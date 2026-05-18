@@ -243,7 +243,10 @@ fn _expr_kind_tag(k: ExprKind) -> string {
         ExprKind::ArrayLit -> "array_lit",
         ExprKind::StructLit -> "struct_lit",
         ExprKind::EnumPath -> "enum_path",
-        ExprKind::Wildcard -> "wildcard"
+        ExprKind::Wildcard -> "wildcard",
+        ExprKind::Try -> "try",
+        ExprKind::Throw -> "throw",
+        ExprKind::Closure -> "closure"
     }
 }
 
@@ -276,7 +279,10 @@ fn _hir_is_lit_int_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -307,7 +313,10 @@ fn _is_lit_float_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -338,7 +347,10 @@ fn _is_lit_string_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -369,7 +381,10 @@ fn _is_lit_bool_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -400,7 +415,10 @@ fn _is_lit_char_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -431,7 +449,45 @@ fn _hir_is_ident_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+// RFC C1 — closure-expression probe.
+fn _hir_is_closure_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Closure -> true,
+        ExprKind::Ident -> false,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -462,7 +518,10 @@ fn _is_atlas_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -493,7 +552,10 @@ fn _is_call_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -524,7 +586,10 @@ fn _hir_is_binop_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -555,7 +620,10 @@ fn _hir_is_unop_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -586,7 +654,10 @@ fn _hir_is_block_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -617,7 +688,10 @@ fn _is_if_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -648,7 +722,10 @@ fn _is_while_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -679,7 +756,10 @@ fn _hir_is_return_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -710,7 +790,10 @@ fn _is_let_expr_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -741,7 +824,10 @@ fn _hir_is_match_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -776,7 +862,10 @@ fn _hir_is_struct_lit_kind(k: ExprKind) -> bool {
         ExprKind::Field -> false,
         ExprKind::Index -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -807,7 +896,10 @@ fn _hir_is_enum_path_kind(k: ExprKind) -> bool {
         ExprKind::Index -> false,
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -838,7 +930,10 @@ fn _hir_is_field_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -869,7 +964,10 @@ fn _hir_is_index_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -900,7 +998,10 @@ fn _hir_is_for_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -931,7 +1032,10 @@ fn _hir_is_assign_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -1824,6 +1928,55 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
     if _hir_is_wildcard_kind(k) {
         let h = _mk_hexpr(kind_tag, e.span, _hir_empty_type(), e.text,
                           [], _empty_atlas_binding(), _hir_miss_def_id())
+        return LowerResult { expr: h, sc: sc }
+    }
+
+    // ── closure-expression — RFC C1 ─────────────────────────
+    // AST children = [param_0 .. param_{n-1}, body_block]; e.text = decimal
+    // param count. Lower the body in a frame that has the param names
+    // defined, so body-local ident references resolve to params (and outer
+    // names resolve up the enclosing frames — the C2 capture set). The
+    // param Ident nodes themselves are NOT scope-resolved — they carry
+    // names only. The resulting HExpr keeps tag "closure"; hir_to_mir
+    // rejects it with HX1104 (codegen deferred to RFC C2/C3) — it never
+    // reaches arm64 lowering. We preserve the param + body children so the
+    // C2 closure-conversion pass has the full structured node.
+    if _hir_is_closure_kind(k) {
+        let nc = len(e.children)
+        let mut clo_kids: [HExpr] = []
+        // params — preserve as ident HExprs (name + span), no resolution.
+        let mut pi = 0
+        while pi < nc - 1 {
+            let pn = e.children[pi]
+            let ph = _mk_hexpr("ident", pn.span, _hir_empty_type(), pn.text,
+                               [], _empty_atlas_binding(), _hir_miss_def_id())
+            clo_kids.push(ph)
+            pi = pi + 1
+        }
+        // body — lowered in a child frame with param names defined.
+        let mut body_sc = _push_frame(sc)
+        let mut pj = 0
+        while pj < nc - 1 {
+            body_sc = _define_in_scope(body_sc, e.children[pj].text,
+                                       _hir_empty_type())
+            pj = pj + 1
+        }
+        if nc >= 1 {
+            let br = _lower_expr(e.children[nc - 1], atlas, body_sc)
+            clo_kids.push(br.expr)
+        }
+        // closure value type: bare `fn` (no per-param/return modeling — C2
+        // scope), mirroring the type-checker's C1 closure representation.
+        let clo_t = Type {
+            kind: "fn",
+            def: _hir_miss_def_id(),
+            args: [],
+            ret: [],
+            domain: "",
+            unit: ""
+        }
+        let h = _mk_hexpr("closure", e.span, clo_t, e.text,
+                          clo_kids, _empty_atlas_binding(), _hir_miss_def_id())
         return LowerResult { expr: h, sc: sc }
     }
 

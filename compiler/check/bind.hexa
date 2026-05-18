@@ -191,7 +191,10 @@ fn _bind_is_ident_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -222,7 +225,10 @@ fn _bind_is_block_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -253,7 +259,10 @@ fn _is_for_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -284,7 +293,10 @@ fn _is_let_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -315,7 +327,10 @@ fn _bind_is_match_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -346,7 +361,10 @@ fn _is_field_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -377,7 +395,10 @@ fn _is_enum_path_kind(k: ExprKind) -> bool {
         ExprKind::Index -> false,
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -416,7 +437,79 @@ fn _is_struct_lit_kind(k: ExprKind) -> bool {
         ExprKind::Field -> false,
         ExprKind::Index -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+fn _bind_is_try_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Try -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+// RFC C1 — closure-expression probe.
+fn _bind_is_closure_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Closure -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -447,7 +540,10 @@ fn _is_wildcard_kind(k: ExprKind) -> bool {
         ExprKind::Index -> false,
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
-        ExprKind::EnumPath -> false
+        ExprKind::EnumPath -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -612,6 +708,56 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
         }
         if len(e.children) >= 2 {
             sc = _bind_walk_expr(e.children[1], sc, mod_file, out)
+        }
+        sc = _pop_scope(sc)
+        return sc
+    }
+
+    if _bind_is_try_kind(e.kind) {
+        // children[0] = try_body_block, children[1] = catch_body_block.
+        // catch_var binding (e.text, may be "_") is visible ONLY inside
+        // catch_body — mirror self/hexa_full.hexa::try_catch scoping.
+        if len(e.children) >= 1 {
+            sc = _push_scope(sc)
+            sc = _bind_walk_expr(e.children[0], sc, mod_file, out)
+            sc = _pop_scope(sc)
+        }
+        if len(e.children) >= 2 {
+            sc = _push_scope(sc)
+            if len(e.text) > 0 && e.text != "_" {
+                sc = _define(sc, e.text, mod_file)
+            }
+            sc = _bind_walk_expr(e.children[1], sc, mod_file, out)
+            sc = _pop_scope(sc)
+        }
+        return sc
+    }
+
+    if _bind_is_closure_kind(e.kind) {
+        // RFC C1 — closure-expression `fn(p0, p1, ...) { body }`.
+        // children = [param_0 .. param_{n-1}, body_block]; the body block is
+        // the LAST child. Closure params open a NEW scope; the params are
+        // visible only inside the body. Free variables referenced in the
+        // body that are NOT params resolve up the enclosing scope chain
+        // (normal _bind_lookup) — so a body ident like `captured` binds to
+        // the outer definition and does NOT error. C2 will walk the body to
+        // collect that capture set; C1 only guarantees binding succeeds.
+        sc = _push_scope(sc)
+        let n_children = len(e.children)
+        // every child except the last is a param Ident node (text = name,
+        // possibly `mut:`-prefixed). Define each into the closure scope.
+        let mut pi = 0
+        while pi < n_children - 1 {
+            let pnode = e.children[pi]
+            let pname = _bind_let_name(pnode.text)
+            if len(pname) > 0 && pname != "_" {
+                sc = _define(sc, pname, mod_file)
+            }
+            pi = pi + 1
+        }
+        // walk the body block (last child) with params + outer scope visible.
+        if n_children >= 1 {
+            sc = _bind_walk_expr(e.children[n_children - 1], sc, mod_file, out)
         }
         sc = _pop_scope(sc)
         return sc
@@ -788,7 +934,27 @@ fn _bind_builtin_names() -> [string] {
         "f32_bits", "f32_from_bits", "ham_free", "ham_pack", "hex", "bin",
         "map_keys", "map_values", "map_entries", "phi_mi_pair", "phi_spatial",
         "ptr_addr", "ptr_alloc", "ptr_free", "ptr_null", "ptr_offset", "ptr_read", "ptr_write",
-        "setenv", "silu", "struct_pack", "struct_unpack", "struct_free", "sum"
+        "setenv", "silu", "struct_pack", "struct_unpack", "struct_free", "sum",
+        // R5 CGFAIL triage — free-call builtins missing from the legacy
+        // mirror. `env_var(name)` → hexa_env_var (runtime.c:10686);
+        // `now()` is interp's alias for `timestamp()` (hexa_full.hexa
+        // call_builtin: "timestamp"||"now"||"time_now"). Both surfaced as
+        // HX2001 in t_cmd_url_args_passthrough / t_exec_env_reproducible /
+        // t_multiarch_cpu_smoke. Codegen _builtin_runtime_sym maps them.
+        "env_var", "now",
+        // Low-level memory / pointer builtins — tier-2 (codegen_c2.hexa
+        // §G5/B3) already lowered these to hexa_ptr_* runtime symbols;
+        // tier-1 (compiler/) was missing the bind registration so a
+        // call surfaced as HX2001 before codegen. Used by
+        // self/ml/cpu_forward_tiny.hexa + self/ml/qwen14b.hexa (the
+        // hxqwen/serve smoke tests). Registration only — no interp /
+        // runtime semantic change. Each name has a matching
+        // _builtin_runtime_sym entry; without that the link (not the
+        // bind) would fail.
+        "alloc_raw", "free_raw", "ptr_from_int",
+        "write_f32", "write_i32", "write_i64", "deref_f32", "deref_i32",
+        "ptr_write_f32", "ptr_write_i32", "ptr_read_f32", "ptr_read_f64", "ptr_read_i32",
+        "ord"
     ]
 }
 

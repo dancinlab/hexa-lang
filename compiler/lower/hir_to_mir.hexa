@@ -38,6 +38,18 @@ pub fn hir_to_mir_diags() -> array {
     return _lr_diag
 }
 
+// ── RFC closure C2 — synthetic lambda accumulator ────────────
+// Closure-expressions (HExpr kind "closure") are lambda-lifted: each one
+// becomes a top-level synthetic MFunc named `__hexa_lambda_<N>`. The
+// closure-expression site itself lowers to an env-array build plus a
+// `hexa_closure_new` call producing a TAG_CLOSURE value. Lifted MFuncs
+// can't be returned through the per-function `_lower_hexpr` recursion, so
+// they accumulate here and `lower_hir` appends them to MModule.funcs after
+// the user functions. Counter is monotonic per `lower_hir` call (reset on
+// entry, like `_lr_diag`) so lambda names are stable + collision-free.
+pub let mut _lr_lambdas: [MFunc] = []
+pub let mut _lr_lambda_ctr: i64 = 0
+
 // STMT_* constants come from compiler/ir/mir.hexa as `pub let`. The
 // previous local mirror was needed when stage0's interpreter did not
 // propagate transitive `pub let` bindings across the long import chain;
@@ -54,6 +66,25 @@ fn _miss_local() -> Local {
 fn _const_int_op(v: i64) -> Operand {
     return Operand {
         kind: "const_int",
+        local_id: -1,
+        int_val: v,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+// Bool literal operand -- TAG_BOOL (=2), payload 0/1. literal_bool
+// previously lowered to _const_int_op (TAG_INT), so `true`/`false`
+// constants carried the wrong tag. hexa_eq returns false on a
+// tag mismatch, so a TAG_INT `true` never compared equal to the
+// TAG_BOOL result of `==` / `!=` / a comparison -- silently
+// flipping any `bool_a == bool_lit` predicate. Mirrors the
+// literal_char fix below (char literals -> TAG_STR for hexa_eq)
+// and codegen_c2.hexa:3233 (`true` -> hexa_bool(1)).
+fn _const_bool_op(v: i64) -> Operand {
+    return Operand {
+        kind: "const_bool",
         local_id: -1,
         int_val: v,
         float_val: 0.0,
@@ -365,13 +396,25 @@ fn _set_returned(ctx: LowerCtx, v: bool) -> LowerCtx {
 // each break/continue binds to its tightest loop. Mirrors the
 // _push_stmt_to block-rebuild idiom; also wires the CFG edge so
 // regalloc / liveness sees the jump (parity with the back-edge path).
-fn _patch_loop_sentinels(ctx: LowerCtx, after_id: i64, header_id: i64) -> LowerCtx {
+//
+// scope_min: only patch sentinels in blocks with id >= scope_min. Block
+// ids are strictly monotonic (_new_block), so every block belonging to
+// THIS loop's header/body/after structure has id >= header_id, while a
+// sentinel that belongs to an ENCLOSING loop — emitted by a `continue`
+// that textually precedes this (sibling) inner loop within the same
+// outer body — lives in a pre-existing block with id < header_id. Without
+// this guard the inner loop's patch wrongly captures the outer loop's
+// continue, jumping it into the inner header and skipping any code
+// between the `continue` and the inner loop (e.g. `let mut dense = []`),
+// leaving that local uninitialized → non-deterministic tag-garbage crash.
+fn _patch_loop_sentinels(ctx: LowerCtx, after_id: i64, header_id: i64, scope_min: i64) -> LowerCtx {
     let mut blocks = ctx.blocks
     let mut ef: [i64] = []
     let mut et: [i64] = []
     let mut i = 0
     while i < len(blocks) {
         let b = blocks[i]
+        if b.id < scope_min { i = i + 1; continue }
         let mut stmts = b.stmts
         let mut changed = false
         let mut j = 0
@@ -544,6 +587,18 @@ fn _emit_hx1103(kind: string, sp: Span) {
     _lr_diag.push(diag_emit(b))
 }
 
+// RFC C1 — closure codegen is DEFERRED to RFC C2/C3. A closure-expression
+// `fn(params){body}` parses and type/bind-checks in C1, but the HIR→MIR
+// indirect-call lowering + arm64 codegen are not implemented yet. Emit a
+// dedicated diagnostic so a closure-using program fails with an ACCURATE
+// message ("closure codegen not yet implemented") instead of the misleading
+// HX2001 "undefined name fn" (the pre-C1 state) or a generic HX1103.
+fn _emit_hx1104(sp: Span) {
+    let mut b = diag_new("HX1104")
+    b = diag_span(b, sp)
+    _lr_diag.push(diag_emit(b))
+}
+
 // Set of HExpr kinds the lowering core dispatches on explicitly. Used
 // by the default fall-through to distinguish "shape we know but didn't
 // produce a value for" (e.g. a side-effect-only block) from "shape we
@@ -575,7 +630,76 @@ fn _is_known_hexpr_kind(k: string) -> bool {
     if k == "index" { return true }
     if k == "wildcard" { return true }
     if k == "field_lit" { return true }
+    if k == "try" { return true }
+    if k == "throw" { return true }
+    if k == "closure" { return true }
     return false
+}
+
+// ── RFC closure C2 — free-variable analysis ─────────────────
+// A closure's free variables are the identifiers in its body that resolve
+// to the ENCLOSING function's scope (not the closure's own params, not
+// names introduced by `let` inside the body, and not module globals — a
+// global is reachable from the lifted lambda by name without an env slot).
+// `gen2_collect_free` in self/codegen_c2.hexa is the tier-2 reference.
+//
+// Membership test for a string in a [string] list.
+fn _str_list_has(xs: [string], s: string) -> bool {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == s { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Recursive walker: collect free idents of `e` into `acc` (ordered, deduped),
+// given `bound` = names already bound in scope (closure params + body lets).
+// `enc` is the enclosing-scope ctx — an ident counts as free only if it
+// resolves to an enclosing local binding (a true capture); a name that is
+// only a global / top-level fn is left alone (the lambda reaches it directly).
+fn _collect_free(e: HExpr, bound: [string], acc: [string],
+                 enc: LowerCtx) -> [string] {
+    let mut out = acc
+    let k = e.kind
+    if k == "ident" {
+        let nm = _strip_mut_prefix(e.text)
+        if !_str_list_has(bound, nm) && !_str_list_has(out, nm) {
+            // capture only enclosing LOCALS — _mir_lookup matches a
+            // local/param binding in the enclosing ctx. Globals resolve
+            // via _mir_lookup_global and are intentionally NOT captured.
+            if _mir_lookup(enc, nm) >= 0 { out.push(nm) }
+        }
+        return out
+    }
+    // `let` inside the body introduces a new bound name for the REST of
+    // the enclosing block. v1 keeps it simple: add the let name to `bound`
+    // for the whole subtree walk (over-approximates scope slightly but is
+    // safe — a body-local never needs capturing regardless of position).
+    let mut bound2 = bound
+    if k == "let" {
+        let lnm = _strip_mut_prefix(e.text)
+        if len(lnm) > 0 && !_str_list_has(bound2, lnm) { bound2.push(lnm) }
+    }
+    // A nested closure: its own params shadow within its body. The nested
+    // body still references the OUTER closure's captures transitively, so
+    // we keep walking — names bound by the nested closure's params get
+    // added to `bound2` so they don't leak as captures of the outer one.
+    if k == "closure" {
+        let nkid = len(e.children)
+        let mut ci = 0
+        while ci < nkid - 1 {
+            let pnm = _strip_mut_prefix(e.children[ci].text)
+            if len(pnm) > 0 && !_str_list_has(bound2, pnm) { bound2.push(pnm) }
+            ci = ci + 1
+        }
+    }
+    let mut i = 0
+    while i < len(e.children) {
+        out = _collect_free(e.children[i], bound2, out, enc)
+        i = i + 1
+    }
+    return out
 }
 
 // ── HExpr lowering core ─────────────────────────────────────
@@ -606,10 +730,20 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     if k == "literal_bool" {
         let mut v: i64 = 0
         if e.text == "true" { v = 1 }
-        return _value(ctx, _const_int_op(v))
+        return _value(ctx, _const_bool_op(v))
     }
     if k == "literal_char" {
-        return _value(ctx, _const_int_op(0))
+        // Char literals are TAG_STR (a single-char string), NOT TAG_INT/
+        // TAG_CHAR. The runtime represents chars as single-char strings
+        // (`s.chars()` / hexa_str_chars yields TAG_STR elements), so a
+        // char literal must also be TAG_STR for `cs[i] != '.'` to compare
+        // equal — mirrors the hexa_v2 reference codegen (self/codegen_c2
+        // .hexa:3247 "char literals must also be TAG_STR for hexa_eq").
+        // e.text is the already-escape-decoded single-char body (parser
+        // ExprKind::LiteralChar). Previously _const_int_op(0) made EVERY
+        // char literal == 0, so e.g. _ends_with_hexa()'s `cs[n-5] != '.'`
+        // was always true → self-host argv parsing broke.
+        return _value(ctx, _const_str_op(e.text))
     }
 
     // ── ident ───────────────────────────────────────────────
@@ -806,6 +940,67 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let mut ctx_r = ctx
         let mut callee_text = ""
         let mut arg_ops: [Operand] = []
+        // RFC closure C2 — indirect-call detection. A call whose callee is
+        // a VALUE (a local-bound closure, or a closure-expression invoked
+        // in place) dispatches through the runtime hexa_callN family rather
+        // than a direct `bl <symbol>`. The discriminator mirrors tier-2's
+        // `_is_known_fn_global`: a callee ident that resolves to a LOCAL
+        // binding (let / param) is a closure value — top-level fn names are
+        // never bound as locals. A closure-expression callee is also
+        // indirect. Field-method calls + plain named-fn calls are unchanged.
+        let mut is_indirect = false
+        let mut callee_op = _const_int_op(0)
+        if len(e.children) > 0 {
+            let callee0 = e.children[0]
+            if callee0.kind == "ident" {
+                let cn = _strip_mut_prefix(callee0.text)
+                if _mir_lookup(ctx_r, cn) >= 0 {
+                    is_indirect = true
+                    callee_op = _local_op(_mir_lookup(ctx_r, cn))
+                } else if _mir_lookup_global(ctx_r, cn) >= 0 {
+                    // A module-level `let` (not a `fn` — only ITEM_LET
+                    // names get a global slot) bound to a closure value:
+                    // dispatch indirectly through the global Operand,
+                    // never `bl <symbol>`. Mirrors tier-2 codegen_c2 —
+                    // a callee ident absent from `_known_fn_globals`
+                    // (which holds fn declarations only) falls through
+                    // to the hexa_callN indirect path. Without this a
+                    // top-level `let clo = fn(...)` call emitted a
+                    // direct `bl _clo` → linker `_clo undefined`.
+                    is_indirect = true
+                    callee_op = _global_op(_mir_lookup_global(ctx_r, cn), cn)
+                }
+            } else if callee0.kind == "closure" {
+                let cr = _lower_hexpr(ctx_r, callee0)
+                ctx_r = cr.ctx
+                is_indirect = true
+                callee_op = cr.operand
+            }
+        }
+        if is_indirect {
+            // args[0] = callee value; args[1..] = call arguments.
+            let mut ia_ops: [Operand] = []
+            ia_ops.push(callee_op)
+            let mut ai = 1
+            while ai < len(e.children) {
+                let r = _lower_hexpr(ctx_r, e.children[ai])
+                ctx_r = r.ctx
+                ia_ops.push(r.operand)
+                ai = ai + 1
+            }
+            let mut ictx = _fresh_local(ctx_r, e.typ, "call_ret")
+            let idst = ictx.locals[len(ictx.locals) - 1]
+            let isr = Stmt {
+                kind: STMT_CALL_INDIRECT,
+                dst: idst,
+                op: "",
+                args: ia_ops,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ictx = _push_stmt(ictx, isr)
+            return _value(ictx, _local_op(idst.id))
+        }
         if len(e.children) > 0 {
             let callee = e.children[0]
             callee_text = callee.text
@@ -1249,7 +1444,13 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         ctx2 = br_b.ctx
         // Resolve any break/continue sentinels emitted while lowering
         // this loop body to this loop's after/header (innermost-first).
-        ctx2 = _patch_loop_sentinels(ctx2, after_id, header_id)
+        // scope_min = header_id: only this loop's own structure/body
+        // blocks (id >= header_id) are eligible — a `continue` that
+        // belongs to an enclosing loop but textually precedes this
+        // (sibling) inner loop lives in an earlier block (id < header_id)
+        // and must NOT be captured here (it is patched by the outer
+        // loop's own _patch_loop_sentinels later).
+        ctx2 = _patch_loop_sentinels(ctx2, after_id, header_id, header_id)
         if !ctx2.has_returned {
             let body_end = ctx2.cur_block
             let back = Stmt {
@@ -1267,6 +1468,178 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _no_value(ctx2)
     }
 
+    // ── try { try_body } catch e { catch_body } — cycle h20 ──
+    //
+    // CFG layout (entry = ctx.cur_block):
+    //
+    //   entry:
+    //       STMT_TRY_SETJMP target_block=try_id  target_block_else=catch_id
+    //         (allocates a per-try jmp_buf slot in the fn frame, calls
+    //          _setjmp; on first call falls through (BR try_id), on
+    //          longjmp-resumed (nonzero return) BRs to catch_id)
+    //   try_id:
+    //       <try_body>                          ; may early-return
+    //       STMT_TRY_POP                        ; normal exit out of try
+    //       BR after_id
+    //   catch_id:
+    //       STMT_TRY_LAST_ERR -> dst=catch_err_local  ; HexaVal __hexa_last_error()
+    //       <catch_body>                        ; (catch_var=text bound to catch_err_local)
+    //       BR after_id (unless catch returned)
+    //   after_id:
+    //       <fall-through to whatever follows>
+    //
+    // Mirrors self/codegen_c2.hexa::TryCatch lowering, but explicit CFG.
+    // The runtime symbols (_setjmp · __hexa_try_push · __hexa_try_pop ·
+    // __hexa_last_error · hexa_throw) all live in self/runtime.c and are
+    // already linked into aprime-built binaries via runtime.c inline.
+    if k == "try" {
+        if len(e.children) < 2 { return _no_value(ctx) }
+        let entry_id = ctx.cur_block
+
+        let mut ctx2 = _new_block(ctx)
+        let try_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        ctx2 = _new_block(ctx2)
+        let catch_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        ctx2 = _new_block(ctx2)
+        let after_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+
+        // STMT_TRY_SETJMP in the entry block — target_block=try_id is the
+        // normal/first-time fall-through; target_block_else=catch_id is
+        // where we land if longjmp-resumed (setjmp returned nonzero).
+        let sj = Stmt {
+            kind: STMT_TRY_SETJMP,
+            dst: _miss_local(),
+            op: "",
+            args: [],
+            target_block: try_id,
+            target_block_else: catch_id
+        }
+        ctx2 = _push_stmt_to(ctx2, entry_id, sj)
+        ctx2 = _add_edge(ctx2, entry_id, try_id)
+        ctx2 = _add_edge(ctx2, entry_id, catch_id)
+
+        // ── try-body block ─────────────────────────────────────
+        ctx2 = _set_cur_block(ctx2, try_id)
+        let tr = _lower_hexpr(ctx2, e.children[0])
+        ctx2 = tr.ctx
+        let try_returned = ctx2.has_returned
+        let try_end_block = ctx2.cur_block
+        if !try_returned {
+            // Normal exit: pop the try stack, branch to after.
+            let pop = Stmt {
+                kind: STMT_TRY_POP,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, try_end_block, pop)
+            let br_after = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: after_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, try_end_block, br_after)
+            ctx2 = _add_edge(ctx2, try_end_block, after_id)
+        }
+
+        // ── catch-body block ───────────────────────────────────
+        // Reset has_returned (try-body's `return` doesn't dominate catch).
+        ctx2 = _set_returned(ctx2, false)
+        ctx2 = _set_cur_block(ctx2, catch_id)
+        // Allocate `catch_err_local`, fill via STMT_TRY_LAST_ERR.
+        ctx2 = _fresh_local(ctx2, e.typ, "catch_err")
+        let catch_err_local = ctx2.locals[len(ctx2.locals) - 1]
+        let le = Stmt {
+            kind: STMT_TRY_LAST_ERR,
+            dst: catch_err_local,
+            op: "",
+            args: [],
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, le)
+        // Bind catch_var (e.text) to catch_err_local so any reference inside
+        // catch_body resolves to it.
+        if len(e.text) > 0 && e.text != "_" {
+            ctx2 = _bind(ctx2, e.text, catch_err_local.id)
+        }
+        let cr = _lower_hexpr(ctx2, e.children[1])
+        ctx2 = cr.ctx
+        let catch_returned = ctx2.has_returned
+        let catch_end_block = ctx2.cur_block
+        if !catch_returned {
+            let br_after = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: after_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, catch_end_block, br_after)
+            ctx2 = _add_edge(ctx2, catch_end_block, after_id)
+        }
+
+        // After both arms returned, the try/catch terminator carries
+        // through. Otherwise reset has_returned (one path falls through).
+        if try_returned && catch_returned {
+            ctx2 = _set_returned(ctx2, true)
+        } else {
+            ctx2 = _set_returned(ctx2, false)
+        }
+        ctx2 = _set_cur_block(ctx2, after_id)
+        return _no_value(ctx2)
+    }
+
+    // ── throw <expr> → STMT_THROW ──────────────────────────
+    // Mirrors self/codegen_c2.hexa::ThrowStmt — call hexa_throw with the
+    // value HexaVal. The runtime longjmps to the most-recently-pushed
+    // try frame, or exits(1) with the value if no try is active.
+    if k == "throw" {
+        let mut ctx_r = ctx
+        let mut args: [Operand] = []
+        if len(e.children) > 0 {
+            let r = _lower_hexpr(ctx_r, e.children[0])
+            ctx_r = r.ctx
+            args.push(r.operand)
+        } else {
+            // bare `throw` — emit hexa_throw(hexa_str("error")) at codegen,
+            // so we pass a sentinel const_str here.
+            args.push(_const_str_op("error"))
+        }
+        let s = Stmt {
+            kind: STMT_THROW,
+            dst: _miss_local(),
+            op: "",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        let mut ctx2 = _push_stmt(ctx_r, s)
+        // hexa_throw never returns to its caller (longjmp or exit). Mark
+        // the block as terminated so any trailing fall-through edges are
+        // suppressed — same handling as STMT_RETURN.
+        ctx2 = _set_returned(ctx2, true)
+        return _no_value(ctx2)
+    }
+
+    // ── closure-expression — RFC closure C2 (lambda lift) ──────
+    // Lower `fn(params){body}` by lambda-lifting: synthesise a top-level
+    // MFunc `__hexa_lambda_<N>` whose params are (__env, <closure params>);
+    // its body is the closure body with each captured identifier read from
+    // __env via hexa_array_get. The closure-expression itself lowers to an
+    // env-array build (the captured values in fixed order) plus a
+    // `hexa_closure_new` value producing a TAG_CLOSURE HexaVal. Mirrors
+    // self/codegen_c2.hexa::gen2_lambda_expr exactly.
+    if k == "closure" {
+        return _lower_closure(ctx, e)
+    }
+
     // ── match: sequence of STMT_BR_COND testing tag ─────────
     //
     // Stage1 Gap 14 + punch list C10: arm-pattern coverage:
@@ -1282,6 +1655,18 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let sr = _lower_hexpr(ctx, e.children[0])
         let scrut_op = sr.operand
         let mut ctx2 = sr.ctx
+
+        // #25 — match as an EXPRESSION (e.g. `return match k {...}` /
+        // `let s = match …`) must carry each arm's result value out to
+        // the join. Pre-#25 the arm body was lowered but its operand was
+        // discarded and the whole match returned `_no_value` (const_int
+        // 0) — so `tag_of`'s `match k { TokenKind::X -> "X", … }` always
+        // produced "0", which made `same_kind`/`at_eof` always true and a
+        // self-compiled ap2 parsed 0 items. Allocate one result local;
+        // each taken arm copies its value into it (op="bind" → plain
+        // dst=arg0 copy in every backend); the join returns it.
+        ctx2 = _fresh_local(ctx2, e.typ, "match_result")
+        let match_res = ctx2.locals[len(ctx2.locals) - 1]
 
         ctx2 = _new_block(ctx2)
         let join_id = ctx2.blocks[len(ctx2.blocks) - 1].id
@@ -1577,6 +1962,23 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             ctx2 = br_b.ctx
             if !ctx2.has_returned {
                 let arm_end = ctx2.cur_block
+                // #25 — carry the arm's value to the match join. Only
+                // when the body actually produced one (a `return …` arm
+                // sets has_returned and never reaches here; a bare
+                // statement-style arm has has_value=false → leave the
+                // result local untouched, matching the legacy no-value
+                // behaviour for statement-position match).
+                if br_b.has_value {
+                    let res_copy = Stmt {
+                        kind: STMT_ASSIGN,
+                        dst: match_res,
+                        op: "bind",
+                        args: [br_b.operand],
+                        target_block: -1,
+                        target_block_else: -1
+                    }
+                    ctx2 = _push_stmt_to(ctx2, arm_end, res_copy)
+                }
                 let to_join = Stmt {
                     kind: STMT_BR,
                     dst: _miss_local(),
@@ -1594,7 +1996,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         }
 
         ctx2 = _set_cur_block(ctx2, join_id)
-        return _no_value(ctx2)
+        return _value(ctx2, _local_op(match_res.id))
     }
 
     // ── struct_lit → STMT_ASSIGN op="struct_lit" with field operands ─
@@ -1782,6 +2184,210 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     return _no_value(ctx_d)
 }
 
+// ── RFC closure C2 — closure-expression lowering ────────────
+// `e` is a HExpr kind "closure": children = [param_0 .. param_{n-1},
+// body_block]; e.text = decimal param count. `enc` is the enclosing
+// function's lowering ctx (used for free-var capture resolution).
+//
+// Produces:
+//   1. a synthetic top-level MFunc `__hexa_lambda_<N>` appended to
+//      `_lr_lambdas`. Its params are (__env, p_0 .. p_{n-1}); its body
+//      prologue reads each captured value out of __env via op="index"
+//      (hexa_index_get → hexa_array_get for arrays), then lowers the
+//      closure body block with params + captures bound.
+//   2. at the closure site: an env-array build (op="array_lit" over the
+//      capture operands in fixed order) + an op="closure_new" STMT_ASSIGN
+//      yielding the TAG_CLOSURE value.
+fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
+    let nc = len(e.children)
+    let mut npar = 0
+    if nc >= 1 { npar = nc - 1 }   // last child = body block
+
+    // closure param names (strip any `mut:` prefix the parser may add).
+    let mut pnames: [string] = []
+    let mut pi = 0
+    while pi < npar {
+        pnames.push(_strip_mut_prefix(e.children[pi].text))
+        pi = pi + 1
+    }
+
+    // free-variable analysis on the body — captures, in source order.
+    let mut free: [string] = []
+    if nc >= 1 {
+        free = _collect_free(e.children[nc - 1], pnames, [], enc)
+    }
+    let nfree = len(free)
+
+    // ── 1. build the synthetic lambda MFunc ──────────────────
+    let lam_id = _lr_lambda_ctr
+    _lr_lambda_ctr = _lr_lambda_ctr + 1
+    let lam_name = "__hexa_lambda_" + to_string(lam_id)
+
+    let any_t = Type {
+        kind: "?", def: DefId { module: "", index: -1 },
+        args: [], ret: [], domain: "", unit: ""
+    }
+
+    let mut lctx = _new_lower_ctx()
+    // Seed the lambda body ctx with the enclosing fn's module globals so a
+    // reference to a top-level `let` inside the closure body resolves via
+    // _mir_lookup_global (→ _global_op) instead of HX1101. _collect_free
+    // intentionally does NOT capture globals into the env array (a global
+    // is reachable by name from the lifted lambda — mirror of tier-2
+    // gen2_collect_free skipping _is_known_global names); without this
+    // seed the lambda's fresh ctx had `globals: []` and the by-name
+    // fallback failed. (closure C2 capture-scope fix — module-global ref.)
+    lctx = LowerCtx {
+        next_local: lctx.next_local,
+        next_block: lctx.next_block,
+        next_arena: lctx.next_arena,
+        arena_root: lctx.arena_root,
+        locals: lctx.locals,
+        blocks: lctx.blocks,
+        cur_block: lctx.cur_block,
+        bindings: lctx.bindings,
+        frame_starts: lctx.frame_starts,
+        globals: enc.globals,
+        has_returned: lctx.has_returned
+    }
+    lctx = _new_block(lctx)
+    let lam_entry = lctx.blocks[len(lctx.blocks) - 1].id
+    lctx = _set_cur_block(lctx, lam_entry)
+
+    // params: __env first, then the closure params (env-first ABI — see
+    // runtime hexa_callN). Bind each by source name.
+    let mut lam_params: [Local] = []
+    lctx = _fresh_local(lctx, any_t, "__env")
+    let env_param = lctx.locals[len(lctx.locals) - 1]
+    lam_params.push(env_param)
+    lctx = _bind(lctx, "__env", env_param.id)
+    pi = 0
+    while pi < npar {
+        lctx = _fresh_local(lctx, any_t, pnames[pi])
+        let pl = lctx.locals[len(lctx.locals) - 1]
+        lam_params.push(pl)
+        if len(pnames[pi]) > 0 { lctx = _bind(lctx, pnames[pi], pl.id) }
+        pi = pi + 1
+    }
+
+    // env-unpack prologue: capture i ← hexa_array_get(__env, i).
+    let mut fi = 0
+    while fi < nfree {
+        lctx = _fresh_local(lctx, any_t, free[fi])
+        let cap_l = lctx.locals[len(lctx.locals) - 1]
+        let mut ga: [Operand] = []
+        ga.push(_local_op(env_param.id))
+        ga.push(_const_int_op(fi))
+        let gs = Stmt {
+            kind: STMT_ASSIGN,
+            dst: cap_l,
+            op: "index",
+            args: ga,
+            target_block: -1,
+            target_block_else: -1
+        }
+        lctx = _push_stmt(lctx, gs)
+        lctx = _bind(lctx, free[fi], cap_l.id)
+        fi = fi + 1
+    }
+
+    // lower the closure body block in the lambda ctx.
+    if nc >= 1 {
+        let br = _lower_hexpr(lctx, e.children[nc - 1])
+        lctx = br.ctx
+        if !lctx.has_returned {
+            let mut ra: [Operand] = []
+            if br.has_value { ra.push(br.operand) }
+            let rs = Stmt {
+                kind: STMT_RETURN,
+                dst: _miss_local(),
+                op: "",
+                args: ra,
+                target_block: -1,
+                target_block_else: -1
+            }
+            lctx = _push_stmt(lctx, rs)
+        }
+    } else {
+        let rs = Stmt {
+            kind: STMT_RETURN,
+            dst: _miss_local(),
+            op: "",
+            args: [],
+            target_block: -1,
+            target_block_else: -1
+        }
+        lctx = _push_stmt(lctx, rs)
+    }
+
+    let lam_func = MFunc {
+        name: lam_name,
+        params: lam_params,
+        return_local: _miss_local(),
+        locals: lctx.locals,
+        blocks: lctx.blocks,
+        entry_block: lam_entry,
+        arena_root: lctx.arena_root,
+        def_line: e.span.line
+    }
+    _lr_lambdas.push(lam_func)
+
+    // ── 2. lower the closure SITE in the enclosing ctx ───────
+    // env array: hexa_array_new() then push each captured value, in the
+    // SAME order _collect_free returned them (== the env-unpack order).
+    let mut ctx2 = enc
+    let mut env_args: [Operand] = []
+    fi = 0
+    while fi < nfree {
+        let cap_id = _mir_lookup(ctx2, free[fi])
+        if cap_id >= 0 {
+            env_args.push(_local_op(cap_id))
+        } else {
+            // global capture fallback — should not normally arise (free
+            // analysis skips globals) but stay safe rather than emit a
+            // dangling operand.
+            let gid = _mir_lookup_global(ctx2, free[fi])
+            if gid >= 0 {
+                env_args.push(_global_op(gid, free[fi]))
+            } else {
+                env_args.push(_const_int_op(0))
+            }
+        }
+        fi = fi + 1
+    }
+    ctx2 = _fresh_local(ctx2, any_t, "clo_env")
+    let env_l = ctx2.locals[len(ctx2.locals) - 1]
+    let env_s = Stmt {
+        kind: STMT_ASSIGN,
+        dst: env_l,
+        op: "array_lit",
+        args: env_args,
+        target_block: -1,
+        target_block_else: -1
+    }
+    ctx2 = _push_stmt(ctx2, env_s)
+
+    // closure value: op="closure_new", args = [env_array, lambda_name_str,
+    // arity_int]. The codegen reads args[1].str_val (symbol) + args[2].int_val
+    // (arity) and emits `bl _hexa_closure_new` with the lifted fn pointer.
+    ctx2 = _fresh_local(ctx2, e.typ, "clo_val")
+    let clo_l = ctx2.locals[len(ctx2.locals) - 1]
+    let mut clo_args: [Operand] = []
+    clo_args.push(_local_op(env_l.id))
+    clo_args.push(_const_str_op(lam_name))
+    clo_args.push(_const_int_op(npar))
+    let clo_s = Stmt {
+        kind: STMT_ASSIGN,
+        dst: clo_l,
+        op: "closure_new",
+        args: clo_args,
+        target_block: -1,
+        target_block_else: -1
+    }
+    ctx2 = _push_stmt(ctx2, clo_s)
+    return _value(ctx2, _local_op(clo_l.id))
+}
+
 // ── Helpers ─────────────────────────────────────────────────
 
 // Stable per-string hash used to assign a deterministic discriminant
@@ -1960,6 +2566,11 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
 
 pub fn lower_hir(module: HModule) -> MModule {
     _lr_diag = []
+    // RFC closure C2 — reset the synthetic-lambda accumulator so repeated
+    // compiles in the same process do not leak lifted MFuncs / counter
+    // state across runs (same discipline as `_lr_diag`).
+    _lr_lambdas = []
+    _lr_lambda_ctr = 0
     // Two-pass: collect all module-level globals first so every fn body
     // can resolve any global by name regardless of textual order
     // (parser may put `fn main` before or after a `let mut g = …`).
@@ -2014,6 +2625,16 @@ pub fn lower_hir(module: HModule) -> MModule {
             }
         }
         i = i + 1
+    }
+    // RFC closure C2 — append every synthetic lambda lifted out of a
+    // closure-expression during the user-function lowering above. They are
+    // ordinary top-level MFuncs from codegen's point of view; emitting them
+    // after the user functions keeps `__hexa_lambda_<N>` symbols defined for
+    // the `hexa_closure_new` references planted at the closure sites.
+    let mut li = 0
+    while li < len(_lr_lambdas) {
+        funcs.push(_lr_lambdas[li])
+        li = li + 1
     }
     return MModule {
         file: module.file,

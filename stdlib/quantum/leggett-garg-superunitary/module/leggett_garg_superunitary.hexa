@@ -1,0 +1,861 @@
+#!hexa strict
+// qmirror/leggett-garg-superunitary/module/leggett_garg_superunitary.hexa
+//
+// @tool(slug="qmirror_leggett_garg_superunitary", desc="Leggett-Garg K_3 > temporal Tsirelson bound (TTB / Lueder's bound = 3/2) via superposition of unitaries. Pure-hexa engine_aer kernel: a 2-qubit (1 system + 1 superposition-control ancilla) state-vector simulation reproduces the Chatterjee-Karthik-Mahesh-Devi (arXiv:2411.02301 / PRL 135, 220202 (2025)) ideal protocol. The control qubit is prepared in |alpha> = cos(alpha)|0> + sin(alpha)|1>; back-to-back controlled gates U_T0 = U_0 (x) |0><0|_A + I_S (x) |1><1|_A and U_T1 = I_S (x) |0><0|_A + U_1 (x) |1><1|_A apply U_0 / U_1 conditionally; the ancilla is post-selected in |+>_A, realizing the effective superposed unitary U_tilde = (sin a)*U_0 + (cos a)*U_1 (normalized) on the system (paper Fig.1, Eq. (1)-(3)). With U_0 = exp(-i sigma_n omega delta/2), U_1 = exp(-i sigma_m omega delta/2), m_hat = x_hat, n_hat = cos(phi) x_hat + sin(phi) y_hat (paper Eq. (A1)). The two-time correlator C_ij = (1/2) tr[sigma_z U_tilde sigma_z U_tilde^dagger] (paper Eq. (4)) is computed via the same 2-qubit channel acting on |0>_S and |1>_S separately. K_3 := C_12 + C_23 - C_13 = 2 C_12 - C_13 since t_1=0, t_2=t, t_3=2t and C_12 = C_23 by symmetry. Reproduces: (i) classical macrorealist bound -3 <= K_3 <= 1 (paper-cited; the sim respects but does not derive it); (ii) standard-quantum / TTB bound (K_3)_max <= 3/2 at alpha=0 (=> single unitary U_1; closed form K_3(t) = 2 cos(omega t/2) - cos(2 omega t), max = 3/2 at omega t = 2pi/3); (iii) super-unitary violation (K_3)_max > 3/2 at alpha=pi/4 with phi in (0, pi); paper Fig. 2(c) and Fig. 4 (NMR experiment): theoretical / measured K_3^max ~= 2.27 at phi=135 deg, alpha=pi/4 and K_3^max ~= 2.43 at phi=165 deg, alpha=pi/4 (paper-cited algebraic ceiling = 3 reached in the singular limit phi -> pi).")
+// @usage(hexa run leggett-garg-superunitary/module/leggett_garg_superunitary.hexa --selftest)
+// @sentinel(__QMIRROR_LEGGETT_GARG_SUPERUNITARY__ <PASS|FAIL>)
+// @resolver-bypass(reason="Selftest exercises the pure-hexa state-vector kernel only (2-qubit S+A register; controlled single-qubit rotations + projector+renorm post-selection); no qiskit, no python bridge, no subprocess for the physics.")
+//
+// =============================================================================
+//  PAPER DEEP-DIVE  (WebFetch arxiv.org/pdf/2411.02301 + pages 1-8, 2026-05-16)
+// =============================================================================
+//
+//  Arijit Chatterjee, H. S. Karthik, T. S. Mahesh, A. R. Usha Devi,
+//  "Enhanced non-macrorealism: Extreme violations of Leggett-Garg
+//   inequalities for a system evolving under superposition of unitaries",
+//   arXiv:2411.02301v1, Phys. Rev. Lett. 135, 220202 (2025).
+//
+//  Three-time LGI: a dichotomic Q_hat = sigma_z measured at t_1, t_2, t_3
+//  with two-time correlators C_ij = <q(t_i) q(t_j)>, q(t_k) = +/-1.
+//
+//      K_3  :=  C_12 + C_23 - C_13                                        (LGI)
+//
+//  Bounds:
+//      classical (macrorealist) : -3 <= K_3 <=  1                         (paper, intro p.1)
+//      standard quantum (TTB)   :         (K_3)_max <= 3/2 = 1.5         (Lueder's bound)
+//      algebraic                :         (K_3)_max <= 3                 (the absolute ceiling)
+//
+//  Standard-quantum (single unitary U_1, alpha=0) closed-form, paper-derived:
+//      K_3(t)  =  2 cos(omega t / 2)  -  cos(2 omega t)                  (Eq. (4) + alpha=0 expansion)
+//      max     =  3/2  at  omega t = 2 pi / 3 ; cos(2pi/3) = -1/2 ;
+//                 2*cos(pi/3) - cos(4pi/3) = 2*(1/2) - (-1/2) = 1 + 1/2 = 3/2.   verified.
+//
+//  Superposition of unitaries (paper Eqs. (1)-(3), (A1)-(A5)):
+//
+//      U_0(t_f,t_0) = exp(-i sigma_n omega delta / 2)
+//      U_1(t_f,t_0) = exp(-i sigma_m omega delta / 2)        delta := t_f - t_0
+//      m_hat = x_hat ;     n_hat = cos(phi) x_hat + sin(phi) y_hat ;  phi in [0, pi]
+//
+//      U_tilde(t_f,t_0)  :=  [ sin(a) U_0 + cos(a) U_1 ]  /  N(t_f,t_0)            (Eq. (1))
+//      N^2(t_f,t_0)      =  1  +  sin(2 a) [ cos^2(omega delta / 2)
+//                                           +  (n_hat . m_hat) sin^2(omega delta / 2) ]   (Eq. (A2))
+//                        =  1  +  sin(2 a) [ cos^2(omega delta / 2)  +  cos(phi) sin^2(omega delta / 2) ]
+//                                                                                    (since m_hat.n_hat = cos phi)
+//      Closed form (Eq. (A1), expanded):
+//         U_tilde_num(t,0) =  (sin a + cos a) cos(omega t / 2)  I
+//                           -  i  ( sin a sigma_n  +  cos a sigma_m ) sin(omega t / 2)
+//
+//      Two-time correlator (paper Eq. (4)):
+//         C_ij  =  Re[ (1/2) tr( sigma_z  U_tilde(t_j,t_i) sigma_z U_tilde^dagger(t_j,t_i) ) ]
+//
+//      Times:  t_1 = 0 ,  t_2 = t ,  t_3 = 2 t .  Since U_tilde depends only on
+//              delta = t_f - t_i (and not on the absolute t_i), C_12 = C_23 = C(t),
+//              C_13 = C(2t), and  K_3(t)  =  2 C(t) - C(2t) .
+//
+//  PHYSICAL REALIZATION (paper Fig. 1(b)) — the 2-qubit ancilla circuit this
+//  module simulates EXACTLY:
+//
+//      Initial:  |0>_S (x) |alpha>_A    where |alpha>_A := cos(a)|0> + sin(a)|1>
+//                                          (prepared by R_y(2 alpha) on |0>_A)
+//
+//      Apply:    U_T0  :=  U_0 (x) |0><0|_A  +  I_S (x) |1><1|_A
+//                U_T1  :=  I_S (x) |0><0|_A  +  U_1 (x) |1><1|_A
+//
+//      Post-select A in  |+>_A := (|0> + |1>)/sqrt(2) .
+//
+//      The post-selected system state is  rho_S(t)  =  U_tilde rho_S(0) U_tilde^dagger
+//      with probability   p_+  =  N^2 / 2   (paper Eq. (3)).
+//
+//      C_ij is then  (1/2)[ <sigma_z>_{psi_0(t)}  -  <sigma_z>_{psi_1(t)} ]
+//      where  psi_k(t) := U_tilde(t,0) |k>_S  is obtained by running the
+//      2-qubit ancilla circuit with system initialized in |k> and post-
+//      selecting A in |+> (we use the IDENTICAL post-selection probability
+//      p_+ as a runtime invariant check).
+//
+//  EXPERIMENTAL ANCHORS (paper Fig. 4 (c)-(d), NMR ^13C-DBFM):
+//      alpha = pi/4 ,  phi = 135 deg :    K_3^max  =  2.27 +/- 0.1   (theory >= 2.27)
+//      alpha = pi/4 ,  phi = 160 deg :    K_3^max  =  2.43 +/- 0.25  (theory >= 2.43)
+//      Theoretical algebraic ceiling                K_3^max ->  3   as  phi -> pi  at alpha=pi/4 .
+//
+// =============================================================================
+//  HONEST CAVEAT  (@D g3 / @F f1 / project @D g6 falsifier-first; sister-domain g9)
+// =============================================================================
+//
+//  This is an EXACT 2-qubit (4-amplitude) state-vector simulation of the
+//  IDEAL super-unitary protocol of arXiv:2411.02301. The kernel is the
+//  qmirror pure-hexa engine_aer (state_zero / apply_single / state_set_*) —
+//  no qiskit / qiskit-aer / python at runtime (project @D g5). The system
+//  is 1 qubit, the superposition-of-unitaries control is 1 ancilla qubit;
+//  the natural ceiling is 2 qubits, not the project-wide 30q envelope. NO
+//  2^N memory wall is relevant (4 amplitudes).
+//
+//  What this sim does NOT reproduce:
+//
+//   (i)  A real QPU / NMR run. The NMR experiment (paper Fig. 4) carries
+//        RF inhomogeneity + T_1 / T_2^* decoherence + ensemble averaging;
+//        this sim has IDEAL projective collapse (zero latency, zero noise,
+//        zero readout error) and IDEAL post-selection. The paper's
+//        decoherence-robustness curves (Fig. 5, Eq. (6)-(7)) are an open-
+//        system Lindblad result OUTSIDE this unitary toy by construction.
+//
+//   (ii) A loophole-free temporal-Bell / LGI test. The standard LGI clumsy-
+//        ness loophole (ideal-projective measurements *are* invasive in
+//        general) is finessed by the paper using the interferometric weak-
+//        measurement circuit (Fig. 1(c)) on a probe qubit M; here we use
+//        the mathematically-equivalent channel-form C_ij of Eq. (4) on the
+//        2-qubit S+A register. This is what the paper itself evaluates
+//        analytically — we do NOT claim a noninvasiveness *proof*, only an
+//        EXACT reproduction of the paper's ideal-protocol K_3.
+//
+//   (iii) A refutation of standard QM. The super-unitary protocol IS
+//        standard QM (it is implemented by standard unitaries on a larger
+//        2-qubit register + post-selection). The "violation" is of the
+//        single-system temporal Tsirelson bound 3/2, which applies to a
+//        single TLS under unitary dynamics with PROJECTIVE measurement on
+//        that same TLS — the larger-register protocol simply does not fall
+//        under that assumption. The sim respects ALL of standard QM
+//        throughout (every gate is unitary; every measurement is
+//        projective; every probability is in [0,1]).
+//
+//   (iv) The thermodynamic / asymptotic LG-vs-Tsirelson hierarchy. K_3 is
+//        the 3-time inequality; the K_n family for n>3 (and the
+//        n -> infinity limit) is NOT addressed.
+//
+// =============================================================================
+//  FILE OWNERSHIP / DROP-IN COMPAT (@D g7)
+// =============================================================================
+//
+//  NEW sibling module. Does NOT touch engine_aer / qrng / chsh / iit_mip
+//  external signatures. The controlled-U and post-selection helpers are
+//  standalone (this module only). Reads engine_aer/module/state_vector.hexa
+//  + engine_aer/module/gates.hexa via use-relative paths.
+//
+//  ── hexa quirks honored ─────────────────────────────────────────────────
+//    - >= / <= banned — strict < / > only.
+//    - struct names cannot start with _.
+//    - apply_single mutates state.re_h / state.im_h in place.
+//    - no `break` — flag-driven while loops.
+
+use "../../engine_aer/module/state_vector.hexa"
+use "../../engine_aer/module/gates.hexa"
+
+// =============================================================================
+//  §1  CONSTANTS  (paper anchors)
+// =============================================================================
+
+fn lg_pi() -> float { return 3.141592653589793 }
+
+// Standard-quantum (Lueder / temporal Tsirelson) upper bound on K_3 for a
+// TLS under a single unitary (paper, p. 1).
+fn lg_ttb() -> float { return 1.5 }
+
+// Algebraic max (paper, p. 1 / intro), and the singular-limit super-unitary ceiling.
+fn lg_alg_max() -> float { return 3.0 }
+
+// Paper's experimentally-measured / theoretical super-unitary K_3^max
+// anchors (Fig. 4 c-d), with one-sigma error budgets:
+//   phi = 135 deg, alpha = pi/4 :    K_3^max ~= 2.27 +/- 0.1
+//   phi = 160 deg, alpha = pi/4 :    K_3^max ~= 2.43 +/- 0.25
+fn lg_paper_k3_phi135() -> float { return 2.27 }
+fn lg_paper_k3_phi160() -> float { return 2.43 }
+
+// =============================================================================
+//  §2  HELPERS
+// =============================================================================
+
+fn lg_absf(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn lg_max(a: float, b: float) -> float {
+    if a < b { return b }
+    return a
+}
+
+fn lg_min(a: float, b: float) -> float {
+    if a < b { return a }
+    return b
+}
+
+// =============================================================================
+//  §3  CONTROLLED SINGLE-QUBIT UNITARY  (2-qubit register helper)
+// =============================================================================
+//
+//  Register convention (qiskit endian, q0 = LSB of amplitude index):
+//      q0 = S  (system qubit; Q_hat = sigma_z is measured here)
+//      q1 = A  (ancilla / superposition-of-unitaries control)
+//      |i>_S (x) |a>_A   =>   amplitude index  i + 2*a   (i in {0,1}, a in {0,1})
+//
+//  Controlled-U on q0 conditioned on q1 == ctrl_bit (0 or 1):
+//      For each pair of amplitudes (i + 2*a) for i in {0,1} at fixed a:
+//        if a == ctrl_bit :  apply the 2x2 unitary U to the (psi_{0a}, psi_{1a})
+//                            block ; else leave it untouched.
+//
+//  This is exact (no Trotter / no decomposition; the 2x2 block update is
+//  performed on the 4-amplitude state vector directly).
+
+struct LgU2 {
+    a_re: float, a_im: float,    // U[0,0]
+    b_re: float, b_im: float,    // U[0,1]
+    c_re: float, c_im: float,    // U[1,0]
+    d_re: float, d_im: float     // U[1,1]
+}
+
+// U = exp(-i sigma_x theta / 2) = [[cos(t/2),       -i sin(t/2)],
+//                                  [-i sin(t/2),     cos(t/2)  ]]
+fn lg_u_rx(theta: float) -> LgU2 {
+    let c = cos(theta / 2.0)
+    let s = sin(theta / 2.0)
+    return LgU2 {
+        a_re: c, a_im: 0.0,
+        b_re: 0.0, b_im: 0.0 - s,
+        c_re: 0.0, c_im: 0.0 - s,
+        d_re: c, d_im: 0.0
+    }
+}
+
+// U = exp(-i sigma_n theta / 2)  with  n_hat = cos(phi) x_hat + sin(phi) y_hat
+//   = cos(t/2) I  -  i sin(t/2) (cos phi sigma_x + sin phi sigma_y)
+//
+//   sigma_x = [[0,1],[1,0]] , sigma_y = [[0,-i],[i,0]]
+//   cos(phi) sigma_x + sin(phi) sigma_y
+//      = [[0,        cos phi - i sin phi],
+//         [cos phi + i sin phi,        0]]
+//      = [[0,  e^{-i phi}],
+//         [e^{+i phi},  0]]
+//
+//   U = [[ cos(t/2),                              -i sin(t/2) e^{-i phi} ],
+//        [-i sin(t/2) e^{+i phi},                  cos(t/2)              ]]
+//     = [[ cos(t/2),                              -sin(t/2)(sin phi + i cos phi) ],
+//        [ sin(t/2)(sin phi - i cos phi),          cos(t/2)                       ]]
+//   (using  -i e^{-i phi} = -i (cos phi - i sin phi) = -sin phi - i cos phi
+//          (the overall sign goes into the off-diagonals; let's recompute carefully).
+//   -i e^{-i phi} = -i cos phi + i^2 (-sin phi)*(... wait. -i*(cos phi - i sin phi)
+//                 = -i cos phi + i*i sin phi
+//                 = -i cos phi - sin phi
+//                 = -(sin phi + i cos phi).
+//   -i e^{+i phi} = -i (cos phi + i sin phi) = -i cos phi + sin phi
+//                 = sin phi - i cos phi.
+//
+//   So  U[0,1] = sin(t/2) * (-(sin phi + i cos phi))
+//             = -sin(t/2) sin phi  +  i (-sin(t/2) cos phi)
+//      U[1,0] = sin(t/2) * (sin phi - i cos phi)
+//             = +sin(t/2) sin phi  +  i (-sin(t/2) cos phi)
+fn lg_u_rn(theta: float, phi: float) -> LgU2 {
+    let c = cos(theta / 2.0)
+    let s = sin(theta / 2.0)
+    let cp = cos(phi)
+    let sp = sin(phi)
+    return LgU2 {
+        a_re: c, a_im: 0.0,
+        b_re: 0.0 - s * sp, b_im: 0.0 - s * cp,
+        c_re: s * sp,         c_im: 0.0 - s * cp,
+        d_re: c, d_im: 0.0
+    }
+}
+
+// Apply U to the system qubit (q0) on the 2-qubit register, conditioned
+// on ancilla bit (q1) == ctrl_bit. In-place mutation of state.re_h / im_h.
+//
+//   amp(i + 2*a) for i in {0,1} :   if a == ctrl_bit, replace by
+//      psi'_0a = U[0,0] psi_0a + U[0,1] psi_1a
+//      psi'_1a = U[1,0] psi_0a + U[1,1] psi_1a
+fn lg_apply_cu(st: StateVector, u: LgU2, ctrl_bit: int) -> StateVector {
+    // Iterate the two ancilla branches.
+    let mut a = 0
+    while a < 2 {
+        if a == ctrl_bit {
+            let i0 = 0 + 2 * a            // |0>_S (x) |a>_A
+            let i1 = 1 + 2 * a            // |1>_S (x) |a>_A
+            let p0r = amp_re_at(st, i0)
+            let p0i = amp_im_at(st, i0)
+            let p1r = amp_re_at(st, i1)
+            let p1i = amp_im_at(st, i1)
+            // psi'_0 = U[0,0]*psi_0 + U[0,1]*psi_1
+            let n0r = u.a_re * p0r - u.a_im * p0i  +  u.b_re * p1r - u.b_im * p1i
+            let n0i = u.a_re * p0i + u.a_im * p0r  +  u.b_re * p1i + u.b_im * p1r
+            // psi'_1 = U[1,0]*psi_0 + U[1,1]*psi_1
+            let n1r = u.c_re * p0r - u.c_im * p0i  +  u.d_re * p1r - u.d_im * p1i
+            let n1i = u.c_re * p0i + u.c_im * p0r  +  u.d_re * p1i + u.d_im * p1r
+            let _r0 = state_set_re(st, i0, n0r)
+            let _i0 = state_set_im(st, i0, n0i)
+            let _r1 = state_set_re(st, i1, n1r)
+            let _i1 = state_set_im(st, i1, n1i)
+        }
+        a = a + 1
+    }
+    return st
+}
+
+// =============================================================================
+//  §4  POST-SELECT ANCILLA ON |+>_A  (project + renormalize)
+// =============================================================================
+//
+//   Project A on |+> = (|0> + |1>) / sqrt(2):  rotate A to Z basis via H_A,
+//   then project A on |0>, renormalize. Returns (ok, p_plus).
+//   ok = 0 if branch probability is below 1e-12 (treated as impossible).
+//
+//   p_plus is the post-selection probability; for the paper's ancilla
+//   circuit + |alpha> = R_y(2 alpha)|0>, we expect  p_plus = N^2(t,0) / 2
+//   (paper Eq. (3)). The selftest checks this invariant.
+
+fn lg_p_anc_bit(st: StateVector, b: int) -> float {
+    // sum |amp[i + 2*b]|^2  for i in {0,1}
+    let mut p = 0.0
+    let mut i = 0
+    while i < 2 {
+        let idx = i + 2 * b
+        let r = amp_re_at(st, idx)
+        let im = amp_im_at(st, idx)
+        p = p + r * r + im * im
+        i = i + 1
+    }
+    return p
+}
+
+struct LgPost {
+    ok:     int,
+    p_plus: float
+}
+
+fn lg_postselect_anc_plus(st: StateVector) -> LgPost {
+    // Rotate ancilla to Z basis: H_A on q1.
+    let h = gate_h()
+    let stH = apply_single(st, h.re, h.im, 1, 2)
+    // Project on |0>_A (ancilla bit == 0). Renormalize by sqrt(p_plus).
+    let p_plus = lg_p_anc_bit(stH, 0)
+    if p_plus < 0.000000000001 {
+        return LgPost { ok: 0, p_plus: 0.0 }
+    }
+    let inv = 1.0 / sqrt(p_plus)
+    // Zero the |1>_A branch (indices 2,3) and renormalize the |0>_A branch (0,1).
+    let _r0 = state_set_re(stH, 0, amp_re_at(stH, 0) * inv)
+    let _i0 = state_set_im(stH, 0, amp_im_at(stH, 0) * inv)
+    let _r1 = state_set_re(stH, 1, amp_re_at(stH, 1) * inv)
+    let _i1 = state_set_im(stH, 1, amp_im_at(stH, 1) * inv)
+    let _z2r = state_set_re(stH, 2, 0.0)
+    let _z2i = state_set_im(stH, 2, 0.0)
+    let _z3r = state_set_re(stH, 3, 0.0)
+    let _z3i = state_set_im(stH, 3, 0.0)
+    return LgPost { ok: 1, p_plus: p_plus }
+}
+
+// =============================================================================
+//  §5  EVOLVE SYSTEM BY SUPERPOSED UNITARY U_tilde(delta) — full 2-qubit run
+// =============================================================================
+//
+//  Given system initial bit |s_init> in {|0>, |1>} and parameters
+//  (alpha, phi, omega * delta), build the 2-qubit register:
+//
+//      1. |s_init>_S (x) |0>_A
+//      2. R_y(2 alpha) on A           -> |s_init>_S (x) |alpha>_A
+//      3. controlled-U_0 on S w/ A=0  ( U_0 = exp(-i sigma_n omega delta /2) )
+//      4. controlled-U_1 on S w/ A=1  ( U_1 = exp(-i sigma_m omega delta /2),  m_hat = x_hat )
+//      5. post-select A on |+>_A      -> normalized system state |psi_s_init(delta)>
+//
+//  Returns the post-selected 2-qubit register (system in q0, ancilla in
+//  q1 forced to |0> after post-selection), together with the post-
+//  selection probability p_plus.
+//
+//  IMPORTANT: by the construction (paper Eq. (3)), p_plus must equal
+//  N^2(t,0)/2 from Eq. (A2). This invariant is checked in the selftest
+//  for both s_init in {0, 1} (they give the same p_plus since the
+//  unitary channel does not depend on the input state for this metric).
+
+struct LgRun {
+    ok:        int,
+    p_plus:    float,
+    sz_exp:    float,         // <sigma_z>_S  after post-selection
+    p0:        float,         // <0|rho_S|0>
+    p1:        float,         // <1|rho_S|1>
+    norm:      float          // |<psi|psi>| sanity check (should be 1)
+}
+
+fn lg_run_channel(s_init: int, alpha: float, phi: float, omega_delta: float) -> LgRun {
+    let n = 2
+    let st0 = state_zero(n)
+    // (1) S in |s_init>. If s_init==1, apply X on q0.
+    let mut s = st0
+    if s_init == 1 {
+        let gx = gate_x()
+        s = apply_single(s, gx.re, gx.im, 0, n)
+    }
+    // (2) prepare ancilla in |alpha> = cos(a)|0> + sin(a)|1>  via R_y(2a) on q1.
+    let ry = gate_ry(2.0 * alpha)
+    s = apply_single(s, ry.re, ry.im, 1, n)
+
+    // (3) controlled-U_0 on S, conditioned on A==0:
+    //     U_0 = exp(-i sigma_n omega_delta / 2),  n_hat = cos(phi) x_hat + sin(phi) y_hat
+    let u0 = lg_u_rn(omega_delta, phi)
+    s = lg_apply_cu(s, u0, 0)
+    // (4) controlled-U_1 on S, conditioned on A==1:
+    //     U_1 = exp(-i sigma_x omega_delta / 2)  (m_hat = x_hat)
+    let u1 = lg_u_rx(omega_delta)
+    s = lg_apply_cu(s, u1, 1)
+
+    // (5) post-select A on |+>_A
+    let ps = lg_postselect_anc_plus(s)
+    if ps.ok != 1 {
+        let _f = state_free(s)
+        return LgRun { ok: 0, p_plus: 0.0, sz_exp: 0.0,
+                       p0: 0.0, p1: 0.0, norm: 0.0 }
+    }
+
+    // <sigma_z>_S on the post-selected state. After post-selection, only
+    // amplitudes at indices 0 (|0>_S |0>_A) and 1 (|1>_S |0>_A) are
+    // nonzero. <sigma_z> = |amp[0]|^2 - |amp[1]|^2.
+    let r0 = amp_re_at(s, 0)
+    let i0 = amp_im_at(s, 0)
+    let r1 = amp_re_at(s, 1)
+    let i1 = amp_im_at(s, 1)
+    let p0_v = r0 * r0 + i0 * i0
+    let p1_v = r1 * r1 + i1 * i1
+    let sz   = p0_v - p1_v
+    let norm = p0_v + p1_v   // post-selected pure state on S: should be 1
+
+    let _f = state_free(s)
+    return LgRun { ok: 1, p_plus: ps.p_plus, sz_exp: sz,
+                   p0: p0_v, p1: p1_v, norm: norm }
+}
+
+// =============================================================================
+//  §6  TWO-TIME CORRELATOR C(delta) AND K_3(t; alpha, phi)
+// =============================================================================
+//
+//  Paper Eq. (4):
+//      C_ij  =  (1/2)  tr[ sigma_z  U_tilde  sigma_z  U_tilde^dagger ]
+//
+//  Equivalent state-vector form (derived in the header):
+//      C(delta)  =  (1/2) [ <sigma_z>_{ psi_0(delta) }
+//                          - <sigma_z>_{ psi_1(delta) } ]
+//      where  psi_k(delta) := U_tilde(delta) |k>_S .
+//
+//  We evaluate the right-hand side by running the 2-qubit channel for
+//  s_init in {0, 1} separately. The post-selection probability p_plus is
+//  the SAME for both (it equals N^2(delta,0)/2 which is initial-state-
+//  independent), and is reported as a runtime check.
+
+struct LgCorr {
+    ok:        int,
+    c:         float,         // C(delta)
+    p_plus_0:  float,         // p_+ for s_init = 0
+    p_plus_1:  float,         // p_+ for s_init = 1
+    sz_from_0: float,
+    sz_from_1: float
+}
+
+fn lg_two_time_correlator(alpha: float, phi: float, omega_delta: float) -> LgCorr {
+    let r0 = lg_run_channel(0, alpha, phi, omega_delta)
+    if r0.ok != 1 { return LgCorr { ok: 0, c: 0.0, p_plus_0: 0.0, p_plus_1: 0.0, sz_from_0: 0.0, sz_from_1: 0.0 } }
+    let r1 = lg_run_channel(1, alpha, phi, omega_delta)
+    if r1.ok != 1 { return LgCorr { ok: 0, c: 0.0, p_plus_0: r0.p_plus, p_plus_1: 0.0, sz_from_0: r0.sz_exp, sz_from_1: 0.0 } }
+    let c = 0.5 * (r0.sz_exp - r1.sz_exp)
+    return LgCorr { ok: 1, c: c, p_plus_0: r0.p_plus, p_plus_1: r1.p_plus,
+                    sz_from_0: r0.sz_exp, sz_from_1: r1.sz_exp }
+}
+
+// K_3 = C_12 + C_23 - C_13  =  2 C(t) - C(2t)   (since t_1=0, t_2=t, t_3=2t)
+struct LgK3 {
+    ok:    int,
+    k3:    float,
+    c_t:   float,
+    c_2t:  float,
+    p_plus_at_t:   float,
+    p_plus_at_2t:  float,
+    norm_drift:    float    // max |norm-1| over both channel runs
+}
+
+fn lg_k3(alpha: float, phi: float, omega_t: float) -> LgK3 {
+    let ct = lg_two_time_correlator(alpha, phi, omega_t)
+    if ct.ok != 1 {
+        return LgK3 { ok: 0, k3: 0.0, c_t: 0.0, c_2t: 0.0,
+                      p_plus_at_t: 0.0, p_plus_at_2t: 0.0, norm_drift: 0.0 }
+    }
+    let c2t = lg_two_time_correlator(alpha, phi, 2.0 * omega_t)
+    if c2t.ok != 1 {
+        return LgK3 { ok: 0, k3: 0.0, c_t: ct.c, c_2t: 0.0,
+                      p_plus_at_t: ct.p_plus_0, p_plus_at_2t: 0.0, norm_drift: 0.0 }
+    }
+    let k3 = 2.0 * ct.c - c2t.c
+    // norm drift: each channel run's post-selected state should satisfy
+    // |amp[0]|^2 + |amp[1]|^2 = 1 exactly (it's been renormalized). We
+    // re-derive it from sz: p0+p1 = (1+sz)/2 + (1-sz)/2 = 1, which is
+    // analytically 1; the actual numerical drift is captured indirectly
+    // by checking that p_plus_0 == p_plus_1 (initial-state-independent).
+    let d1 = lg_absf(ct.p_plus_0  - ct.p_plus_1)
+    let d2 = lg_absf(c2t.p_plus_0 - c2t.p_plus_1)
+    let drift = lg_max(d1, d2)
+    return LgK3 { ok: 1, k3: k3, c_t: ct.c, c_2t: c2t.c,
+                  p_plus_at_t: ct.p_plus_0, p_plus_at_2t: c2t.p_plus_0,
+                  norm_drift: drift }
+}
+
+// Analytic post-selection probability  N^2(t,0)/2  (paper Eq. (3), (A2)).
+fn lg_p_plus_analytic(alpha: float, phi: float, omega_delta: float) -> float {
+    let cd = cos(omega_delta / 2.0)
+    let sd = sin(omega_delta / 2.0)
+    let nm = 1.0 + sin(2.0 * alpha) * (cd * cd  +  cos(phi) * sd * sd)
+    return 0.5 * nm
+}
+
+// =============================================================================
+//  §7  GRID OPTIMIZER OVER omega*t  (and over phi for super-unitary search)
+// =============================================================================
+//
+//  Per the task: a 100x100 grid is fine. Nelder-Mead is overkill — the
+//  problem is bounded, smooth, and 1-D (in omega*t) for fixed (alpha, phi),
+//  or 2-D (in omega*t and phi) for the super-unitary search.
+
+// Max K_3 over omega*t in (0, pi) for fixed (alpha, phi).
+//   N=200 grid points; the function K_3(t) is smooth so this is exact to ~1e-4.
+//   Returns (k3_max, omega_t_argmax).
+fn lg_k3_max_over_t(alpha: float, phi: float, n_grid: int) -> [float] {
+    let mut best = -3.5
+    let mut best_t = 0.0
+    let mut best_pplus = 0.0
+    let pi = lg_pi()
+    let mut k = 1
+    while k < n_grid {
+        let omega_t = pi * (to_float(k) / to_float(n_grid))
+        let r = lg_k3(alpha, phi, omega_t)
+        if r.ok == 1 {
+            if r.k3 > best {
+                best = r.k3
+                best_t = omega_t
+                best_pplus = r.p_plus_at_t
+            }
+        }
+        k = k + 1
+    }
+    return [best, best_t, best_pplus]
+}
+
+// =============================================================================
+//  §8  VERDICT STRUCT + FALSIFIER  (project @D g6 — FAILED marker BEFORE pass)
+// =============================================================================
+//
+//  Five falsifier conditions:
+//    F1: standard-quantum K_3^max > 3/2 + 1e-9   (TTB violated — sim bug)
+//    F2: super-unitary K_3^max <= 3/2 + 1e-9     (paper headline not reproduced)
+//    F3: super-unitary K_3 > algebraic max (3) + 1e-6  (over-claim)
+//    F4: |p_plus_S=0 - p_plus_S=1| > 1e-9 at evaluation point
+//        (channel not initial-state-independent; bug in post-selection or
+//         in the controlled-U; also covered: |p_plus_analytic - p_plus_sim| > 1e-9)
+//    F5: any branch probability outside [0, 1+1e-9] (Born-rule bug)
+
+struct LgVerdict {
+    ok:                  int,
+    verdict:             str,        // "PASS" | "FAIL"
+    // Standard-quantum (alpha = 0, single unitary U_1):
+    sq_k3_max:           float,
+    sq_omega_t_argmax:   float,
+    sq_closed_form_max:  float,      // analytic 3/2
+    sq_dev_from_15:      float,
+    // Super-unitary (alpha = pi/4, swept phi):
+    su_phi_135_k3_max:   float,
+    su_phi_160_k3_max:   float,
+    su_phi_175_k3_max:   float,      // closer-to-singular, K_3 even larger
+    su_best_phi_deg:     float,      // over a phi grid
+    su_best_k3:          float,
+    su_best_omega_t:     float,
+    // Diagnostics:
+    p_plus_drift:        float,      // max |p_plus(s=0) - p_plus(s=1)|
+    p_plus_analytic_dev: float,      // max |p_plus_sim - p_plus_analytic|
+    born_violation:      int,
+    f1_passed:           int,
+    f2_passed:           int,
+    f3_passed:           int,
+    f4_passed:           int,
+    f5_passed:           int,
+    n_grid_omega_t:      int,
+    n_grid_phi:          int,
+    wall_seconds:        float,
+    engine:              str,
+    message:             str
+}
+
+fn lg_fail(reason: str) -> LgVerdict {
+    return LgVerdict {
+        ok: 0, verdict: "FAIL",
+        sq_k3_max: 0.0, sq_omega_t_argmax: 0.0,
+        sq_closed_form_max: lg_ttb(), sq_dev_from_15: 0.0,
+        su_phi_135_k3_max: 0.0, su_phi_160_k3_max: 0.0, su_phi_175_k3_max: 0.0,
+        su_best_phi_deg: 0.0, su_best_k3: 0.0, su_best_omega_t: 0.0,
+        p_plus_drift: 0.0, p_plus_analytic_dev: 0.0, born_violation: 0,
+        f1_passed: 0, f2_passed: 0, f3_passed: 0, f4_passed: 0, f5_passed: 0,
+        n_grid_omega_t: 0, n_grid_phi: 0, wall_seconds: 0.0,
+        engine: "none", message: reason
+    }
+}
+
+// =============================================================================
+//  §9  RUN  (the headline analysis)
+// =============================================================================
+//
+//  (a) Standard-quantum: alpha=0; sweep omega*t; verify K_3^max ~= 3/2.
+//  (b) Super-unitary:     alpha=pi/4; (i) explicit phi = 135 deg, 160 deg, 175 deg;
+//                                     (ii) phi grid over (pi/2, pi) for the
+//                                          super-best K_3.
+//  (c) Diagnostics:       p_+ initial-state-independence; p_+ matches Eq. (A2);
+//                         Born probabilities in [0, 1].
+
+fn lg_run() -> LgVerdict {
+    let t_start = to_int(exec("date +%s").trim())
+    let pi = lg_pi()
+
+    // ---------------------------------------------------------------------
+    // (a) STANDARD QUANTUM  (alpha = 0  =>  single unitary U_1 on S)
+    // ---------------------------------------------------------------------
+    let n_grid = 80
+    let sq = lg_k3_max_over_t(0.0, 0.0, n_grid)
+    let sq_k3 = sq[0]
+    let sq_t  = sq[1]
+    let sq_dev = lg_absf(sq_k3 - lg_ttb())
+
+    // ---------------------------------------------------------------------
+    // (b) SUPER-UNITARY  (alpha = pi/4; explicit phi values from paper Fig. 4)
+    // ---------------------------------------------------------------------
+    let alpha_su = pi / 4.0
+    let phi_135 = 135.0 * pi / 180.0
+    let phi_160 = 160.0 * pi / 180.0
+    let phi_175 = 175.0 * pi / 180.0
+    let su135 = lg_k3_max_over_t(alpha_su, phi_135, n_grid)
+    let su160 = lg_k3_max_over_t(alpha_su, phi_160, n_grid)
+    let su175 = lg_k3_max_over_t(alpha_su, phi_175, n_grid)
+
+    // (b.ii) sweep phi in (pi/2, pi) at alpha=pi/4 to find the best K_3
+    let n_phi = 24          // 24 phi values; the smoother map is 1.5 -> ~2.5 -> 3 as phi -> pi
+    let mut best_phi_deg = 0.0
+    let mut best_k3 = -3.5
+    let mut best_t = 0.0
+    let mut kp = 1
+    while kp < n_phi {
+        // phi in (pi/2, pi - small) to stay clear of the singular limit
+        // U_tilde -> +/- I at phi = pi exactly.
+        let phi = (pi / 2.0)  +  (pi / 2.0 - 0.01) * (to_float(kp) / to_float(n_phi))
+        let r = lg_k3_max_over_t(alpha_su, phi, 50)   // shallower grid for the sweep
+        if r[0] > best_k3 {
+            best_k3 = r[0]
+            best_t  = r[1]
+            best_phi_deg = phi * 180.0 / pi
+        }
+        kp = kp + 1
+    }
+
+    // ---------------------------------------------------------------------
+    // (c) DIAGNOSTICS  (p_plus drift, p_plus analytic, Born checks)
+    // ---------------------------------------------------------------------
+    //
+    //  Sweep a small (alpha, phi, omega_t) grid and accumulate worst-case:
+    //   - |p_plus(s=0) - p_plus(s=1)|        (should be 0 exactly; allow 1e-12)
+    //   - |p_plus_sim - p_plus_analytic|     (should be 0 exactly; allow 1e-12)
+    //   - any branch probability outside [0, 1+1e-9]
+    let mut p_drift = 0.0
+    let mut p_dev   = 0.0
+    let mut born_v  = 0
+    let test_alphas = [0.0, pi / 4.0]
+    let test_phis   = [pi / 2.0, 3.0 * pi / 4.0, 5.0 * pi / 6.0]
+    let test_ts     = [pi / 3.0, pi / 2.0, 2.0 * pi / 3.0]
+    let mut ia = 0
+    while ia < len(test_alphas) {
+        let aa = test_alphas[ia]
+        let mut ip = 0
+        while ip < len(test_phis) {
+            let pp = test_phis[ip]
+            let mut it = 0
+            while it < len(test_ts) {
+                let tt = test_ts[it]
+                let r0 = lg_run_channel(0, aa, pp, tt)
+                let r1 = lg_run_channel(1, aa, pp, tt)
+                if r0.ok == 1 && r1.ok == 1 {
+                    let d = lg_absf(r0.p_plus - r1.p_plus)
+                    if d > p_drift { p_drift = d }
+                    let p_an = lg_p_plus_analytic(aa, pp, tt)
+                    let dv = lg_max(lg_absf(r0.p_plus - p_an), lg_absf(r1.p_plus - p_an))
+                    if dv > p_dev { p_dev = dv }
+                    // Born checks
+                    let pall = [r0.p0, r0.p1, r1.p0, r1.p1, r0.p_plus, r1.p_plus, p_an]
+                    let mut k = 0
+                    while k < len(pall) {
+                        let pv = pall[k]
+                        if pv < 0.0 - 0.000000001 { born_v = born_v + 1 }
+                        if pv > 1.0 + 0.000000001 { born_v = born_v + 1 }
+                        k = k + 1
+                    }
+                }
+                it = it + 1
+            }
+            ip = ip + 1
+        }
+        ia = ia + 1
+    }
+
+    // ---------------------------------------------------------------------
+    // Verdict
+    // ---------------------------------------------------------------------
+    // F1: standard-quantum K_3 must be <= 3/2 + 1e-9
+    let f1 = if sq_k3 < lg_ttb() + 0.000000001 { 1 } else { 0 }
+    // F2: super-unitary K_3 must exceed 3/2 + 1e-9 at the best (phi)
+    let f2 = if best_k3 > lg_ttb() + 0.000000001 { 1 } else { 0 }
+    // F3: super-unitary K_3 must not exceed algebraic max (3) + 1e-6
+    let f3 = if best_k3 < lg_alg_max() + 0.000001 { 1 } else { 0 }
+    // F4: p_plus initial-state-independence + analytic match (combined threshold 1e-9)
+    let f4_drift = if p_drift < 0.000000001 { 1 } else { 0 }
+    let f4_dev   = if p_dev   < 0.000000001 { 1 } else { 0 }
+    let f4 = if f4_drift == 1 && f4_dev == 1 { 1 } else { 0 }
+    // F5: no Born violations
+    let f5 = if born_v == 0 { 1 } else { 0 }
+
+    let pass = if f1 == 1 && f2 == 1 && f3 == 1 && f4 == 1 && f5 == 1 { 1 } else { 0 }
+    let verdict_str = if pass == 1 { "PASS" } else { "FAIL" }
+
+    let t_end = to_int(exec("date +%s").trim())
+    let wall = to_float(t_end - t_start)
+
+    let msg = if pass == 1 {
+        "K_3^max(SQ, alpha=0) = " + str(sq_k3) +
+        " (Tsirelson 3/2; dev " + str(sq_dev) + ");" +
+        " K_3^max(SU, alpha=pi/4, phi=" + str(best_phi_deg) + "deg) = " + str(best_k3) +
+        " > 3/2  (paper Fig.4c K_3^max@phi=135deg=" + str(lg_paper_k3_phi135()) +
+        ", Fig.4d K_3^max@phi=160deg=" + str(lg_paper_k3_phi160()) + ")"
+    } else {
+        "FAIL: F1=" + str(f1) + " F2=" + str(f2) + " F3=" + str(f3) +
+        " F4=" + str(f4) + " F5=" + str(f5) +
+        "; SQ K_3^max=" + str(sq_k3) + " (TTB 3/2)" +
+        "; SU best K_3=" + str(best_k3) + " @ phi=" + str(best_phi_deg) + "deg"
+    }
+
+    return LgVerdict {
+        ok: 1, verdict: verdict_str,
+        sq_k3_max: sq_k3, sq_omega_t_argmax: sq_t,
+        sq_closed_form_max: lg_ttb(), sq_dev_from_15: sq_dev,
+        su_phi_135_k3_max: su135[0],
+        su_phi_160_k3_max: su160[0],
+        su_phi_175_k3_max: su175[0],
+        su_best_phi_deg: best_phi_deg, su_best_k3: best_k3, su_best_omega_t: best_t,
+        p_plus_drift: p_drift, p_plus_analytic_dev: p_dev, born_violation: born_v,
+        f1_passed: f1, f2_passed: f2, f3_passed: f3, f4_passed: f4, f5_passed: f5,
+        n_grid_omega_t: n_grid, n_grid_phi: n_phi, wall_seconds: wall,
+        engine: "pure-hexa engine_aer / 2-qubit state vector", message: msg
+    }
+}
+
+// =============================================================================
+//  §10  MARKER EMISSION + SELFTEST
+// =============================================================================
+//
+//  Falsifier-first (@D g6): the FAILED-marker write path is fully resolved
+//  BEFORE the PASS write path. Same idiom as vqd-excited-cs's
+//  vqd_emit_marker — portable `exec("date +%s")` timestamp, NOT now_unix.
+
+fn lg_emit_marker(passed: int, body: str) -> int {
+    let ts = exec("date +%s").trim()
+    let qm_root = env("QMIRROR_ROOT")
+    let root = if qm_root.len() > 0 { qm_root } else { exec("pwd").trim() }
+    let marker_dir = root + "/state/markers"
+    let _mk = exec("mkdir -p " + marker_dir + " 2>/dev/null")
+    let suffix = if passed == 1 { ".marker" } else { "_FAILED.marker" }
+    let path = marker_dir + "/leggett_garg_superunitary_" + ts + suffix
+    let _w = exec("echo '" + body + "' > '" + path + "'")
+    println("  marker: " + path)
+    return 0
+}
+
+fn lg_selftest() -> int {
+    let v = lg_run()
+    let body =
+        "leggett_garg_superunitary selftest;" +
+        " SQ_K3max=" + str(v.sq_k3_max) +
+        " SQ_omega_t_arg=" + str(v.sq_omega_t_argmax) +
+        " SQ_dev_from_15=" + str(v.sq_dev_from_15) +
+        " SU_phi135_K3max=" + str(v.su_phi_135_k3_max) +
+        " SU_phi160_K3max=" + str(v.su_phi_160_k3_max) +
+        " SU_phi175_K3max=" + str(v.su_phi_175_k3_max) +
+        " SU_best_phi_deg=" + str(v.su_best_phi_deg) +
+        " SU_best_K3=" + str(v.su_best_k3) +
+        " SU_best_omega_t=" + str(v.su_best_omega_t) +
+        " p_plus_drift=" + str(v.p_plus_drift) +
+        " p_plus_analytic_dev=" + str(v.p_plus_analytic_dev) +
+        " born_v=" + str(v.born_violation) +
+        " F1=" + str(v.f1_passed) +
+        " F2=" + str(v.f2_passed) +
+        " F3=" + str(v.f3_passed) +
+        " F4=" + str(v.f4_passed) +
+        " F5=" + str(v.f5_passed) +
+        " wall=" + str(v.wall_seconds) + "s ;" + v.message
+
+    // Falsifier-first: any FAIL emits FAILED marker BEFORE the pass branch.
+    if v.ok != 1 {
+        let _ = lg_emit_marker(0, "FAIL " + body)
+        return 0
+    }
+    if v.verdict == "PASS" {
+        // fall through to pass marker below
+    } else {
+        let _ = lg_emit_marker(0, "FAIL " + body)
+        return 0
+    }
+    let _ = lg_emit_marker(1, "PASS " + body)
+    return 1
+}
+
+fn main() {
+    println("[qmirror/leggett-garg-superunitary] K_3 > 3/2 via superposition of unitaries")
+    println("  paper  = Chatterjee, Karthik, Mahesh, Devi,")
+    println("           arXiv:2411.02301v1 ; PRL 135, 220202 (2025)")
+    println("  target = 2-qubit (S + ancilla) exact state-vector reproduction")
+    println("           of the ideal protocol (paper Fig. 1(b), Eq. (1)-(4)).")
+    println("  kernel = pure-hexa engine_aer; 4 amplitudes; no Trotter, no noise.")
+    println("")
+
+    let v = lg_run()
+    if v.ok != 1 {
+        println("  ERROR: " + v.message)
+        let _ = lg_emit_marker(0, "FAIL run-error ; " + v.message)
+        println("__QMIRROR_LEGGETT_GARG_SUPERUNITARY__ FAIL")
+        return
+    }
+
+    println("  --- standard-quantum (alpha = 0; single unitary U_1) ---")
+    println("    K_3^max (omega*t sweep, " + str(v.n_grid_omega_t) + " grid) = " + str(v.sq_k3_max))
+    println("    omega*t at argmax                                  = " + str(v.sq_omega_t_argmax))
+    println("    Tsirelson / Lueder closed form (paper)             = " + str(v.sq_closed_form_max))
+    println("    |sim - 3/2|                                        = " + str(v.sq_dev_from_15))
+    println("")
+    println("  --- super-unitary (alpha = pi/4) ---")
+    println("    K_3^max @ phi = 135 deg  =  " + str(v.su_phi_135_k3_max) +
+            "   (paper Fig.4c K_3^max ~= " + str(lg_paper_k3_phi135()) + " +/- 0.1)")
+    println("    K_3^max @ phi = 160 deg  =  " + str(v.su_phi_160_k3_max) +
+            "   (paper Fig.4d K_3^max ~= " + str(lg_paper_k3_phi160()) + " +/- 0.25)")
+    println("    K_3^max @ phi = 175 deg  =  " + str(v.su_phi_175_k3_max) +
+            "   (closer to algebraic max 3 at phi -> pi)")
+    println("    K_3^max over phi sweep    =  " + str(v.su_best_k3) +
+            " @ phi = " + str(v.su_best_phi_deg) + " deg, omega*t = " + str(v.su_best_omega_t))
+    println("")
+    println("  --- diagnostics ---")
+    println("    p_+ initial-state-indep drift (max over grid)  = " + str(v.p_plus_drift))
+    println("    p_+ sim vs analytic Eq.(A2) drift (max)        = " + str(v.p_plus_analytic_dev))
+    println("    Born-rule violations                            = " + str(v.born_violation))
+    println("    F1 (SQ K_3 <= 3/2 + 1e-9)                       = " + str(v.f1_passed))
+    println("    F2 (SU K_3 > 3/2 + 1e-9)                        = " + str(v.f2_passed))
+    println("    F3 (SU K_3 <= 3 + 1e-6, no over-claim)          = " + str(v.f3_passed))
+    println("    F4 (p_+ drift + analytic both < 1e-9)           = " + str(v.f4_passed))
+    println("    F5 (no Born violations)                         = " + str(v.f5_passed))
+    println("    wall                                            = " + str(v.wall_seconds) + "s")
+    println("    engine                                          = " + v.engine)
+    println("    verdict                                         = " + v.verdict)
+    println("    msg                                             = " + v.message)
+    println("")
+
+    if lg_selftest() == 1 {
+        println("[qmirror/leggett-garg-superunitary] SELFTEST PASS")
+        println("  (SQ K_3^max -> 3/2 (Tsirelson); SU K_3^max > 3/2 reached via")
+        println("   superposition of unitaries; ancilla post-selection prob matches")
+        println("   paper Eq. (A2) analytic value; no Born violations)")
+        println("__QMIRROR_LEGGETT_GARG_SUPERUNITARY__ PASS")
+    } else {
+        println("[qmirror/leggett-garg-superunitary] SELFTEST FAIL (see *_FAILED.marker)")
+        println("__QMIRROR_LEGGETT_GARG_SUPERUNITARY__ FAIL")
+    }
+}

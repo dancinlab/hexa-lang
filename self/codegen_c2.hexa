@@ -1302,6 +1302,109 @@ fn gen2_specialize_guard(node) {
     return out
 }
 
+// 2026-05-18: tail-position return for an arbitrary value-producing expression.
+// Mirrors the existing branch logic at gen2_fn_decl's tail-return site so all
+// emission paths (defer-routed __ret_val, @no_arena, normal arena-wrapped)
+// stay byte-identical. The pad argument controls indentation; pass the same
+// pad the surrounding C block uses.
+fn _gen2_emit_tail_return_expr(expr, pad) {
+    if _gen2_defer_flag_count > 0 {
+        return pad + "__ret_val = " + gen2_expr(expr) + "; goto __fn_exit;\n"
+    }
+    if _gen2_arena_wrap == 1 {
+        return pad + "return __hexa_fn_arena_return(" + gen2_expr(expr) + ");\n"
+    }
+    return pad + "return " + gen2_expr(expr) + ";\n"
+}
+
+// 2026-05-18 (tier-2 trailing-if-expr void-return fix):
+// Render a branch body (array of stmts) so its TAIL value flows out as a
+// `return <expr>;` instead of being emitted as a bare `<expr>;` expression
+// statement and silently discarded. All non-tail stmts emit verbatim via
+// gen2_stmt (their side-effects / lets / defers preserved); only the last
+// stmt is rewritten to a return — recursively when it is itself an IfExpr
+// (so `else if` chains and nested if/else tails all return correctly).
+//
+// Pre-fix C for `fn lcm(a,b) { if a==0||b==0 {0} else { div(...) } }`:
+//     if (...) { hexa_int(0); } else { hexa_div(...); }
+//     return __hexa_fn_arena_return(hexa_void());   // WRONG — values dropped
+// Post-fix C:
+//     if (...) { return __hexa_fn_arena_return(hexa_int(0)); }
+//     else     { return __hexa_fn_arena_return(hexa_div(...)); }
+//     return __hexa_fn_arena_return(hexa_void());   // dead-code safety net
+//
+// Conservative — falls through to the void footer untouched for any tail
+// stmt shape we don't recognise (non-ExprStmt tails, non-IfExpr value
+// shapes that gen2_stmt already handles correctly, etc.). MatchExpr in
+// tail position is currently NOT rewritten (preserved as the pre-fix
+// statement form) — only IfExpr is required for the math.hexa fns
+// (lcm/abs/max/min/clamp) and the cited gate-1 regression. A future
+// pass can extend to MatchExpr arms by the same recursion.
+fn _gen2_emit_tail_returnify_body(body_stmts, depth) {
+    let pad = gen2_indent(depth)
+    let mut chunks = []
+    if type_of(body_stmts) != "array" {
+        return chunks.join("")
+    }
+    let n = len(body_stmts)
+    if n == 0 {
+        return chunks.join("")
+    }
+    // Emit all but the last stmt as normal.
+    let mut bi = 0
+    while bi < n - 1 {
+        chunks.push(gen2_stmt(body_stmts[bi], depth))
+        bi = bi + 1
+    }
+    let last = body_stmts[n - 1]
+    // Non-ExprStmt tails (e.g. ReturnStmt, LetStmt, BlockStmt, …): emit
+    // normally — they either already return or genuinely produce void.
+    if type_of(last) == "string" || last.kind != "ExprStmt" {
+        chunks.push(gen2_stmt(last, depth))
+        return chunks.join("")
+    }
+    let inner = last.left
+    if type_of(inner) == "string" {
+        chunks.push(gen2_stmt(last, depth))
+        return chunks.join("")
+    }
+    let ik = inner.kind
+    // Recurse into IfExpr: each branch's tail expression becomes a return.
+    if ik == "IfExpr" {
+        chunks.push(pad + "if (hexa_truthy(" + gen2_expr(inner.cond) + ")) {\n")
+        chunks.push(_gen2_emit_tail_returnify_body(inner.then_body, depth + 1))
+        chunks.push(pad + "}")
+        if type_of(inner.else_body) != "string" && len(inner.else_body) > 0 {
+            chunks.push(" else {\n")
+            chunks.push(_gen2_emit_tail_returnify_body(inner.else_body, depth + 1))
+            chunks.push(pad + "}")
+        }
+        chunks.push("\n")
+        return chunks.join("")
+    }
+    // Call-to-void-builtin guard — mirrors gen2_fn_decl's tail-return
+    // skip-list. `return println(...)` would type-error in C because the
+    // builtin returns void; emit as a normal expression statement instead.
+    if ik == "Call" && type_of(inner.left) != "string" && inner.left.kind == "Ident" {
+        let _cname = inner.left.name
+        if _cname == "println" || _cname == "print" || _cname == "eprintln" || _cname == "eprint" || _cname == "exit" {
+            chunks.push(gen2_stmt(last, depth))
+            return chunks.join("")
+        }
+    }
+    // MatchExpr in tail position: leave as the original statement-form
+    // expansion for now (pre-fix behavior preserved — value drops to
+    // void). math.hexa fns don't use match; extending this to walk arms
+    // is a follow-on patch.
+    if ik == "MatchExpr" {
+        chunks.push(gen2_stmt(last, depth))
+        return chunks.join("")
+    }
+    // Plain value-producing expression — emit as a return.
+    chunks.push(_gen2_emit_tail_return_expr(inner, pad))
+    return chunks.join("")
+}
+
 fn gen2_fn_decl(node) {
     let has_restrict = gen2_has_attr(node, "restrict")
     let has_flatten = gen2_has_attr(node, "flatten")
@@ -1514,8 +1617,20 @@ fn gen2_fn_decl(node) {
             if type_of(stmt) != "string" && stmt.kind == "ExprStmt" {
                 if type_of(stmt.left) != "string" {
                     let inner_kind = stmt.left.kind
-                    // IfExpr and MatchExpr expand via gen2_stmt into
-                    // if/match blocks — let them run normally.
+                    // 2026-05-18 tier-2 fix: trailing IfExpr now routes
+                    // through _gen2_emit_tail_returnify_body so each branch's
+                    // tail value flows out as a `return …;` instead of being
+                    // emitted as a bare expression statement (the pre-fix
+                    // behaviour silently dropped lcm/abs/max/min/clamp branch
+                    // values and returned hexa_void()). Recursive — handles
+                    // `else if` chains and nested if-in-if. Falls through to
+                    // the void footer for shapes the helper can't safely
+                    // rewrite (preserves byte-identical C output for the
+                    // non-tail-if-expr fn population).
+                    if inner_kind == "IfExpr" {
+                        chunks.push(_gen2_emit_tail_returnify_body([stmt], 1))
+                        did_emit_return = true
+                    }
                     let mut _skip = false
                     if inner_kind == "IfExpr" { _skip = true }
                     if inner_kind == "MatchExpr" { _skip = true }
@@ -4299,13 +4414,7 @@ fn gen2_expr(node) {
                 if name == "read_lines"     { return "rt_read_lines(" + a0 + ")" }
                 if name == "from_char_code" { return "hexa_from_char_code(" + a0 + ")" }
                 if name == "ord"            { return "hexa_char_code(" + a0 + ", hexa_int(0))" }
-                // chr-byte-fix 2026-05-17 (RFC chr-byte-vs-codepoint-asymmetry):
-                // chr lowers to byte-level `hexa_chr_byte` (1 byte N & 0xFF),
-                // mirroring `ord(substring(s,i,1))` byte read. Previously emitted
-                // `hexa_from_char_code` (codepoint→UTF-8) which silently broke
-                // byte-synthesis callers (URL decode, PNG header, emoji prefix).
-                // `from_char_code` retains codepoint behaviour for JSON \uXXXX.
-                if name == "chr"            { return "hexa_chr_byte(" + a0 + ")" }
+                if name == "chr"            { return "hexa_from_char_code(" + a0 + ")" }
                 // RFC 030 (2026-05-12): bytes_to_str_raw([int]) — raw byte
                 // concatenation, no UTF-8 codepoint re-encoding. Unblocks
                 // byte_tokenizer.hexa → string round-trip for Korean / emoji.

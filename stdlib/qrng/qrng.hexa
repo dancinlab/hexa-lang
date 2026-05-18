@@ -108,7 +108,7 @@ fn cmd_qrng_help() {
     println("  QRNG_HW_LIVE=1                            hardware_qrng live serial/PCIe")
     println("  T2 secrets: IBM_QUANTUM_TOKEN · IONQ_API_KEY · QCS_API_KEY · AWS_*")
     println("")
-    println("RFC 044 absorption · archive: ~/core/archive_qrng/")
+    println("RFC 044 absorption · archive: github.com/dancinlab/qrng (private)")
 }
 
 fn cmd_qrng_version() {

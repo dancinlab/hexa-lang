@@ -73,17 +73,11 @@ fn cmd_help() {
     println("                preheating|multipolar|surface-code|ssh|hofstadter|dqpt|wdw]")
     println("                                          virtual-universe runtime (26 modules, RFC 046)")
     println("    e.g. hexa sim-universe status         module inventory + tier table")
-    println("  mc-integrate                            Monte Carlo integrator full self-test (RFC 047)")
-    println("  mc-integrate estimate --constant <name> [-N N] [--rng <RNG>]")
-    println("                                          MC estimate: catalan|zeta3|euler_gamma|pi5_times_n6")
-    println("  mc-integrate compare --compare <name> [--rng-a <RNG>] [--rng-b <RNG>]")
-    println("                                          Welch-t RNG indistinguishability gate")
-    println("  mc-integrate [status|chain|probe-anu]   ANU-tier probe · 3-stage wire-up · live tier probe")
-    println("    e.g. hexa mc-integrate estimate --constant zeta3 -N 1000000 --rng external")
-    println("  xeno [status|connect|invoke|fallback|list|roadmap|falsifier|cycle]")
-    println("                                          non-GPU exotic compute substrate SSOT (RFC 048)")
-    println("                                          AKIDA·Loihi3·Northpole·FinalSpark·CorticalLabs·IonQ·QRNG")
-    println("    e.g. hexa xeno roadmap akida          substrate roadmap · hexa xeno list")
+    println("  qmirror [status|selftest|chsh|iit|qrng|rqaoa|ctx|dynghz|vqd|stab-ext|")
+    println("           overlap-vqe|sre|lg|pseudo-tel|rpe|sym-shadow|hardy|page-curve|")
+    println("           qdrift|cdr|wigner|qfi|shallow|gme-steer|mabk|mirror-bench]")
+    println("                                          quantum mirror substrate (38 modules, RFC 045)")
+    println("    e.g. hexa qmirror chsh                CHSH Bell test (Tsirelson-class S)")
     println("")
     println("ATLAS SSOT  (zero-I/O rodata, ATLAS_HASH pinned, ~6594 P/C/L nodes)")
     println("  atlas hash | stats                      Read meta")
@@ -93,7 +87,7 @@ fn cmd_help() {
     println("  atlas promote --staging <f.n6>          Write to live (* register/pr = stub)")
     println("  atlas-verify [--domain D] [--tier N]     Verdict ledger — 86 entries Stage 1+2+3 hexa-native")
     println("  calc <engine> [args]                    TECS-L calculators (nstate/vortex/n6/perfect/congruence/gamma0)")
-    println("  verify <id> | --expr <fn> <n> <v>       Claim ↔ atlas+calc reproduction match → trust tier (🔵/🟡/🟠/⚪)")
+    println("  verify <id> | --expr <fn> <n> <v>       Verify claim: atlas+calc → tier (🔵/🟡/🟠/⚪)")
     println("    e.g. hexa atlas lookup P n            → @P n = 6 :: foundation [11*]")
     println("    e.g. hexa verify sigma                → 🔵 SUPPORTED-FORMAL (calc divisor_sum(6)=12)")
     println("    e.g. hexa atlas-verify --domain math  → §2 MATH verifiers PASS/FAIL + |err|")
@@ -106,12 +100,10 @@ fn cmd_help() {
     println("    e.g. hexa pure-check src/math.hexa    → JSON: {version,source:\"ast\",pure_fns:[...]}")
     println("")
     println("MATH VERIFIERS  (3, deterministic — no atlas write)")
-    println("  ─ classifiers, NOT a claim↔atlas check like `verify`: each assigns a")
-    println("    different property (honesty / arithmetical-hierarchy tier / self-ref fixpoint)")
-    println("  honesty <file>                          BT-AI2 honesty audit (16-domain router) — fake-pass/fake-fail detector")
-    println("  absolute --seed \"...\"                   Mk.VIII Δ₀-absolute Σ₁/Π₁ arithmetical-hierarchy classifier")
+    println("  honesty <file>                          BT-AI2 honesty audit (16-domain router)")
+    println("  absolute --seed \"...\"                   Mk.VIII Δ₀-absolute Σ₁/Π₁ classifier")
     println("  meta-closure [--seed \"...\"]             Mk.IX self-ref fixpoint (H1+H2+H3)")
-    println("    e.g. hexa absolute --seed \"forall n: n+0=n\"  → Π₁ arithmetical → grade [10*]→[11*]")
+    println("    e.g. hexa absolute --seed \"sigma(6)=12\"  → grade [10*]→[11*] verdict")
     println("")
     println("MATH DISCOVERY  (3 generators, γ no-write)")
     println("  smash --seed \"...\" [--depth N]          Blowup 9-phase singularity drill")
@@ -137,7 +129,7 @@ fn cmd_help() {
     println("")
     println("  drill variants  (12, each composes drill with a different orchestration pattern):")
     println("    omega       Apex preset (drill+chain+batch auto-dispatch — nexus's \"main entry\")")
-    println("    kick        the ω-cycle (drill→…→resonance staged verb chain — same cycle as omega)")
+    println("    kick        alias → drill                    (ω-cycle ≡ drill apex)")
     println("    surge       omega + cross-seed variants")
     println("    dream       iterations × drill              (dream-mode seed evolution)")
     println("    swarm       population × generations         (evolutionary)")
@@ -355,7 +347,10 @@ fn cmd_url(url) {
             args_list.push(hexa_url_decode(args_raw[ai]))
             ai = ai + 1
         }
-        cmd_run(file, args_list)
+        // R7 option B — user-direct invocation (hexa:// URL) routes
+        // through the deprecation-warning helper. URL action has no
+        // --vm flag, so want_vm=false.
+        cmd_run_user_direct(file, args_list, false)
     } else if action == "install" {
         let pkg = hexa_url_query_get(query, "pkg")
         if pkg == "" {
@@ -861,34 +856,6 @@ fn os_clang_ldflags() {
     return base
 }
 
-// ── anima RFC 040 Phase D — HEXA_CUDA real-cuBLAS link gate ───
-// When env HEXA_CUDA=1 AND a runtime_cuda.c sits next to runtime.c,
-// the native build adds `-DHEXA_CUDA <runtime_cuda.c> -lcublas -lcudart`
-// so farr_matmul_gpu routes to the real cuBLAS Dgemm body (the
-// `#ifdef HEXA_CUDA` extern surface already lives in self/runtime.c).
-// No-op (empty string) unless HEXA_CUDA=1 — every existing build is
-// byte-identical. CUDA include/lib auto-probed under common paths.
-fn cuda_build_cflags(self_dir) {
-    if env("HEXA_CUDA") != "1" { return "" }
-    if !file_exists(self_dir + "/runtime_cuda.c") { return "" }
-    let mut inc = "/usr/local/cuda/include"
-    if !file_exists(inc + "/cublas_v2.h") {
-        if file_exists("/usr/include/cublas_v2.h") { inc = "/usr/include" }
-    }
-    return "-DHEXA_CUDA -I" + inc + " "
-}
-fn cuda_build_ldflags(self_dir) {
-    if env("HEXA_CUDA") != "1" { return "" }
-    if !file_exists(self_dir + "/runtime_cuda.c") { return "" }
-    let mut lib = "/usr/local/cuda/lib64"
-    if !file_exists(lib + "/libcudart.so") {
-        if file_exists("/usr/lib/x86_64-linux-gnu/libcudart.so") {
-            lib = "/usr/lib/x86_64-linux-gnu"
-        }
-    }
-    return " '" + self_dir + "/runtime_cuda.c' -L" + lib + " -lcublas -lcudart"
-}
-
 // ── B20 / roadmap 55 Phase 1 — strict-FP clang flags ─────────
 // codegen_c2 emits `/* HEXA_STRICT_FP_TU: 1 */` at the top of generated
 // C when the translation unit contains any @strict_fp fn. Detect the
@@ -1077,7 +1044,7 @@ fn _absorbed_script(verb) {
     if verb == "qmirror"          { return "compiler/hw_probes/qmirror.hexa" }
     if verb == "akida"            { return "compiler/hw_probes/akida.hexa" }
     if verb == "qrng"             { return "compiler/hw_probes/qrng.hexa" }
-    if verb == "kick"             { return "compiler/omega/omega.hexa" }   // kick = omega = the ω-cycle (drill→…→resonance staged verb chain) — both verbs name the same cycle; same entry point
+    if verb == "kick"             { return "compiler/drill/drill.hexa" }   // alias: kick → drill (ω-cycle ≡ drill apex)
     if verb == "codata"           { return "compiler/bridges/codata.hexa" }
     if verb == "oeis"             { return "compiler/bridges/oeis.hexa" }
     if verb == "arxiv"            { return "compiler/bridges/arxiv.hexa" }
@@ -1599,6 +1566,34 @@ fn resolve_interp() {
     return ""
 }
 
+// interp-retirement R7 gate #4: prefer a COMPILED module_loader binary so the
+// `hexa build` flatten step runs interp-free. Probes (in order) $HEXA_MODULE_LOADER
+// env override, <install>/build/hexa_module_loader, ./build/hexa_module_loader,
+// $HEXA_LANG/build/hexa_module_loader. Returns "" when no compiled binary exists
+// (caller then falls back to resolve_module_loader() + interp). Built via
+// tool/build_hexa_cli.sh.
+fn resolve_module_loader_compiled() {
+    let env_ml = exec("printf '%s' \"$HEXA_MODULE_LOADER\"")
+    if len(env_ml) > 0 {
+        let env_chk = exec("test -x '" + env_ml + "' && printf yes || printf no")
+        if env_chk == "yes" { return env_ml }
+    }
+    let inst = install_dir_from_argv0()
+    if len(inst) > 0 {
+        let inst_ml = inst + "/build/hexa_module_loader"
+        let inst_chk = exec("test -x '" + inst_ml + "' && printf yes || printf no")
+        if inst_chk == "yes" { return inst_ml }
+    }
+    let cwd_chk = exec("test -x './build/hexa_module_loader' && printf yes || printf no")
+    if cwd_chk == "yes" { return "./build/hexa_module_loader" }
+    let home_ml = exec("printf '%s' \"$HEXA_LANG/build/hexa_module_loader\"")
+    if len(home_ml) > 0 {
+        let home_chk = exec("test -x '" + home_ml + "' && printf yes || printf no")
+        if home_chk == "yes" { return home_ml }
+    }
+    return ""
+}
+
 fn resolve_module_loader() {
     let inst = install_dir_from_argv0()
     if len(inst) > 0 {
@@ -1799,13 +1794,20 @@ fn cmd_build(src, out, c_only, target) {
     let __has_use_dir = __src_probe.contains("\nuse \"") || __src_probe.starts_with("use \"")
     let __has_imp_dir = __src_probe.contains("\nimport \"") || __src_probe.starts_with("import \"")
     if __has_use_dir || __has_imp_dir {
-        let __interp = resolve_interp()
-        let __ml = resolve_module_loader()
-        if len(__interp) > 0 && len(__ml) > 0 {
+        // R7 gate #4: prefer the COMPILED module_loader binary (interp-free
+        // flatten). Fall back to interp + module_loader.hexa source only when
+        // no compiled binary is installed.
+        let __ml_compiled = resolve_module_loader_compiled()
+        let __interp = if len(__ml_compiled) > 0 { "" } else { resolve_interp() }
+        let __ml = if len(__ml_compiled) > 0 { __ml_compiled } else { resolve_module_loader() }
+        let __ml_ok = len(__ml_compiled) > 0 || (len(__interp) > 0 && len(__ml) > 0)
+        if __ml_ok {
             let __expanded = runtime_tmpname("hexa_build_expanded") + ".hexa"
             // orpheus O-002 / F-013: pass install dir to module_loader (see
             // module_loader_env_prefix) so stdlib/* resolves env-free.
-            let __preproc = module_loader_env_prefix() + "'" + __interp + "' '" + __ml + "' '" + src + "' '" + __expanded + "' 2>&1"
+            // compiled path: `<ml_bin> <src> <out>`; interp path: `<interp> <ml.hexa> <src> <out>`.
+            let __ml_invoke = if len(__ml_compiled) > 0 { "'" + __ml_compiled + "'" } else { "'" + __interp + "' '" + __ml + "'" }
+            let __preproc = module_loader_env_prefix() + __ml_invoke + " '" + src + "' '" + __expanded + "' 2>&1"
             println("  [flat] module_loader → " + __expanded)
             let __pair = exec_with_status(__preproc)
             let __pout = __pair[0]
@@ -1907,7 +1909,7 @@ fn cmd_build(src, out, c_only, target) {
     let __runtime_c = __self_dir + "/runtime.c"
     let mut compile = ""
     if len(target) == 0 {
-        compile = "clang -O2 " + os_clang_cflags() + cuda_build_cflags(__self_dir) + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + os_clang_ldflags() + cuda_build_ldflags(__self_dir) + " 2>&1"
+        compile = "clang -O2 " + os_clang_cflags() + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
     } else {
         let zt = target_zig_triple(target)
         if len(zt) == 0 {
@@ -2168,6 +2170,30 @@ fn cmd_run_dispatch(file, extra_args, want_vm) {
     cmd_run_vm_mode = want_vm
     cmd_run(file, extra_args)
     cmd_run_vm_mode = false
+}
+
+// R7 — option B (interp deprecation, source preserved).
+// `hexa run <file>` and the hexa://run URL action are USER-DIRECT
+// invocations of the tree-walking interpreter; emit a stderr
+// deprecation warning before delegating to cmd_run_dispatch. The 16+
+// absorbed-verb sites (lsp / test / check / qrng / batch / …) keep
+// calling cmd_run directly — they are internal infrastructure, not
+// surfaces a user is asked to type, so they are silent until track B
+// (sub-binary re-targeting) lands and they can be migrated. The
+// warning is silenced by HEXA_INTERP_QUIET=1 for CI and downstream
+// consumers still on the interp path. Functionality is preserved
+// (loss = 0); only the user-visible signal that `hexa run` is on the
+// retirement track is added. See AGENTS.tape @D g_interp_deprecated
+// and compiler/PLAN.md "R7 Phase 1 entanglement map" for the full
+// rationale + Phase 2 split.
+fn cmd_run_user_direct(file, extra_args, want_vm) {
+    if env_var("HEXA_INTERP_QUIET") != "1" {
+        eprintln("hexa: warning — `hexa run` (tree-walking interpreter) is deprecated and on the retirement track (R7).")
+        eprintln("hexa:   prefer the native path: `hexa build " + file + "` then run the produced binary,")
+        eprintln("hexa:   or use bin/hexa-run-native (auto-fallback to compiled paths).")
+        eprintln("hexa:   silence: set HEXA_INTERP_QUIET=1.")
+    }
+    cmd_run_dispatch(file, extra_args, want_vm)
 }
 
 fn cmd_run(file, extra_args) {
@@ -3037,7 +3063,14 @@ if len(av) < 3 {
                 cmd_help()
             } else {
                 cmd_run_no_sentinel_mode = want_no_sentinel
-                cmd_run_dispatch(file_arg, run_args, want_vm)
+                // R7 option B — top-level `hexa run <file>` is a user-
+                // direct invocation: route via cmd_run_user_direct so
+                // the stderr deprecation warning fires (silenceable
+                // via HEXA_INTERP_QUIET=1). All 16+ absorbed-verb
+                // sites (lsp / test / check / qrng / batch / …) still
+                // call cmd_run / cmd_run_dispatch directly — they are
+                // internal infrastructure and migrate in track B.
+                cmd_run_user_direct(file_arg, run_args, want_vm)
                 cmd_run_no_sentinel_mode = false
             }
         }
@@ -3337,20 +3370,73 @@ if len(av) < 3 {
         // RFC 044 — stdlib/qrng dispatch.
         // stdlib/qrng/qrng.hexa parses argv subcommand (status/collect/selftest/
         // chain/meta/--help/--version) and dispatches to library functions.
-        // No separate CLI binary — single-file dispatcher in stdlib.
+        //
+        // R7 track B (2026-05-18): preferred path = standalone compiled
+        // bin/hexa-qrng binary built by `hexa build stdlib/qrng/qrng.hexa`.
+        // Spawn-and-exit dispatch with shim rc marker (mirrors argv0 shim
+        // pattern) — output buffered then forwarded, exit code propagated.
+        // Falls back to legacy cmd_run() on the .hexa source when the binary
+        // is absent (transitional; pinned by g_inbox_dual_track until interp
+        // retire R7 completes).
         let __inst_q = install_dir_from_argv0()
-        let mut qrng_script = "stdlib/qrng/qrng.hexa"
-        if len(__inst_q) > 0 {
-            let inst_path = __inst_q + "/stdlib/qrng/qrng.hexa"
-            if file_exists(inst_path) { qrng_script = inst_path }
-        }
         let mut qrng_args = []
         let mut qi = 3
         while qi < len(av) {
             qrng_args.push(av[qi])
             qi = qi + 1
         }
-        cmd_run(qrng_script, qrng_args)
+        let mut qrng_bin = ""
+        if len(__inst_q) > 0 {
+            let inst_bin = __inst_q + "/bin/hexa-qrng"
+            if file_exists(inst_bin) { qrng_bin = inst_bin }
+        }
+        if len(qrng_bin) == 0 && file_exists("bin/hexa-qrng") {
+            qrng_bin = "bin/hexa-qrng"
+        }
+        if len(qrng_bin) > 0 {
+            let cli_q = shq(qrng_bin)
+            let mut cmd = cli_q
+            let mut ai = 0
+            while ai < len(qrng_args) {
+                let q = shq(qrng_args[ai])
+                cmd = cmd + " " + q
+                ai = ai + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut si = len(out) - mlen
+            while si >= 0 {
+                if out.substring(si, si + mlen) == marker {
+                    midx = si
+                    si = -1
+                } else {
+                    si = si - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            let mut qrng_script = "stdlib/qrng/qrng.hexa"
+            if len(__inst_q) > 0 {
+                let inst_path = __inst_q + "/stdlib/qrng/qrng.hexa"
+                if file_exists(inst_path) { qrng_script = inst_path }
+            }
+            cmd_run(qrng_script, qrng_args)
+        }
     } else if sub == "sim-universe" {
         // RFC 046 — stdlib/sim_universe dispatch.
         // stdlib/sim_universe/sim_universe.hexa parses argv subcommand
@@ -3369,43 +3455,24 @@ if len(av) < 3 {
             si = si + 1
         }
         cmd_run(su_script, su_args)
-    } else if sub == "mc-integrate" {
-        // RFC 047 — stdlib/mc_integrate dispatch.
-        // stdlib/mc_integrate/mc_integrate.hexa parses argv subcommand
-        // (estimate/compare/self-test/status/chain/probe-anu/--help/--version)
-        // and subprocess-invokes the sibling engine.hexa computational module.
-        let __inst_m = install_dir_from_argv0()
-        let mut mci_script = "stdlib/mc_integrate/mc_integrate.hexa"
-        if len(__inst_m) > 0 {
-            let inst_path = __inst_m + "/stdlib/mc_integrate/mc_integrate.hexa"
-            if file_exists(inst_path) { mci_script = inst_path }
+    } else if sub == "qmirror" {
+        // RFC 045 — stdlib/quantum dispatch.
+        // stdlib/quantum/quantum.hexa parses argv subcommand (status/selftest/
+        // chsh/iit/qrng/rqaoa/ctx/.../mirror-bench) and invokes the matching
+        // module via subprocess. 38 module dirs, 62k LoC, all parse-clean.
+        let __inst_qm = install_dir_from_argv0()
+        let mut qm_script = "stdlib/quantum/quantum.hexa"
+        if len(__inst_qm) > 0 {
+            let inst_path = __inst_qm + "/stdlib/quantum/quantum.hexa"
+            if file_exists(inst_path) { qm_script = inst_path }
         }
-        let mut mci_args = []
-        let mut mi = 3
-        while mi < len(av) {
-            mci_args.push(av[mi])
-            mi = mi + 1
+        let mut qm_args = []
+        let mut qmi = 3
+        while qmi < len(av) {
+            qm_args.push(av[qmi])
+            qmi = qmi + 1
         }
-        cmd_run(mci_script, mci_args)
-    } else if sub == "xeno" {
-        // RFC 048 — stdlib/xeno dispatch.
-        // stdlib/xeno/xeno.hexa parses argv topic (status/connect/invoke/
-        // fallback/list/roadmap/falsifier/cycle/--help/--version) — hexa-native
-        // CLI absorbing the original bash bin/xeno. Roadmaps + Python falsifier/
-        // cycle machinery absorbed under stdlib/xeno/.
-        let __inst_x = install_dir_from_argv0()
-        let mut xeno_script = "stdlib/xeno/xeno.hexa"
-        if len(__inst_x) > 0 {
-            let inst_path = __inst_x + "/stdlib/xeno/xeno.hexa"
-            if file_exists(inst_path) { xeno_script = inst_path }
-        }
-        let mut xeno_args = []
-        let mut xi = 3
-        while xi < len(av) {
-            xeno_args.push(av[xi])
-            xi = xi + 1
-        }
-        cmd_run(xeno_script, xeno_args)
+        cmd_run(qm_script, qm_args)
     } else if is_absorbed_verb(sub) {
         // nexus absorption surface (2026-05-13 final consolidation):
         //

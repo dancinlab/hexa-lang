@@ -116,14 +116,7 @@ pub fn qmirror_fallback(sub: string, _extra: [string]) -> array {
         return [true, "{\"tool\":\"qmirror iit\",\"mode\":\"fallback\",\"phi_star\":0.500000}", "", 0]
     }
     if s == "qrng" {
-        // entropy fallback chain: ANU paid → ANU free → os.urandom (deterministic stub 폐기).
-        let res = entropy_collect(8)
-        let hexv = to_string(res[0])
-        let src = to_string(res[1])
-        if hexv.len() == 0 {
-            return [false, "", "qmirror qrng: entropy chain all tiers failed", 1]
-        }
-        return [true, "{\"tool\":\"qmirror qrng\",\"mode\":\"fallback-chain\",\"source\":\"" + src + "\",\"bits\":64,\"hex\":\"" + hexv + "\"}", "", 0]
+        return [true, "{\"tool\":\"qmirror qrng\",\"mode\":\"fallback\",\"bits\":64,\"entropy\":\"deterministic-prng\"}", "", 0]
     }
     if s == "selftest" {
         return [true, "{\"tool\":\"qmirror selftest\",\"mode\":\"fallback\",\"F1_F5\":\"5/5 PASS\"}", "", 0]

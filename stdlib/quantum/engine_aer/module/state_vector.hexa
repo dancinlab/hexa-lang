@@ -1,0 +1,251 @@
+#!hexa strict
+// qmirror/engine_aer/module/state_vector.hexa
+//
+// Pure-hexa complex state-vector kernel (originally Phase 1 of the Aer
+// absorption plan, docs/aer_hexa_absorption_plan_2026_05_12.md). On
+// 2026-05-12 this module was migrated from boxed `[float]` storage to
+// hexa-lang's primitive-float-array (`farr_*`) backend so the same kernel
+// scales to n ≥ 16 qubits without the per-element heap-object overhead
+// that previously OOM'd the 0.1.0-dispatch interpreter at 768 MB.
+//
+// Representation: amplitudes live in two farr buffers, named via the
+// `re_h` / `im_h` integer handles on the `StateVector` struct. Handles
+// are stable for the lifetime of a `StateVector` and are recycled when
+// `state_free` is called (or implicitly when `apply_cnot` swaps them).
+// Index encoding matches qiskit: q0 is the least-significant bit of the
+// amplitude index `i` (i.e. amp[i] is the coefficient of
+// |b_{n-1} ... b_1 b_0> where b_q = (i >> q) & 1).
+//
+// Gate matrices are 2x2 row-major in split form: `m_re = [a, b, c, d]`,
+// `m_im = [a, b, c, d]`, where the unitary is
+//     [[a, b],
+//      [c, d]].
+//
+// API compatibility:
+//   state_zero(n)                    -> StateVector            (unchanged name)
+//   apply_single(sv, gr, gi, t, n)   -> StateVector            (unchanged signature)
+//   apply_cnot(sv, c, t, n)          -> StateVector            (unchanged signature)
+//
+// New helpers (added during the 2026-05-12 migration):
+//   amp_re_at(sv, i)                 -> float
+//   amp_im_at(sv, i)                 -> float
+//   state_dim(sv)                    -> int          // 2^n, computed from sv.n_qubits
+//   state_re_array(sv)               -> [float]      // materializer for legacy [float] consumers
+//   state_im_array(sv)               -> [float]      // ditto
+//   state_set_re(sv, i, v)           -> int          // write amp_re[i] = v (returns sv.re_h)
+//   state_set_im(sv, i, v)           -> int          // write amp_im[i] = v
+//   state_from_arrays(re, im)        -> StateVector  // wrap fresh [float] re/im into a farr-backed SV
+//   state_clone(sv)                  -> StateVector  // fresh copy (own farr handles)
+//   state_free(sv)                   -> int          // release C buffers; optional
+//
+// `farr_*` builtins (interp dispatch in self/hexa_full.hexa, C runtime in
+// self/runtime.c, introduced in hexa-lang `feat/primitive-float-array`).
+
+struct StateVector {
+    n_qubits: int,
+    re_h:     int,        // farr handle for real-part amplitudes (dim doubles)
+    im_h:     int         // farr handle for imag-part amplitudes (dim doubles)
+}
+
+// Compute 2^n_qubits without relying on a power-of-two builtin.
+fn state_dim(state: StateVector) -> int {
+    let mut dim = 1
+    let mut k = 0
+    while k < state.n_qubits {
+        dim = dim * 2
+        k = k + 1
+    }
+    return dim
+}
+
+// |0..0> on `n_qubits` qubits. Allocates 2^n amplitudes in two farr-backed
+// buffers and sets amplitude index 0 to (1+0i).
+fn state_zero(n_qubits: int) -> StateVector {
+    let mut dim = 1
+    let mut k = 0
+    while k < n_qubits {
+        dim = dim * 2
+        k = k + 1
+    }
+    let re_h = farr_zeros(dim)
+    let im_h = farr_zeros(dim)
+    let _ = farr_set(re_h, 0, 1.0)
+    return StateVector { n_qubits: n_qubits, re_h: re_h, im_h: im_h }
+}
+
+// Apply a single-qubit gate to `target`. Mutates state.re_h / state.im_h
+// in place (the underlying C buffer is updated; handle stays the same)
+// and returns the same StateVector struct for chaining.
+//
+// Endian: target is a qubit index; bit (i >> target) & 1 selects the row.
+// Matches qiskit-aer statevector ordering (q0 = LSB of amplitude index).
+fn apply_single(state: StateVector, gate_re: [float], gate_im: [float],
+                target: int, n_qubits: int) -> StateVector {
+    let _ = farr_apply_single(state.re_h, state.im_h, gate_re, gate_im, target, n_qubits)
+    return state
+}
+
+// CNOT control -> target (qiskit endian; q0 = LSB).
+//
+// Allocates a fresh pair of output farr buffers, writes the result via
+// the destination-disjoint C kernel, frees the input buffers, and returns
+// a new StateVector wrapping the outputs. Callers should not retain
+// references to the pre-call state.re_h / im_h.
+fn apply_cnot(state: StateVector, control: int, target: int,
+              n_qubits: int) -> StateVector {
+    let mut dim = 1
+    let mut k = 0
+    while k < n_qubits {
+        dim = dim * 2
+        k = k + 1
+    }
+    let out_re_h = farr_zeros(dim)
+    let out_im_h = farr_zeros(dim)
+    let _ = farr_apply_cnot(state.re_h, state.im_h, out_re_h, out_im_h, control, target, n_qubits)
+    let _ = farr_free(state.re_h)
+    let _ = farr_free(state.im_h)
+    return StateVector { n_qubits: n_qubits, re_h: out_re_h, im_h: out_im_h }
+}
+
+// ── Accessors / materializers ──────────────────────────────────────────
+
+fn amp_re_at(state: StateVector, i: int) -> float {
+    return farr_get(state.re_h, i)
+}
+
+fn amp_im_at(state: StateVector, i: int) -> float {
+    return farr_get(state.im_h, i)
+}
+
+fn state_set_re(state: StateVector, i: int, v: float) -> int {
+    let _ = farr_set(state.re_h, i, v)
+    return state.re_h
+}
+
+fn state_set_im(state: StateVector, i: int, v: float) -> int {
+    let _ = farr_set(state.im_h, i, v)
+    return state.im_h
+}
+
+// Materialize the real (resp. imag) amplitudes as a fresh `[float]` for
+// callers that need to pass the contents through a legacy boxed-array
+// boundary (e.g. AerResult.amps_re returns to consumers that index it
+// with [i]). O(dim) — only use when the caller cannot be migrated to
+// amp_re_at / amp_im_at access.
+fn state_re_array(state: StateVector) -> [float] {
+    let dim = state_dim(state)
+    let mut out = []
+    let mut i = 0
+    while i < dim {
+        out = out.push(farr_get(state.re_h, i))
+        i = i + 1
+    }
+    return out
+}
+
+fn state_im_array(state: StateVector) -> [float] {
+    let dim = state_dim(state)
+    let mut out = []
+    let mut i = 0
+    while i < dim {
+        out = out.push(farr_get(state.im_h, i))
+        i = i + 1
+    }
+    return out
+}
+
+// Inverse of state_{re,im}_array: take fresh `[float]` arrays produced by
+// a custom gate kernel (e.g., chemistry_vqe's XY/YX exponentials) and wrap
+// them into a fresh farr-backed StateVector. The input arrays are read
+// once and not retained.
+fn state_from_arrays(re: [float], im: [float]) -> StateVector {
+    let dim = len(re)
+    // Infer n_qubits from dim (assumes dim is a power of 2).
+    let mut n = 0
+    let mut d = dim
+    while d > 1 {
+        d = d / 2
+        n = n + 1
+    }
+    let re_h = farr_zeros(dim)
+    let im_h = farr_zeros(dim)
+    let mut i = 0
+    while i < dim {
+        let _ = farr_set(re_h, i, re[i])
+        let _ = farr_set(im_h, i, im[i])
+        i = i + 1
+    }
+    return StateVector { n_qubits: n, re_h: re_h, im_h: im_h }
+}
+
+// Fresh deep copy. Owns its own farr handles — the original is untouched
+// and the returned StateVector is safe to mutate (apply_single, etc.)
+// without aliasing back to the source. O(dim).
+fn state_clone(state: StateVector) -> StateVector {
+    let dim = state_dim(state)
+    let re_h = farr_zeros(dim)
+    let im_h = farr_zeros(dim)
+    let mut i = 0
+    while i < dim {
+        let _ = farr_set(re_h, i, farr_get(state.re_h, i))
+        let _ = farr_set(im_h, i, farr_get(state.im_h, i))
+        i = i + 1
+    }
+    return StateVector { n_qubits: state.n_qubits, re_h: re_h, im_h: im_h }
+}
+
+// Release the underlying C buffers. Optional — the farr freelist will
+// recycle handles automatically, but explicit free is cheap and good
+// hygiene for long-running programs that allocate many state vectors.
+fn state_free(state: StateVector) -> int {
+    let _ = farr_free(state.re_h)
+    let _ = farr_free(state.im_h)
+    return 0
+}
+
+// ── Selftest ───────────────────────────────────────────────────────────
+//
+// Same protocol as the former engine_aer/module/state_vector_farr.hexa:
+// n=17 (dim=131072) H + CNOT round-trip, Bell pair on q0/q1, all other
+// qubits in |0>. The classic boxed-[float] path OOM'd here; the farr
+// path completes in ~10 ms / ~9 MB RSS.
+
+fn _selftest_state_vector() -> int {
+    let n = 17
+    let st = state_zero(n)
+
+    let h_s = 1.0 / sqrt(2.0)
+    let h_re = [h_s, h_s, h_s, 0.0 - h_s]
+    let h_im = [0.0, 0.0, 0.0, 0.0]
+
+    let st1 = apply_single(st, h_re, h_im, 0, n)
+    let st2 = apply_cnot(st1, 0, 1, n)
+
+    let a0 = amp_re_at(st2, 0)
+    let a3 = amp_re_at(st2, 3)
+
+    let expected = 1.0 / sqrt(2.0)
+    let tol = 0.000001
+    let e0 = if a0 - expected < 0.0 { expected - a0 } else { a0 - expected }
+    let e3 = if a3 - expected < 0.0 { expected - a3 } else { a3 - expected }
+
+    let _ = state_free(st2)
+
+    if tol < e0 { return 0 }   // @allow-relop-banned (banned >= via "<")
+    if tol < e3 { return 0 }
+    return 1
+}
+
+fn main() {
+    println("[qmirror/engine_aer/state_vector] complex state-vector kernel (farr-backed)")
+    println("  endian   = qiskit (q0 = LSB)")
+    println("  backend  = hexa-lang farr_* builtins")
+    let ok = _selftest_state_vector()
+    if ok == 1 {
+        println("  selftest = PASS (n=17 Bell pair, |amp[0]| = |amp[3]| ≈ 0.7071)")
+        println("__QMIRROR_STATE_VECTOR__ PASS")
+    } else {
+        println("  selftest = FAIL")
+        println("__QMIRROR_STATE_VECTOR__ FAIL")
+    }
+}

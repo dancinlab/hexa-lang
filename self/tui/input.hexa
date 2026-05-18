@@ -474,7 +474,15 @@ fn _csi_final_to_event(params: string, final_byte: int) -> array {
             if _mok_code == 13 { return ["key", -1, _mok_ctrl, _mok_alt, _mok_shift, ""] }   // Enter
             if _mok_code == 9  { return ["key", -2, _mok_ctrl, _mok_alt, _mok_shift, ""] }   // Tab
             if _mok_code == 8 || _mok_code == 127 { return ["key", -3, _mok_ctrl, _mok_alt, _mok_shift, ""] }   // Backspace
-            if _mok_code >= 32 && _mok_code < 127 { return ["key", _mok_code, _mok_ctrl, _mok_alt, _mok_shift, chr(_mok_code)] }
+            // Printable: ASCII *and* non-ASCII (Hangul / CJK / emoji). At
+            // modifyOtherKeys level 2 the terminal reformats every printable
+            // keypress as CSI 27;<mod>;<codepoint>~, so the codepoint can be
+            // any Unicode scalar — not just ASCII. chr() emits the UTF-8
+            // encoding for wide codepoints, mirroring the raw-mode UTF-8 path
+            // at _decode_one L300. 1114112 = U+110000, one past the highest
+            // valid Unicode scalar. Capping at 127 here silently dropped all
+            // non-Latin input. (inbox/patches/modifyotherkeys-non-ascii-decoder-gap.md)
+            if _mok_code >= 32 && _mok_code < 1114112 { return ["key", _mok_code, _mok_ctrl, _mok_alt, _mok_shift, chr(_mok_code)] }
             return ["err", "csi-modifyotherkeys-unsupported-code"]
         }
         if n == 1  { return ["key", -20, _ctrl_f, _alt_f, _shift_f, ""] }   // home (CSI 1 ~ — screen-256color / linux / rxvt)

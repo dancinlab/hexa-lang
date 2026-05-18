@@ -97,7 +97,7 @@ fn cmd_help() {
     println("  wdw                                       Wheeler-DeWitt minisuperspace [Basilakos 2025]")
     println("")
     println("ARCHIVE")
-    println("  ~/core/archive_sim-universe/              frozen 묘비 (RFC 046 헌법 v2 룰 3)")
+    println("  github.com/dancinlab/sim-universe (private) frozen 묘비 (RFC 046 헌법 v2 룰 3)")
     println("  DOI: 10.5281/zenodo.20102970")
     println("")
     println("HONEST SCOPE  Toy lattice-model substrate with QRNG-anchored entropy.")
@@ -152,7 +152,7 @@ fn cmd_status() {
     println("HONEST SCOPE  Toy lattice-model substrate · Bostrom-flavored framing.")
     println("  NOT lattice QCD · NOT Einstein-equation · NOT N-body cosmology · NOT SM.")
     println("  Each experiment ships per-module 'honest scope' caveat.")
-    println("  Full caveats: stdlib/sim_universe/README.md + archive_sim-universe/README.md")
+    println("  Full caveats: stdlib/sim_universe/README.md + dancinlab/sim-universe (GitHub private) README.md")
 }
 
 fn cmd_anu(args: [str]) {

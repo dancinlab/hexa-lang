@@ -157,6 +157,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX1104",
+        title: "closure codegen not yet implemented",
+        severity: Severity::Error,
+        stage: "S2",
+        template: "closure-expression `fn(...){...}` codegen is not yet implemented (RFC closure-expression cycle C1 delivers parse/bind/type only — MIR indirect-call lowering is C2, arm64 codegen is C3)",
+        explain: "The closure-expression RFC is split into three cycles. C1 (this build) implements the parser, AST node (ExprKind::Closure), bind-pass scoping of closure params, and a `fn`-typed value for the type checker — the full front-half. Codegen is deliberately deferred: C2 adds the HIR->MIR closure-conversion lowering (capture-environment struct synthesis + closure value + indirect call), and C3 adds the arm64 backend. Until C2/C3 land, a program that uses a closure-expression compiles through parse/check cleanly and then stops here with this accurate diagnostic — instead of the misleading pre-C1 `HX2001 undefined name fn` (which mis-reported the `fn` keyword as an unknown identifier). To proceed today, rewrite the closure as a named top-level `fn` item.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX1100",
         title: "closure capture not yet supported",
         severity: Severity::Warning,

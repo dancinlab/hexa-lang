@@ -76,7 +76,22 @@ pub enum ExprKind {
     StructLit,       // Foo { x: 1, y: 2 } — A1.5
     EnumPath,        // Foo::Bar / Foo::Bar(payload) — A1.5
     ArrayLit,        // [e0, e1, ...] / [] — children = elements
-    Wildcard         // _ pattern — A1.5
+    Wildcard,        // _ pattern — A1.5
+    Try,             // try { try_body } catch e { catch_body } — A1.6
+                     // children = [try_body_block, catch_body_block]
+                     // text     = catch_var_name (or "" for catch w/o binder)
+    Throw,           // throw <expr> — children = [value_expr]
+    Closure          // fn(p0, p1, ...) { body } — closure-expression, RFC C1
+                     // text     = decimal param count, e.g. "2"
+                     // children = [param_0, ..., param_{n-1}, body_block]
+                     //   param_i : ExprKind::Ident, text = param name,
+                     //             children = [type_expr] if `: T` annotated
+                     //             else children = []  (type optional, mirrors
+                     //             self/hexa_full.hexa parse_params)
+                     //   body    : ExprKind::Block (last child, always present)
+                     // Captures (free vars) are NOT collected here — C2 walks
+                     // the body subtree to build the capture set; C1 is parse/
+                     // check front-half only, codegen is deferred (HX1104).
 }
 
 // ── Expressions ──────────────────────────────────────────────
@@ -149,7 +164,10 @@ fn _ast_is_string_lit(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 

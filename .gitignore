@@ -76,6 +76,10 @@ hexa.real.bak_*
 # Staging artifact from hexa_v2 regen pipeline (canonical is hexa_cc.c)
 self/native/hexa_cc.c.new
 
+# R7 track B absorbed-verb sub-binaries — built via `hexa build stdlib/<verb>/<verb>.hexa`.
+# Arch-specific Mach-O / ELF, not source of truth. Rebuild with tool/build_hexa_<verb>.sh.
+bin/hexa-qrng
+
 # Local smoke/session artifacts (not tracked)
 shared/state/
 

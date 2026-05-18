@@ -1,0 +1,1050 @@
+#!hexa strict
+// qmirror/mirror-fidelity-bench/module/mirror_fidelity_bench.hexa
+//
+// @tool(slug="qmirror_mirror_fidelity_bench", desc="Mirror-circuit volumetric benchmarking -- the IDEAL-REFERENCE leg of the qmirror bench domain. Pure-hexa engine_aer EXACT 2^w state-vector kernel. Reproduces a measurement INSTRUMENT (NOT a single arXiv paper's headline): the mirror-circuit benchmark of Proctor-Rudinger-Young-Nielsen-Blume-Kohout (Measuring the capabilities of quantum computers, Nature Physics 18, 75 (2022) / arXiv:2008.11294), the volumetric framework of Blume-Kohout & Young (A volumetric framework for quantum computer benchmarks, Quantum 4, 362 (2020) / arXiv:1904.05546), and the heavy-output / quantum-volume test of Cross-Bishop-Sheldon-Nation-Gambetta (Validating quantum computers using randomized model circuits, PRA 100, 032328 (2019) / arXiv:1811.12926). The engine builds a random circuit C of width w and depth d (layers of random single-qubit U3 gates + a CZ brickwork entangler), appends the EXACT inverse C-dagger (gate-reverse + per-gate inverse: U3(t,p,l)^-1 = U3(-t,-l,-p), CZ self-inverse) with optional Pauli-frame randomization inserted between the two halves (Proctor 2022 SS-II Pauli-randomized mirror -- a Pauli layer P and its self-inverse P bracket the join so C-dagger P P C = C-dagger C = I), then verifies the load-bearing ideal-reference fact C-dagger C |0..0> = |0..0> EXACTLY, so the noiseless mirror-circuit success probability S = |<0..0|psi>|^2 is exactly 1.0. Polarization P = (S - 1/2^w)/(1 - 1/2^w) rescales S so noiseless -> 1, full-depolarization S=1/2^w -> 0 (Proctor 2022). An analytic per-layer depolarizing mock multiplies the polarization by a fixed retention (1-eps) per layer, giving P(w,d) = (1-eps)^d and the volumetric pass/fail heatmap pass[w][d] = (P(w,d) > 2/3) (Blume-Kohout-Young 2020 threshold). The quantum-volume heavy-output-generation test computes HOG = Sum_{x: p(x) > median p} p(x) exactly from the w-qubit state vector of a square w*w random circuit and verifies HOG -> (1 + ln 2)/2 ~= 0.8466 (the Porter-Thomas heavy-output asymptote, Cross 2019). Six falsifiers (F1-F6): noiseless S exactly 1 to 1e-9 (the C-dagger C = I identity -- the load-bearing exactness check), noiseless polarization exactly 1, depolarizing P(w,d) monotone non-increasing in d, volumetric heatmap monotone in d, Haar HOG within 0.05 of (1+ln2)/2, and norm drift < 1e-9. Natural ceiling w <= 10-12 (mirror circuits are deep but the register stays small; 2^12 = 4096 amplitudes is comfortable inside the @D g1 30-qubit envelope).")
+// @usage(HEXA_MEM_UNLIMITED=1 hexa run mirror-fidelity-bench/module/mirror_fidelity_bench.hexa --selftest)
+// @sentinel(__QMIRROR_MIRROR_FIDELITY_BENCH__ <PASS|FAIL>)
+// @resolver-bypass(reason="Selftest exercises the pure-hexa state-vector kernel only (engine_aer state_zero / apply_single / amp_*at / state_set_* / state_clone / state_free primitives; in-module gate_u3 / gate inverse / CZ amplitude-permutation applicator; deterministic LCG); no qiskit, no qiskit-aer, no python bridge, no live QRNG, no subprocess for the physics.")
+//
+// =============================================================================
+//  PAPER DEEP-DIVE  (this module reproduces a BENCHMARKING INSTRUMENT, not a
+//  single paper's headline result -- it is the aux ideal-reference module)
+// =============================================================================
+//
+//  ANCHOR 1 -- mirror-circuit benchmarking:
+//    T. Proctor, K. Rudinger, K. Young, E. Nielsen, R. Blume-Kohout,
+//    "Measuring the capabilities of quantum computers",
+//    Nature Physics 18, 75-79 (2022).  arXiv:2008.11294.
+//
+//    A mirror circuit is a circuit C followed by a (Pauli-randomized)
+//    inverse C-dagger.  Because C-dagger C = I, the IDEAL output is a known
+//    computational-basis state -- with the all-zeros input |0..0>, the
+//    ideal output is |0..0> with certainty.  A real device's measured
+//    SUCCESS PROBABILITY  S  (the probability of recovering the known
+//    target bitstring) decays with circuit volume; the figure of merit is
+//    the POLARIZATION
+//        P  =  (S - 1/2^w) / (1 - 1/2^w)
+//    which rescales S so that a noiseless device gives P = 1 and a fully
+//    depolarized device (S = 1/2^w, uniform) gives P = 0.  The Pauli-frame
+//    randomization (Proctor 2022 SS-II) inserts random Pauli layers so that
+//    coherent errors are twirled into a stochastic (depolarizing-like)
+//    channel -- the success probability then has a clean exponential decay
+//    in depth, which is exactly the analytic mock this module uses.
+//
+//  ANCHOR 2 -- volumetric benchmarking:
+//    R. Blume-Kohout, K. C. Young,
+//    "A volumetric framework for quantum computer benchmarks",
+//    Quantum 4, 362 (2020).  arXiv:1904.05546.
+//
+//    A volumetric benchmark reports a (width w  x  depth d) heatmap of
+//    pass/fail cells.  A cell (w, d) PASSES if the figure of merit clears
+//    a threshold; the canonical choice is polarization > 2/3.  The pass
+//    region is a "staircase": if (w, d) passes then every shallower cell
+//    (w, d' < d) at the same width also passes -- the heatmap is monotone
+//    in depth.  The largest passing square w x w is one rendering of the
+//    device's quantum volume.
+//
+//  ANCHOR 3 -- heavy-output generation / quantum volume:
+//    A. W. Cross, L. S. Bishop, S. Sheldon, P. D. Nation, J. M. Gambetta,
+//    "Validating quantum computers using randomized model circuits",
+//    Phys. Rev. A 100, 032328 (2019).  arXiv:1811.12926.
+//
+//    For a w-qubit random ("model") circuit, label a bitstring x HEAVY if
+//    its ideal probability p(x) exceeds the MEDIAN of the 2^w ideal
+//    probabilities.  The heavy-output-generation probability is
+//        HOG  =  Sum_{x : p(x) > median}  p(x).
+//    For a Haar-random circuit the output distribution follows the
+//    Porter-Thomas law  Pr(2^w p = z) = e^{-z}, for which the heavy-output
+//    mass converges (large w) to
+//        HOG  ->  (1 + ln 2) / 2  ~=  0.846574.
+//    The quantum-volume test requires a device to reproduce HOG > 2/3 on
+//    its square model circuits; this module reproduces the IDEAL HOG value
+//    that the > 2/3 bar is measured against.
+//
+// =============================================================================
+//  HONEST SCOPE  (@D g3 / @F f1 / project @D g6 falsifier-first)
+// =============================================================================
+//
+//  This is an EXACT 2^w-amplitude pure-hexa engine_aer state-vector
+//  simulation that provides the IDEAL-REFERENCE LEG of the qmirror bench
+//  domain.  All randomness is a deterministic LCG seeded at module-config
+//  time (the qdrift / page-curve / shallow-shadows idiom) -- NOT live ANU
+//  QRNG.  The verdict is bit-reproducible.
+//
+//  This module is DIFFERENT from the 20 arXiv-paper shortlist modules
+//  (g9-g28): each of those reproduces ONE paper's headline experiment.
+//  mirror-fidelity-bench is an AUX BENCHMARKING module -- it reproduces a
+//  measurement INSTRUMENT (mirror-circuit + volumetric + HOG benchmarking)
+//  for which there is no single arXiv-paper headline; its three anchors
+//  above are the standard practitioner references for that instrument.
+//
+//  What this sim does NOT reproduce:
+//
+//   (i)  A real-QPU volumetric benchmark.  The noiseless mirror-circuit
+//        success probability S = 1 is an EXACT state-vector fact (the
+//        C-dagger C = I identity); the depolarizing noise SWEEP is an
+//        ANALYTIC PER-LAYER MOCK -- each layer multiplies the polarization
+//        by a fixed retention factor (1 - eps).  A real device has
+//        gate-dependent, spatially correlated, and leakage errors that no
+//        single scalar eps captures.  This module is the IDEAL REFERENCE,
+//        the value a real device's volumetric heatmap is measured AGAINST,
+//        not a model of any specific device.
+//
+//   (ii) The asymptotic large-w regime.  The HOG -> (1 + ln 2)/2 limit is
+//        the w -> infinity Porter-Thomas asymptote; at the reachable
+//        w <= 10-12 the finite-w HOG sits within ~0.05 of the asymptote
+//        (the falsifier tolerance), and we do NOT claim the strict limit.
+//
+//   (iii) Measurement / shot noise.  The success probability and the HOG
+//        mass are EXACT state-vector quantities, not finite-shot sampling
+//        estimates.  A real device additionally has SPAM and finite-sample
+//        error on every S and HOG it reports.
+//
+//   (iv) A duplicate of any existing module.  The mirror-circuit /
+//        volumetric / HOG instrument is the benchmarking axis: distinct
+//        from page-curve-scrambler (entanglement growth), distinct from
+//        shallow-shadows / symmetry-adjusted-shadows (classical-shadow
+//        tomography), distinct from rpe-gate-calib (robust phase
+//        estimation), distinct from clifford-data-regression (error
+//        mitigation).  This is the standalone capability-benchmark
+//        instrument.
+//
+//  The 2^w memory wall is the natural ceiling, but mirror circuits keep the
+//  register small (deep, not wide) -- w <= 10-12 (2^12 = 4096 amplitudes)
+//  is comfortable inside the @D g1 30-qubit envelope.  The falsifier is
+//  registered on a grid w in {2,3,4} x d in {1..8} for a fast selftest
+//  budget per @D g6.
+//
+// =============================================================================
+//  FILE OWNERSHIP / DROP-IN COMPAT (@D g7)
+// =============================================================================
+//
+//  NEW sibling module.  Does NOT touch engine_aer / qrng / chsh / iit_mip
+//  external signatures.  All circuit generators / gate-inverse builders /
+//  CZ applicators / HOG computers are STANDALONE in this module.  Reads
+//  engine_aer/module/state_vector.hexa + gates.hexa via use-relative paths
+//  only.
+//
+//  ── hexa quirks honored ─────────────────────────────────────────────────
+//    - >= / <= banned -- strict < / > only.
+//    - struct names cannot start with _.
+//    - no `break` -- flag-driven while loops.
+//    - exec("date +%s").trim() for timestamps (NOT now_unix -- undefined
+//      in the qmirror runtime).
+//    - apply_single mutates state.re_h / state.im_h in place; apply_cnot
+//      reallocates -- we never retain a stale handle.
+
+use "../../engine_aer/module/state_vector.hexa"
+use "../../engine_aer/module/gates.hexa"
+
+// =============================================================================
+//  §1  CONSTANTS  (instrument anchors + registered falsifier grid)
+// =============================================================================
+
+fn mfb_pi() -> float { return 3.141592653589793 }
+fn mfb_ln2() -> float { return 0.6931471805599453 }
+
+// Porter-Thomas heavy-output asymptote  (1 + ln 2) / 2.
+fn mfb_hog_asymptote() -> float { return (1.0 + mfb_ln2()) / 2.0 }
+
+// Volumetric pass threshold on polarization (Blume-Kohout-Young 2020).
+fn mfb_vol_threshold() -> float { return 2.0 / 3.0 }
+
+// Registered falsifier grid for the volumetric + mirror sweep.
+fn mfb_reg_seed()      -> int { return 20260517 }
+fn mfb_reg_max_w()     -> int { return 4 }     // widths 2..4
+fn mfb_reg_max_d()     -> int { return 8 }     // depths 1..8
+fn mfb_reg_min_w()     -> int { return 2 }
+// per-layer depolarizing retention is (1 - eps); eps registered below.
+fn mfb_reg_eps()       -> float { return 0.12 }
+// HOG test: w-qubit random circuit; R independent random circuits averaged.
+// The Cross 2019 quantum-volume MODEL circuit is the square w x w shape, but
+// reproducing the Porter-Thomas HEAVY-OUTPUT ASYMPTOTE (1+ln2)/2 requires the
+// output distribution to ANTICONCENTRATE -- which happens only once the
+// circuit reaches an approximate unitary 2-design.  The 2-design depth for a
+// 1D brickwork is O(w) layers but with an O(1) prefactor > 1 (Brandao-Harrow-
+// Horodecki 2016 / Harrow-Mehraban 2018); a strict square w x w circuit at
+// w = 8 still sits noticeably ABOVE the asymptote (the distribution has not
+// fully spread).  We therefore run the HOG circuit at depth 4*w -- the same
+// approximate-2-design depth page-curve-scrambler uses -- so the heavy-output
+// mass converges to the Porter-Thomas value.  This is an honest modelling
+// choice, stated here: the *shape* anchor is Cross 2019's model circuit; the
+// *depth* is set to the 2-design depth so the asymptote is actually reached.
+fn mfb_reg_hog_w()     -> int { return 8 }
+fn mfb_reg_hog_depth_mult() -> int { return 4 }    // HOG circuit depth = mult * w
+fn mfb_reg_hog_R()     -> int { return 32 }
+
+// Falsifier tolerances.
+fn mfb_tol_exact()  -> float { return 0.000000001 }   // 1e-9 -- F1/F2/F6
+fn mfb_tol_hog()    -> float { return 0.05 }          // F5
+
+// =============================================================================
+//  §2  HELPERS  (float / int)
+// =============================================================================
+
+fn mfb_absf(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn mfb_max(a: float, b: float) -> float {
+    if a < b { return b }
+    return a
+}
+
+fn mfb_min(a: float, b: float) -> float {
+    if a < b { return a }
+    return b
+}
+
+fn mfb_pow2(n: int) -> int {
+    let mut d = 1
+    let mut k = 0
+    while k < n {
+        d = d * 2
+        k = k + 1
+    }
+    return d
+}
+
+// integer power (1 - eps)^d for the depolarizing mock.
+fn mfb_powf(base: float, expo: int) -> float {
+    let mut acc = 1.0
+    let mut k = 0
+    while k < expo {
+        acc = acc * base
+        k = k + 1
+    }
+    return acc
+}
+
+// =============================================================================
+//  §3  DETERMINISTIC LCG  (no live QRNG -- portable, reproducible verdict)
+// =============================================================================
+//
+//  Same 31-bit LCG idiom as qdrift / page-curve / shallow-shadows.
+
+fn mfb_lcg_next(state: int) -> int {
+    return (state * 1103515245 + 12345) & 2147483647
+}
+
+fn mfb_lcg_unit(s: int) -> float {
+    return to_float(s) / 2147483648.0
+}
+
+struct MfbLcgInt {
+    state: int,
+    v:     int
+}
+
+// Draw a uniform integer in [0, k) deterministically from state s_in.
+fn mfb_lcg_int(s_in: int, k: int) -> MfbLcgInt {
+    let s2 = mfb_lcg_next(s_in)
+    let u = mfb_lcg_unit(s2)
+    let v = to_int(u * to_float(k))
+    let v2 = if v < 0 { 0 } else { if v < k { v } else { k - 1 } }
+    return MfbLcgInt { state: s2, v: v2 }
+}
+
+// =============================================================================
+//  §4  MIRROR-CIRCUIT GATE-LIST REPRESENTATION
+// =============================================================================
+//
+//  A circuit is a flat list of "ops".  Two op kinds:
+//
+//    kind = 0 : single-qubit U3 on qubit `q` with Euler angles (theta,phi,lam).
+//    kind = 1 : two-qubit CZ on the ordered pair (q, q2).  CZ is symmetric
+//               and self-inverse (CZ^2 = I).
+//
+//  A MIRROR CIRCUIT is built as
+//
+//       C   .   [Pauli frame P]   .   C-dagger-with-P-prepended
+//
+//  where C is a random width-w depth-d brickwork (random U3 layers + CZ
+//  brickwork) and C-dagger is the EXACT inverse: the op list reversed, with
+//  every U3(theta,phi,lam) replaced by its inverse U3(-theta,-lam,-phi) and
+//  every CZ left unchanged (self-inverse).  The Pauli-frame layer P is a
+//  layer of random {I,X,Y,Z} single-qubit gates; since every Pauli is
+//  self-inverse (P^2 = I up to a global phase that drops out of |amp|^2),
+//  bracketing the join with P on the C side and P again at the head of the
+//  C-dagger side leaves the exact identity intact:
+//       C-dagger . P . P . C   =   C-dagger . C   =   I
+//  (Proctor 2022 SS-II Pauli-randomized mirror -- in the lab this twirls
+//  coherent error into stochastic error; here it is an exact-identity
+//  no-op that the engine must still recover to S = 1).
+
+struct MfbOp {
+    kind:  int,      // 0 = U3, 1 = CZ
+    q:     int,
+    q2:    int,      // used only for CZ
+    theta: float,
+    phi:   float,
+    lam:   float
+}
+
+fn mfb_op_u3(q: int, theta: float, phi: float, lam: float) -> MfbOp {
+    return MfbOp { kind: 0, q: q, q2: 0, theta: theta, phi: phi, lam: lam }
+}
+
+fn mfb_op_cz(qa: int, qb: int) -> MfbOp {
+    return MfbOp { kind: 1, q: qa, q2: qb, theta: 0.0, phi: 0.0, lam: 0.0 }
+}
+
+// Exact inverse of a single op:
+//   U3(theta,phi,lam)^-1 = U3(-theta, -lam, -phi)   (note phi<->lam swap)
+//   CZ^-1 = CZ.
+fn mfb_op_inverse(op: MfbOp) -> MfbOp {
+    if op.kind == 1 {
+        return op
+    }
+    return MfbOp {
+        kind: 0, q: op.q, q2: 0,
+        theta: 0.0 - op.theta,
+        phi:   0.0 - op.lam,
+        lam:   0.0 - op.phi
+    }
+}
+
+// =============================================================================
+//  §5  RANDOM CIRCUIT GENERATOR  (brickwork: random U3 layers + CZ brickwork)
+// =============================================================================
+//
+//  Build the forward half C of width w, depth d.  Each of the d layers is
+//    (a) a random U3(theta in [0,pi], phi,lam in [-pi,pi]) on EVERY qubit;
+//    (b) a CZ brickwork: even layer -> pairs (0,1),(2,3),...; odd layer ->
+//        pairs (1,2),(3,4),...  (CZ is the entangler -- symmetric, so the
+//        ordered pair does not matter, and self-inverse).
+//
+//  Returns the forward op list AND the advanced LCG seed.
+
+struct MfbGenOut {
+    ops:  [MfbOp],
+    seed: int
+}
+
+fn mfb_gen_forward(w: int, d: int, seed_in: int) -> MfbGenOut {
+    let pi = mfb_pi()
+    let mut ops = []
+    let mut seed = seed_in
+    let mut layer = 0
+    while layer < d {
+        // (a) random U3 on every qubit
+        let mut q = 0
+        while q < w {
+            seed = mfb_lcg_next(seed)
+            let u1 = mfb_lcg_unit(seed)
+            seed = mfb_lcg_next(seed)
+            let u2 = mfb_lcg_unit(seed)
+            seed = mfb_lcg_next(seed)
+            let u3 = mfb_lcg_unit(seed)
+            let theta = pi * u1
+            let phi   = 2.0 * pi * (u2 - 0.5)
+            let lam   = 2.0 * pi * (u3 - 0.5)
+            ops = ops.push(mfb_op_u3(q, theta, phi, lam))
+            q = q + 1
+        }
+        // (b) CZ brickwork
+        let parity = layer & 1
+        let mut start = parity
+        while start + 1 < w {
+            ops = ops.push(mfb_op_cz(start, start + 1))
+            start = start + 2
+        }
+        layer = layer + 1
+    }
+    return MfbGenOut { ops: ops, seed: seed }
+}
+
+// Build the exact inverse op list C-dagger from a forward list: reverse the
+// op order, invert each op.
+fn mfb_invert_ops(fwd: [MfbOp]) -> [MfbOp] {
+    let mut out = []
+    let mut i = len(fwd) - 1
+    let mut done = 0
+    while done == 0 {
+        if i < 0 {
+            done = 1
+        } else {
+            out = out.push(mfb_op_inverse(fwd[i]))
+            i = i - 1
+        }
+    }
+    return out
+}
+
+// Build a Pauli-frame layer: one random Pauli {I,X,Y,Z} per qubit, encoded
+// as a U3 op (I=U3(0,0,0); X=U3(pi,0,pi); Y=U3(pi,pi/2,pi/2); Z=U3(0,0,pi)).
+// Pauli gates are self-inverse up to a global phase (irrelevant to |amp|^2),
+// so the SAME layer applied twice is the identity.
+struct MfbPauliOut {
+    ops:  [MfbOp],
+    seed: int
+}
+
+fn mfb_pauli_op(q: int, which: int) -> MfbOp {
+    let pi = mfb_pi()
+    if which == 0 {
+        return mfb_op_u3(q, 0.0, 0.0, 0.0)               // I
+    }
+    if which == 1 {
+        return mfb_op_u3(q, pi, 0.0, pi)                 // X
+    }
+    if which == 2 {
+        return mfb_op_u3(q, pi, pi / 2.0, pi / 2.0)      // Y
+    }
+    return mfb_op_u3(q, 0.0, 0.0, pi)                    // Z
+}
+
+fn mfb_gen_pauli_frame(w: int, seed_in: int) -> MfbPauliOut {
+    let mut ops = []
+    let mut seed = seed_in
+    let mut q = 0
+    while q < w {
+        let d = mfb_lcg_int(seed, 4)
+        seed = d.state
+        ops = ops.push(mfb_pauli_op(q, d.v))
+        q = q + 1
+    }
+    return MfbPauliOut { ops: ops, seed: seed }
+}
+
+// =============================================================================
+//  §6  CZ APPLICATOR  (in-place amplitude-permutation; CZ is diagonal)
+// =============================================================================
+//
+//  CZ on (qa, qb): multiply amplitude i by -1 iff bit qa AND bit qb are
+//  both set.  Diagonal, symmetric, self-inverse.
+
+fn mfb_apply_cz(sv: StateVector, qa: int, qb: int) -> int {
+    let dim = state_dim(sv)
+    let ma = 1 << qa
+    let mb = 1 << qb
+    let mut i = 0
+    while i < dim {
+        if (i & ma) != 0 {
+            if (i & mb) != 0 {
+                let _r = state_set_re(sv, i, 0.0 - amp_re_at(sv, i))
+                let _ii = state_set_im(sv, i, 0.0 - amp_im_at(sv, i))
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// Apply one op to a state vector (in place where possible).
+fn mfb_apply_op(sv: StateVector, op: MfbOp, w: int) -> StateVector {
+    if op.kind == 1 {
+        let _ = mfb_apply_cz(sv, op.q, op.q2)
+        return sv
+    }
+    let g = gate_u3(op.theta, op.phi, op.lam)
+    return apply_single(sv, g.re, g.im, op.q, w)
+}
+
+// Run a full op list on |0..0>.  Returns the final state vector.
+fn mfb_run_ops(w: int, ops: [MfbOp]) -> StateVector {
+    let mut sv = state_zero(w)
+    let mut i = 0
+    while i < len(ops) {
+        sv = mfb_apply_op(sv, ops[i], w)
+        i = i + 1
+    }
+    return sv
+}
+
+// =============================================================================
+//  §7  MIRROR CIRCUIT  +  SUCCESS PROBABILITY  +  POLARIZATION
+// =============================================================================
+//
+//  Build the full mirror op list:
+//
+//      C   .   P   .   P   .   C-dagger
+//
+//  (P is the Pauli frame; the two copies of P bracket the join and cancel
+//  exactly).  Run on |0..0>, then read:
+//
+//    success probability S = |amp[0]|^2  (probability of recovering |0..0>)
+//    norm = Sum_i |amp[i]|^2
+//    polarization P = (S - 1/2^w) / (1 - 1/2^w)
+
+struct MfbMirrorResult {
+    success:     float,    // S = |<0..0|psi>|^2
+    polariz:     float,    // P = (S - 1/D)/(1 - 1/D)
+    norm_drift:  float,    // |norm - 1|
+    n_ops:       int       // total op count of the mirror circuit
+}
+
+fn mfb_run_mirror(w: int, d: int, seed_in: int) -> MfbMirrorResult {
+    // forward half C
+    let fwd = mfb_gen_forward(w, d, seed_in)
+    // Pauli frame P (between the halves)
+    let pf = mfb_gen_pauli_frame(w, fwd.seed)
+    // inverse half C-dagger
+    let inv = mfb_invert_ops(fwd.ops)
+
+    // assemble:  C . P . P . C-dagger
+    let mut all = []
+    let mut i = 0
+    while i < len(fwd.ops) {
+        all = all.push(fwd.ops[i])
+        i = i + 1
+    }
+    let mut j = 0
+    while j < len(pf.ops) {
+        all = all.push(pf.ops[j])
+        j = j + 1
+    }
+    let mut j2 = 0
+    while j2 < len(pf.ops) {
+        all = all.push(pf.ops[j2])
+        j2 = j2 + 1
+    }
+    let mut k = 0
+    while k < len(inv) {
+        all = all.push(inv[k])
+        k = k + 1
+    }
+
+    let sv = mfb_run_ops(w, all)
+    let dim = state_dim(sv)
+
+    // success probability + norm
+    let a0r = amp_re_at(sv, 0)
+    let a0i = amp_im_at(sv, 0)
+    let success = a0r * a0r + a0i * a0i
+    let mut norm = 0.0
+    let mut idx = 0
+    while idx < dim {
+        let r = amp_re_at(sv, idx)
+        let im = amp_im_at(sv, idx)
+        norm = norm + r * r + im * im
+        idx = idx + 1
+    }
+    let _f = state_free(sv)
+
+    // polarization rescaling  P = (S - 1/D)/(1 - 1/D)
+    let inv_d = 1.0 / to_float(dim)
+    let polariz = (success - inv_d) / (1.0 - inv_d)
+
+    return MfbMirrorResult {
+        success: success,
+        polariz: polariz,
+        norm_drift: mfb_absf(norm - 1.0),
+        n_ops: len(all)
+    }
+}
+
+// =============================================================================
+//  §8  DEPOLARIZING-NOISE MOCK  +  VOLUMETRIC HEATMAP
+// =============================================================================
+//
+//  The depolarizing mock takes the IDEAL noiseless polarization P0 (= 1)
+//  and multiplies it by a per-layer retention factor (1 - eps):
+//
+//      P(w, d)  =  P0 * (1 - eps)^d  =  (1 - eps)^d
+//
+//  (a depolarizing channel of strength eps per layer multiplies the
+//  polarization -- the off-identity component of the Pauli-transfer
+//  matrix -- by exactly (1 - eps); d layers compose multiplicatively).
+//  This is the analytic mock per the honest-scope block: a real device's
+//  per-layer error is gate-dependent and correlated, not a single scalar.
+//
+//  The volumetric heatmap:
+//      pass[w][d]  =  ( P(w, d) > 2/3 )       (Blume-Kohout-Young 2020)
+//
+//  Because (1 - eps)^d is strictly decreasing in d, the pass region is a
+//  monotone staircase: if (w,d) passes then every (w, d' < d) passes too.
+
+fn mfb_depol_polariz(p0: float, eps: float, d: int) -> float {
+    return p0 * mfb_powf(1.0 - eps, d)
+}
+
+// =============================================================================
+//  §9  HEAVY-OUTPUT GENERATION  (quantum-volume test, Cross 2019)
+// =============================================================================
+//
+//  For a w-qubit random circuit C (NO inverse half -- this is the forward
+//  model circuit only), evolve |0..0> -> |psi> and read the 2^w ideal
+//  output probabilities p(x) = |amp[x]|^2.  The MEDIAN of the p(x) is found
+//  by sorting a copy.  A bitstring x is HEAVY iff p(x) > median.
+//  HOG = Sum_{x heavy} p(x).
+//
+//  For a Haar-random circuit p follows Porter-Thomas, and the heavy mass
+//  converges to (1 + ln 2)/2 ~= 0.846574.  The circuit is run at depth
+//  mfb_reg_hog_depth_mult() * w (the approximate-2-design depth) so the
+//  output distribution actually anticoncentrates to Porter-Thomas -- a
+//  strict square w x w circuit has not yet fully spread (see the comment
+//  on mfb_reg_hog_depth_mult above).
+
+// insertion sort of a float array ascending (w<=10 => dim<=1024, fine).
+fn mfb_sort_asc(arr_in: [float]) -> [float] {
+    let n = len(arr_in)
+    let mut arr = []
+    let mut c = 0
+    while c < n {
+        arr = arr.push(arr_in[c])
+        c = c + 1
+    }
+    let mut i = 1
+    while i < n {
+        let key = arr[i]
+        let mut j = i - 1
+        let mut placed = 0
+        while placed == 0 {
+            if j < 0 {
+                placed = 1
+            } else {
+                if arr[j] > key {
+                    arr[j + 1] = arr[j]
+                    j = j - 1
+                } else {
+                    placed = 1
+                }
+            }
+        }
+        arr[j + 1] = key
+        i = i + 1
+    }
+    return arr
+}
+
+// median of a sorted array.
+fn mfb_median_sorted(sorted: [float]) -> float {
+    let n = len(sorted)
+    if n == 0 { return 0.0 }
+    let half = n / 2
+    if (n & 1) == 1 {
+        return sorted[half]
+    }
+    return 0.5 * (sorted[half - 1] + sorted[half])
+}
+
+// HOG for one w-qubit random circuit at depth `depth`.
+fn mfb_hog_one(w: int, depth: int, seed_in: int) -> float {
+    let gen = mfb_gen_forward(w, depth, seed_in)
+    let sv = mfb_run_ops(w, gen.ops)
+    let dim = state_dim(sv)
+    // ideal probabilities
+    let mut probs = []
+    let mut i = 0
+    while i < dim {
+        let r = amp_re_at(sv, i)
+        let im = amp_im_at(sv, i)
+        probs = probs.push(r * r + im * im)
+        i = i + 1
+    }
+    let _f = state_free(sv)
+    let sorted = mfb_sort_asc(probs)
+    let med = mfb_median_sorted(sorted)
+    // heavy mass = sum of p(x) strictly above the median
+    let mut hog = 0.0
+    let mut k = 0
+    while k < dim {
+        if probs[k] > med {
+            hog = hog + probs[k]
+        }
+        k = k + 1
+    }
+    return hog
+}
+
+// R-averaged HOG over R independent random w-qubit circuits at depth `depth`.
+fn mfb_hog_R_avg(w: int, depth: int, R: int, seed0: int) -> float {
+    let mut sum = 0.0
+    let mut seed = seed0
+    let mut r = 0
+    while r < R {
+        // decorrelate each circuit's seed
+        seed = mfb_lcg_next(seed)
+        seed = mfb_lcg_next(seed)
+        seed = mfb_lcg_next(seed)
+        sum = sum + mfb_hog_one(w, depth, seed)
+        r = r + 1
+    }
+    return sum / to_float(R)
+}
+
+// =============================================================================
+//  §10  HEADLINE RUN + FALSIFIER VERDICT  (Falsifier-first, project @D g6)
+// =============================================================================
+//
+//  Falsifiers:
+//    F1: noiseless mirror success |S - 1.0| > 1e-9 for ANY (w,d) ->
+//        the C-dagger C = I identity is broken (load-bearing exactness).
+//    F2: noiseless polarization |P - 1.0| > 1e-9 for ANY (w,d).
+//    F3: depolarizing sweep P(w,d) not monotone non-increasing in d.
+//    F4: volumetric heatmap not monotone (a passing cell must imply all
+//        smaller-d cells at the same width pass).
+//    F5: Haar HOG |HOG - (1+ln2)/2| > 0.05 over R random circuits.
+//    F6: |<psi|psi>| norm drift > 1e-9 over any mirror circuit.
+
+struct MfbVerdict {
+    ok:                  int,
+    verdict:             str,
+    // grid
+    min_w:               int,
+    max_w:               int,
+    max_d:               int,
+    eps:                 float,
+    // mirror-circuit results (worst-case over the grid)
+    worst_success_dev:   float,    // max |S - 1|
+    worst_polariz_dev:   float,    // max |P - 1|
+    worst_norm_drift:    float,    // max |norm - 1|
+    sample_success:      float,    // S at (max_w, max_d) -- representative
+    sample_polariz:      float,    // P at (max_w, max_d)
+    // depolarizing sweep at representative width
+    depol_sweep:         [float],  // P(max_w, d) for d=1..max_d
+    depol_monotone:      int,
+    // volumetric heatmap monotonicity
+    heatmap_monotone:    int,
+    pass_cells:          int,      // count of passing (w,d) cells
+    total_cells:         int,
+    // HOG
+    hog_w:               int,
+    hog_depth:           int,
+    hog_R:               int,
+    hog_avg:             float,
+    hog_asymptote:       float,
+    hog_dev:             float,
+    // F status
+    f1_passed:           int,
+    f2_passed:           int,
+    f3_passed:           int,
+    f4_passed:           int,
+    f5_passed:           int,
+    f6_passed:           int,
+    wall_seconds:        float,
+    engine:              str,
+    message:             str
+}
+
+fn mfb_fail(reason: str) -> MfbVerdict {
+    return MfbVerdict {
+        ok: 0, verdict: "FAIL",
+        min_w: 0, max_w: 0, max_d: 0, eps: 0.0,
+        worst_success_dev: 0.0, worst_polariz_dev: 0.0, worst_norm_drift: 0.0,
+        sample_success: 0.0, sample_polariz: 0.0,
+        depol_sweep: [], depol_monotone: 0,
+        heatmap_monotone: 0, pass_cells: 0, total_cells: 0,
+        hog_w: 0, hog_depth: 0, hog_R: 0, hog_avg: 0.0, hog_asymptote: 0.0, hog_dev: 0.0,
+        f1_passed: 0, f2_passed: 0, f3_passed: 0,
+        f4_passed: 0, f5_passed: 0, f6_passed: 0,
+        wall_seconds: 0.0, engine: "none", message: reason
+    }
+}
+
+fn mfb_run() -> MfbVerdict {
+    let t_start = to_int(exec("date +%s").trim())
+    let seed     = mfb_reg_seed()
+    let min_w    = mfb_reg_min_w()
+    let max_w    = mfb_reg_max_w()
+    let max_d    = mfb_reg_max_d()
+    let eps      = mfb_reg_eps()
+    let tol      = mfb_tol_exact()
+
+    // -------------------------------------------------------------------------
+    //  (A) noiseless mirror-circuit sweep over the (w,d) grid
+    //      -> worst |S-1|, worst |P-1|, worst norm drift  (F1, F2, F6)
+    // -------------------------------------------------------------------------
+    let mut worst_s = 0.0
+    let mut worst_p = 0.0
+    let mut worst_nd = 0.0
+    let mut sample_s = 0.0
+    let mut sample_p = 0.0
+    let mut grid_seed = seed
+    let mut w = min_w
+    while w < max_w + 1 {
+        let mut d = 1
+        while d < max_d + 1 {
+            grid_seed = mfb_lcg_next(grid_seed)
+            let mr = mfb_run_mirror(w, d, grid_seed)
+            let sdev = mfb_absf(mr.success - 1.0)
+            let pdev = mfb_absf(mr.polariz - 1.0)
+            if sdev > worst_s  { worst_s = sdev }
+            if pdev > worst_p  { worst_p = pdev }
+            if mr.norm_drift > worst_nd { worst_nd = mr.norm_drift }
+            if w == max_w {
+                if d == max_d {
+                    sample_s = mr.success
+                    sample_p = mr.polariz
+                }
+            }
+            d = d + 1
+        }
+        w = w + 1
+    }
+
+    // -------------------------------------------------------------------------
+    //  (B) depolarizing-noise sweep at the representative width (max_w):
+    //      P(w,d) = (1-eps)^d  (the noiseless P0 = 1 is the ideal reference).
+    //      Check monotone non-increasing in d  (F3).
+    // -------------------------------------------------------------------------
+    let mut sweep = []
+    let mut prev = 2.0
+    let mut depol_mono = 1
+    let mut dd = 1
+    while dd < max_d + 1 {
+        let pv = mfb_depol_polariz(1.0, eps, dd)
+        sweep = sweep.push(pv)
+        // monotone non-increasing: pv must not exceed prev (+tiny slack)
+        if pv > prev + tol {
+            depol_mono = 0
+        }
+        prev = pv
+        dd = dd + 1
+    }
+
+    // -------------------------------------------------------------------------
+    //  (C) volumetric heatmap pass[w][d] = (P(w,d) > 2/3); per the depol mock
+    //      P(w,d) = (1-eps)^d does not depend on w, so every width gives the
+    //      same column -- still a valid monotone staircase.  Verify: for each
+    //      width, a passing cell implies all shallower cells pass  (F4).
+    // -------------------------------------------------------------------------
+    let thr = mfb_vol_threshold()
+    let mut heatmap_mono = 1
+    let mut pass_cells = 0
+    let mut total_cells = 0
+    let mut hw = min_w
+    while hw < max_w + 1 {
+        // build the pass column for this width
+        let mut col = []
+        let mut cd = 1
+        while cd < max_d + 1 {
+            let pv = mfb_depol_polariz(1.0, eps, cd)
+            let passed = if pv > thr { 1 } else { 0 }
+            col = col.push(passed)
+            if passed == 1 { pass_cells = pass_cells + 1 }
+            total_cells = total_cells + 1
+            cd = cd + 1
+        }
+        // monotonicity: once a cell fails, no deeper cell may pass
+        let mut seen_fail = 0
+        let mut ci = 0
+        while ci < len(col) {
+            if col[ci] == 0 {
+                seen_fail = 1
+            } else {
+                if seen_fail == 1 {
+                    // a pass AFTER a fail at greater depth -> staircase broken
+                    heatmap_mono = 0
+                }
+            }
+            ci = ci + 1
+        }
+        hw = hw + 1
+    }
+
+    // -------------------------------------------------------------------------
+    //  (D) heavy-output-generation test  (F5)
+    // -------------------------------------------------------------------------
+    let hog_w = mfb_reg_hog_w()
+    let hog_R = mfb_reg_hog_R()
+    let hog_depth = mfb_reg_hog_depth_mult() * hog_w
+    let hog_avg = mfb_hog_R_avg(hog_w, hog_depth, hog_R, seed + 104729)
+    let hog_asy = mfb_hog_asymptote()
+    let hog_dev = mfb_absf(hog_avg - hog_asy)
+
+    // -------------------------------------------------------------------------
+    //  Falsifier verdict
+    // -------------------------------------------------------------------------
+    let f1 = if worst_s  < tol { 1 } else { 0 }
+    let f2 = if worst_p  < tol { 1 } else { 0 }
+    let f3 = if depol_mono == 1 { 1 } else { 0 }
+    let f4 = if heatmap_mono == 1 { 1 } else { 0 }
+    let f5 = if hog_dev < mfb_tol_hog() { 1 } else { 0 }
+    let f6 = if worst_nd < tol { 1 } else { 0 }
+
+    let pass = if f1 == 1 && f2 == 1 && f3 == 1 && f4 == 1 && f5 == 1 && f6 == 1 { 1 } else { 0 }
+    let verdict_str = if pass == 1 { "PASS" } else { "FAIL" }
+
+    let t_end = to_int(exec("date +%s").trim())
+    let wall = to_float(t_end - t_start)
+
+    let msg = if pass == 1 {
+        "noiseless mirror C-dagger.C=I exact: worst |S-1|=" + str(worst_s) +
+        " worst |P-1|=" + str(worst_p) + " worst norm_drift=" + str(worst_nd) +
+        " (all < 1e-9); depol sweep P(w,d)=(1-eps)^d monotone non-increasing;" +
+        " volumetric heatmap monotone staircase (" + str(pass_cells) + "/" +
+        str(total_cells) + " cells pass at eps=" + str(eps) + ", thr=2/3);" +
+        " HOG(w=" + str(hog_w) + ",R=" + str(hog_R) + ")=" + str(hog_avg) +
+        " vs (1+ln2)/2=" + str(hog_asy) + " (dev=" + str(hog_dev) + " < 0.05)"
+    } else {
+        "FAIL: F1=" + str(f1) + " F2=" + str(f2) + " F3=" + str(f3) +
+        " F4=" + str(f4) + " F5=" + str(f5) + " F6=" + str(f6) +
+        " worst|S-1|=" + str(worst_s) + " worst|P-1|=" + str(worst_p) +
+        " worst_norm_drift=" + str(worst_nd) + " depol_mono=" + str(depol_mono) +
+        " heatmap_mono=" + str(heatmap_mono) + " hog_dev=" + str(hog_dev)
+    }
+
+    return MfbVerdict {
+        ok: 1, verdict: verdict_str,
+        min_w: min_w, max_w: max_w, max_d: max_d, eps: eps,
+        worst_success_dev: worst_s, worst_polariz_dev: worst_p,
+        worst_norm_drift: worst_nd,
+        sample_success: sample_s, sample_polariz: sample_p,
+        depol_sweep: sweep, depol_monotone: depol_mono,
+        heatmap_monotone: heatmap_mono,
+        pass_cells: pass_cells, total_cells: total_cells,
+        hog_w: hog_w, hog_depth: hog_depth, hog_R: hog_R, hog_avg: hog_avg,
+        hog_asymptote: hog_asy, hog_dev: hog_dev,
+        f1_passed: f1, f2_passed: f2, f3_passed: f3,
+        f4_passed: f4, f5_passed: f5, f6_passed: f6,
+        wall_seconds: wall,
+        engine: "pure-hexa engine_aer / 2^w-amplitude state vector (mirror circuits, w<=" + str(max_w) + " grid)",
+        message: msg
+    }
+}
+
+// =============================================================================
+//  §11  MARKER EMISSION + SELFTEST  (Falsifier-first: FAILED-marker BEFORE PASS)
+// =============================================================================
+//
+//  Same idiom as qdrift / page-curve / shallow-shadows: exec("date +%s")
+//  timestamp; the FAILED-marker write path is RESOLVED BEFORE the PASS path.
+
+fn mfb_emit_marker(passed: int, body: str) -> int {
+    let ts = exec("date +%s").trim()
+    let qm_root = env("QMIRROR_ROOT")
+    let root = if qm_root.len() > 0 { qm_root } else { exec("pwd").trim() }
+    let marker_dir = root + "/state/markers"
+    let _mk = exec("mkdir -p " + marker_dir + " 2>/dev/null")
+    let suffix = if passed == 1 { ".marker" } else { "_FAILED.marker" }
+    let path = marker_dir + "/mirror_fidelity_bench_" + ts + suffix
+    let _w = exec("echo '" + body + "' > '" + path + "'")
+    println("  marker: " + path)
+    return 0
+}
+
+fn mfb_selftest() -> int {
+    let v = mfb_run()
+    // serialize the depol sweep into the marker body
+    let mut sweep_str = ""
+    let mut si = 0
+    while si < len(v.depol_sweep) {
+        if si > 0 { sweep_str = sweep_str + "," }
+        sweep_str = sweep_str + str(v.depol_sweep[si])
+        si = si + 1
+    }
+    let body =
+        "mirror_fidelity_bench selftest;" +
+        " grid w=" + str(v.min_w) + ".." + str(v.max_w) +
+        " d=1.." + str(v.max_d) + " eps=" + str(v.eps) +
+        " worst_success_dev=" + str(v.worst_success_dev) +
+        " worst_polariz_dev=" + str(v.worst_polariz_dev) +
+        " worst_norm_drift=" + str(v.worst_norm_drift) +
+        " sample_S=" + str(v.sample_success) +
+        " sample_P=" + str(v.sample_polariz) +
+        " depol_sweep=[" + sweep_str + "]" +
+        " depol_monotone=" + str(v.depol_monotone) +
+        " heatmap_monotone=" + str(v.heatmap_monotone) +
+        " pass_cells=" + str(v.pass_cells) + "/" + str(v.total_cells) +
+        " hog_w=" + str(v.hog_w) + " hog_depth=" + str(v.hog_depth) +
+        " hog_R=" + str(v.hog_R) +
+        " hog_avg=" + str(v.hog_avg) +
+        " hog_asymptote=" + str(v.hog_asymptote) +
+        " hog_dev=" + str(v.hog_dev) +
+        " F1=" + str(v.f1_passed) +
+        " F2=" + str(v.f2_passed) +
+        " F3=" + str(v.f3_passed) +
+        " F4=" + str(v.f4_passed) +
+        " F5=" + str(v.f5_passed) +
+        " F6=" + str(v.f6_passed) +
+        " wall=" + str(v.wall_seconds) + "s ; " + v.message
+
+    if v.ok != 1 {
+        let _ = mfb_emit_marker(0, "FAIL " + body)
+        return 0
+    }
+    if v.verdict == "PASS" {
+        // fall through to PASS marker
+    } else {
+        let _ = mfb_emit_marker(0, "FAIL " + body)
+        return 0
+    }
+    let _ = mfb_emit_marker(1, "PASS " + body)
+    return 1
+}
+
+fn main() {
+    println("[qmirror/mirror-fidelity-bench] Mirror-circuit volumetric benchmarking")
+    println("  instrument = mirror-circuit + volumetric + heavy-output (HOG) benchmark")
+    println("  anchors    = Proctor et al., Nat. Phys. 18, 75 (2022) / arXiv:2008.11294;")
+    println("               Blume-Kohout & Young, Quantum 4, 362 (2020) / arXiv:1904.05546;")
+    println("               Cross et al., PRA 100, 032328 (2019) / arXiv:1811.12926.")
+    println("  target     = EXACT 2^w state-vector reproduction of the IDEAL-REFERENCE")
+    println("               leg of the bench domain (the value a real device's")
+    println("               volumetric heatmap is measured against -- NOT a device model).")
+    println("  kernel     = pure-hexa engine_aer; deterministic LCG; exact gate inverse")
+    println("               for C-dagger; Pauli-frame randomization (exact-identity no-op).")
+    println("")
+
+    let v = mfb_run()
+    if v.ok != 1 {
+        println("  ERROR: " + v.message)
+        let _ = mfb_emit_marker(0, "FAIL run-error ; " + v.message)
+        println("__QMIRROR_MIRROR_FIDELITY_BENCH__ FAIL")
+        return
+    }
+
+    println("  --- registered falsifier grid ---")
+    println("    width  w  in  " + str(v.min_w) + ".." + str(v.max_w))
+    println("    depth  d  in  1.." + str(v.max_d))
+    println("    per-layer depolarizing mock strength  eps = " + str(v.eps))
+    println("")
+    println("  --- noiseless mirror-circuit sweep (C-dagger C = I) ---")
+    println("    worst |S - 1|  over the grid          =  " + str(v.worst_success_dev))
+    println("    worst |P - 1|  over the grid          =  " + str(v.worst_polariz_dev))
+    println("    worst norm drift over the grid        =  " + str(v.worst_norm_drift))
+    println("    representative S at (w=" + str(v.max_w) + ", d=" + str(v.max_d) + ")  =  " + str(v.sample_success))
+    println("    representative P at (w=" + str(v.max_w) + ", d=" + str(v.max_d) + ")  =  " + str(v.sample_polariz))
+    println("")
+    println("  --- depolarizing sweep  P(w,d) = (1-eps)^d  (ideal P0 = 1) ---")
+    let mut di = 0
+    while di < len(v.depol_sweep) {
+        println("    d = " + str(di + 1) + "   P(w,d) = " + str(v.depol_sweep[di]) +
+                (if v.depol_sweep[di] > mfb_vol_threshold() { "   [PASS > 2/3]" }
+                 else { "   [fail < 2/3]" }))
+        di = di + 1
+    }
+    println("    monotone non-increasing in d          =  " + str(v.depol_monotone))
+    println("")
+    println("  --- volumetric heatmap  pass[w][d] = (P(w,d) > 2/3) ---")
+    println("    passing cells                         =  " + str(v.pass_cells) + " / " + str(v.total_cells))
+    println("    monotone staircase (pass => shallower pass)  =  " + str(v.heatmap_monotone))
+    println("")
+    println("  --- heavy-output generation (quantum-volume test) ---")
+    println("    model circuit width  w                =  " + str(v.hog_w))
+    println("    circuit depth (2-design depth = 4w)   =  " + str(v.hog_depth))
+    println("    R random circuits averaged            =  " + str(v.hog_R))
+    println("    HOG (R-avg)                           =  " + str(v.hog_avg))
+    println("    Porter-Thomas asymptote (1+ln2)/2     =  " + str(v.hog_asymptote))
+    println("    |HOG - (1+ln2)/2|                     =  " + str(v.hog_dev))
+    println("")
+    println("  --- falsifier verdict ---")
+    println("    F1 (noiseless mirror success |S-1| < 1e-9)   = " + str(v.f1_passed))
+    println("    F2 (noiseless polarization   |P-1| < 1e-9)   = " + str(v.f2_passed))
+    println("    F3 (depol sweep P(w,d) monotone in d)        = " + str(v.f3_passed))
+    println("    F4 (volumetric heatmap monotone staircase)   = " + str(v.f4_passed))
+    println("    F5 (Haar HOG within 0.05 of (1+ln2)/2)       = " + str(v.f5_passed))
+    println("    F6 (mirror-circuit norm drift < 1e-9)        = " + str(v.f6_passed))
+    println("    wall                                          = " + str(v.wall_seconds) + "s")
+    println("    engine                                        = " + v.engine)
+    println("    verdict                                       = " + v.verdict)
+    println("    msg                                           = " + v.message)
+    println("")
+
+    if mfb_selftest() == 1 {
+        println("[qmirror/mirror-fidelity-bench] SELFTEST PASS")
+        println("  (noiseless mirror circuit C-dagger.C = I recovers |0..0> with")
+        println("   success probability S = 1 and polarization P = 1 exactly to 1e-9")
+        println("   across the whole (w,d) grid; the depolarizing mock P(w,d)=(1-eps)^d")
+        println("   is monotone non-increasing in depth; the volumetric heatmap is a")
+        println("   monotone staircase; the Haar HOG reproduces the Porter-Thomas")
+        println("   (1+ln2)/2 heavy-output asymptote within 0.05; norm is preserved.)")
+        println("__QMIRROR_MIRROR_FIDELITY_BENCH__ PASS")
+    } else {
+        println("[qmirror/mirror-fidelity-bench] SELFTEST FAIL (see *_FAILED.marker)")
+        println("__QMIRROR_MIRROR_FIDELITY_BENCH__ FAIL")
+    }
+}

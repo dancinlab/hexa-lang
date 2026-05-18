@@ -20,8 +20,10 @@ It returns raw bytes from one of 9 backends with a uniform `QrngBytes` struct
 + provenance message.
 
 **Origin:** RFC 044 absorbed [`dancinlab/qrng`](https://github.com/dancinlab/qrng)
-v1.0.0 (private 2026-05-16) into hexa-lang's stdlib. The original SSOT is frozen
-at `~/core/archive_qrng/` (헌법 v2 룰 3).
+v1.0.0 into hexa-lang's stdlib. The original SSOT is frozen as the
+`dancinlab/qrng` GitHub **private** repo (헌법 v2 룰 3). The local
+`~/core/archive_qrng/` was retired 2026-05-17 — GitHub private repo is the
+preservation SSOT; working-tree state is absorbed here in `stdlib/qrng/`.
 
 > [!NOTE]
 > Sister package of [`qmirror`](https://github.com/dancinlab/qmirror) (quantum
@@ -181,7 +183,7 @@ struct shapes are compatible by convention.
 
 Sentinel namespaces disjoint (`__QRNG_*` vs `__QMIRROR_QRNG__`); env namespaces
 disjoint (`QRNG_*` / `NEXUS_QRNG_*` vs `QMIRROR_*`). Full rationale in
-`~/core/archive_qrng/docs/dual_home_boundary.md`.
+`dancinlab/qrng` (GitHub private) `docs/dual_home_boundary.md`.
 
 ## Architecture — abstraction + 9-backend split
 
@@ -259,8 +261,8 @@ stdlib/test/
 ├── test_qrng_router.hexa              # default chain + fallback
 └── test_qrng_audit.hexa               # NIST SP 800-22 (3-4 min DFT wall)
 
-~/core/archive_qrng/                    # frozen 묘비 (RFC 044, read-only)
-└── (full v1.0.0 metadata + CLI + examples preserved verbatim)
+github.com/dancinlab/qrng (private)     # frozen 묘비 (RFC 044)
+└── (full v1.0.0 repo verbatim — local ~/core/archive_qrng/ retired 2026-05-17)
 ```
 
 ## Governance
@@ -271,7 +273,7 @@ stdlib/test/
 | `@D g_qrng_honest_vendor` | `is_quantum` flag follows vendor self-classification; honest-caveat in meta |
 | `@D g_qrng_provider_only` | No HMAC-DRBG / NIST SP 800-90A in stdlib/qrng (amplification is consumer concern) |
 | `@F f_qrng_silent_mock_downgrade` | Router must preserve tier/vendor/message; silent fallback to T0 forbidden |
-| `@X x_archive_qrng` | `~/core/archive_qrng/` frozen 묘비 (Zenodo DOI 10.5281/zenodo.20102966) |
+| `@X x_archive_qrng` | `dancinlab/qrng` GitHub private 묘비 (Zenodo DOI 10.5281/zenodo.20102966) |
 
 Full entries in `AGENTS.tape` §0 (`@N qrng_stack`) + §3-5.
 
@@ -282,7 +284,7 @@ Full entries in `AGENTS.tape` §0 (`@N qrng_stack`) + §3-5.
 3. **Tests scaffolded fresh** at extraction — coverage tier 1 (sentinel per backend); deeper property-based tests deferred.
 4. **ANU rate-limit + ToS evolution** — public REST throttled to 1 req/min on T1.a legacy tier.
 5. **License audit deferred** — qrng core is Apache-2.0; per-vendor data-rights for ANU/CURBy/NIST Beacon byte redistribution NOT formally audited. This package returns bytes; does not redistribute.
-6. **CLI deferred** — original `cli/qrng.hexa` (580 LoC, subprocess+sentinel pattern) frozen at `archive_qrng/cli/qrng.hexa`. RFC 044-B follow-up writes a thin library-wrapper CLI replacing subprocess pattern.
+6. **CLI deferred** — original `cli/qrng.hexa` (580 LoC, subprocess+sentinel pattern) frozen in the `dancinlab/qrng` GitHub private repo at `cli/qrng.hexa`. RFC 044-B follow-up writes a thin library-wrapper CLI replacing subprocess pattern.
 
 ## RFC chain
 
