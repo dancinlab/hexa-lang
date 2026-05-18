@@ -1967,3 +1967,59 @@ Honest remaining gate-relevant after atlas-fix:
 
 Full post-atlas-fix parity re-measurement IN FLIGHT (with patched
 harness run_to so atlas no longer timeout-masked).
+
+### 2026-05-19 — FINAL path-A measurement: 13 → 5 gate-relevant (62% ↓)
+
+Final parity (production w/ all path-A fixes through cf92aa65 +
+runtime.c pop-shrink synced, rfc043 local deploy f46020b4):
+**72 MATCH · 11 SKIP · 11 BOTH_FAIL(ok) · 1 INTERP_ONLY_FAIL(ok) ·
+0 DIVERGE · 5 COMPILED_REGRESS.**
+
+The 5, honestly classified:
+1. **atlas_verify_smoke** — overall file flagged because of 1 verdict
+   residue `modular::s8_elliptic_j1728`. The original 5 transcendental
+   + modular verdict FALSIFIES were resolved by the collision-guard +
+   Call-recognition (atlas 5→1 = 80% of the atlas mass closed). The
+   residue is pure-integer (sigma/tau, 2-torsion while-loop), a
+   different mechanism from the lhs/rhs collision class — next-cycle
+   bisection target.
+2. **t_range_precedence** — FALSE BLOCKER (LESSON 8). The P10 parser
+   fix works; the gap is that `Index(arr, Range)` (range-index
+   slicing) is absent in BOTH interp eval AND compiled codegen
+   (interp slice=0, compiled crash). Interp has no correct behavior
+   to preserve, so deleting interp loses nothing here. Real
+   correctness backlog (general range-slice feature), NOT a deletion
+   regression.
+3. **t36_serve_alm_smoke** — 1st error (char_code bare-identifier
+   undeclared) RESOLVED via 1-arg free-fn map cf92aa65. 2nd error
+   remains: `alm_init` defined with 3 params, the test calls it with
+   2 — interp lenient-default-fills, compiled emits the literal
+   2-arg call. **Default-parameter codegen feature gap**, next-cycle.
+4. **t45b_string_methods_utf8** — UTF-8 char-aware string methods
+   (.char_count, .nth_char, .char_substring, .chars) need runtime
+   impl (codepoint walker) + codegen mapping + runtime.h protos.
+   Substantial bounded.
+5. **test_native_multi_calls** — local struct/fn declared inside a
+   function body — gen2_stmt L2826 "unhandled statement kind:
+   FnDecl/StructDecl" because C has no nested fns/local-scoped types.
+   Needs a codegen pre-scan + hoist pass to module-scope (closure
+   conversion for nested fns that capture). Substantial feature.
+
+Of the 5, 1 is a measurement artifact (false-blocker per LESSON 8) ⇒
+**4 honest genuine deletion-blockers**, each multi-cycle scoped:
+atlas s8_elliptic_j1728 · default-param codegen · UTF-8 string methods
+· nested-decl hoisting. Path-A's "deep multi-session campaign" frame
+exactly maps to these 4.
+
+This session's measurable deliverable: codegen-fix deploy ceremony
+ROOT-CAUSED + AUTOMATED (LESSON 7); atlas mechanism cracked from 3
+falsified hypotheses to the actual GLOBAL-STATE-POLLUTION in
+_known_int_set/_known_float_set (LESSON 9); the surgical guard pair +
+runtime pop-shrink + char_code 1-arg deployed. Measurement instrument
+itself was made g3-honest (harness run_to no longer timeout-masks
+atlas via perl-exec segfault — LESSON 9b harness cleanup).
+
+Cycle C (interp source deletion) remains HONESTLY BLOCKED — 4 real
+codegen-blockers must close first. Future cycles tackle them
+one-by-one with the bisection / candidate-validate / atomic-promote
+discipline now established.
