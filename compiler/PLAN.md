@@ -948,3 +948,35 @@ closure-expression 3-cycle RFC 의 **C1 (front-half: lexer/parser/AST/check)** �
 - non-closure 프로그램 회귀 0 — full asm emit, RC=0.
 
 C2/C3 잔여: C2 = MIR indirect-call (callee-as-Operand) + 합성 MFunc lift + capture; C3 = arm64 `hexa_closure_new`/`TAG_CLOSURE`/`blr` codegen. C3 종료 시 t38 동작 → gate-1 38/44.
+
+---
+
+### 진행 로그 — closure-expression C2/C3 LANDED (`c5c3e9f8`) (cycle h21)
+
+closure RFC back-half (C2 lowering + C3 arm64 codegen), C1(`f4ce5f61`) 위에 적층:
+- **C2** (`hir_to_mir.hexa`·`ir/mir.hexa`·`optimize/{dce,inline}.hexa`): closure body free-var
+  capture 분석 → synthetic top-level MFunc lambda-lift (`__env` 첫 param, capture 를 env
+  read 로 rewire) → closure expr 이 env-array build + `hexa_closure_new` TAG_CLOSURE 값으로
+  lowering. callee 가 Operand(register-held closure 값)인 indirect-call MIR form 신설
+  (기존 compile-time-string-callee `STMT_CALL` 과 분리; direct call 무변경).
+- **C3** (`codegen/arm64_darwin.hexa`): synthetic lambda MFunc emit; closure site 가
+  env build + `bl _hexa_closure_new`; indirect call dispatch. non-closure direct-call
+  codegen 무변경.
+- **runtime 심볼 export** (`self/runtime.c`): `hexa_closure_new` 가 runtime.c·runtime.h
+  양쪽 `static inline` → standalone runtime.o 에 심볼 부재 → aprime separate-compile link
+  시 `Undefined symbols: _hexa_closure_new`. runtime.c 정의의 `static inline` 제거(extern
+  화); runtime.h copy 는 header-includer 용 유지 (runtime.c 가 runtime.h 미include —
+  재정의 없음). 이전 farr_* de-staticize 와 동일 패턴.
+
+**검증 (mini offload — macOS 부하 0)**: build_aprime smoke `exit(6*7)==42` PASS;
+closure repro r1 `fn(x){x*2}` → `42`, r2 capturing `fn(x){x+c}` (c=10) → `15` —
+non-capturing·simple-capturing 양쪽 동작; **self-host fixpoint 보존** `ap1f.s==ap2f.s`
+(252,137 lines); 44-smoke tier-1 compile+link **41 ok / 3 fail** (fail = t35·t36
+선재 FFI/stdlib + t38) — **regression 0**.
+
+**잔여 (#39)**: t38_nanbox closure(line 94)는 `HX1101 unbound identifier 'captured'
+in lower` — C2 capture 분석이 t38 의 특정 capture scope(plain main-local 과 다른 binding
+form) 미해결. simple capture 는 동작. 별도 focused fix.
+
+**closure RFC 상태**: C1+C2+C3 전부 land, closure end-to-end 동작 (단 t38 의 특정
+capture scope 만 #39 잔여). 진짜 tier-1 codegen gap 은 #39 capture-scope 1건으로 수렴.
