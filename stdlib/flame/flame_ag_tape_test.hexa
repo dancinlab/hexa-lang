@@ -2020,13 +2020,114 @@ if t18ok {
     println("FAIL  F-RFC043-AGTAPE-FUSE-PREDICT")
 }
 
+// ── Test 19: gap(d) $0 fusion PLAN — the forge-dispatch artifact ────────
+// ag_fuse_plan emits a per-entry group assignment (maximal host-op runs
+// → one fused-kernel group; native farr_matmul ops → -1). This DATA is
+// exactly what a (user-gated) forge GPU cycle consumes — no execution,
+// no speculative GPU scaffolding. Assert: plan is a valid partition,
+// group count matches the analysis, native entries are exactly the
+// linear/lmhead ops, and the plan is semantics-neutral (ag_run_spec
+// output byte-stable — the plan never touches execution).
+// Falsifier F-RFC043-AGTAPE-FUSE-PLAN.
+println("-- Test 19: gap(d) $0 fusion plan (forge-dispatch artifact) --")
+let qd = 4
+let qnh = 2
+let qnkv = 1
+let qhd = qd / qnh
+let qsp = ag_spec_begin(16)
+let q1 = 0 - 1
+// embed→rmsnorm→Wq(lin)→rope→attn→add→rmsnorm→Wg(lin)→silu→Wd(lin)
+// →add→slice→rmsnorm→lmhead  (covers all 9 op kinds)
+let qe0 = ag_spec_add(qsp, ag_k_embed(), 0-1, q1, q1, 0, q1,q1,q1, 1,qd,0,0)
+let qe1 = ag_spec_add(qsp, ag_k_rmsnorm_mh(), qe0, q1,q1, 1,q1,q1,q1, 1,qd,0,0)
+let qe2 = ag_spec_add(qsp, ag_k_linear(), qe1, q1,q1, 2,q1,q1,q1, 1,qd,qd,0)
+let qe3 = ag_spec_add(qsp, ag_k_rope_mh(), qe2, 0-2,0-3, q1,q1,q1,q1, 1,qnh,qhd,0)
+let qe4 = ag_spec_add(qsp, ag_k_attn_dt(), qe3, qe3, qe2, q1,q1,q1,q1, 1,qnh,qnkv,qhd)
+let qe5 = ag_spec_add(qsp, ag_k_add(), qe1, qe4, q1, q1,q1,q1,q1, 1*qd,0,0,0)
+let qe6 = ag_spec_add(qsp, ag_k_rmsnorm_mh(), qe5, q1,q1, 1,q1,q1,q1, 1,qd,0,0)
+let qe7 = ag_spec_add(qsp, ag_k_linear(), qe6, q1,q1, 2,q1,q1,q1, 1,qd,qd,0)
+let qe8 = ag_spec_add(qsp, ag_k_silu_gate(), qe7, qe7, q1, q1,q1,q1,q1, 1*qd,0,0,0)
+let qe9 = ag_spec_add(qsp, ag_k_linear(), qe8, q1,q1, 2,q1,q1,q1, 1,qd,qd,0)
+let qe10 = ag_spec_add(qsp, ag_k_add(), qe5, qe9, q1, q1,q1,q1,q1, 1*qd,0,0,0)
+let qe11 = ag_spec_add(qsp, ag_k_slice(), qe10, q1,q1, q1,q1,q1,q1, 0,qd,1*qd,0)
+let qe12 = ag_spec_add(qsp, ag_k_rmsnorm_mh(), qe11, q1,q1, 1,q1,q1,q1, 1,qd,0,0)
+let qe13 = ag_spec_add(qsp, ag_k_lmhead(), qe12, q1,q1, 0,q1,q1,q1, 5,qd,0,0)
+let qn = ag_spec_count(qsp)
+let qplan = t_zeros(qn)
+let qgroups = ag_fuse_plan(qsp, qplan)
+let qvalid = ag_fuse_plan_valid(qsp, qplan)
+let qgc = ag_fuse_group_count(qsp)
+// native entries must be exactly the 3 linear (e2,e7,e9) + lmhead (e13)
+let qnat_ok = to_int(t_get(qplan, 2)) == 0-1
+   && to_int(t_get(qplan, 7)) == 0-1
+   && to_int(t_get(qplan, 9)) == 0-1
+   && to_int(t_get(qplan, 13)) == 0-1
+   && to_int(t_get(qplan, 0)) >= 0    // embed = host, grouped
+   && to_int(t_get(qplan, 1)) >= 0    // rmsnorm = host
+   && to_int(t_get(qplan, 4)) >= 0    // attn = host
+// semantics-neutral: plan never touched execution → two runs equal
+let qext = t_zeros(3)
+let qids = t_zeros(1)
+t_set(qids, 0, to_float(2))
+let qcos = t_zeros(1 * qhd)
+let qsin = t_zeros(1 * qhd)
+nn_rope_build_tables(1, qhd, qcos, qsin)
+t_set(qext, 0, to_float(qids))
+t_set(qext, 1, to_float(qcos))
+t_set(qext, 2, to_float(qsin))
+let qpt = t_zeros(3)
+let qTE = t_zeros(5 * qd)
+let mut qi = 0
+while qi < 5 * qd { t_set(qTE, qi, to_float(qi - 6) * 0.03); qi = qi + 1 }
+let qG = t_zeros(qd)
+let mut qg = 0
+while qg < qd { t_set(qG, qg, 1.0 + to_float(qg % 3 - 1) * 0.02); qg = qg + 1 }
+let qW = t_zeros(qd * qd)
+let mut qw = 0
+while qw < qd * qd { t_set(qW, qw, to_float(qw % 7 - 3) * 0.04); qw = qw + 1 }
+t_set(qpt, 0, to_float(qTE))
+t_set(qpt, 1, to_float(qG))
+t_set(qpt, 2, to_float(qW))
+let qv1 = t_zeros(qn)
+let qtp1 = ag_t_begin(16)
+let qo1 = ag_run_spec(qtp1, qsp, qext, qpt, qv1)
+let qr1 = t_zeros(5)
+let mut qa = 0
+while qa < 5 { t_set(qr1, qa, t_get(qo1, qa)); qa = qa + 1 }
+ag_t_free_state(qtp1)
+ag_t_free_reg(qtp1)
+ag_t_end(qtp1)
+let _qpl2 = ag_fuse_plan(qsp, qplan)   // re-plan between runs (read-only)
+let qv2 = t_zeros(qn)
+let qtp2 = ag_t_begin(16)
+let qo2 = ag_run_spec(qtp2, qsp, qext, qpt, qv2)
+let qdelta = agt_maxdiff(qr1, qo2, 5)
+ag_t_free_state(qtp2)
+ag_t_free_reg(qtp2)
+ag_t_end(qtp2)
+ag_spec_free(qsp)
+print("  groups="); print(qgroups)
+print(" (analysis="); print(qgc)
+print(") valid="); print(qvalid)
+print(" native_partition="); print(qnat_ok)
+print(" semantics-neutral Δ="); println(qdelta)
+let t19ok = qvalid == 1 && qgroups == qgc && qnat_ok
+   && qdelta == 0.0 && qgroups > 0
+if t19ok {
+    println("PASS  F-RFC043-AGTAPE-FUSE-PLAN (valid partition; native =")
+    println("  linear/lmhead exactly; plan semantics-neutral Δ=0 — the")
+    println("  $0 forge-dispatch artifact is ready, GPU cycle user-gated)")
+} else {
+    println("FAIL  F-RFC043-AGTAPE-FUSE-PLAN")
+}
+
 if t1ok && t2ok && t3ok && t4ok && t5ok && t6ok && t7ok && t8ok
    && t9ok && t10ok && t11ok && t12ok && t13ok && t14ok && t15ok
-   && t16ok && t17ok && t18ok {
-    println("ALL PASS  ag_tape — 12/12 leaf byte-eq; decoder e2e")
+   && t16ok && t17ok && t18ok && t19ok {
+    println("ALL PASS  ag_tape 19/19 — leaf 12/12 byte-eq; decoder e2e")
     println("  machine-eps; train_step; 5/5 shape-generic; spec DSL;")
-    println("  gap(d) faithful predictor pre-registered. gap(b)✓")
-    println("  gap(c)✓ gap(e)✓ — gap(d) $0-prep done, GPU user-gated.")
+    println("  gap(d) faithful predictor + fusion plan ($0). gap(a-c,e)")
+    println("  ✓ ; gap(d) $0-surface done — GPU fire user-gated.")
 } else {
     println("ALL FAIL  ag_tape regression")
 }

@@ -213,3 +213,64 @@ pub fn ag_fuse_host_op_count(spec: int) -> int {
     }
     return c
 }
+
+// ── fusion PLAN — the concrete dispatch artifact ($0) ──────────────────
+// Emit a per-entry group assignment: plan[e] = group id (0,1,2,…) for
+// a fused-forge-kernel run, or -1 for a NATIVE (farr_matmul-routed) op
+// that stays as-is. Maximal contiguous host-op runs share one group id
+// (one forge kernel launch covers the run). This plan is the exact
+// hand-off artifact a (user-gated) forge GPU cycle consumes — it does
+// NOT execute anything (pure $0 spec analysis; no speculative GPU
+// scaffolding). vtab/execution are unaffected: ag_run_spec stays the
+// byte-identical CPU path; forge dispatch is a future cycle that reads
+// this plan. `plan` caller-allocated, len >= ag_spec_count(spec).
+pub fn ag_fuse_plan(spec: int, plan: int) -> int {
+    let n = ag_spec_count(spec)
+    let mut gid = 0 - 1
+    let mut in_run = 0
+    let mut e = 0
+    while e < n {
+        let kind = to_int(t_get(spec, 1 + e * 12 + 0))
+        if ag_fuse_is_host_op(kind) == 1 {
+            if in_run == 0 { gid = gid + 1 }
+            in_run = 1
+            t_set(plan, e, to_float(gid))
+        } else {
+            in_run = 0
+            t_set(plan, e, to_float(0 - 1))
+        }
+        e = e + 1
+    }
+    return gid + 1   // number of fused groups
+}
+
+// validate the plan is a well-formed partition: every entry assigned;
+// each group's entries are ALL host-ops and CONTIGUOUS; native ops
+// carry -1; group ids are dense 0..G-1 in first-seen order. Returns 1
+// if valid, 0 otherwise. (Falsifier guard for the forge hand-off.)
+pub fn ag_fuse_plan_valid(spec: int, plan: int) -> int {
+    let n = ag_spec_count(spec)
+    let mut expect = 0          // next dense group id to open
+    let mut cur = 0 - 1         // group id currently open (-1 none)
+    let mut e = 0
+    while e < n {
+        let kind = to_int(t_get(spec, 1 + e * 12 + 0))
+        let g = to_int(t_get(plan, e))
+        if ag_fuse_is_host_op(kind) == 1 {
+            if g < 0 { return 0 }                 // host must be in a group
+            if g == cur {
+                // continuing the open run — ok
+            } else if g == expect {
+                cur = g                            // new dense group
+                expect = expect + 1
+            } else {
+                return 0                           // non-dense / reopened
+            }
+        } else {
+            if g != (0 - 1) { return 0 }           // native must be -1
+            cur = 0 - 1                            // a native op breaks runs
+        }
+        e = e + 1
+    }
+    return 1
+}
