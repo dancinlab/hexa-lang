@@ -742,24 +742,25 @@ fn _resolve_use_emit(name) {
 // case is the common one (helper fns + types that take all data as
 // params). Capturing-fn closure-conversion is a later cycle.
 fn _gen2_lift_nested_decls(ast) {
+    // Append-only — do NOT mutate ast[i].body in place (hexa codegen
+    // emits invalid C `hexa_index_get(ast, i) = ...` for that lvalue
+    // pattern). The gen2_stmt FnDecl/StructDecl safety net (see L2830)
+    // emits "" inline for any nested decl encountered in a fn body,
+    // so the appended top-level entry is the only emission.
     let mut lifted = []
     let mut i = 0
     while i < len(ast) {
         let k = ast[i].kind
         if (k == "FnDecl" || k == "PureFnDecl") && type_of(ast[i].body) != "string" {
-            let mut filtered = []
             let mut bi = 0
             while bi < len(ast[i].body) {
                 let stmt = ast[i].body[bi]
                 let sk = stmt.kind
                 if sk == "FnDecl" || sk == "PureFnDecl" || sk == "StructDecl" {
                     lifted.push(stmt)
-                } else {
-                    filtered.push(stmt)
                 }
                 bi = bi + 1
             }
-            ast[i].body = filtered
         }
         i = i + 1
     }
