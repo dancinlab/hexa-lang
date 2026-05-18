@@ -980,3 +980,36 @@ form) 미해결. simple capture 는 동작. 별도 focused fix.
 
 **closure RFC 상태**: C1+C2+C3 전부 land, closure end-to-end 동작 (단 t38 의 특정
 capture scope 만 #39 잔여). 진짜 tier-1 codegen gap 은 #39 capture-scope 1건으로 수렴.
+
+---
+
+### 진행 로그 — closure capture-scope #39 LANDED (`f4f1225e`) — closure RFC 완결 (cycle h21)
+
+#39: t38 의 capture 는 nested-closure 아닌 **module-global** scope 였음 (t38 는 `fn main`
+없는 top-level script — `captured`·closure 둘 다 module-level `let`). 2 gap:
+- `_lower_closure` 가 lifted lambda body 를 `globals: []` 인 fresh ctx 로 lowering → body
+  의 by-name `_mir_lookup_global` fallback 이 못 찾음. fix: lifted lambda lctx 를
+  `globals: enc.globals` 로 seed (`_lower_fn` 의 mglobals seed 와 동일 패턴).
+- indirect-call discriminator 가 local-bound callee 만 indirect 처리 → global-`let`
+  bound closure callee 가 direct named-call 로 추락 (`bl _clo` → undefined). fix:
+  local-lookup miss 시 `_mir_lookup_global` 도 확인 — global slot 은 `ITEM_LET` 만
+  (fn 아님) → global-let callee = closure value → indirect dispatch. tier-2 codegen_c2
+  mirror.
+
+**검증 (mini)**: build_aprime smoke PASS; closure r2(main-local capture)→15 무regression;
+top-level-let closure capturing top-level-let→15; **t38_nanbox HX1101 소멸, compiles+
+links+runs rc=0, closure check PASS**; self-host fixpoint 보존 `ap1f.s==ap2f.s`
+(252,331 lines).
+
+**closure RFC 완결**: C1(`f4ce5f61`)+C2/C3(`c5c3e9f8`)+capture-scope(`f4f1225e`) — closure
+end-to-end 동작 (non-capturing·main-local capture·module-global capture·global-let
+closure call 전부).
+
+**t38 잔여 1건 (#40, closure 무관)**: t38 가 tier-1 32 pass/1 fail vs tier-2 33/0 —
+유일 divergence = `void is void` (`type_of(returns_void()) == "void"`). void-returning
+call 결과의 type_of 가 tier-1 codegen 에서 오답. closure 0 인 repro 로도 재현되는
+선재 버그. 이거 닫으면 t38 MATCH → gate-1 38/44.
+
+**goal ② 현황**: self-host fixpoint CLOSED · try/catch CLOSED · closure RFC CLOSED.
+진짜 tier-1 codegen gap = #40 (void-call type_of) 1건. 그 외 gate-1 non-MATCH 는
+전부 non-tier-1 (tier-2 #37 · ORAFAIL-class FFI · env).
