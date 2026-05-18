@@ -1575,13 +1575,24 @@ A100, ~$0.30 falsify+fix+confirm 총):**
   `cudaMalloc ... device busy or unavailable` 반복 — 렌트 pod 의
   GPU unavailable (pod-infra dud, flame 측정 아님). wall =
   **INCONCLUSIVE** (CPU-bound-by-design 아님; g3 정확근인).
-- 하드닝: dispatch 에 §4.5 GPU-health preflight (cudaMalloc
-  smoke, 빌드 前 dud GPU ~5s 감지→abort→fresh offer). FIRE2
-  auto-retry wrapper 진행 중.
+- 하드닝: dispatch §4.5 GPU-health preflight (cudaMalloc smoke).
+- FIRE2 (A100_SXM4 $0.60, preflight OK, **유효 측정**): trainer
+  .err empty (pod-dud 아님), wall_rc=124 timeout 900s, GPU ~0%,
+  0 step. **근인 소스확정**: `nn_linear_fwd→farr_matmul` =
+  CPU `hexa_farr_matmul` (GPU dispatch 無); d768 지배 GEMM 전부
+  CPU. = matmul source-routing gap (hand-fused 는 Phase 4-D-9
+  로 이미 건넘).
+- **FIX**: `hexa_farr_matmul` 에 `#ifdef HEXA_CUDA` dim-gate
+  (`M*K>8192||K*N>8192` → 검증된 `_hx_cuda_farr_matmul_gpu`
+  cuBLAS, 실패시 CPU fallthrough). 19 oracle tiny→CPU 잔류
+  bit-exact (no-CUDA Mac 19/19 ALL PASS 재검증); d768 만 cuBLAS.
+  hexa source 불변·no-CUDA byte-identical.
+- FIRE3 (matmul GPU-routed) 진행 예정 — F-RFC046-AGTAPE-WALL 실측.
 
 **gap(d) 현재 (측정 기반)**: forge RoPE 커널 GPU byte-eq ✅
-MEASURED (PASS, A100 — falsify 4.4e-16→fix→0) · generic 경로
-CUDA build ✅ MEASURED clean · generic d768 wall = FIRE1
-pod-dud INCONCLUSIVE → FIRE2 (preflight-hardened) 재측정 중.
-gap(d) 명명 범위 ("RoPE CPU loop→forge") = GPU byte-eq closed;
-generic 전체 wall = 정상 pod 재측정만 잔여.
+MEASURED (PASS A100) · generic CUDA build ✅ clean · generic
+d768 wall: FIRE1 pod-dud → FIRE2 유효=CPU-bound (matmul
+not GPU-routed, 소스확정) → matmul dim-gate FIX → FIRE3 실측
+대기. gap(d) 명명범위 ("RoPE CPU loop→forge") = GPU byte-eq
+MEASURED-closed; generic 전체 GPU wall = matmul forge-route
+후 FIRE3 측정만 잔여 (g3: 측정 전 주장 0).

@@ -649,8 +649,36 @@ GPU wall 을 요구 (Test 18 은 $0 예측이지 측정 아님). user 가 비용
   (cheap oracle) — 커널+`__dmul_rn` fix 는 GPU-verified.
 - 하드닝: `dispatch_agtape_d768_fire.sh` 에 §4.5 GPU-health
   preflight (cudaMalloc smoke) 추가 — dud GPU 를 빌드 前 ~5s
-  에 감지, abort→trap destroy→fresh offer 재시도. FIRE2
-  (auto-retry wrapper) 진행 중 — 정상 pod wall 확정 후 갱신.
+  에 감지, abort→trap destroy→fresh offer 재시도.
+
+**측정 결과 (FIRE2, 2026-05-18, A100_SXM4 $0.60, preflight OK):**
+- preflight GPU_OK (정상 pod), build clean, trainer.err **empty**
+  (cudaMalloc 실패 無 — FIRE1 의 pod-dud 아님). = **유효 측정**.
+- wall: trainer_rc=124 timeout, wall_seconds=900, GPU util ~0%,
+  "model size" 까지만 (0 micro-step / 900s).
+- **근인 = 소스로 확정**: `ag_linear → nn_linear_fwd →
+  farr_matmul` (nn_lib.hexa:65) = plain CPU `hexa_farr_matmul`
+  (runtime.c:9909, ikj loop, **GPU dispatch 無**). d768·12L 의
+  지배 GEMM (Wq/Wk/Wv/Wo/Wg/Wu/Wd ×12L ×4win, e.g. [1024·768]·
+  [768·3072]) 전부 CPU. RoPE 만 forge-wired 였고 RoPE 는 FLOP
+  미미 → GPU idle, step 0. = phase4d7 honest-scope caveat 가
+  예고한 matmul source-routing gap, hand-fused 는 Phase 4-D-9
+  (`flame_proj_matmul_dispatch`→cuBLAS) 로 이미 건넘.
+
+**FIX (genuine gap(d) closure, commit 후속):** `hexa_farr_matmul`
+(runtime.c) 에 `#ifdef HEXA_CUDA` dim-gate 추가 — `M*K>8192 ||
+K*N>8192` 면 검증된 `_hx_cuda_farr_matmul_gpu` (cuBLAS Dgemm,
+hand-fused Phase 4-D-9 가 F-RFC046-WALL 통과에 쓴 동일 함수)
+로 route, 실패 시 CPU fall-through. threshold = flame_phase4b3
+8192 mirror → 19 ag_tape byte-eq oracle 은 전부 tiny (M*K·K*N
+≪8192) 라 CPU 잔류·bit-exact 유지 (gap(b) intact, **검증:
+no-CUDA Mac build 19/19 ALL PASS post-edit**); d768-class
+(M*K=786432·K*N≤2.36M) 만 cuBLAS. hexa source 불변
+(g_flame_api_fixed), no-CUDA build byte-identical (#ifdef inert).
+
+**FIRE3** (matmul GPU-routed) 진행 예정 — 정상 pod 에서 generic
+경로가 GPU engage + step 완료 → F-RFC046-AGTAPE-WALL 실측.
+g3: FIRE3 측정 전 wall 주장 0.
 
 **커밋**: GPU fix `b73269ea` (rfc043-flame-camp). non-gated
 (user 명시 fire 승인 + 측정이 단일 g3 방향 강제).

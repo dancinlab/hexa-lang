@@ -9938,6 +9938,27 @@ HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
     const double* A = ae->buf;
     const double* B = be->buf;
     double* C = ce->buf;
+#ifdef HEXA_CUDA
+    /* gap(d) generic-path forge routing: the GENERIC ag_tape path's
+     * ag_linear -> nn_linear_fwd -> farr_matmul lands here. FIRE1/FIRE2
+     * (2026-05-18, A100) measured the d768·12L generic trainer
+     * CPU-bound (0 steps/900s, GPU ~0%) because this builtin had no
+     * GPU dispatch — only RoPE was forge-wired. Dim-gate large GEMMs
+     * to the verified cuBLAS path (_hx_cuda_farr_matmul_gpu, the same
+     * dispatch the hand-fused Phase 4-D-9 trainer used to clear
+     * F-RFC046-WALL). Threshold mirrors flame_phase4b3 (8192): the
+     * 19 ag_tape byte-eq oracles are tiny (M*K, K*N << 8192) so they
+     * stay on the CPU ikj path and remain bit-exact (gap(b) intact);
+     * only d768-class shapes (M*K=786432, K*N up to 2.36M) route to
+     * cuBLAS. Hexa source unchanged (g_flame_api_fixed). On any GPU
+     * error -> fall through to the CPU loop (safe). HEXA_CUDA-only:
+     * the no-CUDA Mac/oracle build is byte-identical (inert). */
+    if ((M * K) > 8192 || (K * N) > 8192) {
+        int grc = _hx_cuda_farr_matmul_gpu(a_id, M, K, b_id, N, c_id);
+        if (grc == 0) return c_handle;
+        /* grc != 0: GPU path failed — fall through to CPU ikj. */
+    }
+#endif
     // ikj loop — streaming B + C, A_ik hoisted out of j.
     for (int64_t i = 0; i < M; i++) {
         const double* Ai = A + i * K;
