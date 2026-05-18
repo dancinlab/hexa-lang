@@ -380,3 +380,20 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   잔여 인프라 메모: ubu-1 `hexa_cc.c` 단일-TU dup-symbol(p_record_error
   등)로 standalone hexa_v2 재빌드 불가 — 단 `hexa build` 는 영향
   없음(내장 codegen). ubu-1 hexa-lang 은 non-git(클론 아님).
+- 2026-05-18 — **canonical 회귀 발견·복구 + 갭 #1 완전폐쇄 (측정, g3)**.
+  macOS HEAD runtime.c 에 `_shortest_double` 부재 확인 → 추적 결과
+  **`3220ffc5`(mesh-fabric sim 무관 커밋)이 `c83f74e3` float 수정을
+  조용히 클로버**(회귀). macOS 인터프리터/컴파일러가 다시 %g-lossy
+  였던 근본원인. 복구: `c83f74e3` 의 `_shortest_double`+non-whole 분기
+  재적용 **+ 확장**: whole-float 분기에 `fabs(f) < 1e16` 가드 →
+  ≥1e16 정수값 float 이 `_shortest_double` 폴백, CPython
+  `repr()`/`json.dumps`(`repr(1e16)='1e+16'`) 일치. `&&` 단락평가로
+  대마그니튜드 int64 캐스트 UB(6.022e23 등) 제거. **측정**: ubu-1
+  컴파일러 경로 20/20 실측 float shape python3 json.dumps 와
+  byte-identical → **갭 #1 컴파일러 경로 완전폐쇄**. canonical 커밋
+  `1d205214`(macOS, push 안 함).
+  **T3 다음 단계(fresh context 권장 — g3)**: hexa-bio → ubu-1 동기화
+  (미푸시 16커밋 + clone / `wilson pool mount`), `selftest/run_all.sh`
+  hexa-union 을 `hexa build && ./bin` 백엔드로 전환, 갭 #1·#4 로
+  막혔던 순수계산/json 게이트군 컴파일-실행 byte-parity 이관.
+  subprocess·dynamic-import·wall-time 군은 별개 트랙(컴파일러 무관).
