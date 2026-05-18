@@ -1372,6 +1372,22 @@ mode (tensor-keyed grad registry) byte-identical 입증. C 무수정
 재구성 (ConsciousDecoderV2 via ag_tape vs hand-written
 nn_decoder_grad byte-eq @ d=32) ④ RFC 043 §Surface train_step.
 
-GOAL 진척: gap(a) ✅ CLOSED · gap(b) 7-layer+registry fan-in ✅
-(잔여 decoder 재구성 + train_step) · gap(c/d/e) 미착수. multi-
-cycle, oracle-gated, $0-우선.
+**gap(b) Decision 4** (decoder building blocks, design.md): ag_tape
+에 3 primitive 추가 — `ag_k_add` (residual), `ag_k_rope_mh` (multi-
+head RoPE, verified single-row primitive loop), `ag_k_slice` (last-
+pos gather). 전부 nn_lib verified math 재사용 (C 무수정). Oracle
+`flame_ag_tape_test.hexa` **10/10 PASS 전부 max|Δ|=0** ($0):
+```
+T1-6 7 layer op   T7 fan-in   T8 RESID   T9 ROPEMH   T10 SLICE
+```
+W-layout 분석: 블록 W=[out·in] vs nn_linear W=[in·out] = pure
+relabel (동일 곱·reduction, fp 무변). 블록 inlined GQA attn vs
+nn_attn_core = 알고리즘·layout·softmax 순서 동일 (byte-eq).
+**gap(b) 의 모든 vjp building block byte-eq 잠금**. 잔여 = decoder
+ASSEMBLY oracle (full ConsciousDecoderV2 via ag_tape vs
+nn_decoder_grad) + RFC 043 §Surface train_step.
+
+GOAL 진척: gap(a) ✅ CLOSED · gap(b) building block 전부 ✅
+(7 layer + residual + rope_mh + slice + registry, 10/10 byte-eq;
+잔여 = decoder assembly + train_step) · gap(c/d/e) 미착수. multi-
+cycle, oracle-gated, $0-우선. honest: primitive 입증 · assembly 미입증.

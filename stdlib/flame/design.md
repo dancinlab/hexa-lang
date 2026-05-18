@@ -243,6 +243,40 @@ F-RFC043-AGTAPE-FANIN-EQ** — `x→{Wq,Wk,Wv Linear}→attn(Q,K,V)→ctx`
 재구성 (ConsciousDecoderV2 via ag_tape vs hand-written
 nn_decoder_grad byte-eq @ d=32) ④ RFC 043 §Surface train_step.
 
+## Decision 4 — decoder reconstruction building blocks (non-contested)
+
+**picked (표준 plumbing — 게이트 불요, Decision 3 선례와 동일)**:
+ConsciousDecoderV2 를 ag_tape 로 재구성하려면 7 layer op 외에
+3 primitive 가 더 필요 — 전부 verified math 재사용 (nn_lib 무수정):
+- `ag_k_add` (residual): `out=a+b`; bwd `d_out→reg[a]+=,reg[b]+=`
+  (registry fan-out 자동). Test 8 F-RFC043-AGTAPE-RESID-EQ Δ=0.
+- `ag_k_rope_mh` (multi-head RoPE): `q[T·nheads·hd]` 의 per-(t,head)
+  row 를 verified single-row `nn_rope_apply_fwd/bwd` 로 p=t loop +
+  hd-scratch copy — 블록의 q_scratch 패턴과 동일. Test 9
+  F-RFC043-AGTAPE-ROPEMH-EQ Δ=0.
+- `ag_k_slice` (last-pos gather): `zr=X[(T-1)·d:]`; bwd 는 window
+  scatter. Test 10 F-RFC043-AGTAPE-SLICE-EQ Δ=0.
+
+**rationale (왜 게이트 안 함)**:
+- 셋 다 단일 표준해 (residual add / 합성 RoPE / gather-scatter) —
+  대안 tradeoff 없음, Decision 3 와 동일 부류.
+- nn_lib 의 verified primitive 만 재사용 — 새 vjp 수학 0, C 무수정
+  (Decision 2 불변식 보존, RFC 034 9/9 회귀 0).
+- W-layout: 블록 projection W=`[out·in]`, `nn_linear` W=`[in·out]`
+  → transpose 는 동일 곱·동일 reduction 순서의 pure relabel
+  (fp 무변). dW 도 transpose-back 하면 byte-eq 보존.
+- attn: 블록 inlined GQA vs `nn_attn_core` 알고리즘·인덱싱·causal·
+  P/ctx layout·stable-softmax 순서 전부 동일 (inspection) → byte-eq.
+
+**status**: Decision 4 building blocks ✅ LANDED + MEASURED.
+`flame_ag_tape_test.hexa` **10/10 PASS 전부 max|Δ|=0** (hexa build
+compiled, $0): 7 layer op + chain + registry fan-in + residual +
+rope_mh + slice. gap(b) 의 모든 vjp building block byte-eq 잠금.
+**잔여 = decoder ASSEMBLY oracle** (full ConsciousDecoderV2 via
+ag_tape vs `nn_decoder_grad` byte-eq @ tiny d, W-transpose
+bookkeeping) → 그 다음 RFC 043 §Surface train_step. 측정 honest:
+primitive 전부 입증 · 조립단계 미입증 (over-claim 0).
+
 **cross-links**: RFC 043 §Surface =
 `inbox/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md`
 · tape foundation = RFC 034 · leaf vjp oracles = `tool/flame_phase4b3_verify_all.sh`
