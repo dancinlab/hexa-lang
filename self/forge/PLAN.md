@@ -181,6 +181,35 @@ mandatory (`g_blue_closed_mandate`).
 
 (append-only)
 
+### 2026-05-19 — RFC 050 v1 ABI Stage A LANDED — header + stub dispatcher + smoke 10/10 PASS
+
+flame ↔ forge integration API (RFC 050) 의 stable public surface 코드로 land. Stage A 는 **API surface only** — Stage 2 substrates (RFC 044 A'/B'/C', RFC 049 BF16, RFC 048 fused) 가 kernel-by-kernel 로 같은 `_v1` entry point 를 통해 추가됨. ABI lockstep mandate (`AGENTS.tape §0 nn_stack`) 의 부재해소 첫걸음.
+
+**파일** (모두 신규, 0 regen risk):
+- `self/forge/forge_tier_v1.h` — public ABI: kernel families (MATMUL/FFN_FUSED/FWD_BWD_LINEAR/ATTN_DT_FWD/ATTN_DT_BWD/RMSNORM_MH/SILU_GATE/ROPE_MH) · regime tiers (AUTO/SMALL/MEDIUM/LARGE) · precision policy (FP64/LAYERCAST_BF16_FP32/PURE_BF16) · det mode (DEFAULT/PEDANTIC) · return codes (OK/FALLBACK_USED/KERNEL_UNSUPPORTED/REGIME_UNSUPPORTED/PRECISION_UNSUPPORTED/INVALID_ARGS/ABI_MISMATCH) · structs `ForgeShapeInfo` + `ForgeArgs` · 3 function signatures (`forge_api_version_v1` · `forge_tier_dispatch_v1` · `forge_register_specialized_v1`).
+- `self/forge/forge_tier_v1.c` — stub dispatcher: MATMUL+FP64 path delegates to existing `hexa_farr_matmul` (RFC 040 baseline, always-available fallback at chain bottom per RFC 050 §6.6) returning `FORGE_FALLBACK_USED` (honest — specialized tier registry empty). Non-MATMUL kernels return `FORGE_KERNEL_UNSUPPORTED`. BF16 precisions return `FORGE_PRECISION_UNSUPPORTED` (RFC 049 Stage 2 gated). PEDANTIC + non-FP64 returns `FORGE_PRECISION_UNSUPPORTED` per RFC 049 §3.3. Specialized registry (`_forge_reg_table[256]`) stores entries; v1 dispatch does NOT consult it yet (Stage 2 wiring). Live MATMUL call gated by `#ifdef FORGE_TIER_V1_LIVE` so the .c file unit-tests standalone.
+- `tool/forge_tier_v1_smoke.c` — standalone smoke (no GPU, no runtime link): 10 assertions covering version, register NULL/valid, dispatch BF16/LAYERCAST/FFN_FUSED/invalid-family/invalid-regime fallback paths. Build: `clang -std=gnu11 -DFORGE_SMOKE_STANDALONE -o /tmp/forge_tier_v1_smoke tool/forge_tier_v1_smoke.c self/forge/forge_tier_v1.c`.
+
+**Wiring** (1-line change to `self/runtime.c`):
+```c
+#define FORGE_TIER_V1_LIVE 1
+#include "forge/forge_tier_v1.c"
+```
+`runtime.c` TU compile clean (`clang -c -O2 -arch arm64 -std=gnu11 -D_GNU_SOURCE -I self self/runtime.c`, 380544 B object, 3 public symbols exported: `_forge_api_version_v1` · `_forge_tier_dispatch_v1` · `_forge_register_specialized_v1`).
+
+**Measured (g3)**:
+- runtime.c full TU compile: PASS, no warnings, no new errors
+- standalone smoke: **10 / 10 PASS** (`exit=0`, prints `forge_tier_v1 smoke: 10/10 PASS`)
+- nm symbols verified: 3 T entries (text) + 2 b entries (registry storage)
+
+**What this is NOT** (g3 honest scope):
+- NOT a perf claim — every dispatch returns FORGE_FALLBACK_USED or _UNSUPPORTED, no Stage 2 tier is actually faster than the existing path yet.
+- NOT a flame consumer integration — flame Phase 4-D still calls direct `hexa_farr_matmul` / `farr_*_gpu` builtins; switching to `forge_tier_dispatch_v1` is a separate cycle once Stage 2 specialized kernels land.
+- NOT BF16 substrate land — RFC 049 Stage 2 is independent multi-week work.
+- NOT a falsifier discharge — `F-FORGE-RFC050-DISPATCH-API-MATCH` and the other 6 falsifiers from RFC 050 §7 are still pre-registered. They become verifiable only when flame Phase 4-D wires the call sites AND Stage 2 kernels register specialized fn_ptrs.
+
+**Next cycle (downstream blockers cleared)**: Stage 2 substrate work (per-kernel) can now land into the same `_v1` entry points without touching the public surface. The `_v1` suffix is the lockstep marker; any future ABI break = `_v2` bump (RFC 050 §6.7).
+
 ### 2026-05-16 — forge/ 스캐폴드 LANDED (NAMING, 코드 추가 0)
 `self/forge/{README.md, PLAN.md, FORGE.tape}` 작성. 사용자 directive
 2026-05-16 "forge 로 가자 세팅해줘". 기존 substrate 코드(`self/runtime.c`
