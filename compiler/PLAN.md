@@ -1767,3 +1767,54 @@ production toolchain (working interp + patched hexa_v2) IN FLIGHT —
 that is the true post-fix byte-eq delta; Cycle C stays BLOCKED until it
 shows the gate passes (or only the deep residue: atlas_verify FP /
 test_native_multi_calls nested-fn-struct / t_range_precedence parser).
+
+### 2026-05-19 — #1 gating-blocker RESOLVED: codegen fixes promoted live
+
+First post-deploy parity (production rebuild) showed only 13→9
+gate-relevant because the prior rebuild deployed L1 (runtime.h,
+link-time) + A.1/A.2 (main.hexa, driver recompile) but NOT the
+codegen_c2.hexa fixes (L2/L3/typeof/inclusive-range): the running
+hexa_v2 was still the stale (pre-fix) transpiler.
+
+Root cause (LESSON 7): `hexa cc --regen` is a regen *preview* — it
+writes self/native/hexa_cc.c.new + a /tmp smoke, but does NOT promote
+to hexa_cc.c and does NOT install hexa_v2. Worse, its Step-6 smoke
+clang uses `-x c` which is mis-applied to runtime.o ("source file is
+not valid UTF-8") so it never validates a real candidate (the
+`compiled=yes` is a stale-/tmp false positive). The actual deploy
+needs an explicit regen → promote (.new→.c) → `hexa cc` (proper
+recipe, NO -x c) → install.
+
+Resolution (path A, user-chosen deep campaign):
+1. Re-ran regen — hexa_cc.c.new correctly embeds the codegen fixes
+   (1455683 B / 22430 lines vs stale 1454250 / 22410 = +20 lines).
+2. Built a candidate hexa_v2 out-of-tree (.new→.c, no -x c, libsodium/
+   openssl flags) and VALIDATED before promoting:
+   - 4/5 affected fixed: t43_closures_hof (L3 closure-call mangle),
+     t49_runtime_string_pure (L2 char_at free-fn), t47_let_mut_zero
+     (typeof→hexa_type_of), t42_for_in_range (`0..=5`→15, was 10).
+   - t45b_string_methods_utf8 still TRANSPILE-FAIL — a SEPARATE
+     pre-existing codegen gap, not introduced here (tracked).
+   - no regression (t45/t46/mult_order_smoke PASS — an apparent
+     mult_order "REGRESS" was a validation-harness artifact: it has
+     `import`, my ad-hoc smoke skipped module_loader flatten; with
+     flatten it is PASS=28/0).
+   - build_aprime fixpoint PASS with candidate as hexa_v2 (self-host).
+3. Atomic promote with rollback backup ($HOME/.hexa-cache/
+   promote_backup_1779118065): .new→hexa_cc.c, candidate→hexa_v2,
+   rebuild driver, install hexa.real.
+4. Post-promote production verify: 6/6 affected+smoke BUILD+RUN OK,
+   interp intact (deletion-gate oracle preserved). Committed rfc043
+   `22c27a05` (self/native/{hexa_cc.c,hexa_v2} are repo-tracked seed
+   transpiler — deploy persists for clones; NOT pushed to shared
+   origin/rfc043 autonomously — blast radius, local deploy suffices
+   for closure measurement).
+
+Expected post-promote gate: 9 → ~5 (t43/t49/t47/t42 → MATCH).
+Remaining deep residue: atlas_verify (flatten symbol-shadow, NOT
+codegen-math — both isolated float AND integer repros are byte-perfect
+interp==compiled; modular's `import stdlib/core/math.hexa` likely
+shadows transcendental's libm in the flattened unit), t44_array_methods
+(DIVERGE), t45b (separate transpile gap), test_native_multi_calls
+(nested fn/struct hoisting feature), t_range_precedence (parser, both
+arms wrong). Post-promote full parity re-run IN FLIGHT.
