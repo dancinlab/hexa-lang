@@ -606,6 +606,8 @@ fn _is_known_hexpr_kind(k: string) -> bool {
     if k == "index" { return true }
     if k == "wildcard" { return true }
     if k == "field_lit" { return true }
+    if k == "try" { return true }
+    if k == "throw" { return true }
     return false
 }
 
@@ -1311,6 +1313,166 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             ctx2 = _add_edge(ctx2, body_end, header_id)
         }
         ctx2 = _set_cur_block(ctx2, after_id)
+        return _no_value(ctx2)
+    }
+
+    // ── try { try_body } catch e { catch_body } — cycle h20 ──
+    //
+    // CFG layout (entry = ctx.cur_block):
+    //
+    //   entry:
+    //       STMT_TRY_SETJMP target_block=try_id  target_block_else=catch_id
+    //         (allocates a per-try jmp_buf slot in the fn frame, calls
+    //          _setjmp; on first call falls through (BR try_id), on
+    //          longjmp-resumed (nonzero return) BRs to catch_id)
+    //   try_id:
+    //       <try_body>                          ; may early-return
+    //       STMT_TRY_POP                        ; normal exit out of try
+    //       BR after_id
+    //   catch_id:
+    //       STMT_TRY_LAST_ERR -> dst=catch_err_local  ; HexaVal __hexa_last_error()
+    //       <catch_body>                        ; (catch_var=text bound to catch_err_local)
+    //       BR after_id (unless catch returned)
+    //   after_id:
+    //       <fall-through to whatever follows>
+    //
+    // Mirrors self/codegen_c2.hexa::TryCatch lowering, but explicit CFG.
+    // The runtime symbols (_setjmp · __hexa_try_push · __hexa_try_pop ·
+    // __hexa_last_error · hexa_throw) all live in self/runtime.c and are
+    // already linked into aprime-built binaries via runtime.c inline.
+    if k == "try" {
+        if len(e.children) < 2 { return _no_value(ctx) }
+        let entry_id = ctx.cur_block
+
+        let mut ctx2 = _new_block(ctx)
+        let try_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        ctx2 = _new_block(ctx2)
+        let catch_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        ctx2 = _new_block(ctx2)
+        let after_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+
+        // STMT_TRY_SETJMP in the entry block — target_block=try_id is the
+        // normal/first-time fall-through; target_block_else=catch_id is
+        // where we land if longjmp-resumed (setjmp returned nonzero).
+        let sj = Stmt {
+            kind: STMT_TRY_SETJMP,
+            dst: _miss_local(),
+            op: "",
+            args: [],
+            target_block: try_id,
+            target_block_else: catch_id
+        }
+        ctx2 = _push_stmt_to(ctx2, entry_id, sj)
+        ctx2 = _add_edge(ctx2, entry_id, try_id)
+        ctx2 = _add_edge(ctx2, entry_id, catch_id)
+
+        // ── try-body block ─────────────────────────────────────
+        ctx2 = _set_cur_block(ctx2, try_id)
+        let tr = _lower_hexpr(ctx2, e.children[0])
+        ctx2 = tr.ctx
+        let try_returned = ctx2.has_returned
+        let try_end_block = ctx2.cur_block
+        if !try_returned {
+            // Normal exit: pop the try stack, branch to after.
+            let pop = Stmt {
+                kind: STMT_TRY_POP,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, try_end_block, pop)
+            let br_after = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: after_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, try_end_block, br_after)
+            ctx2 = _add_edge(ctx2, try_end_block, after_id)
+        }
+
+        // ── catch-body block ───────────────────────────────────
+        // Reset has_returned (try-body's `return` doesn't dominate catch).
+        ctx2 = _set_returned(ctx2, false)
+        ctx2 = _set_cur_block(ctx2, catch_id)
+        // Allocate `catch_err_local`, fill via STMT_TRY_LAST_ERR.
+        ctx2 = _fresh_local(ctx2, e.typ, "catch_err")
+        let catch_err_local = ctx2.locals[len(ctx2.locals) - 1]
+        let le = Stmt {
+            kind: STMT_TRY_LAST_ERR,
+            dst: catch_err_local,
+            op: "",
+            args: [],
+            target_block: -1,
+            target_block_else: -1
+        }
+        ctx2 = _push_stmt(ctx2, le)
+        // Bind catch_var (e.text) to catch_err_local so any reference inside
+        // catch_body resolves to it.
+        if len(e.text) > 0 && e.text != "_" {
+            ctx2 = _bind(ctx2, e.text, catch_err_local.id)
+        }
+        let cr = _lower_hexpr(ctx2, e.children[1])
+        ctx2 = cr.ctx
+        let catch_returned = ctx2.has_returned
+        let catch_end_block = ctx2.cur_block
+        if !catch_returned {
+            let br_after = Stmt {
+                kind: STMT_BR,
+                dst: _miss_local(),
+                op: "",
+                args: [],
+                target_block: after_id,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt_to(ctx2, catch_end_block, br_after)
+            ctx2 = _add_edge(ctx2, catch_end_block, after_id)
+        }
+
+        // After both arms returned, the try/catch terminator carries
+        // through. Otherwise reset has_returned (one path falls through).
+        if try_returned && catch_returned {
+            ctx2 = _set_returned(ctx2, true)
+        } else {
+            ctx2 = _set_returned(ctx2, false)
+        }
+        ctx2 = _set_cur_block(ctx2, after_id)
+        return _no_value(ctx2)
+    }
+
+    // ── throw <expr> → STMT_THROW ──────────────────────────
+    // Mirrors self/codegen_c2.hexa::ThrowStmt — call hexa_throw with the
+    // value HexaVal. The runtime longjmps to the most-recently-pushed
+    // try frame, or exits(1) with the value if no try is active.
+    if k == "throw" {
+        let mut ctx_r = ctx
+        let mut args: [Operand] = []
+        if len(e.children) > 0 {
+            let r = _lower_hexpr(ctx_r, e.children[0])
+            ctx_r = r.ctx
+            args.push(r.operand)
+        } else {
+            // bare `throw` — emit hexa_throw(hexa_str("error")) at codegen,
+            // so we pass a sentinel const_str here.
+            args.push(_const_str_op("error"))
+        }
+        let s = Stmt {
+            kind: STMT_THROW,
+            dst: _miss_local(),
+            op: "",
+            args: args,
+            target_block: -1,
+            target_block_else: -1
+        }
+        let mut ctx2 = _push_stmt(ctx_r, s)
+        // hexa_throw never returns to its caller (longjmp or exit). Mark
+        // the block as terminated so any trailing fall-through edges are
+        // suppressed — same handling as STMT_RETURN.
+        ctx2 = _set_returned(ctx2, true)
         return _no_value(ctx2)
     }
 
