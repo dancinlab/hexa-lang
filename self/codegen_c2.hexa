@@ -1399,7 +1399,7 @@ fn _gen2_emit_tail_returnify_body(body_stmts, depth) {
     // builtin returns void; emit as a normal expression statement instead.
     if ik == "Call" && type_of(inner.left) != "string" && inner.left.kind == "Ident" {
         let _cname = inner.left.name
-        if _cname == "println" || _cname == "print" || _cname == "eprintln" || _cname == "eprint" || _cname == "exit" {
+        if _cname == "println" || _cname == "print" || _cname == "eprintln" || _cname == "print_err" || _cname == "eprint" || _cname == "exit" {
             chunks.push(gen2_stmt(last, depth))
             return chunks.join("")
         }
@@ -3908,7 +3908,16 @@ fn gen2_expr(node) {
             }
             // FIX (2026-04-20): variadic eprintln — same bug as println.
             // Chain hexa_eprint_val for each arg, append trailing newline.
-            if name == "eprintln" {
+            // FIX (2026-05-19): print_err is an exact alias of eprintln in the
+            // interpreter (self/hexa_full.hexa: print_err -> eprintln(concat
+            // args)). It is in the self/env.hexa builtin list so `hexa parse`
+            // accepts it, but the compiled path emitted no shim -> clang
+            // "use of undeclared identifier 'print_err'". Share the eprintln
+            // emission path so the compiled SSOT matches the interp builtin
+            // (GOAL (2) interp/compiled parity). inbox/patches/
+            // print-err-builtin-interp-compiled-parity.md (wisp).
+            // Re-applied 2026-05-19 after e5c4c0ef deploy regen wiped 3abf9f8e.
+            if name == "eprintln" || name == "print_err" {
                 let nargs_e = len(node.args)
                 if nargs_e == 0 {
                     return "(fprintf(stderr, \"\\n\"), hexa_void())"
@@ -6617,6 +6626,7 @@ fn _is_builtin_name(name) {
     if name == "print" { return true }
     if name == "eprintln" { return true }
     if name == "eprint" { return true }
+    if name == "print_err" { return true }  // alias of eprintln (interp/compiled parity)
     if name == "len" { return true }
     if name == "to_string" { return true }
     if name == "type_of" { return true }
