@@ -1471,3 +1471,41 @@ cycles 1-6 후 자기-grep 으로 self/main.hexa 의 `cmd_run(` 호출 사이트
 
 **R7 track B 진척**: 8/16 verbs LANDED + atlas blocked (memory algorithmic). 잔여 ~8 — lsp (streaming) · atlas (memory) · Phase 3/4 modules · init (broken) · batch/bench (inline, track B 무관). 실 잔여 작업 = lsp 1 + atlas 1 + Phase 3/4 다중 = ~3 distinct work-items.
 
+---
+
+### 2026-05-18 — R7 track B cycle 10 — lsp dispatch + readline codegen gap (cycle h31)
+
+**Decision 13** (verb #9): lsp — exec_replace streaming pattern (cmd_run 의 buffered exec 와 다른 unique 패턴).
+
+- **picked**: lsp
+- **rationale**:
+  - lsp JSON-RPC loop = unbuffered bidirectional stdin/stdout 필요 — cycles 1-9 의 `exec()` buffered spawn 불가
+  - `hexa_exec_replace` (runtime.c L4639, `execvp("/bin/sh","-c",cmd)`) 가 이미 존재 + comment 가 명시적으로 "Used by `hexa lsp`" — process 교체로 editor pipe 자연 상속
+  - codegen_c2 L4504 가 이미 `exec_replace` → `hexa_exec_replace` 매핑 보유 (compiled path 지원)
+
+**발견된 2 gap (둘 다 수정)**:
+1. `readline()` (1줄 stdin) compiled-path 미매핑 — codegen_c2 는 `read_stdin` (전체) 만. `readline` → `hexa_input(hexa_str(""))` 추가 (interp `input("")` 와 동일 — getline+strip+EOF시"". g_inbox_dual_track 패리티 검증).
+2. `hexa_exec_replace` runtime.c 정의되나 runtime.h 선언 누락 → self/main.hexa 의 호출이 implicit-declaration clang error. prototype 추가.
+
+**구현 (LANDED `710fab80`)**:
+- `self/lsp.hexa`: module-level `run_lsp()` → `fn main() { run_lsp() }` wrap.
+- `self/main.hexa` lsp/--lsp 분기: `exec_replace(shq(bin/hexa-lsp))` 우선 (process 교체, fd 상속) + cmd_run("self/lsp.hexa",[]) fallback.
+- `self/codegen_c2.hexa`: `readline` 0-arg builtin 매핑.
+- `self/runtime.h`: `hexa_exec_replace` prototype.
+- `tool/build_hexa_lsp.sh` + initialize-handshake smoke. `.gitignore`: bin/hexa-lsp.
+- `hexa.real` rebuild (515 KB, exec_replace path).
+
+**검증**:
+- hexa.real 빌드 OK (runtime.h decl fix 후)
+- cycle 1-9 regression 0: qrng·qmirror·sim-universe·verify·calc·check 모두 정상
+- mini build_aprime 5/5 PASS · exit(42)==42 · **fixpoint regression 0** (codegen_c2 + runtime.h 변경이 self-host bootstrap 무영향 — compiler/main.hexa 가 readline 미사용, runtime.h add 는 additive)
+
+**lsp binary 상태 — DEFERRED to transpiler bootstrap**:
+- `bin/hexa-lsp` 아직 빌드 불가: codegen_c2 의 readline 매핑이 SOURCE 에는 있으나 active `self/native/hexa_v2` transpiler binary 는 그 이전 빌드
+- `hexa build self/lsp.hexa` 가 성공하려면 hexa_v2 재부트스트랩 필요 (fixpoint-verified) → 별도 cycle
+- 그때까지 lsp dispatch 는 cmd_run fallback (안전, 동작 불변)
+
+**fixpoint regression risk**: 0 (mini 검증 완료).
+
+**R7 track B 진척**: 8 verbs binary-migrated + lsp dispatch/codegen-fix landed (binary deferred). 잔여 distinct work: (1) lsp binary = hexa_v2 bootstrap cycle, (2) atlas = memory 최적화 cycle, (3) Phase 3/4 absorbed modules = multi-cycle. init = broken-feature triage 별도.
+
