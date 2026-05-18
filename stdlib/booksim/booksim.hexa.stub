@@ -1,0 +1,139 @@
+#!hexa strict
+// stdlib/booksim/booksim.hexa — dispatcher / `hexa-arch booksim` entry point
+//
+// @version 0.0.1-skeleton
+// @capabilities [dispatch, cli]
+// @stability skeleton (no bodies — TBD; pending rfc_001 §8 GREEN)
+// @since 2026-05-18
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1)
+//   This dispatcher carries no BookSim2 re-derivation — it is the hexa-arch
+//   CLI surface defined in rfc_001 §7.2, structured per the dispatcher
+//   pattern of hexa-lang rfc_047 §4 (mc_integrate) and the raw-91 fail-loud
+//   doctrine of rfc_048 §3 (xeno).
+//   The engine modules it routes into (anynet, iq_router, traffic, sweep,
+//   wire_delay, leighton) carry their own per-module clean-room provenance.
+//
+// Single entry point routed from `self/main.hexa` `else if sub == "booksim"`.
+// *** Do NOT wire this branch in until rfc_001 §8 GREEN (rfc_003 §7). ***
+//
+// CLI surface (mirror of rfc_001 §7.2):
+//   hexa-arch booksim                       default = help
+//   hexa-arch booksim topology load <file>  anynet topology file -> typed
+//   hexa-arch booksim sweep --topology <f> --traffic uniform --rate 0.05..0.5
+//   hexa-arch booksim wire-delay --node 22nm --topology <f>
+//   hexa-arch booksim oracle --degree 6 --bisection --diameter
+//   hexa-arch booksim measure --baseline degree-4 --candidate degree-6 \
+//                             --node 22nm --traffic tornado --report json
+//   hexa-arch booksim --help, -h
+//   hexa-arch booksim --version, -v
+//
+// Exit codes (rfc_001 §7.3 — raw-91 doctrine; silent skip BANNED):
+//   0   success
+//   1   subcommand error (bad flags, missing input)
+//   2   unknown topic
+//   90  measurement gate not satisfied (no "absorbed" claim yet — rfc_001 §8)
+//   91  unreachable / config missing (wire-delay profile absent,
+//       Leighton oracle violated, or a TBD body reached)
+//
+// Source: rfc_001 §7.2 + §7.3; rfc_003 §3.7.
+
+use "stdlib/booksim/anynet"
+use "stdlib/booksim/iq_router"
+use "stdlib/booksim/traffic"
+use "stdlib/booksim/sweep"
+use "stdlib/booksim/wire_delay"
+use "stdlib/booksim/leighton"
+
+let VERSION = "0.0.1-skeleton"
+
+// ─── flag helpers (mirror stdlib/qrng/qrng.hexa + mc_integrate dispatcher) ──
+
+fn _has_flag(a: [str], flag: str) -> int {
+    let mut i = 0
+    while i < len(a) {
+        if a[i] == flag { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn _find_flag(a: [str], flag: str, default_val: str) -> str {
+    let n = len(a)
+    let mut i = 0
+    while i < n {
+        if a[i] == flag {
+            if i + 1 < n { return a[i + 1] }
+        }
+        let prefix = flag + "="
+        if a[i].starts_with(prefix) {
+            return a[i].substring(len(prefix), len(a[i]))
+        }
+        i = i + 1
+    }
+    return default_val
+}
+
+// ─── per-subcommand handlers (all TBD — pending rfc_001 §8 GREEN) ─────────
+
+// `booksim topology load <file>` — parse + echo typed AnynetTopology.
+fn cmd_topology(argv: [str]) -> int {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase B).
+    // Must: anynet_load(path) -> print typed result -> exit 0;
+    //       exit 91 on file-not-found.
+    return 91
+}
+
+// `booksim sweep --topology <f> --traffic <kind> --rate <a..b>`.
+fn cmd_sweep(argv: [str]) -> int {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase B Falsifier B2).
+    return 91
+}
+
+// `booksim wire-delay --node <name> --topology <f>`.
+fn cmd_wire_delay(argv: [str]) -> int {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase C).
+    return 91
+}
+
+// `booksim oracle --degree <d> --bisection --diameter`.
+fn cmd_oracle(argv: [str]) -> int {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase D).
+    return 91
+}
+
+// `booksim measure --baseline degree-4 --candidate degree-6 ...`.
+// The full pipeline: anynet_load -> wire_delay_apply -> sweep_curve ->
+// leighton_check -> emit F1F2-record. Exits 90 until the §8 gate closes,
+// exits 91 if leighton_check returns pass=0.
+fn cmd_measure(argv: [str]) -> int {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase E + F).
+    return 90
+}
+
+// `booksim --help`.
+fn cmd_help() -> int {
+    // TBD body — pending rfc_001 §8 GREEN. Will print the rfc_001 §7.2
+    // subcommand table.
+    return 91
+}
+
+// ─── dispatch table ──────────────────────────────────────────────────────
+
+// Entry point. argv shape: [..., "booksim", <subcmd>, <args...>].
+// Routed from self/main.hexa `else if sub == "booksim"` (NOT wired until
+// rfc_001 §8 GREEN — rfc_003 §7 Phase G).
+fn cmd_booksim(argv: [str]) -> int {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase A Falsifier A1).
+    // Skeleton dispatch shape (bodies TBD):
+    //   if no subcmd                  -> cmd_help()
+    //   "--help" | "-h"               -> cmd_help()
+    //   "--version" | "-v"            -> print VERSION; 0
+    //   "topology"                    -> cmd_topology(...)
+    //   "sweep"                       -> cmd_sweep(...)
+    //   "wire-delay"                  -> cmd_wire_delay(...)
+    //   "oracle"                      -> cmd_oracle(...)
+    //   "measure"                     -> cmd_measure(...)
+    //   else                          -> unknown topic; exit 2
+    return 91
+}

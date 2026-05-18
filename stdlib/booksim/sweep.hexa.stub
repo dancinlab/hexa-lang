@@ -1,0 +1,104 @@
+#!hexa strict
+// stdlib/booksim/sweep.hexa — latency-vs-injection sweep + saturation (CLEAN-ROOM)
+//
+// @version 0.0.1-skeleton
+// @capabilities [simulation, measurement, sweep]
+// @stability skeleton (no bodies — TBD; pending rfc_001 §8 GREEN)
+// @since 2026-05-18
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1)
+//   Re-derives the public surface of BookSim2's measurement loop:
+//   - upstream code   : src/trafficmanager.cpp:954+ (_Step, single sim cycle),
+//                       :1417-1556 (_SingleSim convergence: warmup +
+//                                   sample_period iterations + max_samples),
+//                       :1611-1690 (Run, overall-statistics aggregation)
+//   - upstream spec   : doc/manual.tex §simulation_control
+//   - upstream license: BSD-2-Clause (Stanford 2007-2015)
+//   - upstream commit : 28f43299f1706a3160ffac721ca461d74eb6e618
+//   - external theorem: Dally & Towles, PPIN §25 — saturation knee defined
+//                       as injection rate where avg packet latency reaches
+//                       3 x zero-load latency.
+//   No code copied from upstream.
+//
+// SCOPE NOTE (rfc_003 §3.4): this module defines only the *control surface*
+// of the sweep. The discrete-event inner loop (per-cycle flit + credit
+// circulation, the event queue) lands in a sibling private helper
+// `stdlib/booksim/_sim_step.hexa` in the bodies-landing RFC (deferred).
+// That helper carries its own min-heap + per-flit pool (rfc_003 §6 gaps 3,4).
+//
+// Source: rfc_001 §3 minimal subset (measurement loop) + §8 measurement gate.
+
+use "stdlib/booksim/anynet"
+use "stdlib/booksim/iq_router"
+use "stdlib/booksim/traffic"
+
+// ─── public types ────────────────────────────────────────────────────────
+
+// Full input bundle for a sweep — assembled by the dispatcher.
+// Fields mirror /tmp/hexa-arch-rfc001-measurement/runs/*.cfg canonical values.
+struct SweepConfig {
+    topology:       AnynetTopology,
+    router_cfg:     IQRouterConfig,
+    traffic:        TrafficSpec,
+    packet_size:    int,    // canonical 20  (flits per packet)
+    sample_period:  int,    // canonical 10000 (cycles per sample)
+    warmup_periods: int,    // canonical 3
+    max_samples:    int,    // canonical 8
+    seed:           int,    // canonical 1
+}
+
+// One measured point of the latency-vs-injection curve.
+// Field set mirrors the columns Agent-1's sweep.sh extracts from the
+// BookSim2 "Overall Traffic Statistics" block.
+struct SweepPoint {
+    injection_rate:      float,
+    avg_packet_latency:  float,   // cycles
+    avg_network_latency: float,   // cycles
+    avg_flit_latency:    float,   // cycles
+    accepted_rate:       float,   // flits/node/cycle
+    avg_hops:            float,
+    saturated:           int,     // 0/1; 1 == 'Simulation unstable' (no convergence)
+}
+
+// The full curve + derived saturation classification.
+struct SweepCurve {
+    ok:            int,
+    points:        [SweepPoint],
+    knee_rate:     float,    // saturation injection rate (first 3x-ZLL crossing)
+    zero_load_lat: float,    // ZLL — lowest-rate unsaturated avg_packet_latency
+    message:       str,
+}
+
+// ─── public API ──────────────────────────────────────────────────────────
+
+// Run one (topology, traffic, rate) point.
+// CLEAN-ROOM: re-derives trafficmanager.cpp:1417-1556 _SingleSim convergence
+// loop — warmup_periods skipped, then up to max_samples sample_period blocks,
+// declaring 'saturated' if latency fails to converge.
+fn sweep_single_point(c: SweepConfig, rate: float) -> SweepPoint {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase B).
+    return SweepPoint {
+        injection_rate: rate,
+        avg_packet_latency: 0.0, avg_network_latency: 0.0, avg_flit_latency: 0.0,
+        accepted_rate: 0.0, avg_hops: 0.0, saturated: 1,
+    }
+}
+
+// Sweep an array of injection rates and classify the saturation knee.
+// CLEAN-ROOM: knee = first rate where avg_packet_latency >= 3 * zero_load_lat
+// per Dally & Towles PPIN §25.
+//   §B acceptance (rfc_003 §4): for the 8x8 mesh uniform reference, knee_rate
+//   must land in [0.30, 0.45]; ZLL @ rate 0.05 within +-5% of 50.25 cyc.
+fn sweep_curve(c: SweepConfig, rates: [float]) -> SweepCurve {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase B Falsifier B2).
+    return SweepCurve {
+        ok: 0, points: [], knee_rate: 0.0, zero_load_lat: 0.0,
+        message: "sweep_curve: TBD — stdlib/booksim/sweep.hexa.stub"
+    }
+}
+
+// Helper: extract zero-load latency from a curve (lowest unsaturated point).
+fn sweep_zero_load_latency(curve: SweepCurve) -> float {
+    // TBD body — pending rfc_001 §8 GREEN.
+    return 0.0
+}

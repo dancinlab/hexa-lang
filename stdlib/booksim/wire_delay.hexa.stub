@@ -1,0 +1,100 @@
+#!hexa strict
+// stdlib/booksim/wire_delay.hexa — per-link wire-delay model (CLEAN-ROOM, NEW)
+//
+// @version 0.0.1-skeleton
+// @capabilities [wire-delay, physical-model]
+// @stability skeleton (no bodies — TBD; pending rfc_001 §8 GREEN)
+// @since 2026-05-18
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1)
+//   *** This module is NOT a BookSim2 re-derivation. ***
+//   BookSim2 has no wire-RC model — its default per-link latency is 1 cycle,
+//   hard-coded in source (rfc_001 §4). This module is the rfc_001 §4 critical
+//   engineering addition: per-link cycle latency derived from physical wire
+//   length x a public-literature wire-delay-per-mm at a named modern node.
+//   - external paper  : Krishna, T. et al., "SMART: A Single-Cycle
+//                        Reconfigurable NoC for SoC Applications", CSAIL 2013,
+//                        §3 — characterizes ~90 ps/mm @ 22 nm.
+//   - external paper  : Kwon, H. & Krishna, T., "OpenSMART", ISPASS 2017,
+//                        §IV — replicates the wire-delay number.
+//   - derivation      : cycles = max(1, ceil( L_mm * delta_ps_per_mm / T_ps ))
+//                        T_ps = 1000 / clk_ghz.  RC delay grows ~L^2 raw, but
+//                        repeated buffers linearize it (rc_exponent knob).
+//   - reference numbers cross-checked against Agent-1's gen_topologies.py:
+//                        delta=90 ps/mm, clk=4 GHz (T=250 ps),
+//                        2.5 mm -> 1 cycle, 3.536 mm -> 2 cycles.
+//
+// Source: rfc_001 §4 (the absorption's largest fidelity risk + primary
+//         engineering deliverable). See rfc_003 §3.5.
+
+use "stdlib/booksim/anynet"
+
+// ─── public types ────────────────────────────────────────────────────────
+
+// A named modern-node wire-delay profile. `extrapolation` is non-empty
+// whenever the number is not measured at `node` itself — rfc_002 §4 requires
+// extrapolation be flagged (no-over-claim).
+struct WireDelayProfile {
+    node:          str,     // "22nm" | "7nm" | ...
+    ps_per_mm:     float,   // e.g. 90.0 (SMART 22 nm)
+    clk_ghz:       float,   // e.g. 4.0
+    rc_exponent:   int,     // 1 = buffered/linear, 2 = raw RC (L^2)
+    source_url:    str,
+    source_doi:    str,
+    extrapolation: str,     // "" if at-node; else basis e.g. "SMART 22nm extrapolated to 7nm"
+}
+
+// A physical link with a measured/placed length, before latency assignment.
+struct WireLink {
+    src_router: int,
+    dst_router: int,
+    length_mm:  float,
+}
+
+// A physical link annotated with its derived cycle latency.
+struct WireLinkLatency {
+    src_router:     int,
+    dst_router:     int,
+    length_mm:      float,
+    latency_cycles: int,    // >= 1 always
+}
+
+// ─── public API ──────────────────────────────────────────────────────────
+
+// Per-link cycle latency from physical length.
+// CLEAN-ROOM (Krishna 2013 SMART §3 + Kwon 2017 OpenSMART §IV):
+//   T_ps    = 1000 / clk_ghz
+//   raw_ps  = ps_per_mm * len_mm^rc_exponent     (rc_exponent in {1,2})
+//   cycles  = max(1, ceil(raw_ps / T_ps))
+fn wire_delay_link(p: WireDelayProfile, len_mm: float) -> int {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase C Falsifier C1).
+    return 0
+}
+
+// Annotate a flat physical-link list with per-link cycle latency.
+fn wire_delay_apply(p: WireDelayProfile, links: [WireLink]) -> [WireLinkLatency] {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase C).
+    return []
+}
+
+// Stitch derived per-link latencies back into an AnynetTopology so the sweep
+// consumes one typed bundle. CLEAN-ROOM: this is the rfc_001 §4 step 3
+// ("inject into BookSim2 as per-link latency overrides on the anynet input")
+// done natively — overwrites AnynetEdge.latency_cycles.
+fn wire_delay_into_anynet(t: AnynetTopology, ll: [WireLinkLatency]) -> AnynetTopology {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase C).
+    return t
+}
+
+// Look up a profile by canonical node name. Hard-exit 91 on unknown node per
+// rfc_001 §7.3 ("wire-delay node profile absent" -> 91, NOT silent skip).
+// At minimum supports "22nm" (SMART, at-node) and "7nm" (extrapolated, flagged).
+fn wire_delay_profile_lookup(node: str) -> WireDelayProfile {
+    // TBD body — pending rfc_001 §8 GREEN (rfc_003 Phase C).
+    // exit(91) if `node` is not a registered profile.
+    return WireDelayProfile {
+        node: "", ps_per_mm: 0.0, clk_ghz: 0.0, rc_exponent: 0,
+        source_url: "", source_doi: "",
+        extrapolation: "wire_delay_profile_lookup: TBD — wire_delay.hexa.stub"
+    }
+}
