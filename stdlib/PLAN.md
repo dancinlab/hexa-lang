@@ -585,3 +585,14 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   확정: 계산→compact(js per float)→json_parse→py_json2 + 패널은
   exec printf. 잔여 ~103, 4대 enabler(gap#1·gap#2·sim-recipe·
   py_json2) 전부 실사 검증완료 — 모든 잔여 클래스 기계적 이관 가능.
+- 2026-05-18 — **T3 +1: 25/127** `lytac_sim` (py_json2 레시피, autac
+  템플릿 적용). receptor-mediated endocytosis ternary occupancy +
+  endosomal sort/recycle partition. **검증 기준 정련(g3)**: byte-parity
+  계약 = 게이트 **STDOUT**(리포트+sentinel). `lytac_sim.py:3` 도
+  docstring 에 잘못된 escape `\-` 보유 → CPython 이 stderr 로
+  `SyntaxWarning` 출력(.py 소스 결함·Python 버전의존·run_all.sh 는
+  exit-code 키). hexa 포트 STDOUT 은 byte-identical(stderr 경고
+  없음=정상). ⟹ 검증 = stdout-only diff (이전 게이트는 .py docstring
+  에 bad-escape 없어 2>&1==stdout 였음 — 일관). autac 회귀 0
+  재확인. `6014a43` PARITY-OK(stdout). 잔여 ~102, json-sim 레시피
+  템플릿화로 가속(autac→lytac 2nd, 동형 구조).
