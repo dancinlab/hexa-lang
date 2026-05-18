@@ -22,7 +22,14 @@
 // (forward simulation), not on a real-valued distortion metric. See the
 // forthcoming rate-distortion-pipeline RFC.
 
-import "../parse/ast.hexa"
+// Tree-shaped imports (self-contained): hir.hexa transitively imports
+// ../parse/ast.hexa (→ ../lex/tokens.hexa); the flatten splices every
+// symbol into one module, so AST types are visible here. Importing
+// ast.hexa directly too would make the graph a diamond, and `hexa build`'s
+// flatten does not dedup repeated files unless the module_loader path-
+// canonicalization patch is present — which lives in a shared file outside
+// this directory. Keeping the graph a tree (hir → ast → tokens; mir
+// standalone) makes this module + meter_test build with the stock loader.
 import "../ir/hir.hexa"
 import "../ir/mir.hexa"
 
