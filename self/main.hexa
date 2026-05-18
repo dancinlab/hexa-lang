@@ -3473,37 +3473,137 @@ if len(av) < 3 {
         // ⚪ SPECULATION-FENCED). Cross-project rubric: atlas g_self_verify +
         // TECS-L n6-replication Tier1/2/3 + anima HEXAD g_verdict_tier_blue +
         // hexa-bio AXIS speculation-fence. NOT just a registry (cf. `hexa atlas`).
+        // R7 track B (2026-05-18, cycle 8): preferred path = standalone
+        // compiled bin/hexa-verify binary built by `hexa build
+        // tool/verify_cli.hexa`. cross-directory `compiler/atlas/*` use
+        // resolved by patched module_loader (cycle 7 ml_canon_path).
         let __inst_v = install_dir_from_argv0()
-        let mut verify_script = "tool/verify_cli.hexa"
-        if len(__inst_v) > 0 {
-            let inst_path_v = __inst_v + "/tool/verify_cli.hexa"
-            if file_exists(inst_path_v) { verify_script = inst_path_v }
-        }
         let mut verify_args = []
         let mut vi = 3
         while vi < len(av) {
             verify_args.push(av[vi])
             vi = vi + 1
         }
-        cmd_run(verify_script, verify_args)
+        let mut verify_bin = ""
+        if len(__inst_v) > 0 {
+            let inst_bin = __inst_v + "/bin/hexa-verify"
+            if file_exists(inst_bin) { verify_bin = inst_bin }
+        }
+        if len(verify_bin) == 0 && file_exists("bin/hexa-verify") {
+            verify_bin = "bin/hexa-verify"
+        }
+        if len(verify_bin) > 0 {
+            let cli_q = shq(verify_bin)
+            let mut cmd = cli_q
+            let mut ai = 0
+            while ai < len(verify_args) {
+                let q = shq(verify_args[ai])
+                cmd = cmd + " " + q
+                ai = ai + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut sj = len(out) - mlen
+            while sj >= 0 {
+                if out.substring(sj, sj + mlen) == marker {
+                    midx = sj
+                    sj = -1
+                } else {
+                    sj = sj - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            let mut verify_script = "tool/verify_cli.hexa"
+            if len(__inst_v) > 0 {
+                let inst_path_v = __inst_v + "/tool/verify_cli.hexa"
+                if file_exists(inst_path_v) { verify_script = inst_path_v }
+            }
+            cmd_run(verify_script, verify_args)
+        }
     } else if sub == "calc" {
         // TECS-L calculators absorbed hexa-native (compiler/atlas/symbolic/*).
         // Single CLI surface (NOT one file per calculator); algorithms shared
         // with compiler/atlas/verify/* so verdict-gating and `hexa calc` use
         // one hexa-native impl (g_self_verify). Zero fs I/O, zero nexus dep.
+        //
+        // R7 track B (2026-05-18, cycle 9): preferred path = standalone
+        // compiled bin/hexa-calc binary. Same as verify (cycle 8) — depends
+        // on cycle 7 module_loader patch for cross-directory use flatten.
         let __inst_c = install_dir_from_argv0()
-        let mut calc_script = "tool/calc_cli.hexa"
-        if len(__inst_c) > 0 {
-            let inst_path_c = __inst_c + "/tool/calc_cli.hexa"
-            if file_exists(inst_path_c) { calc_script = inst_path_c }
-        }
         let mut calc_args = []
         let mut ci = 3
         while ci < len(av) {
             calc_args.push(av[ci])
             ci = ci + 1
         }
-        cmd_run(calc_script, calc_args)
+        let mut calc_bin = ""
+        if len(__inst_c) > 0 {
+            let inst_bin = __inst_c + "/bin/hexa-calc"
+            if file_exists(inst_bin) { calc_bin = inst_bin }
+        }
+        if len(calc_bin) == 0 && file_exists("bin/hexa-calc") {
+            calc_bin = "bin/hexa-calc"
+        }
+        if len(calc_bin) > 0 {
+            let cli_q = shq(calc_bin)
+            let mut cmd = cli_q
+            let mut ai = 0
+            while ai < len(calc_args) {
+                let q = shq(calc_args[ai])
+                cmd = cmd + " " + q
+                ai = ai + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut sj = len(out) - mlen
+            while sj >= 0 {
+                if out.substring(sj, sj + mlen) == marker {
+                    midx = sj
+                    sj = -1
+                } else {
+                    sj = sj - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            let mut calc_script = "tool/calc_cli.hexa"
+            if len(__inst_c) > 0 {
+                let inst_path_c = __inst_c + "/tool/calc_cli.hexa"
+                if file_exists(inst_path_c) { calc_script = inst_path_c }
+            }
+            cmd_run(calc_script, calc_args)
+        }
     } else if sub == "atlas" {
         // ATLAS_N6_RETIREMENT_PLAN.md §0b Phase 2: hexa-native atlas surface.
         // tool/atlas_cli.hexa reads the embedded static_atlas() — zero fs I/O,

@@ -1439,3 +1439,35 @@ cycles 1-6 후 자기-grep 으로 self/main.hexa 의 `cmd_run(` 호출 사이트
 
 **R7 track B 진척**: 6/16 verbs LANDED on origin/main + 7번째 cycle 의 flatten fix 가 LANDED (atlas/verify/calc 후속 사이클들의 unblock). 즉, 잠재 진척 = 9/16 (mini 검증 후).
 
+---
+
+### 2026-05-18 — R7 track B cycle 8+9 — verify + calc (cycle h30 · flatten fix 활용)
+
+**Decision 11+12** (verbs #7, #8): verify + calc.
+- **picked**: 두 verb 같은 cycle 에서 진행 (모두 atlas-class cross-directory deps, cycle 7 patch 의 직접 활용)
+- **rationale**:
+  - cycle 7 의 `ml_canon_path` + compiled module_loader 가 두 verb 다 unlock 함을 빌드로 확인:
+    - verify (`tool/verify_cli.hexa`, 346L, 3 use compiler/atlas/*) → bin/hexa-verify 459 KB ✓
+    - calc (`tool/calc_cli.hexa`, 433L, 18 use compiler/atlas/symbolic/*) → bin/hexa-calc 561 KB ✓
+  - atlas (`tool/atlas_cli.hexa`) 는 빌드 SIGKILL (4096MB cap 초과, 16GB cap 도 외부 kernel kill — 5MB `embedded.gen.hexa` + 68 atlas/*.hexa flatten 시 메모리 ballooning). 별도 cycle (메모리 최적화 또는 다른 machine) 필요.
+  - 두 verb pattern 동일 (binary lookup → shq → __HEXA_SHIM_RC__ marker → exit propagation) 이라 같은 cycle 으로 묶음
+
+**구현 (LANDED)**:
+- `bin/hexa-verify` build (459 KB) + `tool/build_hexa_verify.sh` (HEXA_MEM_CAP_MB=16384 명시).
+- `bin/hexa-calc` build (561 KB) + `tool/build_hexa_calc.sh` (동일).
+- `self/main.hexa` verify branch (L3475-L3540 영역, 16 → 65 lines) + calc branch (L3508-L3568, 18 → 67 lines): 동일 spawn + cmd_run fallback 패턴.
+- `.gitignore`: `bin/hexa-verify` · `bin/hexa-calc`.
+
+**검증**:
+- verify: `./hexa verify` (spawn) ≡ `./bin/hexa-verify` (direct) → diff exit 0
+- calc: `./hexa calc --help` (spawn) ≡ `./bin/hexa-calc --help` (direct) → diff exit 0
+- cycle 1-6 regression: qrng 1.0.0 · qmirror 2.6.0 · sim-universe 1.1.0 모두 정상
+
+**atlas 차단 정밀화 (cycle h30 분석)**:
+- patched compiled module_loader 가 atlas_cli.hexa flatten 시도 → SIGKILL (signal 9, kernel OOM-class)
+- HEXA_MEM_CAP_MB=4096 (default) → cap exceeded · HEXA_MEM_CAP_MB=16384 → 외부 kernel kill
+- 메모리 ballooning 원인 = `compiler/atlas/embedded.gen.hexa` (5MB) + 68 atlas/*.hexa 의 전체 transitive flatten + module_loader 의 string-builder 자료구조 (현재 일관성 캐시 + flat parts array)
+- 후속 cycle 후보: (a) module_loader streaming write (incremental file emit), (b) atlas tree에서 embedded.gen.hexa 분리 (separate compilation unit), (c) atlas-only sub-flattener
+
+**R7 track B 진척**: 8/16 verbs LANDED + atlas blocked (memory algorithmic). 잔여 ~8 — lsp (streaming) · atlas (memory) · Phase 3/4 modules · init (broken) · batch/bench (inline, track B 무관). 실 잔여 작업 = lsp 1 + atlas 1 + Phase 3/4 다중 = ~3 distinct work-items.
+
