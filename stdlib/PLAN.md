@@ -287,3 +287,32 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   검증 차단. float-repr 수정 자체는 알고리즘-검증 완료(gcc standalone);
   end-to-end 컴파일 검증은 ubu-2 환경 결함 해소 후 가능. 두 결함은
   사용자에게 보고 — 별도 트랙.
+- 2026-05-18 — **ubu-2 복구 (사용자 "ubu 복구" 지시)**:
+  · **Fault 2 (빌드 툴체인) 완전 복구·설치 완료** — 원인: 설치된
+    `hexa.real`(5/15) 가 stale, `cmd_cc`/`hexa build` 가 `hexa_cc.c`
+    (runtime `#include` self-contained) + 별도 `runtime.o` 이중링크 →
+    dup-symbol. 현재 소스는 클린(`grep runtime.o self/*.hexa`=0).
+    수정: 현재 소스에서 `hexa.real` 재빌드(transpile main.hexa →
+    single-unit clang `-O3 -fno-strict-aliasing -fno-plt -std=gnu11
+    -D_GNU_SOURCE`) → backup 후 `~/.hx/bin/hexa.real` 교체. `hexa cc`/
+    `hexa build` dup-free 확인.
+  · **float-repr 수정 end-to-end 검증 완료** — 재빌드된 툴체인의
+    `hexa build` 로 컴파일한 hexa 프로그램: `json_stringify(
+    9.637917041778564)`→`9.637917041778564`, `2.9357…e-13` 등
+    전부 Python `json.dumps` 바이트-동일. **상류 갭 #1 (float-repr)
+    완전 해소·검증.**
+  · **Fault 1 (git 손상) — 미완**: 객체 DB 손상 깊음(HEAD 트리
+    `.chain-state` `6ad9742e` 누락, `git fetch` 도 "unresolved
+    deltas 447" 실패). fresh 재클론 진행 중 **ubu-2 SSH 오프라인**
+    (banner-exchange timeout) → 중단. 비-차단(빌드는 작업트리에서
+    정상). ubu-2 복귀 시 재클론 재개.
+- 2026-05-18 — **세션 체크포인트 (측정된 거리)**: hexa-matter T1/T2
+  완료(26/26 selftest hexa-native·verify 4/4·문서 HX). hexa-bio
+  **T3 9/104** 검증(r1_symlink·virocapsid_c5·tape_lattice_cohort·
+  compute_substrate·cmt_library_ranking·cmt_side_effect·cmt_axis_cross·
+  ribozyme_mfe_nussinov·ribozyme_a1_3) + 3 공유모듈(json_schema_validator
+  ·tape_lattice_honesty_lint·ribozyme_mfe_nussinov) + json_dumps_canonical
+  (T4 자산) + 상류 float-repr 수정(검증완료). **다음 핀**: `_python_
+  bridge/module/*.py` 55 시뮬레이터 — exp()/sci-notation 부동소수
+  byte-parity 는 fresh context 필요(g3 — 깊은 context 에서 품질저하
+  회피). registry-iteration 게이트는 상류 `-Infinity` parser fix 후.
