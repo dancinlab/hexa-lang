@@ -67,7 +67,8 @@
   t3_sdc_fix = "SDC 4파일 ns-정확본 교체 (router_d{4,6}.sdc + orfs/sky130hd/router_d{4,6}/constraint.sdc). period 5.0ns(200MHz)·uncertainty 0.25ns·io_delay 1.0ns. remove_from_collection/set_driving_cell/set_load 제거 — OpenSTA 최소형."
   t3_blocked = "[과거] ubu-2 ssh timeout — 2차 run 도중. b9whqcpkk 미완. SDC fix push 후 복구 대기."
   t3_orfs_3rd = "bkml0mjdh — ubu-2 복귀 후 ssh-drop resilient detached run. `nohup bash -c \"docker run ... > comb_pnr_out2/orfs_d6.log\" &` 로 ssh 끊겨도 P&R 진행. fresh /tmp/hexa_comb_v2 clone 으로 fix-SDC 픽업 확인. 현재 ubu-2 sshd 다시 starved = 정상 부하 (이번엔 진짜 P&R 진행 신호)."
-  t3_template_ready = "comb/rtl/T3_design.md — ORFS 결과 수신 템플릿 (area / WNS·TNS / fmax / wire len / DRC placeholder). bkml0mjdh 완료 즉시 채워서 RFC 057 §6 T3 deliverable 마감 가능."
+  t3_template_ready = "comb/rtl/T3_design.md — ORFS 결과 수신 템플릿."
+  t2_sim_closure = "🔥 T2 sim closure via REFUTATION (RFC 057 §5 F1-full). same-N=7 fabric cycle-accurate (commit 91061574): d4 mesh 가 모든 workload 에서 d6 hex 이김 (lat 1.5×~4.5× faster). 이론 hop 1.43 vs 1.67 vs 측정 정반대 — Hales caveat 실측. F1 closed-form (non-contention) PASS · F1-full (contention+real workload) FAIL @ N=7. goal '입증/반증' 의 반증 path 만족. authoritative F1 = hexa-arch larger-N records."
 
 # ─── external citations (typed-interface contracts comb consumes) ────
 

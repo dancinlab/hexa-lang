@@ -216,3 +216,25 @@
   단일 디자인포인트 (200 MHz · sky130hd · tt corner · slow/fast 미실행),
   F1/F2 falsifier status 는 hexa-arch[chip] measurement_gate closure 전
   OPEN 유지 (comb-internal P&R 은 corroboration, authoritative 아님).
+- 2026-05-18 — **🔥 F1-full FALSIFIED at fabric cycle-accurate N=7**:
+  세 turn 누적 fabric-level sustained sim. 산출 trio:
+    `comb/rtl/fabric_2x2_sustained_tb.v`     (commit 3220ffc5, 4-node d4)
+    `comb/rtl/fabric_hex7_sustained_tb.v`    (commit 683262a8, 7-node d6)
+    `comb/rtl/fabric_mesh7_sustained_tb.v`   (commit 91061574, 7-node d4 ★)
+  마지막 commit 이 same-N fair comparison — d6 hex 가 d4 mesh 에게 *모든
+  workload 에서* 패배: uniform d4 1.5× / stencil 4.5× / diameter 2.5× /
+  hotspot tie. **이론(hop 1.43 < 1.67) 과 측정 정반대** — Hales 2001
+  caveat "least-perimeter ≠ least-latency" 실측 확인. Hex center R0 의
+  6-port concentration 이 single-issue LL sink 와 결합해 sustained 부하
+  하에서 hex 전체를 throttle. RFC 057 §5 F1 disposition 갱신:
+    F1 (closed-form non-contention)  ✅ PASS  (workload_f1.hexa 8/8)
+    F1-full (cycle-accurate fabric)  ❌ FAIL  at N=7 small-scale
+  반증 = honest refutation, goal "입증하거나 *동일 엄밀도로 반증*" 의
+  반증 path 만족. comb T2 sim 측면 strict closure 도달.
+  *남은 strict gaps* (외부 wait):
+    T2 tapeout-ready (STA·P&R·DRC) — ORFS bkml0mjdh on ubu-2
+    T3 (GDSII)                     — 同上
+    authoritative F1 (larger N + per-link load) — hexa-arch §9 sweep
+  → comb-internal F1-full = FALSIFIED at this test point; 더 큰 N
+    또는 production-grade sim 이 verdict 를 flip 할 가능성 명시
+    (`d4_vs_d6_fabric_compare.md` §Same-N=7 fair comparison).
