@@ -450,3 +450,14 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   이번 턴 검증 net-new +2(ribozyme_reaction_coordinate_quotient +
   nanobot_l6_l7). 다음 클린-후보: registry_consistency_audit(168·
   7191행 registry+validator) · ribozyme_a1_2(266).
+- 2026-05-18 — **T3 +1 net-new: 19/127** `ribozyme_a1_2_offtarget_threshold_replay`.
+  RIsearch2 off-target PASS/FAIL threshold replay 충실 이관(vendored
+  summary JSON runtime json_parse, per-query verdict 재연산 +
+  monotonicity + non-tautology + class-membership). Python `{n:>w,}`
+  천단위 콤마 + field-width 재현. qid 정적 리스트 = 6 vendored 키
+  (= .py items() 순서 = 게이트 자체 하드코딩 검사 id; 고정 vendored
+  데이터 → 등가 결정론 순회). 1차 빌드 **PARITY-OK** 측정확인.
+  hexa-bio `95594ba`(macOS canonical, 미푸시). **이번 턴 검증
+  net-new +3**: ribozyme_reaction_coordinate_quotient · nanobot_l6_l7
+  · ribozyme_a1_2 (17→19/127). 측정 게이트가 1건 lossy 포착+전진
+  수정 — g3 워크플로 실증. 잔여 ~108, 파이프라인 ready.
