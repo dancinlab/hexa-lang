@@ -1044,8 +1044,12 @@ HexaVal farr_copy_slice_gpu(HexaVal src, HexaVal soff, HexaVal dst,
                             HexaVal doff, HexaVal n);                           /* runtime.c — mk2-C5 device slice copy (5-arg direct) */
 HexaVal farr_transpose_2d_gpu(HexaVal src, HexaVal soff, HexaVal dst,
                               HexaVal doff, HexaVal d_out, HexaVal d_in);       /* runtime.c — mk2-C5 device 2-D transpose (6-arg direct) */
-HexaVal farr_zero_slice_gpu(HexaVal dst, HexaVal doff, HexaVal n);              /* runtime.c — mk2-C5 device zero-fill (3-arg direct) */
-HexaVal farr_add_inplace_gpu(HexaVal dst, HexaVal src, HexaVal n);              /* runtime.c — mk2-C5 device in-place elementwise add (3-arg direct) */
+/* mk2-C5 3-arg builtins — codegen emits hexa_call3, dispatched via the
+ * HexaVal carrier; the function with the `hexa_` prefix is the impl. */
+HexaVal hexa_farr_zero_slice_gpu(HexaVal dst, HexaVal doff, HexaVal n);         /* runtime.c — impl */
+HexaVal hexa_farr_add_inplace_gpu(HexaVal dst, HexaVal src, HexaVal n);         /* runtime.c — impl */
+extern HexaVal farr_zero_slice_gpu;                                              /* runtime.c — fn carrier (registered via hexa_fn_new) */
+extern HexaVal farr_add_inplace_gpu;                                             /* runtime.c — fn carrier */
 HexaVal farr_fill_dt_lcg_gpu(HexaVal dst, HexaVal doff, HexaVal n,
                              HexaVal seed, HexaVal scale);                      /* runtime.c — mk2-C5 device LCG random fill (5-arg direct) */
 

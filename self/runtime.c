@@ -11861,7 +11861,11 @@ extern int _hx_cuda_farr_fill_dt_lcg_gpu(int64_t dst_id, int64_t doff,
                                          int64_t n, int64_t seed,
                                          double scale);
 #endif
-HexaVal farr_zero_slice_gpu(HexaVal dst_v, HexaVal doff_v, HexaVal n_v) {
+// 3-arg builtins use the HexaVal carrier + hexa_fn_new pattern (codegen
+// emits hexa_call3, which dispatches via the carrier — same as
+// farr_silu_gate_gpu / farr_add_gpu). Function name gets `hexa_`
+// prefix; the carrier without prefix is registered at init time.
+HexaVal hexa_farr_zero_slice_gpu(HexaVal dst_v, HexaVal doff_v, HexaVal n_v) {
     int64_t dst_id = hexa_as_num(dst_v);
     int64_t doff   = hexa_as_num(doff_v);
     int64_t n      = hexa_as_num(n_v);
@@ -11871,7 +11875,7 @@ HexaVal farr_zero_slice_gpu(HexaVal dst_v, HexaVal doff_v, HexaVal n_v) {
     return hexa_int(_hx_farr_zero_slice_cpu(dst_id, doff, n));
 #endif
 }
-HexaVal farr_add_inplace_gpu(HexaVal dst_v, HexaVal src_v, HexaVal n_v) {
+HexaVal hexa_farr_add_inplace_gpu(HexaVal dst_v, HexaVal src_v, HexaVal n_v) {
     int64_t dst_id = hexa_as_num(dst_v);
     int64_t src_id = hexa_as_num(src_v);
     int64_t n      = hexa_as_num(n_v);
@@ -11881,6 +11885,8 @@ HexaVal farr_add_inplace_gpu(HexaVal dst_v, HexaVal src_v, HexaVal n_v) {
     return hexa_int(_hx_farr_add_inplace_cpu(dst_id, src_id, n));
 #endif
 }
+HexaVal farr_zero_slice_gpu;
+HexaVal farr_add_inplace_gpu;
 HexaVal farr_fill_dt_lcg_gpu(HexaVal dst_v, HexaVal doff_v, HexaVal n_v,
                              HexaVal seed_v, HexaVal scale_v) {
     int64_t dst_id = hexa_as_num(dst_v);
@@ -14290,6 +14296,8 @@ static void _hexa_init_fn_shims(void) {
     farr_add_gpu                    = hexa_fn_new((void*)hexa_farr_add_gpu,                    3);
     farr_scale_gpu                  = hexa_fn_new((void*)hexa_farr_scale_gpu,                  3);
     farr_silu_gate_gpu              = hexa_fn_new((void*)hexa_farr_silu_gate_gpu,              3);
+    farr_zero_slice_gpu             = hexa_fn_new((void*)hexa_farr_zero_slice_gpu,             3);
+    farr_add_inplace_gpu            = hexa_fn_new((void*)hexa_farr_add_inplace_gpu,            3);
     // anima RFC 040 Phase B2 (2026-05-16): d_train5 hot-path completion —
     // matmul_t / outer / mul / silu / silu_grad / rmsnorm_bwd (≤4-arg
     // carriers). farr_adamw_step_gpu (11-arg) = bare direct-C entry,
