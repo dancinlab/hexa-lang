@@ -88,7 +88,10 @@ fn _cli() -> [string] {
     return out
 }
 
-fn main(args: array) {
+// R7 track B (2026-05-18): dropped unused `args: array` param so the
+// compiled-binary 0-arg auto-main-invoke (`u_main()`) matches the
+// signature. CLI args are read via _cli() below, not the param.
+fn main() {
     let argv = _cli()
     if len(argv) < 1 {
         _usage()

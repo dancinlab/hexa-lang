@@ -88,6 +88,9 @@ bin/hexa-verify
 bin/hexa-calc
 bin/hexa-lsp
 
+# R7 track B Phase 3/4 batch absorbed-verb binaries (build_absorbed_binaries.sh)
+bin/hexa-absorbed-*
+
 # Compiled module_loader (build pipeline helper, optional fast path).
 # Built via tool/build_hexa_module_loader.sh. Source is self/module_loader.hexa.
 build/hexa_module_loader
