@@ -8321,6 +8321,19 @@ HexaVal hexa_farr_get(HexaVal h_v, HexaVal i_v) {
     int64_t i  = hexa_as_num(i_v);
     if (id < 0 || id >= _hx_farr_count) return hexa_float(0.0);
     HexaFarrEntry* e = &_hx_farr_table[id];
+#ifdef HEXA_CUDA
+    /* RFC 056 §6.4 lazy-D2H on host-read. When _d2h_out has deferred
+     * (FORGE_OUT_DEVICE_KEEP path) the host buffer is stale and the
+     * authoritative bytes live on the device. Pull them now so the
+     * scalar read sees the freshest value. After _d2h sets
+     * loc=FARR_MIRRORED and dirty_host=0, subsequent farr_get calls
+     * short-circuit (loc != FARR_DEVICE) → amortized O(N) for the
+     * first read, O(1) for the rest of the host-side scan. */
+    if (e->loc == FARR_DEVICE) {
+        extern int _hx_cuda_farr_to_host(int64_t farr_id);
+        (void)_hx_cuda_farr_to_host(id);
+    }
+#endif
     if (!e->buf || i < 0 || i >= e->len) return hexa_float(0.0);
     return hexa_float(e->buf[i]);
 }
@@ -8332,8 +8345,22 @@ HexaVal hexa_farr_set(HexaVal h_v, HexaVal i_v, HexaVal x_v) {
     double  x  = __hx_to_double(x_v);
     if (id < 0 || id >= _hx_farr_count) return h_v;
     HexaFarrEntry* e = &_hx_farr_table[id];
+#ifdef HEXA_CUDA
+    /* RFC 056 §6.4 lazy-D2H before host write. If the device holds the
+     * authoritative bytes, materialise them on the host first or the
+     * subsequent _h2d (triggered by dirty_host=1 below) would re-upload
+     * a buffer whose non-i indices are stale. After the write, mark
+     * dirty_host so the next forge op H2D-refreshes the device. */
+    if (e->loc == FARR_DEVICE) {
+        extern int _hx_cuda_farr_to_host(int64_t farr_id);
+        (void)_hx_cuda_farr_to_host(id);
+    }
+#endif
     if (!e->buf || i < 0 || i >= e->len) return h_v;
     e->buf[i] = x;
+#ifdef HEXA_CUDA
+    if (e->d_buf) { e->dirty_host = 1; e->dirty_dev = 0; }
+#endif
     return h_v;
 }
 

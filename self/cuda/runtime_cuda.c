@@ -239,6 +239,7 @@ static int _d2h(int64_t id) {
         return -1;
     }
     e->dirty_host = 0;
+    e->dirty_dev  = 0;
     if (e->loc == FARR_DEVICE) e->loc = FARR_MIRRORED;
     return 0;
 }
