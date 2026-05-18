@@ -6332,6 +6332,19 @@ fn _is_known_float_name(name) {
     // H17 fix: see _is_known_int_name — param annotation is authoritative
     // over any prior fn's module-global known-float registration.
     if _gen2_name_in_cur_params(name) { return false }
+    // 2026-05-19 atlas root-cause: symmetric collision check (see the
+    // _is_known_int_name companion). If `name` is also registered int,
+    // the int↔float classification is ambiguous across the flattened
+    // unit — bail to safe tag-dispatch.
+    if len(_known_int_set) == 64 {
+        let _bi = _known_hash(name)
+        let _ib = _known_int_set[_bi]
+        let mut _ii = 0
+        while _ii < len(_ib) {
+            if _ib[_ii] == name { return false }
+            _ii = _ii + 1
+        }
+    }
     let b = _known_hash(name)
     let bucket = _known_float_set[b]
     let mut i = 0
@@ -6353,6 +6366,24 @@ fn _is_known_int_name(name) {
     // The current fn's param type is authoritative; a prior fn's `let X = 0`
     // must not be applied to this fn's `X: float` param.
     if _gen2_name_in_cur_params(name) { return false }
+    // 2026-05-19 atlas root-cause fix: name-collision across the
+    // flattened modules. _known_int_set / _known_float_set are GLOBAL
+    // keyed by name, so a common name (`lhs`, `rhs`, `err`, …) can be
+    // registered int by one module (`let lhs = sigma(n)*euler_phi(n)`)
+    // and float by another (`let lhs = lgamma(...)+...`). If both,
+    // treat the classification as ambiguous and bail to the safe
+    // tag-dispatch BinOp — the prior unconditional "int wins" emitted
+    // `HX_INT(lhs)-HX_INT(rhs)` on float operands, producing garbage
+    // err in atlas_verify_smoke and 5 verdict FALSIFIES.
+    if len(_known_float_set) == 64 {
+        let _bf = _known_hash(name)
+        let _fb = _known_float_set[_bf]
+        let mut _fi = 0
+        while _fi < len(_fb) {
+            if _fb[_fi] == name { return false }
+            _fi = _fi + 1
+        }
+    }
     let b = _known_hash(name)
     let bucket = _known_int_set[b]
     let mut i = 0
