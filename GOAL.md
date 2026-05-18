@@ -113,9 +113,11 @@ RFC 034 autograd (✅) · 040 device-farr (✅)        ← 언어 표현력 (dow
 
 ## 현재 정직한 위치 (g3 — over-claim 금지)
 
-**self-host 축 + 전 tier-1 codegen-correctness 축 CLOSED.** bit-stable self-host fixpoint
-도달, tier-1(aprime_cc) 이 구현된 언어 범위에서 codegen-complete. 인터프리터 소스 실삭제
-(R7)만 남음 — hard-to-reverse 라 user 확인 후.
+**self-host 축 + 전 tier-1 codegen-correctness 축 + R7 Phase 1/2 (option B) CLOSED.**
+bit-stable self-host fixpoint 도달, tier-1(aprime_cc) 이 구현된 언어 범위에서 codegen-
+complete, 인터프리터는 user-facing surface 에서 deprecation-signal 활성. **인터프리터
+소스 자체의 일괄 삭제는 track B (16+ absorbed-verb sub-binary 재라우팅)** 완료 후
+multi-cycle housekeeping — functionality 손실 0 으로 점진 sunset.
 
 tier-1 codegen-correctness 버그 #23~#40 누적 종결 (self-host 7 + 정정 6 + 신기능 전스택):
 
@@ -135,13 +137,24 @@ tier-1 codegen-correctness 버그 #23~#40 누적 종결 (self-host 7 + 정정 6 
   → tier-2 가 정확히 처리하는 모든 .hexa 를 tier-1 도 정확히 처리. **tier-1 codegen
     gap = 0.**
 - **R7 deletion gate**: ②(CLI compiled) ③(atlas SIGSEGV) ④(module_loader interp-free)
-  ✅ · ①(coverage ≥ interp) — tier-1 codegen gap 0 이므로 사실상 충족. 인터프리터 소스
-  실삭제만 잔여 (`@D g_interp_deprecated`).
+  ✅ · ①(coverage ≥ interp) — tier-1 codegen gap 0 이므로 사실상 충족.
+- **R7 Phase 1** (`db5635b7`) — interp 소스 vs 부트스트랩 entanglement map 작성. source-
+  level clean 분리 확인, runtime-level 16+ absorbed-verb 위임 발견.
+- **R7 Phase 2 option B** (`bd8c3d85`) LANDED — `cmd_run_user_direct()` 신설, user-direct
+  surface (`hexa run <file>` CLI + `hexa://run` URL) 에 stderr deprecation warning emit
+  (`HEXA_INTERP_QUIET=1` 로 silence 가능), 16+ absorbed-verb 는 그대로 (functionality
+  손실 0). `@D g_interp_deprecated` 룰 갱신 (option B 채택 명시). build_aprime smoke +
+  self-host fixpoint 보존 (mini 검증, 253,049 lines).
+- **track B (sunset 잔여, multi-cycle housekeeping)**: 16+ absorbed-verb (`lsp`/`test`/
+  `bench`/`check`/`qrng`/`sim-universe`/`qmirror`/`batch`/…) 의 sub-binary 화 +
+  main.hexa 재라우팅. 완료 후 인터프리터 소스 일괄 삭제 → `g_interp_deprecated` 룰 폐기
+  → R7 종결. 별도 multi-cycle.
 
-> 이 GOAL 은 north-star — self-host 축 + tier-1 codegen-correctness 축 모두 측정으로
-> CLOSED (fixpoint byte-identical · gate ① 38/44, 잔여 전부 non-tier-1). "인터프리터
-> 폐기" 의 마지막 = 인터프리터 소스 실삭제 (R7), hard-to-reverse 라 user 확인 후 실행.
-> 측정값 SSOT 는 `compiler/PLAN.md`.
+> 이 GOAL 은 north-star — self-host 축 + tier-1 codegen-correctness 축 + R7 Phase 1/2
+> (option B) 모두 측정으로 CLOSED (fixpoint byte-identical · gate ① 38/44 잔여 전부
+> non-tier-1 · user-facing interp signal LANDED). 잔여 = track B 의 sub-binary 재라우팅
+> housekeeping (functionality 손실 0 으로 점진), 별도 multi-cycle. 측정값 SSOT 는
+> `compiler/PLAN.md`.
 
 ---
 
