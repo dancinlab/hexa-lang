@@ -438,3 +438,15 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   포트는 깊은-context 에서 미세 byte 불일치 위험(측정 게이트가
   잡지만 품질저하). g3: 지속가능 페이스로 검증된 +1 씩, 가짜 일괄
   금지. 측정 천장 아님 — 작업량(잔여 ~110, 파이프라인 ready).
+- 2026-05-18 — **T3 +1 net-new: 18/127** `nanobot_l6_l7_contract_test`.
+  N-R2 L6→L7-L9 consumer-driven contract test 충실 이관(5 JSON spec
+  runtime json_parse, set/subset/alias 로직, Python-repr 재현). 1차
+  빌드에서 **측정 게이트가 lossy 포착**(canon-ref 줄 끝 잉여 `)` —
+  .py 의 `)` 는 CANON_REF 뒤에서만 닫힘): MISMATCH 1자. fix-forward
+  재커밋 → **PARITY-OK** 측정확인. hexa-bio `01ae3ef`→`ebb3d20`→
+  `bfe2676`(macOS canonical, 미푸시). g3 워크플로 실증: 측정이
+  손실포트를 진실-병합 전에 잡고 전진수정 — 가짜 진전 0. float 은
+  `json_stringify`(수정된 runtime = CPython-parity) 경유로 안전.
+  이번 턴 검증 net-new +2(ribozyme_reaction_coordinate_quotient +
+  nanobot_l6_l7). 다음 클린-후보: registry_consistency_audit(168·
+  7191행 registry+validator) · ribozyme_a1_2(266).
