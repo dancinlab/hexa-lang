@@ -52,6 +52,7 @@ pub fn ag_k_lmhead()  -> int { return 4 }
 pub fn ag_k_swiglu()  -> int { return 5 }
 pub fn ag_k_embed()   -> int { return 6 }
 pub fn ag_k_attn()    -> int { return 7 }   // GQA attention core (Q,K,V→ctx)
+pub fn ag_k_add()     -> int { return 8 }   // residual: out = a + b (elem)
 
 // ── tape geometry (node v3) ─────────────────────────────────────────────
 // header v2: [0]=op count, [1]=final-input-grad (legacy/chain path),
@@ -238,6 +239,21 @@ pub fn ag_attn(tape: int, Q: int, K: int, V: int,
     return ctx
 }
 
+// out = a + b (element-wise, len). Residual / skip-connection adder.
+// bwd: d_out flows unchanged to BOTH a and b (registry accumulates the
+// fan-out automatically). ids[a,b,out] dims[len].
+pub fn ag_add(tape: int, a: int, b: int, len: int) -> int {
+    let out = t_zeros(len)
+    let mut i = 0
+    while i < len {
+        t_set(out, i, t_get(a, i) + t_get(b, i))
+        i = i + 1
+    }
+    let _ = _ag_push(tape, ag_k_add(), a, b, out, 0 - 1, 0 - 1, 0 - 1,
+                     0 - 1, 0 - 1, len, 0, 0, 0)
+    return out
+}
+
 // ── reverse pass (per-tensor grad registry — Decision 3) ────────────────
 // out_tid = tensor id of the final op's output (loss-seed target).
 // seed = grad w.r.t. that tensor. Walks ops latest→first; each op's
@@ -376,6 +392,14 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             t_free(dQ)
             t_free(dK)
             t_free(dV)
+        } else if kind == ag_k_add() {
+            let a = _ag_get(tape, op, 1)
+            let b = _ag_get(tape, op, 2)
+            let out = _ag_get(tape, op, 3)
+            let len = _ag_get(tape, op, 9)
+            let og = _ag_reg_grad(tape, out, len)
+            _ag_reg_acc(tape, a, og, len)
+            _ag_reg_acc(tape, b, og, len)
         }
         op = op - 1
     }
@@ -532,6 +556,8 @@ pub fn ag_t_free_state(tape: int) {
         } else if kind == ag_k_attn() {
             t_free(_ag_get(tape, op, 4))   // P
             t_free(_ag_get(tape, op, 5))   // ctx
+        } else if kind == ag_k_add() {
+            t_free(_ag_get(tape, op, 3))   // out
         }
         op = op + 1
     }

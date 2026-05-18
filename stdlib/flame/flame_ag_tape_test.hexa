@@ -455,8 +455,65 @@ let t7ok = m7c == 0.0 && m7x == 0.0 && m7wq == 0.0 && m7wk == 0.0 && m7wv == 0.0
 if t7ok { println("PASS  F-RFC043-AGTAPE-FANIN-EQ") }
 else     { println("FAIL  F-RFC043-AGTAPE-FANIN-EQ") }
 
-if t1ok && t2ok && t3ok && t4ok && t5ok && t6ok && t7ok {
-    println("ALL PASS  ag_tape byte-identical (7 layers + chain + registry fan-in)")
+// ── Test 8: residual add fan-out (ag_add primitive, Decision 3) ─────────
+// h = x + rmsnorm(x; g). x feeds BOTH the rmsnorm and the skip-add, so
+// grad[x] = seed (skip path) + dx_rms (through-norm path). Proves the
+// residual primitive + registry fan-out accumulation byte-identical to
+// the hand-chained reference. Falsifier F-RFC043-AGTAPE-RESID-EQ.
+println("-- Test 8: residual  h = x + rmsnorm(x;g)  --")
+let rD = 24
+let rx   = t_zeros(rD)
+let rg   = t_zeros(rD)
+let rseed = t_zeros(rD)
+let mut r8 = 0
+while r8 < rD {
+    t_set(rx,   r8, to_float(r8 - 12) * 0.043 + 0.15)
+    t_set(rg,   r8, 1.0 + to_float(r8 % 5 - 2) * 0.02)
+    t_set(rseed, r8, to_float((r8 * 7) % 9 - 4) * 0.037)
+    r8 = r8 + 1
+}
+// reference: fwd + hand-chained bwd with manual grad[x] = seed + dx_rms
+let ryR  = t_zeros(rD)
+let rxnR = t_zeros(rD)
+let rinvR = t_zeros(1)
+nn_rmsnorm_fwd(rx, rg, ryR, rxnR, rinvR, rD)
+let rhR = t_zeros(rD)
+let mut r8b = 0
+while r8b < rD {
+    t_set(rhR, r8b, t_get(rx, r8b) + t_get(ryR, r8b))
+    r8b = r8b + 1
+}
+let rdxRms = t_zeros(rD)
+let rdgR   = t_zeros(rD)
+nn_rmsnorm_bwd(rx, rg, rxnR, t_get(rinvR, 0), rseed, rdxRms, rdgR, rD)
+let rdxR = t_zeros(rD)
+let mut r8c = 0
+while r8c < rD {
+    t_set(rdxR, r8c, t_get(rseed, r8c) + t_get(rdxRms, r8c))
+    r8c = r8c + 1
+}
+// tape: rmsnorm then residual add, registry backward
+let t8 = ag_t_begin(4)
+let ryT = ag_rmsnorm(t8, rx, rg, rD)
+let rhT = ag_add(t8, rx, ryT, rD)
+ag_backward_reg(t8, rhT, rseed)
+let rdxT = ag_grad(t8, rx)   // seed (skip) + dx_rms (through-norm)
+let rdgT = ag_grad(t8, rg)
+let m8h = agt_maxdiff(rhR, rhT, rD)
+let m8x = agt_maxdiff(rdxR, rdxT, rD)
+let m8g = agt_maxdiff(rdgR, rdgT, rD)
+print("  max|Δ h|="); print(m8h)
+print(" dx(skip+norm)="); print(m8x)
+print(" dg="); println(m8g)
+ag_t_free_state(t8)
+ag_t_free_reg(t8)
+ag_t_end(t8)
+let t8ok = m8h == 0.0 && m8x == 0.0 && m8g == 0.0
+if t8ok { println("PASS  F-RFC043-AGTAPE-RESID-EQ") }
+else     { println("FAIL  F-RFC043-AGTAPE-RESID-EQ") }
+
+if t1ok && t2ok && t3ok && t4ok && t5ok && t6ok && t7ok && t8ok {
+    println("ALL PASS  ag_tape byte-identical (7 layers + chain + fan-in + residual)")
 } else {
     println("ALL FAIL  ag_tape plumbing regression")
 }
