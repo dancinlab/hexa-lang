@@ -149,6 +149,35 @@ no JIT-cache effects). reference oracle = CPU farr (RFC 025/032/033/034)
 
 - AllReduce / AllGather / Broadcast on NCCL — Phase 4 (single-GPU large block AOT trainer) 가 settled 후. 원래 Phase 4 였으나 paradigm 우선순위 재조정으로 Phase 5+ 강등.
 
+### Phase 6 (endgame, long-arc) — forge becomes hexa-native (RFC 055)
+
+> **forge 의 최종 형태는 hexa-native 다.** 현재 C/CUDA substrate 는
+> *과도기* — hexa-lang 에 GPU codegen target 이 없어서 C/CUDA 가 GPU
+> 커널을 산출하는 *유일한* 경로이기 때문. `AGENTS.tape §3 @D g5`
+> (hexa-native-only) 의 GPU lane closure 가 곧 forge 의 closure.
+
+- **seam**: RFC 055 — hexa-src → NVPTX codegen backend
+  (`inbox/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md`,
+  design draft 2026-05-17). deliverable 은 `compiler/codegen/nvptx_*.hexa`
+  (arm64_darwin.hexa / x86_64_linux.hexa 의 sibling target) — **forge 가
+  아니라 compiler 도메인**. forge 는 그 capability 의 *소비자*.
+- **transition**: RFC 055 backend 가 충분한 kernel coverage 를 확보하면
+  `self/cuda/runtime_cuda.c` 의 `.cu` 커널이 `.hexa` 로 재유도됨 (여전히
+  `self/forge/` 아래 — `g_forge_substrate_role` 의 *디렉토리* 경계는
+  유지, *언어*만 flip). cuBLAS Dgemm 은 raw-GEMM fallback 으로 잔존
+  (vendor-library win, hexa-native 가 추월 비목표).
+- **ABI 안정성**: RFC 050 `_v1` 표면이 transition 의 stable surface —
+  flame source 는 커널이 C/CUDA → hexa-emitted PTX 로 바뀌어도
+  재컴파일 불요 (same dispatch, different substrate).
+- **honest scope (g3)**: P2 — 어떤 현재 shipping fire 도 막지 않음.
+  forge Phase R (C Stage 2 Phase 3, hand-WMMA 41-43% TC peak) 가
+  hexa-emitted 커널이 *correct* 함은 anchor 하지만 cuBLAS raw-GEMM
+  throughput 추월은 비목표 (CUTLASS-급 tuning = multi-week). 닫는
+  조건 = RFC 055 backend 가 forge 측정 oracle 무회귀 substitute 가능
+  (`g_blue_closed_mandate`).
+- **gate**: Phase 6 ← RFC 055 land (compiler 도메인) + forge 측정
+  oracle 재현 battery. flame/forge 의 현재 critical chain 과 독립.
+
 ## 2. 의존 (gating)
 
 - Phase 1 ← RFC 040 design (filed) + verified oracle (`x_oracle_cublas`). ✅ CLEARED
@@ -159,6 +188,7 @@ no JIT-cache effects). reference oracle = CPU farr (RFC 025/032/033/034)
 - **Phase 3 ← Phase 2.B (SMEM-fused FFN single-SM 우선 검증) + RFC 044 (filed).** Hopper-only (cc=9.0).
 - **Phase 4 ← flame Phase 1+2+3 (transformer block 구조 land) + Phase R / A Stage 1 PASS.** ⏳ flame 의존
 - Phase 5+ ← Phase 4 single-GPU settled + 실제 multi-GPU need.
+- **Phase 6 (endgame) ← RFC 055 land (compiler 도메인, hexa-src→NVPTX) + forge 측정 oracle 재현 battery.** 현재 critical chain 과 독립 (P2).
 
 flame phase ↔ forge phase mapping (paired, post-PARADIGM):
 
@@ -180,6 +210,16 @@ mandatory (`g_blue_closed_mandate`).
 ## 진행 로그
 
 (append-only)
+
+### 2026-05-19 — endgame 문서화: forge 의 최종 형태 = hexa-native (RFC 055) — 문서 갭 해소
+
+사용자 지적 — forge SSOT 문서 (README / PLAN / PARADIGM / FORGE.tape) 어디에도 "forge 의 최종은 hexa-native" 가 명시돼 있지 않았음. 현재 C/CUDA substrate 가 *영구* 형태로 읽힐 위험. g3 정직성 + `@D g5` (hexa-native-only) 정합을 위해 endgame 을 명문화:
+
+- **README.md** — 신규 `## Endgame — forge becomes hexa-native (RFC 055)` 섹션. today(C/CUDA) vs after-RFC-055(hexa-native) 5-axis 비교표 + 왜 아직 critical chain 아닌지 (P2, g3 honest) + transition 시 forge 내부 변화 (`.cu` → `.hexa` 재유도, 디렉토리 경계 유지·언어만 flip, cuBLAS fallback 잔존, RFC 050 `_v1` ABI 가 stable surface). "What forge is NOT" 의 오해유발 bullet 정정 — "Not a GPU codegen backend" → "RFC 055 는 `compiler/codegen/` sibling deliverable, forge 는 소비자".
+- **PLAN.md** — 신규 `### Phase 6 (endgame, long-arc) — forge becomes hexa-native (RFC 055)`. §2 gating 에 Phase 6 dependency 추가 (RFC 055 land + oracle 재현 battery, 현재 chain 과 독립).
+- **FORGE.tape** — `@D g_forge_endgame_hexa_native` governance entry + `@X x_rfc055` citation.
+
+측정 변화 0 — 순수 문서 (g3 over-claim 없음, "RFC 055 = design draft, 미구현" 명시). forge 현재 상태 (C/CUDA substrate, PARADIGM-anchored) 는 untouched. SSOT: `inbox/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md`.
 
 ### 2026-05-19 — RFC 050 v1 ABI Stage A LANDED — header + stub dispatcher + smoke 10/10 PASS
 

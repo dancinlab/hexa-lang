@@ -71,6 +71,14 @@
   why = "g3 drift-avoidance + hexa-lang Makefile / build_verify 가 self/cuda/runtime_cuda.c 경로에 hardcoded; rename = 광범위 churn 위험 0 이득"
   @> README.md
 
+@D g_forge_endgame_hexa_native := "forge 의 최종 형태 = hexa-native (RFC 055)" :: governance [required d=2026-05-19 active]
+  rule = "forge 의 현재 C/CUDA substrate 는 PERMANENT 아닌 TRANSITIONAL. 최종 형태는 hexa-native — 모든 forge 커널이 .hexa 소스로, hexa-lang 자체 codegen 을 통해 NVPTX 로 lowering. forge SSOT 문서 (README/PLAN/PARADIGM) 는 C/CUDA 를 영구 형태로 서술 금지 — 항상 transitional 임을 명시."
+  why = "AGENTS.tape §3 @D g5 (hexa-native-only — no LLVM, no C-transpile, no third-party codegen) 의 GPU lane 미충족 상태. C/CUDA 는 hexa-lang 에 GPU codegen target 이 없어서 GPU 커널 산출의 *유일* 경로일 뿐 — design preference 아님. g5 GPU lane closure = forge closure."
+  endgame = "RFC 055 (hexa-src → NVPTX codegen backend) land → self/cuda/*.cu 가 .hexa 로 재유도 (self/forge/ 디렉토리 경계는 g_forge_no_relocation 따라 유지, 언어만 flip). cuBLAS Dgemm 은 raw-GEMM fallback 으로 잔존 (vendor-library win 추월 비목표). RFC 050 _v1 ABI 가 transition 의 stable surface — flame source 는 커널 substrate flip 시 재컴파일 불요."
+  honest_scope = "RFC 055 = design draft (2026-05-17, 미구현), P2 — 현재 어떤 shipping fire 도 막지 않음. forge Phase 6 (endgame, long-arc). g3: '최종은 hexa-native' 는 목표 서술이지 달성 주장 아님."
+  authority = "[@x_rfc055] · AGENTS.tape @D g5 · HEXA-NATIVE-ONLY.md · user directive 2026-05-19 ('최종은 forge hexa-native')"
+  @> README.md
+
 @D g_forge_phase_falsifiers := "Phase 1/2/3 falsifier 사전등록" :: governance [required d=2026-05-16 active]
   F_FORGE_CUBLAS_EQ = "Phase 1: farr_matmul_gpu ≡ CPU farr_matmul at TOL_MATMUL ≤ 2e-9 on fresh GPU fire post-main-merge (max|Δ|=4.44e-15 이미 4× 검증, parity 유지 검증)"
   F_FORGE_KERNEL_EQ = "Phase 2: 신규 .cu (softmax_rows/rmsnorm_rows/add/scale/mul/silu/silu_grad/rmsnorm_bwd/adamw/outer/matmul_t) 각각이 (a) CPU farr reference 와 TOL_OP parity + (b) 기존 cuBLAS-reshape 우회 경로와 boundary test 일치"
@@ -114,6 +122,13 @@
   path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_041_*"
   branch = "rfc041-042-upstream-needs dae35fee"
   scope = "softmax_rows/rmsnorm_rows/add/scale/mul/silu/silu_grad/rmsnorm_bwd/adamw/outer/matmul_t 11-op real kernels (currently TODO[cuda] -1 stubs)"
+
+@X x_rfc055 := "RFC 055 — hexa-src → NVPTX codegen backend (forge endgame)" :: rfc [d=2026-05-19 active]
+  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md"
+  status = "design-draft (2026-05-17, 미구현). P2 — 현재 critical chain 과 독립."
+  domain = "compiler (deliverable = compiler/codegen/nvptx_*.hexa, arm64_darwin/x86_64_linux 의 sibling target). forge 는 이 capability 의 *소비자*, RFC 의 subject 아님."
+  scope = "forge 의 endgame seam — RFC 055 land 시 self/cuda/*.cu 가 .hexa 로 재유도되어 AGENTS.tape @D g5 (hexa-native-only) 의 GPU lane 을 닫음. honest: hexa-emitted 커널은 correct (Phase R C-Stage2-Phase3 hand-WMMA 41-43% TC peak anchor) 하나 cuBLAS raw-GEMM throughput 추월 비목표."
+  consumers = "[@g_forge_endgame_hexa_native] · PLAN §Phase 6 (endgame, long-arc)"
 
 @X x_cublas_impl := "cuBLAS Dgemm landed impl" :: code [d=2026-05-16 active]
   branch = "phase-d-cublas-h100"

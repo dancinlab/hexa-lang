@@ -54,10 +54,51 @@ writes C / CUDA. flame calls forge through compiled builtin dispatch
 
 ## What forge is NOT
 
-- ❌ Not a hexa-source stdlib (those go in `stdlib/`; forge is C / CUDA)
+- ❌ Not a hexa-source stdlib (those go in `stdlib/`; forge **today** is C / CUDA — see "Endgame" below for the hexa-native trajectory)
 - ❌ Not a separate repo (toolchain ABI lockstep — `hexa-first` principle; CLAUDE.md "absorbed intrinsic over forking")
-- ❌ Not a GPU codegen backend (hexa source → PTX would be a separate future RFC; out of forge scope)
+- ❌ Not itself a GPU codegen backend (hexa source → PTX is the **sibling** RFC 055 deliverable in `compiler/codegen/`, not in `self/forge/`; forge is the *consumer* of that capability)
 - ❌ Not a name for the CPU farr primitive (that's core hexa, RFC 025/032/033/034 — flame uses it directly)
+
+## Endgame — forge becomes hexa-native (RFC 055)
+
+**Today's forge is transitional, not the final form.** The current C/CUDA
+substrate exists for one reason: hexa-lang has no GPU codegen target yet, so
+C/CUDA is the *only* path that produces GPU kernels. Per `AGENTS.tape` §3 `@D
+g5` ("hexa-native-only" — no LLVM, no C-transpile, no third-party codegen),
+the long-term destination is **every line of forge in pure hexa**, lowered to
+NVPTX through hexa-lang's own codegen pipeline. The closure of `@D g5` for the
+GPU lane is the closure of forge.
+
+The named seam is **RFC 055 — hexa-src → NVPTX codegen backend**
+(`inbox/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md`, design
+draft 2026-05-17). Its honest scope:
+
+| axis | today (C/CUDA forge) | after RFC 055 lands (hexa-native forge) |
+|---|---|---|
+| substrate language | C + `.cu` (`self/runtime.c`, `self/cuda/runtime_cuda.c`) | `.hexa` source compiled to NVPTX by `compiler/codegen/nvptx_*.hexa` |
+| GPU codegen lives in | external `nvcc` + cuBLAS | `compiler/codegen/` — sibling of `arm64_darwin.hexa` / `x86_64_linux.hexa` |
+| third-party deps | cuBLAS, cuDNN (NVIDIA closed binaries) | reduced to driver API + (optionally) cuBLAS for raw GEMM only; everything else hexa-native |
+| `@D g5` status | partial — CPU lane self-hosted, GPU lane on C/CUDA crutch | total — both lanes hexa-emitted, no C-transpile |
+| `flame:forge :: torch:ATen` analogy | applies (forge ≈ ATen) | obsolete (forge is *also* hexa; flame and forge merge into one hexa-native stack with a directory boundary, not a language boundary) |
+
+**Why it's not on a critical chain yet (g3 honest)**: forge's Phase R fires
+(`PARADIGM.md` §1) anchor that *a hand-written WMMA kernel is feasible* (C
+Stage 2 Phase 3 — 41-43% Tensor Core peak), so the codegen path can emit
+*correct* GPU code. It will not *beat cuBLAS on raw GEMM throughput* —
+CUTLASS-level tuning is a multi-week effort. RFC 055 is therefore **P2** (not
+blocking flame Phase 4-D or any current shipping fire). Sequencing: ship
+flame+forge on the C/CUDA substrate; close `@D g5` for the GPU lane when the
+RFC 055 backend has enough kernel coverage to substitute without regressing
+forge's measured oracles (`g_blue_closed_mandate`).
+
+**What changes inside forge when RFC 055 lands**: `self/cuda/runtime_cuda.c`
+kernels get re-derived as `.hexa` files (still under `self/forge/` per
+`g_forge_substrate_role` — the *directory* boundary stays, only the *language*
+flips). cuBLAS Dgemm stays as a fallback (raw GEMM is a vendor-library win
+that hexa-native is not expected to match). The RFC 050 `_v1` ABI is the
+stable surface across the transition: flame source compiled against
+`forge >= 1.0` does not change when the kernels behind the ABI flip from C/CUDA
+to hexa-emitted PTX. Same dispatch, different substrate.
 
 ## Verified oracles (forge correctness floor)
 
