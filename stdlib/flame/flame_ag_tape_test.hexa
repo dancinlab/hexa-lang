@@ -25,6 +25,8 @@ use "stdlib/flame/nn_lib"
 use "stdlib/flame/ag_tape"
 use "stdlib/flame/flame_math"
 use "stdlib/flame/decoder_lib"
+use "stdlib/flame/train_lib"
+use "stdlib/flame/optim_lib"
 use "stdlib/flame/decoder_block_lib"
 
 // W layout bridge: decoder block stores W[out·in] (W[r·in+c]); nn_linear
@@ -73,6 +75,171 @@ fn agt_silu(x: float) -> float { return x * agt_sig(x) }
 fn agt_silu_g(x: float) -> float {
     let s = agt_sig(x)
     return s + x * s * (1.0 - s)
+}
+
+// transpose src[d_in·d_out] (nn-layout grad) → dst[off + r·d_in + c]
+// (block [out·in] layout) — dst[off+r·d_in+c] = src[c·d_out+r].
+fn agt_wT_off(src: int, dst: int, off: int, d_out: int, d_in: int) {
+    let mut r = 0
+    while r < d_out {
+        let mut c = 0
+        while c < d_in {
+            t_set(dst, off + r * d_in + c, t_get(src, c * d_out + r))
+            c = c + 1
+        }
+        r = r + 1
+    }
+}
+
+// One ag-tape decoder train micro-step: build tape from flat M, fwd,
+// gn2 (== nn_decoder_gn2 dt_exp formula), CE seed, ag_backward_reg,
+// then gather registry grads into the dense flat MgOut (m_total
+// layout; W's transposed back to block [out·in]; tied tok_emb grad =
+// ag_embed-scatter + ag_lmhead, registry-accumulated). Returns gn2.
+fn _agt_decoder_step(M: int, MgOut: int, idsf: int, target: int,
+                     cos: int, sin: int, T: int, d: int, nh: int,
+                     nkv: int, h: int, V: int, NL: int) -> float {
+    let hd = d / nh
+    let kvd = nkv * hd
+    let oTE = m_off_tok_emb(d, nh, nkv, h, V, NL)
+    let oGF = m_off_gF(d, nh, nkv, h, V, NL)
+    let tokE = t_zeros(V * d)
+    let mut te = 0
+    while te < V * d { t_set(tokE, te, t_get(M, oTE + te)); te = te + 1 }
+    let gF = t_zeros(d)
+    let mut gf = 0
+    while gf < d { t_set(gF, gf, t_get(M, oGF + gf)); gf = gf + 1 }
+    let Lg1 = t_zeros(NL)
+    let Lg2 = t_zeros(NL)
+    let LWq = t_zeros(NL)
+    let LWk = t_zeros(NL)
+    let LWv = t_zeros(NL)
+    let LWo = t_zeros(NL)
+    let LWg = t_zeros(NL)
+    let LWu = t_zeros(NL)
+    let LWd = t_zeros(NL)
+    let zb1 = t_zeros(d)
+    let zb2 = t_zeros(kvd)
+    let zbh = t_zeros(h)
+    let tp = ag_t_begin(2 + NL * 16 + 4)
+    let mut X = ag_embed(tp, idsf, tokE, T, d)
+    let mut l = 0
+    while l < NL {
+        let mob = m_off_block(l, d, nh, nkv, h, V, NL)
+        let g1t = t_zeros(d)
+        let g2t = t_zeros(d)
+        let mut gc = 0
+        while gc < d {
+            t_set(g1t, gc, t_get(M, mob + bp_off_g1(d, nh, nkv, h) + gc))
+            t_set(g2t, gc, t_get(M, mob + bp_off_g2(d, nh, nkv, h) + gc))
+            gc = gc + 1
+        }
+        let WqL = t_zeros(d * d)
+        let WkL = t_zeros(d * kvd)
+        let WvL = t_zeros(d * kvd)
+        let WoL = t_zeros(d * d)
+        let WgL = t_zeros(d * h)
+        let WuL = t_zeros(d * h)
+        let WdL = t_zeros(h * d)
+        agt_wT_slice(M, mob + bp_off_Wq(d, nh, nkv, h), WqL, d, d)
+        agt_wT_slice(M, mob + bp_off_Wk(d, nh, nkv, h), WkL, kvd, d)
+        agt_wT_slice(M, mob + bp_off_Wv(d, nh, nkv, h), WvL, kvd, d)
+        agt_wT_slice(M, mob + bp_off_Wo(d, nh, nkv, h), WoL, d, d)
+        agt_wT_slice(M, mob + bp_off_Wg(d, nh, nkv, h), WgL, h, d)
+        agt_wT_slice(M, mob + bp_off_Wu(d, nh, nkv, h), WuL, h, d)
+        agt_wT_slice(M, mob + bp_off_Wd(d, nh, nkv, h), WdL, d, h)
+        t_set(Lg1, l, to_float(g1t))
+        t_set(Lg2, l, to_float(g2t))
+        t_set(LWq, l, to_float(WqL))
+        t_set(LWk, l, to_float(WkL))
+        t_set(LWv, l, to_float(WvL))
+        t_set(LWo, l, to_float(WoL))
+        t_set(LWg, l, to_float(WgL))
+        t_set(LWu, l, to_float(WuL))
+        t_set(LWd, l, to_float(WdL))
+        let r1 = ag_rmsnorm_mh(tp, X, g1t, T, d)
+        let Qd = ag_linear(tp, r1, WqL, zb1, T, d, d)
+        let Kd = ag_linear(tp, r1, WkL, zb2, T, d, kvd)
+        let Vd = ag_linear(tp, r1, WvL, zb2, T, d, kvd)
+        let Qr = ag_rope_mh(tp, Qd, cos, sin, T, nh, hd)
+        let Kr = ag_rope_mh(tp, Kd, cos, sin, T, nkv, hd)
+        let cx = ag_attn_dt(tp, Qr, Kr, Vd, T, nh, nkv, hd)
+        let ao = ag_linear(tp, cx, WoL, zb1, T, d, d)
+        let h1 = ag_add(tp, X, ao, T * d)
+        let r2 = ag_rmsnorm_mh(tp, h1, g2t, T, d)
+        let ad = ag_linear(tp, r2, WgL, zbh, T, d, h)
+        let bd = ag_linear(tp, r2, WuL, zbh, T, d, h)
+        let sd = ag_silu_gate(tp, ad, bd, T * h)
+        let od = ag_linear(tp, sd, WdL, zb1, T, h, d)
+        X = ag_add(tp, h1, od, T * d)
+        l = l + 1
+    }
+    let zr = ag_slice(tp, X, (T - 1) * d, d, T * d)
+    let zT = ag_rmsnorm_mh(tp, zr, gF, 1, d)
+    let logits = ag_lmhead(tp, tokE, zT, V, d)
+    // gn2 = Σ (softmax(logits)−onehot)²  (nn_decoder_gn2 dt_exp formula)
+    let mut mx = t_get(logits, 0)
+    let mut mi = 1
+    while mi < V {
+        if t_get(logits, mi) > mx { mx = t_get(logits, mi) }
+        mi = mi + 1
+    }
+    let mut tot = 0.0
+    let mut mj = 0
+    while mj < V { tot = tot + dt_exp(t_get(logits, mj) - mx); mj = mj + 1 }
+    let seed = t_zeros(V)
+    let mut gn2 = 0.0
+    let mut mk = 0
+    while mk < V {
+        let pk = dt_exp(t_get(logits, mk) - mx) / tot
+        let tg = if mk == target { 1.0 } else { 0.0 }
+        let dv = pk - tg
+        t_set(seed, mk, dv)
+        gn2 = gn2 + dv * dv
+        mk = mk + 1
+    }
+    ag_backward_reg(tp, logits, seed)
+    // gather → dense MgOut
+    let mtot = m_total(d, nh, nkv, h, V, NL)
+    let mut z = 0
+    while z < mtot { t_set(MgOut, z, 0.0); z = z + 1 }
+    let gte = ag_grad(tp, tokE)
+    let mut a1 = 0
+    while a1 < V * d { t_set(MgOut, oTE + a1, t_get(gte, a1)); a1 = a1 + 1 }
+    let ggf = ag_grad(tp, gF)
+    let mut a2 = 0
+    while a2 < d { t_set(MgOut, oGF + a2, t_get(ggf, a2)); a2 = a2 + 1 }
+    let mut lb = 0
+    while lb < NL {
+        let mob = m_off_block(lb, d, nh, nkv, h, V, NL)
+        let gg1 = ag_grad(tp, to_int(t_get(Lg1, lb)))
+        let gg2 = ag_grad(tp, to_int(t_get(Lg2, lb)))
+        let mut c = 0
+        while c < d {
+            t_set(MgOut, mob + bp_off_g1(d, nh, nkv, h) + c, t_get(gg1, c))
+            t_set(MgOut, mob + bp_off_g2(d, nh, nkv, h) + c, t_get(gg2, c))
+            c = c + 1
+        }
+        agt_wT_off(ag_grad(tp, to_int(t_get(LWq, lb))), MgOut,
+                   mob + bp_off_Wq(d, nh, nkv, h), d, d)
+        agt_wT_off(ag_grad(tp, to_int(t_get(LWk, lb))), MgOut,
+                   mob + bp_off_Wk(d, nh, nkv, h), kvd, d)
+        agt_wT_off(ag_grad(tp, to_int(t_get(LWv, lb))), MgOut,
+                   mob + bp_off_Wv(d, nh, nkv, h), kvd, d)
+        agt_wT_off(ag_grad(tp, to_int(t_get(LWo, lb))), MgOut,
+                   mob + bp_off_Wo(d, nh, nkv, h), d, d)
+        agt_wT_off(ag_grad(tp, to_int(t_get(LWg, lb))), MgOut,
+                   mob + bp_off_Wg(d, nh, nkv, h), h, d)
+        agt_wT_off(ag_grad(tp, to_int(t_get(LWu, lb))), MgOut,
+                   mob + bp_off_Wu(d, nh, nkv, h), h, d)
+        agt_wT_off(ag_grad(tp, to_int(t_get(LWd, lb))), MgOut,
+                   mob + bp_off_Wd(d, nh, nkv, h), d, h)
+        lb = lb + 1
+    }
+    ag_t_free_state(tp)
+    ag_t_free_reg(tp)
+    ag_t_end(tp)
+    return gn2
 }
 
 fn agt_abs(x: float) -> float {
@@ -1266,12 +1433,111 @@ if e_log == 0.0 && e_te == 0.0 && e_gF == 0.0 && e_blk == 0.0 {
     println("FAIL  F-RFC043-AGTAPE-DECODER-EQ (divergence >1e-12)")
 }
 
+// ── Test 15: RFC 043 §Surface train_step — ag fwd+bwd+AdamW vs
+//    nn_decoder_train_step over N steps from identical init. Proves
+//    the full training loop (gn2 metric + grad → AdamW M update)
+//    end-to-end. Decision 6 bar: gn2 trajectory + final M agree to
+//    machine-eps accumulated over N AdamW steps (<=1e-9 for N=4).
+//    Falsifier F-RFC043-AGTAPE-TRAINSTEP-EQ.
+println("-- Test 15: RFC 043 train_step (N-step AdamW e2e)  --")
+let sT = 2
+let sd = 4
+let snh = 2
+let snkv = 1
+let sh = 8
+let sV = 5
+let sNL = 2
+let shd = sd / snh
+let smtot = m_total(sd, snh, snkv, sh, sV, sNL)
+let smctot = mc_total(sT, sd, snh, snkv, sh, sV, sNL)
+let M_ref = t_zeros(smtot)
+let M_ag = t_zeros(smtot)
+let mut mfi = 0
+while mfi < smtot {
+    let vv = to_float((mfi * 11) % 19 - 9) * 0.018 + 0.005
+    t_set(M_ref, mfi, vv)
+    t_set(M_ag, mfi, vv)
+    mfi = mfi + 1
+}
+let sOGF = m_off_gF(sd, snh, snkv, sh, sV, sNL)
+let mut sgf = 0
+while sgf < sd {
+    let gv = 1.0 + to_float(sgf % 3 - 1) * 0.02
+    t_set(M_ref, sOGF + sgf, gv)
+    t_set(M_ag, sOGF + sgf, gv)
+    sgf = sgf + 1
+}
+let mut slg = 0
+while slg < sNL {
+    let mob = m_off_block(slg, sd, snh, snkv, sh, sV, sNL)
+    let mut gg = 0
+    while gg < sd {
+        let v1 = 1.0 + to_float(gg % 3 - 1) * 0.02
+        let v2 = 1.0 + to_float(gg % 4 - 2) * 0.015
+        t_set(M_ref, mob + bp_off_g1(sd, snh, snkv, sh) + gg, v1)
+        t_set(M_ag, mob + bp_off_g1(sd, snh, snkv, sh) + gg, v1)
+        t_set(M_ref, mob + bp_off_g2(sd, snh, snkv, sh) + gg, v2)
+        t_set(M_ag, mob + bp_off_g2(sd, snh, snkv, sh) + gg, v2)
+        gg = gg + 1
+    }
+    slg = slg + 1
+}
+let sidsf = t_zeros(sT)
+t_set(sidsf, 0, to_float(1))
+t_set(sidsf, 1, to_float(3))
+let starget = 2
+let scos = t_zeros(sT * shd)
+let ssin = t_zeros(sT * shd)
+nn_rope_build_tables(sT, shd, scos, ssin)
+let Mc_ref = t_zeros(smctot)
+let Mg_ref = t_zeros(smtot)
+let Mm_ref = t_zeros(smtot)
+let Mv_ref = t_zeros(smtot)
+let Mg_ag = t_zeros(smtot)
+let Mm_ag = t_zeros(smtot)
+let Mv_ag = t_zeros(smtot)
+let s_lr = 0.01
+let s_b1 = 0.9
+let s_b2 = 0.999
+let s_eps = 0.00000001
+let s_wd = 0.0
+let sNSTEP = 4
+let mut e_gn2 = 0.0
+let mut st = 1
+while st <= sNSTEP {
+    let g_ref = nn_decoder_train_step(sidsf, starget, M_ref, Mc_ref,
+        Mg_ref, Mm_ref, Mv_ref, scos, ssin, sT, sd, snh, snkv, sh,
+        sV, sNL, s_lr, s_b1, s_b2, s_eps, s_wd, st)
+    let g_ag = _agt_decoder_step(M_ag, Mg_ag, sidsf, starget,
+        scos, ssin, sT, sd, snh, snkv, sh, sV, sNL)
+    opt_adamw_step(M_ag, Mg_ag, Mm_ag, Mv_ag, smtot, s_lr, s_b1,
+                   s_b2, s_eps, s_wd, st)
+    let dgi = agt_abs(g_ref - g_ag)
+    if dgi > e_gn2 { e_gn2 = dgi }
+    st = st + 1
+}
+let e_M = agt_maxdiff(M_ref, M_ag, smtot)
+print("  max|Δ gn2| (per-step)="); print(e_gn2)
+print("  max|Δ M| (after "); print(sNSTEP); print(" AdamW)=")
+println(e_M)
+let s15_tol = 0.000000001  // 1e-9 (N-step AdamW machine-eps accum)
+let t15ok = e_gn2 < s15_tol && e_M < s15_tol
+if e_gn2 == 0.0 && e_M == 0.0 {
+    println("PASS  F-RFC043-AGTAPE-TRAINSTEP-EQ (bit-identical)")
+} else if t15ok {
+    println("TRAINSTEP-PASS  F-RFC043-AGTAPE-TRAINSTEP-EQ (gn2 traj +")
+    println("  M after N AdamW <=1e-9 machine-eps accum — Decision 6")
+    println("  bar; generic-autograd train loop e2e correct)")
+} else {
+    println("FAIL  F-RFC043-AGTAPE-TRAINSTEP-EQ (divergence >1e-9)")
+}
+
 if t1ok && t2ok && t3ok && t4ok && t5ok && t6ok && t7ok && t8ok
-   && t9ok && t10ok && t11ok && t12ok && t13ok && t14ok {
+   && t9ok && t10ok && t11ok && t12ok && t13ok && t14ok && t15ok {
     println("ALL PASS  ag_tape — 12/12 leaf vjp byte-identical; single")
-    println("  block FWD byte-eq 0; full n_layer END-TO-END FWD+BWD")
-    println("  machine-eps (<=1.1e-16) incl. tied tok_emb fan-in.")
-    println("  gap(b) autograd automation CLOSED at the correct bar.")
+    println("  block FWD byte-eq 0; full n_layer END-TO-END machine-eps")
+    println("  (tied tok_emb fan-in); RFC 043 train_step N-step AdamW")
+    println("  e2e <=1e-9. gap(b) autograd automation CLOSED.")
 } else {
     println("ALL FAIL  ag_tape regression")
 }
