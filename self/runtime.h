@@ -903,6 +903,16 @@ extern HexaVal farr_pin;                                               /* runtim
 extern HexaVal farr_device_free;                                       /* runtime.c — RFC 040 fn carrier */
 HexaVal farr_matmul_gpu(HexaVal a, HexaVal ar, HexaVal ac,
                         HexaVal b, HexaVal bc);                         /* runtime.c — RFC 040 (5-arg direct) */
+/* RFC 041 Phase B forge RoPE — bare 6-arg direct wrappers (runtime.c
+ * L11965/L11978). Declared here so the COMMITTED hexa_v2 codegen
+ * (which emits the bare name `farr_rope_gpu(...)`, unprefixed) links
+ * WITHOUT a transpiler bootstrap rebuild. CUDA build → RFC 041
+ * __global__ kernel; no-CUDA → byte-identical `_hx_farr_rope_cpu`
+ * (flame gap(d), Decision 9; mirrors the farr_matmul_gpu pattern). */
+HexaVal farr_rope_gpu(HexaVal t, HexaVal cos, HexaVal sin,
+                      HexaVal T, HexaVal nh, HexaVal hd);               /* runtime.c — RFC 041 (6-arg direct) */
+HexaVal farr_rope_bwd_gpu(HexaVal t, HexaVal cos, HexaVal sin,
+                          HexaVal T, HexaVal nh, HexaVal hd);           /* runtime.c — RFC 041 (6-arg direct) */
 
 /* ── anima RFC 040 (2026-05-16): Phase B scaffolding — remaining ops ─────
  * Same `#ifdef HEXA_CUDA` / `#ifndef HEXA_CUDA` pattern as Phase A. The

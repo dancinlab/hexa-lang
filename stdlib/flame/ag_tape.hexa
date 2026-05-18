@@ -458,45 +458,19 @@ pub fn ag_rmsnorm_mh(tape: int, x: int, g: int, T: int, d: int) -> int {
 // copied into a hd-scratch (the primitive reads offset-0) — byte-eq
 // with the decoder block's per-head q_scratch RoPE. ids[q,cos,sin,
 // q_out] dims[T,nheads,hd]. One node; replay loops nn_rope_apply_bwd.
-// gap(d) FORGE SEAM (Decision 9): the byte-eq CPU per-(t,head) loop
-// below is the working compiled path. The forge GPU offload =
-// `farr_rope_gpu(q,cos,sin,T,nheads,hd)` (RFC 041 Phase B kernel; CPU
-// fallback `_hx_farr_rope_cpu` is BYTE-IDENTICAL to this loop). It is
-// interp-wired (hexa_full.hexa) + the codegen_c2.hexa builtin map is
-// added — but `hexa build` (tier-2 hexa_v2/hexa_cc.c) needs a compiler
-// BOOTSTRAP REBUILD to emit `hexa_farr_rope_gpu`, which is infra-
-// blocked (full flatten OOM on all hosts — see compiler/PLAN.md /
-// memory compiler-selfbuild-blockers). So the seam stays the
-// byte-eq CPU loop until a bootstrap rebuild is feasible; swapping
-// the loop for the one-line farr_rope_gpu call is then mechanical
-// (CPU fallback keeps 19/19 byte-eq; CUDA build = the gap(d) offload).
+// gap(d) FORGE-WIRED (Decision 9): the whole [T·nheads·hd] tensor is
+// rotated by ONE `farr_rope_gpu` builtin call — RFC 041 Phase B
+// __global__ kernel on a CUDA build (the gap(d) host→GPU wall
+// offload), or the BYTE-IDENTICAL `_hx_farr_rope_cpu` fallback on a
+// no-CUDA build. Reachable from `hexa build` WITHOUT a transpiler
+// bootstrap rebuild: the committed hexa_v2 codegen emits the bare
+// `farr_rope_gpu(...)`, which links to runtime.c's bare wrapper via
+// the runtime.h prototype (mirrors farr_matmul_gpu). CPU-fallback
+// formula == the prior nn_rope_apply per-row loop → Tests 9/13/14/17
+// re-verify byte-eq unchanged at $0 locally.
 pub fn ag_rope_mh(tape: int, q: int, cos_tab: int, sin_tab: int,
                   T: int, nheads: int, hd: int) -> int {
-    let q_out = t_zeros(T * nheads * hd)
-    let row  = t_zeros(hd)
-    let rout = t_zeros(hd)
-    let mut t = 0
-    while t < T {
-        let mut hh = 0
-        while hh < nheads {
-            let base = (t * nheads + hh) * hd
-            let mut c = 0
-            while c < hd {
-                t_set(row, c, t_get(q, base + c))
-                c = c + 1
-            }
-            nn_rope_apply_fwd(row, cos_tab, sin_tab, rout, t, hd)
-            let mut c2 = 0
-            while c2 < hd {
-                t_set(q_out, base + c2, t_get(rout, c2))
-                c2 = c2 + 1
-            }
-            hh = hh + 1
-        }
-        t = t + 1
-    }
-    t_free(row)
-    t_free(rout)
+    let q_out = farr_rope_gpu(q, cos_tab, sin_tab, T, nheads, hd)
     let _ = _ag_push(tape, ag_k_rope_mh(), q, cos_tab, sin_tab, q_out,
                      0 - 1, 0 - 1, 0 - 1, 0 - 1, T, nheads, hd, 0)
     return q_out
@@ -720,36 +694,12 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             let hd = _ag_get(tape, op, 11)
             let qlen = T * nheads * hd
             let og = _ag_reg_grad(tape, qo, qlen)
-            // gap(d) FORGE SEAM: byte-eq CPU loop (compiled path).
-            // forge offload = farr_rope_bwd_gpu(og,cs,sn,T,nheads,hd)
-            // — pending compiler bootstrap rebuild (see ag_rope_mh).
-            let dq = t_zeros(qlen)
-            let drow = t_zeros(hd)
-            let dout = t_zeros(hd)
-            let mut t = 0
-            while t < T {
-                let mut hh = 0
-                while hh < nheads {
-                    let base = (t * nheads + hh) * hd
-                    let mut c = 0
-                    while c < hd {
-                        t_set(drow, c, t_get(og, base + c))
-                        c = c + 1
-                    }
-                    nn_rope_apply_bwd(drow, cs, sn, dout, t, hd)
-                    let mut c2 = 0
-                    while c2 < hd {
-                        t_set(dq, base + c2, t_get(dout, c2))
-                        c2 = c2 + 1
-                    }
-                    hh = hh + 1
-                }
-                t = t + 1
-            }
+            // gap(d) FORGE-WIRED: one farr_rope_bwd_gpu call (RFC 041
+            // kernel on CUDA / byte-identical _hx_farr_rope_cpu is_bwd
+            // fallback otherwise) — same no-rebuild link path as fwd.
+            let dq = farr_rope_bwd_gpu(og, cs, sn, T, nheads, hd)
             _ag_reg_acc(tape, q, dq, qlen)
             t_free(dq)
-            t_free(drow)
-            t_free(dout)
         } else if kind == ag_k_slice() {
             let X = _ag_get(tape, op, 1)
             let out = _ag_get(tape, op, 2)
