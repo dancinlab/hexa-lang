@@ -1436,3 +1436,12 @@ TRAINSTEP-PASS. flame_ag_tape_test **15/15 ALL PASS**.
 최대 정확도로 일치 (측정). GOAL 진척: gap(a) ✅ · gap(b) ✅
 FULLY CLOSED · 잔여 gap(c) shape-generic sweep · gap(d) forge
 kernel · gap(e) model DSL 미착수. multi-cycle, oracle-gated, $0.
+
+**Test 16 gap(c) shape-generic (LANDED 6e6a11dd)**: 5-config sweep
+(GQA 2:1 · MHA nkv=nh · d4~8 · hd2~4 · 1~3 layer · V4~7 · T2~4)
+각각 full N-step train_step oracle vs nn_decoder_train_step →
+**5/5 ≤7.36e-16** (machine-eps ≪1e-9). ag_tape decoder+train_step
+= **shape-generic 측정 입증**. flame_ag_tape_test **16/16 ALL PASS**.
+**gap(c) VERIFIED.** GOAL 진척: gap(a) ✅ · gap(b) ✅ · **gap(c)
+✅** (3/5) · 잔여 gap(d) forge kernel (GPU, perf, $) · gap(e)
+model DSL (nn.Module-equiv, $0 API) 미착수.
