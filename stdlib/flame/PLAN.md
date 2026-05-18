@@ -1202,3 +1202,118 @@ closure 에 불필요 (선택적 추가 최적화).
 print 추가 + 재측정 ($-cents) 로 191~268s window 를 정밀화 가능.
 gate margin 170s+ 가 30s 양자화를 압도하므로 closure 판정은 변경
 없을 것 — 정확한 wall 수치만 narrow.
+
+### 2026-05-18 — fire #18: per-step wall 정밀화 (191-268s → 267s 단일 수치)
+
+closure 후 정밀화 옵션 실행. trainer step loop 에 per-step
+`time(NULL)` wall print 추가 — hexa source `flame_d768_12L_corpus_
+test.hexa` 에 `exec("date +%s")` 5줄 + GPU-dispatch artifact
+`state/flame_phase4d7_gpu_fire_2026_05_17/flame_d768_12L_corpus_
+test_d7_a2.c` 에 동등한 `time(NULL)`+printf hand-edit (`.c` 가
+matmul-primitive + GPU-resident A2 fwd part-2 prepend 로 hand-
+customized → re-emit 불가, hand-edit 가 정답). vast.ai A100 SXM
+(instance 36983835, $0.7343/hr) WALL_BUDGET_SEC=2400.
+
+**측정 (trainer_rc=124 timeout @ wall_seconds=2401, 8/20 step 완주)**:
+```
+init epoch gn2: 3.98438
+step 1 wall=267s     step 5 wall=268s
+step 2 wall=266s     step 6 wall=269s
+step 3 wall=268s     step 7 wall=270s
+step 4 wall=267s     step 8 wall=269s
+```
+- **step 1 wall = 267s 정확** — fire #17 의 (191s, 268s) 30s-폴링
+  양자화 window 가 단일 수치로 narrow. window 최상단 = 정확값 입증.
+- **steady-state per-step wall = 266-270s** (8 샘플, mean 267.8s,
+  std ~1.4s — warm-up 없음, step 1 이 이미 steady-state).
+- **F-RFC046-WALL ≤437.9s ✅ PASS 재확인** — 정확 마진 437.9-267 =
+  **170.9s**. closure 판정 불변 (예측대로 양자화가 마진에 압도됨).
+- GPU util peak 61%, 비용 ~$0.49.
+
+**수렴 trajectory = 미달 (g3 정직)**: trainer 가 gn2 를 step 1/10/20
+에서만 print + 2400s budget 가 8 step 만 허용 → step 10 미도달. gn2
+= 3.98438 (init = step-1 동일 — gn2 는 pre-update 측정값이므로 step-1
+pre-update = init 가 정상, 학습 입증 아님). 모델이 실제 수렴하는지
+(step간 gn2 단조감소) 는 별도 fire 필요: trainer 에 per-step gn2
+print + n_steps 를 budget-fit 으로 (~8) 축소.
+
+회고: `stdlib/flame/PHASE4D9_CAMPAIGN_RETRO.md` (16-fire 좌초 →
+instrument-first $1.7 해소 + trap RCA + 일반 교훈).
+
+### 다음 (pending) — flame/forge 종합 성능 벤치마킹
+
+user 지시 (2026-05-18): **flame/forge 의 모든 작업이 완료되면 종합 성능
+벤치마킹을 수행할 것.** Phase 4-D-9 closure (F-RFC046-WALL, d768·12L
+step wall 267s) 는 단일 게이트 측정 — flame/forge 가 PyTorch-equiv
+stack 으로서 갖는 전반 성능은 별도 벤치마킹 cycle 로 측정해야 함.
+벤치마킹 축 후보: per-step wall (다양한 d/layer/batch) · vs PyTorch
+eager/compiled · GPU util · memory footprint · 수렴 속도. 결과는
+`stdlib/flame/PERF.md` + `self/forge/PLAN.md` 기록. 잔여 작업 (bwd
+dev_view chain · RoPE forge kernel · scale · fire #19 수렴 trajectory)
+마무리 후 착수.
+
+### 2026-05-18 — fire #19b: 20-step run, 호스트 분산 + 수렴 트래이서리 측정
+
+**dispatch infrastructure shift**: macOS 과부하 (network stack 죽음 —
+curl/SSH 전부 timeout) 로 macOS 발사 봉쇄. pool 의 mini (Apple
+Silicon Mac) provisioning 후 발사 — `brew install python@3.12` +
+`~/vastenv/bin/vastai` (venv) + vast SSH key + corpus + dispatch
+의존 파일셋 tarball 배포 + dispatch script mini-경로 패치
+($HOME 기반). attempt 1 = vast.ai connection reset 이 native/*.c
+업로드 중단 → tensor_kernels.c 누락 build-fail (transient). dispatch
+2개 추가 패치 (destroy `-y` flag · native 업로드 5x retry) 후
+attempt 2 (fire #19b) 정상 완주.
+
+**측정 결과 (instance 36990677, A100_SXM4 $0.70/hr, 15/20 step 완주)**:
+```
+init epoch gn2: 3.98438
+step  1 wall=359s   gn2(pre)=3.98438
+step  2 wall=356s
+step  3 wall=360s   step  4 wall=359s   step  5 wall=359s
+step  6 wall=360s   step  7 wall=359s   step  8 wall=360s
+step  9 wall=360s   step 10 wall=361s   gn2=3.98438
+step 11 wall=359s   step 12 wall=361s   step 13 wall=362s
+step 14 wall=360s   step 15 wall=362s
+                    ↑ trainer SIGKILL @ WALL_BUDGET_SEC=5700s
+
+mean per-step wall = 359.7s · std = 1.6s · range 356-362s
+GPU util peak 47% · mem peak 725 MiB · cost ~$1.23
+```
+
+**판정**:
+- **F-RFC046-WALL ≤437.9s ✅ PASS** (15 sample, max 362s, 마진 ~76s)
+- **steady-state 확정**: step 1 = step 15 동일 시간대 (warm-up effect
+  없음 — d768·12L 의 모든 step 이 같은 패턴)
+- **호스트 분산 측정 입증**: fire #18 (다른 A100_SXM4 호스트) = 267s,
+  fire #19b 호스트 = 359.7s — 같은 라벨 ~35% 분산. GPU 모델 동일,
+  vast.ai 호스트 CPU·interconnect 차이 (비-matmul ops 가 여전히 CPU
+  loop 라서 host CPU 속도 영향 큼). 두 호스트 모두 게이트는 PASS.
+
+**수렴 trajectory (g3 정직)**: gn2 가 init / step 1 / step 10 에서
+모두 `3.98438` 동일. printed precision = 6 sig digit. 두 가지
+해석:
+  (a) 모델이 실제로 학습 안 함 — 151KB byte-vocab 코퍼스 + 현
+      hyperparam (lr=0.03, n_steps=20, nsamp=4) 으로는 visible 학습
+      신호 없음.
+  (b) 학습이 print precision 보다 작은 규모 — gn2 변화 < 1e-4 라서
+      `3.98438` 으로 round 됨.
+구분 = print 정밀도 올려서 (예: `%.10f`) 재측정 시 가능.
+**user GOAL "loss 줄어들면 = 학습 입증" 은 현 print 정밀도로 미달**.
+
+**닫힌 것 / 남은 것 분리**:
+- **closure 정식**: fire #17 (1200s budget, 191-268s) + fire #18
+  (precise 267s) + fire #19b (15 step steady 359.7s, 다른 호스트) =
+  F-RFC046-WALL gate 3중 입증, 호스트 분산 측정 포함.
+- **수렴 입증**: 미달 — gn2 print 정밀도 한계. 별도 cycle 필요
+  (trainer 의 println(gn2) → 명시 `%.10f` 등으로 변경 후 재발사).
+  이건 trainer 의 print 정밀도 개선만 필요한 작은 follow-up.
+
+**fire #19 dispatch infrastructure 부산물** (mini provisioning):
+- `~/core/hexa-lang-flame-wt/` (subset: tool + state + self/{runtime.c,
+  runtime_hi_gen.c, cuda/runtime_cuda.c, native/})
+- `~/core/anima/training/corpus_consciousness_v1.jsonl`
+- `~/.vast/ssh/` + `~/.config/vastai/vast_api_key`
+- `~/vastenv/` (Python 3.12 venv + vastai)
+- mini 의 dispatch script: destroy -y · native 5x retry · $HOME 경로.
+mini 가 이제 추가 fire 의 backup orchestrator 로 즉시 사용 가능 (macOS
+복구 대기 불필요).

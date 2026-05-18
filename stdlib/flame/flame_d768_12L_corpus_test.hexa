@@ -180,8 +180,11 @@ print("  init epoch gn2: "); println(gn2_init_epoch)
 // nn_decoder_adamw_step signature: (M, Mg, Mm, Mv, n, lr, b1, b2, eps,
 // wd, t) — n_size first, then floats, then step (matches the smoke test
 // commit 485a1d96 fix, NOT the older opt_adamw_step shape).
+// Per-step wall measurement — narrows the fire #16 191-268s step-1 window
+// and exposes step-10/step-20 trajectory for end-to-end convergence verify.
 let mut step = 1
 let mut gn2_last = gn2_init_epoch
+let mut wall_prev = to_int(to_string(exec("date +%s")).trim())
 while step <= n_steps {
     // zero global Mg accumulator
     let mut z = 0
@@ -219,6 +222,9 @@ while step <= n_steps {
     // one AdamW step over accumulated grads — CORRECTED signature
     nn_decoder_adamw_step(M, Mg_acc, Mm, Mv, m_size, lr, b1, b2, eps_a, wd, step)
     gn2_last = gn2_step_epoch
+    let wall_now = to_int(to_string(exec("date +%s")).trim())
+    print("  step "); print(step); print(" wall="); print(wall_now - wall_prev); println("s")
+    wall_prev = wall_now
     if step == 1 {
         print("  step 1 (pre-update) gn2: "); println(gn2_step_epoch)
     }
