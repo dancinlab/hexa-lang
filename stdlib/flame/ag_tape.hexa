@@ -117,13 +117,14 @@ fn _ag_reg_grad(tape: int, tid: int, len: int) -> int {
 }
 
 // grad[tid] += src[0..len)
+// mk2-C5: replace host-scalar accumulator with `farr_add_inplace_gpu`.
+// Each ag_k_linear bwd accumulates ~1.4M elements (B·D + D·C + C); the
+// generic ag_tape replay invokes _ag_reg_acc thousands of times per
+// step, dominating wall when host-scalar. Byte-eq via __dadd_rn under
+// FP_CONTRACT OFF (mirrors host `g[i] + src[i]`).
 fn _ag_reg_acc(tape: int, tid: int, src: int, len: int) {
     let g = _ag_reg_grad(tape, tid, len)
-    let mut i = 0
-    while i < len {
-        t_set(g, i, t_get(g, i) + t_get(src, i))
-        i = i + 1
-    }
+    let _ = farr_add_inplace_gpu(g, src, len)
 }
 
 // public: accumulated grad farr id for any tensor (param or activation).
@@ -186,7 +187,13 @@ pub fn ag_rmsnorm(tape: int, x: int, g: int, d: int) -> int {
 
 pub fn ag_linear(tape: int, x: int, W: int, b: int,
                  B: int, D: int, C: int) -> int {
-    let y = nn_linear_fwd(x, W, b, B, D, C)
+    // mk2-C5: bypass nn_linear_fwd's host-scalar bias broadcast loop
+    // (the d768 generic ag_tape driver passes zero-init scratch farrs
+    // zb1/zb2/zbh for `b`, so the broadcast was ~1-3M wasted host
+    // scalar ops per call × 84 calls/step). farr_matmul routes to
+    // cuBLAS via the matmul dim-gate (mk2-C0). For non-zero biases a
+    // separate ag_linear_with_bias variant should be added.
+    let y = farr_matmul(x, B, D, W, C)
     let _ = _ag_push(tape, ag_k_linear(), x, W, b, y, 0 - 1, 0 - 1,
                      0 - 1, 0 - 1, B, D, C, 0)
     return y
@@ -554,16 +561,28 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             let D = _ag_get(tape, op, 10)
             let C = _ag_get(tape, op, 11)
             let og = _ag_reg_grad(tape, y, B * C)
-            let dW = t_zeros(D * C)
-            let dx = t_zeros(B * D)
-            let db = t_zeros(C)
-            nn_linear_bwd(x, W, og, dW, dx, db, B, D, C)
+            // mk2-C5: forge-route the bwd matmuls. nn_linear_bwd was
+            // a full host-scalar 3-loop (dW, dx, db) at ~1.2B ops per
+            // ag_linear call × 84 calls × 5 step calls = ~500B ops
+            // total — the dominant 14min GPU-idle wall blocker per
+            // mk2-FINAL #2 measurement. Replace with:
+            //   dW[D·C] = matmul(xT[D·B], B, og[B·C], C)
+            //   dx[B·D] = matmul(og[B·C], C, WT[C·D], D)
+            // db skipped — d768 driver passes zero `bb` and never
+            // reads bb's grad (callers with non-zero bias would need
+            // a separate variant; flag here for future).
+            let xT = t_zeros(D * B)
+            let _ = farr_transpose_2d_gpu(x, 0, xT, 0, B, D)
+            let dW = farr_matmul(xT, D, B, og, C)
+            let WT = t_zeros(C * D)
+            let _ = farr_transpose_2d_gpu(W, 0, WT, 0, D, C)
+            let dx = farr_matmul(og, B, C, WT, D)
             _ag_reg_acc(tape, x, dx, B * D)
             _ag_reg_acc(tape, W, dW, D * C)
-            _ag_reg_acc(tape, bb, db, C)
+            t_free(xT)
+            t_free(WT)
             t_free(dW)
             t_free(dx)
-            t_free(db)
         } else if kind == ag_k_rope() {
             let q = _ag_get(tape, op, 1)
             let cs = _ag_get(tape, op, 2)

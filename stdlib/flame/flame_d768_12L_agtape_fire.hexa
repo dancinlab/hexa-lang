@@ -46,6 +46,63 @@ use "stdlib/flame/decoder_lib"
 use "stdlib/flame/train_lib"
 use "stdlib/flame/decoder_block_lib"
 
+// ── local decoder init (mk2-C5) ─────────────────────────────────────
+// Bypass nn_decoder_init from train_lib.hexa because the flatten path
+// resolution picks main repo's stdlib version (without the C5 forge
+// LCG fill). Defining the helpers in the driver itself ensures
+// worktree-edits land in the trainer artifact.
+//
+// `_local_fill_dt_lcg` directly calls the forge builtin (host C loop
+// inside the runtime wrapper — ~5ns/iter for 100M elements ≈ 500ms,
+// vs the prior host-scalar hexa `farr_set` loop at ~1μs/element = 100s+).
+fn _local_fill_dt_lcg(dst: int, dst_off: int, n: int,
+                      seed: int, scale: float) {
+    let _ = farr_fill_dt_lcg_gpu(dst, dst_off, n, seed, scale)
+}
+
+fn _local_fill_constant(dst: int, dst_off: int, n: int, value: float) {
+    // small-range (~d=768) constant fill — kept as host scalar loop
+    // (negligible vs the large random fills which now go through the
+    // forge builtin above).
+    let mut i = 0
+    while i < n {
+        let _ = farr_set(dst, dst_off + i, value)
+        i = i + 1
+    }
+}
+
+fn _local_decoder_init(M: int, seed: int,
+                       T: int, d: int, nh: int, nkv: int, h: int,
+                       V: int, n_layer: int) {
+    let oTemb = m_off_tok_emb(d, nh, nkv, h, V, n_layer)
+    let oGF = m_off_gF(d, nh, nkv, h, V, n_layer)
+    _local_fill_dt_lcg(M, oTemb, V * d, seed + 7, 0.05)
+    _local_fill_constant(M, oGF, d, 1.0)
+    let kvd = nkv * (d / nh)
+    let mut l = 0
+    while l < n_layer {
+        let bp_off = m_off_block(l, d, nh, nkv, h, V, n_layer)
+        let block_seed = seed + 1000 + l * 137
+        _local_fill_constant(M, bp_off + bp_off_g1(d, nh, nkv, h), d, 1.0)
+        _local_fill_dt_lcg(M, bp_off + bp_off_Wq(d, nh, nkv, h),
+                           d * d, block_seed + 11, 0.2)
+        _local_fill_dt_lcg(M, bp_off + bp_off_Wk(d, nh, nkv, h),
+                           kvd * d, block_seed + 23, 0.2)
+        _local_fill_dt_lcg(M, bp_off + bp_off_Wv(d, nh, nkv, h),
+                           kvd * d, block_seed + 37, 0.2)
+        _local_fill_dt_lcg(M, bp_off + bp_off_Wo(d, nh, nkv, h),
+                           d * d, block_seed + 53, 0.2)
+        _local_fill_constant(M, bp_off + bp_off_g2(d, nh, nkv, h), d, 1.0)
+        _local_fill_dt_lcg(M, bp_off + bp_off_Wg(d, nh, nkv, h),
+                           h * d, block_seed + 71, 0.2)
+        _local_fill_dt_lcg(M, bp_off + bp_off_Wu(d, nh, nkv, h),
+                           h * d, block_seed + 89, 0.2)
+        _local_fill_dt_lcg(M, bp_off + bp_off_Wd(d, nh, nkv, h),
+                           d * h, block_seed + 103, 0.2)
+        l = l + 1
+    }
+}
+
 // ── transpose helpers — mk2-C5 (2026-05-19): replace the host scalar
 // t_get/t_set loops with single farr_transpose_2d_gpu builtin calls.
 // Semantics preserved (dst[c·d_out+r] = src[soff + r·d_in + c]) and
@@ -266,7 +323,7 @@ while s < nsamp {
 let m_size = m_total(d, nh, nkv, h, V, n_layer)
 print("  model size: "); print(m_size); println(" doubles")
 let M = t_zeros(m_size)
-nn_decoder_init(M, 42, T, d, nh, nkv, h, V, n_layer)
+_local_decoder_init(M, 42, T, d, nh, nkv, h, V, n_layer)
 let Mm = t_zeros(m_size)
 let Mv = t_zeros(m_size)
 let Mg = t_zeros(m_size)
