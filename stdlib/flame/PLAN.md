@@ -1317,3 +1317,43 @@ GPU util peak 47% · mem peak 725 MiB · cost ~$1.23
 - mini 의 dispatch script: destroy -y · native 5x retry · $HOME 경로.
 mini 가 이제 추가 fire 의 backup orchestrator 로 즉시 사용 가능 (macOS
 복구 대기 불필요).
+
+### 2026-05-18 — GOAL "범용 PyTorch 대체": gap(a) 수렴 CLOSED ($0)
+
+user GOAL (2026-05-18) "flame+hexa = PyTorch+Python 범용 대체". 5 gap
+중 (a) 수렴 미입증이 1순위 (wall 빨라도 학습 안 되면 대체 아님).
+
+**fire #20/21/22 (d768 `%.10e` gn2) 모두 좌초**: vast.ai host
+194.228.55.129 (offer 30895671, cheapest 반복 선택) 가 극심 flaky —
+banner timeout + remote-close 반복, [5/9] upload 에서 20분+ 회복불가.
+dispatch 패치 (ConnectTimeout 60s + scp_retry 5x + ServerAliveCountMax
+3 + native 5x retry) 가 fire #21 의 1시간 hang 은 해소했으나 이 특정
+host 의 연속 drop 은 retry budget 으로도 못 넘김. 누적 ~$1.5 소모,
+0 step. instance 매번 destroy 확인 (36999713·37000724 등 정리).
+
+**g3 cost-routing 재판단 → d=32 로 전환 (instrument-first)**: 수렴
+질문 (gn2 단조감소?) 은 학습 *메커니즘* 검증 — d768 GPU 불필요.
+동일 코드 (fwd + closed-vjp bwd + AdamW) 를 가장 싼 decisive 스케일
+(d=32·3L, 로컬 CPU compiled) 에서 측정 = $0. `flame_d32_corpus_
+test.hexa` (이미 80-step trajectory capture 완비) `hexa build`
+compiled 실행:
+```
+gn2: step0=7.97113 → 10=5.867 → 20=1.634 → 40=2.17e-4
+     → 60=3.27e-6 → 80=9.16e-7  ·  final 8.87e-7 · acc 8/8
+collapse = 8.98e6× (단조)  ·  anima ref 3.73e-7 fp-tol 일치
+F-RFC043-STEP-EQ-ORACLE 3/3 PASS (INIT·COLLAPSE·FIT)
+```
+**학습이 실제 일어남을 byte-eq 입증** (8 윈도우 full memorization).
+d768 의 `3.98438` 정체 = 학습실패 아닌 print precision(6 sig) +
+20-step 부족 (d=32 도 step20 에서 1.63 — 큰 모델 d768 의 20-step
+으론 당연히 큰 gn2 영역). **gap(a) CLOSED, $0.**
+
+**병행 gap(b) autograd 자동화** (Decision 1·2, design.md):
+hexa-side generic tape `stdlib/flame/ag_tape.hexa` (C 무수정,
+RFC 034 9/9 oracle 회귀 0). sub-step 1 RMSNorm + sub-step 2
+Linear→RMSNorm 2-op chain reverse-walk: `F-RFC043-AGTAPE-
+{RMSNORM,CHAIN}-EQ` 둘 다 max|Δ|=0 PASS (hexa build compiled, $0).
+잔여: 5 layer + grad registry + decoder 재구성 + train_step.
+
+GOAL 진척: gap(a) ✅ CLOSED · gap(b) 2/~6 sub-step · gap(c/d/e)
+미착수. multi-cycle, oracle-gated, $0-우선.

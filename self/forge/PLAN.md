@@ -427,3 +427,35 @@ precompile (WIP), JAX (JIT), Mojo MAX (inference-first), FlashFuser
 둘 다**: A = RFC 044 design draft, B = FlashFuser-style DSM prototype
 (floor 확인용). 후속 커밋에서 RFC 044 / `PARADIGM.md` / `PHASE2_PREP.md`
 순서 작성. 본 진입은 Phase 진입 아님 (research/design 단계).
+
+### 2026-05-18 — flame fire #19b 측정 → forge RoPE kernel gap = wall 의 leverage 점
+
+flame Phase 4-D-9 closure 정밀화 cycle (commit `9aeccbd1`) 의 fire #18/#19b
+host 분산 측정이 forge 측 우선순위 시사:
+
+**측정 (g3 정직 — 2 vast.ai A100_SXM4 호스트 사이)**:
+- fire #18 host A: step wall **267s**, F-RFC046 마진 ~170s
+- fire #19b host B: step wall **359.7s ± 1.6s** (15 sample), F-RFC046 마진 ~76s
+- **delta ~35%** — 같은 GPU 모델, vast.ai 호스트 차이로만 발생
+- 양쪽 모두 게이트 PASS
+
+**forge 측 시사점**: cuBLAS Dgemm 부분은 GPU 모델 (A100) 가 결정 — host
+간 변동 없음. 35% delta 는 **비-matmul ops (RoPE step 등) 의 host CPU
+loop 가 wall 의 leverage 점**임을 측정 입증. PHASE4D9 retro §6 의
+"RoPE forge kernel gap (RFC 041)" 가 단순 cosmetic 부재가 아니라
+**측정 가능한 wall 손실 (호스트 평균 가정 시 ~30-90s/step)** 이다.
+
+**Phase R 패러다임 work 에 대한 함의**: AOT × whole-train-step
+paradigm 의 wall 우위 측정 시, host CPU 영향을 거른 비교가 필요. 동일
+호스트에서 PyTorch vs flame baseline + flame-with-RoPE-forge-kernel
+3-way 측정 시 forge kernel landing 효과 의 isolate 가능.
+
+**파생 작업 후보** (Phase R 외 본체 leverage):
+- **RFC 041 RoPE forge kernel** 우선 구현 (gap 메우면 host-CPU
+  bottleneck 완화 → wall variance 축소 + 평균 wall 단축).
+- 다른 비-matmul CPU loop (mask gen, residual?) 의 forge 흡수 후보 식별.
+
+**g3 over-claim 0**: 35% delta 는 2-호스트 sample, 통계 의미 미약.
+더 많은 vast.ai 호스트로 재측정해야 RoPE kernel 의 marginal wall
+유효성을 확정 가능. 그 측정 = benchmarking cycle 의 일부
+([[flame-forge-benchmark-pending]] 참조 — flame/forge 작업 완료 후).

@@ -1,0 +1,248 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_ag_tape_test.hexa — flame Phase 2 ag_tape oracle
+//
+// Falsifiers (RFC 043 Decision 2, design.md):
+//   F-RFC043-AGTAPE-RMSNORM-EQ   single-op RMSNorm record/replay dx/dg/y
+//                                byte-identical to direct nn_rmsnorm_*
+//   F-RFC043-AGTAPE-CHAIN-EQ     2-op chain Linear→RMSNorm: tape
+//                                ag_backward (reverse-walk + dy-thread)
+//                                produces dW/db/dg/dx0 byte-identical
+//                                to a direct hand-chained reference
+//                                (max|Δ| = 0.0)
+//
+// What CHAIN-EQ proves: the generic reverse-walk threads each op's
+// input-grad into the previous op's upstream-grad with zero corruption
+// — the multi-op autograd plumbing is exact. The per-layer vjp algebra
+// is already F-RFC043-LAYER-EQ-* verified in flame_nn_test.hexa; this
+// isolates the tape's chaining mechanism.
+//
+// $0: pure-hexa CPU, small dims, no GPU/corpus. Local `hexa build`.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/ag_tape"
+
+fn agt_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn agt_maxdiff(p: int, q: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let e = agt_abs(t_get(p, i) - t_get(q, i))
+        if e > m { m = e }
+        i = i + 1
+    }
+    return m
+}
+
+// ── Test 1: single-op RMSNorm (sub-step 1 regression) ───────────────────
+println("=== flame ag_tape oracle ===")
+println("-- Test 1: RMSNorm single-op record/replay --")
+let d = 64
+let x  = t_zeros(d)
+let g  = t_zeros(d)
+let dy = t_zeros(d)
+let mut i = 0
+while i < d {
+    t_set(x,  i, to_float(i - 32) * 0.137 + 0.5)
+    t_set(g,  i, 1.0 + to_float(i) * 0.011)
+    t_set(dy, i, to_float((i * 7) % 13 - 6) * 0.023)
+    i = i + 1
+}
+let yA   = t_zeros(d)
+let xnA  = t_zeros(d)
+let invA = t_zeros(1)
+nn_rmsnorm_fwd(x, g, yA, xnA, invA, d)
+let dxA = t_zeros(d)
+let dgA = t_zeros(d)
+nn_rmsnorm_bwd(x, g, xnA, t_get(invA, 0), dy, dxA, dgA, d)
+
+let t1 = ag_t_begin(4)
+let yB = ag_rmsnorm(t1, x, g, d)
+let dxB = t_zeros(d)
+let dgB = t_zeros(d)
+ag_backward_rmsnorm_single(t1, dy, dxB, dgB)
+let m1y  = agt_maxdiff(yA,  yB,  d)
+let m1dx = agt_maxdiff(dxA, dxB, d)
+let m1dg = agt_maxdiff(dgA, dgB, d)
+print("  max|Δ y|="); print(m1y); print(" dx="); print(m1dx); print(" dg="); println(m1dg)
+ag_t_free_state(t1)
+ag_t_end(t1)
+let t1ok = m1y == 0.0 && m1dx == 0.0 && m1dg == 0.0
+if t1ok {
+    println("PASS  F-RFC043-AGTAPE-RMSNORM-EQ")
+} else {
+    println("FAIL  F-RFC043-AGTAPE-RMSNORM-EQ")
+}
+
+// ── Test 2: 2-op chain  Linear(x0)→RMSNorm  ─────────────────────────────
+// dims: x0 [B·D], W [D·C], b [C] → h [B·C]; then RMSNorm over the
+// C-vector of row 0 (B=1 keeps the RMSNorm d = C, isolating the chain).
+println("-- Test 2: Linear -> RMSNorm 2-op chain --")
+let B = 1
+let D = 48
+let C = 64
+let x0 = t_zeros(B * D)
+let W  = t_zeros(D * C)
+let bb = t_zeros(C)
+let gg = t_zeros(C)
+let seed = t_zeros(C)        // upstream grad w.r.t. final RMSNorm output
+let mut j = 0
+while j < B * D {
+    t_set(x0, j, to_float(j % 17 - 8) * 0.091 + 0.3)
+    j = j + 1
+}
+let mut k = 0
+while k < D * C {
+    t_set(W, k, to_float((k * 5) % 23 - 11) * 0.017)
+    k = k + 1
+}
+let mut c = 0
+while c < C {
+    t_set(bb,   c, to_float(c % 5 - 2) * 0.05)
+    t_set(gg,   c, 1.0 + to_float(c) * 0.007)
+    t_set(seed, c, to_float((c * 3) % 11 - 5) * 0.031)
+    c = c + 1
+}
+
+// reference: direct hand-chained fwd+bwd (same nn_lib calls).
+let hR    = nn_linear_fwd(x0, W, bb, B, D, C)        // [B·C] = [C]
+let yR    = t_zeros(C)
+let xnR   = t_zeros(C)
+let invR  = t_zeros(1)
+nn_rmsnorm_fwd(hR, gg, yR, xnR, invR, C)
+// rmsnorm bwd: seed → dh (grad wrt linear output) + dg
+let dhR = t_zeros(C)
+let dgR = t_zeros(C)
+nn_rmsnorm_bwd(hR, gg, xnR, t_get(invR, 0), seed, dhR, dgR, C)
+// linear bwd: dh → dW, dx0, db
+let dWR  = t_zeros(D * C)
+let dx0R = t_zeros(B * D)
+let dbR  = t_zeros(C)
+nn_linear_bwd(x0, W, dhR, dWR, dx0R, dbR, B, D, C)
+
+// tape path: record Linear then RMSNorm, single ag_backward.
+let t2 = ag_t_begin(4)
+let hT = ag_linear(t2, x0, W, bb, B, D, C)
+let yT = ag_rmsnorm(t2, hT, gg, C)
+ag_backward(t2, seed)
+// op0 = Linear (pgrad0=dW, pgrad1=db, igrad=dx0) ; op1 = RMSNorm (pgrad0=dg)
+let dWT  = ag_param_grad(t2, 0, 0)
+let dbT  = ag_param_grad(t2, 0, 1)
+let dx0T = ag_input_grad(t2)               // whole-chain input grad
+let dgT  = ag_param_grad(t2, 1, 0)
+
+let m2y  = agt_maxdiff(yR,  yT,  C)
+let m2dW = agt_maxdiff(dWR, dWT, D * C)
+let m2db = agt_maxdiff(dbR, dbT, C)
+let m2dg = agt_maxdiff(dgR, dgT, C)
+let m2dx = agt_maxdiff(dx0R, dx0T, B * D)
+print("  max|Δ y|=");  print(m2y)
+print(" dW=");         print(m2dW)
+print(" db=");         print(m2db)
+print(" dg=");         print(m2dg)
+print(" dx0=");        println(m2dx)
+ag_t_free_state(t2)
+ag_t_free_grads(t2)
+ag_t_end(t2)
+let t2ok = m2y == 0.0 && m2dW == 0.0 && m2db == 0.0 && m2dg == 0.0 && m2dx == 0.0
+if t2ok {
+    println("PASS  F-RFC043-AGTAPE-CHAIN-EQ")
+} else {
+    println("FAIL  F-RFC043-AGTAPE-CHAIN-EQ")
+}
+
+// ── Test 3: RoPE single-op (parameterless) ──────────────────────────────
+println("-- Test 3: RoPE single-op record/replay --")
+let hd = 64
+let pp = 7
+let qv  = t_zeros(hd)
+let cst = t_zeros(64 * hd)   // tables sized for T=64 positions
+let snt = t_zeros(64 * hd)
+nn_rope_build_tables(64, hd, cst, snt)
+let mut r3 = 0
+while r3 < hd {
+    t_set(qv, r3, to_float(r3 - 32) * 0.083 + 0.2)
+    r3 = r3 + 1
+}
+let dqp = t_zeros(hd)
+let mut r3b = 0
+while r3b < hd {
+    t_set(dqp, r3b, to_float((r3b * 5) % 9 - 4) * 0.041)
+    r3b = r3b + 1
+}
+// ref: direct fwd+bwd
+let qoR = t_zeros(hd)
+nn_rope_apply_fwd(qv, cst, snt, qoR, pp, hd)
+let dqR = t_zeros(hd)
+nn_rope_apply_bwd(dqp, cst, snt, dqR, pp, hd)
+// tape
+let t3 = ag_t_begin(4)
+let qoT = ag_rope(t3, qv, cst, snt, pp, hd)
+ag_backward(t3, dqp)
+let dqT = ag_input_grad(t3)
+let m3y  = agt_maxdiff(qoR, qoT, hd)
+let m3dq = agt_maxdiff(dqR, dqT, hd)
+print("  max|Δ q_out|="); print(m3y); print(" dq="); println(m3dq)
+ag_t_free_state(t3)
+ag_t_free_grads(t3)
+ag_t_end(t3)
+let t3ok = m3y == 0.0 && m3dq == 0.0
+if t3ok { println("PASS  F-RFC043-AGTAPE-ROPE-EQ") }
+else     { println("FAIL  F-RFC043-AGTAPE-ROPE-EQ") }
+
+// ── Test 4: LMHead single-op (param dtemb + input dzT) ──────────────────
+println("-- Test 4: tied LM head single-op record/replay --")
+let Vv = 40
+let dd = 48
+let temb = t_zeros(Vv * dd)
+let zT   = t_zeros(dd)
+let dl   = t_zeros(Vv)
+let mut e4 = 0
+while e4 < Vv * dd {
+    t_set(temb, e4, to_float((e4 * 3) % 19 - 9) * 0.013)
+    e4 = e4 + 1
+}
+let mut z4 = 0
+while z4 < dd {
+    t_set(zT, z4, to_float(z4 - 24) * 0.027 + 0.1)
+    z4 = z4 + 1
+}
+let mut l4 = 0
+while l4 < Vv {
+    t_set(dl, l4, to_float((l4 * 7) % 13 - 6) * 0.019)
+    l4 = l4 + 1
+}
+// ref: direct fwd+bwd (dtemb accumulates → zero first, same as tape)
+let lgR = t_zeros(Vv)
+nn_lm_head_fwd(temb, zT, lgR, Vv, dd)
+let dtembR = t_zeros(Vv * dd)
+let dzTR   = t_zeros(dd)
+nn_lm_head_bwd(temb, zT, dl, dtembR, dzTR, Vv, dd)
+// tape
+let t4 = ag_t_begin(4)
+let lgT = ag_lmhead(t4, temb, zT, Vv, dd)
+ag_backward(t4, dl)
+let dtembT = ag_param_grad(t4, 0, 0)
+let dzTT   = ag_input_grad(t4)
+let m4y  = agt_maxdiff(lgR, lgT, Vv)
+let m4dt = agt_maxdiff(dtembR, dtembT, Vv * dd)
+let m4dz = agt_maxdiff(dzTR, dzTT, dd)
+print("  max|Δ logits|="); print(m4y); print(" dtemb="); print(m4dt); print(" dzT="); println(m4dz)
+ag_t_free_state(t4)
+ag_t_free_grads(t4)
+ag_t_end(t4)
+let t4ok = m4y == 0.0 && m4dt == 0.0 && m4dz == 0.0
+if t4ok { println("PASS  F-RFC043-AGTAPE-LMHEAD-EQ") }
+else     { println("FAIL  F-RFC043-AGTAPE-LMHEAD-EQ") }
+
+if t1ok && t2ok && t3ok && t4ok {
+    println("ALL PASS  ag_tape plumbing byte-identical (RMSNorm·Linear·chain·RoPE·LMHead)")
+} else {
+    println("ALL FAIL  ag_tape plumbing regression")
+}
