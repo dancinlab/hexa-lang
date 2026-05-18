@@ -1205,3 +1205,7 @@ surgical deletion 은 트랙 B (CLI driver re-targeting) 가 별도 multi-cycle 
 
 **남은 R7 track B (15 verbs)**: 동일 패턴 (build script + dispatch branch surgical edit + .gitignore + PLAN.md cycle entry). 다음 후보 = `lsp`/`check`/`test` (size-graded). multi-cycle.
 
+**mini verify (commit `58b558e5`)**:
+- ✅ `tool/build_aprime.sh` smoke 5/5 PASS · `exit(42)==42` · aprime_cc 2.1 MB Mach-O · fixpoint regression 0
+- ⚠️ `tool/build_hexa_qrng.sh` FAIL on mini — `hexa: command not found` (mini PATH 에 hexa CLI 미설정). dispatch fallback (`cmd_run` on `stdlib/qrng/qrng.hexa`) 가 무리없이 작동하므로 사용자 영향 0. polish 항목: build_hexa_qrng.sh 가 repo-local `./hexa` shim 또는 `~/.hx/bin/hexa` resolution 지원하도록 후속 cycle. 본 cycle 의 fixpoint regression check 는 build_aprime 으로 충분.
+
