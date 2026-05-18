@@ -11227,6 +11227,61 @@ static int64_t _hx_farr_add_cpu(int64_t a_id, int64_t b_id, int64_t n) {
     return out_id;
 }
 
+// mk2-C1b (2026-05-19): dt_exp byte-exact C mirror of hexa
+// flame_math `dt_exp` (12-term Taylor + range-halve-to-0.25 + r
+// squarings). The flame silu reference uses dt_exp, NOT libm exp
+// (_hx_sigmoid_d) — the byte-eq oracle (flame_ag_tape_test Test 11
+// SILUGATE, leaf max|Δ|=0 bar) demands bit-identical reproduction
+// ([[flame-transcendental-byteeq-hazard]]). All ops are single-
+// rounding sequential (no a*b+c*d in one expr); FP_CONTRACT OFF is
+// cheap insurance vs any clang FMA fusion, mirroring the rope CPU
+// fix (commit c0789e05). Restored DEFAULT after the gate cpu.
+#pragma STDC FP_CONTRACT OFF
+static double _hx_dt_exp_d(double x) {
+    int r = 0;
+    double xr = x;
+    while ((xr > 0.0 ? xr : 0.0 - xr) > 0.25) { xr = xr / 2.0; r = r + 1; }
+    double term = 1.0;
+    double acc  = 1.0;
+    int k = 1;
+    while (k < 12) { term = term * xr / (double)k; acc = acc + term; k = k + 1; }
+    int s = 0;
+    while (s < r) { acc = acc * acc; s = s + 1; }
+    return acc;
+}
+
+// _hx_farr_silu_gate_cpu(a, b, n) -> new farr_id.
+// O[i] = (A[i] · σ(A[i])) · B[i],  σ(x) = 1/(1 + dt_exp(-x)).
+// Byte-identical to ag_tape.hexa `_ag_silu(a)*b` (same op order:
+// sig=1/(1+dt_exp(0-a)); (a*sig)*b). -1 err.
+static int64_t _hx_farr_silu_gate_cpu(int64_t a_id, int64_t b_id,
+                                      int64_t n) {
+    if (a_id < 0 || a_id >= _hx_farr_count) return -1;
+    if (b_id < 0 || b_id >= _hx_farr_count) return -1;
+    if (n <= 0)                              return -1;
+    HexaFarrEntry* ae = &_hx_farr_table[a_id];
+    HexaFarrEntry* be = &_hx_farr_table[b_id];
+    if (!ae->buf || !be->buf)                return -1;
+    if (ae->len < n || be->len < n)          return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    ae = &_hx_farr_table[a_id];
+    be = &_hx_farr_table[b_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!ae->buf || !be->buf || !oe->buf || oe->len < n) return -1;
+    const double* A = ae->buf;
+    const double* B = be->buf;
+    double*       O = oe->buf;
+    for (int64_t i = 0; i < n; i++) {
+        double ai  = A[i];
+        double sig = 1.0 / (1.0 + _hx_dt_exp_d(0.0 - ai));
+        O[i] = (ai * sig) * B[i];
+    }
+    return out_id;
+}
+#pragma STDC FP_CONTRACT DEFAULT
+
 // _hx_farr_scale_cpu(x, alpha, n) -> new farr_id. Y = α·X, length n. -1 err.
 static int64_t _hx_farr_scale_cpu(int64_t x_id, double alpha, int64_t n) {
     if (x_id < 0 || x_id >= _hx_farr_count) return -1;
@@ -11343,6 +11398,30 @@ HexaVal hexa_farr_scale_gpu(HexaVal x_v, HexaVal alpha_v, HexaVal n_v) {
 #endif
 }
 
+// mk2-C1b (2026-05-19): farr_silu_gate_gpu(a, b, n) -> int new
+// farr_id. O = (A·σ(A))·B, σ=1/(1+dt_exp(-x)). On no-CUDA: routes
+// to _hx_farr_silu_gate_cpu (dt_exp-faithful, byte-id to
+// ag_tape.hexa _ag_silu(a)*b). On HEXA_CUDA: _hx_cuda_farr_silu_
+// gate_gpu (dt_exp-faithful device kernel, byte-eq oracle-gated).
+HexaVal hexa_farr_silu_gate_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v) {
+    int64_t a_id = hexa_as_num(a_v);
+    int64_t b_id = hexa_as_num(b_v);
+    int64_t n    = hexa_as_num(n_v);
+#ifdef HEXA_CUDA
+    if (n <= 0) return hexa_int(-1);
+    if (a_id < 0 || a_id >= _hx_farr_count) return hexa_int(-1);
+    if (b_id < 0 || b_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(n));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_silu_gate_gpu(a_id, b_id, n, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_silu_gate_cpu(a_id, b_id, n));
+#endif
+}
+
 // ── Phase B carriers (3-arg / 4-arg → hexa_callN dispatch). ───────
 // All 4 ops fit within the hexa_callN ceiling (≤4-arg), so each gets a
 // HexaVal carrier registered via hexa_fn_new at init time (see the
@@ -11351,6 +11430,7 @@ HexaVal farr_softmax_rows_gpu;
 HexaVal farr_rmsnorm_rows_gpu;
 HexaVal farr_add_gpu;
 HexaVal farr_scale_gpu;
+HexaVal farr_silu_gate_gpu;
 
 // ═══════════════════════════════════════════════════════════════════
 // anima RFC 040 Phase B2 (2026-05-16): d_train5 hot-path completion —
@@ -11396,6 +11476,8 @@ extern int  _hx_cuda_farr_mul_gpu(int64_t a_id, int64_t b_id,
 extern int  _hx_cuda_farr_silu_gpu(int64_t x_id, int64_t n, int64_t out_id);
 extern int  _hx_cuda_farr_silu_grad_gpu(int64_t x_id, int64_t n,
                                          int64_t out_id);
+extern int  _hx_cuda_farr_silu_gate_gpu(int64_t a_id, int64_t b_id,
+                                         int64_t n, int64_t out_id);
 extern int  _hx_cuda_farr_rmsnorm_bwd_rows_gpu(int64_t x_id, int64_t dxn_id,
                                                 int64_t R, int64_t C,
                                                 int64_t out_id);
@@ -13685,6 +13767,7 @@ static void _hexa_init_fn_shims(void) {
     farr_rmsnorm_rows_gpu           = hexa_fn_new((void*)hexa_farr_rmsnorm_rows_gpu,           4);
     farr_add_gpu                    = hexa_fn_new((void*)hexa_farr_add_gpu,                    3);
     farr_scale_gpu                  = hexa_fn_new((void*)hexa_farr_scale_gpu,                  3);
+    farr_silu_gate_gpu              = hexa_fn_new((void*)hexa_farr_silu_gate_gpu,              3);
     // anima RFC 040 Phase B2 (2026-05-16): d_train5 hot-path completion —
     // matmul_t / outer / mul / silu / silu_grad / rmsnorm_bwd (≤4-arg
     // carriers). farr_adamw_step_gpu (11-arg) = bare direct-C entry,

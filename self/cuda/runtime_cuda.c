@@ -1388,6 +1388,49 @@ __device__ __forceinline__ double _hx_cuda_sigmoid_d(double x) {
     return 1.0 / (1.0 + exp(-x));
 }
 
+/* mk2-C1b — dt_exp byte-exact device mirror of hexa flame_math
+ * `dt_exp` (12-term Taylor + range-halve-to-0.25 + r squarings).
+ * The flame silu reference uses dt_exp, NOT libm exp; the byte-eq
+ * oracle (Test 11 SILUGATE, leaf max|Δ|=0) demands bit-identical
+ * reproduction. Ops are single-rounding sequential; explicit
+ * __dmul_rn/__ddiv_rn/__dadd_rn = no FMA contraction regardless of
+ * nvcc --fmad, matching the non-contracted CPU _hx_dt_exp_d
+ * (FP_CONTRACT OFF) — same discipline as the RoPE GPU fix
+ * (commit b73269ea). xr/2.0 is exact (power of 2); kept literal. */
+__device__ __forceinline__ double _hx_cuda_dt_exp_d(double x) {
+    int r = 0;
+    double xr = x;
+    while ((xr > 0.0 ? xr : 0.0 - xr) > 0.25) { xr = xr / 2.0; r = r + 1; }
+    double term = 1.0;
+    double acc  = 1.0;
+    int k = 1;
+    while (k < 12) {
+        term = __ddiv_rn(__dmul_rn(term, xr), (double)k);
+        acc  = __dadd_rn(acc, term);
+        k = k + 1;
+    }
+    int s = 0;
+    while (s < r) { acc = __dmul_rn(acc, acc); s = s + 1; }
+    return acc;
+}
+
+/* silu-gate: O[i] = (A[i]·σ(A[i]))·B[i], σ=1/(1+dt_exp(-x)).
+ * dt_exp-faithful (NOT _hx_cuda_sigmoid_d's libm exp). Op order
+ * byte-identical to CPU _hx_farr_silu_gate_cpu / ag_tape
+ * _ag_silu(a)*b. */
+__global__ void _hx_cuda_kern_silu_gate(const double* __restrict__ A,
+                                        const double* __restrict__ B,
+                                        double* __restrict__ O,
+                                        int64_t n) {
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    for (; i < n; i += stride) {
+        double ai  = A[i];
+        double sig = 1.0 / (1.0 + _hx_cuda_dt_exp_d(0.0 - ai));
+        O[i] = __dmul_rn(__dmul_rn(ai, sig), B[i]);
+    }
+}
+
 __global__ void _hx_cuda_kern_silu(const double* __restrict__ X,
                                    double* __restrict__ Y,
                                    int64_t n) {
@@ -1685,6 +1728,47 @@ int _hx_cuda_farr_silu_gpu(int64_t x_id, int64_t n, int64_t out_id) {
     cudaError_t er = cudaGetLastError();
     if (er != cudaSuccess) {
         fprintf(stderr, "[cuda] silu launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(out_id, n) != 0) return -1;
+    return 0;
+}
+
+/* mk2-C1b: silu-gate O = (A·σ(A))·B (dt_exp-faithful). Two host
+ * inputs H2D'd; byte-eq oracle-gated vs CPU _hx_farr_silu_gate_cpu. */
+int _hx_cuda_farr_silu_gate_gpu(int64_t a_id, int64_t b_id,
+                                int64_t n, int64_t out_id) {
+    if (a_id < 0 || b_id < 0 || out_id < 0) {
+        fprintf(stderr, "[cuda] silu_gate: bad ids %lld %lld %lld\n",
+                (long long)a_id, (long long)b_id, (long long)out_id);
+        return -1;
+    }
+    if (n <= 0) {
+        fprintf(stderr, "[cuda] silu_gate: bad n=%lld\n", (long long)n);
+        return -1;
+    }
+    if (a_id >= _hx_farr_count || b_id >= _hx_farr_count ||
+        out_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] silu_gate: id out of range\n");
+        return -1;
+    }
+    if (_hx_farr_table[a_id].len < n || _hx_farr_table[b_id].len < n ||
+        _hx_farr_table[out_id].len < n) {
+        fprintf(stderr, "[cuda] silu_gate: host len < n\n");
+        return -1;
+    }
+    if (_h2d(a_id) != 0) return -1;
+    if (_h2d(b_id) != 0) return -1;
+    if (_ensure_dev_buf(out_id, n) != 0) return -1;
+    double* A = g_slots[a_id].d_buf;
+    double* B = g_slots[b_id].d_buf;
+    double* O = g_slots[out_id].d_buf;
+    int grid = _hx_cuda_elem_grid(n);
+    _hx_cuda_kern_silu_gate<<<grid, _HX_CUDA_ELEM_BLOCK>>>(A, B, O, n);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] silu_gate launch failed: %s\n",
                 cudaGetErrorString(er));
         return -1;
     }

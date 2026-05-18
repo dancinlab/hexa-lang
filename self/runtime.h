@@ -1005,6 +1005,7 @@ HexaVal hexa_farr_outer_gpu(HexaVal u_v, HexaVal v_v, HexaVal r_v,
 HexaVal hexa_farr_mul_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v);             /* runtime.c — RFC 040 Phase B2 */
 HexaVal hexa_farr_silu_gpu(HexaVal x_v, HexaVal n_v);                         /* runtime.c — RFC 040 Phase B2 */
 HexaVal hexa_farr_silu_grad_gpu(HexaVal x_v, HexaVal n_v);                    /* runtime.c — RFC 040 Phase B2 */
+HexaVal hexa_farr_silu_gate_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v);       /* runtime.c — mk2-C1b silu·b gate */
 HexaVal hexa_farr_rmsnorm_bwd_rows_gpu(HexaVal x_v, HexaVal dxn_v,
                                        HexaVal r_v, HexaVal c_v);             /* runtime.c — RFC 040 Phase B2 */
 HexaVal hexa_farr_adamw_step_gpu(HexaVal w_v, HexaVal m_v, HexaVal v_v,
@@ -1016,6 +1017,7 @@ extern HexaVal farr_outer_gpu;                                                 /
 extern HexaVal farr_mul_gpu;                                                   /* runtime.c — RFC 040 fn carrier */
 extern HexaVal farr_silu_gpu;                                                  /* runtime.c — RFC 040 fn carrier */
 extern HexaVal farr_silu_grad_gpu;                                             /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_silu_gate_gpu;                                             /* runtime.c — mk2-C1b fn carrier */
 extern HexaVal farr_rmsnorm_bwd_rows_gpu;                                      /* runtime.c — RFC 040 fn carrier */
 HexaVal farr_adamw_step_gpu(HexaVal w, HexaVal m, HexaVal v, HexaVal g,
                             HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
