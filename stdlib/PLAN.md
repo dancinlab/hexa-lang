@@ -309,6 +309,9 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
 - 2026-05-18 `6e08ba6` (hexa-bio) — T3 +1: `n6_axis_computational_
   verification` (42-check 결정적 σ/τ/φ/J₂ + 5-axis 구조검증; 정점
   열거·Euler·군위수 실연산, log10 via awk) 바이트-패리티. **T3 10/104.**
+- 2026-05-18 `d382771` (hexa-bio) — T3 +1: `external_governance_cross_check`
+  (@X 인용 무결성 게이트 — .tape v1.2 @X 헤더 hand-parse + url/path 분류
+  + 117행 테이블 렌더 + COEXIST 계약) 157줄 바이트-패리티. **T3 11/104.**
 - 2026-05-18 — **세션 체크포인트 (측정된 거리)**: hexa-matter T1/T2
   완료(26/26 selftest hexa-native·verify 4/4·문서 HX). hexa-bio
   **T3 9/104** 검증(r1_symlink·virocapsid_c5·tape_lattice_cohort·
