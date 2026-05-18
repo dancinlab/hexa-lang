@@ -59,6 +59,8 @@ pub fn ag_k_slice()   -> int { return 10 }  // out = X[off : off+len] gather
 pub fn ag_k_silu_gate() -> int { return 11 } // s = silu(a) * b (SwiGLU)
 pub fn ag_k_rmsnorm_mh() -> int { return 12 } // per-pos RMSNorm [T·d]
                                               // (dt_sqrt — decoder path)
+pub fn ag_k_attn_dt() -> int { return 13 }    // GQA attn, dt_sqrt scale
+                                              // + dt_exp softmax (decoder)
 
 // ── tape geometry (node v3) ─────────────────────────────────────────────
 // header v2: [0]=op count, [1]=final-input-grad (legacy/chain path),
@@ -241,6 +243,157 @@ pub fn ag_attn(tape: int, Q: int, K: int, V: int,
     let ctx = t_zeros(dctx_len)
     nn_attn_core_fwd(Q, K, V, P, ctx, T, nh, nkv, hd)
     let _ = _ag_push(tape, ag_k_attn(), Q, K, V, P, ctx, 0 - 1,
+                     0 - 1, 0 - 1, T, nh, nkv, hd)
+    return ctx
+}
+
+// GQA attention with the DECODER BLOCK's exact transcendental path:
+// scale = 1/dt_sqrt(hd) (NOT libm sqrt) and a stable softmax using
+// dt_exp (NOT libm exp). Algorithm/layout identical to nn_attn_core
+// (P[(hh·T+i)·T+j], ctx[i·d+hh·hd+c], causal L=i+1) — only the two
+// transcendentals match the block, closing byte-eq hazards #2/#3.
+fn _ag_attn_dt_fwd(Q: int, K: int, V: int, P: int, ctx: int,
+                   T: int, nh: int, nkv: int, hd: int) {
+    let n_rep = nh / nkv
+    let d = nh * hd
+    let scale = 1.0 / dt_sqrt(to_float(hd))
+    let srow = t_zeros(T)
+    let mut hh = 0
+    while hh < nh {
+        let kvh = hh / n_rep
+        let mut i = 0
+        while i < T {
+            let L = i + 1
+            let mut j = 0
+            while j < L {
+                let mut dot = 0.0
+                let mut c = 0
+                while c < hd {
+                    dot = dot + t_get(Q, (i * nh + hh) * hd + c)
+                              * t_get(K, (j * nkv + kvh) * hd + c)
+                    c = c + 1
+                }
+                t_set(srow, j, dot * scale)
+                j = j + 1
+            }
+            // stable softmax — max over 0..L, dt_exp(x−max), normalize
+            let mut mx = t_get(srow, 0)
+            let mut jm = 1
+            while jm < L {
+                if t_get(srow, jm) > mx { mx = t_get(srow, jm) }
+                jm = jm + 1
+            }
+            let mut tot = 0.0
+            let mut je = 0
+            while je < L {
+                let e = dt_exp(t_get(srow, je) - mx)
+                t_set(P, (hh * T + i) * T + je, e)
+                tot = tot + e
+                je = je + 1
+            }
+            let mut jn = 0
+            while jn < L {
+                let cur = t_get(P, (hh * T + i) * T + jn)
+                t_set(P, (hh * T + i) * T + jn, cur / tot)
+                jn = jn + 1
+            }
+            let mut c2 = 0
+            while c2 < hd {
+                let mut acc = 0.0
+                let mut jj = 0
+                while jj < L {
+                    acc = acc + t_get(P, (hh * T + i) * T + jj)
+                              * t_get(V, (jj * nkv + kvh) * hd + c2)
+                    jj = jj + 1
+                }
+                t_set(ctx, i * d + hh * hd + c2, acc)
+                c2 = c2 + 1
+            }
+            i = i + 1
+        }
+        hh = hh + 1
+    }
+    t_free(srow)
+}
+
+// dt-scale attention bwd (block lines 678-748 / nn_attn_core_bwd
+// algebra; scale = 1/dt_sqrt(hd); no exp — P is the cached fwd
+// softmax). dQ/dK/dV are caller-zeroed accumulators.
+fn _ag_attn_dt_bwd(Q: int, K: int, V: int, P: int, dctx: int,
+                   dQ: int, dK: int, dV: int,
+                   T: int, nh: int, nkv: int, hd: int) {
+    let n_rep = nh / nkv
+    let d = nh * hd
+    let scale = 1.0 / dt_sqrt(to_float(hd))
+    let dP_row = t_zeros(T)
+    let mut hh = 0
+    while hh < nh {
+        let kvh = hh / n_rep
+        let mut i = 0
+        while i < T {
+            let L = i + 1
+            let mut j = 0
+            while j < L {
+                let mut acc = 0.0
+                let mut c = 0
+                while c < hd {
+                    acc = acc + t_get(dctx, i * d + hh * hd + c)
+                              * t_get(V, (j * nkv + kvh) * hd + c)
+                    c = c + 1
+                }
+                t_set(dP_row, j, acc)
+                j = j + 1
+            }
+            let mut sdot = 0.0
+            let mut j2 = 0
+            while j2 < L {
+                sdot = sdot + t_get(P, (hh * T + i) * T + j2)
+                            * t_get(dP_row, j2)
+                j2 = j2 + 1
+            }
+            let mut j3 = 0
+            while j3 < L {
+                let pij = t_get(P, (hh * T + i) * T + j3)
+                let mut c = 0
+                while c < hd {
+                    let dv_idx = (j3 * nkv + kvh) * hd + c
+                    t_set(dV, dv_idx, t_get(dV, dv_idx)
+                          + pij * t_get(dctx, i * d + hh * hd + c))
+                    c = c + 1
+                }
+                j3 = j3 + 1
+            }
+            let mut j4 = 0
+            while j4 < L {
+                let dS = t_get(P, (hh * T + i) * T + j4)
+                       * (t_get(dP_row, j4) - sdot) * scale
+                let mut c2 = 0
+                while c2 < hd {
+                    let dq_idx = (i * nh + hh) * hd + c2
+                    let dk_idx = (j4 * nkv + kvh) * hd + c2
+                    t_set(dQ, dq_idx, t_get(dQ, dq_idx)
+                          + dS * t_get(K, (j4 * nkv + kvh) * hd + c2))
+                    t_set(dK, dk_idx, t_get(dK, dk_idx)
+                          + dS * t_get(Q, (i * nh + hh) * hd + c2))
+                    c2 = c2 + 1
+                }
+                j4 = j4 + 1
+            }
+            i = i + 1
+        }
+        hh = hh + 1
+    }
+    t_free(dP_row)
+}
+
+// ctx = dt-scale GQA-attn(Q,K,V). Same node shape as ag_attn.
+pub fn ag_attn_dt(tape: int, Q: int, K: int, V: int,
+                  T: int, nh: int, nkv: int, hd: int) -> int {
+    let dctx_len = T * nh * hd
+    let P   = t_zeros(nh * T * T)
+    let ctx = t_zeros(dctx_len)
+    _ag_attn_dt_fwd(Q, K, V, P, ctx, T, nh, nkv, hd)
+    let _ = _ag_push(tape, ag_k_attn_dt(), Q, K, V, P, ctx, 0 - 1,
                      0 - 1, 0 - 1, T, nh, nkv, hd)
     return ctx
 }
@@ -507,6 +660,30 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             let dV = t_zeros(kvlen)
             nn_attn_core_bwd(Q, K, Vv, P, og, dQ, dK, dV,
                              T, nh, nkv, hd)
+            _ag_reg_acc(tape, Q, dQ, qlen)
+            _ag_reg_acc(tape, K, dK, kvlen)
+            _ag_reg_acc(tape, Vv, dV, kvlen)
+            t_free(dQ)
+            t_free(dK)
+            t_free(dV)
+        } else if kind == ag_k_attn_dt() {
+            let Q = _ag_get(tape, op, 1)
+            let K = _ag_get(tape, op, 2)
+            let Vv = _ag_get(tape, op, 3)
+            let P = _ag_get(tape, op, 4)
+            let ctx = _ag_get(tape, op, 5)
+            let T = _ag_get(tape, op, 9)
+            let nh = _ag_get(tape, op, 10)
+            let nkv = _ag_get(tape, op, 11)
+            let hd = _ag_get(tape, op, 12)
+            let qlen = T * nh * hd
+            let kvlen = T * nkv * hd
+            let og = _ag_reg_grad(tape, ctx, qlen)
+            let dQ = t_zeros(qlen)
+            let dK = t_zeros(kvlen)
+            let dV = t_zeros(kvlen)
+            _ag_attn_dt_bwd(Q, K, Vv, P, og, dQ, dK, dV,
+                            T, nh, nkv, hd)
             _ag_reg_acc(tape, Q, dQ, qlen)
             _ag_reg_acc(tape, K, dK, kvlen)
             _ag_reg_acc(tape, Vv, dV, kvlen)
@@ -788,6 +965,9 @@ pub fn ag_t_free_state(tape: int) {
         } else if kind == ag_k_embed() {
             t_free(_ag_get(tape, op, 3))   // X
         } else if kind == ag_k_attn() {
+            t_free(_ag_get(tape, op, 4))   // P
+            t_free(_ag_get(tape, op, 5))   // ctx
+        } else if kind == ag_k_attn_dt() {
             t_free(_ag_get(tape, op, 4))   // P
             t_free(_ag_get(tape, op, 5))   // ctx
         } else if kind == ag_k_add() {

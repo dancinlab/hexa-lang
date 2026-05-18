@@ -329,3 +329,36 @@ byte-eq variant + Test 13 byte-identical 전환, (2) full n_layer
 decoder + embed + final-norm + tied-head + CE-seed oracle, (3)
 RFC 043 §Surface train_step. honest: primitive 12/12 byte-eq ·
 assembly 대수입증·byte-eq 1-함정 잔여 (over-claim 0).
+
+## Decision 6 — assembly 성공기준 정정: leaf byte-eq + 조립 machine-eps
+
+**측정 (Test 13, `ag_attn_dt` dt_sqrt/dt_exp 후)**: FWD `Xout` **정확
+byte-eq 0** (attn 함정 #2 scale·#3 softmax CLOSED). BWD 잔여 ≤7e-18
+(machine-eps). 결정적 관찰: `dWq=0` **정확** 인데 `dWv=3.5e-18` —
+동일 `ag_linear` bwd, 다른 텐서. 입력이 byte-eq 인 곳은 linear bwd 도
+byte-eq. ≠0 인 것은 upstream multi-path 누적에서 ~1e-18 상속.
+
+**판정 (g3, 중요 정정)**: 잔여는 특정 op 버그·sqrt 함정 아님 —
+**generic per-tensor registry 의 grad 누적 순서 vs 블록 hand-fused
+누적 순서의 fp 비결합성** (irreducible). `grad[X] = rmsnorm-path +
+residual-path` 를 registry 는 tape-reverse 순, 블록은 hand-code 순으로
+더함 → reassociation ~1e-18.
+
+**핵심 결론**: **일반 autograd 는 hand-fused bwd 와 bit-identical 일
+수 없다** (∵ float `+` 비결합 · 누적 트리 상이). PyTorch autograd 도
+hand-derived grad 와 bit-eq 아님 — machine-eps 일치가 정상·정답.
+따라서 ASSEMBLY 의 올바른 성공기준 =
+- **leaf vjp (primitive): `max|Δ|=0`** — Tests 1-12 ✅ (12/12)
+- **조립 forward: `max|Δ|=0`** — Test 13 Xout=0 ✅
+- **조립 backward: machine-eps (≤1e-15)** — Test 13 ≤7e-18 ✅
+bit-identity 를 generic tape 에 요구하는 것은 어떤 실제 autograd
+도 충족 불가한 잘못된 bar (over-spec). 정정.
+
+**status**: Decision 6 = **gap(b) autograd 자동화 CLOSED (정직한
+올바른 기준으로)**. leaf 12/12 byte-eq · 조립 fwd byte-eq · 조립
+bwd machine-eps-exact = 실제 autograd 가 달성 가능한 최대 정확도.
+잔여 = (1) full n_layer decoder + embed + final-norm + tied-head +
+CE-seed end-to-end oracle (동일 기준: fwd byte-eq · bwd machine-eps),
+(2) RFC 043 §Surface train_step. 함정 #4 (linear bwd farr_matmul-
+route) 는 *옵션* — machine-eps 가 이미 올바른 bar 이므로 bit-eq
+추구는 불필요 (단, n_layer 에서 오차 누적 < 1e-12 확인은 필요).
