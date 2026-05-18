@@ -461,3 +461,20 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   net-new +3**: ribozyme_reaction_coordinate_quotient · nanobot_l6_l7
   · ribozyme_a1_2 (17→19/127). 측정 게이트가 1건 lossy 포착+전진
   수정 — g3 워크플로 실증. 잔여 ~108, 파이프라인 ready.
+- 2026-05-18 — **정정·하드 발견: 갭 #4 컴파일러 경로 미해소(스케일,
+  측정, g3)**. `registry_consistency_audit` 이관 시도 → 측정 게이트가
+  결정론적 1행 발산 포착(compiled covered=7121 vs .py 7122, 가짜 `?`
+  태그 1). 7191행 전부 비어있지 않은 `"schema"` 보유·.py `?`=0 확인.
+  최장 2행(12218·9051자)은 **단독 파싱은 정상**(type=map·has schema)
+  → 버퍼한계 아님. 7191-iter 루프 안에서만 정확히 1행이 `"schema"`
+  키 유실, 동일행 bounded 재파싱(6회)으로도 **복구 불가**. ⟹ 컴파일러
+  json_parse 에 **스케일 루프-arena 손상(갭 #4)** 존재·retry-immune.
+  **앞선 "0/130 → 컴파일러 갭#4 미발생" 은 표본 과소로 인한 거짓
+  확신이었음 — 정정**. float 수정(_js_emit_value)과 별개 코드경로
+  (json_parse arena). 해당 `.hexa` 는 covered 틀려도 overall=PASS
+  로 exit 0 → exit-code 키 run() 이 **무성 거짓 PASS [hexa-c]**
+  보고(f2/g3 안티패턴) → **백아웃**(`6f7fa3e`)하여 정확한 .py 폴백
+  유지. **registry-loop / 대량-N json_parse 게이트군은 상류 갭 #4
+  수정 전까지 BLOCKED**(측정된 천장 — 작업량 아님). T3 = **19/127
+  유지**(registry_consistency_audit 은 +1 아님; 차단으로 정직 기록).
+  순수계산·소량-json 게이트는 계속 이관 가능(검증된 19 불변).
