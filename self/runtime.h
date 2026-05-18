@@ -452,6 +452,28 @@ HexaVal farr_parameter_shift_grad(HexaVal re_v, HexaVal im_v,
                                   HexaVal n_p_v, HexaVal ham_v,
                                   HexaVal ans_v, HexaVal nq_v);                    /* runtime.c:7150 */
 
+/* Forward-decls exposed by the R7 measured-cutover parity gate
+ * (tool/parity_interp_vs_compiled.sh) — array HOFs + string/array
+ * helpers defined in runtime.c but never declared in this header, so
+ * the tier-2 `hexa build` path errored "call to undeclared function"
+ * (C99 implicit-decl) on test/{t43,t44,t45,t45b,t49,…}. Same
+ * defined-but-not-declared class as the interp-retire R5 sweep above;
+ * signatures byte-match the runtime.c definitions. */
+HexaVal hexa_array_map(HexaVal arr, HexaVal fn);                                   /* runtime.c:7313 */
+HexaVal hexa_array_filter(HexaVal arr, HexaVal fn);                                /* runtime.c:7322 */
+HexaVal hexa_array_fold(HexaVal arr, HexaVal init, HexaVal fn);                    /* runtime.c:7332 */
+HexaVal hexa_array_any(HexaVal arr, HexaVal fn);                                   /* runtime.c:7356 */
+HexaVal hexa_array_all(HexaVal arr, HexaVal fn);                                   /* runtime.c:7367 */
+HexaVal hexa_array_enumerate(HexaVal arr);                                         /* runtime.c:7472 */
+HexaVal hexa_array_flatten(HexaVal arr);                                           /* runtime.c:7524 */
+HexaVal hexa_array_fill(HexaVal arr, HexaVal v);                                   /* runtime.c:7552 */
+HexaVal hexa_array_swap(HexaVal arr, HexaVal iv, HexaVal jv);                      /* runtime.c:7834 */
+HexaVal hexa_array_sort_by(HexaVal arr, HexaVal key_fn);                           /* runtime.c:4270 */
+HexaVal hexa_array_get(HexaVal arr, int64_t idx);                                  /* runtime.c:1981 */
+HexaVal hexa_str_char_at(HexaVal s, HexaVal idx);                                  /* runtime.c:4156 */
+HexaVal hexa_is_empty(HexaVal v);                                                  /* runtime.c:7486 */
+HexaVal hexa_sum(HexaVal a);                                                       /* runtime.c:11955 */
+
 /* hx_* alias TAG_FN carriers — defined in native/persistent_pipe.c and
  * native/exec_argv_sha256.c, initialized at startup via _hexa_init_*_fn_shims.
  * Interp uses bare `hx_pipe_spawn` etc. (not `hexa_pipe_spawn`) as
