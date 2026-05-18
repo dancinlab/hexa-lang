@@ -1632,3 +1632,48 @@ interp 실삭제 (R7 종결) 전제조건: 위 3 잔여 + bench/parse 는 이미
 
 **R7 interp source 실삭제 unblock**: 모든 cmd_run-dependent verb 가 binary-prefer (cmd_run = fallback-only). interp 본체 삭제의 마지막 기술 장벽 (atlas binary 불가) 제거됨.
 
+
+---
+
+### 2026-05-18 — hexa kick COMPLETE — multi-main + arena-aliasing (cycle h36)
+
+User directive: "hexa kick 먼저 완료 해줘". A sibling session had reported
+`hexa kick/omega/drill 은 stub — discovery engine 미구현`. Investigation
+proved that wrong: drill.hexa has the full `drill_run` engine (rounds ·
+Mk.IX/X 6-stage chain · checkpoint · saturation). Two real bugs masked it:
+
+**Bug 1 — multi-`fn main` flatten collision (`a9286eb1`)**: drill.hexa &
+the discovery family `use compiler/smash/candidate`(→smash.hexa, has
+`fn main`) + compiler/honesty/check (has `fn main`); module_loader
+flattened 7 `fn main` bodies and hexa_v2 keeps the FIRST → smash's main
+won, entry(drill) main dropped → `hexa kick` printed `usage: hexa smash …`
+(the "stub" symptom). Fix: module_loader flat-assembly neutralizes every
+NON-entry `fn main(` → unique inert `_ml_inert_main_<ei>(` (g_order_parts
+post-order ⇒ entry is the LAST element). kick flat 7→1 fn main; all 13
+discovery-family binaries now resolve to their OWN engine.
+
+**Bug 2 — arena-aliasing SIGSEGV (`eedc46b4`)**: after Bug 1, drill_run
+SIGSEGV'd on some seeds (lldb frame#0 hexa_map_get_ic_slow, EXC_BAD_ACCESS).
+Stage-traced to `overlay_append_lines` over a large accumulated overlay:
+the default-ON bump arena (S7-B) reclaims a block a map HexaVal still
+references → map-IC slow path derefs a stale HX_MAP_TBL (use-after-free,
+the struct_pack/arena-aliasing class). Data-dependent (seed A worked,
+seed B faulted). Fix: dispatch_absorbed prefixes `HEXA_VAL_ARENA=0` to the
+bin/hexa-absorbed-<verb> spawn. Byte-eq verified (seed A total=687
+ON≡OFF); seed B total=683 rc=0 deterministic. Short-lived verb CLIs —
+arena's only benefit (multi-GB self-compile RSS) is irrelevant; the deep
+runtime root-fix (arena-escape heapify / IC ptr revalidation) is
+fixpoint-critical (aprime_cc/hexa_v2 map-IC) → tracked separately.
+
+**Verified end-to-end** (rebuilt hexa.real dispatch):
+- `hexa kick --seed "prove sigma(6)=12 perfect-number divisor structure"
+  --rounds 1` → Mk.IX 6-stage chain, total=683, overlay_lines=517, rc 0
+- `hexa drill` same seed → identical (kick=drill alias)
+- seed A parity → total=687 unchanged
+- mini build_aprime fixpoint: BOTH fix commits 5/5 PASS · exit(42)==42
+  (self-host preserved; module_loader is the aprime flatten engine)
+
+R7 track B: 52/52 verbs binary-migrated AND the discovery-engine family
+(kick/drill/omega/chain/surge/dream/swarm/reign/molt/forge/canon/debate/
+wake) now runs its real engine, no segfault. interp-source deletion's
+last functional barriers removed. origin/main `eedc46b4`.
