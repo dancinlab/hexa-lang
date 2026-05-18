@@ -8,3 +8,6 @@
 #   <basename.hexa>    # reason
 #
 # (heuristic already auto-skips clock/rand/mono_ns/socket/http/stdin)
+
+t54_lora_to_hexaw.hexa    # output is a `hexa build` trace; the only interp↔compiled delta is the nanosecond-stamped /tmp/.hexa-runtime/hexa_build_expanded.<ns>.tmp.hexa path — build-trace non-determinism, NOT a codegen divergence (verified by diff: identical except the ns token)
+test_auto_marker.hexa     # writes state/markers/test_auto_marker_<unix_ts>.marker — the only delta is the timestamp in the emitted filename (interp vs compiled run a few seconds apart); both behaviors identical, parity not byte-measurable
