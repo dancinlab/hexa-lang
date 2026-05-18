@@ -1733,6 +1733,11 @@ builtin → runtime.c `#ifdef HEXA_CUDA` dim-gate 가능 (hexa
   PASS** (CPU fallback byte-id, Test 8 RESID 포함, leaf 12/12
   보존). add 는 exact add 라 별도 GPU oracle fire 不要 (rounding
   hazard 無). $0 verified.
+- **mk2-C1b (✅ CLOSED 2026-05-19):** CPU Mac 19/19 (Test 11
+  max|Δ|=0) + **GPU A100 oracle ALL-PASS** (`F-MK2C1B-SILUGATE-
+  EXACT max|Δ|=0` both n=786432 & n=2097152). dt_exp-faithful
+  C+CUDA mirror byte-exact 양 gate 통과. commit `e5faa8b0`
+  (code) · `b55ffeee` (oracle). 이하 상세:
 - **mk2-C1b (CPU DONE · GPU oracle in flight, 2026-05-19):**
   `ag_silu_gate` forge-route. C+CUDA `dt_exp` byte-exact mirror
   구현 (`_hx_dt_exp_d` FP_CONTRACT OFF · `_hx_cuda_dt_exp_d`
@@ -1785,8 +1790,10 @@ builtin → runtime.c `#ifdef HEXA_CUDA` dim-gate 가능 (hexa
 4. g3: cycle falsifier 측정 전 closure 주장 0. 측정값만 PLAN
    갱신.
 
-**현재 상태 (2026-05-19): mk2-C0 DONE (PR #68) · mk2-C1a DONE
-($0 verified, Mac 19/19) · mk2-C1b = 다음 진입점.** 각 cycle
+**현재 상태 (2026-05-19): mk2-C0 ✅ (PR #68) · C1a ✅ ($0,
+Mac 19/19) · C1b ✅ CLOSED (Mac 19/19 + A100 oracle max|Δ|=0
+양 config) · mk2-C2 (rmsnorm dt_sqrt, C1b 와 동일 패턴) = 다음
+진입점.** 각 cycle
 독립 commit + (cheap oracle + Mac 19/19) gate. **C3 (residency)
 가 d768 wall 통과의 binding cycle** — C1/C2 forge-route 는
 prerequisite 일 뿐, residency 無면 wall 不動 (FIRE3 측정:
