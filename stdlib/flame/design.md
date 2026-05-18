@@ -408,3 +408,37 @@ bit-identical · M machine-eps). generic ag_tape 가 RFC 043
 §Surface 전체 training loop 을 hand-written 과 실제 autograd 의
 최대 정확도로 일치 — 측정 입증. **잔여 GOAL = gap(c) shape-
 generic sweep · gap(d) forge kernel · gap(e) model DSL (미착수).**
+
+## Decision 7 — gap(e) model DSL = 선언적 spec (최적화 IR) [user gate]
+
+**picked (user gate 2026-05-18, contested 설계 — Decision 1/2 처럼
+실 tradeoff)**: gap(e) flame model-definition DSL = **선언적 layer-
+spec 배열 (그래프 IR)**. 모델 = `{kind, inputs[], params[], dims[]}`
+엔트리 배열. generic `ag_run_spec(tape, spec, vtab, ptab)` 가 spec
+순회하며 검증된 ag_* op 으로 실행. 임의 DAG 는 inputs 필드(이전
+엔트리 슬롯/외부입력 참조)로 표현.
+
+**user 의 결정 기준 (명시)**: "차후 hexa-native 로 성능·자원·속도
+개선 가능한 방향". 4 옵션 (A 선언spec / A+D / B struct-forward /
+C closure) 중 **A** 선택.
+
+**rationale**:
+- 모델이 **데이터(spec)** → 차후 hexa 컴파일러/forge 가 spec 분석
+  해 op fusion · forge GPU 커널 디스패치 · reorder 를 **사용자 코드
+  불변**으로 적용. spec = 최적화 가능한 IR. gap(e)↔gap(d) 자연 합체.
+- B/C (불투명 forward 코드) 는 컴파일러가 그래프 미인식 → 자동
+  fusion/커널화 불가, 성능이 개별 op 속도에 종속 (user 기준 위배).
+- D (고정 transformer builder) 는 한 아키텍처 극한최적화 가능하나
+  범용성 포기 (GOAL '범용' 위배).
+- 검증된 ag_tape primitive (12 op + registry, 15/15+gap(c) 측정)
+  를 실행 substrate 로 재사용 — 새 vjp 0, C 무수정 불변.
+
+**oracle 계획**: Test 14 의 hand-composed decoder 를 spec 으로
+재정의 → `ag_run_spec` 실행 → logits·grad 가 hand-composed 경로와
+**정확히 byte-identical** (동일 ag_* 호출, dispatch 만 spec-driven)
+→ DSL 이 faithful IR 임을 입증. F-RFC043-AGTAPE-SPEC-EQ.
+
+**status**: Decision 7 확정. 구현 = `stdlib/flame/ag_spec.hexa`
+(spec layout farr + ag_spec_begin/add + ag_run_spec; ag_tape 의존)
++ Test 17 oracle (spec-decoder ≡ hand-decoder byte-eq). gap(d)
+forge fusion-pass 는 이 spec IR 위에서 후속.
