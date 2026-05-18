@@ -1264,7 +1264,14 @@ surgical deletion 은 트랙 B (CLI driver re-targeting) 가 별도 multi-cycle 
 **fixpoint regression risk**: 0.
 
 **R7 track B 진척**: 3/16 verbs (qrng · qmirror · sim-universe) — stdlib/<verb>/<verb>.hexa 패턴 모두 마이그레이션 완료. 잔여 13 verbs 중:
-- ready (fn main 보유): atlas (527L, tool/atlas_cli.hexa)
+- ready (fn main 보유): atlas (527L, tool/atlas_cli.hexa) — ⚠️ build 차단 (아래 참조)
 - shim 필요: lsp (1006L) · check (1223L) · test (754L) · convergence_scan
 - 내부/특수: batch · bench · init · verify · calc (dispatch 분기 내 inline 또는 embedded — 별도 분석)
+
+**atlas build 차단 (cycle 4 deferred)**:
+- `HEXA_MAC_BUILD_OK=1 hexa build tool/atlas_cli.hexa -o bin/hexa-atlas` → clang linker 실패: `_atlas_prefix`, `_audit_merged`, `_audit_overlay`, `_audit_rodata`, `_audit_to_json`, `_audit_to_text`, `_lookup_static`, `_promote_to_atlas`, `_static_atlas` 모두 미해소
+- atlas_cli.hexa 의 `use` statements (parser/merger/static_index/audit/audit_rodata/overlay + discover/promote) 가 7개 모듈 import 하지만 flatten 이 `pub fn` 들을 따라가지 못함
+- 정의 위치 확인: `static_atlas` @ compiler/atlas/static_index.hexa, `audit_merged` @ compiler/atlas/audit_rodata.hexa L29 등 — 모두 `pub fn` 으로 정상 정의
+- 가설: tool/atlas_cli.hexa 가 compiler/ tree 와의 cross-directory `use` 인 경우 flatten 단계가 transitive 하게 따라가지 못함 (stdlib/<verb>/ 내 sibling `use` 는 OK)
+- 별도 진단 cycle 필요 — interp `hexa atlas <subcmd>` 는 module_loader 가 OK 처리하므로 hexa build flatten 측의 gap. R7 track B 동안 cmd_run fallback 유지.
 
