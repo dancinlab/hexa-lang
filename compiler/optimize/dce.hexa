@@ -77,6 +77,10 @@ fn _dce_collect_uses(f: MFunc) -> [i64] {
 
 fn _dce_must_keep(s: Stmt) -> bool {
     if s.kind == STMT_CALL { return true }
+    // RFC closure C2 — an indirect call (closure dispatch via hexa_callN)
+    // is potentially side-effecting just like a direct STMT_CALL; never
+    // dead-strip it even when its result local is unused.
+    if s.kind == STMT_CALL_INDIRECT { return true }
     if s.kind == STMT_RETURN { return true }
     if s.kind == STMT_BR { return true }
     if s.kind == STMT_BR_COND { return true }

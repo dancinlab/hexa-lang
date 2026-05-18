@@ -45,6 +45,14 @@ pub let STMT_ASSIGN   = "assign"
 pub let STMT_BINOP    = "binop"
 pub let STMT_UNOP     = "unop"
 pub let STMT_CALL     = "call"
+// RFC closure C2 — indirect call through a closure VALUE (TAG_CLOSURE /
+// TAG_FN HexaVal held in a register), as opposed to STMT_CALL whose callee
+// is a compile-time symbol in `op`. For STMT_CALL_INDIRECT the callee is
+// args[0] (an Operand evaluating to the closure value) and args[1..] are
+// the call arguments; `op` is empty. dst receives the call result. The
+// arm64 backend dispatches via the runtime hexa_callN family (env-first
+// ABI). Direct calls to named fns stay STMT_CALL — zero perturbation.
+pub let STMT_CALL_INDIRECT = "call_indirect"
 pub let STMT_RETURN   = "return"
 pub let STMT_BR       = "br"
 pub let STMT_BR_COND  = "br_cond"

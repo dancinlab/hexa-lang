@@ -1103,7 +1103,12 @@ typedef struct HexaValStruct {
 // ── C3 Closure helpers ───────────────────────────────────
 // Build a closure value. Captured values are provided as an already-built
 // TAG_ARRAY HexaVal; we heap-box it so the closure remains valid after copies.
-static inline HexaVal hexa_closure_new(void* fn_ptr, int arity, HexaVal env_arr) {
+// NOTE: extern (not `static inline`) — the aprime_cc separate-compilation path
+// links test programs against a standalone runtime.o, and closure codegen
+// emits `bl _hexa_closure_new`; an internal-linkage definition is invisible
+// across that TU boundary. The runtime.h copy stays `static inline` for
+// header-only includers (no conflict — runtime.c does not include runtime.h).
+HexaVal hexa_closure_new(void* fn_ptr, int arity, HexaVal env_arr) {
     HexaVal v = {.tag=TAG_CLOSURE};
     HX_SET_CLO_PTR_D(v, (HexaClo*)calloc(1, sizeof(HexaClo)));
     HX_SET_CLO_PTR(v, fn_ptr);

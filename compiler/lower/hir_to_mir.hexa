@@ -38,6 +38,18 @@ pub fn hir_to_mir_diags() -> array {
     return _lr_diag
 }
 
+// ── RFC closure C2 — synthetic lambda accumulator ────────────
+// Closure-expressions (HExpr kind "closure") are lambda-lifted: each one
+// becomes a top-level synthetic MFunc named `__hexa_lambda_<N>`. The
+// closure-expression site itself lowers to an env-array build plus a
+// `hexa_closure_new` call producing a TAG_CLOSURE value. Lifted MFuncs
+// can't be returned through the per-function `_lower_hexpr` recursion, so
+// they accumulate here and `lower_hir` appends them to MModule.funcs after
+// the user functions. Counter is monotonic per `lower_hir` call (reset on
+// entry, like `_lr_diag`) so lambda names are stable + collision-free.
+pub let mut _lr_lambdas: [MFunc] = []
+pub let mut _lr_lambda_ctr: i64 = 0
+
 // STMT_* constants come from compiler/ir/mir.hexa as `pub let`. The
 // previous local mirror was needed when stage0's interpreter did not
 // propagate transitive `pub let` bindings across the long import chain;
@@ -624,6 +636,72 @@ fn _is_known_hexpr_kind(k: string) -> bool {
     return false
 }
 
+// ── RFC closure C2 — free-variable analysis ─────────────────
+// A closure's free variables are the identifiers in its body that resolve
+// to the ENCLOSING function's scope (not the closure's own params, not
+// names introduced by `let` inside the body, and not module globals — a
+// global is reachable from the lifted lambda by name without an env slot).
+// `gen2_collect_free` in self/codegen_c2.hexa is the tier-2 reference.
+//
+// Membership test for a string in a [string] list.
+fn _str_list_has(xs: [string], s: string) -> bool {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == s { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Recursive walker: collect free idents of `e` into `acc` (ordered, deduped),
+// given `bound` = names already bound in scope (closure params + body lets).
+// `enc` is the enclosing-scope ctx — an ident counts as free only if it
+// resolves to an enclosing local binding (a true capture); a name that is
+// only a global / top-level fn is left alone (the lambda reaches it directly).
+fn _collect_free(e: HExpr, bound: [string], acc: [string],
+                 enc: LowerCtx) -> [string] {
+    let mut out = acc
+    let k = e.kind
+    if k == "ident" {
+        let nm = _strip_mut_prefix(e.text)
+        if !_str_list_has(bound, nm) && !_str_list_has(out, nm) {
+            // capture only enclosing LOCALS — _mir_lookup matches a
+            // local/param binding in the enclosing ctx. Globals resolve
+            // via _mir_lookup_global and are intentionally NOT captured.
+            if _mir_lookup(enc, nm) >= 0 { out.push(nm) }
+        }
+        return out
+    }
+    // `let` inside the body introduces a new bound name for the REST of
+    // the enclosing block. v1 keeps it simple: add the let name to `bound`
+    // for the whole subtree walk (over-approximates scope slightly but is
+    // safe — a body-local never needs capturing regardless of position).
+    let mut bound2 = bound
+    if k == "let" {
+        let lnm = _strip_mut_prefix(e.text)
+        if len(lnm) > 0 && !_str_list_has(bound2, lnm) { bound2.push(lnm) }
+    }
+    // A nested closure: its own params shadow within its body. The nested
+    // body still references the OUTER closure's captures transitively, so
+    // we keep walking — names bound by the nested closure's params get
+    // added to `bound2` so they don't leak as captures of the outer one.
+    if k == "closure" {
+        let nkid = len(e.children)
+        let mut ci = 0
+        while ci < nkid - 1 {
+            let pnm = _strip_mut_prefix(e.children[ci].text)
+            if len(pnm) > 0 && !_str_list_has(bound2, pnm) { bound2.push(pnm) }
+            ci = ci + 1
+        }
+    }
+    let mut i = 0
+    while i < len(e.children) {
+        out = _collect_free(e.children[i], bound2, out, enc)
+        i = i + 1
+    }
+    return out
+}
+
 // ── HExpr lowering core ─────────────────────────────────────
 
 fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
@@ -862,6 +940,55 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let mut ctx_r = ctx
         let mut callee_text = ""
         let mut arg_ops: [Operand] = []
+        // RFC closure C2 — indirect-call detection. A call whose callee is
+        // a VALUE (a local-bound closure, or a closure-expression invoked
+        // in place) dispatches through the runtime hexa_callN family rather
+        // than a direct `bl <symbol>`. The discriminator mirrors tier-2's
+        // `_is_known_fn_global`: a callee ident that resolves to a LOCAL
+        // binding (let / param) is a closure value — top-level fn names are
+        // never bound as locals. A closure-expression callee is also
+        // indirect. Field-method calls + plain named-fn calls are unchanged.
+        let mut is_indirect = false
+        let mut callee_op = _const_int_op(0)
+        if len(e.children) > 0 {
+            let callee0 = e.children[0]
+            if callee0.kind == "ident" {
+                let cn = _strip_mut_prefix(callee0.text)
+                if _mir_lookup(ctx_r, cn) >= 0 {
+                    is_indirect = true
+                    callee_op = _local_op(_mir_lookup(ctx_r, cn))
+                }
+            } else if callee0.kind == "closure" {
+                let cr = _lower_hexpr(ctx_r, callee0)
+                ctx_r = cr.ctx
+                is_indirect = true
+                callee_op = cr.operand
+            }
+        }
+        if is_indirect {
+            // args[0] = callee value; args[1..] = call arguments.
+            let mut ia_ops: [Operand] = []
+            ia_ops.push(callee_op)
+            let mut ai = 1
+            while ai < len(e.children) {
+                let r = _lower_hexpr(ctx_r, e.children[ai])
+                ctx_r = r.ctx
+                ia_ops.push(r.operand)
+                ai = ai + 1
+            }
+            let mut ictx = _fresh_local(ctx_r, e.typ, "call_ret")
+            let idst = ictx.locals[len(ictx.locals) - 1]
+            let isr = Stmt {
+                kind: STMT_CALL_INDIRECT,
+                dst: idst,
+                op: "",
+                args: ia_ops,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ictx = _push_stmt(ictx, isr)
+            return _value(ictx, _local_op(idst.id))
+        }
         if len(e.children) > 0 {
             let callee = e.children[0]
             callee_text = callee.text
@@ -1489,16 +1616,16 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         return _no_value(ctx2)
     }
 
-    // ── closure-expression: codegen DEFERRED (RFC C2/C3) ────
-    // C1 delivers the parse/bind/type front-half only. The HIR→MIR
-    // indirect-call lowering (capture-env struct + closure value + indirect
-    // BL) and the arm64 backend are RFC C2/C3 scope. Emit HX1104 — an
-    // accurate "closure codegen not yet implemented" diagnostic — and stop.
-    // We do NOT recurse into the body: the deferral message is the honest
-    // end-state, and recursing would only surface spurious child diags.
+    // ── closure-expression — RFC closure C2 (lambda lift) ──────
+    // Lower `fn(params){body}` by lambda-lifting: synthesise a top-level
+    // MFunc `__hexa_lambda_<N>` whose params are (__env, <closure params>);
+    // its body is the closure body with each captured identifier read from
+    // __env via hexa_array_get. The closure-expression itself lowers to an
+    // env-array build (the captured values in fixed order) plus a
+    // `hexa_closure_new` value producing a TAG_CLOSURE HexaVal. Mirrors
+    // self/codegen_c2.hexa::gen2_lambda_expr exactly.
     if k == "closure" {
-        _emit_hx1104(e.span)
-        return _no_value(ctx)
+        return _lower_closure(ctx, e)
     }
 
     // ── match: sequence of STMT_BR_COND testing tag ─────────
@@ -2045,6 +2172,189 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     return _no_value(ctx_d)
 }
 
+// ── RFC closure C2 — closure-expression lowering ────────────
+// `e` is a HExpr kind "closure": children = [param_0 .. param_{n-1},
+// body_block]; e.text = decimal param count. `enc` is the enclosing
+// function's lowering ctx (used for free-var capture resolution).
+//
+// Produces:
+//   1. a synthetic top-level MFunc `__hexa_lambda_<N>` appended to
+//      `_lr_lambdas`. Its params are (__env, p_0 .. p_{n-1}); its body
+//      prologue reads each captured value out of __env via op="index"
+//      (hexa_index_get → hexa_array_get for arrays), then lowers the
+//      closure body block with params + captures bound.
+//   2. at the closure site: an env-array build (op="array_lit" over the
+//      capture operands in fixed order) + an op="closure_new" STMT_ASSIGN
+//      yielding the TAG_CLOSURE value.
+fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
+    let nc = len(e.children)
+    let mut npar = 0
+    if nc >= 1 { npar = nc - 1 }   // last child = body block
+
+    // closure param names (strip any `mut:` prefix the parser may add).
+    let mut pnames: [string] = []
+    let mut pi = 0
+    while pi < npar {
+        pnames.push(_strip_mut_prefix(e.children[pi].text))
+        pi = pi + 1
+    }
+
+    // free-variable analysis on the body — captures, in source order.
+    let mut free: [string] = []
+    if nc >= 1 {
+        free = _collect_free(e.children[nc - 1], pnames, [], enc)
+    }
+    let nfree = len(free)
+
+    // ── 1. build the synthetic lambda MFunc ──────────────────
+    let lam_id = _lr_lambda_ctr
+    _lr_lambda_ctr = _lr_lambda_ctr + 1
+    let lam_name = "__hexa_lambda_" + to_string(lam_id)
+
+    let any_t = Type {
+        kind: "?", def: DefId { module: "", index: -1 },
+        args: [], ret: [], domain: "", unit: ""
+    }
+
+    let mut lctx = _new_lower_ctx()
+    lctx = _new_block(lctx)
+    let lam_entry = lctx.blocks[len(lctx.blocks) - 1].id
+    lctx = _set_cur_block(lctx, lam_entry)
+
+    // params: __env first, then the closure params (env-first ABI — see
+    // runtime hexa_callN). Bind each by source name.
+    let mut lam_params: [Local] = []
+    lctx = _fresh_local(lctx, any_t, "__env")
+    let env_param = lctx.locals[len(lctx.locals) - 1]
+    lam_params.push(env_param)
+    lctx = _bind(lctx, "__env", env_param.id)
+    pi = 0
+    while pi < npar {
+        lctx = _fresh_local(lctx, any_t, pnames[pi])
+        let pl = lctx.locals[len(lctx.locals) - 1]
+        lam_params.push(pl)
+        if len(pnames[pi]) > 0 { lctx = _bind(lctx, pnames[pi], pl.id) }
+        pi = pi + 1
+    }
+
+    // env-unpack prologue: capture i ← hexa_array_get(__env, i).
+    let mut fi = 0
+    while fi < nfree {
+        lctx = _fresh_local(lctx, any_t, free[fi])
+        let cap_l = lctx.locals[len(lctx.locals) - 1]
+        let mut ga: [Operand] = []
+        ga.push(_local_op(env_param.id))
+        ga.push(_const_int_op(fi))
+        let gs = Stmt {
+            kind: STMT_ASSIGN,
+            dst: cap_l,
+            op: "index",
+            args: ga,
+            target_block: -1,
+            target_block_else: -1
+        }
+        lctx = _push_stmt(lctx, gs)
+        lctx = _bind(lctx, free[fi], cap_l.id)
+        fi = fi + 1
+    }
+
+    // lower the closure body block in the lambda ctx.
+    if nc >= 1 {
+        let br = _lower_hexpr(lctx, e.children[nc - 1])
+        lctx = br.ctx
+        if !lctx.has_returned {
+            let mut ra: [Operand] = []
+            if br.has_value { ra.push(br.operand) }
+            let rs = Stmt {
+                kind: STMT_RETURN,
+                dst: _miss_local(),
+                op: "",
+                args: ra,
+                target_block: -1,
+                target_block_else: -1
+            }
+            lctx = _push_stmt(lctx, rs)
+        }
+    } else {
+        let rs = Stmt {
+            kind: STMT_RETURN,
+            dst: _miss_local(),
+            op: "",
+            args: [],
+            target_block: -1,
+            target_block_else: -1
+        }
+        lctx = _push_stmt(lctx, rs)
+    }
+
+    let lam_func = MFunc {
+        name: lam_name,
+        params: lam_params,
+        return_local: _miss_local(),
+        locals: lctx.locals,
+        blocks: lctx.blocks,
+        entry_block: lam_entry,
+        arena_root: lctx.arena_root,
+        def_line: e.span.line
+    }
+    _lr_lambdas.push(lam_func)
+
+    // ── 2. lower the closure SITE in the enclosing ctx ───────
+    // env array: hexa_array_new() then push each captured value, in the
+    // SAME order _collect_free returned them (== the env-unpack order).
+    let mut ctx2 = enc
+    let mut env_args: [Operand] = []
+    fi = 0
+    while fi < nfree {
+        let cap_id = _mir_lookup(ctx2, free[fi])
+        if cap_id >= 0 {
+            env_args.push(_local_op(cap_id))
+        } else {
+            // global capture fallback — should not normally arise (free
+            // analysis skips globals) but stay safe rather than emit a
+            // dangling operand.
+            let gid = _mir_lookup_global(ctx2, free[fi])
+            if gid >= 0 {
+                env_args.push(_global_op(gid, free[fi]))
+            } else {
+                env_args.push(_const_int_op(0))
+            }
+        }
+        fi = fi + 1
+    }
+    ctx2 = _fresh_local(ctx2, any_t, "clo_env")
+    let env_l = ctx2.locals[len(ctx2.locals) - 1]
+    let env_s = Stmt {
+        kind: STMT_ASSIGN,
+        dst: env_l,
+        op: "array_lit",
+        args: env_args,
+        target_block: -1,
+        target_block_else: -1
+    }
+    ctx2 = _push_stmt(ctx2, env_s)
+
+    // closure value: op="closure_new", args = [env_array, lambda_name_str,
+    // arity_int]. The codegen reads args[1].str_val (symbol) + args[2].int_val
+    // (arity) and emits `bl _hexa_closure_new` with the lifted fn pointer.
+    ctx2 = _fresh_local(ctx2, e.typ, "clo_val")
+    let clo_l = ctx2.locals[len(ctx2.locals) - 1]
+    let mut clo_args: [Operand] = []
+    clo_args.push(_local_op(env_l.id))
+    clo_args.push(_const_str_op(lam_name))
+    clo_args.push(_const_int_op(npar))
+    let clo_s = Stmt {
+        kind: STMT_ASSIGN,
+        dst: clo_l,
+        op: "closure_new",
+        args: clo_args,
+        target_block: -1,
+        target_block_else: -1
+    }
+    ctx2 = _push_stmt(ctx2, clo_s)
+    return _value(ctx2, _local_op(clo_l.id))
+}
+
 // ── Helpers ─────────────────────────────────────────────────
 
 // Stable per-string hash used to assign a deterministic discriminant
@@ -2223,6 +2533,11 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
 
 pub fn lower_hir(module: HModule) -> MModule {
     _lr_diag = []
+    // RFC closure C2 — reset the synthetic-lambda accumulator so repeated
+    // compiles in the same process do not leak lifted MFuncs / counter
+    // state across runs (same discipline as `_lr_diag`).
+    _lr_lambdas = []
+    _lr_lambda_ctr = 0
     // Two-pass: collect all module-level globals first so every fn body
     // can resolve any global by name regardless of textual order
     // (parser may put `fn main` before or after a `let mut g = …`).
@@ -2277,6 +2592,16 @@ pub fn lower_hir(module: HModule) -> MModule {
             }
         }
         i = i + 1
+    }
+    // RFC closure C2 — append every synthetic lambda lifted out of a
+    // closure-expression during the user-function lowering above. They are
+    // ordinary top-level MFuncs from codegen's point of view; emitting them
+    // after the user functions keeps `__hexa_lambda_<N>` symbols defined for
+    // the `hexa_closure_new` references planted at the closure sites.
+    let mut li = 0
+    while li < len(_lr_lambdas) {
+        funcs.push(_lr_lambdas[li])
+        li = li + 1
     }
     return MModule {
         file: module.file,
