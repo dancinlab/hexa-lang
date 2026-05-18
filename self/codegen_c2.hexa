@@ -2890,6 +2890,12 @@ fn gen2_method_builtin(obj_expr, method, args) {
     if method == "to_lower" {
         return cg_string_sym("str_to_lower") + "(" + obj_expr + ")"
     }
+    if method == "to_uppercase" {
+        return cg_string_sym("str_to_upper") + "(" + obj_expr + ")"
+    }
+    if method == "to_lowercase" {
+        return cg_string_sym("str_to_lower") + "(" + obj_expr + ")"
+    }
     if method == "split" {
         return cg_string_sym("str_split") + "(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
     }
@@ -4927,6 +4933,12 @@ fn gen2_expr(node) {
                 return cg_string_sym("str_to_upper") + "(" + obj + ")"
             }
             if method == "to_lower" {
+                return cg_string_sym("str_to_lower") + "(" + obj + ")"
+            }
+            if method == "to_uppercase" {
+                return cg_string_sym("str_to_upper") + "(" + obj + ")"
+            }
+            if method == "to_lowercase" {
                 return cg_string_sym("str_to_lower") + "(" + obj + ")"
             }
             if method == "split" {

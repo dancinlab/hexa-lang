@@ -4051,13 +4051,30 @@ static void _hexa_init_byte_str_cache(void) {
     _cached_byte_str_ready = 1;
 }
 
+// Forward decl — defined further down. Needed here because hexa_str_chars
+// (immediately below) uses it to walk UTF-8 codepoints.
+static int _hx_utf8_cp_len(unsigned char b);
+
 HexaVal hexa_str_chars(HexaVal s) {
     HexaVal arr = hexa_array_new();
     if (!HX_IS_STR(s)) return arr;
-    if (!_cached_byte_str_ready) _hexa_init_byte_str_cache();
-    const unsigned char* p = (const unsigned char*)HX_STR(s);
-    for (; *p; p++) {
-        arr = hexa_array_push(arr, _cached_byte_str[*p]);
+    // 2026-05-19 parity-gate t45b: walk UTF-8 codepoints so
+    // `"한글hi".chars().len() == 4` (4 codepoints), not 8 (bytes).
+    // ASCII behavior is unchanged (codepoint == byte for ASCII). For
+    // raw byte iteration use the separate `.bytes()` / hexa_str_bytes
+    // path. The old byte-level chars() was the buggy-oracle behavior
+    // that interp doesn't have — deletion-gate alignment.
+    const char* p = HX_STR(s);
+    int64_t n = (int64_t)HX_STRLEN(s);
+    int64_t i = 0;
+    while (i < n) {
+        int cp = _hx_utf8_cp_len((unsigned char)p[i]);
+        char buf[5] = {0};
+        int j = 0;
+        while (j < cp && i + j < n) { buf[j] = p[i + j]; j++; }
+        buf[j] = 0;
+        arr = hexa_array_push(arr, hexa_str(buf));
+        i += cp;
     }
     return arr;
 }
