@@ -84,6 +84,8 @@ bin/hexa-sim-universe
 bin/hexa-convergence
 bin/hexa-test
 bin/hexa-check
+bin/hexa-verify
+bin/hexa-calc
 
 # Compiled module_loader (build pipeline helper, optional fast path).
 # Built via tool/build_hexa_module_loader.sh. Source is self/module_loader.hexa.
