@@ -359,3 +359,24 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   bridge/module/*.py` 55 시뮬레이터 — exp()/sci-notation 부동소수
   byte-parity 는 fresh context 필요(g3 — 깊은 context 에서 품질저하
   회피). registry-iteration 게이트는 상류 `-Infinity` parser fix 후.
+- 2026-05-18 — **돌파: ubu-1 컴파일러-백엔드는 갭 #1·#4 둘 다 깨끗
+  (측정됨, g3)**. 사용자 "ubu-1 로 전환" 지시. ubu-1(Linux x86_64)에
+  작동하는 `hexa.real`(613216, 5/16) 존재. `runtime.c` 에 canonical
+  float-repr 패치(macOS `c83f74e3` 와 동형 `_shortest_double`) 적용.
+  **핵심 측정** (`hexa.real build t_unlock.hexa` → 네이티브 실행):
+    · `FLOAT:1.3196299926423976` == Python `json.dumps` **정확 일치**
+      → 갭 #1(bare-float json) **컴파일러 경로에서 해소** (패치된
+      runtime.c 링크됨; `hexa build` 는 삭제된 standalone hexa_v2
+      불필요 — hexa.real 내장 codegen 사용).
+    · `JSONLOOP_LOST:0/130` (130 distinct docs json_parse 루프, key
+      유실 0) → 갭 #4(json_parse loop-lossy) **컴파일러 경로에서 미발생**.
+  ⟹ 직전 "16/104 천장"은 **인터프리터 천장**이었음. 컴파일러 경로는
+  갭 #1·#4 클린 → 그에 막혔던 ~88 게이트 중 순수-계산/json 계열은
+  **컴파일-실행 시 byte-parity 이관 가능**. subprocess·dynamic-import·
+  wall-time 계열은 컴파일러와 무관하게 여전히 막힘(별개 트랙).
+  **정상 경로 확정**: hexa-bio `selftest/run_all.sh` hexa-우선 union
+  을 `hexa run` → `hexa build && ./bin` 백엔드로 전환(영향 게이트
+  한정 또는 전역). 빌드 호스트 = ubu-1 (가용·검증완료).
+  잔여 인프라 메모: ubu-1 `hexa_cc.c` 단일-TU dup-symbol(p_record_error
+  등)로 standalone hexa_v2 재빌드 불가 — 단 `hexa build` 는 영향
+  없음(내장 codegen). ubu-1 hexa-lang 은 non-git(클론 아님).
