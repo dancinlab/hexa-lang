@@ -387,3 +387,24 @@ nn_decoder_grad 와 실제 autograd 의 최대 정확도 (leaf max|Δ|=0 ·
 bounded plumbing; autograd·AdamW 모두 개별 입증완료) — 별도
 module-level surface 작업 (ag_tape→decoder layout 의존), 다음
 cycle. gap(c/d/e) 미착수.
+
+**Test 15 (RFC 043 §Surface train_step, LANDED 0a5faad7)**:
+`_agt_decoder_step` (ag fwd→gn2→CE seed→ag_backward_reg→registry
+grad 를 dense flat Mg 로 gather, W transpose-back, tied tok_emb =
+embed-scatter+lm-head 누적) + `opt_adamw_step`, N=4 step vs
+`nn_decoder_train_step` 동일 init:
+```
+max|Δ gn2| per-step = 0  정확  (loss 궤적 bit-identical 4-step)
+max|Δ M| after 4 AdamW = 4.58e-16  (machine-eps ≪ 1e-9)
+```
+gn2 (forward-only metric) 4-step 전부 **bit-identical**; M 은 bwd
+machine-eps grad 가 4 AdamW 통과로 machine-eps 만 발산. TRAINSTEP-
+PASS. **gap(b) tail CLOSED.**
+
+**최종 status: gap(b) autograd 자동화 FULLY CLOSED.** 15/15 ALL
+PASS — leaf 12/12 byte-eq · single-block fwd byte-eq · full
+n_layer e2e machine-eps (tied fan-in) · N-step train_step (gn2
+bit-identical · M machine-eps). generic ag_tape 가 RFC 043
+§Surface 전체 training loop 을 hand-written 과 실제 autograd 의
+최대 정확도로 일치 — 측정 입증. **잔여 GOAL = gap(c) shape-
+generic sweep · gap(d) forge kernel · gap(e) model DSL (미착수).**

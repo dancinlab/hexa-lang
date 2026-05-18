@@ -1425,3 +1425,14 @@ full n_layer end-to-end machine-eps incl. tied fan-in; Decision 6) ·
 gap(c/d/e) 미착수. 잔여 gap(b) tail = RFC 043 §Surface train_step
 (ag_backward_reg + 기존검증 opt_adamw_step = bounded plumbing,
 별도 module surface) — 다음 cycle. multi-cycle, oracle-gated, $0.
+
+**Test 15 train_step (LANDED 0a5faad7)**: ag fwd+bwd+AdamW N=4
+step vs nn_decoder_train_step 동일 init → **gn2 궤적 max|Δ|=0
+정확 bit-identical** (4-step), M 4.58e-16 (machine-eps ≪1e-9).
+TRAINSTEP-PASS. flame_ag_tape_test **15/15 ALL PASS**.
+
+**gap(b) autograd 자동화 FULLY CLOSED** — generic ag_tape 가 RFC
+043 §Surface 전체 train loop 을 hand-written 과 실제 autograd
+최대 정확도로 일치 (측정). GOAL 진척: gap(a) ✅ · gap(b) ✅
+FULLY CLOSED · 잔여 gap(c) shape-generic sweep · gap(d) forge
+kernel · gap(e) model DSL 미착수. multi-cycle, oracle-gated, $0.
