@@ -5,6 +5,10 @@
 `g_train_flame_not_pytorch upstream_downstream_invariant`; this is a
 patch-request only.
 
+**Status**: `rfc-drafted 2026-05-19 — RFC 059 drafted (3-cycle phasing:
+dual-logits → multi-term grad → PureFieldFFN); first-cycle scaffold
+landed; full implementation = multi-cycle, tracked by RFC 059`.
+
 ## Problem
 
 anima's canonical training model is ConsciousDecoderV2
@@ -95,3 +99,37 @@ forbids. Hence: upstream patch-request, not a downstream workaround.
 g3: no unmeasured perf/compat claim. The vanilla core IS confirmed
 Path-A compatible (measured: compiles + d32 oracle converges). Only
 the physics-overlay extension surface is the gap.
+
+## Resolution-plan — 2026-05-19
+
+- **RFC drafted**: `inbox/rfc_drafts_2026_05_12/rfc_059_flame_path_a_dual_head_multiterm_grad_purefieldffn.md`
+  (number chosen as next-unused after RFC 058 forge_transpose_scatter_kernel;
+  drafts dir contiguous tail at 020..058).
+- **3-cycle phasing** (each cycle = independent commit + falsifier gate):
+  1. **Cycle 1** — dual logits head (§3.1 of RFC). Adds
+     `m_off_head_g`, `mc_off_logits_g`, `m_total_dual`, `mc_total_dual`,
+     `nn_decoder_fwd_dual`, `nn_decoder_grad_dual`. Existing symbols
+     (`m_total`, `nn_decoder_fwd`, `nn_decoder_grad`, `nn_lm_head_bwd`)
+     untouched → F-RFC059-D32-PRESERVE + F-RFC059-D768-PRESERVE byte-eq.
+  2. **Cycle 2** — multi-term aux-grad seed (§3.2). Renames
+     `nn_decoder_grad` impl → `nn_decoder_grad_with_aux(...,
+     d_aux_logits_a, d_aux_logits_g)`; original symbol becomes wrapper
+     that passes `0, 0` (= byte-identical). F-RFC059-C2-NIL-AUX-PRESERVE
+     + F-RFC059-C2-LINEARITY.
+  3. **Cycle 3** — PureFieldFFN block-layout swap (§3.3). Parallel
+     module `decoder_block_purefield_lib.hexa` with
+     `bp_total_purefield = 2*d + 2*d*d + 2*kvd*d + 4*h*d` (Wa_in,
+     Wa_out, Wg_in, Wg_out + GELU). SwiGLU layout unchanged →
+     F-RFC059-C3-SWIGLU-PRESERVE.
+- **First-cycle scaffold landed** (this commit): RFC comment markers at the
+  5 touched call sites in `stdlib/flame/{decoder_lib,nn_lib,decoder_block_lib}.hexa`.
+  Zero behavior change. All parse clean via `hexa_real parse`. The d=768·12L
+  Path-A primary path's byte-eq is unaffected (no code change, only
+  comments). Existing F-RFC043-DECODER-GRAD-EXACT + F-RFC043-TRAIN-* +
+  d768·12L wall closure (Phase 4-D-9 `28e9d648`) all preserved by construction.
+- **Open design decisions** (RFC §10 — user-confirmable before cycle 1
+  implementation starts): aux-seed interface granularity (separate vs
+  fused), nil sentinel convention, GELU exact-vs-tanh, per-layer block-mode
+  mechanism.
+- **Out-of-scope of this resolution-plan**: interp dual-track exempt
+  (`g_flame_compiler_only` — flame is compiled-native only).

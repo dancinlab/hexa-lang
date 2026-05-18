@@ -627,6 +627,12 @@ pub fn nn_lm_head_fwd(temb: int, zT: int, logits_out: int, V: int, d: int) {
 //   We ACCUMULATE dtemb_out += dl ⊗ zT (so caller can pre-set or
 //   subsequently add the scatter term).
 //   dzT_out is overwritten (it has no other contributor).
+//
+// RFC 059 cycle-1 anchor: dual-head adds a sibling `nn_lm_head_g_bwd` that
+// operates on the independent head_g weight slab (NOT tied to tok_emb) and
+// accumulates dzT_out += headᵀ_g · dl_g. The tied-head bwd here stays
+// untouched (head_a remains tied to tok_emb). See
+// inbox/rfc_drafts_2026_05_12/rfc_059_*.md §3.1.
 pub fn nn_lm_head_bwd(temb: int, zT: int, dl: int,
                       dtemb_out: int, dzT_out: int, V: int, d: int) {
     // accumulate dtemb += dl ⊗ zT

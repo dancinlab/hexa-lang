@@ -589,3 +589,59 @@ Phase 4-D-5 layer status (honest):
 (d=32·3L stays CPU byte-eq; d=768·12L → cuBLAS). Then re-fire #5 for the
 actual F-RFC046 wall measurement.
 분석: `state/flame_phase4d_5_4_2026_05_17/PHASE4D_5_4_ANALYSIS.md`.
+
+---
+
+## 2026-05-19 — RFC 059 drafted (anima Path-A dual-head + multi-term grad + PureFieldFFN, multi-cycle scoping)
+
+Inbox patch `inbox/patches/flame-path-a-dual-head-and-multiterm-grad.md`
+(anima §71, 2026-05-19) — anima downstream blocked from adopting flame
+Path-A for its canonical ConsciousDecoderV2 training because three
+physics-overlay extensions need shape-changes to Path-A's parameter
+layout / grad path that anima can't make downstream (`@F f3`).
+
+**RFC 059** drafted: `inbox/rfc_drafts_2026_05_12/rfc_059_flame_path_a_dual_head_multiterm_grad_purefieldffn.md`.
+3 independent cycles, each with default-off byte-eq invariant:
+
+- **Cycle 1** — dual logits head. New `m_off_head_g` / `mc_off_logits_g`
+  / `m_total_dual` / `mc_total_dual` / `nn_decoder_fwd_dual` /
+  `nn_decoder_grad_dual`. Existing `m_total` / `mc_off_logits` /
+  `nn_decoder_fwd` / `nn_decoder_grad` / `nn_lm_head_bwd` untouched.
+- **Cycle 2** — multi-term in-autograd grad. `nn_decoder_grad` becomes
+  a wrapper into `nn_decoder_grad_with_aux(..., d_aux_logits_a,
+  d_aux_logits_g)` with `0, 0` defaults = byte-identical to current.
+- **Cycle 3** — PureFieldFFN dual-engine block. Parallel module
+  `decoder_block_purefield_lib.hexa` with `bp_total_purefield = 2*d +
+  2*d*d + 2*kvd*d + 4*h*d` (Wa_in/Wa_out + Wg_in/Wg_out, GELU). SwiGLU
+  layout in `decoder_block_lib.hexa` unchanged. Deprioritized by patch.
+
+**Cycle-1 scaffold landed in this commit** (RFC-only-comment-markers,
+zero behavior change): comment markers at the 5 call sites in
+`stdlib/flame/{decoder_lib,nn_lib,decoder_block_lib}.hexa` that cycle 1/2/3
+will edit. All three files parse clean via `/Users/ghost/.hx/bin/hexa_real
+parse`. Existing F-RFC043-DECODER-GRAD-EXACT 2/2 PASS + F-RFC043-TRAIN-*
+3/3 PASS + Phase 4-D-9 d768·12L wall closure (`28e9d648`, 191–268s vs
+PyTorch 336.85s) all preserved by construction (no code emitted —
+only comments).
+
+**Falsifier battery** (RFC 059 §6, pre-registered): F-RFC059-D32-PRESERVE,
+F-RFC059-D768-PRESERVE, F-RFC059-TRAIN-DESCENT, F-RFC059-C1-{DUAL-FWD-MATH,
+DUAL-GRAD-EXACT}, F-RFC059-C2-{NIL-AUX-PRESERVE, LINEARITY},
+F-RFC059-C3-{GRAD-EXACT, SWIGLU-PRESERVE}, F-RFC059-ANIMA-INTEGRATION
+(downstream anima reports back the patch's measured 7.97113 → 8.98e6×
+collapse oracle).
+
+**Open design decisions** (RFC §10): aux seed interface (separate
+`d_aux_logits_a` + `d_aux_logits_g` vs single fused length `2*V`), nil
+sentinel (`farr_id==0` vs explicit bool), GELU exact vs tanh-approx,
+per-layer block-mode mechanism. User confirmation before cycle 1
+implementation starts.
+
+**This is RFC + cycle-1 scaffold, NOT full implementation** (g3 honesty —
+the feature is not done; three independently-testable cycles follow,
+each separately user-gated).
+
+cross-link: inbox patch · RFC 059 · this entry · Phase 4-D-9 closure
+memory [[flame-phase4d9-closure]] · GOAL ① north-star
+[[flame-general-pytorch-replacement-goal]].
+

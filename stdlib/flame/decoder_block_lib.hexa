@@ -71,6 +71,13 @@ pub fn bp_total(d: int, nh: int, nkv: int, h: int) -> int {
     return 2*d + 2*d*d + 2*_kvd_of(d, nh, nkv)*d + 3*h*d
 }
 
+// RFC 059 cycle-3 anchor: PureFieldFFN dual-engine block ships as a parallel
+// module (stdlib/flame/decoder_block_purefield_lib.hexa) with its own
+// `bp_total_purefield = 2*d + 2*d*d + 2*kvd*d + 4*h*d` (two Wa_in/Wa_out
+// + two Wg_in/Wg_out engines, GELU activation, out = a - g). This SwiGLU
+// layout (3*h*d) stays unchanged; the parallel module is selected per-
+// decoder. See inbox/rfc_drafts_2026_05_12/rfc_059_*.md §3.3 + §5 cycle 3.
+
 // ── Bc (cache) offset helpers ──────────────────────────────────────────
 pub fn bc_off_Xout(T: int, d: int, nh: int, nkv: int, h: int) -> int { return 0 }
 pub fn bc_off_hstate(T: int, d: int, nh: int, nkv: int, h: int) -> int { return T*d }
