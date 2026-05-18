@@ -586,3 +586,27 @@
   status: pending
   opened: 2026-05-18
   detail: patches/modifyotherkeys-non-ascii-decoder-gap.md
+
+- id: input-decoder-chr-vs-from_char_code
+  source_commit: pending
+  source_files:
+    - self/tui/input.hexa
+  compiler_impact: |
+    Self-hosted TUI layer, no compiler change. Two `chr(cp)` calls
+    in codepoint→UTF-8 paths swapped for `from_char_code(cp)`.
+    hexa-lang sources are read fresh at every downstream `hexa
+    build`, so consumers only need their own rebuild — no toolchain
+    (hexa.real / hexa_v2) rebuild required.
+  selftest_delta: "0 (no new self/test_*.hexa — covered by downstream wilson decoder_smoke + interactive tmux repro)"
+  downstream_consumer: |
+    wilson harness-cli — Korean / CJK / emoji input. The sister
+    patch `modifyotherkeys-non-ascii-decoder-gap` (bf943479) lifted
+    the ASCII ceiling on the modifyOtherKeys branch but the printable
+    emit still used byte-truncating `chr(cp)`, so codepoints arrived
+    at the editor as their low byte (안=0xC548 → 'H'=0x48). This
+    follow-up swaps both decoder paths to `from_char_code` so the
+    full UTF-8 sequence reaches the editor buffer. Verified end-to-
+    end via `tmux send-keys -l '안녕 하세요 🌌'`.
+  status: pending
+  opened: 2026-05-18
+  detail: inbox/patches/input-decoder-chr-vs-from_char_code.md
