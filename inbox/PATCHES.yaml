@@ -633,3 +633,65 @@
   status: pending_external
   opened: 2026-05-18
   detail: inbox/patches/hx-stale-need-singularity-org-after-dancinlab-rename.md
+
+- id: stdlib-booksim-rederive-from-hexa-arch-rfc003
+  source_commit: d5a63a82
+  source_files:
+    - stdlib/booksim/README.md
+    - stdlib/booksim/anynet.hexa
+    - stdlib/booksim/iq_router.hexa
+    - stdlib/booksim/leighton.hexa
+    - stdlib/booksim/sweep.hexa
+    - stdlib/booksim/traffic.hexa
+    - stdlib/booksim/wire_delay.hexa
+    - stdlib/booksim/anynet.hexa.stub
+    - stdlib/booksim/booksim.hexa.stub
+    - stdlib/booksim/iq_router.hexa.stub
+    - stdlib/booksim/leighton.hexa.stub
+    - stdlib/booksim/sweep.hexa.stub
+    - stdlib/booksim/traffic.hexa.stub
+    - stdlib/booksim/wire_delay.hexa.stub
+  compiler_impact: |
+    Pure stdlib/booksim/ addition (14 files, +4005) — leaf modules,
+    transpile-only, no compiler/ or self/ change. Clean-room
+    re-derivation of BookSim2 NoC-sim (rfc_003) absorbed FROM
+    hexa-arch into stdlib per hexa-arch design.md D15 (stdlib is
+    hexa-lang's exclusively; hexa-arch is the consumer).
+  selftest_delta: "0 (modules carry own `fn main()` self-tests per rfc_003 idiom; NOT yet wired into the hexa-lang canonical selftest harness count — honest, g3: do not claim a delta until wired)"
+  downstream_consumer: |
+    hexa-arch rfc_003 / rfc_001 (BookSim2 NoC-sim absorption). This
+    is the modules' SSOT home per hexa-arch design.md D15/D19;
+    hexa-arch references this hexa-lang location, does not carry a
+    stdlib/ tree.
+  status: pending
+  opened: 2026-05-19
+  note: |
+    Commit d5a63a82 is on LOCAL HEAD of rfc043-hexa-torch (branch
+    ahead 17, UNPUSHED). Needs: hexa-lang-session review + push +
+    inbox_sync verify. Filed from the hexa-arch session per the
+    "inbox 넣었어?" handoff request (D19 boundary: hexa-arch designs,
+    hexa-lang owns/implements/pushes stdlib).
+
+- id: comb-cite-hexa-arch-rfc002-f1f2
+  source_commit: 61866308
+  source_files:
+    - comb/COMB.tape
+    - comb/PLAN.md
+    - comb/T1A_analytical.md
+    - comb/T1_experiment.md
+    - comb/sim/README.md
+  compiler_impact: |
+    Docs-only (comb/ 5 files, +168/-6) — no stdlib/ or compiler/
+    change, so the "both trees" check is N/A. Adds the cross-repo
+    citation of hexa-arch rfc_002 F1F2 typed-interface contract.
+  selftest_delta: "0 (docs-only)"
+  downstream_consumer: |
+    hexa-arch rfc_002 (F1F2 typed-interface contract) — closes the
+    comb-side half of the cross-repo citation.
+  status: applied
+  applied_at: 2026-05-18
+  note: |
+    Already PUSHED to origin/rfc043-hexa-torch (verified
+    2026-05-19). Filed for inbox drift-tracking completeness only —
+    no action needed. Corrects an earlier hexa-arch-session
+    mis-statement that this commit was unpushed (g3).

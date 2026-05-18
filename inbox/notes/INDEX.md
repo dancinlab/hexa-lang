@@ -72,6 +72,12 @@ stdlib / tools.
 - `2026-05-14-hexa-chip-absorption-plan.md` — hexa-chip → hexa-lang
 - `2026-05-14-hexa-matter-absorption-plan.md` — hexa-matter → hexa-lang
 - `2026-05-14-hexa-space-absorption-plan.md` — hexa-space → hexa-lang
+- `2026-05-19-hexa-arch-rfc006-yosys-handoff.md` — hexa-arch → hexa-lang
+  **HANDOFF** (actionable, not historical): booksim `d5a63a82` push +
+  rfc_006 Yosys §4 impl + g3 correction. See `PATCHES.yaml` ids
+  `stdlib-booksim-rederive-from-hexa-arch-rfc003` /
+  `comb-cite-hexa-arch-rfc002-f1f2`. (count above is pre-2026-05-17
+  triage; this entry added 2026-05-19)
 
 ### infra / tooling / policy (12 notes)
 
