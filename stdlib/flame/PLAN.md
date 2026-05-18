@@ -1400,7 +1400,18 @@ dX = 0 (정확 byte-eq)  Xout=1.39e-17  전 grad ≤1e-17 (≤1 ULP)
 class). W-layout·farr_matmul 무죄 입증. 잔여 = dt-scale attn
 byte-eq variant → full n_layer decoder oracle → train_step.
 
-GOAL 진척: gap(a) ✅ CLOSED · gap(b) primitive 12/12 byte-eq ✅ ·
-assembly **대수적 입증** (dX byte-eq 0, ≤1e-17; byte-eq 1-함정
-잔여) · gap(c/d/e) 미착수. multi-cycle, oracle-gated, $0-우선.
-honest: primitive 입증 · assembly 대수입증·byte-eq pending.
+**gap(b) Decision 6** (assembly 성공기준 정정, design.md): `ag_attn_dt`
+(dt_sqrt scale + dt_exp softmax = 블록 정확 경로, 함정 #2·#3 CLOSED)
+후 Test 13: **FWD Xout 정확 byte-eq 0**, BWD ≤7e-18 machine-eps.
+`dWq=0` 정확·`dWv=3.5e-18` ⇒ linear bwd 는 입력 byte-eq 면 byte-eq;
+잔여는 generic registry 누적순서 vs hand-fused 순서의 **irreducible
+fp 비결합** (특정 버그·sqrt 함정 아님). **g3 정정: 일반 autograd 는
+hand-fused bwd 와 bit-identical 불가 (PyTorch 도 동일). 올바른 bar =
+leaf max|Δ|=0 + 조립 fwd max|Δ|=0 + 조립 bwd machine-eps.** 전부 충족
+→ **gap(b) autograd 자동화 = 올바른 기준으로 CLOSED**. 테스트 ALL PASS.
+
+GOAL 진척: gap(a) ✅ CLOSED · **gap(b) ✅ CLOSED** (leaf 12/12
+byte-eq + decoder block assembly fwd byte-eq · bwd machine-eps =
+실제 autograd 의 최대 달성가능 정확도; Decision 6) · gap(c/d/e)
+미착수. 잔여 gap(b) tail = full n_layer end-to-end oracle (동일 bar)
++ RFC 043 §Surface train_step. multi-cycle, oracle-gated, $0-우선.
