@@ -228,3 +228,19 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   `json_parse` 활용; printf `%.3f`/Python repr list 형식 hand-roll.
   잔여 잡음 LANDSCAPE.md(타인) 미혼입. **측정된 거리: T3 2/104
   검증 + 공유 validator lib + 캐노니컬 dumps 자산.**
+- 2026-05-18 `c036d24` (hexa-bio) — T3 **+1 게이트** + lint 공유 lib:
+  `_hexa_bridge/module/tape_lattice_honesty_lint.hexa` (PASS/SKIP/FAIL
+  verdict; deriv-WARN 사이드채널은 cohort 가 verdict-only 소비라 생략)
+  + `_hexa_bridge/selftest/tape_lattice_honesty_cohort.hexa` (root
+  `*.tape` 순회, `*.log.tape`/`AGENTS.tape` 제외, tally). `.sh` 와
+  **stdout 완전 일치**(`  tape-lint cohort: PASS=69 SKIP=0 FAIL=0`)
+  + exit 0. **측정된 거리: T3 3/104.**
+- 2026-05-18 — **🔬 추가 상류 갭 발견** (`registry_consistency_audit`
+  시도 중): 두 가지 동시 차단 — (1) hexa runtime `json_parse` 가
+  `-Infinity`(CPython 비표준 확장) 미지원 → `to_int: not an integer:
+  "-Infinity"` 에러; (2) 스케일: 7191 rows × validator-per-row(grep
+  -E exec) = **6:26 wall** — hexa 인터프리트+exec 스케일 한계. 조치:
+  깨진 `.hexa` **삭제**(union 이 `.py` 로 자동 fallback → 무회귀).
+  본 트랙 범위 외(상류 runtime 트랙 별도). 영향: registry-iteration
+  스케일 게이트는 deferred. **누적 측정된 거리: T3 3/104 + 두 상류
+  이슈 정밀 핀.**
