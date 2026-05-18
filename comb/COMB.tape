@@ -61,3 +61,4 @@
   t2_pdk_synth = "comb/rtl/pdk_synthesis.md — 🎉 cross-PDK + SKY130 ASIC mapping. FPGA Xilinx 1.37× + Lattice ECP5 1.41× + **SKY130 ASIC sky130_fd_sc_hd 1.516×** (d4=61762.99 μm², d6=93608.53 μm²). F1 verdict robust under measured ASIC area: hex 33% lat win, 29% energy win at t_r6=152. cross-over t_r6=276 → 1.8× margin. SKY130 .lib 12.8MB cloned from efabless mirror."
   decouple_refine = "comb 가 안 하는 것 = 외부 EDA *흡수* (BookSim2/Yosys/OpenROAD/SKY130 — hexa-arch). comb 가 하는 것 = 자체 graph/non-contention 모델 측정."
   next_gate = "(a) RTL 스텁 (hexa→Verilog emitter, comb-side, T2 RTL 측면) (b) T1-B-full = hexa-arch[chip] BookSim2 흡수 (congestion·real-workload 측정)"
+  t2_openroad_install = "🎉 OpenROAD cmake CONFIGURED 2026-05-18. deps: brew(13) + source(LEMON-coin 1.3.1, CUDD 3.0.0). make -j4 background (PID 25059, ~30-60min). 완료 시 P&R + GDSII 가능 → T3 'hexa-arch 절대 의존' 가정 무너짐."

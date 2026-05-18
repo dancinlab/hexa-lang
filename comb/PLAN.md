@@ -125,3 +125,22 @@
   ASIC PDK-mapped 단계 도달. T2 RTL ~85% → ~95% (PDK-mapped area 실측
   완료, OpenSTA timing + OpenROAD P&R + DRC 만 남음 — 별도 도구 설치).
   T2 overall ~80-85%. T3 = 0% (P&R + GDSII 미수행).
+- 2026-05-18 — **🎉 OpenROAD cmake CONFIGURED + make 빌드 시작**:
+  의존성 전수 해결 (다단계):
+    brew: bison · lemon(parser) · spdlog · or-tools · swig · flex ·
+          googletest · yaml-cpp · libffi · libomp · cmake · boost · eigen
+          · tcl-tk · klayout(cask)
+    source: COIN-OR LEMON graph 1.3.1 (cs.elte.hu, CMakeLists 패치) →
+            /opt/homebrew/opt/coin-lemon
+            CUDD 3.0.0 (github ivmai/cudd) → /opt/homebrew/opt/cudd
+    cmake flags: OpenMP_CXX_FLAGS (macOS clang + libomp), LEMON_DIR,
+                 CUDD_LIB, TCL_LIBRARY, FLEX_INCLUDE_DIR,
+                 BISON_EXECUTABLE 명시
+  cmake configure: Makefile 생성 (4.5s generate). repo 1.7GB / 8551 files
+  + submodules (OpenSTA, abc). make -j4 background (PID 25059) — 빌드는
+  3rd-party ABC + odb/def + libabc 부터 진행 중. 추정 30-60min.
+  → 완료 시 `/tmp/OpenROAD/build/src/openroad` 바이너리 생산. 그 시점
+  부터 comb 가 P&R 직접 실행 가능 (router_d6 → routed netlist → GDSII).
+  T3 의 "별도 hexa-arch[chip] 절대 의존" 가정이 깨짐 — comb-side 에서도
+  도구 풀체인 설치 가능. 단 P&R 실행 자체 (SDC + def + lef 설정 +
+  routing 단계) 는 별도 multi-cycle 작업.
