@@ -488,6 +488,21 @@ user 의 cost-ascending 명시). **$0 자율 surface 완전 소진**:
 GOAL 5 gap 중 4 fully CLOSED + gap(d) $0-prep CLOSED, gap(d) 의
 GPU 측정만 별도 cost 사이클 (pre-registered falsifier 준비완료).
 
+> **★ MEASURED OUTCOME (2026-05-18, 3-fire — pre-registered
+> falsifier 발사·판정, g3 의무):** 예측 **3.72× FALSIFIED**.
+> per-op forge-routing (RoPE 커널 byte-eq + matmul cuBLAS
+> dim-gate) 적용 후 generic d768·12L = **0 step / 900s, GPU
+> util 3%** (Decision 11). 예측기는 **compute** host_frac 엔
+> 구조 faithful 였으나, 지배항은 compute 가 아니라 **per-op
+> H2D/D2H transfer + host orchestration** (device residency
+> 無) 였음 — eff20 모델이 미포함한 항. 즉 "per-op forge-route
+> 면 3.72×" 가설은 측정으로 반증; 실제 성능 경로 = device
+> residency (RFC 056). 예측이 틀린 게 아니라 **예측 범위가
+> compute-only 였고 측정이 그 범위 밖(transfer-bound)임을
+> 드러냄** — instrument-first 가 정확히 이걸 잡으라고 있는
+> 것. ag_fuse 예측기는 compute 모델로 유효하나 d768 wall 의
+> binding constraint 는 아님 (residency 가 binding).
+
 ## Decision 9 — gap(d) closure 경로 = forge 커널 구현 먼저 [user gate]
 
 **picked (user gate 2026-05-18, "GPU-fire => go" + 후속 contested
