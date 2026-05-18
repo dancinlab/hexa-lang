@@ -11,9 +11,15 @@
 > 현 단계: **STAND-ALONE CLOSURE 도달** (2026-05-18) — T1 + T2 sim + 5
 > falsifier verdict 모두 land. F1 fabric cycle-accurate N=7 = **honest
 > refutation** (goal '입증or동일엄밀도 반증' 의 반증 path 만족, RFC 057
-> §5 Hales caveat 실측 확인). 외부의존 항목 (T2 tapeout routed P&R · T3
-> 물리설계) 은 `~/core/hexa-arch` 의 chip 도메인으로 **typed-interface
-> 핸드오프** (RFC 002 schema_version 1.0). 단독 SSOT = `comb/CLOSURE.md`.
+> §5 Hales caveat 실측 확인). **T3 design-only DELIVERED** —
+> hexa-arch[chip] 가 NoC 정량설계 produce (rfc_001 §8 baseline + §9
+> 46-record sweep 22nm/7nm × 1-6GHz × 4 placement, Leighton 6/6 PASS),
+> comb 가 rfc_002 typed-interface 로 consume. §9 가 comb N=7 반증의
+> deferred re-test — N=64 IQ-iSLIP 에서 d6 LEAN-PASS (상보적, verdict
+> enum INCONCLUSIVE 유지·regime claim 금지). routed-GDS(Part E)·T2
+> tapeout routed P&R 만 EDA-execution compute-gate (OpenROAD binary
+> roster 부재 — design gap 아님). SSOT = `comb/CLOSURE.md` +
+> `comb/T3_DESIGN_FINAL.md`.
 >
 > 상태: **CLOSED (stand-alone scope)** · 2026-05-18 · RFC 057 확정 · 4축
 > 전개 + 딥리서치 2건 + T1A 해석 + T2 sim 8/8 closed-form + same-N=7

@@ -141,7 +141,20 @@ of any perf claim. Audit clean.
 | T2 sim (cycle-accurate iverilog)      | ✅ CLOSED via refutation (F1-full) | fabric_{hex,mesh}7_sustained_tb + d4_vs_d6 compare |
 | T2 RTL synth (cross-PDK + ASIC area)  | ✅ CLOSED  | synth_comparison.md, pdk_synthesis.md, .sky130.v   |
 | T2 tapeout-ready (STA / P&R / DRC)    | ⏸ DEFERRED — handoff to hexa-arch[chip] | rtl/orfs/sky130hd/router_d{4,6}/ inputs staged    |
-| T3 (physical-realization design)      | ⏸ DELEGATED — `~/core/hexa-arch` chip domain | HANDOFF_TO_HEXA_ARCH.md                            |
+| T3 (physical-realization design)      | ✅ DESIGN-COMPLETE (design-only) · routed-GDS execution compute-gated | T3_DESIGN_FINAL.md                                 |
+
+> **T3 update (2026-05-18)**: T3 design-only deliverable DELIVERED.
+> hexa-arch[chip] produced the NoC architectural design (rfc_001 §8
+> baseline + §9 46-record sweep across 22nm/7nm, 1-6GHz, 4 placements;
+> Leighton 6/6 PASS), consumed by comb via rfc_002 typed interface.
+> The §9 sweep is exactly the larger-N + multi-issue re-test comb's
+> N=7 refutation deferred to: at N=64 IQ-iSLIP, d6 LEAN-PASS on
+> latency (0.81-0.89×) and throughput (1.19-1.81×), clock-robust 1-6
+> GHz — empirically vindicating comb's pre-registered reversal caveat.
+> Verdict enum stays INCONCLUSIVE (gate open, g3 — not a regime
+> claim). Routed-GDS (Part E) is an EDA-execution gate of the same
+> character as the explicit fab non-goal — design complete, execution
+> compute-gated. SSOT = `comb/T3_DESIGN_FINAL.md`.
 
 T2 sim closure is **authoritative for the cycle-accurate small-N
 test point** (rigorous refutation path of the goal). T2 tapeout and

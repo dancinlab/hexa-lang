@@ -97,7 +97,15 @@
   track_t2_sim = "CLOSED via refutation — fabric_{mesh,hex}7_sustained_tb + d4_vs_d6_fabric_compare.md"
   track_t2_synth = "CLOSED — synth_comparison + pdk_synthesis (FPGA + ASIC SKY130) + synth_netlists/router_{d4,d6}.sky130.v"
   track_t2_tapeout = "DEFERRED — handoff to hexa-arch[chip]; rtl/orfs/sky130hd/router_d{4,6}/ inputs pre-staged (ns-correct SDC 5.0ns/200MHz)"
-  track_t3 = "DELEGATED — ~/core/hexa-arch chip domain (HANDOFF_TO_HEXA_ARCH.md)"
+  track_t3 = "DESIGN-COMPLETE (design-only) — Part D NoC architectural design produced by hexa-arch[chip] (rfc_001 §8 baseline + §9 46-record sweep 22nm/7nm × 1-6GHz × 4 placements; Leighton 6/6 PASS), consumed via rfc_002 typed interface. Part E routed-GDS = EDA-execution compute-gate (OpenROAD binary absent on roster — not a design gap). SSOT comb/T3_DESIGN_FINAL.md."
+
+@D comb_t3_f1_reconcile := "comb⇄hexa-arch[chip] F1 reconciliation" :: note [d=2026-05-18 active]
+  comb_n7 = "N=7 R=1 hex region, single-issue 1-cycle LL sink, ~50% sustained inj, uniform/hotspot/stencil/diameter → d4 mesh wins all (hex 6-port center concentration bottleneck). FALSIFIED at this test point (comb/CLOSURE.md b5e9ee9b)."
+  hexa_arch_n64 = "N=64 8×8 grid, IQ-iSLIP VC8 buf8 pkt20 (production router), tornado, per-link 90/162 ps/mm (22/7nm). d6 LEAN-PASS: zero-load lat 0.81–0.89× · avg hops 0.78–0.84× · saturation thr 1.19–1.81×. clock-robust 1-6 GHz (never flips). §9(i) placement CLOSED (king/brick > axial), §9(ii) clock CLOSED, §9(iii) FinFET partly open."
+  reconcile = "NOT contradictory — orthogonal effects. comb single-issue sink exposes hex center concentration (small-N + weak-router penalty); hexa-arch IQ-iSLIP VC relieves center → hex lower hop count + higher bisection (Leighton B3) dominates. comb's pre-registered reversal caveat (larger N / multi-issue may flip) empirically vindicated."
+  honesty = "verdict enum INCONCLUSIVE both sides (rfc_002 §8 measurement_gate=GATE_OPEN, absorbed=false). LEAN-PASS-d6 = informal aggregate at measured points, placement-conditional. NOT a regime/paradigm claim (g3). n=6 = topology commitment only (F5 PASS)."
+  |> "comb/T3_DESIGN_FINAL.md §2 + ~/core/hexa-arch/exports/chip/noc/f1f2/pair_verdicts/"
+  ~> "comb_closure.verdict_f1 'authoritative re-test = hexa-arch §9' — re-test now produced, result recorded INCONCLUSIVE/lean-d6"
   ssot = "comb/CLOSURE.md (closure statement) · comb/PLAN.md (chronological) · this entry (tape index)"
   rule = "Subsequent comb-side work = scope-extension (new falsifier · new test point · new axis lowering), NOT closure of original RFC 057 scope."
   ~> "comb_ultimate (궁극 최종골) — equal-rigor refutation path satisfied"

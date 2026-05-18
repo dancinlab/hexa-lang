@@ -257,3 +257,27 @@
   본 entry = comb stand-alone scope closure marker. 후속 comb-side
   작업은 scope-extension (신규 falsifier · 신규 test point · 신규
   axis lowering) — 본 RFC 057 scope closure 는 아님.
+- 2026-05-18 — **T3 design-only deliverable DELIVERED**
+  (`comb/T3_DESIGN_FINAL.md`). T3 를 두 part 로 분해:
+    Part D (NoC architectural design) ✅ COMPLETE — hexa-arch[chip]
+      가 produce (rfc_001 §8 BookSim2 baseline + §9 46-record sweep:
+      22nm/7nm × 1-6GHz × 4 placements; Leighton oracle 6/6 PASS),
+      comb 가 rfc_002 typed-interface 로 consume.
+    Part E (routed-GDS execution) ⏸ EDA-execution compute-gate —
+      OpenROAD binary roster 부재 (ubu-2 banner timeout 지속 확인 ·
+      mini no-docker · macOS 금지). design gap 아님 — RTL/synth/PDK/
+      ORFS-config 전부 staged + predicted P&R falsifier 사전등록.
+  **핵심 발견 — comb⇄hexa-arch[chip] F1 reconciliation**: hexa-arch
+  §9 가 정확히 comb 의 N=7 반증이 deferred 한 "larger-N + multi-issue"
+  re-test. comb N=7 (single-issue LL sink) → d4 wins (hex center
+  concentration); hexa-arch N=64 (IQ-iSLIP VC8) → d6 LEAN-PASS lat
+  0.81-0.89× thr 1.19-1.81× clock-robust 1-6GHz. **상보적, 모순 아님**
+  — comb 의 사전등록 reversal caveat (larger N/multi-issue 시 flip
+  가능) 가 실증됨. verdict enum 양쪽 INCONCLUSIVE 유지 (rfc_002 §8
+  GATE_OPEN, absorbed=false) — regime/paradigm claim 금지 (g3).
+  synth-area oracle 1.5156× = hexa-arch §9 cost model
+  router_port_area_norm 1.516 과 정확 일치 (loop closed).
+  T3 = design-only (RFC 057 §6) 정의 충족: 물리실현 *설계* 가
+  hexa-arch[chip] 통해 produce·quantify 됨. routed-GDS 는 fab 비목표와
+  동일 성격의 execution gate. CLOSURE.md T3 row · COMB.tape
+  comb_t3_f1_reconcile · README 갱신 동반.
