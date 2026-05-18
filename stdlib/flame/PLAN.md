@@ -1790,18 +1790,47 @@ builtin → runtime.c `#ifdef HEXA_CUDA` dim-gate 가능 (hexa
 4. g3: cycle falsifier 측정 전 closure 주장 0. 측정값만 PLAN
    갱신.
 
-**현재 상태 (2026-05-19, 본 cycle 진행): mk2-C0 ✅ (PR #68) ·
-C1a ✅ ($0, Mac 19/19) · C1b ✅ CLOSED (Mac 19/19 + A100 oracle
-max|Δ|=0 양 config) · C2 ✅ CLOSED (A100 oracle max|Δ|=0, T=1024
-+ T=4096 d=768, commit `1c98b5b9`) · C3 ✅ wired (lazy-D2H farr_get/
-farr_set, commit `61e29993` + driver toggle `389e40a3`) · C4-fwd ✅
-wired (commit `2425e674`, oracle in-flight) · C4-bwd ✅ wired (commit
-`32d457b3`, oracle pending) · mk2-FINAL (d768 heavy fire) = post-
-oracle gate.** trainer C artifact regenerated with all forge
-dispatches (`flame_d768_agtape.c` — farr_set_out_disposition + add_gpu
-+ rmsnorm_mh_gpu + rope_gpu + silu_gate_gpu + attn_dt_fwd_gpu +
-attn_dt_bwd_gpu). g3: 측정-closure 전 100% 주장 0 (Stop hook 은
-측정 PASS 까지 fire; fabricate 금지).
+**현재 상태 (2026-05-19, mk2 측정 cycle 완료): mk2-C0..C4 byte-eq
+PASS ✅ · mk2-FINAL FALSIFIED (g3 honest)**:
+
+| cycle | 상태 | commit | oracle |
+|---|---|---|---|
+| C0 matmul dim-gate | ✅ | (PR #68) | hand-fused 191-268s |
+| C1a ag_add | ✅ | (Mac 19/19) | $0 |
+| C1b ag_silu_gate | ✅ | `e5faa8b0`/`b55ffeee` | A100 oracle max\|Δ\|=0 양 config |
+| C2 ag_rmsnorm_mh | ✅ | `1c98b5b9` | A100 max\|Δ\|=0 T=1024+T=4096 |
+| C3 lazy-D2H | ✅ | `61e29993`+`389e40a3` | (no-op 무회귀) |
+| C4-fwd ag_attn_dt | ✅ | `2425e674` | A100 max\|Δ\|=0 T=256+T=512 |
+| C4-bwd ag_attn_dt | ✅ | `32d457b3` | A100 max\|Δ\|=0 dQ·dK·dV |
+| **mk2-FINAL d768·12L** | **❌ FALSIFIED** | — | trainer_rc=124 wall=901s, step 1 미진입 |
+
+**측정 verdict (`state/agtape_d768_fire_2026_05_18/`)**:
+- GPU trajectory: 15초 burst (util→34%, mem 0→4175 MiB) → **14분 GPU 0%
+  idle** (mem 4175 MiB 유지).
+- 트레이서 stdout 은 "model size: 104024832 doubles" 에서 정지 → init
+  epoch (4 _agt_decoder_step 호출) 도 미완료.
+- Forge primitives 모두 byte-eq 검증된 상태에서도 wall 通過 不可.
+
+**re-localized blocker (mk2-C5)**: `_agt_decoder_step` (L88-141 +
+L188-218) 의 layer-당 weight slice/transpose host loop 와
+`nn_decoder_init` 의 per-element random fill 이 `t_get`/`t_set`
+HexaVal box 오버헤드를 100M+ 회 부담 → 14분 single-thread host
+hot loop. 측정으로만 식별 가능했던 3차 blocker.
+
+**mk2-C5 (next cycle, multi-session)**: batch device-side builtin
+신설 — `farr_copy_slice_gpu(src, soff, dst, doff, n)` ·
+`farr_transpose_gpu(src, soff, dst, rows, cols)` ·
+`farr_random_normal_gpu` (decoder init용). `_agt_decoder_step` +
+`nn_decoder_init` 호스트 스칼라 루프 ~250 line → 십수 개 builtin
+호출. cheap byte-eq oracle (각 슬라이스 / transpose / rng) →
+d768·12L heavy fire 재-측정. mk2 closure 의 진짜 binding cycle.
+
+g3: F-RFC046-AGTAPE-WALL falsified 사실은 솔직히 기록.
+hand-fused (option B) 트레이너는 이미 PyTorch eager 보다 빠른
+것이 검증됨 (`28e9d648` step1 wall 191-268s vs PyTorch 336.85s);
+mk2 = "generic ag_tape 도 동등하게 빠른가" 가 별개 가설이고,
+본 cycle 은 ag_tape 의 추가 3차 blocker (host-scalar box overhead)
+를 발견 + 측정 = honest progress, fabricate 없음.
 
 cross-link: 본 PLAN mk2 결정 절 · README.md Benchmark ·
 design.md Decision 11 · [[flame-general-pytorch-replacement-goal]].
