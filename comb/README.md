@@ -71,12 +71,34 @@ vs 기존: 폰노이만 = 비트+중앙버스(순차), 양자 = 큐비트 중첩
 
 ---
 
-## 다음 단계 — 축 선택 대기
+## 최종 verdict — CLOSED (stand-alone scope)
 
-1. **B축 먼저** (추천) — 육각 PIM 패브릭 골격: 셀 구조·6이웃 라우팅·dataflow 실행 모델
-2. **A축 먼저** — 6-값 논리 소자: 6개 안정 상태 물리 메커니즘, Shannon 잡음마진 분석
-3. **C축 먼저** — 폰노이만 탈피 실행 모델: 6-위상 dataflow / 셀룰러 오토마타 ISA 스케치
-4. **세 축 합본** — 합쳐진 단일 아키텍처 1-pager (RFC 초안 형태)
+캠페인은 **종결**됐다. 4축은 이미 전개·측정됨 — B(육각 위상)를 뼈대로,
+A(6진법)는 3×HARD_WALL DE-SCOPED, C(실행 모델)는 별도 RFC out-of-scope.
+goal 계약("입증 OR 동일 엄밀도 반증")은 **반증 path 로 충족**됐다.
+
+| # | falsifier (RFC 057 §5) | verdict @ 2026-05-18 | authoritative re-test |
+|---|---|---|---|
+| F1 | degree-6 > degree-4 mesh (wire/energy) | **MIXED** — closed-form PASS · cycle-accurate FAIL @ N=7 = *honest refutation* | hexa-arch §9 N-sweep |
+| F2 | Hales geometry survives EDA cost | **PARTIAL** — synth area 1.516× 확정 · routed P&R deferred | hexa-arch chip §F2 |
+| F3 | PIM dataflow > von-Neumann+HBM | **OUT OF SCOPE** — 별도 RFC | Axis-C lowering RFC |
+| F4 | binary tile 충분 (no MVL) | **✅ PASS** — axis-A 3×HARD_WALL DE-SCOPED | n/a (frozen) |
+| F5 | "6" = topology-only, perf-neutral | **✅ PASS** — perf claim B1/B2/B3 anchored | n/a (audited) |
+
+- comb 가 권위 측정 능력을 가진 실험(T1 해석 · T2 cycle-accurate sim ·
+  RTL synth · 5-falsifier verdict)은 **전부 완료**. F1-full @ N=7 반증이
+  결론 — "hex 항상 패배" 아님, "N=7·single-issue sink·~50% injection 에서
+  패배" (3개 사전등록 reversal regime 은 hexa-arch §9 가 재검; N=64
+  IQ-iSLIP 에서 d6 LEAN-PASS — 상보적, verdict enum INCONCLUSIVE 유지).
+- **T3 design-only DELIVERED** — hexa-arch[chip] 가 NoC 정량설계 produce,
+  comb 가 rfc_002 typed-interface 로 consume.
+- 잔여 = 외부의존 **execution gate 뿐** (routed-GDS P&R: OpenROAD 바이너리
+  roster 부재 · 실제 fab/FPGA: 비목표) — **design gap 아님**, RFC 057 §6 /
+  `HANDOFF_TO_HEXA_ARCH.md` 로 핸드오프됨.
+- 후속 comb-side 작업은 **scope-extension** (신규 falsifier · 신규 test
+  point · 신규 axis lowering) — 본 RFC 057 scope closure 와는 별개.
+
+> 권위 SSOT: verdict = `comb/CLOSURE.md` · design = `comb/T3_DESIGN_FINAL.md`.
 
 > 진행 로그는 `comb/PLAN.md` (자체 SSOT — AGENTS.tape §3 `g_plan_consolidation`
 > 예외: flame/forge 와 동일하게 도메인 자체 위치 유지).
