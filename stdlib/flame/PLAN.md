@@ -1570,11 +1570,18 @@ A100, ~$0.30 falsify+fix+confirm 총):**
   runtime.c) **BUILD_CUDA_RC=0 BUILD_LINK_RC=0** — generic
   ag_tape 경로 + forge runtime + CUDA 가 d768·12L 규모에서 clean
   link (build-tier 통합 검증 ✅).
-- wall + nvidia-smi 측정: **진행 중** (`state/agtape_d768_fire_
-  2026_05_18/`). F-RFC046-AGTAPE-WALL (step-1 wall vs 437.9s ·
-  PyTorch 336.85s · hand-fused 191-268s) + GPU-util 확정 후
-  본 절 갱신. g3: 측정 전 wall 주장 0.
+- FIRE1 (A100_PCIE $0.76): wall trainer_rc=124 timeout 901s,
+  GPU util max **1%**, 0 step. **근인 측정확정 (trainer.err)**:
+  `cudaMalloc ... device busy or unavailable` 반복 — 렌트 pod 의
+  GPU unavailable (pod-infra dud, flame 측정 아님). wall =
+  **INCONCLUSIVE** (CPU-bound-by-design 아님; g3 정확근인).
+- 하드닝: dispatch 에 §4.5 GPU-health preflight (cudaMalloc
+  smoke, 빌드 前 dud GPU ~5s 감지→abort→fresh offer). FIRE2
+  auto-retry wrapper 진행 중.
 
 **gap(d) 현재 (측정 기반)**: forge RoPE 커널 GPU byte-eq ✅
-MEASURED (PASS, A100) · generic 경로 CUDA build ✅ MEASURED ·
-generic d768 wall = 측정 진행 중. 잔여 = 그 wall 수치 확정만.
+MEASURED (PASS, A100 — falsify 4.4e-16→fix→0) · generic 경로
+CUDA build ✅ MEASURED clean · generic d768 wall = FIRE1
+pod-dud INCONCLUSIVE → FIRE2 (preflight-hardened) 재측정 중.
+gap(d) 명명 범위 ("RoPE CPU loop→forge") = GPU byte-eq closed;
+generic 전체 wall = 정상 pod 재측정만 잔여.

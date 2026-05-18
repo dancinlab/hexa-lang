@@ -151,6 +151,29 @@ DEV_CC=$($SSH_CMD 'nvidia-smi --query-gpu=compute_cap --format=csv,noheader | he
 [ -z "$DEV_CC" ] && DEV_CC=80
 echo "  Device compute cap: sm_${DEV_CC}"
 
+# ── 4.5) GPU-HEALTH PREFLIGHT (cudaMalloc smoke) ─────────────────────
+# Fire #1 (2026-05-18) wasted a full build+900s cycle on an A100_PCIE
+# pod whose GPU returned "cudaMalloc ... device busy or unavailable"
+# for every alloc (util 0-1%, 0 steps). Catch a dud GPU in ~5s here
+# (compile+run a trivial cudaMalloc/cudaFree) BEFORE the heavy build;
+# abort on failure so the EXIT trap destroys the pod and a re-launch
+# picks a fresh offer.
+echo "[4.5/9] GPU-health preflight (cudaMalloc smoke) ..."
+GPU_OK=$($SSH_CMD "cat > /tmp/g.cu <<'EOF'
+#include <cstdio>
+#include <cuda_runtime.h>
+int main(){double*p=0;cudaError_t e=cudaMalloc(&p,(size_t)786432*sizeof(double));
+if(e!=cudaSuccess){printf(\"GPU_BAD %s\\n\",cudaGetErrorString(e));return 1;}
+cudaFree(p);printf(\"GPU_OK\\n\");return 0;}
+EOF
+nvcc -arch=sm_${DEV_CC} -O0 -o /tmp/g /tmp/g.cu 2>/tmp/g.berr && /tmp/g 2>&1 || cat /tmp/g.berr" 2>&1 | tee gpu_preflight.log | tail -1)
+if ! echo "$GPU_OK" | grep -q GPU_OK; then
+    echo "  [PREFLIGHT FAIL] GPU unusable on this pod ($GPU_OK) — aborting; re-launch picks a fresh offer"
+    SAVE_POD=0
+    exit 3
+fi
+echo "  GPU preflight OK"
+
 # ── 5) Upload sources ─────────────────────────────────────────────────
 echo "[5/9] Upload trainer.c + runtime.c + runtime_hi_gen.c + runtime_cuda.c + native + corpus ..."
 $SCP_CMD "$TRAINER_C"      "root@$SSH_HOST:$REMOTE_WORK/trainer.c"

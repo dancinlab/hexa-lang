@@ -632,10 +632,25 @@ GPU wall 을 요구 (Test 18 은 $0 예측이지 측정 아님). user 가 비용
   + 구조 동일성으로 cover — full d768 CPU byte-eq run (~600s+/
   step) 은 prohibitive·redundant (instrument-first).
 
-**측정 결과**: [heavy fire `agtape_d768_fire_2026_05_18` 진행 중 —
-F-RFC046-AGTAPE-WALL (step-1 wall vs 437.9s · PyTorch 336.85s ·
-hand-fused 191-268s) + GPU-util 측정값 확정 후 본 절 갱신; g3:
-측정 전 결과 주장 0].
+**측정 결과 (FIRE1, 2026-05-18, A100_PCIE $0.76):**
+- 빌드 `-DHEXA_CUDA` clean (BUILD_CUDA_RC=0 BUILD_LINK_RC=0) —
+  generic ag_tape 경로 + forge runtime + CUDA 가 d768·12L 규모
+  link 검증 ✅ MEASURED.
+- wall: trainer_rc=124 (timeout), wall_seconds=901, GPU util
+  max **1%**, 출력 "model size" 까지만 (0 micro-step 완료).
+- **근인 = 측정으로 확정 (trainer.err)**: `[cuda] cudaMalloc
+  (786432 doubles) failed: CUDA-capable device(s) is/are busy
+  or unavailable` 반복 — **렌트한 A100_PCIE pod 의 GPU 가
+  unavailable** (모든 device alloc 실패 → 커널 0 launch → CPU
+  fallback spin → timeout). flame 코드/측정 아님, **pod-infra
+  dud**. ⇒ wall = **INCONCLUSIVE** (CPU-bound-by-design 아님 —
+  GPU 자체 사용 불가였음; g3: 정확한 근인 보고, mislabel 금지).
+- RoPE 커널은 **별개의 정상 A100 pod** 에서 byte-eq PASS
+  (cheap oracle) — 커널+`__dmul_rn` fix 는 GPU-verified.
+- 하드닝: `dispatch_agtape_d768_fire.sh` 에 §4.5 GPU-health
+  preflight (cudaMalloc smoke) 추가 — dud GPU 를 빌드 前 ~5s
+  에 감지, abort→trap destroy→fresh offer 재시도. FIRE2
+  (auto-retry wrapper) 진행 중 — 정상 pod wall 확정 후 갱신.
 
 **커밋**: GPU fix `b73269ea` (rfc043-flame-camp). non-gated
 (user 명시 fire 승인 + 측정이 단일 g3 방향 강제).
