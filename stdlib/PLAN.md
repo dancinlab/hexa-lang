@@ -604,3 +604,11 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   json-sim 레시피가 동형-아닌 변형(autac/lytac 의 단순 occupancy 가
   아닌 partition function)에도 1발 적용됨 — 레시피 일반성 실증.
   잔여 ~101, 4대 enabler·5 규율·통합 레시피 보유.
+- 2026-05-19 — **T3 +1: 27/127** `covalent_degrader_sim` (4th json-sim,
+  1차 PARITY-OK). Copeland kinact/K_i 비가역 engagement(`1-exp(-k_obs·t)`)
+  + ternary coupling + matched-reversible reference + 시계열 monotonicity
+  witness(7-grid). hexa `exp()` bit-exact vs CPython · `%.3e` 과학기수법
+  · `%8.0f` 폭포맷 모두 sim-recipe 적용. `4fa11dc` STDOUT PARITY-OK 1발.
+  json-sim 레시피가 비가역 dynamics + 시계열 배열까지 1발 적용 — 잔여
+  ~100, 클래스 코어 전부 검증된 형태(simple-occupancy·partition-Z·
+  irreversible-kinetics·time-course).
