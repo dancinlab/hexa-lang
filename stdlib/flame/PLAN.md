@@ -1543,3 +1543,38 @@ build` 도달 ✅** (bare-wrapper seam, bootstrap 재빌드 不要 — 旧
 infra-block 명제 폐기) · merge `9c03aa97` + 19/19 검증. 잔여 =
 **GPU fire (user-gated) 만**. flame 측 + compiled-path 완결.
 GOAL: gap(a-c,e)✅ + gap(d) flame/compiled ✅ / GPU-fire user-gated.
+
+---
+
+## 2026-05-18 — gap(d) MEASURED fire (user "비용신경쓰지말고 모두 fire")
+
+Stop hook 이 generic 경로의 **측정된** d768 GPU wall 요구 (Test 18
+= $0 예측, 측정 아님). user 비용무관 fire 승인. instrument-first
+cheap→heavy 순서 (design.md Decision 11).
+
+**① cheap RoPE GPU byte-eq oracle (`tool/cuda_test_farr_rope.cu`,
+A100, ~$0.30 falsify+fix+confirm 총):**
+- PRE-FIX: `F-RFC041-ROPE-EXACT/-BWD max|Δ|=4.441e-16 FAIL` —
+  nvcc device `--fmad=true` 가 `a*b+c*d`→fma, 非contract 레퍼런스
+  와 ~1e-16 발산 (Decision 10 의 CPU FMA hazard 의 GPU 짝, 예고대로).
+- FIX (commit `b73269ea`): `_hx_cuda_kern_rope_fwd/bwd` →
+  `__dmul_rn`/`__dadd_rn` (CUDA 판 `FP_CONTRACT OFF`, 해당
+  커널에만, 전역 perf 無영향).
+- POST-FIX: 양 config (T=128 · T=1024 d768-class) **`max|Δ|=
+  0.000e+00 byte_eq=1 ALL-PASS`** on A100. gap(d) forge RoPE
+  커널 = **실 GPU 에서 byte-eq 측정 확정** (PASS).
+
+**② heavy generic-path d768·12L wall fire
+(`flame_d768_12L_agtape_fire.hexa` + `dispatch_agtape_d768_fire.sh`):**
+- 빌드: `-DHEXA_CUDA` nvcc(runtime_cuda.c)+clang(trainer.c+
+  runtime.c) **BUILD_CUDA_RC=0 BUILD_LINK_RC=0** — generic
+  ag_tape 경로 + forge runtime + CUDA 가 d768·12L 규모에서 clean
+  link (build-tier 통합 검증 ✅).
+- wall + nvidia-smi 측정: **진행 중** (`state/agtape_d768_fire_
+  2026_05_18/`). F-RFC046-AGTAPE-WALL (step-1 wall vs 437.9s ·
+  PyTorch 336.85s · hand-fused 191-268s) + GPU-util 확정 후
+  본 절 갱신. g3: 측정 전 wall 주장 0.
+
+**gap(d) 현재 (측정 기반)**: forge RoPE 커널 GPU byte-eq ✅
+MEASURED (PASS, A100) · generic 경로 CUDA build ✅ MEASURED ·
+generic d768 wall = 측정 진행 중. 잔여 = 그 wall 수치 확정만.

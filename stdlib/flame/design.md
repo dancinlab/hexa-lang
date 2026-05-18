@@ -592,3 +592,50 @@ byte-eq 별도 확인 (CPU pragma 가 GPU 커버 안 함).
 **커밋**: merge `9c03aa97` · FMA fix `c0789e05` (rfc043-flame-camp).
 non-gated (측정이 단일 g3-correct 방향 강제 — contested 아님;
 감사추적용 기록).
+
+## Decision 11 — gap(d) MEASURED fire: GPU RoPE 커널 non-FMA + 측정 방법론 (user "비용신경쓰지말고 모두 fire")
+
+**picked**: cheap localized RoPE GPU byte-eq oracle (instrument-first)
+→ falsify → surgical `__dmul_rn`/`__dadd_rn` fix → re-confirm →
+heavy generic-path d768·12L wall fire. user 지시 "비용신경쓰지말고
+모두 fire" + Stop hook "gap(d) 는 MEASURED generic-path GPU
+confirmation 필요 (예측 ≠ 측정)".
+
+**맥락**: Decision 10 이 gap(d) CPU-seam 을 byte-eq + compiled-
+reachable 로 닫았으나 Stop hook 이 generic 경로의 **측정된** d768
+GPU wall 을 요구 (Test 18 은 $0 예측이지 측정 아님). user 가 비용
+무관 fire 승인.
+
+**rationale**:
+- **instrument-first 강제 순서** ([[instrument-first-methodology]] +
+  dispatch_phase4d9 thesis): integrated d768 gn2 는 GPU-path
+  regression 을 localize 못 함 — 과거 캠페인이 fire #13/#14 두
+  PAID heavy fire 를 이 진단에 낭비. 그래서 heavy d768 fire **前**
+  반드시 cheap localized 커널 오라클.
+- cheap RoPE GPU 오라클 (`tool/cuda_test_farr_rope.cu`, self-
+  contained, ~$0.15) PRE-FIX 측정: `F-RFC041-ROPE-EXACT/BWD
+  max|Δ|=4.441e-16 FAIL`. 근인 = Decision 10 의 CPU FMA hazard 의
+  **GPU 짝** — nvcc device default `--fmad=true` 가 `a*b+c*d`→fma
+  (1-round), 非contract 레퍼런스(2-round) 와 ~1e-16 발산. Decision
+  10 이 "CPU pragma 가 GPU 커버 안 함" 으로 예고했던 바, 측정 확정.
+- 수정 (commit `b73269ea`): `_hx_cuda_kern_rope_fwd/bwd` 의 fused
+  expr 을 `__dmul_rn`/`__dadd_rn` (explicit round-to-nearest,
+  `--fmad` 무관) — CPU `FP_CONTRACT OFF` 의 CUDA 등가, 해당
+  커널에만 (전역 `--fmad=false` perf hit 無, g3-correct: 커널이
+  레퍼런스에 conform, oracle 약화 아님). POST-FIX 재측정:
+  양 config (T=128·T=1024 d768-class) `max|Δ|=0.000e+00 ALL-PASS`.
+  clean falsify→fix→confirm, 총 ~$0.30.
+- heavy fire artifact = `stdlib/flame/flame_d768_12L_agtape_fire.
+  hexa` (generic `_agt_decoder_step` 경로, corpus_test harness
+  verbatim, RoPE forge-wired). byte-eq 는 19/19 (Test14/15/16 이
+  같은 `_agt_decoder_step` 을 nn_decoder 레퍼런스 대비 검증)
+  + 구조 동일성으로 cover — full d768 CPU byte-eq run (~600s+/
+  step) 은 prohibitive·redundant (instrument-first).
+
+**측정 결과**: [heavy fire `agtape_d768_fire_2026_05_18` 진행 중 —
+F-RFC046-AGTAPE-WALL (step-1 wall vs 437.9s · PyTorch 336.85s ·
+hand-fused 191-268s) + GPU-util 측정값 확정 후 본 절 갱신; g3:
+측정 전 결과 주장 0].
+
+**커밋**: GPU fix `b73269ea` (rfc043-flame-camp). non-gated
+(user 명시 fire 승인 + 측정이 단일 g3 방향 강제).
