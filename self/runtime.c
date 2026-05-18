@@ -4180,7 +4180,15 @@ HexaVal hexa_str_char_code_at(HexaVal s, HexaVal idx) {
 // ── Array operations ─────────────────────────────────
 HexaVal hexa_array_pop(HexaVal arr) {
     if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_void();
-    return HX_ARR_ITEMS(arr)[HX_ARR_LEN(arr) - 1];
+    // Must shrink in place — same pattern as hexa_array_shift below. The
+    // prior body returned the last element but left the length unchanged,
+    // so `a.pop(); len(a)` was wrong on the compiled path (parity gap
+    // t44_array_methods: "FAIL pop len=4", interp expects 3). Synced
+    // from origin/main `a35a9cf5`.
+    int n = HX_ARR_LEN(arr);
+    HexaVal last = HX_ARR_ITEMS(arr)[n - 1];
+    HX_SET_ARR_LEN(arr, n - 1);
+    return last;
 }
 
 // Shift: remove + return first element. Mirrors `pop` but front-side. In-place
