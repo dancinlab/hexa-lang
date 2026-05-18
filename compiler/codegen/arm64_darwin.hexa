@@ -1740,6 +1740,16 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     if s.kind == _STMT_RETURN {
         if len(s.args) >= 1 {
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // AAPCS64 16B return = x0:x1
+        } else {
+            // #40 — value-less return must hand back a real TAG_VOID
+            // HexaVal (x0:x1), not stale call-clobbered registers.
+            // Mirrors tier-2 `return hexa_void();` (codegen_c2.hexa) and
+            // the const_void load above (TAG_VOID=4, payload 0). Without
+            // this, `type_of(returns_void())` reads a garbage tag.
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#4"), "ret void: TAG_VOID"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                             _arm64_op_label("#0"), "ret void: payload 0"))
         }
         // C7 + cycle h20 — epilogue frees spill_frame + call-overflow
         // region + try-jmp_buf region (all allocated in a single
@@ -2109,6 +2119,13 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
             }
         }
     }
+    // #40 — fall-through epilogue also hands back a real TAG_VOID HexaVal
+    // (x0:x1), matching the value-less STMT_RETURN path above; a function
+    // reaching here without an explicit return yields void.
+    instrs.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                        _arm64_op_label("#4"), "ret void: TAG_VOID"))
+    instrs.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                        _arm64_op_label("#0"), "ret void: payload 0"))
     if total_frame > 0 {
         instrs = _hv_sp_adj(instrs, "add", total_frame, "x15")
     }
