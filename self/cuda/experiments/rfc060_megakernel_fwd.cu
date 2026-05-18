@@ -276,8 +276,11 @@ __global__ void mega_forward(Dims d, Bufs b) {
             int tm=(t/tilesN)*TILE,tn=(t%tilesN)*TILE;
             int row=tm+ty,col=tn+tx; double acc=0.0;
             for(int k0=0;k0<hd;k0+=TILE){
+              /* As tile = Q rows; Bs tile = K rows (this is Q·Kᵀ, so Bs
+               * is indexed [col-in-tile][k-in-tile] — the K row is
+               * tn+ty, NOT tn+tx). */
               As[ty][tx]=(row<L&&k0+tx<hd)?Qh[(size_t)row*D+k0+tx]:0.0;
-              Bs[ty][tx]=(col<L&&k0+tx<hd)?Kh[(size_t)col*D+k0+tx]:0.0;
+              Bs[ty][tx]=((tn+ty)<L&&k0+tx<hd)?Kh[(size_t)(tn+ty)*D+k0+tx]:0.0;
               __syncthreads();
               #pragma unroll
               for(int kk=0;kk<TILE;kk++) acc+=As[ty][kk]*Bs[tx][kk];
