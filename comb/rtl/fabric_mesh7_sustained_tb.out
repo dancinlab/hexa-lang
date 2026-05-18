@@ -1,0 +1,8 @@
+=== 7-node mesh fabric sustained traffic — degree-4 (router_d4) — SAME-N vs hex7 ===
+workload     cycles  injected  delivered  in_flight  avg_lat
+0 (uniform   )     1000      2133       1912    10%       10
+1 (hotspot-C )     1000      1827       1025    43%       27
+2 (stencil   )     1000      2191       2159    1%       6
+3 (diameter  )     1000      2126       1640    22%       13
+=== done ===
+build/artifacts/fabric_mesh7.v2k:520: $finish called at 42200 (1s)
