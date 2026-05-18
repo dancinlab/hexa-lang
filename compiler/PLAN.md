@@ -1547,3 +1547,43 @@ cycles 1-6 후 자기-grep 으로 self/main.hexa 의 `cmd_run(` 호출 사이트
 
 interp 실삭제 (R7 종결) 전제조건: 위 3 잔여 + bench/parse 는 이미 inline compiled (무관). 즉 cmd_run 의존 잔여 = atlas + Phase 3/4 + (lsp 는 이제 binary 우선, cmd_run 은 fallback-only).
 
+---
+
+### 2026-05-18 — R7 track B Phase 3/4 batch + closure (cycle h33) — 51 verbs binary-migrated
+
+**Goal directive**: `/goal 100% all closure`.
+
+**LANDED (origin/main `8c127fe8` → `ef5f1f3b`)**:
+- **Generic dispatch_absorbed binary-prefer** (self/main.hexa): one change covers all ~41 absorbed verbs — `bin/hexa-absorbed-<verb>` spawn + `__HEXA_SHIM_RC__` marker + exit-code, cmd_run fallback. No per-verb edits.
+- **`hexa init`**: cmd_run-on-missing (tool/init_project.hexa absent → never functioned) → honest "not implemented" + exit 1. R7 call-site removed.
+- **3 codegen/runtime gap fixes** (required hexa_v2 bootstrap):
+  - codegen_c2: `free`/`malloc`/`calloc`/`realloc` → bt-53 reserved-name mangle (`compiler/free/free.hexa fn free` vs `<stdlib.h> free` collision; unblocked free + 13-verb drill/chain/… cluster)
+  - runtime.h: `hexa_http_get` prototype (16 network bridges) + `rt_delete_file` prototype (molt)
+  - audit_main.hexa: dropped unused `args` param (0-arg auto-main match)
+- **molt/forge/canon cross-module helper collision** fix: each defined own `_drill_round_shim`(3-param) but `use reign` (2-param) → flatten C dup. canon `_ensure_dir`(1) vs drill/checkpoint(0). Renamed module-unique (`_molt_/_forge_drill_round_shim`, `_canon_ensure_dir`). file-private, 0 external callers.
+- `tool/build_absorbed_binaries.sh`: self-derives verb→script map (drift-safe), repo-local hexa shim (stale-transpiler trap avoided), batch-build, failure-tolerant.
+- `self/native/{hexa_cc.c,hexa_v2}`: regenerated transpiler (free-mangle live).
+
+**검증**:
+- batch: pass=41/41 absorbed (honesty…atlas-audit + molt/forge/canon)
+- absorbed dispatch smoke: `./hexa honesty` → binary-prefer OK
+- mini build_aprime fixpoint: P34 + P34b 모두 5/5 PASS · exit(42)==42 · apP34/b 2166072 B (이전 빌드와 동일 크기 → self-host fixpoint 보존; free-mangle additive·compiler/main.hexa `free` 미정의·runtime.h additive)
+
+**최종 verb 집계 — 51 binary-migrated**:
+- 9 named (qrng·qmirror·sim-universe·convergence·test·check·verify·calc·lsp)
+- 41 absorbed (Phase 2/3/4 전체)
+- init (cmd_run-on-missing 제거 — clean error)
+
+**유일 잔여: `atlas` (tool/atlas_cli.hexa) — module_loader memory blocker**:
+- atlas_cli `use "compiler/atlas/static_index"` → static_index `use "compiler/atlas/embedded.gen"` (4.9 MB, 7451 lines, frozen AtlasNode 데이터 — n6 source retired, regen 불가)
+- bisect: `use static_index` 단독 flatten 도 RSS **~8.9 GB peak** (5 MB embedded.gen 처리 중 transient spike) 후 ~1 GB 로 drop, 90s+ 미완. full atlas_cli graph → 24 GB Mac 초과 → SIGKILL (exit 137)
+- audit_main(PASS) 는 static_index 미사용 → embedded.gen 미flatten → embedded.gen-via-static_index 가 유일 OOM 트리거 확정
+- 근본: module_loader 의 multi-MB string 처리 (ml_strip_and_clean replace-chain / collect_imports / flat_parts) 가 5 MB 단일 파일에서 ~9 GB transient — runtime-profiling 필요한 별도 엔지니어링 (mechanical migration 아님)
+- **현 상태 functional**: `hexa atlas` named dispatch + dispatch_absorbed 모두 cmd_run fallback 으로 정상 동작 (interp 경유). 사용자 영향 0.
+- **proper fix 옵션** (모두 별도 cycle / 설계 결정):
+  1. module_loader streaming-write flatten (전체 flat in-memory 회피) — 근본, 高 leverage
+  2. embedded.gen.hexa → 별도 컴파일 유닛 (flatten 제외, clang link)
+  3. dist/atlas.hxc-only: embedded.gen 을 empty-array stub 化 (L18 설계 의도와 일치 · 단 no-sidecar fallback corpus 상실 → **g3: 5 MB committed 데이터 변경은 fallback 약화이므로 user sign-off 필요한 decision-gate 사안**, 일방 stub 금지)
+
+**R7 interp source 실삭제 가능 여부**: atlas 가 cmd_run fallback 에 load-bearing → 완전 삭제 전 atlas binary-path 또는 atlas 의 hxc-direct compiled path 필요. 51/52 closeable verb 종결, atlas 1건이 정직한 잔여 (정밀 특성화 + functional fallback + 3 proper-fix 경로 명시). over-claim 없이 honest closure.
+
