@@ -1410,8 +1410,18 @@ hand-fused bwd 와 bit-identical 불가 (PyTorch 도 동일). 올바른 bar =
 leaf max|Δ|=0 + 조립 fwd max|Δ|=0 + 조립 bwd machine-eps.** 전부 충족
 → **gap(b) autograd 자동화 = 올바른 기준으로 CLOSED**. 테스트 ALL PASS.
 
-GOAL 진척: gap(a) ✅ CLOSED · **gap(b) ✅ CLOSED** (leaf 12/12
-byte-eq + decoder block assembly fwd byte-eq · bwd machine-eps =
-실제 autograd 의 최대 달성가능 정확도; Decision 6) · gap(c/d/e)
-미착수. 잔여 gap(b) tail = full n_layer end-to-end oracle (동일 bar)
-+ RFC 043 §Surface train_step. multi-cycle, oracle-gated, $0-우선.
+→ **gap(b) autograd 자동화 = 올바른 기준으로 CLOSED**. 테스트 ALL PASS.
+
+**Test 14 (full n_layer end-to-end, LANDED 96d4130d)**: ag_embed→
+N×block→ag_slice→final dt_sqrt norm→tied ag_lmhead→CE seed vs
+nn_decoder_fwd/grad (n_layer=2). 전부 ≤1.11e-16 ≪1e-12 (N층 bound).
+**TIED tok_emb fan-in** (embed scatter + lm-head) registry 자동 처리
+입증. DECODER-PASS. gap(b) autograd 의 hard verification (임의
+composition + full decoder + tied-weight) **COMPLETE**.
+
+GOAL 진척: gap(a) ✅ CLOSED · **gap(b) autograd 자동화 ✅ CLOSED**
+(leaf 12/12 byte-eq + single-block fwd byte-eq·bwd machine-eps +
+full n_layer end-to-end machine-eps incl. tied fan-in; Decision 6) ·
+gap(c/d/e) 미착수. 잔여 gap(b) tail = RFC 043 §Surface train_step
+(ag_backward_reg + 기존검증 opt_adamw_step = bounded plumbing,
+별도 module surface) — 다음 cycle. multi-cycle, oracle-gated, $0.

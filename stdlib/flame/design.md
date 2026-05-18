@@ -362,3 +362,28 @@ CE-seed end-to-end oracle (동일 기준: fwd byte-eq · bwd machine-eps),
 (2) RFC 043 §Surface train_step. 함정 #4 (linear bwd farr_matmul-
 route) 는 *옵션* — machine-eps 가 이미 올바른 bar 이므로 bit-eq
 추구는 불필요 (단, n_layer 에서 오차 누적 < 1e-12 확인은 필요).
+
+**Test 14 측정 (full n_layer end-to-end, 2026-05-18 LANDED)**:
+ag_embed→N×block→ag_slice→final ag_rmsnorm_mh(dt_sqrt)→tied
+ag_lmhead→CE(dt_exp seed) vs nn_decoder_fwd/nn_decoder_grad
+(T2·d4·nh2·nkv1·h8·V5·**n_layer2**):
+```
+logits(FWD)=2.78e-17  tok_emb(tied)=1.11e-16  gF=0  block-max=8.3e-17
+전부 ≤1.11e-16  ≪ 1e-12 (N층 누적 bound)
+```
+검증: block STACKING (2층 threaded) · **TIED tok_emb fan-in**
+(grad 가 ag_embed scatter + ag_lmhead 양쪽에서 누적 — registry 가
+자동 처리) · sliced last-pos 의 final dt_sqrt norm · CE dt_exp
+seed · N층 오차누적. n_layer FWD 는 deep multi-op (lm_head
+farr_matmul alloc 등) 라 machine-eps (single-op/single-block 만
+정확 0 가능) — Decision 6 원리 그대로. **DECODER-PASS**.
+
+**status (정정)**: **gap(b) autograd 자동화의 hard verification
+COMPLETE** — generic ag_tape 가 임의 composition (full
+ConsciousDecoderV2, tied-weight fan-in 포함) 을 hand-written
+nn_decoder_grad 와 실제 autograd 의 최대 정확도 (leaf max|Δ|=0 ·
+조립 machine-eps) 로 일치함을 측정 입증. 잔여 = RFC 043 §Surface
+`train_step` (ag_backward_reg grads + 기존 검증된 opt_adamw_step =
+bounded plumbing; autograd·AdamW 모두 개별 입증완료) — 별도
+module-level surface 작업 (ag_tape→decoder layout 의존), 다음
+cycle. gap(c/d/e) 미착수.
