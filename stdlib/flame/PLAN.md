@@ -1688,3 +1688,83 @@ pin_device` · `set_out_disposition(DEVICE_KEEP)` · `farr_dev_view`
 
 cross-link: README.md "Benchmark" · design.md Decision 11 ·
 [[flame-general-pytorch-replacement-goal]] gap(d) · [[pin-trap-pattern]].
+
+---
+
+## 2026-05-19 — mk2 ROADMAP (RFC 056 device-residency, multi-cycle SSOT)
+
+"mk2 go" (user). mk2 = generic `ag_tape` 경로를 device-resident
+로 만들어 d768·12L wall 을 *generic 경로 자체*로 통과. **멀티-
+사이클** — 본 절이 resumable 진행 SSOT (각 cycle = falsifier +
+검증 gate; instrument-first, g3 over-claim 0).
+
+**불변 자산 (이미 존재·측정 — mk2 는 새 커널 아님):**
+- forge 커널 byte-eq: RoPE (`b73269ea` A100 max|Δ|=0) · matmul
+  cuBLAS (`54980357` dim-gate) · rmsnorm_rows/silu/add/softmax
+  (RFC 041 Phase B, runtime_cuda.c).
+- RFC 056 residency API (runtime.c, hand-fused Phase 4-D-7/8
+  사용 중): `hexa_farr_pin_device` · `hexa_farr_set_out_
+  disposition(DEVICE_KEEP)` · `hexa_farr_dev_view`.
+- 측정 근인 (3-fire): per-op host orchestration + per-op H2D/D2H
+  지배 (device residency 無). mk2 = 그 residency 배선.
+
+**구조 격차 (cycle 분해 근거):** matmul 은 `farr_matmul` 단일
+builtin → runtime.c `#ifdef HEXA_CUDA` dim-gate 가능 (hexa
+불변, `54980357` 완료). 그러나 `ag_add`/`ag_rmsnorm_mh`/
+`ag_silu_gate` 는 `ag_tape.hexa` 내 **inline host hexa loop**
+(단일 builtin 아님) — forge-route 시 `ag_rope_mh` 패턴(=
+`farr_X_gpu` builtin 호출 + byte-identical CPU fallback)으로
+`ag_tape.hexa` 수정 필요 → **byte-eq-critical** (19 oracle
+회귀 위험, GPU fire 검증 필수).
+
+### Cycle 분해 (각 cycle 독립 검증·commit·fire)
+
+- **mk2-C0 (DONE):** matmul cuBLAS dim-gate (`54980357`). runtime-
+  only, hexa 불변, no-CUDA Mac 19/19 재검증 PASS. FIRE3 측정:
+  util 0→3% (engage 확인) — 단 residency 無라 wall 미통과
+  (예상, residency 가 binding).
+- **mk2-C1 (NEXT):** `ag_add`/`ag_silu_gate` forge-route.
+  - 작업: `ag_tape.hexa` 의 두 inline loop → `farr_add_gpu` /
+    `farr_silu_gpu` builtin 호출 + runtime.c bare-wrapper +
+    runtime.h proto + byte-identical CPU fallback (= `ag_rope_mh`
+    /`farr_rope_gpu` 패턴 그대로; `_hx_farr_rope_cpu` 처럼
+    `_hx_farr_{add,silu}_cpu` fallback, **FMA pragma 주의**
+    [[flame-transcendental-byteeq-hazard]]).
+  - falsifier: cheap `.cu` add/silu GPU byte-eq oracle (RoPE
+    oracle 패턴, ~$0.3) `max|Δ|=0` · no-CUDA Mac `flame_ag_
+    tape_test` **19/19 ALL PASS** (CPU fallback byte-id).
+  - gate: 두 falsifier PASS 後 commit.
+- **mk2-C2:** `ag_rmsnorm_mh` forge-route (`_hx_cuda_farr_
+  rmsnorm_rows_gpu`, dt_sqrt 경로 — transcendental byte-eq
+  hazard 중점 검증). 동일 falsifier 구조.
+- **mk2-C3 (CORE):** sticky lazy device-residence — forge-routed
+  builtin 이 (1) 입력 farr device-current 면 H2D skip, (2) 출력
+  device-resident 유지(implicit DEVICE_KEEP)·device-current
+  마크, (3) host op 이 device-current farr 읽을 때만 lazy D2H.
+  farr device-mirror 레벨 (runtime.c, `#ifdef HEXA_CUDA`, hexa
+  불변). RFC 056 API 활용. **이게 wall 통과의 binding 작업.**
+  - falsifier: d768·12L generic fire — step 완료 + GPU util
+    ≫3% + wall vs PyTorch 336.85s (F-RFC046-AGTAPE-WALL).
+    19/19 byte-eq 보존 (no-CUDA + 작은 config CUDA).
+- **mk2-C4:** `ag_attn_dt` device-resident (softmax kernel
+  존재; composite 라 마지막). 전체 체인 residency 완성 →
+  d768 wall 재측정 → F-RFC046-AGTAPE-WALL 확정.
+
+### 실행 규율 (cycle 마다)
+
+1. cheap `.cu` byte-eq oracle **먼저** (heavy d768 fire 前 —
+   instrument-first, RoPE oracle 가 $0.3 로 2 PAID heavy fire
+   낭비 대체한 전례).
+2. no-CUDA Mac `flame_ag_tape_test` 19/19 = CPU fallback
+   byte-id gate (HEXA_CUDA inert 라 깨지면 fallback 버그).
+3. FMA-contraction 점검 (`__dmul_rn`/`__dadd_rn` GPU ·
+   `FP_CONTRACT OFF` CPU) — [[flame-transcendental-byteeq-hazard]].
+4. g3: cycle falsifier 측정 전 closure 주장 0. 측정값만 PLAN
+   갱신.
+
+**현재 상태: mk2-C0 DONE (landed main PR #67). mk2-C1 = 다음
+세션 진입점.** 각 cycle 은 독립 commit + (cheap oracle + Mac
+19/19) gate. C3 (residency) 가 d768 wall 통과의 binding cycle.
+
+cross-link: 본 PLAN mk2 결정 절 · README.md Benchmark ·
+design.md Decision 11 · [[flame-general-pytorch-replacement-goal]].
