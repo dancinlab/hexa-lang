@@ -85,6 +85,9 @@ fn keyword_kind(word: string) -> TokenKind {
     if word == "as" { return TokenKind::KwAs }
     if word == "true" { return TokenKind::KwTrue }
     if word == "false" { return TokenKind::KwFalse }
+    if word == "try" { return TokenKind::KwTry }
+    if word == "catch" { return TokenKind::KwCatch }
+    if word == "throw" { return TokenKind::KwThrow }
     return TokenKind::Ident
 }
 

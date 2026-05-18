@@ -76,7 +76,11 @@ pub enum ExprKind {
     StructLit,       // Foo { x: 1, y: 2 } — A1.5
     EnumPath,        // Foo::Bar / Foo::Bar(payload) — A1.5
     ArrayLit,        // [e0, e1, ...] / [] — children = elements
-    Wildcard         // _ pattern — A1.5
+    Wildcard,        // _ pattern — A1.5
+    Try,             // try { try_body } catch e { catch_body } — A1.6
+                     // children = [try_body_block, catch_body_block]
+                     // text     = catch_var_name (or "" for catch w/o binder)
+    Throw            // throw <expr> — children = [value_expr]
 }
 
 // ── Expressions ──────────────────────────────────────────────
@@ -149,7 +153,9 @@ fn _ast_is_string_lit(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
