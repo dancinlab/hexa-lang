@@ -478,3 +478,15 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   수정 전까지 BLOCKED**(측정된 천장 — 작업량 아님). T3 = **19/127
   유지**(registry_consistency_audit 은 +1 아님; 차단으로 정직 기록).
   순수계산·소량-json 게이트는 계속 이관 가능(검증된 19 불변).
+- 2026-05-18 — **갭 #4 근원 구역 국소화 (runtime.c, 측정·코드리뷰)**.
+  json_parse 경로 정독: `_jp_parse_string`(11527)·`_jp_parse_object`
+  (11617)·`_jp_parse_value`(11639)·`hexa_map_set`(2263)·`hmap_grow`·
+  intern table(602-754). 파서 로직·intern·map_set 자체는 단독 정상
+  (격리 파싱 OK 와 일치). 발산은 **호출간 누적 allocator/arena 상태**
+  에서만 발현(7191 호출 후 ~1 map 이 key 유실, 동일입력 retry-immune)
+  → 용의 구역 = arena-backed map(`from_arena`)/hmap_alloc 의 프로세스
+  -전역 arena 가 다수 할당 후 특정 상태에서 slot 별칭/손상. 정확한
+  수정은 계측(HEXA_ALLOC_STATS·valgrind·7191-distinct 최소재현) 필요
+  = 별도 집중 세션. **깊은-context 추측성 runtime.c 패치 금지** —
+  공유 런타임은 검증된 19 + hexa-matter 26 게이트 전부가 의존하므로
+  회귀 위험. 국소화 결과만 인계, 포팅은 언블록 클래스로 계속.
