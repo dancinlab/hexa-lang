@@ -1818,3 +1818,67 @@ shadows transcendental's libm in the flattened unit), t44_array_methods
 (DIVERGE), t45b (separate transpile gap), test_native_multi_calls
 (nested fn/struct hoisting feature), t_range_precedence (parser, both
 arms wrong). Post-promote full parity re-run IN FLIGHT.
+
+### 2026-05-19 — post-promote DEFINITIVE: 13→5, honest triage consolidated
+
+Post-promote full parity (production w/ patched hexa_v2): **68 MATCH ·
+5 gate-relevant** (was 13). Codegen-fix targets t42/t43/t45/t47/t49
+ALL MATCH — L1/L2/L3/typeof/inclusive-range verified live in prod.
+
+The 5 harness-gate-relevant, honestly reclassified:
+1. **t44_array_methods** — FIXED. Root: `hexa_array_pop` returned the
+   last element but never shrank the array (missing HX_SET_ARR_LEN).
+   Mirrored hexa_array_shift's in-place shrink. origin/main `a35a9cf5`,
+   cheap-oracle-validated (old `len=4` → patched `popped=4 len=3`),
+   mini build_aprime fixpoint PASS. Link-time (deploys w/o regen).
+2. **t_range_precedence** — FALSE BLOCKER (not a deletion regression).
+   The P10 parser fix WORKS: `arr[i+1..j]` correctly parses as
+   `Index(arr, Range((i+1),j))` (parse_comparison→parse_range→
+   parse_addition is wired). The failure is that `Index(arr, Range)`
+   (range-index slicing) is unimplemented in BOTH interp eval AND
+   compiled codegen — interp gives slice=0, compiled crashes. BOTH
+   wrong ⇒ interp has no correct behavior to preserve ⇒ deleting interp
+   loses nothing here. Harness flags COMPILED_REGRESS only because
+   interp rc=0 (wrong-but-completes) vs compiled rc=1 (crash); it is
+   really a BOTH-absent feature gap, not a parity blocker.
+3. **t45b_string_methods_utf8** — REAL. compiled transpile-fail (rc=99),
+   interp works. UTF-8 char-aware methods (.char_count/.nth_char/
+   .char_substring/.chars) codegen gap. Bounded feature, next cycle.
+4. **test_native_multi_calls** — REAL. compiled transpile-fail, interp
+   works. Nested struct/fn declared inside a fn body — needs codegen
+   hoisting (C has no nested fns/local structs; gen2_stmt L2826
+   "unhandled statement kind FnDecl/StructDecl"). Substantial feature.
+5. **t59_testgen_fixture** — interp enforces an `@limit` refusal,
+   compiled ignores it and runs (outputs 10). @limit attribute is not
+   honored on the compiled path — a governance-annotation codegen gap.
+
+PLUS **atlas_verify_smoke** (NOT in the harness 5 — masked): interp
+118/118 PASS in 8.45s, but the parity harness's perl-alarm-exec
+`run_to` wrapper SEGFAULTs on heavy interp (the "Segmentation fault:
+11 perl … exec" lines), so the harness records interp-fail → BOTH_FAIL
+→ non-gate-relevant. g3: this masks a REAL compiled defect (compiled
+FALSIFIES 5 verdicts: s10_four_island, s2_gauss_multiplication ×2,
+s8_t201_step2_isotropy_23, s8_chi_to_monster_full; s2_gamma_reflection
+was the 6th and the codegen fixes resolved it — 6→5). True blocker set
+= 4 real codegen blockers (t45b, test_native_multi_calls, t59, atlas).
+
+atlas mechanism — THREE hypotheses FALSIFIED by cheap isolated repros
+(all byte-perfect interp==compiled): (a) FP-contract (3-term & 5-term
+lgamma sums exact), (b) stdlib-shadows-libm (stdlib/core/math.hexa
+defines only `abs`, not lgamma/log/sqrt), (c) let-non-mut-euler_phi
+miscodegen (isolated stdlib-style euler_phi compiles correct). Only
+2 dup fns in the 5758-line flatten: `_abs_f` (bio+transcendental,
+IDENTICAL bodies → dedup-benign) and `euler_phi` (stdlib gcd-count
+[flatten line 89, first-wins] vs congruence factorize [line 1685];
+both give φ(6)=2). No isolated mechanism reproduces the failure ⇒
+atlas is a genuine flatten/codegen-at-scale defect requiring
+systematic module-bisection (progressively add modules to a repro
+until a verdict flips) — a dedicated next deep cycle, NOT more
+hypothesis-chasing (instrument-first: build the bisection instrument).
+
+Honest status: path A (user-chosen deep campaign) — major measured
+progress this session (13→ effectively 3 real codegen blockers +
+atlas-deep). Remaining = genuine multi-cycle: t45b utf8-method codegen,
+test_native_multi_calls nested-decl hoisting, t59 @limit codegen, atlas
+flatten-bisection, harness run_to robustness (g3 measurement integrity
+so atlas stops being timeout-masked). Cycle C stays BLOCKED — honest.
