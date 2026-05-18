@@ -270,6 +270,7 @@ HexaVal rt_delete_file(HexaVal path);                 /* runtime.c:10940 — unl
 HexaVal hexa_list_dir(HexaVal path);                  /* runtime.c — ls -1 shellout → [entries] (R7: compiler/atlas/merger, atlas_cli) */
 HexaVal hexa_timestamp(void);                         /* runtime.c:9877 — UNIX millis */
 HexaVal hexa_from_char_code(HexaVal n);               /* runtime.c:7668 — int → 1-char string */
+HexaVal hexa_chr_byte(HexaVal n);                     /* runtime.c — chr(N) byte-level 1-byte string (N&0xFF) */
 HexaVal hexa_sleep_ms(HexaVal ms);                    /* runtime.c:10000 — non-blocking-ish sleep */
 HexaVal hexa_term_winsize_rows(void);                 /* runtime.c:11340 — terminal rows (TIOCGWINSZ) */
 HexaVal hexa_term_winsize_cols(void);                 /* runtime.c:11345 — terminal cols (TIOCGWINSZ) */

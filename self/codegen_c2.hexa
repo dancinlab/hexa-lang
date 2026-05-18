@@ -1399,7 +1399,7 @@ fn _gen2_emit_tail_returnify_body(body_stmts, depth) {
     // builtin returns void; emit as a normal expression statement instead.
     if ik == "Call" && type_of(inner.left) != "string" && inner.left.kind == "Ident" {
         let _cname = inner.left.name
-        if _cname == "println" || _cname == "print" || _cname == "eprintln" || _cname == "print_err" || _cname == "eprint" || _cname == "exit" {
+        if _cname == "println" || _cname == "print" || _cname == "eprintln" || _cname == "eprint" || _cname == "exit" {
             chunks.push(gen2_stmt(last, depth))
             return chunks.join("")
         }
@@ -3908,15 +3908,7 @@ fn gen2_expr(node) {
             }
             // FIX (2026-04-20): variadic eprintln — same bug as println.
             // Chain hexa_eprint_val for each arg, append trailing newline.
-            // FIX (2026-05-19): print_err is an exact alias of eprintln in the
-            // interpreter (self/hexa_full.hexa: print_err -> eprintln(concat
-            // args)). It is in the self/env.hexa builtin list so `hexa parse`
-            // accepts it, but the compiled path emitted no shim -> clang
-            // "use of undeclared identifier 'print_err'". Share the eprintln
-            // emission path so the compiled SSOT matches the interp builtin
-            // (GOAL (2) interp/compiled parity). inbox/patches/
-            // print-err-builtin-interp-compiled-parity.md (wisp).
-            if name == "eprintln" || name == "print_err" {
+            if name == "eprintln" {
                 let nargs_e = len(node.args)
                 if nargs_e == 0 {
                     return "(fprintf(stderr, \"\\n\"), hexa_void())"
@@ -4451,7 +4443,13 @@ fn gen2_expr(node) {
                 if name == "read_lines"     { return "rt_read_lines(" + a0 + ")" }
                 if name == "from_char_code" { return "hexa_from_char_code(" + a0 + ")" }
                 if name == "ord"            { return "hexa_char_code(" + a0 + ", hexa_int(0))" }
-                if name == "chr"            { return "hexa_from_char_code(" + a0 + ")" }
+                // chr-byte-fix 2026-05-17 (RFC chr-byte-vs-codepoint-asymmetry):
+                // chr lowers to byte-level `hexa_chr_byte` (1 byte N & 0xFF),
+                // mirroring `ord(substring(s,i,1))` byte read. Previously emitted
+                // `hexa_from_char_code` (codepoint→UTF-8) which silently broke
+                // byte-synthesis callers (URL decode, PNG header, emoji prefix).
+                // `from_char_code` retains codepoint behaviour for JSON \uXXXX.
+                if name == "chr"            { return "hexa_chr_byte(" + a0 + ")" }
                 // RFC 030 (2026-05-12): bytes_to_str_raw([int]) — raw byte
                 // concatenation, no UTF-8 codepoint re-encoding. Unblocks
                 // byte_tokenizer.hexa → string round-trip for Korean / emoji.
@@ -4742,6 +4740,17 @@ fn gen2_expr(node) {
                 }
                 if name == "farr_apply_single_farr" {
                     return "hexa_farr_apply_single_farr(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
+                // RFC 041 Phase B forge GPU kernels (gap(d), Decision 9):
+                // compiled-path wiring (interp had these since Phase B;
+                // flame uses `hexa build` so the codegen must map them).
+                // CUDA build → __global__ kernel; else byte-identical
+                // _hx_farr_rope_cpu fallback.
+                if name == "farr_rope_gpu" {
+                    return "hexa_farr_rope_gpu(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
+                if name == "farr_rope_bwd_gpu" {
+                    return "hexa_farr_rope_bwd_gpu(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
                 }
             }
             if len(node.args) == 7 {
@@ -6323,6 +6332,19 @@ fn _is_known_float_name(name) {
     // H17 fix: see _is_known_int_name — param annotation is authoritative
     // over any prior fn's module-global known-float registration.
     if _gen2_name_in_cur_params(name) { return false }
+    // 2026-05-19 atlas root-cause: symmetric collision check (see the
+    // _is_known_int_name companion). If `name` is also registered int,
+    // the int↔float classification is ambiguous across the flattened
+    // unit — bail to safe tag-dispatch.
+    if len(_known_int_set) == 64 {
+        let _bi = _known_hash(name)
+        let _ib = _known_int_set[_bi]
+        let mut _ii = 0
+        while _ii < len(_ib) {
+            if _ib[_ii] == name { return false }
+            _ii = _ii + 1
+        }
+    }
     let b = _known_hash(name)
     let bucket = _known_float_set[b]
     let mut i = 0
@@ -6344,6 +6366,24 @@ fn _is_known_int_name(name) {
     // The current fn's param type is authoritative; a prior fn's `let X = 0`
     // must not be applied to this fn's `X: float` param.
     if _gen2_name_in_cur_params(name) { return false }
+    // 2026-05-19 atlas root-cause fix: name-collision across the
+    // flattened modules. _known_int_set / _known_float_set are GLOBAL
+    // keyed by name, so a common name (`lhs`, `rhs`, `err`, …) can be
+    // registered int by one module (`let lhs = sigma(n)*euler_phi(n)`)
+    // and float by another (`let lhs = lgamma(...)+...`). If both,
+    // treat the classification as ambiguous and bail to the safe
+    // tag-dispatch BinOp — the prior unconditional "int wins" emitted
+    // `HX_INT(lhs)-HX_INT(rhs)` on float operands, producing garbage
+    // err in atlas_verify_smoke and 5 verdict FALSIFIES.
+    if len(_known_float_set) == 64 {
+        let _bf = _known_hash(name)
+        let _fb = _known_float_set[_bf]
+        let mut _fi = 0
+        while _fi < len(_fb) {
+            if _fb[_fi] == name { return false }
+            _fi = _fi + 1
+        }
+    }
     let b = _known_hash(name)
     let bucket = _known_int_set[b]
     let mut i = 0
@@ -6401,11 +6441,67 @@ fn _is_known_float(node) {
 // Covers: FloatLit, float BinOp (recursive), Ident that is already known-float,
 // UnaryOp - on float. Mixed int+float promotes to float (C semantics).
 // decreases node — structural
+// Unambiguously-float-returning math builtins. Recognising them in
+// `_is_float_init_expr` lets `let X = lgamma(...) + ...` register X as
+// known-float so the cross-module collision-guard in
+// _is_known_int_name fires — without this, the atlas-verify
+// transcendental `let lhs = lgamma(1/6)+lgamma(5/6)-2*lgamma(0.5)`
+// stays unregistered while a different module's
+// `let lhs = sigma(n)*euler_phi(n)` pollutes the global known-int set,
+// and the BinOp fast-path mis-emits HX_INT(lhs)-HX_INT(rhs) on float
+// operands (parity-gate atlas root: 5 verdict FALSIFY).
+fn _is_float_returning_call(name) {
+    if type_of(name) != "string" { return false }
+    if name == "lgamma"   { return true }
+    if name == "tgamma"   { return true }
+    if name == "log"      { return true }
+    if name == "log2"     { return true }
+    if name == "log10"    { return true }
+    if name == "log1p"    { return true }
+    if name == "exp"      { return true }
+    if name == "exp2"     { return true }
+    if name == "expm1"    { return true }
+    if name == "sqrt"     { return true }
+    if name == "cbrt"     { return true }
+    if name == "hypot"    { return true }
+    if name == "pow"      { return true }
+    if name == "sin"      { return true }
+    if name == "cos"      { return true }
+    if name == "tan"      { return true }
+    if name == "asin"     { return true }
+    if name == "acos"     { return true }
+    if name == "atan"     { return true }
+    if name == "atan2"    { return true }
+    if name == "sinh"     { return true }
+    if name == "cosh"     { return true }
+    if name == "tanh"     { return true }
+    if name == "asinh"    { return true }
+    if name == "acosh"    { return true }
+    if name == "atanh"    { return true }
+    if name == "erf"      { return true }
+    if name == "erfc"     { return true }
+    if name == "_abs_f"   { return true }
+    if name == "_ln2"     { return true }
+    if name == "_log2_f"  { return true }
+    if name == "_sqrt_f"  { return true }
+    if name == "_pi_const" { return true }
+    if name == "hexa_to_float" { return true }
+    return false
+}
+
 fn _is_float_init_expr(node) {
     if type_of(node) == "string" { return false }
     let k = node.kind
     if k == "FloatLit" { return true }
     if k == "Ident" { return _is_known_float_name(node.name) }
+    // 2026-05-19 atlas root-cause fix: a Call to an unambiguously-
+    // float-returning math builtin makes the result float-init.
+    if k == "Call" {
+        if type_of(node.left) != "string" && node.left.kind == "Ident" {
+            return _is_float_returning_call(node.left.name)
+        }
+        return false
+    }
     if k == "BinOp" {
         let op = node.op
         if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
@@ -6521,7 +6617,6 @@ fn _is_builtin_name(name) {
     if name == "print" { return true }
     if name == "eprintln" { return true }
     if name == "eprint" { return true }
-    if name == "print_err" { return true }  // alias of eprintln (interp/compiled parity)
     if name == "len" { return true }
     if name == "to_string" { return true }
     if name == "type_of" { return true }

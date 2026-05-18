@@ -8113,6 +8113,20 @@ HexaVal hexa_from_char_code(HexaVal n) {
     return hexa_str_own(out);
 }
 
+// chr(N) → byte-level 1-char string. Distinct from hexa_from_char_code
+// (UTF-8 codepoint encoder): chr_byte masks N to a single byte (N & 0xFF)
+// and returns a 1-byte string. Used by URL-decode / raw-byte builders
+// (the codegen mapping `chr` → hexa_chr_byte at codegen_c2.hexa L4452
+// has existed without a runtime impl — the new tier-2 transpiler emits
+// it from self/main.hexa::cmd_url_decode, exposing the gap).
+HexaVal hexa_chr_byte(HexaVal n) {
+    int64_t code = HX_IS_INT(n) ? HX_INT(n) : (int64_t)_hexa_f(n);
+    char* s = (char*)malloc(2);
+    s[0] = (char)(code & 0xFF);
+    s[1] = 0;
+    return hexa_str_own(s);
+}
+
 // RFC 030 — `bytes_to_str_raw([int]) -> string`
 //
 // Wrap a hexa int array (each ∈ 0..255) as a hexa string whose underlying
