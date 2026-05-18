@@ -1882,3 +1882,88 @@ atlas-deep). Remaining = genuine multi-cycle: t45b utf8-method codegen,
 test_native_multi_calls nested-decl hoisting, t59 @limit codegen, atlas
 flatten-bisection, harness run_to robustness (g3 measurement integrity
 so atlas stops being timeout-masked). Cycle C stays BLOCKED — honest.
+
+### 2026-05-19 — ATLAS ROOT-CAUSE RESOLVED: 5 FALSIFY → 1 (path-A)
+
+The systematic module-bisection (LESSON 8 next-cycle item) cracked the
+atlas mystery. The mechanism is NOT FP-contract / lgamma-impl / FMA
+(3 falsified isolated-repro hypotheses) — it is a **global-state
+pollution in codegen's known-int/known-float tracking**:
+
+`_known_int_set` is a 64-bucket hash set keyed by NAME, populated by
+the L1050 top-level scan AND the L2380 gen2_stmt LetStmt registration.
+It accumulates across the FLATTENED unit with no module/function
+scope. In atlas_verify_smoke (5758-line flatten of 20 modules), common
+variable names like `lhs` are registered known-int by a module's
+`let lhs = sigma(n) * euler_phi(n)` (int BinOp chain handled by
+_is_int_init_expr) AND would be registered known-float by another's
+`let lhs = lgamma(1/6)+lgamma(5/6)-2*lgamma(0.5)` — BUT
+_is_float_init_expr did NOT recognise `Call` nodes, so the float-side
+never registered, leaving `lhs` int-only-tagged globally. The BinOp
+codegen at L3457 then took the HX_INT fast-path and emitted
+`hexa_int(HX_INT(lhs) - HX_INT(rhs))` on float operands → garbage int
+truncation of float bits → err value passed to a 1e-9 tolerance check
+produced chaotic (memory-layout-dependent) pass/fail, ⇒ 5 verdicts
+FALSIFY (and a 6th, s2_gamma_reflection_n6, that flipped depending on
+which other modules were flattened — the smoking gun pointing at
+flatten-composition).
+
+The fix is two surgical commits on origin/main:
+- **`3a44f99a`** _is_known_{int,float}_name collision-guard: if a name
+  is present in BOTH sets (collision detected at query time), bail to
+  FALSE so the BinOp fast-path defers to the safe tag-dispatch
+  hexa_sub/hexa_add. Add-logic unchanged.
+- **`b8be02dc`** _is_float_init_expr Call recognition: a curated table
+  of unambiguously-float-returning math builtins (lgamma/tgamma,
+  log/log2/log10/log1p, exp/exp2/expm1, sqrt/cbrt/hypot/pow,
+  sin/cos/tan + inverse/hyperbolic, erf/erfc, _abs_f/_ln2/_log2_f/
+  _sqrt_f/_pi_const, hexa_to_float) lets a Call result satisfy
+  _is_float_init_expr ⇒ float-side registration fires ⇒ collision
+  detected ⇒ guard fires.
+
+Validated end-to-end via the LESSON 7 promote ceremony:
+1. Surgical-overlay codegen_c2.hexa into the shared rfc043 dir (full
+   rfc043↔origin/main merge had 7 conflicts incl. binary artifacts —
+   high blast radius, deferred to a coordinated sync).
+2. `hexa cc --regen` produced hexa_cc.c.new with the fixes (1455683 →
+   1464821 bytes, +20 lines for the codegen fix, +56 lines for the
+   Call-recognition).
+3. Out-of-tree candidate hexa_v2 built (.new→.c, no -x c) — KEY
+   confirmation: the emitted `verify_s2_gamma_reflection_n6` body now
+   reads `_abs_f(hexa_sub(lhs, rhs))` (was
+   `_abs_f(hexa_int(HX_INT(lhs)-HX_INT(rhs)))`) ✓.
+4. atlas_verify_smoke compiled with candidate: 117/118 verdicts hold
+   (was 113/118 = 5 FALSIFY) → **5 → 1 FALSIFY** (modular::s8_elliptic_
+   j1728 remains, separate; the other 5 — s2_gamma_reflection_n6,
+   s10_four_island, s2_gauss_multiplication ×2, s8_t201_step2_isotropy,
+   s8_chi_to_monster_full — ALL resolved).
+5. build_aprime fixpoint PASS w/ candidate as hexa_v2 (self-host safe).
+6. Atomic promote with rollback backup (promote_backup_atlas_
+   1779120749). Post-promote production: atlas 117/118 (re-verified),
+   guard-safe build/parse/run OK, interp intact.
+7. Surfaced a runtime-side miss en route: shared rfc043 was behind
+   origin/main on `hexa_chr_byte` (impl+proto), the new hexa_v2
+   emitted `chr(N)→hexa_chr_byte(N)` from self/main.hexa::cmd_url_decode
+   and build_hexa_cli's driver-rebuild errored. Synced runtime.c +
+   runtime.h to origin/main's behavior (impl in shared rfc043 deploy
+   commit `e5c4c0ef`).
+
+rfc043 deploy `e5c4c0ef` is LOCAL ONLY — NOT pushed to origin/rfc043.
+Shared-branch policy: local deploy suffices for the closure measurement;
+pushing the rfc043 commit (other sessions + 1.5MB binary) is a
+distribution step deferred to a coordinated sync.
+
+Honest remaining gate-relevant after atlas-fix:
+- t45b_string_methods_utf8 (UTF-8 char-aware methods, runtime+codegen
+  impl needed — bounded substantial)
+- test_native_multi_calls (nested fn/struct hoisting — substantial
+  codegen feature)
+- t59_testgen_fixture (@limit attribute codegen — niche)
+- modular::s8_elliptic_j1728 (the 1 remaining atlas verdict — separate
+  small residue post-collision-guard fix, likely the same fast-path
+  class but a different variable name pair)
+- t_range_precedence (parser, both-arms-wrong → confirmed false-blocker
+  per LESSON 8, not a deletion regression)
+
+Full post-atlas-fix parity re-measurement IN FLIGHT (with patched
+harness run_to so atlas no longer timeout-masked).
