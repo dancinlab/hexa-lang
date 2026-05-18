@@ -558,3 +558,20 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   (`%Nd`/`%N.Mf`)은 선행공백 유의 → fmt 는 trim 금지·후행개행만.
   `de71ed3` PARITY-OK. 잔여 ~104, sim-recipe 더 견고해짐(이 정련은
   모든 후속 width-포맷 sim 에 적용).
+- 2026-05-18 — **클래스급 enabler: `py_json2` (json.dumps indent=2
+  parity) 검증완료 — ~50 json-sim 언블록 (gap#2-analog, 측정확인)**.
+  선결 측정: hexa `keys(map)` 가 **삽입순서 보존**(`z a m b`, 정렬
+  아님) → 범용 emitter 가능. `_hexa_bridge/module/py_json2.hexa`:
+  `py_json2(v, level)` = CPython `json.dumps(obj, indent=2,
+  ensure_ascii=False)` **byte-identical**. 규칙: null/true/false,
+  int=str, **float=json_stringify(수정 runtime CPython repr parity,
+  full-repr `0.5599999999999999` 포함)**, str=ensure_ascii=False
+  raw UTF-8 + `\"`/`\\`/`\b\t\n\f\r`/`\u00XX`(ctrl), 빈 `{}`/`[]`,
+  2-space indent, `: `/`,\n` 구분자, 키는 keys() 순서. 격리검증:
+  대표 nested 구조(dict/list/full-repr float/유니코드 em-dash/bool/
+  null/empty) vs python3 → **PARITY-OK** (print-equiv). WIP probe
+  scaffolding 제거, 모듈만 유지(`b1e0750`). ⟹ autac/lytac/protac
+  등 ~50 json-emit sim = compute → 값구성 → `py_json2` 로 기계적
+  이관 가능. gap#1·gap#2·sim-recipe·py_json2 4대 enabler 완비 →
+  모든 잔여 T3 클래스 검증된 레시피 보유. T3=23/127 유지(enabler,
+  +1 아님 — gap#2 동급 가치). 잔여 ~104, 구조적 천장 0 재확인.
