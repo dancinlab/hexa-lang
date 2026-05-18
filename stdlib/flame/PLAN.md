@@ -1723,16 +1723,29 @@ builtin → runtime.c `#ifdef HEXA_CUDA` dim-gate 가능 (hexa
   only, hexa 불변, no-CUDA Mac 19/19 재검증 PASS. FIRE3 측정:
   util 0→3% (engage 확인) — 단 residency 無라 wall 미통과
   (예상, residency 가 binding).
-- **mk2-C1 (NEXT):** `ag_add`/`ag_silu_gate` forge-route.
-  - 작업: `ag_tape.hexa` 의 두 inline loop → `farr_add_gpu` /
-    `farr_silu_gpu` builtin 호출 + runtime.c bare-wrapper +
-    runtime.h proto + byte-identical CPU fallback (= `ag_rope_mh`
-    /`farr_rope_gpu` 패턴 그대로; `_hx_farr_rope_cpu` 처럼
-    `_hx_farr_{add,silu}_cpu` fallback, **FMA pragma 주의**
-    [[flame-transcendental-byteeq-hazard]]).
-  - falsifier: cheap `.cu` add/silu GPU byte-eq oracle (RoPE
-    oracle 패턴, ~$0.3) `max|Δ|=0` · no-CUDA Mac `flame_ag_
-    tape_test` **19/19 ALL PASS** (CPU fallback byte-id).
+- **mk2-C1a (DONE 2026-05-19):** `ag_add` forge-route. **기존
+  infra 재사용** — `farr_add_gpu` bare wrapper + CPU fallback
+  `_hx_farr_add_cpu` (exact `C=A+B`, no FMA/transcendental →
+  byte-eq trivial; GPU `_hx_cuda_farr_add_gpu` 는 Phase 4-D-5-3
+  "11/11 byte-eq" 에서 이미 검증) 이 이미 runtime.c 존재. 작업
+  = `ag_tape.hexa::ag_add` inline loop → `farr_add_gpu(a,b,len)`
+  1-line. **검증: no-CUDA Mac `flame_ag_tape_test` 19/19 ALL
+  PASS** (CPU fallback byte-id, Test 8 RESID 포함, leaf 12/12
+  보존). add 는 exact add 라 별도 GPU oracle fire 不要 (rounding
+  hazard 無). $0 verified.
+- **mk2-C1b (NEXT):** `ag_silu_gate` forge-route — **byte-eq
+  hard**. silu_gate = `a·σ(a)·b`, `σ=1/(1+dt_exp(-x))`. 기존
+  `farr_silu_gpu` 는 (1) silu-only (·b gate 無), (2) CPU
+  fallback `_hx_sigmoid_d`·CUDA `_hx_cuda_sigmoid_d` 둘 다
+  **libm/device `exp` ≠ hexa `dt_exp`** (12-term Taylor) →
+  Test 11 leaf `max|Δ|=0` FAIL 확정. 작업: `_hx_dt_exp_d`(C) +
+  `_hx_cuda_dt_exp_d`(CUDA) 를 hexa `dt_exp` 와 **bit-exact**
+  구현 (deterministic single-rounding loop, `a*b+c*d` 無 →
+  FMA-contraction 低위험이나 CUDA `__dmul_rn`/`__ddiv_rn` 안전
+  적용) + fused `farr_silu_gate_gpu(a,b,n)` (CPU/CUDA) + runtime.h
+  proto + `ag_tape.hexa::ag_silu_gate` 교체.
+  - falsifier: cheap `.cu` silu_gate GPU byte-eq oracle (RoPE
+    oracle 패턴, ~$0.3) `max|Δ|=0` · no-CUDA Mac 19/19 ALL PASS.
   - gate: 두 falsifier PASS 後 commit.
 - **mk2-C2:** `ag_rmsnorm_mh` forge-route (`_hx_cuda_farr_
   rmsnorm_rows_gpu`, dt_sqrt 경로 — transcendental byte-eq
@@ -1762,9 +1775,15 @@ builtin → runtime.c `#ifdef HEXA_CUDA` dim-gate 가능 (hexa
 4. g3: cycle falsifier 측정 전 closure 주장 0. 측정값만 PLAN
    갱신.
 
-**현재 상태: mk2-C0 DONE (landed main PR #67). mk2-C1 = 다음
-세션 진입점.** 각 cycle 은 독립 commit + (cheap oracle + Mac
-19/19) gate. C3 (residency) 가 d768 wall 통과의 binding cycle.
+**현재 상태 (2026-05-19): mk2-C0 DONE (PR #68) · mk2-C1a DONE
+($0 verified, Mac 19/19) · mk2-C1b = 다음 진입점.** 각 cycle
+독립 commit + (cheap oracle + Mac 19/19) gate. **C3 (residency)
+가 d768 wall 통과의 binding cycle** — C1/C2 forge-route 는
+prerequisite 일 뿐, residency 無면 wall 不動 (FIRE3 측정:
+matmul-cuBLAS 단독도 0-step). mk2 100% closure (goal) =
+C1b+C2+C3+C4 + d768 fire 측정 PASS = **multi-session**.
+g3: 측정-closure 전 100% 주장 0 (Stop hook 은 측정 PASS 까지
+fire; fabricate 금지).
 
 cross-link: 본 PLAN mk2 결정 절 · README.md Benchmark ·
 design.md Decision 11 · [[flame-general-pytorch-replacement-goal]].

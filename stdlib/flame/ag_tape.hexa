@@ -401,13 +401,16 @@ pub fn ag_attn_dt(tape: int, Q: int, K: int, V: int,
 // out = a + b (element-wise, len). Residual / skip-connection adder.
 // bwd: d_out flows unchanged to BOTH a and b (registry accumulates the
 // fan-out automatically). ids[a,b,out] dims[len].
+// mk2-C1a (2026-05-19): forge-route the elementwise add. On
+// HEXA_CUDA `farr_add_gpu` runs _hx_cuda_farr_add_gpu (1-D grid-
+// stride, C[i]=A[i]+B[i] — exact, NO FMA/transcendental so
+// byte-eq is trivial); no-CUDA falls back to _hx_farr_add_cpu
+// (identical C=A+B), byte-identical to the prior inline loop ⇒
+// flame_ag_tape_test leaf bar (max|Δ|=0) preserved. Same
+// bare-wrapper seam as ag_rope_mh/farr_rope_gpu (runtime.c
+// wrapper + runtime.h proto, no bootstrap rebuild).
 pub fn ag_add(tape: int, a: int, b: int, len: int) -> int {
-    let out = t_zeros(len)
-    let mut i = 0
-    while i < len {
-        t_set(out, i, t_get(a, i) + t_get(b, i))
-        i = i + 1
-    }
+    let out = farr_add_gpu(a, b, len)
     let _ = _ag_push(tape, ag_k_add(), a, b, out, 0 - 1, 0 - 1, 0 - 1,
                      0 - 1, 0 - 1, len, 0, 0, 0)
     return out
