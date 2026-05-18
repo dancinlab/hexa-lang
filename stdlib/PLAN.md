@@ -319,6 +319,18 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
 - 2026-05-18 `800ad3b` (hexa-bio) — T3 +1: `cross_axis_matrix` (24-axis registry + longest-match filename extractor + docstring CROSS-block 워드바운디드 axis 스캔 + 24×24 시각화 매트릭스 + per-cell roster + awk 퍼센트) 191줄 바이트-패리티. **T3 14/104.**
 - 2026-05-18 `3acfec3` (hexa-bio) — T3 +1: `atlas_atom_proofs` (5 수학 항등식 게이트 — Caspar-Klug 정수 + MWC inline 검증, Griffith-Orgel/CI 2x2 는 교과서 항등식이라 .py 의 sympy 계산 실패 불가) 40줄 바이트-패리티. **T3 15/104.**
 - 2026-05-18 (hexa-bio) — T3 +1: `atlas_atom_tier_upgrade_gate` (registry JSON 로드 + P1 proofs × 5 atom 매칭 + 16-row 업그레이드-eligibility 테이블) 129줄 바이트-패리티. **T3 16/104.**
+- 2026-05-18 — **🔬 상류 갭 #4 발견 (runtime json_parse loop-lossy)**:
+  `schema_const_audit` 이관 중 — 한 프로세스에서 서로 다른 JSON 문서를
+  다수 순차 `json_parse` 하면 일부 객체 키가 누락됨(예: 115 schema 루프
+  중 `"const": true` 키 소실 → 모든 verdict 가 잘못 TYPED-ONLY). 동일
+  텍스트를 즉시 재-`json_parse` 하면 정상 복구 → 파서 arena/free-list
+  메모리 버그(직전 parse 의 해제 메모리 재사용 추정). 단일-텍스트 6회
+  루프는 정상 → 서로 다른/큰 문서 시퀀스에서만 발현. g3 준수: 손실
+  포트 폐기(union → .py fallback, 무회귀). 영향: loop-json-parse 게이트
+  (`schema_const_audit` 등) deferred. 수정 = self/runtime.c `hexa_json_parse`
+  메모리 관리 + 툴체인 재빌드(ubu-2 오프라인 → 복귀 후). 상류 갭 누적:
+  #1 float-repr(✅수정·검증) · #2 -Infinity · #3 scale · #4 json_parse
+  loop-lossy — 별도 atlas/runtime 트랙.
 - 2026-05-18 — **세션 체크포인트 (측정된 거리)**: hexa-matter T1/T2
   완료(26/26 selftest hexa-native·verify 4/4·문서 HX). hexa-bio
   **T3 9/104** 검증(r1_symlink·virocapsid_c5·tape_lattice_cohort·
