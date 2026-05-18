@@ -33,7 +33,9 @@ use "self/stdlib/law_io"
 // (cmd_run 이 extra_args 를 그대로 전달하므로 자체 스크립트 args() 는
 //  [target, opts...] 또는 av[2] 부터가 target 인 경우 둘 다 존재 가능.
 //  bt 39 patch 이후 interpreter 에서 av[2] = 첫 사용자 인자.)
-let __av = args()
+// R7 track B cycle 5 (2026-05-18): `let __av = args()` moved into fn main
+// to satisfy compiled-binary entry semantics. Interp `hexa run` still
+// auto-invokes main() so dual-path behavior preserved (g_inbox_dual_track).
 
 fn _extract_runner_argv(av) {
     // 가장 최근 hexa CLI 컨벤션: av[2..] = 유저 인자.
@@ -259,49 +261,52 @@ fn _run_selftest_compat(target: string) -> int {
 
 // ─── entry ─────────────────────────────────────────────────
 
-let __runner_args = _extract_runner_argv(__av)
+fn main() {
+    let __av = args()
+    let __runner_args = _extract_runner_argv(__av)
 
-if len(__runner_args) == 0 {
-    _print_usage()
-    exit(2)
-}
-
-let mut __target = ""
-let mut __filter = ""
-let mut __verbose = 0
-let mut __selftest_only = 0
-let mut __i = 0
-while __i < len(__runner_args) {
-    let a = __runner_args[__i]
-    if a == "--filter" {
-        if __i + 1 < len(__runner_args) {
-            __filter = __runner_args[__i + 1]
-            __i = __i + 2
-        } else {
-            println("error: --filter requires NAME")
-            exit(2)
-        }
-    } else if a == "--verbose" || a == "-v" {
-        __verbose = 1
-        __i = __i + 1
-    } else if a == "--selftest-only" {
-        __selftest_only = 1
-        __i = __i + 1
-    } else if a == "--help" || a == "-h" {
+    if len(__runner_args) == 0 {
         _print_usage()
-        exit(0)
-    } else if len(__target) == 0 {
-        __target = a
-        __i = __i + 1
-    } else {
-        __i = __i + 1
+        exit(2)
     }
-}
 
-if len(__target) == 0 {
-    _print_usage()
-    exit(2)
-}
+    let mut __target = ""
+    let mut __filter = ""
+    let mut __verbose = 0
+    let mut __selftest_only = 0
+    let mut __i = 0
+    while __i < len(__runner_args) {
+        let a = __runner_args[__i]
+        if a == "--filter" {
+            if __i + 1 < len(__runner_args) {
+                __filter = __runner_args[__i + 1]
+                __i = __i + 2
+            } else {
+                println("error: --filter requires NAME")
+                exit(2)
+            }
+        } else if a == "--verbose" || a == "-v" {
+            __verbose = 1
+            __i = __i + 1
+        } else if a == "--selftest-only" {
+            __selftest_only = 1
+            __i = __i + 1
+        } else if a == "--help" || a == "-h" {
+            _print_usage()
+            exit(0)
+        } else if len(__target) == 0 {
+            __target = a
+            __i = __i + 1
+        } else {
+            __i = __i + 1
+        }
+    }
 
-let __rc = run_tests(__target, __filter, __verbose, __selftest_only)
-exit(__rc)
+    if len(__target) == 0 {
+        _print_usage()
+        exit(2)
+    }
+
+    let __rc = run_tests(__target, __filter, __verbose, __selftest_only)
+    exit(__rc)
+}

@@ -1304,3 +1304,33 @@ surgical deletion 은 트랙 B (CLI driver re-targeting) 가 별도 multi-cycle 
 
 **R7 track B 진척**: 4/16 (qrng · qmirror · sim-universe · convergence). 첫 shim-cluster 멤버 안착 — rename 패턴 확립. 잔여 shim-cluster: lsp (1006L) · check (1223L) · test_runner (307L). 잔여 atlas-class: atlas (cross-directory flatten gap). 잔여 특수: batch · bench · init · verify · calc.
 
+---
+
+### 2026-05-18 — R7 track B cycle 5 — test_runner (cycle h26 · 2nd shim-cluster)
+
+**Decision 8** (verb #5): test (`self/test_runner.hexa`, 307 lines, 3 within-self/ use statements).
+
+- **picked**: test_runner
+- **rationale**:
+  - shim-cluster 중 가장 작음 (vs lsp 1006L · check 1223L)
+  - 내부 use statements 모두 self/ 트리 내 (attrs/core, attrs/test, stdlib/law_io) — within-directory 패턴이라 flatten 호환 (atlas-class 아님)
+  - 모듈-끝 entry block (L260-307) 가 `fn main()` 으로 wrap 가능
+
+**구현 (LANDED)**:
+- `self/test_runner.hexa`: L36 `let __av = args()` 제거 (인-comment) + L260-307 entry block 을 `fn main()` 으로 wrap (내부에서 `let __av = args()` 재호출). dual-path 호환 — interp 도 auto-invoke main().
+- `bin/hexa-test` build → 425 KB Mach-O. `tool/build_hexa_test.sh` + no-arg usage smoke.
+- `self/main.hexa` L3290+ (test 분기): spawn path (3-tier binary lookup: install_dir + cwd + HEXA_LANG) + cmd_run fallback (기존 3-tier script resolve 보존).
+- `.gitignore`: `bin/hexa-test`.
+- `hexa.real` rebuild.
+
+**검증**:
+- 기능 동등성: `./hexa test <fixture>` (spawn) ≡ `./bin/hexa-test <fixture>` (direct) — 출력에서 timing measurement (`in 0.307s` vs `in 0.291s`) 만 차이, 모든 test name/PASS-FAIL/summary 동일. 2/2 PASS · rc=0
+- pre-validation: `./hexa test` (no-arg) → dispatch 분기의 `exit(2)` 동작
+- cycle 1-4 regression: qrng + qmirror + sim-universe + convergence 모두 정상 (--version + dump 출력)
+
+**non-determinism note**: test_runner 출력 의 timing 측정 (`total: 2   in <s>s`) 은 wall-clock 변동성 때문에 byte-eq 가 아닐 수 있음. 기능적 동등성으로 충분 (test count + PASS/FAIL + rc).
+
+**fixpoint regression risk**: 0. test_runner.hexa 재구조 + dispatch-only.
+
+**R7 track B 진척**: 5/16 (qrng · qmirror · sim-universe · convergence · test_runner).
+

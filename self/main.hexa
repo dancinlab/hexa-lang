@@ -3287,33 +3287,90 @@ if len(av) < 3 {
         // self/test_runner.hexa 가 대상 파일을 스캔하고 @test fn 을 수집·실행.
         // anima --selftest 관행은 러너가 자동 fallback 으로 유지 (additive).
         // 경로 해석: install_dir → cwd 순서로 존재하는 것 선택 (worktree 지원).
+        //
+        // R7 track B (2026-05-18, cycle 5): preferred path = standalone
+        // compiled bin/hexa-test binary. test_runner.hexa was reshaped:
+        // module-level entry block wrapped in `fn main()` so compiled
+        // binary entry works; interp `hexa run` auto-invokes main() too.
         if len(av) < 4 {
             println("error: 'test' requires <file>")
             println("usage: hexa test <file.hexa> [--filter NAME] [--verbose] [--selftest-only]")
             exit(2)
         } else {
             let __inst_t = install_dir_from_argv0()
-            let mut test_script = "self/test_runner.hexa"
-            if len(__inst_t) > 0 {
-                let inst_path = __inst_t + "/self/test_runner.hexa"
-                if file_exists(inst_path) {
-                    test_script = inst_path
-                } else if !file_exists(test_script) {
-                    // install_dir 에 없고 cwd 에도 없으면 $HEXA_LANG 시도.
-                    let hl = env_var("HEXA_LANG")
-                    if len(hl) > 0 {
-                        let hl_path = hl + "/self/test_runner.hexa"
-                        if file_exists(hl_path) { test_script = hl_path }
-                    }
-                }
-            }
             let mut test_args = []
             let mut ti = 3
             while ti < len(av) {
                 test_args.push(av[ti])
                 ti = ti + 1
             }
-            cmd_run(test_script, test_args)
+            let mut test_bin = ""
+            if len(__inst_t) > 0 {
+                let inst_bin = __inst_t + "/bin/hexa-test"
+                if file_exists(inst_bin) { test_bin = inst_bin }
+            }
+            if len(test_bin) == 0 && file_exists("bin/hexa-test") {
+                test_bin = "bin/hexa-test"
+            }
+            if len(test_bin) == 0 {
+                let hl = env_var("HEXA_LANG")
+                if len(hl) > 0 {
+                    let hl_bin = hl + "/bin/hexa-test"
+                    if file_exists(hl_bin) { test_bin = hl_bin }
+                }
+            }
+            if len(test_bin) > 0 {
+                let cli_q = shq(test_bin)
+                let mut cmd = cli_q
+                let mut ai = 0
+                while ai < len(test_args) {
+                    let q = shq(test_args[ai])
+                    cmd = cmd + " " + q
+                    ai = ai + 1
+                }
+                let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+                let marker = "__HEXA_SHIM_RC__="
+                let mlen = len(marker)
+                let mut midx = -1
+                let mut sj = len(out) - mlen
+                while sj >= 0 {
+                    if out.substring(sj, sj + mlen) == marker {
+                        midx = sj
+                        sj = -1
+                    } else {
+                        sj = sj - 1
+                    }
+                }
+                if midx >= 0 {
+                    let body = out.substring(0, midx)
+                    let rc_str = out.substring(midx + mlen, len(out))
+                    print(body)
+                    let mut rs = rc_str
+                    let rsl = len(rs)
+                    if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                        rs = rs.substring(0, rsl - 1)
+                    }
+                    let rc = parse_int_str(rs)
+                    if rc != 0 { exit(rc) }
+                } else {
+                    print(out)
+                }
+            } else {
+                let mut test_script = "self/test_runner.hexa"
+                if len(__inst_t) > 0 {
+                    let inst_path = __inst_t + "/self/test_runner.hexa"
+                    if file_exists(inst_path) {
+                        test_script = inst_path
+                    } else if !file_exists(test_script) {
+                        let hl = env_var("HEXA_LANG")
+                        if len(hl) > 0 {
+                            let hl_path = hl + "/self/test_runner.hexa"
+                            if file_exists(hl_path) { test_script = hl_path }
+                        }
+                    }
+                }
+                cmd_run(test_script, test_args)
+            }
         }
     } else if sub == "tape" {
         // L2: native .tape v1.2 reader (inlined, C-compiled — no cmd_run).

@@ -82,6 +82,7 @@ bin/hexa-qrng
 bin/hexa-qmirror
 bin/hexa-sim-universe
 bin/hexa-convergence
+bin/hexa-test
 
 # Local smoke/session artifacts (not tracked)
 shared/state/
