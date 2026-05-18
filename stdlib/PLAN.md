@@ -630,3 +630,27 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   _human_time unit-picker(s/min/h/d/yr) via `%.3g`. py_json2 witness
   with mixed numeric (small/large/sci) + string fields. hexa-bio
   `00d5e66`. 잔여 ~98.
+- 2026-05-19 — **T3 +6 (병렬 fan-out): 35/127**. 6 worktree subagent
+  병렬 포트(fresh context per agent = g3 deep-context 회피): ppi_sim
+  · peptide_sim · protac_sim · macrocycle_sim · cryptic_pocket_sim ·
+  covalent_inhibition_sim. 5 subagent 가 공유 hexa-bio worktree 브랜치
+  사용(`worktree-agent-aaefc9ac0ec0a0bdc`), peptide 는 main 직접.
+  cherry-pick 으로 main 통합. 배치 검증 6/6:
+    · protac/macrocycle/covalent_inhibition: 1차 PARITY-OK
+    · ppi/peptide/cryptic_pocket: 측정게이트 3 mismatch 포착·전진수정
+  **규율 #7 (중요)**: CPython 3.12+ `sum(floats)` 는 **Kahan 보상
+  합산**(naive 아님; PR-bpo-44348). naive `s += x` 가 `sum()` 과 drift
+  (예: `sum([4.2,3.5,2.4,1.0,0.7,0.5])` naive=`12.299999999999999` vs
+  CPython 3.12 sum()=`12.3`). 모든 향후 sim 포트가 `sum()` on floats
+  를 다루면 **`fsum()` Kahan 헬퍼 필수**:
+  ```hexa
+  fn fsum(xs: array) -> float {
+      let mut s = 0.0; let mut c = 0.0; let mut i = 0
+      while i < len(xs) { let y = xs[i]-c; let t = s+y; c = (t-s)-y; s = t; i = i+1 }
+      return s
+  }
+  ```
+  추가: `{TEMP_K}` bare 출력은 `js(v)` (= CPython repr), `fmt("%g",v)`
+  아님(`.0` 절단). hexa-bio `488a869` (배치수정 commit); 누적 6 새
+  포트 모두 STDOUT byte-parity. **병렬 가속 실증**: 직렬 1/turn →
+  fan-out 6/turn (verified). 잔여 ~92.
