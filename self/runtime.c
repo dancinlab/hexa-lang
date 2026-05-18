@@ -11589,6 +11589,17 @@ static int64_t _hx_farr_rmsnorm_bwd_rows_cpu(int64_t x_id, int64_t dxn_id,
 // Pure per-element (out depends only on row elements c and c±half) —
 // the GPU kernel reads from a separate input buffer so it is byte-eq.
 // -1 err.
+//
+// FP_CONTRACT OFF: the byte-eq oracle (flame_ag_tape_test Test 9)
+// pins this against the verified hexa primitive nn_rope_apply_fwd,
+// which codegens through opaque farr_get() calls and is therefore
+// NOT FMA-contracted (2 roundings for a*b+c*d). Raw double[] here
+// lets clang contract a*b+c*d into one fma() (1 rounding) → a
+// ~1e-17 mismatch that fails the leaf-op max|Δ|=0 bar. Disabling
+// contraction for this kernel only makes the CPU fallback conform
+// to the reference's rounding, restoring exact byte-eq without
+// de-optimizing the rest of the runtime.
+#pragma STDC FP_CONTRACT OFF
 static int64_t _hx_farr_rope_cpu(int64_t t_id, int64_t cos_id,
                                  int64_t sin_id, int64_t T,
                                  int64_t nheads, int64_t hd,
@@ -11641,6 +11652,7 @@ static int64_t _hx_farr_rope_cpu(int64_t t_id, int64_t cos_id,
     }
     return out_id;
 }
+#pragma STDC FP_CONTRACT DEFAULT
 
 // _hx_farr_adamw_step_cpu(...) -> new farr_id [n] = updated W. m,v
 // updated IN PLACE on their farr buffers (matches the AdamW state
