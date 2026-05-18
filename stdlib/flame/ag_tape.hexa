@@ -51,19 +51,78 @@ pub fn ag_k_rope()    -> int { return 3 }
 pub fn ag_k_lmhead()  -> int { return 4 }
 pub fn ag_k_swiglu()  -> int { return 5 }
 pub fn ag_k_embed()   -> int { return 6 }
+pub fn ag_k_attn()    -> int { return 7 }   // GQA attention core (Q,K,V→ctx)
 
 // ── tape geometry (node v3) ─────────────────────────────────────────────
-fn _ag_hdr()   -> int { return 2 }
+// header v2: [0]=op count, [1]=final-input-grad (legacy/chain path),
+// [2]=reg_tids farr id, [3]=reg_gids farr id (per-tensor grad registry,
+// Decision 3). reg_tids[0]=reg count; reg_tids[1+i]=tensor farr-id;
+// reg_gids[1+i]=accumulated grad farr-id for that tensor.
+fn _ag_hdr()   -> int { return 4 }
 fn _ag_slots() -> int { return 22 }   // kind + 8 ids + 4 dims + 6 pg + 3 ig
+fn _ag_regcap() -> int { return 256 } // max distinct tensors in a tape
 
 pub fn ag_t_begin(max_ops: int) -> int {
     let t = t_zeros(_ag_hdr() + max_ops * _ag_slots())
     t_set(t, 0, 0.0)
     t_set(t, 1, to_float(0 - 1))
+    let rt = t_zeros(1 + _ag_regcap())
+    let rg = t_zeros(1 + _ag_regcap())
+    t_set(rt, 0, 0.0)
+    t_set(t, 2, to_float(rt))
+    t_set(t, 3, to_float(rg))
     return t
 }
 
-pub fn ag_t_end(tape: int) { t_free(tape) }
+pub fn ag_t_end(tape: int) {
+    t_free(to_int(t_get(tape, 2)))
+    t_free(to_int(t_get(tape, 3)))
+    t_free(tape)
+}
+
+// ── per-tensor grad registry (Decision 3) ───────────────────────────────
+fn _ag_reg_find(tape: int, tid: int) -> int {
+    let rt = to_int(t_get(tape, 2))
+    let n = to_int(t_get(rt, 0))
+    let mut i = 0
+    while i < n {
+        if to_int(t_get(rt, 1 + i)) == tid { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// grad farr id for tensor `tid`; allocates a zeroed len-farr on first
+// touch and registers it. Accumulating reverse-mode slot.
+fn _ag_reg_grad(tape: int, tid: int, len: int) -> int {
+    let idx = _ag_reg_find(tape, tid)
+    let rg = to_int(t_get(tape, 3))
+    if idx >= 0 { return to_int(t_get(rg, 1 + idx)) }
+    let rt = to_int(t_get(tape, 2))
+    let n = to_int(t_get(rt, 0))
+    let g = t_zeros(len)
+    t_set(rt, 1 + n, to_float(tid))
+    t_set(rg, 1 + n, to_float(g))
+    t_set(rt, 0, to_float(n + 1))
+    return g
+}
+
+// grad[tid] += src[0..len)
+fn _ag_reg_acc(tape: int, tid: int, src: int, len: int) {
+    let g = _ag_reg_grad(tape, tid, len)
+    let mut i = 0
+    while i < len {
+        t_set(g, i, t_get(g, i) + t_get(src, i))
+        i = i + 1
+    }
+}
+
+// public: accumulated grad farr id for any tensor (param or activation).
+pub fn ag_grad(tape: int, tid: int) -> int {
+    let idx = _ag_reg_find(tape, tid)
+    if idx < 0 { return 0 - 1 }
+    return to_int(t_get(to_int(t_get(tape, 3)), 1 + idx))
+}
 
 pub fn ag_t_count(tape: int) -> int { return to_int(t_get(tape, 0)) }
 
@@ -166,7 +225,163 @@ pub fn ag_embed(tape: int, idsf: int, table: int,
     return X
 }
 
-// ── reverse pass (generic multi-op chain) ───────────────────────────────
+// ctx = GQA-attn-core(Q,K,V) ; Q[T·nh·hd] K/V[T·nkv·hd] → ctx[T·nh·hd].
+// tape owns P (nh·T·T) and ctx. ids[Q,K,V,P,ctx] dims[T,nh,nkv,hd].
+pub fn ag_attn(tape: int, Q: int, K: int, V: int,
+               T: int, nh: int, nkv: int, hd: int) -> int {
+    let dctx_len = T * nh * hd
+    let P   = t_zeros(nh * T * T)
+    let ctx = t_zeros(dctx_len)
+    nn_attn_core_fwd(Q, K, V, P, ctx, T, nh, nkv, hd)
+    let _ = _ag_push(tape, ag_k_attn(), Q, K, V, P, ctx, 0 - 1,
+                     0 - 1, 0 - 1, T, nh, nkv, hd)
+    return ctx
+}
+
+// ── reverse pass (per-tensor grad registry — Decision 3) ────────────────
+// out_tid = tensor id of the final op's output (loss-seed target).
+// seed = grad w.r.t. that tensor. Walks ops latest→first; each op's
+// output-grad is looked up in the registry by its output tensor id,
+// its bwd is dispatched, and the resulting input/param grads are
+// ACCUMULATED into the registry keyed by tensor id (handles linear
+// chains, attention fan-in, and param reuse uniformly). Read any
+// accumulated grad afterwards via ag_grad(tape, tensor_id).
+pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
+    let n = to_int(t_get(tape, 0))
+    if n <= 0 { return }
+    // seed: grad[out_tid] = seed (acc into fresh zero == set).
+    _ag_reg_acc(tape, out_tid, seed, t_len(seed))
+    let mut op = n - 1
+    while op >= 0 {
+        let kind = _ag_get(tape, op, 0)
+        if kind == ag_k_rmsnorm() {
+            let x = _ag_get(tape, op, 1)
+            let g = _ag_get(tape, op, 2)
+            let y = _ag_get(tape, op, 3)
+            let xn = _ag_get(tape, op, 4)
+            let inv_id = _ag_get(tape, op, 5)
+            let d = _ag_get(tape, op, 9)
+            let og = _ag_reg_grad(tape, y, d)
+            let dx = t_zeros(d)
+            let dg = t_zeros(d)
+            nn_rmsnorm_bwd(x, g, xn, t_get(inv_id, 0), og, dx, dg, d)
+            _ag_reg_acc(tape, x, dx, d)
+            _ag_reg_acc(tape, g, dg, d)
+            t_free(dx)
+            t_free(dg)
+        } else if kind == ag_k_linear() {
+            let x = _ag_get(tape, op, 1)
+            let W = _ag_get(tape, op, 2)
+            let bb = _ag_get(tape, op, 3)
+            let y = _ag_get(tape, op, 4)
+            let B = _ag_get(tape, op, 9)
+            let D = _ag_get(tape, op, 10)
+            let C = _ag_get(tape, op, 11)
+            let og = _ag_reg_grad(tape, y, B * C)
+            let dW = t_zeros(D * C)
+            let dx = t_zeros(B * D)
+            let db = t_zeros(C)
+            nn_linear_bwd(x, W, og, dW, dx, db, B, D, C)
+            _ag_reg_acc(tape, x, dx, B * D)
+            _ag_reg_acc(tape, W, dW, D * C)
+            _ag_reg_acc(tape, bb, db, C)
+            t_free(dW)
+            t_free(dx)
+            t_free(db)
+        } else if kind == ag_k_rope() {
+            let q = _ag_get(tape, op, 1)
+            let cs = _ag_get(tape, op, 2)
+            let sn = _ag_get(tape, op, 3)
+            let qo = _ag_get(tape, op, 4)
+            let p = _ag_get(tape, op, 9)
+            let hd = _ag_get(tape, op, 10)
+            let og = _ag_reg_grad(tape, qo, hd)
+            let dq = t_zeros(hd)
+            nn_rope_apply_bwd(og, cs, sn, dq, p, hd)
+            _ag_reg_acc(tape, q, dq, hd)
+            t_free(dq)
+        } else if kind == ag_k_lmhead() {
+            let temb = _ag_get(tape, op, 1)
+            let zT = _ag_get(tape, op, 2)
+            let lg = _ag_get(tape, op, 3)
+            let V = _ag_get(tape, op, 9)
+            let d = _ag_get(tape, op, 10)
+            let og = _ag_reg_grad(tape, lg, V)
+            let dtemb = t_zeros(V * d)
+            let dzT = t_zeros(d)
+            nn_lm_head_bwd(temb, zT, og, dtemb, dzT, V, d)
+            _ag_reg_acc(tape, temb, dtemb, V * d)
+            _ag_reg_acc(tape, zT, dzT, d)
+            t_free(dtemb)
+            t_free(dzT)
+        } else if kind == ag_k_swiglu() {
+            let r = _ag_get(tape, op, 1)
+            let Wg = _ag_get(tape, op, 2)
+            let Wu = _ag_get(tape, op, 3)
+            let Wd = _ag_get(tape, op, 4)
+            let av = _ag_get(tape, op, 5)
+            let bv = _ag_get(tape, op, 6)
+            let sv = _ag_get(tape, op, 7)
+            let o = _ag_get(tape, op, 8)
+            let d = _ag_get(tape, op, 9)
+            let h = _ag_get(tape, op, 10)
+            let og = _ag_reg_grad(tape, o, d)
+            let dr = t_zeros(d)
+            let dWg = t_zeros(h * d)
+            let dWu = t_zeros(h * d)
+            let dWd = t_zeros(d * h)
+            nn_swiglu_bwd(r, Wg, Wu, Wd, av, bv, sv, og,
+                          dr, dWg, dWu, dWd, d, h)
+            _ag_reg_acc(tape, r, dr, d)
+            _ag_reg_acc(tape, Wg, dWg, h * d)
+            _ag_reg_acc(tape, Wu, dWu, h * d)
+            _ag_reg_acc(tape, Wd, dWd, d * h)
+            t_free(dr)
+            t_free(dWg)
+            t_free(dWu)
+            t_free(dWd)
+        } else if kind == ag_k_embed() {
+            let idsf = _ag_get(tape, op, 1)
+            let table = _ag_get(tape, op, 2)
+            let X = _ag_get(tape, op, 3)
+            let T = _ag_get(tape, op, 9)
+            let d = _ag_get(tape, op, 10)
+            let og = _ag_reg_grad(tape, X, T * d)
+            let tl = t_len(table)
+            let dtable = t_zeros(tl)
+            nn_embedding_bwd_scatter(og, idsf, dtable, T, d)
+            _ag_reg_acc(tape, table, dtable, tl)
+            t_free(dtable)
+        } else if kind == ag_k_attn() {
+            let Q = _ag_get(tape, op, 1)
+            let K = _ag_get(tape, op, 2)
+            let Vv = _ag_get(tape, op, 3)
+            let P = _ag_get(tape, op, 4)
+            let ctx = _ag_get(tape, op, 5)
+            let T = _ag_get(tape, op, 9)
+            let nh = _ag_get(tape, op, 10)
+            let nkv = _ag_get(tape, op, 11)
+            let hd = _ag_get(tape, op, 12)
+            let qlen = T * nh * hd
+            let kvlen = T * nkv * hd
+            let og = _ag_reg_grad(tape, ctx, qlen)
+            let dQ = t_zeros(qlen)
+            let dK = t_zeros(kvlen)
+            let dV = t_zeros(kvlen)
+            nn_attn_core_bwd(Q, K, Vv, P, og, dQ, dK, dV,
+                             T, nh, nkv, hd)
+            _ag_reg_acc(tape, Q, dQ, qlen)
+            _ag_reg_acc(tape, K, dK, kvlen)
+            _ag_reg_acc(tape, Vv, dV, kvlen)
+            t_free(dQ)
+            t_free(dK)
+            t_free(dV)
+        }
+        op = op - 1
+    }
+}
+
+// ── reverse pass (legacy single-cur_dy chain — sub-step 1/2 oracles) ─────
 pub fn ag_backward(tape: int, dy_seed: int) {
     let n = to_int(t_get(tape, 0))
     if n <= 0 { return }
@@ -314,9 +529,26 @@ pub fn ag_t_free_state(tape: int) {
             t_free(_ag_get(tape, op, 8))   // o
         } else if kind == ag_k_embed() {
             t_free(_ag_get(tape, op, 3))   // X
+        } else if kind == ag_k_attn() {
+            t_free(_ag_get(tape, op, 4))   // P
+            t_free(_ag_get(tape, op, 5))   // ctx
         }
         op = op + 1
     }
+}
+
+// free every per-tensor registry grad farr (Decision 3 path).
+pub fn ag_t_free_reg(tape: int) {
+    let rt = to_int(t_get(tape, 2))
+    let rg = to_int(t_get(tape, 3))
+    let n = to_int(t_get(rt, 0))
+    let mut i = 0
+    while i < n {
+        let gid = to_int(t_get(rg, 1 + i))
+        if gid >= 0 { t_free(gid) }
+        i = i + 1
+    }
+    t_set(rt, 0, 0.0)
 }
 
 pub fn ag_t_free_grads(tape: int) {

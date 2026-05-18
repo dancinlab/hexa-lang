@@ -351,8 +351,112 @@ let t6ok = m6x == 0.0 && m6dt == 0.0
 if t6ok { println("PASS  F-RFC043-AGTAPE-EMBED-EQ") }
 else     { println("FAIL  F-RFC043-AGTAPE-EMBED-EQ") }
 
-if t1ok && t2ok && t3ok && t4ok && t5ok && t6ok {
-    println("ALL PASS  ag_tape byte-identical (RMSNorm·Linear·chain·RoPE·LMHead·SwiGLU·Embed)")
+// ── Test 7: per-tensor registry fan-in (Decision 3) ─────────────────────
+// x → Linear_q(x)=Q, Linear_k(x)=K, Linear_v(x)=V → attn(Q,K,V)=ctx.
+// x is consumed by THREE Linear ops (fan-out); attn produces dQ/dK/dV
+// that fan-IN back to those three. The registry must accumulate
+// grad[x] from all three Linear bwds. T=1 → single position;
+// nh=2 nkv=1 hd=8 → d=16, kvd=8.
+println("-- Test 7: registry fan-in  x->{Wq,Wk,Wv}->attn  --")
+let aT = 1
+let anh = 2
+let ankv = 1
+let ahd = 8
+let adq = anh * ahd      // 16  (Q width / model dim for this core)
+let adkv = ankv * ahd    // 8   (K/V width)
+let ax  = t_zeros(adq)              // input x [1·adq] (B=1,D=adq)
+let aWq = t_zeros(adq * adq)        // [D·C], C=adq → Q
+let aWk = t_zeros(adq * adkv)       // [D·C], C=adkv → K
+let aWv = t_zeros(adq * adkv)       // [D·C], C=adkv → V
+let abq = t_zeros(adq)
+let abk = t_zeros(adkv)
+let abv = t_zeros(adkv)
+let aseed = t_zeros(aT * anh * ahd) // grad w.r.t. ctx [T·nh·hd]=adq
+let mut q7 = 0
+while q7 < adq {
+    t_set(ax, q7, to_float(q7 - 8) * 0.061 + 0.2)
+    t_set(abq, q7, to_float(q7 % 3 - 1) * 0.02)
+    t_set(aseed, q7, to_float((q7 * 5) % 7 - 3) * 0.033)
+    q7 = q7 + 1
+}
+let mut q7b = 0
+while q7b < adq * adq {
+    t_set(aWq, q7b, to_float((q7b * 3) % 13 - 6) * 0.01)
+    q7b = q7b + 1
+}
+let mut q7c = 0
+while q7c < adq * adkv {
+    t_set(aWk, q7c, to_float((q7c * 5) % 11 - 5) * 0.012)
+    t_set(aWv, q7c, to_float((q7c * 7) % 9 - 4) * 0.013)
+    q7c = q7c + 1
+}
+let mut q7d = 0
+while q7d < adkv {
+    t_set(abk, q7d, to_float(q7d % 3 - 1) * 0.015)
+    t_set(abv, q7d, to_float(q7d % 5 - 2) * 0.017)
+    q7d = q7d + 1
+}
+// ── reference: direct fwd + hand-chained bwd with manual grad[x] accum ──
+let QR = nn_linear_fwd(ax, aWq, abq, aT, adq, adq)   // [1·adq]
+let KR = nn_linear_fwd(ax, aWk, abk, aT, adq, adkv)  // [1·adkv]
+let VR = nn_linear_fwd(ax, aWv, abv, aT, adq, adkv)
+let PR   = t_zeros(anh * aT * aT)
+let ctxR = t_zeros(aT * anh * ahd)
+nn_attn_core_fwd(QR, KR, VR, PR, ctxR, aT, anh, ankv, ahd)
+// attn bwd: aseed → dQ,dK,dV (pre-zeroed accumulate)
+let dQR = t_zeros(adq)
+let dKR = t_zeros(adkv)
+let dVR = t_zeros(adkv)
+nn_attn_core_bwd(QR, KR, VR, PR, aseed, dQR, dKR, dVR, aT, anh, ankv, ahd)
+// each Linear bwd → its dW/db + dx; grad[x] = sum of the three dx
+let dWqR = t_zeros(adq * adq)
+let dxqR = t_zeros(adq)
+let dbqR = t_zeros(adq)
+nn_linear_bwd(ax, aWq, dQR, dWqR, dxqR, dbqR, aT, adq, adq)
+let dWkR = t_zeros(adq * adkv)
+let dxkR = t_zeros(adq)
+let dbkR = t_zeros(adkv)
+nn_linear_bwd(ax, aWk, dKR, dWkR, dxkR, dbkR, aT, adq, adkv)
+let dWvR = t_zeros(adq * adkv)
+let dxvR = t_zeros(adq)
+let dbvR = t_zeros(adkv)
+nn_linear_bwd(ax, aWv, dVR, dWvR, dxvR, dbvR, aT, adq, adkv)
+let dxR = t_zeros(adq)
+let mut s7 = 0
+while s7 < adq {
+    t_set(dxR, s7, t_get(dxqR, s7) + t_get(dxkR, s7) + t_get(dxvR, s7))
+    s7 = s7 + 1
+}
+// ── tape: registry backward ─────────────────────────────────────────────
+let t7 = ag_t_begin(8)
+let QT = ag_linear(t7, ax, aWq, abq, aT, adq, adq)
+let KT = ag_linear(t7, ax, aWk, abk, aT, adq, adkv)
+let VT = ag_linear(t7, ax, aWv, abv, aT, adq, adkv)
+let ctxT = ag_attn(t7, QT, KT, VT, aT, anh, ankv, ahd)
+ag_backward_reg(t7, ctxT, aseed)
+let dxT  = ag_grad(t7, ax)     // accumulated from all 3 Linear bwds
+let dWqT = ag_grad(t7, aWq)
+let dWkT = ag_grad(t7, aWk)
+let dWvT = ag_grad(t7, aWv)
+let m7c  = agt_maxdiff(ctxR, ctxT, aT * anh * ahd)
+let m7x  = agt_maxdiff(dxR,  dxT,  adq)
+let m7wq = agt_maxdiff(dWqR, dWqT, adq * adq)
+let m7wk = agt_maxdiff(dWkR, dWkT, adq * adkv)
+let m7wv = agt_maxdiff(dWvR, dWvT, adq * adkv)
+print("  max|Δ ctx|="); print(m7c)
+print(" dx(fan-in)="); print(m7x)
+print(" dWq="); print(m7wq)
+print(" dWk="); print(m7wk)
+print(" dWv="); println(m7wv)
+ag_t_free_state(t7)
+ag_t_free_reg(t7)
+ag_t_end(t7)
+let t7ok = m7c == 0.0 && m7x == 0.0 && m7wq == 0.0 && m7wk == 0.0 && m7wv == 0.0
+if t7ok { println("PASS  F-RFC043-AGTAPE-FANIN-EQ") }
+else     { println("FAIL  F-RFC043-AGTAPE-FANIN-EQ") }
+
+if t1ok && t2ok && t3ok && t4ok && t5ok && t6ok && t7ok {
+    println("ALL PASS  ag_tape byte-identical (7 layers + chain + registry fan-in)")
 } else {
     println("ALL FAIL  ag_tape plumbing regression")
 }

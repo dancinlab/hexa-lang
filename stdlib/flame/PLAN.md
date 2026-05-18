@@ -1355,5 +1355,23 @@ Linear→RMSNorm 2-op chain reverse-walk: `F-RFC043-AGTAPE-
 {RMSNORM,CHAIN}-EQ` 둘 다 max|Δ|=0 PASS (hexa build compiled, $0).
 잔여: 5 layer + grad registry + decoder 재구성 + train_step.
 
-GOAL 진척: gap(a) ✅ CLOSED · gap(b) 2/~6 sub-step · gap(c/d/e)
-미착수. multi-cycle, oracle-gated, $0-우선.
+**gap(b) sub-step 3-5** (Decision 3 LANDED): node v3 widen
+(22-slot, HDR=4 registry header) + RoPE/LMHead/SwiGLU/Embedding
+record/replay + **per-tensor grad registry** `ag_backward_reg`
+(7 op kinds, grad keyed by tensor farr-id, accumulate +=) +
+`ag_attn` record/replay. Oracle `flame_ag_tape_test.hexa` **7/7
+PASS 전부 max|Δ|=0** (hexa build compiled, $0):
+```
+T1 RMSNORM  T2 CHAIN  T3 ROPE  T4 LMHEAD  T5 SWIGLU  T6 EMBED
+T7 F-RFC043-AGTAPE-FANIN-EQ  x→{Wq,Wk,Wv}→attn(Q,K,V)→ctx
+   grad[x]=dxq+dxk+dxv accum = hand-chain  dx=0 dWq=0 dWk=0 dWv=0
+```
+Attention Q/K/V fan-in + param accumulation = standard reverse-
+mode (tensor-keyed grad registry) byte-identical 입증. C 무수정
+(Decision 2 불변식 보존, RFC 034 9/9 회귀 0). 잔여 = ③ decoder
+재구성 (ConsciousDecoderV2 via ag_tape vs hand-written
+nn_decoder_grad byte-eq @ d=32) ④ RFC 043 §Surface train_step.
+
+GOAL 진척: gap(a) ✅ CLOSED · gap(b) 7-layer+registry fan-in ✅
+(잔여 decoder 재구성 + train_step) · gap(c/d/e) 미착수. multi-
+cycle, oracle-gated, $0-우선.

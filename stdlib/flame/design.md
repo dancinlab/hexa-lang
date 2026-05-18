@@ -201,16 +201,47 @@ hexa 함수 호출. `hexa build` compiled 라 interp 비용 0.
   전부 max|Δ|=0). node-widen regression-clean (기존 4 test 유지).
 - C runtime 여전히 무수정.
 
-**잔여 (gap(b) closure)**: ① Attention — Q/K/V 3-input fan-in =
-linear-chain 모델의 진짜 한계 (single cur_dy thread 로 부족; dQ/dK/dV
-가 3 다른 earlier op 로 분기). reverse-DAG 또는 per-tensor grad
-registry 필요 — **자체 결정 게이트** (Decision 3). ② per-param grad
-accumulation registry (같은 param 이 여러 op 에 쓰일 때 += ; decoder
-는 layer 가 weight share/repeat) + AdamW 연결. ③ 전체
-ConsciousDecoderV2 를 ag_tape 조합으로 재구성 → hand-written
-nn_decoder_grad vs tape-replay full byte-eq (d=32 hard gate, gap(a)
-의 d=32 trajectory 와 합류 측정). ④ RFC 043 §Surface `train_step`
-(1 fwd+CE+bwd+AdamW) = gap(b) CLOSED.
+**잔여 (gap(b) closure)**: ① Attention 3-input fan-in. ② param
+grad accumulation. ③ decoder 재구성. ④ train_step.
+
+## Decision 3 — per-tensor grad registry (standard reverse-mode)
+
+**picked (non-contested, 표준 설계 — 게이트 불요)**: ag_backward
+의 single `cur_dy` linear chain 을 **per-tensor grad registry**
+로 일반화. grad 를 tensor farr-id 로 keying, accumulate (+=).
+ag_backward: reg[last_op_output] = seed → op n-1..0: out_grad =
+reg[op.output_id] ; nn_*_bwd → d_inputs/d_params ; reg[op.input_id]
++= d_input, reg[param_id] += d_param. ag_grad(reg, pid) = 누적
+dParam.
+
+**rationale (왜 게이트 안 하고 진행 — Decision 1/2 와 달리 contested
+아님)**:
+- linear `cur_dy` chain 은 sub-step-1 의 의도된 단순화였음. 일반
+  reverse-mode AD 의 교과서 설계 = "grad keyed by node/tensor,
+  accumulated" — 이것 외 더 나은 대안 없음 (reverse-DAG ≡
+  tensor-keyed grad registry; 같은 것의 다른 이름).
+- Attention Q/K/V fan-in 이 자연 해결: attn record(Q,K,V→ctx);
+  bwd 가 reg[ctx] 조회 → nn_attn_core_bwd → dQ/dK/dV →
+  reg[Q]/reg[K]/reg[V] += . 선행 Linear 들이 reg[Q] 등을 자기
+  output-grad 로 조회 — 분기/합류 자동.
+- decoder 의 param 재사용 (tied embed/head, layer repeat) 누적
+  (+=) 자동 — gap(b) ③④ 의 전제.
+- C 무수정 유지 (registry 도 hexa farr-backed; Decision 2 불변식
+  보존, RFC 034 9/9 oracle 회귀 0).
+- g3: Decision 1/2 는 실 tradeoff (tape-gen vs hand / C-edit vs
+  hexa) 라 user gate 했음. 이건 단일 표준해 — audit trail 만 기록,
+  round-trip 불요 (no_stop_until_done + 반복 "go" 와 정합).
+
+**status**: Decision 3 ✅ LANDED + MEASURED. `ag_backward_reg`
+(per-tensor grad registry, 7 op kinds) + `ag_attn` record/replay
+구현. Oracle = `flame_ag_tape_test.hexa` 7/7 PASS, 전부 max|Δ|=0:
+Test 1-6 (legacy ag_backward regression-clean) + **Test 7
+F-RFC043-AGTAPE-FANIN-EQ** — `x→{Wq,Wk,Wv Linear}→attn(Q,K,V)→ctx`
+에서 grad[x] = dxq+dxk+dxv 누적이 hand-chain 과 byte-identical
+(`dx(fan-in)=0 dWq=0 dWk=0 dWv=0`). C 무수정 (Decision 2 불변식
+보존). gap(b) ①(attn fan-in) ②(param accum) DONE — 잔여 ③ decoder
+재구성 (ConsciousDecoderV2 via ag_tape vs hand-written
+nn_decoder_grad byte-eq @ d=32) ④ RFC 043 §Surface train_step.
 
 **cross-links**: RFC 043 §Surface =
 `inbox/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md`
