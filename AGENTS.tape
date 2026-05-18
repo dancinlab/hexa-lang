@@ -258,6 +258,27 @@
   authority = "user directive 2026-05-17 '인터프리터 폐기예정 표시 / 신규 의존 금지 => go' + 2026-05-18 'R7 option B' 선택; feedback memory no-interp-use-compiled."
   @> AGENTS.md
 
+@D g_inbox_processing_loop := "inbox 처리 SOP — filing → worktree sub-agent → cherry-pick" :: governance [recommended d=2026-05-19 active]
+  rule = "다운스트림이 file 한 inbox/{patches,notes}/<slug>.md 는 7단계 loop 로 처리한다 — (1) git status 로 untracked filing 식별, (2) explicit-path commit 으로 main 에 filing land, (3) general-purpose sub-agent 를 isolation=worktree + run_in_background=true 로 dispatch, (4) agent 는 SSOT 수정 + local parse-gate + 패치 markdown status reported→resolved-ssot + compiler/PLAN.md 단일 entry + worktree branch commit, (5) 완료 알림 받으면 main 으로 cherry-pick -x, (6) 표준 충돌패턴 해결, (7) binary promote 는 별도 standard deploy step (commit 22c27a05 / e5c4c0ef 패턴) — 본 cycle 에 포함 금지."
+  why = "이 SOP 가 2026-05-19 session 에서 7건 inbox (print_err parity + phanes×3 + wisp/anima 패치 + flame RFC 059 + kick-engine + stdlib/net) 을 race-condition 0 으로 land 시킨 측정-증명 절차. ad-hoc 동시-편집은 e5c4c0ef-style deploy regen 으로 SSOT 가 wipe 될 수 있음 (`3abf9f8e` print_err 가 한 번 lost → `1a133068` 재적용 회복). worktree 격리 + cherry-pick 패턴은 그 회귀를 방지한다."
+  steps <<~EOF
+    1. CHECK   : `git status --short` · `git ls-files --others --exclude-standard inbox/` — 새 untracked 식별.
+    2. FILE    : `git add <explicit-path>` + commit (`docs(inbox): file <slug> ...`). 다른 세션 WIP 절대 미포함; 메시지는 source/severity/요약 + Co-Authored-By trailer.
+    3. DISPATCH: Agent tool — `subagent_type=general-purpose` · `isolation=worktree` · `run_in_background=true`. 프롬프트에 (a) 패치 markdown 전체 읽기, (b) @D g5/g6/g7/g_plan_consolidation/g_interp_deprecated 컨텍스트, (c) Shape-A(surgical) vs Shape-B(RFC+scaffold) 자율 결정 권한, (d) 절대경로는 worktree 내부만, (e) /Users/ghost/.hx/bin/hexa_real parse 후 edit-gate, (f) binary promote 금지, (g) inbox/PATCHES.yaml 미터치 명시.
+    4. AGENT   : SSOT 수정 → parse-gate → markdown status flip → compiler/PLAN.md (또는 도메인-예외 PLAN.md) 단일 entry → commit on worktree branch · 보고 (branch + hash + files + 1-paragraph g3-honest summary + 결정 punted).
+    5. PICK    : `git -C /Users/ghost/core/hexa-lang cherry-pick -x <hash>` (절대경로 권장 — cwd 가 sub-worktree 로 shift 될 수 있음).
+    6. RESOLVE : 표준 conflict 두 가지 — (i) `AA inbox/{patches,notes}/<slug>.md` add/add → `git checkout --theirs <path>` (agent 의 resolved-ssot 버전 우선), (ii) `UU compiler/PLAN.md` 또는 `stdlib/<domain>/PLAN.md` drift → `git checkout --ours` + `git show <hash> -- <plan> | grep ^+ | sed s/^+//` 로 agent 의 실제 추가 텍스트만 추출해서 끝에 append. drill.hexa 등 같은 .hexa 파일 다중 변경은 git auto-merge 가 region 다르면 통과.
+    7. PROMOTE : 별도 deploy step. 본 loop 미포함. SSOT 갭 closed, 바이너리는 standard cycle 에서 자연 promote.
+  EOF
+  conflict_pattern = "AA inbox markdown → --theirs · UU PLAN.md → --ours + append actual-diff · same-file region-disjoint .hexa → auto-merge"
+  hazard_guards = "(a) commit 전 `git -C <main> branch --show-current` 필수 (shared-worktree-branch-hazard 메모리). (b) cherry-pick 중 cwd jump 감지 시 `git -C /Users/ghost/core/hexa-lang ...` 절대경로 fallback (wilson-pool 또는 외부 hook 이 cwd 변경 가능). (c) `self/codegen_c2.hexa` 가 deploy commit (22c27a05·e5c4c0ef 류) 에서 regen 되면 SSOT 편집 wipe 되므로 재적용 commit 준비. (d) 다른 세션 WIP 파일 (예: tool/parity_*.sh · self/native/hexa_v2) 은 status 에 보이더라도 절대 미터치."
+  scope_split = "Shape A (minimum surgical) — SSOT 1~3 file edit, byte-eq preserved, single commit. Shape B (RFC + scaffold) — multi-cycle 작업은 inbox/rfc_drafts_*/rfc_<next>_*.md draft + RFC-comment-marker 만 (zero behavior change) + 3+ cycle phasing + falsifier battery. g3 over-claim 0 — Shape B 는 'implementation 완료' 아니라 'RFC drafted + scaffold landed' 로 정직 보고."
+  task_tracking = "각 inbox item 당 TaskCreate · in_progress → completed. 동시 dispatch 가능 (병렬 fan-out)."
+  applies-to = "inbox/patches/ · inbox/notes/ 양쪽. patches = bug/feature 요청, notes = 에스컬레이션/observation. 동일 SOP."
+  authority = "user directive 2026-05-19 'inbox 처리해달라고 하면 이런식으로 처리하면되 AGENTS.tape 기록' + session 2026-05-19 측정 패턴 (7 inbox: print_err·HX_DATA_DIR·verifier-hook·HXC v2 lib·RFC 059·kick --dump-overlay·stdlib/net surgical — 모두 본 loop 으로 land 성공). cross-link: @D g7 inbox-patches-pipeline (filing 의무), @D g_plan_consolidation (PLAN.md 단일 SSOT), @D g_interp_deprecated (compiled-path-only 검증), @D g8 commit-trailer-co-author."
+  cross-ref = "[@x_handoff] downstream→upstream 흐름 spec · feedback memory `shared worktree branch hazard`"
+  @> AGENTS.md
+
 # ─── §4 Forbidden patterns ───────────────────────────────────────────
 
 @F f1 := "lattice-fit-on-external-language" :: governance [required deny:write]
