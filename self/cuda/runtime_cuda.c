@@ -1415,6 +1415,59 @@ __device__ __forceinline__ double _hx_cuda_dt_exp_d(double x) {
     return acc;
 }
 
+/* mk2-C2 (2026-05-19): dt_sqrt byte-exact device mirror of hexa
+ * flame_math `dt_sqrt` (24-iter Newton from g0 = max(x,1)). The
+ * decoder-block rmsnorm reference uses dt_sqrt, NOT libm sqrt —
+ * same FMA / transcendental hazard as dt_exp. __dmul_rn / __ddiv_rn /
+ * __dadd_rn = contraction-immune, byte-eq to host _hx_dt_sqrt_d
+ * under FP_CONTRACT OFF (same discipline as the silu-gate dt_exp
+ * mirror, commit e5faa8b0). */
+__device__ __forceinline__ double _hx_cuda_dt_sqrt_d(double x) {
+    if (x <= 0.0) return 0.0;
+    double g = x > 1.0 ? x : 1.0;
+    int i = 0;
+    while (i < 24) {
+        g = __dmul_rn(0.5, __dadd_rn(g, __ddiv_rn(x, g)));
+        i = i + 1;
+    }
+    return g;
+}
+
+/* rmsnorm-mh fwd: per-row sequential reduction (one thread per row,
+ * grid-stride for T > grid·block). Strict left-to-right sum order
+ * (single accumulator, single rounding per add) byte-eq with the host
+ * CPU loop — a tree-parallel reduction would differ ~1 ULP at the
+ * last add and fail max|Δ|=0. Ops: __dadd_rn (Σ x²), __ddiv_rn (/d
+ * and 1/sqrt), __dmul_rn (x·iv, g·xni). dt_sqrt mirror above. T=1024,
+ * d=768 → 1024 parallel threads × ~2300 sequential ops ≈ 2 μs total
+ * on A100 — utilization low but the op is bandwidth-bound elsewhere
+ * and bit-exact is the binding constraint (g3). */
+__global__ void _hx_cuda_kern_rmsnorm_mh(const double* __restrict__ X,
+                                         const double* __restrict__ G,
+                                         double* __restrict__ Y,
+                                         double* __restrict__ XN,
+                                         double* __restrict__ I,
+                                         int64_t T, int64_t d) {
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    const double eps = 0.000001;
+    for (; i < T; i += stride) {
+        double ms = 0.0;
+        for (int64_t c = 0; c < d; c++) {
+            double xv = X[i*d + c];
+            ms = __dadd_rn(ms, __dmul_rn(xv, xv));
+        }
+        ms = __ddiv_rn(ms, (double)d);
+        double iv = __ddiv_rn(1.0, _hx_cuda_dt_sqrt_d(__dadd_rn(ms, eps)));
+        I[i] = iv;
+        for (int64_t c = 0; c < d; c++) {
+            double xni = __dmul_rn(X[i*d + c], iv);
+            XN[i*d + c] = xni;
+            Y[i*d + c]  = __dmul_rn(G[c], xni);
+        }
+    }
+}
+
 /* silu-gate: O[i] = (A[i]·σ(A[i]))·B[i], σ=1/(1+dt_exp(-x)).
  * dt_exp-faithful (NOT _hx_cuda_sigmoid_d's libm exp). Op order
  * byte-identical to CPU _hx_farr_silu_gate_cpu / ag_tape
@@ -1774,6 +1827,67 @@ int _hx_cuda_farr_silu_gate_gpu(int64_t a_id, int64_t b_id,
         return -1;
     }
     if (_d2h_out(out_id, n) != 0) return -1;
+    return 0;
+}
+
+/* mk2-C2 (2026-05-19): rmsnorm-mh fwd forge-route. fwd kernel above
+ * computes y[T·d], xn[T·d], inv[T] in one launch (one thread per row,
+ * sequential reduction for byte-eq). All three outputs go through
+ * _d2h_out → DEVICE_KEEP register honoured (mk2-C3) so the next forge
+ * op's _h2d sees them via the §6.1 skip path. Replaces the host-scalar
+ * t_get/t_set loop in ag_tape.hexa::ag_rmsnorm_mh, byte-eq oracle-
+ * gated vs CPU _hx_farr_rmsnorm_mh_cpu (FP_CONTRACT OFF, dt_sqrt-
+ * faithful). */
+int _hx_cuda_farr_rmsnorm_mh_gpu(int64_t x_id, int64_t g_id,
+                                 int64_t y_id, int64_t xn_id,
+                                 int64_t inv_id, int64_t T, int64_t d) {
+    if (x_id < 0 || g_id < 0 || y_id < 0 || xn_id < 0 || inv_id < 0) {
+        fprintf(stderr, "[cuda] rmsnorm_mh: bad ids\n");
+        return -1;
+    }
+    if (T <= 0 || d <= 0) {
+        fprintf(stderr, "[cuda] rmsnorm_mh: bad T=%lld d=%lld\n",
+                (long long)T, (long long)d);
+        return -1;
+    }
+    if (x_id >= _hx_farr_count || g_id >= _hx_farr_count ||
+        y_id >= _hx_farr_count || xn_id >= _hx_farr_count ||
+        inv_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] rmsnorm_mh: id out of range\n");
+        return -1;
+    }
+    int64_t n_xy = T * d;
+    if (_hx_farr_table[x_id].len  < n_xy || _hx_farr_table[g_id].len  < d ||
+        _hx_farr_table[y_id].len  < n_xy || _hx_farr_table[xn_id].len < n_xy ||
+        _hx_farr_table[inv_id].len < T) {
+        fprintf(stderr, "[cuda] rmsnorm_mh: host len mismatch\n");
+        return -1;
+    }
+    if (_h2d(x_id) != 0) return -1;
+    if (_h2d(g_id) != 0) return -1;
+    if (_ensure_dev_buf(y_id,   n_xy) != 0) return -1;
+    if (_ensure_dev_buf(xn_id,  n_xy) != 0) return -1;
+    if (_ensure_dev_buf(inv_id, T)    != 0) return -1;
+    double* X = g_slots[x_id].d_buf;
+    double* G = g_slots[g_id].d_buf;
+    double* Y = g_slots[y_id].d_buf;
+    double* XN= g_slots[xn_id].d_buf;
+    double* I = g_slots[inv_id].d_buf;
+    /* one thread per row; T parallel. Cap grid at 65535 (legacy CUDA
+     * 1-D grid ceiling we already use elsewhere). */
+    int block = 256;
+    int64_t need = (T + block - 1) / block;
+    int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+    _hx_cuda_kern_rmsnorm_mh<<<grid, block>>>(X, G, Y, XN, I, T, d);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] rmsnorm_mh launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(y_id,   n_xy) != 0) return -1;
+    if (_d2h_out(xn_id,  n_xy) != 0) return -1;
+    if (_d2h_out(inv_id, T)    != 0) return -1;
     return 0;
 }
 

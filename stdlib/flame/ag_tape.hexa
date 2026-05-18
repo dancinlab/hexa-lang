@@ -428,28 +428,14 @@ pub fn ag_rmsnorm_mh(tape: int, x: int, g: int, T: int, d: int) -> int {
     let y   = t_zeros(T * d)
     let xn  = t_zeros(T * d)
     let inv = t_zeros(T)
-    let eps = 0.000001
-    let mut i = 0
-    while i < T {
-        let mut ms = 0.0
-        let mut c = 0
-        while c < d {
-            let xv = t_get(x, i * d + c)
-            ms = ms + xv * xv
-            c = c + 1
-        }
-        ms = ms / to_float(d)
-        let iv = 1.0 / dt_sqrt(ms + eps)
-        t_set(inv, i, iv)
-        let mut c2 = 0
-        while c2 < d {
-            let xni = t_get(x, i * d + c2) * iv
-            t_set(xn, i * d + c2, xni)
-            t_set(y, i * d + c2, t_get(g, c2) * xni)
-            c2 = c2 + 1
-        }
-        i = i + 1
-    }
+    // mk2-C2 forge-route: one __global__ kernel computes y/xn/inv on
+    // GPU with strict per-row sequential reduction (one thread / row,
+    // __dadd_rn / __dmul_rn / __ddiv_rn + __dmul_rn(0.5, ...) dt_sqrt
+    // mirror). Byte-identical to the prior host-scalar t_get/t_set
+    // loop (FP_CONTRACT OFF in the CPU mirror). Outputs honour
+    // DEVICE_KEEP via _d2h_out — next forge op's _h2d skips. No-CUDA
+    // build routes to _hx_farr_rmsnorm_mh_cpu (same op order, byte-eq).
+    let _ = farr_rmsnorm_mh_gpu(x, g, y, xn, inv, T, d)
     let _ = _ag_push(tape, ag_k_rmsnorm_mh(), x, g, y, xn, inv, 0 - 1,
                      0 - 1, 0 - 1, T, d, 0, 0)
     return y

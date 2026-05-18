@@ -11281,6 +11281,66 @@ static double _hx_dt_exp_d(double x) {
 // O[i] = (A[i] · σ(A[i])) · B[i],  σ(x) = 1/(1 + dt_exp(-x)).
 // Byte-identical to ag_tape.hexa `_ag_silu(a)*b` (same op order:
 // sig=1/(1+dt_exp(0-a)); (a*sig)*b). -1 err.
+// mk2-C2 (2026-05-19): dt_sqrt byte-exact C mirror of hexa flame_math
+// `dt_sqrt` (24-iter Newton, g0 = max(x, 1.0)). The decoder-block
+// rmsnorm reference uses dt_sqrt, NOT libm sqrt — same hazard as
+// dt_exp ([[flame-transcendental-byteeq-hazard]]). All ops single-
+// rounding sequential; FP_CONTRACT OFF scope (this block) is the
+// proven recipe (see commits c0789e05 RoPE FMA, e5faa8b0 silu_gate
+// dt_exp).
+static double _hx_dt_sqrt_d(double x) {
+    if (x <= 0.0) return 0.0;
+    double g = x > 1.0 ? x : 1.0;
+    int i = 0;
+    while (i < 24) { g = 0.5 * (g + x / g); i = i + 1; }
+    return g;
+}
+
+// _hx_farr_rmsnorm_mh_cpu(x, g, y_out, xn_out, inv_out, T, d) -> 0 ok / -1 err.
+// Per-row (i ∈ [0..T)): ms = Σ x[i,c]² / d; iv = 1 / dt_sqrt(ms + eps);
+// inv[i] = iv; xn[i,c] = x[i,c]·iv; y[i,c] = g[c]·xn[i,c]. Byte-identical
+// to ag_tape.hexa `ag_rmsnorm_mh` host-scalar loop. eps = 1e-6.
+static int _hx_farr_rmsnorm_mh_cpu(int64_t x_id, int64_t g_id,
+                                   int64_t y_id, int64_t xn_id,
+                                   int64_t inv_id, int64_t T, int64_t d) {
+    if (x_id < 0 || x_id >= _hx_farr_count)     return -1;
+    if (g_id < 0 || g_id >= _hx_farr_count)     return -1;
+    if (y_id < 0 || y_id >= _hx_farr_count)     return -1;
+    if (xn_id < 0 || xn_id >= _hx_farr_count)   return -1;
+    if (inv_id < 0 || inv_id >= _hx_farr_count) return -1;
+    if (T <= 0 || d <= 0)                       return -1;
+    HexaFarrEntry* xe  = &_hx_farr_table[x_id];
+    HexaFarrEntry* ge  = &_hx_farr_table[g_id];
+    HexaFarrEntry* ye  = &_hx_farr_table[y_id];
+    HexaFarrEntry* xne = &_hx_farr_table[xn_id];
+    HexaFarrEntry* ie  = &_hx_farr_table[inv_id];
+    if (!xe->buf || !ge->buf || !ye->buf || !xne->buf || !ie->buf) return -1;
+    if (xe->len < T*d || ge->len < d || ye->len < T*d ||
+        xne->len < T*d || ie->len < T)          return -1;
+    const double* X = xe->buf;
+    const double* G = ge->buf;
+    double* Y  = ye->buf;
+    double* XN = xne->buf;
+    double* I  = ie->buf;
+    const double eps = 0.000001;
+    for (int64_t i = 0; i < T; i++) {
+        double ms = 0.0;
+        for (int64_t c = 0; c < d; c++) {
+            double xv = X[i*d + c];
+            ms = ms + xv * xv;
+        }
+        ms = ms / (double)d;  /* byte-eq with hexa `ms / to_float(d)` */
+        double iv = 1.0 / _hx_dt_sqrt_d(ms + eps);
+        I[i] = iv;
+        for (int64_t c = 0; c < d; c++) {
+            double xni = X[i*d + c] * iv;
+            XN[i*d + c] = xni;
+            Y[i*d + c]  = G[c] * xni;
+        }
+    }
+    return 0;
+}
+
 static int64_t _hx_farr_silu_gate_cpu(int64_t a_id, int64_t b_id,
                                       int64_t n) {
     if (a_id < 0 || a_id >= _hx_farr_count) return -1;
@@ -11458,6 +11518,43 @@ HexaVal farr_rmsnorm_rows_gpu;
 HexaVal farr_add_gpu;
 HexaVal farr_scale_gpu;
 HexaVal farr_silu_gate_gpu;
+
+// mk2-C2 (2026-05-19): RMSNorm-mh forge-route. Bare 7-arg function
+// (exceeds hexa_callN ≤4-arg ceiling; same pattern as farr_rope_gpu).
+// fwd: per-row ms = Σ x²/d → iv = 1/dt_sqrt(ms+eps) → y[c]=g[c]·x[c]·iv;
+// caller supplies pre-allocated y[T·d], xn[T·d], inv[T] buffers + reads
+// back via lazy-D2H (mk2-C3 §6.4) on host scalar access. Returns 0 on
+// ok / -1 err. The CUDA kernel + host wrapper live in
+// self/cuda/runtime_cuda.c (`__dmul_rn`/`__dadd_rn`/`__ddiv_rn` dt_sqrt
+// mirror — proven recipe [[flame-transcendental-byteeq-hazard]]).
+// No-CUDA fallback = `_hx_farr_rmsnorm_mh_cpu` (byte-eq with ag_tape
+// host-scalar loop, FP_CONTRACT OFF block).
+#ifdef HEXA_CUDA
+extern int _hx_cuda_farr_rmsnorm_mh_gpu(int64_t x_id, int64_t g_id,
+                                        int64_t y_id, int64_t xn_id,
+                                        int64_t inv_id, int64_t T,
+                                        int64_t d);
+#endif
+HexaVal farr_rmsnorm_mh_gpu(HexaVal x_v, HexaVal g_v, HexaVal y_v,
+                            HexaVal xn_v, HexaVal inv_v, HexaVal T_v,
+                            HexaVal d_v) {
+    int64_t x_id  = hexa_as_num(x_v);
+    int64_t g_id  = hexa_as_num(g_v);
+    int64_t y_id  = hexa_as_num(y_v);
+    int64_t xn_id = hexa_as_num(xn_v);
+    int64_t inv_id= hexa_as_num(inv_v);
+    int64_t T     = hexa_as_num(T_v);
+    int64_t d     = hexa_as_num(d_v);
+#ifdef HEXA_CUDA
+    if (T <= 0 || d <= 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_rmsnorm_mh_gpu(x_id, g_id, y_id, xn_id,
+                                          inv_id, T, d);
+    return hexa_int(rc);
+#else
+    return hexa_int(_hx_farr_rmsnorm_mh_cpu(x_id, g_id, y_id, xn_id,
+                                            inv_id, T, d));
+#endif
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // anima RFC 040 Phase B2 (2026-05-16): d_train5 hot-path completion —
