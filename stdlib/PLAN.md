@@ -624,3 +624,9 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   에 ULP drift 출현). hexa-bio `18a97a1`→`a1fb63f` PARITY-OK.
   5종 distinct formula shape 누적: simple-occupancy · partition-Z ·
   irreversible-kinetics · time-course · saturable-MWC. 잔여 ~99.
+- 2026-05-19 — **Goal set: 100% closure (127/127). T3 +1: 29/127**
+  `reversible_covalent_sim` (6th json-sim, 1차 PARITY-OK). Eyring
+  TST kon/koff, K_eq=kon/koff, τ_res=1/koff, reversibility threshold,
+  _human_time unit-picker(s/min/h/d/yr) via `%.3g`. py_json2 witness
+  with mixed numeric (small/large/sci) + string fields. hexa-bio
+  `00d5e66`. 잔여 ~98.
