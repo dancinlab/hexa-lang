@@ -1152,3 +1152,56 @@ surgical deletion 은 트랙 B (CLI driver re-targeting) 가 별도 multi-cycle 
 **검증**: build_aprime smoke + self-host fixpoint 보존 (mini 에서 검증 예정 — codegen 변경 0, frontend 만 patch 라 fixpoint 영향 0).
 
 **track B (sunset 조건)**: 16+ absorbed-verb 의 sub-binary 재라우팅 (각자 native 빌드 후 main.hexa 가 sub-binary 를 spawn) — multi-cycle. 완료 후 interp 소스 일괄 삭제 → `g_interp_deprecated` 룰 폐기 → R7 종결.
+
+---
+
+### 2026-05-18 — R7 track B cycle 1 — qrng 시작 (cycle h22)
+
+**Decision 1** (worktree triage): 현재 `rfc043-hexa-torch` (HEAD `f14a443b`, 18 modified + 3 untracked, flame + quant_meter mixed WIP) 그대로 두고 `origin/main` 기준 새 worktree `/tmp/wt-r7-trackb` (`r7-trackb-cycle1` 브랜치) 점프.
+
+- **picked**: 현재 브랜치 보존, origin/main 기준 새 worktree
+- **rationale**:
+  - shared dir `~/core/hexa-lang` 직접 편집 금지 (memory: `feedback_hexa_lang_shared_worktree_branch_hazard`)
+  - flame WIP 와 R7 캠페인은 독립 north-star — mixed branch 로 강제 통합 시 양쪽 모두 silent drift 위험
+  - clean `origin/main` (`c0864dc3`) 위에서 cherry-pickable 단일 패치 시퀀스가 R7 track B 패턴 확립에 적합
+
+**Decision 2** (campaign): goal ② 진행 = **#42 R7 track B** (16+ absorbed-verb sub-binary 재라우팅, multi-cycle).
+
+- **picked**: #42 R7 track B
+- **rationale**:
+  - goal ② (interp 폐기) 의 최종 종결 게이트 — track A (소스 삭제) 는 B 가 닫혀야 가능
+  - #37 tier-2 atlas_verify 6 발산은 tier-1 무관 polish — north-star 진행 0
+  - GOAL ① flame+forge 는 별도 north-star (rfc043 브랜치) — 현 세션은 R7 인계 우선
+
+**Decision 3** (first verb): **qrng** (`stdlib/qrng/qrng.hexa`, 318 lines).
+
+- **picked**: qrng
+- **rationale**:
+  - 가장 작은 self-contained sub-script (vs lsp 1006 · invariant_check 1223)
+  - 이미 `fn main()` 보유 (L261-318) — shim 작업 불필요, argv 자체 dispatch
+  - stdlib 하위 모듈 4개만 import (`source`/`qrng_main`/`registry`/`router`) — cross-module dep 최소, build feasibility ✓
+  - 패턴 확립 1st-cycle 으로 적합 (binary 위치 lookup · spawn API · install_dir resolution · fallback transition)
+
+**현 상황** (cycle 시작 시점):
+- L3369-3386 `dispatch_absorbed` 의 qrng 분기 = `cmd_run(qrng_script, qrng_args)` (interp call)
+- 목표: `cmd_run` 호출 → `bin/hexa-qrng` (또는 `__inst_q + "/bin/hexa-qrng"`) spawn 으로 교체. binary 미존재 시 cmd_run fallback (transition).
+- 빌드 인프라: `bin/hexa-run-native` 3-tier (aprime_cc → hexa build → hexa run). qrng 는 `hexa build` 경유.
+
+**구현 (LANDED)**:
+- `bin/hexa-qrng` build: `HEXA_MAC_BUILD_OK=1 hexa build stdlib/qrng/qrng.hexa -o bin/hexa-qrng` → 435 KB Mach-O arm64 (libsodium + openssl@3 link via clang `-DHEXA_HAS_LIBSODIUM` + `-DHEXA_HAS_OPENSSL`). 빌드 시간 < 30s (heavy 아님).
+- `tool/build_hexa_qrng.sh` (1.7 KB shell): canonical 빌드 레시피 + aggregate smoke (`__QRNG_MAIN__ PASS` grep). 패턴-establishing for 15 잔여 verb.
+- `.gitignore`: `bin/hexa-qrng` 추가 (arch-specific Mach-O/ELF, rebuild source 가 SSOT).
+- `self/main.hexa` L3369-3386 → L3369-3438 (~70 lines, 18 → 70): qrng 분기 spawn path 추가. binary lookup (`__inst_q + "/bin/hexa-qrng"` → cwd `bin/hexa-qrng`), shq quoting, `exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")` + marker scan + `parse_int_str(rc_str)` + `exit(rc)` on non-zero. binary 부재 시 `cmd_run(qrng_script, qrng_args)` legacy fallback 보존 (`g_inbox_dual_track` transitional).
+- `hexa.real` rebuild: `self/native/hexa_v2 self/main.hexa build/stage1/main.c` + `hexa tool/build_dispatch.hexa` → 498 KB Mach-O.
+
+**검증**:
+- byte-eq (status): `./hexa qrng status` (spawn) ≡ `./bin/hexa-qrng status` (direct) → diff exit 0
+- subcommand smoke: `--version` ✓ · `chain` ✓ · `selftest` 9/9 OK __QRNG_MAIN__ PASS ✓
+- exit code propagation: `./hexa qrng collect --bytes=0` → shell rc=1 (binary `exit(1)` → marker → `parse_int_str` → `exit(rc)`)
+- fallback: `mv bin/hexa-qrng aside && ./hexa qrng status` → cmd_run path 진입 (worktree-local hexa_interp 부재로 final invocation 만 실패, 분기 로직은 OK)
+- 다른 dispatch 무결성: `--version`/`--help`/`parse <file>` 정상 — qrng else-if 분기만 surgical change.
+
+**fixpoint regression risk**: 0. self/main.hexa::dispatch_absorbed::qrng 분기는 hexa CLI dispatch only — compiler/main.hexa · aprime_cc · hexa_v2 · codegen/transpiler 어느 경로에도 흐르지 않음. self-host fixpoint (aprime_cc transpiles compiler/main.hexa) 와 독립.
+
+**남은 R7 track B (15 verbs)**: 동일 패턴 (build script + dispatch branch surgical edit + .gitignore + PLAN.md cycle entry). 다음 후보 = `lsp`/`check`/`test` (size-graded). multi-cycle.
+
