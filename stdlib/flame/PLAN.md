@@ -1459,3 +1459,21 @@ DSL · **잔여 gap(d)** = forge GPU kernel 커버리지 (RoPE 등 CPU-loop
 → forge; perf claim → GPU 측정·$; cost-ascending 상 마지막). spec
 IR 가 fusion-pass 입력 준비완료. instrument-first: $0 fusion 설계
 + faithful predictor 먼저 → GPU fire 그 다음. multi-cycle.
+
+**gap(d) $0-prep (LANDED 928882ee)**: `stdlib/flame/ag_fuse.hexa`
+— per-op WALL cost 모델 (host scalar-loop vs native farr_matmul +
+dt_* penalty) + `ag_fuse_host_frac/_post/_predicted_speedup` 분석
+predictor + fusion-pass (`ag_fuse_group_count`, semantics-preserving).
+g3: faithfulness = **구조적** (number-fitting 금지) — monotone ↑T
+(attn O(T²·d)) ↓d (matmul O(T·d²)) 검증. **PRE-REGISTERED 예측**:
+d768·12L·T512 host_frac=**0.769** → post-forge(eff20)=**0.143** →
+예측 whole-step speedup **3.72×**. Test 18 F-RFC043-AGTAPE-FUSE-
+PREDICT, flame_ag_tape_test **18/18 ALL PASS**.
+
+GOAL 진척 (**전 gap $0-측정 완료, GPU-fire 만 user-gated**):
+gap(a)✅ gap(b)✅ gap(c)✅ gap(e)✅ · **gap(d)**: $0-prep ✅
+(faithful predictor + pre-registered 0.769→0.143 / 3.72×) ·
+잔여 = forge GPU kernel 구현 (self/forge substrate) + GPU fire
+로 예측 confirm/falsify (**cost-bearing → user 승인 필요**;
+executing-actions-with-care + instrument-first + cost-ascending).
+$0 자율 surface 소진 — gap(d) closure 는 GPU-$ 사이클.

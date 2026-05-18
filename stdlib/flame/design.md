@@ -457,3 +457,33 @@ forge kernel; host 분산 35% 원인; perf claim → GPU 측정 필요·$).
 cost-ascending 상 마지막 (GPU-cost). spec IR (Decision 7) 가
 fusion-pass 입력으로 준비됨. instrument-first: $0 fusion-pass
 설계 + faithful cost-predictor 먼저 → GPU fire 는 그 다음.
+
+## Decision 8 — gap(d) $0-prep: 구조적 faithful predictor (number-fit 금지)
+
+**측정 (Test 18, LANDED 928882ee)**: `ag_fuse.hexa` — per-op WALL
+cost 모델 + host-distribution predictor + spec-IR fusion-pass.
+**g3 핵심 결정**: predictor faithfulness 는 **구조적**이지 RFC 041
+"~0.35" 에 상수 fitting 하지 않음 (LATTICE_POLICY anti-pattern
+fit-to-convenient-number 회피). 모델 form 이 실제 구현 반영
+(host=scalar-loop elem-count·ns / native=matmul MAC·ns /
+dt_* penalty), falsifiable 구조 주장 = monotone ↑T (attn O(T²·d)
+스칼라 루프) · ↓d (matmul O(T·d²)) — 측정 검증 (T128<T512<T1024,
+d256>d768>d1024). **PRE-REGISTERED 예측 (AS-IS, 0.35 으로 안 굽힘)**:
+```
+d768·12L·T512  host_frac = 0.769
+  → forge(eff=20) post host_frac = 0.143
+  → 예측 whole-step speedup = 3.72×
+```
+RFC 041 의 ~0.35 은 더 작은 T config (attn T² 지배 전) — 본 모델
+은 그 config 에선 낮은 frac 을 주는 게 정합. flame_ag_tape_test
+**18/18 ALL PASS** (classify ✓ · fusion-pass semantics-preserving
+Δ=0 · 구조 monotone ✓).
+
+**status**: gap(d) **$0-prep ✅ CLOSED**. 잔여 gap(d) closure =
+(1) forge GPU kernel 구현 (self/forge substrate — host-loop op →
+GPU), (2) GPU fire 로 pre-registered 0.769→0.143 / 3.72× 를
+confirm/falsify. 둘 다 **cost-bearing → user 승인 필요**
+(executing-actions-with-care · instrument-first blind-fire 금지 ·
+user 의 cost-ascending 명시). **$0 자율 surface 완전 소진**:
+GOAL 5 gap 중 4 fully CLOSED + gap(d) $0-prep CLOSED, gap(d) 의
+GPU 측정만 별도 cost 사이클 (pre-registered falsifier 준비완료).
