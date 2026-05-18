@@ -347,7 +347,10 @@ fn cmd_url(url) {
             args_list.push(hexa_url_decode(args_raw[ai]))
             ai = ai + 1
         }
-        cmd_run(file, args_list)
+        // R7 option B — user-direct invocation (hexa:// URL) routes
+        // through the deprecation-warning helper. URL action has no
+        // --vm flag, so want_vm=false.
+        cmd_run_user_direct(file, args_list, false)
     } else if action == "install" {
         let pkg = hexa_url_query_get(query, "pkg")
         if pkg == "" {
@@ -2169,6 +2172,30 @@ fn cmd_run_dispatch(file, extra_args, want_vm) {
     cmd_run_vm_mode = false
 }
 
+// R7 — option B (interp deprecation, source preserved).
+// `hexa run <file>` and the hexa://run URL action are USER-DIRECT
+// invocations of the tree-walking interpreter; emit a stderr
+// deprecation warning before delegating to cmd_run_dispatch. The 16+
+// absorbed-verb sites (lsp / test / check / qrng / batch / …) keep
+// calling cmd_run directly — they are internal infrastructure, not
+// surfaces a user is asked to type, so they are silent until track B
+// (sub-binary re-targeting) lands and they can be migrated. The
+// warning is silenced by HEXA_INTERP_QUIET=1 for CI and downstream
+// consumers still on the interp path. Functionality is preserved
+// (loss = 0); only the user-visible signal that `hexa run` is on the
+// retirement track is added. See AGENTS.tape @D g_interp_deprecated
+// and compiler/PLAN.md "R7 Phase 1 entanglement map" for the full
+// rationale + Phase 2 split.
+fn cmd_run_user_direct(file, extra_args, want_vm) {
+    if env_var("HEXA_INTERP_QUIET") != "1" {
+        eprintln("hexa: warning — `hexa run` (tree-walking interpreter) is deprecated and on the retirement track (R7).")
+        eprintln("hexa:   prefer the native path: `hexa build " + file + "` then run the produced binary,")
+        eprintln("hexa:   or use bin/hexa-run-native (auto-fallback to compiled paths).")
+        eprintln("hexa:   silence: set HEXA_INTERP_QUIET=1.")
+    }
+    cmd_run_dispatch(file, extra_args, want_vm)
+}
+
 fn cmd_run(file, extra_args) {
     // bt 36 revival (2026-04-21): AOT cache reactivated with deep
     // fingerprint + fall-through safety. See helpers above (line ~800)
@@ -3036,7 +3063,14 @@ if len(av) < 3 {
                 cmd_help()
             } else {
                 cmd_run_no_sentinel_mode = want_no_sentinel
-                cmd_run_dispatch(file_arg, run_args, want_vm)
+                // R7 option B — top-level `hexa run <file>` is a user-
+                // direct invocation: route via cmd_run_user_direct so
+                // the stderr deprecation warning fires (silenceable
+                // via HEXA_INTERP_QUIET=1). All 16+ absorbed-verb
+                // sites (lsp / test / check / qrng / batch / …) still
+                // call cmd_run / cmd_run_dispatch directly — they are
+                // internal infrastructure and migrate in track B.
+                cmd_run_user_direct(file_arg, run_args, want_vm)
                 cmd_run_no_sentinel_mode = false
             }
         }

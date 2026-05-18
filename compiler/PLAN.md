@@ -1130,3 +1130,25 @@ surgical deletion 은 트랙 B (CLI driver re-targeting) 가 별도 multi-cycle 
 
 본 Phase 1 = mapping 만. Phase 2 옵션 선택은 다음 cycle (또는 orchestrator 지시).
 
+
+---
+
+### 2026-05-18 — R7 Phase 2 option B LANDED — user-direct warning, sources preserved
+
+**옵션 B 채택 사유** (Phase 1 entanglement map 의 트랙 A/B/C 중):
+- `self/main.hexa::cmd_run` 이 user-direct (`hexa run <file>` + `hexa://run`) 외에 16+ absorbed-verb (`lsp`/`test`/`bench`/`check`/`init`/`verify`/`calc`/`atlas`/`qrng`/`sim-universe`/`qmirror`/`batch`/`convergence`/…) 의 backend.
+- A (즉시 소스삭제 + cmd_run placeholder) = 16 서브커맨드 즉시 break.
+- C (즉시 소스삭제 + exit-1 메시지) = 동일.
+- **B (보수: 소스 보존, user-direct 만 deprecation warning)** = functionality 손실 0, user signal 강.
+
+**변경 (option B)**:
+- `self/main.hexa`: `cmd_run_user_direct(file, extra_args, want_vm)` 신설 — stderr 에 deprecation warning 3줄 emit (silenceable via `HEXA_INTERP_QUIET=1`) → `cmd_run_dispatch(file, extra_args, want_vm)` 위임. functionality 보존.
+- user-direct call site 2곳만 새 fn 으로 교체:
+  - L350 `hexa://run` URL action — `cmd_run_user_direct(file, args_list, false)`
+  - L3060 top-level `hexa run <file>` CLI — `cmd_run_user_direct(file_arg, run_args, want_vm)`
+- 16+ absorbed-verb 의 `cmd_run` 호출 (L1158 batch backend, L2409 cmd_batch loop, L3116 lsp, L3174 check, L3201 convergence, L3234 test, etc.) 은 그대로 — track B 에서 sub-binary 로 마이그레이션.
+- `AGENTS.tape @D g_interp_deprecated`: option B 채택 명시, R7 gate ①②③④ 모두 충족 기록, user_warning + sunset 트랙 B 명세 갱신.
+
+**검증**: build_aprime smoke + self-host fixpoint 보존 (mini 에서 검증 예정 — codegen 변경 0, frontend 만 patch 라 fixpoint 영향 0).
+
+**track B (sunset 조건)**: 16+ absorbed-verb 의 sub-binary 재라우팅 (각자 native 빌드 후 main.hexa 가 sub-binary 를 spawn) — multi-cycle. 완료 후 interp 소스 일괄 삭제 → `g_interp_deprecated` 룰 폐기 → R7 종결.

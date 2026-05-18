@@ -247,14 +247,15 @@
   authority = "user directive 2026-05-17 'PLAN 은 compile 관련 폴더/PLAN.md 파일을 업데이트해나가면되' + 'AGENTS.tape 에도 기록해놔줘 문서분산 방지'. 사전 forge/PLAN.md 위치 시도 (commit d6ef09ab) 는 본 cycle 이 forge 아닌 compile 작업임을 정정한 04fd46b2 에서 revert."
   @> AGENTS.md
 
-@D g_interp_deprecated := "interpreter retirement-pending — no new dependencies" :: governance [required d=2026-05-17 active]
-  rule = "인터프리터 경로 (`hexa run` · `self/hexa_full.hexa` · `build/hexa_interp.real`) 는 RETIREMENT-PENDING (폐기예정). 신규 코드 · 도구 · 테스트 harness · 빌드 스크립트 · 다운스트림 통합이 인터프리터에 의존하는 것 금지. 검증은 `hexa build` (compiled) · syntactic 체크는 `hexa parse`. 신규 기능은 compiled 경로 (hexa_v2 → C, 또는 aprime_cc-direct) 에만 land."
-  why = "interp-retirement R3-R7 진행 중. interp 는 (1) compiled 경로 대비 corpus 커버리지 미달이지만 SSOT 는 compiled, (2) macOS 4GB memcap 초과로 대형 입력에 죽음, (3) chr-byte / atlas parser-drift 등 latent 버그 보유. 신규 의존을 막아야 R7 폐기 시 회귀 0."
-  applies-to = "신규 .hexa 도구 · 테스트 harness · 빌드 스크립트 · 다운스트림 (wilson / echoes / anima) 통합. 기존 interp 의존은 R3-R7 closure 까지 유지하되 신규는 금지."
-  exception = "(1) interp 자체 유지보수 (hexa_full.hexa 버그픽스 — [@x_handoff] dual-track per g_inbox_dual_track). (2) `hexa` CLI 드라이버 (self/main.hexa) 는 아직 interp 위 동작 — 드라이버 self-host 가 R7 마지막 관문. (3) 부득이 interp 필요 시 ubu 원격 (macOS memcap 회피)."
-  r7_gate = "R7 (interp 삭제) 조건: ① aprime_cc-direct / hexa-build corpus 커버리지 ≥ interp (현 50~63%, 목표 ~100%) ② `hexa` CLI 드라이버 (self/main.hexa) compiled 바이너리 동작 ③ atlas struct-array SIGSEGV (3 케이스) 종결 ④ module_loader flatten 경로 interp 비의존."
-  sunset = "R7 완료 시 본 룰 폐기 — interp 부재 시 의존 자체가 불가."
-  authority = "user directive 2026-05-17 '인터프리터 폐기예정 표시 / 신규 의존 금지 => go' + R7 게이트 4항 'all bg go'; feedback memory no-interp-use-compiled."
+@D g_interp_deprecated := "interpreter deprecated — option B: user-facing warning, sources preserved" :: governance [required d=2026-05-17 active]
+  rule = "인터프리터 경로 (`hexa run` · `self/hexa_full.hexa` · `build/hexa_interp.real`) 는 DEPRECATED. 신규 코드 · 도구 · 테스트 harness · 빌드 스크립트 · 다운스트림 통합이 인터프리터에 의존하는 것 금지. 검증은 `hexa build` (compiled) · syntactic 체크는 `hexa parse`. 신규 기능은 compiled 경로 (hexa_v2 → C, 또는 aprime_cc-direct) 에만 land."
+  why = "interp 는 (1) compiled 경로 대비 corpus 커버리지 미달이지만 SSOT 는 compiled, (2) macOS 4GB memcap 초과로 대형 입력에 죽음, (3) chr-byte / atlas parser-drift / enum-eq / bitwise / match-as-expr 등 입증된 latent 버그 보유. 신규 의존을 막아야 R7 폐기 시 회귀 0."
+  applies-to = "신규 .hexa 도구 · 테스트 harness · 빌드 스크립트 · 다운스트림 (wilson / echoes / anima) 통합. 기존 interp 의존은 R7 track-B closure 까지 유지하되 신규는 금지."
+  exception = "(1) interp 자체 유지보수 — bug 픽스 시 [@x_handoff] dual-track per g_inbox_dual_track 적용. (2) self/main.hexa 의 16+ absorbed-verb 분기 (lsp / test / check / qrng / sim-universe / qmirror / batch / …) 가 interp 바이너리에 위임 중 — R7 track B (sub-binary 재라우팅, multi-cycle) 까지 보존. (3) 부득이 interp 필요 시 ubu 원격 (macOS memcap 회피)."
+  r7_status = "R7 gate ①②③④ 모두 충족 (gate ① — tier-1 codegen gap 0; gate ②③④ — CLI compiled · atlas SIGSEGV 종결 · module_loader interp-free). R7 Phase 1 entanglement map 작성 완료 (compiler/PLAN.md). R7 Phase 2 = option B 채택: 인터프리터 소스 보존 + user-direct `hexa run <file>` 와 hexa://run URL 에 stderr deprecation warning emit (silenceable via `HEXA_INTERP_QUIET=1`). 16+ absorbed-verb 는 functionality 보존 (loss = 0) — track B 로 분리."
+  user_warning = "`hexa run <file>` 와 `hexa://run` URL action 호출 시 stderr 에 1회 deprecation warning. silence = `HEXA_INTERP_QUIET=1` env. self/main.hexa::cmd_run_user_direct 에 wired."
+  sunset = "R7 track B (16+ absorbed-verb 의 sub-binary 재라우팅, multi-cycle) 완료 → 인터프리터 소스 일괄 삭제 → 본 룰 폐기."
+  authority = "user directive 2026-05-17 '인터프리터 폐기예정 표시 / 신규 의존 금지 => go' + 2026-05-18 'R7 option B' 선택; feedback memory no-interp-use-compiled."
   @> AGENTS.md
 
 # ─── §4 Forbidden patterns ───────────────────────────────────────────
