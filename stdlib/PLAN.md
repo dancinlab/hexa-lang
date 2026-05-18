@@ -331,6 +331,24 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   메모리 관리 + 툴체인 재빌드(ubu-2 오프라인 → 복귀 후). 상류 갭 누적:
   #1 float-repr(✅수정·검증) · #2 -Infinity · #3 scale · #4 json_parse
   loop-lossy — 별도 atlas/runtime 트랙.
+- 2026-05-18 — **🔬 갭 #1 하드-블로커 확정 (userland 우회 불가)**:
+  `_python_bridge/module` 시뮬레이터(reversible_covalent_sim 등)는
+  `json.dumps` 블록에 bare 17-자리 float(예: 1.3196299926423976) 포함.
+  hexa 인터프리터(`hexa run`)의 `str(float)` 자체가 %g 6-자리 손실 →
+  printf-기반 userland shortest-double 도 불가(값이 printf 도달 전 이미
+  손실). 추가: json.dumps 는 정수-float `.0` 유지·비-지수 표기인데
+  hexa str/json 은 `902`/`6.459e+12` 로 상이. ⇒ **갭 #1 은 sim 게이트
+  무손실 이관의 하드 블로커**(인터프리터 한정; 컴파일러는 c83f74e3
+  로 수정·검증됨). 인터프리터 폐기 예정이므로 정상 경로 = scoreboard
+  를 컴파일-실행 백엔드로(또는 인터프리터 runtime float-repr 별도
+  수정). 둘 다 ubu-2 빌드 필요(오프라인).
+- 2026-05-18 — **T3 측정된 거리 천장 (g3/ANIMA GOAL — 가짜 진전 0)**:
+  현 `hexa run` 인터프리터 + 미수정 runtime 에서 **무손실 이관 가능
+  부분집합 = 16/104 가 실질 천장**. 잔여 게이트는 전부 갭 #1(bare-float
+  json)·#4(json_parse loop-lossy)·subprocess·dynamic-import·wall-time
+  중 하나에 막힘 — 검증된 무손실 패턴 적용 불가. 추가 진전 선결 =
+  상류 runtime 수정(ubu-2 복귀 후) 또는 scoreboard 컴파일-백엔드 전환.
+  손실 포트 양산은 g3 위반 → 측정된 거리만 기록.
 - 2026-05-18 — **세션 체크포인트 (측정된 거리)**: hexa-matter T1/T2
   완료(26/26 selftest hexa-native·verify 4/4·문서 HX). hexa-bio
   **T3 9/104** 검증(r1_symlink·virocapsid_c5·tape_lattice_cohort·
