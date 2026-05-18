@@ -1,0 +1,294 @@
+// HEXA Native Compiler — quant_meter P1 verification test
+//
+// @capabilities [pure]
+//
+// Hand-builds synthetic AST / HIR / MIR for one representative function
+//   fn classify { if (n) { a } else { while (b) { } } }
+// and asserts the RateVec the meter produces, plus the F-monotonicity
+// invariant. Synthetic IR is used because the full compiler self-build
+// (compiler/main.hexa) is currently blocked by an unrelated hexa_v2
+// codegen bug (Severity enum match). This test's import graph pulls in
+// only the IR struct files + meter — it builds and runs standalone.
+//
+// Run:  hexa build compiler/quant_meter/meter_test.hexa -o <out> && <out>
+
+// Single import — meter.hexa transitively pulls ast / hir / mir / tokens,
+// and the flatten splices every symbol into one module. Importing the IR
+// files directly here would double-include them (constructor redefinition).
+import "./meter.hexa"
+
+// ── shared helpers ───────────────────────────────────────────
+
+fn _span0() -> Span { return Span { file: "", line: 0, col: 0, len: 0 } }
+
+// ── AST builders ─────────────────────────────────────────────
+
+fn _aref0() -> AtlasRef { return AtlasRef { kind: "", id: "", span: _span0() } }
+
+fn _ae(k: ExprKind, text: string, kids: [Expr]) -> Expr {
+    return Expr { kind: k, span: _span0(), text: text, children: kids, atlas_ref: _aref0() }
+}
+
+fn _aident(name: string) -> Expr { return _ae(ExprKind::Ident, name, []) }
+
+fn _ablock(kids: [Expr]) -> Expr { return _ae(ExprKind::Block, "", kids) }
+
+fn _aif(c: Expr, t: Expr, e: Expr) -> Expr {
+    let mut k: [Expr] = []
+    k.push(c)
+    k.push(t)
+    k.push(e)
+    return _ae(ExprKind::If, "", k)
+}
+
+fn _awhile(c: Expr, b: Expr) -> Expr {
+    let mut k: [Expr] = []
+    k.push(c)
+    k.push(b)
+    return _ae(ExprKind::While, "", k)
+}
+
+fn _build_ast() -> Module {
+    // body = Block[ If( Ident n, Block[Ident a], Block[ While(Ident b, Block[]) ] ) ]
+    let inner_while = _awhile(_aident("b"), _ablock([]))
+    let mut else_kids: [Expr] = []
+    else_kids.push(inner_while)
+    let else_blk = _ablock(else_kids)
+    let mut then_kids: [Expr] = []
+    then_kids.push(_aident("a"))
+    let then_blk = _ablock(then_kids)
+    let iff = _aif(_aident("n"), then_blk, else_blk)
+    let mut body_kids: [Expr] = []
+    body_kids.push(iff)
+    let body = _ablock(body_kids)
+
+    let it = Item {
+        kind: ItemKind::Fn, name: "classify", span: _span0(),
+        annotations: [], params: [],
+        return_type: TypeRef { kind: "named", name: "string", args: [], span: _span0() },
+        body: body, is_pub: false
+    }
+    let mut items: [Item] = []
+    items.push(it)
+    return Module { file: "synthetic", items: items, imports: [] }
+}
+
+// ── HIR builders ─────────────────────────────────────────────
+
+fn _resolved_def() -> DefId { return DefId { module: "self/test", index: 0 } }
+
+fn _atlas0() -> AtlasBinding {
+    return AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" }
+}
+
+fn _ty(kind: string) -> Type {
+    return Type { kind: kind, def: _resolved_def(), args: [], ret: [], domain: "", unit: "" }
+}
+
+fn _he(kind: string, typ: Type, text: string, kids: [HExpr]) -> HExpr {
+    return HExpr {
+        kind: kind, span: _span0(), typ: typ, text: text,
+        children: kids, atlas: _atlas0(), def: _resolved_def()
+    }
+}
+
+fn _hident(name: string) -> HExpr { return _he("ident", _ty("i64"), name, []) }
+
+fn _hblock(kids: [HExpr]) -> HExpr { return _he("block", _ty("unit"), "", kids) }
+
+fn _hif(c: HExpr, t: HExpr, e: HExpr) -> HExpr {
+    let mut k: [HExpr] = []
+    k.push(c)
+    k.push(t)
+    k.push(e)
+    return _he("if", _ty("unit"), "", k)
+}
+
+fn _hwhile(c: HExpr, b: HExpr) -> HExpr {
+    let mut k: [HExpr] = []
+    k.push(c)
+    k.push(b)
+    return _he("while", _ty("unit"), "", k)
+}
+
+fn _build_hir() -> HModule {
+    let inner_while = _hwhile(_hident("b"), _hblock([]))
+    let mut else_kids: [HExpr] = []
+    else_kids.push(inner_while)
+    let else_blk = _hblock(else_kids)
+    let mut then_kids: [HExpr] = []
+    then_kids.push(_hident("a"))
+    let then_blk = _hblock(then_kids)
+    let iff = _hif(_hident("n"), then_blk, else_blk)
+    let mut body_kids: [HExpr] = []
+    body_kids.push(iff)
+    let body = _hblock(body_kids)
+
+    let it = HItem {
+        kind: "fn", def: _resolved_def(), name: "classify", span: _span0(),
+        annotations: [], sig_params: [], sig_return: _ty("string"),
+        body: body, is_pub: false,
+        discoverable: false, proof_hash: "", verifier_version: ""
+    }
+    let mut items: [HItem] = []
+    items.push(it)
+    return HModule { file: "synthetic", items: items }
+}
+
+// ── MIR builders ─────────────────────────────────────────────
+
+fn _local0() -> Local { return Local { id: 0, arena_id: 1, type_id: 0, name_hint: "" } }
+
+fn _stmt0() -> Stmt {
+    return Stmt {
+        kind: STMT_ASSIGN, dst: _local0(), op: "", args: [],
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _block_n(id: i64, n: i64) -> Block {
+    let mut s: [Stmt] = []
+    let mut i = 0
+    while i < n {
+        s.push(_stmt0())
+        i = i + 1
+    }
+    return Block { id: id, stmts: s, preds: [], succs: [] }
+}
+
+fn _build_mir() -> MModule {
+    // if/while lowered to 4 basic blocks; SSA 3-address expands the stmt
+    // total (13) beyond the 10 AST/HIR nodes — the S/F divergence.
+    let mut blocks: [Block] = []
+    blocks.push(_block_n(0, 4))
+    blocks.push(_block_n(1, 3))
+    blocks.push(_block_n(2, 4))
+    blocks.push(_block_n(3, 2))
+    let f = MFunc {
+        name: "classify", params: [], return_local: _local0(),
+        locals: [], blocks: blocks, entry_block: 0, arena_root: 1, def_line: 1
+    }
+    let mut funcs: [MFunc] = []
+    funcs.push(f)
+    return MModule { file: "synthetic", funcs: funcs, globals: [] }
+}
+
+// ── assertion harness ────────────────────────────────────────
+
+fn _check(label: string, rv: RateVec, es: i64, en: i64, et: i64, ec: i64) -> bool {
+    let mut ok = true
+    if rv.s_nodes != es { ok = false }
+    if rv.f_name != en { ok = false }
+    if rv.f_type != et { ok = false }
+    if rv.f_ctrl != ec { ok = false }
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label
+            + " — got S=" + to_string(rv.s_nodes)
+            + " Fname=" + to_string(rv.f_name)
+            + " Ftype=" + to_string(rv.f_type)
+            + " Fctrl=" + to_string(rv.f_ctrl)
+            + " ; want S=" + to_string(es)
+            + " Fname=" + to_string(en)
+            + " Ftype=" + to_string(et)
+            + " Fctrl=" + to_string(ec))
+    }
+    return ok
+}
+
+fn _b2s(b: bool) -> string {
+    if b { return "true" }
+    return "false"
+}
+
+fn _rv(stage: string, s: i64, nm: i64, ty: i64, ct: i64) -> RateVec {
+    return RateVec { stage: stage, s_nodes: s, f_name: nm, f_type: ty, f_ctrl: ct }
+}
+
+fn _expect_clean(label: string, v: QuantViolation) -> bool {
+    if v.hit {
+        println("  FAIL  " + label + " — unexpected violation: " + v.component
+            + " " + v.from_stage + "->" + v.to_stage
+            + " (" + to_string(v.before) + "->" + to_string(v.after) + ")")
+        return false
+    }
+    println("  PASS  " + label)
+    return true
+}
+
+fn _expect_viol(label: string, v: QuantViolation, comp: string, bf: i64, af: i64) -> bool {
+    let mut ok = true
+    if !v.hit { ok = false }
+    if v.component != comp { ok = false }
+    if v.before != bf { ok = false }
+    if v.after != af { ok = false }
+    if ok {
+        println("  PASS  " + label)
+    } else {
+        println("  FAIL  " + label + " — got hit=" + _b2s(v.hit)
+            + " comp=" + v.component
+            + " " + to_string(v.before) + "->" + to_string(v.after)
+            + " ; want comp=" + comp + " " + to_string(bf) + "->" + to_string(af))
+    }
+    return ok
+}
+
+fn main() {
+    let a = meter_ast(_build_ast())
+    let h = meter_hir(_build_hir())
+    let m = meter_mir(_build_mir())
+
+    println("quant_meter P1 — synthetic-IR verification")
+    println("case: fn classify { if (n) { a } else { while (b) { } } }")
+    println("")
+    quant_report(a, h, m)
+    println("")
+
+    let mut ok = true
+    if !_check("AST RateVec", a, 10, 3, 9, 2) { ok = false }
+    if !_check("HIR RateVec", h, 10, 0, 0, 2) { ok = false }
+    if !_check("MIR RateVec", m, 13, 0, 0, 0) { ok = false }
+
+    let mut mono = true
+    if h.f_name > a.f_name { mono = false }
+    if h.f_type > a.f_type { mono = false }
+    if h.f_ctrl > a.f_ctrl { mono = false }
+    if m.f_name > h.f_name { mono = false }
+    if m.f_type > h.f_type { mono = false }
+    if m.f_ctrl > h.f_ctrl { mono = false }
+    if mono {
+        println("  PASS  F-monotonicity (non-increasing across transforms)")
+    } else {
+        println("  FAIL  F-monotonicity")
+        ok = false
+    }
+
+    println("")
+    println("  -- HX2600 monotonicity gate (quant_check_pair) --")
+    if !_expect_clean("gate: ast->hir clean (real)", quant_check_pair(a, h)) { ok = false }
+    if !_expect_clean("gate: hir->mir clean (real)", quant_check_pair(h, m)) { ok = false }
+    if !_expect_viol("gate: F_ctrl rise flagged",
+        quant_check_pair(_rv("hir", 10, 0, 0, 2), _rv("mir", 13, 0, 0, 5)),
+        "F_ctrl", 2, 5) { ok = false }
+    if !_expect_viol("gate: F_name rise flagged",
+        quant_check_pair(_rv("ast", 5, 1, 0, 0), _rv("hir", 5, 3, 0, 0)),
+        "F_name", 1, 3) { ok = false }
+    if !_expect_viol("gate: F_type rise flagged",
+        quant_check_pair(_rv("ast", 5, 0, 2, 0), _rv("hir", 5, 0, 7, 0)),
+        "F_type", 2, 7) { ok = false }
+    if quant_ok(_rv("x", 0, 0, 0, 0), _rv("y", 0, 0, 0, 0)) {
+        println("  PASS  gate: quant_ok true on flat vecs")
+    } else {
+        println("  FAIL  gate: quant_ok should be true on flat vecs")
+        ok = false
+    }
+
+    println("")
+    if ok {
+        println("PASS: quant_meter P1 counts verified.")
+    } else {
+        println("FAIL: quant_meter P1 mismatch.")
+        exit(1)
+    }
+}
