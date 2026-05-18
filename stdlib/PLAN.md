@@ -548,3 +548,13 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   fn 을 C stdlib 심볼명(pow/powf/expf/log/exp/…)으로 짓지 말 것
   (생성 C 에서 충돌). 레시피 검증완료 → ~55 sim-class 템플릿 확정·
   기계적 이관 가능. 잔여 ~105, 구조적 천장 0 재확인.
+- 2026-05-18 — **T3 +1: 23/127** `oligonucleotide_hybridization_sim`
+  — 두번째 SIM(대형 NN-table). SantaLucia 1998 unified NN 파라미터
+  + helix-init/symmetry + van't Hoff Tm(hexa log = glibc libm
+  bit-exact) + 6-decoy off-target window-scan. 1차 빌드 측정게이트가
+  유일 불일치 포착: `fmt()` 의 `.trim()` 이 `%9.2f`/`%7.2f` 폭지정
+  선행공백을 제거(capsid 는 `%.4e`/`%.4f` 무폭이라 무사). 수정:
+  후행 \n 만 제거·선행패딩 보존. **sim-recipe 정련**: width 포맷
+  (`%Nd`/`%N.Mf`)은 선행공백 유의 → fmt 는 trim 금지·후행개행만.
+  `de71ed3` PARITY-OK. 잔여 ~104, sim-recipe 더 견고해짐(이 정련은
+  모든 후속 width-포맷 sim 에 적용).
