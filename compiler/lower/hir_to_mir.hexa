@@ -957,6 +957,18 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 if _mir_lookup(ctx_r, cn) >= 0 {
                     is_indirect = true
                     callee_op = _local_op(_mir_lookup(ctx_r, cn))
+                } else if _mir_lookup_global(ctx_r, cn) >= 0 {
+                    // A module-level `let` (not a `fn` — only ITEM_LET
+                    // names get a global slot) bound to a closure value:
+                    // dispatch indirectly through the global Operand,
+                    // never `bl <symbol>`. Mirrors tier-2 codegen_c2 —
+                    // a callee ident absent from `_known_fn_globals`
+                    // (which holds fn declarations only) falls through
+                    // to the hexa_callN indirect path. Without this a
+                    // top-level `let clo = fn(...)` call emitted a
+                    // direct `bl _clo` → linker `_clo undefined`.
+                    is_indirect = true
+                    callee_op = _global_op(_mir_lookup_global(ctx_r, cn), cn)
                 }
             } else if callee0.kind == "closure" {
                 let cr = _lower_hexpr(ctx_r, callee0)
@@ -2217,6 +2229,27 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
     }
 
     let mut lctx = _new_lower_ctx()
+    // Seed the lambda body ctx with the enclosing fn's module globals so a
+    // reference to a top-level `let` inside the closure body resolves via
+    // _mir_lookup_global (→ _global_op) instead of HX1101. _collect_free
+    // intentionally does NOT capture globals into the env array (a global
+    // is reachable by name from the lifted lambda — mirror of tier-2
+    // gen2_collect_free skipping _is_known_global names); without this
+    // seed the lambda's fresh ctx had `globals: []` and the by-name
+    // fallback failed. (closure C2 capture-scope fix — module-global ref.)
+    lctx = LowerCtx {
+        next_local: lctx.next_local,
+        next_block: lctx.next_block,
+        next_arena: lctx.next_arena,
+        arena_root: lctx.arena_root,
+        locals: lctx.locals,
+        blocks: lctx.blocks,
+        cur_block: lctx.cur_block,
+        bindings: lctx.bindings,
+        frame_starts: lctx.frame_starts,
+        globals: enc.globals,
+        has_returned: lctx.has_returned
+    }
     lctx = _new_block(lctx)
     let lam_entry = lctx.blocks[len(lctx.blocks) - 1].id
     lctx = _set_cur_block(lctx, lam_entry)

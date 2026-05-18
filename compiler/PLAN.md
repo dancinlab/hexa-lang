@@ -980,3 +980,42 @@ form) 미해결. simple capture 는 동작. 별도 focused fix.
 
 **closure RFC 상태**: C1+C2+C3 전부 land, closure end-to-end 동작 (단 t38 의 특정
 capture scope 만 #39 잔여). 진짜 tier-1 codegen gap 은 #39 capture-scope 1건으로 수렴.
+
+---
+
+### 진행 로그 — closure capture-scope #39 fix (module-global capture + global-let closure call)
+
+**문제 (#39)**: `test/t38_nanbox_smoke.hexa:94` 의 `let captured=10; let clo=fn(x){return x+captured}`
+가 `HX1101 unbound identifier 'captured' in lower`. 원인 격리 — `captured`/`clo` 둘 다
+**모듈 최상위(top-level) `let`** (t38 에는 `fn main` 없음 · 스크립트). simple-capture 작동
+케이스(`r2`: `fn main(){let c=10; ...}`)는 `c` 가 main-local 이라 `_collect_free` 가 enclosing-local
+로 잡아 env capture → 작동. top-level global 은 다른 scope kind.
+
+**근본 원인 2건 (둘 다 closure C2/C3 land 시 미커버)**:
+1. **lambda body ctx 가 모듈 globals 미시드** — `_lower_closure` 가 lifted lambda 본문을
+   `_new_lower_ctx()` (globals: []) 로 lower. closure 본문이 top-level `let` 을 참조하면
+   `_mir_lookup`(local) -1 → `_mir_lookup_global` 도 -1 (globals 비어있음) → HX1101.
+   `_collect_free` 는 의도적으로 global 을 env capture 안 함(tier-2 `gen2_collect_free` 가
+   `_is_known_global` skip 하는 것과 동일 — lifted lambda 는 global 을 이름으로 직접 도달).
+   하지만 tier-1 lambda ctx 에 global slot 이 없어 by-name fallback 실패.
+2. **module-global `let` 에 담긴 closure 의 호출이 direct-call 로 lower** — call lowering
+   의 indirect-call 판별이 `_mir_lookup`(local) >=0 만 검사. `clo` 는 module-global 이라
+   판별 실패 → direct named-fn call (`bl _clo`) → `Undefined symbols: _clo`.
+
+**수정 (`compiler/lower/hir_to_mir.hexa`, 2건)**:
+- `_lower_closure` (~line 2219): lambda body 의 `lctx` 를 `globals: enc.globals` 로 시드
+  (enclosing fn ctx 가 이미 모듈 globals 보유 — `_lower_fn` 의 mglobals 시드와 동일 패턴).
+  → closure 본문의 top-level `let` 참조가 `_mir_lookup_global` → `_global_op` 로 해소.
+- call lowering indirect 판별 (~line 956): `_mir_lookup`(local) 실패 시 `_mir_lookup_global`
+  도 검사 — 모듈-global slot 은 `ITEM_LET` 만 생성(`fn` 은 아님)이므로 global-let callee =
+  closure value → `_global_op` 통해 indirect dispatch. tier-2 codegen_c2 미러 — `_known_fn_globals`
+  (fn 선언만 보유)에 없는 callee 는 `hexa_callN` indirect 경로로 fall-through.
+
+**검증 (mini — macOS 부하 0)**: build_aprime smoke `exit(6*7)==42` PASS. closure repro:
+r2(simple main-local capture) → `15` 유지(regression 0); r_global(top-level `let`=closure
+capturing top-level `let`) → `15`; gci(main-local closure capturing global) → `15`.
+**t38_nanbox_smoke**: HX1101 소거, compile+link+run OK, closure check PASS. tier-1 stdout
+`32 pass/1 fail` vs tier-2 oracle `33 pass/0 fail` — 유일 차이는 `void is void`
+(`type_of(returns_void())=="void"`) 로 **closure 무관 · 선재 tier-1 codegen 버그**
+(`/tmp/r_void.hexa` closure 없이 재현). #39 closure-scope 자체는 종결; void-call 타이핑은
+별건. 44-smoke / self-host fixpoint 는 별도 호스트 오케스트레이터 검증.
