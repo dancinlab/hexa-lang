@@ -244,3 +244,12 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   본 트랙 범위 외(상류 runtime 트랙 별도). 영향: registry-iteration
   스케일 게이트는 deferred. **누적 측정된 거리: T3 3/104 + 두 상류
   이슈 정밀 핀.**
+- 2026-05-18 `fdb4ca3 2aa5c47 95ef1a9 ba470f6` (hexa-bio) — T3
+  **+4 pure-data 게이트** 일괄 바이트-패리티:
+  - `compute_substrate_routing` (61L stdout, unicode 아이콘 ✅⏳🔬○)
+  - `cmt_library_ranking` (48L stdout, %.4f 가중 점수 + sort)
+  - `cmt_side_effect_avoidance_audit` (25L, 10×7 행렬 + dict-repr)
+  - `cmt_axis_and_cross_design_audit` (32L, 4 per-axis + 2 cross-axis)
+  모두 sys-only 정적-데이터 게이트(no JSON/registry/subprocess) → 안전한
+  배치. **누적 측정된 거리: T3 7/104 + 공유 validator/lint libs +
+  json_dumps_canonical(T4 자산).**
