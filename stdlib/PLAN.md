@@ -306,6 +306,9 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
     deltas 447" 실패). fresh 재클론 진행 중 **ubu-2 SSH 오프라인**
     (banner-exchange timeout) → 중단. 비-차단(빌드는 작업트리에서
     정상). ubu-2 복귀 시 재클론 재개.
+- 2026-05-18 `6e08ba6` (hexa-bio) — T3 +1: `n6_axis_computational_
+  verification` (42-check 결정적 σ/τ/φ/J₂ + 5-axis 구조검증; 정점
+  열거·Euler·군위수 실연산, log10 via awk) 바이트-패리티. **T3 10/104.**
 - 2026-05-18 — **세션 체크포인트 (측정된 거리)**: hexa-matter T1/T2
   완료(26/26 selftest hexa-native·verify 4/4·문서 HX). hexa-bio
   **T3 9/104** 검증(r1_symlink·virocapsid_c5·tape_lattice_cohort·
