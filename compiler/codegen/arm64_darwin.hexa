@@ -44,6 +44,8 @@ let _STMT_ASSIGN   = "assign"
 let _STMT_BINOP    = "binop"
 let _STMT_UNOP     = "unop"
 let _STMT_CALL     = "call"
+// RFC closure C3 — local mirror of mir.hexa STMT_CALL_INDIRECT.
+let _STMT_CALL_INDIRECT = "call_indirect"
 let _STMT_RETURN   = "return"
 let _STMT_BR       = "br"
 let _STMT_BR_COND  = "br_cond"
@@ -759,6 +761,18 @@ fn _arm64_max_call_overflow(mf: MFunc) -> i64 {
                     if overflow > max_overflow { max_overflow = overflow }
                 }
             }
+            // RFC closure C3 — indirect call: args[0] is the callee, the
+            // remaining args[1..] are call arguments. The runtime env-first
+            // ABI puts the env in pair 0, so the outgoing pair count is
+            // 1 (env) + (len(args) - 1) call args = len(args). Pairs 5+
+            // overflow to the caller stack region, same as STMT_CALL.
+            if s.kind == _STMT_CALL_INDIRECT {
+                let n = len(s.args)
+                if n > 4 {
+                    let overflow = n - 4
+                    if overflow > max_overflow { max_overflow = overflow }
+                }
+            }
             si = si + 1
         }
         bi = bi + 1
@@ -1346,6 +1360,38 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
             return buf
         }
+        // RFC closure C3 — closure-value construction. hir_to_mir lowers a
+        // closure-expression site to STMT_ASSIGN op="closure_new" with
+        //   args = [env_array, lambda_name_str, arity_int]
+        // and emits the synthetic `__hexa_lambda_<N>` MFunc separately.
+        // Runtime ABI: hexa_closure_new(void* fn_ptr, int arity,
+        // HexaVal env_arr) — fn_ptr in x0, arity (C int) in w1, env HexaVal
+        // pair in x2:x3, returns the TAG_CLOSURE HexaVal in x0:x1. The
+        // fn pointer is the address of the lifted lambda symbol (adrp/add);
+        // mirrors self/codegen_c2.hexa::gen2_lambda_expr's
+        // `hexa_closure_new((void*)&__hexa_lambda_N, arity, env)`.
+        if s.op == "closure_new" && len(s.args) >= 3 {
+            let lam_sym = s.args[1].str_val
+            let arity = s.args[2].int_val
+            // x0 = &__hexa_lambda_N  (PC-relative; symbol mangled by _fmt_label)
+            buf.push(_arm64_instr2("adrp", _arm64_op_reg("x0"),
+                             _arm64_op_label(lam_sym + "@PAGE"),
+                             "closure_new: lambda fn-ptr page"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x0"),
+                             _arm64_op_reg("x0"),
+                             _arm64_op_label(lam_sym + "@PAGEOFF"),
+                             "closure_new: lambda fn-ptr off"))
+            // w1 = arity (C int)
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                             _arm64_op_label("#" + to_string(arity)),
+                             "closure_new: arity"))
+            // x2:x3 = env array HexaVal
+            buf = _hv_load(buf, s.args[0], st, rm, "x2", "x3")
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_closure_new"),
+                             "closure_new: build TAG_CLOSURE"))
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            return buf
+        }
         // array/map subscript: base[idx]. hir_to_mir lowers `a[i]` to
         // STMT_ASSIGN op="index" args=[base, idx]; without a dedicated
         // branch the fall-through below would just copy `base` into
@@ -1615,6 +1661,77 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_bool"),
                              "ret bool: box → HexaVal"))
         }
+        if s.dst.id >= 0 {
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+        }
+        return buf
+    }
+    // RFC closure C3 — indirect call through a closure VALUE.
+    //
+    // hir_to_mir lowers a call whose callee is a closure value (a
+    // let/param-bound TAG_CLOSURE, or a closure-expression invoked in
+    // place) to STMT_CALL_INDIRECT with args[0] = callee value and
+    // args[1..] = the call arguments. We replicate the runtime
+    // `hexa_callN` static-inline dispatch (self/runtime.c:1147+) directly
+    // in asm — those helpers are `static inline` so the direct-asm path
+    // cannot `bl` them; the closure layout is small enough to inline.
+    //
+    // HexaVal is a 16B pair (x_lo = tag, x_hi = payload). For a
+    // TAG_CLOSURE the payload is `HexaClo*` (runtime.h:68):
+    //   struct HexaClo { void* fn_ptr; int arity; HexaVal* env_box; }
+    //   → fn_ptr @0, arity @8, env_box @16.
+    // Dispatch ABI is env-first: the lifted `__hexa_lambda_N` takes
+    // (__env, a1..aN), so we put `*env_box` (the env array HexaVal) in
+    // pair 0 (x0:x1) and the call args in pairs 1.. (x2:x3, x4:x5,
+    // x6:x7); pair 5+ overflow to [sp,#…] (C7 region). Every closure
+    // value reaching here is TAG_CLOSURE (hir_to_mir's `closure_new`
+    // always emits hexa_closure_new — even non-capturing closures get an
+    // empty env), so no TAG_FN branch is needed.
+    if s.kind == _STMT_CALL_INDIRECT && len(s.args) >= 1 {
+        // 1. callee value → x9:x10 ; x10 = HexaClo* payload.
+        buf = _hv_load(buf, s.args[0], st, rm, "x9", "x10")
+        // 2. fn_ptr = [clo_ptr + 0] → x13 (survives the arg loads, which
+        //    only scratch x14/x15).
+        buf.push(_arm64_instr2("ldr", _arm64_op_reg("x13"),
+                         _arm64_op_mem("x10", 0),
+                         "call_indirect: fn_ptr = clo->fn_ptr"))
+        // 3. env_box = [clo_ptr + 16] → x12.
+        buf.push(_arm64_instr2("ldr", _arm64_op_reg("x12"),
+                         _arm64_op_mem("x10", 16),
+                         "call_indirect: env_box = clo->env_box"))
+        // 4. call args a1.. → pairs x2:x3, x4:x5, x6:x7, then stack.
+        //    arg i (1-based over s.args) lands in outgoing pair i:
+        //      pair 1 = x2:x3, pair 2 = x4:x5, pair 3 = x6:x7,
+        //      pair 4+ = [sp, #(pair-4)*16]   (env occupies pair 0).
+        let arg_n = len(s.args)
+        let mut ai = 1
+        while ai < arg_n {
+            if ai < 4 {
+                let lo = "x" + to_string(ai * 2)
+                let hi = "x" + to_string(ai * 2 + 1)
+                buf = _hv_load(buf, s.args[ai], st, rm, lo, hi)
+            } else {
+                buf = _hv_load(buf, s.args[ai], st, rm, "x9", "x10")
+                let off = (ai - 4) * 16
+                buf = _hv_at(buf, off, "x15")
+                buf.push(_arm64_instr3("stp", _arm64_op_reg("x9"),
+                                 _arm64_op_reg("x10"), _hv_memb(off, "x15"),
+                                 "call_indirect: stack arg " + to_string(ai)))
+            }
+            ai = ai + 1
+        }
+        // 5. env HexaVal = *env_box → x0:x1 (pair 0). Done LAST so the
+        //    arg loads above can't clobber it.
+        buf.push(_arm64_instr2("ldr", _arm64_op_reg("x0"),
+                         _arm64_op_mem("x12", 0),
+                         "call_indirect: env tag = env_box->tag"))
+        buf.push(_arm64_instr2("ldr", _arm64_op_reg("x1"),
+                         _arm64_op_mem("x12", 8),
+                         "call_indirect: env payload = env_box->payload"))
+        // 6. indirect branch-with-link through the lifted fn pointer.
+        buf.push(_arm64_instr1("blr", _arm64_op_reg("x13"),
+                         "call_indirect: blr closure fn_ptr"))
+        // 7. result HexaVal x0:x1 → dst slot.
         if s.dst.id >= 0 {
             buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
         }

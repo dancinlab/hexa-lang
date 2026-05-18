@@ -43,6 +43,9 @@ fn _inl_has_call(f: MFunc) -> bool {
         let mut j = 0
         while j < len(b.stmts) {
             if b.stmts[j].kind == STMT_CALL { return true }
+            // RFC closure C2 — an indirect call counts as a call for the
+            // inline-eligibility guard (same nested-side-effect concern).
+            if b.stmts[j].kind == STMT_CALL_INDIRECT { return true }
             j = j + 1
         }
         i = i + 1
