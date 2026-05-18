@@ -610,3 +610,26 @@
   status: pending
   opened: 2026-05-18
   detail: inbox/patches/input-decoder-chr-vs-from_char_code.md
+
+- id: hx-stale-need-singularity-org-after-dancinlab-rename
+  source_commit: pending
+  source_files:
+    - tool/pkg/hx
+  compiler_impact: |
+    Toolchain shell script (tool/pkg/hx), not a compiler/ or stdlib/
+    tree change. Affects package name-resolution only: REGISTRY_REMOTE
+    (line 10) and HX_ORGS_DEFAULT (line 18) still name the pre-rename
+    `need-singularity` org and omit `dancinlab`, so `hx install <name>`
+    only reaches dancinlab repos via GitHub's non-permanent org-rename
+    redirect. No hexa.real / hexa_v2 rebuild required; ~/.hx/bin/hx is a
+    stale copy of this SSOT and should be re-synced after the fix.
+  selftest_delta: "0 (toolchain script; no self/test_*.hexa)"
+  downstream_consumer: |
+    void — README says `hx install void` (name form, kept by downstream
+    decision). That command is only correct once hx's default probe
+    order includes `dancinlab`. Until then void's grid-only beta install
+    path depends on a non-permanent GitHub redirect. Also freezes a
+    stale `need-singularity` row into ~/.hx/cache/resolve.tsv.
+  status: pending_external
+  opened: 2026-05-18
+  detail: inbox/patches/hx-stale-need-singularity-org-after-dancinlab-rename.md
