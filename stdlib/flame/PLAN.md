@@ -1609,3 +1609,82 @@ A100, ~$0.30 falsify+fix+confirm 총):**
   multi-cycle (user 결정 — 단일수정 범위 아님). hand-fused
   Phase 4-D-9 가 wall 통과한 이유 = device-resident fused
   primitive (per-op tape 아님) — 그게 generic 화의 진짜 비용.
+
+---
+
+## 2026-05-19 — mk2 결정 (RFC 056 device-residency) · 🍳/🚗 비유 (user 친근 설명 SSOT)
+
+**user 결정: 옵션 A 채택, "mk2" 로 명명.** gap(d) generic-path
+d768 성능을 RFC 056 device-residency 멀티-사이클로 닫는다. 아래는
+user 에게 친근하게 설명한 비유 전체 — mk2 의 "왜" SSOT (future
+세션·user 재독용).
+
+### 🍳 비유 — flame 의 두 "요리 모드"
+
+```
+generic ag_tape 경로  =  집에서 레시피 보며 한 단계씩 요리
+                          (단계마다 그릇을 싱크대로 들고감 = GPU↔CPU 왕복)
+device-resident 경로  =  전문 주방 라인: 재료가 조리대(GPU)에
+                          계속 올라가 있고 요리 끝날 때까지 안 내려옴
+```
+
+측정 사실: 집-요리(generic)는 **유연·정확**하나(아무 레시피 OK)
+d768·12L 큰 요리는 "싱크대 왕복"이 너무 많아 느림. 전문-주방
+(hand-fused)은 d768 을 **이미 PyTorch보다 빠르게** 해냄 (측정
+완료, `28e9d648`).
+
+### 🅰️ RFC 056 착수 = mk2 (채택) — "집 주방을 전문 라인으로 개조"
+
+```
+🔧 RFC 056 / mk2 — "device residency 풀 개조"
+- 하는 일: generic 경로의 모든 연산(rmsnorm·attn·silu·add·matmul)을
+  GPU 상주로 — 한 번 GPU 올라간 데이터가 끝까지 안 내려오게
+- 비유: 집 주방을 뜯어 전문 조리 라인으로 (싱크대 왕복 제거)
+- 규모: 멀티-사이클 아키텍처 (커널은 이미 있음 — 배선·상주
+  관리자를 새로 짜야 함). hand-fused 도 이 공사에 fire #1~9 걸림
+
+ [개조 전 generic]            [개조 후 generic = mk2]
+ op→CPU→op→CPU→...            op→op→op (전부 GPU 상주)
+  └ 매 단계 24MB 왕복           └ 왕복 0, d768 도 빠름
+```
+
+- 결과물: generic 경로 *자체*가 d768 wall 통과 → GOAL 성능축 literal 충족
+- 비용: 멀티-세션 진짜 엔지니어링 (단일 수정 아님)
+
+### 🅱️ 2-경로 아키텍처 인정 (미채택) — "PyTorch 와 똑같은 구조"
+
+```
+🚗 2-path — "comfort 모드 + sport 모드"
+- generic=정확/유연(eager) + device-resident=빠름(compiled), 골라 씀
+- PyTorch 가 바로 이렇게 만들어져 있음 (eager 가 그 336.85s 기준선)
+
+ PyTorch:  eager(느림·유연) + compiled(빠름)
+ flame  :  ag_tape(정확·유연) + device-resident(PyTorch보다 빠름 ✅)
+```
+
+- $0·즉시. 잔여(자동 lowering)는 "편의"로 RFC 056 future 기록
+- 미채택 사유: user 가 generic 경로 자체의 d768 성능(literal closure)
+  을 원함 → mk2 진행
+
+### 비교표
+
+| 축 | 🅰️ mk2 (채택) | 🅱️ 2-경로 (미채택) |
+|---|---|---|
+| GOAL 성능축 | generic 자체 d768 통과 (literal) | device-resident 로 이미 충족 (PyTorch 동형) |
+| 규모 | 멀티-사이클 공사 | $0, 지금 |
+| 정직성 | 진짜 closure | over-claim 아님 (PyTorch 가 실제 이 구조) |
+| 리스크 | 큼·다세션 | 낮음 |
+
+### mk2 착수 기준 (measured-isolated, 3-fire)
+
+근인 = generic per-op tape 의 host orchestration + per-op H2D/D2H
+(device residency 無). 커널은 존재·byte-eq: RoPE(`b73269ea`,
+A100 `max|Δ|=0`) · rmsnorm/silu/add/softmax (RFC 041 Phase B) ·
+matmul cuBLAS (`54980357` dim-gate). **mk2 작업 = 새 커널 아님 —
+residency-aware tape executor + disposition 배선** (`hexa_farr_
+pin_device` · `set_out_disposition(DEVICE_KEEP)` · `farr_dev_view`
+= RFC 056 Phase 1, 이미 runtime.c 랜딩, hand-fused Phase 4-D-7/8
+가 사용 중). 즉 인프라 존재, generic tape 경로 배선이 mk2 scope.
+
+cross-link: README.md "Benchmark" · design.md Decision 11 ·
+[[flame-general-pytorch-replacement-goal]] gap(d) · [[pin-trap-pattern]].

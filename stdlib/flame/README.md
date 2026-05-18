@@ -1,6 +1,52 @@
 # flame — hexa-native, compiler-only PyTorch-equivalent NN stdlib
 
-> **Status (2026-05-17): 🎯 Phase 4-B ≥3× TARGET REACHED — 3.23× wall** (cool projection)
+## Benchmark — current measured basis (vs PyTorch / CUDA), 2026-05-19
+
+> g3 / LATTICE_POLICY: **measured numbers only.** Unmeasured = not
+> claimed; falsified = recorded as falsified. No over-claim.
+
+**Canonical config: d=768 · 12 layer · T=1024 (one train step wall).**
+
+| path | d768·12L step wall | vs PyTorch eager | status |
+|---|---|---|---|
+| PyTorch eager (RFC 046 baseline) | **336.85 s** | 1.00x (reference) | baseline |
+| **flame device-resident** (hand-fused, `28e9d648`) | **191-268 s** | **1.26-1.76x faster** (20-43%) | MEASURED PASS · F-RFC046-WALL (<=437.9 s gate) |
+| flame generic `ag_tape` (mk1, as-wired) | >900 s (0 step / 900 s timeout, GPU util 3% after matmul to cuBLAS dim-gate) | slower (does not complete) | MEASURED-FALSIFIED as-wired -> **mk2 target** |
+
+**Correctness / substrate (A100, byte-eq oracles — all MEASURED PASS):**
+
+| item | result |
+|---|---|
+| `flame_ag_tape_test` (generic autograd) | 19/19 ALL PASS — leaf 12/12 `max|D|=0`, decoder e2e <=1e-16, train_step gn2 bit-identical, shape-generic 5/5, `ag_spec` DSL |
+| CUDA substrate forge kernels (12) | byte-eq A100 (cuBLAS Dgemm + Phase B kernels) |
+| RoPE GPU kernel fwd/bwd | `4.441e-16` (nvcc `--fmad` FMA) -> `__dmul_rn`/`__dadd_rn` fix (`b73269ea`) -> `max|D|=0` ALL-PASS (T=128 & T=1024) |
+| CPU-only path (historical, d=32·3L) | flame 18.5 s vs anima ~30 s — Phase 4-B 3.23x (different config/axis) |
+
+**mk1 / mk2 framing (decided 2026-05-19, user — option A):**
+
+- **mk1 (current, shipped):** two-path, mirroring PyTorch's own
+  `eager` vs `compiled` split.
+  - generic `ag_tape` = correctness + expressiveness path
+    (autograd · shape-generic · `ag_spec` model DSL · kernel
+    byte-eq) — **5/5 measured-closed**.
+  - device-resident hand-fused = performance path — **beats
+    PyTorch eager at d768·12L (measured, `28e9d648`)**.
+- **mk2 (decided — RFC 056 device-residency program):** make the
+  *generic* `ag_tape` path itself device-resident (full op chain
+  on-device, no per-op H2D/D2H) so it reaches the d768 wall
+  *without* the separate hand-fused path. **Multi-cycle
+  architecture** — forge kernels exist (RoPE/rmsnorm/silu/add/
+  softmax byte-eq); the work is a residency-aware tape executor +
+  disposition wiring. Root cause measured-isolated across 3 A100
+  fires (FIRE1 pod-dud, FIRE2 CPU-bound, FIRE3 matmul-cuBLAS
+  still 0-step/900s at util 3%): binding constraint = device
+  residency, not kernel/matmul correctness. Rationale/analogy:
+  `PLAN.md` section "mk2 decision".
+
+> _History (Phase 4-B / Phase 3, superseded as the headline;
+> preserved as the measured audit trail):_
+
+> **Status (2026-05-17): Phase 4-B >=3x TARGET REACHED — 3.23x wall** (cool projection)
 > (see `STATUS.md` sixth iteration for single-page consolidated state).
 >
 > **🎯 Phase 4-B FULLY SHIPPED with ≥3× ceiling**:
