@@ -1399,7 +1399,7 @@ fn _gen2_emit_tail_returnify_body(body_stmts, depth) {
     // builtin returns void; emit as a normal expression statement instead.
     if ik == "Call" && type_of(inner.left) != "string" && inner.left.kind == "Ident" {
         let _cname = inner.left.name
-        if _cname == "println" || _cname == "print" || _cname == "eprintln" || _cname == "eprint" || _cname == "exit" {
+        if _cname == "println" || _cname == "print" || _cname == "eprintln" || _cname == "print_err" || _cname == "eprint" || _cname == "exit" {
             chunks.push(gen2_stmt(last, depth))
             return chunks.join("")
         }
@@ -3908,7 +3908,16 @@ fn gen2_expr(node) {
             }
             // FIX (2026-04-20): variadic eprintln — same bug as println.
             // Chain hexa_eprint_val for each arg, append trailing newline.
-            if name == "eprintln" {
+            // FIX (2026-05-19): print_err is an exact alias of eprintln in the
+            // interpreter (self/hexa_full.hexa: print_err -> eprintln(concat
+            // args)). It is in the self/env.hexa builtin list so `hexa parse`
+            // accepts it, but the compiled path emitted no shim -> clang
+            // "use of undeclared identifier 'print_err'". Share the eprintln
+            // emission path so the compiled SSOT matches the interp builtin
+            // (GOAL (2) interp/compiled parity). inbox/patches/
+            // print-err-builtin-interp-compiled-parity.md (wisp).
+            // Re-applied 2026-05-19 after e5c4c0ef deploy regen wiped 3abf9f8e.
+            if name == "eprintln" || name == "print_err" {
                 let nargs_e = len(node.args)
                 if nargs_e == 0 {
                     return "(fprintf(stderr, \"\\n\"), hexa_void())"
@@ -6333,6 +6342,16 @@ fn _is_known_float_name(name) {
     // H17 fix: see _is_known_int_name — param annotation is authoritative
     // over any prior fn's module-global known-float registration.
     if _gen2_name_in_cur_params(name) { return false }
+    // 2026-05-19 fn-local shadowing — atlas s8_elliptic_j1728 residue:
+    // `let mut x = -1` in this fn shadows another module's prior
+    // `let x = <float>` global registration. Mutable lets aren't
+    // re-registered (L2376), so without this guard `_is_known_float_
+    // name("x")` returned true and the BinOp fast-path emitted
+    // hexa_float(HX_FLOAT(x) * HX_FLOAT(x)) on an int-tagged value →
+    // garbage float bits → 2-torsion loop computed wrong → verdict
+    // FALSIFY. Extend H17 to fn-body locals using the existing
+    // _gen2_name_in_cur_lets tracker.
+    if _gen2_name_in_cur_lets(name) { return false }
     // 2026-05-19 atlas root-cause: symmetric collision check (see the
     // _is_known_int_name companion). If `name` is also registered int,
     // the int↔float classification is ambiguous across the flattened
@@ -6367,6 +6386,11 @@ fn _is_known_int_name(name) {
     // The current fn's param type is authoritative; a prior fn's `let X = 0`
     // must not be applied to this fn's `X: float` param.
     if _gen2_name_in_cur_params(name) { return false }
+    // 2026-05-19 fn-local shadowing — symmetric to the _is_known_float_
+    // name companion. Fn-body local lets (mutable or immutable) shadow
+    // a prior module's global registration; the local binding's type
+    // is authoritative.
+    if _gen2_name_in_cur_lets(name) { return false }
     // 2026-05-19 atlas root-cause fix: name-collision across the
     // flattened modules. _known_int_set / _known_float_set are GLOBAL
     // keyed by name, so a common name (`lhs`, `rhs`, `err`, …) can be
@@ -6618,6 +6642,7 @@ fn _is_builtin_name(name) {
     if name == "print" { return true }
     if name == "eprintln" { return true }
     if name == "eprint" { return true }
+    if name == "print_err" { return true }  // alias of eprintln (interp/compiled parity)
     if name == "len" { return true }
     if name == "to_string" { return true }
     if name == "type_of" { return true }
