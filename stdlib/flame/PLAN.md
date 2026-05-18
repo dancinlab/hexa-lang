@@ -1733,7 +1733,17 @@ builtin → runtime.c `#ifdef HEXA_CUDA` dim-gate 가능 (hexa
   PASS** (CPU fallback byte-id, Test 8 RESID 포함, leaf 12/12
   보존). add 는 exact add 라 별도 GPU oracle fire 不要 (rounding
   hazard 無). $0 verified.
-- **mk2-C1b (NEXT):** `ag_silu_gate` forge-route — **byte-eq
+- **mk2-C1b (CPU DONE · GPU oracle in flight, 2026-05-19):**
+  `ag_silu_gate` forge-route. C+CUDA `dt_exp` byte-exact mirror
+  구현 (`_hx_dt_exp_d` FP_CONTRACT OFF · `_hx_cuda_dt_exp_d`
+  __dmul_rn/__ddiv_rn/__dadd_rn) + `_hx_farr_silu_gate_cpu` +
+  `_hx_cuda_kern_silu_gate` + builtin/carrier/proto + ag_tape
+  교체 (commit `e5faa8b0`). **CPU 검증: Mac 19/19 ALL PASS —
+  Test 11 SILUGATE max|Δ|=0 = `_hx_dt_exp_d` bit-exact to hexa
+  `dt_exp` 실증.** GPU gate = `tool/cuda_test_silu_gate.cu`
+  cheap oracle (A100, F-MK2C1B-SILUGATE-EXACT |Δ|=0) — 발사됨
+  (`state/silu_gate_oracle_2026_05_19`), PASS 시 C1b CLOSED.
+  (이하 원 분석 보존:) `ag_silu_gate` forge-route — **byte-eq
   hard**. silu_gate = `a·σ(a)·b`, `σ=1/(1+dt_exp(-x))`. 기존
   `farr_silu_gpu` 는 (1) silu-only (·b gate 無), (2) CPU
   fallback `_hx_sigmoid_d`·CUDA `_hx_cuda_sigmoid_d` 둘 다
