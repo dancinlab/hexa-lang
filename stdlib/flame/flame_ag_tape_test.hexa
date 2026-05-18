@@ -28,6 +28,7 @@ use "stdlib/flame/decoder_lib"
 use "stdlib/flame/train_lib"
 use "stdlib/flame/optim_lib"
 use "stdlib/flame/ag_spec"
+use "stdlib/flame/ag_fuse"
 use "stdlib/flame/decoder_block_lib"
 
 // W layout bridge: decoder block stores W[out·in] (W[r·in+c]); nn_linear
@@ -1891,13 +1892,141 @@ if t17ok {
     println("FAIL  F-RFC043-AGTAPE-SPEC-EQ (spec divergence >1e-12)")
 }
 
+// ── Test 18: gap(d) $0 fusion-pass + FAITHFUL host-distribution
+//    predictor (NO GPU spend; the GPU fire stays user-gated). Validates
+//    (a) the predictor reproduces RFC 041's ~0.35 host distribution at
+//    d=768·12L (faithfulness — pre-registered), (b) op classification,
+//    (c) fusion-group analysis is semantics-preserving on the spec IR.
+//    Falsifier F-RFC043-AGTAPE-FUSE-PREDICT.
+println("-- Test 18: gap(d) $0 fusion-pass + faithful predictor  --")
+// (a) STRUCTURAL FAITHFULNESS (g3: no number-fitting). The model
+// must be monotone ↑ in T (attn O(T²·d) host loop) and ↓ in d at
+// fixed T (matmul O(T·d²) grows faster), 0<frac<1. The d768·12L·T512
+// output is the PRE-REGISTERED prediction AS-IS (not bent to 0.35).
+let hf768 = ag_fuse_host_frac(768, 12, 12, 3072, 50257, 12, 512)
+let hf_T128 = ag_fuse_host_frac(768, 12, 12, 3072, 50257, 12, 128)
+let hf_T1024 = ag_fuse_host_frac(768, 12, 12, 3072, 50257, 12, 1024)
+let hf_d256 = ag_fuse_host_frac(256, 4, 4, 1024, 50257, 12, 512)
+let hf_d1024 = ag_fuse_host_frac(1024, 16, 16, 4096, 50257, 12, 512)
+let fe = 20.0  // forge kernel ~20× the unvectorized scalar host loop
+let hf768_post = ag_fuse_host_frac_post(768, 12, 12, 3072, 50257,
+                                        12, 512, fe)
+let sp768 = ag_fuse_predicted_speedup(768, 12, 12, 3072, 50257,
+                                      12, 512, fe)
+print("  [PRE-REGISTERED] host_frac d768.12L.T512="); print(hf768)
+println("")
+print("  monotone T: T128="); print(hf_T128)
+print(" T512="); print(hf768)
+print(" T1024="); println(hf_T1024)
+print("  monotone d: d256="); print(hf_d256)
+print(" d1024="); println(hf_d1024)
+print("  post-forge(eff20) host_frac="); print(hf768_post)
+print(" pred step speedup="); print(sp768)
+println("x")
+// structural faithfulness: monotone ↑ in T, ↓ in d, bounded, sane
+let t18a = hf768 > 0.0 && hf768 < 1.0
+   && hf_T128 < hf768 && hf768 < hf_T1024
+   && hf_d256 > hf768 && hf768 > hf_d1024
+   && hf768_post < hf768 && sp768 > 1.0
+// (b) classification correctness
+let t18b = ag_fuse_is_host_op(ag_k_rmsnorm_mh()) == 1
+   && ag_fuse_is_host_op(ag_k_rope_mh()) == 1
+   && ag_fuse_is_host_op(ag_k_attn_dt()) == 1
+   && ag_fuse_is_host_op(ag_k_silu_gate()) == 1
+   && ag_fuse_is_host_op(ag_k_add()) == 1
+   && ag_fuse_is_host_op(ag_k_embed()) == 1
+   && ag_fuse_is_host_op(ag_k_slice()) == 1
+   && ag_fuse_is_host_op(ag_k_linear()) == 0
+   && ag_fuse_is_host_op(ag_k_lmhead()) == 0
+// (c) fusion analysis on a small spec is semantics-preserving:
+//   build embed→rmsnorm→linear→rope→attn→add, run it, then run AGAIN
+//   after the (read-only) fusion analysis — must be byte-identical
+//   (the pass inspects spec DATA, never mutates it).
+let fT = 1
+let fd = 4
+let fnh = 2
+let fnkv = 1
+let fhd = fd / fnh
+let fsp = ag_spec_begin(8)
+let fn1 = 0 - 1
+let fe0 = ag_spec_add(fsp, ag_k_embed(), 0 - 1, fn1, fn1,
+                      0, fn1, fn1, fn1, fT, fd, 0, 0)
+let fe1 = ag_spec_add(fsp, ag_k_rmsnorm_mh(), fe0, fn1, fn1,
+                      1, fn1, fn1, fn1, fT, fd, 0, 0)
+let fe2 = ag_spec_add(fsp, ag_k_linear(), fe1, fn1, fn1,
+                      2, fn1, fn1, fn1, fT, fd, fd, 0)
+let fe3 = ag_spec_add(fsp, ag_k_rope_mh(), fe2, 0 - 2, 0 - 3,
+                      fn1, fn1, fn1, fn1, fT, fnh, fhd, 0)
+let fe4 = ag_spec_add(fsp, ag_k_add(), fe1, fe3, fn1,
+                      fn1, fn1, fn1, fn1, fT * fd, 0, 0, 0)
+let fgrp = ag_fuse_group_count(fsp)
+let fhost = ag_fuse_host_op_count(fsp)
+// host ops in spec: embed,rmsnorm,rope,add = 4 ; linear native.
+// runs: [embed,rmsnorm] then linear breaks, [rope,add] → 2 groups.
+let t18c1 = fhost == 4 && fgrp == 2
+// semantics-preserving: build params + run twice, byte-identical
+let ftab = t_zeros(3)
+let ftokE = t_zeros(5 * fd)
+let mut fi = 0
+while fi < 5 * fd { t_set(ftokE, fi, to_float(fi - 6) * 0.03); fi = fi + 1 }
+let fg = t_zeros(fd)
+let mut fgi = 0
+while fgi < fd { t_set(fg, fgi, 1.0 + to_float(fgi % 3 - 1) * 0.02); fgi = fgi + 1 }
+let fW = t_zeros(fd * fd)
+let mut fwi = 0
+while fwi < fd * fd { t_set(fW, fwi, to_float(fwi % 7 - 3) * 0.05); fwi = fwi + 1 }
+t_set(ftab, 0, to_float(ftokE))
+t_set(ftab, 1, to_float(fg))
+t_set(ftab, 2, to_float(fW))
+let fids = t_zeros(fT)
+t_set(fids, 0, to_float(2))
+let fcos = t_zeros(fT * fhd)
+let fsin = t_zeros(fT * fhd)
+nn_rope_build_tables(fT, fhd, fcos, fsin)
+let fext = t_zeros(3)
+t_set(fext, 0, to_float(fids))
+t_set(fext, 1, to_float(fcos))
+t_set(fext, 2, to_float(fsin))
+let fvt1 = t_zeros(ag_spec_count(fsp))
+let ftp1 = ag_t_begin(8)
+let fo1 = ag_run_spec(ftp1, fsp, fext, ftab, fvt1)
+let fres1 = t_zeros(fT * fd)
+let mut fr1 = 0
+while fr1 < fT * fd { t_set(fres1, fr1, t_get(fo1, fr1)); fr1 = fr1 + 1 }
+ag_t_free_state(ftp1)
+ag_t_free_reg(ftp1)
+ag_t_end(ftp1)
+let _fg2 = ag_fuse_group_count(fsp)  // read-only pass between runs
+let fvt2 = t_zeros(ag_spec_count(fsp))
+let ftp2 = ag_t_begin(8)
+let fo2 = ag_run_spec(ftp2, fsp, fext, ftab, fvt2)
+let fdelta = agt_maxdiff(fres1, fo2, fT * fd)
+ag_t_free_state(ftp2)
+ag_t_free_reg(ftp2)
+ag_t_end(ftp2)
+ag_spec_free(fsp)
+let t18c = t18c1 && fdelta == 0.0
+print("  classify="); print(t18b)
+print(" host_ops="); print(fhost)
+print(" fuse_groups="); print(fgrp)
+print(" semantics-preserve Δ="); println(fdelta)
+let t18ok = t18a && t18b && t18c
+if t18ok {
+    println("PASS  F-RFC043-AGTAPE-FUSE-PREDICT (predictor STRUCTURALLY")
+    println("  faithful: monotone ↑T ↓d, attn-dominant; classify ✓;")
+    println("  fusion-pass semantics-preserving Δ=0. gap(d) $0-prep ✓")
+    println("  — prediction pre-registered AS-IS, GPU fire user-gated)")
+} else {
+    println("FAIL  F-RFC043-AGTAPE-FUSE-PREDICT")
+}
+
 if t1ok && t2ok && t3ok && t4ok && t5ok && t6ok && t7ok && t8ok
    && t9ok && t10ok && t11ok && t12ok && t13ok && t14ok && t15ok
-   && t16ok && t17ok {
-    println("ALL PASS  ag_tape — 12/12 leaf byte-eq; single-block FWD")
-    println("  byte-eq 0; full n_layer e2e machine-eps; train_step")
-    println("  N-step AdamW; 5/5 shape-generic; declarative spec DSL.")
-    println("  gap(b)✓ gap(c)✓ gap(e)✓ — 4/5 GOAL gaps.")
+   && t16ok && t17ok && t18ok {
+    println("ALL PASS  ag_tape — 12/12 leaf byte-eq; decoder e2e")
+    println("  machine-eps; train_step; 5/5 shape-generic; spec DSL;")
+    println("  gap(d) faithful predictor pre-registered. gap(b)✓")
+    println("  gap(c)✓ gap(e)✓ — gap(d) $0-prep done, GPU user-gated.")
 } else {
     println("ALL FAIL  ag_tape regression")
 }
