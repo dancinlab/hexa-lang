@@ -81,6 +81,55 @@ A binary appears only when every fatal stage passes. The atlas (4.2 MB) is baked
 
 * * *
 
+## 🔥 flame — hexa-native NN training stack (faster than PyTorch, measured)
+
+`stdlib/flame` is what you build *with* hexa-lang: a compiler-only neural-network training stdlib whose generated artifact runs a real transformer training step **2.95× faster than PyTorch eager** on the same hardware. No PyTorch wrapping, no ATen import, no Python in the trained binary — every layer (`t_*`/`ag_*`/`nn_*`/`opt_*`) lowers to hexa→C→native through the same 8-stage strict-lint gate that compiles the compiler itself.
+
+**Architecture analogy** (`flame:forge :: torch:ATen`):
+
+```
+              hexa source (.hexa)
+                     │
+   ┌─────────────────┼─────────────────┐
+   │ flame stdlib (compiler-only NN)   │   ← what users write
+   │   t_* · ag_* · nn_* · opt_*       │     (autograd tape · layers · optim)
+   └─────────────────┬─────────────────┘
+                     │   hexa build (8-stage lint)
+                     ▼
+   ┌─────────────────────────────────┐
+   │ forge GPU substrate (C/CUDA)    │   ← what flame calls into
+   │   cuBLAS Dgemm · 12 byte-eq     │     (RFC 040/041/044 + RFC 049 BF16)
+   │   kernels · device-resident     │
+   └─────────────────────────────────┘
+                     │
+                     ▼
+              A100 / H100 native
+```
+
+**Benchmark — d=768 · 12-layer transformer training step, A100, 2026-05-19** (`stdlib/flame/README.md` for full table):
+
+| path | step 1 wall | vs PyTorch eager | status |
+|---|---|---|---|
+| PyTorch eager (RFC 046 baseline) | 336.85 s | 1.00× (reference) | baseline |
+| **flame generic `ag_tape`** (mk2 closure, `e030fa31`) | **114 s** · step2=133 · step3=120 | **2.95× faster** | ⭐️ MEASURED PASS · 3.84× under F-RFC046 437.9 s ceiling |
+| flame device-resident hand-fused (`28e9d648`) | 191-268 s | 1.26-1.76× faster | MEASURED PASS · independent path |
+
+Two independent measured paths under the same falsifier gate, both faster than the reference. The generic autograd path (`ag_tape`) is **faster than the hand-fused trainer** — abstraction pays no wall tax. Correctness anchored by 4 byte-equal oracle fires (rmsnorm · attn-fwd · attn-bwd · silu-gate, max\|Δ\| = 0 via FMA-contraction-off recipe).
+
+**vs the closest thing in the ecosystem** (PyTorch eager / compiled / JAX, all written in Python+C++):
+
+| axis | PyTorch eager | torch.compile | **flame** |
+|---|---|---|---|
+| language of NN code | Python | Python | hexa (compiled) |
+| runtime in trained binary | Python + libtorch | Python + libtorch + Inductor | native arm64/x86_64, no Python |
+| autograd path | C++ Autograd | TorchInductor | hexa `ag_tape` (forge-routed) |
+| d768·12L step (A100) | 336.85 s | varies (1.05-1.41× small/mid) | **114 s (2.95× faster)** |
+| dispatch model | per-op CUDA launch | fused kernel + CUDA graphs | device-resident chain + selective fusion |
+
+g3 / `LATTICE_POLICY`: every number above traces to a real fire — falsifier-gated, recorded as falsified when failing, no fabrication. See `stdlib/flame/PLAN.md` for the 4-fire campaign log + cycle ledger and `state/anima_handoff_2026_05_19.md` for the integration recipe.
+
+* * *
+
 ## Status
 
 The closure round's fixed points, with witnesses on disk:
@@ -234,7 +283,7 @@ Citing a tombstoned `L[id]` fires `HX1099` and fails the build. Bypass is `@grac
 - `hexa build` / `hexa cc` work **out-of-tree** — flattens `use`/`import`, resolves `hexa_cc.c`/SSOT/`-I` via `$HEXA_LANG > install_dir > ./self`; install-relative `stdlib/` discovery means `use "stdlib/*"` works with no env vars (downstream: `wilson` builds end-to-end → `wilson 0.0.1`)
 - stage-1 P0 host-OOM closed at current scale: A1 phase-arena reset + A2 in-place splice accumulator → peak ~782 MB (was 3 510 MB)
 - 14+ pinned decisions in `SPEC.yaml`, every claim traceable to an RFC
-- **`stdlib/flame` — hexa-native NN training stack faster than PyTorch (measured A100)**: a d=768 · 12-layer transformer training step runs in **114 s** on the generic `ag_tape` autograd path, vs PyTorch eager 336.85 s = **2.95× faster** (2026-05-19, commit `e030fa31`). The hand-fused option B trainer (`28e9d648`) clears the same gate at 191-268 s. Two independent paths, both measured under the F-RFC046 ≤ 437.9 s ceiling. See `stdlib/flame/README.md` for the full benchmark table and `stdlib/flame/PLAN.md` for the cycle log (4 measured fires + 4 byte-eq oracles).
+- **`stdlib/flame` — hexa-native NN training stack 2.95× faster than PyTorch eager** (d=768·12L, A100, measured) — full benchmark table + architecture diagram in the flame section above.
 
 * * *
 
