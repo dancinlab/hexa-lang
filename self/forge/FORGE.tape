@@ -130,6 +130,15 @@
   scope = "forge 의 endgame seam — RFC 055 land 시 self/cuda/*.cu 가 .hexa 로 재유도되어 AGENTS.tape @D g5 (hexa-native-only) 의 GPU lane 을 닫음. honest: hexa-emitted 커널은 correct (Phase R C-Stage2-Phase3 hand-WMMA 41-43% TC peak anchor) 하나 cuBLAS raw-GEMM throughput 추월 비목표."
   consumers = "[@g_forge_endgame_hexa_native] · PLAN §Phase 6 (endgame, long-arc)"
 
+@X x_rfc060 := "RFC 060 — forge new compute paradigm (verified mega-kernel, CUDA kernel-per-op 돌파)" :: rfc [d=2026-05-19 active]
+  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_060_forge_new_compute_paradigm.md"
+  status = "design-draft (2026-05-19, 미구현). P1 — user goal 2026-05-19 'new paradigm 으로 CUDA 성능·자원·속도 돌파 100% closure' 운반."
+  paradigm = "mega-kernel 실행 모델 — train step 전체를 단일 persistent GPU kernel + in-kernel scheduler 로 컴파일 (per-op launch + per-op HBM round-trip 둘 다 제거). Mirage MPK arXiv:2512.22219 + Stanford megakernels 측정 1.5-2.5× anchor. method = verified rewrite-chain codegen (Exo-style, atlas/strict-lint 직결)."
+  scope = "Phase R (CUDA-paradigm) 가 닫지 못한 directive 절반 — kernel-per-op 모델 자체를 벗어나는 실행 모델. 3 falsifier 사전등록 (MEGAKERNEL-WALL ≥1.3× · VERIFIED-CHAIN ≤8 cited rewrites · POLY-FEASIBLE 장기게이트), cheap first measurement $0 paper×2 + $0.40 fire×1. g3: paradigm 선언 0 — 측정 통과시에만 채택."
+  research_ssot = "self/forge/PARADIGM_C_RESEARCH.md (8-paradigm 전수 조사 + ranked synthesis)"
+  consumers = "PLAN §RFC 060 exploration track (RFC 060-A/B/C/D) · PARADIGM_RESEARCH.md §9 scope-note"
+  orthogonal = "[@x_rfc055] 와 직교 — RFC 055 = forge in hexa, RFC 060 = forge breaks kernel-per-op. 합집합 = hexa-native mega-kernel."
+
 @X x_cublas_impl := "cuBLAS Dgemm landed impl" :: code [d=2026-05-16 active]
   branch = "phase-d-cublas-h100"
   sha = "180263d3 (runtime_cuda.c) · 903c0285 (real-wire stub→impl + link-fix + GPU smoke) · 54d56e4a (7 Phase A builtins interp parity)"

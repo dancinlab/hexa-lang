@@ -11,6 +11,23 @@
 snapshot** — paradigm 채택 후 핵심 인용만 RFC 044 / `PARADIGM.md` 로
 이관.
 
+> **⚠ Scope note (2026-05-19) — 이 문서가 directive 를 부분만 이행함.**
+> 위 헤더는 directive *"CUDA 포팅 아님 — 더 뛰어난 아키텍쳐/패러다임"*
+> 을 인용하지만, §1-§8 본문은 **NVIDIA 실리콘 위의 소프트웨어 전략만**
+> 조사했다 (한국 NPU 벤더 · torch.compile · JAX · Mojo · arxiv kernel-
+> fusion). 산출된 paradigm A/B/C/D (`PARADIGM.md`) 는 SIMT kernel-per-op
+> 모델 *안의* dispatch/fusion/precision 전술이지, 새 *실행 모델*이
+> 아니다. directive 의 "완전히 새로운 패러다임" 부분은 본 문서가
+> 이행하지 않았다 — g3 정직성상 명시한다.
+>
+> 그 미이행 부분 (genuinely-new compute/execution model — dataflow ·
+> spatial · polyhedral · verified-scheduling · mega-kernel) 의 조사는
+> 별도 파일 **[`PARADIGM_C_RESEARCH.md`](PARADIGM_C_RESEARCH.md)** 가
+> 담당한다 (2026-05-19, user goal "new paradigm 으로 CUDA 성능·자원·
+> 속도 돌파"). 본 문서는 그대로 **CUDA-paradigm snapshot** 으로 보존 —
+> 둘은 상보적: 본 문서 = "NVIDIA GPU 를 잘 쓰는 법", `PARADIGM_C_RESEARCH`
+> = "kernel-per-op 모델 자체를 벗어나는 법".
+
 ---
 
 ## 1. 한국 CUDA 대안 신생들 — 전수 조사 (NPU 스택 + 자체 컴파일러)

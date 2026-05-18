@@ -30,7 +30,8 @@ writes C / CUDA. flame calls forge through compiled builtin dispatch
 ### Architectural SSOT (2026-05-17 publish)
 
 - **[`PARADIGM.md`](PARADIGM.md)** — measurement-anchored paradigm SSOT (12 sections, dual-mechanism × regime-tiered thesis). FORGE.tape §X `x_paradigm_ssot` cross-link.
-- **[`PARADIGM_RESEARCH.md`](PARADIGM_RESEARCH.md)** — literature snapshot (한국 alternatives + 글로벌 AOT-NN compilers + arxiv 2025-2026). 가설 sources, NOT decision sources.
+- **[`PARADIGM_RESEARCH.md`](PARADIGM_RESEARCH.md)** — literature snapshot, **CUDA-paradigm only** (한국 alternatives + 글로벌 AOT-NN compilers + arxiv kernel-fusion). 가설 sources, NOT decision sources. §9 scope-note honestly flags that it only delivered half the 2026-05-16 directive.
+- **[`PARADIGM_C_RESEARCH.md`](PARADIGM_C_RESEARCH.md)** — genuinely-new compute/execution-model survey (dataflow · CGRA · spatial · polyhedral · verified-scheduling · mega-kernel) — the *other* half of the directive: break past CUDA's kernel-per-op model. Verdict = mega-kernel execution model + verified rewrite-chain codegen. Scaffolds RFC 060.
 - **[`FORGE.tape`](FORGE.tape)** — tape v1.2 SSOT (governance + §X cross-link + Log).
 - **[`PLAN.md`](PLAN.md)** — staged roadmap (post-Phase R reframe: Phase 2 = 3 sub-tier → Phase 3 DSM → Phase 4 AOT → Phase 5+ multi-GPU).
 - **`hexa-lang/inbox/rfc_drafts_2026_05_12/rfc_044_*.md`** — design SSOT (forge regime-tiered substrate, Phase R anchored, 14 falsifier).

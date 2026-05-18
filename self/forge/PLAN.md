@@ -149,6 +149,32 @@ no JIT-cache effects). reference oracle = CPU farr (RFC 025/032/033/034)
 
 - AllReduce / AllGather / Broadcast on NCCL — Phase 4 (single-GPU large block AOT trainer) 가 settled 후. 원래 Phase 4 였으나 paradigm 우선순위 재조정으로 Phase 5+ 강등.
 
+### RFC 060 exploration track — new compute paradigm (CUDA kernel-per-op 돌파)
+
+> **Goal (user 2026-05-19)**: new paradigm 으로 CUDA 성능·자원·속도
+> 돌파 — 100% closure (measured). Phase 6 (hexa-native) 와 직교 —
+> RFC 055 = "forge in hexa", RFC 060 = "forge breaks kernel-per-op".
+> 합집합 = hexa-native mega-kernel.
+
+- **paradigm under test**: mega-kernel 실행 모델 — train step 전체를
+  단일 persistent GPU kernel + in-kernel scheduler 로 컴파일, host
+  kernel-stream 제거 (per-op launch + per-op HBM round-trip 둘 다
+  제거). research SSOT = `PARADIGM_C_RESEARCH.md`, RFC = RFC 060.
+- **method under test**: verified rewrite-chain codegen (Exo-style) —
+  forge codegen 을 atlas-law-cited equivalence-preserving rewrite
+  chain 으로. strict-lint stage 7/8 와 직결.
+
+| Step | Scope | Gate | Cost |
+|---|---|---|---|
+| RFC 060-A | F-RFC060-VERIFIED-CHAIN paper test (1 FFN kernel → rewrite chain) | $0, no GPU | ~$0 |
+| RFC 060-B | F-RFC060-POLY-FEASIBLE feasibility (1 block → isl/Pluto/Tempo) | $0, no GPU | ~$0 |
+| RFC 060-C | F-RFC060-MEGAKERNEL-WALL cheap test (forward-only persistent kernel) | 1 H100 fire | ~$0.40 |
+| RFC 060-D | full training-step mega-kernel (fwd+bwd+opt) — RFC 060-C ≥ 1.1× 시에만 | user gate | multi-fire |
+
+- A·B 는 $0 — 즉시 가능. C 는 Phase-R 단위 fire 1발. D 는 C 게이트.
+- "100% closure" = A/B/C 전부 resolved (pass-and-proceed 또는
+  measured-kill). 측정된 kill 도 closure (g3 — RFC 060 §8.6).
+
 ### Phase 6 (endgame, long-arc) — forge becomes hexa-native (RFC 055)
 
 > **forge 의 최종 형태는 hexa-native 다.** 현재 C/CUDA substrate 는
@@ -210,6 +236,17 @@ mandatory (`g_blue_closed_mandate`).
 ## 진행 로그
 
 (append-only)
+
+### 2026-05-19 — RFC 060 정초: new compute paradigm 조사 (CUDA kernel-per-op 모델 돌파) — directive 갭 해소
+
+사용자 goal 2026-05-19: *"new paradigm 으로 CUDA 성능·자원·속도 돌파 — 100% closure (measured)"*. forge 의 Phase R 은 *CUDA-paradigm* 질문 (NVIDIA GPU 를 어떻게 잘 쓰나) 을 측정으로 닫았지만, 원 directive 2026-05-16 의 *new-paradigm* 절반 (kernel-per-op 모델 자체를 벗어나는 실행 모델) 은 미이행 상태였음 — `PARADIGM_RESEARCH.md` 가 그 directive 를 자칭하면서 §1-§8 본문은 100% NVIDIA-실리콘 SW 전략만 조사. g3 정직성 갭.
+
+**해소 — 3 산출물**:
+- **`PARADIGM_C_RESEARCH.md`** (신규) — genuinely-new compute/execution model 8-paradigm 전수 조사 (dataflow · CGRA · spatial · polyhedral · verified-scheduling · AMT · PIM · mega-kernel) + ranked synthesis. deep research (web, 2024-2026 arxiv/vendor 출처 인라인 인용). 결론: **mega-kernel 실행 모델** (Mirage MPK arXiv:2512.22219 + Stanford megakernels, 측정 1.5-2.5×) = kernel-per-op 을 측정으로 돌파하는 유일한 genuinely-new 모델 — forge 가 이미 가진 GPU 위에서 돌고, $0.40 fire 1발로 kill/confirm 가능. method = verified rewrite-chain codegen (Exo-style, hexa atlas/strict-lint 와 직결).
+- **`PARADIGM_RESEARCH.md`** — §9 scope-note 추가. 본 문서가 directive 의 "CUDA 아님" 절반만 이행했음을 g3 정직하게 명시 + `PARADIGM_C_RESEARCH.md` cross-link. 본 문서는 그대로 CUDA-paradigm snapshot 으로 보존.
+- **RFC 060** (`inbox/rfc_drafts_2026_05_12/rfc_060_forge_new_compute_paradigm.md`, 신규) — verified mega-kernel execution model. 12-section. 3 falsifier 사전등록 (F-RFC060-MEGAKERNEL-WALL ≥1.3× training step, F-RFC060-VERIFIED-CHAIN ≤8 cited rewrites, F-RFC060-POLY-FEASIBLE 장기 게이트). 각각 cheap first measurement ($0 paper test ×2 + $0.40 fire ×1). g3: paradigm 선언 0 — 측정 falsifier 통과시에만 채택.
+
+측정 변화 0 — 순수 정초 (research + RFC scaffold + 문서 갭 해소). forge 현재 상태 (C/CUDA substrate, Phase R closed) untouched. RFC 060 exploration track 은 §1 staged roadmap 의 RFC 060-A/B/C/D 참조.
 
 ### 2026-05-19 — endgame 문서화: forge 의 최종 형태 = hexa-native (RFC 055) — 문서 갭 해소
 
