@@ -265,3 +265,25 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   모두 sys-only 정적-데이터 게이트(no JSON/registry/subprocess) → 안전한
   배치. **누적 측정된 거리: T3 7/104 + 공유 validator/lint libs +
   json_dumps_canonical(T4 자산).**
+- 2026-05-18 `c83f74e3` (hexa-lang `rfc043-hexa-torch`) — **상류 수정:
+  runtime json float-repr** (사용자 허용 "hexa upstream 개선";
+  인터프리터 폐기중 → 컴파일러 경로만 수정). `self/runtime.c::
+  _js_emit_value` 의 비-정수 float 가지가 `%.17g`(round-trip 하나
+  shortest 아님) → `_shortest_double()` 신설(1..17 `%.*g`+strtod
+  round-trip 루프 = CPython repr/json.dumps shortest-repr 정확 동등).
+  정수-값 float 는 기존 `N.0` 가지 유지. **검증: ubu-2 standalone gcc
+  테스트로 `_shortest_double` 가 비-정수 probe 전부 Python json.dumps
+  와 바이트-동일**(9.637917041778564·0.5995·0.1·7.1e-14·2.9357e-13·
+  0.85464…·3.14159…). 이로써 3 상류 갭 중 #1(float-repr) 해소 → T3-json
+  canonical-hash 게이트(virocapsid_calibration 등) + json_dumps_canonical
+  완전 바이트-패리티 경로 확보.
+- 2026-05-18 — **⚠ ubu-2 빌드환경 2개 기존-결함**(본 수정 무관, 별도
+  follow-up): heavy 빌드를 ubu-2 로 라우팅(macOS 과부하) 중 발견 —
+  (1) ubu-2 `~/core/hexa-lang` git 인덱스 손상(`.chain-state/README.md`
+  → invalid object) → ubu-2 에서 커밋 불가; (2) `hexa cc` 빌드-오케
+  스트레이션 버그 — `hexa_cc.c`(런타임 self-contained) + 별도
+  `self/runtime.o` 를 동시 링크 → duplicate-symbol 링크 실패 →
+  `hexa_v2` 트랜스파일러 부트스트랩 불가 → 컴파일 경로 end-to-end
+  검증 차단. float-repr 수정 자체는 알고리즘-검증 완료(gcc standalone);
+  end-to-end 컴파일 검증은 ubu-2 환경 결함 해소 후 가능. 두 결함은
+  사용자에게 보고 — 별도 트랙.
