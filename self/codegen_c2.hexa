@@ -4443,6 +4443,7 @@ fn gen2_expr(node) {
                 if name == "read_lines"     { return "rt_read_lines(" + a0 + ")" }
                 if name == "from_char_code" { return "hexa_from_char_code(" + a0 + ")" }
                 if name == "ord"            { return "hexa_char_code(" + a0 + ", hexa_int(0))" }
+                if name == "char_code"      { return "hexa_char_code(" + a0 + ", hexa_int(0))" }
                 // chr-byte-fix 2026-05-17 (RFC chr-byte-vs-codepoint-asymmetry):
                 // chr lowers to byte-level `hexa_chr_byte` (1 byte N & 0xFF),
                 // mirroring `ord(substring(s,i,1))` byte read. Previously emitted
