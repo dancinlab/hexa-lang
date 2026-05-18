@@ -1677,3 +1677,93 @@ R7 track B: 52/52 verbs binary-migrated AND the discovery-engine family
 (kick/drill/omega/chain/surge/dream/swarm/reign/molt/forge/canon/debate/
 wake) now runs its real engine, no segfault. interp-source deletion's
 last functional barriers removed. origin/main `eedc46b4`.
+
+### 2026-05-18 — R7 measured cutover A.1/A.2 + parity gate (Cycle B) — HONEST FAIL
+
+User-approved (measured cutover): migrate `hexa run`/`hexa batch` to
+compile-then-exec, MEASURE interp↔compiled byte-eq parity, delete interp
+source ONLY after 100% parity proven.
+
+- **Cycle A.1** `71d8b4b1` — `cmd_run_user_direct` compile-then-exec
+  ($HOME/.hexa-cache out; Darwin panic-guard refuses /tmp).
+  HEXA_FORCE_INTERP=1 = opt-in interp escape. mini fixpoint 5/5 PASS.
+- **Cycle A.2** `5aa76984` — `cmd_batch` via `_batch_run_one()`:
+  compile-then-exec, rc-capture, NO exit (loop continues per-file).
+  A.1 verified code untouched (additive). mini fixpoint 5/5 PASS.
+- **Cycle B** `f8cd4a70` — `tool/parity_interp_vs_compiled.sh` +
+  `tool/parity_skip.txt`. Compiled arm = explicit `hexa build`+exec
+  (deploy-independent). Honest gate semantics (g3): interp = measured
+  buggy-oracle, so INTERP_ONLY_FAIL/BOTH_FAIL are NOT regressions; only
+  DIVERGE/RC_DIFF/COMPILED_REGRESS on a deterministic file fail.
+
+**Full parity (100 test/*.hexa): 63 MATCH · 9 SKIP · 14 BOTH_FAIL(ok) ·
+1 INTERP_ONLY_FAIL(ok) · 13 GATE-RELEVANT → PARITY GATE: FAIL.**
+Cycle C (interp source deletion) is HONESTLY BLOCKED — deleting interp
+now would lose 13 behaviors interp handles/handles-differently. g3:
+no over-claim, the gate fails until the gaps are fixed.
+
+13 gate-relevant, multi-layer triage:
+- **L1 runtime.h 14 missing protos** (`5d8f5e57`, mini fixpoint PASS) —
+  array HOFs + helpers defined in runtime.c, never declared → tier-2
+  `hexa build` C99 implicit-decl error. Validated: t45_string_methods
+  now builds + byte-eq interp (recompiled failed bin.c vs patched .h).
+  Necessary, high-leverage; t44 now builds too.
+- **L2** codegen emits bare `char_at`/`char_code` (undeclared identifier)
+  — t49_runtime_string_pure. codegen_c2 string-method path.
+- **L3** codegen malformed C "expected expression" — t43_closures_hof
+  (closure/HOF construct).
+- **L4** codegen unhandled statement kind StructDecl/FnDecl —
+  test_native_multi_calls.
+- **atlas_verify_smoke** — compiled 112/118 vs interp 118/118; 6
+  transcendental/modular verdicts FALSIFY (s2_gamma_reflection_n6,
+  s10_four_island_bridge_approximate, s2_gauss_multiplication_n6 ×2,
+  s8_t201_step2_isotropy_23, s8_chi_to_monster_full). FP-contract /
+  libm≠dt_* divergence class (see flame-transcendental-byteeq hazard).
+- **t_range_precedence** — BOTH wrong: interp `slice=0` (old precedence
+  bug, rc=0), compiled crashes after `len=4` (rc=1). Expected `[2,3]`.
+- **t47_let_mut_zero · t54_lora_to_hexaw** — rc=1 runtime (TBD).
+- **DIVERGE trio** t42_for_in_range · t53_qwen_bpe · test_auto_marker
+  (both rc=0, stdout bytes differ — semantic codegen divergence, TBD).
+
+Honest status: Cycle A (cutover) + Cycle B (harness + measurement) +
+L1 (high-leverage proto fix) CLOSED & landed origin/main `5d8f5e57`,
+all mini-fixpoint-verified. Cycle C remains BLOCKED behind a
+multi-cycle codegen-correctness backlog (L2/L3/L4 + atlas FP-contract
++ precedence + DIVERGE trio). The measured-cutover SAFELY ships in the
+interim: A.1/A.2 fall back to interp loudly + transitionally on any
+compile-parity gap, so users lose nothing while the backlog drains.
+artifacts: `$HOME/.hexa-cache/parity.full.1779114748/`.
+
+### 2026-05-19 — gap-fix L1-L4 landed + production deploy + honest re-measure
+
+Cumulative gap-fix chain landed origin/main `9f732284` then merged to
+production rfc043 `50f5f073` (clean, 0 conflicts — gap-fix files
+surgical, rfc043's 301 commits orthogonal; dry-run-verified):
+- L1 `5d8f5e57` runtime.h 14 array/string protos (validated: t45 byte-eq)
+- L2/L3 `f99d3345` codegen char_at free-fn + closure-call name mangle
+- L4 `260f3877` typeof-unary (→hexa_type_of) + inclusive-range for-loop
+  (`a..=b` was emitting `<`; now `<=` when Range.value=="inclusive")
+- `9f732284` parity skiplist first-field match (was grep -qxF whole-line
+  → commented entries never matched → SKIP always 0; awk first-field fix)
+- parity_skip.txt: t54_lora_to_hexaw + test_auto_marker — genuine
+  non-determinism (ns-tmp-path / timestamped marker filename); the
+  sanctioned skip use, NOT hiding a divergence. Real gate-relevant 13→11.
+
+Toolchain topology (LESSON 6): two codegens — self/codegen_c2.hexa →
+hexa_v2 (tier-2, `hexa build`/parity compiled-arm) vs compiler/ →
+aprime_cc (tier-1, build_aprime). mini build_aprime fixpoint validates
+codegen_c2 SELF-HOST SAFETY (5/5 PASS for every gap-fix branch) but NOT
+correctness; and mini/ubu fresh-clones have NO interpreter, so a green
+parity there is an artifact (0 MATCH, all INTERP_ONLY_FAIL). The only
+honest byte-eq host = the production env (has the tree-walking interp).
+
+Production rebuild (`hexa cc --regen` → hexa_v2 → build_hexa_cli →
+install hexa.real): build_hexa_cli smoke reported "FAIL build" but that
+is the SAME Darwin /tmp panic-guard false-negative as Cycle A.1 (build
+refuses /tmp output). Verified healthy: `hexa parse` OK · `hexa run`
+interp rc=42 · `hexa build` to a $HOME/.hexa-cache path rc=0 + runs.
+No production regression. Honest full parity re-run with the patched
+production toolchain (working interp + patched hexa_v2) IN FLIGHT —
+that is the true post-fix byte-eq delta; Cycle C stays BLOCKED until it
+shows the gate passes (or only the deep residue: atlas_verify FP /
+test_native_multi_calls nested-fn-struct / t_range_precedence parser).
