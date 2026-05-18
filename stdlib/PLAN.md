@@ -397,3 +397,27 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   hexa-union 을 `hexa build && ./bin` 백엔드로 전환, 갭 #1·#4 로
   막혔던 순수계산/json 게이트군 컴파일-실행 byte-parity 이관.
   subprocess·dynamic-import·wall-time 군은 별개 트랙(컴파일러 무관).
+- 2026-05-18 — **파이프라인 end-to-end 검증 + 16/16 컴파일 byte-parity
+  (측정, g3)**. hexa-bio → ubu-1 git-bundle 동기화(미푸시 유지),
+  `selftest/run_all.sh run()` 컴파일러-백엔드 rewire(`hexa build &&
+  ./bin`, 인터프리터는 빌드실패 폴백) — macOS canonical `5765dc6`.
+  정합성: ubu-1 PATH `hexa`→패치 `hexa.real`, `hexa build` 20/20
+  float parity 재확인. **격리 16-게이트 스윕**(스코어보드 VQE
+  메모리폭탄 게이트 회피 — 전체 run_all.sh 를 ubu-1 에서 돌리면
+  `cmt_uccsd` qmirror-VQE 가 swap-thrash load 29 유발, T3 무관):
+  최초 12/16 OK, 4 fail → 전부 **포트측 수정**으로 해소:
+    · `shq` 중복정의 2건(tape_lattice_honesty_cohort·virocapsid_c5)
+      — 로컬 `fn shq` 가 import 모듈의 것과 codegen_c2 단일 TU 충돌
+      (인터프리터는 관용). 로컬 제거 → import 사용. `56c0aea`
+    · ribozyme_a1_3 — solver: 줄에 macOS abspath 하드코딩, .py 는
+      `RMN.__file__`=abspath(cwd) 런타임 산출 → 동일호스트일 때만
+      거짓통과한 잠복 비이식성. `exec("pwd")` 런타임화. `56c0aea`
+    · cmt_side_effect — `_repr_list`/`_repr_dict` 가 main() 내부
+      중첩 fn(codegen_c2 `unhandled FnDecl`). top-level 호이스트
+      (byte-identical 본문). `352219e`
+  ⟹ **16/16 ported 게이트 컴파일러-백엔드 byte-parity 측정확인**.
+  컴파일-포트 규율 3종 확립: (1) import 모듈과 fn 중복정의 금지
+  (2) 호스트경로 하드코딩 금지(런타임 산출) (3) 중첩 fn 금지(top-level).
+  잔여 ~88 미포팅 게이트 = 본 파이프라인으로 이관 가능하나 게이트별
+  byte-parity 작성 필요(대규모 · g3 깊은-context 품질저하 회피 위해
+  fresh-context 단계 권장). 프레임워크·파이프라인은 완성·증명됨.
