@@ -1,0 +1,59 @@
+// comb/sim/noc_distance.hexa — T1-B-oracle: graph-level NoC distance
+// 2026-05-18 · hexa-native graph-level measurement, no wire model.
+//
+// Computes T1-A predictions at concrete N (RFC 057 §6 T1):
+//   degree-4 2D mesh (k x k, N=k^2):  D_mesh = 2(k-1)            ~ 2*sqrt(N)
+//                                     avgD   ~ (2/3) * k
+//   degree-6 hex (hex region radius R, N=3R^2+3R+1):
+//                                     D_hex  = 2R                ~ 2*sqrt(N/3)
+//                                     avgD   ~ (2/3) * R
+//
+// Sources: Leighton 1992 (mesh) · Dally & Towles 2004 (avg) · hex-region
+// combinatorics (standard). Pure arithmetic, no new theorem claim.
+
+fn isqrt(n) {
+    let mut r = 0
+    while (r + 1) * (r + 1) <= n {
+        r = r + 1
+    }
+    r
+}
+
+fn hex_radius_from_N(n) {
+    // largest R such that N(R) = 3R^2 + 3R + 1 <= n
+    let mut r = 0
+    while 3 * (r + 1) * (r + 1) + 3 * (r + 1) + 1 <= n {
+        r = r + 1
+    }
+    r
+}
+
+fn report(n) {
+    let k = isqrt(n)
+    let r = hex_radius_from_N(n)
+    let d_mesh = 2 * (k - 1)
+    let d_hex  = 2 * r
+    // report integer numerators for avg-distance to stay int-only
+    // (avg ~ 2k/3 for mesh, 2R/3 for hex; multiply by 3 to keep precise)
+    let three_avg_mesh = 2 * k
+    let three_avg_hex  = 2 * r
+    println("N=" + to_string(n)
+        + " k=" + to_string(k)
+        + " R=" + to_string(r)
+        + " D_mesh=" + to_string(d_mesh)
+        + " D_hex=" + to_string(d_hex)
+        + " 3*avgD_mesh=" + to_string(three_avg_mesh)
+        + " 3*avgD_hex=" + to_string(three_avg_hex))
+}
+
+println("# comb T1-B-oracle: graph-level NoC distance (no wire model)")
+println("# columns: N k R D_mesh D_hex 3*avgD_mesh 3*avgD_hex")
+report(64)
+report(100)
+report(256)
+report(400)
+report(900)
+report(1024)
+report(2500)
+report(10000)
+println("# asymptotic D_hex/D_mesh -> 1/sqrt(3) ; numeric verify in T1A_verify.txt")
