@@ -890,6 +890,71 @@ float-arithmetic 또는 struct-aliasing 후보. 각각 독립 cycle. tier-1 8/8 
 
 ---
 
+### 2026-05-18 — inline closure-expression (`fn(x){...}`) tier-1 — scope assessment: RFC-size SPLIT recommended (NOT landed)
+
+**goal**: support inline closure `let clo = fn(x){ return x + captured }` at
+`test/t38_nanbox_smoke.hexa:94` (→ `HX2001 undefined name fn`) in the tier-1 native
+compiler. Named as the last tier-1 codegen feature gap.
+
+**tier-2 closure mechanism (authoritative — `self/codegen_c2.hexa` gen2_lambda_expr + `self/runtime.{c,h}`)**:
+- **capturing = YES**. free-variable analysis at codegen time (`gen2_collect_free`).
+- representation: lambda lifted to a synthetic top-level C fn `__hexa_lambda_<N>` with a
+  `HexaVal __env` first param. captured free vars boxed into an env array
+  (`hexa_array_new` + `hexa_array_push` chain); callsite emits
+  `hexa_closure_new((void*)&__hexa_lambda_N, arity, env_array)` → `TAG_CLOSURE` HexaVal.
+  body prologue restores captures via `hexa_array_get(__env, i)`.
+- indirect call = `hexa_callN` (runtime.h header-static inline) dispatches on
+  `TAG_CLOSURE`/`TAG_FN`, calls `((fnptr)(env, a1..))`.
+- the runtime env mechanism is **NOT new** — `hexa_array_*` + `hexa_closure_new`/`hexa_callN`
+  all already exist in the runtime and link-resolve for tier-1 too.
+
+**tier-1 current state (verified)**: closure / indirect-call infrastructure **absent**.
+- no Closure/Lambda variant in `ExprKind` enum (parser does not recognise `fn` in
+  expression position).
+- `STMT_CALL` holds the callee as a **compile-time string `op`** → arm64 codegen emits
+  only `bl <symbol>` direct calls. no register-held fn pointer, no `blr` indirect branch,
+  no `TAG_CLOSURE` value handling (`_hv_load` has no TAG_CLOSURE arm, no `hexa_closure_new`
+  emit).
+- the only closure trace = stub `emit_hx1100_closure_capture` at `ast_to_hir.hexa:1124`
+  (HX1100 capture-warning emitter, awaiting closure-conversion).
+
+**scope assessment — BLOW (cycle's explicit stop criterion met)**:
+this feature is not a simple ExprKind addition; it introduces a **new calling-convention
+axis** (register-indirect call) into tier-1. required work:
+1. parser + ast — new `Closure` ExprKind + `fn(params){body}` expression-position parse.
+2. bind/types/units/citation/equational/annotations/resolve — full match-arm coverage for
+   the new ExprKind (try/catch commit 8f45d3d3 is the 16-file precedent).
+3. ast_to_hir + hir_to_mir — lift closure to a synthetic MFunc + free-var analysis + env
+   capture array construction.
+4. **new MIR**: an indirect-call stmt taking the callee as an `Operand` (register HexaVal)
+   rather than a string `op` — the current `STMT_CALL` struct cannot express this.
+5. **new arm64 codegen**: `hexa_closure_new` callsite emit + `TAG_CLOSURE` value
+   load/store + `blr` indirect-call lowering through a register fn pointer (`blr` is
+   currently unused).
+6. x86_64 mirror (gate-1 sweep impact).
+
+the runtime env mechanism is not new, but the (4)+(5) indirect-call axis is a fundamental
+extension of tier-1 codegen, larger than try/catch. a half implementation (parse+bind only,
+codegen missing) risks breaking the self-host fixpoint → SPLIT recommended over ram-through.
+
+**recommended split (RFC-size, independent cycles)**:
+- **C1 — closure parse + AST + check**: `Closure` ExprKind, expression-position parse, full
+  check-pass match coverage. closure exprs rejected with an explicit `HX????`
+  "closure codegen unimplemented" until codegen lands (more honest than HX2001). verify =
+  parse-gate.
+- **C2 — MIR indirect-call + closure lift**: synthetic MFunc lift, free-var analysis, env
+  capture, callee-as-Operand new MIR stmt.
+- **C3 — arm64/x86_64 indirect-call codegen**: `hexa_closure_new` emit + `TAG_CLOSURE`
+  load/store + `blr` lowering. t38 closure works at the end of this cycle.
+
+**verification**: no code changed this cycle (scope assessment only). t38's
+`HX2001 undefined name fn` is unchanged — unresolved until C3 lands. tier-1 baseline
+unaffected.
+
+**next-cycle pointer**: start at C1. tier-2 `gen2_lambda_expr` / runtime.h `hexa_callN` are
+the reference implementation. capturing closure is confirmed, so free-var analysis is
+mandatory (no non-capturing simplification path — t38 captures `captured`).
+
 ## ★★★ goal ② 사실상 종료선 (cycle h19 closing)
 
 **self-host axis** — bit-stable fixpoint REACHED (`93ee4ecf`, #23~#29 누적 종결).
