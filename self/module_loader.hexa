@@ -1205,6 +1205,24 @@ fn load_module(path) {
     while ei < m {
         let f = g_order_parts[ei]
         let mut body = read_file(f)
+        // R7 track B (2026-05-18): multi-`fn main` flatten collision.
+        // g_order_parts is leaves-first/post-order so the ENTRY file is
+        // the LAST element (ei == m-1). Dependency files that define their
+        // own `fn main` (e.g. compiler/smash/smash.hexa, honesty/check.hexa
+        // — pulled transitively by the discovery-engine family
+        // drill/kick/omega/chain/molt/forge/canon/…) flatten 7+ `fn main`
+        // bodies; hexa_v2 keeps the FIRST, so the entry's main is dropped
+        // and the binary silently runs smash's CLI ("usage: hexa smash …")
+        // instead of drill's discovery loop. Neutralize every NON-entry
+        // `fn main` to a unique inert name (dead code — never called) so
+        // only the entry file's `fn main` survives as the program entry.
+        if ei != m - 1 {
+            let _inert = "fn _ml_inert_main_" + str(ei) + "("
+            if ml_starts_with(body, "fn main(") {
+                body = _inert + body.substring(8, len(body))
+            }
+            body = body.replace("\nfn main(", "\n" + _inert)
+        }
         // RFC-016 P1 (I1-IMPORT-ALIAS) emit-phase transformations:
         //   (1) caller-side: rewrite this file's `<alias>.<sym>` references
         //       to `__mod_<alias>__<sym>` for every alias it imported.
