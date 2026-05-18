@@ -73,7 +73,11 @@ SKIPLIST="$(dirname "$0")/parity_skip.txt"
 
 is_skip() {  # is_skip <file>
   local f="$1" base; base="$(basename "$f")"
-  if [ -f "$SKIPLIST" ] && grep -qxF "$base" "$SKIPLIST" 2>/dev/null; then return 0; fi
+  # Skiplist lines are `<basename>    # reason` — match the FIRST field
+  # only (strip the inline reason), and ignore pure-comment/blank lines.
+  if [ -f "$SKIPLIST" ] && \
+     awk 'NF && $1 !~ /^#/ { print $1 }' "$SKIPLIST" 2>/dev/null \
+       | grep -qxF "$base"; then return 0; fi
   grep -qE "$ND_RE" "$f" 2>/dev/null && return 0
   return 1
 }
