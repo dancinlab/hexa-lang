@@ -58,12 +58,27 @@ mkdir -p "$OUTDIR"
 JSONL="$OUTDIR/parity_results.jsonl"
 : > "$JSONL"
 
-# Portable per-file timeout (macOS has no /usr/bin/timeout) — perl alarm.
+# Portable per-file timeout (macOS has no /usr/bin/timeout).
+# The previous `perl -e 'alarm $s; exec @ARGV'` SEGFAULTED on heavy
+# interp runs (e.g. atlas_verify_smoke flattens 20 modules) — the
+# `exec` inside perl-alarm crashed the child, so the interp arm got
+# recorded as rc=139 → "interp fail" → BOTH_FAIL → the file silently
+# dropped out of the gate-relevant count. That masked a real compiled
+# defect (atlas: interp 118/118 in 8.45s, compiled FALSIFIES 5
+# verdicts) by misclassifying it as non-gate-relevant. g3 integrity:
+# use a background-pid + watchdog kill instead of perl-exec.
 run_to() {  # run_to <secs> <outfile> -- <cmd...>
   local secs="$1" of="$2"; shift 3
-  perl -e 'my $s=shift; $SIG{ALRM}=sub{ exit 124 }; alarm $s; exec @ARGV or exit 127;' \
-       "$secs" "$@" >"$of" 2>/dev/null </dev/null
-  return $?
+  "$@" >"$of" 2>/dev/null </dev/null &
+  local pid=$!
+  ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null; sleep 1; kill -KILL "$pid" 2>/dev/null ) &
+  local watcher=$!
+  wait "$pid" 2>/dev/null
+  local rc=$?
+  kill "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
+  # rc=143 (SIGTERM) / 137 (SIGKILL) ⇒ timed out — map to 124 like GNU timeout.
+  if [ "$rc" -eq 143 ] || [ "$rc" -eq 137 ]; then rc=124; fi
+  return $rc
 }
 
 # Non-determinism heuristic: any of these tokens ⇒ SKIP (output can't be
