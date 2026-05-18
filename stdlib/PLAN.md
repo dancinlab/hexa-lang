@@ -513,3 +513,11 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   철회. 컴파일-포트 규율 #4 추가: 평행배열 있는 함수-인자 배열을
   in-place 정렬/변형 금지(hexa 배열=참조형). 잔여 ~107, registry-
   class 포함 전부 파이프라인 ready (갭#2 제거로 진짜 천장 없음).
+- 2026-05-18 — **T3 +1: 21/127** `nanobot_actuator_v2_reference_emit`.
+  N-R1 v2 schema-conformance emitter 충실 이관: emit() 를 결정론적
+  JSON 텍스트로 재현→json_parse(갭#2-safe)→공유 json_schema_validator
+  모듈로 검증(import; 로컬 shq 무중복). determinism 이중빌드 체크 +
+  parsed row 에서 ligand 카운트 + W 는 json_stringify(CPython-parity
+  runtime). 1차 빌드 **PARITY-OK**. hexa-bio `0dfb4b7`. 갭#2 수정 후
+  validator-의존 nested 포트도 1발 통과 — 파이프라인 견고함 실증.
+  잔여 ~106, registry-class 포함 구조적 차단 없음. cadence 지속.
