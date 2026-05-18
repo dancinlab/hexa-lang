@@ -742,11 +742,10 @@ fn _resolve_use_emit(name) {
 // case is the common one (helper fns + types that take all data as
 // params). Capturing-fn closure-conversion is a later cycle.
 fn _gen2_lift_nested_decls(ast) {
-    // Append-only — do NOT mutate ast[i].body in place (hexa codegen
-    // emits invalid C `hexa_index_get(ast, i) = ...` for that lvalue
-    // pattern). The gen2_stmt FnDecl/StructDecl safety net (see L2830)
-    // emits "" inline for any nested decl encountered in a fn body,
-    // so the appended top-level entry is the only emission.
+    // hexa `.push()` is FUNCTIONAL (returns new array, does not mutate
+    // in place) — captured returns are mandatory or the push is lost.
+    // The previous version dropped the return and silently produced 0
+    // lifts. Now both pushes (lifted, ast) capture-via-reassign.
     let mut lifted = []
     let mut i = 0
     while i < len(ast) {
@@ -757,19 +756,20 @@ fn _gen2_lift_nested_decls(ast) {
                 let stmt = ast[i].body[bi]
                 let sk = stmt.kind
                 if sk == "FnDecl" || sk == "PureFnDecl" || sk == "StructDecl" {
-                    lifted.push(stmt)
+                    lifted = lifted.push(stmt)
                 }
                 bi = bi + 1
             }
         }
         i = i + 1
     }
+    let mut out_ast = ast
     let mut li = 0
     while li < len(lifted) {
-        ast.push(lifted[li])
+        out_ast = out_ast.push(lifted[li])
         li = li + 1
     }
-    return ast
+    return out_ast
 }
 
 fn codegen_c2(ast) {
