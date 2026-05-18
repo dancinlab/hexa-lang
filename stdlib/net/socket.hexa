@@ -14,6 +14,21 @@
 //   이미 구현되어 있으나 self/env.hexa 빌트인 리스트에 등록되지 않아 .hexa
 //   소스에서 호출 불가. 등록되면 read_n / set_timeout 을 직접 래핑하도록
 //   전환하고, 아래 read_body_best_effort 의 루프 fallback 을 제거한다.
+//
+// roadmap 62 prereq — non-blocking accept primitive (compiled-path SSOT).
+//   `socket_set_nonblock` + `socket_select` 는 self/native/net.c 의 이미
+//   존재하는 `hexa_net_set_nonblock` (O_NONBLOCK via fcntl) 와
+//   `hexa_net_select` (FD_SETSIZE-bounded select(2)) 를 thin-wrap 한다.
+//   self/codegen_c2.hexa 가 두 이름 모두 direct-lowering 으로 인식하므로
+//   `hexa build` 경로에서 즉시 사용 가능 (env.hexa 등록은 인터프리터
+//   전용이며 g_interp_deprecated 에 의해 신규 의존 금지).
+//
+//   기본 거동 보존: 기존 `socket_accept` 는 blocking 유지. `server_serve`
+//   accept-loop 와 `concurrent_serve::run(workers)` 의 의미론은 변경 없음
+//   (default-off · 사용자가 명시적으로 wrappers 를 호출해야 멀티플렉싱
+//   활성). phanes-stdlib-net-os-thread-concurrency-roadmap-62 note 의
+//   resolution (a) — "minimum primitive needed" — 만 land. 실제
+//   `server_serve` 의 non-blocking 전환은 별도 follow-up.
 
 // -- TCP primitives --
 
@@ -39,6 +54,44 @@ pub fn socket_write(conn, data) {
 
 pub fn socket_close(conn) {
     net_close(conn)
+}
+
+// -- Non-blocking multiplex primitives (roadmap 62 resolution (a)) --
+//
+// socket_set_nonblock(fd) -> 0 / -errno
+//   fd 에 O_NONBLOCK 플래그를 set 한다. 이후 동일 fd 에 대한
+//   net_read / net_accept 는 즉시 반환 (recv() -> "" on EAGAIN;
+//   net_accept -> -EAGAIN). 한 번 호출하면 이 fd 는 영구 non-blocking.
+//
+// socket_select(fds, timeout_ms) -> [ready_fds]
+//   READ-ready fd 배열 반환 (timeout 시 빈 배열, 에러 시 [-errno]
+//   단일원소 — 부호로 구분). timeout_ms < 0 = block indefinitely,
+//   timeout_ms == 0 = poll, timeout_ms > 0 = bounded block.
+//   FD_SETSIZE (~1024) 초과 시 [-EBADF].
+//
+// 사용 패턴 — non-blocking accept-loop (server_serve 대체 후보):
+//   let listener = socket_listen("0.0.0.0:8080")
+//   socket_set_nonblock(listener)
+//   while running {
+//       let ready = socket_select([listener], 100)   // 100ms tick
+//       if len(ready) > 0 {
+//           if ready[0] >= 0 {
+//               let conn = socket_accept(listener)   // immediate
+//               // ...
+//           }
+//       }
+//   }
+//
+// 본 변경은 두 builtin 의 stdlib-side public 표면만 land. server_serve /
+// concurrent_serve::run 은 의도적으로 untouched (byte-eq 보존). 멀티
+// OS-thread workers 의 실제 활성화는 roadmap 62 의 후속 cycle.
+
+pub fn socket_set_nonblock(fd) {
+    return net_set_nonblock(fd)
+}
+
+pub fn socket_select(fds, timeout_ms) {
+    return net_select(fds, timeout_ms)
 }
 
 // -- Body-framing fallback --

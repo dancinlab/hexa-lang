@@ -1761,3 +1761,20 @@ Resolved `inbox/patches/phanes-hx-data-dir-per-tenant-isolation.md` (resolution 
 
 ### 2026-05-19 — inbox/patches resolution: HXC v2 downstream library API landed (`self/stdlib/hxc_v2_lib.hexa`)
 Resolves `inbox/patches/hxc-v2-no-downstream-library-api.md` (wisp Decision 8 option A blocker on `@D g_hxc`). New thin re-export wrapper exposes `pub fn hxc_v2_encode / hxc_v2_decode / hxc_v2_encode_records / hxc_v2_decode_records` over the existing `self/stdlib/hxc_composite_chain_v2.hexa::cc2_encode/cc2_decode` chain — zero duplicated codec logic, no `fn main()`, callable from any `hexa build`-produced downstream (interp-free per `@D g_interp_deprecated`). Records pair uses pipe+backslash escape mirroring `compiler/atlas/hxc_loader.hexa::_unesc_pipe`/`_split_pipes` so the wire is canonical relative to the in-repo HXC v2 example. Smoke = `tmp_hxc_v2_lib_smoke.hexa` (6 falsifiers: str round-trip, tiny passthrough, encode-idempotency, records deep-eq, empty input, pipe/backslash escape). Parse-gate clean both files (`/Users/ghost/.hx/bin/hexa_real parse`). Compiled execution + binary promote = standard separate deploy step per the `22c27a05` pattern.
+
+### 2026-05-19 — stdlib/net non-blocking accept primitive landed (phanes roadmap-62 note resolution (a))
+
+`stdlib/net/socket.hexa` 에 `pub fn socket_set_nonblock(fd)` +
+`pub fn socket_select(fds, timeout_ms)` thin wrappers 추가. 두 builtin
+(`net_set_nonblock` · `net_select`) 은 `self/native/net.c` 에 이미
+구현 + `self/codegen_c2.hexa` direct-lowering (lines 4564/4577/6742-6743)
+이미 wired — 본 cycle 은 SSOT-level public surface 만 노출. `server_serve`
++ `concurrent_serve::run` 의 의미론은 untouched (default-off byte-eq).
+parse-gate clean (socket.hexa · http_server.hexa · concurrent_serve.hexa
++ smoke /tmp/socket_select_smoke.hexa 모두 OK). env.hexa 등록은
+의도적으로 추가하지 않음 (g_interp_deprecated — 신규 interp 의존 금지;
+compiled-path 가 SSOT). 옵션 (b) OS-thread workers · (c)
+fork-after-accept 헬퍼는 follow-up scope. inbox note status →
+**resolved-ssot**. files: `stdlib/net/socket.hexa` (signature 추가) +
+`inbox/notes/phanes-stdlib-net-os-thread-concurrency-roadmap-62.md`
+(status + Resolution).
