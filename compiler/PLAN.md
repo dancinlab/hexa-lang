@@ -1209,3 +1209,80 @@ surgical deletion 은 트랙 B (CLI driver re-targeting) 가 별도 multi-cycle 
 - ✅ `tool/build_aprime.sh` smoke 5/5 PASS · `exit(42)==42` · aprime_cc 2.1 MB Mach-O · fixpoint regression 0
 - ⚠️ `tool/build_hexa_qrng.sh` FAIL on mini — `hexa: command not found` (mini PATH 에 hexa CLI 미설정). dispatch fallback (`cmd_run` on `stdlib/qrng/qrng.hexa`) 가 무리없이 작동하므로 사용자 영향 0. polish 항목: build_hexa_qrng.sh 가 repo-local `./hexa` shim 또는 `~/.hx/bin/hexa` resolution 지원하도록 후속 cycle. 본 cycle 의 fixpoint regression check 는 build_aprime 으로 충분.
 
+---
+
+### 진행 로그 — quant_meter P1 MVP LANDED (2026-05-18, commit `ce431e2f`)
+
+Rate-distortion compile-pipeline instrumentation P1 ships as a
+standalone module under `compiler/quant_meter/`. Three hexa files +
+Draft RFC, 859 lines total.
+
+**Framing**: compilation = progressive quantization. Each transform
+stage removes a category of representational freedom while preserving
+semantics (D=0, CompCert-style observational equivalence). Two
+orthogonal measurements per IR level:
+
+- `S` (size, node count) — NOT monotone (HIR→MIR expands to 3-address
+  SSA). Observability / regression signal, NOT an invariant.
+- `F` (freedom vector, per-kind counts) — MUST be monotone
+  non-increasing across transforms. A rise = a stage added freedom = a
+  design bug. P1 ships three zero-analysis components:
+    - `F_name` (unresolved identifier strings, killed by bind)
+    - `F_type` (expressions without pinned monotype, killed by
+      type-attach)
+    - `F_ctrl` (structured control not yet lowered, killed by
+      `hir_to_mir`)
+
+**Files**:
+- `compiler/quant_meter/meter.hexa` (288 L) — `RateVec` + 3 tree-walk
+  counters
+- `compiler/quant_meter/meter_test.hexa` (294 L) — synthetic IR PASS
+  verification (hand-built ast/hir/mir for `fn classify { if (n) { a }
+  else { while (b) { } } }`, works around interp self-build OOM)
+- `compiler/quant_meter/meter_probe.hexa` (83 L) — slim real-code probe
+  (lex → parse → ast_to_hir → hir_to_mir + meter only, no codegen /
+  optimize; bundle ~7k LoC under interp flatten ceiling)
+- `proposals/rfc_quant_meter_rate_distortion_pipeline.md` (Draft, 194 L)
+
+**Measured (synthetic, `meter_test` PASS)**:
+
+```
+stage   S(nodes)   F_name   F_type   F_ctrl
+ast          10        3        9        2
+hir          10        0        0        2
+mir          13        0        0        0
+```
+
+Two empirical findings: (1) `F_name` 3→0 and `F_type` 9→0 **collapse
+simultaneously at ast_to_hir** — nanopass single-task violation (one
+pass killing two freedom kinds). (2) `S` 10→10→13 rises across MIR
+lowering — proves S≠F separation is necessary (decision 1 of RFC).
+
+**Honest positioning** (RFC §5):
+- `D=0` rests on CompCert forward-simulation, NOT real-valued
+  RD-distortion. The rate-distortion vocabulary is expository lens only.
+- `R` (true rate) uncomputable per Kolmogorov full-employment theorem;
+  `F` is explicit operational proxy (counts), not entropy.
+- Per-stage statistics plumbing is standard (LLVM `-stats`); novelty is
+  the transform/gate 2-class taxonomy with per-component monotonicity
+  invariants.
+
+**Cross-branch drift**: RFC §6 #2 claims `ml_canon_path` patch landed in
+`self/module_loader.hexa` for diamond-import dedup (interp-retirement
+ride-along), but on `rfc043-hexa-torch` this patch is NOT present
+(verified: `grep ml_canon_path self/module_loader.hexa` empty). The
+patch lives on a sibling branch. P1 MVP files are self-contained —
+`meter_test` runs on synthetic IR; `meter_probe` real-code use depends
+on that patch landing here.
+
+**P2 gates pending user decision (RFC §9)**:
+- (a) HX2600-range strict-lint diagnostics wiring per-component
+  monotonicity assertions at transform boundaries
+- (b) `ast_to_hir` nanopass split — driven by the measured single-task
+  violation (F_name + F_type simultaneous collapse). Separate RFC.
+- (c) interp↔compiled `RateVec` byte-diff tool — localizes per-stage
+  divergence sources, interp-retirement assist
+
+**Push state**: commit `ce431e2f` unpushed. shared branch
+(`rfc043-hexa-torch`) — push pending user decision.
+
