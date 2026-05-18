@@ -1509,3 +1509,41 @@ cycles 1-6 후 자기-grep 으로 self/main.hexa 의 `cmd_run(` 호출 사이트
 
 **R7 track B 진척**: 8 verbs binary-migrated + lsp dispatch/codegen-fix landed (binary deferred). 잔여 distinct work: (1) lsp binary = hexa_v2 bootstrap cycle, (2) atlas = memory 최적화 cycle, (3) Phase 3/4 absorbed modules = multi-cycle. init = broken-feature triage 별도.
 
+---
+
+### 2026-05-18 — R7 track B cycle 10b — hexa_v2 bootstrap, lsp binary 완성 (cycle h32)
+
+**Decision 14**: cycle 10 의 readline codegen 매핑을 active `self/native/hexa_v2` 로 propagate (transpiler bootstrap) 하여 lsp binary 완성.
+
+- **picked**: hexa_v2 재부트스트랩 (`hexa cc --regen` → promote → `hexa cc`)
+- **rationale**:
+  - cycle 10 이 codegen_c2.hexa 에 readline 매핑 추가했으나 active hexa_v2 binary 는 그 이전 빌드 → `hexa build self/lsp.hexa` 가 여전히 `hexa_call0(readline)` 방출 (stale transpiler)
+  - lsp 는 마지막 남은 "tractable" verb (atlas=memory, Phase 3/4=multi-file) — bootstrap 1회로 닫힘
+  - fixpoint risk 관리 가능: readline branch 는 additive + compiler/main.hexa 미사용, sl-renumbering 은 internal-static
+
+**구현 (LANDED `d3b3f42e`)**:
+- `./hexa cc --regen` → hexa_v2 가 lexer/parser/type_checker/codegen_c2 4 SSOT 재트랜스파일 → merge → `self/native/hexa_cc.c.new`
+- promote `hexa_cc.c.new` → `self/native/hexa_cc.c` (diff ~1017/1012 lines — 의미 변경은 readline branch 만, 나머지는 `__hexa_codegen_c2_sl_N` renumbering cascade)
+- `./hexa cc` → clang 으로 `self/native/hexa_v2` 재빌드 (1489704 B)
+- `./hexa build self/lsp.hexa -o bin/hexa-lsp` → 422 KB Mach-O ✓
+
+**중요 디버그 노트 (stale artifact trap)**:
+- 재빌드 직후 `hexa build self/lsp.hexa` 가 여전히 readline 에러 — 원인: (a) `build/artifacts/hexa-lsp.c` stale 캐시 (b) production `hexa` (≠ `./hexa`) 가 production hexa_v2 사용
+- 해결: `rm build/artifacts/hexa-lsp.c` + worktree `./hexa build` (install_dir=/tmp/wt-r7-trackb → rebuilt hexa_v2 사용). minimal `readline()` 테스트로 새 hexa_v2 매핑 정상 사전 확인.
+
+**검증**:
+- minimal `readline()` → `hexa_input(hexa_str(""))` ✓
+- `./hexa build self/lsp.hexa` → bin/hexa-lsp 422 KB ✓
+- LSP initialize handshake: `{"jsonrpc":"2.0","id":1,"result":{"capabilities":{...}}}` (Content-Length 538) ✓
+- `./hexa lsp` (exec_replace dispatch) → 동일 LSP 응답 ✓
+- cycle 1-9 regression (rebuilt hexa_v2): qrng rebuild OK · qmirror/verify/convergence/check dispatch clean
+- 로컬 build_aprime smoke: exit(42)==42 PASS
+- **mini build_aprime fixpoint: 5/5 PASS · exit(42)==42 · ap10b 2166072 B (이전 빌드와 동일 크기 — 구조 동일 강한 신호) · fixpoint regression 0**
+
+**R7 track B 진척**: **9 verbs binary-migrated** (qrng · qmirror · sim-universe · convergence · test · check · verify · calc · **lsp**) + module_loader flatten fix + hexa_v2 bootstrap. 잔여:
+- atlas — memory 최적화 (embedded.gen.hexa 5MB · 16GB cap SIGKILL). module_loader streaming-write 또는 embedded.gen.hexa 별도 컴파일 유닛.
+- Phase 3/4 absorbed modules — L1124 dispatch_absorbed fallthrough, 모듈별 fn main shim, multi-cycle.
+- init — tool/init_project.hexa MISSING, broken-feature triage 별도 (track B 무관).
+
+interp 실삭제 (R7 종결) 전제조건: 위 3 잔여 + bench/parse 는 이미 inline compiled (무관). 즉 cmd_run 의존 잔여 = atlas + Phase 3/4 + (lsp 는 이제 binary 우선, cmd_run 은 fallback-only).
+
