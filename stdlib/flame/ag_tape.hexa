@@ -57,6 +57,8 @@ pub fn ag_k_add()     -> int { return 8 }   // residual: out = a + b (elem)
 pub fn ag_k_rope_mh() -> int { return 9 }   // multi-head RoPE [T·nheads·hd]
 pub fn ag_k_slice()   -> int { return 10 }  // out = X[off : off+len] gather
 pub fn ag_k_silu_gate() -> int { return 11 } // s = silu(a) * b (SwiGLU)
+pub fn ag_k_rmsnorm_mh() -> int { return 12 } // per-pos RMSNorm [T·d]
+                                              // (dt_sqrt — decoder path)
 
 // ── tape geometry (node v3) ─────────────────────────────────────────────
 // header v2: [0]=op count, [1]=final-input-grad (legacy/chain path),
@@ -256,6 +258,45 @@ pub fn ag_add(tape: int, a: int, b: int, len: int) -> int {
     let _ = _ag_push(tape, ag_k_add(), a, b, out, 0 - 1, 0 - 1, 0 - 1,
                      0 - 1, 0 - 1, len, 0, 0, 0)
     return out
+}
+
+// Per-position RMSNorm over X[T·d] (one normalize per d-row, shared
+// gain g[d]). fwd uses dt_sqrt (24-iter Newton) to be byte-eq with the
+// decoder block's rmsnorm — NOT nn_rmsnorm_fwd's libm _nn_sqrt path
+// (the two sqrt impls differ in the last ULP; the single-vector
+// ag_rmsnorm is byte-eq vs nn_rmsnorm but NOT vs the dt_sqrt decoder).
+// bwd is inv-based (no sqrt) so the verified nn_rmsnorm_bwd is reused
+// per row with the dt_sqrt-derived inv → byte-eq. ids[x,g,y,xn,inv]
+// (inv = per-pos T-len) dims[T,d]. eps matches block/nn (1e-6).
+pub fn ag_rmsnorm_mh(tape: int, x: int, g: int, T: int, d: int) -> int {
+    let y   = t_zeros(T * d)
+    let xn  = t_zeros(T * d)
+    let inv = t_zeros(T)
+    let eps = 0.000001
+    let mut i = 0
+    while i < T {
+        let mut ms = 0.0
+        let mut c = 0
+        while c < d {
+            let xv = t_get(x, i * d + c)
+            ms = ms + xv * xv
+            c = c + 1
+        }
+        ms = ms / to_float(d)
+        let iv = 1.0 / dt_sqrt(ms + eps)
+        t_set(inv, i, iv)
+        let mut c2 = 0
+        while c2 < d {
+            let xni = t_get(x, i * d + c2) * iv
+            t_set(xn, i * d + c2, xni)
+            t_set(y, i * d + c2, t_get(g, c2) * xni)
+            c2 = c2 + 1
+        }
+        i = i + 1
+    }
+    let _ = _ag_push(tape, ag_k_rmsnorm_mh(), x, g, y, xn, inv, 0 - 1,
+                     0 - 1, 0 - 1, T, d, 0, 0)
+    return y
 }
 
 // Multi-head RoPE over q[T·nheads·hd]. Each (t,head) row is rotated by
@@ -550,6 +591,49 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             _ag_reg_acc(tape, b, db, len)
             t_free(da)
             t_free(db)
+        } else if kind == ag_k_rmsnorm_mh() {
+            let x = _ag_get(tape, op, 1)
+            let g = _ag_get(tape, op, 2)
+            let y = _ag_get(tape, op, 3)
+            let xn = _ag_get(tape, op, 4)
+            let inv = _ag_get(tape, op, 5)
+            let T = _ag_get(tape, op, 9)
+            let d = _ag_get(tape, op, 10)
+            let og = _ag_reg_grad(tape, y, T * d)
+            let dxF = t_zeros(T * d)
+            let dgA = t_zeros(d)
+            let xr = t_zeros(d)
+            let xnr = t_zeros(d)
+            let dyr = t_zeros(d)
+            let dxr = t_zeros(d)
+            let dgr = t_zeros(d)
+            let mut i = 0
+            while i < T {
+                let mut c = 0
+                while c < d {
+                    t_set(xr, c, t_get(x, i * d + c))
+                    t_set(xnr, c, t_get(xn, i * d + c))
+                    t_set(dyr, c, t_get(og, i * d + c))
+                    c = c + 1
+                }
+                nn_rmsnorm_bwd(xr, g, xnr, t_get(inv, i), dyr, dxr, dgr, d)
+                let mut c2 = 0
+                while c2 < d {
+                    t_set(dxF, i * d + c2, t_get(dxr, c2))
+                    t_set(dgA, c2, t_get(dgA, c2) + t_get(dgr, c2))
+                    c2 = c2 + 1
+                }
+                i = i + 1
+            }
+            _ag_reg_acc(tape, x, dxF, T * d)
+            _ag_reg_acc(tape, g, dgA, d)
+            t_free(dxF)
+            t_free(dgA)
+            t_free(xr)
+            t_free(xnr)
+            t_free(dyr)
+            t_free(dxr)
+            t_free(dgr)
         }
         op = op - 1
     }
@@ -714,6 +798,10 @@ pub fn ag_t_free_state(tape: int) {
             t_free(_ag_get(tape, op, 2))   // out
         } else if kind == ag_k_silu_gate() {
             t_free(_ag_get(tape, op, 3))   // s
+        } else if kind == ag_k_rmsnorm_mh() {
+            t_free(_ag_get(tape, op, 3))   // y
+            t_free(_ag_get(tape, op, 4))   // xn
+            t_free(_ag_get(tape, op, 5))   // inv
         }
         op = op + 1
     }

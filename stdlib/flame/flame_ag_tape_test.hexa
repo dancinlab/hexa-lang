@@ -697,9 +697,100 @@ let t11ok = m11s == 0.0 && m11a == 0.0 && m11b == 0.0
 if t11ok { println("PASS  F-RFC043-AGTAPE-SILUGATE-EQ") }
 else      { println("FAIL  F-RFC043-AGTAPE-SILUGATE-EQ") }
 
+// ── Test 12: per-position RMSNorm batched, dt_sqrt (ag_rmsnorm_mh) ──────
+// X[T·d] per-row normalize, shared g[d]. fwd MUST use dt_sqrt (24-iter
+// Newton) to match the decoder block — NOT libm. Reference = block's
+// exact rmsnorm formula + per-row nn_rmsnorm_bwd with dt_sqrt inv.
+// Falsifier F-RFC043-AGTAPE-RMSNORMMH-EQ.
+println("-- Test 12: rmsnorm_mh  X[T,d] dt_sqrt (decoder path)  --")
+let nT = 3
+let nDd = 8
+let nX = t_zeros(nT * nDd)
+let nG = t_zeros(nDd)
+let nSeed = t_zeros(nT * nDd)
+let mut e12 = 0
+while e12 < nT * nDd {
+    t_set(nX, e12, to_float(e12 - 12) * 0.053 + 0.2)
+    t_set(nSeed, e12, to_float((e12 * 7) % 9 - 4) * 0.035)
+    e12 = e12 + 1
+}
+let mut e12g = 0
+while e12g < nDd {
+    t_set(nG, e12g, 1.0 + to_float(e12g % 4 - 1) * 0.03)
+    e12g = e12g + 1
+}
+// reference: block-exact per-position rmsnorm (dt_sqrt) + per-row bwd
+let nYR = t_zeros(nT * nDd)
+let nXnR = t_zeros(nT * nDd)
+let nInvR = t_zeros(nT)
+let nEps = 0.000001
+let mut ri = 0
+while ri < nT {
+    let mut ms = 0.0
+    let mut c = 0
+    while c < nDd {
+        let xv = t_get(nX, ri * nDd + c)
+        ms = ms + xv * xv
+        c = c + 1
+    }
+    ms = ms / to_float(nDd)
+    let iv = 1.0 / dt_sqrt(ms + nEps)
+    t_set(nInvR, ri, iv)
+    let mut c2 = 0
+    while c2 < nDd {
+        let xni = t_get(nX, ri * nDd + c2) * iv
+        t_set(nXnR, ri * nDd + c2, xni)
+        t_set(nYR, ri * nDd + c2, t_get(nG, c2) * xni)
+        c2 = c2 + 1
+    }
+    ri = ri + 1
+}
+let nDxR = t_zeros(nT * nDd)
+let nDgR = t_zeros(nDd)
+let rxr = t_zeros(nDd)
+let rxnr = t_zeros(nDd)
+let rdyr = t_zeros(nDd)
+let rdxr = t_zeros(nDd)
+let rdgr = t_zeros(nDd)
+let mut rb = 0
+while rb < nT {
+    let mut c = 0
+    while c < nDd {
+        t_set(rxr, c, t_get(nX, rb * nDd + c))
+        t_set(rxnr, c, t_get(nXnR, rb * nDd + c))
+        t_set(rdyr, c, t_get(nSeed, rb * nDd + c))
+        c = c + 1
+    }
+    nn_rmsnorm_bwd(rxr, nG, rxnr, t_get(nInvR, rb), rdyr, rdxr, rdgr, nDd)
+    let mut c2 = 0
+    while c2 < nDd {
+        t_set(nDxR, rb * nDd + c2, t_get(rdxr, c2))
+        t_set(nDgR, c2, t_get(nDgR, c2) + t_get(rdgr, c2))
+        c2 = c2 + 1
+    }
+    rb = rb + 1
+}
+let t12 = ag_t_begin(1)
+let nYT = ag_rmsnorm_mh(t12, nX, nG, nT, nDd)
+ag_backward_reg(t12, nYT, nSeed)
+let nDxT = ag_grad(t12, nX)
+let nDgT = ag_grad(t12, nG)
+let m12y = agt_maxdiff(nYR, nYT, nT * nDd)
+let m12x = agt_maxdiff(nDxR, nDxT, nT * nDd)
+let m12g = agt_maxdiff(nDgR, nDgT, nDd)
+print("  max|Δ y|="); print(m12y)
+print(" dx="); print(m12x)
+print(" dg(accum)="); println(m12g)
+ag_t_free_state(t12)
+ag_t_free_reg(t12)
+ag_t_end(t12)
+let t12ok = m12y == 0.0 && m12x == 0.0 && m12g == 0.0
+if t12ok { println("PASS  F-RFC043-AGTAPE-RMSNORMMH-EQ") }
+else      { println("FAIL  F-RFC043-AGTAPE-RMSNORMMH-EQ") }
+
 if t1ok && t2ok && t3ok && t4ok && t5ok && t6ok && t7ok && t8ok
-   && t9ok && t10ok && t11ok {
-    println("ALL PASS  ag_tape byte-identical (11 oracles: 7 layers + chain + fan-in + residual + rope_mh + slice + silu-gate)")
+   && t9ok && t10ok && t11ok && t12ok {
+    println("ALL PASS  ag_tape byte-identical (12 oracles — full decoder primitive set)")
 } else {
     println("ALL FAIL  ag_tape plumbing regression")
 }
