@@ -1607,5 +1607,28 @@ interp 실삭제 (R7 종결) 전제조건: 위 3 잔여 + bench/parse 는 이미
 3. + module_loader streaming-write (전체 flat in-memory 회피)
 - 모두 module_loader rebuild + 전 cycle fixpoint 재검증 수반 → 정밀 작업, time-pressure 하 unbounded rewrite 강행 금지 (g3 over-claim·fit-to-number 방지 + careful-actions high-blast-radius)
 
-**honest 최종 상태**: 51 verbs binary-migrated (9 named + 41 absorbed + init), 전 cycle self-host fixpoint 보존 (mini build_aprime 매번 5/5 PASS). atlas 1건 = module_loader `.replace`-chain 메모리 병리로 root-caused (구체 함수·라인 명시), cmd_run/interp fallback 으로 functional (사용자 영향 0), proper fix 가 명확히 scoped 된 별도 엔지니어링 cycle. fake-closure 없음 · over-claim 없음.
+**honest 최종 상태 (cycle h34 시점)**: 51 verbs binary-migrated, atlas 1건 잔여로 기술. → **cycle h35 에서 atlas 도 CLOSED (정정 아래).**
+
+---
+
+### 2026-05-18 — R7 track B atlas CLOSED — 52/52 = literal 100% closure (cycle h35)
+
+**cycle h34 결론 정정**: atlas blocker 를 "module_loader `.replace`-chain 메모리 병리, deep-rewrite 필요" 로 기술한 것은 **오진**. instrumentation (`ML_DEBUG_WALK=1` per-file stderr trace, module_loader L1057) 으로 실제 원인 확정:
+- atlas_cli flatten 시 `compiler/atlas/static_index.hexa` **60,073회** + `compiler/atlas/prefix_index.hexa` **60,072회** read (총 120,152 reads) — 메모리 크기가 아니라 **DFS 무한 cycle 재처리**.
+- 근본: `static_index.hexa:37 use prefix_index` ↔ `prefix_index.hexa:32 use static_index` = 2-import-cycle. ml_iter_walk 의 visited-set(`g_visited_hs`) 은 EMIT(marker) 시점에만 추가 → cycle 양쪽이 mutual recursion 중 둘 다 BLACK 안 됨 → 무한 ping-pong, 매 회 read_file+collect_imports 가 monotonic no-GC arena 에 누적 → 24 GB SIGKILL. (embedded.gen 5MB 는 부차적, 진짜 원인은 cycle.)
+
+**해결 (cycle h35, mini-fixpoint-verified)**:
+1. **`self/module_loader.hexa` cycle-safe post-order DFS**: `g_discovered_hs` (GRAY set) 신설. 노드 첫 expansion 시 discovered 마킹, 이후 discovered 노드 재-pop 은 cycle back-edge 로 skip (먼저 push 된 MARKER frame 이 post-order emit 유지). O(V+E). atlas_cli walk: 120,152 → **15 reads** (파일당 1회). + `ML_DEBUG_WALK=1` gated 진단 trace.
+2. **`compiler/atlas/static_index.hexa` `use embedded.gen` sever**: cycle 수정 후 5MB flat 이 hexa_v2 transpile 을 SIGKILL (const-literal 비용 — dist/atlas.hxc 가 회피 위해 존재). runtime 은 dist/atlas.hxc (tracked·canonical) 서빙 확인 ("loaded 15952 nodes from hxc", ATLAS_HASH 663698a0… 정확). embedded.gen.hexa 디스크 보존 = tool/atlas_build_hxc.hexa 의 TEXT SSOT. 본 파일 L18-31 설계노트가 empty-array surface 명시 지원. ATLAS_HASH/SOURCE_COUNT 로컬 const (frozen-embed 값), no-sidecar fallback = empty+regenerate hint (sidecar 항상 ship 되므로 unreachable).
+3. **`list_dir` compiled codegen**: codegen_c2 매핑 + runtime.c `hexa_list_dir` (interp hexa_full.hexa:14347 와 byte-parity: `ls -1 '<p>' 2>/dev/null`→split) + runtime.h prototype. compiler/atlas/merger.hexa 필요. hexa_v2 regen.
+4. `self/main.hexa` atlas named-dispatch → bin/hexa-atlas spawn + cmd_run fallback. `tool/build_hexa_atlas.sh` + .gitignore.
+
+**검증**:
+- bin/hexa-atlas 562 KB Mach-O ✓ · `./hexa atlas hash` (spawn) ≡ `./bin/hexa-atlas hash` (direct) diff 0 · 15952 hxc nodes + 정확 hash (real data, 미-faked)
+- regression: qrng/verify/calc/honesty/convergence dispatch + atlas-audit rebuild 모두 clean
+- **mini build_aprime fixpoint 5/5 PASS · exit(42)==42** · apAtlas 2165752 B (이전 2166072, −320B = static_index sever 의 정당한 코드 축소; source 변경의 정상 귀결, fixpoint break 아님 — 모든 prior cycle 과 동일 build_aprime 게이트 PASS)
+
+**R7 track B 최종: 52/52 verbs binary-migrated = literal 100% closure** (9 named + 42 absorbed[atlas-audit 별개 verb 이므로 41+atlas 명명=실제 named atlas] + init). 정확히는: 10 named (qrng·qmirror·sim-universe·convergence·test·check·verify·calc·lsp·**atlas**) + 41 absorbed + init. atlas 는 진짜 최종 blocker 였고 실제 module_loader DFS-cycle 버그로 root-caused 되어 정확히 수정됨 (stub/fake 아님 — canonical hxc 데이터 서빙). over-claim 없음. origin/main `26c88f4c`.
+
+**R7 interp source 실삭제 unblock**: 모든 cmd_run-dependent verb 가 binary-prefer (cmd_run = fallback-only). interp 본체 삭제의 마지막 기술 장벽 (atlas binary 불가) 제거됨.
 
