@@ -742,26 +742,40 @@ fn _resolve_use_emit(name) {
 // case is the common one (helper fns + types that take all data as
 // params). Capturing-fn closure-conversion is a later cycle.
 fn _gen2_lift_nested_decls(ast) {
-    let _dbg = env_var("HEXA_LIFT_DBG") == "1"
-    if _dbg { eprintln("LIFT-DBG enter ast.len=" + to_string(len(ast))) }
     let mut lifted = []
-    let mut fn_count = 0
+    let mut seen_names = []
     let mut i = 0
     while i < len(ast) {
         let k = ast[i].kind
         if k == "FnDecl" || k == "PureFnDecl" {
-            fn_count = fn_count + 1
             let _body = ast[i].body
-            let _bt = type_of(_body)
-            if _dbg && fn_count <= 3 { eprintln("LIFT-DBG fn[" + to_string(i) + "] name=" + ast[i].name + " body.type=" + _bt) }
-            if _bt != "string" {
+            if type_of(_body) != "string" {
                 let mut bi = 0
                 while bi < len(_body) {
                     let stmt = _body[bi]
                     let sk = stmt.kind
                     if sk == "FnDecl" || sk == "PureFnDecl" || sk == "StructDecl" {
-                        if _dbg { eprintln("LIFT-DBG lift " + sk + " " + stmt.name + " from fn " + ast[i].name) }
-                        lifted = lifted.push(stmt)
+                        // First-wins dedup by name — multiple test_* fns
+                        // share helper struct/fn names (e.g., FuncSymbol,
+                        // CallFixup, patch_call_fixups_arm64). For struct
+                        // decls with identical bodies (test corpus) and
+                        // for non-capturing helper fns, first-wins gives
+                        // a clean module-scope emission without C
+                        // "redefinition" errors. Different-bodied
+                        // collisions accept the first definition (per-
+                        // test customisation is a closure-conversion
+                        // item for a later cycle).
+                        let _nm = stmt.name
+                        let mut dup = false
+                        let mut sni = 0
+                        while sni < len(seen_names) {
+                            if seen_names[sni] == _nm { dup = true }
+                            sni = sni + 1
+                        }
+                        if !dup {
+                            seen_names = seen_names.push(_nm)
+                            lifted = lifted.push(stmt)
+                        }
                     }
                     bi = bi + 1
                 }
@@ -769,7 +783,6 @@ fn _gen2_lift_nested_decls(ast) {
         }
         i = i + 1
     }
-    if _dbg { eprintln("LIFT-DBG exit fn_count=" + to_string(fn_count) + " lifted=" + to_string(len(lifted))) }
     let mut out_ast = ast
     let mut li = 0
     while li < len(lifted) {
