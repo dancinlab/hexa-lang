@@ -1,0 +1,4 @@
+DELIVERED at R3(1,1): cycle=5 data=0x1100000000000000
+END-TO-END latency: 5 cycles (inject=0 deliver=5, 2-hop expected)
+RESULT: PASS (multi-router fabric routes correctly)
+build/artifacts/fabric_2x2_tb.v2k:313: $finish called at 650 (1s)

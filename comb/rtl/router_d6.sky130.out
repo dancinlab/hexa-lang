@@ -1,0 +1,8 @@
+
+   Chip area for module '\router_d6': 93608.528000
+     of which used for sequential elements: 68485.683200 (73.16%)
+
+Warnings: 1 unique messages, 1 total
+End of script. Logfile hash: fd723aad99, time: 12.46s, user: 10.31s, system: 0.36s, MEM: 1273.94 MB peak
+Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 21.0.0 -fPIC -O3)
+Time spent: 26% 1x techmap (3 sec), 23% 100x opt_expr (3 sec), 21% 2x abc (2 sec), ...

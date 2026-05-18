@@ -1,0 +1,51 @@
+2.50. Printing statistics.
+
+=== router_d4 ===
+
+        +----------Local Count, excluding submodules.
+        | 
+    20408 wires
+    97618 wire bits
+       74 public wires
+     3032 public wire bits
+       10 ports
+      670 port bits
+    21522 cells
+        1   BUFG
+      340   IBUF
+     5614   INV
+      373   LUT1
+     3213   LUT2
+     4012   LUT3
+      705   LUT4
+     2289   LUT5
+     4645   LUT6
+      330   OBUF
+    10935 submodules
+     3889   CARRY4
+     1647   FDRE
+     4453   MUXF7
+      946   MUXF8
+
+   Estimated number of LCs:      11651
+
+=== design hierarchy ===
+
+        +----------Count including submodules.
+        | 
+    21522 router_d4
+
+        +----------Count including submodules.
+        | 
+    20408 wires
+    97618 wire bits
+       74 public wires
+     3032 public wire bits
+       10 ports
+      670 port bits
+        - memories
+        - memory bits
+        - processes
+    21522 cells
+        1   BUFG
+      340   IBUF

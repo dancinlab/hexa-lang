@@ -1,0 +1,8 @@
+
+   Chip area for module '\router_d4': 61762.985600
+     of which used for sequential elements: 48956.953600 (79.27%)
+
+Warnings: 1 unique messages, 1 total
+End of script. Logfile hash: d8ce183a95, time: 8.81s, user: 7.76s, system: 0.28s, MEM: 918.97 MB peak
+Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 21.0.0 -fPIC -O3)
+Time spent: 27% 1x techmap (2 sec), 23% 98x opt_expr (2 sec), ...

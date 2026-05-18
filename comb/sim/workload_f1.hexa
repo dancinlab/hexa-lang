@@ -1,0 +1,94 @@
+// comb/sim/workload_f1.hexa — F1 verdict per real workload pattern
+//
+// 2026-05-18 · Adds the "real workload" axis to F1. Closed-form avg-hop
+// per pattern, plugged into the non-contention cost model (Dally & Towles
+// §3.7). Patterns drawn from canonical NoC workloads:
+//
+//   uniform   : every node sends to a uniform random dst
+//               avg hop_mesh = 2k/3, avg hop_hex = 2R/3
+//   broadcast : every node sends to all peers in its row (matmul row-band)
+//               avg hop_mesh = k/2, avg hop_hex = R/2
+//   hotspot   : every node sends to a single fixed center node
+//               avg hop_mesh = (2/3)k, avg hop_hex = (2/3)R  (center placed)
+//   stencil   : nearest-neighbor (1-hop) — both topologies fixed at 1
+//
+// Output: per pattern, latency and energy for both topologies, win flag.
+// Caveat: non-contention; all metrics x100 integer scaled.
+
+fn isqrt(n) {
+    let mut r = 0
+    while (r + 1) * (r + 1) <= n { r = r + 1 }
+    r
+}
+
+fn hex_R(n) {
+    let mut r = 0
+    while (3 * (r + 1) * (r + 1) + 3 * (r + 1) + 1) <= n { r = r + 1 }
+    r
+}
+
+// helper: print one row given avg-hop numerators (x3 to stay int)
+fn report(name, n, hops_mesh_x3, hops_hex_x3, t_r6, e_diag) {
+    let t_r4 = 100
+    let t_wire = 100
+    let e_router_d4 = 100
+    let e_router_d6 = 150
+    let e_wire_axial = 100
+    let avg_e_hop_hex = (e_router_d6 + e_wire_axial + e_router_d6 + e_diag) / 2
+    let avg_e_hop_mesh = e_router_d4 + e_wire_axial
+    let lat_mesh = hops_mesh_x3 * (t_r4 + t_wire)
+    let lat_hex  = hops_hex_x3  * (t_r6 + t_wire)
+    let e_mesh   = hops_mesh_x3 * avg_e_hop_mesh
+    let e_hex    = hops_hex_x3  * avg_e_hop_hex
+    let lat_win  = if lat_hex < lat_mesh { 1 } else { 0 }
+    let e_win    = if e_hex < e_mesh { 1 } else { 0 }
+    let either   = if (lat_win == 1) { 1 } else { e_win }
+    println(name
+        + " N=" + to_string(n)
+        + " 3*h_m=" + to_string(hops_mesh_x3)
+        + " 3*h_h=" + to_string(hops_hex_x3)
+        + " lat_m=" + to_string(lat_mesh)
+        + " lat_h=" + to_string(lat_hex)
+        + " e_m=" + to_string(e_mesh)
+        + " e_h=" + to_string(e_hex)
+        + " d6_lat_win=" + to_string(lat_win)
+        + " d6_e_win=" + to_string(e_win)
+        + " net_win=" + to_string(either))
+}
+
+fn sweep_workloads(n) {
+    let k = isqrt(n)
+    let r = hex_R(n)
+    // canonical avg-hop numerators (x3 to keep int):
+    //   uniform   : (2/3)*k → 3*h = 2*k
+    //   broadcast : (1/2)*k → 3*h = (3/2)*k  ≈ 3k/2  (integer)
+    //   hotspot   : (2/3)*k → 3*h = 2*k     (same as uniform under uniform sources)
+    //   stencil   : 1            → 3*h = 3
+    let uniform_mesh  = 2 * k
+    let uniform_hex   = 2 * r
+    let bcast_mesh    = (3 * k) / 2
+    let bcast_hex     = (3 * r) / 2
+    let hotspot_mesh  = 2 * k
+    let hotspot_hex   = 2 * r
+    let stencil       = 3
+    // realistic regime: t_r6 = 1.5x baseline, e_diag = 1.3x (mild RC penalty)
+    let t_r6 = 150
+    let e_diag = 130
+    report("uniform  ", n, uniform_mesh,  uniform_hex,  t_r6, e_diag)
+    report("broadcast", n, bcast_mesh,    bcast_hex,    t_r6, e_diag)
+    report("hotspot  ", n, hotspot_mesh,  hotspot_hex,  t_r6, e_diag)
+    report("stencil  ", n, stencil,       stencil,       t_r6, e_diag)
+}
+
+println("# comb F1 per real workload (non-contention model, realistic regime)")
+println("# t_router_d6 = 1.5x baseline, e_diag = 1.3x RC penalty")
+println("# columns: pattern N 3*avgH_mesh 3*avgH_hex lat_m lat_h e_m e_h d6_lat_win d6_e_win net_win")
+println("#")
+println("# --- N = 1024 (32x32 mesh / R=17 hex region) ---")
+sweep_workloads(1024)
+println("# --- N = 10000 (100x100 mesh / R=57) ---")
+sweep_workloads(10000)
+println("#")
+println("# expected: degree-6 wins on uniform/broadcast/hotspot (non-trivial avg hop);")
+println("# stencil (nearest-neighbor) ties since both 1-hop. Hex pays router cost so")
+println("# loses energy on stencil — falsifier-relevant edge case.")
