@@ -1468,6 +1468,77 @@ __global__ void _hx_cuda_kern_rmsnorm_mh(const double* __restrict__ X,
     }
 }
 
+/* mk2-C4 (2026-05-19): GQA attention-dt forge-route. One thread per
+ * (head, query) pair = nh·T threads (strict per-pair sequential for
+ * byte-eq with the host loop's nested hh→i→j order). Memory contract:
+ *   in:  Q[T·nh·hd], K[T·nkv·hd], V[T·nkv·hd]
+ *   out: P[nh·T·T]   — causal probs, j ∈ [0,i+1); j ∈ [i+1,T) is 0.
+ *        CTX[T·nh·hd]
+ * Uses dt_sqrt mirror (scale=1/√hd) + dt_exp mirror (stable softmax).
+ * P doubles as scratch: step 1 writes raw scores; steps 3-4 transform
+ * in place to probs. Op order byte-identical to ag_tape.hexa
+ * _ag_attn_dt_fwd (causal mask + per-row stable softmax + GQA kvh =
+ * hh/n_rep). */
+__global__ void _hx_cuda_kern_attn_dt_fwd(const double* __restrict__ Q,
+                                          const double* __restrict__ K,
+                                          const double* __restrict__ V,
+                                          double* __restrict__ P,
+                                          double* __restrict__ CTX,
+                                          int64_t T, int64_t nh,
+                                          int64_t nkv, int64_t hd) {
+    int64_t flat   = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t total  = nh * T;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    int64_t n_rep  = nh / nkv;
+    int64_t d      = nh * hd;
+    /* scale = 1 / dt_sqrt(hd). dt_sqrt-faithful (NOT libm sqrt) —
+     * same hazard as rmsnorm. */
+    double scale = __ddiv_rn(1.0, _hx_cuda_dt_sqrt_d((double)hd));
+    for (; flat < total; flat += stride) {
+        int64_t hh  = flat / T;
+        int64_t i   = flat % T;
+        int64_t kvh = hh / n_rep;
+        int64_t L   = i + 1;
+        /* Step 1: P[hh,i,j] = dot(Q[i,hh,·], K[j,kvh,·]) * scale */
+        for (int64_t j = 0; j < L; j++) {
+            double dot = 0.0;
+            for (int64_t c = 0; c < hd; c++) {
+                dot = __dadd_rn(dot,
+                                __dmul_rn(Q[(i*nh + hh)*hd + c],
+                                          K[(j*nkv + kvh)*hd + c]));
+            }
+            P[(hh*T + i)*T + j] = __dmul_rn(dot, scale);
+        }
+        /* Step 2: max */
+        double mx = P[(hh*T + i)*T + 0];
+        for (int64_t j = 1; j < L; j++) {
+            double v = P[(hh*T + i)*T + j];
+            if (v > mx) mx = v;
+        }
+        /* Step 3: e = dt_exp(P − mx); P := e; tot += e. */
+        double tot = 0.0;
+        for (int64_t j = 0; j < L; j++) {
+            double e = _hx_cuda_dt_exp_d(P[(hh*T + i)*T + j] - mx);
+            P[(hh*T + i)*T + j] = e;
+            tot = __dadd_rn(tot, e);
+        }
+        /* Step 4: normalize */
+        for (int64_t j = 0; j < L; j++) {
+            P[(hh*T + i)*T + j] = __ddiv_rn(P[(hh*T + i)*T + j], tot);
+        }
+        /* Step 5: ctx[i,hh,c2] = Σ P[hh,i,j] · V[j,kvh,c2] */
+        for (int64_t c2 = 0; c2 < hd; c2++) {
+            double acc = 0.0;
+            for (int64_t j = 0; j < L; j++) {
+                acc = __dadd_rn(acc,
+                                __dmul_rn(P[(hh*T + i)*T + j],
+                                          V[(j*nkv + kvh)*hd + c2]));
+            }
+            CTX[i*d + hh*hd + c2] = acc;
+        }
+    }
+}
+
 /* silu-gate: O[i] = (A[i]·σ(A[i]))·B[i], σ=1/(1+dt_exp(-x)).
  * dt_exp-faithful (NOT _hx_cuda_sigmoid_d's libm exp). Op order
  * byte-identical to CPU _hx_farr_silu_gate_cpu / ag_tape
@@ -1888,6 +1959,82 @@ int _hx_cuda_farr_rmsnorm_mh_gpu(int64_t x_id, int64_t g_id,
     if (_d2h_out(y_id,   n_xy) != 0) return -1;
     if (_d2h_out(xn_id,  n_xy) != 0) return -1;
     if (_d2h_out(inv_id, T)    != 0) return -1;
+    return 0;
+}
+
+/* mk2-C4 (2026-05-19): GQA attention-dt fwd forge-route. One kernel
+ * launch computes P[nh·T·T] (causal probs, j<L only) and CTX[T·nh·hd]
+ * from Q/K/V. dt_sqrt + dt_exp mirrors guarantee byte-eq with the host
+ * loop. Outputs honour DEVICE_KEEP via _d2h_out. */
+int _hx_cuda_farr_attn_dt_fwd_gpu(int64_t q_id, int64_t k_id, int64_t v_id,
+                                  int64_t p_id, int64_t ctx_id,
+                                  int64_t T, int64_t nh, int64_t nkv,
+                                  int64_t hd) {
+    if (q_id < 0 || k_id < 0 || v_id < 0 || p_id < 0 || ctx_id < 0) {
+        fprintf(stderr, "[cuda] attn_dt_fwd: bad ids\n");
+        return -1;
+    }
+    if (T <= 0 || nh <= 0 || nkv <= 0 || hd <= 0) {
+        fprintf(stderr, "[cuda] attn_dt_fwd: bad dims T=%lld nh=%lld nkv=%lld hd=%lld\n",
+                (long long)T, (long long)nh, (long long)nkv, (long long)hd);
+        return -1;
+    }
+    if (nh % nkv != 0) {
+        fprintf(stderr, "[cuda] attn_dt_fwd: nh=%lld not divisible by nkv=%lld\n",
+                (long long)nh, (long long)nkv);
+        return -1;
+    }
+    if (q_id >= _hx_farr_count || k_id >= _hx_farr_count ||
+        v_id >= _hx_farr_count || p_id >= _hx_farr_count ||
+        ctx_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] attn_dt_fwd: id out of range\n");
+        return -1;
+    }
+    int64_t nq = T * nh  * hd;
+    int64_t nk = T * nkv * hd;
+    int64_t np = nh * T * T;
+    if (_hx_farr_table[q_id].len   < nq ||
+        _hx_farr_table[k_id].len   < nk ||
+        _hx_farr_table[v_id].len   < nk ||
+        _hx_farr_table[p_id].len   < np ||
+        _hx_farr_table[ctx_id].len < nq) {
+        fprintf(stderr, "[cuda] attn_dt_fwd: host len mismatch\n");
+        return -1;
+    }
+    if (_h2d(q_id) != 0) return -1;
+    if (_h2d(k_id) != 0) return -1;
+    if (_h2d(v_id) != 0) return -1;
+    if (_ensure_dev_buf(p_id,   np) != 0) return -1;
+    if (_ensure_dev_buf(ctx_id, nq) != 0) return -1;
+    /* Zero P first — only j < L positions are written, the upper
+     * triangle (j ≥ L per row) must stay 0 to match the t_zeros init
+     * on the host side. cudaMemset is fine (P is doubles; 0x00·8 == 0.0). */
+    cudaError_t ze = cudaMemset(g_slots[p_id].d_buf, 0,
+                                (size_t)np * sizeof(double));
+    if (ze != cudaSuccess) {
+        fprintf(stderr, "[cuda] attn_dt_fwd: cudaMemset P failed: %s\n",
+                cudaGetErrorString(ze));
+        return -1;
+    }
+    double* Q = g_slots[q_id].d_buf;
+    double* K = g_slots[k_id].d_buf;
+    double* V = g_slots[v_id].d_buf;
+    double* P = g_slots[p_id].d_buf;
+    double* C = g_slots[ctx_id].d_buf;
+    /* one thread per (hh, i) — nh·T threads. */
+    int64_t total = nh * T;
+    int block = 64;
+    int64_t need = (total + block - 1) / block;
+    int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+    _hx_cuda_kern_attn_dt_fwd<<<grid, block>>>(Q, K, V, P, C, T, nh, nkv, hd);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] attn_dt_fwd launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(p_id,   np) != 0) return -1;
+    if (_d2h_out(ctx_id, nq) != 0) return -1;
     return 0;
 }
 

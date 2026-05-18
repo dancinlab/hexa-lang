@@ -1033,5 +1033,8 @@ HexaVal farr_rope_bwd_gpu(HexaVal t, HexaVal cos, HexaVal sin,
                           HexaVal T, HexaVal nh, HexaVal hd);                  /* runtime.c — RFC 041 Phase B RoPE (6-arg direct) */
 HexaVal farr_rmsnorm_mh_gpu(HexaVal x, HexaVal g, HexaVal y, HexaVal xn,
                             HexaVal inv, HexaVal T, HexaVal d);                /* runtime.c — mk2-C2 RMSNorm-mh (7-arg direct) */
+HexaVal farr_attn_dt_fwd_gpu(HexaVal Q, HexaVal K, HexaVal V, HexaVal P,
+                             HexaVal CTX, HexaVal T, HexaVal nh,
+                             HexaVal nkv, HexaVal hd);                          /* runtime.c — mk2-C4 attn-dt fwd (9-arg direct) */
 
 #endif /* HEXA_RUNTIME_H */

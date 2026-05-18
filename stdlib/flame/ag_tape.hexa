@@ -387,12 +387,20 @@ fn _ag_attn_dt_bwd(Q: int, K: int, V: int, P: int, dctx: int,
 }
 
 // ctx = dt-scale GQA-attn(Q,K,V). Same node shape as ag_attn.
+// mk2-C4 (2026-05-19): forge-route fwd. One __global__ kernel computes
+// P[nh·T·T] (causal probs) + CTX[T·nh·hd] from Q/K/V in a single
+// launch. dt_sqrt+dt_exp bit-exact mirrors (proven recipe: RoPE FMA,
+// silu_gate dt_exp, rmsnorm dt_sqrt) — byte-eq with the prior host
+// nested-loop _ag_attn_dt_fwd reference. P + CTX go through _d2h_out
+// → DEVICE_KEEP register honoured (mk2-C3). On no-CUDA build the
+// fallback routes to _hx_farr_attn_dt_fwd_cpu (FP_CONTRACT OFF). bwd
+// still host-loop (mk2-C4-bwd is a follow-up cycle).
 pub fn ag_attn_dt(tape: int, Q: int, K: int, V: int,
                   T: int, nh: int, nkv: int, hd: int) -> int {
     let dctx_len = T * nh * hd
     let P   = t_zeros(nh * T * T)
     let ctx = t_zeros(dctx_len)
-    _ag_attn_dt_fwd(Q, K, V, P, ctx, T, nh, nkv, hd)
+    let _ = farr_attn_dt_fwd_gpu(Q, K, V, P, ctx, T, nh, nkv, hd)
     let _ = _ag_push(tape, ag_k_attn_dt(), Q, K, V, P, ctx, 0 - 1,
                      0 - 1, 0 - 1, T, nh, nkv, hd)
     return ctx

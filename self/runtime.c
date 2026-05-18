@@ -11341,6 +11341,80 @@ static int _hx_farr_rmsnorm_mh_cpu(int64_t x_id, int64_t g_id,
     return 0;
 }
 
+// mk2-C4 (2026-05-19): GQA attention-dt fwd CPU mirror. Byte-eq with
+// ag_tape.hexa::_ag_attn_dt_fwd host loop (causal mask + GQA kvh =
+// hh/n_rep + stable softmax via dt_exp + dt_sqrt scale). Memory:
+// Q[T·nh·hd], K[T·nkv·hd], V[T·nkv·hd]; out P[nh·T·T] (j<L only,
+// j≥L stays 0 per caller's t_zeros init) and CTX[T·nh·hd]. 0/-1 rc.
+static int _hx_farr_attn_dt_fwd_cpu(int64_t q_id, int64_t k_id, int64_t v_id,
+                                    int64_t p_id, int64_t ctx_id,
+                                    int64_t T, int64_t nh, int64_t nkv,
+                                    int64_t hd) {
+    if (q_id < 0 || q_id >= _hx_farr_count)     return -1;
+    if (k_id < 0 || k_id >= _hx_farr_count)     return -1;
+    if (v_id < 0 || v_id >= _hx_farr_count)     return -1;
+    if (p_id < 0 || p_id >= _hx_farr_count)     return -1;
+    if (ctx_id < 0 || ctx_id >= _hx_farr_count) return -1;
+    if (T <= 0 || nh <= 0 || nkv <= 0 || hd <= 0) return -1;
+    if (nh % nkv != 0) return -1;
+    HexaFarrEntry* qe = &_hx_farr_table[q_id];
+    HexaFarrEntry* ke = &_hx_farr_table[k_id];
+    HexaFarrEntry* ve = &_hx_farr_table[v_id];
+    HexaFarrEntry* pe = &_hx_farr_table[p_id];
+    HexaFarrEntry* ce = &_hx_farr_table[ctx_id];
+    if (!qe->buf || !ke->buf || !ve->buf || !pe->buf || !ce->buf) return -1;
+    int64_t nq = T * nh  * hd;
+    int64_t nk = T * nkv * hd;
+    int64_t np = nh * T * T;
+    if (qe->len < nq || ke->len < nk || ve->len < nk ||
+        pe->len < np || ce->len < nq) return -1;
+    const double* Q = qe->buf;
+    const double* K = ke->buf;
+    const double* V = ve->buf;
+    double* P = pe->buf;
+    double* C = ce->buf;
+    int64_t n_rep = nh / nkv;
+    int64_t d     = nh * hd;
+    double scale = 1.0 / _hx_dt_sqrt_d((double)hd);
+    for (int64_t hh = 0; hh < nh; hh++) {
+        int64_t kvh = hh / n_rep;
+        for (int64_t i = 0; i < T; i++) {
+            int64_t L = i + 1;
+            for (int64_t j = 0; j < L; j++) {
+                double dot = 0.0;
+                for (int64_t c = 0; c < hd; c++) {
+                    dot = dot + Q[(i*nh + hh)*hd + c]
+                              * K[(j*nkv + kvh)*hd + c];
+                }
+                P[(hh*T + i)*T + j] = dot * scale;
+            }
+            double mx = P[(hh*T + i)*T + 0];
+            for (int64_t j = 1; j < L; j++) {
+                double v = P[(hh*T + i)*T + j];
+                if (v > mx) mx = v;
+            }
+            double tot = 0.0;
+            for (int64_t j = 0; j < L; j++) {
+                double e = _hx_dt_exp_d(P[(hh*T + i)*T + j] - mx);
+                P[(hh*T + i)*T + j] = e;
+                tot = tot + e;
+            }
+            for (int64_t j = 0; j < L; j++) {
+                P[(hh*T + i)*T + j] = P[(hh*T + i)*T + j] / tot;
+            }
+            for (int64_t c2 = 0; c2 < hd; c2++) {
+                double acc = 0.0;
+                for (int64_t j = 0; j < L; j++) {
+                    acc = acc + P[(hh*T + i)*T + j]
+                              * V[(j*nkv + kvh)*hd + c2];
+                }
+                C[i*d + hh*hd + c2] = acc;
+            }
+        }
+    }
+    return 0;
+}
+
 static int64_t _hx_farr_silu_gate_cpu(int64_t a_id, int64_t b_id,
                                       int64_t n) {
     if (a_id < 0 || a_id >= _hx_farr_count) return -1;
@@ -11553,6 +11627,40 @@ HexaVal farr_rmsnorm_mh_gpu(HexaVal x_v, HexaVal g_v, HexaVal y_v,
 #else
     return hexa_int(_hx_farr_rmsnorm_mh_cpu(x_id, g_id, y_id, xn_id,
                                             inv_id, T, d));
+#endif
+}
+
+// mk2-C4 (2026-05-19): attn-dt fwd forge-route. Bare 9-arg function;
+// caller pre-allocates P[nh·T·T] (must be t_zeros — upper triangle
+// stays 0) + CTX[T·nh·hd]. dt_sqrt+dt_exp byte-eq mirror in
+// runtime_cuda.c kernel / runtime.c CPU fallback.
+#ifdef HEXA_CUDA
+extern int _hx_cuda_farr_attn_dt_fwd_gpu(int64_t q_id, int64_t k_id,
+                                         int64_t v_id, int64_t p_id,
+                                         int64_t ctx_id, int64_t T,
+                                         int64_t nh, int64_t nkv,
+                                         int64_t hd);
+#endif
+HexaVal farr_attn_dt_fwd_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
+                             HexaVal p_v, HexaVal ctx_v, HexaVal T_v,
+                             HexaVal nh_v, HexaVal nkv_v, HexaVal hd_v) {
+    int64_t q_id   = hexa_as_num(q_v);
+    int64_t k_id   = hexa_as_num(k_v);
+    int64_t v_id   = hexa_as_num(v_v);
+    int64_t p_id   = hexa_as_num(p_v);
+    int64_t ctx_id = hexa_as_num(ctx_v);
+    int64_t T      = hexa_as_num(T_v);
+    int64_t nh     = hexa_as_num(nh_v);
+    int64_t nkv    = hexa_as_num(nkv_v);
+    int64_t hd     = hexa_as_num(hd_v);
+#ifdef HEXA_CUDA
+    if (T <= 0 || nh <= 0 || nkv <= 0 || hd <= 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_attn_dt_fwd_gpu(q_id, k_id, v_id, p_id, ctx_id,
+                                           T, nh, nkv, hd);
+    return hexa_int(rc);
+#else
+    return hexa_int(_hx_farr_attn_dt_fwd_cpu(q_id, k_id, v_id, p_id, ctx_id,
+                                             T, nh, nkv, hd));
 #endif
 }
 
