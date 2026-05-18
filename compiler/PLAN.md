@@ -1057,3 +1057,76 @@ codegen gap 0 이므로 사실상 충족.
 **다음 = R7 인터프리터 소스 실삭제** (goal 의 문자적 종착점). hard-to-reverse 작업이라
 user 확인 후 진행. 잔여 #37(tier-2 codegen)은 bootstrap 경로 품질 개선 — interp 폐기
 비차단 (tier-1 이 미래 경로).
+
+### 2026-05-18 — R7 Phase 1: interp source-deletion entanglement map (pre-surgery)
+
+R7 (인터프리터 소스 실삭제) Phase 1 = "delete-target vs preserve-target" 정밀 매핑. hard-to-reverse 라서 실삭제 전 commit-first.
+
+**Interp-only (safe to delete — Phase 2 후보)**:
+
+| 경로 | 역할 | 의존성 |
+|------|------|--------|
+| `self/hexa_full.hexa` (19,584 LoC) | tree-walking interpreter SSOT — `tokenize` + `parse` + AST + `eval_expr` + `interpret(ast)` 엔트리 | `use "runtime_core"` + `use "codegen_c2"` + `use "bc_emitter"` + `use "bc_vm"` + `use "runtime/*_pure"` + `use "stdlib/strbuf"` — 모두 flatten 시 inline 됨. 본 monolith 자체는 어디서도 import 되지 않음 (오로지 `tool/build_interp.hexa` 가 transpile target 으로 사용) |
+| `self/runtime_core.hexa` | interp 의 proof/fuse/match/stack helper (T1 Phase B 분리) | 본 파일을 `use` 하는 곳: **오직 `self/hexa_full.hexa`** — interp-exclusive |
+| `self/hexa_full.json` | interp invariant 레지스트리 + ossification ledger | hexa_full.hexa 헤더가 `@registry` 로 참조 — interp-exclusive |
+| `self/hexa_full.profile_hook.hexa.draft` | profile-hook draft (미배포) | hexa_full 전용 |
+| `tool/build_interp.hexa` | Mac native interp builder (`hexa_v2 hexa_full.hexa → /tmp/hexa_full_regen.c → clang → build/hexa_interp.real`) | interp-exclusive |
+| `tool/build_interp_linux.hexa` | Linux interp builder | interp-exclusive |
+| `tool/rebuild_interp.hexa` | flatten-키 캐시 + 재빌드 드라이버 | interp-exclusive |
+| `tool/build_runner_image.hexa` (L218 / L222) | 도커 이미지 빌드 안에서 `tool/build_interp_linux.hexa` 호출 — interp 삭제 시 해당 step 제거 필요 | interp-derived |
+| `tool/fixpoint_compare.hexa` | hexa_v2 fixpoint compare (v3→v4 = hexa_full.hexa transpile loop) | interp-source-exclusive — interp 소스 없으면 의미 없음 |
+| `tool/check_ssot_sync.hexa` | `self/interpreter.hexa` ↔ `self/hexa_full.hexa` 동기화 검증 | interp-exclusive (legacy interpreter.hexa 도 동시 정리 후보) |
+| `tool/ssot_drift_report.hexa` | hexa_full.hexa SSOT drift 측정 | interp-exclusive (혹은 새 SSOT 로 재포인팅) |
+| `tool/deploy_h100.hexa` (L47 도움말 텍스트만) | docstring 에 hexa_full.hexa cross-compile 예시 — code 의존 X | docstring 정리만 |
+| `build/hexa_interp*` (gitignored) | 빌드 산출물 | gitignored — 별도 처리 |
+
+**Driver-level entanglement (preserve interim — needs replacement before deletion)**:
+
+`self/main.hexa::cmd_run(file, args)` 가 interp 바이너리 (`build/hexa_interp.real`) 를 child process 로 spawn. 18 call site:
+
+| 서브커맨드 | call site | 대체 경로 |
+|------|---------|-------|
+| `hexa run <file>` | L350 (top-level dispatch) | aprime_cc-direct (tier-1) 또는 `hexa build && exec`. `bin/hexa-run-native` 가 이미 tier-1/2/3 wrapper. 본 dispatch 가 wrapper 와 합쳐져야 함. |
+| 16 absorbed verb (`lsp`·`test`·`bench`·`check`·`convergence dump`·`init`·`verify`·`calc`·`atlas`·`qrng`·`sim-universe`·`qmirror`·`batch`·… L1121 dispatch_absorbed) | L1121, L3114, L3172, L3199, L3232, L3271, L3298, L3316, L3334, L3352, L3370, L3388, L3418 | 각 sub-script (`self/lsp.hexa`·`self/invariant_check.hexa`·`stdlib/qrng/qrng.hexa` 등) compiled 바이너리로 land 후 main.hexa 가 그것을 invoke. **R7 deletion 의 진짜 게이트**. |
+| `cmd_batch` | L2407 | 동일 대체 필요 |
+
+→ **Phase 2 = "interp 본체 (`hexa_full.hexa` + 12 위 도구) 삭제" 는 driver entanglement 해소 후에 가능**. 본 Phase 1 commit 후 즉시 source deletion 은 hexa CLI 의 `hexa run` 외 16 sub-command 가 즉시 break.
+
+**MUST PRESERVE (interp 제거에 영향 없음 — 모두 self-host compiled path 의 부품)**:
+
+| 경로 | 역할 | 이유 |
+|------|------|------|
+| `self/native/hexa_v2` (binary) | bootstrap transpiler — `tool/build_aprime.sh` 의 [stage 2] 가 의존. `aprime_cc` 부트스트랩 발판 | aprime_cc 가 self-host bit-stable 가 되었으나 `hexa_v2` 는 보존 (bootstrap reproducibility) |
+| `self/native/hexa_cc.c` + `*.hexanoport` | hexa_v2 의 boot image — `self/{lexer,parser,type_checker,codegen_c2}.hexa` 4 SSOT 의 generated artifact | hexa_v2 재생성 시 필요. hexa_full.hexa 와 무관. |
+| `self/{lexer,parser,type_checker,codegen_c2}.hexa` | hexa_v2 의 4 SSOT (C-emitting transpiler 소스) | hexa_full.hexa 와 무관 (codegen_c2 는 hexa_full 에 `use` 되지만 `hexa_full` 의존이 아님 — codegen_c2 가 stand-alone SSOT) |
+| `self/runtime.c` (13,114 LoC) + `runtime.h` | 모든 compiled binary 에 정적 링크되는 runtime primitives (GC · value tags · string ops · arena · math · I/O · network · process) | interp + 모든 compiled program 공유. interp 삭제와 무관. |
+| `self/runtime/*_pure.hexa` (≈900 파일) | stdlib pure-hexa 모듈 (math · string · array · file · datetime · format · …) | hexa_full 이 `use` 하지만 stand-alone 모듈 — compiler/ · aprime_cc binary · 다운스트림 (wilson 등) 도 사용 |
+| `self/bc_emitter.hexa` + `self/bc_vm.hexa` | bytecode VM (HEXA_VM=1 모드, `--bc` 플래그) — hexa_full 의 옵셔널 백엔드 | hexa_full 만 사용. 본 삭제와 동시 제거 후보 — 단 별도 `--bc` 채택자 확인 후. **보존 권장 (Phase 2.5)** |
+| `self/main.hexa` (CLI dispatcher) | compiled `hexa.real` 바이너리 SSOT — `hexa build`/`parse`/`cc`/help/version 모두 self-compiled 동작 (R7 gate ② LANDED `24cf3e01`). `cmd_run` 만 interp 위임. | 보존 — `cmd_run` 단독 surgery |
+| `self/module_loader.hexa` | flatten 전처리기 — compiled module_loader 가 R7 gate ④ LANDED | 보존 |
+| `compiler/` 전체 | tier-1 native compiler (`aprime_cc`) | hexa_full 무관 |
+| `tool/build_aprime.sh` | aprime_cc canonical build recipe | hexa_full 무관 (hexa_v2 만 의존) |
+| `bin/hexa-run-native` | tier-1/2/3 wrapper (aprime_cc → hexa build → hexa run) | tier-3 `hexa run` 만 interp; 본 wrapper 자체는 보존 — interp 제거 후 tier-3 분기 제거만 필요 |
+
+**Entanglement 결론**:
+
+1. **Source-level**: `hexa_full.hexa` + `runtime_core.hexa` + 6 interp-build tool 은 **clean 분리** — source 삭제 자체는 compiler/·hexa_v2·runtime.c·codegen_c2 영향 0.
+2. **Runtime-level**: 그러나 `self/main.hexa::cmd_run` 의 18 call site (lsp·test·bench·check·init·verify·calc·atlas·qrng·sim-universe·qmirror·batch · etc.) 가 `build/hexa_interp` 바이너리에 의존. **interp 바이너리 부재 시 `hexa run` 외 16+ 서브커맨드 즉시 break**.
+3. → **Phase 2 surgical-deletion 은 두 트랙 동시 필요**:
+   - 트랙 A (source deletion): `hexa_full.hexa` · `runtime_core.hexa` · `hexa_full.json` · `hexa_full.profile_hook.hexa.draft` · `tool/build_interp.hexa` · `tool/build_interp_linux.hexa` · `tool/rebuild_interp.hexa` · `tool/fixpoint_compare.hexa` · `tool/check_ssot_sync.hexa` · `tool/ssot_drift_report.hexa` · `tool/build_runner_image.hexa` 의 interp-build step · `tool/deploy_h100.hexa` docstring.
+   - 트랙 B (CLI driver re-targeting): `self/main.hexa::cmd_run` 을 (i) `bin/hexa-run-native` 로직 inline (aprime_cc / hexa build / 실행) (ii) absorbed-verb sub-script 들을 compiled-binary 로 빌드 후 `cmd_run` 대신 그것을 spawn. 18 call site 전수 검토 필요.
+
+**Phase 1 권고**:
+
+surgical deletion 은 트랙 B (CLI driver re-targeting) 가 별도 multi-cycle 작업이므로, 본 Phase 1 commit 직후 **트랙 A 단독 진행이 안전하지 않음** — 트랙 A 만 삭제하면 `hexa lsp`·`hexa test`·`hexa qrng` 등 16 서브커맨드 즉시 break.
+
+**대안 — Phase 2 권고 (보수)**:
+
+(option A) **소스만 삭제, CLI 는 placeholder 화**: `hexa_full.hexa` 등 트랙 A 파일 삭제 + `cmd_run` 을 "interpreter retired — use `hexa build` for scripting, or use the dedicated sub-binary" 메시지로 stub 화 (16 absorbed-verb 들은 functionality 일시 손실 — 개별 sub-binary 재라우팅 후속 cycle).
+
+(option B) **placeholder 만, 소스 보존**: 트랙 A 보존, `cmd_run` 에 deprecation warning 추가 + `hexa run` 만 tier-1/2 native 로 라우팅. 트랙 B 완주 후 트랙 A 일괄 삭제.
+
+(option C) **즉시 트랙 A 삭제 + 트랙 B 회기 추적**: 트랙 A 삭제, `cmd_run` 은 "interp retired" 메시지 emit + exit 1. 16 absorbed-verb 들은 functionality 일시 손실, 후속 cycle 에서 sub-binary 빌드 + main.hexa 재라우팅. **clean break — 가장 강한 신호**.
+
+본 Phase 1 = mapping 만. Phase 2 옵션 선택은 다음 cycle (또는 orchestrator 지시).
+
