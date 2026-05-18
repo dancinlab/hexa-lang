@@ -512,8 +512,140 @@ let t8ok = m8h == 0.0 && m8x == 0.0 && m8g == 0.0
 if t8ok { println("PASS  F-RFC043-AGTAPE-RESID-EQ") }
 else     { println("FAIL  F-RFC043-AGTAPE-RESID-EQ") }
 
-if t1ok && t2ok && t3ok && t4ok && t5ok && t6ok && t7ok && t8ok {
-    println("ALL PASS  ag_tape byte-identical (7 layers + chain + fan-in + residual)")
+// ── Test 9: multi-head RoPE composite (ag_rope_mh) ──────────────────────
+// q[T·nheads·hd] rotated per (t,head) row with p=t. Reference = manual
+// per-row loop of the verified single-row nn_rope_apply_fwd/bwd (the
+// decoder block's exact q_scratch pattern). Falsifier
+// F-RFC043-AGTAPE-ROPEMH-EQ.
+println("-- Test 9: multi-head RoPE  q[T,nheads,hd]  --")
+let mT = 2
+let mNH = 2
+let mHD = 4
+let mQlen = mT * mNH * mHD
+let mq = t_zeros(mQlen)
+let mcos = t_zeros(mT * mHD)
+let msin = t_zeros(mT * mHD)
+let mseed = t_zeros(mQlen)
+let mut e9 = 0
+while e9 < mQlen {
+    t_set(mq, e9, to_float(e9 - 8) * 0.05 + 0.1)
+    t_set(mseed, e9, to_float((e9 * 3) % 7 - 3) * 0.029)
+    e9 = e9 + 1
+}
+let mut e9b = 0
+while e9b < mT * mHD {
+    t_set(mcos, e9b, 0.6 + to_float(e9b % 4) * 0.07)
+    t_set(msin, e9b, 0.4 - to_float(e9b % 3) * 0.05)
+    e9b = e9b + 1
+}
+// reference: per (t,head) row copy → nn_rope_apply_fwd(p=t) → write back
+let mqoR = t_zeros(mQlen)
+let mrow = t_zeros(mHD)
+let mrout = t_zeros(mHD)
+let mut rt9 = 0
+while rt9 < mT {
+    let mut rh9 = 0
+    while rh9 < mNH {
+        let bb = (rt9 * mNH + rh9) * mHD
+        let mut cc = 0
+        while cc < mHD {
+            t_set(mrow, cc, t_get(mq, bb + cc))
+            cc = cc + 1
+        }
+        nn_rope_apply_fwd(mrow, mcos, msin, mrout, rt9, mHD)
+        let mut cc2 = 0
+        while cc2 < mHD {
+            t_set(mqoR, bb + cc2, t_get(mrout, cc2))
+            cc2 = cc2 + 1
+        }
+        rh9 = rh9 + 1
+    }
+    rt9 = rt9 + 1
+}
+let mdqR = t_zeros(mQlen)
+let mut rt9b = 0
+while rt9b < mT {
+    let mut rh9b = 0
+    while rh9b < mNH {
+        let bb = (rt9b * mNH + rh9b) * mHD
+        let mut cc = 0
+        while cc < mHD {
+            t_set(mrow, cc, t_get(mseed, bb + cc))
+            cc = cc + 1
+        }
+        nn_rope_apply_bwd(mrow, mcos, msin, mrout, rt9b, mHD)
+        let mut cc2 = 0
+        while cc2 < mHD {
+            t_set(mdqR, bb + cc2, t_get(mrout, cc2))
+            cc2 = cc2 + 1
+        }
+        rh9b = rh9b + 1
+    }
+    rt9b = rt9b + 1
+}
+t_free(mrow)
+t_free(mrout)
+// tape
+let t9 = ag_t_begin(2)
+let mqoT = ag_rope_mh(t9, mq, mcos, msin, mT, mNH, mHD)
+ag_backward_reg(t9, mqoT, mseed)
+let mdqT = ag_grad(t9, mq)
+let m9o = agt_maxdiff(mqoR, mqoT, mQlen)
+let m9q = agt_maxdiff(mdqR, mdqT, mQlen)
+print("  max|Δ q_out|="); print(m9o)
+print(" dq="); println(m9q)
+ag_t_free_state(t9)
+ag_t_free_reg(t9)
+ag_t_end(t9)
+let t9ok = m9o == 0.0 && m9q == 0.0
+if t9ok { println("PASS  F-RFC043-AGTAPE-ROPEMH-EQ") }
+else     { println("FAIL  F-RFC043-AGTAPE-ROPEMH-EQ") }
+
+// ── Test 10: last-position slice gather (ag_slice) ──────────────────────
+// out = X[off:off+len]; bwd scatters seed into grad[X] at the window,
+// rest zero. Falsifier F-RFC043-AGTAPE-SLICE-EQ.
+println("-- Test 10: slice  zr = X[(T-1)d:]  --")
+let sXlen = 12
+let sLen = 4
+let sOff = sXlen - sLen           // last "position" window
+let sX = t_zeros(sXlen)
+let sSeed = t_zeros(sLen)
+let mut e10 = 0
+while e10 < sXlen {
+    t_set(sX, e10, to_float(e10) * 0.07 - 0.3)
+    e10 = e10 + 1
+}
+let mut e10b = 0
+while e10b < sLen {
+    t_set(sSeed, e10b, to_float(e10b + 1) * 0.11)
+    e10b = e10b + 1
+}
+let sOutR = t_zeros(sLen)
+let sdXR = t_zeros(sXlen)
+let mut e10c = 0
+while e10c < sLen {
+    t_set(sOutR, e10c, t_get(sX, sOff + e10c))
+    t_set(sdXR, sOff + e10c, t_get(sSeed, e10c))
+    e10c = e10c + 1
+}
+let t10 = ag_t_begin(1)
+let sOutT = ag_slice(t10, sX, sOff, sLen, sXlen)
+ag_backward_reg(t10, sOutT, sSeed)
+let sdXT = ag_grad(t10, sX)
+let m10o = agt_maxdiff(sOutR, sOutT, sLen)
+let m10x = agt_maxdiff(sdXR, sdXT, sXlen)
+print("  max|Δ out|="); print(m10o)
+print(" dX(scatter)="); println(m10x)
+ag_t_free_state(t10)
+ag_t_free_reg(t10)
+ag_t_end(t10)
+let t10ok = m10o == 0.0 && m10x == 0.0
+if t10ok { println("PASS  F-RFC043-AGTAPE-SLICE-EQ") }
+else      { println("FAIL  F-RFC043-AGTAPE-SLICE-EQ") }
+
+if t1ok && t2ok && t3ok && t4ok && t5ok && t6ok && t7ok && t8ok
+   && t9ok && t10ok {
+    println("ALL PASS  ag_tape byte-identical (7 layers + chain + fan-in + residual + rope_mh + slice)")
 } else {
     println("ALL FAIL  ag_tape plumbing regression")
 }
