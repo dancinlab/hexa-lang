@@ -8,13 +8,18 @@
 > 흡수)을 **사용**해 산출. comb 는 소비자이지 EDA 흡수 주체 아님
 > (hexa-native · 실제 fab/FPGA 비목표; T3 = 설계만).
 >
-> 현 단계: **정초 완료** (RFC 057 + falsifier F1–F5 + 딥리서치 2건) →
-> 다음 = T1 hex NoC 사이클 시뮬 (F1/F2, modern node).
+> 현 단계: **STAND-ALONE CLOSURE 도달** (2026-05-18) — T1 + T2 sim + 5
+> falsifier verdict 모두 land. F1 fabric cycle-accurate N=7 = **honest
+> refutation** (goal '입증or동일엄밀도 반증' 의 반증 path 만족, RFC 057
+> §5 Hales caveat 실측 확인). 외부의존 항목 (T2 tapeout routed P&R · T3
+> 물리설계) 은 `~/core/hexa-arch` 의 chip 도메인으로 **typed-interface
+> 핸드오프** (RFC 002 schema_version 1.0). 단독 SSOT = `comb/CLOSURE.md`.
 >
-> 상태: **DRAFT** · 2026-05-18 · RFC 057 확정 · 4축 전개 + 딥리서치 2건 완료
-> (B = backbone 정리앵커 · C = motivation radix-중립 · A = DE-SCOPED WALL).
-> SSOT label. flame(`stdlib/flame/`) · forge(`self/forge/`) 와 형제 레벨의
-> 독립 아키텍처 R&D 트랙. 루트 직속 배치 (stdlib 도 GPU 런타임도 아님).
+> 상태: **CLOSED (stand-alone scope)** · 2026-05-18 · RFC 057 확정 · 4축
+> 전개 + 딥리서치 2건 + T1A 해석 + T2 sim 8/8 closed-form + same-N=7
+> cycle-accurate fabric refutation + cross-PDK synth (SKY130 1.516×).
+> flame(`stdlib/flame/`) · forge(`self/forge/`) 와 형제 레벨의 독립
+> 아키텍처 R&D 트랙. 루트 직속 배치 (stdlib 도 GPU 런타임도 아님).
 
 ---
 

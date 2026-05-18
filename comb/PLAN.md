@@ -238,3 +238,22 @@
   → comb-internal F1-full = FALSIFIED at this test point; 더 큰 N
     또는 production-grade sim 이 verdict 를 flip 할 가능성 명시
     (`d4_vs_d6_fabric_compare.md` §Same-N=7 fair comparison).
+- 2026-05-18 — **comb 완료 closure 작성** (`comb/CLOSURE.md`). 5
+  falsifier 종합 verdict 표 + track-level closure status + handoff
+  summary (hexa-arch[chip] 가 comb 으로부터 inherit 하는 inputs ·
+  comb 가 receive 받기로 기대하는 outputs) + "comb 완료" 정의 명시.
+  Verdict 요약:
+    F1   MIXED — closed-form 8/8 PASS · cycle-accurate FAIL @ N=7
+                 (honest refutation, goal '입증or동일엄밀도 반증' 의
+                  반증 path 만족; authoritative = hexa-arch §9)
+    F2   PARTIAL — synth area 1.516× confirmed · routed deferred
+    F3   OUT OF COMB SCOPE — Axis-C lowering separate RFC
+    F4   ✅ PASS by axis-A DE-SCOPED WALL (3 × HARD_WALL)
+    F5   ✅ PASS by audit — every perf claim B1/B2/B3 anchored
+  Track closure: T1 ✅ · T2 sim ✅ via refutation · T2 synth ✅ ·
+  T2 tapeout ⏸ handoff · T3 ⏸ delegated.
+  comb 단독 산출물 모두 land · 외부의존 항목은 typed-interface 핸드오프
+  (RFC 002 schema_version 1.0 pin) 와 re-entry condition 으로 기록.
+  본 entry = comb stand-alone scope closure marker. 후속 comb-side
+  작업은 scope-extension (신규 falsifier · 신규 test point · 신규
+  axis lowering) — 본 RFC 057 scope closure 는 아님.

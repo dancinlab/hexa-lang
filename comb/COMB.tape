@@ -83,3 +83,21 @@
   decisions_cited = ["hexa-arch design.md D1 public-surface clean-room", "D2 typed-interface", "D7 producer-owned export path"]
   scope = "T1-B-full (modern-node wire model + router cost + traffic-driven latency/throughput). comb 는 소비자 (RFC 057 §6 T1; comb_ultimate.decouple)."
   consumed_by = ["comb/T1_experiment.md §hexa-arch[chip] 인터페이스", "comb/T1A_analytical.md §8 T1-B input contract", "comb/sim/README.md §T1-B-full input expectation"]
+
+# ─── stand-alone closure marker ──────────────────────────────────────
+
+@D comb_closure := "comb stand-alone scope CLOSURE — 2026-05-18" :: closure [d=2026-05-18 ok]
+  scope = "T1 + T2 sim + T2 RTL synth + 5 falsifier verdicts. External-dependency tracks (T2 tapeout routed P&R, T3 GDSII) HANDED OFF to ~/core/hexa-arch[chip] via typed-interface (rfc_002 schema_version 1.0)."
+  verdict_f1 = "MIXED — closed-form (non-contention) PASS 8/8 (workload_f1.hexa) · cycle-accurate fabric N=7 FAIL (d4 mesh wins all 4 workloads 1.5×–4.5× latency). Honest refutation path of goal '입증or동일엄밀도 반증'. Pre-registered Hales caveat (least-perimeter ≠ least-latency) realized empirically. Authoritative re-test = hexa-arch §9 larger-N sweep + multi-issue sink."
+  verdict_f2 = "PARTIAL — synth area SKY130 sky130_fd_sc_hd 1.516× confirmed (d6 93608.53 μm² / d4 61762.99 μm²); routed P&R DEFERRED to hexa-arch[chip] (ORFS bkml0mjdh ubu-2 incomplete; comb-side corroboration only)."
+  verdict_f3 = "OUT OF COMB SCOPE — fabric vs vN+HBM at workload level requires (1) PIM tile execution model (Axis-C lowering — separate RFC) (2) HBM3 chiplet baseline. RFC 057 §6 already notes 'C-axis dataflow lowering = separate RFC if pursued'."
+  verdict_f4 = "PASS — A-axis frozen as counter-evidence per RFC 057 §3 + axis_a_radix.md. 3 × HARD_WALL (radix economy Hayes 2001 · noise margin Maghami 2019 · EDA-cost empirics) kill multi-valued physical logic as differentiator."
+  verdict_f5 = "PASS by audit — every perf claim traces to B1 (Hales DCG 25 2001) / B2 (2D kissing#6 Conway-Sloane 1999) / B3 (Leighton 1992). RFC 057 §4: '6' = inherited convenience constant, NOT independently justified."
+  track_t1 = "CLOSED — T1A analytical + axis_{a,b,c} + RFC 057 + SURVEY"
+  track_t2_sim = "CLOSED via refutation — fabric_{mesh,hex}7_sustained_tb + d4_vs_d6_fabric_compare.md"
+  track_t2_synth = "CLOSED — synth_comparison + pdk_synthesis (FPGA + ASIC SKY130) + synth_netlists/router_{d4,d6}.sky130.v"
+  track_t2_tapeout = "DEFERRED — handoff to hexa-arch[chip]; rtl/orfs/sky130hd/router_d{4,6}/ inputs pre-staged (ns-correct SDC 5.0ns/200MHz)"
+  track_t3 = "DELEGATED — ~/core/hexa-arch chip domain (HANDOFF_TO_HEXA_ARCH.md)"
+  ssot = "comb/CLOSURE.md (closure statement) · comb/PLAN.md (chronological) · this entry (tape index)"
+  rule = "Subsequent comb-side work = scope-extension (new falsifier · new test point · new axis lowering), NOT closure of original RFC 057 scope."
+  ~> "comb_ultimate (궁극 최종골) — equal-rigor refutation path satisfied"
