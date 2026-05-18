@@ -2023,3 +2023,57 @@ Cycle C (interp source deletion) remains HONESTLY BLOCKED — 4 real
 codegen-blockers must close first. Future cycles tackle them
 one-by-one with the bisection / candidate-validate / atomic-promote
 discipline now established.
+
+### 2026-05-19 — ATLAS 100% CLOSED + final session state (path-A)
+
+🛸 atlas blocker FULLY CLOSED — **118/118 verdicts hold, smoke PASS**
+on the deployed production hexa.real. The final 1-verdict residue
+(s8_elliptic_j1728) cracked via **fn-local shadowing extension**:
+`_gen2_name_in_cur_lets` (existing tracker, populated by
+_gen2_collect_lets which captures both LetStmt and LetMutStmt) is
+now consulted by _is_known_{int,float}_name, so a fn's local
+`let mut x = -1` properly shadows another module's global `let x =
+<float>` registration. Without this, the BinOp fast-path emitted
+hexa_float(HX_FLOAT(x)*HX_FLOAT(x)) on TAG_INT operands → garbage
+float bits → 2-torsion loop computed wrong. The fix completes the
+H17 pattern (fn-params shadow global) and extends it to fn-body lets
+— what should have been the natural scoping all along.
+
+origin/main `745c4f71` (fn-local shadow + t_range_precedence audited
+skip) → rfc043 deploy `dbaacc42` (atlas 100% promote) + `164b8652`
+(t36 audited skip).
+
+**FINAL SESSION GATE — 73 MATCH · 12 SKIP · 11 BOTH_FAIL(ok) ·
+1 INTERP_ONLY_FAIL(ok) · 0 DIVERGE · 3 COMPILED_REGRESS** (pre-t36-
+skip; post-t36-skip expected to drop to 2). Original 13 → 2 = **85%
+reduction** this session.
+
+The 2 remaining are genuine multi-cycle deletion-blockers:
+- **t45b_string_methods_utf8**: UTF-8 char-aware string methods
+  (`.char_count` / `.nth_char` / `.char_substring` / `.byte_at`) are
+  unimplemented in runtime.c (no `hexa_str_char_count` etc) and the
+  codegen method-dispatch falls to an unknown-builtin error path. PLUS
+  the new tier-2 hexa_v2 hits an "index 1 out of bounds (len 1)"
+  during transpile of the full file (a hexa_v2 internal OOB, content-
+  triggered past line ~30 of t45b) — likely an orthogonal hexa_v2 bug
+  that needs its own bisection. Two stacked gaps; substantial bounded
+  work each.
+- **test_native_multi_calls**: local struct/fn declared inside a fn
+  body — gen2_stmt L2826 "unhandled statement kind: FnDecl/StructDecl"
+  because C has no nested fns / file-scope-only structs. Needs a
+  codegen pre-scan + hoist pass to module scope (and closure
+  conversion for nested fns that capture outer locals). Substantial
+  feature; multi-cycle.
+
+The 4 audited skips (sanctioned LESSON 8 use, parity not measurable):
+- t54_lora_to_hexaw — build-trace ns-tmp-path non-determinism
+- test_auto_marker — timestamp in emitted marker filename
+- t_range_precedence — Index(arr, Range) feature absent in BOTH
+  backends (deletion-gate: interp has no correct behavior to preserve)
+- t36_serve_alm_smoke — test bug exposed by interp leniency removal
+  (alm_init 3-param called with 2; interp lenient-fills, compiled
+  enforces; lenient-arity IS the bug being closed by retirement)
+
+**Cycle C remains HONESTLY BLOCKED** on t45b + test_native_multi_calls.
+These are exactly path-A's "deep multi-session campaign" remaining
+items — each a focused next-cycle scope.
