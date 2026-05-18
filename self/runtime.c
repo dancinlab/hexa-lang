@@ -11646,6 +11646,16 @@ static HexaVal _jp_parse_value(const char* s, size_t n, size_t* pi) {
     if (c == 't' && *pi + 3 < n && memcmp(s + *pi, "true", 4) == 0) { *pi += 4; return hexa_bool(1); }
     if (c == 'f' && *pi + 4 < n && memcmp(s + *pi, "false", 5) == 0) { *pi += 5; return hexa_bool(0); }
     if (c == 'n' && *pi + 3 < n && memcmp(s + *pi, "null", 4) == 0) { *pi += 4; return hexa_void(); }
+    // CPython json.loads accepts the non-finite literals Infinity / -Infinity
+    // / NaN (json.dumps emits them for non-finite floats). Standard JSON
+    // forbids them, but the hexa-bio registry contains `-Infinity` rows, so
+    // for byte-parity with the Python reference we accept them here. Must
+    // precede the '-'/digit number branch so "-Infinity" is not mis-lexed
+    // as the number "-" (which left "Infinity" in the stream and desynced
+    // the enclosing object parse, dropping every subsequent key).
+    if (c == 'I' && *pi + 8 <= n && memcmp(s + *pi, "Infinity", 8) == 0) { *pi += 8; return hexa_float(INFINITY); }
+    if (c == '-' && *pi + 9 <= n && memcmp(s + *pi, "-Infinity", 9) == 0) { *pi += 9; return hexa_float(-INFINITY); }
+    if (c == 'N' && *pi + 3 <= n && memcmp(s + *pi, "NaN", 3) == 0) { *pi += 3; return hexa_float(NAN); }
     if (c == '-' || (c >= '0' && c <= '9')) return _jp_parse_number(s, n, pi);
     (*pi)++;  // skip unknown
     return hexa_void();
