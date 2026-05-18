@@ -2561,6 +2561,78 @@ fn cmd_run(file, extra_args) {
 let mut cmd_run_no_exit_mode = false
 let mut cmd_run_last_rc = 0
 
+fn _batch_run_one(file) {
+    // R7 interp-retire — MEASURED CUTOVER, batch path (2026-05-18,
+    // user-approved). Mirrors cmd_run_user_direct's compile-then-exec
+    // but RETURNS rc instead of exit(rc): the batch loop must keep
+    // going across per-file failures. The interp branches honor the
+    // caller's cmd_run_no_exit_mode (cmd_batch sets it). This whole
+    // duplicate path collapses into cmd_run_user_direct once the interp
+    // source is deleted (Cycle C); the duplication is transitional.
+    if env_var("HEXA_FORCE_INTERP") == "1" {
+        if env_var("HEXA_INTERP_QUIET") != "1" {
+            eprintln("hexa: HEXA_FORCE_INTERP=1 — tree-walking interpreter (retiring, R7).")
+        }
+        cmd_run_last_rc = 0
+        cmd_run(file, [])
+        return cmd_run_last_rc
+    }
+    let __inst_r = install_dir_from_argv0()
+    let mut hexa_bin = ""
+    if len(__inst_r) > 0 {
+        let cand = __inst_r + "/hexa"
+        if file_exists(cand) { hexa_bin = cand }
+    }
+    if len(hexa_bin) == 0 { hexa_bin = av[0] }
+    let mut _cache_dir = env_var("HOME") + "/.hexa-cache"
+    if len(env_var("HOME")) == 0 { _cache_dir = "./.hexa-cache" }
+    let _mk = exec("mkdir -p " + shq(_cache_dir) + " 2>/dev/null")
+    let tmpbin = _cache_dir + "/hexa_batch." + to_string(mono_ns())
+    let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(tmpbin) + " 2>&1; echo \"__HEXA_BRC__=$?\""
+    let bout = exec(bcmd)
+    let bmark = "__HEXA_BRC__="
+    let bml = len(bmark)
+    let mut bmi = -1
+    let mut bsj = len(bout) - bml
+    while bsj >= 0 {
+        if bout.substring(bsj, bsj + bml) == bmark { bmi = bsj; bsj = -1 } else { bsj = bsj - 1 }
+    }
+    let mut brc = 1
+    if bmi >= 0 {
+        let mut rs = bout.substring(bmi + bml, len(bout))
+        let rsl = len(rs)
+        if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" { rs = rs.substring(0, rsl - 1) }
+        brc = parse_int_str(rs)
+    }
+    if brc == 0 && file_exists(tmpbin) {
+        let out = exec(shq(tmpbin) + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+        let marker = "__HEXA_SHIM_RC__="
+        let mlen = len(marker)
+        let mut midx = -1
+        let mut sj = len(out) - mlen
+        while sj >= 0 {
+            if out.substring(sj, sj + mlen) == marker { midx = sj; sj = -1 } else { sj = sj - 1 }
+        }
+        if midx >= 0 {
+            let body = out.substring(0, midx)
+            let rc_str = out.substring(midx + mlen, len(out))
+            print(body)
+            let mut rs2 = rc_str
+            let rsl2 = len(rs2)
+            if rsl2 > 0 && rs2.substring(rsl2 - 1, rsl2) == "\n" { rs2 = rs2.substring(0, rsl2 - 1) }
+            return parse_int_str(rs2)
+        }
+        print(out)
+        return 0
+    }
+    eprintln("hexa: `hexa build " + file + "` failed (compile-parity gap) — falling back to the retiring interpreter.")
+    eprintln("hexa:   transitional only (R7 measured cutover); please report the parity gap.")
+    if env_var("HEXA_INTERP_QUIET") != "1" { eprintln(bout) }
+    cmd_run_last_rc = 0
+    cmd_run(file, [])
+    return cmd_run_last_rc
+}
+
 fn cmd_batch(files) {
     let n = len(files)
     if n == 0 {
@@ -2574,9 +2646,7 @@ fn cmd_batch(files) {
     cmd_run_no_exit_mode = true
     while bi < n {
         let f = files[bi]
-        cmd_run_last_rc = 0
-        cmd_run(f, [])
-        let rc = cmd_run_last_rc
+        let rc = _batch_run_one(f)
         // Per-script frame on stderr — keeps stdout clean for JSON-emitting scripts.
         eprintln("===BATCH_RESULT=== file=" + f + " rc=" + to_string(rc))
         if rc == 0 {
