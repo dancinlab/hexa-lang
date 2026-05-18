@@ -354,6 +354,10 @@ fn cg_string_sym(name) {
     if name == "str_to_lower"    { return "rt_str_to_lower" }
     if name == "str_char_at"     { return "hexa_str_char_at" }
     if name == "str_char_code_at"{ return "hexa_str_char_code_at" }
+    if name == "str_char_count"    { return "hexa_str_char_count" }
+    if name == "str_nth_char"      { return "hexa_str_nth_char" }
+    if name == "str_char_substring"{ return "hexa_str_char_substring" }
+    if name == "str_byte_at"       { return "hexa_str_byte_at" }
     if name == "str_parse_int"   { return "hexa_str_parse_int" }
     if name == "str_parse_float" { return "hexa_str_parse_float" }
     if name == "str_bytes"       { return "hexa_str_bytes" }
@@ -2857,6 +2861,23 @@ fn gen2_method_builtin(obj_expr, method, args) {
     if method == "chars" {
         return cg_string_sym("str_chars") + "(" + obj_expr + ")"
     }
+    // 2026-05-19 parity-gate t45b — UTF-8 char-aware string methods.
+    // hexa strings are byte-sequenced UTF-8; these are codepoint-indexed
+    // (vs char_at/byte_at which are byte-indexed). interp does the
+    // codepoint walking via the tree-walker; deletion-gate requires
+    // the compiled path to match.
+    if method == "char_count" {
+        return cg_string_sym("str_char_count") + "(" + obj_expr + ")"
+    }
+    if method == "nth_char" {
+        return cg_string_sym("str_nth_char") + "(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
+    if method == "char_substring" {
+        return cg_string_sym("str_char_substring") + "(" + obj_expr + ", " + gen2_expr(args[0]) + ", " + gen2_expr(args[1]) + ")"
+    }
+    if method == "byte_at" {
+        return cg_string_sym("str_byte_at") + "(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
     if method == "contains" {
         return "hexa_contains_poly(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
     }
@@ -2867,6 +2888,12 @@ fn gen2_method_builtin(obj_expr, method, args) {
         return cg_string_sym("str_to_upper") + "(" + obj_expr + ")"
     }
     if method == "to_lower" {
+        return cg_string_sym("str_to_lower") + "(" + obj_expr + ")"
+    }
+    if method == "to_uppercase" {
+        return cg_string_sym("str_to_upper") + "(" + obj_expr + ")"
+    }
+    if method == "to_lowercase" {
         return cg_string_sym("str_to_lower") + "(" + obj_expr + ")"
     }
     if method == "split" {
@@ -3153,10 +3180,15 @@ fn gen2_method_builtin(obj_expr, method, args) {
         return cg_string_sym("str_center") + "(" + obj_expr + ", " + gen2_expr(args[0]) + ", " + gen2_expr(args[1]) + ")"
     }
     if method == "slice" {
-        return "hexa_array_slice(" + obj_expr + ", " + gen2_expr(args[0]) + ", " + gen2_expr(args[1]) + ")"
+        // 1-arg `.slice(start)` → end defaults to len(obj). Runtime handles
+        // HX_IS_VOID(end) as "to end" (parity gap t45b — was OOB at codegen
+        // because args[1] was accessed unconditionally).
+        let _slice_end = if len(args) >= 2 { gen2_expr(args[1]) } else { "hexa_void()" }
+        return "hexa_array_slice(" + obj_expr + ", " + gen2_expr(args[0]) + ", " + _slice_end + ")"
     }
     if method == "slice_fast" {
-        return "hexa_array_slice_fast(" + obj_expr + ", " + gen2_expr(args[0]) + ", " + gen2_expr(args[1]) + ")"
+        let _sfe = if len(args) >= 2 { gen2_expr(args[1]) } else { "hexa_void()" }
+        return "hexa_array_slice_fast(" + obj_expr + ", " + gen2_expr(args[0]) + ", " + _sfe + ")"
     }
     if method == "to_string" {
         return "hexa_to_string(" + obj_expr + ")"
@@ -4903,6 +4935,12 @@ fn gen2_expr(node) {
             if method == "to_lower" {
                 return cg_string_sym("str_to_lower") + "(" + obj + ")"
             }
+            if method == "to_uppercase" {
+                return cg_string_sym("str_to_upper") + "(" + obj + ")"
+            }
+            if method == "to_lowercase" {
+                return cg_string_sym("str_to_lower") + "(" + obj + ")"
+            }
             if method == "split" {
                 return cg_string_sym("str_split") + "(" + obj + ", " + gen2_expr(node.args[0]) + ")"
             }
@@ -5050,10 +5088,12 @@ fn gen2_expr(node) {
                 return cg_string_sym("str_lines") + "(" + obj + ")"
             }
             if method == "slice" {
-                return "hexa_array_slice(" + obj + ", " + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
+                let _sl_end = if len(node.args) >= 2 { gen2_expr(node.args[1]) } else { "hexa_void()" }
+                return "hexa_array_slice(" + obj + ", " + gen2_expr(node.args[0]) + ", " + _sl_end + ")"
             }
             if method == "slice_fast" {
-                return "hexa_array_slice_fast(" + obj + ", " + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
+                let _slf_end = if len(node.args) >= 2 { gen2_expr(node.args[1]) } else { "hexa_void()" }
+                return "hexa_array_slice_fast(" + obj + ", " + gen2_expr(node.args[0]) + ", " + _slf_end + ")"
             }
             if method == "to_string" {
                 return "hexa_to_string(" + obj + ")"

@@ -4051,13 +4051,30 @@ static void _hexa_init_byte_str_cache(void) {
     _cached_byte_str_ready = 1;
 }
 
+// Forward decl — defined further down. Needed here because hexa_str_chars
+// (immediately below) uses it to walk UTF-8 codepoints.
+static int _hx_utf8_cp_len(unsigned char b);
+
 HexaVal hexa_str_chars(HexaVal s) {
     HexaVal arr = hexa_array_new();
     if (!HX_IS_STR(s)) return arr;
-    if (!_cached_byte_str_ready) _hexa_init_byte_str_cache();
-    const unsigned char* p = (const unsigned char*)HX_STR(s);
-    for (; *p; p++) {
-        arr = hexa_array_push(arr, _cached_byte_str[*p]);
+    // 2026-05-19 parity-gate t45b: walk UTF-8 codepoints so
+    // `"한글hi".chars().len() == 4` (4 codepoints), not 8 (bytes).
+    // ASCII behavior is unchanged (codepoint == byte for ASCII). For
+    // raw byte iteration use the separate `.bytes()` / hexa_str_bytes
+    // path. The old byte-level chars() was the buggy-oracle behavior
+    // that interp doesn't have — deletion-gate alignment.
+    const char* p = HX_STR(s);
+    int64_t n = (int64_t)HX_STRLEN(s);
+    int64_t i = 0;
+    while (i < n) {
+        int cp = _hx_utf8_cp_len((unsigned char)p[i]);
+        char buf[5] = {0};
+        int j = 0;
+        while (j < cp && i + j < n) { buf[j] = p[i + j]; j++; }
+        buf[j] = 0;
+        arr = hexa_array_push(arr, hexa_str(buf));
+        i += cp;
     }
     return arr;
 }
@@ -4175,6 +4192,95 @@ HexaVal hexa_str_char_code_at(HexaVal s, HexaVal idx) {
     if (i < 0) i += n;  // 음수 wraparound — char_at 과 align
     if (i < 0 || i >= n) return hexa_int(-1);
     return hexa_int((int64_t)(unsigned char)HX_STR(s)[i]);
+}
+
+// ── UTF-8 char-aware string methods (parity-gate t45b: 2026-05-19) ──
+// hexa strings are byte-sequenced UTF-8. `.char_at(i)` / `.byte_at(i)` /
+// `.char_code_at(i)` are byte-indexed; the methods below are codepoint-
+// indexed for true UTF-8 char-aware iteration (한글, emoji, etc.). The
+// runtime was missing these (interp does the codepoint walking via
+// tree-walker); deletion-gate requires the compiled path to match.
+static int _hx_utf8_cp_len(unsigned char b) {
+    if (b < 0x80) return 1;
+    if ((b & 0xE0) == 0xC0) return 2;
+    if ((b & 0xF0) == 0xE0) return 3;
+    if ((b & 0xF8) == 0xF0) return 4;
+    return 1;  // invalid lead byte — advance by 1 (don't infinite-loop)
+}
+
+// Count UTF-8 codepoints. `"한글hi".char_count() == 4` etc.
+HexaVal hexa_str_char_count(HexaVal s) {
+    if (!HX_IS_STR(s)) return hexa_int(0);
+    const char* p = HX_STR(s);
+    int64_t n = (int64_t)HX_STRLEN(s);
+    int64_t count = 0;
+    int64_t i = 0;
+    while (i < n) {
+        i += _hx_utf8_cp_len((unsigned char)p[i]);
+        count++;
+    }
+    return hexa_int(count);
+}
+
+// Codepoint-indexed nth char as a 1-codepoint string (1..4 bytes).
+// Returns "" for negative or out-of-range n.
+HexaVal hexa_str_nth_char(HexaVal s, HexaVal nv) {
+    if (!HX_IS_STR(s)) return hexa_str("");
+    int64_t target = HX_INT(nv);
+    if (target < 0) return hexa_str("");
+    const char* p = HX_STR(s);
+    int64_t sn = (int64_t)HX_STRLEN(s);
+    int64_t i = 0, k = 0;
+    while (i < sn) {
+        int cp = _hx_utf8_cp_len((unsigned char)p[i]);
+        if (k == target) {
+            char buf[5] = {0};
+            int j = 0;
+            while (j < cp && i + j < sn) { buf[j] = p[i + j]; j++; }
+            buf[j] = 0;
+            return hexa_str(buf);
+        }
+        i += cp;
+        k++;
+    }
+    return hexa_str("");  // OOB
+}
+
+// Codepoint-indexed substring [start..end). `"한글hi".char_substring(0, 2) == "한글"`.
+HexaVal hexa_str_char_substring(HexaVal s, HexaVal startv, HexaVal endv) {
+    if (!HX_IS_STR(s)) return hexa_str("");
+    int64_t cs = HX_INT(startv);
+    int64_t ce = HX_INT(endv);
+    if (cs < 0) cs = 0;
+    if (ce <= cs) return hexa_str("");
+    const char* p = HX_STR(s);
+    int64_t sn = (int64_t)HX_STRLEN(s);
+    int64_t i = 0, k = 0;
+    int64_t bs = -1, be = sn;
+    while (i < sn) {
+        if (k == cs && bs < 0) bs = i;
+        if (k == ce) { be = i; break; }
+        i += _hx_utf8_cp_len((unsigned char)p[i]);
+        k++;
+    }
+    if (bs < 0) return hexa_str("");
+    if (be > sn) be = sn;
+    if (be <= bs) return hexa_str("");
+    int64_t len = be - bs;
+    char* buf = (char*)malloc(len + 1);
+    if (!buf) return hexa_str("");
+    int64_t j = 0;
+    while (j < len) { buf[j] = p[bs + j]; j++; }
+    buf[len] = 0;
+    return hexa_str_own(buf);
+}
+
+// Byte at offset i (0..255), -1 if out-of-range. Alias of char_code_at
+// (same byte-indexed semantics) — separate name because `.byte_at` is
+// the semantically clearer surface for raw-byte access alongside the
+// codepoint-aware char_count / nth_char / char_substring above.
+HexaVal hexa_str_byte_at(HexaVal s, HexaVal idx) {
+    return hexa_str_char_code_at(s, idx);
 }
 
 // ── Array operations ─────────────────────────────────
@@ -7296,9 +7402,32 @@ HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end) {
 }
 
 HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end) {
+    // 2026-05-19 parity-gate t45b — polymorphic slice + 1-arg form.
+    // (1) HX_IS_VOID(end) ⇒ 1-arg `.slice(start)` form — default end to
+    // len(obj). (2) HX_IS_STR(obj) ⇒ string slice via byte-indexed
+    // substring (mirrors interp's `.slice` on strings). Array path
+    // unchanged for the common case.
+    if (HX_IS_STR(arr)) {
+        int n = (int)HX_STRLEN(arr);
+        int a = (int)HX_INT(start);
+        int b = HX_IS_VOID(end) ? n : (int)HX_INT(end);
+        if (a < 0) a += n;
+        if (b < 0) b += n;
+        if (a < 0) a = 0;
+        if (b > n) b = n;
+        if (a > b) return hexa_str("");
+        int len = b - a;
+        char* buf = (char*)malloc(len + 1);
+        if (!buf) return hexa_str("");
+        int j = 0;
+        while (j < len) { buf[j] = HX_STR(arr)[a + j]; j++; }
+        buf[len] = 0;
+        return hexa_str_own(buf);
+    }
     if (!HX_IS_ARRAY(arr)) return hexa_array_new();
     int n = HX_ARR_LEN(arr);
-    int a = (int)HX_INT(start), b = (int)HX_INT(end);
+    int a = (int)HX_INT(start);
+    int b = HX_IS_VOID(end) ? n : (int)HX_INT(end);
     if (a < 0) a = 0;
     if (b > n) b = n;
     if (a > b) a = b;
