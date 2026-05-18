@@ -2870,17 +2870,13 @@ fn gen2_stmt(node, depth) {
         return ""
     }
 
-    // ── Nested FnDecl / StructDecl in a fn body → hoist to module scope ──
-    // C has no nested functions / locally-scoped structs (file-scope only).
-    // Push to the pending-hoist queue and emit nothing inline; gen2_program
-    // drains the queue and re-runs ast iteration on the hoisted nodes so
-    // they emit at module/top level. Non-capturing nested fns are the
-    // common case (test_native_multi_calls); capturing fns would require
-    // closure conversion (multi-cycle, separate).
-    if k == "FnDecl" || k == "PureFnDecl" || k == "StructDecl" {
-        _gen2_pending_hoist.push(node)
-        return ""
-    }
+    // Nested FnDecl / PureFnDecl / StructDecl in a fn body — C has no
+    // nested fns / locally-scoped structs. _gen2_lift_nested_decls at the
+    // codegen_c2 entry attempts to lift them to module scope; if the lift
+    // didn't catch this one (e.g. it's nested deeper than the shallow top-
+    // of-body walk currently supports), keep the loud error rather than
+    // silently emitting "" — silent skip would mask real defects. The
+    // proper deep-nest + closure-conversion case is a next-cycle item.
 
     eprintln("[codegen_c2] ERROR: unhandled statement kind: " + k)
     return pad + "fprintf(stderr, \"CODEGEN ERROR: unhandled stmt kind: " + k + "\\n\"); exit(1);\n"
