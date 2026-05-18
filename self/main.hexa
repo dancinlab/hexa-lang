@@ -3460,19 +3460,72 @@ if len(av) < 3 {
         // stdlib/quantum/quantum.hexa parses argv subcommand (status/selftest/
         // chsh/iit/qrng/rqaoa/ctx/.../mirror-bench) and invokes the matching
         // module via subprocess. 38 module dirs, 62k LoC, all parse-clean.
+        //
+        // R7 track B (2026-05-18, cycle 2): preferred path = standalone
+        // compiled bin/hexa-qmirror binary built by `hexa build
+        // stdlib/quantum/quantum.hexa`. Same spawn-and-exit pattern as
+        // qrng (cycle 1). Falls back to legacy cmd_run() on the .hexa
+        // source when the binary is absent (transitional;
+        // g_inbox_dual_track until R7 source deletion).
         let __inst_qm = install_dir_from_argv0()
-        let mut qm_script = "stdlib/quantum/quantum.hexa"
-        if len(__inst_qm) > 0 {
-            let inst_path = __inst_qm + "/stdlib/quantum/quantum.hexa"
-            if file_exists(inst_path) { qm_script = inst_path }
-        }
         let mut qm_args = []
         let mut qmi = 3
         while qmi < len(av) {
             qm_args.push(av[qmi])
             qmi = qmi + 1
         }
-        cmd_run(qm_script, qm_args)
+        let mut qm_bin = ""
+        if len(__inst_qm) > 0 {
+            let inst_bin = __inst_qm + "/bin/hexa-qmirror"
+            if file_exists(inst_bin) { qm_bin = inst_bin }
+        }
+        if len(qm_bin) == 0 && file_exists("bin/hexa-qmirror") {
+            qm_bin = "bin/hexa-qmirror"
+        }
+        if len(qm_bin) > 0 {
+            let cli_q = shq(qm_bin)
+            let mut cmd = cli_q
+            let mut ai = 0
+            while ai < len(qm_args) {
+                let q = shq(qm_args[ai])
+                cmd = cmd + " " + q
+                ai = ai + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut si = len(out) - mlen
+            while si >= 0 {
+                if out.substring(si, si + mlen) == marker {
+                    midx = si
+                    si = -1
+                } else {
+                    si = si - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            let mut qm_script = "stdlib/quantum/quantum.hexa"
+            if len(__inst_qm) > 0 {
+                let inst_path = __inst_qm + "/stdlib/quantum/quantum.hexa"
+                if file_exists(inst_path) { qm_script = inst_path }
+            }
+            cmd_run(qm_script, qm_args)
+        }
     } else if is_absorbed_verb(sub) {
         // nexus absorption surface (2026-05-13 final consolidation):
         //

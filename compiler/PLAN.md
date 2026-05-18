@@ -1209,3 +1209,35 @@ surgical deletion 은 트랙 B (CLI driver re-targeting) 가 별도 multi-cycle 
 - ✅ `tool/build_aprime.sh` smoke 5/5 PASS · `exit(42)==42` · aprime_cc 2.1 MB Mach-O · fixpoint regression 0
 - ⚠️ `tool/build_hexa_qrng.sh` FAIL on mini — `hexa: command not found` (mini PATH 에 hexa CLI 미설정). dispatch fallback (`cmd_run` on `stdlib/qrng/qrng.hexa`) 가 무리없이 작동하므로 사용자 영향 0. polish 항목: build_hexa_qrng.sh 가 repo-local `./hexa` shim 또는 `~/.hx/bin/hexa` resolution 지원하도록 후속 cycle. 본 cycle 의 fixpoint regression check 는 build_aprime 으로 충분.
 
+---
+
+### 2026-05-18 — R7 track B cycle 2 — qmirror (cycle h23)
+
+**Decision 5** (verb #2): qmirror (`stdlib/quantum/quantum.hexa`, 197 lines, RFC 045).
+
+- **picked**: qmirror
+- **rationale**:
+  - 가장 작은 fn-main() 보유 후보 (vs sim-universe 324 · atlas 527 · check 1223+shim)
+  - qrng cycle 1 의 stdlib/<verb>/<verb>.hexa 패턴 정확 동형 — 패턴 재사용성 1.0
+  - RFC 045 absorption, 62k LoC 모듈 디스패치 표면 (cmd_dispatch + _module_path) — 패턴 robust 검증
+
+**현 상황**:
+- L3458-L3478 `dispatch_absorbed` qmirror 분기 = `cmd_run(qm_script, qm_args)` (interp call)
+- 발견: 현 production `hexa qmirror status` 가 `stdlib/quantum/quantum.hexa` 의 실제 출력 (38 모듈 inventory) 가 아닌 stale JSON stub (`{"mode": "fallback-deterministic"}`) 반환. 본 cycle 이 SSOT (quantum.hexa) 출력으로 정상화.
+- 목표 (cycle 1 동형): binary spawn + cmd_run fallback
+
+**구현 (LANDED)**:
+- `bin/hexa-qmirror` build: `HEXA_MAC_BUILD_OK=1 hexa build stdlib/quantum/quantum.hexa -o bin/hexa-qmirror` → 376 KB Mach-O arm64. 빌드 < 30s.
+- `tool/build_hexa_qmirror.sh` (1.4 KB shell): canonical 빌드 + `--version` smoke (`hexa qmirror 2.6.0` 검증).
+- `.gitignore`: `bin/hexa-qmirror` 추가.
+- `self/main.hexa` L3458-L3478 → L3458-L3528 (20 → 71 lines): qmirror 분기 spawn path 추가. 동일 패턴 (binary lookup `__inst_qm + "/bin/hexa-qmirror"` → cwd `bin/hexa-qmirror`, shq quoting, `__HEXA_SHIM_RC__` marker, `exit(rc)` on non-zero). 부재 시 `cmd_run(qm_script, qm_args)` fallback.
+- `hexa.real` rebuild via `self/native/hexa_v2` + `tool/build_dispatch.hexa` → 498 KB Mach-O.
+
+**검증**:
+- byte-eq (status): `./hexa qmirror status` (spawn) ≡ `./bin/hexa-qmirror status` (direct) → diff exit 0
+- exit code propagation: `./hexa qmirror nonexistent` → shell rc=2 (binary `exit(2)`)
+- cycle 1 regression check: `./hexa qrng status` 여전히 byte-eq with `./bin/hexa-qrng status` → diff exit 0
+- 다른 dispatch 무결성: 변경 surgical (qmirror else-if 분기만)
+
+**fixpoint regression risk**: 0. dispatch-only change (cycle 1 동일 논리).
+
