@@ -113,40 +113,35 @@ RFC 034 autograd (✅) · 040 device-farr (✅)        ← 언어 표현력 (dow
 
 ## 현재 정직한 위치 (g3 — over-claim 금지)
 
-**self-host 축 CLOSED · 인터프리터 실삭제는 gate ① 잔여로 미실행.** bit-stable self-host
-fixpoint 도달 — aprime_cc 가 인터프리터·hexa_v2 없이 자기 자신을 bit-for-bit 재현. 단
-"모든 .hexa 네이티브"는 gate ① 잔여(11/44)로 미완 → 인터프리터 소스 삭제 아직 불가.
+**self-host 축 + 전 tier-1 codegen-correctness 축 CLOSED.** bit-stable self-host fixpoint
+도달, tier-1(aprime_cc) 이 구현된 언어 범위에서 codegen-complete. 인터프리터 소스 실삭제
+(R7)만 남음 — hard-to-reverse 라 user 확인 후.
 
-self-host codegen-correctness 버그 #23~#29 (7개) 누적 종결:
+tier-1 codegen-correctness 버그 #23~#40 누적 종결 (self-host 7 + 정정 6 + 신기능 전스택):
 
-| # | self-host 버그 | 상태 | main |
-|---|----------------|------|------|
-| #23 | `index_set` 반환값 drop → stale array header | ✅ FIXED | `cceb0351` |
-| #24 | `_patch_loop_sentinels` sibling-loop continue mis-bind | ✅ FIXED | `9223fe4a` |
-| #25 | match-as-expression arm 결과값 drop | ✅ FIXED | `1734f890` |
-| #26 | `_arm64_lower_func` MFunc field × fn-arena 경계 | ✅ FIXED | `77b78b31` |
-| #27 | call-overflow region stride 8→16 (frame aliasing) | ✅ FIXED | `d81e2195` |
-| #28 | enum value `==` TAG_MAP pointer-identity | ✅ FIXED | `fa210c54` |
-| #29 | bitwise `& \| ^ << >>` 가 add 로 miscompile | ✅ FIXED | `93ee4ecf` |
+| 군 | 항목 | main |
+|---|------|------|
+| self-host fixpoint 7 | #23 index_set · #24 loop-sentinel · #25 match-as-expr · #26 MFunc-arena · #27 call-overflow stride · #28 enum-eq · #29 bitwise-as-add | …`93ee4ecf` |
+| codegen 정정 | atlas-verifier(index_of+bool-tag) · 메모리 builtin ×14 · @link/extern+*T 파서 · int↔float typecheck · math annotations · void-call type_of | …`63d2511c` |
+| 신기능 전스택 | try/catch/throw · closure C1+C2+C3+capture-scope | `8f45d3d3`·`c5c3e9f8`·`f4f1225e` |
 
-- **★ BIT-STABLE SELF-HOST FIXPOINT REACHED**: `ap1f → flat → ap2f → flat → ap3f`,
-  `ap1f.s == ap2f.s == ap3f.s` byte-identical (231,125-line asm, md5 `18df90eb…`),
-  각 generation 이 38-file/22,227-line flattened compiler 를 HX2001 0 / map-key 0 으로
-  컴파일. 독립 검증 (clean origin/main).
-- **gate ①**: 33/44 MATCH (aprime_cc tier-1 ≡ hexa-build tier-2 oracle). frontend-CGFAIL
-  6 + env-resource 2 제외 시 effective ≈ 33/36 (92%).
-- **잔여 gap (인터프리터 삭제 차단)**: ① 3 atlas-verifier MISMATCH (`doctrine`·
-  `tecsl_verify`·`wave3` — verifier scan predicate wrong-value codegen) · ② 6 frontend-
-  CGFAIL (`extern fn`·`@select` annotation-arg·try/catch·type-infer — codegen 진입 전
-  abort). 이 둘이 닫혀야 "모든 .hexa 네이티브" 성립.
+- **★ BIT-STABLE SELF-HOST FIXPOINT**: `ap1f → flat → ap2f → flat → ap3f`,
+  `ap1f.s == ap2f.s == ap3f.s` byte-identical. aprime_cc 가 인터프리터·hexa_v2 없이
+  자기 자신을 bit-for-bit 재현 (전 cycle 보존 재검증, 최신 253,049 lines).
+- **gate ① 38/44**. 잔여 6 non-MATCH 는 **100% non-tier-1**:
+  - `atlas_verify` — tier-2 codegen 잔여 발산 (tier-1 8/8 PASS; 별도 작업)
+  - `t35`·`t36`·`t37` — ORAFAIL-class (tier-2 oracle 자체가 빌드/실행 실패: FFI dlsym·clang)
+  - `repo_taxonomy_audit`·`t34_net_listen` — env-resource (OOM·socket)
+  → tier-2 가 정확히 처리하는 모든 .hexa 를 tier-1 도 정확히 처리. **tier-1 codegen
+    gap = 0.**
 - **R7 deletion gate**: ②(CLI compiled) ③(atlas SIGSEGV) ④(module_loader interp-free)
-  ✅ · ①(coverage ≥ interp) 🔄 미완. 인터프리터 소스 삭제는 gate ① close 후 — 현재는
-  `폐기예정` 거버넌스 표시 + 사용 금지 directive (`@D g_interp_deprecated`).
+  ✅ · ①(coverage ≥ interp) — tier-1 codegen gap 0 이므로 사실상 충족. 인터프리터 소스
+  실삭제만 잔여 (`@D g_interp_deprecated`).
 
-> 이 GOAL 은 north-star — self-host 축은 측정으로 CLOSED (fixpoint byte-identical),
-> "인터프리터 폐기" 전체는 gate ① 잔여로 미완 — 정직히 분리 기록. 측정값 SSOT 는
-> `compiler/PLAN.md` 진행 로그. 인터프리터는 이미 사용 금지(`hexa run` 금지, 검증은
-> compiled path)이나 *소스 삭제*는 gate ① 후 — 미실행으로 기록.
+> 이 GOAL 은 north-star — self-host 축 + tier-1 codegen-correctness 축 모두 측정으로
+> CLOSED (fixpoint byte-identical · gate ① 38/44, 잔여 전부 non-tier-1). "인터프리터
+> 폐기" 의 마지막 = 인터프리터 소스 실삭제 (R7), hard-to-reverse 라 user 확인 후 실행.
+> 측정값 SSOT 는 `compiler/PLAN.md`.
 
 ---
 
