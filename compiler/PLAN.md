@@ -1334,3 +1334,39 @@ surgical deletion 은 트랙 B (CLI driver re-targeting) 가 별도 multi-cycle 
 
 **R7 track B 진척**: 5/16 (qrng · qmirror · sim-universe · convergence · test_runner).
 
+---
+
+### 2026-05-18 — R7 track B cycle 6 — check / invariant_check (cycle h27 · 3rd shim-cluster)
+
+**Decision 9** (verb #6): check (`self/invariant_check.hexa`, 1223 lines, 0 use statements).
+
+- **picked**: check
+- **rationale**:
+  - cycle 4 (convergence) rename 패턴이 다시 적용 가능 — `main_check()` (L1161) + 모듈-끝 `main_check()` 호출 (L1223) → `fn main` + 호출 제거. 패턴 재사용성 1.0.
+  - lsp 는 stdin/stdout streaming (LSP 무한 loop) 라 `exec()` buffered 패턴과 호환 안 됨 — 별도 streaming spawn 패턴 필요. cycle 6 에서 deferred.
+  - 0 `use` → atlas-class flatten gap 영향 없음
+
+**구현 (LANDED)**:
+- `self/invariant_check.hexa`: `fn main_check()` → `fn main()` rename (L1161) + L1223 module-level call 제거 (R7 explainer comment).
+- `bin/hexa-check` build → 412 KB Mach-O. `tool/build_hexa_check.sh` + 사소 fixture smoke (`fn nothing() {}` → "0 @invariant" 또는 "OK: all invariants passed").
+- `self/main.hexa` L3188-L3207 → L3188-L3260 (20 → 73 lines): check 분기 spawn path + cmd_run fallback. dispatch pre-validation (exit 1 on no-arg) 보존.
+- `.gitignore`: `bin/hexa-check`.
+- `hexa.real` rebuild.
+
+**검증**:
+- byte-eq (invariant fixture): `./hexa check <fixture>` (spawn) ≡ `./bin/hexa-check <fixture>` → diff exit 0, rc=0 양쪽
+- no-arg pre-validation: 에러 + cmd_help() 출력 (기존 동작 보존)
+- cycle 1-5 regression: qrng + qmirror + sim-universe + convergence + test 모두 정상
+
+**fixpoint regression risk**: 0.
+
+**R7 track B 진척**: 6/16 (qrng · qmirror · sim-universe · convergence · test · check). 잔여 13 verbs 중:
+- ⚠️ lsp (1006L · streaming pattern 필요 — deferred)
+- ⚠️ atlas (cross-directory flatten gap — deferred)
+- 🔍 batch / bench / init / verify / calc (inline 또는 embedded — 별도 분석)
+
+**잔여 종류별 작업 분류 (cycle 7+ 후보)**:
+- streaming spawn: lsp (stdin/stdout JSON-RPC, exec() buffered 패턴 불가, posix_spawnp + fd inherit 필요)
+- cross-directory flatten: atlas (별도 compiler 진단 cycle — hexa build 의 module_loader transitive flatten gap)
+- inline/embedded 분석: batch (av 순회 inline) · bench (어떤 모듈? 미확인) · init (tool/init_project.hexa MISSING — 다른 path?) · verify (atlas verifier embedded) · calc (TECS-L embedded)
+
