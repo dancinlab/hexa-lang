@@ -3143,8 +3143,29 @@ if len(av) < 3 {
         }
     } else if sub == "lsp" || sub == "--lsp" {
         // LSP server entry — editors/vscode/extension.js spawns `hexa --lsp`.
-        // Forward to interp interpreter running self/lsp.hexa (run_lsp loop).
-        // cmd_run handles interp locate + stdin fd 3 plumbing + rc propagation.
+        //
+        // R7 track B (2026-05-18, cycle 10): preferred path = standalone
+        // compiled bin/hexa-lsp binary. Unlike other track B verbs which
+        // use exec()-buffered spawn, LSP needs unbuffered bidirectional
+        // stdin/stdout streaming (JSON-RPC). exec_replace() replaces this
+        // process image with the binary so editor pipes are inherited
+        // verbatim — no popen buffering, no __HEXA_RC sentinel interleave.
+        // Falls back to legacy cmd_run() when the binary is absent.
+        let __inst_lsp = install_dir_from_argv0()
+        let mut lsp_bin = ""
+        if len(__inst_lsp) > 0 {
+            let inst_bin = __inst_lsp + "/bin/hexa-lsp"
+            if file_exists(inst_bin) { lsp_bin = inst_bin }
+        }
+        if len(lsp_bin) == 0 && file_exists("bin/hexa-lsp") {
+            lsp_bin = "bin/hexa-lsp"
+        }
+        if len(lsp_bin) > 0 {
+            // exec_replace does not return on success — process becomes
+            // the LSP binary with stdin/stdout/stderr fully inherited.
+            let _ = exec_replace(shq(lsp_bin))
+            // Only reached if execvp failed — fall through to cmd_run.
+        }
         cmd_run("self/lsp.hexa", [])
     } else if sub == "build" {
         if len(av) < 4 {

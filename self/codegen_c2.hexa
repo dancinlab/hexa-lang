@@ -4347,6 +4347,11 @@ fn gen2_expr(node) {
                 // body resolves (it expects the unmapped __builtin_ name).
                 if name == "time_now_ms" || name == "now_ms" || name == "timestamp_ms" || name == "__builtin_time_now_ms" { return "hexa_time_ms()" }
                 if name == "input"     { return "hexa_input(hexa_str(\"\"))" }
+                // R7 track B cycle 10: `readline()` reads one stdin line.
+                // Mirrors interp `input("")` (hexa_full.hexa L13737) — both
+                // route to hexa_input which getline()s + strips trailing \n,
+                // returning "" on EOF. Needed by self/lsp.hexa JSON-RPC loop.
+                if name == "readline"  { return "hexa_input(hexa_str(\"\"))" }
                 if name == "random"    { return "hexa_random()" }
                 // stdlib/os/proc — 0-arg fork helpers (RFC sshd-forking-daemon)
                 if name == "proc_fork"          { return "hexa_proc_fork()" }
