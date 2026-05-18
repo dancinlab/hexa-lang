@@ -1036,5 +1036,9 @@ HexaVal farr_rmsnorm_mh_gpu(HexaVal x, HexaVal g, HexaVal y, HexaVal xn,
 HexaVal farr_attn_dt_fwd_gpu(HexaVal Q, HexaVal K, HexaVal V, HexaVal P,
                              HexaVal CTX, HexaVal T, HexaVal nh,
                              HexaVal nkv, HexaVal hd);                          /* runtime.c — mk2-C4 attn-dt fwd (9-arg direct) */
+HexaVal farr_attn_dt_bwd_gpu(HexaVal Q, HexaVal K, HexaVal V, HexaVal P,
+                             HexaVal dctx, HexaVal dQ, HexaVal dK,
+                             HexaVal dV, HexaVal T, HexaVal nh,
+                             HexaVal nkv, HexaVal hd);                          /* runtime.c — mk2-C4-bwd attn-dt bwd (12-arg direct) */
 
 #endif /* HEXA_RUNTIME_H */

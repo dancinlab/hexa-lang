@@ -668,8 +668,13 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             let dQ = t_zeros(qlen)
             let dK = t_zeros(kvlen)
             let dV = t_zeros(kvlen)
-            _ag_attn_dt_bwd(Q, K, Vv, P, og, dQ, dK, dV,
-                            T, nh, nkv, hd)
+            // mk2-C4-bwd: forge-route the bwd. 3-kernel pipeline
+            // (dP_row precompute → dS in place + dQ → output-centric
+            // dV/dK). dQ/dK/dV freshness contract preserved (just
+            // allocated with t_zeros above). dt_sqrt scale computed
+            // device-side. byte-eq mirror gated by cheap A100 oracle.
+            let _ = farr_attn_dt_bwd_gpu(Q, K, Vv, P, og, dQ, dK, dV,
+                                         T, nh, nkv, hd)
             _ag_reg_acc(tape, Q, dQ, qlen)
             _ag_reg_acc(tape, K, dK, kvlen)
             _ag_reg_acc(tape, Vv, dV, kvlen)

@@ -11415,6 +11415,95 @@ static int _hx_farr_attn_dt_fwd_cpu(int64_t q_id, int64_t k_id, int64_t v_id,
     return 0;
 }
 
+// mk2-C4-bwd (2026-05-19): GQA attention-dt bwd CPU mirror. Byte-eq
+// with ag_tape.hexa::_ag_attn_dt_bwd host loop. dQ/dK/dV are FRESH
+// t_zeros from the tape-replay site (`else if kind == ag_k_attn_dt()`
+// at ag_tape.hexa:655) so we treat them as zero-init accumulators —
+// no read-modify-write hazard. Returns 0 ok / -1 err.
+static int _hx_farr_attn_dt_bwd_cpu(int64_t q_id, int64_t k_id, int64_t v_id,
+                                    int64_t p_id, int64_t dctx_id,
+                                    int64_t dq_id, int64_t dk_id, int64_t dv_id,
+                                    int64_t T, int64_t nh, int64_t nkv,
+                                    int64_t hd) {
+    if (q_id < 0 || q_id >= _hx_farr_count) return -1;
+    if (k_id < 0 || k_id >= _hx_farr_count) return -1;
+    if (v_id < 0 || v_id >= _hx_farr_count) return -1;
+    if (p_id < 0 || p_id >= _hx_farr_count) return -1;
+    if (dctx_id < 0 || dctx_id >= _hx_farr_count) return -1;
+    if (dq_id < 0 || dq_id >= _hx_farr_count) return -1;
+    if (dk_id < 0 || dk_id >= _hx_farr_count) return -1;
+    if (dv_id < 0 || dv_id >= _hx_farr_count) return -1;
+    if (T <= 0 || nh <= 0 || nkv <= 0 || hd <= 0) return -1;
+    if (nh % nkv != 0) return -1;
+    HexaFarrEntry* qe = &_hx_farr_table[q_id];
+    HexaFarrEntry* ke = &_hx_farr_table[k_id];
+    HexaFarrEntry* ve = &_hx_farr_table[v_id];
+    HexaFarrEntry* pe = &_hx_farr_table[p_id];
+    HexaFarrEntry* de = &_hx_farr_table[dctx_id];
+    HexaFarrEntry* dqe= &_hx_farr_table[dq_id];
+    HexaFarrEntry* dke= &_hx_farr_table[dk_id];
+    HexaFarrEntry* dve= &_hx_farr_table[dv_id];
+    if (!qe->buf || !ke->buf || !ve->buf || !pe->buf || !de->buf ||
+        !dqe->buf || !dke->buf || !dve->buf) return -1;
+    int64_t nq = T * nh  * hd;
+    int64_t nk = T * nkv * hd;
+    int64_t np = nh * T * T;
+    if (qe->len < nq || ke->len < nk || ve->len < nk ||
+        pe->len < np || de->len < nq ||
+        dqe->len < nq || dke->len < nk || dve->len < nk) return -1;
+    const double* Q = qe->buf;
+    const double* K = ke->buf;
+    const double* V = ve->buf;
+    const double* P = pe->buf;
+    const double* dctx = de->buf;
+    double* dQ = dqe->buf;
+    double* dK = dke->buf;
+    double* dV = dve->buf;
+    int64_t n_rep = nh / nkv;
+    int64_t d     = nh * hd;
+    double scale = 1.0 / _hx_dt_sqrt_d((double)hd);
+    /* Per-row scratch dP_row[T]; freed at end (matches hexa t_free). */
+    double* dP_row = (double*)malloc((size_t)T * sizeof(double));
+    if (!dP_row) return -1;
+    for (int64_t hh = 0; hh < nh; hh++) {
+        int64_t kvh = hh / n_rep;
+        for (int64_t i = 0; i < T; i++) {
+            int64_t L = i + 1;
+            for (int64_t j = 0; j < L; j++) {
+                double acc = 0.0;
+                for (int64_t c = 0; c < hd; c++) {
+                    acc = acc + dctx[i*d + hh*hd + c]
+                              * V[(j*nkv + kvh)*hd + c];
+                }
+                dP_row[j] = acc;
+            }
+            double sdot = 0.0;
+            for (int64_t j2 = 0; j2 < L; j2++) {
+                sdot = sdot + P[(hh*T + i)*T + j2] * dP_row[j2];
+            }
+            for (int64_t j3 = 0; j3 < L; j3++) {
+                double pij = P[(hh*T + i)*T + j3];
+                for (int64_t c = 0; c < hd; c++) {
+                    int64_t dv_idx = (j3*nkv + kvh)*hd + c;
+                    dV[dv_idx] = dV[dv_idx] + pij * dctx[i*d + hh*hd + c];
+                }
+            }
+            for (int64_t j4 = 0; j4 < L; j4++) {
+                double dS = P[(hh*T + i)*T + j4]
+                          * (dP_row[j4] - sdot) * scale;
+                for (int64_t c2 = 0; c2 < hd; c2++) {
+                    int64_t dq_idx = (i*nh + hh)*hd + c2;
+                    int64_t dk_idx = (j4*nkv + kvh)*hd + c2;
+                    dQ[dq_idx] = dQ[dq_idx] + dS * K[(j4*nkv + kvh)*hd + c2];
+                    dK[dk_idx] = dK[dk_idx] + dS * Q[(i*nh + hh)*hd + c2];
+                }
+            }
+        }
+    }
+    free(dP_row);
+    return 0;
+}
+
 static int64_t _hx_farr_silu_gate_cpu(int64_t a_id, int64_t b_id,
                                       int64_t n) {
     if (a_id < 0 || a_id >= _hx_farr_count) return -1;
@@ -11660,6 +11749,49 @@ HexaVal farr_attn_dt_fwd_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
     return hexa_int(rc);
 #else
     return hexa_int(_hx_farr_attn_dt_fwd_cpu(q_id, k_id, v_id, p_id, ctx_id,
+                                             T, nh, nkv, hd));
+#endif
+}
+
+// mk2-C4-bwd (2026-05-19): attn-dt bwd forge-route. Bare 12-arg
+// function. dQ/dK/dV must be fresh t_zeros at the call site (the
+// tape replay site in ag_tape.hexa allocates them inline, so this
+// contract holds). 3-kernel device path (dP_row precompute → dS in
+// place + dQ → output-centric dV + dK) — full byte-eq mirror in
+// runtime_cuda.c.
+#ifdef HEXA_CUDA
+extern int _hx_cuda_farr_attn_dt_bwd_gpu(int64_t q_id, int64_t k_id,
+                                         int64_t v_id, int64_t p_id,
+                                         int64_t dctx_id, int64_t dq_id,
+                                         int64_t dk_id, int64_t dv_id,
+                                         int64_t T, int64_t nh,
+                                         int64_t nkv, int64_t hd);
+#endif
+HexaVal farr_attn_dt_bwd_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
+                             HexaVal p_v, HexaVal dctx_v, HexaVal dq_v,
+                             HexaVal dk_v, HexaVal dv_v, HexaVal T_v,
+                             HexaVal nh_v, HexaVal nkv_v, HexaVal hd_v) {
+    int64_t q_id   = hexa_as_num(q_v);
+    int64_t k_id   = hexa_as_num(k_v);
+    int64_t v_id   = hexa_as_num(v_v);
+    int64_t p_id   = hexa_as_num(p_v);
+    int64_t dctx_id= hexa_as_num(dctx_v);
+    int64_t dq_id  = hexa_as_num(dq_v);
+    int64_t dk_id  = hexa_as_num(dk_v);
+    int64_t dv_id  = hexa_as_num(dv_v);
+    int64_t T      = hexa_as_num(T_v);
+    int64_t nh     = hexa_as_num(nh_v);
+    int64_t nkv    = hexa_as_num(nkv_v);
+    int64_t hd     = hexa_as_num(hd_v);
+#ifdef HEXA_CUDA
+    if (T <= 0 || nh <= 0 || nkv <= 0 || hd <= 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_attn_dt_bwd_gpu(q_id, k_id, v_id, p_id, dctx_id,
+                                           dq_id, dk_id, dv_id,
+                                           T, nh, nkv, hd);
+    return hexa_int(rc);
+#else
+    return hexa_int(_hx_farr_attn_dt_bwd_cpu(q_id, k_id, v_id, p_id, dctx_id,
+                                             dq_id, dk_id, dv_id,
                                              T, nh, nkv, hd));
 #endif
 }

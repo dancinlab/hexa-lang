@@ -1539,6 +1539,156 @@ __global__ void _hx_cuda_kern_attn_dt_fwd(const double* __restrict__ Q,
     }
 }
 
+/* mk2-C4-bwd (2026-05-19): GQA attention-dt bwd. Three kernels with
+ * a shared scratch buffer (dP_row[nh·T·T], allocated by the host
+ * wrapper).
+ *   Step 1 (dProw kernel) — per (hh,i,j): dP_row[hh,i,j] = Σ_c
+ *     dctx[i,hh,c]·V[j,kvh,c], j < L only.
+ *   Step 2 (dS+dQ kernel) — per (hh,i): sdot=Σ_j P·dP_row; then for
+ *     j<L overwrite dP_row[hh,i,j] := P·(dP_row[hh,i,j]-sdot)·scale
+ *     (this IS dS); then dQ[i,hh,c2] = Σ_j dS·K[j,kvh,c2]. Each
+ *     thread owns its dQ[(i*nh+hh)*hd + c2] cell — no race.
+ *   Step 3a (dV kernel) — per (j,kvh,c): dV[j,kvh,c] = Σ_{hh in
+ *     group, i ≥ j} P[hh,i,j]·dctx[i,hh,c]. Output-centric strict
+ *     sequential = byte-eq with CPU canonical (hh,i) order.
+ *   Step 3b (dK kernel) — per (j,kvh,c): dK[j,kvh,c] = Σ_{hh in
+ *     group, i ≥ j} dS[hh,i,j]·Q[i,hh,c]. (dS lives in dP_row
+ *     scratch after step 2.)
+ * dQ/dK/dV are assumed FRESH t_zeros at the call site (the tape
+ * replay site allocates them inline). */
+__global__ void _hx_cuda_kern_attn_dt_bwd_dProw(
+    const double* __restrict__ V,
+    const double* __restrict__ dctx,
+    double* __restrict__ dProw,
+    int64_t T, int64_t nh, int64_t nkv, int64_t hd) {
+    int64_t flat   = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t total  = nh * T * T;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    int64_t n_rep  = nh / nkv;
+    int64_t d      = nh * hd;
+    for (; flat < total; flat += stride) {
+        int64_t hh = flat / (T * T);
+        int64_t r  = flat - hh * T * T;
+        int64_t i  = r / T;
+        int64_t j  = r - i * T;
+        if (j > i) { dProw[flat] = 0.0; continue; }
+        int64_t kvh = hh / n_rep;
+        double acc = 0.0;
+        for (int64_t c = 0; c < hd; c++) {
+            acc = __dadd_rn(acc,
+                            __dmul_rn(dctx[i*d + hh*hd + c],
+                                      V[(j*nkv + kvh)*hd + c]));
+        }
+        dProw[flat] = acc;
+    }
+}
+
+__global__ void _hx_cuda_kern_attn_dt_bwd_dS_dQ(
+    const double* __restrict__ Q,
+    const double* __restrict__ K,
+    const double* __restrict__ P,
+    double* __restrict__ dProw,    /* in: dP_row, out: dS (same buffer) */
+    double* __restrict__ dQ,
+    int64_t T, int64_t nh, int64_t nkv, int64_t hd) {
+    int64_t flat   = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t total  = nh * T;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    int64_t n_rep  = nh / nkv;
+    /* Compute scale device-side (no cross-TU call to host static
+     * `_hx_dt_sqrt_d`). 25 Newton iters × per-thread ≈ 300K ops total
+     * at d768·12L — negligible. */
+    double scale = __ddiv_rn(1.0, _hx_cuda_dt_sqrt_d((double)hd));
+    for (; flat < total; flat += stride) {
+        int64_t hh = flat / T;
+        int64_t i  = flat - hh * T;
+        int64_t kvh = hh / n_rep;
+        int64_t L = i + 1;
+        /* sdot = Σ_j P[hh,i,j] · dP_row[hh,i,j], j∈[0,L) */
+        double sdot = 0.0;
+        for (int64_t j = 0; j < L; j++) {
+            sdot = __dadd_rn(sdot,
+                             __dmul_rn(P[(hh*T + i)*T + j],
+                                       dProw[(hh*T + i)*T + j]));
+        }
+        /* in-place: dProw[hh,i,j] := P · (dProw - sdot) · scale = dS */
+        for (int64_t j = 0; j < L; j++) {
+            double v = dProw[(hh*T + i)*T + j] - sdot;
+            dProw[(hh*T + i)*T + j] = __dmul_rn(
+                __dmul_rn(P[(hh*T + i)*T + j], v), scale);
+        }
+        /* dQ[i,hh,c2] = Σ_j dS[hh,i,j] · K[j,kvh,c2]
+         * CPU canonical: outer j, inner c2 — accumulator per c2.
+         * Reproduce: keep separate dQ acc per c2 (registers), j outer. */
+        /* For each c2 ∈ [0..hd), the strict j-ascending fold matches
+         * CPU exactly. (kvh constant for this thread.) */
+        for (int64_t c2 = 0; c2 < hd; c2++) {
+            double acc = 0.0;
+            for (int64_t j = 0; j < L; j++) {
+                acc = __dadd_rn(acc,
+                                __dmul_rn(dProw[(hh*T + i)*T + j],
+                                          K[(j*nkv + kvh)*hd + c2]));
+            }
+            dQ[(i*nh + hh)*hd + c2] = acc;
+        }
+    }
+}
+
+__global__ void _hx_cuda_kern_attn_dt_bwd_dV(
+    const double* __restrict__ P,
+    const double* __restrict__ dctx,
+    double* __restrict__ dV,
+    int64_t T, int64_t nh, int64_t nkv, int64_t hd) {
+    int64_t flat   = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t total  = T * nkv * hd;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    int64_t n_rep  = nh / nkv;
+    int64_t d      = nh * hd;
+    for (; flat < total; flat += stride) {
+        int64_t j   = flat / (nkv * hd);
+        int64_t r   = flat - j * (nkv * hd);
+        int64_t kvh = r / hd;
+        int64_t c   = r - kvh * hd;
+        int64_t hh0 = kvh * n_rep;
+        double acc = 0.0;
+        /* CPU canonical order: hh ascending, then i ascending (i ≥ j) */
+        for (int64_t hh = hh0; hh < hh0 + n_rep; hh++) {
+            for (int64_t i = j; i < T; i++) {
+                acc = __dadd_rn(acc,
+                                __dmul_rn(P[(hh*T + i)*T + j],
+                                          dctx[i*d + hh*hd + c]));
+            }
+        }
+        dV[(j*nkv + kvh)*hd + c] = acc;
+    }
+}
+
+__global__ void _hx_cuda_kern_attn_dt_bwd_dK(
+    const double* __restrict__ Q,
+    const double* __restrict__ dS,    /* same buffer as dProw after step 2 */
+    double* __restrict__ dK,
+    int64_t T, int64_t nh, int64_t nkv, int64_t hd) {
+    int64_t flat   = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t total  = T * nkv * hd;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    int64_t n_rep  = nh / nkv;
+    for (; flat < total; flat += stride) {
+        int64_t j   = flat / (nkv * hd);
+        int64_t r   = flat - j * (nkv * hd);
+        int64_t kvh = r / hd;
+        int64_t c   = r - kvh * hd;
+        int64_t hh0 = kvh * n_rep;
+        double acc = 0.0;
+        for (int64_t hh = hh0; hh < hh0 + n_rep; hh++) {
+            for (int64_t i = j; i < T; i++) {
+                acc = __dadd_rn(acc,
+                                __dmul_rn(dS[(hh*T + i)*T + j],
+                                          Q[(i*nh + hh)*hd + c]));
+            }
+        }
+        dK[(j*nkv + kvh)*hd + c] = acc;
+    }
+}
+
 /* silu-gate: O[i] = (A[i]·σ(A[i]))·B[i], σ=1/(1+dt_exp(-x)).
  * dt_exp-faithful (NOT _hx_cuda_sigmoid_d's libm exp). Op order
  * byte-identical to CPU _hx_farr_silu_gate_cpu / ag_tape
@@ -2035,6 +2185,147 @@ int _hx_cuda_farr_attn_dt_fwd_gpu(int64_t q_id, int64_t k_id, int64_t v_id,
     }
     if (_d2h_out(p_id,   np) != 0) return -1;
     if (_d2h_out(ctx_id, nq) != 0) return -1;
+    return 0;
+}
+
+/* mk2-C4-bwd (2026-05-19): GQA attention-dt bwd forge-route. 3-kernel
+ * pipeline using a temporary dP_row[nh·T·T] scratch (reused as dS
+ * after step 2). dQ/dK/dV must be FRESH t_zeros at the call site —
+ * the tape replay in ag_tape.hexa allocates them with t_zeros and the
+ * kernel writes acc directly (no read-modify-write). All outputs go
+ * through _d2h_out → DEVICE_KEEP honoured. */
+int _hx_cuda_farr_attn_dt_bwd_gpu(int64_t q_id, int64_t k_id, int64_t v_id,
+                                  int64_t p_id, int64_t dctx_id,
+                                  int64_t dq_id, int64_t dk_id, int64_t dv_id,
+                                  int64_t T, int64_t nh, int64_t nkv,
+                                  int64_t hd) {
+    if (q_id < 0 || k_id < 0 || v_id < 0 || p_id < 0 || dctx_id < 0 ||
+        dq_id < 0 || dk_id < 0 || dv_id < 0) {
+        fprintf(stderr, "[cuda] attn_dt_bwd: bad ids\n");
+        return -1;
+    }
+    if (T <= 0 || nh <= 0 || nkv <= 0 || hd <= 0) {
+        fprintf(stderr, "[cuda] attn_dt_bwd: bad dims T=%lld nh=%lld nkv=%lld hd=%lld\n",
+                (long long)T, (long long)nh, (long long)nkv, (long long)hd);
+        return -1;
+    }
+    if (nh % nkv != 0) {
+        fprintf(stderr, "[cuda] attn_dt_bwd: nh not multiple of nkv\n");
+        return -1;
+    }
+    if (q_id >= _hx_farr_count || k_id >= _hx_farr_count ||
+        v_id >= _hx_farr_count || p_id >= _hx_farr_count ||
+        dctx_id >= _hx_farr_count || dq_id >= _hx_farr_count ||
+        dk_id >= _hx_farr_count || dv_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] attn_dt_bwd: id out of range\n");
+        return -1;
+    }
+    int64_t nq = T * nh  * hd;
+    int64_t nk = T * nkv * hd;
+    int64_t np = nh * T * T;
+    if (_hx_farr_table[q_id].len    < nq ||
+        _hx_farr_table[k_id].len    < nk ||
+        _hx_farr_table[v_id].len    < nk ||
+        _hx_farr_table[p_id].len    < np ||
+        _hx_farr_table[dctx_id].len < nq ||
+        _hx_farr_table[dq_id].len   < nq ||
+        _hx_farr_table[dk_id].len   < nk ||
+        _hx_farr_table[dv_id].len   < nk) {
+        fprintf(stderr, "[cuda] attn_dt_bwd: host len mismatch\n");
+        return -1;
+    }
+    if (_h2d(q_id) != 0) return -1;
+    if (_h2d(k_id) != 0) return -1;
+    if (_h2d(v_id) != 0) return -1;
+    if (_h2d(p_id) != 0) return -1;
+    if (_h2d(dctx_id) != 0) return -1;
+    if (_ensure_dev_buf(dq_id, nq) != 0) return -1;
+    if (_ensure_dev_buf(dk_id, nk) != 0) return -1;
+    if (_ensure_dev_buf(dv_id, nk) != 0) return -1;
+    /* dP_row scratch (reused as dS after step 2) */
+    double* dProw = NULL;
+    cudaError_t er = cudaMalloc(&dProw, (size_t)np * sizeof(double));
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] attn_dt_bwd: dProw malloc failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    double* Q = g_slots[q_id].d_buf;
+    double* K = g_slots[k_id].d_buf;
+    double* V = g_slots[v_id].d_buf;
+    double* P = g_slots[p_id].d_buf;
+    double* dctx = g_slots[dctx_id].d_buf;
+    double* dQ = g_slots[dq_id].d_buf;
+    double* dK = g_slots[dk_id].d_buf;
+    double* dV = g_slots[dv_id].d_buf;
+    /* Step 1: dProw per (hh, i, j). nh·T·T threads. */
+    {
+        int64_t total = nh * T * T;
+        int block = 64;
+        int64_t need = (total + block - 1) / block;
+        int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+        _hx_cuda_kern_attn_dt_bwd_dProw<<<grid, block>>>(V, dctx, dProw,
+                                                         T, nh, nkv, hd);
+        er = cudaGetLastError();
+        if (er != cudaSuccess) {
+            fprintf(stderr, "[cuda] attn_dt_bwd dProw kernel failed: %s\n",
+                    cudaGetErrorString(er));
+            cudaFree(dProw);
+            return -1;
+        }
+    }
+    /* Step 2: dS in-place (overwrite dProw) + dQ. nh·T threads. */
+    {
+        int64_t total = nh * T;
+        int block = 64;
+        int64_t need = (total + block - 1) / block;
+        int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+        _hx_cuda_kern_attn_dt_bwd_dS_dQ<<<grid, block>>>(Q, K, P, dProw, dQ,
+                                                         T, nh, nkv, hd);
+        er = cudaGetLastError();
+        if (er != cudaSuccess) {
+            fprintf(stderr, "[cuda] attn_dt_bwd dS+dQ kernel failed: %s\n",
+                    cudaGetErrorString(er));
+            cudaFree(dProw);
+            return -1;
+        }
+    }
+    /* Step 3a: dV per (j, kvh, c). T·nkv·hd threads. */
+    {
+        int64_t total = T * nkv * hd;
+        int block = 64;
+        int64_t need = (total + block - 1) / block;
+        int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+        _hx_cuda_kern_attn_dt_bwd_dV<<<grid, block>>>(P, dctx, dV,
+                                                      T, nh, nkv, hd);
+        er = cudaGetLastError();
+        if (er != cudaSuccess) {
+            fprintf(stderr, "[cuda] attn_dt_bwd dV kernel failed: %s\n",
+                    cudaGetErrorString(er));
+            cudaFree(dProw);
+            return -1;
+        }
+    }
+    /* Step 3b: dK per (j, kvh, c). Same shape. */
+    {
+        int64_t total = T * nkv * hd;
+        int block = 64;
+        int64_t need = (total + block - 1) / block;
+        int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+        _hx_cuda_kern_attn_dt_bwd_dK<<<grid, block>>>(Q, dProw, dK,
+                                                      T, nh, nkv, hd);
+        er = cudaGetLastError();
+        if (er != cudaSuccess) {
+            fprintf(stderr, "[cuda] attn_dt_bwd dK kernel failed: %s\n",
+                    cudaGetErrorString(er));
+            cudaFree(dProw);
+            return -1;
+        }
+    }
+    cudaFree(dProw);
+    if (_d2h_out(dq_id, nq) != 0) return -1;
+    if (_d2h_out(dk_id, nk) != 0) return -1;
+    if (_d2h_out(dv_id, nk) != 0) return -1;
     return 0;
 }
 
