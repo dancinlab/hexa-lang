@@ -458,6 +458,18 @@ pub fn ag_rmsnorm_mh(tape: int, x: int, g: int, T: int, d: int) -> int {
 // copied into a hd-scratch (the primitive reads offset-0) — byte-eq
 // with the decoder block's per-head q_scratch RoPE. ids[q,cos,sin,
 // q_out] dims[T,nheads,hd]. One node; replay loops nn_rope_apply_bwd.
+// gap(d) FORGE SEAM (Decision 9): the byte-eq CPU per-(t,head) loop
+// below is the working compiled path. The forge GPU offload =
+// `farr_rope_gpu(q,cos,sin,T,nheads,hd)` (RFC 041 Phase B kernel; CPU
+// fallback `_hx_farr_rope_cpu` is BYTE-IDENTICAL to this loop). It is
+// interp-wired (hexa_full.hexa) + the codegen_c2.hexa builtin map is
+// added — but `hexa build` (tier-2 hexa_v2/hexa_cc.c) needs a compiler
+// BOOTSTRAP REBUILD to emit `hexa_farr_rope_gpu`, which is infra-
+// blocked (full flatten OOM on all hosts — see compiler/PLAN.md /
+// memory compiler-selfbuild-blockers). So the seam stays the
+// byte-eq CPU loop until a bootstrap rebuild is feasible; swapping
+// the loop for the one-line farr_rope_gpu call is then mechanical
+// (CPU fallback keeps 19/19 byte-eq; CUDA build = the gap(d) offload).
 pub fn ag_rope_mh(tape: int, q: int, cos_tab: int, sin_tab: int,
                   T: int, nheads: int, hd: int) -> int {
     let q_out = t_zeros(T * nheads * hd)
@@ -708,6 +720,9 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             let hd = _ag_get(tape, op, 11)
             let qlen = T * nheads * hd
             let og = _ag_reg_grad(tape, qo, qlen)
+            // gap(d) FORGE SEAM: byte-eq CPU loop (compiled path).
+            // forge offload = farr_rope_bwd_gpu(og,cs,sn,T,nheads,hd)
+            // — pending compiler bootstrap rebuild (see ag_rope_mh).
             let dq = t_zeros(qlen)
             let drow = t_zeros(hd)
             let dout = t_zeros(hd)

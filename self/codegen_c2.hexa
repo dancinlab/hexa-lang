@@ -4591,6 +4591,17 @@ fn gen2_expr(node) {
                 if name == "farr_apply_single_farr" {
                     return "hexa_farr_apply_single_farr(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
                 }
+                // RFC 041 Phase B forge GPU kernels (gap(d), Decision 9):
+                // compiled-path wiring (interp had these since Phase B;
+                // flame uses `hexa build` so the codegen must map them).
+                // CUDA build → __global__ kernel; else byte-identical
+                // _hx_farr_rope_cpu fallback.
+                if name == "farr_rope_gpu" {
+                    return "hexa_farr_rope_gpu(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
+                if name == "farr_rope_bwd_gpu" {
+                    return "hexa_farr_rope_bwd_gpu(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
             }
             if len(node.args) == 7 {
                 // feat/primitive-float-array — CNOT kernel.

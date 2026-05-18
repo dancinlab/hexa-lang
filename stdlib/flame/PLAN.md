@@ -1477,3 +1477,20 @@ gap(a)✅ gap(b)✅ gap(c)✅ gap(e)✅ · **gap(d)**: $0-prep ✅
 로 예측 confirm/falsify (**cost-bearing → user 승인 필요**;
 executing-actions-with-care + instrument-first + cost-ascending).
 $0 자율 surface 소진 — gap(d) closure 는 GPU-$ 사이클.
+
+**gap(d) Decision 9 측정 (user "go", 2026-05-18)**: $0 조사 결과
+forge host-loop 커널 **이미 존재** (RFC 041 Phase B, runtime_cuda.c
+rope/rmsnorm/silu/softmax + CPU fallback `_hx_farr_rope_cpu` =
+ag_rope_mh 와 byte-identical). 진짜 블로커 = RFC 041 이 **interp
+만** wiring, `hexa build` (tier-2 hexa_cc.c) codegen builtin-map
+에 farr_rope_gpu 부재. fix = `self/codegen_c2.hexa` 6-arg map 추가
+**LANDED** — 단 `hexa build` 반영엔 컴파일러 bootstrap 재빌드 필요
+(hexa_cc.c 재생성) = [[compiler-selfbuild-blockers]] infra-blocked
+(OOM 全호스트). ag_rope_mh 는 byte-eq CPU 루프 유지 (**19/19 ALL
+PASS green**). forge offload swap 은 재빌드 feasible 시 mechanical.
+
+**gap(d) 정직 terminus**: 커널 ✅ (RFC 041 측정완료) · CPU-fallback
+✅ byte-eq · codegen_c2 map ✅ LANDED · 도달 = bootstrap 재빌드
+(infra-blocked) + GPU fire (user-gated). flame 측 완결, **hexa-lang
+컴파일러 인프라 한계**에서 honest 정지 (over-claim 0). GOAL: gap
+(a-c,e)✅ + gap(d) flame-side ✅ / 컴파일러-infra-blocked.
