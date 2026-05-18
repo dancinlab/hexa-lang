@@ -52,6 +52,23 @@ pub let STMT_LOAD     = "load"
 pub let STMT_STORE    = "store"
 pub let STMT_ARENA_NEW   = "arena_new"   // memory model: open arena
 pub let STMT_ARENA_DROP  = "arena_drop"  // memory model: drop arena (auto at fn exit)
+// Try/catch / throw — A1.6 (cycle h20).
+//
+//   STMT_TRY_SETJMP  — allocates a per-try jmp_buf in the function frame,
+//                      calls _setjmp on it, and on a nonzero return BR's
+//                      to `target_block_else` (the catch entry block).
+//                      `target_block` is the fall-through (try-body).
+//                      The try slot is identified by stmt.int_val (set
+//                      via args[0].int_val) — index into the per-fn jmp_buf
+//                      array allocated by the codegen.
+//   STMT_TRY_POP     — calls __hexa_try_pop (normal exit out of try-body).
+//   STMT_TRY_LAST_ERR — call __hexa_last_error → HexaVal in `dst`.
+//                       Used at the head of the catch block.
+//   STMT_THROW       — calls hexa_throw(args[0]).
+pub let STMT_TRY_SETJMP  = "try_setjmp"
+pub let STMT_TRY_POP     = "try_pop"
+pub let STMT_TRY_LAST_ERR = "try_last_err"
+pub let STMT_THROW       = "throw"
 
 // ── Basic block ───────────────────────────────────────────────
 

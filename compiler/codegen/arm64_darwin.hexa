@@ -766,6 +766,30 @@ fn _arm64_max_call_overflow(mf: MFunc) -> i64 {
     return max_overflow
 }
 
+// Cycle h20 — try/catch jmp_buf region sizing.
+// Each STMT_TRY_SETJMP in the function gets its own 192-byte jmp_buf
+// slot in the function frame (Darwin arm64 jmp_buf is 192 bytes — see
+// /usr/include/setjmp.h: 14*8 bytes for _JBLEN ints + 192-byte align).
+// The slots live ABOVE the SSA-spill region: jmp_buf[i] is at
+//   [sp, #(call_overflow_bytes + spill_frame + i * 192)]
+// after `sub sp, total_frame`. Codegen walks STMT_TRY_SETJMP statements
+// in iteration order and assigns slot indices monotonically.
+let _ARM64_JMP_BUF_BYTES = 192
+fn _arm64_count_try_setjmp(mf: MFunc) -> i64 {
+    let mut n = 0
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let blk = mf.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            if blk.stmts[si].kind == "try_setjmp" { n = n + 1 }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return n
+}
+
 // ── Statement lowering (C6 — RegMap-aware) ───────────────────
 
 fn _arm64_load_spill(buf: [LInstr], rm: RegMap, id: i64, scratch: string) -> [LInstr] {
@@ -1253,8 +1277,13 @@ fn _builtin_ret_box(name: string) -> string {
     return ""
 }
 
+// Cycle h20: extra params try_buf_bytes (total fn jmp_buf region size)
+// and try_slot_idx (this statement's slot index in 0..try_count).
+// try_slot_idx is meaningful only for STMT_TRY_SETJMP / STMT_TRY_POP;
+// other kinds ignore it.
 fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
-                    st: ArmStrTab, rm: RegMap, spill_frame: i64) -> [LInstr] {
+                    st: ArmStrTab, rm: RegMap, spill_frame: i64,
+                    try_buf_bytes: i64, try_slot_idx: i64) -> [LInstr] {
     let mut buf = out
     if s.kind == _STMT_ASSIGN {
         // array_lit constructor (mirror of x86_64_linux.hexa 269bb61d;
@@ -1595,9 +1624,10 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         if len(s.args) >= 1 {
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // AAPCS64 16B return = x0:x1
         }
-        // C7 — epilogue frees spill_frame + call-overflow region (both
-        // allocated in a single prologue sub; see _arm64_lower_func).
-        let epilogue_total = spill_frame + rm.call_overflow_bytes
+        // C7 + cycle h20 — epilogue frees spill_frame + call-overflow
+        // region + try-jmp_buf region (all allocated in a single
+        // prologue sub; see _arm64_lower_func).
+        let epilogue_total = spill_frame + rm.call_overflow_bytes + try_buf_bytes
         if epilogue_total > 0 {
             buf = _hv_sp_adj(buf, "add", epilogue_total, "x15")
         }
@@ -1609,6 +1639,77 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     if s.kind == _STMT_BR {
         let lab = _arm64_block_label(modhash, fname, s.target_block)
         buf.push(_arm64_instr1("b", _arm64_op_label(lab), "branch"))
+        return buf
+    }
+    // ── Cycle h20 — try/catch/throw runtime hooks ────────────
+    //
+    // jmp_buf slot[i] lives at:
+    //   [sp, #(call_overflow_bytes + spill_frame + i * 192)]
+    // after the prologue `sub sp, total_frame`.
+    if s.kind == "try_setjmp" {
+        // Compute &jbuf[slot] -> x0, call _setjmp, branch on w0!=0 to catch.
+        // On first call setjmp returns 0; push jbuf onto try-stack, then
+        // fall through to the try-body (target_block).
+        // On longjmp-resumed setjmp returns 1; branch to target_block_else.
+        let off = rm.call_overflow_bytes + spill_frame + try_slot_idx * 192
+        buf = _hv_at(buf, off, "x15")
+        // x15 now holds (sp + off / 16) * 16; _hv_at builds the immediate
+        // offset via the scratch — use the helper that yields a register
+        // form: `add x15, sp, #off`.
+        buf.push(_arm64_instr3("add", _arm64_op_reg("x0"),
+                         _arm64_op_reg("sp"),
+                         _arm64_op_label("#" + to_string(off)),
+                         "try_setjmp: &jbuf[" + to_string(try_slot_idx) + "]"))
+        // libc setjmp — Mach-O sym is `_setjmp` (auto-prefixed by _fmt_label).
+        // We pass the C name; _fmt_label injects the Darwin `_` prefix.
+        buf.push(_arm64_instr1("bl", _arm64_op_label("setjmp"),
+                         "try_setjmp: call libc _setjmp"))
+        // Branch to catch on nonzero return. cbnz uses w0 (the C int).
+        let catch_lab = _arm64_block_label(modhash, fname, s.target_block_else)
+        buf.push(_arm64_instr2("cbnz", _arm64_op_reg("w0"),
+                         _arm64_op_label(catch_lab),
+                         "try_setjmp: rc!=0 -> catch"))
+        // First-call path: push jbuf into runtime try-stack.
+        buf.push(_arm64_instr3("add", _arm64_op_reg("x0"),
+                         _arm64_op_reg("sp"),
+                         _arm64_op_label("#" + to_string(off)),
+                         "try_setjmp: &jbuf for push"))
+        buf.push(_arm64_instr1("bl", _arm64_op_label("__hexa_try_push"),
+                         "try_setjmp: register jbuf"))
+        // Fall-through into try-body via explicit branch.
+        let try_lab = _arm64_block_label(modhash, fname, s.target_block)
+        buf.push(_arm64_instr1("b", _arm64_op_label(try_lab),
+                         "try_setjmp: enter try body"))
+        return buf
+    }
+    if s.kind == "try_pop" {
+        // Normal exit out of try-body — pop the runtime try-stack frame.
+        // The fall-through `b after_id` is emitted as a separate STMT_BR.
+        buf.push(_arm64_instr1("bl", _arm64_op_label("__hexa_try_pop"),
+                         "try_pop: drop jbuf from try-stack"))
+        return buf
+    }
+    if s.kind == "try_last_err" {
+        // Catch-block entry — fetch __hexa_last_error() into dst HexaVal.
+        // The runtime function returns the HexaVal in x0:x1.
+        buf.push(_arm64_instr1("bl", _arm64_op_label("__hexa_last_error"),
+                         "try_last_err: HexaVal __hexa_last_error()"))
+        if s.dst.id >= 0 {
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+        }
+        return buf
+    }
+    if s.kind == "throw" {
+        // Materialize args[0] HexaVal into x0:x1; call hexa_throw (longjmps
+        // to the most-recently-pushed try frame, or exits if none).
+        if len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+        }
+        buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_throw"),
+                         "throw: hexa_throw(err)"))
+        // hexa_throw never returns (longjmp or exit). No need to emit
+        // a fall-through branch — the lowering set has_returned=true so
+        // hir_to_mir already terminated the block.
         return buf
     }
     if s.kind == _STMT_BR_COND {
@@ -1764,7 +1865,11 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         slots: alloc.map.slots,
         call_overflow_bytes: call_overflow_bytes
     }
-    let total_frame = spill_frame + call_overflow_bytes
+    // Cycle h20 — reserve jmp_buf region above the spill area. Each try
+    // gets one 192-byte slot (16-aligned by construction).
+    let try_count = _arm64_count_try_setjmp(mf)
+    let try_buf_bytes = try_count * _ARM64_JMP_BUF_BYTES
+    let total_frame = spill_frame + call_overflow_bytes + try_buf_bytes
 
     // Prologue
     instrs.push(_arm64_instr3(
@@ -1835,6 +1940,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     // resident `mf` map invalidated by the rewind makes `mf.blocks` a
     // map-miss (len 0) after the first statement, truncating the body.
     let mf_blocks = mf.blocks
+    let mut _try_idx = 0
     let mut bi = 0
     while bi < len(mf_blocks) {
         let blk = mf_blocks[bi]
@@ -1853,8 +1959,14 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
             // itself is heapified just once, when _arm64_lower_func
             // returns its LFunc — O(total). Byte-identical: same instrs in
             // the same order, only the accumulation cadence changed.
+            // Cycle h20: assign monotonic slot indices to STMT_TRY_SETJMP
+            // / STMT_TRY_POP pairs so each try has its own jmp_buf slot.
+            // STMT_TRY_POP uses the SETJMP's slot, so we don't bump on POP.
+            let cur_try_idx = _try_idx
+            if blk.stmts[si].kind == "try_setjmp" { _try_idx = _try_idx + 1 }
             let delta = _emit_arm64_stmt([], modhash, fn_name,
-                                         blk.stmts[si], st, rm, spill_frame)
+                                         blk.stmts[si], st, rm, spill_frame,
+                                         try_buf_bytes, cur_try_idx)
             let mut _di = 0
             while _di < len(delta) {
                 instrs.push(delta[_di])

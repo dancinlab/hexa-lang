@@ -191,7 +191,9 @@ fn _bind_is_ident_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -222,7 +224,9 @@ fn _bind_is_block_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -253,7 +257,9 @@ fn _is_for_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -284,7 +290,9 @@ fn _is_let_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -315,7 +323,9 @@ fn _bind_is_match_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -346,7 +356,9 @@ fn _is_field_kind(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -377,7 +389,9 @@ fn _is_enum_path_kind(k: ExprKind) -> bool {
         ExprKind::Index -> false,
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -416,7 +430,42 @@ fn _is_struct_lit_kind(k: ExprKind) -> bool {
         ExprKind::Field -> false,
         ExprKind::Index -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
+    }
+}
+
+fn _bind_is_try_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Try -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -447,7 +496,9 @@ fn _is_wildcard_kind(k: ExprKind) -> bool {
         ExprKind::Index -> false,
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
-        ExprKind::EnumPath -> false
+        ExprKind::EnumPath -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -614,6 +665,26 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
             sc = _bind_walk_expr(e.children[1], sc, mod_file, out)
         }
         sc = _pop_scope(sc)
+        return sc
+    }
+
+    if _bind_is_try_kind(e.kind) {
+        // children[0] = try_body_block, children[1] = catch_body_block.
+        // catch_var binding (e.text, may be "_") is visible ONLY inside
+        // catch_body — mirror self/hexa_full.hexa::try_catch scoping.
+        if len(e.children) >= 1 {
+            sc = _push_scope(sc)
+            sc = _bind_walk_expr(e.children[0], sc, mod_file, out)
+            sc = _pop_scope(sc)
+        }
+        if len(e.children) >= 2 {
+            sc = _push_scope(sc)
+            if len(e.text) > 0 && e.text != "_" {
+                sc = _define(sc, e.text, mod_file)
+            }
+            sc = _bind_walk_expr(e.children[1], sc, mod_file, out)
+            sc = _pop_scope(sc)
+        }
         return sc
     }
 

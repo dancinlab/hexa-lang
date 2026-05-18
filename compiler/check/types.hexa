@@ -245,7 +245,9 @@ fn _types_is_lit_int(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -276,7 +278,9 @@ fn _types_is_lit_float(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -307,7 +311,9 @@ fn _types_is_lit_string(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -338,7 +344,9 @@ fn _is_lit_bool(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -369,7 +377,9 @@ fn _is_lit_char(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -400,7 +410,9 @@ fn _types_is_ident(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -431,7 +443,9 @@ fn _is_atlas(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -462,7 +476,9 @@ fn _types_is_call(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -493,7 +509,9 @@ fn _types_is_binop(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -524,7 +542,9 @@ fn _types_is_unop(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -555,7 +575,9 @@ fn _types_is_block(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -586,7 +608,9 @@ fn _types_is_if(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -617,7 +641,9 @@ fn _types_is_while(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -648,7 +674,9 @@ fn _types_is_return(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -679,7 +707,9 @@ fn _types_is_let(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -710,7 +740,9 @@ fn _types_is_assign(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 
@@ -741,7 +773,9 @@ fn _is_match_expr(k: ExprKind) -> bool {
         ExprKind::ArrayLit -> false,
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
-        ExprKind::Wildcard -> false
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false
     }
 }
 

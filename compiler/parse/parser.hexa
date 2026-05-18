@@ -233,6 +233,9 @@ fn tag_of(k: TokenKind) -> string {
         TokenKind::KwAs -> "KwAs",
         TokenKind::KwTrue -> "KwTrue",
         TokenKind::KwFalse -> "KwFalse",
+        TokenKind::KwTry -> "KwTry",
+        TokenKind::KwCatch -> "KwCatch",
+        TokenKind::KwThrow -> "KwThrow",
         TokenKind::PNode -> "PNode",
         TokenKind::CNode -> "CNode",
         TokenKind::LNode -> "LNode",
@@ -964,6 +967,12 @@ fn parse_primary() -> Expr {
     if check_kind(TokenKind::KwLet) {
         return parse_let_expr()
     }
+    if check_kind(TokenKind::KwTry) {
+        return parse_try_expr()
+    }
+    if check_kind(TokenKind::KwThrow) {
+        return parse_throw_expr()
+    }
     // unrecognized — placeholder Ident with the literal text so callers can
     // still emit a half-decent diagnostic later.
     advance()
@@ -1199,6 +1208,90 @@ fn parse_return_expr() -> Expr {
     }
     return Expr {
         kind: ExprKind::Return,
+        span: kw.span,
+        text: "",
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
+// try { TRY_BODY } catch e { CATCH_BODY }     — A1.6 / cycle h20
+// try { TRY_BODY } catch(e) { CATCH_BODY }    — alt paren form (self/hexa_full.hexa
+//                                                accepts both; mirror its surface).
+// try { TRY_BODY } catch    { CATCH_BODY }    — no binder; we record text="_".
+// Mirrors self/hexa_full.hexa::parse_try_catch (TryCatch AST node) and
+// self/codegen_c2.hexa::gen2_stmt k=="TryCatch" lowering.
+//
+// AST shape:
+//   ExprKind::Try
+//     text     = catch_var_name (or "_" if absent)
+//     children = [try_body_block, catch_body_block]
+fn parse_try_expr() -> Expr {
+    let kw = peek()
+    advance() // consume 'try'
+    let try_body = parse_block_expr()
+    if !check_kind(TokenKind::KwCatch) {
+        // Malformed — synthesise an empty catch body. The checker can
+        // surface a diagnostic later; we must not panic the parser.
+        let mut kids_err = []
+        kids_err.push(try_body)
+        kids_err.push(Expr {
+            kind: ExprKind::Block,
+            span: kw.span,
+            text: "",
+            children: [],
+            atlas_ref: empty_atlas()
+        })
+        return Expr {
+            kind: ExprKind::Try,
+            span: kw.span,
+            text: "_",
+            children: kids_err,
+            atlas_ref: empty_atlas()
+        }
+    }
+    advance() // consume 'catch'
+    let mut catch_var = "_"
+    if check_kind(TokenKind::LParen) {
+        // catch(e) syntax
+        advance()
+        if check_kind(TokenKind::Ident) {
+            let t = peek()
+            advance()
+            catch_var = t.text
+        }
+        if check_kind(TokenKind::RParen) { advance() }
+    } else {
+        if check_kind(TokenKind::Ident) {
+            let t = peek()
+            advance()
+            catch_var = t.text
+        }
+    }
+    let catch_body = parse_block_expr()
+    let mut kids = []
+    kids.push(try_body)
+    kids.push(catch_body)
+    return Expr {
+        kind: ExprKind::Try,
+        span: kw.span,
+        text: catch_var,
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
+// throw EXPR — mirrors self/hexa_full.hexa::parse_throw_stmt (ThrowStmt).
+// children = [value_expr]; text unused.
+fn parse_throw_expr() -> Expr {
+    let kw = peek()
+    advance() // consume 'throw'
+    let mut kids = []
+    if !check_kind(TokenKind::RBrace) && !check_kind(TokenKind::Semicolon) && !at_eof() {
+        kids.push(parse_expr())
+    }
+    return Expr {
+        kind: ExprKind::Throw,
         span: kw.span,
         text: "",
         children: kids,
