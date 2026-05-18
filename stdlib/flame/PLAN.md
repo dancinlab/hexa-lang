@@ -1494,3 +1494,52 @@ PASS green**). forge offload swap 은 재빌드 feasible 시 mechanical.
 (infra-blocked) + GPU fire (user-gated). flame 측 완결, **hexa-lang
 컴파일러 인프라 한계**에서 honest 정지 (over-claim 0). GOAL: gap
 (a-c,e)✅ + gap(d) flame-side ✅ / 컴파일러-infra-blocked.
+
+---
+
+## 2026-05-18 — main merge + gap(d) compiled-path 도달 (★ 위 terminus 2 명제 정정)
+
+직전 terminus 의 두 명제가 **측정으로 falsified** — gap(d) 는
+infra-blocked 가 아니라 compiled-path 에서 **실제 도달**.
+
+**(1) main 머지 (commit `9c03aa97`, rfc043-flame-camp).** 3-way
+divergent (camp 286 ahead · main 112 ahead of base 1ce840ec).
+5 conflict hand-resolve: AGENTS.tape/GOAL.md = union (HEAD flame/
+forge + main qrng/sim_universe/quantum/comb), hexa_cc.c/hexa_v2/
+PATCHES.yaml = `--theirs`(main). flame 4 소스 parse-clean.
+
+**(2) "bootstrap 재빌드 게이트" 명제 = FALSE.** codegen_c2.hexa
+builtin-map + bootstrap 재빌드는 **불요**. 작동 seam:
+`self/runtime.c` bare wrapper (`HexaVal farr_rope_gpu(...)`, L12000
+이미 존재) + `self/runtime.h` prototype 1줄 + 트랜스파일러가 unknown
+builtin 을 C 호출로 verbatim emit → wrapper 링크. `resolve_hxroot()`
+(self/main.hexa:916) 가 HEXA_LANG→argv0→cwd 순이라 worktree cwd
+빌드 = worktree runtime 사용 (main checkout 경로 hardcode 아님).
+검증: `hexa build flame_ag_tape_test.hexa` 가 `farr_rope_gpu`
+정상 resolve (재빌드 0, "undeclared function" 無).
+
+**(3) "CPU-fallback byte-eq ✅" 명제 = FALSE → 측정·수정.**
+ag_rope_mh forge-wired 후 Test 9 (ROPEMH) FAIL: max|Δ q_out|=
+3.5e-18 dq=1.4e-17 (leaf max|Δ|=0 bar). 근인 (측정 확정, 가정
+아님): **FMA-contraction asymmetry** — raw-`double` 커널
+`_hx_farr_rope_cpu` 를 clang -O2 arm64 가 `a*b+c*d`→단일 `fma()`
+(1 rounding) 로 contract, 검증된 hexa 레퍼런스 `nn_rope_apply_fwd`
+는 opaque `farr_get()` codegen 이라 contract 안 됨(2 rounding) →
+~1e-17. `-ffp-contract=off`→정확히 0 확인. 수정 (commit
+`c0789e05`): `#pragma STDC FP_CONTRACT OFF` 를 `_hx_farr_rope_cpu`
+**에만** 스코프 (직후 DEFAULT 복원) — fallback 이 oracle 에
+conform (oracle 약화·전역 de-opt 아님, g3-correct). 상세 hazard:
+[[flame-transcendental-byteeq-hazard]] FMA 섹션. design.md
+Decision 10.
+
+**검증 (merged tree, 정상 `hexa build`, 기본 FMA elsewhere):
+flame_ag_tape_test 19/19 ALL PASS** — leaf 12/12 byte-eq (Test 9
+ROPEMH 포함 max|Δ|=0), decoder e2e, train_step, gap(c) 5/5 sweep,
+gap(e) spec, gap(d) Test18 predictor + Test19 fusion-plan.
+
+**gap(d) 정직 terminus (정정 후)**: 커널 ✅ (RFC 041) · CPU
+byte-eq ✅ (FMA pragma `c0789e05` 후 exact) · **compiled `hexa
+build` 도달 ✅** (bare-wrapper seam, bootstrap 재빌드 不要 — 旧
+infra-block 명제 폐기) · merge `9c03aa97` + 19/19 검증. 잔여 =
+**GPU fire (user-gated) 만**. flame 측 + compiled-path 완결.
+GOAL: gap(a-c,e)✅ + gap(d) flame/compiled ✅ / GPU-fire user-gated.

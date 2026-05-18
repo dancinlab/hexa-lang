@@ -549,3 +549,46 @@ fire 는 그 후 user-authorized.
 부트스트랩 재빌드 (infra-blocked)** + GPU fire (user-gated). gap(d)
 는 **flame 측 완결, hexa-lang 컴파일러 인프라 한계에서 정지** —
 over-claim 0. forge 커널 자체는 RFC 041 에서 측정 완료.
+
+## Decision 10 — forge CPU-fallback 의 byte-eq conformance = FP_CONTRACT pragma; Decision 9 의 infra-block 명제 정정
+
+**picked**: bare-wrapper+runtime.h-proto seam (bootstrap 재빌드
+不要) + `_hx_farr_rope_cpu` 에 `#pragma STDC FP_CONTRACT OFF`
+스코프하여 검증된 hexa 레퍼런스 rounding 에 conform.
+
+**맥락**: main 머지 (`9c03aa97`) 후 ag_rope_mh 를 forge-wired
+(farr_rope_gpu) 로 둔 채 19-oracle 재검증. Decision 9 는
+compiled-path 도달이 codegen_c2.hexa map + 부트스트랩 재빌드
+(infra-blocked) 에 게이트된다고 기록 — **본 Decision 이 측정으로
+두 명제 정정**.
+
+**rationale**:
+- Decision 9 "infra-block" = FALSE: `self/runtime.c` 의 bare
+  wrapper `farr_rope_gpu` (L12000) + `self/runtime.h` prototype
+  1줄이면 트랜스파일러가 unknown builtin 을 C 호출로 verbatim
+  emit → wrapper 링크. codegen_c2 map·재빌드 없이 `hexa build`
+  정상 (검증: farr_rope_gpu resolve, 재빌드 0). codegen_c2 map
+  은 tier-1 aprime_cc 경로용으로 별개·선택.
+- Decision 9 "CPU-fallback byte-eq ✅" = FALSE: Test 9 ROPEMH
+  max|Δ|=3.5e-18 FAIL. 측정 근인 = **FMA-contraction asymmetry**
+  (raw-double 커널은 clang -O2 가 a*b+c*d→fma 1-round contract,
+  boxed farr_get() 레퍼런스는 2-round non-contract). `-ffp-
+  contract=off`→정확히 0 로 확정 (가정 아님).
+- 수정 방향은 **fallback 이 검증된 레퍼런스(nn_rope_apply_fwd)
+  에 conform** — oracle 약화나 전역 de-opt 아님 (g3: falsifier
+  보존). pragma 를 해당 커널에만 스코프, 직후 DEFAULT 복원하여
+  런타임 나머지는 FMA 유지 (perf 무영향).
+- 결과: merged tree·정상 `hexa build` 에서 **flame_ag_tape_test
+  19/19 ALL PASS** (Test 9 max|Δ|=0 포함). gap(d) CPU-seam =
+  byte-eq + compiled-reachable; 잔여는 GPU fire (user-gated)만.
+
+**일반화 (재사용 패턴)**: 모든 forge CPU-fallback (matmul/
+rmsnorm/silu/attn) 을 hexa 레퍼런스에 byte-eq pin 할 때 —
+transcendental 경로 grep **+ raw-double `x*a+y*b` FMA-contract**
+둘 다 확인. 후자면 해당 커널에 FP_CONTRACT OFF scope. GPU
+경로는 nvcc 가 더 공격적 contract → gap(d) fire 시 CUDA 커널
+byte-eq 별도 확인 (CPU pragma 가 GPU 커버 안 함).
+
+**커밋**: merge `9c03aa97` · FMA fix `c0789e05` (rfc043-flame-camp).
+non-gated (측정이 단일 g3-correct 방향 강제 — contested 아님;
+감사추적용 기록).
