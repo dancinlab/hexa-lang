@@ -187,16 +187,30 @@ hexa 함수 호출. `hexa build` compiled 라 interp 비용 0.
   `F-RFC043-AGTAPE-LMHEAD-EQ`. **measured (hexa build, $0)**:
   4/4 PASS (RMSNorm·Linear·chain·RoPE·LMHead, 전부 max|Δ|=0).
 
-**다음 sub-step**: ① 잔여 3 layer = SwiGLU (7 saved-state ids
-> 현 6-slot → node id-slot 확장 필요) · Attention (Q/K/V 3-input
-fan-in = linear-chain 모델 한계, reverse DAG/registry 필요) ·
-Embedding (scatter-add into param table, ids 입력은 grad-flow 안 함).
-이 3 개는 node-widen + per-param grad registry 와 함께 (다음
-sub-step 의 contained change). ② per-param grad registry /
-accumulation (같은 param 이 여러 op 에 쓰일 때 += ; AdamW 연결).
-③ 전체 ConsciousDecoderV2 ag_tape 재구성 → hand-written
-nn_decoder_grad vs tape-replay full byte-eq (d=32 hard gate). ④
-RFC 043 §Surface `train_step` = gap(b) closed.
+### Decision 2 — 4th sub-step LANDED (2026-05-18, $0 compiled oracle)
+
+- ag_tape.hexa node v3: kind + 8 ids + 4 dims + 6 pgrad + 3 igrad
+  (SLOTS=22). _ag_push 8-id/4-dim, 6 record wrapper 모두 갱신
+  (slot 산술 일관 재작성). +SwiGLU (AG_K_SWIGLU: 8 saved-state ids
+  r/Wg/Wu/Wd/a/b/s/o, pgrad dWg/dWu/dWd, igrad dr) +Embedding
+  (AG_K_EMBED: input layer, nn_embedding_bwd_scatter, pgrad dtable
+  via t_len(table) 크기 복원, no chain-out — ids 무gradient).
+- oracle +Test5 `F-RFC043-AGTAPE-SWIGLU-EQ` +Test6
+  `F-RFC043-AGTAPE-EMBED-EQ`. **measured (hexa build, $0)**:
+  **6/6 PASS** (RMSNorm·Linear·chain·RoPE·LMHead·SwiGLU·Embed,
+  전부 max|Δ|=0). node-widen regression-clean (기존 4 test 유지).
+- C runtime 여전히 무수정.
+
+**잔여 (gap(b) closure)**: ① Attention — Q/K/V 3-input fan-in =
+linear-chain 모델의 진짜 한계 (single cur_dy thread 로 부족; dQ/dK/dV
+가 3 다른 earlier op 로 분기). reverse-DAG 또는 per-tensor grad
+registry 필요 — **자체 결정 게이트** (Decision 3). ② per-param grad
+accumulation registry (같은 param 이 여러 op 에 쓰일 때 += ; decoder
+는 layer 가 weight share/repeat) + AdamW 연결. ③ 전체
+ConsciousDecoderV2 를 ag_tape 조합으로 재구성 → hand-written
+nn_decoder_grad vs tape-replay full byte-eq (d=32 hard gate, gap(a)
+의 d=32 trajectory 와 합류 측정). ④ RFC 043 §Surface `train_step`
+(1 fwd+CE+bwd+AdamW) = gap(b) CLOSED.
 
 **cross-links**: RFC 043 §Surface =
 `inbox/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md`

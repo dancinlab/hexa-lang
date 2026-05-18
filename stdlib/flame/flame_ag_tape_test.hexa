@@ -241,8 +241,118 @@ let t4ok = m4y == 0.0 && m4dt == 0.0 && m4dz == 0.0
 if t4ok { println("PASS  F-RFC043-AGTAPE-LMHEAD-EQ") }
 else     { println("FAIL  F-RFC043-AGTAPE-LMHEAD-EQ") }
 
-if t1ok && t2ok && t3ok && t4ok {
-    println("ALL PASS  ag_tape plumbing byte-identical (RMSNorm·Linear·chain·RoPE·LMHead)")
+// ── Test 5: SwiGLU single-op (params dWg/dWu/dWd + input dr) ─────────────
+println("-- Test 5: SwiGLU single-op record/replay --")
+let sd = 48
+let sh = 96
+let rr  = t_zeros(sd)
+let sWg = t_zeros(sh * sd)
+let sWu = t_zeros(sh * sd)
+let sWd = t_zeros(sd * sh)
+let sdo = t_zeros(sd)        // upstream grad w.r.t. SwiGLU output o
+let mut s5 = 0
+while s5 < sd {
+    t_set(rr, s5, to_float(s5 - 24) * 0.057 + 0.15)
+    s5 = s5 + 1
+}
+let mut s5b = 0
+while s5b < sh * sd {
+    t_set(sWg, s5b, to_float((s5b * 3) % 17 - 8) * 0.009)
+    t_set(sWu, s5b, to_float((s5b * 5) % 19 - 9) * 0.008)
+    s5b = s5b + 1
+}
+let mut s5c = 0
+while s5c < sd * sh {
+    t_set(sWd, s5c, to_float((s5c * 7) % 13 - 6) * 0.011)
+    s5c = s5c + 1
+}
+let mut s5d = 0
+while s5d < sd {
+    t_set(sdo, s5d, to_float((s5d * 5) % 11 - 5) * 0.021)
+    s5d = s5d + 1
+}
+// ref: direct fwd+bwd
+let aR = t_zeros(sh)
+let bR = t_zeros(sh)
+let sR = t_zeros(sh)
+let oR5 = t_zeros(sd)
+nn_swiglu_fwd(rr, sWg, sWu, sWd, aR, bR, sR, oR5, sd, sh)
+let drR  = t_zeros(sd)
+let dWgR = t_zeros(sh * sd)
+let dWuR = t_zeros(sh * sd)
+let dWdR = t_zeros(sd * sh)
+nn_swiglu_bwd(rr, sWg, sWu, sWd, aR, bR, sR, sdo,
+              drR, dWgR, dWuR, dWdR, sd, sh)
+// tape
+let t5 = ag_t_begin(4)
+let oT5 = ag_swiglu(t5, rr, sWg, sWu, sWd, sd, sh)
+ag_backward(t5, sdo)
+let dWgT = ag_param_grad(t5, 0, 0)
+let dWuT = ag_param_grad(t5, 0, 1)
+let dWdT = ag_param_grad(t5, 0, 2)
+let drT  = ag_input_grad(t5)
+let m5o  = agt_maxdiff(oR5, oT5, sd)
+let m5dr = agt_maxdiff(drR, drT, sd)
+let m5g  = agt_maxdiff(dWgR, dWgT, sh * sd)
+let m5u  = agt_maxdiff(dWuR, dWuT, sh * sd)
+let m5d  = agt_maxdiff(dWdR, dWdT, sd * sh)
+print("  max|Δ o|=");  print(m5o)
+print(" dr=");          print(m5dr)
+print(" dWg=");         print(m5g)
+print(" dWu=");         print(m5u)
+print(" dWd=");         println(m5d)
+ag_t_free_state(t5)
+ag_t_free_grads(t5)
+ag_t_end(t5)
+let t5ok = m5o == 0.0 && m5dr == 0.0 && m5g == 0.0 && m5u == 0.0 && m5d == 0.0
+if t5ok { println("PASS  F-RFC043-AGTAPE-SWIGLU-EQ") }
+else     { println("FAIL  F-RFC043-AGTAPE-SWIGLU-EQ") }
+
+// ── Test 6: Embedding single-op (input layer, param dtable) ─────────────
+println("-- Test 6: Embedding single-op record/replay --")
+let eT = 12
+let eV = 30
+let ed = 40
+let eids = t_zeros(eT)
+let etab = t_zeros(eV * ed)
+let edX  = t_zeros(eT * ed)        // upstream grad w.r.t. X
+let mut e6 = 0
+while e6 < eT {
+    t_set(eids, e6, to_float((e6 * 7) % eV))   // token ids in [0,eV)
+    e6 = e6 + 1
+}
+let mut e6b = 0
+while e6b < eV * ed {
+    t_set(etab, e6b, to_float((e6b * 3) % 23 - 11) * 0.014)
+    e6b = e6b + 1
+}
+let mut e6c = 0
+while e6c < eT * ed {
+    t_set(edX, e6c, to_float((e6c * 5) % 9 - 4) * 0.026)
+    e6c = e6c + 1
+}
+// ref: direct fwd + scatter bwd (dtable zero-init, accumulate)
+let XR = t_zeros(eT * ed)
+nn_embedding_fwd(eids, etab, XR, eT, ed)
+let dtabR = t_zeros(eV * ed)
+nn_embedding_bwd_scatter(edX, eids, dtabR, eT, ed)
+// tape
+let t6 = ag_t_begin(4)
+let XT = ag_embed(t6, eids, etab, eT, ed)
+ag_backward(t6, edX)
+let dtabT = ag_param_grad(t6, 0, 0)
+let m6x  = agt_maxdiff(XR, XT, eT * ed)
+let m6dt = agt_maxdiff(dtabR, dtabT, eV * ed)
+print("  max|Δ X|="); print(m6x); print(" dtable="); println(m6dt)
+ag_t_free_state(t6)
+ag_t_free_grads(t6)
+ag_t_end(t6)
+let t6ok = m6x == 0.0 && m6dt == 0.0
+if t6ok { println("PASS  F-RFC043-AGTAPE-EMBED-EQ") }
+else     { println("FAIL  F-RFC043-AGTAPE-EMBED-EQ") }
+
+if t1ok && t2ok && t3ok && t4ok && t5ok && t6ok {
+    println("ALL PASS  ag_tape byte-identical (RMSNorm·Linear·chain·RoPE·LMHead·SwiGLU·Embed)")
 } else {
     println("ALL FAIL  ag_tape plumbing regression")
 }

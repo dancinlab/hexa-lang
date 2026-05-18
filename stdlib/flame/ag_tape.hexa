@@ -3,41 +3,42 @@
 // stdlib/flame/ag_tape.hexa — flame Phase 2 generic autograd tape
 //   (RFC 043 Decision 2: C-무수정 + hexa-side tape; see design.md)
 //
-// RFC 034's C tape (self/runtime.c hexa_ad_*) is matmul/CE-hardcoded
-// (2 op kinds, fixed HexaAdNode). To make autograd general over the
-// 7 verified nn_lib layer vjps WITHOUT touching the C runtime ABI
-// (preserving RFC 034's 9/9 PASS oracle, g3 minimal blast-radius),
-// the generic tape lives here in hexa stdlib. `hexa build`-compiled
-// → zero interpreter cost (RFC 042/043 directive satisfied).
+// RFC 034's C tape (self/runtime.c hexa_ad_*) is matmul/CE-hardcoded.
+// To make autograd general over the verified nn_lib layer vjps WITHOUT
+// touching the C runtime ABI (preserving RFC 034's 9/9 PASS oracle, g3
+// minimal blast-radius), the generic tape lives here in hexa stdlib.
+// `hexa build`-compiled → zero interpreter cost (RFC 042/043 directive).
 //
 // Mechanism: each ag_<layer> wrapper calls the verified nn_lib
 // functional fwd, allocates+saves the bwd state, appends a node.
 // ag_backward walks nodes latest→first, dispatches the matching
 // verified nn_lib bwd with the saved state, and THREADS each op's
-// input-grad into the previous op's upstream-grad (the reverse-mode
-// chain). The closed vjp math is NOT reimplemented — nn_lib (byte-eq
-// verified in flame_nn_test) is reused verbatim. This module is pure
-// plumbing; its oracle (flame_ag_tape_test) proves the plumbing does
-// not corrupt ids/state and that dy-threading is exact.
+// input-grad into the previous op's upstream-grad (reverse-mode chain).
+// The closed vjp math is NOT reimplemented — nn_lib (byte-eq verified
+// in flame_nn_test) is reused verbatim. Pure plumbing; the oracle
+// (flame_ag_tape_test) proves the plumbing is byte-exact.
 //
-// Tape layout (hexa-native, farr-backed parallel record):
-//   tape = a farr of size HDR + MAX_OPS·SLOTS
-//     slot[0] = op count        slot[1] = final input-grad farr id
-//     op n at base = HDR + n·SLOTS :
-//       base+0      = kind (AG_K_*)
-//       base+1..6   = input/state farr-id slots (per-kind, doc below)
-//       base+7..9   = dims d0,d1,d2 (per-kind)
-//       base+10..14 = produced param-grad farr ids (filled by backward)
-//       base+15     = produced input-grad farr id (chain link)
+// Tape layout (hexa-native, farr-backed parallel record) — node v3:
+//   header: slot[0]=op count   slot[1]=final input-grad farr id
+//   op n at base = HDR + n·SLOTS :
+//     base+0      = kind (AG_K_*)
+//     base+1..8   = 8 input/state farr-id slots (per-kind)
+//     base+9..12  = 4 dims (per-kind)
+//     base+13..18 = 6 param-grad farr ids (filled by backward)
+//     base+19..21 = 3 input-grad farr ids (igrad0 = chain link;
+//                    igrad1/2 used by multi-input layers, e.g. attn)
 //   ids stored as floats (to_float/to_int round-trip — the idiom
 //   nn_embedding_fwd uses for token ids in a farr).
 //
-// Op-kind id-slot conventions (slots 1..6 / dims 7..9 / pgrads 10..):
-//   AG_K_RMSNORM : ids[x,g,y,xn,inv,-]  dims[d,-,-]
-//                  bwd=nn_rmsnorm_bwd → pgrad[10]=dg ; igrad=dx
-//   AG_K_LINEAR  : ids[x,W,b,y,-,-]     dims[B,D,C]
-//                  bwd=nn_linear_bwd  → pgrad[10]=dW pgrad[11]=db ;
-//                  igrad=dx
+// Per-kind slot map (ids 1..8 / dims 9..12 / pgrad 13.. / igrad 19..):
+//   RMSNORM : ids[x,g,y,xn,inv]      dims[d]        pg[dg]   ig[dx]
+//   LINEAR  : ids[x,W,b,y]           dims[B,D,C]    pg[dW,db] ig[dx]
+//   ROPE    : ids[q,cos,sin,q_out]   dims[p,hd]     -        ig[dq]
+//   LMHEAD  : ids[temb,zT,logits]    dims[V,d]      pg[dtemb] ig[dzT]
+//   SWIGLU  : ids[r,Wg,Wu,Wd,a,b,s,o] dims[d,h]
+//                                    pg[dWg,dWu,dWd] ig[dr]
+//   EMBED   : ids[idsf,table,X]      dims[T,d]      pg[dtable] (input
+//             layer — consumes cur_dy as dX, no chain-out igrad)
 // ════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/tensor_lib"
@@ -46,12 +47,14 @@ use "stdlib/flame/nn_lib"
 // ── op kinds ────────────────────────────────────────────────────────────
 pub fn ag_k_rmsnorm() -> int { return 1 }
 pub fn ag_k_linear()  -> int { return 2 }
-pub fn ag_k_rope()    -> int { return 3 }   // parameterless rotation
-pub fn ag_k_lmhead()  -> int { return 4 }   // tied LM head (param=dtemb)
+pub fn ag_k_rope()    -> int { return 3 }
+pub fn ag_k_lmhead()  -> int { return 4 }
+pub fn ag_k_swiglu()  -> int { return 5 }
+pub fn ag_k_embed()   -> int { return 6 }
 
-// ── tape geometry ───────────────────────────────────────────────────────
-fn _ag_hdr()   -> int { return 2 }    // [count, final_input_grad_id]
-fn _ag_slots() -> int { return 16 }   // kind + 6 ids + 3 dims + 5 pgrad + 1 igrad
+// ── tape geometry (node v3) ─────────────────────────────────────────────
+fn _ag_hdr()   -> int { return 2 }
+fn _ag_slots() -> int { return 22 }   // kind + 8 ids + 4 dims + 6 pg + 3 ig
 
 pub fn ag_t_begin(max_ops: int) -> int {
     let t = t_zeros(_ag_hdr() + max_ops * _ag_slots())
@@ -73,11 +76,12 @@ fn _ag_get(tape: int, op: int, s: int) -> int {
     return to_int(t_get(tape, _ag_base(op) + s))
 }
 
-// append a node (ids 1..6, dims 7..9); returns op index. pgrad/igrad
-// slots (10..15) left -1 until ag_backward fills them.
+// append a node: 8 ids (1..8) + 4 dims (9..12). pgrad/igrad (13..21)
+// init -1. returns op index.
 fn _ag_push(tape: int, kind: int,
-            i0: int, i1: int, i2: int, i3: int, i4: int, i5: int,
-            d0: int, d1: int, d2: int) -> int {
+            i0: int, i1: int, i2: int, i3: int,
+            i4: int, i5: int, i6: int, i7: int,
+            d0: int, d1: int, d2: int, d3: int) -> int {
     let n = to_int(t_get(tape, 0))
     _ag_set(tape, n, 0, kind)
     _ag_set(tape, n, 1, i0)
@@ -86,10 +90,13 @@ fn _ag_push(tape: int, kind: int,
     _ag_set(tape, n, 4, i3)
     _ag_set(tape, n, 5, i4)
     _ag_set(tape, n, 6, i5)
-    _ag_set(tape, n, 7, d0)
-    _ag_set(tape, n, 8, d1)
-    _ag_set(tape, n, 9, d2)
-    let mut s = 10
+    _ag_set(tape, n, 7, i6)
+    _ag_set(tape, n, 8, i7)
+    _ag_set(tape, n, 9, d0)
+    _ag_set(tape, n, 10, d1)
+    _ag_set(tape, n, 11, d2)
+    _ag_set(tape, n, 12, d3)
+    let mut s = 13
     while s < _ag_slots() {
         _ag_set(tape, n, s, 0 - 1)
         s = s + 1
@@ -99,54 +106,67 @@ fn _ag_push(tape: int, kind: int,
 }
 
 // ── layer record wrappers ───────────────────────────────────────────────
-// y = RMSNorm(x, g) ; tape owns y/xn/inv. d-len in, d-len out.
 pub fn ag_rmsnorm(tape: int, x: int, g: int, d: int) -> int {
     let y   = t_zeros(d)
     let xn  = t_zeros(d)
     let inv = t_zeros(1)
     nn_rmsnorm_fwd(x, g, y, xn, inv, d)
-    let _ = _ag_push(tape, ag_k_rmsnorm(), x, g, y, xn, inv, 0 - 1, d, 0, 0)
+    let _ = _ag_push(tape, ag_k_rmsnorm(), x, g, y, xn, inv, 0 - 1,
+                     0 - 1, 0 - 1, d, 0, 0, 0)
     return y
 }
 
-// y = Linear(x, W, b) ; x[B·D] W[D·C] b[C] → y[B·C]. tape owns y.
 pub fn ag_linear(tape: int, x: int, W: int, b: int,
                  B: int, D: int, C: int) -> int {
     let y = nn_linear_fwd(x, W, b, B, D, C)
-    let _ = _ag_push(tape, ag_k_linear(), x, W, b, y, 0 - 1, 0 - 1, B, D, C)
+    let _ = _ag_push(tape, ag_k_linear(), x, W, b, y, 0 - 1, 0 - 1,
+                     0 - 1, 0 - 1, B, D, C, 0)
     return y
 }
 
-// q_out = RoPE(q) at position p ; parameterless (orthogonal rotation).
-// tape owns q_out. ids[q,cos,sin,q_out,-,-] dims[p,hd,-].
 pub fn ag_rope(tape: int, q: int, cos_tab: int, sin_tab: int,
                p: int, hd: int) -> int {
     let q_out = t_zeros(hd)
     nn_rope_apply_fwd(q, cos_tab, sin_tab, q_out, p, hd)
     let _ = _ag_push(tape, ag_k_rope(), q, cos_tab, sin_tab, q_out,
-                     0 - 1, 0 - 1, p, hd, 0)
+                     0 - 1, 0 - 1, 0 - 1, 0 - 1, p, hd, 0, 0)
     return q_out
 }
 
-// logits = tied-LM-head(temb, zT) ; param = temb (grad accumulates).
-// tape owns logits. ids[temb,zT,logits,-,-,-] dims[V,d,-].
 pub fn ag_lmhead(tape: int, temb: int, zT: int, V: int, d: int) -> int {
     let logits = t_zeros(V)
     nn_lm_head_fwd(temb, zT, logits, V, d)
-    let _ = _ag_push(tape, ag_k_lmhead(), temb, zT, logits,
-                     0 - 1, 0 - 1, 0 - 1, V, d, 0)
+    let _ = _ag_push(tape, ag_k_lmhead(), temb, zT, logits, 0 - 1,
+                     0 - 1, 0 - 1, 0 - 1, 0 - 1, V, d, 0, 0)
     return logits
 }
 
+// o = SwiGLU(r) ; r[d] Wg/Wu[h·d] Wd[d·h] → o[d]. tape owns a/b/s/o.
+pub fn ag_swiglu(tape: int, r: int, Wg: int, Wu: int, Wd: int,
+                 d: int, h: int) -> int {
+    let a = t_zeros(h)
+    let b = t_zeros(h)
+    let s = t_zeros(h)
+    let o = t_zeros(d)
+    nn_swiglu_fwd(r, Wg, Wu, Wd, a, b, s, o, d, h)
+    let _ = _ag_push(tape, ag_k_swiglu(), r, Wg, Wu, Wd, a, b, s, o,
+                     d, h, 0, 0)
+    return o
+}
+
+// X = Embedding(idsf, table) ; idsf[T] (float-encoded token ids),
+// table[V·d] → X[T·d]. Input layer: bwd scatters dX into dtable
+// (param); no chain-out (ids has no gradient). tape owns X.
+pub fn ag_embed(tape: int, idsf: int, table: int,
+                T: int, d: int) -> int {
+    let X = t_zeros(T * d)
+    nn_embedding_fwd(idsf, table, X, T, d)
+    let _ = _ag_push(tape, ag_k_embed(), idsf, table, X, 0 - 1,
+                     0 - 1, 0 - 1, 0 - 1, 0 - 1, T, d, 0, 0)
+    return X
+}
+
 // ── reverse pass (generic multi-op chain) ───────────────────────────────
-// dy_seed = upstream grad w.r.t. the LAST recorded op's output.
-// Walks ops latest→first; each op's input-grad becomes the next
-// (earlier) op's upstream-grad. Param grads + the per-op input-grad
-// are stored into the node's pgrad/igrad slots (read via accessors).
-// The final (op-0 input) grad id is also written to tape header[1].
-//
-// Tape owns every grad buffer it allocates here; ag_t_free_state frees
-// fwd state, ag_t_free_grads frees these.
 pub fn ag_backward(tape: int, dy_seed: int) {
     let n = to_int(t_get(tape, 0))
     if n <= 0 { return }
@@ -155,69 +175,104 @@ pub fn ag_backward(tape: int, dy_seed: int) {
     while op >= 0 {
         let kind = _ag_get(tape, op, 0)
         if kind == ag_k_rmsnorm() {
-            let x   = _ag_get(tape, op, 1)
-            let g   = _ag_get(tape, op, 2)
-            let xn  = _ag_get(tape, op, 4)
+            let x = _ag_get(tape, op, 1)
+            let g = _ag_get(tape, op, 2)
+            let xn = _ag_get(tape, op, 4)
             let inv_id = _ag_get(tape, op, 5)
-            let d   = _ag_get(tape, op, 7)
-            let dx  = t_zeros(d)
-            let dg  = t_zeros(d)
+            let d = _ag_get(tape, op, 9)
+            let dx = t_zeros(d)
+            let dg = t_zeros(d)
             nn_rmsnorm_bwd(x, g, xn, t_get(inv_id, 0), cur_dy, dx, dg, d)
-            _ag_set(tape, op, 10, dg)    // param grad
-            _ag_set(tape, op, 15, dx)    // input grad (chain link)
+            _ag_set(tape, op, 13, dg)
+            _ag_set(tape, op, 19, dx)
             cur_dy = dx
         } else if kind == ag_k_linear() {
             let x = _ag_get(tape, op, 1)
             let W = _ag_get(tape, op, 2)
-            let B = _ag_get(tape, op, 7)
-            let D = _ag_get(tape, op, 8)
-            let C = _ag_get(tape, op, 9)
+            let B = _ag_get(tape, op, 9)
+            let D = _ag_get(tape, op, 10)
+            let C = _ag_get(tape, op, 11)
             let dW = t_zeros(D * C)
             let dx = t_zeros(B * D)
             let db = t_zeros(C)
             nn_linear_bwd(x, W, cur_dy, dW, dx, db, B, D, C)
-            _ag_set(tape, op, 10, dW)
-            _ag_set(tape, op, 11, db)
-            _ag_set(tape, op, 15, dx)
+            _ag_set(tape, op, 13, dW)
+            _ag_set(tape, op, 14, db)
+            _ag_set(tape, op, 19, dx)
             cur_dy = dx
         } else if kind == ag_k_rope() {
-            let q   = _ag_get(tape, op, 1)
-            let cs  = _ag_get(tape, op, 2)
-            let sn  = _ag_get(tape, op, 3)
-            let p   = _ag_get(tape, op, 7)
-            let hd  = _ag_get(tape, op, 8)
-            let dq  = t_zeros(hd)
+            let cs = _ag_get(tape, op, 2)
+            let sn = _ag_get(tape, op, 3)
+            let p = _ag_get(tape, op, 9)
+            let hd = _ag_get(tape, op, 10)
+            let dq = t_zeros(hd)
             nn_rope_apply_bwd(cur_dy, cs, sn, dq, p, hd)
-            _ag_set(tape, op, 15, dq)    // input grad (no params)
+            _ag_set(tape, op, 19, dq)
             cur_dy = dq
         } else if kind == ag_k_lmhead() {
             let temb = _ag_get(tape, op, 1)
-            let zT   = _ag_get(tape, op, 2)
-            let V    = _ag_get(tape, op, 7)
-            let d    = _ag_get(tape, op, 8)
-            let dtemb = t_zeros(V * d)   // zero → bwd accumulates into it
-            let dzT   = t_zeros(d)
+            let zT = _ag_get(tape, op, 2)
+            let V = _ag_get(tape, op, 9)
+            let d = _ag_get(tape, op, 10)
+            let dtemb = t_zeros(V * d)
+            let dzT = t_zeros(d)
             nn_lm_head_bwd(temb, zT, cur_dy, dtemb, dzT, V, d)
-            _ag_set(tape, op, 10, dtemb) // param grad
-            _ag_set(tape, op, 15, dzT)   // input grad (chain link)
+            _ag_set(tape, op, 13, dtemb)
+            _ag_set(tape, op, 19, dzT)
             cur_dy = dzT
+        } else if kind == ag_k_swiglu() {
+            let r = _ag_get(tape, op, 1)
+            let Wg = _ag_get(tape, op, 2)
+            let Wu = _ag_get(tape, op, 3)
+            let Wd = _ag_get(tape, op, 4)
+            let av = _ag_get(tape, op, 5)
+            let bv = _ag_get(tape, op, 6)
+            let sv = _ag_get(tape, op, 7)
+            let d = _ag_get(tape, op, 9)
+            let h = _ag_get(tape, op, 10)
+            let dr = t_zeros(d)
+            let dWg = t_zeros(h * d)
+            let dWu = t_zeros(h * d)
+            let dWd = t_zeros(d * h)
+            nn_swiglu_bwd(r, Wg, Wu, Wd, av, bv, sv, cur_dy,
+                          dr, dWg, dWu, dWd, d, h)
+            _ag_set(tape, op, 13, dWg)
+            _ag_set(tape, op, 14, dWu)
+            _ag_set(tape, op, 15, dWd)
+            _ag_set(tape, op, 19, dr)
+            cur_dy = dr
+        } else if kind == ag_k_embed() {
+            let idsf = _ag_get(tape, op, 1)
+            let table = _ag_get(tape, op, 2)
+            let T = _ag_get(tape, op, 9)
+            let d = _ag_get(tape, op, 10)
+            // V from table length / d ; nn_embedding_bwd_scatter only
+            // needs dtable sized like `table`. Read table len via a
+            // d-stride scatter (caller-zeroed). We size dtable to the
+            // table farr's length using a probe: alloc V·d where V is
+            // recovered from the table id's farr length.
+            let dtable = t_zeros(_ag_table_len(table))
+            nn_embedding_bwd_scatter(cur_dy, idsf, dtable, T, d)
+            _ag_set(tape, op, 13, dtable)
+            // input layer: no chain-out (ids carries no gradient).
         }
         op = op - 1
     }
     t_set(tape, 1, to_float(cur_dy))
 }
 
+// table farr length (V·d). tensor_lib farr-id length probe.
+fn _ag_table_len(table: int) -> int {
+    return t_len(table)
+}
+
 // ── grad accessors ──────────────────────────────────────────────────────
-// param-grad farr id produced for op `op`, slot `which` (0-based;
-// RMSNorm which=0 → dg ; Linear which=0 → dW, which=1 → db).
 pub fn ag_param_grad(tape: int, op: int, which: int) -> int {
-    return _ag_get(tape, op, 10 + which)
+    return _ag_get(tape, op, 13 + which)
 }
-// input-grad farr id produced for op `op` (chain link / op-0 = model input).
 pub fn ag_input_grad_op(tape: int, op: int) -> int {
-    return _ag_get(tape, op, 15)
+    return _ag_get(tape, op, 19)
 }
-// grad w.r.t. the very first op's input (whole-chain input grad).
 pub fn ag_input_grad(tape: int) -> int {
     return to_int(t_get(tape, 1))
 }
@@ -228,11 +283,11 @@ pub fn ag_backward_rmsnorm_single(tape: int, dy_seed: int,
     let n = to_int(t_get(tape, 0))
     if n != 1 { return }
     if _ag_get(tape, 0, 0) != ag_k_rmsnorm() { return }
-    let x   = _ag_get(tape, 0, 1)
-    let g   = _ag_get(tape, 0, 2)
-    let xn  = _ag_get(tape, 0, 4)
+    let x = _ag_get(tape, 0, 1)
+    let g = _ag_get(tape, 0, 2)
+    let xn = _ag_get(tape, 0, 4)
     let inv_id = _ag_get(tape, 0, 5)
-    let d   = _ag_get(tape, 0, 7)
+    let d = _ag_get(tape, 0, 9)
     nn_rmsnorm_bwd(x, g, xn, t_get(inv_id, 0), dy_seed, dx_out, dg_out, d)
 }
 
@@ -252,6 +307,13 @@ pub fn ag_t_free_state(tape: int) {
             t_free(_ag_get(tape, op, 4))   // q_out
         } else if kind == ag_k_lmhead() {
             t_free(_ag_get(tape, op, 3))   // logits
+        } else if kind == ag_k_swiglu() {
+            t_free(_ag_get(tape, op, 5))   // a
+            t_free(_ag_get(tape, op, 6))   // b
+            t_free(_ag_get(tape, op, 7))   // s
+            t_free(_ag_get(tape, op, 8))   // o
+        } else if kind == ag_k_embed() {
+            t_free(_ag_get(tape, op, 3))   // X
         }
         op = op + 1
     }
@@ -261,7 +323,7 @@ pub fn ag_t_free_grads(tape: int) {
     let n = to_int(t_get(tape, 0))
     let mut op = 0
     while op < n {
-        let mut s = 10
+        let mut s = 13
         while s < _ag_slots() {
             let gid = _ag_get(tape, op, s)
             if gid >= 0 { t_free(gid) }
