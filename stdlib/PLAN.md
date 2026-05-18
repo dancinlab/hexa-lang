@@ -575,3 +575,13 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   이관 가능. gap#1·gap#2·sim-recipe·py_json2 4대 enabler 완비 →
   모든 잔여 T3 클래스 검증된 레시피 보유. T3=23/127 유지(enabler,
   +1 아님 — gap#2 동급 가치). 잔여 ~104, 구조적 천장 0 재확인.
+- 2026-05-18 — **T3 +1: 24/127** `autac_sim` — **첫 json-emit SIM,
+  py_json2 레시피 end-to-end 1발 PARITY-OK**. mass-action θ +
+  autophagic-flux partition 을 .py 와 동일 산술(CPython-identical
+  IEEE double)로 계산 → compact JSON(`json_stringify` per float) →
+  `json_parse` → `py_json2` indent=2 출력; human panel 은 sim-recipe.
+  1차 빌드 즉시 byte-parity(`224efcc`) — **~50 json-sim 클래스 레시피
+  완전 실증**(enabler 검증 + 실사 통합 1발). json-sim 포팅 레시피
+  확정: 계산→compact(js per float)→json_parse→py_json2 + 패널은
+  exec printf. 잔여 ~103, 4대 enabler(gap#1·gap#2·sim-recipe·
+  py_json2) 전부 실사 검증완료 — 모든 잔여 클래스 기계적 이관 가능.
