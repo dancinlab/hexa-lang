@@ -1013,3 +1013,38 @@ call 결과의 type_of 가 tier-1 codegen 에서 오답. closure 0 인 repro 로
 **goal ② 현황**: self-host fixpoint CLOSED · try/catch CLOSED · closure RFC CLOSED.
 진짜 tier-1 codegen gap = #40 (void-call type_of) 1건. 그 외 gate-1 non-MATCH 는
 전부 non-tier-1 (tier-2 #37 · ORAFAIL-class FFI · env).
+
+---
+
+## cycle #40 — void-call type_of (LANDED)
+
+**문제**: t38_nanbox_smoke 가 tier-1 32 pass / 1 fail vs tier-2 oracle 33 / 0.
+유일 divergence = `void is void` (`type_of(returns_void()) == "void"`). closure 무관
+선재 버그 — `fn rv(){} fn main(){ println(type_of(rv())) }` 최소 repro 로도 재현
+(tier-1 `unknown` 출력 vs tier-2 `void`).
+
+**근본 원인**: `compiler/codegen/arm64_darwin.hexa` 의 `_STMT_RETURN` 핸들러가
+value-less return (`len(s.args) == 0`) 일 때 x0:x1 에 아무것도 적재하지 않고 곧장
+epilogue+`ret` 만 emit. hir_to_mir 는 `!ctx.has_returned` 인 빈-바디 fn 에 인자 없는
+STMT_RETURN 을 정상 합성하지만, codegen 이 그 void-return 에 TAG_VOID HexaVal 을
+넣지 않아 호출자가 직전 call 이 clobber 한 garbage x0:x1 을 그대로 캡처 → `type_of`
+가 잘못된 tag 를 읽음. tier-2 (codegen_c2.hexa) 는 동일 케이스에 `return hexa_void();`
+emit (TAG_VOID=4, payload 0) → 정답.
+
+**수정 (surgical, codegen 전용 — runtime.c 무수정)**:
+`compiler/codegen/arm64_darwin.hexa`
+- `_STMT_RETURN` 핸들러: `len(s.args) == 0` 분기 추가 → `movz x0,#4` (TAG_VOID) +
+  `movz x1,#0` (payload) emit. const_void `_hv_load` 패턴 + tier-2 `hexa_void()` 와
+  동일.
+- fall-through "Safety epilogue" (명시적 return 없이 블록 종료) 에도 동일한
+  TAG_VOID movz 쌍 추가 (defense-in-depth; explicit return 경로와 일관).
+
+non-void 프로그램 asm 무영향 — movz 쌍은 value-less return 에서만 emit.
+
+**검증 (mini, load-constrained)**: build_aprime smoke `exit(6*7)==42` PASS;
+void-call type_of 최소 repro tier-1 출력 = tier-2 byte-identical (`void` / `true`);
+**t38_nanbox_smoke tier-1 = tier-2 MATCH — 둘 다 `33 pass / 0 fail` + `ALL PASS` +
+rc=0, stdout byte-identical**. gate-1 sweep + self-host fixpoint 는 별도 host orchestrator.
+
+**goal ② 현황**: #40 (void-call type_of) CLOSED. self-host fixpoint · try/catch ·
+closure RFC · void-call 전부 닫힘 → tier-1 codegen gap 0건.
