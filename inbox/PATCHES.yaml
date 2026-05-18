@@ -567,3 +567,22 @@
   applied_at: 2026-05-15
   opened: 2026-05-15
   detail: patches/runtime-h-incomplete-after-phase-1-3-b.md
+
+- id: modifyotherkeys-non-ascii-decoder-gap
+  source_commit: pending
+  source_files:
+    - self/tui/input.hexa
+  compiler_impact: |
+    modifyOtherKeys CSI-27 branch (input.hexa:467-478) decoded only
+    printable codepoints 32..126; every cp >= 127 (Hangul / CJK / emoji)
+    errored as csi-modifyotherkeys-unsupported-code. Fix raises the
+    printable ceiling 127 -> 1114112 (U+110000), mirroring the raw-mode
+    UTF-8 path (L300). Sibling of csi-u-modifier-keys-decoder-gap (same
+    ASCII-only shape). self/tui stdlib only — no compiler/ change.
+  downstream_consumer: |
+    wilson harness-cli — Korean / CJK / emoji input when modifyOtherKeys
+    level 2 is on. Wilson also pushes ESC[>4;1m (level 1) as a workaround
+    to keep IME text as raw UTF-8.
+  status: pending
+  opened: 2026-05-18
+  detail: patches/modifyotherkeys-non-ascii-decoder-gap.md
