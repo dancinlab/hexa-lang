@@ -13316,3 +13316,21 @@ HexaVal hexa_is_alphanumeric(HexaVal a) {
                   || (HX_TAG(a) == TAG_CHAR && isalnum((unsigned char)HX_INT(a))));
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+ * forge_tier_v1 — flame <-> forge integration ABI (RFC 050 Stage A).
+ *
+ * v1 dispatch surface: forge_api_version_v1, forge_tier_dispatch_v1,
+ * forge_register_specialized_v1. Stage A lands the API surface +
+ * stub dispatcher; Stage 2 substrates (RFC 044 A'/B'/C', RFC 049
+ * BF16, RFC 048 fused) wire kernel-by-kernel through the same v1
+ * entry points.
+ *
+ * Inlined here so the dispatcher's MATMUL+FP64 path can call
+ * hexa_farr_matmul directly (no forward-decl skew). Header at
+ * self/forge/forge_tier_v1.h is the stable public surface.
+ *
+ * SSOT: inbox/rfc_drafts_2026_05_12/rfc_050_flame_forge_integration.md
+ * ═══════════════════════════════════════════════════════════════════ */
+#define FORGE_TIER_V1_LIVE 1
+#include "forge/forge_tier_v1.c"
+
