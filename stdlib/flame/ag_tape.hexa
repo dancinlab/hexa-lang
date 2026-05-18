@@ -43,6 +43,7 @@
 
 use "stdlib/flame/tensor_lib"
 use "stdlib/flame/nn_lib"
+use "stdlib/flame/flame_math"
 
 // ── op kinds ────────────────────────────────────────────────────────────
 pub fn ag_k_rmsnorm() -> int { return 1 }
@@ -55,6 +56,7 @@ pub fn ag_k_attn()    -> int { return 7 }   // GQA attention core (Q,K,V→ctx)
 pub fn ag_k_add()     -> int { return 8 }   // residual: out = a + b (elem)
 pub fn ag_k_rope_mh() -> int { return 9 }   // multi-head RoPE [T·nheads·hd]
 pub fn ag_k_slice()   -> int { return 10 }  // out = X[off : off+len] gather
+pub fn ag_k_silu_gate() -> int { return 11 } // s = silu(a) * b (SwiGLU)
 
 // ── tape geometry (node v3) ─────────────────────────────────────────────
 // header v2: [0]=op count, [1]=final-input-grad (legacy/chain path),
@@ -294,6 +296,28 @@ pub fn ag_rope_mh(tape: int, q: int, cos_tab: int, sin_tab: int,
     return q_out
 }
 
+// SwiGLU gate: s = silu(a) * b, element-wise [len]. silu(x)=x·σ(x),
+// σ via dt_exp — byte-eq with the decoder block's _db_sigmoid/_db_silu.
+// bwd: ds → da[k]=ds·b·silu'(a), db[k]=ds·silu(a) (block lines 590-591).
+// ids[a,b,s] dims[len].
+fn _ag_sigmoid(x: float) -> float { return 1.0 / (1.0 + dt_exp(0.0 - x)) }
+fn _ag_silu(x: float) -> float { return x * _ag_sigmoid(x) }
+fn _ag_silu_grad(x: float) -> float {
+    let sg = _ag_sigmoid(x)
+    return sg + x * sg * (1.0 - sg)
+}
+pub fn ag_silu_gate(tape: int, a: int, b: int, len: int) -> int {
+    let s = t_zeros(len)
+    let mut i = 0
+    while i < len {
+        t_set(s, i, _ag_silu(t_get(a, i)) * t_get(b, i))
+        i = i + 1
+    }
+    let _ = _ag_push(tape, ag_k_silu_gate(), a, b, s, 0 - 1, 0 - 1,
+                     0 - 1, 0 - 1, 0 - 1, len, 0, 0, 0)
+    return s
+}
+
 // out[len] = X[off : off+len]. Last-position gather (zr = X[(T-1)·d:]).
 // bwd: d_out scatters into grad[X] at [off:off+len], rest zero — the
 // registry zero-allocates the full X-len grad on first touch, so we
@@ -506,6 +530,26 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
                 t_set(gX, off + i, t_get(gX, off + i) + t_get(og, i))
                 i = i + 1
             }
+        } else if kind == ag_k_silu_gate() {
+            let a = _ag_get(tape, op, 1)
+            let b = _ag_get(tape, op, 2)
+            let s = _ag_get(tape, op, 3)
+            let len = _ag_get(tape, op, 9)
+            let og = _ag_reg_grad(tape, s, len)
+            let da = t_zeros(len)
+            let db = t_zeros(len)
+            let mut i = 0
+            while i < len {
+                let av = t_get(a, i)
+                let dsk = t_get(og, i)
+                t_set(da, i, dsk * t_get(b, i) * _ag_silu_grad(av))
+                t_set(db, i, dsk * _ag_silu(av))
+                i = i + 1
+            }
+            _ag_reg_acc(tape, a, da, len)
+            _ag_reg_acc(tape, b, db, len)
+            t_free(da)
+            t_free(db)
         }
         op = op - 1
     }
@@ -668,6 +712,8 @@ pub fn ag_t_free_state(tape: int) {
             t_free(_ag_get(tape, op, 4))   // q_out
         } else if kind == ag_k_slice() {
             t_free(_ag_get(tape, op, 2))   // out
+        } else if kind == ag_k_silu_gate() {
+            t_free(_ag_get(tape, op, 3))   // s
         }
         op = op + 1
     }

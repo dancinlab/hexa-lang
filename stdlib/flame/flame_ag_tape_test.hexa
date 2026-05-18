@@ -23,6 +23,14 @@
 use "stdlib/flame/tensor_lib"
 use "stdlib/flame/nn_lib"
 use "stdlib/flame/ag_tape"
+use "stdlib/flame/flame_math"
+
+fn agt_sig(x: float) -> float { return 1.0 / (1.0 + dt_exp(0.0 - x)) }
+fn agt_silu(x: float) -> float { return x * agt_sig(x) }
+fn agt_silu_g(x: float) -> float {
+    let s = agt_sig(x)
+    return s + x * s * (1.0 - s)
+}
 
 fn agt_abs(x: float) -> float {
     if x < 0.0 { return 0.0 - x }
@@ -643,9 +651,55 @@ let t10ok = m10o == 0.0 && m10x == 0.0
 if t10ok { println("PASS  F-RFC043-AGTAPE-SLICE-EQ") }
 else      { println("FAIL  F-RFC043-AGTAPE-SLICE-EQ") }
 
+// ── Test 11: SwiGLU silu-gate (ag_silu_gate) ────────────────────────────
+// s = silu(a)·b; bwd da=ds·b·silu'(a), db=ds·silu(a). Reference uses
+// the decoder block's exact _db_silu/_db_silu_grad formulas (dt_exp
+// sigmoid). Falsifier F-RFC043-AGTAPE-SILUGATE-EQ.
+println("-- Test 11: silu-gate  s = silu(a)*b  --")
+let gN = 20
+let ga = t_zeros(gN)
+let gb = t_zeros(gN)
+let gseed = t_zeros(gN)
+let mut e11 = 0
+while e11 < gN {
+    t_set(ga, e11, to_float(e11 - 10) * 0.087)
+    t_set(gb, e11, to_float((e11 * 3) % 7 - 3) * 0.12 + 0.05)
+    t_set(gseed, e11, to_float((e11 * 5) % 9 - 4) * 0.041)
+    e11 = e11 + 1
+}
+let gsR = t_zeros(gN)
+let gdaR = t_zeros(gN)
+let gdbR = t_zeros(gN)
+let mut e11b = 0
+while e11b < gN {
+    let av = t_get(ga, e11b)
+    let dsk = t_get(gseed, e11b)
+    t_set(gsR, e11b, agt_silu(av) * t_get(gb, e11b))
+    t_set(gdaR, e11b, dsk * t_get(gb, e11b) * agt_silu_g(av))
+    t_set(gdbR, e11b, dsk * agt_silu(av))
+    e11b = e11b + 1
+}
+let t11 = ag_t_begin(1)
+let gsT = ag_silu_gate(t11, ga, gb, gN)
+ag_backward_reg(t11, gsT, gseed)
+let gdaT = ag_grad(t11, ga)
+let gdbT = ag_grad(t11, gb)
+let m11s = agt_maxdiff(gsR, gsT, gN)
+let m11a = agt_maxdiff(gdaR, gdaT, gN)
+let m11b = agt_maxdiff(gdbR, gdbT, gN)
+print("  max|Δ s|="); print(m11s)
+print(" da="); print(m11a)
+print(" db="); println(m11b)
+ag_t_free_state(t11)
+ag_t_free_reg(t11)
+ag_t_end(t11)
+let t11ok = m11s == 0.0 && m11a == 0.0 && m11b == 0.0
+if t11ok { println("PASS  F-RFC043-AGTAPE-SILUGATE-EQ") }
+else      { println("FAIL  F-RFC043-AGTAPE-SILUGATE-EQ") }
+
 if t1ok && t2ok && t3ok && t4ok && t5ok && t6ok && t7ok && t8ok
-   && t9ok && t10ok {
-    println("ALL PASS  ag_tape byte-identical (7 layers + chain + fan-in + residual + rope_mh + slice)")
+   && t9ok && t10ok && t11ok {
+    println("ALL PASS  ag_tape byte-identical (11 oracles: 7 layers + chain + fan-in + residual + rope_mh + slice + silu-gate)")
 } else {
     println("ALL FAIL  ag_tape plumbing regression")
 }
