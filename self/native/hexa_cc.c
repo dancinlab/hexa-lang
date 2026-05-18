@@ -20783,6 +20783,9 @@ HexaVal _is_known_float_name(HexaVal name) {
     if (hexa_truthy(_gen2_name_in_cur_params(name))) {
         return __hexa_fn_arena_return(hexa_bool(0));
     }
+    if (hexa_truthy(_gen2_name_in_cur_lets(name))) {
+        return __hexa_fn_arena_return(hexa_bool(0));
+    }
     if (hexa_truthy(hexa_eq(hexa_int(hexa_len(_known_int_set)), hexa_int(64)))) {
         HexaVal _bi = _known_hash(name);
         HexaVal _ib = hexa_index_get(_known_int_set, _bi);
@@ -20822,6 +20825,9 @@ HexaVal _is_known_int_name(HexaVal name) {
         return __hexa_fn_arena_return(hexa_bool(0));
     }
     if (hexa_truthy(_gen2_name_in_cur_params(name))) {
+        return __hexa_fn_arena_return(hexa_bool(0));
+    }
+    if (hexa_truthy(_gen2_name_in_cur_lets(name))) {
         return __hexa_fn_arena_return(hexa_bool(0));
     }
     if (hexa_truthy(hexa_eq(hexa_int(hexa_len(_known_float_set)), hexa_int(64)))) {

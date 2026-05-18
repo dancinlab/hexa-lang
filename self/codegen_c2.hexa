@@ -6342,6 +6342,16 @@ fn _is_known_float_name(name) {
     // H17 fix: see _is_known_int_name — param annotation is authoritative
     // over any prior fn's module-global known-float registration.
     if _gen2_name_in_cur_params(name) { return false }
+    // 2026-05-19 fn-local shadowing — atlas s8_elliptic_j1728 residue:
+    // `let mut x = -1` in this fn shadows another module's prior
+    // `let x = <float>` global registration. Mutable lets aren't
+    // re-registered (L2376), so without this guard `_is_known_float_
+    // name("x")` returned true and the BinOp fast-path emitted
+    // hexa_float(HX_FLOAT(x) * HX_FLOAT(x)) on an int-tagged value →
+    // garbage float bits → 2-torsion loop computed wrong → verdict
+    // FALSIFY. Extend H17 to fn-body locals using the existing
+    // _gen2_name_in_cur_lets tracker.
+    if _gen2_name_in_cur_lets(name) { return false }
     // 2026-05-19 atlas root-cause: symmetric collision check (see the
     // _is_known_int_name companion). If `name` is also registered int,
     // the int↔float classification is ambiguous across the flattened
@@ -6376,6 +6386,11 @@ fn _is_known_int_name(name) {
     // The current fn's param type is authoritative; a prior fn's `let X = 0`
     // must not be applied to this fn's `X: float` param.
     if _gen2_name_in_cur_params(name) { return false }
+    // 2026-05-19 fn-local shadowing — symmetric to the _is_known_float_
+    // name companion. Fn-body local lets (mutable or immutable) shadow
+    // a prior module's global registration; the local binding's type
+    // is authoritative.
+    if _gen2_name_in_cur_lets(name) { return false }
     // 2026-05-19 atlas root-cause fix: name-collision across the
     // flattened modules. _known_int_set / _known_float_set are GLOBAL
     // keyed by name, so a common name (`lhs`, `rhs`, `err`, …) can be
