@@ -62,9 +62,13 @@ OFFER_JSON=$($VASTAI search offers \
     'gpu_name in [A100,A100_SXM4,A100_PCIE,A100X] num_gpus=1 rentable=true dph_total<3.0 cuda_max_good>=12.4 disk_space>40 reliability>0.985 inet_down>200' \
     -o 'dph_total' --raw 2>&1)
 OFFER_PARSED=$(echo "$OFFER_JSON" | python3 -c "
-import json,sys
+import json,sys,os
 try: d=json.load(sys.stdin)
 except: sys.stderr.write('parse_err\n'); sys.exit(1)
+# Allow blacklisting bad hosts that pass the search filter but fail
+# the GPU preflight (env-var, comma-separated id list).
+bad = set(s.strip() for s in os.environ.get('VAST_BAD_OFFERS','').split(',') if s.strip())
+d = [x for x in d if str(x['id']) not in bad]
 if not d: sys.stderr.write('no_offers\n'); sys.exit(1)
 b=d[0]
 print('%s %.4f %s' % (b['id'], b['dph_total'], b['gpu_name'].replace(' ','_')))
