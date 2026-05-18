@@ -2430,6 +2430,17 @@ __global__ void _hx_cuda_kern_fill_dt_lcg(double* __restrict__ dst,
 }
 int _hx_cuda_farr_fill_dt_lcg_gpu(int64_t dst_id, int64_t doff, int64_t n,
                                   int64_t seed, double scale) {
+    /* IMPORTANT (mk2-FINAL #2 measured): the LCG state evolves
+     * sequentially (s_{i+1} = f(s_i)), so the kernel is necessarily
+     * single-thread. A GPU thread runs ~100ns/iter — 20× slower than
+     * a host C loop (~5ns/iter). For ~100M elements per nn_decoder_
+     * init, that's 10s/call on GPU vs 0.5s/call on CPU; 121 calls
+     * blew the 901s budget on the v6 fire (GPU 100% util, never
+     * reached step 1). Switch to host-side fill: the next forge op
+     * (`farr_copy_slice_gpu(M, oTE, tokE, …)` in _agt_decoder_step)
+     * triggers _h2d on M as a side-effect of the host-write path
+     * marking dirty_host=1, so the data lands on device exactly once
+     * per farr, lazily, when it's actually needed. */
     if (dst_id < 0 || dst_id >= _hx_farr_count) {
         fprintf(stderr, "[cuda] fill_dt_lcg: bad id\n");
         return -1;
@@ -2440,20 +2451,25 @@ int _hx_cuda_farr_fill_dt_lcg_gpu(int64_t dst_id, int64_t doff, int64_t n,
         return -1;
     }
     HexaFarrEntry* de = &_hx_farr_table[dst_id];
-    if (de->len < doff + n) {
+    if (!de->buf || de->len < doff + n) {
         fprintf(stderr, "[cuda] fill_dt_lcg: range out of bounds\n");
         return -1;
     }
-    if (_ensure_dev_buf(dst_id, de->len) != 0) return -1;
-    double* D = g_slots[dst_id].d_buf;
-    _hx_cuda_kern_fill_dt_lcg<<<1, 1>>>(D, doff, n, seed, scale);
-    cudaError_t er = cudaGetLastError();
-    if (er != cudaSuccess) {
-        fprintf(stderr, "[cuda] fill_dt_lcg launch failed: %s\n",
-                cudaGetErrorString(er));
-        return -1;
+    /* Pure C host loop — int64_t modular arithmetic byte-identical
+     * to the hexa source (`(s * 1103515245 + 12345) % 2^31`). */
+    int64_t s = seed;
+    double* H = de->buf + doff;
+    for (int64_t i = 0; i < n; i++) {
+        s = (s * (int64_t)1103515245 + (int64_t)12345) % (int64_t)2147483648;
+        double rv = (double)(s % 1000) / 1000.0 - 0.5;
+        H[i] = rv * scale;
     }
-    if (_d2h_out(dst_id, de->len) != 0) return -1;
+    /* Mark host-fresh; the next _h2d uploads the new bytes. Do NOT
+     * call _d2h_out here — we want the host buffer to be the source
+     * of truth, not the device. */
+    de->loc        = FARR_HOST;
+    de->dirty_host = 1;
+    de->dirty_dev  = 0;
     return 0;
 }
 
