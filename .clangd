@@ -12,6 +12,7 @@ CompileFlags:
     - -I.
     - -Iself
     - -Iself/native
+    - -Iself/forge
     - -D_GNU_SOURCE
     - -std=gnu11
 
