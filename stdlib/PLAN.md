@@ -521,3 +521,20 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   runtime). 1차 빌드 **PARITY-OK**. hexa-bio `0dfb4b7`. 갭#2 수정 후
   validator-의존 nested 포트도 1발 통과 — 파이프라인 견고함 실증.
   잔여 ~106, registry-class 포함 구조적 차단 없음. cadence 지속.
+- 2026-05-18 — **클래스급 측정: sim-class(~55) float-parity 가능,
+  T3 구조적 천장 전무 (gap#2-analog 언블록, 측정확인 g3)**. 잔여
+  no-float no-subprocess 게이트 = 단 3(rna_modality_smn2·schema_const
+  ·deferred_items) → 잔여 ~103 은 float-heavy sim/cross + subprocess.
+  핵심 질문: hexa 컴파일 exp/%e/%f 가 CPython byte-parity 인가? 측정:
+  Eyring `k=(kT/h)exp(-ΔG/RT)` (ΔG=21 kcal·T=310) — hexa 컴파일
+  `exp()` = `0.01012735536386349` = Python **bit-exact**(동일 glibc
+  libm); `json_stringify` = CPython repr-parity(수정 runtime);
+  `exec("printf %.4e/%.4f")` = C printf = Python format **byte-동일**
+  (.4e=1.0127e-02 · .4f=12345.6789/0.0001/2.5000 모두 일치).
+  ⟹ **sim-class 기계적 byte-parity 이관 가능 — float 천장 없음.**
+  gap#1(수정)·gap#2(수정)·sim-float(검증) 종합 → **모든 잔여 T3
+  게이트-클래스 구조적 차단 0**; 완료는 게이트당 포팅 노동량에만
+  바운드(진짜 천장 전무, 측정확인). sim 포팅 레시피 확정: hexa float
+  연산 → repr 필드는 json_stringify → %e/%.Nf 필드는 exec printf.
+  T3=21/127 유지(이번 측정은 +1 아닌 클래스급 언블록 — gap#2 와
+  동급 가치).
