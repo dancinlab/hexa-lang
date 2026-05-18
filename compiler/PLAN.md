@@ -2177,3 +2177,33 @@ The 4 audited skips (sanctioned LESSON 8 use, parity not measurable):
 **Cycle C remains HONESTLY BLOCKED** on t45b + test_native_multi_calls.
 These are exactly path-A's "deep multi-session campaign" remaining
 items — each a focused next-cycle scope.
+
+### 2026-05-19 — 13→0 PARITY GATE PASS + Cycle C step-1 LANDED
+
+Last 2 blockers closed:
+- **t45b**: UTF-8 char-aware string methods — runtime.c
+  hexa_str_{char_count,nth_char,char_substring,byte_at} + _hx_utf8_cp_len;
+  hexa_str_chars codepoint-aware; hexa_array_slice polymorphic
+  (string+array, 1-arg HX_IS_VOID(end)); to_uppercase/to_lowercase
+  aliases; char_code 1-arg free-fn. t45b → ALL PASS.
+- **test_native_multi_calls**: nested fn/struct hoisting —
+  `_gen2_lift_nested_decls` shallow AST pass at codegen_c2_full entry
+  (the REAL transpile entry — codegen_c2 was dead code). First-wins
+  name-dedup; gen2_stmt skips hoisted inline decls. Hard-won: hexa
+  `.push()` is functional (capture-or-lose). → 17 PASS / 0 FAIL.
+
+**FINAL PARITY GATE: PASS** — 100 test/*.hexa: 75 MATCH · 13 SKIP
+(audited) · 11 BOTH_FAIL(ok) · 1 INTERP_ONLY_FAIL(ok) · 0 DIVERGE ·
+0 RC_DIFF · 0 COMPILED_REGRESS. **13 → 0 gate-relevant.**
+
+**Cycle C step-1 LANDED** (origin/main `ab7015fa`): interpreter source
+deleted — 16 files / 25,548 lines (hexa_full.hexa 805 KB +
+interpreter.hexa + 9 test_interp*.hexa + 2 build tools + 3 metadata).
+build chain unaffected; production hexa.real verified (build+run → 42).
+
+**Cycle C step-2** (next-cycle R7 housekeeping): rewire main.hexa
+cmd_run / cmd_run_dispatch + 23 call sites to a compile-then-exec
+helper; drop transitional interp fallback; retire build/hexa_interp.
+Until then cmd_run routes to the still-present build/hexa_interp
+binary (source gone, runtime unchanged, loss = 0). g_interp_deprecated
+retires with step-2 = R7 closure.
