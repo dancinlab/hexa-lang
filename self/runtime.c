@@ -13053,6 +13053,16 @@ static void _js_emit_object(char** pbuf, size_t* pcap, size_t* plen, HexaVal v) 
     _js_buf_append(pbuf, pcap, plen, "}", 1);
 }
 
+// shortest %g-form decimal that strtod-round-trips to the same double —
+// matches CPython repr()/json.dumps() shortest-representation output.
+static void _shortest_double(char* buf, size_t cap, double f) {
+    for (int _p = 1; _p < 17; _p++) {
+        snprintf(buf, cap, "%.*g", _p, f);
+        if (strtod(buf, NULL) == f) return;
+    }
+    snprintf(buf, cap, "%.17g", f);
+}
+
 static void _js_emit_value(char** pbuf, size_t* pcap, size_t* plen, HexaVal v) {
     if (HX_IS_VOID(v))       { _js_buf_append(pbuf, pcap, plen, "null", 4); return; }
     if (HX_IS_BOOL(v))       { if (HX_BOOL(v)) _js_buf_append(pbuf, pcap, plen, "true", 4); else _js_buf_append(pbuf, pcap, plen, "false", 5); return; }
@@ -13063,7 +13073,7 @@ static void _js_emit_value(char** pbuf, size_t* pcap, size_t* plen, HexaVal v) {
         int k;
         if (f != f) k = snprintf(nb, sizeof(nb), "null");
         else if (f == (double)(int64_t)f) k = snprintf(nb, sizeof(nb), "%lld.0", (long long)f);
-        else k = snprintf(nb, sizeof(nb), "%.17g", f);
+        else { _shortest_double(nb, sizeof(nb), f); k = (int)strlen(nb); }
         if (k > 0) _js_buf_append(pbuf, pcap, plen, nb, (size_t)k);
         return;
     }
