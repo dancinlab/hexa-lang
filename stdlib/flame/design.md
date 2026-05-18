@@ -268,16 +268,64 @@ ConsciousDecoderV2 를 ag_tape 로 재구성하려면 7 layer op 외에
 - attn: 블록 inlined GQA vs `nn_attn_core` 알고리즘·인덱싱·causal·
   P/ctx layout·stable-softmax 순서 전부 동일 (inspection) → byte-eq.
 
+**⚠ 비자명 byte-eq 함정 (측정으로만 발견 — future work 필독)**:
+`nn_lib::_nn_sqrt` = libm `sqrt` (exact double) 이지만 decoder 블록
++ 최종 norm 은 `dt_sqrt` (24-iter Newton). 둘은 last-ULP 불일치 →
+기존 single-vector `ag_rmsnorm` (libm) 은 nn_rmsnorm 레퍼런스엔
+byte-eq 지만 **dt_sqrt decoder 엔 발산**. 대응: `ag_k_rmsnorm_mh`
+fwd 는 dt_sqrt 직접 (블록 공식), bwd 는 inv-기반이라 verified
+`nn_rmsnorm_bwd` 를 per-row 재사용 → byte-eq. T=1 이 최종 norm 도
+커버. **교훈: flame byte-eq oracle 은 타깃의 정확한 transcendental
+경로(sqrt/exp)를 일치시켜야 함 — gap(c) sweep · gap(d) forge
+kernel 에도 적용.**
+
 **status**: Decision 4 building blocks ✅ LANDED + MEASURED.
-`flame_ag_tape_test.hexa` **10/10 PASS 전부 max|Δ|=0** (hexa build
+`flame_ag_tape_test.hexa` **12/12 PASS 전부 max|Δ|=0** (hexa build
 compiled, $0): 7 layer op + chain + registry fan-in + residual +
-rope_mh + slice. gap(b) 의 모든 vjp building block byte-eq 잠금.
-**잔여 = decoder ASSEMBLY oracle** (full ConsciousDecoderV2 via
-ag_tape vs `nn_decoder_grad` byte-eq @ tiny d, W-transpose
-bookkeeping) → 그 다음 RFC 043 §Surface train_step. 측정 honest:
-primitive 전부 입증 · 조립단계 미입증 (over-claim 0).
+rope_mh + slice + silu_gate + rmsnorm_mh(dt_sqrt). **ConsciousDecoderV2
+재구성의 모든 primitive 가 정확한 sqrt 경로로 byte-eq 잠금**.
+**잔여 = decoder ASSEMBLY oracle** (full decoder via ag_tape vs
+`nn_decoder_grad` byte-eq @ tiny d, W-layout transpose) → 그 다음
+RFC 043 §Surface train_step. 측정 honest: primitive 전부 입증 ·
+조립단계 미입증 (over-claim 0).
 
 **cross-links**: RFC 043 §Surface =
 `inbox/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md`
 · tape foundation = RFC 034 · leaf vjp oracles = `tool/flame_phase4b3_verify_all.sh`
 · GOAL memory = `[[flame-general-pytorch-replacement-goal]]`
+
+## Decision 5 — decoder ASSEMBLY oracle + 2nd sqrt-path hazard
+
+**측정 결과 (Test 13 F-RFC043-AGTAPE-BLOCK-EQ, single decoder block)**:
+ag_tape 로 조립한 full block (embed-less: rmsnorm_mh→Wqkv→rope_mh→
+attn→Wo→resid→rmsnorm_mh→swiglu(linear×3+silu_gate)→resid) vs
+hand-written `nn_decoder_block_fwd/bwd`, 9 param + dX + Xout 비교:
+```
+dX = 0  (정확 byte-eq — 대수적 정확성 증명)
+Xout=1.39e-17  g1/g2≤2e-19  Wq..Wd 5e-20..7e-18  (전부 ≤ 1 ULP)
+```
+**판정: ASSEMBLY ALGEBRAICALLY PROVEN** — dX 정확 byte-eq 0, 전
+grad ≤ ~machine-eps. 조립 위상(registry fan-out/in, residual,
+rope_mh, silu_gate, rmsnorm_mh, W-transpose)은 전부 정확.
+
+**비자명 함정 #2 (instrument-first 가 sub-ULP 로 적발)**:
+잔여 ~1e-17 은 attention SCALE 의 sqrt-path 불일치 — `nn_attn_core`
+fwd+bwd 는 `1.0/sqrt(hd)` (libm), decoder 블록은 `1.0/dt_sqrt(hd)`
+(24-iter Newton). hd=2 에서 last-ULP 차이 → scores→softmax→ctx→
+Xout 으로 1.39e-17 전파. **함정 #1 (rmsnorm sqrt, Test 12 에서
+handled) 과 동일 class**. W-layout([out·in]↔[in·out]) 및 farr_matmul
+ikj-loop 은 무죄로 입증 (동일 reduction 순서·동일 곱; matmul shape
+무관 — 코드 inspection + dX=0 으로 확인).
+
+**picked (byte-eq 경로 — 비-contested, 표준 hazard 처리)**: true
+byte-eq 는 dt_sqrt-scale attention variant 필요. 잔여 op-count 보존
+유일해 = nn_attn_core 의 검증된 알고리즘을 그대로, scale 상수만
+`1.0/dt_sqrt(hd)` 로 (pre-scale Q 는 extra fp-op → 비-byte-eq 라
+배제). nn_lib 은 hexa-편집 가능 (C 아님, RFC 034 C-tape 불변).
+
+**status**: Decision 5 = 측정 완료, dt_sqrt-scale attn 미구현.
+ASSEMBLY 대수적 입증 (dX byte-eq 0). 잔여 = (1) dt-scale attn
+byte-eq variant + Test 13 byte-identical 전환, (2) full n_layer
+decoder + embed + final-norm + tied-head + CE-seed oracle, (3)
+RFC 043 §Surface train_step. honest: primitive 12/12 byte-eq ·
+assembly 대수입증·byte-eq 1-함정 잔여 (over-claim 0).

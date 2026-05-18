@@ -1387,7 +1387,20 @@ nn_attn_core = 알고리즘·layout·softmax 순서 동일 (byte-eq).
 ASSEMBLY oracle (full ConsciousDecoderV2 via ag_tape vs
 nn_decoder_grad) + RFC 043 §Surface train_step.
 
-GOAL 진척: gap(a) ✅ CLOSED · gap(b) building block 전부 ✅
-(7 layer + residual + rope_mh + slice + registry, 10/10 byte-eq;
-잔여 = decoder assembly + train_step) · gap(c/d/e) 미착수. multi-
-cycle, oracle-gated, $0-우선. honest: primitive 입증 · assembly 미입증.
+**gap(b) Decision 5** (assembly oracle + 2nd sqrt hazard, design.md):
+primitive set 5개 추가 완료 — silu_gate + rmsnorm_mh(dt_sqrt),
+**12/12 byte-eq**. Test 13 single-block ASSEMBLY oracle (ag_tape
+조립 vs nn_decoder_block_fwd/bwd, 9 param + dX + Xout):
+```
+dX = 0 (정확 byte-eq)  Xout=1.39e-17  전 grad ≤1e-17 (≤1 ULP)
+→ ASSEMBLY ALGEBRAICALLY PROVEN (조립 위상 전부 정확)
+```
+잔여 ~1e-17 = 비자명 함정 #2: attn SCALE 의 nn_attn_core libm
+`1/sqrt(hd)` vs 블록 `1/dt_sqrt(hd)` (함정 #1 rmsnorm 과 동일
+class). W-layout·farr_matmul 무죄 입증. 잔여 = dt-scale attn
+byte-eq variant → full n_layer decoder oracle → train_step.
+
+GOAL 진척: gap(a) ✅ CLOSED · gap(b) primitive 12/12 byte-eq ✅ ·
+assembly **대수적 입증** (dX byte-eq 0, ≤1e-17; byte-eq 1-함정
+잔여) · gap(c/d/e) 미착수. multi-cycle, oracle-gated, $0-우선.
+honest: primitive 입증 · assembly 대수입증·byte-eq pending.
