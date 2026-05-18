@@ -308,6 +308,12 @@ while s_init < nsamp {
 }
 print("  init epoch gn2: "); println(gn2_init_epoch)
 
+// RFC 056 §6.4 mk2-C3: enable FORGE_OUT_DEVICE_KEEP — forge op outputs
+// stay device-resident, the next forge op's _h2d sees them via the skip
+// path, lazy-D2H in farr_get materialises bytes on host only when a host
+// reader actually touches them. No-op under no-CUDA (returns 0).
+let _ = farr_set_out_disposition(1)
+
 // grad-accumulate-then-step loop with per-step wall (corpus_test pattern)
 let mut step = 1
 let mut gn2_last = gn2_init_epoch

@@ -1018,6 +1018,7 @@ extern HexaVal farr_mul_gpu;                                                   /
 extern HexaVal farr_silu_gpu;                                                  /* runtime.c — RFC 040 fn carrier */
 extern HexaVal farr_silu_grad_gpu;                                             /* runtime.c — RFC 040 fn carrier */
 extern HexaVal farr_silu_gate_gpu;                                             /* runtime.c — mk2-C1b fn carrier */
+extern HexaVal farr_set_out_disposition;                                       /* runtime.c — RFC 056 §6.4 disposition register */
 extern HexaVal farr_rmsnorm_bwd_rows_gpu;                                      /* runtime.c — RFC 040 fn carrier */
 HexaVal farr_adamw_step_gpu(HexaVal w, HexaVal m, HexaVal v, HexaVal g,
                             HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
