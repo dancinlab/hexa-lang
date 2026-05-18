@@ -144,3 +144,28 @@
   T3 의 "별도 hexa-arch[chip] 절대 의존" 가정이 깨짐 — comb-side 에서도
   도구 풀체인 설치 가능. 단 P&R 실행 자체 (SDC + def + lef 설정 +
   routing 단계) 는 별도 multi-cycle 작업.
+- 2026-05-18 — **T1-B-full 첫 입력 record 도달** (consumer-side
+  observation): hexa-arch[chip] 가 본 campaign 의 첫 F1/F2 pair-verdict
+  record 를 emit. 위치 = `~/core/hexa-arch/exports/chip/noc/f1f2/
+  pair_verdicts/2026-05-18_d4_vs_d6_tornado_22nm_4ghz.json` (baseline
+  record = `records/2026-05-18_d4_mesh_tornado_22nm_4ghz.json`,
+  candidate = `records/2026-05-18_d6_hex_tornado_22nm_4ghz.json`).
+  **verdict = INCONCLUSIVE** (f1, f2 둘 다) — rfc_001 §9 live open Qs
+  (i) hex placement variants · (ii) clock-frequency sweep across
+  1–6 GHz · (iii) newer-FinFET wire-delay sensitivity 가 미해소.
+  내부 비공식 표기는 LEAN-PASS-FOR-D6 (이 단일 (4 GHz, 22 nm, axial-
+  hex-on-square-grid placement) 포인트에서 d=6 가 zero-load latency
+  0.887×, saturation throughput 1.26× — 1.5× router port cost 와 2-
+  cycle 대각 link 페널티 *후*); verdict enum 은 INCONCLUSIVE 유지
+  (g3 no-over-claim · single point ≠ regime claim).
+  계약: `hexa-arch:chip:noc:F1F2-pair-verdict` schema_version 1.0
+  (`COMB.tape @X x_hexa_arch_f1f2_schema`; rfc_002 §3 + §D); carrier
+  HXC v2 deferred (rfc_002 §9), JSON interim. provenance.absorbed =
+  false (`measurement_gate = GATE_OPEN`; rfc_002 §4 + §8); record =
+  capture-only. T2-partial f1_parametric (8/8 sweep degree-6 net win,
+  non-contention only) 과 *독립* 측정점 — congestion·real-workload·
+  peak distribution 은 여전히 hexa-arch[chip] 흐름 (T1-B-full 후속
+  스윕 + rfc_001 §9 open Qs 결판) 이 채울 영역.
+  다음 = (a) `T1A_analytical.md` §8 매핑표로 §3 부등식 우변 변수
+  채우기 (b) rfc_001 §9 open Q 결판 대기 — pair verdict 가 PASS/FAIL
+  로 굳을 때까지 RFC 057 F1/F2 closed-status 보류.

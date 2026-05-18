@@ -95,3 +95,56 @@ Net win (degree-6 > degree-4) ⟺
   결정 + F1/F2 verdict. blocked-on-hexa-arch (별도 repo 진행).
 - comb 단독 다음 액션: T1-A 표를 `comb/COMB.tape` 의 `@N t1a_constants`
   entry 로 archive (산출물 인덱스에 고정).
+
+## 8. T1-B input contract (cited — producer-side typed interface)
+
+> 본 절은 §3 승리 부등식의 **우변** (process / placement 의존, T1-A 단독
+> 결판 불가) 을 채울 데이터의 **계약**을 인용한다. comb 는 contract 의
+> *소비자* — schema 를 정의하지 않는다 (RFC 057 §6 T1; COMB.tape
+> `comb_ultimate.decouple`).
+
+### 계약 위치
+
+- **producer RFC** (typed-interface SSOT):
+  `~/core/hexa-arch/proposals/rfc_002_f1f2_export_interface.md`
+  (§3 schema · §4 provenance / no-over-claim · §5 path convention
+  · §6 semver).
+- **스키마 문서** (human reference; JSON rendering of HXC v2 keyset):
+  `~/core/hexa-arch/exports/chip/noc/f1f2/schema/v1_0.md`.
+- **인터페이스 이름**: `hexa-arch:chip:noc:F1F2-record` (single run)
+  + `hexa-arch:chip:noc:F1F2-pair-verdict` (pair-aggregated).
+- **carrier**: HXC v2 byte-canonical wire (`AGENTS.tape @D g_hxc`);
+  interim parse path = JSON of the same keyset.
+
+### §3 RHS quantity → schema field mapping
+
+§3 의 부등식 우변 변수들은 본 schema 의 다음 필드로 정확히 충전된다 (단위
+포함; 인용으로 충분하므로 본 문서는 값 재진술 금지, g3):
+
+| §3 RHS quantity (analytical) | schema field (typed) | unit / kind |
+|---|---|---|
+| `Ē_hop` (avg per-hop energy proxy, used left + right) | `wire_delay_model.{ps_per_mm, cycle_period_ps, rc_exponent}` · `router_cost.iq_pipeline.*` | derived (model parameters) |
+| `Δ_router` (port-cost penalty, ~+50% under d-linear) | `router_cost.{port_area_norm, port_energy_norm}` | normalized to d=4 baseline |
+| `Δ_wire,diag` (diagonal RC penalty ∝ L²) | `wire_delay_model.links[].{length_mm, latency_cycles}` · `wire_delay_model.rc_exponent` | per-link |
+| §3 부등식 부호 결정 (F1 verdict 직접) | `verdict.f1` ∈ {PASS, FAIL, INCONCLUSIVE} + `verdict.rationale` | enum + prose |
+| 측정 곡선 (saturation / latency) — 부등식 검증의 가시화 | `latency_curve[]` · `saturation_throughput` | (injection_rate, cycles) |
+| Leighton 한계 (g3 real-limit anchor) | `leighton_oracle.{status, bisection_*, diameter_*}` | enum + integers |
+
+Pair 단위 (degree-4 vs degree-6) verdict 는 별도 `pair_verdict` 레코드로
+집계됨 (스키마 doc §D pair-record convention) — `verdict.f1 / verdict.f2`
+는 pair 레코드의 enum 으로 들어온다 (single record 에서는 INCONCLUSIVE).
+
+### 소비 경로
+
+T1-B-full 측정이 채워진 record 는 producer-owned 절대 경로에서 읽힘 (D7
+producer-owned; rfc_002 §5):
+
+```
+~/core/hexa-arch/exports/chip/noc/f1f2/records/<record_id>.{hxc,json}
+~/core/hexa-arch/exports/chip/noc/f1f2/pair_verdicts/<pair_id>.{hxc,json}
+```
+
+`comb/sim/README.md` "T1-B-full input expectation" 가 harness-측 경로
+규약을 추가로 명세한다. record 의 `provenance.consumer_target` 은
+`"hexa-lang:comb:RFC_057:F1F2"` 로 발행됨 — 본 문서가 그 consumer
+타깃이다.

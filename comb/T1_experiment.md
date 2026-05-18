@@ -63,12 +63,24 @@ degree-6 승리 조건: `(diameter·energy 이득) > (port-area ~1.5× + wire-RC
 
 ## hexa-arch[chip] 인터페이스 (decoupling 준수)
 
-```
-comb → hexa-arch[chip]:  위상 spec ×2 · traffic · metric 정의 · pass/fail
-hexa-arch[chip] → comb:  NoC sim(BookSim2/gem5-Garnet 흡수) 실행
-                          → metric 표 + F1/F2 verdict
-```
-comb 는 sim 을 흡수/구현하지 않는다 (RFC 057 · COMB.tape `comb_ultimate`).
+이 인터페이스는 producer-side 에서 typed contract 로 정형화됨. 본 절은
+*인용*만 한다 (citation-enforced strict-lint, `AGENTS.tape @D g6`; 중복-
+정의 금지, `@D g3`).
+
+- **계약 SSOT** (producer): `~/core/hexa-arch/proposals/
+  rfc_002_f1f2_export_interface.md` §3 (스키마) + §4 (provenance / no-
+  over-claim 필수 필드) + §5 (path convention) + §6 (semver 규칙).
+- **스키마 문서** (human reference): `~/core/hexa-arch/exports/chip/noc/
+  f1f2/schema/v1_0.md` — JSON 으로 렌더한 키셋; 머신 carrier 는 같은
+  키셋의 HXC v2 byte-canonical wire (`AGENTS.tape @D g_hxc`).
+- **인터페이스 이름** (type carrier): `hexa-arch:chip:noc:F1F2-record`
+  (단일 run) + `hexa-arch:chip:noc:F1F2-pair-verdict` (pair-aggregated).
+- **방향**: comb 는 본 계약의 **소비자** (RFC 057 §6 T1; COMB.tape
+  `comb_ultimate.decouple`). sim 흡수/구현 안 함; record 만 읽음.
+
+위 계약이 정의하는 RHS 출력이 본 문서 §3 (modern-node wire model) 변수와
+T1A_analytical.md §3 승리 부등식 우변을 충전한다 — `T1A_analytical.md` §8
+"T1-B input contract" 가 필드 매핑을 가진다.
 
 ## 상태 / 다음
 

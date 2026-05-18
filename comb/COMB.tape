@@ -62,3 +62,17 @@
   decouple_refine = "comb 가 안 하는 것 = 외부 EDA *흡수* (BookSim2/Yosys/OpenROAD/SKY130 — hexa-arch). comb 가 하는 것 = 자체 graph/non-contention 모델 측정."
   next_gate = "(a) RTL 스텁 (hexa→Verilog emitter, comb-side, T2 RTL 측면) (b) T1-B-full = hexa-arch[chip] BookSim2 흡수 (congestion·real-workload 측정)"
   t2_openroad_install = "🎉 OpenROAD cmake CONFIGURED 2026-05-18. deps: brew(13) + source(LEMON-coin 1.3.1, CUDD 3.0.0). make -j4 background (PID 25059, ~30-60min). 완료 시 P&R + GDSII 가능 → T3 'hexa-arch 절대 의존' 가정 무너짐."
+
+# ─── external citations (typed-interface contracts comb consumes) ────
+
+@X x_hexa_arch_f1f2_schema := "hexa-arch:chip:noc:F1F2 typed-interface contract" :: spec [d=2026-05-18 active]
+  producer_rfc = "~/core/hexa-arch/proposals/rfc_002_f1f2_export_interface.md"
+  schema_doc = "~/core/hexa-arch/exports/chip/noc/f1f2/schema/v1_0.md"
+  interface_names = ["hexa-arch:chip:noc:F1F2-record", "hexa-arch:chip:noc:F1F2-pair-verdict"]
+  carrier = "HXC v2 byte-canonical wire (g_hxc); JSON of same keyset = interim parse path (rfc_002 §9)"
+  read_path = "~/core/hexa-arch/exports/chip/noc/f1f2/{records,pair_verdicts}/<id>.{hxc,json}"
+  semver_pin = "schema_version 1.0 (rfc_002 §6 — comb pins MAJOR; producer maintains last two MAJORs)"
+  consumer_target_value = "hexa-lang:comb:RFC_057:F1F2"
+  decisions_cited = ["hexa-arch design.md D1 public-surface clean-room", "D2 typed-interface", "D7 producer-owned export path"]
+  scope = "T1-B-full (modern-node wire model + router cost + traffic-driven latency/throughput). comb 는 소비자 (RFC 057 §6 T1; comb_ultimate.decouple)."
+  consumed_by = ["comb/T1_experiment.md §hexa-arch[chip] 인터페이스", "comb/T1A_analytical.md §8 T1-B input contract", "comb/sim/README.md §T1-B-full input expectation"]
