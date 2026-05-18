@@ -102,6 +102,73 @@ DRC clean → T3 strict "tapeout-ready" status. DRC violations → diagnose + it
 Pull to local for archival via `scp -r summer@ubu-2:~/comb_pnr_out2/
 {results,reports}_d6 .` after run completes.
 
+## 5b. Pre-result analytical predictions (model-based, NOT measurement)
+
+> Labeled **predicted**. When `extract_pnr_metrics.sh` lands real values
+> from ORFS bkml0mjdh, replace and compute predicted-vs-measured Δ.
+> Predictions provide a falsifier for the model itself, not a substitute
+> for the measurement (g3 no-over-claim · `T1A_analytical.md §5 caveat`).
+
+### Area prediction (from synth-only SKY130 + standard P&R overhead)
+
+| metric | predicted (d6) | predicted (d4) | basis |
+|---|---:|---:|---|
+| std-cell area | ~94,000 μm² | ~62,000 μm² | yosys+abc synth (1.516× ratio, already measured) |
+| utilization target | 25% | 25% | `config.mk PLACE_DENSITY` |
+| min die (util-limited) | ~376,000 μm² | ~248,000 μm² | std_cell / util |
+| min die (pin-limited) | ~1,270,000 μm² | ~810,000 μm² | ~900 pins × pin-pitch / 4 sides |
+| **expected die ≈** | **~1.27 mm²** | **~0.81 mm²** | pin-limited dominates (config.mk DIE=1×1 mm² may bump for d6) |
+
+Note: d6 die may exceed the 1 mm² config — ORFS will either auto-bump
+die or fail on pin congestion. If ORFS bumped die, area ratio ≈ same
+1.5× shape; if it failed, refine config.mk and re-run.
+
+### Timing prediction (SKY130 hd, tt corner, 200 MHz target = 5 ns)
+
+| metric | predicted (d6) | predicted (d4) | basis |
+|---|---:|---:|---|
+| critical path | 7-input arbiter + axial route | 5-input arbiter + XY route | combinational depth |
+| typical fmax  | 150-300 MHz | 200-400 MHz | sky130 hd empirical for similar NoC routers |
+| WNS @ 200 MHz | -0.5 to +2 ns | +1 to +3 ns | d4 has shorter combinational path |
+| TNS  | small (single-cycle FIFO) | small | both single-issue |
+
+→ d6 may have tighter setup slack but should still close at 200 MHz.
+   If d6 WNS < 0 → period must relax (e.g. 6 ns / 167 MHz) and re-route.
+
+### Power prediction (SP&R estimate, 200 MHz, 50% activity)
+
+Roughly area-proportional + clock-tree overhead:
+| metric | predicted (d6) | predicted (d4) | basis |
+|---|---:|---:|---|
+| total power | ~2-4 mW | ~1.3-2.6 mW | sky130 hd flop ~1 μW/MHz, scaled |
+| ratio (d6/d4) | ≈ 1.5× | — | tracks area ratio if activity equal |
+
+### F1 (operative under measured area/timing)
+
+If WNS_d6 > 0 AND area_d6/area_d4 < 2.0 → F1 holds at this design point.
+If WNS_d6 < 0 → period must relax → d6's fmax_max < d4's fmax_max → F1
+falsified at fmax-limited workload (but PASS at hop-limited workload).
+
+This is the *operative F1 verdict* from comb-side P&R. Note: still
+NOT the authoritative F1 for RFC 057 §5 — that's hexa-arch[chip]'s
+typed-interface measurement_gate (rfc_002 §8). comb-side P&R =
+corroboration only.
+
+## 5c. Final disposition rubric (when bkml0mjdh data lands)
+
+For each measured number:
+1. Replace TBD in §2 / §3 / §4 with measured value.
+2. Compute predicted - measured Δ; if |Δ| > 30% → model needs revision
+   (note in §5b honesty ledger).
+3. Re-evaluate F1: substitute measured t_router_d6 (= area_d6/area_d4
+   normalized) into `T1A_analytical.md §3` win inequality.
+4. DRC result → §4: clean → T3 strict tapeout-ready status (subject to
+   §6 caveats); violations → diagnose + iter.
+5. Status: T3 deliverable complete; falsifier F1 (RFC 057 §5) remains
+   OPEN at the authoritative level (hexa-arch gate, item 4 of inbox).
+6. Commit GDS + reports under `comb/rtl/t3_results/` (or large-file
+   archive depending on size — GDS may be MB-scale).
+
 ## 6. Honest scope
 
 - This is **design-only**, no fab/FPGA per RFC 057 §3 (T3 = 설계만).
