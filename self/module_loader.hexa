@@ -1011,6 +1011,18 @@ fn ml_strip_and_clean(src) {
 
 let mut g_order_parts = []
 let mut g_visited_hs = ml_hset_new()
+// R7 (2026-05-18): cycle-safe post-order DFS. g_visited_hs is the BLACK
+// set (added at EMIT/marker time only). For an import CYCLE (e.g.
+// compiler/atlas/static_index ↔ prefix_index) neither node is emitted
+// during the mutual recursion, so the old emit-only guard let them
+// ping-pong: instrumented atlas_cli walk showed static_index read
+// 60,073× / prefix_index 60,072× → unbounded read_file+collect_imports
+// into the monotonic no-GC arena → 24 GB SIGKILL. g_discovered_hs is the
+// GRAY set: a node is marked discovered the first time it is popped for
+// expansion; a later pop of an already-discovered (gray/black) node is a
+// cycle back-edge and is skipped (its MARKER frame, pushed on first
+// expansion, still emits it in post-order). O(V+E), cycle-safe.
+let mut g_discovered_hs = ml_hset_new()
 
 // RFC-016 P1 (I1-IMPORT-ALIAS) — alias bookkeeping. Both maps are scoped
 // per-walk and reset in load_module.
@@ -1046,15 +1058,23 @@ fn ml_iter_walk(start_file) {
                 g_order_parts.push(emit_file)
             }
         } else {
-            if ml_hset_has(g_visited_hs, top) {
-                // already emitted earlier in DFS — skip
+            if ml_hset_has(g_visited_hs, top) || ml_hset_has(g_discovered_hs, top) {
+                // BLACK (already emitted) or GRAY (already expanded / on
+                // the stack with a pending MARKER) — a cycle back-edge.
+                // Skip re-expansion; the existing MARKER frame still emits
+                // it in post-order. This breaks import cycles in O(V+E).
             } else {
-                // Reserve the emit frame first, so children pushed below
-                // are processed before this file finalizes.
+                // First discovery of this node — mark GRAY so any cyclic
+                // back-edge to it is skipped above, then reserve the emit
+                // frame so children below finalize before it.
+                g_discovered_hs = ml_hset_add(g_discovered_hs, top)
                 stack.push(top)
                 stack.push(MARKER)
 
                 let src = read_file(top)
+                if env_var("ML_DEBUG_WALK") == "1" {
+                    eprintln("[ml-walk] read " + top + " (" + str(len(src)) + " bytes)")
+                }
                 let caller_dir = ml_dirname(top)
                 // RFC-016 P1 — paired collector to capture alias alongside
                 // path. ml_collect_imports kept available for non-alias
@@ -1160,6 +1180,7 @@ fn ml_iter_walk(start_file) {
 fn load_module(path) {
     g_order_parts = []
     g_visited_hs = ml_hset_new()
+    g_discovered_hs = ml_hset_new()
     g_target_dir = ml_dirname(path)
     // RFC-016 P1 — alias bookkeeping reset per call.
     g_path_alias = #{}

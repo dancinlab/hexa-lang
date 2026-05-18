@@ -3676,19 +3676,71 @@ if len(av) < 3 {
         // tool/atlas_cli.hexa reads the embedded static_atlas() — zero fs I/O,
         // zero nexus dependency. Supersedes the prior nexus-cli proxy path
         // for "atlas" (the other subs — smash/free/etc — still proxy).
+        // R7 track B (2026-05-18): preferred path = standalone compiled
+        // bin/hexa-atlas. The module_loader cycle-safe DFS fix
+        // (static_index↔prefix_index 2-cycle was ping-ponging 60k× →
+        // OOM) + embedded.gen sever (dist/atlas.hxc is the canonical
+        // runtime SSOT) + list_dir codegen mapping unblocked the build.
+        // cmd_run fallback retained when binary absent.
         let __inst_a = install_dir_from_argv0()
-        let mut atlas_script = "tool/atlas_cli.hexa"
-        if len(__inst_a) > 0 {
-            let inst_path = __inst_a + "/tool/atlas_cli.hexa"
-            if file_exists(inst_path) { atlas_script = inst_path }
-        }
         let mut atlas_args = []
         let mut ai = 3
         while ai < len(av) {
             atlas_args.push(av[ai])
             ai = ai + 1
         }
-        cmd_run(atlas_script, atlas_args)
+        let mut atlas_bin = ""
+        if len(__inst_a) > 0 {
+            let inst_bin = __inst_a + "/bin/hexa-atlas"
+            if file_exists(inst_bin) { atlas_bin = inst_bin }
+        }
+        if len(atlas_bin) == 0 && file_exists("bin/hexa-atlas") {
+            atlas_bin = "bin/hexa-atlas"
+        }
+        if len(atlas_bin) > 0 {
+            let cli_q = shq(atlas_bin)
+            let mut cmd = cli_q
+            let mut aj = 0
+            while aj < len(atlas_args) {
+                let q = shq(atlas_args[aj])
+                cmd = cmd + " " + q
+                aj = aj + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut sj = len(out) - mlen
+            while sj >= 0 {
+                if out.substring(sj, sj + mlen) == marker {
+                    midx = sj
+                    sj = -1
+                } else {
+                    sj = sj - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            let mut atlas_script = "tool/atlas_cli.hexa"
+            if len(__inst_a) > 0 {
+                let inst_path = __inst_a + "/tool/atlas_cli.hexa"
+                if file_exists(inst_path) { atlas_script = inst_path }
+            }
+            cmd_run(atlas_script, atlas_args)
+        }
     } else if sub == "qrng" {
         // RFC 044 — stdlib/qrng dispatch.
         // stdlib/qrng/qrng.hexa parses argv subcommand (status/collect/selftest/

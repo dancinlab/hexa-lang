@@ -87,6 +87,7 @@ bin/hexa-check
 bin/hexa-verify
 bin/hexa-calc
 bin/hexa-lsp
+bin/hexa-atlas
 
 # R7 track B Phase 3/4 batch absorbed-verb binaries (build_absorbed_binaries.sh)
 bin/hexa-absorbed-*

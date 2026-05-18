@@ -4475,6 +4475,11 @@ fn gen2_expr(node) {
                 if name == "env_var"        { return "hexa_env_var(" + a0 + ")" }
                 if name == "env"            { return "hexa_env_var(" + a0 + ")" }
                 if name == "delete_file"    { return "rt_delete_file(" + a0 + ")" }
+                // R7 track B: `list_dir(path)` — compiled parity with
+                // interp (hexa_full.hexa:14347). runtime.c hexa_list_dir
+                // does the `ls -1` shellout + split. Needed by
+                // compiler/atlas/merger.hexa for the atlas_cli binary.
+                if name == "list_dir"       { return "hexa_list_dir(" + a0 + ")" }
                 if name == "bin"            { return "hexa_bin(" + a0 + ")" }
                 if name == "hex"            { return "hexa_hex(" + a0 + ")" }
                 if name == "base64_encode"  { return "hexa_base64_encode(" + a0 + ")" }
