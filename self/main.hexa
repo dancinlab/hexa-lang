@@ -1139,7 +1139,22 @@ fn dispatch_absorbed(verb, ab_args) {
         }
         if len(abin) > 0 {
             let cli_q = shq(abin)
-            let mut cmd = cli_q
+            // R7 track B (2026-05-18): force HEXA_VAL_ARENA=0 for absorbed
+            // sub-binaries. The discovery-engine family (drill/kick/omega/
+            // chain/…) churns heavy struct/map sets through round_run; the
+            // default-ON bump arena (S7-B) reclaims a block whose backing a
+            // map HexaVal still references → hexa_map_get_ic_slow derefs a
+            // stale HX_MAP_TBL ptr → SIGSEGV on certain seeds (verified:
+            // lldb frame#0 hexa_map_get_ic_slow, EXC_BAD_ACCESS). Arena=0
+            // (heap alloc, no reclaim aliasing) is byte-eq for working
+            // seeds (seed A total=687 ON≡OFF) and makes segfaulting seeds
+            // run deterministically (seed B total=683 ×2). These are
+            // short-lived verb CLIs — the arena's only benefit (multi-GB
+            // self-compile RSS) is irrelevant here; correctness wins. The
+            // deep runtime root-fix (arena-escape heapify / IC ptr revalidation)
+            // is fixpoint-critical (aprime_cc/hexa_v2 map-IC) → tracked
+            // separately; this is the sound integration-layer fix.
+            let mut cmd = "HEXA_VAL_ARENA=0 " + cli_q
             let mut ai = 0
             while ai < len(ab_args) {
                 let q = shq(ab_args[ai])
