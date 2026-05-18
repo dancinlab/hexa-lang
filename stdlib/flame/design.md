@@ -487,3 +487,29 @@ confirm/falsify. 둘 다 **cost-bearing → user 승인 필요**
 user 의 cost-ascending 명시). **$0 자율 surface 완전 소진**:
 GOAL 5 gap 중 4 fully CLOSED + gap(d) $0-prep CLOSED, gap(d) 의
 GPU 측정만 별도 cost 사이클 (pre-registered falsifier 준비완료).
+
+## Decision 9 — gap(d) closure 경로 = forge 커널 구현 먼저 [user gate]
+
+**picked (user gate 2026-05-18, "GPU-fire => go" + 후속 contested
+cost 결정)**: gap(d) 닫기 = **forge host-loop GPU 커널 (RoPE /
+rmsnorm / silu) 을 먼저 구현** → CPU dt_* 경로 대비 byte-eq oracle
+→ THEN user-authorized GPU fire 로 pre-registered 0.769→0.143 /
+3.72× confirm/falsify.
+
+**근거 (instrument-first, 사용자 메모리)**: forge substrate 조사
+($0) 결과 = `self/cuda/runtime_cuda.c` 는 cuBLAS Dgemm 만; runtime.c
+L10756 명시 "`__global__` kernels = next-cycle" — RoPE/rmsnorm/silu
+는 아직 host CPU loop (= gap(d) 본체). 따라서 지금 fire = 측정대상
+(forge 커널) 부재 → known baseline 재측정 = blind-fire ($1.7
+교훈 위반). 사용자가 3 옵션 (커널먼저 / baseline보정fire / benchmark
+defer) 중 **커널먼저** 선택 — 측정대상이 존재해야 decisive fire.
+
+**scope**: HEXA-NATIVE-ONLY 정합 — forge 는 현재 C/CUDA substrate
+(GOAL.md; hexa-NVPTX = RFC 055 미래). 커널 = `__global__` CUDA in
+`self/cuda/runtime_cuda.c`, `_hx_cuda_*` extern 패턴 (matmul_gpu 와
+동일), 프로토타입 `tool/cuda_test_farr_{rope,elementwise,reduction}
+.cu` 활용. byte-eq oracle = CPU dt_sqrt/dt_exp 경로 (Decision 6
+함정 #1-3 동일 — GPU 커널도 dt_* 와 byte/fp-tol 일치 필요).
+
+**status**: Decision 9 확정. multi-cycle C/CUDA substrate 작업.
+GPU fire 는 커널 byte-eq oracle PASS 후 user-authorized 실행.
