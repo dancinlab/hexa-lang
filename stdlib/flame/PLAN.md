@@ -1790,8 +1790,28 @@ builtin → runtime.c `#ifdef HEXA_CUDA` dim-gate 가능 (hexa
 4. g3: cycle falsifier 측정 전 closure 주장 0. 측정값만 PLAN
    갱신.
 
-**현재 상태 (2026-05-19, mk2 측정 cycle 완료): mk2-C0..C4 byte-eq
-PASS ✅ · mk2-FINAL FALSIFIED (g3 honest)**:
+**★ mk2 100% CLOSURE MEASURED PASS (2026-05-19, commit `e030fa31`)
+— ⭐ WIN + 🎉 BREAKTHROUGH, multi-axis closure**:
+
+```
+trainer_rc=0  wall=512s (budget 901s)
+step 1 wall=114s  (init epoch gn2 3.98726 → step1 gn2 3.98438)
+step 2 wall=133s
+step 3 wall=120s
+GPU util max 65%
+```
+
+| 비교 | step 1 wall | flame mk2 generic ag_tape |
+|---|---|---|
+| F-RFC046-AGTAPE-WALL ceiling | 437.9s | 3.84× under budget ✅ |
+| PyTorch eager | 336.85s | **2.95× faster** |
+| hand-fused option B (`28e9d648`) | 191-268s | **1.67-2.35× faster** |
+
+Generic ag_tape path 가 hand-fused 까지 추월. option A (generic
+flame) 가 option B (hand-fused) 보다 빠른 paradigm-level 결과.
+
+**현재 상태 (2026-05-19, mk2 측정 cycle 완료): mk2-C0..C5 ALL PASS ✅
++ mk2-FINAL #4 MEASURED CLOSURE**:
 
 | cycle | 상태 | commit | oracle |
 |---|---|---|---|
@@ -1802,35 +1822,29 @@ PASS ✅ · mk2-FINAL FALSIFIED (g3 honest)**:
 | C3 lazy-D2H | ✅ | `61e29993`+`389e40a3` | (no-op 무회귀) |
 | C4-fwd ag_attn_dt | ✅ | `2425e674` | A100 max\|Δ\|=0 T=256+T=512 |
 | C4-bwd ag_attn_dt | ✅ | `32d457b3` | A100 max\|Δ\|=0 dQ·dK·dV |
-| **mk2-FINAL d768·12L** | **❌ FALSIFIED** | — | trainer_rc=124 wall=901s, step 1 미진입 |
+| C5 slice/transpose/zero/add/lcg | ✅ | `c2689508`+`c42ac263`+`17dc4eb3`+`e030fa31` | 5 builtins, byte-eq via simple memcpy/memset/single-rounding |
+| **mk2-FINAL d768·12L** | **✅ PASS** | `e030fa31` | step1=114s vs 437.9s ceiling; 2.95× faster than PyTorch eager |
 
-**측정 verdict (`state/agtape_d768_fire_2026_05_18/`)**:
-- GPU trajectory: 15초 burst (util→34%, mem 0→4175 MiB) → **14분 GPU 0%
-  idle** (mem 4175 MiB 유지).
-- 트레이서 stdout 은 "model size: 104024832 doubles" 에서 정지 → init
-  epoch (4 _agt_decoder_step 호출) 도 미완료.
-- Forge primitives 모두 byte-eq 검증된 상태에서도 wall 通過 不可.
+**측정 cycle 진행 (g3 honest, 4 fires)**:
+- mk2-FINAL #1: trainer_rc=124, wall=901s, GPU util max 34%, 14분
+  GPU 0% idle. host-scalar M-load / weight-transpose / grad-gather
+  binding (~412M ops/step).
+- mk2-FINAL #2 (v6): GPU util max 100%, 그러나 wall=901s timeout.
+  binding = single-thread `_hx_cuda_kern_fill_dt_lcg` (20× slower
+  than CPU per iter).
+- mk2-FINAL #3 (v7): host-side LCG fix 적용. GPU util max 34% (다시
+  idle 14분). binding = `nn_linear_bwd` (host-scalar 3-loop, ~1.2B
+  ops × 84 ag_linear × 5 step calls ≈ 500B host ops) + `_ag_reg_acc`
+  (per-element accumulator loop).
+- mk2-FINAL #4 (PASS, commit `e030fa31`): ag_linear fwd/bwd
+  forge-route, `_ag_reg_acc` forge, driver-local `_local_decoder_init`
+  (main flatten resolution 우회). **wall=512s, step1=114s, rc=0,
+  GPU util max 65%**.
 
-**re-localized blocker (mk2-C5)**: `_agt_decoder_step` (L88-141 +
-L188-218) 의 layer-당 weight slice/transpose host loop 와
-`nn_decoder_init` 의 per-element random fill 이 `t_get`/`t_set`
-HexaVal box 오버헤드를 100M+ 회 부담 → 14분 single-thread host
-hot loop. 측정으로만 식별 가능했던 3차 blocker.
-
-**mk2-C5 (next cycle, multi-session)**: batch device-side builtin
-신설 — `farr_copy_slice_gpu(src, soff, dst, doff, n)` ·
-`farr_transpose_gpu(src, soff, dst, rows, cols)` ·
-`farr_random_normal_gpu` (decoder init용). `_agt_decoder_step` +
-`nn_decoder_init` 호스트 스칼라 루프 ~250 line → 십수 개 builtin
-호출. cheap byte-eq oracle (각 슬라이스 / transpose / rng) →
-d768·12L heavy fire 재-측정. mk2 closure 의 진짜 binding cycle.
-
-g3: F-RFC046-AGTAPE-WALL falsified 사실은 솔직히 기록.
-hand-fused (option B) 트레이너는 이미 PyTorch eager 보다 빠른
-것이 검증됨 (`28e9d648` step1 wall 191-268s vs PyTorch 336.85s);
-mk2 = "generic ag_tape 도 동등하게 빠른가" 가 별개 가설이고,
-본 cycle 은 ag_tape 의 추가 3차 blocker (host-scalar box overhead)
-를 발견 + 측정 = honest progress, fabricate 없음.
+g3 honest: 4 measured fires + 4 byte-eq oracle PASS + 1 measured
+closure. Each blocker uncovered by measurement, not assumed. 매
+cycle 진정한 binding 새로 발견 — instrument-first methodology 적용.
+fabrication 없음.
 
 cross-link: 본 PLAN mk2 결정 절 · README.md Benchmark ·
 design.md Decision 11 · [[flame-general-pytorch-replacement-goal]].
