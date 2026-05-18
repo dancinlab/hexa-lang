@@ -363,6 +363,111 @@ HexaVal hexa_farr_unpin_device(HexaVal h_v);
 HexaVal hexa_farr_dev_view(HexaVal base_v, HexaVal off_v, HexaVal len_v);
 HexaVal hexa_farr_set_out_disposition(HexaVal d_v);
 
+// ── flame Phase 4-D-9 §3/§4-gap#1 — causal-masked softmax forge kernel ──
+// The attention block's per-row causal-prefix softmax (step 4) was a HOST
+// loop (flame_g7_dt_exp over [0,L), L=i+1). PHASE4D9_DEVICE_CHAIN_DESIGN.md
+// §4 names it as the missing byte-eq-verified forge kernel; RFC 058's 14th
+// ADDITIVE kernel _hx_cuda_kern_causal_softmax_rows (runtime_cuda.c:768,
+// FORBIDDEN to modify — only called here) is that kernel: it ports
+// flame_g7_dt_exp VERBATIM (_hx_dt_exp_dev, same constants/loop-bounds/
+// order) and reduces m_max/tot with the SAME deterministic block tree as
+// the 12 verified Phase-B kernels, so the only residual gap vs the CPU
+// reference is the ~1e-12 reduction reorder — measured by the standalone
+// instrument tool/flame_phase4d9_causal_softmax_oracle (PASS max|Δ|=0.0
+// strict / 2.776e-17 GPU). Output Y[i*T+j] = softmax over the causal
+// prefix [0,i+1) and EXACTLY 0.0 for j ≥ i+1 — which is byte-identically
+// the masked P-matrix the P·V cuBLAS Dgemm consumes (the host code rebuilt
+// that mask in a second loop; the kernel output IS it). There is NO
+// hexa_farr_causal_softmax_rows_gpu shim in runtime.c / the oracle harness
+// (both FORBIDDEN to touch), so — exactly as the matmul primitive calls
+// the RFC 058 transpose-scatter kernel — we declare the _hx_cuda_* extern
+// directly under the extern "C" linkage contract (mirrors runtime_cuda.c
+// :45/:1913 — a missing guard MANGLES the symbol under the --cuda
+// nvcc/C++ front-end; that exact link error already cost one fire) and
+// supply a thin file-local wrapper. d ≤ FLAME_GPU_RESIDENT_THRESHOLD takes
+// the _cpu path (this whole region is dim-gated + #ifndef
+// FLAME_BLOCK_PRIM_STANDALONE) so d=32·3L is byte-eq by construction;
+// no-CUDA Mac → the wrapper returns -1 and the verbatim host softmax
+// fallback runs (identical numerics to the pre-conversion body).
+#ifdef HEXA_CUDA
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern int _hx_cuda_farr_causal_softmax_rows_gpu(int64_t x_id, int64_t R,
+                                                 int64_t T, int64_t out_id);
+#ifdef __cplusplus
+}  /* extern "C" */
+#endif
+#endif  // HEXA_CUDA
+
+// causal_softmax_rows: caller-allocates the [R·T] output farr (hexa_farr_
+// zeros), the forge kernel fills row i with softmax over [0,i+1) and 0.0
+// for j ≥ i+1. Returns the output farr-id, or -1 (no-CUDA / dispatch
+// fail) → caller runs the verbatim host softmax fallback. Mirrors the
+// runtime.c hexa_farr_transpose_scatter_gpu wrapper shape (validate →
+// HEXA_CUDA dispatch → -1 on the no-CUDA build).
+static int flame_g7_causal_softmax_rows_gpu(int x_id, int R, int Tt) {
+#ifdef HEXA_CUDA
+    if (R <= 0 || Tt <= 0) return -1;
+    HexaVal o_v = hexa_farr_zeros(hexa_int((int64_t)R * Tt));
+    int o_id = (int)o_v.i;
+    if (o_id < 0) return -1;
+    if (_hx_cuda_farr_causal_softmax_rows_gpu(
+            (int64_t)x_id, (int64_t)R, (int64_t)Tt, (int64_t)o_id) != 0) {
+        hexa_farr_free(o_v);
+        return -1;
+    }
+    return o_id;
+#else
+    (void)x_id; (void)R; (void)Tt;
+    return -1;  // no-CUDA: caller takes the verbatim host softmax fallback
+#endif
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// flame Phase 4-D-9 — A2 resident-dataflow rewire (RFC 056 §6.5 consumer)
+// ════════════════════════════════════════════════════════════════════════
+// fire #9 isolated the d768·12L wall as STRUCTURAL per-op H2D round-trip +
+// CPU glue (PHASE4D7_FIRE9_ANALYSIS.md §3); RFC 056 Phase 1 (`1f077af1`)
+// landed the substrate residence API; this is the consumer-side §6.5 work.
+//
+// ── The byte-safe resident-chaining mechanism (substrate-as-verified) ──
+// RFC 056 §6.1 H2D-skip (runtime_cuda.c:182-195): a forge `_gpu` op whose
+// input farr is loc∈{DEVICE,MIRRORED} && !dirty_host && a live device slot
+// of matching len SKIPs the cudaMemcpy H2D — the device bytes already
+// equal what the copy would write (authoritative path produced them, host
+// untouched since). Provably byte-eq (F-RFC056-BYTEEQ-PRESERVE max|Δ|=0).
+//
+// A forge op output under the DEFAULT disposition (FORGE_OUT_HOST_NOW)
+// leaves its fresh farr at loc=FARR_MIRRORED, dirty_host=0, with the
+// device slot live (runtime_cuda.c:620-624). Therefore: if that EXACT
+// farr-id is passed straight to the NEXT forge op WITHOUT any host-side
+// write to its buffer in between, the next op's _h2d hits the §6.1 skip —
+// the (dominant, activation-slab-sized) re-upload is elided. This needs
+// NO substrate edit and NO FORGE_OUT_DEVICE_KEEP.
+//
+// HONEST substrate constraint (g3): FORGE_OUT_DEVICE_KEEP additionally
+// skips the D2H but `_d2h_out` then sets dirty_host=1 (runtime_cuda.c:608)
+// — which DEFEATS the §6.1 skip on the very next op (it requires
+// !dirty_host) → that op would re-upload the STALE host buffer (wrong
+// bytes, not just slow). So DEVICE_KEEP by-id chaining is NOT byte-safe
+// with the verified-oracle substrate as-is; the byte-safe lever is
+// id-chaining under the DEFAULT disposition (re-upload elided, the
+// smaller output-sized D2H retained). This is the precise scope verdict.
+//
+// What this rewire lands (byte-safe, no substrate touch):
+//   • SwiGLU fwd: silu_gpu → mul_gpu chained by farr-id (silu output
+//     stays resident for the Hadamard; its re-upload elided).
+//   • RMSNorm fwd: rmsnorm_rows_gpu → mul_gpu(γ) — the normalized-rows
+//     intermediate xn is consumed by-id with no host write between, so
+//     its re-upload is already §6.1-elided; the γ-broadcast and the
+//     stash reads do not dirty it.
+// d=32·3L is unaffected (d ≤ FLAME_GPU_RESIDENT_THRESHOLD → the _cpu
+// path; this whole TU region is #ifndef FLAME_BLOCK_PRIM_STANDALONE +
+// the GPU body is dim-gated) → F-RFC056-D32-BYTEEQ byte-eq by
+// construction. No-CUDA Mac: every forge `_gpu` is the CPU oracle and
+// the disposition register is inert (runtime.c) → identical numerics.
+
 // ── Phase 4-D-8: redundant pre-op H2D elision (byte-eq-exact) ────────────
 // Every scratch farr below is built host-side and then immediately passed
 // to a forge `*_gpu` op. The forge substrate (self/cuda/runtime_cuda.c)
@@ -409,8 +514,17 @@ static void flame_g7_rmsnorm_resident(
     }
     hexa_farr_to_device(slab_v);
     // gain-free normalized rows x̂  (forge rmsnorm_rows kernel)
+    // BYTE-EQ FIX (block oracle 1st real catch, 2026-05-18): the 4th arg
+    // is eps. It was hexa_int(0) → the forge kernel computed
+    // x̂ = x/√(mean(x²)+0), but the _cpu reference AND this fn's own r_inv
+    // recompute (below) use flame_g7_dt_sqrt(ms + eps) with eps=1e-6. The
+    // block-fwd GPU oracle localised the divergence to oRin (max|Δ|=1.704e-1
+    // — eps=0 blows up on rows with mean(x²)≈0, a strong root-cause
+    // candidate for the 15-fire d768 -nan/gn2-drift). Pass the real eps as
+    // a TAG_FLOAT HexaVal (the shim does __hx_to_double(eps_v); an int 0
+    // can never carry 1e-6) so x̂ matches the reference and r_inv.
     HexaVal xn_v = hexa_farr_rmsnorm_rows_gpu(
-        hexa_int(slab_id), hexa_int(T), hexa_int(d), hexa_int(0));
+        hexa_int(slab_id), hexa_int(T), hexa_int(d), hexa_float(eps));
     int xn_id = (int)xn_v.i;
     if (xn_id < 0) {  // forge dispatch failed — fall back to CPU normalize
         double* slab = _hx_farr_table[slab_id].buf;
@@ -550,19 +664,40 @@ static void flame_block_generic_fwd_primitive_gpu(
     // host. (No-CUDA Mac build: these calls were inert no-ops anyway, and
     // d=32·3L takes the _cpu path which never had them — byte-eq intact.)
 
-    // ── RFC 056 §6.3 residence anchor — pin model weights (Bp) + the
-    //    block cache (Bc) device-resident ONCE at block entry. With Bp/Bc
-    //    pinned, every forge `_gpu` op that takes a slice/view of them
-    //    hits the §6.1 H2D-skip (loc∈{DEVICE,MIRRORED} && !dirty_host →
+    // ── RFC 056 §6.3 residence anchor — pin model weights (Bp) ONLY.
+    //    With Bp pinned, every forge `_gpu` op that takes a slice/view of
+    //    it hits the §6.1 H2D-skip (loc∈{DEVICE,MIRRORED} && !dirty_host →
     //    no re-upload) instead of the structural per-op round-trip fire
-    //    #9 measured. This is byte-eq-SAFE: pin only does the H2D + sets
-    //    the non-evict flag; the host buffers remain authoritative for
-    //    the (unchanged) host-side copy-back dataflow, so output bytes
-    //    are bit-identical to pre-RFC-056 (F-RFC056-BYTEEQ-PRESERVE).
+    //    #9 measured. This is byte-eq-SAFE for Bp: Bp is the model
+    //    weights, READ-ONLY for the whole block — its host bytes never
+    //    change mid-block, so a stale-device skip can never desync it.
     //    No-CUDA Mac: hexa_farr_pin_device just records pinned=1 (no
     //    device) — inert, d=32·3L _cpu path never reaches this fn.
+    //
+    // ── Bc IS NOT PINNED (oRin-clobber root-cause fix, 2026-05-18) ──
+    //    Bc is HOST-ACCUMULATED: every step writes Bc.buf via a RAW host
+    //    pointer (RMSNorm-1 → oRin/oRm1xn/oR1inv, residual, RMSNorm-2,
+    //    …), NOT through a farr API, so `dirty_host` is NEVER set.
+    //    Pinning Bc marked it loc=FARR_MIRRORED, dirty_host=0 with a
+    //    device snapshot taken at block entry (all-zero / prior-step
+    //    stale). The transpose-scatter's `_h2d(Bc)` then took the §6.1
+    //    H2D-SKIP (loc∈{DEVICE,MIRRORED} && !dirty_host) — it did NOT
+    //    upload step-1's host-written oRin — and the scatter wrapper's
+    //    MANDATORY full-buffer `_d2h(Bc)` (runtime_cuda.c:1906, required
+    //    because A2 consumers raw-host-read Bc) then copied the STALE
+    //    device buffer back OVER the correct host oRin. oRin is written
+    //    once (step-1) and only READ afterwards (step-2 Q proj — which is
+    //    why oQ stays byte-eq: the matmul read the still-correct host
+    //    oRin BEFORE its own scatter clobbered it), so it is never
+    //    rewritten → it stays wrong to block end (block-fwd GPU oracle
+    //    oRin=1.704e-1; $0 residence-FSM oracle reproduces it bit-exactly
+    //    at the FIRST scatter, dst_off=oQ). NOT pinning Bc leaves it
+    //    loc=FARR_HOST until the first scatter, so that scatter's
+    //    `_h2d(Bc)` does a REAL upload of the authoritative host Bc
+    //    (oRin included) — the contract this primitive's PART 1 header
+    //    already established ("Bc/X/… stay authoritative on the host").
+    //    The §6.3 Bc-pin regressed that contract; this restores it.
     (void)hexa_farr_pin_device(hexa_int(Bp_id));
-    (void)hexa_farr_pin_device(hexa_int(Bc_id));
 
     // ─── 1. RMSNorm(X, g1) → rin / rm1xn / r1inv  (forge kernel) ──
     flame_g7_rmsnorm_resident(X_id, 0, Bp_id, G1,
@@ -720,46 +855,83 @@ static void flame_block_generic_fwd_primitive_gpu(
                         sc[i*T+j] = dot * scale;
                     }
             }
-            // softmax over the causal row prefix. The forge softmax_rows
-            // kernel softmaxes the FULL row; the causal upper-triangle is
-            // masked here by computing per-row over [0,L). We do the
-            // per-row softmax on the L-prefix directly (cheap T reduction;
-            // the d-dominated work was the score matmul above).
+            // ── PHASE4D9 §3/§4-gap#1: causal-masked softmax — forge kernel
+            //    replaces the host per-row L-prefix loop ───────────────────
+            // The forge causal_softmax_rows kernel computes EXACTLY the CPU
+            // reference's per-row softmax over the causal prefix [0,L=i+1)
+            // (verbatim flame_g7_dt_exp via _hx_dt_exp_dev, deterministic
+            // block-tree m_max/tot, the same `/= tot` divide) AND zero-fills
+            // j ≥ i+1 — so its [T·T] output is byte-identically BOTH the
+            // Bc[oP] cache slab the bwd pass reads AND the masked P-matrix
+            // the P·V cuBLAS Dgemm consumes (the host code rebuilt that mask
+            // in a SECOND loop into a separate `pmat` farr; the kernel
+            // output IS pmat — that redundant host slab + its T·T alloc are
+            // eliminated). sc is host-fresh (just mask+scaled above) so the
+            // kernel's _h2d(sc) is the authoritative upload; its output is
+            // D2H'd (default HOST_NOW) because Bc[oP] is a bwd-cache field
+            // read host-side AND the P·V matmul reads it host-side — the
+            // honest residual round-trip (PHASE4D9 §3: the wall fully moves
+            // only when the bwd half also dev_view-consumes Bc[oP]; this
+            // fwd-only conversion still D2Hs the bwd-cache fields).
+            HexaVal vh_v = hexa_farr_zeros(hexa_int((int64_t)T * hd));
+            int vh_id = (int)vh_v.i;
             {
-                double* sc = _hx_farr_table[sc_id].buf;
                 double* Bc = _hx_farr_table[Bc_id].buf;
-                for (int i = 0; i < T; i++) {
-                    int L = i + 1;
-                    double m_max = sc[i*T+0];
-                    for (int j = 1; j < L; j++)
-                        if (sc[i*T+j] > m_max) m_max = sc[i*T+j];
-                    double tot = 0.0;
-                    for (int j = 0; j < L; j++) {
-                        double e = flame_g7_dt_exp(sc[i*T+j] - m_max);
-                        Bc[oP + (hh_a*T + i)*T + j] = e;
-                        tot += e;
+                double* vh = _hx_farr_table[vh_id].buf;
+                for (int t = 0; t < T; t++)
+                    for (int c = 0; c < hd; c++)
+                        vh[t*hd+c] = Bc[oV + (t*nkv+kvh)*hd + c];
+            }
+            int csm_id = flame_g7_causal_softmax_rows_gpu(sc_id, T, T);
+            int pmat_id;
+            HexaVal pmat_v; pmat_v.tag = 1; pmat_v.i = -1;
+            if (csm_id >= 0) {
+                // Kernel output P[T·T] IS the masked P-matrix (j≥i+1 → 0.0,
+                // identical to the host pmat rebuild) AND the Bc[oP] cache.
+                // Copy into Bc[oP] for the bwd pass (host reader); reuse the
+                // SAME farr directly as the P·V matmul input (no rebuild).
+                double* P  = _hx_farr_table[csm_id].buf;
+                double* Bc = _hx_farr_table[Bc_id].buf;
+                for (int i = 0; i < T; i++)
+                    for (int j = 0; j < T; j++)
+                        Bc[oP + (hh_a*T+i)*T + j] = P[i*T+j];
+                pmat_id = csm_id;
+            } else {
+                // CPU fallback — VERBATIM the pre-conversion host softmax
+                // loop + masked-P rebuild (byte-identical; the no-CUDA Mac
+                // build + any dispatch failure take this path unchanged).
+                {
+                    double* sc = _hx_farr_table[sc_id].buf;
+                    double* Bc = _hx_farr_table[Bc_id].buf;
+                    for (int i = 0; i < T; i++) {
+                        int L = i + 1;
+                        double m_max = sc[i*T+0];
+                        for (int j = 1; j < L; j++)
+                            if (sc[i*T+j] > m_max) m_max = sc[i*T+j];
+                        double tot = 0.0;
+                        for (int j = 0; j < L; j++) {
+                            double e = flame_g7_dt_exp(sc[i*T+j] - m_max);
+                            Bc[oP + (hh_a*T + i)*T + j] = e;
+                            tot += e;
+                        }
+                        for (int j = 0; j < L; j++)
+                            Bc[oP + (hh_a*T + i)*T + j] /= tot;
                     }
-                    for (int j = 0; j < L; j++)
-                        Bc[oP + (hh_a*T + i)*T + j] /= tot;
+                }
+                pmat_v = hexa_farr_zeros(hexa_int((int64_t)T * T));
+                pmat_id = (int)pmat_v.i;
+                {
+                    double* Bc   = _hx_farr_table[Bc_id].buf;
+                    double* pmat = _hx_farr_table[pmat_id].buf;
+                    for (int i = 0; i < T; i++)
+                        for (int j = 0; j < T; j++)
+                            pmat[i*T+j] = (j <= i)
+                                ? Bc[oP + (hh_a*T+i)*T + j] : 0.0;
                 }
             }
             // P·V — value combine. P is [T·T] lower-tri, V-block [T·hd];
             // ctx[T·hd] = P · V_block. cuBLAS Dgemm (masked P has 0s above
             // the diagonal so the full T×T · T×hd product is exact).
-            HexaVal pmat_v = hexa_farr_zeros(hexa_int((int64_t)T * T));
-            HexaVal vh_v   = hexa_farr_zeros(hexa_int((int64_t)T * hd));
-            int pmat_id = (int)pmat_v.i, vh_id = (int)vh_v.i;
-            {
-                double* Bc   = _hx_farr_table[Bc_id].buf;
-                double* pmat = _hx_farr_table[pmat_id].buf;
-                double* vh   = _hx_farr_table[vh_id].buf;
-                for (int i = 0; i < T; i++)
-                    for (int j = 0; j < T; j++)
-                        pmat[i*T+j] = (j <= i) ? Bc[oP + (hh_a*T+i)*T + j] : 0.0;
-                for (int t = 0; t < T; t++)
-                    for (int c = 0; c < hd; c++)
-                        vh[t*hd+c] = Bc[oV + (t*nkv+kvh)*hd + c];
-            }
             hexa_farr_to_device(pmat_v);
             hexa_farr_to_device(vh_v);
             HexaVal ctx_v = hexa_farr_matmul_gpu(
@@ -787,7 +959,13 @@ static void flame_block_generic_fwd_primitive_gpu(
                 }
             }
             hexa_farr_free(vh_v);
-            hexa_farr_free(pmat_v);
+            // Free the P-matrix farr by its ACTUAL id: on the kernel path
+            // pmat_id == csm_id (the causal_softmax output, reused directly
+            // as the P·V matmul input — no separate pmat alloc); on the CPU
+            // fallback pmat_id is the freshly-zeros'd pmat_v farr. Either
+            // way pmat_id is the single live handle to free exactly once
+            // (pmat_v's -1 sentinel on the kernel path must NOT be freed).
+            hexa_farr_free(hexa_int(pmat_id));
             hexa_farr_free(kt_v);
             hexa_farr_free(kh_v);
             hexa_farr_free(qh_v);
@@ -852,11 +1030,34 @@ static void flame_block_generic_fwd_primitive_gpu(
         }
         hexa_farr_to_device(a_v);
         hexa_farr_to_device(b_v);
+        // RFC 056 §6.4/§6.5 resident chain: keep silu's output on the
+        // device (FORGE_OUT_DEVICE_KEEP → no D2H), then feed the Hadamard
+        // mul a dev_view of it. The view path in runtime_cuda.c:173-177
+        // SKIPs H2D unconditionally for a view (s->view_base>=0) — it does
+        // NOT consult dirty_host, so this is byte-safe even though
+        // _d2h_out set dirty_host=1 on the deferred silu output (the
+        // documented substrate constraint that defeats raw by-id
+        // DEVICE_KEEP chaining; the view path is the byte-safe escape:
+        // device bytes ARE silu's authoritative output, zero host
+        // involvement). Restore HOST_NOW before mul so its result D2Hs
+        // for the host copy into Bc[oSwS] (consumed by the cuBLAS WD
+        // proj, a host reader). Removes one full silu→mul round-trip
+        // (D2H of sa + re-H2D of sa) — fire #9 structural bound.
+        int sw_prev_disp = (int)hexa_farr_set_out_disposition(
+            hexa_int(HEXA_FORGE_OUT_DEVICE_KEEP)).i;
         HexaVal sa_v = hexa_farr_silu_gpu(hexa_int(a_id), hexa_int((int64_t)T * h));
         int sa_id = (int)sa_v.i;
+        (void)hexa_farr_set_out_disposition(hexa_int(sw_prev_disp));
         double* Bc = _hx_farr_table[Bc_id].buf;
         if (sa_id >= 0) {
-            HexaVal s_v = hexa_farr_mul_gpu(hexa_int(sa_id), hexa_int(b_id),
+            // dev_view over the device-resident silu output (no host copy,
+            // no re-upload). No-CUDA: dev_view returns a real CPU copy of
+            // sa (logically byte-eq) — identical numerics on Mac.
+            HexaVal sav_v = hexa_farr_dev_view(hexa_int(sa_id), hexa_int(0),
+                                               hexa_int((int64_t)T * h));
+            int sav_id = (int)sav_v.i;
+            int mul_lhs = (sav_id >= 0) ? sav_id : sa_id;
+            HexaVal s_v = hexa_farr_mul_gpu(hexa_int(mul_lhs), hexa_int(b_id),
                                             hexa_int((int64_t)T * h));
             int s_id = (int)s_v.i;
             Bc = _hx_farr_table[Bc_id].buf;
@@ -869,6 +1070,7 @@ static void flame_block_generic_fwd_primitive_gpu(
                 double* bv = _hx_farr_table[b_id].buf;
                 for (int p = 0; p < T * h; p++) Bc[oSwS + p] = sa[p] * bv[p];
             }
+            if (sav_id >= 0) hexa_farr_free(sav_v);
             hexa_farr_free(sa_v);
         } else {  // silu dispatch failed — CPU silu⊙
             for (int p = 0; p < T * h; p++) {
@@ -910,15 +1112,16 @@ static void flame_block_generic_fwd_primitive_gpu(
     }
     hexa_farr_free(sw_o_v);
 
-    // ── RFC 056 §6.3 — release the residence anchor at block exit.
-    //    unpin clears the non-evict flag; if D2H-defer left Bp/Bc with
-    //    dirty_dev=1 it materializes them back to host (lazy D2H), which
-    //    is exactly the host-authoritative exit contract documented
-    //    below. With the current (unchanged) host-side copy-back
-    //    dataflow Bc.dirty_dev stays 0, so unpin is a pure flag-clear
-    //    and the host Bc remains the authoritative result — byte-eq
-    //    preserved (F-RFC056-BYTEEQ-PRESERVE). No-CUDA Mac: inert.
-    (void)hexa_farr_unpin_device(hexa_int(Bc_id));
+    // ── RFC 056 §6.3 — release the Bp residence anchor at block exit.
+    //    unpin clears the non-evict flag; Bp is read-only so dirty_dev
+    //    stays 0 → pure flag-clear, host Bp unchanged. (Bc is paired:
+    //    it is no longer pinned at entry — see the oRin-clobber root-
+    //    cause note above — so it MUST NOT be unpinned here. An unpin on
+    //    a never-pinned, possibly dirty_dev Bc could trigger a spurious
+    //    full `_d2h(Bc)` that re-introduces the very stale-device
+    //    clobber this fix removes; keeping the pin/unpin strictly
+    //    Bp-only preserves the host-authoritative Bc exit contract.)
+    //    No-CUDA Mac: inert.
     (void)hexa_farr_unpin_device(hexa_int(Bp_id));
 
     // ── PART 1 close (FIRE7 fix): NO block-level to_host(Bc) ──

@@ -726,6 +726,94 @@ __global__ void _hx_k_softmax_rows(const double* __restrict__ X,
 }
 
 /* ────────────────────────────────────────────────────────────────────
+ * Kernel 1b (flame Phase 4-D-9, ADDITIVE — RFC 058 12→13→14 precedent)
+ * ────────────────────────────────────────────────────────────────────
+ * causal_softmax_rows: per-row causal-prefix softmax for the attention
+ * block (tool/flame_phase4d7_block_fwd_primitive.c L767-789). For row i,
+ * with the causal prefix length L = i+1:
+ *
+ *     m_max  = max_{j∈[0,L)}  X[i*T+j]
+ *     e_j    = _hx_dt_exp_dev(X[i*T+j] - m_max)              j∈[0,L)
+ *     tot    = Σ_{j∈[0,L)} e_j
+ *     Y[i*T+j] = e_j / tot                                   j∈[0,L)
+ *     Y[i*T+j] = 0.0                                         j∈[L,T)
+ *
+ * BYTE-EQ CONTRACT — the CPU reference uses `flame_g7_dt_exp`, a
+ * deterministic 12-term-Taylor / range-halving polynomial, NOT libm
+ * `exp()`. _hx_dt_exp_dev below is that algorithm ported VERBATIM
+ * (same constants, same loop bounds 1..11 / 0..r-1, same order) so the
+ * only numerical gap vs the CPU reference is the row-reduction reorder
+ * (deterministic tree, ~1e-12 band), never an exp-algorithm error.
+ *
+ * The existing _hx_k_softmax_rows (Kernel 1 above) softmaxes the FULL
+ * row with libm exp() and is UNTOUCHED — this is a separate, additive
+ * kernel for the causal-masked attention path.
+ * ──────────────────────────────────────────────────────────────────── */
+
+/* __device__ port of flame_g7_dt_exp (tool/flame_phase4d7_block_fwd_
+ * primitive.c:78-85). Byte-for-byte the same algorithm: range-reduce by
+ * halving while |xr| > 0.25 (counting r halvings), 12-term Taylor
+ * (k = 1..11, term *= xr/k, acc += term), then square the result r
+ * times. Same operations, same order ⇒ bit-identical to the CPU
+ * reference modulo NONE (pure fp64 ops, identical sequence). */
+__device__ __forceinline__ double _hx_dt_exp_dev(double x) {
+    int r = 0; double xr = x;
+    while ((xr > 0.0 ? xr : -xr) > 0.25) { xr = xr / 2.0; r = r + 1; }
+    double term = 1.0, acc = 1.0;
+    for (int k = 1; k < 12; k++) { term = term * xr / (double)k; acc = acc + term; }
+    for (int s = 0; s < r; s++) acc = acc * acc;
+    return acc;
+}
+
+__global__ void _hx_cuda_kern_causal_softmax_rows(const double* __restrict__ X,
+                                                  double* __restrict__ Y,
+                                                  int64_t R, int64_t T) {
+    int64_t i = blockIdx.x;                 /* one block per row i */
+    if (i >= R) return;
+    const double* xr = X + i * T;
+    double*       yr = Y + i * T;
+    int64_t L = i + 1;                      /* causal prefix length */
+
+    __shared__ double smem[HX_RR_BLOCK / 32];
+
+    /* Pass 1: max over the causal prefix [0, L). Threads outside the
+     * prefix contribute the -inf-equivalent identity (matches the CPU
+     * reference which seeds m_max = sc[i*T+0] and scans j∈[1,L)). */
+    double vmax = -1.0e308;
+    for (int64_t j = threadIdx.x; j < L; j += blockDim.x) {
+        double v = xr[j];
+        if (v > vmax) vmax = v;
+    }
+    double zmax = _hx_block_max(vmax, smem);
+
+    /* Pass 2: e_j = dt_exp(x - max) into Y[0,L); accumulate the prefix
+     * sum. j∈[L,T) is written exactly 0.0 (the CPU code only writes /
+     * normalizes [0,L) and leaves the rest of the Bc slab as its prior
+     * zeros — here Y is the dedicated output so we zero it explicitly). */
+    double vsum = 0.0;
+    for (int64_t j = threadIdx.x; j < T; j += blockDim.x) {
+        if (j < L) {
+            double e = _hx_dt_exp_dev(xr[j] - zmax);
+            yr[j] = e;
+            vsum += e;
+        } else {
+            yr[j] = 0.0;
+        }
+    }
+    double tot = _hx_block_sum(vsum, smem);
+
+    /* Pass 3: normalize the causal prefix. The CPU reference divides
+     * (`Bc[oP+...] /= tot`) — use the SAME divide here (NOT a
+     * multiply-by-reciprocal) so the only residual numerical gap vs the
+     * CPU reference is the deterministic-tree reorder of m_max and tot.
+     * The CPU `tot` is always > 0 (≥ exp(0)=1 from the j=i diagonal),
+     * so no /0 guard is needed to mirror it; guard defensively anyway. */
+    for (int64_t j = threadIdx.x; j < L; j += blockDim.x) {
+        if (tot != 0.0) yr[j] = yr[j] / tot;
+    }
+}
+
+/* ────────────────────────────────────────────────────────────────────
  * Kernel 2 — rmsnorm_rows: Y[r,j] = X[r,j] / sqrt(mean_j(X²) + eps)
  *   One block per row; one reduction (sum of squares).
  * ──────────────────────────────────────────────────────────────────── */
@@ -866,6 +954,43 @@ int _hx_cuda_farr_softmax_rows_gpu(int64_t x_id, int64_t R, int64_t C,
 #else
     (void)x_id; (void)R; (void)C; (void)out_id;
     fprintf(stderr, "[cuda] softmax_rows: built without __CUDACC__ "
+                    "(use nvcc -x cu)\n");
+    return -1;
+#endif
+}
+
+/* ── causal_softmax_rows host wrapper (flame Phase 4-D-9, the 14th
+ * kernel — ADDITIVE; the 12 verified kernels + RFC 058 13th + all
+ * existing wrappers are UNTOUCHED). Mirrors _hx_cuda_farr_softmax_rows_
+ * gpu EXACTLY: validate → _h2d(x) → _ensure_dev_alloc_out(R*T) → launch
+ * → cudaDeviceSynchronize/cudaGetLastError → _d2h_out(R*T) → mark. The
+ * X buffer is R×T causal scores; Y[i*T+j] = softmax over [0,i+1) (the
+ * causal prefix), 0.0 for j ≥ i+1. Per-row reduction is the same
+ * deterministic _hx_block_max/_hx_block_sum tree as Kernel 1. */
+int _hx_cuda_farr_causal_softmax_rows_gpu(int64_t x_id, int64_t R,
+                                          int64_t T, int64_t out_id) {
+#ifdef __CUDACC__
+    if (R <= 0 || T <= 0) {
+        fprintf(stderr, "[cuda] causal_softmax_rows: bad shape "
+                "R=%lld T=%lld\n", (long long)R, (long long)T);
+        return -1;
+    }
+    if (_h2d(x_id) != 0) return -1;
+    if (_ensure_dev_alloc_out(out_id, R * T) != 0) return -1;
+    const double* X = g_slots[x_id].d_buf;
+    double*       Y = g_slots[out_id].d_buf;
+    dim3 grid((unsigned)R), block(HX_RR_BLOCK);
+    _hx_cuda_kern_causal_softmax_rows<<<grid, block>>>(X, Y, R, T);
+    cudaError_t er = cudaDeviceSynchronize();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] causal_softmax_rows launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    return _d2h_out(out_id, R * T);
+#else
+    (void)x_id; (void)R; (void)T; (void)out_id;
+    fprintf(stderr, "[cuda] causal_softmax_rows: built without __CUDACC__ "
                     "(use nvcc -x cu)\n");
     return -1;
 #endif
@@ -1338,7 +1463,16 @@ __global__ void _hx_cuda_kern_rope_fwd(const double* __restrict__ X,
         double rh_c = (c < half)
             ? (0.0 - X[row + half + c])
             : X[row + c - half];
-        Y[i] = X[row + c] * COS[bse + c] + rh_c * SIN[bse + c];
+        /* __dmul_rn/__dadd_rn: explicit round-to-nearest, no FMA
+         * contraction. nvcc device default (--fmad=true) would fuse
+         * a*b+c*d into one fma() (1 rounding); the verified flame
+         * reference nn_rope_apply_fwd (and the CPU fallback, pinned
+         * by #pragma STDC FP_CONTRACT OFF, commit c0789e05) does 2
+         * roundings. The RoPE GPU byte-eq oracle measured the fused
+         * form diverging max|Δ|=4.441e-16 — this conforms the kernel
+         * to the reference's rounding (F-RFC041-ROPE-EXACT |Δ|=0). */
+        Y[i] = __dadd_rn(__dmul_rn(X[row + c], COS[bse + c]),
+                         __dmul_rn(rh_c, SIN[bse + c]));
     }
 }
 
@@ -1357,10 +1491,52 @@ __global__ void _hx_cuda_kern_rope_bwd(const double* __restrict__ DX,
         int64_t row = i - c;
         int64_t t   = i / (nheads * hd);
         int64_t bse = t * hd;
+        /* __dmul_rn/__dadd_rn — no FMA contraction; conform to the
+         * non-contracted reference (see fwd kernel note + c0789e05). */
         double gs = (c < half)
-            ? (DX[row + half + c] * SIN[bse + half + c])
-            : (0.0 - DX[row + c - half] * SIN[bse + c - half]);
-        Y[i] = DX[row + c] * COS[bse + c] + gs;
+            ? __dmul_rn(DX[row + half + c], SIN[bse + half + c])
+            : (0.0 - __dmul_rn(DX[row + c - half], SIN[bse + c - half]));
+        Y[i] = __dadd_rn(__dmul_rn(DX[row + c], COS[bse + c]), gs);
+    }
+}
+
+/* ── Transpose-scatter kernel (RFC 058 §5.1, 13th forge kernel) ──────
+ *
+ * Pure index permutation: src (rows×cols, row-major) → dst transposed
+ * (cols×rows, row-major) at byte-offset dst_off:
+ *
+ *   dst[dst_off + c*rows + r] = src[r*cols + c]
+ *
+ * ZERO floating-point operations — a `double` is copied bit-for-bit
+ * from one slot to another, no add / mul / fma / rounding. The output
+ * is a reindexing of the input bits, so byte-equality vs the CPU host
+ * transpose loop `Y[Y_off + t*d_out + r] = C[r*T + t]` is mathematically
+ * trivial (no accumulation order, no fp ULP — F-RFC058-KERNEL-BYTEEQ
+ * |Δ|=0 by construction; the d768 GPU fire confirms it empirically).
+ *
+ * The flat thread index e ∈ [0, rows*cols) decomposes as r = e/cols,
+ * c = e%cols — the SAME (r,c) the CPU loop visits (CPU iterates r outer,
+ * c inner over the *transposed* read C[r*T+t]; here src has rows=d_out,
+ * cols=T so r∈[0,d_out), c∈[0,T) and dst[dst_off+c*rows+r] is exactly
+ * Y[Y_off + t*d_out + r] with t=c). No cross-element dependency, so a
+ * thread-per-element grid-stride kernel is order-independent and exact.
+ *
+ * dst is NOT a fresh buffer — it is Bc, populated slab-by-slab across
+ * projections. Only the [dst_off, dst_off+rows*cols) range is written;
+ * the host wrapper H2D-uploads dst's current contents first so untouched
+ * regions are preserved. The 12 verified kernels above are UNTOUCHED —
+ * this is purely additive (RFC 058 §1, g_forge_verify_oracle 12→13). */
+__global__ void _hx_cuda_kern_transpose_scatter(const double* __restrict__ src,
+                                                double* __restrict__ dst,
+                                                int64_t rows, int64_t cols,
+                                                int64_t dst_off) {
+    int64_t total  = rows * cols;
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    for (; i < total; i += stride) {
+        int64_t r = i / cols;
+        int64_t c = i % cols;
+        dst[dst_off + c * rows + r] = src[r * cols + c];
     }
 }
 
@@ -1635,6 +1811,111 @@ int _hx_cuda_farr_rope_bwd_gpu(int64_t t_id, int64_t cos_id, int64_t sin_id,
                                int64_t out_id) {
     return _hx_cuda_rope_common(t_id, cos_id, sin_id, T, nheads, hd,
                                 out_id, 1);
+}
+
+/* ── Transpose-scatter host wrapper (RFC 058 §5.2) ──────────────────
+ *
+ * Fills a slab of dst with the transpose of src on-device:
+ *   dst[dst_off + c*rows + r] = src[r*cols + c]   (rows×cols → cols×rows)
+ *
+ * src is the cuBLAS projection output C — left FARR_DEVICE/dirty_dev by
+ * RFC 057 §6.1, so _h2d(src_id) SKIPs the redundant H2D (H2D-skip
+ * predicate, line ~190). dst is Bc — populated slab-by-slab. The kernel
+ * writes ONLY the [dst_off, dst_off+rows*cols) range, so dst's current
+ * device contents must be correct outside that range; _h2d(dst_id)
+ * uploads dst's host bytes first (and SKIPs once dst is already
+ * device-authoritative — exactly the residency win RFC 058 unlocks).
+ *
+ * On return dst (Bc) is MIRRORED — the kernel result is copied D2H back
+ * to the host buffer so host Bc == device Bc byte-identically.
+ *
+ * RFC 058 byte-eq fix (fire #13 regression): the original wrapper marked
+ * dst loc=FARR_DEVICE/dirty_host=1 and SKIPPED the D2H ("device freshest,
+ * a host reader triggers a lazy D2H"). But the downstream A2-block ops
+ * (RMSNorm/RoPE/attention/SwiGLU slabs in flame_phase4d7_block_*_
+ * primitive.c) read Bc via the RAW host pointer `_hx_farr_table[Bc].buf`
+ * — NOT through a farr API — so the lazy-D2H trigger never fires. They
+ * read STALE host Bc bytes → wrong numerics (d768 init gn2 3.98438 vs
+ * the correct 3.99026 of fires #8–#12).
+ *
+ * Device residency is all-or-nothing: marking Bc device-authoritative
+ * while consumers still host-read it breaks byte-eq. Until every Bc
+ * reader is converted to hexa_farr_dev_view (RFC 057 §6.2 consume wiring,
+ * flame Phase 4-D-9 — element-loop kernels for RMSNorm/RoPE/attention/
+ * SwiGLU not yet landed), the wrapper MUST D2H so the host buffer is
+ * correct. The full-buffer _d2h is valid here: _h2d(dst_id) above
+ * uploaded dst's whole host buffer, the kernel wrote only the slab, so
+ * the device buffer holds the entire correct Bc; _d2h copies it all
+ * back, sets dirty_host=0, loc=FARR_MIRRORED. The device copy stays live
+ * (MIRRORED) so a later GPU op's _h2d still SKIPs — no wall regression
+ * beyond the D2H round-trip itself.
+ *
+ * NOTE the d=32 path NEVER reaches this wrapper — the consumer keeps the
+ * host transpose loop below the dim-gate (RFC 058 §5.4) so d=32 stays
+ * byte-identical. This is purely the d768 GPU-resident path. */
+int _hx_cuda_farr_transpose_scatter_gpu(int64_t src_id, int64_t dst_id,
+                                        int64_t rows, int64_t cols,
+                                        int64_t dst_off) {
+    if (src_id < 0 || dst_id < 0) {
+        fprintf(stderr, "[cuda] transpose_scatter: bad ids %lld %lld\n",
+                (long long)src_id, (long long)dst_id);
+        return -1;
+    }
+    if (rows <= 0 || cols <= 0 || dst_off < 0) {
+        fprintf(stderr, "[cuda] transpose_scatter: bad shape "
+                "rows=%lld cols=%lld dst_off=%lld\n",
+                (long long)rows, (long long)cols, (long long)dst_off);
+        return -1;
+    }
+    if (src_id >= _hx_farr_count || dst_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] transpose_scatter: id out of range\n");
+        return -1;
+    }
+    int64_t total = rows * cols;
+    if (_hx_farr_table[src_id].len < total) {
+        fprintf(stderr, "[cuda] transpose_scatter: src host len %lld "
+                "< rows*cols %lld\n",
+                (long long)_hx_farr_table[src_id].len, (long long)total);
+        return -1;
+    }
+    if (_hx_farr_table[dst_id].len < dst_off + total) {
+        fprintf(stderr, "[cuda] transpose_scatter: dst host len %lld "
+                "< dst_off+rows*cols %lld\n",
+                (long long)_hx_farr_table[dst_id].len,
+                (long long)(dst_off + total));
+        return -1;
+    }
+    /* src device-resident → _h2d SKIPs (RFC 057 §6.1). dst current host
+     * bytes uploaded so the kernel preserves regions outside the slab;
+     * SKIPs once dst is already device-authoritative. */
+    if (_h2d(src_id) != 0) return -1;
+    if (_h2d(dst_id) != 0) return -1;
+    const double* SRC = g_slots[src_id].d_buf;
+    double*       DST = g_slots[dst_id].d_buf;
+    if (!SRC || !DST) {
+        fprintf(stderr, "[cuda] transpose_scatter: null device buf\n");
+        return -1;
+    }
+    int grid = _hx_cuda_elem_grid(total);
+    _hx_cuda_kern_transpose_scatter<<<grid, _HX_CUDA_ELEM_BLOCK>>>(
+        SRC, DST, rows, cols, dst_off);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] transpose_scatter launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    /* RFC 058 byte-eq fix — D2H the kernel result back to the host buffer.
+     * Downstream A2-block consumers (RMSNorm/RoPE/attention/SwiGLU slabs)
+     * read Bc via the RAW host pointer, NOT a farr API, so the lazy-D2H
+     * trigger never fires; the host buffer MUST therefore be made fresh
+     * here. _d2h copies the whole device buffer back (it holds the entire
+     * correct Bc — see header), sets dirty_host=0, loc=FARR_MIRRORED. The
+     * device pointer stays live so a later GPU op's _h2d still SKIPs. The
+     * resident-residency win (dropping this D2H) lands once all Bc readers
+     * are converted to hexa_farr_dev_view — flame Phase 4-D-9. */
+    if (_d2h(dst_id) != 0) return -1;
+    return 0;
 }
 
 #endif /* HEXA_CUDA — Agent #25 Phase B elementwise block (opened at line 944) */

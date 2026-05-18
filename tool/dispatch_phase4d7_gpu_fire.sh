@@ -72,7 +72,7 @@ VAST_SSH_KEY="/Users/ghost/.vast/ssh/vast-key"
 VASTAI="/Users/ghost/Library/Python/3.14/bin/vastai"
 
 # Wall time gate (F-RFC046)
-WALL_BUDGET_SEC=600   # 10 min hard cap (1.4× of F-RFC046 437.9s gate)
+WALL_BUDGET_SEC=${WALL_BUDGET_SEC:-600}   # env-overridable: default 10 min hard cap (1.4× of F-RFC046 437.9s gate)
 
 # Pre-flight
 [ -x "$VASTAI" ]         || { echo "ERROR: vastai CLI not found at $VASTAI"; exit 1; }
@@ -91,9 +91,12 @@ echo "LOCAL_DIR: $LOCAL_DIR"
 echo ""
 
 # ── 1) Search cheapest A100/H100/H200 ─────────────────────────────────
-echo "[1/9] Searching A100/H100/H200 offers (≤\$10/hr, cuda≥12.4, disk≥30) ..."
+echo "[1/9] Searching A100 offers (≤\$3/hr, cuda≥12.4, disk≥30) ..."
+# A100-only — fire #5–#10 all A100, #11 H100 gave identical result (wall
+# compute-independent); A100 은 동일 측정 정보를 ~6× 저비용으로 (g3
+# cost-routing). H100/H200 제외 (fire #11 H100 $1.22 vs A100 ~$0.19).
 OFFER_JSON=$($VASTAI search offers \
-    'gpu_name in [A100,A100_SXM4,A100_PCIE,A100X,H100_SXM,H100_PCIE,H100_NVL,H100,H200] num_gpus=1 rentable=true dph_total<10.0 cuda_max_good>=12.4 disk_space>30 reliability>0.985 inet_down>200' \
+    'gpu_name in [A100,A100_SXM4,A100_PCIE,A100X] num_gpus=1 rentable=true dph_total<3.0 cuda_max_good>=12.4 disk_space>30 reliability>0.985 inet_down>200' \
     -o 'reliability-' --raw 2>&1)
 OFFER_PARSED=$(echo "$OFFER_JSON" | python3 -c "
 import json,sys

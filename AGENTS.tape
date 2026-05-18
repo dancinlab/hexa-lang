@@ -37,6 +37,8 @@
   LIMIT_BREAKTHROUGH.md -> "project-specific limits + breakthrough audit"
   TAPE-AUDIT.md -> "tape v1.x adoption ledger for this repo"
   inbox/patches/ -> "external-contributed patch markdowns (one concept per file)"
+  stdlib/flame/ -> "★ NN training stdlib (hexa source, compiler-only PyTorch-equiv) — README · PLAN · FLAME.tape. RFC 043. see §0 nn_stack."
+  self/forge/ -> "★ GPU compute substrate SSOT label (cuBLAS + .cu kernels live in self/runtime.c + self/cuda/) — README · PLAN · FORGE.tape. RFC 040+041. see §0 nn_stack."
   stdlib/qrng/ -> "★ Quantum RNG — 9 backends T0..T3 + NIST SP 800-22 audit. RFC 044 absorption of ~/core/qrng (헌법 v2 룰 4 reference impl). see §0 qrng_stack."
   stdlib/sim_universe/ -> "★ Sim-Universe — virtual-universe runtime (26 modules · ~32k LoC · τ-clock + multiverse + qpu_bridge + 16 experiments). RFC 046 absorption of ~/core/sim-universe. see §0 sim_universe_stack."
   stdlib/quantum/ -> "★ Quantum Mirror — ≤30-qubit laptop-grade substrate (38 module dirs · 62k LoC · Aer-compat state-vector kernel + 27 algorithms + chemistry_vqe). RFC 045 absorption of ~/core/qmirror. see §0 qmirror_stack."

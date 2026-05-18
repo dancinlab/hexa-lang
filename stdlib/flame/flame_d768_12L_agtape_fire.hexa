@@ -1,0 +1,348 @@
+// flame_d768_12L_agtape_fire.hexa — gap(d) MEASURED generic-path fire
+// ════════════════════════════════════════════════════════════════════════
+//
+// WHY THIS EXISTS
+//   GOAL "범용 PyTorch 대체" gap(d) = forge kernel coverage for the
+//   GENERIC ag_tape path (not the hand-fused decoder_block_lib trainer
+//   that already passed F-RFC046-WALL at commit 28e9d648). The generic
+//   path's RoPE is now forge-wired (ag_rope_mh -> farr_rope_gpu ->
+//   #ifdef HEXA_CUDA _hx_cuda_farr_rope_gpu). The CPU-fallback byte-eq
+//   is verified 19/19 (FMA pragma c0789e05). What is NOT yet measured:
+//   the GENERIC path's end-to-end d768.12L GPU wall vs PyTorch.
+//
+//   This driver is that measurement. It is structurally the hand-fused
+//   flame_d768_12L_corpus_test.hexa harness (same config, same corpus,
+//   same per-step wall protocol) with the per-window
+//   nn_decoder_fwd/gn2/grad triple replaced by ONE _agt_decoder_step
+//   call (the generic ag_tape decoder micro-step — embed -> N x
+//   {rmsnorm,linear,rope_mh,attn_dt,silu_gate} -> final-norm -> tied
+//   lm-head -> CE-seed -> ag_backward_reg -> dense grad gather). The
+//   AdamW step reuses nn_decoder_adamw_step (identical flat m_total
+//   layout — _agt_decoder_step emits the same dense grad shape).
+//
+// Falsifiers (mirror tool/dispatch_phase4d7_gpu_fire.sh):
+//   F-RFC046-AGTAPE-WALL   step-1 wall <= 437.9s (= 1.3x of 336.85s
+//                          eager-PyTorch; the F-RFC046 gate the hand-
+//                          fused trainer cleared at 191-268s)
+//   F-RFC046-AGTAPE-GPU-UTIL  nvidia-smi >50% util during run (forge
+//                          kernels actually engaged on the generic path)
+//
+// Honest scope:
+//   - n_steps small (3): step-1 wall is the F-RFC046 anchor; this
+//     measures wall + GPU engagement of the GENERIC path, NOT a full
+//     convergence trajectory (that is gap(a), already closed).
+//   - Same config as corpus_test (T=1024 d=768 nh=12 nkv=4 h=3072
+//     V=256 NL=12 nsamp=4) so the wall is apples-to-apples with the
+//     hand-fused 191-268s baseline and the F-RFC046 PyTorch 336.85s.
+//   - On the no-CUDA Mac this BUILDS ONLY (HEXA_MAC_BUILD_OK=1); the
+//     numeric run is the vast.ai -DHEXA_CUDA dispatch.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/ag_tape"
+use "stdlib/flame/flame_math"
+use "stdlib/flame/decoder_lib"
+use "stdlib/flame/train_lib"
+use "stdlib/flame/decoder_block_lib"
+
+// ── transpose helpers (verbatim from flame_ag_tape_test.hexa L51,L84) ──
+// transpose a [d_out·d_in] slice of `src` at `off` -> dst[d_in·d_out]
+fn agt_wT_slice(src: int, off: int, dst: int, d_out: int, d_in: int) {
+    let mut r = 0
+    while r < d_out {
+        let mut c = 0
+        while c < d_in {
+            t_set(dst, c * d_out + r, t_get(src, off + r * d_in + c))
+            c = c + 1
+        }
+        r = r + 1
+    }
+}
+
+// transpose src[d_in·d_out] (nn-layout grad) -> dst[off + r·d_in + c]
+// (block [out·in] layout) — dst[off+r·d_in+c] = src[c·d_out+r].
+fn agt_wT_off(src: int, dst: int, off: int, d_out: int, d_in: int) {
+    let mut r = 0
+    while r < d_out {
+        let mut c = 0
+        while c < d_in {
+            t_set(dst, off + r * d_in + c, t_get(src, c * d_out + r))
+            c = c + 1
+        }
+        r = r + 1
+    }
+}
+
+// ── _agt_decoder_step (verbatim from flame_ag_tape_test.hexa L101-245) ─
+// One ag-tape decoder train micro-step: build tape from flat M, fwd,
+// gn2 (== nn_decoder_gn2 dt_exp formula), CE seed, ag_backward_reg,
+// then gather registry grads into the dense flat MgOut. Returns gn2.
+fn _agt_decoder_step(M: int, MgOut: int, idsf: int, target: int,
+                     cos: int, sin: int, T: int, d: int, nh: int,
+                     nkv: int, h: int, V: int, NL: int) -> float {
+    let hd = d / nh
+    let kvd = nkv * hd
+    let oTE = m_off_tok_emb(d, nh, nkv, h, V, NL)
+    let oGF = m_off_gF(d, nh, nkv, h, V, NL)
+    let tokE = t_zeros(V * d)
+    let mut te = 0
+    while te < V * d { t_set(tokE, te, t_get(M, oTE + te)); te = te + 1 }
+    let gF = t_zeros(d)
+    let mut gf = 0
+    while gf < d { t_set(gF, gf, t_get(M, oGF + gf)); gf = gf + 1 }
+    let Lg1 = t_zeros(NL)
+    let Lg2 = t_zeros(NL)
+    let LWq = t_zeros(NL)
+    let LWk = t_zeros(NL)
+    let LWv = t_zeros(NL)
+    let LWo = t_zeros(NL)
+    let LWg = t_zeros(NL)
+    let LWu = t_zeros(NL)
+    let LWd = t_zeros(NL)
+    let zb1 = t_zeros(d)
+    let zb2 = t_zeros(kvd)
+    let zbh = t_zeros(h)
+    let tp = ag_t_begin(2 + NL * 16 + 4)
+    let mut X = ag_embed(tp, idsf, tokE, T, d)
+    let mut l = 0
+    while l < NL {
+        let mob = m_off_block(l, d, nh, nkv, h, V, NL)
+        let g1t = t_zeros(d)
+        let g2t = t_zeros(d)
+        let mut gc = 0
+        while gc < d {
+            t_set(g1t, gc, t_get(M, mob + bp_off_g1(d, nh, nkv, h) + gc))
+            t_set(g2t, gc, t_get(M, mob + bp_off_g2(d, nh, nkv, h) + gc))
+            gc = gc + 1
+        }
+        let WqL = t_zeros(d * d)
+        let WkL = t_zeros(d * kvd)
+        let WvL = t_zeros(d * kvd)
+        let WoL = t_zeros(d * d)
+        let WgL = t_zeros(d * h)
+        let WuL = t_zeros(d * h)
+        let WdL = t_zeros(h * d)
+        agt_wT_slice(M, mob + bp_off_Wq(d, nh, nkv, h), WqL, d, d)
+        agt_wT_slice(M, mob + bp_off_Wk(d, nh, nkv, h), WkL, kvd, d)
+        agt_wT_slice(M, mob + bp_off_Wv(d, nh, nkv, h), WvL, kvd, d)
+        agt_wT_slice(M, mob + bp_off_Wo(d, nh, nkv, h), WoL, d, d)
+        agt_wT_slice(M, mob + bp_off_Wg(d, nh, nkv, h), WgL, h, d)
+        agt_wT_slice(M, mob + bp_off_Wu(d, nh, nkv, h), WuL, h, d)
+        agt_wT_slice(M, mob + bp_off_Wd(d, nh, nkv, h), WdL, d, h)
+        t_set(Lg1, l, to_float(g1t))
+        t_set(Lg2, l, to_float(g2t))
+        t_set(LWq, l, to_float(WqL))
+        t_set(LWk, l, to_float(WkL))
+        t_set(LWv, l, to_float(WvL))
+        t_set(LWo, l, to_float(WoL))
+        t_set(LWg, l, to_float(WgL))
+        t_set(LWu, l, to_float(WuL))
+        t_set(LWd, l, to_float(WdL))
+        let r1 = ag_rmsnorm_mh(tp, X, g1t, T, d)
+        let Qd = ag_linear(tp, r1, WqL, zb1, T, d, d)
+        let Kd = ag_linear(tp, r1, WkL, zb2, T, d, kvd)
+        let Vd = ag_linear(tp, r1, WvL, zb2, T, d, kvd)
+        let Qr = ag_rope_mh(tp, Qd, cos, sin, T, nh, hd)
+        let Kr = ag_rope_mh(tp, Kd, cos, sin, T, nkv, hd)
+        let cx = ag_attn_dt(tp, Qr, Kr, Vd, T, nh, nkv, hd)
+        let ao = ag_linear(tp, cx, WoL, zb1, T, d, d)
+        let h1 = ag_add(tp, X, ao, T * d)
+        let r2 = ag_rmsnorm_mh(tp, h1, g2t, T, d)
+        let ad = ag_linear(tp, r2, WgL, zbh, T, d, h)
+        let bd = ag_linear(tp, r2, WuL, zbh, T, d, h)
+        let sd = ag_silu_gate(tp, ad, bd, T * h)
+        let od = ag_linear(tp, sd, WdL, zb1, T, h, d)
+        X = ag_add(tp, h1, od, T * d)
+        l = l + 1
+    }
+    let zr = ag_slice(tp, X, (T - 1) * d, d, T * d)
+    let zT = ag_rmsnorm_mh(tp, zr, gF, 1, d)
+    let logits = ag_lmhead(tp, tokE, zT, V, d)
+    // gn2 = Σ (softmax(logits)−onehot)²  (nn_decoder_gn2 dt_exp formula)
+    let mut mx = t_get(logits, 0)
+    let mut mi = 1
+    while mi < V {
+        if t_get(logits, mi) > mx { mx = t_get(logits, mi) }
+        mi = mi + 1
+    }
+    let mut tot = 0.0
+    let mut mj = 0
+    while mj < V { tot = tot + dt_exp(t_get(logits, mj) - mx); mj = mj + 1 }
+    let seed = t_zeros(V)
+    let mut gn2 = 0.0
+    let mut mk = 0
+    while mk < V {
+        let pk = dt_exp(t_get(logits, mk) - mx) / tot
+        let tg = if mk == target { 1.0 } else { 0.0 }
+        let dv = pk - tg
+        t_set(seed, mk, dv)
+        gn2 = gn2 + dv * dv
+        mk = mk + 1
+    }
+    ag_backward_reg(tp, logits, seed)
+    // gather → dense MgOut
+    let mtot = m_total(d, nh, nkv, h, V, NL)
+    let mut z = 0
+    while z < mtot { t_set(MgOut, z, 0.0); z = z + 1 }
+    let gte = ag_grad(tp, tokE)
+    let mut a1 = 0
+    while a1 < V * d { t_set(MgOut, oTE + a1, t_get(gte, a1)); a1 = a1 + 1 }
+    let ggf = ag_grad(tp, gF)
+    let mut a2 = 0
+    while a2 < d { t_set(MgOut, oGF + a2, t_get(ggf, a2)); a2 = a2 + 1 }
+    let mut lb = 0
+    while lb < NL {
+        let mob = m_off_block(lb, d, nh, nkv, h, V, NL)
+        let gg1 = ag_grad(tp, to_int(t_get(Lg1, lb)))
+        let gg2 = ag_grad(tp, to_int(t_get(Lg2, lb)))
+        let mut c = 0
+        while c < d {
+            t_set(MgOut, mob + bp_off_g1(d, nh, nkv, h) + c, t_get(gg1, c))
+            t_set(MgOut, mob + bp_off_g2(d, nh, nkv, h) + c, t_get(gg2, c))
+            c = c + 1
+        }
+        agt_wT_off(ag_grad(tp, to_int(t_get(LWq, lb))), MgOut,
+                   mob + bp_off_Wq(d, nh, nkv, h), d, d)
+        agt_wT_off(ag_grad(tp, to_int(t_get(LWk, lb))), MgOut,
+                   mob + bp_off_Wk(d, nh, nkv, h), kvd, d)
+        agt_wT_off(ag_grad(tp, to_int(t_get(LWv, lb))), MgOut,
+                   mob + bp_off_Wv(d, nh, nkv, h), kvd, d)
+        agt_wT_off(ag_grad(tp, to_int(t_get(LWo, lb))), MgOut,
+                   mob + bp_off_Wo(d, nh, nkv, h), d, d)
+        agt_wT_off(ag_grad(tp, to_int(t_get(LWg, lb))), MgOut,
+                   mob + bp_off_Wg(d, nh, nkv, h), h, d)
+        agt_wT_off(ag_grad(tp, to_int(t_get(LWu, lb))), MgOut,
+                   mob + bp_off_Wu(d, nh, nkv, h), h, d)
+        agt_wT_off(ag_grad(tp, to_int(t_get(LWd, lb))), MgOut,
+                   mob + bp_off_Wd(d, nh, nkv, h), d, h)
+        lb = lb + 1
+    }
+    ag_t_free_state(tp)
+    ag_t_free_reg(tp)
+    ag_t_end(tp)
+    return gn2
+}
+
+// helper: per-window ids subview (verbatim from corpus_test L152-158).
+fn _window_ids(IDS: int, s: int, T: int, ids_out: int) {
+    let mut p = 0
+    while p < T {
+        let _ = farr_set(ids_out, p, farr_get(IDS, s * T + p))
+        p = p + 1
+    }
+}
+
+// ── driver (corpus_test harness, generic-path step) ───────────────────
+println("=== flame d768·12L GENERIC ag_tape fire (gap(d) MEASURED) ===")
+
+let T = 1024
+let d = 768
+let nh = 12
+let nkv = 4
+let h = 3072
+let V = 256
+let n_layer = 12
+let nsamp = 4
+let stride = 4096
+let n_steps = 3        // step-1 wall is the F-RFC046 anchor (honest scope)
+let hd = d / nh
+
+let path = "/Users/ghost/core/anima/training/corpus_consciousness_v1.jsonl"
+let bytes_arr = read_file_bytes(path)
+let n_bytes = len(bytes_arr)
+print("  corpus: "); print(path); println("")
+print("  size: "); print(n_bytes); println(" bytes (V=256 byte-level vocab)")
+print("  d768·12L config: T="); print(T); print(" d="); print(d); print(" nh="); print(nh)
+print(" nkv="); print(nkv); print(" h="); print(h); print(" n_layer="); print(n_layer)
+println("")
+print("  nsamp="); print(nsamp); print(" stride="); print(stride); print(" n_steps="); print(n_steps)
+println(" (GENERIC ag_tape path — ag_rope_mh -> farr_rope_gpu forge kernel)")
+
+let IDS = t_zeros(nsamp * T)
+let YS = t_zeros(nsamp)
+let mut s = 0
+while s < nsamp {
+    let off = s * stride
+    if off + T < n_bytes {
+        let mut p = 0
+        while p < T {
+            t_set(IDS, s * T + p, to_float(bytes_arr[off + p]))
+            p = p + 1
+        }
+        t_set(YS, s, to_float(bytes_arr[off + T]))
+    }
+    s = s + 1
+}
+
+let m_size = m_total(d, nh, nkv, h, V, n_layer)
+print("  model size: "); print(m_size); println(" doubles")
+let M = t_zeros(m_size)
+nn_decoder_init(M, 42, T, d, nh, nkv, h, V, n_layer)
+let Mm = t_zeros(m_size)
+let Mv = t_zeros(m_size)
+let Mg = t_zeros(m_size)
+let Mg_acc = t_zeros(m_size)
+let cos_tab = t_zeros(T * hd)
+let sin_tab = t_zeros(T * hd)
+nn_rope_build_tables(T, hd, cos_tab, sin_tab)
+
+let lr = 0.03
+let b1 = 0.9
+let b2 = 0.999
+let eps_a = 0.00000001
+let wd = 0.01
+
+let ids_scratch = t_zeros(T)
+
+// initial gn2 epoch (generic path, grad discarded)
+let mut gn2_init_epoch = 0.0
+let mut s_init = 0
+while s_init < nsamp {
+    _window_ids(IDS, s_init, T, ids_scratch)
+    let tgt0 = to_int(t_get(YS, s_init))
+    let g0 = _agt_decoder_step(M, Mg, ids_scratch, tgt0, cos_tab, sin_tab,
+                               T, d, nh, nkv, h, V, n_layer)
+    gn2_init_epoch = gn2_init_epoch + g0
+    s_init = s_init + 1
+}
+print("  init epoch gn2: "); println(gn2_init_epoch)
+
+// grad-accumulate-then-step loop with per-step wall (corpus_test pattern)
+let mut step = 1
+let mut gn2_last = gn2_init_epoch
+let mut wall_prev = to_int(to_string(exec("date +%s")).trim())
+while step <= n_steps {
+    let mut z = 0
+    while z < m_size { let _ = farr_set(Mg_acc, z, 0.0); z = z + 1 }
+    let mut gn2_step_epoch = 0.0
+    let mut s_e = 0
+    while s_e < nsamp {
+        _window_ids(IDS, s_e, T, ids_scratch)
+        let tt = to_int(t_get(YS, s_e))
+        // ONE generic-path micro-step: returns gn2, fills dense Mg
+        let g = _agt_decoder_step(M, Mg, ids_scratch, tt, cos_tab, sin_tab,
+                                  T, d, nh, nkv, h, V, n_layer)
+        gn2_step_epoch = gn2_step_epoch + g
+        let mut a = 0
+        while a < m_size {
+            let cur = farr_get(Mg_acc, a)
+            let _ = farr_set(Mg_acc, a, cur + farr_get(Mg, a))
+            a = a + 1
+        }
+        s_e = s_e + 1
+    }
+    nn_decoder_adamw_step(M, Mg_acc, Mm, Mv, m_size, lr, b1, b2, eps_a, wd, step)
+    gn2_last = gn2_step_epoch
+    let wall_now = to_int(to_string(exec("date +%s")).trim())
+    print("  step "); print(step); print(" wall="); print(wall_now - wall_prev); println("s")
+    wall_prev = wall_now
+    if step == 1 {
+        print("  step 1 (pre-update) gn2: "); println(gn2_step_epoch)
+    }
+    step = step + 1
+}
+
+print("  final gn2: "); println(gn2_last)
+println("=== F-RFC046-AGTAPE-WALL: see per-step wall vs 437.9s gate ===")
+println("=== generic ag_tape d768·12L fire DONE ===")
