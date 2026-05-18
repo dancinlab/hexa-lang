@@ -3442,19 +3442,71 @@ if len(av) < 3 {
         // stdlib/sim_universe/sim_universe.hexa parses argv subcommand
         // (status/selftest/anu/multiverse/qpu/qrng/bostrom/godel/fvd/stark/...)
         // RFC 046-A landed substrate code; RFC 046-B landed 15 experiments.
+        //
+        // R7 track B (2026-05-18, cycle 3): preferred path = standalone
+        // compiled bin/hexa-sim-universe binary built by `hexa build
+        // stdlib/sim_universe/sim_universe.hexa`. Same spawn-and-exit
+        // pattern as qrng/qmirror (cycles 1/2). Falls back to legacy
+        // cmd_run() when binary is absent.
         let __inst_s = install_dir_from_argv0()
-        let mut su_script = "stdlib/sim_universe/sim_universe.hexa"
-        if len(__inst_s) > 0 {
-            let inst_path = __inst_s + "/stdlib/sim_universe/sim_universe.hexa"
-            if file_exists(inst_path) { su_script = inst_path }
-        }
         let mut su_args = []
         let mut si = 3
         while si < len(av) {
             su_args.push(av[si])
             si = si + 1
         }
-        cmd_run(su_script, su_args)
+        let mut su_bin = ""
+        if len(__inst_s) > 0 {
+            let inst_bin = __inst_s + "/bin/hexa-sim-universe"
+            if file_exists(inst_bin) { su_bin = inst_bin }
+        }
+        if len(su_bin) == 0 && file_exists("bin/hexa-sim-universe") {
+            su_bin = "bin/hexa-sim-universe"
+        }
+        if len(su_bin) > 0 {
+            let cli_q = shq(su_bin)
+            let mut cmd = cli_q
+            let mut ai = 0
+            while ai < len(su_args) {
+                let q = shq(su_args[ai])
+                cmd = cmd + " " + q
+                ai = ai + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut sj = len(out) - mlen
+            while sj >= 0 {
+                if out.substring(sj, sj + mlen) == marker {
+                    midx = sj
+                    sj = -1
+                } else {
+                    sj = sj - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            let mut su_script = "stdlib/sim_universe/sim_universe.hexa"
+            if len(__inst_s) > 0 {
+                let inst_path = __inst_s + "/stdlib/sim_universe/sim_universe.hexa"
+                if file_exists(inst_path) { su_script = inst_path }
+            }
+            cmd_run(su_script, su_args)
+        }
     } else if sub == "qmirror" {
         // RFC 045 — stdlib/quantum dispatch.
         // stdlib/quantum/quantum.hexa parses argv subcommand (status/selftest/

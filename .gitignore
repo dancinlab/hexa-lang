@@ -80,6 +80,7 @@ self/native/hexa_cc.c.new
 # Arch-specific Mach-O / ELF, not source of truth. Rebuild with tool/build_hexa_<verb>.sh.
 bin/hexa-qrng
 bin/hexa-qmirror
+bin/hexa-sim-universe
 
 # Local smoke/session artifacts (not tracked)
 shared/state/

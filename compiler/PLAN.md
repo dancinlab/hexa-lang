@@ -1241,3 +1241,30 @@ surgical deletion 은 트랙 B (CLI driver re-targeting) 가 별도 multi-cycle 
 
 **fixpoint regression risk**: 0. dispatch-only change (cycle 1 동일 논리).
 
+---
+
+### 2026-05-18 — R7 track B cycle 3 — sim-universe (cycle h24)
+
+**Decision 6** (verb #3): sim-universe (`stdlib/sim_universe/sim_universe.hexa`, 324 lines, RFC 046).
+
+- **picked**: sim-universe
+- **rationale**:
+  - 다음 ready candidate — fn-main() at L268 ✓ · stdlib/<verb>/<verb>.hexa 구조 동형
+  - RFC 046 absorption (26 modules, ~32k LoC) — qrng cycle 1 패턴 3번째 적용으로 robustness 확정
+
+**구현 (LANDED)**:
+- `bin/hexa-sim-universe` build → 396 KB Mach-O. `tool/build_hexa_sim_universe.sh` + version smoke (`hexa sim-universe 1.1.0`).
+- `self/main.hexa` L3440-L3457 → L3440-L3517 (qmirror 동형 spawn + cmd_run fallback)
+- `.gitignore`: `bin/hexa-sim-universe`.
+- `hexa.real` rebuild 후 검증:
+  - byte-eq (status): `./hexa sim-universe status` ≡ `./bin/hexa-sim-universe status` → diff exit 0
+  - exit code propagation: unknown subcommand → shell rc=2
+  - cycle 1+2 regression: qrng 1.0.0 + qmirror 2.6.0 dispatch 정상
+
+**fixpoint regression risk**: 0.
+
+**R7 track B 진척**: 3/16 verbs (qrng · qmirror · sim-universe) — stdlib/<verb>/<verb>.hexa 패턴 모두 마이그레이션 완료. 잔여 13 verbs 중:
+- ready (fn main 보유): atlas (527L, tool/atlas_cli.hexa)
+- shim 필요: lsp (1006L) · check (1223L) · test (754L) · convergence_scan
+- 내부/특수: batch · bench · init · verify · calc (dispatch 분기 내 inline 또는 embedded — 별도 분석)
+
