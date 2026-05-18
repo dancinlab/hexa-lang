@@ -1,0 +1,10 @@
+# R7 parity-gate explicit skiplist — one test/*.hexa BASENAME per line.
+# Use ONLY for non-deterministic / interactive / env-resource programs
+# the ND heuristic in parity_interp_vs_compiled.sh misses. Each entry
+# must carry a reason comment so the skip is auditable (g3 — a skip is
+# an admission "parity is not measurable here", never a way to hide a
+# real compile divergence).
+#
+#   <basename.hexa>    # reason
+#
+# (heuristic already auto-skips clock/rand/mono_ns/socket/http/stdin)
