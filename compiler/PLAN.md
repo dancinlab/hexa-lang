@@ -1404,3 +1404,38 @@ cycles 1-6 후 자기-grep 으로 self/main.hexa 의 `cmd_run(` 호출 사이트
 
 **fixpoint regression risk (전 사이클 누적)**: 0. 모든 변경 dispatch-only + fn 이름 rename — codegen/transpiler/aprime_cc 무관.
 
+---
+
+### 2026-05-18 — R7 track B cycle 7 — module_loader flatten gap fix (cycle h29 · compiler-side)
+
+**Decision 10** (next focus): atlas flatten gap 진단 + 수정 (3 verbs unlock 가능 — atlas/verify/calc 전부 동일 root cause).
+
+**근본 원인**: `hexa build <file>` 의 module_loader preprocess 단계가 cross-directory `use` (e.g. `tool/atlas_cli.hexa` 가 `use "compiler/atlas/audit_rodata"` import) 에 대해:
+- 다른 caller_dir 경로로 도달하는 같은 파일 (예: `compiler/atlas/audit.hexa` → `compiler/atlas/audit_rodata` 와 `tool/atlas_cli.hexa` → `compiler/atlas/audit_rodata` 가 각각 다른 raw path) 을 _서로 다른 파일_ 로 dedup-key 처리
+- 결과 (A) flatten double-include (C `enum Severity` redefinition) OR (B) 일부 파일이 colliding 후 silently 누락 → clang 단계 undeclared identifier (`_static_atlas`, `_audit_merged`, ...)
+
+**기존 fix 발굴**: memory `[컴파일러 자체빌드 블로커]` + `[quant_meter P1 MVP]` 가 `ml_canon_path` FIX 가 sibling branch (`rfc043-hexa-torch`, stash `e91a199c`) 에 미커밋으로 land 됐다고 명시. 추출 + main 적용:
+- `self/module_loader.hexa` + 두 함수 신규:
+  - `_ml_drop_last(arr)` (@pure helper — `len/push/index` 만 사용)
+  - `ml_canon_path(p)` (@pure — lexical `.` / `..` collapse, filesystem-free)
+- `ml_resolve_full(imp, caller_dir)` rewrap: 기존 본문은 `ml_resolve_full_raw` 로 rename, wrapper 가 결과를 `ml_canon_path` 통과시켜 정규화
+
+**compiled module_loader 신규**:
+- `self/module_loader.hexa` 의 module-level CLI block 을 `fn main()` 으로 wrap (qrng/convergence cycles 패턴 동일)
+- `tool/build_hexa_module_loader.sh` (1.5 KB) — `hexa build self/module_loader.hexa -o build/hexa_module_loader` + self-test smoke
+- 산출물 `build/hexa_module_loader` (416 KB Mach-O) — 빌드 파이프라인 (`resolve_module_loader_compiled` in self/main.hexa) 가 interp+module_loader.hexa 대신 prefer
+- bootstrap-safe: module_loader.hexa 의 `use` 카운트 0 → 자기-flatten 은 no-op (raw src fallback 으로도 빌드 성공)
+
+**검증 (cycle 1-6 regression)**:
+- qrng / qmirror / sim-universe / convergence / test / check 전부 정상 dispatch (worktree `./hexa <verb> ...` 모두 byte-eq 유지)
+- compiled module_loader self-test PASS (`[module_loader] self-test PASS`)
+- patched vs production module_loader qrng flat 비교: 콘텐츠 등가, path normalization 차이만 (`/abs/path/...hexa` → `relative/path/...hexa` — `ml_canon_path` 의 의도된 효과)
+
+**검증 (atlas) — Mac 메모리 헤비, mini offload 필요**:
+- 로컬 build/hexa_module_loader 가 atlas_cli flatten 시도 → 2 분 후 ~500 MB RSS (계속 증가). memory `[컴파일러 자체빌드 블로커]` 가 예측했던 흐름 — interp 시절 OOM-kill 패턴이 compiled 에서도 비슷 (5 MB embedded.gen.hexa + 68 atlas/*.hexa 전체 flatten).
+- 후속 mini 검증 필요 — compile + atlas flatten 둘 다. 성공 시 atlas/verify/calc 3 verb cycle 6+1+1 추가 land 가능.
+
+**fixpoint regression risk**: 0. module_loader 는 codegen 경로 무관 — flatten 보조 binary 만. aprime_cc 가 module_loader 의 산출물을 사용하긴 하지만 본 patch 는 dedup-key normalization 만 추가 (의미 보존).
+
+**R7 track B 진척**: 6/16 verbs LANDED on origin/main + 7번째 cycle 의 flatten fix 가 LANDED (atlas/verify/calc 후속 사이클들의 unblock). 즉, 잠재 진척 = 9/16 (mini 검증 후).
+

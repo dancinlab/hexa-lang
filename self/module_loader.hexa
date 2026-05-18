@@ -80,6 +80,73 @@ fn ml_with_hexa_ext(path) {
     return p.join("")
 }
 
+// Drop the last element of an array (pure; no .truncate so the @pure
+// whitelist guard stays satisfied — only len/push/index).
+@pure
+fn _ml_drop_last(arr) {
+    let mut r = []
+    let n = len(arr) - 1
+    let mut i = 0
+    while i < n {
+        r.push(arr[i])
+        i = i + 1
+    }
+    return r
+}
+
+// Lexically collapse '.' and '..' path segments (no filesystem / symlink
+// resolution — pure string work, safe for the repo's relative imports).
+// Makes the module-loader dedup key + read path canonical so the same
+// source file reached via different '../' chains is visited exactly once.
+@pure
+fn ml_canon_path(p) {
+    let plen = len(p)
+    let mut is_abs = false
+    if plen > 0 {
+        if p[0] == '/' { is_abs = true }
+    }
+    let parts = p.split("/")
+    let mut out = []
+    let mut i = 0
+    while i < len(parts) {
+        let seg = parts[i]
+        if seg == "" {
+            // drop empty (leading '/', '//', trailing '/')
+        } else {
+            if seg == "." {
+                // drop current-dir marker
+            } else {
+                if seg == ".." {
+                    let on = len(out)
+                    if on > 0 {
+                        let last = out[on - 1]
+                        if last == ".." {
+                            out.push(seg)
+                        } else {
+                            out = _ml_drop_last(out)
+                        }
+                    } else {
+                        if !is_abs { out.push(seg) }
+                        // absolute '..' above root: drop
+                    }
+                } else {
+                    out.push(seg)
+                }
+            }
+        }
+        i = i + 1
+    }
+    let joined = out.join("/")
+    if is_abs {
+        let mut a = []
+        a.push("/")
+        a.push(joined)
+        return a.join("")
+    }
+    if len(joined) == 0 { return "." }
+    return joined
+}
+
 fn ml_trim_left(s) {
     return s.trim_start()
 }
@@ -596,6 +663,20 @@ fn ml_resolve_hexa_path(imp) {
 }
 
 fn ml_resolve_full(imp, caller_dir) {
+    // Path canonicalization (2026-05-18). The dedup key + read path must
+    // be canonical, else the same file reached via different '../' chains
+    // is treated as distinct → flatten double-include (C redefinition of
+    // struct/enum constructors) AND files reached after a colliding non-
+    // canonical key get dropped → undeclared identifier at clang (e.g.
+    // `enum Severity` from compiler/diag/catalog.hexa never emitted, the
+    // Severity_Error/_Warning/_Note breakage). Canonicalize once here so
+    // every caller (visited-set, read_file, child caller_dir) is stable.
+    let _rf = ml_resolve_full_raw(imp, caller_dir)
+    if len(_rf) > 0 { return ml_canon_path(_rf) }
+    return _rf
+}
+
+fn ml_resolve_full_raw(imp, caller_dir) {
     // 1. caller-relative (C-style #include)
     let raw_full = ml_join_path(caller_dir, imp)
     let v1 = ml_try_path_variants(raw_full)
@@ -1231,41 +1312,53 @@ fn load_module(path) {
 }
 
 // ── CLI / self-test ───────────────────────────────────────
+//
+// R7 track B cycle 7 (2026-05-18): module-level CLI wrapped in `fn main()`
+// to support compiled-binary entry (`build/hexa_module_loader`). Interp
+// `hexa run` auto-invokes main() so dual-path behavior preserved.
+//
+// Building this file via `hexa build self/module_loader.hexa -o
+// build/hexa_module_loader` produces a self-contained compiled module_loader
+// that the build pipeline (resolve_module_loader_compiled in self/main.hexa)
+// prefers over interp+module_loader.hexa — eliminates interp dependency in
+// flatten step, unlocking cross-directory `use` (atlas/verify/calc cluster).
 
-let __ml_av = args()
-if len(__ml_av) >= 4 {
-    let expanded = load_module(__ml_av[2])
-    safe_write_file(__ml_av[3], expanded)
-    let mut done = []
-    done.push("[module_loader] wrote ")
-    done.push(__ml_av[3])
-    done.push(" (")
-    done.push(str(len(g_order_parts)))
-    done.push(" files)")
-    println(done.join(""))
-} else {
-    println("[module_loader] helpers ready")
-    assert ml_dirname("a/b/c.hexa") == "a/b"
-    assert ml_dirname("foo.hexa") == "."
-    assert ml_join_path("a/b", "c.hexa") == "a/b/c.hexa"
-    assert ml_join_path("a", "/abs/x.hexa") == "/abs/x.hexa"
-    assert ml_starts_with("import \"x\"", "import ")
-    assert ml_parse_import("import \"lexer.hexa\"") == "lexer.hexa"
-    assert ml_parse_import("  import \"a/b.hexa\"") == "a/b.hexa"
-    assert ml_parse_import("use \"mod_a.hexa\"") == "mod_a.hexa"
-    assert ml_parse_import("  use \"a/b.hexa\"") == "a/b.hexa"
-    assert ml_parse_import("let x = 1") == ""
-    assert ml_parse_import("// import \"x\"") == ""
-    let ls = ml_split_lines("a\nb\nc")
-    assert len(ls) == 3
-    assert ls[0] == "a"
-    assert ls[2] == "c"
-    // hashset sanity
-    let mut hs = ml_hset_new()
-    assert !ml_hset_has(hs, "foo")
-    hs = ml_hset_add(hs, "foo")
-    assert ml_hset_has(hs, "foo")
-    hs = ml_hset_add(hs, "foo")  // dedup
-    assert ml_hset_has(hs, "foo")
-    println("[module_loader] self-test PASS")
+fn main() {
+    let __ml_av = args()
+    if len(__ml_av) >= 4 {
+        let expanded = load_module(__ml_av[2])
+        safe_write_file(__ml_av[3], expanded)
+        let mut done = []
+        done.push("[module_loader] wrote ")
+        done.push(__ml_av[3])
+        done.push(" (")
+        done.push(str(len(g_order_parts)))
+        done.push(" files)")
+        println(done.join(""))
+    } else {
+        println("[module_loader] helpers ready")
+        assert ml_dirname("a/b/c.hexa") == "a/b"
+        assert ml_dirname("foo.hexa") == "."
+        assert ml_join_path("a/b", "c.hexa") == "a/b/c.hexa"
+        assert ml_join_path("a", "/abs/x.hexa") == "/abs/x.hexa"
+        assert ml_starts_with("import \"x\"", "import ")
+        assert ml_parse_import("import \"lexer.hexa\"") == "lexer.hexa"
+        assert ml_parse_import("  import \"a/b.hexa\"") == "a/b.hexa"
+        assert ml_parse_import("use \"mod_a.hexa\"") == "mod_a.hexa"
+        assert ml_parse_import("  use \"a/b.hexa\"") == "a/b.hexa"
+        assert ml_parse_import("let x = 1") == ""
+        assert ml_parse_import("// import \"x\"") == ""
+        let ls = ml_split_lines("a\nb\nc")
+        assert len(ls) == 3
+        assert ls[0] == "a"
+        assert ls[2] == "c"
+        // hashset sanity
+        let mut hs = ml_hset_new()
+        assert !ml_hset_has(hs, "foo")
+        hs = ml_hset_add(hs, "foo")
+        assert ml_hset_has(hs, "foo")
+        hs = ml_hset_add(hs, "foo")  // dedup
+        assert ml_hset_has(hs, "foo")
+        println("[module_loader] self-test PASS")
+    }
 }
