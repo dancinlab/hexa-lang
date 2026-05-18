@@ -1790,17 +1790,18 @@ builtin → runtime.c `#ifdef HEXA_CUDA` dim-gate 가능 (hexa
 4. g3: cycle falsifier 측정 전 closure 주장 0. 측정값만 PLAN
    갱신.
 
-**현재 상태 (2026-05-19): mk2-C0 ✅ (PR #68) · C1a ✅ ($0,
-Mac 19/19) · C1b ✅ CLOSED (Mac 19/19 + A100 oracle max|Δ|=0
-양 config) · mk2-C2 (rmsnorm dt_sqrt, C1b 와 동일 패턴) = 다음
-진입점.** 각 cycle
-독립 commit + (cheap oracle + Mac 19/19) gate. **C3 (residency)
-가 d768 wall 통과의 binding cycle** — C1/C2 forge-route 는
-prerequisite 일 뿐, residency 無면 wall 不動 (FIRE3 측정:
-matmul-cuBLAS 단독도 0-step). mk2 100% closure (goal) =
-C1b+C2+C3+C4 + d768 fire 측정 PASS = **multi-session**.
-g3: 측정-closure 전 100% 주장 0 (Stop hook 은 측정 PASS 까지
-fire; fabricate 금지).
+**현재 상태 (2026-05-19, 본 cycle 진행): mk2-C0 ✅ (PR #68) ·
+C1a ✅ ($0, Mac 19/19) · C1b ✅ CLOSED (Mac 19/19 + A100 oracle
+max|Δ|=0 양 config) · C2 ✅ CLOSED (A100 oracle max|Δ|=0, T=1024
++ T=4096 d=768, commit `1c98b5b9`) · C3 ✅ wired (lazy-D2H farr_get/
+farr_set, commit `61e29993` + driver toggle `389e40a3`) · C4-fwd ✅
+wired (commit `2425e674`, oracle in-flight) · C4-bwd ✅ wired (commit
+`32d457b3`, oracle pending) · mk2-FINAL (d768 heavy fire) = post-
+oracle gate.** trainer C artifact regenerated with all forge
+dispatches (`flame_d768_agtape.c` — farr_set_out_disposition + add_gpu
++ rmsnorm_mh_gpu + rope_gpu + silu_gate_gpu + attn_dt_fwd_gpu +
+attn_dt_bwd_gpu). g3: 측정-closure 전 100% 주장 0 (Stop hook 은
+측정 PASS 까지 fire; fabricate 금지).
 
 cross-link: 본 PLAN mk2 결정 절 · README.md Benchmark ·
 design.md Decision 11 · [[flame-general-pytorch-replacement-goal]].
