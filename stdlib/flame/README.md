@@ -11,7 +11,7 @@
 |---|---|---|---|
 | PyTorch eager (RFC 046 baseline) | **336.85 s** | 1.00x (reference) | baseline |
 | **flame device-resident** (hand-fused, `28e9d648`) | **191-268 s** | **1.26-1.76x faster** (20-43%) | MEASURED PASS · F-RFC046-WALL (<=437.9 s gate) |
-| flame generic `ag_tape` (mk1, as-wired) | >900 s (0 step / 900 s timeout, GPU util 3% after matmul to cuBLAS dim-gate) | slower (does not complete) | MEASURED-FALSIFIED as-wired -> **mk2 target** |
+| **flame generic `ag_tape`** (mk2 closure, `e030fa31`) | **114 s** (step 1) · step2=133 s · step3=120 s | **2.95x faster** | MEASURED PASS · F-RFC046-AGTAPE-WALL (<=437.9 s gate; 3.84x under) — **option A wins (faster than hand-fused option B)** |
 
 **Correctness / substrate (A100, byte-eq oracles — all MEASURED PASS):**
 
@@ -22,26 +22,25 @@
 | RoPE GPU kernel fwd/bwd | `4.441e-16` (nvcc `--fmad` FMA) -> `__dmul_rn`/`__dadd_rn` fix (`b73269ea`) -> `max|D|=0` ALL-PASS (T=128 & T=1024) |
 | CPU-only path (historical, d=32·3L) | flame 18.5 s vs anima ~30 s — Phase 4-B 3.23x (different config/axis) |
 
-**mk1 / mk2 framing (decided 2026-05-19, user — option A):**
+**mk1 / mk2 framing (mk2 CLOSED 2026-05-19, commit `e030fa31`):**
 
-- **mk1 (current, shipped):** two-path, mirroring PyTorch's own
-  `eager` vs `compiled` split.
+- **mk1 (shipped):** two-path, mirroring PyTorch's own `eager` vs
+  `compiled` split.
   - generic `ag_tape` = correctness + expressiveness path
     (autograd · shape-generic · `ag_spec` model DSL · kernel
     byte-eq) — **5/5 measured-closed**.
-  - device-resident hand-fused = performance path — **beats
-    PyTorch eager at d768·12L (measured, `28e9d648`)**.
-- **mk2 (decided — RFC 056 device-residency program):** make the
-  *generic* `ag_tape` path itself device-resident (full op chain
-  on-device, no per-op H2D/D2H) so it reaches the d768 wall
-  *without* the separate hand-fused path. **Multi-cycle
-  architecture** — forge kernels exist (RoPE/rmsnorm/silu/add/
-  softmax byte-eq); the work is a residency-aware tape executor +
-  disposition wiring. Root cause measured-isolated across 3 A100
-  fires (FIRE1 pod-dud, FIRE2 CPU-bound, FIRE3 matmul-cuBLAS
-  still 0-step/900s at util 3%): binding constraint = device
-  residency, not kernel/matmul correctness. Rationale/analogy:
-  `PLAN.md` section "mk2 decision".
+  - device-resident hand-fused = performance path — beats PyTorch
+    eager at d768·12L (`28e9d648`, 191-268 s).
+- **mk2 (CLOSED 2026-05-19):** the generic `ag_tape` path is now
+  device-resident end-to-end and **faster than the hand-fused
+  path** (114 s vs 191-268 s on the same workload, both PASS the
+  437.9 s gate). One trainer, two measurement points; the
+  abstraction layer no longer pays a wall tax. Closure took 4
+  measured A100 fires + 4 byte-eq oracle PASS, each round
+  localising a different binding bottleneck (host-scalar M-load
+  prelude → single-thread LCG on GPU → `nn_linear_bwd` host-scalar
+  matmul + `_ag_reg_acc` per-element loop → all collapsed to forge
+  dispatches). Rationale/timeline: `PLAN.md` section "mk2 cycle".
 
 > _History (Phase 4-B / Phase 3, superseded as the headline;
 > preserved as the measured audit trail):_

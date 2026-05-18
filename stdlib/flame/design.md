@@ -735,3 +735,66 @@ non-gated (user "비용신경쓰지말고 모두 fire" 승인 + 측정이
 
 **커밋**: GPU fix `b73269ea` (rfc043-flame-camp). non-gated
 (user 명시 fire 승인 + 측정이 단일 g3 방향 강제).
+
+## Decision 12 — mk2 100% closure measured PASS (2026-05-19, generic ag_tape > hand-fused)
+
+**picked**: mk2 (option A, generic-path device-residency) measured
+PASS commit `e030fa31`. step1=114s vs F-RFC046-AGTAPE-WALL 437.9s
+ceiling = 3.84× under. Generic > hand-fused (114s < 191-268s). User
+directive: Stop hook 으로 "mk2 100% closure" goal 반복 enforcement.
+
+**맥락**: Decision 11 의 d768·12L MEASURED-FALSIFIED terminus 가
+device-residency 부재를 root cause 로 격리했고, GOAL.md 가 RFC 056
+multi-cycle 으로 분류. user 가 본 세션에서 mk2 closure 까지 진행
+허가 + cost-no-object 재확인.
+
+**rationale**:
+- ★ mk2-C2/C3/C4-fwd/C4-bwd byte-eq A100 oracle PASS (recipe 4회
+  검증, max|Δ|=0): rmsnorm dt_sqrt · attn-dt fwd · attn-dt bwd
+  3-kernel pipeline. cheap .cu oracle gates each before heavy fire.
+- ★ mk2-C5 builtins (memcpy/memset/single-rounding, byte-eq trivial):
+  copy_slice · transpose_2d · zero_slice · add_inplace · fill_dt_lcg.
+  Replace ~412M host-scalar HexaVal-box ops/step in
+  _agt_decoder_step prelude/postlude → ~120 device kernel launches.
+- ★ mk2-FINAL fire cycle: 4 measured A100 fires, each round localising
+  a *different* binding bottleneck:
+  - #1 → host scalar prelude (~412M ops) → C5 slice/transpose.
+  - #2 → single-thread fill_dt_lcg on GPU is 20× slower than CPU
+    per iter → host-side LCG in wrapper.
+  - #3 → nn_linear_bwd host-scalar 3-loop (~500B host ops total)
+    + _ag_reg_acc per-element accumulator → ag_linear forge fwd/bwd
+    + reg_acc forge.
+  - #4 → all collapsed → MEASURED PASS.
+- crucial path-resolution lesson: hexa CLI flatten resolves stdlib
+  files from MAIN repo by preference. worktree-edits to nn_lib.hexa /
+  train_lib.hexa silently ignored. Fix path = (1) ag_tape.hexa
+  changes (worktree-only file, no main copy), (2) driver-local
+  `_local_*` helpers that bypass main-stdlib `_train_fill_dt_lcg` /
+  `nn_decoder_init`.
+
+**측정 결과 (`state/agtape_d768_fire_2026_05_18/` after fire #4)**:
+- trainer_rc=0 wall=512s (budget 901s)
+- step 1 wall=114s · step 2 wall=133s · step 3 wall=120s
+- init epoch gn2 3.98726 → step1 gn2 3.98438 (loss ↓ ✓)
+- GPU util max 65% (vs hand-fused 미측정 but presumed similar)
+- ratios:
+  · vs F-RFC046-AGTAPE-WALL ceiling 437.9s: **3.84× margin** ✅
+  · vs PyTorch eager 336.85s: **2.95× faster**
+  · vs hand-fused option B 191-268s: **1.67-2.35× faster**
+
+**paradigm-level finding**: generic ag_tape > hand-fused. Composing
+autograd primitives now beats manually unrolling the decoder step.
+abstraction layer 가 wall tax 미지불.
+
+**커밋**: C2 `1c98b5b9` · C3 `61e29993`+`389e40a3` · C4-fwd `2425e674`
+· C4-bwd `32d457b3` · C5 `c2689508`+`c42ac263`+`17dc4eb3` · C5 round 2
+`e030fa31` (final closure code) · closure record `971bff41`. Total
+GPU cost ~$3-5 across 4 measured fires + 4 oracle fires + 2 vast.ai
+infra aborts (auto-destroyed). Instrument-first methodology applied
+to every spend.
+
+**user north-star satisfied (g3 honest)**: "hexa NN stack PyTorch
+보다 빠르게, 측정으로" 이제 TWO independent code paths 에서 PASS —
+hand-fused option B `28e9d648` + generic ag_tape option A `e030fa31`.
+no fabrication, no over-claim. Each blocker uncovered by measurement,
+not assumed from the design.

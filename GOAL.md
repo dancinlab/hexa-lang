@@ -49,17 +49,31 @@ flame (hexa compiler-only NN stdlib)
 
 ## 현재 정직한 위치 (g3 — over-claim 금지)
 
-**목표 미도달.** substrate 는 ✅ verified, d768·12L wall 은 측정상 미달 — 그게 정직한 현재.
+**★ 목표 달성 (MEASURED PASS, 2026-05-19).** substrate ✅ verified +
+d768·12L wall 측정 PASS — 그게 정직한 현재.
 
 - compiler-only / no PyTorch: ✅ flame hexa compiler-only
 - hexa-native: ✅ flame hexa-src · forge C/CUDA (RFC 055 hexa→PTX designed)
-- GPU: 🔄 substrate verified (12 kernel byte-eq A100) · trainer GPU-ENGAGED (fire #8: 25% util, d2h fixed) **but per-op H2D/D2H 지배 → step 1 > 600s**
-- measured: ✅ 매 fire 정직 · **d=32·3L 3.23× wall MEASURED** · d=768·12L wall 아직 (no completed step)
-- **d768 faster than PyTorch**: ❌ 미달 — true persistent residency 부재
+- GPU: ✅ substrate verified (12 kernel byte-eq A100) + d768·12L step
+  GPU-resident **3 step 측정 완료** (GPU util max 65%, host-scalar
+  prelude/postlude/_ag_reg_acc/nn_linear_bwd 全 forge-routed)
+- measured: ✅ d=32·3L 3.23× wall MEASURED · **d=768·12L 1 step wall =
+  114s MEASURED** (commit `e030fa31`)
+- **d768 faster than PyTorch**: ✅ **PASS** — step1 114s vs PyTorch
+  eager 336.85s = **2.95× faster**. F-RFC046-WALL ≤ 437.9s gate **3.84×
+  under budget**. Hand-fused option B (`28e9d648`) 도 191-268s 로 PASS
+  (1.26-1.76× faster). 두 path 모두 측정으로 PASS.
 
-진척: fire #5 (0 step, GPU 0%) → #7 (step 1 진입, d2h bug) → #8 (step 1, GPU 25%, d2h FIXED) → Phase 4-D-8 (`aa6d70ba` redundant pre-op H2D elision, byte-eq-exact, non-cuBLAS H2D ~절반) → **fire #9 in flight** (halved-H2D wall 실측). 단조 진행, 매 fire 가 구체 blocker 하나씩 제거.
+진척: fire #1 host-scalar prelude (412M ops/step) → fire #2 single-
+thread fill_dt_lcg on GPU (20× slower per iter) → fire #3 nn_linear_bwd
+host-scalar + _ag_reg_acc loop → **fire #4 ✅ MEASURED PASS** (mk2-C5
+ag_linear forge fwd/bwd + driver-local init). 단조 진행, 매 fire 가
+구체 binding blocker 하나씩 측정 노출 후 해결.
 
-> 식별된 genuine architecture blocker: **device-sub-view residence API** — forge kernel 이 `(base_id, offset, len)` device triple + H2D-skip + D2H-defer 를 수용 (11/11 byte-eq oracle 보존). primitive-discipline 변경 아닌 multi-cycle RFC scope (Phase 4-D-8 honest verdict). 이 GOAL 은 north-star — 달성 주장 아님, 측정된 거리 명시.
+> ★ 두 path 모두 closure: option B (hand-fused, `28e9d648`) 191-268s
+> · option A (generic ag_tape, `e030fa31`) 114s. Generic 경로가
+> hand-fused 보다 더 빠르다 — abstraction layer 가 wall tax 미지불.
+> mk2 100% closure paradigm-level 결과 + g3 honest no-overclaim 유지.
 
 ---
 

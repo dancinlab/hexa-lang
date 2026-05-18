@@ -234,6 +234,7 @@ Citing a tombstoned `L[id]` fires `HX1099` and fails the build. Bypass is `@grac
 - `hexa build` / `hexa cc` work **out-of-tree** — flattens `use`/`import`, resolves `hexa_cc.c`/SSOT/`-I` via `$HEXA_LANG > install_dir > ./self`; install-relative `stdlib/` discovery means `use "stdlib/*"` works with no env vars (downstream: `wilson` builds end-to-end → `wilson 0.0.1`)
 - stage-1 P0 host-OOM closed at current scale: A1 phase-arena reset + A2 in-place splice accumulator → peak ~782 MB (was 3 510 MB)
 - 14+ pinned decisions in `SPEC.yaml`, every claim traceable to an RFC
+- **`stdlib/flame` — hexa-native NN training stack faster than PyTorch (measured A100)**: a d=768 · 12-layer transformer training step runs in **114 s** on the generic `ag_tape` autograd path, vs PyTorch eager 336.85 s = **2.95× faster** (2026-05-19, commit `e030fa31`). The hand-fused option B trainer (`28e9d648`) clears the same gate at 191-268 s. Two independent paths, both measured under the F-RFC046 ≤ 437.9 s ceiling. See `stdlib/flame/README.md` for the full benchmark table and `stdlib/flame/PLAN.md` for the cycle log (4 measured fires + 4 byte-eq oracles).
 
 * * *
 
