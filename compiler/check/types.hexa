@@ -247,7 +247,8 @@ fn _types_is_lit_int(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -280,7 +281,8 @@ fn _types_is_lit_float(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -313,7 +315,8 @@ fn _types_is_lit_string(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -346,7 +349,8 @@ fn _is_lit_bool(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -379,7 +383,8 @@ fn _is_lit_char(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -412,7 +417,8 @@ fn _types_is_ident(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -445,7 +451,8 @@ fn _is_atlas(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -478,7 +485,8 @@ fn _types_is_call(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -511,7 +519,8 @@ fn _types_is_binop(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -544,7 +553,8 @@ fn _types_is_unop(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -577,7 +587,8 @@ fn _types_is_block(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -610,7 +621,8 @@ fn _types_is_if(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -643,7 +655,8 @@ fn _types_is_while(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -676,7 +689,8 @@ fn _types_is_return(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -709,7 +723,8 @@ fn _types_is_let(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -742,7 +757,8 @@ fn _types_is_assign(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -763,6 +779,42 @@ fn _is_match_expr(k: ExprKind) -> bool {
         ExprKind::If -> false,
         ExprKind::While -> false,
         ExprKind::For -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+// RFC C1 — closure-expression probe.
+fn _types_is_closure(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Closure -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
         ExprKind::Return -> false,
         ExprKind::Break -> false,
         ExprKind::Continue -> false,
@@ -1404,6 +1456,38 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
 
     if _is_match_expr(e.kind) {
         return _check_match(e, env, ctx, out)
+    }
+
+    if _types_is_closure(e.kind) {
+        // RFC C1 — closure-expression. children = [param_0..param_{n-1},
+        // body_block]; e.text = decimal param count. The param children are
+        // Ident nodes carrying NAMES, not free-variable references — they
+        // must NOT be _infer_expr'd (that would HX2002/lookup-fail on the
+        // param name). Bind (compiler/check/bind.hexa) is the pass that
+        // scopes param names into the body; here we only walk the body to
+        // surface inner type errors, then hand back a `fn` type so callers
+        // (e.g. `f(21)` where `let f = fn(x){...}`) see a function value.
+        //
+        // C1 type representation: a bare `fn`-kinded Type with empty
+        // args/ret. The tier-1 type system has no per-param / return-type
+        // closure inference yet — that is C2 scope. `fn` with empty
+        // args/ret is the narrowest representation that (a) reuses the
+        // existing `t.kind == "fn"` callee check at _types_check_call, so a
+        // closure call is not mis-flagged as "calling a non-fn", and (b)
+        // carries no false param/return type claims.
+        // body block is the LAST child (children[param_count]); no need to
+        // parse e.text — use len-1 directly.
+        if len(e.children) > 0 {
+            let _bt = _infer_expr(e.children[len(e.children) - 1], env, ctx, out)
+        }
+        return Type {
+            kind: "fn",
+            def: _types_miss_def_id(),
+            args: [],
+            ret: [],
+            domain: "",
+            unit: ""
+        }
     }
 
     // Field / Index / StructLit / EnumPath / Wildcard — STUB v1.

@@ -193,7 +193,8 @@ fn _bind_is_ident_kind(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -226,7 +227,8 @@ fn _bind_is_block_kind(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -259,7 +261,8 @@ fn _is_for_kind(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -292,7 +295,8 @@ fn _is_let_kind(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -325,7 +329,8 @@ fn _bind_is_match_kind(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -358,7 +363,8 @@ fn _is_field_kind(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -391,7 +397,8 @@ fn _is_enum_path_kind(k: ExprKind) -> bool {
         ExprKind::StructLit -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -432,7 +439,8 @@ fn _is_struct_lit_kind(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -465,6 +473,42 @@ fn _bind_is_try_kind(k: ExprKind) -> bool {
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+// RFC C1 — closure-expression probe.
+fn _bind_is_closure_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Closure -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
         ExprKind::Throw -> false
     }
 }
@@ -498,7 +542,8 @@ fn _is_wildcard_kind(k: ExprKind) -> bool {
         ExprKind::StructLit -> false,
         ExprKind::EnumPath -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -685,6 +730,36 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
             sc = _bind_walk_expr(e.children[1], sc, mod_file, out)
             sc = _pop_scope(sc)
         }
+        return sc
+    }
+
+    if _bind_is_closure_kind(e.kind) {
+        // RFC C1 — closure-expression `fn(p0, p1, ...) { body }`.
+        // children = [param_0 .. param_{n-1}, body_block]; the body block is
+        // the LAST child. Closure params open a NEW scope; the params are
+        // visible only inside the body. Free variables referenced in the
+        // body that are NOT params resolve up the enclosing scope chain
+        // (normal _bind_lookup) — so a body ident like `captured` binds to
+        // the outer definition and does NOT error. C2 will walk the body to
+        // collect that capture set; C1 only guarantees binding succeeds.
+        sc = _push_scope(sc)
+        let n_children = len(e.children)
+        // every child except the last is a param Ident node (text = name,
+        // possibly `mut:`-prefixed). Define each into the closure scope.
+        let mut pi = 0
+        while pi < n_children - 1 {
+            let pnode = e.children[pi]
+            let pname = _bind_let_name(pnode.text)
+            if len(pname) > 0 && pname != "_" {
+                sc = _define(sc, pname, mod_file)
+            }
+            pi = pi + 1
+        }
+        // walk the body block (last child) with params + outer scope visible.
+        if n_children >= 1 {
+            sc = _bind_walk_expr(e.children[n_children - 1], sc, mod_file, out)
+        }
+        sc = _pop_scope(sc)
         return sc
     }
 

@@ -973,6 +973,13 @@ fn parse_primary() -> Expr {
     if check_kind(TokenKind::KwThrow) {
         return parse_throw_expr()
     }
+    if check_kind(TokenKind::KwFn) {
+        // closure-expression `fn(params) { body }` in expression position —
+        // RFC C1. Top-level `fn name(...)` items never reach parse_primary
+        // (parse_item dispatches on KwFn first); a bare `fn` here is always
+        // an anonymous closure.
+        return parse_closure_expr()
+    }
     // unrecognized — placeholder Ident with the literal text so callers can
     // still emit a half-decent diagnostic later.
     advance()
@@ -1294,6 +1301,89 @@ fn parse_throw_expr() -> Expr {
         kind: ExprKind::Throw,
         span: kw.span,
         text: "",
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
+// closure-expression `fn(params) { body }` — RFC C1 (parse/check front-half).
+// Also accepts `fn() { body }` and the param-type-annotated form
+// `fn(x: i64, y: i64) { body }`, plus an optional `-> RetType` that
+// self/hexa_full.hexa parses-and-discards (parse_primary k=="Fn"); we mirror
+// that surface exactly — closure params have OPTIONAL type annotations
+// (parse_params: name then optional `: T`), unlike top-level `fn` items
+// whose parse_param requires `: T`.
+//
+// AST shape (see ExprKind::Closure doc in ast.hexa):
+//   text     = decimal param count
+//   children = [param_0 .. param_{n-1}, body_block]
+//     param_i : ExprKind::Ident, text = name, children = [type_expr]?
+//   body     : ExprKind::Block (always last child)
+//
+// Codegen is DEFERRED: a Closure that reaches hir_to_mir emits HX1104
+// ("closure codegen not yet implemented — RFC C2/C3"), NOT HX2001.
+fn parse_closure_expr() -> Expr {
+    let kw = peek()
+    advance() // consume 'fn'
+    let mut kids = []
+    let mut n_params = 0
+    eat(TokenKind::LParen)
+    if !check_kind(TokenKind::RParen) {
+        kids.push(parse_closure_param())
+        n_params = n_params + 1
+        while check_kind(TokenKind::Comma) {
+            advance()
+            if check_kind(TokenKind::RParen) { break }
+            kids.push(parse_closure_param())
+            n_params = n_params + 1
+        }
+    }
+    eat(TokenKind::RParen)
+    // Optional return type — parsed and discarded (C1 has no fn-type surface
+    // on the closure node; C2/C3 may thread it through if needed).
+    if check_kind(TokenKind::Arrow) {
+        advance()
+        let _ret = parse_type()
+    }
+    // Body block is the last child; always present so consumers can index
+    // children[param_count] unconditionally.
+    let body = parse_block_expr()
+    kids.push(body)
+    return Expr {
+        kind: ExprKind::Closure,
+        span: kw.span,
+        text: to_string(n_params),
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
+// A single closure parameter. Encoded as ExprKind::Ident (text = param name)
+// with children = [type_expr] when a `: T` annotation is present, else [].
+// The type annotation is optional — mirrors self/hexa_full.hexa parse_params.
+fn parse_closure_param() -> Expr {
+    let mut is_mut = eat(TokenKind::KwMut)
+    let name_tok = expect(TokenKind::Ident)
+    let mut kids = []
+    if check_kind(TokenKind::Colon) {
+        advance()
+        let ty = parse_type()
+        // Carry the type name as a child Ident so C2 type-check can read it
+        // without a TypeRef field on Expr (Expr has no TypeRef slot).
+        kids.push(Expr {
+            kind: ExprKind::Ident,
+            span: name_tok.span,
+            text: ty.name,
+            children: [],
+            atlas_ref: empty_atlas()
+        })
+    }
+    let mut pname = name_tok.text
+    if is_mut { pname = "mut:" + name_tok.text }
+    return Expr {
+        kind: ExprKind::Ident,
+        span: name_tok.span,
+        text: pname,
         children: kids,
         atlas_ref: empty_atlas()
     }

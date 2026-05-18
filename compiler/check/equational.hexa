@@ -76,7 +76,8 @@ fn _eq_is_lit_int_kind(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -109,7 +110,8 @@ fn _eq_is_ident_kind(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -142,7 +144,8 @@ fn _eq_is_binop_kind(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -175,7 +178,8 @@ fn _eq_is_unop_kind(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -208,7 +212,8 @@ fn _eq_is_return_kind(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -241,7 +246,8 @@ fn _eq_is_block_kind(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 

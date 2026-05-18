@@ -575,6 +575,18 @@ fn _emit_hx1103(kind: string, sp: Span) {
     _lr_diag.push(diag_emit(b))
 }
 
+// RFC C1 — closure codegen is DEFERRED to RFC C2/C3. A closure-expression
+// `fn(params){body}` parses and type/bind-checks in C1, but the HIR→MIR
+// indirect-call lowering + arm64 codegen are not implemented yet. Emit a
+// dedicated diagnostic so a closure-using program fails with an ACCURATE
+// message ("closure codegen not yet implemented") instead of the misleading
+// HX2001 "undefined name fn" (the pre-C1 state) or a generic HX1103.
+fn _emit_hx1104(sp: Span) {
+    let mut b = diag_new("HX1104")
+    b = diag_span(b, sp)
+    _lr_diag.push(diag_emit(b))
+}
+
 // Set of HExpr kinds the lowering core dispatches on explicitly. Used
 // by the default fall-through to distinguish "shape we know but didn't
 // produce a value for" (e.g. a side-effect-only block) from "shape we
@@ -608,6 +620,7 @@ fn _is_known_hexpr_kind(k: string) -> bool {
     if k == "field_lit" { return true }
     if k == "try" { return true }
     if k == "throw" { return true }
+    if k == "closure" { return true }
     return false
 }
 
@@ -1474,6 +1487,18 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // suppressed — same handling as STMT_RETURN.
         ctx2 = _set_returned(ctx2, true)
         return _no_value(ctx2)
+    }
+
+    // ── closure-expression: codegen DEFERRED (RFC C2/C3) ────
+    // C1 delivers the parse/bind/type front-half only. The HIR→MIR
+    // indirect-call lowering (capture-env struct + closure value + indirect
+    // BL) and the arm64 backend are RFC C2/C3 scope. Emit HX1104 — an
+    // accurate "closure codegen not yet implemented" diagnostic — and stop.
+    // We do NOT recurse into the body: the deferral message is the honest
+    // end-state, and recursing would only surface spurious child diags.
+    if k == "closure" {
+        _emit_hx1104(e.span)
+        return _no_value(ctx)
     }
 
     // ── match: sequence of STMT_BR_COND testing tag ─────────

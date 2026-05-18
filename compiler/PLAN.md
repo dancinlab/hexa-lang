@@ -924,3 +924,27 @@ closure-expression(`fn(x){...}`) 에이전트가 scope-assess 후 stop-disciplin
 - **C3** — arm64/x86_64 `hexa_closure_new` emit + `TAG_CLOSURE` load/store + `blr` lowering. C3 종료 시 t38 closure 동작 → gate-1 38/44.
 
 reference: tier-2 `gen2_lambda_expr` + `runtime.h::hexa_callN`. interp 은 oracle 금지.
+
+### 진행 로그 — closure-expression C1 LANDED: parse + AST + check 전반부 (cycle h20)
+
+closure-expression 3-cycle RFC 의 **C1 (front-half: lexer/parser/AST/check)** 구현 완료. codegen 은 C2/C3 로 명시 보류.
+
+구현 (9 파일):
+- **ast** (`compiler/parse/ast.hexa`) — `ExprKind::Closure` 추가. 노드 shape: `text` = 10진수 param 개수, `children = [param_0 .. param_{n-1}, body_block]`. param_i = `ExprKind::Ident` (text=이름, `mut:` prefix 가능, children=[type_ident] if `: T` 명시). body = 항상 마지막 child (`ExprKind::Block`). capture(free-var) 집합은 C1 에서 수집 안 함 — C2 가 body 서브트리 walk 로 구축. 이 shape 선택 이유: param 이름+타입을 구조적으로 보존 → C2 type-check / C3 codegen 이 문자열 split 없이 사용; body 는 일반 Block 서브트리 → 기존 walk 재사용.
+- **parser** (`compiler/parse/parser.hexa`) — `parse_primary` 의 `KwFn` 분기 → `parse_closure_expr` (이전엔 unrecognized fallback → Ident text="fn" → `HX2001 undefined name fn`). `parse_closure_param` 은 param 타입 **선택적** (tier-2 `self/hexa_full.hexa::parse_params` 미러; top-level `parse_param` 의 필수 `: T` 와 대비). `fn()`·`fn(x)`·`fn(x: i64, y: i64)`·optional `-> Ret` (parse-and-discard) 수용.
+- **bind** (`compiler/check/bind.hexa`) — `_bind_is_closure_kind` probe + `_bind_walk_expr` Closure 분기: param 을 새 scope 에 `_define`, body 를 그 scope 에서 walk. body 의 free-var 는 enclosing scope chain 으로 resolve → capturing closure 가 `HX2001` 안 냄 (검증됨).
+- **types** (`compiler/check/types.hexa`) — `_types_is_closure` probe + `_infer_expr` Closure 분기: param Ident child 를 free-ident 로 오인 안 함, body 만 infer, closure 값에 `Type{kind:\"fn\"}` (args/ret 비움 — C1 의 최소 표현; 기존 `t.kind==\"fn\"` callee 체크 재사용 → closure 호출이 non-fn 으로 오판 안 됨).
+- **ast_to_hir** (`compiler/lower/ast_to_hir.hexa`) — `_expr_kind_tag` 에 `Closure -> \"closure\"`, `_hir_is_closure_kind` probe + `_lower_expr` Closure 분기 (param=이름-only ident HExpr, body=param 정의된 child frame 에서 lower, `closure`-tagged HExpr).
+- **hir_to_mir** (`compiler/lower/hir_to_mir.hexa`) — `_emit_hx1104` + `_lower_hexpr` `k==\"closure\"` 분기 → **HX1104** emit 후 `_no_value` (body 재귀 안 함). `_is_known_hexpr_kind` 에 `closure` 추가 (HX1103 중복 방지).
+- **catalog** (`compiler/diag/catalog.hexa`) — `HX1104` \"closure codegen not yet implemented\" 등록 (Error, S2). HX2001 보다 정직한 deferred-codegen 메시지.
+- **main** (`compiler/main.hexa`) — `hir_to_mir_diags()` drain 후 **render + `_has_errors` abort** 추가. 기존 pre-codegen abort 는 `lower_hir` 전에 실행 → HX110x (HIR→MIR 단계에서만 발생) 가 codegen 도달해 잘못된/빈 바이너리 emit 되던 갭. closure 의 HX1104 가 정직하게 abort 하려면 필수.
+- **exhaustive match coverage** — bind/types/units/equational/annotations/citation/resolve/discover/ast_to_hir 전 `ExprKind` match 에 `Closure` arm 추가 (try/catch 커밋 `8f45d3d3` 패턴 정확 미러; non-exhaustive ripple 0).
+
+검증 (macOS load-constrained, build_aprime smoke 2회 이내):
+- `bash tool/build_aprime.sh` — 컴파일러 self-build OK, smoke `exit(6*7)==42` PASS (새 ExprKind + match arm exhaustive 확인).
+- closure repro `let f = fn(x){return x*2}; println(f(21))` — parse 통과 (`HX2001 undefined name fn` 사라짐), bind/type 통과, `HX1104` 정직한 deferred-codegen 메시지로 abort (RC=1, span 2:13-15).
+- `fn()` / `fn(x: i64, y: i64)` / capturing(`fn(x){x+captured}`) 3 형태 모두 동일하게 HX1104 도달 (capturing 케이스 free-var `HX2001` 무발생 → bind 정상 확인).
+- t38_nanbox_smoke (line 94 capturing closure) — 이전 `HX2001` → 현재 `HX1104` 도달.
+- non-closure 프로그램 회귀 0 — full asm emit, RC=0.
+
+C2/C3 잔여: C2 = MIR indirect-call (callee-as-Operand) + 합성 MFunc lift + capture; C3 = arm64 `hexa_closure_new`/`TAG_CLOSURE`/`blr` codegen. C3 종료 시 t38 동작 → gate-1 38/44.

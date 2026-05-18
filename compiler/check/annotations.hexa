@@ -69,7 +69,8 @@ fn _is_string_lit(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -102,7 +103,8 @@ fn _annot_is_assign(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
@@ -135,7 +137,8 @@ fn _annot_is_ident(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 

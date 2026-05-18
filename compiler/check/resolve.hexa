@@ -167,7 +167,8 @@ fn _resolve_is_atlas_ref_kind(k: ExprKind) -> bool {
         ExprKind::EnumPath -> false,
         ExprKind::Wildcard -> false,
         ExprKind::Try -> false,
-        ExprKind::Throw -> false
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
     }
 }
 
