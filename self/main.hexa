@@ -1118,10 +1118,64 @@ fn dispatch_absorbed(verb, ab_args) {
         let r = exec(cmd)
         if len(r) > 0 { println(r) }
     } else {
-        // .hexa module — cmd_run dispatch. Note: most absorbed modules are
-        // libraries without a fn main(); invoking them via the CLI surface
-        // requires a per-module entry shim, tracked as a separate follow-up.
-        cmd_run(script, ab_args)
+        // .hexa module dispatch.
+        //
+        // R7 track B (2026-05-18, Phase 3/4 batch): prefer a standalone
+        // compiled bin/hexa-absorbed-<verb> binary (built by
+        // tool/build_absorbed_binaries.sh) over the legacy cmd_run interp
+        // path. Same spawn-and-exit pattern as the named-verb cycles:
+        // shq-quote args, exec with __HEXA_SHIM_RC__ marker, propagate
+        // exit code. Falls back to cmd_run when the binary is absent
+        // (transitional — modules that don't yet compile cleanly, e.g.
+        // network-bridge deps or the atlas-memory cluster, keep working
+        // via interp until their own follow-up).
+        let mut abin = ""
+        if len(__inst) > 0 {
+            let inst_abin = __inst + "/bin/hexa-absorbed-" + verb
+            if file_exists(inst_abin) { abin = inst_abin }
+        }
+        if len(abin) == 0 && file_exists("bin/hexa-absorbed-" + verb) {
+            abin = "bin/hexa-absorbed-" + verb
+        }
+        if len(abin) > 0 {
+            let cli_q = shq(abin)
+            let mut cmd = cli_q
+            let mut ai = 0
+            while ai < len(ab_args) {
+                let q = shq(ab_args[ai])
+                cmd = cmd + " " + q
+                ai = ai + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut sj = len(out) - mlen
+            while sj >= 0 {
+                if out.substring(sj, sj + mlen) == marker {
+                    midx = sj
+                    sj = -1
+                } else {
+                    sj = sj - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            cmd_run(script, ab_args)
+        }
     }
 }
 
@@ -3461,26 +3515,18 @@ if len(av) < 3 {
             exit(hxc_dump(av[3]))
         }
     } else if sub == "init" {
-        // scaffold <dir>/project.hexa via tool/init_project.hexa
-        // check/convergence 와 같은 패턴: install_dir 로 절대경로 해석 후 cmd_run 위임.
-        if len(av) < 4 {
-            println("error: 'init' requires <target-dir>")
-            cmd_help()
-            exit(1)
-        } else {
-            let __inst_i = install_dir_from_argv0()
-            let mut init_script = "tool/init_project.hexa"
-            if len(__inst_i) > 0 {
-                init_script = __inst_i + "/tool/init_project.hexa"
-            }
-            let mut init_args = []
-            let mut ii = 3
-            while ii < len(av) {
-                init_args.push(av[ii])
-                ii = ii + 1
-            }
-            cmd_run(init_script, init_args)
-        }
+        // R7 track B (2026-05-18): the scaffolder tool/init_project.hexa
+        // does NOT exist in-tree — the prior `cmd_run(init_script, …)`
+        // dereferenced a missing file, so `hexa init` never functioned via
+        // interp either. Removing the cmd_run call site (R7 interp-dep
+        // drain) and emitting an honest "not implemented" instead of a
+        // cryptic loader failure. If a project scaffolder lands later it
+        // should be a standalone bin/hexa-init binary (track B pattern),
+        // not a cmd_run target.
+        println("error: `hexa init` is not implemented in this build")
+        println("  (the project scaffolder tool/init_project.hexa is absent;")
+        println("   scaffold a project.hexa manually, or file an inbox patch)")
+        exit(1)
     } else if sub == "url" {
         if len(av) < 4 {
             println("error: hexa url requires URL argument (e.g. 'hexa://run?file=/path/script.hexa')")
