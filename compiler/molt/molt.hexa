@@ -82,7 +82,7 @@ fn _molt_real_drill_active() -> bool {
     return env("HEXA_VARIANT_REAL_DRILL") == "1"
 }
 
-fn _drill_round_shim(seed: string, depth: i64, fast: bool) -> string {
+fn _molt_drill_round_shim(seed: string, depth: i64, fast: bool) -> string {
     if _molt_real_drill_active() {
         let mut opts = drill_default_opts()
         opts.quiet = true
@@ -143,7 +143,7 @@ pub fn molt_run(seed: string, max_cycles_flag: string) -> MoltResult {
         let d: i64 = skin_depths[i]
         let f: bool = skin_fast[i]
         let perturbed = reign_next_seed(_seed_t, i + 1, "molt-skin=" + to_string(i))
-        let out = _drill_round_shim(perturbed, d, f)
+        let out = _molt_drill_round_shim(perturbed, d, f)
         let signal = reign_extract_signal(out)
         let abs_v = molt_extract_abs(signal)
         eprintln("HEXA_MOLT {\"event\":\"iter\",\"i\":" + to_string(i + 1)

@@ -266,6 +266,7 @@ HexaVal hexa_read_stdin(void);                        /* runtime.c:9962 — full
 HexaVal hexa_exec_with_status(HexaVal cmd);           /* runtime.c:4281 — exec returning {rc, stdout, stderr} */
 HexaVal hexa_exec_replace(HexaVal cmd);               /* runtime.c:4639 — execvp("/bin/sh","-c",cmd); no return on success (R7 lsp) */
 HexaVal hexa_http_get(HexaVal url);                   /* runtime.c:11463 — HTTP GET (R7 Phase 4 bridges: oeis/arxiv/gw/…) */
+HexaVal rt_delete_file(HexaVal path);                 /* runtime.c:10940 — unlink path (R7 Phase 3: compiler/molt) */
 HexaVal hexa_timestamp(void);                         /* runtime.c:9877 — UNIX millis */
 HexaVal hexa_from_char_code(HexaVal n);               /* runtime.c:7668 — int → 1-char string */
 HexaVal hexa_sleep_ms(HexaVal ms);                    /* runtime.c:10000 — non-blocking-ish sleep */

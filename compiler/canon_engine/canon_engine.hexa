@@ -44,7 +44,7 @@ pub fn canon_seal_path() -> string {
     return home + "/.hx/data/canon_seal.jsonl"
 }
 
-fn _ensure_dir(path: string) -> void {
+fn _canon_ensure_dir(path: string) -> void {
     let last_slash = path.last_index_of("/")
     if last_slash < 0 { return }
     let dir = path.substring(0, last_slash)
@@ -132,7 +132,7 @@ pub fn canon_seal(seed_flag: string, note_flag: string) -> CanonSealResult {
         + ",\"atlas_bytes\":" + to_string(atlas_bytes) + "}")
     // 5) append (idempotent — append-only)
     let path = canon_seal_path()
-    _ensure_dir(path)
+    _canon_ensure_dir(path)
     let pre = _line_count(path)
     let mut appended = false
     try { append_file(path, entry + "\n"); appended = true } catch e { appended = false }
