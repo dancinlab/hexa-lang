@@ -1445,3 +1445,17 @@ kernel · gap(e) model DSL 미착수. multi-cycle, oracle-gated, $0.
 **gap(c) VERIFIED.** GOAL 진척: gap(a) ✅ · gap(b) ✅ · **gap(c)
 ✅** (3/5) · 잔여 gap(d) forge kernel (GPU, perf, $) · gap(e)
 model DSL (nn.Module-equiv, $0 API) 미착수.
+
+**Test 17 gap(e) declarative DSL (LANDED 8168de4e, Decision 7
+user-gate)**: `stdlib/flame/ag_spec.hexa` 선언적 spec IR (모델=
+데이터, 임의 DAG) + ag_run_spec dispatcher. full decoder 를 spec
+으로 재정의 → reference 대비 `2.78e-17/1.11e-16/0/8.33e-17` =
+Test 14 와 숫자 동일 → DSL = faithful 최적화 IR. flame_ag_tape_test
+**17/17 ALL PASS**. **gap(e) ✅ CLOSED $0.**
+
+GOAL 진척 (**4/5 CLOSED, 전부 $0 측정**): gap(a) ✅ 수렴 · gap(b)
+✅ autograd 자동화 · gap(c) ✅ shape-generic · gap(e) ✅ 선언적
+DSL · **잔여 gap(d)** = forge GPU kernel 커버리지 (RoPE 등 CPU-loop
+→ forge; perf claim → GPU 측정·$; cost-ascending 상 마지막). spec
+IR 가 fusion-pass 입력 준비완료. instrument-first: $0 fusion 설계
++ faithful predictor 먼저 → GPU fire 그 다음. multi-cycle.

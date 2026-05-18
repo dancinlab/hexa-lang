@@ -438,7 +438,22 @@ C closure) 중 **A** 선택.
 **정확히 byte-identical** (동일 ag_* 호출, dispatch 만 spec-driven)
 → DSL 이 faithful IR 임을 입증. F-RFC043-AGTAPE-SPEC-EQ.
 
-**status**: Decision 7 확정. 구현 = `stdlib/flame/ag_spec.hexa`
-(spec layout farr + ag_spec_begin/add + ag_run_spec; ag_tape 의존)
-+ Test 17 oracle (spec-decoder ≡ hand-decoder byte-eq). gap(d)
-forge fusion-pass 는 이 spec IR 위에서 후속.
+**status**: Decision 7 ✅ LANDED + MEASURED (8168de4e).
+`stdlib/flame/ag_spec.hexa` (spec layout farr · ag_spec_begin/add ·
+ag_run_spec dispatcher over 검증된 ag_* · 임의 DAG = input ref
+≥0 prior / <0 external · param ptab) 구현. **Test 17
+F-RFC043-AGTAPE-SPEC-EQ**: full decoder 를 DATA spec 으로 재정의
+→ ag_run_spec + ag_backward_reg → nn_decoder_fwd/grad 대비
+`logits=2.78e-17 tok_emb(tied)=1.11e-16 gF=0 block-max=8.33e-17`
+= Test 14 hand-composed 와 **숫자까지 동일** → DSL = faithful
+최적화 IR 입증. flame_ag_tape_test **17/17 ALL PASS**. **gap(e)
+✅ CLOSED $0.** gap(d) forge fusion-pass 는 이 spec IR 가 입력
+(Decision 7 설계대로 gap(e)↔gap(d) 합체).
+
+**GOAL 위치 (4/5 CLOSED)**: gap(a) ✅ · gap(b) ✅ (autograd 자동화
+fully) · gap(c) ✅ (shape-generic) · gap(e) ✅ (declarative DSL) ·
+**잔여 gap(d)** = forge GPU kernel 커버리지 (RoPE 등 CPU-loop →
+forge kernel; host 분산 35% 원인; perf claim → GPU 측정 필요·$).
+cost-ascending 상 마지막 (GPU-cost). spec IR (Decision 7) 가
+fusion-pass 입력으로 준비됨. instrument-first: $0 fusion-pass
+설계 + faithful cost-predictor 먼저 → GPU fire 는 그 다음.
