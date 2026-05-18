@@ -42,6 +42,9 @@
 
 (append-only)
 
+### 2026-05-19 — drill: pluggable verifier hook landed (inbox phanes-pluggable-verifier-oracle-for-drill-loop SSOT-resolved)
+`compiler/drill/drill.hexa`: `DrillOpts` += `verifier_cmd` / `verifier_timeout_s` / `verifier_authoritative` (defaults preserve byte-identical pre-hook behavior); new `VerifierVerdict { verdict ∈ pass|fail|continue|skip|error, rationale, round }` + `_verifier_run` / `_verifier_audit_emit` helpers; single call site in `drill_run` AFTER `_honesty_gate` BEFORE `checkpoint_save`; authoritative-stop verdicts (pass → saturated=true, fail → verifier_stopped=true) halt the loop with checkpoint flush; advisory verdicts log only. `DrillResult` += `verifier_stopped` / `verifier_verdict` (positional literals updated at both return sites). CLI flags `--verifier-cmd <sh-cmd>` / `--verifier-timeout <Ns>` / `--verifier-strict` on `hexa drill`. Audit trail = stderr `DRILL_VERIFIER {...}` row + synthesized `__BT_AI2__` sentinel on pass/fail so downstream `bt_ai2_audit` sees the verdict alongside the existing BT-AI2 round line. Verifier is untrusted tenant code — sandbox enforcement is phanes' responsibility (mirror of `g_qrng_provider_only` boundary). Parse-gate clean: drill.hexa · batch.hexa · drill_test.hexa · accumulation_test.hexa. Binary promote = standard separate deploy step per the 22c27a05 pattern.
+
 ### 2026-05-17 — 13 DIFF 정밀 3-way 재분류 (aprime / interp / hexa-build) — 실제 aprime 갭 정밀화
 13 DIFF 중 atlas verifier 5 + suspect-interp 2 = 7건을 aprime/interp/hexa-build 3-way diff.
 
