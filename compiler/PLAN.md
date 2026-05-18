@@ -1587,3 +1587,25 @@ interp 실삭제 (R7 종결) 전제조건: 위 3 잔여 + bench/parse 는 이미
 
 **R7 interp source 실삭제 가능 여부**: atlas 가 cmd_run fallback 에 load-bearing → 완전 삭제 전 atlas binary-path 또는 atlas 의 hxc-direct compiled path 필요. 51/52 closeable verb 종결, atlas 1건이 정직한 잔여 (정밀 특성화 + functional fallback + 3 proper-fix 경로 명시). over-claim 없이 honest closure.
 
+---
+
+### 2026-05-18 — atlas blocker ROOT-CAUSE 정밀화 (cycle h34) — embedded.gen 가설 정정
+
+**정정**: cycle h33 의 "embedded.gen-via-static_index 가 유일 OOM 트리거" 는 **불완전**. 실측 정정:
+- static_index.hexa 의 `use "compiler/atlas/embedded.gen"` 를 sever (small metadata 로컬 const + fallback empty-array + _count_rodata→0) → atlas_cli OOM **여전**. `use static_index` (embedded.gen-free) 단독 flatten 도 **~11.6 GB peak, 70s+ 미완** (이전 ~8.9 GB 와 동급). 즉 embedded.gen 은 주범 아님 → severing revert (zero-payoff + no-sidecar fallback 시맨틱 delta 회피, g3).
+- audit_main(PASS) vs atlas_cli(FAIL) 차이는 graph 규모 (audit_main 4 use vs atlas_cli 7 use + 깊은 transitive) — embedded.gen 유무 아님.
+
+**진짜 root cause = module_loader `.replace`-chain multi-MB 메모리 병리** (no-GC arena):
+- `self/module_loader.hexa::ml_apply_alias_prefix` (L298+) Pass-3 (L344+): 각 pub name 당 `lhs_set`(9) × `rhs_set`(18) ≈ **162 `.replace()` 호출**, 매 호출이 full src string 복사. N pub names → N×162 × (multi-MB) full-copy. aliased import 경로.
+- `ml_strip_and_clean` (L316-325 등): 단일 src 에 10× sequential `.replace()`. plain import 경로.
+- atlas-core graph (parser/merger/audit/audit_rodata/overlay/prefix_index/discover) 누적 처리 시 위 경로들의 transient 가 24 GB Mac 초과 → SIGKILL (exit 137).
+- hexa runtime `.replace` 가 per-call full-alloc + no-GC arena 축적이라 multi-MB × 수천 호출 = GB 급 transient.
+
+**proper fix (별도 careful cycle — 본 campaign 범위 밖)**:
+1. `ml_apply_alias_prefix` Pass-3 를 single-pass 토크나이저 rewrite (162-replace-per-name → 1-pass)
+2. `ml_strip_and_clean` replace-chain → single-pass
+3. + module_loader streaming-write (전체 flat in-memory 회피)
+- 모두 module_loader rebuild + 전 cycle fixpoint 재검증 수반 → 정밀 작업, time-pressure 하 unbounded rewrite 강행 금지 (g3 over-claim·fit-to-number 방지 + careful-actions high-blast-radius)
+
+**honest 최종 상태**: 51 verbs binary-migrated (9 named + 41 absorbed + init), 전 cycle self-host fixpoint 보존 (mini build_aprime 매번 5/5 PASS). atlas 1건 = module_loader `.replace`-chain 메모리 병리로 root-caused (구체 함수·라인 명시), cmd_run/interp fallback 으로 functional (사용자 영향 0), proper fix 가 명확히 scoped 된 별도 엔지니어링 cycle. fake-closure 없음 · over-claim 없음.
+
