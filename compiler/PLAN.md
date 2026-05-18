@@ -1370,3 +1370,37 @@ surgical deletion 은 트랙 B (CLI driver re-targeting) 가 별도 multi-cycle 
 - cross-directory flatten: atlas (별도 compiler 진단 cycle — hexa build 의 module_loader transitive flatten gap)
 - inline/embedded 분석: batch (av 순회 inline) · bench (어떤 모듈? 미확인) · init (tool/init_project.hexa MISSING — 다른 path?) · verify (atlas verifier embedded) · calc (TECS-L embedded)
 
+---
+
+### 2026-05-18 — R7 track B 잔여 cmd_run 사이트 정밀 분석 (cycle h28 · 분석-only)
+
+cycles 1-6 후 자기-grep 으로 self/main.hexa 의 `cmd_run(` 호출 사이트 21개 확인. 분류:
+
+| 사이트 | 호출 컨텍스트 | 동작 | 작업 분류 |
+|---|---|---|---|
+| L1124 | `dispatch_absorbed` fallthrough | 29 annot analyzers (bash, `exec` 처리됨) + Phase 3/4 .hexa modules (cmd_run) | 다중-파일, 모듈별 fn main shim 필요 — 별도 다중 cycle 필요 |
+| L2171 | (cmd_run_user_direct 호출) | option B deprecation warning → cmd_run_dispatch 위임 | user-direct path 정책 (보존) |
+| L2199 | (cmd_run 정의) | cmd_run fn 자체 | N/A |
+| L2434 | `cmd_batch` loop | 사용자가 준 다중 .hexa 파일 순회 (alt interp use) | direct migration 무관 |
+| L3148 | `lsp` 분기 | LSP stdin/stdout JSON-RPC server | streaming spawn 패턴 필요 |
+| L3254, L3331, L3421, L3594, L3664, L3735 | cycle 1-6 fallback paths | binary 부재 시 transitional | OK (보존, `g_inbox_dual_track`) |
+| L3461 | `init` 분기 | tool/init_project.hexa (MISSING in repo) | broken feature — 별도 분석 |
+| L3488 | `verify` 분기 | tool/verify_cli.hexa (3 use, compiler/atlas/* cross-directory) | atlas flatten gap 클러스터 |
+| L3506 | `calc` 분기 | tool/calc_cli.hexa (18 use, compiler/atlas/symbolic/*) | atlas flatten gap 클러스터 |
+| L3524 | `atlas` 분기 | tool/atlas_cli.hexa (7 use) | atlas flatten gap 클러스터 (이미 cycle 4 atlas 에서 발견) |
+| L3766 | compat mode (`hexa foo.hexa`) | user-direct interp invoke | option B 이미 처리 (deprecation warning emit) |
+
+**결과**: 
+- atlas-class 클러스터 = 3 verbs (atlas + verify + calc) 가 단일 flatten 수정으로 unlock 가능. 우선순위 ↑
+- lsp streaming 은 단일 verb 작업 (1 verb)
+- Phase 3/4 absorbed modules 는 다중-파일 다중-cycle 작업
+- bench/parse 는 inline compiled (cmd_run 사용 안 함, track B 무관)
+- init 은 sub-script 자체가 MISSING — 별도 broken-feature triage
+
+**R7 track B 진척**: 6/16 verbs LANDED on origin/main. 잔여 ~10 verbs (analysis-corrected count). 다음 세션 우선순위 권장:
+1. **atlas flatten gap 진단** — 단일 수정으로 3 verbs (atlas/verify/calc) unlock. 가장 high-leverage. `compiler/main.hexa` 의 module_loader 가 cross-directory `use` 의 transitive flatten 을 어떻게 처리하는지, hexa_v2 transpiler 단계인지 등 진단 필요.
+2. **lsp streaming spawn** — `posix_spawnp` 또는 `fork+exec` 기반 fd-inherit spawn helper 신규 추가. 단일 verb 이지만 IDE 사용자에게 영향 큼.
+3. **Phase 3/4 modules 다중-cycle** — 가장 큰 작업. 각 모듈 fn main shim + 빌드.
+
+**fixpoint regression risk (전 사이클 누적)**: 0. 모든 변경 dispatch-only + fn 이름 rename — codegen/transpiler/aprime_cc 무관.
+
