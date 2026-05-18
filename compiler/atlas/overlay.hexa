@@ -62,18 +62,40 @@ let mut _g_overlay_warned_conflict: bool = false
 
 // --- path resolution -------------------------------------------------------
 
-pub fn overlay_path() -> string {
+// Resolve the hx data directory. Single helper consulted by every
+// overlay/checkpoint path-construction site so the rule lives in ONE
+// place. Precedence (downstream multi-tenant requirement, filed via
+// inbox/patches/phanes-hx-data-dir-per-tenant-isolation.md):
+//
+//   1. HX_DATA_DIR — explicit override; preferred for per-tenant
+//      isolation (a hosted SaaS can point each job at its own dir
+//      without hijacking $HOME, which would also redirect every
+//      other home-relative read the process makes).
+//   2. $HOME/.hx/data — historical default; preserves single-user
+//      behaviour and existing test idiom (`HOME=$base` jail used by
+//      drill_test / mkx_test / accumulation_test).
+//   3. ".hx/data" — last-resort fallback when neither env is set
+//      (matches the prior overlay_path() / checkpoint_path() shape).
+//
+// Trailing slash is NOT included; callers compose with "/<name>".
+pub fn hx_data_dir() -> string {
+    let override = env("HX_DATA_DIR")
+    if len(override) > 0 { return override }
     let home = env("HOME")
-    if len(home) == 0 { return ".hx/data/atlas.overlay.n6" }
-    return home + "/.hx/data/atlas.overlay.n6"
+    if len(home) == 0 { return ".hx/data" }
+    return home + "/.hx/data"
 }
 
-// Create ~/.hx/data/ if missing. Idempotent — mkdir -p semantics under
-// the hood. No-op on existing dir.
+pub fn overlay_path() -> string {
+    return hx_data_dir() + "/atlas.overlay.n6"
+}
+
+// Create the hx data dir if missing. Idempotent — mkdir -p semantics
+// under the hood. No-op on the bare ".hx/data" fallback only when
+// HOME is unset AND HX_DATA_DIR is unset (caller has chosen relative).
 pub fn overlay_ensure_dir() -> void {
-    let home = env("HOME")
-    if len(home) == 0 { return }
-    let dir = home + "/.hx/data"
+    let dir = hx_data_dir()
+    if len(dir) == 0 { return }
     mkdir(dir)
 }
 

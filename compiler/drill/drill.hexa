@@ -17,12 +17,15 @@
 //
 // Doctrine v2 룰 5 write policy:
 //   • Each round's discoveries are flushed via overlay_append_lines to
-//     ~/.hx/data/atlas.overlay.n6 (the single runtime overlay file).
+//     <hx_data_dir>/atlas.overlay.n6 (the single runtime overlay file).
 //   • Atlas lookups in subsequent rounds see the prior overlay through
 //     atlas_lookup_merged / atlas_list_merged.
 //   • Checkpoint state (round counter / seed pool / total) goes to a
-//     separate file ~/.hx/data/drill_checkpoint.json — small, JSON, NOT
-//     mixed with the discovery stream.
+//     separate file <hx_data_dir>/drill_checkpoint.json — small, JSON,
+//     NOT mixed with the discovery stream.
+//   • hx_data_dir defaults to $HOME/.hx/data and is overridable via
+//     HX_DATA_DIR (multi-tenant isolation; see compiler/atlas/overlay
+//     ::hx_data_dir).
 //
 // Public surface:
 //   pub struct DrillResult { rounds, total, saturated, ... }

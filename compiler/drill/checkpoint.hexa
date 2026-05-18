@@ -23,10 +23,15 @@
 //   - missing/corrupt file → silent fresh start
 //
 // The single-file approach is intentional. Drill is single-writer per
-// $HOME; concurrent batch dispatch serializes through cmd_drill_batch
-// upstream so we never need a per-seed checkpoint sub-directory.
+// hx data dir; concurrent batch dispatch serializes through
+// cmd_drill_batch upstream so we never need a per-seed checkpoint
+// sub-directory. Multi-tenant isolation is achieved by setting
+// HX_DATA_DIR per job (see compiler/atlas/overlay::hx_data_dir),
+// avoiding a blunt $HOME hijack.
 //
 // Catalog/diagnostic strings: ENGLISH ONLY.
+
+use "compiler/atlas/overlay"
 
 pub struct CheckpointState {
     seed_hash: string,
@@ -48,17 +53,18 @@ pub fn checkpoint_empty() -> CheckpointState {
     }
 }
 
-// Resolve the checkpoint path. Mirrors overlay_path() — uses $HOME.
+// Resolve the checkpoint path. Mirrors overlay_path() — both consult
+// hx_data_dir() (HX_DATA_DIR override, else $HOME/.hx/data, else
+// ".hx/data" relative fallback). Single canonical helper, one site
+// per file.
 pub fn checkpoint_path() -> string {
-    let home = env("HOME")
-    if len(home) == 0 { return ".hx/data/drill_checkpoint.json" }
-    return home + "/.hx/data/drill_checkpoint.json"
+    return hx_data_dir() + "/drill_checkpoint.json"
 }
 
 fn _ensure_dir() -> void {
-    let home = env("HOME")
-    if len(home) == 0 { return }
-    mkdir(home + "/.hx/data")
+    let dir = hx_data_dir()
+    if len(dir) == 0 { return }
+    mkdir(dir)
 }
 
 // FNV-1a 32-bit over the seed string. Produces an 8-char hex tag suitable

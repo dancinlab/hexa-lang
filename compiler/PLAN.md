@@ -1752,3 +1752,6 @@ R7 track B: 52/52 verbs binary-migrated AND the discovery-engine family
 (kick/drill/omega/chain/surge/dream/swarm/reign/molt/forge/canon/debate/
 wake) now runs its real engine, no segfault. interp-source deletion's
 last functional barriers removed. origin/main `eedc46b4`.
+
+### 2026-05-19 — drill hx_data_dir() helper + HX_DATA_DIR env knob (phanes patch)
+Resolved `inbox/patches/phanes-hx-data-dir-per-tenant-isolation.md` (resolution (a)) — added `pub fn hx_data_dir()` in `compiler/atlas/overlay.hexa` with precedence `HX_DATA_DIR > $HOME/.hx/data > ".hx/data"`; routed `overlay_path()` / `overlay_ensure_dir()` / `checkpoint_path()` / `_ensure_dir()` through the single helper. `checkpoint.hexa` now `use "compiler/atlas/overlay"` (dep was already transitive). Multi-tenant SaaS (phanes) can now set `HX_DATA_DIR` per-job for overlay/checkpoint isolation without `$HOME`-hijack. Local `hexa_real parse` clean on all three files; binary promote = standard separate deploy step per the 22c27a05 pattern. Scope (g3): SSOT fix only — no CLI flag, no per-job sub-jail logic added.
