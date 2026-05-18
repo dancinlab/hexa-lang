@@ -1463,7 +1463,16 @@ __global__ void _hx_cuda_kern_rope_fwd(const double* __restrict__ X,
         double rh_c = (c < half)
             ? (0.0 - X[row + half + c])
             : X[row + c - half];
-        Y[i] = X[row + c] * COS[bse + c] + rh_c * SIN[bse + c];
+        /* __dmul_rn/__dadd_rn: explicit round-to-nearest, no FMA
+         * contraction. nvcc device default (--fmad=true) would fuse
+         * a*b+c*d into one fma() (1 rounding); the verified flame
+         * reference nn_rope_apply_fwd (and the CPU fallback, pinned
+         * by #pragma STDC FP_CONTRACT OFF, commit c0789e05) does 2
+         * roundings. The RoPE GPU byte-eq oracle measured the fused
+         * form diverging max|Δ|=4.441e-16 — this conforms the kernel
+         * to the reference's rounding (F-RFC041-ROPE-EXACT |Δ|=0). */
+        Y[i] = __dadd_rn(__dmul_rn(X[row + c], COS[bse + c]),
+                         __dmul_rn(rh_c, SIN[bse + c]));
     }
 }
 
@@ -1482,10 +1491,12 @@ __global__ void _hx_cuda_kern_rope_bwd(const double* __restrict__ DX,
         int64_t row = i - c;
         int64_t t   = i / (nheads * hd);
         int64_t bse = t * hd;
+        /* __dmul_rn/__dadd_rn — no FMA contraction; conform to the
+         * non-contracted reference (see fwd kernel note + c0789e05). */
         double gs = (c < half)
-            ? (DX[row + half + c] * SIN[bse + half + c])
-            : (0.0 - DX[row + c - half] * SIN[bse + c - half]);
-        Y[i] = DX[row + c] * COS[bse + c] + gs;
+            ? __dmul_rn(DX[row + half + c], SIN[bse + half + c])
+            : (0.0 - __dmul_rn(DX[row + c - half], SIN[bse + c - half]));
+        Y[i] = __dadd_rn(__dmul_rn(DX[row + c], COS[bse + c]), gs);
     }
 }
 
