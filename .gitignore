@@ -79,6 +79,22 @@ self/native/hexa_cc.c.new
 # R7 track B absorbed-verb sub-binaries — built via `hexa build stdlib/<verb>/<verb>.hexa`.
 # Arch-specific Mach-O / ELF, not source of truth. Rebuild with tool/build_hexa_<verb>.sh.
 bin/hexa-qrng
+bin/hexa-qmirror
+bin/hexa-sim-universe
+bin/hexa-convergence
+bin/hexa-test
+bin/hexa-check
+bin/hexa-verify
+bin/hexa-calc
+bin/hexa-lsp
+bin/hexa-atlas
+
+# R7 track B Phase 3/4 batch absorbed-verb binaries (build_absorbed_binaries.sh)
+bin/hexa-absorbed-*
+
+# Compiled module_loader (build pipeline helper, optional fast path).
+# Built via tool/build_hexa_module_loader.sh. Source is self/module_loader.hexa.
+build/hexa_module_loader
 
 # Local smoke/session artifacts (not tracked)
 shared/state/

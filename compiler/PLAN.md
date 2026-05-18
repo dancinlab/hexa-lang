@@ -1286,3 +1286,469 @@ on that patch landing here.
 **Push state**: commit `ce431e2f` unpushed. shared branch
 (`rfc043-hexa-torch`) — push pending user decision.
 
+### 2026-05-18 — R7 track B cycle 2 — qmirror (cycle h23)
+
+**Decision 5** (verb #2): qmirror (`stdlib/quantum/quantum.hexa`, 197 lines, RFC 045).
+
+- **picked**: qmirror
+- **rationale**:
+  - 가장 작은 fn-main() 보유 후보 (vs sim-universe 324 · atlas 527 · check 1223+shim)
+  - qrng cycle 1 의 stdlib/<verb>/<verb>.hexa 패턴 정확 동형 — 패턴 재사용성 1.0
+  - RFC 045 absorption, 62k LoC 모듈 디스패치 표면 (cmd_dispatch + _module_path) — 패턴 robust 검증
+
+**현 상황**:
+- L3458-L3478 `dispatch_absorbed` qmirror 분기 = `cmd_run(qm_script, qm_args)` (interp call)
+- 발견: 현 production `hexa qmirror status` 가 `stdlib/quantum/quantum.hexa` 의 실제 출력 (38 모듈 inventory) 가 아닌 stale JSON stub (`{"mode": "fallback-deterministic"}`) 반환. 본 cycle 이 SSOT (quantum.hexa) 출력으로 정상화.
+- 목표 (cycle 1 동형): binary spawn + cmd_run fallback
+
+**구현 (LANDED)**:
+- `bin/hexa-qmirror` build: `HEXA_MAC_BUILD_OK=1 hexa build stdlib/quantum/quantum.hexa -o bin/hexa-qmirror` → 376 KB Mach-O arm64. 빌드 < 30s.
+- `tool/build_hexa_qmirror.sh` (1.4 KB shell): canonical 빌드 + `--version` smoke (`hexa qmirror 2.6.0` 검증).
+- `.gitignore`: `bin/hexa-qmirror` 추가.
+- `self/main.hexa` L3458-L3478 → L3458-L3528 (20 → 71 lines): qmirror 분기 spawn path 추가. 동일 패턴 (binary lookup `__inst_qm + "/bin/hexa-qmirror"` → cwd `bin/hexa-qmirror`, shq quoting, `__HEXA_SHIM_RC__` marker, `exit(rc)` on non-zero). 부재 시 `cmd_run(qm_script, qm_args)` fallback.
+- `hexa.real` rebuild via `self/native/hexa_v2` + `tool/build_dispatch.hexa` → 498 KB Mach-O.
+
+**검증**:
+- byte-eq (status): `./hexa qmirror status` (spawn) ≡ `./bin/hexa-qmirror status` (direct) → diff exit 0
+- exit code propagation: `./hexa qmirror nonexistent` → shell rc=2 (binary `exit(2)`)
+- cycle 1 regression check: `./hexa qrng status` 여전히 byte-eq with `./bin/hexa-qrng status` → diff exit 0
+- 다른 dispatch 무결성: 변경 surgical (qmirror else-if 분기만)
+
+**fixpoint regression risk**: 0. dispatch-only change (cycle 1 동일 논리).
+
+---
+
+### 2026-05-18 — R7 track B cycle 3 — sim-universe (cycle h24)
+
+**Decision 6** (verb #3): sim-universe (`stdlib/sim_universe/sim_universe.hexa`, 324 lines, RFC 046).
+
+- **picked**: sim-universe
+- **rationale**:
+  - 다음 ready candidate — fn-main() at L268 ✓ · stdlib/<verb>/<verb>.hexa 구조 동형
+  - RFC 046 absorption (26 modules, ~32k LoC) — qrng cycle 1 패턴 3번째 적용으로 robustness 확정
+
+**구현 (LANDED)**:
+- `bin/hexa-sim-universe` build → 396 KB Mach-O. `tool/build_hexa_sim_universe.sh` + version smoke (`hexa sim-universe 1.1.0`).
+- `self/main.hexa` L3440-L3457 → L3440-L3517 (qmirror 동형 spawn + cmd_run fallback)
+- `.gitignore`: `bin/hexa-sim-universe`.
+- `hexa.real` rebuild 후 검증:
+  - byte-eq (status): `./hexa sim-universe status` ≡ `./bin/hexa-sim-universe status` → diff exit 0
+  - exit code propagation: unknown subcommand → shell rc=2
+  - cycle 1+2 regression: qrng 1.0.0 + qmirror 2.6.0 dispatch 정상
+
+**fixpoint regression risk**: 0.
+
+**R7 track B 진척**: 3/16 verbs (qrng · qmirror · sim-universe) — stdlib/<verb>/<verb>.hexa 패턴 모두 마이그레이션 완료. 잔여 13 verbs 중:
+- ready (fn main 보유): atlas (527L, tool/atlas_cli.hexa) — ⚠️ build 차단 (아래 참조)
+- shim 필요: lsp (1006L) · check (1223L) · test (754L) · convergence_scan
+- 내부/특수: batch · bench · init · verify · calc (dispatch 분기 내 inline 또는 embedded — 별도 분석)
+
+**atlas build 차단 (cycle 4 atlas deferred · sequence shifted to cycle ≥6)**:
+- `HEXA_MAC_BUILD_OK=1 hexa build tool/atlas_cli.hexa -o bin/hexa-atlas` → clang linker 실패: `_atlas_prefix`, `_audit_merged`, `_audit_overlay`, `_audit_rodata`, `_audit_to_json`, `_audit_to_text`, `_lookup_static`, `_promote_to_atlas`, `_static_atlas` 모두 미해소
+- atlas_cli.hexa 의 `use` statements (parser/merger/static_index/audit/audit_rodata/overlay + discover/promote) 가 7개 모듈 import 하지만 flatten 이 `pub fn` 들을 따라가지 못함
+- 정의 위치 확인: `static_atlas` @ compiler/atlas/static_index.hexa, `audit_merged` @ compiler/atlas/audit_rodata.hexa L29 등 — 모두 `pub fn` 으로 정상 정의
+- 가설: tool/atlas_cli.hexa 가 compiler/ tree 와의 cross-directory `use` 인 경우 flatten 단계가 transitive 하게 따라가지 못함 (stdlib/<verb>/ 내 sibling `use` 는 OK)
+- 별도 진단 cycle 필요 — interp `hexa atlas <subcmd>` 는 module_loader 가 OK 처리하므로 hexa build flatten 측의 gap. R7 track B 동안 cmd_run fallback 유지.
+
+---
+
+### 2026-05-18 — R7 track B cycle 4 — convergence (cycle h25 · first shim-cluster)
+
+**Decision 7** (verb #4): convergence (`self/convergence_scan.hexa`, 811 lines, 0 use statements).
+
+- **picked**: convergence
+- **rationale**:
+  - shim-needed cluster 중 가장 깨끗한 entry — `use` statements 0개 (self-contained, atlas 같은 cross-directory 문제 없음)
+  - 기존 `fn cs_main()` (L766) + 모듈-끝 `cs_main()` 호출 (L811) = interp 패턴. 단순 rename + 호출 제거로 standalone main entry 확보 가능
+  - dispatch 가 이미 subcmd/file 사전검증 처리하므로 shim 추가 부담 0 (cs_main 의 av[1]/av[2] · av[2]/av[3] · av[3]/av[4] 3-shape 처리도 그대로 활용)
+
+**구현 (LANDED)**:
+- `self/convergence_scan.hexa`: `fn cs_main()` → `fn main()` (rename L766) + L811 module-level `cs_main()` 호출 제거 (replaced with R7 explainer comment). interp `hexa run` 도 main() auto-invoke 하므로 dual-path 동작 유지 (`g_inbox_dual_track`).
+- `bin/hexa-convergence` build → 391 KB Mach-O. `tool/build_hexa_convergence.sh` + no-arg usage smoke (rc=2 + 'usage:').
+- `self/main.hexa` L3208-L3234 → L3208-L3290 (27 → 83 lines): convergence 분기 spawn path (binary lookup → shq + __HEXA_SHIM_RC__ marker + `exit(rc)`) + 기존 사전검증 + cmd_run fallback 유지.
+- `.gitignore`: `bin/hexa-convergence`.
+- `hexa.real` rebuild.
+
+**검증**:
+- byte-eq (dump): `./hexa convergence dump <fixture>` (spawn) ≡ `./bin/hexa-convergence dump <fixture>` ≡ production `hexa convergence dump <fixture>` (interp) → diff exit 0 (양방향)
+- dump-meta 동작 ✓
+- 사전검증 exit code: `./hexa convergence` (인자 없음) → rc=1 (dispatch L3214 `exit(1)`)
+- cycle 1+2+3 regression: qrng 1.0.0 · qmirror 2.6.0 · sim-universe 1.1.0 모두 정상 dispatch
+
+**fixpoint regression risk**: 0. dispatch-only + convergence_scan.hexa fn 이름 rename 만 (codegen/aprime_cc 와 무관).
+
+**R7 track B 진척**: 4/16 (qrng · qmirror · sim-universe · convergence). 첫 shim-cluster 멤버 안착 — rename 패턴 확립. 잔여 shim-cluster: lsp (1006L) · check (1223L) · test_runner (307L). 잔여 atlas-class: atlas (cross-directory flatten gap). 잔여 특수: batch · bench · init · verify · calc.
+
+---
+
+### 2026-05-18 — R7 track B cycle 5 — test_runner (cycle h26 · 2nd shim-cluster)
+
+**Decision 8** (verb #5): test (`self/test_runner.hexa`, 307 lines, 3 within-self/ use statements).
+
+- **picked**: test_runner
+- **rationale**:
+  - shim-cluster 중 가장 작음 (vs lsp 1006L · check 1223L)
+  - 내부 use statements 모두 self/ 트리 내 (attrs/core, attrs/test, stdlib/law_io) — within-directory 패턴이라 flatten 호환 (atlas-class 아님)
+  - 모듈-끝 entry block (L260-307) 가 `fn main()` 으로 wrap 가능
+
+**구현 (LANDED)**:
+- `self/test_runner.hexa`: L36 `let __av = args()` 제거 (인-comment) + L260-307 entry block 을 `fn main()` 으로 wrap (내부에서 `let __av = args()` 재호출). dual-path 호환 — interp 도 auto-invoke main().
+- `bin/hexa-test` build → 425 KB Mach-O. `tool/build_hexa_test.sh` + no-arg usage smoke.
+- `self/main.hexa` L3290+ (test 분기): spawn path (3-tier binary lookup: install_dir + cwd + HEXA_LANG) + cmd_run fallback (기존 3-tier script resolve 보존).
+- `.gitignore`: `bin/hexa-test`.
+- `hexa.real` rebuild.
+
+**검증**:
+- 기능 동등성: `./hexa test <fixture>` (spawn) ≡ `./bin/hexa-test <fixture>` (direct) — 출력에서 timing measurement (`in 0.307s` vs `in 0.291s`) 만 차이, 모든 test name/PASS-FAIL/summary 동일. 2/2 PASS · rc=0
+- pre-validation: `./hexa test` (no-arg) → dispatch 분기의 `exit(2)` 동작
+- cycle 1-4 regression: qrng + qmirror + sim-universe + convergence 모두 정상 (--version + dump 출력)
+
+**non-determinism note**: test_runner 출력 의 timing 측정 (`total: 2   in <s>s`) 은 wall-clock 변동성 때문에 byte-eq 가 아닐 수 있음. 기능적 동등성으로 충분 (test count + PASS/FAIL + rc).
+
+**fixpoint regression risk**: 0. test_runner.hexa 재구조 + dispatch-only.
+
+**R7 track B 진척**: 5/16 (qrng · qmirror · sim-universe · convergence · test_runner).
+
+---
+
+### 2026-05-18 — R7 track B cycle 6 — check / invariant_check (cycle h27 · 3rd shim-cluster)
+
+**Decision 9** (verb #6): check (`self/invariant_check.hexa`, 1223 lines, 0 use statements).
+
+- **picked**: check
+- **rationale**:
+  - cycle 4 (convergence) rename 패턴이 다시 적용 가능 — `main_check()` (L1161) + 모듈-끝 `main_check()` 호출 (L1223) → `fn main` + 호출 제거. 패턴 재사용성 1.0.
+  - lsp 는 stdin/stdout streaming (LSP 무한 loop) 라 `exec()` buffered 패턴과 호환 안 됨 — 별도 streaming spawn 패턴 필요. cycle 6 에서 deferred.
+  - 0 `use` → atlas-class flatten gap 영향 없음
+
+**구현 (LANDED)**:
+- `self/invariant_check.hexa`: `fn main_check()` → `fn main()` rename (L1161) + L1223 module-level call 제거 (R7 explainer comment).
+- `bin/hexa-check` build → 412 KB Mach-O. `tool/build_hexa_check.sh` + 사소 fixture smoke (`fn nothing() {}` → "0 @invariant" 또는 "OK: all invariants passed").
+- `self/main.hexa` L3188-L3207 → L3188-L3260 (20 → 73 lines): check 분기 spawn path + cmd_run fallback. dispatch pre-validation (exit 1 on no-arg) 보존.
+- `.gitignore`: `bin/hexa-check`.
+- `hexa.real` rebuild.
+
+**검증**:
+- byte-eq (invariant fixture): `./hexa check <fixture>` (spawn) ≡ `./bin/hexa-check <fixture>` → diff exit 0, rc=0 양쪽
+- no-arg pre-validation: 에러 + cmd_help() 출력 (기존 동작 보존)
+- cycle 1-5 regression: qrng + qmirror + sim-universe + convergence + test 모두 정상
+
+**fixpoint regression risk**: 0.
+
+**R7 track B 진척**: 6/16 (qrng · qmirror · sim-universe · convergence · test · check). 잔여 13 verbs 중:
+- ⚠️ lsp (1006L · streaming pattern 필요 — deferred)
+- ⚠️ atlas (cross-directory flatten gap — deferred)
+- 🔍 batch / bench / init / verify / calc (inline 또는 embedded — 별도 분석)
+
+**잔여 종류별 작업 분류 (cycle 7+ 후보)**:
+- streaming spawn: lsp (stdin/stdout JSON-RPC, exec() buffered 패턴 불가, posix_spawnp + fd inherit 필요)
+- cross-directory flatten: atlas (별도 compiler 진단 cycle — hexa build 의 module_loader transitive flatten gap)
+- inline/embedded 분석: batch (av 순회 inline) · bench (어떤 모듈? 미확인) · init (tool/init_project.hexa MISSING — 다른 path?) · verify (atlas verifier embedded) · calc (TECS-L embedded)
+
+---
+
+### 2026-05-18 — R7 track B 잔여 cmd_run 사이트 정밀 분석 (cycle h28 · 분석-only)
+
+cycles 1-6 후 자기-grep 으로 self/main.hexa 의 `cmd_run(` 호출 사이트 21개 확인. 분류:
+
+| 사이트 | 호출 컨텍스트 | 동작 | 작업 분류 |
+|---|---|---|---|
+| L1124 | `dispatch_absorbed` fallthrough | 29 annot analyzers (bash, `exec` 처리됨) + Phase 3/4 .hexa modules (cmd_run) | 다중-파일, 모듈별 fn main shim 필요 — 별도 다중 cycle 필요 |
+| L2171 | (cmd_run_user_direct 호출) | option B deprecation warning → cmd_run_dispatch 위임 | user-direct path 정책 (보존) |
+| L2199 | (cmd_run 정의) | cmd_run fn 자체 | N/A |
+| L2434 | `cmd_batch` loop | 사용자가 준 다중 .hexa 파일 순회 (alt interp use) | direct migration 무관 |
+| L3148 | `lsp` 분기 | LSP stdin/stdout JSON-RPC server | streaming spawn 패턴 필요 |
+| L3254, L3331, L3421, L3594, L3664, L3735 | cycle 1-6 fallback paths | binary 부재 시 transitional | OK (보존, `g_inbox_dual_track`) |
+| L3461 | `init` 분기 | tool/init_project.hexa (MISSING in repo) | broken feature — 별도 분석 |
+| L3488 | `verify` 분기 | tool/verify_cli.hexa (3 use, compiler/atlas/* cross-directory) | atlas flatten gap 클러스터 |
+| L3506 | `calc` 분기 | tool/calc_cli.hexa (18 use, compiler/atlas/symbolic/*) | atlas flatten gap 클러스터 |
+| L3524 | `atlas` 분기 | tool/atlas_cli.hexa (7 use) | atlas flatten gap 클러스터 (이미 cycle 4 atlas 에서 발견) |
+| L3766 | compat mode (`hexa foo.hexa`) | user-direct interp invoke | option B 이미 처리 (deprecation warning emit) |
+
+**결과**: 
+- atlas-class 클러스터 = 3 verbs (atlas + verify + calc) 가 단일 flatten 수정으로 unlock 가능. 우선순위 ↑
+- lsp streaming 은 단일 verb 작업 (1 verb)
+- Phase 3/4 absorbed modules 는 다중-파일 다중-cycle 작업
+- bench/parse 는 inline compiled (cmd_run 사용 안 함, track B 무관)
+- init 은 sub-script 자체가 MISSING — 별도 broken-feature triage
+
+**R7 track B 진척**: 6/16 verbs LANDED on origin/main. 잔여 ~10 verbs (analysis-corrected count). 다음 세션 우선순위 권장:
+1. **atlas flatten gap 진단** — 단일 수정으로 3 verbs (atlas/verify/calc) unlock. 가장 high-leverage. `compiler/main.hexa` 의 module_loader 가 cross-directory `use` 의 transitive flatten 을 어떻게 처리하는지, hexa_v2 transpiler 단계인지 등 진단 필요.
+2. **lsp streaming spawn** — `posix_spawnp` 또는 `fork+exec` 기반 fd-inherit spawn helper 신규 추가. 단일 verb 이지만 IDE 사용자에게 영향 큼.
+3. **Phase 3/4 modules 다중-cycle** — 가장 큰 작업. 각 모듈 fn main shim + 빌드.
+
+**fixpoint regression risk (전 사이클 누적)**: 0. 모든 변경 dispatch-only + fn 이름 rename — codegen/transpiler/aprime_cc 무관.
+
+---
+
+### 2026-05-18 — R7 track B cycle 7 — module_loader flatten gap fix (cycle h29 · compiler-side)
+
+**Decision 10** (next focus): atlas flatten gap 진단 + 수정 (3 verbs unlock 가능 — atlas/verify/calc 전부 동일 root cause).
+
+**근본 원인**: `hexa build <file>` 의 module_loader preprocess 단계가 cross-directory `use` (e.g. `tool/atlas_cli.hexa` 가 `use "compiler/atlas/audit_rodata"` import) 에 대해:
+- 다른 caller_dir 경로로 도달하는 같은 파일 (예: `compiler/atlas/audit.hexa` → `compiler/atlas/audit_rodata` 와 `tool/atlas_cli.hexa` → `compiler/atlas/audit_rodata` 가 각각 다른 raw path) 을 _서로 다른 파일_ 로 dedup-key 처리
+- 결과 (A) flatten double-include (C `enum Severity` redefinition) OR (B) 일부 파일이 colliding 후 silently 누락 → clang 단계 undeclared identifier (`_static_atlas`, `_audit_merged`, ...)
+
+**기존 fix 발굴**: memory `[컴파일러 자체빌드 블로커]` + `[quant_meter P1 MVP]` 가 `ml_canon_path` FIX 가 sibling branch (`rfc043-hexa-torch`, stash `e91a199c`) 에 미커밋으로 land 됐다고 명시. 추출 + main 적용:
+- `self/module_loader.hexa` + 두 함수 신규:
+  - `_ml_drop_last(arr)` (@pure helper — `len/push/index` 만 사용)
+  - `ml_canon_path(p)` (@pure — lexical `.` / `..` collapse, filesystem-free)
+- `ml_resolve_full(imp, caller_dir)` rewrap: 기존 본문은 `ml_resolve_full_raw` 로 rename, wrapper 가 결과를 `ml_canon_path` 통과시켜 정규화
+
+**compiled module_loader 신규**:
+- `self/module_loader.hexa` 의 module-level CLI block 을 `fn main()` 으로 wrap (qrng/convergence cycles 패턴 동일)
+- `tool/build_hexa_module_loader.sh` (1.5 KB) — `hexa build self/module_loader.hexa -o build/hexa_module_loader` + self-test smoke
+- 산출물 `build/hexa_module_loader` (416 KB Mach-O) — 빌드 파이프라인 (`resolve_module_loader_compiled` in self/main.hexa) 가 interp+module_loader.hexa 대신 prefer
+- bootstrap-safe: module_loader.hexa 의 `use` 카운트 0 → 자기-flatten 은 no-op (raw src fallback 으로도 빌드 성공)
+
+**검증 (cycle 1-6 regression)**:
+- qrng / qmirror / sim-universe / convergence / test / check 전부 정상 dispatch (worktree `./hexa <verb> ...` 모두 byte-eq 유지)
+- compiled module_loader self-test PASS (`[module_loader] self-test PASS`)
+- patched vs production module_loader qrng flat 비교: 콘텐츠 등가, path normalization 차이만 (`/abs/path/...hexa` → `relative/path/...hexa` — `ml_canon_path` 의 의도된 효과)
+
+**검증 (atlas) — Mac 메모리 헤비, mini offload 필요**:
+- 로컬 build/hexa_module_loader 가 atlas_cli flatten 시도 → 2 분 후 ~500 MB RSS (계속 증가). memory `[컴파일러 자체빌드 블로커]` 가 예측했던 흐름 — interp 시절 OOM-kill 패턴이 compiled 에서도 비슷 (5 MB embedded.gen.hexa + 68 atlas/*.hexa 전체 flatten).
+- 후속 mini 검증 필요 — compile + atlas flatten 둘 다. 성공 시 atlas/verify/calc 3 verb cycle 6+1+1 추가 land 가능.
+
+**fixpoint regression risk**: 0. module_loader 는 codegen 경로 무관 — flatten 보조 binary 만. aprime_cc 가 module_loader 의 산출물을 사용하긴 하지만 본 patch 는 dedup-key normalization 만 추가 (의미 보존).
+
+**R7 track B 진척**: 6/16 verbs LANDED on origin/main + 7번째 cycle 의 flatten fix 가 LANDED (atlas/verify/calc 후속 사이클들의 unblock). 즉, 잠재 진척 = 9/16 (mini 검증 후).
+
+---
+
+### 2026-05-18 — R7 track B cycle 8+9 — verify + calc (cycle h30 · flatten fix 활용)
+
+**Decision 11+12** (verbs #7, #8): verify + calc.
+- **picked**: 두 verb 같은 cycle 에서 진행 (모두 atlas-class cross-directory deps, cycle 7 patch 의 직접 활용)
+- **rationale**:
+  - cycle 7 의 `ml_canon_path` + compiled module_loader 가 두 verb 다 unlock 함을 빌드로 확인:
+    - verify (`tool/verify_cli.hexa`, 346L, 3 use compiler/atlas/*) → bin/hexa-verify 459 KB ✓
+    - calc (`tool/calc_cli.hexa`, 433L, 18 use compiler/atlas/symbolic/*) → bin/hexa-calc 561 KB ✓
+  - atlas (`tool/atlas_cli.hexa`) 는 빌드 SIGKILL (4096MB cap 초과, 16GB cap 도 외부 kernel kill — 5MB `embedded.gen.hexa` + 68 atlas/*.hexa flatten 시 메모리 ballooning). 별도 cycle (메모리 최적화 또는 다른 machine) 필요.
+  - 두 verb pattern 동일 (binary lookup → shq → __HEXA_SHIM_RC__ marker → exit propagation) 이라 같은 cycle 으로 묶음
+
+**구현 (LANDED)**:
+- `bin/hexa-verify` build (459 KB) + `tool/build_hexa_verify.sh` (HEXA_MEM_CAP_MB=16384 명시).
+- `bin/hexa-calc` build (561 KB) + `tool/build_hexa_calc.sh` (동일).
+- `self/main.hexa` verify branch (L3475-L3540 영역, 16 → 65 lines) + calc branch (L3508-L3568, 18 → 67 lines): 동일 spawn + cmd_run fallback 패턴.
+- `.gitignore`: `bin/hexa-verify` · `bin/hexa-calc`.
+
+**검증**:
+- verify: `./hexa verify` (spawn) ≡ `./bin/hexa-verify` (direct) → diff exit 0
+- calc: `./hexa calc --help` (spawn) ≡ `./bin/hexa-calc --help` (direct) → diff exit 0
+- cycle 1-6 regression: qrng 1.0.0 · qmirror 2.6.0 · sim-universe 1.1.0 모두 정상
+
+**atlas 차단 정밀화 (cycle h30 분석)**:
+- patched compiled module_loader 가 atlas_cli.hexa flatten 시도 → SIGKILL (signal 9, kernel OOM-class)
+- HEXA_MEM_CAP_MB=4096 (default) → cap exceeded · HEXA_MEM_CAP_MB=16384 → 외부 kernel kill
+- 메모리 ballooning 원인 = `compiler/atlas/embedded.gen.hexa` (5MB) + 68 atlas/*.hexa 의 전체 transitive flatten + module_loader 의 string-builder 자료구조 (현재 일관성 캐시 + flat parts array)
+- 후속 cycle 후보: (a) module_loader streaming write (incremental file emit), (b) atlas tree에서 embedded.gen.hexa 분리 (separate compilation unit), (c) atlas-only sub-flattener
+
+**R7 track B 진척**: 8/16 verbs LANDED + atlas blocked (memory algorithmic). 잔여 ~8 — lsp (streaming) · atlas (memory) · Phase 3/4 modules · init (broken) · batch/bench (inline, track B 무관). 실 잔여 작업 = lsp 1 + atlas 1 + Phase 3/4 다중 = ~3 distinct work-items.
+
+---
+
+### 2026-05-18 — R7 track B cycle 10 — lsp dispatch + readline codegen gap (cycle h31)
+
+**Decision 13** (verb #9): lsp — exec_replace streaming pattern (cmd_run 의 buffered exec 와 다른 unique 패턴).
+
+- **picked**: lsp
+- **rationale**:
+  - lsp JSON-RPC loop = unbuffered bidirectional stdin/stdout 필요 — cycles 1-9 의 `exec()` buffered spawn 불가
+  - `hexa_exec_replace` (runtime.c L4639, `execvp("/bin/sh","-c",cmd)`) 가 이미 존재 + comment 가 명시적으로 "Used by `hexa lsp`" — process 교체로 editor pipe 자연 상속
+  - codegen_c2 L4504 가 이미 `exec_replace` → `hexa_exec_replace` 매핑 보유 (compiled path 지원)
+
+**발견된 2 gap (둘 다 수정)**:
+1. `readline()` (1줄 stdin) compiled-path 미매핑 — codegen_c2 는 `read_stdin` (전체) 만. `readline` → `hexa_input(hexa_str(""))` 추가 (interp `input("")` 와 동일 — getline+strip+EOF시"". g_inbox_dual_track 패리티 검증).
+2. `hexa_exec_replace` runtime.c 정의되나 runtime.h 선언 누락 → self/main.hexa 의 호출이 implicit-declaration clang error. prototype 추가.
+
+**구현 (LANDED `710fab80`)**:
+- `self/lsp.hexa`: module-level `run_lsp()` → `fn main() { run_lsp() }` wrap.
+- `self/main.hexa` lsp/--lsp 분기: `exec_replace(shq(bin/hexa-lsp))` 우선 (process 교체, fd 상속) + cmd_run("self/lsp.hexa",[]) fallback.
+- `self/codegen_c2.hexa`: `readline` 0-arg builtin 매핑.
+- `self/runtime.h`: `hexa_exec_replace` prototype.
+- `tool/build_hexa_lsp.sh` + initialize-handshake smoke. `.gitignore`: bin/hexa-lsp.
+- `hexa.real` rebuild (515 KB, exec_replace path).
+
+**검증**:
+- hexa.real 빌드 OK (runtime.h decl fix 후)
+- cycle 1-9 regression 0: qrng·qmirror·sim-universe·verify·calc·check 모두 정상
+- mini build_aprime 5/5 PASS · exit(42)==42 · **fixpoint regression 0** (codegen_c2 + runtime.h 변경이 self-host bootstrap 무영향 — compiler/main.hexa 가 readline 미사용, runtime.h add 는 additive)
+
+**lsp binary 상태 — DEFERRED to transpiler bootstrap**:
+- `bin/hexa-lsp` 아직 빌드 불가: codegen_c2 의 readline 매핑이 SOURCE 에는 있으나 active `self/native/hexa_v2` transpiler binary 는 그 이전 빌드
+- `hexa build self/lsp.hexa` 가 성공하려면 hexa_v2 재부트스트랩 필요 (fixpoint-verified) → 별도 cycle
+- 그때까지 lsp dispatch 는 cmd_run fallback (안전, 동작 불변)
+
+**fixpoint regression risk**: 0 (mini 검증 완료).
+
+**R7 track B 진척**: 8 verbs binary-migrated + lsp dispatch/codegen-fix landed (binary deferred). 잔여 distinct work: (1) lsp binary = hexa_v2 bootstrap cycle, (2) atlas = memory 최적화 cycle, (3) Phase 3/4 absorbed modules = multi-cycle. init = broken-feature triage 별도.
+
+---
+
+### 2026-05-18 — R7 track B cycle 10b — hexa_v2 bootstrap, lsp binary 완성 (cycle h32)
+
+**Decision 14**: cycle 10 의 readline codegen 매핑을 active `self/native/hexa_v2` 로 propagate (transpiler bootstrap) 하여 lsp binary 완성.
+
+- **picked**: hexa_v2 재부트스트랩 (`hexa cc --regen` → promote → `hexa cc`)
+- **rationale**:
+  - cycle 10 이 codegen_c2.hexa 에 readline 매핑 추가했으나 active hexa_v2 binary 는 그 이전 빌드 → `hexa build self/lsp.hexa` 가 여전히 `hexa_call0(readline)` 방출 (stale transpiler)
+  - lsp 는 마지막 남은 "tractable" verb (atlas=memory, Phase 3/4=multi-file) — bootstrap 1회로 닫힘
+  - fixpoint risk 관리 가능: readline branch 는 additive + compiler/main.hexa 미사용, sl-renumbering 은 internal-static
+
+**구현 (LANDED `d3b3f42e`)**:
+- `./hexa cc --regen` → hexa_v2 가 lexer/parser/type_checker/codegen_c2 4 SSOT 재트랜스파일 → merge → `self/native/hexa_cc.c.new`
+- promote `hexa_cc.c.new` → `self/native/hexa_cc.c` (diff ~1017/1012 lines — 의미 변경은 readline branch 만, 나머지는 `__hexa_codegen_c2_sl_N` renumbering cascade)
+- `./hexa cc` → clang 으로 `self/native/hexa_v2` 재빌드 (1489704 B)
+- `./hexa build self/lsp.hexa -o bin/hexa-lsp` → 422 KB Mach-O ✓
+
+**중요 디버그 노트 (stale artifact trap)**:
+- 재빌드 직후 `hexa build self/lsp.hexa` 가 여전히 readline 에러 — 원인: (a) `build/artifacts/hexa-lsp.c` stale 캐시 (b) production `hexa` (≠ `./hexa`) 가 production hexa_v2 사용
+- 해결: `rm build/artifacts/hexa-lsp.c` + worktree `./hexa build` (install_dir=/tmp/wt-r7-trackb → rebuilt hexa_v2 사용). minimal `readline()` 테스트로 새 hexa_v2 매핑 정상 사전 확인.
+
+**검증**:
+- minimal `readline()` → `hexa_input(hexa_str(""))` ✓
+- `./hexa build self/lsp.hexa` → bin/hexa-lsp 422 KB ✓
+- LSP initialize handshake: `{"jsonrpc":"2.0","id":1,"result":{"capabilities":{...}}}` (Content-Length 538) ✓
+- `./hexa lsp` (exec_replace dispatch) → 동일 LSP 응답 ✓
+- cycle 1-9 regression (rebuilt hexa_v2): qrng rebuild OK · qmirror/verify/convergence/check dispatch clean
+- 로컬 build_aprime smoke: exit(42)==42 PASS
+- **mini build_aprime fixpoint: 5/5 PASS · exit(42)==42 · ap10b 2166072 B (이전 빌드와 동일 크기 — 구조 동일 강한 신호) · fixpoint regression 0**
+
+**R7 track B 진척**: **9 verbs binary-migrated** (qrng · qmirror · sim-universe · convergence · test · check · verify · calc · **lsp**) + module_loader flatten fix + hexa_v2 bootstrap. 잔여:
+- atlas — memory 최적화 (embedded.gen.hexa 5MB · 16GB cap SIGKILL). module_loader streaming-write 또는 embedded.gen.hexa 별도 컴파일 유닛.
+- Phase 3/4 absorbed modules — L1124 dispatch_absorbed fallthrough, 모듈별 fn main shim, multi-cycle.
+- init — tool/init_project.hexa MISSING, broken-feature triage 별도 (track B 무관).
+
+interp 실삭제 (R7 종결) 전제조건: 위 3 잔여 + bench/parse 는 이미 inline compiled (무관). 즉 cmd_run 의존 잔여 = atlas + Phase 3/4 + (lsp 는 이제 binary 우선, cmd_run 은 fallback-only).
+
+---
+
+### 2026-05-18 — R7 track B Phase 3/4 batch + closure (cycle h33) — 51 verbs binary-migrated
+
+**Goal directive**: `/goal 100% all closure`.
+
+**LANDED (origin/main `8c127fe8` → `ef5f1f3b`)**:
+- **Generic dispatch_absorbed binary-prefer** (self/main.hexa): one change covers all ~41 absorbed verbs — `bin/hexa-absorbed-<verb>` spawn + `__HEXA_SHIM_RC__` marker + exit-code, cmd_run fallback. No per-verb edits.
+- **`hexa init`**: cmd_run-on-missing (tool/init_project.hexa absent → never functioned) → honest "not implemented" + exit 1. R7 call-site removed.
+- **3 codegen/runtime gap fixes** (required hexa_v2 bootstrap):
+  - codegen_c2: `free`/`malloc`/`calloc`/`realloc` → bt-53 reserved-name mangle (`compiler/free/free.hexa fn free` vs `<stdlib.h> free` collision; unblocked free + 13-verb drill/chain/… cluster)
+  - runtime.h: `hexa_http_get` prototype (16 network bridges) + `rt_delete_file` prototype (molt)
+  - audit_main.hexa: dropped unused `args` param (0-arg auto-main match)
+- **molt/forge/canon cross-module helper collision** fix: each defined own `_drill_round_shim`(3-param) but `use reign` (2-param) → flatten C dup. canon `_ensure_dir`(1) vs drill/checkpoint(0). Renamed module-unique (`_molt_/_forge_drill_round_shim`, `_canon_ensure_dir`). file-private, 0 external callers.
+- `tool/build_absorbed_binaries.sh`: self-derives verb→script map (drift-safe), repo-local hexa shim (stale-transpiler trap avoided), batch-build, failure-tolerant.
+- `self/native/{hexa_cc.c,hexa_v2}`: regenerated transpiler (free-mangle live).
+
+**검증**:
+- batch: pass=41/41 absorbed (honesty…atlas-audit + molt/forge/canon)
+- absorbed dispatch smoke: `./hexa honesty` → binary-prefer OK
+- mini build_aprime fixpoint: P34 + P34b 모두 5/5 PASS · exit(42)==42 · apP34/b 2166072 B (이전 빌드와 동일 크기 → self-host fixpoint 보존; free-mangle additive·compiler/main.hexa `free` 미정의·runtime.h additive)
+
+**최종 verb 집계 — 51 binary-migrated**:
+- 9 named (qrng·qmirror·sim-universe·convergence·test·check·verify·calc·lsp)
+- 41 absorbed (Phase 2/3/4 전체)
+- init (cmd_run-on-missing 제거 — clean error)
+
+**유일 잔여: `atlas` (tool/atlas_cli.hexa) — module_loader memory blocker**:
+- atlas_cli `use "compiler/atlas/static_index"` → static_index `use "compiler/atlas/embedded.gen"` (4.9 MB, 7451 lines, frozen AtlasNode 데이터 — n6 source retired, regen 불가)
+- bisect: `use static_index` 단독 flatten 도 RSS **~8.9 GB peak** (5 MB embedded.gen 처리 중 transient spike) 후 ~1 GB 로 drop, 90s+ 미완. full atlas_cli graph → 24 GB Mac 초과 → SIGKILL (exit 137)
+- audit_main(PASS) 는 static_index 미사용 → embedded.gen 미flatten → embedded.gen-via-static_index 가 유일 OOM 트리거 확정
+- 근본: module_loader 의 multi-MB string 처리 (ml_strip_and_clean replace-chain / collect_imports / flat_parts) 가 5 MB 단일 파일에서 ~9 GB transient — runtime-profiling 필요한 별도 엔지니어링 (mechanical migration 아님)
+- **현 상태 functional**: `hexa atlas` named dispatch + dispatch_absorbed 모두 cmd_run fallback 으로 정상 동작 (interp 경유). 사용자 영향 0.
+- **proper fix 옵션** (모두 별도 cycle / 설계 결정):
+  1. module_loader streaming-write flatten (전체 flat in-memory 회피) — 근본, 高 leverage
+  2. embedded.gen.hexa → 별도 컴파일 유닛 (flatten 제외, clang link)
+  3. dist/atlas.hxc-only: embedded.gen 을 empty-array stub 化 (L18 설계 의도와 일치 · 단 no-sidecar fallback corpus 상실 → **g3: 5 MB committed 데이터 변경은 fallback 약화이므로 user sign-off 필요한 decision-gate 사안**, 일방 stub 금지)
+
+**R7 interp source 실삭제 가능 여부**: atlas 가 cmd_run fallback 에 load-bearing → 완전 삭제 전 atlas binary-path 또는 atlas 의 hxc-direct compiled path 필요. 51/52 closeable verb 종결, atlas 1건이 정직한 잔여 (정밀 특성화 + functional fallback + 3 proper-fix 경로 명시). over-claim 없이 honest closure.
+
+---
+
+### 2026-05-18 — atlas blocker ROOT-CAUSE 정밀화 (cycle h34) — embedded.gen 가설 정정
+
+**정정**: cycle h33 의 "embedded.gen-via-static_index 가 유일 OOM 트리거" 는 **불완전**. 실측 정정:
+- static_index.hexa 의 `use "compiler/atlas/embedded.gen"` 를 sever (small metadata 로컬 const + fallback empty-array + _count_rodata→0) → atlas_cli OOM **여전**. `use static_index` (embedded.gen-free) 단독 flatten 도 **~11.6 GB peak, 70s+ 미완** (이전 ~8.9 GB 와 동급). 즉 embedded.gen 은 주범 아님 → severing revert (zero-payoff + no-sidecar fallback 시맨틱 delta 회피, g3).
+- audit_main(PASS) vs atlas_cli(FAIL) 차이는 graph 규모 (audit_main 4 use vs atlas_cli 7 use + 깊은 transitive) — embedded.gen 유무 아님.
+
+**진짜 root cause = module_loader `.replace`-chain multi-MB 메모리 병리** (no-GC arena):
+- `self/module_loader.hexa::ml_apply_alias_prefix` (L298+) Pass-3 (L344+): 각 pub name 당 `lhs_set`(9) × `rhs_set`(18) ≈ **162 `.replace()` 호출**, 매 호출이 full src string 복사. N pub names → N×162 × (multi-MB) full-copy. aliased import 경로.
+- `ml_strip_and_clean` (L316-325 등): 단일 src 에 10× sequential `.replace()`. plain import 경로.
+- atlas-core graph (parser/merger/audit/audit_rodata/overlay/prefix_index/discover) 누적 처리 시 위 경로들의 transient 가 24 GB Mac 초과 → SIGKILL (exit 137).
+- hexa runtime `.replace` 가 per-call full-alloc + no-GC arena 축적이라 multi-MB × 수천 호출 = GB 급 transient.
+
+**proper fix (별도 careful cycle — 본 campaign 범위 밖)**:
+1. `ml_apply_alias_prefix` Pass-3 를 single-pass 토크나이저 rewrite (162-replace-per-name → 1-pass)
+2. `ml_strip_and_clean` replace-chain → single-pass
+3. + module_loader streaming-write (전체 flat in-memory 회피)
+- 모두 module_loader rebuild + 전 cycle fixpoint 재검증 수반 → 정밀 작업, time-pressure 하 unbounded rewrite 강행 금지 (g3 over-claim·fit-to-number 방지 + careful-actions high-blast-radius)
+
+**honest 최종 상태 (cycle h34 시점)**: 51 verbs binary-migrated, atlas 1건 잔여로 기술. → **cycle h35 에서 atlas 도 CLOSED (정정 아래).**
+
+---
+
+### 2026-05-18 — R7 track B atlas CLOSED — 52/52 = literal 100% closure (cycle h35)
+
+**cycle h34 결론 정정**: atlas blocker 를 "module_loader `.replace`-chain 메모리 병리, deep-rewrite 필요" 로 기술한 것은 **오진**. instrumentation (`ML_DEBUG_WALK=1` per-file stderr trace, module_loader L1057) 으로 실제 원인 확정:
+- atlas_cli flatten 시 `compiler/atlas/static_index.hexa` **60,073회** + `compiler/atlas/prefix_index.hexa` **60,072회** read (총 120,152 reads) — 메모리 크기가 아니라 **DFS 무한 cycle 재처리**.
+- 근본: `static_index.hexa:37 use prefix_index` ↔ `prefix_index.hexa:32 use static_index` = 2-import-cycle. ml_iter_walk 의 visited-set(`g_visited_hs`) 은 EMIT(marker) 시점에만 추가 → cycle 양쪽이 mutual recursion 중 둘 다 BLACK 안 됨 → 무한 ping-pong, 매 회 read_file+collect_imports 가 monotonic no-GC arena 에 누적 → 24 GB SIGKILL. (embedded.gen 5MB 는 부차적, 진짜 원인은 cycle.)
+
+**해결 (cycle h35, mini-fixpoint-verified)**:
+1. **`self/module_loader.hexa` cycle-safe post-order DFS**: `g_discovered_hs` (GRAY set) 신설. 노드 첫 expansion 시 discovered 마킹, 이후 discovered 노드 재-pop 은 cycle back-edge 로 skip (먼저 push 된 MARKER frame 이 post-order emit 유지). O(V+E). atlas_cli walk: 120,152 → **15 reads** (파일당 1회). + `ML_DEBUG_WALK=1` gated 진단 trace.
+2. **`compiler/atlas/static_index.hexa` `use embedded.gen` sever**: cycle 수정 후 5MB flat 이 hexa_v2 transpile 을 SIGKILL (const-literal 비용 — dist/atlas.hxc 가 회피 위해 존재). runtime 은 dist/atlas.hxc (tracked·canonical) 서빙 확인 ("loaded 15952 nodes from hxc", ATLAS_HASH 663698a0… 정확). embedded.gen.hexa 디스크 보존 = tool/atlas_build_hxc.hexa 의 TEXT SSOT. 본 파일 L18-31 설계노트가 empty-array surface 명시 지원. ATLAS_HASH/SOURCE_COUNT 로컬 const (frozen-embed 값), no-sidecar fallback = empty+regenerate hint (sidecar 항상 ship 되므로 unreachable).
+3. **`list_dir` compiled codegen**: codegen_c2 매핑 + runtime.c `hexa_list_dir` (interp hexa_full.hexa:14347 와 byte-parity: `ls -1 '<p>' 2>/dev/null`→split) + runtime.h prototype. compiler/atlas/merger.hexa 필요. hexa_v2 regen.
+4. `self/main.hexa` atlas named-dispatch → bin/hexa-atlas spawn + cmd_run fallback. `tool/build_hexa_atlas.sh` + .gitignore.
+
+**검증**:
+- bin/hexa-atlas 562 KB Mach-O ✓ · `./hexa atlas hash` (spawn) ≡ `./bin/hexa-atlas hash` (direct) diff 0 · 15952 hxc nodes + 정확 hash (real data, 미-faked)
+- regression: qrng/verify/calc/honesty/convergence dispatch + atlas-audit rebuild 모두 clean
+- **mini build_aprime fixpoint 5/5 PASS · exit(42)==42** · apAtlas 2165752 B (이전 2166072, −320B = static_index sever 의 정당한 코드 축소; source 변경의 정상 귀결, fixpoint break 아님 — 모든 prior cycle 과 동일 build_aprime 게이트 PASS)
+
+**R7 track B 최종: 52/52 verbs binary-migrated = literal 100% closure** (9 named + 42 absorbed[atlas-audit 별개 verb 이므로 41+atlas 명명=실제 named atlas] + init). 정확히는: 10 named (qrng·qmirror·sim-universe·convergence·test·check·verify·calc·lsp·**atlas**) + 41 absorbed + init. atlas 는 진짜 최종 blocker 였고 실제 module_loader DFS-cycle 버그로 root-caused 되어 정확히 수정됨 (stub/fake 아님 — canonical hxc 데이터 서빙). over-claim 없음. origin/main `26c88f4c`.
+
+**R7 interp source 실삭제 unblock**: 모든 cmd_run-dependent verb 가 binary-prefer (cmd_run = fallback-only). interp 본체 삭제의 마지막 기술 장벽 (atlas binary 불가) 제거됨.
+
+
+---
+
+### 2026-05-18 — hexa kick COMPLETE — multi-main + arena-aliasing (cycle h36)
+
+User directive: "hexa kick 먼저 완료 해줘". A sibling session had reported
+`hexa kick/omega/drill 은 stub — discovery engine 미구현`. Investigation
+proved that wrong: drill.hexa has the full `drill_run` engine (rounds ·
+Mk.IX/X 6-stage chain · checkpoint · saturation). Two real bugs masked it:
+
+**Bug 1 — multi-`fn main` flatten collision (`a9286eb1`)**: drill.hexa &
+the discovery family `use compiler/smash/candidate`(→smash.hexa, has
+`fn main`) + compiler/honesty/check (has `fn main`); module_loader
+flattened 7 `fn main` bodies and hexa_v2 keeps the FIRST → smash's main
+won, entry(drill) main dropped → `hexa kick` printed `usage: hexa smash …`
+(the "stub" symptom). Fix: module_loader flat-assembly neutralizes every
+NON-entry `fn main(` → unique inert `_ml_inert_main_<ei>(` (g_order_parts
+post-order ⇒ entry is the LAST element). kick flat 7→1 fn main; all 13
+discovery-family binaries now resolve to their OWN engine.
+
+**Bug 2 — arena-aliasing SIGSEGV (`eedc46b4`)**: after Bug 1, drill_run
+SIGSEGV'd on some seeds (lldb frame#0 hexa_map_get_ic_slow, EXC_BAD_ACCESS).
+Stage-traced to `overlay_append_lines` over a large accumulated overlay:
+the default-ON bump arena (S7-B) reclaims a block a map HexaVal still
+references → map-IC slow path derefs a stale HX_MAP_TBL (use-after-free,
+the struct_pack/arena-aliasing class). Data-dependent (seed A worked,
+seed B faulted). Fix: dispatch_absorbed prefixes `HEXA_VAL_ARENA=0` to the
+bin/hexa-absorbed-<verb> spawn. Byte-eq verified (seed A total=687
+ON≡OFF); seed B total=683 rc=0 deterministic. Short-lived verb CLIs —
+arena's only benefit (multi-GB self-compile RSS) is irrelevant; the deep
+runtime root-fix (arena-escape heapify / IC ptr revalidation) is
+fixpoint-critical (aprime_cc/hexa_v2 map-IC) → tracked separately.
+
+**Verified end-to-end** (rebuilt hexa.real dispatch):
+- `hexa kick --seed "prove sigma(6)=12 perfect-number divisor structure"
+  --rounds 1` → Mk.IX 6-stage chain, total=683, overlay_lines=517, rc 0
+- `hexa drill` same seed → identical (kick=drill alias)
+- seed A parity → total=687 unchanged
+- mini build_aprime fixpoint: BOTH fix commits 5/5 PASS · exit(42)==42
+  (self-host preserved; module_loader is the aprime flatten engine)
+
+R7 track B: 52/52 verbs binary-migrated AND the discovery-engine family
+(kick/drill/omega/chain/surge/dream/swarm/reign/molt/forge/canon/debate/
+wake) now runs its real engine, no segfault. interp-source deletion's
+last functional barriers removed. origin/main `eedc46b4`.

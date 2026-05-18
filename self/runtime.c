@@ -10943,6 +10943,39 @@ HexaVal rt_delete_file(HexaVal path) {
     return hexa_void();
 }
 
+// R7 track B (2026-05-18): compiled-path `list_dir(path)`. Byte-parity
+// with the interp impl (self/hexa_full.hexa:14347) — `ls -1 '<path>'
+// 2>/dev/null`, split on '\n', array of entries; empty/err → []. Single-
+// quote-escape the path (same shellout-shape limitation: entries with
+// '\n' lost — inherent, matches interp). Needed by
+// compiler/atlas/merger.hexa::list_dir for the atlas_cli binary.
+HexaVal hexa_list_dir(HexaVal path) {
+    if (!HX_IS_STR(path) || !HX_STR(path) || !HX_STR(path)[0]) return hexa_array_new();
+    const char* p = HX_STR(path);
+    size_t pl = strlen(p), cap = pl * 4 + 32, n = 0;
+    char* cmd = (char*)malloc(cap);
+    const char* pre = "ls -1 '";
+    memcpy(cmd, pre, strlen(pre)); n = strlen(pre);
+    for (size_t i = 0; i < pl; i++) {
+        if (p[i] == '\'') { memcpy(cmd + n, "'\\''", 4); n += 4; }
+        else cmd[n++] = p[i];
+    }
+    const char* post = "' 2>/dev/null";
+    memcpy(cmd + n, post, strlen(post)); n += strlen(post); cmd[n] = 0;
+    FILE* fp = popen(cmd, "r");
+    free(cmd);
+    if (!fp) return hexa_array_new();
+    HexaVal arr = hexa_array_new();
+    char* line = NULL; size_t lcap = 0; ssize_t got;
+    while ((got = getline(&line, &lcap, fp)) >= 0) {
+        while (got > 0 && (line[got-1] == '\n' || line[got-1] == '\r')) line[--got] = 0;
+        if (got > 0) arr = hexa_array_push(arr, hexa_str(line));
+    }
+    if (line) free(line);
+    pclose(fp);
+    return arr;
+}
+
 HexaVal rt_append_file(HexaVal path, HexaVal content) {
     if (!HX_IS_STR(path) || !HX_STR(path)) return hexa_void();
     const char* data = (HX_IS_STR(content) && HX_STR(content)) ? HX_STR(content) : "";

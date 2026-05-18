@@ -1158,7 +1158,7 @@ fn verify_all_invariants(src, invs) {
 }
 
 // ── CLI 진입점 ────────────────────────────────────────────
-fn main_check() {
+fn main() {
     let av = args()
     // host_args() forwards av[3..] when invoked via `hexa run`. With
     // dispatcher `hexa check <file>` we register file as av[3].
@@ -1220,4 +1220,6 @@ fn ic_report_viols(viols) {
     }
 }
 
-main_check()
+// R7 track B cycle 6 (2026-05-18): module-level call removed.
+// `fn main_check` renamed to `fn main` — both compiled binary entry and
+// interp `hexa run` auto-invocation work uniformly via main().

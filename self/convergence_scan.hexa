@@ -763,7 +763,7 @@ fn cs_merge_all(block_entries, single_entries, attr_entries) {
 }
 
 // ── CLI 진입점 ────────────────────────────────────────────
-fn cs_main() {
+fn main() {
     let av = args()
     let mut subcmd = ""
     let mut file = ""
@@ -808,4 +808,6 @@ fn cs_main() {
     }
 }
 
-cs_main()
+// R7 track B cycle 4 (2026-05-18): module-level call removed.
+// `fn cs_main` renamed to `fn main` — both compiled binary entry and
+// interp `hexa run` auto-invocation work uniformly via main().
