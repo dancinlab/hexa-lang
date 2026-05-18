@@ -538,3 +538,13 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   연산 → repr 필드는 json_stringify → %e/%.Nf 필드는 exec printf.
   T3=21/127 유지(이번 측정은 +1 아닌 클래스급 언블록 — gap#2 와
   동급 가치).
+- 2026-05-18 — **T3 +1: 22/127** `capsid_assembly_modulator_sim` —
+  **첫 float-heavy SIM, sim-recipe end-to-end 실증**. Caspar-Klug
+  exact geometry + Zlotnick mean-field equilibrium, 7 실검사. hexa
+  `exp()`/`log()` + `exec printf '%+.2f/%.4e/%.4f/%+.4f'` +
+  `json_stringify` 풀정밀 feed → `.py` byte-parity 측정확인
+  (`c2566b8`). 1차 빌드 `fn powf` 가 C math.h `powf` 와 충돌
+  (conflicting types) → `xpow` 개명. **컴파일-포트 규율 #5**: hexa
+  fn 을 C stdlib 심볼명(pow/powf/expf/log/exp/…)으로 짓지 말 것
+  (생성 C 에서 충돌). 레시피 검증완료 → ~55 sim-class 템플릿 확정·
+  기계적 이관 가능. 잔여 ~105, 구조적 천장 0 재확인.
