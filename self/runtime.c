@@ -7385,9 +7385,32 @@ HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end) {
 }
 
 HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end) {
+    // 2026-05-19 parity-gate t45b — polymorphic slice + 1-arg form.
+    // (1) HX_IS_VOID(end) ⇒ 1-arg `.slice(start)` form — default end to
+    // len(obj). (2) HX_IS_STR(obj) ⇒ string slice via byte-indexed
+    // substring (mirrors interp's `.slice` on strings). Array path
+    // unchanged for the common case.
+    if (HX_IS_STR(arr)) {
+        int n = (int)HX_STRLEN(arr);
+        int a = (int)HX_INT(start);
+        int b = HX_IS_VOID(end) ? n : (int)HX_INT(end);
+        if (a < 0) a += n;
+        if (b < 0) b += n;
+        if (a < 0) a = 0;
+        if (b > n) b = n;
+        if (a > b) return hexa_str("");
+        int len = b - a;
+        char* buf = (char*)malloc(len + 1);
+        if (!buf) return hexa_str("");
+        int j = 0;
+        while (j < len) { buf[j] = HX_STR(arr)[a + j]; j++; }
+        buf[len] = 0;
+        return hexa_str_own(buf);
+    }
     if (!HX_IS_ARRAY(arr)) return hexa_array_new();
     int n = HX_ARR_LEN(arr);
-    int a = (int)HX_INT(start), b = (int)HX_INT(end);
+    int a = (int)HX_INT(start);
+    int b = HX_IS_VOID(end) ? n : (int)HX_INT(end);
     if (a < 0) a = 0;
     if (b > n) b = n;
     if (a > b) a = b;
