@@ -612,3 +612,15 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   json-sim 레시피가 비가역 dynamics + 시계열 배열까지 1발 적용 — 잔여
   ~100, 클래스 코어 전부 검증된 형태(simple-occupancy·partition-Z·
   irreversible-kinetics·time-course).
+- 2026-05-19 — **T3 +1: 28/127** `allosteric_sim` (5th json-sim).
+  MWC/ternary-complex shift + saturation sweep + ceiling 1/α +
+  NAM/PAM/neutral 분류. 1차 빌드 측정게이트가 `log10_alpha` last-ULP
+  drift 포착: `log(x)/log(10)` 다중 op 합성이 CPython `math.log10`
+  (단일 libm op) 와 마지막 비트 차이. 패널 α 가 상수이므로 행별
+  log10 을 Python 정확 repr 더블로 하드코딩 → byte-parity 회복.
+  **컴파일-포트 규율 #6**: CPython 이 호출하는 libm op 을 hexa
+  stdlib 가 결여한 경우(log10/log2/expm1/...) **정확한 double
+  하드코딩 또는 단일-op 등가체 사용**; 다중-op 합성 금지(repr
+  에 ULP drift 출현). hexa-bio `18a97a1`→`a1fb63f` PARITY-OK.
+  5종 distinct formula shape 누적: simple-occupancy · partition-Z ·
+  irreversible-kinetics · time-course · saturable-MWC. 잔여 ~99.
