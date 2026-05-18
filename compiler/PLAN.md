@@ -1268,10 +1268,39 @@ surgical deletion 은 트랙 B (CLI driver re-targeting) 가 별도 multi-cycle 
 - shim 필요: lsp (1006L) · check (1223L) · test (754L) · convergence_scan
 - 내부/특수: batch · bench · init · verify · calc (dispatch 분기 내 inline 또는 embedded — 별도 분석)
 
-**atlas build 차단 (cycle 4 deferred)**:
+**atlas build 차단 (cycle 4 atlas deferred · sequence shifted to cycle ≥6)**:
 - `HEXA_MAC_BUILD_OK=1 hexa build tool/atlas_cli.hexa -o bin/hexa-atlas` → clang linker 실패: `_atlas_prefix`, `_audit_merged`, `_audit_overlay`, `_audit_rodata`, `_audit_to_json`, `_audit_to_text`, `_lookup_static`, `_promote_to_atlas`, `_static_atlas` 모두 미해소
 - atlas_cli.hexa 의 `use` statements (parser/merger/static_index/audit/audit_rodata/overlay + discover/promote) 가 7개 모듈 import 하지만 flatten 이 `pub fn` 들을 따라가지 못함
 - 정의 위치 확인: `static_atlas` @ compiler/atlas/static_index.hexa, `audit_merged` @ compiler/atlas/audit_rodata.hexa L29 등 — 모두 `pub fn` 으로 정상 정의
 - 가설: tool/atlas_cli.hexa 가 compiler/ tree 와의 cross-directory `use` 인 경우 flatten 단계가 transitive 하게 따라가지 못함 (stdlib/<verb>/ 내 sibling `use` 는 OK)
 - 별도 진단 cycle 필요 — interp `hexa atlas <subcmd>` 는 module_loader 가 OK 처리하므로 hexa build flatten 측의 gap. R7 track B 동안 cmd_run fallback 유지.
+
+---
+
+### 2026-05-18 — R7 track B cycle 4 — convergence (cycle h25 · first shim-cluster)
+
+**Decision 7** (verb #4): convergence (`self/convergence_scan.hexa`, 811 lines, 0 use statements).
+
+- **picked**: convergence
+- **rationale**:
+  - shim-needed cluster 중 가장 깨끗한 entry — `use` statements 0개 (self-contained, atlas 같은 cross-directory 문제 없음)
+  - 기존 `fn cs_main()` (L766) + 모듈-끝 `cs_main()` 호출 (L811) = interp 패턴. 단순 rename + 호출 제거로 standalone main entry 확보 가능
+  - dispatch 가 이미 subcmd/file 사전검증 처리하므로 shim 추가 부담 0 (cs_main 의 av[1]/av[2] · av[2]/av[3] · av[3]/av[4] 3-shape 처리도 그대로 활용)
+
+**구현 (LANDED)**:
+- `self/convergence_scan.hexa`: `fn cs_main()` → `fn main()` (rename L766) + L811 module-level `cs_main()` 호출 제거 (replaced with R7 explainer comment). interp `hexa run` 도 main() auto-invoke 하므로 dual-path 동작 유지 (`g_inbox_dual_track`).
+- `bin/hexa-convergence` build → 391 KB Mach-O. `tool/build_hexa_convergence.sh` + no-arg usage smoke (rc=2 + 'usage:').
+- `self/main.hexa` L3208-L3234 → L3208-L3290 (27 → 83 lines): convergence 분기 spawn path (binary lookup → shq + __HEXA_SHIM_RC__ marker + `exit(rc)`) + 기존 사전검증 + cmd_run fallback 유지.
+- `.gitignore`: `bin/hexa-convergence`.
+- `hexa.real` rebuild.
+
+**검증**:
+- byte-eq (dump): `./hexa convergence dump <fixture>` (spawn) ≡ `./bin/hexa-convergence dump <fixture>` ≡ production `hexa convergence dump <fixture>` (interp) → diff exit 0 (양방향)
+- dump-meta 동작 ✓
+- 사전검증 exit code: `./hexa convergence` (인자 없음) → rc=1 (dispatch L3214 `exit(1)`)
+- cycle 1+2+3 regression: qrng 1.0.0 · qmirror 2.6.0 · sim-universe 1.1.0 모두 정상 dispatch
+
+**fixpoint regression risk**: 0. dispatch-only + convergence_scan.hexa fn 이름 rename 만 (codegen/aprime_cc 와 무관).
+
+**R7 track B 진척**: 4/16 (qrng · qmirror · sim-universe · convergence). 첫 shim-cluster 멤버 안착 — rename 패턴 확립. 잔여 shim-cluster: lsp (1006L) · check (1223L) · test_runner (307L). 잔여 atlas-class: atlas (cross-directory flatten gap). 잔여 특수: batch · bench · init · verify · calc.
 

@@ -3210,6 +3210,11 @@ if len(av) < 3 {
         // 3 formats: A) block @convergence-start/end  B) single-line comment  C) @convergence(...) attr
         // self/convergence_scan.hexa 가 파일을 스캔하고 블록을 추출 → JSON 출력.
         // 하위 명령: dump <file> / dump-meta <file>
+        //
+        // R7 track B (2026-05-18, cycle 4): preferred path = standalone
+        // compiled bin/hexa-convergence binary. cs_main → main renamed in
+        // source so single fn main entry serves both spawn and interp
+        // auto-invoke. Falls back to legacy cmd_run() when binary absent.
         if len(av) < 5 {
             println("error: 'convergence' requires <subcmd> <file>")
             println("usage: hexa convergence dump <file>")
@@ -3217,20 +3222,65 @@ if len(av) < 3 {
             exit(1)
         } else {
             let __inst_cv = install_dir_from_argv0()
-            let mut cv_script = ""
-            if len(__inst_cv) > 0 {
-                cv_script = __inst_cv + "/self/convergence_scan.hexa"
-            } else {
-                cv_script = "self/convergence_scan.hexa"
-            }
-            // av[3] = subcmd (dump | dump-meta), av[4] = file
             let mut cv_args = [av[3], av[4]]
             let mut cvi = 5
             while cvi < len(av) {
                 cv_args.push(av[cvi])
                 cvi = cvi + 1
             }
-            cmd_run(cv_script, cv_args)
+            let mut cv_bin = ""
+            if len(__inst_cv) > 0 {
+                let inst_bin = __inst_cv + "/bin/hexa-convergence"
+                if file_exists(inst_bin) { cv_bin = inst_bin }
+            }
+            if len(cv_bin) == 0 && file_exists("bin/hexa-convergence") {
+                cv_bin = "bin/hexa-convergence"
+            }
+            if len(cv_bin) > 0 {
+                let cli_q = shq(cv_bin)
+                let mut cmd = cli_q
+                let mut ai = 0
+                while ai < len(cv_args) {
+                    let q = shq(cv_args[ai])
+                    cmd = cmd + " " + q
+                    ai = ai + 1
+                }
+                let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+                let marker = "__HEXA_SHIM_RC__="
+                let mlen = len(marker)
+                let mut midx = -1
+                let mut sj = len(out) - mlen
+                while sj >= 0 {
+                    if out.substring(sj, sj + mlen) == marker {
+                        midx = sj
+                        sj = -1
+                    } else {
+                        sj = sj - 1
+                    }
+                }
+                if midx >= 0 {
+                    let body = out.substring(0, midx)
+                    let rc_str = out.substring(midx + mlen, len(out))
+                    print(body)
+                    let mut rs = rc_str
+                    let rsl = len(rs)
+                    if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                        rs = rs.substring(0, rsl - 1)
+                    }
+                    let rc = parse_int_str(rs)
+                    if rc != 0 { exit(rc) }
+                } else {
+                    print(out)
+                }
+            } else {
+                let mut cv_script = ""
+                if len(__inst_cv) > 0 {
+                    cv_script = __inst_cv + "/self/convergence_scan.hexa"
+                } else {
+                    cv_script = "self/convergence_scan.hexa"
+                }
+                cmd_run(cv_script, cv_args)
+            }
         }
     } else if sub == "test" {
         // P1 (2026-04-18): native @test 러너.

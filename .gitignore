@@ -81,6 +81,7 @@ self/native/hexa_cc.c.new
 bin/hexa-qrng
 bin/hexa-qmirror
 bin/hexa-sim-universe
+bin/hexa-convergence
 
 # Local smoke/session artifacts (not tracked)
 shared/state/
