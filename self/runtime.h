@@ -1040,5 +1040,13 @@ HexaVal farr_attn_dt_bwd_gpu(HexaVal Q, HexaVal K, HexaVal V, HexaVal P,
                              HexaVal dctx, HexaVal dQ, HexaVal dK,
                              HexaVal dV, HexaVal T, HexaVal nh,
                              HexaVal nkv, HexaVal hd);                          /* runtime.c — mk2-C4-bwd attn-dt bwd (12-arg direct) */
+HexaVal farr_copy_slice_gpu(HexaVal src, HexaVal soff, HexaVal dst,
+                            HexaVal doff, HexaVal n);                           /* runtime.c — mk2-C5 device slice copy (5-arg direct) */
+HexaVal farr_transpose_2d_gpu(HexaVal src, HexaVal soff, HexaVal dst,
+                              HexaVal doff, HexaVal d_out, HexaVal d_in);       /* runtime.c — mk2-C5 device 2-D transpose (6-arg direct) */
+HexaVal farr_zero_slice_gpu(HexaVal dst, HexaVal doff, HexaVal n);              /* runtime.c — mk2-C5 device zero-fill (3-arg direct) */
+HexaVal farr_add_inplace_gpu(HexaVal dst, HexaVal src, HexaVal n);              /* runtime.c — mk2-C5 device in-place elementwise add (3-arg direct) */
+HexaVal farr_fill_dt_lcg_gpu(HexaVal dst, HexaVal doff, HexaVal n,
+                             HexaVal seed, HexaVal scale);                      /* runtime.c — mk2-C5 device LCG random fill (5-arg direct) */
 
 #endif /* HEXA_RUNTIME_H */

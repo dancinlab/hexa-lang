@@ -11341,6 +11341,80 @@ static int _hx_farr_rmsnorm_mh_cpu(int64_t x_id, int64_t g_id,
     return 0;
 }
 
+// mk2-C5 (2026-05-19): farr_copy_slice + farr_transpose_2d CPU mirrors.
+// Pure memcpy / memory rearrangement — no FP arithmetic, byte-eq with
+// host scalar t_get/t_set is automatic. Used as the no-CUDA fallback
+// and (when the runtime is built without -DHEXA_CUDA) as the entire
+// implementation.
+static int _hx_farr_copy_slice_cpu(int64_t src_id, int64_t soff,
+                                   int64_t dst_id, int64_t doff,
+                                   int64_t n) {
+    if (src_id < 0 || src_id >= _hx_farr_count) return -1;
+    if (dst_id < 0 || dst_id >= _hx_farr_count) return -1;
+    if (n <= 0 || soff < 0 || doff < 0) return -1;
+    HexaFarrEntry* se = &_hx_farr_table[src_id];
+    HexaFarrEntry* de = &_hx_farr_table[dst_id];
+    if (!se->buf || !de->buf) return -1;
+    if (se->len < soff + n || de->len < doff + n) return -1;
+    memcpy(de->buf + doff, se->buf + soff, (size_t)n * sizeof(double));
+    return 0;
+}
+static int _hx_farr_fill_dt_lcg_cpu(int64_t dst_id, int64_t doff, int64_t n,
+                                    int64_t seed, double scale) {
+    if (dst_id < 0 || dst_id >= _hx_farr_count) return -1;
+    if (n <= 0 || doff < 0) return -1;
+    HexaFarrEntry* de = &_hx_farr_table[dst_id];
+    if (!de->buf || de->len < doff + n) return -1;
+    double* D = de->buf;
+    int64_t s = seed;
+    for (int64_t i = 0; i < n; i++) {
+        s = (s * (int64_t)1103515245 + (int64_t)12345) % (int64_t)2147483648;
+        double rv = (double)(s % 1000) / 1000.0 - 0.5;
+        D[doff + i] = rv * scale;
+    }
+    return 0;
+}
+static int _hx_farr_add_inplace_cpu(int64_t dst_id, int64_t src_id, int64_t n) {
+    if (dst_id < 0 || dst_id >= _hx_farr_count) return -1;
+    if (src_id < 0 || src_id >= _hx_farr_count) return -1;
+    if (n <= 0) return -1;
+    HexaFarrEntry* de = &_hx_farr_table[dst_id];
+    HexaFarrEntry* se = &_hx_farr_table[src_id];
+    if (!de->buf || !se->buf || de->len < n || se->len < n) return -1;
+    double* D = de->buf;
+    const double* S = se->buf;
+    for (int64_t i = 0; i < n; i++) D[i] = D[i] + S[i];
+    return 0;
+}
+static int _hx_farr_zero_slice_cpu(int64_t dst_id, int64_t doff, int64_t n) {
+    if (dst_id < 0 || dst_id >= _hx_farr_count) return -1;
+    if (n <= 0 || doff < 0) return -1;
+    HexaFarrEntry* de = &_hx_farr_table[dst_id];
+    if (!de->buf || de->len < doff + n) return -1;
+    memset(de->buf + doff, 0, (size_t)n * sizeof(double));
+    return 0;
+}
+static int _hx_farr_transpose_2d_cpu(int64_t src_id, int64_t soff,
+                                     int64_t dst_id, int64_t doff,
+                                     int64_t d_out, int64_t d_in) {
+    if (src_id < 0 || src_id >= _hx_farr_count) return -1;
+    if (dst_id < 0 || dst_id >= _hx_farr_count) return -1;
+    if (d_out <= 0 || d_in <= 0 || soff < 0 || doff < 0) return -1;
+    HexaFarrEntry* se = &_hx_farr_table[src_id];
+    HexaFarrEntry* de = &_hx_farr_table[dst_id];
+    if (!se->buf || !de->buf) return -1;
+    int64_t total = d_out * d_in;
+    if (se->len < soff + total || de->len < doff + total) return -1;
+    const double* S = se->buf;
+    double* D = de->buf;
+    for (int64_t r = 0; r < d_out; r++) {
+        for (int64_t c = 0; c < d_in; c++) {
+            D[doff + c * d_out + r] = S[soff + r * d_in + c];
+        }
+    }
+    return 0;
+}
+
 // mk2-C4 (2026-05-19): GQA attention-dt fwd CPU mirror. Byte-eq with
 // ag_tape.hexa::_ag_attn_dt_fwd host loop (causal mask + GQA kvh =
 // hh/n_rep + stable softmax via dt_exp + dt_sqrt scale). Memory:
@@ -11767,6 +11841,90 @@ extern int _hx_cuda_farr_attn_dt_bwd_gpu(int64_t q_id, int64_t k_id,
                                          int64_t T, int64_t nh,
                                          int64_t nkv, int64_t hd);
 #endif
+// mk2-C5 (2026-05-19): batch slice/transpose builtins. Eliminate the
+// ~412M per-step host-scalar t_get/t_set prelude (HexaVal box overhead)
+// that mk2-FINAL #1 (2026-05-19) measured at 14min GPU 0% idle on the
+// d768·12L generic ag_tape path. Pure memcpy / memory rearrangement —
+// no FP arithmetic so byte-eq with the host loop is automatic.
+#ifdef HEXA_CUDA
+extern int _hx_cuda_farr_copy_slice_gpu(int64_t src_id, int64_t soff,
+                                        int64_t dst_id, int64_t doff,
+                                        int64_t n);
+extern int _hx_cuda_farr_transpose_2d_gpu(int64_t src_id, int64_t soff,
+                                          int64_t dst_id, int64_t doff,
+                                          int64_t d_out, int64_t d_in);
+extern int _hx_cuda_farr_zero_slice_gpu(int64_t dst_id, int64_t doff,
+                                        int64_t n);
+extern int _hx_cuda_farr_add_inplace_gpu(int64_t dst_id, int64_t src_id,
+                                         int64_t n);
+extern int _hx_cuda_farr_fill_dt_lcg_gpu(int64_t dst_id, int64_t doff,
+                                         int64_t n, int64_t seed,
+                                         double scale);
+#endif
+HexaVal farr_zero_slice_gpu(HexaVal dst_v, HexaVal doff_v, HexaVal n_v) {
+    int64_t dst_id = hexa_as_num(dst_v);
+    int64_t doff   = hexa_as_num(doff_v);
+    int64_t n      = hexa_as_num(n_v);
+#ifdef HEXA_CUDA
+    return hexa_int(_hx_cuda_farr_zero_slice_gpu(dst_id, doff, n));
+#else
+    return hexa_int(_hx_farr_zero_slice_cpu(dst_id, doff, n));
+#endif
+}
+HexaVal farr_add_inplace_gpu(HexaVal dst_v, HexaVal src_v, HexaVal n_v) {
+    int64_t dst_id = hexa_as_num(dst_v);
+    int64_t src_id = hexa_as_num(src_v);
+    int64_t n      = hexa_as_num(n_v);
+#ifdef HEXA_CUDA
+    return hexa_int(_hx_cuda_farr_add_inplace_gpu(dst_id, src_id, n));
+#else
+    return hexa_int(_hx_farr_add_inplace_cpu(dst_id, src_id, n));
+#endif
+}
+HexaVal farr_fill_dt_lcg_gpu(HexaVal dst_v, HexaVal doff_v, HexaVal n_v,
+                             HexaVal seed_v, HexaVal scale_v) {
+    int64_t dst_id = hexa_as_num(dst_v);
+    int64_t doff   = hexa_as_num(doff_v);
+    int64_t n      = hexa_as_num(n_v);
+    int64_t seed   = hexa_as_num(seed_v);
+    double scale   = __hx_to_double(scale_v);
+#ifdef HEXA_CUDA
+    return hexa_int(_hx_cuda_farr_fill_dt_lcg_gpu(dst_id, doff, n, seed, scale));
+#else
+    return hexa_int(_hx_farr_fill_dt_lcg_cpu(dst_id, doff, n, seed, scale));
+#endif
+}
+HexaVal farr_copy_slice_gpu(HexaVal src_v, HexaVal soff_v,
+                            HexaVal dst_v, HexaVal doff_v, HexaVal n_v) {
+    int64_t src_id = hexa_as_num(src_v);
+    int64_t soff   = hexa_as_num(soff_v);
+    int64_t dst_id = hexa_as_num(dst_v);
+    int64_t doff   = hexa_as_num(doff_v);
+    int64_t n      = hexa_as_num(n_v);
+#ifdef HEXA_CUDA
+    return hexa_int(_hx_cuda_farr_copy_slice_gpu(src_id, soff, dst_id, doff, n));
+#else
+    return hexa_int(_hx_farr_copy_slice_cpu(src_id, soff, dst_id, doff, n));
+#endif
+}
+HexaVal farr_transpose_2d_gpu(HexaVal src_v, HexaVal soff_v,
+                              HexaVal dst_v, HexaVal doff_v,
+                              HexaVal d_out_v, HexaVal d_in_v) {
+    int64_t src_id = hexa_as_num(src_v);
+    int64_t soff   = hexa_as_num(soff_v);
+    int64_t dst_id = hexa_as_num(dst_v);
+    int64_t doff   = hexa_as_num(doff_v);
+    int64_t d_out  = hexa_as_num(d_out_v);
+    int64_t d_in   = hexa_as_num(d_in_v);
+#ifdef HEXA_CUDA
+    return hexa_int(_hx_cuda_farr_transpose_2d_gpu(src_id, soff, dst_id, doff,
+                                                   d_out, d_in));
+#else
+    return hexa_int(_hx_farr_transpose_2d_cpu(src_id, soff, dst_id, doff,
+                                              d_out, d_in));
+#endif
+}
+
 HexaVal farr_attn_dt_bwd_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
                              HexaVal p_v, HexaVal dctx_v, HexaVal dq_v,
                              HexaVal dk_v, HexaVal dv_v, HexaVal T_v,

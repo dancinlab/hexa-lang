@@ -76,14 +76,14 @@ pub fn nn_decoder_train_step(ids: int, target_t: int,
 // signature doesn't change underneath any caller).
 fn _train_fill_dt_lcg(dst: int, dst_off: int, n: int,
                       seed: int, scale: float) {
-    let mut s = seed
-    let mut i = 0
-    while i < n {
-        s = dt_lcg_next(s)
-        let v = dt_rand_unit(s) * scale
-        let _ = farr_set(dst, dst_off + i, v)
-        i = i + 1
-    }
+    // mk2-C5 (2026-05-19): replace the host-scalar farr_set LCG loop
+    // with a single device builtin. The LCG state evolves sequentially
+    // (each value depends on the previous seed), so the kernel runs a
+    // single sequential thread on-device — bit-identical to the prior
+    // hexa loop (int64_t modular arithmetic, no FP precision concern).
+    // ~100M scalar farr_set calls per nn_decoder_init → 121 kernel
+    // launches with ~25ns/element on A100 ≈ 2.5s total.
+    let _ = farr_fill_dt_lcg_gpu(dst, dst_off, n, seed, scale)
 }
 
 // Seed-fixed model initialization. Uses anima-aligned dt_lcg_next to
