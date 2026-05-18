@@ -210,15 +210,14 @@
   authority = "user directive 2026-05-17 'PLAN 은 compile 관련 폴더/PLAN.md 파일을 업데이트해나가면되' + 'AGENTS.tape 에도 기록해놔줘 문서분산 방지'. 사전 forge/PLAN.md 위치 시도 (commit d6ef09ab) 는 본 cycle 이 forge 아닌 compile 작업임을 정정한 04fd46b2 에서 revert."
   @> AGENTS.md
 
-@D g_interp_deprecated := "interpreter deprecated — option B: user-facing warning, sources preserved" :: governance [required d=2026-05-17 active]
-  rule = "인터프리터 경로 (`hexa run` · `self/hexa_full.hexa` · `build/hexa_interp.real`) 는 DEPRECATED. 신규 코드 · 도구 · 테스트 harness · 빌드 스크립트 · 다운스트림 통합이 인터프리터에 의존하는 것 금지. 검증은 `hexa build` (compiled) · syntactic 체크는 `hexa parse`. 신규 기능은 compiled 경로 (hexa_v2 → C, 또는 aprime_cc-direct) 에만 land."
-  why = "interp 는 (1) compiled 경로 대비 corpus 커버리지 미달이지만 SSOT 는 compiled, (2) macOS 4GB memcap 초과로 대형 입력에 죽음, (3) chr-byte / atlas parser-drift / enum-eq / bitwise / match-as-expr 등 입증된 latent 버그 보유. 신규 의존을 막아야 R7 폐기 시 회귀 0."
-  applies-to = "신규 .hexa 도구 · 테스트 harness · 빌드 스크립트 · 다운스트림 (wilson / echoes / anima) 통합. 기존 interp 의존은 R7 track-B closure 까지 유지하되 신규는 금지."
-  exception = "(1) interp 자체 유지보수 — bug 픽스 시 [@x_handoff] dual-track per g_inbox_dual_track 적용. (2) self/main.hexa 의 16+ absorbed-verb 분기 (lsp / test / check / qrng / sim-universe / qmirror / batch / …) 가 interp 바이너리에 위임 중 — R7 track B (sub-binary 재라우팅, multi-cycle) 까지 보존. (3) 부득이 interp 필요 시 ubu 원격 (macOS memcap 회피)."
-  r7_status = "R7 gate ①②③④ 모두 충족 (gate ① — tier-1 codegen gap 0; gate ②③④ — CLI compiled · atlas SIGSEGV 종결 · module_loader interp-free). R7 Phase 1 entanglement map 작성 완료 (compiler/PLAN.md). R7 Phase 2 = option B 채택: 인터프리터 소스 보존 + user-direct `hexa run <file>` 와 hexa://run URL 에 stderr deprecation warning emit (silenceable via `HEXA_INTERP_QUIET=1`). 16+ absorbed-verb 는 functionality 보존 (loss = 0) — track B 로 분리."
-  user_warning = "`hexa run <file>` 와 `hexa://run` URL action 호출 시 stderr 에 1회 deprecation warning. silence = `HEXA_INTERP_QUIET=1` env. self/main.hexa::cmd_run_user_direct 에 wired."
-  sunset = "R7 track B (16+ absorbed-verb 의 sub-binary 재라우팅, multi-cycle) 완료 → 인터프리터 소스 일괄 삭제 → 본 룰 폐기."
-  authority = "user directive 2026-05-17 '인터프리터 폐기예정 표시 / 신규 의존 금지 => go' + 2026-05-18 'R7 option B' 선택; feedback memory no-interp-use-compiled."
+@D g_interp_deprecated := "interpreter RETIRED — Cycle C source deletion (R7 closure)" :: governance [required d=2026-05-19 active]
+  rule = "인터프리터 소스는 RETIRED — `self/hexa_full.hexa` · `self/interpreter.hexa` · `test_interp*.hexa` · `tool/{rebuild,build}_interp*.hexa` 삭제 완료 (Cycle C step-1). 신규 코드 · 도구 · 테스트 harness · 빌드 스크립트 · 다운스트림 통합이 인터프리터에 의존하는 것 금지. 검증은 `hexa build` (compiled) · syntactic 체크는 `hexa parse`. 모든 신규 기능은 compiled 경로 (hexa_v2 → C, 또는 aprime_cc-direct) 에만 land."
+  why = "interp 는 (1) compiled 경로 대비 corpus 커버리지 미달, (2) macOS 4GB memcap 초과로 대형 입력에 죽음, (3) latent 버그 보유. R7 measured-cutover 캠페인이 interp↔compiled byte-eq parity gate 를 PASS (13→0 gate-relevant · 75 MATCH · 0 DIVERGE/RC_DIFF/COMPILED_REGRESS) 시켜 compiled 가 interp 를 회귀 0 으로 대체함을 측정으로 입증 — 따라서 소스 삭제 안전."
+  cycle_c_status = "Cycle C step-1 (source-only deletion) 완료: 16 파일 · 25,548 줄 삭제. step-2 (잔여, next-cycle housekeeping) = self/main.hexa 의 cmd_run / cmd_run_dispatch 및 23 cmd_run 호출처를 compile-then-exec 헬퍼로 재배선 + cmd_run_user_direct/_batch_run_one 의 transitional interp fallback 제거 + build/hexa_interp 바이너리 폐기. step-2 까지 build/hexa_interp 바이너리가 남아 있으면 cmd_run 은 런타임상 계속 작동 (소스만 부재 — dev rebuild 불가, 런타임 무변)."
+  parity_proof = "tool/parity_interp_vs_compiled.sh — 100 test/*.hexa, PARITY GATE PASS 2026-05-19. compiler/PLAN.md 진행 로그 SSOT."
+  exception = "step-2 완료 전까지 self/main.hexa::cmd_run 경유 absorbed-verb fallback 은 build/hexa_interp 바이너리에 위임 — 런타임 보존 (functionality loss = 0). step-2 후 본 fallback 제거."
+  sunset = "Cycle C step-2 (cmd_run 재배선) 완료 → 본 룰 폐기 · R7 종결."
+  authority = "user directive 2026-05-17 '인터프리터 폐기예정 / 신규 의존 금지' → 2026-05-18 'measured cutover' → 2026-05-19 '(a) Cycle C 실행 (interp source 일괄 삭제)'. measured proof: parity gate PASS."
   @> AGENTS.md
 
 @D g_inbox_processing_loop := "inbox 처리 SOP — filing → worktree sub-agent → cherry-pick" :: governance [recommended d=2026-05-19 active]
