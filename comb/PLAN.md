@@ -196,10 +196,23 @@
   ns-정확본으로 교체. period 5.0 ns (200 MHz, SKY130 130nm 현실 타겟),
   uncertainty 0.25 ns (250 ps), io_delay 1.0 ns. `remove_from_collection`
   · `set_driving_cell` · `set_load` 제거 — OpenSTA-호환 최소형.
-- 2026-05-18 — **ubu-2 인프라 다운 (현재)**: 2차 ORFS run 도중 ubu-2 ssh
-  banner-exchange timeout 진입 (ubu-1 도 동시 timeout). b9whqcpkk task
-  출력 0 byte · 완료 통지 없음. 가능성: (a) ORFS detailed-route 의 메모리
-  부하 → 박스 hang/OOM, (b) 네트워크 공통 이슈. 원격 호스트 reachability
-  는 comb 측에서 fix 불가 — **사용자 측 박스 점검·재부팅 대기**.
-  SDC fix push 후 ubu-2 복구 시 `git clone --depth=1` 한 번이면 fresh
-  SDC 로 ORFS 재실행 가능 (T3 재가동 1-step).
+- 2026-05-18 — **ubu-2 인프라 다운 (당시)**: 2차 ORFS run 도중 ubu-2 ssh
+  banner-exchange timeout. b9whqcpkk task 출력 0byte · 완료 통지 없음.
+  원격 reachability comb-fix 불가 — 박스 점검 대기. SDC fix push 후 fresh
+  clone 재실행 1-step 경로 확보.
+- 2026-05-18 — **ubu-2 복구 → ORFS 3차 run (bkml0mjdh, detached)**:
+  b9whqcpkk 완료 통지 후 확인하니 ubu-2 sshd 복귀. 이전 comb_pnr_out 의
+  4_1_cts.log 가 BAD-SDC(-48ns hold) 데이터 — 즉 b9whqcpkk 의 docker 는
+  ssh 끊기기 전 짧은 시점에 시작했어도 *완주 못 함*. 3차 run 은 **ssh-drop
+  resilient 패턴**으로 launch:
+    nohup bash -c "docker run ... > comb_pnr_out2/orfs_d6.log 2>&1" &
+  → docker 가 ubu-2 PID 1 detach 라 ssh 가 죽어도 P&R 진행. fresh
+  `git clone --depth=1 --branch rfc043-hexa-torch /tmp/hexa_comb_v2` 로
+  fix-SDC 픽업 검증 통과. 직후 ubu-2 ssh 다시 starved (정상 부하 패턴 —
+  이번엔 docker 가 진짜 도는 신호). 결과 대기.
+- 2026-05-18 — **T3_design.md 템플릿 작성** (`comb/rtl/T3_design.md`):
+  ORFS bkml0mjdh 완료 시 placeholder 자리에 GDS area / STA WNS·TNS·fmax
+  / 와이어길이 / DRC 결과 즉시 채울 수 있게 사전 골격. 정직 스코프 명시:
+  단일 디자인포인트 (200 MHz · sky130hd · tt corner · slow/fast 미실행),
+  F1/F2 falsifier status 는 hexa-arch[chip] measurement_gate closure 전
+  OPEN 유지 (comb-internal P&R 은 corroboration, authoritative 아님).

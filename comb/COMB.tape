@@ -65,7 +65,9 @@
   t3_orfs_path = "ubu-2 (Linux x86_64) Docker ORFS 로 전환. `docker pull openroad/orfs:latest` 성공 (이미지에 OpenROAD+yosys+SKY130 PDK 번들 — 빌드 0/패치 0). comb/rtl/orfs/sky130hd/router_d{4,6}/{router_*.v, constraint.sdc, config.mk} = self-contained 디자인 dir, git 정착."
   t3_orfs_attempt = "1차 run: read_sdc 실패 (`remove_from_collection` OpenSTA 미지원). 2차 run: SDC ns-단위 버그 발견 — `-period 1000.0` 가 1MHz, `set_clock_uncertainty 50.0` 가 50ns 로 해석 → -48ns hold 위반 → CTS RSZ-0060 max buffer reached. synth→floorplan→place 완주, CTS 정지."
   t3_sdc_fix = "SDC 4파일 ns-정확본 교체 (router_d{4,6}.sdc + orfs/sky130hd/router_d{4,6}/constraint.sdc). period 5.0ns(200MHz)·uncertainty 0.25ns·io_delay 1.0ns. remove_from_collection/set_driving_cell/set_load 제거 — OpenSTA 최소형."
-  t3_blocked = "ubu-2 ssh banner-exchange timeout (현재). 2차 ORFS run 도중 진입. b9whqcpkk task 0byte 출력·완료 통지 없음. 원격 호스트 reachability comb-fix 불가 — 사용자 측 박스 점검·재부팅 대기. 복구 시 fresh `git clone --depth=1 rfc043-hexa-torch` 한 번이면 fix-SDC 자동 적용."
+  t3_blocked = "[과거] ubu-2 ssh timeout — 2차 run 도중. b9whqcpkk 미완. SDC fix push 후 복구 대기."
+  t3_orfs_3rd = "bkml0mjdh — ubu-2 복귀 후 ssh-drop resilient detached run. `nohup bash -c \"docker run ... > comb_pnr_out2/orfs_d6.log\" &` 로 ssh 끊겨도 P&R 진행. fresh /tmp/hexa_comb_v2 clone 으로 fix-SDC 픽업 확인. 현재 ubu-2 sshd 다시 starved = 정상 부하 (이번엔 진짜 P&R 진행 신호)."
+  t3_template_ready = "comb/rtl/T3_design.md — ORFS 결과 수신 템플릿 (area / WNS·TNS / fmax / wire len / DRC placeholder). bkml0mjdh 완료 즉시 채워서 RFC 057 §6 T3 deliverable 마감 가능."
 
 # ─── external citations (typed-interface contracts comb consumes) ────
 
