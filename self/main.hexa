@@ -1596,44 +1596,12 @@ fn resolve_hexa_v2() {
 // forward decls (downstream symptom: clang errors "use of undeclared
 // identifier '<fn>'" when <fn> lives in a `use`d module).
 // Reported by wilson session 2026-05-14 (Step G ubu-2 build).
-fn _probe_interp_at(base) {
-    let suffixes = ["", ".linux", ".darwin"]
-    let mut i = 0
-    while i < len(suffixes) {
-        let candidate = base + suffixes[i]
-        let chk = exec("test -x '" + candidate + "' && printf yes || printf no")
-        if chk == "yes" { return candidate }
-        i = i + 1
-    }
-    return ""
-}
-fn resolve_interp() {
-    // 0) $HEXA_INTERP env override (operator-controlled, highest priority).
-    let env_bin = exec("printf '%s' \"$HEXA_INTERP\"")
-    if len(env_bin) > 0 {
-        let env_chk = exec("test -x '" + env_bin + "' && printf yes || printf no")
-        if env_chk == "yes" {
-            return env_bin
-        }
-    }
-    let inst = install_dir_from_argv0()
-    if len(inst) > 0 {
-        let hit = _probe_interp_at(inst + "/build/hexa_interp")
-        if len(hit) > 0 { return hit }
-    }
-    let hit_cwd = _probe_interp_at("./build/hexa_interp")
-    if len(hit_cwd) > 0 { return hit_cwd }
-    let home_base = exec("printf '%s' \"$HEXA_LANG/build/hexa_interp\"")
-    if len(home_base) > 0 {
-        let hit_home = _probe_interp_at(home_base)
-        if len(hit_home) > 0 { return hit_home }
-    }
-    // 4) container default — `/usr/local/bin/build/hexa_interp`.
-    //    Dockerfile 표준 layout (hexa-runner image 측). 다른 경로면 no-op.
-    let hit_ctr = _probe_interp_at("/usr/local/bin/build/hexa_interp")
-    if len(hit_ctr) > 0 { return hit_ctr }
-    return ""
-}
+// _probe_interp_at() removed — R7 Cycle C closure (sole caller was the
+// now-deleted resolve_interp()).
+// resolve_interp() removed — R7 Cycle C closure. The tree-walking
+// interpreter is retired; no code path resolves a build/hexa_interp
+// binary anymore (cmd_run is compile-then-exec, cmd_build's flatten
+// uses the compiled module_loader binary).
 
 // interp-retirement R7 gate #4: prefer a COMPILED module_loader binary so the
 // `hexa build` flatten step runs interp-free. Probes (in order) $HEXA_MODULE_LOADER
@@ -1863,20 +1831,16 @@ fn cmd_build(src, out, c_only, target) {
     let __has_use_dir = __src_probe.contains("\nuse \"") || __src_probe.starts_with("use \"")
     let __has_imp_dir = __src_probe.contains("\nimport \"") || __src_probe.starts_with("import \"")
     if __has_use_dir || __has_imp_dir {
-        // R7 gate #4: prefer the COMPILED module_loader binary (interp-free
-        // flatten). Fall back to interp + module_loader.hexa source only when
-        // no compiled binary is installed.
+        // R7 gate #4 / Cycle C: the COMPILED module_loader binary does
+        // interp-free flatten. The interpreter is retired (R7 closed) —
+        // there is no interp + module_loader.hexa fallback; an absent
+        // compiled binary is a broken install.
         let __ml_compiled = resolve_module_loader_compiled()
-        let __interp = if len(__ml_compiled) > 0 { "" } else { resolve_interp() }
-        let __ml = if len(__ml_compiled) > 0 { __ml_compiled } else { resolve_module_loader() }
-        let __ml_ok = len(__ml_compiled) > 0 || (len(__interp) > 0 && len(__ml) > 0)
-        if __ml_ok {
+        if len(__ml_compiled) > 0 {
             let __expanded = runtime_tmpname("hexa_build_expanded") + ".hexa"
             // orpheus O-002 / F-013: pass install dir to module_loader (see
             // module_loader_env_prefix) so stdlib/* resolves env-free.
-            // compiled path: `<ml_bin> <src> <out>`; interp path: `<interp> <ml.hexa> <src> <out>`.
-            let __ml_invoke = if len(__ml_compiled) > 0 { "'" + __ml_compiled + "'" } else { "'" + __interp + "' '" + __ml + "'" }
-            let __preproc = module_loader_env_prefix() + __ml_invoke + " '" + src + "' '" + __expanded + "' 2>&1"
+            let __preproc = module_loader_env_prefix() + "'" + __ml_compiled + "' '" + src + "' '" + __expanded + "' 2>&1"
             println("  [flat] module_loader → " + __expanded)
             let __pair = exec_with_status(__preproc)
             let __pout = __pair[0]
@@ -1895,8 +1859,7 @@ fn cmd_build(src, out, c_only, target) {
                 if len(__pout) > 0 { println("    " + __pout) }
             }
         } else {
-            println("  [flat] warn: interp/module_loader not resolvable — falling back to raw src")
-            println("    interp=" + __interp + " ml=" + __ml)
+            println("  [flat] warn: compiled module_loader not found — falling back to raw src")
         }
     }
     let stem = basename_stem(out)

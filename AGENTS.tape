@@ -213,14 +213,13 @@
   authority = "user directive 2026-05-17 'PLAN 은 compile 관련 폴더/PLAN.md 파일을 업데이트해나가면되' + 'AGENTS.tape 에도 기록해놔줘 문서분산 방지'. 사전 forge/PLAN.md 위치 시도 (commit d6ef09ab) 는 본 cycle 이 forge 아닌 compile 작업임을 정정한 04fd46b2 에서 revert."
   @> AGENTS.md
 
-@D g_interp_deprecated := "interpreter RETIRED — Cycle C source deletion (R7 closure)" :: governance [required d=2026-05-19 active]
-  rule = "인터프리터 소스는 RETIRED — `self/hexa_full.hexa` · `self/interpreter.hexa` · `test_interp*.hexa` · `tool/{rebuild,build}_interp*.hexa` 삭제 완료 (Cycle C step-1). 신규 코드 · 도구 · 테스트 harness · 빌드 스크립트 · 다운스트림 통합이 인터프리터에 의존하는 것 금지. 검증은 `hexa build` (compiled) · syntactic 체크는 `hexa parse`. 모든 신규 기능은 compiled 경로 (hexa_v2 → C, 또는 aprime_cc-direct) 에만 land."
-  why = "interp 는 (1) compiled 경로 대비 corpus 커버리지 미달, (2) macOS 4GB memcap 초과로 대형 입력에 죽음, (3) latent 버그 보유. R7 measured-cutover 캠페인이 interp↔compiled byte-eq parity gate 를 PASS (13→0 gate-relevant · 75 MATCH · 0 DIVERGE/RC_DIFF/COMPILED_REGRESS) 시켜 compiled 가 interp 를 회귀 0 으로 대체함을 측정으로 입증 — 따라서 소스 삭제 안전."
-  cycle_c_status = "Cycle C step-1 (source-only deletion) 완료: 16 파일 · 25,548 줄 삭제. step-2 (잔여, next-cycle housekeeping) = self/main.hexa 의 cmd_run / cmd_run_dispatch 및 23 cmd_run 호출처를 compile-then-exec 헬퍼로 재배선 + cmd_run_user_direct/_batch_run_one 의 transitional interp fallback 제거 + build/hexa_interp 바이너리 폐기. step-2 까지 build/hexa_interp 바이너리가 남아 있으면 cmd_run 은 런타임상 계속 작동 (소스만 부재 — dev rebuild 불가, 런타임 무변)."
-  parity_proof = "tool/parity_interp_vs_compiled.sh — 100 test/*.hexa, PARITY GATE PASS 2026-05-19. compiler/PLAN.md 진행 로그 SSOT."
-  exception = "step-2 완료 전까지 self/main.hexa::cmd_run 경유 absorbed-verb fallback 은 build/hexa_interp 바이너리에 위임 — 런타임 보존 (functionality loss = 0). step-2 후 본 fallback 제거."
-  sunset = "Cycle C step-2 (cmd_run 재배선) 완료 → 본 룰 폐기 · R7 종결."
-  authority = "user directive 2026-05-17 '인터프리터 폐기예정 / 신규 의존 금지' → 2026-05-18 'measured cutover' → 2026-05-19 '(a) Cycle C 실행 (interp source 일괄 삭제)'. measured proof: parity gate PASS."
+@D g_interp_deprecated := "interpreter RETIRED — R7 CLOSED (Cycle C step-1+2 complete)" :: governance [required d=2026-05-19 active]
+  rule = "인터프리터는 RETIRED. (1) 소스 삭제 완료 — `self/hexa_full.hexa` · `self/interpreter.hexa` · `test_interp*.hexa` · `tool/{rebuild,build}_interp*.hexa` (16 파일 · 25,548 줄). (2) `self/main.hexa::cmd_run` 은 compile-then-exec 으로 재배선 완료 — 더 이상 interp 바이너리에 위임 안 함. 모든 `.hexa` 실행 경로 (`hexa run` · `hexa batch` · 23 absorbed-verb dispatch) 가 compiled. 신규 코드 · 도구 · 테스트 harness 가 interp 에 의존하는 것 금지. 검증은 `hexa build`, syntactic 은 `hexa parse`."
+  why = "interp 는 (1) compiled 대비 corpus 커버리지 미달, (2) macOS 4GB memcap 초과로 대형 입력에 죽음, (3) latent 버그 보유. R7 measured-cutover 캠페인이 interp↔compiled byte-eq parity gate 를 PASS (13→0 gate-relevant · 75 MATCH · 0 DIVERGE/RC_DIFF/COMPILED_REGRESS) — compiled 가 interp 를 회귀 0 으로 대체함을 삭제 前 측정으로 입증."
+  cycle_c_status = "Cycle C COMPLETE. step-1 (origin/main ab7015fa) — interp 소스 16 파일 · 25,548 줄 삭제. step-2 (origin/main 25a9031d) — cmd_run 본체를 197→80 줄 compile-then-exec 으로 재작성 (cmd_run_last_rc · auto_marker_write · cmd_run_no_exit_mode contract 보존; 23 호출처 무변경). 검증: HEXA_FORCE_INTERP=1 run / plain run / build / parse 4/4 rc-eq, mini build_aprime fixpoint PASS, atlas 118/118."
+  parity_proof = "tool/parity_interp_vs_compiled.sh — 삭제 前 100 test/*.hexa PARITY GATE PASS 2026-05-19 (13→0). 삭제 後 harness 의 'interp arm' 도 compiled (interp 은퇴) — corpus regression smoke 로 전환. compiler/PLAN.md SSOT."
+  residual = "build/hexa_interp 바이너리 + resolve_interp() dead-code 는 무해 잔재 — 다음 tidy cycle 에서 물리 제거 (런타임 무참조). R7 의 실질 종결은 본 commit (cmd_run interp-free)."
+  authority = "user directive 2026-05-17 '인터프리터 폐기예정' → 2026-05-18 'measured cutover' → 2026-05-19 '(a) Cycle C 실행' + '/goal step all closure'. measured proof: parity gate PASS + 4/4 cmd_run path rc-eq."
   @> AGENTS.md
 
 @D g_inbox_processing_loop := "inbox 처리 SOP — filing → worktree sub-agent → cherry-pick" :: governance [recommended d=2026-05-19 active]
