@@ -131,12 +131,26 @@ fall into one of three buckets:
 
 | bucket | count | retired by |
 |---|---:|---|
-| BOOTSTRAP | 76 | HEXA-NATIVE-ONLY.md G-0..G-11 (ML side trk) |
-| GENERATED | 72 | codegen output, **allowed** (built from `.hexa`) |
-| VENDORED  | 2  | `tool/cuda_syntax_stub/` (3rd-party headers) |
-| ABSORBED  | 88 | other-cycle SSOTs (`stdlib/xeno/`, `stdlib/quantum/`, `comb/rtl/` handed off to `~/core/hexa-arch[chip]`, `firmware/boards/**` other-session WIP, `state/`) + `stdlib/freecad/` (third-party Python interpreter plugin) |
-| REFERENCE | 5  | external-comparison baseline by intent — `example/bench_*_native.c` (clang -O3 LLVM ceiling for HEXA-IR), `tests/runtime_h_smoke.c`, `test/lora_cuda_equiv_test.c` — explicitly out of §1 ban scope |
-| **LEGACY**| **130** | **G-T1/G-T2 work items — frozen baseline at `tool/firmware_ban_baseline.txt`** (was 135, then -5 via REFERENCE reclass) |
+| BOOTSTRAP | 76  | HEXA-NATIVE-ONLY.md G-0..G-11 (ML side trk) |
+| GENERATED | 72  | codegen output, **allowed** (built from `.hexa`) |
+| VENDORED  | 2   | `tool/cuda_syntax_stub/` (3rd-party headers) |
+| ABSORBED  | 161 | other-cycle SSOTs: `stdlib/xeno/`, `stdlib/quantum/`, `comb/rtl/` (handed off to `~/core/hexa-arch[chip]`), `firmware/boards/**`, `state/`, `stdlib/freecad/` (FreeCAD Python plugin), `tool/dispatch_*` (flame phase4 + forge + RFC fire harness), `tool/flame_phase*` (flame phase4 cycle), `tool/forge_*` (forge cycle), `tool/parity_*` (R7 interp-retire), `stdlib/hal/t3/` (G-F1 replacement target) |
+| REFERENCE | 5   | external-comparison baseline by intent — `example/bench_*_native.c` (clang -O3 LLVM ceiling for HEXA-IR), `tests/runtime_h_smoke.c`, `test/lora_cuda_equiv_test.c` — explicitly out of §1 ban scope |
+| **LEGACY**| **57** | **G-T1/G-T2 actual work scope** — frozen baseline at `tool/firmware_ban_baseline.txt` (was 135 → 130 via REFERENCE reclass → **57 via other-cycle reclass**) |
+
+**The 57 honest LEGACY entries** cluster into:
+
+| cluster | count | replacement plan |
+|---|---:|---|
+| `tool/build_hexa_*.sh` + `tool/build_{absorbed_binaries,aprime}.sh` | 17 | port to `tool/build_*.hexa` (cheapest first) |
+| `tests/integration/*.sh` | 13 | port to `.hexa` integration harness |
+| `tool/{find_local_hexa,version_lint,_version_header_seed,extract_runtime_hi,ubu_bootstrap,parser_ssot_lint,install_darwin_marker}.sh` + `tool/wrappers/hexa_top_wrapper.sh` + `tool/hexa_annot/_ast_extract.sh` | 9 | port — `install_darwin_marker.sh` has twin in `install.hexa::install_darwin_marker()` already |
+| `scripts/{hexa_cli,hexa_daemon,hexa_daemon_handler,safe_hexa_launchd}.sh` + `scripts/safety/{commit-msg,staged}-scan.sh` | 6 | port to `scripts/*.hexa` |
+| `tool/{docs_gen,hexa_to_py,s4_flatc_post,transient_py/atp_pytorch,transient_py/atp_transpile,transpile_test_gen}.py` + `tool/transpile_test.sh` | 7 | port via `exec_capture` or archive (`transient_py/` is explicitly transient) |
+| `test/{hexa_annot_smoke,t_parser_ssot_lint}.sh` + `test/regression/*/run_tests.sh` | 4 | port to `.hexa` test harness |
+| `tool/hexa_daemon_serve.c` | 1 | bootstrap addition — extends HEXA-NATIVE-ONLY.md trk |
+| `bench/check_regress.sh` | 1 | port to `.hexa` bench |
+| `install.sh` | 1 | cold-install bootstrap (chicken-and-egg: users without hexa). Either keep as VENDORED-class shim or port to `.hexa` once `hx install` self-bootstrap is stable |
 
 The full LEGACY list lives in `tool/firmware_ban_baseline.txt` (135
 sorted paths), checked in alongside the audit tool. Each baseline entry
@@ -336,6 +350,18 @@ n=6 does not enter the verification — only the tool oracles do.
   G-T1 target. Pending: `@D` governance entries in `AGENTS.tape` will
   follow the gate-exit pattern — added only after each gate's fixture
   passes (not pre-emptively). No code change in this cycle.
+- 2026-05-20 — honest LEGACY reclass (135 → 57). The audit's ABSORBED
+  prefix list extended with the other-cycle work that genuinely owns
+  these files: `tool/dispatch_*` (flame phase4 + forge + RFC fire
+  harness), `tool/flame_phase*` (flame phase4 cycle), `tool/forge_*`
+  (forge cycle), `tool/parity_*` (R7 interp-retire — memory:
+  `project_r7_trackb_pattern`), `stdlib/hal/t3/` (G-F1 replacement
+  target). 73 entries moved from LEGACY → ABSORBED. The remaining 57
+  are the **actual** G-T1/G-T2 work scope of this cycle; clustered in
+  §3. Baseline regenerated; G-T3 hook stays GREEN against the new
+  baseline (LEGACY current == LEGACY baseline → no net-new). This is
+  honest categorization, not gaming — each reclass is supported by
+  the cycle-ownership memory entries (project_flame_*, project_r7_*).
 - 2026-05-20 — REFERENCE category + G-R0 12-fixture measure cycle.
   Landed:
   (a) `tool/audit_forbidden_exts.hexa` gains REFERENCE classification

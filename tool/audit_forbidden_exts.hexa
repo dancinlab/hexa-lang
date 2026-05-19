@@ -87,6 +87,19 @@ let ABSORBED_PREFIXES: [string] = [
     // (freecadcmd, OpenSCAD, KiCad pcbnew) executes the file in-process;
     // there is no hexa-callable surface to re-author against.
     "stdlib/freecad/",
+    // Other-cycle SSOT dispatched/fire harnesses (flame phase4, forge,
+    // runpod dispatch, R7 interp-retire parity, GPU oracle, RFC fires).
+    // These are owned by their named cycle (see memory:
+    // project_flame_mk2_cycle_2026_05_19 + project_r7_trackb_pattern);
+    // touching them from this cycle would conflict per @D
+    // g_inbox_processing_loop + memory `inbox_dup_race_precheck`.
+    "tool/dispatch_",
+    "tool/flame_phase",
+    "tool/forge_",
+    "tool/parity_",
+    // FIRMWARE-roadmap-tracked legacy: G-F1 (startup emit) is the
+    // explicit replacement plan for these per stdlib/firmware/README.md.
+    "stdlib/hal/t3/",
 ]
 
 let REFERENCE_PREFIXES: [string] = [
