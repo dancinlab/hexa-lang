@@ -25,6 +25,7 @@ use "compiler/lenses/embedded.gen"
 use "compiler/atlas/by_kind/p.gen"
 use "compiler/atlas/by_kind/l.gen"
 use "stdlib/loop/state"
+use "stdlib/io"
 
 let VERSION = "0.0.1"
 
@@ -156,9 +157,42 @@ fn cycle_draft(cands: array, dry_run: bool) {
     let n = len(cands)
     if dry_run {
         println("  [6/8 DRAFT]   --dry-run: " + to_string(n) + " candidate(s) -> tmpdir (no inbox/* write)")
-    } else {
-        println("  [6/8 DRAFT]   " + to_string(n) + " candidate(s) -> inbox/{atlas,lens}_candidates/ (C-3 wires file emit)")
+        return
     }
+    // C-3: real emit — write `inbox/atlas_candidates/<slug>.md` per
+    // Candidate. PR-only invariant (RFC 065 §10): we never touch
+    // compiler/atlas/embedded.gen.hexa or compiler/lenses/embedded.gen.hexa;
+    // candidates land in inbox/* for human review and `hexa atlas pr`
+    // / `hexa lens pr` to fold into the binary built-in.
+    let _ = exec("mkdir -p inbox/atlas_candidates")
+    let mut i = 0
+    let mut written = 0
+    while i < n {
+        let c = cands[i]
+        // build cite csv
+        let mut cite_str = ""
+        let cn = len(c.cite)
+        let mut k = 0
+        while k < cn {
+            if k > 0 { cite_str = cite_str + ", " }
+            cite_str = cite_str + c.cite[k]
+            k = k + 1
+        }
+        let mut fire_str = "false"
+        if c.fire_needed { fire_str = "true" }
+        let path = "inbox/atlas_candidates/" + c.slug + ".md"
+        let md = "# " + c.slug + "\n\n"
+               + "- family: " + c.family + "\n"
+               + "- fire_needed: " + fire_str + "\n"
+               + "- cite: [" + cite_str + "]\n"
+               + "- source: hexa loop (RFC 065)\n\n"
+               + "## proposal\n\n"
+               + c.proposed + "\n"
+        let _ = write_text(path, md)
+        written = written + 1
+        i = i + 1
+    }
+    println("  [6/8 DRAFT]   " + to_string(written) + " candidate(s) -> inbox/atlas_candidates/<slug>.md")
 }
 
 fn cycle_audit(cands: array, cycle_no: int) {
@@ -232,6 +266,7 @@ fn main() {
         if a == "--dry-run" { dry_run = true }
         if a == "--no-fire" { no_fire = true }
         if a == "--fire" { no_fire = false }
+        if a == "--write" { dry_run = false; once = true }
         k = k + 1
     }
 
