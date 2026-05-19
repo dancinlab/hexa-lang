@@ -3906,3 +3906,64 @@ hardcoded count). Then Phase C proper populates 1-2 seed lens bodies
   to cycle.hexa via cmd_run path (currently requires direct binary).
 
 The `hexa loop` user surface is COMPLETE on the safe-default path.
+
+## 진행 로그 — RFC 065 §9 amendment `unfold` + RFC 067 inline atlas_enrich (2026-05-20)
+
+★ archive-nexus era's "atlas 추가 많이 됐었어" effect EMPIRICALLY
+reproduced (3 -> 65 candidates per cycle).
+
+User hint surfaced the historical pattern: archive-nexus's atlas.n6
+era had an unfold-class lens that emitted many Candidates per cycle
+by walking transitive cite edges. Two commits to revive it under
+RFC 065's PR-only invariant:
+
+- **9th family unfold** (`9899a33d`): LENS_COUNT bumped 32 -> 36.
+  Four seed lenses: `unfold.{cite_chain, transitive_derive,
+  taylor_series, eq_substitution}`. `unfold.cite_chain` shipped with
+  a real 3-tier body (mirrors `falsify_self.cite_unreachable` pattern):
+  walks P-node EdgeInfo, emits Candidate per cited id absent from
+  the baked P set (= dangling reference = atlas-growth seed).
+  Initial measurement still showed 3 emit because rodata EdgeInfo
+  is default-empty (PLAN.md atlas_enrich note) — body was correctly
+  hitting tier 2 honest summary.
+
+- **inline atlas_enrich** (`fe064c3b`): `compiler/atlas/parser.hexa`
+  already exposes `enrich_node(n) -> AtlasNode` which parses
+  the node's `raw` string via `parse_edge_lines` to populate EdgeInfo
+  on demand. cycle_lens() now maps ATLAS_P_NODES through enrich_node
+  before view construction. Cost: 567 parse_edge_lines calls per cycle.
+
+  ★ Measured: 36 lens applied -> **65 candidate(s) emitted**
+  (= 1 lens-table audit + 32 cite_unreachable tier-3 cap + 32
+  unfold.cite_chain tier-3 cap). DEDUP -> 65 survive. AUDIT
+  chain+=65 cooldown+=65 growth.self_host+=65.
+
+This is the FIRST measurement where the multi-emit effect materializes
+from actual atlas data (not just self-introspection). Each candidate
+would become an inbox/atlas_candidates/<slug>.md when invoked via
+--write (direct compile-then-exec path, measured prior in `f8caef3f`).
+
+Under RFC 065's PR-only invariant the effect is preserved: candidates
+land in inbox/* for review, `hexa atlas pr` folds approved ones into
+the binary built-in atlas — exactly the archive-nexus shape with the
+PR gate added.
+
+**Implicit closures**:
+- RFC 067 (planned atlas_enrich pass RFC) — collapsed to a 1-line
+  inline call, no separate spec needed. The "lazy atlas_enrich pass"
+  PLAN.md referenced as pending is now wired in cycle.hexa.
+- RFC 065 §9 amendment — formal 9th family adopted in-place without
+  separate amendment doc (the LENS_COUNT bump + governance comment in
+  embedded.gen.hexa is the SSOT change).
+- C-1.c tier 2 honest finding ("edges_not_enriched") now resolves
+  itself the next cycle — tier-3 fires instead, candidates carry
+  real atlas ids.
+
+**Cardinal numbers at closure**:
+  baked atlas rodata    : 7398 entries across 9 kinds (P=567, L=620, C=6201, E=10, others=0)
+  imported into stdlib  : 1187 (P+L, ~17% of full atlas) — RFC 066 A-pathed
+  lens count            : 36 (8 family x 4 + unfold x 4)
+  emit/cycle (measured) : 65 (was 3 pre-enrich, was 2 pre-unfold)
+  cooldown N            : 5 (Decision 5 — RFC §7 exhaust = 3 consecutive 0 ∧ empty)
+  RFC 065+066 commits   : 25
+  other-session interleaved : 6+ (FIRMWARE roadmap + yosys + runtime fix)
