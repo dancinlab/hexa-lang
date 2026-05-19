@@ -271,6 +271,43 @@ mandatory (`g_blue_closed_mandate`).
 
 (append-only)
 
+### 2026-05-19 — RFC 050 Stage 2 (forge-side) — BF16 dispatch routing landed (fire pending)
+
+RFC 050 Stage A 가 `self/forge/forge_tier_v1.{h,c}` (flame↔forge `forge_tier_v1`
+ABI + stub dispatcher) 를 랜딩했으나, `forge_tier_dispatch_v1` 은 모든 non-FP64
+precision 을 `FORGE_PRECISION_UNSUPPORTED` 로 일괄 거부했다 (BF16 substrate
+미검증). RFC 049 Stage 2 가 measured-PASS (`runtime_bf16.c` 의
+`hexa_farr_matmul_bf16_gpu` 8.48×, `hexa_farr_ffn_bf16_gpu` 11.66× FP64 cuBLAS)
+하면서 그 게이트를 열 수 있게 됐다.
+
+본 cycle 변경: (1) `forge_tier_v1.c` 의 blanket precision-reject 를 좁혀
+`FORGE_PREC_PURE_BF16` / `FORGE_PREC_LAYERCAST_BF16_FP32` 를 더 이상 즉시 거부
+안 함. (2) `_forge_dispatch_matmul_bf16` / `_forge_dispatch_ffn_bf16` 추가 —
+`ForgeArgs.farr_ids[]` 슬롯을 `intptr_t` 경유 `HexaFarrBf16*` 로 캐스트해
+RFC 049 substrate 호출 (RFC 050 §6.3 ABI 결정; header ForgeArgs 코멘트에 문서화).
+`forge_tier_dispatch_v1` 이 `PURE_BF16`+MATMUL → matmul_bf16, +FFN_FUSED →
+ffn_bf16 으로 라우팅; 그 외 family/precision 은 정직하게 UNSUPPORTED 유지.
+LayerCast 는 X/Y 가 host `float*` 라 `ForgeArgs` pointer 모델에 안 맞아
+honest UNSUPPORTED (callers 는 `hexa_farr_layercast_linear_bf16_gpu` 직접 호출).
+(3) BF16 라우팅은 신규 `#ifdef FORGE_TIER_V1_BF16` guard 뒤에 — 미정의 TU 는
+BF16 분기가 `FORGE_PRECISION_UNSUPPORTED` 반환 (graceful, no behavior change).
+§6.6 no-crash 위임 보존 — 모든 미지원 (family,precision,regime,det) 조합은
+code 반환, never crash.
+
+검증/산출물: `cc -fsyntax-only` clean (guard 없음 모드 = header-only 유지,
+`FORGE_TIER_V1_BF16` 모드 둘 다). 신규 standalone harness
+`self/cuda/experiments/r050_dispatch_validate.cu` (r049_stage2_validate.cu 패턴
+— g_cublas shim + `#include runtime_bf16.c` + `FORGE_TIER_V1_BF16` +
+`#include forge_tier_v1.c`; `FORGE_TIER_V1_LIVE` 미정의 = FP64 path standalone
+불가 정상) + dispatch script `tool/dispatch_r050_dispatch_validate.sh`
+(`state/forge_rfc050_stage2_2026_05_19`, sm_80+ A100).
+
+g3 정직 보고: **BF16 dispatch routing 랜딩 + standalone harness 준비 완료 ·
+fire pending**. falsifier (VERSION-API / DISPATCH-ROUTES-BF16 / FALLBACK-CHAIN)
+는 아직 PASS 아님 — post-land fire 가 검증. flame-integration falsifier
+(REGIME-CORRECT / PERF-INHERITANCE / FORGE-BACKWARD-FUSE 등) 는 flame 필요,
+본 forge-only harness scope 밖.
+
 ### 2026-05-19 — RFC 049 Stage 2 F1 — matmul+layercast fire (matmul PASS, layercast perf-FAIL diagnosed)
 
 F1 = RFC 049 Stage 2 의 나머지 두 entry point fire-validation

@@ -80,7 +80,18 @@ typedef struct ForgeShapeInfo {
 /* ─── farr id bundle (caller-managed lifetime) ───────────────────── */
 /* Caller (flame) allocates input/output farrs; forge dispatcher only
  * reads/writes them. No hidden alloc / no hidden release. Preserves
- * RFC 035/040 packed-double arena ownership.                       */
+ * RFC 035/040 packed-double arena ownership.
+ *
+ * Family-specific interpretation of farr_ids[]:
+ *   - FP64 precision: each slot is an FP64 packed-double farr_id (the
+ *     RFC 035/040 integer handle into the host _hx_farr_table).
+ *   - BF16 precision (FORGE_PREC_PURE_BF16 / _LAYERCAST_BF16_FP32):
+ *     each slot carries a `HexaFarrBf16*` pointer (runtime_bf16.c,
+ *     RFC 049) cast to int64_t through intptr_t — i.e. the dispatcher
+ *     recovers it via `(HexaFarrBf16*)(intptr_t)farr_ids[i]`. The
+ *     BF16 storage class is pointer-keyed, not table-keyed, so the
+ *     slot is a tagged pointer rather than an arena index.
+ * MATMUL: in=[A,B], out=[C]. FFN_FUSED: in=[X,W1,W2], out=[Y].      */
 typedef struct ForgeArgs {
     int64_t farr_ids[8];    /* family-specific; MATMUL: in=[A,B], out=[C] */
     int     count;

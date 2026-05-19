@@ -1,6 +1,6 @@
 # RFC 050 — flame ↔ forge integration API (precision policy + tier dispatch)
 
-- **Status**: design-draft (2026-05-17) — DESIGN ONLY, no implementation
+- **Status**: design-draft (2026-05-17) → **Stage A landed** (forge_tier_v1.{h,c} ABI + stub dispatcher) → **Stage 2 BF16-routing landed** (2026-05-19) — `forge_tier_dispatch_v1` now routes MATMUL/FFN + `FORGE_PREC_PURE_BF16` through the RFC 049 BF16 substrate (runtime_bf16.c) via the `ForgeArgs` pointer-cast ABI, behind the `FORGE_TIER_V1_BF16` guard. Standalone harness `self/cuda/experiments/r050_dispatch_validate.cu` + dispatch script ready; **fire pending** (the BF16-routing falsifiers VERSION-API / DISPATCH-ROUTES-BF16 / FALLBACK-CHAIN are verified by that post-land fire, not yet PASS).
 - **Date**: 2026-05-17
 - **Severity**: HIGH (flame stdlib has reached Phase 3 COMPLETE + Phase 4-B SHIPPED on CPU; forge has reached Phase R with regime-tiered substrate + RFC 049 mixed-precision substrate paradigm — the two SSOTs have no formal integration API yet. Without one, flame Phase 4-D GPU dispatch and forge Stage 2 kernel land would couple ad-hoc per call site, drifting against the dual-mechanism × regime-tiered substrate forge committed to in RFC 044.)
 - **Priority**: P1 (gates flame Phase 4-D GPU dispatch and forge Stage 2 kernel campaigns — both already designed but cannot land without the boundary contract)
