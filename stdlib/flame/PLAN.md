@@ -1876,3 +1876,58 @@ ABSOLUTE + GPU util > 50%.
 
 cross-link: README.md Benchmark · [[flame-mk2-cycle-2026-05-19]]
 (retraction-aware) · [[flame-general-pytorch-replacement-goal]].
+
+---
+
+## 진행 로그 — A/B/C 머지 d768 검증 (2026-05-19)
+
+rfc043-hexa-torch 에 A/B/C 3-sub-agent worktree 결과를 머지 후 d768 GPU
+재검증. Fire A 가 머지 회귀를 라운드별로 측정-노출, 전부 수정 후 push.
+
+**머지 회귀 (측정-노출 → 수정, 전부 origin push 완료)**:
+- v1 pod boot 실패 → sshd-preconfigured 이미지 + `--ports 22/tcp` (`80a9ce5e`)
+- v2 `nvcc: command not found` (비대화형 ssh PATH) → `/usr/local/cuda/bin`
+  prepend, preflight+GPU-probe+build 3곳 (`a4a07d0f`)
+- v2 surfaced: A/B/C 머지가 `self/cuda/runtime_cuda.c` 에서 Cycle A
+  mk2-C5 기여를 통째 드랍 (e030fa31 2828L → HEAD 2118L). 3겹 verbatim
+  복원: host-launcher 551L (`0ea582a8`, + Cycle-C RFC055 Driver API
+  `-lcuda`) · `__global__` device-kernel 298L (`54dd1ac4`) ·
+  `__device__` dt_exp/dt_sqrt transcendental 34L (`174165d9`).
+  전수 심볼 스캔 0 genuine-unresolved.
+- v5 측정: **nvcc + clang + link GREEN** (`BUILD_CUDA_RC=0
+  BUILD_LINK_RC=0`). caller(runtime.c)+launcher(runtime_cuda.c)+farr
+  모델 = e030fa31 verbatim 동일 확인.
+
+**런타임 SIGSEGV 근본원인 (v5, trainer_rc=139 @ wall 258s)**:
+`[cuda] rmsnorm_mh/attn_dt_fwd: bad ids` → illegal mem access. 진단:
+브랜치 `stdlib/flame/ag_tape.hexa::ag_silu_gate` 가 pre-mk2-C5
+host-scalar loop (`t_zeros`+`while`+`t_set`) 로 revert 돼 있었음. flatten
+된 `build/artifacts/flame_d768_agtape.c` 가 host-scalar silu / GPU
+rmsnorm·attn 혼합 → farr-id lifecycle 불일치. **수정 `361e1b75`**:
+e030fa31 forge-routed `farr_silu_gate_gpu` verbatim 복원, ag_tape.hexa
+가 측정-PASS e030fa31 과 byte-identical (diff=0). origin push 완료
+(`f70f6e6a..2f19c868`, clean FF).
+
+**`258s` 는 GOAL 값 아님** — 크래시-벽시계이지 측정 step1 wall 아님.
+F-RFC046-WALL (≤437.9s) 는 trainer.c 재생성 후 재측정 대기 (g3:
+over-claim 0, 미측정으로 기록).
+
+**남은 1스텝 = trainer.c 재생성 (환경-블로커 대기)**. 정확 명령
+(self/main.hexa:1862 · tool/emit_hxi.hexa:15 확인):
+```
+HEXA_LANG=/Users/ghost/core/hexa-lang HEXA_MAC_BUILD_OK=1 \
+  hexa build stdlib/flame/flame_d768_12L_agtape_fire.hexa \
+  -o build/artifacts/flame_d768_agtape.c --c-only
+```
+검증: 생성된 .c 가 forge-routed silu (no `t_zeros` host loop) 포함 →
+`bash tool/dispatch_runpod_agtape_d768.sh` 재발사. 차단: 로컬
+hexa.real codesign-invalid (타 세션 in-progress 재빌드, shared-worktree
+hazard = 수리 금지) + mini/ubu ssh-unreachable + pool 로컬-폴백.
+origin 에 fix 전부 반영됐으므로 working-hexa 호스트 도달 시 fresh-clone
++ 위 1명령으로 즉시 재개 가능.
+
+**Cycle B/C** (이 d768 캠페인과 별개, 동일 세션): B = RFC050
+PERF-INHERIT speedup FAIL (0.016-0.024×) + CORRECT/DISPATCH-OK PASS
+(vast.ai, host-independent, 확정). C = RFC055 P1 vec-add — 로컬 PTX
+emit 가 동일 codesign-invalid 툴체인에 차단, scaffold+text-shape
+validator 가 랜딩 산출물.
