@@ -2577,3 +2577,21 @@ canonical request, string-to-sign, signature `5fa00fa3…`, and full
 Punted: SigV4 `UriEncode()` percent-encoder + query-param sorting (caller
 passes pre-encoded path/query; AWS JSON APIs use `/` + empty query, so the
 live path is fully covered — S3 object-key signing needs the encoder).
+
+### 2026-05-19 — runtime interp-residue scan + EffectDecl codegen gap (commit cf113765)
+
+Two scoped items (compiler completion + interp residue):
+- **runtime interp-residue scan** — `self/runtime.c` + `self/runtime_core.c`
+  carry NO dead interpreter code (no interp functions, no interp branches).
+  The only `interp` matches are explanatory comments documenting semantic
+  provenance ("Matches interpreter at hexa_full.hexa:NNNNN") + a stale
+  `TODO(fuel-worker)` — harmless; the runtime is interp-residue-free at the
+  code level. No change.
+- **EffectDecl codegen gap CLOSED** — `gen2_stmt` errored "unhandled
+  statement kind: EffectDecl" on `effect Name { fn op(...) }` blocks (parser
+  emits EffectDecl; codegen had no clause — token-forge/forge.hexa hit it 3×).
+  An effect declaration is operation-signatures only — a type-level construct
+  with no runtime code — so codegen now skips it (emits nothing), matching
+  InvariantDecl / FnDecl-hoist handling. hexa_v2/hexa_cc.c regenerated;
+  validated: token-forge transpiles clean, atlas 118/118, self-host fixpoint
+  byte-identical.
