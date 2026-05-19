@@ -490,13 +490,16 @@ fn _ag_silu_grad(x: float) -> float {
     let sg = _ag_sigmoid(x)
     return sg + x * sg * (1.0 - sg)
 }
+// mk2-C1b (2026-05-19): forge-route silu-gate. `farr_silu_gate_gpu`
+// = (a·σ(a))·b, σ=1/(1+dt_exp(-x)). CPU fallback _hx_farr_silu_
+// gate_cpu uses _hx_dt_exp_d (byte-exact hexa dt_exp mirror,
+// FP_CONTRACT OFF) so it is byte-identical to the prior inline
+// `_ag_silu(a)*b` ⇒ Test 11 SILUGATE leaf bar (max|Δ|=0)
+// preserved. HEXA_CUDA: _hx_cuda_farr_silu_gate_gpu (dt_exp-
+// faithful __dmul_rn/__ddiv_rn/__dadd_rn device kernel — no FMA,
+// byte-eq oracle-gated). Same carrier seam as farr_add_gpu.
 pub fn ag_silu_gate(tape: int, a: int, b: int, len: int) -> int {
-    let s = t_zeros(len)
-    let mut i = 0
-    while i < len {
-        t_set(s, i, _ag_silu(t_get(a, i)) * t_get(b, i))
-        i = i + 1
-    }
+    let s = farr_silu_gate_gpu(a, b, len)
     let _ = _ag_push(tape, ag_k_silu_gate(), a, b, s, 0 - 1, 0 - 1,
                      0 - 1, 0 - 1, 0 - 1, len, 0, 0, 0)
     return s
