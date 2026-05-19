@@ -3751,3 +3751,126 @@ operands+main.hexa 와이어링). RFC 추산 P0 = 3-5 cycles → 본 cycle 이 �
 **cc --regen / binary promote**: 미수행. `compiler/emit/macho_arm64.hexa`
 은 NOT yet `compiler/main.hexa` 에서 import. @D g_commit_push_deploy 의
 "compiler/main.hexa 소스 변경 시 필수" 게이트 미발동.
+
+
+### 2026-05-20 — S7-P0 cycle 3: nlist_64 symbol records + string table (F-P0-OBJEQ-SYMTAB PASS, nm/otool confirmed)
+
+RFC 063 § P0 세 번째 substep — `pack_lir()` 가 `LFunc.name` → 다윈-망글된
+external text symbol 을 `obj.symbols[]` + `obj.strtab` 에 emit. serialize 의
+nlist_64 16-byte zeros stub 를 진짜 record emit 으로 교체. LC_DYSYMTAB 의
+`nextdefsym` 카운트 정확히 반영. **`nm` 외부 oracle 이 clang 과 동등하게 `T
+_trivial` 출력**.
+
+**한 줄**: 합성 LFunc(name="trivial") → `pack_lir` → `obj.symbols=[
+MachoSymbol{name_offset:1, section:1, value:0, kind:0x0e, is_external:1}]`
++ `obj.strtab="\0_trivial\0"`. serialize → 322-byte .o. `nm` 출력
+`0000000000000000 T _trivial` — clang oracle (`/tmp/trivial.s` 같은 source 직접
+compile) 결과의 핵심 라인과 **동일**. 차이는 clang 이 추가 emit 하는 `ltmp0`
+debug 로컬-심볼 (1 nlist + 6 byte strtab) 뿐 — semantically optional.
+
+**변경 파일**:
+
+- `compiler/emit/macho_arm64.hexa` — 4 new functions:
+  - `_u16_le(out, v)` — little-endian u16 writer (nlist_64.n_desc 등 2-byte
+    필드용).
+  - `_emit_nlist64(out, strx, n_type, n_sect, n_value)` — 16-byte
+    nlist_64 record. Per `<mach-o/nlist.h>` layout (strx u32 + n_type u8
+    + n_sect u8 + n_desc u16 + n_value u64).
+  - `_push_cstr(out, s) -> Int` — ASCII bytes + trailing NUL push,
+    returns starting offset (caller uses as `name_offset` for the just
+    pushed symbol).
+  - `_darwin_mangle(name)` — `"_" + name` (darwin Mach-O convention,
+    mirrors `compiler/emit/asm.hexa::_fmt_label`).
+  - `_emit_dysymtab_cmd(out, nextdefsym)` — signature extended; emit 의
+    iextdefsym=0, nextdefsym=passed, iundefsym=nextdefsym (defined externs
+    range [0, nextdefsym), then undefs).
+- `serialize()` — 3 changes:
+  - symbol record stub (`_zero_n(out, 16)` x nsyms) → 실제 `_emit_nlist64`
+    호출 with `n_type = kind | (is_external ? 0x01 : 0)`.
+  - `_emit_dysymtab_cmd` 호출 전에 `nextdefsym` 계산 (`is_external != 0`
+    인 sym 카운트).
+- `pack_lir()` — 3 changes:
+  - `obj.strtab.push(0)` — Mach-O 관습대로 index 0 = NUL (빈 문자열).
+  - per-LFunc loop: `_push_cstr(obj.strtab, _darwin_mangle(f.name))` →
+    strx 받음 → `obj.symbols.push(MachoSymbol{name_offset:strx, section:1
+    /__text/, value:fn_start, kind:0x0e /N_SECT/, is_external:1 /N_EXT/})`.
+  - 그 후 `_pack_fn(obj.text, f)` 호출 (cycle 2 그대로).
+- `compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_SYMTAB.hexa` — cycle 3
+  falsifier. 합성 LFunc "trivial" packing 후 structural assertions:
+  `nsym==1` · `name_offset==1` · `section==1` · `value==0` · `kind==0x0e`
+  · `is_external==1` · strtab[0..9] byte-by-byte == `"\0_trivial\0"`.
+  serialize → /tmp/macho_p0_cycle3.ours.o.
+
+**측정 결과 (arm64-Mac local)**:
+
+```
+$ /tmp/run_F_P0_OBJEQ_SYMTAB
+F-P0-OBJEQ-SYMTAB PASS — symbol record + strtab structural
+  obj.text    = 8 B
+  obj.symbols = 1 ("_trivial" defined @ __text+0)
+  obj.strtab  = 10 B ("\0_trivial\0")
+  wrote 322 bytes to /tmp/macho_p0_cycle3.ours.o
+exit=0
+```
+
+**otool 외부 검증 (cycle 2 warning 해소 확인)**:
+
+```
+$ xcrun otool -tv /tmp/macho_p0_cycle3.ours.o
+(__TEXT,__text) section
+_trivial:                              ← cycle 2 에 없던 symbol 라벨
+0000000000000000  mov  x0, #0x2a
+0000000000000004  ret
+
+$ xcrun otool -l /tmp/macho_p0_cycle3.ours.o   # LC_SYMTAB+LC_DYSYMTAB
+LC_SYMTAB cmdsize 24 symoff 296 nsyms 1 stroff 312 strsize 10
+LC_DYSYMTAB nlocalsym 0 nextdefsym 1 iundefsym 1 nundefsym 0
+```
+
+cycle 2 의 "symbol table offset past end of file" warning 사라짐.
+
+**`nm` 외부 oracle (independent verifier)**:
+
+```
+$ xcrun nm /tmp/macho_p0_cycle3.ours.o
+0000000000000000 T _trivial          ← External Text symbol at offset 0
+
+$ xcrun nm /tmp/trivial.ref.o          # clang -c trivial.s 결과
+0000000000000000 T _trivial
+0000000000000000 t ltmp0              ← clang 추가 debug marker (optional)
+```
+
+`T _trivial` 라인이 byte-identical 동등. clang 의 추가 `ltmp0` (1 local nlist
++ 6 byte strtab) 는 debug-aid 로 optional — cycle 6 이후 추가 가능, 본 cycle
+의 functional contract 충족.
+
+**HONEST SCOPE (g3, over-claim 0)**:
+
+- 본 cycle 의 falsifier 는 1-fn LModule. multi-fn LModule + intra-module
+  cross-fn references 는 cycle 4 의 baton (relocations 와 함께 검증).
+- 본 cycle 의 symbol kind 는 `N_SECT | N_EXT` (defined external) 만 emit.
+  `N_UNDF` (extern undef — `BL _fn_in_other_module`) symbols 는 cycle 4
+  가 relocations 와 함께 추가.
+- 본 cycle 은 `ltmp0` 류 debug 로컬-심볼 미emit. clang 호환성 100% 추구하면
+  추가 가능; 그러나 functional contract 와 무관 — cycle 6+ optional.
+- `compiler/main.hexa` 와이어링 여전히 cycle 5. 본 cycle 도 합성 LModule.
+
+**다음 cycle 의 baton** (RFC 063 § P0 nearest sub-step):
+
+4. **Relocation records** — `Arm64Reloc` (현재 scaffold struct) → 8-byte
+   `relocation_info` (r_address u32 + bitfield(r_symbolnum 24b + r_pcrel
+   1b + r_length 2b + r_extern 1b + r_type 4b)). `_pack_fn` 가 extern
+   target (intra-fn label 맵에 없는 BL/B) 을 만나면 reloc record 푸시.
+   `pack_lir` 가 walk 후 string target_name → symbols[] index 해소. 2-fn
+   LModule (fn1 calls fn2) falsifier — clang `.s` oracle 과 BL imm26 의
+   reloc record 일치 확인.
+5. **Mem operands + 추가 encoding rules + `--emit=obj` arm** — frame
+   prologue/epilogue (STP/LDP, ADD/SUB sp), ADRP+ADD/LDR rodata refs,
+   SVC #0x80 exit syscall. `compiler/main.hexa` 의 `--emit=obj` arm
+   추가, 기존 `as` fork 와 falsifier corpus (trivial/fib/while/if)
+   양쪽 wiring + 전체 F-P0-OBJEQ PASS = P0 closure.
+
+**RFC 063 phasing 진척**: P0 의 5 substep 중 **3 land** (1: Mach-O 직렬화 ✅
++ 2: LIR 워커 ✅ + 3: 심볼+strtab ✅). 잔여 2 — relocations · mem ops +
+main.hexa 와이어링 + corpus PASS. RFC 추산 P0 = 3-5 cycles → 본 cycle 이
+중간점.

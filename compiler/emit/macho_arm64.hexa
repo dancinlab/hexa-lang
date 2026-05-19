@@ -314,6 +314,13 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
 //
 // All fields are little-endian per Mach-O on darwin-arm64.
 
+// Append little-endian u16 to `out`. Used for `nlist_64.n_desc` and
+// other 2-byte Mach-O fields.
+fn _u16_le(out: [Int], v: Int) {
+    out.push(v & 0xFF)
+    out.push((v >> 8) & 0xFF)
+}
+
 // Append little-endian u32 to `out` (low byte first). Caller passes
 // already-masked value; we mask defensively (& 0xFF per byte) so an
 // `i64` with the upper 32 bits non-zero does not corrupt the stream.
@@ -482,20 +489,62 @@ fn _emit_symtab_cmd(out: [Int],
     _u32_le(out, strsize)
 }
 
-// Emit `LC_DYSYMTAB` (80 bytes). Per `<mach-o/loader.h>`. For an
-// `MH_OBJECT` with no defined dynamic symbols we still emit this LC
-// because `ld64` (and `otool`) expects it; all 12 index/count pairs
-// are zero plus the trailing 5 indirect/external tables — all zero
-// for an empty object.
-fn _emit_dysymtab_cmd(out: [Int]) {
+// Emit `LC_DYSYMTAB` (80 bytes). Per `<mach-o/loader.h>`:
+//
+//     struct dysymtab_command {
+//         uint32_t cmd;          // LC_DYSYMTAB (0x0b)
+//         uint32_t cmdsize;      // 80
+//         uint32_t ilocalsym;
+//         uint32_t nlocalsym;
+//         uint32_t iextdefsym;
+//         uint32_t nextdefsym;
+//         uint32_t iundefsym;
+//         uint32_t nundefsym;
+//         uint32_t tocoff;       uint32_t ntoc;
+//         uint32_t modtaboff;    uint32_t nmodtab;
+//         uint32_t extrefsymoff; uint32_t nextrefsyms;
+//         uint32_t indirectsymoff; uint32_t nindirectsyms;
+//         uint32_t extreloff;    uint32_t nextrel;
+//         uint32_t locreloff;    uint32_t nlocrel;
+//     };
+//
+// Cycle 3: `nextdefsym` reports our defined external symbols (functions).
+// The other 17 fields stay zero — no locals, no undef, no indirect, no
+// table-of-contents (TOC is a dynamic-library construct).
+fn _emit_dysymtab_cmd(out: [Int], nextdefsym: Int) {
     _u32_le(out, LC_DYSYMTAB)
     _u32_le(out, 80)
-    // ilocalsym .. extreloff/nextrel + locreloff/nlocrel — 18 u32 zeros.
+    _u32_le(out, 0)          // ilocalsym
+    _u32_le(out, 0)          // nlocalsym
+    _u32_le(out, 0)          // iextdefsym (defined externs start at index 0)
+    _u32_le(out, nextdefsym) // nextdefsym
+    _u32_le(out, nextdefsym) // iundefsym (immediately after defined externs)
+    _u32_le(out, 0)          // nundefsym
+    // Remaining 12 u32 fields all zero — no TOC, modtab, indirect refs,
+    // or external/local relocation tables in MH_OBJECT.
     let mut i = 0
-    while i < 18 {
+    while i < 12 {
         _u32_le(out, 0)
         i = i + 1
     }
+}
+
+// Emit one `nlist_64` symbol record (16 bytes). Per `<mach-o/nlist.h>`:
+//
+//     struct nlist_64 {
+//         uint32_t n_strx;   // index into the string table
+//         uint8_t  n_type;   // N_TYPE bits (N_SECT=0x0e, N_UNDF=0x00)
+//                            // OR'd with N_EXT (0x01) for external.
+//         uint8_t  n_sect;   // 1-based section index; 0 = NO_SECT.
+//         uint16_t n_desc;   // misc flags / library ordinal — 0 here.
+//         uint64_t n_value;  // section-relative offset for defined syms.
+//     };
+fn _emit_nlist64(out: [Int], strx: Int, n_type: Int, n_sect: Int, n_value: Int) {
+    _u32_le(out, strx)            // n_strx — 4 bytes
+    out.push(n_type & 0xFF)       // n_type — 1 byte
+    out.push(n_sect & 0xFF)       // n_sect — 1 byte
+    _u16_le(out, 0)               // n_desc — 2 bytes (REFERENCE_FLAG_*, 0 here)
+    _u64_le(out, n_value)         // n_value — 8 bytes
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -575,7 +624,17 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
                      sect_flags)
 
     _emit_symtab_cmd(out, symoff, nsyms, stroff, strsize)
-    _emit_dysymtab_cmd(out)
+    // Defined-extern count: every symbol in `obj.symbols` with the
+    // N_EXT bit set is a defined external (function). Cycle 3 emits
+    // function names as external defined symbols; future locals would
+    // need their own counter (nlocalsym).
+    let mut nextdefsym = 0
+    let mut sx = 0
+    while sx < nsyms {
+        if obj.symbols[sx].is_external != 0 { nextdefsym = nextdefsym + 1 }
+        sx = sx + 1
+    }
+    _emit_dysymtab_cmd(out, nextdefsym)
 
     // __text bytes + 4-byte alignment pad
     let mut i = 0
@@ -587,11 +646,16 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
     let mut ri = 0
     while ri < nreloc { _zero_n(out, 8); ri = ri + 1 }
 
-    // Symbol records: nlist_64 is 16 bytes each (strx, type, sect,
-    // desc, value). Cycle 1 leaves the encoding to the next sub-step;
-    // this loop is reserved.
+    // Symbol records: emit one nlist_64 per `MachoSymbol`. Cycle 3 —
+    // n_type = MachoSymbol.kind | is_external (N_EXT 0x01).
     let mut si = 0
-    while si < nsyms { _zero_n(out, 16); si = si + 1 }
+    while si < nsyms {
+        let s = obj.symbols[si]
+        let mut n_type = s.kind
+        if s.is_external != 0 { n_type = n_type | 0x01 }
+        _emit_nlist64(out, s.name_offset, n_type, s.section, s.value)
+        si = si + 1
+    }
 
     // String table bytes (verbatim).
     let mut ki = 0
@@ -725,6 +789,28 @@ fn _patch_word_le(out: [Int], off: Int, word: Int) {
     out[off + 3] = (word >> 24) & 0xFF
 }
 
+// Append the ASCII bytes of `s` plus a trailing NUL to `out`. Returns
+// the byte offset of the first byte appended — used to seed
+// `MachoSymbol.name_offset` for the just-written name.
+fn _push_cstr(out: [Int], s: string) -> Int {
+    let off = len(out)
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        out.push(char_code(s, i) & 0xFF)
+        i = i + 1
+    }
+    out.push(0)
+    return off
+}
+
+// Darwin Mach-O symbol-name convention: every C/hexa symbol carries
+// a leading `_` in the object file. Mirrors `compiler/emit/asm.hexa
+// ::_fmt_label` for `_is_darwin(target)`.
+fn _darwin_mangle(name: string) -> string {
+    return "_" + name
+}
+
 // Walk one LFunc, append its instructions to `out_text`, record any
 // label offsets, and resolve all intra-function branches. Returns the
 // number of unresolved branches (= would-be relocations for cycle 4).
@@ -838,8 +924,18 @@ fn _pack_fn(out_text: [Int], f: LFunc) -> Int {
 }
 
 // Public entry — walk all LFuncs in `lm`, produce a `MachoArm64Obj`
-// with `text` populated. relocations / symbols / strtab are reserved
-// for follow-up cycles.
+// with `text` + `symbols` + `strtab` populated. Relocations are still
+// reserved for cycle 4.
+//
+// Symbol table contract (cycle 3):
+//   - First byte of `strtab` is NUL (Mach-O index-0 convention).
+//   - Each `LFunc` produces one `MachoSymbol` with:
+//       name_offset = strtab offset of `_<fn.name>\0` (darwin mangle)
+//       section     = 1 (1-based index for __text)
+//       value       = byte offset of fn start within __text
+//       kind        = 0x0e (N_SECT — defined in a section)
+//       is_external = 1 (N_EXT — externally visible)
+//   - LC_DYSYMTAB.nextdefsym counts these; `serialize` derives it.
 pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     let obj = MachoArm64Obj {
         text:       [],
@@ -848,12 +944,29 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         strtab:     [],
         dwarf_line: [],
     }
+    // Mach-O string table starts with a NUL byte at index 0 so unused
+    // `n_strx` slots can point to the empty string. `clang -c` produces
+    // strtabs that begin with `\0` for the same reason.
+    obj.strtab.push(0)
+
     let nf = len(lm.funcs)
     let mut i = 0
     while i < nf {
+        let f = lm.funcs[i]
+        // Symbol value = current __text length BEFORE we pack this fn.
+        let fn_start = len(obj.text)
+        let mangled = _darwin_mangle(f.name)
+        let strx = _push_cstr(obj.strtab, mangled)
+        obj.symbols.push(MachoSymbol {
+            name_offset: strx,
+            section:     1,             // __text is the only section we emit
+            value:       fn_start,
+            kind:        0x0e,          // N_SECT (defined in section)
+            is_external: 1,             // N_EXT (visible to the linker)
+        })
         // Discard the leftover count for now — cycle 4 wiring will
         // turn unresolved intra-/inter-fn refs into Arm64Reloc records.
-        _pack_fn(obj.text, lm.funcs[i])
+        _pack_fn(obj.text, f)
         i = i + 1
     }
     return obj

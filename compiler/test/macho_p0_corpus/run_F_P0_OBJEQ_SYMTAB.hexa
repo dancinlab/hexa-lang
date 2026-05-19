@@ -1,0 +1,101 @@
+// F-P0-OBJEQ-SYMTAB — cycle 3 sub-falsifier (RFC 063 § P0).
+//
+// Checks `pack_lir` symbol-table emission. Synthetic LFunc named
+// "trivial" with `mov x0, #42; ret`. After packing:
+//
+//   obj.symbols.len() == 1
+//   obj.symbols[0].name_offset == 1   (strtab[0]='\0', "_trivial" at [1])
+//   obj.symbols[0].section     == 1   (__text)
+//   obj.symbols[0].value       == 0   (fn at __text offset 0)
+//   obj.symbols[0].kind        == 0x0e (N_SECT)
+//   obj.symbols[0].is_external == 1
+//   obj.strtab                 == "\0_trivial\0"   (10 bytes)
+//
+// Then serialize the .o and verify `otool -tv` shows the `_trivial:`
+// label AND no longer emits "symbol table offset past end" warning.
+
+import "../../emit/macho_arm64.hexa"
+import "../../ir/lir.hexa"
+
+fn main() {
+    let x0 = PReg { name: "x0", kind: "gpr" }
+    let mov_args: [LOperand] = [
+        LOperand { kind: "reg", reg: x0, imm: 0, mem_base: x0, mem_offset: 0, label: "" },
+        LOperand { kind: "imm", reg: x0, imm: 42, mem_base: x0, mem_offset: 0, label: "" },
+    ]
+    let mov_ins = LInstr { op: "mov", args: mov_args, comment: "" }
+    let ret_ins = LInstr { op: "ret", args: [], comment: "" }
+    let f = LFunc {
+        name:         "trivial",
+        target:       "arm64-apple-darwin",
+        instrs:       [mov_ins, ret_ins],
+        frame_size:   0,
+        callee_saved: [],
+        def_line:     0,
+    }
+    let lm = LModule {
+        file: "trivial.hexa", target: "arm64-apple-darwin",
+        funcs: [f], rodata: [], bss: [], globals: [], floats: [],
+    }
+
+    let obj = pack_lir(lm)
+
+    let nsym = len(obj.symbols)
+    if nsym != 1 {
+        println("FAIL: nsym = " + to_string(nsym) + " (expected 1)")
+        exit(1)
+    }
+    let s = obj.symbols[0]
+    if s.name_offset != 1 {
+        println("FAIL: name_offset = " + to_string(s.name_offset) + " (expected 1)")
+        exit(2)
+    }
+    if s.section != 1 {
+        println("FAIL: section = " + to_string(s.section) + " (expected 1)")
+        exit(3)
+    }
+    if s.value != 0 {
+        println("FAIL: value = " + to_string(s.value) + " (expected 0)")
+        exit(4)
+    }
+    if s.kind != 0x0e {
+        println("FAIL: kind = " + to_string(s.kind) + " (expected 0x0e)")
+        exit(5)
+    }
+    if s.is_external != 1 {
+        println("FAIL: is_external = " + to_string(s.is_external) + " (expected 1)")
+        exit(6)
+    }
+
+    // strtab should be: byte 0 = '\0', bytes 1..9 = "_trivial", byte 9 = '\0'
+    let expected_strtab: [Int] = [
+        0,
+        char_code("_", 0), char_code("t", 0), char_code("r", 0), char_code("i", 0),
+        char_code("v", 0), char_code("i", 0), char_code("a", 0), char_code("l", 0),
+        0,
+    ]
+    let strn = len(obj.strtab)
+    let estn = len(expected_strtab)
+    if strn != estn {
+        println("FAIL: strtab length = " + to_string(strn) + " (expected " + to_string(estn) + ")")
+        exit(7)
+    }
+    let mut i = 0
+    while i < strn {
+        if (obj.strtab[i] & 0xFF) != expected_strtab[i] {
+            println("FAIL: strtab[" + to_string(i) + "] = " + to_string(obj.strtab[i]) +
+                    " (expected " + to_string(expected_strtab[i]) + ")")
+            exit(8)
+        }
+        i = i + 1
+    }
+
+    let bytes = serialize(obj)
+    write_bytes("/tmp/macho_p0_cycle3.ours.o", bytes)
+    println("F-P0-OBJEQ-SYMTAB PASS — symbol record + strtab structural")
+    println("  obj.text    = " + to_string(len(obj.text)) + " B")
+    println("  obj.symbols = " + to_string(nsym) + " (\"_trivial\" defined @ __text+0)")
+    println("  obj.strtab  = " + to_string(strn) + " B (\"\\0_trivial\\0\")")
+    println("  wrote " + to_string(len(bytes)) + " bytes to /tmp/macho_p0_cycle3.ours.o")
+    exit(0)
+}
