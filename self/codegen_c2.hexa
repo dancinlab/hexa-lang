@@ -4069,6 +4069,24 @@ fn gen2_expr(node) {
             if name == "type_of" {
                 return "hexa_type_of(" + gen2_expr(node.args[0]) + ")"
             }
+            // RFC 055 055-P3c — host-side `gpu_launch(...)` builtin lowers
+            // to the C runtime wrapper `_hx_cuda_launch_kernel(...)`. The
+            // caller arranges the cubin blob + length (until P3c.e auto-
+            // embed lands; today the caller passes a `const char*`-shaped
+            // cubin blob + a `size_t` length, mirroring the launch ABI
+            // declared in self/runtime.h). Argument shape is pass-through
+            // — clang reports any signature mismatch at compile time.
+            if name == "gpu_launch" {
+                let mut gl = "_hx_cuda_launch_kernel("
+                let mut gi = 0
+                while gi < len(node.args) {
+                    if gi > 0 { gl = gl + ", " }
+                    gl = gl + gen2_expr(node.args[gi])
+                    gi = gi + 1
+                }
+                gl = gl + ")"
+                return gl
+            }
             // Free-function `split(s, delim)` mirror of `s.split(delim)` — lets
             // us retire the TAG_FN runtime shim in runtime.c once hexa_v2 is
             // rebuilt from this SSOT (runtime.c:`static HexaVal split;` block).
