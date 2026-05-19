@@ -4,37 +4,112 @@
 // REST client (mp_api). Crystal-structure container, space-group ops,
 // phase-diagram primitives, and a stdlib-`net` MP query path.
 //
-// Status: SCAFFOLD — stage-1 port pending. No hexa impl yet; this file
-// only fixes the package surface so callers can be migrated incrementally.
+// Status: STAGE-1 — Lattice + Structure containers + constructors +
+// pure-stdlib accessors (volume / abc / num_sites) landed. Stage-2
+// primitives (from_cif / SpacegroupAnalyzer / PhaseDiagram / MP-net
+// query) still pending.
 //
 // ── Migration plan ──────────────────────────────────────────────────
-//   Stage 1 (current implementation port): re-target hexa-matter
-//     `_python_bridge/module/pymatgen_structure_io.py`,
-//     `pymatgen_phasediagram_smoke.py`, and the Materials Project
-//     adapter `_absorption_bridge/materials_project/mp_api_smoke.py`
-//     (its stdlib-urllib REST path → `net`, its schema → this package).
+//   Stage 1 (DONE here): Lattice/Structure structs + lattice_new +
+//     structure_new + lattice_volume + lattice_abc + structure_num_sites
+//     + structure_species + structure_volume — enough surface for
+//     hexa-matter `pymatgen_structure_io.py` /
+//     `pymatgen_phasediagram_smoke.py` callers to be migrated onto
+//     this package (callers pass explicit lattice matrices + species +
+//     fractional coords; no pymatgen shell-out).
 //   Stage 2 (dependency hexa-native port): pymatgen primitives —
-//     Structure, Lattice, SpacegroupAnalyzer, PhaseDiagram, the
-//     CIF reader — get hexa-native kernels here.
+//     Structure ops, SpacegroupAnalyzer, PhaseDiagram, CIF reader,
+//     the Materials Project net query — get hexa-native kernels here.
 //
-// ── Planned public API ──────────────────────────────────────────────
-//   pub struct Lattice      — matrix : tensor (3x3), a/b/c, alpha/beta/gamma
+// ── Public API ──────────────────────────────────────────────────────
+//   pub struct Lattice      — matrix : [[float;3];3]
 //   pub struct Structure    — lattice : Lattice, species : [str],
-//                             frac_coords : tensor
-//   pub fn structure_from_spacegroup(sg, lattice, species, coords) -> Structure
+//                             frac_coords : [[float;3]]
+//   pub fn lattice_new(matrix) -> Lattice
+//   pub fn lattice_volume(L) -> float                 (|det| matrix)
+//   pub fn lattice_abc(L) -> [float;3]                (row-vector norms)
+//   pub fn structure_new(lattice, species, frac) -> Structure
+//   pub fn structure_num_sites(s) -> int
+//   pub fn structure_species(s) -> [str]
+//   pub fn structure_volume(s) -> float
+//   pub fn structure_from_spacegroup(sg, L, species, coords) (Stage 2)
 //   pub fn structure_from_cif(path) -> Structure        (Stage 2)
-//   pub fn mp_summary_query(api_key, formula) -> ...     (Stage 1, via net)
+//   pub fn mp_summary_query(api_key, formula) -> ...     (Stage 2; net)
 //   pub fn energy_above_hull(structure, refs) -> float   (Stage 2)
 //
 // ── Dependencies (hexa stdlib) ──────────────────────────────────────
-//   tensor/  linalg/   — lattice matrices, fractional<->cartesian
-//   net/                — Materials Project REST (X-API-KEY header)
-//   atoms/              — sibling: Structure <-> Atoms bridge
+//   (Stage 1 dependency-free — arrays + closed-form 3x3 det + sqrt.
+//    tensor/ linalg/ net/ atoms/ enter at Stage 2.)
 //
 // Absorbs: pymatgen, mp_api   Used by: hexa-matter   Sibling: atoms, mlff
 // Honesty: MP data is DFT-COMPUTED (CC-BY 4.0), never a measurement.
 // Cross-link: .roadmap.stdlib (science-stack subdomains)
 
+pub struct Lattice {
+    matrix: any      // [[float;3];3] — row lattice vectors (Å)
+}
+
+pub struct Structure {
+    lattice: any,    // Lattice
+    species: any,    // [str]          — per-site element, length N
+    frac_coords: any // [[float;3]; N] — fractional coordinates
+}
+
+pub fn lattice_new(matrix: any) -> Lattice {
+    return Lattice { matrix: matrix }
+}
+
+// pymatgen Lattice.volume — |det(matrix)| for the row-vector 3x3.
+pub fn lattice_volume(L: Lattice) -> float {
+    let m = L.matrix
+    let r0 = m[0]
+    let r1 = m[1]
+    let r2 = m[2]
+    let a00 = r0[0]
+    let a01 = r0[1]
+    let a02 = r0[2]
+    let a10 = r1[0]
+    let a11 = r1[1]
+    let a12 = r1[2]
+    let a20 = r2[0]
+    let a21 = r2[1]
+    let a22 = r2[2]
+    let t0 = a00 * (a11 * a22 - a12 * a21)
+    let t1 = a01 * (a10 * a22 - a12 * a20)
+    let t2 = a02 * (a10 * a21 - a11 * a20)
+    let det = t0 - t1 + t2
+    if det < 0.0 { return -det }
+    return det
+}
+
+// pymatgen Lattice.abc — the three row-vector lengths (Å).
+pub fn lattice_abc(L: Lattice) -> any {
+    let m = L.matrix
+    let r0 = m[0]
+    let r1 = m[1]
+    let r2 = m[2]
+    let n0 = sqrt(r0[0] * r0[0] + r0[1] * r0[1] + r0[2] * r0[2])
+    let n1 = sqrt(r1[0] * r1[0] + r1[1] * r1[1] + r1[2] * r1[2])
+    let n2 = sqrt(r2[0] * r2[0] + r2[1] * r2[1] + r2[2] * r2[2])
+    return [n0, n1, n2]
+}
+
+pub fn structure_new(lattice: Lattice, species: any, frac: any) -> Structure {
+    return Structure { lattice: lattice, species: species, frac_coords: frac }
+}
+
+pub fn structure_num_sites(s: Structure) -> int {
+    return len(s.species)
+}
+
+pub fn structure_species(s: Structure) -> any {
+    return s.species
+}
+
+pub fn structure_volume(s: Structure) -> float {
+    return lattice_volume(s.lattice)
+}
+
 pub fn crystal_status() -> str {
-    return "SCAFFOLD — stage-1 port pending (absorbs: pymatgen, mp_api)"
+    return "STAGE-1 — Lattice/Structure containers + lattice_new/volume/abc + structure_new/num_sites/species/volume (absorbs: pymatgen, mp_api; Stage-2 primitives pending)"
 }

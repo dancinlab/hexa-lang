@@ -1,0 +1,71 @@
+// HEXA Standard Library — crystal/mol/mlff Stage-1 tests
+// Self-validating (closed-form geometry; no external reference).
+
+import "stdlib/crystal/mod.hexa"
+import "stdlib/mol/mod.hexa"
+import "stdlib/mlff/mod.hexa"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed = ""
+
+fn check(name: string, cond: bool) {
+    total_count = total_count + 1
+    if cond { pass_count = pass_count + 1 }
+    else { if failed == "" { failed = name } }
+}
+
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn main() {
+    let a = 3.6149
+    let h = a / 2.0
+
+    // ── crystal ──
+    let cub = lattice_new([[a, 0.0, 0.0], [0.0, a, 0.0], [0.0, 0.0, a]])
+    check("lattice cubic volume == a^3", fabs(lattice_volume(cub) - a * a * a) < 0.000000001)
+    let abc = lattice_abc(cub)
+    check("lattice_abc len 3", len(abc) == 3)
+    check("lattice_abc[0] == a", fabs(abc[0] - a) < 0.000000001)
+    check("lattice_abc[2] == a", fabs(abc[2] - a) < 0.000000001)
+
+    let fcc = lattice_new([[0.0, h, h], [h, 0.0, h], [h, h, 0.0]])
+    check("lattice FCC volume == a^3/4", fabs(lattice_volume(fcc) - a * a * a / 4.0) < 0.000000001)
+
+    let st = structure_new(cub, ["Na", "Cl"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]])
+    check("structure_num_sites == 2", structure_num_sites(st) == 2)
+    let sp = structure_species(st)
+    check("structure_species[1] == Cl", sp[1] == "Cl")
+    check("structure_volume == a^3", fabs(structure_volume(st) - a * a * a) < 0.000000001)
+
+    // ── mol ──
+    let m = mol_new(["C", "O", "H"], [[0, 1, 2], [0, 2, 1]], 0)
+    check("mol_num_atoms == 3", mol_num_atoms(m) == 3)
+    check("mol_num_bonds == 2", mol_num_bonds(m) == 2)
+    check("mol_charge == 0", mol_charge(m) == 0)
+    let ma = mol_atoms(m)
+    check("mol_atoms[1] == O", ma[1] == "O")
+    let anion = mol_new(["O"], [], -2)
+    check("mol_charge negative", mol_charge(anion) == -2)
+
+    // ── mlff ──
+    let r = mlff_result_new(-3.25, [[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]], [1.5, 1.5], st)
+    check("mlff_e_per_atom == -3.25", fabs(mlff_e_per_atom(r) - (-3.25)) < 0.000000001)
+    let f = mlff_forces(r)
+    check("mlff_forces len 2", len(f) == 2)
+    check("mlff_forces[1][0] == 0.1", fabs(f[1][0] - 0.1) < 0.000000001)
+    let mm = mlff_magmoms(r)
+    check("mlff_magmoms[0] == 1.5", fabs(mm[0] - 1.5) < 0.000000001)
+    let rel = mlff_relaxed(r)
+    check("mlff_relaxed roundtrips Structure", structure_num_sites(rel) == 2)
+
+    println("crystal: " + crystal_status())
+    println("mol:     " + mol_status())
+    println("mlff:    " + mlff_status())
+    if pass_count == total_count {
+        println("__SCI_STAGE1_TEST__ PASS (" + str(pass_count) + "/" + str(total_count) + ")")
+    } else {
+        println("__SCI_STAGE1_TEST__ FAIL (" + str(pass_count) + "/" + str(total_count) + " first-fail=" + failed + ")")
+        exit(1)
+    }
+}

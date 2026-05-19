@@ -5,22 +5,33 @@
 // Used by hexa-matter (organic material specs) and hexa-bio (ligand /
 // drug-candidate chemistry).
 //
-// Status: SCAFFOLD — stage-1 port pending. No hexa impl yet; this file
-// only fixes the package surface so callers can be migrated incrementally.
+// Status: STAGE-1 — Mol graph container + constructor + pure-stdlib
+// accessors (num_atoms / num_bonds / charge / atom symbols) landed.
+// Stage-2 primitives (SMILES tokenizer+parser, canon, Crippen/TPSA
+// descriptor kernels) still pending.
 //
 // ── Migration plan ──────────────────────────────────────────────────
-//   Stage 1 (current implementation port): re-target hexa-matter
-//     `_python_bridge/module/rdkit_smiles_audit.py` +
-//     `rdkit_descriptor_calc.py`, and the hexa-bio ligand SMILES
-//     adapters (`ligand_smiles_to_h`, etc.) onto this package.
+//   Stage 1 (DONE here): Mol struct + mol_new + mol_num_atoms +
+//     mol_num_bonds + mol_charge + mol_atoms — enough surface for
+//     callers that already hold an explicit atom/bond list to migrate
+//     onto this package (no RDKit shell-out). SMILES parsing itself is
+//     a Stage-2 kernel (a working byte-parity SMILES parser already
+//     exists at hexa-bio `_hexa_bridge/selftest/cmt_smiles_validation
+//     .hexa`; Stage-2 will hoist a shared parser here).
 //   Stage 2 (dependency hexa-native port): RDKit primitives — SMILES
-//     tokenizer + parser, molecular graph, ring perception, the
-//     Crippen/TPSA descriptor kernels — get hexa-native impls here.
+//     tokenizer + parser, ring perception, Crippen/TPSA descriptor
+//     kernels — get hexa-native impls here.
 //
-// ── Planned public API ──────────────────────────────────────────────
-//   pub struct Mol          — atoms : [str], bonds : [(int,int,int)],
+// ── Public API ──────────────────────────────────────────────────────
+//   pub struct Mol          — atoms : [str], bonds : [[int;3]],
 //                             charge : int
-//   pub fn mol_from_smiles(smiles) -> Mol
+//                             (bond = [i, j, order])
+//   pub fn mol_new(atoms, bonds, charge) -> Mol
+//   pub fn mol_num_atoms(m) -> int
+//   pub fn mol_num_bonds(m) -> int
+//   pub fn mol_charge(m) -> int
+//   pub fn mol_atoms(m) -> [str]
+//   pub fn mol_from_smiles(smiles) -> Mol               (Stage 2)
 //   pub fn mol_canon_smiles(m) -> str                   (Stage 2)
 //   pub fn mol_weight(m) -> float                       (Stage 2)
 //   pub fn mol_logp(m) -> float                         (Stage 2)
@@ -28,12 +39,38 @@
 //   pub fn mol_hba(m) -> int  / mol_hbd(m) -> int        (Stage 2)
 //
 // ── Dependencies (hexa stdlib) ──────────────────────────────────────
-//   tokenize/  — SMILES lexing
-//   collections — molecular graph adjacency
+//   (Stage 1 dependency-free — plain arrays. tokenize/ + collections
+//    enter at Stage 2 for the SMILES parser + graph adjacency.)
 //
 // Absorbs: rdkit   Used by: hexa-matter, hexa-bio   Sibling: crystal
 // Cross-link: .roadmap.stdlib (science-stack subdomains)
 
+pub struct Mol {
+    atoms: any,      // [str]        — element symbols, length N
+    bonds: any,      // [[int;3]; M] — [atom_i, atom_j, order]
+    charge: any      // int          — formal molecular charge
+}
+
+pub fn mol_new(atoms: any, bonds: any, charge: any) -> Mol {
+    return Mol { atoms: atoms, bonds: bonds, charge: charge }
+}
+
+pub fn mol_num_atoms(m: Mol) -> int {
+    return len(m.atoms)
+}
+
+pub fn mol_num_bonds(m: Mol) -> int {
+    return len(m.bonds)
+}
+
+pub fn mol_charge(m: Mol) -> int {
+    return m.charge
+}
+
+pub fn mol_atoms(m: Mol) -> any {
+    return m.atoms
+}
+
 pub fn mol_status() -> str {
-    return "SCAFFOLD — stage-1 port pending (absorbs: rdkit)"
+    return "STAGE-1 — Mol container + mol_new/num_atoms/num_bonds/charge/atoms (absorbs: rdkit; SMILES parser + descriptors Stage-2)"
 }
