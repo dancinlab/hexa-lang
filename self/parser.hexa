@@ -4075,9 +4075,13 @@ fn parse_macro_def() {
             p_skip_newlines()
         }
         p_expect("RParen")
-        // Expect => (FatArrow)
-        // Since we may not have FatArrow token, accept Eq + Gt combo or just skip
-        if p_peek_kind() == "Eq" {
+        // Expect => (FatArrow). Lexer emits FatArrow as a single token
+        // (self/lexer.hexa L509); accept it directly. Eq + Gt combo kept
+        // as a fallback for any older lexer snapshot that produced the
+        // two-token form.
+        if p_peek_kind() == "FatArrow" {
+            p_advance()
+        } else if p_peek_kind() == "Eq" {
             p_advance()
             if p_peek_kind() == "Gt" {
                 p_advance()
