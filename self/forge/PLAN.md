@@ -864,3 +864,38 @@ worktree 가 active churn) 이 `_hx_farr_rope_cpu` byte-eq fallback 과 함께
 runtime.c 의 최근 `#include` 의존성. RoPE 복원 후 재-fire 가능.
 
 SSOT: `state/forge_rfc050_L1_2026_05_19/RFC050_L1_RESULTS.md` (gitignored).
+
+### 2026-05-19 — L1 slice 3 후속 — RoPE seam 복원 + d768 fire 2차 blocker 진단
+
+slice 3 d768 fire 를 3회 발사 (A100, ~$2-3 · 전부 빠른 build-fail). 각 fire 가
+L1 과 무관한 stale-structure breakage 를 노출:
+
+**blocker 1 — RoPE builtin (FIXED · commit `d8300318`)**: `hexa_farr_rope_gpu`/
+`_bwd_gpu` (RFC 041 Phase B) 가 현재 트리에 C 정의 없음 — `9582a395` 가 랜딩한
+bridging wrapper + `_hx_farr_rope_cpu` byte-eq fallback 이 `3220ffc5` deploy-regen
+에서 runtime.c 에서 wipe. `9582a395` 에서 verbatim 복원 (CPU fallback +
+`hexa_farr_rope_gpu`/`_bwd_gpu` `#ifdef HEXA_CUDA` wrapper + bare seam +
+runtime.h proto). d768 트레이너가 CPU 경로로 클린 빌드 확인.
+
+**blocker 2 — `HexaFarrEntry` ABI desync (미해결 · L1 범위 밖)**: fire #3 가
+link 단계에서 실패 — `runtime_cuda.o` (별도 nvcc TU) 가 `_hx_farr_table`/
+`_hx_farr_count` undefined. 근본 원인은 `static` 한정자 누락보다 깊다 — 두 TU 가
+`HexaFarrEntry` struct layout 자체를 다르게 본다: `runtime.c` (`rfc043-hexa-torch`
+HEAD) = `{double* buf; int64_t len;}` 2-field 16B (pre-RFC-040); `runtime_cuda.c`
+= `{buf,len,d_buf,loc,pinned,dirty_host,dirty_dev}` 7-field ~40B (RFC 040
+device-residency). 단순 de-`static` 시 stride 16 vs 40 → silent memory
+corruption. 진짜 fix = `rfc043-hexa-torch` 의 runtime.c 를 RFC 040 7-field farr
+table + device-residency machinery 로 동기화 — forge RFC 040 통합 작업이며
+~10 `flame-phase4d*` worktree 가 active churn 중. L1 범위 밖 + deploy-regen
+conflict-wipe 고위험.
+
+mk2 closure 의 d768 fire (114s/step) 는 branch `rfc043-flame-camp` 에서 측정 —
+그 브랜치 runtime.c 는 RFC-040-synced. `rfc043-hexa-torch` (본 브랜치) 는 더
+오래된 runtime.c → d768 CUDA fire 는 본 브랜치 runtime.c↔runtime_cuda.c ABI
+reconcile 전까지 완결 불가. **L1 verdict 는 불변** — matmul-routing
+regression-zero 는 compiled-path smoke (`forge_dispatch_matmul == farr_matmul`
+byte-eq) 로 이미 입증; d768 fire 는 동일 CPU `hexa_farr_matmul` 을 재실행할 뿐.
+
+L1 deliverable (matmul → dispatcher 라우팅) = slice 1+2 measured-PASS, slice 3
+는 본 브랜치 runtime.c desync 로 보류. RoPE seam 복원은 정당한 bounded fix 로
+land (CPU 경로 검증) — d768 fire 완결과 무관하게 트리 개선.
