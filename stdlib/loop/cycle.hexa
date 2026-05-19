@@ -241,13 +241,17 @@ fn main() {
     let argv = args()
     let n = len(argv)
 
-    // skip [interp, script] prefix — mirrors stdlib/qrng/qrng.hexa pattern
+    // skip [interp, script] prefix — mirrors stdlib/qrng/qrng.hexa pattern.
+    // Direct compiled-binary invocation (no .hexa in argv) falls back to
+    // skipping just argv[0] (the binary path).
     let mut start = 2
+    let mut found_hexa = false
     let mut i = 0
     while i < n {
-        if argv[i].ends_with(".hexa") { start = i + 1; break }
+        if argv[i].ends_with(".hexa") { start = i + 1; found_hexa = true; break }
         i = i + 1
     }
+    if found_hexa == false { start = 1 }
 
     let mut once = false
     let mut no_fire = true
