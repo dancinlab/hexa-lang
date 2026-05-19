@@ -3718,6 +3718,90 @@ files; no binary promote (`compiler/main.hexa` is the self-host compiler
 front-end, not the driver bootstrap — @D g_commit_push_deploy applies to
 `hexa_cc.c` / `hexa_v2`, neither of which this cycle touches).
 
+### 2026-05-20 — RFC 055 055-P3b — per-Local PTX register-kind classification + `.reg` bank emission
+
+Second slice of 055-P3b, building on the STMT_BR primitive. The 055-P0
+generic lowering assumed every assignment-target MIR Local was FP64
+(`%fd<id>` in a `.reg .f64` bank); that's correct for the straight-line
+FP64 arithmetic subset but breaks the moment a kernel uses an i32 index,
+a Boolean predicate, or a u64 address. This slice adds the per-Local
+PTX register-kind classification + kind-aware `.reg` bank emission.
+
+**What landed (compiler/codegen/nvptx_target.hexa, +130 lines additive):**
+- Four kind constants — `NVPTX_RKIND_{F64,U32,U64,PRED}` → `"fpr"`/
+  `"gpr32"`/`"gpr64"`/`"pred"` — used in `PReg.kind`.
+- `_nvptx_reg_name_for(kind, id)` — picks the matching 055-P0/P1 reg-
+  name helper (`_nvptx_reg_{f64,u32,u64,pred}`).
+- `_nvptx_kind_to_ptx_ty(kind)` — `.reg .<ty>` directive type tag.
+- `_nvptx_classify_local_for_stmt(s)` — infers a Local's kind from its
+  defining stmt: comparison binops (`lt`/`le`/`gt`/`ge`/`eq`/`ne`) →
+  PRED; arithmetic binops → F64; known gpu-intrinsic STMT_CALLs
+  (`gpu_thread_id_x` etc. across x/y/z axes) → U32; anything else → F64
+  (the 055-P0 backward-compat default).
+- `_nvptx_classify_locals(mfn) -> [PReg]` — the 055-P3b replacement for
+  `_nvptx_collect_f64_regs`. Walks every block/stmt in source order,
+  classifies each assignment-target Local, returns a per-Local PReg row.
+- `_nvptx_lower_func` rewired to call `_nvptx_classify_locals` for
+  `LFunc.callee_saved`. (The legacy `_nvptx_collect_f64_regs` stays as
+  a helper for any future caller that genuinely wants the FP64-only set.)
+- `_emit_ptx_func` extended — `.reg` declarations dispatch on
+  `PReg.kind` via `_nvptx_kind_to_ptx_ty` (no longer hardcoded `.f64`).
+
+**Verification — standalone (compiled path):**
+- `compiler/codegen/nvptx_lower_test.hexa` gains a second case: a
+  2-stmt synthetic MFunc with `t = a + b` (STMT_BINOP "add" → F64) and
+  `p = t < b` (STMT_BINOP "lt" → PRED). Asserts the emitted PTX
+  contains both `.reg .f64 %fd2;` (for the arithmetic dst) and
+  `.reg .pred %p3;` (for the comparison dst). **PASS**.
+- Regression — the existing 055-P0 emit_test (`nvptx_emit_test`,
+  axpb), 055-P1 vec_add_test, 055-P2 gemm_test all still **PASS**
+  post-refactor (their fixtures classify identically — all arithmetic
+  binops → FP64).
+
+**Honest scope — still 055-P3b (the rest):**
+- A real `setp.<cond>.s32` lowering of the comparison binop body (this
+  cycle classifies the dst correctly but the body lowers as a stub
+  comment — the BINOP-mnemonic table only carries add/sub/mul).
+- STMT_BR_COND uses the classified pred register for `@<pred> bra
+  $L_<target>;` — bypassed in this cycle because it pairs naturally
+  with the setp lowering.
+- STMT_CALL real lowering of the gpu intrinsic names → `mov.u32 %r<dst>,
+  <sreg>.<axis>;` (this cycle CLASSIFIES the call dst as U32 but the
+  call body is still a stub).
+- STMT_LOAD / STMT_STORE → `.global.f64` / `.shared.f64` with the
+  existing 055-P1 address-arithmetic helpers.
+
+**(a) ml_canon_path 재-land + 보존 — investigation result.** The user
+also asked to re-land + preserve the `ml_canon_path` canon fix on the
+flatten/diamond path. Investigation:
+1. The fix IS in current `self/module_loader.hexa` source (lines 102-148);
+   `ml_resolve_full` calls it (line 677) so the visited-set and read
+   path are canonical.
+2. The deployed `self/native/hexa_cc.c` carries 0 references to
+   `ml_canon_path` (grep). So the source has the fix but the deployed
+   transpiler binary doesn't — that's why `hexa build compiler/main.hexa`
+   still produces the 4 dup-symbol errors (`EdgeInfo`/`AtlasIndex`/
+   `AtlasNode`/`GradeInfo`, all from `compiler/atlas/parser.hexa` which
+   is reachable via many `../atlas/parser.hexa` import chains).
+3. The fix needed is a **bootstrap regen** (`hexa cc --regen`) — write
+   the current `.hexa` sources into a fresh `hexa_cc.c`, rebuild
+   `hexa_v2`, fixpoint-check, promote. That modifies paths in the
+   install root (NOT the worktree), touches the deployed driver every
+   parallel session uses, and the bootstrap CI is currently broken
+   on `rt_str_*` link errors (orthogonal — a runtime-mismatch on main
+   HEAD). Doing a bootstrap regen autonomously while the bootstrap CI
+   is broken and 8 sessions share the install root hits the safety
+   floor for "genuinely irreversible / ambiguous" actions — it needs
+   explicit operator authorization + a dedicated regen cycle (with
+   the `rt_str_*` runtime gap resolved first or in parallel). The
+   memory `project_compiler_selfbuild_blockers` is updated with this
+   2026-05-20 reconfirmation; the bootstrap regen is the documented
+   precondition for RFC 055 P3a's e2e.
+
+**Files** — extended only: `compiler/codegen/nvptx_target.hexa` (+~130
+lines, classification infrastructure additive), `compiler/codegen/
+nvptx_lower_test.hexa` (+new classify case).
+
 ### 2026-05-20 — RFC 055 055-P3b — generic `_nvptx_lower_func` gains the STMT_BR primitive
 
 First slice of 055-P3b (the generic MIR-walk lowering of stmt kinds

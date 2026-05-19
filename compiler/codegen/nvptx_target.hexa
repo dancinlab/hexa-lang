@@ -341,6 +341,136 @@ fn _nvptx_collect_f64_regs(mfn: MFunc) -> [i64] {
     return ids
 }
 
+// ── RFC 055 055-P3b — per-Local PTX register-kind classification ──────
+//
+// The 055-P0 generic lowering assumed every assignment-target MIR Local
+// is FP64 (`%fd<id>` in a `.reg .f64` bank). That's correct for the
+// straight-line FP64 arithmetic subset (vec-add of three [f64] arrays,
+// axpb) but breaks the moment a kernel touches the rest of the slice
+// gpu/SPEC.md §3 allows: an i64/i32 index, a bool predicate, a global-
+// memory address pointer. Each needs a different PTX register class:
+//
+//   .f64  %fd<id>   FP64 values + arithmetic
+//   .u32  %r<id>    32-bit integer indices + sreg reads (PTX %tid.x etc.)
+//   .u64  %rd<id>   64-bit addresses + address-arithmetic temporaries
+//   .pred %p<id>    Boolean predicates (comparison results, branch guards)
+//
+// The classification is INFERRED from each Local's defining statement —
+// no MIR type-id table read is required (the type table is intern'd
+// elsewhere and not visible to this file). Each rule is a single named
+// case in `_nvptx_classify_local_for_stmt`; unknown defs default to FP64
+// so the existing 055-P0 axpb / 055-P3b STMT_BR smoke fixtures continue
+// to classify identically (regression-safe).
+
+pub let NVPTX_RKIND_F64: string = "fpr"     // %fd<id>   .reg .f64
+pub let NVPTX_RKIND_U32: string = "gpr32"   // %r<id>    .reg .u32
+pub let NVPTX_RKIND_U64: string = "gpr64"   // %rd<id>   .reg .u64
+pub let NVPTX_RKIND_PRED: string = "pred"   // %p<id>    .reg .pred
+
+// _nvptx_reg_name_for — the PTX virtual-register name for (kind, id).
+// Dispatches to the 055-P0/P1 helpers (`_nvptx_reg_{f64,u32,u64,pred}`).
+fn _nvptx_reg_name_for(kind: string, id: i64) -> string {
+    if kind == NVPTX_RKIND_U32 { return _nvptx_reg_u32(id) }
+    if kind == NVPTX_RKIND_U64 { return _nvptx_reg_u64(id) }
+    if kind == NVPTX_RKIND_PRED { return _nvptx_reg_pred(id) }
+    return _nvptx_reg_f64(id)   // F64 default
+}
+
+// _nvptx_kind_to_ptx_ty — `.reg .<ty>` directive type tag for a kind.
+fn _nvptx_kind_to_ptx_ty(kind: string) -> string {
+    if kind == NVPTX_RKIND_U32 { return ".u32" }
+    if kind == NVPTX_RKIND_U64 { return ".u64" }
+    if kind == NVPTX_RKIND_PRED { return ".pred" }
+    return ".f64"
+}
+
+// _nvptx_classify_local_for_stmt — infer the PTX register kind from the
+// role of a Local's defining statement. The rules cover the gpu/SPEC.md
+// §3 allowlist + the §5 thread-index intrinsics; any unrecognised def
+// falls through to FP64 so the existing 055-P0 fixtures classify
+// identically. Order: predicate-producing binops first, then arithmetic
+// binops (FP64), then known gpu intrinsic calls (u32), then default.
+fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
+    if s.kind == STMT_BINOP {
+        // Comparison binops (gpu/SPEC.md §4 — allowed inside @gpu_*)
+        // produce a Boolean predicate; PTX represents these as a `.pred`
+        // register written by `setp.<cond>.<ty>`. Every comparison binop
+        // the MIR layer emits maps to a predicate dst here.
+        if s.op == "lt" { return NVPTX_RKIND_PRED }
+        if s.op == "le" { return NVPTX_RKIND_PRED }
+        if s.op == "gt" { return NVPTX_RKIND_PRED }
+        if s.op == "ge" { return NVPTX_RKIND_PRED }
+        if s.op == "eq" { return NVPTX_RKIND_PRED }
+        if s.op == "ne" { return NVPTX_RKIND_PRED }
+        // Arithmetic binops — the 055-P0 FP64 subset.
+        return NVPTX_RKIND_F64
+    }
+    if s.kind == STMT_CALL {
+        // gpu/SPEC.md §5 — thread-hierarchy + sync intrinsics. The
+        // thread-index reads (`gpu_thread_id_*` / `gpu_block_id_*` /
+        // `gpu_block_dim_*` / `gpu_grid_dim_*`) lower to a `mov.u32`
+        // from a PTX special register; the result is a 32-bit unsigned
+        // integer Local — `.reg .u32`. `gpu_barrier()` returns nothing
+        // (void), so it doesn't appear here as an assignment-target.
+        if s.op == "gpu_thread_id_x" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_thread_id_y" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_thread_id_z" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_block_id_x" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_block_id_y" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_block_id_z" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_block_dim_x" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_block_dim_y" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_block_dim_z" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_grid_dim_x" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_grid_dim_y" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_grid_dim_z" { return NVPTX_RKIND_U32 }
+        return NVPTX_RKIND_F64
+    }
+    // STMT_ASSIGN default + everything else default — FP64. A real type
+    // propagation pass would forward the source operand's kind; the
+    // current rules cover the gpu/SPEC.md §5 / §6.6 first-cut surface.
+    return NVPTX_RKIND_F64
+}
+
+// _nvptx_classify_locals — produce the per-function PReg roster the
+// emit pass needs to declare. Walks the MIR in source order; for each
+// assignment-target Local, infers a kind via `_nvptx_classify_local_for_stmt`
+// and emits one PReg with `name = reg name for (kind,id)` and `kind =
+// the classification`. Dedup is by-id (MIR is SSA so this is robust).
+//
+// This is the 055-P3b replacement for `_nvptx_collect_f64_regs`: the
+// older collector returns [i64] (just ids — every reg becomes .f64);
+// this returns [PReg] (kind + name preserved). _nvptx_collect_f64_regs
+// stays in place for callers that genuinely want the FP64-only roster.
+fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
+    let mut regs = []
+    let mut seen_ids = []
+    let mut bi = 0
+    while bi < len(mfn.blocks) {
+        let blk = mfn.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            let s = blk.stmts[si]
+            if s.kind == STMT_ASSIGN || s.kind == STMT_BINOP || s.kind == STMT_CALL {
+                let mut dup = false
+                let mut k = 0
+                while k < len(seen_ids) {
+                    if seen_ids[k] == s.dst.id { dup = true }
+                    k = k + 1
+                }
+                if !dup {
+                    let kind = _nvptx_classify_local_for_stmt(s)
+                    regs.push(PReg { name: _nvptx_reg_name_for(kind, s.dst.id), kind: kind })
+                    seen_ids.push(s.dst.id)
+                }
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return regs
+}
+
 // ── Codegen helpers (055-P0 — real MIR -> PTX-LIR lowering) ───
 
 // _nvptx_lower_func — lower one MIR function to a PTX-flavored LFunc.
@@ -373,15 +503,13 @@ fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
         }
         bi = bi + 1
     }
-    // Record the FP64 virtual registers as PReg rows in callee_saved so
-    // the emit pass can declare them with `.reg .f64`.
-    let reg_ids = _nvptx_collect_f64_regs(mfn)
-    let mut regs = []
-    let mut ri = 0
-    while ri < len(reg_ids) {
-        regs.push(PReg { name: _nvptx_reg_f64(reg_ids[ri]), kind: "fpr" })
-        ri = ri + 1
-    }
+    // Record the per-Local PTX virtual registers as PReg rows in
+    // callee_saved so the emit pass can declare each with the matching
+    // `.reg .<ty>` directive. 055-P3b — `_nvptx_classify_locals` picks
+    // the kind per Local (predicate / u32 / u64 / f64) from each Local's
+    // defining stmt; the 055-P0 fixtures classify identically (all FP64)
+    // because their defs are STMT_ASSIGN / STMT_BINOP{add,sub,mul}.
+    let regs = _nvptx_classify_locals(mfn)
     return LFunc {
         name: mfn.name,
         target: target,
@@ -531,24 +659,27 @@ fn _emit_ptx_instr(instr: LInstr) -> string {
 //
 // RFC 055 055-P0 — every fn is emitted as a device `.func` (the
 // `.visible .entry` kernel form + `.param` bank is 055-P1; see header).
-// The `.reg .f64` declarations come from LFunc.callee_saved (the FP64
-// virtual registers `_nvptx_lower_func` recorded there).
+// 055-P3b — `.reg` declarations are kind-aware: the LFunc.callee_saved
+// rows carry one PReg per assignment-target Local + the PTX register
+// class (`fpr` / `gpr32` / `gpr64` / `pred`) inferred by
+// `_nvptx_classify_locals`. The 055-P0 axpb fixture still emits
+// `.reg .f64` for every Local (FP64 arithmetic only); a kernel that
+// touches indexes / predicates now declares the matching bank.
 fn _emit_ptx_func(f: LFunc) -> string {
     let mut parts: [string] = []
     // 055-P0 — device-fn form. `.visible .entry` kernel form is 055-P1.
     parts.push(PTX_DIRECTIVE_FUNC + " " + f.name + "\n")
     parts.push("{\n")
-    // `.reg .f64` declarations — PTX requires every virtual register be
-    // declared before use. One declaration per FP64 register the body
-    // computes into.
+    // `.reg .<ty>` declarations, one per Local — PTX requires every
+    // virtual register be declared before use. The `<ty>` comes from
+    // the PReg.kind set by 055-P3b classification (`.f64` is the default
+    // / 055-P0 backward-compat fallback).
     let mut ri = 0
     while ri < len(f.callee_saved) {
-        parts.push("    .reg .f64 " + f.callee_saved[ri].name + ";\n")
+        let r = f.callee_saved[ri]
+        parts.push("    .reg " + _nvptx_kind_to_ptx_ty(r.kind) + " " + r.name + ";\n")
         ri = ri + 1
     }
-    // RFC 055 055-P0 — `.reg .s32` / `.reg .pred` / `.param` declarations
-    // for index registers, predicates and kernel parameters are 055-P1
-    // (they pair with control flow + the launch ABI).
     let mut i = 0
     while i < len(f.instrs) {
         parts.push(_emit_ptx_instr(f.instrs[i]) + "\n")

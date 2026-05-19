@@ -168,6 +168,89 @@ fn _test_stmt_br() -> bool {
     return ok
 }
 
+// ── Case 2 — per-Local kind classification (predicate via comparison) ──
+//
+// 055-P3b second slice: `_nvptx_classify_locals` walks the MIR and
+// classifies each Local by its defining stmt. A STMT_BINOP with op="lt"
+// (or le/gt/ge/eq/ne) produces a Boolean predicate → the dst Local is
+// classified PRED → the `.reg` declaration emits `.reg .pred %p<id>;`
+// instead of the 055-P0 default `.reg .f64`. Mixed kinds in one MFunc
+// (an arithmetic binop producing f64 + a comparison producing pred)
+// must produce the two banks separately.
+//
+// This test hand-builds:
+//   block 0: t  = a + b      // STMT_BINOP "add"  → t is .f64  (%fd2)
+//            p  = t < b      // STMT_BINOP "lt"   → p is .pred (%p3)
+//            return
+//
+// The lowering of "lt" itself is still a 055-P0 honest stub in the
+// emitted PTX text (the BINOP-mnemonic table only carries add/sub/mul);
+// what this test verifies is the CLASSIFICATION + REG-DECL machinery,
+// which is the prerequisite for a real `setp` lowering in a later
+// cycle. PASS = both `.reg .f64 %fd2;` and `.reg .pred %p3;` appear.
+
+fn _stmt_binop_cmp(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
+    // Same shape as _stmt_binop — kept as a separate helper to keep the
+    // test's intent (a COMPARISON binop) visible at the call site.
+    return _stmt_binop(dst, op, a, b)
+}
+
+fn _build_case_classify_pred() -> MModule {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let t = _local(2, "t")     // expected .reg .f64 %fd2
+    let p = _local(3, "p")     // expected .reg .pred %p3
+
+    let mut s0 = []
+    s0.push(_stmt_binop(t, "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_binop_cmp(p, "lt", _op_local(t.id), _op_local(b.id)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(t)
+    locals.push(p)
+
+    let mf = MFunc {
+        name: "cmp_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_classify.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_classify_pred() -> bool {
+    let mut ok = true
+    let mod_cmp = _build_case_classify_pred()
+    let ptx = codegen_emit_ptx_sm80(mod_cmp)
+
+    println("")
+    println("── emitted PTX (classification case, sm_80) ──")
+    println(ptx)
+
+    // F64 bank — t came from STMT_BINOP "add" → fpr → .reg .f64 %fd2
+    ok = _check(ok, ptx, ".reg .f64 %fd2",  "f64 bank for arithmetic-binop dst")
+    // PRED bank — p came from STMT_BINOP "lt" → pred → .reg .pred %p3
+    ok = _check(ok, ptx, ".reg .pred %p3",  "pred bank for comparison-binop dst")
+    // Header carry-over
+    ok = _check(ok, ptx, ".target sm_80",   "sm_80 .target directive")
+    return ok
+}
+
 // ── Driver ───────────────────────────────────────────────────────────
 
 fn main() {
@@ -176,14 +259,17 @@ fn main() {
     println("══════════════════════════════════════════════")
 
     let ok_br = _test_stmt_br()
+    let ok_cls = _test_classify_pred()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br {
-        println("PASS: RFC 055 055-P3b primitives — STMT_BR generic lowering")
+    if ok_br && ok_cls {
+        println("PASS: RFC 055 055-P3b primitives — STMT_BR + per-Local kind classification")
     } else {
         println("FAIL: RFC 055 055-P3b smoke not satisfied.")
+        if !ok_br  { println("      STMT_BR FAILED") }
+        if !ok_cls { println("      classify (pred bank) FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !ok_br { exit(1) }
+    if !(ok_br && ok_cls) { exit(1) }
 }
