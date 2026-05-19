@@ -737,6 +737,15 @@ fn parse_stmt() {
                 return parse_generate_stmt()
             }
         }
+        // `@derive(Trait1, Trait2) for Type` — peek=LParen.
+        // (Phase 4.6: Phase 2 removed parse_derive_decl on the assumption the
+        // unknown-attribute fall-through would handle @derive, but that path
+        // consumed `(Traits)` and silently dropped `for Type`, which then
+        // confused parse_stmt into starting a for-loop. Restore explicit
+        // dispatch.)
+        if attr_name == "derive" && p_peek_kind() == "LParen" {
+            return parse_derive_decl()
+        }
         // ── @contract — parse requires/ensures clauses ──────
         if attr_name == "contract" && p_peek_kind() == "LParen" {
             p_advance() // consume (
@@ -4097,6 +4106,38 @@ fn parse_macro_def() {
     }
 }
 
+// Body of `@derive(Trait1, Trait2) for TypeName` — M0 has consumed `@derive`,
+// peek is LParen. Parses `(Trait, …) for TypeName` and produces DeriveDecl.
+// (Phase 4.6 restore: Phase 2 removed parse_derive_decl on the assumption the
+// generic unknown-attribute path would handle @derive; in practice that path
+// silently dropped the `for Type` clause and left `for Type` as a malformed
+// for-loop for parse_stmt to choke on.)
+fn parse_derive_decl() {
+    p_expect("LParen")
+    let mut traits = []
+    traits.push(p_expect_ident())
+    while p_peek_kind() == "Comma" {
+        p_advance()
+        traits.push(p_expect_ident())
+    }
+    p_expect("RParen")
+    // Expect 'for' — it's the Hexa for-keyword token here, used as a
+    // syntactic connector (not a for-loop). Accept either token kind.
+    if p_peek_kind() == "For" {
+        p_advance()
+    } else {
+        p_expect_ident() // accept "for" as ident if lexer ever demotes it
+    }
+    let type_name = p_expect_ident()
+    return #{
+        "kind": "DeriveDecl", "name": type_name, "value": "", "op": "",
+        "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+        "params": "", "body": "", "args": "", "fields": "", "items": traits,
+        "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+        "target": "", "trait_name": "", "methods": ""
+    }
+}
+
 // ── theorem name { proof_body } ─────────────────────────────
 fn parse_theorem_stmt() {
     p_advance() // consume 'theorem'
@@ -4464,6 +4505,9 @@ fn ast_to_string(node, indent) {
     }
     if k == "MacroDef" {
         return pad + "MacroDef(" + node.name + ", [" + to_string(len(node.items)) + " rules])"
+    }
+    if k == "DeriveDecl" {
+        return pad + "DeriveDecl(" + node.name + ", [" + to_string(len(node.items)) + " traits])"
     }
     if k == "TheoremStmt" {
         return pad + "TheoremStmt(" + node.name + ", [" + to_string(len(node.body)) + " stmts])"
