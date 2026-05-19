@@ -6,10 +6,10 @@
 // word-splits it back into exactly the original argv — no glob expansion,
 // no C-style `/* */` comment mis-parse, no word-splitting.
 //
-// The local side uses exec_argv (self/native/exec_argv_sha256.c) — direct
-// fork/execvp, no `/bin/sh -c` — so the local shell never parses the
-// command either. The only shell in the path is the remote login shell,
-// and every token reaching it is single-quoted.
+// Every shell in the path — the local `/bin/sh -c` that launches ssh and
+// the remote login shell — receives only single-quoted literal tokens, so
+// neither can word-split, glob-expand, or comment-parse a command into
+// anything other than the argv that was passed in.
 //
 // See stdlib/cloud/design.md for the decision ledger and the L145
 // incident this module exists to make unrepresentable.
@@ -61,6 +61,18 @@ fn _join_argv(argv: [str]) -> str {
         i = i + 1
     }
     return out
+}
+
+// ── ssh transport ───────────────────────────────────────────────────
+
+// _ssh_capture — run `remote` on `host` over ssh and capture stdout+stderr.
+// `host` and `remote` are POSIX-quoted for the LOCAL shell too, so the
+// local `/bin/sh -c` (exec_capture) sees each as one literal word, exactly
+// as the remote login shell sees the inner-quoted tokens. BatchMode=yes
+// makes ssh fail fast instead of hanging on an auth prompt.
+fn _ssh_capture(host: str, remote: str) -> str {
+    let cmd = "ssh -o BatchMode=yes " + _shq(host) + " " + _shq(remote)
+    return exec_capture(cmd)
 }
 
 // ── marker parsing ───────────────────────────────────────────────────
@@ -154,7 +166,7 @@ fn cloud_run(host: str, argv: [str]) -> CloudResult {
         return _cloud_fail("cloud_run: refused — " + warns[0])
     }
     let remote = _join_argv(argv) + "; echo __CLOUD_RC__=$?"
-    let out = exec_argv(["ssh", "-o", "BatchMode=yes", host, remote])
+    let out = _ssh_capture(host, remote)
     let rc = _parse_uint_after(out, "__CLOUD_RC__=")
     let body = _strip_marker(out, "__CLOUD_RC__=")
     if rc < 0 {
@@ -181,7 +193,7 @@ fn cloud_nohup(host: str, argv: [str], logfile: str) -> CloudResult {
         return _cloud_fail("cloud_nohup: refused — " + warns[0])
     }
     let remote = "nohup " + _join_argv(argv) + " > " + _shq(logfile) + " 2>&1 & echo __CLOUD_PID__=$!"
-    let out = exec_argv(["ssh", "-o", "BatchMode=yes", host, remote])
+    let out = _ssh_capture(host, remote)
     let pid = _parse_uint_after(out, "__CLOUD_PID__=")
     let body = _strip_marker(out, "__CLOUD_PID__=")
     if pid < 0 {
@@ -199,7 +211,7 @@ fn cloud_poll(host: str, pid: int) -> int {
         return 0
     }
     let remote = "kill -0 " + str(pid) + " 2>/dev/null && echo __CLOUD_ALIVE__ || echo __CLOUD_DEAD__"
-    let out = exec_argv(["ssh", "-o", "BatchMode=yes", host, remote])
+    let out = _ssh_capture(host, remote)
     if out.index_of("__CLOUD_ALIVE__") >= 0 {
         return 1
     }
