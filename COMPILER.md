@@ -23,7 +23,7 @@ At-a-glance
   interim  : W1/W2/F speed the C path; relief only while the C fallback lives
   naming   : drop bootstrap vestiges (_v2 _c2 aprime s4) — separate cycle
   measured : clang = 80% of build wall; runtime.c recompile = 53% alone
-  status   : S1+S2 DONE — full 24k-line closure codegens in ~94s (was timeout); S3 next
+  status   : S1+S2 done · S5 wiring landed · S3 (self-host fixpoint) running
 ```
 
 ---
@@ -121,9 +121,14 @@ S4  drop the hexa_v2 dependency — tool/build_aprime.sh stage 2 uses
     aprime_cc instead of the C transpiler hexa_v2.
 
 post-fixpoint (beyond compiler/PLAN.md #18 — analysis-side continuation):
-S5  wire aprime_cc as a selectable `hexa build` backend so *user*
-    programs compile native (not just the compiler) — the step that
-    delivers the build-speed win measured in lever 0.
+S5  native `hexa build` backend — wiring DONE 2026-05-20 (commit
+    30dc7a77). HEXA_BACKEND=native selector + resolve_native_cc() added
+    to cmd_build, env-gated OFF by default (C path byte-identical when
+    unset), smoke-verified — native path builds + runs a trivial program
+    (exit 42). Native path is 2-stage (aprime_cc --emit=asm, then clang
+    assemble+link runtime.c) because `aprime_cc --emit=exec` does not
+    self-link (no runtime.o/crt) — that self-linking is an S7 item.
+    Default-on flip waits on S1-S4 (fixpoint) + S7 (native linker).
 S6  optimization passes — compiler/optimize/ is stubs today; then the
     HEXA-NATIVE-ONLY.md G-0..G-11 axis ladder (typed scalar lane A1/A2
     first) to reach runtime parity with clang -O2.
@@ -375,3 +380,10 @@ ultimately removes.
   clean (0 errors). S1's fix confirmed effective at full scale
   (lower_hir 971ms). New long pole = codegen MIR->LIR (7.4s, ~79%) but
   not a blocker. Next: S3 (assemble + link self-host fixpoint).
+- 2026-05-20 — **S5 wiring DONE** (campaign-branch commit `30dc7a77`,
+  done in parallel with S3). `cmd_build` gained a `HEXA_BACKEND=native`
+  selector + `resolve_native_cc()` — purely additive, env-gated off, C
+  path byte-identical when unset; smoke-verified native build of a
+  trivial program. Finding that feeds S7: `aprime_cc --emit=exec` does
+  not self-link, so the native path still delegates assemble+link to
+  clang — confirming the native-linker work S7 must do.
