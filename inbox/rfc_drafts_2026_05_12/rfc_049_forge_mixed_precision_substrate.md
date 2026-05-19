@@ -511,3 +511,33 @@ speedup with correct, deterministic output. The forge dispatcher
 fire-validated substrate. Remaining follow-up (separate cycles, not this
 one): RFC 050 Stage 2 (flame Phase 4-C emitting dispatch sites), and
 RFC 052's Hopper combined kernel (measured-KILL — see RFC 052 §13).
+
+### Stage 2 closure — matmul + layercast (F1, A100 fire 2026-05-19)
+
+The FFN verdict above validated one of three Stage 2 entry points; this
+fire (`r049_stage2_mm_lc.cu`) completed the other two. SSOT:
+`state/forge_rfc049_stage2_mmlc_2026_05_19/`.
+
+| Entry point | Falsifier | Verdict |
+|---|---|---|
+| `hexa_farr_matmul_bf16_gpu` | CORRECT / PERF / DET | **PASS / PASS / PASS** — 8.48× FP64 cuBLAS @ 2048³, max\|Δ\|/max\|Y\| ≤3.8e-3, within-run bit-equal |
+| `hexa_farr_layercast_linear_bf16_gpu` | CORRECT / DET | **PASS / PASS** — max\|Δ\|/max\|Y\| ≤1.8e-3 vs FP32 Sgemm, within-run bit-equal |
+| `hexa_farr_layercast_linear_bf16_gpu` | PERF | **FAIL** — 0.28× (3.5-10× slower than FP32 Sgemm) |
+
+**matmul: measured-PASS (3/3).** The device-resident `farr_bf16` matmul
+path delivers, same as the FFN.
+
+**layercast: correct + deterministic, perf-FAIL with a diagnosed cause.**
+`cublasGemmEx` with mixed input types (BF16 weight, FP32 activations) is
+unsupported in cuBLAS 12.4 — A and B must share a type — so the entry
+point's fallback fires every call: a full-weight `cudaMalloc` + BF16→FP32
+upcast kernel per forward. A correct LayerCast upcasts the stationary
+weight **once**. **Follow-up named — RFC 049 Stage 3 layercast-perf**:
+cache the FP32-upcast weight (with update-invalidation) or store the
+LayerCast weight FP32-resident. Out of scope for Stage 2.
+
+**Stage 2 overall.** The two device-resident `farr_bf16` entry points
+forge's training substrate actually uses — `matmul` (8.48×) and `ffn`
+(11.66×) — are measured-PASS, correct + deterministic. The `layercast`
+FP32-activation surface is correct + deterministic; its perf is a named
+Stage 3 follow-up. RFC 049 Stage 2 = **measured-resolved**.

@@ -271,6 +271,22 @@ mandatory (`g_blue_closed_mandate`).
 
 (append-only)
 
+### 2026-05-19 — RFC 049 Stage 2 F1 — matmul+layercast fire (matmul PASS, layercast perf-FAIL diagnosed)
+
+F1 = RFC 049 Stage 2 의 나머지 두 entry point fire-validation
+(`r049_stage2_mm_lc.cu`, A100, ~$2-3). **matmul**: `hexa_farr_matmul_bf16_gpu`
+= 8.48× FP64 cuBLAS @ 2048³, CORRECT/PERF/DET 3/3 PASS. **layercast**:
+`hexa_farr_layercast_linear_bf16_gpu` = CORRECT(max|Δ|/max|Y| ≤1.8e-3 vs FP32
+Sgemm)+DET PASS, **PERF FAIL** 0.28× (3.5-10× 느림). 근본원인 진단: cuBLAS 12.4
+가 mixed BF16×FP32 input GemmEx 미지원 (A·B 동일 타입 필수) → fallback 이 매
+forward 마다 full-weight cudaMalloc + BF16→FP32 upcast 재실행. 올바른 LayerCast
+는 stationary weight 를 1회만 upcast — named follow-up = RFC 049 Stage 3
+layercast-perf (upcast weight 캐싱 + update-invalidation, 또는 FP32-resident
+weight). Stage 2 종합: device-resident farr 경로(matmul 8.48× + ffn 11.66×,
+forge 학습 substrate 가 실제 쓰는 둘)는 measured-PASS; layercast FP32-activation
+surface 는 correct+det, perf 는 Stage 3. SSOT: `state/forge_rfc049_stage2_mmlc_2026_05_19/`
++ RFC 049 §"Stage 2 closure — matmul + layercast". commit 7ba45dcf (harness).
+
 ### 2026-05-19 — RFC 049 Stage 2 fire-validation — measured-PASS (A100, wired FFN 11.66×)
 
 RFC 049 Stage 2 의 wired BF16 substrate 를 A100 에서 fire-validate. harness
