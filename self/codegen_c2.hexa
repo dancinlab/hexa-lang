@@ -868,7 +868,7 @@ fn codegen_c2(ast) {
         } else if _gk == "ComptimeConst" || _gk == "ConstStmt" {
             _known_nonlocal_names.push(ast[_gi].name)
             _known_nonlocal_add(ast[_gi].name)
-        } else if _gk == "LetMutStmt" || _gk == "LetStmt" {
+        } else if _gk == "LetMutStmt" || _gk == "LetStmt" || _gk == "AtomicLet" {
             _known_nonlocal_names.push(ast[_gi].name)
             _known_nonlocal_add(ast[_gi].name)
         } else if _gk == "AssignStmt" {
@@ -1105,7 +1105,10 @@ fn codegen_c2(ast) {
             } else {
                 main_parts.push("    /* import: " + ast[i].name + " */\n")
             }
-        } else if k == "LetMutStmt" || k == "LetStmt" {
+        } else if k == "LetMutStmt" || k == "LetStmt" || k == "AtomicLet" {
+            // AtomicLet (`atomic let x = …`) at module scope: same node shape
+            // (name + left=init); `atomic` is an annotation — single-threaded
+            // codegen emits a normal global binding.
             // bt-53: mangle `TAG_INT`/`main`/… global names to avoid collision
             // with runtime.c's enum constants at link time.
             let _user_name = _hexa_mangle_ident(ast[i].name)
@@ -2432,7 +2435,10 @@ fn gen2_stmt(node, depth) {
     let pad = gen2_indent(depth)
     let k = node.kind
 
-    if k == "LetStmt" || k == "LetMutStmt" {
+    // AtomicLet (`atomic let x = …`) shares LetMutStmt's shape (name +
+    // left=init); single-threaded codegen treats `atomic` as an annotation
+    // and emits a normal mutable binding (no atomics infra wired).
+    if k == "LetStmt" || k == "LetMutStmt" || k == "AtomicLet" {
         let init = "hexa_void()"
         if type_of(node.left) != "string" {
             init = gen2_expr(node.left)
@@ -2915,6 +2921,25 @@ fn gen2_stmt(node, depth) {
     // pass before transpile; any UseStmt reaching codegen is leftover and
     // should be a no-op.
     if k == "UseStmt" {
+        return ""
+    }
+
+    // ── PanicStmt → print message to stderr + exit(1) ──
+    // `panic(msg)` is unrecoverable termination. node.left = the message
+    // expr. Mirrors the `eprintln` → hexa_eprint_val mapping then exits.
+    if k == "PanicStmt" {
+        let mut _pmsg = "hexa_str(\"panic\")"
+        if type_of(node.left) != "string" {
+            _pmsg = gen2_expr(node.left)
+        }
+        return pad + "{ hexa_eprint_val(hexa_str(\"panic: \")); hexa_eprint_val(" + _pmsg + "); hexa_eprint_val(hexa_str(\"\\n\")); exit(1); }\n"
+    }
+
+    // ── DropStmt → no-op ──
+    // `drop x` is an explicit-drop hint. hexa's value model is arena/GC-
+    // backed (no per-value C destructor), so an explicit drop carries no
+    // codegen — the value simply isn't referenced afterward.
+    if k == "DropStmt" {
         return ""
     }
 
