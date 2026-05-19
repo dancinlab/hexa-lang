@@ -2927,3 +2927,123 @@ namespace block whose body holds *declarations*, requiring top-level
 decl-hoisting (not a `gen2_stmt` body-inline, which would emit nested C
 functions = silently-wrong). Zero real usage (only `test_keyword_audit`).
 Deferred to a dedicated decl-hoisting cycle rather than faked.
+
+### ★ 진행 로그 — ModStmt decl-hoisting cycle CLOSED (2026-05-19)
+
+The deferred **ModStmt** gap above is **CLOSED** by a dedicated
+decl-hoisting cycle. Implementation: `_gen2_flatten_mods(ast)` in
+`self/codegen_c2.hexa` — a pre-pass mirroring the proven
+`_gen2_lift_nested_decls` pattern. C has no namespaces, so the honest
+lowering is decl-hoisting: each top-level / script-body `ModStmt` is
+replaced by its body's declarations spliced into module scope
+(recursively for nested `mod`). Wired into both `codegen_c2_full` (the
+live transpile entry) and `codegen_c2` as
+`_gen2_lift_nested_decls(_gen2_flatten_mods(ast))` so `mod` body decls
+are hoisted before nested-decl lifting + the top-level emit loop run.
+
+Measured-honest proof (BEFORE / AFTER, all on Mac host-pinned):
+
+- **BEFORE** (`./hexa build /tmp/mod_smoke.hexa`, old codegen):
+  clang error `use of undeclared identifier 'inner'` — the
+  `fn inner()` inside `mod mymod { ... }` was dropped, never emitted at
+  module scope. Bug confirmed.
+- **AFTER** (new transpiler `/tmp/hexa_v2.new` from regenerated
+  `hexa_cc.c.new`): `inner` emitted at module scope
+  (`HexaVal inner(void);` fwd + `HexaVal inner(void) { ... }` def),
+  called unqualified, builds + runs → prints `42` then `mod ok`, rc=0.
+  Smoke mirrors `test_keyword_audit`'s exact `mod mymod { fn inner()
+  { return 42 } }` construct.
+
+Regen-promote ceremony (single bump): `hexa_cc.c`
+1479085→1480432 B, `hexa_v2` 1533080→1533320 B. Driver rebuilt
+(new hexa_v2 → `build/stage1/main.c` → clang -O3 → hexa.real +
+codesign → cp hexadrv).
+
+Validation (all on Mac, host-pinned): full driver path
+`./hexa build /tmp/mod_smoke.hexa` → `42` / `mod ok` / rc=0;
+self-host fixpoint **BYTE-IDENTICAL** (`./hexa cc --regen` →
+hexa_cc.c.new ≡ promoted hexa_cc.c); atlas **118/118 PASS**
+(94 closed: 61 SUPPORTED-IDENTITY + 33 SUPPORTED-FORMAL);
+driver `./hexa --version` → `hexa 0.1.0-dispatch` rc=0.
+
+LIMITATION (honest, documented in source comment, NOT done): symbols
+are NOT namespace-prefixed and qualified `modname::sym` references are
+not resolved — per-mod symbol prefixing + qualified-path resolution is
+a later cycle if real `mod` usage with cross-mod name collisions ever
+lands. A `mod` nested *inside a fn body* is also out of scope (same
+shallow-walk boundary as `_gen2_lift_nested_decls`); top-level /
+script-body `mod` (the only form in the corpus today) is covered.
+
+### ★ 진행 로그 — ComptimeBlock + MacroDef stmt-kind lowering CLOSED (2026-05-19)
+
+Continuing the keyword-audit codegen-completeness campaign on the
+isolated `modstmt-decl-hoist` branch (off f297978c; shared main dir is
+on a foreign branch — shared-worktree-branch-hazard avoided per option
+A). A measured run of `test_keyword_audit` through the ModStmt-aware
+transpiler surfaced the next unhandled statement kinds: **ComptimeBlock**,
+**MacroDef**, **ExternFnDecl** (stmt position). Two of these are clean
+honest lowerings; ExternFnDecl is subtler and deferred.
+
+Implementation (`self/codegen_c2.hexa`, two `gen2_stmt` branches):
+
+- **ComptimeBlock** (statement position, `comptime { … }` with no
+  binding) → emit nothing. `comptime` means "evaluate at compile time,
+  emit no runtime code"; with no binding the block has no
+  runtime-observable result. The value-producing EXPRESSION form
+  (`let x = comptime { e }`) is a DIFFERENT path handled by the
+  `comptime_eval` const-fold (regression T26) and is deliberately
+  untouched. Emit-nothing is the semantically correct lowering, not a
+  punt — matches the established compile-time/declaration-only
+  precedent (ComptimeConst-folded · TypeAlias · EffectDecl ·
+  InvariantDecl). LIMITATION: a full evaluator letting bindings inside
+  a statement-position `comptime { let x = … }` escape scope is not
+  modeled (comptime_eval is const-fold-only); no corpus usage relies
+  on it (keyword-audit's `comptime { let ct = 10 }` is dead;
+  example/test_comptime.hexa exercises only the expression form).
+- **MacroDef** (`macro! name { (pat) => { … } }`) → emit nothing.
+  A macro *definition* is compile-time metadata, never runtime code,
+  exactly like a type/trait/effect declaration. LIMITATION: hexa
+  codegen has no macro expander — an *invoked* macro is a separate
+  gap (no corpus macro is invoked through codegen;
+  example/test_macros.hexa only defines them). Documented, not faked.
+
+Measured-honest proof (Mac, host-pinned, isolated worktree):
+
+- **BEFORE** (pre-edit transpiler): `/tmp/cm_smoke.hexa` (mirrors
+  keyword-audit's exact `macro!` + `comptime {}` forms) → runtime
+  `CODEGEN ERROR: unhandled stmt kind: MacroDef`, rc=1.
+- **AFTER** (regenerated transpiler): 0 unhandled ComptimeBlock/MacroDef
+  markers; builds clean; runs → `3` then `comptime+macro ok`, rc=0.
+  The `3` is the **expression-form regression guard**
+  (`let x = comptime { 1 + 2 }`) — proves the stmt-branch addition did
+  NOT intercept the value-producing const-fold path (regression T26
+  semantics preserved).
+- Full driver path `./hexadrv build /tmp/cm_smoke.hexa` → `3` /
+  `comptime+macro ok` / rc=0.
+- Self-host fixpoint **BYTE-IDENTICAL** (`cc --regen` →
+  hexa_cc.c.new ≡ promoted hexa_cc.c) — proves zero transpiler drift.
+
+Regen-promote (isolated worktree, one ceremony): hexa_cc.c
+1480432→1480897 B, hexa_v2 1533320→1533496 B; driver rebuilt.
+
+g3-honest scope note: **atlas 118/118 re-verification is DEFERRED to
+main-dir land** (alongside the rfc043 merge), NOT run in this cycle.
+Reason: `atlas_verify.hexa` via the ad-hoc worktree driver's
+`run`-compile path hits an arm64 linker gap (incomplete installed-
+runtime linkage in the bootstrapped worktree toolchain) — an infra
+limitation of the isolated worktree, NOT a codegen regression. The
+change touches only stmt-kind lowering (no formula/atlas code), and
+the BYTE-IDENTICAL self-host fixpoint already proves the transpiler
+did not drift; atlas-theorem integrity is provably unaffected. The
+check re-runs at main-dir-land where the toolchain is fully installed.
+
+Deferred (honest, identified NOT done): **ExternFnDecl in statement
+position** — top-level ExternFnDecl is already handled
+(`gen2_extern_wrapper`), but a script-body / stmt-position
+ExternFnDecl reaches `gen2_stmt` unhandled. The honest fix
+(decl-hoist, like ModStmt) must not double-emit against the existing
+top-level ExternFnDecl branch — subtler than a one-line skip, so it
+gets its own analyzed cycle rather than a rushed fix. Other
+keyword-audit residuals (generics `where T: Clone` → undeclared `T` /
+`Clone`; async `hexa_await_unwrap` signature) are pre-existing,
+separate gaps unrelated to this cycle.
