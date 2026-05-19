@@ -3175,3 +3175,21 @@ account/network. Honest scope: query/path/utf8/normalize covered; the
 suite's RFC-3986 dot-segment path *normalization* (`../`, `./`
 collapsing) is NOT implemented — out of S3/R2 ListObjectsV2 scope (keys
 have no dot-segments) and not in the patch ask.
+
+Re-verification (2026-05-19, worktree `agent-aad5ba5db26ff6b18`): the
+landing commit `c3bbdffe` documented 25/25 but was not measured in the
+worktree at commit time. Re-run measured: `HEXA_MAC_BUILD_OK=1
+HEXA_LANG=$PWD HEXA_MODULE_LOADER=<repo>/build/hexa_module_loader
+hexadrv build stdlib/aws/sigv4_test.hexa && /tmp/sigv4t` → build-exit 0,
+prints **`PASS 25/25`**, run-exit 0. The +661-line code is correct as
+committed — no source change needed. The transient "does not compile"
+report was a worktree-harness artifact: a fresh worktree lacks a
+compiled `build/hexa_module_loader`, so `cmd_build`'s flatten step
+warns `compiled module_loader not found — falling back to raw src` and
+transpiles the un-flattened `sigv4_test.hexa` (import-only) → `extern`
+stubs with no `Sigv4Header`/`Sigv4Request` constructor defs → ~10 clang
+`undeclared function` errors. Baseline `14fdca36` reproduces the same
+failure loader-less and builds clean in the main checkout (which ships
+`build/hexa_module_loader`), proving the differentiator is the compiled
+loader, not the query/UriEncode code. Pointing `HEXA_MODULE_LOADER` at
+a compiled loader restores correct flatten + 25/25. No case weakened.

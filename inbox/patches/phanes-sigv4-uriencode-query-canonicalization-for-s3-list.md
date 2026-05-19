@@ -158,3 +158,37 @@ equal to the official AWS `aws-sig-v4-test-suite` published
 - No live-R2 cross-check run here (upstream has no R2 creds); the patch
   §4 "optional live cross-check" remains phanes' to re-run `r2_list`
   against the real bucket to confirm HTTP 200 once this lands.
+
+**Measured re-verification (2026-05-19, worktree
+`agent-aad5ba5db26ff6b18`)**
+
+The original landing commit (`c3bbdffe`) was documented `25/25 PASS` but
+not measured in the worktree at commit time. Re-run, exact command +
+output (compiled path, `@D g_interp_deprecated`):
+
+```
+HEXA_MAC_BUILD_OK=1 HEXA_LANG=$PWD \
+  HEXA_MODULE_LOADER=<repo>/build/hexa_module_loader \
+  /tmp/hexadrv_fix build stdlib/aws/sigv4_test.hexa -o /tmp/sigv4t
+  → build-exit 0  (module_loader flatten → hexa_v2 → clang OK)
+/tmp/sigv4t
+  → PASS 25/25   (run-exit 0)
+```
+
+`build && run` combined exit 0. **The +661-line code is correct as
+committed** — the SigV4 `sigv4.hexa` source and the 25-case test compile
+and pass byte-eq with no source change. The earlier "does not compile"
+report was a *worktree-harness artifact*, not a code defect: a fresh
+worktree has no compiled `build/hexa_module_loader`, so `hexa build`'s
+flatten step hit `[flat] warn: compiled module_loader not found —
+falling back to raw src` and transpiled the *un-flattened*
+`sigv4_test.hexa` (which only `import`s `sigv4.hexa`). That raw unit
+emits `extern` stubs for `sigv4_*` but never defines the `Sigv4Header` /
+`Sigv4Request` struct constructors → ~10 clang `undeclared function`
+errors. The control (baseline `14fdca36` test) reproduces the *same*
+failure in the loader-less worktree and builds clean in the main
+checkout — confirming the differentiator is the presence of the
+compiled `module_loader`, not the new query/UriEncode code. Building
+with `HEXA_MODULE_LOADER` pointed at any compiled loader (the main
+checkout ships one at `build/hexa_module_loader`) restores correct
+flatten and 25/25. No test case was deleted or weakened.
