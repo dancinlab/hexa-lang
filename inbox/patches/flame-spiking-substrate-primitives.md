@@ -6,7 +6,7 @@ design (2026-05-20). anima edits NO flame/hexa-lang source per
 patch-request only. Precedent: `flame-path-a-dual-head-and-multiterm-grad.md`
 (§71, same downstream-consumer posture).
 
-**Status**: `request — drafted 2026-05-20, awaiting upstream triage`.
+**Status**: `implemented 2026-05-20 — stdlib/flame/spiking_lib.hexa + flame_spiking_test.hexa (F-SPIKE-1..4 4/4 PASS, hexa build clean). PR on branch flame-spiking-substrate-primitives. Pure-hexa stdlib lib, NO builtin/codegen change.`.
 
 ## Problem
 
