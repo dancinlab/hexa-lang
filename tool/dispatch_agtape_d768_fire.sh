@@ -184,6 +184,8 @@ $SCP_CMD "$TRAINER_C"      "root@$SSH_HOST:$REMOTE_WORK/trainer.c"
 $SCP_CMD "$RUNTIME_C"      "root@$SSH_HOST:$REMOTE_WORK/self/runtime.c"
 $SCP_CMD "$RUNTIME_HI"     "root@$SSH_HOST:$REMOTE_WORK/self/runtime_hi_gen.c"
 $SCP_CMD "$RUNTIME_CUDA_C" "root@$SSH_HOST:$REMOTE_WORK/self/cuda/runtime_cuda.c"
+# RFC 049 Stage 2: runtime_cuda.c #includes runtime_bf16.c (BF16 substrate).
+$SCP_CMD "${REPO_ROOT}/self/cuda/runtime_bf16.c" "root@$SSH_HOST:$REMOTE_WORK/self/cuda/runtime_bf16.c"
 $SCP_CMD "${REPO_ROOT}/self/runtime.h" "root@$SSH_HOST:$REMOTE_WORK/self/runtime.h"
 # RFC 050: runtime.c #includes forge/forge_tier_v1.c (the dispatcher) —
 # ship it + its header so the unconditional include resolves on the pod.
