@@ -7316,6 +7316,165 @@ HexaVal hexa_is_alphanumeric(HexaVal a) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+ * RFC 041 Phase B — forge RoPE wrappers (restored 2026-05-19).
+ *
+ * Originally landed in commit 9582a395; wiped from runtime.c by the
+ * 3220ffc5 deploy-regen. The codegen (codegen_c2.hexa) emits
+ * `hexa_farr_rope_gpu(...)` for the `farr_rope_gpu` builtin, and
+ * runtime_cuda.c defines `_hx_cuda_farr_rope_gpu` — but the bridging
+ * wrappers + CPU fallback below were lost, breaking every
+ * flame d768 ag_tape build (trainer.c: implicit-decl of
+ * hexa_farr_rope_gpu). Restored verbatim from 9582a395.
+ * ═══════════════════════════════════════════════════════════════════ */
+extern int  _hx_cuda_farr_rope_gpu(int64_t t_id, int64_t cos_id,
+                                    int64_t sin_id, int64_t T,
+                                    int64_t nheads, int64_t hd,
+                                    int64_t out_id);
+extern int  _hx_cuda_farr_rope_bwd_gpu(int64_t t_id, int64_t cos_id,
+                                        int64_t sin_id, int64_t T,
+                                        int64_t nheads, int64_t hd,
+                                        int64_t out_id);
+// _hx_farr_rope_cpu(t_id, cos, sin, T, nheads, hd, is_bwd) -> new
+// farr_id [T·nheads·hd]. Rotary position embedding (RFC 041 Phase B
+// completion). Consumes PRECOMPUTED cos/sin tables [T·hd] — does NOT
+// recompute angles. Mirrors flame decoder_block_lib.hexa §3 (fwd) /
+// §3rev (bwd); CPU reference tool/flame_phase4d6_block_{fwd,bwd}_
+// primitive.c. Tensor T_buf row-major [T·nheads·hd], row for (t,hh)
+// at (t·nheads+hh)·hd; cos/sin [T·hd] indexed bse+c, bse=t·hd.
+//   fwd:  rh_c = (c<half)? -x[row+half+c] : x[row+c-half]
+//         out  = x[row+c]·cos[bse+c] + rh_c·sin[bse+c]
+//   bwd:  gs   = (c<half)?  dx[row+half+c]·sin[bse+half+c]
+//                        : -dx[row+c-half]·sin[bse+c-half]
+//         out  = dx[row+c]·cos[bse+c] + gs
+// Pure per-element (out depends only on row elements c and c±half) —
+// the GPU kernel reads from a separate input buffer so it is byte-eq.
+// -1 err.
+static int64_t _hx_farr_rope_cpu(int64_t t_id, int64_t cos_id,
+                                 int64_t sin_id, int64_t T,
+                                 int64_t nheads, int64_t hd,
+                                 int is_bwd) {
+    if (t_id < 0   || t_id >= _hx_farr_count)   return -1;
+    if (cos_id < 0 || cos_id >= _hx_farr_count) return -1;
+    if (sin_id < 0 || sin_id >= _hx_farr_count) return -1;
+    if (T <= 0 || nheads <= 0 || hd <= 0)       return -1;
+    if ((hd & 1) != 0)                          return -1;
+    int64_t total = T * nheads * hd;
+    HexaFarrEntry* te = &_hx_farr_table[t_id];
+    HexaFarrEntry* ce = &_hx_farr_table[cos_id];
+    HexaFarrEntry* se = &_hx_farr_table[sin_id];
+    if (!te->buf || !ce->buf || !se->buf)       return -1;
+    if (te->len < total)                        return -1;
+    if (ce->len < T * hd || se->len < T * hd)   return -1;
+    HexaVal out_h = hexa_farr_zeros(hexa_int(total));
+    int64_t out_id = HX_INT(out_h);
+    if (out_id < 0 || out_id >= _hx_farr_count) return -1;
+    te = &_hx_farr_table[t_id];
+    ce = &_hx_farr_table[cos_id];
+    se = &_hx_farr_table[sin_id];
+    HexaFarrEntry* oe = &_hx_farr_table[out_id];
+    if (!te->buf || !ce->buf || !se->buf || !oe->buf) return -1;
+    if (oe->len < total)                        return -1;
+    const double* X   = te->buf;
+    const double* COS = ce->buf;
+    const double* SIN = se->buf;
+    double*       O   = oe->buf;
+    int64_t half = hd / 2;
+    for (int64_t t = 0; t < T; t++) {
+        int64_t bse = t * hd;
+        for (int64_t hh = 0; hh < nheads; hh++) {
+            int64_t row = (t * nheads + hh) * hd;
+            for (int64_t c = 0; c < hd; c++) {
+                if (is_bwd) {
+                    double gs = (c < half)
+                        ? (X[row + half + c] * SIN[bse + half + c])
+                        : (0.0 - X[row + c - half] * SIN[bse + c - half]);
+                    O[row + c] = X[row + c] * COS[bse + c] + gs;
+                } else {
+                    double rh_c = (c < half)
+                        ? (0.0 - X[row + half + c])
+                        : X[row + c - half];
+                    O[row + c] = X[row + c] * COS[bse + c]
+                               + rh_c * SIN[bse + c];
+                }
+            }
+        }
+    }
+    return out_id;
+}
+
+// farr_rope_gpu(t, cos, sin, T, nheads, hd) -> int new farr_id
+// [T·nheads·hd]. Rotary position embedding forward. 6-arg → past the
+// 4-arg hexa_callN ceiling, so it gets a bare direct-C entry point
+// (same pattern as farr_adamw_step_gpu). On HEXA_CUDA: wired to
+// _hx_cuda_farr_rope_gpu (1-D grid-stride per-element kernel, byte-eq
+// — F-RFC041-ROPE-EXACT |Δ|=0, no reduction). No-CUDA: CPU fallback.
+HexaVal hexa_farr_rope_gpu(HexaVal t_v, HexaVal cos_v, HexaVal sin_v,
+                           HexaVal T_v, HexaVal nh_v, HexaVal hd_v) {
+    int64_t t_id   = hexa_as_num(t_v);
+    int64_t cos_id = hexa_as_num(cos_v);
+    int64_t sin_id = hexa_as_num(sin_v);
+    int64_t T      = hexa_as_num(T_v);
+    int64_t nheads = hexa_as_num(nh_v);
+    int64_t hd     = hexa_as_num(hd_v);
+#ifdef HEXA_CUDA
+    if (T <= 0 || nheads <= 0 || hd <= 0) return hexa_int(-1);
+    if (t_id < 0   || t_id >= _hx_farr_count)   return hexa_int(-1);
+    if (cos_id < 0 || cos_id >= _hx_farr_count) return hexa_int(-1);
+    if (sin_id < 0 || sin_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(T * nheads * hd));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_rope_gpu(t_id, cos_id, sin_id, T, nheads, hd,
+                                    out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_rope_cpu(t_id, cos_id, sin_id, T, nheads,
+                                      hd, 0));
+#endif
+}
+
+// farr_rope_bwd_gpu(t, cos, sin, T, nheads, hd) -> int new farr_id.
+// Rotary position embedding backward (inverse rotation — transpose of
+// the fwd rotation matrix). On HEXA_CUDA: _hx_cuda_farr_rope_bwd_gpu
+// (byte-eq — F-RFC041-ROPE-BWD-EXACT |Δ|=0). No-CUDA: CPU fallback.
+HexaVal hexa_farr_rope_bwd_gpu(HexaVal t_v, HexaVal cos_v, HexaVal sin_v,
+                               HexaVal T_v, HexaVal nh_v, HexaVal hd_v) {
+    int64_t t_id   = hexa_as_num(t_v);
+    int64_t cos_id = hexa_as_num(cos_v);
+    int64_t sin_id = hexa_as_num(sin_v);
+    int64_t T      = hexa_as_num(T_v);
+    int64_t nheads = hexa_as_num(nh_v);
+    int64_t hd     = hexa_as_num(hd_v);
+#ifdef HEXA_CUDA
+    if (T <= 0 || nheads <= 0 || hd <= 0) return hexa_int(-1);
+    if (t_id < 0   || t_id >= _hx_farr_count)   return hexa_int(-1);
+    if (cos_id < 0 || cos_id >= _hx_farr_count) return hexa_int(-1);
+    if (sin_id < 0 || sin_id >= _hx_farr_count) return hexa_int(-1);
+    HexaVal out_h = hexa_farr_zeros(hexa_int(T * nheads * hd));
+    int64_t out_id = hexa_as_num(out_h);
+    if (out_id < 0) return hexa_int(-1);
+    int rc = _hx_cuda_farr_rope_bwd_gpu(t_id, cos_id, sin_id, T, nheads,
+                                        hd, out_id);
+    if (rc != 0) return hexa_int(-1);
+    return hexa_int(out_id);
+#else
+    return hexa_int(_hx_farr_rope_cpu(t_id, cos_id, sin_id, T, nheads,
+                                      hd, 1));
+#endif
+}
+
+// 6-arg bare direct-C entry points (past the hexa_callN ceiling).
+HexaVal farr_rope_gpu(HexaVal t, HexaVal cos, HexaVal sin,
+                      HexaVal T, HexaVal nh, HexaVal hd) {
+    return hexa_farr_rope_gpu(t, cos, sin, T, nh, hd);
+}
+HexaVal farr_rope_bwd_gpu(HexaVal t, HexaVal cos, HexaVal sin,
+                          HexaVal T, HexaVal nh, HexaVal hd) {
+    return hexa_farr_rope_bwd_gpu(t, cos, sin, T, nh, hd);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
  * forge_tier_v1 — flame <-> forge integration ABI (RFC 050 Stage A).
  *
  * v1 dispatch surface: forge_api_version_v1, forge_tier_dispatch_v1,

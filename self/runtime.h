@@ -802,6 +802,24 @@ HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
 HexaVal hexa_farr_copy(HexaVal src_v);                                 /* runtime.c — RFC 033 */
 HexaVal hexa_farr_add_gaussian_noise(HexaVal target_v, HexaVal sigma_v); /* runtime.c — RFC 033 */
 
+/* ── RFC 041 Phase B forge RoPE — 6-arg direct wrappers ─────────────
+ * codegen_c2.hexa lowers the `farr_rope_gpu`/`farr_rope_bwd_gpu`
+ * builtins to direct `hexa_farr_rope_*_gpu` calls (6-arg, past the
+ * hexa_callN ceiling). The generated user.c TU only #include
+ * "runtime.h", so the prototype must be visible — without it the
+ * d768 ag_tape trainer.c implicit-int mis-inits `HexaVal q = ...`.
+ * CUDA build → _hx_cuda_farr_rope_gpu kernel; no-CUDA → byte-identical
+ * _hx_farr_rope_cpu fallback. Body (SSOT): self/runtime.c. The bare
+ * `farr_rope_gpu` forms are the older bootstrap-seam path. */
+HexaVal hexa_farr_rope_gpu(HexaVal t, HexaVal cos, HexaVal sin,
+                           HexaVal T, HexaVal nh, HexaVal hd);          /* runtime.c — RFC 041 */
+HexaVal hexa_farr_rope_bwd_gpu(HexaVal t, HexaVal cos, HexaVal sin,
+                               HexaVal T, HexaVal nh, HexaVal hd);      /* runtime.c — RFC 041 */
+HexaVal farr_rope_gpu(HexaVal t, HexaVal cos, HexaVal sin,
+                      HexaVal T, HexaVal nh, HexaVal hd);               /* runtime.c — RFC 041 seam */
+HexaVal farr_rope_bwd_gpu(HexaVal t, HexaVal cos, HexaVal sin,
+                          HexaVal T, HexaVal nh, HexaVal hd);           /* runtime.c — RFC 041 seam */
+
 /* ── RFC 050 L1 slice 1: forge dispatcher callable from hexa ────────
  * codegen_c2.hexa lowers the 5-arg `forge_dispatch_matmul` builtin to a
  * direct `hexa_forge_dispatch_matmul` call. It packs a ForgeShapeInfo +
