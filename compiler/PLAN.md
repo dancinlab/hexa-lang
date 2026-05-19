@@ -3504,3 +3504,122 @@ native-codegen 캠페인 S5 — `hexa build` 가 native compiler (`aprime_cc`,
   native 다" 가 아니라 "native-backend wiring landed, default off, trivial
   smoke 검증" 으로 정직 보고.
 - **binary promote**: 미수행 (worktree branch commit only).
+
+
+### 2026-05-20 — S7-P0 cycle 1: Mach-O header + 4 load commands 직렬화 (F-P0-OBJEQ-HEADER PASS)
+
+RFC 063 § P0 의 첫 substep — `compiler/emit/macho_arm64.hexa` 의 `MachoArm64Obj`
+를 진짜 byte stream 으로 emit 하는 `serialize()` 함수 land. 빈 `__text` / 빈
+relocs / 빈 symbols / 빈 strtab 까지만 — code/symbol/reloc 직렬화 자체는
+다음 cycle 의 baton.
+
+**한 줄**: 288 byte well-formed Mach-O `.o` 가 hexa-side `serialize()` 만으로
+생성되고, `LC_SEGMENT_64` + `section_64 __text` 구조가 `clang -c -arch arm64`
+oracle 과 **byte-eq 일치** (RFC 063 strip-nondet 명시 대상인 `LC_BUILD_VERSION` +
+1 placeholder symbol 제외).
+
+**변경 파일**:
+
+- `compiler/emit/macho_arm64.hexa` — 새 함수 8개:
+  - `_u32_le(out, v)` · `_u64_le(out, v)` · `_zero_n(out, n)` · `_str_fixed(out, s, n)`
+    — little-endian byte writers + fixed-name padding (`segname` / `sectname`
+    의 16-byte field 용).
+  - `_emit_mach_header(out, ncmds, sizeofcmds, flags)` — 32-byte `mach_header_64`.
+  - `_emit_seg64_cmd(out, segname, vmaddr, vmsize, fileoff, filesize, nsects)`
+    — 72-byte segment LC (sections 미포함, caller 가 `_emit_section_64` 로
+    follow up).
+  - `_emit_section_64(out, sectname, segname, addr, size, offset, align,
+    reloff, nreloc, flags)` — 80-byte section header.
+  - `_emit_symtab_cmd(out, symoff, nsyms, stroff, strsize)` — 24-byte LC.
+  - `_emit_dysymtab_cmd(out)` — 80-byte LC (18 u32 zeros for empty MH_OBJECT).
+  - `serialize(obj: MachoArm64Obj) -> [Int]` — top-level entry. layout 계산
+    (data_off = 32 + sizeofcmds = 288 · reloff = data_off + 4-aligned text ·
+    symoff = reloff + 8·nreloc · stroff = symoff + 16·nsyms) + 모든 LC + 텍스트/
+    relocs/symbols/strtab 버퍼 verbatim concat.
+- `compiler/test/macho_p0_corpus/emit_empty.hexa` — falsifier driver. 빈
+  `MachoArm64Obj` 만들어 `serialize()` 호출 + `write_bytes(/tmp/...ours.o,
+  bytes)`. import `../../emit/macho_arm64.hexa`.
+- `compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_HEADER.hexa` — hexa-native
+  end-to-end falsifier runner. `exec_capture` 로 (1) emit_empty 빌드+실행,
+  (2) `xcrun clang -c -arch arm64 /tmp/empty.s` oracle, (3) 두 `.o` 의
+  `otool -l` 출력 슬라이스 → `LC_SEGMENT_64` 영역만 비교. PASS/FAIL exit
+  code 명시. **hexa-first**: 처음에 .sh 로 작성됐던 것을 PreToolUse hook 알림
+  받고 .hexa 로 포팅 — `exec_capture` builtin (codegen wired) 으로 동일 shell
+  orchestration 을 hexa-side 로 가져옴 (외부 셸 dep 0).
+
+**empty-input corner case mirror (clang 호환)**: 초기 build 결과 5 필드가
+empty-text 코너에서 clang oracle 과 미세 차이 (의미적 동등, 인덱스 셋업
+관습 다름). 1-line conditional 4개로 정렬 — `mh_flags=0` when text_len==0
+(SUBSECTIONS_VIA_SYMBOLS off 이는 코드 없을 때만), `sect_align=0` (=2^0=1)
+when empty (코드 들어가는 다음 cycle 에서 4-byte align 으로 복귀), `sect_flags`
+의 `S_ATTR_SOME_INSTRUCTIONS` (0x400) bit conditional, `sect_reloff=0` when
+no relocs. 두 번째 측정 → 모든 segment/section 필드 일치.
+
+**측정 결과 (arm64-Mac local)**:
+
+```
+$ hexa build compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_HEADER.hexa \
+       -o /tmp/run_F_P0_OBJEQ_HEADER
+OK: built /tmp/run_F_P0_OBJEQ_HEADER
+$ /tmp/run_F_P0_OBJEQ_HEADER
+F-P0-OBJEQ-HEADER PASS — LC_SEGMENT_64 + __text section byte-eq
+  ours: 288 bytes (/tmp/macho_p0_cycle1.ours.o)
+  ref:  336 bytes (/tmp/macho_p0_cycle1.ref.o)  -- delta = LC_BUILD_VERSION + 1 placeholder symbol
+exit=0
+```
+
+`otool -hV` 필드 일치 (post empty-corner-case fix): magic=MH_MAGIC_64 ·
+cputype=ARM64 · cpusubtype=ALL · filetype=OBJECT · flags=0x00000000. 차이는
+ncmds (3 vs 4) + sizeofcmds (256 vs 280) — 정확히 LC_BUILD_VERSION 24 byte
+(RFC 063 § P0 의 strip-nondet 명시 대상; 우리 emit 하지 않음).
+
+`otool -l` LC_SEGMENT_64 영역 field diff = **empty** (= 동일):
+cmdsize 152 · segname `""` · vmaddr 0x0 · vmsize 0x0 · maxprot/initprot 0x7 ·
+nsects 1 · flags 0 · sectname `__text` · segname `__TEXT` · addr 0x0 · size 0x0 ·
+align 2^0(1) · reloff 0 · nreloc 0 · flags 0x80000000 · reserved1/2 0 — 모두
+oracle 과 일치 (fileoff/offset 의 `+24` 정규화 후).
+
+**HONEST SCOPE (g3, over-claim 0)**:
+
+- 본 cycle 의 falsifier 는 **헤더-단독** sub-falsifier `F-P0-OBJEQ-HEADER`
+  (cycle 1). RFC 063 의 F-P0-OBJEQ 풀버전 (trivial / fib / while / if
+  corpus on real code) 은 **NOT 통과** — code bytes / symbol records /
+  relocations 가 아직 직렬화 안됨.
+- 빈 `__text` + 빈 symbols 라 `LC_DYSYMTAB` 의 placeholder index 들 (clang
+  oracle 의 `nlocalsym=1` 등) 과 정렬 안 됨 — 이건 다음 cycle 의 symbol-record
+  emit 에서 자연스럽게 맞춰질 것.
+- `LC_BUILD_VERSION` 미emit — RFC 063 § P0 strip-nondet 명시 대상이지만,
+  완전한 oracle 일치 위해 향후 cycle 에서 추가 가능 (8-line LC).
+- `compiler/main.hexa` 와이어링 (`--emit=obj` arm + LIR → `MachoArm64Obj`
+  population pass) 은 본 cycle 외. scaffold 의 `emit_macho_arm64()` stub 은
+  여전히 `println("SCAFFOLD")` — `serialize()` 가 자족적 entry 라 driver 와이어링과
+  독립적으로 falsifiable.
+
+**다음 cycle 의 baton** (RFC 063 § P0 nearest sub-step 순서):
+
+1. **Code byte emission** — `compiler/codegen/arm64_darwin.hexa::LModule`
+   walker → 인스트럭션 당 `encode_arm64_insn(op, ops)` (이미 16 rules
+   landed) 호출 → `text.push(word_byte_le_4)` 4 회. branch/ADRP+ADD pair
+   별로 `relocs.push(Arm64Reloc{...})`.
+2. **Symbol records** — `MachoSymbol` → `nlist_64` (16 bytes: strx u32,
+   type u8, sect u8, desc u16, value u64). string table 은 NUL-terminated
+   UTF-8, index 0 은 빈 문자열 (Mach-O 관습).
+3. **Relocation records** — `Arm64Reloc` → 8-byte `relocation_info`
+   (offset i32 + info bitfield: type 4b · pcrel 1b · length 2b · ext 1b ·
+   sym_idx 24b).
+4. **LC_BUILD_VERSION** (선택) — oracle 완전 일치 위해.
+5. **`compiler/main.hexa` 와이어링** — `--emit=obj` arm 추가, 기존
+   `as`/`ld` 분기 옆에. `aprime_cc --emit=obj T.hexa → T.ours.o` 가
+   F-P0-OBJEQ corpus (trivial/fib/while/if) 의 oracle (`clang -c
+   T.s -o T.ref.o`) 과 byte-eq 까지.
+
+**RFC 063 phasing 진척**: P0 (Mach-O arm64 obj emitter) 의 5 substep 중
+**1 (=Mach-O 직렬화)** land. 잔여: code bytes + symbols + relocs + main.hexa
+와이어링 + corpus full-pass. RFC 추산 P0 = 3-5 cycles → 본 cycle 이 그 안에서
+첫 cycle.
+
+**cc --regen / binary promote**: 미수행. `compiler/emit/macho_arm64.hexa` +
+falsifier `.hexa` 는 NOT yet `compiler/main.hexa` 에서 import — `hexa_cc.c`
+SSOT 미영향 (@D g_commit_push_deploy 의 "compiler/main.hexa 소스 변경 시
+필수" 게이트 미발동). 와이어링은 cycle 5 (`--emit=obj` arm) 에서 driver-source
+변경 + cc --regen + binary promote.

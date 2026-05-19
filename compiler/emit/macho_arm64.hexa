@@ -294,6 +294,313 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Mach-O byte-level serializer — RFC 063 § P0, cycle 1
+// ─────────────────────────────────────────────────────────────────
+//
+// `serialize(obj)` lays out the in-memory `MachoArm64Obj` into a flat
+// `[Int]` byte stream suitable for `write_bytes(path, ...)`. Layout:
+//
+//   [ mach_header_64                                  ]   32 B
+//   [ LC_SEGMENT_64 __TEXT (+ section_64 __text)      ]  152 B
+//   [ LC_SYMTAB                                       ]   24 B
+//   [ LC_DYSYMTAB                                     ]   80 B
+//   [ __text bytes                                    ]   N B   (4-aligned)
+//   [ relocation entries (Arm64Reloc records)         ]   8·R B
+//   [ symbol table (nlist_64 records)                 ]  16·S B
+//   [ string table                                    ]   T B
+//
+// For an empty object (cycle 1 falsifier) the trailing sections are
+// 0 bytes and the file ends at offset 288 (header + 4 LCs).
+//
+// All fields are little-endian per Mach-O on darwin-arm64.
+
+// Append little-endian u32 to `out` (low byte first). Caller passes
+// already-masked value; we mask defensively (& 0xFF per byte) so an
+// `i64` with the upper 32 bits non-zero does not corrupt the stream.
+fn _u32_le(out: [Int], v: Int) {
+    out.push(v & 0xFF)
+    out.push((v >> 8) & 0xFF)
+    out.push((v >> 16) & 0xFF)
+    out.push((v >> 24) & 0xFF)
+}
+
+// Append little-endian u64 to `out`. `v` is `Int` (i64 in hexa-lang);
+// negative values are written as their two's-complement bit pattern.
+fn _u64_le(out: [Int], v: Int) {
+    out.push(v & 0xFF)
+    out.push((v >> 8) & 0xFF)
+    out.push((v >> 16) & 0xFF)
+    out.push((v >> 24) & 0xFF)
+    out.push((v >> 32) & 0xFF)
+    out.push((v >> 40) & 0xFF)
+    out.push((v >> 48) & 0xFF)
+    out.push((v >> 56) & 0xFF)
+}
+
+// Append `n` zero bytes (used for fixed-size name fields, alignment
+// padding, and the trailing reserved word in `mach_header_64`).
+fn _zero_n(out: [Int], n: Int) {
+    let mut i = 0
+    while i < n {
+        out.push(0)
+        i = i + 1
+    }
+}
+
+// Append the ASCII bytes of `s`, then zero-pad to total length `n`.
+// Mach-O `segname` / `sectname` fields are exactly 16 bytes — names
+// shorter than 16 are zero-filled, names longer than 16 are truncated
+// (the Mach-O spec mandates 16-byte field, and the system tools rely
+// on it).
+fn _str_fixed(out: [Int], s: String, n: Int) {
+    let slen = len(s)
+    let mut i = 0
+    while i < n {
+        if i < slen {
+            out.push(char_code(s, i) & 0xFF)
+        } else {
+            out.push(0)
+        }
+        i = i + 1
+    }
+}
+
+// Emit `mach_header_64` (32 bytes). Per `<mach-o/loader.h>`:
+//
+//     struct mach_header_64 {
+//         uint32_t magic;        // MH_MAGIC_64 (0xfeedfacf)
+//         uint32_t cputype;      // CPU_TYPE_ARM64 (0x0100000c)
+//         uint32_t cpusubtype;   // CPU_SUBTYPE_ARM64_ALL (0)
+//         uint32_t filetype;     // MH_OBJECT (1)
+//         uint32_t ncmds;        // load-command count
+//         uint32_t sizeofcmds;   // total LC bytes
+//         uint32_t flags;        // MH_SUBSECTIONS_VIA_SYMBOLS (0x2000)
+//         uint32_t reserved;     // 64-bit reserved word, always 0
+//     };
+fn _emit_mach_header(out: [Int], ncmds: Int, sizeofcmds: Int, flags: Int) {
+    _u32_le(out, MH_MAGIC_64)
+    _u32_le(out, CPU_TYPE_ARM64)
+    _u32_le(out, CPU_SUBTYPE_ARM64_ALL)
+    _u32_le(out, MH_OBJECT)
+    _u32_le(out, ncmds)
+    _u32_le(out, sizeofcmds)
+    _u32_le(out, flags)
+    _u32_le(out, 0)        // reserved
+}
+
+// Emit `LC_SEGMENT_64` load command without its section table.
+// Per `<mach-o/loader.h>`:
+//
+//     struct segment_command_64 {
+//         uint32_t cmd;          // LC_SEGMENT_64 (0x19)
+//         uint32_t cmdsize;      // 72 + 80*nsects
+//         char     segname[16];  // "" for MH_OBJECT (single unnamed seg)
+//         uint64_t vmaddr;       // 0 (relocatable)
+//         uint64_t vmsize;       // sum of section sizes
+//         uint64_t fileoff;      // header_size + sizeofcmds
+//         uint64_t filesize;     // same as vmsize for relocatable
+//         int32_t  maxprot;      // VM_PROT_READ|WRITE|EXECUTE = 7
+//         int32_t  initprot;     // same
+//         uint32_t nsects;       // count of section_64 records that follow
+//         uint32_t flags;        // 0
+//     };
+//
+// Caller follows up with one `_emit_section_64` per section.
+fn _emit_seg64_cmd(out: [Int],
+                   segname: String,
+                   vmaddr: Int, vmsize: Int,
+                   fileoff: Int, filesize: Int,
+                   nsects: Int) {
+    let cmdsize = 72 + 80 * nsects
+    _u32_le(out, LC_SEGMENT_64)
+    _u32_le(out, cmdsize)
+    _str_fixed(out, segname, 16)
+    _u64_le(out, vmaddr)
+    _u64_le(out, vmsize)
+    _u64_le(out, fileoff)
+    _u64_le(out, filesize)
+    _u32_le(out, 7)            // maxprot
+    _u32_le(out, 7)            // initprot
+    _u32_le(out, nsects)
+    _u32_le(out, 0)            // flags
+}
+
+// Emit one `section_64` (80 bytes). Per `<mach-o/loader.h>`:
+//
+//     struct section_64 {
+//         char     sectname[16];
+//         char     segname[16];
+//         uint64_t addr;
+//         uint64_t size;
+//         uint32_t offset;
+//         uint32_t align;        // log2(byte alignment); 2 == 4-byte
+//         uint32_t reloff;
+//         uint32_t nreloc;
+//         uint32_t flags;
+//         uint32_t reserved1;
+//         uint32_t reserved2;
+//         uint32_t reserved3;
+//     };
+fn _emit_section_64(out: [Int],
+                    sectname: String, segname: String,
+                    addr: Int, size: Int,
+                    offset: Int, align: Int,
+                    reloff: Int, nreloc: Int,
+                    flags: Int) {
+    _str_fixed(out, sectname, 16)
+    _str_fixed(out, segname, 16)
+    _u64_le(out, addr)
+    _u64_le(out, size)
+    _u32_le(out, offset)
+    _u32_le(out, align)
+    _u32_le(out, reloff)
+    _u32_le(out, nreloc)
+    _u32_le(out, flags)
+    _u32_le(out, 0)            // reserved1
+    _u32_le(out, 0)            // reserved2
+    _u32_le(out, 0)            // reserved3
+}
+
+// Emit `LC_SYMTAB` (24 bytes). Per `<mach-o/loader.h>`:
+//
+//     struct symtab_command {
+//         uint32_t cmd;          // LC_SYMTAB (0x02)
+//         uint32_t cmdsize;      // 24
+//         uint32_t symoff;       // file offset of nlist_64[]
+//         uint32_t nsyms;
+//         uint32_t stroff;       // file offset of string table
+//         uint32_t strsize;
+//     };
+fn _emit_symtab_cmd(out: [Int],
+                    symoff: Int, nsyms: Int,
+                    stroff: Int, strsize: Int) {
+    _u32_le(out, LC_SYMTAB)
+    _u32_le(out, 24)
+    _u32_le(out, symoff)
+    _u32_le(out, nsyms)
+    _u32_le(out, stroff)
+    _u32_le(out, strsize)
+}
+
+// Emit `LC_DYSYMTAB` (80 bytes). Per `<mach-o/loader.h>`. For an
+// `MH_OBJECT` with no defined dynamic symbols we still emit this LC
+// because `ld64` (and `otool`) expects it; all 12 index/count pairs
+// are zero plus the trailing 5 indirect/external tables — all zero
+// for an empty object.
+fn _emit_dysymtab_cmd(out: [Int]) {
+    _u32_le(out, LC_DYSYMTAB)
+    _u32_le(out, 80)
+    // ilocalsym .. extreloff/nextrel + locreloff/nlocrel — 18 u32 zeros.
+    let mut i = 0
+    while i < 18 {
+        _u32_le(out, 0)
+        i = i + 1
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// `serialize(obj)` — top-level entry, RFC 063 § P0 cycle 1
+// ─────────────────────────────────────────────────────────────────
+//
+// Returns the flat byte stream as `[Int]` (each value in 0..=255).
+// Cycle 1 scope: header + 4 load commands. Section data, symbol
+// records, and relocations follow `obj`'s buffers verbatim — the
+// scaffold already exposes them as `text` / `relocs` / `symbols` /
+// `strtab`. With those buffers empty (e.g. an empty input program)
+// `serialize` produces a 288-byte well-formed Mach-O `.o` whose
+// `mach_header_64` and `LC_SEGMENT_64`/`__text` shape matches what
+// `clang -c -arch arm64` produces for an empty `.s`.
+//
+// Layout offsets (assuming nsects=1, ncmds=3 ⇒ sizeofcmds = 256):
+//   data_off  = 32 + 256 = 288     (start of __text bytes)
+//   reloff    = data_off + size_4aligned(text)
+//   symoff    = reloff   + 8 * nreloc
+//   stroff    = symoff   + 16 * nsyms
+//   total     = stroff   + strsize
+fn serialize(obj: MachoArm64Obj) -> [Int] {
+    let out: [Int] = []
+    let text_len = len(obj.text)
+    let nreloc   = len(obj.relocs)
+    let nsyms    = len(obj.symbols)
+    let strsize  = len(obj.strtab)
+
+    // __text is 4-byte aligned (arm64 instructions are 4 bytes each).
+    let mut text_pad = 0
+    let trem = text_len & 3
+    if trem != 0 { text_pad = 4 - trem }
+    let text_size_aligned = text_len + text_pad
+
+    let ncmds = 3                  // LC_SEGMENT_64 + LC_SYMTAB + LC_DYSYMTAB
+    let sizeofcmds = 152 + 24 + 80 // 256
+    let data_off = 32 + sizeofcmds // 288
+    let reloff   = data_off + text_size_aligned
+    let symoff   = reloff + 8 * nreloc
+    let stroff   = symoff + 16 * nsyms
+
+    // Mirror clang's empty-input corner case: an `.o` with zero code
+    // bytes has SUBSECTIONS_VIA_SYMBOLS unset (no symbols to split
+    // around). With actual code we set 0x2000 like clang does.
+    let mut mh_flags = 0x2000
+    if text_len == 0 { mh_flags = 0 }
+
+    _emit_mach_header(out, ncmds, sizeofcmds, mh_flags)
+
+    // Single segment, single __text section. Empty `segname` per
+    // Mach-O convention for `MH_OBJECT` (the one segment is unnamed).
+    _emit_seg64_cmd(out, "",
+                    0, text_size_aligned,
+                    data_off, text_size_aligned,
+                    1)
+
+    // arm64 instruction align is 4 bytes (log2=2); for an empty
+    // __text clang emits align=0 (log2 of 1 byte). Mirror that.
+    let mut sect_align = 2
+    if text_len == 0 { sect_align = 0 }
+
+    // section flags: S_ATTR_PURE_INSTRUCTIONS (0x80000000), plus
+    // S_ATTR_SOME_INSTRUCTIONS (0x00000400) only when there actually
+    // are instructions. Clang's empty-input output omits the SOME bit.
+    let mut sect_flags = 0x80000400
+    if text_len == 0 { sect_flags = 0x80000000 }
+
+    // reloff = 0 when there are no relocations (clang convention);
+    // otherwise the post-text offset.
+    let mut sect_reloff = reloff
+    if nreloc == 0 { sect_reloff = 0 }
+
+    _emit_section_64(out, "__text", "__TEXT",
+                     0, text_size_aligned,
+                     data_off, sect_align,
+                     sect_reloff, nreloc,
+                     sect_flags)
+
+    _emit_symtab_cmd(out, symoff, nsyms, stroff, strsize)
+    _emit_dysymtab_cmd(out)
+
+    // __text bytes + 4-byte alignment pad
+    let mut i = 0
+    while i < text_len { out.push(obj.text[i] & 0xFF); i = i + 1 }
+    _zero_n(out, text_pad)
+
+    // Relocations: 8 bytes each (offset:i32, info:i32). Cycle 1 leaves
+    // the encoding to the next sub-step; this loop is reserved.
+    let mut ri = 0
+    while ri < nreloc { _zero_n(out, 8); ri = ri + 1 }
+
+    // Symbol records: nlist_64 is 16 bytes each (strx, type, sect,
+    // desc, value). Cycle 1 leaves the encoding to the next sub-step;
+    // this loop is reserved.
+    let mut si = 0
+    while si < nsyms { _zero_n(out, 16); si = si + 1 }
+
+    // String table bytes (verbatim).
+    let mut ki = 0
+    while ki < strsize { out.push(obj.strtab[ki] & 0xFF); ki = ki + 1 }
+
+    return out
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Notes for the P0 implementation sub-agent
 // ─────────────────────────────────────────────────────────────────
 //
