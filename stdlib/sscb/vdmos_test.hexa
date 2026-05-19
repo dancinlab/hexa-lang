@@ -1,0 +1,102 @@
+#!hexa strict
+// stdlib/sscb/vdmos_test.hexa — hexa-native datasheet parity selftest
+//
+// @since 2026-05-20 (κ-41)
+// @gate  This is the absorbed=true measurement for the sscb DC device
+//        model. It parses the clean-room C3M0021120K model, runs the
+//        hexa-native VDMOS Level-1 DC solvers (vdmos.hexa) with ZERO
+//        subprocess / ZERO ngspice, and checks that the hexa-native
+//        numbers reproduce the Wolfspeed C3M0021120K data sheet Rev.4
+//        tabulated R_DS(on) and V_GS(th) within ±10 %.
+//
+//        ngspice agreement (wolfspeed_parity.hexa) is an independent
+//        cross-check; THIS test is what earns the absorbed=true gate
+//        because no external simulator is in the loop.
+
+import "stdlib/sscb/wolfspeed"
+import "stdlib/sscb/vdmos"
+
+// datasheet reference (Wolfspeed C3M0021120K data sheet Rev.4, p2)
+let DS_RDSON_OHM = 0.021    // R_DS(on) typ — Vgs=15 V, Id=50 A
+let DS_VGSTH_V   = 2.5      // V_GS(th) typ — Vds=Vgs, Id=17.7 mA
+let TOL          = 0.10     // ±10 % parity gate
+
+fn _absf(x: float) -> float {
+    if x < 0.0 { return -x }
+    return x
+}
+
+// Look up a model-card param by key (case-folded). "" if absent.
+fn _model_param(m: Model, key: str) -> str {
+    let mut i = 0
+    while i < len(m.params) {
+        if m.params[i].key == key { return m.params[i].value }
+        i = i + 1
+    }
+    return ""
+}
+
+fn main() -> int {
+    println("== vdmos_test :: hexa-native C3M0021120K datasheet parity ==")
+    println("   engine: hexa-native VDMOS Level-1 DC (zero ngspice, zero subprocess)")
+
+    let lib = "stdlib/sscb/fixtures/c3m0021120k.lib"
+    let s = wolfspeed_parse_lib(lib)
+
+    // Pull device parameters out of the parsed model + .PARAM block.
+    let m = wolfspeed_model_by_name(s, "C3M_CHANNEL")
+    if m.name == "" {
+        println("  ✗ model C3M_CHANNEL not found in " + lib)
+        println("== vdmos_test :: FAIL ==")
+        return 1
+    }
+    let vto = to_float(_model_param(m, "vto"))
+    let kp  = to_float(_model_param(m, "kp"))
+    let lam = to_float(_model_param(m, "lambda"))
+    let rd  = to_float(wolfspeed_lookup_param(s, "rd_acc"))
+    let rs  = to_float(wolfspeed_lookup_param(s, "rs_acc"))
+    println("  model: VTO=" + str(vto) + " KP=" + str(kp) + " LAMBDA=" + str(lam)
+            + " RD=" + str(rd) + " RS=" + str(rs))
+
+    let mut ok = 1
+
+    // ── parity 1: R_DS(on) — Vgs=15 V, Id=50 A ──
+    let rdson = vdmos_solve_rdson(vto, kp, lam, rs, rd, 15.0, 50.0)
+    if rdson < 0.0 {
+        println("  ✗ R_DS(on): hexa-native solver did not converge")
+        ok = 0
+    } else {
+        let err = _absf(rdson - DS_RDSON_OHM) / DS_RDSON_OHM
+        if err <= TOL {
+            println("  ✓ R_DS(on): hexa-native=" + str(rdson)
+                    + " datasheet=" + str(DS_RDSON_OHM)
+                    + " err=" + str(err * 100.0) + "%")
+        } else {
+            println("  ✗ R_DS(on): hexa-native=" + str(rdson)
+                    + " datasheet=" + str(DS_RDSON_OHM)
+                    + " err=" + str(err * 100.0) + "% > ±" + str(TOL * 100.0) + "%")
+            ok = 0
+        }
+    }
+
+    // ── parity 2: V_GS(th) — Vds=Vgs, Id=17.7 mA ──
+    let vth = vdmos_solve_vgsth(vto, kp, lam, 0.0177)
+    let verr = _absf(vth - DS_VGSTH_V) / DS_VGSTH_V
+    if verr <= TOL {
+        println("  ✓ V_GS(th): hexa-native=" + str(vth)
+                + " datasheet=" + str(DS_VGSTH_V)
+                + " err=" + str(verr * 100.0) + "%")
+    } else {
+        println("  ✗ V_GS(th): hexa-native=" + str(vth)
+                + " datasheet=" + str(DS_VGSTH_V)
+                + " err=" + str(verr * 100.0) + "% > ±" + str(TOL * 100.0) + "%")
+        ok = 0
+    }
+
+    if ok == 1 {
+        println("== vdmos_test :: PASS — hexa-native reproduces datasheet (absorbed-eligible) ==")
+        return 0
+    }
+    println("== vdmos_test :: FAIL ==")
+    return 1
+}

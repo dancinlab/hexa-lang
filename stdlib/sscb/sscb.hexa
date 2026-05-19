@@ -34,6 +34,7 @@
 import "stdlib/sscb/wolfspeed"
 import "stdlib/sscb/devsim"
 import "stdlib/sscb/wolfspeed_parity"
+import "stdlib/sscb/vdmos"
 
 let VERSION = "0.1.0"
 
@@ -90,30 +91,76 @@ fn cmd_diode_iv(argv: [str]) -> int {
     return 0
 }
 
+fn _sscb_absf(x: float) -> float {
+    if x < 0.0 { return -x }
+    return x
+}
+
+fn _model_param(m: Model, key: str) -> str {
+    let mut i = 0
+    while i < len(m.params) {
+        if m.params[i].key == key { return m.params[i].value }
+        i = i + 1
+    }
+    return ""
+}
+
 // `sscb datasheet-parity` — verify the clean-room C3M0021120K model
-// reproduces the Wolfspeed datasheet (Rev.4) tabulated specs via ngspice.
+// reproduces the Wolfspeed data sheet (Rev.4) tabulated specs, two ways:
+//   (A) hexa-native VDMOS Level-1 DC solver — ZERO subprocess. This is
+//       the absorbed=true path: hexa-lang reproduces the data sheet on
+//       its own arithmetic (D17 matter pattern).
+//   (B) ngspice substrate cross-check — independent confirmation.
 fn cmd_datasheet_parity(argv: [str]) -> int {
     println("C3M0021120K datasheet parity (model: fixtures/c3m0021120k.lib)")
+    let mut fails = 0
+
+    // ── (A) hexa-native VDMOS DC — absorbed=true path ──
+    println(" [A] hexa-native VDMOS Level-1 DC (zero subprocess):")
+    let s = wolfspeed_parse_lib("stdlib/sscb/fixtures/c3m0021120k.lib")
+    let m = wolfspeed_model_by_name(s, "C3M_CHANNEL")
+    let vto = to_float(_model_param(m, "vto"))
+    let kp  = to_float(_model_param(m, "kp"))
+    let lam = to_float(_model_param(m, "lambda"))
+    let rd  = to_float(wolfspeed_lookup_param(s, "rd_acc"))
+    let rs  = to_float(wolfspeed_lookup_param(s, "rs_acc"))
+    let h_rdson = vdmos_solve_rdson(vto, kp, lam, rs, rd, 15.0, 50.0)
+    let h_vth   = vdmos_solve_vgsth(vto, kp, lam, 0.0177)
+    let h_re = _sscb_absf(h_rdson - 0.021) / 0.021
+    let h_ve = _sscb_absf(h_vth - 2.5) / 2.5
+    if h_re <= 0.10 {
+        println("     ok  R_DS(on): " + str(h_rdson) + " vs 0.021 -> " + str(h_re * 100.0) + "%")
+    } else {
+        println("     FAIL R_DS(on): " + str(h_rdson)); fails = fails + 1
+    }
+    if h_ve <= 0.10 {
+        println("     ok  V_GS(th): " + str(h_vth) + " vs 2.5 -> " + str(h_ve * 100.0) + "%")
+    } else {
+        println("     FAIL V_GS(th): " + str(h_vth)); fails = fails + 1
+    }
+
+    // ── (B) ngspice substrate cross-check ──
+    println(" [B] ngspice substrate cross-check:")
     let r1 = parity_rdson()
     let r2 = parity_vgsth()
     let results = [r1, r2]
-    let mut fails = 0
     let mut i = 0
     while i < len(results) {
         let r = results[i]
         if r.ok == 1 {
-            println("  ok  " + r.spec + ": measured=" + str(r.measured)
-                    + " datasheet=" + str(r.datasheet)
-                    + " err=" + str(r.rel_err * 100.0) + "%")
+            println("     ok  " + r.spec + ": " + str(r.measured)
+                    + " vs " + str(r.datasheet) + " -> " + str(r.rel_err * 100.0) + "%")
         } else {
-            println("  FAIL " + r.spec + ": measured=" + str(r.measured)
-                    + " datasheet=" + str(r.datasheet))
+            println("     FAIL " + r.spec + ": " + str(r.measured))
             fails = fails + 1
         }
         i = i + 1
     }
+
     if fails == 0 {
-        println("parity: PASS (substrate — ngspice engine; absorbed=true still needs hexa-native solver)")
+        println("parity: PASS — hexa-native (A) reproduces datasheet without ngspice")
+        println("        => absorbed=true ELIGIBLE for the sscb DC device model")
+        println("        (transient circuit sim still substrate — separate scope)")
         return 0
     }
     return 1
