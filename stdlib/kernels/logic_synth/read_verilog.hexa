@@ -547,7 +547,7 @@ fn read_verilog(src: str) -> ReadVerilogResult {
                             let r3 = _rv_parse_port_decl(st, m, 3, tab)
                             st = r3.st; m = r3.m
                         } else {
-                            if bt == "wire" || bt == "reg" {
+                            if bt == "wire" || bt == "reg" || bt == "integer" {
                                 let r4 = _rv_parse_port_decl(st, m, 0, tab)
                                 st = r4.st; m = r4.m
                             } else {
@@ -790,15 +790,18 @@ fn _rv_elab_primary(toks: [str], pos: int, m_in: Module, tab: SymTab) -> ElabRes
     }
     if t == "1'b0" { return ElabResult { wire: "$const_0", m: m, pos: pos + 1, err: "" } }
     if t == "1'b1" { return ElabResult { wire: "$const_1", m: m, pos: pos + 1, err: "" } }
-    // bare token = wire reference, optionally followed by `[ <const> ]`
-    // index (unpacked-array element after generate-unrolling, or a
-    // pre-elaborated indexed wire). Constant index folds against `tab`
-    // and yields the wire name `t[<value>]`; range / non-constant index
-    // is an honest gap for now — consume the bracket group and return
-    // the base wire (so the rest of the expression still parses).
-    if pos + 1 < n && toks[pos + 1] == "[" {
+    // bare token = wire reference, optionally followed by one or more
+    // `[ ... ]` index groups (unpacked-array element after generate-
+    // unrolling, packed part-select, or chained 2-D access like
+    // `mem[p][q]`). A foldable constant index appends `[<val>]` to the
+    // wire name; range / non-foldable index is an honest gap — the
+    // bracket group is consumed but the wire name is left unchanged
+    // (rest of the expression still parses).
+    let mut wn = t
+    let mut cur = pos + 1
+    while cur < n && toks[cur] == "[" {
         let mut idxtoks: [str] = []
-        let mut np = pos + 2
+        let mut np = cur + 1
         let mut depth = 1
         while np < n {
             let it = toks[np]
@@ -828,15 +831,12 @@ fn _rv_elab_primary(toks: [str], pos: int, m_in: Module, tab: SymTab) -> ElabRes
         if isrange == 0 {
             let ev = _rv_eval_expr(idxtoks, 0, tab, 1)
             if len(ev.err) == 0 {
-                let wn = t + "[" + str(ev.value) + "]"
-                return ElabResult { wire: wn, m: m, pos: np + 1, err: "" }
+                wn = wn + "[" + str(ev.value) + "]"
             }
         }
-        // range or non-foldable index — honest gap; skip the bracket
-        // group, return the base wire reference.
-        return ElabResult { wire: t, m: m, pos: np + 1, err: "" }
+        cur = np + 1                        // past `]`
     }
-    return ElabResult { wire: t, m: m, pos: pos + 1, err: "" }
+    return ElabResult { wire: wn, m: m, pos: cur, err: "" }
 }
 
 // CLEAN-ROOM: precedence-climbing expression elaborator (left-assoc,
