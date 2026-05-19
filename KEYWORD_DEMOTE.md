@@ -54,6 +54,30 @@ select  generate  channel  verify  derive  optimize  guard  scope
   수용해야 함; `fn <kw>` 정의 + `<kw>(` 호출 양쪽).
 - **키워드 제거** — lexer 키워드 등록 1줄 제거 + parser dispatch 분기 제거 +
   AST kind / parse_*_stmt 정리. 구문 폐기. 사용 0~1 인 키워드엔 이쪽이 단순.
+- **대안 키워드로 rename** — 구문은 살리되 충돌 없는 새 키워드로. 아래 §대안.
+
+## 대안 키워드 (구문 보존 시)
+
+demote 한 단어의 구문을 유지하려면 식별자 충돌이 거의 없는 대체 표면이 필요.
+핵심 원칙: hexa 는 이미 `@`-attribute 체계(`@pure`·`@cite`·`@gpu`·`@invariant`)
+보유 — `@` sigil 은 식별자와 **구조적으로 충돌 불가**. 선언/힌트류는 `@`-attr 이
+자연스러운 집. 제어흐름 statement 류만 별도 키워드 필요.
+
+| demote | 구문 성격 | 권장 대안 | 비고 |
+|--------|----------|----------|------|
+| `derive`   | 선언 어노테이션 | **`@derive`** | Rust `#[derive]` 선례. 충돌 0 |
+| `optimize` | codegen 힌트 (no-op) | **`@optimize`** | Rust `#[optimize]`. 어노테이션이 정확한 성격 |
+| `generate` | compile-time codegen | **`@generate`** | fn/블록에 붙는 어노테이션 |
+| `verify`   | 검증 블록 | **`@verify { }`** | attribute-block. `@invariant` 와 일관 |
+| `channel`  | 동시성 채널 타입 | **`chan`** | Go 관례. `chan` 은 식별자로 거의 안 쓰임 (short type-keyword) |
+| `guard`    | 조기-return 제어흐름 (구문 0) | **`unless`** 또는 제거 | `unless cond { }` — Ruby/Perl 유산, fn명 충돌 ~0. 사용 0 이면 제거가 단순 (`if !cond {}` 슈가) |
+| `scope`    | 스코프 블록 (구문 0) | `@scope` 또는 제거 | 사용 0 — 제거 권장 |
+| `select`   | 동시성 multiplex (구문 0) | `@select { }` 또는 제거 | 사용 0 — 제거 권장; 미래 동시성-select 면 `@select` 블록 |
+
+요약: **`@`-attribute 화** = derive·optimize·generate·verify (+ borderline effect·
+intent·invariant). **타입 키워드 단축** = channel→`chan`. **제어흐름** = guard→
+`unless`(유지 시) / select·scope (구문 0 → 제거). 어느 것도 흔한 식별자 단어가
+아니라 충돌이 구조적으로 사라짐.
 
 ## 상태
 
