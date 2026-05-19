@@ -253,11 +253,48 @@ fn main() {
     let iso_si = atoms_new(["Si"], [[0.0, 0.0, 0.0]], bigcell, nopbc)
     check("EMT unknown element -> 0.0", atoms_emt_energy(iso_si) == 0.0)
 
-    // atoms_emt_relax stays an honest Stage-2.5 sentinel (force
-    // functional deferred — see mod.hexa header).
-    let emt_r = atoms_emt_relax(cu_c)
-    check("emt_relax is honest stub",
-          emt_r.substring(0, 26) == "STAGE-2.5-NOT-IMPLEMENTED:")
+    // ── Stage-2.5: EMT geometry relaxation (atoms_emt_relax) ──────
+    // Positions-only relaxation of the REAL EMT energy via numerical
+    // (central finite-difference) forces + Armijo backtracking line
+    // search. Self-validated (g3, no external golden):
+
+    // (1) Energy never rises — E(relaxed) <= E(initial). Use a Cu2
+    //     dimer compressed off its EMT minimum so relaxation has work.
+    let relax_in = atoms_new(["Cu", "Cu"],
+                             [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+                             bigcell, nopbc)
+    let e_relax_in = atoms_emt_energy(relax_in)
+    let relax_out = atoms_emt_relax(relax_in)
+    let e_relax_out = atoms_emt_energy(relax_out)
+    check("emt_relax energy non-increase", e_relax_out <= e_relax_in + 0.0000001)
+    check("emt_relax preserves natoms", atoms_len(relax_out) == 2)
+    let ro_syms = atoms_chemical_symbols(relax_out)
+    check("emt_relax preserves symbols", ro_syms[0] == "Cu" && ro_syms[1] == "Cu")
+
+    // (3) A deliberately perturbed dimer relaxes to LOWER energy and
+    //     the max force component drops below the convergence cutoff.
+    //     (Strict decrease — the 2.0 Å start is genuinely off-minimum.)
+    check("emt_relax perturbed lowers E", e_relax_out < e_relax_in - 0.000001)
+    let relax_out_forces = atoms_emt_forces(relax_out)
+    check("emt_relax converged force < tol",
+          atoms_force_max(relax_out_forces) < 0.01)
+
+    // (2) Relaxing an already-relaxed structure leaves it ~unchanged:
+    //     re-relaxing the converged dimer barely moves the atoms.
+    let relax_again = atoms_emt_relax(relax_out)
+    let ra_pos = relax_again.positions
+    let ro_pos = relax_out.positions
+    let ra0 = ra_pos[0]
+    let ra1 = ra_pos[1]
+    let ro0 = ro_pos[0]
+    let ro1 = ro_pos[1]
+    let drift0x = fabs(ra0[0] - ro0[0])
+    let drift1x = fabs(ra1[0] - ro1[0])
+    check("emt_relax equilibrium stable (atom0)", drift0x < 0.001)
+    check("emt_relax equilibrium stable (atom1)", drift1x < 0.001)
+    let e_relax_again = atoms_emt_energy(relax_again)
+    check("emt_relax equilibrium energy stable",
+          fabs(e_relax_again - e_relax_out) < 0.0001)
 
     println("atoms_status: " + atoms_status())
     if pass_count == total_count {
