@@ -654,3 +654,26 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   아님(`.0` 절단). hexa-bio `488a869` (배치수정 commit); 누적 6 새
   포트 모두 STDOUT byte-parity. **병렬 가속 실증**: 직렬 1/turn →
   fan-out 6/turn (verified). 잔여 ~92.
+- 2026-05-19 — **T3 완료 (hexa-bio 127/127 hexa-native dispatch)**.
+  Wave-R4(13 python-remaining) + Wave-R5(14 bash-wrapper) 신규 포트,
+  전부 byte-identical 검증·main 커밋. run_all.sh union 재감사:
+  ported(.hexa)=111 + verb-native=15 + hexa_run dispatcher=1 = 127/127.
+  잔존 실제 python3 위임 3건(borderline, `.py`/`.sh` 원본과 동일한
+  외부 도구 위임이라 0-python3 의미 없음): `atlas_atom_proofs`
+  (sympy 버전조회) · `cmt_uccsd_lih_4e4o_external_nm_readiness`
+  (외부 NM 드라이버) · `absorption_bridge_smoke`(10 어댑터 위임;
+  집계 로직 자체는 hexa-native). 측정된 거리: strict 0-python3
+  124/127 + borderline 3. 호스트: macOS OOM 회피 위해 ubu-2 부트스트랩
+  (`hexa cc` 1회) 후 빌드 라우팅; ubu-1 세션중 다운.
+- 2026-05-19 — **T4 착수: `stdlib/atoms` Stage-1 landing** (commit
+  `e3832256`, `rfc043-hexa-torch`). SCAFFOLD stub → `pub struct Atoms`
+  {symbols,positions,cell,pbc} + `atoms_new` + `atoms_len` +
+  `atoms_chemical_symbols` + `atoms_volume`(|det 3x3| closed-form,
+  no linalg dep). 의존성 0(순수 array + 행렬식). hexa-matter
+  `ase_atoms_construct.py`/`ase_relaxation_check.py` 마이그레이션
+  해금(호출부가 명시 결정질 리터럴 전달, ASE shell-out 없음). 검증:
+  ubu-2 `stdlib/atoms_test.hexa` __ATOMS_STAGE1_TEST__ PASS (7/7)
+  — FCC primitive |det|=a³/4, cubic |det|=a³, 좌수계 |det|>0.
+  **상류 발견(규율화)**: hexa 는 줄바꿈을 statement 종료로 처리 →
+  여러 줄 산술식 금지(행렬식은 중간변수 합산으로 분해). atoms 만
+  완료; crystal/mol/mlff Stage-1 + 전(全) Stage-2 잔여.
