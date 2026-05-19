@@ -195,8 +195,12 @@ therefore a HARD_WALL: the only headroom is the 10-20% gap *up to* the
 roofline, and closing it is a multi-year vendor-scale tuning effort,
 not a paradigm break. **Measured (RFC 060-C, 2 A100 fires)**: at FP64
 the mega-kernel runs 1.8-4.4× *slower* than the cuBLAS stream — the
-kernel-per-op model is not beaten at FP64. Honest classification:
-**cannot break; do not target.**
+kernel-per-op model is not beaten at FP64. **Measured (RFC 052, H100
+fire 2026-05-19)**: a hand BF16 WMMA + DSM-cluster combined FFN kernel
+runs **13-131× slower** than the cuBLAS GemmEx BF16 chain — the same
+HARD_WALL now confirmed on the BF16 / Hopper axis (a naive hand kernel's
+occupancy + tiling deficit dwarfs the FP64 result). Honest
+classification: **cannot break; do not target.**
 
 **(b) End-to-end training step → SOFT_WALL.** The achievable win is
 *not* raw GEMM — it is the whole-model wall clock, where kernel-launch

@@ -1,6 +1,8 @@
 # RFC 052 — forge: Hopper BF16 WMMA + DSM cluster combined kernel (combined wall-path)
 
-- **Status**: design-draft (2026-05-17) — DESIGN ONLY, no implementation, no fire
+- **Status**: measured-resolved (2026-05-19) — combined kernel implemented +
+  fired on H100; combined-kernel-beats-cuBLAS claim **measured-FALSIFIED**
+  (107× slower). See §13 Closure. (Originally design-draft 2026-05-17.)
 - **RFC 049 Stage 2 scaffold compatibility note (2026-05-19)**: RFC 049's
   Stage 2 BF16 substrate scaffold landed in `self/cuda/runtime_bf16.c`
   (`farr_bf16` storage class + `hexa_farr_ffn_bf16_gpu` /
@@ -706,3 +708,50 @@ separate task post RFC 052 land. This RFC provides the guide only.
 - `g_blue_closed_mandate` (anima cross-repo) — BF16 path divergence vs FP32
   reference already anchored via RFC 049 F-FORGE-RFC049-LAYERCAST-DIVERGE
   PASS 1.51%; RFC 052 inherits anchor, does NOT introduce new oracle layer
+
+## 13. Closure — measured 2026-05-19 (H100)
+
+RFC 052's combined kernel was implemented and fired, not left as a design
+draft. Harness: `self/cuda/experiments/r052_combined_bf16_dsm.cu` +
+`tool/dispatch_r052_combined_fire.sh`. Fire: NVIDIA H100 80GB HBM3
+(cc 9.0, 132 SM), cuBLAS 12.4.2, vast.ai, ~$5-10. Measurement SSOT:
+`state/forge_rfc052_2026_05_19/{result.json,RFC052_FALSIFIER_RESULTS.md}`
+(gitignored local trail, Phase-R convention).
+
+| Falsifier | Verdict |
+|---|---|
+| F-FORGE-RFC052-COMBINED-PERF | **measured-KILL** — combined kernel **107.6× SLOWER** than the cuBLAS GemmEx BF16 chain at LARGE (Llama-7B FFN); 12.8–131× slower across INFER/SMALL/MEDIUM/LARGE. Gate was ≤ 0.667× (≥ 1.5× *faster*). |
+| F-FORGE-RFC052-BITEQ-VS-RFC049 | **inconclusive** — the naive hand-WMMA combined kernel has a correctness bug (rel\|Δ\| 68–356, ≫ BF16 precision ~1e-2; deterministic — within-run bit-equal — so a logic bug, not a race). Honestly *not clean-measured*. |
+| F-FORGE-RFC052-LAYERCAST-DET | **PASS** — within-run bit-equal 4/4 shapes. |
+| F-FORGE-RFC052-DSM-INTERMEDIATE-FIT | **PASS** — 184 KB/block ≤ 227 KB Hopper optin cap. |
+| F-FORGE-RFC052-HOPPER-ONLY | **PASS** — `cudaLaunchKernelEx` cluster launch SUCCESS on sm_90. |
+
+**Headline verdict — measured.** RFC 052's central claim (combined BF16
+WMMA + DSM kernel ≥ 1.5× faster than the RFC 049 cuBLAS BF16 chain) is
+**measured-FALSIFIED, decisively** — the combined kernel is 13–131×
+*slower*. The KILL is not rescuable by fixing the correctness bug: the
+slowdown is structural. At M=128 / M_TILE=16 the launch geometry is only
+16 blocks on a 132-SM GPU (~12% SM occupancy), and the hand-WMMA GEMM
+does no SMEM operand tiling/reuse (memory-bound). The DSM
+intermediate-elimination saves only ~1.5% of HBM traffic — nowhere near
+enough to offset a hand kernel running at a tiny fraction of cuBLAS's
+throughput.
+
+This is the §3.9a roofline HARD_WALL (`LIMIT_BREAKTHROUGH.md`): a hand
+kernel without CUTLASS-grade occupancy + tiling engineering cannot match
+cuBLAS GemmEx. RFC 060-C measured the same pattern at FP64 (1.8–4.4×
+slower); **RFC 052 now confirms it on the BF16 / Hopper axis** — the
+honest BF16 measurement that RFC 060 §13 named as the last open question.
+The instrument-first pre-fire prediction ("combined kernel KILL at
+compute-bound shapes") was directionally correct; the magnitude (107× vs
+the predicted ~1.8×) shows the prediction under-counted the occupancy
+penalty of a naive single-pass launch geometry.
+
+**g3**: no claim survives on design. RFC 052's combined kernel is
+measured-killed. A combined kernel *could* still beat the chain only with
+a CUTLASS-grade implementation (the §0.1 "C Phase 4 CUTLASS-grade"
+3-6-week item) — which is a multi-year-class vendor-tuning effort, not a
+paradigm. The DSM mechanism + cluster API + SMEM-fit + within-run
+determinism all PASS — the *substrate* works; what fails is the premise
+that a hand kernel beats the vendor BLAS. **RFC 052 status:
+measured-resolved — combined-kernel-beats-cuBLAS FALSIFIED.**

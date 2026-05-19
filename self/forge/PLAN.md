@@ -271,6 +271,26 @@ mandatory (`g_blue_closed_mandate`).
 
 (append-only)
 
+### 2026-05-19 — RFC 052 combined kernel fire — measured-KILL (H100, 107× slower)
+
+RFC 052 Hopper combined kernel (BF16 WMMA + DSM cluster fused FFN) 을 구현
+(`self/cuda/experiments/r052_combined_bf16_dsm.cu`, 753줄) + H100 80GB fire
+(`tool/dispatch_r052_combined_fire.sh`, ~$5-10). user gate 2026-05-19 옵션 A
+(full combined-kernel fire) 채택. **측정 결과**: combined kernel 이 cuBLAS
+GemmEx BF16 chain 대비 13-131× **느림** (LARGE Llama-7B FFN 107.6×, gate 는
+≤0.667× 즉 ≥1.5× faster). F-FORGE-RFC052-COMBINED-PERF = **measured-KILL**.
+F-LAYERCAST-DET / DSM-INTERMEDIATE-FIT / HOPPER-ONLY = PASS. BITEQ-VS-RFC049
+= inconclusive (naive hand-WMMA 커널의 correctness 버그 — rel|Δ| 68-356,
+deterministic 이므로 logic bug; perf KILL 은 버그와 무관하게 성립하므로
+re-fire 미집행). 근본 원인: M=128/M_TILE=16 → 16 block on 132-SM GPU (~12%
+occupancy) + operand SMEM tiling 부재 = §3.9a roofline HARD_WALL. RFC 060-C
+가 FP64 에서 측정한 패턴(1.8-4.4× slower)을 BF16/Hopper 축에서 재확인 —
+RFC 060 §13 이 "마지막 열린 BF16 질문" 으로 지목한 측정. instrument-first
+사전예측(KILL)은 방향 적중, 크기(107× vs 예측 ~1.8×)는 naive launch
+geometry 의 occupancy penalty 를 과소평가. SSOT: `state/forge_rfc052_2026_05_19/`
++ RFC 052 §13 + LIMIT_BREAKTHROUGH §3.9a. RFC 052 status: design-draft →
+measured-resolved (combined-kernel-beats-cuBLAS FALSIFIED).
+
 ### 2026-05-19 — §0.2 ACTIVE 캠페인 선언 — RFC 049 Stage 2 + RFC 052 + RFC 055 동시 greenlight
 
 User directive "3 all go" — §0.1 의 3-RFC 묶음(BF16 substrate / Hopper combined / hexa→NVPTX)을 동시 ACTIVE 로 전환. §0.2 캠페인 표 + instrument-first 원칙 명문화. 본 cycle 산출: (1) RFC 055 — `compiler/codegen/nvptx_*.hexa` backend skeleton scaffold (parse-clean, dispatch 미배선, zero behavior change; `gpu_codegen_stub.c` reconcile), $0. (2) RFC 049 Stage 2 — `farr_bf16` storage class + `*_bf16_gpu` kernel-entry scaffold in `self/cuda/runtime_cuda.c` (compile-clean; Stage 1 커널은 이미 measured PASS 9.67×), $0. (3) RFC 052 — combined-kernel scaffold 호환 + Hopper fire harness 준비. heavy fire 는 별도 measured step (instrument-first — cheap oracle 우선). 측정 변화 0 — scaffold cycle. over-claim 0: "scaffold landed" 로만 보고.
