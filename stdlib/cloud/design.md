@@ -147,6 +147,28 @@ copy-to → remote sha256 == local → copy-from → round-trip byte-identical
 → terminate. Every primitive of the cycle-A + cycle-B chain confirmed end
 to end against real RunPod infrastructure.
 
+### Cycle B-2.1 — CLI-first (runpodctl), API fallback
+
+Each `runpod_*` function now tries the **runpodctl CLI first** and falls
+back to the GraphQL API on CLI absence or failure. The CLI route is cleaner
+(top-level `id` / `ssh.ip` / `ssh.port` JSON instead of GraphQL's
+`data.pod.runtime.ports[].{…}` nested array) and uses RunPod's officially
+maintained tool. `RUNPODCTL_DISABLE=1` in the env forces the API-fallback
+path (handy for testing the fallback).
+
+CLI subcommand mapping (new-form `pod` subgroup — the deprecated
+top-level `create pod` / `remove pod` emit a warning line that breaks
+`json_parse`):
+
+| operation | CLI                                          | API fallback             |
+|-----------|----------------------------------------------|--------------------------|
+| create    | `runpodctl pod create --gpu-id … -o json`    | GraphQL `podFindAndDeployOnDemand` |
+| ssh-port  | `runpodctl pod get <id> -o json` → `ssh.{ip,port}` | GraphQL `pod.runtime.ports[]` |
+| terminate | `runpodctl pod delete <id> -o json`          | GraphQL `podTerminate`   |
+
+Live e2e re-verified on the CLI path (2026-05-19, 46s, `created (cli)`
+message in the smoke log).
+
 ## Cycle B-1 — `cloud_copy_*` (file transfer)
 
 - `cloud_copy_to` / `cloud_copy_to_opts(host, ssh_opts, local, remote)` —
