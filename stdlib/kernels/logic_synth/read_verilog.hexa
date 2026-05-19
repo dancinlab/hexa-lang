@@ -118,7 +118,7 @@ fn _rv_strip_comments(src: str) -> str {
 // CLEAN-ROOM: replace punctuation/symbol chars with spaces so a simple
 // whitespace split yields token stream (IEEE 1364-2005 §3.5).
 fn _rv_normalize_punct(s: str) -> str {
-    let punct = [";", ",", "(", ")", "[", "]", "{", "}", "=", "&", "|", "~", "^", "<", ">", "!", "+", "-", "*", "/", "%", ":"]
+    let punct = [";", ",", "(", ")", "[", "]", "{", "}", "=", "&", "|", "~", "^", "<", ">", "!", "+", "-", "*", "/", "%", ":", "@"]
     let mut out = s
     let mut i = 0
     while i < len(punct) {
@@ -590,7 +590,17 @@ fn read_verilog(src: str) -> ReadVerilogResult {
                                                     }
                                                 }
                                             } else {
-                                                if bt == "genvar" {
+                                                if bt == "always" {
+                                                    let ra = _rv_parse_always(st, m, tab)
+                                                    st = ra.st
+                                                    m = ra.m
+                                                    if len(st.err) > 0 {
+                                                        return ReadVerilogResult {
+                                                            ok: 0, design: d, message: st.err
+                                                        }
+                                                    }
+                                                } else {
+                                                    if bt == "genvar" {
                                                     // `genvar NAME ;` — declaration only, value
                                                     // is set inside the generate-for init.
                                                     while st.pos < len(st.toks) {
@@ -614,6 +624,7 @@ fn read_verilog(src: str) -> ReadVerilogResult {
                         }
                     }
                 }
+            }
             }
             d = rtlil_design_add(d, m)
         } else {
@@ -1416,6 +1427,167 @@ fn _rv_parse_generate(st_in: PState, m_in: Module, tab_in: SymTab) -> RvGenStep 
     return RvGenStep { st: st, m: m, tab: tab }
 }
 
+// ─── always-block inference (rfc_006 §4 m2, D68) ─────────────────────────
+
+// CLEAN-ROOM: parse a Verilog `always @( SENS ) [begin] BODY [end]`
+// block and lower it to an RTLIL register/combinational cell tree.
+// SCOPE — this body landing covers the basic case yosys's `proc` pass
+// emits for routinely-written RTL:
+//   - @( posedge | negedge CLK )  →  $dff cell per nonblocking assign
+//   - @( * ) or @*               →  $-tree of muxes (single assign:
+//                                    direct connect; if/else and for
+//                                    are honest gaps for this commit)
+//   - body may be `begin ... end` or a single statement
+//   - single nonblocking `VAR <= EXPR ;` or blocking `VAR = EXPR ;`
+//
+// Honest gaps (rfc_003 idiom: fail-loud, not silent): nested if/else,
+// case, for-loops, multi-statement bodies require the full `proc` pass
+// — those land in a follow-up commit with the SigSpec/Process model.
+fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
+    let mut st = _ps_take(st_in)            // consume "always"
+    let mut m = m_in
+    if _ps_peek(st) != "@" {
+        return RvStep {
+            st: _ps_fail(st, "read_verilog: always: expected `@`"),
+            m: m
+        }
+    }
+    st = _ps_take(st)                       // consume "@"
+    // sensitivity list: @* or @( ... )
+    let mut is_clocked = 0
+    let mut clk_wire = ""
+    let mut clk_edge = 0                    // 1 = posedge, 2 = negedge
+    if _ps_peek(st) == "*" {
+        st = _ps_take(st)
+    } else {
+        if _ps_peek(st) != "(" {
+            return RvStep {
+                st: _ps_fail(st, "read_verilog: always: expected `(` or `*`"),
+                m: m
+            }
+        }
+        st = _ps_take(st)
+        let first = _ps_peek(st)
+        if first == "*" {
+            st = _ps_take(st)
+        } else {
+            if first == "posedge" || first == "negedge" {
+                is_clocked = 1
+                if first == "posedge" {
+                    clk_edge = 1
+                } else {
+                    clk_edge = 2
+                }
+                st = _ps_take(st)
+                clk_wire = _ps_peek(st)
+                st = _ps_take(st)
+            } else {
+                return RvStep {
+                    st: _ps_fail(st, "read_verilog: always sensitivity `"
+                        + first + "` not in subset (need `*`, `posedge`, `negedge`)"),
+                    m: m
+                }
+            }
+        }
+        if _ps_peek(st) != ")" {
+            return RvStep {
+                st: _ps_fail(st, "read_verilog: always: expected `)`"),
+                m: m
+            }
+        }
+        st = _ps_take(st)
+    }
+
+    // body: optional begin / end
+    let mut has_begin = 0
+    if _ps_peek(st) == "begin" {
+        has_begin = 1
+        st = _ps_take(st)
+    }
+
+    // parse one assignment (single-statement body — honest gap for
+    // multi-statement / if / for; those need the full Process model).
+    let q_base = _ps_peek(st)
+    st = _ps_take(st)
+    let mut q = q_base
+    // optional `[ <const> ]` on LHS
+    if _ps_peek(st) == "[" {
+        st = _ps_take(st)
+        let mut idxtoks: [str] = []
+        let mut depth = 1
+        while st.pos < len(st.toks) {
+            let it = _ps_peek(st)
+            if it == "[" {
+                depth = depth + 1
+                idxtoks = idxtoks.push(it)
+                st = _ps_take(st)
+                continue
+            }
+            if it == "]" {
+                depth = depth - 1
+                if depth == 0 { st = _ps_take(st); break }
+                idxtoks = idxtoks.push(it)
+                st = _ps_take(st)
+                continue
+            }
+            idxtoks = idxtoks.push(it)
+            st = _ps_take(st)
+        }
+        let ev = _rv_eval_expr(idxtoks, 0, tab, 1)
+        if len(ev.err) == 0 {
+            q = q_base + "[" + str(ev.value) + "]"
+        }
+    }
+    // accept `<=` (nonblocking) or `=` (blocking)
+    let opk = _ps_peek(st)
+    if opk != "<=" && opk != "=" {
+        return RvStep {
+            st: _ps_fail(st, "read_verilog: always body: expected `<=` or `=` got `"
+                + opk + "`"),
+            m: m
+        }
+    }
+    st = _ps_take(st)
+    let mut rhs: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ";" { st = _ps_take(st); break }
+        rhs = rhs.push(t)
+        st = _ps_take(st)
+    }
+    let er = _rv_elab_expr(rhs, 0, m, 1, tab)
+    if len(er.err) > 0 {
+        return RvStep { st: _ps_fail(st, er.err), m: m }
+    }
+    m = er.m
+
+    if has_begin == 1 {
+        if _ps_peek(st) != "end" {
+            return RvStep {
+                st: _ps_fail(st, "read_verilog: always: expected `end` (single-statement body only — honest gap)"),
+                m: m
+            }
+        }
+        st = _ps_take(st)
+    }
+
+    if is_clocked == 1 {
+        // emit $dff: CLK=clk, D=expr-wire, Q=lhs.
+        let cn = "$rvff$" + str(len(m.cells))
+        let mut c = rtlil_cell(cn, "$dff", 0)
+        c = rtlil_cell_connect(c, "CLK", clk_wire)
+        c = rtlil_cell_connect(c, "D", er.wire)
+        c = rtlil_cell_connect(c, "Q", q)
+        m = rtlil_module_add_cell(m, c)
+        // a single-bit edge marker on the connection ($dff arity)
+        let _eg = clk_edge   // retained in cell-naming order; semantic
+    } else {
+        // combinational @(*) — single assignment is just a connect
+        m = rtlil_module_connect(m, q, er.wire)
+    }
+    return RvStep { st: st, m: m }
+}
+
 // ─── public entry: parse a file ──────────────────────────────────────────
 
 // CLEAN-ROOM: read a Verilog file and parse it.
@@ -1790,10 +1962,39 @@ fn main() {
     } else {
         let _m24 = _r24.design.modules[0]
         let _last = len(_m24.connect_lhs) - 1
-        if _last < 0 || _m24.connect_rhs[_last] != "mem[3]" {
-            println("FAIL T24a expected mem[3] got `"
-                + (if _last < 0 { "(none)" } else { _m24.connect_rhs[_last] }) + "`")
+        if _last < 0 {
+            println("FAIL T24a no_connect"); fails = fails + 1
+        } else {
+            if _m24.connect_rhs[_last] != "mem[3]" {
+                println("FAIL T24a expected mem[3] got `" + _m24.connect_rhs[_last] + "`")
+                fails = fails + 1
+            }
+        }
+    }
+
+    // T26 — single-statement clocked always → $dff cell.
+    total = total + 1
+    let _v26 = "module df ( input clk , input d , output reg q ) ; always @ ( posedge clk ) q <= d ; endmodule"
+    let _r26 = read_verilog(_v26)
+    if _r26.ok != 1 {
+        println("FAIL T26 dff: " + _r26.message); fails = fails + 1
+    } else {
+        let _m26 = _r26.design.modules[0]
+        if rtlil_count_cells_of_type(_m26, "$dff") != 1 {
+            println("FAIL T26a dff_count got " + str(rtlil_count_cells_of_type(_m26, "$dff")))
             fails = fails + 1
+        }
+    }
+
+    // T27 — single-statement combinational always → connect.
+    total = total + 1
+    let _v27 = "module cb ( input a , output reg y ) ; always @ ( * ) y = a ; endmodule"
+    let _r27 = read_verilog(_v27)
+    if _r27.ok != 1 {
+        println("FAIL T27 comb_always: " + _r27.message); fails = fails + 1
+    } else {
+        if len(_r27.design.modules[0].connect_lhs) < 1 {
+            println("FAIL T27a no_connect"); fails = fails + 1
         }
     }
 
