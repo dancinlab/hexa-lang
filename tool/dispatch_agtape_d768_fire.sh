@@ -29,6 +29,7 @@ LOCAL_DIR="${REPO_ROOT}/state/${PHASE_ID}"
 
 TRAINER_C="${REPO_ROOT}/build/artifacts/flame_d768_agtape.c"
 RUNTIME_C="${REPO_ROOT}/self/runtime.c"
+RUNTIME_CORE_C="${REPO_ROOT}/self/runtime_core.c"
 RUNTIME_HI="${REPO_ROOT}/self/runtime_hi_gen.c"
 RUNTIME_CUDA_C="${REPO_ROOT}/self/cuda/runtime_cuda.c"
 CORPUS="/Users/ghost/core/anima/training/corpus_consciousness_v1.jsonl"
@@ -46,6 +47,7 @@ WALL_BUDGET_SEC=${WALL_BUDGET_SEC:-900}   # generic tape > hand-fused; generous
 [ -f "$VAST_SSH_KEY" ]   || { echo "ERROR: vast ssh key missing"; exit 1; }
 [ -f "$TRAINER_C" ]      || { echo "ERROR: trainer .c missing at $TRAINER_C"; exit 1; }
 [ -f "$RUNTIME_C" ]      || { echo "ERROR: $RUNTIME_C missing"; exit 1; }
+[ -f "$RUNTIME_CORE_C" ] || { echo "ERROR: $RUNTIME_CORE_C missing"; exit 1; }
 [ -f "$RUNTIME_HI" ]     || { echo "ERROR: $RUNTIME_HI missing"; exit 1; }
 [ -f "$RUNTIME_CUDA_C" ] || { echo "ERROR: $RUNTIME_CUDA_C missing"; exit 1; }
 [ -f "$CORPUS" ]         || { echo "ERROR: $CORPUS missing"; exit 1; }
@@ -187,6 +189,8 @@ $SCP_CMD "$RUNTIME_CUDA_C" "root@$SSH_HOST:$REMOTE_WORK/self/cuda/runtime_cuda.c
 # RFC 049 Stage 2: runtime_cuda.c #includes runtime_bf16.c (BF16 substrate).
 $SCP_CMD "${REPO_ROOT}/self/cuda/runtime_bf16.c" "root@$SSH_HOST:$REMOTE_WORK/self/cuda/runtime_bf16.c"
 $SCP_CMD "${REPO_ROOT}/self/runtime.h" "root@$SSH_HOST:$REMOTE_WORK/self/runtime.h"
+# RFC 061: runtime.c #includes runtime_core.c (2-layer split phase 1).
+$SCP_CMD "$RUNTIME_CORE_C" "root@$SSH_HOST:$REMOTE_WORK/self/runtime_core.c"
 # RFC 050: runtime.c #includes forge/forge_tier_v1.c (the dispatcher) —
 # ship it + its header so the unconditional include resolves on the pod.
 $SCP_CMD "${REPO_ROOT}/self/forge/forge_tier_v1.c" "root@$SSH_HOST:$REMOTE_WORK/self/forge/forge_tier_v1.c"
