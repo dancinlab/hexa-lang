@@ -601,6 +601,265 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// LIR walker — `LModule` → byte stream  (RFC 063 § P0, cycle 2)
+// ─────────────────────────────────────────────────────────────────
+//
+// `pack_lir(lm)` is the second half of P0: it walks `LModule.funcs`,
+// turns each `LInstr` into one 4-byte little-endian arm64 instruction
+// word, and records branch / call relocations against a pending
+// symbol table.
+//
+// Cycle 2 subset (this commit):
+//
+//   - register operands: `LOperand.kind == "reg"` → `reg.name`
+//     (lowercase from arm64_darwin LIR; `xreg_idx` handles both cases).
+//   - immediate operands: `LOperand.kind == "imm"` → `#N`.
+//   - label operands on intra-function branches (`b` / `b.cond` /
+//     `cbz` / `cbnz` to a `label` pseudo-op in the same `LFunc`) —
+//     resolved by a name→offset map, the imm bits patched in place,
+//     no relocation record emitted.
+//   - the `label` pseudo-op (`op == "label"`, name in `comment` or
+//     `args[0].label`) records the current `text` offset in the
+//     name→offset map and emits zero bytes.
+//
+// Out of scope (next cycles):
+//
+//   - mem operands with offsets (`[sp, #16]`, pre/post-index frame
+//     ops) — need additional encoding rules in `encode_arm64_insn`
+//     (cycle 3).
+//   - extern-symbol branches / calls (`BL _main`, `ADRP _sym@PAGE`)
+//     and the corresponding `Arm64Reloc` records (cycle 4).
+//   - `LInstr` ops outside the 16 encoding rules currently in
+//     `encode_arm64_insn` (cycle 3 fills out the table).
+//
+// Walker is silent on unsupported ops: it emits a sentinel 0x00000000
+// word so the byte stream stays length-correct and `otool -d` shows
+// the gap. A diagnostic counter (`pack_unhandled_ops`) is reserved
+// for the next cycle when the wiring decides whether to hard-error
+// on an unhandled op or fall back to `.s` + `as`.
+
+fn _lir_op_uppercase(op: string) -> string {
+    // arm64_darwin LIR uses lowercase mnemonics; encode_arm64_insn's
+    // table is keyed on the canonical uppercase ARM ARM spelling.
+    // Hand-mapped table — small, stable, faster + clearer than calling
+    // a generic to_upper() pass.
+    if op == "mov"   { return "MOV"  }
+    if op == "add"   { return "ADD"  }
+    if op == "sub"   { return "SUB"  }
+    if op == "mul"   { return "MUL"  }
+    if op == "cmp"   { return "CMP"  }
+    if op == "ldr"   { return "LDR"  }
+    if op == "str"   { return "STR"  }
+    if op == "b"     { return "B"    }
+    if op == "bl"    { return "BL"   }
+    if op == "ret"   { return "RET"  }
+    if op == "cbz"   { return "CBZ"  }
+    if op == "cbnz"  { return "CBNZ" }
+    // Conditional branch: `b.eq` -> `B.EQ`. The encoder reads the
+    // condition from the suffix; uppercasing the whole token preserves
+    // the dot.
+    if len(op) > 2 && op.substring(0, 2) == "b." {
+        let cc = op.substring(2, len(op))
+        let mut up = ""
+        let mut i = 0
+        while i < len(cc) {
+            let c = char_code(cc, i)
+            if c >= 97 && c <= 122 { up = up + chr(c - 32) } else { up = up + cc.substring(i, i + 1) }
+            i = i + 1
+        }
+        return "B." + up
+    }
+    // Unknown — pass through; the encoder returns 0 and the walker
+    // emits the sentinel word for follow-up triage.
+    return op
+}
+
+fn _lir_operand_str(op: LOperand) -> string {
+    if op.kind == "reg"   { return op.reg.name }
+    if op.kind == "imm"   { return "#" + to_string(op.imm) }
+    if op.kind == "label" { return op.label }
+    // mem operands are intentionally unsupported in cycle 2; return a
+    // placeholder so encode_arm64_insn falls through to the unknown-op
+    // path.
+    return "<?" + op.kind + "?>"
+}
+
+// State carried while walking one LFunc. label_names / label_offsets
+// are parallel arrays (no map-of-string in scope here); intra-fn
+// branch resolution does a linear scan on this short list.
+struct PackFnState {
+    text:          [Int],
+    label_names:   [string],
+    label_offsets: [Int],
+    unresolved_brs: [Int],         // text offsets of branches needing fixup
+    unresolved_to:  [string],      // target label name per branch
+}
+
+fn _lookup_label(state: PackFnState, name: string) -> Int {
+    let n = len(state.label_names)
+    let mut i = 0
+    while i < n {
+        if state.label_names[i] == name { return state.label_offsets[i] }
+        i = i + 1
+    }
+    return -1
+}
+
+// Append a 4-byte little-endian instruction word to the running text
+// buffer. Used by every encoded instruction path in `_pack_fn`.
+fn _push_word_le(out: [Int], word: Int) {
+    out.push(word & 0xFF)
+    out.push((word >> 8) & 0xFF)
+    out.push((word >> 16) & 0xFF)
+    out.push((word >> 24) & 0xFF)
+}
+
+// Patch a 32-bit word in the text buffer at byte offset `off`. Reads
+// the existing word (4 LE bytes), ORs the imm bits in, writes back.
+// Used after the full function is walked to resolve intra-fn branches
+// once every label offset is known.
+fn _patch_word_le(out: [Int], off: Int, word: Int) {
+    out[off + 0] = word & 0xFF
+    out[off + 1] = (word >> 8) & 0xFF
+    out[off + 2] = (word >> 16) & 0xFF
+    out[off + 3] = (word >> 24) & 0xFF
+}
+
+// Walk one LFunc, append its instructions to `out_text`, record any
+// label offsets, and resolve all intra-function branches. Returns the
+// number of unresolved branches (= would-be relocations for cycle 4).
+fn _pack_fn(out_text: [Int], f: LFunc) -> Int {
+    let st = PackFnState {
+        text:           out_text,
+        label_names:    [],
+        label_offsets:  [],
+        unresolved_brs: [],
+        unresolved_to:  [],
+    }
+    let n = len(f.instrs)
+    let base = len(out_text)
+    let mut i = 0
+    while i < n {
+        let ins = f.instrs[i]
+        if ins.op == "label" {
+            let mut name = ins.comment
+            if len(name) == 0 && len(ins.args) > 0 { name = ins.args[0].label }
+            st.label_names.push(name)
+            st.label_offsets.push(len(out_text))
+            i = i + 1
+            continue
+        }
+
+        // Format operands to the [string] form encode_arm64_insn expects.
+        let mut ops: [string] = []
+        let na = len(ins.args)
+        let mut k = 0
+        while k < na {
+            ops.push(_lir_operand_str(ins.args[k]))
+            k = k + 1
+        }
+
+        let up = _lir_op_uppercase(ins.op)
+        let word = encode_arm64_insn(up, ops)
+        let cur_off = len(out_text)
+
+        // Branch targets: encoder emits the bare base bit-pattern;
+        // intra-fn imm26 / imm19 / B.cond imm19 are patched below.
+        // Track which instructions need patching by op shape.
+        if (up == "B" || up == "BL") && na == 1 && ins.args[0].kind == "label" {
+            _push_word_le(out_text, word)
+            st.unresolved_brs.push(cur_off)
+            st.unresolved_to.push(ins.args[0].label)
+            i = i + 1
+            continue
+        }
+        if up == "CBZ" || up == "CBNZ" {
+            // CBZ Xt, label — label is args[1]
+            if na == 2 && ins.args[1].kind == "label" {
+                _push_word_le(out_text, word)
+                st.unresolved_brs.push(cur_off)
+                st.unresolved_to.push(ins.args[1].label)
+                i = i + 1
+                continue
+            }
+        }
+        if len(up) > 2 && up.substring(0, 2) == "B." && na == 1 && ins.args[0].kind == "label" {
+            _push_word_le(out_text, word)
+            st.unresolved_brs.push(cur_off)
+            st.unresolved_to.push(ins.args[0].label)
+            i = i + 1
+            continue
+        }
+
+        _push_word_le(out_text, word)
+        i = i + 1
+    }
+
+    // Resolve intra-fn branches. imm26 (B/BL) is bits [25:0] of word,
+    // multiplied by 4; imm19 (CBZ/CBNZ/B.cond) is bits [23:5] * 4.
+    let nb = len(st.unresolved_brs)
+    let mut leftover = 0
+    let mut bi = 0
+    while bi < nb {
+        let off    = st.unresolved_brs[bi]
+        let target = st.unresolved_to[bi]
+        let toff   = _lookup_label(st, target)
+        if toff < 0 {
+            // Extern symbol — cycle 4 relocation. Leave the bare
+            // bit-pattern in place; bookkeeping returned to caller.
+            leftover = leftover + 1
+            bi = bi + 1
+            continue
+        }
+        let delta = (toff - off) / 4    // PC-rel instruction-count
+        // Reconstruct the existing word bits.
+        let w0 = out_text[off + 0]
+        let w1 = out_text[off + 1]
+        let w2 = out_text[off + 2]
+        let w3 = out_text[off + 3]
+        let cur = w0 | (w1 << 8) | (w2 << 16) | (w3 << 24)
+        // Distinguish B/BL (high 6 bits = 0b000101 or 0b100101) from
+        // CBZ/CBNZ/B.cond (imm19). The encoder gave the upper bits;
+        // we OR the imm into the right field.
+        let top = (cur >> 26) & 0x3F
+        if top == 0x05 || top == 0x25 {
+            // B / BL → imm26 = delta & 0x03FFFFFF
+            let patched = (cur & 0xFC000000) | (delta & 0x03FFFFFF)
+            _patch_word_le(out_text, off, patched)
+        } else {
+            // CBZ / CBNZ / B.cond → imm19 at bits [23:5]
+            let imm19 = delta & 0x7FFFF
+            let patched = (cur & 0xFF00001F) | (imm19 << 5)
+            _patch_word_le(out_text, off, patched)
+        }
+        bi = bi + 1
+    }
+    return leftover
+}
+
+// Public entry — walk all LFuncs in `lm`, produce a `MachoArm64Obj`
+// with `text` populated. relocations / symbols / strtab are reserved
+// for follow-up cycles.
+pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
+    let obj = MachoArm64Obj {
+        text:       [],
+        relocs:     [],
+        symbols:    [],
+        strtab:     [],
+        dwarf_line: [],
+    }
+    let nf = len(lm.funcs)
+    let mut i = 0
+    while i < nf {
+        // Discard the leftover count for now — cycle 4 wiring will
+        // turn unresolved intra-/inter-fn refs into Arm64Reloc records.
+        _pack_fn(obj.text, lm.funcs[i])
+        i = i + 1
+    }
+    return obj
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Notes for the P0 implementation sub-agent
 // ─────────────────────────────────────────────────────────────────
 //

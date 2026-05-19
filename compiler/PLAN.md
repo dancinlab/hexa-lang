@@ -3623,3 +3623,131 @@ falsifier `.hexa` 는 NOT yet `compiler/main.hexa` 에서 import — `hexa_cc.c`
 SSOT 미영향 (@D g_commit_push_deploy 의 "compiler/main.hexa 소스 변경 시
 필수" 게이트 미발동). 와이어링은 cycle 5 (`--emit=obj` arm) 에서 driver-source
 변경 + cc --regen + binary promote.
+
+
+### 2026-05-20 — S7-P0 cycle 2: LIR walker + code byte emission (F-P0-OBJEQ-TEXT PASS, otool disassembly confirmed)
+
+RFC 063 § P0 두 번째 substep — `compiler/emit/macho_arm64.hexa` 에 `LModule
+→ MachoArm64Obj.text` 워커 `pack_lir()` + per-fn `_pack_fn()` 추가. 합성
+2-instr LFunc (`mov x0, #42; ret`) 을 byte-perfect 8-byte `__text` 로
+emit, 외부 assembler 0건으로 Mach-O `.o` 생성, **`otool -tv` 가 우리 .o 를
+원본 source intent 그대로 disassemble**.
+
+**한 줄**: hexa-side `pack_lir()` 가 `MOV X0,#42 → 0xD2800540` + `RET →
+0xD65F03C0` 을 little-endian byte stream `40 05 80 d2 c0 03 5f d6` 으로
+emit. `otool -tv` 가 우리 .o 를 `mov x0, #0x2a; ret` 로 디스어셈블 — clang/
+as/LLVM 0건으로 hexa-side 가 arm64 바이트를 직접 만든 첫 측정 증명.
+
+**변경 파일**:
+
+- `compiler/emit/macho_arm64.hexa` — 7개 새 함수 + 1 struct:
+  - `_lir_op_uppercase(op)` — LIR lowercase mnemonic → `encode_arm64_insn`
+    이 키로 쓰는 canonical uppercase. `mov→MOV` · `b.eq→B.EQ` (suffix
+    uppercase 보존) 하드-맵.
+  - `_lir_operand_str(op)` — `LOperand` → `encode_arm64_insn` 이 받는
+    `string` form. `reg→reg.name` · `imm→"#" + to_string(imm)` ·
+    `label→op.label` (mem 은 cycle 3 의 baton, placeholder `<?mem?>`).
+  - `_push_word_le(out, word)` — 32-bit 인스트럭션 워드 little-endian
+    4-byte push.
+  - `_patch_word_le(out, off, word)` — intra-fn branch fixup 시 기존
+    워드 덮어쓰기.
+  - `_lookup_label(state, name)` — `label_names[] / label_offsets[]`
+    parallel-array 선형 검색 (per-fn 짧음).
+  - `_pack_fn(out_text, f)` — `LFunc.instrs` walker. `op=="label"`
+    pseudo-op 은 byte 0 emit + 이름→offset 기록. 일반 instr 는 operands
+    포맷팅 → `encode_arm64_insn(uppercase_op, ops)` → 4-byte LE push.
+    branch op (B/BL/CBZ/CBNZ/B.cond) 은 base bit-pattern + 미해결 fixup
+    리스트에 추가. 함수 종료 시 모든 미해결 brnch 를 label offset 으로
+    해소 — imm26 (B/BL) 또는 imm19 (CBZ/CBNZ/B.cond) bits 패치, PC-rel
+    delta = (target_off - br_off) / 4.
+  - `pack_lir(lm) -> MachoArm64Obj` — public top-level. `lm.funcs` 전체를
+    walk, `obj.text` 만 populate. `relocs/symbols/strtab` 는 cycle 3/4 의
+    baton 유지.
+  - 새 struct `PackFnState` — per-fn walker 의 in-progress 상태 (label
+    names/offsets, 미해결 branches/targets parallel arrays).
+- `compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_TEXT.hexa` — hexa-native
+  byte-eq falsifier. 합성 `LModule { funcs: [LFunc { instrs: [mov, ret]
+  }] }` 만들어 `pack_lir() → serialize()` → reference word table 과
+  byte-by-byte 비교. import `../../emit/macho_arm64.hexa` +
+  `../../ir/lir.hexa`. byte 0 부터 시작해 mismatch 시 정확한 offset+값
+  출력.
+
+**측정 결과 (arm64-Mac local)**:
+
+```
+$ /tmp/run_F_P0_OBJEQ_TEXT
+F-P0-OBJEQ-TEXT: packed 8 bytes of __text
+  ours: 40 05 80 d2 c0 03 5f d6
+  wrote 296 bytes to /tmp/macho_p0_cycle2.ours.o
+F-P0-OBJEQ-TEXT PASS — __text bytes match expected arm64 encoding
+exit=0
+```
+
+**otool 외부 검증 (independent toolchain oracle)**:
+
+```
+$ xcrun otool -tv /tmp/macho_p0_cycle2.ours.o
+(__TEXT,__text) section
+0000000000000000  mov  x0, #0x2a
+0000000000000004  ret
+
+$ xcrun otool -s __TEXT __text /tmp/macho_p0_cycle2.ours.o
+(__TEXT,__text) section
+0000000000000000 d2800540 d65f03c0
+```
+
+Apple 의 `otool -tv` (llvm-based disassembler) 가 우리 hexa-side 가 만든
+8-byte `__text` 를 원본 source intent `mov x0, #0x2a; ret` 으로 정확히
+디스어셈블. clang/as/LLVM 어느 단계도 우리 출력을 만지지 않음 —
+hexa-side `serialize()` + `pack_lir()` 가 외부 oracle 의 byte-stream 가설을
+독립 확인.
+
+비고: `otool -tv` 가 "symbol table offset is past end of file" warning
+출력 — cycle 3 의 symbol record 직렬화 baton (현재 nsyms=0 인데 symoff
+값은 296 으로 명시되어 있어 디스어셈블러가 "past end" 로 판단). 디스어셈블
+자체에는 영향 없음. cycle 3 이 nsyms 양수 + nlist_64 records 채우면 해소.
+
+**HONEST SCOPE (g3, over-claim 0)**:
+
+- 본 cycle 의 워커는 cycle 2 subset 만 지원 — register/imm/intra-fn label
+  operand. **mem operands** (`[sp, #16]`, pre/post-index frame ops) 는
+  cycle 3 의 baton (encoding rules 도 추가 필요).
+- **Extern symbol branches/calls** (BL `_main`, ADRP `_sym@PAGE`) 미지원.
+  `_pack_fn` 이 미해결 target 을 `leftover` 카운트로 반환하지만 cycle 2
+  의 falsifier 는 intra-fn 만 — extern reloc records 자체는 cycle 4 의
+  baton.
+- 워커는 unknown op 에 대해 sentinel `0x00000000` word 를 emit (encode
+  반환값 0) — 길이는 맞지만 실제로는 invalid instruction. 다음 cycle 들이
+  encoding rules 를 더 채워 sentinel 줄여나감.
+- `compiler/main.hexa` 와이어링 (`--emit=obj` arm + LIR → `MachoArm64Obj`
+  population pass) 은 본 cycle 외. 본 cycle 의 falsifier 는 LModule 을
+  **수동으로 합성** — 진짜 frontend 입력 통과는 cycle 5.
+
+**다음 cycle 의 baton** (RFC 063 § P0 nearest sub-step 순서):
+
+3. **Symbol records** — `MachoSymbol` (현재 scaffold struct) → 16-byte
+   `nlist_64` (strx u32 · type u8 · sect u8 · desc u16 · value u64).
+   `_pack_fn` 시작 시 함수 이름 → symbols[] 에 `MachoSymbol{name_offset:
+   …, section: 1 (__text), value: text_off, kind: N_SECT, is_external: 1}`
+   기록. string table 은 NUL-terminated UTF-8, index 0 = 빈 문자열
+   (Mach-O 관습). otool 의 "symbol table offset past end" warning 해소.
+4. **Relocation records** — `Arm64Reloc` (현재 scaffold struct) →
+   8-byte `relocation_info` (offset i32 + info bitfield: type 4b · pcrel
+   1b · length 2b · ext 1b · sym_idx 24b). `_pack_fn` 의 `leftover` 미해결
+   branch 들이 여기로 흘러감.
+5. **Mem operands + 추가 encoding rules** — `LDR Xt, [Xn, #imm12]` ·
+   `STR Xt, [Xn, #imm12]` · `STP/LDP Xt, Xt2, [Xn, #imm]!` (frame
+   prologue/epilogue) · `ADRP X0, _sym@PAGE` · `ADD X0, X0, _sym@PAGEOFF`
+   · `SVC #0x80` (exit syscall). RFC 추산 ~150-200 rules 의 잔여.
+6. **`compiler/main.hexa` 와이어링** — `--emit=obj` arm + 기존
+   `as`/`ld` 분기 fallback. F-P0-OBJEQ 풀버전 (trivial/fib/while/if corpus)
+   PASS 가 P0 closure.
+
+**RFC 063 phasing 진척**: P0 의 5 substep 중 **2 land** (1: Mach-O 직렬화
+✅ + 2: LIR 워커 ✅). 잔여 3 (symbol records · reloc records · mem
+operands+main.hexa 와이어링). RFC 추산 P0 = 3-5 cycles → 본 cycle 이 그
+중 2nd.
+
+**cc --regen / binary promote**: 미수행. `compiler/emit/macho_arm64.hexa`
+은 NOT yet `compiler/main.hexa` 에서 import. @D g_commit_push_deploy 의
+"compiler/main.hexa 소스 변경 시 필수" 게이트 미발동.
