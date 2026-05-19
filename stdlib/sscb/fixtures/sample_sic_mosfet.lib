@@ -1,0 +1,69 @@
+* sample_sic_mosfet.lib — hand-written synthetic SiC MOSFET .SUBCKT
+*
+* CLEAN-ROOM PROVENANCE (demiurge/design.md D1)
+*   This fixture is derived ENTIRELY from the public Wolfspeed
+*   C3M0021120K datasheet's described topology (D-G-S-TJ-TC five-pin
+*   convention, internal gate resistor, package inductances Ld/Ls,
+*   intrinsic VDMOS channel, temperature pin Tj for self-heating
+*   feedback). Parameter VALUES are nominal placeholder estimates
+*   sized to typical 1200 V / 250 A planar SiC MOSFET ranges from
+*   widely published research literature (Lutz, Schlangenotto, Scheuermann,
+*   De Doncker "Semiconductor Power Devices" 2nd ed. 2018; Baliga
+*   "Fundamentals of Power Semiconductor Devices" 2nd ed. 2019).
+*   NO `.lib` text is copied from any vendor distribution.
+*
+*   This file exists solely so the κ-39 parser selftest has a
+*   structurally faithful SPICE input to round-trip against — not as a
+*   physically calibrated device model. `wolfspeed_parse_lib` MUST
+*   succeed; absorption (κ-39 §8 GREEN) requires a real datasheet
+*   parity check against measured values, deferred.
+*
+* Five-pin convention: D = drain, G = gate, S = source,
+*                      TJ = junction-temperature sense node,
+*                      TC = case-temperature reference node.
+
+.SUBCKT SAMPLE_SIC_1200V_250A D G S TJ TC
+
+* Internal nets:
+*   d1 = drain after package inductance Ld
+*   g1 = gate after internal gate resistor + package inductance Lg
+*   s1 = source after package inductance Ls
+*   t1 = thermal node (junction) — current-into-T1 == power dissipation
+
+.PARAM rg_int = 1.8
+.PARAM ld_pkg = 5n
+.PARAM ls_pkg = 8n
+.PARAM lg_pkg = 12n
+.PARAM cds_par = 220p
+.PARAM rth_jc = 0.24
+
+* Package parasitics
+Ld   D  d1   {ld_pkg}
+Ls   s1 S    {ls_pkg}
+Lg   G  g1a  {lg_pkg}
+Rgi  g1a g1  {rg_int}
+
+* Output capacitance (Coss) lumped
+Cds  d1 s1   {cds_par}
+
+* Intrinsic VDMOS channel (NMOS, Vto > 0)
+M1   d1 g1 s1 s1 SIC_NMOS_INTRINSIC
+
+* Body diode is implicit in the VDMOS model card; for selftest we keep
+* it inside the .MODEL definition rather than as a separate D card.
+
+* Thermal coupling: behavioral source pushes channel power into the
+* junction thermal node; Rth_jc connects to case.
+Bpd  TJ TC I = V(d1,s1) * I(M1)
+Rth  TJ TC {rth_jc}
+* (For selftest, the actual electrothermal coupling fidelity does not
+*  matter — the parser must round-trip the cards.)
+
+.MODEL SIC_NMOS_INTRINSIC VDMOS
++ ( LEVEL=1 VTO=3.2 KP=12 LAMBDA=0.002
++   RS=0.004 RD=0.011 CGSO=2.1n CGDO=0.045n CGBO=0
++   IS=1e-14 N=1.05 BV=1700 IBV=1m
++   MTRIQS=1 KSUBTHRES=0.18
++ )
+
+.ENDS SAMPLE_SIC_1200V_250A

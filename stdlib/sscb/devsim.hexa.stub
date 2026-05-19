@@ -1,0 +1,96 @@
+#!hexa strict
+// stdlib/sscb/devsim.hexa — DEVSIM TCAD script-mode driver
+//                          (drift-diffusion + density-gradient quantum)
+//
+// @version 0.0.1-skeleton
+// @capabilities [mesh, sim, iv_extract]
+// @stability skeleton (no bodies — TBD; pending κ-39 §8 GREEN)
+// @since 2026-05-20
+//
+// CLEAN-ROOM PROVENANCE (demiurge/design.md D1 + D62)
+//   DEVSIM is Apache-2.0 (Juan E. Sanchez, 2013–;
+//   <https://github.com/devsim/devsim>, JOSS 10.21105/joss.03898). This
+//   module wraps DEVSIM in *script* mode (the published Python entry
+//   points + the `devsim` CLI), invoking it as a subprocess via
+//   stdlib/proc (no Python REPL embedded, no in-process binding). The
+//   wrapped surface is the DEVSIM `mosfet_2d` reference flow published
+//   in `devsim/devsim/examples/mosfet_2d/` — only its CLI-surface
+//   commands and physical-model names are referenced; no DEVSIM source
+//   text is re-derived here.
+//
+// ── Scope (κ-39 minimal subset) ─────────────────────────────────────────
+//   IN:  device class label (e.g. "C3M0021120K-like") + Vgs / Vds-max /
+//        npts knobs; the actual mesh + region setup is canned per class
+//        (no general-purpose mesher in this κ — that is later).
+//   OUT: typed `DevsimRun { class, ok, iv_curve: [[Vds, Id], …], log: str }`
+//
+//   OUT-OF-SCOPE (intentional, deferred to later κ):
+//     general 2-D / 3-D mesher (use canned per-class meshes)
+//     transient simulation (DC sweep only here; ngspice covers transient)
+//     temperature sweep (single Tj per run)
+//     C-V extraction (I-V only this κ)
+//
+// ── Public API (TBD bodies; surface stable for κ-39 typed-interface) ────
+//   pub struct DevsimRun {
+//     class: str,             // device class label
+//     ok: int,                // 1 if sweep converged; 0 if DEVSIM exited nonzero
+//     vgs: float, vds_max: float, npts: int,
+//     iv_curve: [[float]],    // [[Vds_i, Id_i], …], length == npts on ok=1
+//     log: str                // captured DEVSIM stderr tail (truncated)
+//   }
+//
+//   pub fn devsim_locate() -> str
+//   pub fn devsim_ramp_vds(class: str, vgs: float, vds_max: float, npts: int) -> DevsimRun
+//
+// ── Dependencies (hexa stdlib) ──────────────────────────────────────────
+//   stdlib/proc   (subprocess spawn)
+//   stdlib/io     (capture stdout/stderr)
+//   stdlib/path   (locate devsim binary on PATH)
+//   (not imported yet — TBD bodies pull only what they need.)
+//
+// Absorbs: DEVSIM (script-mode surface only)
+// Used by: demiurge sscb domain (analyze + verify cells)
+// Sibling: wolfspeed (SPICE-side validation)
+
+// ─── typed surface (placeholder shapes — locks at §8 GREEN) ──────────────
+
+pub struct DevsimRun {
+    class: str,
+    ok: int,
+    vgs: float,
+    vds_max: float,
+    npts: int,
+    iv_curve: [[float]],
+    log: str
+}
+
+// ─── driver entry points (all TBD — pending κ-39 §8 GREEN) ───────────────
+
+// Locate the DEVSIM Python entry (`python -m devsim` is the published
+// surface) or a `devsim` shim on PATH. Returns the launch command or ""
+// if DEVSIM is not installed.
+pub fn devsim_locate() -> str {
+    // TBD body — pending κ-39 §8 GREEN. Probe order (planned):
+    //   1. `which devsim` (shim on PATH)
+    //   2. `python3 -c "import devsim; print(devsim.__file__)"` (Apache wheel)
+    //   3. ""  (caller -> honest GATE_OPEN, no fake values)
+    exit(91)
+    return ""
+}
+
+// Run a Vds sweep at constant Vgs against a canned per-class mesh.
+// Returns an empty iv_curve with ok=0 if DEVSIM is missing or exits
+// nonzero — never fabricates points (g3).
+pub fn devsim_ramp_vds(class: str, vgs: float, vds_max: float, npts: int) -> DevsimRun {
+    // TBD body — pending κ-39 §8 GREEN. Planned flow:
+    //   1. devsim_locate() → cmd; if "" → return ok=0 with log explaining
+    //   2. emit a per-class DEVSIM script (canned mesh + materials)
+    //      to a tempfile (Si + SiC parameter tables — public DEVSIM examples)
+    //   3. spawn `<cmd> <script.py> --vgs <V> --vds-max <V> --npts <N>`
+    //   4. parse the JSONL Id rows DEVSIM prints; populate iv_curve
+    //   5. capture stderr tail into log
+    let mut empty_iv: [[float]] = []
+    let _placeholder = DevsimRun { class: "", ok: 0, vgs: 0.0, vds_max: 0.0, npts: 0, iv_curve: empty_iv, log: "" }
+    exit(91)
+    return _placeholder
+}
