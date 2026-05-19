@@ -57,6 +57,28 @@ cloud_copy_to_opts("root@154.54.102.51",
 cloud_copy_from("gpu-pod-1", "/workspace/result.json", "/local/result.json")
 ```
 
+### RunPod provider (cycle B-2)
+
+```hexa
+use "stdlib/cloud/runpod"
+
+let pod = runpod_create_cascade(api_key,
+    ["NVIDIA A100-SXM4-80GB", "NVIDIA H100 80GB HBM3"],
+    "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
+    pubkey, "my-job")
+let p = runpod_wait_ssh(api_key, pod.pod_id, 90, 10)   // ~15min budget
+let host = "root@" + p.ip
+let opts = runpod_pod_opts(p.port)
+cloud_run_opts(host, opts, ["python3", "train.py"])
+// ... cloud_copy_to / cloud_copy_from / cloud_nohup as needed ...
+runpod_terminate(api_key, pod.pod_id)
+```
+
+Live e2e smoke (`stdlib/cloud/e2e_smoke.hexa`): pod create →
+wait_ssh → echo → copy-to → sha-verify → copy-from → terminate.
+~38 seconds on an A100, ~$0.10. Run with `hexa run` (requires
+`secret get runpod.api_key` and `~/.ssh/id_ed25519.pub`).
+
 `CloudResult` fields: `ok`, `exit_code`, `pid`, `stdout_`, `message`.
 
 `host` is an ssh destination — a `user@host`, or (preferred) a Host alias
