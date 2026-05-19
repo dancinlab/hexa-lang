@@ -663,14 +663,18 @@
     is the modules' SSOT home per hexa-arch design.md D15/D19;
     hexa-arch references this hexa-lang location, does not carry a
     stdlib/ tree.
-  status: pending
+  status: applied
   opened: 2026-05-19
+  applied_at: 2026-05-19
   note: |
-    Commit d5a63a82 is on LOCAL HEAD of rfc043-hexa-torch (branch
-    ahead 17, UNPUSHED). Needs: hexa-lang-session review + push +
-    inbox_sync verify. Filed from the hexa-arch session per the
-    "inbox 넣었어?" handoff request (D19 boundary: hexa-arch designs,
-    hexa-lang owns/implements/pushes stdlib).
+    Already PUSHED to origin/rfc043-hexa-torch (verified 2026-05-19
+    via `git merge-base --is-ancestor d5a63a82 origin/rfc043-hexa-torch`).
+    Filed 2026-05-19 from hexa-arch session as "ahead 17 UNPUSHED" —
+    state already stale by the time hexa-lang session reviewed; commit
+    had been pushed in a prior cycle. g3: this entry is absorption
+    housekeeping only — rfc_006 §5 SKY130 area-oracle gate
+    (router_d{4,6} reproduction) remains OPEN, tracked by the Yosys
+    scaffold work, not by this booksim row.
 
 - id: comb-cite-hexa-arch-rfc002-f1f2
   source_commit: 61866308
