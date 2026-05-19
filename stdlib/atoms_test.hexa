@@ -1,0 +1,67 @@
+// HEXA Standard Library — atoms Stage-1 tests
+//
+// Exercises the pure-stdlib surface: atoms_new, atoms_len,
+// atoms_chemical_symbols, atoms_volume (closed-form 3x3 |det|).
+// Self-validating (no external reference): the FCC primitive cell
+// determinant is exactly a^3/4 by construction.
+
+import "stdlib/atoms/mod.hexa"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed = ""
+
+fn check(name: string, cond: bool) {
+    total_count = total_count + 1
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        if failed == "" { failed = name }
+    }
+}
+
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn main() {
+    // Cu FCC, a = 3.6149 Å (CRC). Primitive-cell row vectors.
+    let a = 3.6149
+    let h = a / 2.0
+    let cell = [[0.0, h, h], [h, 0.0, h], [h, h, 0.0]]
+    let pos = [[0.0, 0.0, 0.0]]
+    let syms = ["Cu"]
+    let pbc = [true, true, true]
+
+    let cu = atoms_new(syms, pos, cell, pbc)
+
+    check("atoms_len == 1", atoms_len(cu) == 1)
+
+    let gs = atoms_chemical_symbols(cu)
+    check("symbols len == 1", len(gs) == 1)
+    check("symbols[0] == Cu", gs[0] == "Cu")
+
+    // FCC primitive cell volume is exactly a^3/4.
+    let want = a * a * a / 4.0
+    let got = atoms_volume(cu)
+    check("volume == a^3/4", fabs(got - want) < 0.000000001)
+    check("volume positive", got > 0.0)
+
+    // A right-handed cubic cell: det = a^3 (sign +), |det| == a^3.
+    let cub = atoms_new(["X"], [[0.0, 0.0, 0.0]],
+                        [[a, 0.0, 0.0], [0.0, a, 0.0], [0.0, 0.0, a]],
+                        [true, true, true])
+    check("cubic volume == a^3", fabs(atoms_volume(cub) - a * a * a) < 0.000000001)
+
+    // A left-handed (swapped) cell must still give |det| (positive).
+    let lh = atoms_new(["X"], [[0.0, 0.0, 0.0]],
+                       [[0.0, a, 0.0], [a, 0.0, 0.0], [0.0, 0.0, a]],
+                       [true, true, true])
+    check("left-handed |det| positive", fabs(atoms_volume(lh) - a * a * a) < 0.000000001)
+
+    println("atoms_status: " + atoms_status())
+    if pass_count == total_count {
+        println("__ATOMS_STAGE1_TEST__ PASS (" + str(pass_count) + "/" + str(total_count) + ")")
+    } else {
+        println("__ATOMS_STAGE1_TEST__ FAIL (" + str(pass_count) + "/" + str(total_count) + " first-fail=" + failed + ")")
+        exit(1)
+    }
+}

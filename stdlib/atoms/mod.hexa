@@ -5,33 +5,88 @@
 // a calculator interface used by hexa-matter (and hexa-bio for molecular
 // geometry).
 //
-// Status: SCAFFOLD — stage-1 port pending. No hexa impl yet; this file
-// only fixes the package surface so callers can be migrated incrementally.
+// Status: STAGE-1 — Atoms container + constructor + pure-stdlib accessors
+// (len / chemical_symbols / volume) landed. Stage-2 primitives
+// (from_cif / neighborlist / EMT relax) still pending; those need
+// dependency hexa-native kernels and are tracked separately.
 //
 // ── Migration plan ──────────────────────────────────────────────────
-//   Stage 1 (current implementation port): re-target hexa-matter
-//     `_python_bridge/module/ase_atoms_construct.py` +
-//     `ase_relaxation_check.py` onto this package.
+//   Stage 1 (DONE here): Atoms struct + atoms_new + atoms_len +
+//     atoms_chemical_symbols + atoms_volume — enough surface for
+//     hexa-matter `_python_bridge/module/ase_atoms_construct.py` /
+//     `ase_relaxation_check.py` to be migrated onto this package
+//     (callers supply explicit symbols/positions/cell/pbc literals;
+//     no ASE shell-out).
 //   Stage 2 (dependency hexa-native port): the ASE primitives those
-//     adapters touch — Atoms, cell, PBC, neighborlist, EMT — get
+//     adapters touch — bulk() builders, neighborlist, EMT — get
 //     hexa-native kernels here (no python_ffi shell-out).
 //
-// ── Planned public API ──────────────────────────────────────────────
-//   pub struct Atoms        — symbols : [str], positions : tensor,
-//                             cell : tensor (3x3), pbc : [bool]
+// ── Public API ──────────────────────────────────────────────────────
+//   pub struct Atoms        — symbols : [str], positions : [[float;3]],
+//                             cell : [[float;3];3], pbc : [bool]
 //   pub fn atoms_new(symbols, positions, cell, pbc) -> Atoms
+//   pub fn atoms_len(a) -> int                    (== ASE len(atoms))
+//   pub fn atoms_chemical_symbols(a) -> [str]     (== get_chemical_symbols)
+//   pub fn atoms_volume(a) -> float               (== get_volume; |det cell|)
 //   pub fn atoms_from_cif(path) -> Atoms          (Stage 2)
 //   pub fn atoms_neighborlist(a, cutoff) -> ...   (Stage 2)
 //   pub fn atoms_emt_relax(a) -> Atoms            (Stage 2)
 //
 // ── Dependencies (hexa stdlib) ──────────────────────────────────────
-//   tensor/   — positions / cell buffers
-//   linalg/   — cell inversion, fractional<->cartesian
-//   crystal/  — sibling science package (lattice <-> Atoms bridge)
+//   (Stage 1 is dependency-free — plain arrays + a closed-form 3x3
+//    determinant; tensor/ + linalg/ enter at Stage 2.)
 //
 // Absorbs: ase    Used by: hexa-matter    Sibling: crystal, mlff
 // Cross-link: .roadmap.stdlib (science-stack subdomains)
 
+pub struct Atoms {
+    symbols: any,     // [str]            — chemical symbols, length N
+    positions: any,   // [[float;3]; N]   — Cartesian coords (Å)
+    cell: any,        // [[float;3]; 3]   — row lattice vectors (Å)
+    pbc: any          // [bool; 3]        — periodic-boundary flags
+}
+
+// Construct an Atoms container. Stage-1: caller supplies explicit
+// crystallographic literals; this is a pure value container (no
+// validation beyond what callers do — matches ASE's permissive ctor).
+pub fn atoms_new(symbols: any, positions: any, cell: any, pbc: any) -> Atoms {
+    return Atoms { symbols: symbols, positions: positions, cell: cell, pbc: pbc }
+}
+
+// ASE: len(atoms) — number of atoms (== len of the symbols list).
+pub fn atoms_len(a: Atoms) -> int {
+    return len(a.symbols)
+}
+
+// ASE: atoms.get_chemical_symbols() — the per-atom symbol list.
+pub fn atoms_chemical_symbols(a: Atoms) -> any {
+    return a.symbols
+}
+
+// ASE: atoms.get_volume() — |det(cell)| for the row-vector 3x3 cell.
+// Closed-form 3x3 determinant (no linalg dependency at Stage 1).
+pub fn atoms_volume(a: Atoms) -> float {
+    let c = a.cell
+    let r0 = c[0]
+    let r1 = c[1]
+    let r2 = c[2]
+    let a00 = r0[0]
+    let a01 = r0[1]
+    let a02 = r0[2]
+    let a10 = r1[0]
+    let a11 = r1[1]
+    let a12 = r1[2]
+    let a20 = r2[0]
+    let a21 = r2[1]
+    let a22 = r2[2]
+    let t0 = a00 * (a11 * a22 - a12 * a21)
+    let t1 = a01 * (a10 * a22 - a12 * a20)
+    let t2 = a02 * (a10 * a21 - a11 * a20)
+    let det = t0 - t1 + t2
+    if det < 0.0 { return -det }
+    return det
+}
+
 pub fn atoms_status() -> str {
-    return "SCAFFOLD — stage-1 port pending (absorbs: ase)"
+    return "STAGE-1 — Atoms container + atoms_new/len/symbols/volume (absorbs: ase; Stage-2 primitives pending)"
 }
