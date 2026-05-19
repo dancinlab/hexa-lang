@@ -23,7 +23,7 @@ At-a-glance
   interim  : W1/W2/F speed the C path; relief only while the C fallback lives
   naming   : drop bootstrap vestiges (_v2 _c2 aprime s4) — separate cycle
   measured : clang = 80% of build wall; runtime.c recompile = 53% alone
-  status   : lever 0 profiled · 정공법 surveyed · sequence = compiler/PLAN.md #18
+  status   : S1-step-1 done — lower_hir confirmed super-linear; S1-step-2 next
 ```
 
 ---
@@ -100,9 +100,14 @@ The canonical staged order is already written in `compiler/PLAN.md` #18
 cross-links it:
 
 ```
-S1  codegen performance — kill the super-linear _lower_hexpr / regalloc
-    / emit cost. DOMINANT blocker. Add per-phase codegen instrumentation
-    first, then attack the curve.
+S1  codegen performance — DOMINANT blocker.
+    step-1 DONE (2026-05-20, commit 60946b8d): per-phase instrumentation
+      (HEXA_CG_PROFILE=1) + baseline measured. lower_hir (HIR->MIR) is
+      THE super-linear phase — 15/63/372 ms at N=100/200/400 (~5.9x per
+      N-doubling = O(N^2)+); codegen + emit are near-linear.
+    step-2 NEXT: hoist _lower_hexpr's LowerCtx accumulators (blocks /
+      locals / bindings) to module scope — kill the per-recursion
+      deep-copy of the growing LowerExprResult{ctx} that causes the O(N^2).
 S2  full-closure codegen 완주 — the 21K-line compiler flatten emits .s
     within time. First point full-scope correctness becomes measurable.
 S3  assemble + link self-host — full .s -> assemble -> link -> 2nd-gen
@@ -299,3 +304,15 @@ ultimately removes.
   stage-numbers) are abandoned: new files use clean names immediately;
   existing vestige files are renamed in a separate atomic worktree cycle
   (see "Naming — drop the bootstrap vestiges"). Not folded into S1.
+- 2026-05-20 — S1-step-1 DONE (commit `60946b8d`). Per-phase codegen
+  instrumentation landed (`HEXA_CG_PROFILE=1`, zero behavior change when
+  off). Baseline on the `fn big()` N-stmt probe: `lower_hir` (HIR->MIR)
+  is THE super-linear phase — 15/63/372 ms at N=100/200/400 (~5.9x per
+  N-doubling = O(N^2)+); `codegen` (6/10/29) and `emit` (1/1/4) are
+  near-linear. Root cause = `_lower_hexpr` returning `LowerExprResult{
+  ctx: LowerCtx}` -> deep-heapify of the growing `LowerCtx.blocks`.
+  S1-step-2 = hoist those accumulators to module scope.
+- 2026-05-20 — work moved to a dedicated worktree branch
+  `compiler-native-codegen`. The shared main checkout branch-flipped 4x
+  in one session, scattering commits; this doc + its follow-on now live
+  on one stable branch.
