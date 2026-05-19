@@ -694,3 +694,13 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   Stage-1 완료, quantum 은 이미 상당 구현. 전 Stage-2 커널 잔여**
   (ASE bulk/neighborlist/EMT · pymatgen ops/CIF/PhaseDiagram · RDKit
   SMILES/descriptor · MLFF GNN 추론 — 메가·수개월).
+- 2026-05-19 — **T4 Stage-2 착수: atoms_bulk** (commit `bc0f90b5`,
+  `rfc043-hexa-torch`). ASE `ase.build.bulk()` 의 cubic Bravais 3종
+  (fcc 0.5a·[[0,1,1],[1,0,1],[1,1,0]] V=a³/4 · bcc
+  0.5a·[[-1,1,1],[1,-1,1],[1,1,-1]] V=a³/2 · diamond fcc셀+2원자
+  basis V=a³/4) hexa-native 재구현, ase_atoms_construct.py 직접 해금.
+  **검증 모델 전환 기록**: Stage-2 는 byte-parity 포트 아님(.py 는
+  ase 미설치 시 SKIP) — ASE 문서화 closed-form primitive-cell 부피에
+  대한 self-validating 단위테스트로 검증. ubu-2
+  __ATOMS_STAGE1_TEST__ PASS (17/17). atoms 의 from_cif/neighborlist/
+  EMT + crystal/mol/mlff 전 Stage-2 잔여.
