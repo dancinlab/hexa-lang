@@ -3420,3 +3420,39 @@ keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/tes
 
 **LIMITATION (소스 주석에 명기)**: shallow-walk 경계 유지 — `if/while/for` 블록 안 더 깊이 nested 된 `extern fn` 는 lift 대상 아님 (`_gen2_lift_nested_decls` 의 기존 top-of-body 한계와 동일). top-level / script-body / fn-body-최상단 `extern fn` 만 커버.
 
+
+## 진행 로그 — `hexa atlas pr` verb 구현 (2026-05-19)
+
+- **scope**: inbox/patches/hexa-cli-atlas-register-update-or-pr.md 의 `pr` arm
+  구현. `tool/atlas_cli.hexa::cmd_pr` 가 STUB (manual-steps print + `exit(3)`)
+  였던 것을 동작하는 verb 로 land. `update || PR` 의 `PR` 분기 — kick/verify 가
+  발견한 equation 을 staging shard 로 받아 fresh git branch + commit + `gh pr
+  create` 까지 자동화.
+- **code (`tool/atlas_cli.hexa`, @version 0.3.0→0.4.0)**: `cmd_pr` 전면 재작성.
+  `--staging <file.n6>` (promote 와 동일 입력 형태) + `--atlas-root` / `--base`
+  / `--branch` / `--title` 플래그. 흐름: (0) `git` 가용성 probe → (1) PR 브랜치
+  생성 (`atlas-pr-<UTC-stamp>`) → (2) 기존 `promote_to_atlas` 재사용해 shard fold
+  → (3) `atlas.append.<today>.n6` `git add`+`commit` → (4) `gh pr create` 시도.
+  헬퍼 추가: `_shq` (shell single-quote escape), `_exec_ok` (`( cmd ) && echo
+  __OK__ || echo __FAIL__` 마커로 exit-status 복원 — `exec()` 는 stdout 만 캡처),
+  `_today_compact` / `_branch_stamp`. help 텍스트 + 헤더 주석 갱신.
+- **g3 정직성 — degraded path (절대 PR fake 금지)**: `git` 없음/atlas-root 비-repo
+  → shard 만 쓰고 정확한 `git switch -c … && … && gh pr create …` 명령 출력 (exit 0).
+  `git` ok 이나 `gh` 없음/실패 (no auth·no push·offline) → branch+commit 은 로컬
+  완료, `git push -u origin <branch>` + `gh pr create` 명령 출력, "**NO PR was
+  opened**" 명시 (exit 0). `gh pr create` rc==0 일 때만 "PR opened — <url>" 출력.
+  @D g5 try-CLI-or-fallback 패턴 준수 (git/gh 외부 셸링 허용).
+- **parse-gate (measured)**: `clang -O2 -I. -Iself -c self/runtime.c -o
+  self/runtime.o` OK → `self/native/hexa_v2 tool/atlas_cli.hexa /tmp/o.c` →
+  `OK` rc=0.
+- **build + dry-run (measured)**: `HEXA_MAC_BUILD_OK=1 hexa build
+  tool/atlas_cli.hexa` PASS (module `use` 6개 flatten 정상). 측정 3건 PASS —
+  `pr --help`, 비-git atlas-root → degraded write-shard 경로, 실제 git repo →
+  branch+commit 후 `gh` degrade-after-commit 경로 (브랜치 생성·append shard
+  커밋 확인, fake PR 0).
+- **deferred / LIMITATION**: `hexa atlas register` 는 STUB 유지. `@discover`
+  주석 `.hexa` 소스를 staging shard 로 변환하려면 컴파일러 frontend
+  (`compiler/lex/*` + `compiler/parse/parser.hexa` + `compiler/discover/`) 를
+  `tool/atlas_register.hexa` companion 으로 끌어와야 함 — `pr` arm 은 의도적으로
+  *이미 staged 된* `.n6` shard 소비로 scope. `cc --regen` 미수행 (atlas_cli.hexa
+  는 tool 이지 hexa_cc.c SSOT 모듈 아님 — regen 불필요).
