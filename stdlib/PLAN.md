@@ -788,3 +788,15 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   mlff Stage-2 = T5(grad/safetensors 의존, 수개월). 빌드호스트:
   macOS 가동(OOM 간헐) · ubu-2 toolchain 동시업데이트로 일시 파손
   (hexa_v2 arch + runtime backtrace) · ubu-1 세션내 다운.
+- 2026-05-19 — **T4 Stage-2.5: atoms EMT energy** (`2f090990` cherry-pick
+  ← agent `52b9ed92`). ASE 3.22.1 EMT 총에너지(JSN, Surf.Sci.366 1996
+  394) hexa-native 충실 포트: 11원소 파라미터표 `[E0,s0,V0,eta2,
+  kappa,lambda,n0]` `ase/calculators/emt.py` verbatim 전사 +
+  energy/interact1 경로(rc/acut, gamma1/2 FCC[12,6,24] 합, sigma1
+  밀도, pair 보정, embedding `E0((1+λds)exp(−λds)−1)+6V0exp(−κds)`).
+  검증 anchor(published·genuine): 무이웃 원자 EMT 에너지 == −E0
+  (embedding ds→∞ 닫힌형) — Cu/Pt/Al isolated == −E0 정확 + 병진
+  불변·far-additivity·Cu₂ 대칭. macOS __ATOMS_STAGE1_TEST__ PASS
+  (46/46). `atoms_emt_relax` 는 force 함수형+line-search 필요 →
+  Stage-2.5 센티넬 유지. 빌드: ubu-2 toolchain 파손 확인(hexa cc
+  링크 실패) → macOS 빌드.
