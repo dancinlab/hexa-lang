@@ -2341,195 +2341,78 @@ fn cmd_run_user_direct(file, extra_args, want_vm) {
 }
 
 fn cmd_run(file, extra_args) {
-    // bt 36 revival (2026-04-21): AOT cache reactivated with deep
-    // fingerprint + fall-through safety. See helpers above (line ~800)
-    // for the rationale. Any cache failure → fall through to interp
-    // unchanged, so first-call latency never regresses.
-    //
-    // B1 Linux portability: resolve_interp() 로 argv[0]/cwd/$HOME 3-단 fallback.
-    // 이전 $HOME 하드코딩은 $HEXA_LANG 외 위치에서 silent fail.
-    let interp = resolve_interp()
-    if len(interp) == 0 {
-        println("error: interp interpreter not found")
-        println("       searched:")
-        let inst = install_dir_from_argv0()
-        if len(inst) > 0 {
-            println("         " + inst + "/build/hexa_interp  (from argv[0] / /proc/self/exe)")
-        }
-        println("         ./build/hexa_interp  (cwd)")
-        println("         $HEXA_LANG/build/hexa_interp  (dev fallback)")
-        println("         /usr/local/bin/build/hexa_interp  (container default)")
-        println("       rebuild with: hexa tool/build_interp.hexa")
-        return
+    // R7 Cycle C step-2 (2026-05-19): the tree-walking interpreter is
+    // RETIRED — its source was deleted (origin/main ab7015fa) after the
+    // measured-cutover parity gate PASSED (interp↔compiled byte-eq,
+    // 13→0 gate-relevant). `cmd_run` now COMPILES then executes:
+    // `hexa build <file>` (which itself flattens use/import via
+    // module_loader) → run the produced binary. The historical contract
+    // is preserved exactly — sets cmd_run_last_rc, calls
+    // auto_marker_write, honors cmd_run_no_exit_mode (the batch driver),
+    // exits on non-zero rc otherwise. cmd_run_vm_mode is now moot (the
+    // bytecode-VM branch was an interpreter-only path).
+    let __inst_r = install_dir_from_argv0()
+    let mut hexa_bin = ""
+    if len(__inst_r) > 0 {
+        let cand = __inst_r + "/hexa"
+        if file_exists(cand) { hexa_bin = cand }
     }
-    // Phase2 C1 wiring — module_loader 전처리기로 `import "path"` / `use "path"`
-    // 라인을 재귀적으로 인라인 전개. 대상 파일에 해당 지시문이 없으면 로더가
-    // 본문을 그대로 복제하므로 사이드이펙트는 임시파일 1개뿐.
-    //
-    // rt 33: fast-exit — grep 으로 use/import 지시문 유무를 먼저 확인.
-    //   없으면 module_loader 전처리 단계(~700ms on hooks) 를 건너뛴다.
-    //   측정: shared/hexa/rt-33-cold-start-report.md
-    //   - 훅 49개 전부 use/import 0건 → 전처리 효용 없이 매 호출 700ms 낭비.
-    //   - grep -qE 비용 ~1ms << interp 로 로더 실행 ~700ms.
-    // HX-load-fix: was `exec("grep -qE ... && printf yes || printf no")` —
-    // a /bin/sh fork per invocation. Replaced with native read_file + scan.
-    // For hook files (≤200 lines typically) the I/O is sub-millisecond; the
-    // fork elimination removes one xpcproxy trip per `hexa run` call.
-    let src_probe = read_file(file)
-    let has_dir_use = src_probe.contains("\nuse \"") || src_probe.starts_with("use \"")
-    let has_dir_imp = src_probe.contains("\nimport \"") || src_probe.starts_with("import \"")
-    let has_directive = if has_dir_use || has_dir_imp { "yes" } else { "no" }
-    let mut script = file
-    if has_directive == "yes" {
-        // B1 Linux portability: argv[0] 기반 resolver 로 $HOME 하드코딩 제거.
-        let ml_source = resolve_module_loader()
-        let ml_check = if len(ml_source) > 0 { "yes" } else { "no" }
-        if ml_check == "yes" {
-            // HX-load-fix: was `exec("printf '%s' \"/tmp/hexa_expanded.$$.hexa\"")`
-            // which forked /bin/sh every invocation. Replaced with native clock()
-            // based filename — nanosecond precision avoids collision across
-            // parallel launchd-triggered hexa runs. Saves 1 fork per invocation.
-            let expanded = runtime_tmpname("hexa_expanded") + ".hexa"
-            // orpheus O-002 / F-013: hand the install dir to module_loader so
-            // `use "stdlib/*"` resolves without HEXA_LANG/HEXA_STDLIB_ROOT set.
-            let __ml_env = module_loader_env_prefix()
-            let preproc = __ml_env + "'" + interp + "' '" + ml_source + "' '" + file + "' '" + expanded + "' 2>&1"
-            // found) propagates instead of silently falling back to the raw
-            // file. exec() drops rc → previous behavior swallowed loader
-            // fail-loud, breaking CI gates for ghost-import detection.
-            // See self/module_loader.hexa ml_iter_walk: unresolved `use` →
-            //   eprintln("[module_loader] FATAL ...") + exit(2).
-            // Distinction: rc=2 + FATAL marker = loader gave up (propagate).
-            //   Any other rc, or rc=2 without marker (defensive) = legitimate
-            //   preprocess miss → keep historical fallback semantics.
-            let preproc_pair = exec_with_status(preproc)
-            let preproc_out = preproc_pair[0]
-            let preproc_rc = preproc_pair[1]
-            // HX-load-fix: was `exec("test -f ... && printf yes || printf no")`.
-            // Use native file_exists() (codegen_c2: access(F_OK), zero I/O, no
-            // fork). 1 /bin/sh fork eliminated per `hexa run` invocation.
-            let exists = if file_exists(expanded) { "yes" } else { "no" }
-            if exists == "yes" {
-                script = expanded
-            } else {
-                if preproc_rc == 2 && preproc_out.contains("[module_loader] FATAL") {
-                    // Loader fail-loud: re-emit captured stderr (merged via
-                    // 2>&1) on parent stderr and exit(2). Do NOT downgrade to
-                    // a warn — CI gates rely on rc=2 to catch ghost imports.
-                    eprint(preproc_out)
-                    exit(2)
-                }
-                println("warn: module_loader preprocess failed, falling back to raw file")
-                if len(preproc_out) > 0 { print(preproc_out) }
-            }
-        }
+    if len(hexa_bin) == 0 { hexa_bin = av[0] }
+    // Compiled output under $HOME/.hexa-cache (NOT /tmp — the Darwin
+    // build panic-guard refuses /tmp|/private/tmp outputs).
+    let mut _cache_dir = env_var("HOME") + "/.hexa-cache"
+    if len(env_var("HOME")) == 0 { _cache_dir = "./.hexa-cache" }
+    let _mk = exec("mkdir -p " + shq(_cache_dir) + " 2>/dev/null")
+    let tmpbin = _cache_dir + "/hexa_run." + to_string(mono_ns())
+    let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(tmpbin) + " 2>&1; echo \"__HEXA_BRC__=$?\""
+    let bout = exec(bcmd)
+    let bmark = "__HEXA_BRC__="
+    let bml = len(bmark)
+    let mut bmi = -1
+    let mut bsj = len(bout) - bml
+    while bsj >= 0 {
+        if bout.substring(bsj, bsj + bml) == bmark { bmi = bsj; bsj = -1 } else { bsj = bsj - 1 }
     }
-    let arg_tail = join_shell_args(extra_args)
-    // 부모 사망 시 자식 interp 자살 — Claude Code/git hook 의 SIGKILL 로
-    // dispatch 만 죽고 자식 interp 가 orphan(ppid=1) 누적되는 패턴 차단.
-    // (memory: project_hook-zombies-timeout — 1시간+ 매달리는 interp 발견)
-    // rt 34: sleep 1 → sleep 0.05 (20Hz poll) + PPID=1 fast-path.
-    //   - 1초 floor 가 hook wall 의 95% 였음 (rt 33 후 1038ms 잔여).
-    //   - kill -0 $PID 는 syscall 1회 (~수십 µs) — 20Hz 폴링도 무부하.
-    //   - [ $PPID -eq 1 ] short-circuit: 시작 시점에 이미 orphan 인 케이스
-    //     (Claude Code 가 dispatch 시작 직후 SIGKILL → PPID 가 init 으로 reparent)
-    //     를 즉시 감지하고 child 를 죽여서 wait 가 곧바로 반환되게 한다.
-    //   - macOS+linux 양쪽에서 sh/bash 모두 fractional sleep 지원 확인됨.
-    let watch = " ) & C=$!; ( while kill -0 $C 2>/dev/null; do [ $PPID -eq 1 ] && { kill -9 $C 2>/dev/null; exit; }; kill -0 $PPID 2>/dev/null || { kill -9 $C 2>/dev/null; exit; }; sleep 0.05; done ) & wait $C"
-    // rt 35: fd 3 <- 부모 stdin 복제. `( ... ) &` 의 background 서브셸은 POSIX
-    //   asynchronous_list 규칙상 stdin 이 /dev/null 로 재지정되어 자식 interp
-    //   의 read_stdin() 이 항상 "" 를 반환 → Claude Code hook systemMessage
-    //   전체 사일런트. 자식 명령에 `<&3` 를 명시해 부모 stdin 을 전달.
-    // rt 36: exit code propagation. exec() 가 stdout 만 캡처하므로 자식의
-    //   `wait $C` rc 를 __HEXA_RC=N 샌티넬로 마지막 라인에 주입, parse 후
-    //   동일 코드로 exit. 하네스 H9 처럼 exit(1) 에 의존하는 하위 훅의
-    //   차단 신뢰성 복원.
-    //
-    // 2026-04-20 silent-stderr-fallback fix (see: test/regression/
-    //   silent_fallback_eprint.hexa): 기존 구현은 shell cmd 에 `2>&1` 를
-    //   강제했음 → popen(r) 로 stdout+stderr 합쳐진 버퍼를 print() 로 부모
-    //   stdout 에만 재출력 → 자식 stderr 가 부모 stdout 으로 잘못 라우팅.
-    //   `eprintln(arr)` 이 정상적으로 stderr 에 쓰는데도 ./hexa 레이어에서
-    //   stdout 으로 휩쓸려감. fix = stderr 전용 temp 파일로 분리, exec 완료
-    //   후 eprint() 로 재방출. __HEXA_RC 샌티넬 + rc 전파 + print 타이밍
-    //   그대로 유지(popen 버퍼링 아키텍처는 바꾸지 않음).
-    // rt#36 launch: prepend HEXA_VM=1 env when --vm flag was passed.
-    //   interp / loaded scripts can branch on env_get("HEXA_VM") to
-    //   route through bc_emitter→bc_vm_run() once the parser→bc_node
-    //   bridge lands. For self-driving smoke tests (use "bc_vm" +
-    //   manual BcProto push) the flag is observable but not required.
-    let vm_env = if cmd_run_vm_mode { "HEXA_VM=1 " } else { "" }
-    // C2 Step 3 (2026-04-16): macOS SIP strips DYLD_LIBRARY_PATH and
-    // Linux preserves LD_LIBRARY_PATH only sometimes when crossing a
-    // system-signed /bin/sh boundary (popen → sh -c). @link extern FFI
-    // (HXLAYER_FFI_LIVE=1 path) needs these to resolve libhxlayer and
-    // peers. Re-export them inside the `sh -c` body so the interp child
-    // sees the original parent values.
-    let dyld_pass = env_var("DYLD_LIBRARY_PATH")
-    let ld_pass = env_var("LD_LIBRARY_PATH")
-    let mut ffi_env = ""
-    if len(dyld_pass) > 0 { ffi_env = ffi_env + "DYLD_LIBRARY_PATH='" + dyld_pass + "' " }
-    if len(ld_pass) > 0 { ffi_env = ffi_env + "LD_LIBRARY_PATH='" + ld_pass + "' " }
-    // 2026-04-20 silent-stderr-fallback fix:
-    //   `2>&1` 제거 — 자식 stderr 는 전용 temp 파일로 redirect.
-    //   stdout 만 popen 으로 캡처 → __HEXA_RC 샌티넬 복원.
-    //   stderr temp 파일은 exec 완료 후 eprint() 로 부모 stderr 로 재방출.
-    // FIXED 2026-05-06 — interactive-stderr-buffering: temp-file redirect
-    //   was buffering interactive prompts (wraith vault setup-2fa
-    //   passphrase, confirmation eprintln() calls before a child
-    //   `read </dev/tty`) for the entire child lifetime — user saw a hung
-    //   cursor with no visible prompt. Probe split test confirmed [B][D]
-    //   stderr lines only surfaced after child exit while [A][C][E]
-    //   stdout printed live. Fix: detect parent stderr TTY via `[ -t 2 ]`.
-    //   Interactive path inherits child stderr to parent's PTY directly
-    //   (immediate visibility, no buffering, no re-emit). Non-TTY path
-    //   (CI / hooks / `2>&1 | cat` / `< /dev/null`) keeps the temp-redirect
-    //   / eprint() re-emit so the silent_fallback_eprint regression test
-    //   still captures and surfaces stderr correctly.
-    //   HEXA_FORCE_STDERR_TEMP=1 forces the legacy temp path on TTY
-    //   (debugging escape hatch — never set by callers in normal flow).
-    let force_temp = env_var("HEXA_FORCE_STDERR_TEMP") == "1"
-    let parent_stderr_tty = !force_temp && exec("[ -t 2 ] && printf yes || printf no").trim() == "yes"
-    let stderr_tmp = if parent_stderr_tty { "" } else { runtime_tmpname("run_err") }
-    let stderr_redirect = if parent_stderr_tty { "" } else { " 2>'" + stderr_tmp + "'" }
-    // no-hardcode9: --no-sentinel / HEXA_NO_SENTINEL=1 keeps stdout byte-clean
-    // by routing rc through a sidechannel file. Default behavior
-    // preserves the legacy `__HEXA_RC=N` stdout sentinel (backward
-    // compat for callers that already strip it on their end, e.g.
-    // tool/roadmap_integrate.hexa).
-    let no_sent = no_sentinel_active()
-    let rc_tmp = if no_sent { runtime_tmpname("run_rc") } else { "" }
-    let rc_inject = if no_sent { "; echo $? > '" + rc_tmp + "'" } else { "; echo __HEXA_RC=$?" }
-    let cmd = "exec 3<&0; ( " + ffi_env + vm_env + "'" + interp + "' '" + script + "'" + arg_tail + " <&3" + stderr_redirect + watch + rc_inject
-    // 2026-04-25 streaming refactor:
-    //   was `let out = exec(cmd)` (popen → full-buffer → split → print),
-    //   which forced sub-200ms-event-latency tools (hive subagent
-    //   dispatcher, hooks emitting progress) to wait for child exit.
-    //   Replaced with run_stream_with_sentinel() — popen-read per
-    //   fgets() line via exec_stream(), forward immediately through
-    //   line-buffered stdout (runtime.c setvbuf _IOLBF), strip the
-    //   trailing __HEXA_RC=N sentinel, return the parsed rc.
-    //   Stderr-temp + parent-death watchdog + rc propagation contract
-    //   unchanged.
-    let rc = if no_sent { run_stream_no_sentinel(cmd, rc_tmp) } else { run_stream_with_sentinel(cmd) }
-    // 2026-04-20: stderr 재방출 — temp 파일을 read_file 로 읽어 eprint().
-    // 순서를 완벽히 보존할 수는 없어도 "stderr=stderr / stdout=stdout"
-    // 라우팅은 복원. (스트리밍 전환 후에도 stderr 는 여전히 temp 파일에
-    // 누적되었다가 자식 종료 후 일괄 방출 — interleaving 강화는 별건.)
-    // 2026-05-06: TTY path skips re-emit (child stderr inherited directly).
-    if !parent_stderr_tty {
-        if file_exists(stderr_tmp) {
-            let err_buf = read_file(stderr_tmp)
-            if len(err_buf) > 0 { eprint(err_buf) }
-            exec("rm -f '" + stderr_tmp + "'")
-        }
+    let mut brc = 1
+    if bmi >= 0 {
+        let mut rs = bout.substring(bmi + bml, len(bout))
+        let rsl = len(rs)
+        if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" { rs = rs.substring(0, rsl - 1) }
+        brc = parse_int_str(rs)
     }
-    // ω-hexa-batch (2026-04-26): when running under `hexa batch ...`,
-    // a non-zero rc must NOT abort the dispatcher — the batch driver
-    // continues to the next script and reports failures in the final
-    // summary. Mode is set/cleared by cmd_batch around each cmd_run
-    // invocation; default behavior (interactive `hexa run X`) preserves
-    // exit-on-failure so shell pipelines and CI gates still propagate rc.
+    let mut rc = 1
+    if brc == 0 && file_exists(tmpbin) {
+        let mut cmd = shq(tmpbin)
+        let mut ai = 0
+        while ai < len(extra_args) {
+            cmd = cmd + " " + shq(extra_args[ai])
+            ai = ai + 1
+        }
+        let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+        let marker = "__HEXA_SHIM_RC__="
+        let mlen = len(marker)
+        let mut midx = -1
+        let mut sj = len(out) - mlen
+        while sj >= 0 {
+            if out.substring(sj, sj + mlen) == marker { midx = sj; sj = -1 } else { sj = sj - 1 }
+        }
+        if midx >= 0 {
+            let body = out.substring(0, midx)
+            print(body)
+            let mut rs2 = out.substring(midx + mlen, len(out))
+            let rsl2 = len(rs2)
+            if rsl2 > 0 && rs2.substring(rsl2 - 1, rsl2) == "\n" { rs2 = rs2.substring(0, rsl2 - 1) }
+            rc = parse_int_str(rs2)
+        } else {
+            print(out)
+            rc = 0
+        }
+    } else {
+        eprintln("error: `hexa build " + file + "` failed (compile error).")
+        if env_var("HEXA_INTERP_QUIET") != "1" { eprintln(bout) }
+        rc = brc
+        if rc == 0 { rc = 1 }
+    }
     cmd_run_last_rc = rc
     auto_marker_write(file, rc)
     if cmd_run_no_exit_mode {
