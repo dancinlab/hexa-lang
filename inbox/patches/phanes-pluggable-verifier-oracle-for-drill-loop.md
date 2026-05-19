@@ -1,6 +1,7 @@
 # incoming patch: phanes-pluggable-verifier-oracle-for-drill-loop — drill loop has no pluggable external verifier/oracle hook; scope-B (tenant-supplied objective+verifier) needs an in-loop authority for "objective met"
 
 > **id**: `phanes-pluggable-verifier-oracle-for-drill-loop` · **opened**: 2026-05-19 KST · **status**: `resolved-ssot 2026-05-19 — pluggable verifier hook landed in drill_run; parse-gate clean; binary promote = standard separate deploy step per the 22c27a05 pattern`
+> **VERIFIED-CLOSED 2026-05-19**: SSOT grep cross-verified — pluggable verifier callback present in `compiler/drill/drill.hexa` (grep ×73 `verifier` hits). Already `resolved-ssot 2026-05-19`; this is a close-only marker confirming the SSOT grep (no source change, no fix re-run). Binary promote remains a standard separate deploy step (NOT this work) per @D g_inbox_processing_loop step 7.
 > **trees**: `compiler/drill/drill.hexa` (`drill_run` loop · `_honesty_gate` — internal BT-AI2, advisory/non-blocking) · `compiler/drill/round.hexa` (`round_run_with_pool`) · `compiler/honesty/check` (`bt_ai2_audit`)
 > **source**: downstream `phanes` (`~/core/phanes`, new dancinlab consumer — private SaaS; Decision 1 = scope B: tenant brings a measurable objective + a verifier/oracle, phanes drives `goal → falsifier → saturation` against it).
 > **observed**: 2026-05-19 · hexa-lang pin: `50f5f073` (`rfc043-hexa-torch`)

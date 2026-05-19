@@ -1,6 +1,7 @@
 # incoming patch: codegen-struct-fwddecl-vs-fn-arena — RESOLVED — was module_loader hitting the 768 MB memory cap, NOT a codegen regression
 
 > **id**: `codegen-struct-fwddecl-vs-fn-arena` · **opened**: 2026-05-13 KST PM · **landed**: 2026-05-13 21:10 KST PM · **status**: `fixed in-session — root cause was module_loader's 768 MB RSS cap (runtime.c::_hx_mem_cap_bytes); raised cap to 4096 MB for the module_loader child only (self/main.hexa::module_loader_env_prefix). hexa.real rebuilt.`
+> **VERIFIED-CLOSED 2026-05-19**: SSOT grep cross-verified — `self/main.hexa` carries `module_loader_env_prefix` / `HEXA_MEM_CAP_MB` (grep ×8). Root cause was the module_loader 768 MB RSS cap (NOT a codegen regression); fixed 2026-05-13. Close-only marker (no source change, no fix re-run; fix already live in SSOT, dup-race precheck per @D g_inbox_processing_loop).
 > **trees**: `self/main.hexa::module_loader_env_prefix` (DONE — propagate `HEXA_MEM_CAP_MB=4096` to child unless operator override is in place)
 > **observed**: 2026-05-13 19:20 KST PM (Mac), wilson `hexa build`
 > **reproduces**: was a wilson bundle that grew past ~1100 user-fns. With this fix, wilson builds clean. Confirmed via `wilson test → 17/17 PASS` + mesh_up/down round-trip.

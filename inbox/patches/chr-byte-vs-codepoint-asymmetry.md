@@ -5,6 +5,8 @@
   - interp: `self/eval.hexa` (or wherever `chr` is dispatched) — the interp builds the string by encoding `N` as a Unicode codepoint via UTF-8
   - compiled: `self/codegen.hexa` / `self/runtime.c::hexa_chr` — most likely treats `N` as a raw byte and produces a length-1 string
 
+> **VERIFIED-CLOSED 2026-05-19 — DISSOLVED-BY-INTERP-RETIREMENT (superseded, not fixed)**: This patch describes an interp-vs-compiled `chr()` ASYMMETRY. The interpreter is now RETIRED (AGENTS.tape @D g_interp_deprecated, R7 CLOSED 2026-05-19 — `self/hexa_full.hexa` / `self/eval.hexa` interp path deleted). The asymmetry premise no longer exists: compiled raw-byte `chr(N&0xFF)` is now the sole, correct semantics, and the patch's proposed "Option A (make interp's chr symmetric)" is moot — there is no interp to make symmetric. Marked DISSOLVED (superseded by interp retirement), NOT fixed. Reference @D g_interp_deprecated. Close-only marker (no source change).
+
 **Symptom:** A string built as `chr(240) + chr(159) + chr(154) + chr(128)` is
 
 - **interp** (`hexa run`): 8 bytes — `0xC3 0xB0 0xC2 0x9F 0xC2 0x9A 0xC2 0x80`

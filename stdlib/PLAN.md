@@ -755,3 +755,20 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   hoist — 유일 대형 genuine 커널, 전용 에이전트) · atoms EMT/crystal
   multi-point-hull/mol Crippen-logP·Ertl-TPSA(Stage-2.5, 파라미터표
   필요) · mlff(T5).
+- 2026-05-19 — **T4 Stage-2 genuine-kernel 배치 완료: mol_from_smiles
+  랜딩** (`f3a14a69` cherry-pick ← agent `3e23ef11`, `rfc043-hexa-
+  torch`). hexa-bio `cmt_smiles_validation.hexa`(858L, byte-parity
+  검증)의 파서 코어 verbatim hoist(`_smiles_` private prefix; reset/
+  new_atom/link_bond/ring_*/parse_bracket_atom/parse_smiles + 렉서).
+  cmt-거동 caveat 정직 보존(heavy-atom only — implicit-H 미포함이라
+  Mol.atoms 는 heavy 리스트; bond order float→int 절단, 무Kekulé;
+  실패→빈 Mol). toolchain 적응 1: 이 빌드의 array `.pop()` 이
+  shrink 안 함 → 명시적 length 카운터로 LIFO 분기 재현(로직 동일,
+  소스 주석화). 전체 회귀 ubu-2: atoms 38/38 · sci 41/41 · mol
+  14/14 · mol_smiles 22/22 (115 checks). **T4 Stage-2 genuine 커널
+  배치 완결**: atoms{bulk,neighborlist,from_cif} ·
+  crystal{coords,angles,hull,from_cif,spacegroup} ·
+  mol{weight,hba,hbd,from_smiles}. 잔여는 전부 Stage-2.5(파라미터표
+  필요: atoms EMT · crystal multi-point-hull · mol Crippen-logP/
+  Ertl-TPSA) 또는 T5-blocked(mlff = grad/safetensors). 가짜 진전
+  0 — Stage-2.5 는 NOT-IMPLEMENTED 센티넬, 수치 미조작(g3).
