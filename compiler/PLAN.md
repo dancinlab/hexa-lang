@@ -3282,3 +3282,20 @@ EnumPath rework deliberately not done (larger, more-principled option).
   leighton/sweep COMPILE_OK 측정 (compile-clean = 패치 버그 closed);
   `fn main()` 런타임 exec 별도 미실행. `self/native/hexa_v2` binary
   promote 는 별도 deploy step (본 cycle 미포함).
+
+### 2026-05-19 — `hx` stale `need-singularity` org reference fixed (inbox patch)
+
+Processed `inbox/patches/hx-stale-need-singularity-org-after-dancinlab-rename.md`
+(filed by void downstream). The GitHub org rename `need-singularity` →
+`dancinlab` left `tool/pkg/hx` name-resolution stale. `REGISTRY_REMOTE`
+(line 10) was already corrected by the earlier identity-rename commit
+`bc545c16`. This cycle fixed `HX_ORGS_DEFAULT` (line 18):
+`"hexa-pkg dancinlab dancinlife"` → `"hexa-pkg dancinlab need-singularity"` —
+`dancinlab` primary, `need-singularity` retained as a lower-priority redirect
+fallback per the patch's Ask #2, and the bogus `dancinlife` (a git-author
+handle, not a GitHub org) dropped so `hx` no longer wastes a probe on a
+nonexistent org. Also fixed a stale `need-singularity/hexa-lang` clone URL in
+a usage comment in `tool/build_hexa_cli_native.hexa:10`. Ask #3 (resolve.tsv
+cache invalidation) deferred — out of scope for a surgical fix. `bash -n
+tool/pkg/hx` passes. `~/.hx/bin/hx` is a stale copy of this SSOT and is
+intentionally untouched. Toolchain-only; no compiler/stdlib/self rebuild.

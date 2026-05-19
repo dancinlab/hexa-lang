@@ -7,7 +7,7 @@
 //  Pairs with build_hexa_cli_linux.hexa (which cross-builds *from*
 //  macOS *to* Linux/musl). This native variant covers the workflow:
 //
-//     git clone https://github.com/need-singularity/hexa-lang.git
+//     git clone https://github.com/dancinlab/hexa-lang.git
 //     cd hexa-lang
 //     HEXA_LANG=$(pwd) hexa cc                     # build hexa_v2 (transpiler)
 //     hexa tool/build_hexa_cli_native.hexa         # build hexa.real (CLI driver)
