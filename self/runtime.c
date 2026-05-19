@@ -2348,13 +2348,36 @@ HexaVal hexa_bytes_to_str_raw(HexaVal arr) {
 //  (callers should pass non-negative indices into 0..len).
 // ═══════════════════════════════════════════════════════════
 
+/* RFC 040 device-residence descriptor. The no-CUDA build leaves every
+ * farr loc=FARR_HOST,d_buf=NULL,dirty_*=0 — byte-identical to pre-040. */
+typedef enum {
+    FARR_HOST     = 0,  /* host memory only (default — RFC 025 behaviour) */
+    FARR_DEVICE   = 1,  /* device memory only (host buf may be NULL) */
+    FARR_MIRRORED = 2   /* both host and device buffers valid + in-sync */
+} FarrLoc;
+
 typedef struct {
-    double* buf;
-    int64_t len;
+    double*  buf;        /* host pointer — RFC 025 (NULL if device-only) */
+    int64_t  len;        /* element count (shared by host and device buf) */
+    void*    d_buf;      /* CUDA device pointer — NULL if host-only (RFC 040) */
+    int      loc;        /* FarrLoc — current residence (RFC 040) */
+    int      pinned;     /* 1 if farr_pin'd (do not auto-evict) (RFC 040) */
+    int      dirty_host; /* host buf stale vs device → needs D2H (RFC 040) */
+    int      dirty_dev;  /* device buf stale vs host → needs H2D (RFC 040) */
 } HexaFarrEntry;
 
+/* RFC 040 Phase D: under -DHEXA_CUDA the farr table + count must be
+ * visible to the runtime_cuda.c TU (cuBLAS Dgemm reads host buf/len for
+ * H2D/D2H, and the residence descriptor). Non-static export under
+ * HEXA_CUDA only — the no-CUDA build keeps them `static` (byte-identical,
+ * zero ABI surface change). */
+#ifdef HEXA_CUDA
+HexaFarrEntry*        _hx_farr_table     = NULL;
+int64_t               _hx_farr_count     = 0;
+#else
 static HexaFarrEntry* _hx_farr_table     = NULL;
 static int64_t        _hx_farr_count     = 0;
+#endif
 static int64_t        _hx_farr_capacity  = 0;
 static int64_t*       _hx_farr_freelist  = NULL;
 static int64_t        _hx_farr_freelist_n = 0;
@@ -2397,6 +2420,13 @@ HexaVal hexa_farr_zeros(HexaVal n_v) {
     }
     _hx_farr_table[id].buf = buf;
     _hx_farr_table[id].len = n;
+    /* RFC 040 Phase A: initialize residence descriptor to HOST default —
+     * byte-identical to pre-040 behaviour for every existing farr. */
+    _hx_farr_table[id].d_buf      = NULL;
+    _hx_farr_table[id].loc        = FARR_HOST;
+    _hx_farr_table[id].pinned     = 0;
+    _hx_farr_table[id].dirty_host = 0;
+    _hx_farr_table[id].dirty_dev  = 0;
     return hexa_int(id);
 }
 
@@ -2406,6 +2436,18 @@ HexaVal hexa_farr_get(HexaVal h_v, HexaVal i_v) {
     int64_t i  = hexa_as_num(i_v);
     if (id < 0 || id >= _hx_farr_count) return hexa_float(0.0);
     HexaFarrEntry* e = &_hx_farr_table[id];
+#ifdef HEXA_CUDA
+    /* RFC 040 lazy-D2H on host-read. When a forge op left the farr
+     * device-resident (loc=FARR_DEVICE — authoritative bytes on the
+     * device, host buf stale), materialise them before the scalar read.
+     * _hx_cuda_farr_to_host's D2H sets loc=FARR_MIRRORED + dirty_host=0,
+     * so subsequent farr_get calls short-circuit (loc != FARR_DEVICE)
+     * — amortized O(N) first read, O(1) rest of the host-side scan. */
+    if (e->loc == FARR_DEVICE) {
+        extern int _hx_cuda_farr_to_host(int64_t farr_id);
+        (void)_hx_cuda_farr_to_host(id);
+    }
+#endif
     if (!e->buf || i < 0 || i >= e->len) return hexa_float(0.0);
     return hexa_float(e->buf[i]);
 }
@@ -2417,8 +2459,23 @@ HexaVal hexa_farr_set(HexaVal h_v, HexaVal i_v, HexaVal x_v) {
     double  x  = __hx_to_double(x_v);
     if (id < 0 || id >= _hx_farr_count) return h_v;
     HexaFarrEntry* e = &_hx_farr_table[id];
+#ifdef HEXA_CUDA
+    /* RFC 040 lazy-D2H before host write. If the device holds the
+     * authoritative bytes, materialise them on the host first — else the
+     * dirty_host=1 below would force _h2d to re-upload a buffer whose
+     * non-i indices are stale. After the write, dirty_host=1 makes the
+     * next forge op H2D-refresh the device from this (now current) host
+     * buffer (the _h2d skip in runtime_cuda.c keys on !dirty_host). */
+    if (e->loc == FARR_DEVICE) {
+        extern int _hx_cuda_farr_to_host(int64_t farr_id);
+        (void)_hx_cuda_farr_to_host(id);
+    }
+#endif
     if (!e->buf || i < 0 || i >= e->len) return h_v;
     e->buf[i] = x;
+#ifdef HEXA_CUDA
+    if (e->d_buf) { e->dirty_host = 1; e->dirty_dev = 0; }
+#endif
     return h_v;
 }
 
@@ -2435,6 +2492,23 @@ HexaVal hexa_farr_free(HexaVal h_v) {
     if (id < 0 || id >= _hx_farr_count) return hexa_void();
     HexaFarrEntry* e = &_hx_farr_table[id];
     if (e->buf) { free(e->buf); e->buf = NULL; e->len = 0; }
+    /* RFC 040: also free the device buffer if present + reset residence.
+     * No-CUDA build: d_buf is always NULL — the resets keep freelist
+     * slots hygienic for a later hexa_farr_zeros reuse. Under -DHEXA_CUDA
+     * _hx_cuda_farr_device_free cudaFree's the mirror-table slot. */
+#ifdef HEXA_CUDA
+    if (e->d_buf) {
+        extern int _hx_cuda_farr_device_free(int64_t farr_id);
+        (void)_hx_cuda_farr_device_free(id);
+        e->d_buf = NULL;
+    }
+#else
+    e->d_buf = NULL;
+#endif
+    e->loc        = FARR_HOST;
+    e->pinned     = 0;
+    e->dirty_host = 0;
+    e->dirty_dev  = 0;
     // Push id onto freelist for reuse.
     if (_hx_farr_freelist_n >= _hx_farr_freelist_cap) {
         int64_t new_cap = _hx_farr_freelist_cap < 16 ? 16 : _hx_farr_freelist_cap * 2;
@@ -3997,6 +4071,25 @@ HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
     const double* A = ae->buf;
     const double* B = be->buf;
     double* C = ce->buf;
+#ifdef HEXA_CUDA
+    /* RFC 040 Phase D / gap(d) generic-path forge routing: dim-gate
+     * large GEMMs to the verified cuBLAS Dgemm path. The GENERIC ag_tape
+     * path's ag_linear → nn_linear_fwd → forge_dispatch_matmul →
+     * dispatcher → hexa_farr_matmul lands here; d768-class shapes
+     * (M*K, K*N up to ~2.36M) route to GPU cuBLAS. The tiny ag_tape
+     * byte-eq oracles (M*K, K*N << 8192) stay on the CPU ikj path and
+     * remain bit-exact (threshold mirrors flame_phase4b3). On any GPU
+     * error → fall through to the CPU loop (safe). HEXA_CUDA-only: the
+     * no-CUDA build is byte-identical (this block is inert). */
+    if ((M * K) > 8192 || (K * N) > 8192) {
+        extern int _hx_cuda_farr_matmul_gpu(int64_t a_id, int64_t M,
+                                            int64_t K, int64_t b_id,
+                                            int64_t N, int64_t c_id);
+        int grc = _hx_cuda_farr_matmul_gpu(a_id, M, K, b_id, N, c_id);
+        if (grc == 0) return c_handle;
+        /* grc != 0: GPU path failed — fall through to CPU ikj. */
+    }
+#endif
     // ikj loop — streaming B + C, A_ik hoisted out of j.
     for (int64_t i = 0; i < M; i++) {
         const double* Ai = A + i * K;
