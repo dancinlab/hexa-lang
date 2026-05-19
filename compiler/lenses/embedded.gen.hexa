@@ -266,21 +266,87 @@ pub fn lens_apply_falsify_self_re_cite_audit(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_falsify_self_cite_unreachable(view: AtlasView) -> array {
-    // Phase C-1.a smoke body — emits one synthetic Candidate per cycle to
-    // prove the dispatch pipeline carries data through DEDUP/GATE/DRAFT/
-    // AUDIT. Cite "n" is the atlas's first @P node (P NODES, primitive 6)
-    // so RFC §12 F5 (cite must reference a valid atlas_node_id) holds.
-    // Real cite-reachability analysis lands in Phase C-1.b once SCAN
-    // populates view.p_nodes / c_nodes / l_nodes (currently empty in B-3.3).
+    // Phase C-1.c (upgrade from C-1.a smoke): real cite-reachability
+    // scan on view.p_nodes. 3-tier behavior:
+    //   tier 1  view.p_nodes empty (atlas not in consumer's view)
+    //           → C-1.a smoke fallback (1 synthetic Candidate).
+    //   tier 2  view.p_nodes populated BUT cited set empty (static rodata
+    //           edges are default-empty per PLAN.md atlas_enrich note)
+    //           → 1 summary Candidate flagging the enrich gap.
+    //   tier 3  view.p_nodes + cited set both populated
+    //           → 1 Candidate per unreachable P-node id.
+    // RFC §12 F5: every Candidate's cite[] references a real atlas id.
+    let n = len(view.p_nodes)
+    if n == 0 {
+        let mut out: array = []
+        out.push(Candidate {
+            slug: "falsify_self.cite_unreachable.smoke",
+            family: "falsify_self",
+            proposed: "tier 1 — view.p_nodes empty (atlas not yet imported into this consumer's translation unit).",
+            cite: ["n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+        return out
+    }
+    // build cited[]
+    let mut cited: array = []
+    let mut i = 0
+    while i < n {
+        let edges = view.p_nodes[i].edges
+        let m = len(edges.depends_on)
+        let mut k = 0
+        while k < m { cited.push(edges.depends_on[k]); k = k + 1 }
+        let m2 = len(edges.derives)
+        k = 0
+        while k < m2 { cited.push(edges.derives[k]); k = k + 1 }
+        let m3 = len(edges.applications)
+        k = 0
+        while k < m3 { cited.push(edges.applications[k]); k = k + 1 }
+        let m4 = len(edges.equivalents)
+        k = 0
+        while k < m4 { cited.push(edges.equivalents[k]); k = k + 1 }
+        i = i + 1
+    }
+    if len(cited) == 0 {
+        let mut out: array = []
+        out.push(Candidate {
+            slug: "falsify_self.cite_unreachable.edges_not_enriched",
+            family: "falsify_self",
+            proposed: "tier 2 — atlas P kind has " + to_string(n) + " entries but cited set is empty (static rodata edges default-empty per PLAN.md atlas_enrich note). Lazy atlas_enrich pass required.",
+            cite: ["n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+        return out
+    }
+    // tier 3: real unreachable scan (cap emissions at 32 to avoid spam)
     let mut out: array = []
-    out.push(Candidate {
-        slug: "falsify_self.cite_unreachable.smoke",
-        family: "falsify_self",
-        proposed: "Phase C-1.a smoke candidate — replace with real cite-reachability scan in C-1.b once SCAN materializes view.",
-        cite: ["n"],
-        fire_needed: false,
-        fire_estimate_usd: 0.0
-    })
+    let mut emitted = 0
+    let mut j = 0
+    while j < n {
+        if emitted >= 32 { break }
+        let id = view.p_nodes[j].id
+        let mut found = false
+        let cn = len(cited)
+        let mut ci = 0
+        while ci < cn {
+            if cited[ci] == id { found = true; break }
+            ci = ci + 1
+        }
+        if found == false {
+            out.push(Candidate {
+                slug: "falsify_self.cite_unreachable." + id,
+                family: "falsify_self",
+                proposed: "tier 3 — P atlas node '" + id + "' is never cited by any other P node's edges.",
+                cite: [id],
+                fire_needed: false,
+                fire_estimate_usd: 0.0
+            })
+            emitted = emitted + 1
+        }
+        j = j + 1
+    }
     return out
 }
 pub fn lens_apply_falsify_self_stale_node_decay(view: AtlasView) -> array {
