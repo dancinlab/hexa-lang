@@ -6637,7 +6637,7 @@ let mut _enum_names = []
 fn _enum_names_add(name) {
     let mut i = 0
     while i < len(_enum_names) {
-        if _enum_names[i] == name { return hexa_void() }
+        if _enum_names[i] == name { return }
         i = i + 1
     }
     _enum_names.push(name)

@@ -3261,3 +3261,24 @@ EnumPath rework deliberately not done (larger, more-principled option).
   `run <smoke>` (compile-then-exec) rc=0. 3/3 PASS — 제거가 회귀 0 임을
   측정 입증. g3-honest: 본 cycle 은 dead-code 신규 삭제 0 (R7 이 이미
   완료) — 부정확 doc string 2줄 정정 + tidy 점검 보고가 실질 산출물.
+
+- **2026-05-19 enum-variant codegen_c2 fix — MEASURED PASS.** inbox
+  `enum-variant-access-miscodegen-as-field-codegen-c2` (demiurge 다운스트림).
+  `<EnumName>.<VARIANT>` 접근이 generic field-access arm 으로 떨어져
+  `hexa_map_get_ic(<typename>, ...)` 로 miscodegen → C "undeclared
+  identifier". 수정 (`70c7ab9d` + 본 cycle): `gen2_enum_decl` 가 enum
+  `node.name` 을 module-scope `_enum_names` 에 등록, `if k == "Field"`
+  arm 이 `_is_enum_name(node.left.name)` 확인 후 `<Enum>_<VARIANT>`
+  #define emit. 후속결함 1건 동시수정: helper `_enum_names_add` 가
+  `return hexa_void()` 사용 → codegen 이 `hexa_call0(hexa_void)` 로
+  mis-emit (type mismatch, hexa_cc.c.new 컴파일 차단) → bare `return`
+  으로 교체. 검증: fixed codegen_c2 로 `hexa cc --regen` → `hexa_cc.c.new`
+  → 수동 link (`-x c <c.new> -x none runtime.o`, Step6 의 `-x c`-가-`.o`
+  까지-번지는 스크립트 버그 우회) → 새 `hexa_v2` bootstrap. 그 bootstrap
+  으로 `stdlib/booksim/leighton.hexa` transpile: `RegionShape_<VARIANT>`
+  #define 4× · bug emission 0× · clang COMPILE_OK (359 KB). flatten 된
+  `sweep.hexa` (module_loader 7 files, RegionShape+TrafficKind
+  cross-module): good 16× · bug 0× · COMPILE_OK (520 KB). g3-honest:
+  leighton/sweep COMPILE_OK 측정 (compile-clean = 패치 버그 closed);
+  `fn main()` 런타임 exec 별도 미실행. `self/native/hexa_v2` binary
+  promote 는 별도 deploy step (본 cycle 미포함).

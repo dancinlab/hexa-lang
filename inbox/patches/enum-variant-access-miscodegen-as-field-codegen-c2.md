@@ -6,15 +6,25 @@
 > bodies); the `if k == "Field"` arm consults `_is_enum_name(node.left.name)`
 > for a bare-Ident left and emits the existing `<EnumName>_<VARIANT>`
 > #define instead of `hexa_map_get_ic(<typename>, ...)`. Non-enum field
-> access unchanged. Verified: `hexa_real parse self/codegen_c2.hexa`
-> parse-clean. Runtime end-to-end (leighton/sweep `hexa run`) is
-> verify-PENDING — the deployed `self/native/hexa_v2` bootstrap binary
-> still predates this source edit (binary rebuild/promote is an explicit
-> out-of-scope separate deploy step); the stale binary reproduces the
-> exact bug (`#define RegionShape_K_BY_K` present + `hexa_map_get_ic(
-> RegionShape,"K_BY_K")` emitted), confirming the diagnosis and that the
-> source fix targets precisely that emission. Parser-side EnumPath rework
-> deliberately NOT done (noted as the larger, more-principled option).
+> access unchanged. Parser-side EnumPath rework deliberately NOT done
+> (noted as the larger, more-principled option).
+>
+> **MEASURED PASS (2026-05-19)** — verified end-to-end by rebuilding the
+> `hexa_v2` bootstrap from the fixed codegen_c2 (`hexa cc --regen` →
+> `hexa_cc.c.new`, manually linked `-x c <c.new> -x none runtime.o` to
+> dodge the Step6 `-x c`-bleeds-into-`.o` script bug). With the new
+> bootstrap: `stdlib/booksim/leighton.hexa` → transpile emits 4×
+> `RegionShape_<VARIANT>` #define, 0× `hexa_map_get_ic(RegionShape,...)`;
+> clang COMPILE_OK (359 KB bin, no undeclared-identifier). Flattened
+> `stdlib/booksim/sweep.hexa` (module_loader, 7 files, RegionShape +
+> TrafficKind cross-module) → 16× good emission, 0× bug; clang
+> COMPILE_OK (520 KB bin). One follow-on defect found + fixed in the
+> same fix: the helper `_enum_names_add` used `return hexa_void()` which
+> codegen mis-emits as `hexa_call0(hexa_void)` (type mismatch) — changed
+> to a bare `return`. Honest scope: leighton/sweep COMPILE_OK measured;
+> their `fn main()` runtime exec not separately run (compile-clean ==
+> the patch's bug is closed). hexa_v2 binary promote remains a separate
+> deploy step (not in this patch).
 
 > Filed 2026-05-19 by the demiurge consumer session (id002 path —
 > consumer hit a hexa-lang gap; inbox patch, never inline-patched).
