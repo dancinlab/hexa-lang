@@ -271,6 +271,49 @@ mandatory (`g_blue_closed_mandate`).
 
 (append-only)
 
+### 2026-05-19 — RFC 049 Stage 2 production BF16 kernel bodies 배선 ($0 — production wiring, fire 0)
+
+RFC 049 Stage 2 의 세 `*_bf16_gpu` 커널 entry point 의 BODY 를 honest stub 에서
+production wiring 으로 채움. **fire 0 — $0 작업**. Stage 2 scaffold (commit
+직전 cycle, `farr_bf16` storage class + entry-point signature + C1-C4
+determinism contract) 는 이미 land 됨; 본 cycle 은 그 scaffold 의 stub body
+3개를 측정-PASS 된 Stage 1 커널의 substrate wiring 으로 교체한다. 새 측정
+주장 0 — Stage 1 (BF16 fused FFN 9.67× FP64 cuBLAS Dgemm chain @ Llama-7B FFN
+A100) 은 이미 측정-PASS, 본 cycle 은 그 검증된 커널을 forge substrate entry
+point 로 turn 하는 production wiring 일 뿐.
+
+- **수정 파일**: `self/cuda/runtime_bf16.c` — `#ifdef HEXA_CUDA` 블록의 세
+  `*_bf16_gpu` body:
+  - **`hexa_farr_matmul_bf16_gpu`** — 단일 BF16 GemmEx. `gemm_ex_bf16` 헬퍼
+    (`r049_bf16_fused_ffn.cu` 측정-PASS) 의 call shape — `CUDA_R_16BF` 입력,
+    `CUBLAS_COMPUTE_32F` FP32 accumulator, `CUDA_R_16BF` 출력,
+    `CUBLAS_GEMM_DEFAULT_TENSOR_OP` (BF16 Tensor Core, deterministic algo →
+    contract C1). row-major → column-major swap trick.
+  - **`hexa_farr_ffn_bf16_gpu`** — fused FFN chain `Y = SiLU(X@W1)@W2`.
+    `cublas_ffn_chain_bf16` (측정-PASS) 패턴 — GemmEx BF16 → in-place
+    `_hx_silu_bf16_k` (FP32-compute SiLU, Stage 1 `silu_bf16` 와 byte-동일)
+    → GemmEx BF16. hidden H[M,FD] 는 local-owned device scratch
+    (caller farr set 에 없음 → cudaMalloc/cudaFree 로컬 관리).
+  - **`hexa_farr_layercast_linear_bf16_gpu`** — LayerCast linear
+    `Y[M,N] = X[M,K]@W[K,N]`, W=BF16 storage, X/Y=FP32, FP32 compute.
+    `r049_layercast_linear.cu` (측정-PASS) 패턴 — mixed FP32×BF16
+    `cublasGemmEx` 우선 시도, unsupported-type status 시 on-device
+    `_hx_bf16_to_f32_k` 업캐스트 + `cublasSgemm` fallback.
+  - 세 body 모두 `runtime_cuda.c` 의 공유 `g_cublas` 핸들 + `_ensure_cublas()`
+    lazy-init 재사용 (별도 핸들 미생성 — 같은 CUDA TU `#include` 로 static
+    심볼 가시; 단일 핸들 = 결정성 C1 보존 + 중복 context init 회피).
+- **수정 파일**: `inbox/rfc_drafts_2026_05_12/rfc_049_*.md` — status
+  `Stage-2-scaffold-landed` → `Stage-2-production-bodies-wired (2026-05-19)`,
+  Components §1/2/4 scaffold note 갱신.
+- **C-syntax 게이트**: `cc -fsyntax-only -std=c11 -Wall -Wextra
+  self/cuda/runtime_bf16.c` — no-CUDA Mac 에서 plain C 로 **PASS** (CUDA
+  심볼은 전부 `#ifdef HEXA_CUDA` 뒤; cuBLAS/CUDA 심볼은 GPU 호스트의
+  `-DHEXA_CUDA` 빌드에서만 resolve).
+- **g3 정직 경계**: production kernel **bodies wired** — 측정-PASS 된 Stage 1
+  커널의 substrate wiring 완료. "RFC 049 Stage 2 measured/complete" 아님.
+  fire-validation (GPU 에서 실행 + 9.67× 속도 + within-run bit-equal 확인) 은
+  별도 cost-bearing step — parent 가 orchestrate.
+
 ### 2026-05-19 — RFC 052 combined kernel fire — measured-KILL (H100, 107× slower)
 
 RFC 052 Hopper combined kernel (BF16 WMMA + DSM cluster fused FFN) 을 구현

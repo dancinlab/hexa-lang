@@ -373,58 +373,359 @@ int hexa_farr_bf16_to_host(HexaFarrBf16* f) {
     return 0;
 }
 
-/* ─── *_bf16_gpu kernel entry points — Stage 2 bodies ─────────────────
+/* ─── *_bf16_gpu kernel entry points — Stage 2 PRODUCTION BODIES ───────
  *
- * RFC 049 Stage 2 — kernel bodies pending fire-validation. The MEASURED
- * Stage 1 reference (self/cuda/experiments/r049_bf16_fused_ffn.cu, cuBLAS
- * GemmEx BF16 path, 9.67x FP64 cuBLAS) is the kernel these will wrap. The
- * production wiring (cuBLAS handle sharing with runtime_cuda.c::g_cublas,
- * stream coordination, the device-mirror residence contract) is the
- * follow-up cost-bearing cycle's deliverable. Each stub returns -1 and
- * names itself on stderr — honest, no fake CUDA result (the runtime_cuda.c
- * error-path convention). */
+ * RFC 049 Stage 2 — production wiring of the MEASURED Stage 1 kernels
+ * (self/cuda/experiments/r049_bf16_fused_ffn.cu, cuBLAS GemmEx BF16 path,
+ * 9.67x FP64 cuBLAS Dgemm chain on A100). The kernel ALGORITHM is unchanged
+ * from Stage 1 — these bodies only do the substrate wiring: they reuse the
+ * shared `g_cublas` handle from runtime_cuda.c (this file is `#include`d
+ * into the same CUDA translation unit, so the static handle + the
+ * `_ensure_cublas()` lazy-init helper are both visible here), then drive
+ * the proven cublasGemmEx call shape. No new measured claim — the fire
+ * (running these on a GPU + confirming 9.67x + within-run bit-equal) is a
+ * separate cost-bearing step.
+ *
+ * `g_cublas` / `_ensure_cublas()` provenance: runtime_cuda.c defines them
+ * `static` before its `#include "runtime_bf16.c"` line, so they are
+ * file-scope-visible to this TU section. We do NOT create a second cuBLAS
+ * handle — one handle per process keeps the determinism contract C1
+ * (within-run bit-equal) intact and avoids redundant context init.
+ *
+ * Determinism contract (file header C1): cublasGemmEx with a fixed algo
+ * (CUBLAS_GEMM_DEFAULT_TENSOR_OP for the pure-BF16 path) reduces in a
+ * fixed order on a single GPU + single stream + single process — so two
+ * invocations with identical inputs produce byte-identical BF16 output.
+ * No atomic-add to HBM. C2/C3/C4 caveats unchanged (see file header).
+ *
+ * On any cuBLAS / device error each body returns -1 and names itself on
+ * stderr — the runtime_cuda.c error-path convention; no fake result. */
+
+/* SiLU(x) = x * sigmoid(x) on a BF16 device buffer, computed in FP32
+ * (LayerCast storage/compute split). Byte-identical to the MEASURED
+ * Stage 1 `silu_bf16` kernel in r049_bf16_fused_ffn.cu — same FP32
+ * sigmoid, same __float2bfloat16 RNE epilogue, same grid-stride loop. */
+static __global__ void _hx_silu_bf16_k(__nv_bfloat16* h, size_t n) {
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = (size_t)gridDim.x * blockDim.x;
+    for (; i < n; i += stride) {
+        float v = __bfloat162float(h[i]);
+        float sig = 1.0f / (1.0f + expf(-v));
+        h[i] = __float2bfloat16(v * sig);
+    }
+}
+
+/* On-device upcast BF16 -> FP32 — the LayerCast fallback path's weight
+ * widening (r049_layercast_linear.cu `bf16_to_f32_k`). Used only when the
+ * running cuBLAS lacks the mixed FP32xBF16 GemmEx type combination. */
+static __global__ void _hx_bf16_to_f32_k(const __nv_bfloat16* in,
+                                         float* out, size_t n) {
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = (size_t)gridDim.x * blockDim.x;
+    for (; i < n; i += stride) out[i] = __bfloat162float(in[i]);
+}
+
+/* The pure-BF16 GemmEx call shape, lifted verbatim from the MEASURED
+ * Stage 1 `gemm_ex_bf16` helper: CUDA_R_16BF input, CUBLAS_COMPUTE_32F
+ * (FP32 accumulator), CUDA_R_16BF output, CUBLAS_GEMM_DEFAULT_TENSOR_OP
+ * (BF16 Tensor Core on sm_80+, deterministic algo -> contract C1). */
+static cublasStatus_t _hx_gemm_ex_bf16(cublasOperation_t opA,
+                                       cublasOperation_t opB,
+                                       int m, int n, int k,
+                                       const __nv_bfloat16* A, int lda,
+                                       const __nv_bfloat16* B, int ldb,
+                                       __nv_bfloat16* C, int ldc) {
+    const float alpha = 1.0f, beta = 0.0f;
+    return cublasGemmEx(g_cublas, opA, opB, m, n, k,
+                        &alpha,
+                        A, CUDA_R_16BF, lda,
+                        B, CUDA_R_16BF, ldb,
+                        &beta,
+                        C, CUDA_R_16BF, ldc,
+                        CUBLAS_COMPUTE_32F,
+                        CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+}
+
+/* Grid-block count for an elementwise kernel of `n` elements (256-thread
+ * blocks, capped at 65535 — the Stage 1 kernels' launch-config helper). */
+static int _hx_bf16_blocks(size_t n) {
+    size_t b = (n + 255) / 256;
+    return (b > 65535) ? 65535 : (int)b;
+}
 
 int hexa_farr_matmul_bf16_gpu(HexaFarrBf16* A, int64_t M, int64_t K,
                               HexaFarrBf16* B, int64_t N,
                               HexaFarrBf16* C) {
-    (void)A; (void)M; (void)K; (void)B; (void)N; (void)C;
-    /* RFC 049 Stage 2 — kernel body pending fire-validation.
-     * Will wrap cublasGemmEx(CUDA_R_16BF, CUBLAS_COMPUTE_32F,
-     * CUBLAS_GEMM_DEFAULT_TENSOR_OP) — the r049_bf16_fused_ffn.cu
-     * gemm_ex_bf16 helper, already MEASURED Stage 1. */
-    fprintf(stderr, "[bf16] hexa_farr_matmul_bf16_gpu: "
-                    "RFC 049 Stage 2 kernel body pending fire-validation\n");
-    return -1;
+    /* Production body: a single BF16 GemmEx — the MEASURED Stage 1
+     * gemm_ex_bf16 pattern (r049_bf16_fused_ffn.cu). */
+    if (!A || !B || !C || M <= 0 || K <= 0 || N <= 0) {
+        fprintf(stderr, "[bf16] hexa_farr_matmul_bf16_gpu: bad args\n");
+        return -1;
+    }
+    if (M > INT32_MAX || K > INT32_MAX || N > INT32_MAX) {
+        fprintf(stderr, "[bf16] hexa_farr_matmul_bf16_gpu: "
+                        "dim exceeds cuBLAS int range\n");
+        return -1;
+    }
+    if (_ensure_cublas() != 0) {
+        fprintf(stderr, "[bf16] hexa_farr_matmul_bf16_gpu: no cuBLAS handle\n");
+        return -1;
+    }
+    /* Ensure all three farr are device-resident (H2D on demand). */
+    if (hexa_farr_bf16_to_device(A) != 0 ||
+        hexa_farr_bf16_to_device(B) != 0 ||
+        hexa_farr_bf16_to_device(C) != 0) {
+        fprintf(stderr, "[bf16] hexa_farr_matmul_bf16_gpu: H2D failed\n");
+        return -1;
+    }
+    const __nv_bfloat16* dA = (const __nv_bfloat16*)A->d_buf;
+    const __nv_bfloat16* dB = (const __nv_bfloat16*)B->d_buf;
+    __nv_bfloat16*       dC = (__nv_bfloat16*)C->d_buf;
+    if (!dA || !dB || !dC) {
+        fprintf(stderr, "[bf16] hexa_farr_matmul_bf16_gpu: null device buf\n");
+        return -1;
+    }
+    /* Row-major C[M,N] = A[M,K] @ B[K,N]. cuBLAS is column-major; the
+     * standard swap trick computes the transpose: gemm(opN,opN, N, M, K,
+     * B, N, A, K, C, N) — identical to the Stage 1 helper's call sites. */
+    cublasStatus_t st = _hx_gemm_ex_bf16(CUBLAS_OP_N, CUBLAS_OP_N,
+                                         (int)N, (int)M, (int)K,
+                                         dB, (int)N,
+                                         dA, (int)K,
+                                         dC, (int)N);
+    if (st != CUBLAS_STATUS_SUCCESS) {
+        fprintf(stderr, "[bf16] hexa_farr_matmul_bf16_gpu: "
+                        "cublasGemmEx failed: %d\n", (int)st);
+        return -1;
+    }
+    cudaError_t ce = cudaDeviceSynchronize();
+    if (ce != cudaSuccess) {
+        fprintf(stderr, "[bf16] hexa_farr_matmul_bf16_gpu: sync failed: %s\n",
+                cudaGetErrorString(ce));
+        return -1;
+    }
+    /* C's device buffer is now authoritative. */
+    C->loc = FARR_BF16_LOC_DEVICE;
+    return 0;
 }
 
 int hexa_farr_ffn_bf16_gpu(HexaFarrBf16* X, int64_t M, int64_t D, int64_t FD,
                            HexaFarrBf16* W1, HexaFarrBf16* W2,
                            HexaFarrBf16* Y) {
-    (void)X; (void)M; (void)D; (void)FD; (void)W1; (void)W2; (void)Y;
-    /* RFC 049 Stage 2 — kernel body pending fire-validation.
-     * Will wrap cublas_ffn_chain_bf16 from r049_bf16_fused_ffn.cu
-     * (GemmEx BF16 -> silu_bf16 FP32-compute -> GemmEx BF16),
-     * already MEASURED Stage 1 at 9.67x FP64 cuBLAS @ Llama-7B FFN.
-     * RFC 052 supersedes this body with the Hopper sm_90+ DSM-cluster
+    /* Production body: the fused FFN chain Y = SiLU(X @ W1) @ W2 — the
+     * MEASURED Stage 1 cublas_ffn_chain_bf16 pattern
+     * (r049_bf16_fused_ffn.cu, 9.67x FP64 cuBLAS @ Llama-7B FFN).
+     *
+     * RFC 052 will supersede this body with the Hopper sm_90+ DSM-cluster
      * combined kernel via an internal cc.major>=9 branch — same entry
-     * point, no signature change. */
-    fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: "
-                    "RFC 049 Stage 2 kernel body pending fire-validation\n");
-    return -1;
+     * point, no signature change (RFC 052 §6.5 fallback chain). This
+     * Stage 2 body is the sm_80 RFC 049 path. */
+    if (!X || !W1 || !W2 || !Y || M <= 0 || D <= 0 || FD <= 0) {
+        fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: bad args\n");
+        return -1;
+    }
+    if (M > INT32_MAX || D > INT32_MAX || FD > INT32_MAX) {
+        fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: "
+                        "dim exceeds cuBLAS int range\n");
+        return -1;
+    }
+    if (_ensure_cublas() != 0) {
+        fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: no cuBLAS handle\n");
+        return -1;
+    }
+    if (hexa_farr_bf16_to_device(X)  != 0 ||
+        hexa_farr_bf16_to_device(W1) != 0 ||
+        hexa_farr_bf16_to_device(W2) != 0 ||
+        hexa_farr_bf16_to_device(Y)  != 0) {
+        fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: H2D failed\n");
+        return -1;
+    }
+    const __nv_bfloat16* dX  = (const __nv_bfloat16*)X->d_buf;
+    const __nv_bfloat16* dW1 = (const __nv_bfloat16*)W1->d_buf;
+    const __nv_bfloat16* dW2 = (const __nv_bfloat16*)W2->d_buf;
+    __nv_bfloat16*       dY  = (__nv_bfloat16*)Y->d_buf;
+    if (!dX || !dW1 || !dW2 || !dY) {
+        fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: null device buf\n");
+        return -1;
+    }
+    /* The hidden activation H[M,FD] needs its own device scratch — the
+     * caller's farr set does not include it. Owned + freed locally. */
+    __nv_bfloat16* dH = NULL;
+    size_t szH = (size_t)M * (size_t)FD * sizeof(__nv_bfloat16);
+    cudaError_t ce = cudaMalloc((void**)&dH, szH);
+    if (ce != cudaSuccess) {
+        fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: "
+                        "scratch cudaMalloc %zu B failed: %s\n",
+                szH, cudaGetErrorString(ce));
+        return -1;
+    }
+    /* H = X @ W1 — row-major (M,D)·(D,FD) -> (M,FD); column-major swap. */
+    cublasStatus_t st = _hx_gemm_ex_bf16(CUBLAS_OP_N, CUBLAS_OP_N,
+                                         (int)FD, (int)M, (int)D,
+                                         dW1, (int)FD,
+                                         dX,  (int)D,
+                                         dH,  (int)FD);
+    if (st != CUBLAS_STATUS_SUCCESS) {
+        fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: "
+                        "gemm1 failed: %d\n", (int)st);
+        cudaFree(dH);
+        return -1;
+    }
+    /* In-place SiLU on H (BF16 storage, FP32 compute). */
+    size_t n_act = (size_t)M * (size_t)FD;
+    _hx_silu_bf16_k<<<_hx_bf16_blocks(n_act), 256>>>(dH, n_act);
+    ce = cudaGetLastError();
+    if (ce != cudaSuccess) {
+        fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: "
+                        "silu launch failed: %s\n", cudaGetErrorString(ce));
+        cudaFree(dH);
+        return -1;
+    }
+    /* Y = H @ W2 — row-major (M,FD)·(FD,D) -> (M,D); column-major swap. */
+    st = _hx_gemm_ex_bf16(CUBLAS_OP_N, CUBLAS_OP_N,
+                          (int)D, (int)M, (int)FD,
+                          dW2, (int)D,
+                          dH,  (int)FD,
+                          dY,  (int)D);
+    if (st != CUBLAS_STATUS_SUCCESS) {
+        fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: "
+                        "gemm2 failed: %d\n", (int)st);
+        cudaFree(dH);
+        return -1;
+    }
+    ce = cudaDeviceSynchronize();
+    cudaFree(dH);
+    if (ce != cudaSuccess) {
+        fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: sync failed: %s\n",
+                cudaGetErrorString(ce));
+        return -1;
+    }
+    Y->loc = FARR_BF16_LOC_DEVICE;
+    return 0;
 }
 
 int hexa_farr_layercast_linear_bf16_gpu(const float* X, int64_t M, int64_t K,
                                         HexaFarrBf16* W, int64_t N,
                                         float* Y) {
-    (void)X; (void)M; (void)K; (void)W; (void)N; (void)Y;
-    /* RFC 049 Stage 2 — kernel body pending fire-validation.
-     * Will wrap the LayerCast path from r049_layercast_linear.cu
-     * (cublasGemmEx FP32 X + BF16 W -> FP32 compute -> FP32 Y, with the
-     * on-device upcast fallback for cuBLAS versions lacking the mixed
-     * type). MEASURED Stage 1: divergence 1.20-1.51% vs FP32. */
-    fprintf(stderr, "[bf16] hexa_farr_layercast_linear_bf16_gpu: "
-                    "RFC 049 Stage 2 kernel body pending fire-validation\n");
-    return -1;
+    /* Production body: the LayerCast linear Y[M,N] = X[M,K] @ W[K,N] with
+     * W in BF16 storage, X and Y in FP32, FP32 compute — the MEASURED
+     * Stage 1 r049_layercast_linear.cu pattern (divergence 1.20-1.51% vs
+     * FP32). Tries the direct mixed FP32xBF16 cublasGemmEx first; on an
+     * unsupported-type status falls back to an on-device BF16->FP32 upcast
+     * of the weight followed by cublasSgemm — exactly the Stage 1
+     * try-mixed-then-fallback structure.
+     *
+     * X / Y are plain FP32 HOST arrays (the LayerCast surface uses FP32
+     * activations); this body owns the device staging for X, W and Y. */
+    if (!X || !W || !Y || M <= 0 || K <= 0 || N <= 0) {
+        fprintf(stderr, "[bf16] hexa_farr_layercast_linear_bf16_gpu: "
+                        "bad args\n");
+        return -1;
+    }
+    if (M > INT32_MAX || K > INT32_MAX || N > INT32_MAX) {
+        fprintf(stderr, "[bf16] hexa_farr_layercast_linear_bf16_gpu: "
+                        "dim exceeds cuBLAS int range\n");
+        return -1;
+    }
+    if (W->len < (int64_t)K * N) {
+        fprintf(stderr, "[bf16] hexa_farr_layercast_linear_bf16_gpu: "
+                        "weight farr too small\n");
+        return -1;
+    }
+    if (_ensure_cublas() != 0) {
+        fprintf(stderr, "[bf16] hexa_farr_layercast_linear_bf16_gpu: "
+                        "no cuBLAS handle\n");
+        return -1;
+    }
+    if (hexa_farr_bf16_to_device(W) != 0) {
+        fprintf(stderr, "[bf16] hexa_farr_layercast_linear_bf16_gpu: "
+                        "weight H2D failed\n");
+        return -1;
+    }
+    const __nv_bfloat16* dW = (const __nv_bfloat16*)W->d_buf;
+    if (!dW) {
+        fprintf(stderr, "[bf16] hexa_farr_layercast_linear_bf16_gpu: "
+                        "null weight device buf\n");
+        return -1;
+    }
+    /* Device staging for the FP32 activations. */
+    size_t szX = (size_t)M * (size_t)K * sizeof(float);
+    size_t szY = (size_t)M * (size_t)N * sizeof(float);
+    float* dX = NULL;
+    float* dY = NULL;
+    cudaError_t ce;
+    if ((ce = cudaMalloc((void**)&dX, szX)) != cudaSuccess) {
+        fprintf(stderr, "[bf16] hexa_farr_layercast_linear_bf16_gpu: "
+                        "dX cudaMalloc failed: %s\n", cudaGetErrorString(ce));
+        return -1;
+    }
+    if ((ce = cudaMalloc((void**)&dY, szY)) != cudaSuccess) {
+        fprintf(stderr, "[bf16] hexa_farr_layercast_linear_bf16_gpu: "
+                        "dY cudaMalloc failed: %s\n", cudaGetErrorString(ce));
+        cudaFree(dX);
+        return -1;
+    }
+    if ((ce = cudaMemcpy(dX, X, szX, cudaMemcpyHostToDevice)) != cudaSuccess) {
+        fprintf(stderr, "[bf16] hexa_farr_layercast_linear_bf16_gpu: "
+                        "X H2D failed: %s\n", cudaGetErrorString(ce));
+        cudaFree(dX); cudaFree(dY);
+        return -1;
+    }
+    /* Row-major Y[M,N] = X[M,K] @ W[K,N]; column-major swap trick:
+     * gemm(opN,opN, N, M, K, W, N, X, K, Y, N). Try the mixed FP32xBF16
+     * GemmEx first (modern cuBLAS 12.x); FP32 accumulator. */
+    const float alpha = 1.0f, beta = 0.0f;
+    cublasStatus_t st = cublasGemmEx(g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+                                     (int)N, (int)M, (int)K,
+                                     &alpha,
+                                     dW, CUDA_R_16BF, (int)N,
+                                     dX, CUDA_R_32F,  (int)K,
+                                     &beta,
+                                     dY, CUDA_R_32F,  (int)N,
+                                     CUBLAS_COMPUTE_32F,
+                                     CUBLAS_GEMM_DEFAULT);
+    if (st != CUBLAS_STATUS_SUCCESS) {
+        /* Fallback: on-device upcast BF16 weight -> FP32, then Sgemm. */
+        float* dW_f32 = NULL;
+        size_t n_w = (size_t)K * (size_t)N;
+        if ((ce = cudaMalloc((void**)&dW_f32,
+                             n_w * sizeof(float))) != cudaSuccess) {
+            fprintf(stderr, "[bf16] hexa_farr_layercast_linear_bf16_gpu: "
+                            "fallback scratch failed: %s\n",
+                    cudaGetErrorString(ce));
+            cudaFree(dX); cudaFree(dY);
+            return -1;
+        }
+        _hx_bf16_to_f32_k<<<_hx_bf16_blocks(n_w), 256>>>(dW, dW_f32, n_w);
+        ce = cudaGetLastError();
+        if (ce != cudaSuccess) {
+            fprintf(stderr, "[bf16] hexa_farr_layercast_linear_bf16_gpu: "
+                            "upcast launch failed: %s\n",
+                    cudaGetErrorString(ce));
+            cudaFree(dX); cudaFree(dY); cudaFree(dW_f32);
+            return -1;
+        }
+        st = cublasSgemm(g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+                         (int)N, (int)M, (int)K,
+                         &alpha, dW_f32, (int)N, dX, (int)K,
+                         &beta, dY, (int)N);
+        cudaFree(dW_f32);
+        if (st != CUBLAS_STATUS_SUCCESS) {
+            fprintf(stderr, "[bf16] hexa_farr_layercast_linear_bf16_gpu: "
+                            "fallback Sgemm failed: %d\n", (int)st);
+            cudaFree(dX); cudaFree(dY);
+            return -1;
+        }
+    }
+    ce = cudaMemcpy(Y, dY, szY, cudaMemcpyDeviceToHost);
+    cudaFree(dX);
+    cudaFree(dY);
+    if (ce != cudaSuccess) {
+        fprintf(stderr, "[bf16] hexa_farr_layercast_linear_bf16_gpu: "
+                        "Y D2H failed: %s\n", cudaGetErrorString(ce));
+        return -1;
+    }
+    return 0;
 }
 
 #else  /* !HEXA_CUDA — no-CUDA host: honest stubs, ABI stays stable */
