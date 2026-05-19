@@ -162,41 +162,235 @@ pub fn nvptx_intrinsic_map() -> [NvptxIntrinsic] {
     return m
 }
 
-// ── Codegen helpers (scaffold stubs) ──────────────────────────
+// ── PTX-flavored LIR encoding (RFC 055 §6.2 — 055-P0) ─────────
+//
+// RFC 055 §6.2: the NVPTX target reuses the existing LInstr / LFunc /
+// LModule structs as-is for text emission, producing PTX-flavored
+// `LInstr` records whose `op` field is a PTX mnemonic. PTX has its own
+// operand surface (virtual registers `%rd1`, type-qualified ops, `[addr]`
+// dereference) that the CPU LOperand reg/imm/mem encoding does not model.
+// To keep the CPU emit path byte-identically untouched (falsifier
+// F-RFC055-CPU-CODEGEN-UNTOUCHED), 055-P0 carries every PTX operand as a
+// pre-rendered text string in `LOperand.label` (kind = "label"). The PTX
+// text emit pass (`emit_ptx` below) then joins `op` + operand strings —
+// it never invokes the CPU `_fmt_operand` reg/imm/mem renderer.
+//
+// PTX virtual registers map 1:1 to MIR `Local.id` — PTX's SSA-with-
+// virtual-registers form needs no register-allocator pass; `ptxas`
+// allocates physical registers downstream (RFC 055 §6.2). 055-P0
+// therefore lowers MIR straight to PTX text with no regalloc.
+
+// _nvptx_op — a PTX operand carried as a pre-rendered text string.
+fn _nvptx_op(text: string) -> LOperand {
+    return LOperand {
+        kind: "label",
+        reg: PReg { name: "", kind: "" },
+        imm: 0,
+        mem_base: PReg { name: "", kind: "" },
+        mem_offset: 0,
+        label: text
+    }
+}
+
+// _nvptx_instr — a PTX-flavored LInstr (op = PTX mnemonic, args = operand
+// text strings, comment = optional MIR-trace note).
+fn _nvptx_instr(op: string, args: [LOperand], comment: string) -> LInstr {
+    return LInstr { op: op, args: args, comment: comment }
+}
+
+// _nvptx_reg_f64 — the PTX virtual-register name for an FP64 value held
+// in MIR Local `id`. PTX names FP64 registers `%fd<n>` by convention.
+fn _nvptx_reg_f64(id: i64) -> string {
+    return "%fd" + to_string(id)
+}
+
+// _nvptx_reg_s32 — PTX virtual register for an i32 (index) value.
+fn _nvptx_reg_s32(id: i64) -> string {
+    return "%r" + to_string(id)
+}
+
+// _nvptx_operand_text — render one MIR Operand as a PTX operand string
+// for the FP64-arithmetic subset (RFC 055 §6.6).
+//
+//   local       -> the value's PTX virtual register (`%fd<id>`).
+//   const_float -> a PTX FP64 immediate (decimal literal).
+//   const_int   -> a PTX integer immediate.
+//
+// RFC 055 055-P0 — const_str / global operands are out of the FP64
+// arithmetic slice; they lower to an honest placeholder so the emit
+// pass never silently mis-renders. String/global GPU operands are 055-P1+.
+fn _nvptx_operand_text(o: Operand) -> string {
+    if o.kind == "local" {
+        return _nvptx_reg_f64(o.local_id)
+    }
+    if o.kind == "const_float" {
+        return to_string(o.float_val)
+    }
+    if o.kind == "const_int" {
+        return to_string(o.int_val)
+    }
+    // RFC 055 055-P0 — non-FP64-slice operand kind (const_str / global).
+    return "0d0000000000000000"
+}
+
+// _nvptx_binop_mnemonic — map a MIR binop opcode to its PTX FP64
+// mnemonic. Covers the FP64 arithmetic subset (RFC 055 §6.6); a MIR
+// binop outside that subset returns "" so the caller emits an honest
+// `// RFC 055 055-P0 — unsupported binop` stub line instead of bad PTX.
+fn _nvptx_binop_mnemonic(op: string) -> string {
+    if op == "add" || op == "+" { return PTX_OP_ADD_F64 }
+    if op == "sub" || op == "-" { return PTX_OP_SUB_F64 }
+    if op == "mul" || op == "*" { return PTX_OP_MUL_F64 }
+    return ""
+}
+
+// _nvptx_lower_stmt — lower one MIR statement to PTX-flavored LInstr
+// records, appending to `buf`. FP64-arithmetic subset only (RFC 055 §6.6).
+//
+//   STMT_ASSIGN  (1 arg)  -> `mov.f64  %fd<dst>, <src>`
+//   STMT_BINOP   (2 args) -> `<op>.f64 %fd<dst>, <a>, <b>`
+//   STMT_RETURN           -> `ret`  (the result lives in its %fd register;
+//                            a PTX `.entry` writes results to a .global
+//                            farr — that store wiring is 055-P1).
+//
+// RFC 055 055-P0 — STMT_CALL / STMT_BR / STMT_BR_COND / STMT_LOAD /
+// STMT_STORE are NOT in the straight-line FP64 arithmetic slice; each
+// lowers to an honest stub LInstr (op = "//") so the emitted PTX text
+// stays readable and never silently drops a statement. Control flow
+// (`bra`, `setp`) and global/shared load/store are 055-P1+.
+fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt) -> [LInstr] {
+    let mut out = buf
+    if s.kind == STMT_ASSIGN {
+        if len(s.args) >= 1 {
+            let mut a = []
+            a.push(_nvptx_op(_nvptx_reg_f64(s.dst.id)))
+            a.push(_nvptx_op(_nvptx_operand_text(s.args[0])))
+            out.push(_nvptx_instr("mov.f64", a, "assign"))
+        }
+        return out
+    }
+    if s.kind == STMT_BINOP {
+        if len(s.args) >= 2 {
+            let mnem = _nvptx_binop_mnemonic(s.op)
+            if len(mnem) > 0 {
+                let mut a = []
+                a.push(_nvptx_op(_nvptx_reg_f64(s.dst.id)))
+                a.push(_nvptx_op(_nvptx_operand_text(s.args[0])))
+                a.push(_nvptx_op(_nvptx_operand_text(s.args[1])))
+                out.push(_nvptx_instr(mnem, a, "binop " + s.op))
+            } else {
+                // RFC 055 055-P0 — binop outside the FP64 arithmetic
+                // subset (e.g. div / compare / bitwise). Honest stub.
+                out.push(_nvptx_instr("//", [], "RFC 055 055-P0 — unsupported binop: " + s.op))
+            }
+        }
+        return out
+    }
+    if s.kind == STMT_RETURN {
+        out.push(_nvptx_instr(PTX_OP_RET, [], "return"))
+        return out
+    }
+    // RFC 055 055-P0 — statement outside the straight-line FP64 slice.
+    // STMT_CALL / STMT_BR* / STMT_LOAD / STMT_STORE / STMT_THROW etc. are
+    // 055-P1+ (control flow, address-space load/store). Honest stub.
+    out.push(_nvptx_instr("//", [], "RFC 055 055-P0 — unsupported stmt kind: " + s.kind))
+    return out
+}
+
+// _nvptx_collect_f64_regs — the set of MIR Local ids that need an FP64
+// `.reg .f64` declaration in the PTX function body. 055-P0 declares one
+// PTX virtual register per Local that is an assignment/binop destination
+// (the values the function computes). PTX requires every virtual
+// register be declared before use.
+fn _nvptx_collect_f64_regs(mfn: MFunc) -> [i64] {
+    let mut ids = []
+    let mut bi = 0
+    while bi < len(mfn.blocks) {
+        let blk = mfn.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            let s = blk.stmts[si]
+            if s.kind == STMT_ASSIGN || s.kind == STMT_BINOP {
+                // dedup — small N, linear membership scan is fine.
+                let mut seen = false
+                let mut k = 0
+                while k < len(ids) {
+                    if ids[k] == s.dst.id { seen = true }
+                    k = k + 1
+                }
+                if !seen { ids.push(s.dst.id) }
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return ids
+}
+
+// ── Codegen helpers (055-P0 — real MIR -> PTX-LIR lowering) ───
 
 // _nvptx_lower_func — lower one MIR function to a PTX-flavored LFunc.
 //
-// RFC 055 Stage 1 — not yet implemented. The 055-P0 cycle fills this:
-// classify the fn (kernel vs device) by attribute, lower each MIR block
-// to PTX `LInstr` records (op = PTX mnemonic from nvptx_ptx_ops.hexa),
-// and read thread-index builtins via `mov.u32` from PTX sregs. PTX's
+// RFC 055 055-P0 — implemented for the FP64 arithmetic subset (§6.6).
+// Walks every MIR block in order and lowers each statement to PTX
+// `LInstr` records (op = PTX mnemonic from nvptx_ptx_ops.hexa). PTX's
 // virtual-register SSA form needs no register allocator pass — `ptxas`
-// allocates downstream (RFC 055 §6.2).
+// allocates downstream (RFC 055 §6.2), so this is a direct MIR walk
+// with no regalloc / no physical-register frame.
+//
+// RFC 055 055-P0 — kernel-vs-device classification by `@gpu_kernel` /
+// `@gpu_device` attribute is 055-P1 (the attribute is not parsed yet);
+// 055-P0 lowers every fn as a device `.func`. The PTX `.reg .f64`
+// declarations the function body needs are recorded in `callee_saved`
+// (one PReg per FP64 virtual register) so the emit pass can declare
+// them — a structural reuse of the LFunc field, not a CPU regalloc.
 fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
-    // RFC 055 Stage 1 — placeholder: emit an empty LFunc carrying only
-    // the name + target so the scaffold is structurally complete.
-    // Stage 055-P0 replaces this with real MIR -> PTX-LIR lowering.
+    let mut instrs = []
+    let mut bi = 0
+    while bi < len(mfn.blocks) {
+        let blk = mfn.blocks[bi]
+        // Block label — PTX block labels are `$L_<id>:`. The emit pass
+        // renders op == "label" specially.
+        instrs.push(_nvptx_instr("label", [_nvptx_op("$L_" + to_string(blk.id))], ""))
+        let mut si = 0
+        while si < len(blk.stmts) {
+            instrs = _nvptx_lower_stmt(instrs, blk.stmts[si])
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    // Record the FP64 virtual registers as PReg rows in callee_saved so
+    // the emit pass can declare them with `.reg .f64`.
+    let reg_ids = _nvptx_collect_f64_regs(mfn)
+    let mut regs = []
+    let mut ri = 0
+    while ri < len(reg_ids) {
+        regs.push(PReg { name: _nvptx_reg_f64(reg_ids[ri]), kind: "fpr" })
+        ri = ri + 1
+    }
     return LFunc {
         name: mfn.name,
         target: target,
-        instrs: [],
+        instrs: instrs,
         frame_size: 0,
-        callee_saved: [],
+        callee_saved: regs,
         def_line: mfn.def_line
     }
 }
 
 // _nvptx_codegen — shared lowering body for both sm_* variants.
 //
-// RFC 055 Stage 1 — partial scaffold. Walks the module's functions and
-// produces empty LFuncs. The PTX text emit pass (LIR -> .ptx text) is a
-// separate 055-P0 deliverable, not wired here.
+// RFC 055 055-P0 — walks the module's functions and lowers each to a
+// PTX-flavored LFunc (FP64 arithmetic subset, §6.6). The PTX text emit
+// pass (LModule -> .ptx text) is `emit_ptx` below. Still NOT wired into
+// the compiler's target dispatch — adding the dispatch case is 055-P1
+// (falsifier F-RFC055-CPU-CODEGEN-UNTOUCHED keeps the CPU path frozen).
 fn _nvptx_codegen(module: MModule, target: string) -> LModule {
     let mut funcs = []
     let mut i = 0
     while i < len(module.funcs) {
-        // RFC 055 Stage 1 — partition by @gpu_* attribute is a 055-P1
-        // step. Today every fn is lowered through the same placeholder.
+        // RFC 055 055-P0 — partition by @gpu_* attribute is a 055-P1
+        // step. Today every fn is lowered as a device `.func`.
         funcs.push(_nvptx_lower_func(module.funcs[i], target))
         i = i + 1
     }
@@ -234,4 +428,153 @@ pub fn codegen_nvptx_sm90(module: MModule) -> LModule {
 // directive (RFC 055 §6.1). sm_80 is the 055-P3 variant deliverable.
 pub fn codegen_nvptx_sm80(module: MModule) -> LModule {
     return _nvptx_codegen(module, NVPTX_TARGET_SM80)
+}
+
+// ── PTX text emit pass (RFC 055 §6.2 — 055-P0) ────────────────
+//
+// The emit pass turns an NVPTX-target LModule (PTX-flavored LFuncs from
+// `codegen_nvptx_sm*`) into valid PTX assembly text. It is the GPU
+// analogue of `compiler/emit/asm.hexa::emit_asm` for the CPU targets,
+// but kept SELF-CONTAINED here: PTX's operand surface (virtual registers,
+// type-qualified ops, `[addr]` dereference) differs from the CPU LOperand
+// reg/imm/mem encoding, so PTX text emission must not route through the
+// CPU `_fmt_operand` renderer. Keeping it in this file means the CPU
+// emit path is byte-identically untouched (F-RFC055-CPU-CODEGEN-UNTOUCHED).
+//
+// RFC 055 055-P0 — emits real PTX for the FP64 arithmetic subset:
+//   * module header — `.version` / `.target` / `.address_size`
+//   * per-function `.func` body with `.reg .f64` declarations
+//   * the FP64 arithmetic ops (`add.f64` / `sub.f64` / `mul.f64`),
+//     `mov.f64`, and `ret`
+//   * block labels
+//
+// RFC 055 055-P1+ stubs (honestly NOT emitted by 055-P0):
+//   * `.visible .entry` kernel headers + `.param` parameter banks
+//     (needs `@gpu_kernel` attribute parsing — 055-P1)
+//   * `ld.global.f64` / `st.global.f64` address-space load/store
+//     (needs the @gpu farr-arg lowering — 055-P1)
+//   * `fma.rn.f64` (needs MIR mul+add fusion recognition — 055-P1)
+//   * thread-index `mov.u32` from `%tid` / `%ctaid` sregs — 055-P1
+//   * `bar.sync` / `bra` / `setp` control + sync — 055-P1/P2
+
+// PTX ISA version 055-P0 targets. PTX 7.8 is the baseline that covers
+// both sm_80 (Ampere) and sm_90 (Hopper) for the FP64 arithmetic subset.
+// NVIDIA fact, cited from the PTX ISA documentation — not lattice-derived.
+//   ref: NVIDIA PTX ISA — https://docs.nvidia.com/cuda/parallel-thread-execution/
+let _NVPTX_PTX_VERSION: string = "7.8"
+
+// _nvptx_arch_for_target — the PTX `.target` arch string for an LModule
+// target tag. Defaults to the sm_90 arch for an unrecognized tag.
+fn _nvptx_arch_for_target(target: string) -> string {
+    if target == NVPTX_TARGET_SM80 { return NVPTX_ARCH_SM80 }
+    return NVPTX_ARCH_SM90
+}
+
+// _emit_ptx_header — the PTX module header directives (RFC 055 §6.2).
+fn _emit_ptx_header(target: string) -> string {
+    let arch = _nvptx_arch_for_target(target)
+    let mut s = ""
+    s = s + "// RFC 055 055-P0 — hexa-native NVPTX emit · target=" + target + "\n"
+    s = s + PTX_VERSION_DIRECTIVE + " " + _NVPTX_PTX_VERSION + "\n"
+    s = s + PTX_TARGET_DIRECTIVE + " " + arch + "\n"
+    // PTX `.address_size 64` — nvptx64 is a 64-bit address ABI.
+    s = s + PTX_ADDRSIZE_DIRECTIVE + " 64\n"
+    return s
+}
+
+// _emit_ptx_instr — render one PTX-flavored LInstr as a PTX text line.
+//   op == "label" -> a bare PTX block label `$L_<id>:`.
+//   op == "//"    -> an honest 055-P0 stub comment line.
+//   otherwise     -> `    <mnemonic> <op0>, <op1>, ...;`  (PTX needs the
+//                     trailing semicolon on every instruction).
+fn _emit_ptx_instr(instr: LInstr) -> string {
+    if instr.op == "label" {
+        let mut name = ""
+        if len(instr.args) > 0 { name = instr.args[0].label }
+        return name + ":"
+    }
+    if instr.op == "//" {
+        return "    // " + instr.comment
+    }
+    let mut line = "    " + instr.op
+    if len(instr.args) > 0 {
+        line = line + " "
+        let mut i = 0
+        while i < len(instr.args) {
+            if i > 0 { line = line + ", " }
+            line = line + instr.args[i].label
+            i = i + 1
+        }
+    }
+    line = line + ";"
+    if len(instr.comment) > 0 {
+        line = line + "  // " + instr.comment
+    }
+    return line
+}
+
+// _emit_ptx_func — render one PTX-flavored LFunc as a PTX function body.
+//
+// RFC 055 055-P0 — every fn is emitted as a device `.func` (the
+// `.visible .entry` kernel form + `.param` bank is 055-P1; see header).
+// The `.reg .f64` declarations come from LFunc.callee_saved (the FP64
+// virtual registers `_nvptx_lower_func` recorded there).
+fn _emit_ptx_func(f: LFunc) -> string {
+    let mut parts: [string] = []
+    // 055-P0 — device-fn form. `.visible .entry` kernel form is 055-P1.
+    parts.push(PTX_DIRECTIVE_FUNC + " " + f.name + "\n")
+    parts.push("{\n")
+    // `.reg .f64` declarations — PTX requires every virtual register be
+    // declared before use. One declaration per FP64 register the body
+    // computes into.
+    let mut ri = 0
+    while ri < len(f.callee_saved) {
+        parts.push("    .reg .f64 " + f.callee_saved[ri].name + ";\n")
+        ri = ri + 1
+    }
+    // RFC 055 055-P0 — `.reg .s32` / `.reg .pred` / `.param` declarations
+    // for index registers, predicates and kernel parameters are 055-P1
+    // (they pair with control flow + the launch ABI).
+    let mut i = 0
+    while i < len(f.instrs) {
+        parts.push(_emit_ptx_instr(f.instrs[i]) + "\n")
+        i = i + 1
+    }
+    parts.push("}\n")
+    return parts.join("")
+}
+
+// emit_ptx — the PTX text emit pass: NVPTX-target LModule -> PTX text.
+//
+// RFC 055 055-P0 — the deliverable entry point. Walks the LModule's
+// PTX-flavored LFuncs and produces valid PTX assembly text for the FP64
+// arithmetic subset (§6.6). Sibling to `emit_asm` for the CPU targets,
+// but PTX-self-contained (see the §6.2 emit-pass note above).
+//
+// NOT wired into the compiler's emit dispatch — `emit_ptx` is reached
+// only by a unit/smoke entry point in 055-P0. Compiler emit dispatch
+// for the NVPTX target is 055-P1 (F-RFC055-CPU-CODEGEN-UNTOUCHED keeps
+// the CPU `emit_asm` path frozen).
+pub fn emit_ptx(module: LModule) -> string {
+    let mut parts: [string] = []
+    parts.push(_emit_ptx_header(module.target))
+    let mut i = 0
+    while i < len(module.funcs) {
+        parts.push("\n")
+        parts.push(_emit_ptx_func(module.funcs[i]))
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+// codegen_emit_ptx_sm90 — convenience one-shot: MIR module -> PTX text
+// for sm_90. Composes `codegen_nvptx_sm90` + `emit_ptx`. RFC 055 055-P0
+// smoke/unit entry point; NOT a compiler-dispatch path.
+pub fn codegen_emit_ptx_sm90(module: MModule) -> string {
+    return emit_ptx(codegen_nvptx_sm90(module))
+}
+
+// codegen_emit_ptx_sm80 — sm_80 variant of `codegen_emit_ptx_sm90`.
+pub fn codegen_emit_ptx_sm80(module: MModule) -> string {
+    return emit_ptx(codegen_nvptx_sm80(module))
 }

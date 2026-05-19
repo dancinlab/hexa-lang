@@ -2,20 +2,27 @@
 
 ## 1. Status
 
-- **Status**: **Stage 1 scaffold landed (2026-05-19)** — the NVPTX codegen
-  target skeleton exists in-tree and parses clean. This is a *scaffold*, NOT
-  an implementation: `compiler/codegen/nvptx_target.hexa` +
-  `compiler/codegen/nvptx_ptx_ops.hexa` carry the codegen entry points
-  (`codegen_nvptx_sm90` / `codegen_nvptx_sm80`), the GPU-IR concept structs,
-  the PTX opcode table, and the rt#45 reconciliation record — but emit no PTX
-  text, parse no `@gpu_kernel` attribute, run no kernel, and are **not wired
-  into the compiler's target dispatch** (zero behavior change). The codegen
-  body (055-P0 PTX emit pass) and dispatch wiring + `@gpu_kernel` end-to-end
-  (055-P1) are follow-up cycles per the §12 phasing table. The pre-existing
-  `self/native/gpu_codegen_stub.c` (rt#45) is SUPERSEDED — see §3 and the
-  reconciliation header block in `nvptx_target.hexa`.
+- **Status**: **055-P0 PTX text emit pass landed (2026-05-19)** — the NVPTX
+  codegen target now lowers the FP64-arithmetic MIR subset (§6.6) to real
+  PTX assembly text. `compiler/codegen/nvptx_target.hexa` carries a working
+  `_nvptx_lower_func` (MIR → PTX-flavored LIR), an `emit_ptx` text emit pass
+  (LModule → PTX text), and the `codegen_emit_ptx_sm90` / `_sm80` one-shot
+  entry points; `compiler/codegen/nvptx_emit_test.hexa` is the 055-P0
+  unit/smoke entry point. **What emits real PTX:** the module header
+  (`.version` / `.target` / `.address_size`), per-function `.func` bodies,
+  `.reg .f64` register declarations, `mov.f64`, `add.f64` / `sub.f64` /
+  `mul.f64`, block labels, and `ret`. **What is still an honest stub for
+  055-P1+:** `.visible .entry` kernel headers + `.param` banks, `ld.global` /
+  `st.global` address-space load/store, `fma.rn.f64` (needs MIR mul+add
+  fusion recognition), thread-index `mov.u32` from sregs, `bar.sync` / `bra` /
+  `setp` control + sync, and `@gpu_kernel` attribute parsing. The emit pass
+  remains **NOT wired into the compiler's main target dispatch** (zero
+  behavior change for CPU codegen — falsifier F-RFC055-CPU-CODEGEN-UNTOUCHED
+  holds). The Stage-1 scaffold (entry points, IR structs, PTX opcode table,
+  rt#45 reconciliation record) landed 2026-05-19; 055-P0 advances it from
+  scaffold to a working text emit pass for the FP64 subset.
 - **Original status**: design-draft (2026-05-17) — DESIGN ONLY, no implementation
-- **Date**: 2026-05-17 (draft) · 2026-05-19 (Stage 1 scaffold)
+- **Date**: 2026-05-17 (draft) · 2026-05-19 (Stage 1 scaffold) · 2026-05-19 (055-P0 PTX emit pass)
 - **Priority**: P2 (architectural enabler — opens the hexa-native GPU path; not on
   any current critical chain. flame/forge ship today on the C/CUDA substrate;
   RFC 055 is the *future* hexa-native tier, not a blocker for either.)
@@ -510,7 +517,7 @@ Suggested phasing once an implementation cycle is greenlit:
 
 | Phase | Capability | Falsifier gate |
 |---|---|---|
-| **055-P0** | NVPTX codegen target skeleton — `codegen_nvptx_sm90` entry, `LModule.target` = `nvptx64-…`, PTX `LInstr` opcode table, PTX text emit pass. No GPU run yet. **Stage 1 scaffold landed 2026-05-19** (`compiler/codegen/nvptx_target.hexa` + `nvptx_ptx_ops.hexa` — entry points, IR structs, opcode table; parse-clean, not dispatch-wired). PTX text emit pass = remaining 055-P0 work. | (skeleton — compiles, emits PTX text) |
+| **055-P0** | NVPTX codegen target skeleton — `codegen_nvptx_sm90` entry, `LModule.target` = `nvptx64-…`, PTX `LInstr` opcode table, PTX text emit pass. No GPU run yet. **Stage 1 scaffold landed 2026-05-19** (`compiler/codegen/nvptx_target.hexa` + `nvptx_ptx_ops.hexa` — entry points, IR structs, opcode table; parse-clean, not dispatch-wired). **055-P0 PTX text emit pass landed 2026-05-19** — `_nvptx_lower_func` lowers the FP64-arithmetic MIR subset (§6.6) to PTX-flavored LIR, `emit_ptx` renders it to real PTX text (`.version`/`.target`/`.address_size` header, `.func` bodies, `.reg .f64` decls, `mov.f64`/`add.f64`/`sub.f64`/`mul.f64`/`ret`, block labels); `nvptx_emit_test.hexa` smoke entry. `.visible .entry` kernels, `ld/st.global`, `fma.rn.f64` fusion, sregs, `bar.sync`/`bra`/`setp` = honest 055-P1+ stubs. Still not dispatch-wired. | (skeleton — compiles, emits PTX text) ✅ |
 | **055-P1** | FP64 vector-add `@gpu_kernel` end-to-end: `@gpu_kernel` attribute parse + strict-lint, thread-index builtins, ptxas + cubin embed + `gpu_launch`. | F-RFC055-PTX-EMIT, F-RFC055-NUMERIC-EQ, F-RFC055-LAUNCH-ABI, F-RFC055-NO-LLVM, F-RFC055-CPU-CODEGEN-UNTOUCHED, F-RFC055-FALLBACK |
 | **055-P2** | FP64 GEMM `@gpu_kernel` (naive/tiled, `@shared` + `gpu_barrier`). | F-RFC055-GEMM-FEASIBLE (correctness gate; perf = honest measurement only) |
 | **055-P3** | sm_80 variant; warp primitives sub-phase. | (additive — no new gate) |

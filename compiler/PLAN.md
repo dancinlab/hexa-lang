@@ -2303,6 +2303,60 @@ sufficient for a scaffold). Follow-up cycles per RFC 055 §12: 055-P0
 + launch ABI + dispatch wiring + falsifier battery), 055-P2 (FP64 GEMM),
 055-P3 (sm_80 variant + warp primitives).
 
+### 2026-05-19 — RFC 055 055-P0 — PTX text emit pass landed
+
+RFC 055 advances from **Stage-1 scaffold** to **055-P0 PTX text emit
+pass**. The NVPTX codegen target now lowers the FP64-arithmetic MIR
+subset (RFC 055 §6.6) to real PTX assembly text. Edits land entirely in
+`compiler/codegen/nvptx_target.hexa` plus one new smoke-test file —
+zero touch to the CPU codegen targets or `emit_asm`.
+
+What 055-P0 implemented (emits real PTX):
+
+  - `_nvptx_lower_func` — replaces the empty-LFunc scaffold stub with a
+    real MIR-walk: every MIR block → PTX-flavored `LInstr` records
+    (op = PTX mnemonic). PTX virtual registers map 1:1 to MIR
+    `Local.id` (`%fd<id>` for FP64) — no register allocator, `ptxas`
+    allocates downstream (RFC 055 §6.2).
+  - `_nvptx_lower_stmt` — `STMT_ASSIGN` → `mov.f64`, `STMT_BINOP`
+    (`add`/`sub`/`mul`) → `add.f64`/`sub.f64`/`mul.f64`, `STMT_RETURN`
+    → `ret`. const_float/const_int operands → PTX immediates.
+  - `emit_ptx` — the PTX text emit pass: NVPTX-target `LModule` → PTX
+    text. Module header (`.version 7.8` / `.target sm_90|sm_80` /
+    `.address_size 64`), per-function `.func` body, `.reg .f64`
+    declarations, block labels, instruction lines with the PTX
+    trailing-`;`. Sibling to `emit_asm` but PTX-self-contained (PTX
+    operand surface differs from the CPU LOperand reg/imm/mem
+    encoding — PTX operands are carried pre-rendered in `LOperand.label`
+    so the CPU `_fmt_operand` renderer is never reached; falsifier
+    F-RFC055-CPU-CODEGEN-UNTOUCHED holds).
+  - `codegen_emit_ptx_sm90` / `_sm80` — one-shot MIR→PTX-text entry
+    points (compose codegen + emit_ptx).
+  - `compiler/codegen/nvptx_emit_test.hexa` — 055-P0 unit/smoke entry:
+    hand-builds an FP64 `mul`+`add`+`ret` MIR module, asserts the
+    emitted PTX-text shape. Does NOT fire a GPU, does NOT invoke
+    `ptxas` — text-shape assertions only.
+
+Honest stub breakdown (NOT 055-P0 — left as `// RFC 055 055-P0 — …`
+honest stubs for 055-P1+): `.visible .entry` kernel headers + `.param`
+parameter banks (needs `@gpu_kernel` attribute parsing), `ld.global.f64`
+/ `st.global.f64` address-space load/store (needs @gpu farr-arg
+lowering), `fma.rn.f64` (needs MIR mul+add fusion recognition),
+thread-index `mov.u32` from `%tid`/`%ctaid` sregs, `bar.sync`/`bra`/
+`setp` control + sync, `.reg .s32`/`.reg .pred` index/predicate
+declarations. MIR statements / binops outside the FP64 arithmetic slice
+lower to an honest `//` stub LInstr — readable PTX, never a silent drop.
+
+Scope discipline: 055-P0 stays UNWIRED from the compiler's main target
+dispatch (no dispatch case added — that is 055-P1) — zero behavior
+change for CPU codegen. `@gpu_kernel` parsing, thread-index builtins,
+the launch ABI, and dispatch wiring are explicitly 055-P1+, untouched.
+
+Verification: `hexa_real parse` clean on `nvptx_target.hexa`,
+`nvptx_ptx_ops.hexa`, and `nvptx_emit_test.hexa` (syntactic gate). No
+GPU fired, no `ptxas` run, no heavy build — $0 cycle. RFC 055 §1/§12
+status flipped to "055-P0 PTX text emit pass landed".
+
 ### 2026-05-19 — compiler-only next-list closure pass
 
 Exhaustive survey of compiler-only residue after R7, then closed the
