@@ -1,0 +1,213 @@
+#!hexa strict
+// stdlib/booksim/booksim.hexa — dispatcher / `hexa-arch booksim` entry
+//
+// @version 0.0.1
+// @capabilities [dispatch, cli]
+// @stability phase-g (rfc_003 §7) — dispatcher routing + help + version
+//   landed; `topology` wired to anynet_load; sweep / wire-delay /
+//   oracle / measure remain GATE-style (exit 90 / 91) until rfc_001
+//   §8 GREEN — no "absorbed" claim (g3).
+// @since 2026-05-18 (.stub) · body landed 2026-05-19
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1)
+//   This dispatcher carries NO BookSim2 re-derivation — it is the
+//   hexa-arch CLI surface defined in rfc_001 §7.2, structured per the
+//   dispatcher pattern of hexa-lang rfc_047 §4 (mc_integrate) and the
+//   raw-91 fail-loud doctrine of rfc_048 §3 (xeno). The engine modules
+//   it routes into (anynet / iq_router / traffic / sweep / wire_delay /
+//   leighton) carry their own per-module clean-room provenance.
+//
+//   - upstream code    : none (CLI surface, not a BookSim2 port)
+//   - upstream spec    : rfc_001 §7.2 (this RFC family's own CLI spec)
+//   - dispatcher idiom : hexa-lang rfc_047 §4 · rfc_048 §3 raw-91
+//
+// CLI surface (rfc_001 §7.2):
+//   hexa-arch booksim                       default = help
+//   hexa-arch booksim topology load <file>  anynet topology -> typed
+//   hexa-arch booksim sweep ...             (gated — rfc_001 §8)
+//   hexa-arch booksim wire-delay ...        (gated — rfc_001 §8)
+//   hexa-arch booksim oracle ...            (gated — rfc_001 §8)
+//   hexa-arch booksim measure ...           (gated — rfc_001 §8)
+//   hexa-arch booksim --help, -h
+//   hexa-arch booksim --version, -v
+//
+// Exit codes (rfc_001 §7.3 — raw-91 doctrine; silent skip BANNED):
+//   0  success · 1 arg error · 2 unknown topic
+//   90 measurement gate not satisfied (no "absorbed" claim — rfc_001 §8)
+//   91 unreachable / config missing / TBD body reached
+
+// Only anynet is imported — the dispatcher routes `topology` into
+// anynet_load; sweep / wire-delay / oracle / measure are GATE-style
+// (exit 90/91, no module call) until rfc_001 §8 GREEN, so importing
+// sweep/leighton/iq_router/traffic/wire_delay here is unnecessary
+// (and currently triggers the hexa-compiler enum bug noted in
+// rfc_003 — RegionShape/TrafficKind undeclared). They get wired in
+// per-module as each Phase B/C/D body lands.
+use "stdlib/booksim/anynet"
+
+let VERSION = "0.0.1"
+
+// ─── flag helpers (mirror the .stub) ─────────────────────────────────────
+
+fn _has_flag(a: [str], flag: str) -> int {
+    let mut i = 0
+    while i < len(a) {
+        if a[i] == flag { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn _find_flag(a: [str], flag: str, default_val: str) -> str {
+    let n = len(a)
+    let mut i = 0
+    while i < n {
+        if a[i] == flag {
+            if i + 1 < n { return a[i + 1] }
+        }
+        let prefix = flag + "="
+        if a[i].starts_with(prefix) {
+            return a[i].substring(len(prefix), len(a[i]))
+        }
+        i = i + 1
+    }
+    return default_val
+}
+
+// ─── handlers ────────────────────────────────────────────────────────────
+
+fn cmd_help() -> int {
+    println("hexa-arch booksim — NoC-sim CLI (rfc_001 §7.2)")
+    println("")
+    println("  booksim                       help (default)")
+    println("  booksim topology load <file>  parse anynet topology -> typed")
+    println("  booksim sweep ...             injection-rate sweep (gated)")
+    println("  booksim wire-delay ...        wire-delay profile (gated)")
+    println("  booksim oracle ...            Leighton bisection oracle (gated)")
+    println("  booksim measure ...           full pipeline -> F1F2 (gated)")
+    println("  booksim --help, -h            this help")
+    println("  booksim --version, -v         print version")
+    println("")
+    println("exit: 0 ok · 1 arg · 2 unknown · 90 gate-unmet · 91 unreachable")
+    return 0
+}
+
+// `booksim topology load <file>` — anynet_load self-exits 91 on a
+// read/parse failure (the clean-room loader's own fail-loud).
+fn cmd_topology(argv: [str]) -> int {
+    let n = len(argv)
+    let mut path = ""
+    let mut i = 0
+    while i < n {
+        if argv[i] == "load" {
+            if i + 1 < n { path = argv[i + 1] }
+        }
+        i = i + 1
+    }
+    if path == "" {
+        println("booksim topology: usage: topology load <file>")
+        return 1
+    }
+    let t = anynet_load(path)
+    println("booksim topology: parsed OK — router0 degree="
+        + str(anynet_router_degree(t, 0)))
+    return 0
+}
+
+// sweep / wire-delay / oracle — bodies pending rfc_001 §8 GREEN
+// (rfc_003 Phase B/C/D). Honest exit 91: TBD body reached, NOT a
+// silent skip (@F f4). No "absorbed" claim.
+fn cmd_sweep(argv: [str]) -> int {
+    println("booksim sweep: pending rfc_001 §8 GREEN (rfc_003 Phase B) — unreachable.")
+    return 91
+}
+
+fn cmd_wire_delay(argv: [str]) -> int {
+    println("booksim wire-delay: pending rfc_001 §8 GREEN (rfc_003 Phase C) — unreachable.")
+    return 91
+}
+
+fn cmd_oracle(argv: [str]) -> int {
+    println("booksim oracle: pending rfc_001 §8 GREEN (rfc_003 Phase D) — unreachable.")
+    return 91
+}
+
+// `booksim measure` — gate 90 until rfc_001 §8 closes. Emitting an
+// F1F2-record with absorbed=true before the measured gate is BANNED
+// (g3 / rfc_001 §8). Honest exit 90: gate not satisfied.
+fn cmd_measure(argv: [str]) -> int {
+    println("booksim measure: measurement gate (rfc_001 §8) NOT satisfied "
+        + "— no absorbed claim (g3). gate-unmet.")
+    return 90
+}
+
+// ─── dispatch ────────────────────────────────────────────────────────────
+
+// argv shape: [..., "booksim", <subcmd>, <args...>].
+fn cmd_booksim(argv: [str]) -> int {
+    let n = len(argv)
+    let mut idx = 0 - 1
+    let mut i = 0
+    while i < n {
+        if argv[i] == "booksim" { idx = i }
+        i = i + 1
+    }
+    if idx < 0 { return cmd_help() }
+    if idx + 1 >= n { return cmd_help() }
+    let sub = argv[idx + 1]
+    if sub == "--help" { return cmd_help() }
+    if sub == "-h" { return cmd_help() }
+    if sub == "--version" { println(VERSION); return 0 }
+    if sub == "-v" { println(VERSION); return 0 }
+    if sub == "topology" { return cmd_topology(argv) }
+    if sub == "sweep" { return cmd_sweep(argv) }
+    if sub == "wire-delay" { return cmd_wire_delay(argv) }
+    if sub == "oracle" { return cmd_oracle(argv) }
+    if sub == "measure" { return cmd_measure(argv) }
+    println("booksim: unknown topic: " + sub)
+    return 2
+}
+
+// ─── self-test (rfc_003 idiom — `hexa run stdlib/booksim/booksim.hexa`) ──
+
+fn main() {
+    let mut fails = 0
+    let mut total = 0
+
+    total = total + 1
+    if cmd_booksim(["x", "booksim", "--version"]) != 0 {
+        println("FAIL version_exit0"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_booksim(["x", "booksim", "--help"]) != 0 {
+        println("FAIL help_exit0"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_booksim(["x", "booksim"]) != 0 {
+        println("FAIL nosub_help_exit0"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_booksim(["x", "booksim", "zzz"]) != 2 {
+        println("FAIL unknown_exit2"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_booksim(["x", "booksim", "measure"]) != 90 {
+        println("FAIL measure_gate90"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_booksim(["x", "booksim", "sweep"]) != 91 {
+        println("FAIL sweep_unreach91"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_booksim(["x", "booksim", "oracle"]) != 91 {
+        println("FAIL oracle_unreach91"); fails = fails + 1
+    }
+
+    if fails > 0 {
+        println("booksim dispatcher selftest: "
+            + str(total - fails) + "/" + str(total) + " — FAIL")
+        exit(1)
+    }
+    println("booksim dispatcher selftest: "
+        + str(total) + "/" + str(total) + " PASS")
+}
