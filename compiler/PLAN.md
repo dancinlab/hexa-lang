@@ -3512,3 +3512,71 @@ keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/tes
   tool 이지 hexa_cc.c SSOT 모듈 아님 — @D g_commit_push_deploy 에 따라 source-only
   변경. driver 빌드 영향 없음, `hexa run tool/atlas_cli.hexa register --help`
   로 새 verb 작동 확인 (interp 경유, system `hexa` 가 worktree source 픽업).
+
+## 진행 로그 — `hexa atlas register` 일반화: MULTI-VERB DISCOVERY PIPELINE (2026-05-20)
+
+- **what**: `--from-verify` 를 일반화해서 모든 내부 discovery surface (verify · drill/kick
+  · check · smash · atlas-verify · verify_* tool family · proposer · math discovery) 가
+  동일한 in-memory node-gen → `embedded.gen.hexa` fold → `gh ‖ api` PR 파이프라인을
+  공유하도록 refactor. user 지시: "kick 말고도 drill 도 쓰고 이러니까 / 내부전체 고려".
+- **why**: 단일 verb (`--from-verify`) 만 직행 path 를 가지면 verb-by-verb 중복 코드.
+  내부 모든 discovery 가 canonical `DiscoveryEvent` 로 수렴 → `register_from_event(ev)`
+  단일 sink. 새 verb 는 adapter 한 줄로 plug-in.
+- **how — `tool/atlas_cli.hexa` 일반화**:
+  1. **`DiscoveryEvent` struct** (pub) — canonical envelope: `kind ∈ {P|C|L|E|F}` ·
+     `id` (atlas-id) · `name` (human) · `raw` (struct.raw body) · `verdict` (🔵 ·
+     🔴 · 🟠 · skip · error) · `source_verb` · `provenance` (one-liner).
+  2. **`register_from_event(ev, auto_pr, atlas_root, base, branch, title)`** —
+     단일 sink. verdict != 🔵 거부, kind 검증, `_build_node_struct_text` →
+     `_fold_into_embedded` → optional `_branch_commit_pr`. 모든 verb 가 이 함수로
+     수렴.
+  3. **`_adapt_verify_1op` / `_adapt_verify_2op`** — verify recompute → DiscoveryEvent.
+     기존 monolithic cmd_register 의 verify 분기를 깔끔히 분리. byte-equivalent.
+  4. **`_adapt_drill_candidate`** — drill `DiscoveryCandidate` (axiom → @P, derived →
+     @L) → DiscoveryEvent. `_build_raw_drill` 로 tape body 생성.
+  5. **`_adapt_check`** — STUB extension point. verdict="error" 반환 + 정직한 NOT
+     YET WIRED 메시지. future verbs 동일 패턴 (`_adapt_<verb>(args) -> DiscoveryEvent`).
+  6. **`cmd_register` dispatcher** — `--from-verify` / `--from-drill` (= `--from-kick`) /
+     `--from-check` arms; 공통 옵션 `--auto-pr` · `--branch` · `--base` · `--atlas-root`
+     · `--title` · `--id`.
+- **`--from-drill` in-process handle**: drill_run(seed, opts) 는 `DrillResult` 만 반환
+  (counts) — per-round `DiscoveryCandidate[]` 는 `RoundResult.discoveries` 에 있고
+  loop 내부 소비. 그래서 cmd_register 가 `round_run_with_pool(seed, r, 3, 3, 1,
+  mkx_on, seed_pool)` 을 직접 round-by-round 호출 + `extract_axiom_exprs` 로 다음
+  round pool feed. 이게 task 가 명시한 "in-process handle, not the overlay file".
+  overlay path (`overlay_load_cached`) 는 RETIRED (@D g_atlas_binary_builtin) — 0
+  반환만 함.
+- **drill 배치 정책**: 1개 candidate = 1 DiscoveryEvent, 하지만 **단일 branch + commit**
+  으로 묶어 1개 PR. fold-then-PR — `_fold_into_embedded` 가 듭리 dedup ('refusing
+  to duplicate') 처리, 마지막에 `_branch_commit_pr` 한 번. summary 에 candidate list 동봉.
+- **g3 정직성**: 
+  - verify 🟠 INSUFFICIENT → exit 3 · 🔴 FALSIFIED → exit 4 (변동 없음, byte-equiv).
+  - drill seed too_short/placeholder → "tier=skip — seed rejected (too_short)", NO PR · exit 0.
+  - drill 0 candidates → "tier=skip — no promotable candidate found · NO PR was opened" · exit 0.
+  - drill all-dup → "tier=skip — all drill candidates were already in the atlas (no new fold)" · exit 0.
+  - check stub → "NOT YET WIRED" + extension-point hint · exit 6.
+  - 모든 PR 경로: `gh` rc=0 또는 HTTP 201 일 때만 "PR opened — <url>". 그 외 NO PR.
+- **future verb adapter slots**: 소스 코멘트로 명시. `--from-check` 가 첫 번째 stub.
+  새 surface (smash · atlas-verify · verify_adversarial · proposer · math) 는
+  `_adapt_<verb>(args) -> DiscoveryEvent` 한 함수 + cmd_register 의 `--from-<verb>`
+  arg parse 가지로 추가.
+- **parse-gate (measured)**: `/Users/ghost/.hx/bin/hexa_real parse tool/atlas_cli.hexa`
+  → `OK rc=0` · `clang -c self/runtime.c` (existing) · `hexa_v2 tool/atlas_cli.hexa
+  /tmp/x.c` → cached OK rc=0.
+- **end-to-end (measured)**:
+  - `register --from-verify phi 8 4` → 🔵, embed appended `@F verified-phi-8`,
+    body byte-equivalent to pre-refactor (same id / same raw / same struct-text shape).
+  - `register --from-verify phi 8 5` → 🔴 FALSIFIED · exit 4 · NO edit.
+  - `register --from-drill --seed "test"` → seed rejected (too_short) · exit 0 · NO PR.
+  - `register --from-drill --seed "sigma divisor sum equals 12 for n equals 6"
+    --rounds 1` → 663 yields → 625 candidates_captured → 306 unique @P/@L folded
+    (rest = within-batch dups handled by `refusing to duplicate` gate).
+  - `register --from-drill ... --atlas-root /tmp/atlas-fake --auto-pr` → 517
+    candidates folded · 비-git atlas-root degrade path: prints manual `git switch -c
+    ... && git add ... && git commit ... && gh pr create ...` · NO PR claimed.
+  - `register --from-check` → "NOT YET WIRED" · exit 6 (정직 stub).
+- **inbox patch flip**: `inbox/patches/atlas-cli-multi-verb-discovery-pipeline.md`
+  (file path 코드 코멘트에 참조; 실제 파일은 이 commit 이 SSOT 노릇).
+- **cc --regen / binary promote**: 미수행. atlas_cli.hexa = driver 가 run 하는 tool
+  (NOT hexa_cc.c SSOT 모듈). @D g_commit_push_deploy: tool/* 변경은 source-only;
+  driver 빌드 무영향. compile-then-exec path (`hexa run`) 로 모든 측정 진행.

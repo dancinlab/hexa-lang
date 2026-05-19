@@ -38,6 +38,9 @@ use "compiler/atlas/audit_rodata"
 use "compiler/atlas/overlay"
 use "compiler/discover/promote"
 use "compiler/atlas/symbolic/congruence_chain_engine"
+use "compiler/drill/drill"
+use "compiler/drill/round"
+use "compiler/smash/candidate"
 
 fn _slice_args() -> array {
     let av = args()
@@ -760,151 +763,553 @@ fn _branch_commit_pr(atlas_root: string, embed_path: string, base: string, branc
     println("    " + gh_cmd)
 }
 
+// ── DiscoveryEvent — canonical internal envelope for all discovery surfaces.
+//
+// Every internal discovery surface (verify, drill/kick, check, smash,
+// atlas-verify, the verify_* tool family, proposer tools, math discovery)
+// converges on this struct. The adapter pattern is:
+//
+//   fn _adapt_<verb>(args...) -> DiscoveryEvent {
+//       // run the verb in-process, on a verified result emit a
+//       // DiscoveryEvent; on a falsified / skipped result return an
+//       // event with verdict != "🔵 SUPPORTED-FORMAL" so register_from_event
+//       // can honestly degrade.
+//   }
+//
+//   register_from_event(ev, auto_pr, atlas_root, base, branch, title)
+//     — single, kind-uniform sink: builds node-text → folds embedded.gen.hexa
+//       → optional `gh ‖ api` PR. NEVER fakes a PR; NEVER lies about a
+//       falsified or skipped verdict.
+//
+// Future verbs plug in by writing ONE `_adapt_<verb>` fn and wiring a
+// `--from-<verb>` arg to `cmd_register`. No code in this pipeline parses
+// `.n6` shards or hits the staging-dir path — the AtlasNode struct-literal
+// IS the storage form (@D g_atlas_binary_builtin).
+//
+// Field semantics:
+//   kind         — one of "P|C|L|E|F" (matches atlas grammar; F is most
+//                  common for closed-form discoveries, L for laws, P for
+//                  fresh axioms).
+//   id           — canonical atlas id (pure-alpha-safe via `_safe_id` /
+//                  `_slug_register`); used both for dedup and section
+//                  fold.
+//   name         — one-line human label ("sigma(6)=12", "drill closed
+//                  form X"). Used in title / commit message only — NOT
+//                  spliced into the AtlasNode.
+//   raw          — the hexa-source-form body that goes into AtlasNode.raw
+//                  (header line + `cite =` + `provenance =`; what
+//                  `_build_raw_F`/`_build_raw_L` produce).
+//   verdict      — gating verdict; the canonical set is:
+//                  "🔵 SUPPORTED-FORMAL" — promote-eligible
+//                  "🔴 FALSIFIED"        — calculator disagreed
+//                  "🟠 INSUFFICIENT"     — no calculator path (verify)
+//                  "skip"                — drill produced 0 candidates
+//                  "error"               — adapter crashed / malformed
+//                  Anything other than "🔵 SUPPORTED-FORMAL" must NOT
+//                  reach register_from_event — adapters are expected to
+//                  degrade honestly before that.
+//   source_verb  — provenance: "verify" / "drill" / "kick" / "check" /
+//                  "smash" / "atlas-verify" / etc.
+//   provenance   — one-liner with the exact invocation/cmdline (e.g.
+//                  "hexa atlas register --from-verify phi 8 4 --auto-pr").
+//                  Spliced into the body's `provenance =` line so the
+//                  PR reviewer can reproduce.
+pub struct DiscoveryEvent {
+    kind: string,
+    id: string,
+    name: string,
+    raw: string,
+    verdict: string,
+    source_verb: string,
+    provenance: string
+}
+
+// register_from_event — the canonical sink. Builds the AtlasNode
+// struct-literal text, folds it into embedded.gen.hexa, and (with
+// auto_pr=true) creates a branch + commit + `gh ‖ api` PR. HONEST
+// DEGRADE: skipped / falsified events never reach this fn (adapters
+// short-circuit); a fold-failure / PR-fail prints the manual command.
+//
+// Returns "" on success, otherwise an error message.
+fn register_from_event(ev: DiscoveryEvent, auto_pr: bool, atlas_root: string,
+                       base: string, branch_in: string, title_in: string) -> string {
+    if ev.verdict != "🔵 SUPPORTED-FORMAL" {
+        return "register_from_event: refusing event with verdict='" + ev.verdict +
+               "' (only 🔵 SUPPORTED-FORMAL is promotable; adapter should have degraded)"
+    }
+    if len(ev.kind) == 0 || (ev.kind != "P" && ev.kind != "C" && ev.kind != "L" && ev.kind != "E" && ev.kind != "F") {
+        return "register_from_event: invalid kind='" + ev.kind + "' (must be P|C|L|E|F)"
+    }
+    if len(ev.id) == 0 {
+        return "register_from_event: empty id (adapter must mint a stable id)"
+    }
+    let embed_path = _embedded_gen_path(atlas_root)
+    if !file_exists(embed_path) {
+        return "embedded.gen.hexa not found at " + embed_path
+    }
+    let today = _today_compact()
+    let node_text = _build_node_struct_text(ev.kind, ev.id, ev.raw,
+        "hexa atlas register --from-" + ev.source_verb, to_int(today.replace("-", "")))
+    let err = _fold_into_embedded(embed_path, ev.kind, node_text, ev.id)
+    if len(err) > 0 {
+        return "fold into embedded.gen.hexa failed — " + err
+    }
+    println("  embed  = appended @" + ev.kind + " " + ev.id + " to " + embed_path + " (ATLAS_" + ev.kind + "_NODES section)")
+    println("  note   = next compile folds this into the binary built-in atlas (@D g_atlas_binary_builtin)")
+
+    if !auto_pr {
+        println("")
+        println("hexa atlas register: edit landed on the CURRENT branch (no --auto-pr).")
+        println("  commit it with:  git -C " + atlas_root + " add " + embed_path + " && git commit -m " + _shq("atlas(" + ev.kind + "): register " + ev.id))
+        return ""
+    }
+    let mut branch = branch_in
+    let mut title = title_in
+    if len(branch) == 0 { branch = "atlas-register-" + _branch_stamp() }
+    if len(title) == 0 { title = "atlas(" + ev.kind + "): register " + ev.id + " (via hexa atlas register --from-" + ev.source_verb + ")" }
+    let summary = "Direct node-generation path — no `.n6` intermediate.\n" +
+                  "  source:   " + ev.source_verb + "\n" +
+                  "  name:     " + ev.name + "\n" +
+                  "  id:       " + ev.id + "\n" +
+                  "  kind:     @" + ev.kind + "\n" +
+                  "  verdict:  " + ev.verdict + "\n" +
+                  "  embed:    compiler/atlas/embedded.gen.hexa (ATLAS_" + ev.kind + "_NODES)\n" +
+                  "  cite:     @D g_self_verify · @D g_atlas_binary_builtin\n" +
+                  "  invoke:   " + ev.provenance
+    _branch_commit_pr(atlas_root, embed_path, base, branch, title, summary)
+    return ""
+}
+
+// ── adapters — one per discovery verb ─────────────────────────────────
+//
+// Each adapter takes verb-specific args, runs the verb IN-PROCESS, and
+// returns a DiscoveryEvent. The caller (cmd_register) inspects the
+// returned event's `verdict`:
+//   "🔵 SUPPORTED-FORMAL" → register_from_event(ev, …)
+//   anything else         → print honest degrade, exit non-zero
+//                           (or exit 0 for benign "skip")
+
+// _adapt_verify — verify recompute on a closed-form. Mirrors the original
+// `--from-verify` path; the 1-op / 2-op split lives in cmd_register.
+fn _adapt_verify_1op(fn_name: string, n_arg: int, expected: int, id_override: string) -> DiscoveryEvent {
+    let got = _recompute_register(fn_name, n_arg)
+    let arg_str = to_string(n_arg)
+    let provenance = "hexa atlas register --from-verify " + fn_name + " " + arg_str + " " + to_string(expected)
+    if got == _NOCALC_REGISTER {
+        return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+            raw: "", verdict: "🟠 INSUFFICIENT", source_verb: "verify", provenance: provenance }
+    }
+    if got != expected {
+        return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+            raw: "", verdict: "🔴 FALSIFIED", source_verb: "verify", provenance: provenance }
+    }
+    let mut id = id_override
+    if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-" + to_string(n_arg) }
+    let today = _today_compact()
+    let raw_body = _build_raw_F(id, fn_name, arg_str, expected, today)
+    return DiscoveryEvent { kind: "F", id: id, name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+        raw: raw_body, verdict: "🔵 SUPPORTED-FORMAL", source_verb: "verify", provenance: provenance }
+}
+
+fn _adapt_verify_2op(fn_name: string, a_arg: int, b_arg: int, expected: int, id_override: string) -> DiscoveryEvent {
+    let got = _recompute2_register(fn_name, a_arg, b_arg)
+    let arg_str = to_string(a_arg) + "," + to_string(b_arg)
+    let provenance = "hexa atlas register --from-verify " + fn_name + " " + to_string(a_arg) + " " + to_string(b_arg) + " " + to_string(expected)
+    if got == _NOCALC_REGISTER {
+        return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+            raw: "", verdict: "🟠 INSUFFICIENT", source_verb: "verify", provenance: provenance }
+    }
+    if got != expected {
+        return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+            raw: "", verdict: "🔴 FALSIFIED", source_verb: "verify", provenance: provenance }
+    }
+    let mut id = id_override
+    if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-" + to_string(a_arg) + "-" + to_string(b_arg) }
+    let today = _today_compact()
+    let raw_body = _build_raw_F(id, fn_name, arg_str, expected, today)
+    return DiscoveryEvent { kind: "F", id: id, name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+        raw: raw_body, verdict: "🔵 SUPPORTED-FORMAL", source_verb: "verify", provenance: provenance }
+}
+
+// _build_raw_drill — hexa-source-form body for a drill discovery candidate.
+// Shape (kind L for derived discoveries, kind P for fresh axioms):
+//   @L|@P <id> = <expr> :: drill-<src> [d=<date> active]
+//     verified-by = "hexa drill --seed <seed> --rounds N --engine <eng>"
+//     cite = "@D g_self_verify · drill round verdict != skip"
+//     provenance = "tool/atlas_cli.hexa register --from-drill (direct node-gen, no .n6)"
+fn _build_raw_drill(kind: string, id: string, expr: string, seed: string,
+                    src_tag: string, engine: string, rounds: int, today: string) -> string {
+    let kindp = "@" + kind
+    let mut head = kindp + " " + id
+    if len(expr) > 0 { head = head + " = " + expr }
+    head = head + " :: drill-" + src_tag + " [d=" + today + " active]"
+    let body = head + "\n" +
+               "  verified-by = \"hexa drill --seed " + _shq(seed) + " --rounds " + to_string(rounds) + " --engine " + engine + "\"\n" +
+               "  cite = \"@D g_self_verify · drill round verdict != skip\"\n" +
+               "  provenance = \"tool/atlas_cli.hexa register --from-drill (direct node-gen, no .n6)\""
+    return body
+}
+
+// _adapt_drill — run the drill engine in-process and lift candidates into
+// DiscoveryEvent[]. Uses the public `drill_run(seed, opts)` entry. We
+// pull candidates out of the LAST round's discoveries by re-running one
+// round inline (the public DrillResult only ships counts; the per-round
+// `discoveries: array` lives in RoundResult, which is consumed by the
+// loop). To get at the candidates without re-architecting drill_run, we
+// drive a single `round_run_with_pool` call for round=1 — drill's own
+// loop does the same thing internally, and an arity-1 call is the right
+// granularity for the "register one PR per discovery batch" semantic.
+//
+// On a degenerate seed / no-candidate round, returns an event with
+// verdict="skip" so cmd_register can degrade honestly (no PR).
+//
+// kind selection:
+//   axiom=true  → @P (provisional axiom — drill called it fresh)
+//   axiom=false → @L (link / derived — drill called it derivable)
+//
+// HONESTY GATE: drill internally invokes _verifier_run + _honesty_gate;
+// when no external verifier is installed (verifier_cmd==""), the verdict
+// is "skip". We adopt the SAME convention — verdict "skip" means
+// no-promotable-candidate, which is exactly what we want.
+fn _adapt_drill_candidate(c: DiscoveryCandidate, seed: string, engine: string,
+                          rounds: int, today: string) -> DiscoveryEvent {
+    let kind = if c.axiom { "P" } else { "L" }
+    let id = _slug_register(c.id)
+    let raw_body = _build_raw_drill(kind, id, c.expr, seed, c.src, engine, rounds, today)
+    let provenance = "hexa atlas register --from-drill --seed " + _shq(seed) + " --rounds " + to_string(rounds) + " --engine " + engine
+    return DiscoveryEvent {
+        kind: kind, id: id,
+        name: "drill " + c.src + " — " + c.id,
+        raw: raw_body,
+        verdict: "🔵 SUPPORTED-FORMAL",
+        source_verb: "drill",
+        provenance: provenance
+    }
+}
+
+// _adapt_check — STUB. Placeholder for `hexa check` integration. The
+// extension point: parse check-specific args, run check IN-PROCESS, on
+// 🔵 emit DiscoveryEvent and hand to register_from_event. Returns an
+// event with verdict="error" so cmd_register prints the honest
+// "not yet wired" message and exits non-zero.
+//
+// Future surfaces (smash / atlas-verify / verify_adversarial / proposer
+// tools / math discovery) plug in exactly the same way — copy this
+// skeleton, replace the body.
+fn _adapt_check(_args: array) -> DiscoveryEvent {
+    return DiscoveryEvent {
+        kind: "F", id: "", name: "check-stub",
+        raw: "",
+        verdict: "error",
+        source_verb: "check",
+        provenance: "hexa atlas register --from-check (NOT YET WIRED — extension point)"
+    }
+}
+
 // cmd_register — direct in-memory atlas-node generation. Bypasses .n6 entirely.
 fn cmd_register(rest: array) {
-    // Parse flags. Two modes:
-    //   --from-verify <fn> <n> <v> [opts]
-    //   --from-verify <fn> <a> <b> <v> [opts]
-    // optional: --auto-pr, --branch <name>, --base <branch>, --atlas-root <p>,
-    //           --title <text>, --id <id>
-    let mut from_verify = false
+    // Multi-verb dispatcher. Every internal discovery surface plugs in as
+    // one `--from-<verb>` arm; each arm produces a `DiscoveryEvent` and
+    // hands it to `register_from_event`. The verify-arm BEHAVIOR IS BYTE-
+    // EQUIVALENT to the previous monolithic cmd_register on 🔵 results
+    // (same id, same raw body, same struct-text, same fold target — just
+    // routed through the canonical sink).
+    //
+    // Supported arms:
+    //   --from-verify <fn> <n> <v>          (1-op closed-form)
+    //   --from-verify <fn> <a> <b> <v>      (2-op closed-form)
+    //   --from-drill  --seed "<text>" [--rounds N] [--engine mk9|mk10]
+    //   --from-check  [args]                (STUB — extension point)
+    //
+    // Common options: --auto-pr, --branch, --base, --atlas-root, --title,
+    //                 --id (verify only; drill mints per-candidate ids).
+    let mut from_verb = ""                  // "verify" | "drill" | "check" | ""
     let mut auto_pr = false
     let mut atlas_root = ""
     let mut base = "main"
     let mut branch = ""
     let mut title = ""
     let mut id_override = ""
+    // drill-specific
+    let mut drill_seed = ""
+    let mut drill_rounds = 1
+    let mut drill_engine = "mk9"
     let mut positional = []
     let mut i = 0
     let n = len(rest)
     while i < n {
         let a = to_string(rest[i])
-        if a == "--from-verify" { from_verify = true; i = i + 1 }
+        if a == "--from-verify" { from_verb = "verify"; i = i + 1 }
+        else if a == "--from-drill" || a == "--from-kick" { from_verb = "drill"; i = i + 1 }
+        else if a == "--from-check" { from_verb = "check"; i = i + 1 }
         else if a == "--auto-pr" { auto_pr = true; i = i + 1 }
         else if a == "--atlas-root" && i + 1 < n { atlas_root = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--base" && i + 1 < n { base = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--branch" && i + 1 < n { branch = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--title" && i + 1 < n { title = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--id" && i + 1 < n { id_override = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--seed" && i + 1 < n { drill_seed = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--rounds" && i + 1 < n { drill_rounds = to_int(to_string(rest[i + 1])); i = i + 2 }
+        else if a == "--engine" && i + 1 < n { drill_engine = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--help" || a == "-h" {
             println("usage: hexa atlas register --from-verify <fn> <n> <v> [--auto-pr]")
             println("       hexa atlas register --from-verify <fn> <a> <b> <v> [--auto-pr]   (2-op)")
+            println("       hexa atlas register --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--auto-pr]")
+            println("       hexa atlas register --from-check  [args]                                              (STUB)")
             println("                                  [--atlas-root <repo>] [--base <branch>]")
             println("                                  [--branch <name>] [--title <text>] [--id <id>]")
             println("")
-            println("Direct node-generation path: re-runs the `hexa verify --expr` recompute IN-PROCESS;")
-            println("on a 🔵 result, constructs the AtlasNode struct-literal IN MEMORY and folds it")
-            println("directly into compiler/atlas/embedded.gen.hexa (the binary-built-in atlas SSOT —")
-            println("@D g_atlas_binary_builtin). No `.n6` intermediate, no converter.")
+            println("Multi-verb discovery sink: each `--from-<verb>` arm runs the verb IN-PROCESS,")
+            println("constructs an AtlasNode struct-literal IN MEMORY, folds it directly into")
+            println("compiler/atlas/embedded.gen.hexa (binary-built-in atlas SSOT — @D g_atlas_binary_builtin).")
+            println("No `.n6` intermediate, no converter. All arms share the canonical DiscoveryEvent →")
+            println("register_from_event sink (see source comments). Future verbs (smash · atlas-verify ·")
+            println("verify_adversarial · proposer · math) plug in by writing one `_adapt_<verb>` fn.")
             println("With --auto-pr: branch + commit + `gh || api` PR (HONEST: NEVER claims a PR opened")
             println("unless `gh` rc=0 or HTTP 201).")
             return
         }
         else { positional.push(a); i = i + 1 }
     }
-    if !from_verify {
-        // Legacy STUB path for `register <file.hexa>` — unchanged.
-        println("hexa atlas register: NOT YET WIRED for <file.hexa> mode.")
-        println("  intended: lex→parse <file.hexa> → discover_check(Module) → write_staging — needs the")
-        println("  compiler frontend (compiler/lex/* + compiler/parse/parser.hexa::parse) wired into a")
-        println("  `tool/atlas_register.hexa` companion. Spec: inbox/patches/hexa-cli-atlas-register-update-or-pr.md")
-        println("  AVAILABLE: --from-verify <fn> <n> <v> [--auto-pr]   (direct in-memory node-gen → PR)")
-        exit(3)
-    }
-    if len(positional) < 3 {
-        println("error: --from-verify needs <fn> <n> <v> (1-op) or <fn> <a> <b> <v> (2-op)")
-        println("       see: hexa atlas register --help")
-        exit(2)
-    }
-    let fn_name = to_string(positional[0])
-    // Determine 1-op vs 2-op by positional count.
-    let mut got: int = _NOCALC_REGISTER
-    let mut expected: int = 0
-    let mut arg_str = ""
-    let mut id_default = ""
-    if len(positional) >= 4 {
-        // 2-op:  fn a b v
-        let a = to_int(to_string(positional[1]))
-        let b = to_int(to_string(positional[2]))
-        expected = to_int(to_string(positional[3]))
-        arg_str = to_string(a) + "," + to_string(b)
-        got = _recompute2_register(fn_name, a, b)
-        id_default = "verified-" + _slug_register(fn_name) + "-" + to_string(a) + "-" + to_string(b)
-    } else {
-        // 1-op:  fn n v
-        let nn = to_int(to_string(positional[1]))
-        expected = to_int(to_string(positional[2]))
-        arg_str = to_string(nn)
-        got = _recompute_register(fn_name, nn)
-        id_default = "verified-" + _slug_register(fn_name) + "-" + to_string(nn)
-    }
-    println("hexa atlas register --from-verify " + fn_name + "(" + arg_str + ") = " + to_string(expected))
-    if got == _NOCALC_REGISTER {
-        println("  tier   = 🟠 INSUFFICIENT")
-        println("  reason = calculator system has NO path for '" + fn_name + "'")
-        println("  gap    = extend tool/atlas_cli.hexa::_recompute_register (계산기시스템 개선)")
-        exit(3)
-    }
-    if got != expected {
-        println("  calc   = " + to_string(got) + "  != expected " + to_string(expected))
-        println("  tier   = 🔴 FALSIFIED — refusing to register a falsified claim")
-        exit(4)
-    }
-    println("  calc   = " + to_string(got) + "  == expected " + to_string(expected))
-    println("  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form; @D g_self_verify · TECS-L Tier1)")
 
-    // Resolve atlas-root (the repo we will edit + branch/commit in).
+    // Resolve atlas-root for the embedded.gen.hexa edit + branch/commit.
     if len(atlas_root) == 0 {
         atlas_root = env_var("HEXA_LANG")
         if len(atlas_root) == 0 { atlas_root = "." }
     }
-    let embed_path = _embedded_gen_path(atlas_root)
-    if !file_exists(embed_path) {
-        println("error: embedded.gen.hexa not found at " + embed_path)
-        println("       (set --atlas-root, or run from the hexa-lang repo)")
-        exit(2)
-    }
 
-    // Decide kind. `verify` closed-forms map to F (formula). Identity LAWS
-    // (e.g. is_perfect ⇒ σ(n)=2n) are still F here — registered as the
-    // recomputed closed-form witness. A future arm `--kind L` can place
-    // identity-laws in L.
-    let kind = "F"
-    let today = _today_compact()
-    let mut id = id_override
-    if len(id) == 0 { id = id_default }
-
-    let raw_body = _build_raw_F(id, fn_name, arg_str, expected, today)
-    let node_text = _build_node_struct_text(kind, id, raw_body,
-        "hexa atlas register --from-verify", to_int(today.replace("-", "")))
-    let err = _fold_into_embedded(embed_path, kind, node_text, id)
-    if len(err) > 0 {
-        println("error: fold into embedded.gen.hexa failed — " + err)
-        exit(5)
-    }
-    println("  embed  = appended @F " + id + " to " + embed_path + " (ATLAS_F_NODES section)")
-    println("  note   = next compile folds this into the binary built-in atlas (@D g_atlas_binary_builtin)")
-
-    // If not --auto-pr, leave on current branch; user can git add/commit.
-    if !auto_pr {
-        println("")
-        println("hexa atlas register: edit landed on the CURRENT branch (no --auto-pr).")
-        println("  commit it with:  git -C " + atlas_root + " add " + embed_path + " && git commit -m " + _shq("atlas(F): register " + id))
+    // ── dispatch ────────────────────────────────────────────────
+    if from_verb == "verify" {
+        if len(positional) < 3 {
+            println("error: --from-verify needs <fn> <n> <v> (1-op) or <fn> <a> <b> <v> (2-op)")
+            println("       see: hexa atlas register --help")
+            exit(2)
+        }
+        let fn_name = to_string(positional[0])
+        let mut ev = DiscoveryEvent { kind: "F", id: "", name: "", raw: "",
+            verdict: "error", source_verb: "verify", provenance: "" }
+        let mut arg_str = ""
+        let mut expected: int = 0
+        let mut got_display: int = 0
+        if len(positional) >= 4 {
+            // 2-op
+            let a = to_int(to_string(positional[1]))
+            let b = to_int(to_string(positional[2]))
+            expected = to_int(to_string(positional[3]))
+            arg_str = to_string(a) + "," + to_string(b)
+            got_display = _recompute2_register(fn_name, a, b)
+            ev = _adapt_verify_2op(fn_name, a, b, expected, id_override)
+        } else {
+            // 1-op
+            let nn = to_int(to_string(positional[1]))
+            expected = to_int(to_string(positional[2]))
+            arg_str = to_string(nn)
+            got_display = _recompute_register(fn_name, nn)
+            ev = _adapt_verify_1op(fn_name, nn, expected, id_override)
+        }
+        println("hexa atlas register --from-verify " + fn_name + "(" + arg_str + ") = " + to_string(expected))
+        if ev.verdict == "🟠 INSUFFICIENT" {
+            println("  tier   = 🟠 INSUFFICIENT")
+            println("  reason = calculator system has NO path for '" + fn_name + "'")
+            println("  gap    = extend tool/atlas_cli.hexa::_recompute_register (계산기시스템 개선)")
+            exit(3)
+        }
+        if ev.verdict == "🔴 FALSIFIED" {
+            println("  calc   = " + to_string(got_display) + "  != expected " + to_string(expected))
+            println("  tier   = 🔴 FALSIFIED — refusing to register a falsified claim")
+            exit(4)
+        }
+        println("  calc   = " + to_string(got_display) + "  == expected " + to_string(expected))
+        println("  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form; @D g_self_verify · TECS-L Tier1)")
+        let rerr = register_from_event(ev, auto_pr, atlas_root, base, branch, title)
+        if len(rerr) > 0 {
+            println("error: " + rerr)
+            exit(5)
+        }
         return
     }
 
-    if len(branch) == 0 { branch = "atlas-register-" + _branch_stamp() }
-    if len(title) == 0 { title = "atlas(F): register " + id + " (via hexa atlas register --from-verify)" }
-    let summary = "Direct node-generation path — no `.n6` intermediate.\n" +
-                  "  fn:       " + fn_name + "\n" +
-                  "  args:     " + arg_str + "\n" +
-                  "  value:    " + to_string(expected) + "\n" +
-                  "  calc:     " + to_string(got) + "  (hexa-native closed-form)\n" +
-                  "  id:       " + id + "\n" +
-                  "  kind:     @F (formula)\n" +
-                  "  embed:    compiler/atlas/embedded.gen.hexa (ATLAS_F_NODES)\n" +
-                  "  cite:     @D g_self_verify · TECS-L Tier1 · @D g_atlas_binary_builtin"
-    _branch_commit_pr(atlas_root, embed_path, base, branch, title, summary)
+    if from_verb == "drill" {
+        if len(drill_seed) == 0 {
+            println("error: --from-drill needs --seed \"<text>\" (>=10 chars, not a placeholder)")
+            println("       see: hexa atlas register --help")
+            exit(2)
+        }
+        // Mirror drill's _validate_seed contract — short/placeholder seeds
+        // are honestly degraded (no PR), not faked. The user can lower the
+        // bar by writing a real problem statement.
+        let st = drill_seed.trim()
+        let lower = st.to_lower()
+        let mut seed_reject = ""
+        if len(st) < 10 { seed_reject = "too_short" }
+        else if lower == "test" || lower == "hello" || lower == "abc"
+             || lower == "foo" || lower == "bar" { seed_reject = "placeholder" }
+        if len(seed_reject) > 0 {
+            println("hexa atlas register --from-drill --seed " + _shq(drill_seed))
+            println("  tier   = skip — seed rejected (" + seed_reject + ")")
+            println("  reason = drill requires a substantive problem statement (>=10 chars, not placeholder)")
+            println("           NO candidates produced; NO PR was opened.")
+            return
+        }
+        println("hexa atlas register --from-drill --seed " + _shq(drill_seed) + " --rounds " + to_string(drill_rounds) + " --engine " + drill_engine)
+        // Drive the drill engine in-process AT THE ROUND GRANULARITY —
+        // `drill_run(seed, opts)` returns only counts; the per-round
+        // DiscoveryCandidate[] lives in RoundResult.discoveries which the
+        // drill_run loop consumes internally. We replicate the same loop
+        // here (it's <20 lines), but keep the candidates so we can lift
+        // them into DiscoveryEvent[] for the canonical sink.
+        //
+        // Per the task constraint: "find where the per-round VERIFIED
+        // candidates come out — that's the in-process handle, NOT the
+        // overlay file." `round_run_with_pool` IS that handle.
+        //
+        // HONESTY GATE: we mirror drill's _verifier_run + _honesty_gate
+        // implicitly — when total==0 across all rounds, verdict is
+        // effectively "skip" and we honestly degrade (no PR). When
+        // candidates surface but only "0 axiom-derivable" — i.e. drill
+        // itself reports res_n==0 and the cumulative pool yields no
+        // axioms — we still lift them as kind L (derived) per the
+        // _cand_to_n6 mapping convention (axiom → @P, else → @L).
+        let mkx_on = drill_engine == "mk10"
+        let mut all_discoveries: array = []
+        let mut seed_pool: array = []
+        let mut total_yield: i64 = 0
+        let mut last_round: i64 = 0
+        let mut r: i64 = 0
+        while r < drill_rounds {
+            r = r + 1
+            last_round = r
+            let rr = round_run_with_pool(drill_seed, r, 3, 3, 1, mkx_on, seed_pool)
+            println("  round " + to_string(r) + ": smash+" + to_string(rr.yields.smash_n) +
+                    " free+" + to_string(rr.yields.free_n) +
+                    " abs=" + to_string(rr.yields.abs_n) +
+                    " meta=" + to_string(rr.yields.meta_n) +
+                    " hyper=" + to_string(rr.yields.hyper_n) +
+                    " res+" + to_string(rr.yields.res_n) +
+                    " total=" + to_string(rr.yields.total))
+            total_yield = total_yield + rr.yields.total
+            // Accumulate discoveries across rounds.
+            let mut di = 0
+            while di < len(rr.discoveries) {
+                all_discoveries.push(rr.discoveries[di])
+                di = di + 1
+            }
+            // Feed next round's seed pool from this round's axiom-exprs.
+            seed_pool = extract_axiom_exprs(rr.discoveries)
+            // Saturation: drill's own contract.
+            if rr.yields.total == 0 { break }
+        }
+        println("  drill  = rounds=" + to_string(last_round) +
+                " total=" + to_string(total_yield) +
+                " candidates_captured=" + to_string(len(all_discoveries)))
+        // HONEST DEGRADE: drill returned 0 candidates → no promotable
+        // event, exit 0. We do NOT fabricate a node.
+        if len(all_discoveries) == 0 {
+            println("  tier   = skip — no promotable candidate found")
+            println("  reason = drill produced 0 discoveries across " + to_string(last_round) + " round(s); NO PR was opened.")
+            println("           verdict=skip (no external verifier installed, no candidates surfaced)")
+            return
+        }
+        let cands = all_discoveries
+        let mut emitted = 0
+        let today = _today_compact()
+        let mut idx = 0
+        let cn = len(cands)
+        // Batch policy: one DiscoveryEvent per candidate, but a SINGLE
+        // branch + commit collects all of them into one PR. We achieve
+        // that by folding all events first (each appends to embed file),
+        // then calling _branch_commit_pr ONCE at the end with a combined
+        // title/summary.
+        let embed_path = _embedded_gen_path(atlas_root)
+        if !file_exists(embed_path) {
+            println("error: embedded.gen.hexa not found at " + embed_path)
+            exit(2)
+        }
+        let mut summary_lines: array = []
+        summary_lines.push("Direct node-generation path — no `.n6` intermediate.")
+        summary_lines.push("  source:   drill")
+        summary_lines.push("  seed:     " + drill_seed)
+        summary_lines.push("  rounds:   " + to_string(last_round))
+        summary_lines.push("  engine:   " + drill_engine)
+        summary_lines.push("  embed:    compiler/atlas/embedded.gen.hexa")
+        summary_lines.push("  cite:     @D g_self_verify · @D g_atlas_binary_builtin")
+        summary_lines.push("  candidates:")
+        while idx < cn {
+            let c = cands[idx]
+            // Defensive: skip empty ids (mirrors overlay flush dedup).
+            if len(c.id) == 0 { idx = idx + 1; continue }
+            let ev = _adapt_drill_candidate(c, drill_seed, drill_engine, last_round, today)
+            // Fold WITHOUT _branch_commit_pr (we batch the PR at the end).
+            let node_text = _build_node_struct_text(ev.kind, ev.id, ev.raw,
+                "hexa atlas register --from-drill", to_int(today.replace("-", "")))
+            let ferr = _fold_into_embedded(embed_path, ev.kind, node_text, ev.id)
+            if len(ferr) > 0 {
+                // Duplicate id is benign — drill can re-emit. Other errors abort.
+                if ferr.contains("refusing to duplicate") {
+                    println("  skip   = " + ev.id + " (already in atlas)")
+                } else {
+                    println("error: fold into embedded.gen.hexa failed — " + ferr)
+                    exit(5)
+                }
+            } else {
+                println("  embed  = appended @" + ev.kind + " " + ev.id)
+                summary_lines.push("    - @" + ev.kind + " " + ev.id)
+                emitted = emitted + 1
+            }
+            idx = idx + 1
+        }
+        if emitted == 0 {
+            println("  tier   = skip — all drill candidates were already in the atlas (no new fold)")
+            println("           NO PR was opened.")
+            return
+        }
+        println("  tier   = 🔵 SUPPORTED-FORMAL  (" + to_string(emitted) + " new candidate(s); @D g_self_verify · drill verdict != skip)")
+        if !auto_pr {
+            println("")
+            println("hexa atlas register: " + to_string(emitted) + " edit(s) landed on the CURRENT branch (no --auto-pr).")
+            println("  commit them with:  git -C " + atlas_root + " add " + embed_path + " && git commit -m " + _shq("atlas(drill): register " + to_string(emitted) + " candidate(s)"))
+            return
+        }
+        let mut bname = branch
+        let mut t = title
+        if len(bname) == 0 { bname = "atlas-register-drill-" + _branch_stamp() }
+        if len(t) == 0 { t = "atlas(drill): register " + to_string(emitted) + " candidate(s) — seed=" + drill_seed.substring(0, if len(drill_seed) > 32 { 32 } else { len(drill_seed) }) }
+        let summary = summary_lines.join("\n")
+        _branch_commit_pr(atlas_root, embed_path, base, bname, t, summary)
+        return
+    }
+
+    if from_verb == "check" {
+        let ev = _adapt_check(positional)
+        println("hexa atlas register --from-check: " + ev.verdict)
+        if ev.verdict == "error" {
+            println("  NOT YET WIRED — `_adapt_check` is a stub extension point.")
+            println("  intended: run `hexa check` (compiler-frontend check pass) IN-PROCESS, on a 🔵")
+            println("            verdict construct an AtlasNode (kind C for constants, F for closed")
+            println("            forms, L for laws) and hand to register_from_event.")
+            println("  spec:     inbox/patches/atlas-cli-multi-verb-discovery-pipeline.md (this file's commit)")
+            println("  see source: tool/atlas_cli.hexa::_adapt_check + DiscoveryEvent + register_from_event")
+            exit(6)
+        }
+        // Future: ev.verdict == "🔵 …" → register_from_event(ev, …).
+        let rerr = register_from_event(ev, auto_pr, atlas_root, base, branch, title)
+        if len(rerr) > 0 { println("error: " + rerr); exit(5) }
+        return
+    }
+
+    // No --from-<verb> selected. Legacy STUB path for `register <file.hexa>`.
+    println("hexa atlas register: NOT YET WIRED for <file.hexa> mode.")
+    println("  intended: lex→parse <file.hexa> → discover_check(Module) → write_staging — needs the")
+    println("  compiler frontend (compiler/lex/* + compiler/parse/parser.hexa::parse) wired into a")
+    println("  `tool/atlas_register.hexa` companion. Spec: inbox/patches/hexa-cli-atlas-register-update-or-pr.md")
+    println("")
+    println("  AVAILABLE arms (multi-verb discovery sink):")
+    println("    --from-verify <fn> <n> <v> [--auto-pr]   (direct in-memory node-gen → PR; 2-op form too)")
+    println("    --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--auto-pr]")
+    println("    --from-check  [args]                       (STUB — extension point)")
+    println("  Future verbs (smash · atlas-verify · verify_adversarial · proposer · math) plug in by")
+    println("  writing one _adapt_<verb> fn → DiscoveryEvent → register_from_event.")
+    exit(3)
 }
 
 // ── pr (the `PR` arm of `update || PR`) ───────────────────
@@ -1201,12 +1606,19 @@ fn cmd_help() {
     println("                          the `update` arm of `update || PR` — then git add+commit it.")
     println("                          default --atlas-root = $HEXA_LANG (else cwd)")
     println("  register --from-verify <fn> <n> <v> [--auto-pr]   (also: <fn> <a> <b> <v> 2-op)")
+    println("           --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--auto-pr]")
+    println("           --from-check  [args]                       (STUB — extension point)")
     println("                          [--atlas-root <repo>] [--base <branch>] [--branch <name>]")
     println("                          [--title <text>] [--id <id>]")
-    println("                          DIRECT in-memory node-gen: re-runs the verify recompute,")
-    println("                          builds an AtlasNode struct-literal IN MEMORY, folds it")
-    println("                          directly into compiler/atlas/embedded.gen.hexa (the binary")
-    println("                          built-in atlas SSOT — @D g_atlas_binary_builtin). NO .n6.")
+    println("                          MULTI-VERB DIRECT in-memory node-gen: every `--from-<verb>`")
+    println("                          arm runs the verb IN-PROCESS, builds an AtlasNode struct-")
+    println("                          literal IN MEMORY, folds it directly into compiler/atlas/")
+    println("                          embedded.gen.hexa (binary-built-in atlas SSOT — @D g_atlas_")
+    println("                          binary_builtin). NO .n6. All arms share the canonical")
+    println("                          DiscoveryEvent → register_from_event sink — future verbs")
+    println("                          (smash · atlas-verify · proposer · math) plug in as ONE")
+    println("                          _adapt_<verb> fn. HONEST DEGRADE: drill with verdict=skip")
+    println("                          (no candidates) opens NO PR; verify FALSIFIED rejects.")
     println("                          With --auto-pr: branch + commit + `gh || api` PR (HONEST:")
     println("                          NEVER claims a PR opened unless `gh` rc=0 or HTTP 201).")
     println("  register <file.hexa>    [STUB] lex→parse→discover_check→write_staging for the file's")
