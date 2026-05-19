@@ -116,19 +116,19 @@ SCP="scp $SSH_OPTS -P $SSH_PORT -o ConnectTimeout=3600"
 echo "[4/8] Toolchain sanity ..."
 $SC "nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader|head -1
   nvcc --version|tail -2
-  mkdir -p $REMOTE_WORK/experiments $REMOTE_WORK/forge && echo TOOLCHAIN_OK" 2>&1 | tee remote_sanity.log
+  mkdir -p $REMOTE_WORK/cuda/experiments $REMOTE_WORK/forge && echo TOOLCHAIN_OK" 2>&1 | tee remote_sanity.log
 
 # ── 5) upload (preserve layout: runtime_bf16.c one dir up from .cu;
 #       forge_tier_v1.{c,h} two dirs up under forge/) ──────────────────
 echo "[5/8] Upload sources ..."
-$SCP "$SRC_RT"      "root@$SSH_HOST:$REMOTE_WORK/runtime_bf16.c"
+$SCP "$SRC_RT"      "root@$SSH_HOST:$REMOTE_WORK/cuda/runtime_bf16.c"
 $SCP "$SRC_FORGE_C" "root@$SSH_HOST:$REMOTE_WORK/forge/forge_tier_v1.c"
 $SCP "$SRC_FORGE_H" "root@$SSH_HOST:$REMOTE_WORK/forge/forge_tier_v1.h"
-$SCP "$SRC_CU"      "root@$SSH_HOST:$REMOTE_WORK/experiments/r050_dispatch_validate.cu"
+$SCP "$SRC_CU"      "root@$SSH_HOST:$REMOTE_WORK/cuda/experiments/r050_dispatch_validate.cu"
 
 # ── 6) build + run ────────────────────────────────────────────────────
 echo "[6/8] Build + fire ..."
-$SC "cd $REMOTE_WORK/experiments && \
+$SC "cd $REMOTE_WORK/cuda/experiments && \
   nvcc -O3 -std=c++17 -arch=native r050_dispatch_validate.cu \
     -lcublas -lcudart -lm -o r050_dispatch_validate 2>&1 | tee build.log ; \
   BRC=\${PIPESTATUS[0]} ; echo \"BUILD_RC=\$BRC\" ; \
@@ -141,9 +141,9 @@ $SC "cd $REMOTE_WORK/experiments && \
 echo "[7/8] Pull artifacts ..."
 PULL_OK=1
 pull(){ local t=0; while [ $t -lt 3 ]; do
-  $SCP "root@$SSH_HOST:$REMOTE_WORK/experiments/$1" "$LOCAL_DIR/$1" 2>&1 && { echo "  pulled $1"; return 0; }
+  $SCP "root@$SSH_HOST:$REMOTE_WORK/cuda/experiments/$1" "$LOCAL_DIR/$1" 2>&1 && { echo "  pulled $1"; return 0; }
   t=$((t+1)); echo "  retry $t/3 $1"; [ $t -lt 3 ] && sleep 10; done; echo "  FAIL $1"; return 1; }
-$SC "test -f $REMOTE_WORK/experiments/result.json && echo OK" 2>/dev/null | grep -q OK \
+$SC "test -f $REMOTE_WORK/cuda/experiments/result.json && echo OK" 2>/dev/null | grep -q OK \
   && pull result.json || PULL_OK=0
 pull build.log || true
 pull fire.log || true
