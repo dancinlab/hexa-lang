@@ -281,7 +281,7 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt) -> [LInstr] {
             } else {
                 // RFC 055 055-P0 — binop outside the FP64 arithmetic
                 // subset (e.g. div / compare / bitwise). Honest stub.
-                out.push(_nvptx_instr("//", [], "RFC 055 055-P0 — unsupported binop: " + s.op))
+                out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported binop: " + s.op))
             }
         }
         return out
@@ -293,7 +293,7 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt) -> [LInstr] {
     // RFC 055 055-P0 — statement outside the straight-line FP64 slice.
     // STMT_CALL / STMT_BR* / STMT_LOAD / STMT_STORE / STMT_THROW etc. are
     // 055-P1+ (control flow, address-space load/store). Honest stub.
-    out.push(_nvptx_instr("//", [], "RFC 055 055-P0 — unsupported stmt kind: " + s.kind))
+    out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported stmt kind: " + s.kind))
     return out
 }
 
@@ -474,7 +474,7 @@ fn _nvptx_arch_for_target(target: string) -> string {
 fn _emit_ptx_header(target: string) -> string {
     let arch = _nvptx_arch_for_target(target)
     let mut s = ""
-    s = s + "// RFC 055 055-P0 — hexa-native NVPTX emit · target=" + target + "\n"
+    s = s + "// RFC 055 055-P0 - hexa-native NVPTX emit | target=" + target + "\n"
     s = s + PTX_VERSION_DIRECTIVE + " " + _NVPTX_PTX_VERSION + "\n"
     s = s + PTX_TARGET_DIRECTIVE + " " + arch + "\n"
     // PTX `.address_size 64` — nvptx64 is a 64-bit address ABI.
@@ -956,7 +956,7 @@ fn _nvptx_build_vec_add_kernel(target: string) -> NvptxKernelFn {
     let mut tr_args = []
     tr_args.push(_nvptx_op(_nvptx_reg_u32(4)))
     tr_args.push(_nvptx_op(_nvptx_reg_u64(3)))
-    buf.push(_nvptx_instr("cvt.u32.u64", tr_args, "n (i64 → u32 truncate for cmp)"))
+    buf.push(_nvptx_instr("cvt.u32.u64", tr_args, "n (i64 -> u32 truncate for cmp)"))
     buf = _nvptx_p1_setp_lt_s32(buf, _nvptx_reg_pred(0), _nvptx_reg_u32(3), _nvptx_reg_u32(4),
         "p0 = (gid < n)")
     buf = _nvptx_p1_bra_if_not(buf, _nvptx_reg_pred(0), "$L_END", "skip OOB lane")
@@ -965,7 +965,7 @@ fn _nvptx_build_vec_add_kernel(target: string) -> NvptxKernelFn {
     // add, store C. PTX byte addressing uses .u64 — widen gid → u64,
     // scale by sizeof(f64) = 8, add to each base.
     buf.push(_nvptx_instr("label", [_nvptx_op("$L_BODY")], ""))
-    buf = _nvptx_p1_cvt_u64_u32(buf, _nvptx_reg_u64(4), _nvptx_reg_u32(3), "widen gid → u64")
+    buf = _nvptx_p1_cvt_u64_u32(buf, _nvptx_reg_u64(4), _nvptx_reg_u32(3), "widen gid -> u64")
     buf = _nvptx_p1_mul_lo_u64(buf,  _nvptx_reg_u64(5), _nvptx_reg_u64(4), "8", "byte offset = gid * 8")
     buf = _nvptx_p1_add_u64(buf,     _nvptx_reg_u64(6), _nvptx_reg_u64(0), _nvptx_reg_u64(5), "&a[gid]")
     buf = _nvptx_p1_add_u64(buf,     _nvptx_reg_u64(7), _nvptx_reg_u64(1), _nvptx_reg_u64(5), "&b[gid]")
@@ -1014,6 +1014,295 @@ fn _nvptx_build_vec_add_kernel(target: string) -> NvptxKernelFn {
 // pipes to `ptxas` for F-RFC055-PTX-EMIT.
 pub fn emit_ptx_vec_add_module(target: string) -> string {
     let kf = _nvptx_build_vec_add_kernel(target)
+    let mut parts: [string] = []
+    parts.push(_emit_ptx_header(target))
+    parts.push("\n")
+    parts.push(emit_ptx_kernel(kf))
+    return parts.join("")
+}
+
+// ════════════════════════════════════════════════════════════════════
+// RFC 055 055-P2 — FP64 GEMM `@gpu_kernel` (naive slice)
+// ════════════════════════════════════════════════════════════════════
+//
+// 055-P2 extends the 055-P1 vec-add emitter to a naive FP64 GEMM — the
+// RFC 055 §12 P2 deliverable, gated by F-RFC055-GEMM-FEASIBLE (a
+// CORRECTNESS gate; per RFC 055 §7, GEMM perf vs cuBLAS is an honest
+// measurement, NOT a gate). The kernel:
+//
+//   @gpu_kernel
+//   fn gemm(a: [f64], b: [f64], c: [f64], m: i64, n: i64, k: i64) {
+//       let row = gpu_block_id_y() * gpu_block_dim_y() + gpu_thread_id_y()
+//       let col = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+//       if row < m && col < n {
+//           let mut acc = 0.0
+//           let mut kk = 0
+//           while kk < k {
+//               acc = acc + a[row*k + kk] * b[kk*n + col]   // → fma.rn.f64
+//               kk = kk + 1
+//           }
+//           c[row*n + col] = acc
+//       }
+//   }
+//
+// One thread computes one C element — A is row-major m×k, B is k×n,
+// C is m×n. The accumulate `acc + a*b` lowers to a single `fma.rn.f64`
+// (round-to-nearest fused multiply-add). This is the **naive** GEMM;
+// the **tiled** `@shared` + `gpu_barrier()` variant (gpu/SPEC.md §6)
+// is the named 055-P2-tiled follow-on — naive satisfies the correctness
+// gate at the lowest fire risk (no shared-memory tiling-boundary bug
+// can cost a GPU fire), and RFC 055 §12 scopes P2 as "naive/tiled".
+//
+// New vs vec-add: a real PTX loop (`$L_LOOP` back-edge via unconditional
+// `bra`, `setp.lt.s32` loop guard), `fma.rn.f64`, `mul.lo.s32` index
+// arithmetic, the `.y`-axis thread-index sregs, and an FP64 zero-init
+// `mov.f64`. F-RFC055-CPU-CODEGEN-UNTOUCHED holds by construction — this
+// section only ADDS functions; no CPU codegen path is touched.
+
+// ── 055-P2 helper LInstr emitters ────────────────────────────────────
+//
+// Same pattern as the `_nvptx_p1_*` helpers — thin wrappers over the
+// 055-P0 `_nvptx_instr` / `_nvptx_op` primitives. The 055-P2 lowering
+// pass (055-P3 productization) will produce identical LInstr records.
+
+// mov.u32 %r<dst>, <sreg>.<axis>;   (thread-hierarchy sreg read, any axis)
+fn _nvptx_p2_mov_sreg(buf: [LInstr], dst_reg: string, sreg: string, axis: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(sreg + "." + axis))
+    out.push(_nvptx_instr(PTX_OP_MOV_U32, a, note))
+    return out
+}
+
+// mov.u32 %r<dst>, <imm>;   (integer-immediate move — e.g. loop init kk=0)
+fn _nvptx_p2_mov_u32_imm(buf: [LInstr], dst_reg: string, imm_text: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(imm_text))
+    out.push(_nvptx_instr(PTX_OP_MOV_U32, a, note))
+    return out
+}
+
+// mov.f64 %fd<dst>, <imm>;   (FP64-immediate move — accumulator zero-init.
+// PTX FP64 literals are the `0d`-prefixed 16-hex-digit IEEE-754 form;
+// 0d0000000000000000 is exactly +0.0.)
+fn _nvptx_p2_mov_f64_imm(buf: [LInstr], dst_reg: string, imm_text: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(imm_text))
+    out.push(_nvptx_instr("mov.f64", a, note))
+    return out
+}
+
+// cvt.u32.u64 %r<dst>, %rd<src>;   (truncate a 64-bit param to 32-bit
+// for index/compare arithmetic — the 055-P1 slice guarantees m/n/k fit
+// in s32, gpu/SPEC.md §8 FP64-first scope.)
+fn _nvptx_p2_cvt_u32_u64(buf: [LInstr], dst_reg: string, src_reg: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(src_reg))
+    out.push(_nvptx_instr("cvt.u32.u64", a, note))
+    return out
+}
+
+// mul.lo.s32 %r<dst>, %r<a>, %r<b>;   (32-bit index multiply, low half)
+fn _nvptx_p2_mul_lo_s32(buf: [LInstr], dst_reg: string, a_reg: string, b_reg: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(a_reg))
+    a.push(_nvptx_op(b_reg))
+    out.push(_nvptx_instr(PTX_OP_MUL_LO_S32, a, note))
+    return out
+}
+
+// add.s32 %r<dst>, %r<a>, <reg-or-imm>;   (32-bit index add — `b_text`
+// may be a register or an immediate, e.g. the `kk = kk + 1` increment)
+fn _nvptx_p2_add_s32(buf: [LInstr], dst_reg: string, a_reg: string, b_text: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(a_reg))
+    a.push(_nvptx_op(b_text))
+    out.push(_nvptx_instr(PTX_OP_ADD_S32, a, note))
+    return out
+}
+
+// fma.rn.f64 %fd<dst>, %fd<a>, %fd<b>, %fd<c>;   ( dst = a*b + c,
+// round-to-nearest — the GEMM inner-product accumulate step )
+fn _nvptx_p2_fma_rn_f64(buf: [LInstr], dst_reg: string, a_reg: string, b_reg: string, c_reg: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut args = []
+    args.push(_nvptx_op(dst_reg))
+    args.push(_nvptx_op(a_reg))
+    args.push(_nvptx_op(b_reg))
+    args.push(_nvptx_op(c_reg))
+    out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, args, note))
+    return out
+}
+
+// bra <label>;   (unconditional branch — the loop back-edge)
+fn _nvptx_p2_bra(buf: [LInstr], label: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(label))
+    out.push(_nvptx_instr(PTX_OP_BRA, a, note))
+    return out
+}
+
+// ── Reference naive GEMM kernel build + emit (055-P2 keystone) ────────
+//
+// _nvptx_build_gemm_kernel — hand-construct the PTX-flavored LFunc for
+// the naive FP64 GEMM kernel (see the section header for the hexa
+// source it mirrors). This is the same shape the 055-P3 MIR lowering
+// will produce; 055-P2 hand-emits it so the dispatch script can fire it
+// end-to-end before the `@gpu_kernel` attribute-parse + MIR partition
+// land.
+//
+// Register convention:
+//   %r0  %ctaid.y   %r1  %ntid.y   %r2  %tid.y
+//   %r3  row = ctaid.y*ntid.y + tid.y
+//   %r4  %ctaid.x   %r5  %ntid.x   %r6  %tid.x
+//   %r7  col = ctaid.x*ntid.x + tid.x
+//   %r8  m   %r9  n   %r10 k   (params truncated u64→u32)
+//   %r11 kk (loop counter)     %r12 row*k (A row base)
+//   %r13 row*k+kk   %r14 kk*n   %r15 kk*n+col
+//   %r16 row*n      %r17 row*n+col
+//   %rd0 a base  %rd1 b base  %rd2 c base  %rd3 m  %rd4 n  %rd5 k
+//   %rd6..8   A element address compose   %rd9..11  B element address
+//   %rd12..14 C element address compose
+//   %p0 row<m   %p1 col<n   %p2 kk<k
+//   %fd0 acc    %fd1 a[*]    %fd2 b[*]
+fn _nvptx_build_gemm_kernel(target: string) -> NvptxKernelFn {
+    let mut buf = []
+
+    // Block 0 — entry. Load .param.u64 bases + the m/n/k extents.
+    buf.push(_nvptx_instr("label", [_nvptx_op("$L_0")], ""))
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(0), "gemm", 0, "load a base ptr (row-major mxk)")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(1), "gemm", 1, "load b base ptr (row-major kxn)")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(2), "gemm", 2, "load c base ptr (row-major mxn)")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(3), "gemm", 3, "load m (rows of A/C)")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(4), "gemm", 4, "load n (cols of B/C)")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(5), "gemm", 5, "load k (contraction dim)")
+
+    // row = ctaid.y*ntid.y + tid.y   (gpu/SPEC.md §5 — y-axis sregs)
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(0), PTX_SREG_CTAID, "y", "gpu_block_id_y()")
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(1), PTX_SREG_NTID,  "y", "gpu_block_dim_y()")
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(2), PTX_SREG_TID,   "y", "gpu_thread_id_y()")
+    buf = _nvptx_p1_mad_lo_s32(buf, _nvptx_reg_u32(3),
+        _nvptx_reg_u32(0), _nvptx_reg_u32(1), _nvptx_reg_u32(2),
+        "row = block_id_y * block_dim_y + thread_id_y")
+
+    // col = ctaid.x*ntid.x + tid.x   (gpu/SPEC.md §5 — x-axis sregs)
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(4), PTX_SREG_CTAID, "x", "gpu_block_id_x()")
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(5), PTX_SREG_NTID,  "x", "gpu_block_dim_x()")
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(6), PTX_SREG_TID,   "x", "gpu_thread_id_x()")
+    buf = _nvptx_p1_mad_lo_s32(buf, _nvptx_reg_u32(7),
+        _nvptx_reg_u32(4), _nvptx_reg_u32(5), _nvptx_reg_u32(6),
+        "col = block_id_x * block_dim_x + thread_id_x")
+
+    // Truncate m/n/k to s32 for the index + compare arithmetic
+    // (gpu/SPEC.md §8 — the FP64-first slice guarantees they fit s32).
+    buf = _nvptx_p2_cvt_u32_u64(buf, _nvptx_reg_u32(8),  _nvptx_reg_u64(3), "m (i64 -> u32 for index/cmp)")
+    buf = _nvptx_p2_cvt_u32_u64(buf, _nvptx_reg_u32(9),  _nvptx_reg_u64(4), "n (i64 -> u32 for index/cmp)")
+    buf = _nvptx_p2_cvt_u32_u64(buf, _nvptx_reg_u32(10), _nvptx_reg_u64(5), "k (i64 -> u32 for index/cmp)")
+
+    // Bounds — a thread off the m×n grid does nothing. Two guards, both
+    // skipping to the common $L_END exit.
+    buf = _nvptx_p1_setp_lt_s32(buf, _nvptx_reg_pred(0), _nvptx_reg_u32(3), _nvptx_reg_u32(8),
+        "p0 = (row < m)")
+    buf = _nvptx_p1_bra_if_not(buf, _nvptx_reg_pred(0), "$L_END", "skip OOB row")
+    buf = _nvptx_p1_setp_lt_s32(buf, _nvptx_reg_pred(1), _nvptx_reg_u32(7), _nvptx_reg_u32(9),
+        "p1 = (col < n)")
+    buf = _nvptx_p1_bra_if_not(buf, _nvptx_reg_pred(1), "$L_END", "skip OOB col")
+
+    // acc = 0.0 ; kk = 0 ; row*k = A-row base offset (loop-invariant).
+    buf = _nvptx_p2_mov_f64_imm(buf, _nvptx_reg_f64(0), "0d0000000000000000", "acc = 0.0")
+    buf = _nvptx_p2_mov_u32_imm(buf, _nvptx_reg_u32(11), "0", "kk = 0")
+    buf = _nvptx_p2_mul_lo_s32(buf, _nvptx_reg_u32(12), _nvptx_reg_u32(3), _nvptx_reg_u32(10),
+        "row*k - A-row base index (loop-invariant)")
+
+    // Block 1 — the contraction loop `while kk < k`.
+    buf.push(_nvptx_instr("label", [_nvptx_op("$L_LOOP")], ""))
+    buf = _nvptx_p1_setp_lt_s32(buf, _nvptx_reg_pred(2), _nvptx_reg_u32(11), _nvptx_reg_u32(10),
+        "p2 = (kk < k)")
+    buf = _nvptx_p1_bra_if_not(buf, _nvptx_reg_pred(2), "$L_LOOPEND", "loop exit when kk >= k")
+
+    // av = a[row*k + kk]
+    buf = _nvptx_p2_add_s32(buf, _nvptx_reg_u32(13), _nvptx_reg_u32(12), _nvptx_reg_u32(11), "row*k + kk")
+    buf = _nvptx_p1_cvt_u64_u32(buf, _nvptx_reg_u64(6), _nvptx_reg_u32(13), "widen A index -> u64")
+    buf = _nvptx_p1_mul_lo_u64(buf, _nvptx_reg_u64(7), _nvptx_reg_u64(6), "8", "A byte offset = idx * 8")
+    buf = _nvptx_p1_add_u64(buf, _nvptx_reg_u64(8), _nvptx_reg_u64(0), _nvptx_reg_u64(7), "&a[row*k+kk]")
+    buf = _nvptx_p1_ld_global_f64(buf, _nvptx_reg_f64(1), _nvptx_reg_u64(8), "av = a[row*k+kk]")
+
+    // bv = b[kk*n + col]
+    buf = _nvptx_p2_mul_lo_s32(buf, _nvptx_reg_u32(14), _nvptx_reg_u32(11), _nvptx_reg_u32(9), "kk*n")
+    buf = _nvptx_p2_add_s32(buf, _nvptx_reg_u32(15), _nvptx_reg_u32(14), _nvptx_reg_u32(7), "kk*n + col")
+    buf = _nvptx_p1_cvt_u64_u32(buf, _nvptx_reg_u64(9), _nvptx_reg_u32(15), "widen B index -> u64")
+    buf = _nvptx_p1_mul_lo_u64(buf, _nvptx_reg_u64(10), _nvptx_reg_u64(9), "8", "B byte offset = idx * 8")
+    buf = _nvptx_p1_add_u64(buf, _nvptx_reg_u64(11), _nvptx_reg_u64(1), _nvptx_reg_u64(10), "&b[kk*n+col]")
+    buf = _nvptx_p1_ld_global_f64(buf, _nvptx_reg_f64(2), _nvptx_reg_u64(11), "bv = b[kk*n+col]")
+
+    // acc = av*bv + acc   (single round-to-nearest fused multiply-add)
+    buf = _nvptx_p2_fma_rn_f64(buf, _nvptx_reg_f64(0), _nvptx_reg_f64(1), _nvptx_reg_f64(2), _nvptx_reg_f64(0),
+        "acc = fma(av, bv, acc)")
+    // kk = kk + 1 ; back-edge to the loop guard.
+    buf = _nvptx_p2_add_s32(buf, _nvptx_reg_u32(11), _nvptx_reg_u32(11), "1", "kk = kk + 1")
+    buf = _nvptx_p2_bra(buf, "$L_LOOP", "loop back-edge")
+
+    // Block 2 — loop exit: write the C element.
+    buf.push(_nvptx_instr("label", [_nvptx_op("$L_LOOPEND")], ""))
+    buf = _nvptx_p2_mul_lo_s32(buf, _nvptx_reg_u32(16), _nvptx_reg_u32(3), _nvptx_reg_u32(9), "row*n")
+    buf = _nvptx_p2_add_s32(buf, _nvptx_reg_u32(17), _nvptx_reg_u32(16), _nvptx_reg_u32(7), "row*n + col")
+    buf = _nvptx_p1_cvt_u64_u32(buf, _nvptx_reg_u64(12), _nvptx_reg_u32(17), "widen C index -> u64")
+    buf = _nvptx_p1_mul_lo_u64(buf, _nvptx_reg_u64(13), _nvptx_reg_u64(12), "8", "C byte offset = idx * 8")
+    buf = _nvptx_p1_add_u64(buf, _nvptx_reg_u64(14), _nvptx_reg_u64(2), _nvptx_reg_u64(13), "&c[row*n+col]")
+    buf = _nvptx_p1_st_global_f64(buf, _nvptx_reg_u64(14), _nvptx_reg_f64(0), "c[row*n+col] = acc")
+
+    // Block 3 — common exit.
+    buf.push(_nvptx_instr("label", [_nvptx_op("$L_END")], ""))
+    buf.push(_nvptx_instr(PTX_OP_RET, [], "return from kernel"))
+
+    // FP64 register bank (`.reg .f64 %fd0..2`) — carried in callee_saved
+    // per the 055-P0 contract.
+    let mut fp64_regs = []
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(0), kind: "fpr" })
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(1), kind: "fpr" })
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(2), kind: "fpr" })
+
+    let f = LFunc {
+        name: "gemm",
+        target: target,
+        instrs: buf,
+        frame_size: 0,
+        callee_saved: fp64_regs,
+        def_line: 0
+    }
+
+    // Param bank — three `.u64` farr bases + three `.u64` extents.
+    let mut ps = []
+    ps.push(_nvptx_param_spec("gemm_param_0", ".u64", "a: [f64]  (device-resident farr base, mxk)"))
+    ps.push(_nvptx_param_spec("gemm_param_1", ".u64", "b: [f64]  (device-resident farr base, kxn)"))
+    ps.push(_nvptx_param_spec("gemm_param_2", ".u64", "c: [f64]  (device-resident farr base, mxn)"))
+    ps.push(_nvptx_param_spec("gemm_param_3", ".u64", "m: i64    (rows of A / C)"))
+    ps.push(_nvptx_param_spec("gemm_param_4", ".u64", "n: i64    (cols of B / C)"))
+    ps.push(_nvptx_param_spec("gemm_param_5", ".u64", "k: i64    (contraction dimension)"))
+
+    // Register banks — body uses %r0..17 (18 .u32), %rd0..14 (15 .u64),
+    // %p0..2 (3 .pred), %fd0..2 (3 .f64 from callee_saved above).
+    return _nvptx_kernel_fn(f, ps, 18, 15, 3)
+}
+
+// emit_ptx_gemm_module — render the full PTX module text for the 055-P2
+// naive FP64 GEMM kernel. The returned string is ptxas-ready (header +
+// `.visible .entry` body) and is what `tool/dispatch_r055_p2_gemm.sh`
+// pipes to `ptxas` for F-RFC055-PTX-EMIT / F-RFC055-GEMM-FEASIBLE.
+pub fn emit_ptx_gemm_module(target: string) -> string {
+    let kf = _nvptx_build_gemm_kernel(target)
     let mut parts: [string] = []
     parts.push(_emit_ptx_header(target))
     parts.push("\n")

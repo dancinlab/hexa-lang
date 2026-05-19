@@ -4,10 +4,14 @@
 > **hexa itself**, via the `@gpu` annotation, instead of hand-written
 > CUDA `.cu` / Metal `.metal`.
 >
-> Status: **DESIGN PHASE**. The kernel source format is decided
-> (`design.md` Decision 1 — `@gpu` annotation on ordinary `.hexa`
-> files). Implementation is zero. No capability is claimed here; this
-> directory holds the design, not a shipped feature.
+> Status: **055-P2 LANDED (2026-05-20)** — the NVPTX codegen (RFC 055)
+> hand-emits a FP64 vec-add and a naive FP64 GEMM `@gpu_kernel`; the
+> RFC 055 §7 falsifier battery is **measured PASS on a real NVIDIA GPU**
+> (RTX 5070). The codegen is not yet wired into the main compile
+> pipeline — that is 055-P3 (`HANDOFF.md`). The kernel source format is
+> decided (`design.md` Decision 1 — `@gpu` annotation on ordinary
+> `.hexa` files). This directory holds the design / spec; the codegen
+> implementation lives in `compiler/codegen/nvptx_*.hexa`.
 >
 > Scope note: this is a **design / spec** directory. The GPU
 > *runtime* code stays under `self/` (`self/native/`, `self/cuda/`,
