@@ -2516,3 +2516,22 @@ diff 0). The 6,065-line core is coarser than the §5b ≈2.4-3k projection —
 P1 deliverable is a clean compiling split, boundary refinement is a
 followup. P2/P3 (`runtime_hi.hexa` authoring) remain future cycles.
 ROADMAP child 69: P0+P1 done.
+
+### 2026-05-19 — interpreter residue removal: run/batch paths (commit 6ba61c8a)
+
+The R7 measured-cutover transitional scaffolding in `self/main.hexa`'s run
+paths is now dead code and removed (self/main.hexa −117/+39):
+- `cmd_run_user_direct` / `_batch_run_one`: dropped the `HEXA_FORCE_INTERP`
+  escape-hatch branch (it re-ran the compile-then-exec path with a
+  misleading "tree-walking interpreter" message) and the "falling back to
+  the retiring interpreter" build-failure branch (it re-invoked the same
+  compile-then-exec, never an interpreter). Build failure now reports the
+  compile error honestly + exits non-zero.
+- Deleted the uncalled `cmd_run_dispatch()` + the write-only
+  `cmd_run_vm_mode` global; dropped the dead `--vm` flag (rt#36 bytecode-VM
+  opt-in — the bc-VM was an interpreter-only path) and `cmd_run_user_direct`'s
+  unused `want_vm` param (both call sites updated).
+Validated: parse-clean, hexa.real builds, `hexa run`/`batch`/`--version` +
+atlas_verify_smoke 118/118 clean. Residue still present elsewhere (bc_vm.hexa
++ test_bc_vm_*, verify_interp_builtins.hexa, PLAN-interp-retirement.md) —
+follow-up cycles.
