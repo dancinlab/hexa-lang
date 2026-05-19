@@ -194,8 +194,10 @@ cmd_bootstrap() {
     log "bootstrap [2/4] hexa_v2 self/main.hexa → $MAIN_OUT"
     ./self/native/hexa_v2 self/main.hexa "$MAIN_OUT" || die "[2] transpile failed"
     # [3] link the full `hexa` driver (build subcommand + import flatten).
+    #     -D_GNU_SOURCE: runtime.c uses POSIX (nanosleep/fdopen/kill/…) —
+    #     strict -std=c11 hides them on linux glibc (macOS headers laxer).
     log "bootstrap [3/4] clang → $hxbin/hexa.real"
-    clang -O2 -std=c11 -I self "$MAIN_OUT" self/runtime.c \
+    clang -O2 -std=c11 -D_GNU_SOURCE -I self "$MAIN_OUT" self/runtime.c \
           -o "$hxbin/hexa.real" -lm || die "[3] driver link failed"
     # [4] wrapper
     log "bootstrap [4/4] wrapper → $hxbin/hexa"
