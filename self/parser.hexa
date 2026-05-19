@@ -2822,6 +2822,43 @@ fn parse_postfix() {
                 "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
                 "target": "", "trait_name": "", "methods": ""
             }
+        } else if k == "Not" {
+            // Macro invocation: name!(args) or name![args]
+            // Disambiguates from prefix `!` (handled in parse_unary, before parse_postfix)
+            // and from comparison `!=` (lexed as NotEq, distinct kind).
+            // Postfix Not only valid when immediately followed by `(` or `[`.
+            // See parse_macro_def (L4164) for the corresponding definition syntax.
+            // Shape-A (RFC-pending): build a MacroCall AST node. Expansion =
+            // future cycle — codegen does not yet consume MacroCall.
+            let next_k = p_peek_ahead(1).kind
+            if next_k == "LParen" {
+                p_advance() // consume `!`
+                p_advance() // consume `(`
+                let mac_args = parse_args()
+                p_expect("RParen")
+                expr = #{
+                    "kind": "MacroCall", "name": "", "value": "", "op": "(",
+                    "left": expr, "right": "", "cond": "", "then_body": "", "else_body": "",
+                    "params": "", "body": "", "args": mac_args, "fields": "", "items": "",
+                    "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                    "target": "", "trait_name": "", "methods": ""
+                }
+            } else if next_k == "LBracket" {
+                p_advance() // consume `!`
+                p_advance() // consume `[`
+                let mac_args = parse_args()
+                p_expect("RBracket")
+                expr = #{
+                    "kind": "MacroCall", "name": "", "value": "", "op": "[",
+                    "left": expr, "right": "", "cond": "", "then_body": "", "else_body": "",
+                    "params": "", "body": "", "args": mac_args, "fields": "", "items": "",
+                    "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                    "target": "", "trait_name": "", "methods": ""
+                }
+            } else {
+                // Bare `!` after expr — not a macro call; let caller decide.
+                cont = false
+            }
         } else if k == "Dot" {
             // Field access or tuple index (.0, .1, ...)
             p_advance()
@@ -4509,6 +4546,9 @@ fn ast_to_string(node, indent) {
     }
     if k == "MacroDef" {
         return pad + "MacroDef(" + node.name + ", [" + to_string(len(node.items)) + " rules])"
+    }
+    if k == "MacroCall" {
+        return pad + "MacroCall(" + node.op + ", [" + to_string(len(node.args)) + " args])"
     }
     if k == "DeriveDecl" {
         return pad + "DeriveDecl(" + node.name + ", [" + to_string(len(node.items)) + " traits])"

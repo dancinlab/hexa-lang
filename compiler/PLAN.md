@@ -2694,3 +2694,49 @@ exception. Recommendation to a future hexa-chip session: rename `*.hexa
 → *.v` in the master subtree (the Makefile's `$(RTL_SRCS:.hexa=.v)` rule
 already presumes that final extension; rename removes both the lie and
 the parse-gate trip). Zero behavior change in hexa-lang.
+
+### 2026-05-19 — KEYWORD_DEMOTE #2.b — macro invocation `name!(args)` parser
+
+**SSOT-only landing (Shape A).** `example/test_macros.hexa` L11 `let result =
+hello!()` failed at the trailing `)` because the parser only knew prefix
+`Not` (unary `!`) — there was no postfix branch for `Ident + Not + (...)`
+even though `parse_macro_def` (L4164) already parsed the **definition**
+side after the prior `=>` fix (commit a85ff11c).
+
+**Fix** (self/parser.hexa): `parse_postfix` gains a `Not` branch with
+1-token lookahead. `Ident + Not + LParen ... RParen` and `Ident + Not +
+LBracket ... RBracket` now fold into a new `MacroCall` AST node carrying
+the callee on `left`, the args on `args`, and `op = "("` or `"["` to
+preserve the invocation form. Bare postfix `!` (no following bracket)
+leaves the loop and lets the caller handle it as before — so prefix `!x`
+(consumed in `parse_unary` *before* `parse_postfix`) and `a != b` (lexed
+as one `NotEq` token) are untouched. AST printer also gains a `MacroCall`
+arm so dumps stay readable.
+
+**g3-honest scope.** Parse-gate ONLY: the new code is on the SSOT and
+syntactically clean (`hexa parse self/parser.hexa` → OK with current
+deployed binary), and a parse-only test exercising 5 shapes lands at
+`test/t_parser_macro_invocation.hexa`. **Codegen of `MacroCall` is not
+wired** — compile-time expansion (hygienic substitution of the matching
+`MacroRule` body) is a separate cycle, punted to an RFC. Running
+`example/test_macros.hexa` will therefore still fail at compile after a
+bootstrap rebuild — the parse error disappears, but later stages will not
+know what to do with the new node yet.
+
+**Out of scope (also still failing in test_macros.hexa).** (a) `$` as a
+lexer token for `$x:expr` capture syntax in macro patterns (L43 `sum`
+arms). (b) `derive(Display) for Point` codegen producing the `.display()`
+method (L97/98 reading errors). Both belong to the larger macro/derive
+absorption RFC.
+
+**Validation.** SSOT parse-gate via the still-deployed `hexa.real` —
+`self/parser.hexa` parses clean post-edit. End-to-end verification of
+the new branch requires a bootstrap rebuild (not performed in this
+worktree; binary promote is a separate deploy step per
+@D g_inbox_processing_loop step 7). The new
+`test/t_parser_macro_invocation.hexa` parses **clean against the future
+binary only** — against the current binary it still fails at the same
+positions as before, which is the expected regression-test polarity.
+
+Files: `self/parser.hexa` (postfix `Not` branch + MacroCall printer arm
+~50 lines net), `test/t_parser_macro_invocation.hexa` (new).
