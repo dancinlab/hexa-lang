@@ -3,7 +3,7 @@
 //  self/main.hexa — HEXA CLI 엔트리 (go/cargo 스타일)
 //
 //  서브커맨드:
-//    hexa run <file> [args...]    스크립트 실행 (interp 인터프리터 위임)
+//    hexa run <file> [args...]    스크립트 실행 (compile-then-exec; interp R7 retired)
 //    hexa build <file> [-o out]   .hexa → 네이티브 바이너리
 //    hexa cc                      트랜스파일러(hexa_cc) 재빌드
 //    hexa status                  툴체인 상태
@@ -30,7 +30,7 @@ fn cmd_help() {
     println("  unified science stack absorbed from nexus (archived 2026-05-13)")
     println("")
     println("USAGE")
-    println("  hexa run <file> [args...]               Execute .hexa script (interpreter)")
+    println("  hexa run <file> [args...]               Execute .hexa script (compile-then-exec)")
     println("  hexa build <file> [-o out]              Compile .hexa → native binary")
     println("  hexa drill --seed \"...\"  ★              Run the discovery engine (main absorbed verb)")
     println("  hexa <subcommand> [args...]             Subcommand dispatch (80+ verbs)")
