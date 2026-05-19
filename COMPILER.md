@@ -23,7 +23,7 @@ At-a-glance
   interim  : W1/W2/F speed the C path; relief only while the C fallback lives
   naming   : drop bootstrap vestiges (_v2 _c2 aprime s4) — separate cycle
   measured : clang = 80% of build wall; runtime.c recompile = 53% alone
-  status   : S1 DONE — lower_hir O(N²) killed (170x @ N=400, byte-eq PASS); S2 next
+  status   : S1+S2 DONE — full 24k-line closure codegens in ~94s (was timeout); S3 next
 ```
 
 ---
@@ -108,8 +108,13 @@ S1  codegen performance — DONE 2026-05-20. The dominant blocker, closed.
       O(N^2) deep-copy of the growing LowerExprResult{ctx}. MEASURED:
       lower_hir at N=400 = 1527 ms -> 9 ms (~170x); O(N^2) -> near-linear.
       byte-eq 7/7 fixtures PASS (perf-only, zero semantic change).
-S2  full-closure codegen 완주 — the 21K-line compiler flatten emits .s
-    within time. First point full-scope correctness becomes measurable.
+S2  full-closure codegen 완주 — DONE 2026-05-20 (commit a94ed6e3).
+    The full 24k-line compiler closure codegens to completion: `.s`
+    emits in ~94s (was a 9-min-cap timeout pre-S1). Per-phase:
+    lower_hir 971ms (S1 holds at full scale), codegen 7.4s (the new
+    long pole, ~79% — not a blocker, <2min total), emit 1.2s. codegen
+    diagnostics clean — 0 errors, 0 unmapped-builtins, 11 HX4001 warns.
+    S2-followup (non-blocking): codegen sub-phase instrumentation.
 S3  assemble + link self-host — full .s -> assemble -> link -> 2nd-gen
     aprime_cc; 1st-gen vs 2nd-gen byte-diff = self-host fixpoint proof.
 S4  drop the hexa_v2 dependency — tool/build_aprime.sh stage 2 uses
@@ -363,3 +368,10 @@ ultimately removes.
   1527 ms -> 9 ms (~170x); the super-linear curve is gone. byte-eq 7/7
   fixtures PASS — verified correctness-preserving. The dominant self-host
   blocker is closed. Next: S2 (full-closure codegen 완주).
+- 2026-05-20 — **S2 PASS** (campaign-branch commit `a94ed6e3`). The full
+  `compiler/main.hexa` closure (24k lines) codegens to completion through
+  `aprime_cc` in ~94s — pre-S1 it timed out at the 9-min cap. `.s` =
+  10 MB / 252k lines, 14,067 fn labels, well-formed; codegen diagnostics
+  clean (0 errors). S1's fix confirmed effective at full scale
+  (lower_hir 971ms). New long pole = codegen MIR->LIR (7.4s, ~79%) but
+  not a blocker. Next: S3 (assemble + link self-host fixpoint).
