@@ -410,6 +410,102 @@ fn _test_call_intrinsic() -> bool {
     return ok
 }
 
+// ── Case 5 — STMT_LOAD + STMT_STORE generic lowering ──────────────────
+//
+// 055-P3b fifth (last) slice: memory ops. STMT_LOAD lowers to
+// `ld.global.f64 %fd<dst>, [%rd<addr>];` and STMT_STORE lowers to
+// `st.global.f64 [%rd<addr>], %fd<value>;`. The classifier's Pass 2
+// has propagated the address-operand source Local into the `.u64`
+// bank so the emitted PTX renders `%rd<id>` for the address.
+//
+// Fixture: a one-block MFunc with a STMT_LOAD that loads from address
+// Local 0 (a function param treated as a u64 farr base) followed by a
+// STMT_STORE that writes a value to the same address. Verifies:
+//   - `.reg .u64 %rd0` declared (Pass 2 propagation of the address Local)
+//   - `ld.global.f64 %fd1, [%rd0];` for the load
+//   - `st.global.f64 [%rd0], %fd1;` for the store
+
+fn _stmt_load(dst: Local, addr: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(addr)
+    return Stmt {
+        kind: STMT_LOAD, dst: dst, op: "", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_store(addr: Operand, value: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(addr)
+    xs.push(value)
+    return Stmt {
+        kind: STMT_STORE, dst: _miss_local(), op: "", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _build_case_load_store() -> MModule {
+    let p = _local(0, "p")           // address Local — propagated to U64 by Pass 2
+    let v = _local(1, "v")           // STMT_LOAD dst — F64
+    let v2 = _local(2, "v2")         // arithmetic intermediate — F64
+
+    // block 0:
+    //   v  = *p              (STMT_LOAD)
+    //   v2 = v + v           (STMT_BINOP "add" — F64)
+    //   *p = v2              (STMT_STORE)
+    //   return
+    let mut s0 = []
+    s0.push(_stmt_load(v, _op_local(p.id)))
+    s0.push(_stmt_binop(v2, "add", _op_local(v.id), _op_local(v.id)))
+    s0.push(_stmt_store(_op_local(p.id), _op_local(v2.id)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(p)
+    let mut locals = []
+    locals.push(p)
+    locals.push(v)
+    locals.push(v2)
+
+    let mf = MFunc {
+        name: "ld_st_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_ld_st.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_load_store() -> bool {
+    let mut ok = true
+    let mod_ls = _build_case_load_store()
+    let ptx = codegen_emit_ptx_sm80(mod_ls)
+
+    println("")
+    println("── emitted PTX (STMT_LOAD + STMT_STORE case, sm_80) ──")
+    println(ptx)
+
+    // Pass 2 retroactive U64 classification of the address Local (param)
+    ok = _check(ok, ptx, ".reg .u64 %rd0",                    "u64 bank for address (Pass 2)")
+    // STMT_LOAD lowering
+    ok = _check(ok, ptx, "ld.global.f64 %fd1, [%rd0]",        "ld.global.f64 dst <- [addr]")
+    // F64 bank for the loaded value + the arithmetic intermediate
+    ok = _check(ok, ptx, ".reg .f64 %fd1",                    "f64 bank for STMT_LOAD dst")
+    ok = _check(ok, ptx, ".reg .f64 %fd2",                    "f64 bank for arithmetic intermediate")
+    // STMT_STORE lowering
+    ok = _check(ok, ptx, "st.global.f64 [%rd0], %fd2",        "st.global.f64 [addr] <- val")
+    return ok
+}
+
 // ── Driver ───────────────────────────────────────────────────────────
 
 fn main() {
@@ -421,18 +517,20 @@ fn main() {
     let ok_cls   = _test_classify_pred()
     let ok_setp  = _test_setp_and_br_cond()
     let ok_intr  = _test_call_intrinsic()
+    let ok_ls    = _test_load_store()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr {
-        println("PASS: RFC 055 055-P3b primitives — STMT_BR + classify + setp/BR_COND + CALL-intrinsic")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls {
+        println("PASS: RFC 055 055-P3b primitives — STMT_BR + classify + setp/BR_COND + CALL + LOAD/STORE")
     } else {
         println("FAIL: RFC 055 055-P3b smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
         if !ok_cls  { println("      classify (pred bank) FAILED") }
         if !ok_setp { println("      setp + STMT_BR_COND FAILED") }
         if !ok_intr { println("      STMT_CALL gpu intrinsic FAILED") }
+        if !ok_ls   { println("      STMT_LOAD / STMT_STORE FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls) { exit(1) }
 }

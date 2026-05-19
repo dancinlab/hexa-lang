@@ -3718,6 +3718,83 @@ files; no binary promote (`compiler/main.hexa` is the self-host compiler
 front-end, not the driver bootstrap — @D g_commit_push_deploy applies to
 `hexa_cc.c` / `hexa_v2`, neither of which this cycle touches).
 
+### 2026-05-20 — RFC 055 055-P3b — STMT_LOAD + STMT_STORE generic lowering (last 055-P3b sub-slice)
+
+Closes 055-P3b. The generic `_nvptx_lower_func` MIR-walk now covers
+every stmt kind needed by the gpu/SPEC.md §6.6 FP64-first slice:
+ASSIGN / BINOP{arith,cmp} / RETURN / BR / BR_COND / CALL (gpu
+intrinsics) / LOAD / STORE — with per-Local kind classification
+(F64/U32/U64/PRED) driving operand + register-bank emission.
+
+**What landed (compiler/codegen/nvptx_target.hexa, +~80 lines additive):**
+- `_nvptx_classify_locals` gains **Pass 2** — a use-site walk over
+  STMT_LOAD / STMT_STORE that classifies each address-operand source
+  Local as U64. Locals classified by Pass 1's defining-stmt walk keep
+  their kind; previously-unclassified Locals (function params, ext
+  temps used directly as addresses) get a fresh `.reg .u64 %rd<id>;`
+  PReg row. STMT_LOAD's dst (the loaded value) is classified F64 in a
+  Pass-1.5 hook (matches §8 FP64-first scope).
+- `_nvptx_lower_stmt` gains two new cases:
+    * STMT_LOAD → `ld.global.f64 %fd<dst>, [%rd<addr>];` (address Local
+      resolved via the classifier; `_nvptx_addr_deref` wraps it in `[]`).
+    * STMT_STORE → `st.global.f64 [%rd<addr>], %fd<value>;` (symmetric).
+- Honest-stub message updated to name the residual unhandled stmt
+  kinds (STMT_THROW / STMT_TRY_* / STMT_ARENA_* / STMT_CALL_INDIRECT) —
+  later 055-P4+ cycles.
+
+**Verification — standalone (compiled path):**
+- `nvptx_lower_test.hexa` gains a 5th case `_test_load_store` — a
+  3-stmt MFunc (`v = *p; v2 = v + v; *p = v2; return`). Asserts the
+  emitted PTX contains `.reg .u64 %rd0;` (Pass 2 retroactive U64 for
+  the param address), `.reg .f64 %fd1;` (LOAD dst) + `.reg .f64 %fd2;`
+  (arith intermediate), `ld.global.f64 %fd1, [%rd0];`, and
+  `st.global.f64 [%rd0], %fd2;`. **PASS** on the compiled path.
+- All 5 nvptx_lower_test cases PASS: STMT_BR + classify + setp/BR_COND
+  + CALL-intrinsic + LOAD/STORE.
+- Regression — 055-P0 emit_test, 055-P1 vec_add_test, 055-P2 gemm_test
+  all still PASS post-extension. Pass 2 only fires for STMT_LOAD/STORE
+  (which 055-P0 axpb / hand-emit P1/P2 fixtures don't use), so prior
+  fixtures classify identically.
+
+**(a) ml_canon_path 재-land + 보존 — measured outcome.** Today I built
+a fresh driver from current sources (`build/hexa_with_canon`, via
+`hexa build self/main.hexa`) and ran it on `compiler/main.hexa`: the
+4 dup-symbol errors (`EdgeInfo`/`AtlasIndex`/`AtlasNode`/`GradeInfo`)
+**are gone** — empirical proof the canon fix in current
+`self/module_loader.hexa` source is correct. `hexa cc --regen`
+produces a `hexa_cc.c.new` byte-identical to current `hexa_cc.c`
+(fixpoint stable). What still blocks `hexa build compiler/main.hexa`
+end-to-end is a SEPARATE codegen_c2.hexa bug: `pub let` /
+`pub enum` symbols from imported files aren't being inlined into the
+flattened C — `Severity_Error/_Warning/_Note` (from
+`compiler/diag/catalog.hexa`) + `NVPTX_TARGET_SM{90,80}` (from
+`compiler/codegen/nvptx_target.hexa`) all "undeclared identifier" at
+clang. That's a transpiler-side gap separate from canon; fixing it
+requires editing `codegen_c2.hexa`'s pub-let / pub-enum cross-module
+emission + regenerating hexa_cc.c — which is a deliberate
+operator-side compiler cycle (`@D g_commit_push_deploy` deploy
+discipline), not autonomous from RFC 055 scope.
+
+Net (a) state: canon fix verified working in source; bootstrap
+promote = a single `hexa build self/main.hexa` + binary swap, BUT the
+pub-let-cross-module follow-on bug means the resulting binary still
+can't build the consumers it was meant to unblock until that second
+bug lands. Documented in `project_compiler_selfbuild_blockers` memory.
+
+**055-P3 remaining = 055-P3c.** With 055-P3b complete, the only RFC
+055 work left is 055-P3c (productization): `MFunc.gpu_kind` carrying
+`@gpu_kernel` / `@gpu_device` from HIR partition, `gpu_launch(...)`
+host-side lowering to `_hx_cuda_launch_kernel`, and cubin `.rodata`
+`LSection` embed. These need parser → HIR → MIR attribute plumbing
+(shared frontend; cross-session contention risk per
+`shared-worktree-hazard` memory) AND depend on `compiler/main.hexa`
+self-building (the pub-let cross-module bug above). 055-P3c is the
+natural next cycle once those preconditions are addressed.
+
+**Files** — extended only: `compiler/codegen/nvptx_target.hexa`
+(+~80 lines additive — Pass 2 + LOAD/STORE cases), `compiler/codegen/
+nvptx_lower_test.hexa` (+case 5 LOAD/STORE).
+
 ### 2026-05-20 — RFC 055 055-P3b — setp body + STMT_BR_COND + STMT_CALL gpu intrinsic body
 
 Third 055-P3b slice (after the STMT_BR primitive and the per-Local kind

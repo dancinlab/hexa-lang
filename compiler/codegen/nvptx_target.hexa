@@ -432,9 +432,39 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
         }
         return out
     }
+    // 055-P3b STMT_LOAD — `ld.global.f64 %fd<dst>, [%rd<addr>];`. The
+    // 055-P3b first slice for memory ops keeps the value type FP64
+    // (§8 FP64-first scope) and the address state-space `.global` (the
+    // farr arg is device-resident). The classifier's Pass 2 has already
+    // ensured the address operand's source Local is in the `.u64` bank.
+    // Address = args[0] (a Local operand); dst = the loaded value.
+    if s.kind == STMT_LOAD {
+        if len(s.args) >= 1 {
+            let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+            let addr_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+            let mut a = []
+            a.push(_nvptx_op(dst_reg))
+            a.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
+            out.push(_nvptx_instr(PTX_OP_LD_GLOBAL_F64, a, "load f64"))
+        }
+        return out
+    }
+    // 055-P3b STMT_STORE — `st.global.f64 [%rd<addr>], %fd<value>;`.
+    // Symmetric to STMT_LOAD. Address = args[0]; value = args[1].
+    if s.kind == STMT_STORE {
+        if len(s.args) >= 2 {
+            let addr_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+            let val_reg = _nvptx_operand_text_kinds(s.args[1], kinds)
+            let mut a = []
+            a.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
+            a.push(_nvptx_op(val_reg))
+            out.push(_nvptx_instr(PTX_OP_ST_GLOBAL_F64, a, "store f64"))
+        }
+        return out
+    }
     // RFC 055 055-P0 - statement outside the FP64 slice + the 055-P3b
-    // primitives above. STMT_LOAD / STMT_STORE / STMT_THROW / STMT_TRY_*
-    // etc. are later 055-P3b/P4+ cycles. Honest stub.
+    // primitives above. STMT_THROW / STMT_TRY_* / STMT_ARENA_* /
+    // STMT_CALL_INDIRECT etc. are later 055-P4+ cycles. Honest stub.
     out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported stmt kind: " + s.kind))
     return out
 }
@@ -561,10 +591,17 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
 }
 
 // _nvptx_classify_locals — produce the per-function PReg roster the
-// emit pass needs to declare. Walks the MIR in source order; for each
-// assignment-target Local, infers a kind via `_nvptx_classify_local_for_stmt`
-// and emits one PReg with `name = reg name for (kind,id)` and `kind =
-// the classification`. Dedup is by-id (MIR is SSA so this is robust).
+// emit pass needs to declare. Two passes:
+//   Pass 1 — walk every assignment-target Local; infer kind via
+//            `_nvptx_classify_local_for_stmt`; emit one PReg per Local.
+//   Pass 2 — walk every STMT_LOAD / STMT_STORE; for each Local USED as
+//            an address operand, ensure it's in the roster as U64
+//            (.global / .shared loads address through `.u64` registers).
+//            Locals that were already classified by Pass 1 keep their
+//            kind (a Local can't be both an arith result and an address
+//            in well-formed MIR); previously-unclassified Locals
+//            (function params, ext temps used directly as addresses)
+//            get a new U64 PReg row.
 //
 // This is the 055-P3b replacement for `_nvptx_collect_f64_regs`: the
 // older collector returns [i64] (just ids — every reg becomes .f64);
@@ -573,6 +610,7 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
 fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
     let mut regs = []
     let mut seen_ids = []
+    // Pass 1 — defining-stmt classification.
     let mut bi = 0
     while bi < len(mfn.blocks) {
         let blk = mfn.blocks[bi]
@@ -592,9 +630,57 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                     seen_ids.push(s.dst.id)
                 }
             }
+            // Pass 1.5 — STMT_LOAD's dst (the loaded VALUE) is classified
+            // here too. The 055-P3b LOAD/STORE slice keeps the value to
+            // FP64 (matches the §8 FP64-first scope); a future cycle
+            // will propagate the loaded type from a real type table.
+            if s.kind == STMT_LOAD {
+                let mut dup = false
+                let mut k = 0
+                while k < len(seen_ids) {
+                    if seen_ids[k] == s.dst.id { dup = true }
+                    k = k + 1
+                }
+                if !dup {
+                    regs.push(PReg { name: _nvptx_reg_f64(s.dst.id), kind: NVPTX_RKIND_F64 })
+                    seen_ids.push(s.dst.id)
+                }
+            }
             si = si + 1
         }
         bi = bi + 1
+    }
+    // Pass 2 — STMT_LOAD/STORE address-operand U64 propagation. Walks
+    // the same blocks; whenever a STMT_LOAD or STMT_STORE references a
+    // Local as its address operand AND that Local isn't already in the
+    // roster, add it as U64. The arg-index convention matches the
+    // lowering: STMT_LOAD address = args[0], STMT_STORE address = args[0].
+    let mut bj = 0
+    while bj < len(mfn.blocks) {
+        let blk = mfn.blocks[bj]
+        let mut sj = 0
+        while sj < len(blk.stmts) {
+            let s = blk.stmts[sj]
+            if s.kind == STMT_LOAD || s.kind == STMT_STORE {
+                if len(s.args) >= 1 {
+                    let addr = s.args[0]
+                    if addr.kind == "local" {
+                        let mut dup = false
+                        let mut k = 0
+                        while k < len(seen_ids) {
+                            if seen_ids[k] == addr.local_id { dup = true }
+                            k = k + 1
+                        }
+                        if !dup {
+                            regs.push(PReg { name: _nvptx_reg_u64(addr.local_id), kind: NVPTX_RKIND_U64 })
+                            seen_ids.push(addr.local_id)
+                        }
+                    }
+                }
+            }
+            sj = sj + 1
+        }
+        bj = bj + 1
     }
     return regs
 }
