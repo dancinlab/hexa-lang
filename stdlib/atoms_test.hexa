@@ -105,6 +105,95 @@ fn main() {
     let si2 = atoms_bulk("Si", "diamond", asi)
     check("diamond coordination == 4", atoms_coordination(si2, 0, si_nn * 1.01) == 4)
 
+    // ── Stage-2: atoms_from_cif (CIF reader vs closed forms) ──────
+    // Fixture 1: FCC Cu conventional cell (a = 3.6149 Å, 4 atoms,
+    // P1-expanded). Cubic ⇒ V = a^3 exactly; 4 Cu.
+    let cu_a = 3.6149
+    let cu_cif = ""
+        + "data_Cu\n"
+        + "_cell_length_a 3.6149\n"
+        + "_cell_length_b 3.6149\n"
+        + "_cell_length_c 3.6149\n"
+        + "_cell_angle_alpha 90.0\n"
+        + "_cell_angle_beta 90.0\n"
+        + "_cell_angle_gamma 90.0\n"
+        + "loop_\n"
+        + "_atom_site_label\n"
+        + "_atom_site_type_symbol\n"
+        + "_atom_site_fract_x\n"
+        + "_atom_site_fract_y\n"
+        + "_atom_site_fract_z\n"
+        + "Cu1 Cu 0.0 0.0 0.0\n"
+        + "Cu2 Cu 0.5 0.5 0.0\n"
+        + "Cu3 Cu 0.5 0.0 0.5\n"
+        + "Cu4 Cu 0.0 0.5 0.5\n"
+    let _w1 = exec("cat > /tmp/_hxatoms_cu.cif <<'CIFEOF'\n" + cu_cif + "CIFEOF\n")
+    let cu_c = atoms_from_cif("/tmp/_hxatoms_cu.cif")
+    check("cif Cu natoms == 4", atoms_len(cu_c) == 4)
+    let cusyms = atoms_chemical_symbols(cu_c)
+    check("cif Cu sym0 == Cu", cusyms[0] == "Cu")
+    check("cif Cu sym3 == Cu", cusyms[3] == "Cu")
+    check("cif Cu cubic V == a^3",
+          fabs(atoms_volume(cu_c) - cu_a * cu_a * cu_a) < 0.00001)
+    // Atom 2 fractional (0.5,0.5,0) -> cartesian (a/2, a/2, 0).
+    let cu_pos = cu_c.positions
+    let cu_p1 = cu_pos[1]
+    check("cif Cu pos1.x == a/2", fabs(cu_p1[0] - cu_a / 2.0) < 0.00001)
+    check("cif Cu pos1.y == a/2", fabs(cu_p1[1] - cu_a / 2.0) < 0.00001)
+    check("cif Cu pos1.z == 0",   fabs(cu_p1[2]) < 0.00001)
+
+    // Fixture 2: NaCl rock-salt conventional cell (a = 5.6402 Å,
+    // 8 atoms: 4 Na + 4 Cl), label-only symbol column (no
+    // _atom_site_type_symbol) ⇒ exercises label→symbol heuristic.
+    let nacl_a = 5.6402
+    let nacl_cif = ""
+        + "data_NaCl\n"
+        + "_cell_length_a 5.6402\n"
+        + "_cell_length_b 5.6402\n"
+        + "_cell_length_c 5.6402\n"
+        + "_cell_angle_alpha 90\n"
+        + "_cell_angle_beta 90\n"
+        + "_cell_angle_gamma 90\n"
+        + "loop_\n"
+        + "_atom_site_label\n"
+        + "_atom_site_fract_x\n"
+        + "_atom_site_fract_y\n"
+        + "_atom_site_fract_z\n"
+        + "Na1 0.0 0.0 0.0\n"
+        + "Na2 0.5 0.5 0.0\n"
+        + "Na3 0.5 0.0 0.5\n"
+        + "Na4 0.0 0.5 0.5\n"
+        + "Cl1 0.5 0.0 0.0\n"
+        + "Cl2 0.0 0.5 0.0\n"
+        + "Cl3 0.0 0.0 0.5\n"
+        + "Cl4 0.5 0.5 0.5\n"
+    let _w2 = exec("cat > /tmp/_hxatoms_nacl.cif <<'CIFEOF'\n" + nacl_cif + "CIFEOF\n")
+    let nacl_c = atoms_from_cif("/tmp/_hxatoms_nacl.cif")
+    check("cif NaCl natoms == 8", atoms_len(nacl_c) == 8)
+    let nasyms = atoms_chemical_symbols(nacl_c)
+    check("cif NaCl sym0 == Na", nasyms[0] == "Na")
+    check("cif NaCl sym4 == Cl", nasyms[4] == "Cl")
+    check("cif NaCl cubic V == a^3",
+          fabs(atoms_volume(nacl_c) - nacl_a * nacl_a * nacl_a) < 0.0001)
+    // Cl1 fractional (0.5,0,0) -> cartesian (a/2,0,0).
+    let na_pos = nacl_c.positions
+    let na_p4 = na_pos[4]
+    check("cif NaCl Cl1.x == a/2", fabs(na_p4[0] - nacl_a / 2.0) < 0.0001)
+
+    // Fixture 3: malformed / empty -> empty-symbol Atoms.
+    let _w3 = exec("printf 'data_junk\\nno cell here\\n' > /tmp/_hxatoms_bad.cif")
+    let bad_c = atoms_from_cif("/tmp/_hxatoms_bad.cif")
+    check("cif malformed -> empty", atoms_len(bad_c) == 0)
+
+    // EMT honestly deferred (Stage-2.5): must return the sentinel,
+    // never a fabricated energy.
+    let emt_e = atoms_emt_energy(cu_c)
+    check("emt_energy is honest stub",
+          emt_e.substring(0, 26) == "STAGE-2.5-NOT-IMPLEMENTED:")
+    let emt_r = atoms_emt_relax(cu_c)
+    check("emt_relax is honest stub",
+          emt_r.substring(0, 26) == "STAGE-2.5-NOT-IMPLEMENTED:")
+
     println("atoms_status: " + atoms_status())
     if pass_count == total_count {
         println("__ATOMS_STAGE1_TEST__ PASS (" + str(pass_count) + "/" + str(total_count) + ")")
