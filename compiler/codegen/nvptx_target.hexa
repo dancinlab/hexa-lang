@@ -290,9 +290,23 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt) -> [LInstr] {
         out.push(_nvptx_instr(PTX_OP_RET, [], "return"))
         return out
     }
-    // RFC 055 055-P0 — statement outside the straight-line FP64 slice.
-    // STMT_CALL / STMT_BR* / STMT_LOAD / STMT_STORE / STMT_THROW etc. are
-    // 055-P1+ (control flow, address-space load/store). Honest stub.
+    // RFC 055 055-P3b — generic control-flow primitive: unconditional
+    // branch. PTX has no fall-through-only convention; every block must
+    // end in a terminator, so the lowering emits an explicit `bra` even
+    // when the target block follows in source order. Type-agnostic;
+    // introduces no new register-bank requirement.
+    if s.kind == STMT_BR {
+        let mut a = []
+        a.push(_nvptx_op("$L_" + to_string(s.target_block)))
+        out.push(_nvptx_instr(PTX_OP_BRA, a, "br -> $L_" + to_string(s.target_block)))
+        return out
+    }
+    // RFC 055 055-P0 - statement outside the straight-line FP64 slice +
+    // STMT_BR. STMT_BR_COND / STMT_CALL / STMT_LOAD / STMT_STORE /
+    // STMT_THROW etc. need per-Local type tracking (predicate vs i32 vs
+    // f64 vs u64 register banks) - that refactor is the rest of 055-P3b.
+    // Honest stub: emits a PTX comment so the surrounding lowered text
+    // stays readable and the unhandled stmt is visible in the output.
     out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported stmt kind: " + s.kind))
     return out
 }
