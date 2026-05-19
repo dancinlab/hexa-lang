@@ -118,7 +118,7 @@ fn _rv_strip_comments(src: str) -> str {
 // CLEAN-ROOM: replace punctuation/symbol chars with spaces so a simple
 // whitespace split yields token stream (IEEE 1364-2005 §3.5).
 fn _rv_normalize_punct(s: str) -> str {
-    let punct = [";", ",", "(", ")", "[", "]", "{", "}", "=", "&", "|", "~", "^", "<", ">", "!"]
+    let punct = [";", ",", "(", ")", "[", "]", "{", "}", "=", "&", "|", "~", "^", "<", ">", "!", "+", "-", "*", "/", "%", ":"]
     let mut out = s
     let mut i = 0
     while i < len(punct) {
@@ -139,7 +139,8 @@ fn _rv_merge_ops(toks: [str]) -> [str] {
         if i + 1 < n {
             let two = toks[i] + toks[i + 1]
             if two == "==" || two == "!=" || two == "<=" || two == ">="
-               || two == "&&" || two == "||" || two == "<<" || two == ">>" {
+               || two == "&&" || two == "||" || two == "<<" || two == ">>"
+               || two == "-:" || two == "+:" {
                 out = out.push(two)
                 i = i + 2
                 continue
@@ -532,7 +533,7 @@ fn read_verilog(src: str) -> ReadVerilogResult {
                                 st = r4.st; m = r4.m
                             } else {
                                 if bt == "assign" {
-                                    let r5 = _rv_parse_assign(st, m)
+                                    let r5 = _rv_parse_assign(st, m, tab)
                                     st = r5.st; m = r5.m
                                     if len(st.err) > 0 {
                                         return ReadVerilogResult {
@@ -669,7 +670,7 @@ fn _rv_fresh_wire(m: Module) -> str {
 
 // CLEAN-ROOM: elaborate a primary — wire reference, 1'b0/1'b1 constant,
 // parenthesised expression, or unary `~` / `!`.
-fn _rv_elab_primary(toks: [str], pos: int, m_in: Module) -> ElabResult {
+fn _rv_elab_primary(toks: [str], pos: int, m_in: Module, tab: SymTab) -> ElabResult {
     let n = len(toks)
     let mut m = m_in
     if pos >= n {
@@ -678,14 +679,15 @@ fn _rv_elab_primary(toks: [str], pos: int, m_in: Module) -> ElabResult {
         }
     }
     let t = toks[pos]
-    if t == "~" || t == "!" {
-        let inner = _rv_elab_primary(toks, pos + 1, m)
+    if t == "~" || t == "!" || t == "-" {
+        let inner = _rv_elab_primary(toks, pos + 1, m, tab)
         if len(inner.err) > 0 { return inner }
         m = inner.m
         let wn = _rv_fresh_wire(m)
         m = rtlil_module_add_wire(m, rtlil_wire(wn, 1, 0, 0))
         let mut cty = "$not"
         if t == "!" { cty = "$logic_not" }
+        if t == "-" { cty = "$neg" }
         let mut c = rtlil_cell(wn + "$c", cty, 0)
         c = rtlil_cell_connect(c, "A", inner.wire)
         c = rtlil_cell_connect(c, "Y", wn)
@@ -693,7 +695,7 @@ fn _rv_elab_primary(toks: [str], pos: int, m_in: Module) -> ElabResult {
         return ElabResult { wire: wn, m: m, pos: inner.pos, err: "" }
     }
     if t == "(" {
-        let inner = _rv_elab_expr(toks, pos + 1, m, 1)
+        let inner = _rv_elab_expr(toks, pos + 1, m, 1, tab)
         if len(inner.err) > 0 { return inner }
         m = inner.m
         if inner.pos >= n {
@@ -711,15 +713,60 @@ fn _rv_elab_primary(toks: [str], pos: int, m_in: Module) -> ElabResult {
     }
     if t == "1'b0" { return ElabResult { wire: "$const_0", m: m, pos: pos + 1, err: "" } }
     if t == "1'b1" { return ElabResult { wire: "$const_1", m: m, pos: pos + 1, err: "" } }
-    // bare token = wire reference
+    // bare token = wire reference, optionally followed by `[ <const> ]`
+    // index (unpacked-array element after generate-unrolling, or a
+    // pre-elaborated indexed wire). Constant index folds against `tab`
+    // and yields the wire name `t[<value>]`; range / non-constant index
+    // is an honest gap for now — consume the bracket group and return
+    // the base wire (so the rest of the expression still parses).
+    if pos + 1 < n && toks[pos + 1] == "[" {
+        let mut idxtoks: [str] = []
+        let mut np = pos + 2
+        let mut depth = 1
+        while np < n {
+            let it = toks[np]
+            if it == "[" {
+                depth = depth + 1
+                idxtoks = idxtoks.push(it)
+                np = np + 1
+                continue
+            }
+            if it == "]" {
+                depth = depth - 1
+                if depth == 0 { break }
+                idxtoks = idxtoks.push(it)
+                np = np + 1
+                continue
+            }
+            idxtoks = idxtoks.push(it)
+            np = np + 1
+        }
+        let mut isrange = 0
+        let mut k = 0
+        while k < len(idxtoks) {
+            let tk = idxtoks[k]
+            if tk == ":" || tk == "-:" || tk == "+:" { isrange = 1 }
+            k = k + 1
+        }
+        if isrange == 0 {
+            let ev = _rv_eval_expr(idxtoks, 0, tab, 1)
+            if len(ev.err) == 0 {
+                let wn = t + "[" + str(ev.value) + "]"
+                return ElabResult { wire: wn, m: m, pos: np + 1, err: "" }
+            }
+        }
+        // range or non-foldable index — honest gap; skip the bracket
+        // group, return the base wire reference.
+        return ElabResult { wire: t, m: m, pos: np + 1, err: "" }
+    }
     return ElabResult { wire: t, m: m, pos: pos + 1, err: "" }
 }
 
 // CLEAN-ROOM: precedence-climbing expression elaborator (left-assoc,
 // IEEE 1364-2005 §5.1.2). Reuses _rv_binop_prec from the constant
 // evaluator. Emits one RTLIL cell per binary operator.
-fn _rv_elab_expr(toks: [str], pos: int, m_in: Module, min_prec: int) -> ElabResult {
-    let lhs = _rv_elab_primary(toks, pos, m_in)
+fn _rv_elab_expr(toks: [str], pos: int, m_in: Module, min_prec: int, tab: SymTab) -> ElabResult {
+    let lhs = _rv_elab_primary(toks, pos, m_in, tab)
     if len(lhs.err) > 0 { return lhs }
     let mut m = lhs.m
     let mut cur = lhs.wire
@@ -737,7 +784,7 @@ fn _rv_elab_expr(toks: [str], pos: int, m_in: Module, min_prec: int) -> ElabResu
                 err: "read_verilog: expr: operator `" + op + "` not in subset"
             }
         }
-        let rhs = _rv_elab_expr(toks, i + 1, m, prec + 1)
+        let rhs = _rv_elab_expr(toks, i + 1, m, prec + 1, tab)
         if len(rhs.err) > 0 { return rhs }
         m = rhs.m
         let wn = _rv_fresh_wire(m)
@@ -755,7 +802,7 @@ fn _rv_elab_expr(toks: [str], pos: int, m_in: Module, min_prec: int) -> ElabResu
 
 // CLEAN-ROOM: parse `assign LHS = EXPR ;`. EXPR is lowered to an RTLIL
 // cell tree via _rv_elab_expr and its result wire connected to LHS.
-fn _rv_parse_assign(st_in: PState, m_in: Module) -> RvStep {
+fn _rv_parse_assign(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
     let mut st = _ps_take(st_in)            // consume "assign"
     let mut m = m_in
     if st.pos >= len(st.toks) {
@@ -778,7 +825,7 @@ fn _rv_parse_assign(st_in: PState, m_in: Module) -> RvStep {
         rhs = rhs.push(t)
         st = _ps_take(st)
     }
-    let er = _rv_elab_expr(rhs, 0, m, 1)
+    let er = _rv_elab_expr(rhs, 0, m, 1, tab)
     if len(er.err) > 0 {
         return RvStep { st: _ps_fail(st, er.err), m: m }
     }
@@ -1443,6 +1490,41 @@ fn main() {
         }
         if rtlil_count_cells_of_type(_m22, "$eq") != 1 {
             println("FAIL T22b eq"); fails = fails + 1
+        }
+    }
+
+    // T23 — array indexing in expression: `bus[1]` folds to wire name.
+    total = total + 1
+    let _v23 = "module ai ( input wire [ 3 : 0 ] bus [ 0 : 2 ] , output y ) ; assign y = bus[1] ; endmodule"
+    let _r23 = read_verilog(_v23)
+    if _r23.ok != 1 {
+        println("FAIL T23 array_index: " + _r23.message); fails = fails + 1
+    } else {
+        let _m23 = _r23.design.modules[0]
+        // expect connect lhs=y, rhs=bus[1] (the indexed wire created by T18-style expansion)
+        if len(_m23.connect_lhs) < 1 {
+            println("FAIL T23a no_connect"); fails = fails + 1
+        } else {
+            let _last = len(_m23.connect_lhs) - 1
+            if _m23.connect_rhs[_last] != "bus[1]" {
+                println("FAIL T23b rhs got `" + _m23.connect_rhs[_last] + "`"); fails = fails + 1
+            }
+        }
+    }
+
+    // T24 — array indexing with parameter-folded constant.
+    total = total + 1
+    let _v24 = "module ap2 #( parameter K = 2 ) ( input wire [ 7 : 0 ] mem [ 0 : 3 ] , output y ) ; assign y = mem[K + 1] ; endmodule"
+    let _r24 = read_verilog(_v24)
+    if _r24.ok != 1 {
+        println("FAIL T24 array_param: " + _r24.message); fails = fails + 1
+    } else {
+        let _m24 = _r24.design.modules[0]
+        let _last = len(_m24.connect_lhs) - 1
+        if _last < 0 || _m24.connect_rhs[_last] != "mem[3]" {
+            println("FAIL T24a expected mem[3] got `"
+                + (if _last < 0 { "(none)" } else { _m24.connect_rhs[_last] }) + "`")
+            fails = fails + 1
         }
     }
 
