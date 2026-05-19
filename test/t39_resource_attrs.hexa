@@ -25,4 +25,3 @@ fn main() {
     println("PASS t39_resource_attrs")
 }
 
-main()

@@ -21,4 +21,3 @@ fn main() {
     println("PASS t41_recovery_attrs")
 }
 
-main()

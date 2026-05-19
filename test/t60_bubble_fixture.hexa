@@ -57,4 +57,3 @@ fn main() {
     println("total=" + to_string(total))
 }
 
-main()

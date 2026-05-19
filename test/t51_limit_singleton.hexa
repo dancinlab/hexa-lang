@@ -32,4 +32,3 @@ fn main() {
     println("PASS t51_limit_singleton")
 }
 
-main()
