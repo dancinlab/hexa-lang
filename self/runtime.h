@@ -928,4 +928,22 @@ HexaVal hexa_phi_spatial(HexaVal st_v, HexaVal nc_v, HexaVal dim_v,
 extern HexaVal phi_mi_pair;                                            /* runtime.c — RFC 036 fn carrier */
 extern HexaVal phi_spatial;                                            /* runtime.c — RFC 036 fn carrier */
 
+/* ── RFC 055 055-P1 (2026-05-19): hexa-native @gpu_kernel launch ABI ──
+ * `gpu_launch(kernel, gx,gy,gz, bx,by,bz, args...)` lowers to this thin
+ * Driver-API wrapper. Definition lives in self/cuda/runtime_cuda.c
+ * under `#ifdef HEXA_CUDA`; the no-CUDA path is a no-op stub returning
+ * 0 (F-RFC055-FALLBACK). Cubin blob + length are produced by the NVPTX
+ * codegen target + `ptxas` and embedded in the host binary as a
+ * .rodata LSection (RFC 055 §6.5). gpu/SPEC.md §7 governs the surface;
+ * the C-side signature here is the consumer-stable bridge. */
+int _hx_cuda_launch_kernel(const void*    cubin_blob,
+                           size_t         cubin_len,
+                           const char*    kernel_name,
+                           int            gx, int gy, int gz,
+                           int            bx, int by, int bz,
+                           const int64_t* farr_ids,
+                           int            n_farr,
+                           const int64_t* extra_i64_args,
+                           int            n_extra);                     /* self/cuda/runtime_cuda.c — RFC 055 */
+
 #endif /* HEXA_RUNTIME_H */

@@ -2595,3 +2595,74 @@ Two scoped items (compiler completion + interp residue):
   InvariantDecl / FnDecl-hoist handling. hexa_v2/hexa_cc.c regenerated;
   validated: token-forge transpiles clean, atlas 118/118, self-host fixpoint
   byte-identical.
+
+### 2026-05-19 — RFC 055 055-P1 — vec-add @gpu_kernel ready-for-dispatch-wire (emit + validator + launch ABI)
+Extended `compiler/codegen/nvptx_target.hexa` from 055-P0's FP64-arithmetic
+device `.func` emit pass to the 055-P1 keystone — a hand-emitted
+`.visible .entry vadd` kernel with the full vec-add lowering vocabulary:
+`.param .u64` bank, `ld.param.u64`, `mov.u32` from `%tid.x` / `%ctaid.x` /
+`%ntid.x` sregs (gpu/SPEC.md §5 per-axis names), `mad.lo.s32` gid compose,
+`setp.lt.s32` + negated `@!%p bra` bounds guard, `cvt.u64.u32` /
+`mul.lo.u64` (×8) / `add.u64` address compose, `ld.global.f64`, `add.f64`,
+`st.global.f64`, `ret`. The keystone entry is `emit_ptx_vec_add_module
+(target)`; the body is built from a new set of `_nvptx_p1_*` LInstr
+helpers + the `NvptxKernelFn` envelope (LFunc + NvptxParamSpec list + .u32
+/ .u64 / .pred bank counts) so the LIR shape stays unchanged (F-RFC055-
+CPU-CODEGEN-UNTOUCHED).
+Also landed: (a) **`@gpu_*` attribute recognition** — `nvptx_is_gpu_attr
+(name)` + `nvptx_attr_kind(name)` — kernels parse as ordinary Annotations
+today (parser change zero); (b) **GPU01–GPU07 strict-lint decision
+table** — `nvptx_validate_gpu_subset(NvptxValidateInput) -> [string]`
+implements gpu/SPEC.md §9 (kernel-must-be-void, @gpu_device-from-CPU,
+CPU-fn-from-kernel, non-allowlisted-type, heap/IO/recursion, intrinsic-
+in-CPU, @shared misuse); the codes are pre-registered in
+`compiler/diag/catalog.hexa` (GPU01–GPU07 + GPU05W) for the 055-P2 wiring
+pass; (c) **host launch ABI** — `_hx_cuda_launch_kernel(cubin_blob,
+cubin_len, kernel_name, gx/y/z, bx/y/z, farr_ids[], n_farr, extra_i64[],
+n_extra) -> int` in `self/cuda/runtime_cuda.c` under `#ifdef HEXA_CUDA`,
+fall-back no-op stub when `HEXA_CUDA` is undefined; proto in
+`self/runtime.h`. Driver-API path: `cuInit` → `cuModuleLoadData` →
+`cuModuleGetFunction` → `cuLaunchKernel` → `cuCtxSynchronize`; arg-marshal
+caps at 16 args (gpu/SPEC.md §7 envelope).
+**Local proofs already on the worktree branch:**
+- `F-RFC055-CPU-CODEGEN-UNTOUCHED` — `compiler/main.hexa` target dispatch
+  is **unchanged**; NVPTX target is unreachable from the main compile
+  pipeline. The three CPU codegen files are unmodified by this cycle.
+- `F-RFC055-NO-LLVM` — structural: `compiler/codegen/nvptx_*.hexa`
+  imports only `mir.hexa` / `lir.hexa` / `nvptx_ptx_ops.hexa`. No LLVM
+  imports, no LLVM types, no LLVM IR construction. `ptxas` is the only
+  external tool on the hexa→PTX path (NVIDIA's PTX→SASS assembler — same
+  g5 logic as `clang`/`as` for the C-fallback portability path).
+- `F-RFC055-FALLBACK` — additive: an NVPTX-target-disabled build is
+  byte-identical to today's; `_hx_cuda_launch_kernel` is `HEXA_CUDA`-
+  guarded with a no-op stub.
+- `F-RFC055-PTX-EMIT (partial)` — local text-shape oracle in
+  `compiler/codegen/nvptx_vec_add_test.hexa` asserts 25+ PTX substrings
+  (header, `.visible .entry`, param bank, all register banks, every
+  vec-add lowering line). The `ptxas`-accept half lives on the GPU fire.
+**Needs GPU fire** (operator runs `tool/dispatch_r055_p1_vec_add.sh`):
+- `F-RFC055-PTX-EMIT` (ptxas accept), `F-RFC055-NUMERIC-EQ` (`max|Δ|==0`
+  vs CPU reference), `F-RFC055-LAUNCH-ABI` (host→kernel→host round-trip).
+- READY_TO_FIRE.md → `state/rfc055_p1_2026_05_19/READY_TO_FIRE.md`.
+- Budget: $0.50–$1.50 (one short fire — n=1024, single FP64 vec-add).
+**Honest scope — not yet landed (055-P2):**
+- The MIR partition that routes a `@gpu_*` MFunc to `codegen_nvptx_sm*`
+  (the strict-lint validator runs on a synthetic `NvptxValidateInput`
+  today, not on a real FnDecl walk).
+- The `gpu_launch(...)` host-side lowering that turns the hexa call site
+  into a `_hx_cuda_launch_kernel(...)` invocation — the C-side wrapper
+  is fully implemented, the hexa-side lowering is 055-P2.
+- The cubin .rodata LSection embed pass (the dispatch script feeds a
+  cubin file directly to the harness today; 055-P2 will embed it in
+  the host binary).
+Status: **"emits + ready-for-dispatch-wire"** — not "lands P1". The
+P1 contract per RFC 055 §12 includes the dispatch wiring; this cycle
+lands every prerequisite the wiring needs and leaves the wiring to a
+follow-up cycle that can fire all six falsifiers in a single PR.
+Files added: `compiler/codegen/nvptx_vec_add_test.hexa`,
+`gpu/tests/vec_add.hexa`, `tool/dispatch_r055_p1_vec_add.sh`,
+`state/rfc055_p1_2026_05_19/READY_TO_FIRE.md`. Files extended:
+`compiler/codegen/nvptx_target.hexa` (+580 lines — P1 emit + validator),
+`compiler/diag/catalog.hexa` (+85 lines — GPU01–GPU07 + GPU05W),
+`self/cuda/runtime_cuda.c` (+150 lines — `_hx_cuda_launch_kernel`),
+`self/runtime.h` (+15 lines — launch ABI proto).

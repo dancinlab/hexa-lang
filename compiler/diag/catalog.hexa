@@ -406,5 +406,85 @@ pub let CATALOG: [DiagSpec] = [
         template: "@discover annotation malformed: {detail}",
         explain: "The `@discover` annotation requires a `kind=` keyword argument whose value is one of the atlas node-kind strings: `\"P\"`, `\"C\"`, `\"L\"`, or `\"E\"`.",
         fix_it_kind: FixItKind::None
+    },
+    // ── RFC 055 055-P1 — `@gpu` subset strict-lint (gpu/SPEC.md §9) ──
+    //
+    // These codes classify a `@gpu_kernel` / `@gpu_device` function
+    // against the gpu/SPEC.md subset. The decision table lives in
+    // `compiler/codegen/nvptx_target.hexa::nvptx_validate_gpu_subset`;
+    // wiring it into the strict-lint pipeline (FnDecl walker + diag
+    // emit) is a 055-P2 deliverable. Today the codes are pre-registered
+    // here so a future PR plumbs them in without growing the catalog.
+    DiagSpec {
+        code: "GPU01",
+        title: "@gpu_kernel must return void",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "@gpu_kernel `{fn_name}` declares a non-void return type ({type_name}); PTX `.visible .entry` cannot return a value",
+        explain: "A `@gpu_kernel` lowers to a PTX `.visible .entry`, which has no return-value channel — results must go through a `.global` farr the host reads back. Either change the return to void and write the result through an output `[f64]` parameter, or convert the function to `@gpu_device` (which lowers to `.func` and may return a value). gpu/SPEC.md §2 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "GPU02",
+        title: "@gpu_device called from CPU code",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "@gpu_device `{fn_name}` called from CPU code; @gpu_device functions are reachable only from @gpu_kernel / @gpu_device bodies",
+        explain: "A `@gpu_device` function lowers to PTX `.func` — it lives in the kernel's address space and cannot be invoked from the host. To call it from CPU code, either route through a `@gpu_kernel` entry point or copy the body to a regular CPU `fn`. gpu/SPEC.md §2 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "GPU03",
+        title: "CPU fn called from @gpu_* body",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "CPU fn `{callee}` called from @gpu_* body `{fn_name}`; only allowlisted intrinsics and @gpu_device fns are callable from GPU code",
+        explain: "A GPU kernel runs on the device — host-side functions are not in its address space. The legal call surface inside a `@gpu_*` body is: (1) the gpu_* intrinsics (gpu/SPEC.md §5), and (2) other `@gpu_device` functions. Move the helper to `@gpu_device` or inline the body. gpu/SPEC.md §4 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "GPU04",
+        title: "non-allowlisted type in @gpu_* function",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "type `{type_name}` is not in the @gpu subset allowlist; legal types are f64 / f32 / i64 / i32 / bool and fixed/borrowed arrays of those",
+        explain: "A GPU kernel has no host heap and no allocator — only fixed-extent scalar + array types are legal. Strings, maps, sets, growable Lists, tuples of non-allowlisted types, closures, and trait objects all reject. Use a `[f64]` / `[i64]` farr instead. gpu/SPEC.md §3 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "GPU05",
+        title: "denied construct in @gpu_* body",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "@gpu_* body contains a denied construct ({detail}); recursion / heap alloc / growable-collection op / IO / syscall are all rejected",
+        explain: "A GPU kernel has no growable call stack, no host heap, and no syscall surface. Rewrite the construct as a fixed-extent computation: convert recursion to iteration, replace growing collections with caller-provided `[T]` farrs, and remove IO calls (a kernel cannot println / read files). gpu/SPEC.md §4 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "GPU05W",
+        title: "@gpu_* loop with non-obviously-bounded iteration count",
+        severity: Severity::Warning,
+        stage: "codegen",
+        template: "@gpu_* loop in `{fn_name}` has an iteration count the validator cannot prove terminates; rewrite as a thread-indexed loop with compile-visible bounds",
+        explain: "A GPU kernel must terminate — unbounded loops can stall an entire SM. The validator accepts `for i in 0..N` with `N` a constant or kernel parameter; loops keyed off a `while` over a runtime-mutated index are warned. gpu/SPEC.md §4 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "GPU06",
+        title: "gpu_* intrinsic in CPU code",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "intrinsic `{intrinsic}` is only legal inside a @gpu_* body; calling it from CPU code is a GPU/CPU phase-confusion error",
+        explain: "Intrinsics like `gpu_thread_id_x` / `gpu_block_dim_x` / `gpu_barrier` lower to PTX special-register reads and only have meaning on the device. Move the call into a `@gpu_kernel` body, or compute the value host-side from the launch configuration. gpu/SPEC.md §5 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "GPU07",
+        title: "@shared misuse",
+        severity: Severity::Error,
+        stage: "codegen",
+        template: "@shared on `{local_name}` is illegal here; @shared is only legal on a fixed-extent local array inside a @gpu_kernel body",
+        explain: "Shared memory is block-scoped and exists only inside a kernel launch. `@shared` must annotate a local of fixed-extent array type (`[T; N]`) of an allowlisted scalar, declared inside a `@gpu_kernel` (not a `@gpu_device`). gpu/SPEC.md §6 / §9.",
+        fix_it_kind: FixItKind::None
     }
 ]

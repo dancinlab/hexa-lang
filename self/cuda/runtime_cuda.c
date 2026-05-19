@@ -313,6 +313,181 @@ int _hx_cuda_farr_device_free(int64_t farr_id) {
     return 1;
 }
 
+#ifdef HEXA_CUDA
+/* ════════════════════════════════════════════════════════════════════
+ * RFC 055 055-P1 — hexa_cuda_launch_kernel
+ *
+ *   Thin Driver-API wrapper that loads a cubin from an in-memory blob,
+ *   resolves a kernel by name, marshals the farr-base argument list,
+ *   and launches with the caller's grid/block configuration. This is
+ *   the `gpu_launch` host-ABI termination point (gpu/SPEC.md §7,
+ *   RFC 055 §6.5): the hexa surface lowers to this call exactly the
+ *   way `hexa_cuda_alloc / copy / free / sync` lower to the Runtime
+ *   API helpers above.
+ *
+ *   Inputs:
+ *     - cubin_blob / cubin_len  — the @gpu_kernel's compiled cubin
+ *                                 (RFC 055 emits PTX text; ptxas turns
+ *                                 it into a cubin which the build
+ *                                 system embeds as a .rodata LSection).
+ *     - kernel_name             — the PTX `.visible .entry` symbol.
+ *     - gx/gy/gz/bx/by/bz       — CUDA grid + block dimensions.
+ *     - farr_ids  / n_args      — argument list: each int64_t is a
+ *                                 farr slot id; the wrapper resolves
+ *                                 the slot's d_buf and marshals a
+ *                                 (CUdeviceptr) pointer into the
+ *                                 cuLaunchKernel argv. n is appended
+ *                                 as a trailing i64 in extra_i64_args.
+ *
+ *   Returns 1 on success, 0 on failure (with stderr diagnostic).
+ *
+ *   F-RFC055-LAUNCH-ABI gates this entry point round-trip via the
+ *   tool/dispatch_r055_p1_vec_add.sh harness (host→kernel→host). The
+ *   wrapper compiles only under `#ifdef HEXA_CUDA`; on a host without
+ *   the CUDA toolkit the symbol is defined as a no-op returning 0 so
+ *   the f-style fallback (F-RFC055-FALLBACK) stays byte-identical to
+ *   the no-NVPTX build.
+ * ════════════════════════════════════════════════════════════════════ */
+#include <cuda.h>   /* CUmodule / CUfunction / cuLaunchKernel — Driver API. */
+
+int _hx_cuda_launch_kernel(const void*   cubin_blob,
+                           size_t        cubin_len,
+                           const char*   kernel_name,
+                           int           gx, int gy, int gz,
+                           int           bx, int by, int bz,
+                           const int64_t* farr_ids,
+                           int            n_farr,
+                           const int64_t* extra_i64_args,
+                           int            n_extra) {
+    if (!cubin_blob || cubin_len == 0 || !kernel_name) {
+        fprintf(stderr, "[cuda] launch_kernel: bad cubin/name\n");
+        return 0;
+    }
+    /* Lazy Driver-API init — Runtime API above auto-inits cuCtx, but a
+     * Driver-API cuModuleLoadData call without an explicit Init/Context
+     * fails on some toolkit/driver pairings. Calling cuInit(0) is
+     * idempotent and cheap. */
+    CUresult cr = cuInit(0);
+    if (cr != CUDA_SUCCESS) {
+        fprintf(stderr, "[cuda] launch_kernel: cuInit failed (%d)\n", (int)cr);
+        return 0;
+    }
+    CUmodule mod = NULL;
+    cr = cuModuleLoadData(&mod, cubin_blob);
+    if (cr != CUDA_SUCCESS) {
+        fprintf(stderr, "[cuda] launch_kernel: cuModuleLoadData failed (%d)\n", (int)cr);
+        return 0;
+    }
+    CUfunction kfn = NULL;
+    cr = cuModuleGetFunction(&kfn, mod, kernel_name);
+    if (cr != CUDA_SUCCESS) {
+        fprintf(stderr, "[cuda] launch_kernel: cuModuleGetFunction(`%s`) failed (%d)\n",
+                kernel_name, (int)cr);
+        cuModuleUnload(mod);
+        return 0;
+    }
+
+    /* Marshal the argument list. cuLaunchKernel expects an array of
+     * `void*` pointing at each argument's storage; we hold the farr
+     * d_buf pointers + the i64 extras in caller-allocated arrays so a
+     * VLA-free build (MSVC, older compilers) still works — cap at 16
+     * total args which is the documented gpu_launch surface for 055-P1
+     * (gpu/SPEC.md §7 — kernel signatures fit comfortably). */
+    enum { _HX_GPU_LAUNCH_MAX_ARGS = 16 };
+    CUdeviceptr arg_dptrs[_HX_GPU_LAUNCH_MAX_ARGS];
+    int64_t     arg_i64s [_HX_GPU_LAUNCH_MAX_ARGS];
+    void*       arg_ptrs [_HX_GPU_LAUNCH_MAX_ARGS];
+
+    int total = n_farr + n_extra;
+    if (total > _HX_GPU_LAUNCH_MAX_ARGS) {
+        fprintf(stderr, "[cuda] launch_kernel: too many args (%d > %d)\n",
+                total, _HX_GPU_LAUNCH_MAX_ARGS);
+        cuModuleUnload(mod);
+        return 0;
+    }
+    int idx = 0;
+    for (int i = 0; i < n_farr; i++) {
+        int64_t farr_id = farr_ids[i];
+        if (farr_id < 0 || farr_id >= g_slot_cap) {
+            fprintf(stderr, "[cuda] launch_kernel: bad farr id %lld\n",
+                    (long long)farr_id);
+            cuModuleUnload(mod);
+            return 0;
+        }
+        /* The kernel reads .global memory — ensure the slot is
+         * device-resident before launch. */
+        if (_h2d(farr_id) != 0) {
+            fprintf(stderr, "[cuda] launch_kernel: h2d for farr %lld failed\n",
+                    (long long)farr_id);
+            cuModuleUnload(mod);
+            return 0;
+        }
+        arg_dptrs[idx] = (CUdeviceptr)(uintptr_t)g_slots[farr_id].d_buf;
+        arg_ptrs [idx] = &arg_dptrs[idx];
+        idx++;
+    }
+    for (int i = 0; i < n_extra; i++) {
+        arg_i64s[idx] = extra_i64_args[i];
+        arg_ptrs[idx] = &arg_i64s[idx];
+        idx++;
+    }
+
+    /* Launch — shared memory bytes = 0, stream = 0 (default). Extra
+     * config (dynamic .shared, async stream) is 055-P2. */
+    cr = cuLaunchKernel(kfn,
+                       (unsigned)gx, (unsigned)gy, (unsigned)gz,
+                       (unsigned)bx, (unsigned)by, (unsigned)bz,
+                       0u, NULL,
+                       arg_ptrs, NULL);
+    if (cr != CUDA_SUCCESS) {
+        fprintf(stderr, "[cuda] launch_kernel: cuLaunchKernel(`%s`) failed (%d)\n",
+                kernel_name, (int)cr);
+        cuModuleUnload(mod);
+        return 0;
+    }
+    /* Synchronize so a follow-up _d2h sees the kernel's writes — the
+     * Runtime API path above is cudaDeviceSynchronize but cuCtxSync is
+     * the Driver-API equivalent. */
+    cr = cuCtxSynchronize();
+    if (cr != CUDA_SUCCESS) {
+        fprintf(stderr, "[cuda] launch_kernel: cuCtxSynchronize failed (%d)\n",
+                (int)cr);
+        cuModuleUnload(mod);
+        return 0;
+    }
+    /* Mark any farr arg as dev-dirty so a follow-up host read triggers
+     * a D2H — the kernel just wrote to the .global buffers. */
+    for (int i = 0; i < n_farr; i++) {
+        int64_t farr_id = farr_ids[i];
+        if (farr_id >= 0 && farr_id < _hx_farr_count) {
+            HexaFarrEntry* e = &_hx_farr_table[farr_id];
+            e->dirty_dev = 1;
+            e->loc = FARR_MIRRORED;
+        }
+    }
+    cuModuleUnload(mod);
+    return 1;
+}
+#else
+/* No-CUDA fallback (F-RFC055-FALLBACK) — the runtime_cuda.c TU still
+ * compiles `-fsyntax-only` on a host without the CUDA toolkit; the
+ * launch wrapper degrades to a no-op stub returning 0 ("no GPU"). */
+int _hx_cuda_launch_kernel(const void*   cubin_blob,
+                           size_t        cubin_len,
+                           const char*   kernel_name,
+                           int           gx, int gy, int gz,
+                           int           bx, int by, int bz,
+                           const int64_t* farr_ids,
+                           int            n_farr,
+                           const int64_t* extra_i64_args,
+                           int            n_extra) {
+    (void)cubin_blob; (void)cubin_len; (void)kernel_name;
+    (void)gx; (void)gy; (void)gz; (void)bx; (void)by; (void)bz;
+    (void)farr_ids; (void)n_farr; (void)extra_i64_args; (void)n_extra;
+    return 0;
+}
+#endif /* HEXA_CUDA — gpu_launch wrapper guard */
+
 /* ════════════════════════════════════════════════════════════════════
  * RFC 056 §6.2 — device sub-view API.  hexa_farr_dev_view(base, off,
  * len) binds an already-host-allocated farr handle `view_id` so that

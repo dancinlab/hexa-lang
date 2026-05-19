@@ -1,0 +1,114 @@
+// gpu/tests/vec_add.hexa — RFC 055 055-P1 vec-add end-to-end shape (declaration form)
+//
+// @version 0.0.1
+// @capabilities [pure]
+// @phase("parse_only")
+//
+// This file declares the hexa-source SHAPE the 055-P1 deliverable targets
+// — a `@gpu_kernel` FP64 vector-add, its CPU reference, and the host-side
+// `gpu_launch` call. It is intentionally `parse_only`: the compiler can
+// parse the surface (gpu/SPEC.md §2 — `@gpu_kernel` is an ordinary
+// annotation on a normal `fn`), but the MIR partition that routes
+// `@gpu_*` functions to the NVPTX codegen target is 055-P2 work
+// (F-RFC055-CPU-CODEGEN-UNTOUCHED requires it land additively).
+//
+// What 055-P1 lands today (compiler/codegen/nvptx_target.hexa):
+//   * The PTX text emitter that produces the cubin-ready PTX for this
+//     kernel — `emit_ptx_vec_add_module(NVPTX_TARGET_SM80|SM90)`.
+//   * The GPU0N strict-lint decision table (gpu/SPEC.md §9) that
+//     classifies this file as subset-clean.
+//   * The host ABI proto for `gpu_launch` — declared as a stdlib-style
+//     bridge in self/runtime.h, implemented in self/cuda/runtime_cuda.c
+//     as `hexa_cuda_launch_kernel`.
+//
+// What lands later (055-P2):
+//   * Parser plumbing that records `@gpu_kernel` on the FnDecl, the HIR
+//     partition that routes a @gpu_* MFunc to codegen_nvptx_sm*, and
+//     the launch-site lowering that turns `gpu_launch(vadd, ...)` into a
+//     `hexa_cuda_launch_kernel(...)` call.
+//
+// Run (parse-only):
+//   hexa parse gpu/tests/vec_add.hexa
+
+// ── The kernel (gpu/SPEC.md §2 — @gpu_kernel must return void) ───────
+
+// NOTE: 055-P1 parses this file as a normal hexa module. The annotation
+// is recorded on the Item; the GPU partition that routes it to the NVPTX
+// target is 055-P2. Today the kernel body is parse-checked only.
+
+@gpu_kernel
+fn vadd(a: [f64], b: [f64], c: [f64], n: i64) {
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(gid) < n {
+        c[to_i64(gid)] = a[to_i64(gid)] + b[to_i64(gid)]
+    }
+}
+
+// ── CPU reference (the byte-eq oracle, F-RFC055-NUMERIC-EQ) ──────────
+//
+// FP64 add has no reduction → addition is exact and order-independent
+// → byte-equality is the right gate (no tolerance). 055-P1 fires both
+// the GPU kernel + this CPU reference and asserts `max|Δ| == 0`.
+
+fn cpu_vadd(a: [f64], b: [f64], c: [f64], n: i64) {
+    let mut i = 0
+    while i < n {
+        c[i] = a[i] + b[i]
+        i = i + 1
+    }
+}
+
+// ── Host harness (gpu/SPEC.md §7 — gpu_launch ABI) ───────────────────
+//
+// 055-P1 declares the host-side launch shape. The compiler-side wiring
+// (`gpu_launch` → `hexa_cuda_launch_kernel`) is 055-P2; today the call
+// stays a declaration so the file parses without inventing a new
+// builtin in the lexer.
+
+fn main() {
+    let n: i64 = 1024
+    let block_x: i64 = 256
+    let grid_x: i64 = (n + block_x - 1) / block_x
+
+    // Allocate three host-side `[f64]` farrs of length n.
+    let mut a_h: [f64] = []
+    let mut b_h: [f64] = []
+    let mut c_h: [f64] = []
+    let mut i = 0
+    while i < n {
+        a_h.push(to_f64(i))
+        b_h.push(to_f64(n - i))
+        c_h.push(0.0)
+        i = i + 1
+    }
+
+    // CPU reference — c_ref[i] = a[i] + b[i].
+    let mut c_ref: [f64] = []
+    let mut k = 0
+    while k < n { c_ref.push(0.0); k = k + 1 }
+    cpu_vadd(a_h, b_h, c_ref, n)
+
+    // GPU launch (055-P2 lowering — today a stubbed call shape):
+    //
+    //   gpu_launch(vadd, grid_x, 1, 1, block_x, 1, 1, a_h, b_h, c_h, n)
+    //
+    // The dispatch script (tool/dispatch_r055_p1_vec_add.sh) fires the
+    // 055-P1 hand-emitted PTX with a thin host wrapper that calls
+    // hexa_cuda_launch_kernel directly; this hexa surface is the future
+    // single-line replacement.
+
+    // F-RFC055-NUMERIC-EQ — byte-equal compare (vec-add reduces nothing).
+    let mut max_delta: f64 = 0.0
+    let mut j = 0
+    while j < n {
+        let d = c_h[j] - c_ref[j]
+        let abs_d = if d < 0.0 { -d } else { d }
+        if abs_d > max_delta { max_delta = abs_d }
+        j = j + 1
+    }
+    if max_delta == 0.0 {
+        println("F-RFC055-NUMERIC-EQ PASS — max|Δ| = 0")
+    } else {
+        println("F-RFC055-NUMERIC-EQ FAIL — max|Δ| = " + to_string(max_delta))
+    }
+}

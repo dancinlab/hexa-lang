@@ -578,3 +578,630 @@ pub fn codegen_emit_ptx_sm90(module: MModule) -> string {
 pub fn codegen_emit_ptx_sm80(module: MModule) -> string {
     return emit_ptx(codegen_nvptx_sm80(module))
 }
+
+// ════════════════════════════════════════════════════════════════════
+// RFC 055 055-P1 — `@gpu_kernel` end-to-end (vec-add slice)
+// ════════════════════════════════════════════════════════════════════
+//
+// 055-P1 extends 055-P0's FP64-arithmetic emit pass with the pieces a
+// real, launchable vector-add `@gpu_kernel` needs:
+//
+//   * `.visible .entry` kernel header + `.param .u64` parameter bank
+//     (three `[f64]` farrs `a`/`b`/`c` + one `i64` length `n`)
+//   * `ld.global.f64` / `st.global.f64` address-space load / store
+//   * `mov.u32` from `%tid.x` / `%ctaid.x` / `%ntid.x` for the
+//     `gpu_thread_id_x()` / `gpu_block_id_x()` / `gpu_block_dim_x()`
+//     intrinsics (gpu/SPEC.md §5 — explicit per-axis names, lowering to
+//     PTX sregs 1:1)
+//   * `mad.lo.s32` to compose the global thread id, `cvt.u64.u32` to
+//     widen the index to a 64-bit address, `mul.lo.u64` to scale by 8
+//     bytes (sizeof f64), `add.u64` to compute the element address,
+//     `setp.lt.s32` + `@!p bra` for the bounds check.
+//
+// The keystone deliverable is `_nvptx_emit_vec_add_kernel(target)` — a
+// hand-emitted, ptxas-ready vec-add kernel built from the 055-P0
+// `LInstr` primitive vocabulary plus a small set of P1 helpers below.
+// 055-P1 still does NOT wire MIR partition-by-attribute into the
+// compiler's target dispatch — F-RFC055-CPU-CODEGEN-UNTOUCHED stays
+// green by design. The hand-emit form is the same shape the P2 lowering
+// pass will produce; the smoke test (`compiler/codegen/
+// nvptx_vec_add_test.hexa`) consumes it, ptxas-checks the text via
+// CONTAINS asserts, and the dispatch script (`tool/
+// dispatch_r055_p1_vec_add.sh`) fires it on a real GPU.
+
+// ── PTX kernel-parameter operand helpers ─────────────────────────────
+
+// _nvptx_reg_u64 — PTX virtual register for a 64-bit unsigned value
+// (used for kernel-arg base pointers + computed element addresses).
+fn _nvptx_reg_u64(id: i64) -> string {
+    return "%rd" + to_string(id)
+}
+
+// _nvptx_reg_u32 — PTX virtual register for a 32-bit unsigned value
+// (used for the thread-index sreg reads + composed global thread id).
+fn _nvptx_reg_u32(id: i64) -> string {
+    return "%r" + to_string(id)
+}
+
+// _nvptx_reg_pred — PTX predicate register name.
+fn _nvptx_reg_pred(id: i64) -> string {
+    return "%p" + to_string(id)
+}
+
+// _nvptx_param_ref — `[<kernel>_param_<i>]` operand for `ld.param.*`.
+fn _nvptx_param_ref(kernel_name: string, idx: i64) -> string {
+    return "[" + kernel_name + "_param_" + to_string(idx) + "]"
+}
+
+// _nvptx_addr_deref — `[<reg>]` operand for `ld.global` / `st.global`.
+fn _nvptx_addr_deref(addr_reg: string) -> string {
+    return "[" + addr_reg + "]"
+}
+
+// _nvptx_pred_guard — `@<pred>` / `@!<pred>` operand prefix for a
+// predicated `bra` (RFC 055 §6.6 — divergent control via predication).
+fn _nvptx_pred_guard(pred_reg: string, negate: bool) -> string {
+    if negate { return "@!" + pred_reg }
+    return "@" + pred_reg
+}
+
+// ── Param-bank declaration (`.visible .entry` parameter list) ────────
+
+// NvptxParamSpec — one row of a `@gpu_kernel`'s `.param` bank.
+//   The vec-add kernel `fn vadd(a: [f64], b: [f64], c: [f64], n: i64)`
+//   declares four params — three `.u64` farr pointers + one `.u64`
+//   length (PTX models i64 params as .u64 / .s64 interchangeably; we
+//   pick .u64 to match the address-space pointer layout).
+pub struct NvptxParamSpec {
+    name: string,         // PTX param name, e.g. "vadd_param_0"
+    ptx_type: string,     // ".u64" | ".f64" | ".s32"
+    note: string          // human-readable role for emitted PTX comment
+}
+
+// _nvptx_param_spec — NvptxParamSpec constructor.
+fn _nvptx_param_spec(name: string, ptx_type: string, note: string) -> NvptxParamSpec {
+    return NvptxParamSpec {
+        name: name,
+        ptx_type: ptx_type,
+        note: note
+    }
+}
+
+// _emit_ptx_param_list — render a `.visible .entry`'s param list.
+// PTX param-list grammar:  ( .param .u64 name_a, .param .u64 name_b, ... )
+fn _emit_ptx_param_list(params: [NvptxParamSpec]) -> string {
+    let mut s = "(\n"
+    let mut i = 0
+    while i < len(params) {
+        s = s + "    .param " + params[i].ptx_type + " " + params[i].name
+        if i < len(params) - 1 { s = s + "," }
+        if len(params[i].note) > 0 { s = s + "  // " + params[i].note }
+        s = s + "\n"
+        i = i + 1
+    }
+    s = s + ")"
+    return s
+}
+
+// ── 055-P1 helper LInstr emitters ────────────────────────────────────
+//
+// Each `_nvptx_p1_*` helper appends one PTX instruction to a buffer
+// using the 055-P0 `_nvptx_instr` / `_nvptx_op` primitives — no new IR
+// shape, just convenience wrappers so a hand-emitted kernel body reads
+// at the same abstraction level as the lowering pass will. The 055-P2
+// lowering pass will produce identical LInstr records.
+
+// ld.param.u64 %rd<dst>, [<kernel>_param_<idx>];
+fn _nvptx_p1_ld_param_u64(buf: [LInstr], dst_reg: string, kernel_name: string, idx: i64, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(_nvptx_param_ref(kernel_name, idx)))
+    out.push(_nvptx_instr(PTX_OP_LD_PARAM_U64, a, note))
+    return out
+}
+
+// mov.u32 %r<dst>, <sreg>.x   (thread-hierarchy sreg read — x axis)
+fn _nvptx_p1_mov_sreg_x(buf: [LInstr], dst_reg: string, sreg: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(sreg + ".x"))
+    out.push(_nvptx_instr(PTX_OP_MOV_U32, a, note))
+    return out
+}
+
+// mad.lo.s32 %r<dst>, %r<a>, %r<b>, %r<c>;   ( dst = a*b + c )
+fn _nvptx_p1_mad_lo_s32(buf: [LInstr], dst_reg: string, a_reg: string, b_reg: string, c_reg: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut args = []
+    args.push(_nvptx_op(dst_reg))
+    args.push(_nvptx_op(a_reg))
+    args.push(_nvptx_op(b_reg))
+    args.push(_nvptx_op(c_reg))
+    out.push(_nvptx_instr(PTX_OP_MAD_LO_S32, args, note))
+    return out
+}
+
+// cvt.u64.u32 %rd<dst>, %r<src>;   (widen 32-bit index to 64-bit address)
+fn _nvptx_p1_cvt_u64_u32(buf: [LInstr], dst_reg: string, src_reg: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(src_reg))
+    out.push(_nvptx_instr(PTX_OP_CVT_U64_U32, a, note))
+    return out
+}
+
+// mul.lo.u64 %rd<dst>, %rd<a>, <imm_or_reg>;   (scale index by sizeof T)
+fn _nvptx_p1_mul_lo_u64(buf: [LInstr], dst_reg: string, a_reg: string, b_text: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(a_reg))
+    a.push(_nvptx_op(b_text))
+    out.push(_nvptx_instr("mul.lo.u64", a, note))
+    return out
+}
+
+// add.u64 %rd<dst>, %rd<a>, %rd<b>;   (base + offset → element address)
+fn _nvptx_p1_add_u64(buf: [LInstr], dst_reg: string, a_reg: string, b_reg: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(a_reg))
+    a.push(_nvptx_op(b_reg))
+    out.push(_nvptx_instr("add.u64", a, note))
+    return out
+}
+
+// ld.global.f64 %fd<dst>, [%rd<addr>];
+fn _nvptx_p1_ld_global_f64(buf: [LInstr], dst_reg: string, addr_reg: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
+    out.push(_nvptx_instr(PTX_OP_LD_GLOBAL_F64, a, note))
+    return out
+}
+
+// st.global.f64 [%rd<addr>], %fd<src>;
+fn _nvptx_p1_st_global_f64(buf: [LInstr], addr_reg: string, src_reg: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
+    a.push(_nvptx_op(src_reg))
+    out.push(_nvptx_instr(PTX_OP_ST_GLOBAL_F64, a, note))
+    return out
+}
+
+// setp.lt.s32 %p<dst>, %r<a>, %r<b>;   (predicate ← a < b)
+fn _nvptx_p1_setp_lt_s32(buf: [LInstr], pred_reg: string, a_reg: string, b_reg: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(pred_reg))
+    a.push(_nvptx_op(a_reg))
+    a.push(_nvptx_op(b_reg))
+    out.push(_nvptx_instr(PTX_OP_SETP_LT_S32, a, note))
+    return out
+}
+
+// @!%p bra <label>;   (negated predicated branch — `if !p` jump)
+fn _nvptx_p1_bra_if_not(buf: [LInstr], pred_reg: string, label: string, note: string) -> [LInstr] {
+    let mut out = buf
+    // PTX predicated branches use the form `@!%p bra <label>` — to keep
+    // the LInstr renderer happy we fuse the predicate guard into `op`.
+    let mut a = []
+    a.push(_nvptx_op(label))
+    out.push(_nvptx_instr(_nvptx_pred_guard(pred_reg, true) + " " + PTX_OP_BRA, a, note))
+    return out
+}
+
+// add.f64 %fd<dst>, %fd<a>, %fd<b>;   (FP64 add — convenience over the
+// 055-P0 generic binop helper for the vec-add C[i] = A[i] + B[i] line)
+fn _nvptx_p1_add_f64(buf: [LInstr], dst_reg: string, a_reg: string, b_reg: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(a_reg))
+    a.push(_nvptx_op(b_reg))
+    out.push(_nvptx_instr(PTX_OP_ADD_F64, a, note))
+    return out
+}
+
+// ── Kernel-body emit pass for `.visible .entry` (055-P1) ─────────────
+//
+// _emit_ptx_kernel_func — render a `@gpu_kernel` as a PTX `.visible
+// .entry`. Distinct from `_emit_ptx_func` (which emits a 055-P0 `.func`
+// device helper) because a `.entry` carries the additional `.param`
+// bank header. The body is the same `LInstr` walk + `.reg` declarations.
+//
+// The `params` list lives on the LFunc as the function's surface ABI;
+// 055-P1 carries it via a thin envelope (NvptxKernelFn below) since the
+// shared LFunc struct has no `.params` slot — keeping the LIR shape
+// unchanged honors F-RFC055-CPU-CODEGEN-UNTOUCHED.
+
+// NvptxKernelFn — an LFunc + its `.param` bank spec. The wrapper is
+// 055-P1's `.visible .entry` representation; the CPU-target LFunc shape
+// is untouched.
+pub struct NvptxKernelFn {
+    func: LFunc,
+    params: [NvptxParamSpec],
+    reg_u32_count: i64,    // number of `.reg .u32` slots the body needs
+    reg_u64_count: i64,    // number of `.reg .u64` slots the body needs
+    reg_pred_count: i64    // number of `.reg .pred` slots the body needs
+}
+
+// _nvptx_kernel_fn — NvptxKernelFn constructor.
+fn _nvptx_kernel_fn(f: LFunc, ps: [NvptxParamSpec], n_u32: i64, n_u64: i64, n_pred: i64) -> NvptxKernelFn {
+    return NvptxKernelFn {
+        func: f,
+        params: ps,
+        reg_u32_count: n_u32,
+        reg_u64_count: n_u64,
+        reg_pred_count: n_pred
+    }
+}
+
+// _emit_ptx_reg_bank — render a `.reg .<ty> %<prefix><i>;` declaration
+// block for `count` virtual registers. PTX requires every virtual reg
+// be declared before use.
+fn _emit_ptx_reg_bank(ptx_type: string, prefix: string, count: i64) -> string {
+    if count <= 0 { return "" }
+    let mut s = ""
+    let mut i = 0
+    while i < count {
+        s = s + "    .reg " + ptx_type + " " + prefix + to_string(i) + ";\n"
+        i = i + 1
+    }
+    return s
+}
+
+// emit_ptx_kernel — render one NvptxKernelFn as PTX `.visible .entry`.
+//
+// PTX entry grammar (RFC 055 §6.4 / gpu/SPEC.md §2):
+//   .visible .entry <name> (
+//       .param .u64 <name>_param_0,
+//       ...
+//   )
+//   {
+//       .reg .u32  %r0; ...
+//       .reg .u64  %rd0; ...
+//       .reg .pred %p0; ...
+//       .reg .f64  %fd0; ...
+//       <instrs>
+//   }
+//
+// 055-P1 emits ALL four `.reg` banks the vec-add body needs. The FP64
+// `.reg .f64` bank comes from LFunc.callee_saved (the 055-P0 carrier);
+// the .u32 / .u64 / .pred banks come from the NvptxKernelFn envelope.
+pub fn emit_ptx_kernel(kf: NvptxKernelFn) -> string {
+    let f = kf.func
+    let mut parts: [string] = []
+    parts.push(PTX_DIRECTIVE_ENTRY + " " + f.name + " ")
+    parts.push(_emit_ptx_param_list(kf.params))
+    parts.push("\n{\n")
+    // Index / address / predicate / FP64 register banks.
+    parts.push(_emit_ptx_reg_bank(".u32",  "%r",  kf.reg_u32_count))
+    parts.push(_emit_ptx_reg_bank(".u64",  "%rd", kf.reg_u64_count))
+    parts.push(_emit_ptx_reg_bank(".pred", "%p",  kf.reg_pred_count))
+    let mut ri = 0
+    while ri < len(f.callee_saved) {
+        parts.push("    .reg .f64 " + f.callee_saved[ri].name + ";\n")
+        ri = ri + 1
+    }
+    // Kernel body — PTX instructions for the FP64 vec-add + bounds check.
+    let mut i = 0
+    while i < len(f.instrs) {
+        parts.push(_emit_ptx_instr(f.instrs[i]) + "\n")
+        i = i + 1
+    }
+    parts.push("}\n")
+    return parts.join("")
+}
+
+// ── Reference vec-add kernel build + emit (055-P1 keystone) ──────────
+//
+// _nvptx_build_vec_add_kernel — hand-construct the PTX-flavored LFunc
+// for the canonical 055-P1 vec-add kernel:
+//
+//   @gpu_kernel
+//   fn vadd(a: [f64], b: [f64], c: [f64], n: i64) {
+//       let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+//       if to_i64(gid) < n {
+//           c[gid] = a[gid] + b[gid]
+//       }
+//   }
+//
+// The emitted PTX follows the standard CUDA vec-add lowering — three
+// ld.param.u64 base loads, three mov.u32 sreg reads to compose the gid,
+// a setp.lt + @!p bra bounds guard, base + 8*gid address compose for
+// each farr, two ld.global.f64 inputs, one add.f64, one st.global.f64.
+// This is the same shape the 055-P2 MIR lowering will produce; 055-P1
+// hand-emits it so the dispatch script can fire it end-to-end before
+// the @gpu_kernel attribute-parse + MIR partition land.
+//
+// Register convention:
+//   %r0  : %ctaid.x         %r1  : %ntid.x         %r2  : %tid.x
+//   %r3  : gid (i32 == ctaid*ntid + tid via mad.lo.s32)
+//   %r4  : n  (cast from %rd6 truncate — actually we load .s32 for cmp)
+//   %rd0 : a base   %rd1 : b base   %rd2 : c base   %rd3 : n (param)
+//   %rd4 : gid widened to u64
+//   %rd5 : gid * 8 (byte offset)
+//   %rd6 : a[gid] addr   %rd7 : b[gid] addr   %rd8 : c[gid] addr
+//   %p0  : gid < n
+//   %fd0 : a[gid] value   %fd1 : b[gid] value   %fd2 : a+b sum
+fn _nvptx_build_vec_add_kernel(target: string) -> NvptxKernelFn {
+    let mut buf = []
+
+    // Block 0 — entry. Load .param.u64 bases + the n length.
+    buf.push(_nvptx_instr("label", [_nvptx_op("$L_0")], ""))
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(0), "vadd", 0, "load a base ptr")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(1), "vadd", 1, "load b base ptr")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(2), "vadd", 2, "load c base ptr")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(3), "vadd", 3, "load n (i64 length)")
+    // Compose global thread id from PTX special registers (RFC 055 §6.3,
+    // gpu/SPEC.md §5 — per-axis names lowering to PTX sregs 1:1).
+    buf = _nvptx_p1_mov_sreg_x(buf, _nvptx_reg_u32(0), PTX_SREG_CTAID, "gpu_block_id_x()")
+    buf = _nvptx_p1_mov_sreg_x(buf, _nvptx_reg_u32(1), PTX_SREG_NTID,  "gpu_block_dim_x()")
+    buf = _nvptx_p1_mov_sreg_x(buf, _nvptx_reg_u32(2), PTX_SREG_TID,   "gpu_thread_id_x()")
+    // gid = ctaid*ntid + tid
+    buf = _nvptx_p1_mad_lo_s32(buf, _nvptx_reg_u32(3),
+        _nvptx_reg_u32(0), _nvptx_reg_u32(1), _nvptx_reg_u32(2),
+        "gid = block_id * block_dim + thread_id")
+    // Bounds check — cvt n down to s32 (vec-add caller-side guarantees
+    // n fits in s32 for 055-P1's first slice). 055-P1 uses %rd3 as the
+    // .u64 param load already; truncate to %r4 for the compare. PTX
+    // `cvt.u32.u64` is the truncating cast.
+    let mut tr_args = []
+    tr_args.push(_nvptx_op(_nvptx_reg_u32(4)))
+    tr_args.push(_nvptx_op(_nvptx_reg_u64(3)))
+    buf.push(_nvptx_instr("cvt.u32.u64", tr_args, "n (i64 → u32 truncate for cmp)"))
+    buf = _nvptx_p1_setp_lt_s32(buf, _nvptx_reg_pred(0), _nvptx_reg_u32(3), _nvptx_reg_u32(4),
+        "p0 = (gid < n)")
+    buf = _nvptx_p1_bra_if_not(buf, _nvptx_reg_pred(0), "$L_END", "skip OOB lane")
+
+    // Block 1 — in-bounds lane: compute element addresses, load A+B,
+    // add, store C. PTX byte addressing uses .u64 — widen gid → u64,
+    // scale by sizeof(f64) = 8, add to each base.
+    buf.push(_nvptx_instr("label", [_nvptx_op("$L_BODY")], ""))
+    buf = _nvptx_p1_cvt_u64_u32(buf, _nvptx_reg_u64(4), _nvptx_reg_u32(3), "widen gid → u64")
+    buf = _nvptx_p1_mul_lo_u64(buf,  _nvptx_reg_u64(5), _nvptx_reg_u64(4), "8", "byte offset = gid * 8")
+    buf = _nvptx_p1_add_u64(buf,     _nvptx_reg_u64(6), _nvptx_reg_u64(0), _nvptx_reg_u64(5), "&a[gid]")
+    buf = _nvptx_p1_add_u64(buf,     _nvptx_reg_u64(7), _nvptx_reg_u64(1), _nvptx_reg_u64(5), "&b[gid]")
+    buf = _nvptx_p1_add_u64(buf,     _nvptx_reg_u64(8), _nvptx_reg_u64(2), _nvptx_reg_u64(5), "&c[gid]")
+    buf = _nvptx_p1_ld_global_f64(buf, _nvptx_reg_f64(0), _nvptx_reg_u64(6), "av = a[gid]")
+    buf = _nvptx_p1_ld_global_f64(buf, _nvptx_reg_f64(1), _nvptx_reg_u64(7), "bv = b[gid]")
+    buf = _nvptx_p1_add_f64(buf,       _nvptx_reg_f64(2), _nvptx_reg_f64(0), _nvptx_reg_f64(1),
+        "sum = av + bv  (vec-add: exact FP64, no reduction)")
+    buf = _nvptx_p1_st_global_f64(buf, _nvptx_reg_u64(8), _nvptx_reg_f64(2), "c[gid] = sum")
+
+    // Block 2 — common exit.
+    buf.push(_nvptx_instr("label", [_nvptx_op("$L_END")], ""))
+    buf.push(_nvptx_instr(PTX_OP_RET, [], "return from kernel"))
+
+    // The FP64 register bank (`.reg .f64 %fd0..2`) is carried in
+    // callee_saved per the 055-P0 contract.
+    let mut fp64_regs = []
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(0), kind: "fpr" })
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(1), kind: "fpr" })
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(2), kind: "fpr" })
+
+    let f = LFunc {
+        name: "vadd",
+        target: target,
+        instrs: buf,
+        frame_size: 0,
+        callee_saved: fp64_regs,
+        def_line: 0
+    }
+
+    // Param bank — three `.u64` farr bases + one `.u64` length.
+    let mut ps = []
+    ps.push(_nvptx_param_spec("vadd_param_0", ".u64", "a: [f64]  (device-resident farr base)"))
+    ps.push(_nvptx_param_spec("vadd_param_1", ".u64", "b: [f64]  (device-resident farr base)"))
+    ps.push(_nvptx_param_spec("vadd_param_2", ".u64", "c: [f64]  (device-resident farr base)"))
+    ps.push(_nvptx_param_spec("vadd_param_3", ".u64", "n: i64    (element count)"))
+
+    // Register banks — body uses %r0..4 (5 .u32), %rd0..8 (9 .u64),
+    // %p0 (1 .pred), %fd0..2 (3 .f64 from callee_saved above).
+    return _nvptx_kernel_fn(f, ps, 5, 9, 1)
+}
+
+// emit_ptx_vec_add_module — render the full PTX module text for the
+// 055-P1 vec-add kernel. The returned string is ptxas-ready (header +
+// `.visible .entry` body) and is what `tool/dispatch_r055_p1_vec_add.sh`
+// pipes to `ptxas` for F-RFC055-PTX-EMIT.
+pub fn emit_ptx_vec_add_module(target: string) -> string {
+    let kf = _nvptx_build_vec_add_kernel(target)
+    let mut parts: [string] = []
+    parts.push(_emit_ptx_header(target))
+    parts.push("\n")
+    parts.push(emit_ptx_kernel(kf))
+    return parts.join("")
+}
+
+// ── `@gpu_*` attribute recognition + GPU0N strict-lint (gpu/SPEC.md §9) ──
+//
+// gpu/SPEC.md §9 names seven `GPU0N` strict-lint codes that the @gpu
+// validator pass emits. 055-P1 implements the *pure detection* half of
+// each — given a parsed FnDecl-shaped value the validator decides which
+// codes (if any) apply. It does NOT wire into the compiler's diag
+// emitter; the smoke test (`compiler/codegen/nvptx_vec_add_test.hexa`)
+// drives it with synthetic inputs to assert the GPU0N decision table
+// stays honest. Wiring strict-lint to a real FnDecl walk is 055-P2 (it
+// needs the @gpu_kernel attribute parse plumbed all the way through
+// HIR → MIR, which the keyword-demote work has not yet touched).
+
+// nvptx_is_gpu_attr — does the annotation name a `@gpu_*` attribute?
+//   Returns true for `gpu_kernel` and `gpu_device`; false otherwise.
+// (gpu/SPEC.md §2 — the two attribute names; `@shared` is a local-array
+// annotation handled separately.)
+pub fn nvptx_is_gpu_attr(name: string) -> bool {
+    if name == "gpu_kernel" { return true }
+    if name == "gpu_device" { return true }
+    return false
+}
+
+// nvptx_attr_kind — `@gpu_kernel` → NVPTX_FN_KERNEL · `@gpu_device` →
+// NVPTX_FN_DEVICE · anything else → -1 (not a gpu attribute).
+pub fn nvptx_attr_kind(name: string) -> i64 {
+    if name == "gpu_kernel" { return NVPTX_FN_KERNEL }
+    if name == "gpu_device" { return NVPTX_FN_DEVICE }
+    return -1
+}
+
+// NvptxValidateInput — the surgical shape the validator consumes. The
+// caller (a 055-P2 HIR walker, or the 055-P1 smoke test) flattens a
+// FnDecl into this struct; the validator stays type-system-agnostic.
+pub struct NvptxValidateInput {
+    is_kernel: bool,            // @gpu_kernel (vs @gpu_device)
+    return_type_name: string,   // "" for void · "i64" · "f64" · etc.
+    param_types: [string],      // each param's allowlist name — gpu/SPEC.md §3
+    local_types: [string],      // each local's allowlist name
+    calls_cpu_fns: bool,        // body calls a CPU-only function → GPU03
+    callable_from_cpu: bool,    // CPU code calls this @gpu_device → GPU02
+    has_recursion: bool,        // direct or mutual recursion → GPU05
+    has_heap_alloc: bool,       // new / push / map / filter → GPU05
+    has_io: bool,               // println / file / syscall → GPU05
+    uses_gpu_intrinsic: bool,   // body references gpu_thread_id_x etc.
+    is_gpu_context: bool,       // body is inside a @gpu_* function
+    has_shared_outside_kernel: bool,  // @shared on non-fixed local OR in @gpu_device → GPU07
+    has_unbounded_loop: bool    // loop the validator cannot prove terminates → GPU05W
+}
+
+// nvptx_empty_validate_input — sane defaults (all false / empty).
+pub fn nvptx_empty_validate_input() -> NvptxValidateInput {
+    return NvptxValidateInput {
+        is_kernel: false,
+        return_type_name: "",
+        param_types: [],
+        local_types: [],
+        calls_cpu_fns: false,
+        callable_from_cpu: false,
+        has_recursion: false,
+        has_heap_alloc: false,
+        has_io: false,
+        uses_gpu_intrinsic: false,
+        is_gpu_context: false,
+        has_shared_outside_kernel: false,
+        has_unbounded_loop: false
+    }
+}
+
+// _nvptx_type_is_allowlisted — gpu/SPEC.md §3 allowlist:
+//   Scalars: f64 · f32 · i64 · i32 · bool
+//   Arrays:  [T] / [T; N] of an allowed scalar
+// 055-P1 uses string-name matching; 055-P2 will switch to TypeRef.
+fn _nvptx_type_is_allowlisted(name: string) -> bool {
+    if name == "f64" { return true }
+    if name == "f32" { return true }
+    if name == "i64" { return true }
+    if name == "i32" { return true }
+    if name == "bool" { return true }
+    if name == "[f64]" { return true }
+    if name == "[f32]" { return true }
+    if name == "[i64]" { return true }
+    if name == "[i32]" { return true }
+    if name == "[bool]" { return true }
+    return false
+}
+
+// nvptx_validate_gpu_subset — gpu/SPEC.md §9. Returns the list of
+// `GPU0N` error codes that apply to `inp`. Empty list = subset clean,
+// kernel is lowerable.
+//
+// Decision table (gpu/SPEC.md §9 — one entry per code):
+//   GPU01 — @gpu_kernel with non-void return type
+//   GPU02 — @gpu_device called from CPU code
+//   GPU03 — CPU fn called from a @gpu_* body
+//   GPU04 — non-allowlisted parameter / local / return type
+//   GPU05 — recursion · heap alloc · growable-collection op · IO · syscall
+//   GPU05W — (warning) unbounded loop the validator cannot prove terminates
+//   GPU06 — a gpu_* intrinsic used in CPU code
+//   GPU07 — @shared outside a @gpu_kernel, or on a non-fixed-array local
+pub fn nvptx_validate_gpu_subset(inp: NvptxValidateInput) -> [string] {
+    let mut codes = []
+
+    // GPU01 — @gpu_kernel must return void (PTX entries do not return).
+    if inp.is_kernel {
+        if len(inp.return_type_name) > 0 {
+            codes.push("GPU01")
+        }
+    }
+
+    // GPU02 — @gpu_device called from CPU code.
+    if inp.is_gpu_context == false && inp.callable_from_cpu == false {
+        // skip — this is the simple CPU path, no GPU concern
+    } else {
+        if inp.callable_from_cpu && inp.is_gpu_context == false {
+            codes.push("GPU02")
+        }
+    }
+
+    // GPU03 — CPU fn called from a @gpu_* body.
+    if inp.is_gpu_context && inp.calls_cpu_fns {
+        codes.push("GPU03")
+    }
+
+    // GPU04 — non-allowlisted type on a @gpu_* parameter / local / return.
+    if inp.is_gpu_context {
+        if len(inp.return_type_name) > 0 {
+            if !_nvptx_type_is_allowlisted(inp.return_type_name) {
+                codes.push("GPU04")
+            }
+        }
+        let mut i = 0
+        while i < len(inp.param_types) {
+            if !_nvptx_type_is_allowlisted(inp.param_types[i]) {
+                codes.push("GPU04")
+                i = len(inp.param_types)   // first hit is enough
+            } else {
+                i = i + 1
+            }
+        }
+        if !_contains_code(codes, "GPU04") {
+            let mut j = 0
+            while j < len(inp.local_types) {
+                if !_nvptx_type_is_allowlisted(inp.local_types[j]) {
+                    codes.push("GPU04")
+                    j = len(inp.local_types)
+                } else {
+                    j = j + 1
+                }
+            }
+        }
+    }
+
+    // GPU05 — recursion / heap alloc / IO inside a @gpu_* body.
+    if inp.is_gpu_context {
+        if inp.has_recursion || inp.has_heap_alloc || inp.has_io {
+            codes.push("GPU05")
+        }
+        if inp.has_unbounded_loop {
+            codes.push("GPU05W")
+        }
+    }
+
+    // GPU06 — `gpu_*` intrinsic referenced from CPU code.
+    if (!inp.is_gpu_context) && inp.uses_gpu_intrinsic {
+        codes.push("GPU06")
+    }
+
+    // GPU07 — @shared outside @gpu_kernel, or on a non-fixed array.
+    if inp.has_shared_outside_kernel {
+        codes.push("GPU07")
+    }
+
+    return codes
+}
+
+// _contains_code — small linear scan for code dedup in validate output.
+fn _contains_code(codes: [string], needle: string) -> bool {
+    let mut i = 0
+    while i < len(codes) {
+        if codes[i] == needle { return true }
+        i = i + 1
+    }
+    return false
+}
