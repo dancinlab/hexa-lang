@@ -110,6 +110,110 @@ pub fn structure_volume(s: Structure) -> float {
     return lattice_volume(s.lattice)
 }
 
+// ── Stage-2 kernel: fractional <-> cartesian + angles ───────────────
+// pymatgen Lattice convention: matrix rows are the a,b,c lattice
+// vectors; cart = frac @ matrix, frac = cart @ inv(matrix).
+
+// Closed-form 3x3 inverse (adjugate / det). Row-major.
+pub fn lattice_inverse(L: Lattice) -> any {
+    let m = L.matrix
+    let r0 = m[0]
+    let r1 = m[1]
+    let r2 = m[2]
+    let m00 = r0[0]
+    let m01 = r0[1]
+    let m02 = r0[2]
+    let m10 = r1[0]
+    let m11 = r1[1]
+    let m12 = r1[2]
+    let m20 = r2[0]
+    let m21 = r2[1]
+    let m22 = r2[2]
+    let c00 = m11 * m22 - m12 * m21
+    let c01 = m10 * m22 - m12 * m20
+    let c02 = m10 * m21 - m11 * m20
+    let det = m00 * c00 - m01 * c01 + m02 * c02
+    let i00 = c00 / det
+    let i01 = (m02 * m21 - m01 * m22) / det
+    let i02 = (m01 * m12 - m02 * m11) / det
+    let i10 = (m12 * m20 - m10 * m22) / det
+    let i11 = (m00 * m22 - m02 * m20) / det
+    let i12 = (m02 * m10 - m00 * m12) / det
+    let i20 = (m10 * m21 - m11 * m20) / det
+    let i21 = (m01 * m20 - m00 * m21) / det
+    let i22 = (m00 * m11 - m01 * m10) / det
+    return [[i00, i01, i02], [i10, i11, i12], [i20, i21, i22]]
+}
+
+// frac (Nx3) -> cartesian (Nx3): cart_i = sum_k frac_k * matrix_row_k.
+pub fn lattice_frac_to_cart(L: Lattice, frac: any) -> any {
+    let m = L.matrix
+    let r0 = m[0]
+    let r1 = m[1]
+    let r2 = m[2]
+    let mut out: any = []
+    let mut i = 0
+    while i < len(frac) {
+        let f = frac[i]
+        let f0 = f[0]
+        let f1 = f[1]
+        let f2 = f[2]
+        let cx = f0 * r0[0] + f1 * r1[0] + f2 * r2[0]
+        let cy = f0 * r0[1] + f1 * r1[1] + f2 * r2[1]
+        let cz = f0 * r0[2] + f1 * r1[2] + f2 * r2[2]
+        out.push([cx, cy, cz])
+        i = i + 1
+    }
+    return out
+}
+
+// cartesian (Nx3) -> frac (Nx3): frac = cart @ inv(matrix).
+pub fn lattice_cart_to_frac(L: Lattice, cart: any) -> any {
+    let inv = lattice_inverse(L)
+    let v0 = inv[0]
+    let v1 = inv[1]
+    let v2 = inv[2]
+    let mut out: any = []
+    let mut i = 0
+    while i < len(cart) {
+        let c = cart[i]
+        let c0 = c[0]
+        let c1 = c[1]
+        let c2 = c[2]
+        let fx = c0 * v0[0] + c1 * v1[0] + c2 * v2[0]
+        let fy = c0 * v0[1] + c1 * v1[1] + c2 * v2[1]
+        let fz = c0 * v0[2] + c1 * v1[2] + c2 * v2[2]
+        out.push([fx, fy, fz])
+        i = i + 1
+    }
+    return out
+}
+
+// pymatgen Lattice.angles — (alpha, beta, gamma) in degrees.
+// alpha = angle(b,c), beta = angle(a,c), gamma = angle(a,b).
+pub fn lattice_angles(L: Lattice) -> any {
+    let m = L.matrix
+    let a = m[0]
+    let b = m[1]
+    let c = m[2]
+    let na = sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
+    let nb = sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2])
+    let nc = sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2])
+    let bc = b[0] * c[0] + b[1] * c[1] + b[2] * c[2]
+    let ac = a[0] * c[0] + a[1] * c[1] + a[2] * c[2]
+    let ab = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    let pi = acos(-1.0)
+    let alpha = acos(bc / (nb * nc)) * 180.0 / pi
+    let beta = acos(ac / (na * nc)) * 180.0 / pi
+    let gamma = acos(ab / (na * nb)) * 180.0 / pi
+    return [alpha, beta, gamma]
+}
+
+// Convenience: a Structure's cartesian site coordinates.
+pub fn structure_cart_coords(s: Structure) -> any {
+    return lattice_frac_to_cart(s.lattice, s.frac_coords)
+}
+
 pub fn crystal_status() -> str {
-    return "STAGE-1 — Lattice/Structure containers + lattice_new/volume/abc + structure_new/num_sites/species/volume (absorbs: pymatgen, mp_api; Stage-2 primitives pending)"
+    return "STAGE-2 (partial) — Stage-1 + lattice_inverse/frac_to_cart/cart_to_frac/angles + structure_cart_coords (absorbs: pymatgen, mp_api; CIF/Spacegroup/PhaseDiagram/MP-net still Stage-2)"
 }
