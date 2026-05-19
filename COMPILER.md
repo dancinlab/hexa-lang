@@ -21,6 +21,7 @@ At-a-glance
              ALREADY EXISTS and self-compiles; blocker = codegen
              super-linear perf. order = compiler/PLAN.md #18 S1->S4.
   interim  : W1/W2/F speed the C path; relief only while the C fallback lives
+  naming   : drop bootstrap vestiges (_v2 _c2 aprime s4) — separate cycle
   measured : clang = 80% of build wall; runtime.c recompile = 53% alone
   status   : lever 0 profiled · 정공법 surveyed · sequence = compiler/PLAN.md #18
 ```
@@ -126,6 +127,37 @@ compiling slowly). Start there.
 
 W1/W2/F are now explicitly interim: worth doing only as relief while the
 C fallback still exists; they do not substitute for the 정공법.
+
+## Naming — drop the bootstrap vestiges
+
+The bootstrap era left version-suffix / codename file names. As the
+정공법 makes `compiler/` the one real compiler, these vestiges go —
+completely. The conventions being abandoned:
+
+- version suffixes — `_v2`, `_c2`, any `<n>` generation marker
+- codenames — `aprime` (the native compiler's temporary codename)
+- stage numbers baked into names — `s4_...`
+
+Vestige inventory (known; canonical names are the plan — adjust before
+the rename cycle runs if any name is contested):
+
+| vestige | what it is | canonical |
+|---------|------------|-----------|
+| `aprime_cc` · `tool/build_aprime.sh` | native codegen compiler + its build | `hexac` · `tool/build_hexac.sh` |
+| `hexa_v2` · `self/native/hexa_cc.c` | legacy C transpiler binary + source | `ctrans` · `ctrans.c` |
+| `self/codegen_c2.hexa` | C-backend codegen (SSOT) | `codegen_c.hexa` |
+| `self/native/codegen_c2_v2.c` | C-frontend codegen mirror | `codegen_c.c` |
+| `self/native/{lexer,parser,type_checker}_v2.c` | C-frontend mirror | drop `_v2` |
+| `tool/s4_flatc_post.py` | flatten post-processor | `tool/flatc_post.py` |
+| `self/native/*.bak.*` · `*.pre*` | dead bootstrap snapshots | delete |
+
+Execution is a SEPARATE atomic cycle — NOT folded into S1. A mass rename
+rewrites `import` paths across the whole tree; mixing it into a perf
+change makes both unreviewable, and the shared-checkout branch churn
+(this session alone saw the branch flip twice) compounds the conflict
+risk. Do it in one worktree, atomically, when S1 is parked. New files
+created from here on already use clean names — the vestige convention is
+abandoned for anything new immediately.
 
 ## Pipeline — where the C-path levers sit
 
@@ -262,3 +294,8 @@ ultimately removes.
 - 2026-05-20 — renamed `ROI.md` -> `COMPILER.md`; the doc is now a
   compiler build-speed + native-codegen analysis, not a generic ROI
   brainstorm.
+- 2026-05-20 — naming policy recorded (user directive "v2 이런것도 안됨,
+  전부 깔끔하게"). Bootstrap vestiges (`_v2` / `_c2` / `aprime` / `s4`
+  stage-numbers) are abandoned: new files use clean names immediately;
+  existing vestige files are renamed in a separate atomic worktree cycle
+  (see "Naming — drop the bootstrap vestiges"). Not folded into S1.
