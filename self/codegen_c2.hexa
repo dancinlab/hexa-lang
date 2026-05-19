@@ -2858,6 +2858,17 @@ fn gen2_stmt(node, depth) {
     // demoted to `@optimize` attribute. @-prefixed attrs ride the existing
     // annotation channel and don't produce dedicated AST nodes.)
 
+    // ── Ownership-group statements → no-op (SPEC §11 v1).
+    //    DropStmt · OwnStmt · BorrowStmt · MoveStmt are
+    //    declarations of intent in the v1 arena memory model;
+    //    runtime semantics are reserved for v2 borrow checker.
+    //    Parser surface lands here, codegen emits nothing — the
+    //    var is unchanged and remains valid through the rest of
+    //    the scope (arena owns lifetime).
+    if k == "DropStmt" || k == "OwnStmt" || k == "BorrowStmt" || k == "MoveStmt" {
+        return ""
+    }
+
     // Nested FnDecl / PureFnDecl / StructDecl in a fn body — already
     // hoisted to module scope by _gen2_lift_nested_decls at the
     // codegen_c2_full entry. Skip inline emission (the module-scope
