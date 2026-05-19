@@ -27,7 +27,7 @@ must("chat has <|im_start|>system",      formatted.index_of("<|im_start|>system"
 must("chat has <|im_start|>user\\nhi<|im_end|>", formatted.index_of("<|im_start|>user\nhi<|im_end|>") >= 0)
 
 // ── T2: alm_init (loads stub handle) ──────────────────────────────
-let init_ok = alm_init("/tmp/fake_ckpt", "Qwen/Qwen2.5-14B-Instruct")
+let init_ok = alm_init("/tmp/fake_ckpt", "Qwen/Qwen2.5-14B-Instruct", true)
 must("alm_init returned true", init_ok == true)
 
 // ── T3: alm_health ────────────────────────────────────────────────
