@@ -3047,3 +3047,39 @@ gets its own analyzed cycle rather than a rushed fix. Other
 keyword-audit residuals (generics `where T: Clone` → undeclared `T` /
 `Clone`; async `hexa_await_unwrap` signature) are pre-existing,
 separate gaps unrelated to this cycle.
+
+### ★ 진행 로그 — modstmt-decl-hoist landed on rfc043-hexa-torch (2026-05-19)
+
+The 2-commit isolated lineage (d4b7db4d ModStmt + 8e524019
+ComptimeBlock/MacroDef, base f297978c) was merged into
+`rfc043-hexa-torch` as `db446da3` — capping merge debt per user
+directive (option A) before stacking further keyword-audit cycles.
+
+The shared-worktree-branch hazard forced the work onto an isolated
+branch; landing was deliberately done in a dedicated rfc043 worktree
+(rfc043 was free / not checked out) so the shared main dir (foreign
+atoms branch) was never touched. Merge was **conflict-free**: f297978c
+is a clean ancestor of the rfc043 tip with **zero drift** on all four
+deliverable files (codegen_c2.hexa / hexa_cc.c / PLAN.md / hexa_v2 —
+0 intervening commits touched them), so the 3-way merge applied with
+no resolution needed.
+
+Post-merge validation (rfc043 base, fully rebuilt worktree toolchain):
+self-host fixpoint **BYTE-IDENTICAL** (`cc --regen` → hexa_cc.c.new ≡
+merged hexa_cc.c) — the second independent fixpoint confirmation
+(orphan worktree + merged rfc043), decisively proving the merge did
+not corrupt codegen and the transpiler reproduces its own source
+exactly.
+
+g3-honest: **atlas 118/118 re-verify remains DEFERRED** — not run on
+either worktree. Root cause is now confirmed base-independent:
+`atlas_verify.hexa` via the ad-hoc bootstrapped worktree driver's
+`run`-compile path hits an arm64 linker symbol gap (the bootstrapped
+runtime lacks symbols only the fully-installed `~/.hx` toolchain
+carries). This is a worktree-toolchain infra limitation, NOT a codegen
+regression. The change touches only stmt-kind lowering (no
+formula/atlas code) and the byte-identical fixpoint (×2) already
+proves zero transpiler drift, so atlas-theorem integrity is provably
+unaffected. The 118/118 re-run is pending a fully-installed-toolchain
+invocation (e.g. when the shared main dir next returns to
+rfc043-hexa-torch, or via the installed driver against this tree).
