@@ -3456,3 +3456,59 @@ keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/tes
   `tool/atlas_register.hexa` companion 으로 끌어와야 함 — `pr` arm 은 의도적으로
   *이미 staged 된* `.n6` shard 소비로 scope. `cc --regen` 미수행 (atlas_cli.hexa
   는 tool 이지 hexa_cc.c SSOT 모듈 아님 — regen 불필요).
+
+## 진행 로그 — `hexa atlas register --from-verify` DIRECT node-gen → PR (2026-05-20)
+
+- **what**: `hexa atlas register` 의 새로운 `--from-verify <fn> <n> <v>` arm. user
+  지시: ".n6 파일같은거 전혀안통하고 바로 PR 하도록" + "변환 말고 / 노드 생성 코드".
+  closed-form `hexa verify` 발견 → `compiler/atlas/embedded.gen.hexa` 직접 fold
+  → `gh || api` PR 까지 **단일 명령**. `.n6` intermediate 0건, converter 0건.
+- **why**: 기존 `hexa atlas pr` 는 staging `.n6` shard 를 입력으로 받는 update-or-PR
+  의 PR arm. @D g_atlas_binary_builtin (atlas 무조건 binary built-in, .n6 는
+  export-only) 와 user 지시 ("바로 PR") 이 합쳐져 — verify 결과를 .n6 우회 없이
+  embedded.gen.hexa 로 직행시키는 경로가 필요. **direct node-gen (NOT 변환)**.
+- **how — `tool/atlas_cli.hexa` cmd_register 본체 + helpers**:
+  1. `_recompute_register` / `_recompute2_register` — `verify_cli.hexa::_recompute`
+     의 calc table 을 IN-PROCESS 거울 (verify_cli 는 `main` 이 있어 import 불가).
+     `compiler/atlas/symbolic/congruence_chain_engine` 의 σ/φ/τ/μ/Γ₀/jacobi/등 사용.
+  2. `_build_raw_F` — tape v1.2 형식 `@F` body 문자열 in-memory 구성
+     (`= fn(args) = v :: formula [d=YYYY-MM-DD active]\n  verified-by="..."\n
+     cite="..."\n  provenance="..."`).
+  3. `_build_node_struct_text` — `tool/atlas_embed_gen.hexa::embed_atlas` 이 emit
+     하는 그 모양 그대로 `AtlasNode { kind, id, raw (escape 적용), source_file,
+     source_line, grade: GradeInfo {...}, edges: EdgeInfo {...} }` struct-literal
+     텍스트를 만든다. **이게 저장 형식.** `.n6` 텍스트 절대 만들지 않음.
+  4. `_fold_into_embedded` — `embedded.gen.hexa` 읽기 → `pub let ATLAS_F_NODES:
+     [AtlasNode] = [` marker 찾기 → 다음 `]` 까지 walk → `id: "<id>"` 텍스트
+     dedup → 직전 trailing `}` 에 `,` 추가하면서 새 line splice → write back.
+     section empty path (`= [\n]`) + non-empty path 분리 처리.
+  5. `_branch_commit_pr` — `cmd_pr` 의 step 4+5 fallback chain 재사용 (branch
+     생성 + `git add embedded.gen.hexa` + commit + `gh pr create` → GitHub REST
+     API POST `/repos/<o>/<r>/pulls` HTTP 201). **정직 degrade**: `gh` rc=0 또는
+     HTTP 201 일 때만 "PR opened — <url>". 그 외에는 NO PR was opened 명시.
+- **kind 결정**: closed-form `verify --expr` = **F (formula)**. ATLAS_F_NODES 비어
+  있었음 (embedded.gen.hexa L7434-7436); 이 verb 가 채워나갈 위치. identity-law
+  (e.g. `is_perfect ⇒ σ(n)=2n`) 도 F 로 등록 — 향후 `--kind L` 옵션 가능.
+- **g3 정직성**: 🟠 INSUFFICIENT (`_recompute_register` no path) → exit 3,
+  🔴 FALSIFIED → exit 4, fold dedup hit → exit 5. `--auto-pr` 없으면 현재 브랜치
+  로 edit 만 land, user 가 commit. `--auto-pr` 후 PR 안 열리면 `git push -u
+  origin <branch>` + 정확한 `gh pr create` 명령 출력, "NO PR was opened" 명시.
+  `cmd_pr` 와 동일 정책. 절대 PR fake 0.
+- **parse-gate (measured)**: `self/runtime.o` 빌드 → `self/native/hexa_v2
+  tool/atlas_cli.hexa /tmp/atlas_cli.c` → `OK` rc=0. 새 F-section line (`@F
+  verified-tau-6 ...`) struct-literal 격리 검증 → `OK` rc=0.
+- **end-to-end (measured, no --auto-pr)**: `hexa run tool/atlas_cli.hexa register
+  --from-verify tau 6 4` → `tier = 🔵 SUPPORTED-FORMAL` + `embed = appended
+  @F verified-tau-6 to compiler/atlas/embedded.gen.hexa (ATLAS_F_NODES section)`
+  + clean splice 확인 (line 7435 에 새 AtlasNode literal 단일 line). test edit
+  revert 후 live PR 시도 (아래 commit).
+- **inbox patch flip**: `inbox/patches/hexa-cli-atlas-register-update-or-pr.md`
+  status `partially-resolved` → `resolved-ssot`. `register --from-verify` 가
+  `<file.hexa>` STUB 와 별개의 직행 path 로 user-asked-for 경로 close.
+- **deferred**: `<file.hexa>` mode 의 `register` (lex→parse→discover_check) 는
+  여전히 STUB. 이 cycle 의 user 지시 ("바로 PR") 와 무관 — discovery-from-source
+  은 별도 cycle (compiler frontend 끌어와야 함).
+- **cc --regen / binary promote**: 미수행. atlas_cli.hexa 는 driver 가 run 하는
+  tool 이지 hexa_cc.c SSOT 모듈 아님 — @D g_commit_push_deploy 에 따라 source-only
+  변경. driver 빌드 영향 없음, `hexa run tool/atlas_cli.hexa register --help`
+  로 새 verb 작동 확인 (interp 경유, system `hexa` 가 worktree source 픽업).
