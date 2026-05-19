@@ -24,6 +24,7 @@ use "compiler/lenses/types"
 use "compiler/lenses/embedded.gen"
 use "compiler/atlas/by_kind/p.gen"
 use "compiler/atlas/by_kind/l.gen"
+use "stdlib/loop/state"
 
 let VERSION = "0.0.1"
 
@@ -77,7 +78,7 @@ fn cycle_scan() {
     println("  [1/8 SCAN]    corpus snapshot (B-2.1: hash atlas + recent commits)")
 }
 
-fn cycle_lens() -> int {
+fn cycle_lens() -> array {
     // B-3.3 + RFC 066 B-3 (partial): AtlasView populated with P + L kinds
     // from compiler/atlas/by_kind/{p,l}.gen (RFC 066 A+B hybrid, A-pathed).
     // C kind awaits B-1b HXC sidecar; others empty / placeholder.
@@ -90,67 +91,116 @@ fn cycle_lens() -> int {
         atlas_hash: "", atlas_generated_at: ""
     }
     let n = len(LENS_NODES)
-    let mut total = 0
+    let mut all_cands: array = []
     let mut i = 0
     while i < n {
         let id = LENS_NODES[i].id
         let cand = lens_apply_by_id(id, view)
-        total = total + len(cand)
+        let cn = len(cand)
+        let mut j = 0
+        while j < cn {
+            all_cands.push(cand[j])
+            j = j + 1
+        }
         i = i + 1
     }
-    println("  [2/8 LENS]    " + to_string(n) + " lens applied (B-3.3 real dispatch, " + to_string(total) + " candidate(s) emitted)")
-    return total
+    println("  [2/8 LENS]    " + to_string(n) + " lens applied (C-2 real view, " + to_string(len(all_cands)) + " candidate(s) emitted)")
+    return all_cands
 }
 
-fn cycle_dedup(total: int) -> int {
-    println("  [3/8 DEDUP]   cooldown skip (B-2.1) -> " + to_string(total) + " survive")
-    return total
+fn cycle_dedup(cands: array, cycle_no: int) -> array {
+    let n = len(cands)
+    let mut out: array = []
+    let mut blocked = 0
+    let mut i = 0
+    while i < n {
+        let c = cands[i]
+        if loop_state_cooldown_check(c.slug, cycle_no) {
+            blocked = blocked + 1
+        } else {
+            out.push(c)
+        }
+        i = i + 1
+    }
+    println("  [3/8 DEDUP]   cooldown blocked " + to_string(blocked) + " -> " + to_string(len(out)) + " survive")
+    return out
 }
 
-fn cycle_gate(total: int) {
-    println("  [4/8 GATE]    fire-vs-resolve classification (B-2.1) -> 0 fire-needed")
+fn cycle_gate(cands: array) {
+    let n = len(cands)
+    let mut fire_needed = 0
+    let mut i = 0
+    while i < n {
+        if cands[i].fire_needed { fire_needed = fire_needed + 1 }
+        i = i + 1
+    }
+    println("  [4/8 GATE]    fire-vs-resolve -> " + to_string(fire_needed) + " fire-needed, " + to_string(n - fire_needed) + " settled")
 }
 
-fn cycle_fire(total: int, fire_enabled: bool) {
+fn cycle_fire(cands: array, fire_enabled: bool) {
+    let n = len(cands)
+    let mut fire_count = 0
+    let mut i = 0
+    while i < n {
+        if cands[i].fire_needed { fire_count = fire_count + 1 }
+        i = i + 1
+    }
     if fire_enabled {
-        println("  [5/8 FIRE]    --fire enabled, 0 fires required (no uncertain candidates)")
+        println("  [5/8 FIRE]    --fire enabled, " + to_string(fire_count) + " fires required")
     } else {
-        println("  [5/8 FIRE]    --no-fire (default) — settled-branch only")
+        println("  [5/8 FIRE]    --no-fire (default) - " + to_string(fire_count) + " uncertain deferred")
     }
 }
 
-fn cycle_draft(total: int, dry_run: bool) {
+fn cycle_draft(cands: array, dry_run: bool) {
+    let n = len(cands)
     if dry_run {
-        println("  [6/8 DRAFT]   --dry-run: 0 candidates -> tmpdir (no inbox/* write)")
+        println("  [6/8 DRAFT]   --dry-run: " + to_string(n) + " candidate(s) -> tmpdir (no inbox/* write)")
     } else {
-        println("  [6/8 DRAFT]   inbox/{atlas,lens}_candidates/ (B-2.1)")
+        println("  [6/8 DRAFT]   " + to_string(n) + " candidate(s) -> inbox/{atlas,lens}_candidates/ (C-3 wires file emit)")
     }
 }
 
-fn cycle_audit() {
-    println("  [7/8 AUDIT]   chain / cooldown / goal_growth update (B-2.1)")
+fn cycle_audit(cands: array, cycle_no: int) {
+    let n = len(cands)
+    let mut i = 0
+    while i < n {
+        let c = cands[i]
+        loop_state_chain_append(cycle_no, c.slug, c.family, c.fire_needed)
+        loop_state_cooldown_add(c.slug, cycle_no)
+        loop_state_growth_bump("self_host", 1, cycle_no)
+        i = i + 1
+    }
+    let _ = loop_state_turn_inc()
+    println("  [7/8 AUDIT]   chain += " + to_string(n) + " · cooldown += " + to_string(n) + " · growth.self_host += " + to_string(n))
 }
 
-fn cycle_exhaust(total: int) -> bool {
-    let exhausted = total == 0
+fn cycle_exhaust(cands: array, cycle_no: int) -> bool {
+    let n = len(cands)
+    let cooldown_active = loop_state_cooldown_active_count(cycle_no)
+    let exhausted = (n == 0) && (cooldown_active == 0)
     if exhausted {
-        println("  [8/8 EXHAUST] 0 emit this cycle (need 3 consecutive + empty cooldown to terminate)")
+        loop_state_end_touch()
+        println("  [8/8 EXHAUST] 0 emit AND cooldown empty -> brainstorm exhausted, .end touched")
     } else {
-        println("  [8/8 EXHAUST] " + to_string(total) + " emit -> not exhausted, continue")
+        println("  [8/8 EXHAUST] " + to_string(n) + " emit, " + to_string(cooldown_active) + " cooldown active -> continue")
     }
     return exhausted
 }
 
 fn run_one_cycle(no_fire: bool, dry_run: bool) {
-    println("[loop] cycle 1 (B-2 shell — state files not yet wired)")
+    loop_state_init()
+    let cycle_no = loop_state_cycle_read() + 1
+    loop_state_cycle_write(cycle_no)
+    println("[loop] cycle " + to_string(cycle_no) + " (Phase C-2 + C-4 — atlas view + state I/O wired)")
     cycle_scan()
-    let total = cycle_lens()
-    let survive = cycle_dedup(total)
+    let cands = cycle_lens()
+    let survive = cycle_dedup(cands, cycle_no)
     cycle_gate(survive)
     cycle_fire(survive, no_fire == false)
     cycle_draft(survive, dry_run)
-    cycle_audit()
-    let _ = cycle_exhaust(survive)
+    cycle_audit(survive, cycle_no)
+    let _ = cycle_exhaust(survive, cycle_no)
 }
 
 fn main() {
