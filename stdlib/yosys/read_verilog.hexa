@@ -1541,6 +1541,66 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
             st = _ps_take(st)
             break
         }
+        // `if (...) [begin] body [end] [else [begin] body [end]]`
+        // inside always — honest gap (cond-mux + signal tracking is the
+        // yosys `proc` pass core, separate commit). Skip the statement.
+        if _ps_peek(st) == "if" {
+            st = _ps_take(st)
+            if _ps_peek(st) == "(" {
+                st = _ps_take(st)
+                let mut pdepth = 1
+                while st.pos < len(st.toks) {
+                    let pt = _ps_peek(st)
+                    if pt == "(" { pdepth = pdepth + 1; st = _ps_take(st); continue }
+                    if pt == ")" {
+                        pdepth = pdepth - 1
+                        if pdepth == 0 { st = _ps_take(st); break }
+                        st = _ps_take(st); continue
+                    }
+                    st = _ps_take(st)
+                }
+            }
+            if _ps_peek(st) == "begin" {
+                st = _ps_take(st)
+                let mut sdepth = 1
+                while st.pos < len(st.toks) {
+                    let st_ = _ps_peek(st)
+                    if st_ == "begin" { sdepth = sdepth + 1 }
+                    if st_ == "end" {
+                        sdepth = sdepth - 1
+                        if sdepth == 0 { st = _ps_take(st); break }
+                    }
+                    st = _ps_take(st)
+                }
+            } else {
+                while st.pos < len(st.toks) {
+                    if _ps_peek(st) == ";" { st = _ps_take(st); break }
+                    st = _ps_take(st)
+                }
+            }
+            if _ps_peek(st) == "else" {
+                st = _ps_take(st)
+                if _ps_peek(st) == "begin" {
+                    st = _ps_take(st)
+                    let mut sd2 = 1
+                    while st.pos < len(st.toks) {
+                        let et = _ps_peek(st)
+                        if et == "begin" { sd2 = sd2 + 1 }
+                        if et == "end" {
+                            sd2 = sd2 - 1
+                            if sd2 == 0 { st = _ps_take(st); break }
+                        }
+                        st = _ps_take(st)
+                    }
+                } else {
+                    while st.pos < len(st.toks) {
+                        if _ps_peek(st) == ";" { st = _ps_take(st); break }
+                        st = _ps_take(st)
+                    }
+                }
+            }
+            continue
+        }
         // `for ( GV = INIT ; COND ; GV = STEP ) begin BODY end` inside
         // always — static unroll while COND folds non-zero. BODY here
         // supports the same single-statement shape (assign) — nested
@@ -1634,6 +1694,69 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                 let mut bst = PState { toks: st.toks, pos: f_body_start, err: "" }
                 while bst.pos < f_body_end {
                     if f_has_begin == 1 && _ps_peek(bst) == "end" { break }
+                    // `if (...)` inside the for body — honest gap for this
+                    // commit: skip the statement (cond + then [+ else]).
+                    // Proper conditional emission needs the yosys `proc`
+                    // pass (cond-mux + signal tracking), separate commit.
+                    if _ps_peek(bst) == "if" {
+                        bst = _ps_take(bst)
+                        if _ps_peek(bst) == "(" {
+                            bst = _ps_take(bst)
+                            let mut pdepth = 1
+                            while bst.pos < len(bst.toks) {
+                                let pt = _ps_peek(bst)
+                                if pt == "(" { pdepth = pdepth + 1; bst = _ps_take(bst); continue }
+                                if pt == ")" {
+                                    pdepth = pdepth - 1
+                                    if pdepth == 0 { bst = _ps_take(bst); break }
+                                    bst = _ps_take(bst); continue
+                                }
+                                bst = _ps_take(bst)
+                            }
+                        }
+                        // skip body — `begin ... end` or single statement
+                        if _ps_peek(bst) == "begin" {
+                            bst = _ps_take(bst)
+                            let mut sdepth = 1
+                            while bst.pos < len(bst.toks) {
+                                let st_ = _ps_peek(bst)
+                                if st_ == "begin" { sdepth = sdepth + 1 }
+                                if st_ == "end" {
+                                    sdepth = sdepth - 1
+                                    if sdepth == 0 { bst = _ps_take(bst); break }
+                                }
+                                bst = _ps_take(bst)
+                            }
+                        } else {
+                            while bst.pos < len(bst.toks) {
+                                if _ps_peek(bst) == ";" { bst = _ps_take(bst); break }
+                                bst = _ps_take(bst)
+                            }
+                        }
+                        // optional `else`
+                        if _ps_peek(bst) == "else" {
+                            bst = _ps_take(bst)
+                            if _ps_peek(bst) == "begin" {
+                                bst = _ps_take(bst)
+                                let mut sd2 = 1
+                                while bst.pos < len(bst.toks) {
+                                    let et = _ps_peek(bst)
+                                    if et == "begin" { sd2 = sd2 + 1 }
+                                    if et == "end" {
+                                        sd2 = sd2 - 1
+                                        if sd2 == 0 { bst = _ps_take(bst); break }
+                                    }
+                                    bst = _ps_take(bst)
+                                }
+                            } else {
+                                while bst.pos < len(bst.toks) {
+                                    if _ps_peek(bst) == ";" { bst = _ps_take(bst); break }
+                                    bst = _ps_take(bst)
+                                }
+                            }
+                        }
+                        continue
+                    }
                     let bqb = _ps_peek(bst)
                     bst = _ps_take(bst)
                     let mut bq = bqb
