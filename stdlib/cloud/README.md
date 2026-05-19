@@ -74,9 +74,13 @@ cloud_run_opts(host, opts, ["python3", "train.py"])
 runpod_terminate(api_key, pod.pod_id)
 ```
 
+Each `runpod_*` call tries the **runpodctl CLI first** (`pod create` /
+`pod get` / `pod delete`) and falls back to the GraphQL API on CLI absence
+or failure. Set `RUNPODCTL_DISABLE=1` to force the API path.
+
 Live e2e smoke (`stdlib/cloud/e2e_smoke.hexa`): pod create →
 wait_ssh → echo → copy-to → sha-verify → copy-from → terminate.
-~38 seconds on an A100, ~$0.10. Run with `hexa run` (requires
+~38–46 seconds on an A100, ~$0.10. Run with `hexa run` (requires
 `secret get runpod.api_key` and `~/.ssh/id_ed25519.pub`).
 
 `CloudResult` fields: `ok`, `exit_code`, `pid`, `stdout_`, `message`.
