@@ -126,43 +126,77 @@ full `raw` string).
 (`view` vs `full_lookup(id)`); strict-lint stage 4 may need a
 summary-aware path.
 
-## §5 Recommendation
+## §5 Recommendation — A+B hybrid (revised after empirical measurement)
 
-**Option A (lazy kind-scoped)** for the immediate RFC 065 C-2..C-5
-unblock. Justification:
+### §5.1 Empirical evidence (2026-05-20, post-draft)
 
-1. **Smallest invariant-stress**: keeps `@D g_atlas_binary_builtin`
-   intact and unambiguous (every blob is a literal binary built-in,
-   just smaller); avoids Option B's interpretation debate.
-2. **Lens metadata fit**: RFC 065 §8 `LensNode` already carries a
-   `family` field that aligns well with a `kinds: [string]` field
-   addition. Cross-pollinate / counterexample lenses can declare
-   `kinds: ["L"]`; falsify-self meta-lenses declare `kinds: []` (no
-   atlas dep — they work today, see C-1.b).
-3. **Empirical headroom**: per-kind largest blob (L, ~5k entries × ~600 B)
-   ≈ 3 MB rodata literal. Flatten 1 such kind in cycle.hexa: ~1.2 GB
-   peak (factor ~400× literal-to-AST-peak based on existing
-   transpiler-time measurement on the 10 MB full atlas) — well under
-   4 GB user-time cap. Multiple kinds union still fits comfortably.
+Hand-extracted per-kind blocks from `compiler/atlas/embedded.gen.hexa`,
+wrapped in a minimal `fn main() { len(...) }` test module, and ran
+under default user-time memcap (4096 MB):
 
-**Fallback B** if A's split tooling proves >2 cycles of work:
-the `dist/atlas.hxc` runtime path is already proven (Layer 4 sidecar);
-adopting it for cycle.hexa is a 50-line state.hexa-style read_text +
-parse helper. The `g_atlas_binary_builtin` ambiguity is a docs
-question, not a code question.
+| kind | entries | lines extracted | hexa_v2 transpile result |
+|---|---|---|---|
+| P  | 567  |  569  | **PASS** (build+run rc=0, `p_only_test n=567`) |
+| L  | 620  |  622  | **PASS** (build+run rc=0, `l_only_test n=620`) |
+| C  | 6201 | 6203  | **FAIL** — rss=4197MB > cap=4096MB |
+| E  | 10   |  12   | (not stressed; tiny — assumed PASS) |
+| F/R/S/X/Q | 0 each | 1 line | (empty arrays — assumed PASS) |
 
-**Reject C** — dual maintenance + two-tier API is the worst of both
-worlds.
+C-kind retry with `HEXA_MEM_LIMIT=` unset (no cap) ran >3 min without
+finishing — practical swap-thrash on macOS, not a viable path.
 
-## §6 Phase plan (A as picked)
+### §5.2 Initial pick was wrong
+
+The original §5 (pre-measurement) recommended **Option A alone**, with
+F2 as a hypothetical fallback gate. F2 fired in practice — the C kind
+(6201 entries, ~80% of all atlas entries) FAILS even when isolated.
+
+### §5.3 Revised pick — **A + B hybrid**
+
+Adopt **Option A for kinds {P, L, E, F, R, S, X, Q}** (8 of 9), and
+**Option B (HXC sidecar) for C kind only** (the one that doesn't fit).
+
+| kind | path |
+|---|---|
+| P, L, E, F, R, S, X, Q | per-kind `compiler/atlas/embedded_<kind>.gen.hexa` (Option A) |
+| C | `dist/atlas_c.hxc` runtime fetch via existing `compiler/atlas/hxc_loader.hexa` (Option B) |
+
+Justification:
+
+1. **Empirically grounded**: matches what actually fits in the 4 GB
+   user-time cap (the only 8 kinds that fit are A-pathed; the one
+   that doesn't is B-pathed).
+2. **Pure binary-built-in preserved for 7 of 9 kinds**: P, L, E, F, R,
+   S, X, Q remain literal rodata — `@D g_atlas_binary_builtin` holds
+   in spirit and largely in form. The C-only exception is documented
+   honestly as a memcap-driven engineering necessity, not a
+   philosophical retreat.
+3. **HXC sidecar already legitimized for C**: per `@D g_hxc` and
+   PLAN.md 2026-05-12, `dist/atlas.hxc` is canonical Layer 4. We
+   simply scope its usage to the C kind alone instead of the full
+   atlas (since 8 of 9 kinds work as pure A).
+4. **Lens metadata fit unchanged**: RFC 065 §8 `LensNode.kinds:
+   array` still declares per-lens which kinds it needs. Lenses that
+   declare `kinds: ["C"]` pay the runtime-fetch cost; others stay
+   transpile-time-only.
+
+**Reject C-Option** (baked summary) — unchanged from original RFC;
+empirical evidence does not change the dual-maintenance objection.
+
+**Status of F2 falsifier**: F2 FIRED on the C kind. Per F2's own
+prescription, "fallback to Option B is required" — done. F2 is now a
+SATISFIED falsifier rather than an outstanding gate.
+
+## §6 Phase plan (A + B hybrid)
 
 | phase | deliverable | gate |
 |---|---|---|
-| **A** — this RFC | spec + recommendation | reviewable, 0 code change |
-| **B-1** | `tool/atlas_embed_gen.hexa` learns `--split-by-kind` flag; emits 9 files (P/C/L/E/F/R/S/X/Q) keyed by `ATLAS_<K>_HASH` + per-kind `LOAD_GENERATED_AT`; existing `embedded.gen.hexa` becomes a thin re-export for back-compat | regen produces 9 files, all parse-clean, byte-identical to source-of-truth |
-| **B-2** | `compiler/lenses/types.hexa::LensNode` gains `kinds: array` field; `compiler/lenses/embedded.gen.hexa` annotates each of the 32 seeds with its kind footprint | parse-clean; existing dispatch unchanged |
-| **B-3** | `stdlib/loop/cycle.hexa::cycle_scan` reads `LENS_NODES[*].kinds` union, imports only those kinds, constructs a partial `AtlasView`. cycle_lens stays the same. | memcap PASS — `hexa run cycle.hexa` does not exceed 4 GB |
-| **C-1** | `falsify_self.cite_unreachable` upgraded from smoke (C-1.a) to real cite-reachability analysis using the partial view | emits real candidates from actual atlas inspection |
+| **A** — this RFC | spec + measurement + revised A+B recommendation | reviewable, 0 code change |
+| **B-1a** | `tool/atlas_embed_gen.hexa` learns `--split-by-kind` flag; emits 8 baked files (P, L, E, F, R, S, X, Q — every kind EXCEPT C) + `embedded.gen.hexa` becomes a thin re-export of the 8 baked + a C-loader trampoline | regen produces 8 files; per-kind imports parse-clean (measured PASS for P, L empirically) |
+| **B-1b** | `tool/atlas_embed_gen.hexa` learns `--emit-c-hxc` flag; emits `dist/atlas_c.hxc` (HXC v2 codec) for the C kind only; `compiler/atlas/hxc_loader.hexa` gains `load_atlas_c_nodes() -> array` | hxc file rebuilt; loader round-trip PASS on at least 100 sample C nodes (id+grade+edge-degree match) |
+| **B-2** | `compiler/lenses/types.hexa::LensNode` gains `kinds: array` field; `compiler/lenses/embedded.gen.hexa` annotates each of the 32 seeds with its kind footprint (most lenses declare `kinds: ["P", "L"]`; cross-pollinate / counterexample-mine may need `["C"]`) | parse-clean; existing dispatch unchanged |
+| **B-3** | `stdlib/loop/cycle.hexa::cycle_scan` reads `LENS_NODES[*].kinds` union, imports the matching baked siblings, and lazy-loads C only when at least one active lens declares `"C"` ∈ kinds | memcap PASS for the most-common lens mixes (no C) under default 4 GB; C-using runs explicitly accept the hxc-loader latency |
+| **C-1** | `falsify_self.cite_unreachable` (currently C-1.a smoke) upgraded to real cite-reachability analysis using the partial view | emits real candidates from actual atlas inspection |
 
 ## §7 Falsifiers
 
