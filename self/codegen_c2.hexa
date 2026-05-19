@@ -5254,6 +5254,25 @@ fn gen2_expr(node) {
     }
 
     if k == "Index" {
+        // arr[a..b] / arr[a..=b] — range-slice. The parser nests a Range
+        // node as the index; lower it to hexa_array_slice (exclusive end,
+        // +1 for the inclusive `..=` form) instead of hexa_index_get, which
+        // would otherwise be handed an int-array key and crash. Open ends
+        // (arr[..b] / arr[a..]) default to 0 / len(arr).
+        let idx = node.right
+        if type_of(idx) != "string" && idx.kind == "Range" {
+            let arr_c = gen2_expr(node.left)
+            let mut s_c = "hexa_int(0)"
+            if type_of(idx.left) != "string" { s_c = gen2_expr(idx.left) }
+            let mut e_c = "hexa_int(hexa_len(" + arr_c + "))"
+            if type_of(idx.right) != "string" {
+                e_c = gen2_expr(idx.right)
+                if idx.value == "inclusive" {
+                    e_c = "hexa_int(HX_INT(" + e_c + ") + 1)"
+                }
+            }
+            return "hexa_array_slice(" + arr_c + ", " + s_c + ", " + e_c + ")"
+        }
         return "hexa_index_get(" + gen2_expr(node.left) + ", " + gen2_expr(node.right) + ")"
     }
 

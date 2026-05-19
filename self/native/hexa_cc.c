@@ -11471,6 +11471,7 @@ static HexaVal __hexa_codegen_c2_sl_1745;
 static HexaVal __hexa_codegen_c2_sl_1746;
 static HexaVal __hexa_codegen_c2_sl_1747;
 static HexaVal __hexa_codegen_c2_sl_1748;
+static HexaVal __hexa_codegen_c2_sl_1749;
 static void __hexa_codegen_c2_strlit_init_0(void) {
     __hexa_codegen_c2_sl_0 = hexa_str("TAG_INT");
     __hexa_codegen_c2_sl_1 = hexa_str("TAG_FLOAT");
@@ -13011,222 +13012,223 @@ static void __hexa_codegen_c2_strlit_init_3(void) {
     __hexa_codegen_c2_sl_1530 = hexa_str("hexa_array_push(__arr_lit, ");
     __hexa_codegen_c2_sl_1531 = hexa_str("); ");
     __hexa_codegen_c2_sl_1532 = hexa_str("__arr_lit; })");
-    __hexa_codegen_c2_sl_1533 = hexa_str("EnumPath");
-    __hexa_codegen_c2_sl_1534 = hexa_str("hexa_array_push(hexa_array_push(hexa_array_new(), ");
-    __hexa_codegen_c2_sl_1535 = hexa_str("(hexa_truthy(");
-    __hexa_codegen_c2_sl_1536 = hexa_str("Lambda");
-    __hexa_codegen_c2_sl_1537 = hexa_str("Tuple");
-    __hexa_codegen_c2_sl_1538 = hexa_str("TupleLit");
-    __hexa_codegen_c2_sl_1539 = hexa_str("MapLit");
-    __hexa_codegen_c2_sl_1540 = hexa_str("hexa_map_new()");
-    __hexa_codegen_c2_sl_1541 = hexa_str("NegFloat");
-    __hexa_codegen_c2_sl_1542 = hexa_str("Wildcard");
-    __hexa_codegen_c2_sl_1543 = hexa_str("/* wildcard */");
-    __hexa_codegen_c2_sl_1544 = hexa_str("Slice");
-    __hexa_codegen_c2_sl_1545 = hexa_str("hexa_int(0)");
-    __hexa_codegen_c2_sl_1546 = hexa_str("hexa_range_array(");
-    __hexa_codegen_c2_sl_1547 = hexa_str("Await");
-    __hexa_codegen_c2_sl_1548 = hexa_str("AwaitExpr");
-    __hexa_codegen_c2_sl_1549 = hexa_str("hexa_await_unwrap(");
-    __hexa_codegen_c2_sl_1550 = hexa_str("[codegen_c2] ERROR: unhandled expression kind: ");
-    __hexa_codegen_c2_sl_1551 = hexa_str("(fprintf(stderr, \"CODEGEN ERROR: unhandled expr kind: ");
-    __hexa_codegen_c2_sl_1552 = hexa_str("    // [escape-analysis] stack-promoted: ");
-    __hexa_codegen_c2_sl_1553 = hexa_str(" = hexa_map_new(); // stack-eligible\n");
-    __hexa_codegen_c2_sl_1554 = hexa_str("\", hexa_void());\n");
-    __hexa_codegen_c2_sl_1555 = hexa_str("    // [escape-analysis] stack array: ");
-    __hexa_codegen_c2_sl_1556 = hexa_str(" (size hint: ");
-    __hexa_codegen_c2_sl_1557 = hexa_str(")\n");
-    __hexa_codegen_c2_sl_1558 = hexa_str(" = hexa_array_new();\n");
-    __hexa_codegen_c2_sl_1559 = hexa_str("    // [vectorize] SIMD preamble (width=");
-    __hexa_codegen_c2_sl_1560 = hexa_str("    int64_t __simd_len = hexa_array_len(");
-    __hexa_codegen_c2_sl_1561 = hexa_str("    int64_t __simd_vec_iters = __simd_len / ");
-    __hexa_codegen_c2_sl_1562 = hexa_str("    int64_t __simd_remainder = __simd_len % ");
-    __hexa_codegen_c2_sl_1563 = hexa_str("    // [vectorize] SIMD loop: ");
-    __hexa_codegen_c2_sl_1564 = hexa_str("[i] = ");
-    __hexa_codegen_c2_sl_1565 = hexa_str("[i] ");
-    __hexa_codegen_c2_sl_1566 = hexa_str(" scalar\n");
-    __hexa_codegen_c2_sl_1567 = hexa_str("    for (int64_t __vi = 0; __vi < __simd_vec_iters; __vi++) {\n");
-    __hexa_codegen_c2_sl_1568 = hexa_str("__vi * ");
-    __hexa_codegen_c2_sl_1569 = hexa_str(" + ");
-    __hexa_codegen_c2_sl_1570 = hexa_str("        hexa_array_set(");
-    __hexa_codegen_c2_sl_1571 = hexa_str(", hexa_int(HX_INT(hexa_array_get(");
-    __hexa_codegen_c2_sl_1572 = hexa_str(")) ");
-    __hexa_codegen_c2_sl_1573 = hexa_str(")));\n");
-    __hexa_codegen_c2_sl_1574 = hexa_str("    // [vectorize] scalar remainder\n");
-    __hexa_codegen_c2_sl_1575 = hexa_str("    for (int64_t __ri = __simd_vec_iters * ");
-    __hexa_codegen_c2_sl_1576 = hexa_str("; __ri < __simd_len; __ri++) {\n");
-    __hexa_codegen_c2_sl_1577 = hexa_str(", __ri, hexa_int(HX_INT(hexa_array_get(");
-    __hexa_codegen_c2_sl_1578 = hexa_str(", __ri)) ");
-    __hexa_codegen_c2_sl_1579 = hexa_str("// [soa] ");
-    __hexa_codegen_c2_sl_1580 = hexa_str(" — field-parallel layout\n");
-    __hexa_codegen_c2_sl_1581 = hexa_str("_soa_new(HexaVal __count) {\n");
-    __hexa_codegen_c2_sl_1582 = hexa_str("    HexaVal __soa = hexa_map_new();\n");
-    __hexa_codegen_c2_sl_1583 = hexa_str("    __soa = hexa_map_set(__soa, \"");
-    __hexa_codegen_c2_sl_1584 = hexa_str("s\", hexa_array_new());\n");
-    __hexa_codegen_c2_sl_1585 = hexa_str("    return __soa;\n");
-    __hexa_codegen_c2_sl_1586 = hexa_str("Val");
-    __hexa_codegen_c2_sl_1587 = hexa_str(") {\n    return hexa_valstruct_new_v(");
-    __hexa_codegen_c2_sl_1588 = hexa_str(");\n}\n");
-    __hexa_codegen_c2_sl_1589 = hexa_str("    return hexa_struct_pack_map(\"");
-    __hexa_codegen_c2_sl_1590 = hexa_str("\", 0, (const char* const*)0, (const HexaVal*)0);\n");
-    __hexa_codegen_c2_sl_1591 = hexa_str("    static const char* const _k[] = {");
-    __hexa_codegen_c2_sl_1592 = hexa_str("};\n");
-    __hexa_codegen_c2_sl_1593 = hexa_str("    HexaVal _v[] = {");
-    __hexa_codegen_c2_sl_1594 = hexa_str(", _k, _v);\n");
-    __hexa_codegen_c2_sl_1595 = hexa_str("    // @cache_line: 64B aligned\n");
-    __hexa_codegen_c2_sl_1596 = hexa_str("    HexaVal __s __attribute__((aligned(64))) = hexa_map_new();\n");
-    __hexa_codegen_c2_sl_1597 = hexa_str("    __s = hexa_map_set(__s, \"__type__\", hexa_str(\"");
-    __hexa_codegen_c2_sl_1598 = hexa_str("\"));\n");
-    __hexa_codegen_c2_sl_1599 = hexa_str("    __s = hexa_map_set(__s, \"__cache_line__\", hexa_int(64));\n");
-    __hexa_codegen_c2_sl_1600 = hexa_str("    __s = hexa_map_set(__s, \"");
-    __hexa_codegen_c2_sl_1601 = hexa_str("    return __s;\n}\n");
-    __hexa_codegen_c2_sl_1602 = hexa_str("__builtin_expect(hexa_truthy(");
-    __hexa_codegen_c2_sl_1603 = hexa_str("), 1)");
-    __hexa_codegen_c2_sl_1604 = hexa_str("), 0)");
-    __hexa_codegen_c2_sl_1605 = hexa_str("((1ULL << 1) - 1)");
-    __hexa_codegen_c2_sl_1606 = hexa_str("#define ");
-    __hexa_codegen_c2_sl_1607 = hexa_str("_get_");
-    __hexa_codegen_c2_sl_1608 = hexa_str("(v) ((HX_INT(v) >> ");
-    __hexa_codegen_c2_sl_1609 = hexa_str(") & ");
-    __hexa_codegen_c2_sl_1610 = hexa_str("_set_");
-    __hexa_codegen_c2_sl_1611 = hexa_str("(v, b) ((v) = HX_MAKE_INT((HX_INT(v) & ~(");
-    __hexa_codegen_c2_sl_1612 = hexa_str(" << ");
-    __hexa_codegen_c2_sl_1613 = hexa_str(")) | (((b) & ");
-    __hexa_codegen_c2_sl_1614 = hexa_str(") << ");
-    __hexa_codegen_c2_sl_1615 = hexa_str("))))\n");
-    __hexa_codegen_c2_sl_1616 = hexa_str("// enum ");
-    __hexa_codegen_c2_sl_1617 = hexa_str(" variants, ");
-    __hexa_codegen_c2_sl_1618 = hexa_str(" tag bit(s))\n");
-    __hexa_codegen_c2_sl_1619 = hexa_str("// @compact: tag fits in ");
-    __hexa_codegen_c2_sl_1620 = hexa_str(" bit(s), mask=0x");
-    __hexa_codegen_c2_sl_1621 = hexa_str("// @payload: enum ");
-    __hexa_codegen_c2_sl_1622 = hexa_str(" carries single-field payload variants — runtime form is HexaVal array [tag, payload]\n");
-    __hexa_codegen_c2_sl_1623 = hexa_str(" hexa_int(");
-    __hexa_codegen_c2_sl_1624 = hexa_str("01");
-    __hexa_codegen_c2_sl_1625 = hexa_str("03");
-    __hexa_codegen_c2_sl_1626 = hexa_str("07");
-    __hexa_codegen_c2_sl_1627 = hexa_str("0f");
-    __hexa_codegen_c2_sl_1628 = hexa_str("1f");
-    __hexa_codegen_c2_sl_1629 = hexa_str("3f");
-    __hexa_codegen_c2_sl_1630 = hexa_str("7f");
-    __hexa_codegen_c2_sl_1631 = hexa_str("ff");
-    __hexa_codegen_c2_sl_1632 = hexa_str("HexaVal __match_val = ");
-    __hexa_codegen_c2_sl_1633 = hexa_str("__match_val");
-    __hexa_codegen_c2_sl_1634 = hexa_str("if (");
-    __hexa_codegen_c2_sl_1635 = hexa_str(" else if (");
-    __hexa_codegen_c2_sl_1636 = hexa_str(" = hexa_index_get(__match_val, hexa_int(1));\n");
-    __hexa_codegen_c2_sl_1637 = hexa_str("hexa_truthy(hexa_eq(");
-    __hexa_codegen_c2_sl_1638 = hexa_str(", hexa_int(");
-    __hexa_codegen_c2_sl_1639 = hexa_str(", hexa_float(");
-    __hexa_codegen_c2_sl_1640 = hexa_str(", hexa_str(\"");
-    __hexa_codegen_c2_sl_1641 = hexa_str("\")))");
-    __hexa_codegen_c2_sl_1642 = hexa_str(", hexa_bool(1)))");
-    __hexa_codegen_c2_sl_1643 = hexa_str(", hexa_bool(0)))");
-    __hexa_codegen_c2_sl_1644 = hexa_str("(HX_IS_ARRAY(");
-    __hexa_codegen_c2_sl_1645 = hexa_str(") && hexa_truthy(hexa_eq(hexa_index_get(");
-    __hexa_codegen_c2_sl_1646 = hexa_str(", hexa_int(0)), ");
-    __hexa_codegen_c2_sl_1647 = hexa_str("({ HexaVal ");
-    __hexa_codegen_c2_sl_1648 = hexa_str(" = hexa_index_get(");
-    __hexa_codegen_c2_sl_1649 = hexa_str(", hexa_int(1)); (");
-    __hexa_codegen_c2_sl_1650 = hexa_str(" ? ");
-    __hexa_codegen_c2_sl_1651 = hexa_str(" : hexa_void())");
-    __hexa_codegen_c2_sl_1652 = hexa_str("    return hexa_void();\n}\n\n");
-    __hexa_codegen_c2_sl_1653 = hexa_str("__hexa_sl_");
-    __hexa_codegen_c2_sl_1654 = hexa_str("asinh");
-    __hexa_codegen_c2_sl_1655 = hexa_str("acosh");
-    __hexa_codegen_c2_sl_1656 = hexa_str("atanh");
-    __hexa_codegen_c2_sl_1657 = hexa_str("_abs_f");
-    __hexa_codegen_c2_sl_1658 = hexa_str("_ln2");
-    __hexa_codegen_c2_sl_1659 = hexa_str("_log2_f");
-    __hexa_codegen_c2_sl_1660 = hexa_str("_sqrt_f");
-    __hexa_codegen_c2_sl_1661 = hexa_str("_pi_const");
-    __hexa_codegen_c2_sl_1662 = hexa_str("hexa_to_float");
-    __hexa_codegen_c2_sl_1663 = hexa_str("hexa_truthy(");
-    __hexa_codegen_c2_sl_1664 = hexa_str("(HX_INT(");
-    __hexa_codegen_c2_sl_1665 = hexa_str("(HX_FLOAT(");
-    __hexa_codegen_c2_sl_1666 = hexa_str("HX_BOOL(hexa_cmp_lt(");
-    __hexa_codegen_c2_sl_1667 = hexa_str("HX_BOOL(hexa_cmp_gt(");
-    __hexa_codegen_c2_sl_1668 = hexa_str("HX_BOOL(hexa_cmp_le(");
-    __hexa_codegen_c2_sl_1669 = hexa_str("HX_BOOL(hexa_cmp_ge(");
-    __hexa_codegen_c2_sl_1670 = hexa_str(") == HX_INT(");
-    __hexa_codegen_c2_sl_1671 = hexa_str(") == HX_FLOAT(");
-    __hexa_codegen_c2_sl_1672 = hexa_str(") != HX_INT(");
-    __hexa_codegen_c2_sl_1673 = hexa_str(") != HX_FLOAT(");
-    __hexa_codegen_c2_sl_1674 = hexa_str("(!hexa_truthy(hexa_eq(");
-    __hexa_codegen_c2_sl_1675 = hexa_str(" && ");
-    __hexa_codegen_c2_sl_1676 = hexa_str(" || ");
-    __hexa_codegen_c2_sl_1677 = hexa_str("(!");
-    __hexa_codegen_c2_sl_1678 = hexa_str("ForInStmt");
-    __hexa_codegen_c2_sl_1679 = hexa_str("__hexa_lambda_");
-    __hexa_codegen_c2_sl_1680 = hexa_str("HexaVal __env");
-    __hexa_codegen_c2_sl_1681 = hexa_str(" = hexa_array_get(__env, ");
-    __hexa_codegen_c2_sl_1682 = hexa_str("hexa_closure_new((void*)&");
-    __hexa_codegen_c2_sl_1683 = hexa_str(", hexa_array_new())");
-    __hexa_codegen_c2_sl_1684 = hexa_str("#include \"runtime.h\"\n\n");
-    __hexa_codegen_c2_sl_1685 = hexa_str("HEXA_CERT");
-    __hexa_codegen_c2_sl_1686 = hexa_str("Add");
-    __hexa_codegen_c2_sl_1687 = hexa_str("Sub");
-    __hexa_codegen_c2_sl_1688 = hexa_str("Mul");
-    __hexa_codegen_c2_sl_1689 = hexa_str("Div");
-    __hexa_codegen_c2_sl_1690 = hexa_str("Mod");
-    __hexa_codegen_c2_sl_1691 = hexa_str("Neg");
-    __hexa_codegen_c2_sl_1692 = hexa_str("issue");
-    __hexa_codegen_c2_sl_1693 = hexa_str("Load");
-    __hexa_codegen_c2_sl_1694 = hexa_str("Store");
-    __hexa_codegen_c2_sl_1695 = hexa_str("Alloc");
-    __hexa_codegen_c2_sl_1696 = hexa_str("Free");
-    __hexa_codegen_c2_sl_1697 = hexa_str("Copy");
-    __hexa_codegen_c2_sl_1698 = hexa_str("Move");
-    __hexa_codegen_c2_sl_1699 = hexa_str("Jump");
-    __hexa_codegen_c2_sl_1700 = hexa_str("Branch");
-    __hexa_codegen_c2_sl_1701 = hexa_str("Return");
-    __hexa_codegen_c2_sl_1702 = hexa_str("Phi");
-    __hexa_codegen_c2_sl_1703 = hexa_str("Switch");
-    __hexa_codegen_c2_sl_1704 = hexa_str("Assert");
-    __hexa_codegen_c2_sl_1705 = hexa_str("Assume");
-    __hexa_codegen_c2_sl_1706 = hexa_str("propagate");
-    __hexa_codegen_c2_sl_1707 = hexa_str("Invariant");
-    __hexa_codegen_c2_sl_1708 = hexa_str("LifetimeStart");
-    __hexa_codegen_c2_sl_1709 = hexa_str("LifetimeEnd");
-    __hexa_codegen_c2_sl_1710 = hexa_str("OwnershipTransfer");
-    __hexa_codegen_c2_sl_1711 = hexa_str("verify");
-    __hexa_codegen_c2_sl_1712 = hexa_str("bounded");
-    __hexa_codegen_c2_sl_1713 = hexa_str("monotone");
-    __hexa_codegen_c2_sl_1714 = hexa_str("nonneg");
-    __hexa_codegen_c2_sl_1715 = hexa_str("no_div_zero");
-    __hexa_codegen_c2_sl_1716 = hexa_str("mod_nonneg");
-    __hexa_codegen_c2_sl_1717 = hexa_str("sign_flip");
-    __hexa_codegen_c2_sl_1718 = hexa_str("no_alias");
-    __hexa_codegen_c2_sl_1719 = hexa_str("no_leak");
-    __hexa_codegen_c2_sl_1720 = hexa_str("lifetime_valid");
-    __hexa_codegen_c2_sl_1721 = hexa_str("loop_term");
-    __hexa_codegen_c2_sl_1722 = hexa_str("assert_holds");
-    __hexa_codegen_c2_sl_1723 = hexa_str("invariant_holds");
-    __hexa_codegen_c2_sl_1724 = hexa_str("CallExpr");
-    __hexa_codegen_c2_sl_1725 = hexa_str("module");
-    __hexa_codegen_c2_sl_1726 = hexa_str("ISSUED");
-    __hexa_codegen_c2_sl_1727 = hexa_str("{\"predicate\":\"");
-    __hexa_codegen_c2_sl_1728 = hexa_str("\",\"target\":\"");
-    __hexa_codegen_c2_sl_1729 = hexa_str("\",\"opcode\":\"");
-    __hexa_codegen_c2_sl_1730 = hexa_str("\",\"bucket\":\"");
-    __hexa_codegen_c2_sl_1731 = hexa_str("\",\"status\":\"");
-    __hexa_codegen_c2_sl_1732 = hexa_str("\",\"hash\":");
-    __hexa_codegen_c2_sl_1733 = hexa_str("mkdir -p .certificates");
-    __hexa_codegen_c2_sl_1734 = hexa_str(".certificates/");
-    __hexa_codegen_c2_sl_1735 = hexa_str(".cert.jsonl");
-    __hexa_codegen_c2_sl_1736 = hexa_str("[hexa_cert] wrote ");
-    __hexa_codegen_c2_sl_1737 = hexa_str(" cert(s) → ");
-    __hexa_codegen_c2_sl_1738 = hexa_str(":");
-    __hexa_codegen_c2_sl_1739 = hexa_str(")->");
-    __hexa_codegen_c2_sl_1740 = hexa_str(" @symbol=");
-    __hexa_codegen_c2_sl_1741 = hexa_str(" @link=");
-    __hexa_codegen_c2_sl_1742 = hexa_str("let_mut ");
-    __hexa_codegen_c2_sl_1743 = hexa_str("let ");
-    __hexa_codegen_c2_sl_1744 = hexa_str(":_");
-    __hexa_codegen_c2_sl_1745 = hexa_str("hxi v0");
-    __hexa_codegen_c2_sl_1746 = hexa_str("src_bytes ");
-    __hexa_codegen_c2_sl_1747 = hexa_str("enum ");
-    __hexa_codegen_c2_sl_1748 = hexa_str("comptime ");
+    __hexa_codegen_c2_sl_1533 = hexa_str("hexa_int(0)");
+    __hexa_codegen_c2_sl_1534 = hexa_str(") + 1)");
+    __hexa_codegen_c2_sl_1535 = hexa_str("EnumPath");
+    __hexa_codegen_c2_sl_1536 = hexa_str("hexa_array_push(hexa_array_push(hexa_array_new(), ");
+    __hexa_codegen_c2_sl_1537 = hexa_str("(hexa_truthy(");
+    __hexa_codegen_c2_sl_1538 = hexa_str("Lambda");
+    __hexa_codegen_c2_sl_1539 = hexa_str("Tuple");
+    __hexa_codegen_c2_sl_1540 = hexa_str("TupleLit");
+    __hexa_codegen_c2_sl_1541 = hexa_str("MapLit");
+    __hexa_codegen_c2_sl_1542 = hexa_str("hexa_map_new()");
+    __hexa_codegen_c2_sl_1543 = hexa_str("NegFloat");
+    __hexa_codegen_c2_sl_1544 = hexa_str("Wildcard");
+    __hexa_codegen_c2_sl_1545 = hexa_str("/* wildcard */");
+    __hexa_codegen_c2_sl_1546 = hexa_str("Slice");
+    __hexa_codegen_c2_sl_1547 = hexa_str("hexa_range_array(");
+    __hexa_codegen_c2_sl_1548 = hexa_str("Await");
+    __hexa_codegen_c2_sl_1549 = hexa_str("AwaitExpr");
+    __hexa_codegen_c2_sl_1550 = hexa_str("hexa_await_unwrap(");
+    __hexa_codegen_c2_sl_1551 = hexa_str("[codegen_c2] ERROR: unhandled expression kind: ");
+    __hexa_codegen_c2_sl_1552 = hexa_str("(fprintf(stderr, \"CODEGEN ERROR: unhandled expr kind: ");
+    __hexa_codegen_c2_sl_1553 = hexa_str("    // [escape-analysis] stack-promoted: ");
+    __hexa_codegen_c2_sl_1554 = hexa_str(" = hexa_map_new(); // stack-eligible\n");
+    __hexa_codegen_c2_sl_1555 = hexa_str("\", hexa_void());\n");
+    __hexa_codegen_c2_sl_1556 = hexa_str("    // [escape-analysis] stack array: ");
+    __hexa_codegen_c2_sl_1557 = hexa_str(" (size hint: ");
+    __hexa_codegen_c2_sl_1558 = hexa_str(")\n");
+    __hexa_codegen_c2_sl_1559 = hexa_str(" = hexa_array_new();\n");
+    __hexa_codegen_c2_sl_1560 = hexa_str("    // [vectorize] SIMD preamble (width=");
+    __hexa_codegen_c2_sl_1561 = hexa_str("    int64_t __simd_len = hexa_array_len(");
+    __hexa_codegen_c2_sl_1562 = hexa_str("    int64_t __simd_vec_iters = __simd_len / ");
+    __hexa_codegen_c2_sl_1563 = hexa_str("    int64_t __simd_remainder = __simd_len % ");
+    __hexa_codegen_c2_sl_1564 = hexa_str("    // [vectorize] SIMD loop: ");
+    __hexa_codegen_c2_sl_1565 = hexa_str("[i] = ");
+    __hexa_codegen_c2_sl_1566 = hexa_str("[i] ");
+    __hexa_codegen_c2_sl_1567 = hexa_str(" scalar\n");
+    __hexa_codegen_c2_sl_1568 = hexa_str("    for (int64_t __vi = 0; __vi < __simd_vec_iters; __vi++) {\n");
+    __hexa_codegen_c2_sl_1569 = hexa_str("__vi * ");
+    __hexa_codegen_c2_sl_1570 = hexa_str(" + ");
+    __hexa_codegen_c2_sl_1571 = hexa_str("        hexa_array_set(");
+    __hexa_codegen_c2_sl_1572 = hexa_str(", hexa_int(HX_INT(hexa_array_get(");
+    __hexa_codegen_c2_sl_1573 = hexa_str(")) ");
+    __hexa_codegen_c2_sl_1574 = hexa_str(")));\n");
+    __hexa_codegen_c2_sl_1575 = hexa_str("    // [vectorize] scalar remainder\n");
+    __hexa_codegen_c2_sl_1576 = hexa_str("    for (int64_t __ri = __simd_vec_iters * ");
+    __hexa_codegen_c2_sl_1577 = hexa_str("; __ri < __simd_len; __ri++) {\n");
+    __hexa_codegen_c2_sl_1578 = hexa_str(", __ri, hexa_int(HX_INT(hexa_array_get(");
+    __hexa_codegen_c2_sl_1579 = hexa_str(", __ri)) ");
+    __hexa_codegen_c2_sl_1580 = hexa_str("// [soa] ");
+    __hexa_codegen_c2_sl_1581 = hexa_str(" — field-parallel layout\n");
+    __hexa_codegen_c2_sl_1582 = hexa_str("_soa_new(HexaVal __count) {\n");
+    __hexa_codegen_c2_sl_1583 = hexa_str("    HexaVal __soa = hexa_map_new();\n");
+    __hexa_codegen_c2_sl_1584 = hexa_str("    __soa = hexa_map_set(__soa, \"");
+    __hexa_codegen_c2_sl_1585 = hexa_str("s\", hexa_array_new());\n");
+    __hexa_codegen_c2_sl_1586 = hexa_str("    return __soa;\n");
+    __hexa_codegen_c2_sl_1587 = hexa_str("Val");
+    __hexa_codegen_c2_sl_1588 = hexa_str(") {\n    return hexa_valstruct_new_v(");
+    __hexa_codegen_c2_sl_1589 = hexa_str(");\n}\n");
+    __hexa_codegen_c2_sl_1590 = hexa_str("    return hexa_struct_pack_map(\"");
+    __hexa_codegen_c2_sl_1591 = hexa_str("\", 0, (const char* const*)0, (const HexaVal*)0);\n");
+    __hexa_codegen_c2_sl_1592 = hexa_str("    static const char* const _k[] = {");
+    __hexa_codegen_c2_sl_1593 = hexa_str("};\n");
+    __hexa_codegen_c2_sl_1594 = hexa_str("    HexaVal _v[] = {");
+    __hexa_codegen_c2_sl_1595 = hexa_str(", _k, _v);\n");
+    __hexa_codegen_c2_sl_1596 = hexa_str("    // @cache_line: 64B aligned\n");
+    __hexa_codegen_c2_sl_1597 = hexa_str("    HexaVal __s __attribute__((aligned(64))) = hexa_map_new();\n");
+    __hexa_codegen_c2_sl_1598 = hexa_str("    __s = hexa_map_set(__s, \"__type__\", hexa_str(\"");
+    __hexa_codegen_c2_sl_1599 = hexa_str("\"));\n");
+    __hexa_codegen_c2_sl_1600 = hexa_str("    __s = hexa_map_set(__s, \"__cache_line__\", hexa_int(64));\n");
+    __hexa_codegen_c2_sl_1601 = hexa_str("    __s = hexa_map_set(__s, \"");
+    __hexa_codegen_c2_sl_1602 = hexa_str("    return __s;\n}\n");
+    __hexa_codegen_c2_sl_1603 = hexa_str("__builtin_expect(hexa_truthy(");
+    __hexa_codegen_c2_sl_1604 = hexa_str("), 1)");
+    __hexa_codegen_c2_sl_1605 = hexa_str("), 0)");
+    __hexa_codegen_c2_sl_1606 = hexa_str("((1ULL << 1) - 1)");
+    __hexa_codegen_c2_sl_1607 = hexa_str("#define ");
+    __hexa_codegen_c2_sl_1608 = hexa_str("_get_");
+    __hexa_codegen_c2_sl_1609 = hexa_str("(v) ((HX_INT(v) >> ");
+    __hexa_codegen_c2_sl_1610 = hexa_str(") & ");
+    __hexa_codegen_c2_sl_1611 = hexa_str("_set_");
+    __hexa_codegen_c2_sl_1612 = hexa_str("(v, b) ((v) = HX_MAKE_INT((HX_INT(v) & ~(");
+    __hexa_codegen_c2_sl_1613 = hexa_str(" << ");
+    __hexa_codegen_c2_sl_1614 = hexa_str(")) | (((b) & ");
+    __hexa_codegen_c2_sl_1615 = hexa_str(") << ");
+    __hexa_codegen_c2_sl_1616 = hexa_str("))))\n");
+    __hexa_codegen_c2_sl_1617 = hexa_str("// enum ");
+    __hexa_codegen_c2_sl_1618 = hexa_str(" variants, ");
+    __hexa_codegen_c2_sl_1619 = hexa_str(" tag bit(s))\n");
+    __hexa_codegen_c2_sl_1620 = hexa_str("// @compact: tag fits in ");
+    __hexa_codegen_c2_sl_1621 = hexa_str(" bit(s), mask=0x");
+    __hexa_codegen_c2_sl_1622 = hexa_str("// @payload: enum ");
+    __hexa_codegen_c2_sl_1623 = hexa_str(" carries single-field payload variants — runtime form is HexaVal array [tag, payload]\n");
+    __hexa_codegen_c2_sl_1624 = hexa_str(" hexa_int(");
+    __hexa_codegen_c2_sl_1625 = hexa_str("01");
+    __hexa_codegen_c2_sl_1626 = hexa_str("03");
+    __hexa_codegen_c2_sl_1627 = hexa_str("07");
+    __hexa_codegen_c2_sl_1628 = hexa_str("0f");
+    __hexa_codegen_c2_sl_1629 = hexa_str("1f");
+    __hexa_codegen_c2_sl_1630 = hexa_str("3f");
+    __hexa_codegen_c2_sl_1631 = hexa_str("7f");
+    __hexa_codegen_c2_sl_1632 = hexa_str("ff");
+    __hexa_codegen_c2_sl_1633 = hexa_str("HexaVal __match_val = ");
+    __hexa_codegen_c2_sl_1634 = hexa_str("__match_val");
+    __hexa_codegen_c2_sl_1635 = hexa_str("if (");
+    __hexa_codegen_c2_sl_1636 = hexa_str(" else if (");
+    __hexa_codegen_c2_sl_1637 = hexa_str(" = hexa_index_get(__match_val, hexa_int(1));\n");
+    __hexa_codegen_c2_sl_1638 = hexa_str("hexa_truthy(hexa_eq(");
+    __hexa_codegen_c2_sl_1639 = hexa_str(", hexa_int(");
+    __hexa_codegen_c2_sl_1640 = hexa_str(", hexa_float(");
+    __hexa_codegen_c2_sl_1641 = hexa_str(", hexa_str(\"");
+    __hexa_codegen_c2_sl_1642 = hexa_str("\")))");
+    __hexa_codegen_c2_sl_1643 = hexa_str(", hexa_bool(1)))");
+    __hexa_codegen_c2_sl_1644 = hexa_str(", hexa_bool(0)))");
+    __hexa_codegen_c2_sl_1645 = hexa_str("(HX_IS_ARRAY(");
+    __hexa_codegen_c2_sl_1646 = hexa_str(") && hexa_truthy(hexa_eq(hexa_index_get(");
+    __hexa_codegen_c2_sl_1647 = hexa_str(", hexa_int(0)), ");
+    __hexa_codegen_c2_sl_1648 = hexa_str("({ HexaVal ");
+    __hexa_codegen_c2_sl_1649 = hexa_str(" = hexa_index_get(");
+    __hexa_codegen_c2_sl_1650 = hexa_str(", hexa_int(1)); (");
+    __hexa_codegen_c2_sl_1651 = hexa_str(" ? ");
+    __hexa_codegen_c2_sl_1652 = hexa_str(" : hexa_void())");
+    __hexa_codegen_c2_sl_1653 = hexa_str("    return hexa_void();\n}\n\n");
+    __hexa_codegen_c2_sl_1654 = hexa_str("__hexa_sl_");
+    __hexa_codegen_c2_sl_1655 = hexa_str("asinh");
+    __hexa_codegen_c2_sl_1656 = hexa_str("acosh");
+    __hexa_codegen_c2_sl_1657 = hexa_str("atanh");
+    __hexa_codegen_c2_sl_1658 = hexa_str("_abs_f");
+    __hexa_codegen_c2_sl_1659 = hexa_str("_ln2");
+    __hexa_codegen_c2_sl_1660 = hexa_str("_log2_f");
+    __hexa_codegen_c2_sl_1661 = hexa_str("_sqrt_f");
+    __hexa_codegen_c2_sl_1662 = hexa_str("_pi_const");
+    __hexa_codegen_c2_sl_1663 = hexa_str("hexa_to_float");
+    __hexa_codegen_c2_sl_1664 = hexa_str("hexa_truthy(");
+    __hexa_codegen_c2_sl_1665 = hexa_str("(HX_INT(");
+    __hexa_codegen_c2_sl_1666 = hexa_str("(HX_FLOAT(");
+    __hexa_codegen_c2_sl_1667 = hexa_str("HX_BOOL(hexa_cmp_lt(");
+    __hexa_codegen_c2_sl_1668 = hexa_str("HX_BOOL(hexa_cmp_gt(");
+    __hexa_codegen_c2_sl_1669 = hexa_str("HX_BOOL(hexa_cmp_le(");
+    __hexa_codegen_c2_sl_1670 = hexa_str("HX_BOOL(hexa_cmp_ge(");
+    __hexa_codegen_c2_sl_1671 = hexa_str(") == HX_INT(");
+    __hexa_codegen_c2_sl_1672 = hexa_str(") == HX_FLOAT(");
+    __hexa_codegen_c2_sl_1673 = hexa_str(") != HX_INT(");
+    __hexa_codegen_c2_sl_1674 = hexa_str(") != HX_FLOAT(");
+    __hexa_codegen_c2_sl_1675 = hexa_str("(!hexa_truthy(hexa_eq(");
+    __hexa_codegen_c2_sl_1676 = hexa_str(" && ");
+    __hexa_codegen_c2_sl_1677 = hexa_str(" || ");
+    __hexa_codegen_c2_sl_1678 = hexa_str("(!");
+    __hexa_codegen_c2_sl_1679 = hexa_str("ForInStmt");
+    __hexa_codegen_c2_sl_1680 = hexa_str("__hexa_lambda_");
+    __hexa_codegen_c2_sl_1681 = hexa_str("HexaVal __env");
+    __hexa_codegen_c2_sl_1682 = hexa_str(" = hexa_array_get(__env, ");
+    __hexa_codegen_c2_sl_1683 = hexa_str("hexa_closure_new((void*)&");
+    __hexa_codegen_c2_sl_1684 = hexa_str(", hexa_array_new())");
+    __hexa_codegen_c2_sl_1685 = hexa_str("#include \"runtime.h\"\n\n");
+    __hexa_codegen_c2_sl_1686 = hexa_str("HEXA_CERT");
+    __hexa_codegen_c2_sl_1687 = hexa_str("Add");
+    __hexa_codegen_c2_sl_1688 = hexa_str("Sub");
+    __hexa_codegen_c2_sl_1689 = hexa_str("Mul");
+    __hexa_codegen_c2_sl_1690 = hexa_str("Div");
+    __hexa_codegen_c2_sl_1691 = hexa_str("Mod");
+    __hexa_codegen_c2_sl_1692 = hexa_str("Neg");
+    __hexa_codegen_c2_sl_1693 = hexa_str("issue");
+    __hexa_codegen_c2_sl_1694 = hexa_str("Load");
+    __hexa_codegen_c2_sl_1695 = hexa_str("Store");
+    __hexa_codegen_c2_sl_1696 = hexa_str("Alloc");
+    __hexa_codegen_c2_sl_1697 = hexa_str("Free");
+    __hexa_codegen_c2_sl_1698 = hexa_str("Copy");
+    __hexa_codegen_c2_sl_1699 = hexa_str("Move");
+    __hexa_codegen_c2_sl_1700 = hexa_str("Jump");
+    __hexa_codegen_c2_sl_1701 = hexa_str("Branch");
+    __hexa_codegen_c2_sl_1702 = hexa_str("Return");
+    __hexa_codegen_c2_sl_1703 = hexa_str("Phi");
+    __hexa_codegen_c2_sl_1704 = hexa_str("Switch");
+    __hexa_codegen_c2_sl_1705 = hexa_str("Assert");
+    __hexa_codegen_c2_sl_1706 = hexa_str("Assume");
+    __hexa_codegen_c2_sl_1707 = hexa_str("propagate");
+    __hexa_codegen_c2_sl_1708 = hexa_str("Invariant");
+    __hexa_codegen_c2_sl_1709 = hexa_str("LifetimeStart");
+    __hexa_codegen_c2_sl_1710 = hexa_str("LifetimeEnd");
+    __hexa_codegen_c2_sl_1711 = hexa_str("OwnershipTransfer");
+    __hexa_codegen_c2_sl_1712 = hexa_str("verify");
+    __hexa_codegen_c2_sl_1713 = hexa_str("bounded");
+    __hexa_codegen_c2_sl_1714 = hexa_str("monotone");
+    __hexa_codegen_c2_sl_1715 = hexa_str("nonneg");
+    __hexa_codegen_c2_sl_1716 = hexa_str("no_div_zero");
+    __hexa_codegen_c2_sl_1717 = hexa_str("mod_nonneg");
+    __hexa_codegen_c2_sl_1718 = hexa_str("sign_flip");
+    __hexa_codegen_c2_sl_1719 = hexa_str("no_alias");
+    __hexa_codegen_c2_sl_1720 = hexa_str("no_leak");
+    __hexa_codegen_c2_sl_1721 = hexa_str("lifetime_valid");
+    __hexa_codegen_c2_sl_1722 = hexa_str("loop_term");
+    __hexa_codegen_c2_sl_1723 = hexa_str("assert_holds");
+    __hexa_codegen_c2_sl_1724 = hexa_str("invariant_holds");
+    __hexa_codegen_c2_sl_1725 = hexa_str("CallExpr");
+    __hexa_codegen_c2_sl_1726 = hexa_str("module");
+    __hexa_codegen_c2_sl_1727 = hexa_str("ISSUED");
+    __hexa_codegen_c2_sl_1728 = hexa_str("{\"predicate\":\"");
+    __hexa_codegen_c2_sl_1729 = hexa_str("\",\"target\":\"");
+    __hexa_codegen_c2_sl_1730 = hexa_str("\",\"opcode\":\"");
+    __hexa_codegen_c2_sl_1731 = hexa_str("\",\"bucket\":\"");
+    __hexa_codegen_c2_sl_1732 = hexa_str("\",\"status\":\"");
+    __hexa_codegen_c2_sl_1733 = hexa_str("\",\"hash\":");
+    __hexa_codegen_c2_sl_1734 = hexa_str("mkdir -p .certificates");
+    __hexa_codegen_c2_sl_1735 = hexa_str(".certificates/");
+    __hexa_codegen_c2_sl_1736 = hexa_str(".cert.jsonl");
+    __hexa_codegen_c2_sl_1737 = hexa_str("[hexa_cert] wrote ");
+    __hexa_codegen_c2_sl_1738 = hexa_str(" cert(s) → ");
+    __hexa_codegen_c2_sl_1739 = hexa_str(":");
+    __hexa_codegen_c2_sl_1740 = hexa_str(")->");
+    __hexa_codegen_c2_sl_1741 = hexa_str(" @symbol=");
+    __hexa_codegen_c2_sl_1742 = hexa_str(" @link=");
+    __hexa_codegen_c2_sl_1743 = hexa_str("let_mut ");
+    __hexa_codegen_c2_sl_1744 = hexa_str("let ");
+    __hexa_codegen_c2_sl_1745 = hexa_str(":_");
+    __hexa_codegen_c2_sl_1746 = hexa_str("hxi v0");
+    __hexa_codegen_c2_sl_1747 = hexa_str("src_bytes ");
+    __hexa_codegen_c2_sl_1748 = hexa_str("enum ");
+    __hexa_codegen_c2_sl_1749 = hexa_str("comptime ");
 }
 static void __hexa_codegen_c2_strlit_init(void) {
     __hexa_codegen_c2_strlit_init_0();
@@ -14344,6 +14346,14 @@ static HexaIC __hexa_codegen_c2_ic_1106 = {0};
 static HexaIC __hexa_codegen_c2_ic_1107 = {0};
 static HexaIC __hexa_codegen_c2_ic_1108 = {0};
 static HexaIC __hexa_codegen_c2_ic_1109 = {0};
+static HexaIC __hexa_codegen_c2_ic_1110 = {0};
+static HexaIC __hexa_codegen_c2_ic_1111 = {0};
+static HexaIC __hexa_codegen_c2_ic_1112 = {0};
+static HexaIC __hexa_codegen_c2_ic_1113 = {0};
+static HexaIC __hexa_codegen_c2_ic_1114 = {0};
+static HexaIC __hexa_codegen_c2_ic_1115 = {0};
+static HexaIC __hexa_codegen_c2_ic_1116 = {0};
+static HexaIC __hexa_codegen_c2_ic_1117 = {0};
 
 HexaVal _hexa_name_is_reserved(HexaVal s) {
     __hexa_fn_arena_enter();
@@ -17912,6 +17922,9 @@ HexaVal gen2_expr(HexaVal node) {
     HexaVal nargs = hexa_void();
     HexaVal ti = hexa_void();
     HexaVal out = hexa_void();
+    HexaVal arr_c = hexa_void();
+    HexaVal s_c = hexa_void();
+    HexaVal e_c = hexa_void();
     __hexa_fn_arena_enter();
     HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_322);
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_859))) {
@@ -19754,50 +19767,66 @@ HexaVal gen2_expr(HexaVal node) {
         return __hexa_fn_arena_return(out);
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_587))) {
-        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_588, gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_721))), __hexa_codegen_c2_sl_342), gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_722))), __hexa_codegen_c2_sl_330));
+        HexaVal idx = hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_721);
+        if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(idx), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(idx, "kind", &__hexa_codegen_c2_ic_722), __hexa_codegen_c2_sl_631))))) {
+            arr_c = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_723));
+            s_c = __hexa_codegen_c2_sl_1533;
+            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(idx, "left", &__hexa_codegen_c2_ic_724)), __hexa_codegen_c2_sl_162))))) {
+                s_c = gen2_expr(hexa_map_get_ic(idx, "left", &__hexa_codegen_c2_ic_725));
+            }
+            e_c = hexa_add(hexa_add(__hexa_codegen_c2_sl_690, arr_c), __hexa_codegen_c2_sl_504);
+            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(idx, "right", &__hexa_codegen_c2_ic_726)), __hexa_codegen_c2_sl_162))))) {
+                e_c = gen2_expr(hexa_map_get_ic(idx, "right", &__hexa_codegen_c2_ic_727));
+                if (hexa_truthy(hexa_eq(hexa_map_get_ic(idx, "value", &__hexa_codegen_c2_ic_728), __hexa_codegen_c2_sl_636))) {
+                    e_c = hexa_add(hexa_add(__hexa_codegen_c2_sl_878, e_c), __hexa_codegen_c2_sl_1534);
+                }
+            }
+            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_831, arr_c), __hexa_codegen_c2_sl_342), s_c), __hexa_codegen_c2_sl_342), e_c), __hexa_codegen_c2_sl_330));
+        }
+        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_588, gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_729))), __hexa_codegen_c2_sl_342), gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_730))), __hexa_codegen_c2_sl_330));
     }
-    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1533))) {
-        HexaVal ename = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_723);
-        HexaVal vname = hexa_map_get_ic(node, "value", &__hexa_codegen_c2_ic_724);
+    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1535))) {
+        HexaVal ename = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_731);
+        HexaVal vname = hexa_map_get_ic(node, "value", &__hexa_codegen_c2_ic_732);
         HexaVal enum_const = hexa_add(hexa_add(ename, __hexa_codegen_c2_sl_670), vname);
-        HexaVal pe = hexa_map_get_ic(node, "payload_expr", &__hexa_codegen_c2_ic_725);
+        HexaVal pe = hexa_map_get_ic(node, "payload_expr", &__hexa_codegen_c2_ic_733);
         if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(pe), __hexa_codegen_c2_sl_162))))) {
-            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1534, enum_const), __hexa_codegen_c2_sl_729), gen2_expr(pe)), __hexa_codegen_c2_sl_330));
+            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1536, enum_const), __hexa_codegen_c2_sl_729), gen2_expr(pe)), __hexa_codegen_c2_sl_330));
         }
         return __hexa_fn_arena_return(enum_const);
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_440))) {
-        HexaVal c = gen2_expr(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_726));
-        if (hexa_truthy(hexa_bool(hexa_truthy(_gen2_arm_is_trivial(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_727))) && hexa_truthy(_gen2_arm_is_trivial(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_728)))))) {
+        HexaVal c = gen2_expr(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_734));
+        if (hexa_truthy(hexa_bool(hexa_truthy(_gen2_arm_is_trivial(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_735))) && hexa_truthy(_gen2_arm_is_trivial(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_736)))))) {
             HexaVal t_val = __hexa_codegen_c2_sl_509;
-            if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_729)), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_cmp_gt(hexa_int(hexa_len(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_730))), hexa_int(0)))))) {
-                HexaVal t_last = hexa_index_get(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_731), hexa_sub(hexa_int(hexa_len(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_732))), hexa_int(1)));
-                if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(t_last), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(t_last, "kind", &__hexa_codegen_c2_ic_733), __hexa_codegen_c2_sl_389)))) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(t_last, "left", &__hexa_codegen_c2_ic_734)), __hexa_codegen_c2_sl_162))))))) {
-                    t_val = gen2_expr(hexa_map_get_ic(t_last, "left", &__hexa_codegen_c2_ic_735));
+            if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_737)), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_cmp_gt(hexa_int(hexa_len(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_738))), hexa_int(0)))))) {
+                HexaVal t_last = hexa_index_get(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_739), hexa_sub(hexa_int(hexa_len(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_740))), hexa_int(1)));
+                if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(t_last), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(t_last, "kind", &__hexa_codegen_c2_ic_741), __hexa_codegen_c2_sl_389)))) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(t_last, "left", &__hexa_codegen_c2_ic_742)), __hexa_codegen_c2_sl_162))))))) {
+                    t_val = gen2_expr(hexa_map_get_ic(t_last, "left", &__hexa_codegen_c2_ic_743));
                 }
             }
             HexaVal e_val = __hexa_codegen_c2_sl_509;
-            if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_736)), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_cmp_gt(hexa_int(hexa_len(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_737))), hexa_int(0)))))) {
-                HexaVal e_last = hexa_index_get(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_738), hexa_sub(hexa_int(hexa_len(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_739))), hexa_int(1)));
-                if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(e_last), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(e_last, "kind", &__hexa_codegen_c2_ic_740), __hexa_codegen_c2_sl_389)))) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(e_last, "left", &__hexa_codegen_c2_ic_741)), __hexa_codegen_c2_sl_162))))))) {
-                    e_val = gen2_expr(hexa_map_get_ic(e_last, "left", &__hexa_codegen_c2_ic_742));
+            if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_744)), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_cmp_gt(hexa_int(hexa_len(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_745))), hexa_int(0)))))) {
+                HexaVal e_last = hexa_index_get(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_746), hexa_sub(hexa_int(hexa_len(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_747))), hexa_int(1)));
+                if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(e_last), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(e_last, "kind", &__hexa_codegen_c2_ic_748), __hexa_codegen_c2_sl_389)))) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(e_last, "left", &__hexa_codegen_c2_ic_749)), __hexa_codegen_c2_sl_162))))))) {
+                    e_val = gen2_expr(hexa_map_get_ic(e_last, "left", &__hexa_codegen_c2_ic_750));
                 }
             }
-            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1535, c), __hexa_codegen_c2_sl_615), t_val), __hexa_codegen_c2_sl_616), e_val), __hexa_codegen_c2_sl_330));
+            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1537, c), __hexa_codegen_c2_sl_615), t_val), __hexa_codegen_c2_sl_616), e_val), __hexa_codegen_c2_sl_330));
         }
-        HexaVal _t_arm = _gen2_arm_block_expr(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_743));
-        HexaVal _e_arm = _gen2_arm_block_expr(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_744));
-        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1535, c), __hexa_codegen_c2_sl_615), _t_arm), __hexa_codegen_c2_sl_616), _e_arm), __hexa_codegen_c2_sl_330));
+        HexaVal _t_arm = _gen2_arm_block_expr(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_751));
+        HexaVal _e_arm = _gen2_arm_block_expr(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_752));
+        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1537, c), __hexa_codegen_c2_sl_615), _t_arm), __hexa_codegen_c2_sl_616), _e_arm), __hexa_codegen_c2_sl_330));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_449))) {
         return __hexa_fn_arena_return(gen2_match_expr(node));
     }
-    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1536))) {
+    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1538))) {
         return __hexa_fn_arena_return(gen2_lambda_expr(node));
     }
-    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1537)) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1538))))) {
+    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1539)) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1540))))) {
         out = __hexa_codegen_c2_sl_1054;
-        HexaVal items = hexa_map_get_ic(node, "items", &__hexa_codegen_c2_ic_745);
+        HexaVal items = hexa_map_get_ic(node, "items", &__hexa_codegen_c2_ic_753);
         if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(items), __hexa_codegen_c2_sl_162))))) {
             ti = hexa_int(0);
             while (HX_BOOL(hexa_cmp_lt(ti, hexa_int(hexa_len(items))))) {
@@ -19807,56 +19836,56 @@ HexaVal gen2_expr(HexaVal node) {
         }
         return __hexa_fn_arena_return(out);
     }
-    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1539))) {
-        out = __hexa_codegen_c2_sl_1540;
-        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "items", &__hexa_codegen_c2_ic_746)), __hexa_codegen_c2_sl_162))))) {
+    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1541))) {
+        out = __hexa_codegen_c2_sl_1542;
+        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "items", &__hexa_codegen_c2_ic_754)), __hexa_codegen_c2_sl_162))))) {
             HexaVal mi = hexa_int(0);
-            while (HX_BOOL(hexa_cmp_lt(mi, hexa_int(hexa_len(hexa_map_get_ic(node, "items", &__hexa_codegen_c2_ic_747)))))) {
-                HexaVal entry = hexa_index_get(hexa_map_get_ic(node, "items", &__hexa_codegen_c2_ic_748), mi);
-                HexaVal key_c = gen2_expr(hexa_map_get_ic(entry, "left", &__hexa_codegen_c2_ic_749));
-                if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(entry, "left", &__hexa_codegen_c2_ic_750)), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(hexa_map_get_ic(entry, "left", &__hexa_codegen_c2_ic_751), "kind", &__hexa_codegen_c2_ic_752), __hexa_codegen_c2_sl_865))))) {
-                    key_c = hexa_add(hexa_add(__hexa_codegen_c2_sl_549, c_escape(hexa_map_get_ic(hexa_map_get_ic(entry, "left", &__hexa_codegen_c2_ic_753), "value", &__hexa_codegen_c2_ic_754))), __hexa_codegen_c2_sl_549);
+            while (HX_BOOL(hexa_cmp_lt(mi, hexa_int(hexa_len(hexa_map_get_ic(node, "items", &__hexa_codegen_c2_ic_755)))))) {
+                HexaVal entry = hexa_index_get(hexa_map_get_ic(node, "items", &__hexa_codegen_c2_ic_756), mi);
+                HexaVal key_c = gen2_expr(hexa_map_get_ic(entry, "left", &__hexa_codegen_c2_ic_757));
+                if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(entry, "left", &__hexa_codegen_c2_ic_758)), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(hexa_map_get_ic(entry, "left", &__hexa_codegen_c2_ic_759), "kind", &__hexa_codegen_c2_ic_760), __hexa_codegen_c2_sl_865))))) {
+                    key_c = hexa_add(hexa_add(__hexa_codegen_c2_sl_549, c_escape(hexa_map_get_ic(hexa_map_get_ic(entry, "left", &__hexa_codegen_c2_ic_761), "value", &__hexa_codegen_c2_ic_762))), __hexa_codegen_c2_sl_549);
                 }
-                out = hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_728, out), __hexa_codegen_c2_sl_342), key_c), __hexa_codegen_c2_sl_342), gen2_expr(hexa_map_get_ic(entry, "right", &__hexa_codegen_c2_ic_755))), __hexa_codegen_c2_sl_330);
+                out = hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_728, out), __hexa_codegen_c2_sl_342), key_c), __hexa_codegen_c2_sl_342), gen2_expr(hexa_map_get_ic(entry, "right", &__hexa_codegen_c2_ic_763))), __hexa_codegen_c2_sl_330);
                 mi = hexa_add(mi, hexa_int(1));
             }
         }
         return __hexa_fn_arena_return(out);
     }
-    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1541))) {
-        return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_921, gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_756))), __hexa_codegen_c2_sl_504));
-    }
-    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1542))) {
-        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1543);
+    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1543))) {
+        return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_921, gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_764))), __hexa_codegen_c2_sl_504));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1544))) {
-        HexaVal arr_c = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_757));
-        HexaVal s_c = __hexa_codegen_c2_sl_1545;
-        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_758)), __hexa_codegen_c2_sl_162))))) {
-            s_c = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_759));
+        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1545);
+    }
+    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1546))) {
+        arr_c = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_765));
+        s_c = __hexa_codegen_c2_sl_1533;
+        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_766)), __hexa_codegen_c2_sl_162))))) {
+            s_c = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_767));
         }
-        HexaVal e_c = hexa_add(hexa_add(__hexa_codegen_c2_sl_690, arr_c), __hexa_codegen_c2_sl_504);
-        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_760)), __hexa_codegen_c2_sl_162))))) {
-            e_c = gen2_expr(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_761));
+        e_c = hexa_add(hexa_add(__hexa_codegen_c2_sl_690, arr_c), __hexa_codegen_c2_sl_504);
+        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_768)), __hexa_codegen_c2_sl_162))))) {
+            e_c = gen2_expr(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_769));
         }
         return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_831, arr_c), __hexa_codegen_c2_sl_342), s_c), __hexa_codegen_c2_sl_342), e_c), __hexa_codegen_c2_sl_330));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_631))) {
-        HexaVal start_c = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_762));
-        HexaVal end_c = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_763));
-        HexaVal step_c = (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_764)), __hexa_codegen_c2_sl_162)))) ? gen2_expr(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_765)) : __hexa_codegen_c2_sl_509);
-        HexaVal incl = (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "value", &__hexa_codegen_c2_ic_766), __hexa_codegen_c2_sl_636)) ? __hexa_codegen_c2_sl_490 : __hexa_codegen_c2_sl_488);
-        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1546, start_c), __hexa_codegen_c2_sl_342), end_c), __hexa_codegen_c2_sl_342), step_c), __hexa_codegen_c2_sl_342), incl), __hexa_codegen_c2_sl_330));
+        HexaVal start_c = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_770));
+        HexaVal end_c = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_771));
+        HexaVal step_c = (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_772)), __hexa_codegen_c2_sl_162)))) ? gen2_expr(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_773)) : __hexa_codegen_c2_sl_509);
+        HexaVal incl = (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "value", &__hexa_codegen_c2_ic_774), __hexa_codegen_c2_sl_636)) ? __hexa_codegen_c2_sl_490 : __hexa_codegen_c2_sl_488);
+        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1547, start_c), __hexa_codegen_c2_sl_342), end_c), __hexa_codegen_c2_sl_342), step_c), __hexa_codegen_c2_sl_342), incl), __hexa_codegen_c2_sl_330));
     }
-    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1547)) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1548))))) {
-        HexaVal inner_c = gen2_expr(hexa_map_get_ic(node, "expr", &__hexa_codegen_c2_ic_767));
-        return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1549, inner_c), __hexa_codegen_c2_sl_330));
+    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1548)) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1549))))) {
+        HexaVal inner_c = gen2_expr(hexa_map_get_ic(node, "expr", &__hexa_codegen_c2_ic_775));
+        return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1550, inner_c), __hexa_codegen_c2_sl_330));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_186))) {
-        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1540);
+        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1542);
     }
-    (hexa_eprint_val(hexa_add(__hexa_codegen_c2_sl_1550, k)), fprintf(stderr, "\n"), hexa_void());
-    return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1551, k), __hexa_codegen_c2_sl_848));
+    (hexa_eprint_val(hexa_add(__hexa_codegen_c2_sl_1551, k)), fprintf(stderr, "\n"), hexa_void());
+    return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1552, k), __hexa_codegen_c2_sl_848));
     return __hexa_fn_arena_return(hexa_void());
 }
 
@@ -19864,12 +19893,12 @@ HexaVal gen2_expr(HexaVal node) {
 HexaVal gen2_stack_alloc_struct(HexaVal var_name, HexaVal fields) {
     __hexa_fn_arena_enter();
     HexaVal parts = hexa_array_new();
-    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1552, var_name), __hexa_codegen_c2_sl_346));
-    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_375, var_name), __hexa_codegen_c2_sl_1553));
+    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1553, var_name), __hexa_codegen_c2_sl_346));
+    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_375, var_name), __hexa_codegen_c2_sl_1554));
     HexaVal i = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(i, hexa_int(hexa_len(fields))))) {
         HexaVal f = hexa_index_get(fields, i);
-        hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_382, var_name), __hexa_codegen_c2_sl_591), var_name), __hexa_codegen_c2_sl_592), f), __hexa_codegen_c2_sl_1554));
+        hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_382, var_name), __hexa_codegen_c2_sl_591), var_name), __hexa_codegen_c2_sl_592), f), __hexa_codegen_c2_sl_1555));
         i = hexa_add(i, hexa_int(1));
     }
     return __hexa_fn_arena_return(hexa_str_join(parts, __hexa_codegen_c2_sl_186));
@@ -19880,8 +19909,8 @@ HexaVal gen2_stack_alloc_struct(HexaVal var_name, HexaVal fields) {
 HexaVal gen2_stack_alloc_array(HexaVal var_name, HexaVal size_hint) {
     __hexa_fn_arena_enter();
     HexaVal parts = hexa_array_new();
-    hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1555, var_name), __hexa_codegen_c2_sl_1556), hexa_to_string(size_hint)), __hexa_codegen_c2_sl_1557));
-    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_375, var_name), __hexa_codegen_c2_sl_1558));
+    hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1556, var_name), __hexa_codegen_c2_sl_1557), hexa_to_string(size_hint)), __hexa_codegen_c2_sl_1558));
+    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_375, var_name), __hexa_codegen_c2_sl_1559));
     return __hexa_fn_arena_return(hexa_str_join(parts, __hexa_codegen_c2_sl_186));
     return __hexa_fn_arena_return(hexa_void());
 }
@@ -19890,10 +19919,10 @@ HexaVal gen2_stack_alloc_array(HexaVal var_name, HexaVal size_hint) {
 HexaVal gen2_simd_preamble(HexaVal arr_name, HexaVal width) {
     __hexa_fn_arena_enter();
     HexaVal parts = hexa_array_new();
-    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1559, hexa_to_string(width)), __hexa_codegen_c2_sl_1557));
-    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1560, arr_name), __hexa_codegen_c2_sl_345));
-    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1561, hexa_to_string(width)), __hexa_codegen_c2_sl_381));
+    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1560, hexa_to_string(width)), __hexa_codegen_c2_sl_1558));
+    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1561, arr_name), __hexa_codegen_c2_sl_345));
     hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1562, hexa_to_string(width)), __hexa_codegen_c2_sl_381));
+    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1563, hexa_to_string(width)), __hexa_codegen_c2_sl_381));
     return __hexa_fn_arena_return(hexa_str_join(parts, __hexa_codegen_c2_sl_186));
     return __hexa_fn_arena_return(hexa_void());
 }
@@ -19902,18 +19931,18 @@ HexaVal gen2_simd_preamble(HexaVal arr_name, HexaVal width) {
 HexaVal gen2_simd_loop(HexaVal arr_name, HexaVal op, HexaVal scalar_expr, HexaVal width) {
     __hexa_fn_arena_enter();
     HexaVal parts = hexa_array_new();
-    hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1563, arr_name), __hexa_codegen_c2_sl_1564), arr_name), __hexa_codegen_c2_sl_1565), op), __hexa_codegen_c2_sl_1566));
-    hexa_array_push(parts, __hexa_codegen_c2_sl_1567);
+    hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1564, arr_name), __hexa_codegen_c2_sl_1565), arr_name), __hexa_codegen_c2_sl_1566), op), __hexa_codegen_c2_sl_1567));
+    hexa_array_push(parts, __hexa_codegen_c2_sl_1568);
     HexaVal lane = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(lane, width))) {
-        HexaVal idx = hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1568, hexa_to_string(width)), __hexa_codegen_c2_sl_1569), hexa_to_string(lane));
-        hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1570, arr_name), __hexa_codegen_c2_sl_342), idx), __hexa_codegen_c2_sl_1571), arr_name), __hexa_codegen_c2_sl_342), idx), __hexa_codegen_c2_sl_1572), op), __hexa_codegen_c2_sl_879), scalar_expr), __hexa_codegen_c2_sl_1573));
+        HexaVal idx = hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1569, hexa_to_string(width)), __hexa_codegen_c2_sl_1570), hexa_to_string(lane));
+        hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1571, arr_name), __hexa_codegen_c2_sl_342), idx), __hexa_codegen_c2_sl_1572), arr_name), __hexa_codegen_c2_sl_342), idx), __hexa_codegen_c2_sl_1573), op), __hexa_codegen_c2_sl_879), scalar_expr), __hexa_codegen_c2_sl_1574));
         lane = hexa_add(lane, hexa_int(1));
     }
     hexa_array_push(parts, __hexa_codegen_c2_sl_434);
-    hexa_array_push(parts, __hexa_codegen_c2_sl_1574);
-    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1575, hexa_to_string(width)), __hexa_codegen_c2_sl_1576));
-    hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1570, arr_name), __hexa_codegen_c2_sl_1577), arr_name), __hexa_codegen_c2_sl_1578), op), __hexa_codegen_c2_sl_879), scalar_expr), __hexa_codegen_c2_sl_1573));
+    hexa_array_push(parts, __hexa_codegen_c2_sl_1575);
+    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1576, hexa_to_string(width)), __hexa_codegen_c2_sl_1577));
+    hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1571, arr_name), __hexa_codegen_c2_sl_1578), arr_name), __hexa_codegen_c2_sl_1579), op), __hexa_codegen_c2_sl_879), scalar_expr), __hexa_codegen_c2_sl_1574));
     hexa_array_push(parts, __hexa_codegen_c2_sl_434);
     return __hexa_fn_arena_return(hexa_str_join(parts, __hexa_codegen_c2_sl_186));
     return __hexa_fn_arena_return(hexa_void());
@@ -19923,16 +19952,16 @@ HexaVal gen2_simd_loop(HexaVal arr_name, HexaVal op, HexaVal scalar_expr, HexaVa
 HexaVal gen2_soa_struct_decl(HexaVal name, HexaVal fields) {
     __hexa_fn_arena_enter();
     HexaVal parts = hexa_array_new();
-    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1579, name), __hexa_codegen_c2_sl_1580));
-    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_380, name), __hexa_codegen_c2_sl_1581));
-    hexa_array_push(parts, __hexa_codegen_c2_sl_1582);
+    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1580, name), __hexa_codegen_c2_sl_1581));
+    hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_380, name), __hexa_codegen_c2_sl_1582));
+    hexa_array_push(parts, __hexa_codegen_c2_sl_1583);
     HexaVal i = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(i, hexa_int(hexa_len(fields))))) {
         HexaVal f = hexa_index_get(fields, i);
-        hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1583, f), __hexa_codegen_c2_sl_1584));
+        hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1584, f), __hexa_codegen_c2_sl_1585));
         i = hexa_add(i, hexa_int(1));
     }
-    hexa_array_push(parts, __hexa_codegen_c2_sl_1585);
+    hexa_array_push(parts, __hexa_codegen_c2_sl_1586);
     hexa_array_push(parts, __hexa_codegen_c2_sl_392);
     return __hexa_fn_arena_return(hexa_str_join(parts, __hexa_codegen_c2_sl_186));
     return __hexa_fn_arena_return(hexa_void());
@@ -19941,15 +19970,15 @@ HexaVal gen2_soa_struct_decl(HexaVal name, HexaVal fields) {
 
 HexaVal gen2_struct_forward(HexaVal node) {
     __hexa_fn_arena_enter();
-    HexaVal name = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_768);
-    HexaVal nfields = hexa_int(hexa_len(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_769)));
+    HexaVal name = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_776);
+    HexaVal nfields = hexa_int(hexa_len(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_777)));
     if (hexa_truthy(hexa_eq(nfields, hexa_int(0)))) {
         return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_380, name), __hexa_codegen_c2_sl_423));
     }
     HexaVal params = hexa_array_new();
     HexaVal fi = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(fi, nfields))) {
-        hexa_array_push(params, hexa_add(__hexa_codegen_c2_sl_380, hexa_map_get_ic(hexa_index_get(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_770), fi), "name", &__hexa_codegen_c2_ic_771)));
+        hexa_array_push(params, hexa_add(__hexa_codegen_c2_sl_380, hexa_map_get_ic(hexa_index_get(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_778), fi), "name", &__hexa_codegen_c2_ic_779)));
         fi = hexa_add(fi, hexa_int(1));
     }
     return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_380, name), __hexa_codegen_c2_sl_327), hexa_str_join(params, __hexa_codegen_c2_sl_342)), __hexa_codegen_c2_sl_537));
@@ -19959,33 +19988,33 @@ HexaVal gen2_struct_forward(HexaVal node) {
 
 HexaVal gen2_struct_decl(HexaVal node) {
     __hexa_fn_arena_enter();
-    HexaVal name = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_772);
-    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(name, __hexa_codegen_c2_sl_1586)) && hexa_truthy(hexa_eq(hexa_int(hexa_len(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_773))), hexa_int(12)))))) {
+    HexaVal name = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_780);
+    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(name, __hexa_codegen_c2_sl_1587)) && hexa_truthy(hexa_eq(hexa_int(hexa_len(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_781))), hexa_int(12)))))) {
         HexaVal vs_params = hexa_array_new();
         HexaVal vs_args = hexa_array_new();
         HexaVal vi = hexa_int(0);
-        while (HX_BOOL(hexa_cmp_lt(vi, hexa_int(hexa_len(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_774)))))) {
-            HexaVal fname = hexa_map_get_ic(hexa_index_get(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_775), vi), "name", &__hexa_codegen_c2_ic_776);
+        while (HX_BOOL(hexa_cmp_lt(vi, hexa_int(hexa_len(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_782)))))) {
+            HexaVal fname = hexa_map_get_ic(hexa_index_get(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_783), vi), "name", &__hexa_codegen_c2_ic_784);
             hexa_array_push(vs_params, hexa_add(__hexa_codegen_c2_sl_380, fname));
             hexa_array_push(vs_args, fname);
             vi = hexa_add(vi, hexa_int(1));
         }
-        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_380, name), __hexa_codegen_c2_sl_327), hexa_str_join(vs_params, __hexa_codegen_c2_sl_342)), __hexa_codegen_c2_sl_1587), hexa_str_join(vs_args, __hexa_codegen_c2_sl_342)), __hexa_codegen_c2_sl_1588));
+        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_380, name), __hexa_codegen_c2_sl_327), hexa_str_join(vs_params, __hexa_codegen_c2_sl_342)), __hexa_codegen_c2_sl_1588), hexa_str_join(vs_args, __hexa_codegen_c2_sl_342)), __hexa_codegen_c2_sl_1589));
     }
     HexaVal params = hexa_array_new();
     HexaVal keys_parts = hexa_array_new();
     HexaVal vals_parts = hexa_array_new();
-    HexaVal nfields = hexa_int(hexa_len(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_777)));
+    HexaVal nfields = hexa_int(hexa_len(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_785)));
     HexaVal i = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(i, nfields))) {
-        HexaVal f = hexa_index_get(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_778), i);
-        hexa_array_push(params, hexa_add(__hexa_codegen_c2_sl_380, hexa_map_get_ic(f, "name", &__hexa_codegen_c2_ic_779)));
+        HexaVal f = hexa_index_get(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_786), i);
+        hexa_array_push(params, hexa_add(__hexa_codegen_c2_sl_380, hexa_map_get_ic(f, "name", &__hexa_codegen_c2_ic_787)));
         if (hexa_truthy(hexa_cmp_gt(i, hexa_int(0)))) {
             hexa_array_push(keys_parts, __hexa_codegen_c2_sl_342);
             hexa_array_push(vals_parts, __hexa_codegen_c2_sl_342);
         }
-        hexa_array_push(keys_parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_549, hexa_map_get_ic(f, "name", &__hexa_codegen_c2_ic_780)), __hexa_codegen_c2_sl_549));
-        hexa_array_push(vals_parts, hexa_map_get_ic(f, "name", &__hexa_codegen_c2_ic_781));
+        hexa_array_push(keys_parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_549, hexa_map_get_ic(f, "name", &__hexa_codegen_c2_ic_788)), __hexa_codegen_c2_sl_549));
+        hexa_array_push(vals_parts, hexa_map_get_ic(f, "name", &__hexa_codegen_c2_ic_789));
         i = hexa_add(i, hexa_int(1));
     }
     HexaVal p = hexa_str_join(params, __hexa_codegen_c2_sl_342);
@@ -19995,11 +20024,11 @@ HexaVal gen2_struct_decl(HexaVal node) {
     }
     HexaVal body = __hexa_codegen_c2_sl_186;
     if (hexa_truthy(hexa_eq(nfields, hexa_int(0)))) {
-        body = hexa_add(hexa_add(__hexa_codegen_c2_sl_1589, name), __hexa_codegen_c2_sl_1590);
+        body = hexa_add(hexa_add(__hexa_codegen_c2_sl_1590, name), __hexa_codegen_c2_sl_1591);
     } else {
-        HexaVal ks_line = hexa_add(hexa_add(__hexa_codegen_c2_sl_1591, hexa_str_join(keys_parts, __hexa_codegen_c2_sl_186)), __hexa_codegen_c2_sl_1592);
-        HexaVal vs_line = hexa_add(hexa_add(__hexa_codegen_c2_sl_1593, hexa_str_join(vals_parts, __hexa_codegen_c2_sl_186)), __hexa_codegen_c2_sl_1592);
-        HexaVal call_line = hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1589, name), __hexa_codegen_c2_sl_593), hexa_to_string(nfields)), __hexa_codegen_c2_sl_1594);
+        HexaVal ks_line = hexa_add(hexa_add(__hexa_codegen_c2_sl_1592, hexa_str_join(keys_parts, __hexa_codegen_c2_sl_186)), __hexa_codegen_c2_sl_1593);
+        HexaVal vs_line = hexa_add(hexa_add(__hexa_codegen_c2_sl_1594, hexa_str_join(vals_parts, __hexa_codegen_c2_sl_186)), __hexa_codegen_c2_sl_1593);
+        HexaVal call_line = hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1590, name), __hexa_codegen_c2_sl_593), hexa_to_string(nfields)), __hexa_codegen_c2_sl_1595);
         body = hexa_add(hexa_add(ks_line, vs_line), call_line);
     }
     return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_380, name), __hexa_codegen_c2_sl_327), p_sig), __hexa_codegen_c2_sl_480), body), __hexa_codegen_c2_sl_392));
@@ -20009,48 +20038,48 @@ HexaVal gen2_struct_decl(HexaVal node) {
 
 HexaVal gen2_struct_decl_aligned(HexaVal node) {
     __hexa_fn_arena_enter();
-    HexaVal name = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_782);
+    HexaVal name = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_790);
     HexaVal params = hexa_array_new();
     HexaVal body_parts = hexa_array_new();
-    hexa_array_push(body_parts, __hexa_codegen_c2_sl_1595);
     hexa_array_push(body_parts, __hexa_codegen_c2_sl_1596);
-    hexa_array_push(body_parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1597, name), __hexa_codegen_c2_sl_1598));
-    hexa_array_push(body_parts, __hexa_codegen_c2_sl_1599);
+    hexa_array_push(body_parts, __hexa_codegen_c2_sl_1597);
+    hexa_array_push(body_parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1598, name), __hexa_codegen_c2_sl_1599));
+    hexa_array_push(body_parts, __hexa_codegen_c2_sl_1600);
     HexaVal i = hexa_int(0);
-    while (HX_BOOL(hexa_cmp_lt(i, hexa_int(hexa_len(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_783)))))) {
-        HexaVal f = hexa_index_get(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_784), i);
-        hexa_array_push(params, hexa_add(__hexa_codegen_c2_sl_380, hexa_map_get_ic(f, "name", &__hexa_codegen_c2_ic_785)));
-        hexa_array_push(body_parts, hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1600, hexa_map_get_ic(f, "name", &__hexa_codegen_c2_ic_786)), __hexa_codegen_c2_sl_593), hexa_map_get_ic(f, "name", &__hexa_codegen_c2_ic_787)), __hexa_codegen_c2_sl_345));
+    while (HX_BOOL(hexa_cmp_lt(i, hexa_int(hexa_len(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_791)))))) {
+        HexaVal f = hexa_index_get(hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_792), i);
+        hexa_array_push(params, hexa_add(__hexa_codegen_c2_sl_380, hexa_map_get_ic(f, "name", &__hexa_codegen_c2_ic_793)));
+        hexa_array_push(body_parts, hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1601, hexa_map_get_ic(f, "name", &__hexa_codegen_c2_ic_794)), __hexa_codegen_c2_sl_593), hexa_map_get_ic(f, "name", &__hexa_codegen_c2_ic_795)), __hexa_codegen_c2_sl_345));
         i = hexa_add(i, hexa_int(1));
     }
     HexaVal p = hexa_str_join(params, __hexa_codegen_c2_sl_342);
     if (hexa_truthy(hexa_eq(p, __hexa_codegen_c2_sl_186))) {
         p = __hexa_codegen_c2_sl_82;
     }
-    return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_380, name), __hexa_codegen_c2_sl_327), p), __hexa_codegen_c2_sl_480), hexa_str_join(body_parts, __hexa_codegen_c2_sl_186)), __hexa_codegen_c2_sl_1601));
+    return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_380, name), __hexa_codegen_c2_sl_327), p), __hexa_codegen_c2_sl_480), hexa_str_join(body_parts, __hexa_codegen_c2_sl_186)), __hexa_codegen_c2_sl_1602));
     return __hexa_fn_arena_return(hexa_void());
 }
 
 
 HexaVal gen2_branch_predict_cond(HexaVal cond_expr) {
     __hexa_fn_arena_enter();
-    return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1602, gen2_expr(cond_expr)), __hexa_codegen_c2_sl_1603));
+    return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1603, gen2_expr(cond_expr)), __hexa_codegen_c2_sl_1604));
     return __hexa_fn_arena_return(hexa_void());
 }
 
 
 HexaVal gen2_branch_unlikely_cond(HexaVal cond_expr) {
     __hexa_fn_arena_enter();
-    return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1602, gen2_expr(cond_expr)), __hexa_codegen_c2_sl_1604));
+    return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1603, gen2_expr(cond_expr)), __hexa_codegen_c2_sl_1605));
     return __hexa_fn_arena_return(hexa_void());
 }
 
 
 HexaVal gen2_bitfield_accessor(HexaVal struct_name, HexaVal field_name, HexaVal bit_offset) {
     __hexa_fn_arena_enter();
-    HexaVal mask = __hexa_codegen_c2_sl_1605;
-    HexaVal getter = hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1606, struct_name), __hexa_codegen_c2_sl_1607), field_name), __hexa_codegen_c2_sl_1608), hexa_to_string(bit_offset)), __hexa_codegen_c2_sl_1609), mask), __hexa_codegen_c2_sl_1557);
-    HexaVal setter = hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1606, struct_name), __hexa_codegen_c2_sl_1610), field_name), __hexa_codegen_c2_sl_1611), mask), __hexa_codegen_c2_sl_1612), hexa_to_string(bit_offset)), __hexa_codegen_c2_sl_1613), mask), __hexa_codegen_c2_sl_1614), hexa_to_string(bit_offset)), __hexa_codegen_c2_sl_1615);
+    HexaVal mask = __hexa_codegen_c2_sl_1606;
+    HexaVal getter = hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1607, struct_name), __hexa_codegen_c2_sl_1608), field_name), __hexa_codegen_c2_sl_1609), hexa_to_string(bit_offset)), __hexa_codegen_c2_sl_1610), mask), __hexa_codegen_c2_sl_1558);
+    HexaVal setter = hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1607, struct_name), __hexa_codegen_c2_sl_1611), field_name), __hexa_codegen_c2_sl_1612), mask), __hexa_codegen_c2_sl_1613), hexa_to_string(bit_offset)), __hexa_codegen_c2_sl_1614), mask), __hexa_codegen_c2_sl_1615), hexa_to_string(bit_offset)), __hexa_codegen_c2_sl_1616);
     return __hexa_fn_arena_return(hexa_add(getter, setter));
     return __hexa_fn_arena_return(hexa_void());
 }
@@ -20058,30 +20087,30 @@ HexaVal gen2_bitfield_accessor(HexaVal struct_name, HexaVal field_name, HexaVal 
 
 HexaVal gen2_enum_decl(HexaVal node) {
     __hexa_fn_arena_enter();
-    HexaVal name = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_788);
-    HexaVal vc = hexa_int(hexa_len(hexa_map_get_ic(node, "variants", &__hexa_codegen_c2_ic_789)));
+    HexaVal name = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_796);
+    HexaVal vc = hexa_int(hexa_len(hexa_map_get_ic(node, "variants", &__hexa_codegen_c2_ic_797)));
     HexaVal tag_bits = gen2_min_bits(vc);
     HexaVal parts = hexa_array_new();
-    hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1616, name), __hexa_codegen_c2_sl_876), hexa_to_string(vc)), __hexa_codegen_c2_sl_1617), hexa_to_string(tag_bits)), __hexa_codegen_c2_sl_1618));
+    hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1617, name), __hexa_codegen_c2_sl_876), hexa_to_string(vc)), __hexa_codegen_c2_sl_1618), hexa_to_string(tag_bits)), __hexa_codegen_c2_sl_1619));
     if (hexa_truthy(hexa_cmp_lt(tag_bits, hexa_int(8)))) {
-        hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1619, hexa_to_string(tag_bits)), __hexa_codegen_c2_sl_1620), gen2_hex_mask(tag_bits)), __hexa_codegen_c2_sl_346));
+        hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1620, hexa_to_string(tag_bits)), __hexa_codegen_c2_sl_1621), gen2_hex_mask(tag_bits)), __hexa_codegen_c2_sl_346));
     }
     HexaVal _has_payload = hexa_bool(0);
     HexaVal _pi = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(_pi, vc))) {
-        HexaVal _pv = hexa_index_get(hexa_map_get_ic(node, "variants", &__hexa_codegen_c2_ic_790), _pi);
-        if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(_pv, "items", &__hexa_codegen_c2_ic_791)), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_cmp_gt(hexa_int(hexa_len(hexa_map_get_ic(_pv, "items", &__hexa_codegen_c2_ic_792))), hexa_int(0)))))) {
+        HexaVal _pv = hexa_index_get(hexa_map_get_ic(node, "variants", &__hexa_codegen_c2_ic_798), _pi);
+        if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(_pv, "items", &__hexa_codegen_c2_ic_799)), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_cmp_gt(hexa_int(hexa_len(hexa_map_get_ic(_pv, "items", &__hexa_codegen_c2_ic_800))), hexa_int(0)))))) {
             _has_payload = hexa_bool(1);
         }
         _pi = hexa_add(_pi, hexa_int(1));
     }
     if (hexa_truthy(_has_payload)) {
-        hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1621, name), __hexa_codegen_c2_sl_1622));
+        hexa_array_push(parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_1622, name), __hexa_codegen_c2_sl_1623));
     }
     HexaVal i = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(i, vc))) {
-        HexaVal v = hexa_index_get(hexa_map_get_ic(node, "variants", &__hexa_codegen_c2_ic_793), i);
-        hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1606, name), __hexa_codegen_c2_sl_670), hexa_map_get_ic(v, "name", &__hexa_codegen_c2_ic_794)), __hexa_codegen_c2_sl_1623), hexa_to_string(i)), __hexa_codegen_c2_sl_1557));
+        HexaVal v = hexa_index_get(hexa_map_get_ic(node, "variants", &__hexa_codegen_c2_ic_801), i);
+        hexa_array_push(parts, hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1607, name), __hexa_codegen_c2_sl_670), hexa_map_get_ic(v, "name", &__hexa_codegen_c2_ic_802)), __hexa_codegen_c2_sl_1624), hexa_to_string(i)), __hexa_codegen_c2_sl_1558));
         i = hexa_add(i, hexa_int(1));
     }
     return __hexa_fn_arena_return(hexa_str_join(parts, __hexa_codegen_c2_sl_186));
@@ -20108,27 +20137,27 @@ HexaVal gen2_min_bits(HexaVal count) {
 HexaVal gen2_hex_mask(HexaVal bits) {
     __hexa_fn_arena_enter();
     if (hexa_truthy(hexa_eq(bits, hexa_int(1)))) {
-        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1624);
-    }
-    if (hexa_truthy(hexa_eq(bits, hexa_int(2)))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1625);
     }
-    if (hexa_truthy(hexa_eq(bits, hexa_int(3)))) {
+    if (hexa_truthy(hexa_eq(bits, hexa_int(2)))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1626);
     }
-    if (hexa_truthy(hexa_eq(bits, hexa_int(4)))) {
+    if (hexa_truthy(hexa_eq(bits, hexa_int(3)))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1627);
     }
-    if (hexa_truthy(hexa_eq(bits, hexa_int(5)))) {
+    if (hexa_truthy(hexa_eq(bits, hexa_int(4)))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1628);
     }
-    if (hexa_truthy(hexa_eq(bits, hexa_int(6)))) {
+    if (hexa_truthy(hexa_eq(bits, hexa_int(5)))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1629);
     }
-    if (hexa_truthy(hexa_eq(bits, hexa_int(7)))) {
+    if (hexa_truthy(hexa_eq(bits, hexa_int(6)))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1630);
     }
-    return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1631);
+    if (hexa_truthy(hexa_eq(bits, hexa_int(7)))) {
+        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1631);
+    }
+    return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1632);
     return __hexa_fn_arena_return(hexa_void());
 }
 
@@ -20136,16 +20165,16 @@ HexaVal gen2_hex_mask(HexaVal bits) {
 HexaVal gen2_match_stmt(HexaVal node, HexaVal depth) {
     __hexa_fn_arena_enter();
     HexaVal pad = gen2_indent(depth);
-    HexaVal scrutinee = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_795));
+    HexaVal scrutinee = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_803));
     HexaVal chunks = hexa_array_new();
     hexa_array_push(chunks, hexa_add(pad, __hexa_codegen_c2_sl_627));
     HexaVal pad2 = gen2_indent(hexa_add(depth, hexa_int(1)));
-    hexa_array_push(chunks, hexa_add(hexa_add(hexa_add(pad2, __hexa_codegen_c2_sl_1632), scrutinee), __hexa_codegen_c2_sl_381));
+    hexa_array_push(chunks, hexa_add(hexa_add(hexa_add(pad2, __hexa_codegen_c2_sl_1633), scrutinee), __hexa_codegen_c2_sl_381));
     HexaVal ai = hexa_int(0);
-    while (HX_BOOL(hexa_cmp_lt(ai, hexa_int(hexa_len(hexa_map_get_ic(node, "arms", &__hexa_codegen_c2_ic_796)))))) {
-        HexaVal arm = hexa_index_get(hexa_map_get_ic(node, "arms", &__hexa_codegen_c2_ic_797), ai);
-        HexaVal pat = hexa_map_get_ic(arm, "left", &__hexa_codegen_c2_ic_798);
-        HexaVal is_wildcard = hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(pat), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(pat, "kind", &__hexa_codegen_c2_ic_799), __hexa_codegen_c2_sl_1542)));
+    while (HX_BOOL(hexa_cmp_lt(ai, hexa_int(hexa_len(hexa_map_get_ic(node, "arms", &__hexa_codegen_c2_ic_804)))))) {
+        HexaVal arm = hexa_index_get(hexa_map_get_ic(node, "arms", &__hexa_codegen_c2_ic_805), ai);
+        HexaVal pat = hexa_map_get_ic(arm, "left", &__hexa_codegen_c2_ic_806);
+        HexaVal is_wildcard = hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(pat), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(pat, "kind", &__hexa_codegen_c2_ic_807), __hexa_codegen_c2_sl_1544)));
         if (hexa_truthy(is_wildcard)) {
             if (hexa_truthy(hexa_cmp_gt(ai, hexa_int(0)))) {
                 hexa_array_push(chunks, __hexa_codegen_c2_sl_442);
@@ -20153,23 +20182,23 @@ HexaVal gen2_match_stmt(HexaVal node, HexaVal depth) {
                 hexa_array_push(chunks, hexa_add(pad2, __hexa_codegen_c2_sl_627));
             }
         } else {
-            HexaVal cond = gen2_match_cond(pat, __hexa_codegen_c2_sl_1633);
+            HexaVal cond = gen2_match_cond(pat, __hexa_codegen_c2_sl_1634);
             if (hexa_truthy(hexa_eq(ai, hexa_int(0)))) {
-                hexa_array_push(chunks, hexa_add(hexa_add(hexa_add(pad2, __hexa_codegen_c2_sl_1634), cond), __hexa_codegen_c2_sl_480));
+                hexa_array_push(chunks, hexa_add(hexa_add(hexa_add(pad2, __hexa_codegen_c2_sl_1635), cond), __hexa_codegen_c2_sl_480));
             } else {
-                hexa_array_push(chunks, hexa_add(hexa_add(__hexa_codegen_c2_sl_1635, cond), __hexa_codegen_c2_sl_480));
+                hexa_array_push(chunks, hexa_add(hexa_add(__hexa_codegen_c2_sl_1636, cond), __hexa_codegen_c2_sl_480));
             }
         }
-        if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(pat), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(pat, "kind", &__hexa_codegen_c2_ic_800), __hexa_codegen_c2_sl_1533)))) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(pat, "left", &__hexa_codegen_c2_ic_801)), __hexa_codegen_c2_sl_162)))))) && hexa_truthy(hexa_eq(hexa_map_get_ic(hexa_map_get_ic(pat, "left", &__hexa_codegen_c2_ic_802), "kind", &__hexa_codegen_c2_ic_803), __hexa_codegen_c2_sl_372))))) {
-            HexaVal _bn = hexa_map_get_ic(hexa_map_get_ic(pat, "left", &__hexa_codegen_c2_ic_804), "name", &__hexa_codegen_c2_ic_805);
+        if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(pat), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(pat, "kind", &__hexa_codegen_c2_ic_808), __hexa_codegen_c2_sl_1535)))) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(pat, "left", &__hexa_codegen_c2_ic_809)), __hexa_codegen_c2_sl_162)))))) && hexa_truthy(hexa_eq(hexa_map_get_ic(hexa_map_get_ic(pat, "left", &__hexa_codegen_c2_ic_810), "kind", &__hexa_codegen_c2_ic_811), __hexa_codegen_c2_sl_372))))) {
+            HexaVal _bn = hexa_map_get_ic(hexa_map_get_ic(pat, "left", &__hexa_codegen_c2_ic_812), "name", &__hexa_codegen_c2_ic_813);
             if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(hexa_type_of(_bn), __hexa_codegen_c2_sl_162)) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(_bn, __hexa_codegen_c2_sl_670))))))) {
                 HexaVal _pad3 = gen2_indent(hexa_add(depth, hexa_int(2)));
-                hexa_array_push(chunks, hexa_add(hexa_add(hexa_add(_pad3, __hexa_codegen_c2_sl_380), _hexa_mangle_ident(_bn)), __hexa_codegen_c2_sl_1636));
+                hexa_array_push(chunks, hexa_add(hexa_add(hexa_add(_pad3, __hexa_codegen_c2_sl_380), _hexa_mangle_ident(_bn)), __hexa_codegen_c2_sl_1637));
             }
         }
         HexaVal bi = hexa_int(0);
-        while (HX_BOOL(hexa_cmp_lt(bi, hexa_int(hexa_len(hexa_map_get_ic(arm, "body", &__hexa_codegen_c2_ic_806)))))) {
-            hexa_array_push(chunks, gen2_stmt(hexa_index_get(hexa_map_get_ic(arm, "body", &__hexa_codegen_c2_ic_807), bi), hexa_add(depth, hexa_int(2))));
+        while (HX_BOOL(hexa_cmp_lt(bi, hexa_int(hexa_len(hexa_map_get_ic(arm, "body", &__hexa_codegen_c2_ic_814)))))) {
+            hexa_array_push(chunks, gen2_stmt(hexa_index_get(hexa_map_get_ic(arm, "body", &__hexa_codegen_c2_ic_815), bi), hexa_add(depth, hexa_int(2))));
             bi = hexa_add(bi, hexa_int(1));
         }
         hexa_array_push(chunks, hexa_add(pad2, __hexa_codegen_c2_sl_332));
@@ -20186,41 +20215,41 @@ HexaVal gen2_match_cond(HexaVal pat, HexaVal scrutinee_var) {
     if (hexa_truthy(hexa_eq(hexa_type_of(pat), __hexa_codegen_c2_sl_162))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_490);
     }
-    HexaVal k = hexa_map_get_ic(pat, "kind", &__hexa_codegen_c2_ic_808);
-    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1542))) {
+    HexaVal k = hexa_map_get_ic(pat, "kind", &__hexa_codegen_c2_ic_816);
+    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1544))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_490);
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_859))) {
-        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1637, scrutinee_var), __hexa_codegen_c2_sl_1638), hexa_map_get_ic(pat, "value", &__hexa_codegen_c2_ic_809)), __hexa_codegen_c2_sl_720));
+        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1638, scrutinee_var), __hexa_codegen_c2_sl_1639), hexa_map_get_ic(pat, "value", &__hexa_codegen_c2_ic_817)), __hexa_codegen_c2_sl_720));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_860))) {
-        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1637, scrutinee_var), __hexa_codegen_c2_sl_1639), hexa_map_get_ic(pat, "value", &__hexa_codegen_c2_ic_810)), __hexa_codegen_c2_sl_720));
+        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1638, scrutinee_var), __hexa_codegen_c2_sl_1640), hexa_map_get_ic(pat, "value", &__hexa_codegen_c2_ic_818)), __hexa_codegen_c2_sl_720));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_865))) {
-        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1637, scrutinee_var), __hexa_codegen_c2_sl_1640), c_escape(hexa_map_get_ic(pat, "value", &__hexa_codegen_c2_ic_811))), __hexa_codegen_c2_sl_1641));
+        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1638, scrutinee_var), __hexa_codegen_c2_sl_1641), c_escape(hexa_map_get_ic(pat, "value", &__hexa_codegen_c2_ic_819))), __hexa_codegen_c2_sl_1642));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_861))) {
-        if (hexa_truthy(hexa_eq(hexa_map_get_ic(pat, "value", &__hexa_codegen_c2_ic_812), __hexa_codegen_c2_sl_862))) {
-            return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1637, scrutinee_var), __hexa_codegen_c2_sl_1642));
+        if (hexa_truthy(hexa_eq(hexa_map_get_ic(pat, "value", &__hexa_codegen_c2_ic_820), __hexa_codegen_c2_sl_862))) {
+            return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1638, scrutinee_var), __hexa_codegen_c2_sl_1643));
         }
-        return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1637, scrutinee_var), __hexa_codegen_c2_sl_1643));
+        return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1638, scrutinee_var), __hexa_codegen_c2_sl_1644));
     }
-    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1533))) {
-        HexaVal enum_const = hexa_add(hexa_add(hexa_map_get_ic(pat, "name", &__hexa_codegen_c2_ic_813), __hexa_codegen_c2_sl_670), hexa_map_get_ic(pat, "value", &__hexa_codegen_c2_ic_814));
-        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(pat, "left", &__hexa_codegen_c2_ic_815)), __hexa_codegen_c2_sl_162))))) {
-            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1644, scrutinee_var), __hexa_codegen_c2_sl_1645), scrutinee_var), __hexa_codegen_c2_sl_1646), enum_const), __hexa_codegen_c2_sl_720));
+    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1535))) {
+        HexaVal enum_const = hexa_add(hexa_add(hexa_map_get_ic(pat, "name", &__hexa_codegen_c2_ic_821), __hexa_codegen_c2_sl_670), hexa_map_get_ic(pat, "value", &__hexa_codegen_c2_ic_822));
+        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(pat, "left", &__hexa_codegen_c2_ic_823)), __hexa_codegen_c2_sl_162))))) {
+            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1645, scrutinee_var), __hexa_codegen_c2_sl_1646), scrutinee_var), __hexa_codegen_c2_sl_1647), enum_const), __hexa_codegen_c2_sl_720));
         }
-        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1637, scrutinee_var), __hexa_codegen_c2_sl_342), enum_const), __hexa_codegen_c2_sl_504));
+        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1638, scrutinee_var), __hexa_codegen_c2_sl_342), enum_const), __hexa_codegen_c2_sl_504));
     }
-    return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1637, scrutinee_var), __hexa_codegen_c2_sl_342), gen2_expr(pat)), __hexa_codegen_c2_sl_504));
+    return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1638, scrutinee_var), __hexa_codegen_c2_sl_342), gen2_expr(pat)), __hexa_codegen_c2_sl_504));
     return __hexa_fn_arena_return(hexa_void());
 }
 
 
 HexaVal gen2_match_expr(HexaVal node) {
     __hexa_fn_arena_enter();
-    HexaVal scrutinee = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_816));
-    HexaVal arms = hexa_map_get_ic(node, "arms", &__hexa_codegen_c2_ic_817);
+    HexaVal scrutinee = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_824));
+    HexaVal arms = hexa_map_get_ic(node, "arms", &__hexa_codegen_c2_ic_825);
     return __hexa_fn_arena_return(gen2_match_ternary(arms, scrutinee, hexa_int(0)));
     return __hexa_fn_arena_return(hexa_void());
 }
@@ -20233,13 +20262,13 @@ HexaVal gen2_match_ternary(HexaVal arms, HexaVal scrutinee_c, HexaVal idx) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_509);
     }
     HexaVal arm = hexa_index_get(arms, idx);
-    HexaVal pat = hexa_map_get_ic(arm, "left", &__hexa_codegen_c2_ic_818);
-    HexaVal is_wildcard = hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(pat), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(pat, "kind", &__hexa_codegen_c2_ic_819), __hexa_codegen_c2_sl_1542)));
-    HexaVal val = gen2_arm_value(hexa_map_get_ic(arm, "body", &__hexa_codegen_c2_ic_820));
-    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(pat), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(pat, "kind", &__hexa_codegen_c2_ic_821), __hexa_codegen_c2_sl_1533)))) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(pat, "left", &__hexa_codegen_c2_ic_822)), __hexa_codegen_c2_sl_162)))))) && hexa_truthy(hexa_eq(hexa_map_get_ic(hexa_map_get_ic(pat, "left", &__hexa_codegen_c2_ic_823), "kind", &__hexa_codegen_c2_ic_824), __hexa_codegen_c2_sl_372))))) {
-        HexaVal _bn = hexa_map_get_ic(hexa_map_get_ic(pat, "left", &__hexa_codegen_c2_ic_825), "name", &__hexa_codegen_c2_ic_826);
+    HexaVal pat = hexa_map_get_ic(arm, "left", &__hexa_codegen_c2_ic_826);
+    HexaVal is_wildcard = hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(pat), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(pat, "kind", &__hexa_codegen_c2_ic_827), __hexa_codegen_c2_sl_1544)));
+    HexaVal val = gen2_arm_value(hexa_map_get_ic(arm, "body", &__hexa_codegen_c2_ic_828));
+    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(pat), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(pat, "kind", &__hexa_codegen_c2_ic_829), __hexa_codegen_c2_sl_1535)))) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(pat, "left", &__hexa_codegen_c2_ic_830)), __hexa_codegen_c2_sl_162)))))) && hexa_truthy(hexa_eq(hexa_map_get_ic(hexa_map_get_ic(pat, "left", &__hexa_codegen_c2_ic_831), "kind", &__hexa_codegen_c2_ic_832), __hexa_codegen_c2_sl_372))))) {
+        HexaVal _bn = hexa_map_get_ic(hexa_map_get_ic(pat, "left", &__hexa_codegen_c2_ic_833), "name", &__hexa_codegen_c2_ic_834);
         if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(hexa_type_of(_bn), __hexa_codegen_c2_sl_162)) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(_bn, __hexa_codegen_c2_sl_670))))))) {
-            val = hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1647, _hexa_mangle_ident(_bn)), __hexa_codegen_c2_sl_1648), scrutinee_c), __hexa_codegen_c2_sl_1649), val), __hexa_codegen_c2_sl_585);
+            val = hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1648, _hexa_mangle_ident(_bn)), __hexa_codegen_c2_sl_1649), scrutinee_c), __hexa_codegen_c2_sl_1650), val), __hexa_codegen_c2_sl_585);
         }
     }
     if (hexa_truthy(hexa_bool(hexa_truthy(is_wildcard) || hexa_truthy(hexa_eq(idx, hexa_sub(hexa_int(hexa_len(arms)), hexa_int(1))))))) {
@@ -20247,11 +20276,11 @@ HexaVal gen2_match_ternary(HexaVal arms, HexaVal scrutinee_c, HexaVal idx) {
             return __hexa_fn_arena_return(val);
         }
         cond = gen2_match_cond(pat, scrutinee_c);
-        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_327, cond), __hexa_codegen_c2_sl_1650), val), __hexa_codegen_c2_sl_1651));
+        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_327, cond), __hexa_codegen_c2_sl_1651), val), __hexa_codegen_c2_sl_1652));
     }
     cond = gen2_match_cond(pat, scrutinee_c);
     HexaVal rest = gen2_match_ternary(arms, scrutinee_c, hexa_add(idx, hexa_int(1)));
-    return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_327, cond), __hexa_codegen_c2_sl_1650), val), __hexa_codegen_c2_sl_616), rest), __hexa_codegen_c2_sl_330));
+    return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_327, cond), __hexa_codegen_c2_sl_1651), val), __hexa_codegen_c2_sl_616), rest), __hexa_codegen_c2_sl_330));
     return __hexa_fn_arena_return(hexa_void());
 }
 
@@ -20265,12 +20294,12 @@ HexaVal gen2_arm_value(HexaVal body) {
         return __hexa_fn_arena_return(_gen2_arm_block_expr(body));
     }
     HexaVal last = hexa_index_get(body, hexa_sub(hexa_int(hexa_len(body)), hexa_int(1)));
-    if (hexa_truthy(hexa_eq(hexa_map_get_ic(last, "kind", &__hexa_codegen_c2_ic_827), __hexa_codegen_c2_sl_389))) {
-        return __hexa_fn_arena_return(gen2_expr(hexa_map_get_ic(last, "left", &__hexa_codegen_c2_ic_828)));
+    if (hexa_truthy(hexa_eq(hexa_map_get_ic(last, "kind", &__hexa_codegen_c2_ic_835), __hexa_codegen_c2_sl_389))) {
+        return __hexa_fn_arena_return(gen2_expr(hexa_map_get_ic(last, "left", &__hexa_codegen_c2_ic_836)));
     }
-    if (hexa_truthy(hexa_eq(hexa_map_get_ic(last, "kind", &__hexa_codegen_c2_ic_829), __hexa_codegen_c2_sl_619))) {
-        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(last, "left", &__hexa_codegen_c2_ic_830)), __hexa_codegen_c2_sl_162))))) {
-            return __hexa_fn_arena_return(gen2_expr(hexa_map_get_ic(last, "left", &__hexa_codegen_c2_ic_831)));
+    if (hexa_truthy(hexa_eq(hexa_map_get_ic(last, "kind", &__hexa_codegen_c2_ic_837), __hexa_codegen_c2_sl_619))) {
+        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(last, "left", &__hexa_codegen_c2_ic_838)), __hexa_codegen_c2_sl_162))))) {
+            return __hexa_fn_arena_return(gen2_expr(hexa_map_get_ic(last, "left", &__hexa_codegen_c2_ic_839)));
         }
     }
     return __hexa_fn_arena_return(__hexa_codegen_c2_sl_509);
@@ -20296,19 +20325,19 @@ HexaVal _method_registry_lookup(HexaVal name) {
 
 HexaVal gen2_impl_block(HexaVal node) {
     __hexa_fn_arena_enter();
-    HexaVal type_n = hexa_map_get_ic(node, "target", &__hexa_codegen_c2_ic_832);
+    HexaVal type_n = hexa_map_get_ic(node, "target", &__hexa_codegen_c2_ic_840);
     HexaVal fwd_chunks = hexa_array_new();
     HexaVal fn_chunks = hexa_array_new();
-    HexaVal methods = hexa_map_get_ic(node, "methods", &__hexa_codegen_c2_ic_833);
+    HexaVal methods = hexa_map_get_ic(node, "methods", &__hexa_codegen_c2_ic_841);
     HexaVal mi = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(mi, hexa_int(hexa_len(methods))))) {
         HexaVal m = hexa_index_get(methods, mi);
-        HexaVal mangled = hexa_add(hexa_add(type_n, __hexa_codegen_c2_sl_1514), hexa_map_get_ic(m, "name", &__hexa_codegen_c2_ic_834));
-        hexa_array_push(_method_registry, hexa_array_push(hexa_array_push(hexa_array_new(), hexa_map_get_ic(m, "name", &__hexa_codegen_c2_ic_835)), type_n));
+        HexaVal mangled = hexa_add(hexa_add(type_n, __hexa_codegen_c2_sl_1514), hexa_map_get_ic(m, "name", &__hexa_codegen_c2_ic_842));
+        hexa_array_push(_method_registry, hexa_array_push(hexa_array_push(hexa_array_new(), hexa_map_get_ic(m, "name", &__hexa_codegen_c2_ic_843)), type_n));
         HexaVal params = hexa_array_new();
         HexaVal pi = hexa_int(0);
-        while (HX_BOOL(hexa_cmp_lt(pi, hexa_int(hexa_len(hexa_map_get_ic(m, "params", &__hexa_codegen_c2_ic_836)))))) {
-            hexa_array_push(params, hexa_add(__hexa_codegen_c2_sl_380, hexa_map_get_ic(hexa_index_get(hexa_map_get_ic(m, "params", &__hexa_codegen_c2_ic_837), pi), "name", &__hexa_codegen_c2_ic_838)));
+        while (HX_BOOL(hexa_cmp_lt(pi, hexa_int(hexa_len(hexa_map_get_ic(m, "params", &__hexa_codegen_c2_ic_844)))))) {
+            hexa_array_push(params, hexa_add(__hexa_codegen_c2_sl_380, hexa_map_get_ic(hexa_index_get(hexa_map_get_ic(m, "params", &__hexa_codegen_c2_ic_845), pi), "name", &__hexa_codegen_c2_ic_846)));
             pi = hexa_add(pi, hexa_int(1));
         }
         HexaVal p = hexa_str_join(params, __hexa_codegen_c2_sl_342);
@@ -20319,11 +20348,11 @@ HexaVal gen2_impl_block(HexaVal node) {
         HexaVal body_chunks = hexa_array_new();
         hexa_array_push(body_chunks, hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_380, mangled), __hexa_codegen_c2_sl_327), p), __hexa_codegen_c2_sl_480));
         HexaVal bi = hexa_int(0);
-        while (HX_BOOL(hexa_cmp_lt(bi, hexa_int(hexa_len(hexa_map_get_ic(m, "body", &__hexa_codegen_c2_ic_839)))))) {
-            hexa_array_push(body_chunks, gen2_stmt(hexa_index_get(hexa_map_get_ic(m, "body", &__hexa_codegen_c2_ic_840), bi), hexa_int(1)));
+        while (HX_BOOL(hexa_cmp_lt(bi, hexa_int(hexa_len(hexa_map_get_ic(m, "body", &__hexa_codegen_c2_ic_847)))))) {
+            hexa_array_push(body_chunks, gen2_stmt(hexa_index_get(hexa_map_get_ic(m, "body", &__hexa_codegen_c2_ic_848), bi), hexa_int(1)));
             bi = hexa_add(bi, hexa_int(1));
         }
-        hexa_array_push(body_chunks, __hexa_codegen_c2_sl_1652);
+        hexa_array_push(body_chunks, __hexa_codegen_c2_sl_1653);
         hexa_array_push(fn_chunks, hexa_str_join(body_chunks, __hexa_codegen_c2_sl_186));
         mi = hexa_add(mi, hexa_int(1));
     }
@@ -20337,7 +20366,7 @@ HexaVal _lambda_param_name(HexaVal p) {
     if (hexa_truthy(hexa_eq(hexa_type_of(p), __hexa_codegen_c2_sl_162))) {
         return __hexa_fn_arena_return(p);
     }
-    return __hexa_fn_arena_return(hexa_to_string(hexa_map_get_ic(p, "name", &__hexa_codegen_c2_ic_841)));
+    return __hexa_fn_arena_return(hexa_to_string(hexa_map_get_ic(p, "name", &__hexa_codegen_c2_ic_849)));
     return __hexa_fn_arena_return(hexa_void());
 }
 
@@ -20361,7 +20390,7 @@ HexaVal _strlit_dedup(HexaVal escaped) {
     HexaVal i = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(i, hexa_int(hexa_len(_strlit_keys))))) {
         if (hexa_truthy(hexa_eq(hexa_index_get(_strlit_keys, i), escaped))) {
-            return __hexa_fn_arena_return(hexa_add(__hexa_codegen_c2_sl_1653, hexa_to_string(hexa_index_get(_strlit_ids, i))));
+            return __hexa_fn_arena_return(hexa_add(__hexa_codegen_c2_sl_1654, hexa_to_string(hexa_index_get(_strlit_ids, i))));
         }
         i = hexa_add(i, hexa_int(1));
     }
@@ -20369,7 +20398,7 @@ HexaVal _strlit_dedup(HexaVal escaped) {
     _strlit_counter = hexa_add(_strlit_counter, hexa_int(1));
     hexa_array_push(_strlit_keys, escaped);
     hexa_array_push(_strlit_ids, id);
-    HexaVal varname = hexa_add(__hexa_codegen_c2_sl_1653, hexa_to_string(id));
+    HexaVal varname = hexa_add(__hexa_codegen_c2_sl_1654, hexa_to_string(id));
     return __hexa_fn_arena_return(varname);
     return __hexa_fn_arena_return(hexa_void());
 }
@@ -20399,10 +20428,10 @@ HexaVal _make_bool_lit_node(HexaVal b) {
 
 HexaVal _cf_as_float(HexaVal lit) {
     __hexa_fn_arena_enter();
-    if (hexa_truthy(hexa_eq(hexa_map_get_ic(lit, "kind", &__hexa_codegen_c2_ic_842), __hexa_codegen_c2_sl_860))) {
-        return __hexa_fn_arena_return(hexa_float(__hx_to_double(hexa_map_get_ic(lit, "value", &__hexa_codegen_c2_ic_843))));
+    if (hexa_truthy(hexa_eq(hexa_map_get_ic(lit, "kind", &__hexa_codegen_c2_ic_850), __hexa_codegen_c2_sl_860))) {
+        return __hexa_fn_arena_return(hexa_float(__hx_to_double(hexa_map_get_ic(lit, "value", &__hexa_codegen_c2_ic_851))));
     }
-    return __hexa_fn_arena_return(hexa_float(__hx_to_double(hexa_to_string((HX_IS_STR(hexa_map_get_ic(lit, "value", &__hexa_codegen_c2_ic_844))?hexa_str_parse_int(hexa_map_get_ic(lit, "value", &__hexa_codegen_c2_ic_844)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(lit, "value", &__hexa_codegen_c2_ic_844))))))));
+    return __hexa_fn_arena_return(hexa_float(__hx_to_double(hexa_to_string((HX_IS_STR(hexa_map_get_ic(lit, "value", &__hexa_codegen_c2_ic_852))?hexa_str_parse_int(hexa_map_get_ic(lit, "value", &__hexa_codegen_c2_ic_852)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(lit, "value", &__hexa_codegen_c2_ic_852))))))));
     return __hexa_fn_arena_return(hexa_void());
 }
 
@@ -20417,7 +20446,7 @@ HexaVal comptime_eval(HexaVal node) {
     if (hexa_truthy(hexa_eq(hexa_type_of(node), __hexa_codegen_c2_sl_162))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
     }
-    HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_845);
+    HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_853);
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_859))) {
         return __hexa_fn_arena_return(node);
     }
@@ -20431,101 +20460,101 @@ HexaVal comptime_eval(HexaVal node) {
         return __hexa_fn_arena_return(node);
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_372))) {
-        return __hexa_fn_arena_return(_lookup_comptime_const(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_846)));
+        return __hexa_fn_arena_return(_lookup_comptime_const(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_854)));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_920))) {
-        op = hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_847);
-        HexaVal v = comptime_eval(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_848));
+        op = hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_855);
+        HexaVal v = comptime_eval(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_856));
         if (hexa_truthy(hexa_eq(hexa_type_of(v), __hexa_codegen_c2_sl_162))) {
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
         if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_603))) {
-            if (hexa_truthy(hexa_eq(hexa_map_get_ic(v, "kind", &__hexa_codegen_c2_ic_849), __hexa_codegen_c2_sl_859))) {
-                HexaVal i = hexa_sub(hexa_int(0), (HX_IS_STR(hexa_map_get_ic(v, "value", &__hexa_codegen_c2_ic_850))?hexa_str_parse_int(hexa_map_get_ic(v, "value", &__hexa_codegen_c2_ic_850)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(v, "value", &__hexa_codegen_c2_ic_850)))));
+            if (hexa_truthy(hexa_eq(hexa_map_get_ic(v, "kind", &__hexa_codegen_c2_ic_857), __hexa_codegen_c2_sl_859))) {
+                HexaVal i = hexa_sub(hexa_int(0), (HX_IS_STR(hexa_map_get_ic(v, "value", &__hexa_codegen_c2_ic_858))?hexa_str_parse_int(hexa_map_get_ic(v, "value", &__hexa_codegen_c2_ic_858)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(v, "value", &__hexa_codegen_c2_ic_858)))));
                 return __hexa_fn_arena_return(_make_int_lit_node(hexa_to_string(i)));
             }
-            if (hexa_truthy(hexa_eq(hexa_map_get_ic(v, "kind", &__hexa_codegen_c2_ic_851), __hexa_codegen_c2_sl_860))) {
-                HexaVal f = hexa_sub(hexa_int(0), hexa_float(__hx_to_double(hexa_map_get_ic(v, "value", &__hexa_codegen_c2_ic_852))));
+            if (hexa_truthy(hexa_eq(hexa_map_get_ic(v, "kind", &__hexa_codegen_c2_ic_859), __hexa_codegen_c2_sl_860))) {
+                HexaVal f = hexa_sub(hexa_int(0), hexa_float(__hx_to_double(hexa_map_get_ic(v, "value", &__hexa_codegen_c2_ic_860))));
                 return __hexa_fn_arena_return(_make_float_lit_node(hexa_to_string(f)));
             }
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
         if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_923))) {
-            if (hexa_truthy(hexa_eq(hexa_map_get_ic(v, "kind", &__hexa_codegen_c2_ic_853), __hexa_codegen_c2_sl_861))) {
-                return __hexa_fn_arena_return(_make_bool_lit_node(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(v, "value", &__hexa_codegen_c2_ic_854), __hexa_codegen_c2_sl_862)))));
+            if (hexa_truthy(hexa_eq(hexa_map_get_ic(v, "kind", &__hexa_codegen_c2_ic_861), __hexa_codegen_c2_sl_861))) {
+                return __hexa_fn_arena_return(_make_bool_lit_node(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(v, "value", &__hexa_codegen_c2_ic_862), __hexa_codegen_c2_sl_862)))));
             }
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_858))) {
-        op = hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_855);
+        op = hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_863);
         if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_906))) {
-            ll = comptime_eval(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_856));
+            ll = comptime_eval(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_864));
             if (hexa_truthy(hexa_eq(hexa_type_of(ll), __hexa_codegen_c2_sl_162))) {
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
-            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(ll, "kind", &__hexa_codegen_c2_ic_857), __hexa_codegen_c2_sl_861))))) {
+            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(ll, "kind", &__hexa_codegen_c2_ic_865), __hexa_codegen_c2_sl_861))))) {
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
-            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(ll, "value", &__hexa_codegen_c2_ic_858), __hexa_codegen_c2_sl_862))))) {
+            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(ll, "value", &__hexa_codegen_c2_ic_866), __hexa_codegen_c2_sl_862))))) {
                 return __hexa_fn_arena_return(_make_bool_lit_node(hexa_bool(0)));
             }
-            rr = comptime_eval(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_859));
+            rr = comptime_eval(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_867));
             if (hexa_truthy(hexa_eq(hexa_type_of(rr), __hexa_codegen_c2_sl_162))) {
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
-            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(rr, "kind", &__hexa_codegen_c2_ic_860), __hexa_codegen_c2_sl_861))))) {
+            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(rr, "kind", &__hexa_codegen_c2_ic_868), __hexa_codegen_c2_sl_861))))) {
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
-            return __hexa_fn_arena_return(_make_bool_lit_node(hexa_eq(hexa_map_get_ic(rr, "value", &__hexa_codegen_c2_ic_861), __hexa_codegen_c2_sl_862)));
+            return __hexa_fn_arena_return(_make_bool_lit_node(hexa_eq(hexa_map_get_ic(rr, "value", &__hexa_codegen_c2_ic_869), __hexa_codegen_c2_sl_862)));
         }
         if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_908))) {
-            ll = comptime_eval(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_862));
+            ll = comptime_eval(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_870));
             if (hexa_truthy(hexa_eq(hexa_type_of(ll), __hexa_codegen_c2_sl_162))) {
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
-            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(ll, "kind", &__hexa_codegen_c2_ic_863), __hexa_codegen_c2_sl_861))))) {
+            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(ll, "kind", &__hexa_codegen_c2_ic_871), __hexa_codegen_c2_sl_861))))) {
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
-            if (hexa_truthy(hexa_eq(hexa_map_get_ic(ll, "value", &__hexa_codegen_c2_ic_864), __hexa_codegen_c2_sl_862))) {
+            if (hexa_truthy(hexa_eq(hexa_map_get_ic(ll, "value", &__hexa_codegen_c2_ic_872), __hexa_codegen_c2_sl_862))) {
                 return __hexa_fn_arena_return(_make_bool_lit_node(hexa_bool(1)));
             }
-            rr = comptime_eval(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_865));
+            rr = comptime_eval(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_873));
             if (hexa_truthy(hexa_eq(hexa_type_of(rr), __hexa_codegen_c2_sl_162))) {
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
-            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(rr, "kind", &__hexa_codegen_c2_ic_866), __hexa_codegen_c2_sl_861))))) {
+            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(rr, "kind", &__hexa_codegen_c2_ic_874), __hexa_codegen_c2_sl_861))))) {
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
-            return __hexa_fn_arena_return(_make_bool_lit_node(hexa_eq(hexa_map_get_ic(rr, "value", &__hexa_codegen_c2_ic_867), __hexa_codegen_c2_sl_862)));
+            return __hexa_fn_arena_return(_make_bool_lit_node(hexa_eq(hexa_map_get_ic(rr, "value", &__hexa_codegen_c2_ic_875), __hexa_codegen_c2_sl_862)));
         }
-        HexaVal l = comptime_eval(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_868));
+        HexaVal l = comptime_eval(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_876));
         if (hexa_truthy(hexa_eq(hexa_type_of(l), __hexa_codegen_c2_sl_162))) {
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
-        HexaVal r = comptime_eval(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_869));
+        HexaVal r = comptime_eval(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_877));
         if (hexa_truthy(hexa_eq(hexa_type_of(r), __hexa_codegen_c2_sl_162))) {
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
-        HexaVal lk = hexa_map_get_ic(l, "kind", &__hexa_codegen_c2_ic_870);
-        HexaVal rk = hexa_map_get_ic(r, "kind", &__hexa_codegen_c2_ic_871);
+        HexaVal lk = hexa_map_get_ic(l, "kind", &__hexa_codegen_c2_ic_878);
+        HexaVal rk = hexa_map_get_ic(r, "kind", &__hexa_codegen_c2_ic_879);
         if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_884)) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_885)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_880)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_881)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_882)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_883))))) {
             if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(lk, __hexa_codegen_c2_sl_865)) && hexa_truthy(hexa_eq(rk, __hexa_codegen_c2_sl_865))))) {
                 if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_884))) {
-                    return __hexa_fn_arena_return(_make_bool_lit_node(hexa_eq(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_872), hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_873))));
+                    return __hexa_fn_arena_return(_make_bool_lit_node(hexa_eq(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_880), hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_881))));
                 }
                 if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_885))) {
-                    return __hexa_fn_arena_return(_make_bool_lit_node(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_874), hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_875))))));
+                    return __hexa_fn_arena_return(_make_bool_lit_node(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_882), hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_883))))));
                 }
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
             if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(lk, __hexa_codegen_c2_sl_861)) && hexa_truthy(hexa_eq(rk, __hexa_codegen_c2_sl_861))))) {
                 if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_884))) {
-                    return __hexa_fn_arena_return(_make_bool_lit_node(hexa_eq(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_876), hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_877))));
+                    return __hexa_fn_arena_return(_make_bool_lit_node(hexa_eq(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_884), hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_885))));
                 }
                 if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_885))) {
-                    return __hexa_fn_arena_return(_make_bool_lit_node(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_878), hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_879))))));
+                    return __hexa_fn_arena_return(_make_bool_lit_node(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_886), hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_887))))));
                 }
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
@@ -20558,8 +20587,8 @@ HexaVal comptime_eval(HexaVal node) {
                 }
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
-            HexaVal li_c = (HX_IS_STR(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_880))?hexa_str_parse_int(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_880)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_880))));
-            HexaVal ri_c = (HX_IS_STR(hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_881))?hexa_str_parse_int(hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_881)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_881))));
+            HexaVal li_c = (HX_IS_STR(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_888))?hexa_str_parse_int(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_888)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_888))));
+            HexaVal ri_c = (HX_IS_STR(hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_889))?hexa_str_parse_int(hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_889)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_889))));
             if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_884))) {
                 return __hexa_fn_arena_return(_make_bool_lit_node(hexa_eq(li_c, ri_c)));
             }
@@ -20581,7 +20610,7 @@ HexaVal comptime_eval(HexaVal node) {
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
         if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_598)) && hexa_truthy(hexa_eq(lk, __hexa_codegen_c2_sl_865)))) && hexa_truthy(hexa_eq(rk, __hexa_codegen_c2_sl_865))))) {
-            return __hexa_fn_arena_return(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_new(), "kind", __hexa_codegen_c2_sl_865), "name", __hexa_codegen_c2_sl_186), "value", hexa_add(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_882), hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_883))), "op", __hexa_codegen_c2_sl_186), "left", __hexa_codegen_c2_sl_186), "right", __hexa_codegen_c2_sl_186), "cond", __hexa_codegen_c2_sl_186), "then_body", __hexa_codegen_c2_sl_186), "else_body", __hexa_codegen_c2_sl_186), "params", __hexa_codegen_c2_sl_186), "body", __hexa_codegen_c2_sl_186), "args", __hexa_codegen_c2_sl_186), "fields", __hexa_codegen_c2_sl_186), "items", __hexa_codegen_c2_sl_186), "variants", __hexa_codegen_c2_sl_186), "arms", __hexa_codegen_c2_sl_186), "iter_expr", __hexa_codegen_c2_sl_186), "ret_type", __hexa_codegen_c2_sl_186), "target", __hexa_codegen_c2_sl_186), "trait_name", __hexa_codegen_c2_sl_186), "methods", __hexa_codegen_c2_sl_186));
+            return __hexa_fn_arena_return(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_set(hexa_map_new(), "kind", __hexa_codegen_c2_sl_865), "name", __hexa_codegen_c2_sl_186), "value", hexa_add(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_890), hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_891))), "op", __hexa_codegen_c2_sl_186), "left", __hexa_codegen_c2_sl_186), "right", __hexa_codegen_c2_sl_186), "cond", __hexa_codegen_c2_sl_186), "then_body", __hexa_codegen_c2_sl_186), "else_body", __hexa_codegen_c2_sl_186), "params", __hexa_codegen_c2_sl_186), "body", __hexa_codegen_c2_sl_186), "args", __hexa_codegen_c2_sl_186), "fields", __hexa_codegen_c2_sl_186), "items", __hexa_codegen_c2_sl_186), "variants", __hexa_codegen_c2_sl_186), "arms", __hexa_codegen_c2_sl_186), "iter_expr", __hexa_codegen_c2_sl_186), "ret_type", __hexa_codegen_c2_sl_186), "target", __hexa_codegen_c2_sl_186), "trait_name", __hexa_codegen_c2_sl_186), "methods", __hexa_codegen_c2_sl_186));
         }
         if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(lk, __hexa_codegen_c2_sl_859)))) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(lk, __hexa_codegen_c2_sl_860))))))) {
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
@@ -20610,8 +20639,8 @@ HexaVal comptime_eval(HexaVal node) {
             }
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
-        HexaVal li = (HX_IS_STR(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_884))?hexa_str_parse_int(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_884)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_884))));
-        HexaVal ri = (HX_IS_STR(hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_885))?hexa_str_parse_int(hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_885)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_885))));
+        HexaVal li = (HX_IS_STR(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_892))?hexa_str_parse_int(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_892)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(l, "value", &__hexa_codegen_c2_ic_892))));
+        HexaVal ri = (HX_IS_STR(hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_893))?hexa_str_parse_int(hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_893)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(r, "value", &__hexa_codegen_c2_ic_893))));
         if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_598))) {
             return __hexa_fn_arena_return(_make_int_lit_node(hexa_to_string(hexa_add(li, ri))));
         }
@@ -20645,15 +20674,15 @@ HexaVal comptime_eval(HexaVal node) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_440))) {
-        HexaVal c = comptime_eval(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_886));
+        HexaVal c = comptime_eval(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_894));
         if (hexa_truthy(hexa_eq(hexa_type_of(c), __hexa_codegen_c2_sl_162))) {
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
-        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(c, "kind", &__hexa_codegen_c2_ic_887), __hexa_codegen_c2_sl_861))))) {
+        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(c, "kind", &__hexa_codegen_c2_ic_895), __hexa_codegen_c2_sl_861))))) {
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
-        HexaVal pick_true = hexa_eq(hexa_map_get_ic(c, "value", &__hexa_codegen_c2_ic_888), __hexa_codegen_c2_sl_862);
-        HexaVal body = (hexa_truthy(pick_true) ? hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_889) : hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_890));
+        HexaVal pick_true = hexa_eq(hexa_map_get_ic(c, "value", &__hexa_codegen_c2_ic_896), __hexa_codegen_c2_sl_862);
+        HexaVal body = (hexa_truthy(pick_true) ? hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_897) : hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_898));
         if (hexa_truthy(hexa_eq(hexa_type_of(body), __hexa_codegen_c2_sl_162))) {
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
@@ -20664,36 +20693,36 @@ HexaVal comptime_eval(HexaVal node) {
         if (hexa_truthy(hexa_eq(hexa_type_of(last), __hexa_codegen_c2_sl_162))) {
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
-        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(last, "kind", &__hexa_codegen_c2_ic_891), __hexa_codegen_c2_sl_389))))) {
+        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_map_get_ic(last, "kind", &__hexa_codegen_c2_ic_899), __hexa_codegen_c2_sl_389))))) {
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
-        if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(last, "left", &__hexa_codegen_c2_ic_892)), __hexa_codegen_c2_sl_162))) {
+        if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(last, "left", &__hexa_codegen_c2_ic_900)), __hexa_codegen_c2_sl_162))) {
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
-        return __hexa_fn_arena_return(comptime_eval(hexa_map_get_ic(last, "left", &__hexa_codegen_c2_ic_893)));
+        return __hexa_fn_arena_return(comptime_eval(hexa_map_get_ic(last, "left", &__hexa_codegen_c2_ic_901)));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_390))) {
-        HexaVal fname = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_894);
-        if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_895)), __hexa_codegen_c2_sl_162))) {
+        HexaVal fname = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_902);
+        if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_903)), __hexa_codegen_c2_sl_162))) {
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
-        HexaVal nargs = hexa_int(hexa_len(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_896)));
+        HexaVal nargs = hexa_int(hexa_len(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_904)));
         if (hexa_truthy(hexa_eq(nargs, hexa_int(1)))) {
-            HexaVal a = comptime_eval(hexa_index_get(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_897), hexa_int(0)));
+            HexaVal a = comptime_eval(hexa_index_get(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_905), hexa_int(0)));
             if (hexa_truthy(hexa_eq(hexa_type_of(a), __hexa_codegen_c2_sl_162))) {
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
-            HexaVal ak = hexa_map_get_ic(a, "kind", &__hexa_codegen_c2_ic_898);
+            HexaVal ak = hexa_map_get_ic(a, "kind", &__hexa_codegen_c2_ic_906);
             if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(ak, __hexa_codegen_c2_sl_859)))) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(ak, __hexa_codegen_c2_sl_860))))))) {
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
             if (hexa_truthy(hexa_eq(fname, __hexa_codegen_c2_sl_37))) {
                 if (hexa_truthy(hexa_eq(ak, __hexa_codegen_c2_sl_859))) {
-                    HexaVal iv = (HX_IS_STR(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_899))?hexa_str_parse_int(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_899)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_899))));
+                    HexaVal iv = (HX_IS_STR(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_907))?hexa_str_parse_int(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_907)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_907))));
                     HexaVal ar = (hexa_truthy(hexa_cmp_lt(iv, hexa_int(0))) ? hexa_sub(hexa_int(0), iv) : iv);
                     return __hexa_fn_arena_return(_make_int_lit_node(hexa_to_string(ar)));
                 }
-                HexaVal fv = hexa_float(__hx_to_double(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_900)));
+                HexaVal fv = hexa_float(__hx_to_double(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_908)));
                 HexaVal fr = (hexa_truthy(hexa_cmp_lt(fv, hexa_float(0.0))) ? hexa_sub(hexa_float(0.0), fv) : fv);
                 return __hexa_fn_arena_return(_make_float_lit_node(hexa_to_string(fr)));
             }
@@ -20703,7 +20732,7 @@ HexaVal comptime_eval(HexaVal node) {
                     return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
                 }
                 if (hexa_truthy(hexa_eq(ak, __hexa_codegen_c2_sl_859))) {
-                    HexaVal iv2 = (HX_IS_STR(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_901))?hexa_str_parse_int(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_901)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_901))));
+                    HexaVal iv2 = (HX_IS_STR(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_909))?hexa_str_parse_int(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_909)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_909))));
                     HexaVal s = hexa_int(0);
                     while ((HX_BOOL(hexa_cmp_lt(hexa_mul(s, s), iv2)) && HX_BOOL(hexa_cmp_lt(s, hexa_int(10000))))) {
                         s = hexa_add(s, hexa_int(1));
@@ -20717,31 +20746,31 @@ HexaVal comptime_eval(HexaVal node) {
             }
             if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(fname, __hexa_codegen_c2_sl_34)) || hexa_truthy(hexa_eq(fname, __hexa_codegen_c2_sl_33))))) {
                 if (hexa_truthy(hexa_eq(ak, __hexa_codegen_c2_sl_859))) {
-                    return __hexa_fn_arena_return(_make_int_lit_node(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_902)));
+                    return __hexa_fn_arena_return(_make_int_lit_node(hexa_map_get_ic(a, "value", &__hexa_codegen_c2_ic_910)));
                 }
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
             return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
         }
         if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(nargs, hexa_int(2))) && hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(fname, __hexa_codegen_c2_sl_172)) || hexa_truthy(hexa_eq(fname, __hexa_codegen_c2_sl_174))))))) {
-            HexaVal a1 = comptime_eval(hexa_index_get(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_903), hexa_int(0)));
+            HexaVal a1 = comptime_eval(hexa_index_get(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_911), hexa_int(0)));
             if (hexa_truthy(hexa_eq(hexa_type_of(a1), __hexa_codegen_c2_sl_162))) {
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
-            HexaVal a2 = comptime_eval(hexa_index_get(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_904), hexa_int(1)));
+            HexaVal a2 = comptime_eval(hexa_index_get(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_912), hexa_int(1)));
             if (hexa_truthy(hexa_eq(hexa_type_of(a2), __hexa_codegen_c2_sl_162))) {
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
-            HexaVal k1 = hexa_map_get_ic(a1, "kind", &__hexa_codegen_c2_ic_905);
-            HexaVal k2 = hexa_map_get_ic(a2, "kind", &__hexa_codegen_c2_ic_906);
+            HexaVal k1 = hexa_map_get_ic(a1, "kind", &__hexa_codegen_c2_ic_913);
+            HexaVal k2 = hexa_map_get_ic(a2, "kind", &__hexa_codegen_c2_ic_914);
             HexaVal n1 = hexa_bool(hexa_truthy(hexa_eq(k1, __hexa_codegen_c2_sl_859)) || hexa_truthy(hexa_eq(k1, __hexa_codegen_c2_sl_860)));
             HexaVal n2 = hexa_bool(hexa_truthy(hexa_eq(k2, __hexa_codegen_c2_sl_859)) || hexa_truthy(hexa_eq(k2, __hexa_codegen_c2_sl_860)));
             if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(n1))) || hexa_truthy(hexa_bool(!hexa_truthy(n2)))))) {
                 return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
             }
             if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k1, __hexa_codegen_c2_sl_859)) && hexa_truthy(hexa_eq(k2, __hexa_codegen_c2_sl_859))))) {
-                HexaVal v1 = (HX_IS_STR(hexa_map_get_ic(a1, "value", &__hexa_codegen_c2_ic_907))?hexa_str_parse_int(hexa_map_get_ic(a1, "value", &__hexa_codegen_c2_ic_907)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(a1, "value", &__hexa_codegen_c2_ic_907))));
-                HexaVal v2 = (HX_IS_STR(hexa_map_get_ic(a2, "value", &__hexa_codegen_c2_ic_908))?hexa_str_parse_int(hexa_map_get_ic(a2, "value", &__hexa_codegen_c2_ic_908)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(a2, "value", &__hexa_codegen_c2_ic_908))));
+                HexaVal v1 = (HX_IS_STR(hexa_map_get_ic(a1, "value", &__hexa_codegen_c2_ic_915))?hexa_str_parse_int(hexa_map_get_ic(a1, "value", &__hexa_codegen_c2_ic_915)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(a1, "value", &__hexa_codegen_c2_ic_915))));
+                HexaVal v2 = (HX_IS_STR(hexa_map_get_ic(a2, "value", &__hexa_codegen_c2_ic_916))?hexa_str_parse_int(hexa_map_get_ic(a2, "value", &__hexa_codegen_c2_ic_916)):hexa_int((int64_t)__hx_to_double(hexa_map_get_ic(a2, "value", &__hexa_codegen_c2_ic_916))));
                 HexaVal pick = (hexa_truthy(hexa_eq(fname, __hexa_codegen_c2_sl_172)) ? hexa_cmp_lt(v1, v2) : hexa_cmp_gt(v1, v2));
                 HexaVal out = (hexa_truthy(pick) ? v1 : v2);
                 return __hexa_fn_arena_return(_make_int_lit_node(hexa_to_string(out)));
@@ -20983,11 +21012,11 @@ HexaVal _is_known_int(HexaVal node) {
     if (hexa_truthy(hexa_eq(hexa_type_of(node), __hexa_codegen_c2_sl_162))) {
         return __hexa_fn_arena_return(hexa_bool(0));
     }
-    if (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_909), __hexa_codegen_c2_sl_859))) {
+    if (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_917), __hexa_codegen_c2_sl_859))) {
         return __hexa_fn_arena_return(hexa_bool(1));
     }
-    if (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_910), __hexa_codegen_c2_sl_372))) {
-        return __hexa_fn_arena_return(_is_known_int_name(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_911)));
+    if (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_918), __hexa_codegen_c2_sl_372))) {
+        return __hexa_fn_arena_return(_is_known_int_name(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_919)));
     }
     return __hexa_fn_arena_return(hexa_bool(0));
     return __hexa_fn_arena_return(hexa_void());
@@ -20999,23 +21028,23 @@ HexaVal _is_int_init_expr(HexaVal node) {
     if (hexa_truthy(hexa_eq(hexa_type_of(node), __hexa_codegen_c2_sl_162))) {
         return __hexa_fn_arena_return(hexa_bool(0));
     }
-    HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_912);
+    HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_920);
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_859))) {
         return __hexa_fn_arena_return(hexa_bool(1));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_372))) {
-        return __hexa_fn_arena_return(_is_known_int_name(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_913)));
+        return __hexa_fn_arena_return(_is_known_int_name(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_921)));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_858))) {
-        HexaVal op = hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_914);
+        HexaVal op = hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_922);
         if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_598)) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_603)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_600)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_320)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_607))))) {
-            return __hexa_fn_arena_return(hexa_bool(hexa_truthy(_is_int_init_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_915))) && hexa_truthy(_is_int_init_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_916)))));
+            return __hexa_fn_arena_return(hexa_bool(hexa_truthy(_is_int_init_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_923))) && hexa_truthy(_is_int_init_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_924)))));
         }
         return __hexa_fn_arena_return(hexa_bool(0));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_920))) {
-        if (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_917), __hexa_codegen_c2_sl_603))) {
-            return __hexa_fn_arena_return(_is_int_init_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_918)));
+        if (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_925), __hexa_codegen_c2_sl_603))) {
+            return __hexa_fn_arena_return(_is_int_init_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_926)));
         }
         return __hexa_fn_arena_return(hexa_bool(0));
     }
@@ -21029,11 +21058,11 @@ HexaVal _is_known_float(HexaVal node) {
     if (hexa_truthy(hexa_eq(hexa_type_of(node), __hexa_codegen_c2_sl_162))) {
         return __hexa_fn_arena_return(hexa_bool(0));
     }
-    if (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_919), __hexa_codegen_c2_sl_860))) {
+    if (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_927), __hexa_codegen_c2_sl_860))) {
         return __hexa_fn_arena_return(hexa_bool(1));
     }
-    if (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_920), __hexa_codegen_c2_sl_372))) {
-        return __hexa_fn_arena_return(_is_known_float_name(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_921)));
+    if (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_928), __hexa_codegen_c2_sl_372))) {
+        return __hexa_fn_arena_return(_is_known_float_name(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_929)));
     }
     return __hexa_fn_arena_return(hexa_bool(0));
     return __hexa_fn_arena_return(hexa_void());
@@ -21114,22 +21143,19 @@ HexaVal _is_float_returning_call(HexaVal name) {
     if (hexa_truthy(hexa_eq(name, __hexa_codegen_c2_sl_47))) {
         return __hexa_fn_arena_return(hexa_bool(1));
     }
-    if (hexa_truthy(hexa_eq(name, __hexa_codegen_c2_sl_1654))) {
-        return __hexa_fn_arena_return(hexa_bool(1));
-    }
     if (hexa_truthy(hexa_eq(name, __hexa_codegen_c2_sl_1655))) {
         return __hexa_fn_arena_return(hexa_bool(1));
     }
     if (hexa_truthy(hexa_eq(name, __hexa_codegen_c2_sl_1656))) {
         return __hexa_fn_arena_return(hexa_bool(1));
     }
+    if (hexa_truthy(hexa_eq(name, __hexa_codegen_c2_sl_1657))) {
+        return __hexa_fn_arena_return(hexa_bool(1));
+    }
     if (hexa_truthy(hexa_eq(name, __hexa_codegen_c2_sl_51))) {
         return __hexa_fn_arena_return(hexa_bool(1));
     }
     if (hexa_truthy(hexa_eq(name, __hexa_codegen_c2_sl_52))) {
-        return __hexa_fn_arena_return(hexa_bool(1));
-    }
-    if (hexa_truthy(hexa_eq(name, __hexa_codegen_c2_sl_1657))) {
         return __hexa_fn_arena_return(hexa_bool(1));
     }
     if (hexa_truthy(hexa_eq(name, __hexa_codegen_c2_sl_1658))) {
@@ -21147,6 +21173,9 @@ HexaVal _is_float_returning_call(HexaVal name) {
     if (hexa_truthy(hexa_eq(name, __hexa_codegen_c2_sl_1662))) {
         return __hexa_fn_arena_return(hexa_bool(1));
     }
+    if (hexa_truthy(hexa_eq(name, __hexa_codegen_c2_sl_1663))) {
+        return __hexa_fn_arena_return(hexa_bool(1));
+    }
     return __hexa_fn_arena_return(hexa_bool(0));
     return __hexa_fn_arena_return(hexa_void());
 }
@@ -21157,39 +21186,39 @@ HexaVal _is_float_init_expr(HexaVal node) {
     if (hexa_truthy(hexa_eq(hexa_type_of(node), __hexa_codegen_c2_sl_162))) {
         return __hexa_fn_arena_return(hexa_bool(0));
     }
-    HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_922);
+    HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_930);
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_860))) {
         return __hexa_fn_arena_return(hexa_bool(1));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_372))) {
-        return __hexa_fn_arena_return(_is_known_float_name(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_923)));
+        return __hexa_fn_arena_return(_is_known_float_name(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_931)));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_390))) {
-        if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_924)), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_925), "kind", &__hexa_codegen_c2_ic_926), __hexa_codegen_c2_sl_372))))) {
-            return __hexa_fn_arena_return(_is_float_returning_call(hexa_map_get_ic(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_927), "name", &__hexa_codegen_c2_ic_928)));
+        if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_932)), __hexa_codegen_c2_sl_162)))) && hexa_truthy(hexa_eq(hexa_map_get_ic(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_933), "kind", &__hexa_codegen_c2_ic_934), __hexa_codegen_c2_sl_372))))) {
+            return __hexa_fn_arena_return(_is_float_returning_call(hexa_map_get_ic(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_935), "name", &__hexa_codegen_c2_ic_936)));
         }
         return __hexa_fn_arena_return(hexa_bool(0));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_858))) {
-        HexaVal op = hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_929);
+        HexaVal op = hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_937);
         if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_598)) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_603)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_600)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_320)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_607))))) {
-            HexaVal lf = _is_float_init_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_930));
-            HexaVal rf = _is_float_init_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_931));
+            HexaVal lf = _is_float_init_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_938));
+            HexaVal rf = _is_float_init_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_939));
             if (hexa_truthy(hexa_bool(hexa_truthy(lf) && hexa_truthy(rf)))) {
                 return __hexa_fn_arena_return(hexa_bool(1));
             }
-            if (hexa_truthy(hexa_bool(hexa_truthy(lf) && hexa_truthy(_is_int_init_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_932)))))) {
+            if (hexa_truthy(hexa_bool(hexa_truthy(lf) && hexa_truthy(_is_int_init_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_940)))))) {
                 return __hexa_fn_arena_return(hexa_bool(1));
             }
-            if (hexa_truthy(hexa_bool(hexa_truthy(rf) && hexa_truthy(_is_int_init_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_933)))))) {
+            if (hexa_truthy(hexa_bool(hexa_truthy(rf) && hexa_truthy(_is_int_init_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_941)))))) {
                 return __hexa_fn_arena_return(hexa_bool(1));
             }
         }
         return __hexa_fn_arena_return(hexa_bool(0));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_920))) {
-        if (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_934), __hexa_codegen_c2_sl_603))) {
-            return __hexa_fn_arena_return(_is_float_init_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_935)));
+        if (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_942), __hexa_codegen_c2_sl_603))) {
+            return __hexa_fn_arena_return(_is_float_init_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_943)));
         }
         return __hexa_fn_arena_return(hexa_bool(0));
     }
@@ -21207,86 +21236,86 @@ HexaVal _gen2_while_cond(HexaVal node) {
     HexaVal rf = hexa_void();
     __hexa_fn_arena_enter();
     if (hexa_truthy(hexa_eq(hexa_type_of(node), __hexa_codegen_c2_sl_162))) {
-        return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1663, gen2_expr(node)), __hexa_codegen_c2_sl_330));
+        return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1664, gen2_expr(node)), __hexa_codegen_c2_sl_330));
     }
-    HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_936);
+    HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_944);
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_858))) {
-        HexaVal op = hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_937);
+        HexaVal op = hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_945);
         if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_880)) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_881)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_882)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_883))))) {
-            li = _is_known_int(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_938));
-            ri = _is_known_int(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_939));
+            li = _is_known_int(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_946));
+            ri = _is_known_int(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_947));
             if (hexa_truthy(hexa_bool(hexa_truthy(li) && hexa_truthy(ri)))) {
-                l = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_940));
-                r = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_941));
-                return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1664, l), __hexa_codegen_c2_sl_875), op), __hexa_codegen_c2_sl_879), r), __hexa_codegen_c2_sl_504));
+                l = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_948));
+                r = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_949));
+                return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1665, l), __hexa_codegen_c2_sl_875), op), __hexa_codegen_c2_sl_879), r), __hexa_codegen_c2_sl_504));
             }
-            lf = _is_known_float(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_942));
-            rf = _is_known_float(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_943));
+            lf = _is_known_float(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_950));
+            rf = _is_known_float(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_951));
             if (hexa_truthy(hexa_bool(hexa_truthy(lf) && hexa_truthy(rf)))) {
-                l = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_944));
-                r = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_945));
-                return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1665, l), __hexa_codegen_c2_sl_875), op), __hexa_codegen_c2_sl_888), r), __hexa_codegen_c2_sl_504));
+                l = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_952));
+                r = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_953));
+                return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1666, l), __hexa_codegen_c2_sl_875), op), __hexa_codegen_c2_sl_888), r), __hexa_codegen_c2_sl_504));
             }
-            l = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_946));
-            r = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_947));
+            l = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_954));
+            r = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_955));
             if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_880))) {
-                return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1666, l), __hexa_codegen_c2_sl_342), r), __hexa_codegen_c2_sl_504));
-            }
-            if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_881))) {
                 return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1667, l), __hexa_codegen_c2_sl_342), r), __hexa_codegen_c2_sl_504));
             }
-            if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_882))) {
+            if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_881))) {
                 return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1668, l), __hexa_codegen_c2_sl_342), r), __hexa_codegen_c2_sl_504));
             }
-            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1669, l), __hexa_codegen_c2_sl_342), r), __hexa_codegen_c2_sl_504));
+            if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_882))) {
+                return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1669, l), __hexa_codegen_c2_sl_342), r), __hexa_codegen_c2_sl_504));
+            }
+            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1670, l), __hexa_codegen_c2_sl_342), r), __hexa_codegen_c2_sl_504));
         }
         if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_884))) {
-            li = _is_known_int(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_948));
-            ri = _is_known_int(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_949));
+            li = _is_known_int(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_956));
+            ri = _is_known_int(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_957));
             if (hexa_truthy(hexa_bool(hexa_truthy(li) && hexa_truthy(ri)))) {
-                l = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_950));
-                r = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_951));
-                return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1664, l), __hexa_codegen_c2_sl_1670), r), __hexa_codegen_c2_sl_504));
-            }
-            lf = _is_known_float(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_952));
-            rf = _is_known_float(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_953));
-            if (hexa_truthy(hexa_bool(hexa_truthy(lf) && hexa_truthy(rf)))) {
-                l = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_954));
-                r = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_955));
+                l = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_958));
+                r = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_959));
                 return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1665, l), __hexa_codegen_c2_sl_1671), r), __hexa_codegen_c2_sl_504));
             }
-            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1637, gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_956))), __hexa_codegen_c2_sl_342), gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_957))), __hexa_codegen_c2_sl_504));
+            lf = _is_known_float(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_960));
+            rf = _is_known_float(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_961));
+            if (hexa_truthy(hexa_bool(hexa_truthy(lf) && hexa_truthy(rf)))) {
+                l = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_962));
+                r = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_963));
+                return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1666, l), __hexa_codegen_c2_sl_1672), r), __hexa_codegen_c2_sl_504));
+            }
+            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1638, gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_964))), __hexa_codegen_c2_sl_342), gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_965))), __hexa_codegen_c2_sl_504));
         }
         if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_885))) {
-            li = _is_known_int(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_958));
-            ri = _is_known_int(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_959));
+            li = _is_known_int(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_966));
+            ri = _is_known_int(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_967));
             if (hexa_truthy(hexa_bool(hexa_truthy(li) && hexa_truthy(ri)))) {
-                l = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_960));
-                r = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_961));
-                return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1664, l), __hexa_codegen_c2_sl_1672), r), __hexa_codegen_c2_sl_504));
-            }
-            lf = _is_known_float(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_962));
-            rf = _is_known_float(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_963));
-            if (hexa_truthy(hexa_bool(hexa_truthy(lf) && hexa_truthy(rf)))) {
-                l = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_964));
-                r = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_965));
+                l = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_968));
+                r = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_969));
                 return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1665, l), __hexa_codegen_c2_sl_1673), r), __hexa_codegen_c2_sl_504));
             }
-            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1674, gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_966))), __hexa_codegen_c2_sl_342), gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_967))), __hexa_codegen_c2_sl_720));
+            lf = _is_known_float(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_970));
+            rf = _is_known_float(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_971));
+            if (hexa_truthy(hexa_bool(hexa_truthy(lf) && hexa_truthy(rf)))) {
+                l = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_972));
+                r = gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_973));
+                return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1666, l), __hexa_codegen_c2_sl_1674), r), __hexa_codegen_c2_sl_504));
+            }
+            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1675, gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_974))), __hexa_codegen_c2_sl_342), gen2_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_975))), __hexa_codegen_c2_sl_720));
         }
         if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_906))) {
-            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_327, _gen2_while_cond(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_968))), __hexa_codegen_c2_sl_1675), _gen2_while_cond(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_969))), __hexa_codegen_c2_sl_330));
+            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_327, _gen2_while_cond(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_976))), __hexa_codegen_c2_sl_1676), _gen2_while_cond(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_977))), __hexa_codegen_c2_sl_330));
         }
         if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_908))) {
-            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_327, _gen2_while_cond(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_970))), __hexa_codegen_c2_sl_1676), _gen2_while_cond(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_971))), __hexa_codegen_c2_sl_330));
+            return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_327, _gen2_while_cond(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_978))), __hexa_codegen_c2_sl_1677), _gen2_while_cond(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_979))), __hexa_codegen_c2_sl_330));
         }
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_920))) {
-        if (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_972), __hexa_codegen_c2_sl_923))) {
-            return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1677, _gen2_while_cond(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_973))), __hexa_codegen_c2_sl_330));
+        if (hexa_truthy(hexa_eq(hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_980), __hexa_codegen_c2_sl_923))) {
+            return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1678, _gen2_while_cond(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_981))), __hexa_codegen_c2_sl_330));
         }
     }
-    return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1663, gen2_expr(node)), __hexa_codegen_c2_sl_330));
+    return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_1664, gen2_expr(node)), __hexa_codegen_c2_sl_330));
     return __hexa_fn_arena_return(hexa_void());
 }
 
@@ -21796,36 +21825,36 @@ HexaVal gen2_collect_free(HexaVal node, HexaVal bound, HexaVal out) {
         while (HX_BOOL(hexa_cmp_lt(i, hexa_int(hexa_len(node))))) {
             HexaVal s = hexa_index_get(node, i);
             if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(s), __hexa_codegen_c2_sl_162))))) {
-                HexaVal sk = hexa_map_get_ic(s, "kind", &__hexa_codegen_c2_ic_974);
+                HexaVal sk = hexa_map_get_ic(s, "kind", &__hexa_codegen_c2_ic_982);
                 if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(sk, __hexa_codegen_c2_sl_370)) || hexa_truthy(hexa_eq(sk, __hexa_codegen_c2_sl_369))))) {
-                    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(s, "left", &__hexa_codegen_c2_ic_975)), __hexa_codegen_c2_sl_162))))) {
-                        result = gen2_collect_free(hexa_map_get_ic(s, "left", &__hexa_codegen_c2_ic_976), local, result);
+                    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(s, "left", &__hexa_codegen_c2_ic_983)), __hexa_codegen_c2_sl_162))))) {
+                        result = gen2_collect_free(hexa_map_get_ic(s, "left", &__hexa_codegen_c2_ic_984), local, result);
                     }
-                    hexa_array_push(local, hexa_map_get_ic(s, "name", &__hexa_codegen_c2_ic_977));
+                    hexa_array_push(local, hexa_map_get_ic(s, "name", &__hexa_codegen_c2_ic_985));
                 } else {
-                    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(sk, __hexa_codegen_c2_sl_630)) || hexa_truthy(hexa_eq(sk, __hexa_codegen_c2_sl_1678))))) {
-                        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(s, "left", &__hexa_codegen_c2_ic_978)), __hexa_codegen_c2_sl_162))))) {
-                            result = gen2_collect_free(hexa_map_get_ic(s, "left", &__hexa_codegen_c2_ic_979), local, result);
+                    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(sk, __hexa_codegen_c2_sl_630)) || hexa_truthy(hexa_eq(sk, __hexa_codegen_c2_sl_1679))))) {
+                        if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(s, "left", &__hexa_codegen_c2_ic_986)), __hexa_codegen_c2_sl_162))))) {
+                            result = gen2_collect_free(hexa_map_get_ic(s, "left", &__hexa_codegen_c2_ic_987), local, result);
                         }
-                        HexaVal body_local = hexa_array_push(local, hexa_map_get_ic(s, "name", &__hexa_codegen_c2_ic_980));
-                        if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(s, "body", &__hexa_codegen_c2_ic_981)), __hexa_codegen_c2_sl_439))) {
-                            result = gen2_collect_free(hexa_map_get_ic(s, "body", &__hexa_codegen_c2_ic_982), body_local, result);
+                        HexaVal body_local = hexa_array_push(local, hexa_map_get_ic(s, "name", &__hexa_codegen_c2_ic_988));
+                        if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(s, "body", &__hexa_codegen_c2_ic_989)), __hexa_codegen_c2_sl_439))) {
+                            result = gen2_collect_free(hexa_map_get_ic(s, "body", &__hexa_codegen_c2_ic_990), body_local, result);
                         }
                     } else {
                         if (hexa_truthy(hexa_eq(sk, __hexa_codegen_c2_sl_648))) {
-                            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(s, "iter_expr", &__hexa_codegen_c2_ic_983)), __hexa_codegen_c2_sl_162))))) {
-                                result = gen2_collect_free(hexa_map_get_ic(s, "iter_expr", &__hexa_codegen_c2_ic_984), local, result);
+                            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(s, "iter_expr", &__hexa_codegen_c2_ic_991)), __hexa_codegen_c2_sl_162))))) {
+                                result = gen2_collect_free(hexa_map_get_ic(s, "iter_expr", &__hexa_codegen_c2_ic_992), local, result);
                             }
                             HexaVal fd_local = local;
-                            if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(s, "params", &__hexa_codegen_c2_ic_985)), __hexa_codegen_c2_sl_439))) {
+                            if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(s, "params", &__hexa_codegen_c2_ic_993)), __hexa_codegen_c2_sl_439))) {
                                 HexaVal _fdi = hexa_int(0);
-                                while (HX_BOOL(hexa_cmp_lt(_fdi, hexa_int(hexa_len(hexa_map_get_ic(s, "params", &__hexa_codegen_c2_ic_986)))))) {
-                                    hexa_array_push(fd_local, hexa_index_get(hexa_map_get_ic(s, "params", &__hexa_codegen_c2_ic_987), _fdi));
+                                while (HX_BOOL(hexa_cmp_lt(_fdi, hexa_int(hexa_len(hexa_map_get_ic(s, "params", &__hexa_codegen_c2_ic_994)))))) {
+                                    hexa_array_push(fd_local, hexa_index_get(hexa_map_get_ic(s, "params", &__hexa_codegen_c2_ic_995), _fdi));
                                     _fdi = hexa_add(_fdi, hexa_int(1));
                                 }
                             }
-                            if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(s, "body", &__hexa_codegen_c2_ic_988)), __hexa_codegen_c2_sl_439))) {
-                                result = gen2_collect_free(hexa_map_get_ic(s, "body", &__hexa_codegen_c2_ic_989), fd_local, result);
+                            if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(s, "body", &__hexa_codegen_c2_ic_996)), __hexa_codegen_c2_sl_439))) {
+                                result = gen2_collect_free(hexa_map_get_ic(s, "body", &__hexa_codegen_c2_ic_997), fd_local, result);
                             }
                         } else {
                             result = gen2_collect_free(s, local, result);
@@ -21837,12 +21866,12 @@ HexaVal gen2_collect_free(HexaVal node, HexaVal bound, HexaVal out) {
         }
         return __hexa_fn_arena_return(result);
     }
-    HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_990);
-    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_859)) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_860)))) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_865)))) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_861)))) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_867)))) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1542))))) {
+    HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_998);
+    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_859)) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_860)))) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_865)))) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_861)))) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_867)))) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1544))))) {
         return __hexa_fn_arena_return(out);
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_372))) {
-        HexaVal name = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_991);
+        HexaVal name = hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_999);
         if (hexa_truthy(_is_known_global(name))) {
             return __hexa_fn_arena_return(out);
         }
@@ -21858,54 +21887,54 @@ HexaVal gen2_collect_free(HexaVal node, HexaVal bound, HexaVal out) {
         }
         return __hexa_fn_arena_return(_add_unique(out, name));
     }
-    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1536))) {
+    if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1538))) {
         HexaVal inner_bound = bound;
         HexaVal pi = hexa_int(0);
-        while (HX_BOOL(hexa_cmp_lt(pi, hexa_int(hexa_len(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_992)))))) {
-            hexa_array_push(inner_bound, _lambda_param_name(hexa_index_get(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_993), pi)));
+        while (HX_BOOL(hexa_cmp_lt(pi, hexa_int(hexa_len(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1000)))))) {
+            hexa_array_push(inner_bound, _lambda_param_name(hexa_index_get(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1001), pi)));
             pi = hexa_add(pi, hexa_int(1));
         }
-        return __hexa_fn_arena_return(gen2_collect_free(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_994), inner_bound, out));
+        return __hexa_fn_arena_return(gen2_collect_free(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_1002), inner_bound, out));
     }
     result = out;
-    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_995)), __hexa_codegen_c2_sl_162))))) {
-        result = gen2_collect_free(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_996), bound, result);
+    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_1003)), __hexa_codegen_c2_sl_162))))) {
+        result = gen2_collect_free(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_1004), bound, result);
     }
-    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_997)), __hexa_codegen_c2_sl_162))))) {
-        result = gen2_collect_free(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_998), bound, result);
+    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_1005)), __hexa_codegen_c2_sl_162))))) {
+        result = gen2_collect_free(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_1006), bound, result);
     }
-    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_999)), __hexa_codegen_c2_sl_162))))) {
-        result = gen2_collect_free(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_1000), bound, result);
+    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_1007)), __hexa_codegen_c2_sl_162))))) {
+        result = gen2_collect_free(hexa_map_get_ic(node, "cond", &__hexa_codegen_c2_ic_1008), bound, result);
     }
-    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_1001)), __hexa_codegen_c2_sl_162))))) {
-        result = gen2_collect_free(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_1002), bound, result);
+    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_1009)), __hexa_codegen_c2_sl_162))))) {
+        result = gen2_collect_free(hexa_map_get_ic(node, "then_body", &__hexa_codegen_c2_ic_1010), bound, result);
     }
-    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_1003)), __hexa_codegen_c2_sl_162))))) {
-        result = gen2_collect_free(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_1004), bound, result);
+    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_1011)), __hexa_codegen_c2_sl_162))))) {
+        result = gen2_collect_free(hexa_map_get_ic(node, "else_body", &__hexa_codegen_c2_ic_1012), bound, result);
     }
-    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "body", &__hexa_codegen_c2_ic_1005)), __hexa_codegen_c2_sl_162))))) {
-        result = gen2_collect_free(hexa_map_get_ic(node, "body", &__hexa_codegen_c2_ic_1006), bound, result);
+    if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "body", &__hexa_codegen_c2_ic_1013)), __hexa_codegen_c2_sl_162))))) {
+        result = gen2_collect_free(hexa_map_get_ic(node, "body", &__hexa_codegen_c2_ic_1014), bound, result);
     }
-    if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_1007)), __hexa_codegen_c2_sl_439))) {
+    if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_1015)), __hexa_codegen_c2_sl_439))) {
         HexaVal ai = hexa_int(0);
-        while (HX_BOOL(hexa_cmp_lt(ai, hexa_int(hexa_len(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_1008)))))) {
-            result = gen2_collect_free(hexa_index_get(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_1009), ai), bound, result);
+        while (HX_BOOL(hexa_cmp_lt(ai, hexa_int(hexa_len(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_1016)))))) {
+            result = gen2_collect_free(hexa_index_get(hexa_map_get_ic(node, "args", &__hexa_codegen_c2_ic_1017), ai), bound, result);
             ai = hexa_add(ai, hexa_int(1));
         }
     }
-    if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "items", &__hexa_codegen_c2_ic_1010)), __hexa_codegen_c2_sl_439))) {
+    if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "items", &__hexa_codegen_c2_ic_1018)), __hexa_codegen_c2_sl_439))) {
         HexaVal ii = hexa_int(0);
-        while (HX_BOOL(hexa_cmp_lt(ii, hexa_int(hexa_len(hexa_map_get_ic(node, "items", &__hexa_codegen_c2_ic_1011)))))) {
-            result = gen2_collect_free(hexa_index_get(hexa_map_get_ic(node, "items", &__hexa_codegen_c2_ic_1012), ii), bound, result);
+        while (HX_BOOL(hexa_cmp_lt(ii, hexa_int(hexa_len(hexa_map_get_ic(node, "items", &__hexa_codegen_c2_ic_1019)))))) {
+            result = gen2_collect_free(hexa_index_get(hexa_map_get_ic(node, "items", &__hexa_codegen_c2_ic_1020), ii), bound, result);
             ii = hexa_add(ii, hexa_int(1));
         }
     }
-    if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "arms", &__hexa_codegen_c2_ic_1013)), __hexa_codegen_c2_sl_439))) {
+    if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "arms", &__hexa_codegen_c2_ic_1021)), __hexa_codegen_c2_sl_439))) {
         HexaVal mi = hexa_int(0);
-        while (HX_BOOL(hexa_cmp_lt(mi, hexa_int(hexa_len(hexa_map_get_ic(node, "arms", &__hexa_codegen_c2_ic_1014)))))) {
-            HexaVal arm = hexa_index_get(hexa_map_get_ic(node, "arms", &__hexa_codegen_c2_ic_1015), mi);
-            if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(arm, "body", &__hexa_codegen_c2_ic_1016)), __hexa_codegen_c2_sl_439))) {
-                result = gen2_collect_free(hexa_map_get_ic(arm, "body", &__hexa_codegen_c2_ic_1017), bound, result);
+        while (HX_BOOL(hexa_cmp_lt(mi, hexa_int(hexa_len(hexa_map_get_ic(node, "arms", &__hexa_codegen_c2_ic_1022)))))) {
+            HexaVal arm = hexa_index_get(hexa_map_get_ic(node, "arms", &__hexa_codegen_c2_ic_1023), mi);
+            if (hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(arm, "body", &__hexa_codegen_c2_ic_1024)), __hexa_codegen_c2_sl_439))) {
+                result = gen2_collect_free(hexa_map_get_ic(arm, "body", &__hexa_codegen_c2_ic_1025), bound, result);
             }
             mi = hexa_add(mi, hexa_int(1));
         }
@@ -21920,20 +21949,20 @@ HexaVal gen2_lambda_expr(HexaVal node) {
     __hexa_fn_arena_enter();
     HexaVal id = _lambda_counter;
     _lambda_counter = hexa_add(_lambda_counter, hexa_int(1));
-    HexaVal fn_name = hexa_add(__hexa_codegen_c2_sl_1679, hexa_to_string(id));
+    HexaVal fn_name = hexa_add(__hexa_codegen_c2_sl_1680, hexa_to_string(id));
     HexaVal bound = hexa_array_new();
     HexaVal pi = hexa_int(0);
-    while (HX_BOOL(hexa_cmp_lt(pi, hexa_int(hexa_len(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1018)))))) {
-        hexa_array_push(bound, _lambda_param_name(hexa_index_get(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1019), pi)));
+    while (HX_BOOL(hexa_cmp_lt(pi, hexa_int(hexa_len(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1026)))))) {
+        hexa_array_push(bound, _lambda_param_name(hexa_index_get(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1027), pi)));
         pi = hexa_add(pi, hexa_int(1));
     }
-    HexaVal free_vars = gen2_collect_free(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_1020), bound, hexa_array_new());
-    HexaVal arity = hexa_int(hexa_len(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1021)));
+    HexaVal free_vars = gen2_collect_free(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_1028), bound, hexa_array_new());
+    HexaVal arity = hexa_int(hexa_len(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1029)));
     HexaVal params = hexa_array_new();
-    hexa_array_push(params, __hexa_codegen_c2_sl_1680);
+    hexa_array_push(params, __hexa_codegen_c2_sl_1681);
     pi = hexa_int(0);
-    while (HX_BOOL(hexa_cmp_lt(pi, hexa_int(hexa_len(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1022)))))) {
-        hexa_array_push(params, hexa_add(__hexa_codegen_c2_sl_380, _lambda_param_name(hexa_index_get(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1023), pi))));
+    while (HX_BOOL(hexa_cmp_lt(pi, hexa_int(hexa_len(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1030)))))) {
+        hexa_array_push(params, hexa_add(__hexa_codegen_c2_sl_380, _lambda_param_name(hexa_index_get(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1031), pi))));
         pi = hexa_add(pi, hexa_int(1));
     }
     HexaVal p = hexa_str_join(params, __hexa_codegen_c2_sl_342);
@@ -21944,11 +21973,11 @@ HexaVal gen2_lambda_expr(HexaVal node) {
     if (hexa_truthy(hexa_cmp_gt(hexa_int(hexa_len(free_vars)), hexa_int(0)))) {
         fi = hexa_int(0);
         while (HX_BOOL(hexa_cmp_lt(fi, hexa_int(hexa_len(free_vars))))) {
-            hexa_array_push(body_parts, hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_375, hexa_index_get(free_vars, fi)), __hexa_codegen_c2_sl_1681), hexa_to_string(fi)), __hexa_codegen_c2_sl_345));
+            hexa_array_push(body_parts, hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_375, hexa_index_get(free_vars, fi)), __hexa_codegen_c2_sl_1682), hexa_to_string(fi)), __hexa_codegen_c2_sl_345));
             fi = hexa_add(fi, hexa_int(1));
         }
     }
-    HexaVal lbody = hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_1024);
+    HexaVal lbody = hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_1032);
     if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(lbody), __hexa_codegen_c2_sl_162))))) {
         if (hexa_truthy(hexa_eq(hexa_type_of(lbody), __hexa_codegen_c2_sl_439))) {
             HexaVal bi = hexa_int(0);
@@ -21972,11 +22001,11 @@ HexaVal gen2_lambda_expr(HexaVal node) {
         hexa_array_push(_fn_def_parts, hexa_index_get(body_parts, _bpi));
         _bpi = hexa_add(_bpi, hexa_int(1));
     }
-    hexa_array_push(_fn_def_parts, __hexa_codegen_c2_sl_1652);
+    hexa_array_push(_fn_def_parts, __hexa_codegen_c2_sl_1653);
     HexaVal fn_def = hexa_str_join(_fn_def_parts, __hexa_codegen_c2_sl_186);
     hexa_array_push(_lambda_def_parts, fn_def);
     if (hexa_truthy(hexa_eq(hexa_int(hexa_len(free_vars)), hexa_int(0)))) {
-        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1682, fn_name), __hexa_codegen_c2_sl_342), hexa_to_string(arity)), __hexa_codegen_c2_sl_1683));
+        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1683, fn_name), __hexa_codegen_c2_sl_342), hexa_to_string(arity)), __hexa_codegen_c2_sl_1684));
     }
     HexaVal env_expr = __hexa_codegen_c2_sl_1054;
     fi = hexa_int(0);
@@ -21984,7 +22013,7 @@ HexaVal gen2_lambda_expr(HexaVal node) {
         env_expr = hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_687, env_expr), __hexa_codegen_c2_sl_342), hexa_index_get(free_vars, fi)), __hexa_codegen_c2_sl_330);
         fi = hexa_add(fi, hexa_int(1));
     }
-    return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1682, fn_name), __hexa_codegen_c2_sl_342), hexa_to_string(arity)), __hexa_codegen_c2_sl_342), env_expr), __hexa_codegen_c2_sl_330));
+    return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1683, fn_name), __hexa_codegen_c2_sl_342), hexa_to_string(arity)), __hexa_codegen_c2_sl_342), env_expr), __hexa_codegen_c2_sl_330));
     return __hexa_fn_arena_return(hexa_void());
 }
 
@@ -22013,33 +22042,33 @@ HexaVal codegen_c2_full(HexaVal ast) {
     _comptime_const_nodes = hexa_array_new();
     HexaVal gi = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(gi, hexa_int(hexa_len(ast))))) {
-        HexaVal gk = hexa_map_get_ic(hexa_index_get(ast, gi), "kind", &__hexa_codegen_c2_ic_1025);
+        HexaVal gk = hexa_map_get_ic(hexa_index_get(ast, gi), "kind", &__hexa_codegen_c2_ic_1033);
         if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(gk, __hexa_codegen_c2_sl_355)) || hexa_truthy(hexa_eq(gk, __hexa_codegen_c2_sl_364)))) || hexa_truthy(hexa_eq(gk, __hexa_codegen_c2_sl_356)))) || hexa_truthy(hexa_eq(gk, __hexa_codegen_c2_sl_365))))) {
-            hexa_array_push(_known_fn_globals, hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1026));
-            hexa_array_push(_known_nonlocal_names, hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1027));
-            _known_fn_globals_add(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1028));
-            _known_nonlocal_add(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1029));
+            hexa_array_push(_known_fn_globals, hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1034));
+            hexa_array_push(_known_nonlocal_names, hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1035));
+            _known_fn_globals_add(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1036));
+            _known_nonlocal_add(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1037));
         } else {
             if (hexa_truthy(hexa_eq(gk, __hexa_codegen_c2_sl_357))) {
-                hexa_array_push(_known_fn_globals, hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1030));
-                hexa_array_push(_known_nonlocal_names, hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1031));
-                _known_fn_globals_add(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1032));
-                _known_nonlocal_add(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1033));
+                hexa_array_push(_known_fn_globals, hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1038));
+                hexa_array_push(_known_nonlocal_names, hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1039));
+                _known_fn_globals_add(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1040));
+                _known_nonlocal_add(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1041));
             } else {
                 if (hexa_truthy(hexa_eq(gk, __hexa_codegen_c2_sl_366))) {
-                    hexa_array_push(_known_nonlocal_names, hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1034));
-                    _known_nonlocal_add(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1035));
+                    hexa_array_push(_known_nonlocal_names, hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1042));
+                    _known_nonlocal_add(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1043));
                 } else {
                     if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(gk, __hexa_codegen_c2_sl_367)) || hexa_truthy(hexa_eq(gk, __hexa_codegen_c2_sl_368))))) {
-                        hexa_array_push(_known_nonlocal_names, hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1036));
-                        _known_nonlocal_add(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1037));
+                        hexa_array_push(_known_nonlocal_names, hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1044));
+                        _known_nonlocal_add(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1045));
                     } else {
                         if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(gk, __hexa_codegen_c2_sl_369)) || hexa_truthy(hexa_eq(gk, __hexa_codegen_c2_sl_370))))) {
-                            hexa_array_push(_known_nonlocal_names, hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1038));
-                            _known_nonlocal_add(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1039));
+                            hexa_array_push(_known_nonlocal_names, hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1046));
+                            _known_nonlocal_add(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1047));
                         } else {
                             if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(gk, __hexa_codegen_c2_sl_373)) || hexa_truthy(hexa_eq(gk, __hexa_codegen_c2_sl_374))))) {
-                                _resolve_use_register_names(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1040));
+                                _resolve_use_register_names(hexa_map_get_ic(hexa_index_get(ast, gi), "name", &__hexa_codegen_c2_ic_1048));
                             }
                         }
                     }
@@ -22094,9 +22123,9 @@ HexaVal codegen_c2_full(HexaVal ast) {
     HexaVal _fn_emit_seen2 = hexa_array_new();
     HexaVal i = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(i, hexa_int(hexa_len(ast))))) {
-        HexaVal k = hexa_map_get_ic(hexa_index_get(ast, i), "kind", &__hexa_codegen_c2_ic_1041);
+        HexaVal k = hexa_map_get_ic(hexa_index_get(ast, i), "kind", &__hexa_codegen_c2_ic_1049);
         if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_355))) {
-            HexaVal _fn_name2 = hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1042);
+            HexaVal _fn_name2 = hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1050);
             HexaVal _fes_i2 = hexa_int(0);
             HexaVal _fes_dup2 = hexa_bool(0);
             while (HX_BOOL(hexa_cmp_lt(_fes_i2, hexa_int(hexa_len(_fn_emit_seen2))))) {
@@ -22110,7 +22139,7 @@ HexaVal codegen_c2_full(HexaVal ast) {
                 continue;
             }
             hexa_array_push(_fn_emit_seen2, _fn_name2);
-            if (hexa_truthy(hexa_eq(hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1043), __hexa_codegen_c2_sl_10))) {
+            if (hexa_truthy(hexa_eq(hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1051), __hexa_codegen_c2_sl_10))) {
                 has_user_main = hexa_bool(1);
             }
             hexa_array_push(fwd_parts, hexa_add(gen2_fn_forward(hexa_index_get(ast, i)), __hexa_codegen_c2_sl_346));
@@ -22118,10 +22147,10 @@ HexaVal codegen_c2_full(HexaVal ast) {
         } else {
             if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_364))) {
                 HexaVal ew = gen2_extern_wrapper(hexa_index_get(ast, i));
-                hexa_array_push(global_parts, hexa_map_get_ic(ew, "global", &__hexa_codegen_c2_ic_1044));
-                hexa_array_push(fwd_parts, hexa_add(hexa_map_get_ic(ew, "forward", &__hexa_codegen_c2_ic_1045), __hexa_codegen_c2_sl_346));
-                hexa_array_push(fn_parts, hexa_add(hexa_map_get_ic(ew, "fn_code", &__hexa_codegen_c2_ic_1046), __hexa_codegen_c2_sl_377));
-                hexa_array_push(init_parts, hexa_map_get_ic(ew, "init", &__hexa_codegen_c2_ic_1047));
+                hexa_array_push(global_parts, hexa_map_get_ic(ew, "global", &__hexa_codegen_c2_ic_1052));
+                hexa_array_push(fwd_parts, hexa_add(hexa_map_get_ic(ew, "forward", &__hexa_codegen_c2_ic_1053), __hexa_codegen_c2_sl_346));
+                hexa_array_push(fn_parts, hexa_add(hexa_map_get_ic(ew, "fn_code", &__hexa_codegen_c2_ic_1054), __hexa_codegen_c2_sl_377));
+                hexa_array_push(init_parts, hexa_map_get_ic(ew, "init", &__hexa_codegen_c2_ic_1055));
             } else {
                 if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_357))) {
                     hexa_array_push(fwd_parts, hexa_add(gen2_struct_forward(hexa_index_get(ast, i)), __hexa_codegen_c2_sl_346));
@@ -22132,11 +22161,11 @@ HexaVal codegen_c2_full(HexaVal ast) {
                     } else {
                         if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_378))) {
                             HexaVal ib = gen2_impl_block(hexa_index_get(ast, i));
-                            hexa_array_push(fwd_parts, hexa_map_get_ic(ib, "forward", &__hexa_codegen_c2_ic_1048));
-                            hexa_array_push(fn_parts, hexa_map_get_ic(ib, "fn_code", &__hexa_codegen_c2_ic_1049));
+                            hexa_array_push(fwd_parts, hexa_map_get_ic(ib, "forward", &__hexa_codegen_c2_ic_1056));
+                            hexa_array_push(fn_parts, hexa_map_get_ic(ib, "fn_code", &__hexa_codegen_c2_ic_1057));
                         } else {
                             if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_356))) {
-                                HexaVal _pfn_name2 = hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1050);
+                                HexaVal _pfn_name2 = hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1058);
                                 HexaVal _pfes_i2 = hexa_int(0);
                                 HexaVal _pfes_dup2 = hexa_bool(0);
                                 while (HX_BOOL(hexa_cmp_lt(_pfes_i2, hexa_int(hexa_len(_fn_emit_seen2))))) {
@@ -22154,7 +22183,7 @@ HexaVal codegen_c2_full(HexaVal ast) {
                                 hexa_array_push(fn_parts, hexa_add(gen2_fn_decl(hexa_index_get(ast, i)), __hexa_codegen_c2_sl_377));
                             } else {
                                 if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_379))) {
-                                    HexaVal _afn_name2 = hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1051);
+                                    HexaVal _afn_name2 = hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1059);
                                     HexaVal _afes_i2 = hexa_int(0);
                                     HexaVal _afes_dup2 = hexa_bool(0);
                                     while (HX_BOOL(hexa_cmp_lt(_afes_i2, hexa_int(hexa_len(_fn_emit_seen2))))) {
@@ -22172,15 +22201,15 @@ HexaVal codegen_c2_full(HexaVal ast) {
                                     hexa_array_push(fn_parts, hexa_add(gen2_fn_decl(hexa_index_get(ast, i)), __hexa_codegen_c2_sl_377));
                                 } else {
                                     if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_367)) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_368))))) {
-                                        HexaVal _cc_folded2 = comptime_eval(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1052));
+                                        HexaVal _cc_folded2 = comptime_eval(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1060));
                                         if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(_cc_folded2), __hexa_codegen_c2_sl_162))))) {
-                                            _register_comptime_const(hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1053), _cc_folded2);
+                                            _register_comptime_const(hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1061), _cc_folded2);
                                         } else {
-                                            hexa_array_push(global_parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_380, hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1054)), __hexa_codegen_c2_sl_381));
-                                            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1055)), __hexa_codegen_c2_sl_162))))) {
-                                                hexa_array_push(init_parts, hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_382, hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1056)), __hexa_codegen_c2_sl_383), gen2_expr(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1057))), __hexa_codegen_c2_sl_381));
+                                            hexa_array_push(global_parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_380, hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1062)), __hexa_codegen_c2_sl_381));
+                                            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1063)), __hexa_codegen_c2_sl_162))))) {
+                                                hexa_array_push(init_parts, hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_382, hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1064)), __hexa_codegen_c2_sl_383), gen2_expr(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1065))), __hexa_codegen_c2_sl_381));
                                             } else {
-                                                hexa_array_push(init_parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_382, hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1058)), __hexa_codegen_c2_sl_376));
+                                                hexa_array_push(init_parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_382, hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1066)), __hexa_codegen_c2_sl_376));
                                             }
                                         }
                                     } else {
@@ -22191,24 +22220,24 @@ HexaVal codegen_c2_full(HexaVal ast) {
                                                 if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_385))) {
                                                 } else {
                                                     if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_373)) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_374))))) {
-                                                        HexaVal _use_fwd2 = _resolve_use_emit(hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1059));
+                                                        HexaVal _use_fwd2 = _resolve_use_emit(hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1067));
                                                         if (hexa_truthy(hexa_cmp_gt(hexa_int(hexa_len(_use_fwd2)), hexa_int(0)))) {
                                                             hexa_array_push(fwd_parts, _use_fwd2);
                                                         } else {
-                                                            hexa_array_push(main_parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_386, hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1060)), __hexa_codegen_c2_sl_354));
+                                                            hexa_array_push(main_parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_386, hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1068)), __hexa_codegen_c2_sl_354));
                                                         }
                                                     } else {
                                                         if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_369)) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_370))))) {
-                                                            HexaVal _user_name2 = _hexa_mangle_ident(hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1061));
-                                                            if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_370)) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1062)), __hexa_codegen_c2_sl_162))))))) {
-                                                                if (hexa_truthy(_is_int_init_expr(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1063)))) {
-                                                                    _known_int_add(hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1064));
+                                                            HexaVal _user_name2 = _hexa_mangle_ident(hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1069));
+                                                            if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_370)) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1070)), __hexa_codegen_c2_sl_162))))))) {
+                                                                if (hexa_truthy(_is_int_init_expr(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1071)))) {
+                                                                    _known_int_add(hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1072));
                                                                 }
-                                                                if (hexa_truthy(_is_float_init_expr(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1065)))) {
-                                                                    _known_float_add(hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1066));
+                                                                if (hexa_truthy(_is_float_init_expr(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1073)))) {
+                                                                    _known_float_add(hexa_map_get_ic(hexa_index_get(ast, i), "name", &__hexa_codegen_c2_ic_1074));
                                                                 }
                                                             }
-                                                            HexaVal _tls_val2 = hexa_map_get_ic(hexa_index_get(ast, i), "value", &__hexa_codegen_c2_ic_1067);
+                                                            HexaVal _tls_val2 = hexa_map_get_ic(hexa_index_get(ast, i), "value", &__hexa_codegen_c2_ic_1075);
                                                             HexaVal _is_tls2 = hexa_bool(0);
                                                             if (hexa_truthy(hexa_eq(hexa_type_of(_tls_val2), __hexa_codegen_c2_sl_162))) {
                                                                 if (hexa_truthy(hexa_eq(_tls_val2, __hexa_codegen_c2_sl_387))) {
@@ -22220,18 +22249,18 @@ HexaVal codegen_c2_full(HexaVal ast) {
                                                             } else {
                                                                 hexa_array_push(global_parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_380, _user_name2), __hexa_codegen_c2_sl_381));
                                                             }
-                                                            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1068)), __hexa_codegen_c2_sl_162))))) {
-                                                                hexa_array_push(main_parts, hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_382, _user_name2), __hexa_codegen_c2_sl_383), gen2_expr(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1069))), __hexa_codegen_c2_sl_381));
+                                                            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1076)), __hexa_codegen_c2_sl_162))))) {
+                                                                hexa_array_push(main_parts, hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_382, _user_name2), __hexa_codegen_c2_sl_383), gen2_expr(hexa_map_get_ic(hexa_index_get(ast, i), "left", &__hexa_codegen_c2_ic_1077))), __hexa_codegen_c2_sl_381));
                                                             } else {
                                                                 hexa_array_push(main_parts, hexa_add(hexa_add(__hexa_codegen_c2_sl_382, _user_name2), __hexa_codegen_c2_sl_376));
                                                             }
                                                         } else {
                                                             HexaVal _tls_stmt2 = hexa_index_get(ast, i);
-                                                            if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(hexa_map_get_ic(_tls_stmt2, "kind", &__hexa_codegen_c2_ic_1070), __hexa_codegen_c2_sl_389)) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(_tls_stmt2, "left", &__hexa_codegen_c2_ic_1071)), __hexa_codegen_c2_sl_162))))))) {
-                                                                HexaVal _tls_expr2 = hexa_map_get_ic(_tls_stmt2, "left", &__hexa_codegen_c2_ic_1072);
-                                                                if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(hexa_map_get_ic(_tls_expr2, "kind", &__hexa_codegen_c2_ic_1073), __hexa_codegen_c2_sl_390)) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(_tls_expr2, "left", &__hexa_codegen_c2_ic_1074)), __hexa_codegen_c2_sl_162))))))) {
-                                                                    HexaVal _tls_callee2 = hexa_map_get_ic(_tls_expr2, "left", &__hexa_codegen_c2_ic_1075);
-                                                                    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(hexa_map_get_ic(_tls_callee2, "kind", &__hexa_codegen_c2_ic_1076), __hexa_codegen_c2_sl_372)) && hexa_truthy(hexa_eq(hexa_map_get_ic(_tls_callee2, "name", &__hexa_codegen_c2_ic_1077), __hexa_codegen_c2_sl_10))))) {
+                                                            if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(hexa_map_get_ic(_tls_stmt2, "kind", &__hexa_codegen_c2_ic_1078), __hexa_codegen_c2_sl_389)) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(_tls_stmt2, "left", &__hexa_codegen_c2_ic_1079)), __hexa_codegen_c2_sl_162))))))) {
+                                                                HexaVal _tls_expr2 = hexa_map_get_ic(_tls_stmt2, "left", &__hexa_codegen_c2_ic_1080);
+                                                                if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(hexa_map_get_ic(_tls_expr2, "kind", &__hexa_codegen_c2_ic_1081), __hexa_codegen_c2_sl_390)) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(_tls_expr2, "left", &__hexa_codegen_c2_ic_1082)), __hexa_codegen_c2_sl_162))))))) {
+                                                                    HexaVal _tls_callee2 = hexa_map_get_ic(_tls_expr2, "left", &__hexa_codegen_c2_ic_1083);
+                                                                    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(hexa_map_get_ic(_tls_callee2, "kind", &__hexa_codegen_c2_ic_1084), __hexa_codegen_c2_sl_372)) && hexa_truthy(hexa_eq(hexa_map_get_ic(_tls_callee2, "name", &__hexa_codegen_c2_ic_1085), __hexa_codegen_c2_sl_10))))) {
                                                                         has_explicit_main_call = hexa_bool(1);
                                                                     }
                                                                 }
@@ -22255,7 +22284,7 @@ HexaVal codegen_c2_full(HexaVal ast) {
     }
     HexaVal out_parts = hexa_array_new();
     hexa_array_push(out_parts, __hexa_codegen_c2_sl_358);
-    hexa_array_push(out_parts, __hexa_codegen_c2_sl_1684);
+    hexa_array_push(out_parts, __hexa_codegen_c2_sl_1685);
     hexa_array_push(out_parts, hexa_str_join(fwd_parts, __hexa_codegen_c2_sl_186));
     hexa_array_push(out_parts, __hexa_codegen_c2_sl_346);
     hexa_array_push(out_parts, hexa_str_join(global_parts, __hexa_codegen_c2_sl_186));
@@ -22320,7 +22349,7 @@ HexaVal codegen_c2_full(HexaVal ast) {
         hexa_array_push(out_parts, __hexa_codegen_c2_sl_410);
     }
     hexa_array_push(out_parts, __hexa_codegen_c2_sl_411);
-    HexaVal _nc = hexa_env_var(__hexa_codegen_c2_sl_1685);
+    HexaVal _nc = hexa_env_var(__hexa_codegen_c2_sl_1686);
     if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(hexa_type_of(_nc), __hexa_codegen_c2_sl_162)) && hexa_truthy(hexa_eq(_nc, __hexa_codegen_c2_sl_490))))) {
         _hexa_cert_emit(ast);
     }
@@ -22350,28 +22379,25 @@ HexaVal _hexa_cert_hash_str(HexaVal s) {
 
 HexaVal _hexa_cert_bucket(HexaVal op) {
     __hexa_fn_arena_enter();
-    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1686)) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1687)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1688)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1689)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1690)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1691))))) {
-        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1692);
+    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1687)) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1688)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1689)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1690)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1691)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1692))))) {
+        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1693);
     }
-    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1693)) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1694)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1695)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1696)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1697)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1698))))) {
-        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1692);
+    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1694)) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1695)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1696)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1697)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1698)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1699))))) {
+        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1693);
     }
-    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1699)) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1700)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_390)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1701)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1702)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1703)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1704)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1705))))) {
-        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1706);
+    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1700)) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1701)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_390)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1702)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1703)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1704)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1705)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1706))))) {
+        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1707);
     }
-    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1707)) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1708)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1709)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1710))))) {
-        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1711);
+    if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1708)) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1709)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1710)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1711))))) {
+        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1712);
     }
-    return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1692);
+    return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1693);
     return __hexa_fn_arena_return(hexa_void());
 }
 
 
 HexaVal _hexa_cert_pred_for(HexaVal op) {
     __hexa_fn_arena_enter();
-    if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1686))) {
-        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1712);
-    }
     if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1687))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1713);
     }
@@ -22387,7 +22413,7 @@ HexaVal _hexa_cert_pred_for(HexaVal op) {
     if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1691))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1717);
     }
-    if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1693))) {
+    if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1692))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1718);
     }
     if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1694))) {
@@ -22396,16 +22422,19 @@ HexaVal _hexa_cert_pred_for(HexaVal op) {
     if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1695))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1720);
     }
-    if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1699))) {
+    if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1696))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1721);
     }
-    if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1704))) {
+    if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1700))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1722);
     }
-    if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1707))) {
+    if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1705))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1723);
     }
-    return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1712);
+    if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_1708))) {
+        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1724);
+    }
+    return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1713);
     return __hexa_fn_arena_return(hexa_void());
 }
 
@@ -22413,19 +22442,19 @@ HexaVal _hexa_cert_pred_for(HexaVal op) {
 HexaVal _hexa_cert_binop_to_ir(HexaVal binop) {
     __hexa_fn_arena_enter();
     if (hexa_truthy(hexa_eq(binop, __hexa_codegen_c2_sl_598))) {
-        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1686);
-    }
-    if (hexa_truthy(hexa_eq(binop, __hexa_codegen_c2_sl_603))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1687);
     }
-    if (hexa_truthy(hexa_eq(binop, __hexa_codegen_c2_sl_600))) {
+    if (hexa_truthy(hexa_eq(binop, __hexa_codegen_c2_sl_603))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1688);
     }
-    if (hexa_truthy(hexa_eq(binop, __hexa_codegen_c2_sl_320))) {
+    if (hexa_truthy(hexa_eq(binop, __hexa_codegen_c2_sl_600))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1689);
     }
-    if (hexa_truthy(hexa_eq(binop, __hexa_codegen_c2_sl_607))) {
+    if (hexa_truthy(hexa_eq(binop, __hexa_codegen_c2_sl_320))) {
         return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1690);
+    }
+    if (hexa_truthy(hexa_eq(binop, __hexa_codegen_c2_sl_607))) {
+        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1691);
     }
     return __hexa_fn_arena_return(__hexa_codegen_c2_sl_186);
     return __hexa_fn_arena_return(hexa_void());
@@ -22437,14 +22466,14 @@ HexaVal _hexa_cert_walk_expr(HexaVal node, HexaVal target, HexaVal rows) {
     if (hexa_truthy(hexa_eq(hexa_type_of(node), __hexa_codegen_c2_sl_162))) {
         return __hexa_fn_arena_return(rows);
     }
-    HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_1078);
+    HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_1086);
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_599))) {
-        HexaVal op_ir = _hexa_cert_binop_to_ir(hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_1079));
+        HexaVal op_ir = _hexa_cert_binop_to_ir(hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_1087));
         if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(op_ir, __hexa_codegen_c2_sl_186))))) {
             hexa_array_push(rows, hexa_array_push(hexa_array_push(hexa_array_new(), op_ir), target));
         }
-        rows = _hexa_cert_walk_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_1080), target, rows);
-        rows = _hexa_cert_walk_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_1081), target, rows);
+        rows = _hexa_cert_walk_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_1088), target, rows);
+        rows = _hexa_cert_walk_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_1089), target, rows);
     }
     return __hexa_fn_arena_return(rows);
     return __hexa_fn_arena_return(hexa_void());
@@ -22456,21 +22485,21 @@ HexaVal _hexa_cert_walk_stmt(HexaVal node, HexaVal target, HexaVal rows) {
     if (hexa_truthy(hexa_eq(hexa_type_of(node), __hexa_codegen_c2_sl_162))) {
         return __hexa_fn_arena_return(rows);
     }
-    HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_1082);
+    HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_1090);
     if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_370)) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_369))))) {
-        hexa_array_push(rows, hexa_array_push(hexa_array_push(hexa_array_new(), __hexa_codegen_c2_sl_1694), hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1083)));
-        rows = _hexa_cert_walk_expr(hexa_map_get_ic(node, "value", &__hexa_codegen_c2_ic_1084), hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1085), rows);
+        hexa_array_push(rows, hexa_array_push(hexa_array_push(hexa_array_new(), __hexa_codegen_c2_sl_1695), hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1091)));
+        rows = _hexa_cert_walk_expr(hexa_map_get_ic(node, "value", &__hexa_codegen_c2_ic_1092), hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1093), rows);
     } else {
         if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_371))) {
-            hexa_array_push(rows, hexa_array_push(hexa_array_push(hexa_array_new(), __hexa_codegen_c2_sl_1694), target));
-            rows = _hexa_cert_walk_expr(hexa_map_get_ic(node, "value", &__hexa_codegen_c2_ic_1086), target, rows);
+            hexa_array_push(rows, hexa_array_push(hexa_array_push(hexa_array_new(), __hexa_codegen_c2_sl_1695), target));
+            rows = _hexa_cert_walk_expr(hexa_map_get_ic(node, "value", &__hexa_codegen_c2_ic_1094), target, rows);
         } else {
-            if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1724))) {
+            if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_1725))) {
                 hexa_array_push(rows, hexa_array_push(hexa_array_push(hexa_array_new(), __hexa_codegen_c2_sl_390), target));
             } else {
                 if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_619))) {
-                    hexa_array_push(rows, hexa_array_push(hexa_array_push(hexa_array_new(), __hexa_codegen_c2_sl_1701), target));
-                    rows = _hexa_cert_walk_expr(hexa_map_get_ic(node, "value", &__hexa_codegen_c2_ic_1087), target, rows);
+                    hexa_array_push(rows, hexa_array_push(hexa_array_push(hexa_array_new(), __hexa_codegen_c2_sl_1702), target));
+                    rows = _hexa_cert_walk_expr(hexa_map_get_ic(node, "value", &__hexa_codegen_c2_ic_1095), target, rows);
                 } else {
                     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_599))) {
                         rows = _hexa_cert_walk_expr(node, target, rows);
@@ -22488,11 +22517,11 @@ HexaVal _hexa_cert_module_name(void) {
     __hexa_fn_arena_enter();
     HexaVal av = hexa_args();
     if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(hexa_type_of(av), __hexa_codegen_c2_sl_162)) || hexa_truthy(hexa_cmp_lt(hexa_int(hexa_len(av)), hexa_int(3)))))) {
-        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1725);
+        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1726);
     }
     HexaVal path = hexa_index_get(av, hexa_int(2));
     if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(path), __hexa_codegen_c2_sl_162))))) {
-        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1725);
+        return __hexa_fn_arena_return(__hexa_codegen_c2_sl_1726);
     }
     HexaVal i = hexa_sub(hexa_int(hexa_len(path)), hexa_int(1));
     HexaVal slash = hexa_sub(hexa_int(0), hexa_int(1));
@@ -22522,11 +22551,11 @@ HexaVal _hexa_cert_emit(HexaVal ast) {
     HexaVal i = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(i, hexa_int(hexa_len(ast))))) {
         HexaVal node = hexa_index_get(ast, i);
-        HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_1088);
+        HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_1096);
         if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_355)) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_356)))) || hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_379))))) {
-            HexaVal fn_name = hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1089));
-            hexa_array_push(rows, hexa_array_push(hexa_array_push(hexa_array_new(), __hexa_codegen_c2_sl_1695), fn_name));
-            body = hexa_map_get_ic(node, "body", &__hexa_codegen_c2_ic_1090);
+            HexaVal fn_name = hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1097));
+            hexa_array_push(rows, hexa_array_push(hexa_array_push(hexa_array_new(), __hexa_codegen_c2_sl_1696), fn_name));
+            body = hexa_map_get_ic(node, "body", &__hexa_codegen_c2_ic_1098);
             if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(body), __hexa_codegen_c2_sl_162))))) {
                 HexaVal j = hexa_int(0);
                 while (HX_BOOL(hexa_cmp_lt(j, hexa_int(hexa_len(body))))) {
@@ -22544,19 +22573,19 @@ HexaVal _hexa_cert_emit(HexaVal ast) {
         HexaVal target = hexa_index_get(hexa_index_get(rows, ri), hexa_int(1));
         HexaVal pred = _hexa_cert_pred_for(op);
         HexaVal bucket = _hexa_cert_bucket(op);
-        HexaVal status = __hexa_codegen_c2_sl_1726;
+        HexaVal status = __hexa_codegen_c2_sl_1727;
         HexaVal canonical = hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(pred, __hexa_codegen_c2_sl_339), target), __hexa_codegen_c2_sl_339), bucket), __hexa_codegen_c2_sl_339), status);
         HexaVal h = _hexa_cert_hash_str(canonical);
-        HexaVal line = hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1727, pred), __hexa_codegen_c2_sl_1728), target), __hexa_codegen_c2_sl_1729), op), __hexa_codegen_c2_sl_1730), bucket), __hexa_codegen_c2_sl_1731), status), __hexa_codegen_c2_sl_1732), hexa_to_string(h)), __hexa_codegen_c2_sl_332);
+        HexaVal line = hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1728, pred), __hexa_codegen_c2_sl_1729), target), __hexa_codegen_c2_sl_1730), op), __hexa_codegen_c2_sl_1731), bucket), __hexa_codegen_c2_sl_1732), status), __hexa_codegen_c2_sl_1733), hexa_to_string(h)), __hexa_codegen_c2_sl_332);
         hexa_array_push(lines, line);
         ri = hexa_add(ri, hexa_int(1));
     }
-    hexa_exec(__hexa_codegen_c2_sl_1733);
+    hexa_exec(__hexa_codegen_c2_sl_1734);
     HexaVal mname = _hexa_cert_module_name();
-    HexaVal path = hexa_add(hexa_add(__hexa_codegen_c2_sl_1734, mname), __hexa_codegen_c2_sl_1735);
+    HexaVal path = hexa_add(hexa_add(__hexa_codegen_c2_sl_1735, mname), __hexa_codegen_c2_sl_1736);
     body = hexa_add(hexa_str_join(lines, __hexa_codegen_c2_sl_346), __hexa_codegen_c2_sl_346);
     rt_write_file(path, body);
-    (hexa_eprint_val(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1736, hexa_to_string(hexa_int(hexa_len(lines)))), __hexa_codegen_c2_sl_1737), path)), fprintf(stderr, "\n"), hexa_void());
+    (hexa_eprint_val(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_1737, hexa_to_string(hexa_int(hexa_len(lines)))), __hexa_codegen_c2_sl_1738), path)), fprintf(stderr, "\n"), hexa_void());
     return __hexa_fn_arena_return(hexa_void());
 }
 
@@ -22570,9 +22599,9 @@ HexaVal _hxi_params_str(HexaVal params) {
     HexaVal i = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(i, hexa_int(hexa_len(params))))) {
         HexaVal p = hexa_index_get(params, i);
-        HexaVal vt = hexa_to_string(hexa_map_get_ic(p, "value", &__hexa_codegen_c2_ic_1091));
+        HexaVal vt = hexa_to_string(hexa_map_get_ic(p, "value", &__hexa_codegen_c2_ic_1099));
         HexaVal t = (hexa_truthy(hexa_eq(vt, __hexa_codegen_c2_sl_186)) ? __hexa_codegen_c2_sl_670 : vt);
-        hexa_array_push(parts, hexa_add(hexa_add(hexa_to_string(hexa_map_get_ic(p, "name", &__hexa_codegen_c2_ic_1092)), __hexa_codegen_c2_sl_1738), t));
+        hexa_array_push(parts, hexa_add(hexa_add(hexa_to_string(hexa_map_get_ic(p, "name", &__hexa_codegen_c2_ic_1100)), __hexa_codegen_c2_sl_1739), t));
         i = hexa_add(i, hexa_int(1));
     }
     return __hexa_fn_arena_return(hexa_str_join(parts, __hexa_codegen_c2_sl_333));
@@ -22582,45 +22611,45 @@ HexaVal _hxi_params_str(HexaVal params) {
 
 HexaVal _hxi_fn_line(HexaVal node) {
     __hexa_fn_arena_enter();
-    HexaVal ret = hexa_to_string(hexa_map_get_ic(node, "ret_type", &__hexa_codegen_c2_ic_1093));
+    HexaVal ret = hexa_to_string(hexa_map_get_ic(node, "ret_type", &__hexa_codegen_c2_ic_1101));
     HexaVal ret_s = (hexa_truthy(hexa_eq(ret, __hexa_codegen_c2_sl_186)) ? __hexa_codegen_c2_sl_82 : ret);
-    return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_338, hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1094))), __hexa_codegen_c2_sl_327), _hxi_params_str(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1095))), __hexa_codegen_c2_sl_1739), ret_s));
+    return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_338, hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1102))), __hexa_codegen_c2_sl_327), _hxi_params_str(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1103))), __hexa_codegen_c2_sl_1740), ret_s));
     return __hexa_fn_arena_return(hexa_void());
 }
 
 
 HexaVal _hxi_struct_line(HexaVal node) {
     __hexa_fn_arena_enter();
-    HexaVal fields = hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_1096);
+    HexaVal fields = hexa_map_get_ic(node, "fields", &__hexa_codegen_c2_ic_1104);
     if (hexa_truthy(hexa_eq(hexa_type_of(fields), __hexa_codegen_c2_sl_162))) {
-        return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_341, hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1097))), __hexa_codegen_c2_sl_463));
+        return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_341, hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1105))), __hexa_codegen_c2_sl_463));
     }
     HexaVal parts = hexa_array_new();
     HexaVal i = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(i, hexa_int(hexa_len(fields))))) {
         HexaVal f = hexa_index_get(fields, i);
-        HexaVal vt = hexa_to_string(hexa_map_get_ic(f, "value", &__hexa_codegen_c2_ic_1098));
+        HexaVal vt = hexa_to_string(hexa_map_get_ic(f, "value", &__hexa_codegen_c2_ic_1106));
         HexaVal t = (hexa_truthy(hexa_eq(vt, __hexa_codegen_c2_sl_186)) ? __hexa_codegen_c2_sl_670 : vt);
-        hexa_array_push(parts, hexa_add(hexa_add(hexa_to_string(hexa_map_get_ic(f, "name", &__hexa_codegen_c2_ic_1099)), __hexa_codegen_c2_sl_1738), t));
+        hexa_array_push(parts, hexa_add(hexa_add(hexa_to_string(hexa_map_get_ic(f, "name", &__hexa_codegen_c2_ic_1107)), __hexa_codegen_c2_sl_1739), t));
         i = hexa_add(i, hexa_int(1));
     }
-    return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_341, hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1100))), __hexa_codegen_c2_sl_327), hexa_str_join(parts, __hexa_codegen_c2_sl_333)), __hexa_codegen_c2_sl_330));
+    return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_341, hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1108))), __hexa_codegen_c2_sl_327), hexa_str_join(parts, __hexa_codegen_c2_sl_333)), __hexa_codegen_c2_sl_330));
     return __hexa_fn_arena_return(hexa_void());
 }
 
 
 HexaVal _hxi_extern_line(HexaVal node) {
     __hexa_fn_arena_enter();
-    HexaVal ret = hexa_to_string(hexa_map_get_ic(node, "ret_type", &__hexa_codegen_c2_ic_1101));
+    HexaVal ret = hexa_to_string(hexa_map_get_ic(node, "ret_type", &__hexa_codegen_c2_ic_1109));
     HexaVal ret_s = (hexa_truthy(hexa_eq(ret, __hexa_codegen_c2_sl_186)) ? __hexa_codegen_c2_sl_82 : ret);
-    HexaVal sym = hexa_to_string(hexa_map_get_ic(node, "value", &__hexa_codegen_c2_ic_1102));
-    HexaVal u_link = hexa_to_string(hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_1103));
-    HexaVal line = hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_527, hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1104))), __hexa_codegen_c2_sl_327), _hxi_params_str(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1105))), __hexa_codegen_c2_sl_1739), ret_s);
+    HexaVal sym = hexa_to_string(hexa_map_get_ic(node, "value", &__hexa_codegen_c2_ic_1110));
+    HexaVal u_link = hexa_to_string(hexa_map_get_ic(node, "op", &__hexa_codegen_c2_ic_1111));
+    HexaVal line = hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(__hexa_codegen_c2_sl_527, hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1112))), __hexa_codegen_c2_sl_327), _hxi_params_str(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_1113))), __hexa_codegen_c2_sl_1740), ret_s);
     if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(sym, __hexa_codegen_c2_sl_186))))) {
-        line = hexa_add(hexa_add(line, __hexa_codegen_c2_sl_1740), sym);
+        line = hexa_add(hexa_add(line, __hexa_codegen_c2_sl_1741), sym);
     }
     if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(u_link, __hexa_codegen_c2_sl_186))))) {
-        line = hexa_add(hexa_add(line, __hexa_codegen_c2_sl_1741), u_link);
+        line = hexa_add(hexa_add(line, __hexa_codegen_c2_sl_1742), u_link);
     }
     return __hexa_fn_arena_return(line);
     return __hexa_fn_arena_return(hexa_void());
@@ -22629,8 +22658,8 @@ HexaVal _hxi_extern_line(HexaVal node) {
 
 HexaVal _hxi_let_line(HexaVal node, HexaVal mutable) {
     __hexa_fn_arena_enter();
-    HexaVal prefix = (hexa_truthy(mutable) ? __hexa_codegen_c2_sl_1742 : __hexa_codegen_c2_sl_1743);
-    return __hexa_fn_arena_return(hexa_add(hexa_add(prefix, hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1106))), __hexa_codegen_c2_sl_1744));
+    HexaVal prefix = (hexa_truthy(mutable) ? __hexa_codegen_c2_sl_1743 : __hexa_codegen_c2_sl_1744);
+    return __hexa_fn_arena_return(hexa_add(hexa_add(prefix, hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1114))), __hexa_codegen_c2_sl_1745));
     return __hexa_fn_arena_return(hexa_void());
 }
 
@@ -22638,12 +22667,12 @@ HexaVal _hxi_let_line(HexaVal node, HexaVal mutable) {
 HexaVal emit_hxi(HexaVal ast, HexaVal src_bytes) {
     __hexa_fn_arena_enter();
     HexaVal lines = hexa_array_new();
-    hexa_array_push(lines, __hexa_codegen_c2_sl_1745);
-    hexa_array_push(lines, hexa_add(__hexa_codegen_c2_sl_1746, hexa_to_string(src_bytes)));
+    hexa_array_push(lines, __hexa_codegen_c2_sl_1746);
+    hexa_array_push(lines, hexa_add(__hexa_codegen_c2_sl_1747, hexa_to_string(src_bytes)));
     HexaVal i = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(i, hexa_int(hexa_len(ast))))) {
         HexaVal node = hexa_index_get(ast, i);
-        HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_1107);
+        HexaVal k = hexa_map_get_ic(node, "kind", &__hexa_codegen_c2_ic_1115);
         if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_355))) {
             hexa_array_push(lines, _hxi_fn_line(node));
         } else {
@@ -22657,7 +22686,7 @@ HexaVal emit_hxi(HexaVal ast, HexaVal src_bytes) {
                         hexa_array_push(lines, _hxi_struct_line(node));
                     } else {
                         if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_366))) {
-                            hexa_array_push(lines, hexa_add(__hexa_codegen_c2_sl_1747, hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1108))));
+                            hexa_array_push(lines, hexa_add(__hexa_codegen_c2_sl_1748, hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1116))));
                         } else {
                             if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_364))) {
                                 hexa_array_push(lines, _hxi_extern_line(node));
@@ -22669,7 +22698,7 @@ HexaVal emit_hxi(HexaVal ast, HexaVal src_bytes) {
                                         hexa_array_push(lines, _hxi_let_line(node, hexa_bool(1)));
                                     } else {
                                         if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_367))) {
-                                            hexa_array_push(lines, hexa_add(__hexa_codegen_c2_sl_1748, hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1109))));
+                                            hexa_array_push(lines, hexa_add(__hexa_codegen_c2_sl_1749, hexa_to_string(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_1117))));
                                         }
                                     }
                                 }
