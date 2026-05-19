@@ -4,29 +4,45 @@
 > that flame phases consume. Same governance discipline: editable head +
 > append-only `## 진행 로그`. **Nothing runs without explicit user go.**
 
-## 0. 현재 상태 (2026-05-17, Phase R+ 진정 cycle 종결)
+## 0. 현재 상태 (2026-05-19 — forge 일단완성 milestone)
 
-forge = **PARADIGM-ANCHORED + EXPERIMENTALLY VALIDATED**. Phase R+ campaign
-(14 cost-bearing fires + 9 sub-agents, $2.91 total) 측정-anchored 종결:
+forge = **SUBSTRATE-VERIFIED + PARADIGM-ANCHORED + ABI-LANDED**. 기존 plan
+의 정의된 범위 내에서 coherent 완성 milestone 도달 — 잔여는 모두
+multi-week Stage 2 GPU 캠페인 (§0.1, 별도 user-gated).
 
-**최종 verdict (모든 paradigm × stage)**:
-- **D' (within-run det)** ✅ FREE — every shape bit-equal (FP64 single-process)
-- **A (dispatch elimination)** ✅ MLP universal 4-13× vs torch.compile; transformer mixed (small.red compile 1.41× WINS, medium compile 1.05× WINS, large AOT 1.18× WIN)
-- **B (DSM fusion)** mechanism ✅ (Phase 1 SMOKE + Phase 2 bit-eq), wall ❌ FP64 hand-kernel ceiling (200-300× SLOWER) → RFC 049 path
-- **C (autograd co-emission)** traffic ✅ 0.667 anchor, det ✅ <1e-16, wall ❌ 1.80× SLOWER best (4 iter v3/v3b/v3c) → RFC 049 path
-- **RFC 049 (BF16 precision pivot)** ✅ **THE WALL PATH validated** — 9.67× FP64 cuBLAS at Llama-7B FFN, 4/4 falsifier PASS (BF16-TC-PERF + LayerCast det/mem/diverge)
-- **RFC 050 (flame↔forge integration)** ✅ DESIGN land — 7 falsifier 사전등록
+**완성된 것 (measured, 이 milestone)**:
 
-**META-FINDING**: forge wall path = RFC 049 BF16 precision pivot (실측 검증). FP64 substrate ceiling experimentally bound. dispatch elimination NOT unique (CUDA graphs equivalent). True forge distinctive = BF16 TC substrate quality + custom kernel selective + within-run det FREE.
+| 축 | 상태 | 근거 |
+|---|---|---|
+| **Phase 1 substrate** | ✅ verified | RFC 040 device-farr + cuBLAS Dgemm, 4× 검증 (max\|Δ\|=4.44e-15) · RFC 041 11-op `.cu` 커널 |
+| **Phase R paradigm 탐색** | ✅ closed | 14 fire $2.91 — D'/A/B/C 측정 verdict (`PARADIGM.md`). FP64 substrate ceiling 실험적 bound, BF16(RFC 049) = wall path 검증 (9.67× FP64 cuBLAS @ Llama-7B FFN) |
+| **RFC 050 v1 ABI** | ✅ Stage A LANDED | `self/forge/forge_tier_v1.{h,c}` — flame↔forge dispatch surface, runtime.c 통합, smoke 10/10 PASS (2026-05-19) |
+| **RFC 060 new-paradigm** | ✅ 100% closure | 3 falsifier measured — mega-kernel FP64 KILL (1.8-4.4× slower), poly-feasible PASS, verified-chain downgrade. CUDA kernel-per-op 돌파는 FP64 에서 measured-falsified, BF16 substrate 로 measured-deferred |
+| **endgame 문서화** | ✅ | RFC 055 (hexa→NVPTX) = Phase 6 long-arc. `@D g_forge_endgame_hexa_native` |
 
-**SSOT**: [`PARADIGM.md`](PARADIGM.md) §1 status table · [`FORGE.tape`](FORGE.tape) ##X cross-link · 14 commits in rfc043-hexa-torch (origin sync 됨, push verified 2026-05-17).
+**META-FINDING (Phase R + RFC 060 통합)**: forge 의 measured wall path =
+**BF16 Tensor Core** (RFC 049). FP64 substrate 는 두 번 측정으로 ceiling
+확인 — (1) Phase R: FP64 hand-kernel 200-300× slower, (2) RFC 060: FP64
+mega-kernel 1.8-4.4× slower. dispatch elimination 은 unique 하지 않음
+(CUDA graphs 동등). True forge distinctive = BF16 TC substrate quality +
+within-run det FREE (D').
 
-## 0.1 다음 progression 영역 (post Phase R+, multi-week multi-team)
+**잔여 = 전부 multi-week Stage 2 (§0.1)**. forge 의 "일단완성" 은
+substrate + paradigm + ABI surface 가 coherent 하게 닫혔다는 뜻 — 추가
+성능은 BF16 production 캠페인 (RFC 049 Stage 2) 의 별도 cycle.
+
+**SSOT**: [`PARADIGM.md`](PARADIGM.md) §1 (CUDA-paradigm 측정표) ·
+[`PARADIGM_C_RESEARCH.md`](PARADIGM_C_RESEARCH.md) (new-paradigm 측정) ·
+[`FORGE.tape`](FORGE.tape) §X cross-link · `state/forge_rfc060_2026_05_19/`
+(RFC 060 측정 trail, gitignored).
+
+## 0.1 다음 progression 영역 (post-milestone, multi-week multi-team)
 
 | Phase | Scope | Effort | Gate |
 |---|---|---|---|
 | **RFC 049 Phase R' Stage 2** | Production BF16 kernels (DSM + WMMA combined, sm_90 Hopper). Llama-7B full FFN BF16 fused single-kernel + numerical validation at scale | 2-4 weeks | user (cost-bearing fire campaign) |
-| **RFC 050 implementation** | flame Phase 4-C ↔ forge tier dispatch API. 양 세션 협력 required. 7 falsifier 사전등록 검증 | 2-3 weeks | flame session 협력 |
+| **RFC 050 Stage 2** | v1 ABI Stage A 는 LANDED (2026-05-19, `forge_tier_v1.{h,c}`). Stage 2 = specialized tier kernel 등록 + flame Phase 4-C lowering 이 dispatch site emit. 7 falsifier 검증 | 2-3 weeks | flame session 협력 |
+| **RFC 060 ∩ RFC 049 — BF16-TC mega-kernel** | RFC 060 closure 가 가리킨 곳 — mega-kernel 실행 모델 + BF16 Tensor Core. FP64 mega-kernel 은 measured-killed; BF16 substrate 에서 in-kernel GEMM 이 vendor lib 와 경쟁 가능 (literature Mirage/Stanford 전부 BF16) | 2-4 weeks | RFC 049 Stage 2 land 후 |
 | **C Phase 4 CUTLASS-grade** | FP64 production tiling (close hand-WMMA 43% → cuBLAS 87% gap). 별도 effort, RFC 049 보다 ROI 작음 | 3-6 weeks | low priority post-RFC 049 |
 | **A Phase 3 torch.compile-equivalent** | torch.compile reduce-overhead = CUDA graphs 동등 path. AOT가 진정 win 하려면 custom kernel quality 가 dispatch elim 보다 dominant 해야 | Open scope | RFC 049 land 후 재평가 |
 | **flame Phase 4-D GPU dispatch land** | flame 측 책임, forge 의 RFC 050 dispatch API 통해 BF16 kernel 호출 | flame session 진행 중 | flame 세션 직접 |
@@ -236,6 +252,10 @@ mandatory (`g_blue_closed_mandate`).
 ## 진행 로그
 
 (append-only)
+
+### 2026-05-19 — forge 일단완성 milestone 선언 (기존 plan 범위 내 coherent closure)
+
+User directive "기존 plan 으로 forge 일단완성". §0 현재 상태를 2026-05-17 (stale) → 2026-05-19 milestone 스냅샷으로 갱신. forge 가 기존 PLAN 의 정의된 범위 내에서 coherent 완성점 도달함을 명문화 — substrate(Phase 1 verified) + paradigm(Phase R closed + RFC 060 new-paradigm 100% closure) + integration ABI(RFC 050 v1 Stage A landed) 3축이 닫힘. 잔여는 전부 multi-week Stage 2 GPU 캠페인 (§0.1) — 별도 user-gated cycle. README.md + FORGE.tape status 줄 동기화. 측정 변화 0 — 상태 문서 consolidation. "일단완성" = 추가 성능(BF16 production) 은 RFC 049 Stage 2 의 별도 cycle 이라는 honest 경계 설정.
 
 ### 2026-05-19 — RFC 060 falsifier 측정 — 100% closure (mega-kernel FP64 KILL, poly PASS, verified-chain downgrade)
 

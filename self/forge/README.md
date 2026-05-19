@@ -1,9 +1,13 @@
 # forge — hexa-lang's GPU compute substrate
 
-> **Status: PARADIGM-ANCHORED (2026-05-17).** Phase R 4 cost-bearing GPU
-> fires (D/B/C/A, $1.35 total, H100/H200 SXM vast.ai) 측정 anchor 위에
-> [`PARADIGM.md`](PARADIGM.md) SSOT publish + RFC 044 draft (regime-tiered
-> AOT substrate spec) land. `forge` 는 SSOT 라벨 + paradigm 결정 거점 —
+> **Status: SUBSTRATE-VERIFIED + PARADIGM-ANCHORED + ABI-LANDED
+> (2026-05-19 — 일단완성 milestone).** Phase 1 substrate verified
+> (RFC 040 cuBLAS Dgemm 4×, RFC 041 11-op kernels). Phase R closed
+> (14 fires $2.91 — `PARADIGM.md`). RFC 050 v1 ABI Stage A landed
+> (`forge_tier_v1.{h,c}`, smoke 10/10). RFC 060 new-compute-paradigm
+> 100% closure measured (mega-kernel FP64 KILL → BF16 substrate
+> deferred — `PARADIGM_C_RESEARCH.md`). Remaining = multi-week Stage 2
+> GPU campaigns (`PLAN.md` §0.1). `forge` = SSOT 라벨 + paradigm 거점;
 > `flame` stdlib 가 model shape / regime 별로 forge tier dispatch.
 
 ## Position in the stack

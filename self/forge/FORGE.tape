@@ -23,10 +23,10 @@
   kind = "GPU compute substrate (device-farr alloc/copy/free + cuBLAS Dgemm + .cu kernels)"
   brief = "C/CUDA runtime layer that flame stdlib calls through compiled builtin dispatch"
   analog = "flame:forge :: torch:ATen (forge writes C/CUDA; flame writes hexa)"
-  status = "NAMING + SCAFFOLD 2026-05-16 — underlying code already landed across RFC 040 campaign; this directory is the SSOT label, not new code"
-  lives_in = "self/runtime.c (cuBLAS bindings + hexa_farr_*_gpu dispatchers + hexa_cuda_* runtime) + self/cuda/ (.cu kernels)"
-  parent_rfc = "RFC 040 (device-farr + cuBLAS) + RFC 041 (.cu kernels) + RFC 043 (flame consumer)"
-  not_what = "NOT a hexa stdlib (those go in stdlib/) · NOT a separate repo (hexa-first) · NOT a GPU codegen backend (hexa-src→PTX is a hypothetical future RFC, out of forge scope)"
+  status = "SUBSTRATE-VERIFIED + PARADIGM-ANCHORED + ABI-LANDED (2026-05-19 일단완성 milestone) — Phase 1 verified · Phase R closed (14 fires) · RFC 050 v1 ABI Stage A landed (forge_tier_v1.{h,c}) · RFC 060 new-paradigm 100% closure measured (mega-kernel FP64 KILL → BF16 deferred). Remaining = multi-week Stage 2 GPU campaigns (PLAN §0.1)."
+  lives_in = "self/runtime.c (cuBLAS bindings + hexa_farr_*_gpu dispatchers + hexa_cuda_* runtime + forge_tier_v1) + self/cuda/ (.cu kernels) + self/forge/forge_tier_v1.{h,c} (RFC 050 v1 ABI)"
+  parent_rfc = "RFC 040 (device-farr + cuBLAS) + RFC 041 (.cu kernels) + RFC 043 (flame consumer) + RFC 050 (v1 ABI) + RFC 060 (new-paradigm closure)"
+  not_what = "NOT a hexa stdlib (those go in stdlib/) · NOT a separate repo (hexa-first) · forge does NOT itself host the GPU codegen backend (hexa-src→PTX = RFC 055, a compiler/codegen/ sibling deliverable; forge is its consumer — see @D g_forge_endgame_hexa_native)"
 
 # ─── §2 Layout ───────────────────────────────────────────────────────
 
