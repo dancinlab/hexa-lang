@@ -233,6 +233,47 @@ fn _nvptx_operand_text(o: Operand) -> string {
     return "0d0000000000000000"
 }
 
+// _nvptx_operand_text_kinds — 055-P3b kind-aware operand renderer. When
+// the operand references a MIR Local, consult the classified PReg roster
+// to pick the right register name (`%fd`/`%r`/`%rd`/`%p`) instead of the
+// 055-P0 unconditional `%fd<id>`. Falls back to `%fd<id>` for operands
+// referencing Locals that don't appear in the roster (function params
+// + caller-side temporaries that weren't classified by an assignment).
+fn _nvptx_operand_text_kinds(o: Operand, kinds: [PReg]) -> string {
+    if o.kind == "local" {
+        return _nvptx_lookup_reg_for_local(kinds, o.local_id)
+    }
+    if o.kind == "const_float" {
+        return to_string(o.float_val)
+    }
+    if o.kind == "const_int" {
+        return to_string(o.int_val)
+    }
+    return "0d0000000000000000"
+}
+
+// _nvptx_lookup_reg_for_local — given a classified roster (one PReg per
+// assignment-target Local), return the PTX register name for `id`. Each
+// MIR Local maps to exactly one of `%fd<id>` / `%r<id>` / `%rd<id>` /
+// `%p<id>` — test the four candidate names against the roster. Falls
+// back to `%fd<id>` if the Local isn't classified (params + ext temps).
+fn _nvptx_lookup_reg_for_local(kinds: [PReg], id: i64) -> string {
+    let n_f64 = _nvptx_reg_f64(id)
+    let n_u32 = _nvptx_reg_u32(id)
+    let n_u64 = _nvptx_reg_u64(id)
+    let n_pred = _nvptx_reg_pred(id)
+    let mut i = 0
+    while i < len(kinds) {
+        let n = kinds[i].name
+        if n == n_f64 { return n_f64 }
+        if n == n_u32 { return n_u32 }
+        if n == n_u64 { return n_u64 }
+        if n == n_pred { return n_pred }
+        i = i + 1
+    }
+    return n_f64
+}
+
 // _nvptx_binop_mnemonic — map a MIR binop opcode to its PTX FP64
 // mnemonic. Covers the FP64 arithmetic subset (RFC 055 §6.6); a MIR
 // binop outside that subset returns "" so the caller emits an honest
@@ -241,6 +282,44 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
     if op == "add" || op == "+" { return PTX_OP_ADD_F64 }
     if op == "sub" || op == "-" { return PTX_OP_SUB_F64 }
     if op == "mul" || op == "*" { return PTX_OP_MUL_F64 }
+    return ""
+}
+
+// _nvptx_cmp_mnemonic — map a MIR comparison binop opcode to the PTX
+// `setp.<cond>.f64` mnemonic. PTX condition names match the MIR opcodes
+// 1:1 (`lt` / `le` / `gt` / `ge` / `eq` / `ne`); 055-P3b uses `.f64` as
+// the comparand type to match the FP64-first scope (gpu/SPEC.md §8) —
+// integer comparisons (`.s32`) come with the STMT_LOAD index-arithmetic
+// follow-on cycle. Returns "" for non-comparison ops.
+fn _nvptx_cmp_mnemonic(op: string) -> string {
+    if op == "lt" { return "setp.lt.f64" }
+    if op == "le" { return "setp.le.f64" }
+    if op == "gt" { return "setp.gt.f64" }
+    if op == "ge" { return "setp.ge.f64" }
+    if op == "eq" { return "setp.eq.f64" }
+    if op == "ne" { return "setp.ne.f64" }
+    return ""
+}
+
+// _nvptx_gpu_intrinsic_sreg — map a known gpu intrinsic STMT_CALL op
+// name to the PTX special-register reference its body lowers to (a
+// `mov.u32 %r<dst>, <sreg>.<axis>;`). gpu/SPEC.md §5 specifies the
+// per-axis names; the classifier already routes the call dst into a
+// `.reg .u32` bank, so the lowering only needs the `sreg.axis` string.
+// Returns "" for non-intrinsic call names.
+fn _nvptx_gpu_intrinsic_sreg(op: string) -> string {
+    if op == "gpu_thread_id_x" { return PTX_SREG_TID + ".x" }
+    if op == "gpu_thread_id_y" { return PTX_SREG_TID + ".y" }
+    if op == "gpu_thread_id_z" { return PTX_SREG_TID + ".z" }
+    if op == "gpu_block_id_x"  { return PTX_SREG_CTAID + ".x" }
+    if op == "gpu_block_id_y"  { return PTX_SREG_CTAID + ".y" }
+    if op == "gpu_block_id_z"  { return PTX_SREG_CTAID + ".z" }
+    if op == "gpu_block_dim_x" { return PTX_SREG_NTID + ".x" }
+    if op == "gpu_block_dim_y" { return PTX_SREG_NTID + ".y" }
+    if op == "gpu_block_dim_z" { return PTX_SREG_NTID + ".z" }
+    if op == "gpu_grid_dim_x"  { return PTX_SREG_NCTAID + ".x" }
+    if op == "gpu_grid_dim_y"  { return PTX_SREG_NCTAID + ".y" }
+    if op == "gpu_grid_dim_z"  { return PTX_SREG_NCTAID + ".z" }
     return ""
 }
 
@@ -258,55 +337,104 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
 // lowers to an honest stub LInstr (op = "//") so the emitted PTX text
 // stays readable and never silently drops a statement. Control flow
 // (`bra`, `setp`) and global/shared load/store are 055-P1+.
-fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt) -> [LInstr] {
+fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
     let mut out = buf
     if s.kind == STMT_ASSIGN {
         if len(s.args) >= 1 {
+            // 055-P3b kind-aware — destination reg picks .f64 / .u32 /
+            // .u64 / .pred from the classifier; operand text likewise
+            // resolves via `_nvptx_operand_text_kinds`.
             let mut a = []
-            a.push(_nvptx_op(_nvptx_reg_f64(s.dst.id)))
-            a.push(_nvptx_op(_nvptx_operand_text(s.args[0])))
+            a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
+            a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[0], kinds)))
             out.push(_nvptx_instr("mov.f64", a, "assign"))
         }
         return out
     }
     if s.kind == STMT_BINOP {
         if len(s.args) >= 2 {
+            // 055-P3b comparison-binop lowering — `setp.<cond>.f64 %p<dst>,
+            // <a>, <b>;` for lt/le/gt/ge/eq/ne. The destination is a
+            // predicate (.pred bank) per the classifier; PTX `setp.<cond>`
+            // takes the SAME mnemonic as the MIR opcode (1:1 mapping).
+            let cmp = _nvptx_cmp_mnemonic(s.op)
+            if len(cmp) > 0 {
+                let mut a = []
+                a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
+                a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[0], kinds)))
+                a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[1], kinds)))
+                out.push(_nvptx_instr(cmp, a, "cmp " + s.op))
+                return out
+            }
+            // 055-P0 arithmetic binop fallthrough.
             let mnem = _nvptx_binop_mnemonic(s.op)
             if len(mnem) > 0 {
                 let mut a = []
-                a.push(_nvptx_op(_nvptx_reg_f64(s.dst.id)))
-                a.push(_nvptx_op(_nvptx_operand_text(s.args[0])))
-                a.push(_nvptx_op(_nvptx_operand_text(s.args[1])))
+                a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
+                a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[0], kinds)))
+                a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[1], kinds)))
                 out.push(_nvptx_instr(mnem, a, "binop " + s.op))
             } else {
                 // RFC 055 055-P0 — binop outside the FP64 arithmetic
-                // subset (e.g. div / compare / bitwise). Honest stub.
+                // subset (e.g. div / bitwise). Honest stub.
                 out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported binop: " + s.op))
             }
         }
+        return out
+    }
+    // 055-P3b STMT_CALL — lower known gpu intrinsic names (gpu/SPEC.md
+    // §5) to a `mov.u32 %r<dst>, <sreg>.<axis>;` read. The classifier
+    // has already put the dst Local into the `.reg .u32` bank; this
+    // emits the body. Non-intrinsic STMT_CALLs remain a stub (a real
+    // call ABI is 055-P3c-territory).
+    if s.kind == STMT_CALL {
+        let sreg = _nvptx_gpu_intrinsic_sreg(s.op)
+        if len(sreg) > 0 {
+            let mut a = []
+            a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
+            a.push(_nvptx_op(sreg))
+            out.push(_nvptx_instr(PTX_OP_MOV_U32, a, s.op + "()"))
+            return out
+        }
+        out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported call: " + s.op))
         return out
     }
     if s.kind == STMT_RETURN {
         out.push(_nvptx_instr(PTX_OP_RET, [], "return"))
         return out
     }
-    // RFC 055 055-P3b — generic control-flow primitive: unconditional
-    // branch. PTX has no fall-through-only convention; every block must
-    // end in a terminator, so the lowering emits an explicit `bra` even
-    // when the target block follows in source order. Type-agnostic;
-    // introduces no new register-bank requirement.
+    // 055-P3b STMT_BR (unconditional) — `bra $L_<target>;`. PTX has no
+    // fall-through convention; every block must end in a terminator,
+    // so the lowering emits an explicit `bra` even when the target
+    // follows in source order.
     if s.kind == STMT_BR {
         let mut a = []
         a.push(_nvptx_op("$L_" + to_string(s.target_block)))
         out.push(_nvptx_instr(PTX_OP_BRA, a, "br -> $L_" + to_string(s.target_block)))
         return out
     }
-    // RFC 055 055-P0 - statement outside the straight-line FP64 slice +
-    // STMT_BR. STMT_BR_COND / STMT_CALL / STMT_LOAD / STMT_STORE /
-    // STMT_THROW etc. need per-Local type tracking (predicate vs i32 vs
-    // f64 vs u64 register banks) - that refactor is the rest of 055-P3b.
-    // Honest stub: emits a PTX comment so the surrounding lowered text
-    // stays readable and the unhandled stmt is visible in the output.
+    // 055-P3b STMT_BR_COND — `@<pred> bra $L_<true>; bra $L_<false>;`.
+    // The predicate operand (args[0]) is a Local in the `.pred` bank
+    // (classified by its defining comparison binop). PTX guards the
+    // first branch with the predicate; the second is an unconditional
+    // fall-through to the else target.
+    if s.kind == STMT_BR_COND {
+        if len(s.args) >= 1 {
+            let pred_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+            let mut a1 = []
+            a1.push(_nvptx_op("$L_" + to_string(s.target_block)))
+            out.push(_nvptx_instr("@" + pred_reg + " " + PTX_OP_BRA, a1,
+                "br_cond true -> $L_" + to_string(s.target_block)))
+            let mut a2 = []
+            a2.push(_nvptx_op("$L_" + to_string(s.target_block_else)))
+            out.push(_nvptx_instr(PTX_OP_BRA, a2,
+                "br_cond false -> $L_" + to_string(s.target_block_else)))
+        }
+        return out
+    }
+    // RFC 055 055-P0 - statement outside the FP64 slice + the 055-P3b
+    // primitives above. STMT_LOAD / STMT_STORE / STMT_THROW / STMT_TRY_*
+    // etc. are later 055-P3b/P4+ cycles. Honest stub.
     out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported stmt kind: " + s.kind))
     return out
 }
@@ -489,6 +617,13 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
 // (one PReg per FP64 virtual register) so the emit pass can declare
 // them — a structural reuse of the LFunc field, not a CPU regalloc.
 fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
+    // 055-P3b — classify every assignment-target Local ONCE before the
+    // lowering walk, then thread the kinds roster through every
+    // `_nvptx_lower_stmt` call. The same roster doubles as callee_saved
+    // so the emit pass declares each register with the matching
+    // `.reg .<ty>` directive. Computing it once avoids re-walking the
+    // MIR per-stmt.
+    let regs = _nvptx_classify_locals(mfn)
     let mut instrs = []
     let mut bi = 0
     while bi < len(mfn.blocks) {
@@ -498,18 +633,11 @@ fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
         instrs.push(_nvptx_instr("label", [_nvptx_op("$L_" + to_string(blk.id))], ""))
         let mut si = 0
         while si < len(blk.stmts) {
-            instrs = _nvptx_lower_stmt(instrs, blk.stmts[si])
+            instrs = _nvptx_lower_stmt(instrs, blk.stmts[si], regs)
             si = si + 1
         }
         bi = bi + 1
     }
-    // Record the per-Local PTX virtual registers as PReg rows in
-    // callee_saved so the emit pass can declare each with the matching
-    // `.reg .<ty>` directive. 055-P3b — `_nvptx_classify_locals` picks
-    // the kind per Local (predicate / u32 / u64 / f64) from each Local's
-    // defining stmt; the 055-P0 fixtures classify identically (all FP64)
-    // because their defs are STMT_ASSIGN / STMT_BINOP{add,sub,mul}.
-    let regs = _nvptx_classify_locals(mfn)
     return LFunc {
         name: mfn.name,
         target: target,

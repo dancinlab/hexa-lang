@@ -3718,6 +3718,70 @@ files; no binary promote (`compiler/main.hexa` is the self-host compiler
 front-end, not the driver bootstrap — @D g_commit_push_deploy applies to
 `hexa_cc.c` / `hexa_v2`, neither of which this cycle touches).
 
+### 2026-05-20 — RFC 055 055-P3b — setp body + STMT_BR_COND + STMT_CALL gpu intrinsic body
+
+Third 055-P3b slice (after the STMT_BR primitive and the per-Local kind
+classifier). Builds on the kind infrastructure to land the three MIR
+stmt-kind lowerings the prior slice deliberately stubbed:
+
+**What landed (compiler/codegen/nvptx_target.hexa, +~120 lines additive):**
+- `_nvptx_cmp_mnemonic(op)` — maps comparison binop opcodes (lt/le/gt/
+  ge/eq/ne) to the PTX `setp.<cond>.f64` mnemonic (1:1 with PTX cond
+  names). The FP64 comparand type matches the §8 FP64-first scope.
+- `_nvptx_gpu_intrinsic_sreg(op)` — maps a known gpu intrinsic STMT_CALL
+  callee name (`gpu_{thread,block,grid}_{id,dim}_{x,y,z}`, 12 names)
+  to its PTX special-register reference (`%tid.x`, `%ctaid.y`, etc.).
+- `_nvptx_operand_text_kinds(o, kinds)` — 055-P3b kind-aware operand
+  renderer; consults the classified roster to pick the right register
+  name (`%fd`/`%r`/`%rd`/`%p`) instead of the 055-P0 unconditional `%fd`.
+- `_nvptx_lookup_reg_for_local(kinds, id)` — given the [PReg] roster +
+  a MIR Local id, return the PTX register name (tests four candidate
+  names against the roster; falls back to `%fd<id>` for unclassified
+  Locals, matching the 055-P0 default).
+- `_nvptx_lower_stmt` signature now `(buf, s, kinds)` — threads the
+  classification through every call. New stmt-kind cases:
+    * STMT_BINOP comparison ops → `setp.<cond>.f64 %p<dst>, <a>, <b>;`
+    * STMT_CALL gpu intrinsics → `mov.u32 %r<dst>, <sreg>.<axis>;`
+    * STMT_BR_COND → `@<pred> bra $L_<true>;` + `bra $L_<false>;`
+    * existing ASSIGN / arith-BINOP / RETURN / BR cases use the
+      kind-aware lookup for operand + dst register naming
+- `_nvptx_lower_func` computes the classification ONCE at function
+  entry and threads it into every `_nvptx_lower_stmt` call (avoids
+  re-walking the MIR per-stmt; also reuses the roster for
+  `LFunc.callee_saved`).
+
+**Verification — standalone (compiled path):**
+- `compiler/codegen/nvptx_lower_test.hexa` gains two cases:
+    * `_test_setp_and_br_cond` — 3-block MFunc (`p = a < b; br_cond p
+      -> $L_1 else $L_2; { return } { return }`); asserts the emitted
+      PTX contains `setp.lt.f64 %p2`, `@%p2 bra $L_1`,
+      `bra $L_2`, `.reg .pred %p2`, and all three block labels.
+    * `_test_call_intrinsic` — STMT_CALLs to `gpu_block_id_x` /
+      `gpu_block_dim_x` / `gpu_thread_id_x`; asserts the emitted PTX
+      contains the matching `.reg .u32 %r{0,1,2}` decls + the
+      `mov.u32 %r<dst>, %{ctaid,ntid,tid}.x` reads.
+  Total 4 cases in nvptx_lower_test.hexa now: STMT_BR + classify +
+  setp/BR_COND + CALL-intrinsic — all **PASS** on the compiled path.
+- Regression — all four existing NVPTX smokes (055-P0 emit_test, 055-P1
+  vec_add_test, 055-P2 gemm_test, 055-P3b lower_test pre-extension)
+  still **PASS** post-refactor. The hand-emit kernels (P1 vec-add / P2
+  GEMM) bypass _nvptx_lower_stmt entirely — their `_nvptx_p{1,2}_*`
+  helpers emit LInstr records directly, so they're unaffected by the
+  generic-lowering signature change.
+
+**Honest scope — still 055-P3b (last sub-slice):**
+- STMT_LOAD / STMT_STORE generic lowering → `.global.f64` /
+  `.shared.f64` with address arithmetic. Needs operand-kind tracking
+  for the address u64 Local AND parameter-bank knowledge (the host-
+  passed farr base) — pairs naturally with 055-P3c (MFunc.gpu_kind
+  routing through the @gpu_kernel partition + the `.visible .entry`
+  param bank).
+
+**Files** — extended only: `compiler/codegen/nvptx_target.hexa` (+~120
+lines additive, _nvptx_lower_stmt now threads kinds, _nvptx_lower_func
+classifies once), `compiler/codegen/nvptx_lower_test.hexa` (+two new
+cases). No binary promote.
+
 ### 2026-05-20 — RFC 055 055-P3b — per-Local PTX register-kind classification + `.reg` bank emission
 
 Second slice of 055-P3b, building on the STMT_BR primitive. The 055-P0

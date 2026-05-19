@@ -251,6 +251,165 @@ fn _test_classify_pred() -> bool {
     return ok
 }
 
+// ── Case 3 — STMT_BR_COND + setp comparison body ─────────────────────
+//
+// 055-P3b third slice: paired setp lowering + STMT_BR_COND. A two-block
+// MFunc with a predicate-producing comparison binop in block 0 followed
+// by a STMT_BR_COND that branches on it, with block 1 = `then` and
+// block 2 = `else` (both returning). Verifies:
+//   - the comparison binop body emits `setp.<cond>.f64 %p<dst>, <a>, <b>;`
+//     (not the stub comment from the prior P3b slice)
+//   - STMT_BR_COND emits `@<pred> bra $L_<true>;` + a fall-through
+//     `bra $L_<false>;`
+//   - the .reg .pred bank carries the predicate Local
+
+fn _stmt_br_cond(pred: Operand, t_block: i64, e_block: i64) -> Stmt {
+    let mut xs = []
+    xs.push(pred)
+    return Stmt {
+        kind: STMT_BR_COND, dst: _miss_local(), op: "", args: xs,
+        target_block: t_block, target_block_else: e_block
+    }
+}
+
+fn _build_case_setp_br_cond() -> MModule {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let p = _local(2, "p")     // expected .pred (setp produces predicate)
+
+    // block 0: p = a < b ; br_cond p -> block 1, else block 2
+    let mut s0 = []
+    s0.push(_stmt_binop(p, "lt", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_br_cond(_op_local(p.id), 1, 2))
+
+    // block 1: then-arm — return
+    let mut s1 = []
+    s1.push(_stmt_return())
+    // block 2: else-arm — return
+    let mut s2 = []
+    s2.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    blocks.push(_block(1, s1))
+    blocks.push(_block(2, s2))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(p)
+
+    let mf = MFunc {
+        name: "br_cond_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_br_cond.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_setp_and_br_cond() -> bool {
+    let mut ok = true
+    let mod_bc = _build_case_setp_br_cond()
+    let ptx = codegen_emit_ptx_sm80(mod_bc)
+
+    println("")
+    println("── emitted PTX (setp + STMT_BR_COND case, sm_80) ──")
+    println(ptx)
+
+    // setp body for `lt`
+    ok = _check(ok, ptx, "setp.lt.f64 %p2",     "setp.lt.f64 with pred dst")
+    // STMT_BR_COND lowering
+    ok = _check(ok, ptx, "@%p2 bra $L_1",       "predicated br -> $L_1 (then)")
+    ok = _check(ok, ptx, "bra $L_2",            "fall-through br -> $L_2 (else)")
+    // .reg .pred bank
+    ok = _check(ok, ptx, ".reg .pred %p2",      "pred bank for the comparison dst")
+    // All three blocks present
+    ok = _check(ok, ptx, "$L_0:",               "block-0 label")
+    ok = _check(ok, ptx, "$L_1:",               "block-1 (then) label")
+    ok = _check(ok, ptx, "$L_2:",               "block-2 (else) label")
+    return ok
+}
+
+// ── Case 4 — STMT_CALL gpu intrinsic body ─────────────────────────────
+//
+// 055-P3b fourth slice: STMT_CALL with the known gpu thread-index
+// intrinsic names lowers to `mov.u32 %r<dst>, <sreg>.<axis>;`. The
+// classifier puts the dst into the `.reg .u32` bank; this verifies the
+// body emission. Uses three intrinsics across the x axis:
+// gpu_block_id_x, gpu_block_dim_x, gpu_thread_id_x — the same three
+// the 055-P1 hand-emit vec-add reads as the gid-compose preamble.
+
+fn _stmt_call(dst: Local, callee: string) -> Stmt {
+    return Stmt {
+        kind: STMT_CALL, dst: dst, op: callee, args: [],
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _build_case_call_intrinsic() -> MModule {
+    let ctaid_x = _local(0, "ctaid_x")
+    let ntid_x  = _local(1, "ntid_x")
+    let tid_x   = _local(2, "tid_x")
+
+    let mut s0 = []
+    s0.push(_stmt_call(ctaid_x, "gpu_block_id_x"))
+    s0.push(_stmt_call(ntid_x,  "gpu_block_dim_x"))
+    s0.push(_stmt_call(tid_x,   "gpu_thread_id_x"))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut locals = []
+    locals.push(ctaid_x)
+    locals.push(ntid_x)
+    locals.push(tid_x)
+
+    let mf = MFunc {
+        name: "intrin_smoke",
+        params: [],
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_intrinsics.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_call_intrinsic() -> bool {
+    let mut ok = true
+    let mod_in = _build_case_call_intrinsic()
+    let ptx = codegen_emit_ptx_sm80(mod_in)
+
+    println("")
+    println("── emitted PTX (STMT_CALL gpu intrinsic body, sm_80) ──")
+    println(ptx)
+
+    // .reg .u32 bank for each intrinsic dst
+    ok = _check(ok, ptx, ".reg .u32 %r0",                "u32 bank %r0 (ctaid_x)")
+    ok = _check(ok, ptx, ".reg .u32 %r1",                "u32 bank %r1 (ntid_x)")
+    ok = _check(ok, ptx, ".reg .u32 %r2",                "u32 bank %r2 (tid_x)")
+    // mov.u32 from PTX special registers
+    ok = _check(ok, ptx, "mov.u32 %r0, %ctaid.x",        "gpu_block_id_x() -> %ctaid.x")
+    ok = _check(ok, ptx, "mov.u32 %r1, %ntid.x",         "gpu_block_dim_x() -> %ntid.x")
+    ok = _check(ok, ptx, "mov.u32 %r2, %tid.x",          "gpu_thread_id_x() -> %tid.x")
+    return ok
+}
+
 // ── Driver ───────────────────────────────────────────────────────────
 
 fn main() {
@@ -258,18 +417,22 @@ fn main() {
     println("  RFC 055 055-P3b — generic NVPTX lowering primitives smoke")
     println("══════════════════════════════════════════════")
 
-    let ok_br = _test_stmt_br()
-    let ok_cls = _test_classify_pred()
+    let ok_br    = _test_stmt_br()
+    let ok_cls   = _test_classify_pred()
+    let ok_setp  = _test_setp_and_br_cond()
+    let ok_intr  = _test_call_intrinsic()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls {
-        println("PASS: RFC 055 055-P3b primitives — STMT_BR + per-Local kind classification")
+    if ok_br && ok_cls && ok_setp && ok_intr {
+        println("PASS: RFC 055 055-P3b primitives — STMT_BR + classify + setp/BR_COND + CALL-intrinsic")
     } else {
         println("FAIL: RFC 055 055-P3b smoke not satisfied.")
-        if !ok_br  { println("      STMT_BR FAILED") }
-        if !ok_cls { println("      classify (pred bank) FAILED") }
+        if !ok_br   { println("      STMT_BR FAILED") }
+        if !ok_cls  { println("      classify (pred bank) FAILED") }
+        if !ok_setp { println("      setp + STMT_BR_COND FAILED") }
+        if !ok_intr { println("      STMT_CALL gpu intrinsic FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr) { exit(1) }
 }
