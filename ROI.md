@@ -1,20 +1,68 @@
 # 💎
 
 > Performance · resource · speed improvement ROI brainstorm for hexa-lang.
-> Estimates are *ranges* — no profile run yet. Lever `0` (instrument) is the
-> 0-priority action that turns every estimate below into a measured ranking.
+>
+> ★ **정공법 (orthodox path) — CONCLUSION 2026-05-20.** The measured
+> bottleneck is clang (80% of build wall). Every C-path lever below
+> (W1/W2/F) optimizes a *dependency on an external compiler*. The
+> orthodox fix removes that dependency: emit machine code directly from
+> hexa, drop the `.c` step, drop clang. This is not a new idea — it is
+> hexa-lang's own stated architecture (`HEXA-NATIVE-ONLY.md`,
+> `AGENTS.tape @D g5` "no third-party codegen backend"; the C path is
+> "fallback, not the architecture", `@N n1`). Lever `I` is therefore
+> promoted from "last / tradeoff" to THE keystone. W1/W2/F remain valid
+> only as interim relief while the C fallback still exists. See the
+> "정공법 — drop the C step" section below.
 
 ```
 At-a-glance
   pipeline : .hexa --> hexa_v2 --> C (1 TU) --> clang --> native --> run
-  keystone : F — drop whole-program flatten; it is the common root of
-             OOM + slow compile + zero incrementality
-  do first : W1 runtime.o cache (-53% build wall) then W2 -O0 dev flag
+  정공법   : drop the C step — direct native codegen, no clang dependency
+             (HEXA-NATIVE-ONLY.md / @D g5). clang = 80% of build wall.
+  interim  : W1/W2/F speed the C path; relief only while the C fallback lives
   measured : clang = 80% of build wall; runtime.c recompile = 53% alone
-  status   : lever 0 profiled (see below) — not yet in compiler/PLAN.md
+  status   : lever 0 profiled + 정공법 recorded — not yet in compiler/PLAN.md
 ```
 
 ---
+
+## 정공법 — drop the C step (orthodox path)
+
+Levers W1, W2, and F all make the *C compilation* faster — but the C
+step exists only to hand work to clang, an external compiler. The
+orthodox path removes the dependency entirely:
+
+```
+current (C-path, depends on clang):
+  .hexa --> hexa_v2 --> C --> [ clang -O2 ] --> native binary
+                              ^^^^^^^^^^^^^
+                              external dependency · 80% of build wall
+
+정공법 (direct native codegen, self-hosted):
+  .hexa --> hexa codegen --> machine code --> native binary
+                             (own instr-sel + regalloc + emitter + linker)
+```
+
+Why this is the orthodox path, not lever `I` "ranked last":
+
+- It IS hexa-lang's stated architecture — `HEXA-NATIVE-ONLY.md`, `@D g5`
+  ("no third-party codegen backend"), `@N n1` ("direct native codegen is
+  on the roadmap"; the C path is "fallback, not the architecture").
+- clang is the measured 80% of build wall — removing the dependency
+  removes the bottleneck at its root, not at the margin.
+- "loses clang's optimizer" is not a cost of the path — it is scope
+  hexa must own (its own optimizer passes). Keeping clang to borrow its
+  optimizer is precisely the external dependency to shed.
+
+Cost is real and honest: direct codegen needs instruction selection,
+register allocation, a machine-code emitter, and an object-file / linker
+path for arm64 + x86_64. This is RFC-scale, multi-cycle — not a quick
+win. The C path stays as the documented portability fallback during the
+transition (consistent with `@F f2`: fallback C emission is allowed, it
+just is not the architecture).
+
+W1/W2/F are now explicitly interim: worth doing only as relief while the
+C fallback still exists; they do not substitute for the 정공법.
 
 ## Pipeline — where the levers sit
 
@@ -45,7 +93,7 @@ breaking flatten unlocks `B`, `C`, and `G` for free.
 | F  | drop flatten -> separate compilation (keystone) | all 3 axes | 4-7d | resolves OOM + unlocks B/C/G | yes |
 | G  | module-level incremental compile (on top of F) | compile speed | in F | 1-line edit: full build -> 1 module | yes |
 | H  | streaming codegen (no whole-AST in memory) | resource | 5-8d | large drop in compile memory peak | yes |
-| I  | direct native codegen (drop the C step) | compile speed | 10d+ | bypasses clang but **loses the optimizer** | no (tradeoff) |
+| **I** | **정공법 — direct native codegen; drop `.c`, drop the clang dependency** (promoted from "last" to keystone — see section above) | all axes | RFC-scale | removes clang = removes 80% of build wall at the root | yes (self-hosted) |
 
 `*` B and C depend on `F` (split) — neither parallelism nor caching is
 possible while the build is a single flattened translation unit.
@@ -61,10 +109,12 @@ flatten makes `B`, `C`, and `G` follow for free. The OOM wall (full
 `compiler/main.hexa` flatten exceeds memory on every host) is resolved
 structurally here.
 
-**Wave 3 — long horizon (`H` / `I`):** `I` (no-C) is a ROADMAP item but
-loses clang's optimizer, so under the hexa-first "lossless gains first"
-rule it ranks last — a self-hosted optimizer pass should land before it
-breaks even.
+**Wave 3 — the 정공법 (`I` direct native codegen):** the orthodox fix —
+drop the `.c` step, drop the clang dependency, emit machine code
+directly. This is hexa-lang's stated architecture (`HEXA-NATIVE-ONLY.md`,
+`@D g5`), removes the measured 80%-of-build-wall bottleneck at its root,
+and is RFC-scale / multi-cycle. W1/W2/F (Waves 1-2) are interim relief on
+the C path, not substitutes for it. See "정공법 — drop the C step" above.
 
 ## Why lever 0 leads
 
@@ -130,5 +180,12 @@ optimizer tax.
   profile" above. clang is 80% of build wall; `runtime.c` recompile
   alone is 53%. Re-ranked: W1 (`runtime.o` cache, ~2x) + W2 (`-O0` dev
   flag, stacked ~3.8x) are the measured top quick wins; lever `A`
-  (`-O2`) was found already shipped. Next: schedule W1+W2 into
-  `compiler/PLAN.md` when a cycle picks them up.
+  (`-O2`) was found already shipped.
+- 2026-05-20 — 정공법 recorded (user directive). The orthodox path is
+  not optimizing the C path — it is removing it. clang is an external
+  dependency and the measured 80% of build wall; the orthodox fix is
+  direct native codegen (drop `.c`, drop clang), which is hexa-lang's
+  own stated architecture (`HEXA-NATIVE-ONLY.md`, `@D g5`). Lever `I`
+  promoted to keystone; W1/W2/F demoted to interim C-path relief. Next:
+  the 정공법 is RFC-scale — draft an RFC for direct CPU native codegen
+  rather than scheduling W1/W2/F as the headline.
