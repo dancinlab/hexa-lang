@@ -3899,6 +3899,12 @@ fn gen2_expr(node) {
             if name == "byte_len" {
                 return "hexa_byte_len(" + gen2_expr(node.args[0]) + ")"
             }
+            // Free-function form of `s.byte_at(i)` — raw byte (0..255) at a
+            // byte offset, -1 OOB. The method form is already mapped; this
+            // covers `byte_at(s, i)` callers.
+            if name == "byte_at" {
+                return "hexa_str_byte_at(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
+            }
             if name == "dict_keys" {
                 return "hexa_dict_keys(" + gen2_expr(node.args[0]) + ")"
             }

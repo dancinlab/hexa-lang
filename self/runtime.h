@@ -285,6 +285,7 @@ HexaVal hexa_term_install_sigint(void);               /* runtime.c:11368 — ins
 HexaVal hexa_term_sigint_pending(void);               /* runtime.c:11369 — drain SIGINT-pending flag */
 HexaVal hexa_term_getppid(void);                      /* runtime.c:11372 — getppid() as HexaVal int */
 HexaVal hexa_time_ms(void);                           /* runtime.c:9889 — monotonic millis (CLOCK_MONOTONIC) */
+HexaVal hexa_byte_len(HexaVal v);                     /* runtime.c:5326 — byte length of string/array/map */
 HexaVal hexa_json_stringify(HexaVal v);               /* runtime.c:10639 — HexaVal → JSON */
 HexaVal hexa_bytes_to_str_raw(HexaVal arr);           /* runtime.c:7718 — byte array → raw string */
 HexaVal rt_append_file(HexaVal path, HexaVal content); /* runtime.c:9830 — fs append (HexaVal-typed wrapper) */
