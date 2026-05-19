@@ -346,10 +346,8 @@ fn cmd_url(url) {
             args_list.push(hexa_url_decode(args_raw[ai]))
             ai = ai + 1
         }
-        // R7 option B — user-direct invocation (hexa:// URL) routes
-        // through the deprecation-warning helper. URL action has no
-        // --vm flag, so want_vm=false.
-        cmd_run_user_direct(file, args_list, false)
+        // `hexa://run` URL action — user-direct invocation: compile then exec.
+        cmd_run_user_direct(file, args_list)
     } else if action == "install" {
         let pkg = hexa_url_query_get(query, "pkg")
         if pkg == "" {
@@ -2159,50 +2157,16 @@ fn join_shell_args(argv) {
     return out
 }
 
-// rt#36 launch — opt-in `--vm` flag wrapper. Sets a module-global
-// `cmd_run_vm_mode` consumed by cmd_run when building the interp
-// child shell cmd (HEXA_VM=1 env). Keeps cmd_run's positional
-// signature stable so existing callers (compat mode, lsp, check)
-// remain untouched.
-let mut cmd_run_vm_mode = false
-
-fn cmd_run_dispatch(file, extra_args, want_vm) {
-    cmd_run_vm_mode = want_vm
-    cmd_run(file, extra_args)
-    cmd_run_vm_mode = false
-}
-
-// R7 — option B (interp deprecation, source preserved).
-// `hexa run <file>` and the hexa://run URL action are USER-DIRECT
-// invocations of the tree-walking interpreter; emit a stderr
-// deprecation warning before delegating to cmd_run_dispatch. The 16+
-// absorbed-verb sites (lsp / test / check / qrng / batch / …) keep
-// calling cmd_run directly — they are internal infrastructure, not
-// surfaces a user is asked to type, so they are silent until track B
-// (sub-binary re-targeting) lands and they can be migrated. The
-// warning is silenced by HEXA_INTERP_QUIET=1 for CI and downstream
-// consumers still on the interp path. Functionality is preserved
-// (loss = 0); only the user-visible signal that `hexa run` is on the
-// retirement track is added. See AGENTS.tape @D g_interp_deprecated
-// and compiler/PLAN.md "R7 Phase 1 entanglement map" for the full
-// rationale + Phase 2 split.
-fn cmd_run_user_direct(file, extra_args, want_vm) {
-    // R7 interp-retire — MEASURED CUTOVER (2026-05-18, user-approved).
-    // `hexa run <file>` now COMPILES then executes (interp-free path).
-    //   • HEXA_FORCE_INTERP=1 → opt-in escape hatch to the retiring
-    //     tree-walking interpreter (kept until parity is proven 100%).
-    //   • compile OK → exec the produced binary, propagate exit code.
-    //   • `hexa build` fails (a compile-parity gap) → transitional
-    //     fallback to interp + a loud report. This safety net exists
-    //     ONLY for the measured-cutover parity phase; it is removed
-    //     (with the interp source) once byte-eq parity is proven.
-    if env_var("HEXA_FORCE_INTERP") == "1" {
-        if env_var("HEXA_INTERP_QUIET") != "1" {
-            eprintln("hexa: HEXA_FORCE_INTERP=1 — tree-walking interpreter (retiring, R7).")
-        }
-        cmd_run_dispatch(file, extra_args, want_vm)
-        return
-    }
+// `hexa run <file>` and the `hexa://run` URL action are user-direct
+// invocations; cmd_run_user_direct compiles then executes (the
+// tree-walking interpreter is retired — g_interp_deprecated). The
+// absorbed-verb sites (lsp / test / check / qrng / batch / …) call
+// cmd_run directly.
+fn cmd_run_user_direct(file, extra_args) {
+    // `hexa run <file>` COMPILES then executes — the tree-walking
+    // interpreter is retired (g_interp_deprecated). compile OK → exec the
+    // produced binary and propagate its exit code; build fails → report
+    // the compile error and exit non-zero.
     // Resolve this hexa binary to self-invoke `hexa build`.
     let __inst_r = install_dir_from_argv0()
     let mut hexa_bin = ""
@@ -2265,23 +2229,20 @@ fn cmd_run_user_direct(file, extra_args, want_vm) {
             exit(0)
         }
     }
-    eprintln("hexa: `hexa build " + file + "` failed (compile-parity gap) — falling back to the retiring interpreter.")
-    eprintln("hexa:   transitional only (R7 measured cutover); please report the parity gap.")
+    eprintln("error: `hexa build " + file + "` failed (compile error).")
     if env_var("HEXA_INTERP_QUIET") != "1" { eprintln(bout) }
-    cmd_run_dispatch(file, extra_args, want_vm)
+    let mut _erc = brc
+    if _erc == 0 { _erc = 1 }
+    exit(_erc)
 }
 
 fn cmd_run(file, extra_args) {
-    // R7 Cycle C step-2 (2026-05-19): the tree-walking interpreter is
-    // RETIRED — its source was deleted (origin/main ab7015fa) after the
-    // measured-cutover parity gate PASSED (interp↔compiled byte-eq,
-    // 13→0 gate-relevant). `cmd_run` now COMPILES then executes:
-    // `hexa build <file>` (which itself flattens use/import via
-    // module_loader) → run the produced binary. The historical contract
-    // is preserved exactly — sets cmd_run_last_rc, calls
-    // auto_marker_write, honors cmd_run_no_exit_mode (the batch driver),
-    // exits on non-zero rc otherwise. cmd_run_vm_mode is now moot (the
-    // bytecode-VM branch was an interpreter-only path).
+    // The tree-walking interpreter is RETIRED (g_interp_deprecated).
+    // `cmd_run` COMPILES then executes: `hexa build <file>` (which flattens
+    // use/import via module_loader) → run the produced binary. The historical
+    // contract is preserved — sets cmd_run_last_rc, calls auto_marker_write,
+    // honors cmd_run_no_exit_mode (the batch driver), exits on non-zero rc
+    // otherwise. Internal absorbed-verb sites call cmd_run directly.
     let __inst_r = install_dir_from_argv0()
     let mut hexa_bin = ""
     if len(__inst_r) > 0 {
@@ -2376,21 +2337,10 @@ let mut cmd_run_no_exit_mode = false
 let mut cmd_run_last_rc = 0
 
 fn _batch_run_one(file) {
-    // R7 interp-retire — MEASURED CUTOVER, batch path (2026-05-18,
-    // user-approved). Mirrors cmd_run_user_direct's compile-then-exec
-    // but RETURNS rc instead of exit(rc): the batch loop must keep
-    // going across per-file failures. The interp branches honor the
-    // caller's cmd_run_no_exit_mode (cmd_batch sets it). This whole
-    // duplicate path collapses into cmd_run_user_direct once the interp
-    // source is deleted (Cycle C); the duplication is transitional.
-    if env_var("HEXA_FORCE_INTERP") == "1" {
-        if env_var("HEXA_INTERP_QUIET") != "1" {
-            eprintln("hexa: HEXA_FORCE_INTERP=1 — tree-walking interpreter (retiring, R7).")
-        }
-        cmd_run_last_rc = 0
-        cmd_run(file, [])
-        return cmd_run_last_rc
-    }
+    // Batch path — compile-then-exec, mirrors cmd_run_user_direct but
+    // RETURNS rc instead of exit(rc) so the batch loop continues across
+    // per-file failures. The tree-walking interpreter is retired
+    // (g_interp_deprecated).
     let __inst_r = install_dir_from_argv0()
     let mut hexa_bin = ""
     if len(__inst_r) > 0 {
@@ -2439,12 +2389,11 @@ fn _batch_run_one(file) {
         print(out)
         return 0
     }
-    eprintln("hexa: `hexa build " + file + "` failed (compile-parity gap) — falling back to the retiring interpreter.")
-    eprintln("hexa:   transitional only (R7 measured cutover); please report the parity gap.")
+    eprintln("error: `hexa build " + file + "` failed (compile error).")
     if env_var("HEXA_INTERP_QUIET") != "1" { eprintln(bout) }
-    cmd_run_last_rc = 0
-    cmd_run(file, [])
-    return cmd_run_last_rc
+    let mut _erc = brc
+    if _erc == 0 { _erc = 1 }
+    return _erc
 }
 
 fn cmd_batch(files) {
@@ -3033,40 +2982,19 @@ if len(av) < 3 {
             println("error: 'run' requires <file>")
             cmd_help()
         } else {
-            // rt#36 launch: parse `--vm` opt-in flag (rt36-D bridge plumbing).
-            //   - Accepted positions: `hexa run --vm <file> [args...]`
-            //                         `hexa run <file> --vm [args...]`
-            //                         `hexa run <file> [args...] --vm`
-            //   - The flag is *stripped* from forwarded run_args so the
-            //     script's own args() does not see it.
-            //   - When set, cmd_run exports HEXA_VM=1 to the interp child.
-            //     interp / loaded scripts can branch on env_get("HEXA_VM")
-            //     to route through bc_emitter→bc_vm_run() once the
-            //     parser→bc_node_pool bridge lands (rt#36-D, blocked).
-            //   - For now, scripts that already self-drive bc_vm (e.g.
-            //     self/test_bc_vm_smoke.hexa via raw BcProto push +
-            //     bc_vm_run() call) execute identically with or without
-            //     the flag — the env var is purely advisory until the
-            //     AST→bc bridge exists.
-            // no-hardcode9 (2026-04-28): `--no-sentinel` opt-in flag — same
-            //   accepted positions and flag-strip semantics as `--vm`.
-            //   Suppresses the trailing `__HEXA_RC=N` stdout sentinel
-            //   (rc routed through a sidechannel file instead). Equivalent
-            //   to setting HEXA_NO_SENTINEL=1 in the environment.
-            //   Use case: callers parse the child's stdout directly
-            //   (e.g. `hexa run script.hexa | jq`, JSON.parse pipelines,
-            //   hive fake-* test fixtures spawned from .ts via spawn).
-            // bt 39: av[4..] = 스크립트 전달 인자 (argv forwarding)
+            // `--no-sentinel` opt-in flag — accepted before/after the file
+            //   arg, stripped from forwarded run_args. Suppresses the
+            //   trailing `__HEXA_RC=N` stdout sentinel (rc via sidechannel) —
+            //   equivalent to HEXA_NO_SENTINEL=1. Use case: callers parse the
+            //   child's stdout directly (`hexa run script.hexa | jq`, …).
+            // av[4..] = script-forwarded args (argv forwarding).
             let mut run_args = []
-            let mut want_vm = false
             let mut want_no_sentinel = false
             let mut file_arg = ""
             let mut ri = 3
             while ri < len(av) {
                 let a = av[ri]
-                if a == "--vm" {
-                    want_vm = true
-                } else if a == "--no-sentinel" {
+                if a == "--no-sentinel" {
                     want_no_sentinel = true
                 } else if len(file_arg) == 0 {
                     file_arg = a
@@ -3080,14 +3008,8 @@ if len(av) < 3 {
                 cmd_help()
             } else {
                 cmd_run_no_sentinel_mode = want_no_sentinel
-                // R7 option B — top-level `hexa run <file>` is a user-
-                // direct invocation: route via cmd_run_user_direct so
-                // the stderr deprecation warning fires (silenceable
-                // via HEXA_INTERP_QUIET=1). All 16+ absorbed-verb
-                // sites (lsp / test / check / qrng / batch / …) still
-                // call cmd_run / cmd_run_dispatch directly — they are
-                // internal infrastructure and migrate in track B.
-                cmd_run_user_direct(file_arg, run_args, want_vm)
+                // `hexa run <file>` — user-direct: compile then exec.
+                cmd_run_user_direct(file_arg, run_args)
                 cmd_run_no_sentinel_mode = false
             }
         }
