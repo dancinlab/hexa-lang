@@ -58,11 +58,15 @@ fn _nn_sqrt(x: float) -> float {
 
 // ─── Linear layer ──────────────────────────────────────────────────────
 // y = x · W + b ; shapes: x [B·D], W [D·C], b [C] → y [B·C].
-// Forward (host CPU): farr_matmul + per-row bias broadcast.
-// farr_matmul signature = (A_id, M=rows(A), K=cols(A), B_id, N=cols(B))
-// so for y = x[B·D]·W[D·C] we call farr_matmul(x, B, D, W, C).
+// Forward: RFC 050 dispatcher-routed matmul + per-row bias broadcast.
+// forge_dispatch_matmul signature mirrors farr_matmul exactly —
+// (A_id, M=rows(A), K=cols(A), B_id, N=cols(B)) — and routes through
+// forge_tier_dispatch_v1. Its FP64 path bottoms out at the same
+// hexa_farr_matmul kernel, so output is byte-equal to the direct call
+// (F-RFC050-L1-DISPATCH-EQ); the dispatcher adds the precision-routing
+// layer that future BF16 specialization (RFC 050 Stage 2) hooks into.
 pub fn nn_linear_fwd(x: int, W: int, b: int, B: int, D: int, C: int) -> int {
-    let y = farr_matmul(x, B, D, W, C)
+    let y = forge_dispatch_matmul(x, B, D, W, C)
     // bias broadcast: y[i,j] += b[j], same reduction order as c3_matvec
     // batched loop (no fp-non-assoc surprise — the bias is added in a
     // single pass, identical to a c3_matvec + scalar add).

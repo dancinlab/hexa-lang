@@ -814,6 +814,13 @@ HexaVal hexa_farr_add_gaussian_noise(HexaVal target_v, HexaVal sigma_v); /* runt
  * inline include so forge_tier_dispatch_v1 is in scope. */
 HexaVal hexa_forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
                                    HexaVal b_v, HexaVal n_v);          /* runtime.c — RFC 050 */
+/* Bare-symbol seam: the deployed hexa_v2 bootstrap emits the builtin as
+ * a literal `forge_dispatch_matmul(...)` call (≥5-arg direct-C path),
+ * the generated user.c TU only sees runtime.h — declare the bare form
+ * too so it links to runtime.c's extern wrapper without a bootstrap
+ * rebuild. SSOT codegen (codegen_c2.hexa) lowers to hexa_* directly. */
+HexaVal forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                              HexaVal b_v, HexaVal n_v);               /* runtime.c — RFC 050 seam */
 
 /* ── safetensors mmap-backed zero-copy load (RFC 025) ──────────────
  * codegen_c2.hexa lowers safetensors_mmap_* builtins to direct

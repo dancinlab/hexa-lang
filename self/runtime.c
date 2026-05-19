@@ -1064,6 +1064,22 @@ static inline HexaVal farr_matmul(HexaVal a, HexaVal ar, HexaVal ac,
                                   HexaVal b, HexaVal bc) {
     return hexa_farr_matmul(a, ar, ac, b, bc);
 }
+// RFC 050 L1 slice 1 — bare-wrapper seam for the forge dispatcher.
+// codegen_c2.hexa registers `forge_dispatch_matmul` as a 5-arg builtin
+// lowering to hexa_forge_dispatch_matmul, but the deployed hexa_v2
+// bootstrap (not yet rebuilt from that SSOT codegen) emits the bare
+// `forge_dispatch_matmul(...)` call literally — same ≥5-arg direct-C
+// path as farr_matmul above. The generated user.c TU only #includes
+// runtime.h, so this is an extern (non-static) definition paired with a
+// runtime.h prototype, the same runtime.h-split seam the farr ABI uses.
+// Resolves the symbol without a bootstrap rebuild — see memory
+// project_forge_gpu_builtin_compiled_path seam pattern.
+HexaVal hexa_forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                   HexaVal b_v, HexaVal n_v);
+HexaVal forge_dispatch_matmul(HexaVal a, HexaVal m, HexaVal k,
+                              HexaVal b, HexaVal n) {
+    return hexa_forge_dispatch_matmul(a, m, k, b, n);
+}
 // 5e817564 — interp dispatch added `farr_apply_single_farr(...)` and
 // `farr_apply_cnot(...)` literal calls (6-arg / 7-arg, past the
 // hexa_callN ceiling) but never grew the matching shims. Without
