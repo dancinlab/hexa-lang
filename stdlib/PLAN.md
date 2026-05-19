@@ -827,3 +827,16 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   잔여: atoms_emt_relax(force 함수형+line-search) · mlff Stage-2
   (T5 = grad/safetensors, 수개월) — 둘 다 한 세션 범위 밖, 가짜
   완료 안 함(g3).
+- 2026-05-19 — **Wave-R5 fidelity fix + mlff interim bridge**. (1) hexa-bio
+  `2af75b0`: Wave-R5 8 게이트의 case-sensitive runtime-fail 체크를 실제
+  `grep -qiE` 셸아웃으로 교체 — `.sh`의 case-insensitive 거동 byte-faithful
+  미러(#77). SKIP-path 8/8 byte-identical·py3=0. (2) hexa-lang `f69d4728`
+  mlff INTERIM bridge: `mlff_load/predict/relax`가 Structure→JSON 직렬화
+  후 python3 드라이버를 exec해 실제 universal-FF 패키지(CHGNet/MACE/matgl/
+  ALIGNN) forward/relax 구동, energy/forces/magmoms 파싱 → 실 MlffResult.
+  g3: NNP 출력 `source="SIM-NNP-BRIDGE:<model>"` 태깅; 패키지 미설치 호스트
+  는 honest SKIP(센티넬 e_per_atom, 빈 forces, 에너지 미조작). __MLFF_TEST__
+  PASS (32/32). mlff Stage-2(hexa-native NNP)가 이 bridge를 대체할 때까지
+  interim. SSOT pointer: hexa-bio AGENTS.md + hexa-matter AGENTS.tape 에
+  hexa-lang/stdlib/PLAN.md 가리키는 포인터 추가(타 프로젝트는 pointer만).
+  남은 non-months 잔여 = `atoms_emt_relax` 단 1건.
