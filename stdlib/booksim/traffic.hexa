@@ -190,18 +190,38 @@ fn traffic_dest_tornado(spec: TrafficSpec, source: int) -> int {
 // hexa-lang gap (this toolchain, hexa 0.1.0-dispatch): there is no `match`
 // statement and `enum_a == enum_b` does NOT compare members (always
 // false); `int(enum)` also collapses to 0. The working comparison idiom
-// is the canonical string form `str(enum)` (yields "TrafficKind::TORNADO"
-// etc.), which compares correctly. This is a toolchain limitation, not a
-// design choice — see the deliverable's hexa-lang-gaps note.
+// is `str(spec.kind)` against a LITERAL string. THREE interpreter quirks
+// of `str(enum)` were measured 2026-05-20 and are all worked around here:
+//   (1) `str(EnumType.X)` called repeatedly in an if-ladder returns "void"
+//       for all but one variant (call-order dependent) — so the RHS must
+//       be a literal string, never a `str(TrafficKind.X)` call.
+//   (2) `str(spec.kind)` is MODULE-CONTEXT DEPENDENT: when the TrafficSpec
+//       value was constructed in traffic.hexa it yields the canonical name
+//       form "TrafficKind::TORNADO"; when constructed in another module
+//       (e.g. sweep_oracle_parity.hexa) the SAME read yields the bare
+//       discriminant "2". Both forms must therefore be accepted.
+//   (3) discriminant order = declaration order: UNIFORM=0/TRANSPOSE=1/
+//       TORNADO=2.
+// This is a toolchain limitation, not a design choice — see the
+// deliverable's hexa-lang-gaps note + 2026-05-20 cross-module diag.
 fn traffic_dest(spec: TrafficSpec, source: int) -> int {
     let kind = str(spec.kind)
-    if kind == str(TrafficKind.UNIFORM) {
+    if kind == "TrafficKind::UNIFORM" {
         return traffic_dest_uniform(spec, source)
     }
-    if kind == str(TrafficKind.TRANSPOSE) {
+    if kind == "0" {
+        return traffic_dest_uniform(spec, source)
+    }
+    if kind == "TrafficKind::TRANSPOSE" {
         return traffic_dest_transpose(spec, source)
     }
-    if kind == str(TrafficKind.TORNADO) {
+    if kind == "1" {
+        return traffic_dest_transpose(spec, source)
+    }
+    if kind == "TrafficKind::TORNADO" {
+        return traffic_dest_tornado(spec, source)
+    }
+    if kind == "2" {
         return traffic_dest_tornado(spec, source)
     }
     return -1
