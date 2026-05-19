@@ -34,8 +34,10 @@ of the generic-R_on/R_off regime (κ-34) into device-faithful regime:
 | `ngspice.hexa` ⭐ | hexa-native SSCB transient producer — writes a hard-switching netlist, spawns `ngspice -b`, parses the tran table, emits `sscb_v1.meta.json` + an `SSCB_NGSPICE_RESULT` summary. κ-41 port of `ngspice.py` (9/9 measurement parity vs the Python it replaced) | κ-34 `sscb_ngspice.py`; ngspice 46 batch I/O |
 | `devsim.hexa` ⭐ | DEVSIM TCAD bridge — generates + spawns a DEVSIM Python script for a real 1-D Si PN-diode drift-diffusion I-V sweep | DEVSIM JOSS 10.21105/joss.03898; `simple_physics` helper API |
 | `devsim_test.hexa` ⭐ | DEVSIM-bridge selftest — 7 physics assertions (rectification, monotonic forward I-V, exponential growth). SKIPs cleanly (exit 0) if the devsim wheel is absent | (in-repo, no upstream) |
-| `sscb.hexa` ⭐ | dispatcher = `hexa run sscb.hexa <subcmd>` — routes `parse-lib` (wolfspeed) + `diode-iv` (devsim) | `stdlib/booksim/booksim.hexa`; rfc_047 §4 |
-| `fixtures/sample_sic_mosfet.lib` | hand-written synthetic SPICE `.SUBCKT` mimicking the C3M0021120K topology — clean-room derived from public datasheet only | Wolfspeed C3M0021120K datasheet (public PDF) — topology only, no `.lib` text copied |
+| `wolfspeed_parity.hexa` ⭐ | datasheet-parity verifier — generates ngspice decks at the datasheet test conditions, runs them, checks the measured R_DS(on) / V_GS(th) against the Wolfspeed C3M0021120K data sheet (Rev.4) tabulated typ values within ±10 % | Wolfspeed C3M0021120K data sheet Rev.4 (public PDF) — spec table only |
+| `sscb.hexa` ⭐ | dispatcher = `hexa run sscb.hexa <subcmd>` — routes `parse-lib` (wolfspeed) + `diode-iv` (devsim) + `datasheet-parity` (wolfspeed_parity) | `stdlib/booksim/booksim.hexa`; rfc_047 §4 |
+| `fixtures/sample_sic_mosfet.lib` | hand-written synthetic SPICE `.SUBCKT` (parser unit-test fixture) — clean-room, topology mock | (in-repo) |
+| `fixtures/c3m0021120k.lib` ⭐ | **datasheet-calibrated** clean-room C3M0021120K model — every parameter traces to a cited cell of the Wolfspeed data sheet Rev.4 spec table | Wolfspeed C3M0021120K data sheet Rev.4 (public PDF) — spec table only, no vendor `.lib` bytes |
 
 ## CLI surface
 
@@ -92,15 +94,31 @@ devsim.hexa bridge selftest:       7/7 PASS (hexa run devsim_test.hexa) —
                                     I(0.6 V)=0.80 A forward, monotonic,
                                     exponential growth >1000× per 0.3 V.
 
-g3 boundary (what is NOT yet measured — Stage 4, absorbed=true):
-  - The devsim bridge runs a GENERIC silicon PN-diode, NOT a Wolfspeed
-    C3M0021120K 2-D SiC-MOSFET. It proves hexa→DEVSIM works end-to-end;
-    it does not yet absorb a named device.
-  - device-physics parity vs a real Wolfspeed C3M datasheet (IDS-VDS /
-    IDS-VGS curves) is NOT performed — the synthetic fixture is a
-    topology mock, and the real datasheet is an external asset the
-    user must supply. Fabricating that parity would violate g3.
+C3M0021120K datasheet parity:      PASS (hexa run wolfspeed_parity.hexa)
+                                    The clean-room model fixtures/
+                                    c3m0021120k.lib — every param traced
+                                    to the Wolfspeed C3M0021120K data
+                                    sheet Rev.4 (June 2025) spec table —
+                                    reproduces, via ngspice:
+                                      R_DS(on)  21.23 mΩ vs 21 mΩ → 1.08 %
+                                      V_GS(th)  2.466 V  vs 2.5 V → 1.36 %
+                                    both inside the ±10 % parity gate.
+
+g3 boundary (what is still NOT done — Stage 4, absorbed=true):
+  - The parity above is a SUBSTRATE parity: the engine is ngspice (an
+    external C solver). `absorbed=true` is reserved for a hexa-native
+    SPICE MNA solver re-deriving the same numbers — that solver does
+    not exist yet (a separate, multi-week effort).
+  - The Wolfspeed-distributed `.lib` model file is form-gated and was
+    never accessed; only the PUBLIC datasheet spec table is absorbed
+    (D1 clean-room — fully compliant).
+  - The parity has an honest circularity: VTO is set to the datasheet
+    V_GS(th) and RD/RS are sized toward R_DS(on); it is a consistency
+    check (netlist parses, ngspice converges, operating points land on
+    the datasheet), not a fully-independent prediction. See the header
+    of wolfspeed_parity.hexa.
   - therefore `provenance.absorbed = false` REMAINS truthful. Stage 2
-    (parser) + the substrate / TCAD bridges are done; Stage 4 needs the
-    real datasheet + a calibrated SiC-MOSFET mesh (a later κ).
+    (parser) + substrate/TCAD bridges + datasheet-grounded model +
+    measured substrate parity are DONE; Stage 4 (absorbed=true) needs
+    the hexa-native SPICE engine.
 ```

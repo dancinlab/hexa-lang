@@ -33,6 +33,7 @@
 
 import "stdlib/sscb/wolfspeed"
 import "stdlib/sscb/devsim"
+import "stdlib/sscb/wolfspeed_parity"
 
 let VERSION = "0.1.0"
 
@@ -89,11 +90,41 @@ fn cmd_diode_iv(argv: [str]) -> int {
     return 0
 }
 
+// `sscb datasheet-parity` — verify the clean-room C3M0021120K model
+// reproduces the Wolfspeed datasheet (Rev.4) tabulated specs via ngspice.
+fn cmd_datasheet_parity(argv: [str]) -> int {
+    println("C3M0021120K datasheet parity (model: fixtures/c3m0021120k.lib)")
+    let r1 = parity_rdson()
+    let r2 = parity_vgsth()
+    let results = [r1, r2]
+    let mut fails = 0
+    let mut i = 0
+    while i < len(results) {
+        let r = results[i]
+        if r.ok == 1 {
+            println("  ok  " + r.spec + ": measured=" + str(r.measured)
+                    + " datasheet=" + str(r.datasheet)
+                    + " err=" + str(r.rel_err * 100.0) + "%")
+        } else {
+            println("  FAIL " + r.spec + ": measured=" + str(r.measured)
+                    + " datasheet=" + str(r.datasheet))
+            fails = fails + 1
+        }
+        i = i + 1
+    }
+    if fails == 0 {
+        println("parity: PASS (substrate — ngspice engine; absorbed=true still needs hexa-native solver)")
+        return 0
+    }
+    return 1
+}
+
 fn cmd_help() -> int {
     println("hexa-lang sscb — solid-state DC circuit-breaker domain tools")
     println("usage:")
     println("  sscb parse-lib <file>             SPICE .lib -> typed Subckt summary")
     println("  sscb diode-iv <vmax_mv> <step_mv> DEVSIM 1-D Si PN-diode I-V sweep")
+    println("  sscb datasheet-parity             C3M0021120K model vs Wolfspeed datasheet")
     println("  sscb --help | -h")
     println("  sscb --version | -v")
     return 0
@@ -120,6 +151,7 @@ fn cmd_sscb(argv: [str]) -> int {
     }
     if sub == "parse-lib" { return cmd_parse_lib(rest) }
     if sub == "diode-iv" { return cmd_diode_iv(rest) }
+    if sub == "datasheet-parity" { return cmd_datasheet_parity(rest) }
     println("sscb: unknown topic: " + sub)
     return 2
 }

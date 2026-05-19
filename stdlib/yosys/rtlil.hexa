@@ -1,13 +1,10 @@
 #!hexa strict
-// stdlib/yosys/rtlil.hexa — Yosys RTLIL IR data model (CLEAN-ROOM minimum body)
+// stdlib/yosys/rtlil.hexa — Yosys RTLIL IR data model (CLEAN-ROOM)
 //
 // @version 0.0.1
-// @capabilities [rtlil, ir, design, module, wire]
-// @stability phase-a (rfc_006 §4 module-1 — Wire+Module+Design minimum
-//   data model landed; Cell/SigSpec/Process/Memory remain as raw-91 in
-//   sibling modules until follow-up phase. selftest exercises Design ⇄
-//   Module ⇄ Wire roundtrip + name-collision invariants.)
-// @since 2026-05-19 (.stub) · 2026-05-20 (Wire+Module+Design body landed)
+// @capabilities [rtlil, ir, parse, emit]
+// @stability phase-a (rfc_006 §4 module-1 of 7 — typed core + invariants)
+// @since 2026-05-19
 //
 // CLEAN-ROOM PROVENANCE (design.md Decision 1 — public-surface clean-room)
 //   This module re-derives the *public surface* of Yosys' RTLIL
@@ -22,259 +19,328 @@
 //   - upstream license  : ISC (YosysHQ; LICENSE)
 //   - upstream repo     : https://github.com/YosysHQ/yosys (main branch
 //                          as of 2026-05-19 re-derivation pass)
+//   - absorbed substrate (D18) : none (this module is hexa-native only)
 //
-// rfc_006 §4: module-1 of 7. Typed in-memory design representation
+// rfc_006 §4: module-1 of 7. typed in-memory design representation
 // shared by read_verilog (§4-2) frontend and write_verilog (§4-6)
-// backend, mutated by the passes library (§4-3).
+// backend, mutated by the passes library (§4-3). All other modules in
+// this stdlib consume or produce values of these types.
 //
-// THIS PHASE SCOPE (2026-05-20 minimum body — D68 / κ-45):
-//   • Design : ordered list of named Modules
-//   • Module : ordered list of named Wires
-//   • Wire   : name + width + port classification (INPUT/OUTPUT/INOUT/none)
-//   • fns    : design_new · design_add_module · design_get_module_idx ·
-//              design_has_module · design_module_count ·
-//              module_new · module_add_wire · module_get_wire_idx ·
-//              module_has_wire · module_wire_count
-//   • selftest : 11 invariant checks (empty-design queries, lookup-miss
-//                sentinel, add-module roundtrip, wire-add + lookup,
-//                port classification, out-of-bound width assertion)
-//
-// OUT OF SCOPE (sibling modules / future phases — raw-91 until then):
-//   • Cell / SigSpec / SigBit / Const (the cell-connectivity surface)
-//   • Process / SyncRule / SwitchRule (the always-block surface)
-//   • Memory / SyncOp (the memory inference surface)
-//   • RTLIL::Design::scratchpad string-keyed config (passes use this)
-//
-// Toolchain limits applied (rfc_003): no `match`, no tuples, no
-// nullable — use int-tagged structs + free fn + sentinel (idx = -1).
-// Immutable arrays — `xs.push(x)` returns a new array (booksim
-// stdlib/booksim/iq_router.hexa convention).
+// Toolchain limits (rfc_003): no `match`, no tuples — use int-tagged
+// structs + dispatcher fns; enum-equality is supported (codegen_c2
+// `_is_enum_name` fix landed in hexa-lang main 8ff19d2a) but we keep
+// the int-payload idiom for predictability.
 
-// ─── port classification ─────────────────────────────────────────────
-//   Re-derived from kernel/rtlil.h Wire fields `port_input` / `port_output`
-//   as a 2-bit encoding (the upstream represents each as a separate bool;
-//   we collapse to one int constant for the clean dispatcher idiom).
+// ─── public types ────────────────────────────────────────────────────────
 
-let PORT_NONE   = 0      // internal wire
-let PORT_INPUT  = 1
-let PORT_OUTPUT = 2
-let PORT_INOUT  = 3
-
-// ─── public types ────────────────────────────────────────────────────
-
+// CLEAN-ROOM (kernel/rtlil.h ::Wire — port direction + bit width)
+// dir_kind: 0=internal · 1=input · 2=output · 3=inout
 struct Wire {
-    name:  str,
-    width: int,            // bit-width ≥ 1
-    port:  int,            // PORT_NONE / PORT_INPUT / PORT_OUTPUT / PORT_INOUT
+    name:     str,
+    width:    int,
+    dir_kind: int,
+    port_id:  int,        // 0 if not a port; otherwise 1-based sort order
 }
 
+// CLEAN-ROOM (kernel/rtlil.h ::Cell — instance of a typed cell with
+// named pin connections; matches RTLIL::Cell::connections SigMap).
+struct CellConn {
+    pin:  str,            // port name on the cell type (e.g. "A", "Y")
+    net:  str,            // wire name in containing module
+}
+
+struct Cell {
+    name:     str,        // local instance name (unique within module)
+    cell_type: str,       // e.g. "$and" or "sky130_fd_sc_hd__nand2_1"
+    conns:    [CellConn],
+    is_mapped: int,       // 0 = generic ($and/$or/$dff/...), 1 = tech cell
+}
+
+// CLEAN-ROOM (kernel/rtlil.h ::Process — sync/comb assignment block;
+// post-`proc` pass these are replaced by Cells, so we keep the
+// minimal info needed to round-trip through passes.proc).
+struct Process {
+    name:    str,
+    is_sync: int,
+    clk:     str,         // wire name of clock (sync only)
+    targets: [str],       // assigned wire names
+}
+
+// CLEAN-ROOM (kernel/rtlil.h ::Module — container of wires + cells +
+// processes + connect statements).
 struct Module {
-    name:  str,
-    wires: [Wire],         // linear ordered list (RTLIL retains decl order)
+    name:      str,
+    wires:     [Wire],
+    cells:     [Cell],
+    processes: [Process],
+    // top-level `assign` (RTLIL ::connect): pairs of (lhs_wire, rhs_wire)
+    connect_lhs: [str],
+    connect_rhs: [str],
 }
 
+// CLEAN-ROOM (kernel/rtlil.h ::Design — the root container).
 struct Design {
     modules: [Module],
+    // top-level provenance: which RTLIL frontend produced this design
+    // (e.g. "read_verilog" / "abc_map") — aids the gate-§5 audit trail.
+    source:  str,
 }
 
-// ─── public API : Design ─────────────────────────────────────────────
+// ─── constructors ────────────────────────────────────────────────────────
 
-// Fresh empty design with no modules.
-fn design_new() -> Design {
-    return Design { modules: [] }
+// CLEAN-ROOM: empty design factory (kernel/rtlil.cc Design::Design()).
+fn rtlil_new_design(source: str) -> Design {
+    return Design { modules: [], source: source }
 }
 
-// Append a fresh empty Module named `name`. RTLIL allows multiple
-// design.add_module calls with the same name to FAIL — caller checks
-// design_has_module first. This fn assumes the name has been checked.
-fn design_add_module(d: Design, name: str) -> Design {
-    let m = Module { name: name, wires: [] }
-    return Design { modules: d.modules.push(m) }
+// CLEAN-ROOM: empty module factory (kernel/rtlil.cc Module::Module()).
+fn rtlil_new_module(name: str) -> Module {
+    return Module {
+        name:        name,
+        wires:       [],
+        cells:       [],
+        processes:   [],
+        connect_lhs: [],
+        connect_rhs: [],
+    }
 }
 
-// Linear search by module name; returns 0-based idx or -1 if not found.
-fn design_get_module_idx(d: Design, name: str) -> int {
-    let n = len(d.modules)
+// CLEAN-ROOM: wire builder (kernel/rtlil.cc Module::addWire).
+fn rtlil_wire(name: str, width: int, dir_kind: int, port_id: int) -> Wire {
+    return Wire { name: name, width: width, dir_kind: dir_kind, port_id: port_id }
+}
+
+// CLEAN-ROOM: cell builder (kernel/rtlil.cc Module::addCell).
+fn rtlil_cell(name: str, cell_type: str, is_mapped: int) -> Cell {
+    return Cell {
+        name:      name,
+        cell_type: cell_type,
+        conns:     [],
+        is_mapped: is_mapped,
+    }
+}
+
+// CLEAN-ROOM: pin-binding appender (RTLIL::Cell::setPort).
+fn rtlil_cell_connect(c: Cell, pin: str, net: str) -> Cell {
+    let mut updated = c.conns
+    updated = updated.push(CellConn { pin: pin, net: net })
+    return Cell {
+        name: c.name, cell_type: c.cell_type,
+        conns: updated, is_mapped: c.is_mapped
+    }
+}
+
+// CLEAN-ROOM: module mutation — append wire (Module::addWire).
+fn rtlil_module_add_wire(m: Module, w: Wire) -> Module {
+    let mut ws = m.wires
+    ws = ws.push(w)
+    return Module {
+        name: m.name, wires: ws, cells: m.cells, processes: m.processes,
+        connect_lhs: m.connect_lhs, connect_rhs: m.connect_rhs
+    }
+}
+
+// CLEAN-ROOM: module mutation — append cell (Module::addCell).
+fn rtlil_module_add_cell(m: Module, c: Cell) -> Module {
+    let mut cs = m.cells
+    cs = cs.push(c)
+    return Module {
+        name: m.name, wires: m.wires, cells: cs, processes: m.processes,
+        connect_lhs: m.connect_lhs, connect_rhs: m.connect_rhs
+    }
+}
+
+// CLEAN-ROOM: module mutation — append process (Module::addProcess).
+fn rtlil_module_add_process(m: Module, p: Process) -> Module {
+    let mut ps = m.processes
+    ps = ps.push(p)
+    return Module {
+        name: m.name, wires: m.wires, cells: m.cells, processes: ps,
+        connect_lhs: m.connect_lhs, connect_rhs: m.connect_rhs
+    }
+}
+
+// CLEAN-ROOM: module mutation — append top-level connect (RTLIL::connect).
+fn rtlil_module_connect(m: Module, lhs: str, rhs: str) -> Module {
+    let mut l = m.connect_lhs
+    let mut r = m.connect_rhs
+    l = l.push(lhs)
+    r = r.push(rhs)
+    return Module {
+        name: m.name, wires: m.wires, cells: m.cells, processes: m.processes,
+        connect_lhs: l, connect_rhs: r
+    }
+}
+
+// CLEAN-ROOM: design mutation — append module (Design::addModule).
+fn rtlil_design_add(d: Design, m: Module) -> Design {
+    let mut ms = d.modules
+    ms = ms.push(m)
+    return Design { modules: ms, source: d.source }
+}
+
+// ─── lookup helpers ──────────────────────────────────────────────────────
+
+// CLEAN-ROOM: name-based module lookup (Design::module(IdString)).
+// Returns module index or -1 (no module).
+fn rtlil_find_module(d: Design, name: str) -> int {
     let mut i = 0
-    while i < n {
+    while i < len(d.modules) {
         if d.modules[i].name == name { return i }
         i = i + 1
     }
     return 0 - 1
 }
 
-// 1 if `name` is the name of some Module in `d`, 0 otherwise.
-fn design_has_module(d: Design, name: str) -> int {
-    if design_get_module_idx(d, name) < 0 { return 0 }
-    return 1
-}
-
-fn design_module_count(d: Design) -> int {
-    return len(d.modules)
-}
-
-// ─── public API : Module ─────────────────────────────────────────────
-
-// Fresh empty module with the given name.
-fn module_new(name: str) -> Module {
-    return Module { name: name, wires: [] }
-}
-
-// Linear search by wire name; returns 0-based idx or -1 if not found.
-// RTLIL wires must be uniquely named within a module — caller checks
-// module_has_wire before module_add_wire to enforce the invariant.
-fn module_get_wire_idx(m: Module, name: str) -> int {
-    let n = len(m.wires)
+// CLEAN-ROOM: name-based wire lookup (Module::wire(IdString)).
+fn rtlil_find_wire(m: Module, name: str) -> int {
     let mut i = 0
-    while i < n {
+    while i < len(m.wires) {
         if m.wires[i].name == name { return i }
         i = i + 1
     }
     return 0 - 1
 }
 
-// 1 if `name` is the name of some Wire in `m`, 0 otherwise.
-fn module_has_wire(m: Module, name: str) -> int {
-    if module_get_wire_idx(m, name) < 0 { return 0 }
-    return 1
+// ─── invariants (for self-test + gate-§5 audit) ──────────────────────────
+
+// CLEAN-ROOM: every cell pin must reference an existing wire — RTLIL's
+// "no dangling SigBit" invariant (kernel/rtlil.cc ::Module::check).
+// Returns 0 = OK, >0 = first violating index.
+fn rtlil_check_no_dangling(m: Module) -> int {
+    let mut ci = 0
+    while ci < len(m.cells) {
+        let conns = m.cells[ci].conns
+        let mut pi = 0
+        while pi < len(conns) {
+            if rtlil_find_wire(m, conns[pi].net) < 0 {
+                return ci + 1
+            }
+            pi = pi + 1
+        }
+        ci = ci + 1
+    }
+    return 0
 }
 
-// Append a new Wire. Caller must have verified the name is fresh
-// (module_has_wire == 0) — adding a duplicate yields a malformed
-// module that downstream passes detect.
-fn module_add_wire(m: Module, w: Wire) -> Module {
-    return Module { name: m.name, wires: m.wires.push(w) }
+// CLEAN-ROOM: module-name uniqueness (Design::check — no two modules
+// share a name in the registry).
+fn rtlil_check_unique_modules(d: Design) -> int {
+    let mut i = 0
+    while i < len(d.modules) {
+        let mut j = i + 1
+        while j < len(d.modules) {
+            if d.modules[i].name == d.modules[j].name { return i + 1 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return 0
 }
 
-fn module_wire_count(m: Module) -> int {
-    return len(m.wires)
+// CLEAN-ROOM: cell count of a given type — used by passes.hexa to
+// audit post-techmap cell mixes.
+fn rtlil_count_cells_of_type(m: Module, ty: str) -> int {
+    let mut n = 0
+    let mut i = 0
+    while i < len(m.cells) {
+        if m.cells[i].cell_type == ty { n = n + 1 }
+        i = i + 1
+    }
+    return n
 }
 
-// ─── self-test (`hexa run stdlib/yosys/rtlil.hexa`) ──────────────────
+// ─── self-test (rfc_003 idiom — `hexa run stdlib/yosys/rtlil.hexa`) ──────
 
 fn main() {
     let mut fails = 0
     let mut total = 0
 
-    // T1 — empty design has zero modules
+    // T1 — empty design has zero modules.
     total = total + 1
-    let d0 = design_new()
-    if design_module_count(d0) != 0 {
-        println("FAIL empty_design_module_count")
-        fails = fails + 1
+    let d0 = rtlil_new_design("test")
+    if len(d0.modules) != 0 {
+        println("FAIL T1 empty_design"); fails = fails + 1
     }
 
-    // T2 — lookup-miss returns -1 sentinel
+    // T2 — module/wire round-trip.
     total = total + 1
-    if design_get_module_idx(d0, "top") != (0 - 1) {
-        println("FAIL miss_sentinel_neg1")
-        fails = fails + 1
+    let mut m1 = rtlil_new_module("top")
+    m1 = rtlil_module_add_wire(m1, rtlil_wire("a", 1, 1, 1))
+    m1 = rtlil_module_add_wire(m1, rtlil_wire("b", 1, 1, 2))
+    m1 = rtlil_module_add_wire(m1, rtlil_wire("y", 1, 2, 3))
+    if len(m1.wires) != 3 {
+        println("FAIL T2 wire_add"); fails = fails + 1
     }
 
-    // T3 — has_module on miss == 0
+    // T3 — cell with port bindings.
     total = total + 1
-    if design_has_module(d0, "top") != 0 {
-        println("FAIL has_module_miss_0")
-        fails = fails + 1
+    let mut c1 = rtlil_cell("u_and", "$and", 0)
+    c1 = rtlil_cell_connect(c1, "A", "a")
+    c1 = rtlil_cell_connect(c1, "B", "b")
+    c1 = rtlil_cell_connect(c1, "Y", "y")
+    m1 = rtlil_module_add_cell(m1, c1)
+    if len(m1.cells) != 1 {
+        println("FAIL T3 cell_add"); fails = fails + 1
+    }
+    if len(m1.cells[0].conns) != 3 {
+        println("FAIL T3b cell_conns"); fails = fails + 1
     }
 
-    // T4 — add_module + count
+    // T4 — no-dangling invariant holds for the built module.
     total = total + 1
-    let d1 = design_add_module(d0, "top")
-    if design_module_count(d1) != 1 {
-        println("FAIL add_module_count_1")
-        fails = fails + 1
+    if rtlil_check_no_dangling(m1) != 0 {
+        println("FAIL T4 no_dangling_clean"); fails = fails + 1
     }
 
-    // T5 — lookup hit returns idx 0
+    // T5 — dangling pin detected.
     total = total + 1
-    if design_get_module_idx(d1, "top") != 0 {
-        println("FAIL get_module_idx_0")
-        fails = fails + 1
+    let mut c_bad = rtlil_cell("u_bad", "$or", 0)
+    c_bad = rtlil_cell_connect(c_bad, "A", "ghost")
+    let m_bad = rtlil_module_add_cell(m1, c_bad)
+    if rtlil_check_no_dangling(m_bad) == 0 {
+        println("FAIL T5 dangling_detect"); fails = fails + 1
     }
 
-    // T6 — has_module on hit == 1
+    // T6 — design with module + lookup.
     total = total + 1
-    if design_has_module(d1, "top") != 1 {
-        println("FAIL has_module_hit_1")
-        fails = fails + 1
+    let mut d1 = rtlil_new_design("read_verilog")
+    d1 = rtlil_design_add(d1, m1)
+    if rtlil_find_module(d1, "top") < 0 {
+        println("FAIL T6 find_module"); fails = fails + 1
     }
 
-    // T7 — wire-add roundtrip (3 wires) on a fresh module
+    // T7 — module-name uniqueness violation detected.
     total = total + 1
-    let mut m = module_new("top")
-    m = module_add_wire(m, Wire { name: "clk", width: 1, port: PORT_INPUT })
-    m = module_add_wire(m, Wire { name: "rst", width: 1, port: PORT_INPUT })
-    m = module_add_wire(m, Wire { name: "q",   width: 8, port: PORT_OUTPUT })
-    if module_wire_count(m) != 3 {
-        println("FAIL wire_count_3")
-        fails = fails + 1
+    let mut d_dup = rtlil_design_add(d1, m1)
+    if rtlil_check_unique_modules(d_dup) == 0 {
+        println("FAIL T7 unique_modules"); fails = fails + 1
     }
 
-    // T8 — clk wire lookup + width + port classification
+    // T8 — process round-trip (sync flop placeholder).
     total = total + 1
-    let clk_idx = module_get_wire_idx(m, "clk")
-    if clk_idx != 0 {
-        println("FAIL clk_idx_0")
-        fails = fails + 1
-    }
-    total = total + 1
-    if m.wires[0].width != 1 {
-        println("FAIL clk_width_1")
-        fails = fails + 1
-    }
-    total = total + 1
-    if m.wires[0].port != PORT_INPUT {
-        println("FAIL clk_port_input")
-        fails = fails + 1
+    let p1 = Process { name: "p_ff", is_sync: 1, clk: "clk", targets: ["q"] }
+    let m_p = rtlil_module_add_process(m1, p1)
+    if len(m_p.processes) != 1 {
+        println("FAIL T8 process_add"); fails = fails + 1
     }
 
-    // T9 — q wire (output, 8-bit) — different port classification
+    // T9 — connect statement (RTLIL ::connect).
     total = total + 1
-    let q_idx = module_get_wire_idx(m, "q")
-    if q_idx != 2 {
-        println("FAIL q_idx_2")
-        fails = fails + 1
-    }
-    total = total + 1
-    if m.wires[q_idx].port != PORT_OUTPUT {
-        println("FAIL q_port_output")
-        fails = fails + 1
-    }
-    total = total + 1
-    if m.wires[q_idx].width != 8 {
-        println("FAIL q_width_8")
-        fails = fails + 1
+    let m_c = rtlil_module_connect(m1, "y", "a")
+    if len(m_c.connect_lhs) != 1 {
+        println("FAIL T9 connect"); fails = fails + 1
     }
 
-    // T10 — has_wire on miss == 0
+    // T10 — cell-of-type counter (used by techmap audit).
     total = total + 1
-    if module_has_wire(m, "missing") != 0 {
-        println("FAIL has_wire_missing_0")
-        fails = fails + 1
-    }
-
-    // T11 — Design + Module composability: stash module into design
-    //       and recover its wires through the Design index.
-    total = total + 1
-    let d2 = Design { modules: [m] }
-    if design_module_count(d2) != 1 {
-        println("FAIL d2_module_count_1")
-        fails = fails + 1
-    }
-    total = total + 1
-    if len(d2.modules[0].wires) != 3 {
-        println("FAIL d2_wire_count_3")
-        fails = fails + 1
+    if rtlil_count_cells_of_type(m1, "$and") != 1 {
+        println("FAIL T10 count_cells_of_type"); fails = fails + 1
     }
 
     if fails > 0 {
-        println("rtlil selftest: "
-            + str(total - fails) + "/" + str(total) + " — FAIL")
+        println("rtlil selftest: " + str(total - fails) + "/" + str(total) + " — FAIL")
         exit(1)
     }
-    println("rtlil selftest: "
-        + str(total) + "/" + str(total) + " PASS — "
-        + "Wire+Module+Design minimum data model "
-        + "(rfc_006 §4 module-1 — Cell/SigSpec/Process/Memory TBD)")
+    println("rtlil selftest: " + str(total) + "/" + str(total) + " PASS")
 }
