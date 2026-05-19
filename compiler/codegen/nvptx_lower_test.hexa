@@ -1,0 +1,189 @@
+// HEXA Native Compiler — RFC 055 055-P3b / generic NVPTX lowering primitives smoke
+//
+// @version 0.0.1
+// @capabilities [pure]
+//
+// RFC 055 055-P3b — exercises the generic `_nvptx_lower_func` MIR walk
+// on stmt kinds beyond the 055-P0 FP64-arithmetic straight-line subset.
+// This file's role is the *primitives* gate: each new MIR construct the
+// generic lowering learns to handle lands a `_test_<construct>` case
+// here, hand-built MIR + substring asserts on the emitted PTX text.
+//
+// 055-P0 already proved STMT_ASSIGN / STMT_BINOP{add,sub,mul} / STMT_RETURN
+// via `nvptx_emit_test.hexa`. 055-P1 / 055-P2 proved the hand-emit form
+// (kernel `.visible .entry` + bank + intrinsics + control flow) via
+// `nvptx_vec_add_test.hexa` / `nvptx_gemm_test.hexa` + a real GPU fire.
+// What this file picks up: the GENERIC MIR-walk lowering of those same
+// constructs, one stmt kind at a time, each verified by a tiny synthetic
+// MModule the same way `codegen_test.hexa` verifies the CPU codegens.
+//
+// 055-P3b first slice landed here:
+//   STMT_BR — unconditional branch → `bra $L_<target>;`
+//
+// 055-P3b still TBD (per-Local type tracking required before each):
+//   STMT_BR_COND — predicate-register dance (`%p<id>` separate from `%fd<id>`)
+//   STMT_CALL    — known gpu intrinsic names → sreg `mov.u32`
+//   STMT_LOAD / STMT_STORE — `.global.f64` address-space ops
+//
+// Run:
+//   hexa build compiler/codegen/nvptx_lower_test.hexa -o build/nvptx_lower_test
+//   ./build/nvptx_lower_test
+
+import "../ir/mir.hexa"
+import "../ir/lir.hexa"
+import "./nvptx_target.hexa"
+import "./nvptx_ptx_ops.hexa"
+
+// ── MIR construction helpers (mirror of codegen_test.hexa /
+//    nvptx_emit_test.hexa — same shape, kept local to keep this file
+//    self-contained for the test-harness pattern) ────────────────────
+
+fn _local(id: i64, name: string) -> Local {
+    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name }
+}
+
+fn _miss_local() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "" }
+}
+
+fn _op_local(local_id: i64) -> Operand {
+    return Operand {
+        kind: "local", local_id: local_id,
+        int_val: 0, float_val: 0.0, str_val: "", global_id: -1
+    }
+}
+
+fn _stmt_binop(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(a)
+    xs.push(b)
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: op, args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_return() -> Stmt {
+    return Stmt {
+        kind: STMT_RETURN, dst: _miss_local(), op: "", args: [],
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_br(target: i64) -> Stmt {
+    return Stmt {
+        kind: STMT_BR, dst: _miss_local(), op: "", args: [],
+        target_block: target, target_block_else: -1
+    }
+}
+
+fn _block(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+// ── Text inspection ──────────────────────────────────────────────────
+
+fn _contains(hay: string, needle: string) -> bool {
+    return hay.find(needle) >= 0
+}
+
+fn _check(ok_in: bool, hay: string, needle: string, label: string) -> bool {
+    if _contains(hay, needle) { return ok_in }
+    println("  FAIL: " + label + " (missing: `" + needle + "`)")
+    return false
+}
+
+// ── Case 1 — STMT_BR (unconditional branch) ───────────────────────────
+//
+// Two-block MFunc: block 0 computes an f64 add then BR's to block 1,
+// block 1 returns. Proves the generic `_nvptx_lower_func` emits:
+//   - the block-0 label `$L_0:` and an `add.f64` for the binop
+//   - an unconditional `bra $L_1;` terminator at the end of block 0
+//   - the block-1 label `$L_1:` and a `ret;` terminator
+//
+// Verifies the 055-P3b STMT_BR primitive lands correctly without
+// disturbing the 055-P0 STMT_ASSIGN/BINOP/RETURN handling.
+
+fn _build_case_br() -> MModule {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let r = _local(2, "r")
+
+    // block 0: r = a + b ; br -> block 1
+    let mut s0 = []
+    s0.push(_stmt_binop(r, "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_br(1))
+
+    // block 1: return
+    let mut s1 = []
+    s1.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    blocks.push(_block(1, s1))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(r)
+
+    let mf = MFunc {
+        name: "br_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_br.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_stmt_br() -> bool {
+    let mut ok = true
+    let mod_br = _build_case_br()
+    let ptx = codegen_emit_ptx_sm80(mod_br)
+
+    println("")
+    println("── emitted PTX (STMT_BR case, sm_80) ──")
+    println(ptx)
+
+    // 055-P0 carry-over — module header survives the generic path
+    ok = _check(ok, ptx, ".version 7.8",    "sm_80 .version directive")
+    ok = _check(ok, ptx, ".target sm_80",   "sm_80 .target directive")
+    // Block-0 body: label + f64 add
+    ok = _check(ok, ptx, "$L_0:",           "block-0 label")
+    ok = _check(ok, ptx, "add.f64 %fd2",    "f64 add into result register")
+    // 055-P3b STMT_BR primitive — explicit `bra $L_1;` terminator
+    ok = _check(ok, ptx, "bra $L_1",        "STMT_BR -> bra $L_1")
+    // Block-1 body: label + ret
+    ok = _check(ok, ptx, "$L_1:",           "block-1 label")
+    ok = _check(ok, ptx, "ret;",            "ret terminator")
+    return ok
+}
+
+// ── Driver ───────────────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  RFC 055 055-P3b — generic NVPTX lowering primitives smoke")
+    println("══════════════════════════════════════════════")
+
+    let ok_br = _test_stmt_br()
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok_br {
+        println("PASS: RFC 055 055-P3b primitives — STMT_BR generic lowering")
+    } else {
+        println("FAIL: RFC 055 055-P3b smoke not satisfied.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok_br { exit(1) }
+}
