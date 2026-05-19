@@ -51,7 +51,6 @@ fn is_keyword(word) {
     if word == "invariant" { return true }
     if word == "theorem" { return true }
     if word == "macro" { return true }
-    if word == "derive" { return true }
     if word == "where" { return true }
     if word == "comptime" { return true }
     if word == "try" { return true }
@@ -62,7 +61,6 @@ fn is_keyword(word) {
     if word == "intent" { return true }
     if word == "generate" { return true }
     if word == "verify" { return true }
-    if word == "optimize" { return true }
     if word == "extern" { return true }
     if word == "break" { return true }
     if word == "continue" { return true }

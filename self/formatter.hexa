@@ -312,12 +312,6 @@ fn format_stmt(stmt, indent) {
         s = s + prefix + "}"
         return s
     }
-    if k == "DeriveDecl" {
-        let ts = stmt.items
-        let mut ts_str = ""
-        if ts != "" { ts_str = join(ts, ", ") }
-        return prefix + "derive(" + ts_str + ") for " + stmt.target
-    }
     if k == "EffectDecl" {
         let ops = stmt.items
         let mut s = prefix + "effect " + stmt.name + " {\n"
@@ -446,23 +440,6 @@ fn format_stmt(stmt, indent) {
         let mut gret = ""
         if stmt.ret_type != "" { gret = " -> " + stmt.ret_type }
         return prefix + "generate fn " + stmt.name + "(" + join(gparts, ", ") + ")" + gret + " { \"" + stmt.value + "\" }"
-    }
-    if k == "OptimizeFnStmt" {
-        let oplist = stmt.params
-        let mut oparts = []
-        let mut opi2 = 0
-        while opi2 < len(oplist) {
-            let op2 = oplist[opi2]
-            if op2.value != "" {
-                oparts.push(op2.name + ": " + op2.value)
-            } else {
-                oparts.push(op2.name)
-            }
-            opi2 = opi2 + 1
-        }
-        let mut oret = ""
-        if stmt.ret_type != "" { oret = " -> " + stmt.ret_type }
-        return prefix + "optimize fn " + stmt.name + "(" + join(oparts, ", ") + ")" + oret + " " + format_block(stmt.body, indent)
     }
     if k == "EvolveFn" {
         return prefix + "@evolve fn " + stmt.name + "(...) {}"

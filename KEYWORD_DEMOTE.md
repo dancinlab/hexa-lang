@@ -247,7 +247,15 @@ Phase 4 추가: 다운스트림 12 repo `hexa parse` smoke (스크립트 적용 
   + formatter ~18줄 + lsp 키워드 목록 + VSCode tmLanguage 정규식 정리. 6/6
   parse-gate PASS, 30/30 sample test parse-gate PASS, identifier-as-`guard`
   4 파일 PASS. 다운스트림 영향 0.
-- ⛔ Phase 2 (derive·optimize → `@`-attribute) 착수 승인 대기.
+- ✅ **Phase 2 LANDED (worktree `kw-demote-phase1`)** — `derive`·`optimize`
+  → `@derive`·`@optimize` attribute. M0 attribute collection (`self/parser.hexa`
+  L697 인근) 이 이미 `@<keyword>` 와 `@<ident>` 양쪽을 처리하므로 추가 인프라
+  없이 lexer 키워드 등록 제거만으로 자동 활성화. parser ~64줄 + codegen ~17줄
+  + formatter ~23줄 정리. hexa-lang 내부 1파일 마이그레이션
+  (`self/test_keyword_audit.hexa` L347: `optimize fn` → `@optimize fn`).
+  6/6 parse-gate PASS, 30/30 smoke PASS. 다운스트림 영향 0.
+- ⛔ Phase 3 (generate·verify·intent·effect → `@`-attribute, attribute-block
+  포함) 착수 승인 대기.
 
 ## 로그
 
@@ -263,9 +271,15 @@ Phase 4 추가: 다운스트림 12 repo `hexa parse` smoke (스크립트 적용 
   소멸. 다운스트림 flag-day 마이그레이션 (총 ~46파일, 기계 치환) Phase 4.
   코드 변경은 여전히 미착수.
 - 2026-05-19 — **Phase 1 LANDED** (worktree branch `kw-demote-phase1`,
-  commit `fb068640`). `select`·`scope`·`guard`·`channel` 4 키워드 제거.
+  commit `5c90a78a`). `select`·`scope`·`guard`·`channel` 4 키워드 제거.
   7 파일 수정 (lexer · parser · codegen_c2 · formatter · lsp · VSCode
   syntax · 본 문서). Parse-gate 6/6 PASS, 30/30 sample test PASS,
   identifier-as-`guard` 4 파일 PASS. 다운스트림 영향 0. bootstrap regen +
   433-파일 sweep + atlas verify 는 사용자의 다음 정기 regen 사이클에서
   (오늘 시점의 로컬 `hexa.real` 은 타 세션 WIP 로 인해 corrupted 상태).
+- 2026-05-19 — **Phase 2 LANDED** (same branch, follow-up commit).
+  `derive`·`optimize` → `@derive`·`@optimize` attribute. M0 attribute
+  collector 가 이미 `@<keyword>` + `@<ident>` 양쪽 처리 → lexer 등록 제거만
+  으로 자동 활성. 7 파일 수정 (lexer · parser · codegen · formatter · lsp ·
+  VSCode syntax · test_keyword_audit 1줄 migrate). +13/-103 lines.
+  parse-gate 6/6 PASS, smoke 30/30 PASS.

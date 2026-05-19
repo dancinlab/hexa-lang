@@ -92,9 +92,9 @@ fn get_keywords() -> [string] {
         "spawn", "atomic",
         "effect", "handle", "resume", "pure",
         "proof", "assert", "invariant", "theorem",
-        "macro", "derive", "where", "comptime",
+        "macro", "where", "comptime",
         "try", "catch", "throw", "panic", "recover",
-        "intent", "generate", "verify", "optimize"
+        "intent", "generate", "verify"
     ]
 }
 

@@ -851,7 +851,7 @@ fn codegen_c2(ast) {
     let mut _gi = 0
     while _gi < len(ast) {
         let _gk = ast[_gi].kind
-        if _gk == "FnDecl" || _gk == "ExternFnDecl" || _gk == "PureFnDecl" || _gk == "OptimizeFnStmt" {
+        if _gk == "FnDecl" || _gk == "ExternFnDecl" || _gk == "PureFnDecl" {
             _known_fn_globals.push(ast[_gi].name)
             _known_nonlocal_names.push(ast[_gi].name)
             _known_fn_globals_add(ast[_gi].name)
@@ -1088,8 +1088,6 @@ fn codegen_c2(ast) {
                     init_parts.push("    " + ast[i].name + " = hexa_void();\n")
                 }
             }
-        } else if k == "OptimizeFnStmt" {
-            // Optimization hint — skip
         } else if k == "TraitDecl" {
             // Skip
         } else if k == "InvariantDecl" {
@@ -2356,7 +2354,7 @@ fn _gen2_collect_main_body_lets(ast) {
         if k != "FnDecl" && k != "ExternFnDecl" && k != "StructDecl"
            && k != "EnumDecl" && k != "ImplBlock" && k != "PureFnDecl"
            && k != "ComptimeConst" && k != "ConstStmt"
-           && k != "OptimizeFnStmt" && k != "TraitDecl" && k != "InvariantDecl"
+           && k != "TraitDecl" && k != "InvariantDecl"
            && k != "ImportStmt" && k != "UseStmt"
            && k != "LetMutStmt" && k != "LetStmt" {
             names = _gen2_collect_lets_stmt(ast[i], names)
@@ -2856,10 +2854,9 @@ fn gen2_stmt(node, depth) {
         return pad + "HexaVal " + node.name + " = " + gen2_expr(node.left) + ";\n"
     }
 
-    // ── OptimizeFnStmt → skip (optimization hint only) ──
-    if k == "OptimizeFnStmt" {
-        return ""
-    }
+    // (KEYWORD_DEMOTE Phase 2: OptimizeFnStmt removed — `optimize` keyword
+    // demoted to `@optimize` attribute. @-prefixed attrs ride the existing
+    // annotation channel and don't produce dedicated AST nodes.)
 
     // Nested FnDecl / PureFnDecl / StructDecl in a fn body — already
     // hoisted to module scope by _gen2_lift_nested_decls at the
@@ -7235,7 +7232,7 @@ fn codegen_c2_full(ast) {
     let mut gi = 0
     while gi < len(ast) {
         let gk = ast[gi].kind
-        if gk == "FnDecl" || gk == "ExternFnDecl" || gk == "PureFnDecl" || gk == "OptimizeFnStmt" {
+        if gk == "FnDecl" || gk == "ExternFnDecl" || gk == "PureFnDecl" {
             _known_fn_globals.push(ast[gi].name)
             _known_nonlocal_names.push(ast[gi].name)
             _known_fn_globals_add(ast[gi].name)
@@ -7411,8 +7408,6 @@ fn codegen_c2_full(ast) {
                     init_parts.push("    " + ast[i].name + " = hexa_void();\n")
                 }
             }
-        } else if k == "OptimizeFnStmt" {
-            // Optimization hint — skip
         } else if k == "TraitDecl" {
             // Skip
         } else if k == "InvariantDecl" {
