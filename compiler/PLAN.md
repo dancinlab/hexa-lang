@@ -2535,3 +2535,20 @@ Validated: parse-clean, hexa.real builds, `hexa run`/`batch`/`--version` +
 atlas_verify_smoke 118/118 clean. Residue still present elsewhere (bc_vm.hexa
 + test_bc_vm_*, verify_interp_builtins.hexa, PLAN-interp-retirement.md) —
 follow-up cycles.
+
+### 2026-05-19 — interp-residue removal: verify_interp_builtins + bc-VM cluster
+
+Two more interp-residue removals (commits 122ac6f1, c4dea75b):
+- `self/verify_interp_builtins.hexa` (103 lines) — a regression test for
+  `self/interpreter.hexa`, which was deleted in R7 Cycle C step-1. Tests a
+  file that no longer exists — pure dead residue.
+- bytecode-VM cluster — `self/bc_vm.hexa` (1,906) + `self/bc_emitter.hexa`
+  (4,099) + 4 `test_bc_vm_*.hexa` (8,680) = **16,685 lines**. Fully orphaned:
+  the compiler pipeline never imports bc_vm/bc_emitter; only the test_bc_vm_*
+  files reference them. The bc-VM was rt#36's "interpreter-only path" (cmd_run
+  framing); rt#36 was blocked and its sole wiring (`--vm`) removed in
+  6ba61c8a. Recoverable from git history if a bytecode-VM is wanted later.
+  User-gated decision (option a — remove).
+Toolchain build-smoke clean after each. Remaining interp-era residue is
+documentation only (`PLAN-interp-retirement.md`, `docs/interp_*.md`) — kept
+as historical record.
