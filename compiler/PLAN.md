@@ -2794,3 +2794,54 @@ runtime assertion 들은 본 패치로는 여전히 FAIL (v2 work item).
 PASS 4/4 파일. End-to-end (deployed binary 가 new parser 받아야) 는 standard
 deploy cycle 에서 자연 promote. 본 cycle 은 binary promote 미포함
 (per @D g_inbox_processing_loop step 7).
+
+### 2026-05-19 — `handle ... with` as EXPRESSION position (parser-only)
+
+`example/test_effects.hexa` L11 (`let collected = handle { ... } with { ... }`)
+and `example/practical_state_machine.hexa` L154 (effect-based logging) were
+parse-failing because `parse_handle_stmt` was only reachable from the
+statement dispatcher (`parse_stmt` L1090); expression callers (let-RHS,
+`parse_primary`) had no `Handle` arm and emitted `unexpected token Handle`.
+
+Shape A — split AST kind. `self/parser.hexa`: factored the shared
+`handle { ... } with { ... }` body into a new `parse_handle_core()` helper
+(returns a temporary `HandleCorePair` pair-node carrying `body` + `items`);
+`parse_handle_stmt()` now wraps the pair as `HandleWithStmt` (existing
+stmt-position AST, no behavior change), and a new `parse_handle_expr()`
+wraps the pair as a new `HandleWithExpr` kind. `parse_primary` gained an
+`if k == "Handle"` arm that calls `parse_handle_expr()`, sitting next to
+the existing `If` / `Match` expression-position keywords. Printer + the
+top-of-file AST-kind comment list updated for the new node.
+
+Why split, not reuse: future typechecker / codegen pass needs to know
+the handle block must produce a value when consumed in expr position
+(the `let` binds the result). Reusing `HandleWithStmt` would have erased
+that distinction.
+
+Parse-gate (measured via worktree-internal rebuild — `hexa cc --regen`
+→ runtime.o → clang on `hexa_cc.c.new.c` → `/tmp/hexa_v2.new`):
+  - isolated let-RHS handle: zero "Parse error" lines; only
+    `[codegen_c2] ERROR: unhandled expression kind: HandleWithExpr`
+    (expected, codegen punted).
+  - isolated stmt-position handle (regression check): zero "Parse error";
+    only `unhandled statement kind: HandleWithStmt` (pre-existing, same
+    as before edit).
+  - `example/test_effects.hexa`: zero "Parse error" (was failing at
+    L11:17 `unexpected token Handle` + 10+ cascade lines). Remaining
+    output is `unhandled statement/expression kind: EffectDecl /
+    HandleWithExpr` — all codegen-layer gaps, separate from parse.
+  - `example/practical_state_machine.hexa`: zero "Parse error" (was
+    failing at L154). Same codegen-layer residuals.
+  - 20 `test/*.hexa` regression sweep: ok=20 fail=0.
+  - Self-host fixpoint: `/tmp/hexa_v2.new self/parser.hexa` → OK; the
+    deployed `/Users/ghost/.hx/bin/hexa_real parse self/parser.hexa` →
+    OK.
+
+g3-honest scope: parse-layer only. Codegen / typechecker / runtime
+evaluation of `handle ... with` (both stmt and expr forms) remain
+unimplemented — the `[codegen_c2] ERROR: unhandled ... kind: HandleWith*`
+lines are the existing TODO marker. Effect-system semantics (resume,
+handler arm dispatch, effect-type checking) are punted to a future RFC
+draft. Binary promote (writing the new `hexa_v2` / `hexa.real` to
+`~/.hx/bin/`) is a separate standard deploy step per g_inbox_processing_loop
+§7 and is intentionally out-of-scope for this cycle.

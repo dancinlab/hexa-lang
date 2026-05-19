@@ -29,10 +29,10 @@
 //               ComptimeFnDecl, ComptimeConst, ComptimeLet,
 //               ComptimeBlock, ComptimeAssert,
 //               PureFnDecl,
-//               MacroDef, TheoremStmt, HandleWithStmt,
-//               (IntentStmt/VerifyStmt/GenerateFnStmt/GenerateStmt/EffectDecl
+//               MacroDef, TheoremStmt, HandleWithStmt, HandleWithExpr,
+//               (IntentStmt/VerifyStmt/GenerateFnStmt/GenerateStmt/EffectDecl/DeriveDecl
 //                are still emitted, but only via the @-attribute path —
-//                KEYWORD_DEMOTE Phase 3.)
+//                KEYWORD_DEMOTE Phase 3. HandleWithExpr added via #3 별건 cycle.)
 //               DestructLetStmt, MapDestructLetStmt,
 //               ForDestructStmt,
 //               WithStmt
@@ -3354,6 +3354,13 @@ fn parse_primary() {
     if k == "Match" {
         return parse_match_expr()
     }
+    // `let x = handle { ... } with { ... }` — algebraic-effect handler
+    // in expression position. Same body / arms grammar as the statement
+    // form (parse_stmt L1090), distinct AST kind HandleWithExpr so the
+    // future evaluator knows the handle block must yield a value.
+    if k == "Handle" {
+        return parse_handle_expr()
+    }
     if k == "BitOr" {
         // Lambda: |params| body
         p_advance() // consume first |
@@ -4272,7 +4279,14 @@ fn parse_theorem_stmt() {
 }
 
 // ── handle { body } with { Effect.op(params) => { handler }, ... } ──
-fn parse_handle_stmt() {
+// Shared core: parses `handle { ... } with { ... }` starting at the
+// `handle` token and returns (body, handlers) for both stmt and expr
+// callers. The caller wraps them in either HandleWithStmt (statement
+// position, parse_stmt L1090) or HandleWithExpr (expression position,
+// parse_primary). Splitting the AST kind preserves position info for
+// the downstream typechecker / codegen pass (still TODO — see RFC
+// drafts; codegen currently does not emit either node).
+fn parse_handle_core() {
     p_advance() // consume 'handle'
     let body = parse_block()
     p_skip_newlines()
@@ -4326,9 +4340,40 @@ fn parse_handle_stmt() {
     }
     p_expect("RBrace")
     return #{
-        "kind": "HandleWithStmt", "name": "", "value": "", "op": "",
+        "kind": "HandleCorePair", "name": "", "value": "", "op": "",
         "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
         "params": "", "body": body, "args": "", "fields": "", "items": handlers,
+        "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+        "target": "", "trait_name": "", "methods": ""
+    }
+}
+
+fn parse_handle_stmt() {
+    let core = parse_handle_core()
+    return #{
+        "kind": "HandleWithStmt", "name": "", "value": "", "op": "",
+        "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+        "params": "", "body": core.body, "args": "", "fields": "", "items": core.items,
+        "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+        "target": "", "trait_name": "", "methods": ""
+    }
+}
+
+// Expression-position handle: `let x = handle { ... } with { ... }`,
+// `f(handle { ... } with { ... })`, etc. Same grammar as the statement
+// form; the only difference is the AST kind so a future typechecker /
+// codegen pass can distinguish "value-producing handle" (needed for the
+// `let` binding) from a stand-alone effect-handling block. Today both
+// kinds reach codegen_c2 with no emit branch — the `[codegen_c2] ERROR:
+// unhandled statement kind: HandleWithStmt` line is the existing TODO,
+// and HandleWithExpr inherits the same gap (parse-gate green, codegen
+// punted to RFC draft).
+fn parse_handle_expr() {
+    let core = parse_handle_core()
+    return #{
+        "kind": "HandleWithExpr", "name": "", "value": "", "op": "",
+        "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+        "params": "", "body": core.body, "args": "", "fields": "", "items": core.items,
         "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
         "target": "", "trait_name": "", "methods": ""
     }
@@ -4629,6 +4674,9 @@ fn ast_to_string(node, indent) {
     }
     if k == "HandleWithStmt" {
         return pad + "HandleWithStmt([" + to_string(len(node.items)) + " handlers])"
+    }
+    if k == "HandleWithExpr" {
+        return pad + "HandleWithExpr([" + to_string(len(node.items)) + " handlers])"
     }
     if k == "WithStmt" {
         return pad + "WithStmt(" + node.name + ", [" + to_string(len(node.body)) + " body stmts])"
