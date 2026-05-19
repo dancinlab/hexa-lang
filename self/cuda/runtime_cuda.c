@@ -1923,3 +1923,21 @@ int _hx_cuda_farr_transpose_scatter_gpu(int64_t src_id, int64_t dst_id,
 #ifdef __cplusplus
 }  /* extern "C" */
 #endif
+
+/* ════════════════════════════════════════════════════════════════════
+ * forge RFC 049 Stage 2 — BF16 mixed-precision substrate.
+ *
+ * The `farr_bf16` storage class + `*_bf16_gpu` kernel entry points live
+ * in the sibling TU runtime_bf16.c. It is `#include`d here (not compiled
+ * separately) so the BF16 tier shares this file's single `nvcc -x cu`
+ * build — the same way the FP64 substrate above is one TU. runtime_bf16.c
+ * carries its own `extern "C"` + `#include` guards and gates every
+ * CUDA-only line behind `#ifdef HEXA_CUDA`, so on a no-CUDA host it
+ * `cc -fsyntax-only`s clean as plain C.
+ *
+ * Stage 2 status: storage-class + kernel-entry SCAFFOLD. The Stage 1
+ * BF16 fused FFN kernel is already MEASURED PASS (9.67x FP64 cuBLAS,
+ * self/cuda/experiments/r049_bf16_fused_ffn.cu); the production kernel
+ * fire-validation is a follow-up cost-bearing cycle.
+ * ════════════════════════════════════════════════════════════════════ */
+#include "runtime_bf16.c"

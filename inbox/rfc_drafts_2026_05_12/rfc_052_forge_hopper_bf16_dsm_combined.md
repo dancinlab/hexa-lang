@@ -1,6 +1,19 @@
 # RFC 052 — forge: Hopper BF16 WMMA + DSM cluster combined kernel (combined wall-path)
 
 - **Status**: design-draft (2026-05-17) — DESIGN ONLY, no implementation, no fire
+- **RFC 049 Stage 2 scaffold compatibility note (2026-05-19)**: RFC 049's
+  Stage 2 BF16 substrate scaffold landed in `self/cuda/runtime_bf16.c`
+  (`farr_bf16` storage class + `hexa_farr_ffn_bf16_gpu` /
+  `hexa_farr_matmul_bf16_gpu` / `hexa_farr_layercast_linear_bf16_gpu`
+  entry points). RFC 052 stays fully compatible: its Hopper sm_90+
+  DSM-cluster combined kernel is reachable through the SAME
+  `hexa_farr_ffn_bf16_gpu` entry point — the cluster-vs-single-block
+  decision is internal to the kernel body via a `cc.major >= 9` branch
+  (RFC 052 §6.5 fallback chain). The RFC 049 scaffold signatures carry
+  NO sm_90-only argument, so RFC 052's Stage 2 fire grafts the combined
+  kernel into the body without an ABI change. A future RFC 052 Stage 2
+  MAY additionally add a `hexa_farr_ffn_bf16_dsm_gpu` sibling — the
+  RFC 049 scaffold deliberately does not pre-empt that name.
 - **Date**: 2026-05-17
 - **Priority**: P2 (MEDIUM) — gates the *combined* wall path on Hopper-class hardware
   (sm_90+), but neither blocks Stage 2 RFC 049 BF16 substrate per-component land

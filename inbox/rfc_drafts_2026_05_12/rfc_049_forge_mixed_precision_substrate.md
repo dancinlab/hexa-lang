@@ -1,6 +1,18 @@
 # RFC 049 — forge: mixed-precision substrate (BF16 Tensor Core + LayerCast-style det)
 
-- **Status**: design-draft (2026-05-17) — DESIGN ONLY, no implementation
+- **Status**: Stage-2-scaffold-landed (2026-05-19) — Stage 1 MEASURED PASS
+  (BF16 fused FFN 9.67× FP64 cuBLAS Dgemm chain on A100, Llama-7B FFN —
+  `state/forge_phaseR_r049_bf16_2026_05_17`). Stage 2 storage-class
+  (`farr_bf16`) + `*_bf16_gpu` kernel-entry-point + cross-precision
+  determinism-contract scaffold landed 2026-05-19 in
+  `self/cuda/runtime_bf16.c` (compile-clean as plain C; CUDA-only code
+  behind `#ifdef HEXA_CUDA`; `#include`d by `self/cuda/runtime_cuda.c`).
+  **Production kernel fire-validation = follow-up cost-bearing cycle**
+  (the `*_bf16_gpu` bodies are honest `RFC 049 Stage 2 — kernel body
+  pending fire-validation` stubs that name the MEASURED Stage 1 kernel
+  they will wrap). Below this line is the original design draft —
+  unchanged, latest-wins per `g_arch_vs_log_split`.
+- **Status (original draft)**: design-draft (2026-05-17) — DESIGN ONLY, no implementation
 - **Date**: 2026-05-17
 - **Severity**: HIGH (forge 의 FP64-only substrate 가 Hopper/Blackwell Tensor Core 를 사용할 수 없는 구조적 한계 — Phase R Stage 2 C v2 wall FAIL 의 근본 원인 candidate)
 - **Priority**: P2 (RFC 044 / RFC 040+041 기반 위에서 mixed-precision tier 추가; flame Phase 4+ 와 paired, 즉시 fire 아님)
@@ -122,7 +134,19 @@ option 을 **하나의 substrate-level paradigm 으로 통합**.
 
 ### Components (Stage 1 = design only, Stage 2+ = follow-up RFC + fire)
 
-1. **BF16 storage class (`farr_bf16`)** — Stage 2 (RFC 050+):
+> **Stage 2 scaffold status (2026-05-19)**: Components 1, 2 and 4 below
+> have their C-ABI surface landed in `self/cuda/runtime_bf16.c` —
+> `HexaFarrBf16` storage descriptor + `hexa_farr_bf16_alloc/free` +
+> `hexa_farr_bf16_from_f64/to_f64` (host-side RNE casts, portable) +
+> `hexa_farr_bf16_to_device/to_host` + the `hexa_farr_matmul_bf16_gpu`
+> / `hexa_farr_ffn_bf16_gpu` / `hexa_farr_layercast_linear_bf16_gpu`
+> entry points + the cross-precision determinism contract (C1-C4) as a
+> header comment block. The `*_bf16_gpu` kernel BODIES are honest
+> fire-validation-pending stubs (they name the MEASURED Stage 1 kernel
+> they will wrap). Components 3 (LayerCast JIT cast policy) and 5
+> (AdamW master-weight integration) remain follow-up RFC work.
+
+1. **BF16 storage class (`farr_bf16`)** — Stage 2 (RFC 050+) — *scaffold landed 2026-05-19*:
    - Half-width arena (현 RFC 035 v1 의 "packed-double 위 RNE 라운드" 와 다른
      실제 byte halving). RFC 035 v1 의 Roadmap (RFC 035 §"Roadmap follow-up")
      가 명시한 follow-up.

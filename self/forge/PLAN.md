@@ -275,6 +275,22 @@ mandatory (`g_blue_closed_mandate`).
 
 User directive "3 all go" — §0.1 의 3-RFC 묶음(BF16 substrate / Hopper combined / hexa→NVPTX)을 동시 ACTIVE 로 전환. §0.2 캠페인 표 + instrument-first 원칙 명문화. 본 cycle 산출: (1) RFC 055 — `compiler/codegen/nvptx_*.hexa` backend skeleton scaffold (parse-clean, dispatch 미배선, zero behavior change; `gpu_codegen_stub.c` reconcile), $0. (2) RFC 049 Stage 2 — `farr_bf16` storage class + `*_bf16_gpu` kernel-entry scaffold in `self/cuda/runtime_cuda.c` (compile-clean; Stage 1 커널은 이미 measured PASS 9.67×), $0. (3) RFC 052 — combined-kernel scaffold 호환 + Hopper fire harness 준비. heavy fire 는 별도 measured step (instrument-first — cheap oracle 우선). 측정 변화 0 — scaffold cycle. over-claim 0: "scaffold landed" 로만 보고.
 
+### 2026-05-19 — RFC 049 Stage 2 BF16 substrate scaffold land ($0 — storage class + kernel-entry wiring)
+
+RFC 049 Stage 2 의 BF16 mixed-precision substrate scaffold 를 land. **fire 0 — $0 작업**. Stage 1 은 이미 측정-PASS (BF16 fused FFN 9.67× FP64 cuBLAS Dgemm chain @ Llama-7B FFN A100, `state/forge_phaseR_r049_bf16_2026_05_17`); 본 cycle 은 그 검증된 kernel 을 forge substrate storage class 로 배선하는 wiring scaffold 일 뿐 — 새 측정 주장 0.
+
+**Land 내용**:
+- `self/cuda/runtime_bf16.c` (신규, ~430 줄) — RFC 040 FP64 substrate (`runtime_cuda.c`) 의 BF16 sibling TU.
+  - **`farr_bf16` storage class** — `HexaFarrBf16` descriptor (2 byte/elem `__nv_bfloat16`, FP64 packed-double farr 의 half-width arena) + `hexa_farr_bf16_alloc` / `_free` / `_to_device` (H2D) / `_to_host` (D2H) + `hexa_farr_bf16_from_f64` / `_to_f64` (host-side RNE cast, portable — BF16 CPU reference oracle 용).
+  - **`*_bf16_gpu` kernel entry points** — `hexa_farr_matmul_bf16_gpu` · `hexa_farr_ffn_bf16_gpu` · `hexa_farr_layercast_linear_bf16_gpu`. signature 는 landed; body 는 정직한 `RFC 049 Stage 2 — kernel body pending fire-validation` stub (각 stub 이 wrap 할 측정된 Stage 1 kernel — `r049_bf16_fused_ffn.cu` GemmEx BF16 path — 을 명시).
+  - **cross-precision determinism contract** (RFC 049 §4) 를 header comment block C1-C4 + signature surface 로 encode. C1 within-precision within-run bit-eq (FP64 D' 의 BF16 일반화, Stage 1 측정 PASS), C2 cross-precision NOT bit-eq, C3 cross-batch NOT bit-eq (BF16 7-bit mantissa), C4 PEDANTIC BF16 등가물 부재. 증명은 fire 의 몫 — scaffold 는 surface 만.
+- `self/cuda/runtime_cuda.c` — TU 끝에 `#include "runtime_bf16.c"` 추가 (BF16 tier 가 FP64 substrate 와 동일한 단일 `nvcc -x cu` build 공유). HEXA_CUDA-only 코드는 전부 `#ifdef HEXA_CUDA` guard.
+- `inbox/rfc_drafts_2026_05_12/rfc_049_*.md` — status `design-draft / DESIGN ONLY` → `Stage-2-scaffold-landed (2026-05-19)`, Components §1/2/4 scaffold note. `rfc_052_*.md` — RFC 049 scaffold 호환성 note (RFC 052 Hopper combined kernel 은 동일 `hexa_farr_ffn_bf16_gpu` entry 의 `cc.major>=9` 내부 branch 로 도달, ABI 무변경).
+
+**C-code gate**: `cc -fsyntax-only -std=c11 -Wall -Wextra self/cuda/runtime_bf16.c` CLEAN (no-CUDA Mac host, plain C — CUDA-only 코드는 `#ifdef HEXA_CUDA` 뒤). `nvcc -x cu -DHEXA_CUDA` build 는 GPU 호스트 (RFC 040 build model 그대로).
+
+**g3 정직 경계**: 이것은 **scaffold** 다 — 측정된 (Stage 1) kernel chain 의 substrate wiring. "RFC 049 Stage 2 complete/measured" 아님. production kernel fire-validation = 별도 cost-bearing cycle (`*_bf16_gpu` body 채우기 + cuBLAS handle 공유 + 측정).
+
 ### 2026-05-19 — forge 일단완성 milestone 선언 (기존 plan 범위 내 coherent closure)
 
 User directive "기존 plan 으로 forge 일단완성". §0 현재 상태를 2026-05-17 (stale) → 2026-05-19 milestone 스냅샷으로 갱신. forge 가 기존 PLAN 의 정의된 범위 내에서 coherent 완성점 도달함을 명문화 — substrate(Phase 1 verified) + paradigm(Phase R closed + RFC 060 new-paradigm 100% closure) + integration ABI(RFC 050 v1 Stage A landed) 3축이 닫힘. 잔여는 전부 multi-week Stage 2 GPU 캠페인 (§0.1) — 별도 user-gated cycle. README.md + FORGE.tape status 줄 동기화. 측정 변화 0 — 상태 문서 consolidation. "일단완성" = 추가 성능(BF16 production) 은 RFC 049 Stage 2 의 별도 cycle 이라는 honest 경계 설정.
