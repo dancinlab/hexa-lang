@@ -1,0 +1,101 @@
+#!hexa strict
+// stdlib/sscb/devsim_test.hexa — selftest for the DEVSIM bridge
+//                                (devsim_diode_iv)
+//
+// @since 2026-05-20 (κ-41)
+// @gate  This validates the hexa → DEVSIM → parsed-measurement BRIDGE
+//        against a real 1-D Si PN-diode drift-diffusion solve. It does
+//        NOT validate any Wolfspeed C3M device parity — that is the
+//        deferred Stage-4 (needs the real datasheet). The diode is a
+//        genuine device-physics computation, so the assertions below
+//        check real physics: rectification + monotonic forward I-V +
+//        exponential growth.
+//
+// If DEVSIM is not importable the test SKIPS with exit 0 and a clear
+// note (the bridge code is still correct; the dependency is just
+// absent). This keeps CI green on hosts without the devsim wheel.
+
+import "stdlib/sscb/devsim"
+
+fn main() -> int {
+    println("== devsim_test :: 1-D Si PN-diode bridge ==")
+
+    let dpath = devsim_locate()
+    if dpath == "" {
+        println("  ~ SKIP — devsim not importable (pip install devsim to enable)")
+        println("== devsim_test :: SKIP (dependency absent, bridge code unverified-but-present) ==")
+        return 0
+    }
+    println("  ✓ devsim located via " + dpath)
+
+    let run = devsim_diode_iv(600, 100)
+    let mut ok = 1
+
+    if run.ok != 1 {
+        println("  ✗ run.ok != 1 — log: " + run.log)
+        println("== devsim_test :: FAIL ==")
+        return 1
+    }
+    println("  ✓ run.ok = 1")
+
+    if run.npts == 7 {
+        println("  ✓ npts = 7 (0.0 … 0.6 V step 0.1)")
+    } else {
+        println("  ✗ npts: got " + str(run.npts) + " want 7")
+        ok = 0
+    }
+
+    // Physics check 1 — rectification: |I(0 V)| must be tiny vs I(0.6 V).
+    let c = run.iv_curve
+    if len(c) >= 7 {
+        let i_zero = c[0][1]
+        let i_fwd  = c[6][1]
+        let mut abs_zero = i_zero
+        if abs_zero < 0.0 { abs_zero = -abs_zero }
+        if abs_zero < 0.001 {
+            println("  ✓ near-zero-bias current tiny (|I(0V)| = " + str(abs_zero) + " A)")
+        } else {
+            println("  ✗ |I(0V)| not tiny: " + str(abs_zero))
+            ok = 0
+        }
+        if i_fwd > 0.01 {
+            println("  ✓ forward current substantial (I(0.6V) = " + str(i_fwd) + " A)")
+        } else {
+            println("  ✗ I(0.6V) too small: " + str(i_fwd))
+            ok = 0
+        }
+
+        // Physics check 2 — monotonic non-decreasing forward I-V.
+        let mut mono = 1
+        let mut k = 1
+        while k < len(c) {
+            if c[k][1] < c[k - 1][1] { mono = 0 }
+            k = k + 1
+        }
+        if mono == 1 {
+            println("  ✓ forward I-V monotonic non-decreasing")
+        } else {
+            println("  ✗ forward I-V not monotonic")
+            ok = 0
+        }
+
+        // Physics check 3 — exponential: I(0.6V) >> I(0.3V) by > 1000x.
+        let i_mid = c[3][1]
+        if i_mid > 0.0 && i_fwd > i_mid * 1000.0 {
+            println("  ✓ exponential growth I(0.6V)/I(0.3V) > 1000x")
+        } else {
+            println("  ✗ growth I(0.6V)/I(0.3V) not exponential enough")
+            ok = 0
+        }
+    } else {
+        println("  ✗ iv_curve too short: " + str(len(c)))
+        ok = 0
+    }
+
+    if ok == 1 {
+        println("== devsim_test :: PASS ==")
+        return 0
+    }
+    println("== devsim_test :: FAIL ==")
+    return 1
+}
