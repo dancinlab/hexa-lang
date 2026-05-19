@@ -23,6 +23,7 @@
 use "compiler/lenses/types"
 use "compiler/lenses/embedded.gen"
 use "compiler/atlas/by_kind/p.gen"
+use "compiler/atlas/by_kind/l.gen"
 
 let VERSION = "0.0.1"
 
@@ -77,12 +78,14 @@ fn cycle_scan() {
 }
 
 fn cycle_lens() -> int {
-    // B-3.3 + RFC 066 B-3 (partial): AtlasView populated with P kind
-    // from compiler/atlas/by_kind/p.gen (RFC 066 A+B hybrid, A-pathed).
-    // Other kinds remain [] until lens metadata declares them.
+    // B-3.3 + RFC 066 B-3 (partial): AtlasView populated with P + L kinds
+    // from compiler/atlas/by_kind/{p,l}.gen (RFC 066 A+B hybrid, A-pathed).
+    // C kind awaits B-1b HXC sidecar; others empty / placeholder.
     let view = AtlasView {
         p_nodes: ATLAS_P_NODES,
-        c_nodes: [], l_nodes: [], f_nodes: [],
+        c_nodes: [],
+        l_nodes: ATLAS_L_NODES,
+        f_nodes: [],
         r_nodes: [], s_nodes: [], x_nodes: [], q_nodes: [],
         atlas_hash: "", atlas_generated_at: ""
     }
