@@ -79,17 +79,25 @@ a `~/.ssh/config` Host alias. Key / port / user are not API parameters.
   added later without breaking callers.
 - ssh config is the canonical, per-host place for keys and ports.
 
-### Decision 7 — exec via `exec_argv` + RC-marker, not `exec_argv_with_status`
-**picked**: Use the `exec_argv` builtin (bind-registered) and recover the
-remote exit code from a `; echo __CLOUD_RC__=$?` marker line.
+### Decision 7 — exec via `exec_capture` + double-quoting + RC-marker
+**picked**: Local dispatch uses the `exec_capture` builtin; both `host` and
+the remote command are POSIX-quoted (`_shq`) for the local shell as well.
+The remote exit code is recovered from a `; echo __CLOUD_RC__=$?` marker line.
 **rationale**:
-- `exec_argv` is in the compiler's builtin allowlist (`compiler/check/bind.hexa`);
-  `exec_argv_with_status` is not — using it would require editing the
-  compiler frontend, out of scope for cycle A.
+- Revised from a measurement: cycle A first chose `exec_argv` (a no-local-shell
+  fork/execvp builtin), but `hexa build` failed — `exec_argv` is in the bind
+  allowlist yet has no codegen branch (only the `hx_exec_argv` carrier exists),
+  so it is not callable from compiled hexa. `exec_capture` is both
+  bind-registered and codegen-wired.
+- `exec_capture` routes through a local `/bin/sh -c`, so the local invocation
+  is `_shq`-quoted too — the local shell sees `ssh`, `-o`, `BatchMode=yes` and
+  two literal words. Approach C holds: every shell in the path (local and
+  remote) sees only single-quoted literal tokens.
 - The RC-marker pattern is already proven in-repo (`self/main.hexa` qrng
-  dispatch uses `echo "__HEXA_SHIM_RC__=$?"`).
-- A missing marker is itself a useful signal — it means ssh transport
-  failure or a dead remote shell, which `cloud_run` reports distinctly.
+  dispatch uses `echo "__HEXA_SHIM_RC__=$?"`); a missing marker distinctly
+  signals ssh transport failure.
+- Wiring `exec_argv` through codegen stays available as a later option, but it
+  is a compiler-frontend change — out of cycle-A scope.
 
 ---
 
@@ -101,5 +109,7 @@ remote exit code from a `; echo __CLOUD_RC__=$?` marker line.
   `version`).
 - `README.md`, `design.md` (this file).
 
-Verification: local `hexa parse` edit-gate (syntactic). Full semantic build
-and a live SSH smoke test are a follow-up step.
+Verification: `hexa parse` (syntactic, clean) + `hexa build` (semantic —
+compiles clean, only pre-existing unrelated runtime.h warnings) + smoke
+(`help` prints; a `/* note */` argv element is rejected by `cloud_lint_argv`).
+A live SSH smoke test against a real host is a follow-up step.
