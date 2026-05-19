@@ -37,6 +37,7 @@ use "compiler/atlas/audit"
 use "compiler/atlas/audit_rodata"
 use "compiler/atlas/overlay"
 use "compiler/discover/promote"
+use "compiler/atlas/symbolic/congruence_chain_engine"
 
 fn _slice_args() -> array {
     let av = args()
@@ -436,21 +437,474 @@ fn cmd_promote(rest: array) {
     }
 }
 
-// `hexa atlas register <file.hexa>` — STUB. The intended behavior: lex→parse the
-// file, run compiler/discover/discover.hexa::discover_check on the Module, and
-// write the proposals via compiler/discover/staging.hexa::write_staging. That
-// pulls the compiler frontend (compiler/lex/* + compiler/parse/parser.hexa::parse)
-// into this tool — so it belongs in a `tool/atlas_register.hexa` companion, not
-// here (this tool is otherwise zero-frontend). Tracked: inbox/patches/hexa-cli-atlas-register-update-or-pr.md.
+// `hexa atlas register` — direct node-generation → embedded.gen.hexa → PR.
+//
+// TWO arms:
+//
+// (1) `hexa atlas register --from-verify <fn> <n> <v> [--auto-pr] [--branch ...] [--base ...]`
+//     `hexa atlas register --from-verify <fn> <a> <b> <v> [--auto-pr] ...`   (2-op)
+//
+//     Re-runs the `hexa verify --expr` recompute IN-PROCESS (same calc fns,
+//     compiler/atlas/symbolic/congruence_chain_engine). On a 🔵 SUPPORTED-FORMAL
+//     result, CONSTRUCTS the AtlasNode struct-literal text IN MEMORY (no `.n6`
+//     intermediate, no converter), folds it directly into the binary-built-in
+//     atlas SSOT (compiler/atlas/embedded.gen.hexa, into the matching kind
+//     section — F for closed-form recomputed identities), and — with --auto-pr —
+//     creates a fresh branch, commits the embedded.gen.hexa edit, and opens a PR
+//     via `gh` then GitHub API fallback (HONEST: a PR is NEVER claimed unless
+//     `gh` rc=0 or HTTP 201). On --auto-pr absent, the edit lands on the
+//     current branch and the user owns the commit (mirrors `update` arm).
+//
+// (2) `hexa atlas register <file.hexa>` — STUB. Same status as before: needs
+//     the compiler frontend (compiler/lex/* + compiler/parse/parser.hexa::parse)
+//     wired into a companion. Tracked at
+//     inbox/patches/hexa-cli-atlas-register-update-or-pr.md.
+//
+// Per @D g_atlas_binary_builtin: the atlas is unconditionally binary built-in
+// (compiler/atlas/embedded.gen.hexa is the SSOT). Equations land via PR —
+// direct fold-to-live is forbidden, every equation lands via reviewable PR.
+// Per @D g6: every formula-bearing line @cites the embedded atlas; this verb
+// is how `hexa verify` discoveries reach that embed without a `.n6` shard.
+
+// --- helpers for direct node-construction + embedded fold ---------------
+
+let _NOCALC_REGISTER: int = -999999
+
+// _recompute_register — mirror tool/verify_cli.hexa::_recompute (1-op).
+// Kept inline so atlas_cli stays a single tool — verify_cli has `main` and
+// cannot be imported as a module. Add a case here when verify_cli's table
+// grows, OR pull verify_cli's calc into a shared compiler/atlas/symbolic/
+// dispatcher (TODO: extract once a 3rd consumer arrives).
+fn _recompute_register(fn_name: string, n: int) -> int {
+    if fn_name == "divisor_sum" || fn_name == "sigma" || fn_name == "sigma_1" { return sigma_k(n, 1) }
+    if fn_name == "sigma_0" { return sigma_k(n, 0) }
+    if fn_name == "sigma_2" { return sigma_k(n, 2) }
+    if fn_name == "euler_totient" || fn_name == "euler_phi" || fn_name == "phi" { return euler_phi(n) }
+    if fn_name == "mobius" || fn_name == "mu" { return mobius(n) }
+    if fn_name == "divisor_count" || fn_name == "tau" { return len(divisors(n)) }
+    if fn_name == "is_perfect" {
+        if sigma_k(n, 1) == 2 * n { return 1 }
+        return 0
+    }
+    if fn_name == "aliquot" { return sigma_k(n, 1) - n }
+    if fn_name == "gamma0_index"   { return gamma0_index(n) }
+    if fn_name == "gamma0_cusps"   { return gamma0_cusps(n) }
+    if fn_name == "gamma0_genus"   { return gamma0_genus(n) }
+    if fn_name == "isotropy_lcm"   { return isotropy_lcm(n) }
+    if fn_name == "first_cusp_form_weight" { return first_cusp_form_weight(n) }
+    return _NOCALC_REGISTER
+}
+
+fn _recompute2_register(fn_name: string, a: int, b: int) -> int {
+    if fn_name == "sigma_k"   { return sigma_k(a, b) }
+    if fn_name == "jacobi"    { return jacobi_symbol(a, b) }
+    if fn_name == "kronecker" { return kronecker_symbol(a, b) }
+    if fn_name == "dim_cusp_forms" { return dim_cusp_forms(a, b) }
+    return _NOCALC_REGISTER
+}
+
+// _hxesc — escape a string for use inside a hexa double-quoted string literal
+// (backslash, then double-quote, then newline). Mirrors what tool/atlas_embed_gen
+// emits when serializing AtlasNode.raw into embedded.gen.hexa.
+fn _hxesc(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" { out = out + "\\\\" }
+        else if c == "\"" { out = out + "\\\"" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+// _build_node_struct_text — direct in-memory node-generation. Produces the
+// EXACT struct-literal text `tool/atlas_embed_gen.hexa::embed_atlas` would emit
+// for one AtlasNode, ready to splice into compiler/atlas/embedded.gen.hexa.
+// No `.n6` intermediate; no converter — the node is the hexa-source-form
+// AtlasNode literal that the next compile will fold into the binary built-in
+// atlas (@D g_atlas_binary_builtin).
+fn _build_node_struct_text(kind: string, id: string, raw_body: string, source_file: string, source_line: i64) -> string {
+    let raw_e = _hxesc(raw_body)
+    let id_e = _hxesc(id)
+    let sf_e = _hxesc(source_file)
+    let kind_e = _hxesc(kind)
+    return "    AtlasNode { kind: \"" + kind_e + "\", id: \"" + id_e +
+           "\", raw: \"" + raw_e + "\", source_file: \"" + sf_e +
+           "\", source_line: " + to_string(source_line) +
+           ", grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }" +
+           ", edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }"
+}
+
+// _build_raw_F — hexa-source-form header for a verified closed-form (kind F).
+// Shape:   @F <id> = <fn>(<arg>) = <value> :: formula [d=<date> active]
+//            verified-by = "hexa verify --expr <fn> <args> <v>"
+//            cite = "@D g_self_verify · TECS-L Tier1"
+fn _build_raw_F(id: string, fn_name: string, arg_str: string, value: int, today: string) -> string {
+    return "@F " + id + " = " + fn_name + "(" + arg_str + ") = " + to_string(value) +
+           " :: formula [d=" + today + " active]\n" +
+           "  verified-by = \"hexa verify --expr " + fn_name + " " + arg_str + " " + to_string(value) + "\"\n" +
+           "  cite = \"@D g_self_verify · TECS-L Tier1 — hexa-native NT closed-form\"\n" +
+           "  provenance = \"tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6)\""
+}
+
+// _embedded_gen_path — resolve the SSOT path for the binary-built-in atlas.
+fn _embedded_gen_path(atlas_root: string) -> string {
+    return atlas_root + "/compiler/atlas/embedded.gen.hexa"
+}
+
+// _section_marker — `pub let ATLAS_<K>_NODES: [AtlasNode] = [`
+fn _section_marker(kind: string) -> string {
+    return "pub let ATLAS_" + kind + "_NODES: [AtlasNode] = ["
+}
+
+// _embedded_has_id — true iff embedded.gen.hexa already contains a node with
+// `id: "<id>"`. Cheap textual scan — the embed is one-line-per-node and ids
+// are quoted right after `id: `.
+fn _embedded_has_id(embed_text: string, id: string) -> bool {
+    let needle = "id: \"" + id + "\""
+    return embed_text.contains(needle)
+}
+
+// _fold_into_embedded — direct fold. Reads embedded.gen.hexa, finds the
+// section for `kind`, inserts the new struct-literal line just before the
+// closing `]`. Returns "" on success, otherwise an error message.
+// No `.n6` intermediate; the AtlasNode literal IS the storage form.
+fn _fold_into_embedded(embed_path: string, kind: string, node_text: string, id: string) -> string {
+    let body = read_file_safe(embed_path)
+    if len(body) == 0 {
+        return "embedded.gen.hexa not readable or empty at: " + embed_path
+    }
+    if _embedded_has_id(body, id) {
+        return "id already present in embedded atlas: " + id + " (refusing to duplicate)"
+    }
+    let marker = _section_marker(kind)
+    let mi = body.index_of(marker)
+    if mi < 0 {
+        return "section marker not found in embedded.gen.hexa: " + marker
+    }
+    // Find the closing `]` of THIS section. The section's open bracket is the
+    // `[` at end of marker; the closing `]` is the next line that is exactly `]`
+    // at column 0 (matches the emitter convention; see tool/atlas_embed_gen).
+    let mut scan = mi + len(marker)
+    let mut close_at = -1
+    let blen = len(body)
+    while scan < blen {
+        let nl = body.index_of("\n", scan)
+        if nl < 0 { break }
+        let line_start = scan
+        let line = body.substring(line_start, nl)
+        // The closing line is a bare `]` (no leading whitespace, no `,`).
+        if line == "]" {
+            close_at = line_start
+            break
+        }
+        scan = nl + 1
+    }
+    if close_at < 0 {
+        return "could not locate closing `]` for section " + kind + " in embedded.gen.hexa"
+    }
+    // Decide whether the prior element needs a `,`. Walk backward from
+    // close_at and find the previous non-blank line; if it ends with `}`
+    // (a struct literal), insert `,` before our line. The section opens
+    // empty as `= [\n]`, in which case the immediately-prior line ends with `[`.
+    let mut prev_end = close_at - 1
+    while prev_end > 0 && body.substring(prev_end, prev_end + 1) == "\n" {
+        prev_end = prev_end - 1
+    }
+    // Walk to start of that non-blank line.
+    let mut prev_start = prev_end
+    while prev_start > 0 && body.substring(prev_start - 1, prev_start) != "\n" {
+        prev_start = prev_start - 1
+    }
+    let prev_line = body.substring(prev_start, prev_end + 1)
+    let mut prefix = body.substring(0, close_at)
+    let suffix = body.substring(close_at, blen)
+    // If the prior line is an existing struct literal (ends with `}`), it
+    // needs a trailing comma; we add it by appending `,\n` before our line.
+    // If the section is empty (prev line ends with `[`), no comma.
+    let mut splice = ""
+    if prev_line.ends_with("}") {
+        // Strip any trailing whitespace/newlines we want to preserve.
+        // prefix currently includes prev_line plus the newline(s) before `]`.
+        // We rewrite: drop content from prev_end+1 .. close_at, re-add as `,\n` + node + `\n`.
+        let head = body.substring(0, prev_end + 1)
+        splice = head + ",\n" + node_text + "\n"
+        prefix = splice
+    } else {
+        // Empty section path. prev_line ends with `[`. Insert node_text then newline.
+        splice = prefix + node_text + "\n"
+        prefix = splice
+    }
+    let new_body = prefix + suffix
+    write_file_safe(embed_path, new_body)
+    return ""
+}
+
+// _slug_register — id-safe slug for the new atlas-id (kind-prefix style:
+// `verified_<fn>_<arg>` → `verified-divisor_sum-6`). Matches the existing
+// embed convention (lowercase, hyphen-separator, no spaces).
+fn _slug_register(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        let is_lo = c >= "a" && c <= "z"
+        let is_up = c >= "A" && c <= "Z"
+        let is_di = c >= "0" && c <= "9"
+        if is_lo || is_di { out = out + c }
+        else if is_up { out = out + c }
+        else if c == "_" || c == "-" { out = out + c }
+        else { out = out + "-" }
+        i = i + 1
+    }
+    return out
+}
+
+// _branch_commit_pr — reuse the same step-4+5 path as cmd_pr: stage the
+// embedded.gen.hexa edit on a fresh branch, commit, and open the PR via
+// gh || api. HONEST DEGRADE: never claims a PR was opened unless gh rc=0
+// or HTTP 201.
+fn _branch_commit_pr(atlas_root: string, embed_path: string, base: string, branch: string, title: string, summary: string) {
+    let have_git = _exec_ok("command -v git")
+    let in_repo = have_git && _exec_ok("git -C " + _shq(atlas_root) + " rev-parse --git-dir")
+    if !in_repo {
+        println("")
+        println("hexa atlas register: embedded.gen.hexa edited at " + embed_path)
+        if !have_git {
+            println("  `git` not found on PATH — cannot branch/commit/PR automatically.")
+        } else {
+            println("  '" + atlas_root + "' is not a git repo — cannot branch/commit/PR automatically.")
+        }
+        println("  ready to PR — from " + atlas_root + " run:")
+        println("    git switch -c " + branch)
+        println("    git add " + embed_path)
+        println("    git commit -m " + _shq(title))
+        println("    gh pr create --base " + base + " --head " + branch +
+                " --title " + _shq(title))
+        return
+    }
+    let branched = _exec_ok("git -C " + _shq(atlas_root) + " switch -c " + _shq(branch))
+    if !branched {
+        println("hexa atlas register: warning — could not create branch '" + branch + "'")
+        println("  (already exists or dirty worktree); commit by hand on current branch.")
+        return
+    }
+    let added = _exec_ok("git -C " + _shq(atlas_root) + " add " + _shq(embed_path))
+    if !added {
+        println("hexa atlas register: warning — `git add` failed for " + embed_path)
+        return
+    }
+    let commit_msg = title + "\n\n" + summary +
+                     "\nCo-Authored-By: hexa atlas register <noreply@hexa-lang>"
+    let committed = _exec_ok("git -C " + _shq(atlas_root) + " commit -m " + _shq(commit_msg))
+    if !committed {
+        println("hexa atlas register: warning — `git commit` failed (no change? hook reject?).")
+        return
+    }
+    println("hexa atlas register: committed " + embed_path + " on branch '" + branch + "'")
+
+    let gh_cmd = "gh pr create --base " + _shq(base) + " --head " + _shq(branch) +
+                 " --title " + _shq(title) +
+                 " --body " + _shq("Direct in-memory atlas-node generation via `hexa atlas register --from-verify`.\n\n" + summary)
+    if _exec_ok("command -v gh") {
+        if _exec_ok("cd " + _shq(atlas_root) + " && " + gh_cmd) {
+            let url = exec("cd " + _shq(atlas_root) + " && gh pr view --json url -q .url 2>/dev/null").trim()
+            println("hexa atlas register: PR opened via gh — " + (if len(url) > 0 { url } else { "(see `gh pr list`)" }))
+            return
+        }
+        println("hexa atlas register: `gh pr create` did not succeed — falling back to GitHub API…")
+    } else {
+        println("hexa atlas register: `gh` not found — falling back to GitHub API…")
+    }
+    let tok = _gh_token()
+    let slug = _origin_slug(atlas_root)
+    let mut why = ""
+    if len(tok) == 0 {
+        why = "no GH_TOKEN / GITHUB_TOKEN set and `gh auth token` unavailable"
+    } else if len(slug) == 0 {
+        why = "could not resolve owner/repo from the `origin` remote"
+    } else if !_exec_ok("cd " + _shq(atlas_root) + " && git push -u origin " + _shq(branch)) {
+        why = "`git push` to origin failed (no write access / offline)"
+    }
+    if len(why) == 0 {
+        let body = "{\"title\":\"" + _jesc(title) + "\",\"head\":\"" + _jesc(branch) +
+                   "\",\"base\":\"" + _jesc(base) +
+                   "\",\"body\":\"Direct in-memory atlas-node generation via hexa atlas register --from-verify.\"}"
+        let api = "curl -sS -o /tmp/_hexa_pr_resp.json -w '%{http_code}' -X POST" +
+                  " -H " + _shq("Authorization: Bearer " + tok) +
+                  " -H " + _shq("Accept: application/vnd.github+json") +
+                  " -H " + _shq("X-GitHub-Api-Version: 2022-11-28") +
+                  " https://api.github.com/repos/" + slug + "/pulls" +
+                  " -d " + _shq(body)
+        let code = exec("cd " + _shq(atlas_root) + " && " + api).trim()
+        if code == "201" {
+            let url = exec("grep -o 'https://github.com/[^\"]*/pull/[0-9]*' /tmp/_hexa_pr_resp.json | head -1").trim()
+            println("hexa atlas register: PR opened via GitHub API — " + (if len(url) > 0 { url } else { "(HTTP 201)" }))
+            return
+        }
+        let msg = exec("grep -o '\"message\"[^,}]*' /tmp/_hexa_pr_resp.json | head -1").trim()
+        why = "GitHub API returned HTTP " + code + (if len(msg) > 0 { " — " + msg } else { "" })
+    }
+    println("")
+    println("hexa atlas register: PR not opened — " + why + ".")
+    println("  branch '" + branch + "' has the commit locally — NO PR was opened.")
+    println("  ready to PR — from " + atlas_root + " run:")
+    println("    git push -u origin " + branch)
+    println("    " + gh_cmd)
+}
+
+// cmd_register — direct in-memory atlas-node generation. Bypasses .n6 entirely.
 fn cmd_register(rest: array) {
-    println("hexa atlas register: NOT YET WIRED.")
-    println("  intended: lex→parse <file.hexa> → discover_check(Module) → write_staging — needs the")
-    println("  compiler frontend (compiler/lex/* + compiler/parse/parser.hexa::parse) wired into a")
-    println("  `tool/atlas_register.hexa` companion. Spec: inbox/patches/hexa-cli-atlas-register-update-or-pr.md")
-    println("  workaround: stage a node by hand —")
-    println("    hexa atlas append-witness --kind L --id <id> {--raw <body> | --stdin}")
-    println("  then fold it:  hexa atlas promote --staging <atlas.append.witness-*.n6>")
-    exit(3)
+    // Parse flags. Two modes:
+    //   --from-verify <fn> <n> <v> [opts]
+    //   --from-verify <fn> <a> <b> <v> [opts]
+    // optional: --auto-pr, --branch <name>, --base <branch>, --atlas-root <p>,
+    //           --title <text>, --id <id>
+    let mut from_verify = false
+    let mut auto_pr = false
+    let mut atlas_root = ""
+    let mut base = "main"
+    let mut branch = ""
+    let mut title = ""
+    let mut id_override = ""
+    let mut positional = []
+    let mut i = 0
+    let n = len(rest)
+    while i < n {
+        let a = to_string(rest[i])
+        if a == "--from-verify" { from_verify = true; i = i + 1 }
+        else if a == "--auto-pr" { auto_pr = true; i = i + 1 }
+        else if a == "--atlas-root" && i + 1 < n { atlas_root = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--base" && i + 1 < n { base = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--branch" && i + 1 < n { branch = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--title" && i + 1 < n { title = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--id" && i + 1 < n { id_override = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--help" || a == "-h" {
+            println("usage: hexa atlas register --from-verify <fn> <n> <v> [--auto-pr]")
+            println("       hexa atlas register --from-verify <fn> <a> <b> <v> [--auto-pr]   (2-op)")
+            println("                                  [--atlas-root <repo>] [--base <branch>]")
+            println("                                  [--branch <name>] [--title <text>] [--id <id>]")
+            println("")
+            println("Direct node-generation path: re-runs the `hexa verify --expr` recompute IN-PROCESS;")
+            println("on a 🔵 result, constructs the AtlasNode struct-literal IN MEMORY and folds it")
+            println("directly into compiler/atlas/embedded.gen.hexa (the binary-built-in atlas SSOT —")
+            println("@D g_atlas_binary_builtin). No `.n6` intermediate, no converter.")
+            println("With --auto-pr: branch + commit + `gh || api` PR (HONEST: NEVER claims a PR opened")
+            println("unless `gh` rc=0 or HTTP 201).")
+            return
+        }
+        else { positional.push(a); i = i + 1 }
+    }
+    if !from_verify {
+        // Legacy STUB path for `register <file.hexa>` — unchanged.
+        println("hexa atlas register: NOT YET WIRED for <file.hexa> mode.")
+        println("  intended: lex→parse <file.hexa> → discover_check(Module) → write_staging — needs the")
+        println("  compiler frontend (compiler/lex/* + compiler/parse/parser.hexa::parse) wired into a")
+        println("  `tool/atlas_register.hexa` companion. Spec: inbox/patches/hexa-cli-atlas-register-update-or-pr.md")
+        println("  AVAILABLE: --from-verify <fn> <n> <v> [--auto-pr]   (direct in-memory node-gen → PR)")
+        exit(3)
+    }
+    if len(positional) < 3 {
+        println("error: --from-verify needs <fn> <n> <v> (1-op) or <fn> <a> <b> <v> (2-op)")
+        println("       see: hexa atlas register --help")
+        exit(2)
+    }
+    let fn_name = to_string(positional[0])
+    // Determine 1-op vs 2-op by positional count.
+    let mut got: int = _NOCALC_REGISTER
+    let mut expected: int = 0
+    let mut arg_str = ""
+    let mut id_default = ""
+    if len(positional) >= 4 {
+        // 2-op:  fn a b v
+        let a = to_int(to_string(positional[1]))
+        let b = to_int(to_string(positional[2]))
+        expected = to_int(to_string(positional[3]))
+        arg_str = to_string(a) + "," + to_string(b)
+        got = _recompute2_register(fn_name, a, b)
+        id_default = "verified-" + _slug_register(fn_name) + "-" + to_string(a) + "-" + to_string(b)
+    } else {
+        // 1-op:  fn n v
+        let nn = to_int(to_string(positional[1]))
+        expected = to_int(to_string(positional[2]))
+        arg_str = to_string(nn)
+        got = _recompute_register(fn_name, nn)
+        id_default = "verified-" + _slug_register(fn_name) + "-" + to_string(nn)
+    }
+    println("hexa atlas register --from-verify " + fn_name + "(" + arg_str + ") = " + to_string(expected))
+    if got == _NOCALC_REGISTER {
+        println("  tier   = 🟠 INSUFFICIENT")
+        println("  reason = calculator system has NO path for '" + fn_name + "'")
+        println("  gap    = extend tool/atlas_cli.hexa::_recompute_register (계산기시스템 개선)")
+        exit(3)
+    }
+    if got != expected {
+        println("  calc   = " + to_string(got) + "  != expected " + to_string(expected))
+        println("  tier   = 🔴 FALSIFIED — refusing to register a falsified claim")
+        exit(4)
+    }
+    println("  calc   = " + to_string(got) + "  == expected " + to_string(expected))
+    println("  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form; @D g_self_verify · TECS-L Tier1)")
+
+    // Resolve atlas-root (the repo we will edit + branch/commit in).
+    if len(atlas_root) == 0 {
+        atlas_root = env_var("HEXA_LANG")
+        if len(atlas_root) == 0 { atlas_root = "." }
+    }
+    let embed_path = _embedded_gen_path(atlas_root)
+    if !file_exists(embed_path) {
+        println("error: embedded.gen.hexa not found at " + embed_path)
+        println("       (set --atlas-root, or run from the hexa-lang repo)")
+        exit(2)
+    }
+
+    // Decide kind. `verify` closed-forms map to F (formula). Identity LAWS
+    // (e.g. is_perfect ⇒ σ(n)=2n) are still F here — registered as the
+    // recomputed closed-form witness. A future arm `--kind L` can place
+    // identity-laws in L.
+    let kind = "F"
+    let today = _today_compact()
+    let mut id = id_override
+    if len(id) == 0 { id = id_default }
+
+    let raw_body = _build_raw_F(id, fn_name, arg_str, expected, today)
+    let node_text = _build_node_struct_text(kind, id, raw_body,
+        "hexa atlas register --from-verify", to_int(today.replace("-", "")))
+    let err = _fold_into_embedded(embed_path, kind, node_text, id)
+    if len(err) > 0 {
+        println("error: fold into embedded.gen.hexa failed — " + err)
+        exit(5)
+    }
+    println("  embed  = appended @F " + id + " to " + embed_path + " (ATLAS_F_NODES section)")
+    println("  note   = next compile folds this into the binary built-in atlas (@D g_atlas_binary_builtin)")
+
+    // If not --auto-pr, leave on current branch; user can git add/commit.
+    if !auto_pr {
+        println("")
+        println("hexa atlas register: edit landed on the CURRENT branch (no --auto-pr).")
+        println("  commit it with:  git -C " + atlas_root + " add " + embed_path + " && git commit -m " + _shq("atlas(F): register " + id))
+        return
+    }
+
+    if len(branch) == 0 { branch = "atlas-register-" + _branch_stamp() }
+    if len(title) == 0 { title = "atlas(F): register " + id + " (via hexa atlas register --from-verify)" }
+    let summary = "Direct node-generation path — no `.n6` intermediate.\n" +
+                  "  fn:       " + fn_name + "\n" +
+                  "  args:     " + arg_str + "\n" +
+                  "  value:    " + to_string(expected) + "\n" +
+                  "  calc:     " + to_string(got) + "  (hexa-native closed-form)\n" +
+                  "  id:       " + id + "\n" +
+                  "  kind:     @F (formula)\n" +
+                  "  embed:    compiler/atlas/embedded.gen.hexa (ATLAS_F_NODES)\n" +
+                  "  cite:     @D g_self_verify · TECS-L Tier1 · @D g_atlas_binary_builtin"
+    _branch_commit_pr(atlas_root, embed_path, base, branch, title, summary)
 }
 
 // ── pr (the `PR` arm of `update || PR`) ───────────────────
@@ -746,6 +1200,15 @@ fn cmd_help() {
     println("                          id-first wins), write atlas.append.<today>.n6 + a manifest.")
     println("                          the `update` arm of `update || PR` — then git add+commit it.")
     println("                          default --atlas-root = $HEXA_LANG (else cwd)")
+    println("  register --from-verify <fn> <n> <v> [--auto-pr]   (also: <fn> <a> <b> <v> 2-op)")
+    println("                          [--atlas-root <repo>] [--base <branch>] [--branch <name>]")
+    println("                          [--title <text>] [--id <id>]")
+    println("                          DIRECT in-memory node-gen: re-runs the verify recompute,")
+    println("                          builds an AtlasNode struct-literal IN MEMORY, folds it")
+    println("                          directly into compiler/atlas/embedded.gen.hexa (the binary")
+    println("                          built-in atlas SSOT — @D g_atlas_binary_builtin). NO .n6.")
+    println("                          With --auto-pr: branch + commit + `gh || api` PR (HONEST:")
+    println("                          NEVER claims a PR opened unless `gh` rc=0 or HTTP 201).")
     println("  register <file.hexa>    [STUB] lex→parse→discover_check→write_staging for the file's")
     println("                          @discover-annotated fns. (needs the compiler frontend — see note)")
     println("  pr --staging <file.n6>  [--atlas-root <repo>] [--base <branch>] [--branch <name>]")

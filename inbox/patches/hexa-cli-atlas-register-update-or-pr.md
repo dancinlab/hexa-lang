@@ -1,10 +1,16 @@
 # `hexa` CLI subcommand — act on an atlas-citation signal (`update || PR`)
 
-> **Status:** partially-resolved (2026-05-19). `hexa atlas pr` is now wired and
-> measured (see Resolution at the bottom). `hexa atlas register` is still STUB —
-> it needs the compiler frontend (`compiler/lex/*` + `compiler/parse/parser.hexa`)
-> pulled into a `tool/atlas_register.hexa` companion; the `pr` arm was scoped to
-> operate on an already-staged `.n6` shard so it did not require `register`.
+> **Status:** resolved-ssot (2026-05-20). Both arms wired and measured. `hexa atlas pr`
+> (2026-05-19) opens the PR path from an existing staging shard; `hexa atlas register
+> --from-verify <fn> <n> <v> [--auto-pr]` (2026-05-20) closes the loop with the DIRECT
+> path the user asked for — in-memory AtlasNode generation folded straight into
+> `compiler/atlas/embedded.gen.hexa` (the binary-built-in atlas SSOT, @D
+> g_atlas_binary_builtin), then `gh || api` PR. **No `.n6` intermediate at all.** The
+> legacy `register <file.hexa>` mode (lex→parse a source file for `@discover`
+> annotations) is still STUB and tracked separately — it needs the compiler frontend
+> pulled into a `tool/atlas_register.hexa` companion. The `--from-verify` arm is the
+> common path now: every closed-form `hexa verify` discovery reaches the embed in
+> ONE command.
 
 **From:** wilson (downstream) — 2026-05-13. Follow-on to two earlier notes:
 `hexa-oneliner-install-should-link-source-repo.md` (the one-liner install should clone+link the
@@ -116,3 +122,43 @@ arm, which was deliberately scoped to consume an *already-staged* `.n6` shard
 (e.g. one written by `hexa atlas append-witness`). The end-to-end downstream
 flow `register → pr` therefore still requires the manual `append-witness` step
 in place of `register`. Status: **partially-resolved-ssot**.
+
+## Resolution part 2 — `register --from-verify` (2026-05-20)
+
+User directive: ".n6 파일같은거 전혀안통하고 바로 PR 하도록" (no `.n6` file in the path
+at all, go straight to PR) + "변환 말고 / 노드 생성 코드" (NOT a converter — node-
+construction code). Implemented as the second arm of `cmd_register` in
+`tool/atlas_cli.hexa`:
+
+```
+hexa atlas register --from-verify <fn> <n> <v> [--auto-pr]
+hexa atlas register --from-verify <fn> <a> <b> <v> [--auto-pr]   (2-op)
+                                  [--atlas-root <repo>] [--base <branch>]
+                                  [--branch <name>] [--title <text>] [--id <id>]
+```
+
+Flow (zero `.n6` files anywhere):
+
+1. **Recompute in-process.** `_recompute_register` / `_recompute2_register` mirror
+   `tool/verify_cli.hexa::_recompute` over `compiler/atlas/symbolic/congruence_chain_engine`.
+   Same calc, same result; refusing to register on 🔴 FALSIFIED / 🟠 INSUFFICIENT.
+2. **In-memory AtlasNode struct-literal construction.** `_build_raw_F` builds the
+   tape-form `@F` body (`= fn(args) = v :: formula [d=YYYY-MM-DD active]` + verified-by +
+   cite + provenance). `_build_node_struct_text` then emits the EXACT struct-literal
+   text that `tool/atlas_embed_gen.hexa::embed_atlas` would emit for one `AtlasNode`
+   — kind / id / escaped raw / source_file / source_line / GradeInfo / EdgeInfo. This
+   is the storage form. Not a `.n6` file, not a converter — the hexa-source-form
+   `AtlasNode` literal that the next compile folds into the binary built-in atlas.
+3. **Direct fold into the embed SSOT.** `_fold_into_embedded` reads
+   `compiler/atlas/embedded.gen.hexa`, finds `pub let ATLAS_F_NODES: [AtlasNode] = [`,
+   walks forward to the section's closing `]`, dedup-by-id (textual `id: "<id>"`
+   scan), and splices the new line — adding a `,` to the prior trailing `}` when
+   the section is non-empty. Writes back. Per @D g_atlas_binary_builtin this IS
+   the canonical absorption path; the file is compile-time embedded.
+4. **PR via `gh || api`.** `_branch_commit_pr` reuses the same fallback chain as
+   `cmd_pr`: branch + `git add embedded.gen.hexa` + commit, then `gh pr create`,
+   then the GitHub REST API (`POST /repos/<owner>/<repo>/pulls`, HTTP 201). Honest
+   degrade preserved — a PR is NEVER claimed opened unless `gh` rc=0 or HTTP 201.
+
+Status: **resolved-ssot**. The `<file.hexa>` arm of `register` remains separately
+tracked; the user-asked-for direct path is closed.
