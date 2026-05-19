@@ -61,6 +61,36 @@ fn main() {
     check("hull: below by -0.25", fabs(energy_above_hull([0.25, -1.75], refs) - (-0.25)) < 0.0000001)
     check("hull: endpoint A exact", fabs(energy_above_hull([0.0, -1.0], refs)) < 0.0000001)
 
+    // crystal Stage-2: structure_from_cif (cubic NaCl, label-only)
+    let nacl_cif = "" + "data_NaCl\n" + "_cell_length_a 5.6402\n"
+        + "_cell_length_b 5.6402\n" + "_cell_length_c 5.6402\n"
+        + "_cell_angle_alpha 90\n" + "_cell_angle_beta 90\n"
+        + "_cell_angle_gamma 90\n" + "loop_\n" + "_atom_site_label\n"
+        + "_atom_site_fract_x\n" + "_atom_site_fract_y\n"
+        + "_atom_site_fract_z\n" + "Na1 0.0 0.0 0.0\n"
+        + "Cl1 0.5 0.5 0.5\n"
+    let _w = exec("cat > /tmp/_hxcry_nacl.cif <<'CIFEOF'\n" + nacl_cif + "CIFEOF\n")
+    let nc = structure_from_cif("/tmp/_hxcry_nacl.cif")
+    check("cif structure num_sites == 2", structure_num_sites(nc) == 2)
+    let ncsp = structure_species(nc)
+    check("cif structure sp0 == Na", ncsp[0] == "Na")
+    check("cif structure sp1 == Cl", ncsp[1] == "Cl")
+    check("cif structure V == a^3", fabs(structure_volume(nc) - 5.6402 * 5.6402 * 5.6402) < 0.001)
+    let bad_s = structure_from_cif("/tmp/_no_such_cif_xyz.cif")
+    check("cif structure malformed -> empty", structure_num_sites(bad_s) == 0)
+
+    // crystal Stage-2: structure_from_spacegroup
+    let p1 = structure_from_spacegroup(1, cub, ["Po"], [[0.0, 0.0, 0.0]])
+    check("sg P1 -> 1 site", structure_num_sites(p1) == 1)
+    let fm = structure_from_spacegroup(225, cub, ["Cu"], [[0.0, 0.0, 0.0]])
+    check("sg Fm-3m -> 4 sites", structure_num_sites(fm) == 4)
+    let fmfc = fm.frac_coords
+    let fc2 = fmfc[1]
+    check("Fm-3m site1 == (0,.5,.5)",
+          fabs(fc2[0]) < 1e-9 && fabs(fc2[1] - 0.5) < 1e-9 && fabs(fc2[2] - 0.5) < 1e-9)
+    let unk = structure_from_spacegroup(999, cub, ["X"], [[0.1, 0.2, 0.3]])
+    check("sg unknown -> P1 identity (no fabricated mult)", structure_num_sites(unk) == 1)
+
     let scc = structure_cart_coords(structure_new(cub, ["Na", "Cl"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]))
     let s1 = scc[1]
     check("structure_cart_coords site1 == a/2", fabs(s1[0] - a / 2.0) < 0.000000001)

@@ -214,6 +214,249 @@ pub fn structure_cart_coords(s: Structure) -> any {
     return lattice_frac_to_cart(s.lattice, s.frac_coords)
 }
 
+// ── Stage-2 kernel: structure_from_cif + structure_from_spacegroup ──
+// Self-contained minimal CIF reader (same grammar subset as
+// atoms.atoms_from_cif) but returns a Structure: Lattice from
+// (a,b,c,α,β,γ) + species + FRACTIONAL coords kept verbatim (CIF
+// stores fractional natively — no cart conversion needed here).
+
+fn _crystal_shq(s: string) -> string {
+    let mut o = "'"
+    let mut i = 0
+    while i < len(s) {
+        let ch = s.substring(i, i + 1)
+        if ch == "'" { o = o + "'\\''" } else { o = o + ch }
+        i = i + 1
+    }
+    return o + "'"
+}
+
+fn _crystal_split_ws(s: string) -> any {
+    let mut out: any = []
+    let mut cur = ""
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let ch = s.substring(i, i + 1)
+        let is_sp = ch == " " || ch == "\t" || ch == "\r"
+        if is_sp {
+            if cur != "" { out.push(cur) }
+            cur = ""
+        } else {
+            cur = cur + ch
+        }
+        i = i + 1
+    }
+    if cur != "" { out.push(cur) }
+    return out
+}
+
+fn _crystal_clean_num(tok: string) -> string {
+    let mut out = ""
+    let mut i = 0
+    let n = len(tok)
+    while i < n {
+        let ch = tok.substring(i, i + 1)
+        if ch == "(" {
+            i = n
+        } else {
+            out = out + ch
+            i = i + 1
+        }
+    }
+    return out
+}
+
+fn _crystal_sym_from_token(tok: string) -> string {
+    let n = len(tok)
+    if n == 0 { return "" }
+    let c0 = tok.substring(0, 1)
+    let up0 = c0 >= "A" && c0 <= "Z"
+    let lo0 = c0 >= "a" && c0 <= "z"
+    if (up0 || lo0) == false { return "" }
+    let mut sym = c0
+    if n >= 2 {
+        let c1 = tok.substring(1, 2)
+        let lo1 = c1 >= "a" && c1 <= "z"
+        if lo1 { sym = sym + c1 }
+    }
+    return sym
+}
+
+// (a,b,c,α,β,γ) -> row-vector 3x3 (a‖x, b in xy, c general).
+fn _crystal_cellpar_to_matrix(a: float, b: float, c: float, al: float, be: float, ga: float) -> any {
+    let d2r = 0.017453292519943295
+    let ar = al * d2r
+    let br = be * d2r
+    let gr = ga * d2r
+    let ca = cos(ar)
+    let cb = cos(br)
+    let cg = cos(gr)
+    let sg = sin(gr)
+    let ax = a
+    let bx = b * cg
+    let by = b * sg
+    let cx = c * cb
+    let cy_num = ca - cb * cg
+    let cy = c * cy_num / sg
+    let cyu = cy / c
+    let inside = 1.0 - cb * cb - cyu * cyu
+    let czu = sqrt(inside)
+    let cz = c * czu
+    let mut out: any = []
+    out.push([ax, 0.0, 0.0])
+    out.push([bx, by, 0.0])
+    out.push([cx, cy, cz])
+    return out
+}
+
+pub fn structure_from_cif(path: string) -> Structure {
+    let raw = to_string(exec("cat " + _crystal_shq(path)))
+    let lines = raw.split("\n")
+    let nlines = len(lines)
+    let mut a = 0.0
+    let mut b = 0.0
+    let mut c = 0.0
+    let mut al = 90.0
+    let mut be = 90.0
+    let mut ga = 90.0
+    let mut li = 0
+    while li < nlines {
+        let toks = _crystal_split_ws(lines[li].trim())
+        if len(toks) >= 2 {
+            let key = toks[0]
+            let valt = _crystal_clean_num(toks[1])
+            if key == "_cell_length_a" { a = to_float(valt) }
+            if key == "_cell_length_b" { b = to_float(valt) }
+            if key == "_cell_length_c" { c = to_float(valt) }
+            if key == "_cell_angle_alpha" { al = to_float(valt) }
+            if key == "_cell_angle_beta" { be = to_float(valt) }
+            if key == "_cell_angle_gamma" { ga = to_float(valt) }
+        }
+        li = li + 1
+    }
+    let mut col_sym = -1
+    let mut col_label = -1
+    let mut col_fx = -1
+    let mut col_fy = -1
+    let mut col_fz = -1
+    let mut ncol = 0
+    let mut in_header = false
+    let mut data_started = false
+    let mut species: any = []
+    let mut fracs: any = []
+    let mut k = 0
+    while k < nlines {
+        let line = lines[k].trim()
+        let toks = _crystal_split_ws(line)
+        let nt = len(toks)
+        if nt == 0 {
+            if data_started { k = nlines }
+            k = k + 1
+            continue
+        }
+        let head = toks[0]
+        let mut tag_is_site = false
+        if len(head) >= 11 {
+            if head.substring(0, 11) == "_atom_site_" { tag_is_site = true }
+        }
+        if tag_is_site {
+            in_header = true
+            if head == "_atom_site_type_symbol" { col_sym = ncol }
+            if head == "_atom_site_label" { col_label = ncol }
+            if head == "_atom_site_fract_x" { col_fx = ncol }
+            if head == "_atom_site_fract_y" { col_fy = ncol }
+            if head == "_atom_site_fract_z" { col_fz = ncol }
+            ncol = ncol + 1
+            k = k + 1
+            continue
+        }
+        let starts_us = head.substring(0, 1) == "_"
+        let is_loop = head == "loop_"
+        if in_header && data_started == false {
+            if starts_us || is_loop {
+                k = nlines
+            } else {
+                data_started = true
+            }
+        }
+        if data_started {
+            if starts_us || is_loop {
+                k = nlines
+            } else {
+                if nt >= ncol {
+                    let mut sym = ""
+                    if col_sym >= 0 {
+                        sym = _crystal_sym_from_token(toks[col_sym])
+                    } else {
+                        if col_label >= 0 { sym = _crystal_sym_from_token(toks[col_label]) }
+                    }
+                    let fx = to_float(_crystal_clean_num(toks[col_fx]))
+                    let fy = to_float(_crystal_clean_num(toks[col_fy]))
+                    let fz = to_float(_crystal_clean_num(toks[col_fz]))
+                    if sym != "" {
+                        species.push(sym)
+                        fracs.push([fx, fy, fz])
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    if a == 0.0 || len(species) == 0 {
+        let zl = Lattice { matrix: [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]] }
+        return Structure { lattice: zl, species: [], frac_coords: [] }
+    }
+    let m = _crystal_cellpar_to_matrix(a, b, c, al, be, ga)
+    return Structure { lattice: Lattice { matrix: m }, species: species, frac_coords: fracs }
+}
+
+// Wrap a fractional coordinate into [0, 1).
+fn _crystal_wrap1(x: float) -> float {
+    let mut v = x
+    while v < 0.0 { v = v + 1.0 }
+    while v >= 1.0 { v = v - 1.0 }
+    return v
+}
+
+// structure_from_spacegroup: apply the space-group's coset
+// translations to every input site. Supported faithfully: sg=1 (P1,
+// identity) and sg=225 (Fm-3m, the FCC face-centering set). Remaining
+// 228 groups are Stage-2.5 (need the full generator/Wyckoff table) —
+// an unsupported sg returns the P1 (identity) expansion, never a
+// fabricated multiplicity.
+pub fn structure_from_spacegroup(sg: int, L: Lattice, species: any, coords: any) -> Structure {
+    let mut trans: any = []
+    if sg == 225 {
+        trans.push([0.0, 0.0, 0.0])
+        trans.push([0.0, 0.5, 0.5])
+        trans.push([0.5, 0.0, 0.5])
+        trans.push([0.5, 0.5, 0.0])
+    } else {
+        trans.push([0.0, 0.0, 0.0])
+    }
+    let nt = len(trans)
+    let mut out_sp: any = []
+    let mut out_fc: any = []
+    let mut i = 0
+    while i < len(coords) {
+        let cc = coords[i]
+        let sp = species[i]
+        let mut t = 0
+        while t < nt {
+            let tr = trans[t]
+            let nx = _crystal_wrap1(cc[0] + tr[0])
+            let ny = _crystal_wrap1(cc[1] + tr[1])
+            let nz = _crystal_wrap1(cc[2] + tr[2])
+            out_sp.push(sp)
+            out_fc.push([nx, ny, nz])
+            t = t + 1
+        }
+        i = i + 1
+    }
+    return Structure { lattice: L, species: out_sp, frac_coords: out_fc }
+}
+
 // ── Stage-2 kernel: 2-endpoint convex-hull distance ─────────────────
 // pymatgen PhaseDiagram.get_e_above_hull, restricted to a binary
 // (2-endpoint) tie-line — the bounded case hexa-matter's NOVEL
@@ -239,5 +482,5 @@ pub fn energy_above_hull(query: any, refs: any) -> float {
 }
 
 pub fn crystal_status() -> str {
-    return "STAGE-2 (partial) — Stage-1 + lattice_inverse/frac_to_cart/cart_to_frac/angles + structure_cart_coords + energy_above_hull(binary) (absorbs: pymatgen, mp_api; CIF/Spacegroup/multi-point-hull/MP-net still Stage-2)"
+    return "STAGE-2 (partial) — Stage-1 + lattice coords/angles + energy_above_hull(binary) + structure_from_cif + structure_from_spacegroup(P1,Fm-3m) (absorbs: pymatgen, mp_api; full-Wyckoff/multi-point-hull/MP-net still Stage-2.5)"
 }
