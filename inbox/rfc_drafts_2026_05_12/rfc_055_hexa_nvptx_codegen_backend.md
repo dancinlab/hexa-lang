@@ -2,41 +2,35 @@
 
 ## 1. Status
 
-- **Status**: **055-P1 vec-add emit + validator + launch ABI ready-for-dispatch-wire (2026-05-19)** — the NVPTX codegen
-  target now hand-emits the full FP64 vec-add `.visible .entry` shape,
-  recognizes `@gpu_kernel` / `@gpu_device` attributes, classifies functions
-  against the gpu/SPEC.md §9 GPU0N decision table, and the host-side
-  `_hx_cuda_launch_kernel` Driver-API wrapper is implemented in
-  `self/cuda/runtime_cuda.c` (proto in `self/runtime.h`). What's emittable in
-  PTX text today: `.version` / `.target` / `.address_size` header,
-  `.visible .entry <name>` with `.param .u64` bank, all four register banks
-  (`.reg .u32` / `.u64` / `.pred` / `.f64`), `ld.param.u64`, `mov.u32` from
-  `%tid.x` / `%ctaid.x` / `%ntid.x` sregs (gpu/SPEC.md §5 per-axis names —
-  lowering 1:1), `mad.lo.s32` (gid compose), `cvt.u64.u32` / `mul.lo.u64`
-  (×8) / `add.u64` (address compose), `setp.lt.s32` + `@!%p bra` (bounds
-  check), `ld.global.f64` / `st.global.f64`, `add.f64` / `sub.f64` /
-  `mul.f64`, `mov.f64`, `ret`, block labels. The keystone entry is
-  `emit_ptx_vec_add_module(target)`. The `@gpu` subset strict-lint validator
-  is `nvptx_validate_gpu_subset(NvptxValidateInput) -> [string]`; GPU01–GPU07
-  + GPU05W diagnostic codes are pre-registered in
-  `compiler/diag/catalog.hexa`. **What still needs the GPU fire:**
-  F-RFC055-PTX-EMIT (ptxas accept), F-RFC055-NUMERIC-EQ (`max|Δ|==0`),
-  F-RFC055-LAUNCH-ABI (host→kernel→host round-trip) — operator runs
-  `tool/dispatch_r055_p1_vec_add.sh` with `state/rfc055_p1_2026_05_19/READY_TO_FIRE.md`
-  guidance, budget ~$0.50–$1.50. **What's still 055-P2:** the MIR partition
-  that routes a `@gpu_*` MFunc to `codegen_nvptx_sm*` (validator runs on
-  synthetic `NvptxValidateInput` today, not a real FnDecl walk); the
-  `gpu_launch(...)` host-side lowering that turns the call site into a
-  `_hx_cuda_launch_kernel(...)` invocation (C-side wrapper is fully
-  implemented, hexa-side lowering is P2); the cubin `.rodata` `LSection`
-  embed (dispatch script feeds a cubin file directly today). 055-P1 is
-  honestly **"emits + ready-for-dispatch-wire"**, not "lands P1" — the
-  P1 contract per §12 includes the dispatch wiring, this cycle lands every
-  prerequisite. Falsifier F-RFC055-CPU-CODEGEN-UNTOUCHED held by
-  construction — `compiler/main.hexa` target dispatch is unchanged; the
-  NVPTX target is unreachable from the main compile pipeline.
+- **Status**: **055-P2 LANDED — naive FP64 GEMM `@gpu_kernel` + full falsifier battery measured PASS on a real GPU (2026-05-20)**.
+  The NVPTX codegen target hand-emits both a FP64 vec-add and a naive FP64
+  GEMM `.visible .entry` kernel; the RFC 055 §7 falsifier battery is
+  **measured PASS** on an NVIDIA RTX 5070 (sm_120 · driver 580.126.09),
+  closing 055-P1 (vec-add — the prior cycle left it unfired) and 055-P2
+  (GEMM) in one $0 fire on the wilson-pool GPU host. Measured verdicts
+  (`state/rfc055_p2_2026_05_20/result.json`): **F-RFC055-PTX-EMIT PASS**
+  (both PTX modules `ptxas`-accepted + driver-JIT-loaded), **F-RFC055-
+  NUMERIC-EQ PASS** (vec-add `max|Δ|=0`, 0/1024), **F-RFC055-GEMM-FEASIBLE
+  PASS** (naive GEMM `max|Δ|=0`, 0/4096 — integer inputs → byte-exact),
+  **F-RFC055-LAUNCH-ABI PASS** (host→kernel→host, 1-D + 2-D launch),
+  **F-RFC055-NO-LLVM PASS**, **F-RFC055-CPU-CODEGEN-UNTOUCHED PASS** (by
+  construction). The GEMM keystone is `emit_ptx_gemm_module(target)` — a
+  real PTX contraction loop (`$L_LOOP` back-edge, `setp.lt.s32` guard,
+  `fma.rn.f64` accumulate); the vec-add keystone is
+  `emit_ptx_vec_add_module(target)`. A 055-P0 latent bug was found + fixed
+  by the fire: emitted PTX carried non-ASCII bytes (em-dash · arrow · ×)
+  in comments — standalone `ptxas` tolerated them, the driver JIT aborts
+  on them; all emitted strings are now ASCII, with a regression guard in
+  the dispatch script. **What's still 055-P3 (productization):** the MIR
+  partition routing a real `@gpu_*` FnDecl to `codegen_nvptx_sm*` (the
+  validator still consumes a synthetic `NvptxValidateInput`, not a FnDecl
+  walk); the `gpu_launch(...)` host-side lowering (C-side
+  `_hx_cuda_launch_kernel` wrapper is implemented, hexa-side lowering is
+  P3); the cubin `.rodata` `LSection` embed; the tiled `@shared` +
+  `gpu_barrier()` GEMM variant (055-P2-tiled). 055-P2 is the hand-emit +
+  measured fire; 055-P3 wires it into the compile pipeline.
 - **Original status**: design-draft (2026-05-17) — DESIGN ONLY, no implementation
-- **Date**: 2026-05-17 (draft) · 2026-05-19 (Stage 1 scaffold) · 2026-05-19 (055-P0 PTX emit pass) · 2026-05-19 (055-P1 vec-add emit + validator + launch ABI ready-for-dispatch-wire)
+- **Date**: 2026-05-17 (draft) · 2026-05-19 (Stage 1 scaffold) · 2026-05-19 (055-P0 PTX emit pass) · 2026-05-19 (055-P1 vec-add emit + validator + launch ABI ready-for-dispatch-wire) · 2026-05-20 (055-P2 naive GEMM emit + full falsifier battery measured PASS)
 - **Priority**: P2 (architectural enabler — opens the hexa-native GPU path; not on
   any current critical chain. flame/forge ship today on the C/CUDA substrate;
   RFC 055 is the *future* hexa-native tier, not a blocker for either.)
@@ -483,8 +477,9 @@ Suggested phasing once an implementation cycle is greenlit:
 |---|---|---|
 | **055-P0** | NVPTX codegen target skeleton — `codegen_nvptx_sm90` entry, `LModule.target` = `nvptx64-…`, PTX `LInstr` opcode table, PTX text emit pass. No GPU run yet. **Stage 1 scaffold landed 2026-05-19** (`compiler/codegen/nvptx_target.hexa` + `nvptx_ptx_ops.hexa` — entry points, IR structs, opcode table; parse-clean, not dispatch-wired). **055-P0 PTX text emit pass landed 2026-05-19** — `_nvptx_lower_func` lowers the FP64-arithmetic MIR subset (§6.6) to PTX-flavored LIR, `emit_ptx` renders it to real PTX text (`.version`/`.target`/`.address_size` header, `.func` bodies, `.reg .f64` decls, `mov.f64`/`add.f64`/`sub.f64`/`mul.f64`/`ret`, block labels); `nvptx_emit_test.hexa` smoke entry. `.visible .entry` kernels, `ld/st.global`, `fma.rn.f64` fusion, sregs, `bar.sync`/`bra`/`setp` = honest 055-P1+ stubs. Still not dispatch-wired. | (skeleton — compiles, emits PTX text) ✅ |
 | **055-P1** | FP64 vector-add `@gpu_kernel` end-to-end: `@gpu_kernel` attribute parse + strict-lint, thread-index builtins, ptxas + cubin embed + `gpu_launch`. **2026-05-19**: vec-add PTX emitter (`emit_ptx_vec_add_module`) lands with full `.visible .entry` + `.param` bank + sreg-read + bounds-check + ld/st.global lowering; `@gpu_*` attribute recognition + GPU01–GPU07 strict-lint decision table land in `compiler/codegen/nvptx_target.hexa`; GPU0N codes pre-registered in `compiler/diag/catalog.hexa`; host launch ABI `_hx_cuda_launch_kernel` lands in `self/cuda/runtime_cuda.c` (proto in `self/runtime.h`). Honest scope: the MIR partition routing + `gpu_launch` lowering + cubin LSection embed are 055-P2 — this cycle is "emits + ready-for-dispatch-wire". F-RFC055-CPU-CODEGEN-UNTOUCHED, F-RFC055-NO-LLVM, F-RFC055-FALLBACK held locally; F-RFC055-PTX-EMIT (text-shape half), GPU0N decision table verified by `nvptx_vec_add_test.hexa`. The ptxas-accept + GPU run is `tool/dispatch_r055_p1_vec_add.sh` + `state/rfc055_p1_2026_05_19/READY_TO_FIRE.md`. | F-RFC055-PTX-EMIT, F-RFC055-NUMERIC-EQ, F-RFC055-LAUNCH-ABI, F-RFC055-NO-LLVM ✅, F-RFC055-CPU-CODEGEN-UNTOUCHED ✅, F-RFC055-FALLBACK ✅ |
-| **055-P2** | FP64 GEMM `@gpu_kernel` (naive/tiled, `@shared` + `gpu_barrier`). | F-RFC055-GEMM-FEASIBLE (correctness gate; perf = honest measurement only) |
-| **055-P3** | sm_80 variant; warp primitives sub-phase. | (additive — no new gate) |
+| **055-P2** | naive FP64 GEMM `@gpu_kernel` — real PTX contraction loop, `fma.rn.f64`. **LANDED 2026-05-20** (`emit_ptx_gemm_module`). | F-RFC055-GEMM-FEASIBLE **PASS** (`max\|Δ\|=0`, RTX 5070); F-RFC055-PTX-EMIT / -NUMERIC-EQ / -LAUNCH-ABI / -NO-LLVM / -CPU-CODEGEN-UNTOUCHED all **PASS** (vec-add fire closed in the same run) |
+| **055-P2-tiled** | tiled GEMM — `@shared` tile + `gpu_barrier()` (gpu/SPEC.md §6). | (additive — perf form; correctness gate unchanged) |
+| **055-P3** | productization: MIR partition routing a real `@gpu_*` FnDecl → `codegen_nvptx_sm*`; `gpu_launch(...)` host-side lowering; cubin `.rodata` `LSection` embed; sm_80 variant; warp primitives. | (wiring — F-RFC055-CPU-CODEGEN-UNTOUCHED re-checked) |
 | **055-P4+** | Tensor Core MMA intrinsic; mixed-precision PTX types; PTX optimization passes. | later RFCs |
 
 This phasing **enables** a future `self/forge/native/` hexa-native kernel tier

@@ -3580,3 +3580,79 @@ keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/tes
 - **cc --regen / binary promote**: 미수행. atlas_cli.hexa = driver 가 run 하는 tool
   (NOT hexa_cc.c SSOT 모듈). @D g_commit_push_deploy: tool/* 변경은 source-only;
   driver 빌드 무영향. compile-then-exec path (`hexa run`) 로 모든 측정 진행.
+
+### 2026-05-20 — RFC 055 055-P2 LANDED — naive FP64 GEMM `@gpu_kernel` + GPU fire PASS
+
+RFC 055 055-P2 (`gpu/SPEC.md` §12 P2 deliverable): the hexa-native NVPTX
+backend now emits a **naive FP64 GEMM `@gpu_kernel`**, and the full RFC 055
+§7 falsifier battery is **measured PASS on a real NVIDIA GPU** — closing
+both the 055-P1 vec-add fire (which the prior cycle left "ready-for-
+dispatch-wire", unfired — `state/rfc055_p1_2026_05_19/vec_add.ptx` was
+0 bytes) and 055-P2 GEMM in one fire.
+
+**What landed (compiler/codegen/nvptx_target.hexa, +~330 lines):**
+- `emit_ptx_gemm_module(target)` — the keystone naive GEMM emitter. One
+  thread per C element; A row-major m×k, B k×n, C m×n; a real PTX
+  contraction loop (`$L_LOOP` back-edge, `setp.lt.s32` guard), the
+  accumulate lowered to a single `fma.rn.f64`. Hand-emitted from the
+  055-P0 `LInstr` vocabulary + eight new `_nvptx_p2_*` helper emitters
+  (`mov` any-axis sreg, u32/f64 immediate `mov`, `cvt.u32.u64`,
+  `mul.lo.s32`, `add.s32`, `fma.rn.f64`, unconditional `bra`).
+- `_nvptx_build_gemm_kernel` — the `NvptxKernelFn` builder (6-param bank
+  — 3 farr bases + m/n/k; 18×.u32, 15×.u64, 3×.pred, 3×.f64 reg banks).
+- **naive, not tiled** — the tiled `@shared` + `gpu_barrier()` variant
+  (gpu/SPEC.md §6) is the named 055-P2-tiled follow-on; naive satisfies
+  F-RFC055-GEMM-FEASIBLE (a correctness gate — RFC 055 §7) at the lowest
+  fire risk. RFC 055 §12 scopes P2 as "naive/tiled".
+
+**Bug found + fixed by the fire (055-P0 latent):** `_emit_ptx_header` and
+several lowering-note strings contained **non-ASCII bytes** (em-dash `—`,
+middle-dot `·`, arrow `→`, `×`). Standalone `ptxas` (CUDA 12.0) tolerated
+them in PTX comments; the **driver JIT** `ptxas` (driver 580) aborts with
+`Unexpected non-ASCII character encountered on line 1`. All emitted
+strings sanitized to ASCII; `dispatch_r055_p2_gemm.sh` carries a
+regression guard (`perl … [^[:ascii:]]`) so emitted PTX is asserted
+ASCII-clean before any GPU touch.
+
+**Falsifier battery — MEASURED (`state/rfc055_p2_2026_05_20/result.json`):**
+- `F-RFC055-PTX-EMIT` **PASS** — both vec-add + GEMM PTX accepted by
+  `ptxas` (cheap standalone oracle, sm_80 + sm_90, $0) and JIT-loaded by
+  the driver.
+- `F-RFC055-NUMERIC-EQ` **PASS** — vec-add `max|Δ| = 0`, 0/1024 mismatch
+  (byte-exact; vec-add reduces nothing).
+- `F-RFC055-GEMM-FEASIBLE` **PASS** — naive GEMM `max|Δ| = 0`, 0/4096
+  mismatch (integer inputs a=i%7/b=i%5/k=64 → every product + partial
+  sum exact in FP64 → byte-exact, beyond the §7 tolerance gate).
+- `F-RFC055-LAUNCH-ABI` **PASS** — host→kernel→host round-trip via the
+  CUDA Driver API for a 1-D (vadd) and a 2-D (gemm) launch.
+- `F-RFC055-NO-LLVM` **PASS** — hexa→PTX is pure hexa; downstream is only
+  `nvcc -lcuda` + the driver JIT, no LLVM linkage.
+- `F-RFC055-CPU-CODEGEN-UNTOUCHED` **PASS** (by construction) — this
+  cycle only ADDS functions to `nvptx_target.hexa`; the CPU codegen
+  files and `compiler/main.hexa` dispatch are unmodified.
+
+**Fire — $0, no vast.ai.** Run on the wilson-pool GPU host **ubu-2**
+(NVIDIA RTX 5070 · sm_120 Blackwell · driver 580.126.09). PTX targeting
+`.target sm_80` is forward-compatible — the driver JITs it for sm_120.
+Standalone `ptxas` was the cheap pre-fire oracle (instrument-first);
+the GPU run was the authoritative measurement.
+
+**Local proofs:** `compiler/codegen/nvptx_gemm_test.hexa` — 38-substring
+PTX-shape oracle + GEMM `@gpu` validator (GPU01) — built + run via the
+compiled path, PASS. `nvptx_vec_add_test.hexa` re-verified PASS post
+ASCII-fix.
+
+**Honest scope — still 055-P3 (productization, NOT this cycle):** the
+MIR partition routing a real `@gpu_*` FnDecl → `codegen_nvptx_sm*` (the
+validator still consumes a synthetic `NvptxValidateInput`, not a FnDecl
+walk); the `gpu_launch(...)` host-side lowering; the cubin `.rodata`
+`LSection` embed. These need attribute plumbing through parser→HIR→MIR —
+deep shared-frontend surgery deliberately deferred. 055-P2 is the
+hand-emit + measured fire; 055-P3 wires it into the compile pipeline.
+
+**Files** — added: `compiler/codegen/nvptx_gemm_test.hexa`,
+`gpu/tests/gemm.hexa`, `tool/dispatch_r055_p2_gemm.sh`,
+`tool/r055_p2_host.c`. Extended: `compiler/codegen/nvptx_target.hexa`
+(GEMM emitter + ASCII fix). No binary promote — `nvptx_*.hexa` is
+unreached by the driver's compile path (F-RFC055-CPU-CODEGEN-UNTOUCHED);
+tool/* + test files are source-only (@D g_commit_push_deploy).

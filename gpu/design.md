@@ -134,6 +134,69 @@ Consequence: `gpu/SPEC.md` written as the SSOT; RFC 055 §6.4/§6.5 reduced
 to a pointer; `gpu_codegen_stub.c`'s intrinsic table + allowlist are the
 in-tree reference the spec is kept consistent with.
 
+### Decision 4 — 055-P2 scope: naive GEMM emitter + measured fire; MIR partition deferred to 055-P3
+
+The 055-P2 cycle (`gpu/SPEC.md` §12 P2 = "FP64 GEMM `@gpu_kernel`") had two
+genuinely separable bodies of work bundled under the label: (i) the GEMM
+PTX **emitter** + the GPU **fire** that proves it, and (ii) **productizing**
+the backend — the MIR partition that routes a real `@gpu_*` FnDecl through
+`codegen_nvptx_sm*`, the `gpu_launch(...)` host-side lowering, the cubin
+`.rodata` `LSection` embed. How much lands in one cycle?
+
+**Candidate A — everything in 055-P2.** Emitter + fire + the full MIR /
+launch / embed wiring, so `@gpu` is usable from real hexa source at the
+end of the cycle.
+
+- `+` `@gpu` becomes a real language feature, not a hand-emit demo
+- `−` the MIR partition needs `@gpu_kernel` attribute plumbing through
+  parser → HIR → MIR — deep surgery in the shared compiler frontend
+- `−` `nvptx_target.hexa`'s own comments flag this as blocked on in-flight
+  keyword-demote work; the frontend is edited by many parallel sessions
+- `−` a routing bug would entangle with the emitter fire — a failed GPU
+  fire could not be localized to emitter vs routing (instrument-first
+  violation — no cheap oracle separates the two)
+
+**Candidate B — 055-P2 = emitter + fire only; wiring → 055-P3.** Land
+`emit_ptx_gemm_module` + the measured falsifier battery; defer the MIR
+partition / launch lowering / cubin embed to a named 055-P3.
+
+- `+` the cycle has a clean, cheap-to-verify deliverable — a hand-emitted
+  kernel checked by a local substring oracle, then one GPU fire
+- `+` a verified golden PTX exists *before* the routing work — 055-P3's
+  FnDecl-walk codegen has a byte-reference to reproduce
+- `+` zero shared-frontend surgery — F-RFC055-CPU-CODEGEN-UNTOUCHED holds
+  by construction (only new functions added to `nvptx_target.hexa`)
+- `−` `@gpu` is not yet writable from real hexa source after 055-P2
+
+**picked:** B — 055-P2 = naive GEMM emitter + measured fire; the MIR
+partition / `gpu_launch` lowering / cubin embed are 055-P3 (2026-05-20)
+
+**rationale:**
+- the RFC 055 §12 phasing table itself scopes 055-P2 as the GEMM kernel
+  with gate F-RFC055-GEMM-FEASIBLE — a *correctness* gate on a kernel,
+  not a pipeline-integration gate; Candidate B matches the RFC's own line
+- instrument-first discipline — the emitter is verified by a $0 local
+  substring oracle and a $0 GPU fire (run on the wilson-pool RTX 5070);
+  bundling unverified frontend routing into the same cycle would make a
+  failed fire un-localizable
+- the verified golden PTX (`emit_ptx_{vec_add,gemm}_module`, fired PASS)
+  is the *reference* 055-P3's real FnDecl-walk codegen reproduces — doing
+  the emitter first is the sound dependency order
+- shared-worktree safety — the MIR partition edits parser/HIR/MIR files
+  that ~8 parallel sessions touch; an autonomous cycle keeps to additive
+  changes in a codegen-only file, deferring frontend surgery to a scoped
+  055-P3 with its own review
+- **naive, not tiled** — within 055-P2, the GEMM is the naive one-thread-
+  per-element form (no `@shared`); it satisfies the correctness gate at
+  the lowest fire risk. The tiled `@shared` + `gpu_barrier()` variant is
+  the named 055-P2-tiled follow-on (a perf form; the correctness gate is
+  unchanged)
+
+Candidate A is rejected; kept above as the audit trail. Consequence:
+055-P2 landed `emit_ptx_gemm_module` + `nvptx_gemm_test.hexa` +
+`gpu/tests/gemm.hexa` + the dispatch script; the measured battery is in
+`state/rfc055_p2_2026_05_20/result.json`.
+
 ## Cross-references
 
 - `gpu/SPEC.md` — the `@gpu` subset SSOT (Decision 3)
