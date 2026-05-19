@@ -42,6 +42,26 @@
 
 (append-only)
 
+### 2026-05-19 — codegen: ExternFnDecl in statement position — FFI wrapper mangle parity + nested-decl hoist
+
+keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/test_keyword_audit.hexa` L376 `extern fn getpid() -> Int` 는 두 갈래로 깨졌었다.
+
+**근본원인 (측정으로 확정 — `unhandled stmt kind` 가 아니었음)**: top-level / script-body `extern fn` 는 이미 top-level emit loop 의 `ExternFnDecl` 분기에 도달한다. 진짜 버그는 `gen2_extern_wrapper` 가 emit 하는 C 래퍼 함수 이름이 call-site mangle 과 불일치한 것. `getpid` 는 `_hexa_name_is_reserved` 목록에 있어 (libc `getpid` 충돌) call-site 는 `_hexa_mangle_ident` 로 `u_getpid()` 를 emit 하지만, 래퍼는 plain `getpid` 로 emit 됨 → call 이 libc `int getpid(void)` 로 resolve → clang `assigning to HexaVal from incompatible type 'int'`. fn-body 안에 nested 된 `extern fn` 는 `_gen2_lift_nested_decls` 가 hoist 하지 않아 별개로 `CODEGEN ERROR: unhandled stmt kind: ExternFnDecl` 스텁을 emit 했다.
+
+**수정 (`self/codegen_c2.hexa`, surgical 3-part)**:
+1. `gen2_extern_wrapper` — 래퍼 C 함수 이름 (forward decl + 두 `static HexaVal NAME(...)` 정의 + typedef 태그) 을 `_hexa_mangle_ident(name)` (`cname`) 로 변경. decl 이름 == reference 이름. `__ffi_sym_<name>` dlsym 슬롯은 raw name 유지 (이미 고유-prefix 내부 식별자; dlsym C-symbol 문자열은 `c_sym` 으로 별도). 비-reserved extern 이름은 mangle 이 no-op → 일반 케이스 zero regression (측정 확인).
+2. `_gen2_lift_nested_decls` — lift 인식 종류에 `ExternFnDecl` 추가. fn-body 최상단 `extern fn` 도 module scope 로 hoist (C 는 nested fn 없음; FFI 래퍼는 top-level 분기에서만 emit). 추가로 `seen_names` 를 기존 top-level decl 이름으로 pre-seed — top-level 과 nested 가 같은 extern 이름이면 nested 복사본을 lift 하지 않음 (top-level 이 이김) → C "redefinition" 방지.
+3. `gen2_stmt` decl-skip — `ExternFnDecl` 추가. lift 된 stmt-position `extern fn` 가 원래 위치에서 `unhandled stmt kind` 스텁을 ALSO emit 하지 않게.
+
+**측정 BEFORE/AFTER** (Mac, host-pinned smoke `extern fn getpid() -> Int; let p = getpid(); ...`):
+- BEFORE (구 hexa_v2): transpile OK 이나 C 빌드 2 errors (`u_getpid` ≠ `getpid` incompatible-type). nested smoke → `unhandled stmt kind: ExternFnDecl` 스텁 1개.
+- AFTER (regen hexa_v2): script-body smoke → 래퍼 `u_getpid` == call `u_getpid` → C 빌드 0 error → run `extern ok` rc=0. nested smoke → 스텁 0개 → 빌드+run `nested extern ok` rc=0. 비-reserved extern → 래퍼 이름 변경 없음 (no-op mangle 확인).
+- `self/test_keyword_audit.hexa` → ExternFnDecl 스텁 0 (BEFORE 1). 잔여 5 C-error 는 generics `T` / `Clone` / async `hexa_await_unwrap` 등 무관 별건 갭 — 구·신 transpiler 동일 5개 → zero regression.
+
+**self-host fixpoint**: `cc --regen` → `hexa_cc.c.new` ≡ promoted `hexa_cc.c` BYTE-IDENTICAL (`cmp` 확인). 바이너리 promote 동반 — `hexa_cc.c` 1480897→1484206 B, `hexa_v2` 1533496→1534088 B.
+
+**LIMITATION (소스 주석에 명기)**: shallow-walk 경계 유지 — `if/while/for` 블록 안 더 깊이 nested 된 `extern fn` 는 lift 대상 아님 (`_gen2_lift_nested_decls` 의 기존 top-of-body 한계와 동일). top-level / script-body / fn-body-최상단 `extern fn` 만 커버.
+
 ### 2026-05-19 — token-forge: `consciousness TokenForgeRouter { ... }` 블록 retirement (Decision C surgical unwrap)
 
 `tool/pkg/packages/token-forge/forge.hexa` 의 마지막 잔여 별건 #4. 파일은 line 214 에서 `consciousness TokenForgeRouter { assert ...; let argv = args(); ... }` 를 top-level 블록처럼 사용 — 하지만 hexa-lang 의 `consciousness Name { ... }` 구문은 lexer/parser/codegen 어디에도 등록되어 있지 않고 (`self/formatter.hexa::ConsciousnessBlock` 만 orphan dead-branch 로 잔존), 파서는 이를 struct-literal `consciousness { TokenForgeRouter: ... }` 로 잘못 해석해서 `expected identifier, got Assert` 류의 ~40 errors 폭발. `example/consciousness_bootstrap.hexa` 의 phi/tension/faction/cells 자동주입 의미론은 published 되었으나 미구현 상태이며 — token-forge 의 블록은 **그 의미론을 전혀 사용하지 않음** (단순 라벨드 스크립트 바디 wrapper).
@@ -3261,3 +3281,44 @@ EnumPath rework deliberately not done (larger, more-principled option).
   `run <smoke>` (compile-then-exec) rc=0. 3/3 PASS — 제거가 회귀 0 임을
   측정 입증. g3-honest: 본 cycle 은 dead-code 신규 삭제 0 (R7 이 이미
   완료) — 부정확 doc string 2줄 정정 + tidy 점검 보고가 실질 산출물.
+
+### 2026-05-19 — install.sh: fresh-install `hexa build` + PATH 견고화
+
+- inbox/patches/hexa-oneliner-install-should-link-source-repo.md 해소.
+  문제 1: 릴리스 tarball 은 `{hexa 바이너리, build/}` 만 담아 `stdlib/`·
+  `self/` 미포함 → fresh install 에서 `use "stdlib/..."` 빌드 전부 실패.
+  컴파일러는 install-relative stdlib 탐색 (df9e7f6b: `<inst>/stdlib`·
+  `<inst>/self/stdlib`) 을 갖췄으나 `install.sh` 가 `stdlib/` 를 거기
+  배치하지 않았음.
+- 채택안 (a) — 새 릴리스 不要, 오늘 동작: `install_src()` 가 hexa-lang
+  소스를 `$HX_HOME/src` 로 shallow git clone → `$HX_BIN/stdlib`·
+  `$HX_BIN/self` 심볼릭 링크 (install_dir_from_argv0() 가 `hexa.real` 을
+  realpath 해 `$HX_BIN` 반환 → 두 candidate 정확히 적중). `hexa cc` 의
+  `<inst>/self/native/hexa_cc.c` 도 `self` 링크로 해소.
+- 추가 발견 (g3): `hexa build` flatten 단계는 codegen_c2 의 4-way `use`
+  탐색 (caller-dir·$HEXA_LANG/self·$HEXA_LANG·cwd·./self) 만 갖춘
+  standalone `hexa_v2` 가 아니라, **compiled `hexa_module_loader`**
+  바이너리를 통해야 install-relative 탐색이 작동. 이 바이너리는
+  `.gitignore` 대상 → clone 에 없음. 단 `module_loader.hexa` 는 `use` 0건
+  (self-contained) 이라 pre-existing module_loader 없이 빌드 가능 →
+  `install_src()` 가 clone 직후 `$HX_BIN/build/hexa_module_loader` 로
+  빌드. 이로써 새 릴리스 없이 end-to-end `hexa build` 성립.
+- 문제 2: `update_path_hint()` — (1) rc 파일이 이미 존재할 때만 기록
+  (`[ -f ]`) → fresh user 자동설정 누락 = 없으면 생성. (2) macOS login
+  bash 는 `~/.bashrc` 아닌 `~/.bash_profile` 를 읽음 → OS×shell 조합별
+  올바른 파일 선택 (bash+Darwin→.bash_profile, bash+Linux→.bashrc,
+  zsh→.zshrc). (3) fish 미지원 → `~/.config/fish/config.fish` 에
+  `fish_add_path` (fish 문법) 기록.
+- 검증 (measured): `bash -n install.sh` PASS. update_path_hint 4 조합
+  (zsh/Darwin · bash/Darwin→.bash_profile · bash/Linux→.bashrc ·
+  fish→config.fish) 모두 올바른 파일·문법으로 신규 생성 확인. stdlib:
+  temp `HX_HOME` 에 클린룸 시뮬레이션 install (native 바이너리 + shim +
+  소스 clone + 심볼릭 링크 + module_loader 빌드) 후 `HEXA_LANG`/
+  `HEXA_STDLIB_ROOT`/`HEXA_INSTALL_DIR` 전부 unset 으로 `use
+  "stdlib/core/bytes.hexa"` 프로그램 `hexa build` rc=0 → 실행 시
+  `int_from_hex("deadbeef")=3735928559` 정상 출력.
+- 릴리스 의존 잔여: 없음 — 채택안 (a) 는 git 만 있으면 오늘 작동.
+  단 release tarball 자체에 `stdlib/`·`hexa_module_loader` 를 담는
+  대안 (b) 은 미채택 (release-packaging tool 부재 — `.github/workflows/`
+  에 release workflow 없음). `hexa repo path` / `hexa update` verb 는
+  컴파일러 변경 필요 → 후속 follow-up 으로 patch markdown 에 명시.
