@@ -2666,3 +2666,31 @@ Files added: `compiler/codegen/nvptx_vec_add_test.hexa`,
 `compiler/diag/catalog.hexa` (+85 lines — GPU01–GPU07 + GPU05W),
 `self/cuda/runtime_cuda.c` (+150 lines — `_hx_cuda_launch_kernel`),
 `self/runtime.h` (+15 lines — launch ABI proto).
+
+### 2026-05-19 — RTL DSL scope decision: NOT a hexa-lang feature (Option B)
+
+Residual #5: `hexa parse firmware/boards/chip/origins/hexa-rtl/rtl/hexa_edge_top.hexa`
+fails on `rtl module hexa_edge_top { input clk: bit ... }`. Investigation:
+the 7 affected files (`rtl/*.hexa` + `sim/tb_*.hexa`, 2203 LoC total) are
+**Verilog / SystemVerilog RTL DSL with a `.hexa` extension**, not hexa-lang
+source. The colocated `Makefile` feeds them directly to `iverilog -g2005-sv`
+and `yosys read_verilog`; it presumes a `.hexa → .v` rename step that exists
+nowhere. The construct `rtl module` appears 0 times in `self/`, `stdlib/`,
+or `compiler/` — only in this one origins mirror.
+
+Decision: **Option B (RTL DSL ⊥ hexa-lang scope).** No parser change.
+Three options were considered: (A) implement an RTL DSL — rejected per
+@I id001 (hexa-lang = "native compiler with atlas-bound theorems") + @F f2
+(no third-party-codegen backend); (B) RTL ownership stays in `~/core/hexa-chip`
+where an identical `origins/hexa-rtl/` master already lives — selected, and
+the local copy is just a frozen Option-A absorption snapshot from 2026-05-10;
+(C) stub-parse `rtl module {}` as opaque — rejected as silent over-claim (g3).
+
+Landed: `inbox/notes/2026-05-19-rtl-dsl-scope-decision.md` (full decision
+record, status `resolved-ssot`), `firmware/boards/chip/origins/hexa-rtl/RTL_DSL_NOT_HEXA.md`
+(in-place marker so re-parsers get the same answer without re-investigation),
+and an annotation in `firmware/README.md` calling out the convention
+exception. Recommendation to a future hexa-chip session: rename `*.hexa
+→ *.v` in the master subtree (the Makefile's `$(RTL_SRCS:.hexa=.v)` rule
+already presumes that final extension; rename removes both the lie and
+the parse-gate trip). Zero behavior change in hexa-lang.

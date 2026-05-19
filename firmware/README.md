@@ -94,6 +94,18 @@ Selftest delta post-absorb (2026-05-10):
   cargo toolchains; not re-run during absorb. Upstream Phase D+
   matrix still holds — absorbed sources are byte-identical to upstream.
 
+## Convention exception — `origins/hexa-rtl/*.hexa` is Verilog DSL, not hexa-lang
+
+The subtree `firmware/boards/chip/origins/hexa-rtl/{rtl,sim}/` contains
+files with a `.hexa` extension whose content is in fact Verilog /
+SystemVerilog RTL DSL (`rtl module ... { input/output/wire/reg ...
+always_ff @(posedge clk) ... }`). They are fed to `iverilog -g2005-sv`
+and `yosys read_verilog` by the local `Makefile`, not to `hexa parse`
+/ `hexa build`. See `firmware/boards/chip/origins/hexa-rtl/RTL_DSL_NOT_HEXA.md`
+for the full scope decision (2026-05-19, option B — RTL DSL is owned
+by `~/core/hexa-chip`, not hexa-lang). Parse-gate sweeps must skip
+this subtree.
+
 ## Absorption mechanics
 
 Each `firmware/boards/<repo>/` is a full copy (Option A, decided
