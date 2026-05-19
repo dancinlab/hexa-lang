@@ -140,7 +140,7 @@ println("    on J2=24:", on_j2)
 // === Phase 4: Optimize the Evolved Functions ===
 // The optimize keyword asks the compiler to improve the function
 
-optimize fn evolved_fitness(value: int) -> int {
+@optimize fn evolved_fitness(value: int) -> int {
     // After evolution, this is the refined fitness function
     let targets = [2, 4, 5, 6, 12, 24]
     let mut best = 1000

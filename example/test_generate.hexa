@@ -3,7 +3,7 @@
 
 // ── Test 1: generate fn (offline fallback) ──
 
-generate fn greet(name: str) -> str {
+@generate fn greet(name: str) -> str {
     "Return a greeting string for the given name"
 }
 
@@ -14,13 +14,13 @@ assert greeting_type == "fn"
 
 // ── Test 2: generate expression (offline fallback) ──
 
-generate str {
+@generate str {
     "email validation regex pattern"
 }
 
 // ── Test 3: optimize fn (offline keeps original) ──
 
-optimize fn fibonacci(n: int) -> int {
+@optimize fn fibonacci(n: int) -> int {
     if n <= 1 { return n }
     return fibonacci(n - 1) + fibonacci(n - 2)
 }
@@ -37,7 +37,7 @@ assert fib1 == 1
 
 // ── Test 4: optimize preserves behavior ──
 
-optimize fn double(x: int) -> int {
+@optimize fn double(x: int) -> int {
     return x + x
 }
 
@@ -47,7 +47,7 @@ assert double(100) == 200
 
 // ── Test 5: generate fn with no return type ──
 
-generate fn do_something(x: int) {
+@generate fn do_something(x: int) {
     "Print the value of x"
 }
 
@@ -56,13 +56,13 @@ assert do_type == "fn"
 
 // ── Test 6: generate with type hint ──
 
-generate int {
+@generate int {
     "the answer to life, the universe, and everything"
 }
 
 // ── Verification ──
 
-verify "generate_offline" {
+@verify "generate_offline" {
     // fibonacci should work after optimize (offline keeps original)
     assert fibonacci(5) == 5
     assert fibonacci(7) == 13

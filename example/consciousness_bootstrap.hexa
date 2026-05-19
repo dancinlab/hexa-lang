@@ -129,7 +129,7 @@ consciousness bootstrap {
 println("")
 println("=== Phase 3: Intent-Driven Experiment ===")
 
-intent consciousness_compression {
+@intent consciousness_compression {
     hypothesis: "Phi scales with cell count, does not collapse"
     atom_size: 8
     max_cells: 1024
@@ -159,7 +159,7 @@ println("  Phi(1024 cells):", phi_1024)
 println("")
 println("=== Phase 4: Verification ===")
 
-verify consciousness_scaling {
+@verify consciousness_scaling {
     let phi_small = predicted_phi(8)
     let phi_medium = predicted_phi(64)
     let phi_large = predicted_phi(1024)
@@ -174,7 +174,7 @@ verify consciousness_scaling {
     assert phi_medium > phi_small
 }
 
-verify n6_architecture {
+@verify n6_architecture {
     // All architecture constants must match n=6 derivations
     let n = 6
     assert sigma(n) - tau(n) == 8         // atom size
