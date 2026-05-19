@@ -3717,3 +3717,54 @@ RFC 055 §6.1 specified.
 files; no binary promote (`compiler/main.hexa` is the self-host compiler
 front-end, not the driver bootstrap — @D g_commit_push_deploy applies to
 `hexa_cc.c` / `hexa_v2`, neither of which this cycle touches).
+
+### 2026-05-20 — RFC 055 055-P3b — generic `_nvptx_lower_func` gains the STMT_BR primitive
+
+First slice of 055-P3b (the generic MIR-walk lowering of stmt kinds
+beyond the 055-P0 FP64-arithmetic straight-line subset). The crucial
+property of the 055-P0 generic path was that it ONLY handled
+`STMT_ASSIGN` / `STMT_BINOP{add,sub,mul}` / `STMT_RETURN` — every other
+stmt kind became an honest stub comment in the emitted PTX. The 055-P1
+/ 055-P2 keystone kernels (`emit_ptx_{vec_add,gemm}_module`) sidestepped
+that gap by HAND-emitting the full kernel body. 055-P3b chips away at
+the gap one stmt kind at a time.
+
+**What landed (compiler/codegen/nvptx_target.hexa, +10 lines additive):**
+- `_nvptx_lower_stmt` learns `STMT_BR` (MIR unconditional branch) →
+  `bra $L_<target_block>;`. PTX has no fall-through-only convention;
+  every block must end in a terminator, so the lowering emits an
+  explicit `bra` even when the target block follows in source order.
+  Type-agnostic — no new register-bank requirement.
+- Honest-stub comment updated to name the still-unhandled kinds
+  (`STMT_BR_COND` / `STMT_CALL` / `STMT_LOAD` / `STMT_STORE`) as "rest
+  of 055-P3b" — a clear next-target for a future cycle.
+
+**Verification (compiled path, standalone — no full-compiler build needed):**
+- `compiler/codegen/nvptx_lower_test.hexa` (new) — hand-builds a
+  2-block MFunc (`fn br_smoke(a,b){ r = a+b ; br -> block 1 } { return }`)
+  the same way `codegen_test.hexa` builds CPU test MIR, runs
+  `codegen_emit_ptx_sm80`, asserts the lowered PTX contains the block-0
+  label, the f64 `add` for the binop, the `bra $L_1;` terminator from
+  the new STMT_BR case, the block-1 label, and the `ret;`. **PASS**.
+- Regression — the existing 055-P0 `nvptx_emit_test`, 055-P1
+  `nvptx_vec_add_test`, 055-P2 `nvptx_gemm_test` all still **PASS**
+  post-extension (the new STMT_BR branch is purely additive and never
+  reached by their fixtures).
+
+**Honest scope — still 055-P3b (the rest, not this commit):**
+- `STMT_BR_COND` needs the predicate-register (`%p<id>`) dance, which
+  requires per-Local type tracking separate from the existing
+  `%fd<id>` collection in `_nvptx_collect_f64_regs`.
+- `STMT_CALL` for known gpu intrinsic names (`gpu_thread_id_x` etc.)
+  → sreg `mov.u32` reads; non-intrinsic `STMT_CALL` stays a stub.
+- `STMT_LOAD` / `STMT_STORE` → `.global.f64` / `.shared.f64`
+  address-space ops with the existing 055-P1 address-arithmetic
+  helpers.
+
+The per-Local type tracking refactor is the prerequisite for the
+remaining three kinds; the STMT_BR primitive lands first because it
+doesn't need it.
+
+**Files** — added: `compiler/codegen/nvptx_lower_test.hexa`. Extended:
+`compiler/codegen/nvptx_target.hexa` (+10 lines, `_nvptx_lower_stmt`
+gains the STMT_BR case + the honest-stub comment is rewritten).
