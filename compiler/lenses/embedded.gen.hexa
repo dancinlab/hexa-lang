@@ -235,7 +235,35 @@ pub fn lens_apply_constraint_flip_flip_dim(view: AtlasView) -> array {
 }
 
 pub fn lens_apply_falsify_self_re_cite_audit(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // Phase C-1.b — lens-table self-audit (no atlas dep — immune to C-2
+    // 4 GB memcap blocker that prevents view materialization).
+    //
+    // Scans LENS_NODES.cite arrays; if any LensNode entry has empty cite,
+    // emit one summary Candidate flagging the count. This is a real
+    // finding driven by RFC §10 cite-enforced governance — every lens
+    // body MUST eventually cite >=1 atlas_node_id once populated; B-1
+    // seeded all 32 with cite=[] (acknowledged in RFC §13 Phase C-1.b
+    // as the body-populate item).
+    let n = len(LENS_NODES)
+    let mut empty_count = 0
+    let mut i = 0
+    while i < n {
+        if len(LENS_NODES[i].cite) == 0 {
+            empty_count = empty_count + 1
+        }
+        i = i + 1
+    }
+    if empty_count == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "falsify_self.re_cite_audit.lens_table_empty_cites",
+        family: "falsify_self",
+        proposed: "Lens table has " + to_string(empty_count) + " of " + to_string(n) + " LensNode entries with empty cite[] — populate per RFC §10 cite-enforced governance.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_falsify_self_cite_unreachable(view: AtlasView) -> array {
     // Phase C-1.a smoke body — emits one synthetic Candidate per cycle to
