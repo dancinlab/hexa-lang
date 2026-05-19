@@ -182,20 +182,20 @@ pub fn lookup_static(kind: string, id: string) -> AtlasNode {
     return lookup(idx, kind, id)
 }
 
-// --- merged lookup (rodata + runtime overlay) ------------------------------
+// --- merged lookup (binary built-in atlas) ---------------------------------
 //
-// Phase 3 foundation (doctrine v2 룰 5, model b — "rodata seed + runtime
-// overlay"). The rodata index is the canonical seed; the overlay at
-// ~/.hx/data/atlas.overlay.n6 carries discoveries promoted at runtime
-// by drill / falsifier / telescope chains. Conflict policy: RODATA WINS.
-// An overlay entry whose (kind, id) matches a rodata entry is silently
-// dropped at lookup; the first such collision per process is logged on
-// stderr via overlay_note_conflict.
+// POLICY 2026-05-19 — atlas is unconditionally binary built-in. The live
+// atlas is the compile-time embed (embedded.gen.hexa → dist/atlas.hxc).
+// The runtime `.n6` overlay LOAD path is RETIRED: overlay_load_cached()
+// now returns [] unconditionally, so the "merged" variants below resolve
+// to the binary-built-in rodata view ALONE. `.n6` files are a `hexa atlas
+// export` OUTPUT artifact only; new equations reach the live atlas via
+// GitHub PR into embedded.gen.hexa, never through an on-disk overlay.
+// See @D g_atlas_binary_builtin in AGENTS.tape.
 //
-// Callers that need overlay-aware lookups should reach for these merged
-// variants. The original lookup_static / static_atlas remain in place
-// for hot paths that explicitly want the deterministic, hash-pinned
-// view (e.g. ATLAS_HASH drift checks).
+// atlas_lookup_merged / atlas_list_merged are kept as stable surfaces so
+// existing callers (drill / audit) compile unchanged; with the overlay
+// retired-to-empty they are now equivalent to atlas_lookup / atlas_list.
 
 // atlas_lookup — convenience alias matching the spec API name from the
 // Phase 3 task description. Wraps the existing lookup_static under a

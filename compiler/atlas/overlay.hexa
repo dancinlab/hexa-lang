@@ -1,22 +1,31 @@
-// HEXA Native Compiler — Phase 3 foundation: atlas overlay surface
+// HEXA Native Compiler — atlas overlay surface (EXPORT-ONLY)
 //
-// @version 0.1.0
-// @capabilities [fs_read, fs_write]
+// @version 0.2.0
+// @capabilities [fs_write]
 //
-// Implements the runtime-mutable half of the doctrine v2 룰 5 write
-// policy ("rodata seed + runtime overlay", model b). The atlas rodata
-// embed (compiler/atlas/embedded.gen.hexa) is the canonical seed —
-// hash-pinned, deterministic, regenerated only via tool/atlas_embed_gen.
-// Anything the live system discovers at runtime (drill chain, falsifier
-// promotions, telescope-verified additions) is appended to a single
-// per-user overlay file:
+// POLICY 2026-05-19 — atlas is unconditionally binary built-in.
+// The hexa-lang atlas is compile-time embedded; its SSOT is
+// compiler/atlas/embedded.gen.hexa, merged into the compiler at build
+// time (SPEC.md §2.2 "atlas embedding — static, baked into compiler").
+// `.n6` files (atlas.overlay.n6, atlas.append.*.n6) are now ONLY a
+// `hexa atlas export` OUTPUT artifact — produced on demand for interop
+// / inspection. They are NOT a runtime-loaded "live overlay".
 //
-//   ~/.hx/data/atlas.overlay.n6
+// New equations discovered via `hexa kick` / `hexa verify` are absorbed
+// via GitHub PR directly into the binary built-in atlas. The old runtime
+// path — "~/.hx/data/atlas.overlay.n6 discovery → 3+ hits → promote into
+// rodata regen" — is RETIRED. Equations do NOT pass through `.n6` to
+// reach the live atlas.
 //
-// Format: same .n6 syntax as the rodata seed (see compiler/atlas/parser),
-// header line `@P|@C|@L|@E <id> ...` plus continuation lines. The
-// merger's first-wins policy carries through: rodata always wins on
-// (kind, id) conflict; the overlay can only ADD, never override.
+// This module therefore keeps ONLY the write surface (overlay_append* —
+// the export-artifact emitters). The runtime LOAD path (overlay_load /
+// overlay_load_cached) is retired-to-empty: it returns [] unconditionally
+// so the live, binary-built-in atlas is never mutated by an on-disk file.
+// See @D g_atlas_binary_builtin in AGENTS.tape.
+//
+// .n6 export format: same syntax as the rodata seed (see
+// compiler/atlas/parser), header line `@P|@C|@L|@E <id> ...` plus
+// continuation lines.
 //
 // Why append-only:
 //   * Single writer, many readers — no locking required (POSIX write(2)
@@ -26,13 +35,6 @@
 //   * Audit trail — the file is a tail of every discovery in insertion
 //     order; rotating is a `mv && touch` away.
 //
-// Cache invalidation:
-//   `overlay_load_cached` checks file size on every call. Size delta is
-//   the cheapest signal that anyone has appended since the last read
-//   (file_mtime is not available as a builtin yet). False positives
-//   (size unchanged but content rewritten) are theoretically possible
-//   but require an explicit truncate+rewrite, which the API never does.
-
 use "compiler/atlas/parser"
 
 // --- meta / cache ----------------------------------------------------------
@@ -99,53 +101,30 @@ pub fn overlay_ensure_dir() -> void {
     mkdir(dir)
 }
 
-// --- read surface ----------------------------------------------------------
+// --- read surface (RETIRED — atlas is binary built-in) ---------------------
+//
+// POLICY 2026-05-19: the runtime overlay-LOAD path is retired. The live
+// atlas is unconditionally the binary built-in (compiler/atlas/embedded.gen
+// → dist/atlas.hxc sidecar). No `.n6` file on disk is ever merged into the
+// live atlas at runtime — `.n6` is an EXPORT artifact only. New equations
+// reach the live atlas via GitHub PR into embedded.gen.hexa, never through
+// an on-disk overlay. See @D g_atlas_binary_builtin in AGENTS.tape.
+//
+// overlay_load / overlay_load_cached are kept ONLY as stable, empty-return
+// surfaces so existing callers (atlas_lookup_merged, audit_overlay, drill
+// round seed-dedup) compile unchanged and observe a binary-only atlas.
 
-// Parse the overlay file into AtlasNodes. Returns [] if the file is
-// missing or empty. Uses the same line-parser as the rodata seed
-// (compiler/atlas/parser::parse_atlas_file) so format identity is
-// guaranteed — anything the rodata generator can emit, the overlay
-// loader can read.
+// overlay_load — RETIRED. Always returns []; the on-disk `.n6` file is
+// never parsed into the live atlas. parse_atlas_file remains available to
+// the `hexa atlas export` artifact path (export, not runtime load).
 pub fn overlay_load() -> array {
-    let path = overlay_path()
-    if !file_exists(path) { return [] }
-    if file_size(path) == 0 { return [] }
-    return parse_atlas_file(path, "atlas.overlay.n6")
+    return []
 }
 
-// Cached overlay load. Refreshes the cache when the file size has
-// changed since the last call (or first call). Most lookups in the
-// hot resolve path will hit the cache; appends invalidate naturally
-// on the next call.
+// overlay_load_cached — RETIRED. Always returns []. The atlas is binary
+// built-in; there is no runtime overlay to cache.
 pub fn overlay_load_cached() -> array {
-    let path = overlay_path()
-    if !file_exists(path) {
-        // File doesn't exist yet. Mark loaded with empty cache so we
-        // don't re-stat every call.
-        if !_g_overlay_meta.loaded {
-            _g_overlay_meta = OverlayMeta {
-                file_path: path,
-                entry_count: 0,
-                last_size: 0,
-                loaded: true
-            }
-            _g_overlay_cache = []
-        }
-        return _g_overlay_cache
-    }
-    let sz = file_size(path)
-    if _g_overlay_meta.loaded && _g_overlay_meta.last_size == sz {
-        return _g_overlay_cache
-    }
-    let nodes = parse_atlas_file(path, "atlas.overlay.n6")
-    _g_overlay_cache = nodes
-    _g_overlay_meta = OverlayMeta {
-        file_path: path,
-        entry_count: len(nodes),
-        last_size: sz,
-        loaded: true
-    }
-    return nodes
+    return []
 }
 
 // Linear scan over an overlay node list to find a node by id.

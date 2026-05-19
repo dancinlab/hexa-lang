@@ -137,6 +137,14 @@
   authority = "[@x_spec]"
   @> AGENTS.md
 
+@D g_atlas_binary_builtin := "atlas is unconditionally binary built-in" :: governance [required d=2026-05-19 active]
+  rule = "The hexa-lang atlas is unconditionally binary built-in — compile-time embedded. The SSOT is compiler/atlas/embedded.gen.hexa, merged into the compiler at build time. There is no runtime-loaded live overlay."
+  why = ".n6 files (atlas.n6 · atlas.overlay.n6 · atlas.append.*.n6) are now ONLY a `hexa atlas export` OUTPUT artifact — produced on demand for interop / inspection / external tooling. The old runtime path (~/.hx/data/atlas.overlay.n6 · discovery → atlas overlay → 3+ hits → promote into rodata regen) is RETIRED. Equations do NOT go through .n6 to reach the live atlas."
+  apply = "New equations discovered via `hexa kick` / `hexa verify` are absorbed via GitHub PR directly into the binary built-in atlas — the PR regenerates + commits the embedded atlas source (compiler/atlas/embedded.gen.hexa). Direct fold-to-live is forbidden; every equation lands via reviewable PR."
+  authority = "user directive 2026-05-19 'atlas 는 무조건 바이너리 빌트인 · .n6 는 export 출력물 전용 · 신규 식은 GitHub PR 로 빌트인 흡수'; reinforces SPEC.md §2.2 'atlas embedding — static, baked into compiler'."
+  cross-ref = "@D g6 citation-enforced-strict-lint (every formula-bearing line @cites the embedded atlas) · upstream principle 'every equation via PR; direct fold-to-live forbidden'"
+  @> AGENTS.md
+
 @D g7 := "inbox-patches-pipeline" :: governance [required]
   rule = "External patches arrive at inbox/patches/<descriptive-name>.md — one concept per file."
   flow = "[downstream consumer] → file at inbox/patches/ → upstream review → integration to self/ + RFC log"
