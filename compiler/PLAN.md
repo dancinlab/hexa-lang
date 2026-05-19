@@ -2245,3 +2245,20 @@ Note: post-deletion the parity harness's "interp arm"
 degenerates to a compiled-corpus regression smoke. The meaningful
 interp↔compiled byte-eq proof was the PRE-DELETION 13→0 PARITY GATE
 PASS; that measurement stands as the safety evidence for the deletion.
+
+### 2026-05-19 — R7 tidy + production driver refresh
+
+The R7 tidy (build/hexa_interp binary + resolve_interp()/_probe_interp_at()
+dead-code removal) landed via the origin/main→rfc043 merge `98d3b9af`;
+the deploy commits `90125d5d`/`8bbc9199` are now reachable from
+origin/rfc043-hexa-torch (rfc043 sync complete).
+
+Caught a production-driver staleness bug: the live `hexa` shim
+exec's `~/core/hexa-lang/hexa.real`, but the post-step-2 driver had
+only been installed to `~/.hx/bin/hexa.real` (an unused path). The
+real `hexa.real` was a 2026-05-18 build still carrying the pre-rewrite
+`cmd_run_user_direct` — so `hexa run <file>` failed with "interp
+interpreter not found". Rebuilt the driver from the merged main.hexa
+(597,488 B) and installed it to `~/core/hexa-lang/hexa.real`; verified
+`hexa run` (rc 7), `hexa --version`, `hexa parse self/main.hexa` all
+clean. hexa.real is gitignored — no committable artifact, log-only.
