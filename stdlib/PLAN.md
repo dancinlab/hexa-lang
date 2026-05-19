@@ -74,7 +74,11 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   char-class 스캐너 hand-roll, cross-line `\s` 케이스(hardwall·vendor)는
   ±window join 정밀 재확인으로 803/798/5·30/30/0 정확 일치.
   `.py` 원본은 fallback·재패리티용으로 **유지**(제거는 별도 결정).
-- **T3** ⏳ hexa-bio stdlib-only 이관 — **전수조사 완료 2026-05-18**:
+- **T3** ✅ **완료 2026-05-19** — hexa-bio 127/127 run_all.sh 게이트
+  hexa-native dispatch (111 `.hexa` + 15 verb-native + 1 hexa_run).
+  3 borderline 게이트만 외부 python 도구 충실 위임. 상세는 진행로그.
+  (아래는 착수 당시 전수조사 기록 — 역사 보존):
+- **T3 (history)** — **전수조사 완료 2026-05-18**:
   119 `.py` 중 **104 stdlib-only(지금 이관)** + 15 Stage-2(`_qiskit_
   bridge/module/` 전량, T4/T5). 분류:
   - `_python_bridge/module/*.py` **55/55** stdlib-only (생물물리
@@ -131,10 +135,16 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   `shasum -a 256`)이 Python 과 일치. 이게 서면 T3-json 다수 +
   `regression_audit` 해시줄 + T4 자산 동시 해금. (rfc043-hexa-torch
   브랜치, hexa atlas PR-only 규약 유의 — 직접 fold-to-live 금지.)
-- **T4** 🔒 Stage 2 — `atoms`/`crystal`/`mol`/`mlff`/`quantum` 실구현
-  (각 `mod.hexa` planned API 채움) → science-stack 의존 모듈/어댑터 해금
+- **T4** 🔄 **Stage-2 genuine 커널 완료 2026-05-19** (`rfc043-hexa-torch`)
+  — `stdlib/{atoms,crystal,mol}/mod.hexa` Stage-1+Stage-2 커널 랜딩·검증:
+  atoms{bulk,neighborlist,from_cif,emt_energy} · crystal{coords,angles,
+  N-point-hull,from_cif,spacegroup} · mol{weight,hba,hbd,from_smiles,
+  logp,tpsa}. quantum 은 기구현. upstream fix: runtime.h 17 hexa_math_*
+  + runtime.c execinfo.h. **잔여**: `atoms_emt_relax`(force+line-search,
+  bounded) · `mlff` Stage-2 NNP(=T5, 수개월) — 그동안 mlff bridge(기존
+  Python NNP 패키지 tool 셸아웃, interim)로 사용가능화 진행 중.
 - **T5** 🔒 Stage 2 잔여 — `nd`/`grad` 정밀화, `_absorption_bridge` 16,
-  hexa-bio 양자화학 (qiskit/pyscf hexa-native — 메가)
+  hexa-bio 양자화학 (qiskit/pyscf hexa-native — 메가). T4 완료 후.
 
 각 트랙은 끝나야 다음으로(T2 는 T1 패턴 의존, T4 는 T1~T3 무손실 완료 후).
 
