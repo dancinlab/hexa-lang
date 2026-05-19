@@ -23,7 +23,7 @@ At-a-glance
   interim  : W1/W2/F speed the C path; relief only while the C fallback lives
   naming   : drop bootstrap vestiges (_v2 _c2 aprime s4) — separate cycle
   measured : clang = 80% of build wall; runtime.c recompile = 53% alone
-  status   : S1+S2 done · S5 wiring landed · S3 rate-limited (retry after reset)
+  status   : S1+S2+S3 DONE · self-host fixpoint PROVEN (gen1.s ≡ gen2.s); S4 next
 ```
 
 ---
@@ -115,8 +115,16 @@ S2  full-closure codegen 완주 — DONE 2026-05-20 (commit a94ed6e3).
     long pole, ~79% — not a blocker, <2min total), emit 1.2s. codegen
     diagnostics clean — 0 errors, 0 unmapped-builtins, 11 HX4001 warns.
     S2-followup (non-blocking): codegen sub-phase instrumentation.
-S3  assemble + link self-host — full .s -> assemble -> link -> 2nd-gen
-    aprime_cc; 1st-gen vs 2nd-gen byte-diff = self-host fixpoint proof.
+S3  self-host fixpoint — PROVEN 2026-05-20. gen1 (built via the hexa_v2
+    -> C -> clang path) and gen2 (built by assembling gen1's emitted .s
+    of the full closure + a 3-fn shim `gen2_shim.c` mapping native-asm
+    builtin names `sha256_hex`/`list_dir`/`mono_ns` to the `hexa_*`
+    runtime exports — the asm path lacks build_aprime.sh's sed rewrites)
+    both compile the same flatten of `compiler/main.hexa` to BYTE-
+    IDENTICAL `.s` — 10,094,662 B, md5
+    `29426b801cb072b2861bd608e884b20b`. The compiler reproduces its own
+    emitted code: gen3 follows transitively. Honest caveat: the shim is
+    a *bootstrap-time naming-convention bridge*, not a semantic gap.
 S4  drop the hexa_v2 dependency — tool/build_aprime.sh stage 2 uses
     aprime_cc instead of the C transpiler hexa_v2.
 
@@ -407,3 +415,15 @@ ultimately removes.
   ONLY G-ladder. S7's `tool/hexa_link.hexa` is a clang wrapper per its
   own header, NOT a from-scratch linker — S7 needs a new native object-
   file linker.
+- 2026-05-20 — **🛸 S3 PROVEN — SELF-HOST FIXPOINT.** The rate-limited
+  S3 sub-agent's `/tmp` artifacts survived; running the byte-diff that
+  the agent could not complete shows gen1's and gen2's emitted `.s` of
+  the full `compiler/main.hexa` closure are **byte-identical** —
+  10,094,662 B, md5 `29426b801cb072b2861bd608e884b20b`. gen1 = built via
+  `hexa_v2` -> C -> clang; gen2 = assembled from gen1's `.s` + a 3-fn
+  shim (`gen2_shim.c`, asm-path naming bridge for `sha256_hex` /
+  `list_dir` / `mono_ns`). The compiler reproduces its own emitted code.
+  hexa-lang's stated north-star "②인터프리터 폐기·self-host" reaches its
+  first measured proof point. Campaign branch state: S1 ✅ + S2 ✅ + S5
+  ✅ (wiring) + S3 ✅. Next: S4 (drop hexa_v2 from build_aprime.sh
+  stage 2 — now concretely doable).
