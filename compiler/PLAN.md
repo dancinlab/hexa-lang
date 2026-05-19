@@ -3233,3 +3233,31 @@ EnumPath rework deliberately not done (larger, more-principled option).
   Ctrl+letter), Enter path preserved as subset. parse-gate (hexa_real
   parse) clean; NOT runtime/byte-eq tested; binary promote = standard
   separate deploy step.
+
+### 2026-05-19 — interp-retirement tidy cycle: stale doc-string cleanup (R7 closure)
+
+- 2026-05-19 — R7 의 "다음 tidy cycle 에서 물리 제거" 항목 점검 cycle.
+  `self/main.hexa` 를 fresh grep 한 결과 `resolve_interp()` ·
+  `_probe_interp_at()` · `cmd_run_vm_mode` · `HEXA_FORCE_INTERP` 블록은
+  이미 R7 Cycle C (`25a9031d`) + residue-removal (`6ba61c8a`) 에서 전부
+  제거됨 — 잔여 `interp` 토큰 33건 전부 주석/설명문이며 runtime-dead
+  코드 0건. 본 cycle 의 실질 작업 = 사후 부정확해진 user-facing doc
+  string 2건 정정 (self/main.hexa −2/+2): (1) 파일 헤더 서브커맨드 표의
+  `hexa run ... (interp 인터프리터 위임)` → `(compile-then-exec; interp
+  R7 retired)`; (2) `cmd_help()` USAGE 출력의 `Execute .hexa script
+  (interpreter)` → `(compile-then-exec)`. 둘 다 R7 cutover 후
+  `cmd_run`/`cmd_run_user_direct` 가 compile-then-exec 이므로 "interpreter"
+  표기가 사실과 불일치였음.
+- `build/hexa_interp` 바이너리는 git-ignored (`git check-ignore` 확인) →
+  task scope 대로 미터치. `self/main.hexa` L2864 `av0_base == "interp"`
+  self-name 가드는 행동성 가드 (binary 이름이 `interp` 일 때 self 인식)
+  이므로 provably-dead 아님 → 보수적으로 보존.
+- 검증 (measured): runtime.o 빌드 후 `self/native/hexa_v2 self/main.hexa
+  /tmp/out.c` parse-gate PASS. `build/stage1/main.c` regen 후 canonical
+  recipe (`clang -O3 -fno-strict-aliasing -std=c11 -I self
+  build/stage1/main.c self/runtime.c`) 로 `hexa.real` 재빌드 — 0 error /
+  0 duplicate-symbol. 재빌드 드라이버로 `--version` rc=0 ·
+  `build <smoke> -o ...` round-trip rc=0 (산출 바이너리 `smoke-ok` 출력) ·
+  `run <smoke>` (compile-then-exec) rc=0. 3/3 PASS — 제거가 회귀 0 임을
+  측정 입증. g3-honest: 본 cycle 은 dead-code 신규 삭제 0 (R7 이 이미
+  완료) — 부정확 doc string 2줄 정정 + tidy 점검 보고가 실질 산출물.
