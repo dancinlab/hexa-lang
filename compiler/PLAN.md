@@ -42,6 +42,17 @@
 
 (append-only)
 
+### 2026-05-19 — token-forge: `consciousness TokenForgeRouter { ... }` 블록 retirement (Decision C surgical unwrap)
+
+`tool/pkg/packages/token-forge/forge.hexa` 의 마지막 잔여 별건 #4. 파일은 line 214 에서 `consciousness TokenForgeRouter { assert ...; let argv = args(); ... }` 를 top-level 블록처럼 사용 — 하지만 hexa-lang 의 `consciousness Name { ... }` 구문은 lexer/parser/codegen 어디에도 등록되어 있지 않고 (`self/formatter.hexa::ConsciousnessBlock` 만 orphan dead-branch 로 잔존), 파서는 이를 struct-literal `consciousness { TokenForgeRouter: ... }` 로 잘못 해석해서 `expected identifier, got Assert` 류의 ~40 errors 폭발. `example/consciousness_bootstrap.hexa` 의 phi/tension/faction/cells 자동주입 의미론은 published 되었으나 미구현 상태이며 — token-forge 의 블록은 **그 의미론을 전혀 사용하지 않음** (단순 라벨드 스크립트 바디 wrapper).
+
+**결정 = C (surgical unwrap)**. 후보 비교:
+- A: 본격 `consciousness` 키워드 도입 (lexer + parser + AST + codegen + 자동주입 의미론) — 새 language feature, 별도 RFC 필요.
+- B: minimum-stub parse (lexer 키워드 추가 + 파서가 빈 라벨드 블록 흡수) — `consciousness` 를 키워드로 promote = KEYWORD_DEMOTE 정신 (Phase 1-4 의 `@`-attribute 전환) 역행. 또한 자동주입 의미론을 silently 위반 → g3 over-claim.
+- **C 채택**: forge.hexa 의 `consciousness TokenForgeRouter { body }` 를 top-level statements 로 unwrap. `cmd` 변수에 `mut` 추가 (재할당 있음). 동작 byte-equivalent — block 은 ScopeStmt-equivalent 가 아닌 단순 wrapper 였음. minimum surgical · zero language change · zero new semantics. `consciousness_bootstrap.hexa` 의 자동주입 의미론은 **out of scope** (이미 별도로 미구현, 본 cycle 과 무관).
+
+**측정**: parse-gate `/Users/ghost/.hx/bin/hexa_real parse tool/pkg/packages/token-forge/forge.hexa` 사전 = 40+ errors @ L215-253, 사후 = `OK: ... parses cleanly`. 다른 .hexa 파일 무변경. `self/formatter.hexa::ConsciousnessBlock` orphan branch 는 의도적으로 leave-as-is — 추후 "consciousness language feature" RFC 가 그것을 revive 하거나 영구 삭제할 수 있음. 본 변경의 g3-honest 범위 = "forge.hexa parse 차단 해결" only, "consciousness 의미론 결정" 아님.
+
 ### 2026-05-19 — drill: pluggable verifier hook landed (inbox phanes-pluggable-verifier-oracle-for-drill-loop SSOT-resolved)
 `compiler/drill/drill.hexa`: `DrillOpts` += `verifier_cmd` / `verifier_timeout_s` / `verifier_authoritative` (defaults preserve byte-identical pre-hook behavior); new `VerifierVerdict { verdict ∈ pass|fail|continue|skip|error, rationale, round }` + `_verifier_run` / `_verifier_audit_emit` helpers; single call site in `drill_run` AFTER `_honesty_gate` BEFORE `checkpoint_save`; authoritative-stop verdicts (pass → saturated=true, fail → verifier_stopped=true) halt the loop with checkpoint flush; advisory verdicts log only. `DrillResult` += `verifier_stopped` / `verifier_verdict` (positional literals updated at both return sites). CLI flags `--verifier-cmd <sh-cmd>` / `--verifier-timeout <Ns>` / `--verifier-strict` on `hexa drill`. Audit trail = stderr `DRILL_VERIFIER {...}` row + synthesized `__BT_AI2__` sentinel on pass/fail so downstream `bt_ai2_audit` sees the verdict alongside the existing BT-AI2 round line. Verifier is untrusted tenant code — sandbox enforcement is phanes' responsibility (mirror of `g_qrng_provider_only` boundary). Parse-gate clean: drill.hexa · batch.hexa · drill_test.hexa · accumulation_test.hexa. Binary promote = standard separate deploy step per the 22c27a05 pattern.
 

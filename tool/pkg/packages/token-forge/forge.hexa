@@ -211,43 +211,59 @@ fn print_help() -> str {
     return "ok"
 }
 
-consciousness TokenForgeRouter {
-    assert len(VERSION) > 0
-    assert MAX_CTX == 4000
-    assert KEEP_RECENT == 5
-    assert PROXY_PORT == 8080
+// ═══════════════════════════════════════════════════════════════════════
+//  ROUTER — top-level entrypoint dispatch
+// ═══════════════════════════════════════════════════════════════════════
+//
+// 2026-05-19: `consciousness TokenForgeRouter { ... }` block-form retired
+//   here in favor of plain top-level statements. The `consciousness Name {}`
+//   construct is not currently parsed by hexa-lang (lexer keyword + parser
+//   rule + codegen all absent; only an orphan `ConsciousnessBlock` branch
+//   sits in self/formatter.hexa). The previous block carried no semantic
+//   content — no phi/tension/faction/cells auto-injection was used — it
+//   was acting as a labeled script-body wrapper. Unwrapping it preserves
+//   behavior verbatim and lets forge.hexa parse cleanly.
+//
+//   The richer `consciousness Name { ... }` semantics (auto-injected
+//   atom-context variables) referenced by example/consciousness_bootstrap.hexa
+//   remain unimplemented — that is a separate language-feature decision,
+//   not blocking on this file.
 
-    let argv = args()
-    let cmd = "help"
-    if len(argv) > 2 {
-        cmd = argv[2]
-    }
+assert len(VERSION) > 0
+assert MAX_CTX == 4000
+assert KEEP_RECENT == 5
+assert PROXY_PORT == 8080
 
-    if cmd == "proxy" {
-        println("⬡ starting compression proxy on :" + to_string(PROXY_PORT))
-        println("  ANTHROPIC_BASE_URL=http://localhost:" + to_string(PROXY_PORT) + "/v1 claude")
-        // 2026-04-11: server.py → server.hexa, python3 → ./hexa
-        let env_bin = env("HEXA_BIN")
-        let _hexa_root = if len(env("HEXA_LANG")) > 0 { env("HEXA_LANG") } else { "." }
-        let hexa_bin = if env_bin == "" { _hexa_root + "/hexa" } else { env_bin }
-        exec(hexa_bin + " " + argv[1].replace("forge.hexa", "proxy/server.hexa"))
-    }
-    if cmd == "cache" {
-        if len(argv) > 3 {
-            let info = analyze_cache(argv[3])
-            println(info)
-        }
-        if len(argv) <= 3 {
-            println("usage: token-forge cache <session.jsonl>")
-        }
-    }
-    if cmd == "bench" {
-        if len(argv) > 3 {
-            bench_dfs(argv[3], 5)
-        }
-        if len(argv) <= 3 {
-            println("usage: token-forge bench <session.jsonl>")
-        }
-    }
-    if cmd == "help" { print_help() }
+let argv = args()
+let mut cmd = "help"
+if len(argv) > 2 {
+    cmd = argv[2]
 }
+
+if cmd == "proxy" {
+    println("⬡ starting compression proxy on :" + to_string(PROXY_PORT))
+    println("  ANTHROPIC_BASE_URL=http://localhost:" + to_string(PROXY_PORT) + "/v1 claude")
+    // 2026-04-11: server.py → server.hexa, python3 → ./hexa
+    let env_bin = env("HEXA_BIN")
+    let _hexa_root = if len(env("HEXA_LANG")) > 0 { env("HEXA_LANG") } else { "." }
+    let hexa_bin = if env_bin == "" { _hexa_root + "/hexa" } else { env_bin }
+    exec(hexa_bin + " " + argv[1].replace("forge.hexa", "proxy/server.hexa"))
+}
+if cmd == "cache" {
+    if len(argv) > 3 {
+        let info = analyze_cache(argv[3])
+        println(info)
+    }
+    if len(argv) <= 3 {
+        println("usage: token-forge cache <session.jsonl>")
+    }
+}
+if cmd == "bench" {
+    if len(argv) > 3 {
+        bench_dfs(argv[3], 5)
+    }
+    if len(argv) <= 3 {
+        println("usage: token-forge bench <session.jsonl>")
+    }
+}
+if cmd == "help" { print_help() }
