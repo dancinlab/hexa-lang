@@ -447,9 +447,9 @@ if p_is_selftest {
 } else {
     let mut p_topo_name: string = "t3"
     let mut p_ticks: i64 = 50
-    if _pargs.len() >= 3 { p_topo_name = _pargs[2] }
-    if _pargs.len() >= 4 {
-        try { p_ticks = to_int(_pargs[3]) } catch e { p_ticks = 50 }
+    if _pargs.len() >= 2 { p_topo_name = _pargs[1] }
+    if _pargs.len() >= 3 {
+        try { p_ticks = to_int(_pargs[2]) } catch e { p_ticks = 50 }
     }
     run_pipeline(p_topo_name, p_ticks)
 }

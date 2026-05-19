@@ -162,8 +162,8 @@ fn load_trajectories(path: string) -> [[i64]] {
 // Enumerate C(M,k) subsets in lexicographic order (for small k), write TC each.
 // For k<=3 enumerate all; k>=4 use stride sub-sampling via --n-samples.
 let _args = args()
-if _args.len() >= 3 {
-    if _args[2] == "--self-test" {
+if _args.len() >= 2 {
+    if _args[1] == "--self-test" {
         // identical triple (max TC)
         let mut x: [i64] = []
         let mut y: [i64] = []
@@ -192,12 +192,12 @@ if _args.len() >= 3 {
         s2.push(x2); s2.push(y2); s2.push(z2)
         let r2 = tc_k(s2, 3)
         println("independent triple TC=" + to_string(r2) + " (min, should be small)")
-    } else if _args.len() >= 4 {
-        let in_path = _args[2]
-        let out_path = _args[3]
+    } else if _args.len() >= 3 {
+        let in_path = _args[1]
+        let out_path = _args[2]
         let mut k_order: i64 = 3
         let mut n_samples: i64 = 0
-        let mut ai = 4
+        let mut ai = 3
         while ai < _args.len() {
             if _args[ai] == "--k" && ai + 1 < _args.len() {
                 try { k_order = to_int(_args[ai + 1]) } catch e { k_order = 3 }

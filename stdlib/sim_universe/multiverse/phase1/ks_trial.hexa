@@ -144,15 +144,15 @@ fn mean_std(arr: [i64]) -> [i64] {
 
 // --- main ---
 let _args = args()
-if _args.len() < 7 {
+if _args.len() < 6 {
     println("usage: hexa ks_trial.hexa <anu_mi_txt> <prng_mi_txt> <trial_idx> <estimator> <out_jsonl>")
 } else {
-    let anu_path = _args[2]
-    let prng_path = _args[3]
+    let anu_path = _args[1]
+    let prng_path = _args[2]
     let mut trial_idx = 0
-    try { trial_idx = to_int(_args[4]) } catch e { trial_idx = 0 }
-    let estimator = _args[5]
-    let out_path = _args[6]
+    try { trial_idx = to_int(_args[3]) } catch e { trial_idx = 0 }
+    let estimator = _args[4]
+    let out_path = _args[5]
 
     let a = load_ints(anu_path)
     let b = load_ints(prng_path)

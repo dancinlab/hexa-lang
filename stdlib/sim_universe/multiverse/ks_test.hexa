@@ -168,8 +168,8 @@ fn ks_2samp(a: [i64], b: [i64]) -> [i64] {
 
 // ============================ self-test ============================
 let _args = args()
-if _args.len() >= 3 {
-    if _args[2] == "--self-test" {
+if _args.len() >= 2 {
+    if _args[1] == "--self-test" {
         // 같은분포: 둘 다 같은 시드 패턴
         let mut a: [i64] = []
         let mut b: [i64] = []

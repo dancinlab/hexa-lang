@@ -46,14 +46,14 @@ fn parse_metric(stdout: string) -> i64 {
 }
 
 let _args = args()
-if _args.len() < 3 {
+if _args.len() < 2 {
     println("ERROR: need candidate path")
     exit(1)
 }
-let cand = _args[2]
+let cand = _args[1]
 let mut baseline_metric = 0
-if _args.len() >= 4 {
-    try { baseline_metric = to_int(_args[3]) } catch e { baseline_metric = 0 }
+if _args.len() >= 3 {
+    try { baseline_metric = to_int(_args[2]) } catch e { baseline_metric = 0 }
 }
 
 // 1. parse check via `hexa parse`

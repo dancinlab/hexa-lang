@@ -493,7 +493,7 @@ fn cmd_selftest() -> i64 {
 // ── main ──────────────────────────────────────────────────────────────────
 fn main() {
     let _av_st = args()
-    if _av_st.len() > 2 && (_av_st[2] == "--selftest" || _av_st[2] == "selftest") { exit(cmd_selftest()) }
+    if _av_st.len() > 1 && (_av_st[1] == "--selftest" || _av_st[1] == "selftest") { exit(cmd_selftest()) }
     // argv 정규화 (2026-04-19): Mac=[hexa, script, user...] Linux-dispatch=[hexa, "run", script, user...]
     // 이전까지 Mac-only argv[2] 가정 → Linux 에서 argv[2] = script path 로 dispatch 실패.
     let _raw_argv = args()
@@ -503,15 +503,15 @@ fn main() {
         if _raw_argv[_scan_i].ends_with(".hexa") { _script_idx = _scan_i; break }
         _scan_i = _scan_i + 1
     }
-    let mut _user_start = 2
+    let mut _user_start = 1
     let mut _script_token = ""
     if _script_idx >= 0 {
         _user_start = _script_idx + 1
         _script_token = _raw_argv[_script_idx]
     } else {
         if _raw_argv.len() >= 3 {
-            if _raw_argv[1] == "run" { _user_start = 3 }
-            if _raw_argv[1] == "eval" { _user_start = 3 }
+            if _raw_argv[1] == "run" { _user_start = 2 }
+            if _raw_argv[1] == "eval" { _user_start = 2 }
         }
     }
     let mut argv: [str] = [_raw_argv[0], _script_token]

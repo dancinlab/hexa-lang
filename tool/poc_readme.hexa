@@ -172,8 +172,8 @@ fn cmd_selftest() -> i64 {
 
 fn main() {
     let av = args()
-    if len(av) > 2 {
-        let sub = av[2]
+    if len(av) > 1 {
+        let sub = av[1]
         if sub == "--selftest" || sub == "selftest" {
             exit(cmd_selftest())
         }

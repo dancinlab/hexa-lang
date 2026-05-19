@@ -7684,11 +7684,12 @@ fn _hexa_cert_walk_stmt(node, target, rows) {
 }
 
 fn _hexa_cert_module_name() {
-    // Best-effort: derive from args()[2] (the .hexa being compiled);
+    // Best-effort: derive from args()[1] (the .hexa being compiled);
+    // RFC 062 post-dedup layout [hexa_v2_bin, input.hexa, output.c].
     // fall back to "module" if unavailable.
     let av = args()
-    if type_of(av) == "string" || len(av) < 3 { return "module" }
-    let path = av[2]
+    if type_of(av) == "string" || len(av) < 2 { return "module" }
+    let path = av[1]
     if type_of(path) != "string" { return "module" }
     // strip directory
     let mut i = len(path) - 1

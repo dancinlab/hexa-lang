@@ -261,13 +261,13 @@ let mut max_ticks: i64 = 300
 let mut run_dir: string = ""
 
 // args: [0]=interp, [1]=script, [2]=max_ticks, [3]=run_dir
-if _uargs.len() >= 3 {
-    try { max_ticks = to_int(_uargs[2]) } catch e { max_ticks = 300 }
+if _uargs.len() >= 2 {
+    try { max_ticks = to_int(_uargs[1]) } catch e { max_ticks = 300 }
 }
 
 // run_dir 자동 생성 또는 인자 지정
-if _uargs.len() >= 4 {
-    run_dir = _uargs[3]
+if _uargs.len() >= 3 {
+    run_dir = _uargs[2]
 } else {
     let mut home = ""
     try { home = to_string(exec("printenv HOME")).trim() } catch e { home = "" }

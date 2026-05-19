@@ -336,10 +336,10 @@ if e_is_selftest {
 } else {
     let mut e_max_ticks: i64 = 50
     let mut e_topo_name: string = "t3"
-    if _eargs.len() >= 3 {
-        try { e_max_ticks = to_int(_eargs[2]) } catch e { e_max_ticks = 50 }
+    if _eargs.len() >= 2 {
+        try { e_max_ticks = to_int(_eargs[1]) } catch e { e_max_ticks = 50 }
     }
-    if _eargs.len() >= 4 { e_topo_name = _eargs[3] }
+    if _eargs.len() >= 3 { e_topo_name = _eargs[2] }
     let e_topo = _etopo_id(e_topo_name)
     if e_topo < 0 {
         println("[empirical_anchor] ERROR unknown topology=" + e_topo_name)

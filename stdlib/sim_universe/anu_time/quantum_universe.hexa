@@ -573,14 +573,14 @@ if q_is_selftest {
         }
     } else {
         // legacy fallback: original positional parser
-        if _qargs.len() >= 3 {
-            try { q_max_ticks = to_int(_qargs[2]) } catch e { q_max_ticks = 100 }
+        if _qargs.len() >= 2 {
+            try { q_max_ticks = to_int(_qargs[1]) } catch e { q_max_ticks = 100 }
         }
-        if _qargs.len() >= 5 && _qargs[3] == "bbm" {
+        if _qargs.len() >= 4 && _qargs[2] == "bbm" {
             q_bbm_mode = true
-            q_topo_name = _qargs[4]
-        } else if _qargs.len() >= 4 {
             q_topo_name = _qargs[3]
+        } else if _qargs.len() >= 3 {
+            q_topo_name = _qargs[2]
         }
     }
     let q_topo = _qtopo_id(q_topo_name)

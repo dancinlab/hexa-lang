@@ -2869,9 +2869,24 @@ fn cmd_parse(src) {
 }
 
 // == Entry ==
-// 런타임이 argv[0]을 중복 삽입하므로 실제 사용자 인자는 av[2]부터 시작.
-// av[0]=exec경로, av[1]=exec경로(중복), av[2]=서브커맨드, av[3..]=서브 인자
-let av = args()
+// RFC 062: hexa_set_args no longer doubles argv[0] — the runtime args()
+// contract is now the clean [exec, sub, user-args...] layout. This CLI
+// dispatcher was written against the historical [exec, exec, sub, ...] shape
+// (av[0]=exec, av[2]=subcommand, av[3..]=sub-args). `av` is re-derived with
+// argv[0] inserted once so the ~40 dispatch index sites stay correct without
+// a behavior-neutral mass reindex — a file-local index convention, NOT the
+// runtime duplication (that is removed). A later cosmetic cycle may reindex
+// this dispatcher (zero behavior change). See RFC 062 / ROADMAP child 65.
+let mut av: [string] = []
+let _av_raw = args()
+if len(_av_raw) > 0 {
+    av.push(_av_raw[0])
+    let mut _avi = 0
+    while _avi < len(_av_raw) {
+        av.push(_av_raw[_avi])
+        _avi = _avi + 1
+    }
+}
 
 // ─── busybox-pattern argv0 dispatch ───
 // <user-home>/.hx/shared/bin/<name> is a symlink to the hexa binary.

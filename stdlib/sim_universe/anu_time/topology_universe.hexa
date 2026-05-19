@@ -736,18 +736,18 @@ if is_selftest {
     let mut evolve_to_name: string = "t3"
     let mut evolve_at: i64 = 0
 
-    if _args.len() >= 3 {
-        try { max_ticks = to_int(_args[2]) } catch e { max_ticks = 100 }
+    if _args.len() >= 2 {
+        try { max_ticks = to_int(_args[1]) } catch e { max_ticks = 100 }
     }
 
     // CLI evolution mode: hexa topology_universe.hexa <ticks> evolve <from> <to> <at>
-    if _args.len() >= 7 && _args[3] == "evolve" {
+    if _args.len() >= 6 && _args[2] == "evolve" {
         evolve_mode = true
-        evolve_from_name = _args[4]
-        evolve_to_name = _args[5]
-        try { evolve_at = to_int(_args[6]) } catch e { evolve_at = max_ticks / 2 }
-    } else if _args.len() >= 4 {
-        topo_name = _args[3]
+        evolve_from_name = _args[3]
+        evolve_to_name = _args[4]
+        try { evolve_at = to_int(_args[5]) } catch e { evolve_at = max_ticks / 2 }
+    } else if _args.len() >= 3 {
+        topo_name = _args[2]
     } else {
         // env fallback (single-topology + evolution-via-env)
         let mut env_topo = ""

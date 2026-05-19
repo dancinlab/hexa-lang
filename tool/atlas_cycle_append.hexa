@@ -377,7 +377,7 @@ fn main() {
     let mut draft_path = ""
     let mut dry_run = false
     let mut override_date = ""
-    let mut i = 2
+    let mut i = 1
     while i < len(av) {
         let a = to_string(av[i])
         if a == "--dry-run" {

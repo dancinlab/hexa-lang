@@ -433,7 +433,7 @@ void _hx_emit_fuel_abort(const char* kind,
 #endif
     }
 
-    // Binary path = argv[0]; user args = argv[2..argc-1] (argv[1] is dup of argv[0]).
+    // Binary path = argv[0]; user args = argv[1..argc-1] (RFC 062 dedup).
     const char* binary = (_hexa_argv && _hexa_argc > 0) ? _hexa_argv[0] : "";
     if (!binary) binary = "";
 
@@ -441,7 +441,7 @@ void _hx_emit_fuel_abort(const char* kind,
     char args_buf[1024];
     args_buf[0] = '['; args_buf[1] = '\0';
     size_t apos = 1;
-    int args_start = (_hexa_argc >= 2) ? 2 : _hexa_argc;
+    int args_start = (_hexa_argc >= 1) ? 1 : _hexa_argc;
     int wrote = 0;
     for (int i = args_start; i < _hexa_argc && _hexa_argv && _hexa_argv[i]; i++) {
         if (apos + 4 >= sizeof(args_buf)) break;
@@ -5548,15 +5548,14 @@ static char** _hexa_argv = NULL;
 void hexa_set_args(int argc, char** argv) {
     // S1-D2: init TAG_FN shim globals before user code touches them.
     _hexa_init_fn_shims();
-    // argv[0]을 2번 삽입하여 인터프리터 모드와 동일한 인덱스 유지
-    // 인터프리터: ["hexa", "script.hexa", arg1, arg2, ...]
-    // 네이티브:   ["binary", "binary",    arg1, arg2, ...]
-    _hexa_argc = argc + 1;
-    _hexa_argv = (char**)malloc(sizeof(char*) * (argc + 1));
-    _hexa_argv[0] = argv[0];
-    _hexa_argv[1] = argv[0];
-    for (int i = 1; i < argc; i++) {
-        _hexa_argv[i + 1] = argv[i];
+    // RFC 062: argv[0] dedup — store argv verbatim, no duplication.
+    // args() = [exec, user1, user2, ...]. The historical double-insert
+    // matched the (R7-retired) interpreter's index layout; that rationale
+    // is now gone, so the clean [exec, user...] layout is canonical.
+    _hexa_argc = argc;
+    _hexa_argv = (char**)malloc(sizeof(char*) * (argc > 0 ? argc : 1));
+    for (int i = 0; i < argc; i++) {
+        _hexa_argv[i] = argv[i];
     }
 }
 
@@ -5569,21 +5568,18 @@ HexaVal hexa_args() {
 }
 
 // Canonical argv API (roadmap 65 / M3, anima hxa-20260423-003 §3 M3).
-// Additive on top of args() — hexa_args()/hexa_set_args() untouched because
-// 40+ call sites across self/ + tool/ + bench/ read args()[2..] assuming the
-// current [driver, driver, user...] layout. Full contract flip requires a
-// repo-wide migration (separate follow-on). These new APIs let new
-// consumers (incl. anima tool/an11_a_verifier skip0 path) get clean
-// semantics today: script_path() = the thing that was launched,
-// real_args() = user arguments only, identical across interp/AOT/stage0.
+// RFC 062 (argv[0] dedup) flipped args() to the clean [exec, user...]
+// layout, so these helpers index from 1 (exec at 0, user args at 1..).
+// script_path() = the thing that was launched, real_args() = user
+// arguments only, identical across AOT/stage0.
 HexaVal hexa_script_path() {
-    if (_hexa_argc < 2 || _hexa_argv[1] == NULL) return hexa_str("");
-    return hexa_str(_hexa_argv[1]);
+    if (_hexa_argc < 1 || _hexa_argv[0] == NULL) return hexa_str("");
+    return hexa_str(_hexa_argv[0]);
 }
 
 HexaVal hexa_real_args() {
     HexaVal arr = hexa_array_new();
-    int start = (_hexa_argc >= 2) ? 2 : _hexa_argc;
+    int start = (_hexa_argc >= 1) ? 1 : _hexa_argc;
     for (int i = start; i < _hexa_argc; i++) {
         arr = hexa_array_push(arr, hexa_str(_hexa_argv[i]));
     }

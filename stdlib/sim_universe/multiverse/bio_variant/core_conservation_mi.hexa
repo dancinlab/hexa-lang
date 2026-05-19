@@ -161,11 +161,11 @@ fn pair_mi(all_seqs: [[i64]], p1: i64, p2: i64) -> i64 {
 
 // CLI entrypoint
 let _args = args()
-if _args.len() < 4 {
+if _args.len() < 3 {
     println("usage: hexa core_conservation_mi.hexa <variants_tsv> <out_json>")
 } else {
-    let variants_tsv = _args[2]
-    let out_json = _args[3]
+    let variants_tsv = _args[1]
+    let out_json = _args[2]
 
     let all_seqs = parse_variant_seqs(variants_tsv)
     let M = all_seqs.len()

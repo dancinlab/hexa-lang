@@ -187,7 +187,7 @@ fn cmd_selftest() -> int {
 
 fn main() -> int {
     let _av_st = args()
-    if _av_st.len() > 2 && (_av_st[2] == "--selftest" || _av_st[2] == "selftest") { return cmd_selftest() }
+    if _av_st.len() > 1 && (_av_st[1] == "--selftest" || _av_st[1] == "selftest") { return cmd_selftest() }
     let argv = args()
     let mut mode = "warn"
     let mut root = ""

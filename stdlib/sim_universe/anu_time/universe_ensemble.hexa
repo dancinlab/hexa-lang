@@ -257,12 +257,12 @@ if e_is_selftest {
     let mut e_topo: string = "t3"
     let mut e_N: i64 = 10
     let mut e_ticks: i64 = 64
-    if _eargs.len() >= 3 { e_topo = _eargs[2] }
-    if _eargs.len() >= 4 {
-        try { e_N = to_int(_eargs[3]) } catch ex { e_N = 10 }
+    if _eargs.len() >= 2 { e_topo = _eargs[1] }
+    if _eargs.len() >= 3 {
+        try { e_N = to_int(_eargs[2]) } catch ex { e_N = 10 }
     }
-    if _eargs.len() >= 5 {
-        try { e_ticks = to_int(_eargs[4]) } catch ex { e_ticks = 64 }
+    if _eargs.len() >= 4 {
+        try { e_ticks = to_int(_eargs[3]) } catch ex { e_ticks = 64 }
     }
     let r = run_ensemble(e_topo, e_N, e_ticks)
     println("[universe_ensemble] topology=" + e_topo + " N=" + to_string(e_N) + " ticks=" + to_string(e_ticks))

@@ -147,7 +147,7 @@ fn cmd_selftest() -> i64 {
 
 fn main() -> int {
     let argv = args()
-    if len(argv) > 2 && (argv[2] == "--selftest" || argv[2] == "selftest") { exit(cmd_selftest()) }
+    if len(argv) > 1 && (argv[1] == "--selftest" || argv[1] == "selftest") { exit(cmd_selftest()) }
     let mut mode = "warn"
     let mut root = ""
     let mut i = 0

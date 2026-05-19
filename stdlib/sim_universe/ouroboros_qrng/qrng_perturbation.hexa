@@ -17,15 +17,15 @@
 // trial-indexed offset so each trial sees a unique window).
 
 let _a = args()
-if _a.len() < 5 {
+if _a.len() < 4 {
     println("usage: qrng_perturbation.hexa <n_trials> <gens> <hex_path>")
     exit(1)
 }
 let mut n_trials = 0
-try { n_trials = to_int(_a[2]) } catch e1 { n_trials = 30 }
+try { n_trials = to_int(_a[1]) } catch e1 { n_trials = 30 }
 let mut gens = 0
-try { gens = to_int(_a[3]) } catch e2 { gens = 15 }
-let hex_path = _a[4]
+try { gens = to_int(_a[2]) } catch e2 { gens = 15 }
+let hex_path = _a[3]
 
 let mut nexus_root = ""
 try { nexus_root = env_var("NEXUS") } catch e3 { nexus_root = "" }

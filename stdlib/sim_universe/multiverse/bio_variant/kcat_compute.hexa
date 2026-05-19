@@ -99,13 +99,13 @@ fn parse_variants(tsv: string) -> [[i64]] {
 
 // CLI entrypoint
 let _args = args()
-if _args.len() < 5 {
+if _args.len() < 4 {
     println("usage: hexa kcat_compute.hexa <variants_tsv> <W_worlds> <out_file>")
 } else {
-    let variants_tsv = _args[2]
+    let variants_tsv = _args[1]
     let mut W = 50
-    try { W = to_int(_args[3]) } catch e { W = 50 }
-    let out_file = _args[4]
+    try { W = to_int(_args[2]) } catch e { W = 50 }
+    let out_file = _args[3]
 
     let mut raw = ""
     try { raw = read_file(variants_tsv) } catch e { raw = "" }

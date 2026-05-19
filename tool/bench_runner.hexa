@@ -7,7 +7,7 @@
 //   {ts, file, iters, warmup, total_ms, avg_ms, ops_per_sec,
 //    ok, fail, classifier_version: "bench_runner.v1"}
 //
-// Argv (user args at argv[2]+ under hexa run):
+// Argv (user args at argv[1]+ under hexa run):
 //   --target <dir>   default "packages/"
 //   --pattern <glob> default "*.bench.hexa"
 //   --warmup <N>     default 100
@@ -178,13 +178,13 @@ fn cmd_selftest() -> i64 {
 
 fn main() {
     let argv = args()
-    if len(argv) > 2 && (argv[2] == "--selftest" || argv[2] == "selftest") { exit(cmd_selftest()) }
+    if len(argv) > 1 && (argv[1] == "--selftest" || argv[1] == "selftest") { exit(cmd_selftest()) }
     let mut target = "packages/"
     let mut pattern = "*.bench.hexa"
     let mut warmup = 100
     let mut iters = 1000
     let mut output = ""
-    let mut i = 2
+    let mut i = 1
     while i < len(argv) {
         let a = argv[i]
         if a == "--target" && i + 1 < len(argv) { target = argv[i + 1]; i = i + 2; continue }

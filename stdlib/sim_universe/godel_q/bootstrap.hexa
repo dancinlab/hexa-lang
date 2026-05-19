@@ -30,14 +30,14 @@ fn ensure_blob(pos_ref: i64, max_len: i64) -> bool {
 
 let _args = args()
 let mut max_iters = 20
-if _args.len() >= 3 {
-    try { max_iters = to_int(_args[2]) } catch e { max_iters = 20 }
+if _args.len() >= 2 {
+    try { max_iters = to_int(_args[1]) } catch e { max_iters = 20 }
 }
 if max_iters > 100 { max_iters = 100 }
 if max_iters < 1 { max_iters = 1 }
 
 let mut run_id = ts_id()
-if _args.len() >= 4 { run_id = _args[3] }
+if _args.len() >= 3 { run_id = _args[2] }
 
 let home = env_var("HOME")
 let base = home + "/Dev/nexus/sim_bridge/godel_q"

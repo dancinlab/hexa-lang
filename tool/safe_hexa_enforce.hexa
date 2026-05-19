@@ -41,7 +41,8 @@ fn _log_breach(mode: string) {
     let ppid = exec("ps -o ppid= -p $$").trim()  // @allow-bare-exec
     let argv = args()
     let mut script = ""
-    if argv.len() > 1 { script = argv[1] }
+    // RFC 062: args()[0] = exec path (argv[0] dedup)
+    if argv.len() > 0 { script = argv[0] }
     // caller: ppid 의 커맨드라인 (shim 경유 추적)
     let caller_cmd = exec("ps -o command= -p " + ppid + " 2>/dev/null | head -c 120").trim().replace("\"", "\\\"")  // @allow-bare-exec
     let line = "{\"ts\":\"" + ts + "\",\"pid\":" + pid + ",\"ppid\":" + ppid +

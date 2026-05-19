@@ -296,12 +296,12 @@ fn cmd_selftest() -> i64 {
 
 fn main() {
     let argv = args()
-    if len(argv) > 2 && (argv[2] == "--selftest" || argv[2] == "selftest") { exit(cmd_selftest()) }
-    if len(argv) < 3 {
+    if len(argv) > 1 && (argv[1] == "--selftest" || argv[1] == "selftest") { exit(cmd_selftest()) }
+    if len(argv) < 2 {
         println("usage: ai_native_testgen.hexa <source.hexa>")
         return
     }
-    let src_path = argv[2]
+    let src_path = argv[1]
     let src = read_file(src_path)
     let annotated = find_annotated_fns(src)
     if len(annotated) == 0 {

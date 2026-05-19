@@ -474,16 +474,16 @@ if f_is_selftest {
     let mut f_mode_name: string = "phi4"
     let mut f_m2: i64 = 100
     let mut f_lambda: i64 = 50
-    if _fargs.len() >= 3 {
-        try { f_max_ticks = to_int(_fargs[2]) } catch e { f_max_ticks = 50 }
+    if _fargs.len() >= 2 {
+        try { f_max_ticks = to_int(_fargs[1]) } catch e { f_max_ticks = 50 }
     }
-    if _fargs.len() >= 4 { f_topo_name = _fargs[3] }
-    if _fargs.len() >= 5 { f_mode_name = _fargs[4] }
+    if _fargs.len() >= 3 { f_topo_name = _fargs[2] }
+    if _fargs.len() >= 4 { f_mode_name = _fargs[3] }
+    if _fargs.len() >= 5 {
+        try { f_m2 = to_int(_fargs[4]) } catch e { f_m2 = 100 }
+    }
     if _fargs.len() >= 6 {
-        try { f_m2 = to_int(_fargs[5]) } catch e { f_m2 = 100 }
-    }
-    if _fargs.len() >= 7 {
-        try { f_lambda = to_int(_fargs[6]) } catch e { f_lambda = 50 }
+        try { f_lambda = to_int(_fargs[5]) } catch e { f_lambda = 50 }
     }
     let f_topo = _ftopo_id(f_topo_name)
     let f_mode = _fmode_id(f_mode_name)

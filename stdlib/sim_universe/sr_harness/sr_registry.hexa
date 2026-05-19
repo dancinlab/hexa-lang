@@ -25,7 +25,7 @@
 //   rolled_back   — integration reverted
 
 let _a = args()
-let mode_arg = if _a.len() >= 3 { _a[2] } else { "help" }
+let mode_arg = if _a.len() >= 2 { _a[1] } else { "help" }
 
 fn registry_path() -> string {
     let mut home = ""
@@ -68,16 +68,16 @@ if mode_arg == "help" {
 }
 
 if mode_arg == "register" {
-    if _a.len() < 9 {
+    if _a.len() < 8 {
         println("ERROR: need <engine> <metric> <sigma> <base_seed> <file> <line> [status]")
     } else {
-        let engine = _a[3]
-        let metric = _a[4]
-        let sigma_s = _a[5]
-        let seed_s = _a[6]
-        let file = _a[7]
-        let line = _a[8]
-        let status = if _a.len() >= 10 { _a[9] } else { "planned" }
+        let engine = _a[2]
+        let metric = _a[3]
+        let sigma_s = _a[4]
+        let seed_s = _a[5]
+        let file = _a[6]
+        let line = _a[7]
+        let status = if _a.len() >= 9 { _a[8] } else { "planned" }
 
         let rec = "{\"ts\":\"" + now_iso() + "\"" +
                   ",\"engine\":\"" + escape_json(engine) + "\"" +
@@ -109,10 +109,10 @@ if mode_arg == "list" {
 }
 
 if mode_arg == "list_engine" {
-    if _a.len() < 4 {
+    if _a.len() < 3 {
         println("ERROR: need engine name")
     } else {
-        let want = _a[3]
+        let want = _a[2]
         let needle = "\"engine\":\"" + want + "\""
         let path = registry_path()
         let mut raw = ""

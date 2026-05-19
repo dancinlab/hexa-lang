@@ -43,11 +43,11 @@ let MUT_LINE_MIN = 9
 let MUT_LINE_MAX = 14
 
 let _args = args()
-if _args.len() < 3 {
+if _args.len() < 2 {
     println("ERROR: need 4-byte hex (8 chars)")
     exit(1)
 }
-let hex = _args[2].trim()
+let hex = _args[1].trim()
 if hex.len() < 8 {
     println("ERROR: hex too short: " + hex)
     exit(1)

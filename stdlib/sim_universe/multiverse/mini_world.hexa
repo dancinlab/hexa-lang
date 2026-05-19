@@ -100,8 +100,8 @@ fn trajectory(dim: i64, steps: i64, seed_bytes: [i64], eps_bytes: [i64]) -> [i64
 
 // ============================ CLI self-test ============================
 let _args = args()
-if _args.len() >= 3 {
-    if _args[2] == "--self-test" {
+if _args.len() >= 2 {
+    if _args[1] == "--self-test" {
         let mut seed: [i64] = []
         let mut j = 0
         while j < 32 { seed.push((j * 17 + 3) % 256); j = j + 1 }

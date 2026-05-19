@@ -368,17 +368,17 @@ fn position_entropy_seqs(all_seqs: [[i64]], pos: i64) -> i64 {
 // --- main driver ---
 
 let _args = args()
-if _args.len() < 5 {
+if _args.len() < 4 {
     println("usage: hexa bio_interferometer.hexa <M> <W> <out_dir>")
     println("  M: number of variants (≥3, default 15)")
     println("  W: number of cross-world k_cat samples per variant (≥10, default 50)")
     println("  out_dir: directory to write results")
 } else {
     let mut M = 15
-    try { M = to_int(_args[2]) } catch e { M = 15 }
+    try { M = to_int(_args[1]) } catch e { M = 15 }
     let mut W = 50
-    try { W = to_int(_args[3]) } catch e { W = 50 }
-    let out_dir = _args[4]
+    try { W = to_int(_args[2]) } catch e { W = 50 }
+    let out_dir = _args[3]
     if M < 3 { M = 3 }
     if W < 10 { W = 10 }
 

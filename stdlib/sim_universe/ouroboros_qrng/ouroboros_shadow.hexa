@@ -422,14 +422,14 @@ fn run_one_trial(max_gen: int) {
 // ─── CLI ───
 let _a = args()
 // convention: [0]=hexa [1]=script [2..]=user
-let mode_arg = if _a.len() >= 3 { _a[2] } else { "help" }
+let mode_arg = if _a.len() >= 2 { _a[1] } else { "help" }
 
 if mode_arg == "det" {
     RNG_MODE = "det"
     let mut trial = 0
     let mut gens = default_generations
-    if _a.len() >= 4 { try { trial = to_int(_a[3]) } catch e {} }
-    if _a.len() >= 5 { try { gens = to_int(_a[4]) } catch e {} }
+    if _a.len() >= 3 { try { trial = to_int(_a[2]) } catch e {} }
+    if _a.len() >= 4 { try { gens = to_int(_a[3]) } catch e {} }
     TRIAL = trial
     run_one_trial(gens)
 }
@@ -439,9 +439,9 @@ if mode_arg == "qrng" {
     let mut trial = 0
     let mut gens = default_generations
     let mut hex_path = ""
-    if _a.len() >= 4 { try { trial = to_int(_a[3]) } catch e {} }
-    if _a.len() >= 5 { try { gens = to_int(_a[4]) } catch e {} }
-    if _a.len() >= 6 { hex_path = _a[5] }
+    if _a.len() >= 3 { try { trial = to_int(_a[2]) } catch e {} }
+    if _a.len() >= 4 { try { gens = to_int(_a[3]) } catch e {} }
+    if _a.len() >= 5 { hex_path = _a[4] }
     TRIAL = trial
     if hex_path.len() == 0 {
         println("ERROR: qrng mode requires hex path")

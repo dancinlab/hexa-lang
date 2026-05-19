@@ -409,7 +409,7 @@ fn print_summary(s: SigmaSummary) {
 
 // ─── CLI ───
 let _a = args()
-let mode_arg = if _a.len() >= 3 { _a[2] } else { "help" }
+let mode_arg = if _a.len() >= 2 { _a[1] } else { "help" }
 
 if mode_arg == "help" {
     println("demo_ouroboros_sr.hexa — σ=0 vs σ=0.1 ouroboros baseline")
@@ -419,8 +419,8 @@ if mode_arg == "help" {
 if mode_arg == "run" {
     let mut trials = 20
     let mut gens = default_generations
-    if _a.len() >= 4 { try { trials = to_int(_a[3]) } catch e {} }
-    if _a.len() >= 5 { try { gens = to_int(_a[4]) } catch e {} }
+    if _a.len() >= 3 { try { trials = to_int(_a[2]) } catch e {} }
+    if _a.len() >= 4 { try { gens = to_int(_a[3]) } catch e {} }
 
     println("=== SR DEMO: ouroboros meta-mutation, σ=0 vs σ=0.1 ===")
     println("trials=" + to_string(trials) + " gens=" + to_string(gens))

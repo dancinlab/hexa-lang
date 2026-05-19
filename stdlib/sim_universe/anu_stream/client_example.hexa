@@ -26,8 +26,8 @@
 //   hexa client_example.hexa ingest <hex_file>
 
 let _a = args()
-let mode = if _a.len() >= 3 { _a[2] } else { "pi" }
-let N = if _a.len() >= 4 { to_int(_a[3]) } else { 1000000 }
+let mode = if _a.len() >= 2 { _a[1] } else { "pi" }
+let N = if _a.len() >= 3 { to_int(_a[2]) } else { 1000000 }
 
 let M32 = 4294967295
 
@@ -340,7 +340,7 @@ if mode == "pi" {
 }
 
 if mode == "ingest" {
-    let path = if _a.len() >= 4 { _a[3] } else { "" }
+    let path = if _a.len() >= 3 { _a[2] } else { "" }
     let raw = read_file(path).trim()
     println("INFO: loaded " + to_string(raw.len()) + " hex chars from " + path)
     let bs = hex_to_bytes(raw.substring(0, 128))

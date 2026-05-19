@@ -167,8 +167,8 @@ fn mi_npmi(x: [i64], y: [i64]) -> [i64] {
 
 // ============================ CLI self-test ============================
 let _args = args()
-if _args.len() >= 3 {
-    if _args[2] == "--self-test" {
+if _args.len() >= 2 {
+    if _args[1] == "--self-test" {
         // 완전상관 테스트 (x=y) → MI 높아야 함
         let mut x: [i64] = []
         let mut y: [i64] = []

@@ -40,14 +40,14 @@ fn _sleep_seconds(s: i64) {
 
 fn main() {
     let a = args()
-    if a.len() < 3 {
+    if a.len() < 2 {
         println("USAGE: anu_long_stream.hexa <out_path> [bytes_goal=512]")
         return
     }
-    let out_path = a[2]
+    let out_path = a[1]
     let mut goal = DEFAULT_GOAL
-    if a.len() >= 4 {
-        try { goal = to_int(a[3]) } catch e6 { goal = DEFAULT_GOAL }
+    if a.len() >= 3 {
+        try { goal = to_int(a[2]) } catch e6 { goal = DEFAULT_GOAL }
     }
     let t_start = _now_epoch()
     println("# ANU fetch: goal=" + to_string(goal) + "B out=" + out_path)

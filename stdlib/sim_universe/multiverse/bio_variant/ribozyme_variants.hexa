@@ -161,13 +161,13 @@ fn generate_variants_tsv(M: i64) -> string {
 
 // CLI entrypoint
 let _args = args()
-if _args.len() < 4 {
+if _args.len() < 3 {
     println("usage: hexa ribozyme_variants.hexa <M> <out_file>")
     println("  generates M variant records (idx, hamming_d, core_seq, conservation_mask)")
 } else {
     let mut M = 15
-    try { M = to_int(_args[2]) } catch e { M = 15 }
-    let out_file = _args[3]
+    try { M = to_int(_args[1]) } catch e { M = 15 }
+    let out_file = _args[2]
     let tsv = generate_variants_tsv(M)
     try { write_file(out_file, tsv) } catch e {}
     println("[ribozyme_variants] M=" + to_string(M) + " canonical=CUGAUGAGGCCG -> " + out_file)

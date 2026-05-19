@@ -417,7 +417,7 @@ fn atlas_encode_hxc(rows: array) -> string {
 fn main() {
     let av = args()
     let mut out_path = "dist/atlas.hxc"
-    if len(av) >= 3 { out_path = to_string(av[2]) }
+    if len(av) >= 2 { out_path = to_string(av[1]) }
 
     println("atlas_build_hxc: parsing rodata source files...")
     let rows_embedded = _parse_gen_file("compiler/atlas/embedded.gen.hexa")

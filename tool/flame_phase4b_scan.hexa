@@ -11,13 +11,13 @@
 
 let argv = args()
 // `hexa run` invocation: argv[0]=interp, argv[1]=this script, argv[2..]=user args.
-if len(argv) < 3 {
+if len(argv) < 2 {
     println("usage: hexa run tool/flame_phase4b_scan.hexa <source.hexa>")
     println("       Phase 4-B-1 detect-only scaffold (RFC 047)")
     exit(1)
 }
 
-let src_path = argv[2]
+let src_path = argv[1]
 let src = read_file(src_path)
 if len(src) == 0 {
     println("error: cannot read " + src_path)

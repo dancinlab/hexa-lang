@@ -87,14 +87,14 @@ fn _stat_summary(rows: list, col: i64) -> list {
 
 fn main() {
     let a = args()
-    if a.len() < 6 {
+    if a.len() < 5 {
         println("USAGE: analyze.hexa <xcorr_anu.csv> <xcorr_urandom.csv> <out_ks.json> <out_summary.md>")
         return
     }
-    let anu_path = a[2]
-    let ur_path = a[3]
-    let ks_path = a[4]
-    let sum_path = a[5]
+    let anu_path = a[1]
+    let ur_path = a[2]
+    let ks_path = a[3]
+    let sum_path = a[4]
 
     let anu_rows = _parse_csv(anu_path)
     let ur_rows = _parse_csv(ur_path)

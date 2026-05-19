@@ -182,11 +182,11 @@ fn extract_variant_kcats(flat: [i64], variant_idx: i64, W: i64) -> [i64] {
 
 // CLI entrypoint
 let _args = args()
-if _args.len() < 4 {
+if _args.len() < 3 {
     println("usage: hexa bio_ks_test.hexa <kcat_tsv> <out_jsonl>")
 } else {
-    let kcat_tsv = _args[2]
-    let out_jsonl = _args[3]
+    let kcat_tsv = _args[1]
+    let out_jsonl = _args[2]
 
     let parsed = parse_kcat_tsv(kcat_tsv)
     let idxs = parsed[0]

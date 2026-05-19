@@ -30,12 +30,12 @@
 // ════════════════════════════════════════════════════════════════════════
 
 let argv = args()
-if len(argv) < 3 {
+if len(argv) < 2 {
     println("usage: hexa run tool/flame_phase4c_pair_detect.hexa <source.hexa>")
     exit(1)
 }
 
-let src_path = argv[2]
+let src_path = argv[1]
 let src = read_file(src_path)
 if len(src) == 0 {
     println("error: cannot read " + src_path)

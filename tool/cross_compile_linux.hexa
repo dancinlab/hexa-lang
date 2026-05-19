@@ -65,7 +65,7 @@ fn cmd_selftest() -> i64 {
 
 fn main() {
     let _av_st = args()
-    if _av_st.len() > 2 && (_av_st[2] == "--selftest" || _av_st[2] == "selftest") { exit(cmd_selftest()) }
+    if _av_st.len() > 1 && (_av_st[1] == "--selftest" || _av_st[1] == "selftest") { exit(cmd_selftest()) }
     let args = argv()
     if len(args) < 2 {
         usage()
@@ -80,7 +80,7 @@ fn main() {
     let mut deploy_target = ""
     let mut compile_only = false
 
-    let mut ai = 2
+    let mut ai = 1
     while ai < len(args) {
         let a = args[ai]
         if a == "-o" && (ai + 1) < len(args) {

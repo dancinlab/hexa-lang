@@ -25,18 +25,18 @@
 // ════════════════════════════════════════════════════════════════════════
 
 let argv = args()
-if len(argv) < 3 {
+if len(argv) < 2 {
     println("usage: hexa run tool/flame_phase4b3_emit_trampoline.hexa <ipcp.hexa> [<out.c>]")
     exit(1)
 }
 
-let src_path = argv[2]
+let src_path = argv[1]
 let mut out_path = "build/artifacts/flame_phase4b3_trampoline.c"
-if len(argv) >= 4 { out_path = argv[3] }
+if len(argv) >= 3 { out_path = argv[2] }
 // optional: --decls writes forward declarations to a separate .h-like file
 // (for insertion near top of single-TU concatenated .c)
 let mut decls_path = ""
-if len(argv) >= 5 { decls_path = argv[4] }
+if len(argv) >= 4 { decls_path = argv[3] }
 
 let src = read_file(src_path)
 if len(src) == 0 {

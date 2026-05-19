@@ -209,7 +209,7 @@ fn write_bytes_to_file_raw(bs: [int], path: string) {
 // CLI
 // ============================================================
 let _a = args()
-let mode = if _a.len() >= 3 { _a[2] } else { "help" }
+let mode = if _a.len() >= 2 { _a[1] } else { "help" }
 
 if mode == "help" {
     println("stream_daemon.hexa — ANU-seeded ChaCha20 stream extender")
@@ -238,8 +238,8 @@ if mode == "once" {
 }
 
 // --- bulk generation path ---
-let want_bytes = if _a.len() >= 4 { to_int(_a[3]) } else { 65536 }
-let out_path = if _a.len() >= 5 { _a[4] } else { "" }
+let want_bytes = if _a.len() >= 3 { to_int(_a[2]) } else { 65536 }
+let out_path = if _a.len() >= 4 { _a[3] } else { "" }
 
 let seed_hex = fetch_seed_hex()
 if seed_hex.len() < 64 {

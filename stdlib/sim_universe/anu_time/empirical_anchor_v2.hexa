@@ -478,7 +478,7 @@ while e2_arg_i < _e2args.len() {
 if e2_is_selftest {
     run_v2_selftest()
 } else if e2_is_compare {
-    let topo_name = if _e2args.len() >= 4 { _e2args[3] } else { "t3" }
+    let topo_name = if _e2args.len() >= 3 { _e2args[2] } else { "t3" }
     println("[v2 compare] topology=" + topo_name + " ticks=16")
     print_chi2_table(topo_name, 16)
     println("compare with v1 (empirical_anchor.hexa) result: shows the design-bias gap")
@@ -512,12 +512,12 @@ if e2_is_selftest {
         }
     } else {
         // no topology found — fall back to legacy positional defaults
-        if _e2args.len() >= 3 {
-            try { e2_max_ticks = to_int(_e2args[2]) } catch e { e2_max_ticks = 50 }
+        if _e2args.len() >= 2 {
+            try { e2_max_ticks = to_int(_e2args[1]) } catch e { e2_max_ticks = 50 }
         }
-        if _e2args.len() >= 4 { e2_topo_name = _e2args[3] }
-        if _e2args.len() >= 5 {
-            try { e2_seed = to_int(_e2args[4]) } catch e { e2_seed = 6 }
+        if _e2args.len() >= 3 { e2_topo_name = _e2args[2] }
+        if _e2args.len() >= 4 {
+            try { e2_seed = to_int(_e2args[3]) } catch e { e2_seed = 6 }
         }
     }
     let e2_topo = _e2topo_id(e2_topo_name)

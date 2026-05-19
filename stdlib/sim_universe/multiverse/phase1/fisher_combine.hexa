@@ -171,11 +171,11 @@ fn extract_p_scaled(line: string) -> i64 {
 
 // --- main ---
 let _args = args()
-if _args.len() < 4 {
+if _args.len() < 3 {
     println("usage: hexa fisher_combine.hexa <ks_results.jsonl> <out_json>")
 } else {
-    let ks_path = _args[2]
-    let out_path = _args[3]
+    let ks_path = _args[1]
+    let out_path = _args[2]
 
     let mut raw = ""
     try { raw = read_file(ks_path) } catch e { raw = "" }

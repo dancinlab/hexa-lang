@@ -227,12 +227,12 @@ let mut max_report = 20
 // argc` — the native transpiler mis-types that local as a raw C `int` and
 // then fails to re-wrap it when compared against integer literals. Inline
 // use keeps the expression inside HexaVal-land.
-if len(args) >= 4 {
-    interp_path = args[2]
-    full_path = args[3]
+if len(args) >= 3 {
+    interp_path = args[1]
+    full_path = args[2]
 }
-if len(args) >= 5 {
-    max_report = args[4].parse_int()
+if len(args) >= 4 {
+    max_report = args[3].parse_int()
 }
 
 if !file_exists(interp_path) {

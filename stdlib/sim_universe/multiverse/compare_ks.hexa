@@ -119,12 +119,12 @@ fn load_ints(path: string) -> [i64] {
 
 // --- main ---
 let _args = args()
-if _args.len() < 5 {
+if _args.len() < 4 {
     println("usage: hexa compare_ks.hexa <anu_mi_file> <prng_mi_file> <out_json>")
 } else {
-    let a = load_ints(_args[2])
-    let b = load_ints(_args[3])
-    let out = _args[4]
+    let a = load_ints(_args[1])
+    let b = load_ints(_args[2])
+    let out = _args[3]
     println("[compare_ks] a_n=" + to_string(a.len()) + " b_n=" + to_string(b.len()))
     if a.len() < 5 || b.len() < 5 {
         println("[compare_ks] ERROR: too few samples")

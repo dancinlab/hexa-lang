@@ -194,16 +194,16 @@ fn rename_in_line(l: string, old: string, nu: string) -> string {
 
 // ===== main =====
 let _args = args()
-if _args.len() < 7 {
+if _args.len() < 6 {
     println("ERROR: need src dst line op mag")
     exit(1)
 }
-let src = _args[2]
-let dst = _args[3]
+let src = _args[1]
+let dst = _args[2]
 let mut line_no = 0
-try { line_no = to_int(_args[4]) } catch e { line_no = 0 }
-let op = _args[5]
-let mag = _args[6]
+try { line_no = to_int(_args[3]) } catch e { line_no = 0 }
+let op = _args[4]
+let mag = _args[5]
 
 let mut content = ""
 try { content = read_file(src) } catch e { content = "" }

@@ -555,12 +555,12 @@ if l_is_selftest {
             try { l_c = to_int(_largs[l_topo_idx + 1]) } catch e { l_c = 1 }
         }
     } else {
-        if _largs.len() >= 3 {
-            try { l_max_ticks = to_int(_largs[2]) } catch e { l_max_ticks = 50 }
+        if _largs.len() >= 2 {
+            try { l_max_ticks = to_int(_largs[1]) } catch e { l_max_ticks = 50 }
         }
-        if _largs.len() >= 4 { l_topo_name = _largs[3] }
-        if _largs.len() >= 5 {
-            try { l_c = to_int(_largs[4]) } catch e { l_c = 1 }
+        if _largs.len() >= 3 { l_topo_name = _largs[2] }
+        if _largs.len() >= 4 {
+            try { l_c = to_int(_largs[3]) } catch e { l_c = 1 }
         }
     }
     let l_topo = _ltopo_id(l_topo_name)

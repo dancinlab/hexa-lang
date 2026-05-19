@@ -475,9 +475,11 @@ fn env_hexa_install_dir() {
 //   [3] = output  (see the CLI block at the bottom of this file).
 // dirname(args()[1]) = `<inst>/self` → its dirname = `<inst>`.
 fn ml_self_install_dir() {
+    // RFC 062: post-dedup args() = [this-binary, input, output] — the
+    // binary's own path is at index 0 (was [1] under the doubled layout).
     let av = args()
-    if len(av) < 2 { return "" }
-    let self_path = av[1]
+    if len(av) < 1 { return "" }
+    let self_path = av[0]
     if len(self_path) == 0 { return "" }
     let self_dir = ml_dirname(self_path)            // e.g. <inst>/self
     if len(self_dir) == 0 { return "" }
@@ -1363,13 +1365,14 @@ fn load_module(path) {
 // flatten step, unlocking cross-directory `use` (atlas/verify/calc cluster).
 
 fn main() {
+    // RFC 062: post-dedup args() = [this-binary, input, output].
     let __ml_av = args()
-    if len(__ml_av) >= 4 {
-        let expanded = load_module(__ml_av[2])
-        safe_write_file(__ml_av[3], expanded)
+    if len(__ml_av) >= 3 {
+        let expanded = load_module(__ml_av[1])
+        safe_write_file(__ml_av[2], expanded)
         let mut done = []
         done.push("[module_loader] wrote ")
-        done.push(__ml_av[3])
+        done.push(__ml_av[2])
         done.push(" (")
         done.push(str(len(g_order_parts)))
         done.push(" files)")

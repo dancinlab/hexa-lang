@@ -949,15 +949,15 @@ fn main() {
         if _raw_argv[_scan_i].ends_with(".hexa") { _script_idx = _scan_i; break }
         _scan_i = _scan_i + 1
     }
-    let mut _user_start = 2
+    let mut _user_start = 1
     let mut _script_token = ""
     if _script_idx >= 0 {
         _user_start = _script_idx + 1
         _script_token = _raw_argv[_script_idx]
     } else {
         if _raw_argv.len() >= 3 {
-            if _raw_argv[1] == "run" { _user_start = 3 }
-            if _raw_argv[1] == "eval" { _user_start = 3 }
+            if _raw_argv[1] == "run" { _user_start = 2 }
+            if _raw_argv[1] == "eval" { _user_start = 2 }
         }
     }
     let mut argv: [str] = [_raw_argv[0], _script_token]

@@ -217,7 +217,7 @@ fn _render(hook_files: array, hook_dirs: array, mode: string, root: string, remo
 
 fn main() -> int {
     let argv = args()
-    if len(argv) > 2 && (argv[2] == "--selftest" || argv[2] == "selftest") {
+    if len(argv) > 1 && (argv[1] == "--selftest" || argv[1] == "selftest") {
         println("[git_hook_ban_watcher selftest] OK")
         return 0
     }

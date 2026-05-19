@@ -231,19 +231,19 @@ fn mi_scaled(x: [i64], y: [i64]) -> i64 {
 
 // --- CLI main ---
 let _args = args()
-if _args.len() < 8 {
+if _args.len() < 7 {
     println("usage: hexa interferometer.hexa <tag> <seed_file> <M> <T> <dim> <out_dir>")
     println("  got args: " + to_string(_args.len()))
 } else {
-    let tag = _args[2]
-    let seed_file = _args[3]
+    let tag = _args[1]
+    let seed_file = _args[2]
     let mut M = 10
-    try { M = to_int(_args[4]) } catch e { M = 10 }
+    try { M = to_int(_args[3]) } catch e { M = 10 }
     let mut T = 200
-    try { T = to_int(_args[5]) } catch e { T = 200 }
+    try { T = to_int(_args[4]) } catch e { T = 200 }
     let mut dim = 64
-    try { dim = to_int(_args[6]) } catch e { dim = 64 }
-    let out_dir = _args[7]
+    try { dim = to_int(_args[5]) } catch e { dim = 64 }
+    let out_dir = _args[6]
 
     println("[interferometer] tag=" + tag + " M=" + to_string(M) + " T=" + to_string(T) + " dim=" + to_string(dim))
 

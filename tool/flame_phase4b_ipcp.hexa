@@ -32,15 +32,15 @@
 // ════════════════════════════════════════════════════════════════════════
 
 let argv = args()
-if len(argv) < 3 {
+if len(argv) < 2 {
     println("usage: hexa run tool/flame_phase4b_ipcp.hexa <expanded.hexa> [<out.hexa>]")
     println("       Phase 4-B-2 IPCP prototype (RFC 047)")
     exit(1)
 }
 
-let src_path = argv[2]
+let src_path = argv[1]
 let mut out_path = src_path + ".ipcp"
-if len(argv) >= 4 { out_path = argv[3] }
+if len(argv) >= 3 { out_path = argv[2] }
 
 let src = read_file(src_path)
 if len(src) == 0 {

@@ -365,21 +365,21 @@ fn parse_seed_file(path: string) -> [i64] {
 
 // ---- main ----
 let _args = args()
-if _args.len() < 9 {
+if _args.len() < 8 {
     println("usage: hexa scale_up.hexa <tag> <seed_file> <M> <T> <dim> <trial_idx> <out_dir>")
-    println("  got: " + to_string(_args.len() - 2))
+    println("  got: " + to_string(_args.len() - 1))
 } else {
-    let tag = _args[2]
-    let seed_file = _args[3]
+    let tag = _args[1]
+    let seed_file = _args[2]
     let mut M = 50
-    try { M = to_int(_args[4]) } catch e { M = 50 }
+    try { M = to_int(_args[3]) } catch e { M = 50 }
     let mut T = 2000
-    try { T = to_int(_args[5]) } catch e { T = 2000 }
+    try { T = to_int(_args[4]) } catch e { T = 2000 }
     let mut dim = 144
-    try { dim = to_int(_args[6]) } catch e { dim = 144 }
+    try { dim = to_int(_args[5]) } catch e { dim = 144 }
     let mut trial_idx = 0
-    try { trial_idx = to_int(_args[7]) } catch e { trial_idx = 0 }
-    let out_dir = _args[8]
+    try { trial_idx = to_int(_args[6]) } catch e { trial_idx = 0 }
+    let out_dir = _args[7]
 
     let t_start = timestamp()
     println("[scale_up] trial=" + to_string(trial_idx) + " tag=" + tag + " M=" + to_string(M) + " T=" + to_string(T) + " dim=" + to_string(dim))

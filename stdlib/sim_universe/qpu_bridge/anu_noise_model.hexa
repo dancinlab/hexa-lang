@@ -31,14 +31,14 @@
 // @no-sandbox — reads self-contained anu_source.hexa; no L0 writes.
 
 let argv = args()
-if argv.len() < 3 {
+if argv.len() < 2 {
     eprintln("usage: anu_noise_model.hexa <n_calls> [bytes_per_iter=16]")
     exit(2)
 }
 
-let n_calls = to_int(argv[2])
+let n_calls = to_int(argv[1])
 let mut bpi = 16
-if argv.len() >= 4 { bpi = to_int(argv[3]) }
+if argv.len() >= 3 { bpi = to_int(argv[2]) }
 
 if n_calls <= 0 || n_calls > 100000 {
     eprintln("REJECT: n_calls out of range [1, 100000]")

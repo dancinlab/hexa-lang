@@ -408,9 +408,9 @@ if pr_is_selftest {
 } else {
     let mut pr_topo_name: string = "t3"
     let mut pr_ticks: i64 = 12
-    if _prargs.len() >= 3 { pr_topo_name = _prargs[2] }
-    if _prargs.len() >= 4 {
-        try { pr_ticks = to_int(_prargs[3]) } catch e { pr_ticks = 12 }
+    if _prargs.len() >= 2 { pr_topo_name = _prargs[1] }
+    if _prargs.len() >= 3 {
+        try { pr_ticks = to_int(_prargs[2]) } catch e { pr_ticks = 12 }
     }
     run_propagation(pr_topo_name, pr_ticks)
 }

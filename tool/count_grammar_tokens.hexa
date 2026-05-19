@@ -68,12 +68,12 @@ fn main_count() {
     let a = args()
     // args() returns the raw argv including interpreter + script.
     // hexa convention: user args start at index 2.
-    if len(a) >= 3 && (a[2] == "--selftest" || a[2] == "selftest") { exit(cmd_selftest()) }
-    if len(a) < 3 {
+    if len(a) >= 2 && (a[1] == "--selftest" || a[1] == "selftest") { exit(cmd_selftest()) }
+    if len(a) < 2 {
         println("0")
         return
     }
-    let section = a[2]
+    let section = a[1]
     let field = if section == "keywords" { "tokens" } else if section == "operators" { "ops" } else { "" }
     if field == "" {
         println("0")

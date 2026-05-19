@@ -57,9 +57,9 @@ if argc < 3 {
     println("usage: hexa tool/jit/jit_compile.hexa <input.hexa> [-o <runner.hexa>]")
     exit(2)
 }
-let input = _argv[2]
+let input = _argv[1]
 let mut out_runner = ""
-let mut k = 3
+let mut k = 2
 while k < argc {
     if _argv[k] == "-o" && k + 1 < argc {
         out_runner = _argv[k + 1]

@@ -273,11 +273,11 @@ if sc_is_selftest {
 } else {
     let mut sc_max_ticks: i64 = 8
     let mut sc_sigma2: i64 = 64
-    if _scargs.len() >= 3 {
-        try { sc_max_ticks = to_int(_scargs[2]) } catch e { sc_max_ticks = 8 }
+    if _scargs.len() >= 2 {
+        try { sc_max_ticks = to_int(_scargs[1]) } catch e { sc_max_ticks = 8 }
     }
-    if _scargs.len() >= 4 {
-        try { sc_sigma2 = to_int(_scargs[3]) } catch e { sc_sigma2 = 64 }
+    if _scargs.len() >= 3 {
+        try { sc_sigma2 = to_int(_scargs[2]) } catch e { sc_sigma2 = 64 }
     }
     if !_is_valid_sigma2(sc_sigma2) {
         println("[scale_universe] ERROR invalid sigma²=" + to_string(sc_sigma2))

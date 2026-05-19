@@ -11,7 +11,7 @@
 
 let _aargs = args()
 let mut run_dir = ""
-if _aargs.len() >= 3 { run_dir = _aargs[2] } else {
+if _aargs.len() >= 2 { run_dir = _aargs[1] } else {
     println("usage: analyze.hexa <run_dir>")
     exit(1)
 }

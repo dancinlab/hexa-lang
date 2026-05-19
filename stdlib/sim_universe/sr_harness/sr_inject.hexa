@@ -163,7 +163,7 @@ fn call_wrapped_clamped(w: WrappedMetric, raw: float, seed_offset: int, lo: floa
 // ─── CLI self-test ───
 
 let _a = args()
-let mode_arg = if _a.len() >= 3 { _a[2] } else { "help" }
+let mode_arg = if _a.len() >= 2 { _a[1] } else { "help" }
 
 if mode_arg == "help" {
     println("sr_inject.hexa — Stochastic Resonance noise floor")
@@ -186,8 +186,8 @@ if mode_arg == "self-test" {
 if mode_arg == "stats" {
     let mut sigma = 0.1
     let mut n = 10000
-    if _a.len() >= 4 { try { sigma = to_float(_a[3]) } catch e {} }
-    if _a.len() >= 5 { try { n = to_int(_a[4]) } catch e {} }
+    if _a.len() >= 3 { try { sigma = to_float(_a[2]) } catch e {} }
+    if _a.len() >= 4 { try { n = to_int(_a[3]) } catch e {} }
     let mut sum = 0.0
     let mut sum2 = 0.0
     let mut i = 0

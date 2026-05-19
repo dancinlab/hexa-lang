@@ -180,8 +180,8 @@ fn anuc_total() -> i64 { return __anuc_total }
 // ─── 단독 self-test ───
 let _args = args()
 let mut standalone = true
-if _args.len() >= 3 {
-    if _args[2] == "lib" { standalone = false }
+if _args.len() >= 2 {
+    if _args[1] == "lib" { standalone = false }
 }
 
 if standalone {

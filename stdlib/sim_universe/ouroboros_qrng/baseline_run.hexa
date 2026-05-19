@@ -12,14 +12,14 @@
 //         streaming per-trial FINAL lines.
 
 let _a = args()
-let n_trials = if _a.len() >= 3 {
+let n_trials = if _a.len() >= 2 {
     let mut v = 0
-    try { v = to_int(_a[2]) } catch e { v = 30 }
+    try { v = to_int(_a[1]) } catch e { v = 30 }
     v
 } else { 30 }
-let gens = if _a.len() >= 4 {
+let gens = if _a.len() >= 3 {
     let mut v = 0
-    try { v = to_int(_a[3]) } catch e { v = 15 }
+    try { v = to_int(_a[2]) } catch e { v = 15 }
     v
 } else { 15 }
 

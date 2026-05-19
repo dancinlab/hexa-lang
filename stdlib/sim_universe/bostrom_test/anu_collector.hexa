@@ -9,16 +9,16 @@
 //   hexa anu_collector.hexa <out_hex_file> <n_requests> [gap_sec=65] [max_fail=3]
 
 let _args = args()
-if _args.len() < 4 {
+if _args.len() < 3 {
     println("usage: anu_collector.hexa <out_hex> <n_req> [gap_sec] [max_fail]")
     exit(1)
 }
-let out_hex = _args[2]
-let n_req = to_int(_args[3])
+let out_hex = _args[1]
+let n_req = to_int(_args[2])
 let mut gap_sec: i64 = 65
-if _args.len() >= 5 { gap_sec = to_int(_args[4]) }
+if _args.len() >= 4 { gap_sec = to_int(_args[3]) }
 let mut max_fail: i64 = 3
-if _args.len() >= 6 { max_fail = to_int(_args[5]) }
+if _args.len() >= 5 { max_fail = to_int(_args[4]) }
 
 let meta_path = out_hex + ".meta.jsonl"
 let cache_path = env_var("HOME") + "/Dev/nexus/sim_bridge/godel_q/.anu_cache.bin"

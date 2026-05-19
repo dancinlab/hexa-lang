@@ -176,15 +176,15 @@ fn ks_two_sample(xs: list, ys: list) -> list {
 
 // ─── main ───
 let _a = args()
-if _a.len() < 7 {
+if _a.len() < 6 {
     println("usage: comparison.hexa <det_log> <qrng_log> <qrng_label> <summary_md> <stats_json>")
     exit(1)
 }
-let det_log = _a[2]
-let qrng_log = _a[3]
-let qrng_label = _a[4]
-let summary_path = _a[5]
-let stats_path = _a[6]
+let det_log = _a[1]
+let qrng_log = _a[2]
+let qrng_label = _a[3]
+let summary_path = _a[4]
+let stats_path = _a[5]
 
 let dets = load_trials(det_log)
 let qrngs = load_trials(qrng_log)

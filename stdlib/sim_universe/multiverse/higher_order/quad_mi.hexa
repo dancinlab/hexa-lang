@@ -183,8 +183,8 @@ fn load_trajectories(path: string) -> [[i64]] {
 
 // --- CLI ---
 let _args = args()
-if _args.len() >= 3 {
-    if _args[2] == "--self-test" {
+if _args.len() >= 2 {
+    if _args[1] == "--self-test" {
         // identical quad (redundancy)
         let mut x: [i64] = []
         let mut y: [i64] = []
@@ -227,14 +227,14 @@ if _args.len() >= 3 {
         }
         let r3 = quad_mi(x3, y3, z3, w3)
         println("synergy quad (w=x+y+z): I=" + to_string(r3))
-    } else if _args.len() >= 4 {
-        let in_path = _args[2]
-        let out_path = _args[3]
+    } else if _args.len() >= 3 {
+        let in_path = _args[1]
+        let out_path = _args[2]
         // optional sub-sample N
         let mut sub_n = 0
-        if _args.len() >= 6 {
-            if _args[4] == "--sub-sample" {
-                try { sub_n = to_int(_args[5]) } catch e { sub_n = 0 }
+        if _args.len() >= 5 {
+            if _args[3] == "--sub-sample" {
+                try { sub_n = to_int(_args[4]) } catch e { sub_n = 0 }
             }
         }
         let trajs = load_trajectories(in_path)

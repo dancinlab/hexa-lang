@@ -21,7 +21,7 @@ fn urandom_hex() -> string {
 
 let _args = args()
 let mut mode = "hex"
-if _args.len() >= 3 { mode = _args[2] }
+if _args.len() >= 2 { mode = _args[1] }
 
 let mut hex = ""
 let mut source = ""

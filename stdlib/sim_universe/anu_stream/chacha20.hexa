@@ -195,7 +195,7 @@ fn bytes_to_hex(bs: [int]) -> string {
 
 // --- CLI entry: self-test against RFC 7539 §2.3.2 vector ---
 let _a = args()
-let mode = if _a.len() >= 3 { _a[2] } else { "help" }
+let mode = if _a.len() >= 2 { _a[1] } else { "help" }
 
 if mode == "test" {
     // RFC 7539 §2.3.2 test: key = 00..1f, counter=1, nonce=00 00 00 09 00 00 00 4a 00 00 00 00

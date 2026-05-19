@@ -236,15 +236,15 @@ fn _spearman(x: list, y: list) -> f64 {
 
 fn main() {
     let a = args()
-    if a.len() < 5 {
+    if a.len() < 4 {
         println("USAGE: xcorr_engine.hexa <constants.tsv> <stream.hex> <out.csv> [label=anu]")
         return
     }
-    let const_path = a[2]
-    let stream_path = a[3]
-    let out_path = a[4]
+    let const_path = a[1]
+    let stream_path = a[2]
+    let out_path = a[3]
     let mut label = "anu"
-    if a.len() >= 6 { label = a[5] }
+    if a.len() >= 5 { label = a[4] }
 
     let mut stream_hex = ""
     try { stream_hex = read_file(stream_path).trim() } catch e4 { stream_hex = "" }
