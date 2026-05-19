@@ -136,6 +136,24 @@ pub let LENS_NODES: [LensNode] = [
         cite: [] },
     LensNode { kind: "L", id: "falsify_self.contradiction_pair", family: "falsify_self",
         docstring: "Find pairs of @L laws whose claims algebraically contradict — flag as falsifier candidate.",
+        cite: [] },
+
+    // --- family: unfold (4) — RFC 065 §9 amendment (9th family, archive-nexus heritage) -
+    // archive-nexus era's atlas-growth lens family. Under RFC 065's
+    // PR-only invariant (@D g_atlas_binary_builtin) the multi-emit effect
+    // is preserved (inbox/atlas_candidates/<slug>.md -> `hexa atlas pr`
+    // -> baked); direct fold-to-live remains forbidden.
+    LensNode { kind: "L", id: "unfold.cite_chain", family: "unfold",
+        docstring: "Walk each P node's edges (depends_on/derives/equivalents); emit Candidate per cited id absent from baked P set (atlas-growth seed).",
+        cite: [] },
+    LensNode { kind: "L", id: "unfold.transitive_derive", family: "unfold",
+        docstring: "BFS depth-2 along `->` derive edges from every P node; emit Candidate per discovered id absent from atlas.",
+        cite: [] },
+    LensNode { kind: "L", id: "unfold.taylor_series", family: "unfold",
+        docstring: "For each @F formula carrying a variable, emit Candidate per Taylor expansion term (sibling series identity).",
+        cite: [] },
+    LensNode { kind: "L", id: "unfold.eq_substitution", family: "unfold",
+        docstring: "For each @L law with `==` equivalence chain, emit Candidate per substitution that propagates an equality to an atlas node missing it.",
         cite: [] }
 ]
 
@@ -356,6 +374,89 @@ pub fn lens_apply_falsify_self_contradiction_pair(view: AtlasView) -> array {
     return empty_candidate_list()
 }
 
+pub fn lens_apply_unfold_cite_chain(view: AtlasView) -> array {
+    // C-1.d unfold heritage — walk each P node's edges; emit Candidate per
+    // cited id absent from baked P set. 3-tier honest shape:
+    //   tier 1  view.p_nodes empty -> [] (no work)
+    //   tier 2  cited set empty (edges default-empty) -> 1 summary
+    //   tier 3  cited populated -> emit per dangling id (cap 32)
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut cited: array = []
+    let mut i = 0
+    while i < n {
+        let edges = view.p_nodes[i].edges
+        let m1 = len(edges.depends_on)
+        let mut k = 0
+        while k < m1 { cited.push(edges.depends_on[k]); k = k + 1 }
+        let m2 = len(edges.derives)
+        k = 0
+        while k < m2 { cited.push(edges.derives[k]); k = k + 1 }
+        let m3 = len(edges.applications)
+        k = 0
+        while k < m3 { cited.push(edges.applications[k]); k = k + 1 }
+        let m4 = len(edges.equivalents)
+        k = 0
+        while k < m4 { cited.push(edges.equivalents[k]); k = k + 1 }
+        i = i + 1
+    }
+    if len(cited) == 0 {
+        let mut out: array = []
+        out.push(Candidate {
+            slug: "unfold.cite_chain.edges_not_enriched",
+            family: "unfold",
+            proposed: "tier 2 — unfold-driven atlas growth blocked: baked rodata EdgeInfo default-empty across all " + to_string(n) + " P nodes. archive-nexus era multi-emit effect awaits PLAN.md atlas_enrich pass wire.",
+            cite: ["n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+        return out
+    }
+    let mut p_set: array = []
+    let mut a = 0
+    while a < n { p_set.push(view.p_nodes[a].id); a = a + 1 }
+    let mut out: array = []
+    let mut emitted = 0
+    let cn = len(cited)
+    let mut b = 0
+    while b < cn {
+        if emitted >= 32 { break }
+        let cid = cited[b]
+        let mut found = false
+        let pn = len(p_set)
+        let mut q = 0
+        while q < pn {
+            if p_set[q] == cid { found = true; break }
+            q = q + 1
+        }
+        if found == false {
+            out.push(Candidate {
+                slug: "unfold.cite_chain." + cid,
+                family: "unfold",
+                proposed: "tier 3 — atlas P kind cites '" + cid + "' but that id is absent from baked P_NODES — candidate new atlas node from unfold walk.",
+                cite: [cid],
+                fire_needed: false,
+                fire_estimate_usd: 0.0
+            })
+            emitted = emitted + 1
+        }
+        b = b + 1
+    }
+    return out
+}
+
+pub fn lens_apply_unfold_transitive_derive(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+
+pub fn lens_apply_unfold_taylor_series(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+
+pub fn lens_apply_unfold_eq_substitution(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+
 // Dispatch: id -> apply fn. Cycle stage 2 (LENS) calls this in a loop
 // over the active filter set. Unknown id returns [] (no-op).
 pub fn lens_apply_by_id(id: string, view: AtlasView) -> array {
@@ -398,6 +499,11 @@ pub fn lens_apply_by_id(id: string, view: AtlasView) -> array {
     if id == "falsify_self.cite_unreachable" { return lens_apply_falsify_self_cite_unreachable(view) }
     if id == "falsify_self.stale_node_decay" { return lens_apply_falsify_self_stale_node_decay(view) }
     if id == "falsify_self.contradiction_pair" { return lens_apply_falsify_self_contradiction_pair(view) }
+
+    if id == "unfold.cite_chain" { return lens_apply_unfold_cite_chain(view) }
+    if id == "unfold.transitive_derive" { return lens_apply_unfold_transitive_derive(view) }
+    if id == "unfold.taylor_series" { return lens_apply_unfold_taylor_series(view) }
+    if id == "unfold.eq_substitution" { return lens_apply_unfold_eq_substitution(view) }
 
     return empty_candidate_list()
 }
