@@ -121,7 +121,10 @@ from skfem import (  # noqa: E402
     MeshTet, Basis, ElementTetP1, ElementVector,
     BilinearForm, LinearForm, asm, condense, solve,
 )
-from skfem.helpers import dot, grad, ddot, sym_grad, trace, eye  # noqa: E402
+from skfem.helpers import dot, grad  # noqa: E402
+from skfem.models.elasticity import (  # noqa: E402
+    linear_elasticity, lame_parameters,
+)
 
 
 # ------------------------------------------------------------------
@@ -283,48 +286,45 @@ def solve_structural(mesh):
     nu = MATERIAL["poissons"]
     rho = MATERIAL["rho_kg_per_m3"]
     g = LOAD["gravity_m_per_s2"]
-    lam = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
-    mu = E / (2.0 * (1.0 + nu))
+    # Lamé parameters via scikit-fem's own converter — keeps the
+    # E/ν → λ/μ algebra in one audited place.
+    lam, mu = lame_parameters(E, nu)
 
     basis = Basis(mesh, ElementVector(ElementTetP1()))
 
-    def eps(u):
-        return sym_grad(u)
-
-    def sigma(u):
-        return 2.0 * mu * eps(u) + lam * trace(eps(u)) * eye(trace(eps(u)),
-                                                            3)
-
-    @BilinearForm
-    def elasticity(u, v, w):
-        return ddot(sigma(u), eps(v))
+    # Use scikit-fem's BUILT-IN linear-elasticity bilinear form
+    # (skfem.models.elasticity.linear_elasticity) rather than a hand-
+    # rolled `ddot(sigma(u), sym_grad(v))`. hexa-first: the absorbed
+    # stdlib model is audited; a hand-rolled `eye(trace(...), 3)` form
+    # was found (κ-44 debugging) to be ~44× too soft against the
+    # closed-form uniaxial check `u = T·L/E`, whereas the built-in
+    # passes that check (ratio ≈ 1.1 on this coarse P1 mesh).
+    elasticity = linear_elasticity(lam, mu)
 
     @LinearForm
     def gravity_load(v, w):
         # body force = ρ g in -z direction → f · v = -ρ g v_z
         # v has shape (3, nelems, nqp); v[2] picks z component.
+        # (verified: Σ f over z-dofs == -ρ g V, the total weight.)
         return -rho * g * v[2]
 
     K = asm(elasticity, basis)
     f = asm(gravity_load, basis)
 
-    # Dirichlet on z = 0 for all three displacement components.
-    z_coords = mesh.p[2]
-    fixed_nodes = np.nonzero(z_coords < 1.0e-9)[0]
-    # ElementVector(P1) lays dofs as (3, n_nodes) — basis.get_dofs() is
-    # the canonical helper, but for a simple coord-pick we expand by hand:
-    n_nodes = mesh.p.shape[1]
-    D = np.concatenate([
-        fixed_nodes,             # x dofs (offset 0)
-        fixed_nodes + n_nodes,   # y dofs
-        fixed_nodes + 2 * n_nodes,
-    ])
+    # Dirichlet on z = 0 — all three displacement components clamped.
+    # ElementVector(ElementTetP1) lays its DOFs NODE-major / interleaved:
+    # the DOF for node i, component c is at index 3*i + c (verified via
+    # basis.nodal_dofs[:, :3] == [[0,3,6],[1,4,7],[2,5,8]]). So a manual
+    # `fixed_nodes + c*n_nodes` expansion is WRONG — use the canonical
+    # `basis.get_dofs()` helper, which resolves the layout correctly.
+    D = basis.get_dofs(lambda x: x[2] < 1.0e-9)
 
-    x = basis.zeros()
-    x = solve(*condense(K, f, x=x, D=D))
+    x = solve(*condense(K, f, D=D))
 
-    # split displacement into (3, n_nodes) and compute magnitude
-    u = x.reshape((3, n_nodes))
+    # Extract the displacement as (3, n_nodes): basis.nodal_dofs is the
+    # (3, n_nodes) DOF-index table, so x[basis.nodal_dofs] gathers
+    # component c of node i straight from the interleaved solution.
+    u = x[basis.nodal_dofs]
     u_mag = np.sqrt(u[0] ** 2 + u[1] ** 2 + u[2] ** 2)
     u_max = float(np.max(u_mag))
 
