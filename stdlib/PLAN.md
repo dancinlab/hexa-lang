@@ -852,3 +852,15 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   mol{weight,hba,hbd,from_smiles,logp,tpsa} · mlff{Stage-1 + interim
   Python-NNP bridge}. 다음: T5(mlff hexa-native NNP = grad/safetensors,
   수개월; bridge 가 그동안 커버).
+- 2026-05-19 — **종착 아키텍처 디렉티브 (user)**: **hexa-lang 단일 통합**.
+  hexa-matter·hexa-bio 는 **문서만 남기고 아카이브** 예정 — 그들의
+  stdlib/툴/외부라이브러리(absorption bridge 16 어댑터, _python_bridge,
+  science-stack 등)까지 **전부 hexa-lang 으로 이동**. hexa-lang 이 모든
+  것을 보유하고, 타 프로젝트는 (이미 적용된 AGENTS pointer 처럼) hexa-lang
+  을 가리키기만 함. 이번 세션 범위: 이 종착점을 SSOT 에 기록 + T3/T4
+  마무리. **다음 단계(별도 대형 트랙)**: (1) hexa-bio `_hexa_bridge` +
+  `_absorption_bridge` + hexa-matter `_python_bridge`/`_absorption_bridge`
+  자산을 hexa-lang `stdlib/` 하위로 이관·재배선, (2) 외부 Python
+  라이브러리는 mlff bridge 패턴(interim Python-tool 셸아웃 → 점진적
+  hexa-native 대체)으로 흡수, (3) hexa-matter·hexa-bio 는 문서 아카이브.
+  T5(nd/grad·qchem·mlff hexa-native NNP)는 이 통합 트랙과 병행/후속.
