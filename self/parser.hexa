@@ -21,12 +21,8 @@
 //               AssignStmt, ExprStmt, MatchStmt, ImplBlock, TraitDecl,
 //               ProofStmt, AssertStmt, UseStmt, ModStmt,
 //               TryCatch, ThrowStmt, PanicStmt, DropStmt,
-<<<<<<< HEAD
-//               SpawnStmt,
-=======
 //               OwnStmt, BorrowStmt, MoveStmt,
-//               SpawnStmt, ScopeStmt, SelectStmt,
->>>>>>> 234063d1 (feat(parser): own/borrow/move/drop bare-stmt surface (SPEC §11 v1 no-op))
+//               SpawnStmt,
 //               AsyncFnDecl, ExternFnDecl, TypeAlias, AtomicLet,
 //               BreakStmt, ContinueStmt, YieldStmt, DoWhileStmt,
 //               ForElseStmt, DeferStmt,
