@@ -89,7 +89,7 @@ fn get_keywords() -> [string] {
         "let", "mut", "const", "static",
         "mod", "use", "pub", "crate",
         "own", "borrow", "move", "drop",
-        "spawn", "channel", "select", "atomic",
+        "spawn", "atomic",
         "effect", "handle", "resume", "pure",
         "proof", "assert", "invariant", "theorem",
         "macro", "derive", "where", "comptime",

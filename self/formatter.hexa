@@ -383,21 +383,6 @@ fn format_stmt(stmt, indent) {
     if k == "DropStmt" {
         return prefix + "drop " + stmt.name
     }
-    if k == "SelectStmt" {
-        let sarms = stmt.arms
-        if sarms == "" || len(sarms) == 0 {
-            return prefix + "select {}"
-        }
-        let mut s = prefix + "select {\n"
-        let mut si = 0
-        while si < len(sarms) {
-            let sarm = sarms[si]
-            s = s + prefix + "    " + format_expr(sarm.left) + " => " + format_block(sarm.body, indent + 1) + ",\n"
-            si = si + 1
-        }
-        s = s + prefix + "}"
-        return s
-    }
     if k == "HandleWithStmt" {
         let handlers = stmt.items
         let body_str = format_block(stmt.body, indent)
@@ -413,9 +398,6 @@ fn format_stmt(stmt, indent) {
         }
         s = s + prefix + "}"
         return s
-    }
-    if k == "ScopeStmt" {
-        return prefix + "scope " + format_block(stmt.body, indent)
     }
 
     // ── proofs / intents / verification ────────────────────

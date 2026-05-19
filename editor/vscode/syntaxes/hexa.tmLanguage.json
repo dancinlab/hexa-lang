@@ -70,7 +70,7 @@
                 },
                 {
                     "name": "keyword.other.hexa",
-                    "match": "\\b(mod|use|pub|crate|own|borrow|move|drop|spawn|channel|select|atomic|effect|handle|resume|pure|proof|assert|invariant|theorem|macro|derive|where|comptime|try|catch|throw|panic|recover|intent|generate|verify|optimize|async|await)\\b"
+                    "match": "\\b(mod|use|pub|crate|own|borrow|move|drop|spawn|atomic|effect|handle|resume|pure|proof|assert|invariant|theorem|macro|derive|where|comptime|try|catch|throw|panic|recover|intent|generate|verify|optimize|async|await)\\b"
                 },
                 {
                     "name": "constant.language.boolean.hexa",

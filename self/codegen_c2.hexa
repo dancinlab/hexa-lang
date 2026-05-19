@@ -2585,14 +2585,12 @@ fn gen2_stmt(node, depth) {
         return pad + "__defer_" + to_string(flag_id) + "_active = 1;\n"
     }
 
-    // Plan B Phase 3: scope { body } — a nested C block. Unlike some
-    // Go-style scope primitives, hexa's scope does NOT create a new
-    // defer stack; defers inside still fire at enclosing fn exit
-    // (matches interp interpreter, self/hexa_full.hexa line 8763).
-    // We emit as `{ ... }` so local `let` declarations stay scoped
-    // per C semantics. `spawn { body }` has identical single-threaded
-    // eval semantics in the interpreter, so it shares this codegen.
-    if k == "ScopeStmt" || k == "SpawnStmt" {
+    // `spawn { body }` — single-threaded eval semantics (matches interp,
+    // self/hexa_full.hexa line 8763). Emit as `{ ... }` so local `let`
+    // declarations stay scoped per C semantics.
+    // (KEYWORD_DEMOTE Phase 1: ScopeStmt branch removed — `scope` keyword
+    // had 0/0 block-form usage; the construct was dead weight.)
+    if k == "SpawnStmt" {
         let mut chunks = []
         chunks.push(pad + "{\n")
         if type_of(node.body) == "array" {
@@ -2831,36 +2829,9 @@ fn gen2_stmt(node, depth) {
         return chunks.join("")
     }
 
-    // ── G28: guard EXPR else { BODY } ─────────────────────────
-    // If cond is falsy, run else_body (which should return/break/continue).
-    // Mirror interpreter path in self/hexa_full.hexa (k == "GuardStmt").
-    if k == "GuardStmt" {
-        let mut chunks = []
-        chunks.push(pad + "if (!hexa_truthy(" + gen2_expr(node.cond) + ")) {\n")
-        let mut gi = 0
-        while gi < len(node.else_body) {
-            chunks.push(gen2_stmt(node.else_body[gi], depth + 1))
-            gi = gi + 1
-        }
-        chunks.push(pad + "}\n")
-        return chunks.join("")
-    }
-
-    // ── G28: guard let NAME = EXPR else { BODY } ─────────────
-    // If expr is falsy, run else_body (early exit). Otherwise bind NAME.
-    // Parser stores: left=expr, name=NAME, else_body=block.
-    if k == "GuardLetStmt" {
-        let mut chunks = []
-        chunks.push(pad + "HexaVal " + node.name + " = " + gen2_expr(node.left) + ";\n")
-        chunks.push(pad + "if (!hexa_truthy(" + node.name + ")) {\n")
-        let mut gli = 0
-        while gli < len(node.else_body) {
-            chunks.push(gen2_stmt(node.else_body[gli], depth + 1))
-            gli = gli + 1
-        }
-        chunks.push(pad + "}\n")
-        return chunks.join("")
-    }
+    // (KEYWORD_DEMOTE Phase 1: GuardStmt + GuardLetStmt removed — `guard`
+    // keyword had 0/0 block-form usage; `if !cond { ... }` covers the same
+    // pattern. Identifier uses like `guard = guard + 1` now just work.)
 
     // ── T3: InvariantDecl — @invariant DSL (codegen no-op) ───
     // Static analysis only, performed by self/invariant_check.hexa.
