@@ -2,11 +2,15 @@
 
 ## 1. Status
 
-- **Status**: **design-draft (2026-05-19)** — DESIGN ONLY, no implementation.
-  This RFC scopes ROADMAP child **69** ("runtime 2-레이어 분할"), which until
-  now was a single unscoped roadmap line. No code moves with this RFC; it
-  defines the boundary criterion, the bootstrap-circularity constraint, and a
-  4-phase execution plan so the split can proceed as reviewable cycles.
+- **Status**: **P0 + P1 LANDED — 2026-05-19 (commit `4fb439fc`, origin/rfc043)**.
+  P0 boundary ledger §5b. **P1 done**: `self/runtime.c` (13,332 lines)
+  partitioned into `self/runtime_core.c` (6,065 lines) + `self/runtime.c`
+  (7,319 lines, `#include`s runtime_core.c). Pure file split — validated:
+  compiles clean, atlas_verify_smoke 118/118, self-host fixpoint
+  byte-identical. Note: the 6,065-line core is coarser than the §5b ≈2.4-3k
+  projection — P1's deliverable is a clean compiling split, not a line count;
+  boundary refinement is a P1-followup. P2/P3 (authoring the hi tier as
+  `runtime_hi.hexa`) remain future cycles.
 - **Date**: 2026-05-19
 - **Priority**: P2 (architectural hygiene — not on any critical chain; the
   monolithic runtime.c works correctly today, it is simply hard to audit and

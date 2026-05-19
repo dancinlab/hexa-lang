@@ -2501,3 +2501,18 @@ EffectDecl gap). roadmap_view non-build confirmed pre-existing (base
 233548a6 fails identically). 118 files. Re-validated on main (atlas
 118/118), hexa.real reinstalled (production dedup confirmed N=4),
 origin/rfc043 pushed. ROADMAP 65 fully closed (API + dedup).
+
+### 2026-05-19 — RFC 061-P1 runtime 2-layer split LANDED (commit 4fb439fc)
+
+`self/runtime.c` (13,332 lines) partitioned into `self/runtime_core.c`
+(6,065 lines) + `self/runtime.c` (7,319 lines, `#include`s runtime_core.c).
+Pure file split, functionally identical TU. Produced by a background
+worktree agent (rate-limit interrupted, WIP 61c2adc8), integrated by hand
+onto post-RFC-062 main — the 4 argv[0]-dedup functions all landed in
+runtime_core.c and were re-patched to the RFC 062 form. Validated:
+runtime.o + hexa_v2 + hexa.real compile clean, args() dedup holds,
+atlas_verify_smoke 118/118, self-host fixpoint byte-identical (regen
+diff 0). The 6,065-line core is coarser than the §5b ≈2.4-3k projection —
+P1 deliverable is a clean compiling split, boundary refinement is a
+followup. P2/P3 (`runtime_hi.hexa` authoring) remain future cycles.
+ROADMAP child 69: P0+P1 done.

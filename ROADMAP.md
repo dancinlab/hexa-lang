@@ -201,7 +201,12 @@ Parent roadmap **64** → 5 children **65–69**. 상세 정의 `.roadmap` 64–
   측정 결과 ROADMAP 원래의 "≤500 줄" core 목표는 **달성 불가** — irreducible
   core (representation + allocator + universal-codegen primitives) ≈ **2.4–3k
   줄** (~98–120 함수). 목표를 "≈2.5k core / ≈10.8k hi" 로 정정. RFC 061 §5b.
-  P1 (core 추출) 부터는 phase 단위 reviewable cycle.
+  **061-P1 LANDED (2026-05-19, commit `4fb439fc`)** — runtime.c 13,332줄 →
+  `runtime_core.c` 6,065줄 + `runtime.c` 7,319줄 (`#include`). pure file
+  split, atlas 118/118 + self-host fixpoint byte-identical 검증. 6,065줄
+  core 는 §5b 추정보다 coarse — P1 deliverable 은 clean split (line count
+  아님), boundary refinement 은 P1-followup. P2/P3 (`runtime_hi.hexa` 저작)
+  은 향후 cycle.
 
 ---
 
