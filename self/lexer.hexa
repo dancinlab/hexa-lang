@@ -41,8 +41,6 @@ fn is_keyword(word) {
     if word == "move" { return true }
     if word == "drop" { return true }
     if word == "spawn" { return true }
-    if word == "channel" { return true }
-    if word == "select" { return true }
     if word == "atomic" { return true }
     if word == "effect" { return true }
     if word == "handle" { return true }
@@ -69,12 +67,10 @@ fn is_keyword(word) {
     if word == "break" { return true }
     if word == "continue" { return true }
     if word == "dyn" { return true }
-    if word == "scope" { return true }
     if word == "in" { return true }
     if word == "do" { return true }
     if word == "defer" { return true }
     if word == "typeof" { return true }
-    if word == "guard" { return true }
     if word == "with" { return true }
     if word == "as" { return true }
     // Termination policy modifiers were reserved 2026-05-06 but pulled
