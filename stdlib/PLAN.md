@@ -800,3 +800,20 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   (46/46). `atoms_emt_relax` 는 force 함수형+line-search 필요 →
   Stage-2.5 센티넬 유지. 빌드: ubu-2 toolchain 파손 확인(hexa cc
   링크 실패) → macOS 빌드.
+- 2026-05-19 — **T4 Stage-2.6: mol Wildman-Crippen logP + Ertl TPSA**
+  (`05e612da`, `rfc043-hexa-torch`). mol_logp — Wildman&Crippen 1999
+  JCICS 39:868 원자기여표 verbatim(RDKit BSD-3 Crippen.txt); mol_tpsa
+  — Ertl 2000 JMC 43:3714 Table-1 fragment표 verbatim. `Mol.arom`
+  per-atom 확장 + `mol_new_arom`. 검증 anchor(published): logP
+  methane 0.6361·ethanol −0.0014·benzene 1.6866 …; TPSA methanol
+  20.23·acetic-acid 37.30·pyridine 12.89·benzene 0.0. macOS
+  __MOL_DESCRIPTOR_TEST__ PASS (19/19), 회귀 clean(mol 14/14·smiles
+  22/22). 지원 subset 명시·미지원 타입은 fallback 0/문서화(상수
+  미조작·g3). +upstream `self/runtime.c` `<execinfo.h>` 게이트 수정
+  (backtrace 이식성 — 앞서 진단한 ubu-2 빌드실패 근본원인).
+  **T4 Stage-2/2.5/2.6 genuine 커널 전부 완료**: atoms{bulk,
+  neighborlist,from_cif,emt_energy} · crystal{coords,angles,N-hull,
+  from_cif,spacegroup} · mol{weight,hba,hbd,from_smiles,logp,tpsa}.
+  잔여: atoms_emt_relax(force 함수형+line-search) · mlff Stage-2
+  (T5 = grad/safetensors, 수개월) — 둘 다 한 세션 범위 밖, 가짜
+  완료 안 함(g3).
