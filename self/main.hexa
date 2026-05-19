@@ -11,12 +11,11 @@
 //    hexa help                    도움말
 //
 //  빌드 체인 (go/rust 부트스트랩 패턴):
-//    interp = build/hexa_interp (이전 바이너리, 앵커)
 //    dispatch = hexa_v2 self/main.hexa -> main.c -> clang -> 루트 ./hexa
 //    stage2 = ./hexa build self/main.hexa -> stage2 비교 (fixpoint)
 //
 //  골화 레지스트리: $ANIMA/shared/hexa/hexa_toolchain.json
-//    (CLI dispatcher + interp interp + hexa_cc 전체 포괄)
+//    (CLI dispatcher + hexa_cc 전체 포괄)
 //    ossified[]/stable[]/failing[] 3섹션. 수정 시 해당 섹션 업데이트.
 //  런타임 병목 추적: doc/runtime_bottlenecks.json
 // ═══════════════════════════════════════════════════════════
@@ -382,12 +381,6 @@ fn cmd_status() {
     println("  ./hexa:      " + hexa_bin)
     let cc_bin = exec("ls -la self/native/hexa_v2 2>&1 | head -1 | tr -d '\\n'")
     println("  hexa_cc:     " + cc_bin)
-    let interp = exec("ls -la build/hexa_interp 2>/dev/null | head -1 | tr -d '\\n'")
-    if len(interp) > 0 {
-        println("  interp:      " + interp)
-    } else {
-        println("  interp:      (not archived)")
-    }
     let self_cnt = exec("ls self/*.hexa 2>/dev/null | wc -l | tr -d ' \\n'")
     println("  SSOT .hexa:  " + self_cnt + " files")
     let art_cnt = exec("ls build/artifacts 2>/dev/null | wc -l | tr -d ' \\n'")
@@ -1512,7 +1505,7 @@ fn install_dir_from_argv0() {
     //
     // hexa-runner container 진단 (BG ab36b1648a338643c, 2026-05-03):
     //   - container `/usr/local/bin/hexa` 호출 시 args()[0] empty/unresolvable
-    //   - resolve_cmd 가 빈 D 반환 → resolve_interp 실패 → silent emit 회귀
+    //   - resolve_cmd 가 빈 D 반환 → install_dir 미해결 → silent emit 회귀
     //   - /proc/self/exe symlink 은 Linux kernel 이 항상 제공하므로 안정적.
     //   - macOS 는 /proc 자체가 없음 → 자동 skip (test -L 실패).
     let av0 = args()
@@ -1535,14 +1528,12 @@ fn install_dir_from_argv0() {
     //    test -L 로 symlink 존재 확인 (macOS 에서는 false → "" 반환).
     //    readlink -f 우선, fallback 으로 realpath.
     //
-    // 의미론 보정: install_dir 정의 = "hexa driver wrapper 가 있는 디렉토리"
-    //   (`<install_dir>/build/hexa_interp`, `<install_dir>/self/...` layout).
-    // /proc/self/exe 는 *현재 실행 중인 프로세스* binary 를 가리킨다. main.hexa
-    // 는 hexa_interp 안에서 동작하므로 보통 `.../build/hexa_interp` 가 잡힌다.
-    // 즉 dirname(REAL) = `.../build` → install_dir 은 그 부모.
-    // 안전 보정: basename(dirname) == "build" 일 때 한 단계 더 올라간다.
-    // (driver wrapper 가 동일 process 로 실행되는 wrapper-less layout 도
-    //  대비: basename(dirname) != "build" 면 그대로 dirname 사용.)
+    // 의미론 보정: install_dir 정의 = "hexa driver 가 있는 디렉토리"
+    //   (`<install_dir>/hexa.real`, `<install_dir>/self/...` layout).
+    // /proc/self/exe 는 *현재 실행 중인 프로세스* binary 를 가리킨다 — R7
+    // 이후 그것은 compiled `hexa.real` 이므로 dirname(REAL) = install_dir.
+    // 안전 보정: basename(dirname) == "build" (구 layout 잔재) 일 때만 한
+    // 단계 위로; 그 외에는 dirname 을 그대로 install_dir 로 사용.
     let proc_cmd = "if [ -L /proc/self/exe ]; then REAL=\"$(readlink -f /proc/self/exe 2>/dev/null || realpath /proc/self/exe 2>/dev/null)\"; if [ -n \"$REAL\" ] && [ -f \"$REAL\" ]; then D=\"$(cd \"$(dirname \"$REAL\")\" 2>/dev/null && pwd -P)\"; if [ \"$(basename \"$D\")\" = \"build\" ]; then D=\"$(cd \"$D/..\" 2>/dev/null && pwd -P)\"; fi; printf '%s' \"$D\"; fi; fi"
     let pd = exec(proc_cmd)
     return pd
@@ -1574,34 +1565,11 @@ fn resolve_hexa_v2() {
     return ""
 }
 
-// B1 Linux portability — cmd_run 이 사용할 interp / module_loader 경로 resolver.
-// 이전: `exec("printf '%s' \"$HEXA_LANG/...\"")` 로 $HOME 하드코딩.
-//       이는 리포가 $HEXA_LANG 에 있을 때만 동작. Linux 사용자 / 다른
-//       설치 경로 / CI 등에서 silently "not found" 로 실패.
-// 신규: resolve_hexa_v2() 와 동일한 3-단 fallback (argv[0] → cwd → $HOME).
-// 2026-05-03 추가: 4-단 fallback — `/usr/local/bin/build/hexa_interp` (hexa-runner
-//   container 기본 위치). install_dir_from_argv0() 의 /proc/self/exe fallback 이
-//   실패해도 container layout 이 표준일 때 silent emit 회귀 방지.
-// 2026-05-03 cosmetic polish: 0-단 fallback — `$HEXA_INTERP` env var override.
-//   ~/.hx/bin/hexa dispatch script seeds HEXA_INTERP for the container; this
-//   makes the env var actually honored by resolve_interp() (was previously
-//   ignored — relied on 4-tier hardcoded path coincidence). Allows operator
-//   override without touching dispatch infra. See state/cosmetic_polish_batch_2026_05_03/.
-// 2026-05-14: probe `hexa_interp`, then `hexa_interp.linux` / `hexa_interp.darwin`
-// at each path tier — Linux + macOS build scripts produce per-OS-suffixed
-// binaries (build/hexa_interp.linux, build/hexa_interp.darwin) and *usually*
-// also a `hexa_interp` symlink. A fresh upstream clone has only the suffixed
-// file, no symlink — without this probe `resolve_interp` returns "" and the
-// flatten step silently falls back to raw-src mode, dropping cross-module
-// forward decls (downstream symptom: clang errors "use of undeclared
-// identifier '<fn>'" when <fn> lives in a `use`d module).
-// Reported by wilson session 2026-05-14 (Step G ubu-2 build).
-// _probe_interp_at() removed — R7 Cycle C closure (sole caller was the
-// now-deleted resolve_interp()).
-// resolve_interp() removed — R7 Cycle C closure. The tree-walking
-// interpreter is retired; no code path resolves a build/hexa_interp
-// binary anymore (cmd_run is compile-then-exec, cmd_build's flatten
-// uses the compiled module_loader binary).
+// R7 Cycle C closure — resolve_interp() and _probe_interp_at() removed.
+// The tree-walking interpreter is retired (g_interp_deprecated); no code
+// path resolves a build/hexa_interp binary anymore. `cmd_run` is compile-
+// then-exec and `cmd_build`'s flatten step uses the compiled module_loader
+// binary (resolve_module_loader_compiled, below).
 
 // interp-retirement R7 gate #4: prefer a COMPILED module_loader binary so the
 // `hexa build` flatten step runs interp-free. Probes (in order) $HEXA_MODULE_LOADER
@@ -2533,47 +2501,21 @@ fn cmd_batch(files) {
 //   - 첫 회 실행은 cold (디스크 캐시) — N>=3 권장, median 사용으로 흡수.
 
 fn bench_time_cmd(bin, file) {
-    // /usr/bin/time 호출 한 회. 결과 stderr 를 임시파일에 캡처해서
-    // grep/awk 로 wall/RSS 추출. stdout 은 통째로 버린다(스크립트 무관).
-    // tmp 경로는 PID 구분으로 동시 호출 충돌 방지(bt 37 패턴 차용).
+    // One `/usr/bin/time` invocation; its stderr is captured to a
+    // PID-tagged tmp file for wall/RSS extraction (stdout discarded).
+    // tmp path is PID-tagged to avoid concurrent-call collision.
     //
-    // 중요: `./hexa run <file>` dispatcher 는 interp child 의 stderr 를 자기
-    // stdout 으로 합치면서 동시에 `print(out)` 으로 다시 stdout 에 흘리기 때문에,
-    // interp 의 HEXA_ALLOC_STATS dump 가 parent 의 stderr 에 도달하지 못한다.
-    // 따라서 parent 의 HEXA_ALLOC_STATS 만 stats_file 에 남고(작은 수치),
-    // 진짜 워크로드 카운터는 사라진다.
-    //
-    // 회피: interp binary(`build/hexa_interp`) 를 직접 호출. 이렇게 하면
-    // 인터프리터가 단일 프로세스로 돌고 atexit dump 가 해당 프로세스의 stderr
-    // (= /usr/bin/time stderr 에 함께 묶여 stats_file 에 적힘) 에 정확히 한 번만
-    // 출력된다. `bin` 인자가 ./hexa 면 같은 디렉토리의 build/hexa_interp 사용,
-    // 그렇지 않으면 (--compare 등) bin 자체가 interp-호환 인터프리터라고
-    // 가정하고 직접 실행.
+    // R7 (g_interp_deprecated): the tree-walking interpreter is retired,
+    // so there is no `build/hexa_interp` binary to invoke directly. The
+    // run goes through `bin run <file>` (cmd_run_user_direct → compile-
+    // then-exec). wall/RSS are still captured exactly by `/usr/bin/time`;
+    // the HEXA_ALLOC_STATS atexit dump now belongs to the compiled child
+    // process and is no longer separable from dispatcher output — wall/RSS
+    // is the reliable bench signal post-R7.
     let stats_file = exec("printf '%s' \"/tmp/hexa_bench_stats.$$.$RANDOM.txt\"")
     let alloc_env = "HEXA_ALLOC_STATS=1"
     let flag = if is_macos() { "-l" } else { "-v" }
-    // bin 처리 룰:
-    //   1) bin basename 이 'hexa_interp*' 으로 시작 → 직접 호출(파일만 인자).
-    //   2) bin 옆에 build/hexa_interp 존재 → 그것을 직접 호출.
-    //   3) 그 외 → bin run <file> (./hexa style dispatcher 가정).
-    // 1) 과 2) 는 atexit dump 가 단일 프로세스에서 한 번만 나오므로
-    // HEXA_ALLOC_STATS 가 정확하게 캡처된다.
-    let bn = exec("basename '" + bin + "' | tr -d ' \\n'")
-    let bn_starts_interp = exec("printf '%s' '" + bn + "' | awk '{ if (index($0, \"hexa_interp\") == 1) print \"yes\"; else print \"no\" }' | tr -d ' \\n'")
-    let dir = exec("dirname '" + bin + "' | tr -d ' \\n'")
-    let interp_path = dir + "/build/hexa_interp"
-    let has_interp = exec("test -x '" + interp_path + "' && printf yes || printf no")
-    let mut runner = bin
-    let mut runner_args = " run "
-    if bn_starts_interp == "yes" {
-        // bin 자체가 interp binary — 그대로 사용, run 서브커맨드 없음.
-        runner_args = " "
-    } else if has_interp == "yes" {
-        // bin 은 dispatcher (./hexa) — 옆의 interp 직접 호출.
-        runner = interp_path
-        runner_args = " "
-    }
-    let cmd = alloc_env + " /usr/bin/time " + flag + " '" + runner + "'" + runner_args + "'" + file + "' > /dev/null 2> '" + stats_file + "'"
+    let cmd = alloc_env + " /usr/bin/time " + flag + " '" + bin + "' run '" + file + "' > /dev/null 2> '" + stats_file + "'"
     let _ = exec(cmd)
     return stats_file
 }
@@ -2951,7 +2893,7 @@ if len(av) > 0 {
     }
     let av0_base = if slash >= 0 { av0.substring(slash + 1, len(av0)) } else { av0 }
     // self-name 스킵 — hexa 바이너리 본인 이름 계열.
-    // 1) "hexa" prefix — hexa, hexa_v2, hexa_interp, hexa_new, hexa.bak...
+    // 1) "hexa" prefix — hexa, hexa_v2, hexa_new, hexa.bak...
     // 2) common aliases
     let mut is_self = false
     if len(av0_base) >= 4 && av0_base.substring(0, 4) == "hexa" { is_self = true }
