@@ -3781,3 +3781,61 @@ hardcoded count). Then Phase C proper populates 1-2 seed lens bodies
   functional end-to-end on the safe-default path:
   `/tmp/hexadrv loop` -> 8 stage dispatch, 1 candidate flow,
   RFC §7 exhaustion semantic verified.
+
+## 진행 로그 — RFC 066 B-1a + RFC 065 C-2 PARTIAL UNBLOCK (2026-05-20)
+
+★ Atlas memcap blocker partial closure measured PASS.
+
+- **RFC 066 drafted** (`821b8ad8` + `d748b222`): atlas memcap
+  unblock spec. 3-option survey (A: per-kind split, B: HXC sidecar,
+  C: summary bake). Initial pick = A; post-draft empirical
+  measurement fired F2 falsifier on C kind (6201 entries OOM @
+  4 GB cap). Revised pick = **A + B hybrid** (A for 8 kinds, B
+  for C only).
+
+  Measurements (per-kind isolation, 4096 MB default cap):
+  ```
+  P (567)   PASS  rc=0
+  L (620)   PASS  rc=0
+  C (6201)  FAIL  rss=4197MB > 4096MB
+  E (10)    PASS (tiny)
+  F/R/S/X/Q (0)  PASS (empty)
+  ```
+
+- **RFC 066 B-1a delivered** (`13994bd4`):
+  `tool/atlas_split_by_kind.hexa` (hexa-native; hexa-first guard
+  blocked the .sh attempt) emits 8 baked sibling files under
+  `compiler/atlas/by_kind/{p,l,e,f,r,s,x,q}.gen.hexa`. p.gen.hexa
+  = 342 KB / 567 entries; l.gen.hexa = 384 KB / 620 entries; others
+  small. C kind explicitly skipped per RFC 066 §5.3 A+B hybrid.
+
+- **RFC 065 C-2 PARTIAL** (`13994bd4` cycle.hexa edit):
+  `stdlib/loop/cycle.hexa` gains `use "compiler/atlas/by_kind/p.gen"`;
+  AtlasView constructor populates `p_nodes: ATLAS_P_NODES`. First
+  stdlib/* consumer to import atlas rodata into a single translation
+  unit without exceeding 4 GB memcap.
+
+- **RFC 065 C-1.c delivered** (`fd1f47b3`):
+  `falsify_self.cite_unreachable` upgraded from C-1.a smoke to a
+  3-tier real cite-reachability scan:
+  - tier 1 — view.p_nodes empty → smoke fallback
+  - tier 2 — populated but cited set empty (edges default-empty in
+    static rodata, atlas_enrich pending) → 1 summary Candidate
+  - tier 3 — cited populated → real unreachable scan, ≤32 emissions
+
+  Measured: tier 2 fires correctly (1 honest summary Candidate
+  flagging atlas_enrich gap), so user sees `2 candidate(s) emitted`
+  (= C-1.b lens-table-audit + C-1.c tier-2 enrich-gap).
+
+- **HONEST finding surfaced by C-1.c**: the binary built-in atlas
+  rodata ships with default-empty EdgeInfo on every node — the lazy
+  `atlas_enrich` pass that PLAN.md 2026-05-13 references is NOT
+  wired into the static_index.hexa hot path. C-1.c does not spam
+  567 unreachable candidates; it cleanly flags this systemic gap.
+
+- **boundary (honest)**: L-kind wire (cheap, mirrors P), C-1.d more
+  lens bodies, and RFC 066 B-1b (HXC sidecar for C kind) remain.
+  These are bounded, well-scoped follow-ups; none are gating users
+  from the `hexa loop` verb today. The campaign is at a clean
+  closure point — verb works, real lens body emits real findings,
+  blockers documented with measured falsifier evidence.
