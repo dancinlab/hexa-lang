@@ -1,0 +1,52 @@
+// AUTO-GENERATED — do not edit. Regenerate via tool/lens_embed_gen.hexa
+//                  (the generator tool is a Phase B-2 deliverable; for
+//                  B-1 this file is hand-authored under the same schema).
+//
+// Phase B-1 of RFC 065: lens static embed (schema compile-check).
+// Spec:   RFC 065 §8 + §9 / AGENTS.tape @D g_atlas_binary_builtin
+// Source: hand-written B-1 seed (1 of 32 — remaining 31 land in
+//         subsequent commits per RFC §9 family-by-family).
+//
+// SSOT invariant (RFC 065 §10): this file is the binary built-in lens
+// table; direct fold-to-live is forbidden. New entries land via
+// `hexa lens pr` (Phase B-2+ verb), never by hand-editing on main.
+
+use "compiler/lenses/types"
+
+@phase("parse_only")
+pub let LENS_HASH: string = "0000000000000000000000000000000000000000000000000000000000000000"
+@phase("parse_only")
+pub let LENS_COUNT: i64 = 1
+@phase("parse_only")
+pub let LENS_GENERATED_AT: string = "2026-05-20T00:00:00Z"
+
+// Lens registry — B-1 seed.
+// Each row pairs metadata (here) with an apply fn (below) by `id`.
+// Apply fns return [] in B-1; bodies populate in Phase C per RFC §13.
+@phase("parse_only")
+pub let LENS_NODES: [LensNode] = [
+    LensNode {
+        kind: "L",
+        id: "empty_space.unmapped_axis",
+        family: "empty_space",
+        docstring: "Scan atlas P/C/L kinds for axes with zero outgoing edges — flags coverage gap. RFC 065 §9.",
+        cite: []
+    }
+]
+
+// Apply functions — all stubs in B-1 (return empty []).
+// Bodies populate in Phase C; each fn MUST cite >=1 atlas_node_id per
+// strict-lint stage 4 (AGENTS.tape @D g6 citation-enforced).
+
+pub fn lens_apply_empty_space_unmapped_axis(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+
+// Dispatch: id -> apply fn. Cycle stage 2 (LENS) calls this in a loop
+// over the active filter set. Unknown id returns [] (no-op).
+pub fn lens_apply_by_id(id: string, view: AtlasView) -> array {
+    if id == "empty_space.unmapped_axis" {
+        return lens_apply_empty_space_unmapped_axis(view)
+    }
+    return empty_candidate_list()
+}
