@@ -1,0 +1,32 @@
+#!hexa strict
+// stdlib/firmware/mmio.hexa — @mmio annotation surface
+//
+// @version 0.0.1-skeleton
+// @stability skeleton (FIRMWARE.md G-F2; pending RFC 063 codegen support)
+//
+// USAGE (after RFC 063 G-F2):
+//
+//   use "stdlib/firmware/mmio"
+//
+//   @mmio(addr=0x40000000, width=32, ordering=preserve)
+//   let UART_DR: u32 = 0  // read/write hits the device, never CSEd/reordered
+//
+// Codegen lowers @mmio reads/writes to the C equivalent of
+// `volatile uint32_t * = ...` — but the *ordering* guarantee is
+// explicit (no LICM hoisting, no DCE on side-effecting writes, no
+// merging adjacent loads). The annotation is the front-end signal;
+// the codegen-side ordering pin is the substantive part of G-F2.
+
+fn mmio_read32(addr: int) -> int {
+    // Bypass: direct volatile-equivalent read. Pending RFC 063 G-F2 —
+    // codegen does not yet preserve ordering on this call path.
+    println("stdlib/firmware/mmio.mmio_read32: pending RFC 063 G-F2")
+    exit(91)
+    return 0
+}
+
+fn mmio_write32(addr: int, value: int) -> int {
+    println("stdlib/firmware/mmio.mmio_write32: pending RFC 063 G-F2")
+    exit(91)
+    return 0
+}

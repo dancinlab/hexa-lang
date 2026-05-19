@@ -1,0 +1,49 @@
+#!hexa strict
+// stdlib/vhdl/write_vhdl.hexa — mapped-RTLIL → VHDL-2008 netlist backend
+//
+// @version 0.0.1-skeleton
+// @stability skeleton (FIRMWARE.md G-R3; pending RFC 064 G-R3)
+// @authority FIRMWARE.md §4 G-R3 + inbox/rfc_drafts_2026_05_20/rfc_064_target_rtl_codegen.md
+//
+// Mirror of stdlib/yosys/write_verilog.hexa for the VHDL dialect.
+// Consumes the same mapped-RTLIL Design that `stdlib/yosys/passes.hexa`
+// + `abc_map.hexa` produce; emits a gate-level VHDL-2008 netlist that
+// downstream tools (GHDL, Vivado, Quartus) can analyse + synthesise.
+//
+// CLEAN-ROOM PROVENANCE
+//   - IEEE Std 1076-2008 — VHDL language reference (the output spec)
+//   - no Yosys VHDL backend exists upstream (Yosys is Verilog-first);
+//     so there is no upstream code to clean-room-derive from. This
+//     module is authored against the IEEE standard directly.
+//
+// USAGE (after RFC 064 G-R3 lands):
+//
+//   use "stdlib/yosys/rtlil"
+//   use "stdlib/vhdl/write_vhdl"
+//
+//   let d: Design = ... // produced by passes + abc_map
+//   let r = write_vhdl(d)
+//   if r.ok == 1 { fs_write("build/rtl/vhdl/out.vhd", r.text) }
+
+use "stdlib/yosys/rtlil"
+
+struct WriteVhdlResult {
+    ok:    int,
+    text:  str,
+    bytes: int,
+}
+
+fn write_vhdl(d: Design) -> WriteVhdlResult {
+    // Pending RFC 064 G-R3 — body lands once Verilog round-trip
+    // (G-R0/G-R1) is GREEN, since the VHDL emitter shares the
+    // mapped-RTLIL traversal logic with the Verilog one.
+    println("stdlib/vhdl/write_vhdl.write_vhdl: pending RFC 064 G-R3")
+    exit(91)
+    return WriteVhdlResult { ok: 0, text: "", bytes: 0 }
+}
+
+fn write_vhdl_file(d: Design, path: str) -> WriteVhdlResult {
+    println("stdlib/vhdl/write_vhdl.write_vhdl_file: pending RFC 064 G-R3")
+    exit(91)
+    return WriteVhdlResult { ok: 0, text: "", bytes: 0 }
+}

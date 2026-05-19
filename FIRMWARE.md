@@ -127,13 +127,37 @@ fall into one of three buckets:
      sim-universe absorption pattern — `@D g_atlas_binary_builtin`-class
      "frozen archive" treatment).
 
-| legacy file | why it exists | replacement plan |
-|---|---|---|
-| `stdlib/freecad/bipv.py` | one-off Building-Integrated-PV CAD helper, predates `stdlib/freecad` being declared hexa-only | rewrite as `stdlib/freecad/bipv.hexa` driving FreeCAD via `exec_capture`; or move to `archive_freecad_bipv/` if not consumed in-tree |
-| _(populate during cycle)_ | _grep `'\.(py|sh|c|h|cpp|hpp|cc|hh|s|S|v|sv|vhd|vhdl)$'` for non-bootstrap, non-vendored matches_ | _one row per file_ |
+**Measured inventory (2026-05-20, `tool/audit_forbidden_exts.hexa`)**:
 
-The grep that populates the rest of this table runs in §4 G-T0 (the very
-first gate); the table above is the **shape**, not the final list.
+| bucket | count | retired by |
+|---|---:|---|
+| BOOTSTRAP | 76 | HEXA-NATIVE-ONLY.md G-0..G-11 (ML side trk) |
+| GENERATED | 72 | codegen output, **allowed** (built from `.hexa`) |
+| VENDORED  | 2  | `tool/cuda_syntax_stub/` (3rd-party headers) |
+| ABSORBED  | 88 | other-cycle SSOTs (`stdlib/xeno/`, `stdlib/quantum/`, `comb/rtl/` handed off to `~/core/hexa-arch[chip]`, `firmware/boards/**` other-session WIP, `state/`) |
+| **LEGACY**| **135** | **G-T1/G-T2 work items — frozen baseline at `tool/firmware_ban_baseline.txt`** |
+
+The full LEGACY list lives in `tool/firmware_ban_baseline.txt` (135
+sorted paths), checked in alongside the audit tool. Each baseline entry
+is grandfathered through the G-T3 pre-push hook — only **net-new**
+additions block push. The G-T1 and G-T2 cycles drain the baseline down
+over time.
+
+Notable LEGACY clusters (rough size, indicative — the baseline file is
+authoritative):
+
+| cluster | approx | replacement plan |
+|---|---:|---|
+| `tool/build_hexa_*.sh` | ~15 | port to `tool/build_hexa_*.hexa` (cheapest first) |
+| `tool/dispatch_*.sh` + `tool/*_oracle.c` | ~30 | flame/forge oracle harness — owned by that cycle |
+| `tool/flame_phase4*.{sh,c}` | ~20 | same as above |
+| `tests/integration/*.sh` | 13 | port to `.hexa` integration harness |
+| `tool/transient_py/*.py`, `tool/*_py.py` | ~5 | port via `exec_capture` |
+| `scripts/*.sh`, `bench/*.sh`, `install.sh` | ~10 | port to `.hexa` repo-level scripts |
+| `self/{bootstrap_compiler,native_gen,runtime_*}.{c,h}` | ~12 | extends HEXA-NATIVE-ONLY.md bootstrap retire scope |
+| `lib/hx{nccl,pyembed}/*.{c}` | 4 | wrapper layer — pair with the absorbed-substrate it bridges |
+| `stdlib/hal/t3/{boot_*.s, harness_*.c}` | 4 | G-F1 (startup emit) replaces these |
+| `gate/`, `example/` legacy | ~5 | port or tombstone |
 
 ---
 
@@ -311,3 +335,36 @@ n=6 does not enter the verification — only the tool oracles do.
   G-T1 target. Pending: `@D` governance entries in `AGENTS.tape` will
   follow the gate-exit pattern — added only after each gate's fixture
   passes (not pre-emptively). No code change in this cycle.
+- 2026-05-20 — full-roadmap closure cycle. Landed:
+  (a) **G-T0** measured: `tool/audit_forbidden_exts.hexa` runs clean and
+  reports 76/72/2/88/135 (BOOTSTRAP/GENERATED/VENDORED/ABSORBED/LEGACY)
+  across all banned-ext tracked files. §3 updated with the measured
+  inventory + LEGACY cluster breakdown.
+  (b) **G-T3** measured: `tool/firmware_ban_baseline.txt` freezes the
+  135 LEGACY paths; `tool/hooks/pre_push_firmware_ban.hexa` re-runs the
+  audit and blocks push when current LEGACY is a strict superset of the
+  baseline (rc=0 verified against frozen baseline at land time).
+  Installer = `tool/install_firmware_hook.hexa`.
+  (c) **G-R0** scaffold + fixture: `stdlib/yosys/test/round_trip.hexa`
+  with 5 inline Verilog fixtures (F1 empty module · F2 io port · F3
+  multibit wire · F4 localparam · F5 and-gate); expands to 12 as
+  `read_verilog.hexa` feature coverage grows. Honest exit: prints
+  `N/M round-trip-equal` and exit code 0/1/2.
+  (d) **G-F0..G-F4 scaffold**: `stdlib/firmware/{README, target.hexa.
+  stub, mmio.hexa.stub, interrupt.hexa.stub, asm.hexa.stub,
+  startup.hexa.stub, test/blinky.hexa}` — typed surface skeletons,
+  bodies pending RFC 063.
+  (e) **G-R3 scaffold**: `stdlib/vhdl/{README, write_vhdl.hexa.stub}` —
+  VHDL mirror of `stdlib/yosys/write_verilog`, pending RFC 064 G-R3.
+  (f) **RFC 063** drafted (`inbox/rfc_drafts_2026_05_20/rfc_063_target_
+  firmware_codegen.md`) covering G-F0..G-F4 codegen contract,
+  reconciling with `self/native/gpu_codegen_stub.c` (rt#45) and RFC 055.
+  (g) **RFC 064** drafted (`inbox/rfc_drafts_2026_05_20/rfc_064_target_
+  rtl_codegen.md`) covering G-R0..G-R4 codegen contract.
+  All 8 new `.hexa`/`.hexa.stub` files parse-clean
+  (`/Users/ghost/.hx/bin/hexa_real parse`). Honest scope: glue + audit
+  gates (G-T0/G-T3) are measured-PASS; firmware/RTL gates (G-F*, G-R1+)
+  are RFC + skeleton land — codegen body lands in dedicated cycles
+  driven by RFC 063/064. `@D` governance entries in `AGENTS.tape` stay
+  pending until each gate's actual exit fixture passes (not on RFC
+  draft alone).

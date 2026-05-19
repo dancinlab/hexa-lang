@@ -1,0 +1,32 @@
+#!hexa strict
+// stdlib/firmware/startup.hexa — startup vector + reset handler emit
+//
+// @version 0.0.1-skeleton
+// @stability skeleton (FIRMWARE.md G-F1; pending RFC 063 G-F1 codegen)
+//
+// Replaces hand-authored `crt0.s` / `startup_<chip>.s` files. The
+// reset handler and the initial vector table are codegen output, not
+// authored source. After RFC 063 G-F1, the build emits:
+//
+//   build/firmware/<arch>/startup.c   — reset handler + .bss zero + .data copy
+//   build/firmware/<arch>/vectors.c   — initial vector table (stack top,
+//                                        reset, NMI, hardfault, then user
+//                                        @interrupt slots from G-F3)
+//
+// Both files are codegen output. No `.s` is authored.
+
+fn startup_emit_reset_handler(arch: str) -> str {
+    // Returns the textual C content of the reset handler for the arch.
+    // Pending RFC 063 G-F1.
+    println("stdlib/firmware/startup.startup_emit_reset_handler: pending RFC 063 G-F1")
+    exit(91)
+    return ""
+}
+
+fn startup_emit_vector_table(arch: str) -> str {
+    // Returns the textual C content of the initial vector table for
+    // the arch (slots 0..15 — stack top, reset, NMI, hardfault, ...).
+    println("stdlib/firmware/startup.startup_emit_vector_table: pending RFC 063 G-F1")
+    exit(91)
+    return ""
+}
