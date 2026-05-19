@@ -243,76 +243,26 @@ launchable from host) vs a PTX `.func` (a device function — `__device__`,
 callable only from other GPU code). This is the GPU analogue of the CPU
 distinction between an exported symbol and a static helper.
 
-### 6.4 hexa surface — how a hexa fn is marked as a GPU kernel
+### 6.4 hexa surface + 6.5 launch ABI — specified in `gpu/SPEC.md`
 
-**Design decision (the central one).** Three options were considered:
+The `@gpu` *language surface* — the `@gpu_kernel` / `@gpu_device`
+attributes, the type + statement allowlist / denylist, the thread-index
+and sync intrinsics, the `@shared` memory model, and the `gpu_launch`
+host launch ABI — is specified in **`gpu/SPEC.md`**, the `@gpu` subset
+SSOT (`gpu/design.md` Decision 3). RFC 055 is the *codegen target* that
+lowers that surface to NVPTX; it deliberately does **not** re-specify it
+(that duplication is what Decision 3 removed).
 
-- *(A) `@gpu` annotation* — an attribute on an otherwise ordinary `fn`.
-- *(B) separate fn-kind keyword* — e.g. `kernel fn` / `device fn`.
-- *(C) module-level target* — a whole file compiled for NVPTX.
-
-**RFC 055 proposes (A): a `@gpu` / `@gpu_kernel` attribute on a normal `fn`.**
-Rationale:
-
-1. **Consistency with the existing annotation surface.** `HEXA-NATIVE-ONLY.md`
-   §2 already references `@parallel`, `@align`, `@prefetch`, `@likely`, and
-   `self/ai_native/ai_native.json` carries `@`-annotation markers. The compiler
-   already has an annotation channel. `@gpu_kernel` joins it; no new keyword,
-   no grammar change to the `fn` form.
-2. **A kernel is still a hexa `fn`.** It has parameters, a body, a return type.
-   Option (B)'s separate keyword would fork the function grammar for no
-   semantic gain. Option (C)'s whole-file model is too coarse — a file
-   naturally mixes host glue and kernel bodies.
-3. **Two attributes, mirroring the PTX `.entry` / `.func` split:**
-   - `@gpu_kernel` — a launchable entry point. Lowers to PTX `.visible .entry`.
-     Return type must be `void` (PTX entries do not return values; results go
-     to a `.global` farr the caller reads back). Verified at strict-lint time.
-   - `@gpu_device` — a device-only helper. Lowers to PTX `.func`. May return a
-     value; callable only from `@gpu_kernel` / `@gpu_device` code.
-4. **Thread-index builtins, not magic globals.** Inside a `@gpu_kernel` body the
-   thread/block indices are read via builtins — `gpu_thread_idx()`,
-   `gpu_block_idx()`, `gpu_block_dim()`, `gpu_grid_dim()` — each lowering to a
-   `mov.u32` from the corresponding PTX sreg. Shared memory is declared with a
-   `@shared` annotation on a local array. `gpu_barrier()` lowers to `bar.sync`.
-   These builtins are **only legal inside `@gpu_*` functions**; strict-lint
-   rejects them in CPU code (a GPU/CPU phase-confusion guard).
-
-A `@gpu_kernel` function is routed to the NVPTX codegen target; the rest of the
-module continues to the host CPU target. One source file can therefore contain
-both host code and kernels — the compiler partitions by attribute.
-
-### 6.5 Launch ABI — how hexa host code launches a hexa GPU kernel
-
-A compiled `@gpu_kernel` produces a `cubin`. The host side must (1) load the
-module, (2) get a function handle, (3) marshal arguments, (4) launch with a
-grid/block configuration. This is `cudaLaunchKernel` (or the Driver API
-`cuLaunchKernel`) territory.
-
-**Design decision.** RFC 055 proposes the host-side launch **reuses forge's
-existing cudart binding** for the launch syscall *only*:
-
-- forge already links `cudart` (`self/cuda/runtime_cuda.c`, `self/runtime.c`
-  GPU portions) for cuBLAS and `hexa_cuda_alloc/copy/free/sync`. The launch
-  call is one more thin binding in that same layer.
-- A hexa `@gpu_kernel` is invoked from host hexa code via a `gpu_launch`
-  builtin: `gpu_launch(kernel_handle, grid, block, args...)`. The compiler
-  lowers `gpu_launch` to a `hexa_cuda_launch_kernel` runtime call (a new thin
-  cudart wrapper, sibling to the existing `hexa_cuda_*` family) that resolves
-  the kernel's `cubin`, builds the argument buffer, and calls
-  `cuLaunchKernel`.
-- The `cubin` produced by the NVPTX codegen target is embedded in the host
-  binary as a `.rodata` blob (an `LSection` — the LIR already models rodata
-  sections) and registered at startup.
-
-**Honest framing of this choice.** A kernel *launch* is a syscall-like
-host-side operation — it is not compute. Routing it through cudart is the same
-category of decision as the C-fallback portability path: the *compute* (the
-kernel body) is hexa-native PTX; the *launch plumbing* stays a C binding. A
-fully no-CUDA-dependency launch (talking to the GPU driver `ioctl` directly)
-is a possible further goal but is explicitly **not** RFC 055 scope — it would
-buy nothing for kernel correctness and a great deal of fragile, undocumented,
-per-driver-version code. RFC 055 is honest that the launch binding is a
-remaining C dependency (see §8).
+Summary for this RFC's purpose: a kernel is a normal hexa `fn` carrying
+`@gpu_kernel` (→ PTX `.visible .entry`, `void` return — results go to a
+`.global` farr the host reads back) or `@gpu_device` (→ PTX `.func`,
+device-only helper). The compiler partitions a source file by attribute
+— `@gpu_*` functions route to the NVPTX target, every other function
+continues to the host CPU target. Thread/block indices are read via
+`gpu_*` intrinsics; the launch syscall reuses forge's cudart binding via
+a `gpu_launch` builtin lowering to `hexa_cuda_launch_kernel`. See
+`gpu/SPEC.md` §2–§9 for the normative detail and the `GPU0N` strict-lint
+codes.
 
 ### 6.6 Honest scoping — FP64 first, Tensor Core later
 

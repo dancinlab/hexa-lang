@@ -7,12 +7,22 @@
 
 ## State (2026-05-19)
 
-- **DESIGN PHASE — zero implementation.**
+- **SPEC LANDED · codegen in progress under RFC 055.**
 - Decision 1 LOCKED — kernel source format = `@gpu` annotation on
   ordinary `.hexa` files; no `.hxk` extension. (`design.md` D1)
 - Decision 2 LOCKED — directory = `hexa-lang/gpu/`. (`design.md` D2)
-- Existing scaffold — `self/native/gpu_codegen_stub.c` is the `@gpu`
-  codegen skeleton to build on.
+- Decision 3 LOCKED — `gpu/SPEC.md` is the `@gpu` subset SSOT; RFC 055
+  §6 references it. (`design.md` D3)
+- **`gpu/SPEC.md` written** — the full `@gpu` subset: `@gpu_kernel` /
+  `@gpu_device` attributes, type allowlist, statement allowlist /
+  denylist, thread-index + sync intrinsics, `@shared` memory, the
+  `gpu_launch` ABI, FP64-first scope, the `GPU0N` strict-lint codes.
+- **RFC 055 is the codegen implementation** — `hexa-src → NVPTX`. It
+  consumes `gpu/SPEC.md`. Status: `055-P0` PTX text emit pass landed
+  (`compiler/codegen/nvptx_target.hexa` — FP64 arithmetic subset emits
+  real PTX); not yet wired into main target dispatch.
+- Existing scaffold — `self/native/gpu_codegen_stub.c` is the rt#45
+  `@gpu` codegen skeleton; superseded by RFC 055's `nvptx_target.hexa`.
 
 ## Goal
 
@@ -57,16 +67,23 @@ For `@gpu` fused-kernel perf work:
 
 ## Next steps (suggested order)
 
-1. **Spec the `@gpu` subset** — which hexa constructs are legal inside
-   a `@gpu fn`: thread/block index intrinsics, no recursion, no host
-   heap allocation, bounded loops. Write it as `gpu/SPEC.md`.
-2. **Real codegen for one kernel** — grow `self/native/gpu_codegen_stub.c`
-   from skeleton to a working `@gpu` → CUDA C emitter for one kernel.
-3. **Port + verify one existing kernel** — reproduce e.g.
-   `self/native/hxcuda_fused.cu` as a `@gpu fn`, verify byte-eq
-   output against the hand-written `.cu` (oracle).
-4. **Benchmark vs torch.compile** — once a fused `@gpu` kernel exists,
-   measure against torch.compile on the same A100 workload.
+1. ~~**Spec the `@gpu` subset**~~ — **DONE**: `gpu/SPEC.md` (Decision 3).
+2. **`@gpu_kernel` attribute parse + strict-lint** — wire the `GPU0N`
+   validation pass (`gpu/SPEC.md` §9) into the compiler frontend; emit
+   the `GPU01`–`GPU07` diagnostics. This is RFC 055 phase **055-P1**.
+3. **FP64 vector-add end-to-end** — a `@gpu_kernel` `c[i]=a[i]+b[i]`
+   compiles through the NVPTX target, `ptxas`-assembles to a `cubin`,
+   launches via `gpu_launch`, byte-eq vs the CPU hexa reference
+   (F-RFC055-PTX-EMIT, -NUMERIC-EQ, -LAUNCH-ABI). RFC 055 **055-P1**.
+4. **FP64 GEMM `@gpu_kernel`** — naive / tiled, `@shared` + `gpu_barrier`;
+   correctness gate vs CPU hexa GEMM (F-RFC055-GEMM-FEASIBLE). Perf vs
+   cuBLAS is an honest measurement, **not** a gate. RFC 055 **055-P2**.
+5. **Benchmark vs torch.compile** — once a fused `@gpu` kernel exists,
+   measure per-step wall vs torch.compile on the same A100 workload at
+   matched T / batch / precision (see the honesty guard below).
+
+Steps 2–4 are the RFC 055 phasing — `gpu/` (this directory) owns the
+*spec*; RFC 055 owns the *codegen implementation*.
 
 ## Open items
 
@@ -79,6 +96,10 @@ For `@gpu` fused-kernel perf work:
 ## Cross-references
 
 - `gpu/README.md` · `gpu/design.md` — what this is + decision ledger
-- `self/native/gpu_codegen_stub.c` — `@gpu` codegen skeleton
+- `gpu/SPEC.md` — the `@gpu` subset SSOT (Decision 3)
+- `inbox/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md` —
+  the NVPTX codegen implementation (consumes `gpu/SPEC.md`); 055-P0
+  landed, 055-P1/P2 = steps 2–4 above
+- `self/native/gpu_codegen_stub.c` — rt#45 `@gpu` codegen skeleton
 - `self/forge/PLAN.md` — GPU substrate roadmap
 - `stdlib/flame/README.md` — "honest floor" / cuBLAS roofline framing
