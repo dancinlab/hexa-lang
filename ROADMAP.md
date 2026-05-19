@@ -174,11 +174,26 @@ exec-rule: "SUB progress 는 MAIN phase 로만 흡수, 단독 commit 금지"
 
 ### Self-host (runtime.c + Rust driver 탈피) — 신규 (anima hxa-20260423-003, 2026-04-23)
 Parent roadmap **64** → 5 children **65–69**. 상세 정의 `.roadmap` 64–69, 원문 `$ANIMA/docs/upstream_notes/hexa_lang_full_selfhost_prompt_20260423.md`.
-- **65 (M3, P1/Q2)** — argv[0] 중복 삽입 정책 고정 (anima 최우선). `hexa_set_args` duplicate 제거 + `args()` / `script_path()` 계약 분리.
-- **66 (M4, P1/Q2)** — string method codegen 완성 + **binary rebuild 파이프라인 Phase C.2 symbol namespacing** (현재 블로커: `hexa cc --regen` merge 시 `__hexa_strlit_init` per-module 충돌로 Mac `hexa_v2` 재빌드 불가 → 소스는 고쳤는데 바이너리 미반영).
-- **67 (M5, P1/Q3)** — self-hosted `hexa_driver.hexa` (Rust 삭제, Linux/Mac/arm64 동일 CLI, `hexa run` 공식 서브커맨드).
-- **68 (M2, P1/Q2)** — builtin `hx_` prefix mangling 정식화 (runtime `#define` shim 제거).
-- **69 (M1, P2/Q4)** — runtime 2-레이어 분할 (`runtime_core.c` ≤500 줄 + `runtime_hi.hexa`).
+- **65 (M3, P1/Q2)** — `[PARTIAL — 2026-05-19]` 계약 분리 DONE: canonical
+  `hexa_script_path()` / `hexa_real_args()` 가 runtime.c:5579 에 존재 (M3 §3
+  deliverable). 잔여 = `hexa_set_args` 의 argv[0] 중복 삽입 제거 — interp
+  은퇴(R7)로 "interp index layout 일치" 근거는 소멸했으나, self/+tool/+bench/
+  의 40+ `args()[2..]` 소비처를 `real_args()` 로 옮기는 breaking 마이그레이션이
+  남음. 별도 cycle (g3 — 공유 툴체인 40-site 변경, 자율 1-pass 부적합).
+- **66 (M4, P1/Q2)** — `[DONE — 2026-05-19]` string method codegen 완성
+  (t45b char_count/nth_char/char_substring/byte_at PASS) + symbol
+  namespacing 작동 — `hexa cc --regen` 의 rename-awk 가 `__hexa_strlit_init`
+  /`_sl_`/`_ic_` 를 per-module 접두 처리, regen fixpoint byte-identical 실증
+  (2026-05-19 closure pass). 구 "블로커" 문구는 stale 였음.
+- **67 (M5, P1/Q3)** — `[DONE — 2026-05-19]` Rust 컴파일러 드라이버 부재 확인
+  (no Cargo.toml, no compiler `.rs`). `self/main.hexa` → `hexa.real` 이
+  self-hosted 드라이버, `hexa run` 공식 서브커맨드. Linux/Mac/arm64 동일 소스.
+- **68 (M2, P1/Q2)** — `[DONE / moot — 2026-05-19]` runtime.h/.c 에 `#define hx_`
+  shim 0개 — 제거 대상이 존재하지 않음. codegen 은 `hexa_` 접두 런타임 호출을
+  직접 방출. 항목은 이미 충족.
+- **69 (M1, P2/Q4)** — `[OPEN]` runtime 2-레이어 분할 (`runtime_core.c` ≤500 줄
+  + `runtime_hi.hexa`). runtime.c 13,336 줄 — 대형 리팩터, 별도 multi-cycle
+  캠페인 (자율 1-pass 부적합; half-done 분할 금지).
 
 ---
 
