@@ -815,3 +815,52 @@ paradigm 의 wall 우위 측정 시, host CPU 영향을 거른 비교가 필요.
 더 많은 vast.ai 호스트로 재측정해야 RoPE kernel 의 marginal wall
 유효성을 확정 가능. 그 측정 = benchmarking cycle 의 일부
 ([[flame-forge-benchmark-pending]] 참조 — flame/forge 작업 완료 후).
+
+### 2026-05-19 — RFC 050 L1 slice 2 — flame routed through forge dispatcher (measured-PASS, $0 smoke + 2 build-failed fires)
+
+slice 1 (commit `deaf8bd5`) 가 `forge_dispatch_matmul` builtin 을 신설한 데
+이어, slice 2 (commit `5a38712f`) 가 flame `nn_linear_fwd` 의 forward matmul
+을 `farr_matmul` 직호출 → `forge_dispatch_matmul` (RFC 050 dispatcher 경유)
+으로 재배선. `nn_linear_fwd` 는 `ag_linear` 가 호출 — d768·12L 에서 디코더
+레이어당 7회 × 12L = step 당 84 matmul. 이제 flame 의 FP64 선형층 matmul 이
+`forge_tier_dispatch_v1` 의 precision-routing 층을 통과한다.
+
+**measured-PASS (compiled-path smoke, $0)**: `flame_forge_dispatch_test.hexa`
+를 `hexa build` 로 컴파일+실행 → F-RFC050-L1-DISPATCH-EQ PASS:
+`forge_dispatch_matmul(A,M,K,B,N)` farr == `farr_matmul(A,M,K,B,N)` farr
+element-wise. dispatcher 의 FP64 경로가 동일한 `hexa_farr_matmul` 커널로
+떨어지므로 byte-equal — `nn_linear_fwd` 출력은 재배선 전후 byte-identical
+(regression-zero, GPU fire 없이 입증). 5 falsifier 중 3 PASS
+(DISPATCH-EQ/API-MATCH · PRECISION-D-PRESERVE · REGIME-CORRECT).
+
+**seam**: 배포된 `hexa_v2` bootstrap 은 builtin 을 bare `forge_dispatch_matmul(...)`
+literal 로 emit (≥5-arg direct-C path) — generated user.c TU 는 runtime.h
+만 본다. `runtime.c` 에 extern wrapper + `runtime.h` 에 prototype 을 둬
+bootstrap 재빌드 없이 심볼 resolve (farr ABI 와 동일한 runtime.h-split seam).
+
+**honestly NOT done**: F-RFC050-PERF-INHERITANCE (RFC 049 BF16 8.48×/11.66×
+속도 상속) — L1 은 FP64 만 라우팅, BF16 specialized registry 가 비어 있어
+(Stage A) FP64 baseline 으로 떨어진다. RFC 050 Stage 2 가 registry 를 채우면
+flame 측 재배선 없이 상속. F-RFC050-FORGE-BACKWARD-FUSE — `nn_linear_bwd` 는
+loop-based 로 유지 (matmul 아님; 라우팅 시 reduction order 변경 → d768
+closure baseline 과 byte-eq 깨짐).
+
+**slice 3 (d768·12L end-to-end fire) BLOCKED — L1 과 무관한 pre-existing
+breakage**: generic ag_tape d768 trainer 가 현재 branch HEAD 에서 빌드 실패 —
+`hexa_farr_rope_gpu`/`_bwd_gpu` (RFC 041 Phase B RoPE forge builtin) 가 현재
+`self/` 트리 어디에도 정의 없음. `codegen_c2.hexa:4881` 은 `hexa_farr_rope_gpu(...)`
+를 emit, `runtime_cuda.c` 는 `_hx_cuda_farr_rope_gpu` (다른 이름) 만 정의,
+둘을 잇던 seam wrapper (commit `bc5191c2` 가 추가한 runtime.h proto) 가
+deploy-regen 에서 wipe + codegen 이 bare→`hexa_`-prefixed 로 변경되어 유실.
+rope ≠ matmul — L1 작업과 독립. forge RoPE Phase B 도메인 (~10 `flame-phase4d*`
+worktree 가 active churn) 이 `_hx_farr_rope_cpu` byte-eq fallback 과 함께
+복원해야 함. matmul-routing regression-zero 주장은 이 blocker 에 의존하지
+않음 (FP64 dispatch 경로는 byte-identical CPU `hexa_farr_matmul`, smoke 로 입증).
+
+**dispatch-script staleness 수정** (3 commit): 2 build-failed fire 가
+`tool/dispatch_agtape_d768_fire.sh` 의 upload 갭을 노출 — `self/forge/forge_tier_v1.c`
+(RFC 050 include · `046dbde5`), `self/cuda/runtime_bf16.c` (RFC 049 include ·
+`056d787a`), `self/runtime_core.c` (RFC 061 2-layer split · `1ea306e7`). 셋 다
+runtime.c 의 최근 `#include` 의존성. RoPE 복원 후 재-fire 가능.
+
+SSOT: `state/forge_rfc050_L1_2026_05_19/RFC050_L1_RESULTS.md` (gitignored).
