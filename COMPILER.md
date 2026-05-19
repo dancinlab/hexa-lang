@@ -23,7 +23,7 @@ At-a-glance
   interim  : W1/W2/F speed the C path; relief only while the C fallback lives
   naming   : drop bootstrap vestiges (_v2 _c2 aprime s4) — separate cycle
   measured : clang = 80% of build wall; runtime.c recompile = 53% alone
-  status   : S1+S2 done · S5 wiring landed · S3 (self-host fixpoint) running
+  status   : S1+S2 done · S5 wiring landed · S3 rate-limited (retry after reset)
 ```
 
 ---
@@ -129,9 +129,11 @@ S5  native `hexa build` backend — wiring DONE 2026-05-20 (commit
     assemble+link runtime.c) because `aprime_cc --emit=exec` does not
     self-link (no runtime.o/crt) — that self-linking is an S7 item.
     Default-on flip waits on S1-S4 (fixpoint) + S7 (native linker).
-S6  optimization passes — compiler/optimize/ is stubs today; then the
-    HEXA-NATIVE-ONLY.md G-0..G-11 axis ladder (typed scalar lane A1/A2
-    first) to reach runtime parity with clang -O2.
+S6  optimization passes — the basic passes (const_fold, dce, inline)
+    are ALREADY wired (`compiler/main.hexa --opt=0..3`). S6 = extend
+    them toward parity with clang -O2 via the HEXA-NATIVE-ONLY.md
+    G-0..G-11 axis ladder (typed scalar lane A1/A2 first, then loop /
+    SIMD / tiling) — that ladder is the substantive gap.
 S7  own assembler + hexa_ld integration — drop `as` and system `ld`,
     closing "의존도 없이 외부" (zero external dependency) fully.
 ```
@@ -164,19 +166,27 @@ Surveyed read-only while S1-step-2 runs, so each step is dispatch-ready.
   currently drives hexa_v2->C->clang. Add a backend selector (env/flag)
   so `cmd_build` can invoke `aprime_cc --emit=exec`. This delivers the
   lever-0 build-speed win to *user* programs, not just the compiler.
-- **S6 — optimization passes.** `compiler/optimize/{const_fold,dce,
-  inline}.hexa` exist (160/152/412 lines — partially built, not empty
-  stubs). Complete them + wire into the `--opt` path, then climb the
-  `HEXA-NATIVE-ONLY.md` G-0..G-11 axis ladder (typed scalar lane A1/A2
-  first) to reach runtime parity with `clang -O2`.
+- **S6 — optimization passes.** CORRECTION (2026-05-20 prep): the basic
+  passes ARE wired, not stubs. `compiler/main.hexa` documents
+  `--opt=0..3` (`:128`/`:140-142`): `--opt=1` const_fold, `--opt=2`
+  const_fold + dce, `--opt=3` inline_small + const_fold + dce 2-pass.
+  `compiler/optimize/{const_fold (160L), dce (152L), inline (412L)}.hexa`
+  are implemented (RFC-018 §9). S6 = extend toward parity with `clang
+  -O2` via the `HEXA-NATIVE-ONLY.md` G-0..G-11 ladder (typed scalar lane
+  A1/A2 first, then loop / SIMD / tiling) — the ladder is the
+  substantive gap, not the basic optimizer scaffold.
 - **S7 — own assembler + linker (완전한 hexa-native).** `compiler/main.hexa`
   already marks `as` / `ld` / `xcrun` as "L1 keepers — replaced when
   self-as lands" (`:2`, `:806`); an L1->L2 migration scaffold +
-  `compiler/intrinsics/intrinsics.hexa` exist. `tool/hexa_link.hexa` is a
-  117-line in-house linker skeleton. S7 = land self-`as` (LIR -> object
-  code directly, skipping the `.s` text -> `as` round-trip) + mature
-  `hexa_ld`. The deepest step — object-file encoding (Mach-O arm64 / ELF
-  x86_64) + relocation records — and what closes "의존도 없이 외부" fully.
+  `compiler/intrinsics/intrinsics.hexa` exist. CORRECTION (2026-05-20
+  prep): `tool/hexa_link.hexa` is a *clang wrapper* per its own header
+  ("Thin clang wrapper. Takes N .c files ... clang handles C-level symbol
+  resolution") — NOT a from-scratch linker. S5's finding confirms scope:
+  `aprime_cc --emit=exec` does not self-link (no runtime.o / crt). S7 =
+  land self-`as` (LIR -> object code directly, skipping `.s` -> `as`) +
+  write a real native linker for Mach-O arm64 / ELF x86_64 (relocation
+  records + crt + runtime.o). The deepest step — what closes "의존도 없이
+  외부" fully.
 
 ## Naming — drop the bootstrap vestiges
 
@@ -387,3 +397,13 @@ ultimately removes.
   trivial program. Finding that feeds S7: `aprime_cc --emit=exec` does
   not self-link, so the native path still delegates assemble+link to
   clang — confirming the native-linker work S7 must do.
+- 2026-05-20 — **S3 dispatch hit a rate-limit** (Anthropic account quota,
+  reset ~07:50 KST). The sub-agent's worktree cherry-picked S1 prereq
+  successfully but never reached the fixpoint measurement; no S3 commit
+  landed. Will re-dispatch after the reset.
+- 2026-05-20 — deeper S6/S7 prep done read-only (rate-limit-safe).
+  Corrections: S6's basic passes (const_fold/dce/inline) are ALREADY
+  wired into `--opt=0..3`, not stubs — S6's real gap is the HEXA-NATIVE-
+  ONLY G-ladder. S7's `tool/hexa_link.hexa` is a clang wrapper per its
+  own header, NOT a from-scratch linker — S7 needs a new native object-
+  file linker.
