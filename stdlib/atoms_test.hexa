@@ -81,6 +81,30 @@ fn main() {
     let bad = atoms_bulk("X", "hcp", 3.0)
     check("bulk unknown -> empty", atoms_len(bad) == 0)
 
+    // ── Stage-2: atoms_neighborlist / coordination (textbook CN) ──
+    // FCC nearest-neighbour shell: 12 at a/sqrt(2).
+    let acu = 3.6149
+    let cu_nn = acu / sqrt(2.0)
+    let cu2 = atoms_bulk("Cu", "fcc", acu)
+    check("FCC coordination == 12", atoms_coordination(cu2, 0, cu_nn * 1.01) == 12)
+    check("FCC sub-NN cutoff -> 0", atoms_coordination(cu2, 0, cu_nn * 0.5) == 0)
+    let nlcu = atoms_neighborlist(cu2, cu_nn * 1.01)
+    check("FCC neighborlist rows == 12", len(nlcu) == 12)
+    let row0 = nlcu[0]
+    check("FCC NN distance == a/sqrt2", fabs(row0[2] - cu_nn) < 0.000001)
+
+    // BCC nearest-neighbour shell: 8 at a*sqrt(3)/2.
+    let afe = 2.8665
+    let fe_nn = afe * sqrt(3.0) / 2.0
+    let fe2 = atoms_bulk("Fe", "bcc", afe)
+    check("BCC coordination == 8", atoms_coordination(fe2, 0, fe_nn * 1.01) == 8)
+
+    // Diamond Si: tetrahedral coordination 4 at a*sqrt(3)/4.
+    let asi = 5.4307
+    let si_nn = asi * sqrt(3.0) / 4.0
+    let si2 = atoms_bulk("Si", "diamond", asi)
+    check("diamond coordination == 4", atoms_coordination(si2, 0, si_nn * 1.01) == 4)
+
     println("atoms_status: " + atoms_status())
     if pass_count == total_count {
         println("__ATOMS_STAGE1_TEST__ PASS (" + str(pass_count) + "/" + str(total_count) + ")")

@@ -115,6 +115,84 @@ pub fn atoms_bulk(sym: string, crystalstructure: string, a: float) -> Atoms {
     return Atoms { symbols: [], positions: [], cell: [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], pbc: pbc }
 }
 
+// ── Stage-2 kernel: ase.neighborlist (periodic full list) ───────────
+// hexa-native re-implementation of ASE `neighbor_list('ijd', atoms,
+// cutoff)`: every ordered pair (i, j) with a periodic-image distance
+// d in (0, cutoff]. Returns array of [i, j, d] triples (cartesian
+// positions; row-vector cell). Lattice images enumerated over
+// n in {-1,0,1}^3 — exact for cutoff < the shortest cell-vector
+// length (the nearest-neighbour-shell regime hexa-matter uses);
+// larger cutoffs need a wider image range (future Stage-2 widening).
+pub fn atoms_neighborlist(at: Atoms, cutoff: float) -> any {
+    let pos = at.positions
+    let cell = at.cell
+    let c0 = cell[0]
+    let c1 = cell[1]
+    let c2 = cell[2]
+    let n = len(at.symbols)
+    let mut out: any = []
+    let mut ia = 0
+    while ia < n {
+        let pi = pos[ia]
+        let pix = pi[0]
+        let piy = pi[1]
+        let piz = pi[2]
+        let mut ja = 0
+        while ja < n {
+            let pj = pos[ja]
+            let pjx = pj[0]
+            let pjy = pj[1]
+            let pjz = pj[2]
+            let mut s1 = -1
+            while s1 <= 1 {
+                let mut s2 = -1
+                while s2 <= 1 {
+                    let mut s3 = -1
+                    while s3 <= 1 {
+                        let self_img = (ia == ja) && (s1 == 0) && (s2 == 0) && (s3 == 0)
+                        if self_img == false {
+                            let f1 = s1 + 0.0
+                            let f2 = s2 + 0.0
+                            let f3 = s3 + 0.0
+                            let shx = f1 * c0[0] + f2 * c1[0] + f3 * c2[0]
+                            let shy = f1 * c0[1] + f2 * c1[1] + f3 * c2[1]
+                            let shz = f1 * c0[2] + f2 * c1[2] + f3 * c2[2]
+                            let dx = pjx + shx - pix
+                            let dy = pjy + shy - piy
+                            let dz = pjz + shz - piz
+                            let d2 = dx * dx + dy * dy + dz * dz
+                            let d = sqrt(d2)
+                            if d > 0.0 && d <= cutoff {
+                                out.push([ia, ja, d])
+                            }
+                        }
+                        s3 = s3 + 1
+                    }
+                    s2 = s2 + 1
+                }
+                s1 = s1 + 1
+            }
+            ja = ja + 1
+        }
+        ia = ia + 1
+    }
+    return out
+}
+
+// Convenience: coordination number of atom `idx` within `cutoff`
+// (count of neighbor-list rows with i == idx). FCC=12, BCC=8, ... .
+pub fn atoms_coordination(at: Atoms, idx: int, cutoff: float) -> int {
+    let nl = atoms_neighborlist(at, cutoff)
+    let mut k = 0
+    let mut i = 0
+    while i < len(nl) {
+        let row = nl[i]
+        if row[0] == idx { k = k + 1 }
+        i = i + 1
+    }
+    return k
+}
+
 pub fn atoms_status() -> str {
-    return "STAGE-2 (partial) — Stage-1 surface + atoms_bulk fcc/bcc/diamond (absorbs: ase; from_cif/neighborlist/EMT still Stage-2)"
+    return "STAGE-2 (partial) — Stage-1 + atoms_bulk + atoms_neighborlist/coordination (absorbs: ase; from_cif/EMT still Stage-2)"
 }
