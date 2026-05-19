@@ -3839,3 +3839,70 @@ hardcoded count). Then Phase C proper populates 1-2 seed lens bodies
   from the `hexa loop` verb today. The campaign is at a clean
   closure point — verb works, real lens body emits real findings,
   blockers documented with measured falsifier evidence.
+
+## 진행 로그 — RFC 065 Phase C end-to-end MEASURED PASS (2026-05-20)
+
+★ Self-growing atlas pipeline measured PASS end-to-end.
+
+- **C-2 L wire** (`f34e05ce`): cycle.hexa wires
+  `use "compiler/atlas/by_kind/l.gen"` alongside P. Combined 567+620
+  = 1187 entries in one stdlib/* TU, memcap PASS — confirms RFC 066
+  A path scales for the 7-kind union.
+- **C-4 pipeline refactor** (`6d56afe7`): cycle_lens returns
+  `array<Candidate>` instead of `int count`; pipeline threads the
+  array through DEDUP/GATE/FIRE/DRAFT/AUDIT/EXHAUST. AUDIT calls
+  state.hexa API per candidate: chain append (JSONL), cooldown_add
+  (Decision 5 N=5), growth_bump("self_host", 1). EXHAUST uses
+  `loop_state_cooldown_active_count` for the RFC §7 condition.
+  - measured cycle-1: 2 emit, 0 blocked, AUDIT chain+=2 cooldown+=2
+  - measured cycle-2: 2 emit, 2 BLOCKED -> 0 survive, AUDIT 0
+  - RFC §5/§7 cooldown N=5 hard-block + RFC §7 exhaust both verified
+- **C-3 inbox emit code** (`a4d14ed6`): cycle_draft writes
+  `inbox/atlas_candidates/<slug>.md` per Candidate when not --dry-run.
+  `--write` flag added. Markdown body carries family/fire_needed/cite/
+  source frontmatter + ## proposal section. mkdir -p in advance.
+  Initial commit deferred measurement due to driver arg-forwarding gap.
+- **C-3 measurement** (`f8caef3f`): args() parsing fix — `found_hexa`
+  fallback so direct-compiled invocation skips only argv[0]. Then
+  `/tmp/cycle_test --write` materializes the candidate set as
+  markdown files at `inbox/atlas_candidates/*.md` (cleaned up after
+  the smoke). ★ End-to-end pipeline now produces user-visible
+  artifacts.
+
+**RFC 065 self-growing atlas closure tally**:
+
+| stage  | measured | commit |
+|--------|----------|--------|
+| A      | RFC + design.md + PLAN entry | 2eb1f51e |
+| B-1    | 32 lens binary built-in      | ca733de6 + 16d22fd8 |
+| B-2    | 8-stage cycle shell          | 30a275e2 |
+| B-2.1  | cycle/end state I/O          | b764bf32 |
+| B-2.2  | 6 more state files           | 712778ce |
+| B-3.1  | self/main verb source        | ef8f4f1f |
+| B-3.2  | driver binary promote        | 3f93112d (no git delta) |
+| B-3.3  | real LENS_NODES dispatch     | 50fe5c09 |
+| C-1.a  | smoke body                   | f1252fb5 |
+| C-1.b  | lens-table audit             | b18f9ca2 |
+| C-1.c  | real cite-reachability       | fd1f47b3 |
+| C-2    | atlas view (P+L kinds)       | 13994bd4 + f34e05ce |
+| C-3    | inbox file emit              | a4d14ed6 + f8caef3f |
+| C-4    | cooldown / chain / growth    | 6d56afe7 |
+
+**RFC 066 closure tally** (sibling unblock):
+
+| stage  | measured | commit |
+|--------|----------|--------|
+| draft  | 3-option survey + initial pick A | 821b8ad8 |
+| empirical | per-kind isolation (P PASS, C FAIL) | d748b222 |
+| B-1a   | atlas_split_by_kind tool + 8 baked files | 13994bd4 |
+
+**HONEST boundary** (remaining work, all non-gating):
+- RFC 066 B-1b — `dist/atlas_c.hxc` HXC sidecar for the C kind
+  (6201 entries, F2 falsifier path). Heavy 1-2 sprint.
+- C-1.d — more lens body populates (point-wise, PR-driven).
+- atlas_enrich hot-path wire — the gap C-1.c tier 2 surfaces (the
+  baked rodata EdgeInfo is default-empty). Separate RFC scope.
+- driver arg-forwarding fix — `hexa loop --write` forwards `--write`
+  to cycle.hexa via cmd_run path (currently requires direct binary).
+
+The `hexa loop` user surface is COMPLETE on the safe-default path.
