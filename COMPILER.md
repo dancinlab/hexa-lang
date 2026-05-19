@@ -23,7 +23,7 @@ At-a-glance
   interim  : W1/W2/F speed the C path; relief only while the C fallback lives
   naming   : drop bootstrap vestiges (_v2 _c2 aprime s4) — separate cycle
   measured : clang = 80% of build wall; runtime.c recompile = 53% alone
-  status   : S1-S5 done · S7 RFC 063 drafted (~12-18 cycles, P0-P3 falsifiers)
+  status   : S1-S5 done · S7 RFC 063 + P0/P1 scaffolds; implementation multi-cycle
 ```
 
 ---
@@ -147,13 +147,16 @@ S6  optimization passes — the basic passes (const_fold, dce, inline)
     them toward parity with clang -O2 via the HEXA-NATIVE-ONLY.md
     G-0..G-11 axis ladder (typed scalar lane A1/A2 first, then loop /
     SIMD / tiling) — that ladder is the substantive gap.
-S7  own assembler + hexa_ld — drop `as` / `ld` / `clang`. RFC 063
-    DRAFTED 2026-05-20 (`inbox/rfc_drafts_2026_05_12/rfc_063_s7_
-    native_assembler_linker.md`) — 4 phases (P0 Mach-O arm64 obj
-    emitter / P1 native linker / P2 ELF x86_64 / P3 flip default),
-    each with a falsifier (F-P0-OBJEQ / F-P1-RUNEQ / F-P3-ZERO-
-    EXTERN). Estimated ~12-18 cycles total. This is the final
-    closure of "의존도 없이 외부 / 완전한 hexa-native".
+S7  own assembler + hexa_ld — drop `as` / `ld` / `clang`. Design
+    contract: RFC 063 (`inbox/rfc_drafts_2026_05_12/rfc_063_s7_
+    native_assembler_linker.md`), 4 phases with falsifiers (F-P0-
+    OBJEQ / F-P1-RUNEQ / F-P3-ZERO-EXTERN), ~12-18 cycles total.
+    P0 scaffold landed 2026-05-20 (`compiler/emit/macho_arm64.hexa`
+    — types + entry + encoding checklist + Mach-O constants).
+    P1 scaffold landed (`tool/hexa_ld.hexa` — CLI + types + link
+    entry + relocation/symbol-resolution checklist). Implementation
+    across future S7-{P0,P1,P2,P3} sub-agent cycles. Final closure
+    of "의존도 없이 외부 / 완전한 hexa-native".
 ```
 
 S1 is both the dominant blocker AND a performance problem in its own
@@ -456,3 +459,20 @@ ultimately removes.
   lands the design contract + S1-S5 wiring. Honest scope: RFC drafted
   + scaffold plan, not implementation. Implementation across future
   S7-{P0,P1,P2,P3} sub-agent cycles.
+- 2026-05-20 — **S7 P0 + P1 scaffolds LANDED.** Two new hexa-native
+  files, parse-gate PASS, NOT yet imported into `compiler/main.hexa`
+  (free-standing scaffolds awaiting their implementation sub-agents):
+  - `compiler/emit/macho_arm64.hexa` — P0 LIR -> Mach-O arm64 `.o`
+    emitter. Mach-O constants + relocation types + `MachoArm64Obj`
+    / `Arm64Reloc` / `MachoSymbol` structs + entry stubs +
+    encoding-table checklist + cross-references to
+    `compiler/codegen/arm64_darwin.hexa` and `compiler/emit/asm
+    .hexa` (the .s emitter to mirror).
+  - `tool/hexa_ld.hexa` — P1 native Mach-O linker. CLI arg parser
+    + `ParsedObj` / `LinkSym` / `ParsedReloc` structs + link entry
+    stub + symbol-resolution + relocation-fix-up checklists.
+    Explicitly NOT a rename of `tool/hexa_link.hexa` (which stays
+    as the C-path clang wrapper until S7 P3 retires it).
+  Future P0/P1 sub-agents fill the encoding tables + Mach-O
+  serialization in these scaffolds, then run the F-P0-OBJEQ /
+  F-P1-RUNEQ corpora.

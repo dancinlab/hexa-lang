@@ -1,0 +1,179 @@
+// compiler/emit/macho_arm64.hexa
+//
+// S7-P0 SCAFFOLD — Mach-O arm64 object emitter (LIR -> .o bytes).
+//
+// RFC 063 § P0. Replaces the `.s` text -> `as` round-trip currently
+// in `compiler/main.hexa:806`. Emits Mach-O 64-bit arm64 relocatable
+// objects (`MH_OBJECT`, cputype `CPU_TYPE_ARM64`, cpusubtype
+// `CPU_SUBTYPE_ARM64_ALL`) directly from `LModule`.
+//
+// STATUS: SCAFFOLD — types + entry points + RFC markers only. The
+// actual encoding tables (arm64 instruction syntax -> 32-bit word)
+// and Mach-O load-command serialization land in the P0
+// implementation cycles. This file is NOT yet imported by
+// `compiler/main.hexa` — wiring follows after the encoding table is
+// populated and F-P0-OBJEQ passes on the corpus.
+//
+// Falsifier (from RFC 063 § P0): `F-P0-OBJEQ` — byte-eq vs
+// `clang -c -arch arm64 T.s -o T.ref.o` on {trivial, fib, while, if,
+// compiler_self}, after stripping non-deterministic fields
+// (timestamps, `LC_BUILD_VERSION` paths, `LC_UUID`, load-command
+// order).
+//
+// Design references:
+// - Mach-O spec: <https://github.com/apple-oss-distributions/cctools>
+//   (`include/mach-o/loader.h`, `reloc.h`, `arm64/reloc.h`)
+// - arm64 ISA: ARM ARM (DDI 0487), the LIR subset emitted by
+//   `compiler/codegen/arm64_darwin.hexa`.
+// - Existing `.s` emitter: `compiler/emit/asm.hexa` (~459 lines) —
+//   line-level structure to mirror; the encoding decisions are
+//   identical, only the output format differs (.s text vs Mach-O
+//   bytes).
+
+// ─────────────────────────────────────────────────────────────────
+// Mach-O 64-bit constants (subset needed for arm64 `.o`)
+// ─────────────────────────────────────────────────────────────────
+
+// Mach-O file magic (little-endian 64-bit).
+let MH_MAGIC_64 = 0xfeedfacf
+
+// File types we emit.
+let MH_OBJECT  = 1   // .o relocatable
+let MH_EXECUTE = 2   // executable (P1 uses this, not P0)
+
+// CPU types.
+let CPU_TYPE_ARM64 = 0x0100000c  // 0x01000000 | 12 (arm64)
+let CPU_SUBTYPE_ARM64_ALL = 0
+
+// Load commands we emit.
+let LC_SEGMENT_64    = 0x19
+let LC_SYMTAB        = 0x02
+let LC_DYSYMTAB      = 0x0b
+let LC_BUILD_VERSION = 0x32
+
+// Section flags.
+let S_REGULAR              = 0x00000000
+let S_ATTR_PURE_INSTRUCTIONS = 0x80000000
+
+// arm64 relocation types (`mach-o/arm64/reloc.h`).
+let ARM64_RELOC_UNSIGNED      = 0
+let ARM64_RELOC_BRANCH26      = 2
+let ARM64_RELOC_PAGE21        = 3
+let ARM64_RELOC_PAGEOFF12     = 4
+
+// ─────────────────────────────────────────────────────────────────
+// Builder state — the in-progress Mach-O object as buffers
+// ─────────────────────────────────────────────────────────────────
+
+struct MachoArm64Obj {
+    // __TEXT,__text section bytes (concatenated instruction words +
+    // any literal pools).
+    text:     [u8],
+    // Per-instruction relocation records (deferred fix-ups for
+    // ADRP/ADD symbol pairs, BL branches > 128 MB, etc.).
+    relocs:   [Arm64Reloc],
+    // Symbol table — function labels, extern references.
+    symbols:  [MachoSymbol],
+    // String table — null-terminated UTF-8, indexed by symbols.
+    strtab:   [u8],
+    // DWARF __debug_line bytes (optional; populated from the `.loc`
+    // directives the LIR carries; see compiler/emit/asm.hexa for the
+    // line-table builder this scaffold reuses).
+    dwarf_line: [u8],
+}
+
+struct Arm64Reloc {
+    offset:  i64,    // offset in __text where the patch applies
+    sym_idx: i64,    // index into symbols[]
+    kind:    i64,    // ARM64_RELOC_*
+    pcrel:   i64,    // 0 or 1
+    length:  i64,    // log2(byte size); 2 = 4 bytes (one arm64 insn)
+}
+
+struct MachoSymbol {
+    name_offset: i64,   // index into strtab[]
+    section:     i64,   // 0 = undefined extern, 1 = __text, ...
+    value:       i64,   // address (within __text for defined syms)
+    kind:        i64,   // N_SECT (defined) / N_UNDF (extern) / ...
+    is_external: i64,   // N_EXT flag
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Public entry — LIR -> Mach-O arm64 .o
+// ─────────────────────────────────────────────────────────────────
+
+// pub fn emit_macho_arm64(lm: LModule, out_path: string) -> i64
+//
+// Returns 0 on success, non-zero on encoding / IO failure.
+//
+// RFC 063 § P0 IMPLEMENTATION CHECKLIST (in dispatch order):
+//   1. arm64 encoding table — LIR opcode + operands -> 32-bit word.
+//      ~150-200 rules covering the LIR subset
+//      `compiler/codegen/arm64_darwin.hexa` currently emits.
+//   2. Symbol pass — collect all function labels and extern refs
+//      from `lm.funcs`, populate `symbols[]` + `strtab[]`.
+//   3. Code pass — walk LInstr stream, encode each to 4 bytes, emit
+//      relocation records for ADRP / ADD / LDR symbol pairs and
+//      BL branches.
+//   4. DWARF pass — reuse asm.hexa's `.loc` line-table builder, emit
+//      `__debug_line` section bytes.
+//   5. Mach-O serialization — header + LC_SEGMENT_64(__TEXT) +
+//      LC_SYMTAB + LC_DYSYMTAB + LC_BUILD_VERSION, sections, then
+//      the data buffers; relocations into `__text` section's reloff.
+//   6. Write to `out_path`.
+fn emit_macho_arm64(_lm: i64, _out_path: string) {
+    // RFC 063 § P0 — implementation pending.
+    // The signature uses placeholder types until LModule is wired
+    // (the import will resolve to `compiler/ir/lir.hexa::LModule`
+    // when this file is integrated).
+    println("emit_macho_arm64: SCAFFOLD — not yet implemented (RFC 063 P0)")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Encoding table — populated in P0 implementation cycles
+// ─────────────────────────────────────────────────────────────────
+
+// fn encode_arm64_insn(op: string, operands: [string]) -> i64
+//
+// Returns a 32-bit arm64 instruction word for the given LIR
+// instruction. Each LIR mnemonic + operand shape maps to exactly
+// one encoding rule. The table covers (incrementally):
+//
+//   - Arithmetic: ADD, SUB, AND, ORR, EOR (register + immediate forms)
+//   - Multiply: MADD, MSUB, MUL, SDIV, UDIV
+//   - Logical shifts: LSL, LSR, ASR
+//   - Memory: LDR / STR (immediate + register-offset, sized)
+//   - Branches: B, BL (PC-rel), CBZ/CBNZ/TBZ/TBNZ, RET
+//   - Conditional: B.cond (EQ/NE/...), CSEL, CSET
+//   - Symbol relocations: ADRP + ADD/LDR pair (PAGE21 + PAGEOFF12)
+//   - Stack: STP/LDP pre-/post-index (prologue/epilogue)
+//
+// The full encoding rules live in this table; the LIR -> rule
+// dispatch is a simple per-opcode `if` chain.
+fn encode_arm64_insn(_op: string, _operands: i64) -> i64 {
+    // RFC 063 § P0 step 1 — encoding table not yet populated.
+    return 0
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Notes for the P0 implementation sub-agent
+// ─────────────────────────────────────────────────────────────────
+//
+// 1. `compiler/codegen/arm64_darwin.hexa` already chose registers
+//    (linear-scan regalloc) and instruction mnemonics. Do NOT
+//    re-decide; just encode what is there.
+//
+// 2. `compiler/emit/asm.hexa` emits the same instructions as `.s`
+//    text. Mirror its structure (per-function loop, per-stmt switch)
+//    and replace each `out = out + "<asm string>\n"` with a call to
+//    `encode_arm64_insn(op, operands)` + append-bytes to `text`.
+//
+// 3. F-P0-OBJEQ falsifier corpus is in RFC 063 § P0; build it under
+//    `compiler/test/macho_p0_corpus/` when implementing.
+//
+// 4. After F-P0-OBJEQ passes, wire into `compiler/main.hexa` next to
+//    the existing `--emit=asm` arm: add `--emit=obj` that calls
+//    `emit_macho_arm64` instead of `emit_asm` + `as`.
+//
+// 5. The `as` fork at `compiler/main.hexa:806` remains the fallback
+//    until F-P0-OBJEQ corpus stabilizes; flip after.

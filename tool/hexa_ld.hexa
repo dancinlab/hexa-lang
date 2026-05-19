@@ -1,0 +1,172 @@
+// tool/hexa_ld.hexa
+//
+// S7-P1 SCAFFOLD — Native Mach-O arm64 linker.
+//
+// RFC 063 § P1. Replaces the `ld` / `ld64` fork in `aprime_cc
+// --emit=exec` (and the system `ld` invoked by `clang` at link time
+// in the current build path). Parses Mach-O `.o` files, resolves
+// symbols across them + against a runtime object, applies relocation
+// fix-ups, writes a Mach-O arm64 executable.
+//
+// NOT to be confused with `tool/hexa_link.hexa` — that file is a
+// clang wrapper (its own header: "Thin clang wrapper. Takes N .c
+// files ... clang handles C-level symbol resolution") and is a
+// C-path artifact. RFC 063 § P3 retires it; until then it stays
+// untouched.
+//
+// STATUS: SCAFFOLD — CLI shape + types + stub link function + RFC
+// markers only. The Mach-O parsing, symbol resolution, and
+// relocation fix-up land in the P1 implementation cycles.
+//
+// Falsifier (from RFC 063 § P1): `F-P1-RUNEQ` — programs linked by
+// hexa_ld behave equivalently (same exit code, same stdout) to those
+// linked by system `ld` on a corpus {smoke exit-42, fib, hexac}.
+// Mach-O byte-eq is NOT required (system ld64 and ours differ on
+// non-functional ordering / padding); runtime equivalence is the
+// contract.
+//
+// Usage (P1, after implementation):
+//   hexa run tool/hexa_ld.hexa -o <out> <a.o> [b.o ...] [--lc-main <sym>]
+//
+// Flags:
+//   -o OUT          output executable path
+//   --lc-main SYM   entry-point symbol for LC_MAIN (default: `_main`)
+//   --static        no dyld / no libSystem (P1.b — single-binary)
+
+fn show_usage() {
+    println("usage: hexa run tool/hexa_ld.hexa -o <out> <a.o> [b.o ...]")
+    println("       [--lc-main SYM] [--static]")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Parsed Mach-O object representation
+// ─────────────────────────────────────────────────────────────────
+
+struct ParsedObj {
+    path:     string,
+    // __text section bytes from the .o (will be concatenated into
+    // the output executable's __text section, with relocations
+    // adjusted to the new base offset).
+    text:     [u8],
+    // Symbols this object DEFINES (visible to other objects).
+    defined:  [LinkSym],
+    // Symbols this object REFERENCES but does not define (resolved
+    // against the union of all other objects' `defined`).
+    extern_refs: [LinkSym],
+    // Relocations within this object's __text — patched after
+    // section concatenation when the new offsets are known.
+    relocs:   [ParsedReloc],
+    // Optional DWARF __debug_line — concatenated to output if all
+    // objects carry it; otherwise dropped.
+    dwarf_line: [u8],
+}
+
+struct LinkSym {
+    name:    string,
+    // Object-local offset into this .o's __text. Final address is
+    // (text_section_base_in_exe + this_obj's_text_offset_in_concat
+    //  + this offset).
+    offset:  i64,
+    // 0 = global/external, 1 = local/private.
+    scope:   i64,
+}
+
+struct ParsedReloc {
+    offset:  i64,
+    sym_name: string,   // name to resolve at link time
+    kind:    i64,       // ARM64_RELOC_* (mirrors macho_arm64.hexa)
+    pcrel:   i64,
+    length:  i64,
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Public entry — link N .o -> Mach-O arm64 executable
+// ─────────────────────────────────────────────────────────────────
+
+// pub fn link_macho_arm64(objs: [ParsedObj], out_path: string,
+//                        lc_main_sym: string, is_static: i64) -> i64
+//
+// RFC 063 § P1 IMPLEMENTATION CHECKLIST (in dispatch order):
+//   1. Mach-O parser — read each input .o, populate ParsedObj
+//      (header / load commands / __text / relocs / symtab).
+//   2. Symbol resolution — union of all `defined`, sweep each
+//      `extern_refs` against the union; unresolved = link error
+//      (mirror system ld's "Undefined symbols" output for diag
+//      compatibility with existing build harnesses).
+//   3. Section concatenation — gather all __text sections in a
+//      deterministic order (input order), record per-obj base
+//      offsets in the merged __text.
+//   4. Relocation fix-up — for each ParsedReloc, compute the final
+//      target address (resolved symbol's final offset) and patch
+//      the instruction word at (obj_base + reloc.offset).
+//      - ARM64_RELOC_BRANCH26: 26-bit immediate, byte-units = 4,
+//        range +/- 128 MB; emit stub if out-of-range.
+//      - ARM64_RELOC_PAGE21 + ARM64_RELOC_PAGEOFF12: ADRP / ADD
+//        pair, page-aligned base + 12-bit offset.
+//      - ARM64_RELOC_UNSIGNED: 64-bit absolute (for symbol pointers
+//        in __got / __data).
+//   5. Mach-O serialization — header (`MH_EXECUTE`, `MH_PIE`),
+//      load commands (LC_SEGMENT_64 __PAGEZERO / __TEXT / __DATA /
+//      __LINKEDIT, LC_MAIN, LC_LOAD_DYLINKER unless --static,
+//      LC_LOAD_DYLIB libSystem unless --static, LC_SYMTAB,
+//      LC_DYSYMTAB, LC_CODE_SIGNATURE placeholder).
+//   6. Write to `out_path`.
+//   7. Post-link: ad-hoc codesign (`codesign -s -`, OS Gatekeeper
+//      requirement — documented in RFC 063 as the ONE remaining
+//      fork on macOS, not a toolchain dependency).
+//
+// Returns 0 on success, non-zero on link failure.
+fn link_macho_arm64(_objs: i64, _out_path: string, _entry: string, _is_static: i64) -> i64 {
+    // RFC 063 § P1 — implementation pending.
+    println("hexa_ld: SCAFFOLD — not yet implemented (RFC 063 P1)")
+    return 1
+}
+
+// ─────────────────────────────────────────────────────────────────
+// CLI
+// ─────────────────────────────────────────────────────────────────
+
+let raw_args = argv()
+let mut out = ""
+let mut input_objs = []
+let mut lc_main = "_main"
+let mut is_static = 0
+
+let mut i = 2  // skip [hexa_program, script_path]
+while i < len(raw_args) {
+    let a = raw_args[i]
+    if a == "-o" {
+        if i + 1 < len(raw_args) {
+            out = raw_args[i + 1]
+            i = i + 2
+        } else { show_usage() exit(1) }
+    } else if a == "--lc-main" {
+        if i + 1 < len(raw_args) {
+            lc_main = raw_args[i + 1]
+            i = i + 2
+        } else { show_usage() exit(1) }
+    } else if a == "--static" {
+        is_static = 1
+        i = i + 1
+    } else if a == "-h" || a == "--help" {
+        show_usage()
+        exit(0)
+    } else if len(a) > 2 && a.substring(len(a) - 2, len(a)) == ".o" {
+        input_objs.push(a)
+        i = i + 1
+    } else {
+        println("hexa_ld: unknown arg '" + a + "'")
+        show_usage()
+        exit(1)
+    }
+}
+
+if len(out) == 0 || len(input_objs) == 0 {
+    show_usage()
+    exit(1)
+}
+
+// Driver dispatch — once link_macho_arm64 is implemented, this
+// parses each input .o into ParsedObj and calls into the linker.
+let rc = link_macho_arm64(0, out, lc_main, is_static)
+exit(rc)
