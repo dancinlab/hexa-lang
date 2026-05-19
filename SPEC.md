@@ -58,15 +58,26 @@ Rejected: `interpreter_only` (too slow for CI/LSP at atlas size 4.2 MB),
 `interpreter_with_cache` (still per-process overhead, not zero).
 
 ### 2.2 atlas embedding — **static, baked into compiler**
-`atlas.n6 + atlas.append.*.n6` are merged at compiler build time and
-embedded as a packed const into the compiler binary (rodata). Hash
-pinned via `ATLAS_HASH` constant.
+The atlas is **unconditionally binary built-in**. Its SSOT is
+`compiler/atlas/embedded.gen.hexa`, merged into the compiler at build
+time and embedded as a packed const in the compiler binary (rodata).
+Hash pinned via `ATLAS_HASH` constant. There is **no runtime atlas
+load** — no on-disk `.n6` file is read or merged into the live atlas at
+runtime.
+
+`.n6` files (`atlas.n6`, `atlas.overlay.n6`, `atlas.append.*.n6`) are a
+`hexa atlas export` **output artifact** only — produced on demand for
+interop / inspection, never a runtime-loaded "live overlay". New
+equations reach the live atlas via **GitHub PR** into
+`embedded.gen.hexa`, after which a compiler rebuild re-embeds them.
 
 | Property | Value |
 |---|---|
 | Runtime cost | 0 ms |
 | Compiler binary overhead | 1–2 MB |
 | Drift handling | CI auto-rebuilds compiler |
+| `.n6` role | `hexa atlas export` output artifact (interop / inspection) |
+| Absorption path | GitHub PR into `embedded.gen.hexa` → compiler rebuild |
 | Override | `hexa.toml [atlas] path = "..."` (rebuilds compiler) |
 
 Rejected: `read_atlas_at_runtime` (200 ms per invocation),
@@ -305,11 +316,22 @@ real-number induction.
 ### 10.2 Registration authority — **fully automatic (Sub 5b)**
 Auto-register on prover pass; safety net is invalidation (Sub 5e).
 
+The live atlas is the binary built-in (§2.2). A verified equation
+reaches it via a **GitHub PR into `compiler/atlas/embedded.gen.hexa`**,
+not via a runtime overlay. The retired runtime path — "discover →
+`atlas.overlay.n6` → 3+ hits → promote into rodata regen" — is no
+longer how equations become live; equations do **not** pass through a
+`.n6` file to reach the live atlas.
+
 Staging pipeline at `compiler/discover/`:
-- `discover.hexa` + `staging.hexa` — write `atlas.proposed.{date}.n6`
-- `promote.hexa` — **active** — folds proposed → live atlas, emits
-  `atlas.append.{today}.n6` shard plus
-  `/tmp/_promote_manifest.{date}.txt` summarising counts.
+- `discover.hexa` + `staging.hexa` — emit a `.n6` **export artifact**
+  (`atlas.proposed.{date}.n6`) for review, equivalent to
+  `hexa atlas export`. This is an inspection / interop artifact, not a
+  runtime-loaded overlay.
+- `promote.hexa` — prepares the proposed entries and emits an
+  `atlas.append.{today}.n6` export shard plus
+  `/tmp/_promote_manifest.{date}.txt` summarising counts; the actual
+  fold into the live atlas is the PR into `embedded.gen.hexa`.
 - Conflict rules: fingerprint dedup merges as alias; id-first wins
   rejects collisions with warning; new emits full proof-hash record.
 

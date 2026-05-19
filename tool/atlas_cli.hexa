@@ -1,6 +1,6 @@
 // tool/atlas_cli.hexa — `hexa atlas {hash|stats|lookup|dump|append-witness|promote|register|pr}`
 //
-// @version 0.3.0
+// @version 0.4.0
 // @capabilities [fs_read, fs_write, exec]
 // @allow-bare-exec-file (reason: exec() used for date +%s%3N millis timer in
 //   _now_ms() — wall-clock for unique shard filename; matches the same
@@ -19,7 +19,10 @@
 //                        `@discover`-annotated fns. Needs the compiler frontend wired into a
 //                        `tool/atlas_register.hexa` companion — spec in
 //                        inbox/patches/hexa-cli-atlas-register-update-or-pr.md.
-//       pr             — STUB: the `PR` fallback (branch + promote-in-fork + `gh pr create`).
+//       pr             — the `PR` arm of `update || PR`: fold a staging shard onto a fresh
+//                        git branch, commit the append shard, try `gh pr create` against
+//                        origin. Degrades honestly (write-shard + print exact commands) when
+//                        git/gh are missing or unauthenticated — never fakes a PR.
 //
 // Wired from self/main.hexa: `hexa atlas <sub-sub> [args]`.
 // Also runnable directly: `hexa run tool/atlas_cli.hexa <sub-sub> [args]`.
@@ -450,19 +453,274 @@ fn cmd_register(rest: array) {
     exit(3)
 }
 
-// `hexa atlas pr` — STUB. The `PR` arm of `update || PR`: create a branch in the
-// linked hexa-lang clone, run promote there, commit the append shard, `gh pr create`
-// against origin. Needs the install-links-the-source-repo path (`hexa repo path`)
-// and `gh` auth. Tracked alongside `register`.
+// ── pr (the `PR` arm of `update || PR`) ───────────────────
+// `hexa atlas pr --staging <file.n6>` — fold a staging shard into the live
+// atlas IN A FRESH BRANCH of the hexa-lang clone, commit the append shard,
+// then try `gh pr create` against origin. The `PR` fallback for non-owners
+// (and for agents) — distinct from `promote`, which folds onto the current
+// branch for owners to commit themselves.
+//
+// HONEST DEGRADED PATH (g3): `git`/`gh` may be absent or unauthenticated.
+//   - no `git`               → still folds the shard, prints the manual
+//                              branch+commit+PR commands. exit 0 (shard written).
+//   - `git` ok, `gh` absent  → branch + commit succeed; prints the exact
+//     /unauth                  `gh pr create` command to run. exit 0.
+//   - `gh pr create` ok      → prints the real PR URL. exit 0.
+// A PR is NEVER claimed as "opened" unless `gh pr create` actually returned 0.
+
+// _shq — single-quote-escape a string for safe `exec()` embedding.
+fn _shq(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+// _exec_ok — run a shell command, return true iff exit status 0. `exec()`
+// only captures stdout, so we append `&& echo __OK__ || echo __FAIL__` and
+// inspect the trailing marker (the try-CLI-or-fallback pattern, @D g5).
+fn _exec_ok(cmd: string) -> bool {
+    let out = exec("( " + cmd + " ) >/dev/null 2>&1 && echo __OK__ || echo __FAIL__").trim()
+    return out == "__OK__"
+}
+
+fn _today_compact() -> string {
+    let s = exec("date -u +%Y-%m-%d 2>/dev/null").trim()
+    if len(s) == 0 { return "unknown-date" }
+    return s
+}
+
+// _branch_stamp — date + millis, safe for a git branch name.
+fn _branch_stamp() -> string {
+    let s = exec("date -u +%Y%m%d-%H%M%S 2>/dev/null").trim()
+    if len(s) == 0 { return "unknown" }
+    return s
+}
+
+// _gh_token — resolve a GitHub token for the API fallback: env first
+// (GH_TOKEN / GITHUB_TOKEN), then `gh auth token` if gh is logged in.
+// The token is never printed. Empty string = no token available.
+fn _gh_token() -> string {
+    let e1 = env("GH_TOKEN")
+    if len(e1) > 0 { return e1 }
+    let e2 = env("GITHUB_TOKEN")
+    if len(e2) > 0 { return e2 }
+    return exec("gh auth token 2>/dev/null").trim()
+}
+
+// _origin_slug — "owner/repo" parsed from `origin`'s URL (https or ssh
+// form), trailing ".git" stripped. Empty string = could not resolve.
+fn _origin_slug(root: string) -> string {
+    let url = exec("git -C " + _shq(root) + " remote get-url origin 2>/dev/null").trim()
+    if len(url) == 0 { return "" }
+    return exec("printf '%s' " + _shq(url) +
+        " | sed -E 's#^.*github\\.com[:/]##; s#\\.git$##'").trim()
+}
+
+// _jesc — minimal JSON string escape (backslash, then double-quote).
+fn _jesc(s: string) -> string {
+    return s.replace("\\", "\\\\").replace("\"", "\\\"")
+}
+
 fn cmd_pr(rest: array) {
-    println("hexa atlas pr: NOT YET WIRED.")
-    println("  intended: branch + `hexa atlas promote` (in your hexa-lang clone) + `gh pr create` against origin —")
-    println("  the `PR` fallback of `update || PR` for non-owners. Spec: inbox/patches/hexa-cli-atlas-register-update-or-pr.md")
-    println("  manual PR for now:")
-    println("    cd <your hexa-lang clone> && git switch -c atlas-<id>")
-    println("    hexa atlas promote --staging <shard.n6>")
-    println("    git add atlas.append.*.n6 && git commit -m 'atlas: <id>' && gh pr create")
-    exit(3)
+    let mut staging = ""
+    let mut atlas_root = ""
+    let mut base = "main"
+    let mut branch = ""
+    let mut title = ""
+    let mut i = 0
+    let n = len(rest)
+    while i < n {
+        let a = to_string(rest[i])
+        if a == "--staging" && i + 1 < n {
+            staging = to_string(rest[i + 1])
+            i = i + 2
+        } else if a == "--atlas-root" && i + 1 < n {
+            atlas_root = to_string(rest[i + 1])
+            i = i + 2
+        } else if a == "--base" && i + 1 < n {
+            base = to_string(rest[i + 1])
+            i = i + 2
+        } else if a == "--branch" && i + 1 < n {
+            branch = to_string(rest[i + 1])
+            i = i + 2
+        } else if a == "--title" && i + 1 < n {
+            title = to_string(rest[i + 1])
+            i = i + 2
+        } else if a == "--help" || a == "-h" {
+            println("usage: hexa atlas pr --staging <file.n6> [--atlas-root <repo-root>]")
+            println("                     [--base <branch>] [--branch <name>] [--title <text>]")
+            println("")
+            println("the `PR` arm of `update || PR`: fold the staging shard into the live atlas")
+            println("on a FRESH branch, commit the append shard, then `gh pr create` against origin.")
+            println("degrades honestly when git/gh are missing — prints the exact commands to run,")
+            println("never claims a PR was opened unless `gh pr create` actually succeeded.")
+            return
+        } else if len(staging) == 0 && a.substring(0, 2) != "--" {
+            staging = a
+            i = i + 1
+        } else {
+            println("error: unknown arg: " + a)
+            exit(2)
+        }
+    }
+    if len(staging) == 0 {
+        println("error: hexa atlas pr needs a staging file — `--staging <file.n6>`")
+        println("       (a discover/append shard; e.g. one written by `hexa atlas append-witness`)")
+        exit(2)
+    }
+    if !file_exists(staging) {
+        println("error: staging file not found: " + staging)
+        exit(2)
+    }
+    if len(atlas_root) == 0 {
+        atlas_root = env_var("HEXA_LANG")
+        if len(atlas_root) == 0 { atlas_root = "." }
+    }
+    if len(branch) == 0 { branch = "atlas-pr-" + _branch_stamp() }
+    if len(title) == 0 { title = "atlas: promote discovered nodes (via hexa atlas pr)" }
+
+    let today = _today_compact()
+    // The append shard `promote_to_atlas` will write — reconstruct the path
+    // it uses (atlas_root + "/atlas.append." + today + ".n6") so we can stage
+    // exactly that file for the commit.
+    let append_path = atlas_root + "/atlas.append." + today + ".n6"
+
+    // ── Step 0 — is `git` usable in this atlas-root? ───────────
+    let have_git = _exec_ok("command -v git")
+    let in_repo = have_git && _exec_ok("git -C " + _shq(atlas_root) + " rev-parse --git-dir")
+
+    // ── Step 1 — create the PR branch (before folding, so the append
+    //   shard lands on the branch, not on whatever was checked out). ──
+    let mut branched = false
+    if in_repo {
+        branched = _exec_ok("git -C " + _shq(atlas_root) + " switch -c " + _shq(branch))
+        if !branched {
+            println("hexa atlas pr: warning — could not create branch '" + branch + "'")
+            println("  (it may already exist, or the worktree is dirty). Folding onto the")
+            println("  current branch instead; you will need to branch + commit by hand.")
+        }
+    }
+
+    // ── Step 2 — fold the shard into the live atlas (reuse `promote`). ──
+    let rc = promote_to_atlas(staging, atlas_root)
+    if rc != 0 {
+        println("hexa atlas pr: promote_to_atlas failed (rc=" + to_string(rc) +
+                ", staging=" + staging + ", atlas-root=" + atlas_root + ")")
+        // Roll the branch back so we do not leave a stray empty branch.
+        if branched {
+            let _ = exec("git -C " + _shq(atlas_root) + " switch " + _shq(base) +
+                         " >/dev/null 2>&1; git -C " + _shq(atlas_root) +
+                         " branch -D " + _shq(branch) + " >/dev/null 2>&1")
+        }
+        exit(2)
+    }
+
+    // promote_to_atlas only writes the append shard when something landed.
+    if !file_exists(append_path) {
+        println("hexa atlas pr: nothing promoted — no append shard at " + append_path)
+        println("  (the staging file produced 0 new/merged nodes; see the promote manifest above).")
+        if branched {
+            let _ = exec("git -C " + _shq(atlas_root) + " switch " + _shq(base) +
+                         " >/dev/null 2>&1; git -C " + _shq(atlas_root) +
+                         " branch -D " + _shq(branch) + " >/dev/null 2>&1")
+        }
+        exit(3)
+    }
+
+    // ── Step 3 — degraded path: no git → write-only, print manual steps. ──
+    if !in_repo {
+        println("")
+        println("hexa atlas pr: append shard written — " + append_path)
+        if !have_git {
+            println("  `git` not found on PATH — cannot branch/commit/PR automatically.")
+        } else {
+            println("  '" + atlas_root + "' is not a git repo — cannot branch/commit/PR automatically.")
+        }
+        println("  ready to PR — from " + atlas_root + " run:")
+        println("    git switch -c " + branch)
+        println("    git add " + append_path)
+        println("    git commit -m " + _shq(title))
+        println("    gh pr create --base " + base + " --head " + branch +
+                " --title " + _shq(title))
+        return
+    }
+
+    // ── Step 4 — git available: stage + commit the append shard. ──
+    let added = _exec_ok("git -C " + _shq(atlas_root) + " add " + _shq(append_path))
+    if !added {
+        println("hexa atlas pr: warning — `git add` failed for " + append_path)
+        println("  shard is on disk; commit it by hand:")
+        println("    git -C " + atlas_root + " add " + append_path)
+        println("    git -C " + atlas_root + " commit -m " + _shq(title))
+        return
+    }
+    let commit_msg = title + "\n\nFolded staging shard: " + staging +
+                     "\nCo-Authored-By: hexa atlas pr <noreply@hexa-lang>"
+    let committed = _exec_ok("git -C " + _shq(atlas_root) + " commit -m " + _shq(commit_msg))
+    if !committed {
+        println("hexa atlas pr: warning — `git commit` failed (nothing staged? hooks?).")
+        println("  the append shard is staged on branch '" + branch + "'; commit it by hand.")
+        return
+    }
+    println("hexa atlas pr: committed " + append_path + " on branch '" + branch + "'")
+
+    // ── Step 5 — open the PR.  Fallback chain: gh CLI → GitHub API → honest
+    //    degrade (user directive: `gh || api`). A PR is NEVER claimed opened
+    //    unless `gh pr create` returned 0 or the API returned HTTP 201.
+    let gh_cmd = "gh pr create --base " + _shq(base) + " --head " + _shq(branch) +
+                 " --title " + _shq(title) +
+                 " --body 'Automated atlas promotion via `hexa atlas pr`.'"
+
+    // 5a — gh CLI (it pushes the head branch itself).
+    if _exec_ok("command -v gh") {
+        if _exec_ok("cd " + _shq(atlas_root) + " && " + gh_cmd) {
+            let url = exec("cd " + _shq(atlas_root) + " && gh pr view --json url -q .url 2>/dev/null").trim()
+            println("hexa atlas pr: PR opened via gh — " + (if len(url) > 0 { url } else { "(see `gh pr list`)" }))
+            return
+        }
+        println("hexa atlas pr: `gh pr create` did not succeed — falling back to GitHub API…")
+    } else {
+        println("hexa atlas pr: `gh` not found — falling back to GitHub API…")
+    }
+
+    // 5b — GitHub API via curl. Needs a token + the head branch pushed to
+    //      origin (the API opens a PR from an already-existing remote branch).
+    let tok = _gh_token()
+    let slug = _origin_slug(atlas_root)
+    let mut why = ""
+    if len(tok) == 0 {
+        why = "no GH_TOKEN / GITHUB_TOKEN set and `gh auth token` unavailable"
+    } else if len(slug) == 0 {
+        why = "could not resolve owner/repo from the `origin` remote"
+    } else if !_exec_ok("cd " + _shq(atlas_root) + " && git push -u origin " + _shq(branch)) {
+        why = "`git push` to origin failed (no write access / offline)"
+    }
+    if len(why) == 0 {
+        let body = "{\"title\":\"" + _jesc(title) + "\",\"head\":\"" + _jesc(branch) +
+                   "\",\"base\":\"" + _jesc(base) +
+                   "\",\"body\":\"Automated atlas promotion via hexa atlas pr.\"}"
+        let api = "curl -sS -o /tmp/_hexa_pr_resp.json -w '%{http_code}' -X POST" +
+                  " -H " + _shq("Authorization: Bearer " + tok) +
+                  " -H " + _shq("Accept: application/vnd.github+json") +
+                  " -H " + _shq("X-GitHub-Api-Version: 2022-11-28") +
+                  " https://api.github.com/repos/" + slug + "/pulls" +
+                  " -d " + _shq(body)
+        let code = exec("cd " + _shq(atlas_root) + " && " + api).trim()
+        if code == "201" {
+            let url = exec("grep -o 'https://github.com/[^\"]*/pull/[0-9]*' /tmp/_hexa_pr_resp.json | head -1").trim()
+            println("hexa atlas pr: PR opened via GitHub API — " + (if len(url) > 0 { url } else { "(HTTP 201)" }))
+            return
+        }
+        let msg = exec("grep -o '\"message\"[^,}]*' /tmp/_hexa_pr_resp.json | head -1").trim()
+        why = "GitHub API returned HTTP " + code + (if len(msg) > 0 { " — " + msg } else { "" })
+    }
+
+    // 5c — honest degrade: gh and the API are both unavailable. The branch +
+    //      commit are local; print the exact commands, claim NO PR.
+    println("")
+    println("hexa atlas pr: PR not opened — " + why + ".")
+    println("  branch '" + branch + "' has the commit locally — NO PR was opened.")
+    println("  ready to PR — from " + atlas_root + " run:")
+    println("    git push -u origin " + branch)
+    println("    " + gh_cmd)
 }
 
 fn cmd_help() {
@@ -490,8 +748,12 @@ fn cmd_help() {
     println("                          default --atlas-root = $HEXA_LANG (else cwd)")
     println("  register <file.hexa>    [STUB] lex→parse→discover_check→write_staging for the file's")
     println("                          @discover-annotated fns. (needs the compiler frontend — see note)")
-    println("  pr                      [STUB] the `PR` fallback: branch + promote-in-fork + gh pr create.")
-    println("                          (see inbox/patches/hexa-cli-atlas-register-update-or-pr.md)")
+    println("  pr --staging <file.n6>  [--atlas-root <repo>] [--base <branch>] [--branch <name>]")
+    println("                          [--title <text>]")
+    println("                          the `PR` arm of `update || PR`: fold the shard onto a fresh")
+    println("                          branch, commit the append shard, then `gh pr create`.")
+    println("                          degrades honestly when git/gh are absent/unauthed —")
+    println("                          writes the shard + prints the exact commands, never fakes a PR.")
     println("")
     println("data lives compile-time in compiler/atlas/embedded.gen.hexa")
     println("(regenerate via:  hexa run tool/atlas_embed_gen.hexa)")

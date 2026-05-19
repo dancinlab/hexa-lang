@@ -1,5 +1,17 @@
 # `hx` still points at the old `need-singularity` org after the dancinlab rename
 
+> **Status: resolved-ssot (2026-05-19).** `tool/pkg/hx` line 10
+> (`REGISTRY_REMOTE`) was already corrected to `dancinlab/hexa-lang` by the
+> earlier identity-rename commit `bc545c16`. This cycle fixes line 18:
+> `HX_ORGS_DEFAULT="hexa-pkg dancinlab need-singularity"` — `dancinlab` is now
+> the primary probe org, `need-singularity` retained as a lower-priority
+> fallback (per Ask #2), and the bogus `dancinlife` git-author handle was
+> dropped (it is not a GitHub org, so probing it only wasted a `git ls-remote`).
+> Ask #3 (cache invalidation) is NOT done this cycle — out of scope for a
+> surgical fix; users can `hx where --no-cache <name>` to re-probe. Also fixed
+> a stale clone URL in a usage comment in `tool/build_hexa_cli_native.hexa:10`.
+> `bash -n tool/pkg/hx` passes.
+
 **From:** void (downstream) — 2026-05-18, during void's grid-only beta launch prep,
 verifying that the README's `hx install void` actually resolves the right repo.
 

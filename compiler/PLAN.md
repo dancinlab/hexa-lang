@@ -3282,3 +3282,177 @@ EnumPath rework deliberately not done (larger, more-principled option).
   leighton/sweep COMPILE_OK 측정 (compile-clean = 패치 버그 closed);
   `fn main()` 런타임 exec 별도 미실행. `self/native/hexa_v2` binary
   promote 는 별도 deploy step (본 cycle 미포함).
+
+### 2026-05-19 — `hx` stale `need-singularity` org reference fixed (inbox patch)
+
+Processed `inbox/patches/hx-stale-need-singularity-org-after-dancinlab-rename.md`
+(filed by void downstream). The GitHub org rename `need-singularity` →
+`dancinlab` left `tool/pkg/hx` name-resolution stale. `REGISTRY_REMOTE`
+(line 10) was already corrected by the earlier identity-rename commit
+`bc545c16`. This cycle fixed `HX_ORGS_DEFAULT` (line 18):
+`"hexa-pkg dancinlab dancinlife"` → `"hexa-pkg dancinlab need-singularity"` —
+`dancinlab` primary, `need-singularity` retained as a lower-priority redirect
+fallback per the patch's Ask #2, and the bogus `dancinlife` (a git-author
+handle, not a GitHub org) dropped so `hx` no longer wastes a probe on a
+nonexistent org. Also fixed a stale `need-singularity/hexa-lang` clone URL in
+a usage comment in `tool/build_hexa_cli_native.hexa:10`. Ask #3 (resolve.tsv
+cache invalidation) deferred — out of scope for a surgical fix. `bash -n
+tool/pkg/hx` passes. `~/.hx/bin/hx` is a stale copy of this SSOT and is
+intentionally untouched. Toolchain-only; no compiler/stdlib/self rebuild.
+### 2026-05-19 — codegen: ExternFnDecl in statement position — FFI wrapper mangle parity + nested-decl hoist
+
+keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/test_keyword_audit.hexa` L376 `extern fn getpid() -> Int` 는 두 갈래로 깨졌었다.
+
+**근본원인 (측정으로 확정 — `unhandled stmt kind` 가 아니었음)**: top-level / script-body `extern fn` 는 이미 top-level emit loop 의 `ExternFnDecl` 분기에 도달한다. 진짜 버그는 `gen2_extern_wrapper` 가 emit 하는 C 래퍼 함수 이름이 call-site mangle 과 불일치한 것. `getpid` 는 `_hexa_name_is_reserved` 목록에 있어 (libc `getpid` 충돌) call-site 는 `_hexa_mangle_ident` 로 `u_getpid()` 를 emit 하지만, 래퍼는 plain `getpid` 로 emit 됨 → call 이 libc `int getpid(void)` 로 resolve → clang `assigning to HexaVal from incompatible type 'int'`. fn-body 안에 nested 된 `extern fn` 는 `_gen2_lift_nested_decls` 가 hoist 하지 않아 별개로 `CODEGEN ERROR: unhandled stmt kind: ExternFnDecl` 스텁을 emit 했다.
+
+**수정 (`self/codegen_c2.hexa`, surgical 3-part)**:
+1. `gen2_extern_wrapper` — 래퍼 C 함수 이름 (forward decl + 두 `static HexaVal NAME(...)` 정의 + typedef 태그) 을 `_hexa_mangle_ident(name)` (`cname`) 로 변경. decl 이름 == reference 이름. `__ffi_sym_<name>` dlsym 슬롯은 raw name 유지 (이미 고유-prefix 내부 식별자; dlsym C-symbol 문자열은 `c_sym` 으로 별도). 비-reserved extern 이름은 mangle 이 no-op → 일반 케이스 zero regression (측정 확인).
+2. `_gen2_lift_nested_decls` — lift 인식 종류에 `ExternFnDecl` 추가. fn-body 최상단 `extern fn` 도 module scope 로 hoist (C 는 nested fn 없음; FFI 래퍼는 top-level 분기에서만 emit). 추가로 `seen_names` 를 기존 top-level decl 이름으로 pre-seed — top-level 과 nested 가 같은 extern 이름이면 nested 복사본을 lift 하지 않음 (top-level 이 이김) → C "redefinition" 방지.
+3. `gen2_stmt` decl-skip — `ExternFnDecl` 추가. lift 된 stmt-position `extern fn` 가 원래 위치에서 `unhandled stmt kind` 스텁을 ALSO emit 하지 않게.
+
+**측정 BEFORE/AFTER** (Mac, host-pinned smoke `extern fn getpid() -> Int; let p = getpid(); ...`):
+- BEFORE (구 hexa_v2): transpile OK 이나 C 빌드 2 errors (`u_getpid` ≠ `getpid` incompatible-type). nested smoke → `unhandled stmt kind: ExternFnDecl` 스텁 1개.
+- AFTER (regen hexa_v2): script-body smoke → 래퍼 `u_getpid` == call `u_getpid` → C 빌드 0 error → run `extern ok` rc=0. nested smoke → 스텁 0개 → 빌드+run `nested extern ok` rc=0. 비-reserved extern → 래퍼 이름 변경 없음 (no-op mangle 확인).
+- `self/test_keyword_audit.hexa` → ExternFnDecl 스텁 0 (BEFORE 1). 잔여 5 C-error 는 generics `T` / `Clone` / async `hexa_await_unwrap` 등 무관 별건 갭 — 구·신 transpiler 동일 5개 → zero regression.
+
+**self-host fixpoint**: `cc --regen` → `hexa_cc.c.new` ≡ promoted `hexa_cc.c` BYTE-IDENTICAL (`cmp` 확인). 바이너리 promote 동반 — `hexa_cc.c` 1480897→1484206 B, `hexa_v2` 1533496→1534088 B.
+
+**LIMITATION (소스 주석에 명기)**: shallow-walk 경계 유지 — `if/while/for` 블록 안 더 깊이 nested 된 `extern fn` 는 lift 대상 아님 (`_gen2_lift_nested_decls` 의 기존 top-of-body 한계와 동일). top-level / script-body / fn-body-최상단 `extern fn` 만 커버.
+
+
+### 2026-05-19 — install.sh: fresh-install `hexa build` + PATH 견고화
+
+- inbox/patches/hexa-oneliner-install-should-link-source-repo.md 해소.
+  문제 1: 릴리스 tarball 은 `{hexa 바이너리, build/}` 만 담아 `stdlib/`·
+  `self/` 미포함 → fresh install 에서 `use "stdlib/..."` 빌드 전부 실패.
+  컴파일러는 install-relative stdlib 탐색 (df9e7f6b: `<inst>/stdlib`·
+  `<inst>/self/stdlib`) 을 갖췄으나 `install.sh` 가 `stdlib/` 를 거기
+  배치하지 않았음.
+- 채택안 (a) — 새 릴리스 不要, 오늘 동작: `install_src()` 가 hexa-lang
+  소스를 `$HX_HOME/src` 로 shallow git clone → `$HX_BIN/stdlib`·
+  `$HX_BIN/self` 심볼릭 링크 (install_dir_from_argv0() 가 `hexa.real` 을
+  realpath 해 `$HX_BIN` 반환 → 두 candidate 정확히 적중). `hexa cc` 의
+  `<inst>/self/native/hexa_cc.c` 도 `self` 링크로 해소.
+- 추가 발견 (g3): `hexa build` flatten 단계는 codegen_c2 의 4-way `use`
+  탐색 (caller-dir·$HEXA_LANG/self·$HEXA_LANG·cwd·./self) 만 갖춘
+  standalone `hexa_v2` 가 아니라, **compiled `hexa_module_loader`**
+  바이너리를 통해야 install-relative 탐색이 작동. 이 바이너리는
+  `.gitignore` 대상 → clone 에 없음. 단 `module_loader.hexa` 는 `use` 0건
+  (self-contained) 이라 pre-existing module_loader 없이 빌드 가능 →
+  `install_src()` 가 clone 직후 `$HX_BIN/build/hexa_module_loader` 로
+  빌드. 이로써 새 릴리스 없이 end-to-end `hexa build` 성립.
+- 문제 2: `update_path_hint()` — (1) rc 파일이 이미 존재할 때만 기록
+  (`[ -f ]`) → fresh user 자동설정 누락 = 없으면 생성. (2) macOS login
+  bash 는 `~/.bashrc` 아닌 `~/.bash_profile` 를 읽음 → OS×shell 조합별
+  올바른 파일 선택 (bash+Darwin→.bash_profile, bash+Linux→.bashrc,
+  zsh→.zshrc). (3) fish 미지원 → `~/.config/fish/config.fish` 에
+  `fish_add_path` (fish 문법) 기록.
+- 검증 (measured): `bash -n install.sh` PASS. update_path_hint 4 조합
+  (zsh/Darwin · bash/Darwin→.bash_profile · bash/Linux→.bashrc ·
+  fish→config.fish) 모두 올바른 파일·문법으로 신규 생성 확인. stdlib:
+  temp `HX_HOME` 에 클린룸 시뮬레이션 install (native 바이너리 + shim +
+  소스 clone + 심볼릭 링크 + module_loader 빌드) 후 `HEXA_LANG`/
+  `HEXA_STDLIB_ROOT`/`HEXA_INSTALL_DIR` 전부 unset 으로 `use
+  "stdlib/core/bytes.hexa"` 프로그램 `hexa build` rc=0 → 실행 시
+  `int_from_hex("deadbeef")=3735928559` 정상 출력.
+- 릴리스 의존 잔여: 없음 — 채택안 (a) 는 git 만 있으면 오늘 작동.
+  단 release tarball 자체에 `stdlib/`·`hexa_module_loader` 를 담는
+  대안 (b) 은 미채택 (release-packaging tool 부재 — `.github/workflows/`
+  에 release workflow 없음). `hexa repo path` / `hexa update` verb 는
+  컴파일러 변경 필요 → 후속 follow-up 으로 patch markdown 에 명시.
+
+### 진행 로그 — atlas binary-built-in 정책 codify + runtime overlay-load 은퇴
+
+user directive 2026-05-19 — atlas 는 **무조건 바이너리 빌트인** (compile-time
+embed; SSOT = `compiler/atlas/embedded.gen.hexa`). `.n6` 파일은 이제 `hexa atlas
+export` **출력물 전용** (interop / inspection). 신규 식은 GitHub PR 로 빌트인 atlas
+에 직접 흡수 — 구 runtime path (`~/.hx/data/atlas.overlay.n6` · discovery →
+overlay → 3+ hits → promote into rodata regen) RETIRED.
+
+- **거버넌스**: `AGENTS.tape §3` 에 `@D g_atlas_binary_builtin` 추가 (g6 인접,
+  tape v1.2 grammar — rule/why/apply/authority/cross-ref/@>). `CLAUDE.md` 는
+  symlink 이라 자동 반영.
+- **docs**: `README.md` — 구 discovery 다이어그램 (`atlas.proposed/.append.n6 →
+  promote → live atlas grows`) 를 `hexa atlas export → GitHub PR into
+  embedded.gen.hexa → compiler build re-embeds` 로 재서술; "noise smash
+  contract" ASCII 박스 라벨 `(rodata + overlay)` → `(binary built-in)`;
+  "regenerated daily" → "binary built-in; new laws via GitHub PR". `SPEC.md`
+  §2.2 — `.n6` = export artifact + absorption = PR-into-embedded-atlas 행 추가,
+  "no runtime atlas load" 명문화; §10.2 — staging pipeline 을 export-artifact
+  + PR-fold 모델로 재서술.
+- **code (surgical retire)**: `compiler/atlas/overlay.hexa` — runtime LOAD
+  path 은퇴. `overlay_load()` / `overlay_load_cached()` 는 이제 무조건 `[]`
+  반환 (디스크 `.n6` 파일을 live atlas 에 머지 안 함). 함수 시그니처는 유지 —
+  기존 호출처 (`atlas_lookup_merged` · `audit_overlay` · drill round seed-dedup)
+  무수정 컴파일, binary-only atlas 관측. WRITE surface (`overlay_append` /
+  `overlay_append_lines` / `overlay_ensure_dir`) 는 `.n6` export 출력물 emit
+  경로이므로 보존 — `hexa atlas export` 불파손. `compiler/atlas/static_index.hexa`
+  — `atlas_lookup_merged` / `atlas_list_merged` 주석을 binary-built-in 모델로
+  재서술 (overlay retired-to-empty → merged ≡ rodata-alone).
+- **parse-gate (measured)**: `clang -O2 -I. -Iself -c self/runtime.c -o
+  self/runtime.o` OK → `self/native/hexa_v2 compiler/atlas/overlay.hexa
+  /tmp/o_overlay.c` → `OK` rc=0 · `self/native/hexa_v2
+  compiler/atlas/static_index.hexa /tmp/o_static.c` → `OK` rc=0.
+- **deferred**: (1) discovery 체인 (`reign`/`revive`/`debate`/`molt`/`wake`/
+  `forge`/`canon_engine`/`drill`) 의 `overlay_append` 호출은 그대로 — 이제
+  export-artifact 를 쓸 뿐 live atlas 변이 없음 (load-path 은퇴로 무해화).
+  이 호출들을 명시적 `hexa atlas export` verb 로 재배선하는 것은 후속 cycle.
+  (2) `self/main.hexa` help 텍스트 (`atlas.overlay.n6` 언급 L119-173) 갱신은
+  별도 surgical edit — 본 cycle 범위 밖. (3) `cc --regen` / `hexa_cc.c`·
+  `hexa_v2` promote 미수행 — 부모 세션의 단일 consolidated regen 대상.
+### 2026-05-19 — codegen: ExternFnDecl in statement position — FFI wrapper mangle parity + nested-decl hoist
+
+keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/test_keyword_audit.hexa` L376 `extern fn getpid() -> Int` 가 두 갈래로 깨졌었다.
+
+**근본원인 (측정으로 확정 — `unhandled stmt kind` 가 아니었음)**: top-level / script-body `extern fn` 는 이미 top-level emit loop 의 `ExternFnDecl` 분기에 도달한다. 진짜 버그는 `gen2_extern_wrapper` 가 emit 하는 C 래퍼 함수 이름이 call-site mangle 과 불일치한 것. `getpid` 는 `_hexa_name_is_reserved` 목록에 있어 (libc `getpid` 충돌) call-site 는 `_hexa_mangle_ident` 로 `u_getpid()` 를 emit 하지만, 래퍼는 plain `getpid` 로 emit 됨 → call 이 libc `int getpid(void)` 로 resolve → clang `assigning to HexaVal from incompatible type 'int'`. fn-body 안에 nested 된 `extern fn` 는 `_gen2_lift_nested_decls` 가 hoist 하지 않아 별개로 `CODEGEN ERROR: unhandled stmt kind: ExternFnDecl` 스텁을 emit 했다.
+
+**수정 (`self/codegen_c2.hexa`, surgical 3-part)**:
+1. `gen2_extern_wrapper` — 래퍼 C 함수 이름 (forward decl + 두 `static HexaVal NAME(...)` 정의) 을 `_hexa_mangle_ident(name)` (`cname`) 로 변경. decl 이름 == reference 이름. `__ffi_sym_<name>` dlsym 슬롯 + `__ffi_ftyp_<name>` typedef 태그는 raw name 유지 (이미 고유-prefix 내부 식별자; dlsym C-symbol 문자열은 `c_sym` 으로 별도). 비-reserved extern 이름은 mangle 이 no-op → 일반 케이스 zero regression (측정 확인).
+2. `_gen2_lift_nested_decls` — lift 인식 종류에 `ExternFnDecl` 추가. fn-body 최상단 `extern fn` 도 module scope 로 hoist (C 는 nested fn 없음; FFI 래퍼는 top-level 분기에서만 emit). 추가로 `seen_names` 를 기존 top-level decl 이름으로 pre-seed — top-level 과 nested 가 같은 extern 이름이면 nested 복사본을 lift 하지 않음 (top-level 이 이김) → C "redefinition" 방지.
+3. `gen2_stmt` decl-skip — `ExternFnDecl` 추가. lift 된 stmt-position `extern fn` 가 원래 위치에서 `unhandled stmt kind` 스텁을 ALSO emit 하지 않게.
+
+**측정 BEFORE/AFTER** (Mac, host-pinned smoke `extern fn getpid() -> Int; let p = getpid(); ...`):
+- BEFORE (구 hexa_v2): transpile OK 이나 C 빌드 2 errors (`u_getpid` ≠ `getpid` incompatible-type). nested smoke → `unhandled stmt kind: ExternFnDecl` 스텁 1개.
+- AFTER (regen hexa_v2): script-body smoke → 래퍼 `u_getpid` == call `u_getpid` → C 빌드 0 error → run `extern ok` rc=0. nested smoke → 스텁 0개 → 빌드+run `nested extern ok` rc=0. 비-reserved extern → 래퍼 이름 변경 없음 (no-op mangle 확인).
+- `self/test_keyword_audit.hexa` → ExternFnDecl 스텁 0 (BEFORE 1). 잔여 5 C-error 는 generics `T` / `Clone` / async `hexa_await_unwrap` 등 무관 별건 갭 — 구·신 transpiler 동일 5개 → zero regression.
+
+**self-host fixpoint**: `cc --regen` → `hexa_cc.c.new` ≡ promoted `hexa_cc.c` BYTE-IDENTICAL (`cmp` 확인). 바이너리 promote 동반.
+
+**LIMITATION (소스 주석에 명기)**: shallow-walk 경계 유지 — `if/while/for` 블록 안 더 깊이 nested 된 `extern fn` 는 lift 대상 아님 (`_gen2_lift_nested_decls` 의 기존 top-of-body 한계와 동일). top-level / script-body / fn-body-최상단 `extern fn` 만 커버.
+
+
+## 진행 로그 — `hexa atlas pr` verb 구현 (2026-05-19)
+
+- **scope**: inbox/patches/hexa-cli-atlas-register-update-or-pr.md 의 `pr` arm
+  구현. `tool/atlas_cli.hexa::cmd_pr` 가 STUB (manual-steps print + `exit(3)`)
+  였던 것을 동작하는 verb 로 land. `update || PR` 의 `PR` 분기 — kick/verify 가
+  발견한 equation 을 staging shard 로 받아 fresh git branch + commit + `gh pr
+  create` 까지 자동화.
+- **code (`tool/atlas_cli.hexa`, @version 0.3.0→0.4.0)**: `cmd_pr` 전면 재작성.
+  `--staging <file.n6>` (promote 와 동일 입력 형태) + `--atlas-root` / `--base`
+  / `--branch` / `--title` 플래그. 흐름: (0) `git` 가용성 probe → (1) PR 브랜치
+  생성 (`atlas-pr-<UTC-stamp>`) → (2) 기존 `promote_to_atlas` 재사용해 shard fold
+  → (3) `atlas.append.<today>.n6` `git add`+`commit` → (4) `gh pr create` 시도.
+  헬퍼 추가: `_shq` (shell single-quote escape), `_exec_ok` (`( cmd ) && echo
+  __OK__ || echo __FAIL__` 마커로 exit-status 복원 — `exec()` 는 stdout 만 캡처),
+  `_today_compact` / `_branch_stamp`. help 텍스트 + 헤더 주석 갱신.
+- **g3 정직성 — degraded path (절대 PR fake 금지)**: `git` 없음/atlas-root 비-repo
+  → shard 만 쓰고 정확한 `git switch -c … && … && gh pr create …` 명령 출력 (exit 0).
+  `git` ok 이나 `gh` 없음/실패 (no auth·no push·offline) → branch+commit 은 로컬
+  완료, `git push -u origin <branch>` + `gh pr create` 명령 출력, "**NO PR was
+  opened**" 명시 (exit 0). `gh pr create` rc==0 일 때만 "PR opened — <url>" 출력.
+  @D g5 try-CLI-or-fallback 패턴 준수 (git/gh 외부 셸링 허용).
+- **parse-gate (measured)**: `clang -O2 -I. -Iself -c self/runtime.c -o
+  self/runtime.o` OK → `self/native/hexa_v2 tool/atlas_cli.hexa /tmp/o.c` →
+  `OK` rc=0.
+- **build + dry-run (measured)**: `HEXA_MAC_BUILD_OK=1 hexa build
+  tool/atlas_cli.hexa` PASS (module `use` 6개 flatten 정상). 측정 3건 PASS —
+  `pr --help`, 비-git atlas-root → degraded write-shard 경로, 실제 git repo →
+  branch+commit 후 `gh` degrade-after-commit 경로 (브랜치 생성·append shard
+  커밋 확인, fake PR 0).
+- **deferred / LIMITATION**: `hexa atlas register` 는 STUB 유지. `@discover`
+  주석 `.hexa` 소스를 staging shard 로 변환하려면 컴파일러 frontend
+  (`compiler/lex/*` + `compiler/parse/parser.hexa` + `compiler/discover/`) 를
+  `tool/atlas_register.hexa` companion 으로 끌어와야 함 — `pr` arm 은 의도적으로
+  *이미 staged 된* `.n6` shard 소비로 scope. `cc --regen` 미수행 (atlas_cli.hexa
+  는 tool 이지 hexa_cc.c SSOT 모듈 아님 — regen 불필요).
