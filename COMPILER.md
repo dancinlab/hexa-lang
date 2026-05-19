@@ -23,7 +23,7 @@ At-a-glance
   interim  : W1/W2/F speed the C path; relief only while the C fallback lives
   naming   : drop bootstrap vestiges (_v2 _c2 aprime s4) — separate cycle
   measured : clang = 80% of build wall; runtime.c recompile = 53% alone
-  status   : S1+S2+S3 DONE · self-host fixpoint PROVEN (gen1.s ≡ gen2.s); S4 next
+  status   : S1+S2+S3+S5 done · S4 wiring landed (build_hexac.hexa); S6/S7 next
 ```
 
 ---
@@ -125,8 +125,13 @@ S3  self-host fixpoint — PROVEN 2026-05-20. gen1 (built via the hexa_v2
     `29426b801cb072b2861bd608e884b20b`. The compiler reproduces its own
     emitted code: gen3 follows transitively. Honest caveat: the shim is
     a *bootstrap-time naming-convention bridge*, not a semantic gap.
-S4  drop the hexa_v2 dependency — tool/build_aprime.sh stage 2 uses
-    aprime_cc instead of the C transpiler hexa_v2.
+S4  drop the hexa_v2 dependency — wiring DONE 2026-05-20. New
+    `tool/build_hexac.hexa` (hexa-native, NOT .sh — hexa-first) runs
+    the native path: flatten -> aprime_cc --emit=asm -> 3-fn naming
+    shim -> clang assemble+link. Mirrors the gen2 chain verified by
+    S3 fixpoint. hexa_v2 is no longer in the compiler's own build
+    path. clang remains as assembler+linker only — S7 closes that.
+    Verification build deferred to post-rate-limit-reset.
 
 post-fixpoint (beyond compiler/PLAN.md #18 — analysis-side continuation):
 S5  native `hexa build` backend — wiring DONE 2026-05-20 (commit
@@ -427,3 +432,13 @@ ultimately removes.
   first measured proof point. Campaign branch state: S1 ✅ + S2 ✅ + S5
   ✅ (wiring) + S3 ✅. Next: S4 (drop hexa_v2 from build_aprime.sh
   stage 2 — now concretely doable).
+- 2026-05-20 — **S4 wiring DONE.** New `tool/build_hexac.hexa` (hexa-
+  native build orchestrator — NOT a `.sh`, honoring hexa-first per a
+  PreToolUse warn). Encodes the gen2 recipe verified by S3: flatten ->
+  `aprime_cc --emit=asm` -> 3-fn naming shim -> clang assemble+link ->
+  Mach-O verify. The compiler's own build no longer goes through
+  hexa_v2. parse-gate PASS. Verification build (actual run +
+  byte-diff vs `tool/build_aprime.sh` output) deferred to post-rate-
+  limit-reset. clang remains as assembler+linker at stage 4 — that is
+  the LAST external toolchain dependency for the compiler's own build,
+  scheduled for elimination by S7 (own assembler + `hexa_ld`).
