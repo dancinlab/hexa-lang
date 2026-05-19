@@ -43,6 +43,8 @@ These are tracked as SSOTs in [[FLAME.tape]] / [[FORGE.tape]] / [[PARADIGM.md]] 
 - **rfc_046** — flame Phase 4: compiler fusion for eager-PyTorch throughput match. Severity: HIGH (perf-domain entry).
 - **rfc_047** — flame Phase 4-B: per-block IR pass for compile-time block fusion. Severity: HIGH (Stage 2 block fusion, ~5× wall target).
 - **rfc_048** — flame Phase 4-C: fwd+bwd graph fusion at compile time. Severity: HIGHEST IMPACT (RFC 046 dominant single Phase 4 win).
+- **rfc_061** — runtime 2-layer split (`runtime_core.c` ≤500 + `runtime_hi.hexa`). Severity: LOW (hygiene). Scopes ROADMAP child **69** — 4-phase plan, bootstrap-circularity constraint documented.
+- **rfc_062** — argv[0] dedup + `args()` contract migration. Severity: LOW (vestigial interp-compat cruft). Scopes the remaining half of ROADMAP child **65** (the `script_path()`/`real_args()` API half already shipped).
 
 ## draft — open, awaiting promotion or absorption
 

@@ -2351,3 +2351,33 @@ autonomously-closeable without risking the shared toolchain):
   multi-cycle campaign.
 - **native codegen / RFC 055 (no-C path, NVPTX)** — large campaign,
   scaffold already landed (see entry above).
+
+### 2026-05-19 — multi-cycle residual brought to Shape-B closure (RFC scoping)
+
+The three items the closure pass left OPEN are large by nature (a 13 k-line
+refactor, a 40-site CLI-contract migration, a 4-phase GPU backend) — not
+single-session work. Per `@D g_inbox_processing_loop` Shape-B ("multi-cycle
+work's honest deliverable = RFC drafted + scaffold landed, NOT implementation
+complete"), each is now at its honest current-cycle closure:
+
+- **ROADMAP 69 → RFC 061** (`inbox/rfc_drafts_2026_05_12/rfc_061_runtime_two_layer_split.md`)
+  — runtime 2-layer split scoped: boundary criterion (core iff it touches
+  HexaVal bits / allocator hot path / universal codegen calls), the
+  bootstrap-circularity constraint (`runtime_hi.hexa` ships as pre-generated
+  C, not a loaded module), 4-phase plan (P0 boundary ledger → P1 core extract
+  → P2/P3 hi-tier), 5-falsifier battery. Honest: the ≤500-line core target is
+  aspirational, measured in P0.
+- **ROADMAP 65 → RFC 062** (`inbox/rfc_drafts_2026_05_12/rfc_062_argv0_dedup_args_contract.md`)
+  — the contract-separation half (`script_path()`/`real_args()`) already
+  shipped; RFC 062 scopes the remaining argv[0]-dedup migration as P0 audit →
+  P1 migrate user-arg readers to `real_args()` (zero layout change) → P2 flip.
+  Blast radius measured: 191 `args()`-calling files, 12 literal `args()[N]`
+  sites, the main.hexa dispatcher's `av[2..]` indexing.
+- **RFC 055 (native codegen)** — already Shape-B: RFC 055 + Stage-1 scaffold
+  landed (`b6f89287`); P0–P3 are its declared follow-up phases.
+
+Closure-pass final state — every compiler-only next-list item is at its
+honest closure: **Shape A (fully implemented + validated)** for the bounded
+items (#1 interp-residue, #2 range-slice, #3 default-param triage, ROADMAP
+66/67/68); **Shape B (RFC drafted + scaffold)** for the multi-cycle items
+(ROADMAP 65/69, RFC 055). No item left unscoped; no closure over-claimed.
