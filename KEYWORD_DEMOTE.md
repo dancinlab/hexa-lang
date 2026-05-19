@@ -321,3 +321,67 @@ Phase 4 추가: 다운스트림 12 repo `hexa parse` smoke (스크립트 적용 
   + egyptian_memory + firmware/hexa_edge_top + test_keyword_audit `@derive`).
   `--check` 재실행 = 0 hits (idempotent). 다운스트림 repo 는 같은 도구로
   자기 트리에서 적용 (f3 준수).
+
+## Known residue — deferred (DO NOT rewrite history while branch is hot)
+
+> Decision (2026-05-19, user pick = **B**): leave the cosmetic git-history
+> residue as-is for now; do a coordinated rebase only when the
+> `rfc043-hexa-torch` branch is quiet (no concurrent sessions / no
+> uncommitted WIP in the shared tree). Recorded here so a later session
+> can FIND → CHECK → FIX without re-investigating.
+
+**What**: intermediate commit `a6e5ac95`
+(`feat(parser): own/borrow/move/drop bare-stmt surface`) carries 2 leftover
+git conflict markers in `self/parser.hexa` (one in the AST-kind doc comment
+~L24, one in the `ast_to_string` printer). Committed because a
+`cherry-pick --continue` ran before the markers were resolved.
+
+**Impact = zero at HEAD**: superseded by `bdc2b952` (both regions resolved).
+`git show HEAD:self/parser.hexa | grep -c '^<<<<<<<'` → 0. 100/100 smoke,
+6/6 core parse-gate PASS. Visible only via `git checkout a6e5ac95` or a
+`git bisect` landing there — never in normal workflow.
+
+**Why deferred not fixed now**: at decision time `a6e5ac95` was 9 commits
+deep with 5+ concurrent-session commits on top (`23d9edfd` codegen-6-kinds ·
+`80a9ce5e`/`a4a07d0f` runpod dispatch · `0ea582a8` GPU restore ·
+`96bd4b09` yosys) + uncommitted WIP (`self/codegen_c2.hexa` AtomicLet).
+Rebasing → force-push would orphan all of that (wilson-git-guard violation).
+
+**CHECK (still present?)**:
+```
+git -C ~/core/hexa-lang show a6e5ac95:self/parser.hexa | grep -c '^<<<<<<<'
+# non-zero → residue present · 0/error → already cleaned
+```
+
+**FIX (run only when branch quiet — no other sessions, clean tree)**:
+```
+cd ~/core/hexa-lang
+git branch backup-kwresidue-$(date +%s) HEAD
+GIT_SEQUENCE_EDITOR="sed -i '' 's/^pick \(a6e5ac95\)/edit \1/'" \
+  git rebase -i a6e5ac95~1
+# at stop: resolve 2 regions in self/parser.hexa to match HEAD's form —
+#   region1 (AST-kind doc): Phase-3 listing + OwnStmt/BorrowStmt/MoveStmt + HandleWithExpr
+#   region2 (printer): keep Own/Borrow/Move branches, drop stale Guard*/Select*
+git add self/parser.hexa && git -c core.editor=true rebase --continue
+# verify smoke 100, then push
+```
+(Canonical resolved form = `git show HEAD:self/parser.hexa`.)
+
+## 별건 cycle log (KEYWORD_DEMOTE 후속, 2026-05-19)
+
+5 residual 별건 — sub-agent fan-out (worktree-격리) + cherry-pick fan-in:
+
+- **#5 RTL DSL** (`590f3c71`) — Option B: RTL ⊥ hexa-lang scope. zero parser change.
+- **#2.b macro invocation** (`4476cc12`) — Shape A: `parse_postfix` `Not`
+  → `MacroCall` (`name!(args)`/`name![args]`). Punt: MacroCall expansion.
+- **#1 own/borrow/move stmt** (`a6e5ac95`) — Option C: stub stmt + codegen
+  no-op (+ latent DropStmt fallthrough fix). Punt: v2 borrow-checker.
+  ★ this commit holds the residue above.
+- **#4 consciousness** (`c329bbd9`) — Option C: forge.hexa top-level
+  unwrap (byte-equivalent). Punt: `consciousness` feature RFC.
+- **#3 handle-expr** (`bdc2b952`) — Shape A: `HandleWithExpr` AST kind +
+  shared `parse_handle_core`. Punt: HandleWithExpr codegen/typecheck.
+
+Cross-session convergence: concurrent `23d9edfd` (codegen 6 declaration-only
+kinds) independently covered part of the punted codegen no-op work.
+All-5-별건 fixture parses cleanly post-regen; 100-file smoke 100/100.
