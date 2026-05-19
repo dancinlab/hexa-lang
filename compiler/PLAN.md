@@ -2482,3 +2482,22 @@ migration for a purely cosmetic cleanup is a bad trade. ROADMAP 65's valuable
 half (canonical `script_path()`/`real_args()`, layout-independent) already
 shipped; new code should use those. User decision pending: WONTFIX vs a
 multi-session migration campaign.
+
+### 2026-05-19 — RFC 062 argv[0] dedup LANDED (commit 26a785af)
+
+User chose the migration over WONTFIX. Executed: a background worktree
+agent migrated ~89 tool/+sim_universe files + runtime.c (idle-timed-out,
+WIP snapshot 4cc8e57e); the cycle was finished by hand — `self/main.hexa`
+(dispatcher-local index shim — `av` re-derived as [exec]+args() so the
+~40 dispatch sites stay unchanged), `self/module_loader.hexa`,
+`self/codegen_c2.hexa`, 25 `tool/roadmap_*` adaptive shims (`_user_start`
+−1). `self/native/{hexa_v2,hexa_cc.c}` regenerated.
+
+Validated in an isolated worktree before squash-merge: args() dedup
+proven (`[exec,a,b,c]` — was 5-elem doubled), self-host fixpoint
+byte-identical, atlas_verify_smoke 118/118, hexa.real + hexa_module_loader
+build+run clean, parse-gate 114/115 (token-forge: pre-existing unrelated
+EffectDecl gap). roadmap_view non-build confirmed pre-existing (base
+233548a6 fails identically). 118 files. Re-validated on main (atlas
+118/118), hexa.real reinstalled (production dedup confirmed N=4),
+origin/rfc043 pushed. ROADMAP 65 fully closed (API + dedup).

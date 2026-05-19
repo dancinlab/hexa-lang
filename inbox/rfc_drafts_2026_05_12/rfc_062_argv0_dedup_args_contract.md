@@ -2,12 +2,15 @@
 
 ## 1. Status
 
-- **Status**: **P0 COMPLETE · P1 attempted → WONTFIX recommended (2026-05-19)**.
-  The contract-separation half of ROADMAP 65 is DONE (§3). The remaining
-  argv[0]-dedup: P0 audit + a P1 implementation attempt established the true
-  blast-radius = **60+ files** (§6c) for a change RFC §6 itself calls
-  cosmetic (no user-visible bug). Recommendation: WONTFIX / indefinite defer
-  — see §6c. P1 attempt code reverted; working tree clean.
+- **Status**: **LANDED — 2026-05-19 (commit `26a785af`, origin/rfc043)**.
+  WONTFIX was recommended (§6c — 60+-file cosmetic migration); the user chose
+  the migration. Executed: 118-file migration (runtime.c `hexa_set_args`
+  dedup + `real_args`/`script_path`/`_hx_fuel`, main.hexa dispatcher-local
+  index shim, module_loader, codegen_c2, ~89 tool/+sim_universe, 25 roadmap
+  adaptive shims) + `hexa_v2`/`hexa_cc.c` regen. Validated in an isolated
+  worktree (args() dedup proven · self-host fixpoint byte-identical ·
+  atlas_verify_smoke 118/118 · core CLI clean) then squash-merged to main.
+  ROADMAP child 65 fully closed.
 - **Date**: 2026-05-19
 - **Priority**: P2 — ROADMAP marks 65 "anima 최우선" for the *API* deliverable,
   which shipped; the dedup cleanup is hygiene, not a blocker.

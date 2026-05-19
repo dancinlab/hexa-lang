@@ -174,15 +174,15 @@ exec-rule: "SUB progress 는 MAIN phase 로만 흡수, 단독 commit 금지"
 
 ### Self-host (runtime.c + Rust driver 탈피) — 신규 (anima hxa-20260423-003, 2026-04-23)
 Parent roadmap **64** → 5 children **65–69**. 상세 정의 `.roadmap` 64–69, 원문 `$ANIMA/docs/upstream_notes/hexa_lang_full_selfhost_prompt_20260423.md`.
-- **65 (M3, P1/Q2)** — `[DONE(API) / dedup WONTFIX-rec — 2026-05-19]` 계약
-  분리 DONE: canonical `hexa_script_path()` / `hexa_real_args()` 가
-  runtime.c:5571-5591 에 존재 (M3 §3 deliverable, layout-independent — 신규
-  코드는 이것 사용). 잔여 = `hexa_set_args` argv[0] 중복 삽입 제거. **RFC 062**
-  로 scoped — P0 audit + P1 구현 시도 결과 blast-radius = **60+ 파일**
-  (roadmap-boilerplate ~25 + sim_universe ~25 + self/tool 기타; `_args[2]`/
-  loop-from-2 패턴이 P0 의 `args()[N]` regex 회피). dedup 은 RFC §6 가 명시한
-  순수 cosmetic (사용자-가시 버그 0). **WONTFIX 권장** — 기능 이득 0 인
-  cleanup 에 60+ 파일·다중 서브시스템 마이그레이션은 나쁜 trade. RFC 062 §6c.
+- **65 (M3, P1/Q2)** — `[DONE — 2026-05-19]` 계약 분리 + argv[0] dedup 모두
+  완료. (1) canonical `hexa_script_path()` / `hexa_real_args()` (runtime.c:
+  5571-5591, layout-independent). (2) **RFC 062** argv[0] dedup LANDED
+  (commit `26a785af`) — `hexa_set_args` 가 더 이상 argv[0] 을 중복 삽입하지
+  않음; `args()` = clean `[exec, user...]`. 118 파일 마이그레이션 (runtime.c +
+  main.hexa dispatcher shim + module_loader + codegen_c2 + ~89 tool/
+  sim_universe + 25 roadmap shim), 격리 worktree 검증 (dedup 입증 ·
+  self-host fixpoint byte-identical · atlas 118/118) 후 squash-merge.
+  ROADMAP self-host child 65 완결. RFC 062 §6c/§7.
 - **66 (M4, P1/Q2)** — `[DONE — 2026-05-19]` string method codegen 완성
   (t45b char_count/nth_char/char_substring/byte_at PASS) + symbol
   namespacing 작동 — `hexa cc --regen` 의 rename-awk 가 `__hexa_strlit_init`

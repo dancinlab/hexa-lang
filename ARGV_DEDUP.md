@@ -1,67 +1,61 @@
-# ARGV_DEDUP — RFC 062 구현 시도 + 정직한 재측정
+# ARGV_DEDUP — RFC 062 argv[0] dedup — LANDED
 
 > 루트 UPPERCASE.md 작업 로그. RFC 062 = ROADMAP self-host child 65 의 잔여분
 > (`hexa_set_args` argv[0] 중복 삽입 제거).
 > SSOT: `inbox/rfc_drafts_2026_05_12/rfc_062_argv0_dedup_args_contract.md`
 
-## 결론 (2026-05-19) — P2 는 60+ 파일 repo-wide 마이그레이션, 기능 이득 0
+## 상태 (2026-05-19) — ✅ LANDED · commit `26a785af` · origin/rfc043 푸시 완료
 
-RFC 062-P2 (argv[0] dedup flip) 의 실제 구현을 착수했고, 그 과정에서 **blast-radius
-가 P0 추정(4파일)의 15배 = 60+ 파일**임을 측정으로 발견했다. 구현 파일은 revert
-했고 (작업트리 클린), 정직한 재측정만 남긴다.
+`hexa_set_args` 의 argv[0] 중복 삽입을 제거했다. `args()` 는 이제 clean
+`[exec, user-args...]` 레이아웃을 반환한다 (구 `[exec, exec, sub, ...]` 는
+R7-은퇴 인터프리터 레이아웃 일치용이었음). 118 파일 마이그레이션 + 툴체인
+재생성, 격리 worktree 에서 검증 후 squash-merge 로 main 랜딩.
 
-## 무엇을 했나
+## 검증 결과 (worktree + main)
 
-1. P0 audit (commit c1b08c68) — `args()[N]` regex 로 4파일 추정.
-2. 실제 구현 착수 — runtime.c (hexa_set_args dedup + real_args + script_path +
-   _hx_fuel) · main.hexa (dispatcher-local adapter) · module_loader · codegen_c2 ·
-   ssot_mirror 수정.
-3. **구현 중 전수 audit 재실행** — `args()` 가 `_args`/`argv`/`cli_args` 로
-   alias 되거나 `loop-from-2` 패턴으로 소비되는 경우 P0 의 `args()[<digit>]`
-   regex 가 못 잡았음을 발견.
-4. 전수 결과: 위치-의존 소비처 = **60+ 파일** (아래).
-5. 구현 5파일 revert — runtime dedup 을 ship 하면 60+ 파일이 조용히 깨짐.
+- **args() dedup 입증** — `args()` = `[exec, a, b, c]` 4-elem (구: 5-elem
+  `[exec, exec, a, b, c]`). worktree + production `hexa` 양쪽 측정 확인.
+- self-host fixpoint byte-identical (regen diff 0).
+- `atlas_verify_smoke` 118/118 — worktree + main 양쪽.
+- hexa.real + hexa_v2 + hexa_module_loader 빌드·실행 clean.
+- parse-gate 114/115 (.hexa) — token-forge 1건은 기존 EffectDecl gap (무관).
+- roadmap_view 비-빌드는 base 233548a6 에서도 동일 실패 = pre-existing
+  (explicit main() call codegen 거부), 내 regression 아님.
 
-## 측정된 진짜 blast-radius (60+ 파일)
+## 마이그레이션 범위 (118 파일)
 
-| 그룹 | 파일 수 | 패턴 |
-|------|--------|------|
-| `tool/roadmap_*.hexa` 보일러플레이트 | ~25 | `_raw_argv[1]=="run"` · `argv[2]==_script_token` · `_user_start=3` |
-| `stdlib/sim_universe/**` | ~25 | `_args[2]` / `[3]` / `[4]` 위치 인덱싱 |
-| `self/` | 5+ | main.hexa · module_loader · codegen_c2 · build_c(`_argv[2/3]`) · edit_cli/attr_cli/fs_fuse_skel(`_ai=2`) · hexa_build(`argv[1/2]`) |
-| `tool/` 기타 | 10+ | flame_phase4*(`argv[2/3]`) · ai_native_*(`argv[2]`) · jit · build · emit_esm · ssot_mirror |
+- `self/runtime.c` — hexa_set_args(dedup) · hexa_real_args(start 2→1) ·
+  hexa_script_path([1]→[0]) · _hx_fuel arg-dump(2→1).
+- `self/main.hexa` — dispatcher-local index shim (`av` = [exec]+args(),
+  ~40 dispatch 사이트 무변경 — proven 코드 보존).
+- `self/module_loader.hexa` · `self/codegen_c2.hexa` — args 인덱스 −1.
+- ~89 `tool/` + `stdlib/sim_universe/**` (Agent A) — `_args[N]` −1 shift.
+- 25 `tool/roadmap_*.hexa` adaptive shim — `_user_start` −1.
+- `self/native/{hexa_v2,hexa_cc.c}` — RFC 062 SSOT 로 재생성.
 
-P0 가 4파일로 추정한 이유: `args()[2]` 직접 인덱싱은 4곳뿐이고, 나머지는 모두
-`let _args = args()` 후 `_args[2]` 또는 `_ai=2` 루프 — alias 된 이름이라 regex 회피.
+## 진행 경위
 
-## 정직한 판단
+1. P0 audit (c1b08c68) — `args()[N]` regex 로 4파일 추정.
+2. 백그라운드 worktree 에이전트 dispatch → idle-timeout, 89파일 partial.
+3. 사용자 (B) 선택 — 인계받아 직접 완성: main.hexa/module_loader/codegen_c2
+   + roadmap 25 마이그레이션, worktree 빌드·검증.
+4. squash-merge → main `26a785af` → 재검증 (atlas 118/118) → hexa.real 설치
+   → origin/rfc043 푸시.
 
-- RFC 062 §6 caveat 가 명시했듯 dedup 은 **사용자-가시 버그를 고치지 않음** —
-  doubled 레이아웃은 무해한 관례. P2 는 순수 cosmetic.
-- 60+ 파일 · 다중 서브시스템(roadmap tools + sim_universe 15 experiments +
-  self 부트스트랩) · 각 바이너리 재빌드+재검증 = 자율 1-pass 안전 불가.
-- 기능 이득 0 인 cosmetic cleanup 을 위해 60+ 파일을 마이그레이션하는 것은
-  나쁜 trade. `runtime.c:5571` 작성자의 deferral 판단이 옳았다 (오히려
-  "40+ sites" 도 과소추정 — 실제 60+).
-- ROADMAP 65 의 가치있는 절반(canonical `script_path()`/`real_args()` API)은
-  이미 shipped. dedup 자체는 **WONTFIX 권장** 또는 무기한 defer.
+## 잔여 (binary promote — standard deploy step)
 
-## 상태
-
-- 코드 변경: **없음** (구현 5파일 revert, 작업트리 클린).
-- 문서: RFC 062 §6c (corrected blast-radius) · ROADMAP 65 · PLAN.md · 이 파일.
-- 결정 필요 (사용자): P2 를 WONTFIX 처리할지 / 60+ 파일을 multi-session
-  캠페인으로 진행할지.
+- `build/hexa_module_loader` 재빌드 완료 (로컬). 다른 호스트(pool)는 미동기 —
+  standard deploy 에서 자연 promote.
 
 ## 로그
 
-- 2026-05-19 — 추적 파일 생성. P1/P2 실제 구현 착수.
-- 2026-05-19 — 구현 중 전수 audit 으로 blast-radius = 60+ 파일 발견 (P0 의
-  4파일 추정은 alias/loop 패턴을 regex 가 못 잡아 15× 과소). 구현 5파일 revert.
-  RFC 062 §6c 정정 + WONTFIX 권장. 코드 무변경.
-- 2026-05-19 — 커밋 `3c91cf03` (docs only). origin push 는 네트워크 다운으로
-  pending — 복구 시 `git push origin rfc043-hexa-torch` 필요.
-- 2026-05-19 — 사용자 "all bg go" 지시. 백그라운드 worktree 에이전트 2개
-  dispatch: (A) RFC 062 60+파일 dedup 마이그레이션, (B) RFC 061-P1
-  runtime_core.c 추출. 격리 worktree 라 main 툴체인 안전 — 완료 시 cherry-pick
-  + runtime.c 충돌 해소 + 통합 검증 (A·B 둘 다 runtime.c 변경 → 충돌 예상).
+- 2026-05-19 — P0 audit. 백그라운드 에이전트 dispatch.
+- 2026-05-19 — Agent A idle-timeout (89파일 partial, uncommitted) → WIP
+  스냅샷 `4cc8e57e`. 사용자 (B) 선택 — 직접 인계.
+- 2026-05-19 — main.hexa(adapter)/module_loader/codegen_c2 + roadmap 25
+  마이그레이션. worktree 빌드 (hexa_v2 후보 + hexa.real + module_loader),
+  검증 8/8 (dedup·fixpoint·atlas 118/118·core CLI). worktree commit
+  `0b5addd6` + `7c61ab45`.
+- 2026-05-19 — squash-merge → main `26a785af` (118 파일). atlas 118/118
+  재검증. hexa.real 설치 (production dedup 확인 `N=4`). origin/rfc043 푸시.
+  **RFC 062 LANDED. ROADMAP 65 완결 (API + dedup 양쪽).**
