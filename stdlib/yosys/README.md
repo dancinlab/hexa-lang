@@ -125,10 +125,13 @@ int-payload-tagged variants over enums-with-eq).
 ## Status row
 
 ```
-status: SCAFFOLD-ONLY (skeleton .hexa.stub, all fns exit 91)
+status: BODIES-LANDED (all 7 modules; selftests 57/57 PASS)
 gate:   OPEN (rfc_006 §5 SKY130 area oracle d4≈61,763 d6≈93,609 1.516×)
-absorbed: NO (g3 — gate-PASS prerequisite)
-since:  2026-05-19
-plan:   one cycle per module body landing; abc_map is the last (D18
-        subprocess pattern depends on the prior 6 being typed-stable)
+absorbed: NO (g3 — three substrate gaps: ABC binary, SKY130 lib,
+            read_verilog subset; honest record at
+            ~/core/demiurge/exports/chip/yosys/2026-05-19-gate-§5-record.md)
+since:  2026-05-19 (skeleton) / 2026-05-19 (bodies)
+next:   (a) read_verilog SCOPE expand (params/generate/always/case),
+        (b) install berkeley-abc, (c) install skywater-pdk,
+        (d) re-run gate_record.hexa, verify ±5 %.
 ```
