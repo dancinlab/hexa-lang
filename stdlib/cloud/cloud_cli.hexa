@@ -12,9 +12,11 @@ fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
     println("")
     println("usage:")
-    println("  cloud run   <host> [conn] -- <argv...>            run argv, wait, exit with its code")
-    println("  cloud nohup <host> <logfile> [conn] -- <argv...>  background argv, print remote pid")
-    println("  cloud poll  <host> <pid> [conn]                   exit 0 if remote pid alive, else 1")
+    println("  cloud run       <host> [conn] -- <argv...>             run argv, wait, exit with its code")
+    println("  cloud nohup     <host> <logfile> [conn] -- <argv...>   background argv, print remote pid")
+    println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
+    println("  cloud copy-to   <host> <local> <remote> [conn]         upload local file to host:remote (scp)")
+    println("  cloud copy-from <host> <remote> <local> [conn]         download host:remote file to local (scp)")
     println("  cloud help | version")
     println("")
     println("connection flags [conn] (before `--`):")
@@ -105,7 +107,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "run" || t == "nohup" || t == "poll" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "run" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -181,5 +183,31 @@ fn main() {
         }
         println("[cloud] pid " + str(pid) + " DEAD")
         exit(1)
+    }
+    if sub == "copy-to" {
+        if si + 3 >= len(av) {
+            println("[cloud] copy-to: usage — cloud copy-to <host> <local> <remote> [--port N] [--insecure]")
+            exit(2)
+        }
+        let host = av[si + 1]
+        let local_path = av[si + 2]
+        let remote_path = av[si + 3]
+        let ssh_opts = _ssh_opts_cli(av, si + 4)
+        let r = cloud_copy_to_opts(host, ssh_opts, local_path, remote_path)
+        println("[cloud] " + r.message + " · " + local_path + " -> " + host + ":" + remote_path)
+        exit(r.exit_code)
+    }
+    if sub == "copy-from" {
+        if si + 3 >= len(av) {
+            println("[cloud] copy-from: usage — cloud copy-from <host> <remote> <local> [--port N] [--insecure]")
+            exit(2)
+        }
+        let host = av[si + 1]
+        let remote_path = av[si + 2]
+        let local_path = av[si + 3]
+        let ssh_opts = _ssh_opts_cli(av, si + 4)
+        let r = cloud_copy_from_opts(host, ssh_opts, remote_path, local_path)
+        println("[cloud] " + r.message + " · " + host + ":" + remote_path + " -> " + local_path)
+        exit(r.exit_code)
     }
 }

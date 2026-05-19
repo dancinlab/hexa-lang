@@ -88,6 +88,52 @@ fn _ssh_capture(host: str, ssh_opts: [str], remote: str) -> str {
     return res[0]
 }
 
+// ── scp transport ───────────────────────────────────────────────────
+
+// _scp_opts — translate cloud's ssh_opts to scp's. ssh uses `-p` for port,
+// scp uses `-P`; every `-o foo=bar` passes through verbatim.
+fn _scp_opts(ssh_opts: [str]) -> [str] {
+    let mut out = []
+    let mut i = 0
+    while i < len(ssh_opts) {
+        let t = ssh_opts[i]
+        if t == "-p" {
+            out.push("-P")
+            i = i + 1
+            if i < len(ssh_opts) {
+                out.push(ssh_opts[i])
+                i = i + 1
+            }
+        } else {
+            out.push(t)
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// _scp_capture — run scp with each opt + src + dst POSIX-quoted for the
+// local /bin/sh -c (exec_capture). scp's own exit code rides on the local
+// process exit, recovered from exec_capture's element 2 — no remote marker
+// needed (scp does not run a shell on the remote side for plain file copy).
+fn _scp_capture(scp_opts: [str], src: str, dst: str) -> CloudResult {
+    let mut cmd = "scp -o BatchMode=yes -o ConnectTimeout=8"
+    let mut i = 0
+    while i < len(scp_opts) {
+        cmd = cmd + " " + _shq(scp_opts[i])
+        i = i + 1
+    }
+    cmd = cmd + " " + _shq(src) + " " + _shq(dst)
+    let res = exec_capture(cmd)
+    let rc = res[2]
+    let mut ok = 0
+    if rc == 0 {
+        ok = 1
+    }
+    return CloudResult { ok: ok, exit_code: rc, pid: 0, stdout_: res[0],
+        message: "scp exit " + to_string(rc) }
+}
+
 // ── marker parsing ───────────────────────────────────────────────────
 
 // _parse_uint_after — read the run of decimal digits immediately after
@@ -265,4 +311,28 @@ fn cloud_poll_opts(host: str, ssh_opts: [str], pid: int) -> int {
 // cloud_poll — cloud_poll_opts with no extra ssh flags.
 fn cloud_poll(host: str, pid: int) -> int {
     return cloud_poll_opts(host, [], pid)
+}
+
+// ── file transfer ────────────────────────────────────────────────────
+
+// cloud_copy_to_opts — upload `local_path` to `host:remote_path` over scp
+// with extra ssh flags `ssh_opts` (translated to scp's `-P` for port).
+// Returns CloudResult.ok==1 iff scp exited 0.
+fn cloud_copy_to_opts(host: str, ssh_opts: [str], local_path: str, remote_path: str) -> CloudResult {
+    return _scp_capture(_scp_opts(ssh_opts), local_path, host + ":" + remote_path)
+}
+
+// cloud_copy_to — cloud_copy_to_opts with no extra ssh flags.
+fn cloud_copy_to(host: str, local_path: str, remote_path: str) -> CloudResult {
+    return cloud_copy_to_opts(host, [], local_path, remote_path)
+}
+
+// cloud_copy_from_opts — download `host:remote_path` to local `local_path`.
+fn cloud_copy_from_opts(host: str, ssh_opts: [str], remote_path: str, local_path: str) -> CloudResult {
+    return _scp_capture(_scp_opts(ssh_opts), host + ":" + remote_path, local_path)
+}
+
+// cloud_copy_from — cloud_copy_from_opts with no extra ssh flags.
+fn cloud_copy_from(host: str, remote_path: str, local_path: str) -> CloudResult {
+    return cloud_copy_from_opts(host, [], remote_path, local_path)
 }
