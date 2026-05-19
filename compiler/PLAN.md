@@ -2845,3 +2845,32 @@ handler arm dispatch, effect-type checking) are punted to a future RFC
 draft. Binary promote (writing the new `hexa_v2` / `hexa.real` to
 `~/.hx/bin/`) is a separate standard deploy step per g_inbox_processing_loop
 §7 and is intentionally out-of-scope for this cycle.
+
+### 2026-05-19 — codegen-completeness ⓓ (3 commits) + regen-promote DEFERRED
+
+Transpile-sweep across compiler/+self/+stdlib (beyond the earlier
+test/+tool/+flame sweep) found ~27 unhandled parser-kind hits. Closed:
+- `cf113765` — EffectDecl skip (declaration-only).
+- `23d9edfd` — 6 declaration/annotation skips (ProofStmt · TheoremStmt ·
+  ContractAssert · Invariant · TypeAlias · UseStmt) + `**`→hexa_pow binop.
+  Regenerated + atlas 118/118 + fixpoint byte-identical (toolchain healthy
+  then).
+- `58834640` — PanicStmt (→ stderr + exit 1) · DropStmt (→ no-op) ·
+  AtomicLet (→ normal binding; 3 dispatch sites incl. module-level).
+  **SSOT only — regen-promote DEFERRED.**
+Remaining unhandled (deeper semantic codegen, not done): RecoverStmt(1) +
+HandleWithStmt(2) — effect/recover machinery, future cycle.
+
+★ NEXT-CYCLE BLOCKER: a sustained external SIGKILL on
+`~/core/hexa-lang/hexa.real` (rc 137; same binary at any other path runs
+fine — confirmed cp+run). Intermittent: recovered several times then
+re-triggered for a long window. While active it blocks `./hexa cc
+--regen` and makes full build sweeps return spurious counts (0/100,
+17/83, 59/41) — measurement noise, NOT compiler regression (individual
+builds pass when hexa.real is alive). The global `~/.hx/bin/hexa_real cc
+--regen` is NOT a substitute (produced stale codegen, didn't write
+/tmp/_cg.c). `58834640`'s codegen_c2.hexa is correct + direct-transpile-
+verified (`self/native/hexa_v2 self/codegen_c2.hexa out.c` → OK, output
+has the new handlers). A healthy-toolchain session must regen + promote
+hexa_v2/hexa_cc.c + revalidate (atlas 118/118 + self-host fixpoint) to
+land the binary side of `58834640`.
