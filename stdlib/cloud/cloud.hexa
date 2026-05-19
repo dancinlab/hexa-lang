@@ -66,13 +66,26 @@ fn _join_argv(argv: [str]) -> str {
 // ── ssh transport ───────────────────────────────────────────────────
 
 // _ssh_capture — run `remote` on `host` over ssh and capture stdout+stderr.
-// `host` and `remote` are POSIX-quoted for the LOCAL shell too, so the
-// local `/bin/sh -c` (exec_capture) sees each as one literal word, exactly
-// as the remote login shell sees the inner-quoted tokens. BatchMode=yes
-// makes ssh fail fast instead of hanging on an auth prompt.
-fn _ssh_capture(host: str, remote: str) -> str {
-    let cmd = "ssh -o BatchMode=yes " + _shq(host) + " " + _shq(remote)
-    return exec_capture(cmd)
+// `ssh_opts` are extra ssh flags (e.g. ["-p","19241"] for a non-22 port,
+// or ["-o","StrictHostKeyChecking=no"] for an ephemeral host whose key
+// changes each boot — the RunPod / vast.ai case). host, every opt and
+// `remote` are POSIX-quoted for the LOCAL shell too, so the local
+// `/bin/sh -c` (exec_capture) sees each as one literal word, exactly as
+// the remote login shell sees the inner-quoted tokens. BatchMode=yes makes
+// ssh fail fast instead of hanging on an auth prompt.
+fn _ssh_capture(host: str, ssh_opts: [str], remote: str) -> str {
+    let mut cmd = "ssh -o BatchMode=yes"
+    let mut i = 0
+    while i < len(ssh_opts) {
+        cmd = cmd + " " + _shq(ssh_opts[i])
+        i = i + 1
+    }
+    cmd = cmd + " " + _shq(host) + " " + _shq(remote)
+    // exec_capture returns [stdout, stderr, local_exit_code]; the remote
+    // command merges its own stderr into stdout (2>&1), so element 0
+    // carries everything including the __CLOUD_*__ marker line.
+    let res = exec_capture(cmd)
+    return res[0]
 }
 
 // ── marker parsing ───────────────────────────────────────────────────
@@ -139,8 +152,27 @@ fn cloud_lint_argv(argv: [str]) -> [str] {
     let mut i = 0
     while i < len(argv) {
         let a = argv[i]
-        if a.index_of("/*") >= 0 || a.index_of("*/") >= 0 {
-            warns.push("argv[" + str(i) + "] carries a C-style comment marker (/* or */) — shell comments are `#`; this is almost certainly a misplaced note, not an argument: " + a)
+        let m = len(a)
+        let mut hit = 0
+        // A C-style comment fragment: an element that opens with /*,
+        // closes with */, or carries an inline "/* " or " */". A plain
+        // glob path (/tmp/*, dir/*) matches none of these.
+        if m >= 2 {
+            if a.substring(0, 2) == "/*" {
+                hit = 1
+            }
+            if a.substring(m - 2, m) == "*/" {
+                hit = 1
+            }
+        }
+        if a.index_of("/* ") >= 0 {
+            hit = 1
+        }
+        if a.index_of(" */") >= 0 {
+            hit = 1
+        }
+        if hit == 1 {
+            warns.push("argv[" + str(i) + "] looks like a C-style comment fragment — shell comments are `#`; this is almost certainly a misplaced note, not an argument: " + a)
         }
         if a.index_of("\n") >= 0 {
             warns.push("argv[" + str(i) + "] contains a newline — split it into separate argv elements")
@@ -152,12 +184,12 @@ fn cloud_lint_argv(argv: [str]) -> [str] {
 
 // ── dispatch ─────────────────────────────────────────────────────────
 
-// cloud_run — run `argv` on remote `host` over ssh, wait for it, and
-// return its captured output + exit code. `host` is an ssh destination
-// (a `user@host` or, preferred, a Host alias from ~/.ssh/config — key,
-// port and user belong there, not in this API). BatchMode=yes makes ssh
-// fail fast instead of hanging on an auth prompt.
-fn cloud_run(host: str, argv: [str]) -> CloudResult {
+// cloud_run_opts — run `argv` on remote `host` over ssh with extra ssh
+// flags `ssh_opts`, wait for it, and return its captured output + exit
+// code. `host` is an ssh destination (`user@host`, or a ~/.ssh/config
+// Host alias). Use `ssh_opts` for a non-22 port or a changing host key —
+// an ephemeral RunPod / vast.ai pod cannot rely on a static config alias.
+fn cloud_run_opts(host: str, ssh_opts: [str], argv: [str]) -> CloudResult {
     if len(argv) == 0 {
         return _cloud_fail("cloud_run: empty argv")
     }
@@ -165,8 +197,8 @@ fn cloud_run(host: str, argv: [str]) -> CloudResult {
     if len(warns) > 0 {
         return _cloud_fail("cloud_run: refused — " + warns[0])
     }
-    let remote = _join_argv(argv) + "; echo __CLOUD_RC__=$?"
-    let out = _ssh_capture(host, remote)
+    let remote = _join_argv(argv) + " 2>&1; echo __CLOUD_RC__=$?"
+    let out = _ssh_capture(host, ssh_opts, remote)
     let rc = _parse_uint_after(out, "__CLOUD_RC__=")
     let body = _strip_marker(out, "__CLOUD_RC__=")
     if rc < 0 {
@@ -181,10 +213,16 @@ fn cloud_run(host: str, argv: [str]) -> CloudResult {
         message: "remote exit " + str(rc) }
 }
 
-// cloud_nohup — start `argv` on `host` detached (nohup, output to
-// `logfile`) and return immediately with the remote PID. Poll liveness
-// later with cloud_poll.
-fn cloud_nohup(host: str, argv: [str], logfile: str) -> CloudResult {
+// cloud_run — cloud_run_opts with no extra ssh flags (host reachable on
+// port 22 with a known host key, e.g. a ~/.ssh/config alias).
+fn cloud_run(host: str, argv: [str]) -> CloudResult {
+    return cloud_run_opts(host, [], argv)
+}
+
+// cloud_nohup_opts — start `argv` on `host` detached (nohup, output to
+// `logfile`) over ssh with extra `ssh_opts`, and return immediately with
+// the remote PID. Poll liveness later with cloud_poll / cloud_poll_opts.
+fn cloud_nohup_opts(host: str, ssh_opts: [str], argv: [str], logfile: str) -> CloudResult {
     if len(argv) == 0 {
         return _cloud_fail("cloud_nohup: empty argv")
     }
@@ -193,7 +231,7 @@ fn cloud_nohup(host: str, argv: [str], logfile: str) -> CloudResult {
         return _cloud_fail("cloud_nohup: refused — " + warns[0])
     }
     let remote = "nohup " + _join_argv(argv) + " > " + _shq(logfile) + " 2>&1 & echo __CLOUD_PID__=$!"
-    let out = _ssh_capture(host, remote)
+    let out = _ssh_capture(host, ssh_opts, remote)
     let pid = _parse_uint_after(out, "__CLOUD_PID__=")
     let body = _strip_marker(out, "__CLOUD_PID__=")
     if pid < 0 {
@@ -204,16 +242,27 @@ fn cloud_nohup(host: str, argv: [str], logfile: str) -> CloudResult {
         message: "started; remote pid " + str(pid) + " · log " + logfile }
 }
 
-// cloud_poll — return 1 if remote process `pid` is still alive on `host`,
-// else 0. `kill -0` probes the process without signalling it.
-fn cloud_poll(host: str, pid: int) -> int {
+// cloud_nohup — cloud_nohup_opts with no extra ssh flags.
+fn cloud_nohup(host: str, argv: [str], logfile: str) -> CloudResult {
+    return cloud_nohup_opts(host, [], argv, logfile)
+}
+
+// cloud_poll_opts — return 1 if remote process `pid` is still alive on
+// `host` (ssh with extra `ssh_opts`), else 0. `kill -0` probes the
+// process without signalling it.
+fn cloud_poll_opts(host: str, ssh_opts: [str], pid: int) -> int {
     if pid <= 0 {
         return 0
     }
     let remote = "kill -0 " + str(pid) + " 2>/dev/null && echo __CLOUD_ALIVE__ || echo __CLOUD_DEAD__"
-    let out = _ssh_capture(host, remote)
+    let out = _ssh_capture(host, ssh_opts, remote)
     if out.index_of("__CLOUD_ALIVE__") >= 0 {
         return 1
     }
     return 0
+}
+
+// cloud_poll — cloud_poll_opts with no extra ssh flags.
+fn cloud_poll(host: str, pid: int) -> int {
+    return cloud_poll_opts(host, [], pid)
 }

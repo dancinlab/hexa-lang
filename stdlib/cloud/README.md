@@ -35,9 +35,14 @@ exact list you gave. The corruption is not caught — it is unrepresentable.
 ```hexa
 use "stdlib/cloud/cloud"
 
-// run, wait, get exit code + output
+// run, wait, get exit code + output (stable host — a ~/.ssh/config alias)
 let r = cloud_run("gpu-pod-1", ["python3", "-u", "train.py", "--steps", "2000"])
 if r.ok == 1 { println(r.stdout_) }
+
+// an ephemeral RunPod / vast.ai pod — non-22 port, changing host key
+let r2 = cloud_run_opts("root@154.54.102.51",
+    ["-p", "19241", "-o", "StrictHostKeyChecking=no"],
+    ["python3", "train.py"])
 
 // background a long job, get the remote pid
 let j = cloud_nohup("gpu-pod-1", ["python3", "train.py"], "/workspace/train.log")
@@ -55,9 +60,9 @@ from `~/.ssh/config` where the key, port and user live. ssh runs with
 ## CLI
 
 ```
-hexa run stdlib/cloud/cloud_cli.hexa run   gpu-pod-1 -- python3 train.py
-hexa run stdlib/cloud/cloud_cli.hexa nohup gpu-pod-1 /workspace/t.log -- python3 train.py
-hexa run stdlib/cloud/cloud_cli.hexa poll  gpu-pod-1 12345
+hexa run stdlib/cloud/cloud_cli.hexa run  gpu-pod-1 -- python3 train.py
+hexa run stdlib/cloud/cloud_cli.hexa run  root@1.2.3.4 --port 19241 --insecure -- python3 train.py
+hexa run stdlib/cloud/cloud_cli.hexa poll gpu-pod-1 12345
 ```
 
 ## Compared to the nearest tools
