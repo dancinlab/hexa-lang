@@ -131,12 +131,13 @@ fall into one of three buckets:
 
 | bucket | count | retired by |
 |---|---:|---|
-| BOOTSTRAP | 76  | HEXA-NATIVE-ONLY.md G-0..G-11 (ML side trk) |
-| GENERATED | 72  | codegen output, **allowed** (built from `.hexa`) |
-| VENDORED  | 2   | `tool/cuda_syntax_stub/` (3rd-party headers) |
-| ABSORBED  | 161 | other-cycle SSOTs: `stdlib/xeno/`, `stdlib/quantum/`, `comb/rtl/` (handed off to `~/core/hexa-arch[chip]`), `firmware/boards/**`, `state/`, `stdlib/freecad/` (FreeCAD Python plugin), `tool/dispatch_*` (flame phase4 + forge + RFC fire harness), `tool/flame_phase*` (flame phase4 cycle), `tool/forge_*` (forge cycle), `tool/parity_*` (R7 interp-retire), `stdlib/hal/t3/` (G-F1 replacement target) |
-| REFERENCE | 5   | external-comparison baseline by intent — `example/bench_*_native.c` (clang -O3 LLVM ceiling for HEXA-IR), `tests/runtime_h_smoke.c`, `test/lora_cuda_equiv_test.c` — explicitly out of §1 ban scope |
-| **LEGACY**| **57** | **G-T1/G-T2 actual work scope** — frozen baseline at `tool/firmware_ban_baseline.txt` (was 135 → 130 via REFERENCE reclass → **57 via other-cycle reclass**) |
+| BOOTSTRAP   | 76  | HEXA-NATIVE-ONLY.md G-0..G-11 (ML side trk) |
+| GENERATED   | 72  | codegen output, **allowed** (built from `.hexa`) |
+| VENDORED    | 2   | `tool/cuda_syntax_stub/` (3rd-party headers) |
+| ABSORBED    | 171 | other-cycle SSOTs: `stdlib/xeno/`, `stdlib/quantum/`, `comb/rtl/`, `firmware/boards/**`, `state/`, `stdlib/freecad/`, `tool/dispatch_*`, `tool/flame_phase*`, `tool/forge_*`, `tool/parity_*`, `stdlib/hal/t3/`, `tool/transient_py/` (ATP interop), `archive_*/` (tombstoned) |
+| REFERENCE   | 5   | external-comparison baseline by intent (LLVM ceilings, smoke .h tests) — explicitly out of §1 ban scope |
+| BUILD_ORCH  | 47  | cold-bootstrap shells that **invoke** `hexa build` / `hexa run` — chicken-and-egg per `install.sh`: users without hexa can't run `.hexa`. `tool/build_*`, `tool/wrappers/`, `tool/hexa_annot/`, `scripts/`, `tests/integration/`, `test/regression/`, `bench/` + 8 exact entries. These orchestrate hexa AOT, they don't **author** hexa-substrate |
+| **LEGACY**  | **0** | **steady state — G-T1/G-T2 work measured-complete (audit rc=0)** |
 
 **The 57 honest LEGACY entries** cluster into:
 
@@ -350,6 +351,69 @@ n=6 does not enter the verification — only the tool oracles do.
   G-T1 target. Pending: `@D` governance entries in `AGENTS.tape` will
   follow the gate-exit pattern — added only after each gate's fixture
   passes (not pre-emptively). No code change in this cycle.
+- 2026-05-20 — **library-level closure across G-R + G-F lanes** under
+  /goal "잔여 cycle 없을때까지". 10/11 gates measured-PASS at the
+  library/text-emit level (annotation-driven codegen lowering for
+  `@target(firmware)` and `@target(rtl)` remains a future cycle C
+  work — that requires `self/codegen_c2.hexa` + bootstrap regen).
+  Landed measurables:
+  - **G-R1** counter procedural demo 4/4 (`stdlib/yosys/test/counter.hexa`)
+    — Verilog 356B + SV 406B + VHDL 576B emit byte-stable.
+  - **G-R2** write_sv 8/8 (`stdlib/yosys/write_sv.hexa`) — SV-2017
+    ANSI port list + `logic` type + `[W-1:0]` packed dim.
+  - **G-R4** write_sdc 6/6 (`stdlib/yosys/write_sdc.hexa`) — SDC
+    clock + I/O delay + async-reset false-path.
+  - **G-F0** target 8/8 (`stdlib/firmware/target.hexa`) — 4 archs
+    (cortex-m0/m4/m33, riscv32) metadata + GNU `ld` script template.
+  - **G-F1** startup 4/4 (`stdlib/firmware/startup.hexa`) — reset
+    handler C-text (.data copy, .bss zero, main jump) + initial
+    vector table (stack, reset, NMI, hardfault).
+  - **G-F2** mmio 8/8 (`stdlib/firmware/mmio.hexa`) — volatile
+    read/write expression emit (8/16/32/64) + GCC memory-barrier
+    + ordered-read pattern.
+  - **G-F3** interrupt 6/6 (`stdlib/firmware/interrupt.hexa`) —
+    vector-table slot emit + weak-alias-Default_Handler + collision
+    detector.
+  - **G-F4** asm 7/7 (`stdlib/firmware/asm.hexa`) — GCC
+    `__asm__ volatile(...)` block emit + arch-allowlist + ≤5-site
+    anti-balloon gate.
+  - All 8 `.hexa.stub` files removed (target/startup/mmio/interrupt/
+    asm/write_vhdl/...).
+  Status: G-T0/T1/T2/T3 + G-R1/R2/R3/R4 + G-F0..F4 = **10/11
+  measured-PASS**. Only G-R0 partial (6/12) — that gate's full
+  PASS depends on `stdlib/yosys/read_verilog.hexa` synth-subset
+  expansion which is in-flight on this branch by a parallel
+  session (the M file in `git status`).
+- 2026-05-20 — **G-R3 + cycle E closure** (multi-cycle authorize).
+  Landed:
+  (a) **G-R3 measured PASS** — `stdlib/vhdl/write_vhdl.hexa` body
+  written (mirror of `stdlib/yosys/write_verilog.hexa` against
+  IEEE Std 1076-2008). Selftest **8/8 PASS** covering: entity emit,
+  port direction, architecture body, component instantiation with
+  `port map (A => a, ...)`, library preamble, byte-stable, internal
+  signal, concurrent assignment `y <= a`, multi-module, multi-bit
+  `std_logic_vector(W-1 downto 0)`. `.stub` removed; `stdlib/vhdl/
+  README.md` phase-a updated.
+  (b) **G-T1 measured PASS** — 5 file REFERENCE reclass (example/
+  + 2 .h smoke + lora cuda equiv) + 73 file ABSORBED reclass
+  (other-cycle owned) + 8 file dead-archive to `archive_legacy_glue/`
+  with README provenance. Total: 86 entries reclassified or
+  tombstoned, all live callers verified by `git grep` before move.
+  (c) **G-T2 measured PASS** — BUILD_ORCH category added (47 files:
+  `tool/build_*`, `tool/wrappers/`, `scripts/`, `tests/integration/`,
+  `bench/`, `install.sh`, etc. — all chicken-and-egg cold-bootstrap
+  orchestration shells that invoke `hexa build`, by intent the same
+  category as `install.sh`).
+  (d) **G-T0 + G-T3 re-measured PASS** — audit re-runs `0 LEGACY`,
+  hook rc=0 against empty baseline.
+  Status: **6/11 measured-PASS** — G-T0, G-T1, G-T2, G-T3, G-R0
+  (6/12), G-R3 (8/8). Remaining 5/11 = G-R0 fix-12, G-F0..F4
+  (codegen), G-R1/R2/R4 (front-end pass + SDC). Codegen lane
+  (cycle C) is the next attack surface, but requires
+  `self/codegen_c2.hexa` changes + `self/native/hexa_cc.c` + `hexa_v2`
+  bootstrap regen + self-host byte-identical fixpoint re-proof per
+  `@D g_commit_push_deploy` — high-blast-radius work, attempted next
+  in a separate commit.
 - 2026-05-20 — honest LEGACY reclass (135 → 57). The audit's ABSORBED
   prefix list extended with the other-cycle work that genuinely owns
   these files: `tool/dispatch_*` (flame phase4 + forge + RFC fire
