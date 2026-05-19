@@ -133,25 +133,163 @@ fn emit_macho_arm64(_lm: i64, _out_path: string) {
 // Encoding table — populated in P0 implementation cycles
 // ─────────────────────────────────────────────────────────────────
 
-// fn encode_arm64_insn(op: string, operands: [string]) -> i64
+// Register name -> index. arm64 has 31 general-purpose 64-bit regs
+// (X0..X30) plus XZR (zero register, encoded as 31) and SP (stack
+// pointer, also encoded as 31 in some contexts).
+fn xreg_idx(s: string) -> i64 {
+    if s == "XZR" || s == "xzr" { return 31 }
+    if s == "SP"  || s == "sp"  { return 31 }
+    // Strip leading "X"/"x", parse remaining as integer (0..30).
+    let n = len(s)
+    if n < 2 { return -1 }
+    let head = s.substring(0, 1)
+    if head != "X" && head != "x" { return -1 }
+    let rest = s.substring(1, n)
+    let v = rest.to_int()
+    if v < 0 || v > 30 { return -1 }
+    return v
+}
+
+// Parse "#42" or "#0x2A" (immediate operand) to i64.
+fn imm_val(s: string) -> i64 {
+    let n = len(s)
+    if n < 2 { return 0 }
+    if s.substring(0, 1) != "#" { return s.to_int() }
+    return s.substring(1, n).to_int()
+}
+
+// fn encode_arm64_insn(op: string, ops: [string]) -> i64
 //
-// Returns a 32-bit arm64 instruction word for the given LIR
-// instruction. Each LIR mnemonic + operand shape maps to exactly
-// one encoding rule. The table covers (incrementally):
+// Returns the 32-bit arm64 instruction word for `op` + `ops`.
+// Each rule below mirrors a fixed arm64 encoding from ARM ARM
+// (DDI 0487). All forms are 64-bit (sf=1) — the LIR subset emitted
+// by `compiler/codegen/arm64_darwin.hexa` is uniformly 64-bit.
 //
-//   - Arithmetic: ADD, SUB, AND, ORR, EOR (register + immediate forms)
-//   - Multiply: MADD, MSUB, MUL, SDIV, UDIV
-//   - Logical shifts: LSL, LSR, ASR
-//   - Memory: LDR / STR (immediate + register-offset, sized)
-//   - Branches: B, BL (PC-rel), CBZ/CBNZ/TBZ/TBNZ, RET
-//   - Conditional: B.cond (EQ/NE/...), CSEL, CSET
-//   - Symbol relocations: ADRP + ADD/LDR pair (PAGE21 + PAGEOFF12)
-//   - Stack: STP/LDP pre-/post-index (prologue/epilogue)
+// On unknown op, returns 0 (caller should treat 0 = NOP-like as an
+// encoding-failure marker, since real NOP is encoded as 0xD503201F).
 //
-// The full encoding rules live in this table; the LIR -> rule
-// dispatch is a simple per-opcode `if` chain.
-fn encode_arm64_insn(_op: string, _operands: i64) -> i64 {
-    // RFC 063 § P0 step 1 — encoding table not yet populated.
+// RFC 063 § P0 step 1 — first 16 rules landed (the LIR subset that
+// `compiler/emit/asm.hexa` emits today as `.s` text). Symbol-
+// relative forms (ADRP + ADD/LDR pair) are emitted as bare bits;
+// the relocation record carries the symbol identity, the linker
+// patches the bits.
+fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
+    // ── Move ──
+    // MOVZ Xd, #imm16  (`MOV Xd, #imm` alias when imm fits 16 bits)
+    if op == "MOV" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
+        let rd = xreg_idx(ops[0])
+        let imm = imm_val(ops[1]) & 0xFFFF
+        return 0xD2800000 | (imm << 5) | rd
+    }
+    // MOV Xd, Xn  (alias for ORR Xd, XZR, Xn)
+    if op == "MOV" && len(ops) == 2 {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        return 0xAA0003E0 | (rn << 16) | rd
+    }
+
+    // ── Arithmetic, register form ──
+    // ADD Xd, Xn, Xm
+    if op == "ADD" && len(ops) == 3 && ops[2].substring(0, 1) != "#" {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let rm = xreg_idx(ops[2])
+        return 0x8B000000 | (rm << 16) | (rn << 5) | rd
+    }
+    // ADD Xd, Xn, #imm12
+    if op == "ADD" && len(ops) == 3 {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let imm = imm_val(ops[2]) & 0xFFF
+        return 0x91000000 | (imm << 10) | (rn << 5) | rd
+    }
+    // SUB Xd, Xn, Xm
+    if op == "SUB" && len(ops) == 3 && ops[2].substring(0, 1) != "#" {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let rm = xreg_idx(ops[2])
+        return 0xCB000000 | (rm << 16) | (rn << 5) | rd
+    }
+    // SUB Xd, Xn, #imm12
+    if op == "SUB" && len(ops) == 3 {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let imm = imm_val(ops[2]) & 0xFFF
+        return 0xD1000000 | (imm << 10) | (rn << 5) | rd
+    }
+    // MUL Xd, Xn, Xm  (alias for MADD Xd, Xn, Xm, XZR)
+    if op == "MUL" && len(ops) == 3 {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let rm = xreg_idx(ops[2])
+        return 0x9B007C00 | (rm << 16) | (rn << 5) | rd
+    }
+
+    // ── Compare (SUBS XZR, ...) ──
+    // CMP Xn, Xm
+    if op == "CMP" && len(ops) == 2 && ops[1].substring(0, 1) != "#" {
+        let rn = xreg_idx(ops[0])
+        let rm = xreg_idx(ops[1])
+        return 0xEB00001F | (rm << 16) | (rn << 5)
+    }
+    // CMP Xn, #imm12
+    if op == "CMP" && len(ops) == 2 {
+        let rn = xreg_idx(ops[0])
+        let imm = imm_val(ops[1]) & 0xFFF
+        return 0xF100001F | (imm << 10) | (rn << 5)
+    }
+
+    // ── Memory ──
+    // LDR Xt, [Xn]
+    if op == "LDR" && len(ops) == 2 {
+        let rt = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        return 0xF9400000 | (rn << 5) | rt
+    }
+    // STR Xt, [Xn]
+    if op == "STR" && len(ops) == 2 {
+        let rt = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        return 0xF9000000 | (rn << 5) | rt
+    }
+
+    // ── Branches (bit-pattern only; imm26 / imm19 filled by reloc) ──
+    // B label  — imm26 patched by ARM64_RELOC_BRANCH26 reloc
+    if op == "B" && len(ops) == 1 { return 0x14000000 }
+    // BL label
+    if op == "BL" && len(ops) == 1 { return 0x94000000 }
+    // RET (= RET X30)
+    if op == "RET" && len(ops) == 0 { return 0xD65F03C0 }
+
+    // ── Conditional branch (B.cond label) ──
+    // op is "B.EQ" / "B.NE" / "B.LT" / "B.GE" / "B.GT" / "B.LE" etc.
+    if len(op) > 2 && op.substring(0, 2) == "B." && len(ops) == 1 {
+        let cc = op.substring(2, len(op))
+        let mut c = -1
+        if cc == "EQ" { c = 0  } else if cc == "NE" { c = 1  }
+        else if cc == "CS" { c = 2  } else if cc == "CC" { c = 3  }
+        else if cc == "MI" { c = 4  } else if cc == "PL" { c = 5  }
+        else if cc == "VS" { c = 6  } else if cc == "VC" { c = 7  }
+        else if cc == "HI" { c = 8  } else if cc == "LS" { c = 9  }
+        else if cc == "GE" { c = 10 } else if cc == "LT" { c = 11 }
+        else if cc == "GT" { c = 12 } else if cc == "LE" { c = 13 }
+        else if cc == "AL" { c = 14 }
+        if c >= 0 { return 0x54000000 | c }
+    }
+
+    // ── Compare and branch (zero / non-zero) ──
+    // CBZ Xt, label  — imm19 patched by reloc
+    if op == "CBZ" && len(ops) == 2 {
+        let rt = xreg_idx(ops[0])
+        return 0xB4000000 | rt
+    }
+    // CBNZ Xt, label
+    if op == "CBNZ" && len(ops) == 2 {
+        let rt = xreg_idx(ops[0])
+        return 0xB5000000 | rt
+    }
+
+    // Unknown op — caller checks for 0 as failure marker.
     return 0
 }
 

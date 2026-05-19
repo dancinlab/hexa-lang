@@ -23,7 +23,7 @@ At-a-glance
   interim  : W1/W2/F speed the C path; relief only while the C fallback lives
   naming   : drop bootstrap vestiges (_v2 _c2 aprime s4) — separate cycle
   measured : clang = 80% of build wall; runtime.c recompile = 53% alone
-  status   : S1-S5 done · S7 RFC 063 + P0/P1 scaffolds; implementation multi-cycle
+  status   : S1-S5 done · S7 RFC 063 + scaffolds + P0 encoding table (~20 rules)
 ```
 
 ---
