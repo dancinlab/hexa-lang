@@ -727,3 +727,18 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   · crystal(spacegroup/from_cif/energy_above_hull) · mol(from_smiles
   hoist + canon + descriptors). 검증모델 = self-validating
   교과서/라운드트립(ase/pymatgen/rdkit 미설치 → .py golden 없음).
+- 2026-05-19 — **T4 Stage-2 팬아웃 1/3 수확 + 직접 +1 커널**.
+  3-에이전트 동시발사(atoms/crystal/mol Stage-2): atoms 에이전트만
+  완료(`514e0b72` cherry-pick, atoms_from_cif — 최소 CIF 리더:
+  cell_length/angle + atom_site loop, label→symbol 휴리스틱, SU
+  suffix strip, cellpar→cart; EMT 는 g3 준수로 STAGE-2.5-NOT-
+  IMPLEMENTED 센티넬, 가짜 에너지 0). crystal/mol 에이전트는 API
+  레이트리밋 mid-run(미완 — 한계 해제 시 재발사). 직접 추가:
+  `energy_above_hull`(binary tie-line, `ace39481`). **동시 codegen
+  머지(`db446da3` modstmt-decl-hoist)로 rfc043 이동 → 내 마지막
+  3커밋 분기, cherry-pick 재통합(884c4ddd/58e2174d/514e0b72) 클린·
+  무충돌**. ubu-2 재검증(머지 상태): __ATOMS_STAGE1_TEST__ PASS
+  (38/38) + __SCI_STAGE1_TEST__ PASS (32/32). 잔여 Stage-2:
+  crystal structure_from_cif/spacegroup/multi-point-hull · mol
+  from_smiles(hexa-bio 858L 파서 hoist)/descriptors · atoms EMT ·
+  mlff(grad/safetensors 의존 = T5). 재발사 대상: crystal/mol 2-에이전트.
