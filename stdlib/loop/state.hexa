@@ -2,10 +2,17 @@
 //
 // State dir: $HEXA_LANG/state/loop/<cwd_hash>/
 //
-// Files (per RFC 065 §6 — B-2.1 wires cycle/end; chain/cooldown/goal
-// growth/etc. land in B-2.2):
+// Files (RFC 065 §6) — B-2.1 wired cycle/end; B-2.2 (this commit) wires
+// the remaining six. Schemas are line-based (avoid JSON parser dep):
 //   loop                          cycle counter ("cycle=N\n")
 //   end                           exhaustion sentinel (touch file)
+//   chain                         JSONL append-only, one row per emit
+//   gap_cooldown                  "slug expiry_cycle\n" per line
+//   goal_growth_state             "star_id score last_delta ts\n" per line
+//                                 (3 stars: flame, self_host, comb)
+//   growth_last_scan              "hash\n" single line
+//   turn                          turn counter ("N\n")
+//   guide                         free-text user focus prompt
 //
 // authority: AGENTS.tape @D g_atlas_binary_builtin (sibling SSOT) +
 //   stdlib/qrng/router state-file convention (HEXA_LANG/state/<domain>/).
@@ -95,11 +102,196 @@ fn _bool_str(b: bool) -> string {
     return "false"
 }
 
+// --- chain (append-only JSONL) ---------------------------------------
+
+pub fn loop_state_chain_append(cycle: int, slug: string, family: string, fire_used: bool) {
+    let path = loop_state_dir() + "/chain"
+    let row = "{\"cycle\":" + to_string(cycle)
+            + ",\"slug\":\"" + slug + "\""
+            + ",\"family\":\"" + family + "\""
+            + ",\"fire\":" + _bool_str(fire_used) + "}\n"
+    // append via shell echo (write_text overwrites; no append API yet)
+    let _ = exec("printf '%s' " + _shq(row) + " >> " + _shq(path))
+}
+
+fn _shq(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+// --- gap_cooldown (slug -> expiry_cycle, line-based) ----------------
+
+// Returns true if slug is in cooldown (expiry > current_cycle).
+pub fn loop_state_cooldown_check(slug: string, current_cycle: int) -> bool {
+    if loop_state_path_exists("gap_cooldown") == false { return false }
+    let path = loop_state_dir() + "/gap_cooldown"
+    let raw = read_text(path)
+    // split into lines, find one starting with "slug "
+    let lines = raw.split("\n")
+    let n = len(lines)
+    let mut i = 0
+    while i < n {
+        let line = lines[i]
+        let prefix = slug + " "
+        if line.starts_with(prefix) {
+            let rest = line.substring(len(prefix), len(line))
+            let expiry = _parse_leading_int(rest)
+            return expiry > current_cycle
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// Add/update slug with expiry = current_cycle + N (Decision 5: N=5).
+pub fn loop_state_cooldown_add(slug: string, current_cycle: int) {
+    let expiry = current_cycle + 5
+    let path = loop_state_dir() + "/gap_cooldown"
+    // naive: read all lines, drop any starting with "slug ", append fresh.
+    let mut existing = ""
+    if loop_state_path_exists("gap_cooldown") {
+        existing = read_text(path)
+    }
+    let lines = existing.split("\n")
+    let n = len(lines)
+    let mut out = ""
+    let prefix = slug + " "
+    let mut i = 0
+    while i < n {
+        let line = lines[i]
+        if len(line) > 0 {
+            if line.starts_with(prefix) == false {
+                out = out + line + "\n"
+            }
+        }
+        i = i + 1
+    }
+    out = out + slug + " " + to_string(expiry) + "\n"
+    let _ = write_text(path, out)
+}
+
+// Count of cooldown entries whose expiry > current_cycle (RFC §7 EXHAUST?).
+pub fn loop_state_cooldown_active_count(current_cycle: int) -> int {
+    if loop_state_path_exists("gap_cooldown") == false { return 0 }
+    let path = loop_state_dir() + "/gap_cooldown"
+    let raw = read_text(path)
+    let lines = raw.split("\n")
+    let n = len(lines)
+    let mut count = 0
+    let mut i = 0
+    while i < n {
+        let line = lines[i]
+        if len(line) > 0 {
+            // line format "slug N" — find space, parse trailing int
+            let sp = line.index_of(" ")
+            if sp >= 0 {
+                let tail = line.substring(sp + 1, len(line))
+                let expiry = _parse_leading_int(tail)
+                if expiry > current_cycle { count = count + 1 }
+            }
+        }
+        i = i + 1
+    }
+    return count
+}
+
+// --- goal_growth_state (3 north-stars, line-based) ------------------
+
+// star_id one of: "flame" (north-star ①), "self_host" (②), "comb" (③).
+pub fn loop_state_growth_bump(star_id: string, delta: int, cycle: int) {
+    let path = loop_state_dir() + "/goal_growth_state"
+    let mut existing = ""
+    if loop_state_path_exists("goal_growth_state") {
+        existing = read_text(path)
+    }
+    let lines = existing.split("\n")
+    let n = len(lines)
+    let mut out = ""
+    let prefix = star_id + " "
+    let mut found = false
+    let mut i = 0
+    while i < n {
+        let line = lines[i]
+        if len(line) > 0 {
+            if line.starts_with(prefix) {
+                // increment score (first int after prefix)
+                let rest = line.substring(len(prefix), len(line))
+                let prev = _parse_leading_int(rest)
+                let new_score = prev + delta
+                out = out + star_id + " " + to_string(new_score) + " " + to_string(delta) + " " + to_string(cycle) + "\n"
+                found = true
+            } else {
+                out = out + line + "\n"
+            }
+        }
+        i = i + 1
+    }
+    if found == false {
+        out = out + star_id + " " + to_string(delta) + " " + to_string(delta) + " " + to_string(cycle) + "\n"
+    }
+    let _ = write_text(path, out)
+}
+
+pub fn loop_state_growth_score(star_id: string) -> int {
+    if loop_state_path_exists("goal_growth_state") == false { return 0 }
+    let path = loop_state_dir() + "/goal_growth_state"
+    let raw = read_text(path)
+    let lines = raw.split("\n")
+    let n = len(lines)
+    let prefix = star_id + " "
+    let mut i = 0
+    while i < n {
+        let line = lines[i]
+        if line.starts_with(prefix) {
+            let rest = line.substring(len(prefix), len(line))
+            return _parse_leading_int(rest)
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// --- growth_last_scan (corpus hash, single line) --------------------
+
+pub fn loop_state_last_scan_get() -> string {
+    if loop_state_path_exists("growth_last_scan") == false { return "" }
+    let path = loop_state_dir() + "/growth_last_scan"
+    return read_text(path).trim()
+}
+
+pub fn loop_state_last_scan_set(hash: string) {
+    let path = loop_state_dir() + "/growth_last_scan"
+    let _ = write_text(path, hash + "\n")
+}
+
+// --- turn (LLM-budget shadow counter, single int) -------------------
+
+pub fn loop_state_turn_inc() -> int {
+    let path = loop_state_dir() + "/turn"
+    let mut cur = 0
+    if loop_state_path_exists("turn") {
+        cur = _parse_leading_int(read_text(path))
+    }
+    let next = cur + 1
+    let _ = write_text(path, to_string(next) + "\n")
+    return next
+}
+
+// --- guide (user focus prompt, free text) ---------------------------
+
+pub fn loop_state_guide_read() -> string {
+    if loop_state_path_exists("guide") == false { return "" }
+    let path = loop_state_dir() + "/guide"
+    return read_text(path)
+}
+
+// --- selftest --------------------------------------------------------
+
 pub fn loop_state_selftest() -> bool {
     loop_state_init()
     let dir = loop_state_dir()
     println("[loop.state] dir = " + dir)
 
+    // B-2.1: cycle / end round-trip
     loop_state_cycle_write(7)
     let r = loop_state_cycle_read()
     let cycle_ok = (r == 7)
@@ -111,8 +303,58 @@ pub fn loop_state_selftest() -> bool {
     println("[loop.state] end touched, exists=" + _bool_str(exists))
     if exists == false { return false }
 
+    // B-2.2: chain append
+    loop_state_chain_append(7, "empty_space.unmapped_axis", "empty_space", false)
+    loop_state_chain_append(7, "paradigm_shift.dual", "paradigm_shift", true)
+    let chain_exists = loop_state_path_exists("chain")
+    println("[loop.state] chain append x2, exists=" + _bool_str(chain_exists))
+    if chain_exists == false { return false }
+
+    // B-2.2: gap_cooldown check + add (Decision 5: N=5)
+    let cold_before = loop_state_cooldown_check("foo.bar", 7)
+    loop_state_cooldown_add("foo.bar", 7)
+    let cold_after = loop_state_cooldown_check("foo.bar", 7)
+    let cold_expired = loop_state_cooldown_check("foo.bar", 13)
+    let active_at_7 = loop_state_cooldown_active_count(7)
+    let active_at_13 = loop_state_cooldown_active_count(13)
+    println("[loop.state] cooldown before=" + _bool_str(cold_before)
+            + " after=" + _bool_str(cold_after)
+            + " expired_at_13=" + _bool_str(cold_expired)
+            + " active@7=" + to_string(active_at_7)
+            + " active@13=" + to_string(active_at_13))
+    if cold_before { return false }
+    if cold_after == false { return false }
+    if cold_expired { return false }
+    if active_at_7 != 1 { return false }
+    if active_at_13 != 0 { return false }
+
+    // B-2.2: goal_growth bump + score
+    loop_state_growth_bump("flame", 3, 7)
+    loop_state_growth_bump("self_host", 1, 7)
+    loop_state_growth_bump("flame", 2, 8)
+    let flame_score = loop_state_growth_score("flame")
+    let self_host_score = loop_state_growth_score("self_host")
+    let comb_score = loop_state_growth_score("comb")
+    println("[loop.state] growth flame=" + to_string(flame_score)
+            + " self_host=" + to_string(self_host_score)
+            + " comb=" + to_string(comb_score))
+    if flame_score != 5 { return false }
+    if self_host_score != 1 { return false }
+    if comb_score != 0 { return false }
+
+    // B-2.2: growth_last_scan + turn + guide
+    loop_state_last_scan_set("abc123")
+    let scan = loop_state_last_scan_get()
+    let t1 = loop_state_turn_inc()
+    let t2 = loop_state_turn_inc()
+    let guide = loop_state_guide_read()
+    println("[loop.state] last_scan=" + scan + " turn1=" + to_string(t1) + " turn2=" + to_string(t2) + " guide_len=" + to_string(len(guide)))
+    if scan != "abc123" { return false }
+    if t1 != 1 { return false }
+    if t2 != 2 { return false }
+
     let _ = exec("rm -rf \"" + dir + "\"")
-    println("[loop.state] selftest PASS")
+    println("[loop.state] selftest PASS (8 file schema wired)")
     return true
 }
 
