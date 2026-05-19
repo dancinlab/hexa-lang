@@ -85,6 +85,15 @@ import "./nvptx_ptx_ops.hexa"
 pub let NVPTX_TARGET_SM90: string = "nvptx64-nvidia-cuda-sm90"
 pub let NVPTX_TARGET_SM80: string = "nvptx64-nvidia-cuda-sm80"
 
+// RFC 055 055-P3c — kernel-marker prefix on LFunc.name. The 055-P3c
+// codegen partition routes `@gpu_kernel` MFuncs through
+// `_nvptx_lower_func` and tags the resulting LFunc.name with this
+// sentinel so the emit pass can render `.visible .entry <real_name>`
+// (the PTX form a host can `cuLaunchKernel`) instead of `.func`. The
+// prefix is unlikely to clash with any user-defined symbol; the emit
+// pass strips it before writing the kernel name to PTX.
+pub let NVPTX_KERNEL_PREFIX: string = "__nvptx_kernel__"
+
 // PTX `.target` directive arch string per variant.
 pub let NVPTX_ARCH_SM90: string = "sm_90"
 pub let NVPTX_ARCH_SM80: string = "sm_80"
@@ -724,8 +733,20 @@ fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
         }
         bi = bi + 1
     }
+    // 055-P3c — `.visible .entry` kernel wrapping. PTX distinguishes
+    // launchable kernels (`.visible .entry`) from device-only helpers
+    // (`.func`); the host can only `cuLaunchKernel` a `.visible .entry`.
+    // Encode the gpu_kind in LFunc.name via a sentinel prefix
+    // (NVPTX_KERNEL_PREFIX); _emit_ptx_func strips the prefix and emits
+    // the matching directive. This avoids adding a kind field to LFunc
+    // (which would break every CPU codegen's LFunc constructor).
+    let lf_name = if mfn.gpu_kind == GPU_KIND_KERNEL {
+        NVPTX_KERNEL_PREFIX + mfn.name
+    } else {
+        mfn.name
+    }
     return LFunc {
-        name: mfn.name,
+        name: lf_name,
         target: target,
         instrs: instrs,
         frame_size: 0,
@@ -891,8 +912,22 @@ fn _emit_ptx_instr(instr: LInstr) -> string {
 // touches indexes / predicates now declares the matching bank.
 fn _emit_ptx_func(f: LFunc) -> string {
     let mut parts: [string] = []
-    // 055-P0 — device-fn form. `.visible .entry` kernel form is 055-P1.
-    parts.push(PTX_DIRECTIVE_FUNC + " " + f.name + "\n")
+    // 055-P3c — strip the kernel-marker prefix (`__nvptx_kernel__`) if
+    // present and emit `.visible .entry <real_name> ()` instead of
+    // `.func <name>`. The param bank is empty here — a real param-bank
+    // materialisation from MFunc.params is the next 055-P3c sub-slice
+    // (paired with the `gpu_launch(...)` host-side lowering that knows
+    // the param ABI). The 055-P0 axpb fixture and any GPU_KIND_DEVICE
+    // function continue to emit as `.func` (path unchanged).
+    let kp_len = len(NVPTX_KERNEL_PREFIX)
+    let is_kernel = len(f.name) > kp_len && f.name.substring(0, kp_len) == NVPTX_KERNEL_PREFIX
+    if is_kernel {
+        let real_name = f.name.substring(kp_len, len(f.name))
+        parts.push(PTX_DIRECTIVE_ENTRY + " " + real_name + " ()\n")
+    } else {
+        // 055-P0 — device-fn form for non-kernel funcs.
+        parts.push(PTX_DIRECTIVE_FUNC + " " + f.name + "\n")
+    }
     parts.push("{\n")
     // `.reg .<ty>` declarations, one per Local — PTX requires every
     // virtual register be declared before use. The `<ty>` comes from
