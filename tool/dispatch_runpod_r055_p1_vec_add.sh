@@ -57,7 +57,8 @@ RUNPOD_SSH_KEY="${HOME}/.runpod/ssh/RunPod-Key-Go"
 RUNPODCTL="/opt/homebrew/Cellar/runpodctl/2.1.9/bin/runpodctl"
 export RUNPOD_API_KEY="$(secret get runpod.api_key 2>/dev/null)"
 GPU_ID="${GPU_ID:-NVIDIA A100-SXM4-80GB}"
-IMAGE="${IMAGE:-nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04}"
+# runpod-prebuilt image: sshd pre-configured, CUDA 12.4 toolkit, fast boot.
+IMAGE="${IMAGE:-runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04}"
 [ -x "$RUNPODCTL" ]      || { echo "ERROR: runpodctl not found at $RUNPODCTL"; exit 1; }
 [ -f "$RUNPOD_SSH_KEY" ] || { echo "ERROR: runpod ssh key missing"; exit 1; }
 [ -n "$RUNPOD_API_KEY" ] || { echo "ERROR: RUNPOD_API_KEY empty"; exit 1; }
@@ -226,7 +227,7 @@ echo "[0b] host harness materialised ($(wc -l < $HARNESS_C) lines)"
 echo "[1/8] Creating runpod pod (gpu=${GPU_ID}, image=${IMAGE})..."
 CREATE=$($RUNPODCTL pod create \
     --gpu-id "$GPU_ID" --image "$IMAGE" --container-disk-in-gb 40 \
-    --volume-in-gb 0 --ssh --name "$LABEL" 2>&1)
+    --volume-in-gb 0 --ssh --ports "22/tcp" --name "$LABEL" 2>&1)
 IID=$(echo "$CREATE"|python3 -c "
 import json,sys
 try: d=json.load(sys.stdin); print(d.get('id',''))
