@@ -20,12 +20,10 @@
 //   · g7 (inbox sibling stream) · g_interp_deprecated (compiled-path
 //   only) · g_plan_consolidation (compiler/PLAN.md entry per cycle).
 
-let VERSION = "0.0.1"
+use "compiler/lenses/types"
+use "compiler/lenses/embedded.gen"
 
-// Mirrors compiler/lenses/embedded.gen.hexa::LENS_COUNT. The actual
-// LENS_NODES iteration wires up in B-3 (self/main.hexa) where both
-// compiler/* and stdlib/* are importable in the same translation unit.
-let LENS_COUNT_SHELL = 32
+let VERSION = "0.0.1"
 
 fn _bool_str(b: bool) -> string {
     if b { return "true" }
@@ -62,9 +60,9 @@ fn cmd_loop_version() {
 }
 
 fn cmd_loop_status() {
-    println("[loop] status — Phase B-2 shell")
+    println("[loop] status — Phase B-3.3 (real lens dispatch)")
     println("  state dir:        \$HEXA_LANG/state/loop/<cwd_hash>/ (B-2.1 wires)")
-    println("  baked lens count: " + to_string(LENS_COUNT_SHELL))
+    println("  baked lens count: " + to_string(LENS_COUNT))
     println("  active families:  empty_space, paradigm_shift, cross_pollinate,")
     println("                    counterexample_mine, invariant_stress,")
     println("                    scale_extrapolate, constraint_flip, falsify_self")
@@ -78,8 +76,25 @@ fn cycle_scan() {
 }
 
 fn cycle_lens() -> int {
-    println("  [2/8 LENS]    " + to_string(LENS_COUNT_SHELL) + " lens applied (B-2 shell, all stubs return [])")
-    return 0
+    // B-3.3: real LENS_NODES iteration via lens_apply_by_id dispatch.
+    // AtlasView is empty in B-shell (Phase C wires the SCAN-stage hash
+    // into a populated view). All apply fns return [] in B-1 so total = 0.
+    let view = AtlasView {
+        p_nodes: [], c_nodes: [], l_nodes: [], f_nodes: [],
+        r_nodes: [], s_nodes: [], x_nodes: [], q_nodes: [],
+        atlas_hash: "", atlas_generated_at: ""
+    }
+    let n = len(LENS_NODES)
+    let mut total = 0
+    let mut i = 0
+    while i < n {
+        let id = LENS_NODES[i].id
+        let cand = lens_apply_by_id(id, view)
+        total = total + len(cand)
+        i = i + 1
+    }
+    println("  [2/8 LENS]    " + to_string(n) + " lens applied (B-3.3 real dispatch, " + to_string(total) + " candidate(s) emitted)")
+    return total
 }
 
 fn cycle_dedup(total: int) -> int {
