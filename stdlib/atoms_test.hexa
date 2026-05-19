@@ -57,6 +57,30 @@ fn main() {
                        [true, true, true])
     check("left-handed |det| positive", fabs(atoms_volume(lh) - a * a * a) < 0.000000001)
 
+    // ── Stage-2: atoms_bulk fcc/bcc/diamond (ASE bulk() conventions) ──
+    let cu = atoms_bulk("Cu", "fcc", 3.6149)
+    check("bulk Cu fcc len 1", atoms_len(cu) == 1)
+    let cusym = atoms_chemical_symbols(cu)
+    check("bulk Cu fcc sym", cusym[0] == "Cu")
+    check("bulk Cu fcc vol a^3/4",
+          fabs(atoms_volume(cu) - 3.6149 * 3.6149 * 3.6149 / 4.0) < 0.000000001)
+
+    let fe = atoms_bulk("Fe", "bcc", 2.8665)
+    check("bulk Fe bcc len 1", atoms_len(fe) == 1)
+    check("bulk Fe bcc vol a^3/2",
+          fabs(atoms_volume(fe) - 2.8665 * 2.8665 * 2.8665 / 2.0) < 0.000000001)
+
+    let si = atoms_bulk("Si", "diamond", 5.4307)
+    check("bulk Si diamond len 2", atoms_len(si) == 2)
+    let sisym = atoms_chemical_symbols(si)
+    check("bulk Si diamond sym0", sisym[0] == "Si")
+    check("bulk Si diamond sym1", sisym[1] == "Si")
+    check("bulk Si diamond vol a^3/4",
+          fabs(atoms_volume(si) - 5.4307 * 5.4307 * 5.4307 / 4.0) < 0.000000001)
+
+    let bad = atoms_bulk("X", "hcp", 3.0)
+    check("bulk unknown -> empty", atoms_len(bad) == 0)
+
     println("atoms_status: " + atoms_status())
     if pass_count == total_count {
         println("__ATOMS_STAGE1_TEST__ PASS (" + str(pass_count) + "/" + str(total_count) + ")")

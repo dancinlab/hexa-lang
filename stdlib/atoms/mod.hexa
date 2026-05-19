@@ -87,6 +87,34 @@ pub fn atoms_volume(a: Atoms) -> float {
     return det
 }
 
+// ── Stage-2 kernel: ase.build.bulk() cubic primitive cells ──────────
+// hexa-native re-implementation of ASE's `bulk(sym, crystalstructure,
+// a)` for the three cubic Bravais cases hexa-matter needs. Exact ASE
+// primitive-cell conventions (ase/lattice):
+//   fcc      cell = 0.5*a * [[0,1,1],[1,0,1],[1,1,0]]   1 atom  V=a^3/4
+//   bcc      cell = 0.5*a * [[-1,1,1],[1,-1,1],[1,1,-1]] 1 atom  V=a^3/2
+//   diamond  fcc cell + 2-atom basis (0,0,0),(a/4,a/4,a/4) V=a^3/4
+// Unknown crystalstructure → empty-symbol Atoms (caller checks len).
+pub fn atoms_bulk(sym: string, crystalstructure: string, a: float) -> Atoms {
+    let h = a / 2.0
+    let q = a / 4.0
+    let pbc = [true, true, true]
+    if crystalstructure == "fcc" {
+        let cell = [[0.0, h, h], [h, 0.0, h], [h, h, 0.0]]
+        return Atoms { symbols: [sym], positions: [[0.0, 0.0, 0.0]], cell: cell, pbc: pbc }
+    }
+    if crystalstructure == "bcc" {
+        let cell = [[-h, h, h], [h, -h, h], [h, h, -h]]
+        return Atoms { symbols: [sym], positions: [[0.0, 0.0, 0.0]], cell: cell, pbc: pbc }
+    }
+    if crystalstructure == "diamond" {
+        let cell = [[0.0, h, h], [h, 0.0, h], [h, h, 0.0]]
+        let pos = [[0.0, 0.0, 0.0], [q, q, q]]
+        return Atoms { symbols: [sym, sym], positions: pos, cell: cell, pbc: pbc }
+    }
+    return Atoms { symbols: [], positions: [], cell: [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], pbc: pbc }
+}
+
 pub fn atoms_status() -> str {
-    return "STAGE-1 — Atoms container + atoms_new/len/symbols/volume (absorbs: ase; Stage-2 primitives pending)"
+    return "STAGE-2 (partial) — Stage-1 surface + atoms_bulk fcc/bcc/diamond (absorbs: ase; from_cif/neighborlist/EMT still Stage-2)"
 }
