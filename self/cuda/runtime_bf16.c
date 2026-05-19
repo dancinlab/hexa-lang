@@ -557,16 +557,28 @@ int hexa_farr_ffn_bf16_gpu(HexaFarrBf16* X, int64_t M, int64_t D, int64_t FD,
         return -1;
     }
     /* The hidden activation H[M,FD] needs its own device scratch — the
-     * caller's farr set does not include it. Owned + freed locally. */
-    __nv_bfloat16* dH = NULL;
+     * caller's farr set does not include it. Cached process-lifetime and
+     * grown on demand: a per-call cudaMalloc/cudaFree pair roughly halved
+     * the FFN speedup (RFC 049 Stage 2 re-fire measured 4.78× with the
+     * per-call malloc; the scratch is forge runtime state, like g_cublas,
+     * and is intentionally never freed). */
+    static __nv_bfloat16* s_ffn_dH = NULL;
+    static size_t s_ffn_dH_bytes = 0;
     size_t szH = (size_t)M * (size_t)FD * sizeof(__nv_bfloat16);
-    cudaError_t ce = cudaMalloc((void**)&dH, szH);
-    if (ce != cudaSuccess) {
-        fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: "
-                        "scratch cudaMalloc %zu B failed: %s\n",
-                szH, cudaGetErrorString(ce));
-        return -1;
+    cudaError_t ce;
+    if (szH > s_ffn_dH_bytes) {
+        if (s_ffn_dH) cudaFree(s_ffn_dH);
+        ce = cudaMalloc((void**)&s_ffn_dH, szH);
+        if (ce != cudaSuccess) {
+            fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: "
+                            "scratch cudaMalloc %zu B failed: %s\n",
+                    szH, cudaGetErrorString(ce));
+            s_ffn_dH = NULL; s_ffn_dH_bytes = 0;
+            return -1;
+        }
+        s_ffn_dH_bytes = szH;
     }
+    __nv_bfloat16* dH = s_ffn_dH;
     /* H = X @ W1 — row-major (M,D)·(D,FD) -> (M,FD); column-major swap. */
     cublasStatus_t st = _hx_gemm_ex_bf16(CUBLAS_OP_N, CUBLAS_OP_N,
                                          (int)FD, (int)M, (int)D,
@@ -576,7 +588,6 @@ int hexa_farr_ffn_bf16_gpu(HexaFarrBf16* X, int64_t M, int64_t D, int64_t FD,
     if (st != CUBLAS_STATUS_SUCCESS) {
         fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: "
                         "gemm1 failed: %d\n", (int)st);
-        cudaFree(dH);
         return -1;
     }
     /* In-place SiLU on H (BF16 storage, FP32 compute). */
@@ -586,7 +597,6 @@ int hexa_farr_ffn_bf16_gpu(HexaFarrBf16* X, int64_t M, int64_t D, int64_t FD,
     if (ce != cudaSuccess) {
         fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: "
                         "silu launch failed: %s\n", cudaGetErrorString(ce));
-        cudaFree(dH);
         return -1;
     }
     /* Y = H @ W2 — row-major (M,FD)·(FD,D) -> (M,D); column-major swap. */
@@ -598,11 +608,9 @@ int hexa_farr_ffn_bf16_gpu(HexaFarrBf16* X, int64_t M, int64_t D, int64_t FD,
     if (st != CUBLAS_STATUS_SUCCESS) {
         fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: "
                         "gemm2 failed: %d\n", (int)st);
-        cudaFree(dH);
         return -1;
     }
     ce = cudaDeviceSynchronize();
-    cudaFree(dH);
     if (ce != cudaSuccess) {
         fprintf(stderr, "[bf16] hexa_farr_ffn_bf16_gpu: sync failed: %s\n",
                 cudaGetErrorString(ce));
