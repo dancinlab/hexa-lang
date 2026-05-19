@@ -745,12 +745,35 @@ fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
     } else {
         mfn.name
     }
+    // 055-P3c (param-bank sub-slice) — for a KERNEL, materialise the
+    // `.param .u64 <name>_param_<i>;` declarations from MFunc.params by
+    // PREPENDING one PReg per param to callee_saved. PReg.kind == "param"
+    // signals the emit pass to render this PReg as a PTX param-list
+    // entry; the reg-bank PRegs follow with their existing kinds. All
+    // params are `.u64` for the §8 FP64-first scope — matches the
+    // hand-emit P1/P2 (`a: [f64]` farr bases + `n: i64` extents).
+    let mut full_regs = []
+    if mfn.gpu_kind == GPU_KIND_KERNEL {
+        let mut pi = 0
+        while pi < len(mfn.params) {
+            full_regs.push(PReg {
+                name: mfn.name + "_param_" + to_string(pi),
+                kind: "param"
+            })
+            pi = pi + 1
+        }
+    }
+    let mut ri = 0
+    while ri < len(regs) {
+        full_regs.push(regs[ri])
+        ri = ri + 1
+    }
     return LFunc {
         name: lf_name,
         target: target,
         instrs: instrs,
         frame_size: 0,
-        callee_saved: regs,
+        callee_saved: full_regs,
         def_line: mfn.def_line
     }
 }
@@ -912,18 +935,39 @@ fn _emit_ptx_instr(instr: LInstr) -> string {
 // touches indexes / predicates now declares the matching bank.
 fn _emit_ptx_func(f: LFunc) -> string {
     let mut parts: [string] = []
-    // 055-P3c — strip the kernel-marker prefix (`__nvptx_kernel__`) if
-    // present and emit `.visible .entry <real_name> ()` instead of
-    // `.func <name>`. The param bank is empty here — a real param-bank
-    // materialisation from MFunc.params is the next 055-P3c sub-slice
-    // (paired with the `gpu_launch(...)` host-side lowering that knows
-    // the param ABI). The 055-P0 axpb fixture and any GPU_KIND_DEVICE
-    // function continue to emit as `.func` (path unchanged).
+    // 055-P3c — kernel-marker prefix + param-bank materialisation.
+    //   1. If LFunc.name starts with NVPTX_KERNEL_PREFIX, this is a
+    //      KERNEL — emit `.visible .entry <real_name> ( <params> )`.
+    //   2. Otherwise — emit `.func <name>` (DEVICE form, 055-P0).
+    //   3. The param list comes from callee_saved entries whose
+    //      kind == "param" (prepended by `_nvptx_lower_func` for KERNEL).
+    //   4. The `.reg .<ty>` declarations come from the remaining
+    //      callee_saved entries (the 055-P3b reg-bank kinds).
     let kp_len = len(NVPTX_KERNEL_PREFIX)
     let is_kernel = len(f.name) > kp_len && f.name.substring(0, kp_len) == NVPTX_KERNEL_PREFIX
     if is_kernel {
         let real_name = f.name.substring(kp_len, len(f.name))
-        parts.push(PTX_DIRECTIVE_ENTRY + " " + real_name + " ()\n")
+        // Collect the `.param .u64 <p>` entries from callee_saved.
+        let mut param_names = []
+        let mut pi = 0
+        while pi < len(f.callee_saved) {
+            if f.callee_saved[pi].kind == "param" {
+                param_names.push(f.callee_saved[pi].name)
+            }
+            pi = pi + 1
+        }
+        parts.push(PTX_DIRECTIVE_ENTRY + " " + real_name + " (")
+        if len(param_names) > 0 {
+            parts.push("\n")
+            let mut pj = 0
+            while pj < len(param_names) {
+                parts.push("    .param .u64 " + param_names[pj])
+                if pj < len(param_names) - 1 { parts.push(",") }
+                parts.push("\n")
+                pj = pj + 1
+            }
+        }
+        parts.push(")\n")
     } else {
         // 055-P0 — device-fn form for non-kernel funcs.
         parts.push(PTX_DIRECTIVE_FUNC + " " + f.name + "\n")
@@ -932,11 +976,14 @@ fn _emit_ptx_func(f: LFunc) -> string {
     // `.reg .<ty>` declarations, one per Local — PTX requires every
     // virtual register be declared before use. The `<ty>` comes from
     // the PReg.kind set by 055-P3b classification (`.f64` is the default
-    // / 055-P0 backward-compat fallback).
+    // / 055-P0 backward-compat fallback). Skip kind == "param" entries
+    // — those rendered as the kernel param list above, not as `.reg`s.
     let mut ri = 0
     while ri < len(f.callee_saved) {
         let r = f.callee_saved[ri]
-        parts.push("    .reg " + _nvptx_kind_to_ptx_ty(r.kind) + " " + r.name + ";\n")
+        if r.kind != "param" {
+            parts.push("    .reg " + _nvptx_kind_to_ptx_ty(r.kind) + " " + r.name + ";\n")
+        }
         ri = ri + 1
     }
     let mut i = 0

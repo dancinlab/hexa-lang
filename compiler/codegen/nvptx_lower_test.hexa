@@ -559,6 +559,12 @@ fn _test_partition() -> bool {
     ok = _check(ok, ptx, ".func dev_helper",   "device fn emitted as .func")
     // 055-P3c — KERNEL emits as `.visible .entry`, not `.func`
     ok = _check(ok, ptx, ".visible .entry kernel_entry", "kernel emitted as .visible .entry")
+    // 055-P3c (param-bank sub-slice) — KERNEL renders MFunc.params as
+    // `.param .u64 <name>_param_<i>` entries in the kernel header.
+    ok = _check(ok, ptx, ".param .u64 kernel_entry_param_0",
+        "kernel param 0 in .visible .entry list")
+    ok = _check(ok, ptx, ".param .u64 kernel_entry_param_1",
+        "kernel param 1 in .visible .entry list")
     // KERNEL must NOT also appear with the `.func` directive nor with
     // the raw prefixed name.
     if _contains(ptx, ".func kernel_entry") {
@@ -571,6 +577,11 @@ fn _test_partition() -> bool {
     }
     if _contains(ptx, ".func cpu_only") {
         println("  FAIL: cpu_only must NOT be emitted (partition filter)")
+        ok = false
+    }
+    // The kernel param list must NOT leak into `.reg` declarations.
+    if _contains(ptx, ".reg .param") {
+        println("  FAIL: param PRegs must render as kernel param list, not as .reg .param")
         ok = false
     }
     return ok
