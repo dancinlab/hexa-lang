@@ -2262,3 +2262,43 @@ interpreter not found". Rebuilt the driver from the merged main.hexa
 (597,488 B) and installed it to `~/core/hexa-lang/hexa.real`; verified
 `hexa run` (rc 7), `hexa --version`, `hexa parse self/main.hexa` all
 clean. hexa.real is gitignored — no committable artifact, log-only.
+
+### 2026-05-19 — RFC 055 NVPTX codegen backend — Stage 1 scaffold landed
+
+RFC 055 (hexa-src → NVPTX GPU codegen backend) advances from DESIGN-ONLY
+to **Stage 1 scaffold landed**. Two new files under `compiler/codegen/`,
+siblings to the CPU targets (`arm64_darwin.hexa` / `x86_64_linux.hexa` /
+`thumbv7em_eabihf.hexa`):
+
+  - `compiler/codegen/nvptx_target.hexa` — codegen entry points
+    `codegen_nvptx_sm90` / `codegen_nvptx_sm80` (MIR → LModule, same
+    signature shape as the CPU targets), the GPU-IR concept structs
+    (`NvptxKernelMeta`, `NvptxIntrinsic`), the kernel/device function-kind
+    enum, and the `nvptx_intrinsic_map()` rt#45-rename record.
+  - `compiler/codegen/nvptx_ptx_ops.hexa` — the PTX FP64-arithmetic-subset
+    opcode table (`ptx_fp64_slice_ops()`), PTX state-space / special-register
+    name constants, and the warp-size hardware constant.
+
+Honest scope (g3): this is a **scaffold**, NOT an implementation. Every
+codegen function body is a `// RFC 055 Stage N — not yet implemented`
+stub — no PTX text is emitted, no `@gpu_kernel` attribute is parsed, no
+kernel runs, `ptxas` is never invoked. The files are **not wired into
+the compiler's target dispatch** — nothing routes MIR to them, so this
+is a zero-behavior-change landing (CPU codegen byte-identical; falsifier
+F-RFC055-CPU-CODEGEN-UNTOUCHED holds trivially since the dispatch case
+is not yet added).
+
+rt#45 reconciliation (RFC 055 §3): the scaffold's header block documents
+why `nvptx_target.hexa` SUPERSEDES the pre-existing C skeleton
+`self/native/gpu_codegen_stub.c` — that stub offers an LLVM-NVPTX path
+(violates @D f2), walks the C AST (wrong pipeline layer; real codegen
+lowers MIR), and its companion `docs/rt-45-gpu-design.md` is missing
+(unrecoverable design). The stub's intrinsic name set is preserved as
+the auditable `rt45_name` column of `nvptx_intrinsic_map()`. A follow-up
+cleanup cycle should tombstone the C stub once 055-P0 lands.
+
+Verification: `hexa_real parse` clean on both files (syntactic gate —
+sufficient for a scaffold). Follow-up cycles per RFC 055 §12: 055-P0
+(PTX text emit pass), 055-P1 (`@gpu_kernel` parse + thread-index builtins
++ launch ABI + dispatch wiring + falsifier battery), 055-P2 (FP64 GEMM),
+055-P3 (sm_80 variant + warp primitives).

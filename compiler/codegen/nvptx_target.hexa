@@ -1,0 +1,237 @@
+// HEXA Native Compiler — Codegen / NVPTX (hexa-src → PTX)  [RFC 055 Stage 1 scaffold]
+//
+// @version 0.0.1
+// @capabilities [pure]
+//
+// ─────────────────────────────────────────────────────────────────────
+// SCAFFOLD ONLY — RFC 055 Stage 1 (055-P0). Zero behavior change.
+//
+// This file is a STRUCTURAL SKELETON for the hexa-native GPU codegen
+// target. It PARSES CLEAN but is NOT wired into the compiler's target
+// dispatch — nothing routes MIR here. Every codegen function body is an
+// honest `// RFC 055 Stage N — not yet implemented` stub. The codegen
+// body + dispatch wiring are follow-up cycles (055-P0 emit pass, 055-P1
+// `@gpu_kernel` parse + thread-index builtins + launch ABI).
+//
+// Lowers MIR (SSA CFG) -> LIR (PTX-flavored target instructions) for the
+// NVPTX target — a sibling to the CPU targets arm64_darwin.hexa /
+// x86_64_linux.hexa / thumbv7em_eabihf.hexa (RFC 055 §6.1).
+//
+//   pub fn codegen_nvptx_sm90(module: MModule) -> LModule   (Hopper sm_90)
+//   pub fn codegen_nvptx_sm80(module: MModule) -> LModule   (Ampere sm_80)
+//
+// Same signature shape as codegen_arm64_darwin / codegen_x86_64_linux:
+// MIR in, LModule out. The two sm_* entries share lowering logic and
+// differ only in the PTX `.target` directive (RFC 055 §6.1).
+//
+// ─────────────────────────────────────────────────────────────────────
+// RECONCILIATION with self/native/gpu_codegen_stub.c (RFC 055 §3)
+//
+// A pre-existing C-level skeleton — self/native/gpu_codegen_stub.c, the
+// "rt#45-research scaffold" — locked a C ABI for a future @gpu codegen
+// backend. RFC 055 §3 mandates this hexa scaffold reconcile with it.
+// This file SUPERSEDES the rt#45 C stub, for three reasons:
+//
+//   1. ARCHITECTURE. The rt#45 stub is a C file (`gpu_codegen_stub.c`)
+//      that walks a C `HexaNode*` AST and offers a `GPU_BACKEND_PTX_LLVM`
+//      path as its *preferred* backend. That LLVM path directly violates
+//      @D f2 "llvm-c-transpile-backend". The hexa-native answer is a
+//      `compiler/codegen/nvptx_*.hexa` target that lowers MIR (not the C
+//      AST) and emits PTX text directly — no LLVM. RFC 055 §6.2 / §6.4
+//      Decision (A) replace the rt#45 design, they do not extend it.
+//
+//   2. PIPELINE STAGE. The rt#45 stub emits from the *AST* (parser
+//      output). hexa-lang's real codegen targets lower from *MIR* (the
+//      SSA CFG, post-HIR). NVPTX joins that pipeline at the same
+//      MIR -> LIR boundary as every CPU target — the rt#45 AST-walk
+//      stage is the wrong layer.
+//
+//   3. MISSING DESIGN DOC. The rt#45 stub header references a companion
+//      `docs/rt-45-gpu-design.md` that does NOT exist in the repo
+//      (confirmed missing — see @N native_dir). The rt#45 design is
+//      therefore unrecoverable; RFC 055 is the replacement specification.
+//
+// The rt#45 stub's one reusable artifact is its INTRINSIC NAME SET
+// (`gpu_thread_id_x`, `gpu_block_dim_x`, `gpu_sync`, ...). RFC 055 §6.4
+// renames these to the `gpu_thread_idx() / gpu_block_dim() / gpu_barrier()`
+// builtin family; the mapping is recorded in `nvptx_intrinsic_map()`
+// below so the rename is auditable. A follow-up cleanup cycle should
+// tombstone `self/native/gpu_codegen_stub.c` once 055-P0 lands.
+//
+// ─────────────────────────────────────────────────────────────────────
+// HONEST SCOPE (RFC 055 §8 / @D g3)
+//
+//   IS  — a structural scaffold: the codegen entry points, the LModule
+//         target tags, the GPU-IR concept structs, function-kind enum,
+//         and the rt#45 reconciliation record.
+//   NOT — a working backend. No PTX text is emitted. No `@gpu_kernel`
+//         attribute is parsed. No kernel runs. `ptxas` is never invoked.
+//         Nothing in the compiler dispatches to these entry points.
+//
+// `ptxas` (PTX -> SASS) remains an external NVIDIA assembler — the same
+// g5 logic as the C-fallback `clang`/`as` path (RFC 055 §8). This file
+// does not claim a closed-loop GPU toolchain.
+// ─────────────────────────────────────────────────────────────────────
+
+import "../ir/mir.hexa"
+import "../ir/lir.hexa"
+import "./nvptx_ptx_ops.hexa"
+
+// ── LModule target tags ───────────────────────────────────────
+//
+// The `LModule.target` value an NVPTX-compiled module carries. Two
+// sm_* variants: sm_80 is the conservative Ampere baseline, sm_90 adds
+// Hopper features (wgmma, larger shared memory) additively (RFC 055 §6.1).
+pub let NVPTX_TARGET_SM90: string = "nvptx64-nvidia-cuda-sm90"
+pub let NVPTX_TARGET_SM80: string = "nvptx64-nvidia-cuda-sm80"
+
+// PTX `.target` directive arch string per variant.
+pub let NVPTX_ARCH_SM90: string = "sm_90"
+pub let NVPTX_ARCH_SM80: string = "sm_80"
+
+// ── GPU function kind (RFC 055 §6.3 / §6.4) ───────────────────
+//
+// The GPU analogue of the CPU "exported symbol vs static helper" split.
+//   KERNEL — `@gpu_kernel`, lowers to PTX `.visible .entry`; launchable
+//            from host; return type must be void (strict-lint enforced).
+//   DEVICE — `@gpu_device`, lowers to PTX `.func`; callable only from
+//            other @gpu_* code; may return a value.
+pub let NVPTX_FN_KERNEL: i64 = 0
+pub let NVPTX_FN_DEVICE: i64 = 1
+
+// ── GPU-specific IR concepts (RFC 055 §6.3) ───────────────────
+//
+// A GPU target needs concepts the flat single-threaded CPU MIR/LIR
+// pipeline never carried. RFC 055 §6.3 adds them as ADDITIVE, GPU-ONLY
+// annotations — invisible to the CPU targets (guarded by falsifier
+// F-RFC055-CPU-CODEGEN-UNTOUCHED). These structs are the scaffold for
+// those annotations; the lowering passes that populate them are 055-P1.
+
+// NvptxKernelMeta — per-function GPU metadata attached when a hexa fn
+// carries `@gpu_kernel` / `@gpu_device`.
+pub struct NvptxKernelMeta {
+    fn_kind: i64,             // NVPTX_FN_KERNEL | NVPTX_FN_DEVICE
+    uses_shared: bool,        // body declares a @shared local array
+    uses_barrier: bool,       // body calls gpu_barrier()
+    shared_bytes: i64         // total .shared bytes requested (0 if none)
+}
+
+// _nvptx_empty_kernel_meta — default NvptxKernelMeta (device fn, no
+// shared memory, no barrier).
+fn _nvptx_empty_kernel_meta() -> NvptxKernelMeta {
+    return NvptxKernelMeta {
+        fn_kind: NVPTX_FN_DEVICE,
+        uses_shared: false,
+        uses_barrier: false,
+        shared_bytes: 0
+    }
+}
+
+// NvptxIntrinsic — one thread-hierarchy / sync builtin and the PTX
+// sreg / mnemonic it lowers to (RFC 055 §6.3 table, §6.4 point 4).
+// `rt45_name` records the OLD name from self/native/gpu_codegen_stub.c
+// so the RFC 055 rename is auditable (see header §3 reconciliation).
+pub struct NvptxIntrinsic {
+    hexa_builtin: string,     // RFC 055 §6.4 name, e.g. "gpu_thread_idx"
+    ptx_lowering: string,     // PTX sreg / mnemonic, e.g. "%tid"
+    rt45_name: string         // superseded rt#45 stub name, e.g. "gpu_thread_id_x"
+}
+
+// _nvptx_intrinsic — NvptxIntrinsic constructor.
+fn _nvptx_intrinsic(hexa_builtin: string, ptx_lowering: string, rt45_name: string) -> NvptxIntrinsic {
+    return NvptxIntrinsic {
+        hexa_builtin: hexa_builtin,
+        ptx_lowering: ptx_lowering,
+        rt45_name: rt45_name
+    }
+}
+
+// nvptx_intrinsic_map — the @gpu builtin set legal inside `@gpu_*`
+// function bodies, with the rt#45 → RFC 055 rename recorded per row.
+//
+// RFC 055 Stage 1 — informational scaffold. 055-P1 wires strict-lint to
+// reject these builtins outside @gpu_* functions (a GPU/CPU
+// phase-confusion guard, RFC 055 §6.4). Today unreferenced.
+pub fn nvptx_intrinsic_map() -> [NvptxIntrinsic] {
+    let mut m = []
+    m.push(_nvptx_intrinsic("gpu_thread_idx", PTX_SREG_TID, "gpu_thread_id_*"))
+    m.push(_nvptx_intrinsic("gpu_block_idx", PTX_SREG_CTAID, "gpu_block_id_*"))
+    m.push(_nvptx_intrinsic("gpu_block_dim", PTX_SREG_NTID, "gpu_block_dim_*"))
+    m.push(_nvptx_intrinsic("gpu_grid_dim", PTX_SREG_NCTAID, "gpu_grid_dim_*"))
+    m.push(_nvptx_intrinsic("gpu_barrier", PTX_OP_BAR_SYNC, "gpu_sync"))
+    return m
+}
+
+// ── Codegen helpers (scaffold stubs) ──────────────────────────
+
+// _nvptx_lower_func — lower one MIR function to a PTX-flavored LFunc.
+//
+// RFC 055 Stage 1 — not yet implemented. The 055-P0 cycle fills this:
+// classify the fn (kernel vs device) by attribute, lower each MIR block
+// to PTX `LInstr` records (op = PTX mnemonic from nvptx_ptx_ops.hexa),
+// and read thread-index builtins via `mov.u32` from PTX sregs. PTX's
+// virtual-register SSA form needs no register allocator pass — `ptxas`
+// allocates downstream (RFC 055 §6.2).
+fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
+    // RFC 055 Stage 1 — placeholder: emit an empty LFunc carrying only
+    // the name + target so the scaffold is structurally complete.
+    // Stage 055-P0 replaces this with real MIR -> PTX-LIR lowering.
+    return LFunc {
+        name: mfn.name,
+        target: target,
+        instrs: [],
+        frame_size: 0,
+        callee_saved: [],
+        def_line: mfn.def_line
+    }
+}
+
+// _nvptx_codegen — shared lowering body for both sm_* variants.
+//
+// RFC 055 Stage 1 — partial scaffold. Walks the module's functions and
+// produces empty LFuncs. The PTX text emit pass (LIR -> .ptx text) is a
+// separate 055-P0 deliverable, not wired here.
+fn _nvptx_codegen(module: MModule, target: string) -> LModule {
+    let mut funcs = []
+    let mut i = 0
+    while i < len(module.funcs) {
+        // RFC 055 Stage 1 — partition by @gpu_* attribute is a 055-P1
+        // step. Today every fn is lowered through the same placeholder.
+        funcs.push(_nvptx_lower_func(module.funcs[i], target))
+        i = i + 1
+    }
+    return LModule {
+        file: module.file,
+        target: target,
+        funcs: funcs,
+        rodata: [],
+        bss: [],
+        globals: [],
+        floats: []
+    }
+}
+
+// ── Codegen entry points (RFC 055 §6.1) ───────────────────────
+//
+// Sibling signature to codegen_arm64_darwin / codegen_x86_64_linux:
+// MIR in, LModule out. NOT wired into the compiler's target dispatch —
+// adding the dispatch case is a 055-P1 deliverable (guarded by falsifier
+// F-RFC055-CPU-CODEGEN-UNTOUCHED: the CPU targets must see zero change).
+
+// codegen_nvptx_sm90 — NVPTX codegen for sm_90 (Hopper: H100 / H200).
+//
+// RFC 055 Stage 1 — scaffold. Returns a structurally-valid LModule with
+// empty function bodies. The codegen body is 055-P0; `@gpu_kernel`
+// end-to-end (PTX emit + ptxas + cubin embed + gpu_launch) is 055-P1.
+pub fn codegen_nvptx_sm90(module: MModule) -> LModule {
+    return _nvptx_codegen(module, NVPTX_TARGET_SM90)
+}
+
+// codegen_nvptx_sm80 — NVPTX codegen for sm_80 (Ampere: A100).
+//
+// RFC 055 Stage 1 — scaffold. The conservative baseline variant; shares
+// all lowering logic with sm_90 and differs only in the PTX `.target`
+// directive (RFC 055 §6.1). sm_80 is the 055-P3 variant deliverable.
+pub fn codegen_nvptx_sm80(module: MModule) -> LModule {
+    return _nvptx_codegen(module, NVPTX_TARGET_SM80)
+}

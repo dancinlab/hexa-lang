@@ -2,8 +2,20 @@
 
 ## 1. Status
 
-- **Status**: design-draft (2026-05-17) — DESIGN ONLY, no implementation
-- **Date**: 2026-05-17
+- **Status**: **Stage 1 scaffold landed (2026-05-19)** — the NVPTX codegen
+  target skeleton exists in-tree and parses clean. This is a *scaffold*, NOT
+  an implementation: `compiler/codegen/nvptx_target.hexa` +
+  `compiler/codegen/nvptx_ptx_ops.hexa` carry the codegen entry points
+  (`codegen_nvptx_sm90` / `codegen_nvptx_sm80`), the GPU-IR concept structs,
+  the PTX opcode table, and the rt#45 reconciliation record — but emit no PTX
+  text, parse no `@gpu_kernel` attribute, run no kernel, and are **not wired
+  into the compiler's target dispatch** (zero behavior change). The codegen
+  body (055-P0 PTX emit pass) and dispatch wiring + `@gpu_kernel` end-to-end
+  (055-P1) are follow-up cycles per the §12 phasing table. The pre-existing
+  `self/native/gpu_codegen_stub.c` (rt#45) is SUPERSEDED — see §3 and the
+  reconciliation header block in `nvptx_target.hexa`.
+- **Original status**: design-draft (2026-05-17) — DESIGN ONLY, no implementation
+- **Date**: 2026-05-17 (draft) · 2026-05-19 (Stage 1 scaffold)
 - **Priority**: P2 (architectural enabler — opens the hexa-native GPU path; not on
   any current critical chain. flame/forge ship today on the C/CUDA substrate;
   RFC 055 is the *future* hexa-native tier, not a blocker for either.)
@@ -498,7 +510,7 @@ Suggested phasing once an implementation cycle is greenlit:
 
 | Phase | Capability | Falsifier gate |
 |---|---|---|
-| **055-P0** | NVPTX codegen target skeleton — `codegen_nvptx_sm90` entry, `LModule.target` = `nvptx64-…`, PTX `LInstr` opcode table, PTX text emit pass. No GPU run yet. | (skeleton — compiles, emits PTX text) |
+| **055-P0** | NVPTX codegen target skeleton — `codegen_nvptx_sm90` entry, `LModule.target` = `nvptx64-…`, PTX `LInstr` opcode table, PTX text emit pass. No GPU run yet. **Stage 1 scaffold landed 2026-05-19** (`compiler/codegen/nvptx_target.hexa` + `nvptx_ptx_ops.hexa` — entry points, IR structs, opcode table; parse-clean, not dispatch-wired). PTX text emit pass = remaining 055-P0 work. | (skeleton — compiles, emits PTX text) |
 | **055-P1** | FP64 vector-add `@gpu_kernel` end-to-end: `@gpu_kernel` attribute parse + strict-lint, thread-index builtins, ptxas + cubin embed + `gpu_launch`. | F-RFC055-PTX-EMIT, F-RFC055-NUMERIC-EQ, F-RFC055-LAUNCH-ABI, F-RFC055-NO-LLVM, F-RFC055-CPU-CODEGEN-UNTOUCHED, F-RFC055-FALLBACK |
 | **055-P2** | FP64 GEMM `@gpu_kernel` (naive/tiled, `@shared` + `gpu_barrier`). | F-RFC055-GEMM-FEASIBLE (correctness gate; perf = honest measurement only) |
 | **055-P3** | sm_80 variant; warp primitives sub-phase. | (additive — no new gate) |

@@ -1,0 +1,123 @@
+// HEXA Native Compiler — Codegen / NVPTX PTX opcode table  [RFC 055 Stage 1 scaffold]
+//
+// @version 0.0.1
+// @capabilities [pure]
+//
+// SCAFFOLD ONLY — RFC 055 Stage-1 (055-P0). Zero behavior change: nothing
+// in the compiler imports or calls this file yet. It exists so a later
+// implementation cycle (055-P0/P1) has a fixed structural target.
+//
+// This file enumerates the PTX (NVIDIA Parallel Thread eXecution virtual
+// ISA) mnemonics the NVPTX codegen target lowers MIR into. PTX is a
+// stable virtual-ISA text format — the hexa compiler emits PTX text
+// DIRECTLY (RFC 055 §6.2): no LLVM IR, no LLVM NVPTX backend. This honors
+// @D f2 "llvm-c-transpile-backend" — see falsifier F-RFC055-NO-LLVM.
+//
+// The first implementable slice (RFC 055 §6.6) is the FP64 arithmetic
+// subset only — enough to lower a vector-add and a naive GEMM. Tensor
+// Core MMA (wmma/wgmma), texture/surface ops, atomics, cp.async are each
+// later sub-phases (RFC 055 §8).
+//
+// PTX mnemonics, special-register names, and warp size (32) below are
+// NVIDIA hardware facts cited from the NVIDIA PTX ISA documentation —
+// never derived from the n=6 lattice (@D f1).
+//   ref: NVIDIA PTX ISA — https://docs.nvidia.com/cuda/parallel-thread-execution/
+
+// ── Address spaces (PTX state spaces) ─────────────────────────
+//
+// A GPU target needs multiple memory address spaces the CPU targets
+// never modelled (RFC 055 §6.3). Each PTX load/store is qualified by
+// the state space of its operand.
+pub let PTX_SPACE_GLOBAL: string   = "global"     // device DRAM — farr args
+pub let PTX_SPACE_SHARED: string   = "shared"     // per-block scratchpad — @shared locals
+pub let PTX_SPACE_LOCAL: string    = "local"      // per-thread spill space
+pub let PTX_SPACE_CONST: string    = "const"      // read-only constant bank
+pub let PTX_SPACE_PARAM: string    = "param"      // kernel parameter bank
+pub let PTX_SPACE_REG: string      = "reg"        // virtual registers
+
+// ── PTX special registers (thread hierarchy) ──────────────────
+//
+// The thread / block / grid indices a kernel reads. Lowered via
+// `mov.u32` from the named sreg (RFC 055 §6.3 table).
+pub let PTX_SREG_TID: string    = "%tid"      // thread index within block
+pub let PTX_SREG_NTID: string   = "%ntid"     // block dimension (threads/block)
+pub let PTX_SREG_CTAID: string  = "%ctaid"    // block index within grid
+pub let PTX_SREG_NCTAID: string = "%nctaid"   // grid dimension (blocks/grid)
+pub let PTX_SREG_LANEID: string = "%laneid"   // lane index within warp
+
+// NVIDIA hardware fact: a warp is 32 threads. Cited constant, not derived.
+pub let PTX_WARP_SIZE: i64 = 32
+
+// ── PTX FP64 arithmetic mnemonics (first slice — RFC 055 §6.6) ──
+pub let PTX_OP_LD_GLOBAL_F64: string  = "ld.global.f64"
+pub let PTX_OP_ST_GLOBAL_F64: string  = "st.global.f64"
+pub let PTX_OP_LD_SHARED_F64: string  = "ld.shared.f64"
+pub let PTX_OP_ST_SHARED_F64: string  = "st.shared.f64"
+pub let PTX_OP_LD_PARAM_U64: string   = "ld.param.u64"
+pub let PTX_OP_ADD_F64: string        = "add.f64"
+pub let PTX_OP_SUB_F64: string        = "sub.f64"
+pub let PTX_OP_MUL_F64: string        = "mul.f64"
+pub let PTX_OP_FMA_RN_F64: string     = "fma.rn.f64"   // round-to-nearest FMA
+
+// ── PTX integer index arithmetic (loop / addressing) ──────────
+pub let PTX_OP_MOV_U32: string        = "mov.u32"      // read sreg / move
+pub let PTX_OP_ADD_S32: string        = "add.s32"
+pub let PTX_OP_MUL_LO_S32: string     = "mul.lo.s32"
+pub let PTX_OP_MAD_LO_S32: string     = "mad.lo.s32"
+pub let PTX_OP_CVT_U64_U32: string    = "cvt.u64.u32"  // widen index → address
+pub let PTX_OP_SETP_LT_S32: string    = "setp.lt.s32"  // predicate compare
+
+// ── PTX control / synchronization ─────────────────────────────
+pub let PTX_OP_BAR_SYNC: string       = "bar.sync"     // block-wide barrier
+pub let PTX_OP_BRA: string            = "bra"          // branch
+pub let PTX_OP_RET: string            = "ret"          // return from entry/func
+
+// ── PTX function-kind directives ──────────────────────────────
+//
+// The GPU analogue of "exported symbol vs static helper" (RFC 055 §6.3).
+pub let PTX_DIRECTIVE_ENTRY: string   = ".visible .entry"  // launchable kernel
+pub let PTX_DIRECTIVE_FUNC: string    = ".func"            // device-only helper
+
+// ── PTX module header directives ──────────────────────────────
+pub let PTX_VERSION_DIRECTIVE: string = ".version"
+pub let PTX_TARGET_DIRECTIVE: string  = ".target"
+pub let PTX_ADDRSIZE_DIRECTIVE: string = ".address_size"
+
+// PtxOpEntry — one row of the informational PTX opcode table. Mirrors
+// the per-target opcode-table pattern (RFC 055 §3 / lir.hexa note).
+pub struct PtxOpEntry {
+    mnemonic: string,    // PTX mnemonic, e.g. "fma.rn.f64"
+    arity: i64,          // operand count
+    space: string,       // state space if memory op, "" otherwise
+    note: string         // human-readable role
+}
+
+// _ptx_op_entry — PtxOpEntry constructor.
+fn _ptx_op_entry(mnemonic: string, arity: i64, space: string, note: string) -> PtxOpEntry {
+    return PtxOpEntry {
+        mnemonic: mnemonic,
+        arity: arity,
+        space: space,
+        note: note
+    }
+}
+
+// ptx_fp64_slice_ops — the FP64-arithmetic-subset opcode table for the
+// RFC 055 first implementable slice (055-P0/P1).
+//
+// RFC 055 Stage 1 — informational scaffold only. The 055-P0 codegen
+// cycle consumes this table to validate emitted mnemonics; today it is
+// unreferenced (zero behavior change).
+pub fn ptx_fp64_slice_ops() -> [PtxOpEntry] {
+    let mut t = []
+    t.push(_ptx_op_entry(PTX_OP_LD_GLOBAL_F64, 2, PTX_SPACE_GLOBAL, "load FP64 from device DRAM"))
+    t.push(_ptx_op_entry(PTX_OP_ST_GLOBAL_F64, 2, PTX_SPACE_GLOBAL, "store FP64 to device DRAM"))
+    t.push(_ptx_op_entry(PTX_OP_LD_SHARED_F64, 2, PTX_SPACE_SHARED, "load FP64 from block scratchpad"))
+    t.push(_ptx_op_entry(PTX_OP_ST_SHARED_F64, 2, PTX_SPACE_SHARED, "store FP64 to block scratchpad"))
+    t.push(_ptx_op_entry(PTX_OP_ADD_F64, 3, "", "FP64 add"))
+    t.push(_ptx_op_entry(PTX_OP_SUB_F64, 3, "", "FP64 subtract"))
+    t.push(_ptx_op_entry(PTX_OP_MUL_F64, 3, "", "FP64 multiply"))
+    t.push(_ptx_op_entry(PTX_OP_FMA_RN_F64, 4, "", "FP64 fused multiply-add, round-to-nearest"))
+    t.push(_ptx_op_entry(PTX_OP_BAR_SYNC, 1, "", "block-wide barrier"))
+    return t
+}
