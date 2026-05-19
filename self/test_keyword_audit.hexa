@@ -343,8 +343,8 @@ verify "keyword_check" {
 }
 ok("verify")
 
-// 53. optimize
-optimize fn opt_mul(a, b) {
+// 53. @optimize  (KEYWORD_DEMOTE Phase 2: `optimize` keyword → `@optimize` attribute)
+@optimize fn opt_mul(a, b) {
     return a * b
 }
 if opt_mul(6, 7) == 42 { ok("optimize") } else { ng("optimize", "wrong result") }

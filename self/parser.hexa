@@ -28,8 +28,8 @@
 //               ComptimeFnDecl, ComptimeConst, ComptimeLet,
 //               ComptimeBlock, ComptimeAssert,
 //               IntentStmt, VerifyStmt, GenerateFnStmt, GenerateStmt,
-//               OptimizeFnStmt, EffectDecl, PureFnDecl,
-//               MacroDef, DeriveDecl, TheoremStmt, HandleWithStmt,
+//               EffectDecl, PureFnDecl,
+//               MacroDef, TheoremStmt, HandleWithStmt,
 //               DestructLetStmt, MapDestructLetStmt,
 //               ForDestructStmt,
 //               WithStmt
@@ -367,7 +367,6 @@ fn p_is_reserved_id_kind_tier2(k) {
     if k == "Comptime" { return true }
     if k == "Intent" { return true }
     if k == "Verify" { return true }
-    if k == "Optimize" { return true }
     return false
 }
 
@@ -382,7 +381,6 @@ fn p_reserved_id_hint_tier2(k) {
     if k == "Comptime" { return "cmt" }
     if k == "Intent" { return "intt" }
     if k == "Verify" { return "vrf" }
-    if k == "Optimize" { return "opt" }
     return "_x"
 }
 
@@ -1053,11 +1051,9 @@ fn parse_stmt() {
         if p_generate_is_stmt_here() { return parse_generate_stmt() }
         // else: fall through, treat `generate` as identifier in expr-stmt
     }
-    if kind == "Optimize" { return parse_optimize_stmt() }
     if kind == "Effect" { return parse_effect_decl() }
     if kind == "Pure" { return parse_pure_fn() }
     if kind == "Macro" { return parse_macro_def() }
-    if kind == "Derive" { return parse_derive_decl() }
     if kind == "Theorem" { return parse_theorem_stmt() }
     if kind == "Handle" { return parse_handle_stmt() }
     if kind == "Recover" { return parse_recover_stmt() }
@@ -3963,29 +3959,6 @@ fn parse_generate_stmt() {
     }
 }
 
-// ── optimize fn name(params) { body } ──────────────────────
-fn parse_optimize_stmt() {
-    p_advance() // consume 'optimize'
-    p_expect("Fn")
-    let name = p_expect_ident()
-    p_expect("LParen")
-    let params = parse_params()
-    p_expect("RParen")
-    let mut ret = ""
-    if p_peek_kind() == "Arrow" {
-        p_advance()
-        ret = parse_type_annotation()
-    }
-    let body = parse_block()
-    return #{
-        "kind": "OptimizeFnStmt", "name": name, "value": "", "op": "",
-        "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
-        "params": params, "body": body, "args": "", "fields": "", "items": "",
-        "variants": "", "arms": "", "iter_expr": "", "ret_type": ret,
-        "target": "", "trait_name": "", "methods": ""
-    }
-}
-
 // ── effect Name { fn op(params) -> ret, ... } ──────────────
 fn parse_effect_decl() {
     p_advance() // consume 'effect'
@@ -4101,33 +4074,6 @@ fn parse_macro_def() {
         "kind": "MacroDef", "name": name, "value": "", "op": "",
         "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
         "params": "", "body": "", "args": "", "fields": "", "items": rules,
-        "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
-        "target": "", "trait_name": "", "methods": ""
-    }
-}
-
-// ── derive(Trait1, Trait2) for TypeName ─────────────────────
-fn parse_derive_decl() {
-    p_advance() // consume 'derive'
-    p_expect("LParen")
-    let mut traits = []
-    traits.push(p_expect_ident())
-    while p_peek_kind() == "Comma" {
-        p_advance()
-        traits.push(p_expect_ident())
-    }
-    p_expect("RParen")
-    // Expect 'for' — it's a keyword or ident
-    if p_peek_kind() == "For" {
-        p_advance()
-    } else {
-        p_expect_ident() // "for" as ident
-    }
-    let type_name = p_expect_ident()
-    return #{
-        "kind": "DeriveDecl", "name": type_name, "value": "", "op": "",
-        "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
-        "params": "", "body": "", "args": "", "fields": "", "items": traits,
         "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
         "target": "", "trait_name": "", "methods": ""
     }
@@ -4492,9 +4438,6 @@ fn ast_to_string(node, indent) {
     if k == "GenerateFnStmt" || k == "GenerateStmt" {
         return pad + k + "(" + node.name + ")"
     }
-    if k == "OptimizeFnStmt" {
-        return pad + "OptimizeFnStmt(" + node.name + ", [" + to_string(len(node.params)) + " params])"
-    }
     if k == "EffectDecl" {
         return pad + "EffectDecl(" + node.name + ", [" + to_string(len(node.items)) + " ops])"
     }
@@ -4503,9 +4446,6 @@ fn ast_to_string(node, indent) {
     }
     if k == "MacroDef" {
         return pad + "MacroDef(" + node.name + ", [" + to_string(len(node.items)) + " rules])"
-    }
-    if k == "DeriveDecl" {
-        return pad + "DeriveDecl(" + node.name + ", [" + to_string(len(node.items)) + " traits])"
     }
     if k == "TheoremStmt" {
         return pad + "TheoremStmt(" + node.name + ", [" + to_string(len(node.body)) + " stmts])"
