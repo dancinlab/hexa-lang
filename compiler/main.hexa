@@ -310,6 +310,16 @@ let mut verbose = false
 let mut stream_mode = false
 let _stream_env = env("HEXA_STREAM")
 if _stream_env == "1" { stream_mode = true }
+
+// HEXA_CG_PROFILE=1 — S1-step-1 codegen instrumentation (compiler/PLAN.md
+// #18). Emits per-phase wall-clock timing to stderr for lower_hir
+// (HIR->MIR), MIR-opt, codegen (MIR->LIR) and emit (LIR->asm). The probe
+// localises the super-linear codegen cost without changing any output:
+// when the env var is unset every cg_profile* call is a silent no-op
+// (gated on `cg_profile` — no mono_ns() syscall, no stderr write).
+let mut cg_profile = false
+let _cgp_env = env("HEXA_CG_PROFILE")
+if _cgp_env == "1" { cg_profile = true }
 // Stage1 punch list Gap 13: `--strict-citations` defaults OFF. While compiler/
 // source is not yet fully cite-bound (every implementation function would
 // need an @implements/@discover annotation otherwise), we run citation_check
@@ -459,6 +469,40 @@ fn phase_reset(name: string) {
 fn phase_log(name: string) {
     if verbose {
         let _ = env("__HEXA_PHASE_LOG__" + name)
+    }
+}
+
+// ── HEXA_CG_PROFILE — per-phase codegen wall-clock probe (S1-step-1) ──
+//
+// Companion to phase_reset/phase_log. Where those reclaim the bump arena
+// at phase boundaries, cg_profile_mark records a CLOCK_MONOTONIC reading
+// (mono_ns() — TAG_INT nanoseconds, runtime.c hexa_mono_ns) and emits the
+// delta since the previous mark to stderr as a `CG_PROFILE` row. The
+// probe is fully gated on the module-scope `cg_profile` flag: when
+// HEXA_CG_PROFILE is unset there is no mono_ns() syscall and no stderr
+// write — zero behavior change, zero cost.
+//
+// `_cg_last_ns` holds the previous mark; cg_profile_begin seeds it so the
+// first delta is measured from pipeline entry, not from 0.
+let mut _cg_last_ns: i64 = 0
+
+fn cg_profile_begin() {
+    if cg_profile {
+        _cg_last_ns = mono_ns()
+        eprintln("CG_PROFILE  phase=begin              delta_ms=0")
+    }
+}
+
+// cg_profile_mark(label) — print ms elapsed since the previous mark and
+// re-seed the cursor. `label` names the phase that JUST COMPLETED.
+fn cg_profile_mark(label: string) {
+    if cg_profile {
+        let now = mono_ns()
+        let delta_ns = now - _cg_last_ns
+        let delta_ms = delta_ns / 1000000
+        _cg_last_ns = now
+        eprintln("CG_PROFILE  phase=" + label
+            + "  delta_ms=" + to_string(delta_ms))
     }
 }
 
@@ -619,10 +663,18 @@ if stream_mode && target == "arm64-apple-darwin" {
         eprintln("hexa-compiler: --stream uses the fused per-function path; "
             + "--opt is not applied (omit --stream for the MIR optimizer)")
     }
+    cg_profile_begin()
     asm_text = codegen_emit_streaming(hmodule, target)
+    // S1-step-1 — the --stream path fuses lower/codegen/emit per-function
+    // so there is one combined mark rather than four phase boundaries.
+    cg_profile_mark("stream_fused")
     phase_reset("post_emit_asm")
 } else {
+    // S1-step-1 codegen profile — seed the wall-clock cursor at the
+    // entry of the lower/opt/codegen/emit pipeline (post-frontend).
+    cg_profile_begin()
     let mut mmodule = lower_hir(hmodule)
+    cg_profile_mark("lower_hir")
 
     // #14 — drain Lower-cluster diagnostics (HX1101/HX1102/HX1103) so they
     // surface in CLI alongside parser/check/units diags. hir_to_mir.hexa
@@ -673,6 +725,9 @@ if stream_mode && target == "arm64-apple-darwin" {
         mmodule = const_fold(mmodule)
         mmodule = dce(mmodule)
     }
+    // S1-step-1 — MIR-opt phase boundary (no-op at --opt=0, but the
+    // _mmod_stmt_count walk above still runs; measure it regardless).
+    cg_profile_mark("mir_opt")
 
     if opt_level > 0 && verbose {
         let post_opt_stmts = _mmod_stmt_count(mmodule)
@@ -705,8 +760,14 @@ if stream_mode && target == "arm64-apple-darwin" {
     // label strings + opcode mnemonics from the per-fn lower can be
     // released before emit_asm allocates the rendered assembly text.
     phase_reset("post_codegen")
+    // S1-step-1 — codegen (MIR->LIR) phase boundary. This is the phase
+    // PLAN.md #18 flags as super-linear; the prior cycle removed the
+    // arm64 stmt-loop O(N^2), the residual lives in lower_hir.
+    cg_profile_mark("codegen")
 
     asm_text = emit_asm(lmodule)
+    // S1-step-1 — emit (LIR->asm text) phase boundary.
+    cg_profile_mark("emit_asm")
 
     // Phase boundary 6: emit done. asm_text is the final bytestring that
     // gets written to disk; reset is safe (nothing downstream of write
