@@ -2328,7 +2328,8 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
         blocks: lctx.blocks,
         entry_block: lam_entry,
         arena_root: lctx.arena_root,
-        def_line: e.span.line
+        def_line: e.span.line,
+        gpu_kind: GPU_KIND_CPU
     }
     _lr_lambdas.push(lam_func)
 
@@ -2546,6 +2547,19 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     }
 
     let ret_local = _miss_local()
+    // RFC 055 055-P3c — propagate the HIR FnDecl's `@gpu_kernel` /
+    // `@gpu_device` annotation to MFunc.gpu_kind so the NVPTX codegen
+    // can partition the module's functions. CPU codegen targets ignore
+    // the field (F-RFC055-CPU-CODEGEN-UNTOUCHED holds; the CPU emit
+    // path is byte-identical when no @gpu_* function is present).
+    let mut __gpu_kind = GPU_KIND_CPU
+    let mut __ai = 0
+    while __ai < len(it.annotations) {
+        let __an = it.annotations[__ai].name
+        if __an == "gpu_kernel" { __gpu_kind = GPU_KIND_KERNEL }
+        if __an == "gpu_device" { __gpu_kind = GPU_KIND_DEVICE }
+        __ai = __ai + 1
+    }
     return MFunc {
         // F6 P0c-2 — forced copy: it.name is the HItem's name handle
         // (hmodule outlives the streaming loop). PLAN-stage3-footprint-F6.md.
@@ -2558,7 +2572,8 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         arena_root: ctx.arena_root,
         // #13 DWARF .loc — carry the fn-definition source line through to
         // codegen so it can emit a `.loc 1 <line> 0` directive.
-        def_line: it.span.line
+        def_line: it.span.line,
+        gpu_kind: __gpu_kind
     }
 }
 

@@ -395,7 +395,8 @@ fn _inl_func(module: MModule, f: MFunc) -> MFunc {
         blocks: blocks,
         entry_block: f.entry_block,
         arena_root: f.arena_root,
-        def_line: f.def_line
+        def_line: f.def_line,
+        gpu_kind: GPU_KIND_CPU
     }
 }
 

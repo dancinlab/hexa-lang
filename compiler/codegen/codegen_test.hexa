@@ -116,7 +116,8 @@ fn _build_case_id() -> MModule {
         blocks: blocks,
         entry_block: 0,
         arena_root: 1,
-        def_line: 0
+        def_line: 0,
+        gpu_kind: GPU_KIND_CPU
     }
     let mut fns = []
     fns.push(mf)
@@ -154,7 +155,8 @@ fn _build_case_add() -> MModule {
         blocks: blocks,
         entry_block: 0,
         arena_root: 1,
-        def_line: 0
+        def_line: 0,
+        gpu_kind: GPU_KIND_CPU
     }
     let mut fns = []
     fns.push(mf)
