@@ -40,6 +40,7 @@ import "./codegen/thumbv7em_eabihf.hexa"
 import "./codegen/stream.hexa"
 import "./check/target_gate.hexa"
 import "./emit/asm.hexa"
+import "./emit/macho_arm64.hexa"
 import "./diag/catalog.hexa"
 import "./diag/builder.hexa"
 import "./diag/render.hexa"
@@ -300,6 +301,12 @@ let mut target = detect_default_target()
 let mut emit_kind = "exec"
 let mut error_format = "pretty"
 let mut linker_kind = "system"
+// RFC 063 § P0 (S7) — `--backend=native` selects the hexa-native Mach-O
+// arm64 object emitter (`compiler/emit/macho_arm64.hexa::pack_lir +
+// serialize`) instead of writing `.s` text and forking `as`. Default is
+// the legacy `as`/clang path so the campaign cycles stay opt-in until
+// F-P0-OBJEQ corpus PASS.
+let mut backend_kind = "system"
 let mut source_path = ""
 let mut keep_temp = false
 let mut verbose = false
@@ -379,6 +386,12 @@ while ai < len(user_argv) {
         ai = ai + 1
     } else if len(a) >= 9 && a.substring(0, 9) == "--linker=" {
         linker_kind = a.substring(9, len(a))
+        ai = ai + 1
+    } else if len(a) >= 10 && a.substring(0, 10) == "--backend=" {
+        // S7 P0 — `--backend=native` routes `--emit=obj` through the
+        // hexa-side Mach-O writer. Any other value (incl. default
+        // "system") keeps the legacy `as`/clang path.
+        backend_kind = a.substring(10, len(a))
         ai = ai + 1
     } else if len(a) > 5 && a.substring(0, 6) == "--opt=" {
         opt_level = to_int(a.substring(6, len(a)))
@@ -764,6 +777,23 @@ if stream_mode && target == "arm64-apple-darwin" {
     // PLAN.md #18 flags as super-linear; the prior cycle removed the
     // arm64 stmt-loop O(N^2), the residual lives in lower_hir.
     cg_profile_mark("codegen")
+
+    // ── Emit OBJ (native, RFC 063 § P0) ─────────────────────────
+    //
+    // When `--backend=native` and `target=arm64-apple-darwin`, write
+    // the Mach-O `.o` directly via `pack_lir` + `serialize`. Skips
+    // `.s` text + `as`/clang fork entirely. Branches early — out_path
+    // is final and we exit here.
+    if emit_kind == "obj" && backend_kind == "native" && target == "arm64-apple-darwin" {
+        let obj_data = pack_lir(lmodule)
+        let obj_bytes = serialize(obj_data)
+        write_bytes(out_path, obj_bytes)
+        if verbose {
+            eprintln("hexa-compiler: emitted Mach-O .o via native backend ("
+                     + to_string(len(obj_bytes)) + " bytes) to " + out_path)
+        }
+        exit(0)
+    }
 
     asm_text = emit_asm(lmodule)
     // S1-step-1 — emit (LIR->asm text) phase boundary.

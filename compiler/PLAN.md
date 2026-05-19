@@ -4234,3 +4234,112 @@ cycle 7 driver wiring + F-P0-OBJEQ corpus PASS.
 
 cc --regen / binary promote: 미수행. macho_arm64.hexa NOT yet imported
 by compiler/main.hexa.
+
+
+### 2026-05-20 — S7-P0 cycle 7: F-P0-OBJEQ FULL CORPUS PASS 4/4 (RFC 063 § P0 CLOSED) 🛸🛸🛸
+
+RFC 063 § P0 의 closure gate F-P0-OBJEQ 통과 — trivial / if / while /
+fib 모든 corpus 의 `__text` 가 clang `-c -arch arm64` oracle 과 **byte-
+for-byte 동일**.
+
+**한 줄**: real hexa source → aprime_cc frontend (lex+parse+check+lower)
+→ MIR optimizer → LIR codegen (arm64_darwin) → OUR `pack_lir + serialize`
+→ Mach-O `.o` `__text` bytes 가 clang oracle 과 동일. 외부 assembler 0건
+의 path 가 4 corpus 에서 측정 증명.
+
+**한 cycle 에 발견된 4 버그 + fix** (모두 cycle 6 잠재 결함):
+
+1. `<mach-o/loader.h>` `#define` 충돌 — `let CPU_TYPE_ARM64 = …` 가 runtime.c
+   가 include 한 시스템 헤더의 `#define CPU_TYPE_ARM64 …` 와 충돌해서
+   transpile 단계에서 invalid C decl. **fix**: 모든 public 상수 `MACHO_`
+   prefix 화 (`MACHO_MH_OBJECT` · `MACHO_CPU_TYPE_ARM64` · `MACHO_LC_*` ·
+   `MACHO_ARM64_RELOC_*`). 내부 callers 업데이트.
+
+2. `movz` / `movk` / `uxtw` 등 lowercase mnemonic `_lir_op_uppercase` 매핑
+   누락 → encoder 가 0 (= UDF) emit, `otool -tv` 에 `udf #0x0` 출현.
+   **fix**: 15 신규 매핑 추가 (`movz` · `movk` · `uxtw` · `uxtb` · `uxth` ·
+   `sxtw` · `sxtb` · `sxth` · `ubfm` · `sbfm` · `lsl` · `lsr` · `asr` ·
+   `cset` · `csel`) + 새 인코딩 규칙 5개 (MOVZ/MOVK + UXTW/UXTB/UXTH/SXTW
+   = UBFM/SBFM aliases).
+
+3. darwin-mangling lookup 불일치 — LIR `_arm64_op_label("fib")` 는 raw
+   name 저장; `_fmt_label` 는 `.s` 출력에서만 darwin `_` prepend. OUR
+   encoder 가 raw "fib" 받아 obj.symbols (darwin-mangled "_fib" 저장)
+   에서 못 찾음 → N_UNDF 새로 push → intra-module pre-patch 미발동 +
+   nm 출력에 `_` 빠진 이름. **fix**: `pack_lir` post-walk 가 pending
+   name 이 `_` 로 시작 안 하면 `_darwin_mangle` 적용 후 lookup. recursive
+   `bl fib` → defined `_fib` 매칭 → pre-patch 발동. extern `hexa_exit`
+   → `_hexa_exit` 로 N_UNDF push → `nm` `U _hexa_exit` 정확.
+
+4. `lmodule` scope — `let lmodule` 가 `if stream_mode else { … }` 블록
+   내부 (line 757-789). 내 새 `--emit=obj --backend=native` 분기를 그
+   블록 밖에 두어서 `undeclared identifier 'lmodule'` clang 오류. **fix**:
+   emit-obj 분기를 else 블록 INSIDE 로 이동, asm_text emit 바로 앞.
+
+**Intra-module BL pre-patch (cycle 7 신규 추가)**:
+
+- `pack_lir` post-walk 가 reloc target 이 defined 심볼 (section != 0)
+  이면 BL 의 imm26 도 사전 patch + reloc record 유지. clang 의 동일
+  behavior (`0x97ffffe8` 패턴 — recursive `bl _fib` 가 PC-rel delta 로
+  pre-patch + reloc 도 emit) 와 byte-eq.
+- Bare extern (libc / runtime) 은 N_UNDF 의 section=0 이라 pre-patch
+  skip, bare 0x94000000 + reloc.
+
+**측정 (arm64-Mac local)** — 4/4 corpus 전부 byte-eq:
+
+```
+$ for t in trivial if while fib; do
+    /tmp/aprime_s7 _drv.hexa --target=arm64-apple-darwin --emit=obj --backend=native \
+        -o /tmp/corpus_${t}.ours.o compiler/test/macho_p0_corpus/${t}.hexa
+    /tmp/aprime_s7 _drv.hexa --target=arm64-apple-darwin --emit=asm \
+        -o /tmp/corpus_${t}.s compiler/test/macho_p0_corpus/${t}.hexa
+    xcrun clang -c -arch arm64 /tmp/corpus_${t}.s -o /tmp/corpus_${t}.ref.o
+    diff <(xcrun otool -s __TEXT __text /tmp/corpus_${t}.ours.o | tail -n +3) \
+         <(xcrun otool -s __TEXT __text /tmp/corpus_${t}.ref.o  | tail -n +3)
+  done
+
+  trivial.hexa: __text byte-eq PASS  (48 bytes · 12 instr · 2 reloc)
+  if.hexa:      __text byte-eq PASS  (cond branch + label)
+  while.hexa:   __text byte-eq PASS  (backward branch + cbz loop)
+  fib.hexa:     __text byte-eq PASS  (recursion + 6 extern + 10 BR26 relocs)
+```
+
+`nm` cross-check (fib):
+
+```
+$ xcrun nm /tmp/corpus_fib.ours.o
+0000000000000000 T _fib                  ← Defined Text @ 0x0
+                 U _hexa_add_slow         ← N_UNDF extern
+                 U _hexa_cmp_lt
+                 U _hexa_exit
+                 U _hexa_set_args
+                 U _hexa_sub
+                 U _hexa_truthy
+00000000000000a8 T _main                 ← Defined Text @ 0xa8
+```
+
+darwin-mangled `_` prefix 모두 정확 (cycle 6 까지의 `hexa_exit` 누락
+fix).
+
+**HONEST SCOPE (g3, over-claim 0)**:
+
+- 4/4 corpus = trivial / if / while / fib 한정. compiler/main.hexa 같은
+  realistic 컴파일러 소스 self-host byte-eq 는 다음 사이클의 baton.
+- `__text` byte-eq 만 PASS. `LC_BUILD_VERSION` + 추가 strtab/symtab
+  entries (clang 의 `ltmp0` 류 debug 로컬 심볼) 는 우리가 미emit — 본
+  cycle 게이트 범위 밖, RFC 063 § P0 strip-nondet 명시 대상.
+- 자족적 binary (.o → ld → exec) 까지 가는 path 는 P1 (hexa_ld) 의 일.
+  본 cycle 은 P0 compile-time .o byte-eq 만.
+
+**RFC 063 phasing 진척**:
+
+| Phase | 범위 | 상태 |
+|-------|------|------|
+| P0 | Mach-O arm64 obj emitter | ✅ **CLOSED** (cycle 1-7) |
+| P1 | hexa_ld real linker | next |
+| P2 | ELF x86_64 emitter + linker | |
+| P3 | flip default + F-P3-ZERO-EXTERN | |
+
+**cc --regen / binary promote**: compiler/main.hexa 변경 → @D
+g_commit_push_deploy 게이트 발동. 본 cycle 은 worktree branch source-only;
+main 머지 cycle 에서 동반 promote.

@@ -33,33 +33,42 @@
 // ─────────────────────────────────────────────────────────────────
 // Mach-O 64-bit constants (subset needed for arm64 `.o`)
 // ─────────────────────────────────────────────────────────────────
+//
+// All public constant names are prefixed `MACHO_` / `MACHO_LC_` / `MACHO_S_`
+// / `MACHO_ARM64_RELOC_`. The bare-name forms (`MH_OBJECT`, `LC_SEGMENT_64`,
+// `CPU_TYPE_ARM64`, etc.) collide with the same-name `#define` macros in
+// `<mach-o/loader.h>` / `<mach/machine.h>` that the C runtime
+// transitively includes — preprocessor expansion would mangle our
+// `HexaVal CPU_TYPE_ARM64 = ...` decl into invalid C. The MACHO_ prefix
+// is unique to hexa-side constants.
 
 // Mach-O file magic (little-endian 64-bit).
-let MH_MAGIC_64 = 0xfeedfacf
+let MACHO_MH_MAGIC_64 = 0xfeedfacf
 
 // File types we emit.
-let MH_OBJECT  = 1   // .o relocatable
-let MH_EXECUTE = 2   // executable (P1 uses this, not P0)
+let MACHO_MH_OBJECT  = 1   // .o relocatable
+let MACHO_MH_EXECUTE = 2   // executable (P1 uses this, not P0)
 
 // CPU types.
-let CPU_TYPE_ARM64 = 0x0100000c  // 0x01000000 | 12 (arm64)
-let CPU_SUBTYPE_ARM64_ALL = 0
+let MACHO_CPU_TYPE_ARM64 = 0x0100000c  // 0x01000000 | 12 (arm64)
+let MACHO_CPU_SUBTYPE_ARM64_ALL = 0
 
 // Load commands we emit.
-let LC_SEGMENT_64    = 0x19
-let LC_SYMTAB        = 0x02
-let LC_DYSYMTAB      = 0x0b
-let LC_BUILD_VERSION = 0x32
+let MACHO_LC_SEGMENT_64    = 0x19
+let MACHO_LC_SYMTAB        = 0x02
+let MACHO_LC_DYSYMTAB      = 0x0b
+let MACHO_LC_BUILD_VERSION = 0x32
 
 // Section flags.
-let S_REGULAR              = 0x00000000
-let S_ATTR_PURE_INSTRUCTIONS = 0x80000000
+let MACHO_S_REGULAR               = 0x00000000
+let MACHO_S_ATTR_PURE_INSTRUCTIONS = 0x80000000
 
 // arm64 relocation types (`mach-o/arm64/reloc.h`).
-let ARM64_RELOC_UNSIGNED      = 0
-let ARM64_RELOC_BRANCH26      = 2
-let ARM64_RELOC_PAGE21        = 3
-let ARM64_RELOC_PAGEOFF12     = 4
+let MACHO_ARM64_RELOC_UNSIGNED   = 0
+let MACHO_ARM64_RELOC_BRANCH26   = 2
+let MACHO_ARM64_RELOC_PAGE21     = 3
+let MACHO_ARM64_RELOC_PAGEOFF12  = 4
+
 
 // ─────────────────────────────────────────────────────────────────
 // Builder state — the in-progress Mach-O object as buffers
@@ -175,7 +184,20 @@ fn imm_val(s: string) -> i64 {
 // patches the bits.
 fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
     // ── Move ──
-    // MOVZ Xd, #imm16  (`MOV Xd, #imm` alias when imm fits 16 bits)
+    // MOVZ Xd, #imm16  (zero-extend; canonical 16-bit immediate move).
+    // The shifted variant `MOVZ Xd, #imm16, lsl #N` (N ∈ {0,16,32,48})
+    // sets bits 22:21 = N/16; LIR may emit it as the 4th operand "lsl"
+    // + 5th operand "#N" but cycle 7 ships the unshifted form only.
+    // MOVK Xd, #imm16 (keep — OR the immediate, preserves others).
+    if (op == "MOVZ" || op == "MOVK") && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
+        let rd = xreg_idx(ops[0])
+        let imm = imm_val(ops[1]) & 0xFFFF
+        let mut base = 0xD2800000      // MOVZ
+        if op == "MOVK" { base = 0xF2800000 }   // MOVK
+        return base | (imm << 5) | rd
+    }
+    // MOV Xd, #imm16  (legacy alias — `MOV Xd, #imm` is a MOVZ alias
+    // when the immediate fits 16 bits with no shift).
     if op == "MOV" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = xreg_idx(ops[0])
         let imm = imm_val(ops[1]) & 0xFFFF
@@ -344,6 +366,73 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         if c >= 0 { return 0x54000000 | c }
     }
 
+    // ── Bitfield / extension aliases (UBFM-family) ──
+    // UBFM Xd, Xn, #immr, #imms   (64-bit, sf=1, opc=10, N=1)
+    //   0xD3400000 | (immr<<16) | (imms<<10) | (rn<<5) | rd
+    // UXTW Xd, Wn  is an alias for UBFM Xd, Xn, #0, #31  (zero-extend
+    // the low 32 bits, clear the upper). codegen uses it to widen
+    // 32-bit values to the 64-bit ABI slot.
+    if op == "UXTW" && len(ops) == 2 {
+        let rd = xreg_idx(ops[0])
+        // Wn shares the same register-number encoding as Xn (low 5 bits).
+        // Accept both "wN" and "xN" form.
+        let nm = ops[1]
+        let mut rn = -1
+        let nn = len(nm)
+        if nn >= 2 && (nm.substring(0, 1) == "w" || nm.substring(0, 1) == "W") {
+            let rest = nm.substring(1, nn).to_int()
+            if rest >= 0 && rest <= 30 { rn = rest }
+            if nm == "wzr" || nm == "WZR" { rn = 31 }
+        } else {
+            rn = xreg_idx(nm)
+        }
+        if rd >= 0 && rn >= 0 {
+            return 0xD3400000 | (0 << 16) | (31 << 10) | (rn << 5) | rd
+        }
+    }
+    // UXTB Xd, Wn  →  UBFM Xd, Xn, #0, #7
+    if op == "UXTB" && len(ops) == 2 {
+        let rd = xreg_idx(ops[0])
+        let nm = ops[1]
+        let nn = len(nm)
+        let mut rn = -1
+        if nn >= 2 && (nm.substring(0, 1) == "w" || nm.substring(0, 1) == "W") {
+            let rest = nm.substring(1, nn).to_int()
+            if rest >= 0 && rest <= 30 { rn = rest }
+        } else { rn = xreg_idx(nm) }
+        if rd >= 0 && rn >= 0 {
+            return 0xD3400000 | (0 << 16) | (7 << 10) | (rn << 5) | rd
+        }
+    }
+    // UXTH Xd, Wn  →  UBFM Xd, Xn, #0, #15
+    if op == "UXTH" && len(ops) == 2 {
+        let rd = xreg_idx(ops[0])
+        let nm = ops[1]
+        let nn = len(nm)
+        let mut rn = -1
+        if nn >= 2 && (nm.substring(0, 1) == "w" || nm.substring(0, 1) == "W") {
+            let rest = nm.substring(1, nn).to_int()
+            if rest >= 0 && rest <= 30 { rn = rest }
+        } else { rn = xreg_idx(nm) }
+        if rd >= 0 && rn >= 0 {
+            return 0xD3400000 | (0 << 16) | (15 << 10) | (rn << 5) | rd
+        }
+    }
+    // SXTW Xd, Wn  →  SBFM Xd, Xn, #0, #31   (opc=00 base 0x93400000)
+    if op == "SXTW" && len(ops) == 2 {
+        let rd = xreg_idx(ops[0])
+        let nm = ops[1]
+        let nn = len(nm)
+        let mut rn = -1
+        if nn >= 2 && (nm.substring(0, 1) == "w" || nm.substring(0, 1) == "W") {
+            let rest = nm.substring(1, nn).to_int()
+            if rest >= 0 && rest <= 30 { rn = rest }
+        } else { rn = xreg_idx(nm) }
+        if rd >= 0 && rn >= 0 {
+            return 0x93400000 | (0 << 16) | (31 << 10) | (rn << 5) | rd
+        }
+    }
+
     // ── Compare and branch (zero / non-zero) ──
     // CBZ Xt, label  — imm19 patched by reloc
     if op == "CBZ" && len(ops) == 2 {
@@ -452,10 +541,10 @@ fn _str_fixed(out: [Int], s: String, n: Int) {
 //         uint32_t reserved;     // 64-bit reserved word, always 0
 //     };
 fn _emit_mach_header(out: [Int], ncmds: Int, sizeofcmds: Int, flags: Int) {
-    _u32_le(out, MH_MAGIC_64)
-    _u32_le(out, CPU_TYPE_ARM64)
-    _u32_le(out, CPU_SUBTYPE_ARM64_ALL)
-    _u32_le(out, MH_OBJECT)
+    _u32_le(out, MACHO_MH_MAGIC_64)
+    _u32_le(out, MACHO_CPU_TYPE_ARM64)
+    _u32_le(out, MACHO_CPU_SUBTYPE_ARM64_ALL)
+    _u32_le(out, MACHO_MH_OBJECT)
     _u32_le(out, ncmds)
     _u32_le(out, sizeofcmds)
     _u32_le(out, flags)
@@ -486,7 +575,7 @@ fn _emit_seg64_cmd(out: [Int],
                    fileoff: Int, filesize: Int,
                    nsects: Int) {
     let cmdsize = 72 + 80 * nsects
-    _u32_le(out, LC_SEGMENT_64)
+    _u32_le(out, MACHO_LC_SEGMENT_64)
     _u32_le(out, cmdsize)
     _str_fixed(out, segname, 16)
     _u64_le(out, vmaddr)
@@ -548,7 +637,7 @@ fn _emit_section_64(out: [Int],
 fn _emit_symtab_cmd(out: [Int],
                     symoff: Int, nsyms: Int,
                     stroff: Int, strsize: Int) {
-    _u32_le(out, LC_SYMTAB)
+    _u32_le(out, MACHO_LC_SYMTAB)
     _u32_le(out, 24)
     _u32_le(out, symoff)
     _u32_le(out, nsyms)
@@ -579,7 +668,7 @@ fn _emit_symtab_cmd(out: [Int],
 // The other 17 fields stay zero — no locals, no undef, no indirect, no
 // table-of-contents (TOC is a dynamic-library construct).
 fn _emit_dysymtab_cmd(out: [Int], nextdefsym: Int) {
-    _u32_le(out, LC_DYSYMTAB)
+    _u32_le(out, MACHO_LC_DYSYMTAB)
     _u32_le(out, 80)
     _u32_le(out, 0)          // ilocalsym
     _u32_le(out, 0)          // nlocalsym
@@ -805,6 +894,8 @@ fn _lir_op_uppercase(op: string) -> string {
     // Hand-mapped table — small, stable, faster + clearer than calling
     // a generic to_upper() pass.
     if op == "mov"   { return "MOV"  }
+    if op == "movz"  { return "MOVZ" }
+    if op == "movk"  { return "MOVK" }
     if op == "add"   { return "ADD"  }
     if op == "sub"   { return "SUB"  }
     if op == "mul"   { return "MUL"  }
@@ -818,6 +909,19 @@ fn _lir_op_uppercase(op: string) -> string {
     if op == "ret"   { return "RET"  }
     if op == "cbz"   { return "CBZ"  }
     if op == "cbnz"  { return "CBNZ" }
+    if op == "uxtw"  { return "UXTW" }
+    if op == "uxtb"  { return "UXTB" }
+    if op == "uxth"  { return "UXTH" }
+    if op == "sxtw"  { return "SXTW" }
+    if op == "sxtb"  { return "SXTB" }
+    if op == "sxth"  { return "SXTH" }
+    if op == "ubfm"  { return "UBFM" }
+    if op == "sbfm"  { return "SBFM" }
+    if op == "lsl"   { return "LSL"  }
+    if op == "lsr"   { return "LSR"  }
+    if op == "asr"   { return "ASR"  }
+    if op == "cset"  { return "CSET" }
+    if op == "csel"  { return "CSEL" }
     // Conditional branch: `b.eq` -> `B.EQ`. The encoder reads the
     // condition from the suffix; uppercasing the whole token preserves
     // the dot.
@@ -1209,7 +1313,22 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     let mut pi = 0
     while pi < np {
         let off  = pending_offsets[pi]
-        let name = pending_names[pi]
+        // arm64_darwin LIR stores branch target labels as the raw
+        // hexa name (`fib`, `hexa_exit`, …); `_fmt_label` prepends the
+        // darwin `_` only on `.s` emission. We need the mangled form
+        // both for `_find_sym_by_name` (against the darwin-mangled
+        // defined symbols pack_lir already pushed) AND for any new
+        // N_UNDF entry's strtab name (so `nm`/the linker see the same
+        // canonical `_xxx` form clang produces).
+        //
+        // Pre-mangled names (those that already start with `_` — e.g.
+        // an inner intra-module emit that bypassed `_fmt_label`) pass
+        // through unchanged.
+        let raw = pending_names[pi]
+        let mut name = raw
+        if len(raw) > 0 && raw.substring(0, 1) != "_" {
+            name = _darwin_mangle(raw)
+        }
         let mut idx = _find_sym_by_name(obj.symbols, obj.strtab, name)
         if idx < 0 {
             // Push an N_UNDF undef extern symbol entry. The Mach-O
@@ -1232,10 +1351,28 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         obj.relocs.push(Arm64Reloc {
             offset:  off,
             sym_idx: idx,
-            kind:    ARM64_RELOC_BRANCH26,
+            kind:    MACHO_ARM64_RELOC_BRANCH26,
             pcrel:   1,
             length:  2,
         })
+        // Intra-module pre-patch: when the target is a *defined*
+        // symbol in this .o (section != 0), clang patches the BL's
+        // imm26 with the PC-rel delta even though it also emits the
+        // relocation record. The linker then re-validates rather than
+        // having to compute the offset from scratch. Mirror that so
+        // F-P0-OBJEQ byte-eq holds on intra-module calls (recursion,
+        // helper fns).
+        let sym = obj.symbols[idx]
+        if sym.section != 0 {
+            let delta = (sym.value - off) / 4
+            let w0 = obj.text[off + 0]
+            let w1 = obj.text[off + 1]
+            let w2 = obj.text[off + 2]
+            let w3 = obj.text[off + 3]
+            let cur = w0 | (w1 << 8) | (w2 << 16) | (w3 << 24)
+            let patched = (cur & 0xFC000000) | (delta & 0x03FFFFFF)
+            _patch_word_le(obj.text, off, patched)
+        }
         pi = pi + 1
     }
     return obj
