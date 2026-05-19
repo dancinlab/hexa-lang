@@ -71,6 +71,85 @@ pub fn mol_atoms(m: Mol) -> any {
     return m.atoms
 }
 
+// ── Stage-2 kernel: graph descriptors (explicit-atom Mol) ───────────
+// Operate on a Mol holding an EXPLICIT atom list (incl H) + bonds.
+// (mol_from_smiles — hoisting the byte-parity-verified hexa-bio
+// parser — is the separate large Stage-2 deliverable; these
+// descriptors are bounded and SMILES-independent.)
+
+// CRC standard atomic weights (g/mol), common organic/inorganic set.
+// Unknown symbol -> 0.0 (caller's molecule should use known elements).
+fn _mol_atomic_weight(sym: string) -> float {
+    if sym == "H" { return 1.008 }
+    if sym == "C" { return 12.011 }
+    if sym == "N" { return 14.007 }
+    if sym == "O" { return 15.999 }
+    if sym == "F" { return 18.998403163 }
+    if sym == "P" { return 30.973761998 }
+    if sym == "S" { return 32.06 }
+    if sym == "Cl" { return 35.45 }
+    if sym == "Br" { return 79.904 }
+    if sym == "I" { return 126.90447 }
+    if sym == "Na" { return 22.98976928 }
+    if sym == "K" { return 39.0983 }
+    if sym == "Mg" { return 24.305 }
+    if sym == "Ca" { return 40.078 }
+    if sym == "Fe" { return 55.845 }
+    if sym == "Zn" { return 65.38 }
+    if sym == "Si" { return 28.085 }
+    if sym == "B" { return 10.81 }
+    return 0.0
+}
+
+// RDKit Descriptors.MolWt — sum of standard atomic weights over the
+// explicit atom list (so all H must be explicit in the Mol).
+pub fn mol_weight(m: Mol) -> float {
+    let at = m.atoms
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(at) {
+        s = s + _mol_atomic_weight(at[i])
+        i = i + 1
+    }
+    return s
+}
+
+// Lipinski HBA — count of N and O atoms (the Lipinski Ro5 definition).
+pub fn mol_hba(m: Mol) -> int {
+    let at = m.atoms
+    let mut k = 0
+    let mut i = 0
+    while i < len(at) {
+        let e = at[i]
+        if e == "N" || e == "O" { k = k + 1 }
+        i = i + 1
+    }
+    return k
+}
+
+// Lipinski HBD — number of H atoms covalently bonded to an N or O
+// (N-H + O-H). Uses the explicit bond list [[i, j, order], ...].
+pub fn mol_hbd(m: Mol) -> int {
+    let at = m.atoms
+    let bonds = m.bonds
+    let mut k = 0
+    let mut bi = 0
+    while bi < len(bonds) {
+        let bd = bonds[bi]
+        let ai = bd[0]
+        let aj = bd[1]
+        let ea = at[ai]
+        let eb = at[aj]
+        let a_h = ea == "H"
+        let b_h = eb == "H"
+        let a_no = ea == "N" || ea == "O"
+        let b_no = eb == "N" || eb == "O"
+        if (a_h && b_no) || (b_h && a_no) { k = k + 1 }
+        bi = bi + 1
+    }
+    return k
+}
+
 pub fn mol_status() -> str {
-    return "STAGE-1 — Mol container + mol_new/num_atoms/num_bonds/charge/atoms (absorbs: rdkit; SMILES parser + descriptors Stage-2)"
+    return "STAGE-2 (partial) — Stage-1 + mol_weight/mol_hba/mol_hbd (explicit-atom graph descriptors) (absorbs: rdkit; mol_from_smiles hoist + Crippen logP/Ertl TPSA still Stage-2)"
 }
