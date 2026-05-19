@@ -185,11 +185,76 @@ fn main() {
     let bad_c = atoms_from_cif("/tmp/_hxatoms_bad.cif")
     check("cif malformed -> empty", atoms_len(bad_c) == 0)
 
-    // EMT honestly deferred (Stage-2.5): must return the sentinel,
-    // never a fabricated energy.
-    let emt_e = atoms_emt_energy(cu_c)
-    check("emt_energy is honest stub",
-          emt_e.substring(0, 26) == "STAGE-2.5-NOT-IMPLEMENTED:")
+    // ── Stage-2.5: ASE EMT energy (atoms_emt_energy) ──────────────
+    // Published validation anchor (g3, no ase install ⇒ no .py golden):
+    // an ISOLATED atom has zero neighbours ⇒ sigma1 = 0 ⇒ ASE's EMT
+    // contributes exactly `energy -= E0`. The embedding term has the
+    // same closed-form limit (ds→∞ ⇒ E→E0·(0−1) = −E0). Hence
+    // atoms_emt_energy(isolated X) == −E0(X) EXACTLY.
+    let big = 30.0   // large cubic cell ⇒ truly isolated (no images in cutoff)
+    let bigcell = [[big, 0.0, 0.0], [0.0, big, 0.0], [0.0, 0.0, big]]
+    let nopbc = [false, false, false]
+
+    // Cu: E0 = -3.51 ⇒ isolated energy = +3.51 eV.
+    let iso_cu = atoms_new(["Cu"], [[0.0, 0.0, 0.0]], bigcell, nopbc)
+    let e_cu = atoms_emt_energy(iso_cu)
+    check("EMT isolated Cu == -E0 (3.51)", fabs(e_cu - 3.51) < 0.0000001)
+
+    // Pt: E0 = -5.85 ⇒ isolated energy = +5.85 eV.
+    let iso_pt = atoms_new(["Pt"], [[0.0, 0.0, 0.0]], bigcell, nopbc)
+    let e_pt = atoms_emt_energy(iso_pt)
+    check("EMT isolated Pt == -E0 (5.85)", fabs(e_pt - 5.85) < 0.0000001)
+
+    // Al: E0 = -3.28 ⇒ isolated energy = +3.28 eV.
+    let iso_al = atoms_new(["Al"], [[0.0, 0.0, 0.0]], bigcell, nopbc)
+    let e_al = atoms_emt_energy(iso_al)
+    check("EMT isolated Al == -E0 (3.28)", fabs(e_al - 3.28) < 0.0000001)
+
+    // Translation invariance: shifting the whole structure must not
+    // change the energy (EMT depends only on interatomic distances).
+    let iso_cu_shift = atoms_new(["Cu"], [[7.3, -2.1, 4.8]], bigcell, nopbc)
+    let e_cu_shift = atoms_emt_energy(iso_cu_shift)
+    check("EMT translation-invariant (1 atom)",
+          fabs(e_cu_shift - e_cu) < 0.0000001)
+
+    // Two well-separated isolated atoms (gap >> rc_list) ⇒ energy is
+    // exactly the sum of the two isolated-atom energies: -E0(Cu)-E0(Pt).
+    let pair_far = atoms_new(["Cu", "Pt"],
+                             [[0.0, 0.0, 0.0], [20.0, 0.0, 0.0]],
+                             bigcell, nopbc)
+    let e_far = atoms_emt_energy(pair_far)
+    check("EMT 2 far atoms == sum of isolated",
+          fabs(e_far - (3.51 + 5.85)) < 0.0000001)
+
+    // Dimer symmetry: a homonuclear Cu2 dimer — translating the dimer
+    // leaves the energy invariant (interacting pair, non-trivial).
+    let dimer = atoms_new(["Cu", "Cu"],
+                          [[0.0, 0.0, 0.0], [2.4, 0.0, 0.0]],
+                          bigcell, nopbc)
+    let e_dimer = atoms_emt_energy(dimer)
+    let dimer_shift = atoms_new(["Cu", "Cu"],
+                                [[5.0, 1.0, -3.0], [7.4, 1.0, -3.0]],
+                                bigcell, nopbc)
+    let e_dimer_shift = atoms_emt_energy(dimer_shift)
+    check("EMT dimer translation-invariant",
+          fabs(e_dimer - e_dimer_shift) < 0.000001)
+    // A bound Cu2 dimer must sit below 2 isolated Cu atoms (EMT binds).
+    check("EMT Cu2 dimer binds (E < 2 isolated)",
+          e_dimer < 2.0 * 3.51)
+    // Swapping the two identical-atom labels/order is a symmetry.
+    let dimer_swap = atoms_new(["Cu", "Cu"],
+                               [[2.4, 0.0, 0.0], [0.0, 0.0, 0.0]],
+                               bigcell, nopbc)
+    let e_dimer_swap = atoms_emt_energy(dimer_swap)
+    check("EMT dimer permutation-symmetric",
+          fabs(e_dimer - e_dimer_swap) < 0.000001)
+
+    // Unknown element ⇒ guarded 0.0 (no EMT row for Si).
+    let iso_si = atoms_new(["Si"], [[0.0, 0.0, 0.0]], bigcell, nopbc)
+    check("EMT unknown element -> 0.0", atoms_emt_energy(iso_si) == 0.0)
+
+    // atoms_emt_relax stays an honest Stage-2.5 sentinel (force
+    // functional deferred — see mod.hexa header).
     let emt_r = atoms_emt_relax(cu_c)
     check("emt_relax is honest stub",
           emt_r.substring(0, 26) == "STAGE-2.5-NOT-IMPLEMENTED:")
