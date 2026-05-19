@@ -677,3 +677,20 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   **상류 발견(규율화)**: hexa 는 줄바꿈을 statement 종료로 처리 →
   여러 줄 산술식 금지(행렬식은 중간변수 합산으로 분해). atoms 만
   완료; crystal/mol/mlff Stage-1 + 전(全) Stage-2 잔여.
+- 2026-05-19 — **T4 Stage-1 표면 완료: crystal/mol/mlff** (commit
+  `bab9eeb3`, `rfc043-hexa-torch`). atoms 와 동일 패턴(의존성 0 값
+  컨테이너 + ctor + 접근자, 무거운 Stage-2 프리미티브 문서화 연기):
+  · crystal: `Lattice`/`Structure` + lattice_new/volume(|det|)/abc
+    (row norms via sqrt) + structure_new/num_sites/species/volume
+  · mol: `Mol`{atoms,bonds,charge} + mol_new + num_atoms/num_bonds/
+    charge/atoms (SMILES 파서·descriptor 는 Stage-2; byte-parity
+    SMILES 파서가 이미 hexa-bio cmt_smiles_validation.hexa 에 존재 —
+    Stage-2 에서 공유본 hoist)
+  · mlff: `MlffResult` + mlff_result_new + e_per_atom/forces/magmoms/
+    relaxed (NNP 추론은 본질적 Stage-2 — grad/safetensors GNN)
+  검증: ubu-2 `stdlib/sci_stage1_test.hexa` __SCI_STAGE1_TEST__ PASS
+  (18/18) — cubic |det|=a³, FCC |det|=a³/4, abc norms, mol 음전하,
+  mlff Structure 라운드트립. **5 scaffold 중 atoms/crystal/mol/mlff
+  Stage-1 완료, quantum 은 이미 상당 구현. 전 Stage-2 커널 잔여**
+  (ASE bulk/neighborlist/EMT · pymatgen ops/CIF/PhaseDiagram · RDKit
+  SMILES/descriptor · MLFF GNN 추론 — 메가·수개월).
