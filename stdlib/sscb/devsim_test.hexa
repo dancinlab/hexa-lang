@@ -15,7 +15,7 @@
 // note (the bridge code is still correct; the dependency is just
 // absent). This keeps CI green on hosts without the devsim wheel.
 
-import "stdlib/sscb/devsim"
+import "stdlib/kernels/circuit/devsim"
 
 fn main() -> int {
     println("== devsim_test :: 1-D Si PN-diode bridge ==")

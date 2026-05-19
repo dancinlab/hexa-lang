@@ -13,8 +13,8 @@
 //        cross-check; THIS test is what earns the absorbed=true gate
 //        because no external simulator is in the loop.
 
-import "stdlib/sscb/wolfspeed"
-import "stdlib/sscb/vdmos"
+import "stdlib/kernels/circuit/wolfspeed"
+import "stdlib/kernels/circuit/vdmos"
 
 // datasheet reference (Wolfspeed C3M0021120K data sheet Rev.4, p2)
 let DS_RDSON_OHM = 0.021    // R_DS(on) typ — Vgs=15 V, Id=50 A

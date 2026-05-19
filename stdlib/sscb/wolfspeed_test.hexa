@@ -9,7 +9,7 @@
 //        real datasheet parity check + DEVSIM TCAD comparison (Stage 3-4,
 //        deferred).
 
-import "stdlib/sscb/wolfspeed"
+import "stdlib/kernels/circuit/wolfspeed"
 
 fn _assert_eq_int(label: str, got: int, want: int, ok: int) -> int {
     if got == want {

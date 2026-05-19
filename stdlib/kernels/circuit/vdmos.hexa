@@ -1,5 +1,5 @@
 #!hexa strict
-// stdlib/sscb/vdmos.hexa — hexa-native VDMOS Level-1 DC device model
+// stdlib/kernels/circuit/vdmos.hexa — hexa-native VDMOS Level-1 DC device model
 //                          + Newton operating-point solvers
 //
 // @version 0.1.0

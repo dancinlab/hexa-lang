@@ -1,5 +1,5 @@
 #!hexa strict
-// stdlib/sscb/devsim.hexa — DEVSIM TCAD bridge (drift-diffusion device
+// stdlib/kernels/circuit/devsim.hexa — DEVSIM TCAD bridge (drift-diffusion device
 //                          physics) — hexa-native driver
 //
 // @version 0.1.0

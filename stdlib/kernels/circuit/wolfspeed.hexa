@@ -1,5 +1,5 @@
 #!hexa strict
-// stdlib/sscb/wolfspeed.hexa — SPICE `.lib` parser + Wolfspeed C3M/E3M
+// stdlib/kernels/circuit/wolfspeed.hexa — SPICE `.lib` parser + Wolfspeed C3M/E3M
 //                              subset typed-AST + `.PARAM` resolver
 //
 // @version 0.1.0
