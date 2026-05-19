@@ -3193,3 +3193,27 @@ failure loader-less and builds clean in the main checkout (which ships
 `build/hexa_module_loader`), proving the differentiator is the compiled
 loader, not the query/UriEncode code. Pointing `HEXA_MODULE_LOADER` at
 a compiled loader restores correct flatten + 25/25. No case weakened.
+
+### 2026-05-19 — inbox: enum-variant access miscodegen (codegen_c2) fix drafted, parse-clean
+demiurge-filed inbox patch `enum-variant-access-miscodegen-as-field-codegen-c2.md`.
+Root cause confirmed: `<EnumName>.<VARIANT>` (e.g. `RegionShape.K_BY_K`)
+falls through the generic `if k == "Field"` arm in `self/codegen_c2.hexa`
+→ emits `hexa_map_get_ic(RegionShape, "K_BY_K", &ic)` where `RegionShape`
+is a type name with no C value → clang "use of undeclared identifier".
+Shape-A surgical codegen-side fix landed in `self/codegen_c2.hexa`:
+module-scope `_enum_names` list + `_enum_names_add`/`_is_enum_name`
+helpers; `gen2_enum_decl` registers every enum `node.name` (decl pass,
+single chokepoint for both EnumDecl routings); the Field arm now returns
+`node.left.name + "_" + node.name` (the existing `gen2_enum_decl`
+`#define <EnumName>_<VARIANT>`) when `node.left` is a bare Ident on a
+known enum name. Non-enum field access unchanged; `_enum_names` reset at
+both codegen TU-init points alongside `_resolved_modules`/comptime sets.
+**Measured: `hexa_real parse self/codegen_c2.hexa` parse-clean.** Runtime
+end-to-end (leighton/sweep `hexa run`) verify-PENDING — deployed
+`self/native/hexa_v2` bootstrap binary predates this source edit; the
+stale binary still reproduces the exact bug (`#define RegionShape_K_BY_K`
+present + `hexa_map_get_ic(RegionShape,...)` emitted), confirming the
+diagnosis and that the source fix targets that emission. Binary
+rebuild/promote is a separate out-of-scope deploy step (no over-claim:
+fix drafted + parse-clean, runtime PASS not yet observed). Parser-side
+EnumPath rework deliberately not done (larger, more-principled option).

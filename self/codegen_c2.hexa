@@ -881,6 +881,9 @@ fn codegen_c2(ast) {
     // ComptimeConst const-fold table — must reset per codegen invocation.
     _comptime_const_names = []
     _comptime_const_nodes = []
+    // enum-variant access fix: reset enum-name set per codegen invocation
+    // so a second TU in the same process doesn't see stale enum names.
+    _enum_names = []
     // B20 / roadmap 55: reset @strict_fp TU flag per codegen invocation so
     // a second compilation in the same process doesn't inherit the first.
     _gen2_tu_has_strict_fp = 0
@@ -3914,6 +3917,17 @@ fn gen2_expr(node) {
     // rt#37: each call site gets a unique static HexaIC slot, emitted as a
     // file-scope global so it survives across calls within the same binary.
     if k == "Field" {
+        // enum-variant access fix (inbox: enum-variant-access-miscodegen):
+        // `<EnumName>.<VARIANT>` (e.g. RegionShape.K_BY_K) is an enum-variant
+        // constant, NOT a runtime field access. node.left is a bare Ident
+        // whose name is a known enum type → emit the gen2_enum_decl #define
+        // `<EnumName>_<VARIANT>`. Without this it falls through to the
+        // generic hexa_map_get_ic(RegionShape, "K_BY_K", &ic) — but
+        // `RegionShape` is a type name with no C runtime value ("undeclared
+        // identifier"). Non-enum field access is unchanged (falls through).
+        if type_of(node.left) != "string" && node.left.kind == "Ident" && _is_enum_name(node.left.name) {
+            return node.left.name + "_" + node.name
+        }
         let obj = gen2_expr(node.left)
         let field = node.name
         let id = _ic_counter
@@ -5871,6 +5885,12 @@ fn gen2_bitfield_accessor(struct_name, field_name, bit_offset) {
 
 fn gen2_enum_decl(node) {
     let name = node.name
+    // enum-variant access fix: record this enum's type name so the
+    // gen2_expr `if k == "Field"` arm can recognize `<EnumName>.<VARIANT>`
+    // and emit the `<EnumName>_<VARIANT>` #define below instead of a
+    // bogus hexa_map_get_ic(<typename>, ...) field access. This runs in
+    // the decl pass, before any fn body that references the enum.
+    _enum_names_add(name)
     let vc = len(node.variants)
     // @compact enum: compute minimum bits for tag
     let tag_bits = gen2_min_bits(vc)
@@ -6603,6 +6623,34 @@ let mut _known_int_set = []          // 64 buckets; each bucket is [name, ...]
 // via `hexa_float(HX_FLOAT(L) OP HX_FLOAT(R))`, bypassing hexa_add/sub/mul/
 // div runtime tag dispatch. Critical for training loops (99% float ops).
 let mut _known_float_set = []        // 64 buckets; each bucket is [name, ...]
+
+// ── enum-variant access fix (inbox: enum-variant-access-miscodegen) ──
+// `<EnumName>.<VARIANT>` (e.g. RegionShape.K_BY_K) is an enum-variant
+// constant, NOT a runtime field access — the gen2_enum_decl #define
+// `<EnumName>_<VARIANT>` is the only C symbol that exists. Collect every
+// `enum` node.name seen by gen2_enum_decl during the decl pass (decls
+// precede fn bodies — see EnumDecl routing ~L1024/L7372), then consult
+// it in the gen2_expr `if k == "Field"` arm so the bare-Ident-on-known-
+// enum case emits the #define instead of hexa_map_get_ic(<typename>,..).
+let mut _enum_names = []
+
+fn _enum_names_add(name) {
+    let mut i = 0
+    while i < len(_enum_names) {
+        if _enum_names[i] == name { return hexa_void() }
+        i = i + 1
+    }
+    _enum_names.push(name)
+}
+
+fn _is_enum_name(name) {
+    let mut i = 0
+    while i < len(_enum_names) {
+        if _enum_names[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
 
 fn _known_hash(key) {
     let mut h = 0
@@ -7459,6 +7507,9 @@ fn codegen_c2_full(ast) {
     // codegen_c2 and codegen_c2_full to avoid stale fold from prior call.
     _comptime_const_names = []
     _comptime_const_nodes = []
+    // enum-variant access fix: reset enum-name set in BOTH codegen entry
+    // points so a second TU doesn't see the prior call's enum names.
+    _enum_names = []
 
     // ── Pass 0: collect known global names for closure free-var analysis ──
     let mut gi = 0

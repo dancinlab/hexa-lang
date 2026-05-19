@@ -1,5 +1,21 @@
 # inbox patch — enum-variant access miscodegen'd as field-access (codegen_c2)
 
+> **status**: resolved-ssot — codegen-side Shape-A fix landed in
+> `self/codegen_c2.hexa`: `gen2_enum_decl` now registers every enum
+> `node.name` into a module-scope `_enum_names` set (decl pass, before fn
+> bodies); the `if k == "Field"` arm consults `_is_enum_name(node.left.name)`
+> for a bare-Ident left and emits the existing `<EnumName>_<VARIANT>`
+> #define instead of `hexa_map_get_ic(<typename>, ...)`. Non-enum field
+> access unchanged. Verified: `hexa_real parse self/codegen_c2.hexa`
+> parse-clean. Runtime end-to-end (leighton/sweep `hexa run`) is
+> verify-PENDING — the deployed `self/native/hexa_v2` bootstrap binary
+> still predates this source edit (binary rebuild/promote is an explicit
+> out-of-scope separate deploy step); the stale binary reproduces the
+> exact bug (`#define RegionShape_K_BY_K` present + `hexa_map_get_ic(
+> RegionShape,"K_BY_K")` emitted), confirming the diagnosis and that the
+> source fix targets precisely that emission. Parser-side EnumPath rework
+> deliberately NOT done (noted as the larger, more-principled option).
+
 > Filed 2026-05-19 by the demiurge consumer session (id002 path —
 > consumer hit a hexa-lang gap; inbox patch, never inline-patched).
 > One concept per file. Compiler-core change → review/PR per
