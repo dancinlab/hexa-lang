@@ -23,7 +23,7 @@ At-a-glance
   interim  : W1/W2/F speed the C path; relief only while the C fallback lives
   naming   : drop bootstrap vestiges (_v2 _c2 aprime s4) — separate cycle
   measured : clang = 80% of build wall; runtime.c recompile = 53% alone
-  status   : S1-step-1 done — lower_hir confirmed super-linear; S1-step-2 next
+  status   : S1 DONE — lower_hir O(N²) killed (170x @ N=400, byte-eq PASS); S2 next
 ```
 
 ---
@@ -100,14 +100,14 @@ The canonical staged order is already written in `compiler/PLAN.md` #18
 cross-links it:
 
 ```
-S1  codegen performance — DOMINANT blocker.
-    step-1 DONE (2026-05-20, commit 60946b8d): per-phase instrumentation
-      (HEXA_CG_PROFILE=1) + baseline measured. lower_hir (HIR->MIR) is
-      THE super-linear phase — 15/63/372 ms at N=100/200/400 (~5.9x per
-      N-doubling = O(N^2)+); codegen + emit are near-linear.
-    step-2 NEXT: hoist _lower_hexpr's LowerCtx accumulators (blocks /
-      locals / bindings) to module scope — kill the per-recursion
-      deep-copy of the growing LowerExprResult{ctx} that causes the O(N^2).
+S1  codegen performance — DONE 2026-05-20. The dominant blocker, closed.
+    step-1 (commit 8ab732bd): per-phase instrumentation HEXA_CG_PROFILE=1
+      + baseline — lower_hir (HIR->MIR) confirmed THE super-linear phase.
+    step-2 (commit ce4c9706): hoisted _lower_hexpr's LowerCtx accumulators
+      (locals/blocks/bindings) to module scope, killing the per-recursion
+      O(N^2) deep-copy of the growing LowerExprResult{ctx}. MEASURED:
+      lower_hir at N=400 = 1527 ms -> 9 ms (~170x); O(N^2) -> near-linear.
+      byte-eq 7/7 fixtures PASS (perf-only, zero semantic change).
 S2  full-closure codegen 완주 — the 21K-line compiler flatten emits .s
     within time. First point full-scope correctness becomes measurable.
 S3  assemble + link self-host — full .s -> assemble -> link -> 2nd-gen
@@ -357,3 +357,9 @@ ultimately removes.
   assembler) is already scaffolded — `compiler/main.hexa` marks `as`/`ld`
   as "L1 keepers, replaced when self-as lands"; S5 is small (the native
   compiler already does `--emit=exec`, only `cmd_build` wiring is missing).
+- 2026-05-20 — **S1 DONE.** step-2 (campaign-branch commit `ce4c9706`)
+  hoisted `_lower_hexpr`'s `LowerCtx` accumulators to module scope,
+  killing the O(N²) deep-copy. Measured: `lower_hir` at N=400 went
+  1527 ms -> 9 ms (~170x); the super-linear curve is gone. byte-eq 7/7
+  fixtures PASS — verified correctness-preserving. The dominant self-host
+  blocker is closed. Next: S2 (full-closure codegen 완주).
