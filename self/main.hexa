@@ -67,6 +67,9 @@ fn cmd_help() {
     println("  qrng selftest | chain | meta --backend=NAME")
     println("                                          provider sweep · resolved chain · backend meta")
     println("    e.g. hexa qrng collect --bytes=32 --source=mock_qrng --seed=42")
+    println("  cloud [run|nohup|poll|copy-to|copy-from] <host> [--port N] [--insecure] -- <argv...>")
+    println("                                          structured-argv remote dispatch (PR #81/#84/#86/#88)")
+    println("    e.g. hexa cloud run ubu-2 -- python3 train.py    (also: cloud copy-to / copy-from)")
     println("  sim-universe [status|selftest|anu|multiverse|qpu|qrng|bostrom|godel|")
     println("                fvd|stark|qdarwin|ca-qm|supremacy|mbs|dtc|z2gauge|")
     println("                preheating|multipolar|surface-code|ssh|hofstadter|dqpt|wdw]")
@@ -3696,6 +3699,77 @@ if len(av) < 3 {
                 if file_exists(inst_path) { qrng_script = inst_path }
             }
             cmd_run(qrng_script, qrng_args)
+        }
+    } else if sub == "cloud" {
+        // stdlib/cloud dispatch (PR #81 cycle A · #84 cloud_copy · #86 runpod · #88 CLI-first).
+        // stdlib/cloud/cloud_cli.hexa parses argv subcommand
+        // (run / nohup / poll / copy-to / copy-from / help / version;
+        // --port / --insecure connection flags) and dispatches to
+        // cloud_run / cloud_nohup / cloud_poll / cloud_copy_to /
+        // cloud_copy_from. Structured-argv discipline — every element
+        // POSIX-quoted, no remote-shell re-parse class.
+        //
+        // Preferred path = standalone compiled bin/hexa-cloud binary built
+        // by `hexa build stdlib/cloud/cloud_cli.hexa`. Falls back to
+        // cmd_run() (compile-then-exec after R7) when the binary is absent.
+        let __inst_c = install_dir_from_argv0()
+        let mut cloud_args = []
+        let mut ci = 3
+        while ci < len(av) {
+            cloud_args.push(av[ci])
+            ci = ci + 1
+        }
+        let mut cloud_bin = ""
+        if len(__inst_c) > 0 {
+            let inst_bin = __inst_c + "/bin/hexa-cloud"
+            if file_exists(inst_bin) { cloud_bin = inst_bin }
+        }
+        if len(cloud_bin) == 0 && file_exists("bin/hexa-cloud") {
+            cloud_bin = "bin/hexa-cloud"
+        }
+        if len(cloud_bin) > 0 {
+            let cli_c = shq(cloud_bin)
+            let mut cmd = cli_c
+            let mut ai = 0
+            while ai < len(cloud_args) {
+                let q = shq(cloud_args[ai])
+                cmd = cmd + " " + q
+                ai = ai + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut si = len(out) - mlen
+            while si >= 0 {
+                if out.substring(si, si + mlen) == marker {
+                    midx = si
+                    si = -1
+                } else {
+                    si = si - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            let mut cloud_script = "stdlib/cloud/cloud_cli.hexa"
+            if len(__inst_c) > 0 {
+                let inst_path = __inst_c + "/stdlib/cloud/cloud_cli.hexa"
+                if file_exists(inst_path) { cloud_script = inst_path }
+            }
+            cmd_run(cloud_script, cloud_args)
         }
     } else if sub == "sim-universe" {
         // RFC 046 — stdlib/sim_universe dispatch.
