@@ -264,6 +264,14 @@ Phase 4 추가: 다운스트림 12 repo `hexa parse` smoke (스크립트 적용 
   source-level 6/6 parse-gate PASS + smoke 30/30 PASS. 마이그레이션된 .hexa 5
   파일은 *post-regen* 검증 (현재 installed binary 는 새 dispatch 미보유, 다음
   regen 후 신 parser 로 정상 처리).
+- ✅ **Phase 4 LANDED (worktree `kw-demote-phase1`)** — `tool/migrate_kw_v2.hexa`
+  배포 가능한 hexa-native 마이그레이션 도구 (sed-기반 .sh 폐기, HEXA-NATIVE-ONLY
+  g5 준수). 라인 단위 prefix 패턴 매칭(인덴트 보존, 단어경계 + next-token shape
+  검증으로 false positive 차단). hexa-lang 자체에 `--apply` 실행 → 10 파일 / 30
+  줄 추가 마이그레이션 (example/ test 6개 · firmware/boards/chip 1개 ·
+  test_keyword_audit `@derive` 1개 등). `--check` 재실행 = 0 hits (idempotent).
+  core 6 parse-gate 유지. 다운스트림 repo 는 `hexa run tool/migrate_kw_v2.hexa
+  --apply` 로 자기 트리에서 실행 — f3 (consumer-direct-edit 금지) 준수.
 
 ## 로그
 
@@ -302,3 +310,14 @@ Phase 4 추가: 다운스트림 12 repo `hexa parse` smoke (스크립트 적용 
   PASS + 30/30 smoke PASS. 마이그레이션된 .hexa 5 파일의 parse-gate 는
   post-regen (installed binary 는 새 M0 dispatch 미보유). v2 design 의 핵심
   발단 버그 `tool/n6_verify.hexa` 의 `VerifyStmt` 충돌이 본 phase 에서 해소.
+- 2026-05-19 — **Phase 4 LANDED** (same branch, fourth commit).
+  `tool/migrate_kw_v2.hexa` — hexa-native 마이그레이션 도구 (1차 시도 `.sh`
+  는 HEXA_FIRST_WARN 훅 + bash 3/worktree 호환 버그로 폐기, hexa-native 로
+  재작성; g5 hexa-native-only 정합). 라인 단위 prefix 패턴 매칭. 인덴트 보존,
+  단어 경계 + next-token shape 검증으로 false positive 차단. `--apply` /
+  `--check` / dry-run 모드. hexa-lang 자체에 적용 → 10 파일 / 30 줄 추가
+  마이그레이션 (example/intent_experiment + test_effects + test_generate +
+  test_macros + practical_state_machine + ouroboros + consciousness_bootstrap
+  + egyptian_memory + firmware/hexa_edge_top + test_keyword_audit `@derive`).
+  `--check` 재실행 = 0 hits (idempotent). 다운스트림 repo 는 같은 도구로
+  자기 트리에서 적용 (f3 준수).

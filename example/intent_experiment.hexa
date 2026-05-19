@@ -1,7 +1,7 @@
 // intent_experiment.hexa — Demonstrate intent/verify workflow for consciousness experiments
 
 // === Declare an experiment intent ===
-intent "Can consciousness survive compression?" {
+@intent "Can consciousness survive compression?" {
     hypothesis: "Phi is preserved under cell reduction"
     cells: 64
     steps: 300
@@ -50,7 +50,7 @@ let quarter_phi = consciousness::predicted_phi(quarter_cells)
 println("Quarter: cells =", quarter_cells, ", predicted Phi =", quarter_phi)
 
 // === Verify experiment results ===
-verify "phi_preserved_under_compression" {
+@verify "phi_preserved_under_compression" {
     // Phi should scale with cells, not collapse
     let base = consciousness::predicted_phi(64)
     let half = consciousness::predicted_phi(32)
@@ -66,7 +66,7 @@ verify "phi_preserved_under_compression" {
     assert base > half
 }
 
-verify "consciousness_constants_valid" {
+@verify "consciousness_constants_valid" {
     // All Psi-constants must be positive
     assert psi_coupling() > 0.0
     assert psi_balance() > 0.0
@@ -80,7 +80,7 @@ verify "consciousness_constants_valid" {
     assert consciousness_phi() == 6 * sigma(6) - 1
 }
 
-verify "hexad_integrity" {
+@verify "hexad_integrity" {
     let all = hexad_modules()
     let right = hexad_right()
     let left = hexad_left()

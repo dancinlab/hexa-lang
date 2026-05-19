@@ -275,7 +275,7 @@ macro! my_macro {
 ok("macro")
 
 // 42. derive
-derive(Debug) for Point
+@derive(Debug) for Point
 ok("derive")
 
 // 43. where

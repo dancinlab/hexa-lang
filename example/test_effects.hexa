@@ -2,7 +2,7 @@
 // Tests: effect declaration, handling, resume, nesting, pure fn
 
 // ── Test 1: Define an effect with 2 operations ──────────────
-effect Console {
+@effect Console {
     fn log(msg: str) -> ()
     fn read_line() -> str
 }
@@ -19,7 +19,7 @@ let collected = handle {
 assert collected == 42
 
 // ── Test 3: Resume with a value ─────────────────────────────
-effect Ask {
+@effect Ask {
     fn question(prompt: str) -> str
 }
 
@@ -33,7 +33,7 @@ let answer = handle {
 assert answer == "Alice"
 
 // ── Test 4: Multiple effect calls in sequence ───────────────
-effect Counter {
+@effect Counter {
     fn next() -> int
 }
 
@@ -62,11 +62,11 @@ pure fn double(x: int) -> int {
 assert double(21) == 42
 
 // ── Test 6: Nested handle blocks ────────────────────────────
-effect Outer {
+@effect Outer {
     fn get_outer() -> int
 }
 
-effect Inner {
+@effect Inner {
     fn get_inner() -> int
 }
 
@@ -88,7 +88,7 @@ let nested = handle {
 assert nested == 300
 
 // ── Test 7: Effect with multiple parameters ─────────────────
-effect Math {
+@effect Math {
     fn compute(a: int, b: int) -> int
 }
 
@@ -102,7 +102,7 @@ let computed = handle {
 assert computed == 30
 
 // ── Test 8: Handle replaces behavior ────────────────────────
-effect Logger {
+@effect Logger {
     fn write(msg: str) -> int
 }
 
@@ -132,7 +132,7 @@ let fn_answer = handle {
 assert fn_answer == "Bob"
 
 // ── Test 10: Handler without resume returns handler value ───
-effect Choice {
+@effect Choice {
     fn pick() -> int
 }
 

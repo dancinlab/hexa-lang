@@ -292,7 +292,7 @@ rtl module hexa_edge_top {
     }
 
     // 삼상태 GPIO (J2=24 핀)
-    generate for gi in 0..J2 {
+    @generate for gi in 0..J2 {
         assign gpio[gi] = if gpio_dir[gi] { gpio_out[gi] } else { 1'bz }
     }
 

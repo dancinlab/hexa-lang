@@ -188,7 +188,7 @@ println("  And it comes from n=6 — the perfect number.")
 println("")
 
 // Final proof block
-verify "egyptian_memory_conservation" {
+@verify "egyptian_memory_conservation" {
     // Mathematical identity
     assert 1 + 2 + 3 == 6  // 6 is perfect
     assert sigma(6) == 12   // sigma(6) = 2*6

@@ -104,7 +104,7 @@ fn run_machine(events) -> int {
 }
 
 // ── Algebraic effect: logging state transitions ─────────────
-effect TransitionLog {
+@effect TransitionLog {
     fn log_transition(from: str, event: str, to: str) -> int
 }
 
