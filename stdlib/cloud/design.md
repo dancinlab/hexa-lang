@@ -116,6 +116,37 @@ The remote exit code is recovered from a `; echo __CLOUD_RC__=$?` marker line.
   `version`; `--port` / `--insecure` connection flags).
 - `README.md`, `design.md` (this file).
 
+## Cycle B-2 — `runpod` provider (GraphQL pod lifecycle)
+
+`stdlib/cloud/runpod.hexa` — reusable RunPod GraphQL wrappers. POSTs go
+through `stdlib/http` (`http_post_with_headers` over HTTPS curl) and JSON
+responses through `stdlib/alloc/json_object` (`json_object_get_path` with
+dotted nested-field access). No hand-rolled curl strings, no JSON line
+scans.
+
+- `runpod_create(api_key, gpu_type, image, pubkey, name) -> RunPodPod` —
+  on-demand pod with 22/tcp exposed, /workspace volume mount, PUBLIC_KEY
+  injected for sshd authorized_keys.
+- `runpod_create_cascade(api_key, gpu_types[], …) -> RunPodPod` — try
+  each GPU type in order; first that succeeds wins (RunPod capacity is
+  bursty).
+- `runpod_get_ssh_port(api_key, pod_id) -> RunPodSshPort` — query the
+  port map; returns the public IP+port mapped to private 22.
+- `runpod_wait_ssh(api_key, pod_id, max_tries, sleep_each_sec)` — polls
+  the port query AND a real `echo` round-trip via `cloud_run` until both
+  succeed or the budget expires.
+- `runpod_pod_opts(port) -> [str]` — the canonical ssh_opts for an
+  ephemeral RunPod pod (`-p <port> -o StrictHostKeyChecking=no -o
+  UserKnownHostsFile=/dev/null`); hand the same list to `cloud_run_opts`,
+  `cloud_copy_to_opts`, `cloud_copy_from_opts`.
+- `runpod_terminate(api_key, pod_id) -> int` — best-effort pod terminate.
+
+**Verified — live e2e PASS** (`stdlib/cloud/e2e_smoke.hexa`, 2026-05-19,
+~$0.10, ~38s on `NVIDIA A100-SXM4-80GB`): pod create → wait_ssh → echo →
+copy-to → remote sha256 == local → copy-from → round-trip byte-identical
+→ terminate. Every primitive of the cycle-A + cycle-B chain confirmed end
+to end against real RunPod infrastructure.
+
 ## Cycle B-1 — `cloud_copy_*` (file transfer)
 
 - `cloud_copy_to` / `cloud_copy_to_opts(host, ssh_opts, local, remote)` —
