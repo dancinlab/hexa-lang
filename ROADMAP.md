@@ -181,6 +181,9 @@ Parent roadmap **64** → 5 children **65–69**. 상세 정의 `.roadmap` 64–
   의 40+ `args()[2..]` 소비처를 `real_args()` 로 옮기는 breaking 마이그레이션이
   남음. 별도 cycle (g3 — 공유 툴체인 40-site 변경, 자율 1-pass 부적합).
   잔여분은 **RFC 062** 로 scoped (P0 audit → P1 consumer 이전 → P2 flip).
+  **062-P0 audit DONE (2026-05-19)** — 레이아웃-의존 소비처는 191개가 아니라
+  **4개 파일** (main.hexa dispatcher ~30 sites · module_loader 3 · codegen_c2
+  3 · ssot_mirror 2); 마이그레이션은 bounded·mechanical. RFC 062 §6b ledger.
 - **66 (M4, P1/Q2)** — `[DONE — 2026-05-19]` string method codegen 완성
   (t45b char_count/nth_char/char_substring/byte_at PASS) + symbol
   namespacing 작동 — `hexa cc --regen` 의 rename-awk 가 `__hexa_strlit_init`
@@ -193,10 +196,13 @@ Parent roadmap **64** → 5 children **65–69**. 상세 정의 `.roadmap` 64–
   shim 0개 — 제거 대상이 존재하지 않음. codegen 은 `hexa_` 접두 런타임 호출을
   직접 방출. 항목은 이미 충족.
 - **69 (M1, P2/Q4)** — `[SCOPED — 2026-05-19]` runtime 2-레이어 분할
-  (`runtime_core.c` ≤500 줄 + `runtime_hi.hexa`). runtime.c 13,336 줄 — 대형
-  리팩터. **RFC 061** 로 scoped: bootstrap-circularity 제약 + 경계 기준 + 4-phase
-  plan (P0 boundary ledger → P1 core 추출 → P2/P3 hi-tier 이전). 자율 1-pass
-  부적합 (half-done 분할 금지) — phase 단위 reviewable cycle 로 실행.
+  (`runtime_core.c` + `runtime_hi.hexa`). runtime.c 13,336 줄 — 대형 리팩터.
+  **RFC 061** 로 scoped: bootstrap-circularity 제약 + 경계 기준 + 4-phase plan.
+  **061-P0 boundary ledger DONE (2026-05-19)** — 522개 `hexa_*` 함수 분류;
+  측정 결과 ROADMAP 원래의 "≤500 줄" core 목표는 **달성 불가** — irreducible
+  core (representation + allocator + universal-codegen primitives) ≈ **2.4–3k
+  줄** (~98–120 함수). 목표를 "≈2.5k core / ≈10.8k hi" 로 정정. RFC 061 §5b.
+  P1 (core 추출) 부터는 phase 단위 reviewable cycle.
 
 ---
 

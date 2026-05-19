@@ -84,6 +84,37 @@ the (already audited) driver-slot sites.
   out to `hexa` are unaffected — the CLI surface (`hexa <verb> <args>`) does
   not change; only the internal `args()` array shape does.
 
+## 6b. Phase 062-P0 — audit ledger (COMPLETE 2026-05-19)
+
+Repo-wide grep of `args()` / cached-`av` indexing across self/ + tool/ +
+stdlib/. **Key finding: the layout-dependent surface is 4 files, not 191.**
+191 files *call* `args()`, but only 4 index it positionally for the doubled
+`[exec, exec, sub, user…]` layout — the rest pass the whole array or read
+`args()[0]` only.
+
+**Layout-dependent consumers (the real migration set):**
+
+| File | Sites | Current dependence | Post-dedup target |
+|------|-------|--------------------|-------------------|
+| `self/main.hexa` | ~30 `av[]` in the CLI dispatcher | `av[0]`=exec, `av[2]`=subcommand, `av[3..]`=sub-args; per-verb loop inits `ai=2 · ri=3 · bi2=3 · bi=4 · i=4(build) · cvi=5 · ti=3` | `av[0]` unchanged; subcommand→`av[1]`; every `av[N≥2]` and loop-init `N≥2` shifts −1 |
+| `self/module_loader.hexa` | 3 (`args()[1]`=self path, `[2]`=input, `[3]`=output) | invoked `module_loader <in> <out>` → doubled | `[0]`=self, `[1]`=in, `[2]`=out |
+| `self/codegen_c2.hexa` | `args()[2]` = input `.hexa` path (caller-dir hint, 3 ref sites L401/469/7687) | runs inside `hexa_v2 <src> <out>` → doubled | `args()[1]` = src |
+| `tool/ssot_mirror.hexa` | `args()[2]`=target, `[3]`=source (L316-320) | explicit "`raw[1..]` … we use `[2..]` under interp" comment | `args()[1..]` |
+
+`real_args()` already used at 5 sites (correct, layout-independent — no change).
+`args()[0]` sites (main.hexa:1487/1499/1507, all in `install_dir_from_argv0`)
+are exec-path reads — index 0 is **invariant** under dedup, no change.
+
+**Revised P1/P2 sizing:** P1 (migrate user-arg readers to `real_args()`)
+touches the 4 files above — `module_loader`, `codegen_c2`, `ssot_mirror` are
+small (≤3 sites each); `main.hexa`'s dispatcher is the bulk (~30 sites, all the
+uniform `−1` shift). P2 (drop the dup in `hexa_set_args`) is then a 5-line
+runtime.c change. The migration is **bounded and mechanical** — materially
+smaller than the RFC's initial "40+ sites" estimate once non-positional
+`args()` callers are excluded.
+
+**Gate for P1 start:** this ledger reviewed. ✅ P0 COMPLETE.
+
 ## 7. Non-goals
 
 - No change to the external CLI surface or any subcommand's behavior.

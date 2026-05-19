@@ -87,6 +87,43 @@ line-count.
 Each phase is an independent reviewable cycle. P1 is risk-free (file split). P2
 onward each carry a byte-eq falsifier per migrated function.
 
+## 5b. Phase 061-P0 — boundary ledger (COMPLETE 2026-05-19)
+
+`self/runtime.c` = **13,336 lines**, **522** `hexa_*`-prefixed function
+definitions (the §2 "~191" estimate was low — measured count is 522). Category
+classification per the §4.1 criterion:
+
+| Category | n | Layer | Rationale |
+|----------|---|-------|-----------|
+| `val` / `valstruct` / `struct` / constructors (`hexa_int/float/str/bool/void`) | ~26 | **CORE** | manipulate HexaVal representation bits (§4.1-1) |
+| `cmp` / `is` / `truthy` / tag inspection | ~18 | **CORE** | read NaN-box tag (§4.1-1) |
+| `ptr` / `null` | ~9 | **CORE** | raw pointer / representation (§4.1-1) |
+| `array` primitives (new/push/get/set/len) | ~15 of 59 | **CORE** | allocation hot path + universal codegen calls (§4.1-2,3) |
+| `map` primitives (new/set/get) | ~8 of 21 | **CORE** | universal codegen calls (§4.1-3) |
+| arithmetic (`add`/`sub`/…) | ~12 | **CORE** | codegen emits everywhere (§4.1-3) |
+| arena / alloc | ~10 | **CORE** | allocation hot path (§4.1-2) |
+| `array` HOFs (map/filter/reduce/sort/slice) | ~44 of 59 | HI | expressible in hexa over the primitives |
+| `str` (string methods) | 39 | HI | the natural P2 tranche-1 |
+| `math` | 34 | HI | thin libm wrappers |
+| `farr` (flat/unboxed array) | 67 | HI | specialized array tier — built over primitives |
+| `term` (ANSI) · `exec` · `format` · `json` · `regex` · `utc`/`time` · `host` · `pad` | ~70 | HI | libc/OS shells + pure logic |
+| `safetensors` · `tensor` · `ad` · `ansatz` · `adamw` · `phi` · `ham` · `swiglu` · `softmax` · `rms` (ML tier) | ~70 | HI | pure hexa-expressible numerics |
+| remaining misc | ~30 | mixed | resolved per-function in P1 |
+
+**Estimated CORE set ≈ 98–120 functions.** At a measured runtime.c mean of
+~18 lines/function plus the struct/macro/`#include` preamble (~600 lines of
+non-function CORE: the HexaVal union, NaN-box macros, tag constants), the
+honest **`runtime_core.c` projection is ≈ 2,400–3,000 lines** — **NOT ≤500**.
+
+**This is the P0 finding the RFC §4.2 explicitly anticipated.** The ROADMAP-69
+"≤500" figure is unachievable: the irreducible C core (representation + allocator
++ universal-codegen primitives) is ~2.4–3 k lines. The RFC deliverable stands —
+*a clean 2-layer split* — but the ROADMAP target line is corrected here from
+"≤500" to "**≈2.5 k core / ≈10.8 k hi**". P1 should be re-gated on "core
+contains only §4.1-qualifying functions", not on a line count.
+
+**Gate for P1 start:** ledger reviewed + core size measured. ✅ P0 COMPLETE.
+
 ## 6. Falsifier battery (pre-registered)
 
 1. **F1 self-host fixpoint** — after every phase, `hexa cc --regen` produces a

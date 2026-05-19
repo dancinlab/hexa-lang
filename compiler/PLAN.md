@@ -2435,3 +2435,25 @@ honest closure: **Shape A (fully implemented + validated)** for the bounded
 items (#1 interp-residue, #2 range-slice, #3 default-param triage, ROADMAP
 66/67/68); **Shape B (RFC drafted + scaffold)** for the multi-cycle items
 (ROADMAP 65/69, RFC 055). No item left unscoped; no closure over-claimed.
+
+### 2026-05-19 — RFC 061-P0 + 062-P0 audit cycles COMPLETE
+
+Both audit-only first phases run to completion (zero code move):
+
+- **062-P0 (args() audit)** — repo-wide grep. Key finding: the `args()`
+  layout-dependent surface is **4 files, not 191** — `self/main.hexa` (~30
+  dispatcher `av[]` sites), `self/module_loader.hexa` (3), `self/codegen_c2.hexa`
+  (3), `tool/ssot_mirror.hexa` (2). The other 187 `args()` callers are
+  non-positional (whole-array or `[0]`-only). Migration is bounded + mechanical;
+  the RFC's "40+ sites" estimate revised down. Ledger: RFC 062 §6b.
+- **061-P0 (runtime boundary ledger)** — runtime.c measured at 13,336 lines /
+  **522** `hexa_*` functions (the "~191" estimate was low). Category
+  classification per the §4.1 criterion → CORE set ≈98–120 functions. Honest
+  finding: the ROADMAP-69 **"≤500-line core" target is unachievable** — the
+  irreducible C core (HexaVal representation + allocator + universal-codegen
+  primitives) projects to **≈2.4–3 k lines**. Target corrected to "≈2.5 k core
+  / ≈10.8 k hi"; P1 re-gated on the §4.1 criterion, not a line count. Ledger:
+  RFC 061 §5b. ROADMAP 69 line updated with the measured correction.
+
+Both P0 gates ("ledger reviewed") satisfied — P1 (062: migrate user-arg
+readers; 061: extract runtime_core.c) is unblocked as the next cycle.
