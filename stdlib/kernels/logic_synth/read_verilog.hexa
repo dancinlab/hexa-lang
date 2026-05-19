@@ -447,6 +447,15 @@ fn read_verilog(src: str) -> ReadVerilogResult {
             }
             st = _ps_take(st)
             let mut m = rtlil_new_module(name)
+            let mut tab = symtab_new()
+            // optional `#( parameter NAME = EXPR , … )` header
+            if _ps_peek(st) == "#" {
+                let ph = _rv_parse_param_header(st, tab)
+                st = ph.st; tab = ph.tab
+                if len(st.err) > 0 {
+                    return ReadVerilogResult { ok: 0, design: d, message: st.err }
+                }
+            }
             // optional (port-list); skip until ; or endmodule
             // consume until ';' to finish the module header
             while st.pos < len(st.toks) {
@@ -488,11 +497,21 @@ fn read_verilog(src: str) -> ReadVerilogResult {
                                         }
                                     }
                                 } else {
-                                    // unsupported construct — fail-loud
-                                    return ReadVerilogResult {
-                                        ok: 0, design: d,
-                                        message: "read_verilog: unsupported construct `"
-                                            + bt + "` (synth-subset only — see rfc_006 §4 module-2 scope)"
+                                    if bt == "localparam" {
+                                        let rl = _rv_parse_localparam(st, tab)
+                                        st = rl.st; tab = rl.tab
+                                        if len(st.err) > 0 {
+                                            return ReadVerilogResult {
+                                                ok: 0, design: d, message: st.err
+                                            }
+                                        }
+                                    } else {
+                                        // unsupported construct — fail-loud
+                                        return ReadVerilogResult {
+                                            ok: 0, design: d,
+                                            message: "read_verilog: unsupported construct `"
+                                                + bt + "` (synth-subset only — see rfc_006 §4 module-2 scope)"
+                                        }
                                     }
                                 }
                             }
@@ -634,6 +653,131 @@ fn _rv_parse_assign(st_in: PState, m_in: Module) -> RvStep {
     c = rtlil_cell_connect(c, "Y", lhs)
     m = rtlil_module_add_cell(m, c)
     return RvStep { st: st, m: m }
+}
+
+// ─── parameter / localparam declaration parsing (rfc_006 §4 m2, D68) ─────
+
+// Parse-step result carrying the cursor + the updated symbol table.
+struct RvParamStep {
+    st:  PState,
+    tab: SymTab,
+}
+
+// CLEAN-ROOM: skip optional declaration type keywords / range before a
+// parameter or localparam name — `integer`, `signed`, `[hi:lo]`
+// (IEEE 1364-2005 §4.10 — type is irrelevant to integer constant folding).
+fn _rv_skip_decl_type(st_in: PState) -> PState {
+    let mut st = st_in
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == "integer" { st = _ps_take(st); continue }
+        if t == "signed"  { st = _ps_take(st); continue }
+        if t == "[" {
+            while st.pos < len(st.toks) {
+                if _ps_peek(st) == "]" { st = _ps_take(st); break }
+                st = _ps_take(st)
+            }
+            continue
+        }
+        break
+    }
+    return st
+}
+
+// CLEAN-ROOM: parse a module-header parameter list `#( parameter NAME =
+// EXPR , … )` (ANSI-style, IEEE 1364-2005 §12.1). `st` points at `#`.
+// Each EXPR is folded against `tab` (so a later parameter can reference
+// an earlier one) and the result is added to the table.
+fn _rv_parse_param_header(st_in: PState, tab_in: SymTab) -> RvParamStep {
+    let mut st = st_in
+    let mut tab = tab_in
+    st = _ps_take(st)                       // consume "#"
+    if _ps_peek(st) != "(" {
+        return RvParamStep {
+            st: _ps_fail(st, "read_verilog: param header: expected `(` after `#`"),
+            tab: tab
+        }
+    }
+    st = _ps_take(st)                       // consume "("
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ")" { st = _ps_take(st); break }
+        if t == "," { st = _ps_take(st); continue }
+        if t == "parameter" { st = _ps_take(st); continue }
+        st = _rv_skip_decl_type(st)
+        let name = _ps_peek(st)
+        if name == "" || name == ")" {
+            return RvParamStep {
+                st: _ps_fail(st, "read_verilog: param header: expected parameter name"),
+                tab: tab
+            }
+        }
+        st = _ps_take(st)
+        if _ps_peek(st) != "=" {
+            return RvParamStep {
+                st: _ps_fail(st, "read_verilog: param `" + name + "`: expected `=`"),
+                tab: tab
+            }
+        }
+        st = _ps_take(st)
+        // collect expression tokens until `,` or `)`
+        let mut exprtoks: [str] = []
+        while st.pos < len(st.toks) {
+            let tk = _ps_peek(st)
+            if tk == "," { break }
+            if tk == ")" { break }
+            exprtoks = exprtoks.push(tk)
+            st = _ps_take(st)
+        }
+        let ev = _rv_eval_expr(exprtoks, 0, tab, 1)
+        if len(ev.err) > 0 {
+            return RvParamStep {
+                st: _ps_fail(st, "read_verilog: param `" + name + "`: " + ev.err),
+                tab: tab
+            }
+        }
+        tab = symtab_put(tab, name, ev.value)
+    }
+    return RvParamStep { st: st, tab: tab }
+}
+
+// CLEAN-ROOM: parse a body `localparam NAME = EXPR ;` (IEEE 1364-2005
+// §4.10.1). `st` points at `localparam`. EXPR is folded against `tab`.
+fn _rv_parse_localparam(st_in: PState, tab_in: SymTab) -> RvParamStep {
+    let mut st = _ps_take(st_in)            // consume "localparam"
+    let mut tab = tab_in
+    st = _rv_skip_decl_type(st)
+    let name = _ps_peek(st)
+    if name == "" {
+        return RvParamStep {
+            st: _ps_fail(st, "read_verilog: localparam: expected name"),
+            tab: tab
+        }
+    }
+    st = _ps_take(st)
+    if _ps_peek(st) != "=" {
+        return RvParamStep {
+            st: _ps_fail(st, "read_verilog: localparam `" + name + "`: expected `=`"),
+            tab: tab
+        }
+    }
+    st = _ps_take(st)
+    let mut exprtoks: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ";" { st = _ps_take(st); break }
+        exprtoks = exprtoks.push(t)
+        st = _ps_take(st)
+    }
+    let ev = _rv_eval_expr(exprtoks, 0, tab, 1)
+    if len(ev.err) > 0 {
+        return RvParamStep {
+            st: _ps_fail(st, "read_verilog: localparam `" + name + "`: " + ev.err),
+            tab: tab
+        }
+    }
+    tab = symtab_put(tab, name, ev.value)
+    return RvParamStep { st: st, tab: tab }
 }
 
 // ─── public entry: parse a file ──────────────────────────────────────────
@@ -807,6 +951,39 @@ fn main() {
     let _e5 = _rv_eval_expr(["UNKNOWN_P"], 0, _tab, 1)
     if len(_e5.err) == 0 {
         println("FAIL T12e unresolved_should_err"); fails = fails + 1
+    }
+
+    // T13 — module-header parameter list `#( parameter … )`.
+    total = total + 1
+    let _pht = _rv_tokens(_rv_normalize_punct("#( parameter W = 8 , parameter A = W + 4 )"))
+    let _ph = _rv_parse_param_header(PState { toks: _pht, pos: 0, err: "" }, symtab_new())
+    if len(_ph.st.err) > 0 {
+        println("FAIL T13 err: " + _ph.st.err); fails = fails + 1
+    }
+    if symtab_get(_ph.tab, "W") != 8 {
+        println("FAIL T13a W got " + str(symtab_get(_ph.tab, "W"))); fails = fails + 1
+    }
+    if symtab_get(_ph.tab, "A") != 12 {
+        println("FAIL T13b A=W+4 got " + str(symtab_get(_ph.tab, "A"))); fails = fails + 1
+    }
+
+    // T14 — body localparam, resolving against header parameters.
+    total = total + 1
+    let _lpt = _rv_tokens(_rv_normalize_punct("localparam D = W << 1 ;"))
+    let _lp = _rv_parse_localparam(PState { toks: _lpt, pos: 0, err: "" }, _ph.tab)
+    if len(_lp.st.err) > 0 {
+        println("FAIL T14 err: " + _lp.st.err); fails = fails + 1
+    }
+    if symtab_get(_lp.tab, "D") != 16 {
+        println("FAIL T14a D=W<<1 got " + str(symtab_get(_lp.tab, "D"))); fails = fails + 1
+    }
+
+    // T15 — end-to-end module with `#(parameter)` header + localparam body.
+    total = total + 1
+    let _v15 = "module pm #( parameter PW = 4 ) ( a , y ) ; localparam PD = PW * 2 ; input a ; output y ; assign y = a ; endmodule"
+    let _r15 = read_verilog(_v15)
+    if _r15.ok != 1 {
+        println("FAIL T15 param_module: " + _r15.message); fails = fails + 1
     }
 
     if fails > 0 {
