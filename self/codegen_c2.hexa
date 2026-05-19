@@ -6635,9 +6635,14 @@ let mut _known_float_set = []        // 64 buckets; each bucket is [name, ...]
 let mut _enum_names = []
 
 fn _enum_names_add(name) {
+    // dedup-add. NOTE: a no-value early return must be a bare `return`
+    // — `return hexa_void()` mis-transpiles to `hexa_call0(hexa_void)`
+    // (hexa_void is a C runtime symbol, not a hexa-source callable),
+    // which broke the hexa_cc.c self-compile / bootstrap promote. Bare
+    // `return` lowers to the correct `__hexa_fn_arena_return(hexa_void())`.
     let mut i = 0
     while i < len(_enum_names) {
-        if _enum_names[i] == name { return hexa_void() }
+        if _enum_names[i] == name { return }
         i = i + 1
     }
     _enum_names.push(name)

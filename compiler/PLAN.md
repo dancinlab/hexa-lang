@@ -3217,3 +3217,40 @@ diagnosis and that the source fix targets that emission. Binary
 rebuild/promote is a separate out-of-scope deploy step (no over-claim:
 fix drafted + parse-clean, runtime PASS not yet observed). Parser-side
 EnumPath rework deliberately not done (larger, more-principled option).
+
+### ★ 진행 로그 — enum-fix BINARY PROMOTE + bootstrap bug fix (2026-05-19)
+
+`70c7ab9d` landed the enum-variant fix **source-only** (codegen_c2.hexa)
+— `self/native/hexa_cc.c` + `hexa_v2` were NOT regenerated/promoted, so
+`hexa run`/`build` still used the stale transpiler and demiurge's
+`stdlib/booksim/{leighton,sweep,traffic}.hexa` still failed
+`RegionShape/TrafficKind undeclared` (exactly the patch's
+"verify-PENDING: stale binary, promote out-of-scope deploy" note). This
+cycle does the deploy-side binary promote (hexa-lang's responsibility).
+
+Blocker found during regen: the parallel session's `_enum_names_add`
+dedup helper used `return hexa_void()` as a no-value early return.
+`hexa_void` is a C runtime symbol, not a hexa-source callable — the
+transpiler renders `return hexa_void()` as
+`return __hexa_fn_arena_return(hexa_call0(hexa_void))`, and
+`hexa_call0(HexaVal)` rejects the function `hexa_void` (type
+`HexaVal(void)`) → `hexa_cc.c.new:20841` clang error → **the enum fix
+was un-promotable as committed**. Surgical fix: `return hexa_void()` →
+bare `return` (idiomatic no-value return; lowers correctly to
+`__hexa_fn_arena_return(hexa_void())` per the line-1834 tail pattern).
+
+Measured-honest (Mac, isolated worktree `binpromote-enumfix` off main):
+- enum_smoke BEFORE (committed stale hexa_v2): clang errors, no binary.
+  AFTER (regenerated+promoted hexa_v2): `0`/`hex`/`other`/`enum-variant
+  ok`, rc=0.
+- End-to-end via the PROMOTED driver (the actual demiurge blocker):
+  `stdlib/booksim/leighton.hexa` → d4_oracle=PASS d6_oracle=PASS
+  impossible=REJECT; `sweep.hexa` → B_obs=8>=B_bound=8 D_obs=14>=
+  D_bound=14 PASS; `traffic.hexa` → tornado map OK. All BUILD + RUN.
+- Self-host fixpoint **BYTE-IDENTICAL** (`cc --regen` → hexa_cc.c.new ≡
+  promoted hexa_cc.c) — promoted transpiler reproduces its own source.
+
+Promoted: `self/native/hexa_cc.c` (regenerated, enum fix present +
+self-compiling) + `self/native/hexa_v2` (capable binary). The
+codegen_c2.hexa bare-return fix is also a general latent-bug guard:
+any `return hexa_void()` in compiler source had the same hazard.
