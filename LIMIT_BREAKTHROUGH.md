@@ -96,6 +96,20 @@ willing to learn a non-mainstream language. Rust (~3 M devs), Go
 for languages that *do* take off; ≈ 2 yr for ones that don't.
 First-external-contributor milestone (G6) is the leading indicator.
 
+### 2.9 GPU raw-GEMM throughput vs vendor BLAS (PHYSICAL / ENGINEERING)
+
+forge (the GPU compute substrate — RFC 040/044/049/060) performs
+matmul through cuBLAS. "Exceeding CUDA performance" in the
+**raw-GEMM** sense means beating cuBLAS Dgemm / GemmEx throughput on
+the same shape and precision. Two stacked limits make this a wall:
+(a) the hardware **FLOP roofline** is physical — peak = cores × clock
+× FMA-width, an energy-per-transistor bound; (b) cuBLAS already
+extracts ~80-90% of that roofline (forge measured 51.24 TFLOPS FP64
+on H100 = 76% of peak). NVIDIA's own open template library CUTLASS
+reaches ~90-95% *of cuBLAS* — i.e. still below it. A kernel cannot
+exceed the roofline, and matching cuBLAS's fraction of it is a
+multi-year vendor-scale tuning effort.
+
 ---
 
 ## §3 Per-limit breakthrough assessment
@@ -167,6 +181,44 @@ defensible. Trigger: ship a 200-page *Hexa Book* + 1-day workshop
 package by Q4-2026. Status: **partial — G6 at 100% per README, but
 external-contributor count not yet visible**.
 
+### 3.9 GPU raw-GEMM throughput vs vendor BLAS → **HARD_WALL** (roofline) + **SOFT_WALL** at the end-to-end layer
+
+The §2.9 limit splits cleanly into two questions, and only one of them
+is open:
+
+**(a) Raw-GEMM vs cuBLAS → HARD_WALL.** A kernel cannot exceed the
+hardware FLOP roofline (peak = cores × clock × FMA-width — a physical
+energy-per-transistor bound). cuBLAS already extracts ~80-90% of that
+roofline; NVIDIA's own CUTLASS reaches ~90-95% *of cuBLAS* and still
+sits below it. "Beat cuBLAS Dgemm on the same shape + precision" is
+therefore a HARD_WALL: the only headroom is the 10-20% gap *up to* the
+roofline, and closing it is a multi-year vendor-scale tuning effort,
+not a paradigm break. **Measured (RFC 060-C, 2 A100 fires)**: at FP64
+the mega-kernel runs 1.8-4.4× *slower* than the cuBLAS stream — the
+kernel-per-op model is not beaten at FP64. Honest classification:
+**cannot break; do not target.**
+
+**(b) End-to-end training step → SOFT_WALL.** The achievable win is
+*not* raw GEMM — it is the whole-model wall clock, where kernel-launch
+overhead, memory traffic, and op-fusion dominate. forge already
+measures **2.95× faster than PyTorch eager** on d768·12L (mk2,
+114s/step, commit `e030fa31`) — not by beating CUDA's GEMM but by
+beating PyTorch's *eager dispatch overhead* with device-resident
+fusion. This wall is breakable with tech: mega-kernel fusion
+(RFC 060), polyhedral scheduling (RFC 060-B, isl feasibility measured
+PASS 0.0114s), and the BF16 precision pivot (RFC 049 ∩ 060). Note the
+BF16 path is a *different precision class* (`cublasGemmEx` BF16 vs
+FP64) — it is honestly a precision pivot, **not** a CUDA-exceed.
+
+**Reframed goal.** "Exceed CUDA" is retired as a raw-GEMM target
+(HARD_WALL, §3.9a). The honest, measured north-star is the
+**end-to-end training-step wall** vs PyTorch (§3.9b) — already
+2.95× and SOFT_WALL-open via fusion. Trigger for further gains: a
+competitive in-kernel WMMA campaign (multi-week, cost-bearing,
+separate go) to close the kernel-per-op gap at BF16. Status:
+**raw-GEMM HARD_WALL accepted; end-to-end SOFT_WALL at 2.95×,
+measured.**
+
 ---
 
 ## §4 Top-3 breakthrough opportunities
@@ -215,6 +267,14 @@ target. ~6 engineer-months total.
    ELF64-Linux is not self-hosting on ESP32. The README's 100%
    claim is per-target.
 
+7. **forge does not beat CUDA at raw GEMM** (§3.9a). forge's matmul
+   runs *through* cuBLAS; "exceeding CUDA" in the raw-GEMM sense is a
+   roofline HARD_WALL and is explicitly retired as a target. forge's
+   measured 2.95× is vs **PyTorch eager dispatch overhead**, not vs
+   CUDA — and the RFC 049 BF16 9.67× figure is a *precision pivot*
+   (BF16 GemmEx vs FP64), not a CUDA-exceed. The honest north-star is
+   the end-to-end training-step wall (§3.9b), a SOFT_WALL.
+
 ---
 
 ## §6 References
@@ -224,6 +284,8 @@ target. ~6 engineer-months total.
 - `PLAN.md` — phase / goal definitions (G1-G6)
 - `compiler/` — frontend + middle + backend stages
 - `tests/m0/`, `verify/wilson-build/` — current test infrastructure
+- `self/forge/PARADIGM_C_RESEARCH.md`, `inbox/rfc_drafts_2026_05_12/`
+  `rfc_060_forge_new_compute_paradigm.md` — §3.9 measurement source
 - External: Rice (1953), Hindley-Milner (1969), Siek & Taha (2006)
   *Gradual Typing for Functional Languages*, Marques-Silva & Sakallah
   (1999) *GRASP CDCL*, Robert Harper *Practical Foundations for
