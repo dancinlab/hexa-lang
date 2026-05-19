@@ -1,5 +1,18 @@
 # One-line `hexa` install should also link/clone the hexa-lang source repo
 
+**Status:** resolved-ssot (2026-05-19) — `install.sh` now shallow-clones the
+hexa-lang source into `$HX_HOME/src`, symlinks `stdlib/` + `self/` next to the
+`hexa.real` binary (so the compiler's install-relative discovery, df9e7f6b,
+finds them with no `HEXA_LANG`/`HEXA_STDLIB_ROOT`), and builds the compiled
+`hexa_module_loader` flatten helper from that source. Measured: a fresh
+simulated install into a temp `HX_HOME` builds + runs a `use "stdlib/..."`
+program with zero env hints. The ask's (a) clone-to-known-location and (b)
+wire support-tree links into `~/.hx/bin/` are done. The ask's (c) `hexa repo
+path` subcommand and the optional `hexa update` verb are NOT done — they need a
+compiler change and remain open as a follow-up (the source location is the
+stable `$HX_HOME/src`, so it is discoverable, just not yet printable by a CLI
+verb). Skip with `HEXA_SKIP_SRC=1`.
+
 **From:** wilson (downstream) — 2026-05-12, while wilson's governance principle #2 codified
 the upstream-fix mechanism as `update || PR` ("direct update if you own the hexa-lang repo,
 else PR").
