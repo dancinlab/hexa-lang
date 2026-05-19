@@ -1931,3 +1931,39 @@ PERF-INHERIT speedup FAIL (0.016-0.024×) + CORRECT/DISPATCH-OK PASS
 (vast.ai, host-independent, 확정). C = RFC055 P1 vec-add — 로컬 PTX
 emit 가 동일 codesign-invalid 툴체인에 차단, scaffold+text-shape
 validator 가 랜딩 산출물.
+
+### CLOSURE — Fire A v6 GOAL 측정 PASS (2026-05-19)
+
+로컬 hexa.real 회복(타 세션 재빌드 완료, 19:53) 후 trainer.c 를
+e030fa31 forge-routed provenance 로 재생성:
+`HEXA_LANG=... hexa build flame_d768_12L_agtape_fire.hexa -o
+build/artifacts/flame_d768_agtape.c --c-only` → 생성 .c 의
+`ag_silu_gate` = `hexa_call3(farr_silu_gate_gpu,...)` 확인 (host-scalar
+leak 0). Fire A v6 (runpod A100-SXM4-80GB):
+
+```
+trainer_rc=0            (클린 완료 — v5 SIGSEGV 해소)
+init epoch gn2: 3.98726
+step 1 wall = 139s      ← F-RFC046-AGTAPE-WALL 게이트 메트릭
+step 1 gn2:  3.98438
+step 2 wall = 145s
+step 3 wall = 142s
+final  gn2:  3.98438    (NaN/inf 0; e030fa31 closure gn2 와 동일)
+wall_seconds=601        (total init+3step+teardown, 게이트값 아님)
+```
+
+**F-RFC046-AGTAPE-WALL: step1 wall 139s ≤ 437.9s ABSOLUTE → PASS
+(3.15× 여유).** gn2 init↔step1↔final = 3.98438 안정, e030fa31
+측정-PASS closure 와 동일값 → A/B/C 머지 후에도 correctness-faithful
+측정 입증. PyTorch 비율 claim 없음 (gpu/HANDOFF.md retracted).
+
+**정직한 잔여 (비차단)**: `copy_slice` ×3 + `transpose_2d` ×11
+`bad ids -1` → 두 op CPU fallback (silu_gate 와 동일 class 의 ag-op
+provenance 잔재 추정). step1 139s vs e030fa31 114s ≈ +25s 비용.
+trainer_rc=0 · gn2 동일 · 게이트 3.15× 여유라 GOAL 미차단. 후속
+tidy cycle 정리 대상 (ag_tape.hexa ag_copy_slice/ag_transpose
+forge-route 확인 — 미측정 over-claim 0).
+
+**머지-안전성**: build GREEN + GOAL step1 PASS 측정 → rfc043-hexa-torch
+의 A/B/C 머지가 검증됨. git-clean(FF) + 런타임 측정-PASS → main 머지
+안전. (copy_slice/transpose CPU-fallback 은 비차단 잔재로 별도 추적.)
