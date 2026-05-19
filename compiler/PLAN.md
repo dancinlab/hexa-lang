@@ -2302,3 +2302,52 @@ sufficient for a scaffold). Follow-up cycles per RFC 055 §12: 055-P0
 (PTX text emit pass), 055-P1 (`@gpu_kernel` parse + thread-index builtins
 + launch ABI + dispatch wiring + falsifier battery), 055-P2 (FP64 GEMM),
 055-P3 (sm_80 variant + warp primitives).
+
+### 2026-05-19 — compiler-only next-list closure pass
+
+Exhaustive survey of compiler-only residue after R7, then closed the
+autonomously-closeable items:
+
+- **#1 interp-residue cleanup** (`53a9fe73`) — self/main.hexa: cmd_status
+  drops the dead `interp:` line, bench_time_cmd drops the interp-direct
+  branch (no build/hexa_interp binary post-R7), stale resolve_interp
+  comment block condensed. -83/+25 lines, live paths byte-identical.
+- **#2 range-slice `arr[i..j]` / `arr[i..=j]`** (`d2ac6458`) — gen2_expr's
+  Index handler lowers an `Index(arr, Range)` child to hexa_array_slice
+  (exclusive end, +1 for `..=`, open ends → 0/len) instead of handing
+  hexa_index_get an int-array key (which crashed). self/native/{hexa_cc.c,
+  hexa_v2} regenerated. Validated 6 gates: self-host build of main.hexa,
+  atlas_verify_smoke 118/118, self-host fixpoint byte-identical (regen
+  diff 0), t_range_precedence crash→[2,3]/[2,3,4]/9, t45b +
+  test_native_multi_calls regression-clean. t36 build-fail confirmed
+  pre-existing (arity test bug, skip.txt-audited — NOT a regression).
+- **#5-67 self-hosted driver / Rust removal — VERIFIED DONE.** No
+  Cargo.toml, no compiler `.rs` (the only `.rs` files are unrelated
+  firmware/boards MCU code). `self/main.hexa` → `hexa.real` is the
+  self-hosted driver; `hexa run` is an official subcommand. ROADMAP 67
+  substance complete.
+- **#3 default parameters — closed as non-defect.** hexa has no
+  default-param syntax; the only thing that surfaced it (t36) is an
+  audited test bug (3-param `alm_init` called with 2 args). No codegen
+  gap; no language change warranted unless default-params are wanted as
+  a deliberate feature (separate design decision).
+
+Honest residual (NOT closed — each a documented multi-cycle scope, not
+autonomously-closeable without risking the shared toolchain):
+
+- **ROADMAP 66 (symbol namespacing)** — largely moot: the `hexa cc
+  --regen` rename-awk already prefixes `__hexa_strlit_init`/`_sl_`/`_ic_`
+  per-module; this cycle exercised regen with a byte-identical fixpoint.
+  t45b string methods pass. The ROADMAP-66 "blocker" text is stale.
+- **ROADMAP 65 (argv[0] policy)** — partially done: canonical
+  `script_path()`/`real_args()` APIs exist (runtime.c:5579). Remaining =
+  migrating 40+ `args()[2..]` call sites across self/+tool/+bench/ to
+  `real_args()`. Post-R7 the "match interp index layout" rationale is
+  moot, but the migration is still a 40-site repo-wide change.
+- **ROADMAP 68** — builtin `hx_` prefix mangling formalization
+  (remove runtime.h `#define` shims). Medium, own cycle.
+- **ROADMAP 69** — runtime 2-layer split (`runtime_core.c` ≤500 lines +
+  `runtime_hi.hexa`); runtime.c is 13,336 lines — large refactor, own
+  multi-cycle campaign.
+- **native codegen / RFC 055 (no-C path, NVPTX)** — large campaign,
+  scaffold already landed (see entry above).
