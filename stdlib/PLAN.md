@@ -712,3 +712,18 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   배위수(no .py golden) — ubu-2 __ATOMS_STAGE1_TEST__ PASS (23/23):
   FCC CN=12 @ a/√2, BCC CN=8 @ a√3/2, diamond CN=4 @ a√3/4. atoms
   잔여 = from_cif/EMT; crystal/mol/mlff 전 Stage-2 잔여.
+- 2026-05-19 — **T4 Stage-2 #3: crystal frac↔cart/inverse/angles**
+  (commit `0c75e151`, `rfc043-hexa-torch`). pymatgen Lattice 좌표
+  머신: lattice_inverse(adjugate/det closed-form) ·
+  lattice_frac_to_cart(frac@matrix) · lattice_cart_to_frac(cart@inv) ·
+  lattice_angles(α/β/γ deg, acos) · structure_cart_coords. 검증
+  (교과서 기하 + 라운드트립, no .py golden): ubu-2
+  __SCI_STAGE1_TEST__ PASS (28/28) — cubic 90/90/90, FCC primitive
+  60/60/60, frac→cart→frac 항등. acos/sqrt hexa 가용 확인.
+- 2026-05-19 — **T4 Stage-2 병렬 팬아웃 설계**: 잔여 Stage-2 를 모듈
+  경계로 분할(독립 worktree 에이전트, 같은 mod.hexa 동시편집 충돌 0,
+  순차 cherry-pick). mlff Stage-2 는 stdlib grad/safetensors 의존
+  (T5 영역, blocked) → 제외. 클린 최대 동시 = 3: atoms(from_cif/EMT)
+  · crystal(spacegroup/from_cif/energy_above_hull) · mol(from_smiles
+  hoist + canon + descriptors). 검증모델 = self-validating
+  교과서/라운드트립(ase/pymatgen/rdkit 미설치 → .py golden 없음).
