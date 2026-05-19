@@ -1,7 +1,8 @@
 # `stdlib/vhdl/` — hexa-native VHDL emit (FIRMWARE.md G-R3)
 
-> **Status: SCAFFOLD-ONLY (2026-05-20) — `.hexa.stub` skeleton only.**
-> Body pending RFC 064 G-R3.
+> **Status: PHASE-A (2026-05-20) — `write_vhdl.hexa` selftest 8/8 PASS.**
+> G-R3 measured exit pending GHDL `ghdl -a` round-trip on the
+> stdlib/yosys/test counter demo (G-R1 dependency).
 
 Mirror of [`stdlib/yosys/`](../yosys/) for the VHDL dialect.
 `stdlib/yosys/read_verilog.hexa` + `write_verilog.hexa` already do the
@@ -13,7 +14,7 @@ directory holds the VHDL counterpart so the `@target(rtl)` lane
 
 | file | purpose | FIRMWARE.md gate |
 |---|---|---|
-| `write_vhdl.hexa.stub` | mapped-RTLIL → VHDL-2008 netlist backend (gate-level emit) | G-R3 |
+| `write_vhdl.hexa` | mapped-RTLIL → VHDL-2008 netlist backend (gate-level emit) — selftest 8/8 PASS | G-R3 (phase-a) |
 
 Read side (VHDL → RTLIL) is **not in scope for v1.** Cross-language
 RTL projects typically only need one authoritative source-of-truth

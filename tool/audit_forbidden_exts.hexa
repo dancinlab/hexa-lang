@@ -82,6 +82,10 @@ let ABSORBED_PREFIXES: [string] = [
     "comb/rtl/",
     "firmware/boards/",
     "state/",
+    // archive_*/ — tombstoned legacy (qrng/qmirror/sim-universe-style
+    // frozen archive convention). See archive_legacy_glue/README.md for
+    // the 2026-05-20 G-T1/G-T2 drain.
+    "archive_",
     // Third-party interpreter plugins (FreeCAD Python, EDA TCL, etc.) —
     // FIRMWARE.md §1 ban does not apply because the host interpreter
     // (freecadcmd, OpenSCAD, KiCad pcbnew) executes the file in-process;
@@ -100,6 +104,11 @@ let ABSORBED_PREFIXES: [string] = [
     // FIRMWARE-roadmap-tracked legacy: G-F1 (startup emit) is the
     // explicit replacement plan for these per stdlib/firmware/README.md.
     "stdlib/hal/t3/",
+    // ATP (audio token predictor) ML interop — Python-side scripts that
+    // tool/atp_transpile.hexa orchestrates against self/ml/audio_token_
+    // predictor.hexa. The hexa side IS the SSOT; the Python side is
+    // torch-interop, which the FIRMWARE.md §1 ban does not target.
+    "tool/transient_py/",
 ]
 
 let REFERENCE_PREFIXES: [string] = [
@@ -108,6 +117,33 @@ let REFERENCE_PREFIXES: [string] = [
 let REFERENCE_EXACT: [string] = [
     "tests/runtime_h_smoke.c",
     "test/lora_cuda_equiv_test.c",
+]
+
+// BUILD_ORCHESTRATION — outside-hexa orchestration that *calls* hexa AOT,
+// by intent. Same chicken-and-egg category as install.sh (users without
+// hexa can't run .hexa to install hexa). FIRMWARE.md §1 ban is for
+// hexa-substrate authoring; these are the shell/Python boundary that
+// invokes the hexa toolchain. Each .hexa they call IS hexa-substrate;
+// the .sh / .py wrappers around `hexa build` / `hexa run` / `hexa lsp`
+// are not.
+let BUILD_ORCH_PREFIXES: [string] = [
+    "tool/build_",
+    "tool/wrappers/",
+    "tool/hexa_annot/",
+    "scripts/",
+    "tests/integration/",
+    "test/regression/",
+    "bench/",
+]
+let BUILD_ORCH_EXACT: [string] = [
+    "install.sh",
+    "tool/extract_runtime_hi.sh",
+    "tool/parser_ssot_lint.sh",
+    "tool/find_local_hexa.sh",
+    "tool/s4_flatc_post.py",
+    "tool/hexa_daemon_serve.c",
+    "test/hexa_annot_smoke.sh",
+    "test/t_parser_ssot_lint.sh",
 ]
 
 fn _has_prefix(s: string, p: string) -> bool {
@@ -189,6 +225,8 @@ fn _classify(path: string) -> string {
     if _matches_any_prefix(path, ABSORBED_PREFIXES) { return "ABSORBED" }
     if _matches_any_prefix(path, REFERENCE_PREFIXES) { return "REFERENCE" }
     if _matches_exact(path, REFERENCE_EXACT) { return "REFERENCE" }
+    if _matches_any_prefix(path, BUILD_ORCH_PREFIXES) { return "BUILD_ORCH" }
+    if _matches_exact(path, BUILD_ORCH_EXACT) { return "BUILD_ORCH" }
     return "LEGACY"
 }
 
@@ -216,6 +254,7 @@ fn main() -> i64 {
     let mut count_vendored = 0
     let mut count_absorbed = 0
     let mut count_reference = 0
+    let mut count_build_orch = 0
     let mut count_legacy = 0
 
     let legacy = []
@@ -231,6 +270,7 @@ fn main() -> i64 {
             else if cls == "VENDORED" { count_vendored = count_vendored + 1 }
             else if cls == "ABSORBED" { count_absorbed = count_absorbed + 1 }
             else if cls == "REFERENCE" { count_reference = count_reference + 1 }
+            else if cls == "BUILD_ORCH" { count_build_orch = count_build_orch + 1 }
             else {
                 count_legacy = count_legacy + 1
                 legacy.push(path)
@@ -245,6 +285,7 @@ fn main() -> i64 {
     println("  VENDORED  (3rd-party allow-list)   : " + to_string(count_vendored))
     println("  ABSORBED  (other-cycle SSOT)       : " + to_string(count_absorbed))
     println("  REFERENCE (external-comparison)    : " + to_string(count_reference))
+    println("  BUILD_ORCH (cold-bootstrap shells) : " + to_string(count_build_orch))
     println("  LEGACY    (G-T1/G-T2 work items)   : " + to_string(count_legacy))
 
     if count_legacy == 0 {
