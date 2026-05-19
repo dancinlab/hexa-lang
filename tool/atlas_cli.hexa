@@ -494,6 +494,31 @@ fn _branch_stamp() -> string {
     return s
 }
 
+// _gh_token — resolve a GitHub token for the API fallback: env first
+// (GH_TOKEN / GITHUB_TOKEN), then `gh auth token` if gh is logged in.
+// The token is never printed. Empty string = no token available.
+fn _gh_token() -> string {
+    let e1 = env("GH_TOKEN")
+    if len(e1) > 0 { return e1 }
+    let e2 = env("GITHUB_TOKEN")
+    if len(e2) > 0 { return e2 }
+    return exec("gh auth token 2>/dev/null").trim()
+}
+
+// _origin_slug — "owner/repo" parsed from `origin`'s URL (https or ssh
+// form), trailing ".git" stripped. Empty string = could not resolve.
+fn _origin_slug(root: string) -> string {
+    let url = exec("git -C " + _shq(root) + " remote get-url origin 2>/dev/null").trim()
+    if len(url) == 0 { return "" }
+    return exec("printf '%s' " + _shq(url) +
+        " | sed -E 's#^.*github\\.com[:/]##; s#\\.git$##'").trim()
+}
+
+// _jesc — minimal JSON string escape (backslash, then double-quote).
+fn _jesc(s: string) -> string {
+    return s.replace("\\", "\\\\").replace("\"", "\\\"")
+}
+
 fn cmd_pr(rest: array) {
     let mut staging = ""
     let mut atlas_root = ""
@@ -637,33 +662,63 @@ fn cmd_pr(rest: array) {
     }
     println("hexa atlas pr: committed " + append_path + " on branch '" + branch + "'")
 
-    // ── Step 5 — try `gh pr create`. Honest: only claim a PR on rc==0. ──
-    let have_gh = _exec_ok("command -v gh")
-    if !have_gh {
-        println("")
-        println("hexa atlas pr: `gh` not found — branch + commit are done, PR is not.")
-        println("  ready to PR — from " + atlas_root + " run:")
-        println("    git push -u origin " + branch)
-        println("    gh pr create --base " + base + " --head " + branch +
-                " --title " + _shq(title))
-        return
-    }
-    // `gh pr create` will itself push the branch when needed; capture stdout
-    // (the PR URL on success) and the exit status separately.
+    // ── Step 5 — open the PR.  Fallback chain: gh CLI → GitHub API → honest
+    //    degrade (user directive: `gh || api`). A PR is NEVER claimed opened
+    //    unless `gh pr create` returned 0 or the API returned HTTP 201.
     let gh_cmd = "gh pr create --base " + _shq(base) + " --head " + _shq(branch) +
                  " --title " + _shq(title) +
                  " --body 'Automated atlas promotion via `hexa atlas pr`.'"
-    let gh_ok = _exec_ok("cd " + _shq(atlas_root) + " && " + gh_cmd)
-    if gh_ok {
-        let url = exec("cd " + _shq(atlas_root) + " && gh pr view --json url -q .url 2>/dev/null").trim()
-        println("hexa atlas pr: PR opened — " + (if len(url) > 0 { url } else { "(see `gh pr list`)" }))
-        return
+
+    // 5a — gh CLI (it pushes the head branch itself).
+    if _exec_ok("command -v gh") {
+        if _exec_ok("cd " + _shq(atlas_root) + " && " + gh_cmd) {
+            let url = exec("cd " + _shq(atlas_root) + " && gh pr view --json url -q .url 2>/dev/null").trim()
+            println("hexa atlas pr: PR opened via gh — " + (if len(url) > 0 { url } else { "(see `gh pr list`)" }))
+            return
+        }
+        println("hexa atlas pr: `gh pr create` did not succeed — falling back to GitHub API…")
+    } else {
+        println("hexa atlas pr: `gh` not found — falling back to GitHub API…")
     }
-    // gh failed (no auth / no remote write / network) — degrade honestly.
+
+    // 5b — GitHub API via curl. Needs a token + the head branch pushed to
+    //      origin (the API opens a PR from an already-existing remote branch).
+    let tok = _gh_token()
+    let slug = _origin_slug(atlas_root)
+    let mut why = ""
+    if len(tok) == 0 {
+        why = "no GH_TOKEN / GITHUB_TOKEN set and `gh auth token` unavailable"
+    } else if len(slug) == 0 {
+        why = "could not resolve owner/repo from the `origin` remote"
+    } else if !_exec_ok("cd " + _shq(atlas_root) + " && git push -u origin " + _shq(branch)) {
+        why = "`git push` to origin failed (no write access / offline)"
+    }
+    if len(why) == 0 {
+        let body = "{\"title\":\"" + _jesc(title) + "\",\"head\":\"" + _jesc(branch) +
+                   "\",\"base\":\"" + _jesc(base) +
+                   "\",\"body\":\"Automated atlas promotion via hexa atlas pr.\"}"
+        let api = "curl -sS -o /tmp/_hexa_pr_resp.json -w '%{http_code}' -X POST" +
+                  " -H " + _shq("Authorization: Bearer " + tok) +
+                  " -H " + _shq("Accept: application/vnd.github+json") +
+                  " -H " + _shq("X-GitHub-Api-Version: 2022-11-28") +
+                  " https://api.github.com/repos/" + slug + "/pulls" +
+                  " -d " + _shq(body)
+        let code = exec("cd " + _shq(atlas_root) + " && " + api).trim()
+        if code == "201" {
+            let url = exec("grep -o 'https://github.com/[^\"]*/pull/[0-9]*' /tmp/_hexa_pr_resp.json | head -1").trim()
+            println("hexa atlas pr: PR opened via GitHub API — " + (if len(url) > 0 { url } else { "(HTTP 201)" }))
+            return
+        }
+        let msg = exec("grep -o '\"message\"[^,}]*' /tmp/_hexa_pr_resp.json | head -1").trim()
+        why = "GitHub API returned HTTP " + code + (if len(msg) > 0 { " — " + msg } else { "" })
+    }
+
+    // 5c — honest degrade: gh and the API are both unavailable. The branch +
+    //      commit are local; print the exact commands, claim NO PR.
     println("")
-    println("hexa atlas pr: `gh pr create` did not succeed (no auth, no push access, or offline).")
+    println("hexa atlas pr: PR not opened — " + why + ".")
     println("  branch '" + branch + "' has the commit locally — NO PR was opened.")
-    println("  ready to PR — from " + atlas_root + " run, once `gh auth login` is set up:")
+    println("  ready to PR — from " + atlas_root + " run:")
     println("    git push -u origin " + branch)
     println("    " + gh_cmd)
 }
