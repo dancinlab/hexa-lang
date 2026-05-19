@@ -134,8 +134,9 @@ fall into one of three buckets:
 | BOOTSTRAP | 76 | HEXA-NATIVE-ONLY.md G-0..G-11 (ML side trk) |
 | GENERATED | 72 | codegen output, **allowed** (built from `.hexa`) |
 | VENDORED  | 2  | `tool/cuda_syntax_stub/` (3rd-party headers) |
-| ABSORBED  | 88 | other-cycle SSOTs (`stdlib/xeno/`, `stdlib/quantum/`, `comb/rtl/` handed off to `~/core/hexa-arch[chip]`, `firmware/boards/**` other-session WIP, `state/`) |
-| **LEGACY**| **135** | **G-T1/G-T2 work items — frozen baseline at `tool/firmware_ban_baseline.txt`** |
+| ABSORBED  | 88 | other-cycle SSOTs (`stdlib/xeno/`, `stdlib/quantum/`, `comb/rtl/` handed off to `~/core/hexa-arch[chip]`, `firmware/boards/**` other-session WIP, `state/`) + `stdlib/freecad/` (third-party Python interpreter plugin) |
+| REFERENCE | 5  | external-comparison baseline by intent — `example/bench_*_native.c` (clang -O3 LLVM ceiling for HEXA-IR), `tests/runtime_h_smoke.c`, `test/lora_cuda_equiv_test.c` — explicitly out of §1 ban scope |
+| **LEGACY**| **130** | **G-T1/G-T2 work items — frozen baseline at `tool/firmware_ban_baseline.txt`** (was 135, then -5 via REFERENCE reclass) |
 
 The full LEGACY list lives in `tool/firmware_ban_baseline.txt` (135
 sorted paths), checked in alongside the audit tool. Each baseline entry
@@ -335,6 +336,25 @@ n=6 does not enter the verification — only the tool oracles do.
   G-T1 target. Pending: `@D` governance entries in `AGENTS.tape` will
   follow the gate-exit pattern — added only after each gate's fixture
   passes (not pre-emptively). No code change in this cycle.
+- 2026-05-20 — REFERENCE category + G-R0 12-fixture measure cycle.
+  Landed:
+  (a) `tool/audit_forbidden_exts.hexa` gains REFERENCE classification
+  (external-comparison baseline by intent — `example/bench_*_native.c`
+  LLVM ceilings, `tests/runtime_h_smoke.c`, `test/lora_cuda_equiv_test.c`)
+  + ABSORBED extended with `stdlib/freecad/` (third-party FreeCAD Python
+  interpreter plugin — out-of-scope for §1 ban because the host
+  interpreter runs the file in-process). Audit re-runs, baseline regen
+  to 130 LEGACY (was 135, -5 via reclass). G-T0 measurement stable.
+  (b) `stdlib/yosys/test/round_trip.hexa` expanded 5 → **12 fixtures**
+  (F1..F12 covering empty/io/multibit/localparam/and-gate/dff/instance/
+  generate/function/case/param-override/adder). Measured against
+  current in-flight `stdlib/yosys/read_verilog.hexa`: **6/12 PASS**
+  (F1, F2, F3, F4, F8, F9). 6 FAIL — synth-subset gaps ($and/$dff/$add
+  cells; instance + param-override + case-body parse). G-R0 status:
+  **PARTIAL — 50% measured**. Honest exit code 1.
+  (c) FIRMWARE.md §3 updated with REFERENCE row + reclass note. Log
+  this entry.
+  Initial cycle entry follows.
 - 2026-05-20 — full-roadmap closure cycle. Landed:
   (a) **G-T0** measured: `tool/audit_forbidden_exts.hexa` runs clean and
   reports 76/72/2/88/135 (BOOTSTRAP/GENERATED/VENDORED/ABSORBED/LEGACY)

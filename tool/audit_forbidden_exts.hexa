@@ -18,7 +18,12 @@
 //   ABSORBED   — stdlib/<dom>/state/**, stdlib/xeno/scripts/**,
 //                stdlib/quantum/bench/**.sh, comb/rtl/** (handed off to
 //                ~/core/hexa-arch[chip] per memory comb_closure_2026_05_18),
-//                firmware/boards/**.v (other-session WIP, FIRMWARE-roadmap-tracked)
+//                firmware/boards/**.v (other-session WIP, FIRMWARE-roadmap-tracked),
+//                stdlib/freecad/** (third-party Python interpreter plugin)
+//   REFERENCE  — external-comparison baseline by INTENT (e.g. example/*.c
+//                are LLVM-comparison ceilings; rewriting them as .hexa
+//                destroys the comparison) — explicitly out of FIRMWARE.md
+//                §1 ban scope.
 //   LEGACY     — none of the above. These are the G-T1/G-T2 work items.
 //
 // Exit code:
@@ -77,6 +82,19 @@ let ABSORBED_PREFIXES: [string] = [
     "comb/rtl/",
     "firmware/boards/",
     "state/",
+    // Third-party interpreter plugins (FreeCAD Python, EDA TCL, etc.) —
+    // FIRMWARE.md §1 ban does not apply because the host interpreter
+    // (freecadcmd, OpenSCAD, KiCad pcbnew) executes the file in-process;
+    // there is no hexa-callable surface to re-author against.
+    "stdlib/freecad/",
+]
+
+let REFERENCE_PREFIXES: [string] = [
+    "example/",
+]
+let REFERENCE_EXACT: [string] = [
+    "tests/runtime_h_smoke.c",
+    "test/lora_cuda_equiv_test.c",
 ]
 
 fn _has_prefix(s: string, p: string) -> bool {
@@ -156,6 +174,8 @@ fn _classify(path: string) -> string {
     if _matches_any_substring(path, GENERATED_SUBSTRINGS) { return "GENERATED" }
     if _matches_any_prefix(path, VENDORED_PREFIXES) { return "VENDORED" }
     if _matches_any_prefix(path, ABSORBED_PREFIXES) { return "ABSORBED" }
+    if _matches_any_prefix(path, REFERENCE_PREFIXES) { return "REFERENCE" }
+    if _matches_exact(path, REFERENCE_EXACT) { return "REFERENCE" }
     return "LEGACY"
 }
 
@@ -182,6 +202,7 @@ fn main() -> i64 {
     let mut count_generated = 0
     let mut count_vendored = 0
     let mut count_absorbed = 0
+    let mut count_reference = 0
     let mut count_legacy = 0
 
     let legacy = []
@@ -196,6 +217,7 @@ fn main() -> i64 {
             else if cls == "GENERATED" { count_generated = count_generated + 1 }
             else if cls == "VENDORED" { count_vendored = count_vendored + 1 }
             else if cls == "ABSORBED" { count_absorbed = count_absorbed + 1 }
+            else if cls == "REFERENCE" { count_reference = count_reference + 1 }
             else {
                 count_legacy = count_legacy + 1
                 legacy.push(path)
@@ -209,6 +231,7 @@ fn main() -> i64 {
     println("  GENERATED (codegen output, allowed): " + to_string(count_generated))
     println("  VENDORED  (3rd-party allow-list)   : " + to_string(count_vendored))
     println("  ABSORBED  (other-cycle SSOT)       : " + to_string(count_absorbed))
+    println("  REFERENCE (external-comparison)    : " + to_string(count_reference))
     println("  LEGACY    (G-T1/G-T2 work items)   : " + to_string(count_legacy))
 
     if count_legacy == 0 {

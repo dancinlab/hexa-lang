@@ -1,7 +1,4 @@
 bench/check_regress.sh
-example/bench_ir_native.c
-example/bench_loop_native.c
-example/bench_suite_native.c
 install.sh
 scripts/hexa_cli.sh
 scripts/hexa_daemon_handler.sh
@@ -14,7 +11,6 @@ stdlib/hal/t3/boot_stm32h7.s
 stdlib/hal/t3/harness_main.c
 stdlib/hal/t3/harness_stm32h7_main.c
 test/hexa_annot_smoke.sh
-test/lora_cuda_equiv_test.c
 test/regression/array_idx_assign_repro/run_tests.sh
 test/regression/import_alias_repro/run_tests.sh
 test/t_parser_ssot_lint.sh
@@ -31,7 +27,6 @@ tests/integration/10_dormancy_wake_tick_flip/test.sh
 tests/integration/11_exec_embedded_nul/test.sh
 tests/integration/13_resolver_no_reroute_one_hop/test.sh
 tests/integration/run_all.sh
-tests/runtime_h_smoke.c
 tool/_version_header_seed.sh
 tool/build_absorbed_binaries.sh
 tool/build_aprime.sh
