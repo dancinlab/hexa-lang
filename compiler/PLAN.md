@@ -42,6 +42,31 @@
 
 (append-only)
 
+### 2026-05-20 — #18 S1-step-1 — codegen per-phase 계측 landed + baseline 측정 (INSTRUMENT only)
+
+**작업 = instrumentation + baseline 측정 only** — super-linear curve 자체는 본 cycle 에서 고치지 않음 (g3 over-claim 0).
+
+PLAN.md #18 가 S1 prerequisite 로 명시한 "codegen 단계 내부 phase 계측 추가"를 수행. `compiler/main.hexa` 의 기존 `phase_reset`/`phase_log` arena-reclaim hook 옆에 wall-clock 계측을 추가 — 별도 메커니즘 발명 대신 같은 phase-boundary 지점을 재사용.
+
+**Instrumentation (`compiler/main.hexa`, env-gated)**:
+- `HEXA_CG_PROFILE=1` 새 env-gate (`cg_profile` 모듈-스코프 flag). unset 이면 전 호출이 silent no-op — `mono_ns()` syscall 도 stderr write 도 없음.
+- `cg_profile_begin()` / `cg_profile_mark(label)` 헬퍼 — `mono_ns()` (runtime.c `hexa_mono_ns`, `CLOCK_MONOTONIC` TAG_INT ns) 로 phase delta 측정, `CG_PROFILE phase=<label> delta_ms=<N>` 행을 stderr 로 출력.
+- non-stream 파이프라인에 4 mark: `lower_hir` (HIR→MIR) · `mir_opt` (MIR-opt + stmt-count walk) · `codegen` (MIR→LIR) · `emit_asm` (LIR→asm). `--stream` 경로는 fused 라 `stream_fused` 단일 mark.
+- **byte-identical 검증**: N=400 probe asm, `HEXA_CG_PROFILE` 有/無 `diff -q` = byte-identical. env unset 시 `CG_PROFILE` 행 0개. zero behavior change.
+- 깨끗한 명명 — `_v2`/`_c2`/`aprime`/stage-suffix 미사용.
+
+**Baseline 측정** (`tool/build_aprime.sh -o /tmp/aprime_s1`, arm64-Mac 로컬 빌드 — 2.2 MB Mach-O, smoke `exit(42)` PASS; 합성 probe `fn big()` N 개 sequential `let`):
+
+| N   | lower_hir | mir_opt | codegen | emit_asm |
+|-----|-----------|---------|---------|----------|
+| 100 | 15 ms     | 0 ms    | 6 ms    | 1 ms     |
+| 200 | 63 ms     | 0 ms    | 10 ms   | 1 ms     |
+| 400 | 372 ms    | 0 ms    | 29 ms   | 4 ms     |
+
+**측정 결론 — super-linear phase = `lower_hir` (HIR→MIR)**: 15→63→372 ms. N 더블링당 4.2× (100→200) · 5.9× (200→400) — O(N²) 이상. `codegen`(6→10→29) 과 `emit_asm`(1→1→4) 은 거의 선형, `mir_opt` 은 `--opt=0` 에서 무시할 수준. 이는 2026-05-17 entry 의 잔여 진단 — arm64 stmt-loop O(N²) 는 이미 제거됐고 잔여는 `_lower_hexpr` 재귀가 `LowerExprResult{ctx: LowerCtx}` 를 반환 → `LowerCtx.blocks` deep-heapify — 와 정확히 일치. 본 계측이 그 가설을 top-level phase 분해로 재확인.
+
+**punted (다음 cycle, S1-step-2 후보)**: (1) `codegen` 내부 sub-phase 계측 (regalloc vs per-fn lowering) — PLAN.md 가 잔여를 `lower_hir` 로 이미 localize 했고 `codegen` 은 선형이라 본 cycle 에서 추가 안 함 (cheap-but-low-value). (2) super-linear 제거 자체 — `LowerCtx` 의 `blocks`/`locals`/`bindings` 누적 배열을 module-level `pub let mut` 로 빼는 lowering-pass 리팩터 (20+ helper 영향), 본 cycle scope 밖.
+
 ### 2026-05-19 — token-forge: `consciousness TokenForgeRouter { ... }` 블록 retirement (Decision C surgical unwrap)
 
 `tool/pkg/packages/token-forge/forge.hexa` 의 마지막 잔여 별건 #4. 파일은 line 214 에서 `consciousness TokenForgeRouter { assert ...; let argv = args(); ... }` 를 top-level 블록처럼 사용 — 하지만 hexa-lang 의 `consciousness Name { ... }` 구문은 lexer/parser/codegen 어디에도 등록되어 있지 않고 (`self/formatter.hexa::ConsciousnessBlock` 만 orphan dead-branch 로 잔존), 파서는 이를 struct-literal `consciousness { TokenForgeRouter: ... }` 로 잘못 해석해서 `expected identifier, got Assert` 류의 ~40 errors 폭발. `example/consciousness_bootstrap.hexa` 의 phi/tension/faction/cells 자동주입 의미론은 published 되었으나 미구현 상태이며 — token-forge 의 블록은 **그 의미론을 전혀 사용하지 않음** (단순 라벨드 스크립트 바디 wrapper).
