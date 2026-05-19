@@ -1541,6 +1541,176 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
             st = _ps_take(st)
             break
         }
+        // `for ( GV = INIT ; COND ; GV = STEP ) begin BODY end` inside
+        // always — static unroll while COND folds non-zero. BODY here
+        // supports the same single-statement shape (assign) — nested
+        // for / if are honest gaps for this commit.
+        if _ps_peek(st) == "for" {
+            st = _ps_take(st)
+            if _ps_peek(st) != "(" {
+                return RvStep {
+                    st: _ps_fail(st, "read_verilog: always for: expected `(`"),
+                    m: m
+                }
+            }
+            st = _ps_take(st)
+            let fgv = _ps_peek(st)
+            st = _ps_take(st)
+            if _ps_peek(st) != "=" {
+                return RvStep {
+                    st: _ps_fail(st, "read_verilog: always for init: expected `=`"),
+                    m: m
+                }
+            }
+            st = _ps_take(st)
+            let mut finit: [str] = []
+            while st.pos < len(st.toks) {
+                let t = _ps_peek(st)
+                if t == ";" { st = _ps_take(st); break }
+                finit = finit.push(t)
+                st = _ps_take(st)
+            }
+            let f_init_ev = _rv_eval_expr(finit, 0, tab, 1)
+            if len(f_init_ev.err) > 0 {
+                return RvStep {
+                    st: _ps_fail(st, "read_verilog: always for init: " + f_init_ev.err),
+                    m: m
+                }
+            }
+            tab = symtab_put(tab, fgv, f_init_ev.value)
+            let mut fcond: [str] = []
+            while st.pos < len(st.toks) {
+                let t = _ps_peek(st)
+                if t == ";" { st = _ps_take(st); break }
+                fcond = fcond.push(t)
+                st = _ps_take(st)
+            }
+            st = _ps_take(st)               // step gv name
+            if _ps_peek(st) != "=" {
+                return RvStep {
+                    st: _ps_fail(st, "read_verilog: always for step: expected `=`"),
+                    m: m
+                }
+            }
+            st = _ps_take(st)
+            let mut fstep: [str] = []
+            while st.pos < len(st.toks) {
+                let t = _ps_peek(st)
+                if t == ")" { st = _ps_take(st); break }
+                fstep = fstep.push(t)
+                st = _ps_take(st)
+            }
+            // optional begin
+            let mut f_has_begin = 0
+            if _ps_peek(st) == "begin" {
+                f_has_begin = 1
+                st = _ps_take(st)
+            }
+            // record body span and find matching `end`
+            let f_body_start = st.pos
+            let mut f_depth = 1
+            let mut f_body_end = f_body_start
+            while f_body_end < len(st.toks) {
+                let t = st.toks[f_body_end]
+                if t == "begin" { f_depth = f_depth + 1 }
+                if t == "end" {
+                    f_depth = f_depth - 1
+                    if f_depth == 0 { break }
+                }
+                f_body_end = f_body_end + 1
+            }
+            // unroll
+            let mut fiter = 0
+            while fiter < 1024 {
+                let fcv = _rv_eval_expr(fcond, 0, tab, 1)
+                if len(fcv.err) > 0 {
+                    return RvStep {
+                        st: _ps_fail(st, "read_verilog: always for cond: " + fcv.err),
+                        m: m
+                    }
+                }
+                if fcv.value == 0 { break }
+                // re-parse body assignments
+                let mut bst = PState { toks: st.toks, pos: f_body_start, err: "" }
+                while bst.pos < f_body_end {
+                    if f_has_begin == 1 && _ps_peek(bst) == "end" { break }
+                    let bqb = _ps_peek(bst)
+                    bst = _ps_take(bst)
+                    let mut bq = bqb
+                    if _ps_peek(bst) == "[" {
+                        bst = _ps_take(bst)
+                        let mut bidx: [str] = []
+                        let mut bdepth = 1
+                        while bst.pos < len(bst.toks) {
+                            let bit = _ps_peek(bst)
+                            if bit == "[" {
+                                bdepth = bdepth + 1
+                                bidx = bidx.push(bit)
+                                bst = _ps_take(bst)
+                                continue
+                            }
+                            if bit == "]" {
+                                bdepth = bdepth - 1
+                                if bdepth == 0 { bst = _ps_take(bst); break }
+                                bidx = bidx.push(bit)
+                                bst = _ps_take(bst)
+                                continue
+                            }
+                            bidx = bidx.push(bit)
+                            bst = _ps_take(bst)
+                        }
+                        let bev = _rv_eval_expr(bidx, 0, tab, 1)
+                        if len(bev.err) == 0 {
+                            bq = bqb + "[" + str(bev.value) + "]"
+                        }
+                    }
+                    let bopk = _ps_peek(bst)
+                    if bopk != "<=" && bopk != "=" {
+                        return RvStep {
+                            st: _ps_fail(bst, "read_verilog: always for body: expected `<=` or `=` got `"
+                                + bopk + "` (nested for/if/case in always is an honest gap)"),
+                            m: m
+                        }
+                    }
+                    bst = _ps_take(bst)
+                    let mut brhs: [str] = []
+                    while bst.pos < len(bst.toks) {
+                        let bt2 = _ps_peek(bst)
+                        if bt2 == ";" { bst = _ps_take(bst); break }
+                        brhs = brhs.push(bt2)
+                        bst = _ps_take(bst)
+                    }
+                    let ber = _rv_elab_expr(brhs, 0, m, 1, tab)
+                    if len(ber.err) > 0 {
+                        return RvStep { st: _ps_fail(bst, ber.err), m: m }
+                    }
+                    m = ber.m
+                    if is_clocked == 1 {
+                        let cn = "$rvff$" + str(len(m.cells))
+                        let mut c = rtlil_cell(cn, "$dff", 0)
+                        c = rtlil_cell_connect(c, "CLK", clk_wire)
+                        c = rtlil_cell_connect(c, "D", ber.wire)
+                        c = rtlil_cell_connect(c, "Q", bq)
+                        m = rtlil_module_add_cell(m, c)
+                        let _eg = clk_edge
+                    } else {
+                        m = rtlil_module_connect(m, bq, ber.wire)
+                    }
+                }
+                let f_step_ev = _rv_eval_expr(fstep, 0, tab, 1)
+                if len(f_step_ev.err) > 0 {
+                    return RvStep {
+                        st: _ps_fail(st, "read_verilog: always for step: " + f_step_ev.err),
+                        m: m
+                    }
+                }
+                tab = symtab_put(tab, fgv, f_step_ev.value)
+                fiter = fiter + 1
+            }
+            // jump past body + `end`
+            st = PState { toks: st.toks, pos: f_body_end + 1, err: "" }
+            continue
+        }
         let q_base = _ps_peek(st)
         st = _ps_take(st)
         let mut q = q_base
