@@ -3656,3 +3656,64 @@ hand-emit + measured fire; 055-P3 wires it into the compile pipeline.
 (GEMM emitter + ASCII fix). No binary promote — `nvptx_*.hexa` is
 unreached by the driver's compile path (F-RFC055-CPU-CODEGEN-UNTOUCHED);
 tool/* + test files are source-only (@D g_commit_push_deploy).
+
+### 2026-05-20 — RFC 055 055-P3a — `--target=nvptx64-*` dispatch branch wired in `compiler/main.hexa`
+
+RFC 055 055-P3 first slice (**a — dispatch wiring**). The NVPTX target is
+now a real selectable target in the `compiler/main.hexa` codegen dispatch
+table, sibling to the three CPU targets. Architecturally completes the
+"sibling to `codegen_arm64_darwin` / `codegen_x86_64_linux`" framing
+RFC 055 §6.1 specified.
+
+**What landed (compiler/main.hexa, +40 / -3 lines, additive):**
+- Imports `./codegen/nvptx_target.hexa`.
+- `--target=` help line lists `nvptx64-nvidia-cuda-sm{80,90}`.
+- The codegen if-expression chain gains two branches (after the existing
+  three CPU branches, before the unsupported-target fallthrough):
+  `target == NVPTX_TARGET_SM90` → `codegen_nvptx_sm90(mmodule)` ·
+  `target == NVPTX_TARGET_SM80` → `codegen_nvptx_sm80(mmodule)`.
+- The emit step routes NVPTX through `emit_ptx(lmodule)` (PTX text emit
+  pass) instead of the CPU `emit_asm(lmodule)`.
+- A pre-`emit_kind == "asm"` bypass writes the `.ptx` directly to
+  `out_path` and exits when the target is NVPTX — PTX is the final
+  artifact for hexa (`ptxas` → cubin is the downstream NVIDIA tool, RFC
+  055 §6.2 / §8); no system `as` / `ld` step applies. The CPU `emit_kind
+  == "asm"` branch below is byte-identically untouched.
+
+**Verification — honest scope:**
+- Parse-clean: `/Users/ghost/.hx/bin/hexa_real parse compiler/main.hexa`
+  → OK (post-edit).
+- 055-P1 + 055-P2 standalone smoke tests still PASS after the import
+  added to `main.hexa` (the standalone tests resolve their own
+  imports — no cross-impact).
+- **E2E unverifiable in this cycle** — `hexa build compiler/main.hexa`
+  currently fails at clang with **duplicate-definition errors**
+  (`EdgeInfo` struct constructor double-emitted at flatten lines 10372 +
+  12251, 4 errors total). This is the pre-existing `ml_resolve_full`
+  diamond-import dedup gap documented in the
+  `project_compiler_selfbuild_blockers` memory (사실 2 — the
+  `ml_canon_path` canon-fix was landed once on 2026-05-18 then wiped by
+  parallel sessions). RFC 055 P3a's e2e is **gated on that selfbuild
+  blocker**, not on this edit. The dispatch wiring lands as parse-clean
+  source the moment the flatten dedup is restored, the dispatch becomes
+  exercisable.
+- F-RFC055-CPU-CODEGEN-UNTOUCHED — the three CPU branches in the
+  if-expression are byte-identical; the new branches are pure additions
+  before the `else { eprintln(unsupported) }` fallthrough.
+
+**Honest scope — still 055-P3b/c (NOT this slice):**
+- The MIR partition that marks `@gpu_kernel` / `@gpu_device` FnDecls
+  flowing through to `MFunc.gpu_kind` — needs HIR→MIR lowering edits.
+- `_nvptx_lower_func` real lowering of intrinsic-calls (`gpu_thread_id_x`),
+  control flow (`STMT_BR_COND`), `STMT_LOAD` / `STMT_STORE` from MIR.
+  055-P0 currently honestly stubs these. A real `@gpu_kernel` MFunc
+  today lowers to PTX with `// RFC 055 055-P0 — unsupported stmt kind:`
+  honest-stub comments for non-FP64-arith body lines.
+- `gpu_launch(...)` host-side lowering → `_hx_cuda_launch_kernel` builtin
+  codegen; cubin `.rodata` `LSection` embed; the tiled `@shared` +
+  `gpu_barrier()` GEMM variant.
+
+**Files** — extended only: `compiler/main.hexa` (+40 / -3). No new
+files; no binary promote (`compiler/main.hexa` is the self-host compiler
+front-end, not the driver bootstrap — @D g_commit_push_deploy applies to
+`hexa_cc.c` / `hexa_v2`, neither of which this cycle touches).
