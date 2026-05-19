@@ -5,10 +5,15 @@
 // a calculator interface used by hexa-matter (and hexa-bio for molecular
 // geometry).
 //
-// Status: STAGE-1 — Atoms container + constructor + pure-stdlib accessors
-// (len / chemical_symbols / volume) landed. Stage-2 primitives
-// (from_cif / neighborlist / EMT relax) still pending; those need
-// dependency hexa-native kernels and are tracked separately.
+// Status: STAGE-2 — Atoms container + pure-stdlib accessors
+// (len / chemical_symbols / volume) + atoms_bulk (fcc/bcc/diamond) +
+// atoms_neighborlist / atoms_coordination + atoms_from_cif (minimal
+// CIF reader) all landed and self-validated against closed forms.
+// EMT (atoms_emt_energy / atoms_emt_relax) is honestly deferred to
+// Stage-2.5: a faithful port needs ASE's per-element parameter table
+// AND a validated ASE reference, neither of which exists in-repo
+// (no ase install ⇒ no golden) — the stubs return an explicit
+// NOT-IMPLEMENTED sentinel rather than a fabricated energy (g3).
 //
 // ── Migration plan ──────────────────────────────────────────────────
 //   Stage 1 (DONE here): Atoms struct + atoms_new + atoms_len +
@@ -193,6 +198,286 @@ pub fn atoms_coordination(at: Atoms, idx: int, cutoff: float) -> int {
     return k
 }
 
+// ── Stage-2 kernel: minimal CIF reader (ase.io.read for .cif) ───────
+// hexa-native re-implementation of the subset of ASE's CIF reader
+// that hexa-matter touches: a single data block with explicit
+//   _cell_length_a/_b/_c            (Å)
+//   _cell_angle_alpha/_beta/_gamma  (degrees)
+// and one `_atom_site_` loop carrying a symbol column
+// (_atom_site_type_symbol, else _atom_site_label) plus
+// _atom_site_fract_x/_y/_z. Symmetry expansion (_symmetry_equiv_*) is
+// NOT applied — sites are taken verbatim (P1 / already-expanded CIF),
+// which is exactly the regime the hexa-matter fixtures use.
+//
+// Cell matrix: standard crystallographic→cartesian convention with
+// a along +x, b in the xy-plane, c general (ASE `cellpar_to_cell`):
+//   a = (a, 0, 0)
+//   b = (b cosγ, b sinγ, 0)
+//   c = (c cosβ, c (cosα − cosβ cosγ)/sinγ, c cz)
+// where cz keeps |c| exact. Positions are fractional→cartesian via
+// p = fx·a + fy·b + fz·c.
+//
+// File read: `exec("cat " + shq(path))` (single-quote shell-escape).
+
+// Single-quote shell escape: ' -> '\'' , wrap in single quotes.
+fn _atoms_shq(s: string) -> string {
+    let mut out = "'"
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let ch = s.substring(i, i + 1)
+        if ch == "'" {
+            out = out + "'\\''"
+        } else {
+            out = out + ch
+        }
+        i = i + 1
+    }
+    out = out + "'"
+    return out
+}
+
+// Whitespace tokenizer (space / tab) — collapses runs, drops empties.
+fn _atoms_split_ws(s: string) -> any {
+    let mut out: any = []
+    let mut cur = ""
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let ch = s.substring(i, i + 1)
+        let is_sp = ch == " " || ch == "\t" || ch == "\r"
+        if is_sp {
+            if cur != "" { out.push(cur) }
+            cur = ""
+        } else {
+            cur = cur + ch
+        }
+        i = i + 1
+    }
+    if cur != "" { out.push(cur) }
+    return out
+}
+
+// Strip a CIF parenthesised standard-uncertainty suffix, e.g.
+// "3.6149(2)" -> "3.6149", and surrounding quotes.
+fn _atoms_clean_num(tok: string) -> string {
+    let mut out = ""
+    let mut i = 0
+    let n = len(tok)
+    while i < n {
+        let ch = tok.substring(i, i + 1)
+        if ch == "(" {
+            i = n
+        } else {
+            out = out + ch
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// Element symbol from a site token: leading alphabetic run, with the
+// 2nd char lowercased only if it is a letter (handles "Cu1", "NA",
+// "Cu2+", "O1-"). ASE applies a similar label→symbol heuristic.
+fn _atoms_sym_from_token(tok: string) -> string {
+    let n = len(tok)
+    if n == 0 { return "" }
+    let c0 = tok.substring(0, 1)
+    let up0 = c0 >= "A" && c0 <= "Z"
+    let lo0 = c0 >= "a" && c0 <= "z"
+    if (up0 || lo0) == false { return "" }
+    let mut sym = c0
+    if n >= 2 {
+        let c1 = tok.substring(1, 2)
+        let lo1 = c1 >= "a" && c1 <= "z"
+        if lo1 { sym = sym + c1 }
+    }
+    return sym
+}
+
+fn _atoms_cellpar_to_cell(a: float, b: float, c: float, al: float, be: float, ga: float) -> any {
+    let d2r = 0.017453292519943295
+    let ar = al * d2r
+    let br = be * d2r
+    let gr = ga * d2r
+    let ca = cos(ar)
+    let cb = cos(br)
+    let cg = cos(gr)
+    let sg = sin(gr)
+    let ax = a
+    let bx = b * cg
+    let by = b * sg
+    let cx = c * cb
+    let cy_num = ca - cb * cg
+    let cy = c * cy_num / sg
+    let cyu = cy / c
+    let inside = 1.0 - cb * cb - cyu * cyu
+    let czu = sqrt(inside)
+    let cz = c * czu
+    let r0 = [ax, 0.0, 0.0]
+    let r1 = [bx, by, 0.0]
+    let r2 = [cx, cy, cz]
+    let mut out: any = []
+    out.push(r0)
+    out.push(r1)
+    out.push(r2)
+    return out
+}
+
+// Parse a CIF file into an Atoms (see header). Unknown / malformed
+// input degrades to an empty-symbol Atoms (caller checks atoms_len).
+pub fn atoms_from_cif(path: string) -> Atoms {
+    let raw = to_string(exec("cat " + _atoms_shq(path)))
+    let lines = raw.split("\n")
+    let nlines = len(lines)
+
+    let mut a = 0.0
+    let mut b = 0.0
+    let mut c = 0.0
+    let mut al = 90.0
+    let mut be = 90.0
+    let mut ga = 90.0
+
+    // First pass: scalar cell parameters.
+    let mut li = 0
+    while li < nlines {
+        let toks = _atoms_split_ws(lines[li].trim())
+        if len(toks) >= 2 {
+            let key = toks[0]
+            let valt = _atoms_clean_num(toks[1])
+            if key == "_cell_length_a" { a = to_float(valt) }
+            if key == "_cell_length_b" { b = to_float(valt) }
+            if key == "_cell_length_c" { c = to_float(valt) }
+            if key == "_cell_angle_alpha" { al = to_float(valt) }
+            if key == "_cell_angle_beta" { be = to_float(valt) }
+            if key == "_cell_angle_gamma" { ga = to_float(valt) }
+        }
+        li = li + 1
+    }
+
+    // Second pass: locate the _atom_site_ loop header block and read
+    // its column ordering, then consume the data rows.
+    let mut col_sym = -1
+    let mut col_label = -1
+    let mut col_fx = -1
+    let mut col_fy = -1
+    let mut col_fz = -1
+    let mut ncol = 0
+    let mut in_header = false
+    let mut data_started = false
+
+    let mut symbols: any = []
+    let mut fracs: any = []
+
+    let mut k = 0
+    while k < nlines {
+        let line = lines[k].trim()
+        let toks = _atoms_split_ws(line)
+        let nt = len(toks)
+        if nt == 0 {
+            if data_started { k = nlines }
+            k = k + 1
+            continue
+        }
+        let head = toks[0]
+        let is_site_tag = false
+        let mut tag_is_site = false
+        if len(head) >= 11 {
+            if head.substring(0, 11) == "_atom_site_" { tag_is_site = true }
+        }
+        if tag_is_site {
+            // Entering / inside the atom-site loop header.
+            in_header = true
+            if head == "_atom_site_type_symbol" { col_sym = ncol }
+            if head == "_atom_site_label" { col_label = ncol }
+            if head == "_atom_site_fract_x" { col_fx = ncol }
+            if head == "_atom_site_fract_y" { col_fy = ncol }
+            if head == "_atom_site_fract_z" { col_fz = ncol }
+            ncol = ncol + 1
+            k = k + 1
+            continue
+        }
+        let starts_us = head.substring(0, 1) == "_"
+        let is_loop = head == "loop_"
+        if in_header && data_started == false {
+            if starts_us || is_loop {
+                // A different tag / new loop_ ends the atom-site block
+                // before any data row -> stop looking here.
+                k = nlines
+            } else {
+                // First data row of the atom-site loop.
+                data_started = true
+            }
+        }
+        if data_started {
+            if starts_us || is_loop {
+                k = nlines
+            } else {
+                if nt >= ncol {
+                    let mut sym = ""
+                    if col_sym >= 0 {
+                        sym = _atoms_sym_from_token(toks[col_sym])
+                    } else {
+                        if col_label >= 0 { sym = _atoms_sym_from_token(toks[col_label]) }
+                    }
+                    let fx = to_float(_atoms_clean_num(toks[col_fx]))
+                    let fy = to_float(_atoms_clean_num(toks[col_fy]))
+                    let fz = to_float(_atoms_clean_num(toks[col_fz]))
+                    if sym != "" {
+                        symbols.push(sym)
+                        fracs.push([fx, fy, fz])
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+
+    if a == 0.0 || len(symbols) == 0 {
+        let zc = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+        return Atoms { symbols: [], positions: [], cell: zc, pbc: [true, true, true] }
+    }
+
+    let cell = _atoms_cellpar_to_cell(a, b, c, al, be, ga)
+    let cr0 = cell[0]
+    let cr1 = cell[1]
+    let cr2 = cell[2]
+
+    let mut positions: any = []
+    let mut pi = 0
+    let np = len(fracs)
+    while pi < np {
+        let fr = fracs[pi]
+        let fx = fr[0]
+        let fy = fr[1]
+        let fz = fr[2]
+        let px = fx * cr0[0] + fy * cr1[0] + fz * cr2[0]
+        let py = fx * cr0[1] + fy * cr1[1] + fz * cr2[1]
+        let pz = fx * cr0[2] + fy * cr1[2] + fz * cr2[2]
+        positions.push([px, py, pz])
+        pi = pi + 1
+    }
+
+    return Atoms { symbols: symbols, positions: positions, cell: cell, pbc: [true, true, true] }
+}
+
+// ── Stage-2.5 (honest deferral): ASE EMT calculator ─────────────────
+// ASE's EMT is a parametrised embedded-atom-method potential with a
+// per-element parameter table (E0, s0, V0, eta2, kappa, lambda, n0)
+// fitted by Jacobsen/Stoltze/Nørskov. A faithful port needs that full
+// table + the EMT energy functional; this repo has NO ASE install and
+// therefore NO golden to validate a port against. Per project g3
+// (predictions ≠ measurements) / "no fabricated numbers", these are
+// deliberately left as a sentinel-returning stub rather than emitting
+// an unvalidated energy. Promote only with a checked ASE reference.
+pub fn atoms_emt_energy(at: Atoms) -> str {
+    return "STAGE-2.5-NOT-IMPLEMENTED: ASE EMT energy needs the element parameter table + a validated ASE reference (no ase install / no golden in-repo)"
+}
+
+pub fn atoms_emt_relax(at: Atoms) -> str {
+    return "STAGE-2.5-NOT-IMPLEMENTED: ASE EMT relaxation needs atoms_emt_energy + a validated ASE reference (no ase install / no golden in-repo)"
+}
+
 pub fn atoms_status() -> str {
-    return "STAGE-2 (partial) — Stage-1 + atoms_bulk + atoms_neighborlist/coordination (absorbs: ase; from_cif/EMT still Stage-2)"
+    return "STAGE-2 — Stage-1 + atoms_bulk + atoms_neighborlist/coordination + atoms_from_cif (absorbs: ase; EMT honestly deferred Stage-2.5: no ase golden in-repo)"
 }
