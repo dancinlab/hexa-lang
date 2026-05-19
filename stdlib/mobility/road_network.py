@@ -1,59 +1,52 @@
-# road_network.py — phase κ-41 (P-⑧ 5th cohort producer, D63)
+# road_network.py — ①b domain adapter (demiurge design.md D72)
 # osmnx-based road-network topology producer for `mobility + analyze`.
 #
-# This script is the *SSOT* for the mobility road-graph producer
-# (demiurge AGENTS.tape `@D g_demiurge_pointer_only` / D61: every
-# producer script lives in `~/core/hexa-lang/stdlib/<domain>/`,
-# demiurge holds only the `Process`-spawn Swift wrapper —
-# `MobilityAnalyzeProducer.swift`).
+# D72 2-layer restructure: this file is now a THIN domain adapter.
+# It owns ONLY the domain topology (the synthetic Manhattan grid) and
+# the domain honesty caveats. The domain-agnostic graph-theoretic
+# math (connectivity / diameter / centrality) is delegated to the
+# shared ①a kernel `kernels/graph/networkx_kernel.py` — the same
+# kernel `grid/networkx_basics.py` calls (N×M -> N+M).
+#
+# osmnx.basic_stats stays HERE: it is an osmnx-specific road-graph
+# statistic (intersection_count, streets_per_node, edge_length), not
+# a generic graph metric — so it belongs to the mobility adapter, not
+# the graph kernel.
 #
 # Invoked by Swift's MobilityAnalyzeProducer via:
-#   /opt/homebrew/bin/python3 road_network.py <output_dir>
+#   /opt/homebrew/bin/python3 .../stdlib/mobility/road_network.py <out_dir>
 #
 # What it does (honest scope — g3):
 #   1. Synthesize a deterministic 10x10 Manhattan-style grid (block
-#      spacing 100 m, centered on Midtown Manhattan lat/lon for
+#      spacing 100 m, anchored on Midtown Manhattan lat/lon for
 #      coordinate plausibility). 100 intersections, 360 directed
-#      edges. This is a *standard topology fixture*, not a fetched
-#      real road network — no internet, no OSM Overpass dependency,
-#      reproducible byte-for-byte across hosts. (Online OSM fetch
-#      via osmnx.graph_from_bbox is intentionally NOT used here:
-#      it (a) requires reachable Overpass servers, (b) returns
-#      time-varying results, both of which would defeat the
-#      cross-host drift guarantee that the rest of demiurge's
-#      record discipline relies on.)
-#   2. Run osmnx.basic_stats(G) on the synthetic graph to extract
-#      the standard road-graph topology measurements: node count,
-#      edge count, intersection_count, average node degree (k_avg),
-#      edge_length_total_m, streets_per_node distribution.
-#   3. Run networkx connectivity + diameter on the undirected
-#      projection (small graph → exact, no sampling needed).
-#   4. Emit road_network.meta.json with parameters + measurements
-#      + osmnx version + networkx version + Python version so
-#      cross-host drift is visible.
+#      edges. A *standard topology fixture*, not a fetched real road
+#      network — no internet, reproducible byte-for-byte.
+#   2. Run osmnx.basic_stats(G) for the osmnx-specific road-graph
+#      statistics (intersection count, k_avg, edge_length totals,
+#      streets_per_node distribution).
+#   3. Delegate connectivity + diameter to the ①a graph kernel
+#      (`topology_metrics`) — the generic graph facts.
+#   4. Emit road_network.meta.json with parameters + measurements +
+#      library versions so cross-host drift is visible.
 #
-# HONESTY (g3 — non-negotiable):
-#   * Graph topology measurements ARE real (osmnx.basic_stats and
-#     networkx.diameter are standard algorithms — the numbers are
-#     genuine outputs for the synthetic Manhattan grid topology).
+# HONESTY (g3 — non-negotiable, domain caveats stay HERE):
+#   * Graph topology measurements ARE real (osmnx.basic_stats and the
+#     kernel's networkx algorithms are standard — genuine outputs for
+#     the synthetic Manhattan grid topology).
 #   * BUT this is *graph topology only* — NO traffic flow, NO travel
-#     time, NO vehicle simulation, NO real-world OSM data. The
-#     synthetic grid is a *topology fixture*, not "the road network
-#     of Manhattan". A real mobility-analyze record (SUMO traffic
-#     micro-simulation, CARLA scenario regression — domains/mobility.md
-#     §2) would need orders of magnitude more setup; this producer
-#     intentionally stops at the topology layer to keep cohort
+#     time, NO vehicle simulation, NO real OSM data. The synthetic
+#     grid is a *topology fixture*, not "the road network of
+#     Manhattan". A real mobility-analyze record (SUMO/CARLA —
+#     domains/mobility.md §2) would need orders of magnitude more
+#     setup; this producer stops at the topology layer to keep cohort
 #     breadth-coverage tractable (g3 — honest narrow scope).
 #   * measurement_gate stays GATE_OPEN ALWAYS. absorbed = false
-#     ALWAYS. Real "absorbed" mobility analysis would need:
-#       (a) real OSM extract (or HD map) for the named place,
-#       (b) calibrated traffic-demand matrix (origin-destination
-#           survey or detector counts), (c) SUMO/CARLA micro-sim
-#           validated against measured travel times.
-#     None of those are in scope here.
-#   * If osmnx/networkx are missing OR analysis fails, returns
-#     ok=false and writes the error verbatim. Silent success is
-#     forbidden.
+#     ALWAYS. Real "absorbed" mobility analysis would need a real OSM
+#     extract, a calibrated demand matrix, and a validated micro-sim.
+#   * If osmnx/networkx/the kernel are missing OR analysis fails,
+#     returns ok=false and writes the error verbatim. Silent success
+#     is forbidden.
 
 import json
 import math
@@ -64,7 +57,16 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-# --- Deterministic synthetic topology parameters.
+# --- Locate the ①a graph kernel relative to this adapter's own file
+# (stdlib/mobility/ -> stdlib/kernels/graph/). The Swift spawn sets an
+# arbitrary cwd, so a path relative to __file__ is the only robust
+# anchor.
+_KERNEL_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "kernels", "graph")
+if _KERNEL_DIR not in sys.path:
+    sys.path.insert(0, _KERNEL_DIR)
+
+# --- Deterministic synthetic topology parameters (①b domain knowledge).
 GEOMETRY_ID = "road_network_manhattan_grid_10x10_v1"
 PLACE_LABEL = "Synthetic_Manhattan_Grid_10x10"
 GRID_N = 10                  # 10 x 10 intersections
@@ -84,28 +86,21 @@ def osmnx_version() -> str:
         return "unknown"
 
 
-def networkx_version() -> str:
-    try:
-        import networkx
-        return networkx.__version__
-    except Exception:
-        return "unknown"
-
-
 def build_grid_graph():
     """Build a deterministic 10x10 Manhattan grid as a MultiDiGraph
     with osmnx-compatible node attributes (x=lon, y=lat, street_count)
     and edge attributes (length in metres). Returns the MultiDiGraph
-    so osmnx.basic_stats() can consume it directly."""
+    so osmnx.basic_stats() can consume it directly. This is the ①b
+    domain knowledge — the synthetic mobility topology."""
     import networkx as nx
 
     G = nx.MultiDiGraph()
     G.graph["crs"] = "EPSG:4326"
 
     # Approximate degrees-per-metre at origin latitude (good enough
-    # for a 1 km x 1 km synthetic grid — we are NOT claiming this is
-    # geodesically exact, only that the edge_length attribute below
-    # is the true block spacing in metres).
+    # for a 1 km x 1 km synthetic grid — NOT claimed geodesically
+    # exact; only the edge_length attribute below is the true block
+    # spacing in metres).
     deg_per_m_lat = 1.0 / 111000.0
     deg_per_m_lon = 1.0 / (111000.0 * math.cos(math.radians(ORIGIN_LAT)))
 
@@ -133,8 +128,8 @@ def build_grid_graph():
     # osmnx.basic_stats expects each node to carry a `street_count`
     # attribute (number of distinct streets meeting at the node).
     # In a directed grid that is the number of unique adjacent
-    # intersections; we approximate it as out-degree (correct for an
-    # un-multi grid because there is one edge per neighbour pair).
+    # intersections; approximated as out-degree (correct for an
+    # un-multi grid — one edge per neighbour pair).
     for n in G.nodes():
         G.nodes[n]["street_count"] = sum(1 for _ in G.successors(n))
 
@@ -142,30 +137,32 @@ def build_grid_graph():
 
 
 def run_simulation(output_dir: str) -> dict:
-    """Build the grid, run osmnx.basic_stats + networkx connectivity,
-    and write a CSV of the edge list. Raises on import / library
-    failure — the caller (main) catches and reports honest gap."""
+    """Build the grid, run osmnx.basic_stats, delegate connectivity +
+    diameter to the ①a graph kernel, and write a CSV of the edge
+    list. Raises on import / library failure — the caller (main)
+    catches and reports honest gap."""
     import osmnx as ox
-    import networkx as nx
+    import networkx_kernel as kernel
 
     G = build_grid_graph()
 
+    # osmnx-specific road-graph statistics — stay in the adapter.
     stats = ox.basic_stats(G)
 
-    # Undirected projection for connectivity + diameter.
-    G_undirected = nx.MultiGraph(G)
-    components = nx.number_connected_components(G_undirected)
-    # Diameter requires connected; 10x10 grid is connected.
-    diameter = nx.diameter(G_undirected) if components == 1 else None
+    # Generic graph facts — delegated to the ①a kernel. The kernel
+    # internally projects the MultiDiGraph to a simple undirected
+    # graph for connectivity / diameter.
+    graph_metrics = kernel.topology_metrics(G, top_n=3)
+    components = 1 if graph_metrics["is_connected"] else None
+    diameter = graph_metrics["diameter"]
 
     streets_per_node_counts = {
         str(k): int(v) for k, v in stats.get("streets_per_node_counts", {}).items()
     }
 
     # Write the edge list as CSV for downstream sweeps (small —
-    # 360 rows × 3 cols). Geometry serialization not needed since
-    # the grid is deterministic; recipients can regenerate from
-    # GEOMETRY_ID alone.
+    # 360 rows × 3 cols). Geometry serialization not needed since the
+    # grid is deterministic; recipients regenerate from GEOMETRY_ID.
     csv_path = os.path.join(output_dir, f"{GEOMETRY_ID}.edges.csv")
     with open(csv_path, "w", encoding="utf-8") as f:
         f.write("u,v,length_m\n")
@@ -181,7 +178,7 @@ def run_simulation(output_dir: str) -> dict:
         "edge_length_avg_m": round(float(stats["edge_length_avg"]), 3),
         "streets_per_node_avg": round(float(stats["streets_per_node_avg"]), 6),
         "streets_per_node_counts": streets_per_node_counts,
-        "connected_components": int(components),
+        "connected_components": int(components) if components is not None else 0,
         "diameter_undirected": int(diameter) if diameter is not None else None,
         "edges_csv_artifact": f"{GEOMETRY_ID}.edges.csv",
     }
@@ -196,8 +193,14 @@ def main(argv: list) -> int:
 
     meta_path = os.path.join(output_dir, f"{GEOMETRY_ID}.meta.json")
     ox_v = osmnx_version()
-    nx_v = networkx_version()
     py_v = platform.python_version()
+
+    # networkx version probed via the ①a kernel — single source.
+    try:
+        import networkx_kernel as _kernel_probe
+        nx_v = _kernel_probe.networkx_version()
+    except Exception:
+        nx_v = "unknown"
 
     try:
         measurements = run_simulation(output_dir)
