@@ -49,6 +49,12 @@ let j = cloud_nohup("gpu-pod-1", ["python3", "train.py"], "/workspace/train.log"
 
 // later — is it still alive?
 let alive = cloud_poll("gpu-pod-1", j.pid)
+
+// upload / download files (cycle B-1 — scp via structured argv)
+cloud_copy_to_opts("root@154.54.102.51",
+    ["-p", "19241", "-o", "StrictHostKeyChecking=no"],
+    "/local/train.py", "/workspace/train.py")
+cloud_copy_from("gpu-pod-1", "/workspace/result.json", "/local/result.json")
 ```
 
 `CloudResult` fields: `ok`, `exit_code`, `pid`, `stdout_`, `message`.
@@ -60,9 +66,11 @@ from `~/.ssh/config` where the key, port and user live. ssh runs with
 ## CLI
 
 ```
-hexa run stdlib/cloud/cloud_cli.hexa run  gpu-pod-1 -- python3 train.py
-hexa run stdlib/cloud/cloud_cli.hexa run  root@1.2.3.4 --port 19241 --insecure -- python3 train.py
-hexa run stdlib/cloud/cloud_cli.hexa poll gpu-pod-1 12345
+hexa run stdlib/cloud/cloud_cli.hexa run       gpu-pod-1 -- python3 train.py
+hexa run stdlib/cloud/cloud_cli.hexa run       root@1.2.3.4 --port 19241 --insecure -- python3 train.py
+hexa run stdlib/cloud/cloud_cli.hexa copy-to   root@1.2.3.4 ./train.py /workspace/train.py --port 19241 --insecure
+hexa run stdlib/cloud/cloud_cli.hexa copy-from root@1.2.3.4 /workspace/result.json ./result.json --port 19241 --insecure
+hexa run stdlib/cloud/cloud_cli.hexa poll      gpu-pod-1 12345
 ```
 
 ## Compared to the nearest tools

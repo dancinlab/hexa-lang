@@ -116,6 +116,21 @@ The remote exit code is recovered from a `; echo __CLOUD_RC__=$?` marker line.
   `version`; `--port` / `--insecure` connection flags).
 - `README.md`, `design.md` (this file).
 
+## Cycle B-1 — `cloud_copy_*` (file transfer)
+
+- `cloud_copy_to` / `cloud_copy_to_opts(host, ssh_opts, local, remote)` —
+  upload a local file to `host:remote` over scp.
+- `cloud_copy_from` / `cloud_copy_from_opts(host, ssh_opts, remote, local)` —
+  download `host:remote` to a local path.
+- `_scp_opts` translates ssh's `-p PORT` to scp's `-P PORT` (other `-o` opts
+  pass through unchanged). `_scp_capture` POSIX-quotes every opt + src + dst
+  for the local `/bin/sh -c`. scp's exit code rides on the local process —
+  recovered from `exec_capture` element 2, no remote marker needed.
+- CLI: `cloud copy-to <host> <local> <remote> [--port N] [--insecure]` and
+  `cloud copy-from <host> <remote> <local> [...]`.
+- Verified: live round-trip on `ubu-2` — sha256 byte-identical both
+  directions (local → remote → local).
+
 Verification: `hexa parse` (syntactic) + `hexa build` (semantic, clean) +
 live SSH smoke — 5/5 PASS against `ubu-2` and a real RunPod pod
 (`root@…:19241`): basic run, exit-code propagation (remote `exit 7` → 7),
