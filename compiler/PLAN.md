@@ -3400,3 +3400,23 @@ overlay → 3+ hits → promote into rodata regen) RETIRED.
   (2) `self/main.hexa` help 텍스트 (`atlas.overlay.n6` 언급 L119-173) 갱신은
   별도 surgical edit — 본 cycle 범위 밖. (3) `cc --regen` / `hexa_cc.c`·
   `hexa_v2` promote 미수행 — 부모 세션의 단일 consolidated regen 대상.
+### 2026-05-19 — codegen: ExternFnDecl in statement position — FFI wrapper mangle parity + nested-decl hoist
+
+keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/test_keyword_audit.hexa` L376 `extern fn getpid() -> Int` 가 두 갈래로 깨졌었다.
+
+**근본원인 (측정으로 확정 — `unhandled stmt kind` 가 아니었음)**: top-level / script-body `extern fn` 는 이미 top-level emit loop 의 `ExternFnDecl` 분기에 도달한다. 진짜 버그는 `gen2_extern_wrapper` 가 emit 하는 C 래퍼 함수 이름이 call-site mangle 과 불일치한 것. `getpid` 는 `_hexa_name_is_reserved` 목록에 있어 (libc `getpid` 충돌) call-site 는 `_hexa_mangle_ident` 로 `u_getpid()` 를 emit 하지만, 래퍼는 plain `getpid` 로 emit 됨 → call 이 libc `int getpid(void)` 로 resolve → clang `assigning to HexaVal from incompatible type 'int'`. fn-body 안에 nested 된 `extern fn` 는 `_gen2_lift_nested_decls` 가 hoist 하지 않아 별개로 `CODEGEN ERROR: unhandled stmt kind: ExternFnDecl` 스텁을 emit 했다.
+
+**수정 (`self/codegen_c2.hexa`, surgical 3-part)**:
+1. `gen2_extern_wrapper` — 래퍼 C 함수 이름 (forward decl + 두 `static HexaVal NAME(...)` 정의) 을 `_hexa_mangle_ident(name)` (`cname`) 로 변경. decl 이름 == reference 이름. `__ffi_sym_<name>` dlsym 슬롯 + `__ffi_ftyp_<name>` typedef 태그는 raw name 유지 (이미 고유-prefix 내부 식별자; dlsym C-symbol 문자열은 `c_sym` 으로 별도). 비-reserved extern 이름은 mangle 이 no-op → 일반 케이스 zero regression (측정 확인).
+2. `_gen2_lift_nested_decls` — lift 인식 종류에 `ExternFnDecl` 추가. fn-body 최상단 `extern fn` 도 module scope 로 hoist (C 는 nested fn 없음; FFI 래퍼는 top-level 분기에서만 emit). 추가로 `seen_names` 를 기존 top-level decl 이름으로 pre-seed — top-level 과 nested 가 같은 extern 이름이면 nested 복사본을 lift 하지 않음 (top-level 이 이김) → C "redefinition" 방지.
+3. `gen2_stmt` decl-skip — `ExternFnDecl` 추가. lift 된 stmt-position `extern fn` 가 원래 위치에서 `unhandled stmt kind` 스텁을 ALSO emit 하지 않게.
+
+**측정 BEFORE/AFTER** (Mac, host-pinned smoke `extern fn getpid() -> Int; let p = getpid(); ...`):
+- BEFORE (구 hexa_v2): transpile OK 이나 C 빌드 2 errors (`u_getpid` ≠ `getpid` incompatible-type). nested smoke → `unhandled stmt kind: ExternFnDecl` 스텁 1개.
+- AFTER (regen hexa_v2): script-body smoke → 래퍼 `u_getpid` == call `u_getpid` → C 빌드 0 error → run `extern ok` rc=0. nested smoke → 스텁 0개 → 빌드+run `nested extern ok` rc=0. 비-reserved extern → 래퍼 이름 변경 없음 (no-op mangle 확인).
+- `self/test_keyword_audit.hexa` → ExternFnDecl 스텁 0 (BEFORE 1). 잔여 5 C-error 는 generics `T` / `Clone` / async `hexa_await_unwrap` 등 무관 별건 갭 — 구·신 transpiler 동일 5개 → zero regression.
+
+**self-host fixpoint**: `cc --regen` → `hexa_cc.c.new` ≡ promoted `hexa_cc.c` BYTE-IDENTICAL (`cmp` 확인). 바이너리 promote 동반.
+
+**LIMITATION (소스 주석에 명기)**: shallow-walk 경계 유지 — `if/while/for` 블록 안 더 깊이 nested 된 `extern fn` 는 lift 대상 아님 (`_gen2_lift_nested_decls` 의 기존 top-of-body 한계와 동일). top-level / script-body / fn-body-최상단 `extern fn` 만 커버.
+
