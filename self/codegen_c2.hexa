@@ -2976,6 +2976,40 @@ fn gen2_stmt(node, depth) {
         return pad + "HexaVal " + node.name + " = " + gen2_expr(node.left) + ";\n"
     }
 
+    // ── ComptimeBlock (statement position) → emit nothing ──
+    // `comptime { ... }` in statement position (no binding) is a
+    // compile-time-only block: `comptime` means "evaluate at compile
+    // time, emit no runtime code". With no binding the block produces
+    // no runtime-observable result — any escaping value would require a
+    // binding, which makes it the EXPRESSION form (`let x = comptime
+    // { e }`), handled separately by the comptime_eval const-fold path
+    // (regression T26) and deliberately untouched here. Emitting nothing
+    // is the semantically correct lowering, matching the established
+    // compile-time/declaration-only precedent (ComptimeConst-folded,
+    // TypeAlias, EffectDecl, InvariantDecl below).
+    // LIMITATION: a full compile-time evaluator that lets bindings
+    // declared inside a statement-position `comptime { let x = … }`
+    // escape into the enclosing scope is not modeled — comptime_eval is
+    // const-fold-only. No corpus usage relies on that (keyword-audit's
+    // `comptime { let ct = 10 }` is dead; example/test_comptime.hexa
+    // exercises only the value-producing expression form).
+    if k == "ComptimeBlock" {
+        return ""
+    }
+
+    // ── MacroDef → emit nothing (declaration-only) ──
+    // `macro! name { (pat) => { body }, … }` is a compile-time macro
+    // *definition* — pure metadata, never runtime code, exactly like a
+    // type/trait/effect declaration. Macro expansion (if/when wired) is
+    // an upstream pre-codegen concern keyed off invocation sites, not
+    // the definition node; the definition itself lowers to nothing.
+    // LIMITATION: hexa codegen has no macro expander — an invoked macro
+    // is a separate gap (no corpus macro is invoked through this path;
+    // example/test_macros.hexa only defines them). Documented, not faked.
+    if k == "MacroDef" {
+        return ""
+    }
+
     // (KEYWORD_DEMOTE Phase 2: OptimizeFnStmt removed — `optimize` keyword
     // demoted to `@optimize` attribute. @-prefixed attrs ride the existing
     // annotation channel and don't produce dedicated AST nodes.)
