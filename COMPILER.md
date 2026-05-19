@@ -133,6 +133,41 @@ compiling slowly). Start there.
 W1/W2/F are now explicitly interim: worth doing only as relief while the
 C fallback still exists; they do not substitute for the 정공법.
 
+### Step detail — S2..S7 (prep survey, 2026-05-20)
+
+Surveyed read-only while S1-step-2 runs, so each step is dispatch-ready.
+
+- **S2 — full-closure codegen 완주.** Prereq: S1. Re-run the full
+  `compiler/main.hexa` import+use closure (38 files / 21,832 lines)
+  through `aprime_cc`; confirm `.s` emits within time (it hit the 9-min
+  cap pre-S1). First point full-scope codegen-correctness is measurable.
+- **S3 — self-host fixpoint.** Full `.s` -> assemble -> link -> 2nd-gen
+  `aprime_cc`. byte-diff 1st-gen (built via hexa_v2) vs 2nd-gen (built
+  via aprime_cc) = the fixpoint proof. Harness: `tool/build_aprime.sh`.
+- **S4 — drop hexa_v2.** `tool/build_aprime.sh` stage 2 is the hexa_v2
+  `.hexa->.c` transpile. Once S3's byte-diff PASSES, swap stage 2 to
+  `aprime_cc` — the compiler no longer needs the C transpiler (nor clang)
+  to build itself.
+- **S5 — native `hexa build` backend.** `compiler/main.hexa` already has
+  `--emit=asm|obj|exec` (default exec — it already produces linked
+  executables, `:125`/`:151`). `self/main.hexa::cmd_build` (`:1710`)
+  currently drives hexa_v2->C->clang. Add a backend selector (env/flag)
+  so `cmd_build` can invoke `aprime_cc --emit=exec`. This delivers the
+  lever-0 build-speed win to *user* programs, not just the compiler.
+- **S6 — optimization passes.** `compiler/optimize/{const_fold,dce,
+  inline}.hexa` exist (160/152/412 lines — partially built, not empty
+  stubs). Complete them + wire into the `--opt` path, then climb the
+  `HEXA-NATIVE-ONLY.md` G-0..G-11 axis ladder (typed scalar lane A1/A2
+  first) to reach runtime parity with `clang -O2`.
+- **S7 — own assembler + linker (완전한 hexa-native).** `compiler/main.hexa`
+  already marks `as` / `ld` / `xcrun` as "L1 keepers — replaced when
+  self-as lands" (`:2`, `:806`); an L1->L2 migration scaffold +
+  `compiler/intrinsics/intrinsics.hexa` exist. `tool/hexa_link.hexa` is a
+  117-line in-house linker skeleton. S7 = land self-`as` (LIR -> object
+  code directly, skipping the `.s` text -> `as` round-trip) + mature
+  `hexa_ld`. The deepest step — object-file encoding (Mach-O arm64 / ELF
+  x86_64) + relocation records — and what closes "의존도 없이 외부" fully.
+
 ## Naming — drop the bootstrap vestiges
 
 The bootstrap era left version-suffix / codename file names. As the
@@ -316,3 +351,9 @@ ultimately removes.
   `compiler-native-codegen`. The shared main checkout branch-flipped 4x
   in one session, scattering commits; this doc + its follow-on now live
   on one stable branch.
+- 2026-05-20 — S2..S7 prep survey done (read-only, in parallel with the
+  S1-step-2 sub-agent). Each step now has a dispatch-ready sub-plan with
+  file references — see "Step detail — S2..S7". Key finding: S7 (own
+  assembler) is already scaffolded — `compiler/main.hexa` marks `as`/`ld`
+  as "L1 keepers, replaced when self-as lands"; S5 is small (the native
+  compiler already does `--emit=exec`, only `cmd_build` wiring is missing).
