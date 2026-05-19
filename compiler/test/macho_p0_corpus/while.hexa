@@ -1,0 +1,14 @@
+// F-P0-OBJEQ corpus / while — backward branch + loop body encoding.
+//
+// Exercises: a labelled loop top, CMP / B.cond at the bottom forming
+// the backward branch (BRANCH26 relocation small range), ADD on a
+// loop-counter register, conditional exit via the loop's natural exit
+// edge. After the loop, exit with the final counter value.
+
+fn main() {
+    let mut n = 0
+    while n < 5 {
+        n = n + 1
+    }
+    exit(n)  // exits 5
+}
