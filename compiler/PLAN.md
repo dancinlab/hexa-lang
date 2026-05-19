@@ -2501,3 +2501,46 @@ EffectDecl gap). roadmap_view non-build confirmed pre-existing (base
 233548a6 fails identically). 118 files. Re-validated on main (atlas
 118/118), hexa.real reinstalled (production dedup confirmed N=4),
 origin/rfc043 pushed. ROADMAP 65 fully closed (API + dedup).
+
+### 2026-05-19 — own/borrow/move/drop bare-stmt parser surface LANDED
+
+**Scope** (별건 #1 잔여, post-keyword-audit). `self/test_keyword_audit.hexa`
+L172-189 의 ownership-group 4 stanzas (`own ov`, `borrow bx`, `move mv`,
+`drop dv`) 가 parser 단계에서 죽고 있었음. lexer 는 이미 4 단어 모두 키워드
+(`is_keyword` true) 로 인식했지만 parser dispatch 에는 `Drop` 만 등록되어
+있었고, 심지어 `parse_drop_stmt` 는 `drop(NAME)` paren-form 만 받아서 in-tree
+의 5 callers 모두 (`drop NAME` bare-form) 실제로는 parse-fail.
+
+**디자인 결정** (사용자-허용 A/B/C 중 **Option C — minimal stub stmt**):
+- 4 키워드 모두 uniform 표면 `KEYWORD NAME` (no parens) 채택. 그래서 v1
+  에서 surface 가 일관되며 formatter (이미 `drop NAME` 출력) 와 일치.
+- AST kind 3 종 신설: `OwnStmt`, `BorrowStmt`, `MoveStmt` (DropStmt 와
+  shape 동일, `name` 만 보유).
+- 코드젠: v1 (SPEC §11 arena 메모리 모델) 에서 4 stmt 모두 **no-op**.
+  `DropStmt` 도 함께 명시적 no-op 핸들러에 들어감 (이전엔 unhandled fall-
+  through 였음 — 사실상 latent bug).
+- Backward-compat: `parse_drop_stmt` 는 `drop NAME` + `drop(NAME)` 둘 다
+  허용 (옵셔널 LParen/RParen). 현재 in-tree paren-form caller 0 개.
+
+**g3 honesty** — `test_ownership_lifecycle.hexa` 가 기대하는 `move x` 의
+runtime 무효화 (post-move access 가 throw) 는 **이번 패치 범위 밖**.
+이건 SPEC §11 v2 borrow checker 의 일이며, 본 패치는 **surface only**
+(키워드가 parse-clean + 실행시 no-op execution). test_keyword_audit.hexa
+의 4 stanzas 는 PASS, test_ownership_lifecycle.hexa 의 move-invalidates-
+runtime assertion 들은 본 패치로는 여전히 FAIL (v2 work item).
+
+**파일**
+- `self/parser.hexa` — 헤더 코멘트 AST kinds 표 갱신 · parse_stmt dispatch
+  3 branches (`Own`/`Borrow`/`Move`) · parse_own_stmt/parse_borrow_stmt/
+  parse_move_stmt 3 함수 · parse_drop_stmt 를 옵셔널-paren 으로 relax ·
+  ast_to_string 3 pretty-printer 분기.
+- `self/codegen_c2.hexa` — 4 ownership-group stmt (`DropStmt`/`OwnStmt`/
+  `BorrowStmt`/`MoveStmt`) 통합 no-op 핸들러 (OptimizeFnStmt 패턴 따름).
+- `self/formatter.hexa` — `own`/`borrow`/`move` 3 pretty-printer 분기.
+- `self/compiler.hexa` — 4 stmt no-op 분기 (vestigial bytecode 백엔드,
+  메인 경로엔 미포함이지만 in-tree 정합성).
+
+**Verification** — `/Users/ghost/.hx/bin/hexa.real parse` syntactic gate
+PASS 4/4 파일. End-to-end (deployed binary 가 new parser 받아야) 는 standard
+deploy cycle 에서 자연 promote. 본 cycle 은 binary promote 미포함
+(per @D g_inbox_processing_loop step 7).

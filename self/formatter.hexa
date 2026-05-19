@@ -383,6 +383,15 @@ fn format_stmt(stmt, indent) {
     if k == "DropStmt" {
         return prefix + "drop " + stmt.name
     }
+    if k == "OwnStmt" {
+        return prefix + "own " + stmt.name
+    }
+    if k == "BorrowStmt" {
+        return prefix + "borrow " + stmt.name
+    }
+    if k == "MoveStmt" {
+        return prefix + "move " + stmt.name
+    }
     if k == "SelectStmt" {
         let sarms = stmt.arms
         if sarms == "" || len(sarms) == 0 {

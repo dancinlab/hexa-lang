@@ -770,6 +770,12 @@ fn c_compile_stmt(node) {
     if k == "UseStmt" { return }
     if k == "ModStmt" { return }
     if k == "ImportStmt" { return } // Phase2 C1 — 로더가 이미 처리
+    // Ownership-group bare stmts — declarations of intent only in
+    // v1 arena memory model (SPEC §11). No bytecode emitted.
+    if k == "DropStmt" { return }
+    if k == "OwnStmt" { return }
+    if k == "BorrowStmt" { return }
+    if k == "MoveStmt" { return }
     if k == "ProofStmt" {
         // Proofs compile like blocks
         c_push_scope()
