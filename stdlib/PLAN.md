@@ -772,3 +772,19 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   필요: atoms EMT · crystal multi-point-hull · mol Crippen-logP/
   Ertl-TPSA) 또는 T5-blocked(mlff = grad/safetensors). 가짜 진전
   0 — Stage-2.5 는 NOT-IMPLEMENTED 센티넬, 수치 미조작(g3).
+- 2026-05-19 — **upstream fix + crystal Stage-2 완결**. (1) `d2c758b9`
+  `fix(runtime.h)`: hexa_math_{sin,cos,acos,sqrt,exp,pow,…17개}가
+  runtime.c:2144+ 정의됐으나 runtime.h 미선언 → AOT clang C99
+  implicit-decl 빌드실패. 동시 커밋이 일으킨 upstream regression,
+  프로토타입 추가로 해금(순수 선언, 거동 불변). (2) `82943985`
+  crystal `energy_above_hull` 을 binary tie-line → N-point lower
+  convex hull(Andrew monotone chain)로 일반화 — Stage-2.5 연기 항목
+  해소. 검증 macOS(빌드 재가동): sci 45/45 · atoms 38/38 · mol
+  14/14 · mol_smiles 22/22 (119 checks). **crystal Stage-2 완전
+  완료**(coords/angles/N-point-hull/from_cif/spacegroup). T4 Stage-2
+  genuine 커널 배치 종결. 잔여: atoms EMT · mol Crippen-logP/Ertl-
+  TPSA = Stage-2.5(published 파라미터표 전사 — 대형, fresh-context
+  에이전트 적합; 이번 세션 2회 팬아웃 시도는 API 레이트리밋 즉사) ·
+  mlff Stage-2 = T5(grad/safetensors 의존, 수개월). 빌드호스트:
+  macOS 가동(OOM 간헐) · ubu-2 toolchain 동시업데이트로 일시 파손
+  (hexa_v2 arch + runtime backtrace) · ubu-1 세션내 다운.
