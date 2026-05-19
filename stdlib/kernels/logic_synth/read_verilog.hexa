@@ -448,6 +448,7 @@ fn read_verilog(src: str) -> ReadVerilogResult {
             st = _ps_take(st)
             let mut m = rtlil_new_module(name)
             let mut tab = symtab_new()
+            let mut funcs: [VFunc] = []
             // optional `#( parameter NAME = EXPR , … )` header
             if _ps_peek(st) == "#" {
                 let ph = _rv_parse_param_header(st, tab)
@@ -525,11 +526,22 @@ fn read_verilog(src: str) -> ReadVerilogResult {
                                             }
                                         }
                                     } else {
-                                        // unsupported construct — fail-loud
-                                        return ReadVerilogResult {
-                                            ok: 0, design: d,
-                                            message: "read_verilog: unsupported construct `"
-                                                + bt + "` (synth-subset only — see rfc_006 §4 module-2 scope)"
+                                        if bt == "function" {
+                                            let rf = _rv_parse_function(st)
+                                            st = rf.st
+                                            if len(rf.err) > 0 {
+                                                return ReadVerilogResult {
+                                                    ok: 0, design: d, message: rf.err
+                                                }
+                                            }
+                                            funcs = funcs.push(rf.func)
+                                        } else {
+                                            // unsupported construct — fail-loud
+                                            return ReadVerilogResult {
+                                                ok: 0, design: d,
+                                                message: "read_verilog: unsupported construct `"
+                                                    + bt + "` (synth-subset only — see rfc_006 §4 module-2 scope)"
+                                            }
                                         }
                                     }
                                 }
@@ -915,6 +927,104 @@ fn _rv_parse_ansi_ports(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
     return RvStep { st: st, m: m }
 }
 
+// ─── function automatic declaration parsing (rfc_006 §4 m2, D68) ────────
+
+// CLEAN-ROOM: a parsed Verilog `function` — its name, ordered argument
+// names, and body token stream (between `;` and `endfunction`). The
+// body is kept as tokens for later inline expansion at call sites
+// (IEEE 1364-2005 §10.3 — a function call is semantically an inline
+// substitution of the body with arguments bound).
+struct VFunc {
+    name: str,
+    args: [str],
+    body: [str],
+}
+
+// Parse-step result for a function declaration.
+struct RvFuncStep {
+    st:   PState,
+    func: VFunc,
+    err:  str,
+}
+
+// CLEAN-ROOM: parse `function [automatic] [signed] [range] NAME (
+// [input [range]] ARG , … ) ; BODY endfunction` (IEEE 1364-2005
+// §10.3.1). `st` points at `function`. The return type / ranges are
+// skipped — integer-level inlining does not need them; argument names
+// and the body token stream are retained.
+fn _rv_parse_function(st_in: PState) -> RvFuncStep {
+    let mut st = _ps_take(st_in)            // consume "function"
+    // skip `automatic` / `signed` / return `[range]`
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == "automatic" { st = _ps_take(st); continue }
+        if t == "signed"    { st = _ps_take(st); continue }
+        if t == "integer"   { st = _ps_take(st); continue }
+        if t == "[" {
+            while st.pos < len(st.toks) {
+                if _ps_peek(st) == "]" { st = _ps_take(st); break }
+                st = _ps_take(st)
+            }
+            continue
+        }
+        break
+    }
+    let fname = _ps_peek(st)
+    if fname == "" {
+        return RvFuncStep {
+            st: st, func: VFunc { name: "", args: [], body: [] },
+            err: "read_verilog: function: expected name"
+        }
+    }
+    st = _ps_take(st)
+    // optional ANSI argument list `( input [range] ARG , … )`
+    let mut argnames: [str] = []
+    if _ps_peek(st) == "(" {
+        st = _ps_take(st)
+        while st.pos < len(st.toks) {
+            let t = _ps_peek(st)
+            if t == ")" { st = _ps_take(st); break }
+            if t == "," { st = _ps_take(st); continue }
+            if t == "input"  { st = _ps_take(st); continue }
+            if t == "signed" { st = _ps_take(st); continue }
+            if t == "[" {
+                while st.pos < len(st.toks) {
+                    if _ps_peek(st) == "]" { st = _ps_take(st); break }
+                    st = _ps_take(st)
+                }
+                continue
+            }
+            argnames = argnames.push(t)
+            st = _ps_take(st)
+        }
+    }
+    // header terminator `;`
+    if _ps_peek(st) == ";" { st = _ps_take(st) }
+    // body tokens until `endfunction`
+    let mut body: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == "endfunction" { st = _ps_take(st); break }
+        body = body.push(t)
+        st = _ps_take(st)
+    }
+    return RvFuncStep {
+        st: st,
+        func: VFunc { name: fname, args: argnames, body: body },
+        err: ""
+    }
+}
+
+// CLEAN-ROOM: linear lookup of a function by name; -1 if absent.
+fn _rv_find_function(funcs: [VFunc], name: str) -> int {
+    let mut i = 0
+    while i < len(funcs) {
+        if funcs[i].name == name { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
 // ─── public entry: parse a file ──────────────────────────────────────────
 
 // CLEAN-ROOM: read a Verilog file and parse it.
@@ -1172,6 +1282,35 @@ fn main() {
                 println("FAIL T18c bus[1]_width"); fails = fails + 1
             }
         }
+    }
+
+    // T19 — function declaration parsing (function … endfunction).
+    total = total + 1
+    let _v19 = "module fm ( input a , output y ) ; function automatic f ( input x ) ; f = x ; endfunction assign y = a ; endmodule"
+    let _r19 = read_verilog(_v19)
+    if _r19.ok != 1 {
+        println("FAIL T19 function_decl: " + _r19.message); fails = fails + 1
+    }
+
+    // T20 — _rv_parse_function: name, args, body, lookup.
+    total = total + 1
+    let _ftoks = _rv_tokens(_rv_normalize_punct(
+        "function automatic signed [ 3 : 0 ] g ( input [ 7 : 0 ] d ) ; g = d ; endfunction"))
+    let _fr = _rv_parse_function(PState { toks: _ftoks, pos: 0, err: "" })
+    if len(_fr.err) > 0 {
+        println("FAIL T20 err: " + _fr.err); fails = fails + 1
+    }
+    if _fr.func.name != "g" {
+        println("FAIL T20a fname got " + _fr.func.name); fails = fails + 1
+    }
+    if len(_fr.func.args) != 1 {
+        println("FAIL T20b argcount got " + str(len(_fr.func.args))); fails = fails + 1
+    }
+    if _rv_find_function([_fr.func], "g") != 0 {
+        println("FAIL T20c find_function"); fails = fails + 1
+    }
+    if _rv_find_function([_fr.func], "missing") != (0 - 1) {
+        println("FAIL T20d find_miss"); fails = fails + 1
     }
 
     if fails > 0 {
