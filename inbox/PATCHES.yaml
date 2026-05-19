@@ -772,21 +772,23 @@
     rfc_006 §4 module-2 (read_verilog) — produces rtlil.Design values;
     module-6 (write_verilog) consumes them. demiurge cockpit chip+
     synthesize cell (already wired κ-31/D53 — spawns hexa run yosys.hexa).
-  status: pending
+  status: withdrawn
   opened: 2026-05-20
+  withdrawn_at: 2026-05-20
   branch: rfc006-yosys-rtlil-skeleton
   note: |
+    WITHDRAWN 2026-05-20 (g3) — stale-base duplicate. This entry tracked
+    a `rtlil.hexa` minimum body (commit ec8a51fc) written from a stale
+    `t4-emt-calc` checkout. origin/main already carries the full rfc_006
+    §4 7-module absorption (hexa-lang commit 4f70ce46, dispatcher
+    selftest 8/8 PASS) — its rtlil.hexa (346 lines, Cell included) is a
+    proper superset. The ec8a51fc minimum body is superseded; the
+    duplicate file is git-rm'd from this branch in the same commit that
+    withdraws this entry. No hexa-lang action — rfc_006 §4 is done on
+    origin/main. Full audit: demiurge design.md "Decision-gate note on
+    Decision 68" (+ its 2nd correction).
+
+    [original entry — kept for audit]
     Filed from a demiurge session 2026-05-20 under the user's
-    /goal "완료시까지 진행" + "hexa upstream 필요시도 이 세션에서 진행"
-    autonomy. Continues stdlib-yosys-rfc006-scaffold's phase plan:
-    lands module-1 (rtlil) Wire+Module+Design minimum data-model body.
-
-    Scope this cycle: Design ⇄ Module ⇄ Wire only. Cell / SigSpec /
-    SigBit / Const / Process / Memory remain raw-91 (sibling phases).
-
-    g3: 1/7 modules body landed ≠ Yosys absorbed. rfc_006 §5 area-
-    oracle gate (G1-G4 in stdlib-yosys-rfc006-scaffold) REMAINS OPEN.
-
-    Audit trail: inbox/notes/2026-05-20-demiurge-rfc006-yosys-rtlil-
-    handoff.md. Branch cut from t4-emt-calc 0626febc; final PR target
-    rfc043-hexa-torch per the 2026-05-19 handoff.
+    /goal autonomy as the first body of stdlib-yosys-rfc006-scaffold's
+    phase plan. Turned out to be a stale-base duplicate of 4f70ce46.
