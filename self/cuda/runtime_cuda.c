@@ -2094,6 +2094,310 @@ int _hx_cuda_farr_transpose_scatter_gpu(int64_t src_id, int64_t dst_id,
 }
 
 
+
+/* ── mk2-C5 __global__ device kernels restored from e030fa31 ───────
+ * Launched by the host wrappers immediately below; the A/B/C merge
+ * dropped both halves. Pure double* math kernels, FP_CONTRACT-safe
+ * (compiled by nvcc -x cu). Must precede the host launchers. */
+__global__ void _hx_cuda_kern_rmsnorm_mh(const double* __restrict__ X,
+                                         const double* __restrict__ G,
+                                         double* __restrict__ Y,
+                                         double* __restrict__ XN,
+                                         double* __restrict__ I,
+                                         int64_t T, int64_t d) {
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    const double eps = 0.000001;
+    for (; i < T; i += stride) {
+        double ms = 0.0;
+        for (int64_t c = 0; c < d; c++) {
+            double xv = X[i*d + c];
+            ms = __dadd_rn(ms, __dmul_rn(xv, xv));
+        }
+        ms = __ddiv_rn(ms, (double)d);
+        double iv = __ddiv_rn(1.0, _hx_cuda_dt_sqrt_d(__dadd_rn(ms, eps)));
+        I[i] = iv;
+        for (int64_t c = 0; c < d; c++) {
+            double xni = __dmul_rn(X[i*d + c], iv);
+            XN[i*d + c] = xni;
+            Y[i*d + c]  = __dmul_rn(G[c], xni);
+        }
+    }
+}
+
+/* mk2-C5 (2026-05-19): farr_copy_slice + farr_transpose_2d device
+ * kernels — bandwidth-bound memcpy / memory rearrangement. No FP
+ * arithmetic → trivially byte-eq with the host scalar t_get/t_set
+ * loop. Eliminates the ~412M scalar HexaVal-box prelude that
+ * dominated the d768·12L generic ag_tape step (mk2-FINAL #1 fire
+ * 2026-05-19 timeout at 901s with 14min GPU idle). */
+__global__ void _hx_cuda_kern_copy_slice(const double* __restrict__ src,
+                                         double* __restrict__ dst,
+                                         int64_t n) {
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    for (; i < n; i += stride) {
+        dst[i] = src[i];
+    }
+}
+
+/* transpose: dst[c·d_out + r] = src[soff + r·d_in + c], one thread per
+ * (r, c) cell. byte-identical to the agt_wT_slice / agt_wT_off host
+ * loop (no FP — pure memory rearrangement). */
+__global__ void _hx_cuda_kern_transpose_2d(const double* __restrict__ src,
+                                           int64_t soff,
+                                           double* __restrict__ dst,
+                                           int64_t doff,
+                                           int64_t d_out, int64_t d_in) {
+    int64_t flat   = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t total  = d_out * d_in;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    for (; flat < total; flat += stride) {
+        int64_t r = flat / d_in;
+        int64_t c = flat - r * d_in;
+        dst[doff + c * d_out + r] = src[soff + r * d_in + c];
+    }
+}
+
+/* mk2-C4 (2026-05-19): GQA attention-dt forge-route. One thread per
+ * (head, query) pair = nh·T threads (strict per-pair sequential for
+ * byte-eq with the host loop's nested hh→i→j order). Memory contract:
+ *   in:  Q[T·nh·hd], K[T·nkv·hd], V[T·nkv·hd]
+ *   out: P[nh·T·T]   — causal probs, j ∈ [0,i+1); j ∈ [i+1,T) is 0.
+ *        CTX[T·nh·hd]
+ * Uses dt_sqrt mirror (scale=1/√hd) + dt_exp mirror (stable softmax).
+ * P doubles as scratch: step 1 writes raw scores; steps 3-4 transform
+ * in place to probs. Op order byte-identical to ag_tape.hexa
+ * _ag_attn_dt_fwd (causal mask + per-row stable softmax + GQA kvh =
+ * hh/n_rep). */
+__global__ void _hx_cuda_kern_attn_dt_fwd(const double* __restrict__ Q,
+                                          const double* __restrict__ K,
+                                          const double* __restrict__ V,
+                                          double* __restrict__ P,
+                                          double* __restrict__ CTX,
+                                          int64_t T, int64_t nh,
+                                          int64_t nkv, int64_t hd) {
+    int64_t flat   = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t total  = nh * T;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    int64_t n_rep  = nh / nkv;
+    int64_t d      = nh * hd;
+    /* scale = 1 / dt_sqrt(hd). dt_sqrt-faithful (NOT libm sqrt) —
+     * same hazard as rmsnorm. */
+    double scale = __ddiv_rn(1.0, _hx_cuda_dt_sqrt_d((double)hd));
+    for (; flat < total; flat += stride) {
+        int64_t hh  = flat / T;
+        int64_t i   = flat % T;
+        int64_t kvh = hh / n_rep;
+        int64_t L   = i + 1;
+        /* Step 1: P[hh,i,j] = dot(Q[i,hh,·], K[j,kvh,·]) * scale */
+        for (int64_t j = 0; j < L; j++) {
+            double dot = 0.0;
+            for (int64_t c = 0; c < hd; c++) {
+                dot = __dadd_rn(dot,
+                                __dmul_rn(Q[(i*nh + hh)*hd + c],
+                                          K[(j*nkv + kvh)*hd + c]));
+            }
+            P[(hh*T + i)*T + j] = __dmul_rn(dot, scale);
+        }
+        /* Step 2: max */
+        double mx = P[(hh*T + i)*T + 0];
+        for (int64_t j = 1; j < L; j++) {
+            double v = P[(hh*T + i)*T + j];
+            if (v > mx) mx = v;
+        }
+        /* Step 3: e = dt_exp(P − mx); P := e; tot += e. */
+        double tot = 0.0;
+        for (int64_t j = 0; j < L; j++) {
+            double e = _hx_cuda_dt_exp_d(P[(hh*T + i)*T + j] - mx);
+            P[(hh*T + i)*T + j] = e;
+            tot = __dadd_rn(tot, e);
+        }
+        /* Step 4: normalize */
+        for (int64_t j = 0; j < L; j++) {
+            P[(hh*T + i)*T + j] = __ddiv_rn(P[(hh*T + i)*T + j], tot);
+        }
+        /* Step 5: ctx[i,hh,c2] = Σ P[hh,i,j] · V[j,kvh,c2] */
+        for (int64_t c2 = 0; c2 < hd; c2++) {
+            double acc = 0.0;
+            for (int64_t j = 0; j < L; j++) {
+                acc = __dadd_rn(acc,
+                                __dmul_rn(P[(hh*T + i)*T + j],
+                                          V[(j*nkv + kvh)*hd + c2]));
+            }
+            CTX[i*d + hh*hd + c2] = acc;
+        }
+    }
+}
+
+/* mk2-C4-bwd (2026-05-19): GQA attention-dt bwd. Three kernels with
+ * a shared scratch buffer (dP_row[nh·T·T], allocated by the host
+ * wrapper).
+ *   Step 1 (dProw kernel) — per (hh,i,j): dP_row[hh,i,j] = Σ_c
+ *     dctx[i,hh,c]·V[j,kvh,c], j < L only.
+ *   Step 2 (dS+dQ kernel) — per (hh,i): sdot=Σ_j P·dP_row; then for
+ *     j<L overwrite dP_row[hh,i,j] := P·(dP_row[hh,i,j]-sdot)·scale
+ *     (this IS dS); then dQ[i,hh,c2] = Σ_j dS·K[j,kvh,c2]. Each
+ *     thread owns its dQ[(i*nh+hh)*hd + c2] cell — no race.
+ *   Step 3a (dV kernel) — per (j,kvh,c): dV[j,kvh,c] = Σ_{hh in
+ *     group, i ≥ j} P[hh,i,j]·dctx[i,hh,c]. Output-centric strict
+ *     sequential = byte-eq with CPU canonical (hh,i) order.
+ *   Step 3b (dK kernel) — per (j,kvh,c): dK[j,kvh,c] = Σ_{hh in
+ *     group, i ≥ j} dS[hh,i,j]·Q[i,hh,c]. (dS lives in dP_row
+ *     scratch after step 2.)
+ * dQ/dK/dV are assumed FRESH t_zeros at the call site (the tape
+ * replay site allocates them inline). */
+__global__ void _hx_cuda_kern_attn_dt_bwd_dProw(
+    const double* __restrict__ V,
+    const double* __restrict__ dctx,
+    double* __restrict__ dProw,
+    int64_t T, int64_t nh, int64_t nkv, int64_t hd) {
+    int64_t flat   = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t total  = nh * T * T;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    int64_t n_rep  = nh / nkv;
+    int64_t d      = nh * hd;
+    for (; flat < total; flat += stride) {
+        int64_t hh = flat / (T * T);
+        int64_t r  = flat - hh * T * T;
+        int64_t i  = r / T;
+        int64_t j  = r - i * T;
+        if (j > i) { dProw[flat] = 0.0; continue; }
+        int64_t kvh = hh / n_rep;
+        double acc = 0.0;
+        for (int64_t c = 0; c < hd; c++) {
+            acc = __dadd_rn(acc,
+                            __dmul_rn(dctx[i*d + hh*hd + c],
+                                      V[(j*nkv + kvh)*hd + c]));
+        }
+        dProw[flat] = acc;
+    }
+}
+
+__global__ void _hx_cuda_kern_attn_dt_bwd_dS_dQ(
+    const double* __restrict__ Q,
+    const double* __restrict__ K,
+    const double* __restrict__ P,
+    double* __restrict__ dProw,    /* in: dP_row, out: dS (same buffer) */
+    double* __restrict__ dQ,
+    int64_t T, int64_t nh, int64_t nkv, int64_t hd) {
+    int64_t flat   = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t total  = nh * T;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    int64_t n_rep  = nh / nkv;
+    /* Compute scale device-side (no cross-TU call to host static
+     * `_hx_dt_sqrt_d`). 25 Newton iters × per-thread ≈ 300K ops total
+     * at d768·12L — negligible. */
+    double scale = __ddiv_rn(1.0, _hx_cuda_dt_sqrt_d((double)hd));
+    for (; flat < total; flat += stride) {
+        int64_t hh = flat / T;
+        int64_t i  = flat - hh * T;
+        int64_t kvh = hh / n_rep;
+        int64_t L = i + 1;
+        /* sdot = Σ_j P[hh,i,j] · dP_row[hh,i,j], j∈[0,L) */
+        double sdot = 0.0;
+        for (int64_t j = 0; j < L; j++) {
+            sdot = __dadd_rn(sdot,
+                             __dmul_rn(P[(hh*T + i)*T + j],
+                                       dProw[(hh*T + i)*T + j]));
+        }
+        /* in-place: dProw[hh,i,j] := P · (dProw - sdot) · scale = dS */
+        for (int64_t j = 0; j < L; j++) {
+            double v = dProw[(hh*T + i)*T + j] - sdot;
+            dProw[(hh*T + i)*T + j] = __dmul_rn(
+                __dmul_rn(P[(hh*T + i)*T + j], v), scale);
+        }
+        /* dQ[i,hh,c2] = Σ_j dS[hh,i,j] · K[j,kvh,c2]
+         * CPU canonical: outer j, inner c2 — accumulator per c2.
+         * Reproduce: keep separate dQ acc per c2 (registers), j outer. */
+        /* For each c2 ∈ [0..hd), the strict j-ascending fold matches
+         * CPU exactly. (kvh constant for this thread.) */
+        for (int64_t c2 = 0; c2 < hd; c2++) {
+            double acc = 0.0;
+            for (int64_t j = 0; j < L; j++) {
+                acc = __dadd_rn(acc,
+                                __dmul_rn(dProw[(hh*T + i)*T + j],
+                                          K[(j*nkv + kvh)*hd + c2]));
+            }
+            dQ[(i*nh + hh)*hd + c2] = acc;
+        }
+    }
+}
+
+__global__ void _hx_cuda_kern_attn_dt_bwd_dV(
+    const double* __restrict__ P,
+    const double* __restrict__ dctx,
+    double* __restrict__ dV,
+    int64_t T, int64_t nh, int64_t nkv, int64_t hd) {
+    int64_t flat   = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t total  = T * nkv * hd;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    int64_t n_rep  = nh / nkv;
+    int64_t d      = nh * hd;
+    for (; flat < total; flat += stride) {
+        int64_t j   = flat / (nkv * hd);
+        int64_t r   = flat - j * (nkv * hd);
+        int64_t kvh = r / hd;
+        int64_t c   = r - kvh * hd;
+        int64_t hh0 = kvh * n_rep;
+        double acc = 0.0;
+        /* CPU canonical order: hh ascending, then i ascending (i ≥ j) */
+        for (int64_t hh = hh0; hh < hh0 + n_rep; hh++) {
+            for (int64_t i = j; i < T; i++) {
+                acc = __dadd_rn(acc,
+                                __dmul_rn(P[(hh*T + i)*T + j],
+                                          dctx[i*d + hh*hd + c]));
+            }
+        }
+        dV[(j*nkv + kvh)*hd + c] = acc;
+    }
+}
+
+__global__ void _hx_cuda_kern_attn_dt_bwd_dK(
+    const double* __restrict__ Q,
+    const double* __restrict__ dS,    /* same buffer as dProw after step 2 */
+    double* __restrict__ dK,
+    int64_t T, int64_t nh, int64_t nkv, int64_t hd) {
+    int64_t flat   = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t total  = T * nkv * hd;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    int64_t n_rep  = nh / nkv;
+    for (; flat < total; flat += stride) {
+        int64_t j   = flat / (nkv * hd);
+        int64_t r   = flat - j * (nkv * hd);
+        int64_t kvh = r / hd;
+        int64_t c   = r - kvh * hd;
+        int64_t hh0 = kvh * n_rep;
+        double acc = 0.0;
+        for (int64_t hh = hh0; hh < hh0 + n_rep; hh++) {
+            for (int64_t i = j; i < T; i++) {
+                acc = __dadd_rn(acc,
+                                __dmul_rn(dS[(hh*T + i)*T + j],
+                                          Q[(i*nh + hh)*hd + c]));
+            }
+        }
+        dK[(j*nkv + kvh)*hd + c] = acc;
+    }
+}
+
+/* silu-gate: O[i] = (A[i]·σ(A[i]))·B[i], σ=1/(1+dt_exp(-x)).
+ * dt_exp-faithful (NOT _hx_cuda_sigmoid_d's libm exp). Op order
+ * byte-identical to CPU _hx_farr_silu_gate_cpu / ag_tape
+ * _ag_silu(a)*b. */
+__global__ void _hx_cuda_kern_silu_gate(const double* __restrict__ A,
+                                        const double* __restrict__ B,
+                                        double* __restrict__ O,
+                                        int64_t n) {
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    for (; i < n; i += stride) {
+        double ai  = A[i];
+        double sig = 1.0 / (1.0 + _hx_cuda_dt_exp_d(0.0 - ai));
+        O[i] = __dmul_rn(__dmul_rn(ai, sig), B[i]);
+    }
+}
+
+
 /* ── mk2-C5 GPU kernels restored from e030fa31 (rfc043-flame-camp) ──
  * The A/B/C three-way merge dropped Cycle A's runtime_cuda.c additions;
  * these 9 device kernels are the GPU side of the HEXA_CUDA seam in
