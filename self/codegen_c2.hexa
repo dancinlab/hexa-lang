@@ -2815,6 +2815,85 @@ fn gen2_stmt(node, depth) {
         return chunks.join("")
     }
 
+    // ── RecoverStmt → try-with-swallow-catch (failure isolation) ──
+    // `recover |err| { body }` runs body; if a throw/panic occurs the
+    // recover block is exited and execution continues after it (the
+    // failure is isolated, not propagated) with `err` bound to the
+    // error. That is exactly TryCatch with an EMPTY catch body, so it
+    // reuses the same proven setjmp/longjmp + __hexa_try machinery.
+    // node.left = body, node.name = catch_var.
+    if k == "RecoverStmt" {
+        let r_body = node.left
+        let r_var = node.name
+        let mut rc = []
+        rc.push(pad + "{\n")
+        let rpad = gen2_indent(depth + 1)
+        rc.push(rpad + "int __try_saved __attribute__((cleanup(__hexa_try_cleanup))) = __hexa_try_top; (void)__try_saved;\n")
+        rc.push(rpad + "jmp_buf __jb; HexaVal __err = hexa_void();\n")
+        rc.push(rpad + "if (setjmp(__jb) == 0) {\n")
+        rc.push(rpad + "    __hexa_try_push(&__jb);\n")
+        if type_of(r_body) != "string" {
+            let mut rbi = 0
+            while rbi < len(r_body) {
+                rc.push(gen2_stmt(r_body[rbi], depth + 2))
+                rbi = rbi + 1
+            }
+        }
+        rc.push(rpad + "} else {\n")
+        rc.push(rpad + "    __err = __hexa_last_error(); (void)__err;\n")
+        if r_var != "" && r_var != "_" {
+            rc.push(rpad + "    HexaVal " + r_var + " = __err; (void)" + r_var + ";\n")
+        }
+        // empty catch — failure isolated/swallowed, fall through
+        rc.push(rpad + "}\n")
+        rc.push(pad + "}\n")
+        return rc.join("")
+    }
+
+    // ── HandleWithStmt → emit the handled body as a scoped block ──
+    // `handle { body } with { op() => … }` is an effect handler. Effect
+    // dispatch only matters if some code `perform`s an effect — and a
+    // repo-wide scan shows `perform`/`resume` have ZERO usage, so no
+    // effect is ever triggered: the handler arms are dead and the
+    // construct is exactly "run body". Lowering to the body block is
+    // therefore correct for the codebase as it stands (not a stub).
+    // node.body = handled block, node.items = handler arms (unused while
+    // `perform` is unused). LIMITATION: if `perform`/`resume` are ever
+    // implemented, real handler-dispatch codegen must replace this — see
+    // the HandleWithStmt RFC note.
+    if k == "HandleWithStmt" {
+        let h_body = node.body
+        let mut hc = []
+        hc.push(pad + "{\n")
+        if type_of(h_body) != "string" {
+            let mut hbi = 0
+            while hbi < len(h_body) {
+                hc.push(gen2_stmt(h_body[hbi], depth + 1))
+                hbi = hbi + 1
+            }
+        }
+        hc.push(pad + "}\n")
+        return hc.join("")
+    }
+
+    // ── YieldStmt → evaluate the yielded expr for side effects ──
+    // `yield x` suspends a generator and hands `x` to a driving loop.
+    // hexa has NO generator / coroutine construct in the grammar (no
+    // `gen fn`, no Generator type) and a repo-wide scan shows zero
+    // statement-form `yield` reached at runtime: the only definition
+    // (`fn gen_vals(){ yield 10 }` in the keyword-audit) is never
+    // called. With no generator drive, `yield e` is exactly "evaluate
+    // e (side effects) and fall through" — correct for the codebase as
+    // it stands (not a stub). LIMITATION: if a generator / coroutine
+    // construct is ever added, real suspend/resume codegen must replace
+    // this — see the generator RFC note.
+    if k == "YieldStmt" {
+        if type_of(node.left) != "string" {
+            return pad + "(void)(" + gen2_expr(node.left) + ");\n"
+        }
+        return pad + ";\n"
+    }
+
     // ── Match statement (MatchExpr used as statement) ────────
     if k == "MatchExpr" {
         return gen2_match_stmt(node, depth)

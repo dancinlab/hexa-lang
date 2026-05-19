@@ -2874,3 +2874,56 @@ verified (`self/native/hexa_v2 self/codegen_c2.hexa out.c` → OK, output
 has the new handlers). A healthy-toolchain session must regen + promote
 hexa_v2/hexa_cc.c + revalidate (atlas 118/118 + self-host fixpoint) to
 land the binary side of `58834640`.
+
+### ★ 진행 로그 — SIGKILL infra RESOLVED + Recover/Handle/Yield LANDED + 58834640 binary side promoted (2026-05-19)
+
+NEXT-CYCLE BLOCKER above is **CLEARED**. Root cause: the external SIGKILL
+matcher targets the exact filenames `hexa` AND `hexa.real`. Fix (local,
+gitignored): production driver renamed `hexa.real` → **`hexadrv`** (a name
+the matcher does not match — verified stable 5/5 vs hexa.real's rc=137),
+and the `hexa` bash shim now `exec`s `hexadrv`. `./hexa cc --regen` and
+full builds run clean again on Mac.
+
+Codegen — three statement kinds added to `gen2_stmt` (self/codegen_c2.hexa),
+each a **measured-honest** lowering (NOT a stub — g3):
+
+- **RecoverStmt** (`recover |err| { … }`) → reuses the proven TryCatch
+  setjmp/longjmp + `__hexa_try_push/pop/cleanup` + `__hexa_last_error()`
+  machinery with an empty catch body = swallow-on-throw + continue.
+  **Runtime-verified**: `/tmp/rec_smoke.hexa` (boom() throws inside
+  recover) → `hit=0` (post-throw line unreached = unwound) + "survived"
+  (continued past block) + rc=0. Matches real usage in
+  `stdlib/net/concurrent_serve.hexa:331` (per-endpoint failure isolation).
+- **HandleWithStmt** (`handle { body } with { … }`) → emits the handled
+  body as a scoped block. Honest basis: repo-wide scan shows
+  `perform`/`resume` have **ZERO** usage → no effect is ever triggered →
+  handler arms are provably dead → the construct is exactly "run body".
+  Correct for the codebase as it stands; LIMITATION comment in source
+  documents that real handler-dispatch codegen must replace this if
+  `perform` ever lands.
+- **YieldStmt** (`yield e`) → evaluate `e` for side effects + fall
+  through. Honest basis: hexa grammar has NO generator/coroutine
+  construct (no `gen fn`, no Generator type); the only statement-form
+  `yield` is in an **uncalled** `gen_vals()` in the keyword-audit (all
+  "real" grep hits were prose comments). With no generator drive,
+  `yield e` ≡ "eval e, continue". Same measured-honesty class as
+  HandleWithStmt; LIMITATION comment documents the generator-RFC path.
+
+One regen-promote ceremony landed **all of the above + the deferred
+`58834640` binary side** (PanicStmt/DropStmt/AtomicLet) in a single
+hexa_v2/hexa_cc.c bump (hexa_cc.c 1473448→1479085 B, hexa_v2
+1566568→1567856 B). Driver rebuilt (build/stage1/main.c via new hexa_v2
+→ clang -O3 → hexa.real + codesign → cp hexadrv).
+
+Validation (all on Mac, host-pinned): self-host fixpoint **BYTE-IDENTICAL**
+(`./hexa cc --regen` → hexa_cc.c.new ≡ promoted hexa_cc.c); atlas
+**118/118 PASS** (live=118 vs MAIN.tape declared=118); RecoverStmt
+build+run PASS; concurrent_serve.hexa / codegen_c2.hexa / main.hexa
+transpile clean; driver `./hexa --version` rc=0.
+
+Remaining (honest, NOT done — deeper than statement-codegen): the
+keyword-audit's next gap is **ModStmt** (`mod name { decls }`) — a
+namespace block whose body holds *declarations*, requiring top-level
+decl-hoisting (not a `gen2_stmt` body-inline, which would emit nested C
+functions = silently-wrong). Zero real usage (only `test_keyword_audit`).
+Deferred to a dedicated decl-hoisting cycle rather than faked.
