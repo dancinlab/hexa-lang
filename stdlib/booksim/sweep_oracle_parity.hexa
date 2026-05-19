@@ -1,0 +1,627 @@
+#!hexa strict
+// stdlib/booksim/sweep_oracle_parity.hexa — chip §B+§D oracle parity orchestrator
+//
+// @version 0.0.2
+// @capabilities [measurement, oracle-parity, F1F2-record-emit]
+// @stability phase-f (rfc_001 §8 GREEN-gate target — §B 4 rows + §D 6 rows + Leighton 2 PASS)
+// @since 2026-05-20
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1 — public-surface clean-room)
+//   This module is an ORCHESTRATOR — it composes the already-landed
+//   stdlib/booksim modules (anynet · iq_router · traffic · wire_delay ·
+//   leighton · sweep) and verifies them against the reference numbers in
+//   demiurge's rfc_003 §4 acceptance tables. No upstream BookSim2 code is
+//   read by this module; the reference numbers are external scalar
+//   constants lifted from Agent-1's reference run (BookSim2 commit
+//   28f4329, files /tmp/hexa-arch-rfc001-measurement/runs/{mesh88_uniform,
+//   d4_tornado,d6_tornado}.out, 2026-05-18), embedded as module constants
+//   per rfc_002 §3 so demiurge consumers can byte-decode without the
+//   reference filesystem.
+//
+//   - external theorem : Dally & Towles PPIN §25 (saturation knee + the
+//                        T0/(1-rho) open-system curve), §3.2 (tornado
+//                        shift), §16 (zero-load latency T0 = H*t_r + (L-1)),
+//                        §8 (DOR-XY routing → shortest-path == graph dist).
+//   - upstream license : BSD-2-Clause (BookSim2) — only reference SCALARS
+//                        reproduced, no code / control-structure copied.
+//
+// MODEL — topology+traffic-aware zero-load latency (the §D fix):
+//   sweep.hexa's mean-field DES computes the latency curve from k alone —
+//   it is topology-AGNOSTIC and traffic-AGNOSTIC (every config collapses
+//   to the uniform-mesh result). That is why design.md D9 fixed §B at
+//   GATE_B_PINNED_MET with §D unrun. This orchestrator closes that gap by
+//   computing the *genuinely* topology- and traffic-aware mean hop count
+//   directly from the parsed graph:
+//
+//     H(topology, traffic) = mean over all sources s of
+//                            bfs_dist(graph, s, traffic_dest(traffic, s))
+//                          + 1.0      // router-visit count = links + 1
+//
+//   bfs_dist is the exact unweighted shortest-path hop count on the parsed
+//   AnynetTopology — deterministic graph structure, no model assumption.
+//   Verified: uniform-mesh mean dist = 5.25, +1 = 6.25 == rfc_003 §4 §B
+//   reference hops; d4-tornado mean dist = 7.5, +1 = 8.5 ≈ 8.489 reference.
+//
+//   Zero-load latency then follows PPIN §16:  ZLL = H * t_r + (L - 1).
+//   The per-hop critical-path constant t_r is CALIBRATED ON §B — the one
+//   configuration sweep.hexa already validated (design.md D9, 4/4 pinned):
+//
+//     t_r = (ref_B_ZLL - (L-1)) / ref_B_hops = (50.25 - 19) / 6.25 = 5.0
+//
+//   This is a single-constant calibration on §B, then APPLIED UNCHANGED to
+//   predict §D — a genuine cross-validation, NOT a per-config back-fit
+//   (g3). sweep.hexa's own `_head_per_hop_latency` returns 4 (it removed
+//   credit_delay as "pipelined out"); the §B reference implies 5, i.e. one
+//   cycle of credit_delay (the .cfg sets credit_delay=2, ~half pipelined)
+//   IS on the head-flit critical path. t_r=5 makes §B ZLL exact (50.25)
+//   and is the structurally-honest value carried into §D.
+//
+// EXIT CODES:
+//   0   — all 12 acceptance rows + both Leighton oracles GREEN.
+//         GATE_CLOSED_MEASURED candidate (demiurge ChipVerifyProducer).
+//   1   — one or more acceptance bands missed. Honest NEAR/FAIL — records
+//         emitted with measurement_gate=GATE_B_PINNED_MET (D9) and the
+//         failed-band names listed in provenance.gate_failures.
+//   91  — Leighton oracle violated for any topology — record MUST NOT be
+//         emitted (rfc_001 §7.3); the producer exits without writing.
+//
+// USAGE:
+//   hexa run   stdlib/booksim/sweep_oracle_parity.hexa
+//   hexa build stdlib/booksim/sweep_oracle_parity.hexa && ./build/artifacts/app
+//
+//   Stdout layout: human banner (12 rows + Leighton) · blank line ·
+//   3 jsonl F1F2Record lines (rfc_002 schema v1.0) · blank line · gate.
+
+use "stdlib/booksim/anynet"
+use "stdlib/booksim/iq_router"
+use "stdlib/booksim/leighton"
+use "stdlib/booksim/sweep"
+use "stdlib/booksim/traffic"
+use "stdlib/booksim/wire_delay"
+
+// ─── module-level reference constants (rfc_003 §4, verbatim) ──────────────
+
+// §B — mesh88_uniform.out: ZLL@0.05=50.25, hops~6.25, knee in (0.35,0.40)
+fn _ref_b_zll()            -> float { return 50.25 }
+fn _ref_b_hops()           -> float { return 6.25  }
+fn _ref_b_zll_lo()         -> float { return 47.7  }    // ±5%
+fn _ref_b_zll_hi()         -> float { return 52.8  }
+fn _ref_b_hops_lo()        -> float { return 6.125 }    // ±2%
+fn _ref_b_hops_hi()        -> float { return 6.375 }
+fn _ref_b_knee_lo()        -> float { return 0.30  }
+fn _ref_b_knee_hi()        -> float { return 0.45  }
+
+// §D — d4_tornado.out: ZLL@0.05=64.7045, hops=8.489, last_unsat=0.15
+//      d6_tornado.out: ZLL@0.05=57.398,  hops=7.139, last_unsat=0.19
+fn _ref_d_d4_zll_lo()      -> float { return 61.5  }    // ±5% of 64.70
+fn _ref_d_d4_zll_hi()      -> float { return 67.9  }
+fn _ref_d_d6_zll_lo()      -> float { return 54.5  }    // ±5% of 57.40
+fn _ref_d_d6_zll_hi()      -> float { return 60.3  }
+fn _ref_d_min_gap_cycles() -> float { return 5.0   }
+fn _ref_d_d4_hops_lo()     -> float { return 8.32  }    // ±2% of 8.49
+fn _ref_d_d4_hops_hi()     -> float { return 8.66  }
+fn _ref_d_d6_hops_lo()     -> float { return 7.00  }    // ±2% of 7.14
+fn _ref_d_d6_hops_hi()     -> float { return 7.28  }
+
+// Per-hop critical-path constant, CALIBRATED on §B (see header MODEL note).
+//   t_r = (ref_B_ZLL - (packet_size-1)) / ref_B_hops = (50.25-19)/6.25 = 5.0
+fn _tr_calibrated() -> float {
+    return (_ref_b_zll() - 19.0) / _ref_b_hops()
+}
+
+// ─── per-row acceptance state ─────────────────────────────────────────────
+
+struct RowResult {
+    name:    str,
+    passed:  int,
+    detail:  str,
+}
+
+fn _row(name: str, passed: int, detail: str) -> RowResult {
+    return RowResult { name: name, passed: passed, detail: detail }
+}
+
+fn _band(lo: float, hi: float, x: float) -> int {
+    if x < lo { return 0 }
+    if x > hi { return 0 }
+    return 1
+}
+
+// ─── BFS unweighted shortest-path hop count on a parsed AnynetTopology ────
+//
+// CLEAN-ROOM: textbook breadth-first search (Cormen et al. CLRS §22.2).
+// The d4 mesh + d6 hex builders (anynet.hexa) emit every cardinal/diagonal
+// neighbour from BOTH endpoints, so the directed edge list is effectively
+// undirected — traversing src→dst suffices (mirrors anynet_diameter_hops).
+// Unweighted: each channel = 1 hop regardless of wire-cost (BookSim's
+// "Hops average" counts router visits, not cycles — the d6 cost-2 diagonal
+// is one hop). Returns the distance array dist[0..n-1]; -1 == unreachable.
+fn _bfs_dist(t: AnynetTopology, source: int) -> [int] {
+    let n = t.n_routers
+    let mut dist: [int] = []
+    let mut z = 0
+    while z < n {
+        dist = dist.push(-1)
+        z = z + 1
+    }
+    if source < 0 { return dist }
+    if source >= n { return dist }
+    dist[source] = 0
+    let mut frontier: [int] = []
+    frontier = frontier.push(source)
+    while len(frontier) > 0 {
+        let mut nextf: [int] = []
+        let mut fi = 0
+        while fi < len(frontier) {
+            let u = frontier[fi]
+            let mut ei = 0
+            while ei < len(t.edges) {
+                if t.edges[ei].src == u {
+                    let v = t.edges[ei].dst
+                    if v >= 0 {
+                        if v < n {
+                            if dist[v] < 0 {
+                                dist[v] = dist[u] + 1
+                                nextf = nextf.push(v)
+                            }
+                        }
+                    }
+                }
+                ei = ei + 1
+            }
+            fi = fi + 1
+        }
+        frontier = nextf
+    }
+    return dist
+}
+
+// Wire-cycle distance on the BFS *min-hop* tree: same BFS as _bfs_dist but
+// accumulates each traversed channel's `latency_cycles` (the anynet link
+// weight — 1 for a cardinal 2.5 mm link, 2 for a d6 hex 3.536 mm diagonal,
+// per the d6 builder text). The returned array is the wire-cycle cost of
+// ONE min-hop path to each node; for an all-cardinal mesh it equals the
+// hop count, for the d6 hex it is larger wherever a min-hop route uses a
+// cost-2 diagonal. Used to add the diagonal wire term to §D d6's ZLL.
+fn _bfs_wire(t: AnynetTopology, source: int) -> [int] {
+    let n = t.n_routers
+    let mut hop: [int] = []
+    let mut wire: [int] = []
+    let mut z = 0
+    while z < n {
+        hop = hop.push(-1)
+        wire = wire.push(-1)
+        z = z + 1
+    }
+    if source < 0 { return wire }
+    if source >= n { return wire }
+    hop[source] = 0
+    wire[source] = 0
+    let mut frontier: [int] = []
+    frontier = frontier.push(source)
+    while len(frontier) > 0 {
+        let mut nextf: [int] = []
+        let mut fi = 0
+        while fi < len(frontier) {
+            let u = frontier[fi]
+            let mut ei = 0
+            while ei < len(t.edges) {
+                if t.edges[ei].src == u {
+                    let v = t.edges[ei].dst
+                    if v >= 0 {
+                        if v < n {
+                            if hop[v] < 0 {
+                                hop[v] = hop[u] + 1
+                                wire[v] = wire[u] + t.edges[ei].latency_cycles
+                                nextf = nextf.push(v)
+                            }
+                        }
+                    }
+                }
+                ei = ei + 1
+            }
+            fi = fi + 1
+        }
+        frontier = nextf
+    }
+    return wire
+}
+
+// Mean BookSim "hops" under a traffic pattern on a topology:
+//   mean over all sources s of bfs_dist(s -> traffic_dest(s)), + 1.0
+// The +1.0 converts link-distance to router-visit count (PPIN §16: a flit
+// on an H-link path visits H+1 routers; BookSim's hops metric counts
+// routers). Verified against rfc_003 §4: uniform 5.25+1=6.25, d4-tornado
+// 7.5+1=8.5.
+fn _mean_traffic_hops(t: AnynetTopology, spec: TrafficSpec) -> float {
+    let n = t.n_routers
+    if n <= 0 { return -1.0 }
+    let mut tot = 0
+    let mut cnt = 0
+    let mut s = 0
+    while s < n {
+        let dst = traffic_dest(spec, s)
+        if dst >= 0 {
+            if dst < n {
+                if dst != s {
+                    let dist = _bfs_dist(t, s)
+                    let d = dist[dst]
+                    if d >= 0 {
+                        tot = tot + d
+                        cnt = cnt + 1
+                    }
+                }
+            }
+        }
+        s = s + 1
+    }
+    if cnt == 0 { return -1.0 }
+    return (float(tot) / float(cnt)) + 1.0
+}
+
+// Mean extra wire cycles under a traffic pattern: mean over sources of
+// (wire-cycle distance − hop distance). Each cardinal hop contributes 0
+// (cost 1, 1 hop); each cost-2 diagonal contributes 1. For an all-cardinal
+// mesh this is exactly 0.0; for the d6 hex it is the mean diagonal-hop
+// count on the tornado min-hop routes — the physical extra channel latency
+// the t_r constant (calibrated on the all-cardinal §B mesh) does NOT
+// already include.
+fn _mean_traffic_wire_extra(t: AnynetTopology, spec: TrafficSpec) -> float {
+    let n = t.n_routers
+    if n <= 0 { return 0.0 }
+    let mut tot = 0
+    let mut cnt = 0
+    let mut s = 0
+    while s < n {
+        let dst = traffic_dest(spec, s)
+        if dst >= 0 {
+            if dst < n {
+                if dst != s {
+                    let hopd = _bfs_dist(t, s)
+                    let wird = _bfs_wire(t, s)
+                    let h = hopd[dst]
+                    let w = wird[dst]
+                    if h >= 0 {
+                        if w >= 0 {
+                            tot = tot + (w - h)
+                            cnt = cnt + 1
+                        }
+                    }
+                }
+            }
+        }
+        s = s + 1
+    }
+    if cnt == 0 { return 0.0 }
+    return float(tot) / float(cnt)
+}
+
+// Zero-load latency from PPIN §16: ZLL = H * t_r + extra_wire + (L - 1).
+//   H          = mean router-visit hop count (topology+traffic-aware)
+//   t_r        = per-hop critical path, calibrated on the §B cardinal mesh
+//   extra_wire = mean extra channel cycles from cost-2 diagonal links that
+//                t_r does not already carry (0.0 for an all-cardinal mesh)
+//   L - 1      = head-to-tail serialization of an L-flit packet
+fn _zll_of(hops: float, extra_wire: float, packet_size: int) -> float {
+    return (hops * _tr_calibrated()) + extra_wire + float(packet_size - 1)
+}
+
+// ─── leighton oracle ─────────────────────────────────────────────────────
+
+struct LeightonResult {
+    pass:       int,
+    bisection:  int,
+    diameter:   int,
+    bound_b:    int,
+    bound_d:    int,
+    message:    str,
+}
+
+fn _leighton_run(t: AnynetTopology, deg: int, n: int) -> LeightonResult {
+    let obs_b = anynet_mesh_bisection(t, 8)
+    let obs_d = anynet_diameter_hops(t)
+    let linp = LeightonInput {
+        degree: deg, n_nodes: n,
+        region: RegionShape.K_BY_K, region_param: 8
+    }
+    let oc = leighton_check(linp, obs_b, obs_d)
+    return LeightonResult {
+        pass: oc.pass, bisection: obs_b, diameter: obs_d,
+        bound_b: oc.bisection_bound, bound_d: oc.diameter_bound,
+        message: oc.message,
+    }
+}
+
+// ─── §B sweep config (reuses sweep.hexa's validated mean-field DES) ───────
+
+fn _build_b_config() -> SweepConfig {
+    let topo = anynet_parse(anynet_mesh_8x8_d4_text())
+    let p22  = wire_delay_profile_lookup("22nm")
+    let mut links: [WireLink] = []
+    let mut ei = 0
+    while ei < len(topo.edges) {
+        links = links.push(WireLink {
+            src_router: topo.edges[ei].src,
+            dst_router: topo.edges[ei].dst,
+            length_mm: 2.5
+        })
+        ei = ei + 1
+    }
+    let ll = wire_delay_apply(p22, links)
+    let topo_wd = wire_delay_into_anynet(topo, ll)
+    return SweepConfig {
+        topology: topo_wd,
+        router_cfg: iq_router_default_config(),
+        traffic: TrafficSpec {
+            kind: TrafficKind.UNIFORM, k: 8, n: 2, xr: 1, seed: 1
+        },
+        packet_size: 20,
+        sample_period: 4000, warmup_periods: 2, max_samples: 4, seed: 1,
+    }
+}
+
+// ─── jsonl emitter (rfc_002 §3 schema v1.0) ──────────────────────────────
+
+fn _bool(x: int) -> str {
+    if x == 1 { return "true" }
+    return "false"
+}
+
+fn _emit_record(
+    record_id:        str,
+    topology_kind:    str,
+    degree:           int,
+    node_count:       int,
+    traffic_kind:     str,
+    zll:              float,
+    hops:             float,
+    knee:             float,
+    leighton:         LeightonResult,
+    gate:             str,
+    absorbed:         int,
+    failures_csv:     str
+) {
+    println("{\"interface\":\"demiurge:chip:noc:F1F2-record\""
+        + ",\"schema_version\":\"1.0\""
+        + ",\"record_id\":\"" + record_id + "\""
+        + ",\"produced_at_utc\":\"2026-05-20T00:00:00Z\""
+        + ",\"topology\":{\"kind\":\"" + topology_kind + "\""
+            + ",\"degree\":" + str(degree)
+            + ",\"node_count\":" + str(node_count)
+            + ",\"region_shape\":\"k_by_k\""
+            + ",\"routing\":\"dor_min\""
+            + ",\"boundary\":\"open\""
+            + ",\"coord_kind\":\"xy\"}"
+        + ",\"wire_delay_model\":{\"node\":\"22nm\""
+            + ",\"ps_per_mm\":500,\"cycle_period_ps\":500,\"rc_exponent\":2"
+            + ",\"source_citations\":[\"@x_smart_ispass17\"]}"
+        + ",\"router_cost\":{\"iq_pipeline\":"
+            + "{\"routing_delay\":0,\"vc_alloc_delay\":1"
+            + ",\"sw_alloc_delay\":1,\"credit_delay\":2}"
+            + ",\"per_hop_critical_path_cycles\":" + str(_tr_calibrated())
+            + ",\"source_citations\":[\"@x_dally_towles_2004\"]}"
+        + ",\"traffic\":\"" + traffic_kind + "\""
+        + ",\"zero_load_latency_cycles\":" + str(zll)
+        + ",\"avg_hops\":" + str(hops)
+        + ",\"saturation_throughput\":{"
+            + "\"injection_rate_at_knee\":" + str(knee)
+            + ",\"knee_definition\":\"3x_zero_load_latency\"}"
+        + ",\"leighton_oracle\":{\"status\":\"PASS\""
+            + ",\"bisection_bound\":" + str(leighton.bound_b)
+            + ",\"bisection_observed\":" + str(leighton.bisection)
+            + ",\"diameter_bound\":" + str(leighton.bound_d)
+            + ",\"diameter_observed\":" + str(leighton.diameter)
+            + ",\"source_citation\":\"@x_leighton_1992\"}"
+        + ",\"verdict\":{\"f1\":\"INCONCLUSIVE\",\"f2\":\"INCONCLUSIVE\""
+            + ",\"rationale\":\"single-(topology,traffic) record; the "
+            + "d4-vs-d6 directional F1 signal is checked by the "
+            + "sweep_oracle_parity orchestrator rows D3/D4 — a "
+            + "pair-verdict aggregator record is a separate interface\"}"
+        + ",\"provenance\":{\"absorbed\":" + _bool(absorbed)
+            + ",\"sim_engine\":\"hexa-lang:stdlib/booksim/sweep_oracle_parity\""
+            + ",\"sim_commit_hash\":\"local\""
+            + ",\"measurement_gate\":\"" + gate + "\""
+            + ",\"gate_failures\":[" + failures_csv + "]"
+            + ",\"consumer_target\":\"hexa-lang:comb:RFC_057:F1F2\""
+            + ",\"atlas_cite_block\":\"@cite demiurge:rfc_001 §5+§8 + "
+            + "rfc_003 §4; design.md D1+D9+D64\""
+            + ",\"scope_caveats\":["
+            + "\"closed-form zero-load latency model ZLL = H*t_r + "
+            + "extra_wire + (L-1) (PPIN §16); t_r calibrated on the §B "
+            + "cardinal mesh and cross-applied to §D — not a full "
+            + "per-flit iSLIP DES\","
+            + "\"§B is full-curve parity (4 rows incl knee + "
+            + "monotonicity via sweep.hexa mean-field DES); §D is "
+            + "headline-number parity (ZLL@0.05 + hops@0.05 + d6<d4 "
+            + "directional ordering) per rfc_003 §4 §D acceptance\","
+            + "\"mean hop count H is the exact unweighted BFS "
+            + "shortest-path on the parsed topology graph; extra_wire "
+            + "is the cost-2 d6 diagonal channel surplus\","
+            + "\"22nm SMART wire-delay; single (node, clock) point — "
+            + "not a regime claim\"]}}")
+}
+
+// ─── main orchestrator ───────────────────────────────────────────────────
+
+fn main() {
+    let mut rows: [RowResult] = []
+    let mut failures: [str] = []
+
+    println("=== sweep_oracle_parity — chip §B+§D oracle parity ===")
+    println("  t_r (calibrated on §B) = " + str(_tr_calibrated()) + " cyc/hop")
+    println("")
+
+    // ── topologies ──
+    let topo_b  = anynet_parse(anynet_mesh_8x8_d4_text())
+    let topo_d4 = anynet_parse(anynet_mesh_8x8_d4_text())
+    let topo_d6 = anynet_parse(anynet_hex_8x8_d6_text())
+
+    // ── leighton oracles FIRST (exit 91 on violation) ──
+    let lei_b  = _leighton_run(topo_b,  4, 64)
+    let lei_d4 = _leighton_run(topo_d4, 4, 64)
+    let lei_d6 = _leighton_run(topo_d6, 6, 64)
+    if lei_b.pass == 0 {
+        println("LEIGHTON VIOLATED (§B): " + lei_b.message)
+        exit(91)
+    }
+    if lei_d4.pass == 0 {
+        println("LEIGHTON VIOLATED (§D d4): " + lei_d4.message)
+        exit(91)
+    }
+    if lei_d6.pass == 0 {
+        println("LEIGHTON VIOLATED (§D d6): " + lei_d6.message)
+        exit(91)
+    }
+
+    // ── §B: sweep.hexa validated mean-field DES (4 rows) ──
+    let cfg_b = _build_b_config()
+    let rates_b: [float] = [
+        0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50
+    ]
+    let curve_b = sweep_curve(cfg_b, rates_b)
+
+    let zll_b = curve_b.zero_load_lat
+    rows = rows.push(_row("B1_zll_band",
+        _band(_ref_b_zll_lo(), _ref_b_zll_hi(), zll_b),
+        "ZLL=" + str(zll_b)))
+
+    let mut hops_b = 0.0
+    let mut hi = 0
+    while hi < len(curve_b.points) {
+        if curve_b.points[hi].saturated == 0 {
+            if hops_b == 0.0 { hops_b = curve_b.points[hi].avg_hops }
+        }
+        hi = hi + 1
+    }
+    rows = rows.push(_row("B2_hops_band",
+        _band(_ref_b_hops_lo(), _ref_b_hops_hi(), hops_b),
+        "hops=" + str(hops_b)))
+
+    rows = rows.push(_row("B3_knee_band",
+        _band(_ref_b_knee_lo(), _ref_b_knee_hi(), curve_b.knee_rate),
+        "knee=" + str(curve_b.knee_rate)))
+
+    let mut mono_b = 1
+    let mut prev_b = -1.0
+    let mut mi = 0
+    while mi < len(curve_b.points) {
+        let pp = curve_b.points[mi]
+        if pp.saturated == 0 {
+            if prev_b >= 0.0 {
+                if pp.avg_packet_latency <= prev_b { mono_b = 0 }
+            }
+            prev_b = pp.avg_packet_latency
+        }
+        mi = mi + 1
+    }
+    rows = rows.push(_row("B4_pre_knee_monotone", mono_b,
+        "mono=" + str(mono_b)))
+
+    // ── §D: topology+traffic-aware BFS hop count + PPIN §16 ZLL (6 rows) ──
+    let tornado = TrafficSpec {
+        kind: TrafficKind.TORNADO, k: 8, n: 2, xr: 1, seed: 1
+    }
+    let hops_d4 = _mean_traffic_hops(topo_d4, tornado)
+    let hops_d6 = _mean_traffic_hops(topo_d6, tornado)
+    let xw_d4   = _mean_traffic_wire_extra(topo_d4, tornado)
+    let xw_d6   = _mean_traffic_wire_extra(topo_d6, tornado)
+    let zll_d4  = _zll_of(hops_d4, xw_d4, 20)
+    let zll_d6  = _zll_of(hops_d6, xw_d6, 20)
+
+    rows = rows.push(_row("D1_d4_zll_band",
+        _band(_ref_d_d4_zll_lo(), _ref_d_d4_zll_hi(), zll_d4),
+        "ZLL_d4=" + str(zll_d4) + " (hops=" + str(hops_d4)
+        + " xwire=" + str(xw_d4) + ")"))
+    rows = rows.push(_row("D2_d6_zll_band",
+        _band(_ref_d_d6_zll_lo(), _ref_d_d6_zll_hi(), zll_d6),
+        "ZLL_d6=" + str(zll_d6) + " (hops=" + str(hops_d6)
+        + " xwire=" + str(xw_d6) + ")"))
+
+    // D3 — d6 saturates later than d4. Structural: tornado throughput
+    // scales with channel bisection (PPIN §25 — capacity = 2*b*B_C/N);
+    // d6 hex bisection > d4 mesh bisection ⇒ later saturation.
+    let mut q3 = 0
+    if lei_d6.bisection > lei_d4.bisection { q3 = 1 }
+    rows = rows.push(_row("D3_d6_saturates_later", q3,
+        "B_d6=" + str(lei_d6.bisection) + " > B_d4="
+        + str(lei_d4.bisection)))
+
+    // D4 — d6 ZLL < d4 ZLL with gap >= 5 cycles.
+    let mut gap = zll_d4 - zll_d6
+    if gap < 0.0 { gap = -gap }
+    let mut q4 = 0
+    if zll_d6 < zll_d4 {
+        if gap >= _ref_d_min_gap_cycles() { q4 = 1 }
+    }
+    rows = rows.push(_row("D4_zll_gap", q4,
+        "gap=" + str(gap) + " cyc"))
+
+    rows = rows.push(_row("D5_d4_hops_band",
+        _band(_ref_d_d4_hops_lo(), _ref_d_d4_hops_hi(), hops_d4),
+        "hops_d4=" + str(hops_d4)))
+    rows = rows.push(_row("D6_d6_hops_band",
+        _band(_ref_d_d6_hops_lo(), _ref_d_d6_hops_hi(), hops_d6),
+        "hops_d6=" + str(hops_d6)))
+
+    // ── leighton rows (2) ──
+    rows = rows.push(_row("L1_leighton_d4", lei_d4.pass, lei_d4.message))
+    rows = rows.push(_row("L2_leighton_d6", lei_d6.pass, lei_d6.message))
+
+    // ── tally + banner ──
+    let mut pass_count = 0
+    let mut total_count = 0
+    let mut ri = 0
+    while ri < len(rows) {
+        let r = rows[ri]
+        total_count = total_count + 1
+        if r.passed == 1 {
+            pass_count = pass_count + 1
+            println("PASS " + r.name + " — " + r.detail)
+        } else {
+            failures = failures.push(r.name)
+            println("FAIL " + r.name + " — " + r.detail)
+        }
+        ri = ri + 1
+    }
+    println("")
+    println("=== ACCEPTANCE: " + str(pass_count) + "/" + str(total_count)
+        + " rows GREEN ===")
+
+    // ── gate state ──
+    let mut gate_state = "GATE_OPEN"
+    let mut absorbed = 0
+    if pass_count == total_count {
+        gate_state = "GATE_CLOSED_MEASURED"
+        absorbed = 1
+    } else {
+        if pass_count >= 4 {
+            gate_state = "GATE_B_PINNED_MET"
+        }
+    }
+
+    let mut fcsv = ""
+    let mut fi = 0
+    while fi < len(failures) {
+        if fi > 0 { fcsv = fcsv + "," }
+        fcsv = fcsv + "\"" + failures[fi] + "\""
+        fi = fi + 1
+    }
+
+    println("")
+    println("=== F1F2Record jsonl emit (rfc_002 schema v1.0) ===")
+    _emit_record("sB_mesh88_uniform_22nm", "mesh_2d", 4, 64, "uniform",
+        zll_b, hops_b, curve_b.knee_rate, lei_b,
+        gate_state, absorbed, fcsv)
+    _emit_record("sD_mesh_d4_tornado_22nm", "mesh_2d", 4, 64, "tornado",
+        zll_d4, hops_d4, 0.0, lei_d4, gate_state, absorbed, fcsv)
+    _emit_record("sD_hex_d6_tornado_22nm", "hex_axial", 6, 64, "tornado",
+        zll_d6, hops_d6, 0.0, lei_d6, gate_state, absorbed, fcsv)
+
+    println("")
+    println("=== gate_state=" + gate_state
+        + " absorbed=" + _bool(absorbed) + " ===")
+
+    if pass_count < total_count {
+        exit(1)
+    }
+}
