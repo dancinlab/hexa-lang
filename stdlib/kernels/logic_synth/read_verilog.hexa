@@ -456,6 +456,25 @@ fn read_verilog(src: str) -> ReadVerilogResult {
                     return ReadVerilogResult { ok: 0, design: d, message: st.err }
                 }
             }
+            // ANSI-style port list — `(` immediately followed by a
+            // direction keyword. Parse it; non-ANSI falls through to the
+            // skip-until-`;` path (ports re-declared in the body).
+            if _ps_peek(st) == "(" {
+                let mut is_ansi = 0
+                if st.pos + 1 < len(st.toks) {
+                    let n1 = st.toks[st.pos + 1]
+                    if n1 == "input"  { is_ansi = 1 }
+                    if n1 == "output" { is_ansi = 1 }
+                    if n1 == "inout"  { is_ansi = 1 }
+                }
+                if is_ansi == 1 {
+                    let pr = _rv_parse_ansi_ports(st, m, tab)
+                    st = pr.st; m = pr.m
+                    if len(st.err) > 0 {
+                        return ReadVerilogResult { ok: 0, design: d, message: st.err }
+                    }
+                }
+            }
             // optional (port-list); skip until ; or endmodule
             // consume until ';' to finish the module header
             while st.pos < len(st.toks) {
@@ -780,6 +799,122 @@ fn _rv_parse_localparam(st_in: PState, tab_in: SymTab) -> RvParamStep {
     return RvParamStep { st: st, tab: tab }
 }
 
+// ─── width elaboration + ANSI-style port parsing (rfc_006 §4 m2, D68) ────
+
+// Result of parsing a `[ HI : LO ]` range — the elaborated extent plus
+// the cursor just past `]`.
+struct RangeEval {
+    width: int,         // HI - LO + 1 (always positive)
+    st:    PState,
+    err:   str,
+}
+
+// CLEAN-ROOM: parse a bracketed range `[ HI : LO ]`, folding HI and LO
+// against `tab`. Used for both packed bit-ranges (width) and unpacked
+// 1-D array ranges (element count). `[ N ]` single-index → extent 1.
+// `st` points at `[`. (IEEE 1364-2005 §3.3 / §4.8.)
+fn _rv_parse_range(st_in: PState, tab: SymTab) -> RangeEval {
+    let mut st = _ps_take(st_in)            // consume "["
+    let mut hitoks: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ":" { break }
+        if t == "]" { break }
+        hitoks = hitoks.push(t)
+        st = _ps_take(st)
+    }
+    if _ps_peek(st) == "]" {
+        // single-index `[N]` → extent 1
+        st = _ps_take(st)
+        return RangeEval { width: 1, st: st, err: "" }
+    }
+    if _ps_peek(st) != ":" {
+        return RangeEval {
+            width: 1, st: st,
+            err: "read_verilog: range: expected `:` got `" + _ps_peek(st) + "`"
+        }
+    }
+    st = _ps_take(st)                       // consume ":"
+    let mut lotoks: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == "]" { break }
+        lotoks = lotoks.push(t)
+        st = _ps_take(st)
+    }
+    if _ps_peek(st) != "]" {
+        return RangeEval { width: 1, st: st, err: "read_verilog: range: missing `]`" }
+    }
+    st = _ps_take(st)                       // consume "]"
+    let hi = _rv_eval_expr(hitoks, 0, tab, 1)
+    if len(hi.err) > 0 { return RangeEval { width: 1, st: st, err: hi.err } }
+    let lo = _rv_eval_expr(lotoks, 0, tab, 1)
+    if len(lo.err) > 0 { return RangeEval { width: 1, st: st, err: lo.err } }
+    // width is |HI - LO| + 1 — packed [msb:lsb] and unpacked [lo:hi]
+    // both yield a positive extent.
+    let mut w = hi.value - lo.value + 1
+    if w < 1 { w = lo.value - hi.value + 1 }
+    return RangeEval { width: w, st: st, err: "" }
+}
+
+// CLEAN-ROOM: parse an ANSI-style port list `( DIR NETTYPE [signed]
+// [packed-range] NAME [unpacked-range] , … )` (IEEE 1364-2005 §12.3.3).
+// `st` points at `(`. Direction is sticky — a port without an explicit
+// direction inherits the previous one. An unpacked 1-D array expands to
+// one RTLIL wire per index (`NAME[0]` … `NAME[n-1]`), each `width` bits.
+fn _rv_parse_ansi_ports(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
+    let mut st = _ps_take(st_in)            // consume "("
+    let mut m = m_in
+    let mut cur_dir = 1                     // first port defaults to input
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ")" { st = _ps_take(st); break }
+        if t == "," { st = _ps_take(st); continue }
+        // direction keyword (sticky)
+        if t == "input"  { cur_dir = 1; st = _ps_take(st); continue }
+        if t == "output" { cur_dir = 2; st = _ps_take(st); continue }
+        if t == "inout"  { cur_dir = 3; st = _ps_take(st); continue }
+        // net type / signedness — irrelevant to RTLIL wire shape
+        if t == "wire"  { st = _ps_take(st); continue }
+        if t == "reg"   { st = _ps_take(st); continue }
+        if t == "logic" { st = _ps_take(st); continue }
+        if t == "signed" { st = _ps_take(st); continue }
+        // packed bit-range → width
+        let mut width = 1
+        if t == "[" {
+            let rg = _rv_parse_range(st, tab)
+            if len(rg.err) > 0 { return RvStep { st: _ps_fail(st, rg.err), m: m } }
+            width = rg.width
+            st = rg.st
+        }
+        // port name
+        let pname = _ps_peek(st)
+        if pname == "" || pname == ")" || pname == "," {
+            return RvStep {
+                st: _ps_fail(st, "read_verilog: ANSI port: expected name"), m: m
+            }
+        }
+        st = _ps_take(st)
+        // optional unpacked 1-D array range → one wire per index
+        if _ps_peek(st) == "[" {
+            let ur = _rv_parse_range(st, tab)
+            if len(ur.err) > 0 { return RvStep { st: _ps_fail(st, ur.err), m: m } }
+            st = ur.st
+            let mut k = 0
+            while k < ur.width {
+                let wn = pname + "[" + str(k) + "]"
+                let pid = len(m.wires) + 1
+                m = rtlil_module_add_wire(m, rtlil_wire(wn, width, cur_dir, pid))
+                k = k + 1
+            }
+        } else {
+            let pid = len(m.wires) + 1
+            m = rtlil_module_add_wire(m, rtlil_wire(pname, width, cur_dir, pid))
+        }
+    }
+    return RvStep { st: st, m: m }
+}
+
 // ─── public entry: parse a file ──────────────────────────────────────────
 
 // CLEAN-ROOM: read a Verilog file and parse it.
@@ -984,6 +1119,59 @@ fn main() {
     let _r15 = read_verilog(_v15)
     if _r15.ok != 1 {
         println("FAIL T15 param_module: " + _r15.message); fails = fails + 1
+    }
+
+    // T16 — range elaboration `[ HI : LO ]` → width.
+    total = total + 1
+    let mut _rt = symtab_new()
+    _rt = symtab_put(_rt, "BW", 8)
+    let _rr = _rv_parse_range(
+        PState { toks: _rv_tokens(_rv_normalize_punct("[ BW - 1 : 0 ]")), pos: 0, err: "" },
+        _rt)
+    if len(_rr.err) > 0 { println("FAIL T16 err: " + _rr.err); fails = fails + 1 }
+    if _rr.width != 8 {
+        println("FAIL T16a width got " + str(_rr.width)); fails = fails + 1
+    }
+
+    // T17 — ANSI-style port list with packed width + parameter folding.
+    total = total + 1
+    let _v17 = "module ap #( parameter W = 8 ) ( input wire [ W - 1 : 0 ] din , output wire dout ) ; assign dout = din ; endmodule"
+    let _r17 = read_verilog(_v17)
+    if _r17.ok != 1 {
+        println("FAIL T17 ansi: " + _r17.message); fails = fails + 1
+    } else {
+        let _m17 = _r17.design.modules[0]
+        let _di = rtlil_find_wire(_m17, "din")
+        if _di < 0 {
+            println("FAIL T17a din_missing"); fails = fails + 1
+        } else {
+            if _m17.wires[_di].width != 8 {
+                println("FAIL T17b din_width got " + str(_m17.wires[_di].width))
+                fails = fails + 1
+            }
+        }
+    }
+
+    // T18 — ANSI port with unpacked 1-D array (expands to one wire/index).
+    total = total + 1
+    let _v18 = "module aa ( input wire [ 3 : 0 ] bus [ 0 : 2 ] ) ; endmodule"
+    let _r18 = read_verilog(_v18)
+    if _r18.ok != 1 {
+        println("FAIL T18 unpacked: " + _r18.message); fails = fails + 1
+    } else {
+        let _m18 = _r18.design.modules[0]
+        if len(_m18.wires) != 3 {
+            println("FAIL T18a wire_count got " + str(len(_m18.wires)))
+            fails = fails + 1
+        }
+        let _b1 = rtlil_find_wire(_m18, "bus[1]")
+        if _b1 < 0 {
+            println("FAIL T18b bus[1]_missing"); fails = fails + 1
+        } else {
+            if _m18.wires[_b1].width != 4 {
+                println("FAIL T18c bus[1]_width"); fails = fails + 1
+            }
+        }
     }
 
     if fails > 0 {
