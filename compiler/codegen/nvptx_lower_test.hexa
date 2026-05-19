@@ -556,8 +556,19 @@ fn _test_partition() -> bool {
     println("")
     println("── emitted PTX (055-P3c partition case, sm_80) ──")
     println(ptx)
-    ok = _check(ok, ptx, ".func dev_helper",   "device fn emitted")
-    ok = _check(ok, ptx, ".func kernel_entry", "kernel fn emitted")
+    ok = _check(ok, ptx, ".func dev_helper",   "device fn emitted as .func")
+    // 055-P3c — KERNEL emits as `.visible .entry`, not `.func`
+    ok = _check(ok, ptx, ".visible .entry kernel_entry", "kernel emitted as .visible .entry")
+    // KERNEL must NOT also appear with the `.func` directive nor with
+    // the raw prefixed name.
+    if _contains(ptx, ".func kernel_entry") {
+        println("  FAIL: kernel_entry must NOT appear as .func")
+        ok = false
+    }
+    if _contains(ptx, "__nvptx_kernel__") {
+        println("  FAIL: NVPTX_KERNEL_PREFIX must be stripped in emitted PTX")
+        ok = false
+    }
     if _contains(ptx, ".func cpu_only") {
         println("  FAIL: cpu_only must NOT be emitted (partition filter)")
         ok = false
