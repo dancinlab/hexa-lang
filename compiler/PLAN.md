@@ -3677,3 +3677,57 @@ Phase A (spec-only, 0 code change) landed as `inbox/rfc_drafts_2026_05_20/rfc_06
 - **commit**: source-only (RFC draft + design.md + this entry). No
   hexa_cc.c regen / binary promote needed; @D g_commit_push_deploy
   scope = compiler source files, not inbox RFC drafts.
+
+## 진행 로그 — RFC 065 Phase B substep landings (2026-05-20)
+
+Phase B closure measured. 7 substep commits land the verb end-to-end.
+
+- **B-1** (`ca733de6` + `16d22fd8`) — `compiler/lenses/{types,embedded.gen}.hexa`
+  sibling SSOT to atlas. 32 LensNode rows across 8 families × 4 seeds + 32
+  stub apply fns (all return []) + `lens_apply_by_id` dispatch. Schema
+  parse-clean.
+- **B-2** (`30a275e2`) — `stdlib/loop/cycle.hexa` 8-stage cycle shell
+  (SCAN/LENS/DEDUP/GATE/FIRE/DRAFT/AUDIT/EXHAUST?) + CLI parse + safe-
+  default (`--once --no-fire --dry-run`). standalone selftest PASS via
+  `/tmp/hexadrv run stdlib/loop/cycle.hexa` → 8 stage lines + rc=0.
+- **B-2.1** (`b764bf32`) — `stdlib/loop/state.hexa` initial wiring for
+  `loop` + `end` files. cycle write=7 read=7 round-trip PASS, end touch
+  PASS.
+- **B-2.2** (`712778ce`) — remaining 6 state files (chain · gap_cooldown
+  · goal_growth_state · growth_last_scan · turn · guide). Cooldown N=5
+  hard-block verified (`active@7=1 active@13=0`), growth delta
+  accumulation verified (`flame=3+2=5`), turn 1→2 monotone. line-based
+  schemas (no JSON parser dep).
+- **B-3.1** (`ef8f4f1f`) — `self/main.hexa` SOURCE: `else if sub == "loop"`
+  branch + cmd_help row. cmd_run-fallback shape (mirrors qmirror).
+  parse-clean. @D g_commit_push_deploy: source-only landing flagged as
+  INCOMPLETE until B-3.2 promotes binary.
+- **B-3.2** (UNTRACKED — driver binary regen, no git delta) — driver
+  rebuilt via `tool/build_hexa_cli.sh` (SIDECAR_NO_POOL=1 NO_SMOKE=1):
+  `build/hexa_cli_driver` 599424 B (vs prior 597488 B; Δ=+1936 B matching
+  the 27-line cmd_help + 22-line dispatch insertion). Driver promoted
+  to `~/.hx/bin/hexa.real`, `hexa.real`, `hexadrv`. End-to-end dispatch
+  PASS via `/tmp/hexadrv loop`:
+    `[loop] hexa loop — RFC 065 Phase B-2 shell`
+    `  flags: once=true no_fire=true dry_run=true`
+    `  [1/8 SCAN] ... [8/8 EXHAUST] 0 emit this cycle`
+  cmd_run path emits a duplicate-symbol link error on cold cache when
+  invoked from a *just-installed* driver; the `/tmp/hexadrv` bypass
+  path is the canonical user surface (memory
+  reference_hexa_driver_sigkill_bypass). PATH-level `hexa loop`
+  blocked by external SIGKILL matcher (rc=137 — unrelated to RFC 065,
+  same matcher that gates qrng/qmirror).
+- **AGENTS.tape**: `@L l1` repo-layout entry gains `compiler/lenses/` +
+  `stdlib/loop/` siblings (companion commit).
+
+Phase B EXIT: all four exit fixtures (G-L0..G-L3) measured PASS. G-L4
+(fire budget enforcement) deferred to Phase C (no fire-needed candidates
+until lens bodies populate). G-L5 (PR-only invariant) holds by
+construction — no inbox/* write path exists in B-2/B-2.1/B-2.2 cycle
+stubs; only `--dry-run`-marked tmpdir notes are produced.
+
+Phase C entry: B-3.3 wires `stdlib/loop/cycle.hexa` to actually iterate
+`compiler/lenses/embedded.gen.hexa::LENS_NODES` (current shell uses a
+hardcoded count). Then Phase C proper populates 1-2 seed lens bodies
+(starting with `falsify_self.cite_unreachable` and
+`empty_space.unmapped_axis` — cheapest to implement, no FIRE needed).
