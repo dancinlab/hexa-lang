@@ -2095,6 +2095,47 @@ int _hx_cuda_farr_transpose_scatter_gpu(int64_t src_id, int64_t dst_id,
 
 
 
+
+/* ── mk2 dt_* faithful device transcendentals restored from e030fa31 ─
+ * _hx_cuda_dt_exp_d / _hx_cuda_dt_sqrt_d: non-contracted (__dmul_rn/
+ * __dadd_rn/__ddiv_rn) device mirrors of the CPU _hx_dt_*_d, byte-eq
+ * under FP_CONTRACT OFF (commit b73269ea discipline). Called by the
+ * mk2-C5 device kernels below — must precede them. */
+__device__ __forceinline__ double _hx_cuda_dt_exp_d(double x) {
+    int r = 0;
+    double xr = x;
+    while ((xr > 0.0 ? xr : 0.0 - xr) > 0.25) { xr = xr / 2.0; r = r + 1; }
+    double term = 1.0;
+    double acc  = 1.0;
+    int k = 1;
+    while (k < 12) {
+        term = __ddiv_rn(__dmul_rn(term, xr), (double)k);
+        acc  = __dadd_rn(acc, term);
+        k = k + 1;
+    }
+    int s = 0;
+    while (s < r) { acc = __dmul_rn(acc, acc); s = s + 1; }
+    return acc;
+}
+
+/* mk2-C2 (2026-05-19): dt_sqrt byte-exact device mirror of hexa
+ * flame_math `dt_sqrt` (24-iter Newton from g0 = max(x,1)). The
+ * decoder-block rmsnorm reference uses dt_sqrt, NOT libm sqrt —
+ * same FMA / transcendental hazard as dt_exp. __dmul_rn / __ddiv_rn /
+ * __dadd_rn = contraction-immune, byte-eq to host _hx_dt_sqrt_d
+ * under FP_CONTRACT OFF (same discipline as the silu-gate dt_exp
+ * mirror, commit e5faa8b0). */
+__device__ __forceinline__ double _hx_cuda_dt_sqrt_d(double x) {
+    if (x <= 0.0) return 0.0;
+    double g = x > 1.0 ? x : 1.0;
+    int i = 0;
+    while (i < 24) {
+        g = __dmul_rn(0.5, __dadd_rn(g, __ddiv_rn(x, g)));
+        i = i + 1;
+    }
+    return g;
+}
+
 /* ── mk2-C5 __global__ device kernels restored from e030fa31 ───────
  * Launched by the host wrappers immediately below; the A/B/C merge
  * dropped both halves. Pure double* math kernels, FP_CONTRACT-safe
