@@ -6,7 +6,9 @@
 
 ## Measurement convention
 
-- **Host**: M-Mac (Darwin arm64), CPU only (no GPU dispatch yet)
+- **Host**: M-Mac (Darwin arm64), CPU only — this section is the
+  CPU-tier d32 ledger; the GPU-dispatch d768·12L walls are in
+  "## GPU dispatch path" below
 - **Toolchain**: hexa-lang `./hexa build` → clang -O2 → native binary
 - **Run protocol**: ≥5-run averaging for sub-second-per-iteration walls
 - **Reported**: avg, range, variance %
@@ -317,6 +319,68 @@ RFC 045 Phase 3-F-3 init gn2 = 7.97113 (flame) vs 7.97116 (anima)
 persists exactly across **all** flame Phase 4-A-bwd refactors. The
 delta is precisely the dict/list-vs-packed-farr last-ulp drift
 (RFC 040 §2.2 TOL_MATMUL class); no algorithm tier 변경 affects it.
+
+---
+
+## GPU dispatch path — d768·12L transformer 1-step wall (종합 벤치마킹)
+
+> Consolidated 2026-05-19. All walls below are GPU-dispatch measurements
+> on the d768·12L transformer training step — a different host + scale
+> class from the CPU-only d32 ledger above. No new fires: this section
+> gathers walls already paid for across the Phase 4-D-9 + mk2 campaigns
+> into one SSOT, per the "flame/forge 모든 작업 완료 시 종합 벤치마킹"
+> directive (2026-05-18).
+
+### Measurement convention (GPU tier)
+
+- **Host**: NVIDIA A100 SXM4 80GB (vast.ai dispatch)
+- **Workload**: d=768, 12 layers, decoder transformer, 1 training step
+  (fwd + bwd + AdamW); FP64 substrate
+- **Reported**: per-step wall (step 1 = cold, includes one-time setup;
+  steps 2-3 = warm). Step-1 wall is the gated metric.
+- **Gate**: F-RFC046-WALL ≤ **437.9 s** (= 1.3× of PyTorch eager
+  336.85 s). Wall(s) is the SOLE pass criterion; GPU util / resident
+  are diagnostic only.
+
+### Baselines
+
+| Reference | d768·12L 1-step wall | Source |
+|---|---|---|
+| PyTorch **eager** | **336.85 s** | RFC 046 baseline (A100, same shape) |
+| F-RFC046-WALL gate | 437.9 s | 1.3× eager — the closure ceiling |
+
+### flame measured walls
+
+| Path | Commit | step 1 (s) | step 2/3 (s) | vs PyTorch eager | vs gate |
+|---|---|---|---|---|---|
+| **option B** — hand-fused (decoder step → direct forge calls) | `28e9d648` | 191–268 | — | 1.26–1.76× faster | ✅ PASS (≤437.9) |
+| **mk2 / option A** — generic `ag_tape` (compose autograd primitives, device-resident) | `e030fa31` | **114** | 133 / 120 | **2.95× faster** | ✅ PASS — **3.84× margin** |
+
+mk2 fire detail (`e030fa31`, `state/agtape_d768_fire_2026_05_18/`):
+trainer_rc=0, total wall 512 s (budget 901 s), GPU util max 65 %,
+init epoch gn2 3.98726 → step-1 gn2 3.98438 (loss ↓ — training is
+real, not a no-op). 4 measured fires + 9 byte-eq oracle fires;
+~$3–5 total GPU cost.
+
+**Headline**: the generic abstraction path (mk2) is the *faster* of
+the two — composing autograd primitives pays **no wall tax** over the
+hand-fused path. flame trains d768·12L **2.95× faster than PyTorch
+eager**, measured, two independent code paths PASS.
+
+### forge substrate measurements (cross-ref `self/forge/PARADIGM.md`)
+
+| Layer | Measured | Note |
+|---|---|---|
+| RFC 040 cuBLAS Dgemm | max\|Δ\| = 4.44e-15 vs CPU farr_matmul | substrate verified, 4× fires |
+| RFC 049 BF16 path | 9.67× FP64 cuBLAS @ Llama-7B FFN | **precision pivot** (BF16 GemmEx vs FP64), NOT a CUDA-exceed |
+| RFC 060-C mega-kernel (FP64) | 1.8–4.4× **slower** than cuBLAS stream | new-paradigm measured-killed at FP64 — see `LIMIT_BREAKTHROUGH.md` §3.9 |
+
+**Honest scope**: flame's 2.95× is vs **PyTorch eager dispatch
+overhead**, achieved by device-resident fusion — *not* by beating
+CUDA's GEMM. Exceeding cuBLAS raw GEMM throughput is a roofline
+HARD_WALL (`LIMIT_BREAKTHROUGH.md` §3.9a). The end-to-end
+training-step wall is the open SOFT_WALL, and flame currently sits at
+2.95× on it.
 
 ## Cross-references
 
