@@ -1080,6 +1080,21 @@ HexaVal forge_dispatch_matmul(HexaVal a, HexaVal m, HexaVal k,
                               HexaVal b, HexaVal n) {
     return hexa_forge_dispatch_matmul(a, m, k, b, n);
 }
+// RFC 050 PERF-INHERITANCE — bare-wrapper seam for the BF16 FFN dispatch.
+// Same pattern as forge_dispatch_matmul above: the deployed hexa_v2
+// bootstrap emits a literal `forge_dispatch_ffn_fp64_via_bf16(...)` call
+// (7-arg ≥5-arg direct-C path); the generated user.c only sees
+// runtime.h, so this extern wrapper + the prototype below link-resolve
+// the symbol without a bootstrap rebuild.
+HexaVal hexa_forge_dispatch_ffn_fp64_via_bf16(HexaVal x_v, HexaVal w1_v,
+                                              HexaVal w2_v, HexaVal y_v,
+                                              HexaVal m_v, HexaVal d_v,
+                                              HexaVal fd_v);
+HexaVal forge_dispatch_ffn_fp64_via_bf16(HexaVal x, HexaVal w1, HexaVal w2,
+                                         HexaVal y, HexaVal m, HexaVal d,
+                                         HexaVal fd) {
+    return hexa_forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, m, d, fd);
+}
 // 5e817564 — interp dispatch added `farr_apply_single_farr(...)` and
 // `farr_apply_cnot(...)` literal calls (6-arg / 7-arg, past the
 // hexa_callN ceiling) but never grew the matching shims. Without
@@ -7583,6 +7598,15 @@ HexaVal farr_rope_bwd_gpu(HexaVal t, HexaVal cos, HexaVal sin,
  * SSOT: inbox/rfc_drafts_2026_05_12/rfc_050_flame_forge_integration.md
  * ═══════════════════════════════════════════════════════════════════ */
 #define FORGE_TIER_V1_LIVE 1
+/* RFC 050 PERF-INHERITANCE: open the dispatcher's BF16 substrate path
+ * when CUDA is compiled in. The substrate's hexa_farr_*_bf16_gpu symbols
+ * live in runtime_cuda.c (which #includes runtime_bf16.c) — already
+ * link-resolved in any -DHEXA_CUDA build. On no-CUDA hosts the macro
+ * stays undefined so forge_tier_v1.c keeps returning
+ * FORGE_PRECISION_UNSUPPORTED gracefully (no link dependency). */
+#ifdef HEXA_CUDA
+#define FORGE_TIER_V1_BF16 1
+#endif
 #include "forge/forge_tier_v1.c"
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -7644,5 +7668,159 @@ HexaVal hexa_forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
     int64_t c_id = out.farr_ids[0];
     if (c_id < 0)                return hexa_int(-1);
     return hexa_int(c_id);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * BF16 substrate externs (RFC 049 / RFC 050 PERF-INHERITANCE).
+ *
+ * runtime_bf16.c lives in a sibling TU compiled with HEXA_CUDA — its
+ * symbols (HexaFarrBf16 + hexa_farr_bf16_*) are linked at build time
+ * when HEXA_CUDA is set. Declare the surface here so the wrapper below
+ * compiles. Mirrors the FORGE_TIER_V1_BF16 forward decls in
+ * forge_tier_v1.c — same opaque-pointer ABI (RFC 050 §6.3).
+ *
+ * On no-CUDA hosts these externs are never referenced (the wrapper's
+ * body is guarded with `#ifdef HEXA_CUDA`), so the link surface stays
+ * unchanged for portable builds.
+ * ═══════════════════════════════════════════════════════════════════ */
+#ifdef HEXA_CUDA
+typedef struct HexaFarrBf16 HexaFarrBf16;
+extern HexaFarrBf16* hexa_farr_bf16_alloc(int64_t len);
+extern void          hexa_farr_bf16_free(HexaFarrBf16* f);
+extern int           hexa_farr_bf16_from_f64(const double* src,
+                                             HexaFarrBf16* dst, int64_t n);
+extern int           hexa_farr_bf16_to_f64(const HexaFarrBf16* src,
+                                           double* dst, int64_t n);
+#endif
+
+/* ═══════════════════════════════════════════════════════════════════
+ * hexa_forge_dispatch_ffn_fp64_via_bf16 — RFC 050 PERF-INHERITANCE.
+ *
+ * The hexa-callable wrapper around the forge BF16 FFN substrate. flame's
+ * NN stdlib gets a 7-arg builtin `forge_dispatch_ffn_fp64_via_bf16` whose
+ * signature is in FP64 farrs (the hexa-side currency) — the wrapper
+ * internally allocates HexaFarrBf16 handles, RNE-casts FP64 → BF16,
+ * routes through forge_tier_dispatch_v1(FFN_FUSED, PURE_BF16), then
+ * casts BF16 → FP64 back into the caller-supplied output FP64 farr.
+ *
+ *   forge_dispatch_ffn_fp64_via_bf16(x_id, w1_id, w2_id, y_id,
+ *                                    M, D, FD) -> int rc
+ *
+ * Shapes: X[M·D], W1[D·FD], W2[FD·D], Y[M·D] — same as the substrate
+ * kernel hexa_farr_ffn_bf16_gpu. Returns 0 on success, -1 on any error
+ * (no-CUDA host, OOM, dispatch failure, shape mismatch with the FP64
+ * farr lengths in the global table).
+ *
+ * Falsifier anchor: RFC 049 Stage 2 measured hexa_farr_ffn_bf16_gpu at
+ * 11.66× FP64 cuBLAS Dgemm (128·768·3072 FFN, A100). This wrapper adds
+ * host↔device + FP64↔BF16 cast overhead; the falsifier gate is ≥5×
+ * over FP64 cuBLAS to absorb that overhead honestly. The state design
+ * doc state/forge_rfc050_perf_inherit_2026_05_19/design.md tracks the
+ * scope: routing capability + measurement; flame call-site rewiring
+ * is a follow-up.
+ *
+ * No-CUDA fallback: when HEXA_CUDA is not defined the BF16 substrate
+ * is not linked in, so the wrapper short-circuits to -1. Callers
+ * (flame nn_lib::nn_ffn_bf16_fwd) MUST check the rc and fall back to
+ * the FP64 nn_swiglu / nn_linear path.
+ * ═══════════════════════════════════════════════════════════════════ */
+HexaVal hexa_forge_dispatch_ffn_fp64_via_bf16(HexaVal x_v, HexaVal w1_v,
+                                              HexaVal w2_v, HexaVal y_v,
+                                              HexaVal m_v, HexaVal d_v,
+                                              HexaVal fd_v) {
+#ifdef HEXA_CUDA
+    int64_t x_id  = hexa_as_num(x_v);
+    int64_t w1_id = hexa_as_num(w1_v);
+    int64_t w2_id = hexa_as_num(w2_v);
+    int64_t y_id  = hexa_as_num(y_v);
+    int64_t M     = hexa_as_num(m_v);
+    int64_t D     = hexa_as_num(d_v);
+    int64_t FD    = hexa_as_num(fd_v);
+
+    /* Validate the FP64 farr handles + lengths against the host
+     * _hx_farr_table. The BF16 wrapper is a no-op on bad inputs — never
+     * crash the caller (mirrors hexa_farr_get / _set soft-fail). */
+    if (x_id  < 0 || x_id  >= _hx_farr_count) return hexa_int(-1);
+    if (w1_id < 0 || w1_id >= _hx_farr_count) return hexa_int(-1);
+    if (w2_id < 0 || w2_id >= _hx_farr_count) return hexa_int(-1);
+    if (y_id  < 0 || y_id  >= _hx_farr_count) return hexa_int(-1);
+    if (M <= 0 || D <= 0 || FD <= 0)          return hexa_int(-1);
+
+    HexaFarrEntry *eX  = &_hx_farr_table[x_id];
+    HexaFarrEntry *eW1 = &_hx_farr_table[w1_id];
+    HexaFarrEntry *eW2 = &_hx_farr_table[w2_id];
+    HexaFarrEntry *eY  = &_hx_farr_table[y_id];
+    int64_t nX = M * D, nW1 = D * FD, nW2 = FD * D, nY = M * D;
+    if (!eX->buf  || eX->len  < nX)           return hexa_int(-1);
+    if (!eW1->buf || eW1->len < nW1)          return hexa_int(-1);
+    if (!eW2->buf || eW2->len < nW2)          return hexa_int(-1);
+    if (!eY->buf  || eY->len  < nY)           return hexa_int(-1);
+
+    /* Allocate BF16 staging buffers. Lifetime is THIS call only; the
+     * substrate's HexaFarrBf16 lifecycle is private to the wrapper. */
+    HexaFarrBf16 *bfX  = hexa_farr_bf16_alloc(nX);
+    HexaFarrBf16 *bfW1 = hexa_farr_bf16_alloc(nW1);
+    HexaFarrBf16 *bfW2 = hexa_farr_bf16_alloc(nW2);
+    HexaFarrBf16 *bfY  = hexa_farr_bf16_alloc(nY);
+    if (!bfX || !bfW1 || !bfW2 || !bfY) {
+        if (bfX)  hexa_farr_bf16_free(bfX);
+        if (bfW1) hexa_farr_bf16_free(bfW1);
+        if (bfW2) hexa_farr_bf16_free(bfW2);
+        if (bfY)  hexa_farr_bf16_free(bfY);
+        return hexa_int(-1);
+    }
+
+    /* RNE cast FP64 host master → BF16 host buffer (host-side; the
+     * substrate's _to_device upload happens inside the kernel). */
+    if (hexa_farr_bf16_from_f64(eX->buf,  bfX,  nX)  != 0 ||
+        hexa_farr_bf16_from_f64(eW1->buf, bfW1, nW1) != 0 ||
+        hexa_farr_bf16_from_f64(eW2->buf, bfW2, nW2) != 0) {
+        hexa_farr_bf16_free(bfX);  hexa_farr_bf16_free(bfW1);
+        hexa_farr_bf16_free(bfW2); hexa_farr_bf16_free(bfY);
+        return hexa_int(-1);
+    }
+
+    /* Pack ForgeArgs (RFC 050 §6.3 BF16 ABI — farr_ids carry the
+     * HexaFarrBf16* cast through intptr_t). */
+    ForgeShapeInfo shape;
+    shape.M     = M;
+    shape.K     = D;   /* FFN_FUSED mapping: shape.K -> kernel D */
+    shape.N     = FD;  /* shape.N -> kernel FD                     */
+    shape.batch = 0;
+
+    ForgeArgs in;
+    in.farr_ids[0] = (int64_t)(intptr_t)bfX;
+    in.farr_ids[1] = (int64_t)(intptr_t)bfW1;
+    in.farr_ids[2] = (int64_t)(intptr_t)bfW2;
+    in.count       = 3;
+
+    ForgeArgs out;
+    out.farr_ids[0] = (int64_t)(intptr_t)bfY;
+    out.count       = 1;
+
+    int rc = forge_tier_dispatch_v1(FORGE_KERNEL_FFN_FUSED, &shape,
+                                    FORGE_REGIME_AUTO, FORGE_PREC_PURE_BF16,
+                                    FORGE_DET_DEFAULT, &in, &out);
+
+    /* On dispatcher OK, BF16 host buffer is authoritative (substrate
+     * D2H'd after the kernel). Cast BF16 → FP64 back into the caller's
+     * FP64 farr. */
+    int wrapper_rc = -1;
+    if (rc == FORGE_OK) {
+        if (hexa_farr_bf16_to_f64(bfY, eY->buf, nY) == 0) {
+            wrapper_rc = 0;
+        }
+    }
+
+    hexa_farr_bf16_free(bfX);  hexa_farr_bf16_free(bfW1);
+    hexa_farr_bf16_free(bfW2); hexa_farr_bf16_free(bfY);
+    return hexa_int(wrapper_rc);
+#else
+    /* No-CUDA host: BF16 substrate not linked in; honest -1.
+     * Suppress unused-arg warnings. */
+    (void)x_v; (void)w1_v; (void)w2_v; (void)y_v;
+    (void)m_v; (void)d_v;  (void)fd_v;
+    return hexa_int(-1);
+#endif
 }
 

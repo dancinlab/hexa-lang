@@ -841,6 +841,30 @@ HexaVal hexa_forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
 HexaVal forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
                               HexaVal b_v, HexaVal n_v);               /* runtime.c — RFC 050 seam */
 
+/* ── RFC 050 PERF-INHERITANCE: forge BF16 FFN dispatch wrapper ──────
+ * `forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, M, D, FD)` — 7-arg
+ * builtin. Takes FP64 farr handles, internally allocates HexaFarrBf16
+ * staging, RNE-casts FP64 → BF16, routes through
+ * forge_tier_dispatch_v1(FFN_FUSED, PURE_BF16) to the RFC 049 measured
+ * substrate (hexa_farr_ffn_bf16_gpu, 11.66× FP64 cuBLAS Dgemm on A100
+ * at d768·12L FFN), casts BF16 → FP64 back into the caller's FP64
+ * output farr. Returns 0 on success, -1 on any error (no-CUDA host,
+ * OOM, dispatch failure, shape mismatch).
+ *
+ * Same bare-symbol seam as forge_dispatch_matmul above — the deployed
+ * hexa_v2 emits a literal forge_dispatch_ffn_fp64_via_bf16(...) call,
+ * and these two prototypes resolve it to the runtime.c wrapper.
+ * Body (SSOT): self/runtime.c. State design doc:
+ *   state/forge_rfc050_perf_inherit_2026_05_19/design.md.            */
+HexaVal hexa_forge_dispatch_ffn_fp64_via_bf16(HexaVal x_v, HexaVal w1_v,
+                                              HexaVal w2_v, HexaVal y_v,
+                                              HexaVal m_v, HexaVal d_v,
+                                              HexaVal fd_v);            /* runtime.c — RFC 050 PERF */
+HexaVal forge_dispatch_ffn_fp64_via_bf16(HexaVal x_v, HexaVal w1_v,
+                                         HexaVal w2_v, HexaVal y_v,
+                                         HexaVal m_v, HexaVal d_v,
+                                         HexaVal fd_v);                 /* runtime.c — RFC 050 PERF seam */
+
 /* ── safetensors mmap-backed zero-copy load (RFC 025) ──────────────
  * codegen_c2.hexa lowers safetensors_mmap_* builtins to direct
  * `hexa_safetensors_mmap_*` calls (1-arg: open/header/data_offset/

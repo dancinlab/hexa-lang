@@ -930,3 +930,75 @@ route + driver-local helper 로 고친 바로 그 병목. d768 fire 완결 =
 `rfc043-hexa-torch` 로 mk2-closure flame 스택 전체 port (별도 캠페인) — runtime.c
 RFC 040 sync 범위 밖. 본 작업은 user 지시 'runtime.c 를 RFC 040 으로 동기화'
 범위를 측정으로 완수 (build-link = 증명).
+
+### 2026-05-19 — RFC 050 PERF-INHERITANCE — flame BF16 FFN dispatch wrapper landed (CPU verified, fire pending)
+L1 (commits `deaf8bd5` + `5a38712f`) routed flame's FP64 matmul through
+`forge_tier_dispatch_v1` but the FP64 dispatcher path bottoms out at the
+same `hexa_farr_matmul` baseline — `F-RFC050-PERF-INHERITANCE` honestly
+recorded NOT-ACHIEVED in the L1 results doc. RFC 050 Stage 2 (commit
+`351cd87d`) opened the dispatcher's BF16 path; this cycle plumbs a
+flame-side wrapper so an FFN op actually exercises the BF16 substrate
+end-to-end and the inheritance is *measurable*.
+**Decision 1 — Shape B (single in-C wrapper) PICKED over Shape A**
+(in-hexa FFN composer) — rationale: (a) 1 new builtin vs 5+, edit
+surface ~60 lines vs ~300, `codegen_c2.hexa` intentionally NOT touched
+per deploy-regen-wipe constraint; (b) `HexaFarrBf16` lifecycle stays
+encapsulated in C — no flame caller needs persistent BF16 farrs yet;
+(c) API parallels `forge_dispatch_matmul` exactly (same bare-wrapper
+seam, same int-return convention).
+**Landed (CPU verified — parse-gate + clang -fsyntax-only PASS)**:
+- `self/runtime.c` — `hexa_forge_dispatch_ffn_fp64_via_bf16(x, w1, w2,
+  y, M, D, FD)` 7-arg wrapper. Takes FP64 farr handles, internally
+  allocates `HexaFarrBf16` staging, RNE-casts FP64 → BF16, routes
+  through `forge_tier_dispatch_v1(FFN_FUSED, PURE_BF16)` to the RFC 049
+  measured substrate (`hexa_farr_ffn_bf16_gpu`, 11.66× FP64 cuBLAS
+  Dgemm @ A100, commit `c8fdc3bd`), casts BF16 → FP64 back into the
+  caller's FP64 output farr. Returns 0 on success / -1 on any error.
+  Bare-symbol seam `forge_dispatch_ffn_fp64_via_bf16` (≥5-arg
+  direct-C path) added next to the matmul seam — same pattern.
+  `FORGE_TIER_V1_BF16` activation gated on `HEXA_CUDA` so the
+  forge_tier_v1.c inline include opens the BF16 dispatch path when
+  the BF16 substrate is linked in (no-CUDA hosts: dispatcher returns
+  `FORGE_PRECISION_UNSUPPORTED` gracefully, wrapper returns -1).
+- `self/runtime.h` — added the two prototypes in the RFC 050 L1 block
+  (hexa_* impl + bare seam). Same runtime.h-split contract.
+- `stdlib/flame/nn_lib.hexa` — added `nn_ffn_bf16_fwd(x, W1, W2,
+  Y_out, M, D, FD) -> int`. Single-line dispatch via the new builtin.
+  `nn_swiglu_fwd` UNCHANGED — opt-in entry point preserves Phase 4-B
+  byte-eq oracle.
+- `self/cuda/experiments/r050_perf_inherit_validate.cu` — fire harness
+  measuring wall(BF16 wrapper wire) vs wall(FP64 cuBLAS Dgemm baseline)
+  at 64·768·3072 + 128·768·3072 FFN shapes. 1 warmup + 3 measured
+  iters, min-wall reporter, scale-relative `max|Δ|/max|Y|` correctness
+  oracle. Mirrors the runtime.c wrapper step-by-step in a standalone
+  TU (the runtime.c wrapper depends on `_hx_farr_table` so it cannot
+  be linked standalone — the harness exercises the SAME wire).
+- `tool/dispatch_r050_perf_inherit.sh` — vast.ai fire script. Same
+  shape as `dispatch_r050_dispatch_validate.sh`. Budget ~$2-4.
+- `state/forge_rfc050_perf_inherit_2026_05_19/{design.md,READY_TO_FIRE.md}` —
+  cycle SSOT.
+**NOT touched** (task constraints): `inbox/PATCHES.yaml` ·
+`self/main.hexa` · `tool/parity_*.sh` · `self/native/hexa_v2` ·
+`self/codegen_c2.hexa` (deploy-regen wipe hazard — bare-wrapper +
+runtime.h-proto seam used instead).
+**Falsifier battery (4 — fire pending)**:
+- `F-RFC050-PERF-INHERIT-FFN-D768-64`  : speedup ≥ 5× FP64 cuBLAS Dgemm @ 64·768·3072
+- `F-RFC050-PERF-INHERIT-FFN-D768-128` : speedup ≥ 5× FP64 cuBLAS Dgemm @ 128·768·3072 (RFC 049 anchor)
+- `F-RFC050-PERF-INHERIT-CORRECT`      : max|Δ|/max|Y| ≤ 5e-2 vs FP64 cuBLAS Dgemm
+- `F-RFC050-PERF-INHERIT-DISPATCH-OK`  : dispatch rc == FORGE_OK every shape
+5× gate is RELAXED vs RFC 049 Stage 2 bare-substrate 11.66× — relaxation
+absorbs the wrapper's host alloc + FP64↔BF16 cast overhead. A measured
+result between 5× and 11.66× PASSes and documents the wrapper cost
+honestly; <5× means the wrapper overhead dominates (also a useful
+signal). Baseline = FP64 cuBLAS Dgemm only (gpu/HANDOFF.md retracted
+the PyTorch comparison; NEVER claim a PyTorch speedup from these).
+**Honest deferrals (g3 over-claim 0)**:
+- `nn_swiglu_fwd` 3-weight SwiGLU NOT routed (substrate is 2-weight
+  Llama FFN; 3-weight gated routing = follow-up).
+- Backward pass FP64-only (no FFN-bwd BF16 kernel yet).
+- No flame caller has been rewired to `nn_ffn_bf16_fwd` (cycle
+  delivers routing + measurement capability only; call-site adoption
+  decision is separate).
+- CPU-side BF16 reference oracle not wired (would duplicate the FP64
+  path with no inheritance benefit).
+state SSOT: `state/forge_rfc050_perf_inherit_2026_05_19/`.

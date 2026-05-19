@@ -696,3 +696,40 @@ pub fn nn_rmsnorm_bwd(x: int, g: int, xn: int, inv: float, dy: int,
         j = j + 1
     }
 }
+
+// ─── BF16 FFN (RFC 050 PERF-INHERITANCE, 2026-05-19) ────────────────────
+// Fused FFN forward routed through the RFC 049 BF16 substrate via the
+// RFC 050 dispatcher:    Y = SiLU(X · W1) · W2 .
+// Shapes (Llama-style 2-weight FFN): X[M·D], W1[D·FD], W2[FD·D], Y[M·D].
+//
+// The `forge_dispatch_ffn_fp64_via_bf16` builtin takes FP64 farr handles
+// (the hexa-side currency) and internally RNE-casts FP64 → BF16, routes
+// through forge_tier_dispatch_v1(FFN_FUSED, PURE_BF16) to the measured
+// substrate (RFC 049 Stage 2: hexa_farr_ffn_bf16_gpu 11.66× FP64 cuBLAS
+// at d768·12L FFN on A100), then casts BF16 → FP64 back into the
+// caller's output farr. Returns 0 on success, -1 on:
+//   - no-CUDA host (BF16 substrate not linked in),
+//   - dispatch failure (FORGE_PRECISION_UNSUPPORTED or kernel error),
+//   - OOM / shape mismatch with the FP64 farr lengths.
+//
+// Numerical contract: BF16 storage (7-bit mantissa) + FP32-accumulator
+// GemmEx ≠ FP64 byte-equal. The Stage 2 dispatch-validate harness
+// measured max|Δ|/max|Y| ≤ 5e-2 vs FP64 cuBLAS at these shapes — this
+// fn inherits that tolerance, NOT byte-eq with nn_swiglu_fwd. Callers
+// that need byte-eq (e.g. flame Phase 4-B oracle) MUST stay on the FP64
+// path (nn_swiglu_fwd or nn_linear_fwd composition).
+//
+// This is NOT a SwiGLU replacement — SwiGLU has 3 weights (Wg gate +
+// Wu up + Wd down with σ-gated combine); this is the 2-weight Llama
+// FFN (W1 up + SiLU + W2 down). flame model code that wants a BF16
+// SwiGLU needs a separate substrate kernel (out of scope for this
+// cycle — see state design doc honest deferrals).
+//
+// Falsifier: F-RFC050-PERF-INHERIT-FFN — wall_bf16 ≤ wall_fp64/5 at
+// 128·768·3072 FFN. Measured by the standalone .cu harness
+// (state/forge_rfc050_perf_inherit_2026_05_19/, fire pending).
+pub fn nn_ffn_bf16_fwd(x: int, W1: int, W2: int, Y_out: int,
+                       M: int, D: int, FD: int) -> int {
+    return forge_dispatch_ffn_fp64_via_bf16(x, W1, W2, Y_out, M, D, FD)
+}
+
