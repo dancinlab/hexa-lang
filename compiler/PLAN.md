@@ -4126,3 +4126,111 @@ c0 03 5f d6  →  0xD65F03C0  RET
 **RFC 063 phasing 진척**: P0 의 5 substep 중 **부분적으로 5 land** (1-4
 완전 ✅ + 5 의 3/4 task ✅). closure 게이트 = cycle 6 의 driver 와이어링
 + corpus PASS. RFC 추산 3-5 cycles → 실제 ≥ 6 (정직).
+
+
+### 2026-05-20 — S7-P0 cycle 6: STP/LDP pre-/post-index + MOV-with-SP fix (F-P0-OBJEQ-PREPOST PASS, byte-eq vs clang oracle)
+
+🛸 **TRANSCEND**: 5-instruction frame prologue+epilogue `stp x29,x30,[sp,#-16]!;
+mov x29,sp; bl _callee; ldp x29,x30,[sp],#16; ret` 의 `__text` 20 bytes 가
+**clang -c -arch arm64 oracle 과 byte-for-byte 동일** (`a9bf7bfd 910003fd
+94000000 a8c17bfd d65f03c0`). hexa-side native Mach-O emitter 가 Apple
+toolchain 과 측정 가능한 동등성 — realistic 함수 시작/종료 패턴 byte-eq 첫 증명.
+
+**변경 파일** (`compiler/emit/macho_arm64.hexa`):
+
+- `_parse_mem_op` 확장 — 2-element 반환 `[base, off]` → 3-element
+  `[base, off, mode]` (mode: 0=offset, 1=pre-index w/`!`, 2=post-index
+  `[Xn], #imm`). 인식 형태:
+  - `[Xn]`          → `[base, 0, 0]`
+  - `[Xn, #imm]`    → `[base, imm, 0]`
+  - `[Xn, #imm]!`   → `[base, imm, 1]` (pre-index, writeback after)
+  - `[Xn], #imm`    → `[base, imm, 2]` (post-index, writeback before)
+  arm64_darwin LIR 의 frame prologue/epilogue 가 `_arm64_op_label("[sp,
+  #-16]!")` / `_arm64_op_label("[sp], #16")` 로 label-kind 에 literal 문자열
+  carry 하는 convention 과 매칭.
+- STP/LDP 인코딩 규칙 — 단일 offset-form → 3 mode 분기:
+  - STP offset: `0xA9000000`, pre-index: `0xA9800000`, post-index: `0xA8800000`
+  - LDP offset: `0xA9400000`, pre-index: `0xA9C00000`, post-index: `0xA8C00000`
+- `_lir_op_uppercase` 에 `stp`/`ldp` 매핑 추가 (cycle 5 누락 ← 본 cycle
+  발견된 버그). 누락 시 encoder 가 lowercase "stp" 받아 unknown 으로 0 반환.
+- **MOV-with-SP 인코딩 alias fix** (cycle 6 발견된 버그) — ARM ARM C6.2.187:
+  ```
+  MOV Xd, Xn:
+    Rd or Rn == SP  →  alias for `ADD Xd, Xn, #0`     (reg 31 = SP here)
+    else           →  alias for `ORR Xd, XZR, Xn`     (reg 31 = XZR here)
+  ```
+  cycle 2 의 MOV 규칙은 항상 ORR-alias 였음 → `mov x29, sp` 가 `ORR x29,
+  xzr, xzr` (= `mov x29, #0`) 로 잘못 인코딩. 본 cycle 의 sp-detection:
+  `ops[0] == "sp" || ops[1] == "sp"` 시 ADD-alias path (`0x91000000 | (rn<<5)
+  | rd`) — clang oracle 의 `0x910003FD` 와 byte-eq.
+
+**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_PREPOST.hexa`):
+
+  5-instr LFunc — 실제 darwin-arm64 frame pattern:
+    stp x29, x30, [sp, #-16]!     // pre-index
+    mov x29, sp
+    bl _callee                     // intra-module call (cycle 4 reloc)
+    ldp x29, x30, [sp], #16       // post-index
+    ret
+
+  Expected byte stream (hand-computed + clang oracle 교차 검증):
+    a9 bf 7b fd 91 00 03 fd 94 00 00 00 a8 c1 7b fd d6 5f 03 c0
+    → LE bytes: fd 7b bf a9 fd 03 00 91 00 00 00 94 fd 7b c1 a8 c0 03 5f d6
+
+**측정 결과 (arm64-Mac local)**:
+
+```
+$ /tmp/run_F_P0_OBJEQ_PREPOST
+F-P0-OBJEQ-PREPOST: packed 20 bytes
+  text   = fd 7b bf a9 fd 03 00 91 00 00 00 94 fd 7b c1 a8 c0 03 5f d6
+  wrote 363 bytes to /tmp/macho_p0_cycle6.ours.o
+F-P0-OBJEQ-PREPOST PASS — STP pre-index + LDP post-index byte-eq
+exit=0
+```
+
+**clang oracle byte-eq**:
+
+```
+$ cat > /tmp/frame_real.s <<EOF
+.section __TEXT,__text,regular,pure_instructions
+.globl _main
+.p2align 2
+_main:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    bl _callee
+    ldp x29, x30, [sp], #16
+    ret
+```
+
+```
+diff <(otool -s __TEXT __text /tmp/macho_p0_cycle6.ours.o | tail -n +3) \
+     <(otool -s __TEXT __text /tmp/frame_real.ref.o   | tail -n +3)
+echo $?
+0       (BYTE-EQ vs clang oracle)
+```
+
+otool -tv (cycle 6 result) reproduces source intent exactly — pre-index
+`!` and post-index `, #imm` both correct. otool -rV reports BL @ 0x8 →
+`_callee` BR26 pcrel-extern.
+
+**HONEST SCOPE (g3, over-claim 0)**:
+
+- 본 cycle 의 byte-eq 는 5-instr frame pattern 전용. real hexa source
+  compile byte-eq = cycle 7 main.hexa wiring + F-P0-OBJEQ corpus.
+- 잔여 encoding rules ~ 130: MOVZ shifted, MOVK, ADRP+ADD/LDR PAGE/
+  PAGEOFF, LSL/LSR/ASR, MADD/MSUB, SDIV/UDIV, SXTB/SXTH/SXTW. 약 24/200 land.
+- compiler/main.hexa --emit=obj arm 미land. 모든 falsifier 합성 LModule.
+
+cycle 6 에서 발견된 2 버그 (모두 cycle 5 잠재 결함):
+1. _lir_op_uppercase 누락 → STP/LDP unknown. SOP: lowercase op 추가시
+   매핑 추가 필수.
+2. MOV-with-SP ORR-alias 오인코딩. cycle 5 simple frame falsifier 에는
+   mov-reg-reg 없어 잠재. cycle 6 realistic prologue 도입 surface —
+   falsifier coverage 가치 입증.
+
+RFC 063 phasing 진척: P0 5 substep 중 부분 5+ land. closure 게이트 =
+cycle 7 driver wiring + F-P0-OBJEQ corpus PASS.
+
+cc --regen / binary promote: 미수행. macho_arm64.hexa NOT yet imported
+by compiler/main.hexa.

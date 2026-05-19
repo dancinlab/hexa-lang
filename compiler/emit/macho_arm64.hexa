@@ -181,10 +181,21 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         let imm = imm_val(ops[1]) & 0xFFFF
         return 0xD2800000 | (imm << 5) | rd
     }
-    // MOV Xd, Xn  (alias for ORR Xd, XZR, Xn)
+    // MOV Xd, Xn. Two sub-cases per ARM ARM (C6.2.187):
+    //   - `MOV Xd, SP` or `MOV SP, Xn` → alias for `ADD Xd, Xn, #0`
+    //     (because the ORR alias treats Rm=31 as XZR, not SP).
+    //   - Otherwise → alias for `ORR Xd, XZR, Xn`.
+    // Detect SP either via the source string or via the destination —
+    // when either side is "sp"/"SP", route through the ADD form.
     if op == "MOV" && len(ops) == 2 {
         let rd = xreg_idx(ops[0])
         let rn = xreg_idx(ops[1])
+        let dst_is_sp = ops[0] == "sp" || ops[0] == "SP"
+        let src_is_sp = ops[1] == "sp" || ops[1] == "SP"
+        if dst_is_sp || src_is_sp {
+            // ADD Xd, Xn, #0  (Rn=31 here means SP, not XZR)
+            return 0x91000000 | (rn << 5) | rd
+        }
         return 0xAA0003E0 | (rn << 16) | rd
     }
 
@@ -270,34 +281,43 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         let imm = (mp[1] >> 3) & 0xFFF
         return 0xF9000000 | (imm << 10) | (rn << 5) | rt
     }
-    // ── Stack-pair (STP/LDP) — `[Xn, #imm7]` offset form ──
+    // ── Stack-pair (STP/LDP) — 3 mem modes (offset / pre-index /
+    //    post-index) for 64-bit GPRs. Per ARM ARM C6.2.273-:
     //
-    // 64-bit form, signed scaled imm7 in 8-byte steps (range -512..504).
-    // The pre-/post-index variants (`[Xn, #imm]!` / `[Xn], #imm`) carry
-    // the same opcode prefix with two different sub-mode bits; cycle 5
-    // ships only the offset-form (sub-mode bit `010` => 0x29/0xA9 high
-    // byte for STP/LDP). Pre-/post-index follow when the frame ops need
-    // them (next cycle).
+    //    STP offset:     0xA9000000   `stp Xt, Xt2, [Xn, #imm]`
+    //    STP pre-index:  0xA9800000   `stp Xt, Xt2, [Xn, #imm]!`
+    //    STP post-index: 0xA8800000   `stp Xt, Xt2, [Xn], #imm`
+    //    LDP offset:     0xA9400000
+    //    LDP pre-index:  0xA9C00000
+    //    LDP post-index: 0xA8C00000
     //
-    // STP Xt, Xt2, [Xn, #imm]
+    // Signed imm7 in 8-byte steps (range -512..504). mode comes from
+    // `_parse_mem_op` (0=offset, 1=pre, 2=post).
     if op == "STP" && len(ops) == 3 {
         let rt  = xreg_idx(ops[0])
         let rt2 = xreg_idx(ops[1])
         let mp  = _parse_mem_op(ops[2])
         if mp[0] < 0 { return 0 }
-        let rn  = mp[0]
-        let imm = (mp[1] >> 3) & 0x7F
-        return 0xA9000000 | (imm << 15) | (rt2 << 10) | (rn << 5) | rt
+        let rn   = mp[0]
+        let imm  = (mp[1] >> 3) & 0x7F
+        let mode = mp[2]
+        let mut base = 0xA9000000           // offset
+        if mode == 1 { base = 0xA9800000 }   // pre-index
+        if mode == 2 { base = 0xA8800000 }   // post-index
+        return base | (imm << 15) | (rt2 << 10) | (rn << 5) | rt
     }
-    // LDP Xt, Xt2, [Xn, #imm]
     if op == "LDP" && len(ops) == 3 {
         let rt  = xreg_idx(ops[0])
         let rt2 = xreg_idx(ops[1])
         let mp  = _parse_mem_op(ops[2])
         if mp[0] < 0 { return 0 }
-        let rn  = mp[0]
-        let imm = (mp[1] >> 3) & 0x7F
-        return 0xA9400000 | (imm << 15) | (rt2 << 10) | (rn << 5) | rt
+        let rn   = mp[0]
+        let imm  = (mp[1] >> 3) & 0x7F
+        let mode = mp[2]
+        let mut base = 0xA9400000           // offset
+        if mode == 1 { base = 0xA9C00000 }   // pre-index
+        if mode == 2 { base = 0xA8C00000 }   // post-index
+        return base | (imm << 15) | (rt2 << 10) | (rn << 5) | rt
     }
 
     // ── Branches (bit-pattern only; imm26 / imm19 filled by reloc) ──
@@ -791,6 +811,8 @@ fn _lir_op_uppercase(op: string) -> string {
     if op == "cmp"   { return "CMP"  }
     if op == "ldr"   { return "LDR"  }
     if op == "str"   { return "STR"  }
+    if op == "ldp"   { return "LDP"  }
+    if op == "stp"   { return "STP"  }
     if op == "b"     { return "B"    }
     if op == "bl"    { return "BL"   }
     if op == "ret"   { return "RET"  }
@@ -828,41 +850,80 @@ fn _lir_operand_str(op: LOperand) -> string {
     return "<?" + op.kind + "?>"
 }
 
-// Parse a mem-operand string of the form `[Xn]`, `[Xn, #imm]`, or
-// `[sp, #-16]` back to its (base_reg_idx, offset_i64). Returns
-// `[-1, 0]` if the shape is not recognized — caller treats that as an
-// unknown-op fall-through.
+// Parse a mem-operand string back to `[base_reg_idx, offset, mode]`.
+// Recognized forms (arm64 LIR convention, matching `_fmt_label`'s
+// carve-out for `[…]` literals):
+//
+//   `[Xn]`            -> mode 0 (offset, off=0)
+//   `[Xn, #imm]`      -> mode 0 (offset)
+//   `[Xn, #imm]!`     -> mode 1 (pre-index, writeback after)
+//   `[Xn], #imm`      -> mode 2 (post-index, writeback before)
+//
+// Returns `[-1, 0, 0]` if the shape is not recognized.
 fn _parse_mem_op(s: string) -> [Int] {
     let n = len(s)
-    if n < 3 || s.substring(0, 1) != "[" || s.substring(n - 1, n) != "]" {
-        return [-1, 0]
+    if n < 3 || s.substring(0, 1) != "[" { return [-1, 0, 0] }
+
+    // Detect post-index: `[Xn], #imm` — closing `]` followed by `, #imm`.
+    let mut close = -1
+    let mut p = 0
+    while p < n {
+        if s.substring(p, p + 1) == "]" { close = p; break }
+        p = p + 1
     }
-    let inner = s.substring(1, n - 1)
-    let nn = len(inner)
-    // Find the comma separating base and `#imm` (if any).
+    if close < 0 { return [-1, 0, 0] }
+    let inner = s.substring(1, close)
+
+    // Tail after `]`: either empty, `!` (pre-index), or `, #imm`
+    // (post-index). Anything else is unrecognized.
+    let tail = s.substring(close + 1, n)
+    let tail_n = len(tail)
+
+    // Split inner on the first ", " to get base and inline-offset (if
+    // any). For the post-index form, `inner` is just `Xn` (no comma).
+    let inn = len(inner)
     let mut comma = -1
     let mut i = 0
-    while i < nn {
+    while i < inn {
         if inner.substring(i, i + 1) == "," { comma = i; break }
         i = i + 1
     }
-    if comma < 0 {
-        // Bare `[Xn]` form — offset 0.
-        let rn = xreg_idx(inner)
-        return [rn, 0]
+    let mut base = inner
+    let mut inline_imm: Int = 0
+    let mut has_inline_imm = false
+    if comma >= 0 {
+        base = inner.substring(0, comma)
+        let rest = inner.substring(comma + 1, inn)
+        let nr = len(rest)
+        let mut j = 0
+        while j < nr && rest.substring(j, j + 1) == " " { j = j + 1 }
+        if j < nr && rest.substring(j, j + 1) == "#" { j = j + 1 }
+        if j < nr {
+            inline_imm = rest.substring(j, nr).to_int()
+            has_inline_imm = true
+        }
     }
-    let base = inner.substring(0, comma)
-    let rest = inner.substring(comma + 1, nn)
-    // Skip the leading space(s) and `#`.
-    let nr = len(rest)
-    let mut j = 0
-    while j < nr && rest.substring(j, j + 1) == " " { j = j + 1 }
-    if j >= nr { return [-1, 0] }
-    if rest.substring(j, j + 1) == "#" { j = j + 1 }
-    let imm_s = rest.substring(j, nr)
-    let imm = imm_s.to_int()
     let rn = xreg_idx(base)
-    return [rn, imm]
+    if rn < 0 { return [-1, 0, 0] }
+
+    if tail_n == 0 {
+        return [rn, inline_imm, 0]   // offset-form
+    }
+    if tail == "!" {
+        return [rn, inline_imm, 1]   // pre-index, writeback
+    }
+    // Post-index: tail looks like `, #imm` (or `, #-imm`).
+    if tail.substring(0, 1) == "," {
+        let post = tail.substring(1, tail_n)
+        let pn = len(post)
+        let mut j = 0
+        while j < pn && post.substring(j, j + 1) == " " { j = j + 1 }
+        if j < pn && post.substring(j, j + 1) == "#" { j = j + 1 }
+        if j >= pn { return [-1, 0, 0] }
+        let imm = post.substring(j, pn).to_int()
+        return [rn, imm, 2]
+    }
+    return [-1, 0, 0]
 }
 
 // State carried while walking one LFunc. label_names / label_offsets
