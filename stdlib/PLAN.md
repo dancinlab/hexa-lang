@@ -840,3 +840,15 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   interim. SSOT pointer: hexa-bio AGENTS.md + hexa-matter AGENTS.tape 에
   hexa-lang/stdlib/PLAN.md 가리키는 포인터 추가(타 프로젝트는 pointer만).
   남은 non-months 잔여 = `atoms_emt_relax` 단 1건.
+- 2026-05-19 — **T4 non-months 잔여 종료: atoms_emt_relax** (`82a8f0b4`).
+  positions-only EMT 완화: force = `atoms_emt_energy` 중심차분(h=1e-4),
+  gradient descent + Armijo 백트래킹(에너지 상승 시 step 반감, max 200
+  iter, RMS-force f_tol=1e-3). g3 self-consistent 검증: E(relaxed)≤
+  E(initial) · 평형구조 재완화 <0.001Å 안정 · 압축 Cu2 2.0→2.168Å,
+  E −0.30eV, max-force 3.98→6.1e-5. __ATOMS_STAGE1_TEST__ PASS (53/53).
+  cell 완화는 범위 밖(문서화). **T4 Stage-2 — mlff Stage-2(=T5,
+  수개월) 제외 전부 완료**: atoms{bulk,neighborlist,from_cif,emt_energy,
+  emt_relax} · crystal{coords,angles,N-hull,from_cif,spacegroup} ·
+  mol{weight,hba,hbd,from_smiles,logp,tpsa} · mlff{Stage-1 + interim
+  Python-NNP bridge}. 다음: T5(mlff hexa-native NNP = grad/safetensors,
+  수개월; bridge 가 그동안 커버).
