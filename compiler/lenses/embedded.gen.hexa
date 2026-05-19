@@ -238,7 +238,22 @@ pub fn lens_apply_falsify_self_re_cite_audit(view: AtlasView) -> array {
     return empty_candidate_list()
 }
 pub fn lens_apply_falsify_self_cite_unreachable(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // Phase C-1.a smoke body — emits one synthetic Candidate per cycle to
+    // prove the dispatch pipeline carries data through DEDUP/GATE/DRAFT/
+    // AUDIT. Cite "n" is the atlas's first @P node (P NODES, primitive 6)
+    // so RFC §12 F5 (cite must reference a valid atlas_node_id) holds.
+    // Real cite-reachability analysis lands in Phase C-1.b once SCAN
+    // populates view.p_nodes / c_nodes / l_nodes (currently empty in B-3.3).
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "falsify_self.cite_unreachable.smoke",
+        family: "falsify_self",
+        proposed: "Phase C-1.a smoke candidate — replace with real cite-reachability scan in C-1.b once SCAN materializes view.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_falsify_self_stale_node_decay(view: AtlasView) -> array {
     return empty_candidate_list()
