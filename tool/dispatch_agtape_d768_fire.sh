@@ -149,7 +149,7 @@ $SSH_CMD "set +e
   nvcc --version | tail -2
   which clang || (apt update >/dev/null 2>&1 && apt install -y clang >/dev/null 2>&1 && which clang)
   ls /usr/local/cuda/include/cublas_v2.h && echo cublas_PRESENT
-  mkdir -p $REMOTE_WORK/self/cuda $REMOTE_WORK/self/native
+  mkdir -p $REMOTE_WORK/self/cuda $REMOTE_WORK/self/native $REMOTE_WORK/self/forge
   echo TOOLCHAIN_OK" 2>&1 | tee remote_sanity.log
 DEV_CC=$($SSH_CMD 'nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d "."' 2>/dev/null || echo "80")
 [ -z "$DEV_CC" ] && DEV_CC=80
@@ -185,6 +185,10 @@ $SCP_CMD "$RUNTIME_C"      "root@$SSH_HOST:$REMOTE_WORK/self/runtime.c"
 $SCP_CMD "$RUNTIME_HI"     "root@$SSH_HOST:$REMOTE_WORK/self/runtime_hi_gen.c"
 $SCP_CMD "$RUNTIME_CUDA_C" "root@$SSH_HOST:$REMOTE_WORK/self/cuda/runtime_cuda.c"
 $SCP_CMD "${REPO_ROOT}/self/runtime.h" "root@$SSH_HOST:$REMOTE_WORK/self/runtime.h"
+# RFC 050: runtime.c #includes forge/forge_tier_v1.c (the dispatcher) —
+# ship it + its header so the unconditional include resolves on the pod.
+$SCP_CMD "${REPO_ROOT}/self/forge/forge_tier_v1.c" "root@$SSH_HOST:$REMOTE_WORK/self/forge/forge_tier_v1.c"
+$SCP_CMD "${REPO_ROOT}/self/forge/forge_tier_v1.h" "root@$SSH_HOST:$REMOTE_WORK/self/forge/forge_tier_v1.h"
 $SCP_CMD -r "${REPO_ROOT}/self/native/"*.c "root@$SSH_HOST:$REMOTE_WORK/self/native/"
 $SCP_CMD -r "${REPO_ROOT}/self/native/"*.h "root@$SSH_HOST:$REMOTE_WORK/self/native/" 2>/dev/null || true
 CORPUS_REMOTE_DIR=$(dirname "$CORPUS_REMOTE_PATH")
