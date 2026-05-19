@@ -2,10 +2,12 @@
 
 ## 1. Status
 
-- **Status**: **design-draft (2026-05-19)** — DESIGN ONLY. Scopes the
-  *remaining* half of ROADMAP child **65**. The contract-separation half is
-  already DONE (see §3); this RFC phases the breaking migration that the
-  `runtime.c:5571` author deliberately deferred as a "separate follow-on".
+- **Status**: **P0 COMPLETE · P1 attempted → WONTFIX recommended (2026-05-19)**.
+  The contract-separation half of ROADMAP 65 is DONE (§3). The remaining
+  argv[0]-dedup: P0 audit + a P1 implementation attempt established the true
+  blast-radius = **60+ files** (§6c) for a change RFC §6 itself calls
+  cosmetic (no user-visible bug). Recommendation: WONTFIX / indefinite defer
+  — see §6c. P1 attempt code reverted; working tree clean.
 - **Date**: 2026-05-19
 - **Priority**: P2 — ROADMAP marks 65 "anima 최우선" for the *API* deliverable,
   which shipped; the dedup cleanup is hygiene, not a blocker.
@@ -114,6 +116,42 @@ smaller than the RFC's initial "40+ sites" estimate once non-positional
 `args()` callers are excluded.
 
 **Gate for P1 start:** this ledger reviewed. ✅ P0 COMPLETE.
+
+## 6c. Phase 062-P1 attempt — CORRECTED blast-radius (2026-05-19)
+
+P1 implementation was started (runtime.c `hexa_set_args`/`hexa_real_args`/
+`hexa_script_path`/`_hx_fuel` + main.hexa + module_loader + codegen_c2 +
+ssot_mirror) and **uncovered that §6b's "4 files" is wrong by ~15×.** The P0
+grep matched only literal `args()[<digit>]`. The dominant real pattern is
+`args()` aliased — `let _args = args()` / `let argv = args()` / `let cli_args
+= args()` — then indexed `_args[2]` or looped from `_ai = 2`. Those alias the
+array, so the `args()[N]` regex never saw them.
+
+**Exhaustive re-audit — positional-dependent consumers ≈ 60+ files:**
+
+| Group | n | Pattern |
+|-------|---|---------|
+| `tool/roadmap_*.hexa` boilerplate | ~25 | `_raw_argv[1]=="run"` · `argv[2]==_script_token` · `_user_start=3` |
+| `stdlib/sim_universe/**` | ~25 | `_args[2]` / `[3]` / `[4]` positional |
+| `self/` | 5+ | main.hexa · module_loader · codegen_c2 · build_c · edit_cli/attr_cli/fs_fuse_skel (`_ai=2`) · hexa_build |
+| `tool/` other | 10+ | flame_phase4* · ai_native_* · jit · emit_esm · ssot_mirror |
+
+`real_args()` consumers (linter +4) and the scan-based `_slice_args()` /
+`_resolve_caller_dir` helpers are layout-robust — unaffected.
+
+**Revised verdict.** RFC 062 §6 already states the dedup *fixes no
+user-visible bug* — the doubled layout is a harmless convention. A 60+-file,
+multi-subsystem migration (roadmap tools + 25 sim-universe experiments + the
+self/ bootstrap chain), every binary rebuilt and re-validated, for a purely
+cosmetic cleanup, is a **bad trade**. The `runtime.c:5571` author's deferral
+was correct; if anything "40+ sites" understated it.
+
+**Recommendation: P2 → WONTFIX (or indefinite defer).** ROADMAP 65's valuable
+half — the canonical `script_path()`/`real_args()` accessors — already shipped
+(runtime.c:5571-5591) and *is* layout-independent; new code should use those.
+The argv[0] de-duplication itself is not worth the migration. The P1 attempt's
+code changes were reverted (working tree clean); this measured finding is the
+deliverable.
 
 ## 7. Non-goals
 

@@ -2457,3 +2457,28 @@ Both audit-only first phases run to completion (zero code move):
 
 Both P0 gates ("ledger reviewed") satisfied — P1 (062: migrate user-arg
 readers; 061: extract runtime_core.c) is unblocked as the next cycle.
+
+### 2026-05-19 — RFC 062-P1 implementation attempt → blast-radius corrected, WONTFIX recommended
+
+Started the actual RFC 062 implementation (argv[0] dedup): edited runtime.c
+(`hexa_set_args` no-dup + `hexa_real_args`/`hexa_script_path`/`_hx_fuel` index
+fixes), main.hexa, module_loader, codegen_c2, ssot_mirror. During the work an
+**exhaustive re-audit** showed P0's "4 files" estimate was wrong by ~15× — the
+P0 `args()[<digit>]` grep missed every consumer that aliases `args()` to
+`_args`/`argv`/`cli_args` then indexes `_args[2]` or loops from `_ai=2`.
+
+True positional-dependent surface ≈ **60+ files**: ~25 `tool/roadmap_*`
+boilerplate (`_raw_argv[1]`/`argv[2]`), ~25 `stdlib/sim_universe/**`
+(`_args[2..4]`), plus self/ bootstrap + tool/ (flame_phase4*, ai_native_*,
+build_c, edit_cli/attr_cli/fs_fuse_skel, hexa_build, jit, …). Shipping the
+runtime dedup would silently break all of them (every user-arg index off by
+one).
+
+The 5 implementation files were **reverted** (working tree clean). RFC 062
+§6c + §1 + ROADMAP 65 + `ARGV_DEDUP.md` carry the corrected measurement.
+**Verdict: RFC 062-P2 (the dedup flip) → WONTFIX recommended.** RFC §6 already
+states the dedup fixes no user-visible bug — a 60+-file, multi-subsystem
+migration for a purely cosmetic cleanup is a bad trade. ROADMAP 65's valuable
+half (canonical `script_path()`/`real_args()`, layout-independent) already
+shipped; new code should use those. User decision pending: WONTFIX vs a
+multi-session migration campaign.
