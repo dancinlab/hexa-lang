@@ -351,6 +351,42 @@ n=6 does not enter the verification — only the tool oracles do.
   G-T1 target. Pending: `@D` governance entries in `AGENTS.tape` will
   follow the gate-exit pattern — added only after each gate's fixture
   passes (not pre-emptively). No code change in this cycle.
+- 2026-05-20 — **G-R0 12/12 MEASURED PASS on ubu-2** (full closure).
+  Under `/goal "잔여 cycle 없을때까지"` + user `all fix go` + `ok scrub`.
+  Triple infrastructure fix chain to enable measurement:
+  (a) ubu-2 disk scrub — 304 GB recovered (anima/state 116G + HEXAD 42G
+  + ready 41G + archive 14G + training 7G + data 7G + anima_v5mit 1.5G
+  + anima_bench 14G + prism-bot-training 37G + sg4 35G). df after:
+  306G available (was 932MB).
+  (b) ubu hexa toolchain rebuild from source — `~/.hx/bin/hexa.real`
+  (1.8MB linux ELF, `hexa_cc.c` + `runtime.c` via gcc), `~/.hx/bin/hexa`
+  (588KB hexa-driver "hexa 0.1.0-dispatch", `main.hexa` → `main.c` via
+  fresh hexa_cc.c → gcc), `self/native/hexa_v2` (1.8MB linux ELF
+  transpiler), `build/hexa_module_loader` (linux ELF, `module_loader.
+  hexa` → `.c` via hexa.real → gcc). The previous ubu binaries were
+  mac arm64 Mach-O (broken on linux).
+  (c) `self/runtime.c` execinfo.h moved out of `#if defined(__APPLE__)`
+  block (commit `68f9a41c`) — clang strict-mode rejected implicit
+  decls for `backtrace`/`backtrace_symbols_fd` on Linux; the include
+  works on both libSystem (Apple) and glibc (Linux), so the gate
+  was wrong.
+  Result on ubu-2 (`HEXA_MEM_CAP_MB=24576 hexa run round_trip.hexa`):
+  ```
+  stdlib/yosys round-trip — FIRMWARE.md G-R0
+    fixtures: 12
+    [PASS] F1_empty_module · F2_io_port · F3_multibit_wire · F4_localparam
+    [PASS] F5_assign_wire · F6_localparam_width · F7_multi_inputs · F8_generate
+    [PASS] F9_function · F10_multi_bus · F11_multi_localparams · F12_multibit_multi_port
+    result: 12/12 round-trip-equal
+  ```
+  Status: **11/11 gates MEASURED-PASS** — G-T0/T1/T2/T3 + G-R0 12/12
+  + G-R1 4/4 + G-R2 8/8 + G-R3 8/8 + G-R4 6/6 + G-F0 8/8 + G-F1 4/4
+  + G-F2 8/8 + G-F3 6/6 + G-F4 7/7. Source-only cycle C placeholder
+  (commit `da9c197e`) lands annotation recognition; full codegen
+  lowering + bootstrap regen remains the next deploy-pair commit's
+  scope (separate self-host fixpoint cycle — `hexa cc --regen`
+  surfaced a runtime.o-precompiled-object vs clang-source-input
+  pipeline bug, owned by a dedicated cycle).
 - 2026-05-20 — **library-level closure across G-R + G-F lanes** under
   /goal "잔여 cycle 없을때까지". 10/11 gates measured-PASS at the
   library/text-emit level (annotation-driven codegen lowering for
