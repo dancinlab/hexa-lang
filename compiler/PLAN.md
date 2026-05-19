@@ -3731,3 +3731,53 @@ Phase C entry: B-3.3 wires `stdlib/loop/cycle.hexa` to actually iterate
 hardcoded count). Then Phase C proper populates 1-2 seed lens bodies
 (starting with `falsify_self.cite_unreachable` and
 `empty_space.unmapped_axis` — cheapest to implement, no FIRE needed).
+
+## 진행 로그 — RFC 065 Phase B-3.3 + C-1.a + C-2 blocker (2026-05-20)
+
+- **B-3.3** (`50fe5c09`): cycle.hexa swaps the B-2 shell's hardcoded
+  `LENS_COUNT_SHELL=32` for real iteration over
+  `compiler/lenses/embedded.gen.hexa::LENS_NODES` via `lens_apply_by_id`.
+  Proves `use "compiler/lenses/..."` works from stdlib (no precedent in
+  the existing stdlib codebase but parses + executes here). All 32 stub
+  bodies still return [] so total=0.
+- **C-1.a** (`f1252fb5`): first real lens body —
+  `falsify_self.cite_unreachable` emits one synthetic Candidate per
+  cycle (cite=["n"], RFC §12 F5 valid). End-to-end measured:
+  ```
+  [2/8 LENS]    32 lens applied (B-3.3 real dispatch, 1 candidate(s) emitted)
+  [3/8 DEDUP]   cooldown skip (B-2.1) -> 1 survive
+  [8/8 EXHAUST] 1 emit -> not exhausted, continue
+  ```
+  RFC §7 EXHAUST? semantic verified — `1 emit` correctly flips
+  exhaustion to false.
+
+- **C-2 BLOCKER**: attempt to wire `cycle_scan()` to materialize a real
+  `AtlasView` from `compiler/atlas/embedded.gen.hexa` via
+  `use "compiler/atlas/embedded.gen"`. Result: hexa_v2 OOM during
+  transpile —
+  ```
+  [hexa-runtime] memory cap exceeded: rss=4166MB > cap=4096MB
+  error: transpile failed — C file not produced
+  ```
+  Cause: `compiler/atlas/embedded.gen.hexa` carries ~24k AtlasNode
+  rodata; flattening it into the loop runtime translation unit
+  exceeds the 4 GB macOS arena. Matches memory
+  `project_compiler_selfbuild_blockers` (full compiler/main.hexa
+  flatten = ≤31 GB infra cap on all hosts).
+
+- **C-2 status**: reverted (`git restore stdlib/loop/cycle.hexa`).
+  Real atlas view materialization requires either (a) atlas lazy
+  import — load only the kind being scanned, or (b) runtime fetch
+  — `read_text("compiler/atlas/atlas.n6")` + minimal parser; or
+  (c) a NEW backed-in atlas SUMMARY format that fits in memcap.
+  This is a separate RFC scope, NOT RFC 065 §13 Phase C-2 as drafted.
+
+- **honest exit**: RFC 065 Phase B is COMPLETE (G-L0..G-L3 measured
+  PASS; G-L4/G-L5 hold by construction). Phase C-1.a is MEASURED
+  PASS (1 lens body, smoke). Phase C-2..C-5 (real atlas view + body
+  populate + inbox/atlas_candidates emit + cooldown wiring + audit
+  to state files) is deferred to follow-up RFCs that first solve
+  the atlas memcap question. The user-facing `hexa loop` verb is
+  functional end-to-end on the safe-default path:
+  `/tmp/hexadrv loop` -> 8 stage dispatch, 1 candidate flow,
+  RFC §7 exhaustion semantic verified.
