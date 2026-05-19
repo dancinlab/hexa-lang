@@ -53,6 +53,14 @@ fn main() {
     check("rt frac[1]", fabs(r[1] - 0.642) < 0.0000001)
     check("rt frac[2]", fabs(r[2] - 0.911) < 0.0000001)
 
+    // crystal Stage-2: energy_above_hull (binary tie-line)
+    // refs: endpoint A (x=0, e=-1.0), endpoint B (x=1, e=-3.0).
+    let refs = [[0.0, -1.0], [1.0, -3.0]]
+    check("hull: on tie-line -> 0", fabs(energy_above_hull([0.5, -2.0], refs)) < 0.0000001)
+    check("hull: above by +0.5", fabs(energy_above_hull([0.5, -1.5], refs) - 0.5) < 0.0000001)
+    check("hull: below by -0.25", fabs(energy_above_hull([0.25, -1.75], refs) - (-0.25)) < 0.0000001)
+    check("hull: endpoint A exact", fabs(energy_above_hull([0.0, -1.0], refs)) < 0.0000001)
+
     let scc = structure_cart_coords(structure_new(cub, ["Na", "Cl"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]]))
     let s1 = scc[1]
     check("structure_cart_coords site1 == a/2", fabs(s1[0] - a / 2.0) < 0.000000001)

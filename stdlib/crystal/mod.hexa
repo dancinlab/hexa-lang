@@ -214,6 +214,30 @@ pub fn structure_cart_coords(s: Structure) -> any {
     return lattice_frac_to_cart(s.lattice, s.frac_coords)
 }
 
+// ── Stage-2 kernel: 2-endpoint convex-hull distance ─────────────────
+// pymatgen PhaseDiagram.get_e_above_hull, restricted to a binary
+// (2-endpoint) tie-line — the bounded case hexa-matter's NOVEL
+// candidate screen uses. `refs` = [[x0, e0], [x1, e1]] two reference
+// points (composition fraction x in [0,1], formation energy e per
+// atom); query = [x, e]. Returns e − e_hull(x) where e_hull is the
+// linear interpolation between the two endpoints (0 on the tie-line,
+// >0 above, <0 below — caller clamps if a strict hull is wanted).
+// Full multi-point lower-convex-hull is Stage-2.5 (needs a hull
+// sweep + facet search; this binary form is exact and self-checked).
+pub fn energy_above_hull(query: any, refs: any) -> float {
+    let r0 = refs[0]
+    let r1 = refs[1]
+    let x0 = r0[0]
+    let e0 = r0[1]
+    let x1 = r1[0]
+    let e1 = r1[1]
+    let qx = query[0]
+    let qe = query[1]
+    let frac = (qx - x0) / (x1 - x0)
+    let e_hull = e0 + frac * (e1 - e0)
+    return qe - e_hull
+}
+
 pub fn crystal_status() -> str {
-    return "STAGE-2 (partial) — Stage-1 + lattice_inverse/frac_to_cart/cart_to_frac/angles + structure_cart_coords (absorbs: pymatgen, mp_api; CIF/Spacegroup/PhaseDiagram/MP-net still Stage-2)"
+    return "STAGE-2 (partial) — Stage-1 + lattice_inverse/frac_to_cart/cart_to_frac/angles + structure_cart_coords + energy_above_hull(binary) (absorbs: pymatgen, mp_api; CIF/Spacegroup/multi-point-hull/MP-net still Stage-2)"
 }
