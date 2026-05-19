@@ -12,10 +12,14 @@ fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
     println("")
     println("usage:")
-    println("  cloud run   <host> -- <argv...>            run argv on host, wait, exit with its code")
-    println("  cloud nohup <host> <logfile> -- <argv...>  background argv, print remote pid")
-    println("  cloud poll  <host> <pid>                   exit 0 if remote pid alive, else 1")
+    println("  cloud run   <host> [conn] -- <argv...>            run argv, wait, exit with its code")
+    println("  cloud nohup <host> <logfile> [conn] -- <argv...>  background argv, print remote pid")
+    println("  cloud poll  <host> <pid> [conn]                   exit 0 if remote pid alive, else 1")
     println("  cloud help | version")
+    println("")
+    println("connection flags [conn] (before `--`):")
+    println("  --port <n>   ssh to a non-22 port (RunPod / vast.ai)")
+    println("  --insecure   accept a changing/unknown host key (ephemeral pods)")
     println("")
     println("every argv element after `--` is POSIX-quoted before ssh — no remote")
     println("shell parsing, no glob expansion, no /* */ comment mis-parse.")
@@ -35,6 +39,36 @@ fn _cli_atoi(s: str) -> int {
         i = i + 1
     }
     return v
+}
+
+// _ssh_opts_cli — scan av[start..] (up to a "--" separator) for the
+// connection flags --port <n> and --insecure, and build the ssh_opts list.
+fn _ssh_opts_cli(av: [str], start: int) -> [str] {
+    let mut opts = []
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--" {
+            i = len(av)
+        } else if t == "--insecure" {
+            opts.push("-o")
+            opts.push("StrictHostKeyChecking=no")
+            opts.push("-o")
+            opts.push("UserKnownHostsFile=/dev/null")
+            i = i + 1
+        } else if t == "--port" {
+            if i + 1 < len(av) {
+                opts.push("-p")
+                opts.push(av[i + 1])
+                i = i + 2
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return opts
 }
 
 // _collect_after — argv elements after the first "--" at or past `start`;
@@ -92,16 +126,17 @@ fn main() {
     }
     if sub == "run" {
         if si + 1 >= len(av) {
-            println("[cloud] run: missing <host> — usage: cloud run <host> -- <argv...>")
+            println("[cloud] run: missing <host> — usage: cloud run <host> [--port N] [--insecure] -- <argv...>")
             exit(2)
         }
         let host = av[si + 1]
+        let ssh_opts = _ssh_opts_cli(av, si + 2)
         let argv = _collect_after(av, si + 2)
         if len(argv) == 0 {
-            println("[cloud] run: empty argv — usage: cloud run <host> -- <argv...>")
+            println("[cloud] run: empty argv — usage: cloud run <host> [--port N] [--insecure] -- <argv...>")
             exit(2)
         }
-        let r = cloud_run(host, argv)
+        let r = cloud_run_opts(host, ssh_opts, argv)
         if len(r.stdout_) > 0 {
             println(r.stdout_)
         }
@@ -110,17 +145,18 @@ fn main() {
     }
     if sub == "nohup" {
         if si + 2 >= len(av) {
-            println("[cloud] nohup: usage — cloud nohup <host> <logfile> -- <argv...>")
+            println("[cloud] nohup: usage — cloud nohup <host> <logfile> [--port N] [--insecure] -- <argv...>")
             exit(2)
         }
         let host = av[si + 1]
         let logfile = av[si + 2]
+        let ssh_opts = _ssh_opts_cli(av, si + 3)
         let argv = _collect_after(av, si + 3)
         if len(argv) == 0 {
-            println("[cloud] nohup: empty argv — usage: cloud nohup <host> <logfile> -- <argv...>")
+            println("[cloud] nohup: empty argv — usage: cloud nohup <host> <logfile> [--port N] [--insecure] -- <argv...>")
             exit(2)
         }
-        let r = cloud_nohup(host, argv, logfile)
+        let r = cloud_nohup_opts(host, ssh_opts, argv, logfile)
         if len(r.stdout_) > 0 {
             println(r.stdout_)
         }
@@ -132,12 +168,13 @@ fn main() {
     }
     if sub == "poll" {
         if si + 2 >= len(av) {
-            println("[cloud] poll: usage — cloud poll <host> <pid>")
+            println("[cloud] poll: usage — cloud poll <host> <pid> [--port N] [--insecure]")
             exit(2)
         }
         let host = av[si + 1]
         let pid = _cli_atoi(av[si + 2])
-        let alive = cloud_poll(host, pid)
+        let ssh_opts = _ssh_opts_cli(av, si + 3)
+        let alive = cloud_poll_opts(host, ssh_opts, pid)
         if alive == 1 {
             println("[cloud] pid " + str(pid) + " ALIVE")
             exit(0)

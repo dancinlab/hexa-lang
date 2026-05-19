@@ -70,14 +70,20 @@ branch in `self/main.hexa` is a later deploy-adjacent step.
 - The primary consumer (anima) imports the library directly via
   `use "stdlib/cloud/cloud"`; it does not need the `hexa cloud` verb.
 
-### Decision 6 — `host` is an ssh destination; ssh options live in ssh config
-**picked**: `cloud_run(host, argv)` takes `host` as a `user@host` or, preferred,
-a `~/.ssh/config` Host alias. Key / port / user are not API parameters.
+### Decision 6 — `host` + optional `ssh_opts`; `*_opts` variants for ephemeral pods
+**picked**: `cloud_run(host, argv)` for a stable host (a `~/.ssh/config` alias).
+`cloud_run_opts(host, ssh_opts, argv)` takes extra ssh flags as a `[str]` — the
+same structured-argv discipline applied to the ssh invocation itself. Same pair
+for nohup / poll. The CLI exposes `--port` / `--insecure` for this.
 **rationale**:
-- Matches the wilson-pool roster convention (`host: ssh-target`).
-- Keeps the cycle-A API to two parameters; an inline-options variant can be
-  added later without breaking callers.
-- ssh config is the canonical, per-host place for keys and ports.
+- Revised from a measurement: the cycle-A live smoke against a real RunPod pod
+  showed a static `~/.ssh/config` alias is unworkable there — an ephemeral pod
+  gets a fresh IP, a non-22 port, and a new host key every creation. A generic
+  SSH core must accept a port and a host-key policy.
+- `ssh_opts` is itself a `[str]` (`["-p","19241","-o","StrictHostKeyChecking=no"]`)
+  — every element `_shq`-quoted, consistent with approach C.
+- `cloud_run` (no opts) stays for the common stable-host case; `*_opts` is
+  purely additive — no existing caller breaks.
 
 ### Decision 7 — exec via `exec_capture` + double-quoting + RC-marker
 **picked**: Local dispatch uses the `exec_capture` builtin; both `host` and
@@ -103,13 +109,19 @@ The remote exit code is recovered from a `; echo __CLOUD_RC__=$?` marker line.
 
 ## Cycle A deliverable
 
-- `cloud.hexa` — library: `CloudResult` struct, `cloud_run`, `cloud_nohup`,
-  `cloud_poll`, `cloud_lint_argv`, and `_shq`/`_join_argv`/marker helpers.
+- `cloud.hexa` — library: `CloudResult` struct; `cloud_run` / `cloud_nohup`
+  / `cloud_poll` and their `*_opts` variants (extra `ssh_opts: [str]`);
+  `cloud_lint_argv`; `_shq` / `_join_argv` / marker helpers.
 - `cloud_cli.hexa` — standalone CLI (`run` / `nohup` / `poll` / `help` /
-  `version`).
+  `version`; `--port` / `--insecure` connection flags).
 - `README.md`, `design.md` (this file).
 
-Verification: `hexa parse` (syntactic, clean) + `hexa build` (semantic —
-compiles clean, only pre-existing unrelated runtime.h warnings) + smoke
-(`help` prints; a `/* note */` argv element is rejected by `cloud_lint_argv`).
-A live SSH smoke test against a real host is a follow-up step.
+Verification: `hexa parse` (syntactic) + `hexa build` (semantic, clean) +
+live SSH smoke — 5/5 PASS against `ubu-2` and a real RunPod pod
+(`root@…:19241`): basic run, exit-code propagation (remote `exit 7` → 7),
+argv quoting (`*` and `/tmp/*` stay literal — no remote glob expansion), a
+real `python3 -c` on the pod, and a `/* note */` argv rejected. Two bugs the
+smoke caught and fixed: `exec_capture` returns `[stdout, stderr, rc]` not a
+bare str (use element 0); the `/*`-substring lint false-positived on `/tmp/*`
+(now matches only true comment-fragment shapes — opens `/*`, closes `*/`, or
+inline `/* ` / ` */`).
