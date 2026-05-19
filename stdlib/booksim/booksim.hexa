@@ -36,14 +36,13 @@
 //   90 measurement gate not satisfied (no "absorbed" claim — rfc_001 §8)
 //   91 unreachable / config missing / TBD body reached
 
-// Only anynet is imported — the dispatcher routes `topology` into
-// anynet_load; sweep / wire-delay / oracle / measure are GATE-style
-// (exit 90/91, no module call) until rfc_001 §8 GREEN, so importing
-// sweep/leighton/iq_router/traffic/wire_delay here is unnecessary
-// (and currently triggers the hexa-compiler enum bug noted in
-// rfc_003 — RegionShape/TrafficKind undeclared). They get wired in
-// per-module as each Phase B/C/D body lands.
+// anynet + leighton imported. The hexa-compiler enum bug (rfc_003 —
+// RegionShape undeclared) is fixed (codegen_c2 `_is_enum_name`,
+// hexa-lang 8ff19d2a) and the native binary promoted, so leighton's
+// RegionShape enum compiles here. sweep / traffic / wire_delay wire
+// in as cmd_sweep / cmd_measure bodies land (rfc_003 Phase B/E/F).
 use "stdlib/booksim/anynet"
+use "stdlib/booksim/leighton"
 
 let VERSION = "0.0.1"
 
@@ -127,9 +126,28 @@ fn cmd_wire_delay(argv: [str]) -> int {
     return 91
 }
 
+// `booksim oracle` — Leighton analytic lower bounds for the
+// committed-record 8x8 (n=64) reference: d4 mesh + d6 hex. These
+// are the no-over-claim cross-floor any measured F1F2 record must
+// satisfy (rfc_001 §7.3 / leighton.hexa oracle_check, g3).
 fn cmd_oracle(argv: [str]) -> int {
-    println("booksim oracle: pending rfc_001 §8 GREEN (rfc_003 Phase D) — unreachable.")
-    return 91
+    let d4 = LeightonInput {
+        degree: 4, n_nodes: 64,
+        region: RegionShape.K_BY_K, region_param: 8
+    }
+    let d6 = LeightonInput {
+        degree: 6, n_nodes: 64,
+        region: RegionShape.HEX_AXIAL_R, region_param: 8
+    }
+    let b4 = leighton_bounds(d4)
+    let b6 = leighton_bounds(d6)
+    println("booksim oracle — Leighton analytic bounds (8x8, n=64):")
+    println("  d4 mesh: bisection_lower=" + str(b4.bisection_lower)
+        + " diameter_lower=" + str(b4.diameter_lower))
+    println("  d6 hex : bisection_lower=" + str(b6.bisection_lower)
+        + " diameter_lower=" + str(b6.diameter_lower))
+    println("  cite: " + b4.derivation_cite)
+    return 0
 }
 
 // `booksim measure` — gate 90 until rfc_001 §8 closes. Emitting an
@@ -199,8 +217,8 @@ fn main() {
         println("FAIL sweep_unreach91"); fails = fails + 1
     }
     total = total + 1
-    if cmd_booksim(["x", "booksim", "oracle"]) != 91 {
-        println("FAIL oracle_unreach91"); fails = fails + 1
+    if cmd_booksim(["x", "booksim", "oracle"]) != 0 {
+        println("FAIL oracle_exit0"); fails = fails + 1
     }
 
     if fails > 0 {
