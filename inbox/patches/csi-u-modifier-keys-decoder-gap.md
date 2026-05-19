@@ -1,5 +1,13 @@
 # CSI u (kitty keyboard protocol) decoder only handles Enter — every other modifier-key combo errors
 
+> **Status:** `resolved-ssot 2026-05-19` — CSI u branch generalized from
+> Enter-only special-case to arbitrary codepoint+modifier decode (Enter/Tab/
+> Backspace/Esc → negative codes; printable cp → from_char_code UTF-8 emit;
+> C0 1..26 → lowercase+ctrl=1 mirroring raw-mode `b+96`); the Enter path is
+> preserved as a subset (no regression). `from_char_code` used in place of the
+> patch snippet's `chr(_u_cp)` per the sister-patch correction. Parse-gate
+> clean. Binary promote = standard separate deploy step.
+
 **Layer:** `self/tui/input.hexa` — L2 input decode
 **File:** `self/tui/input.hexa:418-436`
 **Symptom:** When `ESC[>1u` (kitty kbd protocol flag 1 — "Disambiguate escape codes") is pushed,

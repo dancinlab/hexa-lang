@@ -1,0 +1,149 @@
+// HEXA Standard Library — mlff (T4 INTERIM PYTHON BRIDGE) tests
+//
+// Exercises the mlff bridge surface WITHOUT requiring any universal-FF
+// python package to be installed:
+//   - mlff_load model-name validation (known names + rejection of bogus).
+//   - MlffResult struct + accessors (mlff_result_new / mlff_result_full).
+//   - mlff_predict / mlff_relax SKIP-mode honesty: the chgnet / mace /
+//     matgl / alignn / schnetpack packages are almost certainly NOT
+//     installed on this host, so the bridge MUST return a flagged SKIP
+//     MlffResult — `mlff_ok` false, the sentinel e_per_atom, a `source`
+//     tag beginning "SKIP:" or "ERROR:" — and MUST NEVER fabricate an
+//     energy. This test ASSERTS that honest SKIP behaviour.
+//
+// g3: NNP outputs are PREDICTIONS. The test deliberately checks that no
+// plausible energy is invented on a host without the NNP packages.
+
+import "stdlib/mlff/mod.hexa"
+import "stdlib/crystal/mod.hexa"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed = ""
+
+fn check(name: string, cond: bool) {
+    total_count = total_count + 1
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        if failed == "" { failed = name }
+    }
+}
+
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn main() {
+    // ── mlff_load: known model names → READY or SKIP, never ERROR ────
+    let h_chgnet = mlff_load("chgnet")
+    check("load chgnet not ERROR", h_chgnet.starts_with("mlff:chgnet:ERROR") == false)
+    check("load chgnet tagged", h_chgnet.starts_with("mlff:chgnet:"))
+
+    let h_mace = mlff_load("mace")
+    check("load mace not ERROR", h_mace.starts_with("mlff:mace:ERROR") == false)
+
+    let h_m3 = mlff_load("m3gnet")
+    check("load m3gnet not ERROR", h_m3.starts_with("mlff:m3gnet:ERROR") == false)
+
+    let h_al = mlff_load("alignn")
+    check("load alignn not ERROR", h_al.starts_with("mlff:alignn:ERROR") == false)
+
+    let h_sc = mlff_load("schnet")
+    check("load schnet not ERROR", h_sc.starts_with("mlff:schnet:ERROR") == false)
+
+    // ── mlff_load: bogus model name → ERROR handle ───────────────────
+    let h_bad = mlff_load("totally-not-a-model")
+    check("load bogus -> ERROR", h_bad.starts_with("mlff:totally-not-a-model:ERROR"))
+
+    let h_empty = mlff_load("")
+    check("load empty -> ERROR", h_empty.starts_with("mlff::ERROR"))
+
+    // ── MlffResult struct + accessors (Stage-1 manual constructor) ───
+    let f0 = [[0.1, 0.2, 0.3], [-0.1, -0.2, -0.3]]
+    let m0 = [1.5, -1.5]
+    let r_manual = mlff_result_new(-5.42, f0, m0, 0)
+    check("manual e_per_atom", fabs(mlff_e_per_atom(r_manual) - (-5.42)) < 0.000001)
+    let mf = mlff_forces(r_manual)
+    check("manual forces len 2", len(mf) == 2)
+    let mf0 = mf[0]
+    check("manual forces[0][1]", fabs(mf0[1] - 0.2) < 0.000001)
+    let mm = mlff_magmoms(r_manual)
+    check("manual magmoms len 2", len(mm) == 2)
+    check("manual source MANUAL", mlff_source(r_manual) == "MANUAL")
+    check("manual bridge_status RUN", mlff_bridge_status(r_manual) == "RUN")
+    check("manual mlff_ok true", mlff_ok(r_manual))
+
+    // ── Full constructor: a flagged SKIP result ──────────────────────
+    let r_skip = mlff_result_full(-987654.0, [], [], 0, "SKIP:test", "SKIP")
+    check("full SKIP status", mlff_bridge_status(r_skip) == "SKIP")
+    check("full SKIP source", mlff_source(r_skip) == "SKIP:test")
+    check("full SKIP not ok", mlff_ok(r_skip) == false)
+
+    // ── Build a real crystal.Structure for the bridge calls ──────────
+    // Si diamond-cubic primitive cell (2 atoms, a = 5.4307 Å).
+    let a = 5.4307
+    let h = a / 2.0
+    let lat = lattice_new([[0.0, h, h], [h, 0.0, h], [h, h, 0.0]])
+    let si = structure_new(lat, ["Si", "Si"],
+                           [[0.0, 0.0, 0.0], [0.25, 0.25, 0.25]])
+    check("structure 2 sites", structure_num_sites(si) == 2)
+
+    // ── mlff_predict SKIP-mode honesty ───────────────────────────────
+    // On a host WITHOUT the NNP packages, mlff_predict MUST return a
+    // SKIP-flagged result: not ok, sentinel energy, SKIP/ERROR source.
+    // If a package IS installed the result is a genuine RUN — accept
+    // either, but in BOTH cases the contract below must hold.
+    let pred = mlff_predict("chgnet", si)
+    let pst = mlff_bridge_status(pred)
+    check("predict status RUN|SKIP|ERROR",
+          pst == "RUN" || pst == "SKIP" || pst == "ERROR")
+    if mlff_ok(pred) {
+        // Genuine NNP ran — provenance MUST be tagged SIM-NNP-BRIDGE.
+        check("predict RUN source tagged",
+              mlff_source(pred).starts_with("SIM-NNP-BRIDGE:chgnet"))
+    } else {
+        // SKIP/ERROR — NO fabricated energy. Sentinel + flagged source.
+        check("predict SKIP sentinel energy",
+              fabs(mlff_e_per_atom(pred) - (-987654.0)) < 0.001)
+        let psrc = mlff_source(pred)
+        check("predict SKIP source flagged",
+              psrc.starts_with("SKIP:") || psrc.starts_with("ERROR:"))
+        check("predict SKIP empty forces", len(mlff_forces(pred)) == 0)
+        check("predict SKIP empty magmoms", len(mlff_magmoms(pred)) == 0)
+    }
+    // The input structure is always preserved in `relaxed`.
+    let prel = mlff_relaxed(pred)
+    check("predict preserves structure", structure_num_sites(prel) == 2)
+
+    // ── mlff_relax SKIP-mode honesty (same contract) ─────────────────
+    let rlx = mlff_relax("mace", si)
+    let rst = mlff_bridge_status(rlx)
+    check("relax status RUN|SKIP|ERROR",
+          rst == "RUN" || rst == "SKIP" || rst == "ERROR")
+    if mlff_ok(rlx) == false {
+        check("relax SKIP sentinel energy",
+              fabs(mlff_e_per_atom(rlx) - (-987654.0)) < 0.001)
+        let rsrc = mlff_source(rlx)
+        check("relax SKIP source flagged",
+              rsrc.starts_with("SKIP:") || rsrc.starts_with("ERROR:"))
+    } else {
+        check("relax RUN source tagged",
+              mlff_source(rlx).starts_with("SIM-NNP-BRIDGE:mace"))
+    }
+
+    // ── Bogus model through predict → ERROR, never fabricated ────────
+    let pbad = mlff_predict("no-such-ff", si)
+    check("predict bogus model -> ERROR", mlff_bridge_status(pbad) == "ERROR")
+    check("predict bogus not ok", mlff_ok(pbad) == false)
+    check("predict bogus sentinel energy",
+          fabs(mlff_e_per_atom(pbad) - (-987654.0)) < 0.001)
+    check("predict bogus source ERROR",
+          mlff_source(pbad).starts_with("ERROR:"))
+
+    println("mlff_status: " + mlff_status())
+    if pass_count == total_count {
+        println("__MLFF_TEST__ PASS (" + str(pass_count) + "/" + str(total_count) + ")")
+    } else {
+        println("__MLFF_TEST__ FAIL (" + str(pass_count) + "/" + str(total_count) + " first-fail=" + failed + ")")
+        exit(1)
+    }
+}

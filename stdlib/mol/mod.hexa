@@ -48,11 +48,28 @@
 pub struct Mol {
     atoms: any,      // [str]        — element symbols, length N
     bonds: any,      // [[int;3]; M] — [atom_i, atom_j, order]
-    charge: any      // int          — formal molecular charge
+    charge: any,     // int          — formal molecular charge
+    arom: any        // [bool; N]    — per-atom aromatic flag (Stage-2.6;
+                     //               mol_new defaults all-false)
 }
 
+// Stage-1/2 constructor — `arom` defaults all-false (callers that need
+// aromatic atom typing for mol_logp/mol_tpsa use mol_new_arom).
 pub fn mol_new(atoms: any, bonds: any, charge: any) -> Mol {
-    return Mol { atoms: atoms, bonds: bonds, charge: charge }
+    let mut ar: any = []
+    let mut i = 0
+    while i < len(atoms) {
+        ar.push(false)
+        i = i + 1
+    }
+    return Mol { atoms: atoms, bonds: bonds, charge: charge, arom: ar }
+}
+
+// Stage-2.6 constructor — explicit per-atom aromatic flags. `arom[k]`
+// true marks atom k as part of an aromatic system (lowercase SMILES
+// `c`/`n`/`o`/`s`). Used by Crippen logP / Ertl TPSA atom typing.
+pub fn mol_new_arom(atoms: any, bonds: any, charge: any, arom: any) -> Mol {
+    return Mol { atoms: atoms, bonds: bonds, charge: charge, arom: arom }
 }
 
 pub fn mol_num_atoms(m: Mol) -> int {
@@ -71,6 +88,850 @@ pub fn mol_atoms(m: Mol) -> any {
     return m.atoms
 }
 
+// ── Stage-2 kernel: SMILES parser (hoisted, byte-parity-verified) ───
+//
+// Parse core hoisted VERBATIM from the byte-parity-verified hexa-bio
+// gate `_hexa_bridge/selftest/cmt_smiles_validation.hexa`. Hoisted
+// fns (renamed with a `_smiles_`/`_mol_` private prefix to avoid
+// C-stdlib symbol clashes, logic UNCHANGED):
+//   reset_parse → _smiles_reset_parse        new_atom → _smiles_new_atom
+//   link_bond → _smiles_link_bond            ring_find/pop/push/closure
+//   parse_bracket_atom → _smiles_parse_bracket_atom
+//   parse_smiles → _smiles_parse        + the lexical helpers
+//   (is_digit_ch/is_upper_ch/is_lower_ch/upper_ch/lower_ch/
+//    capitalize_sym/in_set/is_bond_char/bond_order_of).
+//
+// cmt-behaviour caveats preserved (NOT invented here):
+//   * `at_sym` holds HEAVY atoms only — the cmt parser never pushes
+//     implicit-H atoms onto the atom list (it only counts H into a
+//     formula dict in finalize_parse, which is NOT hoisted). So
+//     Mol.atoms from mol_from_smiles is the heavy-atom list; H is
+//     implicit (matches cmt; mol_weight over this Mol is therefore a
+//     heavy-atom sum, not the molecular weight).
+//   * bond order: cmt uses float orders (1.0 single, 1.5 aromatic,
+//     2.0 double, 3.0 triple, 4.0 quad). Mol bonds need int order,
+//     so the float is truncated via int(): aromatic 1.5 → 1 (no
+//     Kekulé assignment — same as cmt, which never kekulises).
+//   * failure convention: cmt `parse_smiles` returns false and sets
+//     `parse_err`. mol_from_smiles maps that to an EMPTY flagged Mol
+//     (atoms:[], bonds:[], charge:0) — callers test mol_num_atoms==0.
+
+let mut _smiles_at_sym: array = []
+let mut _smiles_at_arom: array = []
+let mut _smiles_at_charge: array = []
+let mut _smiles_at_explH: array = []
+let mut _smiles_bd_a: array = []
+let mut _smiles_bd_b: array = []
+let mut _smiles_bd_o: array = []
+let mut _smiles_parse_err: string = ""
+
+let mut _smiles_ring_keys: array = []
+let mut _smiles_ring_atoms: array = []
+let mut _smiles_ring_bonds: array = []
+
+let mut _smiles_bk_sym_norm: string = ""
+let mut _smiles_bk_arom: bool = false
+let mut _smiles_bk_charge: int = 0
+let mut _smiles_bk_explH: int = 0
+
+let _SMILES_ORGANIC = ["B", "C", "N", "O", "P", "S", "F", "Cl", "Br", "I"]
+let _SMILES_AROM_LOWER = ["b", "c", "n", "o", "p", "s"]
+let _SMILES_BOND_CHARS = ["-", "=", "#", ":", "$", "/", "\\", "~"]
+let _SMILES_BOND_ORDERS = [1.0, 2.0, 3.0, 1.5, 4.0, 1.0, 1.0, 1.0]
+
+fn _smiles_in_set(xs: array, s: string) -> bool {
+    let mut i = 0
+    while i < len(xs) { if xs[i] == s { return true }; i = i + 1 }
+    return false
+}
+fn _smiles_is_bond_char(c: string) -> bool {
+    let mut i = 0
+    while i < len(_SMILES_BOND_CHARS) { if _SMILES_BOND_CHARS[i] == c { return true }; i = i + 1 }
+    return false
+}
+fn _smiles_bond_order_of(c: string) -> float {
+    let mut i = 0
+    while i < len(_SMILES_BOND_CHARS) { if _SMILES_BOND_CHARS[i] == c { return _SMILES_BOND_ORDERS[i] }; i = i + 1 }
+    return 0.0
+}
+fn _smiles_is_digit_ch(c: string) -> bool {
+    if len(c) != 1 { return false }
+    let b = ord(c)
+    return b >= 48 && b <= 57
+}
+fn _smiles_is_upper_ch(c: string) -> bool {
+    if len(c) != 1 { return false }
+    let b = ord(c)
+    return b >= 65 && b <= 90
+}
+fn _smiles_is_lower_ch(c: string) -> bool {
+    if len(c) != 1 { return false }
+    let b = ord(c)
+    return b >= 97 && b <= 122
+}
+fn _smiles_upper_ch(c: string) -> string {
+    if !_smiles_is_lower_ch(c) { return c }
+    return chr(ord(c) - 32)
+}
+fn _smiles_lower_ch(c: string) -> string {
+    if !_smiles_is_upper_ch(c) { return c }
+    return chr(ord(c) + 32)
+}
+fn _smiles_capitalize_sym(s: string) -> string {
+    if len(s) == 0 { return s }
+    let head = _smiles_upper_ch(s.substr(0, 1))
+    let mut out = head
+    let mut i = 1
+    while i < len(s) { out = out + _smiles_lower_ch(s.substr(i, 1)); i = i + 1 }
+    return out
+}
+
+fn _smiles_reset_parse() {
+    _smiles_at_sym = []; _smiles_at_arom = []; _smiles_at_charge = []; _smiles_at_explH = []
+    _smiles_bd_a = []; _smiles_bd_b = []; _smiles_bd_o = []
+    _smiles_parse_err = ""
+}
+
+fn _smiles_new_atom(sym: string, arom: bool, charge: int, explH: int) -> int {
+    _smiles_at_sym.push(sym); _smiles_at_arom.push(arom)
+    _smiles_at_charge.push(charge); _smiles_at_explH.push(explH)
+    return len(_smiles_at_sym) - 1
+}
+
+fn _smiles_link_bond(a: int, b: int, pending_bond: float) {
+    let mut o = 1.0
+    if pending_bond >= 0.0 { o = pending_bond }
+    else if _smiles_at_arom[a] && _smiles_at_arom[b] { o = 1.5 }
+    else { o = 1.0 }
+    _smiles_bd_a.push(a); _smiles_bd_b.push(b); _smiles_bd_o.push(o)
+}
+
+fn _smiles_ring_find(k: string) -> int {
+    let mut i = 0
+    while i < len(_smiles_ring_keys) { if _smiles_ring_keys[i] == k { return i }; i = i + 1 }
+    return -1
+}
+fn _smiles_ring_pop(idx: int) {
+    let mut nk: array = []
+    let mut na: array = []
+    let mut nb: array = []
+    let mut i = 0
+    while i < len(_smiles_ring_keys) {
+        if i != idx { nk.push(_smiles_ring_keys[i]); na.push(_smiles_ring_atoms[i]); nb.push(_smiles_ring_bonds[i]) }
+        i = i + 1
+    }
+    _smiles_ring_keys = nk; _smiles_ring_atoms = na; _smiles_ring_bonds = nb
+}
+fn _smiles_ring_push(k: string, a: int, b: float) {
+    _smiles_ring_keys.push(k); _smiles_ring_atoms.push(a); _smiles_ring_bonds.push(b)
+}
+fn _smiles_ring_sorted_keys() -> array {
+    let mut ks: array = []
+    let mut i = 0
+    while i < len(_smiles_ring_keys) { ks.push(_smiles_ring_keys[i]); i = i + 1 }
+    let mut p = 1
+    while p < len(ks) {
+        let cur = ks[p]
+        let mut q = p - 1
+        while q >= 0 && ks[q] > cur { ks[q + 1] = ks[q]; q = q - 1 }
+        ks[q + 1] = cur
+        p = p + 1
+    }
+    return ks
+}
+
+fn _smiles_ring_closure(key: string, prev: int, pending_bond: float) -> bool {
+    if prev < 0 { _smiles_parse_err = "ring-closure label " + key + " with no preceding atom"; return false }
+    let idx = _smiles_ring_find(key)
+    if idx >= 0 {
+        let a0 = _smiles_ring_atoms[idx]
+        let bo = _smiles_ring_bonds[idx]
+        _smiles_ring_pop(idx)
+        if a0 == prev { _smiles_parse_err = "ring-closure label " + key + " bonds an atom to itself"; return false }
+        let mut o = 1.0
+        if pending_bond >= 0.0 { o = pending_bond }
+        else if bo >= 0.0 { o = bo }
+        else if _smiles_at_arom[a0] && _smiles_at_arom[prev] { o = 1.5 }
+        else { o = 1.0 }
+        _smiles_bd_a.push(a0); _smiles_bd_b.push(prev); _smiles_bd_o.push(o)
+    } else {
+        _smiles_ring_push(key, prev, pending_bond)
+    }
+    return true
+}
+
+fn _smiles_parse_bracket_atom(inner: string) -> bool {
+    let n = len(inner)
+    let mut i = 0
+    while i < n && _smiles_is_digit_ch(inner.substr(i, 1)) { i = i + 1 }
+    if i >= n { _smiles_parse_err = "unparseable bracket atom '[" + inner + "]'"; return false }
+    let c0 = inner.substr(i, 1)
+    let mut sym = ""
+    if c0 == "s" && i + 1 < n && inner.substr(i + 1, 1) == "e" { sym = "se"; i = i + 2 }
+    else if c0 == "a" && i + 1 < n && inner.substr(i + 1, 1) == "s" { sym = "as"; i = i + 2 }
+    else if _smiles_is_upper_ch(c0) {
+        sym = c0; i = i + 1
+        if i < n && _smiles_is_lower_ch(inner.substr(i, 1)) { sym = sym + inner.substr(i, 1); i = i + 1 }
+    } else if c0 == "b" || c0 == "c" || c0 == "n" || c0 == "o" || c0 == "p" || c0 == "s" {
+        sym = c0; i = i + 1
+    } else {
+        _smiles_parse_err = "unparseable bracket atom '[" + inner + "]'"; return false
+    }
+    if i < n && inner.substr(i, 1) == "@" {
+        if i + 1 < n && inner.substr(i + 1, 1) == "@" { i = i + 2 }
+        else if i + 2 < n {
+            let two = inner.substr(i + 1, 2)
+            if two == "TH" || two == "AL" {
+                if i + 3 < n {
+                    let d = inner.substr(i + 3, 1)
+                    if d == "1" || d == "2" { i = i + 4 } else { i = i + 1 }
+                } else { i = i + 1 }
+            } else if two == "SP" {
+                if i + 3 < n {
+                    let d = inner.substr(i + 3, 1)
+                    if d == "1" || d == "2" || d == "3" { i = i + 4 } else { i = i + 1 }
+                } else { i = i + 1 }
+            } else if two == "TB" || two == "OH" {
+                let mut j = i + 3
+                if j < n && _smiles_is_digit_ch(inner.substr(j, 1)) {
+                    while j < n && _smiles_is_digit_ch(inner.substr(j, 1)) { j = j + 1 }
+                    i = j
+                } else { i = i + 1 }
+            } else { i = i + 1 }
+        } else { i = i + 1 }
+    }
+    let mut explH = 0
+    if i < n && inner.substr(i, 1) == "H" {
+        i = i + 1
+        let mut j = i
+        while j < n && _smiles_is_digit_ch(inner.substr(j, 1)) { j = j + 1 }
+        if j == i { explH = 1 }
+        else {
+            let dstr = inner.substr(i, j - i)
+            let mut v = 0; let mut k = 0
+            while k < len(dstr) { v = v * 10 + (ord(dstr.substr(k, 1)) - 48); k = k + 1 }
+            explH = v
+            i = j
+        }
+    }
+    let mut charge = 0
+    if i < n {
+        let cc = inner.substr(i, 1)
+        if cc == "+" || cc == "-" {
+            let next_ch = if i + 1 < n { inner.substr(i + 1, 1) } else { "" }
+            if _smiles_is_digit_ch(next_ch) {
+                let sign = if cc == "+" { 1 } else { -1 }
+                i = i + 1
+                let mut j = i
+                while j < n && _smiles_is_digit_ch(inner.substr(j, 1)) { j = j + 1 }
+                let dstr = inner.substr(i, j - i)
+                let mut v = 0; let mut k = 0
+                while k < len(dstr) { v = v * 10 + (ord(dstr.substr(k, 1)) - 48); k = k + 1 }
+                charge = sign * v
+                i = j
+            } else if cc == "+" {
+                let mut cnt = 0
+                while i < n && inner.substr(i, 1) == "+" { cnt = cnt + 1; i = i + 1 }
+                charge = cnt
+            } else {
+                let mut cnt = 0
+                while i < n && inner.substr(i, 1) == "-" { cnt = cnt + 1; i = i + 1 }
+                charge = -cnt
+            }
+        }
+    }
+    if i < n && inner.substr(i, 1) == ":" {
+        let mut j = i + 1
+        if j >= n || !_smiles_is_digit_ch(inner.substr(j, 1)) {
+            _smiles_parse_err = "unparseable bracket atom '[" + inner + "]'"; return false
+        }
+        while j < n && _smiles_is_digit_ch(inner.substr(j, 1)) { j = j + 1 }
+        i = j
+    }
+    if i != n { _smiles_parse_err = "unparseable bracket atom '[" + inner + "]'"; return false }
+    let sym_norm = _smiles_capitalize_sym(sym)
+    let arom = _smiles_is_lower_ch(sym.substr(0, 1))
+    _smiles_bk_sym_norm = sym_norm
+    _smiles_bk_arom = arom
+    _smiles_bk_charge = charge
+    _smiles_bk_explH = explH
+    return true
+}
+
+fn _smiles_parse(smiles: string) -> bool {
+    _smiles_reset_parse()
+    _smiles_ring_keys = []; _smiles_ring_atoms = []; _smiles_ring_bonds = []
+    // Branch stack: this toolchain's array `.pop()` does NOT shrink the
+    // array (returns last but len unchanged), so the cmt
+    // `branch_stack.pop()` is realised here with an explicit length
+    // counter `bs_len`. LIFO branch semantics are byte-identical to the
+    // cmt parser (push prev / read top / drop top).
+    let mut branch_stack: array = []
+    let mut bs_len = 0
+    let mut prev = -1
+    let mut pending_bond = -1.0  // -1.0 sentinel == None
+    let n = len(smiles)
+    let mut i = 0
+    while i < n {
+        let c = smiles.substr(i, 1)
+        if c == "(" {
+            if prev < 0 { _smiles_parse_err = "'(' with no preceding atom"; return false }
+            if bs_len < len(branch_stack) { branch_stack[bs_len] = prev }
+            else { branch_stack.push(prev) }
+            bs_len = bs_len + 1
+            i = i + 1
+            continue
+        }
+        if c == ")" {
+            if bs_len == 0 { _smiles_parse_err = "unbalanced ')'"; return false }
+            prev = branch_stack[bs_len - 1]
+            bs_len = bs_len - 1
+            i = i + 1
+            continue
+        }
+        if _smiles_is_bond_char(c) {
+            if pending_bond >= 0.0 { _smiles_parse_err = "two bond operators in a row"; return false }
+            pending_bond = _smiles_bond_order_of(c)
+            i = i + 1
+            continue
+        }
+        if c == "." {
+            prev = -1
+            pending_bond = -1.0
+            i = i + 1
+            continue
+        }
+        if c == "[" {
+            let mut j = i + 1
+            while j < n && smiles.substr(j, 1) != "]" { j = j + 1 }
+            if j >= n { _smiles_parse_err = "unclosed '['"; return false }
+            let inner = smiles.substr(i + 1, j - i - 1)
+            if !_smiles_parse_bracket_atom(inner) { return false }
+            let idx = _smiles_new_atom(_smiles_bk_sym_norm, _smiles_bk_arom, _smiles_bk_charge, _smiles_bk_explH)
+            if prev >= 0 { _smiles_link_bond(prev, idx, pending_bond) }
+            else if pending_bond >= 0.0 { _smiles_parse_err = "bond operator at start of chain"; return false }
+            prev = idx
+            pending_bond = -1.0
+            i = j + 1
+            continue
+        }
+        if c == "%" {
+            let key = smiles.substr(i + 1, 2)
+            if len(key) != 2 || !_smiles_is_digit_ch(key.substr(0, 1)) || !_smiles_is_digit_ch(key.substr(1, 1)) {
+                _smiles_parse_err = "malformed %NN ring closure"; return false
+            }
+            i = i + 3
+            if !_smiles_ring_closure(key, prev, pending_bond) { return false }
+            pending_bond = -1.0
+            continue
+        }
+        if _smiles_is_digit_ch(c) {
+            i = i + 1
+            if !_smiles_ring_closure(c, prev, pending_bond) { return false }
+            pending_bond = -1.0
+            continue
+        }
+        let two = smiles.substr(i, 2)
+        let mut sym = ""
+        if two == "Cl" || two == "Br" { sym = two; i = i + 2 }
+        else if _smiles_in_set(_SMILES_ORGANIC, c) || _smiles_in_set(_SMILES_AROM_LOWER, c) { sym = c; i = i + 1 }
+        else if c == "/" || c == "\\" || c == "@" || c == "%" || c == "H" || c == "+" || c == "-" {
+            _smiles_parse_err = "stray '" + c + "' outside a bracket atom"; return false
+        } else {
+            _smiles_parse_err = "unexpected character '" + c + "' at position " + str(i); return false
+        }
+        let arom = _smiles_is_lower_ch(sym.substr(0, 1))
+        let sym_norm = _smiles_capitalize_sym(sym)
+        let idx = _smiles_new_atom(sym_norm, arom, 0, 0)
+        if prev >= 0 { _smiles_link_bond(prev, idx, pending_bond) }
+        else if pending_bond >= 0.0 { _smiles_parse_err = "bond operator at start of chain"; return false }
+        prev = idx
+        pending_bond = -1.0
+    }
+    if bs_len > 0 { _smiles_parse_err = "unbalanced '(' — branch never closed"; return false }
+    if len(_smiles_ring_keys) > 0 {
+        let ks = _smiles_ring_sorted_keys()
+        let mut s = "["
+        let mut i2 = 0
+        while i2 < len(ks) {
+            if i2 > 0 { s = s + ", " }
+            s = s + "'" + ks[i2] + "'"
+            i2 = i2 + 1
+        }
+        s = s + "]"
+        _smiles_parse_err = "ring-closure label(s) opened but never closed: " + s
+        return false
+    }
+    if pending_bond >= 0.0 { _smiles_parse_err = "trailing bond operator"; return false }
+    if len(_smiles_at_sym) == 0 { _smiles_parse_err = "empty molecule"; return false }
+    return true
+}
+
+// Public Stage-2 entry. Parses `smiles` with the hoisted cmt parser
+// and materialises a Mol. atoms = heavy-atom symbols (H implicit, as
+// cmt); bonds = [i, j, int(order)]; charge = sum of per-atom formal
+// charges. Parse failure → empty flagged Mol (mol_num_atoms == 0).
+pub fn mol_from_smiles(smiles: string) -> Mol {
+    let ok = _smiles_parse(smiles)
+    if !ok {
+        return Mol { atoms: [], bonds: [], charge: 0, arom: [] }
+    }
+    let mut atoms: any = []
+    let mut arom: any = []
+    let mut ai = 0
+    while ai < len(_smiles_at_sym) {
+        atoms.push(_smiles_at_sym[ai])
+        arom.push(_smiles_at_arom[ai])
+        ai = ai + 1
+    }
+    let mut bonds: any = []
+    let mut bi = 0
+    while bi < len(_smiles_bd_a) {
+        let oi = int(_smiles_bd_o[bi])
+        let one_bond: any = [_smiles_bd_a[bi], _smiles_bd_b[bi], oi]
+        bonds.push(one_bond)
+        bi = bi + 1
+    }
+    let mut charge = 0
+    let mut ci = 0
+    while ci < len(_smiles_at_charge) {
+        charge = charge + _smiles_at_charge[ci]
+        ci = ci + 1
+    }
+    return Mol { atoms: atoms, bonds: bonds, charge: charge, arom: arom }
+}
+
+// ── Stage-2 kernel: graph descriptors (explicit-atom Mol) ───────────
+// Operate on a Mol holding an EXPLICIT atom list (incl H) + bonds.
+// (mol_from_smiles — hoisting the byte-parity-verified hexa-bio
+// parser — is the separate large Stage-2 deliverable; these
+// descriptors are bounded and SMILES-independent.)
+
+// CRC standard atomic weights (g/mol), common organic/inorganic set.
+// Unknown symbol -> 0.0 (caller's molecule should use known elements).
+fn _mol_atomic_weight(sym: string) -> float {
+    if sym == "H" { return 1.008 }
+    if sym == "C" { return 12.011 }
+    if sym == "N" { return 14.007 }
+    if sym == "O" { return 15.999 }
+    if sym == "F" { return 18.998403163 }
+    if sym == "P" { return 30.973761998 }
+    if sym == "S" { return 32.06 }
+    if sym == "Cl" { return 35.45 }
+    if sym == "Br" { return 79.904 }
+    if sym == "I" { return 126.90447 }
+    if sym == "Na" { return 22.98976928 }
+    if sym == "K" { return 39.0983 }
+    if sym == "Mg" { return 24.305 }
+    if sym == "Ca" { return 40.078 }
+    if sym == "Fe" { return 55.845 }
+    if sym == "Zn" { return 65.38 }
+    if sym == "Si" { return 28.085 }
+    if sym == "B" { return 10.81 }
+    return 0.0
+}
+
+// RDKit Descriptors.MolWt — sum of standard atomic weights over the
+// explicit atom list (so all H must be explicit in the Mol).
+pub fn mol_weight(m: Mol) -> float {
+    let at = m.atoms
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(at) {
+        s = s + _mol_atomic_weight(at[i])
+        i = i + 1
+    }
+    return s
+}
+
+// Lipinski HBA — count of N and O atoms (the Lipinski Ro5 definition).
+pub fn mol_hba(m: Mol) -> int {
+    let at = m.atoms
+    let mut k = 0
+    let mut i = 0
+    while i < len(at) {
+        let e = at[i]
+        if e == "N" || e == "O" { k = k + 1 }
+        i = i + 1
+    }
+    return k
+}
+
+// Lipinski HBD — number of H atoms covalently bonded to an N or O
+// (N-H + O-H). Uses the explicit bond list [[i, j, order], ...].
+pub fn mol_hbd(m: Mol) -> int {
+    let at = m.atoms
+    let bonds = m.bonds
+    let mut k = 0
+    let mut bi = 0
+    while bi < len(bonds) {
+        let bd = bonds[bi]
+        let ai = bd[0]
+        let aj = bd[1]
+        let ea = at[ai]
+        let eb = at[aj]
+        let a_h = ea == "H"
+        let b_h = eb == "H"
+        let a_no = ea == "N" || ea == "O"
+        let b_no = eb == "N" || eb == "O"
+        if (a_h && b_no) || (b_h && a_no) { k = k + 1 }
+        bi = bi + 1
+    }
+    return k
+}
+
+// ── Stage-2.6 kernel: Crippen logP + Ertl TPSA descriptors ──────────
+//
+// Operate on an EXPLICIT-atom Mol (incl. H atoms, same convention as
+// mol_weight/mol_hba/mol_hbd). Per-atom aromaticity comes from the
+// Mol.arom array (mol_new_arom sets it; mol_new defaults all-false).
+//
+// PUBLISHED CONSTANTS — transcribed VERBATIM, never invented:
+//   logP : Wildman, S.A. & Crippen, G.M. (1999) "Prediction of
+//          Physicochemical Parameters by Atomic Contributions",
+//          J. Chem. Inf. Comput. Sci. 39(5):868-873. Atom-type logP
+//          increments below are taken verbatim from the RDKit
+//          transcription Data/Crippen.txt (BSD-3) of that table.
+//   TPSA : Ertl, P., Rohde, B. & Selzer, P. (2000) "Fast Calculation
+//          of Molecular Polar Surface Area...", J. Med. Chem.
+//          43(20):3714-3717. Fragment contributions below are Table 1
+//          of that paper, transcribed verbatim.
+//
+// SUPPORTED SUBSET (Stage-2.6, honest):
+//   logP  — C/H/N/O/F/Cl/Br/I/S over the common organic atom types
+//           C1..C8,C18..C24,CS · H1..H3,HS · N1,N2,N7,N11,NS ·
+//           O1,O2,O3,O9,O10,OS · F,Cl,Br,I · S1,S3,S2.
+//   TPSA  — N/O fragment types (Ertl Table 1 N+O rows). S/P fragments
+//           are transcribed in the table comment but typing for S/P
+//           is DEFERRED (see below).
+//
+// DEFERRED (not yet typed — would need richer SMARTS matching; NO
+// increment is invented for these — an unmatched atom falls to the
+// element fallback CS/NS/OS/HS for logP, contributes 0 for TPSA):
+//   logP  — C9..C17,C25..C27 (heteroaromatic-substituted carbons),
+//           H4 (peroxide/thiol O-H), N3..N6,N8..N14 (aromatic-NH,
+//           imine, nitrile, charged N), O4..O8,O11,O12 (aryl ether,
+//           charged O, sulfur-oxide O).
+//   TPSA  — all S and P fragments; charged-N ring fragments needing
+//           ring-size SMARTS ([N]1-*-*-1 three-membered ring).
+
+// Per-atom analysis cache: filled by _mol_analyze(m). Index k aligns
+// with m.atoms. nH = bonded explicit-H count; maxbo = max bond order
+// to a heavy neighbor; nbc/nbn/nbo/nbs/nbhet = heavy-neighbor element
+// counts; aromnb = count of aromatic heavy neighbors.
+let mut _mol_an_nH: array = []
+let mut _mol_an_maxbo: array = []
+let mut _mol_an_nbc: array = []
+let mut _mol_an_nbn: array = []
+let mut _mol_an_nbo: array = []
+let mut _mol_an_nbs: array = []
+let mut _mol_an_nbhet: array = []
+let mut _mol_an_nbheavy: array = []
+let mut _mol_an_aromnb: array = []
+let mut _mol_an_dbl_to_o: array = []   // this atom has a =O double bond
+let mut _mol_an_dbl_to_nonc: array = []  // double bond to a non-C heavy atom
+
+fn _mol_is_hetero(sym: string) -> bool {
+    if sym == "N" { return true }
+    if sym == "O" { return true }
+    if sym == "P" { return true }
+    if sym == "S" { return true }
+    if sym == "F" { return true }
+    if sym == "Cl" { return true }
+    if sym == "Br" { return true }
+    if sym == "I" { return true }
+    return false
+}
+
+fn _mol_analyze(m: Mol) {
+    let at = m.atoms
+    let bonds = m.bonds
+    let n = len(at)
+    _mol_an_nH = []; _mol_an_maxbo = []
+    _mol_an_nbc = []; _mol_an_nbn = []; _mol_an_nbo = []; _mol_an_nbs = []
+    _mol_an_nbhet = []; _mol_an_nbheavy = []; _mol_an_aromnb = []
+    _mol_an_dbl_to_o = []; _mol_an_dbl_to_nonc = []
+    let mut i = 0
+    while i < n {
+        _mol_an_nH.push(0); _mol_an_maxbo.push(0)
+        _mol_an_nbc.push(0); _mol_an_nbn.push(0); _mol_an_nbo.push(0)
+        _mol_an_nbs.push(0); _mol_an_nbhet.push(0); _mol_an_nbheavy.push(0)
+        _mol_an_aromnb.push(0)
+        _mol_an_dbl_to_o.push(false); _mol_an_dbl_to_nonc.push(false)
+        i = i + 1
+    }
+    let ar = m.arom
+    let mut bi = 0
+    while bi < len(bonds) {
+        let bd = bonds[bi]
+        let a = bd[0]
+        let b = bd[1]
+        let o = bd[2]
+        let ea = at[a]
+        let eb = at[b]
+        let a_is_h = ea == "H"
+        let b_is_h = eb == "H"
+        if b_is_h { _mol_an_nH[a] = _mol_an_nH[a] + 1 }
+        if a_is_h { _mol_an_nH[b] = _mol_an_nH[b] + 1 }
+        if !b_is_h {
+            _mol_an_nbheavy[a] = _mol_an_nbheavy[a] + 1
+            if o > _mol_an_maxbo[a] { _mol_an_maxbo[a] = o }
+            if eb == "C" { _mol_an_nbc[a] = _mol_an_nbc[a] + 1 }
+            if eb == "N" { _mol_an_nbn[a] = _mol_an_nbn[a] + 1 }
+            if eb == "O" { _mol_an_nbo[a] = _mol_an_nbo[a] + 1 }
+            if eb == "S" { _mol_an_nbs[a] = _mol_an_nbs[a] + 1 }
+            if _mol_is_hetero(eb) { _mol_an_nbhet[a] = _mol_an_nbhet[a] + 1 }
+            if ar[b] { _mol_an_aromnb[a] = _mol_an_aromnb[a] + 1 }
+            if o == 2 && eb == "O" { _mol_an_dbl_to_o[a] = true }
+            if o == 2 && eb != "C" { _mol_an_dbl_to_nonc[a] = true }
+        }
+        if !a_is_h {
+            _mol_an_nbheavy[b] = _mol_an_nbheavy[b] + 1
+            if o > _mol_an_maxbo[b] { _mol_an_maxbo[b] = o }
+            if ea == "C" { _mol_an_nbc[b] = _mol_an_nbc[b] + 1 }
+            if ea == "N" { _mol_an_nbn[b] = _mol_an_nbn[b] + 1 }
+            if ea == "O" { _mol_an_nbo[b] = _mol_an_nbo[b] + 1 }
+            if ea == "S" { _mol_an_nbs[b] = _mol_an_nbs[b] + 1 }
+            if _mol_is_hetero(ea) { _mol_an_nbhet[b] = _mol_an_nbhet[b] + 1 }
+            if ar[a] { _mol_an_aromnb[b] = _mol_an_aromnb[b] + 1 }
+            if o == 2 && ea == "O" { _mol_an_dbl_to_o[b] = true }
+            if o == 2 && ea != "C" { _mol_an_dbl_to_nonc[b] = true }
+        }
+        bi = bi + 1
+    }
+}
+
+// Crippen per-atom logP increment for atom k. Returns the verbatim
+// published value for the matched type; falls to the element fallback
+// (CS/HS/NS/OS) for atom types outside the supported subset.
+fn _mol_crippen_inc(m: Mol, k: int) -> float {
+    let at = m.atoms
+    let sym = at[k]
+    let ar = m.arom
+    let nH = _mol_an_nH[k]
+    let maxbo = _mol_an_maxbo[k]
+    let nbc = _mol_an_nbc[k]
+    let nbhet = _mol_an_nbhet[k]
+    let nbheavy = _mol_an_nbheavy[k]
+    let aromnb = _mol_an_aromnb[k]
+    // ── Hydrogen ──
+    if sym == "H" {
+        // H neighbour element decides type. nbheavy is 0 or 1 for H.
+        if nbheavy == 0 { return 0.1125 }   // HS  [#1]
+        let nb = _mol_h_neighbor(m, k)
+        let ne = at[nb]
+        if ne == "C" { return 0.123 }        // H1  [#1][#6]
+        if ne == "N" { return 0.2142 }       // H3  [#1][#7]
+        if ne == "O" {
+            // H2 [#1]O[CX4,c] / H4 [#1]OC=[...]. Carbonyl O-H → H4.
+            if _mol_an_dbl_to_o[nb] { return 0.298 }   // H4 (acid O-H, O on C=O)
+            return -0.2677                    // H2  [#1]O[C]
+        }
+        return 0.1125                        // HS fallback
+    }
+    // ── Aromatic atoms ──
+    if ar[k] {
+        if sym == "C" {
+            if nH >= 1 { return 0.1581 }      // C18 [cH]
+            // C19..C24 — aromatic c by the non-aromatic neighbour.
+            // aromatic-c with all aromatic neighbours → C19.
+            if aromnb >= 3 { return 0.2955 }  // C19 [c](:a)(:a):a
+            // one non-aromatic substituent: classify by its element.
+            let sub = _mol_arom_c_sub(m, k)
+            if sub == "a" { return 0.2713 }   // C20 -a
+            if sub == "C" { return 0.136 }    // C21 -C
+            if sub == "N" { return 0.4619 }   // C22 -N
+            if sub == "O" { return 0.5437 }   // C23 -O
+            if sub == "S" { return 0.1893 }   // C24 -S
+            return 0.08129                    // CS fallback (C13/C25 deferred)
+        }
+        if sym == "N" { return -0.3239 }      // N11 [n+0]
+        if sym == "O" { return 0.1552 }       // O1  [o]
+        if sym == "S" { return 0.6237 }       // S3  [s;a]
+        return 0.08129
+    }
+    // ── Aliphatic carbon ──
+    if sym == "C" {
+        // sp3 (only single bonds to heavy atoms).
+        if maxbo <= 1 {
+            // adjacent to a heteroatom?
+            if nbhet >= 1 {
+                // count C/H to disambiguate C3 (CH3/CH2) vs C4 (CH/CH0).
+                if nH >= 2 { return -0.2035 }   // C3
+                return -0.2051                  // C4
+            }
+            // adjacent to an aromatic atom (CH3-c family) — C8.
+            if aromnb >= 1 && nH >= 3 { return 0.08452 }  // C8 [CH3]c
+            // plain sp3 C bonded only to C/H.
+            // C1 = CH4/CH3/CH2 (>=2 H); C2 = CH/C (<=1 H).
+            if nH >= 2 { return 0.1441 }        // C1
+            return 0.0                          // C2
+        }
+        // sp2 (a double bond present).
+        if maxbo == 2 {
+            if _mol_an_dbl_to_nonc[k] { return -0.2783 }  // C5 [C]=[!C]
+            return 0.1551                       // C6 [C]=C
+        }
+        // sp (triple bond).
+        if maxbo == 3 { return 0.0017 }         // C7 [CX2]#*
+        return 0.08129                          // CS fallback
+    }
+    // ── Aliphatic nitrogen (neutral amine subset) ──
+    if sym == "N" {
+        if maxbo <= 1 {
+            if nH == 2 { return -1.019 }        // N1 [NH2+0][A]
+            if nH == 1 { return -0.7096 }       // N2 [NH+0]([A])[A]
+            if nH == 0 { return -0.3187 }       // N7 [N+0]([A])([A])[A]
+        }
+        return -0.4806                          // NS fallback (imine/nitrile deferred)
+    }
+    // ── Aliphatic oxygen ──
+    if sym == "O" {
+        if maxbo == 2 {
+            // carbonyl O — O9 (=O on aldehyde/ketone) vs O10 deferred.
+            return -0.1526                      // O9 [O]=C
+        }
+        if nH >= 1 { return -0.2893 }           // O2 [OH]
+        if nbheavy >= 2 { return -0.0684 }      // O3 ether [O]([A])[A]
+        return -0.1188                          // OS fallback
+    }
+    // ── Halogens (neutral) ──
+    if sym == "F" { return 0.4202 }
+    if sym == "Cl" { return 0.6895 }
+    if sym == "Br" { return 0.8456 }
+    if sym == "I" { return 0.8857 }
+    // ── Aliphatic sulfur ──
+    if sym == "S" {
+        if _mol_an_dbl_to_nonc[k] { return -0.0024 }  // S2 [S]=[N,O,P,S]
+        return 0.6482                           // S1 [S;A]
+    }
+    return 0.0
+}
+
+// Find the (single) heavy neighbour index of an H atom k.
+fn _mol_h_neighbor(m: Mol, k: int) -> int {
+    let bonds = m.bonds
+    let mut bi = 0
+    while bi < len(bonds) {
+        let bd = bonds[bi]
+        if bd[0] == k { return bd[1] }
+        if bd[1] == k { return bd[0] }
+        bi = bi + 1
+    }
+    return -1
+}
+
+// For an aromatic carbon k with a non-aromatic substituent, return the
+// substituent class: "a" (non-arom heavy atom flagged aromatic in a
+// fused ring → treated via aromnb), "C"/"N"/"O"/"S", or "" if none.
+fn _mol_arom_c_sub(m: Mol, k: int) -> string {
+    let at = m.atoms
+    let ar = m.arom
+    let bonds = m.bonds
+    let mut bi = 0
+    while bi < len(bonds) {
+        let bd = bonds[bi]
+        let mut nb = -1
+        if bd[0] == k { nb = bd[1] }
+        else if bd[1] == k { nb = bd[0] }
+        if nb >= 0 {
+            let e = at[nb]
+            if e != "H" && !ar[nb] {
+                if e == "C" { return "C" }
+                if e == "N" { return "N" }
+                if e == "O" { return "O" }
+                if e == "S" { return "S" }
+            }
+        }
+        bi = bi + 1
+    }
+    return "a"
+}
+
+// Wildman-Crippen logP — sum of per-atom contributions over the
+// EXPLICIT-atom Mol (all H must be explicit atoms). Published table:
+// Wildman & Crippen 1999, JCICS 39:868 (verbatim, see header above).
+// Atom types outside the supported subset fall to the element
+// fallback (CS/HS/NS/OS) — NO increment is fabricated.
+pub fn mol_logp(m: Mol) -> float {
+    _mol_analyze(m)
+    let at = m.atoms
+    let n = len(at)
+    let mut s = 0.0
+    let mut k = 0
+    while k < n {
+        let inc = _mol_crippen_inc(m, k)
+        s = s + inc
+        k = k + 1
+    }
+    return s
+}
+
+// Ertl TPSA fragment contribution for nitrogen/oxygen atom k. Returns
+// the verbatim Table-1 value (Ertl 2000, JMC 43:3714) for the matched
+// N/O fragment; 0.0 for atoms outside the N/O supported subset.
+fn _mol_tpsa_inc(m: Mol, k: int) -> float {
+    let at = m.atoms
+    let sym = at[k]
+    let ar = m.arom
+    let nH = _mol_an_nH[k]
+    let maxbo = _mol_an_maxbo[k]
+    let nbheavy = _mol_an_nbheavy[k]
+    // ── Aromatic N/O (Ertl lowercase rows) ──
+    if ar[k] {
+        if sym == "N" {
+            if nH == 1 { return 15.79 }       // [nH](:*):*
+            return 12.89                       // [n](:*):*
+        }
+        if sym == "O" { return 13.14 }         // [o](:*):*
+        return 0.0
+    }
+    // ── Aliphatic nitrogen ──
+    if sym == "N" {
+        // triple bond → [N]#*  23.79
+        if maxbo == 3 { return 23.79 }
+        // double bond present.
+        if maxbo == 2 {
+            if nH == 0 { return 12.36 }        // [N](-*)=*
+            return 23.85                       // [NH]=*
+        }
+        // all single bonds → amine by H count.
+        if nH == 0 { return 3.24 }             // [N](-*)(-*)-*
+        if nH == 1 { return 12.03 }            // [NH](-*)-*
+        if nH == 2 { return 26.02 }            // [NH2]-*
+        return 0.0
+    }
+    // ── Aliphatic oxygen ──
+    if sym == "O" {
+        if maxbo == 2 { return 17.07 }         // [O]=*
+        if nH >= 1 { return 20.23 }            // [OH]-*
+        if nbheavy >= 2 { return 9.23 }        // [O](-*)-*
+        return 0.0
+    }
+    return 0.0
+}
+
+// Ertl Topological Polar Surface Area — sum of per-fragment N/O
+// surface contributions over the EXPLICIT-atom Mol. Published table:
+// Ertl 2000, JMC 43:3714 Table 1 (verbatim, see header above).
+// S/P fragment typing is DEFERRED (Stage-2.6 honest scope) — those
+// atoms contribute 0; no increment is fabricated.
+pub fn mol_tpsa(m: Mol) -> float {
+    _mol_analyze(m)
+    let at = m.atoms
+    let n = len(at)
+    let mut s = 0.0
+    let mut k = 0
+    while k < n {
+        let e = at[k]
+        if e == "N" || e == "O" {
+            s = s + _mol_tpsa_inc(m, k)
+        }
+        k = k + 1
+    }
+    return s
+}
+
 pub fn mol_status() -> str {
-    return "STAGE-1 — Mol container + mol_new/num_atoms/num_bonds/charge/atoms (absorbs: rdkit; SMILES parser + descriptors Stage-2)"
+    return "STAGE-2.6 — Stage-1 + mol_from_smiles (hoisted cmt parser) + mol_weight/mol_hba/mol_hbd + mol_logp (Wildman-Crippen 1999) + mol_tpsa (Ertl 2000) graph descriptors (absorbs: rdkit)"
 }

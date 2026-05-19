@@ -36,14 +36,17 @@
 //   90 measurement gate not satisfied (no "absorbed" claim — rfc_001 §8)
 //   91 unreachable / config missing / TBD body reached
 
-// Only anynet is imported — the dispatcher routes `topology` into
-// anynet_load; sweep / wire-delay / oracle / measure are GATE-style
-// (exit 90/91, no module call) until rfc_001 §8 GREEN, so importing
-// sweep/leighton/iq_router/traffic/wire_delay here is unnecessary
-// (and currently triggers the hexa-compiler enum bug noted in
-// rfc_003 — RegionShape/TrafficKind undeclared). They get wired in
-// per-module as each Phase B/C/D body lands.
+// anynet + leighton imported. The hexa-compiler enum bug (rfc_003 —
+// RegionShape undeclared) is fixed (codegen_c2 `_is_enum_name`,
+// hexa-lang 8ff19d2a) and the native binary promoted, so leighton's
+// RegionShape enum compiles here. sweep / traffic / wire_delay wire
+// in as cmd_sweep / cmd_measure bodies land (rfc_003 Phase B/E/F).
 use "stdlib/booksim/anynet"
+use "stdlib/booksim/leighton"
+use "stdlib/booksim/wire_delay"
+use "stdlib/booksim/iq_router"
+use "stdlib/booksim/traffic"
+use "stdlib/booksim/sweep"
 
 let VERSION = "0.0.1"
 
@@ -117,9 +120,50 @@ fn cmd_topology(argv: [str]) -> int {
 // sweep / wire-delay / oracle — bodies pending rfc_001 §8 GREEN
 // (rfc_003 Phase B/C/D). Honest exit 91: TBD body reached, NOT a
 // silent skip (@F f4). No "absorbed" claim.
+// `booksim sweep` — the §B injection-rate sweep on the committed
+// 8x8 mesh / uniform / 22 nm reference (sweep.hexa fn main pipeline:
+// anynet_mesh_8x8_d4_text → wire_delay(22nm) → SweepConfig →
+// sweep_curve).
 fn cmd_sweep(argv: [str]) -> int {
-    println("booksim sweep: pending rfc_001 §8 GREEN (rfc_003 Phase B) — unreachable.")
-    return 91
+    let topo = anynet_parse(anynet_mesh_8x8_d4_text())
+    let p22 = wire_delay_profile_lookup("22nm")
+    let mut links: [WireLink] = []
+    let mut ei = 0
+    while ei < len(topo.edges) {
+        links = links.push(WireLink {
+            src_router: topo.edges[ei].src,
+            dst_router: topo.edges[ei].dst,
+            length_mm:  2.5
+        })
+        ei = ei + 1
+    }
+    let ll = wire_delay_apply(p22, links)
+    let topo_wd = wire_delay_into_anynet(topo, ll)
+    let cfg = SweepConfig {
+        topology:   topo_wd,
+        router_cfg: iq_router_default_config(),
+        traffic: TrafficSpec {
+            kind: TrafficKind.UNIFORM, k: 8, n: 2, xr: 1, seed: 1
+        },
+        packet_size:    20,
+        sample_period:  4000,
+        warmup_periods: 2,
+        max_samples:    4,
+        seed:           1,
+    }
+    let rates: [float] = [
+        0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50
+    ]
+    let curve = sweep_curve(cfg, rates)
+    if curve.ok != 1 {
+        println("booksim sweep: sweep_curve failed — " + curve.message)
+        return 2
+    }
+    println("booksim sweep — 8x8 mesh · uniform · 22nm wire-delay:")
+    println("  points=" + str(len(curve.points))
+        + " zero_load_lat=" + str(curve.zero_load_lat)
+        + " knee_rate=" + str(curve.knee_rate))
+    return 0
 }
 
 fn cmd_wire_delay(argv: [str]) -> int {
@@ -127,9 +171,28 @@ fn cmd_wire_delay(argv: [str]) -> int {
     return 91
 }
 
+// `booksim oracle` — Leighton analytic lower bounds for the
+// committed-record 8x8 (n=64) reference: d4 mesh + d6 hex. These
+// are the no-over-claim cross-floor any measured F1F2 record must
+// satisfy (rfc_001 §7.3 / leighton.hexa oracle_check, g3).
 fn cmd_oracle(argv: [str]) -> int {
-    println("booksim oracle: pending rfc_001 §8 GREEN (rfc_003 Phase D) — unreachable.")
-    return 91
+    let d4 = LeightonInput {
+        degree: 4, n_nodes: 64,
+        region: RegionShape.K_BY_K, region_param: 8
+    }
+    let d6 = LeightonInput {
+        degree: 6, n_nodes: 64,
+        region: RegionShape.HEX_AXIAL_R, region_param: 8
+    }
+    let b4 = leighton_bounds(d4)
+    let b6 = leighton_bounds(d6)
+    println("booksim oracle — Leighton analytic bounds (8x8, n=64):")
+    println("  d4 mesh: bisection_lower=" + str(b4.bisection_lower)
+        + " diameter_lower=" + str(b4.diameter_lower))
+    println("  d6 hex : bisection_lower=" + str(b6.bisection_lower)
+        + " diameter_lower=" + str(b6.diameter_lower))
+    println("  cite: " + b4.derivation_cite)
+    return 0
 }
 
 // `booksim measure` — gate 90 until rfc_001 §8 closes. Emitting an
@@ -195,12 +258,12 @@ fn main() {
         println("FAIL measure_gate90"); fails = fails + 1
     }
     total = total + 1
-    if cmd_booksim(["x", "booksim", "sweep"]) != 91 {
-        println("FAIL sweep_unreach91"); fails = fails + 1
+    if cmd_booksim(["x", "booksim", "sweep"]) != 0 {
+        println("FAIL sweep_exit0"); fails = fails + 1
     }
     total = total + 1
-    if cmd_booksim(["x", "booksim", "oracle"]) != 91 {
-        println("FAIL oracle_unreach91"); fails = fails + 1
+    if cmd_booksim(["x", "booksim", "oracle"]) != 0 {
+        println("FAIL oracle_exit0"); fails = fails + 1
     }
 
     if fails > 0 {

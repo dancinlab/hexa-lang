@@ -6,50 +6,88 @@
 // energy / forces / magnetic moments — for hexa-matter's NOVEL candidate
 // deepening pipeline.
 //
-// Status: STAGE-1 — MlffResult container + constructor + pure-stdlib
-// accessors landed. Stage-2 (the actual NNP inference graphs on stdlib
-// `grad` with pre-trained weights) still pending; mlff_load / predict /
-// relax bodies are inherently Stage-2.
+// ── Status: STAGE-1 + INTERIM PYTHON BRIDGE (T4) ────────────────────
+//   Stage 1 (DONE): MlffResult container + mlff_result_new + accessors
+//     (pure-stdlib value surface).
+//   T4 INTERIM BRIDGE (this revision): mlff_load / mlff_predict /
+//     mlff_relax are SHELL-OUT bridges to the real Python universal
+//     force-field packages (`chgnet`, `mace-torch`, `matgl`, `alignn`,
+//     `schnetpack`). The bridge `exec`s python3, drives the genuine NNP
+//     forward pass / relaxation, and parses energy / forces / magmoms
+//     out of stdout into a real MlffResult.
+//   Stage 2 (FUTURE — replaces this bridge): the NNP inference graphs
+//     run hexa-native on stdlib `grad` (autograd + nn); pre-trained
+//     weights via `safetensors`; message-passing GNN kernels get
+//     hexa-native impls. That is a multi-month T5 effort — until then
+//     this INTERIM bridge makes mlff USABLE NOW.
 //
-// ── Migration plan ──────────────────────────────────────────────────
-//   Stage 1 (DONE here): MlffResult struct + mlff_result_new +
-//     mlff_e_per_atom + mlff_forces + mlff_magmoms + mlff_relaxed —
-//     the result surface hexa-matter `universal_ff_runner.py` and the
-//     per-model adapters consume. Inference itself is Stage-2.
-//   Stage 2 (dependency hexa-native port): the NNP inference graphs run
-//     on stdlib `grad` (autograd + nn); pre-trained weights via
-//     `safetensors`; message-passing GNN kernels get hexa-native impls.
+// ── Honesty (g3 — CRITICAL) ─────────────────────────────────────────
+//   NNP outputs are PREDICTIONS, never measurements. Every MlffResult
+//   produced here carries a `source` provenance tag:
+//     "SIM-NNP-BRIDGE:<model>"  — a genuine Python NNP forward pass ran.
+//     "SKIP:<reason>"           — the Python package was NOT reachable
+//                                 on this host; NO energy was computed.
+//   In SKIP mode e_per_atom is the sentinel `_MLFF_SKIP_SENTINEL`
+//   (NaN-like flag value) and forces / magmoms are empty — the bridge
+//   NEVER fabricates an energy. Callers MUST check `mlff_ok(r)` (or the
+//   `source` prefix) before trusting any number.
 //
 // ── Public API ──────────────────────────────────────────────────────
-//   pub struct MlffResult   — e_per_atom : float, forces : [[float;3]],
-//                             magmoms : [float], relaxed : any (Structure)
+//   pub struct MlffResult   — e_per_atom, forces, magmoms, relaxed,
+//                             source (provenance), bridge_status
 //   pub fn mlff_result_new(e_per_atom, forces, magmoms, relaxed)
+//   pub fn mlff_result_full(e_per_atom, forces, magmoms, relaxed,
+//                           source, bridge_status)
 //   pub fn mlff_e_per_atom(r) -> float
 //   pub fn mlff_forces(r) -> [[float;3]]
 //   pub fn mlff_magmoms(r) -> [float]
 //   pub fn mlff_relaxed(r) -> any
-//   pub fn mlff_load(model) -> ...        (Stage 2 — NNP weights)
-//   pub fn mlff_predict(model, structure) -> MlffResult   (Stage 2)
-//   pub fn mlff_relax(model, structure)   -> MlffResult   (Stage 2)
+//   pub fn mlff_source(r) -> str          (provenance tag)
+//   pub fn mlff_bridge_status(r) -> str   ("RUN" | "SKIP" | "ERROR")
+//   pub fn mlff_ok(r) -> bool             (true iff a real NNP ran)
+//   pub fn mlff_load(model) -> str        (validate + probe reachability)
+//   pub fn mlff_predict(model, structure) -> MlffResult
+//   pub fn mlff_relax(model, structure)   -> MlffResult
 //
 // ── Dependencies (hexa stdlib) ──────────────────────────────────────
-//   (Stage 1 dependency-free — value container only. grad/ tensor/
-//    safetensors/ crystal/ atoms/ enter at Stage 2.)
+//   stdlib/crystal/mod.hexa — the Structure type the bridge serialises.
+//   `exec` builtin — the shell-out to python3 (INTERIM bridge only;
+//   Stage-2 drops this for stdlib grad/safetensors).
 //
 // Absorbs: chgnet, mace, m3gnet/matgl, alignn, schnetpack
 // Used by: hexa-matter   Sibling: crystal, atoms, grad
-// Honesty: NNP outputs are PREDICTIONS (SIM-NNP), never measurements.
+// Honesty: NNP outputs are PREDICTIONS (SIM-NNP-BRIDGE), never measurements.
 // Cross-link: .roadmap.stdlib (science-stack subdomains)
 
+import "stdlib/crystal/mod.hexa"
+
+// Sentinel e_per_atom for SKIP mode. -987654.0 is an obviously-bogus
+// value: no real per-atom energy is ever this large/negative — a caller
+// that forgets `mlff_ok()` still gets a glaringly wrong number, not a
+// plausible fabricated one.
+let _MLFF_SKIP_SENTINEL = -987654.0
+
 pub struct MlffResult {
-    e_per_atom: any, // float        — predicted energy per atom (eV)
-    forces: any,     // [[float;3]]  — per-atom force vectors (eV/Å)
-    magmoms: any,    // [float]      — per-atom magnetic moments (μB)
-    relaxed: any     // Structure    — relaxed structure (or input)
+    e_per_atom: any,    // float        — predicted energy per atom (eV)
+    forces: any,        // [[float;3]]  — per-atom force vectors (eV/Å)
+    magmoms: any,       // [float]      — per-atom magnetic moments (μB)
+    relaxed: any,       // Structure    — relaxed structure (or input)
+    source: any,        // str          — provenance: SIM-NNP-BRIDGE:<m> | SKIP:... | ERROR:...
+    bridge_status: any  // str          — "RUN" | "SKIP" | "ERROR"
 }
 
+// Stage-1 compat constructor — tags the result as a hand-built value
+// (no NNP ran). Kept for callers that build a MlffResult directly.
 pub fn mlff_result_new(e_per_atom: any, forces: any, magmoms: any, relaxed: any) -> MlffResult {
-    return MlffResult { e_per_atom: e_per_atom, forces: forces, magmoms: magmoms, relaxed: relaxed }
+    return MlffResult { e_per_atom: e_per_atom, forces: forces, magmoms: magmoms,
+                        relaxed: relaxed, source: "MANUAL", bridge_status: "RUN" }
+}
+
+// Full constructor — used by the bridge to attach provenance.
+pub fn mlff_result_full(e_per_atom: any, forces: any, magmoms: any, relaxed: any,
+                        source: any, bridge_status: any) -> MlffResult {
+    return MlffResult { e_per_atom: e_per_atom, forces: forces, magmoms: magmoms,
+                        relaxed: relaxed, source: source, bridge_status: bridge_status }
 }
 
 pub fn mlff_e_per_atom(r: MlffResult) -> float {
@@ -68,6 +106,359 @@ pub fn mlff_relaxed(r: MlffResult) -> any {
     return r.relaxed
 }
 
+pub fn mlff_source(r: MlffResult) -> str {
+    return r.source
+}
+
+pub fn mlff_bridge_status(r: MlffResult) -> str {
+    return r.bridge_status
+}
+
+// True iff a genuine NNP forward pass produced this result. SKIP / ERROR
+// results return false — callers MUST gate on this before trusting numbers.
+pub fn mlff_ok(r: MlffResult) -> bool {
+    return r.bridge_status == "RUN"
+}
+
+// ── Model registry ──────────────────────────────────────────────────
+// Returns the importable python package name for a model, or "" if the
+// model name is not one of the five supported universal-FFs.
+fn _mlff_package(model: str) -> str {
+    if model == "chgnet" { return "chgnet" }
+    if model == "mace"   { return "mace" }
+    if model == "m3gnet" { return "matgl" }
+    if model == "alignn" { return "alignn" }
+    if model == "schnet" { return "schnetpack" }
+    return ""
+}
+
+// True iff `model` is a supported universal-FF name.
+fn _mlff_known(model: str) -> bool {
+    let pkg = _mlff_package(model)
+    return pkg != ""
+}
+
+// ── Reachability probe ──────────────────────────────────────────────
+// `exec`s python3 to test whether the model's package is importable on
+// this host. Returns "OK", "NOPY" (python3 absent), or "NOPKG".
+fn _mlff_probe(model: str) -> str {
+    let havepy = exec("command -v python3 >/dev/null 2>&1 && echo Y || echo N").trim()
+    if havepy != "Y" { return "NOPY" }
+    let pkg = _mlff_package(model)
+    let cmd = "python3 -c 'import " + pkg + "' >/dev/null 2>&1 && echo OK || echo NOPKG"
+    let res = exec(cmd).trim()
+    if res == "OK" { return "OK" }
+    return "NOPKG"
+}
+
+// ── mlff_load ───────────────────────────────────────────────────────
+// Validate the model name and probe the python package reachability.
+// Returns a handle string the caller can pass back / inspect:
+//   "mlff:<model>:READY"   — package reachable; predict/relax will RUN.
+//   "mlff:<model>:SKIP"    — package not installed; predict/relax SKIP.
+//   "mlff:<model>:ERROR"   — unknown model name.
+pub fn mlff_load(model: str) -> str {
+    if _mlff_known(model) == false {
+        return "mlff:" + model + ":ERROR (unknown model — expected chgnet|mace|m3gnet|alignn|schnet)"
+    }
+    let probe = _mlff_probe(model)
+    if probe == "OK" {
+        return "mlff:" + model + ":READY"
+    }
+    if probe == "NOPY" {
+        return "mlff:" + model + ":SKIP (python3 not on PATH)"
+    }
+    return "mlff:" + model + ":SKIP (package " + _mlff_package(model) + " not installed)"
+}
+
+// ── Structure serialisation ─────────────────────────────────────────
+// Serialise a crystal.Structure to a tiny JSON file the python driver
+// reads. Layout: {"matrix": [[..],[..],[..]], "species": [..],
+// "frac_coords": [[..],..]}. Written via `exec` heredoc.
+fn _mlff_num_json(xs: any) -> str {
+    let mut s = "["
+    let n = len(xs)
+    let mut i = 0
+    while i < n {
+        if i > 0 { s = s + "," }
+        s = s + str(xs[i])
+        i = i + 1
+    }
+    return s + "]"
+}
+
+fn _mlff_vec3_json(rows: any) -> str {
+    let mut s = "["
+    let n = len(rows)
+    let mut i = 0
+    while i < n {
+        if i > 0 { s = s + "," }
+        s = s + _mlff_num_json(rows[i])
+        i = i + 1
+    }
+    return s + "]"
+}
+
+fn _mlff_str_json(xs: any) -> str {
+    let mut s = "["
+    let n = len(xs)
+    let mut i = 0
+    while i < n {
+        if i > 0 { s = s + "," }
+        s = s + "\"" + str(xs[i]) + "\""
+        i = i + 1
+    }
+    return s + "]"
+}
+
+fn _mlff_serialise(structure: Structure, path: str) {
+    let lat = structure.lattice
+    let mat_json = _mlff_vec3_json(lat.matrix)
+    let sp_json = _mlff_str_json(structure.species)
+    let fc_json = _mlff_vec3_json(structure.frac_coords)
+    let body = "{\"matrix\":" + mat_json + ",\"species\":" + sp_json
+    let body2 = body + ",\"frac_coords\":" + fc_json + "}"
+    let _w = exec("cat > " + path + " <<'MLFFEOF'\n" + body2 + "\nMLFFEOF\n")
+}
+
+// ── Python driver ───────────────────────────────────────────────────
+// The driver is a self-contained python program written to a temp file,
+// then `exec`d. It builds an ASE Atoms / pymatgen Structure from the
+// serialised JSON, runs the GENUINE universal-FF forward pass (or
+// relaxation), and prints a single delimited line:
+//   __MLFF_BRIDGE__|<status>|<e_per_atom>|<f0x,f0y,f0z;f1x,..>|<m0,m1,..>
+// status is RUN or SKIP. On SKIP no numbers are emitted.
+//
+// The driver shells the SAME packages the hexa-matter universal_ff
+// adapters wrap (chgnet / mace-torch / matgl / alignn / schnetpack).
+fn _mlff_driver_src() -> str {
+    let mut p = ""
+    p = p + "import sys, json\n"
+    p = p + "model = sys.argv[1]\n"
+    p = p + "spath = sys.argv[2]\n"
+    p = p + "mode  = sys.argv[3]\n"
+    p = p + "SENT = '__MLFF_BRIDGE__'\n"
+    p = p + "def emit_skip(reason):\n"
+    p = p + "    print(SENT + '|SKIP|' + reason); sys.exit(0)\n"
+    p = p + "def emit_run(epa, forces, magmoms):\n"
+    p = p + "    fstr = ';'.join(','.join(repr(float(c)) for c in row) for row in forces)\n"
+    p = p + "    mstr = ','.join(repr(float(m)) for m in magmoms)\n"
+    p = p + "    print(SENT + '|RUN|' + repr(float(epa)) + '|' + fstr + '|' + mstr)\n"
+    p = p + "    sys.exit(0)\n"
+    p = p + "try:\n"
+    p = p + "    rec = json.load(open(spath))\n"
+    p = p + "except Exception as e:\n"
+    p = p + "    emit_skip('structure-json-unreadable:' + e.__class__.__name__)\n"
+    p = p + "matrix = rec['matrix']; species = rec['species']; frac = rec['frac_coords']\n"
+    // ASE Atoms is the lingua franca for chgnet / mace / matgl calculators.
+    p = p + "try:\n"
+    p = p + "    from ase import Atoms\n"
+    p = p + "except Exception:\n"
+    p = p + "    emit_skip('ase not installed (required to build the structure)')\n"
+    p = p + "atoms = Atoms(symbols=species, scaled_positions=frac, cell=matrix, pbc=True)\n"
+    p = p + "nat = len(atoms)\n"
+    // ── CHGNet ──
+    p = p + "if model == 'chgnet':\n"
+    p = p + "    try:\n"
+    p = p + "        from chgnet.model import CHGNet, StructOptimizer\n"
+    p = p + "        from pymatgen.io.ase import AseAtomsAdaptor\n"
+    p = p + "    except Exception:\n"
+    p = p + "        emit_skip('chgnet/pymatgen not installed')\n"
+    p = p + "    pmg = AseAtomsAdaptor.get_structure(atoms)\n"
+    p = p + "    if mode == 'relax':\n"
+    p = p + "        opt = StructOptimizer()\n"
+    p = p + "        out = opt.relax(pmg)\n"
+    p = p + "        pred = out['trajectory'].__dict__\n"
+    p = p + "        net = CHGNet.load()\n"
+    p = p + "        pr = net.predict_structure(out['final_structure'])\n"
+    p = p + "    else:\n"
+    p = p + "        net = CHGNet.load()\n"
+    p = p + "        pr = net.predict_structure(pmg)\n"
+    p = p + "    epa = float(pr['e'])\n"
+    p = p + "    forces = [list(map(float, f)) for f in pr['f']]\n"
+    p = p + "    magmoms = [float(m) for m in pr.get('m', [0.0]*nat)]\n"
+    p = p + "    emit_run(epa, forces, magmoms)\n"
+    // ── MACE (mace-mp foundation model) ──
+    p = p + "if model == 'mace':\n"
+    p = p + "    try:\n"
+    p = p + "        from mace.calculators import mace_mp\n"
+    p = p + "    except Exception:\n"
+    p = p + "        emit_skip('mace-torch not installed')\n"
+    p = p + "    calc = mace_mp(model='small', dispersion=False, default_dtype='float64')\n"
+    p = p + "    atoms.calc = calc\n"
+    p = p + "    if mode == 'relax':\n"
+    p = p + "        from ase.optimize import BFGS\n"
+    p = p + "        BFGS(atoms, logfile=None).run(fmax=0.05, steps=200)\n"
+    p = p + "    e = atoms.get_potential_energy()\n"
+    p = p + "    forces = [list(map(float, f)) for f in atoms.get_forces()]\n"
+    p = p + "    emit_run(e/nat, forces, [0.0]*nat)\n"
+    // ── M3GNet (via matgl) ──
+    p = p + "if model == 'm3gnet':\n"
+    p = p + "    try:\n"
+    p = p + "        import matgl\n"
+    p = p + "        from matgl.ext.ase import PESCalculator\n"
+    p = p + "    except Exception:\n"
+    p = p + "        emit_skip('matgl not installed')\n"
+    p = p + "    pot = matgl.load_model('M3GNet-MP-2021.2.8-PES')\n"
+    p = p + "    atoms.calc = PESCalculator(pot)\n"
+    p = p + "    if mode == 'relax':\n"
+    p = p + "        from ase.optimize import FIRE\n"
+    p = p + "        FIRE(atoms, logfile=None).run(fmax=0.05, steps=200)\n"
+    p = p + "    e = atoms.get_potential_energy()\n"
+    p = p + "    forces = [list(map(float, f)) for f in atoms.get_forces()]\n"
+    p = p + "    emit_run(e/nat, forces, [0.0]*nat)\n"
+    // ── ALIGNN-FF ──
+    p = p + "if model == 'alignn':\n"
+    p = p + "    try:\n"
+    p = p + "        from alignn.ff.ff import AlignnAtomwiseCalculator, default_path\n"
+    p = p + "    except Exception:\n"
+    p = p + "        emit_skip('alignn not installed')\n"
+    p = p + "    calc = AlignnAtomwiseCalculator(path=default_path())\n"
+    p = p + "    atoms.calc = calc\n"
+    p = p + "    if mode == 'relax':\n"
+    p = p + "        from ase.optimize import FIRE\n"
+    p = p + "        FIRE(atoms, logfile=None).run(fmax=0.05, steps=200)\n"
+    p = p + "    e = atoms.get_potential_energy()\n"
+    p = p + "    forces = [list(map(float, f)) for f in atoms.get_forces()]\n"
+    p = p + "    emit_run(e/nat, forces, [0.0]*nat)\n"
+    // ── SchNet (schnetpack — molecular; needs a trained model file) ──
+    p = p + "if model == 'schnet':\n"
+    p = p + "    try:\n"
+    p = p + "        import schnetpack\n"
+    p = p + "    except Exception:\n"
+    p = p + "        emit_skip('schnetpack not installed')\n"
+    p = p + "    emit_skip('schnet needs a task-specific trained model file; '\n"
+    p = p + "              'no universal foundation checkpoint — supply one for a live run')\n"
+    p = p + "emit_skip('unknown model: ' + model)\n"
+    return p
+}
+
+// Run the python NNP driver for `model` / `structure` in `mode`
+// ("predict" | "relax"). Parses the delimited stdout line and returns a
+// real MlffResult. SKIP / ERROR are flagged honestly — no fabrication.
+fn _mlff_run(model: str, structure: Structure, mode: str) -> MlffResult {
+    if _mlff_known(model) == false {
+        let er = "ERROR:unknown-model:" + model
+        return mlff_result_full(_MLFF_SKIP_SENTINEL, [], [], structure, er, "ERROR")
+    }
+    let probe = _mlff_probe(model)
+    if probe == "NOPY" {
+        let sr = "SKIP:python3-not-on-PATH"
+        return mlff_result_full(_MLFF_SKIP_SENTINEL, [], [], structure, sr, "SKIP")
+    }
+    if probe == "NOPKG" {
+        let sr2 = "SKIP:" + _mlff_package(model) + "-not-installed"
+        return mlff_result_full(_MLFF_SKIP_SENTINEL, [], [], structure, sr2, "SKIP")
+    }
+    // Package reachable — write driver + structure, exec the genuine NNP.
+    let drvpath = "/tmp/_mlff_driver.py"
+    let _wd = exec("cat > " + drvpath + " <<'MLFFDRVEOF'\n" + _mlff_driver_src() + "MLFFDRVEOF\n")
+    let stpath = "/tmp/_mlff_structure.json"
+    _mlff_serialise(structure, stpath)
+    let cmd = "python3 " + drvpath + " " + model + " " + stpath + " " + mode + " 2>/dev/null"
+    let raw = exec(cmd).trim()
+    return _mlff_parse(raw, model, structure)
+}
+
+// Parse the driver's delimited stdout. The driver may also print model
+// banner lines; we scan for the line beginning with the sentinel.
+fn _mlff_parse(raw: str, model: str, structure: Structure) -> MlffResult {
+    let lines = raw.split("\n")
+    let nlines = len(lines)
+    let mut hit = ""
+    let mut i = 0
+    while i < nlines {
+        let ln = lines[i].trim()
+        if ln.starts_with("__MLFF_BRIDGE__|") {
+            hit = ln
+        }
+        i = i + 1
+    }
+    if hit == "" {
+        let er = "ERROR:no-bridge-output (python driver produced no __MLFF_BRIDGE__ line)"
+        return mlff_result_full(_MLFF_SKIP_SENTINEL, [], [], structure, er, "ERROR")
+    }
+    let parts = hit.split("|")
+    let status = parts[1]
+    if status == "SKIP" {
+        let reason = parts[2]
+        let sr = "SKIP:" + reason
+        return mlff_result_full(_MLFF_SKIP_SENTINEL, [], [], structure, sr, "SKIP")
+    }
+    if status != "RUN" {
+        let er2 = "ERROR:bad-status:" + status
+        return mlff_result_full(_MLFF_SKIP_SENTINEL, [], [], structure, er2, "ERROR")
+    }
+    // RUN: parts = [SENT, RUN, e_per_atom, forces, magmoms]
+    let epa = _mlff_to_float(parts[2])
+    let forces = _mlff_parse_forces(parts[3])
+    let magmoms = _mlff_parse_floats(parts[4])
+    let src = "SIM-NNP-BRIDGE:" + model
+    return mlff_result_full(epa, forces, magmoms, structure, src, "RUN")
+}
+
+// String → float. The driver emits python `repr(float(...))` so the
+// runtime float parser handles it. `to_float` is the hexa builtin.
+fn _mlff_to_float(s: str) -> float {
+    return to_float(s.trim())
+}
+
+// Parse "f0x,f0y,f0z;f1x,f1y,f1z;..." into [[float;3]].
+fn _mlff_parse_forces(s: str) -> any {
+    let mut out = []
+    if s == "" { return out }
+    let rows = s.split(";")
+    let nr = len(rows)
+    let mut i = 0
+    while i < nr {
+        let cells = rows[i].split(",")
+        if len(cells) == 3 {
+            let fx = _mlff_to_float(cells[0])
+            let fy = _mlff_to_float(cells[1])
+            let fz = _mlff_to_float(cells[2])
+            out.push([fx, fy, fz])
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Parse "m0,m1,m2,..." into [float].
+fn _mlff_parse_floats(s: str) -> any {
+    let mut out = []
+    if s == "" { return out }
+    let cells = s.split(",")
+    let nc = len(cells)
+    let mut i = 0
+    while i < nc {
+        let c = cells[i].trim()
+        if c != "" {
+            out.push(_mlff_to_float(c))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ── mlff_predict ────────────────────────────────────────────────────
+// Genuine universal-FF energy / force / magmom prediction via the
+// INTERIM python bridge. Returns a real MlffResult tagged
+// `SIM-NNP-BRIDGE:<model>` on success, or a flagged SKIP MlffResult if
+// the python package is not reachable on this host.
+pub fn mlff_predict(model: str, structure: Structure) -> MlffResult {
+    return _mlff_run(model, structure, "predict")
+}
+
+// ── mlff_relax ──────────────────────────────────────────────────────
+// Genuine universal-FF structural relaxation via the INTERIM python
+// bridge. The `relaxed` field carries the INPUT structure (the bridge
+// does not yet round-trip the relaxed coordinates back into a hexa
+// Structure — Stage-2 closes that); e_per_atom / forces reflect the
+// relaxed configuration as computed by the python package.
+pub fn mlff_relax(model: str, structure: Structure) -> MlffResult {
+    return _mlff_run(model, structure, "relax")
+}
+
 pub fn mlff_status() -> str {
-    return "STAGE-1 — MlffResult container + mlff_result_new/e_per_atom/forces/magmoms/relaxed (absorbs: chgnet/mace/m3gnet/alignn/schnet; NNP inference Stage-2)"
+    return "STAGE-1 + T4 INTERIM PYTHON BRIDGE — mlff_load/predict/relax shell out to the real universal-FF packages (chgnet/mace/matgl/alignn/schnetpack) via exec(python3); honest SKIP when a package is absent; Stage-2 (stdlib grad/safetensors hexa-native NNP) replaces this bridge"
 }

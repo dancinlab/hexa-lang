@@ -1,6 +1,7 @@
 # incoming patch: builtin-vs-stdlib-symbol-collision — pthread `channel_*` globals collide with `stdlib/channel.hexa` FD-pipe API
 
 > **id**: `builtin-vs-stdlib-symbol-collision` · **opened**: 2026-05-13 KST PM · **landed**: 2026-05-13 18:00 KST PM (downstream rebuild verified) · **status**: `fixed in-session — rename thread.c globals → `thread_channel_*`. RFC update + interp-side cleanup remain (see §7).`
+> **VERIFIED-CLOSED 2026-05-19**: SSOT grep cross-verified — `self/native/thread.c` carries the `thread_channel_` rename (grep ×9). The residual "interp-side cleanup (see §7)" is now MOOT/dissolved: the interpreter is RETIRED (AGENTS.tape @D g_interp_deprecated, R7 CLOSED 2026-05-19) — `self/hexa_full.hexa` and its interp `channel_*` Val store no longer exist, so there is nothing left to clean up. Close-only marker (no source change, no fix re-run; fix already live in SSOT).
 > **trees**: `self/native/thread.c` (rename globals — DONE) · `self/hexa_full.hexa` (interp's own `fn channel_send/recv/close` for TAG_CHANNEL Val store — unchanged, no collision now) · `inbox/patches/thread-channel-primitive.md` (API rename — TODO)
 > **source**: wilson `hexa build core/main.hexa -o build/Darwin-arm64/wilson` failed at clang link on Mac Darwin-arm64
 > **observed**: 2026-05-13 17:25 KST PM · **fixed**: 17:55 KST PM

@@ -74,7 +74,11 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   char-class 스캐너 hand-roll, cross-line `\s` 케이스(hardwall·vendor)는
   ±window join 정밀 재확인으로 803/798/5·30/30/0 정확 일치.
   `.py` 원본은 fallback·재패리티용으로 **유지**(제거는 별도 결정).
-- **T3** ⏳ hexa-bio stdlib-only 이관 — **전수조사 완료 2026-05-18**:
+- **T3** ✅ **완료 2026-05-19** — hexa-bio 127/127 run_all.sh 게이트
+  hexa-native dispatch (111 `.hexa` + 15 verb-native + 1 hexa_run).
+  3 borderline 게이트만 외부 python 도구 충실 위임. 상세는 진행로그.
+  (아래는 착수 당시 전수조사 기록 — 역사 보존):
+- **T3 (history)** — **전수조사 완료 2026-05-18**:
   119 `.py` 중 **104 stdlib-only(지금 이관)** + 15 Stage-2(`_qiskit_
   bridge/module/` 전량, T4/T5). 분류:
   - `_python_bridge/module/*.py` **55/55** stdlib-only (생물물리
@@ -131,10 +135,16 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   `shasum -a 256`)이 Python 과 일치. 이게 서면 T3-json 다수 +
   `regression_audit` 해시줄 + T4 자산 동시 해금. (rfc043-hexa-torch
   브랜치, hexa atlas PR-only 규약 유의 — 직접 fold-to-live 금지.)
-- **T4** 🔒 Stage 2 — `atoms`/`crystal`/`mol`/`mlff`/`quantum` 실구현
-  (각 `mod.hexa` planned API 채움) → science-stack 의존 모듈/어댑터 해금
+- **T4** 🔄 **Stage-2 genuine 커널 완료 2026-05-19** (`rfc043-hexa-torch`)
+  — `stdlib/{atoms,crystal,mol}/mod.hexa` Stage-1+Stage-2 커널 랜딩·검증:
+  atoms{bulk,neighborlist,from_cif,emt_energy} · crystal{coords,angles,
+  N-point-hull,from_cif,spacegroup} · mol{weight,hba,hbd,from_smiles,
+  logp,tpsa}. quantum 은 기구현. upstream fix: runtime.h 17 hexa_math_*
+  + runtime.c execinfo.h. **잔여**: `atoms_emt_relax`(force+line-search,
+  bounded) · `mlff` Stage-2 NNP(=T5, 수개월) — 그동안 mlff bridge(기존
+  Python NNP 패키지 tool 셸아웃, interim)로 사용가능화 진행 중.
 - **T5** 🔒 Stage 2 잔여 — `nd`/`grad` 정밀화, `_absorption_bridge` 16,
-  hexa-bio 양자화학 (qiskit/pyscf hexa-native — 메가)
+  hexa-bio 양자화학 (qiskit/pyscf hexa-native — 메가). T4 완료 후.
 
 각 트랙은 끝나야 다음으로(T2 는 T1 패턴 의존, T4 는 T1~T3 무손실 완료 후).
 
@@ -742,3 +752,115 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   crystal structure_from_cif/spacegroup/multi-point-hull · mol
   from_smiles(hexa-bio 858L 파서 hoist)/descriptors · atoms EMT ·
   mlff(grad/safetensors 의존 = T5). 재발사 대상: crystal/mol 2-에이전트.
+- 2026-05-19 — **T4 Stage-2 직접 연속 수확 (레이트리밋 우회)**: 에이전트
+  대신 직접 바운드 커널 연속 랜딩. `fd1b297f` crystal
+  structure_from_cif(자립 최소 CIF 리더 → Structure) +
+  structure_from_spacegroup(sg=1 P1·sg=225 Fm-3m coset; 미지원 sg →
+  P1 identity, 가짜 multiplicity 0/g3). `(mol)` mol_weight/mol_hba/
+  mol_hbd(explicit-atom 그래프 descriptor; CRC 원자량표). 검증 ubu-2:
+  __SCI_STAGE1_TEST__ PASS (41/41) · __MOL_STAGE2_TEST__ PASS (14/14).
+  **Stage-2 바운드 커널 배치 완료**: atoms{bulk,neighborlist,from_cif}
+  · crystal{coords,angles,hull(binary),from_cif,spacegroup(P1/Fm-3m)}
+  · mol{weight,hba,hbd}. 잔여 = mol_from_smiles(hexa-bio 858L 파서
+  hoist — 유일 대형 genuine 커널, 전용 에이전트) · atoms EMT/crystal
+  multi-point-hull/mol Crippen-logP·Ertl-TPSA(Stage-2.5, 파라미터표
+  필요) · mlff(T5).
+- 2026-05-19 — **T4 Stage-2 genuine-kernel 배치 완료: mol_from_smiles
+  랜딩** (`f3a14a69` cherry-pick ← agent `3e23ef11`, `rfc043-hexa-
+  torch`). hexa-bio `cmt_smiles_validation.hexa`(858L, byte-parity
+  검증)의 파서 코어 verbatim hoist(`_smiles_` private prefix; reset/
+  new_atom/link_bond/ring_*/parse_bracket_atom/parse_smiles + 렉서).
+  cmt-거동 caveat 정직 보존(heavy-atom only — implicit-H 미포함이라
+  Mol.atoms 는 heavy 리스트; bond order float→int 절단, 무Kekulé;
+  실패→빈 Mol). toolchain 적응 1: 이 빌드의 array `.pop()` 이
+  shrink 안 함 → 명시적 length 카운터로 LIFO 분기 재현(로직 동일,
+  소스 주석화). 전체 회귀 ubu-2: atoms 38/38 · sci 41/41 · mol
+  14/14 · mol_smiles 22/22 (115 checks). **T4 Stage-2 genuine 커널
+  배치 완결**: atoms{bulk,neighborlist,from_cif} ·
+  crystal{coords,angles,hull,from_cif,spacegroup} ·
+  mol{weight,hba,hbd,from_smiles}. 잔여는 전부 Stage-2.5(파라미터표
+  필요: atoms EMT · crystal multi-point-hull · mol Crippen-logP/
+  Ertl-TPSA) 또는 T5-blocked(mlff = grad/safetensors). 가짜 진전
+  0 — Stage-2.5 는 NOT-IMPLEMENTED 센티넬, 수치 미조작(g3).
+- 2026-05-19 — **upstream fix + crystal Stage-2 완결**. (1) `d2c758b9`
+  `fix(runtime.h)`: hexa_math_{sin,cos,acos,sqrt,exp,pow,…17개}가
+  runtime.c:2144+ 정의됐으나 runtime.h 미선언 → AOT clang C99
+  implicit-decl 빌드실패. 동시 커밋이 일으킨 upstream regression,
+  프로토타입 추가로 해금(순수 선언, 거동 불변). (2) `82943985`
+  crystal `energy_above_hull` 을 binary tie-line → N-point lower
+  convex hull(Andrew monotone chain)로 일반화 — Stage-2.5 연기 항목
+  해소. 검증 macOS(빌드 재가동): sci 45/45 · atoms 38/38 · mol
+  14/14 · mol_smiles 22/22 (119 checks). **crystal Stage-2 완전
+  완료**(coords/angles/N-point-hull/from_cif/spacegroup). T4 Stage-2
+  genuine 커널 배치 종결. 잔여: atoms EMT · mol Crippen-logP/Ertl-
+  TPSA = Stage-2.5(published 파라미터표 전사 — 대형, fresh-context
+  에이전트 적합; 이번 세션 2회 팬아웃 시도는 API 레이트리밋 즉사) ·
+  mlff Stage-2 = T5(grad/safetensors 의존, 수개월). 빌드호스트:
+  macOS 가동(OOM 간헐) · ubu-2 toolchain 동시업데이트로 일시 파손
+  (hexa_v2 arch + runtime backtrace) · ubu-1 세션내 다운.
+- 2026-05-19 — **T4 Stage-2.5: atoms EMT energy** (`2f090990` cherry-pick
+  ← agent `52b9ed92`). ASE 3.22.1 EMT 총에너지(JSN, Surf.Sci.366 1996
+  394) hexa-native 충실 포트: 11원소 파라미터표 `[E0,s0,V0,eta2,
+  kappa,lambda,n0]` `ase/calculators/emt.py` verbatim 전사 +
+  energy/interact1 경로(rc/acut, gamma1/2 FCC[12,6,24] 합, sigma1
+  밀도, pair 보정, embedding `E0((1+λds)exp(−λds)−1)+6V0exp(−κds)`).
+  검증 anchor(published·genuine): 무이웃 원자 EMT 에너지 == −E0
+  (embedding ds→∞ 닫힌형) — Cu/Pt/Al isolated == −E0 정확 + 병진
+  불변·far-additivity·Cu₂ 대칭. macOS __ATOMS_STAGE1_TEST__ PASS
+  (46/46). `atoms_emt_relax` 는 force 함수형+line-search 필요 →
+  Stage-2.5 센티넬 유지. 빌드: ubu-2 toolchain 파손 확인(hexa cc
+  링크 실패) → macOS 빌드.
+- 2026-05-19 — **T4 Stage-2.6: mol Wildman-Crippen logP + Ertl TPSA**
+  (`05e612da`, `rfc043-hexa-torch`). mol_logp — Wildman&Crippen 1999
+  JCICS 39:868 원자기여표 verbatim(RDKit BSD-3 Crippen.txt); mol_tpsa
+  — Ertl 2000 JMC 43:3714 Table-1 fragment표 verbatim. `Mol.arom`
+  per-atom 확장 + `mol_new_arom`. 검증 anchor(published): logP
+  methane 0.6361·ethanol −0.0014·benzene 1.6866 …; TPSA methanol
+  20.23·acetic-acid 37.30·pyridine 12.89·benzene 0.0. macOS
+  __MOL_DESCRIPTOR_TEST__ PASS (19/19), 회귀 clean(mol 14/14·smiles
+  22/22). 지원 subset 명시·미지원 타입은 fallback 0/문서화(상수
+  미조작·g3). +upstream `self/runtime.c` `<execinfo.h>` 게이트 수정
+  (backtrace 이식성 — 앞서 진단한 ubu-2 빌드실패 근본원인).
+  **T4 Stage-2/2.5/2.6 genuine 커널 전부 완료**: atoms{bulk,
+  neighborlist,from_cif,emt_energy} · crystal{coords,angles,N-hull,
+  from_cif,spacegroup} · mol{weight,hba,hbd,from_smiles,logp,tpsa}.
+  잔여: atoms_emt_relax(force 함수형+line-search) · mlff Stage-2
+  (T5 = grad/safetensors, 수개월) — 둘 다 한 세션 범위 밖, 가짜
+  완료 안 함(g3).
+- 2026-05-19 — **Wave-R5 fidelity fix + mlff interim bridge**. (1) hexa-bio
+  `2af75b0`: Wave-R5 8 게이트의 case-sensitive runtime-fail 체크를 실제
+  `grep -qiE` 셸아웃으로 교체 — `.sh`의 case-insensitive 거동 byte-faithful
+  미러(#77). SKIP-path 8/8 byte-identical·py3=0. (2) hexa-lang `f69d4728`
+  mlff INTERIM bridge: `mlff_load/predict/relax`가 Structure→JSON 직렬화
+  후 python3 드라이버를 exec해 실제 universal-FF 패키지(CHGNet/MACE/matgl/
+  ALIGNN) forward/relax 구동, energy/forces/magmoms 파싱 → 실 MlffResult.
+  g3: NNP 출력 `source="SIM-NNP-BRIDGE:<model>"` 태깅; 패키지 미설치 호스트
+  는 honest SKIP(센티넬 e_per_atom, 빈 forces, 에너지 미조작). __MLFF_TEST__
+  PASS (32/32). mlff Stage-2(hexa-native NNP)가 이 bridge를 대체할 때까지
+  interim. SSOT pointer: hexa-bio AGENTS.md + hexa-matter AGENTS.tape 에
+  hexa-lang/stdlib/PLAN.md 가리키는 포인터 추가(타 프로젝트는 pointer만).
+  남은 non-months 잔여 = `atoms_emt_relax` 단 1건.
+- 2026-05-19 — **T4 non-months 잔여 종료: atoms_emt_relax** (`82a8f0b4`).
+  positions-only EMT 완화: force = `atoms_emt_energy` 중심차분(h=1e-4),
+  gradient descent + Armijo 백트래킹(에너지 상승 시 step 반감, max 200
+  iter, RMS-force f_tol=1e-3). g3 self-consistent 검증: E(relaxed)≤
+  E(initial) · 평형구조 재완화 <0.001Å 안정 · 압축 Cu2 2.0→2.168Å,
+  E −0.30eV, max-force 3.98→6.1e-5. __ATOMS_STAGE1_TEST__ PASS (53/53).
+  cell 완화는 범위 밖(문서화). **T4 Stage-2 — mlff Stage-2(=T5,
+  수개월) 제외 전부 완료**: atoms{bulk,neighborlist,from_cif,emt_energy,
+  emt_relax} · crystal{coords,angles,N-hull,from_cif,spacegroup} ·
+  mol{weight,hba,hbd,from_smiles,logp,tpsa} · mlff{Stage-1 + interim
+  Python-NNP bridge}. 다음: T5(mlff hexa-native NNP = grad/safetensors,
+  수개월; bridge 가 그동안 커버).
+- 2026-05-19 — **종착 아키텍처 디렉티브 (user)**: **hexa-lang 단일 통합**.
+  hexa-matter·hexa-bio 는 **문서만 남기고 아카이브** 예정 — 그들의
+  stdlib/툴/외부라이브러리(absorption bridge 16 어댑터, _python_bridge,
+  science-stack 등)까지 **전부 hexa-lang 으로 이동**. hexa-lang 이 모든
+  것을 보유하고, 타 프로젝트는 (이미 적용된 AGENTS pointer 처럼) hexa-lang
+  을 가리키기만 함. 이번 세션 범위: 이 종착점을 SSOT 에 기록 + T3/T4
+  마무리. **다음 단계(별도 대형 트랙)**: (1) hexa-bio `_hexa_bridge` +
+  `_absorption_bridge` + hexa-matter `_python_bridge`/`_absorption_bridge`
+  자산을 hexa-lang `stdlib/` 하위로 이관·재배선, (2) 외부 Python
+  라이브러리는 mlff bridge 패턴(interim Python-tool 셸아웃 → 점진적
+  hexa-native 대체)으로 흡수, (3) hexa-matter·hexa-bio 는 문서 아카이브.
+  T5(nd/grad·qchem·mlff hexa-native NNP)는 이 통합 트랙과 병행/후속.

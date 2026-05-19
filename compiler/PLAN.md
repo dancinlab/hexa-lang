@@ -42,6 +42,26 @@
 
 (append-only)
 
+### 2026-05-19 — codegen: ExternFnDecl in statement position — FFI wrapper mangle parity + nested-decl hoist
+
+keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/test_keyword_audit.hexa` L376 `extern fn getpid() -> Int` 는 두 갈래로 깨졌었다.
+
+**근본원인 (측정으로 확정 — `unhandled stmt kind` 가 아니었음)**: top-level / script-body `extern fn` 는 이미 top-level emit loop 의 `ExternFnDecl` 분기에 도달한다. 진짜 버그는 `gen2_extern_wrapper` 가 emit 하는 C 래퍼 함수 이름이 call-site mangle 과 불일치한 것. `getpid` 는 `_hexa_name_is_reserved` 목록에 있어 (libc `getpid` 충돌) call-site 는 `_hexa_mangle_ident` 로 `u_getpid()` 를 emit 하지만, 래퍼는 plain `getpid` 로 emit 됨 → call 이 libc `int getpid(void)` 로 resolve → clang `assigning to HexaVal from incompatible type 'int'`. fn-body 안에 nested 된 `extern fn` 는 `_gen2_lift_nested_decls` 가 hoist 하지 않아 별개로 `CODEGEN ERROR: unhandled stmt kind: ExternFnDecl` 스텁을 emit 했다.
+
+**수정 (`self/codegen_c2.hexa`, surgical 3-part)**:
+1. `gen2_extern_wrapper` — 래퍼 C 함수 이름 (forward decl + 두 `static HexaVal NAME(...)` 정의 + typedef 태그) 을 `_hexa_mangle_ident(name)` (`cname`) 로 변경. decl 이름 == reference 이름. `__ffi_sym_<name>` dlsym 슬롯은 raw name 유지 (이미 고유-prefix 내부 식별자; dlsym C-symbol 문자열은 `c_sym` 으로 별도). 비-reserved extern 이름은 mangle 이 no-op → 일반 케이스 zero regression (측정 확인).
+2. `_gen2_lift_nested_decls` — lift 인식 종류에 `ExternFnDecl` 추가. fn-body 최상단 `extern fn` 도 module scope 로 hoist (C 는 nested fn 없음; FFI 래퍼는 top-level 분기에서만 emit). 추가로 `seen_names` 를 기존 top-level decl 이름으로 pre-seed — top-level 과 nested 가 같은 extern 이름이면 nested 복사본을 lift 하지 않음 (top-level 이 이김) → C "redefinition" 방지.
+3. `gen2_stmt` decl-skip — `ExternFnDecl` 추가. lift 된 stmt-position `extern fn` 가 원래 위치에서 `unhandled stmt kind` 스텁을 ALSO emit 하지 않게.
+
+**측정 BEFORE/AFTER** (Mac, host-pinned smoke `extern fn getpid() -> Int; let p = getpid(); ...`):
+- BEFORE (구 hexa_v2): transpile OK 이나 C 빌드 2 errors (`u_getpid` ≠ `getpid` incompatible-type). nested smoke → `unhandled stmt kind: ExternFnDecl` 스텁 1개.
+- AFTER (regen hexa_v2): script-body smoke → 래퍼 `u_getpid` == call `u_getpid` → C 빌드 0 error → run `extern ok` rc=0. nested smoke → 스텁 0개 → 빌드+run `nested extern ok` rc=0. 비-reserved extern → 래퍼 이름 변경 없음 (no-op mangle 확인).
+- `self/test_keyword_audit.hexa` → ExternFnDecl 스텁 0 (BEFORE 1). 잔여 5 C-error 는 generics `T` / `Clone` / async `hexa_await_unwrap` 등 무관 별건 갭 — 구·신 transpiler 동일 5개 → zero regression.
+
+**self-host fixpoint**: `cc --regen` → `hexa_cc.c.new` ≡ promoted `hexa_cc.c` BYTE-IDENTICAL (`cmp` 확인). 바이너리 promote 동반 — `hexa_cc.c` 1480897→1484206 B, `hexa_v2` 1533496→1534088 B.
+
+**LIMITATION (소스 주석에 명기)**: shallow-walk 경계 유지 — `if/while/for` 블록 안 더 깊이 nested 된 `extern fn` 는 lift 대상 아님 (`_gen2_lift_nested_decls` 의 기존 top-of-body 한계와 동일). top-level / script-body / fn-body-최상단 `extern fn` 만 커버.
+
 ### 2026-05-19 — token-forge: `consciousness TokenForgeRouter { ... }` 블록 retirement (Decision C surgical unwrap)
 
 `tool/pkg/packages/token-forge/forge.hexa` 의 마지막 잔여 별건 #4. 파일은 line 214 에서 `consciousness TokenForgeRouter { assert ...; let argv = args(); ... }` 를 top-level 블록처럼 사용 — 하지만 hexa-lang 의 `consciousness Name { ... }` 구문은 lexer/parser/codegen 어디에도 등록되어 있지 않고 (`self/formatter.hexa::ConsciousnessBlock` 만 orphan dead-branch 로 잔존), 파서는 이를 struct-literal `consciousness { TokenForgeRouter: ... }` 로 잘못 해석해서 `expected identifier, got Assert` 류의 ~40 errors 폭발. `example/consciousness_bootstrap.hexa` 의 phi/tension/faction/cells 자동주입 의미론은 published 되었으나 미구현 상태이며 — token-forge 의 블록은 **그 의미론을 전혀 사용하지 않음** (단순 라벨드 스크립트 바디 wrapper).
@@ -3254,6 +3274,21 @@ Promoted: `self/native/hexa_cc.c` (regenerated, enum fix present +
 self-compiling) + `self/native/hexa_v2` (capable binary). The
 codegen_c2.hexa bare-return fix is also a general latent-bug guard:
 any `return hexa_void()` in compiler source had the same hazard.
+### 진행 로그 — 8 stale-open inbox patches VERIFIED-CLOSED via SSOT grep (close-only, no fix cycle · 2026-05-19)
+
+- 2026-05-19 — 8 stale-open `inbox/patches/` 항목을 SSOT grep cross-verification 으로 VERIFIED-CLOSED 마킹 (close-only sweep, NO source change, NO fix re-run — fix 가 이미 SSOT 에 live; dup-race precheck 적용). 각 패치 헤더 블록 직후에 `> **VERIFIED-CLOSED 2026-05-19**: ...` 감사-증거 라인 추가, 기존 본문 무삭제. 대상 + 증거: (1) `net-nonblock-multiplex` — `self/native/net.c` `hexa_net_set_nonblock`+`hexa_net_select` grep ×5; (2) `net-unix-domain-socket` — `self/native/net.c` `AF_UNIX`/`_hexa_net_parse_any` grep ×12; (3) `builtin-vs-stdlib-symbol-collision` — `self/native/thread.c` `thread_channel_` rename grep ×9, §7 interp-side residual 은 @D g_interp_deprecated (R7 CLOSED) 로 dissolved; (4) `codegen-struct-fwddecl-vs-fn-arena` — `self/main.hexa` `module_loader_env_prefix`/`HEXA_MEM_CAP_MB` grep ×8 (근본원인 = module_loader 768MB RSS cap, codegen 아님); (5) `modifyotherkeys-non-ascii-decoder-gap` — `self/tui/input.hexa` 0x110000 ceiling grep ×2, commit `bf943479` (deeper `chr()` followup = `input-decoder-chr-vs-from_char_code` 별도 추적, OPEN 유지); (6) `phanes-hx-data-dir-per-tenant-isolation` — `HX_DATA_DIR` in `compiler/drill/{checkpoint,drill}.hexa` grep ×3 (binary promote = 별도 표준 deploy step); (7) `phanes-pluggable-verifier-oracle-for-drill-loop` — verifier callback in `compiler/drill/drill.hexa` grep ×73; (8) `chr-byte-vs-codepoint-asymmetry` — interp-vs-compiled ASYMMETRY 전제가 interp 은퇴(@D g_interp_deprecated, R7 CLOSED)로 소멸 → DISSOLVED-BY-INTERP-RETIREMENT (superseded, not fixed; compiled raw-byte N&0xFF 가 단일 정답). g3-honest: 본 sweep 은 이미 랜딩된 작업의 CLOSE + 감사 증거 추가일 뿐, 신규 fix 아님. inbox/PATCHES.yaml 미터치.
+
+- 2026-05-19 — decoder cluster B (self/tui/input.hexa):
+  input-decoder-chr-vs-from_char_code (chr→from_char_code at raw-UTF8 +
+  modifyOtherKeys sites) + csi-u-modifier-keys-decoder-gap (Enter-only →
+  general codepoint+modifier CSI u decode); Shape-A surgical, parse-gate
+  clean. Note: input-decoder-chr-vs-from_char_code already landed in-tree
+  by a parallel session/sister-patch (L304/L491 already from_char_code) —
+  marked resolved-ssot, no edit needed. CSI u branch generalized
+  (Enter/Tab/Backspace/Esc + printable from_char_code + C0 1..26
+  Ctrl+letter), Enter path preserved as subset. parse-gate (hexa_real
+  parse) clean; NOT runtime/byte-eq tested; binary promote = standard
+  separate deploy step.
 
 ### 2026-05-19 — interp-retirement tidy cycle: stale doc-string cleanup (R7 closure)
 
@@ -3420,3 +3455,39 @@ keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/tes
 
 **LIMITATION (소스 주석에 명기)**: shallow-walk 경계 유지 — `if/while/for` 블록 안 더 깊이 nested 된 `extern fn` 는 lift 대상 아님 (`_gen2_lift_nested_decls` 의 기존 top-of-body 한계와 동일). top-level / script-body / fn-body-최상단 `extern fn` 만 커버.
 
+
+## 진행 로그 — `hexa atlas pr` verb 구현 (2026-05-19)
+
+- **scope**: inbox/patches/hexa-cli-atlas-register-update-or-pr.md 의 `pr` arm
+  구현. `tool/atlas_cli.hexa::cmd_pr` 가 STUB (manual-steps print + `exit(3)`)
+  였던 것을 동작하는 verb 로 land. `update || PR` 의 `PR` 분기 — kick/verify 가
+  발견한 equation 을 staging shard 로 받아 fresh git branch + commit + `gh pr
+  create` 까지 자동화.
+- **code (`tool/atlas_cli.hexa`, @version 0.3.0→0.4.0)**: `cmd_pr` 전면 재작성.
+  `--staging <file.n6>` (promote 와 동일 입력 형태) + `--atlas-root` / `--base`
+  / `--branch` / `--title` 플래그. 흐름: (0) `git` 가용성 probe → (1) PR 브랜치
+  생성 (`atlas-pr-<UTC-stamp>`) → (2) 기존 `promote_to_atlas` 재사용해 shard fold
+  → (3) `atlas.append.<today>.n6` `git add`+`commit` → (4) `gh pr create` 시도.
+  헬퍼 추가: `_shq` (shell single-quote escape), `_exec_ok` (`( cmd ) && echo
+  __OK__ || echo __FAIL__` 마커로 exit-status 복원 — `exec()` 는 stdout 만 캡처),
+  `_today_compact` / `_branch_stamp`. help 텍스트 + 헤더 주석 갱신.
+- **g3 정직성 — degraded path (절대 PR fake 금지)**: `git` 없음/atlas-root 비-repo
+  → shard 만 쓰고 정확한 `git switch -c … && … && gh pr create …` 명령 출력 (exit 0).
+  `git` ok 이나 `gh` 없음/실패 (no auth·no push·offline) → branch+commit 은 로컬
+  완료, `git push -u origin <branch>` + `gh pr create` 명령 출력, "**NO PR was
+  opened**" 명시 (exit 0). `gh pr create` rc==0 일 때만 "PR opened — <url>" 출력.
+  @D g5 try-CLI-or-fallback 패턴 준수 (git/gh 외부 셸링 허용).
+- **parse-gate (measured)**: `clang -O2 -I. -Iself -c self/runtime.c -o
+  self/runtime.o` OK → `self/native/hexa_v2 tool/atlas_cli.hexa /tmp/o.c` →
+  `OK` rc=0.
+- **build + dry-run (measured)**: `HEXA_MAC_BUILD_OK=1 hexa build
+  tool/atlas_cli.hexa` PASS (module `use` 6개 flatten 정상). 측정 3건 PASS —
+  `pr --help`, 비-git atlas-root → degraded write-shard 경로, 실제 git repo →
+  branch+commit 후 `gh` degrade-after-commit 경로 (브랜치 생성·append shard
+  커밋 확인, fake PR 0).
+- **deferred / LIMITATION**: `hexa atlas register` 는 STUB 유지. `@discover`
+  주석 `.hexa` 소스를 staging shard 로 변환하려면 컴파일러 frontend
+  (`compiler/lex/*` + `compiler/parse/parser.hexa` + `compiler/discover/`) 를
+  `tool/atlas_register.hexa` companion 으로 끌어와야 함 — `pr` arm 은 의도적으로
+  *이미 staged 된* `.n6` shard 소비로 scope. `cc --regen` 미수행 (atlas_cli.hexa
+  는 tool 이지 hexa_cc.c SSOT 모듈 아님 — regen 불필요).

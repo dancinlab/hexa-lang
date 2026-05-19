@@ -1,6 +1,7 @@
 # incoming patch: phanes-hx-data-dir-per-tenant-isolation — drill overlay+checkpoint dir is `$HOME`-derived only; no explicit per-tenant data-dir knob for multi-tenant isolation
 
 > **id**: `phanes-hx-data-dir-per-tenant-isolation` · **opened**: 2026-05-19 KST · **status**: `resolved-ssot 2026-05-19 — HX_DATA_DIR env knob landed; parse-gate clean; binary promote = standard separate deploy step per the 22c27a05 pattern`
+> **VERIFIED-CLOSED 2026-05-19**: SSOT grep cross-verified — `HX_DATA_DIR` present in `compiler/drill/checkpoint.hexa` + `compiler/drill/drill.hexa` (grep ×3). Already `resolved-ssot 2026-05-19`; this is a close-only marker confirming the SSOT grep (no source change, no fix re-run). Binary promote remains a standard separate deploy step (NOT this work) per @D g_inbox_processing_loop step 7.
 > **trees**: `compiler/drill/checkpoint.hexa` (`checkpoint_path` / `checkpoint_save` — `env("HOME")`) · `compiler/drill/round.hexa` + `overlay_path()` (`~/.hx/data/atlas.overlay.n6` — `$HOME`) · `compiler/drill/drill.hexa` (`drill_run` Doctrine v2 룰 5 write policy)
 > **source**: downstream `phanes` (`~/core/phanes`, new dancinlab consumer — private SaaS wrapping `hexa kick` / OUROBOROS for companies; scope B generic autonomous-cycle platform).
 > **observed**: 2026-05-19 · hexa-lang pin: `50f5f073` (`rfc043-hexa-torch`)

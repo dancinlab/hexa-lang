@@ -12,6 +12,8 @@ or rendered as replacement glyphs while ASCII typing still works.
 This is the modifyOtherKeys sibling of `csi-u-modifier-keys-decoder-gap.md` — same root
 shape (a CSI branch that only covers ASCII), different trigger sequence.
 
+> **VERIFIED-CLOSED 2026-05-19**: SSOT grep cross-verified — `self/tui/input.hexa` carries the `0x110000` / `1114112` codepoint ceiling (grep ×2 [×3 incl. variant]), landed commit `bf943479`. Close-only marker (no source change, no fix re-run; fix already live in SSOT). NOTE: the deeper `chr()` followup is tracked SEPARATELY as `input-decoder-chr-vs-from_char_code` and remains OPEN — it is NOT closed by this marker.
+
 **Status:** Fix applied to `self/tui/input.hexa` on branch
 `fix/modifyotherkeys-non-ascii-decoder` — printable ceiling raised `127` → `1114112`
 (U+110000). Verified by wilson `decoder_smoke` regression case (`modifyOtherKeys Hangul
