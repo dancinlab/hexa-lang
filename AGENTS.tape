@@ -145,6 +145,14 @@
   cross-ref = "@D g6 citation-enforced-strict-lint (every formula-bearing line @cites the embedded atlas) · upstream principle 'every equation via PR; direct fold-to-live forbidden'"
   @> AGENTS.md
 
+@D g_commit_push_deploy := "commit-push carries the deployed binary — no source/binary drift" :: governance [required d=2026-05-19 active]
+  rule = "Any commit/push that changes compiler source (self/{lexer,parser,type_checker,codegen_c2}.hexa · self/main.hexa · tool/* the driver runs) MUST — in the same change-set or an immediately-paired deploy commit — regenerate + promote the bootstrap binary (self/native/hexa_cc.c + self/native/hexa_v2) and rebuild the driver. Source and the deployed binary never land out of sync."
+  why = "Commit 70c7ab9d landed the enum-variant fix SOURCE-ONLY; self/native/hexa_cc.c + hexa_v2 were not regenerated, so `hexa run`/`build` kept executing the stale transpiler and the demiurge consumer stayed blocked (RegionShape/TrafficKind undeclared) until a separate deploy commit (8ff19d2a) promoted the binary. 'fix the source, defer the binary' silently ships a no-op to every consumer."
+  apply = "Before push: `hexa cc --regen` → rebuild hexa_v2 from the regenerated hexa_cc.c → rebuild the driver → confirm the self-host fixpoint is BYTE-IDENTICAL (a regen of the promoted hexa_cc.c reproduces itself). The commit includes the regenerated self/native/hexa_cc.c + hexa_v2. A compiler-source change whose binary is not promoted is INCOMPLETE — not landed."
+  authority = "user directive 2026-05-19 '매 commit push 시에 deployed 필수 진행'; incident: 70c7ab9d source-only enum-fix → demiurge stale-binary block → 8ff19d2a remedial promote."
+  cross-ref = "@D g_plan_consolidation (compile-cycle PLAN SSOT) · @D g8 commit-trailer-co-author · self-host fixpoint byte-identical gate"
+  @> AGENTS.md
+
 @D g7 := "inbox-patches-pipeline" :: governance [required]
   rule = "External patches arrive at inbox/patches/<descriptive-name>.md — one concept per file."
   flow = "[downstream consumer] → file at inbox/patches/ → upstream review → integration to self/ + RFC log"
