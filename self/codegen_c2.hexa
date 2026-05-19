@@ -2891,6 +2891,33 @@ fn gen2_stmt(node, depth) {
         return ""
     }
 
+    // ── Proof / Theorem / Contract / Invariant family → skip ──
+    // These are verification-annotation statement forms (proof blocks,
+    // theorem declarations, contract asserts, invariant statements). Like
+    // InvariantDecl above, they carry only type-level / verification-side
+    // semantics — no runtime code. The verifier consumes them; codegen
+    // emits nothing. ContractAssert at runtime is a deliberate no-op for
+    // now (the contract checker is a separate pass).
+    if k == "ProofStmt" || k == "TheoremStmt" || k == "ContractAssert" || k == "Invariant" {
+        return ""
+    }
+
+    // ── TypeAlias → skip (type-system only) ──
+    // `type X = Y` is a type-system declaration; C has no direct analogue
+    // (no `typedef HexaVal X` is needed since everything is HexaVal at
+    // runtime), so emit nothing.
+    if k == "TypeAlias" {
+        return ""
+    }
+
+    // ── UseStmt → skip (already resolved by flatten step) ──
+    // `use "mod.hexa"` directives are processed by module_loader's flatten
+    // pass before transpile; any UseStmt reaching codegen is leftover and
+    // should be a no-op.
+    if k == "UseStmt" {
+        return ""
+    }
+
     // ── KEYWORD_DEMOTE Phase 3 follow-up: @-attribute declarative AST kinds ──
     // VerifyStmt   ← @verify "NAME" { … }   (compile-time assertion block)
     // IntentStmt   ← @intent "NAME" { … }   (design-intent annotation)
@@ -3671,6 +3698,7 @@ fn gen2_expr(node) {
         if op == "<<" { return "hexa_int(HX_INT(" + l + ") << HX_INT(" + r + "))" }
         if op == ">>" { return "hexa_int(HX_INT(" + l + ") >> HX_INT(" + r + "))" }
         if op == "??" { return "hexa_null_coal(" + l + ", " + r + ")" }
+        if op == "**" { return "hexa_pow(" + l + ", " + r + ")" }
         // ── as cast: x as int / x as float / x as string / x as bool ──
         // Right node is type-name Ident — re-extract since `r` was generated
         // as if it were an expression. Mirrors interpreter eval_expr NK_BIN_OP
