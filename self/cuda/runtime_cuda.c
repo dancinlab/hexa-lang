@@ -2093,6 +2093,565 @@ int _hx_cuda_farr_transpose_scatter_gpu(int64_t src_id, int64_t dst_id,
     return 0;
 }
 
+
+/* ── mk2-C5 GPU kernels restored from e030fa31 (rfc043-flame-camp) ──
+ * The A/B/C three-way merge dropped Cycle A's runtime_cuda.c additions;
+ * these 9 device kernels are the GPU side of the HEXA_CUDA seam in
+ * self/runtime.c (silu_gate/rmsnorm_mh/attn_dt_fwd+bwd/copy_slice/
+ * fill_dt_lcg/add_inplace/zero_slice/transpose_2d). byte-eq oracle-
+ * gated vs the _hx_farr_*_cpu mirrors. */
+/* mk2-C1b: silu-gate O = (A·σ(A))·B (dt_exp-faithful). Two host
+ * inputs H2D'd; byte-eq oracle-gated vs CPU _hx_farr_silu_gate_cpu. */
+int _hx_cuda_farr_silu_gate_gpu(int64_t a_id, int64_t b_id,
+                                int64_t n, int64_t out_id) {
+    if (a_id < 0 || b_id < 0 || out_id < 0) {
+        fprintf(stderr, "[cuda] silu_gate: bad ids %lld %lld %lld\n",
+                (long long)a_id, (long long)b_id, (long long)out_id);
+        return -1;
+    }
+    if (n <= 0) {
+        fprintf(stderr, "[cuda] silu_gate: bad n=%lld\n", (long long)n);
+        return -1;
+    }
+    if (a_id >= _hx_farr_count || b_id >= _hx_farr_count ||
+        out_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] silu_gate: id out of range\n");
+        return -1;
+    }
+    if (_hx_farr_table[a_id].len < n || _hx_farr_table[b_id].len < n ||
+        _hx_farr_table[out_id].len < n) {
+        fprintf(stderr, "[cuda] silu_gate: host len < n\n");
+        return -1;
+    }
+    if (_h2d(a_id) != 0) return -1;
+    if (_h2d(b_id) != 0) return -1;
+    if (_ensure_dev_buf(out_id, n) != 0) return -1;
+    double* A = g_slots[a_id].d_buf;
+    double* B = g_slots[b_id].d_buf;
+    double* O = g_slots[out_id].d_buf;
+    int grid = _hx_cuda_elem_grid(n);
+    _hx_cuda_kern_silu_gate<<<grid, _HX_CUDA_ELEM_BLOCK>>>(A, B, O, n);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] silu_gate launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(out_id, n) != 0) return -1;
+    return 0;
+}
+
+/* mk2-C2 (2026-05-19): rmsnorm-mh fwd forge-route. fwd kernel above
+ * computes y[T·d], xn[T·d], inv[T] in one launch (one thread per row,
+ * sequential reduction for byte-eq). All three outputs go through
+ * _d2h_out → DEVICE_KEEP register honoured (mk2-C3) so the next forge
+ * op's _h2d sees them via the §6.1 skip path. Replaces the host-scalar
+ * t_get/t_set loop in ag_tape.hexa::ag_rmsnorm_mh, byte-eq oracle-
+ * gated vs CPU _hx_farr_rmsnorm_mh_cpu (FP_CONTRACT OFF, dt_sqrt-
+ * faithful). */
+int _hx_cuda_farr_rmsnorm_mh_gpu(int64_t x_id, int64_t g_id,
+                                 int64_t y_id, int64_t xn_id,
+                                 int64_t inv_id, int64_t T, int64_t d) {
+    if (x_id < 0 || g_id < 0 || y_id < 0 || xn_id < 0 || inv_id < 0) {
+        fprintf(stderr, "[cuda] rmsnorm_mh: bad ids\n");
+        return -1;
+    }
+    if (T <= 0 || d <= 0) {
+        fprintf(stderr, "[cuda] rmsnorm_mh: bad T=%lld d=%lld\n",
+                (long long)T, (long long)d);
+        return -1;
+    }
+    if (x_id >= _hx_farr_count || g_id >= _hx_farr_count ||
+        y_id >= _hx_farr_count || xn_id >= _hx_farr_count ||
+        inv_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] rmsnorm_mh: id out of range\n");
+        return -1;
+    }
+    int64_t n_xy = T * d;
+    if (_hx_farr_table[x_id].len  < n_xy || _hx_farr_table[g_id].len  < d ||
+        _hx_farr_table[y_id].len  < n_xy || _hx_farr_table[xn_id].len < n_xy ||
+        _hx_farr_table[inv_id].len < T) {
+        fprintf(stderr, "[cuda] rmsnorm_mh: host len mismatch\n");
+        return -1;
+    }
+    if (_h2d(x_id) != 0) return -1;
+    if (_h2d(g_id) != 0) return -1;
+    if (_ensure_dev_buf(y_id,   n_xy) != 0) return -1;
+    if (_ensure_dev_buf(xn_id,  n_xy) != 0) return -1;
+    if (_ensure_dev_buf(inv_id, T)    != 0) return -1;
+    double* X = g_slots[x_id].d_buf;
+    double* G = g_slots[g_id].d_buf;
+    double* Y = g_slots[y_id].d_buf;
+    double* XN= g_slots[xn_id].d_buf;
+    double* I = g_slots[inv_id].d_buf;
+    /* one thread per row; T parallel. Cap grid at 65535 (legacy CUDA
+     * 1-D grid ceiling we already use elsewhere). */
+    int block = 256;
+    int64_t need = (T + block - 1) / block;
+    int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+    _hx_cuda_kern_rmsnorm_mh<<<grid, block>>>(X, G, Y, XN, I, T, d);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] rmsnorm_mh launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(y_id,   n_xy) != 0) return -1;
+    if (_d2h_out(xn_id,  n_xy) != 0) return -1;
+    if (_d2h_out(inv_id, T)    != 0) return -1;
+    return 0;
+}
+
+/* mk2-C4 (2026-05-19): GQA attention-dt fwd forge-route. One kernel
+ * launch computes P[nh·T·T] (causal probs, j<L only) and CTX[T·nh·hd]
+ * from Q/K/V. dt_sqrt + dt_exp mirrors guarantee byte-eq with the host
+ * loop. Outputs honour DEVICE_KEEP via _d2h_out. */
+int _hx_cuda_farr_attn_dt_fwd_gpu(int64_t q_id, int64_t k_id, int64_t v_id,
+                                  int64_t p_id, int64_t ctx_id,
+                                  int64_t T, int64_t nh, int64_t nkv,
+                                  int64_t hd) {
+    if (q_id < 0 || k_id < 0 || v_id < 0 || p_id < 0 || ctx_id < 0) {
+        fprintf(stderr, "[cuda] attn_dt_fwd: bad ids\n");
+        return -1;
+    }
+    if (T <= 0 || nh <= 0 || nkv <= 0 || hd <= 0) {
+        fprintf(stderr, "[cuda] attn_dt_fwd: bad dims T=%lld nh=%lld nkv=%lld hd=%lld\n",
+                (long long)T, (long long)nh, (long long)nkv, (long long)hd);
+        return -1;
+    }
+    if (nh % nkv != 0) {
+        fprintf(stderr, "[cuda] attn_dt_fwd: nh=%lld not divisible by nkv=%lld\n",
+                (long long)nh, (long long)nkv);
+        return -1;
+    }
+    if (q_id >= _hx_farr_count || k_id >= _hx_farr_count ||
+        v_id >= _hx_farr_count || p_id >= _hx_farr_count ||
+        ctx_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] attn_dt_fwd: id out of range\n");
+        return -1;
+    }
+    int64_t nq = T * nh  * hd;
+    int64_t nk = T * nkv * hd;
+    int64_t np = nh * T * T;
+    if (_hx_farr_table[q_id].len   < nq ||
+        _hx_farr_table[k_id].len   < nk ||
+        _hx_farr_table[v_id].len   < nk ||
+        _hx_farr_table[p_id].len   < np ||
+        _hx_farr_table[ctx_id].len < nq) {
+        fprintf(stderr, "[cuda] attn_dt_fwd: host len mismatch\n");
+        return -1;
+    }
+    if (_h2d(q_id) != 0) return -1;
+    if (_h2d(k_id) != 0) return -1;
+    if (_h2d(v_id) != 0) return -1;
+    if (_ensure_dev_buf(p_id,   np) != 0) return -1;
+    if (_ensure_dev_buf(ctx_id, nq) != 0) return -1;
+    /* Zero P first — only j < L positions are written, the upper
+     * triangle (j ≥ L per row) must stay 0 to match the t_zeros init
+     * on the host side. cudaMemset is fine (P is doubles; 0x00·8 == 0.0). */
+    cudaError_t ze = cudaMemset(g_slots[p_id].d_buf, 0,
+                                (size_t)np * sizeof(double));
+    if (ze != cudaSuccess) {
+        fprintf(stderr, "[cuda] attn_dt_fwd: cudaMemset P failed: %s\n",
+                cudaGetErrorString(ze));
+        return -1;
+    }
+    double* Q = g_slots[q_id].d_buf;
+    double* K = g_slots[k_id].d_buf;
+    double* V = g_slots[v_id].d_buf;
+    double* P = g_slots[p_id].d_buf;
+    double* C = g_slots[ctx_id].d_buf;
+    /* one thread per (hh, i) — nh·T threads. */
+    int64_t total = nh * T;
+    int block = 64;
+    int64_t need = (total + block - 1) / block;
+    int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+    _hx_cuda_kern_attn_dt_fwd<<<grid, block>>>(Q, K, V, P, C, T, nh, nkv, hd);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] attn_dt_fwd launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(p_id,   np) != 0) return -1;
+    if (_d2h_out(ctx_id, nq) != 0) return -1;
+    return 0;
+}
+
+/* mk2-C4-bwd (2026-05-19): GQA attention-dt bwd forge-route. 3-kernel
+ * pipeline using a temporary dP_row[nh·T·T] scratch (reused as dS
+ * after step 2). dQ/dK/dV must be FRESH t_zeros at the call site —
+ * the tape replay in ag_tape.hexa allocates them with t_zeros and the
+ * kernel writes acc directly (no read-modify-write). All outputs go
+ * through _d2h_out → DEVICE_KEEP honoured. */
+int _hx_cuda_farr_attn_dt_bwd_gpu(int64_t q_id, int64_t k_id, int64_t v_id,
+                                  int64_t p_id, int64_t dctx_id,
+                                  int64_t dq_id, int64_t dk_id, int64_t dv_id,
+                                  int64_t T, int64_t nh, int64_t nkv,
+                                  int64_t hd) {
+    if (q_id < 0 || k_id < 0 || v_id < 0 || p_id < 0 || dctx_id < 0 ||
+        dq_id < 0 || dk_id < 0 || dv_id < 0) {
+        fprintf(stderr, "[cuda] attn_dt_bwd: bad ids\n");
+        return -1;
+    }
+    if (T <= 0 || nh <= 0 || nkv <= 0 || hd <= 0) {
+        fprintf(stderr, "[cuda] attn_dt_bwd: bad dims T=%lld nh=%lld nkv=%lld hd=%lld\n",
+                (long long)T, (long long)nh, (long long)nkv, (long long)hd);
+        return -1;
+    }
+    if (nh % nkv != 0) {
+        fprintf(stderr, "[cuda] attn_dt_bwd: nh not multiple of nkv\n");
+        return -1;
+    }
+    if (q_id >= _hx_farr_count || k_id >= _hx_farr_count ||
+        v_id >= _hx_farr_count || p_id >= _hx_farr_count ||
+        dctx_id >= _hx_farr_count || dq_id >= _hx_farr_count ||
+        dk_id >= _hx_farr_count || dv_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] attn_dt_bwd: id out of range\n");
+        return -1;
+    }
+    int64_t nq = T * nh  * hd;
+    int64_t nk = T * nkv * hd;
+    int64_t np = nh * T * T;
+    if (_hx_farr_table[q_id].len    < nq ||
+        _hx_farr_table[k_id].len    < nk ||
+        _hx_farr_table[v_id].len    < nk ||
+        _hx_farr_table[p_id].len    < np ||
+        _hx_farr_table[dctx_id].len < nq ||
+        _hx_farr_table[dq_id].len   < nq ||
+        _hx_farr_table[dk_id].len   < nk ||
+        _hx_farr_table[dv_id].len   < nk) {
+        fprintf(stderr, "[cuda] attn_dt_bwd: host len mismatch\n");
+        return -1;
+    }
+    if (_h2d(q_id) != 0) return -1;
+    if (_h2d(k_id) != 0) return -1;
+    if (_h2d(v_id) != 0) return -1;
+    if (_h2d(p_id) != 0) return -1;
+    if (_h2d(dctx_id) != 0) return -1;
+    if (_ensure_dev_buf(dq_id, nq) != 0) return -1;
+    if (_ensure_dev_buf(dk_id, nk) != 0) return -1;
+    if (_ensure_dev_buf(dv_id, nk) != 0) return -1;
+    /* dP_row scratch (reused as dS after step 2) */
+    double* dProw = NULL;
+    cudaError_t er = cudaMalloc(&dProw, (size_t)np * sizeof(double));
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] attn_dt_bwd: dProw malloc failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    double* Q = g_slots[q_id].d_buf;
+    double* K = g_slots[k_id].d_buf;
+    double* V = g_slots[v_id].d_buf;
+    double* P = g_slots[p_id].d_buf;
+    double* dctx = g_slots[dctx_id].d_buf;
+    double* dQ = g_slots[dq_id].d_buf;
+    double* dK = g_slots[dk_id].d_buf;
+    double* dV = g_slots[dv_id].d_buf;
+    /* Step 1: dProw per (hh, i, j). nh·T·T threads. */
+    {
+        int64_t total = nh * T * T;
+        int block = 64;
+        int64_t need = (total + block - 1) / block;
+        int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+        _hx_cuda_kern_attn_dt_bwd_dProw<<<grid, block>>>(V, dctx, dProw,
+                                                         T, nh, nkv, hd);
+        er = cudaGetLastError();
+        if (er != cudaSuccess) {
+            fprintf(stderr, "[cuda] attn_dt_bwd dProw kernel failed: %s\n",
+                    cudaGetErrorString(er));
+            cudaFree(dProw);
+            return -1;
+        }
+    }
+    /* Step 2: dS in-place (overwrite dProw) + dQ. nh·T threads. */
+    {
+        int64_t total = nh * T;
+        int block = 64;
+        int64_t need = (total + block - 1) / block;
+        int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+        _hx_cuda_kern_attn_dt_bwd_dS_dQ<<<grid, block>>>(Q, K, P, dProw, dQ,
+                                                         T, nh, nkv, hd);
+        er = cudaGetLastError();
+        if (er != cudaSuccess) {
+            fprintf(stderr, "[cuda] attn_dt_bwd dS+dQ kernel failed: %s\n",
+                    cudaGetErrorString(er));
+            cudaFree(dProw);
+            return -1;
+        }
+    }
+    /* Step 3a: dV per (j, kvh, c). T·nkv·hd threads. */
+    {
+        int64_t total = T * nkv * hd;
+        int block = 64;
+        int64_t need = (total + block - 1) / block;
+        int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+        _hx_cuda_kern_attn_dt_bwd_dV<<<grid, block>>>(P, dctx, dV,
+                                                      T, nh, nkv, hd);
+        er = cudaGetLastError();
+        if (er != cudaSuccess) {
+            fprintf(stderr, "[cuda] attn_dt_bwd dV kernel failed: %s\n",
+                    cudaGetErrorString(er));
+            cudaFree(dProw);
+            return -1;
+        }
+    }
+    /* Step 3b: dK per (j, kvh, c). Same shape. */
+    {
+        int64_t total = T * nkv * hd;
+        int block = 64;
+        int64_t need = (total + block - 1) / block;
+        int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+        _hx_cuda_kern_attn_dt_bwd_dK<<<grid, block>>>(Q, dProw, dK,
+                                                      T, nh, nkv, hd);
+        er = cudaGetLastError();
+        if (er != cudaSuccess) {
+            fprintf(stderr, "[cuda] attn_dt_bwd dK kernel failed: %s\n",
+                    cudaGetErrorString(er));
+            cudaFree(dProw);
+            return -1;
+        }
+    }
+    cudaFree(dProw);
+    if (_d2h_out(dq_id, nq) != 0) return -1;
+    if (_d2h_out(dk_id, nk) != 0) return -1;
+    if (_d2h_out(dv_id, nk) != 0) return -1;
+    return 0;
+}
+
+/* mk2-C5: device-resident slice copy. Reads src[soff..soff+n) and
+ * writes dst[doff..doff+n). DEVICE_KEEP honoured via _d2h_out. */
+int _hx_cuda_farr_copy_slice_gpu(int64_t src_id, int64_t soff,
+                                 int64_t dst_id, int64_t doff,
+                                 int64_t n) {
+    if (src_id < 0 || dst_id < 0) {
+        fprintf(stderr, "[cuda] copy_slice: bad ids %lld %lld\n",
+                (long long)src_id, (long long)dst_id);
+        return -1;
+    }
+    if (n <= 0 || soff < 0 || doff < 0) {
+        fprintf(stderr, "[cuda] copy_slice: bad n=%lld soff=%lld doff=%lld\n",
+                (long long)n, (long long)soff, (long long)doff);
+        return -1;
+    }
+    if (src_id >= _hx_farr_count || dst_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] copy_slice: id out of range\n");
+        return -1;
+    }
+    HexaFarrEntry* se = &_hx_farr_table[src_id];
+    HexaFarrEntry* de = &_hx_farr_table[dst_id];
+    if (se->len < soff + n || de->len < doff + n) {
+        fprintf(stderr, "[cuda] copy_slice: range out of bounds\n");
+        return -1;
+    }
+    if (_h2d(src_id) != 0) return -1;
+    if (_ensure_dev_buf(dst_id, de->len) != 0) return -1;
+    const double* S = g_slots[src_id].d_buf;
+    double* D = g_slots[dst_id].d_buf;
+    /* Device-to-device cudaMemcpy is the canonical (and fastest) form
+     * for a contiguous slice — saturates HBM bandwidth, no kernel
+     * launch overhead per element. */
+    cudaError_t er = cudaMemcpy(D + doff, S + soff,
+                                (size_t)n * sizeof(double),
+                                cudaMemcpyDeviceToDevice);
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] copy_slice cudaMemcpy failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    /* Mark dst as device-current; lazy-D2H handles host readback. */
+    if (_d2h_out(dst_id, de->len) != 0) return -1;
+    return 0;
+}
+
+/* mk2-C5: device-side dt_lcg fill (single thread sequential to match
+ * the hexa nn_decoder_init / _train_fill_dt_lcg byte-eq exactly —
+ * each value depends on the previous LCG state). int64_t modular
+ * arithmetic is byte-identical to the hexa `(s * 1103515245 + 12345)
+ * % 2^31`. ~100M elements/init × 25ns = ~2.5s on A100, vs ~10min on
+ * host via HexaVal-box farr_set. The init runs once at startup,
+ * before any forge ops fire — eliminating it is what lets the d768
+ * trainer actually reach step 1. */
+__global__ void _hx_cuda_kern_fill_dt_lcg(double* __restrict__ dst,
+                                          int64_t off, int64_t n,
+                                          int64_t seed, double scale) {
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+        int64_t s = seed;
+        for (int64_t i = 0; i < n; i++) {
+            s = (s * (int64_t)1103515245 + (int64_t)12345) % (int64_t)2147483648;
+            double rv = (double)(s % 1000) / 1000.0 - 0.5;
+            dst[off + i] = rv * scale;
+        }
+    }
+}
+int _hx_cuda_farr_fill_dt_lcg_gpu(int64_t dst_id, int64_t doff, int64_t n,
+                                  int64_t seed, double scale) {
+    /* IMPORTANT (mk2-FINAL #2 measured): the LCG state evolves
+     * sequentially (s_{i+1} = f(s_i)), so the kernel is necessarily
+     * single-thread. A GPU thread runs ~100ns/iter — 20× slower than
+     * a host C loop (~5ns/iter). For ~100M elements per nn_decoder_
+     * init, that's 10s/call on GPU vs 0.5s/call on CPU; 121 calls
+     * blew the 901s budget on the v6 fire (GPU 100% util, never
+     * reached step 1). Switch to host-side fill: the next forge op
+     * (`farr_copy_slice_gpu(M, oTE, tokE, …)` in _agt_decoder_step)
+     * triggers _h2d on M as a side-effect of the host-write path
+     * marking dirty_host=1, so the data lands on device exactly once
+     * per farr, lazily, when it's actually needed. */
+    if (dst_id < 0 || dst_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] fill_dt_lcg: bad id\n");
+        return -1;
+    }
+    if (n <= 0 || doff < 0) {
+        fprintf(stderr, "[cuda] fill_dt_lcg: bad n=%lld doff=%lld\n",
+                (long long)n, (long long)doff);
+        return -1;
+    }
+    HexaFarrEntry* de = &_hx_farr_table[dst_id];
+    if (!de->buf || de->len < doff + n) {
+        fprintf(stderr, "[cuda] fill_dt_lcg: range out of bounds\n");
+        return -1;
+    }
+    /* Pure C host loop — int64_t modular arithmetic byte-identical
+     * to the hexa source (`(s * 1103515245 + 12345) % 2^31`). */
+    int64_t s = seed;
+    double* H = de->buf + doff;
+    for (int64_t i = 0; i < n; i++) {
+        s = (s * (int64_t)1103515245 + (int64_t)12345) % (int64_t)2147483648;
+        double rv = (double)(s % 1000) / 1000.0 - 0.5;
+        H[i] = rv * scale;
+    }
+    /* Mark host-fresh; the next _h2d uploads the new bytes. Do NOT
+     * call _d2h_out here — we want the host buffer to be the source
+     * of truth, not the device. */
+    de->loc        = FARR_HOST;
+    de->dirty_host = 1;
+    de->dirty_dev  = 0;
+    return 0;
+}
+
+/* mk2-C5: device in-place elementwise add dst[i] += src[i] for i ∈
+ * [0..n). Used by the gradient accumulator (Mg_acc += Mg across the
+ * micro-batch samples). No FMA-contraction concern — a single
+ * __dadd_rn per element, byte-eq with host `dst + src` under
+ * FP_CONTRACT OFF. */
+__global__ void _hx_cuda_kern_add_inplace(double* __restrict__ dst,
+                                          const double* __restrict__ src,
+                                          int64_t n) {
+    int64_t i      = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x  * (int64_t)blockDim.x;
+    for (; i < n; i += stride) {
+        dst[i] = __dadd_rn(dst[i], src[i]);
+    }
+}
+int _hx_cuda_farr_add_inplace_gpu(int64_t dst_id, int64_t src_id, int64_t n) {
+    if (dst_id < 0 || src_id < 0) {
+        fprintf(stderr, "[cuda] add_inplace: bad ids\n");
+        return -1;
+    }
+    if (n <= 0) {
+        fprintf(stderr, "[cuda] add_inplace: bad n=%lld\n", (long long)n);
+        return -1;
+    }
+    if (dst_id >= _hx_farr_count || src_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] add_inplace: id out of range\n");
+        return -1;
+    }
+    HexaFarrEntry* de = &_hx_farr_table[dst_id];
+    HexaFarrEntry* se = &_hx_farr_table[src_id];
+    if (de->len < n || se->len < n) {
+        fprintf(stderr, "[cuda] add_inplace: range out of bounds\n");
+        return -1;
+    }
+    if (_h2d(dst_id) != 0) return -1;
+    if (_h2d(src_id) != 0) return -1;
+    double* D = g_slots[dst_id].d_buf;
+    const double* S = g_slots[src_id].d_buf;
+    int block = 256;
+    int64_t need = (n + block - 1) / block;
+    int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+    _hx_cuda_kern_add_inplace<<<grid, block>>>(D, S, n);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] add_inplace launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(dst_id, de->len) != 0) return -1;
+    return 0;
+}
+
+/* mk2-C5: device zero-fill of dst[doff..doff+n). Used to clear MgOut
+ * at the top of each grad-gather postlude (~100M-double memset). */
+int _hx_cuda_farr_zero_slice_gpu(int64_t dst_id, int64_t doff, int64_t n) {
+    if (dst_id < 0 || dst_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] zero_slice: bad id %lld\n", (long long)dst_id);
+        return -1;
+    }
+    if (n <= 0 || doff < 0) {
+        fprintf(stderr, "[cuda] zero_slice: bad n=%lld doff=%lld\n",
+                (long long)n, (long long)doff);
+        return -1;
+    }
+    HexaFarrEntry* de = &_hx_farr_table[dst_id];
+    if (de->len < doff + n) {
+        fprintf(stderr, "[cuda] zero_slice: range out of bounds\n");
+        return -1;
+    }
+    if (_ensure_dev_buf(dst_id, de->len) != 0) return -1;
+    double* D = g_slots[dst_id].d_buf;
+    cudaError_t er = cudaMemset(D + doff, 0, (size_t)n * sizeof(double));
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] zero_slice cudaMemset failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(dst_id, de->len) != 0) return -1;
+    return 0;
+}
+
+/* mk2-C5: device-resident 2-D transpose (dst[c·d_out + r] = src[soff +
+ * r·d_in + c]), byte-eq with agt_wT_slice / agt_wT_off host loop. */
+int _hx_cuda_farr_transpose_2d_gpu(int64_t src_id, int64_t soff,
+                                   int64_t dst_id, int64_t doff,
+                                   int64_t d_out, int64_t d_in) {
+    if (src_id < 0 || dst_id < 0) {
+        fprintf(stderr, "[cuda] transpose_2d: bad ids\n");
+        return -1;
+    }
+    if (d_out <= 0 || d_in <= 0 || soff < 0 || doff < 0) {
+        fprintf(stderr, "[cuda] transpose_2d: bad dims\n");
+        return -1;
+    }
+    if (src_id >= _hx_farr_count || dst_id >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] transpose_2d: id out of range\n");
+        return -1;
+    }
+    HexaFarrEntry* se = &_hx_farr_table[src_id];
+    HexaFarrEntry* de = &_hx_farr_table[dst_id];
+    int64_t total = d_out * d_in;
+    if (se->len < soff + total || de->len < doff + total) {
+        fprintf(stderr, "[cuda] transpose_2d: range out of bounds\n");
+        return -1;
+    }
+    if (_h2d(src_id) != 0) return -1;
+    if (_ensure_dev_buf(dst_id, de->len) != 0) return -1;
+    const double* S = g_slots[src_id].d_buf;
+    double* D = g_slots[dst_id].d_buf;
+    int block = 256;
+    int64_t need = (total + block - 1) / block;
+    int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+    _hx_cuda_kern_transpose_2d<<<grid, block>>>(S, soff, D, doff, d_out, d_in);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] transpose_2d launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(dst_id, de->len) != 0) return -1;
+    return 0;
+}
+
+
 #endif /* HEXA_CUDA — Agent #25 Phase B elementwise block (opened at line 944) */
 
 #ifdef __cplusplus

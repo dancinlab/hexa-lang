@@ -167,7 +167,7 @@ $SSH_CMD "cd $REMOTE_WORK && \
     clang -O2 -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -DHEXA_CUDA \
         -I self -I /usr/local/cuda/include -Wno-trigraphs -fbracket-depth=4096 \
         trainer.c self/runtime.c runtime_cuda.o \
-        -L/usr/local/cuda/lib64 -lcublas -lcudart -lcudart_static -ldl -lrt \
+        -L/usr/local/cuda/lib64 -lcuda -lcublas -lcudart -lcudart_static -ldl -lrt \
         -lm -lpthread -lstdc++ -o trainer 2>&1 | tee build_link.log ; \
     BLK=\${PIPESTATUS[0]} ; echo BUILD_LINK_RC=\$BLK ; \
     if [ -f trainer ]; then ls -lh trainer ; fi ; \
