@@ -166,7 +166,8 @@ fn _build_mir() -> MModule {
     blocks.push(_block_n(3, 2))
     let f = MFunc {
         name: "classify", params: [], return_local: _local0(),
-        locals: [], blocks: blocks, entry_block: 0, arena_root: 1, def_line: 1
+        locals: [], blocks: blocks, entry_block: 0, arena_root: 1, def_line: 1,
+        gpu_kind: GPU_KIND_CPU
     }
     let mut funcs: [MFunc] = []
     funcs.push(f)

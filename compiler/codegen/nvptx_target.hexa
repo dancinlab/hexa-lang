@@ -745,9 +745,19 @@ fn _nvptx_codegen(module: MModule, target: string) -> LModule {
     let mut funcs = []
     let mut i = 0
     while i < len(module.funcs) {
-        // RFC 055 055-P0 — partition by @gpu_* attribute is a 055-P1
-        // step. Today every fn is lowered as a device `.func`.
-        funcs.push(_nvptx_lower_func(module.funcs[i], target))
+        // RFC 055 055-P3c — `@gpu_kernel` / `@gpu_device` partition.
+        // Only MFuncs marked GPU_KIND_KERNEL or GPU_KIND_DEVICE reach the
+        // NVPTX output; GPU_KIND_CPU funcs are filtered out so a mixed
+        // host+device source file (`@gpu_kernel fn vadd(...) ; fn main()
+        // {...}`) produces a PTX module with ONLY the GPU functions
+        // (gpu/SPEC.md §2 partition). Lowering each as a device `.func`
+        // remains the 055-P0 emit form; `.visible .entry` kernel
+        // wrapping is the next 055-P3c sub-slice (gpu_launch lowering +
+        // cubin embed).
+        let mf = module.funcs[i]
+        if mf.gpu_kind != GPU_KIND_CPU {
+            funcs.push(_nvptx_lower_func(mf, target))
+        }
         i = i + 1
     }
     return LModule {
