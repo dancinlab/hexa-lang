@@ -271,6 +271,39 @@ mandatory (`g_blue_closed_mandate`).
 
 (append-only)
 
+### 2026-05-19 — RFC 050 L1 slice 1 — forge dispatcher callable from hexa ($0, no fire)
+
+flame NN stdlib 가 GPU matmul 을 `farr_matmul` 직호출 대신 RFC 050 dispatcher
+경유로 라우팅할 수 있도록 hexa-callable 경로를 신설. 3 변경:
+
+1. **`self/forge/forge_tier_v1.c`** — `_forge_dispatch_matmul_fp64` 의 output-farr
+   plumbing gap 해소. 기존 Stage-A stub 은 `hexa_farr_matmul` 결과를 `(void)r;`
+   로 폐기 (`/* Stage 2 will plumb r into c_id */`) — caller 가 출력 farr 를
+   회수 불가. 이제 `FORGE_TIER_V1_LIVE` 경로가 생산된 farr id 를
+   `out->farr_ids[0]` 슬롯에 write-back (`out` 은 ABI 안정성상 `const ForgeArgs*`
+   — result-id 단일 슬롯 store 만 documented 예외로 const-cast). 출력-farr
+   contract 를 주석으로 명시 (caller 가 farr lifetime 소유 — RFC 035/040 arena).
+   `FORGE_TIER_V1_BF16` 분기 무변경.
+2. **`self/runtime.c` + `self/runtime.h`** — `hexa_forge_dispatch_matmul(a,M,K,b,N)`
+   C 래퍼 신설 (forge_tier_v1.c inline-include 이후 정의 — `forge_tier_dispatch_v1`
+   + `ForgeShapeInfo`/`ForgeArgs` in-scope). `ForgeShapeInfo`(M,K,N) +
+   `ForgeArgs` in=[A,B]/out=[C] 패킹 후 `forge_tier_dispatch_v1(FORGE_KERNEL_
+   MATMUL, ..., FORGE_PREC_FP64, FORGE_DET_DEFAULT, ...)` 호출, 출력 farr handle
+   반환 (음수 코드/음수 id → `hexa_int(-1)`, `hexa_farr_matmul` 와 동일 실패
+   분기). prototype 은 runtime.h 에 (generated user.c TU implicit-int 방지).
+3. **`self/codegen_c2.hexa`** — 5-arg builtin 테이블에 `forge_dispatch_matmul`
+   → `hexa_forge_dispatch_matmul` 매핑 추가 (`farr_matmul` 와 동일 패턴).
+
+검증: `runtime.c` + standalone `forge_tier_v1.c` 둘 다 `clang -fsyntax-only`
+clean. `codegen_c2.hexa` + 신규 smoke `stdlib/flame/flame_forge_dispatch_test.hexa`
+(F-RFC050-L1-DISPATCH-EQ — dispatch farr == farr_matmul farr 원소별 동등)
+parse-gate PASS. $0 — GPU fire 없음, heavy build 없음.
+
+L1 slice 2 잔여 (별도 cycle): flame `ag_tape.hexa` 의 forge fwd/bwd 경로를
+`farr_matmul` 직호출에서 `forge_dispatch_matmul` 로 rewire + d768·12L
+measured fire 로 dispatch 경로 회귀 0 입증. 본 slice 는 dispatcher 가
+hexa 에서 호출 가능해진 것까지만 — flame 미rewire, fire 미수행.
+
 ### 2026-05-19 — RFC 050 Stage 2 (forge-side) fire — measured-PASS (A100, dispatch routes BF16)
 
 F2 = RFC 050 dispatcher 의 BF16 경로 fire-validation. `forge_tier_dispatch_v1`

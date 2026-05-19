@@ -122,8 +122,22 @@ static int _forge_dispatch_matmul_fp64(
 
     int64_t a_id = in->farr_ids[0];
     int64_t b_id = in->farr_ids[1];
+
+    /* Output-farr contract (L1 slice 1, RFC 050 §6.2):
+     * hexa_farr_matmul follows the RFC 032 pattern — it allocates its
+     * OWN output farr and returns the integer handle (id into the host
+     * _hx_farr_table). The dispatcher does NOT pre-allocate the output
+     * farr; instead it writes the produced id back into the caller's
+     * out->farr_ids[0] slot so the caller (flame / the forge_dispatch_
+     * matmul builtin) can recover the result. The `out` parameter is
+     * declared `const ForgeArgs*` for ABI stability, but the result-id
+     * write-back is a documented, deliberate exception — we cast away
+     * const for that single slot store. The caller still OWNS the farr
+     * lifetime (RFC 035/040 arena ownership): the dispatcher produces
+     * the handle, the caller releases it. A future _v2 ABI may make
+     * `out` non-const to surface this intent in the type. */
     int64_t c_id = out->farr_ids[0];
-    (void)c_id;  /* hexa_farr_matmul allocates its own output farr per RFC 032 */
+    (void)c_id;  /* slot is OUT-only: overwritten with the produced id below */
 
     /* The live MATMUL+FP64 path delegates to hexa_farr_matmul (defined
      * in runtime.c). That dependency only exists when this TU is
@@ -135,12 +149,17 @@ static int _forge_dispatch_matmul_fp64(
     extern HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
                                     HexaVal b_v, HexaVal bc_v);
     extern HexaVal hexa_int(int64_t);
+    extern int64_t hexa_as_num(HexaVal v);
     HexaVal r = hexa_farr_matmul(hexa_int(a_id),
                                  hexa_int(shape->M),
                                  hexa_int(shape->K),
                                  hexa_int(b_id),
                                  hexa_int(shape->N));
-    (void)r;  /* Stage 2 will plumb r into c_id once _into variant lands */
+    /* Plumb the produced farr id back into the caller-designated out
+     * slot. hexa_farr_matmul returns the farr handle (or hexa_int(-1)
+     * on a bad-args / OOM path); hexa_as_num unwraps it to int64_t. The
+     * caller checks for a negative id to detect failure. */
+    ((ForgeArgs *)out)->farr_ids[0] = hexa_as_num(r);
 #else
     (void)a_id; (void)b_id;  /* standalone smoke: ack args, skip live call */
 #endif

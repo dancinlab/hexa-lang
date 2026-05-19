@@ -7317,3 +7317,64 @@ HexaVal hexa_is_alphanumeric(HexaVal a) {
 #define FORGE_TIER_V1_LIVE 1
 #include "forge/forge_tier_v1.c"
 
+/* ═══════════════════════════════════════════════════════════════════
+ * hexa_forge_dispatch_matmul — RFC 050 L1 slice 1.
+ *
+ * The hexa-callable wrapper around the forge dispatcher. flame's NN
+ * stdlib calls the `forge_dispatch_matmul` builtin (codegen_c2.hexa
+ * lowers it here) so its FP64 GPU matmul routes through the RFC 050
+ * dispatch contract instead of calling hexa_farr_matmul directly.
+ *
+ *   forge_dispatch_matmul(a_farr, M, K, b_farr, N) -> c_farr
+ *
+ * Packs a ForgeShapeInfo (M,K,N) + a ForgeArgs in=[A,B] / out=[C] and
+ * invokes forge_tier_dispatch_v1(FORGE_KERNEL_MATMUL, ..., FP64,
+ * DET_DEFAULT, ...). The dispatcher's MATMUL+FP64 path (RFC 040
+ * baseline) writes the produced farr id back into out.farr_ids[0] —
+ * see the output-farr contract comment in forge_tier_v1.c. This
+ * wrapper unwraps that id and returns it as a HexaVal handle.
+ *
+ * Return codes: forge_tier_dispatch_v1 returns FORGE_OK or
+ * FORGE_FALLBACK_USED on a successful dispatch (Stage A always reports
+ * FALLBACK_USED — the specialized registry is empty). Any negative
+ * return code, or a negative produced id, surfaces as hexa_int(-1) so
+ * the hexa caller can branch on failure exactly like hexa_farr_matmul.
+ *
+ * Defined here (after the forge_tier_v1.c inline include) so
+ * forge_tier_dispatch_v1 + the ForgeShapeInfo/ForgeArgs types are in
+ * scope without a forward declaration.
+ * ═══════════════════════════════════════════════════════════════════ */
+HexaVal hexa_forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                   HexaVal b_v, HexaVal n_v) {
+    int64_t a_id = hexa_as_num(a_v);
+    int64_t M    = hexa_as_num(m_v);
+    int64_t K    = hexa_as_num(k_v);
+    int64_t b_id = hexa_as_num(b_v);
+    int64_t N    = hexa_as_num(n_v);
+
+    ForgeShapeInfo shape;
+    shape.M = M;
+    shape.N = N;
+    shape.K = K;
+    shape.batch = 0;
+
+    ForgeArgs in;
+    in.farr_ids[0] = a_id;
+    in.farr_ids[1] = b_id;
+    in.count = 2;
+
+    ForgeArgs out;
+    out.farr_ids[0] = -1;  /* OUT slot — dispatcher overwrites with produced id */
+    out.count = 1;
+
+    int rc = forge_tier_dispatch_v1(FORGE_KERNEL_MATMUL, &shape,
+                                    FORGE_REGIME_AUTO, FORGE_PREC_FP64,
+                                    FORGE_DET_DEFAULT, &in, &out);
+    /* FORGE_OK (0) and FORGE_FALLBACK_USED (1) are both successful
+     * dispatches; negative codes are genuine errors. */
+    if (rc < 0)                  return hexa_int(-1);
+    int64_t c_id = out.farr_ids[0];
+    if (c_id < 0)                return hexa_int(-1);
+    return hexa_int(c_id);
+}
+

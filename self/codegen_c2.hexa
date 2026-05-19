@@ -4818,6 +4818,10 @@ fn gen2_expr(node) {
                 if name == "matmul"         { return "hexa_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 // RFC 032 (2026-05-12): farr_matmul — packed-double matmul.
                 if name == "farr_matmul"    { return "hexa_farr_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
+                // RFC 050 L1 slice 1: forge_dispatch_matmul — routes the
+                // FP64 matmul through forge_tier_dispatch_v1 instead of
+                // calling hexa_farr_matmul directly. Returns the farr handle.
+                if name == "forge_dispatch_matmul" { return "hexa_forge_dispatch_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 // anima RFC 034 (2026-05-16): farr autograd — ad_matmul
                 // (5-arg; forward = farr_matmul + records backward).
                 if name == "ad_matmul"      { return "hexa_ad_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }

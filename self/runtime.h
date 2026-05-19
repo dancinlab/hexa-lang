@@ -802,6 +802,19 @@ HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
 HexaVal hexa_farr_copy(HexaVal src_v);                                 /* runtime.c — RFC 033 */
 HexaVal hexa_farr_add_gaussian_noise(HexaVal target_v, HexaVal sigma_v); /* runtime.c — RFC 033 */
 
+/* ── RFC 050 L1 slice 1: forge dispatcher callable from hexa ────────
+ * codegen_c2.hexa lowers the 5-arg `forge_dispatch_matmul` builtin to a
+ * direct `hexa_forge_dispatch_matmul` call. It packs a ForgeShapeInfo +
+ * ForgeArgs and routes through forge_tier_dispatch_v1 (RFC 050 §6.1),
+ * then yields the output farr handle (or hexa_int(-1) on a dispatch
+ * error). Same runtime.h-split contract as the farr ABI above — the
+ * generated user.c TU only #include "runtime.h", so the prototype must
+ * be visible to avoid an implicit-int mis-init of `HexaVal c = ...`.
+ * Body (SSOT): self/runtime.c, defined after the forge_tier_v1.c
+ * inline include so forge_tier_dispatch_v1 is in scope. */
+HexaVal hexa_forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                   HexaVal b_v, HexaVal n_v);          /* runtime.c — RFC 050 */
+
 /* ── safetensors mmap-backed zero-copy load (RFC 025) ──────────────
  * codegen_c2.hexa lowers safetensors_mmap_* builtins to direct
  * `hexa_safetensors_mmap_*` calls (1-arg: open/header/data_offset/
