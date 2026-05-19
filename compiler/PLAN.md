@@ -2927,3 +2927,49 @@ namespace block whose body holds *declarations*, requiring top-level
 decl-hoisting (not a `gen2_stmt` body-inline, which would emit nested C
 functions = silently-wrong). Zero real usage (only `test_keyword_audit`).
 Deferred to a dedicated decl-hoisting cycle rather than faked.
+
+### ★ 진행 로그 — ModStmt decl-hoisting cycle CLOSED (2026-05-19)
+
+The deferred **ModStmt** gap above is **CLOSED** by a dedicated
+decl-hoisting cycle. Implementation: `_gen2_flatten_mods(ast)` in
+`self/codegen_c2.hexa` — a pre-pass mirroring the proven
+`_gen2_lift_nested_decls` pattern. C has no namespaces, so the honest
+lowering is decl-hoisting: each top-level / script-body `ModStmt` is
+replaced by its body's declarations spliced into module scope
+(recursively for nested `mod`). Wired into both `codegen_c2_full` (the
+live transpile entry) and `codegen_c2` as
+`_gen2_lift_nested_decls(_gen2_flatten_mods(ast))` so `mod` body decls
+are hoisted before nested-decl lifting + the top-level emit loop run.
+
+Measured-honest proof (BEFORE / AFTER, all on Mac host-pinned):
+
+- **BEFORE** (`./hexa build /tmp/mod_smoke.hexa`, old codegen):
+  clang error `use of undeclared identifier 'inner'` — the
+  `fn inner()` inside `mod mymod { ... }` was dropped, never emitted at
+  module scope. Bug confirmed.
+- **AFTER** (new transpiler `/tmp/hexa_v2.new` from regenerated
+  `hexa_cc.c.new`): `inner` emitted at module scope
+  (`HexaVal inner(void);` fwd + `HexaVal inner(void) { ... }` def),
+  called unqualified, builds + runs → prints `42` then `mod ok`, rc=0.
+  Smoke mirrors `test_keyword_audit`'s exact `mod mymod { fn inner()
+  { return 42 } }` construct.
+
+Regen-promote ceremony (single bump): `hexa_cc.c`
+1479085→1480432 B, `hexa_v2` 1533080→1533320 B. Driver rebuilt
+(new hexa_v2 → `build/stage1/main.c` → clang -O3 → hexa.real +
+codesign → cp hexadrv).
+
+Validation (all on Mac, host-pinned): full driver path
+`./hexa build /tmp/mod_smoke.hexa` → `42` / `mod ok` / rc=0;
+self-host fixpoint **BYTE-IDENTICAL** (`./hexa cc --regen` →
+hexa_cc.c.new ≡ promoted hexa_cc.c); atlas **118/118 PASS**
+(94 closed: 61 SUPPORTED-IDENTITY + 33 SUPPORTED-FORMAL);
+driver `./hexa --version` → `hexa 0.1.0-dispatch` rc=0.
+
+LIMITATION (honest, documented in source comment, NOT done): symbols
+are NOT namespace-prefixed and qualified `modname::sym` references are
+not resolved — per-mod symbol prefixing + qualified-path resolution is
+a later cycle if real `mod` usage with cross-mod name collisions ever
+lands. A `mod` nested *inside a fn body* is also out of scope (same
+shallow-walk boundary as `_gen2_lift_nested_decls`); top-level /
+script-body `mod` (the only form in the corpus today) is covered.
