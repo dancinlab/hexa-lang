@@ -699,3 +699,61 @@
     2026-05-19). Filed for inbox drift-tracking completeness only —
     no action needed. Corrects an earlier hexa-arch-session
     mis-statement that this commit was unpushed (g3).
+
+- id: stdlib-yosys-rfc006-scaffold
+  source_commit: pending
+  source_files:
+    - stdlib/yosys/README.md
+    - stdlib/yosys/rtlil.hexa.stub
+    - stdlib/yosys/read_verilog.hexa.stub
+    - stdlib/yosys/passes.hexa.stub
+    - stdlib/yosys/liberty.hexa.stub
+    - stdlib/yosys/abc_map.hexa.stub
+    - stdlib/yosys/write_verilog.hexa.stub
+    - stdlib/yosys/yosys.hexa.stub
+  compiler_impact: |
+    Pure stdlib/yosys/ addition (8 files: README + 7 .hexa.stub) —
+    leaf modules, no compiler/ or self/ change. SCAFFOLD-ONLY: every
+    fn main() exits 91 (rfc_048 raw-91 doctrine). Per
+    AGENTS.tape g_inbox_processing_loop Shape-B (RFC + scaffold,
+    zero behavior change, 3+ cycle phasing).
+  selftest_delta: "0 (all 7 module fn main() exit 91 — skeleton; NOT yet wired into hexa-lang selftest harness count — honest, g3: do not claim a delta until module bodies land + §5 gate measured)"
+  downstream_consumer: |
+    hexa-arch rfc_006 (Yosys absorption) drafted §4 module list; this
+    is the modules' SSOT home per hexa-arch D15/D19 (same idiom as
+    stdlib/booksim/). Eventual consumer of the synth output:
+    comb/rtl/router_d{4,6}.v synthesized against SKY130 — the
+    measurement that closes rfc_006 §5 area-oracle gate.
+  status: pending
+  opened: 2026-05-19
+  note: |
+    Filed from hexa-lang session 2026-05-19 in response to
+    inbox/notes/2026-05-19-hexa-arch-rfc006-yosys-handoff.md item ②
+    (Yosys §4 implementation). hexa-arch repo not present locally
+    as of this filing — rfc_006 design referenced via the handoff
+    note only.
+
+    Landed via isolated worktree (branch yosys-reland-2026-05-19)
+    after two shared-worktree-hazard fires on the main tree (initial
+    commit swept into parallel cherry-pick f880c425 then rewritten
+    away as a6e5ac95; second attempt blocked by cherry-pick
+    b9c38cf4). Full audit trail:
+    inbox/notes/2026-05-19-shared-worktree-hazard-yosys-drop.md.
+
+    Gate (rfc_006 §5, g3 — required for status flip to applied):
+      G1 read comb/rtl/router_d4.v + router_d6.v (Verilog-2005)
+      G2 synthesize against SKY130 sky130_fd_sc_hd cell library
+      G3 reproduce area oracle ±5%: d4 ≈ 61,763 µm², d6 ≈ 93,609 µm²,
+         ratio ≈ 1.516×
+      G4 file numbers + provenance into comb/rtl/synth_comparison.md
+         or successor
+
+    Phase plan: one module per cycle (rtlil → read_verilog → passes
+    → liberty → write_verilog → abc_map → yosys dispatcher); abc_map
+    is the LAST (D18 bounded-subprocess pattern depends on the prior
+    6 being typed-stable). E (rfc_001 §B BookSim NoC curve fire,
+    separate sibling row pending) depends on this scaffold + bodies
+    + gate-PASS to synthesize router RTL.
+
+    g3: scaffold landed ≠ Yosys absorbed. Self/main.hexa branch
+    `hexa yosys` is NOT wired yet (skeleton phase).

@@ -1,0 +1,53 @@
+#!hexa strict
+// stdlib/yosys/read_verilog.hexa — Verilog-2005 → RTLIL frontend (CLEAN-ROOM skeleton)
+//
+// @version 0.0.1-skeleton
+// @capabilities [frontend, verilog, parse, rtlil-emit]
+// @stability skeleton (rfc_006 §4 module-2 of 7; bodies pending §5 gate)
+// @since 2026-05-19
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1 — public-surface clean-room)
+//   This module re-derives the *public surface* of Yosys' Verilog
+//   frontend (synthesizable subset only) by inspection of upstream +
+//   IEEE 1364-2005 / 1800-2017 standard wording. No upstream code is
+//   copied. Behavioral-simulation constructs are explicitly out of
+//   scope (rfc_006 §4 — synth path only).
+//
+//   - upstream code     : frontends/verilog/verilog_lexer.l
+//                         frontends/verilog/verilog_parser.y
+//                         frontends/verilog/preproc.cc
+//                         frontends/verilog/const2ast.cc
+//                         frontends/verilog/genrtlil.cc
+//   - upstream manual   : https://yosyshq.readthedocs.io/projects/yosys/
+//                          en/latest/yosys_internals/extending_yosys/
+//                          extensions.html (frontend extension surface)
+//   - upstream license  : ISC (YosysHQ; LICENSE)
+//   - upstream repo     : https://github.com/YosysHQ/yosys
+//   - IEEE refs (norm)  : IEEE Std 1364-2005 (Verilog) §3-13
+//                         IEEE Std 1800-2017 (SystemVerilog) §6-12
+//                         (used only as standardized language reference;
+//                          NOT a code source)
+//
+// rfc_006 §4: module-2 of 7. Consumes Verilog text (file path or
+// in-memory buffer), emits an rtlil.Design. The synthesizable subset
+// is the minimum needed to read comb/rtl/router_d{4,6}.v — synthesis
+// gate §5 requires this exact corpus to parse.
+//
+// Subset scope (re-derived from IEEE 1364-2005 + Yosys' synth subset):
+//   module/endmodule, parameter, input/output/inout, wire/reg, assign,
+//   always @ (* | posedge clk | negedge clk), if/else, case/casez,
+//   for-loop unrolling (constant bounds), generate-for, instance
+//   binding (positional + named), basic operators (+ - * / % & | ^
+//   ~ ! << >> == != < > <= >= ? :), $signed/$unsigned, concatenation
+//   { , } and replication {N{ }}. NOT in scope: $display, $finish,
+//   delays #N, fork/join, classes, dynamic arrays.
+
+fn main() {
+    // Skeleton phase — no body landed yet (rfc_048 raw-91 doctrine).
+    // Self-test will: parse comb/rtl/router_d4.v + router_d6.v + a
+    // minimum synth-subset corpus, assert resulting rtlil.Design has
+    // expected module count + wire/cell topology, fail-loud on any
+    // unsupported construct with a "synth subset only" diagnostic.
+    println("stdlib/yosys/read_verilog.hexa: TBD-STUB (rfc_006 §4 module-2)");
+    exit(91);  // rfc_048 raw-91 — TBD-stub-hit, do not wire in
+}
