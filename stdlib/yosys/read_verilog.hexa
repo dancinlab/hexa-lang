@@ -188,6 +188,25 @@ fn symtab_new() -> SymTab {
 }
 
 fn symtab_put(s: SymTab, name: str, value: int) -> SymTab {
+    // update in place if `name` is already present (genvar update in
+    // generate-for unroll); otherwise append.
+    let mut i = 0
+    while i < len(s.names) {
+        if s.names[i] == name {
+            let mut newvals: [int] = []
+            let mut k = 0
+            while k < len(s.values) {
+                if k == i {
+                    newvals = newvals.push(value)
+                } else {
+                    newvals = newvals.push(s.values[k])
+                }
+                k = k + 1
+            }
+            return SymTab { names: s.names, values: newvals }
+        }
+        i = i + 1
+    }
     return SymTab { names: s.names.push(name), values: s.values.push(value) }
 }
 
@@ -560,11 +579,33 @@ fn read_verilog(src: str) -> ReadVerilogResult {
                                             }
                                             funcs = funcs.push(rf.func)
                                         } else {
-                                            // unsupported construct — fail-loud
-                                            return ReadVerilogResult {
-                                                ok: 0, design: d,
-                                                message: "read_verilog: unsupported construct `"
-                                                    + bt + "` (synth-subset only — see rfc_006 §4 module-2 scope)"
+                                            if bt == "generate" {
+                                                let rg = _rv_parse_generate(st, m, tab)
+                                                st = rg.st
+                                                m = rg.m
+                                                tab = rg.tab
+                                                if len(st.err) > 0 {
+                                                    return ReadVerilogResult {
+                                                        ok: 0, design: d, message: st.err
+                                                    }
+                                                }
+                                            } else {
+                                                if bt == "genvar" {
+                                                    // `genvar NAME ;` — declaration only, value
+                                                    // is set inside the generate-for init.
+                                                    while st.pos < len(st.toks) {
+                                                        if _ps_peek(st) == ";" {
+                                                            st = _ps_take(st); break
+                                                        }
+                                                        st = _ps_take(st)
+                                                    }
+                                                } else {
+                                                    return ReadVerilogResult {
+                                                        ok: 0, design: d,
+                                                        message: "read_verilog: unsupported construct `"
+                                                            + bt + "` (synth-subset only — see rfc_006 §4 module-2 scope)"
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -808,8 +849,38 @@ fn _rv_parse_assign(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
     if st.pos >= len(st.toks) {
         return RvStep { st: _ps_fail(st, "read_verilog: EOF after `assign`"), m: m }
     }
-    let lhs = _ps_peek(st)
+    let lhs_base = _ps_peek(st)
     st = _ps_take(st)
+    let mut lhs = lhs_base
+    // optional `[ <const> ]` index on the LHS (unpacked array element
+    // after generate-unrolling or pre-elaborated indexed wire).
+    if _ps_peek(st) == "[" {
+        st = _ps_take(st)
+        let mut idxtoks: [str] = []
+        let mut depth = 1
+        while st.pos < len(st.toks) {
+            let it = _ps_peek(st)
+            if it == "[" {
+                depth = depth + 1
+                idxtoks = idxtoks.push(it)
+                st = _ps_take(st)
+                continue
+            }
+            if it == "]" {
+                depth = depth - 1
+                if depth == 0 { st = _ps_take(st); break }
+                idxtoks = idxtoks.push(it)
+                st = _ps_take(st)
+                continue
+            }
+            idxtoks = idxtoks.push(it)
+            st = _ps_take(st)
+        }
+        let ev = _rv_eval_expr(idxtoks, 0, tab, 1)
+        if len(ev.err) == 0 {
+            lhs = lhs_base + "[" + str(ev.value) + "]"
+        }
+    }
     if _ps_peek(st) != "=" {
         return RvStep {
             st: _ps_fail(st, "read_verilog: assign missing `=` (got `" + _ps_peek(st) + "`)"),
@@ -1173,6 +1244,178 @@ fn _rv_find_function(funcs: [VFunc], name: str) -> int {
     return 0 - 1
 }
 
+// ─── generate-for static unroll (rfc_006 §4 m2, D68) ─────────────────────
+
+// Parse-step result for a `generate` block — cursor + module + tab.
+struct RvGenStep {
+    st:  PState,
+    m:   Module,
+    tab: SymTab,
+}
+
+// CLEAN-ROOM: parse and unroll a `generate for ( GV = INIT ; COND ; GV
+// = STEP ) begin [: label] BODY end endgenerate` block (IEEE 1364-2005
+// §12.4.1). On each iteration the genvar is bound in `tab` and the
+// body is re-parsed; supported body statements are `assign` and
+// `localparam` (router_d{4,6}.v synth-subset). Nested begin/end are
+// depth-balanced; an iteration cap guards runaway loops.
+fn _rv_parse_generate(st_in: PState, m_in: Module, tab_in: SymTab) -> RvGenStep {
+    let mut st = _ps_take(st_in)            // consume "generate"
+    let mut m = m_in
+    let mut tab = tab_in
+    if _ps_peek(st) != "for" {
+        return RvGenStep {
+            st: _ps_fail(st, "read_verilog: generate: expected `for`"),
+            m: m, tab: tab
+        }
+    }
+    st = _ps_take(st)
+    if _ps_peek(st) != "(" {
+        return RvGenStep {
+            st: _ps_fail(st, "read_verilog: generate for: expected `(`"),
+            m: m, tab: tab
+        }
+    }
+    st = _ps_take(st)
+
+    // init: GV = INIT ;
+    let gv = _ps_peek(st)
+    st = _ps_take(st)
+    if _ps_peek(st) != "=" {
+        return RvGenStep {
+            st: _ps_fail(st, "read_verilog: generate for init: expected `=`"),
+            m: m, tab: tab
+        }
+    }
+    st = _ps_take(st)
+    let mut initoks: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ";" { st = _ps_take(st); break }
+        initoks = initoks.push(t)
+        st = _ps_take(st)
+    }
+    let init_ev = _rv_eval_expr(initoks, 0, tab, 1)
+    if len(init_ev.err) > 0 {
+        return RvGenStep {
+            st: _ps_fail(st, "read_verilog: generate for init: " + init_ev.err),
+            m: m, tab: tab
+        }
+    }
+    tab = symtab_put(tab, gv, init_ev.value)
+
+    // cond expr until ";"
+    let mut condtoks: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ";" { st = _ps_take(st); break }
+        condtoks = condtoks.push(t)
+        st = _ps_take(st)
+    }
+
+    // step: GV = STEP ) — skip name + "=", collect step expr until ")"
+    st = _ps_take(st)                       // step gv name
+    if _ps_peek(st) != "=" {
+        return RvGenStep {
+            st: _ps_fail(st, "read_verilog: generate for step: expected `=`"),
+            m: m, tab: tab
+        }
+    }
+    st = _ps_take(st)
+    let mut steptoks: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ")" { st = _ps_take(st); break }
+        steptoks = steptoks.push(t)
+        st = _ps_take(st)
+    }
+
+    // expect "begin" [: label]
+    if _ps_peek(st) != "begin" {
+        return RvGenStep {
+            st: _ps_fail(st, "read_verilog: generate for: expected `begin`"),
+            m: m, tab: tab
+        }
+    }
+    st = _ps_take(st)
+    if _ps_peek(st) == ":" {
+        st = _ps_take(st)
+        st = _ps_take(st)                   // label name
+    }
+
+    // record body span [body_start, body_end), depth-balancing begin/end.
+    let body_start = st.pos
+    let mut depth = 1
+    let mut body_end = body_start
+    while body_end < len(st.toks) {
+        let t = st.toks[body_end]
+        if t == "begin" { depth = depth + 1 }
+        if t == "end" {
+            depth = depth - 1
+            if depth == 0 { break }
+        }
+        body_end = body_end + 1
+    }
+
+    // unroll: re-parse the body each iteration while COND folds to non-zero.
+    let mut iter = 0
+    while iter < 1024 {
+        let cond_ev = _rv_eval_expr(condtoks, 0, tab, 1)
+        if len(cond_ev.err) > 0 {
+            return RvGenStep {
+                st: _ps_fail(st, "read_verilog: generate for cond: " + cond_ev.err),
+                m: m, tab: tab
+            }
+        }
+        if cond_ev.value == 0 { break }
+
+        let mut bst = PState { toks: st.toks, pos: body_start, err: "" }
+        while bst.pos < body_end {
+            let bt = _ps_peek(bst)
+            if bt == "assign" {
+                let r = _rv_parse_assign(bst, m, tab)
+                bst = r.st
+                m = r.m
+                if len(bst.err) > 0 {
+                    return RvGenStep { st: bst, m: m, tab: tab }
+                }
+            } else {
+                if bt == "localparam" {
+                    let r2 = _rv_parse_localparam(bst, tab)
+                    bst = r2.st
+                    tab = r2.tab
+                    if len(bst.err) > 0 {
+                        return RvGenStep { st: bst, m: m, tab: tab }
+                    }
+                } else {
+                    bst = _ps_take(bst)
+                }
+            }
+        }
+
+        let step_ev = _rv_eval_expr(steptoks, 0, tab, 1)
+        if len(step_ev.err) > 0 {
+            return RvGenStep {
+                st: _ps_fail(st, "read_verilog: generate for step: " + step_ev.err),
+                m: m, tab: tab
+            }
+        }
+        tab = symtab_put(tab, gv, step_ev.value)
+        iter = iter + 1
+    }
+
+    // jump past body + the closing `end`
+    st = PState { toks: st.toks, pos: body_end + 1, err: "" }
+    if _ps_peek(st) != "endgenerate" {
+        return RvGenStep {
+            st: _ps_fail(st, "read_verilog: generate: expected `endgenerate`"),
+            m: m, tab: tab
+        }
+    }
+    st = _ps_take(st)
+    return RvGenStep { st: st, m: m, tab: tab }
+}
+
 // ─── public entry: parse a file ──────────────────────────────────────────
 
 // CLEAN-ROOM: read a Verilog file and parse it.
@@ -1508,6 +1751,32 @@ fn main() {
             let _last = len(_m23.connect_lhs) - 1
             if _m23.connect_rhs[_last] != "bus[1]" {
                 println("FAIL T23b rhs got `" + _m23.connect_rhs[_last] + "`"); fails = fails + 1
+            }
+        }
+    }
+
+    // T25 — generate-for static unroll: 4 iterations → 4 connects.
+    total = total + 1
+    let _v25 = "module gm #( parameter N = 4 ) ( input wire din [ 0 : 3 ] , output wire dout [ 0 : 3 ] ) ; genvar p ; generate for ( p = 0 ; p < N ; p = p + 1 ) begin : gen_assign assign dout [ p ] = din [ p ] ; end endgenerate endmodule"
+    let _r25 = read_verilog(_v25)
+    if _r25.ok != 1 {
+        println("FAIL T25 generate_for: " + _r25.message); fails = fails + 1
+    } else {
+        let _m25 = _r25.design.modules[0]
+        if len(_m25.connect_lhs) != 4 {
+            println("FAIL T25a connect_count got " + str(len(_m25.connect_lhs))); fails = fails + 1
+        } else {
+            // verify the third iteration produced `connect dout[2] din[2]`
+            let mut found = 0
+            let mut k = 0
+            while k < len(_m25.connect_lhs) {
+                if _m25.connect_lhs[k] == "dout[2]" && _m25.connect_rhs[k] == "din[2]" {
+                    found = 1
+                }
+                k = k + 1
+            }
+            if found == 0 {
+                println("FAIL T25b dout[2]=din[2] not found"); fails = fails + 1
             }
         }
     }
