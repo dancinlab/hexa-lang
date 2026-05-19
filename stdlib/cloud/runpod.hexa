@@ -213,8 +213,12 @@ fn runpod_get_ssh_port(api_key: str, pod_id: str) -> RunPodSshPort {
 }
 
 // runpod_pod_opts — canonical ssh_opts for an ephemeral RunPod pod.
+// `ServerAliveInterval=15` + `ServerAliveCountMax=3` keep an idle ssh from
+// being declared dead by transient network noise (45s of unanswered
+// keepalives → clean exit, instead of a TCP-stale timeout that took several
+// minutes and confused poll-loop strike counters in the wild).
 fn runpod_pod_opts(port: str) -> [str] {
-    return ["-p", port, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
+    return ["-p", port, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]
 }
 
 // runpod_wait_ssh — poll the port map AND a real `echo` round-trip via
