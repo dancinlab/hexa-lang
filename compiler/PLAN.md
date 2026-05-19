@@ -3639,3 +3639,41 @@ keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/tes
 - **cc --regen / binary promote**: 미수행. atlas_cli.hexa = driver 가 run 하는 tool
   (NOT hexa_cc.c SSOT 모듈). @D g_commit_push_deploy: tool/* 변경은 source-only;
   driver 빌드 무영향. compile-then-exec path (`hexa run`) 로 모든 측정 진행.
+
+## 진행 로그 — RFC 065 `hexa loop` self-growing atlas cycle drafted (2026-05-20)
+
+Phase A (spec-only, 0 code change) landed as `inbox/rfc_drafts_2026_05_20/rfc_065_hexa_loop.md`
++ companion `design.md` decision ledger (7 decisions).
+
+- **scope**: new verb `hexa loop` that walks compiler/atlas/embedded.gen.hexa,
+  applies a binary-built-in lens table (`compiler/lenses/embedded.gen.hexa`,
+  sibling SSOT), emits PR-only atlas/lens candidates to
+  `inbox/{atlas,lens}_candidates/`, self-terminates on brainstorm exhaustion.
+- **legacy**: dancinlab/archive-nexus (frozen 2026-05-17) state-file
+  convention (.loop / .chain / .gap_cooldown / .goal_growth_state.json /
+  .turn / .end / .guide) is reused; the 130+ lens engine itself was NOT
+  ported as code (self/nexus_port/ = optimizer port only, confirmed).
+  Seed = 32 lens (8 family × 4); 130+ reached via PR-driven expansion.
+- **invariant**: PR-only — loop NEVER mutates compiler/atlas/embedded.gen.hexa
+  or compiler/lenses/embedded.gen.hexa directly. Write set ⊆
+  `{inbox/**, $HEXA_LANG/state/loop/**, /tmp/**}`. Falsifier F1 explicit.
+- **7 decisions**: (1) lens at `compiler/lenses/` sibling — (2) seed = 32
+  hybrid, nexus_port fallback fired — (3) state at `$HEXA_LANG/state/loop/
+  <cwd_hash>/` — (4) trays = sibling `inbox/{atlas,lens}_candidates/` —
+  (5) cooldown = hard-block N=5 cycles — (6) fire = `--no-fire` default,
+  opt-in `--fire --budget <USD>` — (7) exhaust = 3 consecutive 0-emit
+  cycles ∧ cooldown empty.
+- **governance**: complies with @D g_atlas_binary_builtin (binary built-in
+  symmetry) · g6 (citation-enforced; every Candidate carries
+  `cite: [atlas_node_id]`) · g7 (inbox sibling stream) · g_interp_deprecated
+  (compiled-path verb) · g_commit_push_deploy (lens PR includes regenerated
+  embedded.gen.hexa + paired binary promote) · g_plan_consolidation (this
+  entry).
+- **phase plan**: B = scaffold (32 empty seed lenses + 8-stage cycle shell
+  + `hexa loop --once --dry-run` selftest); C = measurement (seed bodies +
+  first inbox/atlas_candidates/ PR). B and C are separate RFCs.
+- **next**: reviewer pass on §8 (lens schema), §7 (exhaustion), §10
+  (governance matrix), §12 (falsifier set) → land sign-off → Phase B.
+- **commit**: source-only (RFC draft + design.md + this entry). No
+  hexa_cc.c regen / binary promote needed; @D g_commit_push_deploy
+  scope = compiler source files, not inbox RFC drafts.
