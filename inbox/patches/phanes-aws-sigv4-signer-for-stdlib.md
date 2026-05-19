@@ -1,6 +1,6 @@
 # incoming patch: phanes-aws-sigv4-signer-for-stdlib — stdlib has no AWS SigV4 request signer; add `stdlib/aws/sigv4.hexa` (+ a byte-level HMAC-SHA256)
 
-> **id**: `phanes-aws-sigv4-signer-for-stdlib` · **opened**: 2026-05-19 KST · **status**: `open — feature request, downstream-filed per @D g7 / @D g_stdlib_ownership`
+> **id**: `phanes-aws-sigv4-signer-for-stdlib` · **opened**: 2026-05-19 KST · **status**: `resolved-ssot — stdlib/aws/sigv4.hexa + stdlib/core/hash/hmac.hexa landed, AWS test-suite byte-eq verified (see resolution note)`
 > **trees**: `stdlib/aws/` (new — proposed home) · `stdlib/core/hash/sha256.hexa` (has `sha256_hex`, byte-capable `sha256_hash_bytes`) · `self/std_crypto.hexa` (has `hmac_sha256`, but string-in / hex-out — see §3) · `self/stdlib/bedrock_sdk.hexa` (already DEFERs its SigV4 path — this patch un-blocks it)
 > **source**: downstream `phanes` (`~/core/phanes`, public source-available SaaS).
 > **observed**: 2026-05-19 · hexa-lang pin: `6f9962e5`
@@ -125,3 +125,53 @@ over it.
 - phanes `design.md` Decision 13 (Stripe — also HTTP-API, separate) +
   Decision 15 (DynamoDB + S3 — the consumer of this signer).
 - AWS SigV4 test suite: https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html (worked example) · the `aws-sig-v4-test-suite` fixture set.
+
+---
+
+## 7. Resolution (2026-05-19 — resolved-ssot)
+
+Landed as **Shape A** (real implementation, not RFC scaffold): SigV4 is pure,
+deterministic, and fully unit-testable against AWS-published oracles, so a
+direct implementation with byte-eq falsifier is the natural fit.
+
+**Files added:**
+- `stdlib/core/hash/hmac.hexa` — byte-level `hmac_sha256_bytes(key: [int],
+  data: [int]) -> [int]` (raw bytes in, raw bytes out — the §3 gap). Carries
+  its own pure-hexa SHA-256-over-bytes core (`sha256_digest_bytes`) because
+  the runtime `sha256` builtin is string-in/hex-out only and cannot be fed
+  the intermediate ipad/opad blocks. Also ships `hmac_sha256_hex`,
+  `sha256_hex_bytes`, and the thin `hmac_sha256_str` string/hex wrapper that
+  re-expresses the legacy `self/std_crypto.hexa::hmac_sha256` surface on top
+  of the byte-level core (§3 suggested re-base).
+- `stdlib/core/hash/hmac_test.hexa` — FIPS 180-4 SHA-256 vectors (empty,
+  "abc") + RFC 4231 §4 HMAC-SHA256 known-answer vectors (cases 1 & 2) +
+  a chaining proof that byte-key ≠ hex-key (the exact §3 bug).
+- `stdlib/aws/sigv4.hexa` — pure `sigv4_sign(req: Sigv4Request) -> Sigv4Result`.
+  No network, no I/O. Implements the 4-step algorithm verbatim; returns the
+  `Authorization` header value plus `x-amz-date` / `x-amz-content-sha256`,
+  and exposes the canonical-request / string-to-sign intermediates for
+  assertion. Optional STS `session_token` field is on the request struct.
+- `stdlib/aws/sigv4_test.hexa` — the official `aws-sig-v4-test-suite`
+  `get-vanilla` fixture as a byte-eq self-test.
+
+**Verification (measured, compiled path — `hexa build`, interp not used):**
+- `hmac_test`: 8/8 PASS — SHA-256 + HMAC-SHA256 byte-equal to FIPS 180-4 /
+  RFC 4231 published vectors.
+- `sigv4_test`: 9/9 PASS — canonical request, full string-to-sign (incl. the
+  published canonical-request hash `bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63`),
+  signature `5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31`,
+  and the complete `Authorization` header all byte-equal to the AWS
+  `get-vanilla` oracle. Zero AWS account / network used.
+
+**Not done (honest scope):** `sigv4.hexa` assumes the caller passes an
+already-encoded `path` and a pre-canonicalised `query` string — it does not
+implement the SigV4 `UriEncode()` percent-encoder or query-parameter
+sorting. For AWS JSON APIs (DynamoDB, Bedrock, STS) the path is always `/`
+and the query is empty, so the `get-vanilla` case fully exercises the live
+path. S3 object paths with non-trivial keys / query parameters will need a
+`UriEncode` helper added before that surface is signed — punted as a
+follow-up (the `get-*-query` / `get-*-utf8` suite cases are the falsifier
+for it). `self/std_crypto.hexa::hmac_sha256` was left untouched (it predates
+the retired interpreter and uses interp-era builtins); `hmac_sha256_str`
+in the new module is the compiled-path replacement and the suggested
+re-base target.

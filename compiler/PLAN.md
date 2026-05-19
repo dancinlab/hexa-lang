@@ -2552,3 +2552,28 @@ Two more interp-residue removals (commits 122ac6f1, c4dea75b):
 Toolchain build-smoke clean after each. Remaining interp-era residue is
 documentation only (`PLAN-interp-retirement.md`, `docs/interp_*.md`) — kept
 as historical record.
+
+### 2026-05-19 — stdlib: AWS SigV4 signer + byte-level HMAC-SHA256 LANDED (inbox phanes-aws-sigv4-signer)
+
+inbox/patches/phanes-aws-sigv4-signer-for-stdlib.md (downstream phanes,
+@D g7) processed Shape A. 4 files added:
+- `stdlib/core/hash/hmac.hexa` — byte-level `hmac_sha256_bytes(key:[int],
+  data:[int])->[int]` (raw bytes in/out — the §3 gap; the legacy
+  `self/std_crypto.hexa::hmac_sha256` is string-in/hex-out which silently
+  breaks the SigV4 4-link key chain). Self-contained pure-hexa SHA-256
+  core (`sha256_digest_bytes`) since the runtime `sha256` builtin is
+  string-in/hex-out only. Native bitwise ops (`& | ^ << >>`) used —
+  `bit_xor`/`array_push`/`math_pow` were interp-era builtins absent from
+  the compiled path. Ships `hmac_sha256_hex`/`sha256_hex_bytes`/
+  `hmac_sha256_str` (string/hex wrapper = §3 re-base target).
+- `stdlib/aws/sigv4.hexa` — pure `sigv4_sign(req)->Sigv4Result`; no I/O.
+- `stdlib/core/hash/hmac_test.hexa` + `stdlib/aws/sigv4_test.hexa` tests.
+
+Verified (compiled path, `hexa build`, interp not used): hmac_test 8/8
+PASS (FIPS 180-4 SHA-256 + RFC 4231 HMAC vectors); sigv4_test 9/9 PASS —
+canonical request, string-to-sign, signature `5fa00fa3…`, and full
+`Authorization` header all byte-equal to the official AWS
+`aws-sig-v4-test-suite` `get-vanilla` fixture, zero AWS account/network.
+Punted: SigV4 `UriEncode()` percent-encoder + query-param sorting (caller
+passes pre-encoded path/query; AWS JSON APIs use `/` + empty query, so the
+live path is fully covered — S3 object-key signing needs the encoder).
