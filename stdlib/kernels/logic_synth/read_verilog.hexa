@@ -1530,85 +1530,81 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
         st = _ps_take(st)
     }
 
-    // parse one assignment (single-statement body — honest gap for
-    // multi-statement / if / for; those need the full Process model).
-    let q_base = _ps_peek(st)
-    st = _ps_take(st)
-    let mut q = q_base
-    // optional `[ <const> ]` on LHS
-    if _ps_peek(st) == "[" {
-        st = _ps_take(st)
-        let mut idxtoks: [str] = []
-        let mut depth = 1
-        while st.pos < len(st.toks) {
-            let it = _ps_peek(st)
-            if it == "[" {
-                depth = depth + 1
-                idxtoks = idxtoks.push(it)
-                st = _ps_take(st)
-                continue
-            }
-            if it == "]" {
-                depth = depth - 1
-                if depth == 0 { st = _ps_take(st); break }
-                idxtoks = idxtoks.push(it)
-                st = _ps_take(st)
-                continue
-            }
-            idxtoks = idxtoks.push(it)
+    // Parse one or more statements. With `begin`, loop until `end`;
+    // otherwise a single statement. Supported per-statement shape:
+    //   VAR [ <const> ]  (`<=` | `=`)  EXPR ;
+    // If / for / case / function-call inside the body are honest gaps
+    // (those need the full yosys `proc` pass — separate commit).
+    let mut keep_going = 1
+    while keep_going == 1 {
+        if has_begin == 1 && _ps_peek(st) == "end" {
             st = _ps_take(st)
+            break
         }
-        let ev = _rv_eval_expr(idxtoks, 0, tab, 1)
-        if len(ev.err) == 0 {
-            q = q_base + "[" + str(ev.value) + "]"
-        }
-    }
-    // accept `<=` (nonblocking) or `=` (blocking)
-    let opk = _ps_peek(st)
-    if opk != "<=" && opk != "=" {
-        return RvStep {
-            st: _ps_fail(st, "read_verilog: always body: expected `<=` or `=` got `"
-                + opk + "`"),
-            m: m
-        }
-    }
-    st = _ps_take(st)
-    let mut rhs: [str] = []
-    while st.pos < len(st.toks) {
-        let t = _ps_peek(st)
-        if t == ";" { st = _ps_take(st); break }
-        rhs = rhs.push(t)
+        let q_base = _ps_peek(st)
         st = _ps_take(st)
-    }
-    let er = _rv_elab_expr(rhs, 0, m, 1, tab)
-    if len(er.err) > 0 {
-        return RvStep { st: _ps_fail(st, er.err), m: m }
-    }
-    m = er.m
-
-    if has_begin == 1 {
-        if _ps_peek(st) != "end" {
+        let mut q = q_base
+        // optional `[ <const> ]` on LHS
+        if _ps_peek(st) == "[" {
+            st = _ps_take(st)
+            let mut idxtoks: [str] = []
+            let mut depth = 1
+            while st.pos < len(st.toks) {
+                let it = _ps_peek(st)
+                if it == "[" {
+                    depth = depth + 1
+                    idxtoks = idxtoks.push(it)
+                    st = _ps_take(st)
+                    continue
+                }
+                if it == "]" {
+                    depth = depth - 1
+                    if depth == 0 { st = _ps_take(st); break }
+                    idxtoks = idxtoks.push(it)
+                    st = _ps_take(st)
+                    continue
+                }
+                idxtoks = idxtoks.push(it)
+                st = _ps_take(st)
+            }
+            let ev = _rv_eval_expr(idxtoks, 0, tab, 1)
+            if len(ev.err) == 0 {
+                q = q_base + "[" + str(ev.value) + "]"
+            }
+        }
+        let opk = _ps_peek(st)
+        if opk != "<=" && opk != "=" {
             return RvStep {
-                st: _ps_fail(st, "read_verilog: always: expected `end` (single-statement body only — honest gap)"),
+                st: _ps_fail(st, "read_verilog: always body: expected `<=` or `=` got `"
+                    + opk + "`"),
                 m: m
             }
         }
         st = _ps_take(st)
-    }
-
-    if is_clocked == 1 {
-        // emit $dff: CLK=clk, D=expr-wire, Q=lhs.
-        let cn = "$rvff$" + str(len(m.cells))
-        let mut c = rtlil_cell(cn, "$dff", 0)
-        c = rtlil_cell_connect(c, "CLK", clk_wire)
-        c = rtlil_cell_connect(c, "D", er.wire)
-        c = rtlil_cell_connect(c, "Q", q)
-        m = rtlil_module_add_cell(m, c)
-        // a single-bit edge marker on the connection ($dff arity)
-        let _eg = clk_edge   // retained in cell-naming order; semantic
-    } else {
-        // combinational @(*) — single assignment is just a connect
-        m = rtlil_module_connect(m, q, er.wire)
+        let mut rhs: [str] = []
+        while st.pos < len(st.toks) {
+            let t = _ps_peek(st)
+            if t == ";" { st = _ps_take(st); break }
+            rhs = rhs.push(t)
+            st = _ps_take(st)
+        }
+        let er = _rv_elab_expr(rhs, 0, m, 1, tab)
+        if len(er.err) > 0 {
+            return RvStep { st: _ps_fail(st, er.err), m: m }
+        }
+        m = er.m
+        if is_clocked == 1 {
+            let cn = "$rvff$" + str(len(m.cells))
+            let mut c = rtlil_cell(cn, "$dff", 0)
+            c = rtlil_cell_connect(c, "CLK", clk_wire)
+            c = rtlil_cell_connect(c, "D", er.wire)
+            c = rtlil_cell_connect(c, "Q", q)
+            m = rtlil_module_add_cell(m, c)
+            let _eg = clk_edge
+        } else {
+            m = rtlil_module_connect(m, q, er.wire)
+        }
+        if has_begin == 0 { keep_going = 0 }
     }
     return RvStep { st: st, m: m }
 }
@@ -1712,9 +1708,10 @@ fn main() {
         println("FAIL T7 comments: " + r7.message); fails = fails + 1
     }
 
-    // T8 — fail-loud on unsupported construct.
+    // T8 — fail-loud on unsupported construct (`task` is still
+    // out-of-subset; `always` itself is now supported).
     total = total + 1
-    let r8 = read_verilog("module b(a); input a; always @(*) begin end endmodule")
+    let r8 = read_verilog("module b(a); input a; task t; begin end endtask endmodule")
     if r8.ok == 1 {
         println("FAIL T8 unsupported_should_fail"); fails = fails + 1
     }
@@ -2044,6 +2041,20 @@ fn main() {
         let _b2 = rtlil_find_wire(_m28, "bus[2]")
         if _b2 < 0 {
             println("FAIL T28c bus[2]_missing"); fails = fails + 1
+        }
+    }
+
+    // T30 — multi-statement always: `begin q1 <= d1; q2 <= d2; end` → 2 $dff.
+    total = total + 1
+    let _v30 = "module mm ( input clk , input d1 , input d2 , output reg q1 , output reg q2 ) ; always @ ( posedge clk ) begin q1 <= d1 ; q2 <= d2 ; end endmodule"
+    let _r30 = read_verilog(_v30)
+    if _r30.ok != 1 {
+        println("FAIL T30 multi_dff: " + _r30.message); fails = fails + 1
+    } else {
+        let _m30 = _r30.design.modules[0]
+        if rtlil_count_cells_of_type(_m30, "$dff") != 2 {
+            println("FAIL T30a dff_count got " + str(rtlil_count_cells_of_type(_m30, "$dff")))
+            fails = fails + 1
         }
     }
 
