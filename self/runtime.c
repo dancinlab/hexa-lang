@@ -22,8 +22,13 @@
 #include <regex.h>      // G3-REGEX 2026-05-06: POSIX ERE regcomp/regexec
 #include <sys/mman.h>   // RFC 025 (2026-05-12): mmap-backed safetensors load
 extern char **environ; // posix_spawnp inherits parent env explicitly
-#if defined(__APPLE__)
+// execinfo.h: backtrace()/backtrace_symbols_fd() (HEXA_OOB_TRACE path in
+// runtime_core.c). Available on both glibc (Linux) and Darwin — gating it
+// to __APPLE__ broke the Linux runtime.c compile (implicit-fn-decl error).
+#if defined(__APPLE__) || defined(__GLIBC__)
 #include <execinfo.h>
+#endif
+#if defined(__APPLE__)
 #include <mach/mach.h>
 #include <mach/task.h>
 #include <mach/task_info.h>
