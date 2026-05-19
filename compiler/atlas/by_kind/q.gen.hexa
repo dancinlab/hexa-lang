@@ -1,0 +1,14 @@
+// AUTO-GENERATED — RFC 066 B-1a per-kind atlas split.
+// Source: tool/atlas_split_by_kind.hexa
+// Carries one kind only; sibling files cover the rest.
+//
+// Consumer: use "compiler/atlas/by_kind/q.gen"
+//
+// Byte-stable wrt the matching block in
+// compiler/atlas/embedded.gen.hexa::ATLAS_Q_NODES.
+// Do NOT hand-edit; regen via tool/atlas_split_by_kind.hexa.
+
+use "compiler/atlas/parser"
+
+pub let ATLAS_Q_NODES: [AtlasNode] = [
+]
