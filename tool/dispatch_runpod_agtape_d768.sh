@@ -112,6 +112,7 @@ SCP_CMD="scp $SSH_OPTS -P $SSH_PORT -o ConnectTimeout=3600"
 # ── 3) Toolchain sanity + GPU preflight ──────────────────────────────
 echo "[3/8] Remote toolchain sanity + GPU preflight..."
 $SSH_CMD "set +e
+  export PATH=/usr/local/cuda/bin:\$PATH
   nvidia-smi --query-gpu=name,compute_cap,memory.total --format=csv,noheader
   nvcc --version | tail -2
   which clang || (apt update >/dev/null 2>&1 && apt install -y clang >/dev/null 2>&1 && which clang)
@@ -129,6 +130,7 @@ int main(){double*p=0;cudaError_t e=cudaMalloc(&p,(size_t)786432*sizeof(double))
 if(e!=cudaSuccess){printf(\"GPU_BAD %s\\n\",cudaGetErrorString(e));return 1;}
 cudaFree(p);printf(\"GPU_OK\\n\");return 0;}
 EOF
+export PATH=/usr/local/cuda/bin:\$PATH
 nvcc -arch=sm_${DEV_CC} -O0 -o /tmp/g /tmp/g.cu 2>/tmp/g.berr && /tmp/g 2>&1 || cat /tmp/g.berr" 2>&1 | tee gpu_preflight.log | tail -1)
 if ! echo "$GPU_OK" | grep -q GPU_OK; then
     echo "  [PREFLIGHT FAIL] GPU unusable ($GPU_OK) — aborting"; SAVE_POD=0; exit 3
@@ -156,6 +158,7 @@ $SSH_CMD "ls -lh '$CORPUS_REMOTE_PATH'"
 # ── 5) Build + run ────────────────────────────────────────────────────
 echo "[5/8] Build + run on sm_${DEV_CC}..."
 $SSH_CMD "cd $REMOTE_WORK && \
+    export PATH=/usr/local/cuda/bin:\$PATH ; \
     echo '=== nvcc compile runtime_cuda.c ===' ; \
     nvcc -O2 -std=c++14 -DHEXA_CUDA -arch=sm_${DEV_CC} \
         -x cu -c self/cuda/runtime_cuda.c -o runtime_cuda.o 2>&1 | tee build_cuda.log ; \

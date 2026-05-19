@@ -270,7 +270,8 @@ SCP="scp $SSH_OPTS -P $SSH_PORT -o ConnectTimeout=3600"
 
 # ── 4) Toolchain sanity ───────────────────────────────────────────────
 echo "[4/8] Toolchain sanity ..."
-$SC "nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader|head -1
+$SC "export PATH=/usr/local/cuda/bin:\$PATH
+nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader|head -1
 nvcc --version|tail -2
 which clang||(apt update >/dev/null 2>&1 && apt install -y clang >/dev/null 2>&1 && which clang)
 mkdir -p $REMOTE_WORK
@@ -288,6 +289,7 @@ $SCP "$HARNESS_C"   "root@$SSH_HOST:$REMOTE_WORK/host_vec_add.c"
 # invoke means there is no LLVM-side link step.
 echo "[6/8] ptxas + build + fire ..."
 $SC "cd $REMOTE_WORK && \
+  export PATH=/usr/local/cuda/bin:\$PATH ; \
   GPU_ARCH=\$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader|head -1|tr -d '.\n') ; \
   echo \"GPU_ARCH=sm_\$GPU_ARCH\" ; \
   ptxas -arch=sm_\$GPU_ARCH vec_add.ptx -o vec_add.cubin 2>&1 | tee build.log ; \
