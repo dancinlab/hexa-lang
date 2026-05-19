@@ -239,18 +239,65 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         return 0xF100001F | (imm << 10) | (rn << 5)
     }
 
-    // ── Memory ──
-    // LDR Xt, [Xn]
+    // ── Memory (LDR/STR with `[Xn]` or `[Xn, #imm12]` mem operand) ──
+    // The mem operand is parsed by `_parse_mem_op` into [base_idx,
+    // offset]. The 64-bit form uses a SCALED imm12: encoded value =
+    // offset / 8 (so the range is 0..32760 in 8-byte steps).
+    //
+    // LDR Xt, [Xn{, #imm}]
     if op == "LDR" && len(ops) == 2 {
         let rt = xreg_idx(ops[0])
-        let rn = xreg_idx(ops[1])
-        return 0xF9400000 | (rn << 5) | rt
+        let mp = _parse_mem_op(ops[1])
+        if mp[0] < 0 {
+            // Treat as `[Xn]` bare (no `[`) — fall back to the original
+            // path so legacy 2-string callers (no parens) still work.
+            let rn = xreg_idx(ops[1])
+            return 0xF9400000 | (rn << 5) | rt
+        }
+        let rn = mp[0]
+        let imm = (mp[1] >> 3) & 0xFFF       // scaled imm12, 64-bit form
+        return 0xF9400000 | (imm << 10) | (rn << 5) | rt
     }
-    // STR Xt, [Xn]
+    // STR Xt, [Xn{, #imm}]
     if op == "STR" && len(ops) == 2 {
         let rt = xreg_idx(ops[0])
-        let rn = xreg_idx(ops[1])
-        return 0xF9000000 | (rn << 5) | rt
+        let mp = _parse_mem_op(ops[1])
+        if mp[0] < 0 {
+            let rn = xreg_idx(ops[1])
+            return 0xF9000000 | (rn << 5) | rt
+        }
+        let rn = mp[0]
+        let imm = (mp[1] >> 3) & 0xFFF
+        return 0xF9000000 | (imm << 10) | (rn << 5) | rt
+    }
+    // ── Stack-pair (STP/LDP) — `[Xn, #imm7]` offset form ──
+    //
+    // 64-bit form, signed scaled imm7 in 8-byte steps (range -512..504).
+    // The pre-/post-index variants (`[Xn, #imm]!` / `[Xn], #imm`) carry
+    // the same opcode prefix with two different sub-mode bits; cycle 5
+    // ships only the offset-form (sub-mode bit `010` => 0x29/0xA9 high
+    // byte for STP/LDP). Pre-/post-index follow when the frame ops need
+    // them (next cycle).
+    //
+    // STP Xt, Xt2, [Xn, #imm]
+    if op == "STP" && len(ops) == 3 {
+        let rt  = xreg_idx(ops[0])
+        let rt2 = xreg_idx(ops[1])
+        let mp  = _parse_mem_op(ops[2])
+        if mp[0] < 0 { return 0 }
+        let rn  = mp[0]
+        let imm = (mp[1] >> 3) & 0x7F
+        return 0xA9000000 | (imm << 15) | (rt2 << 10) | (rn << 5) | rt
+    }
+    // LDP Xt, Xt2, [Xn, #imm]
+    if op == "LDP" && len(ops) == 3 {
+        let rt  = xreg_idx(ops[0])
+        let rt2 = xreg_idx(ops[1])
+        let mp  = _parse_mem_op(ops[2])
+        if mp[0] < 0 { return 0 }
+        let rn  = mp[0]
+        let imm = (mp[1] >> 3) & 0x7F
+        return 0xA9400000 | (imm << 15) | (rt2 << 10) | (rn << 5) | rt
     }
 
     // ── Branches (bit-pattern only; imm26 / imm19 filled by reloc) ──
@@ -772,10 +819,50 @@ fn _lir_operand_str(op: LOperand) -> string {
     if op.kind == "reg"   { return op.reg.name }
     if op.kind == "imm"   { return "#" + to_string(op.imm) }
     if op.kind == "label" { return op.label }
-    // mem operands are intentionally unsupported in cycle 2; return a
-    // placeholder so encode_arm64_insn falls through to the unknown-op
-    // path.
+    if op.kind == "mem" {
+        // Format mirrors `compiler/emit/asm.hexa::_fmt_mem` for darwin
+        // arm64: `[base, #offset]`. The encoder splits this back out
+        // via `_parse_mem_op` when it sees a leading "[".
+        return "[" + op.mem_base.name + ", #" + to_string(op.mem_offset) + "]"
+    }
     return "<?" + op.kind + "?>"
+}
+
+// Parse a mem-operand string of the form `[Xn]`, `[Xn, #imm]`, or
+// `[sp, #-16]` back to its (base_reg_idx, offset_i64). Returns
+// `[-1, 0]` if the shape is not recognized — caller treats that as an
+// unknown-op fall-through.
+fn _parse_mem_op(s: string) -> [Int] {
+    let n = len(s)
+    if n < 3 || s.substring(0, 1) != "[" || s.substring(n - 1, n) != "]" {
+        return [-1, 0]
+    }
+    let inner = s.substring(1, n - 1)
+    let nn = len(inner)
+    // Find the comma separating base and `#imm` (if any).
+    let mut comma = -1
+    let mut i = 0
+    while i < nn {
+        if inner.substring(i, i + 1) == "," { comma = i; break }
+        i = i + 1
+    }
+    if comma < 0 {
+        // Bare `[Xn]` form — offset 0.
+        let rn = xreg_idx(inner)
+        return [rn, 0]
+    }
+    let base = inner.substring(0, comma)
+    let rest = inner.substring(comma + 1, nn)
+    // Skip the leading space(s) and `#`.
+    let nr = len(rest)
+    let mut j = 0
+    while j < nr && rest.substring(j, j + 1) == " " { j = j + 1 }
+    if j >= nr { return [-1, 0] }
+    if rest.substring(j, j + 1) == "#" { j = j + 1 }
+    let imm_s = rest.substring(j, nr)
+    let imm = imm_s.to_int()
+    let rn = xreg_idx(base)
+    return [rn, imm]
 }
 
 // State carried while walking one LFunc. label_names / label_offsets
@@ -1052,28 +1139,42 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     }
 
     // Post-walk: resolve each pending branch target's mangled name to
-    // a symbol index and emit the Arm64Reloc record. The mangled name
-    // comes from the LIR side as a raw label (e.g. `_callee`); we look
-    // it up verbatim against the symbol-table's strings.
+    // a symbol index and emit the Arm64Reloc record. Cycle 5 adds
+    // N_UNDF support — targets not already in `obj.symbols` get a
+    // placeholder undef nlist entry appended (section=0/NO_SECT,
+    // kind=0x00/N_UNDF, is_external=1/N_EXT), then the reloc points
+    // at it. This is the libc/runtime path (`_exit`, `_hexa_*` etc.).
     let np = len(pending_offsets)
     let mut pi = 0
     while pi < np {
         let off  = pending_offsets[pi]
         let name = pending_names[pi]
-        let idx  = _find_sym_by_name(obj.symbols, obj.strtab, name)
-        if idx >= 0 {
-            obj.relocs.push(Arm64Reloc {
-                offset:  off,
-                sym_idx: idx,
-                kind:    ARM64_RELOC_BRANCH26,
-                pcrel:   1,
-                length:  2,
+        let mut idx = _find_sym_by_name(obj.symbols, obj.strtab, name)
+        if idx < 0 {
+            // Push an N_UNDF undef extern symbol entry. The Mach-O
+            // convention is "defined externs first, undefs after";
+            // we don't separate them physically here — the linker
+            // tolerates intermixing as long as iundefsym lies past
+            // all the defs in dysymtab. (Cycle 5 keeps it simple by
+            // letting the order match the order they appear; cycle 6
+            // can split if a corpus test fails on it.)
+            let strx = _push_cstr(obj.strtab, name)
+            obj.symbols.push(MachoSymbol {
+                name_offset: strx,
+                section:     0,     // NO_SECT — undefined
+                value:       0,     // (linker fills in)
+                kind:        0x00,  // N_UNDF
+                is_external: 1,     // N_EXT
             })
+            idx = len(obj.symbols) - 1
         }
-        // idx < 0 means the LIR target name is not in our symbol table —
-        // a future cycle adds N_UNDF emission for "really external"
-        // symbols (libc, runtime exports). Cycle 4 only handles
-        // intra-module references.
+        obj.relocs.push(Arm64Reloc {
+            offset:  off,
+            sym_idx: idx,
+            kind:    ARM64_RELOC_BRANCH26,
+            pcrel:   1,
+            length:  2,
+        })
         pi = pi + 1
     }
     return obj
