@@ -1,6 +1,6 @@
 # incoming note: phanes-stdlib-net-server-serve-idle-socket-deadlock — `server_serve` blocks forever on a connected-but-silent socket; one idle socket starves the whole server
 
-> **id**: `phanes-stdlib-net-server-serve-idle-socket-deadlock` · **opened**: 2026-05-19 KST · **status**: `open — downstream worked around with a phanes-local select() accept loop; upstream server_serve still affected`
+> **id**: `phanes-stdlib-net-server-serve-idle-socket-deadlock` · **opened**: 2026-05-19 KST · **status**: `resolved-ssot 2026-05-19 — server_serve select-guarded; idle sockets reaped; parse-gate clean; binary promote = standard separate deploy step per the 22c27a05 pattern`
 > **trees**: `stdlib/net/http_server.hexa` (`server_serve` accept-loop + `server_handle_conn` → `socket_read`) · `stdlib/net/socket.hexa` (`socket_select` / `socket_set_nonblock` — the primitives the fix needs, already landed)
 > **source**: downstream `phanes` (`~/core/phanes`, private SaaS; HTTP service `service/http_phanes.hexa`).
 > **observed**: 2026-05-19 · hexa-lang pin: `de7b84de` (`rfc043-hexa-torch`)
@@ -141,3 +141,69 @@ consumer reproduces the hang.
   multiplex patch.
 - phanes commit `08d1738` (`dancinlab/phanes`) — `phanes_serve` reference
   implementation + the measured reproduction.
+
+---
+
+## Resolution — 2026-05-19
+
+`server_serve` in `stdlib/net/http_server.hexa` has been rewritten as a
+**select-guarded accept loop** (Shape A — minimum surgical fix; the
+primitives `socket_select` / `socket_accept` / `socket_close` were
+already landed in `stdlib/net/socket.hexa` via roadmap-62). The fix
+adopts the measured `phanes_serve()` reference shape from §5 directly
+into the upstream SSOT, so the phanes-local workaround can now be
+retired.
+
+### New loop shape
+
+Each loop tick:
+
+1. Check the `stop_flag_path` sentinel (unchanged termination condition —
+   `file_exists` / `delete_file`, exactly as before; `server_shutdown`
+   still creates the file).
+2. Build a watch set = `[listener]` + `pend` (the list of
+   accepted-but-not-yet-readable fds). A parallel `age` array tracks how
+   many ticks each `pend` fd has been silent.
+3. `socket_select(watch, 1000)` — **1000 ms select tick**.
+4. listener READ-ready → `socket_accept`, append the new fd to `pend`
+   with `age = 0`.
+5. a `pend` fd READ-ready → `server_handle_conn` (unchanged; called only
+   once the fd is known-readable, so its first-line `socket_read` no
+   longer blocks). `server_handle_conn` closes the fd itself, so it is
+   dropped from `pend`.
+6. a `pend` fd silent → `age + 1`; once `age >= 8` (**8-tick ≈ 8 s
+   idle-reap threshold**) the fd is `socket_close`d and dropped.
+7. On loop exit, any remaining `pend` fds are closed, then the listener.
+
+`socket_select` error (`[-errno]`, single negative element) is naturally
+distinguished from listener / `pend` fds (all `>= 0`) by the membership
+check, so an error tick simply accepts/handles nothing and re-enters.
+
+### What changed vs old behavior
+
+- **Fixed (deliberate behavior change):** an idle/half-open socket no
+  longer blocks the serial accept loop. It sits in `pend`, is polled by
+  `socket_select`, and is reaped after ~8 s of silence. One idle socket
+  (or six — Chrome's preconnect worst case) no longer freezes the server
+  for every other client.
+- The old code accepted an fd and immediately called `server_handle_conn`
+  → blocking `socket_read`; that hang path is gone.
+
+### What is unchanged for prompt clients
+
+- A normal client that sends its request promptly becomes READ-ready on
+  the first or next select tick, is handed to `server_handle_conn`, and
+  receives the **same response** as before — same routing, same
+  `dispatch_fn` contract, same `__stop__` handling, same CORS preflight.
+- `server_handle_conn`, `server_accept_once`, `server_shutdown`, the
+  `stop_flag_path` sentinel mechanism, and all public signatures are
+  untouched. No new public API. `concurrent_serve.hexa` not touched. No
+  OS threads added.
+
+### Verification + promote status
+
+- Parse-gate clean: `/Users/ghost/.hx/bin/hexa_real parse
+  stdlib/net/http_server.hexa` → "parses cleanly".
+- This is an SSOT source fix. Promoting it into the running `hexa_v2`
+  binary is a **separate standard deploy step** (commit `22c27a05`
+  pattern) and is intentionally out of scope for this resolution.

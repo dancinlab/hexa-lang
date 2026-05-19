@@ -2207,3 +2207,7 @@ helper; drop transitional interp fallback; retire build/hexa_interp.
 Until then cmd_run routes to the still-present build/hexa_interp
 binary (source gone, runtime unchanged, loss = 0). g_interp_deprecated
 retires with step-2 = R7 closure.
+
+### 진행 로그 — inbox note: stdlib/net server_serve idle-socket deadlock FIXED (Shape A)
+
+`stdlib/net/http_server.hexa::server_serve` rewritten as a select-guarded accept loop (1000 ms tick · 8-tick ≈ 8 s idle-reap) consuming the already-landed `socket_select`/`socket_accept`/`socket_close` primitives — accepted-but-silent fds now sit in a `pend` list and are reaped instead of blocking `socket_read`; one idle socket no longer freezes the whole server (HIGH availability bug, phanes-stdlib-net-server-serve-idle-socket-deadlock note). Prompt clients unchanged (same response). `server_handle_conn`/`concurrent_serve.hexa` untouched; no new public API. Parse-gate clean; binary promote = separate standard deploy step (22c27a05 pattern).
