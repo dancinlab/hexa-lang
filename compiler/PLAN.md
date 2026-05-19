@@ -2207,3 +2207,37 @@ helper; drop transitional interp fallback; retire build/hexa_interp.
 Until then cmd_run routes to the still-present build/hexa_interp
 binary (source gone, runtime unchanged, loss = 0). g_interp_deprecated
 retires with step-2 = R7 closure.
+
+### 2026-05-19 — Cycle C step-2 COMPLETE: R7 CLOSED
+
+`self/main.hexa::cmd_run` rewritten (197 → 80 lines) from interp-spawn
+(resolve_interp → build/hexa_interp subprocess) to compile-then-exec
+(`hexa build <file>` → run the produced binary). The historical
+contract is preserved exactly — cmd_run_last_rc, auto_marker_write,
+cmd_run_no_exit_mode (batch driver), exit-on-nonzero — so ALL 23
+cmd_run call sites + cmd_run_dispatch are UNCHANGED. One-function
+rewire, zero call-site surgery.
+
+Verified (step-2 driver built from r7-cycle-c-step2):
+  - HEXA_FORCE_INTERP=1 hexa run  → cmd_run_dispatch → cmd_run → rc 7 ✓
+  - plain hexa run               → cmd_run_user_direct → rc 7 ✓
+  - hexa build + run             → rc 7 ✓
+  - hexa parse / --version       → OK ✓
+  - mini build_aprime fixpoint   → exit(42)==42 PASS (self-host) ✓
+  - atlas_verify_smoke           → 118/118 ✓
+
+Landed: origin/main `25a9031d` (cmd_run rewrite) + `6611e355`
+(g_interp_deprecated → R7 CLOSED). Production hexa.real = the
+interp-free step-2 driver (580,000 B).
+
+**R7 CLOSED.** The tree-walking interpreter is fully retired — source
+deleted (25,548 lines) and every `.hexa` execution path
+(`hexa run` / `hexa batch` / 23 absorbed-verb dispatch) is compiled.
+Residue (harmless, next tidy cycle): the build/hexa_interp binary +
+resolve_interp() dead-code — zero runtime references.
+
+Note: post-deletion the parity harness's "interp arm"
+(HEXA_FORCE_INTERP=1 hexa run) now also compiles — the harness
+degenerates to a compiled-corpus regression smoke. The meaningful
+interp↔compiled byte-eq proof was the PRE-DELETION 13→0 PARITY GATE
+PASS; that measurement stands as the safety evidence for the deletion.
