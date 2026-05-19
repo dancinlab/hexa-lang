@@ -1,11 +1,11 @@
 // AUTO-GENERATED — do not edit. Regenerate via tool/lens_embed_gen.hexa
-//                  (the generator tool is a Phase B-2 deliverable; for
+//                  (the generator tool is a Phase B-2+ deliverable; for
 //                  B-1 this file is hand-authored under the same schema).
 //
-// Phase B-1 of RFC 065: lens static embed (schema compile-check).
+// Phase B-1 of RFC 065: lens static embed.
 // Spec:   RFC 065 §8 + §9 / AGENTS.tape @D g_atlas_binary_builtin
-// Source: hand-written B-1 seed (1 of 32 — remaining 31 land in
-//         subsequent commits per RFC §9 family-by-family).
+// Source: hand-written B-1 seed — 32 lenses across 8 families x 4 each
+//         per RFC §9. Bodies all return []; populate in Phase C.
 //
 // SSOT invariant (RFC 065 §10): this file is the binary built-in lens
 // table; direct fold-to-live is forbidden. New entries land via
@@ -16,22 +16,127 @@ use "compiler/lenses/types"
 @phase("parse_only")
 pub let LENS_HASH: string = "0000000000000000000000000000000000000000000000000000000000000000"
 @phase("parse_only")
-pub let LENS_COUNT: i64 = 1
+pub let LENS_COUNT: i64 = 32
 @phase("parse_only")
 pub let LENS_GENERATED_AT: string = "2026-05-20T00:00:00Z"
 
-// Lens registry — B-1 seed.
+// Lens registry — B-1 seed (32 lenses, 8 families x 4 seeds).
 // Each row pairs metadata (here) with an apply fn (below) by `id`.
 // Apply fns return [] in B-1; bodies populate in Phase C per RFC §13.
+// 130+ target reached by PR-driven expansion within each family.
 @phase("parse_only")
 pub let LENS_NODES: [LensNode] = [
-    LensNode {
-        kind: "L",
-        id: "empty_space.unmapped_axis",
-        family: "empty_space",
-        docstring: "Scan atlas P/C/L kinds for axes with zero outgoing edges — flags coverage gap. RFC 065 §9.",
-        cite: []
-    }
+    // --- family: empty_space (4) -----------------------------------------
+    LensNode { kind: "L", id: "empty_space.unmapped_axis", family: "empty_space",
+        docstring: "Scan atlas P/C/L kinds for axes with zero outgoing edges — flags coverage gap.",
+        cite: [] },
+    LensNode { kind: "L", id: "empty_space.degree_hole", family: "empty_space",
+        docstring: "Identify nodes whose edge-degree falls below family median — flags under-derived theorem.",
+        cite: [] },
+    LensNode { kind: "L", id: "empty_space.cross_product_gap", family: "empty_space",
+        docstring: "Detect (kindA, kindB) pairs with no joining @X crossing nodes.",
+        cite: [] },
+    LensNode { kind: "L", id: "empty_space.zero_coverage_quadrant", family: "empty_space",
+        docstring: "Map atlas grade x kind to a quadrant grid; flag empty quadrants as candidate gap.",
+        cite: [] },
+
+    // --- family: paradigm_shift (4) --------------------------------------
+    LensNode { kind: "L", id: "paradigm_shift.inversion", family: "paradigm_shift",
+        docstring: "For each @F formula, propose its functional inverse as a candidate sibling node.",
+        cite: [] },
+    LensNode { kind: "L", id: "paradigm_shift.dual", family: "paradigm_shift",
+        docstring: "For each @P primitive, propose its dual (e.g. sigma <-> phi via Mobius) as candidate.",
+        cite: [] },
+    LensNode { kind: "L", id: "paradigm_shift.adjoint", family: "paradigm_shift",
+        docstring: "For each @R relation, propose its adjoint pair as candidate cross-domain mapping.",
+        cite: [] },
+    LensNode { kind: "L", id: "paradigm_shift.op_lift", family: "paradigm_shift",
+        docstring: "Lift a scalar operator to its vector/tensor analogue and propose as candidate @L law.",
+        cite: [] },
+
+    // --- family: cross_pollinate (4) -------------------------------------
+    LensNode { kind: "L", id: "cross_pollinate.borrow_from_qrng", family: "cross_pollinate",
+        docstring: "Re-apply a stdlib/qrng audit/router pattern to atlas formula nodes.",
+        cite: [] },
+    LensNode { kind: "L", id: "cross_pollinate.borrow_from_qmirror", family: "cross_pollinate",
+        docstring: "Re-apply a stdlib/quantum (qmirror) algorithm shape (e.g. tomography) to atlas relations.",
+        cite: [] },
+    LensNode { kind: "L", id: "cross_pollinate.borrow_from_sim_universe", family: "cross_pollinate",
+        docstring: "Re-apply a stdlib/sim_universe experiment honest-scope pattern to bound an atlas claim.",
+        cite: [] },
+    LensNode { kind: "L", id: "cross_pollinate.borrow_from_forge", family: "cross_pollinate",
+        docstring: "Re-apply a self/forge GPU kernel fusion pattern to an atlas computational law.",
+        cite: [] },
+
+    // --- family: counterexample_mine (4) ---------------------------------
+    LensNode { kind: "L", id: "counterexample_mine.n7_break", family: "counterexample_mine",
+        docstring: "Run each @L law at n=7 (off-lattice neighbour) — flag breakages as boundary candidate.",
+        cite: [] },
+    LensNode { kind: "L", id: "counterexample_mine.n5_break", family: "counterexample_mine",
+        docstring: "Run each @L law at n=5 (lower neighbour) — flag asymmetries as candidate.",
+        cite: [] },
+    LensNode { kind: "L", id: "counterexample_mine.scale_break", family: "counterexample_mine",
+        docstring: "Sweep N across 2 orders of magnitude; flag laws whose form degrades.",
+        cite: [] },
+    LensNode { kind: "L", id: "counterexample_mine.regime_break", family: "counterexample_mine",
+        docstring: "Toggle regime flag (e.g. classical vs quantum); flag laws that lose validity.",
+        cite: [] },
+
+    // --- family: invariant_stress (4) ------------------------------------
+    LensNode { kind: "L", id: "invariant_stress.conservation_violation", family: "invariant_stress",
+        docstring: "Check each @L law against a conservation invariant — flag candidate as falsifier.",
+        cite: [] },
+    LensNode { kind: "L", id: "invariant_stress.symmetry_break", family: "invariant_stress",
+        docstring: "Apply each @S symmetry to a non-symmetric node and flag breakage as candidate.",
+        cite: [] },
+    LensNode { kind: "L", id: "invariant_stress.monotonicity_break", family: "invariant_stress",
+        docstring: "Verify monotonicity claims (e.g. sigma increasing) and flag deviating nodes.",
+        cite: [] },
+    LensNode { kind: "L", id: "invariant_stress.idempotence_break", family: "invariant_stress",
+        docstring: "For idempotent operators, double-apply and flag non-idempotent occurrences.",
+        cite: [] },
+
+    // --- family: scale_extrapolate (4) -----------------------------------
+    LensNode { kind: "L", id: "scale_extrapolate.n_to_2n", family: "scale_extrapolate",
+        docstring: "Take each @L law at parameter N, evaluate at 2N — flag candidate scaling-law sibling.",
+        cite: [] },
+    LensNode { kind: "L", id: "scale_extrapolate.n_to_n_div_2", family: "scale_extrapolate",
+        docstring: "Take each @L law at parameter N, evaluate at N/2 — flag candidate refinement.",
+        cite: [] },
+    LensNode { kind: "L", id: "scale_extrapolate.dim_1d_to_2d", family: "scale_extrapolate",
+        docstring: "Lift a 1-D atlas formula to 2-D and propose as candidate sibling.",
+        cite: [] },
+    LensNode { kind: "L", id: "scale_extrapolate.dim_2d_to_3d", family: "scale_extrapolate",
+        docstring: "Lift a 2-D atlas formula to 3-D and propose as candidate sibling.",
+        cite: [] },
+
+    // --- family: constraint_flip (4) -------------------------------------
+    LensNode { kind: "L", id: "constraint_flip.flip_sign", family: "constraint_flip",
+        docstring: "Negate constants in @C nodes; propose surviving identities as candidate dual.",
+        cite: [] },
+    LensNode { kind: "L", id: "constraint_flip.flip_ordering", family: "constraint_flip",
+        docstring: "Reverse ordering in ordered @L laws; propose retro-causal sibling.",
+        cite: [] },
+    LensNode { kind: "L", id: "constraint_flip.flip_topology", family: "constraint_flip",
+        docstring: "Swap planar with toroidal topology; flag laws whose form survives as candidate.",
+        cite: [] },
+    LensNode { kind: "L", id: "constraint_flip.flip_dim", family: "constraint_flip",
+        docstring: "Permute dimensional roles (e.g. time <-> space); flag laws whose form survives.",
+        cite: [] },
+
+    // --- family: falsify_self (4) ----------------------------------------
+    LensNode { kind: "L", id: "falsify_self.re_cite_audit", family: "falsify_self",
+        docstring: "Re-walk every @cite edge in atlas; flag broken / unreachable edges as candidate cleanup.",
+        cite: [] },
+    LensNode { kind: "L", id: "falsify_self.cite_unreachable", family: "falsify_self",
+        docstring: "Identify atlas nodes never cited by any other — flag as candidate retirement.",
+        cite: [] },
+    LensNode { kind: "L", id: "falsify_self.stale_node_decay", family: "falsify_self",
+        docstring: "Identify nodes whose source_file is gone from disk — flag as candidate prune.",
+        cite: [] },
+    LensNode { kind: "L", id: "falsify_self.contradiction_pair", family: "falsify_self",
+        docstring: "Find pairs of @L laws whose claims algebraically contradict — flag as falsifier candidate.",
+        cite: [] }
 ]
 
 // Apply functions — all stubs in B-1 (return empty []).
@@ -41,12 +146,149 @@ pub let LENS_NODES: [LensNode] = [
 pub fn lens_apply_empty_space_unmapped_axis(view: AtlasView) -> array {
     return empty_candidate_list()
 }
+pub fn lens_apply_empty_space_degree_hole(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_empty_space_cross_product_gap(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_empty_space_zero_coverage_quadrant(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+
+pub fn lens_apply_paradigm_shift_inversion(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_paradigm_shift_dual(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_paradigm_shift_adjoint(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_paradigm_shift_op_lift(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+
+pub fn lens_apply_cross_pollinate_borrow_from_qrng(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_cross_pollinate_borrow_from_qmirror(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_cross_pollinate_borrow_from_sim_universe(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_cross_pollinate_borrow_from_forge(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+
+pub fn lens_apply_counterexample_mine_n7_break(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_counterexample_mine_n5_break(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_counterexample_mine_scale_break(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_counterexample_mine_regime_break(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+
+pub fn lens_apply_invariant_stress_conservation_violation(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_invariant_stress_symmetry_break(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_invariant_stress_monotonicity_break(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_invariant_stress_idempotence_break(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+
+pub fn lens_apply_scale_extrapolate_n_to_2n(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_scale_extrapolate_n_to_n_div_2(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_scale_extrapolate_dim_1d_to_2d(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_scale_extrapolate_dim_2d_to_3d(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+
+pub fn lens_apply_constraint_flip_flip_sign(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_constraint_flip_flip_ordering(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_constraint_flip_flip_topology(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_constraint_flip_flip_dim(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+
+pub fn lens_apply_falsify_self_re_cite_audit(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_falsify_self_cite_unreachable(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_falsify_self_stale_node_decay(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
+pub fn lens_apply_falsify_self_contradiction_pair(view: AtlasView) -> array {
+    return empty_candidate_list()
+}
 
 // Dispatch: id -> apply fn. Cycle stage 2 (LENS) calls this in a loop
 // over the active filter set. Unknown id returns [] (no-op).
 pub fn lens_apply_by_id(id: string, view: AtlasView) -> array {
-    if id == "empty_space.unmapped_axis" {
-        return lens_apply_empty_space_unmapped_axis(view)
-    }
+    if id == "empty_space.unmapped_axis" { return lens_apply_empty_space_unmapped_axis(view) }
+    if id == "empty_space.degree_hole" { return lens_apply_empty_space_degree_hole(view) }
+    if id == "empty_space.cross_product_gap" { return lens_apply_empty_space_cross_product_gap(view) }
+    if id == "empty_space.zero_coverage_quadrant" { return lens_apply_empty_space_zero_coverage_quadrant(view) }
+
+    if id == "paradigm_shift.inversion" { return lens_apply_paradigm_shift_inversion(view) }
+    if id == "paradigm_shift.dual" { return lens_apply_paradigm_shift_dual(view) }
+    if id == "paradigm_shift.adjoint" { return lens_apply_paradigm_shift_adjoint(view) }
+    if id == "paradigm_shift.op_lift" { return lens_apply_paradigm_shift_op_lift(view) }
+
+    if id == "cross_pollinate.borrow_from_qrng" { return lens_apply_cross_pollinate_borrow_from_qrng(view) }
+    if id == "cross_pollinate.borrow_from_qmirror" { return lens_apply_cross_pollinate_borrow_from_qmirror(view) }
+    if id == "cross_pollinate.borrow_from_sim_universe" { return lens_apply_cross_pollinate_borrow_from_sim_universe(view) }
+    if id == "cross_pollinate.borrow_from_forge" { return lens_apply_cross_pollinate_borrow_from_forge(view) }
+
+    if id == "counterexample_mine.n7_break" { return lens_apply_counterexample_mine_n7_break(view) }
+    if id == "counterexample_mine.n5_break" { return lens_apply_counterexample_mine_n5_break(view) }
+    if id == "counterexample_mine.scale_break" { return lens_apply_counterexample_mine_scale_break(view) }
+    if id == "counterexample_mine.regime_break" { return lens_apply_counterexample_mine_regime_break(view) }
+
+    if id == "invariant_stress.conservation_violation" { return lens_apply_invariant_stress_conservation_violation(view) }
+    if id == "invariant_stress.symmetry_break" { return lens_apply_invariant_stress_symmetry_break(view) }
+    if id == "invariant_stress.monotonicity_break" { return lens_apply_invariant_stress_monotonicity_break(view) }
+    if id == "invariant_stress.idempotence_break" { return lens_apply_invariant_stress_idempotence_break(view) }
+
+    if id == "scale_extrapolate.n_to_2n" { return lens_apply_scale_extrapolate_n_to_2n(view) }
+    if id == "scale_extrapolate.n_to_n_div_2" { return lens_apply_scale_extrapolate_n_to_n_div_2(view) }
+    if id == "scale_extrapolate.dim_1d_to_2d" { return lens_apply_scale_extrapolate_dim_1d_to_2d(view) }
+    if id == "scale_extrapolate.dim_2d_to_3d" { return lens_apply_scale_extrapolate_dim_2d_to_3d(view) }
+
+    if id == "constraint_flip.flip_sign" { return lens_apply_constraint_flip_flip_sign(view) }
+    if id == "constraint_flip.flip_ordering" { return lens_apply_constraint_flip_flip_ordering(view) }
+    if id == "constraint_flip.flip_topology" { return lens_apply_constraint_flip_flip_topology(view) }
+    if id == "constraint_flip.flip_dim" { return lens_apply_constraint_flip_flip_dim(view) }
+
+    if id == "falsify_self.re_cite_audit" { return lens_apply_falsify_self_re_cite_audit(view) }
+    if id == "falsify_self.cite_unreachable" { return lens_apply_falsify_self_cite_unreachable(view) }
+    if id == "falsify_self.stale_node_decay" { return lens_apply_falsify_self_stale_node_decay(view) }
+    if id == "falsify_self.contradiction_pair" { return lens_apply_falsify_self_contradiction_pair(view) }
+
     return empty_candidate_list()
 }
