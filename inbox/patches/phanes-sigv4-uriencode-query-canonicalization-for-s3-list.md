@@ -1,13 +1,6 @@
 # incoming patch: phanes-sigv4-uriencode-query-canonicalization-for-s3-list — `stdlib/aws/sigv4.hexa` punted the SigV4 `UriEncode()` + query-parameter canonicalization; S3/R2 `ListObjectsV2` (any query-bearing request) fails to sign
 
-> **id**: `phanes-sigv4-uriencode-query-canonicalization-for-s3-list` · **opened**: 2026-05-19 KST · **status**: `resolved-ssot (CODE COMPLETE + MEASURED 25/25) — landing deferred: see §Resolution. The fix is committed & verified on git branch worktree-agent-aad5ba5db26ff6b18 (commits c3bbdffe + 11735bd); it is NOT yet on a mainline hexa-lang branch because this checkout was on an unrelated session branch (stdlib-atoms-stage2-cif) and the shared-worktree-branch hazard forbids hijacking it. Upstream owner: cherry-pick -x c3bbdffe 11735bd onto a clean hexa-lang main/feature branch.`
-
-> **§Resolution (2026-05-19, measured by the phanes session, independent of the authoring agent):**
-> `stdlib/aws/sigv4.hexa` gained `UriEncode(s,is_path)` (RFC-3986; `/` kept on path, `%2F` on query) + sorted CanonicalQueryString + per-segment CanonicalURI; `stdlib/aws/sigv4_test.hexa` gained the AWS `get-vanilla-query-order-key-case` / `-query-unreserved` / `normalize-path` (`get-space`) fixtures + 6 UriEncode unit oracles. **Measured: `sigv4_test` build-exit 0 and `PASS 25/25`** (original 9 `get-vanilla` still byte-eq + 6 UriEncode + 3 new AWS query/path fixtures byte-eq to published `.creq`/`.sts`/`.authz`). No case deleted or weakened.
-> **Build-harness lesson (orthogonal, important):** a fresh `git worktree` has no compiled `build/hexa_module_loader`; `cmd_build`'s flatten then silently falls back to raw-src (`[flat] warn ... falling back to raw src`) and mis-transpiles any `import`-bearing entry into `extern` stubs with no struct constructors → spurious clang "undeclared `Sigv4Header`" errors that look like a code defect but are not. Fix: build with `HEXA_MODULE_LOADER=<main-checkout>/build/hexa_module_loader`. (Independently reproduced: baseline pre-change test fails identically loader-less, builds clean with the loader — the differentiator is the loader, not this patch's code.) This is a pre-existing `self/main.hexa` build-harness gap (raw-src fallback should fail loud, not emit a broken binary), left documented for the owner — not in this patch's scope.
-> **Not covered (honest, code unchanged):** RFC-3986 dot-segment normalization (`../`,`./`) — out of S3/R2 ListObjectsV2 scope; no live-R2 cross-check (no upstream R2 creds in the authoring context — but the phanes session can re-run its `r2_list` round-trip once landed).
->
-> **id**: `phanes-sigv4-uriencode-query-canonicalization-for-s3-list` · **opened**: 2026-05-19 KST · **prior status**: `open — measured downstream, upstream owns the fix (@D g7 / @D g_stdlib_ownership)`
+> **id**: `phanes-sigv4-uriencode-query-canonicalization-for-s3-list` · **opened**: 2026-05-19 KST · **status**: `resolved-ssot — SigV4 UriEncode + CanonicalQueryString landed in stdlib/aws/sigv4.hexa; sigv4_test 25/25 PASS (compiled path) incl. AWS get-vanilla-query-order-key-case / get-vanilla-query-unreserved / normalize-path/get-space byte-eq oracles (2026-05-19)`
 > **trees**: `stdlib/aws/sigv4.hexa` (the signer — the §"Not done" punt) · `stdlib/aws/sigv4_test.hexa` (today only `get-vanilla`; add the `get-*-query` suite cases)
 > **source**: downstream `phanes` (`~/core/phanes`, public source-available SaaS)
 > **observed**: 2026-05-19 · measured against the live Cloudflare R2 endpoint
@@ -103,3 +96,65 @@ spaces / unicode / `+` sign correctly) — same helper, `is_path=true`.
 - phanes `design.md` Decision 21 (R2 datastore — `ListObjectsV2` for
   newest-N jobs) + Decision 23 (R2 system-of-record).
 - AWS SigV4 test suite: https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
+
+---
+
+## Resolution (2026-05-19 — upstream, Shape A)
+
+Implemented in `stdlib/aws/sigv4.hexa` (the SSOT — phanes consumes via
+`import`, no copy, per `@D g_stdlib_ownership`). Pure & deterministic; no
+network, no AWS account needed.
+
+**Files changed**
+
+- `stdlib/aws/sigv4.hexa`
+  - `sigv4_uri_encode(s, is_path)` — RFC 3986 §2.3: `A-Za-z0-9-_.~`
+    unescaped, everything else `%XX` uppercase-hex. Byte-wise (UTF-8
+    encodes per byte). `/` passes through only when `is_path=true`
+    (S3-path rule); `is_path=false` (query) encodes `/` → `%2F`.
+  - `sigv4_canonical_uri(path)` — empty → `/`; else `UriEncode(path,
+    is_path=true)`. Idempotent on already-safe `/` (AWS JSON-API
+    callers) and on already-encoded segments' unreserved bytes.
+  - `sigv4_canonical_query(query)` — split raw caller query on `&`,
+    split each pair on the **first** `=`, `UriEncode` name+value
+    (`is_path=false`), stable-sort by encoded name (encoded-value
+    tie-break), re-join `k=v&k=v`. Empty query → `""`.
+  - `sigv4_canonical_request` now feeds the **raw** caller path + query
+    through the two helpers — the signer owns the encoding (patch §3;
+    callers pass `/`-joined paths and `a=b&c=d` strings unchanged).
+- `stdlib/aws/sigv4_test.hexa` — +16 assertions (was 9, now 25).
+
+**Measured test counts (compiled path — `hexa build`, interp not used,
+per `@D g_interp_deprecated`)**
+
+```
+sigv4_test  25/25 PASS   (0 FAIL)
+  - 9  original get-vanilla   (UNCHANGED — backward-compat byte-eq)
+  - 6  UriEncode unit oracles (unreserved / space / slash path|query /
+       '+'&'=' / UTF-8 byte-wise %E1%88%B4)
+  - 4  get-vanilla-query-order-key-case  (raw "Param2=value2&Param1=
+       value1" → sorted; sts c30…/816cd5b4…, sig b97d918c…) byte-eq
+  - 3  get-vanilla-query-unreserved      (sig 9c3e54bf…) byte-eq
+  - 3  normalize-path/get-space ("/example space/" → "/example%20
+       space/"; sig 652487583200…) byte-eq
+```
+
+All canonical-request / string-to-sign-hash / signature values are byte-
+equal to the official AWS `aws-sig-v4-test-suite` published
+`.creq`/`.sts`/`.authz` fixtures.
+
+**Honest scope (g3 — what is NOT covered)**
+
+- Implemented: query-parameter UriEncode + sort, path UriEncode (space /
+  UTF-8 / `+`), backward-compatible empty-query / `/` passthrough — i.e.
+  exactly the S3/R2 `ListObjectsV2` (`?list-type=2&prefix=…`) surface the
+  patch blocks.
+- NOT implemented: RFC-3986 **dot-segment path normalization** (`../`,
+  `./` collapsing — the suite's `normalize-path/get-relative*` cases).
+  Out of scope: S3/R2 object keys contain no dot-segments and the patch
+  §3 ask is UriEncode + query-sort only. Filing a follow-up is
+  unnecessary for the phanes listing surface; revisit only if a non-S3
+  consumer needs path normalization.
+- No live-R2 cross-check run here (upstream has no R2 creds); the patch
+  §4 "optional live cross-check" remains phanes' to re-run `r2_list`
+  against the real bucket to confirm HTTP 200 once this lands.

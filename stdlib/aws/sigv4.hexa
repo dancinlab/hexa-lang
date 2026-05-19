@@ -28,11 +28,20 @@
 //   4. Authorization     — "AWS4-HMAC-SHA256 Credential=.../scope,
 //      SignedHeaders=..., Signature=..."
 //
-// Verified byte-equal against the official aws-sig-v4-test-suite
-// `get-vanilla` fixture in the companion sigv4_test.hexa — see that file
-// for the published string-to-sign hash + signature oracles.
+// CanonicalURI and CanonicalQueryString are built per SigV4: the path is
+// RFC-3986 percent-encoded (UriEncode, is_path=true so '/' is a separator)
+// and the query is parsed, each name/value UriEncode'd (is_path=false so
+// '/' -> %2F), then sorted by encoded name. The signer owns the encoding;
+// callers pass the raw path + raw `a=b&c=d` query string.
 //
-// @cite FIPS 198-1 (HMAC) · FIPS 180-4 (SHA-256) · AWS SigV4 spec
+// Verified byte-equal against the official aws-sig-v4-test-suite
+// `get-vanilla`, `get-vanilla-query-order-key-case`,
+// `get-vanilla-query-unreserved` and `normalize-path/get-space` fixtures
+// in the companion sigv4_test.hexa — see that file for the published
+// string-to-sign hash + signature oracles.
+//
+// @cite FIPS 198-1 (HMAC) · FIPS 180-4 (SHA-256) · RFC 3986 §2.3
+//       (unreserved set) · AWS SigV4 spec (CanonicalQueryString)
 
 import "../core/hash/hmac.hexa"
 
@@ -122,6 +131,143 @@ fn sigv4_sha256_hex(s) -> string {
     return sha256_hex_bytes(string_to_byte_array(s))
 }
 
+// ── SigV4 UriEncode (RFC 3986 unreserved-only) ───────────────────────
+// Unreserved set: A-Z a-z 0-9 - _ . ~  are passed through unescaped.
+// Every other byte becomes %XX with UPPERCASE hex. When is_path is true
+// the path separator '/' is also passed through (S3-path rule); when
+// is_path is false (query parameter name/value) '/' is encoded as %2F.
+// Operates byte-wise so multi-byte UTF-8 sequences encode per-byte
+// (matches the AWS aws-sig-v4-test-suite get-utf8 / normalize cases).
+fn sigv4_uri_encode(s, is_path) -> string {
+    let hexd = "0123456789ABCDEF"
+    let bytes = string_to_byte_array(s)
+    let n = len(bytes)
+    let result = ""
+    let i = 0
+    while i < n {
+        let c = bytes[i]
+        let unreserved = 0
+        if c >= 65 && c <= 90 { unreserved = 1 }       // A-Z
+        if c >= 97 && c <= 122 { unreserved = 1 }      // a-z
+        if c >= 48 && c <= 57 { unreserved = 1 }       // 0-9
+        if c == 45 || c == 95 || c == 46 || c == 126 { unreserved = 1 } // - _ . ~
+        if c == 47 && is_path { unreserved = 1 }       // '/' kept on path only
+        if unreserved == 1 {
+            result = result + chr(c)
+        } else {
+            let hi = c / 16
+            let lo = c - hi * 16
+            result = result + "%" + hexd[hi] + hexd[lo]
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// ── CanonicalURI ─────────────────────────────────────────────────────
+// Empty path -> "/". Otherwise UriEncode with is_path=true so each path
+// byte except '/' is percent-encoded (object keys with spaces / unicode /
+// '+' sign correctly; '/' stays a separator). Idempotent on already-safe
+// input such as "/" (AWS JSON-API callers) — every unreserved byte and
+// the separator pass straight through unchanged.
+fn sigv4_canonical_uri(path) -> string {
+    if path == "" {
+        return "/"
+    }
+    return sigv4_uri_encode(path, true)
+}
+
+// ── CanonicalQueryString ─────────────────────────────────────────────
+// Split the raw query on '&'; split each pair on the FIRST '='; UriEncode
+// name and value with is_path=false (so '/' -> %2F); sort pairs by the
+// encoded name (stable insertion sort, ties broken by encoded value);
+// re-join "k=v&k=v". A bare flag "x" (no '=') canonicalises to "x=".
+// Empty query -> "" (unchanged — preserves get-vanilla byte-eq).
+fn sigv4_canonical_query(query) -> string {
+    if query == "" {
+        return ""
+    }
+    // split on '&'
+    let qbytes = string_to_byte_array(query)
+    let qn = len(qbytes)
+    let pairs = []
+    let cur = ""
+    let i = 0
+    while i < qn {
+        if qbytes[i] == 38 {           // '&'
+            pairs = pairs.push(cur)
+            cur = ""
+        } else {
+            cur = cur + chr(qbytes[i])
+        }
+        i = i + 1
+    }
+    pairs = pairs.push(cur)
+    // for each pair split on first '=', UriEncode name & value
+    let enc_names = []
+    let enc_vals = []
+    let p = 0
+    while p < len(pairs) {
+        let pair = pairs[p]
+        let pb = string_to_byte_array(pair)
+        let pbn = len(pb)
+        let eq = -1
+        let k = 0
+        while k < pbn {
+            if pb[k] == 61 && eq == -1 {   // first '='
+                eq = k
+            }
+            k = k + 1
+        }
+        let name = ""
+        let value = ""
+        if eq == -1 {
+            name = pair
+            value = ""
+        } else {
+            let a = 0
+            while a < eq {
+                name = name + chr(pb[a])
+                a = a + 1
+            }
+            let b = eq + 1
+            while b < pbn {
+                value = value + chr(pb[b])
+                b = b + 1
+            }
+        }
+        enc_names = enc_names.push(sigv4_uri_encode(name, false))
+        enc_vals = enc_vals.push(sigv4_uri_encode(value, false))
+        p = p + 1
+    }
+    // stable insertion sort by encoded name, tie-break encoded value
+    let s = 1
+    while s < len(enc_names) {
+        let key_n = enc_names[s]
+        let key_v = enc_vals[s]
+        let t = s - 1
+        while t >= 0 && (enc_names[t] > key_n || (enc_names[t] == key_n && enc_vals[t] > key_v)) {
+            enc_names[t + 1] = enc_names[t]
+            enc_vals[t + 1] = enc_vals[t]
+            t = t - 1
+        }
+        enc_names[t + 1] = key_n
+        enc_vals[t + 1] = key_v
+        s = s + 1
+    }
+    // re-join "k=v&k=v"
+    let out = ""
+    let j = 0
+    while j < len(enc_names) {
+        if j > 0 {
+            out = out + "&"
+        }
+        out = out + enc_names[j] + "=" + enc_vals[j]
+        j = j + 1
+    }
+    return out
+}
+
 // ── Step 1: canonical request ────────────────────────────────────────
 // Headers must be sorted by lowercased name; SignedHeaders is the
 // semicolon-joined sorted lowercase name list.
@@ -170,15 +316,16 @@ fn sigv4_canonical_request(req: Sigv4Request, payload_hash) -> [str] {
     let hp = sigv4_canonical_headers(req.headers)
     let canon_headers = hp[0]
     let signed_headers = hp[1]
-    // CanonicalURI: empty path -> "/". Path is assumed already-encoded by
-    // the caller (AWS service paths like DynamoDB are always "/").
-    let uri = req.path
-    if uri == "" {
-        uri = "/"
-    }
+    // CanonicalURI: SigV4 UriEncode the path (is_path=true so '/' stays a
+    // separator); empty path -> "/". The signer now owns the encoding —
+    // callers pass the raw path. Idempotent on already-safe input ("/").
+    let uri = sigv4_canonical_uri(req.path)
+    // CanonicalQueryString: UriEncode each name/value (is_path=false) and
+    // sort by encoded name. Empty query -> "" (get-vanilla byte-eq kept).
+    let cquery = sigv4_canonical_query(req.query)
     let creq = req.method + "\n"
         + uri + "\n"
-        + req.query + "\n"
+        + cquery + "\n"
         + canon_headers + "\n"
         + signed_headers + "\n"
         + payload_hash

@@ -3083,3 +3083,95 @@ proves zero transpiler drift, so atlas-theorem integrity is provably
 unaffected. The 118/118 re-run is pending a fully-installed-toolchain
 invocation (e.g. when the shared main dir next returns to
 rfc043-hexa-torch, or via the installed driver against this tree).
+
+### 2026-05-19 — RFC 061-P1 runtime 2-layer split LANDED (commit 4fb439fc)
+`self/runtime.c` (13,332 lines) partitioned into `self/runtime_core.c`
+(6,065 lines) + `self/runtime.c` (7,319 lines, `#include`s runtime_core.c).
+Pure file split, functionally identical TU. Produced by a background
+worktree agent (rate-limit interrupted, WIP 61c2adc8), integrated by hand
+onto post-RFC-062 main — the 4 argv[0]-dedup functions all landed in
+runtime_core.c and were re-patched to the RFC 062 form. Validated:
+runtime.o + hexa_v2 + hexa.real compile clean, args() dedup holds,
+atlas_verify_smoke 118/118, self-host fixpoint byte-identical (regen
+diff 0). The 6,065-line core is coarser than the §5b ≈2.4-3k projection —
+P1 deliverable is a clean compiling split, boundary refinement is a
+followup. P2/P3 (`runtime_hi.hexa` authoring) remain future cycles.
+ROADMAP child 69: P0+P1 done.
+### 2026-05-19 — interpreter residue removal: run/batch paths (commit 6ba61c8a)
+The R7 measured-cutover transitional scaffolding in `self/main.hexa`'s run
+paths is now dead code and removed (self/main.hexa −117/+39):
+- `cmd_run_user_direct` / `_batch_run_one`: dropped the `HEXA_FORCE_INTERP`
+  escape-hatch branch (it re-ran the compile-then-exec path with a
+  misleading "tree-walking interpreter" message) and the "falling back to
+  the retiring interpreter" build-failure branch (it re-invoked the same
+  compile-then-exec, never an interpreter). Build failure now reports the
+  compile error honestly + exits non-zero.
+- Deleted the uncalled `cmd_run_dispatch()` + the write-only
+  `cmd_run_vm_mode` global; dropped the dead `--vm` flag (rt#36 bytecode-VM
+  opt-in — the bc-VM was an interpreter-only path) and `cmd_run_user_direct`'s
+  unused `want_vm` param (both call sites updated).
+Validated: parse-clean, hexa.real builds, `hexa run`/`batch`/`--version` +
+atlas_verify_smoke 118/118 clean. Residue still present elsewhere (bc_vm.hexa
+follow-up cycles.
+### 2026-05-19 — interp-residue removal: verify_interp_builtins + bc-VM cluster
+Two more interp-residue removals (commits 122ac6f1, c4dea75b):
+- `self/verify_interp_builtins.hexa` (103 lines) — a regression test for
+  `self/interpreter.hexa`, which was deleted in R7 Cycle C step-1. Tests a
+  file that no longer exists — pure dead residue.
+- bytecode-VM cluster — `self/bc_vm.hexa` (1,906) + `self/bc_emitter.hexa`
+  (4,099) + 4 `test_bc_vm_*.hexa` (8,680) = **16,685 lines**. Fully orphaned:
+  the compiler pipeline never imports bc_vm/bc_emitter; only the test_bc_vm_*
+  files reference them. The bc-VM was rt#36's "interpreter-only path" (cmd_run
+  framing); rt#36 was blocked and its sole wiring (`--vm`) removed in
+  6ba61c8a. Recoverable from git history if a bytecode-VM is wanted later.
+  User-gated decision (option a — remove).
+Toolchain build-smoke clean after each. Remaining interp-era residue is
+documentation only (`PLAN-interp-retirement.md`, `docs/interp_*.md`) — kept
+as historical record.
+### 2026-05-19 — stdlib: AWS SigV4 signer + byte-level HMAC-SHA256 LANDED (inbox phanes-aws-sigv4-signer)
+inbox/patches/phanes-aws-sigv4-signer-for-stdlib.md (downstream phanes,
+@D g7) processed Shape A. 4 files added:
+- `stdlib/core/hash/hmac.hexa` — byte-level `hmac_sha256_bytes(key:[int],
+  data:[int])->[int]` (raw bytes in/out — the §3 gap; the legacy
+  `self/std_crypto.hexa::hmac_sha256` is string-in/hex-out which silently
+  breaks the SigV4 4-link key chain). Self-contained pure-hexa SHA-256
+  core (`sha256_digest_bytes`) since the runtime `sha256` builtin is
+  string-in/hex-out only. Native bitwise ops (`& | ^ << >>`) used —
+  `bit_xor`/`array_push`/`math_pow` were interp-era builtins absent from
+  the compiled path. Ships `hmac_sha256_hex`/`sha256_hex_bytes`/
+  `hmac_sha256_str` (string/hex wrapper = §3 re-base target).
+- `stdlib/aws/sigv4.hexa` — pure `sigv4_sign(req)->Sigv4Result`; no I/O.
+- `stdlib/core/hash/hmac_test.hexa` + `stdlib/aws/sigv4_test.hexa` tests.
+Verified (compiled path, `hexa build`, interp not used): hmac_test 8/8
+PASS (FIPS 180-4 SHA-256 + RFC 4231 HMAC vectors); sigv4_test 9/9 PASS —
+canonical request, string-to-sign, signature `5fa00fa3…`, and full
+`Authorization` header all byte-equal to the official AWS
+`aws-sig-v4-test-suite` `get-vanilla` fixture, zero AWS account/network.
+Punted: SigV4 `UriEncode()` percent-encoder + query-param sorting (caller
+passes pre-encoded path/query; AWS JSON APIs use `/` + empty query, so the
+live path is fully covered — S3 object-key signing needs the encoder).
+### 2026-05-19 — stdlib: SigV4 UriEncode + CanonicalQueryString LANDED (inbox phanes-sigv4-uriencode-query-canonicalization)
+inbox/patches/phanes-sigv4-uriencode-query-canonicalization-for-s3-list.md
+(downstream phanes, @D g7 / @D g_stdlib_ownership) processed Shape A — the
+explicitly-deferred follow-up from the SigV4 signer above. 2 files edited:
+- `stdlib/aws/sigv4.hexa` — added `sigv4_uri_encode(s, is_path)` (RFC 3986
+  §2.3 unreserved-only `A-Za-z0-9-_.~`; everything else `%XX`
+  uppercase-hex, byte-wise so UTF-8 encodes per-byte; `/` kept only when
+  `is_path=true`), `sigv4_canonical_uri(path)` (UriEncode `is_path=true`,
+  empty→`/`, idempotent on `/`), and `sigv4_canonical_query(query)` (split
+  on `&`, split each pair on first `=`, UriEncode name+value
+  `is_path=false`, stable-sort by encoded name with encoded-value
+  tie-break, re-join). `sigv4_canonical_request` now feeds the raw caller
+  path/query through these — the signer owns the encoding (per patch §3).
+- `stdlib/aws/sigv4_test.hexa` — +16 assertions (6 UriEncode unit oracles
+  + `get-vanilla-query-order-key-case` + `get-vanilla-query-unreserved` +
+  `normalize-path/get-space`, the patch §4 falsifier set).
+Verified (compiled path, `hexa build`, interp not used): sigv4_test
+**25/25 PASS** (was 9/9; original `get-vanilla` 9 still byte-eq, +16 new).
+Canonical-request / string-to-sign hash / signature all byte-equal to the
+official AWS `aws-sig-v4-test-suite` published `.creq`/`.sts`/`.authz`
+oracles (sigs `b97d918c…`, `9c3e54bf…`, `652487583200…`), zero AWS
+account/network. Honest scope: query/path/utf8/normalize covered; the
+suite's RFC-3986 dot-segment path *normalization* (`../`, `./`
+collapsing) is NOT implemented — out of S3/R2 ListObjectsV2 scope (keys
+have no dot-segments) and not in the patch ask.
