@@ -351,3 +351,30 @@ PLAN body update (`self/forge/PLAN.md` + `stdlib/flame/PLAN.md`) = separate task
 - `g_flame_compiler_only` — RFC 050 API is invoked at compiled-native eval time, no `hexa_interp` dispatch
 - `g_forge_substrate_role` — forge = substrate, flame = consumer; RFC 050 formalizes the boundary
 - `g_blue_closed_mandate` (anima cross-repo) — F-FORGE-RFC050-PRECISION-D-PRESERVE preserves CPU farr reference vs GPU kernel bit-equality on the FORGE_PREC_FP64 + FORGE_REGIME_AUTO path
+
+## Stage 2 closure (forge-side) — measured 2026-05-19 (A100)
+
+Stage A landed the stub dispatcher; F2 opened the BF16 path now that
+RFC 049 Stage 2 is measured-PASS. `forge_tier_dispatch_v1` no longer
+rejects `FORGE_PREC_PURE_BF16` — it routes MATMUL → `hexa_farr_matmul_bf16_gpu`
+and FFN_FUSED → `hexa_farr_ffn_bf16_gpu` (the RFC 049 measured entry
+points), recovering `HexaFarrBf16*` from `ForgeArgs.farr_ids[]` via the
+documented `intptr_t` pointer-cast ABI, behind the `FORGE_TIER_V1_BF16`
+guard. Harness: `self/cuda/experiments/r050_dispatch_validate.cu` +
+`tool/dispatch_r050_dispatch_validate.sh`. Fire: A100-PCIE-40GB. SSOT:
+`state/forge_rfc050_stage2_2026_05_19/`.
+
+| Falsifier | Verdict |
+|---|---|
+| F-FORGE-RFC050-VERSION-API | **PASS** — `forge_api_version_v1()` == `0x00010000` |
+| F-FORGE-RFC050-DISPATCH-ROUTES-BF16 | **PASS** — MATMUL + FFN `PURE_BF16` route via the dispatcher, rc==`FORGE_OK`, max\|Δ\|/max\|Y\| ≤4.7e-3 vs FP64 cuBLAS (4 shapes) |
+| F-FORGE-RFC050-FALLBACK-CHAIN | **PASS** — 5 unsupported (family/precision/regime/det) combos each return a negative code, no crash (§6.6 mandate) |
+
+**Verdict.** RFC 050 Stage 2 **forge-side** = measured-resolved. The
+dispatcher is a real, fire-validated routing layer over the RFC 049 BF16
+substrate. The remaining 5 falsifiers (REGIME-CORRECT, PERF-INHERITANCE,
+FORGE-BACKWARD-FUSE, DISPATCH-API-MATCH, PRECISION-D-PRESERVE) are
+flame-integration — they need flame's compiled stdlib calling through the
+dispatcher, i.e. flame Phase 4-D (the "L1" follow-up), a parallel-session
+task. `layercast` precision stays dispatcher-`UNSUPPORTED` honestly (host
+`float*` X/Y don't fit the `ForgeArgs` farr-id model).

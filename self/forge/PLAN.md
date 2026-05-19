@@ -271,6 +271,22 @@ mandatory (`g_blue_closed_mandate`).
 
 (append-only)
 
+### 2026-05-19 — RFC 050 Stage 2 (forge-side) fire — measured-PASS (A100, dispatch routes BF16)
+
+F2 = RFC 050 dispatcher 의 BF16 경로 fire-validation. `forge_tier_dispatch_v1`
+이 (Stage A 에서 모든 non-FP64 를 거부하던 것을) 이제 `FORGE_PREC_PURE_BF16`
+MATMUL/FFN 을 RFC 049 검증 entry point (`hexa_farr_matmul_bf16_gpu` 8.48× ·
+`hexa_farr_ffn_bf16_gpu` 11.66×) 로 라우팅. harness `r050_dispatch_validate.cu`
+가 dispatcher 자체를 fire. **forge-side 3 falsifier PASS**: VERSION-API
+(0x00010000) · DISPATCH-ROUTES-BF16 (MATMUL 256³/1024³ + FFN 2 shape, rc=FORGE_OK,
+max|Δ|/max|Y| ≤4.7e-3 vs FP64) · FALLBACK-CHAIN (5 unsupported combo 전부 음수
+코드, no-crash §6.6). flame-integration falsifier 5종(REGIME/PERF/BACKWARD/
+API-MATCH/D-PRESERVE)은 flame Phase 4-D(L1) 영역 — forge-only 범위 제외.
+layercast precision 은 dispatcher-UNSUPPORTED 정직 유지 (host float* X/Y 가
+ForgeArgs farr-id 모델에 안 맞음). SSOT: `state/forge_rfc050_stage2_2026_05_19/`
++ RFC 050 §"Stage 2 closure (forge-side)". commits 351cd87d (routing) + 7b5161b4
+(dispatch script 경로 fix). RFC 050 Stage 2 forge-side = measured-resolved.
+
 ### 2026-05-19 — RFC 050 Stage 2 (forge-side) — BF16 dispatch routing landed (fire pending)
 
 RFC 050 Stage A 가 `self/forge/forge_tier_v1.{h,c}` (flame↔forge `forge_tier_v1`
