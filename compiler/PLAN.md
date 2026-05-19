@@ -3360,3 +3360,43 @@ keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/tes
   대안 (b) 은 미채택 (release-packaging tool 부재 — `.github/workflows/`
   에 release workflow 없음). `hexa repo path` / `hexa update` verb 는
   컴파일러 변경 필요 → 후속 follow-up 으로 patch markdown 에 명시.
+
+### 진행 로그 — atlas binary-built-in 정책 codify + runtime overlay-load 은퇴
+
+user directive 2026-05-19 — atlas 는 **무조건 바이너리 빌트인** (compile-time
+embed; SSOT = `compiler/atlas/embedded.gen.hexa`). `.n6` 파일은 이제 `hexa atlas
+export` **출력물 전용** (interop / inspection). 신규 식은 GitHub PR 로 빌트인 atlas
+에 직접 흡수 — 구 runtime path (`~/.hx/data/atlas.overlay.n6` · discovery →
+overlay → 3+ hits → promote into rodata regen) RETIRED.
+
+- **거버넌스**: `AGENTS.tape §3` 에 `@D g_atlas_binary_builtin` 추가 (g6 인접,
+  tape v1.2 grammar — rule/why/apply/authority/cross-ref/@>). `CLAUDE.md` 는
+  symlink 이라 자동 반영.
+- **docs**: `README.md` — 구 discovery 다이어그램 (`atlas.proposed/.append.n6 →
+  promote → live atlas grows`) 를 `hexa atlas export → GitHub PR into
+  embedded.gen.hexa → compiler build re-embeds` 로 재서술; "noise smash
+  contract" ASCII 박스 라벨 `(rodata + overlay)` → `(binary built-in)`;
+  "regenerated daily" → "binary built-in; new laws via GitHub PR". `SPEC.md`
+  §2.2 — `.n6` = export artifact + absorption = PR-into-embedded-atlas 행 추가,
+  "no runtime atlas load" 명문화; §10.2 — staging pipeline 을 export-artifact
+  + PR-fold 모델로 재서술.
+- **code (surgical retire)**: `compiler/atlas/overlay.hexa` — runtime LOAD
+  path 은퇴. `overlay_load()` / `overlay_load_cached()` 는 이제 무조건 `[]`
+  반환 (디스크 `.n6` 파일을 live atlas 에 머지 안 함). 함수 시그니처는 유지 —
+  기존 호출처 (`atlas_lookup_merged` · `audit_overlay` · drill round seed-dedup)
+  무수정 컴파일, binary-only atlas 관측. WRITE surface (`overlay_append` /
+  `overlay_append_lines` / `overlay_ensure_dir`) 는 `.n6` export 출력물 emit
+  경로이므로 보존 — `hexa atlas export` 불파손. `compiler/atlas/static_index.hexa`
+  — `atlas_lookup_merged` / `atlas_list_merged` 주석을 binary-built-in 모델로
+  재서술 (overlay retired-to-empty → merged ≡ rodata-alone).
+- **parse-gate (measured)**: `clang -O2 -I. -Iself -c self/runtime.c -o
+  self/runtime.o` OK → `self/native/hexa_v2 compiler/atlas/overlay.hexa
+  /tmp/o_overlay.c` → `OK` rc=0 · `self/native/hexa_v2
+  compiler/atlas/static_index.hexa /tmp/o_static.c` → `OK` rc=0.
+- **deferred**: (1) discovery 체인 (`reign`/`revive`/`debate`/`molt`/`wake`/
+  `forge`/`canon_engine`/`drill`) 의 `overlay_append` 호출은 그대로 — 이제
+  export-artifact 를 쓸 뿐 live atlas 변이 없음 (load-path 은퇴로 무해화).
+  이 호출들을 명시적 `hexa atlas export` verb 로 재배선하는 것은 후속 cycle.
+  (2) `self/main.hexa` help 텍스트 (`atlas.overlay.n6` 언급 L119-173) 갱신은
+  별도 surgical edit — 본 cycle 범위 밖. (3) `cc --regen` / `hexa_cc.c`·
+  `hexa_v2` promote 미수행 — 부모 세션의 단일 consolidated regen 대상.

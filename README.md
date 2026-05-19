@@ -23,7 +23,7 @@
 `hexa-lang` is a native compiler that carries its own theorem 사전 (dictionary) inside the binary. No LLVM. No C-transpile. Every formula in your code either cites the atlas or the build refuses to start. The stricter the gate, the cleaner the code that passes.
 
 > [!NOTE]
-> Sister of [`n6`](https://github.com/dancinlab/n6) (semantic atom layer — atlas serialisation format), [`hxc`](https://github.com/dancinlab/hxc) (byte-canonical wire), and [`tape`](https://github.com/dancinlab/tape) (operational trace). hexa-lang's atlas overlay at `~/.hx/data/atlas.overlay.n6` and the rodata seed are both `.n6` — discovered laws promote into the live atlas through n6 grammar. The `wilson` agent ([`dancinlab/wilson`](https://github.com/dancinlab/wilson)) is built end-to-end on hexa-lang.
+> Sister of [`n6`](https://github.com/dancinlab/n6) (semantic atom layer — atlas serialisation format), [`hxc`](https://github.com/dancinlab/hxc) (byte-canonical wire), and [`tape`](https://github.com/dancinlab/tape) (operational trace). hexa-lang's atlas is unconditionally binary built-in — compile-time embedded into the compiler — and `.n6` is the sister serialisation format emitted on demand by `hexa atlas export` for interop / inspection. Discovered laws are absorbed via GitHub PR directly into the embedded atlas, not through a runtime `.n6` overlay. The `wilson` agent ([`dancinlab/wilson`](https://github.com/dancinlab/wilson)) is built end-to-end on hexa-lang.
 
 ## At a glance
 
@@ -216,7 +216,7 @@ bin/hexa-fast clean                     # wipe ~/.hexa-cache
 
 From [`doc/atlas_lint_easy_explainer.md`](doc/atlas_lint_easy_explainer.md):
 
-The **atlas** is a 사전 — a single shared dictionary of primitives (P), connections (C), laws (L), and errors (E). 60,760 lines, 4.2 MB, regenerated daily.
+The **atlas** is a 사전 — a single shared dictionary of primitives (P), connections (C), laws (L), and errors (E). 60,760 lines, 4.2 MB, unconditionally binary built-in (compile-time embedded); new laws land via GitHub PR.
 
 The **compiler** is a 셰프 (chef) — it has the entire 사전 memorized. It does not phone the library mid-recipe. When you hand it a `.hexa` file, the chef checks every ingredient, unit, and citation against the atlas it already knows by heart.
 
@@ -249,14 +249,14 @@ Eight checks, six always fatal, two opt-in via annotation:
       compile-time prover  (S6, equational + sample-eval, in-house only)
             │
             ▼
-      atlas.proposed.{date}.n6        ← compiler/discover/staging.hexa
+      hexa atlas export                ← .n6 export artifact (interop / inspection)
             │
             ▼
-      promote_to_atlas                 ← compiler/discover/promote.hexa
+      GitHub PR into embedded.gen.hexa ← the atlas SSOT (binary built-in)
             │           ├─► fingerprint dedup → register as alias
             │           └─► id collision     → first-wins + warning
             ▼
-      atlas.append.{date}.n6           ← live atlas grows
+      compiler build re-embeds atlas   ← live atlas grows (no runtime overlay)
             │
             ▼
       prover upgrade                   ← retroactive sweep (compiler/discover/cascade.hexa)
@@ -340,8 +340,8 @@ LLM (noise inside the well)         hexa (noise outside the well)
      |             |             ------+-------------+------
      |  ~ ~ ~ ~ ~  | <- noise          |             |
      |  ~ noise ~  |   bubbles         |   atlas     |
-     |  ~ ~ ~ ~ ~  |   from            |  (rodata +  | <- noise
-     |    ####     |   inside          |   overlay)  |   arrives
+     |  ~ ~ ~ ~ ~  |   from            |  (binary    | <- noise
+     |    ####     |   inside          |  built-in)  |   arrives
      |    #LLM#    |                   |             |   from
      +-------------+                   |   smash     |   outside
        the well                        |     v       |
@@ -361,8 +361,9 @@ inside. hexa is an open well — every `absorb` step widens the wall,
 so the next cycle can say things the previous one literally had no
 primitive for. That's why "RAG" is the wrong frame: retrieval still
 draws from a fixed outside corpus. hexa's "outside" is produced by
-its own prior cycles (overlay at `~/.hx/data/atlas.overlay.n6`,
-rodata seed at compile time + runtime grow).
+its own prior cycles (the binary built-in atlas, embedded into the
+compiler at build time; new laws land via GitHub PR into the embedded
+atlas source).
 
 ### OUROBOROS cycle — full view
 
@@ -413,7 +414,7 @@ self-reinforcement:
 
 | Loop | Role | Trigger |
 |---|---|---|
-| **L1 · self-correct** | discovery → atlas overlay → 3+ hits → promote into rodata regen | per tick |
+| **L1 · self-correct** | discovery → verify → GitHub PR into binary built-in atlas | per tick |
 | **L2 · meta-reward** | per-source discovery rate → scan_priority → deeper scan | per scan batch |
 | **L3 · self-expand** | accumulation ≥ 10 → auto-trigger `hexa smash --seed` (or full `hexa drill`) | per threshold |
 
