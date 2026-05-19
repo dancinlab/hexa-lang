@@ -141,6 +141,268 @@ fn _rv_tokens(s: str) -> [str] {
     return out
 }
 
+// ─── constant-expression evaluator (rfc_006 §4 module-2 scope, D68) ──────
+//
+// CLEAN-ROOM: Verilog-2005 §5 constant expressions — the integer-valued
+// subset needed to elaborate parameter/localparam, [hi:lo] wire ranges,
+// generate-for bounds, and replication counts. Re-derived from IEEE
+// 1364-2005 §5.1 operator precedence; no upstream code copied.
+//
+// Scope: integer arithmetic only (parameters/widths are integers). The
+// evaluator does NOT model bit-width or X/Z — those belong to RTLIL
+// elaboration, not constant folding.
+
+// Parameter/localparam symbol table — parallel name/value arrays
+// (booksim stdlib idiom; no map type in this stdlib layer).
+struct SymTab {
+    names:  [str],
+    values: [int],
+}
+
+fn symtab_new() -> SymTab {
+    return SymTab { names: [], values: [] }
+}
+
+fn symtab_put(s: SymTab, name: str, value: int) -> SymTab {
+    return SymTab { names: s.names.push(name), values: s.values.push(value) }
+}
+
+fn symtab_has(s: SymTab, name: str) -> int {
+    let mut i = 0
+    while i < len(s.names) {
+        if s.names[i] == name { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn symtab_get(s: SymTab, name: str) -> int {
+    let mut i = 0
+    while i < len(s.names) {
+        if s.names[i] == name { return s.values[i] }
+        i = i + 1
+    }
+    return 0
+}
+
+// Result of evaluating a constant (sub)expression: the integer value,
+// the token index just past what was consumed, and an error string
+// (empty = ok). No tuples in this toolchain — struct return.
+struct ConstEval {
+    value: int,
+    pos:   int,
+    err:   str,
+}
+
+// CLEAN-ROOM: single hex/dec digit → value, or -1 if not a digit.
+fn _rv_digit(c: str, base: int) -> int {
+    let mut v = 0 - 1
+    if c == "0" { v = 0 }
+    if c == "1" { v = 1 }
+    if c == "2" { v = 2 }
+    if c == "3" { v = 3 }
+    if c == "4" { v = 4 }
+    if c == "5" { v = 5 }
+    if c == "6" { v = 6 }
+    if c == "7" { v = 7 }
+    if c == "8" { v = 8 }
+    if c == "9" { v = 9 }
+    if base == 16 {
+        if c == "a" { v = 10 }
+        if c == "b" { v = 11 }
+        if c == "c" { v = 12 }
+        if c == "d" { v = 13 }
+        if c == "e" { v = 14 }
+        if c == "f" { v = 15 }
+        if c == "A" { v = 10 }
+        if c == "B" { v = 11 }
+        if c == "C" { v = 12 }
+        if c == "D" { v = 13 }
+        if c == "E" { v = 14 }
+        if c == "F" { v = 15 }
+    }
+    if v >= base { return 0 - 1 }
+    return v
+}
+
+// CLEAN-ROOM: parse a digit run `s[from:]` in `base`, ignoring `_`
+// (Verilog 1364-2005 §3.5.1 allows underscores in numbers). Returns
+// the accumulated value; stops at the first non-digit.
+fn _rv_parse_digits(s: str, from: int, base: int) -> int {
+    let n = len(s)
+    let mut acc = 0
+    let mut i = from
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "_" { i = i + 1; continue }
+        let d = _rv_digit(c, base)
+        if d < 0 { return acc }
+        acc = acc * base + d
+        i = i + 1
+    }
+    return acc
+}
+
+// CLEAN-ROOM: integer value of a single Verilog number token.
+//   `64`        → 64           (unsized decimal)
+//   `3'd2`      → 2            (sized decimal — size ignored for folding)
+//   `8'hff`     → 255          (sized hex)
+//   `4'b1010`   → 10           (sized binary)
+//   `1'b0`      → 0
+// Returns -1 on a token that is not a number literal.
+fn _rv_literal_value(tok: str) -> int {
+    let n = len(tok)
+    if n == 0 { return 0 - 1 }
+    // find a `'` (sized literal marker)
+    let mut tick = 0 - 1
+    let mut i = 0
+    while i < n {
+        if tok.substring(i, i + 1) == "'" { tick = i }
+        i = i + 1
+    }
+    if tick < 0 {
+        // unsized decimal — must be all digits
+        if _rv_digit(tok.substring(0, 1), 10) < 0 { return 0 - 1 }
+        return _rv_parse_digits(tok, 0, 10)
+    }
+    // sized: <size>'<base><digits> ; base char follows the tick
+    if tick + 1 >= n { return 0 - 1 }
+    let basec = tok.substring(tick + 1, tick + 2)
+    let mut base = 10
+    let mut dstart = tick + 2
+    if basec == "d" { base = 10 }
+    if basec == "h" { base = 16 }
+    if basec == "b" { base = 2 }
+    if basec == "o" { base = 8 }
+    if basec == "D" { base = 10 }
+    if basec == "H" { base = 16 }
+    if basec == "B" { base = 2 }
+    if basec == "O" { base = 8 }
+    return _rv_parse_digits(tok, dstart, base)
+}
+
+// CLEAN-ROOM: binary-operator precedence (IEEE 1364-2005 §5.1.2).
+// Higher number = binds tighter. 0 = not a binary operator.
+fn _rv_binop_prec(op: str) -> int {
+    if op == "||" { return 1 }
+    if op == "&&" { return 2 }
+    if op == "|"  { return 3 }
+    if op == "^"  { return 4 }
+    if op == "&"  { return 5 }
+    if op == "==" { return 6 }
+    if op == "!=" { return 6 }
+    if op == "<"  { return 7 }
+    if op == ">"  { return 7 }
+    if op == "<=" { return 7 }
+    if op == ">=" { return 7 }
+    if op == "<<" { return 8 }
+    if op == ">>" { return 8 }
+    if op == "+"  { return 9 }
+    if op == "-"  { return 9 }
+    if op == "*"  { return 10 }
+    if op == "/"  { return 10 }
+    if op == "%"  { return 10 }
+    return 0
+}
+
+// CLEAN-ROOM: apply a binary operator to two folded integer operands.
+fn _rv_apply_binop(op: str, a: int, b: int) -> int {
+    if op == "||" { if a != 0 { return 1 } if b != 0 { return 1 } return 0 }
+    if op == "&&" { if a != 0 { if b != 0 { return 1 } } return 0 }
+    if op == "|"  { return a | b }
+    if op == "^"  { return a ^ b }
+    if op == "&"  { return a & b }
+    if op == "==" { if a == b { return 1 } return 0 }
+    if op == "!=" { if a != b { return 1 } return 0 }
+    if op == "<"  { if a < b  { return 1 } return 0 }
+    if op == ">"  { if a > b  { return 1 } return 0 }
+    if op == "<=" { if a <= b { return 1 } return 0 }
+    if op == ">=" { if a >= b { return 1 } return 0 }
+    if op == "<<" { return a << b }
+    if op == ">>" { return a >> b }
+    if op == "+"  { return a + b }
+    if op == "-"  { return a - b }
+    if op == "*"  { return a * b }
+    if op == "/"  { if b == 0 { return 0 } return a / b }
+    if op == "%"  { if b == 0 { return 0 } return a % b }
+    return 0
+}
+
+// CLEAN-ROOM: evaluate a primary — literal, identifier (looked up in
+// `tab`), parenthesised expression, or unary `-` / `~` / `!`.
+fn _rv_eval_primary(toks: [str], pos: int, tab: SymTab) -> ConstEval {
+    let n = len(toks)
+    if pos >= n {
+        return ConstEval { value: 0, pos: pos, err: "const-expr: unexpected end" }
+    }
+    let t = toks[pos]
+    // unary operators
+    if t == "-" {
+        let inner = _rv_eval_primary(toks, pos + 1, tab)
+        if len(inner.err) > 0 { return inner }
+        return ConstEval { value: 0 - inner.value, pos: inner.pos, err: "" }
+    }
+    if t == "~" {
+        let inner = _rv_eval_primary(toks, pos + 1, tab)
+        if len(inner.err) > 0 { return inner }
+        return ConstEval { value: 0 - inner.value - 1, pos: inner.pos, err: "" }
+    }
+    if t == "!" {
+        let inner = _rv_eval_primary(toks, pos + 1, tab)
+        if len(inner.err) > 0 { return inner }
+        let mut v = 1
+        if inner.value != 0 { v = 0 }
+        return ConstEval { value: v, pos: inner.pos, err: "" }
+    }
+    // parenthesised
+    if t == "(" {
+        let inner = _rv_eval_expr(toks, pos + 1, tab, 1)
+        if len(inner.err) > 0 { return inner }
+        if inner.pos >= n {
+            return ConstEval { value: 0, pos: inner.pos, err: "const-expr: missing `)`" }
+        }
+        if toks[inner.pos] != ")" {
+            return ConstEval { value: 0, pos: inner.pos,
+                err: "const-expr: expected `)` got `" + toks[inner.pos] + "`" }
+        }
+        return ConstEval { value: inner.value, pos: inner.pos + 1, err: "" }
+    }
+    // numeric literal
+    let lit = _rv_literal_value(t)
+    if lit >= 0 {
+        return ConstEval { value: lit, pos: pos + 1, err: "" }
+    }
+    // identifier — must resolve in the symbol table
+    if symtab_has(tab, t) == 1 {
+        return ConstEval { value: symtab_get(tab, t), pos: pos + 1, err: "" }
+    }
+    return ConstEval { value: 0, pos: pos,
+        err: "const-expr: unresolved `" + t + "` (not a literal or known parameter)" }
+}
+
+// CLEAN-ROOM: precedence-climbing constant-expression evaluator.
+// Evaluates from `pos` while the next binary operator's precedence is
+// >= `min_prec`; returns the folded value + the index just past the
+// last consumed token. (IEEE 1364-2005 §5.1.2 — left-associative.)
+fn _rv_eval_expr(toks: [str], pos: int, tab: SymTab, min_prec: int) -> ConstEval {
+    let lhs = _rv_eval_primary(toks, pos, tab)
+    if len(lhs.err) > 0 { return lhs }
+    let mut acc = lhs.value
+    let mut i = lhs.pos
+    let n = len(toks)
+    while i < n {
+        let op = toks[i]
+        let prec = _rv_binop_prec(op)
+        if prec == 0 { return ConstEval { value: acc, pos: i, err: "" } }
+        if prec < min_prec { return ConstEval { value: acc, pos: i, err: "" } }
+        let rhs = _rv_eval_expr(toks, i + 1, tab, prec + 1)
+        if len(rhs.err) > 0 { return rhs }
+        acc = _rv_apply_binop(op, acc, rhs.value)
+        i = rhs.pos
+    }
+    return ConstEval { value: acc, pos: i, err: "" }
+}
+
 // ─── private parsers ─────────────────────────────────────────────────────
 
 // Track parse cursor in a struct (no tuples).
@@ -491,6 +753,60 @@ fn main() {
     total = total + 1
     if r3.design.source != "read_verilog" {
         println("FAIL T10 source_provenance"); fails = fails + 1
+    }
+
+    // T11 — numeric literal values (unsized decimal + sized dec/hex/bin).
+    total = total + 1
+    if _rv_literal_value("64") != 64 {
+        println("FAIL T11a lit_dec"); fails = fails + 1
+    }
+    if _rv_literal_value("3'd2") != 2 {
+        println("FAIL T11b lit_sized_dec"); fails = fails + 1
+    }
+    if _rv_literal_value("8'hff") != 255 {
+        println("FAIL T11c lit_hex"); fails = fails + 1
+    }
+    if _rv_literal_value("4'b1010") != 10 {
+        println("FAIL T11d lit_bin"); fails = fails + 1
+    }
+    if _rv_literal_value("1'b0") != 0 {
+        println("FAIL T11e lit_b0"); fails = fails + 1
+    }
+
+    // T12 — constant-expression folding against a symbol table.
+    total = total + 1
+    let mut _tab = symtab_new()
+    _tab = symtab_put(_tab, "W", 64)
+    _tab = symtab_put(_tab, "ADDR_W", 8)
+    _tab = symtab_put(_tab, "FIFO_LD", 2)
+    let _e1 = _rv_eval_expr(["W", "-", "1"], 0, _tab, 1)
+    if len(_e1.err) > 0 {
+        println("FAIL T12a err: " + _e1.err); fails = fails + 1
+    }
+    if _e1.value != 63 {
+        println("FAIL T12a W-1 got " + str(_e1.value)); fails = fails + 1
+    }
+    total = total + 1
+    let _e2 = _rv_eval_expr(["1", "<<", "FIFO_LD"], 0, _tab, 1)
+    if _e2.value != 4 {
+        println("FAIL T12b 1<<FIFO_LD got " + str(_e2.value)); fails = fails + 1
+    }
+    // precedence: `/` binds tighter than `-` → ADDR_W/2 - 1 = 4 - 1 = 3
+    total = total + 1
+    let _e3 = _rv_eval_expr(["ADDR_W", "/", "2", "-", "1"], 0, _tab, 1)
+    if _e3.value != 3 {
+        println("FAIL T12c ADDR_W/2-1 got " + str(_e3.value)); fails = fails + 1
+    }
+    total = total + 1
+    let _e4 = _rv_eval_expr(["(", "1", "<<", "FIFO_LD", ")"], 0, _tab, 1)
+    if _e4.value != 4 {
+        println("FAIL T12d paren got " + str(_e4.value)); fails = fails + 1
+    }
+    // unresolved identifier must fail-loud
+    total = total + 1
+    let _e5 = _rv_eval_expr(["UNKNOWN_P"], 0, _tab, 1)
+    if len(_e5.err) == 0 {
+        println("FAIL T12e unresolved_should_err"); fails = fails + 1
     }
 
     if fails > 0 {
