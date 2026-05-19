@@ -345,7 +345,15 @@ int hexa_farr_bf16_to_device(HexaFarrBf16* f) {
             return -1;
         }
     }
-    if (f->len > 0 && f->h_buf) {
+    /* Sticky device-residence: copy host->device ONLY when the host buffer
+     * is the authoritative copy (loc == HOST — e.g. fresh from from_f64).
+     * If the farr is already MIRROR or DEVICE the device buffer is in sync
+     * (or newer), so a re-upload is both redundant and wrong (it would
+     * clobber a device-authoritative result with stale host data). Without
+     * this guard every *_bf16_gpu call re-staged its full operand set —
+     * measured 17x slowdown on the FFN path (RFC 049 Stage 2 fire,
+     * state/forge_rfc049_stage2_2026_05_19): weights re-uploaded every step. */
+    if (f->len > 0 && f->h_buf && f->loc == FARR_BF16_LOC_HOST) {
         cudaError_t e = cudaMemcpy(f->d_buf, f->h_buf, bytes,
                                    cudaMemcpyHostToDevice);
         if (e != cudaSuccess) {
