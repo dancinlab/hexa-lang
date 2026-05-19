@@ -406,6 +406,27 @@ HexaVal hexa_floor(HexaVal v);                                                  
 HexaVal hexa_math_isfinite(HexaVal x);                                             /* runtime.c:849 (proto) */
 HexaVal hexa_math_isinf(HexaVal x);                                                /* runtime.c:848 (proto) */
 HexaVal hexa_math_isnan(HexaVal x);                                                /* runtime.c:847 (proto) */
+/* hexa_math_* transcendental/arith builtins — defined runtime.c:2144+ but
+ * previously undeclared, causing C99 implicit-declaration build failures
+ * for any AOT-compiled hexa using acos/cos/sqrt/etc. */
+HexaVal hexa_math_tanh(HexaVal x);                                                 /* runtime.c:2144 */
+HexaVal hexa_math_sin(HexaVal x);                                                  /* runtime.c:2145 */
+HexaVal hexa_math_cos(HexaVal x);                                                  /* runtime.c:2146 */
+HexaVal hexa_math_tan(HexaVal x);                                                  /* runtime.c:2147 */
+HexaVal hexa_math_asin(HexaVal x);                                                 /* runtime.c:2148 */
+HexaVal hexa_math_acos(HexaVal x);                                                 /* runtime.c:2149 */
+HexaVal hexa_math_atan(HexaVal x);                                                 /* runtime.c:2150 */
+HexaVal hexa_math_atan2(HexaVal y, HexaVal x);                                     /* runtime.c:2151 */
+HexaVal hexa_math_log(HexaVal x);                                                  /* runtime.c:2152 */
+HexaVal hexa_math_exp(HexaVal x);                                                  /* runtime.c:2153 */
+HexaVal hexa_math_abs(HexaVal x);                                                  /* runtime.c:2154 */
+HexaVal hexa_math_sqrt(HexaVal x);                                                 /* runtime.c:2155 */
+HexaVal hexa_math_floor(HexaVal x);                                                /* runtime.c:2156 */
+HexaVal hexa_math_ceil(HexaVal x);                                                 /* runtime.c:2157 */
+HexaVal hexa_math_round(HexaVal x);                                                /* runtime.c:2158 */
+HexaVal hexa_math_pow(HexaVal b, HexaVal e);                                       /* runtime.c:2159 */
+HexaVal hexa_math_min(HexaVal a, HexaVal b);                                       /* runtime.c:2160 */
+HexaVal hexa_math_max(HexaVal a, HexaVal b);                                       /* runtime.c:2169 */
 HexaVal hexa_str_parse_float(HexaVal s);                                           /* runtime.c:815 (proto) */
 
 /* De-staticized 2026-05-17 (wilson P0#2 interp rebuild) — file-scope
