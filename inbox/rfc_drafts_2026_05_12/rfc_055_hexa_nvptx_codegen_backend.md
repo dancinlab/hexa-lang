@@ -83,6 +83,17 @@ codegen target.
 - `self/forge/FORGE.tape` g_forge_substrate_role + g_forge_no_relocation — the
   C/CUDA-vs-hexa directory boundary that RFC 055 must respect (it does not move
   any forge code; see §8).
+- **`self/native/gpu_codegen_stub.c`** — a pre-existing `@gpu` codegen backend
+  **skeleton** ("rt#45-research scaffold", placeholder-only, no real emission;
+  it locks a C ABI between `hexa_cc.c` and a future GPU backend). Discovered
+  2026-05-19 (`@N native_dir`). RFC 055 was drafted unaware of it. **RFC 055
+  must reconcile**: either (a) supersede the rt#45 stub (RFC 055's
+  `compiler/codegen/nvptx_*.hexa` is the hexa-native answer, the C stub is the
+  abandoned bootstrap-era attempt → tombstone it), or (b) adopt the stub's
+  already-fixed C ABI as the bootstrap seam. The stub's companion design
+  `docs/rt-45-gpu-design.md` is referenced in its header but is **MISSING** —
+  so option (a), supersede, is the likely honest call. This is a pre-existing-
+  work overlap the RFC must not silently ignore.
 
 ## 4. Scope
 

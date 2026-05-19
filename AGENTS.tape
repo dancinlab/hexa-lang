@@ -37,6 +37,9 @@
   LIMIT_BREAKTHROUGH.md -> "project-specific limits + breakthrough audit"
   TAPE-AUDIT.md -> "tape v1.x adoption ledger for this repo"
   inbox/patches/ -> "external-contributed patch markdowns (one concept per file)"
+  self/ -> "compiler runtime + bootstrap — runtime.c (C runtime), codegen_c2.hexa (SSOT codegen), main.hexa (CLI), module_loader.hexa"
+  self/native/ -> "bootstrap + native-support C layer (WIP) — hexa_cc.c + hexa_v2 (bootstrap transpiler), {lexer,parser,type_checker}_v2.c (C frontend), tensor_kernels.c, OS shims (net/thread/pty/mount). ★ also holds GPU code: hxcuda_*.cu · hxmetal_* · gpu_codegen_stub.c (@gpu codegen skeleton, rt#45 — see @N native_dir). NOT forge SSOT."
+  self/cuda/ -> "forge CUDA kernels — runtime_cuda.c (cuBLAS Dgemm + .cu kernels). see self/forge/."
   stdlib/flame/ -> "★ NN training stdlib (hexa source, compiler-only PyTorch-equiv) — README · PLAN · FLAME.tape. RFC 043. see §0 nn_stack."
   self/forge/ -> "★ GPU compute substrate SSOT label (cuBLAS + .cu kernels live in self/runtime.c + self/cuda/) — README · PLAN · FORGE.tape. RFC 040+041. see §0 nn_stack."
   stdlib/qrng/ -> "★ Quantum RNG — 9 backends T0..T3 + NIST SP 800-22 audit. RFC 044 absorption of ~/core/qrng (헌법 v2 룰 4 reference impl). see §0 qrng_stack."
@@ -352,6 +355,36 @@
 
 @N n_log_separation := "hexa-lang specific" :: note [active]
   text = "hexa-lang's stdlib/RFC/codegen progress lands as commits — each commit hook should append @A entries to per-domain .log.tape (e.g. CODEGEN.log.tape, STDLIB.log.tape) rather than mutating the architecture .tape files."
+
+@N native_dir := "self/native/ — bootstrap + native-support C layer (WIP)" :: note [d=2026-05-19 active]
+  text <<~EOF
+    self/native/ is the C-level bootstrap + native-support directory.
+    Status: WORK-IN-PROGRESS — mixed, no own README/tape yet. Recognized
+    here so sessions/agents do not rediscover it ad-hoc.
+
+    Contents (git-tracked):
+    - bootstrap transpiler: hexa_cc.c + hexa_v2 (the canonical .hexa→C
+      path, @N n1) + many hexa_v2.bak.* / .pre* snapshots.
+    - C frontend mirror: lexer_v2.c · parser_v2.c · type_checker_v2.c
+      · codegen_c2_v2.c (the *.hexanoport siblings are no-port marks).
+    - kernels + OS shims: tensor_kernels.c · net.c · thread.c · pty.c
+      · mount.c · namespace.c · wait.c · crypto_*.c · proc_fork.c.
+    - GPU code (NOT forge SSOT — forge = self/cuda/ per FORGE.tape):
+      hxcuda_conv1d/fused/stft.cu · lora_cuda.cu · hxqwen14b_cuda.cu
+      · hxmetal_kernels.metal + hxmetal_macos.m · hxblas/hxccl/hxflash/
+      hxlayer/hxlmhead/hxvdsp_linux.c accelerator shims.
+    - ★ gpu_codegen_stub.c — a `@gpu` codegen backend SKELETON
+      ("rt#45-research scaffold", placeholder-only, locks the C ABI
+      for a future GPU codegen backend). This PRE-DATES RFC 055
+      (hexa-src→NVPTX); RFC 055 should reconcile with / supersede this
+      stub rather than ignore it. Companion `docs/rt-45-gpu-design.md`
+      is referenced by the stub header but currently MISSING.
+
+    Boundary: self/native/ ≠ self/forge/ (forge = self/cuda/ +
+    runtime.c GPU dispatch, RFC 040/041). self/native/ GPU files are
+    a separate, older, partly-stale layer; treat as WIP, do not assume
+    they are wired into the flame/forge path.
+  EOF
 
 # ─── §7 Generator hooks ──────────────────────────────────────────────
 

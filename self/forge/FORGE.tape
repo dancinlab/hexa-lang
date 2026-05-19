@@ -175,6 +175,9 @@
 @N n_naming_rationale := "왜 'forge' 인가" :: note [d=2026-05-16 active]
   text = "(a) flame 과 thermal 패밀리 통일 ('flame builds on forge'); (b) 기능 정확 = 무거운 컴퓨트가 일어나는 substrate/엔진; (c) f1/f2 안전 (격자/수비학 함의 0); (d) 영어/한국어 모두 자연스러움 (HF/upstream 영어 mandate · 세션 한글 mandate 양립); (e) 짧음 (5 글자) — torch/flame 과 어휘 길이 비슷"
 
+@N n_native_dir_boundary := "self/native/ GPU 코드는 forge 아님" :: note [d=2026-05-19 active]
+  text = "self/native/ 에도 GPU 코드가 있다 — hxcuda_*.cu · hxmetal_* · lora_cuda.cu · hxqwen14b_cuda.cu · gpu_codegen_stub.c (@gpu codegen skeleton, rt#45). 이들은 forge SSOT 가 아니다. forge = self/cuda/runtime_cuda.c + self/runtime.c GPU dispatch (RFC 040/041) 한정. self/native/ GPU 파일은 별도의 더 오래된 부분-stale layer (WIP). forge kernel/oracle 작업 시 self/native/ GPU 파일을 forge 자산으로 오인 금지. 특히 gpu_codegen_stub.c 는 RFC 055 (hexa→NVPTX) 와 개념 중복 — RFC 055 가 reconcile 책임. canonical 서술 = AGENTS.tape @N native_dir."
+
 ## Log
 
 ### 2026-05-16 — FORGE.tape created (NAMING, scaffold-only)
