@@ -5,13 +5,23 @@
 > g3 / LATTICE_POLICY: **measured numbers only.** Unmeasured = not
 > claimed; falsified = recorded as falsified. No over-claim.
 
-**Canonical config: d=768 · 12 layer · T=1024 (one train step wall).**
+**Canonical config: d=768 · 12 layer · T=1024 — per-step wall.**
 
-| path | d768·12L step wall | vs PyTorch eager | status |
+> CORRECTION 2026-05-19: the prior table reported flame "2.95x /
+> 1.26-1.76x faster than PyTorch eager". That divided PyTorch's
+> 336.85 s (a full 2500-step run) by flame's 1-step wall — a unit
+> mismatch, RETRACTED. flame has no measured PyTorch-speedup. Detail:
+> `PERF.md` "GPU dispatch path".
+
+| path | d768·12L wall | unit | status |
 |---|---|---|---|
-| PyTorch eager (RFC 046 baseline) | **336.85 s** | 1.00x (reference) | baseline |
-| **flame device-resident** (hand-fused, `28e9d648`) | **191-268 s** | **1.26-1.76x faster** (20-43%) | MEASURED PASS · F-RFC046-WALL (<=437.9 s gate) |
-| **flame generic `ag_tape`** (mk2 closure, `e030fa31`) | **114 s** (step 1) · step2=133 s · step3=120 s | **2.95x faster** | MEASURED PASS · F-RFC046-AGTAPE-WALL (<=437.9 s gate; 3.84x under) — **option A wins (faster than hand-fused option B)** |
+| PyTorch eager (anima A100 fire) | 336.85 s / 2500 steps ≈ **0.135 s/step** | T=128, bf16 autocast | baseline |
+| **flame** hand-fused (`28e9d648`) | **191-268 s/step** | T=1024, FP64 | MEASURED |
+| **flame** generic `ag_tape` (mk2, `e030fa31`) | **114 s/step** (step 1) · 133/120 (2/3) | T=1024, FP64 | MEASURED |
+
+flame is currently ~3 orders of magnitude slower per step than
+PyTorch eager (FP64 vs bf16 tensor cores; young GPU codegen). Not
+apples-to-apples — T / batch / precision differ.
 
 **Correctness / substrate (A100, byte-eq oracles — all MEASURED PASS):**
 
@@ -29,12 +39,12 @@
   - generic `ag_tape` = correctness + expressiveness path
     (autograd · shape-generic · `ag_spec` model DSL · kernel
     byte-eq) — **5/5 measured-closed**.
-  - device-resident hand-fused = performance path — beats PyTorch
-    eager at d768·12L (`28e9d648`, 191-268 s).
+  - device-resident hand-fused = performance path — d768·12L
+    per-step wall 191-268 s (`28e9d648`, FP64).
 - **mk2 (CLOSED 2026-05-19):** the generic `ag_tape` path is now
   device-resident end-to-end and **faster than the hand-fused
-  path** (114 s vs 191-268 s on the same workload, both PASS the
-  437.9 s gate). One trainer, two measurement points; the
+  path** (114 s vs 191-268 s/step — a flame-internal comparison,
+  NOT a PyTorch comparison). One trainer, two measurement points; the
   abstraction layer no longer pays a wall tax. Closure took 4
   measured A100 fires + 4 byte-eq oracle PASS, each round
   localising a different binding bottleneck (host-scalar M-load

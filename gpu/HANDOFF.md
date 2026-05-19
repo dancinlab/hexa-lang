@@ -37,19 +37,23 @@ about what each half means, or the claim trips hexa-lang `g3`/`g4`
   naive attention. Achievable and honest. Any "exceed cuBLAS" claim
   must name the fused op sequence it beats.
 
-### Benchmark target = torch.compile, NOT eager
+### Benchmark target — measure honestly, same units
 
-flame's current headline (2.95x, d768·12L, A100) is vs PyTorch
-**eager**. Eager carries Python dispatch overhead that
-torch.compile / TorchInductor also removes. For `@gpu` fused-kernel
-work the honest comparison is **vs torch.compile** — because
-torch.compile *also* fuses. Beating only eager proves nothing a
-fused kernel should claim credit for.
+**CORRECTION 2026-05-19**: flame's prior "2.95x faster than PyTorch
+eager" headline was a unit mismatch (flame 1-step wall ÷ PyTorch
+2500-step run wall) and is RETRACTED. flame has NO measured
+PyTorch-speedup. See `stdlib/flame/PERF.md` "GPU dispatch path".
 
-- Gate it: `@gpu` fused-path wall ≤ torch.compile wall — same
-  workload, same A100, same dtype.
-- torch.compile is currently UNMEASURED (see Open items) — that
-  measurement is a prerequisite for any `@gpu` perf gate.
+For `@gpu` fused-kernel perf work:
+
+- Always compare PER-STEP wall to PER-STEP wall, same T / batch /
+  precision. flame runs FP64; PyTorch baselines are bf16 autocast —
+  match precision or state the gap explicitly.
+- The honest opponent is **torch.compile**, not eager — torch.compile
+  also fuses; beating only eager proves nothing.
+- flame d768·12L FP64 is currently ~3 orders of magnitude slower per
+  step than PyTorch eager. "match cuBLAS → exceed cuBLAS" is a long
+  road from here — set gates against measured per-step walls only.
 
 ## Next steps (suggested order)
 
@@ -66,10 +70,11 @@ fused kernel should claim credit for.
 
 ## Open items
 
-- **torch.compile baseline UNMEASURED.** flame docs only hold PyTorch
-  eager (336.85 s · d768·12L · A100). A `@gpu` perf gate needs the
-  torch.compile number — one A100 dispatch, ~$5-20. Decision pending
-  (fire-gate: measure vs resolve-analytically).
+- **No honest PyTorch comparison exists.** The prior 2.95× was
+  retracted (unit mismatch — see Benchmark target above). A real perf
+  gate needs a per-step PyTorch baseline (eager AND torch.compile) at
+  matched T / batch / precision — one A100 dispatch, when `@gpu` work
+  is far enough along to warrant it.
 
 ## Cross-references
 
