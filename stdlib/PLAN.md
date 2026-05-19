@@ -704,3 +704,11 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   대한 self-validating 단위테스트로 검증. ubu-2
   __ATOMS_STAGE1_TEST__ PASS (17/17). atoms 의 from_cif/neighborlist/
   EMT + crystal/mol/mlff 전 Stage-2 잔여.
+- 2026-05-19 — **T4 Stage-2 #2: atoms_neighborlist + atoms_coordination**
+  (commit `dc5528ac`, `rfc043-hexa-torch`). ASE `neighbor_list('ijd')`
+  hexa-native: 주기 이미지 n∈{-1,0,1}³ 전수, (0,cutoff] 거리쌍
+  [i,j,d]. cutoff < 최단 셀벡터 길이 영역(hexa-matter NN-shell)에서
+  정확; 더 큰 cutoff 는 이미지 범위 확대 필요(future). 검증: 교과서
+  배위수(no .py golden) — ubu-2 __ATOMS_STAGE1_TEST__ PASS (23/23):
+  FCC CN=12 @ a/√2, BCC CN=8 @ a√3/2, diamond CN=4 @ a√3/4. atoms
+  잔여 = from_cif/EMT; crystal/mol/mlff 전 Stage-2 잔여.
