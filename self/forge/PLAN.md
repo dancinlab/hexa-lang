@@ -271,6 +271,23 @@ mandatory (`g_blue_closed_mandate`).
 
 (append-only)
 
+### 2026-05-19 — RFC 049 Stage 2 fire-validation — measured-PASS (A100, wired FFN 11.66×)
+
+RFC 049 Stage 2 의 wired BF16 substrate 를 A100 에서 fire-validate. harness
+`self/cuda/experiments/r049_stage2_validate.cu` 가 production entry point
+`hexa_farr_ffn_bf16_gpu` 를 `farr_bf16` storage class 경유로 fire (bare Stage 1
+커널 아님 — `g_cublas`+`_ensure_cublas` 2-심볼만 shim, `runtime_bf16.c` 그대로
+#include). **3 falsifier 전부 PASS**: WIRED-PERF = LARGE(Llama-7B FFN) 11.66×
+FP64 cuBLAS (gate ≥5×, Stage 1 anchor 9.67× 상회) · WIRED-CORRECT = max|Δ|/max|Y|
+4.5-6.4e-3 (BF16 정밀도) · WIRED-DET = within-run bit-equal 3/3. fire 가
+load-bearing — production wiring 의 perf 버그 2개를 잡음: (1) `hexa_farr_bf16_to_device`
+가 `loc` 무시하고 매 호출 H2D 재업로드 (fire#1 0.058× = 17× slower) → sticky
+device-residence (`loc==HOST` 일 때만 H2D) 수정. (2) FFN body 가 호출마다
+`cudaMalloc(dH)` scratch (fire#2 4.78×) → process-lifetime 캐싱 수정. fire#3
+11.66× all-PASS. SSOT: `state/forge_rfc049_stage2_2026_05_19/` + RFC 049
+§"Stage 2 closure". commits b221f281 + 0d2a4f35 + 735f2fc5. RFC 049 status:
+Stage-2-MEASURED-PASS.
+
 ### 2026-05-19 — RFC 049 Stage 2 production BF16 kernel bodies 배선 ($0 — production wiring, fire 0)
 
 RFC 049 Stage 2 의 세 `*_bf16_gpu` 커널 entry point 의 BODY 를 honest stub 에서

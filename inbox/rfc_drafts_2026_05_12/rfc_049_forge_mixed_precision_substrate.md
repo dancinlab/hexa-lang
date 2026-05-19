@@ -1,28 +1,18 @@
 # RFC 049 — forge: mixed-precision substrate (BF16 Tensor Core + LayerCast-style det)
 
-- **Status**: Stage-2-production-bodies-wired (2026-05-19) — Stage 1
-  MEASURED PASS (BF16 fused FFN 9.67× FP64 cuBLAS Dgemm chain on A100,
-  Llama-7B FFN — `state/forge_phaseR_r049_bf16_2026_05_17`). Stage 2
-  storage-class (`farr_bf16`) + `*_bf16_gpu` kernel-entry-point +
-  cross-precision determinism-contract scaffold landed 2026-05-19 in
-  `self/cuda/runtime_bf16.c` (compile-clean as plain C; CUDA-only code
-  behind `#ifdef HEXA_CUDA`; `#include`d by `self/cuda/runtime_cuda.c`).
-  The three `*_bf16_gpu` kernel BODIES are now **production-wired**
-  (2026-05-19) — `hexa_farr_matmul_bf16_gpu` drives a single BF16
-  GemmEx (the MEASURED `gemm_ex_bf16` pattern), `hexa_farr_ffn_bf16_gpu`
-  drives the fused FFN chain (GemmEx → SiLU FP32-compute → GemmEx, the
-  MEASURED `cublas_ffn_chain_bf16` pattern), `hexa_farr_layercast_linear_bf16_gpu`
-  drives the LayerCast linear (mixed FP32×BF16 GemmEx with on-device
-  upcast fallback, the MEASURED `r049_layercast_linear.cu` pattern).
-  All three reuse the shared `g_cublas` handle from `runtime_cuda.c`
-  (same CUDA TU via `#include`) and honor determinism contract C1.
-  Verified `cc -fsyntax-only -std=c11 -Wall -Wextra` clean as plain C
-  on a no-CUDA host. **Fire-validation (running these on a GPU + the
-  9.67× speedup + within-run bit-equal confirmation) remains a separate
-  cost-bearing step** — the production wiring adds no new measured
-  claim; it is the proven Stage 1 kernels turned into substrate entry
-  points. Below this line is the original design draft — unchanged,
-  latest-wins per `g_arch_vs_log_split`.
+- **Status**: Stage-2-MEASURED-PASS (2026-05-19) — the wired BF16
+  substrate is fire-validated. See §"Stage 2 closure" below. Stage 1
+  measured PASS (BF16 fused FFN 9.67× FP64 cuBLAS on A100,
+  `state/forge_phaseR_r049_bf16_2026_05_17`); Stage 2 wired the
+  `farr_bf16` storage class + `*_bf16_gpu` kernel entry points into
+  `self/cuda/runtime_bf16.c`, and a fire on A100 confirmed the WIRED
+  `hexa_farr_ffn_bf16_gpu` entry point delivers **11.66× FP64 cuBLAS**
+  on the Llama-7B FFN through the `farr_bf16` storage class — at/above
+  the Stage 1 anchor — with BF16-precision-correct output and within-run
+  determinism (all 3 Stage 2 falsifiers PASS). The fire caught + fixed
+  two production-wiring perf bugs (per-call H2D re-stage; per-call
+  scratch malloc). Below this line is the original design draft —
+  unchanged, latest-wins per `g_arch_vs_log_split`.
 - **Status (original draft)**: design-draft (2026-05-17) — DESIGN ONLY, no implementation
 - **Date**: 2026-05-17
 - **Severity**: HIGH (forge 의 FP64-only substrate 가 Hopper/Blackwell Tensor Core 를 사용할 수 없는 구조적 한계 — Phase R Stage 2 C v2 wall FAIL 의 근본 원인 candidate)
@@ -487,3 +477,37 @@ PLAN 본문 갱신 = 별도 task (RFC 049 land 후).
   본 RFC 의 falsifier 7 개 모두 paper data 또는 NVIDIA spec 직접 reference
 - g_arch_vs_log_split: 본 RFC = architecture draft (편집 가능, latest-wins).
   fire 결과 land 시 FORGE.tape ## Log 에 append-only event 등록.
+
+## Stage 2 closure — measured 2026-05-19 (A100)
+
+The Stage 2 production wiring was fire-validated, not left as a scaffold.
+Harness: `self/cuda/experiments/r049_stage2_validate.cu` +
+`tool/dispatch_r049_stage2_validate.sh` — fires the WIRED entry point
+`hexa_farr_ffn_bf16_gpu` THROUGH the `farr_bf16` storage class (the
+production code path), shimming only the 2-symbol `runtime_cuda.c`
+surface (`g_cublas` + `_ensure_cublas`). Fire: NVIDIA A100-PCIE-40GB
+(cc 8.0), cuBLAS 12.4.2, vast.ai. Measurement SSOT:
+`state/forge_rfc049_stage2_2026_05_19/{result.json,RFC049_STAGE2_RESULTS.md}`.
+
+| Falsifier | Verdict |
+|---|---|
+| F-FORGE-RFC049-STAGE2-WIRED-PERF | **PASS** — wired `hexa_farr_ffn_bf16_gpu` = **11.66× FP64 cuBLAS** at the Llama-7B FFN (M=128 D=4096 FD=11008); gate ≥5×. At/above the Stage 1 bare-kernel anchor (9.67×). |
+| F-FORGE-RFC049-STAGE2-WIRED-CORRECT | **PASS** — max\|Δ\|/max\|Y\| 4.5-6.4e-3 vs FP64, BF16-precision-consistent. |
+| F-FORGE-RFC049-STAGE2-WIRED-DET | **PASS** — within-run bit-equal 3/3 shapes (determinism contract C1). |
+
+**The fire was load-bearing.** It caught two real perf bugs that a
+non-fired scaffold would have shipped silent: (1) `hexa_farr_bf16_to_device`
+re-uploaded every operand on every call (fire #1 = 0.058×, 17× *slower*
+than FP64) — fixed with sticky device-residence (H2D only when
+`loc == HOST`); (2) the FFN body did a per-call `cudaMalloc`/`cudaFree`
+of the hidden-activation scratch (fire #2 = 4.78×) — fixed with a
+process-lifetime cached scratch. Fire #3 = 11.66×, all falsifiers PASS.
+
+**Verdict.** RFC 049 Stage 2 is **measured-resolved (PASS)** — the BF16
+mixed-precision substrate is wired into forge (`farr_bf16` + the three
+`*_bf16_gpu` entry points) and the wired path delivers the Stage 1
+speedup with correct, deterministic output. The forge dispatcher
+(`forge_tier_v1`, `FORGE_PREC_*`) can route BF16 work to a real,
+fire-validated substrate. Remaining follow-up (separate cycles, not this
+one): RFC 050 Stage 2 (flame Phase 4-C emitting dispatch sites), and
+RFC 052's Hopper combined kernel (measured-KILL — see RFC 052 §13).
