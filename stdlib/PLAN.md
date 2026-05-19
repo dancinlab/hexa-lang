@@ -742,3 +742,16 @@ science-stack 패키지: `nd`·`grad`·`net` = 기존 자산 remap,
   crystal structure_from_cif/spacegroup/multi-point-hull · mol
   from_smiles(hexa-bio 858L 파서 hoist)/descriptors · atoms EMT ·
   mlff(grad/safetensors 의존 = T5). 재발사 대상: crystal/mol 2-에이전트.
+- 2026-05-19 — **T4 Stage-2 직접 연속 수확 (레이트리밋 우회)**: 에이전트
+  대신 직접 바운드 커널 연속 랜딩. `fd1b297f` crystal
+  structure_from_cif(자립 최소 CIF 리더 → Structure) +
+  structure_from_spacegroup(sg=1 P1·sg=225 Fm-3m coset; 미지원 sg →
+  P1 identity, 가짜 multiplicity 0/g3). `(mol)` mol_weight/mol_hba/
+  mol_hbd(explicit-atom 그래프 descriptor; CRC 원자량표). 검증 ubu-2:
+  __SCI_STAGE1_TEST__ PASS (41/41) · __MOL_STAGE2_TEST__ PASS (14/14).
+  **Stage-2 바운드 커널 배치 완료**: atoms{bulk,neighborlist,from_cif}
+  · crystal{coords,angles,hull(binary),from_cif,spacegroup(P1/Fm-3m)}
+  · mol{weight,hba,hbd}. 잔여 = mol_from_smiles(hexa-bio 858L 파서
+  hoist — 유일 대형 genuine 커널, 전용 에이전트) · atoms EMT/crystal
+  multi-point-hull/mol Crippen-logP·Ertl-TPSA(Stage-2.5, 파라미터표
+  필요) · mlff(T5).
