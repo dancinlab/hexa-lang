@@ -199,6 +199,17 @@ cmd_bootstrap() {
     log "bootstrap [3/4] clang → $hxbin/hexa.real"
     clang -O2 -std=c11 -D_GNU_SOURCE -I self "$MAIN_OUT" self/runtime.c \
           -o "$hxbin/hexa.real" -lm || die "[3] driver link failed"
+    # [3b] the compiled module loader — REQUIRED for correct import
+    #      flatten. self/module_loader.hexa is import-free → hexa_v2
+    #      transpiles it standalone. Without build/hexa_module_loader,
+    #      `hexa build` of an import-bearing program silently falls back
+    #      to raw-src and emits `extern` stubs (undeclared-symbol clang
+    #      errors). Built so downstream `hexa build` flattens correctly.
+    log "bootstrap [3b] clang → build/hexa_module_loader"
+    mkdir -p build
+    ./self/native/hexa_v2 self/module_loader.hexa /tmp/hexa_ml.c || die "[3b] ml transpile failed"
+    clang -O2 -std=c11 -D_GNU_SOURCE -I self /tmp/hexa_ml.c self/runtime.c \
+          -o build/hexa_module_loader -lm || die "[3b] module_loader link failed"
     # [4] wrapper
     log "bootstrap [4/4] wrapper → $hxbin/hexa"
     printf '#!/bin/bash\nexec "%s/hexa.real" "$@"\n' "$hxbin" > "$hxbin/hexa"
