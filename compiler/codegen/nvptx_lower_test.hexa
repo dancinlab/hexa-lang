@@ -138,7 +138,8 @@ fn _build_case_br() -> MModule {
         blocks: blocks,
         entry_block: 0,
         arena_root: 1,
-        def_line: 0
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
     }
     let mut fns = []
     fns.push(mf)
@@ -226,7 +227,8 @@ fn _build_case_classify_pred() -> MModule {
         blocks: blocks,
         entry_block: 0,
         arena_root: 1,
-        def_line: 0
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
     }
     let mut fns = []
     fns.push(mf)
@@ -310,7 +312,8 @@ fn _build_case_setp_br_cond() -> MModule {
         blocks: blocks,
         entry_block: 0,
         arena_root: 1,
-        def_line: 0
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
     }
     let mut fns = []
     fns.push(mf)
@@ -383,7 +386,8 @@ fn _build_case_call_intrinsic() -> MModule {
         blocks: blocks,
         entry_block: 0,
         arena_root: 1,
-        def_line: 0
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
     }
     let mut fns = []
     fns.push(mf)
@@ -478,7 +482,8 @@ fn _build_case_load_store() -> MModule {
         blocks: blocks,
         entry_block: 0,
         arena_root: 1,
-        def_line: 0
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
     }
     let mut fns = []
     fns.push(mf)
@@ -506,11 +511,65 @@ fn _test_load_store() -> bool {
     return ok
 }
 
+// ── Case 6 — 055-P3c MFunc.gpu_kind partition ─────────────────────────
+//
+// 055-P3c: `_nvptx_codegen` only lowers MFuncs whose gpu_kind !=
+// GPU_KIND_CPU. Build a mixed-kind MModule and assert the partition:
+//   - cpu_only        — GPU_KIND_CPU    (expected FILTERED OUT)
+//   - dev_helper      — GPU_KIND_DEVICE (expected emitted)
+//   - kernel_entry    — GPU_KIND_KERNEL (expected emitted)
+
+fn _mfunc_partition(name: string, kind: i64) -> MFunc {
+    // Same body across all three fns — the only diff the partition can
+    // act on is gpu_kind. Body: `r = a + b ; return`.
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let r = _local(2, "r")
+    let mut s = []
+    s.push(_stmt_binop(r, "add", _op_local(a.id), _op_local(b.id)))
+    s.push(_stmt_return())
+    let mut blocks = []
+    blocks.push(_block(0, s))
+    let mut params = []
+    params.push(a); params.push(b)
+    let mut locals = []
+    locals.push(a); locals.push(b); locals.push(r)
+    return MFunc {
+        name: name, params: params, return_local: _miss_local(),
+        locals: locals, blocks: blocks, entry_block: 0,
+        arena_root: 1, def_line: 0, gpu_kind: kind
+    }
+}
+
+fn _build_case_partition() -> MModule {
+    let mut fns = []
+    fns.push(_mfunc_partition("cpu_only",     GPU_KIND_CPU))
+    fns.push(_mfunc_partition("dev_helper",   GPU_KIND_DEVICE))
+    fns.push(_mfunc_partition("kernel_entry", GPU_KIND_KERNEL))
+    return MModule { file: "case_partition.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_partition() -> bool {
+    let mut ok = true
+    let mod_p = _build_case_partition()
+    let ptx = codegen_emit_ptx_sm80(mod_p)
+    println("")
+    println("── emitted PTX (055-P3c partition case, sm_80) ──")
+    println(ptx)
+    ok = _check(ok, ptx, ".func dev_helper",   "device fn emitted")
+    ok = _check(ok, ptx, ".func kernel_entry", "kernel fn emitted")
+    if _contains(ptx, ".func cpu_only") {
+        println("  FAIL: cpu_only must NOT be emitted (partition filter)")
+        ok = false
+    }
+    return ok
+}
+
 // ── Driver ───────────────────────────────────────────────────────────
 
 fn main() {
     println("══════════════════════════════════════════════")
-    println("  RFC 055 055-P3b — generic NVPTX lowering primitives smoke")
+    println("  RFC 055 055-P3b + P3c — generic NVPTX lowering smoke")
     println("══════════════════════════════════════════════")
 
     let ok_br    = _test_stmt_br()
@@ -518,19 +577,21 @@ fn main() {
     let ok_setp  = _test_setp_and_br_cond()
     let ok_intr  = _test_call_intrinsic()
     let ok_ls    = _test_load_store()
+    let ok_part  = _test_partition()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls {
-        println("PASS: RFC 055 055-P3b primitives — STMT_BR + classify + setp/BR_COND + CALL + LOAD/STORE")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part {
+        println("PASS: RFC 055 055-P3b + P3c — 6/6 cases (incl. gpu_kind partition)")
     } else {
-        println("FAIL: RFC 055 055-P3b smoke not satisfied.")
+        println("FAIL: RFC 055 055-P3b/c smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
         if !ok_cls  { println("      classify (pred bank) FAILED") }
         if !ok_setp { println("      setp + STMT_BR_COND FAILED") }
         if !ok_intr { println("      STMT_CALL gpu intrinsic FAILED") }
         if !ok_ls   { println("      STMT_LOAD / STMT_STORE FAILED") }
+        if !ok_part { println("      055-P3c gpu_kind partition FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part) { exit(1) }
 }

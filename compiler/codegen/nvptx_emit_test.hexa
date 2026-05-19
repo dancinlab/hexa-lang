@@ -95,7 +95,8 @@ fn _build_case_axpb() -> MModule {
         blocks: blocks,
         entry_block: 0,
         arena_root: 1,
-        def_line: 0
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
     }
     let mut fns = []
     fns.push(mf)
