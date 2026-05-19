@@ -118,7 +118,7 @@ fn _rv_strip_comments(src: str) -> str {
 // CLEAN-ROOM: replace punctuation/symbol chars with spaces so a simple
 // whitespace split yields token stream (IEEE 1364-2005 §3.5).
 fn _rv_normalize_punct(s: str) -> str {
-    let punct = [";", ",", "(", ")", "[", "]", "{", "}", "=", "&", "|", "~", "^"]
+    let punct = [";", ",", "(", ")", "[", "]", "{", "}", "=", "&", "|", "~", "^", "<", ">", "!"]
     let mut out = s
     let mut i = 0
     while i < len(punct) {
@@ -128,7 +128,30 @@ fn _rv_normalize_punct(s: str) -> str {
     return out
 }
 
-// CLEAN-ROOM: whitespace tokeniser.
+// CLEAN-ROOM: merge adjacent single-char tokens back into 2-char
+// Verilog operators (== != <= >= && || << >>) that _rv_normalize_punct
+// split apart (IEEE 1364-2005 §5.1 — these are single lexical tokens).
+fn _rv_merge_ops(toks: [str]) -> [str] {
+    let n = len(toks)
+    let mut out: [str] = []
+    let mut i = 0
+    while i < n {
+        if i + 1 < n {
+            let two = toks[i] + toks[i + 1]
+            if two == "==" || two == "!=" || two == "<=" || two == ">="
+               || two == "&&" || two == "||" || two == "<<" || two == ">>" {
+                out = out.push(two)
+                i = i + 2
+                continue
+            }
+        }
+        out = out.push(toks[i])
+        i = i + 1
+    }
+    return out
+}
+
+// CLEAN-ROOM: whitespace tokeniser + 2-char operator merge.
 fn _rv_tokens(s: str) -> [str] {
     let raw = s.replace("\n", " ").replace("\t", " ").split(" ")
     let mut out: [str] = []
@@ -138,7 +161,7 @@ fn _rv_tokens(s: str) -> [str] {
         if len(t) > 0 { out = out.push(t) }
         i = i + 1
     }
-    return out
+    return _rv_merge_ops(out)
 }
 
 // ─── constant-expression evaluator (rfc_006 §4 module-2 scope, D68) ──────
@@ -600,14 +623,143 @@ fn _rv_parse_port_decl(st_in: PState, m_in: Module, dir_kind: int) -> RvStep {
 //   `assign y = 1'b0 ;`   →  RTLIL ::connect to a constant (treated as
 //                             a tie to a special wire "$const_0"/"$const_1"
 //                             which the passes pipeline will lift)
+// ─── expression elaboration → RTLIL cell tree (rfc_006 §4 m2, D68) ───────
+//
+// CLEAN-ROOM: lower a Verilog expression to a tree of RTLIL cells (IEEE
+// 1364-2005 §5 / Yosys genrtlil.cc public surface). Each binary operator
+// becomes one generic RTLIL cell ($add/$and/$eq/…) whose Y output is a
+// fresh internal wire; the wire carrying the whole expression's result
+// is returned. Wire widths are recorded as 1 here — a follow-up pass
+// elaborates real widths; the generic cells are width-tolerant.
+
+struct ElabResult {
+    wire: str,
+    m:    Module,
+    pos:  int,
+    err:  str,
+}
+
+// CLEAN-ROOM: binary operator → RTLIL generic cell type (empty = none).
+fn _rv_binop_cell(op: str) -> str {
+    if op == "+"  { return "$add" }
+    if op == "-"  { return "$sub" }
+    if op == "*"  { return "$mul" }
+    if op == "/"  { return "$div" }
+    if op == "%"  { return "$mod" }
+    if op == "&"  { return "$and" }
+    if op == "|"  { return "$or" }
+    if op == "^"  { return "$xor" }
+    if op == "==" { return "$eq" }
+    if op == "!=" { return "$ne" }
+    if op == "<"  { return "$lt" }
+    if op == ">"  { return "$gt" }
+    if op == "<=" { return "$le" }
+    if op == ">=" { return "$ge" }
+    if op == "<<" { return "$shl" }
+    if op == ">>" { return "$shr" }
+    if op == "&&" { return "$logic_and" }
+    if op == "||" { return "$logic_or" }
+    return ""
+}
+
+// CLEAN-ROOM: a fresh internal result-wire name, unique per cell count.
+fn _rv_fresh_wire(m: Module) -> str {
+    return "$rvexpr$" + str(len(m.cells))
+}
+
+// CLEAN-ROOM: elaborate a primary — wire reference, 1'b0/1'b1 constant,
+// parenthesised expression, or unary `~` / `!`.
+fn _rv_elab_primary(toks: [str], pos: int, m_in: Module) -> ElabResult {
+    let n = len(toks)
+    let mut m = m_in
+    if pos >= n {
+        return ElabResult {
+            wire: "", m: m, pos: pos, err: "read_verilog: expr: unexpected end"
+        }
+    }
+    let t = toks[pos]
+    if t == "~" || t == "!" {
+        let inner = _rv_elab_primary(toks, pos + 1, m)
+        if len(inner.err) > 0 { return inner }
+        m = inner.m
+        let wn = _rv_fresh_wire(m)
+        m = rtlil_module_add_wire(m, rtlil_wire(wn, 1, 0, 0))
+        let mut cty = "$not"
+        if t == "!" { cty = "$logic_not" }
+        let mut c = rtlil_cell(wn + "$c", cty, 0)
+        c = rtlil_cell_connect(c, "A", inner.wire)
+        c = rtlil_cell_connect(c, "Y", wn)
+        m = rtlil_module_add_cell(m, c)
+        return ElabResult { wire: wn, m: m, pos: inner.pos, err: "" }
+    }
+    if t == "(" {
+        let inner = _rv_elab_expr(toks, pos + 1, m, 1)
+        if len(inner.err) > 0 { return inner }
+        m = inner.m
+        if inner.pos >= n {
+            return ElabResult {
+                wire: "", m: m, pos: inner.pos, err: "read_verilog: expr: missing `)`"
+            }
+        }
+        if toks[inner.pos] != ")" {
+            return ElabResult {
+                wire: "", m: m, pos: inner.pos,
+                err: "read_verilog: expr: expected `)` got `" + toks[inner.pos] + "`"
+            }
+        }
+        return ElabResult { wire: inner.wire, m: m, pos: inner.pos + 1, err: "" }
+    }
+    if t == "1'b0" { return ElabResult { wire: "$const_0", m: m, pos: pos + 1, err: "" } }
+    if t == "1'b1" { return ElabResult { wire: "$const_1", m: m, pos: pos + 1, err: "" } }
+    // bare token = wire reference
+    return ElabResult { wire: t, m: m, pos: pos + 1, err: "" }
+}
+
+// CLEAN-ROOM: precedence-climbing expression elaborator (left-assoc,
+// IEEE 1364-2005 §5.1.2). Reuses _rv_binop_prec from the constant
+// evaluator. Emits one RTLIL cell per binary operator.
+fn _rv_elab_expr(toks: [str], pos: int, m_in: Module, min_prec: int) -> ElabResult {
+    let lhs = _rv_elab_primary(toks, pos, m_in)
+    if len(lhs.err) > 0 { return lhs }
+    let mut m = lhs.m
+    let mut cur = lhs.wire
+    let mut i = lhs.pos
+    let n = len(toks)
+    while i < n {
+        let op = toks[i]
+        let prec = _rv_binop_prec(op)
+        if prec == 0 { return ElabResult { wire: cur, m: m, pos: i, err: "" } }
+        if prec < min_prec { return ElabResult { wire: cur, m: m, pos: i, err: "" } }
+        let cty = _rv_binop_cell(op)
+        if cty == "" {
+            return ElabResult {
+                wire: cur, m: m, pos: i,
+                err: "read_verilog: expr: operator `" + op + "` not in subset"
+            }
+        }
+        let rhs = _rv_elab_expr(toks, i + 1, m, prec + 1)
+        if len(rhs.err) > 0 { return rhs }
+        m = rhs.m
+        let wn = _rv_fresh_wire(m)
+        m = rtlil_module_add_wire(m, rtlil_wire(wn, 1, 0, 0))
+        let mut c = rtlil_cell(wn + "$c", cty, 0)
+        c = rtlil_cell_connect(c, "A", cur)
+        c = rtlil_cell_connect(c, "B", rhs.wire)
+        c = rtlil_cell_connect(c, "Y", wn)
+        m = rtlil_module_add_cell(m, c)
+        cur = wn
+        i = rhs.pos
+    }
+    return ElabResult { wire: cur, m: m, pos: i, err: "" }
+}
+
+// CLEAN-ROOM: parse `assign LHS = EXPR ;`. EXPR is lowered to an RTLIL
+// cell tree via _rv_elab_expr and its result wire connected to LHS.
 fn _rv_parse_assign(st_in: PState, m_in: Module) -> RvStep {
     let mut st = _ps_take(st_in)            // consume "assign"
     let mut m = m_in
     if st.pos >= len(st.toks) {
-        return RvStep {
-            st: _ps_fail(st, "read_verilog: EOF after `assign`"),
-            m: m
-        }
+        return RvStep { st: _ps_fail(st, "read_verilog: EOF after `assign`"), m: m }
     }
     let lhs = _ps_peek(st)
     st = _ps_take(st)
@@ -618,71 +770,20 @@ fn _rv_parse_assign(st_in: PState, m_in: Module) -> RvStep {
         }
     }
     st = _ps_take(st)
-    let t1 = _ps_peek(st)
-    st = _ps_take(st)
-    let t2 = _ps_peek(st)
-    if t2 == ";" {
-        // wire-to-wire connect, or constant literal `1'b0` / `1'b1`
+    // collect RHS tokens up to `;`
+    let mut rhs: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ";" { st = _ps_take(st); break }
+        rhs = rhs.push(t)
         st = _ps_take(st)
-        let lit0 = "1'b0"
-        let lit1 = "1'b1"
-        if t1 == lit0 {
-            m = rtlil_module_connect(m, lhs, "$const_0")
-        } else {
-            if t1 == lit1 {
-                m = rtlil_module_connect(m, lhs, "$const_1")
-            } else {
-                m = rtlil_module_connect(m, lhs, t1)
-            }
-        }
-        return RvStep { st: st, m: m }
     }
-    // single-operator expression: ~ a  |  a & b  |  a | b  |  a ^ b
-    if t1 == "~" {
-        let opnd = t2
-        st = _ps_take(st)
-        if _ps_peek(st) != ";" {
-            return RvStep {
-                st: _ps_fail(st, "read_verilog: assign `~`: expected `;` got `" + _ps_peek(st) + "`"),
-                m: m
-            }
-        }
-        st = _ps_take(st)
-        let cell_name = "_rv_not_" + str(len(m.cells))
-        let mut c = rtlil_cell(cell_name, "$not", 0)
-        c = rtlil_cell_connect(c, "A", opnd)
-        c = rtlil_cell_connect(c, "Y", lhs)
-        m = rtlil_module_add_cell(m, c)
-        return RvStep { st: st, m: m }
+    let er = _rv_elab_expr(rhs, 0, m, 1)
+    if len(er.err) > 0 {
+        return RvStep { st: _ps_fail(st, er.err), m: m }
     }
-    // binary: t1 op opnd2 ;
-    let op = t2
-    st = _ps_take(st)
-    let opnd2 = _ps_peek(st)
-    st = _ps_take(st)
-    if _ps_peek(st) != ";" {
-        return RvStep {
-            st: _ps_fail(st, "read_verilog: assign binary: expected `;` got `" + _ps_peek(st) + "`"),
-            m: m
-        }
-    }
-    st = _ps_take(st)
-    let mut cty = ""
-    if op == "&" { cty = "$and" }
-    if op == "|" { cty = "$or" }
-    if op == "^" { cty = "$xor" }
-    if cty == "" {
-        return RvStep {
-            st: _ps_fail(st, "read_verilog: assign op `" + op + "` not in subset"),
-            m: m
-        }
-    }
-    let cname = "_rv_" + cty.substring(1, len(cty)) + "_" + str(len(m.cells))
-    let mut c = rtlil_cell(cname, cty, 0)
-    c = rtlil_cell_connect(c, "A", t1)
-    c = rtlil_cell_connect(c, "B", opnd2)
-    c = rtlil_cell_connect(c, "Y", lhs)
-    m = rtlil_module_add_cell(m, c)
+    m = er.m
+    m = rtlil_module_connect(m, lhs, er.wire)
     return RvStep { st: st, m: m }
 }
 
@@ -1311,6 +1412,38 @@ fn main() {
     }
     if _rv_find_function([_fr.func], "missing") != (0 - 1) {
         println("FAIL T20d find_miss"); fails = fails + 1
+    }
+
+    // T21 — compound expression → RTLIL cell tree (parens + 2 ops).
+    total = total + 1
+    let _v21 = "module ce ( input a , input b , input c , output y ) ; assign y = ( a & b ) | c ; endmodule"
+    let _r21 = read_verilog(_v21)
+    if _r21.ok != 1 {
+        println("FAIL T21 compound: " + _r21.message); fails = fails + 1
+    } else {
+        let _m21 = _r21.design.modules[0]
+        if rtlil_count_cells_of_type(_m21, "$and") != 1 {
+            println("FAIL T21a and_count"); fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m21, "$or") != 1 {
+            println("FAIL T21b or_count"); fails = fails + 1
+        }
+    }
+
+    // T22 — arithmetic + comparison operators in one expression.
+    total = total + 1
+    let _v22 = "module ar ( input a , input b , input c , output y ) ; assign y = a + b == c ; endmodule"
+    let _r22 = read_verilog(_v22)
+    if _r22.ok != 1 {
+        println("FAIL T22 arith: " + _r22.message); fails = fails + 1
+    } else {
+        let _m22 = _r22.design.modules[0]
+        if rtlil_count_cells_of_type(_m22, "$add") != 1 {
+            println("FAIL T22a add"); fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m22, "$eq") != 1 {
+            println("FAIL T22b eq"); fails = fails + 1
+        }
     }
 
     if fails > 0 {
