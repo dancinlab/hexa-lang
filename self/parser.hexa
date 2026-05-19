@@ -27,9 +27,11 @@
 //               ForElseStmt, DeferStmt,
 //               ComptimeFnDecl, ComptimeConst, ComptimeLet,
 //               ComptimeBlock, ComptimeAssert,
-//               IntentStmt, VerifyStmt, GenerateFnStmt, GenerateStmt,
-//               EffectDecl, PureFnDecl,
+//               PureFnDecl,
 //               MacroDef, TheoremStmt, HandleWithStmt,
+//               (IntentStmt/VerifyStmt/GenerateFnStmt/GenerateStmt/EffectDecl
+//                are still emitted, but only via the @-attribute path —
+//                KEYWORD_DEMOTE Phase 3.)
 //               DestructLetStmt, MapDestructLetStmt,
 //               ForDestructStmt,
 //               WithStmt
@@ -365,8 +367,6 @@ fn p_is_reserved_id_kind_tier2(k) {
     if k == "Macro" { return true }
     if k == "Where" { return true }
     if k == "Comptime" { return true }
-    if k == "Intent" { return true }
-    if k == "Verify" { return true }
     return false
 }
 
@@ -379,8 +379,6 @@ fn p_reserved_id_hint_tier2(k) {
     if k == "Macro" { return "mcr" }
     if k == "Where" { return "wh" }
     if k == "Comptime" { return "cmt" }
-    if k == "Intent" { return "intt" }
-    if k == "Verify" { return "vrf" }
     return "_x"
 }
 
@@ -394,13 +392,12 @@ fn p_reserved_tier2_enabled() {
     return false
 }
 
-// Contextual keywords: lex'd as keywords so statement dispatch can
-// still recognize `generate` at statement-start, but accepted as an
-// identifier in expression / decl-name / param-name positions.
-// Statement dispatch uses p_generate_is_stmt_here lookahead to disambiguate.
-// (KEYWORD_DEMOTE Phase 1: `guard` removed entirely — was 0/0 block-form usage.)
+// Contextual keyword helper — currently no kinds. All previously-contextual
+// keywords (guard Phase 1; generate Phase 3) have been demoted: `guard` to
+// plain `if !cond` sugar (removed entirely) and `generate` to the
+// `@generate` attribute surface. Function kept as a stable callsite so the
+// `p_expect_ident` etc. paths don't need a structural edit.
 fn p_is_contextual_kw_kind(k) {
-    if k == "Generate" { return true }
     return false
 }
 
@@ -465,19 +462,8 @@ fn p_check_strict_reserved(ctx) {
     return true
 }
 
-// `generate` is a keyword statement iff it's followed by `fn`, `{`,
-// or an Ident then `{` (`generate fn …`, `generate { … }`,
-// `generate Type { … }`). Anything else (e.g. `generate(args)`) is
-// an expression statement.
-fn p_generate_is_stmt_here() {
-    let nk = p_peek_ahead(1).kind
-    if nk == "Fn" { return true }
-    if nk == "LBrace" { return true }
-    if nk == "Ident" {
-        if p_peek_ahead(2).kind == "LBrace" { return true }
-    }
-    return false
-}
+// (KEYWORD_DEMOTE Phase 3: p_generate_is_stmt_here removed — `generate`
+// keyword is now `@generate` attribute, dispatched from the M0 collector.)
 
 fn p_expect_ident() {
     let tok = p_peek()
@@ -712,6 +698,44 @@ fn parse_stmt() {
         // predicate 별 checker 를 실행한다.
         if attr_name == "invariant" && p_peek_kind() == "LBrace" {
             return parse_invariant_decl()
+        }
+        // ── KEYWORD_DEMOTE Phase 3: @-attribute-block dispatch ──
+        // Mirrors @invariant pattern. Each branch returns a dedicated AST
+        // node directly; the M0 loop terminates. Accumulated annotations
+        // before the @-block are discarded (consistent with @invariant).
+        //
+        // `@verify NAME { body }` — peek=Ident|String + peek_ahead(1)=LBrace
+        if attr_name == "verify" {
+            let _vk0 = p_peek_kind()
+            if (_vk0 == "Ident" || _vk0 == "StringLit") && p_peek_ahead(1).kind == "LBrace" {
+                return parse_verify_stmt()
+            }
+        }
+        // `@intent "name" { fields }` — peek=String|Ident + peek_ahead(1)=LBrace
+        if attr_name == "intent" {
+            let _ik0 = p_peek_kind()
+            if (_ik0 == "Ident" || _ik0 == "StringLit") && p_peek_ahead(1).kind == "LBrace" {
+                return parse_intent_stmt()
+            }
+        }
+        // `@effect Name { fn op(...) -> T, ... }` — peek=Ident + peek_ahead(1)∈{LBrace,Lt}
+        if attr_name == "effect" {
+            if p_peek_kind() == "Ident" {
+                let _ek1 = p_peek_ahead(1).kind
+                if _ek1 == "LBrace" || _ek1 == "Lt" {
+                    return parse_effect_decl()
+                }
+            }
+        }
+        // `@generate fn name(...) { "desc" }` | `@generate { "desc" }` | `@generate Type { "desc" }`
+        if attr_name == "generate" {
+            let _gk0 = p_peek_kind()
+            if _gk0 == "Fn" || _gk0 == "LBrace" {
+                return parse_generate_stmt()
+            }
+            if _gk0 == "Ident" && p_peek_ahead(1).kind == "LBrace" {
+                return parse_generate_stmt()
+            }
         }
         // ── @contract — parse requires/ensures clauses ──────
         if attr_name == "contract" && p_peek_kind() == "LParen" {
@@ -1045,13 +1069,6 @@ fn parse_stmt() {
     if kind == "Continue" { return parse_continue_stmt() }
     if kind == "Yield" { return parse_yield_stmt() }
     if kind == "Comptime" { return parse_comptime_stmt() }
-    if kind == "Intent" { return parse_intent_stmt() }
-    if kind == "Verify" { return parse_verify_stmt() }
-    if kind == "Generate" {
-        if p_generate_is_stmt_here() { return parse_generate_stmt() }
-        // else: fall through, treat `generate` as identifier in expr-stmt
-    }
-    if kind == "Effect" { return parse_effect_decl() }
     if kind == "Pure" { return parse_pure_fn() }
     if kind == "Macro" { return parse_macro_def() }
     if kind == "Theorem" { return parse_theorem_stmt() }
@@ -3849,8 +3866,8 @@ fn parse_comptime_stmt() {
 }
 
 // ── intent "description" { key: value, ... } ────────────────
+// Body of `@intent "name" { fields }` — M0 has consumed `@` and `intent`.
 fn parse_intent_stmt() {
-    p_advance() // consume 'intent'
     // intent accepts a string literal or identifier as description
     let mut desc = ""
     if p_peek_kind() == "StringLit" {
@@ -3888,8 +3905,9 @@ fn parse_intent_stmt() {
 }
 
 // ── verify "name" { block } ────────────────────────────────
+// Body of `@verify NAME { ... }` — M0 attribute collector has already
+// consumed `@` and `verify`. (KEYWORD_DEMOTE Phase 3.)
 fn parse_verify_stmt() {
-    p_advance() // consume 'verify'
     let mut name = ""
     if p_peek_kind() == "StringLit" {
         name = p_advance().value
@@ -3906,9 +3924,9 @@ fn parse_verify_stmt() {
     }
 }
 
-// ── generate fn name(params) { "desc" } | generate { "desc" } ──
+// Body of `@generate fn name(...) { "desc" }` | `@generate { "desc" }` |
+// `@generate Type { "desc" }` — M0 has consumed `@` and `generate`.
 fn parse_generate_stmt() {
-    p_advance() // consume 'generate'
     if p_peek_kind() == "Fn" {
         // generate fn name(params) -> ret { "description" }
         p_advance() // consume 'fn'
@@ -3960,8 +3978,8 @@ fn parse_generate_stmt() {
 }
 
 // ── effect Name { fn op(params) -> ret, ... } ──────────────
+// Body of `@effect Name { fn op() -> T, ... }` — M0 has consumed `@` and `effect`.
 fn parse_effect_decl() {
-    p_advance() // consume 'effect'
     let name = p_expect_ident()
     // Optional type params: effect State<T> { ... }
     let mut tparams = []

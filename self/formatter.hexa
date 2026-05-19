@@ -314,7 +314,7 @@ fn format_stmt(stmt, indent) {
     }
     if k == "EffectDecl" {
         let ops = stmt.items
-        let mut s = prefix + "effect " + stmt.name + " {\n"
+        let mut s = prefix + "@effect " + stmt.name + " {\n"
         let mut oi = 0
         while oi < len(ops) {
             let op = ops[oi]
@@ -403,7 +403,7 @@ fn format_stmt(stmt, indent) {
     }
     if k == "IntentStmt" {
         let ifields = stmt.fields
-        let mut s = prefix + "intent \"" + stmt.name + "\" {\n"
+        let mut s = prefix + "@intent \"" + stmt.name + "\" {\n"
         let mut ifi = 0
         while ifi < len(ifields) {
             let iff = ifields[ifi]
@@ -414,7 +414,7 @@ fn format_stmt(stmt, indent) {
         return s
     }
     if k == "VerifyStmt" {
-        return prefix + "verify \"" + stmt.name + "\" " + format_block(stmt.body, indent)
+        return prefix + "@verify \"" + stmt.name + "\" " + format_block(stmt.body, indent)
     }
     if k == "TheoremStmt" {
         return prefix + "theorem " + stmt.name + " " + format_block(stmt.body, indent)
@@ -422,7 +422,7 @@ fn format_stmt(stmt, indent) {
     if k == "GenerateStmt" {
         let mut hint = ""
         if stmt.name != "" { hint = stmt.name + " " }
-        return prefix + "generate " + hint + "{ \"" + stmt.value + "\" }"
+        return prefix + "@generate " + hint + "{ \"" + stmt.value + "\" }"
     }
     if k == "GenerateFnStmt" {
         let gplist = stmt.params
@@ -439,7 +439,7 @@ fn format_stmt(stmt, indent) {
         }
         let mut gret = ""
         if stmt.ret_type != "" { gret = " -> " + stmt.ret_type }
-        return prefix + "generate fn " + stmt.name + "(" + join(gparts, ", ") + ")" + gret + " { \"" + stmt.value + "\" }"
+        return prefix + "@generate fn " + stmt.name + "(" + join(gparts, ", ") + ")" + gret + " { \"" + stmt.value + "\" }"
     }
     if k == "EvolveFn" {
         return prefix + "@evolve fn " + stmt.name + "(...) {}"

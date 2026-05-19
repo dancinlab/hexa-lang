@@ -215,8 +215,10 @@ ok("atomic")
 // GROUP 8: Effects (4 keywords)
 // ══════════════════════════════════════════════════════════════
 
-// 33. effect
-effect Logger {
+// 33. @effect  (KEYWORD_DEMOTE Phase 3: `effect` keyword → `@effect` attribute.
+// This stanza will not parse on the installed binary today — it requires the
+// post-Phase-3 regen to take effect. Same caveat applies to @intent/@generate/@verify below.)
+@effect Logger {
     fn log(msg) -> void
 }
 ok("effect")
@@ -325,20 +327,20 @@ wn("recover", "keyword recognized in lexer; no runtime handler in interpreter")
 // GROUP 12: AI-Native (4 keywords)
 // ══════════════════════════════════════════════════════════════
 
-// 50. intent
-intent "audit keyword" {
+// 50. @intent
+@intent "audit keyword" {
     goal: "test all keywords"
 }
 ok("intent")
 
-// 51. generate
-generate fn gen_fn(x) -> Int {
+// 51. @generate
+@generate fn gen_fn(x) -> Int {
     "double the input"
 }
 ok("generate")
 
-// 52. verify
-verify "keyword_check" {
+// 52. @verify
+@verify "keyword_check" {
     assert 1 == 1
 }
 ok("verify")

@@ -42,7 +42,6 @@ fn is_keyword(word) {
     if word == "drop" { return true }
     if word == "spawn" { return true }
     if word == "atomic" { return true }
-    if word == "effect" { return true }
     if word == "handle" { return true }
     if word == "resume" { return true }
     if word == "pure" { return true }
@@ -58,9 +57,6 @@ fn is_keyword(word) {
     if word == "throw" { return true }
     if word == "panic" { return true }
     if word == "recover" { return true }
-    if word == "intent" { return true }
-    if word == "generate" { return true }
-    if word == "verify" { return true }
     if word == "extern" { return true }
     if word == "break" { return true }
     if word == "continue" { return true }

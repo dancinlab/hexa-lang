@@ -254,8 +254,16 @@ Phase 4 추가: 다운스트림 12 repo `hexa parse` smoke (스크립트 적용 
   + formatter ~23줄 정리. hexa-lang 내부 1파일 마이그레이션
   (`self/test_keyword_audit.hexa` L347: `optimize fn` → `@optimize fn`).
   6/6 parse-gate PASS, 30/30 smoke PASS. 다운스트림 영향 0.
-- ⛔ Phase 3 (generate·verify·intent·effect → `@`-attribute, attribute-block
-  포함) 착수 승인 대기.
+- ✅ **Phase 3 LANDED (worktree `kw-demote-phase1`)** — `generate`·`verify`·
+  `intent`·`effect` → `@`-attribute. M0 dispatch 분기 4개 신설 (`@invariant {}`
+  패턴 mirror, 2-token lookahead 로 attribute-block vs 일반 attribute 식별).
+  parse_*_stmt 4 함수에서 leading `p_advance()` 제거 (M0 이 이미 키워드를
+  consume). parse_stmt dispatch + p_generate_is_stmt_here + tier-2
+  reserved-id 헬퍼 정리. hexa-lang 내부 5파일 마이그레이션
+  (test_keyword_audit.hexa 4개 + tool/pkg/packages/token-forge/forge.hexa 3개).
+  source-level 6/6 parse-gate PASS + smoke 30/30 PASS. 마이그레이션된 .hexa 5
+  파일은 *post-regen* 검증 (현재 installed binary 는 새 dispatch 미보유, 다음
+  regen 후 신 parser 로 정상 처리).
 
 ## 로그
 
@@ -283,3 +291,14 @@ Phase 4 추가: 다운스트림 12 repo `hexa parse` smoke (스크립트 적용 
   으로 자동 활성. 7 파일 수정 (lexer · parser · codegen · formatter · lsp ·
   VSCode syntax · test_keyword_audit 1줄 migrate). +13/-103 lines.
   parse-gate 6/6 PASS, smoke 30/30 PASS.
+- 2026-05-19 — **Phase 3 LANDED** (same branch, third commit).
+  `generate`·`verify`·`intent`·`effect` → `@`-attribute. M0 dispatch 분기
+  4개 신설 (peek + peek_ahead(1) lookahead 로 attribute-block 식별; 비-block
+  사용은 일반 attribute 경로로 fallthrough). parse_*_stmt 4 함수의 leading
+  `p_advance()` 제거. parse_stmt dispatch + `p_generate_is_stmt_here` +
+  tier-2 reserved-id 헬퍼 정리. AST kind 명세 doc 업데이트. lexer/lsp/VSCode
+  syntax 정리. 5 hexa-lang 파일 마이그레이션 (test_keyword_audit 4개 +
+  tool/pkg/packages/token-forge/forge.hexa 3개). source-level 6/6 parse-gate
+  PASS + 30/30 smoke PASS. 마이그레이션된 .hexa 5 파일의 parse-gate 는
+  post-regen (installed binary 는 새 M0 dispatch 미보유). v2 design 의 핵심
+  발단 버그 `tool/n6_verify.hexa` 의 `VerifyStmt` 충돌이 본 phase 에서 해소.
