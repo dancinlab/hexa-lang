@@ -547,6 +547,30 @@ fn _emit_nlist64(out: [Int], strx: Int, n_type: Int, n_sect: Int, n_value: Int) 
     _u64_le(out, n_value)         // n_value — 8 bytes
 }
 
+// Emit one `relocation_info` record (8 bytes). Per `<mach-o/reloc.h>`:
+//
+//     struct relocation_info {
+//         int32_t  r_address;        // section-relative byte offset of patch
+//         uint32_t r_symbolnum:24,    // symbol index (extern=1) / section# (extern=0)
+//                  r_pcrel:1,         // 1 if displacement is pc-relative
+//                  r_length:2,        // log2(byte size); 2 = 4 bytes
+//                  r_extern:1,        // 1 = symbolnum is sym idx; 0 = section
+//                  r_type:4;          // ARM64_RELOC_*
+//     };
+//
+// The bitfield is little-endian-packed within its u32 (same as the
+// struct's natural memory order on darwin-arm64).
+fn _emit_reloc_info(out: [Int], r_address: Int, r_symbolnum: Int,
+                    r_pcrel: Int, r_length: Int, r_extern: Int, r_type: Int) {
+    _u32_le(out, r_address)
+    let bits = (r_symbolnum & 0xFFFFFF)
+             | ((r_pcrel & 1) << 24)
+             | ((r_length & 3) << 25)
+             | ((r_extern & 1) << 27)
+             | ((r_type & 0xF) << 28)
+    _u32_le(out, bits)
+}
+
 // ─────────────────────────────────────────────────────────────────
 // `serialize(obj)` — top-level entry, RFC 063 § P0 cycle 1
 // ─────────────────────────────────────────────────────────────────
@@ -641,10 +665,16 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
     while i < text_len { out.push(obj.text[i] & 0xFF); i = i + 1 }
     _zero_n(out, text_pad)
 
-    // Relocations: 8 bytes each (offset:i32, info:i32). Cycle 1 leaves
-    // the encoding to the next sub-step; this loop is reserved.
+    // Relocations: emit one `relocation_info` per Arm64Reloc.
+    // r_extern is always 1 in cycle 4 (we only emit symbol-based relocs,
+    // never section-based). Future cycles will lift this when local
+    // section-rel patches enter the mix.
     let mut ri = 0
-    while ri < nreloc { _zero_n(out, 8); ri = ri + 1 }
+    while ri < nreloc {
+        let rl = obj.relocs[ri]
+        _emit_reloc_info(out, rl.offset, rl.sym_idx, rl.pcrel, rl.length, 1, rl.kind)
+        ri = ri + 1
+    }
 
     // Symbol records: emit one nlist_64 per `MachoSymbol`. Cycle 3 —
     // n_type = MachoSymbol.kind | is_external (N_EXT 0x01).
@@ -812,9 +842,16 @@ fn _darwin_mangle(name: string) -> string {
 }
 
 // Walk one LFunc, append its instructions to `out_text`, record any
-// label offsets, and resolve all intra-function branches. Returns the
-// number of unresolved branches (= would-be relocations for cycle 4).
-fn _pack_fn(out_text: [Int], f: LFunc) -> Int {
+// label offsets, and resolve all intra-function branches.
+//
+// Out-params (cycle 4):
+//   pending_offsets[] / pending_names[] — parallel arrays for branch
+//   targets the intra-fn label table does not resolve. pack_lir's
+//   post-walk pass turns each pair into an Arm64Reloc record (by
+//   looking up `name` in obj.symbols).
+fn _pack_fn(out_text: [Int],
+            pending_offsets: [Int], pending_names: [string],
+            f: LFunc) {
     let st = PackFnState {
         text:           out_text,
         label_names:    [],
@@ -883,17 +920,20 @@ fn _pack_fn(out_text: [Int], f: LFunc) -> Int {
 
     // Resolve intra-fn branches. imm26 (B/BL) is bits [25:0] of word,
     // multiplied by 4; imm19 (CBZ/CBNZ/B.cond) is bits [23:5] * 4.
+    // Unresolved targets (cross-fn / extern) get pushed to pending_*
+    // out-params; pack_lir's post-walk turns them into reloc records.
     let nb = len(st.unresolved_brs)
-    let mut leftover = 0
     let mut bi = 0
     while bi < nb {
         let off    = st.unresolved_brs[bi]
         let target = st.unresolved_to[bi]
         let toff   = _lookup_label(st, target)
         if toff < 0 {
-            // Extern symbol — cycle 4 relocation. Leave the bare
-            // bit-pattern in place; bookkeeping returned to caller.
-            leftover = leftover + 1
+            // Extern target — leave bare bit-pattern (imm26/imm19 = 0)
+            // in place; the linker patches it via the relocation record
+            // pack_lir emits from these pending lists.
+            pending_offsets.push(off)
+            pending_names.push(target)
             bi = bi + 1
             continue
         }
@@ -920,12 +960,33 @@ fn _pack_fn(out_text: [Int], f: LFunc) -> Int {
         }
         bi = bi + 1
     }
-    return leftover
+}
+
+// Find the index of a symbol in `symbols[]` whose name-string (read
+// out of `strtab` via `name_offset`) matches `mangled`. Returns -1 if
+// no match — caller treats that as a missing-symbol bug.
+fn _find_sym_by_name(symbols: [MachoSymbol], strtab: [Int], mangled: string) -> Int {
+    let ns = len(symbols)
+    let ml = len(mangled)
+    let mut i = 0
+    while i < ns {
+        let off = symbols[i].name_offset
+        let mut k = 0
+        let mut ok = true
+        while k < ml {
+            if (strtab[off + k] & 0xFF) != char_code(mangled, k) { ok = false; break }
+            k = k + 1
+        }
+        // Match also requires the terminating NUL at the right spot —
+        // guards against "_foo" matching the prefix of "_foobar".
+        if ok && (strtab[off + ml] & 0xFF) == 0 { return i }
+        i = i + 1
+    }
+    return -1
 }
 
 // Public entry — walk all LFuncs in `lm`, produce a `MachoArm64Obj`
-// with `text` + `symbols` + `strtab` populated. Relocations are still
-// reserved for cycle 4.
+// with `text` + `symbols` + `strtab` + `relocs` populated.
 //
 // Symbol table contract (cycle 3):
 //   - First byte of `strtab` is NUL (Mach-O index-0 convention).
@@ -936,6 +997,23 @@ fn _pack_fn(out_text: [Int], f: LFunc) -> Int {
 //       kind        = 0x0e (N_SECT — defined in a section)
 //       is_external = 1 (N_EXT — externally visible)
 //   - LC_DYSYMTAB.nextdefsym counts these; `serialize` derives it.
+//
+// Relocation contract (cycle 4):
+//   - Each unresolved branch / call target (intra-fn label miss) in
+//     any `LFunc` becomes one `Arm64Reloc` with:
+//       offset   = __text byte offset of the patched instruction
+//       sym_idx  = index into `symbols[]` of the target symbol
+//                  (post-walk lookup by mangled name)
+//       kind     = ARM64_RELOC_BRANCH26 (= 2) for B/BL targets
+//       pcrel    = 1
+//       length   = 2 (log2 of 4-byte instruction)
+//   - `serialize()` hardcodes `r_extern=1` (we only emit symbol-based
+//     relocs in cycle 4; section-based relocations enter in cycle 5).
+//   - Intra-module callees (the target is one of `symbols[]`) and
+//     external undefined symbols both share this path; symbol-table
+//     layout decides which is which (cycle 4 ships defined-only; the
+//     N_UNDF undef record path lands when a real frontend supplies an
+//     undefined target).
 pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     let obj = MachoArm64Obj {
         text:       [],
@@ -949,6 +1027,11 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     // strtabs that begin with `\0` for the same reason.
     obj.strtab.push(0)
 
+    // Cycle 4: collect cross-fn / extern branch targets as we walk.
+    // pack_lir resolves them after the symbol table is fully built.
+    let pending_offsets: [Int]    = []
+    let pending_names:   [string] = []
+
     let nf = len(lm.funcs)
     let mut i = 0
     while i < nf {
@@ -959,15 +1042,39 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         let strx = _push_cstr(obj.strtab, mangled)
         obj.symbols.push(MachoSymbol {
             name_offset: strx,
-            section:     1,             // __text is the only section we emit
+            section:     1,
             value:       fn_start,
-            kind:        0x0e,          // N_SECT (defined in section)
-            is_external: 1,             // N_EXT (visible to the linker)
+            kind:        0x0e,
+            is_external: 1,
         })
-        // Discard the leftover count for now — cycle 4 wiring will
-        // turn unresolved intra-/inter-fn refs into Arm64Reloc records.
-        _pack_fn(obj.text, f)
+        _pack_fn(obj.text, pending_offsets, pending_names, f)
         i = i + 1
+    }
+
+    // Post-walk: resolve each pending branch target's mangled name to
+    // a symbol index and emit the Arm64Reloc record. The mangled name
+    // comes from the LIR side as a raw label (e.g. `_callee`); we look
+    // it up verbatim against the symbol-table's strings.
+    let np = len(pending_offsets)
+    let mut pi = 0
+    while pi < np {
+        let off  = pending_offsets[pi]
+        let name = pending_names[pi]
+        let idx  = _find_sym_by_name(obj.symbols, obj.strtab, name)
+        if idx >= 0 {
+            obj.relocs.push(Arm64Reloc {
+                offset:  off,
+                sym_idx: idx,
+                kind:    ARM64_RELOC_BRANCH26,
+                pcrel:   1,
+                length:  2,
+            })
+        }
+        // idx < 0 means the LIR target name is not in our symbol table —
+        // a future cycle adds N_UNDF emission for "really external"
+        // symbols (libc, runtime exports). Cycle 4 only handles
+        // intra-module references.
+        pi = pi + 1
     }
     return obj
 }

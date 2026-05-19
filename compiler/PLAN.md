@@ -3874,3 +3874,126 @@ $ xcrun nm /tmp/trivial.ref.o          # clang -c trivial.s 결과
 + 2: LIR 워커 ✅ + 3: 심볼+strtab ✅). 잔여 2 — relocations · mem ops +
 main.hexa 와이어링 + corpus PASS. RFC 추산 P0 = 3-5 cycles → 본 cycle 이
 중간점.
+
+
+### 2026-05-20 — S7-P0 cycle 4: relocation_info records + extern symbol resolution (F-P0-OBJEQ-RELOC PASS, otool -rV oracle-confirmed)
+
+RFC 063 § P0 네 번째 substep — Arm64Reloc record 직렬화 + `_pack_fn` 의
+unresolved branch target 을 `pack_lir` 의 post-walk 패스에서 symbol-table
+인덱스로 해소. **`otool -rV` 가 우리 reloc record 를 BR26 pcrel-external
+`_callee` symbol 로 정확히 해석**.
+
+**한 줄**: 2-fn LModule `fn caller { bl _callee; ret } fn callee { mov
+x0,#42; ret }` → pack_lir → obj.relocs=[Arm64Reloc{offset:0, sym_idx:1,
+kind:BRANCH26, pcrel:1, length:2}] + 16-B __text + 2 symbols + 1 reloc.
+serialize → 361-byte .o. `otool -rV` 출력 `address=0 pcrel=True length=long
+extern=True type=BR26 symbolnum=_callee` — Mach-O 스펙의 모든 비트 필드 byte-
+correct.
+
+**변경 파일**:
+
+- `compiler/emit/macho_arm64.hexa`:
+  - 새 함수 `_emit_reloc_info(out, r_address, r_symbolnum, r_pcrel,
+    r_length, r_extern, r_type)` — 8-byte `relocation_info`. r_address
+    u32 + bitfield u32 (symbolnum 24b + pcrel 1b + length 2b + extern 1b
+    + type 4b, little-endian-packed). Per `<mach-o/reloc.h>`.
+  - 새 함수 `_find_sym_by_name(symbols, strtab, mangled) -> Int` —
+    strtab 의 name_offset 부터 mangled name 까지 char-by-char 비교 +
+    terminating NUL 확인 (prefix-match 방지). 미발견 시 -1.
+  - `_pack_fn` 시그니처 확장 — `Int` 반환 → 새 out-params
+    `pending_offsets: [Int]` · `pending_names: [string]`. unresolved
+    branch (label not in intra-fn map) 을 push.
+  - `pack_lir` 의 post-walk — pending_* parallel arrays 를 walk 하여
+    각 name → `_find_sym_by_name` → `obj.relocs.push(Arm64Reloc{...})`.
+    intra-module call (target 가 obj.symbols 에 있음) 이 cycle 4 의 대상;
+    extern undef (libc 등) 은 cycle 5 baton.
+  - `serialize()` — reloc stub `_zero_n(out, 8)` x nreloc → 실제
+    `_emit_reloc_info(...)` 호출. `r_extern` 은 1 하드코딩 (cycle 4 가
+    symbol-based relocs 만 emit; section-based 는 cycle 5).
+- `compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_RELOC.hexa` — 2-fn
+  LModule 합성. caller 의 BL 의 target.label="_callee" (LIR convention),
+  pack_lir 의 darwin-mangle "_caller"/"_callee" 와 매칭. Structural
+  assertions: nt==16 · nsym==2 · nreloc==1 · reloc.offset==0 · sym_idx==1
+  · kind==2 (BRANCH26) · pcrel==1 · length==2.
+
+**측정 결과 (arm64-Mac local)**:
+
+```
+$ /tmp/run_F_P0_OBJEQ_RELOC
+F-P0-OBJEQ-RELOC PASS — relocation record structural
+  obj.text    = 16 B (caller 8B + callee 8B)
+  obj.symbols = 2 (_caller @ 0, _callee @ 8)
+  obj.relocs  = 1 (BL @ 0 → sym 1 _callee, BRANCH26 pcrel L2)
+  wrote 361 bytes to /tmp/macho_p0_cycle4.ours.o
+exit=0
+```
+
+**otool -rV 외부 oracle**:
+
+```
+$ xcrun otool -rV /tmp/macho_p0_cycle4.ours.o
+Relocation information (__TEXT,__text) 1 entries
+address  pcrel length extern type    scattered symbolnum/value
+00000000 True  long   True   BR26    False     _callee
+```
+
+All Mach-O bitfield slots 정확 — address=0 (BL 위치) · pcrel=True · length=
+long (= 4 bytes, log2=2) · extern=True · type=BR26 (= ARM64_RELOC_BRANCH26
+= 2) · scattered=False · symbolnum **_callee** 로 해소.
+
+**otool -tv disassembly note**:
+
+```
+$ xcrun otool -tv /tmp/macho_p0_cycle4.ours.o
+_caller:
+0000000000000000  bl  _caller       ← otool 가 imm26=0 → "bl PC+0=self" 로 해석
+0000000000000004  ret
+_callee:
+0000000000000008  mov  x0, #0x2a
+000000000000000c  ret
+```
+
+BL 의 imm26 비트가 0 인 bare bit-pattern — 의도된 동작 (`as -c` 도 동일).
+링커가 reloc record 를 보고 imm26 = (target - PC)/4 = (8-0)/4 = 2 로 patch.
+otool 의 disassembler 는 reloc 무시하고 raw bits 만 봐서 "bl _caller" 표시.
+
+**HONEST SCOPE (g3, over-claim 0)**:
+
+- intra-module 콜만 cycle 4 의 대상. **Extern undef symbols** (libc
+  `printf`, runtime `hexa_exit` 등) 에 대한 N_UNDF nlist + 그를 가리키는
+  reloc 는 cycle 5 의 baton — symbol table layout 도 "defined externs
+  [0, nextdefsym), undefs [nextdefsym, nsyms)" 로 분리 필요.
+- 본 cycle 의 reloc 가 `ARM64_RELOC_BRANCH26` 한 종류만. 다른 kinds
+  (`ARM64_RELOC_PAGE21` + `ARM64_RELOC_PAGEOFF12` for ADRP+ADD/LDR rodata
+  refs, `ARM64_RELOC_UNSIGNED` for data ptrs) 는 cycle 5.
+- CBZ/CBNZ/B.cond 의 extern 타깃은 `ARM64_RELOC_BRANCH19` 가 Mach-O 에서
+  정의되지 않음 — 일반적으로 PC-rel branch 가 너무 짧아 extern 안 됨. 본
+  cycle `_pack_fn` 의 unresolved-handler 가 모든 branch 종류를 pending 으로
+  올리지만 `pack_lir` 가 BRANCH26 만 emit (다른 종류는 silently skipped —
+  추후 추가).
+- 본 cycle 도 합성 LModule. compiler/main.hexa 와이어링 = cycle 5.
+
+**다음 cycle 의 baton** (RFC 063 § P0 cycle 5 = P0 closure):
+
+5. **Mem operands + 추가 encoding rules + N_UNDF undefs + `--emit=obj`
+   arm + F-P0-OBJEQ corpus PASS** — P0 의 종결 cycle. 4 sub-task:
+   - 추가 encoding rules — `LDR Xt, [Xn, #imm12]` · `STR Xt, [Xn, #imm12]`
+     · `STP/LDP Xt, Xt2, [Xn, #imm]!` (frame prologue/epilogue) ·
+     `ADRP X0, _sym@PAGE` · `ADD X0, X0, _sym@PAGEOFF` (rodata refs) ·
+     `SVC #0x80` (exit syscall). `_lir_operand_str` 에 mem operand 지원.
+   - N_UNDF symbols — `pack_lir` 가 unresolved name 을 N_UNDF entry 로
+     symbols 에 추가 (`section=0 NO_SECT`, `value=0`, `kind=0x00 N_UNDF`,
+     `is_external=1 N_EXT`). nextdefsym 분리 정확화.
+   - `compiler/main.hexa` 와이어링 — `--emit=obj` arm + 기존
+     `--emit=asm` + `as` fork fallback. `aprime_cc --emit=obj T.hexa →
+     T.ours.o`.
+   - F-P0-OBJEQ full corpus PASS — trivial/fib/while/if 4 hexa source
+     를 `aprime_cc --emit=obj` 로 빌드 → 각각 clang -c oracle 과 strip-
+     nondet 후 byte-eq. P0 closure 게이트.
+
+**RFC 063 phasing 진척**: P0 의 5 substep 중 **4 land** (1 직렬화 ✅ +
+2 LIR walker ✅ + 3 심볼/strtab ✅ + 4 reloc ✅). 잔여 1 (cycle 5 =
+P0 closure). RFC 추산 P0 = 3-5 cycles → 본 cycle 이 4번째, 5번째가 마지막.
+
+**cc --regen / binary promote**: 미수행. macho_arm64.hexa NOT yet
+imported by compiler/main.hexa. @D g_commit_push_deploy 미발동.
