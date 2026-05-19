@@ -4343,3 +4343,94 @@ fix).
 **cc --regen / binary promote**: compiler/main.hexa 변경 → @D
 g_commit_push_deploy 게이트 발동. 본 cycle 은 worktree branch source-only;
 main 머지 cycle 에서 동반 promote.
+
+
+### 2026-05-20 — S7-P1 cycle 1: Mach-O parser (.o → ParsedObj) round-trip PASS
+
+RFC 063 § P1 의 첫 substep — `tool/hexa_ld.hexa::parse_macho_obj(path)` 를
+구현. 우리 P0 emit 의 inverse — `read_file_bytes` 로 .o 를 slurp, header /
+load commands / `__text` section / symtab / strtab / relocs 를 읽어 scaffold
+의 `ParsedObj` struct 채움.
+
+**한 줄**: 우리 P0 cycle 7 corpus output (`/tmp/corpus_trivial.ours.o`
+· `/tmp/corpus_fib.ours.o`) 를 `parse_macho_obj` 가 round-trip — text 바이트
+수 · defined symbols (name+offset) · extern_refs · BR26 relocs (offset, sym_name,
+kind, pcrel, length) 모두 expected 와 일치.
+
+**변경 파일** (`tool/hexa_ld.hexa`):
+
+- 새 함수 5개 LE byte readers + 2 name readers:
+  - `_r_u8` / `_r_u16` / `_r_u32` / `_r_u64` — buf+offset 에서 LE 정수
+  - `_r_name16` — 16-byte fixed name (NUL-terminated subrange)
+  - `_r_cstr` — strtab[strx..] NUL-terminated UTF-8
+- `pub fn parse_macho_obj(path: string) -> ParsedObj`:
+  - read_file_bytes(path) → buf
+  - magic == 0xfeedfacf · cputype == 0x0100000c 검사 (실패 시 exit 2)
+  - ncmds u32 @ offset 16 → 모든 load commands walk
+    - LC_SEGMENT_64 (0x19): section[0..nsects], "__text" 찾으면
+      text_size/text_offset/text_reloff/text_nreloc 캡처
+    - LC_SYMTAB (0x02): symoff/nsyms/stroff/strsize 캡처
+  - text bytes slice
+  - nlist_64 × nsyms 파싱 — n_sect==0 → extern_refs, else → defined
+  - relocation_info × text_nreloc 파싱 — r_extern==1 이면 symtab 인덱스로
+    sym_name 룩업; bitfield 디코드 (symbolnum 24b + pcrel 1b + length 2b
+    + extern 1b + type 4b)
+  - return ParsedObj { path, text, defined, extern_refs, relocs, dwarf_line: [] }
+- CLI dispatcher 를 `fn main() { … }` 안으로 wrap — `import` 시 모듈-레벨
+  CLI 가 auto-run 하던 것을 차단 (test driver 들이 `parse_macho_obj` 만 호출
+  하도록).
+
+**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P1_PARSE_ROUNDTRIP.hexa`):
+
+`import "../../../tool/hexa_ld.hexa"` + 우리 cycle 7 출력 `.o` 2개 파싱 + 5
+필드 assertions per file:
+
+- trivial.ours.o:
+  - text.len == 48
+  - defined.len == 1, defined[0] = {name="_main", offset=0}
+  - extern_refs.len == 2 — order: _hexa_set_args, _hexa_exit
+  - relocs.len == 2 — both BR26 (kind=2), pcrel=1, length=2
+- fib.ours.o:
+  - defined.len == 2: _fib @ 0, _main @ 0xa8
+  - relocs.len == 10 (recursion + extern calls)
+
+**측정 (arm64-Mac local)**:
+
+```
+$ /tmp/run_F_P1_PARSE_ROUNDTRIP
+trivial.ours.o parsed: text=48 defined=1 extern=2 relocs=2
+fib.ours.o parsed: text=228 defined=2 extern=6 relocs=10
+F-P1-PARSE-ROUNDTRIP PASS — parser reads back hexa-side .o output
+exit=0
+```
+
+**HONEST SCOPE (g3)**:
+
+- 본 cycle 의 parser 는 우리 P0 emit 의 inverse 만 검증. clang `-c` 가
+  emit 하는 추가 LC (`LC_BUILD_VERSION` · `LC_LOAD_DYLINKER` 같은) 를
+  스킵 (walk loop 이 unknown cmd 를 무시하므로 안전하지만 검증 안됨).
+- LC_DYSYMTAB 의 indices (nlocalsym 등) 도 캡처 안 함 (P1 linker 가
+  의존 안 함).
+- `link_macho_arm64` 본체는 여전히 STUB. parser 가 입력 준비를 함, 다음
+  cycle 이 linker 구현 (section concat · symbol resolution · relocation
+  fix-up · MH_EXECUTE writer).
+
+**다음 cycle baton (P1 cycle 2)**:
+
+- link_macho_arm64 첫 구현:
+  - 단일 ParsedObj → MH_EXECUTE Mach-O 직렬화
+  - LC_SEGMENT_64 __PAGEZERO / __TEXT / __LINKEDIT
+  - LC_MAIN (entry = "_main")
+  - LC_LOAD_DYLINKER `/usr/lib/dyld`
+  - LC_LOAD_DYLIB `/usr/lib/libSystem.B.dylib`
+  - LC_SYMTAB · LC_DYSYMTAB · LC_CODE_SIGNATURE
+- relocation fix-up:
+  - extern reloc → libSystem 의 stub 주소 (PLT-like __stubs/__stub_helper)
+    OR 직접 dyld 바인딩
+  - intra-module reloc → 본 cycle 의 단일-obj 에는 없음 (다중 .o = cycle 3)
+
+**cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa 는 driver 가 run
+하는 tool (NOT hexa_cc.c SSOT 모듈). @D g_commit_push_deploy 미발동.
+
+**RFC 063 phasing 진척**: P0 ✅ CLOSED. P1 cycle 1 (parser) ✅. 잔여
+P1 cycles 2-N (linker body) + P2 + P3.
