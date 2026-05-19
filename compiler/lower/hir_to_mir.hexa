@@ -197,22 +197,106 @@ pub struct LocalBinding {
     local_id: i64
 }
 
+// S1-step-2 (#18) — codegen super-linear fix.
+//
+// Previously LowerCtx carried the growing accumulator arrays (locals /
+// blocks / bindings) BY VALUE. Every _lower_hexpr recursion returned a
+// fresh LowerCtx literal, so hexa deep-cloned all three arrays once per
+// statement -> O(N^2) on a sequential-let body (measured: lower_hir
+// 15/63/372 ms at N=100/200/400).
+//
+// Fix: the accumulators move to module scope (mirroring the existing
+// `_lr_diag` / `_lr_lambdas` convention). LowerCtx now holds ONLY scalar
+// fields, which are cheap to copy -- threading a LowerCtx no longer
+// touches the O(N) arrays. The helper functions still take/return a
+// LowerCtx so the call graph and threading order are byte-identical;
+// they just mutate the module arrays in place instead of cloning.
+//
+// Nesting: a closure body lowers into a fresh ctx (_lower_closure's
+// `lctx`). Because the arrays are now module scope, _lower_closure must
+// SAVE the enclosing function's arrays, swap in empty ones for the
+// lambda body, build the lambda MFunc from them, then RESTORE the
+// enclosing arrays before lowering the closure site. _lr_ctx_save /
+// _lr_ctx_restore do exactly that. _lower_fn clears them per fn.
+pub let mut _lr_locals: [Local] = []
+pub let mut _lr_blocks: [Block] = []
+pub let mut _lr_bindings: [LocalBinding] = []
+// frame_starts was already dead (init empty, copied, never read); kept
+// as a module-scope array so dropping the field is not a separate
+// behavioural change.
+pub let mut _lr_frame_starts: [i64] = []
+// Module-level globals -- set once per module in lower_hir, then
+// read-only for the rest of the pass (every fn / closure body shares).
+pub let mut _lr_globals: [Local] = []
+
 pub struct LowerCtx {
     next_local: i64,
     next_block: i64,
     next_arena: i64,
     arena_root: i64,
-    locals: [Local],
-    blocks: [Block],
     cur_block: i64,
-    bindings: [LocalBinding],
-    frame_starts: [i64],
-    globals: [Local],
     has_returned: bool
 }
 
+// Snapshot of the module-scope accumulators -- used to save/restore the
+// array set across a nested lowering scope (a closure body).
+struct LowerArrays {
+    locals: [Local],
+    blocks: [Block],
+    bindings: [LocalBinding],
+    frame_starts: [i64]
+}
+
+fn _lr_ctx_save() -> LowerArrays {
+    return LowerArrays {
+        locals: _lr_locals,
+        blocks: _lr_blocks,
+        bindings: _lr_bindings,
+        frame_starts: _lr_frame_starts
+    }
+}
+
+fn _lr_ctx_restore(saved: LowerArrays) {
+    _lr_locals = saved.locals
+    _lr_blocks = saved.blocks
+    _lr_bindings = saved.bindings
+    _lr_frame_starts = saved.frame_starts
+}
+
+// Reset the module accumulators IN PLACE for a new fn-lowering scope.
+// `.truncate(0)` keeps the SAME backing buffer (only HX_ARR_LEN is zeroed)
+// -- so the buffer stays heap-resident. Reassigning `= []` instead would
+// allocate a FRESH empty array; a `[]` literal evaluated inside a function
+// under a live fn-arena mark is arena-backed (cap < 0), and a module-scope
+// global must never hold an arena buffer -- the buffer is freed on the
+// callee arena rewind, leaving _lr_* dangling (observed: `map key 'id' not
+// found` then a heapify stack overflow). truncate-in-place avoids that.
+// The module arrays are first allocated at MODULE scope (mark_top == 0 ->
+// heap); they stay heap for the whole pass.
+fn _lr_ctx_clear() {
+    _lr_locals.truncate(0)
+    _lr_blocks.truncate(0)
+    _lr_bindings.truncate(0)
+    _lr_frame_starts.truncate(0)
+}
+
+// Swap in a FRESH (independent) array set for a nested lowering scope --
+// used only by _lower_closure for the lifted-lambda body. The caller must
+// have _lr_ctx_save'd the enclosing arrays first: a truncate would corrupt
+// them (the save copies the handle, not the buffer), so the lambda body
+// needs genuinely separate arrays. These fresh `[]` are arena-backed, but
+// the lambda's MFunc is heapified when it is pushed onto _lr_lambdas, which
+// promotes the lambda's locals/blocks to the heap before the enclosing
+// arrays are restored -- so the arena buffers are safely abandoned.
+fn _lr_ctx_fresh() {
+    _lr_locals = []
+    _lr_blocks = []
+    _lr_bindings = []
+    _lr_frame_starts = []
+}
+
 // Renamed from _new_ctx to avoid stage0 last-import-wins shadow
-// collision with compiler/check/types.hexa::_new_ctx (Gap 4 fix —
+// collision with compiler/check/types.hexa::_new_ctx (Gap 4 fix --
 // silenced 211 'map key not found' warnings during M0 smoke).
 fn _new_lower_ctx() -> LowerCtx {
     return LowerCtx {
@@ -220,12 +304,7 @@ fn _new_lower_ctx() -> LowerCtx {
         next_block: 0,
         next_arena: 1,
         arena_root: 1,
-        locals: [],
-        blocks: [],
         cur_block: 0,
-        bindings: [],
-        frame_starts: [],
-        globals: [],
         has_returned: false
     }
 }
@@ -238,19 +317,13 @@ fn _fresh_local(ctx: LowerCtx, t: Type, hint: string) -> LowerCtx {
         type_id: _type_id_of(t),
         name_hint: hint
     }
-    let mut locals = ctx.locals
-    locals.push(l)
+    _lr_locals.push(l)
     return LowerCtx {
         next_local: id + 1,
         next_block: ctx.next_block,
         next_arena: ctx.next_arena,
         arena_root: ctx.arena_root,
-        locals: locals,
-        blocks: ctx.blocks,
         cur_block: ctx.cur_block,
-        bindings: ctx.bindings,
-        frame_starts: ctx.frame_starts,
-        globals: ctx.globals,
         has_returned: ctx.has_returned
     }
 }
@@ -258,19 +331,13 @@ fn _fresh_local(ctx: LowerCtx, t: Type, hint: string) -> LowerCtx {
 fn _new_block(ctx: LowerCtx) -> LowerCtx {
     let id = ctx.next_block
     let b = Block { id: id, stmts: [], preds: [], succs: [] }
-    let mut blocks = ctx.blocks
-    blocks.push(b)
+    _lr_blocks.push(b)
     return LowerCtx {
         next_local: ctx.next_local,
         next_block: id + 1,
         next_arena: ctx.next_arena,
         arena_root: ctx.arena_root,
-        locals: ctx.locals,
-        blocks: blocks,
         cur_block: ctx.cur_block,
-        bindings: ctx.bindings,
-        frame_starts: ctx.frame_starts,
-        globals: ctx.globals,
         has_returned: ctx.has_returned
     }
 }
@@ -281,30 +348,26 @@ fn _set_cur_block(ctx: LowerCtx, id: i64) -> LowerCtx {
         next_block: ctx.next_block,
         next_arena: ctx.next_arena,
         arena_root: ctx.arena_root,
-        locals: ctx.locals,
-        blocks: ctx.blocks,
         cur_block: id,
-        bindings: ctx.bindings,
-        frame_starts: ctx.frame_starts,
-        globals: ctx.globals,
         has_returned: false
     }
 }
 
 fn _push_stmt_to(ctx: LowerCtx, block_id: i64, s: Stmt) -> LowerCtx {
-    let mut blocks = ctx.blocks
     let mut i = 0
-    while i < len(blocks) {
-        if blocks[i].id == block_id {
-            let b = blocks[i]
-            let mut stmts = b.stmts
-            stmts.push(s)
-            blocks[i] = Block {
-                id: b.id,
-                stmts: stmts,
-                preds: b.preds,
-                succs: b.succs
-            }
+    while i < len(_lr_blocks) {
+        if _lr_blocks[i].id == block_id {
+            // S1-step-2: mutate the Block's `stmts` array IN PLACE rather
+            // than rebuilding the Block and writing it back with
+            // `_lr_blocks[i] = Block{...}`. hexa arrays are shared handles,
+            // so `_lr_blocks[i].stmts.push(s)` grows the same array the
+            // stored Block already holds. The old write-back used
+            // hexa_array_set, which (unlike hexa_array_push) does NOT
+            // heapify the value — a Block constructed in a deep callee
+            // frame and array_set into the module-scope `_lr_blocks` is
+            // freed on that frame's arena rewind, leaving a dangling slot.
+            // `.push` heapifies the pushed Stmt, so in-place growth is safe.
+            _lr_blocks[i].stmts.push(s)
             break
         }
         i = i + 1
@@ -314,12 +377,7 @@ fn _push_stmt_to(ctx: LowerCtx, block_id: i64, s: Stmt) -> LowerCtx {
         next_block: ctx.next_block,
         next_arena: ctx.next_arena,
         arena_root: ctx.arena_root,
-        locals: ctx.locals,
-        blocks: blocks,
         cur_block: ctx.cur_block,
-        bindings: ctx.bindings,
-        frame_starts: ctx.frame_starts,
-        globals: ctx.globals,
         has_returned: ctx.has_returned
     }
 }
@@ -329,30 +387,16 @@ fn _push_stmt(ctx: LowerCtx, s: Stmt) -> LowerCtx {
 }
 
 fn _add_edge(ctx: LowerCtx, from_id: i64, to_id: i64) -> LowerCtx {
-    let mut blocks = ctx.blocks
     let mut i = 0
-    while i < len(blocks) {
-        if blocks[i].id == from_id {
-            let b = blocks[i]
-            let mut succs = b.succs
-            succs.push(to_id)
-            blocks[i] = Block {
-                id: b.id,
-                stmts: b.stmts,
-                preds: b.preds,
-                succs: succs
-            }
+    while i < len(_lr_blocks) {
+        // S1-step-2: in-place edge growth (see _push_stmt_to). `.succs` /
+        // `.preds` are shared array handles on the stored Block; pushing to
+        // them needs no Block write-back, and `.push` heapifies the i64 id.
+        if _lr_blocks[i].id == from_id {
+            _lr_blocks[i].succs.push(to_id)
         }
-        if blocks[i].id == to_id {
-            let b = blocks[i]
-            let mut preds = b.preds
-            preds.push(from_id)
-            blocks[i] = Block {
-                id: b.id,
-                stmts: b.stmts,
-                preds: preds,
-                succs: b.succs
-            }
+        if _lr_blocks[i].id == to_id {
+            _lr_blocks[i].preds.push(from_id)
         }
         i = i + 1
     }
@@ -361,12 +405,7 @@ fn _add_edge(ctx: LowerCtx, from_id: i64, to_id: i64) -> LowerCtx {
         next_block: ctx.next_block,
         next_arena: ctx.next_arena,
         arena_root: ctx.arena_root,
-        locals: ctx.locals,
-        blocks: blocks,
         cur_block: ctx.cur_block,
-        bindings: ctx.bindings,
-        frame_starts: ctx.frame_starts,
-        globals: ctx.globals,
         has_returned: ctx.has_returned
     }
 }
@@ -377,12 +416,7 @@ fn _set_returned(ctx: LowerCtx, v: bool) -> LowerCtx {
         next_block: ctx.next_block,
         next_arena: ctx.next_arena,
         arena_root: ctx.arena_root,
-        locals: ctx.locals,
-        blocks: ctx.blocks,
         cur_block: ctx.cur_block,
-        bindings: ctx.bindings,
-        frame_starts: ctx.frame_starts,
-        globals: ctx.globals,
         has_returned: v
     }
 }
@@ -408,14 +442,22 @@ fn _set_returned(ctx: LowerCtx, v: bool) -> LowerCtx {
 // between the `continue` and the inner loop (e.g. `let mut dense = []`),
 // leaving that local uninitialized → non-deterministic tag-garbage crash.
 fn _patch_loop_sentinels(ctx: LowerCtx, after_id: i64, header_id: i64, scope_min: i64) -> LowerCtx {
-    let mut blocks = ctx.blocks
     let mut ef: [i64] = []
     let mut et: [i64] = []
     let mut i = 0
-    while i < len(blocks) {
-        let b = blocks[i]
+    while i < len(_lr_blocks) {
+        let b = _lr_blocks[i]
         if b.id < scope_min { i = i + 1; continue }
-        let mut stmts = b.stmts
+        let stmts = b.stmts
+        // Build the patched statement list in a fresh local first; only if
+        // a sentinel was actually rewritten do we rebuild the block's
+        // `stmts` array in place. S1-step-2: we cannot `stmts[j] = Stmt{}`
+        // a patched statement back — hexa_array_set does not heapify, so a
+        // Stmt built in this callee frame would dangle once `_lr_blocks` is
+        // a module global and this frame's arena rewinds. Instead we
+        // truncate the (shared) stmts array and re-`.push` every element;
+        // `.push` heapifies each one, so the rebuilt list is heap-safe.
+        let mut rebuilt: [Stmt] = []
         let mut changed = false
         let mut j = 0
         while j < len(stmts) {
@@ -423,43 +465,33 @@ fn _patch_loop_sentinels(ctx: LowerCtx, after_id: i64, header_id: i64, scope_min
             if s.kind == STMT_BR && (s.target_block == -7001 || s.target_block == -7002) {
                 let mut tgt = header_id
                 if s.target_block == -7001 { tgt = after_id }
-                stmts[j] = Stmt {
+                rebuilt.push(Stmt {
                     kind: s.kind,
                     dst: s.dst,
                     op: s.op,
                     args: s.args,
                     target_block: tgt,
                     target_block_else: s.target_block_else
-                }
+                })
                 ef.push(b.id)
                 et.push(tgt)
                 changed = true
+            } else {
+                rebuilt.push(s)
             }
             j = j + 1
         }
         if changed {
-            blocks[i] = Block {
-                id: b.id,
-                stmts: stmts,
-                preds: b.preds,
-                succs: b.succs
+            _lr_blocks[i].stmts.truncate(0)
+            let mut r = 0
+            while r < len(rebuilt) {
+                _lr_blocks[i].stmts.push(rebuilt[r])
+                r = r + 1
             }
         }
         i = i + 1
     }
-    let mut ctx2 = LowerCtx {
-        next_local: ctx.next_local,
-        next_block: ctx.next_block,
-        next_arena: ctx.next_arena,
-        arena_root: ctx.arena_root,
-        locals: ctx.locals,
-        blocks: blocks,
-        cur_block: ctx.cur_block,
-        bindings: ctx.bindings,
-        frame_starts: ctx.frame_starts,
-        globals: ctx.globals,
-        has_returned: ctx.has_returned
-    }
+    let mut ctx2 = ctx
     let mut e = 0
     while e < len(ef) {
         ctx2 = _add_edge(ctx2, ef[e], et[e])
@@ -471,59 +503,30 @@ fn _patch_loop_sentinels(ctx: LowerCtx, after_id: i64, header_id: i64, scope_min
 // ── Bindings ────────────────────────────────────────────────
 
 fn _bind(ctx: LowerCtx, name: string, local_id: i64) -> LowerCtx {
-    let mut bs = ctx.bindings
-    bs.push(LocalBinding { name: name, local_id: local_id })
-    return LowerCtx {
-        next_local: ctx.next_local,
-        next_block: ctx.next_block,
-        next_arena: ctx.next_arena,
-        arena_root: ctx.arena_root,
-        locals: ctx.locals,
-        blocks: ctx.blocks,
-        cur_block: ctx.cur_block,
-        bindings: bs,
-        frame_starts: ctx.frame_starts,
-        globals: ctx.globals,
-        has_returned: ctx.has_returned
-    }
+    _lr_bindings.push(LocalBinding { name: name, local_id: local_id })
+    return ctx
 }
 
 fn _rebind(ctx: LowerCtx, name: string, local_id: i64) -> LowerCtx {
-    // SSA-rename: replace innermost binding for `name`.
-    let mut bs = ctx.bindings
-    let mut i = len(bs) - 1
-    let mut done = false
-    while i >= 0 {
-        if bs[i].name == name {
-            bs[i] = LocalBinding { name: name, local_id: local_id }
-            done = true
-            break
-        }
-        i = i - 1
-    }
-    if !done {
-        bs.push(LocalBinding { name: name, local_id: local_id })
-    }
-    return LowerCtx {
-        next_local: ctx.next_local,
-        next_block: ctx.next_block,
-        next_arena: ctx.next_arena,
-        arena_root: ctx.arena_root,
-        locals: ctx.locals,
-        blocks: ctx.blocks,
-        cur_block: ctx.cur_block,
-        bindings: bs,
-        frame_starts: ctx.frame_starts,
-        globals: ctx.globals,
-        has_returned: ctx.has_returned
-    }
+    // SSA-rename for `name`. S1-step-2: append a shadowing binding instead
+    // of `_lr_bindings[i] = LocalBinding{...}`. _mir_lookup scans from the
+    // tail and returns the FIRST match, so the freshly-pushed binding wins
+    // — semantically identical to an in-place replace. We must append
+    // rather than array_set because hexa_array_set does not heapify, and a
+    // LocalBinding built in this callee frame would dangle once stored into
+    // the module-scope `_lr_bindings` and this frame's arena rewinds.
+    // `.push` heapifies the value, so the appended binding is heap-safe.
+    // Nothing ever pops `_lr_bindings` (the frame_starts mechanism is
+    // unused), so the shadowed entry is inert.
+    _lr_bindings.push(LocalBinding { name: name, local_id: local_id })
+    return ctx
 }
 
 fn _mir_lookup(ctx: LowerCtx, name: string) -> i64 {
-    let mut i = len(ctx.bindings) - 1
+    let mut i = len(_lr_bindings) - 1
     while i >= 0 {
-        if ctx.bindings[i].name == name {
-            return ctx.bindings[i].local_id
+        if _lr_bindings[i].name == name {
+            return _lr_bindings[i].local_id
         }
         i = i - 1
     }
@@ -532,12 +535,13 @@ fn _mir_lookup(ctx: LowerCtx, name: string) -> i64 {
 
 // Module-level global lookup by source name (lexical fallback when no
 // local/param binding matches). Returns the global id (== index into
-// ctx.globals matching MModule.globals[id]) or -1 if not a global.
+// MModule.globals matching the module-scope `_lr_globals`) or -1 if not
+// a global.
 fn _mir_lookup_global(ctx: LowerCtx, name: string) -> i64 {
     let mut i = 0
-    while i < len(ctx.globals) {
-        if ctx.globals[i].name_hint == name {
-            return ctx.globals[i].id
+    while i < len(_lr_globals) {
+        if _lr_globals[i].name_hint == name {
+            return _lr_globals[i].id
         }
         i = i + 1
     }
@@ -778,7 +782,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // ── atlas ref → STMT_ASSIGN with global Operand ─────────
     if k == "atlas_ref" {
         let mut ctx2 = _fresh_local(ctx, e.typ, "atlas_" + e.atlas.ref_kind + "_" + e.atlas.id)
-        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let dst = _lr_locals[len(_lr_locals) - 1]
         let mut args: [Operand] = []
         args.push(_global_op(e.atlas.atlas_index, e.atlas.ref_kind + "[" + e.atlas.id + "]"))
         let s = Stmt {
@@ -807,11 +811,11 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             let lr = _lower_hexpr(ctx, e.children[0])
             let entry_id = lr.ctx.cur_block
             let mut ctx_pre = _fresh_local(lr.ctx, e.typ, "sc_val")
-            let sc_val = ctx_pre.locals[len(ctx_pre.locals) - 1]
+            let sc_val = _lr_locals[len(_lr_locals) - 1]
             ctx_pre = _new_block(ctx_pre)
-            let then_id = ctx_pre.blocks[len(ctx_pre.blocks) - 1].id
+            let then_id = _lr_blocks[len(_lr_blocks) - 1].id
             ctx_pre = _new_block(ctx_pre)
-            let else_id = ctx_pre.blocks[len(ctx_pre.blocks) - 1].id
+            let else_id = _lr_blocks[len(_lr_blocks) - 1].id
             let mut br_args: [Operand] = []
             br_args.push(lr.operand)
             let br = Stmt {
@@ -868,7 +872,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             let else_end = ctx2.cur_block
             // join
             ctx2 = _new_block(ctx2)
-            let join_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+            let join_id = _lr_blocks[len(_lr_blocks) - 1].id
             let br_t = Stmt {
                 kind: STMT_BR,
                 dst: _miss_local(),
@@ -899,7 +903,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let lr = _lower_hexpr(ctx, e.children[0])
         let rr = _lower_hexpr(lr.ctx, e.children[1])
         let mut ctx2 = _fresh_local(rr.ctx, e.typ, "t")
-        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let dst = _lr_locals[len(_lr_locals) - 1]
         let mut args: [Operand] = []
         args.push(lr.operand)
         args.push(rr.operand)
@@ -920,7 +924,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         if len(e.children) < 1 { return _no_value(ctx) }
         let r = _lower_hexpr(ctx, e.children[0])
         let mut ctx2 = _fresh_local(r.ctx, e.typ, "t")
-        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let dst = _lr_locals[len(_lr_locals) - 1]
         let mut args: [Operand] = []
         args.push(r.operand)
         let s = Stmt {
@@ -989,7 +993,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 ai = ai + 1
             }
             let mut ictx = _fresh_local(ctx_r, e.typ, "call_ret")
-            let idst = ictx.locals[len(ictx.locals) - 1]
+            let idst = _lr_locals[len(_lr_locals) - 1]
             let isr = Stmt {
                 kind: STMT_CALL_INDIRECT,
                 dst: idst,
@@ -1026,7 +1030,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             i = i + 1
         }
         let mut ctx2 = _fresh_local(ctx_r, e.typ, "call_ret")
-        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let dst = _lr_locals[len(_lr_locals) - 1]
         let s = Stmt {
             kind: STMT_CALL,
             dst: dst,
@@ -1114,7 +1118,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         }
         if len(e.children) > 0 { rhs_t = e.children[0].typ }
         ctx2 = _fresh_local(ctx2, rhs_t, nm)
-        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let dst = _lr_locals[len(_lr_locals) - 1]
         let mut args: [Operand] = []
         args.push(rhs_op)
         let s = Stmt {
@@ -1184,9 +1188,9 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             let existing = _mir_lookup(ctx2, lhs.text)
             if existing >= 0 {
                 let mut li = 0
-                while li < len(ctx2.locals) {
-                    if ctx2.locals[li].id == existing {
-                        dst = ctx2.locals[li]
+                while li < len(_lr_locals) {
+                    if _lr_locals[li].id == existing {
+                        dst = _lr_locals[li]
                         did_reuse = true
                         break
                     }
@@ -1212,7 +1216,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         }
         if !did_reuse && !is_global {
             ctx2 = _fresh_local(ctx2, e.children[1].typ, lhs.text)
-            dst = ctx2.locals[len(ctx2.locals) - 1]
+            dst = _lr_locals[len(_lr_locals) - 1]
         }
         let mut args: [Operand] = []
         args.push(rr.operand)
@@ -1262,12 +1266,12 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // copy their operand into this shared slot at end-of-branch
         // and the join block returns it.
         let mut ctx_pre = _fresh_local(cr.ctx, e.typ, "if_val")
-        let if_val = ctx_pre.locals[len(ctx_pre.locals) - 1]
+        let if_val = _lr_locals[len(_lr_locals) - 1]
 
         let mut ctx2 = _new_block(ctx_pre)
-        let then_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        let then_id = _lr_blocks[len(_lr_blocks) - 1].id
         ctx2 = _new_block(ctx2)
-        let else_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        let else_id = _lr_blocks[len(_lr_blocks) - 1].id
 
         let has_else = len(e.children) >= 3
 
@@ -1314,7 +1318,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 return _no_value(ctx2)
             }
             ctx2 = _new_block(ctx2)
-            let join_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+            let join_id = _lr_blocks[len(_lr_blocks) - 1].id
             let both_yield = then_has && else_has && !then_returned && !else_returned
             if !then_returned {
                 // Copy the then-arm value into the shared if_val slot
@@ -1405,11 +1409,11 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let from_id = ctx.cur_block
 
         let mut ctx2 = _new_block(ctx)
-        let header_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        let header_id = _lr_blocks[len(_lr_blocks) - 1].id
         ctx2 = _new_block(ctx2)
-        let body_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        let body_id = _lr_blocks[len(_lr_blocks) - 1].id
         ctx2 = _new_block(ctx2)
-        let after_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        let after_id = _lr_blocks[len(_lr_blocks) - 1].id
 
         let br0 = Stmt {
             kind: STMT_BR,
@@ -1497,11 +1501,11 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let entry_id = ctx.cur_block
 
         let mut ctx2 = _new_block(ctx)
-        let try_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        let try_id = _lr_blocks[len(_lr_blocks) - 1].id
         ctx2 = _new_block(ctx2)
-        let catch_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        let catch_id = _lr_blocks[len(_lr_blocks) - 1].id
         ctx2 = _new_block(ctx2)
-        let after_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        let after_id = _lr_blocks[len(_lr_blocks) - 1].id
 
         // STMT_TRY_SETJMP in the entry block — target_block=try_id is the
         // normal/first-time fall-through; target_block_else=catch_id is
@@ -1553,7 +1557,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         ctx2 = _set_cur_block(ctx2, catch_id)
         // Allocate `catch_err_local`, fill via STMT_TRY_LAST_ERR.
         ctx2 = _fresh_local(ctx2, e.typ, "catch_err")
-        let catch_err_local = ctx2.locals[len(ctx2.locals) - 1]
+        let catch_err_local = _lr_locals[len(_lr_locals) - 1]
         let le = Stmt {
             kind: STMT_TRY_LAST_ERR,
             dst: catch_err_local,
@@ -1666,10 +1670,10 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // each taken arm copies its value into it (op="bind" → plain
         // dst=arg0 copy in every backend); the join returns it.
         ctx2 = _fresh_local(ctx2, e.typ, "match_result")
-        let match_res = ctx2.locals[len(ctx2.locals) - 1]
+        let match_res = _lr_locals[len(_lr_locals) - 1]
 
         ctx2 = _new_block(ctx2)
-        let join_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+        let join_id = _lr_blocks[len(_lr_blocks) - 1].id
 
         let mut idx = 1
         while idx + 1 < len(e.children) {
@@ -1677,12 +1681,12 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             let body = e.children[idx + 1]
 
             ctx2 = _new_block(ctx2)
-            let arm_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+            let arm_id = _lr_blocks[len(_lr_blocks) - 1].id
             let mut next_id = join_id
             let is_last = (idx + 2 >= len(e.children))
             if !is_last {
                 ctx2 = _new_block(ctx2)
-                next_id = ctx2.blocks[len(ctx2.blocks) - 1].id
+                next_id = _lr_blocks[len(_lr_blocks) - 1].id
             }
 
             let cur_block_id = ctx2.cur_block
@@ -1716,7 +1720,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 // BEFORE the tag compare. Was: cmp scrut_op (the whole
                 // map) vs int → always false after the map-backed switch.
                 let mut ctx3 = _fresh_local(ctx2, pat.typ, "scrut_tag")
-                let tag_dst = ctx3.locals[len(ctx3.locals) - 1]
+                let tag_dst = _lr_locals[len(_lr_locals) - 1]
                 let mut tag_args: [Operand] = []
                 tag_args.push(scrut_op)
                 tag_args.push(_const_str_op("__tag"))
@@ -1730,7 +1734,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 }
                 ctx3 = _push_stmt(ctx3, tag_get)
                 ctx3 = _fresh_local(ctx3, pat.typ, "tag_eq")
-                let cmp_dst = ctx3.locals[len(ctx3.locals) - 1]
+                let cmp_dst = _lr_locals[len(_lr_locals) - 1]
                 let mut cmp_args: [Operand] = []
                 cmp_args.push(_local_op(tag_dst.id))
                 cmp_args.push(_const_int_op(tag_v))
@@ -1761,7 +1765,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 // Stage1 punch list C10 — integer-literal pattern.
                 let v = _parse_int(pat.text)
                 let mut ctx3 = _fresh_local(ctx2, pat.typ, "lit_eq")
-                let cmp_dst = ctx3.locals[len(ctx3.locals) - 1]
+                let cmp_dst = _lr_locals[len(_lr_locals) - 1]
                 let mut cmp_args: [Operand] = []
                 cmp_args.push(scrut_op)
                 cmp_args.push(_const_int_op(v))
@@ -1793,7 +1797,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 // equality lowers to STMT_BINOP `==`; codegen handles the
                 // string-compare via the same path as runtime `==` on strings.
                 let mut ctx3 = _fresh_local(ctx2, pat.typ, "lit_eq")
-                let cmp_dst = ctx3.locals[len(ctx3.locals) - 1]
+                let cmp_dst = _lr_locals[len(_lr_locals) - 1]
                 let mut cmp_args: [Operand] = []
                 cmp_args.push(scrut_op)
                 cmp_args.push(_const_str_op(pat.text))
@@ -1844,7 +1848,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 let pr = _lower_hexpr(ctx2, pat)
                 ctx2 = pr.ctx
                 let mut ctx3 = _fresh_local(ctx2, pat.typ, "tag_eq")
-                let cmp_dst = ctx3.locals[len(ctx3.locals) - 1]
+                let cmp_dst = _lr_locals[len(_lr_locals) - 1]
                 let mut cmp_args: [Operand] = []
                 cmp_args.push(scrut_op)
                 cmp_args.push(pr.operand)
@@ -1880,7 +1884,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             ctx2 = _set_cur_block(ctx2, arm_id)
             if pat.kind == "ident" && len(pat.text) > 0 && pat.text != "_" {
                 let mut ctx_a = _fresh_local(ctx2, pat.typ, pat.text)
-                let dst_a = ctx_a.locals[len(ctx_a.locals) - 1]
+                let dst_a = _lr_locals[len(_lr_locals) - 1]
                 let mut a: [Operand] = []
                 a.push(scrut_op)
                 let s = Stmt {
@@ -1900,7 +1904,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     let pc = pat.children[pi]
                     if pc.kind == "ident" && len(pc.text) > 0 && pc.text != "_" {
                         let mut ctx_b = _fresh_local(ctx2, pc.typ, pc.text)
-                        let dst_b = ctx_b.locals[len(ctx_b.locals) - 1]
+                        let dst_b = _lr_locals[len(_lr_locals) - 1]
                         let mut a2: [Operand] = []
                         a2.push(scrut_op)
                         let s2 = Stmt {
@@ -1940,7 +1944,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     }
                     if len(bind_name) > 0 {
                         let mut ctx_b = _fresh_local(ctx2, pc.typ, bind_name)
-                        let dst_b = ctx_b.locals[len(ctx_b.locals) - 1]
+                        let dst_b = _lr_locals[len(_lr_locals) - 1]
                         let mut a2: [Operand] = []
                         a2.push(scrut_op)
                         let s2 = Stmt {
@@ -2032,7 +2036,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             i = i + 1
         }
         ctx2 = _fresh_local(ctx2, e.typ, "struct_" + e.text)
-        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let dst = _lr_locals[len(_lr_locals) - 1]
         let s = Stmt {
             kind: STMT_ASSIGN,
             dst: dst,
@@ -2064,7 +2068,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             i = i + 1
         }
         ctx2 = _fresh_local(ctx2, e.typ, "array")
-        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let dst = _lr_locals[len(_lr_locals) - 1]
         let s = Stmt {
             kind: STMT_ASSIGN,
             dst: dst,
@@ -2105,7 +2109,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             i = i + 1
         }
         ctx2 = _fresh_local(ctx2, e.typ, "enum_" + e.text)
-        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let dst = _lr_locals[len(_lr_locals) - 1]
         let s = Stmt {
             kind: STMT_ASSIGN,
             dst: dst,
@@ -2130,7 +2134,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         if len(e.children) < 1 { return _no_value(ctx) }
         let r = _lower_hexpr(ctx, e.children[0])
         let mut ctx2 = _fresh_local(r.ctx, e.typ, "field_" + e.text)
-        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let dst = _lr_locals[len(_lr_locals) - 1]
         let mut args: [Operand] = []
         args.push(r.operand)
         args.push(_const_str_op(e.text))
@@ -2152,7 +2156,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let lr = _lower_hexpr(ctx, e.children[0])
         let rr = _lower_hexpr(lr.ctx, e.children[1])
         let mut ctx2 = _fresh_local(rr.ctx, e.typ, "idx")
-        let dst = ctx2.locals[len(ctx2.locals) - 1]
+        let dst = _lr_locals[len(_lr_locals) - 1]
         let mut args: [Operand] = []
         args.push(lr.operand)
         args.push(rr.operand)
@@ -2228,43 +2232,30 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
         args: [], ret: [], domain: "", unit: ""
     }
 
+    // S1-step-2: the lambda body lowers into a FRESH array set. Save the
+    // enclosing fn's module-scope accumulators, swap in empty ones for the
+    // lambda, then restore the enclosing arrays before the closure site is
+    // lowered below. _lr_globals is module-wide and read-only, so the
+    // lambda body's _mir_lookup_global still resolves the same globals the
+    // enclosing fn sees (no per-ctx `globals` seed needed any more).
+    let _lr_saved_arrays = _lr_ctx_save()
+    _lr_ctx_fresh()
     let mut lctx = _new_lower_ctx()
-    // Seed the lambda body ctx with the enclosing fn's module globals so a
-    // reference to a top-level `let` inside the closure body resolves via
-    // _mir_lookup_global (→ _global_op) instead of HX1101. _collect_free
-    // intentionally does NOT capture globals into the env array (a global
-    // is reachable by name from the lifted lambda — mirror of tier-2
-    // gen2_collect_free skipping _is_known_global names); without this
-    // seed the lambda's fresh ctx had `globals: []` and the by-name
-    // fallback failed. (closure C2 capture-scope fix — module-global ref.)
-    lctx = LowerCtx {
-        next_local: lctx.next_local,
-        next_block: lctx.next_block,
-        next_arena: lctx.next_arena,
-        arena_root: lctx.arena_root,
-        locals: lctx.locals,
-        blocks: lctx.blocks,
-        cur_block: lctx.cur_block,
-        bindings: lctx.bindings,
-        frame_starts: lctx.frame_starts,
-        globals: enc.globals,
-        has_returned: lctx.has_returned
-    }
     lctx = _new_block(lctx)
-    let lam_entry = lctx.blocks[len(lctx.blocks) - 1].id
+    let lam_entry = _lr_blocks[len(_lr_blocks) - 1].id
     lctx = _set_cur_block(lctx, lam_entry)
 
     // params: __env first, then the closure params (env-first ABI — see
     // runtime hexa_callN). Bind each by source name.
     let mut lam_params: [Local] = []
     lctx = _fresh_local(lctx, any_t, "__env")
-    let env_param = lctx.locals[len(lctx.locals) - 1]
+    let env_param = _lr_locals[len(_lr_locals) - 1]
     lam_params.push(env_param)
     lctx = _bind(lctx, "__env", env_param.id)
     pi = 0
     while pi < npar {
         lctx = _fresh_local(lctx, any_t, pnames[pi])
-        let pl = lctx.locals[len(lctx.locals) - 1]
+        let pl = _lr_locals[len(_lr_locals) - 1]
         lam_params.push(pl)
         if len(pnames[pi]) > 0 { lctx = _bind(lctx, pnames[pi], pl.id) }
         pi = pi + 1
@@ -2274,7 +2265,7 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
     let mut fi = 0
     while fi < nfree {
         lctx = _fresh_local(lctx, any_t, free[fi])
-        let cap_l = lctx.locals[len(lctx.locals) - 1]
+        let cap_l = _lr_locals[len(_lr_locals) - 1]
         let mut ga: [Operand] = []
         ga.push(_local_op(env_param.id))
         ga.push(_const_int_op(fi))
@@ -2324,13 +2315,15 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
         name: lam_name,
         params: lam_params,
         return_local: _miss_local(),
-        locals: lctx.locals,
-        blocks: lctx.blocks,
+        locals: _lr_locals,
+        blocks: _lr_blocks,
         entry_block: lam_entry,
         arena_root: lctx.arena_root,
         def_line: e.span.line
     }
     _lr_lambdas.push(lam_func)
+    // restore the enclosing fn's accumulators before lowering the site.
+    _lr_ctx_restore(_lr_saved_arrays)
 
     // ── 2. lower the closure SITE in the enclosing ctx ───────
     // env array: hexa_array_new() then push each captured value, in the
@@ -2356,7 +2349,7 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
         fi = fi + 1
     }
     ctx2 = _fresh_local(ctx2, any_t, "clo_env")
-    let env_l = ctx2.locals[len(ctx2.locals) - 1]
+    let env_l = _lr_locals[len(_lr_locals) - 1]
     let env_s = Stmt {
         kind: STMT_ASSIGN,
         dst: env_l,
@@ -2371,7 +2364,7 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
     // arity_int]. The codegen reads args[1].str_val (symbol) + args[2].int_val
     // (arity) and emits `bl _hexa_closure_new` with the lifted fn pointer.
     ctx2 = _fresh_local(ctx2, e.typ, "clo_val")
-    let clo_l = ctx2.locals[len(ctx2.locals) - 1]
+    let clo_l = _lr_locals[len(_lr_locals) - 1]
     let mut clo_args: [Operand] = []
     clo_args.push(_local_op(env_l.id))
     clo_args.push(_const_str_op(lam_name))
@@ -2480,25 +2473,13 @@ fn _parse_int(t: string) -> i64 {
 // ── Function lowering ───────────────────────────────────────
 
 fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
+    // S1-step-2: each fn lowers into a fresh module-scope array set.
+    // Module globals come from `_lr_globals` (set once in lower_hir);
+    // `mglobals` is retained as a parameter for call-site compatibility.
+    _lr_ctx_clear()
     let mut ctx = _new_lower_ctx()
-    // Seed the lowering ctx with the module's globals so ident lookups
-    // inside this fn can fall back to a global Operand instead of the
-    // HX1101 unbound-ident fatal.
-    ctx = LowerCtx {
-        next_local: ctx.next_local,
-        next_block: ctx.next_block,
-        next_arena: ctx.next_arena,
-        arena_root: ctx.arena_root,
-        locals: ctx.locals,
-        blocks: ctx.blocks,
-        cur_block: ctx.cur_block,
-        bindings: ctx.bindings,
-        frame_starts: ctx.frame_starts,
-        globals: mglobals,
-        has_returned: ctx.has_returned
-    }
     ctx = _new_block(ctx)
-    let entry_id = ctx.blocks[len(ctx.blocks) - 1].id
+    let entry_id = _lr_blocks[len(_lr_blocks) - 1].id
     ctx = _set_cur_block(ctx, entry_id)
 
     let mut params: [Local] = []
@@ -2506,7 +2487,7 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     while p < len(it.sig_params) {
         let pt = it.sig_params[p]
         ctx = _fresh_local(ctx, pt, "param" + to_string(p))
-        let l = ctx.locals[len(ctx.locals) - 1]
+        let l = _lr_locals[len(_lr_locals) - 1]
         params.push(l)
         ctx = _bind(ctx, "param" + to_string(p), l.id)
         p = p + 1
@@ -2552,8 +2533,8 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         name: it.name.substring(0, len(it.name)),
         params: params,
         return_local: ret_local,
-        locals: ctx.locals,
-        blocks: ctx.blocks,
+        locals: _lr_locals,
+        blocks: _lr_blocks,
         entry_block: entry_id,
         arena_root: ctx.arena_root,
         // #13 DWARF .loc — carry the fn-definition source line through to
@@ -2595,6 +2576,10 @@ pub fn lower_hir(module: HModule) -> MModule {
         }
         k = k + 1
     }
+    // S1-step-2: publish the module globals to module scope so every
+    // _lower_fn / closure body resolves them via `_lr_globals` without
+    // threading a per-ctx `globals` array.
+    _lr_globals = globals
     let mut funcs: [MFunc] = []
     let mut fn_names: [string] = []
     let mut i = 0

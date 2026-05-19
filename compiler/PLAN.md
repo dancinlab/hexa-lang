@@ -42,6 +42,40 @@
 
 (append-only)
 
+### 2026-05-20 — #18 S1-step-2 — `lower_hir` super-linear 제거 (O(N²) → near-linear, byte-eq PASS)
+
+**작업 = correctness-preserving 성능 리팩터** — emit asm 는 byte-identical 유지. S1-step-1 이 측정한 `lower_hir` O(N²) 곡선을 제거.
+
+**진단 (코드 확인)**: `_lower_hexpr` 재귀가 `LowerExprResult{ctx: LowerCtx}` 를 반환. `LowerCtx` 가 누적 배열 `locals`/`blocks`/`bindings` 를 필드로 보유 → 매 `_lower_hexpr` 반환마다 `hexa_val_heapify` 가 그 배열들을 deep-copy (배열 자체는 hexa 핸들 공유라 struct 재구성에서는 안 복사되나, fn-arena escape 시점의 heapify 가 N 개 원소를 모두 복사). N 개 sequential stmt → O(N²).
+
+**리팩터 (`compiler/lower/hir_to_mir.hexa`, 단일 파일)**: 누적 배열을 module-scope `pub let mut` 로 분리 (`_lr_locals` / `_lr_blocks` / `_lr_bindings` / `_lr_frame_starts` / `_lr_globals` — 기존 `_lr_diag`/`_lr_lambdas` 관례 그대로). `LowerCtx` 는 6 스칼라 필드만 보유 (`next_local`/`next_block`/`next_arena`/`arena_root`/`cur_block`/`has_returned`) → 스레딩이 O(N) 배열을 더 이상 안 건드림. 헬퍼 (`_fresh_local`/`_new_block`/`_push_stmt_to`/`_add_edge`/`_patch_loop_sentinels`/`_bind`/`_rebind`)는 `LowerCtx` 시그니처 유지 (call graph·스레딩 순서 byte-identical) — module 배열을 in-place mutate 만.
+
+**runtime arena 함정 2건 (측정으로 발견·해결)**:
+1. **버퍼 수명** — module-global 을 함수 안에서 `= []` 로 재대입하면 그 `[]` 리터럴이 live fn-arena mark 아래서 arena-backed (cap<0) → callee arena rewind 시 버퍼 free → `_lr_*` dangling (`map key 'id' not found` → heapify 스택오버플로 SIGSEGV 로 관측). 해결: per-fn reset 을 `.truncate(0)` (같은 heap 버퍼 유지, len 만 0) 로. module 배열은 module-scope `[]` (mark_top==0 → heap) 로 1회 할당, pass 전체에서 heap 유지.
+2. **원소 수명** — `_lr_blocks[i] = Block{...}` 의 `hexa_array_set` 는 (`hexa_array_push` 와 달리) 값을 heapify 안 함 → deep callee frame 에서 만든 Block 이 module 배열에 들어간 뒤 그 frame rewind 시 free. 해결: write-back 제거하고 stmts/preds/succs 를 공유 핸들째 in-place `.push` (`.push` 는 원소 heapify 함). `_patch_loop_sentinels` 는 sentinel 패치 후 `stmts.truncate(0)` + 전 원소 re-`.push`. `_rebind` 는 array_set 대신 shadowing binding append (`_mir_lookup` 이 tail-first 라 결과 동일).
+
+**closure**: 람다 본문은 `_lr_ctx_save` (둘러싼 배열 핸들 저장) → `_lr_ctx_fresh` (람다용 신규 배열) → 람다 MFunc 빌드 → `_lr_lambdas.push` (heapify 가 람다 배열을 heap 승격) → `_lr_ctx_restore` 순. `_lr_globals` 는 module-wide read-only 라 per-ctx `globals` seed 불필요.
+
+**재측정** (`tool/build_aprime.sh -o /tmp/aprime_s2`, arm64-Mac 로컬, smoke `exit(42)` PASS):
+
+| N   | lower_hir (전) | lower_hir (후) | codegen | emit_asm |
+|-----|----------------|----------------|---------|----------|
+| 100 | 62 ms          | **2 ms**       | 19 ms   | 2 ms     |
+| 200 | 270 ms         | **3 ms**       | 28 ms   | 3 ms     |
+| 400 | 1527 ms        | **9 ms**       | 67 ms   | 14 ms    |
+
+`lower_hir` 62→270→1527 (≈5.7× per N-doubling, O(N²)) → 2→3→9 (near-linear). N=400 에서 ≈170× 빠름. `codegen`/`emit_asm` 은 미변경 (리팩터가 안 건드림).
+
+**byte-eq falsifier — PASS (7/7 fixture)**: emit asm 가 baseline(`/tmp/aprime_base`) vs 리팩터 build 사이 byte-identical 임을 확인.
+- 합성 probe N=100 (39,986 B) / N=200 (88,528 B) / N=400 (191,592 B) — IDENTICAL
+- `fib`/`while`/`if` 제어흐름 프로그램 (3,645 B) — IDENTICAL (`_add_edge`/`_patch_loop_sentinels` 검증)
+- `compiler/codegen/arm64_darwin.hexa` closure (3 files, 1,115,763 B) — IDENTICAL
+- `compiler/emit/asm.hexa` closure (2 files, 126,240 B) — IDENTICAL
+- `compiler/lower/hir_to_mir.hexa` closure (7 files, 1,525,561 B) — IDENTICAL
+- `compiler/check/types.hexa` closure (6 files, 1,485,818 B) — IDENTICAL
+
+**punted**: `compiler/parse/parser.hexa` closure 는 baseline·리팩터 양쪽에서 `HX2001` (closure-incompleteness, 3293:32 미해결 식별자) 로 컴파일 실패 — 본 리팩터와 무관한 기존 버그라 fixture 에서 제외 (codegen/asm/types/hir closure 로 대체). 깨끗한 명명 — `_v2`/`_c2`/`aprime`/stage-suffix 미사용.
+
 ### 2026-05-20 — #18 S1-step-1 — codegen per-phase 계측 landed + baseline 측정 (INSTRUMENT only)
 
 **작업 = instrumentation + baseline 측정 only** — super-linear curve 자체는 본 cycle 에서 고치지 않음 (g3 over-claim 0).
