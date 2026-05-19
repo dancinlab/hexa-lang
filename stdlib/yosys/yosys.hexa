@@ -1,0 +1,163 @@
+#!hexa strict
+// stdlib/yosys/yosys.hexa — dispatcher / `hexa yosys` entry (CLEAN-ROOM)
+//
+// @version 0.0.1
+// @capabilities [dispatcher, cli]
+// @stability phase-g — dispatcher routing + help + version landed;
+//   read-verilog / write-verilog route to module bodies that are
+//   still skeleton (exit 91 TBD); synth holds exit 90 (rfc_006 §5
+//   SKY130 area-oracle gate OPEN — no "absorbed" claim, g3).
+// @since 2026-05-19 (.stub) · body landed 2026-05-19
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1 — public-surface clean-room)
+//   Re-derives the *public surface* of Yosys' main loop + script driver
+//   by inspection of upstream + manual only. No upstream code copied.
+//   This is the `hexa yosys <subcmd>` entry point — a thin orchestrator
+//   that routes into read_verilog / passes / liberty / abc_map /
+//   write_verilog (each carrying its own per-module clean-room header).
+//
+//   - upstream code    : kernel/yosys.cc · frontends/script/script.cc
+//   - upstream manual  : yosyshq.readthedocs.io/projects/yosys cmd index
+//   - upstream license : ISC (YosysHQ)
+//   - dispatcher idiom : hexa-lang rfc_048 §3 raw-91 · rfc_047 §4
+//   - toolchain limits : no `match`, enum-eq broken, no tuples
+//                        (rfc_003 finding) — int/struct idioms only
+//
+// CLI surface (rfc_006 §4 module-7):
+//   hexa yosys                    default = help
+//   hexa yosys --help, -h         subcmd listing
+//   hexa yosys --version, -v      print version
+//   hexa yosys selftest           dispatcher routing self-test
+//   hexa yosys read-verilog <f>   Verilog -> RTLIL  (module body TBD)
+//   hexa yosys synth <opts>       full flow         (gated — rfc_006 §5)
+//   hexa yosys write-verilog <o>  RTLIL -> netlist  (module body TBD)
+//
+// Exit codes (rfc_006, mirroring rfc_001 §7.3):
+//   0  ok · 1 user error (bad args / missing input) · 2 runtime error
+//   90 measurement gate OPEN (no absorbed claim — rfc_006 §5)
+//   91 TBD stub hit (rfc_048 raw-91 — module body not landed)
+//
+// No `use` of read_verilog/passes/abc_map/write_verilog yet — those
+// bodies are skeleton; importing them would pull skeleton code (and
+// risk the hexa enum-bug, rfc_003). They wire in per-module as each
+// body lands and its fn main() self-test goes GREEN.
+
+let VERSION = "0.0.1"
+
+fn cmd_help() -> int {
+    println("hexa yosys — RTL->netlist flow (rfc_006 §4 module-7)")
+    println("")
+    println("  yosys                      help (default)")
+    println("  yosys --help, -h           this help")
+    println("  yosys --version, -v        print version")
+    println("  yosys selftest             dispatcher routing self-test")
+    println("  yosys read-verilog <file>  Verilog -> RTLIL   (body TBD)")
+    println("  yosys synth <opts>         full flow          (gated)")
+    println("  yosys write-verilog <out>  RTLIL -> netlist   (body TBD)")
+    println("")
+    println("exit: 0 ok · 1 user-err · 2 runtime · 90 gate-open · 91 TBD")
+    return 0
+}
+
+// read-verilog / write-verilog — module bodies (read_verilog.hexa /
+// write_verilog.hexa) are still skeleton. Honest exit 91: TBD body,
+// NOT a silent skip (@F f4). No claim.
+fn cmd_read_verilog(argv: [str]) -> int {
+    println("yosys read-verilog: module body TBD (rfc_006 §4 read_verilog.hexa) — unreachable.")
+    return 91
+}
+
+fn cmd_write_verilog(argv: [str]) -> int {
+    println("yosys write-verilog: module body TBD (rfc_006 §4 write_verilog.hexa) — unreachable.")
+    return 91
+}
+
+// synth — the full read_verilog->passes->abc_map->write_verilog flow.
+// Gate 90: rfc_006 §5 SKY130 area-oracle (d4≈61,763 · d6≈93,609 µm²
+// · 1.516×) is OPEN; no hexa-native flow reproduces it yet, so an
+// "absorbed" claim is BANNED (g3 / rfc_006 §5).
+fn cmd_synth(argv: [str]) -> int {
+    println("yosys synth: rfc_006 §5 area-oracle gate OPEN "
+        + "(d4 61763 / d6 93609 µm² 1.516x unmeasured by hexa-native flow) "
+        + "— no absorbed claim (g3). gate-open.")
+    return 90
+}
+
+fn cmd_selftest() -> int {
+    // Dispatcher-routing self-test only — module bodies are skeleton,
+    // so there are no module fn main()s to chain yet. Honest scope.
+    println("yosys selftest: dispatcher routing only (module bodies skeleton).")
+    return 0
+}
+
+// argv shape: [..., "yosys", <subcmd>, <args...>].
+fn cmd_yosys(argv: [str]) -> int {
+    let n = len(argv)
+    let mut idx = 0 - 1
+    let mut i = 0
+    while i < n {
+        if argv[i] == "yosys" { idx = i }
+        i = i + 1
+    }
+    if idx < 0 { return cmd_help() }
+    if idx + 1 >= n { return cmd_help() }
+    let sub = argv[idx + 1]
+    if sub == "--help" { return cmd_help() }
+    if sub == "-h" { return cmd_help() }
+    if sub == "--version" { println(VERSION); return 0 }
+    if sub == "-v" { println(VERSION); return 0 }
+    if sub == "selftest" { return cmd_selftest() }
+    if sub == "read-verilog" { return cmd_read_verilog(argv) }
+    if sub == "synth" { return cmd_synth(argv) }
+    if sub == "write-verilog" { return cmd_write_verilog(argv) }
+    println("yosys: unknown subcommand: " + sub)
+    return 1
+}
+
+// ─── self-test (`hexa run stdlib/yosys/yosys.hexa`) ──────────────────────
+
+fn main() {
+    let mut fails = 0
+    let mut total = 0
+
+    total = total + 1
+    if cmd_yosys(["x", "yosys", "--version"]) != 0 {
+        println("FAIL version_exit0"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_yosys(["x", "yosys", "--help"]) != 0 {
+        println("FAIL help_exit0"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_yosys(["x", "yosys"]) != 0 {
+        println("FAIL nosub_help_exit0"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_yosys(["x", "yosys", "zzz"]) != 1 {
+        println("FAIL unknown_exit1"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_yosys(["x", "yosys", "selftest"]) != 0 {
+        println("FAIL selftest_exit0"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_yosys(["x", "yosys", "synth"]) != 90 {
+        println("FAIL synth_gate90"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_yosys(["x", "yosys", "read-verilog"]) != 91 {
+        println("FAIL readverilog_tbd91"); fails = fails + 1
+    }
+    total = total + 1
+    if cmd_yosys(["x", "yosys", "write-verilog"]) != 91 {
+        println("FAIL writeverilog_tbd91"); fails = fails + 1
+    }
+
+    if fails > 0 {
+        println("yosys dispatcher selftest: "
+            + str(total - fails) + "/" + str(total) + " — FAIL")
+        exit(1)
+    }
+    println("yosys dispatcher selftest: "
+        + str(total) + "/" + str(total) + " PASS")
+}
