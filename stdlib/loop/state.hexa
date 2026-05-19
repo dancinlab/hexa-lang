@@ -1,0 +1,122 @@
+// stdlib/loop/state.hexa — RFC 065 state file I/O (Phase B-2.1)
+//
+// State dir: $HEXA_LANG/state/loop/<cwd_hash>/
+//
+// Files (per RFC 065 §6 — B-2.1 wires cycle/end; chain/cooldown/goal
+// growth/etc. land in B-2.2):
+//   loop                          cycle counter ("cycle=N\n")
+//   end                           exhaustion sentinel (touch file)
+//
+// authority: AGENTS.tape @D g_atlas_binary_builtin (sibling SSOT) +
+//   stdlib/qrng/router state-file convention (HEXA_LANG/state/<domain>/).
+//
+// CLI selftest:
+//   /tmp/hexadrv run stdlib/loop/state.hexa
+//   -> writes /Users/ghost/.hx/state/loop/<hash>/{loop,end},
+//      reads them back, asserts equality, cleans up, prints PASS.
+
+use "stdlib/io"
+use "stdlib/core/hash/sha256"
+
+fn _hexa_lang_dir() -> string {
+    let h = env("HEXA_LANG")
+    if len(h) > 0 { return h }
+    return env("HOME") + "/.hx"
+}
+
+fn _cwd_str() -> string {
+    return exec("pwd").trim()
+}
+
+fn _cwd_hash12() -> string {
+    let full = sha256_hex(_cwd_str())
+    return full.substring(0, 12)
+}
+
+pub fn loop_state_dir() -> string {
+    return _hexa_lang_dir() + "/state/loop/" + _cwd_hash12()
+}
+
+pub fn loop_state_init() {
+    let dir = loop_state_dir()
+    let _ = exec("mkdir -p \"" + dir + "\"")
+}
+
+pub fn loop_state_path_exists(name: string) -> bool {
+    let path = loop_state_dir() + "/" + name
+    let out = exec("test -e \"" + path + "\" && echo Y || echo N").trim()
+    return out == "Y"
+}
+
+pub fn loop_state_end_touch() {
+    let path = loop_state_dir() + "/end"
+    let _ = write_text(path, "")
+}
+
+pub fn loop_state_cycle_write(n: int) {
+    let path = loop_state_dir() + "/loop"
+    let content = "cycle=" + to_string(n) + "\n"
+    let _ = write_text(path, content)
+}
+
+pub fn loop_state_cycle_read() -> int {
+    if loop_state_path_exists("loop") == false { return 0 }
+    let path = loop_state_dir() + "/loop"
+    let raw = read_text(path)
+    let prefix = "cycle="
+    if len(raw) <= len(prefix) { return 0 }
+    let rest = raw.substring(len(prefix), len(raw))
+    return _parse_leading_int(rest)
+}
+
+fn _parse_leading_int(s: string) -> int {
+    let mut n = 0
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "0" { n = n * 10 + 0 }
+        else if c == "1" { n = n * 10 + 1 }
+        else if c == "2" { n = n * 10 + 2 }
+        else if c == "3" { n = n * 10 + 3 }
+        else if c == "4" { n = n * 10 + 4 }
+        else if c == "5" { n = n * 10 + 5 }
+        else if c == "6" { n = n * 10 + 6 }
+        else if c == "7" { n = n * 10 + 7 }
+        else if c == "8" { n = n * 10 + 8 }
+        else if c == "9" { n = n * 10 + 9 }
+        else { break }
+        i = i + 1
+    }
+    return n
+}
+
+fn _bool_str(b: bool) -> string {
+    if b { return "true" }
+    return "false"
+}
+
+pub fn loop_state_selftest() -> bool {
+    loop_state_init()
+    let dir = loop_state_dir()
+    println("[loop.state] dir = " + dir)
+
+    loop_state_cycle_write(7)
+    let r = loop_state_cycle_read()
+    let cycle_ok = (r == 7)
+    println("[loop.state] cycle write=7 read=" + to_string(r) + " match=" + _bool_str(cycle_ok))
+    if cycle_ok == false { return false }
+
+    loop_state_end_touch()
+    let exists = loop_state_path_exists("end")
+    println("[loop.state] end touched, exists=" + _bool_str(exists))
+    if exists == false { return false }
+
+    let _ = exec("rm -rf \"" + dir + "\"")
+    println("[loop.state] selftest PASS")
+    return true
+}
+
+fn main() {
+    let ok = loop_state_selftest()
+    if ok == false { exit(1) }
+}
