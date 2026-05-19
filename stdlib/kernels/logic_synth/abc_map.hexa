@@ -52,8 +52,8 @@
 // comb/rtl/router_d{4,6}.v against SKY130 sky130_fd_sc_hd, NO
 // "absorbed" claim is valid for this stdlib.
 
-use "stdlib/yosys/rtlil"
-use "stdlib/yosys/liberty"
+use "stdlib/kernels/logic_synth/rtlil"
+use "stdlib/kernels/logic_synth/liberty"
 
 // ─── public types ────────────────────────────────────────────────────────
 

@@ -43,12 +43,12 @@
 //   90 measurement gate OPEN (no absorbed claim — rfc_006 §5)
 //   91 TBD stub hit (rfc_048 raw-91 — should not occur post-phase-a)
 
-use "stdlib/yosys/rtlil"
-use "stdlib/yosys/read_verilog"
-use "stdlib/yosys/passes"
-use "stdlib/yosys/liberty"
-use "stdlib/yosys/abc_map"
-use "stdlib/yosys/write_verilog"
+use "stdlib/kernels/logic_synth/rtlil"
+use "stdlib/kernels/logic_synth/read_verilog"
+use "stdlib/kernels/logic_synth/passes"
+use "stdlib/kernels/logic_synth/liberty"
+use "stdlib/kernels/logic_synth/abc_map"
+use "stdlib/kernels/logic_synth/write_verilog"
 
 let VERSION = "0.0.2"
 

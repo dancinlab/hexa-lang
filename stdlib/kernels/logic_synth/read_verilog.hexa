@@ -49,7 +49,7 @@
 // Gate-§5 path: enlarge the subset under the same idiom (each new
 // construct = one new fn, one new self-test, fail-loud on unsupported).
 
-use "stdlib/yosys/rtlil"
+use "stdlib/kernels/logic_synth/rtlil"
 
 // ─── parse result ────────────────────────────────────────────────────────
 

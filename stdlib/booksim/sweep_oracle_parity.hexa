@@ -72,12 +72,12 @@
 //   Stdout layout: human banner (12 rows + Leighton) · blank line ·
 //   3 jsonl F1F2Record lines (rfc_002 schema v1.0) · blank line · gate.
 
-use "stdlib/booksim/anynet"
-use "stdlib/booksim/iq_router"
-use "stdlib/booksim/leighton"
-use "stdlib/booksim/sweep"
-use "stdlib/booksim/traffic"
-use "stdlib/booksim/wire_delay"
+use "stdlib/kernels/noc_sim/anynet"
+use "stdlib/kernels/noc_sim/iq_router"
+use "stdlib/kernels/noc_sim/leighton"
+use "stdlib/kernels/noc_sim/sweep"
+use "stdlib/kernels/noc_sim/traffic"
+use "stdlib/kernels/noc_sim/wire_delay"
 
 // ─── module-level reference constants (rfc_003 §4, verbatim) ──────────────
 

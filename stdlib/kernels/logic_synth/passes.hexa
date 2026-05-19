@@ -47,7 +47,7 @@
 // the gate §5 path requires expanding them — phase-a body lands a
 // reviewable minimum.
 
-use "stdlib/yosys/rtlil"
+use "stdlib/kernels/logic_synth/rtlil"
 
 // ─── pass result ─────────────────────────────────────────────────────────
 

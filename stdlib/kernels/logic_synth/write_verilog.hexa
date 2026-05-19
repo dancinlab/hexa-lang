@@ -38,7 +38,7 @@
 //   declarations in port_id order, then internal wires by emission
 //   order, then cells by emission order; byte-stable output.
 
-use "stdlib/yosys/rtlil"
+use "stdlib/kernels/logic_synth/rtlil"
 
 // ─── public types ────────────────────────────────────────────────────────
 

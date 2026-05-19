@@ -22,12 +22,12 @@
 //   - FAIL (a hard error blocked progress — fail-loud)
 // In ALL three states the record is filed with cited numbers.
 
-use "stdlib/yosys/rtlil"
-use "stdlib/yosys/read_verilog"
-use "stdlib/yosys/passes"
-use "stdlib/yosys/liberty"
-use "stdlib/yosys/abc_map"
-use "stdlib/yosys/write_verilog"
+use "stdlib/kernels/logic_synth/rtlil"
+use "stdlib/kernels/logic_synth/read_verilog"
+use "stdlib/kernels/logic_synth/passes"
+use "stdlib/kernels/logic_synth/liberty"
+use "stdlib/kernels/logic_synth/abc_map"
+use "stdlib/kernels/logic_synth/write_verilog"
 
 struct GateStage {
     name:    str,

@@ -1,11 +1,20 @@
-# `stdlib/yosys/` — hexa-native Yosys flow (D18 bounded-subprocess for ABC)
+# `stdlib/yosys/` — chip-domain logic-synth adapter (①b layer; demiurge D72)
 
-> **Status: SCAFFOLD-ONLY (2026-05-19) — `.hexa.stub` skeletons only.**
-> No body returns a useful value yet. Every function is a TBD stub that
-> hard-exits `91` (rfc_048 raw-91 doctrine) when called. This directory
-> exists as the typed-interface scaffold the bodies will land into.
-> Do **NOT** wire this into `self/main.hexa` until the §4 measurement
-> gate (below) is GREEN.
+> **D72 2-layer restructure:** the six domain-agnostic logic-synthesis
+> engine modules (`rtlil` · `read_verilog` · `passes` · `liberty` ·
+> `abc_map` · `write_verilog`, listed in the table below) were
+> relocated to `stdlib/kernels/logic_synth/` — the ①a kernel layer
+> (see `stdlib/kernels/logic_synth/README.md`). This directory now
+> holds only the chip-domain ①b adapter:
+>
+> | file | role |
+> |---|---|
+> | `yosys.hexa` | `hexa yosys` CLI dispatcher (demiurge `chip+synthesize`). |
+> | `gate_record.hexa` | rfc_006 §5 gate-runner — SKY130 router_d4/d6 area oracle. |
+>
+> Both adapters import the engine via `use "stdlib/kernels/
+> logic_synth/<module>"`. The adapter file paths are unchanged — the
+> demiurge `hexa run yosys.hexa` spawn is transparent to the move.
 >
 > **Provenance — shared-worktree-hazard re-land (2026-05-19):** an
 > initial commit of this scaffold was silently dropped when a parallel
