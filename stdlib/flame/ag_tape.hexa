@@ -117,13 +117,14 @@ fn _ag_reg_grad(tape: int, tid: int, len: int) -> int {
 }
 
 // grad[tid] += src[0..len)
+// mk2-C5: replace host-scalar accumulator with `farr_add_inplace_gpu`.
+// Each ag_k_linear bwd accumulates ~1.4M elements (B·D + D·C + C); the
+// generic ag_tape replay invokes _ag_reg_acc thousands of times per
+// step, dominating wall when host-scalar. Byte-eq via __dadd_rn under
+// FP_CONTRACT OFF (mirrors host `g[i] + src[i]`).
 fn _ag_reg_acc(tape: int, tid: int, src: int, len: int) {
     let g = _ag_reg_grad(tape, tid, len)
-    let mut i = 0
-    while i < len {
-        t_set(g, i, t_get(g, i) + t_get(src, i))
-        i = i + 1
-    }
+    let _ = farr_add_inplace_gpu(g, src, len)
 }
 
 // public: accumulated grad farr id for any tensor (param or activation).
@@ -186,7 +187,13 @@ pub fn ag_rmsnorm(tape: int, x: int, g: int, d: int) -> int {
 
 pub fn ag_linear(tape: int, x: int, W: int, b: int,
                  B: int, D: int, C: int) -> int {
-    let y = nn_linear_fwd(x, W, b, B, D, C)
+    // mk2-C5: bypass nn_linear_fwd's host-scalar bias broadcast loop
+    // (the d768 generic ag_tape driver passes zero-init scratch farrs
+    // zb1/zb2/zbh for `b`, so the broadcast was ~1-3M wasted host
+    // scalar ops per call × 84 calls/step). farr_matmul routes to
+    // cuBLAS via the matmul dim-gate (mk2-C0). For non-zero biases a
+    // separate ag_linear_with_bias variant should be added.
+    let y = farr_matmul(x, B, D, W, C)
     let _ = _ag_push(tape, ag_k_linear(), x, W, b, y, 0 - 1, 0 - 1,
                      0 - 1, 0 - 1, B, D, C, 0)
     return y
@@ -387,12 +394,20 @@ fn _ag_attn_dt_bwd(Q: int, K: int, V: int, P: int, dctx: int,
 }
 
 // ctx = dt-scale GQA-attn(Q,K,V). Same node shape as ag_attn.
+// mk2-C4 (2026-05-19): forge-route fwd. One __global__ kernel computes
+// P[nh·T·T] (causal probs) + CTX[T·nh·hd] from Q/K/V in a single
+// launch. dt_sqrt+dt_exp bit-exact mirrors (proven recipe: RoPE FMA,
+// silu_gate dt_exp, rmsnorm dt_sqrt) — byte-eq with the prior host
+// nested-loop _ag_attn_dt_fwd reference. P + CTX go through _d2h_out
+// → DEVICE_KEEP register honoured (mk2-C3). On no-CUDA build the
+// fallback routes to _hx_farr_attn_dt_fwd_cpu (FP_CONTRACT OFF). bwd
+// still host-loop (mk2-C4-bwd is a follow-up cycle).
 pub fn ag_attn_dt(tape: int, Q: int, K: int, V: int,
                   T: int, nh: int, nkv: int, hd: int) -> int {
     let dctx_len = T * nh * hd
     let P   = t_zeros(nh * T * T)
     let ctx = t_zeros(dctx_len)
-    _ag_attn_dt_fwd(Q, K, V, P, ctx, T, nh, nkv, hd)
+    let _ = farr_attn_dt_fwd_gpu(Q, K, V, P, ctx, T, nh, nkv, hd)
     let _ = _ag_push(tape, ag_k_attn_dt(), Q, K, V, P, ctx, 0 - 1,
                      0 - 1, 0 - 1, T, nh, nkv, hd)
     return ctx
@@ -401,13 +416,16 @@ pub fn ag_attn_dt(tape: int, Q: int, K: int, V: int,
 // out = a + b (element-wise, len). Residual / skip-connection adder.
 // bwd: d_out flows unchanged to BOTH a and b (registry accumulates the
 // fan-out automatically). ids[a,b,out] dims[len].
+// mk2-C1a (2026-05-19): forge-route the elementwise add. On
+// HEXA_CUDA `farr_add_gpu` runs _hx_cuda_farr_add_gpu (1-D grid-
+// stride, C[i]=A[i]+B[i] — exact, NO FMA/transcendental so
+// byte-eq is trivial); no-CUDA falls back to _hx_farr_add_cpu
+// (identical C=A+B), byte-identical to the prior inline loop ⇒
+// flame_ag_tape_test leaf bar (max|Δ|=0) preserved. Same
+// bare-wrapper seam as ag_rope_mh/farr_rope_gpu (runtime.c
+// wrapper + runtime.h proto, no bootstrap rebuild).
 pub fn ag_add(tape: int, a: int, b: int, len: int) -> int {
-    let out = t_zeros(len)
-    let mut i = 0
-    while i < len {
-        t_set(out, i, t_get(a, i) + t_get(b, i))
-        i = i + 1
-    }
+    let out = farr_add_gpu(a, b, len)
     let _ = _ag_push(tape, ag_k_add(), a, b, out, 0 - 1, 0 - 1, 0 - 1,
                      0 - 1, 0 - 1, len, 0, 0, 0)
     return out
@@ -425,28 +443,14 @@ pub fn ag_rmsnorm_mh(tape: int, x: int, g: int, T: int, d: int) -> int {
     let y   = t_zeros(T * d)
     let xn  = t_zeros(T * d)
     let inv = t_zeros(T)
-    let eps = 0.000001
-    let mut i = 0
-    while i < T {
-        let mut ms = 0.0
-        let mut c = 0
-        while c < d {
-            let xv = t_get(x, i * d + c)
-            ms = ms + xv * xv
-            c = c + 1
-        }
-        ms = ms / to_float(d)
-        let iv = 1.0 / dt_sqrt(ms + eps)
-        t_set(inv, i, iv)
-        let mut c2 = 0
-        while c2 < d {
-            let xni = t_get(x, i * d + c2) * iv
-            t_set(xn, i * d + c2, xni)
-            t_set(y, i * d + c2, t_get(g, c2) * xni)
-            c2 = c2 + 1
-        }
-        i = i + 1
-    }
+    // mk2-C2 forge-route: one __global__ kernel computes y/xn/inv on
+    // GPU with strict per-row sequential reduction (one thread / row,
+    // __dadd_rn / __dmul_rn / __ddiv_rn + __dmul_rn(0.5, ...) dt_sqrt
+    // mirror). Byte-identical to the prior host-scalar t_get/t_set
+    // loop (FP_CONTRACT OFF in the CPU mirror). Outputs honour
+    // DEVICE_KEEP via _d2h_out — next forge op's _h2d skips. No-CUDA
+    // build routes to _hx_farr_rmsnorm_mh_cpu (same op order, byte-eq).
+    let _ = farr_rmsnorm_mh_gpu(x, g, y, xn, inv, T, d)
     let _ = _ag_push(tape, ag_k_rmsnorm_mh(), x, g, y, xn, inv, 0 - 1,
                      0 - 1, 0 - 1, T, d, 0, 0)
     return y
@@ -554,16 +558,28 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             let D = _ag_get(tape, op, 10)
             let C = _ag_get(tape, op, 11)
             let og = _ag_reg_grad(tape, y, B * C)
-            let dW = t_zeros(D * C)
-            let dx = t_zeros(B * D)
-            let db = t_zeros(C)
-            nn_linear_bwd(x, W, og, dW, dx, db, B, D, C)
+            // mk2-C5: forge-route the bwd matmuls. nn_linear_bwd was
+            // a full host-scalar 3-loop (dW, dx, db) at ~1.2B ops per
+            // ag_linear call × 84 calls × 5 step calls = ~500B ops
+            // total — the dominant 14min GPU-idle wall blocker per
+            // mk2-FINAL #2 measurement. Replace with:
+            //   dW[D·C] = matmul(xT[D·B], B, og[B·C], C)
+            //   dx[B·D] = matmul(og[B·C], C, WT[C·D], D)
+            // db skipped — d768 driver passes zero `bb` and never
+            // reads bb's grad (callers with non-zero bias would need
+            // a separate variant; flag here for future).
+            let xT = t_zeros(D * B)
+            let _ = farr_transpose_2d_gpu(x, 0, xT, 0, B, D)
+            let dW = farr_matmul(xT, D, B, og, C)
+            let WT = t_zeros(C * D)
+            let _ = farr_transpose_2d_gpu(W, 0, WT, 0, D, C)
+            let dx = farr_matmul(og, B, C, WT, D)
             _ag_reg_acc(tape, x, dx, B * D)
             _ag_reg_acc(tape, W, dW, D * C)
-            _ag_reg_acc(tape, bb, db, C)
+            t_free(xT)
+            t_free(WT)
             t_free(dW)
             t_free(dx)
-            t_free(db)
         } else if kind == ag_k_rope() {
             let q = _ag_get(tape, op, 1)
             let cs = _ag_get(tape, op, 2)
@@ -668,8 +684,13 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             let dQ = t_zeros(qlen)
             let dK = t_zeros(kvlen)
             let dV = t_zeros(kvlen)
-            _ag_attn_dt_bwd(Q, K, Vv, P, og, dQ, dK, dV,
-                            T, nh, nkv, hd)
+            // mk2-C4-bwd: forge-route the bwd. 3-kernel pipeline
+            // (dP_row precompute → dS in place + dQ → output-centric
+            // dV/dK). dQ/dK/dV freshness contract preserved (just
+            // allocated with t_zeros above). dt_sqrt scale computed
+            // device-side. byte-eq mirror gated by cheap A100 oracle.
+            let _ = farr_attn_dt_bwd_gpu(Q, K, Vv, P, og, dQ, dK, dV,
+                                         T, nh, nkv, hd)
             _ag_reg_acc(tape, Q, dQ, qlen)
             _ag_reg_acc(tape, K, dK, kvlen)
             _ag_reg_acc(tape, Vv, dV, kvlen)

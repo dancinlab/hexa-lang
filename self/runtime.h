@@ -970,4 +970,179 @@ int _hx_cuda_launch_kernel(const void*    cubin_blob,
                            const int64_t* extra_i64_args,
                            int            n_extra);                     /* self/cuda/runtime_cuda.c — RFC 055 */
 
+/* ── anima RFC 040 (2026-05-16): farr GPU/CUDA backend — Phase A scaffolding ─
+ * Device-farr residence descriptor + dispatcher + CPU-fallback for the
+ * GPU-routed compute path. The default build (no `-DHEXA_CUDA`) MUST be
+ * byte-identical to today: every existing farr is loc=FARR_HOST with
+ * d_buf=NULL, and `farr_matmul_gpu` falls back to the RFC 032 CPU
+ * `farr_matmul`. With `-DHEXA_CUDA` the dispatcher signatures match but
+ * the bodies remain TODO[cuda] stubs (the real cuBLAS/kernel impls are
+ * a future CUDA-box cycle — Phase A scaffolding only). See
+ * inbox/rfc_drafts_2026_05_12/rfc_040_farr_gpu_cuda_backend.md §"Phase A".
+ *
+ *   cuda_available()         -> 1 iff CUDA toolkit+device present at
+ *                                runtime; else 0. No-CUDA build = 0.
+ *   cuda_device_count()      -> # visible GPUs (0 = none).
+ *   farr_to_device(id)       -> 1 ok / 0 err / -1 no-cuda. No-op + 1 on
+ *                                CPU-fallback (caller code stays valid).
+ *   farr_to_host(id)         -> mirror of farr_to_device (D2H side).
+ *   farr_pin(id)             -> mark resident-on-device, do not evict.
+ *   farr_device_free(id)     -> free d_buf, keep host buf.
+ *   farr_matmul_gpu(A,Ar,Ac,B,Bc) -> int farr (ABI-identical to RFC 032
+ *                                farr_matmul; same shape, same -1 errs;
+ *                                no-CUDA → routes to CPU farr_matmul).
+ *
+ * Honest carve-out (AGENTS.tape g3): this scaffolding lands NO CUDA
+ * kernels. The GPU paths are TODO[cuda] stubs verified on Mac via the
+ * CPU-fallback equivalence — the actual cuBLAS Dgemm + kernels are the
+ * next-cycle deliverable on a CUDA host. */
+HexaVal hexa_cuda_available(void);                                     /* runtime.c — RFC 040 */
+HexaVal hexa_cuda_device_count(void);                                  /* runtime.c — RFC 040 */
+HexaVal hexa_farr_to_device(HexaVal h_v);                              /* runtime.c — RFC 040 */
+HexaVal hexa_farr_to_host(HexaVal h_v);                                /* runtime.c — RFC 040 */
+HexaVal hexa_farr_pin(HexaVal h_v);                                    /* runtime.c — RFC 040 */
+HexaVal hexa_farr_device_free(HexaVal h_v);                            /* runtime.c — RFC 040 */
+HexaVal hexa_farr_matmul_gpu(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                             HexaVal b_v, HexaVal bc_v);                /* runtime.c — RFC 040 */
+/* Generic-fallback carriers (≤4-arg: `hexa_callN(<carrier>, …)`) and
+ * direct-call wrappers (5-arg `farr_matmul_gpu(…)` bare). Both linked
+ * external so the committed codegen's fallback path resolves cleanly. */
+extern HexaVal cuda_available;                                         /* runtime.c — RFC 040 fn carrier */
+extern HexaVal cuda_device_count;                                      /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_to_device;                                         /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_to_host;                                           /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_pin;                                               /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_device_free;                                       /* runtime.c — RFC 040 fn carrier */
+HexaVal farr_matmul_gpu(HexaVal a, HexaVal ar, HexaVal ac,
+                        HexaVal b, HexaVal bc);                         /* runtime.c — RFC 040 (5-arg direct) */
+/* RFC 041 Phase B forge RoPE — bare 6-arg direct wrappers (runtime.c
+ * L11965/L11978). Declared here so the COMMITTED hexa_v2 codegen
+ * (which emits the bare name `farr_rope_gpu(...)`, unprefixed) links
+ * WITHOUT a transpiler bootstrap rebuild. CUDA build → RFC 041
+ * __global__ kernel; no-CUDA → byte-identical `_hx_farr_rope_cpu`
+ * (flame gap(d), Decision 9; mirrors the farr_matmul_gpu pattern). */
+HexaVal farr_rope_gpu(HexaVal t, HexaVal cos, HexaVal sin,
+                      HexaVal T, HexaVal nh, HexaVal hd);               /* runtime.c — RFC 041 (6-arg direct) */
+HexaVal farr_rope_bwd_gpu(HexaVal t, HexaVal cos, HexaVal sin,
+                          HexaVal T, HexaVal nh, HexaVal hd);           /* runtime.c — RFC 041 (6-arg direct) */
+
+/* ── anima RFC 040 (2026-05-16): Phase B scaffolding — remaining ops ─────
+ * Same `#ifdef HEXA_CUDA` / `#ifndef HEXA_CUDA` pattern as Phase A. The
+ * d_train5 hot-path candidates for GPU offload (per RFC 040 §"Hot-path op
+ * survey"): row-wise softmax, RMSNorm row reduction, elementwise add,
+ * elementwise scale. Each gets a `*_gpu` builtin that on the no-CUDA
+ * build routes to a NEW SMALL CPU helper (no pre-existing equivalent in
+ * the farr surface — the existing `ad_softmax_cross_entropy` is the
+ * loss-coupled fused op, not a row-softmax-only kernel). On the HEXA_CUDA
+ * build the bodies are TODO[cuda] stubs returning -1 (honest no-fake
+ * PASS, per AGENTS.tape g3). Real CUDA `__global__` kernels =
+ * next-cycle deliverable on a CUDA host.
+ *
+ *   farr_softmax_rows_gpu(x_id, R, C) -> int new farr [R*C] with
+ *      numerically-stable row-softmax (subtract row max). -1 on err.
+ *   farr_rmsnorm_rows_gpu(x_id, R, C, eps_v) -> int new farr [R*C] with
+ *      row-RMSNorm (y = x / sqrt(mean(x^2) + eps)). -1 on err.
+ *   farr_add_gpu(a_id, b_id, n) -> int new farr [n] with c = a + b.
+ *      -1 on err.
+ *   farr_scale_gpu(x_id, alpha_v, n) -> int new farr [n] with y = α·x.
+ *      -1 on err.
+ *
+ * Phase B is also SCAFFOLDING: the equivalence harness (no-CUDA build)
+ * proves the dispatchers route to the CPU helpers byte-equal; real GPU
+ * kernels + their parity vs CPU oracle = next-cycle deliverable. */
+HexaVal hexa_farr_softmax_rows_gpu(HexaVal x_v, HexaVal r_v, HexaVal c_v);    /* runtime.c — RFC 040 Phase B */
+HexaVal hexa_farr_rmsnorm_rows_gpu(HexaVal x_v, HexaVal r_v, HexaVal c_v,
+                                   HexaVal eps_v);                            /* runtime.c — RFC 040 Phase B */
+HexaVal hexa_farr_add_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v);             /* runtime.c — RFC 040 Phase B */
+HexaVal hexa_farr_scale_gpu(HexaVal x_v, HexaVal alpha_v, HexaVal n_v);       /* runtime.c — RFC 040 Phase B */
+extern HexaVal farr_softmax_rows_gpu;                                          /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_rmsnorm_rows_gpu;                                          /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_add_gpu;                                                   /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_scale_gpu;                                                 /* runtime.c — RFC 040 fn carrier */
+
+/* mk2-closure port (rfc043-flame-camp 61e29993, 2026-05-19):
+ * RFC 056 §6.4 device-residence disposition carrier — `farr_set_out_disposition(d)`
+ * toggles FORGE_OUT_DEVICE_KEEP for the next forge op so its output stays
+ * device-resident (lazy-D2H on host scalar access). Body in runtime.c. */
+HexaVal hexa_farr_set_out_disposition(HexaVal d_v);                            /* runtime.c — RFC 056 */
+extern HexaVal farr_set_out_disposition;                                       /* runtime.c — RFC 056 fn carrier */
+
+/* mk2-closure port (rfc043-flame-camp 1c98b5b9 + 2425e674 + 32d457b3 +
+ * c2689508 + c42ac263, 2026-05-19):
+ *   - mk2-C2 farr_rmsnorm_mh_gpu  (7-arg bare): multi-head RMSNorm fwd
+ *   - mk2-C4 farr_attn_dt_fwd_gpu (9-arg bare): GQA attention-dt fwd
+ *   - mk2-C4-bwd farr_attn_dt_bwd_gpu (12-arg bare): GQA attention-dt bwd
+ *   - mk2-C5 farr_copy_slice_gpu / _transpose_2d_gpu / _fill_dt_lcg_gpu
+ *     (5+/6+/5-arg bare): device memcpy / 2-D transpose / LCG fill
+ *   - mk2-C5 hexa_farr_zero_slice_gpu / _add_inplace_gpu (3-arg, carrier
+ *     + hexa_fn_new dispatch). */
+HexaVal hexa_farr_zero_slice_gpu(HexaVal dst_v, HexaVal doff_v, HexaVal n_v);  /* runtime.c — mk2-C5 */
+HexaVal hexa_farr_add_inplace_gpu(HexaVal dst_v, HexaVal src_v, HexaVal n_v);  /* runtime.c — mk2-C5 */
+extern HexaVal farr_zero_slice_gpu;                                            /* runtime.c — mk2-C5 fn carrier */
+extern HexaVal farr_add_inplace_gpu;                                           /* runtime.c — mk2-C5 fn carrier */
+HexaVal farr_copy_slice_gpu(HexaVal src_v, HexaVal soff_v, HexaVal dst_v,
+                            HexaVal doff_v, HexaVal n_v);                      /* runtime.c — mk2-C5 (5-arg bare) */
+HexaVal farr_transpose_2d_gpu(HexaVal src_v, HexaVal soff_v, HexaVal dst_v,
+                              HexaVal doff_v, HexaVal d_out_v,
+                              HexaVal d_in_v);                                 /* runtime.c — mk2-C5 (6-arg bare) */
+HexaVal farr_fill_dt_lcg_gpu(HexaVal dst_v, HexaVal doff_v, HexaVal n_v,
+                             HexaVal seed_v, HexaVal scale_v);                 /* runtime.c — mk2-C5 (5-arg bare) */
+HexaVal farr_rmsnorm_mh_gpu(HexaVal x_v, HexaVal g_v, HexaVal y_v,
+                            HexaVal xn_v, HexaVal inv_v, HexaVal T_v,
+                            HexaVal d_v);                                      /* runtime.c — mk2-C2 (7-arg bare) */
+HexaVal farr_attn_dt_fwd_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
+                             HexaVal p_v, HexaVal ctx_v, HexaVal T_v,
+                             HexaVal nh_v, HexaVal nkv_v, HexaVal hd_v);       /* runtime.c — mk2-C4 (9-arg bare) */
+HexaVal farr_attn_dt_bwd_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
+                             HexaVal p_v, HexaVal dctx_v, HexaVal dq_v,
+                             HexaVal dk_v, HexaVal dv_v, HexaVal T_v,
+                             HexaVal nh_v, HexaVal nkv_v,
+                             HexaVal hd_v);                                    /* runtime.c — mk2-C4-bwd (12-arg bare) */
+
+/* anima RFC 040 Phase B2 (2026-05-16): d_train5 hot-path completion.
+ * The remaining DOMINANT-FLOP farr ops the Phase E refactor of
+ * HEXAD/D/d_train5_lib.hexa needs so every boxed c3_/dt2_ op has a
+ * matching farr-gpu swap target. Scaffolding only (Mac, no CUDA):
+ * no-CUDA = verified CPU helper == trusted boxed reference; HEXA_CUDA =
+ * TODO[cuda] stub returning -1 (honest, no-fake-PASS, AGENTS.tape g3).
+ *
+ *   farr_matmul_t_gpu(M,R,C,u)        -> int new farr [C]    (M^T . u)
+ *   farr_outer_gpu(u,v,R,C)           -> int new farr [R.C]  (u outer v)
+ *   farr_mul_gpu(a,b,n)               -> int new farr [n]    (Hadamard)
+ *   farr_silu_gpu(x,n)                -> int new farr [n]    (x.sigmoid)
+ *   farr_silu_grad_gpu(x,n)           -> int new farr [n]    (silu grad)
+ *   farr_rmsnorm_bwd_rows_gpu(x,dxn,R,C) -> int new farr [R.C] (vjp dx)
+ *   farr_adamw_step_gpu(W,m,v,g,n,lr,b1,b2,eps,wd,step_t)
+ *                                     -> int new farr [n] (updated W;
+ *                                        m,v updated in place)
+ *   farr_rope_gpu(t,cos,sin,T,nheads,hd)     -> int new farr [T.nheads.hd]
+ *                                        (rotary pos-emb forward)
+ *   farr_rope_bwd_gpu(t,cos,sin,T,nheads,hd) -> int new farr [T.nheads.hd]
+ *                                        (rotary pos-emb backward)
+ */
+HexaVal hexa_farr_matmul_t_gpu(HexaVal m_v, HexaVal r_v, HexaVal c_v,
+                               HexaVal u_v);                                   /* runtime.c — RFC 040 Phase B2 */
+HexaVal hexa_farr_outer_gpu(HexaVal u_v, HexaVal v_v, HexaVal r_v,
+                            HexaVal c_v);                                      /* runtime.c — RFC 040 Phase B2 */
+HexaVal hexa_farr_mul_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v);             /* runtime.c — RFC 040 Phase B2 */
+HexaVal hexa_farr_silu_gpu(HexaVal x_v, HexaVal n_v);                         /* runtime.c — RFC 040 Phase B2 */
+HexaVal hexa_farr_silu_grad_gpu(HexaVal x_v, HexaVal n_v);                    /* runtime.c — RFC 040 Phase B2 */
+HexaVal hexa_farr_silu_gate_gpu(HexaVal a_v, HexaVal b_v, HexaVal n_v);       /* runtime.c — mk2-C1b silu·b gate */
+HexaVal hexa_farr_rmsnorm_bwd_rows_gpu(HexaVal x_v, HexaVal dxn_v,
+                                       HexaVal r_v, HexaVal c_v);             /* runtime.c — RFC 040 Phase B2 */
+HexaVal hexa_farr_adamw_step_gpu(HexaVal w_v, HexaVal m_v, HexaVal v_v,
+                                 HexaVal g_v, HexaVal n_v, HexaVal lr_v,
+                                 HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                                 HexaVal wd_v, HexaVal step_v);               /* runtime.c — RFC 040 Phase B2 */
+extern HexaVal farr_matmul_t_gpu;                                              /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_outer_gpu;                                                 /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_mul_gpu;                                                   /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_silu_gpu;                                                  /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_silu_grad_gpu;                                             /* runtime.c — RFC 040 fn carrier */
+extern HexaVal farr_silu_gate_gpu;                                             /* runtime.c — mk2-C1b fn carrier */
+extern HexaVal farr_rmsnorm_bwd_rows_gpu;                                      /* runtime.c — RFC 040 fn carrier */
+HexaVal farr_adamw_step_gpu(HexaVal w, HexaVal m, HexaVal v, HexaVal g,
+                            HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
+                            HexaVal eps, HexaVal wd, HexaVal step_t);          /* runtime.c — RFC 040 Phase B2 (11-arg direct) */
+
 #endif /* HEXA_RUNTIME_H */

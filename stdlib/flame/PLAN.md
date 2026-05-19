@@ -1821,3 +1821,58 @@ builtin → runtime.c `#ifdef HEXA_CUDA` dim-gate 가능 (hexa
 
 cross-link: 본 PLAN mk2 결정 절 · README.md Benchmark ·
 design.md Decision 11 · [[flame-general-pytorch-replacement-goal]].
+
+---
+
+## 2026-05-19 mk2-closure port → rfc043-hexa-torch (worktree-agent-ab8967615e174dc79)
+
+**Cycle**: Port `rfc043-flame-camp` mk2-closure stack to
+`rfc043-hexa-torch` via worktree-agent-ab8967615e174dc79.
+
+**Source**: rfc043-flame-camp HEAD = `3ee28d30` (mk2 closure record);
+measured PASS = `e030fa31` (d768·12L step1=114s on A100 SXM4).
+
+**g3-honest scope**: CPU build PASS only. GPU fire NOT performed in this
+cycle. NO PyTorch comparison stated (gpu/HANDOFF.md retraction respected —
+the "2.95× faster" headline was a unit mismatch, RETRACTED).
+
+**Files modified (worktree branch)**:
+- `stdlib/flame/ag_tape.hexa` (107-line diff): mk2-C1/C2/C4/C4-bwd/C5
+  forge routing replaces host loops — `ag_add`, `ag_silu_gate`,
+  `ag_rmsnorm_mh`, `ag_attn_dt` fwd/bwd, `ag_linear` bwd
+  (`farr_matmul` + `farr_transpose_2d_gpu` instead of `nn_linear_bwd`
+  3-loop), `_ag_reg_acc` (`farr_add_inplace_gpu`).
+- `stdlib/flame/flame_d768_12L_agtape_fire.hexa` (157-line diff):
+  device slice/transpose/zero/add-inplace/lcg builtins, `_local_*`
+  driver helpers bypassing main-repo flatten resolution,
+  `farr_set_out_disposition(1)` device-keep toggle.
+- `stdlib/flame/nn_lib.hexa` + `decoder_block_lib.hexa`: RFC 059 anchor docs.
+- `self/runtime.c` (+526 lines): mk2 CPU helpers (`_hx_dt_sqrt_d` +
+  8 `_hx_farr_*_cpu`) + 8 dispatchers + 3-arg carrier registrations,
+  all `#pragma STDC FP_CONTRACT OFF/DEFAULT` wrapped + HEXA_CUDA gated.
+- `self/runtime.h` (+39 lines): extern carriers + bare-fn prototypes
+  for mk2 builtins, including `farr_set_out_disposition` extern that
+  the d768 driver's `hexa_call1` link relies on.
+
+**CPU build verification**:
+```
+HEXA_LANG=<worktree-root> HEXA_MAC_BUILD_OK=1 \
+  /Users/ghost/.hx/bin/hexa build \
+  stdlib/flame/flame_d768_12L_agtape_fire.hexa -o build/d768_t
+```
+→ `OK: built build/d768_t` (531 KB Mach-O arm64; launches cleanly).
+
+**Note on flatten resolution**: hexa CLI's `resolve_hxroot()` reads
+`HEXA_LANG` env. Without it, builds default to main repo
+`/Users/ghost/core/hexa-lang`. To exercise worktree edits via CLI,
+callers MUST set `HEXA_LANG=<worktree-root>`. The dispatch script
+derives `REPO_ROOT` from its own location.
+
+**READY_TO_FIRE state**: `state/mk2_port_2026_05_19/READY_TO_FIRE.md`.
+
+**Next**: parent merges worktree branch to rfc043-hexa-torch, fires
+`bash tool/dispatch_agtape_d768_fire.sh`. Gate = step1 wall ≤ 437.9s
+ABSOLUTE + GPU util > 50%.
+
+cross-link: README.md Benchmark · [[flame-mk2-cycle-2026-05-19]]
+(retraction-aware) · [[flame-general-pytorch-replacement-goal]].

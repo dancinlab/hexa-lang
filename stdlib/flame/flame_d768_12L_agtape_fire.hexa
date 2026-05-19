@@ -46,32 +46,80 @@ use "stdlib/flame/decoder_lib"
 use "stdlib/flame/train_lib"
 use "stdlib/flame/decoder_block_lib"
 
-// ── transpose helpers (verbatim from flame_ag_tape_test.hexa L51,L84) ──
-// transpose a [d_out·d_in] slice of `src` at `off` -> dst[d_in·d_out]
-fn agt_wT_slice(src: int, off: int, dst: int, d_out: int, d_in: int) {
-    let mut r = 0
-    while r < d_out {
-        let mut c = 0
-        while c < d_in {
-            t_set(dst, c * d_out + r, t_get(src, off + r * d_in + c))
-            c = c + 1
-        }
-        r = r + 1
+// ── local decoder init (mk2-C5) ─────────────────────────────────────
+// Bypass nn_decoder_init from train_lib.hexa because the flatten path
+// resolution picks main repo's stdlib version (without the C5 forge
+// LCG fill). Defining the helpers in the driver itself ensures
+// worktree-edits land in the trainer artifact.
+//
+// `_local_fill_dt_lcg` directly calls the forge builtin (host C loop
+// inside the runtime wrapper — ~5ns/iter for 100M elements ≈ 500ms,
+// vs the prior host-scalar hexa `farr_set` loop at ~1μs/element = 100s+).
+fn _local_fill_dt_lcg(dst: int, dst_off: int, n: int,
+                      seed: int, scale: float) {
+    let _ = farr_fill_dt_lcg_gpu(dst, dst_off, n, seed, scale)
+}
+
+fn _local_fill_constant(dst: int, dst_off: int, n: int, value: float) {
+    // small-range (~d=768) constant fill — kept as host scalar loop
+    // (negligible vs the large random fills which now go through the
+    // forge builtin above).
+    let mut i = 0
+    while i < n {
+        let _ = farr_set(dst, dst_off + i, value)
+        i = i + 1
     }
 }
 
-// transpose src[d_in·d_out] (nn-layout grad) -> dst[off + r·d_in + c]
-// (block [out·in] layout) — dst[off+r·d_in+c] = src[c·d_out+r].
-fn agt_wT_off(src: int, dst: int, off: int, d_out: int, d_in: int) {
-    let mut r = 0
-    while r < d_out {
-        let mut c = 0
-        while c < d_in {
-            t_set(dst, off + r * d_in + c, t_get(src, c * d_out + r))
-            c = c + 1
-        }
-        r = r + 1
+fn _local_decoder_init(M: int, seed: int,
+                       T: int, d: int, nh: int, nkv: int, h: int,
+                       V: int, n_layer: int) {
+    let oTemb = m_off_tok_emb(d, nh, nkv, h, V, n_layer)
+    let oGF = m_off_gF(d, nh, nkv, h, V, n_layer)
+    _local_fill_dt_lcg(M, oTemb, V * d, seed + 7, 0.05)
+    _local_fill_constant(M, oGF, d, 1.0)
+    let kvd = nkv * (d / nh)
+    let mut l = 0
+    while l < n_layer {
+        let bp_off = m_off_block(l, d, nh, nkv, h, V, n_layer)
+        let block_seed = seed + 1000 + l * 137
+        _local_fill_constant(M, bp_off + bp_off_g1(d, nh, nkv, h), d, 1.0)
+        _local_fill_dt_lcg(M, bp_off + bp_off_Wq(d, nh, nkv, h),
+                           d * d, block_seed + 11, 0.2)
+        _local_fill_dt_lcg(M, bp_off + bp_off_Wk(d, nh, nkv, h),
+                           kvd * d, block_seed + 23, 0.2)
+        _local_fill_dt_lcg(M, bp_off + bp_off_Wv(d, nh, nkv, h),
+                           kvd * d, block_seed + 37, 0.2)
+        _local_fill_dt_lcg(M, bp_off + bp_off_Wo(d, nh, nkv, h),
+                           d * d, block_seed + 53, 0.2)
+        _local_fill_constant(M, bp_off + bp_off_g2(d, nh, nkv, h), d, 1.0)
+        _local_fill_dt_lcg(M, bp_off + bp_off_Wg(d, nh, nkv, h),
+                           h * d, block_seed + 71, 0.2)
+        _local_fill_dt_lcg(M, bp_off + bp_off_Wu(d, nh, nkv, h),
+                           h * d, block_seed + 89, 0.2)
+        _local_fill_dt_lcg(M, bp_off + bp_off_Wd(d, nh, nkv, h),
+                           d * h, block_seed + 103, 0.2)
+        l = l + 1
     }
+}
+
+// ── transpose helpers — mk2-C5 (2026-05-19): replace the host scalar
+// t_get/t_set loops with single farr_transpose_2d_gpu builtin calls.
+// Semantics preserved (dst[c·d_out+r] = src[soff + r·d_in + c]) and
+// byte-eq is automatic (no FP arithmetic — pure memory rearrangement).
+// Eliminates the ~412M per-step host-scalar HexaVal-box prelude that
+// timed out mk2-FINAL #1 (901s, 14min GPU 0% idle).
+fn agt_wT_slice(src: int, off: int, dst: int, d_out: int, d_in: int) {
+    let _ = farr_transpose_2d_gpu(src, off, dst, 0, d_out, d_in)
+}
+
+// agt_wT_off: src[d_in·d_out] (nn-layout grad) -> dst[off + r·d_in + c].
+// The inverse-direction transpose. We swap d_out <-> d_in so the same
+// kernel formula (dst[c·D_OUT + r] = src[s + r·D_IN + c]) realises
+// dst[off + r·d_in + c] = src[c·d_out + r]. Just instantiate with
+// (D_OUT=d_in, D_IN=d_out, soff=0, doff=off).
+fn agt_wT_off(src: int, dst: int, off: int, d_out: int, d_in: int) {
+    let _ = farr_transpose_2d_gpu(src, 0, dst, off, d_in, d_out)
 }
 
 // ── _agt_decoder_step (verbatim from flame_ag_tape_test.hexa L101-245) ─
@@ -85,12 +133,13 @@ fn _agt_decoder_step(M: int, MgOut: int, idsf: int, target: int,
     let kvd = nkv * hd
     let oTE = m_off_tok_emb(d, nh, nkv, h, V, NL)
     let oGF = m_off_gF(d, nh, nkv, h, V, NL)
+    // mk2-C5: replace M→tokE / M→gF host scalar copies with single
+    // device-side slice copies. ~197K + 768 scalar t_get/t_set calls
+    // per _agt_decoder_step call collapse to 2 cudaMemcpy launches.
     let tokE = t_zeros(V * d)
-    let mut te = 0
-    while te < V * d { t_set(tokE, te, t_get(M, oTE + te)); te = te + 1 }
+    let _ = farr_copy_slice_gpu(M, oTE, tokE, 0, V * d)
     let gF = t_zeros(d)
-    let mut gf = 0
-    while gf < d { t_set(gF, gf, t_get(M, oGF + gf)); gf = gf + 1 }
+    let _ = farr_copy_slice_gpu(M, oGF, gF, 0, d)
     let Lg1 = t_zeros(NL)
     let Lg2 = t_zeros(NL)
     let LWq = t_zeros(NL)
@@ -110,12 +159,10 @@ fn _agt_decoder_step(M: int, MgOut: int, idsf: int, target: int,
         let mob = m_off_block(l, d, nh, nkv, h, V, NL)
         let g1t = t_zeros(d)
         let g2t = t_zeros(d)
-        let mut gc = 0
-        while gc < d {
-            t_set(g1t, gc, t_get(M, mob + bp_off_g1(d, nh, nkv, h) + gc))
-            t_set(g2t, gc, t_get(M, mob + bp_off_g2(d, nh, nkv, h) + gc))
-            gc = gc + 1
-        }
+        // mk2-C5: M→g1t / M→g2t device slice copies (was 2·d scalar
+        // t_get/t_set per layer × 12 layers = 18,432 box ops).
+        let _ = farr_copy_slice_gpu(M, mob + bp_off_g1(d, nh, nkv, h), g1t, 0, d)
+        let _ = farr_copy_slice_gpu(M, mob + bp_off_g2(d, nh, nkv, h), g2t, 0, d)
         let WqL = t_zeros(d * d)
         let WkL = t_zeros(d * kvd)
         let WvL = t_zeros(d * kvd)
@@ -182,26 +229,24 @@ fn _agt_decoder_step(M: int, MgOut: int, idsf: int, target: int,
     }
     ag_backward_reg(tp, logits, seed)
     // gather → dense MgOut
+    // mk2-C5: device zero-fill + device slice copies. The 100M-double
+    // MgOut zero and the V·d + d + per-layer 2·d scalar gather all
+    // collapse to a handful of cudaMemset / cudaMemcpy launches.
     let mtot = m_total(d, nh, nkv, h, V, NL)
-    let mut z = 0
-    while z < mtot { t_set(MgOut, z, 0.0); z = z + 1 }
+    let _ = farr_zero_slice_gpu(MgOut, 0, mtot)
     let gte = ag_grad(tp, tokE)
-    let mut a1 = 0
-    while a1 < V * d { t_set(MgOut, oTE + a1, t_get(gte, a1)); a1 = a1 + 1 }
+    let _ = farr_copy_slice_gpu(gte, 0, MgOut, oTE, V * d)
     let ggf = ag_grad(tp, gF)
-    let mut a2 = 0
-    while a2 < d { t_set(MgOut, oGF + a2, t_get(ggf, a2)); a2 = a2 + 1 }
+    let _ = farr_copy_slice_gpu(ggf, 0, MgOut, oGF, d)
     let mut lb = 0
     while lb < NL {
         let mob = m_off_block(lb, d, nh, nkv, h, V, NL)
         let gg1 = ag_grad(tp, to_int(t_get(Lg1, lb)))
         let gg2 = ag_grad(tp, to_int(t_get(Lg2, lb)))
-        let mut c = 0
-        while c < d {
-            t_set(MgOut, mob + bp_off_g1(d, nh, nkv, h) + c, t_get(gg1, c))
-            t_set(MgOut, mob + bp_off_g2(d, nh, nkv, h) + c, t_get(gg2, c))
-            c = c + 1
-        }
+        let _ = farr_copy_slice_gpu(gg1, 0, MgOut,
+                                    mob + bp_off_g1(d, nh, nkv, h), d)
+        let _ = farr_copy_slice_gpu(gg2, 0, MgOut,
+                                    mob + bp_off_g2(d, nh, nkv, h), d)
         agt_wT_off(ag_grad(tp, to_int(t_get(LWq, lb))), MgOut,
                    mob + bp_off_Wq(d, nh, nkv, h), d, d)
         agt_wT_off(ag_grad(tp, to_int(t_get(LWk, lb))), MgOut,
@@ -278,7 +323,7 @@ while s < nsamp {
 let m_size = m_total(d, nh, nkv, h, V, n_layer)
 print("  model size: "); print(m_size); println(" doubles")
 let M = t_zeros(m_size)
-nn_decoder_init(M, 42, T, d, nh, nkv, h, V, n_layer)
+_local_decoder_init(M, 42, T, d, nh, nkv, h, V, n_layer)
 let Mm = t_zeros(m_size)
 let Mv = t_zeros(m_size)
 let Mg = t_zeros(m_size)
@@ -308,13 +353,20 @@ while s_init < nsamp {
 }
 print("  init epoch gn2: "); println(gn2_init_epoch)
 
+// RFC 056 §6.4 mk2-C3: enable FORGE_OUT_DEVICE_KEEP — forge op outputs
+// stay device-resident, the next forge op's _h2d sees them via the skip
+// path, lazy-D2H in farr_get materialises bytes on host only when a host
+// reader actually touches them. No-op under no-CUDA (returns 0).
+let _ = farr_set_out_disposition(1)
+
 // grad-accumulate-then-step loop with per-step wall (corpus_test pattern)
 let mut step = 1
 let mut gn2_last = gn2_init_epoch
 let mut wall_prev = to_int(to_string(exec("date +%s")).trim())
 while step <= n_steps {
-    let mut z = 0
-    while z < m_size { let _ = farr_set(Mg_acc, z, 0.0); z = z + 1 }
+    // mk2-C5: device zero of Mg_acc (100M-double cudaMemset, ~10ms
+    // on A100 vs ~10min host scalar t_set loop).
+    let _ = farr_zero_slice_gpu(Mg_acc, 0, m_size)
     let mut gn2_step_epoch = 0.0
     let mut s_e = 0
     while s_e < nsamp {
@@ -324,12 +376,11 @@ while step <= n_steps {
         let g = _agt_decoder_step(M, Mg, ids_scratch, tt, cos_tab, sin_tab,
                                   T, d, nh, nkv, h, V, n_layer)
         gn2_step_epoch = gn2_step_epoch + g
-        let mut a = 0
-        while a < m_size {
-            let cur = farr_get(Mg_acc, a)
-            let _ = farr_set(Mg_acc, a, cur + farr_get(Mg, a))
-            a = a + 1
-        }
+        // mk2-C5: device in-place elementwise add. Mg_acc[i] += Mg[i]
+        // for all m_size = 100M elements via __dadd_rn (byte-eq with
+        // host `cur + farr_get(Mg, a)`). Was the second largest host-
+        // scalar hot loop (4 samples × 100M × HexaVal box overhead).
+        let _ = farr_add_inplace_gpu(Mg_acc, Mg, m_size)
         s_e = s_e + 1
     }
     nn_decoder_adamw_step(M, Mg_acc, Mm, Mv, m_size, lr, b1, b2, eps_a, wd, step)
