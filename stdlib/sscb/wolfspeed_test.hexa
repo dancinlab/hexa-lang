@@ -1,0 +1,134 @@
+#!hexa strict
+// stdlib/sscb/wolfspeed_test.hexa — round-trip selftest for
+//                                   wolfspeed_parse_lib(fixture)
+//
+// @since 2026-05-20 (κ-40)
+// @gate  measurement-gate OPEN — this selftest validates STRUCTURAL
+//        parser correctness only (n_pins, n_elements, n_params, n_models).
+//        It does NOT validate device-physics fidelity — that requires a
+//        real datasheet parity check + DEVSIM TCAD comparison (Stage 3-4,
+//        deferred).
+
+import "stdlib/sscb/wolfspeed"
+
+fn _assert_eq_int(label: str, got: int, want: int, ok: int) -> int {
+    if got == want {
+        println("  ✓ " + label + " = " + str(got))
+        return ok
+    }
+    println("  ✗ " + label + ": got " + str(got) + " want " + str(want))
+    return 0
+}
+
+fn _assert_eq_str(label: str, got: str, want: str, ok: int) -> int {
+    if got == want {
+        println("  ✓ " + label + " = \"" + got + "\"")
+        return ok
+    }
+    println("  ✗ " + label + ": got \"" + got + "\" want \"" + want + "\"")
+    return 0
+}
+
+fn main() -> int {
+    println("== wolfspeed_test :: round-trip fixture ==")
+
+    let fixture = "stdlib/sscb/fixtures/sample_sic_mosfet.lib"
+    let s = wolfspeed_parse_lib(fixture)
+    let mut ok = 1
+
+    // .SUBCKT header: name + 5 pins (D G S TJ TC), all case-folded.
+    ok = _assert_eq_str("subckt.name", s.name, "sample_sic_1200v_250a", ok)
+    ok = _assert_eq_int("subckt.pins.count", len(s.pins), 5, ok)
+    if len(s.pins) >= 5 {
+        ok = _assert_eq_str("pins[0]", s.pins[0], "d",  ok)
+        ok = _assert_eq_str("pins[1]", s.pins[1], "g",  ok)
+        ok = _assert_eq_str("pins[2]", s.pins[2], "s",  ok)
+        ok = _assert_eq_str("pins[3]", s.pins[3], "tj", ok)
+        ok = _assert_eq_str("pins[4]", s.pins[4], "tc", ok)
+    }
+
+    // .PARAM count = 6 (rg_int, ld_pkg, ls_pkg, lg_pkg, cds_par, rth_jc).
+    ok = _assert_eq_int("params.count", len(s.params), 6, ok)
+    ok = _assert_eq_str("param[rg_int]",  wolfspeed_lookup_param(s, "rg_int"),  "1.8",      ok)
+    ok = _assert_eq_str("param[ld_pkg]",  wolfspeed_lookup_param(s, "ld_pkg"),  "5n",       ok)
+    ok = _assert_eq_str("param[ls_pkg]",  wolfspeed_lookup_param(s, "ls_pkg"),  "8n",       ok)
+    ok = _assert_eq_str("param[lg_pkg]",  wolfspeed_lookup_param(s, "lg_pkg"),  "12n",      ok)
+    ok = _assert_eq_str("param[cds_par]", wolfspeed_lookup_param(s, "cds_par"), "220p",     ok)
+    ok = _assert_eq_str("param[rth_jc]",  wolfspeed_lookup_param(s, "rth_jc"),  "0.24",     ok)
+
+    // Element count = 8 (Ld, Ls, Lg, Rgi, Cds, M1, Bpd, Rth).
+    ok = _assert_eq_int("elements.count", len(s.elements), 8, ok)
+
+    // Spot-check the MOSFET card (4-node + model name as value).
+    let mut found_m1 = 0
+    let mut i = 0
+    while i < len(s.elements) {
+        let e = s.elements[i]
+        if e.kind == "m" && e.name == "1" {
+            found_m1 = 1
+            ok = _assert_eq_int("M1.nodes.count", len(e.nodes), 4, ok)
+            if len(e.nodes) >= 4 {
+                ok = _assert_eq_str("M1.nodes[0]", e.nodes[0], "d1", ok)
+                ok = _assert_eq_str("M1.nodes[1]", e.nodes[1], "g1", ok)
+                ok = _assert_eq_str("M1.nodes[2]", e.nodes[2], "s1", ok)
+                ok = _assert_eq_str("M1.nodes[3]", e.nodes[3], "s1", ok)
+            }
+            ok = _assert_eq_str("M1.value", e.value, "sic_nmos_intrinsic", ok)
+        }
+        i = i + 1
+    }
+    ok = _assert_eq_int("M1.found", found_m1, 1, ok)
+
+    // Spot-check the B-source (behavioral) — 2-node + verbatim expression.
+    let mut found_bpd = 0
+    let mut j = 0
+    while j < len(s.elements) {
+        let e = s.elements[j]
+        if e.kind == "b" && e.name == "pd" {
+            found_bpd = 1
+            ok = _assert_eq_int("Bpd.nodes.count", len(e.nodes), 2, ok)
+            if len(e.nodes) >= 2 {
+                ok = _assert_eq_str("Bpd.nodes[0]", e.nodes[0], "tj", ok)
+                ok = _assert_eq_str("Bpd.nodes[1]", e.nodes[1], "tc", ok)
+            }
+            // value is the rest, joined by single spaces; SPICE lowered.
+            ok = _assert_eq_str("Bpd.value", e.value, "i = v(d1,s1) * i(m1)", ok)
+        }
+        j = j + 1
+    }
+    ok = _assert_eq_int("Bpd.found", found_bpd, 1, ok)
+
+    // .MODEL count = 1; the one model is a folded VDMOS card.
+    ok = _assert_eq_int("submodels.count", len(s.submodels), 1, ok)
+    if len(s.submodels) >= 1 {
+        let m = s.submodels[0]
+        ok = _assert_eq_str("model.name", m.name, "sic_nmos_intrinsic", ok)
+        ok = _assert_eq_str("model.kind", m.kind, "vdmos", ok)
+        ok = _assert_eq_int("model.is_vdmos", wolfspeed_is_vdmos(m), 1, ok)
+        // VDMOS param count: LEVEL, VTO, KP, LAMBDA, RS, RD, CGSO, CGDO,
+        // CGBO, IS, N, BV, IBV, MTRIQS, KSUBTHRES = 15.
+        ok = _assert_eq_int("model.params.count", len(m.params), 15, ok)
+        // Spot-check the threshold voltage.
+        let mut found_vto = 0
+        let mut p = 0
+        while p < len(m.params) {
+            if m.params[p].key == "vto" {
+                found_vto = 1
+                ok = _assert_eq_str("vto", m.params[p].value, "3.2", ok)
+            }
+            p = p + 1
+        }
+        ok = _assert_eq_int("vto.found", found_vto, 1, ok)
+    }
+
+    // wolfspeed_model_by_name lookup
+    let look = wolfspeed_model_by_name(s, "SIC_NMOS_INTRINSIC")
+    ok = _assert_eq_str("lookup.name", look.name, "sic_nmos_intrinsic", ok)
+
+    if ok == 1 {
+        println("== wolfspeed_test :: PASS ==")
+        return 0
+    }
+    println("== wolfspeed_test :: FAIL ==")
+    return 1
+}
