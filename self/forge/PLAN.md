@@ -47,6 +47,24 @@ substrate + paradigm + ABI surface 가 coherent 하게 닫혔다는 뜻 — 추�
 | **A Phase 3 torch.compile-equivalent** | torch.compile reduce-overhead = CUDA graphs 동등 path. AOT가 진정 win 하려면 custom kernel quality 가 dispatch elim 보다 dominant 해야 | Open scope | RFC 049 land 후 재평가 |
 | **flame Phase 4-D GPU dispatch land** | flame 측 책임, forge 의 RFC 050 dispatch API 통해 BF16 kernel 호출 | flame session 진행 중 | flame 세션 직접 |
 
+## 0.2 ACTIVE 캠페인 (2026-05-19 — user "3 all go")
+
+forge 일단완성 milestone (§0) 이후, user 가 §0.1 의 3-RFC 묶음을 동시
+greenlight 했다 (2026-05-19 "3 all go"). 이제 §0.1 의 "post-milestone,
+별도 user-gated" 상태가 **ACTIVE** 로 전환된 것은 다음 세 축:
+
+| RFC | Scope | Stage | Cost | 본 cycle 산출 |
+|---|---|---|---|---|
+| **RFC 049** BF16 substrate | `farr_bf16` storage class + `*_bf16_gpu` Tensor Core 커널 + cross-precision determinism. Stage 1 은 이미 measured PASS (9.67× FP64 cuBLAS @ Llama-7B FFN, A100, $0.10) | Stage 2 = 구현 | cost-bearing (fire campaign) | Stage 2 scaffold land (storage class + kernel-entry, $0) |
+| **RFC 052** Hopper combined | BF16 WMMA + DSM cluster combined kernel, sm_90+ | Stage 2 = 1 Hopper fire | ~$5-20 (H100/H200) | scaffold 호환 + fire harness 준비 |
+| **RFC 055** hexa→NVPTX | `compiler/codegen/nvptx_*.hexa` — hexa-native GPU codegen backend (forge endgame). `self/native/gpu_codegen_stub.c` 와 reconcile | Stage 1 = scaffold | $0 (compiler 작업) | backend skeleton land, parse-clean, dispatch 미배선 (zero behavior change) |
+
+**진행 원칙 (instrument-first, g3)**: RFC 049/052 의 heavy fire 전에
+cheap oracle 우선 — Stage 1 커널은 이미 측정됐으므로 Stage 2 는 wiring
+scaffold → 호환 fire harness → 측정 순. RFC 055 는 전부 $0 compiler
+scaffold (codegen body + dispatch wiring 은 후속 cycle). 각 cycle 산출은
+"scaffold landed" / "measured PASS|KILL" 로만 정직 보고 — over-claim 0.
+
 ## 1. 단계 (staged — substrate parity → exceed)
 
 ### Phase 0 — 보존 + 통합 (paired with flame Phase 0) ⚠️ 선결, $0
@@ -252,6 +270,10 @@ mandatory (`g_blue_closed_mandate`).
 ## 진행 로그
 
 (append-only)
+
+### 2026-05-19 — §0.2 ACTIVE 캠페인 선언 — RFC 049 Stage 2 + RFC 052 + RFC 055 동시 greenlight
+
+User directive "3 all go" — §0.1 의 3-RFC 묶음(BF16 substrate / Hopper combined / hexa→NVPTX)을 동시 ACTIVE 로 전환. §0.2 캠페인 표 + instrument-first 원칙 명문화. 본 cycle 산출: (1) RFC 055 — `compiler/codegen/nvptx_*.hexa` backend skeleton scaffold (parse-clean, dispatch 미배선, zero behavior change; `gpu_codegen_stub.c` reconcile), $0. (2) RFC 049 Stage 2 — `farr_bf16` storage class + `*_bf16_gpu` kernel-entry scaffold in `self/cuda/runtime_cuda.c` (compile-clean; Stage 1 커널은 이미 measured PASS 9.67×), $0. (3) RFC 052 — combined-kernel scaffold 호환 + Hopper fire harness 준비. heavy fire 는 별도 measured step (instrument-first — cheap oracle 우선). 측정 변화 0 — scaffold cycle. over-claim 0: "scaffold landed" 로만 보고.
 
 ### 2026-05-19 — forge 일단완성 milestone 선언 (기존 plan 범위 내 coherent closure)
 
