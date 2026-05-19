@@ -90,11 +90,10 @@ fn get_keywords() -> [string] {
         "mod", "use", "pub", "crate",
         "own", "borrow", "move", "drop",
         "spawn", "atomic",
-        "effect", "handle", "resume", "pure",
+        "handle", "resume", "pure",
         "proof", "assert", "invariant", "theorem",
         "macro", "where", "comptime",
-        "try", "catch", "throw", "panic", "recover",
-        "intent", "generate", "verify"
+        "try", "catch", "throw", "panic", "recover"
     ]
 }
 
@@ -712,7 +711,7 @@ fn keyword_doc(kw: string) -> string {
     if kw == "trait" { return "Trait declaration: `trait Name { fn method(...) -> Ret }`" }
     if kw == "impl" { return "Implementation block: `impl Trait for Type { ... }`" }
     if kw == "enum" { return "Enum declaration: `enum Name { Variant, ... }`" }
-    if kw == "effect" { return "Declare an algebraic effect: `effect Name { ... }`" }
+    if kw == "effect" { return "Declare an algebraic effect: `@effect Name { ... }`" }
     return ""
 }
 

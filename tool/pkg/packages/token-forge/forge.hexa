@@ -23,18 +23,18 @@ let UPSTREAM = "https://api.anthropic.com"
 //  EFFECTS
 // ═══════════════════════════════════════════════════════════════════════
 
-effect LLMCall {
+@effect LLMCall {
     fn call(prompt: str) -> str
     fn call_stream(prompt: str) -> str
 }
 
-effect FileSystem {
+@effect FileSystem {
     fn read(path: str) -> str
     fn write(path: str, content: str) -> void
     fn glob(pattern: str) -> [str]
 }
 
-effect HttpProxy {
+@effect HttpProxy {
     fn listen(port: int) -> void
     fn forward(url: str, body: str, headers: str) -> str
 }
