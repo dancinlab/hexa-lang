@@ -243,6 +243,14 @@
   cross-ref = "[@x_handoff] downstream→upstream 흐름 spec · feedback memory `shared worktree branch hazard`"
   @> AGENTS.md
 
+@D g_stdlib_ownership := "hexa-lang owns ALL stdlib — downstream repos point, never copy" :: governance [required deny:write d=2026-05-19 active]
+  rule = "모든 stdlib/ 모듈은 hexa-lang 소유이며 hexa-lang 에만 존재한다 — hexa-lang 이 stdlib 의 단일 SSOT. 다운스트림 repo (demiurge, wilson, echoes, anima, phanes, 모든 hexa-*) 는 stdlib 모듈을 POINTER (cross-link · import 경로) 로만 참조한다. 복사·vendoring·fork 금지."
+  why = "stdlib 모듈당 SSOT 1개 = drift 0. 다운스트림 복사본은 조용히 발산하지만 pointer 는 발산할 수 없다. 특히 demiurge 는 pointer — hexa-lang stdlib 를 참조할 뿐 vendoring 하지 않는다 (demiurge = pointer, hexa-lang = SSOT)."
+  apply = "다운스트림이 stdlib 변경이 필요하면 inbox/patches/ 로 file (g7) — 자기 트리에 stdlib/<mod>.hexa 복사 금지. 흡수된 외부 라이브러리 (qrng · qmirror · sim-universe) 는 흡수에 의해 hexa-lang stdlib 가 된 것 — 이제 hexa-lang 소유이며 dual-home 아님."
+  authority = "user directive 2026-05-19 'hexa-lang=SSOT, demiurge=pointer · 모든 stdlib 는 hexa-lang 소유'"
+  cross-ref = "@I id002 upstream-position · @D g7 inbox-patches-pipeline · @F f3 consumer-direct-edit"
+  @> AGENTS.md
+
 # ─── §4 Forbidden patterns ───────────────────────────────────────────
 
 @F f1 := "lattice-fit-on-external-language" :: governance [required deny:write]
