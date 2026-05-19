@@ -423,11 +423,17 @@ fn _csi_final_to_event(params: string, final_byte: int) -> array {
         // CSI u — kitty keyboard protocol: ESC[<codepoint>;<modifier>u
         // (e.g. ESC[13;2u = Shift+Enter). Modifier bitmap follows xterm
         // modifyOtherKeys: 1=base, 2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, ...
-        // We decode Enter (cp 13) with mod flags so terminals that emit kitty
-        // CSI u (ghostty / kitty / WezTerm / recent iTerm2 with proto enabled)
-        // produce a Shift+Enter event without needing the ESC+CR mapping.
-        // Other codepoints fall through as ["err", "csi-u-unsupported-cp"].
-        // (wilson 2026-05-13, see inbox/patches/wilson-shift-enter-newline.md.)
+        // We decode arbitrary ESC[<codepoint>;<modifier>u into a normal key
+        // event (mirroring the raw-mode path at lines 267-281): special keys
+        // (Enter/Tab/Backspace/Esc) map to their negative codes, printable
+        // codepoints emit ch via from_char_code (UTF-8; NOT chr — chr
+        // truncates to cp & 0xFF per RFC chr-byte-vs-codepoint-asymmetry,
+        // see L296), and C0 Ctrl+letter codepoints map to lowercase+ctrl=1
+        // so downstream matches the raw `b + 96` encoding. The protocol is
+        // push-only (terminals send EVERY key as CSI u once ESC[>1u is set),
+        // so an Enter-only stub silently dropped Ctrl+C / Ctrl+D / Esc / etc.
+        // (wilson 2026-05-13 inbox/patches/wilson-shift-enter-newline.md +
+        //  2026-05-19 inbox/patches/csi-u-modifier-keys-decoder-gap.md.)
         let _u_parts = _split_semi(params)
         let _u_cp = if len(_u_parts) > 0 { _atoi(to_string(_u_parts[0])) } else { _atoi(params) }
         let _u_mod = if len(_u_parts) >= 2 { _atoi(to_string(_u_parts[1])) } else { 1 }
@@ -435,7 +441,25 @@ fn _csi_final_to_event(params: string, final_byte: int) -> array {
         let _u_shift = if (_u_eff & 1) != 0 { 1 } else { 0 }
         let _u_alt   = if (_u_eff & 2) != 0 { 1 } else { 0 }
         let _u_ctrl  = if (_u_eff & 4) != 0 { 1 } else { 0 }
-        if _u_cp == 13 { return ["key", -1, _u_ctrl, _u_alt, _u_shift, ""] }
+        // Special keys first (codepoints that don't map to a printable ch).
+        if _u_cp == 13 { return ["key", -1, _u_ctrl, _u_alt, _u_shift, ""] }   // Enter
+        if _u_cp == 9  { return ["key", -2, _u_ctrl, _u_alt, _u_shift, ""] }   // Tab
+        if _u_cp == 127 || _u_cp == 8 {
+            return ["key", -3, _u_ctrl, _u_alt, _u_shift, ""]                  // Backspace
+        }
+        if _u_cp == 27 { return ["key", -4, _u_ctrl, _u_alt, _u_shift, ""] }   // Esc
+        // Printable letters / digits / punctuation. from_char_code encodes
+        // the full Unicode scalar as UTF-8 (1..4 bytes).
+        if _u_cp >= 32 && _u_cp < 0x110000 {
+            return ["key", _u_cp, _u_ctrl, _u_alt, _u_shift, from_char_code(_u_cp)]
+        }
+        // C0 control range (1..26, less the handful above) — Ctrl+letter via
+        // CSI u. Map to the lowercase letter code with ctrl=1 so downstream
+        // matches the raw-mode encoding (`b + 96` mapping at line 274).
+        if _u_cp >= 1 && _u_cp <= 26 {
+            let letter = _u_cp + 96
+            return ["key", letter, 1, _u_alt, _u_shift, ""]
+        }
         return ["err", "csi-u-unsupported-cp"]
     }
     if final_byte == 126 {

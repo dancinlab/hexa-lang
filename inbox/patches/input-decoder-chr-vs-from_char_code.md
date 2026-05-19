@@ -1,5 +1,13 @@
 # Input decoder uses byte-truncating `chr()` in codepoint→UTF-8 paths — Korean/CJK/emoji rendered as ASCII garbage
 
+> **Status:** `resolved-ssot 2026-05-19` — already landed in tree by a parallel
+> session/sister-patch: self/tui/input.hexa:304 (raw-UTF8 path) + :491
+> (modifyOtherKeys CSI 27 branch) both already emit `from_char_code(codepoint)`
+> with RFC-referencing comments (verified by grep — no `chr(cp)` remains at
+> these sites; only the byte-synthesis `chr(b)` at L616/L624 which is correct).
+> Decoder cluster B confirmed the fix is in-tree; no further edit needed for
+> this patch. Parse-gate clean. Binary promote = standard separate deploy step.
+
 **Layer:** `self/tui/input.hexa` — L2 input decode
 **Files:** `self/tui/input.hexa:300` (raw UTF-8 path), `:489` (modifyOtherKeys CSI 27 branch)
 **Sister patch:** `inbox/patches/modifyotherkeys-non-ascii-decoder-gap.md` (commit `bf943479`,
