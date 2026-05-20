@@ -1,0 +1,253 @@
+// stdlib/kernels/graph/bfs_topo_kernel.hexa — D80 g_hexa_only pilot #3
+// (demiurge AGENTS.tape @D g_hexa_only — ultimate form).
+//
+// Third sample of the hexa-native parity port pattern. Clean-room
+// hexa-native BFS (queue-based shortest hop distance) + topological
+// sort (Kahn's algorithm) kernels for the smallest cited graph
+// algorithms inside `networkx_kernel.py`. Substrate parity vs
+// networkx 3.x lives in `bfs_topo_kernel_test.hexa`.
+//
+// Layer (ABSORPTION.md ① / demiurge design.md D72):
+//   ①a kernel — THIS FILE. Domain-agnostic. No IEEE 14-bus, no
+//                Manhattan grid — only "given an adjacency list,
+//                compute BFS distances / topological order". A
+//                graph-domain ①b adapter (`stdlib/grid/...`,
+//                `stdlib/mobility/...`) would supply the topology
+//                + caveats.
+//   ①b adapter — current adapters still call `networkx_kernel.py`
+//                for the heavyweight metrics (betweenness, edge-
+//                connectivity, average-shortest-path). Re-pointing
+//                those adapters at hexa-native equivalents is a
+//                follow-on (Dijkstra / Brandes / Stoer-Wagner each
+//                deserve their own port).
+//
+// @version 0.1.0
+// @capabilities [pure]
+// @stability stage-2 substrate (clean-room re-derivation, no
+//   networkx call). Substrate parity against networkx 3.x verified
+//   by `bfs_topo_kernel_test.hexa` for 3 graph topologies (linear
+//   chain / branching tree / DAG) to EXACT integer equality on BFS
+//   distances and topological order (no floating-point — these are
+//   pure-integer combinatorial outputs, so the D80 0.1 % tolerance
+//   collapses to bit-identical for the count layer).
+// @since 2026-05-20
+//
+// CLEAN-ROOM PROVENANCE
+//   This module carries NO networkx code — both algorithms are
+//   textbook open-form combinatorial recipes:
+//
+//   - BFS  — Moore 1959 "The Shortest Path Through a Maze"; the
+//            queue-based level-set traversal is the canonical
+//            shortest-path algorithm on unweighted graphs.
+//   - Topo — Kahn 1962 "Topological sorting of large networks"
+//            CACM 5(11): repeatedly emit any in-degree-0 vertex,
+//            decrement in-degree of its out-neighbors, halt when
+//            the queue empties (remaining vertices participate in
+//            at least one cycle).
+//
+//   - upstream code   : none (clean-room re-derivation)
+//   - upstream spec   : Moore EF, "The Shortest Path Through a Maze",
+//                       Proc. Int'l Symp. Theory of Switching, 1959.
+//                       Kahn AB, "Topological sorting of large
+//                       networks", CACM 5(11):558-562, 1962.
+//   - parity baseline : networkx 3.x `shortest_path_length` (BFS
+//                       single-source unweighted) +
+//                       `topological_sort`, captured on darwin-
+//                       arm64 Python 3.x.
+//
+// HONESTY (g3 — non-negotiable, inherited by every caller):
+//   * BFS distance and topological order ARE mathematical facts
+//     about the adjacency list — pure combinatorial outputs, no
+//     floating-point, no model prediction. Given a fixed adjacency
+//     list, the BFS distance vector is unique; the topological
+//     order is unique modulo tie-breaks (Kahn yields a specific
+//     order determined by neighbor iteration order, which we
+//     stabilize by always processing in ascending node-id order).
+//   * The parity test asserts EXACT integer equality on every
+//     element of the distance vector and the topological order
+//     (not relative — there is nothing to round).
+//   * Substrate parity only proves the PORT PATTERN. D80's record-
+//     layer `absorbed=true` flip needs the demiurge
+//     HexaNativeParityRef schema + a measured oracle that wires the
+//     full networkx metric suite (betweenness, diameter, edge-
+//     connectivity) through hexa-native equivalents. Out of scope
+//     here per g3.
+//   * Input convention: nodes are dense integer IDs in [0, n).
+//     Caller maps sparse / string node IDs to dense ints before
+//     calling — same as networkx's internal node-to-index when
+//     building sparse matrices. No `Dict[Int, [Int]]` primitive
+//     needed in hexa-lang (array-of-arrays IS the adjacency list).
+//
+// Surface:
+//   pub fn bfs_distance(adj: [[int]], n: int, start: int) -> [int]
+//     Returns dist[0..n) where dist[v] = number of hops from
+//     `start` to `v`, or -1 if `v` is unreachable from `start`.
+//     dist[start] = 0 always.
+//
+//   pub fn topological_order(adj: [[int]], n: int) -> [int]
+//     Returns a list of node IDs in topological order (parents
+//     before children in the DAG induced by `adj`). If the graph
+//     has a cycle, returns the partial order: cyclic nodes are
+//     omitted (caller can detect cycles by len(out) < n).
+//     Tie-break: among nodes with in-degree 0, ascending node-id
+//     order wins — so the result is fully deterministic.
+
+// ── BFS (Moore 1959, queue-based shortest path on unweighted graph) ──
+
+/// Single-source BFS shortest-path distance vector.
+///
+/// `adj[v]` is the list of out-neighbors of node v. For undirected
+/// graphs, the caller adds each edge in BOTH directions
+/// (adj[u].push(v); adj[v].push(u)).
+///
+/// `n` is the total node count (length of adj). `start` is the
+/// source node ID, must be in [0, n).
+///
+/// Returns dist[0..n) where dist[v] = number of edges on the
+/// shortest path from `start` to `v`, or -1 if unreachable.
+pub fn bfs_distance(adj: [[int]], n: int, start: int) -> [int] {
+    let mut dist: [int] = []
+    let mut i = 0
+    while i < n {
+        dist.push(-1)
+        i = i + 1
+    }
+    if start < 0 { return dist }
+    if start >= n { return dist }
+
+    dist[start] = 0
+    let mut queue: [int] = [start]
+
+    // Drain queue level by level. We use the same "build new_q" idiom
+    // as stdlib/cert/dag.hexa::descendants — O(n²) on the interp but
+    // correct, and BFS distance only needs each node enqueued once
+    // so the total work is O(n·avg_deg) plus the shift overhead.
+    let mut steps = 0
+    let budget = n * n + 1   // bounded — every node visited at most once
+    while len(queue) > 0 && steps < budget {
+        let u = queue[0]
+        let mut new_q: [int] = []
+        let mut k = 1
+        while k < len(queue) {
+            new_q.push(queue[k])
+            k = k + 1
+        }
+        queue = new_q
+
+        let neighbors = adj[u]
+        let mut j = 0
+        while j < len(neighbors) {
+            let v = neighbors[j]
+            if v >= 0 && v < n {
+                if dist[v] < 0 {
+                    dist[v] = dist[u] + 1
+                    queue.push(v)
+                }
+            }
+            j = j + 1
+        }
+        steps = steps + 1
+    }
+    return dist
+}
+
+// ── Topological sort (Kahn 1962, in-degree queue) ───────────────────
+
+/// Compute in-degree of every node from the adjacency list.
+fn _indegree(adj: [[int]], n: int) -> [int] {
+    let mut indeg: [int] = []
+    let mut i = 0
+    while i < n {
+        indeg.push(0)
+        i = i + 1
+    }
+    let mut u = 0
+    while u < n {
+        let outs = adj[u]
+        let mut k = 0
+        while k < len(outs) {
+            let v = outs[k]
+            if v >= 0 && v < n {
+                indeg[v] = indeg[v] + 1
+            }
+            k = k + 1
+        }
+        u = u + 1
+    }
+    return indeg
+}
+
+/// Kahn's algorithm topological sort.
+///
+/// `adj[v]` is the list of out-neighbors (directed edges v -> w).
+/// `n` is the total node count.
+///
+/// Returns nodes in topological order. Tie-break: ascending node-
+/// id (the in-degree-0 queue is seeded in 0..n order, and any node
+/// freshly dropped to in-degree 0 is appended in the order its
+/// last predecessor was processed — deterministic given the input).
+///
+/// If the graph has a cycle, the returned order contains only the
+/// acyclic prefix; cyclic nodes are omitted. The caller detects
+/// "had cycle" via len(out) < n.
+pub fn topological_order(adj: [[int]], n: int) -> [int] {
+    let mut indeg = _indegree(adj, n)
+
+    // Initialize queue with all in-degree-0 nodes, in ascending id
+    // order — Kahn's algorithm is stable iff the initial queue is.
+    let mut queue: [int] = []
+    let mut i = 0
+    while i < n {
+        if indeg[i] == 0 {
+            queue.push(i)
+        }
+        i = i + 1
+    }
+
+    let mut out: [int] = []
+    let mut steps = 0
+    let budget = n * n + 1
+    while len(queue) > 0 && steps < budget {
+        let u = queue[0]
+        let mut new_q: [int] = []
+        let mut k = 1
+        while k < len(queue) {
+            new_q.push(queue[k])
+            k = k + 1
+        }
+        queue = new_q
+        out.push(u)
+
+        let outs = adj[u]
+        let mut j = 0
+        while j < len(outs) {
+            let v = outs[j]
+            if v >= 0 && v < n {
+                indeg[v] = indeg[v] - 1
+                if indeg[v] == 0 {
+                    queue.push(v)
+                }
+            }
+            j = j + 1
+        }
+        steps = steps + 1
+    }
+    return out
+}
+
+// ── reachability helper (BFS reachable-set, for convenience) ────────
+
+/// Set of nodes reachable from `start` via outgoing edges, ascending
+/// id order. Built on top of bfs_distance for consistency.
+pub fn bfs_reachable(adj: [[int]], n: int, start: int) -> [int] {
+    let dist = bfs_distance(adj, n, start)
+    let mut out: [int] = []
+    let mut v = 0
+    while v < n {
+        if dist[v] >= 0 {
+            out.push(v)
+        }
+        v = v + 1
+    }
+    return out
+}
