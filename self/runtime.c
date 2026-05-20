@@ -3363,7 +3363,8 @@ HexaVal hexa_array_window(HexaVal arr, HexaVal nv) {
 }
 
 // unique: dedupe by hexa_eq. O(n²) — matches interpreter's equality
-// check (hexa_full.hexa:15263-15277). Scaling to hash-set is a follow-up.
+// check (hexa_full.hexa:15263-15277). Step-3 cycle 29 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_unique(HexaVal arr) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3378,6 +3379,24 @@ HexaVal hexa_array_unique(HexaVal arr) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_unique_float(HexaVal arr);
+HexaVal hexa_array_unique(HexaVal arr) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    if (_arr_all_float(arr)) return rt_array_unique_float(arr);
+    int64_t len = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < len; i++) {
+        HexaVal it = HX_ARR_ITEMS(arr)[i];
+        int seen = 0;
+        for (int64_t j = 0; j < HX_ARR_LEN(out); j++) {
+            if (hexa_truthy(hexa_eq(HX_ARR_ITEMS(out)[j], it))) { seen = 1; break; }
+        }
+        if (!seen) out = hexa_array_push(out, it);
+    }
+    return out;
+}
+#endif
 
 // rotate(k): k>0 shifts left (items[k] becomes new head); k<0 shifts right.
 // k is normalized mod len — matches interpreter at hexa_full.hexa:15486-15499.
