@@ -898,8 +898,8 @@ fn _rv_elab_expr(toks: [str], pos: int, m_in: Module, min_prec: int, tab: SymTab
     while i < n {
         let op = toks[i]
         let prec = _rv_binop_prec(op)
-        if prec == 0 { return ElabResult { wire: cur, m: m, pos: i, err: "" } }
-        if prec < min_prec { return ElabResult { wire: cur, m: m, pos: i, err: "" } }
+        if prec == 0 { break }
+        if prec < min_prec { break }
         let cty = _rv_binop_cell(op)
         if cty == "" {
             return ElabResult {
@@ -919,6 +919,38 @@ fn _rv_elab_expr(toks: [str], pos: int, m_in: Module, min_prec: int, tab: SymTab
         m = rtlil_module_add_cell(m, c)
         cur = wn
         i = rhs.pos
+    }
+    // CLEAN-ROOM: ternary `? :` (IEEE 1364-2005 §5.1.4, right-assoc,
+    // lowest non-assignment precedence). Lowered to `\$mux(S=cond,
+    // A=else, B=then, Y=mux_y)` — matches yosys-internal ternary
+    // emission. Only fires at the lowest precedence call (min_prec<=1)
+    // so it does not interfere with cell-tree ops above.
+    if min_prec <= 1 && i < n {
+        if toks[i] == "?" {
+            let then_res = _rv_elab_expr(toks, i + 1, m, 1, tab)
+            if len(then_res.err) > 0 { return then_res }
+            m = then_res.m
+            let cp = then_res.pos
+            if cp >= n || toks[cp] != ":" {
+                return ElabResult {
+                    wire: cur, m: m, pos: cp,
+                    err: "read_verilog: ternary: expected `:`"
+                }
+            }
+            let else_res = _rv_elab_expr(toks, cp + 1, m, 1, tab)
+            if len(else_res.err) > 0 { return else_res }
+            m = else_res.m
+            let mux_y = _rv_fresh_wire(m)
+            m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+            let mut tc = rtlil_cell(mux_y + "$tc", "$mux", 0)
+            tc = rtlil_cell_connect(tc, "A", else_res.wire)
+            tc = rtlil_cell_connect(tc, "B", then_res.wire)
+            tc = rtlil_cell_connect(tc, "S", cur)
+            tc = rtlil_cell_connect(tc, "Y", mux_y)
+            m = rtlil_module_add_cell(m, tc)
+            cur = mux_y
+            i = else_res.pos
+        }
     }
     return ElabResult { wire: cur, m: m, pos: i, err: "" }
 }
@@ -3244,6 +3276,22 @@ fn main() {
         let _ab = _rv_array_bound(_m43, "q")
         if _ab != 4 {
             println("FAIL T43a array_bound got " + str(_ab))
+            fails = fails + 1
+        }
+    }
+
+    // T44 — ternary `? :` expression elaboration (IEEE 1364-2005 §5.1.4).
+    //       `assign z = a ? b : c ;` → 1 $mux cell, with Y wire
+    //       routed to z via module_connect.
+    total = total + 1
+    let _v44 = "module ter ( input a , input b , input c , output z ) ; assign z = a ? b : c ; endmodule"
+    let _r44 = read_verilog(_v44)
+    if _r44.ok != 1 {
+        println("FAIL T44 ternary: " + _r44.message); fails = fails + 1
+    } else {
+        let _m44 = _r44.design.modules[0]
+        if rtlil_count_cells_of_type(_m44, "$mux") != 1 {
+            println("FAIL T44a mux_count got " + str(rtlil_count_cells_of_type(_m44, "$mux")))
             fails = fails + 1
         }
     }
