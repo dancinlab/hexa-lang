@@ -1,0 +1,16 @@
+{
+  "rfc": "067-P4-cp-async",
+  "kernel": "wmma_cp_async",
+  "falsifier": "F-RFC067-CP-ASYNC-PERF",
+  "verdict": "PASS",
+  "shape": "M=16 N=16 K=64 (K_TILES=4)",
+  "max_delta_vs_cpu_ref": 0,
+  "tolerance_vs_ref": 0.000703125,
+  "mismatches_vs_ref": 0,
+  "max_delta_vs_baseline": 0,
+  "mismatches_vs_baseline": 0,
+  "max_abs_cref": 0.0703125,
+  "ms_cp_async_mean_256rep": 0.003839,
+  "ms_baseline_mean_256rep": 0.00340587,
+  "speedup_base_over_cpa": 0.887177
+}

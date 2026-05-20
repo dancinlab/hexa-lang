@@ -1,0 +1,199 @@
+// RFC 067 P4 cp.async pipelined WMMA -- double-buffered K-loop.
+//
+// Same M=16 N=16 K_TOTAL=64 GEMM as PR #205 (wmma_multitile.ptx) but
+// pipelined: each K-tile load is staged through .shared memory via
+// cp.async.cg.shared.global (sm_80+ async copy), double-buffered so
+// the K=i+1 tile prefetch overlaps with the K=i wmma.mma compute.
+//
+// Layout (identical to baseline):
+//   A row-major     [M=16 x K_TOTAL=64], 128 B per row, 32 B per K-tile slice
+//   B col-major     [K_TOTAL=64 x N=16], 128 B per col, 32 B per K-tile slice
+//   C row-major out [M=16 x N=16], f32
+//
+// Shared-memory staging (per matrix, double-buffered):
+//   stage_a[2][16 rows * 16 cols * 2 B] = 512 B per slot = 1024 B total
+//   stage_b[2][16 cols * 16 rows * 2 B] = 512 B per slot = 1024 B total
+//
+// Per-tile copy strategy (one warp, 32 threads):
+//   For A: 16 rows * 2 (16-B chunks) = 32 chunks -> 1 chunk per thread.
+//   For B: 16 cols * 2 (16-B chunks) = 32 chunks -> 1 chunk per thread.
+//   Each thread issues cp.async.cg.shared.global of size 16 B.
+//
+// Pipeline:
+//   prologue : kick K=0 cp.async into slot 0, commit, wait.
+//   iter i in [0, K_TILES):
+//       if i+1 < K_TILES: kick K=i+1 into slot (i+1)&1, commit
+//       consume K=i: wmma.load.a/b from slot i&1 (.shared) ; wmma.mma
+//       wait_all (covers prefetch landing for next iter)
+//
+// Numerics: wmma.load + wmma.mma operate on identical f16 bits as the
+// baseline, in identical accumulator order. cp.async is a pure memcpy
+// transport; max|d|=0 vs PR #205 is the F-RFC067-CP-ASYNC-PERF gate.
+//
+// Falsifier F-RFC067-CP-ASYNC-PERF -- output numeric-identical to
+// baseline (max|d|=0) AND timed delta documented.
+
+.version 8.0
+.target sm_90
+.address_size 64
+
+// Shared-mem staging slots, double-buffered. b8 array sized in bytes.
+.shared .align 16 .b8 stage_a[1024];   // [2 slots][16 rows x 16 cols x 2 B = 512 B]
+.shared .align 16 .b8 stage_b[1024];   // [2 slots][16 cols x 16 rows x 2 B = 512 B]
+
+.visible .entry wmma_cp_async (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 k_tiles
+)
+{
+    .reg .u64 %rd<40>;
+    .reg .u32 %r<40>;
+    .reg .u32 %r_base_a;
+    .reg .u32 %r_base_b;
+    .reg .u32 %r_load_a;
+    .reg .u32 %r_load_b;
+    .reg .u32 %r_slot;
+    .reg .u64 %rd_tile;
+    .reg .pred %p1;
+    .reg .pred %pmore;
+    .reg .b32 %ra<8>;
+    .reg .b32 %rb<8>;
+    .reg .f32 %fc<8>;
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [k_tiles];
+
+    // Accumulator zero-init.
+    mov.f32 %fc0, 0f00000000;
+    mov.f32 %fc1, 0f00000000;
+    mov.f32 %fc2, 0f00000000;
+    mov.f32 %fc3, 0f00000000;
+    mov.f32 %fc4, 0f00000000;
+    mov.f32 %fc5, 0f00000000;
+    mov.f32 %fc6, 0f00000000;
+    mov.f32 %fc7, 0f00000000;
+
+    // Lane id (0..31).
+    mov.u32 %r1, %tid.x;
+    and.b32 %r1, %r1, 31;
+
+    // Per-lane chunk decomposition: lane = row*2 + chunk_idx
+    //   row in [0..15], chunk_idx in [0..1].
+    shr.u32 %r2, %r1, 1;             // row index = lane / 2
+    and.b32 %r3, %r1, 1;             // chunk index = lane & 1
+    shl.b32 %r4, %r3, 4;             // chunk byte offset in row = chunk_idx * 16
+
+    // Per-lane source row offset in global (row*128 = row * (K_TOTAL elem * 2 B)).
+    mul.wide.u32 %rd10, %r2, 128;
+    cvt.u64.u32  %rd11, %r4;         // chunk byte offset, zero-extended
+
+    // Per-lane DST byte offset within a slot:
+    //   dst_off = row*32 + chunk*16   (row stride = 16 elem * 2 B = 32 B)
+    mul.lo.u32 %r5, %r2, 32;
+    add.u32    %r5, %r5, %r4;        // %r5 = row*32 + chunk*16 in [0..496]
+
+    // Shared-mem base offsets for stage_a / stage_b (state-space u32 byte offsets).
+    mov.u32 %r_base_a, stage_a;
+    mov.u32 %r_base_b, stage_b;
+
+    // K-loop iteration count (remaining tiles).
+    cvt.s32.s64 %r6, %rd3;
+
+    // Track tile byte offset in global; 32 B per K-tile.
+    mov.u64 %rd_tile, 0;             // shared between A and B (same advance)
+
+    // Slot index for the CURRENT (consume) tile.
+    mov.u32 %r_slot, 0;
+
+    // --- PROLOGUE: kick K=0 cp.async into slot 0 ---
+    // A lane src: a + row*128 + 0 + chunk*16
+    add.u64 %rd20, %rd0, %rd10;
+    add.u64 %rd20, %rd20, %rd11;
+    // A lane dst (shared u32 offset): base_a + 0 + (row*32 + chunk*16)
+    add.u32 %r10, %r_base_a, %r5;
+    cp.async.cg.shared.global [%r10], [%rd20], 16;
+
+    // B lane src: b + col*128 + 0 + chunk*16    (col-major, lane "row" is actually col here)
+    add.u64 %rd24, %rd1, %rd10;
+    add.u64 %rd24, %rd24, %rd11;
+    add.u32 %r11, %r_base_b, %r5;
+    cp.async.cg.shared.global [%r11], [%rd24], 16;
+
+    cp.async.commit_group;
+    cp.async.wait_all;
+    bar.sync 0;
+
+$kloop:
+    setp.le.s32 %p1, %r6, 0;
+    @%p1 bra $kloop_done;
+
+    // Compute load addresses (shared u32 offsets) for current slot.
+    // slot_off = slot * 512.
+    shl.b32 %r12, %r_slot, 9;
+    add.u32 %r_load_a, %r_base_a, %r12;
+    add.u32 %r_load_b, %r_base_b, %r12;
+
+    // If more tiles remain after this one, kick next prefetch into other slot.
+    setp.gt.s32 %pmore, %r6, 1;
+    @!%pmore bra $no_prefetch;
+
+    // next_slot = slot ^ 1
+    xor.b32 %r13, %r_slot, 1;
+    shl.b32 %r14, %r13, 9;            // next_slot * 512
+
+    // Next tile global offset: current_tile + 32 B.
+    add.u64 %rd35, %rd_tile, 32;
+
+    // A next-tile prefetch
+    add.u64 %rd20, %rd0, %rd35;
+    add.u64 %rd20, %rd20, %rd10;
+    add.u64 %rd20, %rd20, %rd11;
+    add.u32 %r10, %r_base_a, %r14;
+    add.u32 %r10, %r10, %r5;
+    cp.async.cg.shared.global [%r10], [%rd20], 16;
+
+    // B next-tile prefetch
+    add.u64 %rd24, %rd1, %rd35;
+    add.u64 %rd24, %rd24, %rd10;
+    add.u64 %rd24, %rd24, %rd11;
+    add.u32 %r11, %r_base_b, %r14;
+    add.u32 %r11, %r11, %r5;
+    cp.async.cg.shared.global [%r11], [%rd24], 16;
+
+    cp.async.commit_group;
+
+$no_prefetch:
+
+    // CONSUME current tile: wmma.load.a/b from .shared (stride 16 elements
+    // = packed 16x16 tile in shared) and wmma.mma into accumulator.
+    wmma.load.a.sync.aligned.row.m16n16k16.shared.f16
+        {%ra0, %ra1, %ra2, %ra3, %ra4, %ra5, %ra6, %ra7}, [%r_load_a], 16;
+
+    wmma.load.b.sync.aligned.col.m16n16k16.shared.f16
+        {%rb0, %rb1, %rb2, %rb3, %rb4, %rb5, %rb6, %rb7}, [%r_load_b], 16;
+
+    wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32
+        {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3, %ra4, %ra5, %ra6, %ra7},
+        {%rb0, %rb1, %rb2, %rb3, %rb4, %rb5, %rb6, %rb7},
+        {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7};
+
+    // Wait for any in-flight prefetch to land before next iteration uses it.
+    cp.async.wait_all;
+    bar.sync 0;
+
+    // Advance state.
+    add.u64 %rd_tile, %rd_tile, 32;
+    xor.b32 %r_slot, %r_slot, 1;
+    sub.s32 %r6, %r6, 1;
+    bra $kloop;
+
+$kloop_done:
+    wmma.store.d.sync.aligned.row.m16n16k16.global.f32
+        [%rd2], {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7}, 16;
+    ret;
+}
