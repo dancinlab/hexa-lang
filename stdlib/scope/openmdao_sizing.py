@@ -13,11 +13,13 @@
 #                    + w_fwhm * fwhm_arcsec(d_ftf, n_seg)
 #                    - w_aper * effective_diameter_m(d_ftf, n_seg)
 #
-# subject to (d_ftf, n_seg) ∈ [0.5, 1.8] m × {7, 18, 36}. The hex-ring
-# count discretisation is handled by snapping n_seg to {7|18|36} inside
+# subject to (d_ftf, n_seg) ∈ [0.5, 1.8] m × {7, 19, 37}. The hex-ring
+# count discretisation is handled by snapping n_seg to {7|19|37} inside
 # the component (the ①a kernel rounds rings the same way), so the
 # driver sees a smooth-ish problem in d_ftf with n_seg as a designer
-# shelf option (default = 18 = JWST reference).
+# shelf option (default = 19 ~ JWST 18+1 reference; POPPY's
+# `MultiHexagonAperture(rings=2)` populates the centre + 2 outer rings
+# for 19 hexes total).
 #
 # SSOT location: `~/core/hexa-lang/stdlib/scope/openmdao_sizing.py`
 # (D61 — producer scripts live under hexa-lang/stdlib/<domain>/, sibling
@@ -103,8 +105,16 @@ GEOMETRY_ID = "scope_synth_v1"
 
 # Defaults — same JWST-class baseline the scope_poppy.py ①b adapter
 # uses, so synth + analyze speak the same parametric language.
-SEGMENT_SHELVES = (7, 18, 36)
-DEFAULT_SHELF = 18
+#
+# Shelf labels are POPPY's ACTUAL ring populations: rings=1 → 7, rings=2 → 19,
+# rings=3 → 37 (closed form 1 + 3·r·(r+1)). The previous (7, 18, 36) labels
+# were off-by-one in the outer ring — they implied a hex was missing per ring,
+# which POPPY's MultiHexagonAperture does NOT do unless `segmentlist=` excludes
+# it explicitly. Documented in
+# `~/core/demiurge/inbox/notes/parity_attempt_scope_synth_2026-05-20.md`
+# root-cause §2 → fixed here 2026-05-20.
+SEGMENT_SHELVES = (7, 19, 37)
+DEFAULT_SHELF = 19
 
 # Continuous design-variable bounds for segment flat-to-flat (metres).
 # 0.50 m floor ~ small space telescope cell; 1.80 m ceiling ~ ELT-class
@@ -172,14 +182,28 @@ def evaluate_point(ftf_m: float, segments: int) -> dict:
     if fwhm is None or fwhm <= 0:
         fwhm = metrics["fwhm_diffraction_limit_arcsec"]
 
-    # Mass model — areal density × collecting area + per-segment hw.
-    # Effective area is honest (computed from the kernel's effective
-    # diameter); the coefficients are placeholders.
-    import math as _math
-    area_m2 = float(_math.pi * (diameter_m / 2.0) ** 2)
+    # Mass model — areal density × hex-packed collecting area
+    # + per-segment hw.
+    #
+    # `effective_area_m2` is the actual hex-pack collecting area
+    # (N · (3√3/2) · a² with a = POPPY's side attribute), NOT the
+    # bounding disk π·(D/2)² the prior version used. The disk
+    # approximation overstated the flat-axis extent but understated
+    # the corner-axis extent of the hex lattice and parity-FAILed by
+    # 7–13 % vs the analytic oracle
+    # (`inbox/notes/parity_attempt_scope_synth_2026-05-20.md` root-
+    # cause §1 → fixed here 2026-05-20). The kernel helper reads
+    # POPPY's actual `side` and `rings` so the area returned reflects
+    # exactly the geometry that was propagated.
+    #
+    # `n_segments_actual` is POPPY's true population for this ring
+    # count (root-cause §2 fix); use it for hardware mass so the kg
+    # accounting matches the propagated aperture.
+    area_m2 = poppy_kernel.hex_collecting_area_m2(aperture, ftf_m)
+    n_segments_actual = poppy_kernel.hex_ring_segment_count(rings)
     mass_kg = (
         (AREAL_PRIMARY_KG_PER_M2 + AREAL_BACKING_KG_PER_M2) * area_m2
-        + PER_SEGMENT_HARDWARE_KG * segments
+        + PER_SEGMENT_HARDWARE_KG * n_segments_actual
     )
 
     # Scalarisation. W_APER on diameter is *subtracted* (reward more
@@ -190,10 +214,15 @@ def evaluate_point(ftf_m: float, segments: int) -> dict:
 
     return {
         "ftf_m": float(ftf_m),
-        "segments": int(segments),
+        "segments_requested": int(segments),
+        "segments_actual": int(n_segments_actual),
+        "segments": int(n_segments_actual),
         "rings": int(rings),
         "effective_diameter_m": float(diameter_m),
         "effective_area_m2": float(area_m2),
+        "collecting_area_m2": float(area_m2),
+        "bounding_disk_area_m2": float(
+            __import__("math").pi * (diameter_m / 2.0) ** 2),
         "fwhm_arcsec": float(fwhm),
         "strehl_proxy": metrics["strehl_proxy"],
         "psf_sha256_16": prop["psf_sha256_16"],

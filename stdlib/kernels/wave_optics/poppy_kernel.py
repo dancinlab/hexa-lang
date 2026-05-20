@@ -74,7 +74,7 @@ def build_multihex_aperture(segments: int,
 
     POPPY's `rings` arg counts rings AROUND the centre: ring 1 = 7
     hexes, ring 2 = 19, ring 3 = 37. The requested `segments` is
-    rounded to the nearest supported ring config (<=7 -> 1, <=18 -> 2,
+    rounded to the nearest supported ring config (<=7 -> 1, <=19 -> 2,
     else 3). Domain-agnostic — the caller decides what the aperture
     represents (JWST-class scope, a photonics test bench).
 
@@ -83,7 +83,7 @@ def build_multihex_aperture(segments: int,
 
     if segments <= 7:
         rings = 1     # 7 hexes
-    elif segments <= 18:
+    elif segments <= 19:
         rings = 2     # 19 hexes
     else:
         rings = 3     # 37 hexes
@@ -104,7 +104,14 @@ def aperture_diameter_m(ap: Any,
     approximately (2r + 1) × flat_to_flat. POPPY may store flattoflat
     as an astropy Quantity or a plain float depending on version —
     both are handled. `fallback_flat_to_flat_m` is used when the
-    attributes are absent. Domain-agnostic geometry post-processing."""
+    attributes are absent. Domain-agnostic geometry post-processing.
+
+    NOTE (geometry, 2026-05-20 hex-pack-area fix): the returned value
+    is the *bounding-disk diameter* across the flat axis of the hex
+    lattice — i.e., a circumscribed-disk proxy convenient for the
+    diffraction-limit FWHM (λ/D). It is NOT the hex-packed collecting
+    area's equivalent diameter. For collecting-area work call
+    `hex_collecting_area_m2` instead."""
     if hasattr(ap, "flattoflat") and hasattr(ap, "rings"):
         ftf_attr = ap.flattoflat
         if hasattr(ftf_attr, "to"):
@@ -117,6 +124,69 @@ def aperture_diameter_m(ap: Any,
         ftf = float(fallback_flat_to_flat_m)
         n = 1
     return (2 * n + 1) * ftf
+
+
+def hex_ring_segment_count(rings: int) -> int:
+    """Total segment count for an r-ring POPPY MultiHexagonAperture
+    (central hex + all rings around it). Closed-form:
+
+        N(0) = 1
+        N(r) = 1 + 6 · r·(r+1)/2 = 1 + 3·r·(r+1)
+             = 7   for r=1
+             = 19  for r=2
+             = 37  for r=3
+             = 61  for r=4
+
+    Domain-agnostic. Use this instead of the (7, 18, 36) labels the
+    `openmdao_sizing.py` ①b adapter historically carried, which were
+    off-by-one in the outer ring (see
+    `~/core/demiurge/inbox/notes/parity_attempt_scope_synth_2026-05-20.md`
+    root-cause §2 for the trail).
+    """
+    r = int(rings)
+    if r < 0:
+        raise ValueError(f"hex_ring_segment_count: rings must be ≥ 0 (got {r})")
+    return 1 + 3 * r * (r + 1)
+
+
+def hex_collecting_area_m2(ap: Any,
+                            fallback_flat_to_flat_m: float) -> float:
+    """Hex-packed collecting area (sum of segment areas) for a POPPY
+    MultiHexagonAperture, in m².
+
+    Math: each regular hexagon with edge length `a` has area
+        A_hex = (3·√3 / 2) · a²
+    equivalently, with flat-to-flat width `ftf = √3 · a`,
+        A_hex = (√3 / 2) · ftf²
+    The total collecting area is N · A_hex, where N is the actual
+    POPPY ring population (1 + 3·r·(r+1)).
+
+    Reads POPPY's actual `side` (= edge length) attribute so the
+    returned area reflects exactly the geometry that was propagated —
+    NOT a substrate-side approximation. `fallback_flat_to_flat_m` is
+    used only when the aperture lacks the POPPY attrs.
+
+    This is the right area to use in mass-model / collecting-power
+    objectives. The disk-bounded `aperture_diameter_m` overstates the
+    flat-axis extent (good for FWHM) but understates the corner-axis
+    extent and is not the geometric area — see parity-attempt note
+    referenced above for measured 7–13 % discrepancies vs disk."""
+    if hasattr(ap, "side") and hasattr(ap, "rings"):
+        side_attr = ap.side
+        if hasattr(side_attr, "to"):
+            import astropy.units as u
+            side = float(side_attr.to(u.m).value)
+        else:
+            side = float(side_attr)
+        n_segments = hex_ring_segment_count(int(ap.rings))
+    else:
+        # Fallback: assume the supplied flat-to-flat IS the true
+        # segment flat-to-flat (NOT the doubled-edge-length convention
+        # the current ①b adapter passes through).
+        ftf = float(fallback_flat_to_flat_m)
+        side = ftf / math.sqrt(3.0)
+        n_segments = 7
+    return n_segments * (3.0 * math.sqrt(3.0) / 2.0) * side * side
 
 
 # ------------------------------------------------------------------
