@@ -603,3 +603,24 @@ For each Tier-A sub-phase:
   at 97 (1 better than target). Remaining 2 Tier-A.3-ish:
   none in current externs
 - Carryover residuals: `_malloc` · `_memcpy` · `_mmap`
+### 2026-05-20 — cycle 55 — Tier-A.6 stderr/stdout/stdin/errno override (-4 externs)
+
+- ✅ cycle 55 — Tier-A.6 darwin global override. aprime_cc nm
+  undefined externs 97 → **93** (−4 measured · cumulative
+  **137 → 93 = −44**) · smoke exit(42) PASS · binary
+  1,118,952 → 1,114,040 B (−4,912 B = errno indirection removed)
+- Closed: `___stderrp` · `___stdoutp` · `___stdinp` · `___error`
+- Method: `#undef stderr` / `stdout` / `stdin` + `#define` to
+  encoded FILE* constants (`(FILE *)(uintptr_t){3,2,1}` per
+  cycle-54 fopen encoding · fd+1 to avoid NULL collision).
+  Errno: `static int hxlcl_errno = 0; #undef errno; #define
+  errno hxlcl_errno` — replaces libc TLS-errno `(*__error())`
+  indirection with a single plain store. Acceptable for
+  compiler binary (errors signaled via return codes + exit,
+  not errno consumers)
+- Tier-A.6 progress: 6 of ~12 dropped. Remaining 3 darwin:
+  `___chkstk_darwin` (no `bl` direct callers visible in
+  disasm — symbol present but reference may be in trampoline)
+  · `___darwin_check_fd_set_overflow` (2 sites · `fd_set`
+  FD_SET macro inline) · `___sincos_stret` (1 site · paired
+  sin/cos FP math)

@@ -45,6 +45,26 @@ extern char **environ; // posix_spawnp inherits parent env explicitly
 //  unit byte-identical to the pre-split runtime.c — a pure file
 //  partition with ZERO behavior change. See runtime_core.c header.
 // ═══════════════════════════════════════════════════════════
+// Cycle 55: override macOS libc stderr/stdout/stdin (= __stderrp/
+// __stdoutp/__stdinp extern globals) with encoded FILE* constants
+// BEFORE the helper definitions so they see our values too. Drops
+// ___stderrp + ___stdoutp + ___stdinp from extern list.
+#undef stderr
+#undef stdout
+#undef stdin
+#define stderr ((FILE *)(uintptr_t)3)
+#define stdout ((FILE *)(uintptr_t)2)
+#define stdin  ((FILE *)(uintptr_t)1)
+// Cycle 55: override macOS libc errno (= (*__error())). Replaces
+// the function-pointer dereference with a plain static int store.
+// Drops ___error from the extern list. Code that reads/writes
+// errno will now hit our own store rather than libc TLS errno.
+// Acceptable for compiler binary — errors are flagged via return
+// codes and exit, not errno consumers.
+static int hxlcl_errno = 0;
+#undef errno
+#define errno hxlcl_errno
+
 // ─── RUNTIME.md Phase 1 Tier-A.1 — libc unhook helpers ───
 // Step-1 of the hexa-native runtime rewrite (RUNTIME.md cycle 46):
 // local C-source replacements for the most-called libc string fns

@@ -7945,3 +7945,271 @@ K2 SSOT (`1e82ef95`) 후 deploy 시도 — 결과 ABORT.
 **`@D g_commit_push_deploy` posture** (honest): per the rule, "compiler-source change whose binary is not promoted is INCOMPLETE — not landed." K2 SSOT is on a worktree branch (not `origin/s1-step2-codegen-perf` or `origin/main`); the rule's enforcement triggers at the branch-land + push event, not at the worktree-commit event. The deploy step remains the next cycle's responsibility before K2 can land on the source branch.
 
 **Cross-link**: K2 SSOT entry above · `@D g_commit_push_deploy` · K1 deferred #2 (this attempt) · K1 deferred #3 (gated on this).
+**작업 = cycle 50/51 maintenance**. 3 attempts (`-fno-builtin-sincos` · `-mllvm -disable-loop-idiom-memcpy=true` · `__attribute__((no_builtin("memcpy")))`) 모두 무효 — 115 externs 그대로. honest log + attribute keeps (valid, harmless, documents the attempt).
+
+**measured delta**: 0 (115 → 115) · smoke PASS · 바이너리 1,119,784 B 무변.
+
+**takeaway**: `_memcpy` 잔류 + `___sincos_stret` + `___chkstk_darwin` 등 darwin/codegen 레벨 lowering 은 flag/attribute 으로 안 닫힘. source-level rewrite 필요. 다음 진전은 (a) Tier-A.3 stdio batch (16 symbols · printf family 작성), (b) Tier-A.4 trivial POSIX wrappers (exit/getpid 등), (c) source-level struct-assign 명시화 셋 중 하나.
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +18 (cycle 51 entry)
+ compiler/PLAN.md     | + (this entry)
+ self/runtime_core.c  | +2 (no_builtin attributes + docstring)
+ tool/build_aprime.sh | -1 (revert -fno-builtin-sincos)
+```
+
+**cross-link**: RUNTIME.md cycle 51 entry · cycles 46-50 entries · `53bb27d6` cycle 50 commit.
+
+
+### 진행 로그 — RFC 073 Phase 3e — 3 named §5 blockers CLOSED · new comb-loop layer exposed (cycle 2026-05-20)
+
+**Branch** : `rfc-073-phase-3e-closure`
+
+**Inputs** :
+- `inbox/notes/2026-05-20-rfc006-§5-phase-3d-relanded-t69.md` — Phase 3d
+  status note identifying the THREE shared-helper-path blockers.
+- `inbox/notes/2026-05-20-rfc006-§5-phase-3d-status.md` — line-anchored
+  fix sketches per blocker.
+- baseline `[gate] router_d{4,6} area=0.0 µm² Δ=100%` on `origin/main`
+  `5ddd72bc`.
+
+**Outputs** :
+- read_verilog.hexa **+503 LoC** : `_rv_emit_body_v2` recursive single-arm
+  cond-mux helper (handles begin/end + if/then/else + for-unroll + simple/
+  static-idx/dyn-idx/2-D LHS) + `_rv_v2_track` / `_rv_v2_dwire` /
+  `_rv_emit_dff_for_tracked` (per-LHS D-wire model preserves single-driver
+  $dff invariant) + with-else fallback wiring (fire_a + fire_b triggers) +
+  for-handler outer-loop `keep_going=0` fix (T70 unblock) + generic
+  Verilog sized-literal `<size>'<base><digits>` lowering (T70/T71/T72 all
+  exercise this) + T70/T71/T72 falsifier selftests.
+- abc_map.hexa (BOTH stdlib/yosys/ + stdlib/kernels/logic_synth/) **+62
+  LoC** : BLIF `.latch <D> <Q> re <CLK> 2` emission for
+  `sky130_fd_sc_hd__dfxtp_1` cells (so ABC's `read_blif` doesn't reject
+  the `94 skipped: 63 seq` cell with `Cannot find gate "dfxtp_1"`) +
+  `.latch` parse-back into `sky130_fd_sc_hd__dfxtp_1` so the area-oracle
+  histogram includes the FF count.
+
+**Falsifier verdict** (read_verilog selftest 72/72 → 75/75 PASS):
+
+- **T70 — F-RFC-RV-CLOCKED-FOR-INDEXED-LHS** : `for (i=0; i<3; i=i+1)
+  name[i] <= a` inside posedge-always → 3 `$dff` with Q=name[0..2]. PASS.
+- **T71 — F-RFC-RV-WITH-ELSE-NONMATCHING-BODIES** : `if (c) y<=a; else
+  begin y<=b; z<=c; end` → 2 single-driver `$dff` (Q=y, Q=z) via per-LHS
+  D-wire (y__d, z__d) + cond-tagged rows + feedback default. PASS.
+- **T72 — F-RFC-RV-NESTED-IF-INSIDE-ELSE-BODY** : `if (c1) y<=a; else
+  if (c2) y<=b` → anchors existing cascaded else-if chain handler
+  doesn't regress when v2 fallback wired. PASS.
+- **NO-REGRESSION** : T1..T69 all pass; v2 fallback gated via
+  `_3e_legacy_emitted` / `_3e_single_emitted` flags so it never fires
+  when positional handlers succeed.
+
+**§5 oracle outcome** :
+
+```
+[gate] router_d4 area=0.0 µm² oracle=61763 µm²   Δ=100.0% FAIL (±5%)
+[gate] router_d6 area=0.0 µm² oracle=93608.5 µm² Δ=100.0% FAIL (±5%)
+```
+
+Same numbers as baseline. **§5 verdict — OPEN** (NOT CLOSED).
+
+But the pipeline meaningfully advanced:
+- `proc_mux` cond-tagged LHS-groups lowered: **3 → 32** (10× more clocked
+  writes now reach the BLIF flow)
+- `clean_multidriver` collapses: **1 → 1** (per-LHS D-wire model preserves
+  single-driver $dff invariant — no new multidriver despite recursive arm
+  emit)
+- `abc_map` exit: **0 (OK) → 1 (FAIL — Network contains combinational loop)**
+
+**The NEW (post-Phase-3e) §5 blocker layer** :
+
+`F-RFC-RV-COMB-ALWAYS-BLOCKING-ASSIGN-SSA` — the §5 router's combinational
+arbiter (router_d{4,6}.v L80-94) reads its own procedural variable
+`any_grant` via blocking-assignment ordering:
+
+```verilog
+always @* begin
+    any_grant = 1'b0;
+    for (i = 0; i < P; i = i + 1) begin
+        idx = (rr_ptr + i) % P;
+        if (!any_grant && !fifo_empty[idx]) begin   // reads any_grant
+            grant_out = route_xy(fifo_peek[idx]);
+            if (out_ready[grant_out]) begin
+                any_grant = 1'b1;                    // writes any_grant
+                grant_in  = idx[2:0];
+            end
+        end
+    end
+end
+```
+
+The unrolled equivalent has each iter's GUARD reading `any_grant` and each
+iter's BODY writing it. `pass_proc_mux` folds the writes into one $mux
+chain driving `any_grant` — but the unrolled GUARDS still read `any_grant`
+(SAME chain output). Combinational self-feedback loop.
+
+ABC's `read_blif` detects:
+
+```
+n410 → n555 → … → n410 → … → CO "rr_ptr__d"
+NetworkCheck: Network contains a combinational loop.
+```
+
+Pre-Phase-3e: `any_grant`'s self-loop existed BUT was disconnected from
+any CO (clocked writes that consumed it were dropped). ABC's strash only
+checks CO-rooted networks → loop invisible. Phase 3e's 32 new cond-tagged
+writes connect the comb loop to a CO (`rr_ptr__d`), exposing the issue.
+
+**Fix scope (estimated Phase 3f)** : per-iteration SSA renaming of
+procedural variables in combinational always blocks (~80-150 LoC). Per
+IEEE 1364-2005 §10.4.1, each blocking write to `var` makes a NEW value
+visible to subsequent statements within the procedure. The unrolled
+equivalent must rename `any_grant_iter0` (initial) → iter k guard reads
+`any_grant_iter<k>` (NOT mux chain output) → iter k body writes
+`any_grant_iter<k+1>` → final visible `any_grant` = `any_grant_iter<P>`.
+Specific to combinational always — clocked always blocks don't have this
+issue because non-blocking `<=` semantics are temporally-ordered through
+the next clock edge.
+
+**LoC delta** :
+
+```
+ stdlib/kernels/logic_synth/read_verilog.hexa               | +503 -65
+ stdlib/yosys/abc_map.hexa                                  |  +24  -1
+ stdlib/kernels/logic_synth/abc_map.hexa                    |  +38  -1
+ inbox/notes/2026-05-20-rfc006-§5-phase-3e-result.md        | + (new)
+ compiler/PLAN.md                                           | + (this entry)
+```
+
+@cite IEEE 1364-2005 §9.4 (control statements) + §10.4.1 (blocking
+procedural assignment) + §10.4.2 (procedural assign) + §10.3.5 (for-loop
+unroll) + §3.5.1 (sized literals) + Yosys `passes/proc/proc_mux.cc`
+(priority-mux chain) + BLIF spec §3.4 (`.latch` directive).
+
+cross-link: inbox/notes/2026-05-20-rfc006-§5-phase-3e-result.md (full
+g3-honest writeup with the exact ABC trace + Phase 3f fix scope).
+
+### 2026-05-20 — RUNTIME.md cycle 52 — Tier-A.3 printf-family minimal impl (137→108, -29 cumulative)
+
+**작업 = Tier-A.3 stdio printf family minimal impl**. `hxlcl_vsnprintf` (~90 LoC va_list + format scanner) + wrappers (printf/fprintf/snprintf/sprintf/fputs/fputc/fflush/putchar/perror). Float specifiers (`%f/%g/%e`) 는 `(float)` placeholder (compiler hot paths float print 안함). Cycle 47 에서 무효했던 `-fno-builtin-strlen` 이 새 코드 surface 에서 다른 최적화 pass 트리거 차단해 strlen residual 까지 closure.
+
+**measured delta**: aprime_cc nm undefined externs **115 → 108 (−7)** · 누적 cycles 46-52 = **137 → 108 = −29** · smoke `exit(6*7)==42` PASS · 바이너리 1,119,784 → 1,119,608 B (−176 B).
+
+**closed this cycle (8 symbols)**:
+- `_printf` · `_fprintf` · `_snprintf` · `_fputs` · `_fputc` · `_fflush` · `_putchar` · `_perror` (8 stdio + +1 strlen residual = 9 helper-introduced or recovered)
+
+**Tier-A.3 OPEN (9 file-stream)**: `_fopen` · `_fclose` · `_fread` · `_fwrite` · `_fseek` · `_ftell` · `_fdopen` · `_flock` · `_setvbuf`. FILE* abstraction layer 필요 — 별 cycle (구현부담 ~150 LoC).
+
+**Tier-A.5 libm 잔류**: `_cos` · `_exp` · `_fmod` 등. RUNTIME.md path (b) "libm-only-extern allowed" 가 Phase 1 cumulative gate 정의 (`≤5 syscall + 16 libm`) 와 일치. cycle 53+ 에 path 결정 후 적용.
+
+**Phase 1 progress**:
+- Tier-A.1 (trivial libc): **CLOSED** (15 of 12+ symbols)
+- Tier-A.2 (memory): **3 of 8** dropped (memset/memmove/___memcpy_chk · 5 OPEN: malloc/free/realloc/calloc/mmap/munmap + 1 residual memcpy)
+- Tier-A.3 (stdio): **8 of 19** dropped · 9 file-stream OPEN
+- Tier-A.4 POSIX: OPEN
+- Tier-A.5 libm: path 결정 pending
+- Tier-A.6 darwin/compiler-rt: 2 of ~12 dropped (___stack_chk_fail/_guard) · 6 OPEN
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +26 (cycle 52 entry)
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +160 (~90 LoC vsnprintf + 9 wrappers + 11 #defines)
+ tool/build_aprime.sh | +1 (-fno-builtin-strlen)
+```
+
+**cross-link**: RUNTIME.md cycle 52 entry · cycles 46-51 entries · `66d4ffe5` cycle 51 commit baseline.
+
+### 2026-05-20 — RUNTIME.md cycle 53 — Tier-A.2 mmap-backed bump allocator (137→104, -33 cumulative)
+
+**작업 = Tier-A.2 memory family port via mmap-backed bump allocator**. `hxlcl_malloc/free/realloc/calloc/munmap` 추가, 4 MB mmap chunk bump + 16-byte align. free/munmap = noop (compiler binary leak-at-exit policy). #define block 으로 redirect.
+
+**measured delta**: aprime_cc nm undefined externs **108 → 104 (−4)** · 누적 cycles 46-53 = **137 → 104 = −33** · smoke `exit(6*7)==42` PASS · 바이너리 1,119,608 → 1,119,144 B (−464 B).
+
+**closed this cycle (4)**: `_free` · `_realloc` · `_calloc` · `_munmap`.
+
+**residual (1 new + 2 carryover)**:
+- `_malloc` — clang -Oz 가 `hxlcl_strdup` 본체의 `volatile-loop + malloc(n+1) + byte-copy` 패턴을 libc strdup-shape 으로 fuse 해서 `_malloc` 호출 emit. `volatile` cast 도 부족. 다음 cycle 에 (a) `__attribute__((no_builtin("strdup","malloc")))` 또는 (b) `asm volatile("" ::: "memory")` barrier 추가
+- `_memcpy` — cycle 51 carryover, source struct-assign 필요
+- `_mmap` — 1 call from hxlcl_malloc · 다음 (Tier-A.4 `@asm syscall` 시) eliminate 가능
+
+**Tier-A.2 progress**: 6 of 8 dropped (cycle 49: memset/memmove/___memcpy_chk · cycle 53: free/realloc/calloc/munmap). 잔류 malloc + memcpy. mmap 은 새 floor (allocator 의존).
+
+**Phase 1 progress update**:
+- Tier-A.1: CLOSED (15/12+)
+- Tier-A.2: **6 of 8** dropped (75%) · 1 new floor (mmap)
+- Tier-A.3: 8 of 19 (file-stream subset 9 OPEN)
+- Tier-A.6: 2 of ~12
+- Tier-A.4/A.5: OPEN
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +24 (cycle 53 entry)
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +60 (5 allocator helpers + 5 #defines)
+ tool/build_aprime.sh | unchanged
+```
+
+**cross-link**: RUNTIME.md cycle 53 entry · cycles 46-52 entries · `eac4d2ff` cycle 52 commit.
+
+### 2026-05-20 — RUNTIME.md cycle 54 — Tier-A.3 file-stream batch (137→97, -40 cumulative)
+
+**작업 = Tier-A.3 file-stream subset port**. fopen/fclose/fread/fwrite/fseek/ftell/fdopen/flock/setvbuf 9 helpers + #defines. FILE* = `(void *)(uintptr_t)(fd + 1)` 인코딩 (0 ≠ NULL). _hxlcl_fp_fd 가 작은 값 (<0x1000) 은 our encoding · 큰 값은 libc FILE* (stderr/stdout/stdin) 와 pointer compare.
+
+**measured delta**: aprime_cc nm undefined externs **104 → 97 (−7)** · 누적 cycles 46-54 = **137 → 97 = −40** · smoke `exit(6*7)==42` PASS · 바이너리 1,119,144 → 1,118,952 B (−192 B).
+
+**closed this cycle (9)**: `_fopen` · `_fclose` · `_fread` · `_fwrite` · `_fseek` · `_ftell` · `_fdopen` · `_flock` · `_setvbuf`.
+
+**Tier-A.3 acceptance "117 → ~98 externs" REACHED at 97 (1 better than target)**. 17 of 19 plan symbols closed (printf family cycle 52 + file-stream cycle 54).
+
+**Phase 1 progress**:
+- Tier-A.1 (libc trivial): **CLOSED** (15+ symbols)
+- Tier-A.2 (memory): **6 of 8** (free/realloc/calloc/munmap cycle 53 + memset/memmove/___memcpy_chk cycle 49)
+- Tier-A.3 (stdio): **CLOSED** (17 of 19 · acceptance reached)
+- Tier-A.6 (compiler-rt): 2 of ~12 · stderr/stdout/sincos_stret 남음
+- Tier-A.4 POSIX: OPEN
+- Tier-A.5 libm: OPEN (path-b decision pending)
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +20 (cycle 54 entry)
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +95 (9 helpers + 9 #defines)
+```
+
+**cross-link**: RUNTIME.md cycle 54 entry · cycle 53 commit `54508092`.
+
+### 2026-05-20 — RUNTIME.md cycle 55 — Tier-A.6 stderr/stdout/stdin/errno override (137→93, -44)
+
+**작업 = Tier-A.6 darwin global override**. `#undef stderr/stdout/stdin` + `#define` 으로 cycle-54 fopen encoding 의 `(FILE *)(uintptr_t){3,2,1}` 로 redirect. `__error` (errno indirection) 도 `static int hxlcl_errno = 0; #define errno hxlcl_errno` 으로 plain-store override.
+
+**measured delta**: aprime_cc nm undefined externs **97 → 93 (−4)** · 누적 cycles 46-55 = **137 → 93 = −44** · smoke `exit(6*7)==42` PASS · 바이너리 1,118,952 → 1,114,040 B (−4,912 B = errno call site overhead 제거).
+
+**closed (4)**: `___stderrp` · `___stdoutp` · `___stdinp` · `___error`.
+
+**Tier-A.6 progress**: 6 of ~12 dropped. 잔류 3:
+- `___chkstk_darwin` — disasm 에서 직접 `bl` 호출자 안 보임 (trampoline 또는 stack frame 진입 코드에 emit 되는 듯). frame-size 작게 만들기 어려움 (transpile 출력에 큰 local array 가 있을 듯)
+- `___darwin_check_fd_set_overflow` — 2 사이트, FD_SET 매크로 인라인. fd_set 사용 회피 또는 macro override 필요
+- `___sincos_stret` — 1 사이트, paired sin+cos FP. source-level split 또는 hexa-native math 대체
+
+**Phase 1 progress**:
+- Tier-A.1: CLOSED (15+)
+- Tier-A.2: 6 of 8 (cycle 49 + cycle 53 · malloc/memcpy/mmap 잔류)
+- Tier-A.3: CLOSED (17 of 19)
+- Tier-A.6: **6 of ~12** (cycle 50 stack canary + cycle 55 stderr/stdout/stdin/errno)
+- Tier-A.4 POSIX: OPEN
+- Tier-A.5 libm: OPEN
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +14 (cycle 55 entry)
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +18 (stderr/stdout/stdin + errno override block)
+```
+
+**cross-link**: cycle 54 commit `7939ace6` · RUNTIME.md cycle 55 entry.
