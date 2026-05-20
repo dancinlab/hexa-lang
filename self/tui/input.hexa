@@ -83,6 +83,7 @@ pub fn input_init() -> int {
     if _input_initialized == 1 { return 0 }
     let r = term_raw_enter()
     if r != 0 { return -1 }
+    let _bp = term_write_str(chr(27) + "[?2004h")    // DECSET 2004 — bracketed paste ON (inbox/patches/tui-input-needs-decset-2004-bracketed-paste.md)
     let _sw = term_install_sigwinch()
     let _si = term_install_sigint()
     _input_initialized = 1
@@ -160,6 +161,7 @@ fn _poll_stdin(ms: int) -> int {
 // Restore: leave raw mode. Idempotent.
 pub fn input_close() -> int {
     if _input_initialized == 0 { return 0 }
+    let _bp = term_write_str(chr(27) + "[?2004l")    // DECRST 2004 — bracketed paste OFF (inbox/patches/tui-input-needs-decset-2004-bracketed-paste.md)
     let r = term_raw_restore()
     _input_initialized = 0
     _paste_active = 0

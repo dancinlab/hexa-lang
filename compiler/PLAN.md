@@ -4350,3 +4350,10 @@ Honest scope (g3):
 
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_072_atlas_enrich_cache.md
 (header + §5 phase table + sign-off all marked Phase 1 landed).
+
+## 진행 로그 — inbox: tui-input-needs-decset-2004-bracketed-paste (2026-05-20)
+
+Shape A (2-line surgical) — `self/tui/input.hexa::input_init` 가 `term_raw_enter` 직후 `term_write_str(chr(27) + "[?2004h")` 로 DECSET 2004 (bracketed paste ON) 를 발신; `input_close` 가 `term_raw_restore` 직전 `term_write_str(chr(27) + "[?2004l")` 로 DECRST 2004 (OFF) 를 발신. 기존 bracketed-paste 디코더 (`_decode_in_paste` lines 209-516, `_paste_active`/`_paste_bytes` 상태기계) 가 dead code 였던 이유는 터미널이 `ESC [ 200 ~` begin sequence 를 보내지 않았기 때문. 이제 Ghostty / iTerm2 / Terminal.app / kitty / alacritty 가 paste 를 단일 `["paste", "<all lines>"]` 이벤트로 전달 — wilson harness-cli 의 3000-line paste = 3000 Enter submit 회귀가 hexa-lang 단에서 닫힘. 부수 효과: Ghostty 의 `clipboard-paste-protection = true` 경고 다이얼로그도 사라짐(수신자가 bracketed paste 에 opt-in 했으므로). 검증: `/Users/ghost/.hx/bin/hexa_real parse self/tui/input.hexa` PASS. Wilson-side workaround in `plugins/harness-cli/main.hexa::harness_cli_tui_draw` + `render_leave_alt_screen` 은 follow-up cycle 에서 제거 가능(중복 emit 은 무해, 단지 dead weight). Sibling patch `tui-input-paste-buf-quadratic.md` 는 OPEN — DECSET 활성화로 `_decode_in_paste` 의 byte-by-byte O(n²) 문자열 concat 이 이제 hot path 로 진입, 대용량 paste 에서 quadratic blowup. 다음 사이클 권장. g3 정직 범위: 본 변경은 SSOT 1 파일 · 2 줄. binary promote 별도 deploy cycle (g_commit_push_deploy 별도 적용 — 본 SOP `g_inbox_processing_loop` step 7 에서 제외 명시). `g_stdlib_ownership` 준수: wilson 자기 트리 복사 없이 upstream patch 흡수 완료.
+Files: `self/tui/input.hexa` (input_init +1 line, input_close +1 line).
+Parse-gate: PASS.
+Patch markdown: `inbox/patches/tui-input-needs-decset-2004-bracketed-paste.md` status → resolved-ssot.

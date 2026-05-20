@@ -1,5 +1,16 @@
 # self/tui/input.hexa — `input_init` never enables bracketed-paste mode
 
+> **Status: resolved-ssot 2026-05-20** — Shape A (2-line surgical) landed:
+> `input_init` emits DECSET 2004 (`ESC[?2004h`) after `term_raw_enter`,
+> `input_close` emits DECRST 2004 (`ESC[?2004l`) before `term_raw_restore`.
+> `_decode_in_paste` (lines 209-516) now reachable on Ghostty/iTerm2/kitty/
+> alacritty/Terminal.app. Wilson-side workaround in
+> `plugins/harness-cli/main.hexa` can be removed in a follow-up cycle.
+> Sibling patch `tui-input-paste-buf-quadratic.md` remains open (O(n²)
+> concat inside `_decode_in_paste` — now exercised, fix recommended next).
+> Verified: `hexa_real parse self/tui/input.hexa` OK.
+
+
 ## Symptom
 
 Every hexa TUI program that uses `self/tui/input` ships with a broken paste
