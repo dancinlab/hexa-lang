@@ -42,6 +42,32 @@
 
 (append-only)
 
+### 2026-05-20 — RFC 071 P0 scaffold — source-to-silicon e2e (GPU.md §2a) 정식 RFC + cmd_build NVPTX 타깃 스트링 인식
+
+**작업 = Shape-B 1차 commit** — RFC drafted + `self/main.hexa::cmd_build` 의 target-string 인식 분기만 land. P1-P4 (실제 emit-driver synth + module_loader bridge + e2e silicon fire) 는 명시 multi-cycle 연기. byte-identical CPU codegen 경로 — `--target=` 빈 문자열 / 기존 `linux-*` / `darwin-*` 모두 미변경. `@F f1` (no LLVM) + `@F f2` (no C-transpile in architecture) 보존.
+
+**배경 (GPU.md §2a 정식 추적)**: 2026-05-20 GPU.md §2a 가 발견 — `hexa build --target=nvptx64-*` 은 한 줄 cmd_build 타깃 추가 작업이 아니다. 실질 갭 = build pipeline 자체. 기존 6 cross-target (linux-x86_64/aarch64-{musl,glibc} · darwin-{arm64,x86_64}) 은 전부 `hexa_v2 → C → clang/zig cc` 로 host CPU 바이너리 emit. NVPTX 는 `module_loader → in-hexa compiler self-host → MIR → codegen_emit_ptx_sm80(...) → PTX text` 로 categorically 다른 파이프라인 필요. `compiler/codegen/nvptx_target.hexa` (~3500 줄) 는 in-hexa self-host tree 안에서만 호출됨 (`nvptx_lower_test.hexa` 하니스 등) — `hexa build` CLI verb 에서 invoke 안 됨.
+
+**P0 deliverable (this commit, 4 file)**:
+1. `inbox/rfc_drafts_2026_05_20/rfc_071_source_to_silicon_e2e.md` — Shape-B RFC, 6 sections (Problem · Approach options A/B/C · Phasing P0-P4 · Falsifier battery 4건 · Honest scope · Cross-refs).
+2. `self/main.hexa::cmd_build` — `nvptx64-nvidia-cuda-sm80` / `sm90` / `sm120` 3 target string 인식 + informative deferred 메시지 + exit 1. 기존 `target_zig_triple` dispatch 보다 앞단에서 catch (silent "unknown target" 우회 방지).
+3. `GPU.md` §2a + §10 closure box + §12 cross-refs — RFC 071 P0 진행 노트 cross-link. **closure box `[ ] §12 P4+ source-to-silicon e2e` 은 그대로 미체크** (P4 F-RFC071-E2E-NUMERIC-EQ fire 까지는 RFC drafted-only, 즉 g3 over-claim 0).
+4. (this PLAN entry).
+
+**falsifier battery (RFC 071 §4)**:
+| ID                                | claim                                                                     | cycle |
+| --------------------------------- | ------------------------------------------------------------------------- | ----- |
+| F-RFC071-TARGET-ACCEPT            | cmd_build 3 NVPTX 타깃 스트링 인식 + deferred 메시지 + exit 1             | P0    |
+| F-RFC071-EMIT-DRIVER-INVOKE       | `--target=nvptx64-*` 가 non-empty PTX 텍스트 artifact emit                | P1    |
+| F-RFC071-MODULE-LOADER-BRIDGE     | source-level `@gpu_kernel` body 가 emitted PTX 에 반영                    | P2/P3 |
+| F-RFC071-E2E-NUMERIC-EQ           | src → PTX → 실리콘 → max|d|=0 vs CPU reference                            | P4    |
+
+P0 = F-RFC071-TARGET-ACCEPT 측정-증명만. **parse-gate (`/Users/ghost/.hx/bin/hexa_real parse self/main.hexa`)** = `OK: self/main.hexa parses cleanly` PASS. CPU 빌드 회귀 0 (target 빈 문자열 path 동일).
+
+**bootstrap regen 비대상**: `self/main.hexa` 드라이버 분기만 추가. `@D g_commit_push_deploy` 의 narrow rule 적용 — `self/{lexer,parser,type_checker,codegen_c2}.hexa` 미터치, codegen 영향 없음. 다음 deploy 사이클에서 자연 promote (별도 standard step, 본 cycle scope 외).
+
+**punted (RFC 071 P1+)**: (a) emit-driver synth source 작성 + hexa_v2 컴파일 + exec (Approach A); (b) `compiler/cli/build_nvptx.hexa` 실제 모듈 + 진짜 compiler/parse + check + lower + codegen 와이어링 (Approach A 정식화); (c) `module_loader.hexa` 의 `@gpu_kernel` discovery 확장 — 한 .hexa 파일 안의 CPU+GPU 함수 분기; (d) 진짜 `.hexa` source → PTX → ubu-2 silicon fire → numeric byte-eq vs CPU reference (F-RFC071-E2E-NUMERIC-EQ); (e) north-star ② CPU self-host campaign default-flip 후 Approach B 수렴 (RFC 063 Px ledger 와 동기). 본 cycle 은 P0 scaffold only, 즉 "RFC drafted + arg parser accept" 두 가지 외 zero behavior change.
+
 ### 2026-05-20 — #18 S1-step-2 — `lower_hir` super-linear 제거 (O(N²) → near-linear, byte-eq PASS)
 
 **작업 = correctness-preserving 성능 리팩터** — emit asm 는 byte-identical 유지. S1-step-1 이 측정한 `lower_hir` O(N²) 곡선을 제거.

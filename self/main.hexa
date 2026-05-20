@@ -1783,6 +1783,32 @@ fn cmd_build(src, out, c_only, target) {
         println("error: source file not found: " + src)
         exit(1)
     }
+    // ─── RFC 071 P0 scaffold — NVPTX target string recognition ───────────
+    // RFC 071 (inbox/rfc_drafts_2026_05_20/rfc_071_source_to_silicon_e2e.md)
+    // formalises the source-to-silicon e2e gap GPU.md §2a identified: the
+    // existing `--target=` table (target_zig_triple) routes through
+    // hexa_v2 → C → clang/zig cc, which emits host CPU binaries. The
+    // NVPTX path needs a categorically different pipeline (in-hexa compiler
+    // self-host → MIR → codegen_emit_ptx_sm80 → PTX text), tracked as
+    // RFC 071 P1-P4. This P0 branch ONLY recognises the canonical NVPTX
+    // target strings so P1+ wiring can plug in real dispatch without
+    // re-touching the arg parser. Per @D g3 (honest scope) we exit 1 with
+    // an informative deferred-message — we do NOT silently fall through
+    // to the zig-cc table (which would print "unknown --target value:" +
+    // confuse the caller about whether NVPTX is a supported target name).
+    if len(target) > 0 {
+        let mut _is_nvptx = 0
+        if target == "nvptx64-nvidia-cuda-sm80"  { _is_nvptx = 1 }
+        if target == "nvptx64-nvidia-cuda-sm90"  { _is_nvptx = 1 }
+        if target == "nvptx64-nvidia-cuda-sm120" { _is_nvptx = 1 }
+        if _is_nvptx == 1 {
+            println("error: --target=" + target + " recognized but not yet wired")
+            println("       NVPTX target: deferred to RFC 071 P1+ wiring;")
+            println("       use hand-emit PTX + `hexa gpu fire` for now (see GPU.md §7c)")
+            println("       RFC: inbox/rfc_drafts_2026_05_20/rfc_071_source_to_silicon_e2e.md")
+            exit(1)
+        }
+    }
     // ─── Darwin build refusal (2026-04-20 kernel panic prevention) ──────
     // Root-cause of 2026-04-20 03:33 Mac kernel panic: a train_alm_lora.hexa
     // source was compiled to /private/tmp/train_alm_lora_mac on Darwin, then

@@ -129,6 +129,21 @@ out-of-band pattern; full source-to-silicon `hexa build --target=
 nvptx64-*` is a strategic infrastructure cycle for a separate
 session.
 
+**Update 2026-05-20 (RFC 071 P0 scaffold landed):** This gap is now
+formally tracked as RFC 071 — see
+`inbox/rfc_drafts_2026_05_20/rfc_071_source_to_silicon_e2e.md`. P0
+landed the `cmd_build` target-string recognition for
+`nvptx64-nvidia-cuda-sm80` / `sm90` / `sm120` (informative deferred
+exit + RFC pointer; CPU codegen path byte-identical, no LLVM, no new
+C-transpile architecture per `@F f1`/`@F f2`). P1-P4 (real dispatch +
+emit-driver module + module_loader bridge + e2e silicon fire) are
+explicitly deferred multi-cycle work governed by the F-RFC071-* falsifier
+battery. Approach **A (internal emit-driver synthesis)** is the
+recommended P1-P2 path; **B (compiler self-host on NVPTX)** is the
+P3+ convergence path once north-star ②'s CPU self-host campaign
+default-flips. Approach C remains the codegen-author fast iteration
+shell — RFC 071 introduces a new path, not a replacement.
+
 ### 2b — Multi-tile WMMA GEMM K-loop (RFC 067 §3 P4 spec form)
 
 PR #191 closed the *single-tile* WMMA fire. The RFC 067 §3 P4 spec asks for 64×64 GEMM = 4×4 output tiles × 4 K-tiles = 64 `wmma.mma` calls with `.shared` staging.
@@ -479,7 +494,7 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 The GPU substrate has finite scope. Closure ≠ "all features"; closure = "the listed north-star metrics are silicon-measured PASS":
 
 - [x] **§12 P4+ codegen end-to-end** — hand-emit path works on silicon (today's session)
-- [ ] **§12 P4+ source-to-silicon e2e** — full `.hexa` source → silicon (next layer 2a)
+- [ ] **§12 P4+ source-to-silicon e2e** — full `.hexa` source → silicon (next layer 2a). **RFC 071 P0 scaffold landed 2026-05-20** (target-string recognition in `cmd_build` + RFC drafted + P1-P4 phasing + 4 falsifiers); box stays `[ ]` until F-RFC071-E2E-NUMERIC-EQ measures PASS at P4.
 - [x] **flame d=768 transformer beats PyTorch eager wall** — already measured (project_flame_phase4d9_closure)
 - [ ] **flame d=4096 GPT-3 class beats PyTorch eager** — gate pre-registered as **RFC 072** (`inbox/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md`, P0 scaffold landed branch `rfc072-flame-d4096-scaffold`). Harness stub: `stdlib/flame/bench/d4096.hexa`. Spec: d=4096 · n_layer=24 · seq_len=2048 · batch=8 (GPT-3 6.7B d_model axis per Brown 2020 Table 2.1). Falsifiers: F-RFC072-WALL-PT · F-RFC072-WALL-FLAME · F-RFC072-RATIO < 1.0 · F-RFC072-VARIANCE std < 5 %. Multi-session (P2 flame fire + P3 PT baseline + P4 variance, ~$5–20). Stays `[ ]` until F-RFC072-RATIO PASSes.
 - [ ] **Multi-vendor: ROCm or Metal kernel parity** — proves architectural independence
@@ -542,6 +557,7 @@ Once 4-6 of these check off, the GPU substrate phase is "done enough" to consume
 - `compiler/PLAN.md` — chronological cycle log (this file is forward-looking; PLAN is the past)
 - `gpu/SPEC.md` — formal specification per RFC 055 §6
 - `inbox/rfc_drafts_2026_05_20/rfc_06[7-9]_*.md` — three Shape-B RFCs
+- `inbox/rfc_drafts_2026_05_20/rfc_071_source_to_silicon_e2e.md` — RFC 071 Shape-B (source-to-silicon e2e, P0 scaffold 2026-05-20)
 - `inbox/fires/rfc06[7-9]_p4_*/` — silicon-fire artifacts (today's PRs #189/#190/#191)
 - `tool/r06[7-9]_p4_host.c` — host launchers for the silicon fires
 - `compiler/codegen/nvptx_target.hexa` — main codegen file (~3500 lines as of 2026-05-20)
