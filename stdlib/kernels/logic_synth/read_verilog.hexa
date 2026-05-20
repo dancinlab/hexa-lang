@@ -588,7 +588,7 @@ fn read_verilog(src: str) -> ReadVerilogResult {
                                         }
                                     }
                                 } else {
-                                    if bt == "localparam" {
+                                    if bt == "localparam" || bt == "parameter" {
                                         let rl = _rv_parse_localparam(st, tab)
                                         st = rl.st; tab = rl.tab
                                         if len(st.err) > 0 {
@@ -628,7 +628,7 @@ fn read_verilog(src: str) -> ReadVerilogResult {
                                                         }
                                                     }
                                                 } else {
-                                                    if bt == "genvar" {
+                                                    if bt == "genvar" || bt == "initial" {
                                                     // `genvar NAME ;` — declaration only, value
                                                     // is set inside the generate-for init.
                                                     while st.pos < len(st.toks) {
@@ -1780,7 +1780,7 @@ fn _rv_parse_generate(st_in: PState, m_in: Module, tab_in: SymTab) -> RvGenStep 
                     return RvGenStep { st: bst, m: m, tab: tab }
                 }
             } else {
-                if bt == "localparam" {
+                if bt == "localparam" || bt == "parameter" {
                     let r2 = _rv_parse_localparam(bst, tab)
                     bst = r2.st
                     tab = r2.tab
@@ -4099,6 +4099,28 @@ fn main() {
         if _ndup != 1 {
             println("FAIL T-fold-D dedupe got " + str(_ndup) + " (expected 1)"); fails = fails + 1
         }
+    }
+
+    // T48 — V2K-style bare `parameter` (module-body, non-ANSI). Same
+    // shape as localparam; routed through _rv_parse_localparam via the
+    // OR'd dispatch (read_verilog.hexa L591 + L1783). Enables reading
+    // sv2v-flattened inputs (e.g. archive/comb/rtl/flat_v2k/router_d4.v)
+    // that yosys 0.65 also accepts for the §5 oracle area measurement.
+    total = total + 1
+    let _v48 = "module pm ; parameter integer W = 8 ; endmodule"
+    let _r48 = read_verilog(_v48)
+    if _r48.ok != 1 {
+        println("FAIL T48 parameter_dispatch: " + _r48.message); fails = fails + 1
+    }
+
+    // T49 — `initial` block: skip-only (sv2v emits `initial _sv2v_0 = 0;`
+    // as a synth-irrelevant artifact; yosys ignores it for synth subset).
+    // Routed through the genvar skip path via OR'd dispatch at L631.
+    total = total + 1
+    let _v49 = "module ii ; initial xx = 0 ; endmodule"
+    let _r49 = read_verilog(_v49)
+    if _r49.ok != 1 {
+        println("FAIL T49 initial_skip: " + _r49.message); fails = fails + 1
     }
 
     if fails > 0 {
