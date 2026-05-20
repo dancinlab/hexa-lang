@@ -48,21 +48,34 @@ RUNTIME.md             ← runtime hexa-native rewrite (this file)
 
 ### Tier-A.1 — Trivial libc replacements (pure logic, no syscall)
 
+Cycle 46 (2026-05-20) landed step-1 (C-source scaffold). Method:
+`static hxlcl_*` helpers in `self/runtime.c` defined ABOVE the
+`#include "runtime_core.c"` line, plus textual `#define strlen
+hxlcl_strlen` etc that redirect every subsequent call (including
+macro expansions clang's libcall recognition would otherwise re-pull
+to libc). Step-2 (later cycle) ports each `hxlcl_*` to
+`stdlib/runtime/<name>.hexa` + codegen routing; runtime.c itself
+retires once its callers move to hexa-source.
+
+- [partial] `_strcmp` — removed cycle 46 (`hxlcl_strcmp` + #define)
+- [partial] `_memcmp` — removed cycle 46 (`hxlcl_memcmp` + #define)
+- [pending] `_strlen` — `hxlcl_strlen` landed + #define; 1 residual
+      libc call remains chained from `_strcat` inline path (cycle 47
+      lands `_strcat` and closes this in the same surgery)
 - [ ] `_atoi` — string → i64. → `stdlib/runtime/atoi.hexa`
 - [ ] `_atof` — string → f64 (scaled accumulator + decimal exponent)
 - [ ] `_atoll` — string → i64 (alias of atoi or longer-range variant)
 - [ ] `_strtol`, `_strtod`, `_strtoul` — strtok-like with end-ptr
 - [ ] `_strcpy`, `_strncpy`, `_strcat` — byte copy
-- [ ] `_strcmp`, `_strncmp` — byte compare
-- [ ] `_strlen` — count to NUL (already hexa builtin `len`)
+- [ ] `_strncmp` — byte compare (n-prefixed; cycle 47)
 - [ ] `_strchr`, `_strstr` — substring search
 - [ ] `_strdup` — strlen + malloc + memcpy
-- [ ] `_memcmp` — byte compare
 - [ ] `_bzero` — fill with zero
 - [ ] `_qsort` — sort-array helper (rare; review usage)
 - [ ] `_bsearch` — binary search (rare; review usage)
 
 Acceptance: 12+ libc symbols removed → 137 → ~125 externs.
+Cycle 46 partial: 137 → 135 (−2 measured).
 
 ### Tier-A.2 — Memory allocator family
 
@@ -321,3 +334,32 @@ For each Tier-A sub-phase:
 - ✅ cycle 45 entry — this file created (RUNTIME.md SSOT, Phase 1-3
   [ ]/[x] checkpoint roadmap)
 - 📌 137 externs catalogued; Phase 1 ready to begin (cycle 46+)
+
+### 2026-05-20 — Phase 1 Tier-A.1 step-1 (cycle 46)
+
+- ✅ cycle 46 — `_strcmp` + `_memcmp` libc unhook landed (137 → 135
+  externs measured · aprime_cc smoke exit(42) PASS · binary
+  1,120,024 B +544 B vs baseline)
+- Method: `static __attribute__((noinline)) hxlcl_strlen/memcmp/
+  strcmp` helpers added to `self/runtime.c` ABOVE the
+  `#include "runtime_core.c"` line, plus textual `#define strlen
+  hxlcl_strlen` (and friends) that redirects every subsequent
+  call including macro expansions / inline header bodies clang's
+  libcall recognition would otherwise re-pull to libc
+- Source delta: `self/runtime.c` (+helper block + #define + 17
+  call-site substitutions) · `self/runtime_core.c` (30 strlen + 39
+  strcmp + 1 memcmp substitutions) · `tool/build_aprime.sh`
+  (comment-only — no -fno-builtin flag needed)
+- Residual: `_strlen` 1 stubborn libc call remains, chained from a
+  `_strcat` inline path (`bl _strcat` immediately followed by
+  `bl _strlen` in disasm at `0x100000824`). Cycle 47 closes this
+  by introducing `hxlcl_strcat` + `#define strcat hxlcl_strcat`
+  in the same surgery — eliminates 2 externs simultaneously
+- Honest scope: this is step-1 (C-source scaffold); the `hxlcl_*`
+  helpers themselves are slated for retirement when step-2 ports
+  them to `stdlib/runtime/<name>.hexa` + codegen routing. The
+  helpers and runtime.c HI tier go away together once their
+  callers (the broader runtime.c surface) move to hexa-source
+- S3 fixpoint validation DEFERRED to Phase 1 cumulative gate —
+  this step is a single sub-symbol edit; preserving gen1 ≡ gen2
+  is gated when full Tier-A.1 lands

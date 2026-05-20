@@ -7728,3 +7728,37 @@ assign + Yosys `passes/proc/proc_mux.cc` demux.
 cross-link: inbox/notes/2026-05-20-rfc006-§5-phase-3d-relanded-t69.md
 (this branch's status note · re-confirms Phase 3e opener plan after
 PR #233 closed PIECE 1).
+
+### 2026-05-20 — RUNTIME.md Phase 1 Tier-A.1 cycle 46 — `_strcmp` + `_memcmp` libc unhook (step-1 C-scaffold)
+
+**작업 = RUNTIME.md Phase 1 Tier-A.1 첫 cycle, step-1 (C-source scaffold)**. RUNTIME.md (PR #234 cycle 45 SSOT) 의 north-star ② "Eliminate all C dependencies from aprime_cc/hexac" 를 향한 첫 measurable extern delta. Phase 0 baseline (cycle 43-44) 가 173→137 extern 으로 닫혔고, 본 cycle 이 Phase 1 의 첫 surgical drop.
+
+**measured delta**: aprime_cc nm undefined-externs **137 → 135 (−2)** · `_strcmp` + `_memcmp` 제거 · smoke `exit(6*7)==42` PASS · 바이너리 1,119,480 → 1,120,024 B (+544 B). worktree `/tmp/wt-runtime-tier-a1-v2` (origin/main 694914cc 기반).
+
+**method (재현 가능)**:
+
+1. `self/runtime.c` 에 `#include "runtime_core.c"` **위로** 3개 static helper 추가 — `hxlcl_strlen` / `hxlcl_memcmp` / `hxlcl_strcmp`. 각각 `__attribute__((noinline))` 로 clang 의 libcall recognition (loop pattern → libc strlen 재인식) 1차 방어.
+2. 동일 블록 직후 `#define strlen hxlcl_strlen` / `#define memcmp ...` / `#define strcmp ...` 의 텍스트 redirect. 후속 #include 들 (runtime_core.c · post-process flatten 출력) 의 *모든* call site + macro expansion + inline header body 가 텍스트 단계에서 hxlcl_* 으로 치환됨.
+3. `self/runtime.c` 의 17 직접 호출 사이트 + `self/runtime_core.c` 의 30 strlen + 39 strcmp + 1 memcmp 사이트를 perl 일괄 치환 (comment-only line `^\s*//` 제외 · `strncmp` 보호용 lookbehind `(?<!strn)\bstrcmp`).
+4. `tool/build_aprime.sh` 의 `-Oz` clang 명령은 **변경 없음** — `-fno-builtin-{memcmp,strlen}` 시도 결과 strcmp 가 되려 되돌아오는 회귀가 났고, `-fno-builtin` 전체는 동일하게 137 유지. `#define` 텍스트 치환이 가장 깨끗한 path 였음 (comment 만 업데이트).
+
+**residual**: `_strlen` 1 잔류 — disasm `0x100000820 bl _strcat` → `0x100000824 bl _strlen` 시퀀스로 보아 libc strcat 의 inline impl 이 strlen 을 호출하는 path. cycle 47 이 `_strcat` 을 `hxlcl_strcat` 으로 unhook 하면서 동일 surgery 로 닫힘 (두 extern 동시 제거 예상 → 135 → 133).
+
+**honest scope**:
+- 본 cycle 은 **step-1 (C-source scaffold)** — `hxlcl_*` 자체도 폐기 예정. step-2 (후속 cycle) 에서 각 helper 를 `stdlib/runtime/<name>.hexa` 로 옮기고 codegen 의 `_builtin_runtime_sym` 매핑 확장으로 runtime.c 호출자와 연결. runtime.c HI tier 가 hexa-source 로 마이그되면 step-2 helpers + 본 scaffold 가 함께 사라짐.
+- S3 fixpoint check (`gen1.s ≡ gen2.s`) **DEFERRED to Phase 1 cumulative gate** — 본 cycle 은 단일 sub-symbol surgery 이고, Tier-A.1 전체 (~12 심볼) 가 들어온 시점에 gen1/gen2 byte-eq + LEAN size ±20% 게이트 일괄 측정. RUNTIME.md "Methodology checkpoints" 의 acceptance 시점 정의 일치.
+- "libc 호출 0" 또는 "Tier-A.1 closure" 주장 **금지** — cycle 46 = 2 심볼 measurable drop, 그 이상도 이하도 아님 (@F f1 g3-honest).
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +26 -3
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +37 (helper block + #define + 17 substitutions)
+ self/runtime_core.c  | 70 substitutions in place (LoC ~ unchanged)
+ tool/build_aprime.sh | +3 -3 (comment-only)
+```
+
+**cross-link**: RUNTIME.md ## Log "2026-05-20 — Phase 1 Tier-A.1 step-1 (cycle 46)" entry · RUNTIME.md ### Tier-A.1 의 `_strcmp/_memcmp` [partial] flip + `_strlen` [pending] 메모. Phase 1 cumulative gate (`≤ 5 external syscalls + 16 libm`) 는 ~10 cycle 후 측정.
+
+@cite RFC 061 §4.1 (runtime split) · `inbox/rfc_drafts_2026_05_20/rfc_runtime_hexa_native_rewrite.md` (cycle 42 draft) · `inbox/rfc_drafts_2026_05_20/aprime_c41_externs_catalog.txt` (173-symbol raw).
