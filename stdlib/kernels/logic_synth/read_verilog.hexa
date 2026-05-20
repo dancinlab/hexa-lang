@@ -898,8 +898,8 @@ fn _rv_elab_expr(toks: [str], pos: int, m_in: Module, min_prec: int, tab: SymTab
     while i < n {
         let op = toks[i]
         let prec = _rv_binop_prec(op)
-        if prec == 0 { return ElabResult { wire: cur, m: m, pos: i, err: "" } }
-        if prec < min_prec { return ElabResult { wire: cur, m: m, pos: i, err: "" } }
+        if prec == 0 { break }
+        if prec < min_prec { break }
         let cty = _rv_binop_cell(op)
         if cty == "" {
             return ElabResult {
