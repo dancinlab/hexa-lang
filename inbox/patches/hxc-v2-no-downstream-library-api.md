@@ -1,5 +1,7 @@
 # incoming patch: hxc-v2-no-downstream-library-api — HXC v2 codec has no pub-fn library surface; only CLI/interpreter entrypoints
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/stdlib/hxc_v2_lib.hexa` (7,487 bytes) present on disk. Close-only marker.
+
 > **id**: `hxc-v2-no-downstream-library-api` · **opened**: 2026-05-18 KST · **status**: `resolved-ssot 2026-05-19 — HXC v2 downstream library API landed at self/stdlib/hxc_v2_lib.hexa; round-trip smoke + parse-gate clean; binary promote = standard separate deploy step per the 22c27a05 pattern`
 > **trees**: `self/stdlib/hxc_composite_chain_v2.hexa` · `self/stdlib/hxc_a29_deflate.hexa` · `self/stdlib/hxc_a30_bwt_mtf.hexa` · `compiler/atlas/hxc_loader.hexa`
 > **source**: downstream `wisp` (`~/core/wisp`, WebKit-shell + hexa-native browser) evaluating Decision 8 option A — persist history via HXC v2 per `@D g_hxc`.

@@ -1,5 +1,7 @@
 # incoming patch: thread-channel-primitive — POSIX thread + channel for async inference + 60+ FPS frame loop
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/native/thread.c` present on disk. Close-only marker.
+
 > **id**: `thread-channel-primitive` · **opened**: 2026-05-13 KST PM · **landed**: 2026-05-13 KST PM · **status**: `applied` — pthread + channel primitives shipped in `self/native/thread.c` (commit 401ed87d). API rename `channel_*` → `thread_channel_*` followup landed (commit b6ab67ac via wilson session — see `builtin-vs-stdlib-symbol-collision.md`) to disambiguate from `stdlib/channel.hexa` FD-pipe API.
 > **trees**: `self/native/` (new `thread.c` + `channel.c`) + `self/std_thread.hexa` (new) + `self/runtime.c` (symbol register)
 > **source**: anima daemon Phase 2/3 (CHAT.md `~/core/anima/CHAT.md` revised spec) — 사용자 directive "철학 준수 + FPS 60+" (substrate-native autonomy + 16ms frame tick). chat_generate single-token wall ~30s on Mac CPU (24L decoder) 는 frame loop 안에서 절대 blocking 불가. async inference worker thread + frame loop thread 의 cooperation 필요.

@@ -1,5 +1,7 @@
 # json_parse: `\uXXXX` raw-passthrough → non-conformant strings (compiled)
 
+> **VERIFIED-CLOSED 2026-05-20** — `_jp_parse_string` in `self/runtime.c` L7686 has the documented `\uXXXX` 6-byte passthrough (comment L7710 explicitly notes the round-trip-lossless contract). Close-only marker.
+
 - **kind:** patch
 - **status:** proposed (fix attached, applied from wilson context)
 - **source_files:** `self/runtime.c` (`_jp_parse_string`, ~L11699)

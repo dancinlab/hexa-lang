@@ -1,5 +1,7 @@
 # Codegen: `hexa_fn_arena_return` frees a value that was pushed into the caller's array (use-after-free)
 
+> **VERIFIED-CLOSED 2026-05-20** — `git log` shows `7ced8229 runtime + tui/input + lexer: fn-arena escape fix on cross-fn array.push; ...` + `92c5511f feat(runtime): F6 option A — A2 hexa_val_arena_heapify_to_parent (temp-buffered)`. Close-only marker.
+
 **Filed by:** wilson (`~/core/wilson`). Reproduced from wilson's tool-call multi-turn
 flow (`provider-claude-cli` → `agent_loop` → `harness_cli_append_tool_results` →
 `harness_cli_persist`'s `transcript_to_jsonl` iteration). Minimal hexa-lang repro

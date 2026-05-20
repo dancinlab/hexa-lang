@@ -1,5 +1,7 @@
 # incoming patch: phanes-linux-self-host-build-driver-for-containerization — no documented from-source path to a working `hexa build` (flatten-capable driver) on linux/amd64; blocks downstream container images
 
+> **VERIFIED-CLOSED 2026-05-20** — `git log` shows `a76637bf fix(tool): ubu_bootstrap — verified pure-from-source linux self-host bootstrap`. Close-only marker.
+
 > **id**: `phanes-linux-self-host-build-driver-for-containerization` · **opened**: 2026-05-19 KST · **status**: `resolved-ssot — verified pure-from-source linux self-host recipe found + measured (see §Resolution). hexa-lang source needs NO change; the gap was stale recipe docs + tooling.`
 
 > **§Resolution (2026-05-19, measured mac arm64 + applied in phanes Dockerfile):**

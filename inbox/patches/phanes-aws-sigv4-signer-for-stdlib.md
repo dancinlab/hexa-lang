@@ -1,5 +1,7 @@
 # incoming patch: phanes-aws-sigv4-signer-for-stdlib — stdlib has no AWS SigV4 request signer; add `stdlib/aws/sigv4.hexa` (+ a byte-level HMAC-SHA256)
 
+> **VERIFIED-CLOSED 2026-05-20** — `stdlib/aws/sigv4.hexa` (15,499 bytes) + `stdlib/core/hash/hmac.hexa` (8,789 bytes) present on disk. Close-only marker.
+
 > **id**: `phanes-aws-sigv4-signer-for-stdlib` · **opened**: 2026-05-19 KST · **status**: `resolved-ssot — stdlib/aws/sigv4.hexa + stdlib/core/hash/hmac.hexa landed, AWS test-suite byte-eq verified (see resolution note)`
 > **trees**: `stdlib/aws/` (new — proposed home) · `stdlib/core/hash/sha256.hexa` (has `sha256_hex`, byte-capable `sha256_hash_bytes`) · `self/std_crypto.hexa` (has `hmac_sha256`, but string-in / hex-out — see §3) · `self/stdlib/bedrock_sdk.hexa` (already DEFERs its SigV4 path — this patch un-blocks it)
 > **source**: downstream `phanes` (`~/core/phanes`, public source-available SaaS).

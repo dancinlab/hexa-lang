@@ -1,5 +1,7 @@
 # Stdlib gap: `sort_by` missing; `arr.sort()` is numeric-only
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/codegen_c2.hexa` L3315-3323 + L5446-5453 dispatch `sort_by` → `hexa_array_sort_by(obj, fn)`. Close-only marker.
+
 **Filed by:** wilson. ROI audit 2026-05-14 found stable-sort-by-key is the only genuine hexa-lang gap among the three originally flagged (the map.remove and nested-mutation findings turned out to be stale docs — compiled runtime is fine).
 
 **Date:** 2026-05-14.

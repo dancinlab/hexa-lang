@@ -1,5 +1,7 @@
 # `stdlib/net/ssh.hexa` — SSH client + server (BOTH PHASES LANDED)
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/stdlib/ssh/` carries {wire,kex,ssh,agent,keyfile,known_hosts,authorized_keys,sshd}.hexa (8 files). Close-only marker.
+
 **STATUS 2026-05-14: FULL STACK LANDED — client + server + hardening**
 
 **Client** (commit `2d978169`): `self/stdlib/ssh/{wire,kex,ssh}.hexa`.

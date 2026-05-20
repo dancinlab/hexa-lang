@@ -1,5 +1,7 @@
 # incoming patch: stdlib-subsecond-sleep
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/runtime.c` L7275 `HexaVal hexa_sleep_ms(HexaVal ms)` (nanosleep-backed, no-fork) present. Close-only marker.
+
 > **id**: `stdlib-subsecond-sleep` · **opened**: 2026-05-11 · **status**: `applied` (2026-05-12)
 > **trees**: `self/runtime.c`, `self/hexa_full.hexa`, `self/codegen_c2.hexa`, `self/native/{hexa_cc.c,hexa_v2}` (regen) — no stdlib `.hexa` change needed; the primitive is a runtime builtin.
 > **why**: sub-second throttle in poll loops currently shells out (`exec("sleep 0.1")` — fork `/bin/sh` → `exec /bin/sleep` → `waitpid`, ~5-8 ms overhead per tick). wilson's `provider-claude-cli` poll loop at a 50 ms interval measured this fork churn at **~16 % of a core**. Need a no-fork sub-second sleep primitive.

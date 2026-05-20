@@ -1,5 +1,7 @@
 # `bytes_to_str_raw([int])` — Phase 2: allow embedded NUL bytes
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/runtime.c` L979-983 declares `HexaVal hexa_bytes_to_str_raw(HexaVal arr)` with the RFC 030 cross-link. Close-only marker.
+
 **Filed by:** wilson (Active gap #3 → multimodal Message)
 **Date:** 2026-05-13
 **Status:** **applied** — landed in this same commit (self/runtime.c:7589 / `hexa_bytes_to_str_raw`).

@@ -1,5 +1,7 @@
 # Stdlib gap: bidirectional stdio for long-running subprocesses (`exec_stream_write`)
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/codegen_c2.hexa` L4407-4423 wires `hexa_exec_stream` / `hexa_exec_stream_kill` / `hexa_exec_stream_open` / `_write` / `_close_stdin` builtin family. Close-only marker.
+
 **Filed by:** wilson. Discovered while scaffolding the `mcp` plugin (Model
 Context Protocol) — wilson's P0 cluster item #5.
 

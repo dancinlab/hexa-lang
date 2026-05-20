@@ -1,5 +1,7 @@
 # inbox patch — enum-variant access miscodegen'd as field-access (codegen_c2)
 
+> **VERIFIED-CLOSED 2026-05-20** — SSOT grep confirms `_enum_names` / `gen2_enum_decl` / `_is_enum_name` live in `self/codegen_c2.hexa` L911/L1089/L3980. Close-only marker (no source change; fix already live).
+
 > **status**: resolved-ssot — codegen-side Shape-A fix landed in
 > `self/codegen_c2.hexa`: `gen2_enum_decl` now registers every enum
 > `node.name` into a module-scope `_enum_names` set (decl pass, before fn

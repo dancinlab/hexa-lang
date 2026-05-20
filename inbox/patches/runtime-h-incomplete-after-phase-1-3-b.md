@@ -1,5 +1,7 @@
 # `runtime.h` missing symbols after PHASE 1.3.B → wilson uncompilable
 
+> **VERIFIED-CLOSED 2026-05-20** — all 12 sample missing externs (hexa_map_keys / hexa_map_remove / hexa_str_substr / hexa_input / hexa_read_stdin / hexa_exec_with_status / hexa_timestamp / hexa_time_ms / hexa_from_char_code / hexa_sleep_ms / hexa_term_raw_enter / hexa_term_poll_stdin) now present in `self/runtime.h`. Close-only marker.
+
 **Layer:** codegen / runtime header (compile-speed track)
 **Related:** commit `0813f4e` (`feat(runtime.h): PHASE 1.2.A — grow header to compile-cover hexa_cc.c`) and `codegen_c2.hexa:679` (`PHASE 1.3.B (2026-05-15) — emit #include "runtime.h"`)
 
