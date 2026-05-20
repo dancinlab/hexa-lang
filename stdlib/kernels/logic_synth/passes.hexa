@@ -1733,6 +1733,41 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                     mapped_type = "sky130_fd_sc_hd__dfxtp_1"
                     mapped = 1
                 }
+                // RFC 073 Phase 3c — $mux → SKY130 mux2_1 direct
+                // techmap. RTLIL `$mux` has pins A/B/S/Y (Y = A when
+                // S==0, Y = B when S==1). SKY130 `mux2_1` has pins
+                // A0/A1/S/X with function `(A0 & !S) | (A1 & S)` →
+                // X = A0 when S==0, X = A1 when S==1. The mapping is
+                // therefore one-to-one with a pin rename: A→A0, B→A1,
+                // S→S, Y→X. Width is 1 bit (pass_proc_mux emits 1-bit
+                // mux cells only — single S, single A/B/Y).
+                //
+                // @cite IEEE 1364-2005 §5.1.4 (conditional / mux
+                // semantics) + SKY130 PDK sky130_fd_sc_hd__mux2_1
+                // cell footprint (Apache-2 / CC-BY-4.0) + Yosys
+                // techlibs/sky130/sky130_fd_sc_hd.lib mapping.
+                if c.cell_type == "$mux" {
+                    let mut new_conns: [CellConn] = []
+                    let mut mi2 = 0
+                    while mi2 < len(c.conns) {
+                        let cn = c.conns[mi2]
+                        let mut pin_out = cn.pin
+                        if cn.pin == "A" { pin_out = "A0" }
+                        if cn.pin == "B" { pin_out = "A1" }
+                        if cn.pin == "Y" { pin_out = "X" }
+                        // S stays as S; any other pin (e.g. bit-indexed
+                        // for future multi-bit mux) passes through.
+                        new_conns = new_conns.push(CellConn { pin: pin_out, net: cn.net })
+                        mi2 = mi2 + 1
+                    }
+                    new_cells = new_cells.push(Cell {
+                        name: c.name,
+                        cell_type: "sky130_fd_sc_hd__mux2_1",
+                        conns: new_conns,
+                        is_mapped: 1,
+                    })
+                    expanded = 1
+                }
                 if c.cell_type == "$eq" {
                     let lr = _passes_lower_eq_cell(c)
                     if lr.ok == 1 {
@@ -2018,6 +2053,24 @@ fn pass_clean_multidriver(d: Design) -> PassResult {
     let mut mi = 0
     while mi < len(d.modules) {
         let m = d.modules[mi]
+        // RFC 073 Phase 3c — condition-aware multi-driver collapse.
+        //
+        // The for-loop unroller (read_verilog.hexa `_rv_emit_for_if_stmts`)
+        // attaches the iteration-substituted guard wire as `connect_cond`
+        // on every row produced by an `if (cond_expr(i)) lhs = rhs(i);`
+        // body. Per the F-RFC-RV-LOOP-GUARD theorem (IEEE 1364-2005
+        // §10.3.5 for-loop unroll + §10.4.2 procedural assign + Yosys
+        // passes/proc/proc_mux.cc), the unrolled equivalent of N parallel
+        // guarded writes is a priority-encoded mux of all guarded writes
+        // — STRUCTURE LIVES IN `pass_proc_mux`, NOT HERE.
+        //
+        // This pass therefore SKIPS any LHS-group that contains at least
+        // one cond-tagged row (`connect_cond[k] != ""`) — those groups
+        // pass through unchanged for `pass_proc_mux` to fold into a $mux
+        // chain. Only LHS-groups whose rows are ALL unconditional are
+        // collapsed via the legacy last-write-wins (the ABC `read_blif`
+        // multi-driver-rejection unblocker, scope-A behaviour).
+        //
         // Build per-LHS occurrence count (linear; gate-§5 designs have
         // O(10²) distinct LHS strings → quadratic worst-case is fine).
         let mut new_lhs:  [str] = []
@@ -2026,18 +2079,35 @@ fn pass_clean_multidriver(d: Design) -> PassResult {
         let mut k = 0
         while k < len(m.connect_lhs) {
             let cur_lhs = m.connect_lhs[k]
-            // count later occurrences of this LHS (after index k)
+            // count later occurrences of this LHS (after index k);
+            // also record whether ANY row in the LHS-group is cond-tagged.
             let mut later = 0
             let mut earlier = 0
+            let mut group_has_cond = 0
             let mut j = 0
             while j < len(m.connect_lhs) {
-                if j != k {
-                    if m.connect_lhs[j] == cur_lhs {
-                        if j > k { later = later + 1 }
-                        if j < k { earlier = earlier + 1 }
-                    }
+                if m.connect_lhs[j] == cur_lhs {
+                    if j > k { later = later + 1 }
+                    if j < k { earlier = earlier + 1 }
+                    let mut jc = ""
+                    if j < len(m.connect_cond) { jc = m.connect_cond[j] }
+                    if len(jc) > 0 { group_has_cond = 1 }
                 }
                 j = j + 1
+            }
+            // RFC 073 Phase 3c: if the LHS-group has ANY cond-tagged
+            // row, defer the ENTIRE group to pass_proc_mux — keep every
+            // row in input order (this branch fires per-row, so we copy
+            // the current row through verbatim and skip the legacy
+            // last-write-wins collapse).
+            if group_has_cond == 1 {
+                new_lhs = new_lhs.push(cur_lhs)
+                new_rhs = new_rhs.push(m.connect_rhs[k])
+                let mut cck = ""
+                if k < len(m.connect_cond) { cck = m.connect_cond[k] }
+                new_cond = new_cond.push(cck)
+                k = k + 1
+                continue
             }
             if later == 0 {
                 // This is the LAST connect for cur_lhs — keep it.
