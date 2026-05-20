@@ -4140,3 +4140,50 @@ cross-link: inbox/patches/g7-hexa-ld-dlopen.md ·
 inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md ·
 `@D g7` inbox-patches-pipeline · `@D g_inbox_processing_loop` ·
 `@D g5` hexa-native-only (libc widening discussion §3.A)
+
+## 진행 로그 — inbox: json_parse `\uXXXX` raw passthrough — re-apply RFC 8259 decode after deploy-regen wipe (2026-05-20)
+
+inbox/patches/json-parse-uXXXX-raw-passthrough.md (wilson 2026-05-16,
+fix attached). Dup-race precheck: fix already landed twice
+(`c7224be9` 2026-05-05 first land, `472646dc` 2026-05-16 re-apply
+citing this same inbox markdown) — yet worktree HEAD
+`s1-step2-codegen-perf` had reverted to the raw 6-byte passthrough
+in `self/runtime.c::_jp_parse_string` `case 'u':`.
+
+Cause: deploy-regen-style commits between the fix lands and the
+current HEAD re-touched `self/runtime.c` and dropped the decode
+body — `b9d1da27 deploy(R7): runtime.c sync` ·
+`cff366ae feat(forge): sync runtime.c to RFC 040` ·
+`4fb439fc feat(rfc-061-P1): runtime 2-layer split` ·
+`26a785af feat(rfc-062): argv[0] dedup` are the candidate touch
+points. Same SSOT-wipe-by-regen hazard called out in
+`@D g_inbox_processing_loop` hazard-guard (c) for
+`self/codegen_c2.hexa`, materialised here for `self/runtime.c`.
+
+Shape A — re-applied the identical `472646dc` body verbatim
+(4-hex → code point, UTF-16 surrogate-pair recombination for
+D800-DBFF + DC00-DFFF, 1-4 byte UTF-8 encode, malformed-hex
+passthrough preserved). Comment block updated to point at the
+inbox markdown so future regen tooling sees the rationale inline.
+
+Verify: `clang -fsyntax-only -Wno-everything self/runtime.c` exit 0.
+No `hexa parse` gate possible (target is C). Logic-level
+confidence: byte-identical to a fix that already shipped twice and
+was verified by wilson `provider-openai-compat` CJK/emoji round-trip
+in the original commit body.
+
+Files (1): `self/runtime.c` (12 → 60 lines in `_jp_parse_string`
+case 'u' body). inbox markdown status flipped `proposed →
+resolved-ssot` with full resolution log. inbox/PATCHES.yaml not
+touched.
+
+Binary promote (regenerate `self/native/hexa_v2` + driver, byte-eq
+fixpoint) is the standard deploy step per `@D g_inbox_processing_loop`
+step 7 — out of scope for this cycle.
+
+g3-honest: this is the THIRD land of the same patch. The SSOT
+gap is closed for now, but the underlying root cause is the
+deploy-regen pattern that periodically wipes runtime.c edits.
+Until that pattern is fixed at the deploy tooling layer, the same
+wipe can recur. No claim that this cycle prevents recurrence —
+only that the SSOT is currently correct again.
