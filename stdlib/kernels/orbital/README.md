@@ -7,6 +7,7 @@ extracted under the D72 2-layer STDLIB restructure (after
 | file | role |
 |---|---|
 | `sgp4_kernel.py` | `propagate_track` · `tle_epoch_utc` · `tle_text_hash` · `skyfield_version` · `sgp4_version` · `versions` — given a TLE + an observer + a sample window, propagate the orbit (SGP4) and reduce it to a topocentric track. |
+| `kepler_2body_kernel.hexa` | D80 g_hexa_only pilot #3 — clean-room hexa-native closed-form Kepler 2-body propagator (`propagate(mu, a, ecc, t) -> [E, ν, r, x, y]`). Newton-Raphson 5-step on M = E − e·sin(E); textbook half-angle ν / r reduction. <1e-12 relative parity vs Python `math` libm on a 5-sample × 4-ecc LEO test grid (`kepler_2body_kernel_test.hexa`, 27/27 PASS). |
 
 ## 2-layer (ABSORPTION.md ①)
 
@@ -65,3 +66,56 @@ record layer always.
 The adapter locates this kernel by path relative to its own file
 (`../kernels/orbital/`), so the `python3 <script> <output_dir>` spawn
 from demiurge works regardless of cwd.
+
+## D80 hexa-native pilot (`kepler_2body_kernel.hexa`)
+
+`kepler_2body_kernel.hexa` follows the D80 `g_hexa_only`
+ultimate-form pattern alongside `stdlib/kernels/solar/`,
+`stdlib/kernels/mc_transport/`, `stdlib/kernels/graph/`,
+`stdlib/kernels/neural/`, and `stdlib/kernels/urdf/`. Scope is
+*deliberately small*: the unperturbed two-body closed form
+(Kepler equation + half-angle ν reduction + perifocal cartesian) —
+not the full SGP4 mean-element propagation. That keeps the first
+orbital `.hexa` port reviewable; a future hexa-native SGP4 port
+would call this kernel as its inner closed-form solver.
+
+API (hexa):
+
+```hexa
+use "stdlib/kernels/orbital/kepler_2body_kernel"
+let r = propagate(mu, a, ecc, t)   // -> [E, ν, r, x, y]
+```
+
+- `kepler_solve_E(M, ecc, n_iters)` — fixed-count Newton-Raphson on
+  M = E − e·sin(E). 5 iterations saturate double precision for
+  e ≤ 0.7 from the seed E₀ = M (quadratic convergence).
+- `mean_anomaly(mu, a, t)` — M = sqrt(μ/a³)·t (unwrapped; the
+  internal `wrap_pi` in `kepler_solve_E` reduces to (-π, π]).
+- `true_anomaly(E, ecc)` — ν = 2·atan2(√(1+e)·sin(E/2),
+  √(1−e)·cos(E/2)).
+- `radius(a, ecc, E)` — r = a·(1 − e·cos E).
+- `propagate(mu, a, ecc, t)` — full pipeline; returns 5-float
+  `[E, ν, r, x, y]` in perifocal (P-Q) coordinates.
+
+Parity (`kepler_2body_kernel_test.hexa`, 27/27 PASS):
+LEO orbit (a=7000 km, μ=GM_earth) sampled at 5 (e, t/T) picks
+covering circular, near-circular, moderate, and high (e=0.7)
+eccentricity — including apoapsis (M=π boundary) and post-π
+wrap (negative-M Newton-Raphson seed). On all 5 picks the
+hexa-native and Python `math` libm closed-form values agree
+bit-for-bit (rel = 0.0 measured; assertion ceiling 1e-10
+exceeds the actual gap by ~12 orders). Two invariant checks
+(ν = E at e=0; conic r(ν) = a(1−e²)/(1+e·cos ν)) round out the
+suite.
+
+Scope / honesty (g3):
+- elliptical only (0 ≤ e < 1). Parabolic / hyperbolic Kepler is
+  a separate solve (M = e·sinh F − F) — not in scope here.
+- two-body point-mass model — no J2, no drag, no third-body, no
+  SRP. SGP4 (`sgp4_kernel.py`) is still the ①a kernel for real
+  satellite work; this is the *unperturbed baseline* + future-port
+  inner solver.
+- Substrate parity proves the PORT PATTERN; D80 record-layer
+  `absorbed=true` flip on a real measurement cell still requires
+  the demiurge `HexaNativeParityRef` schema + a measured ephemeris
+  oracle (out of scope here).
