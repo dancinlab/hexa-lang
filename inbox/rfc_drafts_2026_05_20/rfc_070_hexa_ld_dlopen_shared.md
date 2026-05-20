@@ -1,6 +1,6 @@
 # RFC 070 — `hexa_ld --shared` + runtime `dlopen` (fat .so single-symbol convention)
 
-> **status**: `g7-b-loadable-measured` (F-B-LOADABLE measured 2026-05-20 on real hexa_ld v1.5 link_shared() output, both platforms — Mach-O end-to-end PASS · ELF dlopen+dlsym PASS, invoke FAIL per v1.5 honest scope. v1.6+ reloc-record consumption identified as next sub-cycle for ELF end-to-end. See §4.7.) [previously `g7-d-impl-parser-landed`: capability-manifest authoring decision LOCKED = `@plugin(capabilities=[...])` in-source attribute; ABI stamp `(runtime_version: u32, nanbox_layout_hash: u64)` section layout LOCKED; `stdlib/dynlink_caps.hexa` skeleton + `compiler/codegen/plugin_attr_scaffold.hexa` skeleton landed · `self/parser.hexa` `@plugin` attribute dispatcher LANDED 2026-05-20 — annotation channel `"plugin|<raw-tokens>"`, parse-gate PASS · zero codegen change · §4.6 below]
+> **status**: `g7-b-v16-elf-st-shndx-fix-MEASURED` (hexa_ld v1.6 ELF dynsym `st_shndx` fix LANDED + MEASURED 2026-05-20 ubu-1 — F-B-LOADABLE-ELF invoke + byte-eq PASS end-to-end; `dlsym -> 0x736895b50000` confirms `l_addr + 0x1000` resolution; `fn(2,3) == 5`. v1.5 SHN_ABS short-circuit closed. Mach-O Part B deferred per Shape-B fallback — worktree base lacks F1's v1.5 Mach-O Part A which is the cherry-pick prerequisite. See §4.7.7.) [previously `g7-b-loadable-measured` (F-B-LOADABLE measured on v1.5: Mach-O end-to-end PASS · ELF dlopen+dlsym PASS, invoke FAIL per honest scope — v1.6 fix root-cause from §4.7.6 anchor).] [previously `g7-d-impl-parser-landed`: capability-manifest authoring decision LOCKED = `@plugin(capabilities=[...])` in-source attribute; ABI stamp `(runtime_version: u32, nanbox_layout_hash: u64)` section layout LOCKED; `stdlib/dynlink_caps.hexa` skeleton + `compiler/codegen/plugin_attr_scaffold.hexa` skeleton landed · `self/parser.hexa` `@plugin` attribute dispatcher LANDED 2026-05-20 — annotation channel `"plugin|<raw-tokens>"`, parse-gate PASS · zero codegen change · §4.6 below]
 > **opened**: 2026-05-20 (promoted from `inbox/patches/g7-hexa-ld-dlopen.md`, opened 2026-05-10)
 > **G7-A flag wire**: 2026-05-20 (`self/main.hexa::cmd_build` + dispatch — flag-wiring only, zero falsifier coverage yet)
 > **G7-A falsify** : 2026-05-20 (F-A1/F-A2 measured on C path · macOS arm64 dylib + ubu-1 ELF x86_64 .so · §4.5 below)
@@ -94,7 +94,8 @@ Manifest section name (proposed): ELF `.hexa.cap` / Mach-O `__HEXA,__cap` (16-by
 | G7-B (v1.4 ELF Part A) ✅ | `build_elf64_dyn_with_dynamic` adds PT_DYNAMIC + .dynsym + .dynstr + .hash + DT_SONAME + 1 exported FUNC symbol `<ident>_dispatch` | G7-B (v1.3) | F-B1, F-B2, F-B-DYNSYM-ELF (audit-EXPECTED) |
 | G7-B (v1.5 Mach-O Part A + ELF wire) ✅ | `_build_macho_arm64_dylib_image_v1_5` (LC_ID_DYLIB + LC_DYLD_INFO_ONLY single-export trie + LC_SYMTAB + LC_DYSYMTAB + LC_CODE_SIGNATURE) + `_link_elf_shared` wires v1.4 Part A through `link_shared()` for the first time. **LANDED 2026-05-20** (commit `0a5ef2d2`). | G7-B (v1.4) | F-B1, F-B2, F-B3, F-B-EXPORTTRIE-MACHO (audit-EXPECTED), F-B-LOADABLE (measurement-deferred) |
 | G7-B.falsify (F-B-LOADABLE measured) ✅ | dlopen + dlsym + invoke harness on real v1.5 link_shared output, both platforms. **Mach-O PASS end-to-end** (dlopen + dlsym + invoke(2,3)=5 byte-eq). **ELF PARTIAL PASS** (dlopen handle non-null + dlsym non-null + dlerror clean — but invoke SEGV because v1.5 dynsym `st_value` is file-offset not base-relative; reloc-record consumption is the deferred v1.6+ sub-cycle per v1.5 honest scope). Measured 2026-05-20 mini (Darwin 25.5.0 arm64) + ubu-1 (Ubuntu 24.04 x86_64). See §4.7. | G7-B (v1.5) | F-B-LOADABLE-MACHO (PASS, byte-eq) · F-B-LOADABLE-ELF (PASS dlopen+dlsym, FAIL invoke — honest-scope confirmed) · F-B-DYNSYM-ELF (PASS) · F-B-EXPORTTRIE-MACHO (PASS) |
-| G7-B (v1.6+ reloc-record path) | `_apply_text_relocs(buf, secs)` consumes `R_X86_64_GOTPCREL` / `R_AARCH64_ADR_GOT_PAGE` / `R_AARCH64_LD64_GOT_LO12_NC` / `X86_64_RELOC_GOT_LOAD` / `ARM64_RELOC_GOT_LOAD_PAGE21` from input `.o` and rewrites the text + emits matching dynsym `st_value` as base-relative offsets so ELF invocation works end-to-end. | G7-B (v1.5) | F-B-LOADABLE-ELF (full end-to-end) |
+| G7-B (v1.6 ELF dynsym st_shndx fix) ✅ | Both ELF dynsym builders (`_build_elf64_dyn_payload` L862, `build_elf64_dyn_with_dynamic_reloc` L1193) rewrite the export `<ident>_dispatch` symbol's `st_shndx` from `SHN_ABS` (`0xFFF1`) to `1` (pseudo text-section index). G6 (`32dfa0cf`) root-caused the measured ELF invoke SEGV to glibc's `SYMBOL_ADDRESS` short-circuiting and returning `st_value` AS-IS for SHN_ABS symbols. Any non-ABS, non-UNDEF shndx makes ld.so add `l_addr` to produce the runtime address (`l_addr + st_value`). glibc/musl ld.so do NOT walk the section-header table on this decision — only the `== SHN_ABS` check matters — so the absent section-header table (e_shoff=0, e_shnum=0) stays valid. Header docs L69+ updated. **LANDED 2026-05-20 + MEASURED ubu-1.** | G7-B (v1.5) | F-B-LOADABLE-ELF invoke (MEASURED PASS — see §4.7.5) |
+| G7-B (v1.6+ reloc-record path / Mach-O Part B) | (a) ELF: `_apply_text_relocs(buf, secs)` consumes `R_X86_64_GOTPCREL` / `R_AARCH64_ADR_GOT_PAGE` / `R_AARCH64_LD64_GOT_LO12_NC` / `X86_64_RELOC_GOT_LOAD` / `ARM64_RELOC_GOT_LOAD_PAGE21` from input `.o`, rewrites text, emits matching `.rela.dyn` for non-text-local refs (covers PIC binaries with external GOT refs). (b) Mach-O Part B: LC_DYLD_INFO_ONLY rebase/binds/lazy_binds opcodes + `__DATA_CONST,__got` section materialization for external-symbol references in the dylib path — currently `_build_macho_arm64_image(is_shared=true)` emits LC_MAIN-only and dyld rejects at load time when bind targets exist. (Note: v1.5 Mach-O Part A `_build_macho_arm64_dylib_image_v1_5` is on origin/main F1 `0a5ef2d2`, not yet on `s1-step2-codegen-perf`; cherry-pick is a parallel prerequisite for the Part B sub-cycle on this branch.) | G7-B (v1.6) | F-B-LOADABLE-ELF (full PIC end-to-end with imports) · F-B-LOADABLE-MACHO-IMPORTS |
 | G7-C  | `self/runtime.{c,h}` adds `hexa_dlopen/dlsym/dlclose/dlerror`; `stdlib/dynlink.hexa` ships | G7-B (or independent if consuming pre-built `.so` only) | F-C1, F-C2 |
 | G7-D.scaffold ✅ | Capability-manifest authoring **decision locked = `@plugin(capabilities=[...])` in-source attribute** (sidecar `.hexa.cap.tape` declined per `@D g3` honesty anchor). ABI stamp record layout LOCKED = `(runtime_version: u32, nanbox_layout_hash: u64)` little-endian, 12 B fixed. `stdlib/dynlink_caps.hexa` skeleton (parse + check_compat + check_grant fn shells, no body) + `compiler/codegen/plugin_attr_scaffold.hexa` (header-comment-only scaffold marker for `@plugin` attribute parser hook). **Zero behavior change.** | G7-C (section emit) | none yet — scaffold only |
 | G7-D.impl.parser ✅ | `self/parser.hexa` learns `@plugin(capabilities=[...])` attribute — paren-balanced raw-token accumulator, serialized into `p_pending_annotations` as `"plugin|<raw-tokens>"` (matches `@cli`/`@flag`/`@doc` storage convention; string-array literal inside `capabilities=[…]` admitted via the bracket-aware depth counter). Parse-gate `hexa_real parse self/parser.hexa` PASS. Self-test `@plugin(capabilities=["net.outbound"]) fn …` parses cleanly. **LANDED 2026-05-20** (this sub-cycle, Shape A surgical; deployed-binary regen = standard deploy). Zero codegen change — `__HEXA,__cap` / `__HEXA,__abi` section emit + manifest sort + `dynlink_caps.hexa` body wiring = G7-D.impl.codegen + G7-D.impl.runtime (future sub-cycles). | G7-D.scaffold | — (parse-gate only) |
@@ -402,6 +403,59 @@ This matches F1's own honest scope verbatim (`compiler/link/hexa_ld.hexa:2210-22
 - **F-B-LOADABLE-ELF (invoke half)** anchor: System V gABI §4.18 — `Elf64_Sym::st_value` semantics for `SHN_*ABS*`-typed FUNC symbols inside `ET_DYN` files. Real-limit: ld.so DOES add `l_addr` to `st_value` for relocatable symbols, but `*ABS*` symbols are treated as absolute. The fix is to mark dispatch symbols as relocatable (`st_shndx` pointing to the text section, not `SHN_ABS`), so ld.so's resolution `l_addr + st_value` lands on the right virtual address. This is the v1.6+ sub-cycle's job.
 
 cross-link: §4.1 falsifier battery · §4.5 G7-A.falsify (parallel measurement pattern, F-A1 PASS / F-A2 EXPECTED-FAIL contract) · `@D g3` real-limits-first (POSIX dlopen + SysV gABI + Apple Mach-O spec anchors) · `@D g5` hexa-native-only (hexa_ld is the hexa-native dynamic linker — no LLVM lld, no system ld) · `@D g_inbox_processing_loop` Shape A (smallest measurement closure — driver-only SSOT edit, no SSOT to hexa_ld itself).
+
+### 4.7.7 G7-B v1.6 ELF dynsym st_shndx fix MEASURED (2026-05-20, **F-B-LOADABLE-ELF invoke → end-to-end PASS · Mach-O Part B deferred per Shape-B**)
+
+Follow-on to G6 (`32dfa0cf`) which root-caused the F-B-LOADABLE-ELF invoke SEGV to glibc's SHN_ABS short-circuit. This sub-cycle lands the surgical SSOT fix at both ELF dynsym builders and re-runs the same harness on ubu-1 to verify end-to-end.
+
+**SSOT edits** (`compiler/link/hexa_ld.hexa`):
+
+1. `_build_elf64_dyn_payload` L862 — `_push_u16le(dynsym, 0xFFF1)` → `_push_u16le(dynsym, 1)`.
+2. `build_elf64_dyn_with_dynamic_reloc` L1193 — same byte change at the v1.5 reloc-record path's export entry.
+3. Header docs L69+ — new v1.6 CAVEATS bullet (root cause + fix mechanism); historical v1.5 block preserved verbatim.
+
+**Driver** (`/tmp/build_g7b/driver`): same shape as §4.7.3's `g7b_driver.hexa` — `use "compiler/link/hexa_ld"`, `env("HEXA_G7B_IN")` + `env("HEXA_G7B_OUT")`, `link_shared(inp, out)` single call. Build pipeline `HEXA_LANG=<worktree> HEXA_MODULE_LOADER=<worktree>/build/hexa_module_loader HEXA_MAC_BUILD_OK=1 hexa.real build`. The `mv` final stage is intercepted by wilson-pool on this host so the `.tmp.<pid>` salvage is `cp .tmp -> driver && chmod +x` (no-op on the binary itself).
+
+**Build object**: `/tmp/trivial_v16.c` (`long add(long a, long b) { return a + b; }`) cross-compiled on ubu-1 (Ubuntu 24.04 x86_64) via `clang -fPIC -c trivial_v16.c -o trivial_v16.o` → 976 B ELF64 relocatable. scp'd back to mini for `hexa_ld v1.6` link_shared invocation.
+
+| stage | result | evidence |
+|-------|--------|----------|
+| `link_shared(trivial_v16.o, trivial_v16.so)` rc | 0 | driver stdout `link_shared(... .so) -> rc=0` |
+| `readelf -h trivial_v16.so` Type | `DYN (Shared object file)` | F-B1 PASS |
+| `objdump -T trivial_v16.so` dynsym | `0000000000001000 g    DF .text 0000000000000016 trivial_v16_dispatch` | **st_shndx renders `.text`** (v1.5 emitted `*ABS*`) — v1.6 fix MEASURED at the binary level |
+| `dlopen(./trivial_v16.so, RTLD_NOW \| RTLD_LOCAL)` | handle non-null, `dlerror()` clean | F-B-LOADABLE-ELF dlopen PASS |
+| `dlsym(h, "trivial_v16_dispatch")` | `0x736895b50000` non-null, `dlerror()` clean | F-B-LOADABLE-ELF dlsym PASS — runtime address is `l_addr + 0x1000` (vs v1.5's raw `0x1000`) |
+| invoke `fn(2, 3)` | returns `5` | **F-B-LOADABLE-ELF invoke + byte-eq PASS** end-to-end |
+
+Harness `/tmp/harness_v16.c` (20 LoC, `dlopen RTLD_NOW \| RTLD_LOCAL` + `dlsym` + invoke + byte-eq + `dlerror` gates) exit code 0, stdout `PASS r=5`.
+
+**Verdict**: ELF path **end-to-end PASS**. The single 2-byte st_shndx change (`0xFFF1` → `0x0001`) closes the G6 SEGV. No section header table emit needed — glibc's `SYMBOL_ADDRESS` decision short-circuits exclusively on `== SHN_ABS`. F-B-LOADABLE-ELF (invoke) PARTIAL PASS → **PASS**.
+
+#### 4.7.7.1 Falsifier matrix update
+
+| ID | platform | v1.5 measurement | v1.6 measurement |
+|----|----------|------------------|------------------|
+| F-B-LOADABLE-MACHO | Mach-O | PASS (mini, end-to-end) | unchanged (no Mach-O change this sub-cycle) |
+| F-B-LOADABLE-ELF | ELF | PARTIAL PASS (invoke SEGV) | **PASS** (ubu-1, end-to-end · `dlsym -> 0x736895b50000` · `fn(2,3) == 5`) |
+
+#### 4.7.7.2 Out of scope (`@D g3`-honest)
+
+- **No Mach-O Part B this sub-cycle** (Shape-B fallback per task spec). Worktree base lacks F1's v1.5 Mach-O Part A (`_build_macho_arm64_dylib_image_v1_5` — on origin/main only); v1.5 Mach-O cherry-pick + Part B (LC_DYLD_INFO_ONLY binds + `__got` materialization) is its own paired sub-cycle. Current `_link_mach_o_shared` still routes through `_build_macho_arm64_image(is_shared=true)` which the file's own L1973 comment correctly flags ("dyld will reject the dylib at load time").
+- **No `e_shoff` / section header table emit** — glibc/musl skip the SHT walk for the SHN_ABS check; adding NULL + .text headers would be cosmetic only (e.g. `readelf -S` polish). Section-header MATERIALIZATION is its own sub-cycle when GOT/PLT lay-down lands.
+- **No reloc-record consumption** (`_apply_text_relocs` etc.) — this sub-cycle is the dynsym-shndx fix in isolation. GOT-typed text relocs that require `.rela.dyn` consumption + .got materialization remain v1.6+ scope per §4 phase table next row.
+- **No `hexa_v2` regen, no binary promote** (`@D g_commit_push_deploy` deferred). Driver was built against deployed `hexa.real` (06:59 UTC).
+- **No `inbox/PATCHES.yaml` touch.**
+
+#### 4.7.7.3 Files this commit touches
+
+- `compiler/link/hexa_ld.hexa` — three sites: dynsym builder L862 + L1193 (the byte change) + header docs L69 (v1.6 CAVEATS bullet). Net: +29 -7 (mostly the new comment block).
+- `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` — §4 phase table v1.6 row added, v1.6+ row reframed to enumerate ELF reloc-record + Mach-O Part B as next sub-cycle; §4.7.7 (this section) added.
+- `compiler/PLAN.md` — single entry pointing to §4.7.7.
+
+#### 4.7.7.4 Real-limit grounding (`@D g3`)
+
+- **F-B-LOADABLE-ELF (invoke half) v1.6 anchor**: glibc `elf/dl-lookup.c` (`SYMBOL_ADDRESS` macro in `include/link.h`) explicitly branches on `sym->st_shndx == SHN_ABS ? sym->st_value : map->l_addr + sym->st_value`. The v1.5 SHN_ABS encoding hit the first branch and lost `l_addr`; the v1.6 `st_shndx=1` encoding lands in the additive branch — same code path as a real `clang -shared` `.so`. Measured `dlsym -> 0x736895b50000` (a typical mmap'd `l_addr` + 0x1000) is the operational confirmation.
+- The fix touches **0 bytes of `st_value` / DT_HASH / DT_SYMTAB layout** — it changes only the symbol's *meaning* from "absolute" to "relocatable", which is the gABI's intent for any FUNC symbol inside an `ET_DYN` shared object.
 
 ## 5. Open questions (verbatim from source patch §7 + 2026-05-20 status)
 

@@ -66,7 +66,26 @@
 //     `nm`, `dwarfdump` will still see an empty binary. Sufficient for
 //     LC_CODE_SIGNATURE acceptance + smoke testing.
 //
-// G7-B CAVEATS (v1.3 scaffold) — UPDATED FOR v1.5 IMPL:
+// G7-B CAVEATS (v1.3 scaffold) — UPDATED FOR v1.6 IMPL:
+//   * v1.6 (2026-05-20, RFC 070 G7-B ELF dynsym st_shndx fix —
+//     follow-on to G6 measurement `32dfa0cf`): the export `<ident>_
+//     dispatch` symbol's `st_shndx` is rewritten from SHN_ABS
+//     (`0xFFF1`) to `1` (pseudo text-section index) in BOTH dynsym
+//     builders (`_build_elf64_dyn_payload` and
+//     `build_elf64_dyn_with_dynamic_reloc`). G6 root-caused the
+//     measured ELF `dlsym` + invoke SEGV to the SHN_ABS encoding:
+//     glibc's `SYMBOL_ADDRESS` short-circuits and returns `st_value`
+//     AS-IS for SHN_ABS symbols, so `dlsym` returned `0x1000` (the
+//     file-offset) instead of `l_addr + 0x1000` (the runtime
+//     address). Any non-ABS, non-UNDEF shndx makes ld.so add `l_addr`
+//     — glibc/musl do NOT walk the section-header table for this
+//     decision, so `e_shnum=0` remains valid. F-B-LOADABLE-ELF
+//     invoke MEASURED PASS on ubu-1 (`dlsym -> 0x736895b50000`,
+//     `fn(2,3) == 5` byte-eq). Mach-O Part B (LC_DYLD_INFO_ONLY
+//     binds for `__got` references) deferred per Shape-B fallback —
+//     RFC 070 §4.7 v1.6+ row.
+//
+// G7-B CAVEATS (v1.3 scaffold) — v1.5 IMPL (historical):
 //   * v1.4 (2026-05-20, RFC 070 G7-B impl Part A): ELF path now emits
 //     PT_DYNAMIC + .dynsym + .dynstr + .hash + .dynamic section with
 //     ONE export symbol `<ident>_dispatch`. The DT_HASH/DT_SYMTAB/
@@ -843,10 +862,22 @@ fn _build_elf64_dyn_payload(ident: string) -> [int] {
     //   [1] global FUNC export `<ident>_dispatch`
     //       st_info = (STB_GLOBAL=1 << 4) | STT_FUNC=2 = 0x12
     //       st_other = STV_DEFAULT = 0
-    //       st_shndx = SHN_ABS = 0xFFF1 (we don't emit a real section
-    //                                    table; absolute keeps the
-    //                                    linker happy without one)
-    //       st_value = 0x1000 (the .text vaddr)
+    //       st_shndx = 1 — pseudo text-section index (v1.6 RFC 070
+    //                  G7-B fix). Any non-SHN_ABS / non-SHN_UNDEF
+    //                  value triggers glibc's `SYMBOL_ADDRESS` to add
+    //                  `l_addr` (i.e. `l_addr + st_value`); SHN_ABS
+    //                  (=0xFFF1) is the special case that returns
+    //                  `st_value` AS-IS, which is what produced the
+    //                  G6 measured invoke SEGV (jumped to unmapped
+    //                  0x1000 instead of `base + 0x1000`). glibc /
+    //                  musl ld.so do NOT walk the section-header
+    //                  table on the shndx field — only the
+    //                  `== SHN_ABS` check matters — so we keep
+    //                  e_shoff/e_shnum at zero and just stamp the
+    //                  symbol with the conventional text-section
+    //                  index 1. See RFC 070 §4.7 root-cause.
+    //       st_value = 0x1000 (the .text vaddr offset; ld.so adds
+    //                  l_addr to recover the runtime address)
     //       st_size  = text_size (filled in by caller via patch — we
     //                              stub 0 here and the caller patches
     //                              once it knows text_size)
@@ -859,7 +890,7 @@ fn _build_elf64_dyn_payload(ident: string) -> [int] {
     _push_u32le(dynsym, sym_name_off)                // st_name
     _push_u8(dynsym, 0x12)                           // st_info
     _push_u8(dynsym, 0)                              // st_other
-    _push_u16le(dynsym, 0xFFF1)                      // st_shndx = SHN_ABS
+    _push_u16le(dynsym, 1)                           // st_shndx = text (v1.6 fix)
     _push_u64le(dynsym, 0x1000)                      // st_value
     _push_u64le(dynsym, 0)                           // st_size (caller patch)
     let dynsym_size = len(dynsym)
@@ -1180,17 +1211,26 @@ pub fn build_elf64_dyn_with_dynamic_reloc(text_bytes,
 
     // ── Build .dynsym ──
     //   [0]              STN_UNDEF (all zero)
-    //   [1]              export `<ident>_dispatch` (STT_FUNC, SHN_ABS,
+    //   [1]              export `<ident>_dispatch` (STT_FUNC,
+    //                      st_shndx=1 pseudo-text index per v1.6 fix,
     //                      st_value=text_vaddr, st_size=text_size)
     //   [2..2+n_imports) STN_UNDEF entries for each import name
     //                      (st_info = STB_GLOBAL << 4 | STT_NOTYPE = 0x10)
+    //
+    // st_shndx=1 (v1.6 RFC 070 G7-B fix): the v1.4 / v1.5 emitter wrote
+    // SHN_ABS (0xFFF1) which forces glibc/musl ld.so to return
+    // st_value as-is from dlsym — caller jumped to unmapped 0x1000
+    // and got SEGV (measured G6 `32dfa0cf` F-B-LOADABLE-ELF invoke
+    // FAIL). Any non-ABS / non-UNDEF index makes `SYMBOL_ADDRESS`
+    // compute `l_addr + st_value` correctly. See RFC 070 §4.7 root
+    // cause + companion patch at `_build_elf64_dyn_payload`.
     let mut dynsym = []
     let mut k = 0
     while k < 24 { _push_u8(dynsym, 0); k = k + 1 }                  // sym[0]
     _push_u32le(dynsym, sym_name_off)                                // sym[1].st_name
     _push_u8(dynsym, 0x12)                                           // st_info GLOBAL|FUNC
     _push_u8(dynsym, 0)                                              // st_other
-    _push_u16le(dynsym, 0xFFF1)                                      // SHN_ABS
+    _push_u16le(dynsym, 1)                                           // st_shndx = text (v1.6 fix)
     _push_u64le(dynsym, text_vaddr)                                  // st_value
     _push_u64le(dynsym, text_size)                                   // st_size
 

@@ -5852,3 +5852,85 @@ HXC v2 — no new toolchain dep) · @D g7 inbox-patches-pipeline
 patch; SOP @D g_inbox_processing_loop steps 1/4/5/6 still apply
 analogously) · @D g_plan_consolidation (this entry is the single PLAN
 SSOT for the cycle).
+
+---
+
+## 2026-05-20 — RFC 070 G7-B v1.6 ELF dynsym st_shndx fix + MEASURED end-to-end
+
+**Scope:** `compiler/link/hexa_ld.hexa` — surgical 2-byte fix at both ELF
+dynsym builders (`_build_elf64_dyn_payload` L862 +
+`build_elf64_dyn_with_dynamic_reloc` L1193) to rewrite the export
+`<ident>_dispatch` symbol's `st_shndx` from `SHN_ABS` (`0xFFF1`) to `1`
+(pseudo text-section index). Follow-on to G6 (`32dfa0cf`) which
+root-caused the F-B-LOADABLE-ELF invoke SEGV to glibc's
+`SYMBOL_ADDRESS` short-circuit on `== SHN_ABS`. Mach-O Part B
+(LC_DYLD_INFO_ONLY binds for `__got` references) DEFERRED per
+task-spec Shape-B fallback — worktree base lacks F1's v1.5 Mach-O
+Part A (`_build_macho_arm64_dylib_image_v1_5`, on origin/main only),
+which is the cherry-pick prerequisite.
+
+**Measurement (mini + ubu-1, 2026-05-20):**
+
+- Driver `/tmp/build_g7b/driver` built against deployed `hexa.real` via
+  `HEXA_LANG=<worktree> HEXA_MODULE_LOADER=<worktree>/build/hexa_module_loader
+   HEXA_MAC_BUILD_OK=1 hexa.real build /tmp/build_g7b/driver.hexa`.
+  Driver imports `compiler/link/hexa_ld`, calls
+  `link_shared(env("HEXA_G7B_IN"), env("HEXA_G7B_OUT"))`. The final
+  `mv` is intercepted by wilson-pool on this host; salvage =
+  `cp .tmp.<pid> driver && chmod +x` (no-op on the produced Mach-O
+  bytes).
+- `/tmp/trivial_v16.c` (`long add(long a, long b) { return a + b; }`)
+  cross-compiled on ubu-1 via `clang -fPIC -c trivial_v16.c -o
+  trivial_v16.o` → 976 B ELF64 relocatable.
+- `HEXA_G7B_IN=trivial_v16.o HEXA_G7B_OUT=trivial_v16.so driver`
+  → rc=0; `.so` scp'd to ubu-1.
+
+| stage | result |
+|-------|--------|
+| `readelf -h trivial_v16.so` Type | `DYN (Shared object file)` (F-B1 PASS) |
+| `objdump -T trivial_v16.so` | `0000000000001000 g    DF .text  0000000000000016 trivial_v16_dispatch` — **st_shndx renders `.text`** (v1.5 emitted `*ABS*`) |
+| `dlopen(./trivial_v16.so, RTLD_NOW \| RTLD_LOCAL)` | handle non-null, `dlerror()` clean |
+| `dlsym(h, "trivial_v16_dispatch")` | `0x736895b50000` non-null, `dlerror()` clean (vs v1.5's raw `0x1000` — i.e. `l_addr + 0x1000` resolution restored) |
+| invoke `fn(2, 3)` | returns `5` byte-equally → harness exit 0, stdout `PASS r=5` |
+
+**Falsifier matrix:** F-B-LOADABLE-ELF (invoke + byte-eq) PARTIAL PASS
+→ **PASS** (ubu-1 measured). All other v1.5 PASSes unchanged.
+F-B-LOADABLE-MACHO unchanged (no Mach-O change this sub-cycle).
+
+**Honest scope (`@D g3`):**
+- **Mach-O Part B DEFERRED** per task-spec Shape-B fallback. The
+  worktree base `_link_mach_o_shared` still routes through
+  `_build_macho_arm64_image(is_shared=true)` which the file's own
+  L1973 comment correctly flags ("dyld will reject the dylib at load
+  time"). Cherry-pick of F1 (`0a5ef2d2` Mach-O Part A) + Part B
+  payload is a paired sub-cycle on this branch.
+- **No section header table emit** — `e_shoff=0, e_shnum=0` remains
+  valid because glibc/musl skip the SHT walk for the SHN_ABS check;
+  adding NULL + .text headers would be cosmetic only (`readelf -S`
+  polish).
+- **No reloc-record consumption** (`_apply_text_relocs` etc.) — this
+  sub-cycle is the dynsym-shndx fix in isolation. GOT-typed text
+  relocs that require `.rela.dyn` consumption + `.got`
+  materialization remain the v1.6+ ELF row's scope per §4 phase
+  table next entry.
+- **No `hexa_v2` regen, no binary promote.** `@D g_commit_push_deploy`
+  pairing deferred to standard deploy cycle.
+- **No `inbox/PATCHES.yaml` touch.**
+
+**Files:**
+```
+ compiler/link/hexa_ld.hexa                                        | +29 -7   (st_shndx 0xFFF1 -> 1 at L862 + L1193 + v1.6 CAVEATS bullet at L69)
+ inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md      | +<70>    (§4 phase table v1.6 row + v1.6+ Mach-O Part B reframe + §4.7.7 measurement + status header)
+ compiler/PLAN.md                                                  | +<this>  (this entry)
+```
+
+cross-link: `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md`
+§4.7.7 (full v1.6 measurement table) · G6 `32dfa0cf`
+(F-B-LOADABLE-ELF invoke SEGV root-cause) · G2 `88533a91`
+(hexa_ld v1.5 ELF PIC text reloc, Shape B heritage) · F1 `0a5ef2d2`
+(hexa_ld v1.5 Mach-O Part A — origin/main only, awaiting cherry-pick
+for the Part B sub-cycle) · `@D g3` real-limits-first (glibc
+`SYMBOL_ADDRESS` SHN_ABS branch anchor + ubu-1 `dlsym -> 0x736895b50000`
+operational confirmation) · `@D g5` hexa-native-only (hexa_ld is the
+hexa-native dynamic linker) · `@D g_inbox_processing_loop` Shape A
+(surgical 2-byte fix at the SSOT, no scaffold).
