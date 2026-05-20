@@ -12,6 +12,7 @@ build/
 ready
 
 .claude/*
+!.claude/skills/
 !.claude/settings.json
 !.claude/hooks/
 !.claude/commands/
