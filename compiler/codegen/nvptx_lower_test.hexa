@@ -787,11 +787,12 @@ fn main() {
     let ok_os    = _test_opcode_suffix()
     let ok_df    = _test_dtype_family()
     let ok_bm    = _test_body_mnemonic()
+    let ok_wie   = _test_wmma_instr_emit()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm {
-        println("PASS: RFC 055 + RFC 067 P1/P2/P3 + RFC 068 P1/P2/P3 + RFC 069 P1/P2/P3 — 22/22 cases (incl. F-RFC068-BODY-MNEMONIC)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie {
+        println("PASS: RFC 055 + RFC 067 P1/P2/P3/INSTR + RFC 068 P1/P2/P3 + RFC 069 P1/P2/P3 — 23/23 cases (incl. RFC 067 WMMA instr-emit)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -816,9 +817,10 @@ fn main() {
         if !ok_os   { println("      RFC 068 P2 F-RFC068-OPCODE-SUFFIX FAILED") }
         if !ok_df   { println("      RFC 067 P3 F-RFC067-DTYPE-FAMILY FAILED") }
         if !ok_bm   { println("      RFC 068 P3 F-RFC068-BODY-MNEMONIC FAILED") }
+        if !ok_wie  { println("      RFC 067 WMMA instr-emit FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -1128,33 +1130,45 @@ fn _build_case_wmma_scaffold() -> MModule {
 }
 
 fn _test_wmma_scaffold() -> bool {
+    // RFC 067 INSTR-EMIT — this case originally asserted the "scaffold"
+    // comment stub. After RFC 067 instruction-emit landed (PR replacing
+    // stub with real wmma.mma.sync... PTX), the assertions are updated
+    // to match the real-emit reality. Naming preserved for backward-
+    // compat (the case still verifies gpu_wmma_mma routes through the
+    // STMT_CALL branch correctly).
     let mut ok = true
     let mod_w = _build_case_wmma_scaffold()
     let ptx = codegen_emit_ptx_sm80(mod_w)
 
     println("")
-    println("── emitted PTX (RFC 055 §12 P4+ WMMA scaffold case, sm_80) ──")
+    println("── emitted PTX (RFC 067 WMMA real-emit case, sm_80) ──")
     println(ptx)
 
-    // Scaffold marker line — substring assertion on the emitted PTX.
-    ok = _check(ok, ptx, "WMMA (scaffold",
-        "WMMA scaffold marker line emitted")
-    // Resolved mnemonic carried by the marker (proves
-    // `_nvptx_wmma_mnemonic` is reachable from the STMT_CALL branch).
+    // Resolved mnemonic emits as a real PTX instruction now (not a stub
+    // comment). The canonical f16×f16→f32 mnemonic from
+    // `_nvptx_wmma_mnemonic`.
     ok = _check(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32",
-        "wmma.mma mnemonic resolved into marker")
-    // The op name `gpu_wmma_mma` appears in the marker, NOT as the
-    // legacy "unsupported call:" stub (which would mean the scaffold
-    // didn't intercept the op).
+        "wmma.mma mnemonic emitted (real instr)")
+    // The dst fragment tuple starts with `{%fra<id>_e0,` — proves the
+    // 8-element curly-braced operand tuple is generated.
+    ok = _check(ok, ptx, "_e0,",
+        "wmma dst tuple starts with `_e0,` (fragment-vector operand)")
+    // The op name `gpu_wmma_mma` still appears in the instruction
+    // comment (added via `_nvptx_instr(mnem, args, comment)`), proving
+    // STMT_CALL routing intact.
     ok = _check(ok, ptx, "gpu_wmma_mma",
-        "gpu_wmma_mma op name preserved in marker")
+        "gpu_wmma_mma op name preserved in instr comment")
     if _contains(ptx, "RFC 055 055-P0 - unsupported call: gpu_wmma_mma") {
-        println("  FAIL: gpu_wmma_mma must be intercepted by the WMMA scaffold, not fall through to unsupported-call stub")
+        println("  FAIL: gpu_wmma_mma must be intercepted by the WMMA emit, not fall through to unsupported-call stub")
         ok = false
     }
-    // Surrounding 055-P0 instructions still emit (scaffold is non-disturbing).
+    if _contains(ptx, "WMMA (scaffold, not yet wired)") {
+        println("  FAIL: stub comment still present — real wmma-emit did NOT fire (P4+ regression)")
+        ok = false
+    }
+    // Surrounding 055-P0 instructions still emit (wmma-emit non-disturbing).
     ok = _check(ok, ptx, "add.f64",          "preceding f64 add still emitted")
-    ok = _check(ok, ptx, "ret;",             "ret terminator after scaffold")
+    ok = _check(ok, ptx, "ret;",             "ret terminator after wmma")
     return ok
 }
 
@@ -2348,6 +2362,91 @@ fn _test_body_mnemonic() -> bool {
         ok = false
     } else {
         println("  ok: no stub fallthrough for add_f16/_bf16/_f32 (P3 dispatch live)")
+    }
+    return ok
+}
+
+// ── Case 23 — RFC 067 wmma INSTR-EMIT (post-scaffold) ─────────────────
+//
+// Verifies the full WMMA emit path lands real PTX instructions for all
+// 4 op-names (gpu_wmma_load_a/_b/_mma/_store_c). Each is asserted via
+// its canonical PTX mnemonic prefix + operand-tuple `_e0,` substring.
+
+fn _build_case_wmma_full() -> MModule {
+    let frag_a = _local(7, "fa")
+    let frag_b = _local(8, "fb")
+    let frag_d = _local(9, "fd")
+
+    let mut s0 = []
+    // gpu_wmma_load_a → load into frag_a (FRAG kind)
+    s0.push(_stmt_call(frag_a, "gpu_wmma_load_a"))
+    // gpu_wmma_load_b → load into frag_b (FRAG kind)
+    s0.push(_stmt_call(frag_b, "gpu_wmma_load_b"))
+    // gpu_wmma_mma → frag_d = mma(frag_a, frag_b, <c>). With s.args
+    // empty in this fixture, the placeholder operand tuples appear.
+    s0.push(_stmt_call(frag_d, "gpu_wmma_mma"))
+    // gpu_wmma_store_c → store. Dst is _miss (void).
+    s0.push(_stmt_call(_miss_local(), "gpu_wmma_store_c"))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut locals = []
+    locals.push(frag_a)
+    locals.push(frag_b)
+    locals.push(frag_d)
+
+    let mf = MFunc {
+        name: "wmma_full_smoke",
+        params: [],
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_wmma_full.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_wmma_instr_emit() -> bool {
+    let mut ok = true
+    let mod_w = _build_case_wmma_full()
+    let ptx = codegen_emit_ptx_sm80(mod_w)
+
+    println("")
+    println("── emitted PTX (RFC 067 WMMA full 4-op emit, sm_80) ──")
+    println(ptx)
+
+    // 4 real PTX wmma mnemonics emit.
+    ok = _check(ok, ptx, "wmma.load.a.sync.aligned.row.m16n16k16.f16.shared",
+        "wmma.load.a real instr")
+    ok = _check(ok, ptx, "wmma.load.b.sync.aligned.col.m16n16k16.f16.shared",
+        "wmma.load.b real instr")
+    ok = _check(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32",
+        "wmma.mma real instr")
+    ok = _check(ok, ptx, "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared",
+        "wmma.store.d real instr")
+    // Per-op staging offsets (proves the lowering threads them
+    // correctly).
+    ok = _check(ok, ptx, "[_hexa_wmma_stage+0]",    "load.a staging offset 0")
+    ok = _check(ok, ptx, "[_hexa_wmma_stage+512]",  "load.b staging offset 512")
+    ok = _check(ok, ptx, "[_hexa_wmma_stage+1024]", "store.d staging offset 1024")
+    // Fragment operand tuple — each FRAG dst expands to 8 elements.
+    ok = _check(ok, ptx, "%fra7_e0",  "frag_a element 0 reachable")
+    ok = _check(ok, ptx, "%fra7_e7",  "frag_a element 7 reachable")
+    ok = _check(ok, ptx, "%fra8_e0",  "frag_b element 0 reachable")
+    ok = _check(ok, ptx, "%fra9_e0",  "frag_d (mma dst) element 0 reachable")
+    // Negative guard — no stub comment leakage.
+    if _contains(ptx, "WMMA (scaffold, not yet wired)") {
+        println("  FAIL: stub comment leaked — instr-emit didn't fire")
+        ok = false
+    } else {
+        println("  ok: no scaffold-stub leak across all 4 op-names")
     }
     return ok
 }
