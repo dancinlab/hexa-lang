@@ -149,11 +149,19 @@ $ HEXA_EXEC_NO_SHELL=1 hexa run /Users/ghost/core/hexa-lang/stdlib/yosys/gate_re
 
 - `~/core/demiurge/YOSYS.md` — rfc_006 §5 measurement gate (this is
   the most-affected concrete blocker)
+- **`inbox/patches/runtime-env-and-exec-capture-stubs-block-cli-tools.md`**
+  (dancinlab/pool, filed earlier) — sibling report: `env(name)` returns ""
+  and `exec_capture()` segfaults from runtime stubs. Same family of
+  bugs at a different layer: pool patch identifies `hxlcl_getenv`
+  intentional-stub; this patch identifies cycle 61-65 unhook leak.
+  Both should be addressed together — restoring either alone leaves
+  the other half of the surface broken
 - `~/core/hexa-lang/inbox/notes/2026-05-21-hexa-exec-broken-pipe.md`
   (if exists) — earlier-noted popen brokenness, may be the same root
 - `~/core/hexa-lang/RUNTIME.md` — cycle 61 / 63 / 65 entries
 - `~/core/hexa-lang/inbox/patches/stdlib-print-float-emits-type-tag-not-value.md`
-  — sibling runtime regression filed 2026-05-21 (anima trainer)
+  — sibling runtime regression filed 2026-05-21 (anima trainer
+  `println(float)` emits literal `(float)` — likely same cycle 61-65 era)
 
 ## Honest C3 / scope
 
