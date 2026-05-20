@@ -283,14 +283,33 @@ fn _nvptx_lookup_reg_for_local(kinds: [PReg], id: i64) -> string {
     return n_f64
 }
 
-// _nvptx_binop_mnemonic — map a MIR binop opcode to its PTX FP64
-// mnemonic. Covers the FP64 arithmetic subset (RFC 055 §6.6); a MIR
-// binop outside that subset returns "" so the caller emits an honest
-// `// RFC 055 055-P0 — unsupported binop` stub line instead of bad PTX.
+// _nvptx_binop_mnemonic — map a MIR binop opcode to its PTX mnemonic.
+// Covers the FP64 arithmetic subset (RFC 055 §6.6) PLUS the RFC 068 P3
+// mixed-precision subset (`add_f16/_bf16/_f32`, sub/mul siblings) so
+// PTX body emit matches the `.reg` bank declared via PR #148 short-
+// circuit. A MIR binop outside the recognized set returns "" so the
+// caller emits an honest `// RFC 055 055-P0 — unsupported binop` stub.
 fn _nvptx_binop_mnemonic(op: string) -> string {
     if op == "add" || op == "+" { return PTX_OP_ADD_F64 }
     if op == "sub" || op == "-" { return PTX_OP_SUB_F64 }
     if op == "mul" || op == "*" { return PTX_OP_MUL_F64 }
+    // RFC 068 P3 `F-RFC068-BODY-MNEMONIC` — mixed-precision arithmetic
+    // mnemonics. The opcode-suffix comes from `hir_to_mir.hexa`'s
+    // `_op_with_precision` (PR #170) when the dst Local carries an
+    // explicit precision tag. Each new mnemonic matches the dst reg
+    // bank declared by `_nvptx_classify_local_for_stmt`'s short-circuit:
+    //   add_f16/sub_f16/mul_f16   → `add.f16 / sub.f16 / mul.f16`     → `%fh<id>` bank
+    //   add_bf16/sub_bf16/mul_bf16 → `add.bf16 / sub.bf16 / mul.bf16` → `%fb<id>` bank
+    //   add_f32/sub_f32/mul_f32   → `add.f32 / sub.f32 / mul.f32`     → `%fs<id>` bank
+    if op == "add_f16"  { return "add.f16" }
+    if op == "sub_f16"  { return "sub.f16" }
+    if op == "mul_f16"  { return "mul.f16" }
+    if op == "add_bf16" { return "add.bf16" }
+    if op == "sub_bf16" { return "sub.bf16" }
+    if op == "mul_bf16" { return "mul.bf16" }
+    if op == "add_f32"  { return "add.f32" }
+    if op == "sub_f32"  { return "sub.f32" }
+    if op == "mul_f32"  { return "mul.f32" }
     return ""
 }
 
@@ -396,14 +415,16 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
         }
         return out
     }
-    // RFC 068 marker — Mixed-precision MIR body lowering. The STMT_BINOP
-    // body branch below emits only `.f64` mnemonics today (`add.f64`,
-    // `sub.f64`, `mul.f64`). RFC 068 P3 (`F-RFC068-BODY-MNEMONIC`)
-    // extends the dispatcher to read the dst Local's precision tag (or
-    // its classified RKIND) and emit `add.{f16,bf16,f32}` siblings
-    // alongside the existing `.f64` path. See
+    // RFC 068 P3 LANDED — Mixed-precision MIR body lowering. The
+    // STMT_BINOP body branch dispatches through `_nvptx_binop_mnemonic`
+    // which now covers `add_f16/_bf16/_f32` (+ sub/mul siblings)
+    // alongside the existing `.f64` path. Real PTX `add.f16 %fh<d>,
+    // %fh<a>, %fh<b>;` (and bf16/f32 variants) emit when source-level
+    // `let t: f16 = a + b` lowers through P1 (precision tag) → P2
+    // (op-name suffix) → P3 (body mnemonic). See
     // `inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
-    // §3 P3 for the per-dtype mnemonic table.
+    // §3 P3 + §4 F3 (`F-RFC068-BODY-MNEMONIC`).
+    // Still pending: P4 (`F-RFC068-NUMERIC-EQ`) — real-silicon fire.
     if s.kind == STMT_BINOP {
         if len(s.args) >= 2 {
             // 055-P3b comparison-binop lowering — `setp.<cond>.f64 %p<dst>,

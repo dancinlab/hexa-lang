@@ -786,11 +786,12 @@ fn main() {
     let ok_np    = _test_nested_preserve()
     let ok_os    = _test_opcode_suffix()
     let ok_df    = _test_dtype_family()
+    let ok_bm    = _test_body_mnemonic()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df {
-        println("PASS: RFC 055 + RFC 067 P1/P2/P3 + RFC 068 P1/P2 + RFC 069 P1/P2/P3 — 21/21 cases (incl. F-RFC068-OPCODE-SUFFIX + F-RFC067-DTYPE-FAMILY)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm {
+        println("PASS: RFC 055 + RFC 067 P1/P2/P3 + RFC 068 P1/P2/P3 + RFC 069 P1/P2/P3 — 22/22 cases (incl. F-RFC068-BODY-MNEMONIC)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -814,9 +815,10 @@ fn main() {
         if !ok_np   { println("      RFC 069 P3 F-RFC069-NESTED-PRESERVE FAILED") }
         if !ok_os   { println("      RFC 068 P2 F-RFC068-OPCODE-SUFFIX FAILED") }
         if !ok_df   { println("      RFC 067 P3 F-RFC067-DTYPE-FAMILY FAILED") }
+        if !ok_bm   { println("      RFC 068 P3 F-RFC068-BODY-MNEMONIC FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -2310,5 +2312,42 @@ fn _test_dtype_family() -> bool {
         println("  ok: non-FRAG PRegs keep frag_* = \"\" (default invariant)")
     }
 
+    return ok
+}
+
+// ── Case 22 — RFC 068 P3 `F-RFC068-BODY-MNEMONIC` ─────────────────────
+//
+// Verifies that STMT_BINOP `add_f16/_bf16/_f32` opcodes emit real
+// PTX `add.f16/.bf16/.f32` body instructions (not the "unsupported
+// binop" stub the P1+P2-only path produced).
+//
+// Re-uses Case 13's mixed-precision fixture (3 binops with op-name
+// suffixes already emitted by the classifier op-name rules from
+// PR #123 + PR #170). The new P3 mnemonic dispatch makes the BODY
+// also emit correctly.
+
+fn _test_body_mnemonic() -> bool {
+    let mut ok = true
+    let mod_mp = _build_case_mixed_precision_scaffold()   // re-use Case 13
+    let ptx = codegen_emit_ptx_sm80(mod_mp)
+
+    println("")
+    println("── emitted PTX (RFC 068 P3 body-mnemonic, sm_80) ──")
+    println(ptx)
+
+    // Body must now contain the real PTX mnemonics — NOT the stub.
+    ok = _check(ok, ptx, "add.f16 ",  "add.f16 body mnemonic emitted")
+    ok = _check(ok, ptx, "add.bf16 ", "add.bf16 body mnemonic emitted")
+    ok = _check(ok, ptx, "add.f32 ",  "add.f32 body mnemonic emitted")
+    // Negative guard — the old "unsupported binop" stub for these ops
+    // MUST NOT appear (would mean the P3 dispatch didn't fire).
+    if _contains(ptx, "unsupported binop: add_f16") ||
+       _contains(ptx, "unsupported binop: add_bf16") ||
+       _contains(ptx, "unsupported binop: add_f32") {
+        println("  FAIL: P3 mnemonic dispatch didn't fire — body still stub")
+        ok = false
+    } else {
+        println("  ok: no stub fallthrough for add_f16/_bf16/_f32 (P3 dispatch live)")
+    }
     return ok
 }
