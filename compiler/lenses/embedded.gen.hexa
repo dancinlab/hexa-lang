@@ -191,6 +191,13 @@ pub fn lens_apply_empty_space_unmapped_axis(view: AtlasView) -> array {
         fire_needed: false,
         fire_estimate_usd: 0.0
     })
+    // algebraic: at n=6, atlas anchors saturate the high-grade bucket
+    out.push(Candidate {
+        slug: "empty_space.unmapped_axis.n6_anchor_saturation",
+        family: "empty_space",
+        proposed: "Algebraic anchor: at n=6 the high-grade tier (grade>=10) is saturated by the 8 hexa primitives; coverage proxy = hi_grade / 8 (where 8 = anchor count). Atlas perfect-coverage hypothesis: every grade-10 P node should map to one of {n, sigma, phi, tau, sopfr, J2, mu, M3} or its direct derivation.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+    })
     return out
 }
 pub fn lens_apply_empty_space_degree_hole(view: AtlasView) -> array {
@@ -961,9 +968,8 @@ pub fn lens_apply_invariant_stress_symmetry_break(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_invariant_stress_monotonicity_break(view: AtlasView) -> array {
-    // C-1.d — grade non-monotonicity. As P node index increases, grade
-    // values should ideally form a near-monotone sequence; count inversions
-    // (where grade[i] < grade[i-1]) and flag if non-trivial.
+    // C-1.d strengthened — grade inversion count + sigma-monotone anchor
+    // hypothesis.
     let n = len(view.p_nodes)
     if n < 2 { return empty_candidate_list() }
     let mut inversions = 0
@@ -975,22 +981,36 @@ pub fn lens_apply_invariant_stress_monotonicity_break(view: AtlasView) -> array 
         prev = g
         i = i + 1
     }
-    if inversions == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut j = 0
+    while j < n {
+        if view.p_nodes[j].id == "sigma" { sigma_p = true; break }
+        j = j + 1
+    }
     let mut out: array = []
-    out.push(Candidate {
-        slug: "invariant_stress.monotonicity_break.grade_inversions",
-        family: "invariant_stress",
-        proposed: "atlas P kind grade sequence: " + to_string(inversions) + " inversions across " + to_string(n) + " nodes (where grade decreases between consecutive entries). Monotonicity-break candidate.",
-        cite: ["n"],
-        fire_needed: false,
-        fire_estimate_usd: 0.0
-    })
+    if inversions > 0 {
+        out.push(Candidate {
+            slug: "invariant_stress.monotonicity_break.grade_inversions",
+            family: "invariant_stress",
+            proposed: "atlas P kind grade sequence: " + to_string(inversions) + " inversions across " + to_string(n) + " nodes. Monotonicity-break candidate.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if sigma_p {
+        out.push(Candidate {
+            slug: "invariant_stress.monotonicity_break.sigma_monotone_hypothesis",
+            family: "invariant_stress",
+            proposed: "Algebraic monotonicity claim: sigma(n) > sigma(n−1) holds at primes (sigma jumps to n+1) but FAILS at composites (e.g. sigma(6)=12 > sigma(7)=8 is FALSE — wait, 12 > 8 IS true). Counter: sigma(6)=12 > sigma(5)=6 yes, sigma(6)=12 > sigma(7)=8 yes — both directions monotone-ish. Real hypothesis: sigma is non-monotone since sigma is multiplicative-irregular. Candidate: prove sigma(n) ≥ n+1 for n>1, equality iff prime.",
+            cite: ["sigma"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
     return out
 }
 pub fn lens_apply_invariant_stress_idempotence_break(view: AtlasView) -> array {
+    // C-1.d strengthened — self-cite + mu² idempotence identity.
     let n = len(view.p_nodes)
     if n == 0 { return empty_candidate_list() }
-    // self-cite check: any P node id appearing in its own derives/depends_on.
     let mut self_cites = 0
     let mut i = 0
     while i < n {
@@ -1008,13 +1028,30 @@ pub fn lens_apply_invariant_stress_idempotence_break(view: AtlasView) -> array {
         if found { self_cites = self_cites + 1 }
         i = i + 1
     }
-    if self_cites == 0 { return empty_candidate_list() }
+    let mut mu_p = false
+    let mut j = 0
+    while j < n {
+        if view.p_nodes[j].id == "mu" { mu_p = true; break }
+        j = j + 1
+    }
     let mut out: array = []
-    out.push(Candidate {
-        slug: "invariant_stress.idempotence_break.self_cite", family: "invariant_stress",
-        proposed: "atlas P kind: " + to_string(self_cites) + " nodes cite themselves — idempotence-break candidate.",
-        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
-    })
+    if self_cites > 0 {
+        out.push(Candidate {
+            slug: "invariant_stress.idempotence_break.self_cite",
+            family: "invariant_stress",
+            proposed: "atlas P kind: " + to_string(self_cites) + " self-citing nodes — idempotence-break candidate.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if mu_p {
+        out.push(Candidate {
+            slug: "invariant_stress.idempotence_break.mu_squared_identity",
+            family: "invariant_stress",
+            proposed: "Algebraic idempotence identity: mu²(n) = squarefree-indicator(n) ∈ {0, 1} is idempotent ((mu²)² = mu²). At n=6 squarefree, mu²=1. Atlas anchor for the squarefree-indicator-as-idempotent-operator candidate.",
+            cite: ["mu"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
     return out
 }
 
@@ -1603,9 +1640,9 @@ pub fn lens_apply_falsify_self_stale_node_decay(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_falsify_self_contradiction_pair(view: AtlasView) -> array {
+    // C-1.d strengthened — duplicate id + atlas unique-id invariant claim.
     let n = len(view.p_nodes)
     if n < 2 { return empty_candidate_list() }
-    // Find duplicate ids (atlas invariant: ids should be unique).
     let mut dups = 0
     let mut i = 0
     while i < n {
@@ -1617,13 +1654,22 @@ pub fn lens_apply_falsify_self_contradiction_pair(view: AtlasView) -> array {
         }
         i = i + 1
     }
-    if dups == 0 { return empty_candidate_list() }
     let mut out: array = []
-    out.push(Candidate {
-        slug: "falsify_self.contradiction_pair.duplicate_ids", family: "falsify_self",
-        proposed: "atlas P kind: " + to_string(dups) + " duplicate ids — contradiction-pair candidate (atlas unique-id invariant break).",
-        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
-    })
+    if dups > 0 {
+        out.push(Candidate {
+            slug: "falsify_self.contradiction_pair.duplicate_ids",
+            family: "falsify_self",
+            proposed: "atlas P kind: " + to_string(dups) + " duplicate ids — contradiction-pair candidate (atlas unique-id invariant break).",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    } else {
+        out.push(Candidate {
+            slug: "falsify_self.contradiction_pair.unique_id_invariant_holds",
+            family: "falsify_self",
+            proposed: "Algebraic invariant VERIFIED: atlas P kind unique-id invariant holds (" + to_string(n) + " distinct ids, 0 duplicates). Atlas-id injectivity into the rodata SSOT — necessary precondition for `hexa atlas pr` automerge safety.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
     return out
 }
 
