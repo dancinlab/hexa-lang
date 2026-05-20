@@ -85,6 +85,41 @@ pub fn rt_lgamma(z: float) -> float {
     return (x - 0.5) * rt_log(x) - x + LOG_SQRT_2PI + series - shift
 }
 
+// Step 3 cycle 19 — naive matmul (row-major, cblas-style M/K/N order).
+//   C[i*N + j] = Σ_p A[i*K + p] * B[p*N + j]
+// Bounds-guarded inner accumulator (skips out-of-range index instead of
+// faulting) matches the C body's defensive contract.
+pub fn rt_matmul(a: [float], b: [float], m: int, k: int, n: int) -> [float] {
+    let mut out: [float] = []
+    if m < 0 { return out }
+    if k < 0 { return out }
+    if n < 0 { return out }
+    let alen = len(a)
+    let blen = len(b)
+    let mut i = 0
+    while i < m {
+        let mut j = 0
+        while j < n {
+            let mut s = 0.0
+            let mut p = 0
+            while p < k {
+                let ai = i * k + p
+                let bi = p * n + j
+                if ai < alen {
+                    if bi < blen {
+                        s = s + a[ai] * b[bi]
+                    }
+                }
+                p = p + 1
+            }
+            out = out.push(s)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
 // Step 3 cycle 18 — naive matrix-vector multiply (row-major).
 //   out[r] = Σ_c w[r*cols + c] * x[c]   for r ∈ [0, rows)
 // Hot path; C wrapper retains the rows/cols int extraction.

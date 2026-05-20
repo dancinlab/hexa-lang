@@ -9538,6 +9538,8 @@ HexaVal hexa_softmax(HexaVal a) {
 // historical reasons; the load-bearing convention is the (M, N, K) caller
 // order documented here. See stdlib/linalg/ffi.hexa for the caller-side
 // mirror of this contract.
+// Step-3 cycle 19 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_matmul(HexaVal a, HexaVal b, HexaVal mv, HexaVal kv, HexaVal nv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(a) || !HX_IS_ARRAY(b)) return out;
@@ -9561,6 +9563,16 @@ HexaVal hexa_matmul(HexaVal a, HexaVal b, HexaVal mv, HexaVal kv, HexaVal nv) {
     }
     return out;
 }
+#else
+extern HexaVal rt_matmul(HexaVal a, HexaVal b, HexaVal m, HexaVal k, HexaVal n);
+HexaVal hexa_matmul(HexaVal a, HexaVal b, HexaVal mv, HexaVal kv, HexaVal nv) {
+    if (!HX_IS_ARRAY(a) || !HX_IS_ARRAY(b)) return hexa_array_new();
+    int64_t m = (int64_t)__hx_to_double(mv);
+    int64_t k = (int64_t)__hx_to_double(kv);
+    int64_t n = (int64_t)__hx_to_double(nv);
+    return rt_matmul(a, b, hexa_int(m), hexa_int(k), hexa_int(n));
+}
+#endif
 
 // Base64 (RFC 4648)
 static const char _b64_enc[] =
