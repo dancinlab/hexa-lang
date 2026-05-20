@@ -6417,3 +6417,79 @@ cross-Mac corpus oracle · x86_64 encoder 40 rules · LIR ops 17/17 ·
 end-to-end ld → exec PASS.
 
 **cc --regen / binary promote**: 미수행 (compiler/emit/* + test/* only).
+
+
+### 2026-05-20 — follow-up cycle 32-c: campaign-branch self-host fixpoint re-measure (HONEST)
+
+cycle 22-31 follow-up 작업으로 campaign branch 가 origin/main 의 S3
+fixpoint PROOF (2026-05-20) 와 어떤 차이가 있는지 측정.
+
+**Track 32-c — 현재 Mac 자체에서 측정**:
+
+```
+$ bash tool/build_aprime.sh -o /tmp/aprime_s7_cycle32c
+=== build_aprime: repo=/tmp/wt-s7-p0-cycle1
+HEAD: de175890 cycle 31 three-track sweep ...
+  [1/5] flatten: 38 files 25594 lines
+  [2/5] transpile: 27572 lines C
+  [3/5] post-process: s4_flatc_post + builtin sed + runtime.c inline
+  [4/5] clang: 2243968 B Mach-O arm64
+  [5/5] smoke: exit(42)==42 PASS — aprime_cc OK
+```
+
+**측정 결과 — 두 axis split**:
+
+✅ **Bootstrap path** (`hexa_v2 → C → clang → aprime_cc`):
+- build_aprime.sh PASS (2.24 MB binary)
+- aprime_cc smoke test: `exit(42)==42` PASS
+- Branch source 가 hexa_v2 transpiler 의 더 permissive 한 타입 검사를
+  여전히 통과한다는 뜻
+
+❌ **S4 native path** (`aprime_cc --emit=asm`):
+- aprime_cc compiling campaign source 는 142 diagnostics 발생
+- 대표 에러:
+  - `HX2001` at `compiler/emit/elf_x86_64.hexa:77:19-22`
+    (`_ew_u16` / `_ew_u32` shift+mask 패턴)
+  - `HX0011` at `compiler/emit/elf_x86_64.hexa:1411:36-39`
+    (`(strtab[off + k] & 0xFF) != char_code(name, k)` 비교)
+- 즉 **aprime_cc 의 stricter type-checker 가 cycle 22-31 의 i64/Int
+  혼용 + u8/Int 비교 패턴을 거부**
+
+**Honest finding** (g3):
+
+S3 fixpoint as PROVEN on origin/main 2026-05-20 (gen1.s ≡ gen2.s,
+md5 `29426b801cb072b2861bd608e884b20b`) is unaffected. Campaign branch
+(`s7-p0-cycle1`) added P2/P3 follow-up cycles 22-31 that introduced
+source patterns hexa_v2 accepts but aprime_cc rejects — a TYPE-CHECKER
+COMPAT REGRESSION introduced by our own follow-ups, not a fixpoint
+break.
+
+To restore S4 native path on the campaign branch:
+- Convert `i64` constants in shift expressions to explicit `Int` where
+  needed (or vice-versa)
+- Cast `[u8]` (strtab) reads with explicit `Int` widening before
+  comparison with `char_code()` (which returns `Int`)
+- Estimate: 142 diagnostics → ~3-4 cycle equivalent surgical fix, OR
+  one big pass with `cc --regen` + deploy
+
+This is correctly classified as a g3-honest gap — the bootstrap path
+still holds, the campaign branch is shippable via hexa_v2+clang chain,
+but the campaign source has self-imposed compat regression that a
+follow-up cycle needs to address.
+
+**RFC 063 phasing**: 32 cycles · 18 falsifier · P0+P1+P2+P3 all closed ·
+S3 fixpoint preserved on origin/main · campaign branch needs aprime_cc
+compat cleanup (deferred to deploy cycle).
+
+**cc --regen / binary promote**: 미수행 — 32-c 는 측정만, source unchanged.
+
+**Deferred cycles (deploy-coupled, separate cycle)**:
+- **32-a**: `compiler/main.hexa::cmd_build` driver 에 `--backend=native
+  --target=x86_64-linux-gnu` 경로 wire
+- **32-b**: `compiler/codegen/x86_64_linux.hexa::codegen_module` →
+  `pack_lir_x86_64` wiring (real LIR, 아니라 synthetic)
+- Both require cc --regen + binary promote per @D g_commit_push_deploy
+
+**Resource note**: 현재 Mac (campaign 호스트, arm64 macOS) 단독. mini
+LAN unreachable, m4mini 는 hexa toolchain 미설치 — 32-c 같은 fixpoint
+측정은 campaign 호스트에서만 가능.
