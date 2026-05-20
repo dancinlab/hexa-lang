@@ -5168,3 +5168,98 @@ would silently store the wrong-typed values.
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md
 (Phase 1+2+2.1 LANDED 2026-05-20 · Phases 3-5 lower/codegen/fixpoint
 still PLANNED).
+
+---
+
+## 2026-05-20 — RFC 070 §G7-D fix: capability-bypass risk (E3 audit follow-up)
+
+**SSOT:** `stdlib/dynlink_caps.hexa` (D3 harvest superset + fix) + new
+`stdlib/test/test_dynlink_caps_parse_error.hexa` selftest.
+
+**Trigger:** E3 audit (commit `10e87cd1`) flagged that
+`dynlink_decode_cap_manifest` silently returned an empty
+`CapManifest{ capabilities: [] }` whenever the HXC v2 payload was
+malformed (zero records · empty header row · first cell ≠ `"H"` ·
+header arity < 4). `dynlink_full_gate` then trivially passed the
+zero-capability manifest through `dynlink_check_cap_grant` (no
+capabilities ⇒ no grant checks ⇒ `ok=1`) — a forged or truncated
+`__HEXA,__cap` section could masquerade as a **"harmless empty
+plugin"** and bypass the F-D2 capability gate after a valid F-D1 ABI
+check.
+
+**Fix (Shape A, surgical):**
+
+1. **New `dynlink_parse_cap_manifest_strict(payload) -> ParseCapManifestResult`**
+   returns the manifest *plus* a `GateResult`. On any malformed
+   condition it returns `kind="parse_error"` with a specific reason
+   (`"CAP: empty manifest payload"` · `"... (no records decoded)"` ·
+   `"... (empty header row)"` · `"... (header row sentinel != 'H')"` ·
+   `"... (header row arity < 4)"`). The empty-sentinel `CapManifest`
+   accompanies the failed gate but **must not be trusted** — the gate
+   field is the truth.
+
+2. **`dynlink_full_gate` rewired** to invoke
+   `dynlink_parse_cap_manifest_strict` between the F-D1 ABI check and
+   the F-D2 cap-grant check. `parse_error` short-circuits the gate
+   (fail-closed) before any grant comparison runs. Order is now:
+   `abi → strict parse → cap grant`.
+
+3. **`dynlink_decode_cap_manifest` retained** with a docstring caveat
+   explicitly directing security-critical callers (host-side dlopen
+   gate) to use the strict variant. Backward-compat for read-only
+   callers preserved.
+
+**Selftest:** `stdlib/test/test_dynlink_caps_parse_error.hexa` exercises
+6 cases — (1) empty payload → `parse_error`, (2) **forged non-'H'
+first cell** → `parse_error` (the bypass scenario), (3) truncated
+header (arity < 4) → `parse_error`, (4) well-formed payload → `ok` +
+populated manifest, (5) `dynlink_full_gate` rejects malformed cap
+payload even with valid ABI + permissive grant table (E3 bypass
+closure proof), (6) `dynlink_full_gate` accepts well-formed payload
+with all caps granted (positive control). Sentinel
+`__DYNLINK_CAPS_PARSE_ERROR__ PASS`.
+
+**Parse gates (worktree-local, syntactic-only):**
+
+```
+stdlib/dynlink_caps.hexa                            → OK parses cleanly
+stdlib/test/test_dynlink_caps_parse_error.hexa      → OK parses cleanly
+compiler/codegen/plugin_attr_scaffold.hexa          → OK parses cleanly
+```
+
+`FIXME` / `XXX` marker count = 0.
+
+**Honest scope (g3):**
+
+- Behaviour change measurement (compile + execute selftest) is **not
+  performed in this cycle** — D3 harvest itself is not yet on
+  `s1-step2-codegen-perf` (only on `d2-x86_64-emit-body`), so this
+  worktree carries the D3 SSOT (`stdlib/dynlink_caps.hexa` +
+  `compiler/codegen/plugin_attr_scaffold.hexa`) as a superset of the
+  fix. The selftest will run for the first time when D3 + this fix
+  are picked into a branch that has the standard build path
+  (`hexa build`) wired against the host runtime.
+- No `hexa_v2` regen, no driver promote (`@D g_commit_push_deploy`
+  defers to the standard deploy cycle).
+- RFC 070 SSOT (`inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md`)
+  is **not present in this worktree** (lives in sibling
+  D-wave-harvest worktrees on branch `d2-x86_64-emit-body`). The
+  §G7-D row in that RFC will be updated to reflect this fix when the
+  RFC itself is picked into mainline — out of scope for the
+  Shape A surgical fix.
+- `dynlink_decode_cap_manifest` left in place for backward-compat;
+  follow-up could deprecate it once all callers migrate.
+
+**LoC delta:**
+
+```
+ stdlib/dynlink_caps.hexa                             | +100 -8   (strict parser + full_gate rewire + docstring)
+ stdlib/test/test_dynlink_caps_parse_error.hexa       |  +85 -0   (6-case selftest)
+ compiler/codegen/plugin_attr_scaffold.hexa           | (D3 harvest superset, unchanged this cycle)
+ compiler/PLAN.md                                     |  +<this>  (this entry)
+```
+
+cross-link: D3 harvest `5f37a884` · E3 audit `10e87cd1` ·
+B2 design lock `c54b76f3` · RFC 070 §G7-D row (out-of-worktree;
+fix lands here for cherry-pick once RFC enters mainline).
+
