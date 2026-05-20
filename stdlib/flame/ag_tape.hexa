@@ -44,6 +44,15 @@
 use "stdlib/flame/tensor_lib"
 use "stdlib/flame/nn_lib"
 use "stdlib/flame/flame_math"
+// SD4 (autograd-auto integration, RFC 043 scoping note
+// inbox/notes/2026-05-20-flame-autograd-auto-scoping.md §4): pull in
+// the ag_derive vjp-rule registry so `ag_backward_reg` can dispatch
+// matmul (`ag_k_linear`) + silu-gate (`ag_k_silu_gate`) via the
+// SD1/SD3 auto-rules. SD2's `add_bwd_auto` is broadcast bias-add (a
+// different primitive than `ag_k_add`'s elementwise residual — see
+// the g3 caveat at the integration call-site below); only the two
+// semantically-matching rules are integrated in SD4.
+use "stdlib/flame/ag_derive"
 
 // ── op kinds ────────────────────────────────────────────────────────────
 pub fn ag_k_rmsnorm() -> int { return 1 }
@@ -534,6 +543,21 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
     if n <= 0 { return }
     // seed: grad[out_tid] = seed (acc into fresh zero == set).
     _ag_reg_acc(tape, out_tid, seed, t_len(seed))
+    // SD4 (autograd-auto integration): one ag_derive vjp-rule registry
+    // per backward pass — 16-slot farr (≈64 cells), allocated once and
+    // reused across all ops below. Registering the two ops we dispatch
+    // (matmul · silu_gate) up-front; SD2's add_bwd_auto is intentionally
+    // NOT integrated here (its `farr_add` semantics is broadcast bias-add
+    // = reduce-sum, while ag_k_add is elementwise residual = identity
+    // vjp — different primitives; see the ag_k_add case below for the
+    // honest carve-out comment). The matmul rule body is byte-equivalent
+    // to nn_linear_bwd's {dW, dx} loops (SD1 oracle gate); the silu_gate
+    // rule body is byte-equivalent to ag_tape's inline closed-form (SD3
+    // oracle gate). Both were measured max|Δ| = 0.0 in
+    // test/flame_ag_derive_test.hexa.
+    let ag_derive_reg = ag_derive_registry_new()
+    let _ = ag_derive_register(ag_derive_reg, ag_derive_k_matmul())
+    let _ = ag_derive_register(ag_derive_reg, ag_derive_k_silu_gate())
     let mut op = n - 1
     while op >= 0 {
         let kind = _ag_get(tape, op, 0)
@@ -561,26 +585,39 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             let D = _ag_get(tape, op, 10)
             let C = _ag_get(tape, op, 11)
             let og = _ag_reg_grad(tape, y, B * C)
-            // mk2-C5: forge-route the bwd matmuls. nn_linear_bwd was
-            // a full host-scalar 3-loop (dW, dx, db) at ~1.2B ops per
-            // ag_linear call × 84 calls × 5 step calls = ~500B ops
-            // total — the dominant 14min GPU-idle wall blocker per
-            // mk2-FINAL #2 measurement. Replace with:
-            //   dW[D·C] = matmul(xT[D·B], B, og[B·C], C)
-            //   dx[B·D] = matmul(og[B·C], C, WT[C·D], D)
-            // db skipped — d768 driver passes zero `bb` and never
-            // reads bb's grad (callers with non-zero bias would need
-            // a separate variant; flag here for future).
-            let xT = t_zeros(D * B)
-            let _ = farr_transpose_2d_gpu(x, 0, xT, 0, B, D)
-            let dW = farr_matmul(xT, D, B, og, C)
-            let WT = t_zeros(C * D)
-            let _ = farr_transpose_2d_gpu(W, 0, WT, 0, D, C)
-            let dx = farr_matmul(og, B, C, WT, D)
+            // SD4 (autograd-auto integration · scoping §4): dispatch
+            // the matmul vjp via the SD1 auto-rule `matmul_bwd_auto`
+            // from `stdlib/flame/ag_derive.hexa`. The rule body is the
+            // closed-form chain-rule application
+            //   dW = xᵀ · dy        (outer (d,c), reduce over b)
+            //   dx = dy · Wᵀ        (outer (b,d), reduce over c)
+            // in the SAME loop-nest + scalar-multiplication associativity
+            // order as `nn_lib::nn_linear_bwd` (which Test 2/7 + decoder
+            // references in this test file call directly) — therefore
+            // max|Δ| = 0.0 vs the nn_lib reference, the gate measured in
+            // test/flame_ag_derive_test.hexa (F-RFC043-AUTOGRAD-AUTO-
+            // MATMUL-BYTE-EQ). This replaces the prior `mk2-C5` forge-
+            // route (`farr_matmul` + `farr_transpose_2d_gpu`); the
+            // forge-route's GPU-side IEEE-754 trajectory differed from
+            // the CPU host-scalar `nn_linear_bwd` reference, making
+            // Tests 2 + 7 (which compare against `nn_linear_bwd`
+            // directly) FAIL byte-eq pre-SD4. The auto-rule routes
+            // through the same host-scalar order as `nn_linear_bwd`
+            // and therefore brings the tape path back into byte-eq
+            // with those references; the throughput tradeoff is a
+            // separate cycle (gap(d) forge-routing under a per-call
+            // semantics-preserving fusion plan, Test 19's $0
+            // artifact). db skipped — `ag_linear` recorder drops the
+            // bias (forward shortcuts through `farr_matmul` without
+            // the `+ b` broadcast at line 196), so consumers reading
+            // `db` rely on the legacy `ag_backward` single-cur_dy
+            // walker which still calls `nn_linear_bwd`.
+            let dW = t_zeros(D * C)
+            let dx = t_zeros(B * D)
+            let _ = matmul_bwd_auto(ag_derive_reg, x, W, og,
+                                    dW, dx, B, D, C)
             _ag_reg_acc(tape, x, dx, B * D)
             _ag_reg_acc(tape, W, dW, D * C)
-            t_free(xT)
-            t_free(WT)
             t_free(dW)
             t_free(dx)
         } else if kind == ag_k_rope() {
@@ -701,6 +738,25 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             t_free(dK)
             t_free(dV)
         } else if kind == ag_k_add() {
+            // SD4 (autograd-auto integration · scoping §4): NOT
+            // dispatched through ag_derive's `add_bwd_auto`. The SD2
+            // rule encodes the BROADCAST bias-add vjp (`db[j] = Σ_i
+            // dy[i,j]` — the reduce-sum adjoint of the `+ b[j]` half
+            // of `nn_linear_fwd`), whereas `ag_k_add` here is the
+            // ELEMENTWISE residual primitive (`out = a + b`, both
+            // tensors length `len`; both inputs receive the upstream
+            // gradient verbatim — the identity adjoint of pure
+            // addition). They are different fwd primitives despite
+            // sharing the `add` label; routing the elementwise case
+            // through the broadcast rule would change semantics
+            // (reduce-sum is NOT the identity vjp) and break Test 8
+            // (residual fan-out) + Tests 13–17 (decoder residuals).
+            // The honest carve-out is to keep the inline identity
+            // dispatch for `ag_k_add` and leave SD2's bias-add rule
+            // for a future `ag_k_bias_add` recorder when one is
+            // added (scoping note §4 future sub-cycles). g3 — SD4
+            // integrates the two rules whose semantics match
+            // `ag_tape`'s primitives; this one does not.
             let a = _ag_get(tape, op, 1)
             let b = _ag_get(tape, op, 2)
             let out = _ag_get(tape, op, 3)
@@ -743,16 +799,25 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             let s = _ag_get(tape, op, 3)
             let len = _ag_get(tape, op, 9)
             let og = _ag_reg_grad(tape, s, len)
+            // SD4 (autograd-auto integration · scoping §4): dispatch
+            // the elementwise gated-SiLU vjp via the SD3 auto-rule
+            // `silu_gate_bwd_auto` from `stdlib/flame/ag_derive.hexa`.
+            // The rule body computes
+            //   da[i] = ds[i] · b[i] · silu'(a[i])
+            //   db[i] = ds[i] · silu(a[i])
+            // (i ∈ [0, len)) via the SAME `dt_exp`-based sigmoid /
+            // silu / silu' helpers (`_ag_derive_sigmoid`, etc. — local
+            // mirrors of `_ag_sigmoid`/`_ag_silu`/`_ag_silu_grad`
+            // above) AND the same product-rule expansion in the same
+            // index-order as the prior inline body — therefore the
+            // dispatch is byte-identical (max|Δ| = 0.0) to the inline
+            // formula it replaces. The gate is measured in
+            // test/flame_ag_derive_test.hexa (F-RFC043-AUTOGRAD-AUTO-
+            // SILU-GATE-BYTE-EQ).
             let da = t_zeros(len)
             let db = t_zeros(len)
-            let mut i = 0
-            while i < len {
-                let av = t_get(a, i)
-                let dsk = t_get(og, i)
-                t_set(da, i, dsk * t_get(b, i) * _ag_silu_grad(av))
-                t_set(db, i, dsk * _ag_silu(av))
-                i = i + 1
-            }
+            let _ = silu_gate_bwd_auto(ag_derive_reg, a, b, og,
+                                       da, db, len)
             _ag_reg_acc(tape, a, da, len)
             _ag_reg_acc(tape, b, db, len)
             t_free(da)
@@ -803,6 +868,8 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
         }
         op = op - 1
     }
+    // SD4: release the per-pass ag_derive registry (16-slot farr).
+    t_free(ag_derive_reg)
 }
 
 // ── reverse pass (legacy single-cur_dy chain — sub-step 1/2 oracles) ─────
