@@ -8494,3 +8494,27 @@ Cross-links:
 - PR #247 / `cdfa8d46` — prior `any_grant` SSA fix (still alive)
 
 @cite g_commit_push_deploy
+
+### 2026-05-21 — RFC 073 Phase 3g `rr_ptr__d` cross-iter comb-loop CLOSED (rfc_006 §5 Tier-1 (d))
+
+**Branch**: `rfc-073-phase-3g-rrptr-ssa` · **Files**: `stdlib/kernels/logic_synth/read_verilog.hexa` (+243 / -10) · **Tests**: read_verilog 77→78/78 PASS (T75 added) · adjacent {passes, abc_map, rtlil, liberty} 0 regression.
+
+Phase 3g generalises Phase 3f (per-iter SSA renaming for read-then-blocking-LHS targets inside `always @*` for-loops). Added `_rv_ssa_rewrite_preloop_for(m, s, snapshot)` helper that walks existing connect rows in `[0, snapshot)` and rewrites unconditional `connect(s, X)` to `connect(s__ssa0, X)` when `s` is in `_ssa_tracked`. SSA fire site (in `_rv_parse_always` for-handler) snapshots `len(m.connect_lhs)` BEFORE the alias loop, calls the rewrite per tracked `s`, and SUPPRESSES the legacy `connect(s__ssa0, s)` alias when ≥1 rewrite occurred.
+
+RCA: Phase 3f's pre-loop alias `connect(s__ssa0, s)` combined with post-publish `connect(s, s__ssa<P>)` AND the pre-loop direct init `connect(s, $const_0)` multi-drove `s` → `clean_multidriver` collapsed to `s__ssa<P>` (last-wins) → the alias chained `s__ssa0 ← s ← s__ssa<P>` → ABC `NetworkCheck` flagged a self-loop terminating at `rr_ptr__d` (the downstream `$dff` CO consuming `grant_in`).
+
+§5 oracle measurement (gate_record.hexa --lib sky130_fd_sc_hd):
+  - d4 abc_map: ok (was FAIL — comb loop on n272 → CO `rr_ptr__d`)
+  - d6 abc_map: ok (was FAIL — comb loop on n372 → CO `rr_ptr__d`)
+  - d4 area = 559.286 µm² (oracle 61762.99 µm² · Δ ≈ 99.1 % UNDER)
+  - d6 area = 771.99  µm² (oracle 93608.53 µm² · Δ ≈ 99.2 % UNDER)
+
+**§5 verdict**: OPEN — comb-loop class CLOSED, area-oracle still OPEN. Next blocker is Tier-1 (e) `fifo_mem` 2-D packed-array memwr (40 non-driven nets in d4, ~80 in d6 per ABC's `Constant-0 drivers added` warning). NO `Yosys absorbed` claim made.
+
+Cross-links:
+- inbox/notes/2026-05-21-rfc006-§5-phase3g-rrptr-closed.md — full RCA + measurement
+- inbox/patches/yosys-rr-ptr-cross-iteration-comb-loop.md (commit `f4283ac2`) — status → resolved-ssot
+- PR #247 (`cdfa8d46`) — Phase 3f intra-iter SSA this generalises
+- PR #250 (`d698e61a`) — T74 minimum-shape falsifier (assertions updated for 3g)
+
+@cite g6 citation-enforced + IEEE 1364-2005 §9.1.1.2 / §10.4.2 + Yosys passes/proc/proc_mux.cc (clean-room)

@@ -2427,6 +2427,78 @@ fn _rv_ssa_rename_toks(toks: [str], tracked: [str], k_read: int, k_write: int) -
     return out
 }
 
+// RFC 073 Phase 3g — pre-loop init redirect for SSA-tracked signals.
+//
+// Phase 3f wrapped each combinational for-loop with per-iter SSA
+// renaming for blocking-LHS-and-read targets (e.g. router_d4's
+// `any_grant`, `grant_in`, `grant_out`, `idx`). It emitted a
+// pre-loop alias `connect(s__ssa0, s)` so iter-0 reads see the
+// pre-for value of `s`, plus a post-loop publish `connect(s,
+// s__ssa<P>)` so consumers downstream of the for-loop see the
+// final SSA version.
+//
+// HONEST GAP (Phase 3f) — when the always-body has a PRE-LOOP
+// blocking write to `s` (e.g. router_d4 L81-83: `any_grant = 1'b0
+// ; grant_in = 3'd0 ; grant_out = 3'd0 ;` BEFORE the for-loop),
+// the connects emitted for those statements were `connect(s,
+// $const_0)`. Combined with the post-publish `connect(s, s__ssa
+// <P>)` this multi-drove `s` → `pass_clean_multidriver` collapsed
+// (kept post-publish, dropped const) → the pre-loop alias
+// `connect(s__ssa0, s)` then chained `s__ssa0 ← s ← s__ssa<P>`
+// → ABC `NetworkCheck` flagged a combinational loop terminating
+// at `rr_ptr__d` (the CO of the sibling clocked always block that
+// reads `grant_in`).
+//
+// FIX — when SSA fires, walk the existing connect rows (those
+// emitted BEFORE the for-handler entered the SSA path) and for
+// each unconditional row whose lhs is a tracked signal `s`,
+// rewrite the lhs to `s__ssa0`. The pre-loop init now drives the
+// SSA chain's entry version directly; `s` ends up single-driven
+// by the post-publish, breaking the cycle. The caller suppresses
+// the `connect(s__ssa0, s)` alias for signals where ≥1 row was
+// rewritten (suppression is per-signal to keep alias semantics
+// for signals with no pre-loop write).
+//
+// @cite IEEE 1364-2005 §9.1.1.2 (blocking assignment ordering),
+// §10.4.2 (procedural assign final value), Yosys
+// passes/proc/proc_mux.cc (last-wins multi-driver collapse
+// reference behaviour). Surgical to read_verilog.hexa — passes
+// .hexa / abc_map.hexa / gate_record.hexa untouched.
+struct RvSsaRewrite1 {
+    m: Module,
+    rewrote: int,
+}
+
+fn _rv_ssa_rewrite_preloop_for(m: Module, s: str, snapshot: int) -> RvSsaRewrite1 {
+    let mut new_lhs: [str] = []
+    let mut rewrote = 0
+    let n = len(m.connect_lhs)
+    let mut k = 0
+    while k < n {
+        let cur_lhs = m.connect_lhs[k]
+        let mut should_rewrite = 0
+        if k < snapshot {
+            if len(m.connect_cond[k]) == 0 && cur_lhs == s {
+                should_rewrite = 1
+            }
+        }
+        if should_rewrite == 1 {
+            new_lhs = new_lhs.push(s + "__ssa0")
+            rewrote = rewrote + 1
+        } else {
+            new_lhs = new_lhs.push(cur_lhs)
+        }
+        k = k + 1
+    }
+    return RvSsaRewrite1 {
+        m: Module {
+            name: m.name, wires: m.wires, cells: m.cells, processes: m.processes,
+            connect_lhs: new_lhs, connect_rhs: m.connect_rhs, connect_cond: m.connect_cond
+        },
+        rewrote: rewrote
+    }
+}
+
 fn _rv_emit_body_v2(
     body_toks: [str],
     cond_wire: str,
@@ -4300,7 +4372,22 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     let _ssa_first_body = _rv_ssa_rename_toks(_ssa_body_toks, _ssa_tracked, 0, 1)
                     let _ssa_probe = _rv_emit_for_if_stmts(_ssa_first_body, "", m, tab, 0, "")
                     if _ssa_probe.ok == 1 {
-                        // Pre-loop alias.
+                        // RFC 073 Phase 3g — snapshot connects BEFORE the
+                        // SSA fire so pre-loop direct writes to tracked
+                        // signals can be redirected to `s__ssa0`. See
+                        // `_rv_ssa_rewrite_preloop_for` (L2429+) for the
+                        // RCA: pre-loop `connect(s, $const_0)` combined
+                        // with post-publish `connect(s, s__ssa<P>)`
+                        // multi-drives `s` → clean_multidriver keeps the
+                        // post-publish → the alias `s__ssa0 ← s` closes
+                        // a comb cycle (router_d4 `rr_ptr__d` symptom).
+                        let _ssa_snapshot_n = len(m.connect_lhs)
+                        // Pre-loop alias — emitted per tracked signal,
+                        // BUT suppressed when ≥1 pre-loop direct write
+                        // to `s` was rewritten to `s__ssa0`. In that
+                        // case the rewritten init writes are the
+                        // entry-version drivers; emitting the alias on
+                        // top would re-introduce the multidriver.
                         let mut _ssa_si = 0
                         while _ssa_si < len(_ssa_tracked) {
                             let s = _ssa_tracked[_ssa_si]
@@ -4308,7 +4395,16 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                             if rtlil_find_wire(m, s0) < 0 {
                                 m = rtlil_module_add_wire(m, rtlil_wire(s0, 1, 0, 0))
                             }
-                            m = rtlil_module_connect(m, s0, s)
+                            let _ssa_rw = _rv_ssa_rewrite_preloop_for(m, s, _ssa_snapshot_n)
+                            m = _ssa_rw.m
+                            if _ssa_rw.rewrote == 0 {
+                                // No pre-loop direct write to `s` —
+                                // emit the legacy alias so iter-0 reads
+                                // see whatever drove `s` before the
+                                // always-block (or the same-cycle value
+                                // when no prior driver exists).
+                                m = rtlil_module_connect(m, s0, s)
+                            }
                             _ssa_si = _ssa_si + 1
                         }
                         let mut _ssa_fi = 0
@@ -6673,22 +6769,159 @@ fn main() {
             println("FAIL T74b missing final publish connect(v, v__ssa3)")
             fails = fails + 1
         }
-        // Pre-loop alias: connect(v__ssa0, v) — unconditional. This is the
-        // "loop entry value" that BREAKS the comb self-feedback: iter 0
-        // reads v__ssa0 (an alias of pre-loop v), NOT a wire that some
-        // later iter will rewrite.
-        let mut _t74_entry = 0
+        // RFC 073 Phase 3g — pre-loop direct write redirect.
+        //
+        // Phase 3f originally asserted `connect(v__ssa0, v)` (the
+        // "loop entry alias") to anchor iter-0's read at the pre-for
+        // value of `v`. Phase 3g (`_rv_ssa_rewrite_preloop_for`)
+        // RE-targets the pre-loop direct write `v = 1'b0` from
+        // `connect(v, $const_0)` to `connect(v__ssa0, $const_0)` —
+        // the SSA chain's entry version is now driven by the init
+        // constant DIRECTLY (no `v`-aliased indirection). The alias
+        // emit is suppressed because the redirected init already
+        // drives `v__ssa0`. This closes the
+        // `v__ssa0 ← v ← v__ssa<P>` clean_multidriver cycle that
+        // ABC's `NetworkCheck` flagged for router_d{4,6} as
+        // `rr_ptr__d` combinational loop (Tier-1 (d), commit
+        // `f4283ac2` inbox hypothesis 1 + 2).
+        //
+        // Acceptance for T74 (post-3g): `v__ssa0` is driven by the
+        // rewritten pre-loop init (not aliased to `v`); `v` is
+        // single-driven by the post-publish; the legacy alias row
+        // `connect(v__ssa0, v)` MUST be ABSENT.
+        let mut _t74_entry_driver = 0
+        let mut _t74_legacy_alias = 0
         let mut _t74_ej = 0
         while _t74_ej < len(_m74.connect_lhs) {
             if _m74.connect_lhs[_t74_ej] == "v__ssa0"
+                && len(_m74.connect_cond[_t74_ej]) == 0 {
+                _t74_entry_driver = _t74_entry_driver + 1
+            }
+            if _m74.connect_lhs[_t74_ej] == "v__ssa0"
                 && _m74.connect_rhs[_t74_ej] == "v"
                 && len(_m74.connect_cond[_t74_ej]) == 0 {
-                _t74_entry = 1
+                _t74_legacy_alias = _t74_legacy_alias + 1
             }
             _t74_ej = _t74_ej + 1
         }
-        if _t74_entry != 1 {
-            println("FAIL T74c missing pre-loop alias connect(v__ssa0, v)")
+        if _t74_entry_driver < 1 {
+            println("FAIL T74c missing v__ssa0 entry-version driver (Phase 3g pre-loop redirect)")
+            fails = fails + 1
+        }
+        if _t74_legacy_alias != 0 {
+            println("FAIL T74d unexpected legacy alias connect(v__ssa0, v) present after Phase 3g")
+            fails = fails + 1
+        }
+    }
+
+    // T75 — RFC 073 Phase 3g (F-RFC-RV-PRELOOP-INIT-REDIRECT).
+    //
+    //   Minimum-shape exerciser for the pre-loop direct-write
+    //   redirect in `_rv_ssa_rewrite_preloop_for`. Pattern is the
+    //   router_d4 priority-arbiter (L80-94) reduced to the
+    //   essential init-then-for shape: a tracked signal is
+    //   blocking-assigned BEFORE the for-loop AND blocking-assigned
+    //   AND read INSIDE the for-loop.
+    //
+    //   Pattern (P=3 iterations):
+    //
+    //     always @* begin
+    //       rr = rr_q ;                              // pre-loop init
+    //       for ( i = 0 ; i < 3 ; i = i + 1 )
+    //         if ( cond [ i ] ) rr = rr + 1'b1 ;     // read-then-write
+    //     end
+    //
+    //   Pre-fix (Phase 3f only): `connect(rr, rr_q)` (pre-loop) +
+    //   `connect(rr, rr__ssa3)` (post-publish) multidrives `rr` →
+    //   collapse keeps rr__ssa3 → `rr__ssa0 ← rr ← rr__ssa3`
+    //   cycle (router_d{4,6} `rr_ptr__d` symptom in ABC).
+    //
+    //   Post-fix (Phase 3g): pre-loop write redirects to
+    //   `connect(rr__ssa0, rr_q)`; legacy `connect(rr__ssa0, rr)`
+    //   alias is suppressed; `rr` is single-driven by the
+    //   post-publish; no clean_multidriver collapse on `rr` →
+    //   no cycle.
+    //
+    //   @cite IEEE 1364-2005 §9.1.1.2 + Yosys
+    //   passes/proc/proc_mux.cc (last-wins multi-driver collapse).
+    total = total + 1
+    let _v75 = "module sm75 ( input wire rr_q , input wire [ 2 : 0 ] cond , output reg rr ) ; integer i ; always @ ( * ) begin rr = rr_q ; for ( i = 0 ; i < 3 ; i = i + 1 ) if ( cond [ i ] ) rr = rr + 1'b1 ; end endmodule"
+    let _r75 = read_verilog(_v75)
+    if _r75.ok != 1 {
+        println("FAIL T75 preloop_redirect_ssa: " + _r75.message); fails = fails + 1
+    } else {
+        let _m75 = _r75.design.modules[0]
+        // SSA versioned wires for `rr` — pre-3g this test would fail
+        // T75b (legacy alias present) and T75c (pre-loop write still
+        // targeting `rr`, not `rr__ssa0`).
+        let mut _t75_ssa_missing = 0
+        let mut _t75_k = 0
+        while _t75_k <= 3 {
+            if rtlil_find_wire(_m75, "rr__ssa" + str(_t75_k)) < 0 {
+                _t75_ssa_missing = _t75_ssa_missing + 1
+            }
+            _t75_k = _t75_k + 1
+        }
+        if _t75_ssa_missing > 0 {
+            println("FAIL T75a rr__ssa<k> missing count = "
+                + str(_t75_ssa_missing) + " (expected 0 — 4 versions ssa0..ssa3)")
+            fails = fails + 1
+        }
+        // T75b — legacy alias `connect(rr__ssa0, rr)` MUST be absent
+        // (suppressed by Phase 3g rewrite).
+        let mut _t75_legacy_alias = 0
+        let mut _t75_ci = 0
+        while _t75_ci < len(_m75.connect_lhs) {
+            if _m75.connect_lhs[_t75_ci] == "rr__ssa0"
+                && _m75.connect_rhs[_t75_ci] == "rr"
+                && len(_m75.connect_cond[_t75_ci]) == 0 {
+                _t75_legacy_alias = _t75_legacy_alias + 1
+            }
+            _t75_ci = _t75_ci + 1
+        }
+        if _t75_legacy_alias != 0 {
+            println("FAIL T75b legacy alias connect(rr__ssa0, rr) present (expected 0 after Phase 3g rewrite-and-suppress)")
+            fails = fails + 1
+        }
+        // T75c — pre-loop write redirected to `rr__ssa0`: there
+        // MUST be ≥1 unconditional row `connect(rr__ssa0, rr_q)`.
+        let mut _t75_redirected = 0
+        let mut _t75_di = 0
+        while _t75_di < len(_m75.connect_lhs) {
+            if _m75.connect_lhs[_t75_di] == "rr__ssa0"
+                && _m75.connect_rhs[_t75_di] == "rr_q"
+                && len(_m75.connect_cond[_t75_di]) == 0 {
+                _t75_redirected = _t75_redirected + 1
+            }
+            _t75_di = _t75_di + 1
+        }
+        if _t75_redirected < 1 {
+            println("FAIL T75c missing redirected pre-loop write connect(rr__ssa0, rr_q)")
+            fails = fails + 1
+        }
+        // T75d — `rr` is NOT directly written outside the post-publish:
+        // count unconditional `connect(rr, X)` rows. Phase 3g should
+        // leave EXACTLY 1 row: the post-publish `connect(rr, rr__ssa3)`.
+        let mut _t75_rr_drivers = 0
+        let mut _t75_post_publish_seen = 0
+        let mut _t75_pi = 0
+        while _t75_pi < len(_m75.connect_lhs) {
+            if _m75.connect_lhs[_t75_pi] == "rr"
+                && len(_m75.connect_cond[_t75_pi]) == 0 {
+                _t75_rr_drivers = _t75_rr_drivers + 1
+                if _m75.connect_rhs[_t75_pi] == "rr__ssa3" {
+                    _t75_post_publish_seen = 1
+                }
+            }
+            _t75_pi = _t75_pi + 1
+        }
+        if _t75_post_publish_seen != 1 {
+            println("FAIL T75d missing post-publish connect(rr, rr__ssa3)")
+            fails = fails + 1
+        }
+        if _t75_rr_drivers != 1 {
+            println("FAIL T75e expected exactly 1 unconditional driver of `rr` (post-publish) got "
+                + str(_t75_rr_drivers))
             fails = fails + 1
         }
     }
