@@ -8,6 +8,8 @@ kernel. Extracted under the D72 2-layer STDLIB restructure, alongside
 | file | role |
 |---|---|
 | `lif_kernel.py` | `simulate_lif(...)` — integrate one LIF neuron with constant DC drive via brian2; `equation_hash(...)` for drift detection; `brian2_version()` probe. Given any LIF parameter set, returns the deterministic spike statistics (count, firing rate, mean ISI, CV). |
+| `lif_kernel.hexa` | D80 g_hexa_only port (3/N after `kernels/solar/solar_kernel.hexa` and `kernels/mc_transport/`). Clean-room hexa-native exact-update integrator — `v_step`, `v_step_general` (general SI form with V_rest / R), `decay_factor`, `isi_period`, `firing_rate`, `simulate`. The per-step update IS the closed-form ODE solution (brian2 method='exact'); no numerical integration error. |
+| `lif_kernel_test.hexa` | Stage 3 parity check — closed-form V(t) checkpoints (sub-threshold + general SI form), analytic ISI period, `simulate()` spike counts vs numpy 2.x reference captured 2026-05-20 (darwin-arm64). 23/23 PASS at ≤1e-12 relative (actual ≤2e-15, machine epsilon). |
 
 ## 2-layer (ABSORPTION.md ①)
 
@@ -22,22 +24,33 @@ kernel. Extracted under the D72 2-layer STDLIB restructure, alongside
   `BrainAnalyzeProducer.swift` spawns the ADAPTER by absolute path,
   never this kernel.
 
-## `.py` SUBSTRATE — hexa-native porting is the future target (g3)
+## hexa-native port (D80 g_hexa_only) — LANDED 2026-05-20
 
-This kernel is a **`.py` substrate**, NOT hexa-native. brian2 is an
-EXTERNAL Python library. Per wilson principle #2 (**hexa-first**), a
-hexa-native re-derivation of the LIF integrator is the FUTURE PORTING
-TARGET:
+A clean-room hexa-native re-derivation of the LIF integrator
+(`lif_kernel.hexa`) now sits alongside the brian2 substrate. The
+per-step exact update is the analytic ODE solution
 
-- The LIF model is a single linear ODE — `dv/dt = (I − v) / tau` —
-  with an analytic exact per-timestep solution. It is small,
-  well-bounded, and a natural candidate for a clean-room `.hexa`
-  kernel (mirror of `kernels/plasma/plasma_metrics.hexa`).
-- When that hexa-native LIF kernel lands and passes a parity round
-  against this brian2 substrate, `absorbed=true` flips HERE — once —
-  in the kernel, not in the brain adapter.
-- Until then, this `.py` kernel is the honest substrate and
-  `absorbed = false` ALWAYS at the record layer.
+```
+v(t+dt) = I + (v(t) - I) · exp(-dt/τ)             (dimensionless)
+V(t+dt) = V∞ + (V(t) - V∞) · exp(-dt/τ_m),  V∞ = V_rest + R·I  (SI form)
+```
+
+and produces machine-epsilon agreement (≤2e-15 relative) with the
+numpy / brian2 method='exact' reference. Substrate parity is
+verified by `lif_kernel_test.hexa` (23/23 PASS, 6 reference samples
+spanning super-threshold tonic firing, sub-threshold trajectory,
+patch-clamp-shaped SI form, and at-threshold edge case).
+
+The `.py` substrate is RETAINED, not deleted — `stdlib/brain/lif_brian2.py`
+still spawns it via the demiurge Producer ABI. Re-pointing the
+adapter at the hexa-native kernel is a follow-on milestone gated on
+a hexa-native producer spawn ABI (or a thin Python shim that loads a
+hexa-compiled binding). The same Stage-2 → Stage-4 ladder as
+`plasma_metrics.hexa` applies: **`absorbed=true` does NOT flip yet** —
+that requires the demiurge HexaNativeParityRef schema + a measured
+patch-clamp oracle (Sim4Life MDDT / Allen Brain Atlas), which is out
+of scope for this pilot. See inbox note
+`2026-05-20-d80-lif-kernel-hexa-native-port-landed.md`.
 
 ## Why
 

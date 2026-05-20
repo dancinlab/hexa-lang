@@ -7,6 +7,16 @@ implementation, then prove parity against the Python substrate.
 **Result**: parity holds at machine epsilon (≤1e-14 relative, vs the
 spec ceiling of ±0.1 %). Pattern is sound — documented below.
 
+**2026-05-20 follow-on — sample #3 LANDED**: `kernels/neural/lif_kernel.hexa`
+(D72 LIF analytic port flagged in §"Follow-ups" of the original
+neural-kernel inbox note; sample #2 was `kernels/mc_transport/` —
+commit dd3dad19) — 23/23 PASS at ≤2e-15 relative against numpy 2.x
+reference. Pattern from the solar pilot transferred 1:1 with no new
+parser footguns (the LIF kernel is shorter, ~140 LOC of math, and
+needs only `exp` + `log` from libm — both already in `cg_math_sym`). See
+inbox note `2026-05-20-d80-lif-kernel-hexa-native-port-landed.md` for the
+sample #3 closure record + per-sample parity table.
+
 ## What landed
 
 | file | role |
