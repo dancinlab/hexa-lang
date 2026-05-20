@@ -4664,3 +4664,126 @@ warning 사라짐.
 
 **cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa 는 tool, NOT
 compiler/main.hexa. @D g_commit_push_deploy 미발동.
+
+
+### 2026-05-20 — S7-P1 cycle 4: LC_SYMTAB populate + __LINKEDIT segment (F-P1-EXEC-SYMTAB PASS, nm 정확)
+
+RFC 063 § P1 cycle 4 — exec 의 symbol table 채우기. 8번째 LC `LC_SEGMENT_64
+__LINKEDIT` 추가 (RO segment 가 symtab + strtab 호스팅). ParsedObj.defined
+→ N_SECT|N_EXT nlist_64, ParsedObj.extern_refs → N_UNDF|N_EXT nlist_64.
+**`nm` 이 우리 exec 의 `_main T` (External Text) + `_hexa_*` `U` (Undefined)
+를 clang-built exec 과 동일하게 인식**.
+
+**한 줄**: 우리 hexa_ld 가 만든 exec 의 `nm` 출력 = `0000000100000220 T _main`
++ `U _hexa_exit` + `U _hexa_set_args`. ld64 가 만든 동일 source 의 exec
+과 nm 출력 동등.
+
+**변경 파일** (`tool/hexa_ld.hexa`):
+
+1. 새 헬퍼 `_w_u16(out, v)` — little-endian u16 writer (cycle 3 누락,
+   본 cycle 의 nlist_64.n_desc 에 필요).
+
+2. **Symbol table build 2-pass** (link_macho_arm64 시작 후):
+   - Pass A: defined externals — obj.defined 중 scope==0, name + offset
+     축적. n_type=0x0e|0x01 (N_SECT|N_EXT), n_sect=1 (__text), n_value
+     은 일단 section-relative offset 저장 (Pass C 에서 absolute 로 변환).
+   - Pass B: undefined externals — obj.extern_refs, name dedup (같은
+     extern 이 여러 obj 에 등장). n_type=0x00|0x01 (N_UNDF|N_EXT),
+     n_sect=0 (NO_SECT), n_value=0.
+   - strtab build: byte 0 = NUL, 각 name + NUL push.
+   - nlist arrays: parallel `nlist_strx/type/sect/value: [Int]`.
+   - 4-byte align padding for strtab.
+
+3. **LC_SEGMENT_64 __LINKEDIT** (cmd 2 of 8) — 새 LC:
+   - fileoff = text_filesize (after __TEXT page-aligned end)
+   - filesize = symtab_size (16*nsyms) + strtab_total (strsize+strpad)
+   - vmsize = page-aligned filesize
+   - vmaddr = 0x100000000 + text_filesize
+   - maxprot/initprot = 1 (VM_PROT_READ — RO segment)
+
+4. **LC_SYMTAB populated**:
+   - symoff = __LINKEDIT.fileoff
+   - nsyms = total sym count
+   - stroff = symoff + symtab_size
+   - strsize = strtab byte count
+
+5. **LC_DYSYMTAB populated**:
+   - ilocalsym=0, nlocalsym=0 (no locals cycle 4)
+   - iextdefsym=0, nextdefsym=count(defined externs)
+   - iundefsym=nextdefsym, nundefsym=nsyms-nextdefsym
+   - remaining 12 u32 fields all zero.
+
+6. **__LINKEDIT payload write** (after __text padding):
+   - per nlist (loop ni=0..nsyms): strx u32 + n_type u8 + n_sect u8 +
+     n_desc u16 + n_value u64. **Pass C**: if n_sect!=0, n_value =
+     (0x100000000 + text_fileoff) + stored_offset (절대 VM 주소).
+   - strtab bytes verbatim + strpad zero bytes.
+
+7. **ncmds 8** (cycle 3 의 7 에서 +1 for __LINKEDIT).
+
+8. **LC_LOAD_DYLINKER / LC_LOAD_DYLIB cmdsize 8-byte alignment fix**:
+   - dyld_path_padded: 16 → 20 (LC total 12+20=32, 8-aligned)
+   - lib_path_padded: 28 → 32 (LC total 24+32=56, 8-aligned)
+   - cycle 3 의 28/52 가 nm 의 "cmdsize not multiple of 8" 거부 원인.
+
+**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P1_EXEC_SYMTAB.hexa`):
+
+- parse_macho_obj(corpus_trivial.ours.o) + link → exec
+- `xcrun nm exec` output checks: `T _main`, `U _hexa_set_args`, `U _hexa_exit`
+- `xcrun otool -l exec` checks: `__LINKEDIT` segment present
+
+**측정 (arm64-Mac local)**:
+
+```
+$ /tmp/run_F_P1_EXEC_SYMTAB
+=== nm ===
+                 U _hexa_exit
+                 U _hexa_set_args
+0000000100000220 T _main
+
+=== otool -l (__LINKEDIT + sym counts) ===
+  segname __LINKEDIT
+   nsyms 3
+     nextdefsym 1
+      nundefsym 2
+
+F-P1-EXEC-SYMTAB PASS — symtab populated, nm sees _main T + 2 U externs
+  /tmp/p1_c4_symtab.exec: 16468 bytes
+```
+
+clang-built exec on equivalent source produces identical `nm` shape —
+3 symbols, 1 defined external, 2 undefined externals.
+
+**HONEST SCOPE (g3)**:
+
+- exec 는 **여전히 runnable 아님** — lazy-bind path (extern symbols
+  → libSystem.dylib 의 실제 주소 binding) 없음. dyld 가 launch 시
+  unresolved symbol 거부.
+- macOS Sonoma+ codesign 거부도 잔존 — LC_CODE_SIGNATURE + ad-hoc
+  `codesign -s -` 는 cycle 5.
+- Cycle 4 발견된 cycle 3 잠재 결함 2건:
+  1. `_w_u16` 헬퍼 누락 — 본 cycle 의 nlist n_desc 필요. cycle 3 의
+     LC_LOAD_DYLIB 가 u32 placeholder 로 우회했지만, 본 cycle 의
+     nlist_64 에서 surface.
+  2. LC_LOAD_DYLINKER (28) / LC_LOAD_DYLIB (52) cmdsize 8-byte align 안 됨
+     — cycle 3 의 otool 는 통과했지만 cycle 4 의 nm 가 엄격 거부.
+
+**다음 cycle (P1 cycle 5) baton**:
+
+- **Lazy-bind path** — `__DATA` segment 추가 + `__la_symbol_ptr` (lazy
+  pointer table, per-extern u64 slot) + `__TEXT.__stubs` (per-extern
+  3-instr stub: `ADRP x16, _la_slot@PAGE; LDR x16, [x16, _la_slot@PAGEOFF];
+  BR x16`) + `__TEXT.__stub_helper` (dyld 의 binder thunk). 또는 더
+  modern `LC_DYLD_CHAINED_FIXUPS` opcode stream.
+- **`__got` for non-call references** (cycle 4 의 `_hexa_*` 은 모두
+  BL → __stubs 로 라우팅; `_hexa_set_args` 와 같은 함수 호출만 있어
+  __got 불필요할 수도).
+- **ad-hoc codesign** — LC_CODE_SIGNATURE placeholder + post-link
+  external `codesign -s -` fork (RFC 063 § P1 의 OS Gatekeeper exception,
+  한 외부 fork 허용).
+- F-P1-RUNEQ corpus PASS — trivial/fib/while/if 실행 + exit code 일치.
+
+**RFC 063 phasing 진척**: P0 ✅ · P1 cycles 1-4 ✅. 잔여 P1 cycle 5
+(lazy-bind + codesign + corpus PASS) + P2 + P3.
+
+**cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa.

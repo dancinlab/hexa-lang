@@ -323,6 +323,9 @@ let MACHO_LD_S_REG              = 0x80000400         // S_REGULAR | PURE+SOME_IN
 // emit-side helpers. (We can't `import` macho_arm64.hexa here because
 // tool/ lives outside compiler/'s import graph and circular `use`
 // is fragile in hexa.)
+fn _w_u16(out: [Int], v: Int) {
+    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
+}
 fn _w_u32(out: [Int], v: Int) {
     out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
     out.push((v >> 16) & 0xFF); out.push((v >> 24) & 0xFF)
@@ -427,35 +430,140 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
 
     let text_size = len(text_bytes)
 
+    // ── Cycle 4: build symbol table + string table from inputs ────
+    //
+    // Symbol ordering follows clang/ld64 convention: defined externs
+    // FIRST (so LC_DYSYMTAB.iextdefsym=0, nextdefsym=count), then
+    // undefined externs (iundefsym=nextdefsym, nundefsym=count).
+    // Locals (scope==1) would go FIRST before defined externs but
+    // cycle 4 ships defined-extern + undef-extern only.
+    //
+    // strtab convention: byte 0 = NUL; each name pushed as ASCII +
+    // NUL; n_strx in nlist_64 = byte offset of name in strtab.
+    let strtab: [Int] = []
+    strtab.push(0)                                   // strtab[0] = NUL
+    // nlist_64 records emitted as parallel arrays of (strx, type, sect, value)
+    // so we can serialize into __LINKEDIT after layout is known.
+    let nlist_strx:  [Int] = []
+    let nlist_type:  [Int] = []
+    let nlist_sect:  [Int] = []
+    let nlist_value: [Int] = []
+
+    let mut nextdefsym: Int = 0
+
+    // Pass A — defined externals (scope==0) from each input obj. The
+    // per-obj `defined.offset` is section-relative; we already
+    // concatenated text by recording the running `len(text_bytes)`
+    // so each sym's final value = (text_section.addr) + running base
+    // + sym.offset. Cycle 3's `entry_off_in_text` used the same
+    // accumulation.
+    let mut text_base_acc = 0
+    let mut oa = 0
+    while oa < len(objs) {
+        let obj = objs[oa]
+        let mut di = 0
+        while di < len(obj.defined) {
+            let d = obj.defined[di]
+            if d.scope == 0 {
+                let strx = len(strtab)
+                let nn = len(d.name)
+                let mut k = 0
+                while k < nn { strtab.push(char_code(d.name, k) & 0xFF); k = k + 1 }
+                strtab.push(0)
+                nlist_strx.push(strx)
+                // n_type = N_SECT (0x0e) | N_EXT (0x01)
+                nlist_type.push(0x0e | 0x01)
+                nlist_sect.push(1)                  // 1-based section idx: __text
+                // n_value = absolute VM address of the symbol. Filled
+                // below once we know section_64.__text.addr (which
+                // depends on text_fileoff which depends on the load-
+                // command extent — we patch n_value in a 2nd pass).
+                nlist_value.push(text_base_acc + d.offset)
+                nextdefsym = nextdefsym + 1
+            }
+            di = di + 1
+        }
+        text_base_acc = text_base_acc + len(obj.text)
+        oa = oa + 1
+    }
+    // Pass B — undefined externals (extern_refs from each obj).
+    // De-duplicate by name across objs (multiple objects might
+    // reference the same `_hexa_exit`); first occurrence wins.
+    let mut ob = 0
+    while ob < len(objs) {
+        let obj = objs[ob]
+        let mut ei = 0
+        while ei < len(obj.extern_refs) {
+            let e = obj.extern_refs[ei]
+            // Is this name already in our nlist?
+            let mut found = false
+            let mut ck = 0
+            while ck < len(nlist_strx) {
+                let off = nlist_strx[ck]
+                let mn = len(e.name)
+                let mut eq = true
+                let mut z = 0
+                while z < mn {
+                    if (strtab[off + z] & 0xFF) != char_code(e.name, z) { eq = false; break }
+                    z = z + 1
+                }
+                if eq && (strtab[off + mn] & 0xFF) == 0 { found = true; break }
+                ck = ck + 1
+            }
+            if !found {
+                let strx = len(strtab)
+                let nn = len(e.name)
+                let mut k = 0
+                while k < nn { strtab.push(char_code(e.name, k) & 0xFF); k = k + 1 }
+                strtab.push(0)
+                nlist_strx.push(strx)
+                // n_type = N_UNDF (0) | N_EXT (0x01)
+                nlist_type.push(0x00 | 0x01)
+                nlist_sect.push(0)                  // NO_SECT
+                nlist_value.push(0)
+            }
+            ei = ei + 1
+        }
+        ob = ob + 1
+    }
+    let nsyms   = len(nlist_strx)
+    let strsize = len(strtab)
+    // strtab is 4-byte aligned in __LINKEDIT (Mach-O convention; ld64
+    // pads to 8 for safety, we go 4 to match minimal).
+    let strrem  = strsize & 3
+    let mut strpad = 0
+    if strrem != 0 { strpad = 4 - strrem }
+
     // Load-command sizes pre-computed so the header can record
     // ncmds + sizeofcmds correctly.
     let lc_pagezero_size = 72
     let lc_text_size     = 72 + 80                   // segment + 1 section
+    let lc_linkedit_size = 72                        // segment, 0 sections
     let lc_main_size     = 24
     let lc_symtab_size   = 24
     let lc_dysymtab_size = 80
 
-    // dyld path is `/usr/lib/dyld` (13 + NUL = 14, pad to 16).
+    // dyld path is `/usr/lib/dyld` (13 + NUL = 14). LC_LOAD_DYLINKER
+    // total = 12 (cmd+cmdsize+name_off) + payload; cmdsize MUST be a
+    // multiple of 8 in 64-bit Mach-O. 12 + 20 = 32 → payload padded 20.
     let dyld_path        = "/usr/lib/dyld"
-    let dyld_path_padded = 16                        // 13 + 1 NUL + 2 pad → 16
-    let lc_dyld_size     = 12 + dyld_path_padded     // cmd+cmdsize+name_off + payload
+    let dyld_path_padded = 20                        // 13 + 1 NUL + 6 pad → 20 (32-total LC)
+    let lc_dyld_size     = 12 + dyld_path_padded
 
-    // libSystem path: `/usr/lib/libSystem.B.dylib` (26 + NUL = 27 → pad to 28)
+    // libSystem path: `/usr/lib/libSystem.B.dylib` (26 + NUL = 27).
+    // dylib_command header = 24 bytes (cmd + cmdsize + name_off +
+    // timestamp + current_version + compatibility_version). Total LC
+    // = 24 + payload; 24 + 32 = 56 → 8-aligned.
     let lib_path         = "/usr/lib/libSystem.B.dylib"
-    let lib_path_padded  = 28
-    // dylib_command struct = cmd u32 + cmdsize u32 + name_off u32 +
-    // timestamp u32 + current_version u32 + compatibility_version u32 +
-    // payload (path NUL-padded).  = 24 + 28 = 52.
+    let lib_path_padded  = 32                        // 26 + 1 NUL + 5 pad → 32 (56-total LC)
     let lc_lib_size      = 24 + lib_path_padded
 
-    // LC count = 7 (PAGEZERO + __TEXT + DYLINKER + DYLIB + MAIN + SYMTAB + DYSYMTAB).
-    // Cycle 2 had `ncmds=8` off-by-one — otool emitted "load command 7
-    // size not multiple of 4" because it tried to read an 8th LC from
-    // __text payload (garbage cmdsize).
-    let ncmds = 7
-    let sizeofcmds = lc_pagezero_size + lc_text_size + lc_dyld_size
-                   + lc_lib_size + lc_main_size + lc_symtab_size
-                   + lc_dysymtab_size
+    // LC count = 8 (PAGEZERO + __TEXT + __LINKEDIT + DYLINKER + DYLIB
+    // + MAIN + SYMTAB + DYSYMTAB).
+    let ncmds = 8
+    let sizeofcmds = lc_pagezero_size + lc_text_size + lc_linkedit_size
+                   + lc_dyld_size + lc_lib_size + lc_main_size
+                   + lc_symtab_size + lc_dysymtab_size
 
     // ── mach_header_64 ──
     _w_u32(out, MACHO_LD_MAGIC_64)
@@ -513,6 +621,32 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u32(out, MACHO_LD_S_REG)
     _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)   // reserved1/2/3
 
+    // ── LC_SEGMENT_64 __LINKEDIT (read-only segment for symtab/strtab) ──
+    //
+    // __LINKEDIT sits AFTER __TEXT in the file. fileoff = text_filesize
+    // (immediately after __TEXT's page-aligned end). filesize covers
+    // the symtab (16 * nsyms) + strtab (strsize + strpad). vmsize is
+    // page-aligned upward.
+    let linkedit_fileoff = text_filesize
+    let symtab_size  = 16 * nsyms
+    let strtab_total = strsize + strpad
+    let mut linkedit_filesize = symtab_size + strtab_total
+    let lrem = linkedit_filesize & (page - 1)
+    let mut linkedit_vmsize = linkedit_filesize
+    if lrem != 0 { linkedit_vmsize = linkedit_filesize + (page - lrem) }
+    let linkedit_vmaddr = 0x100000000 + text_filesize
+    _w_u32(out, MACHO_LD_LC_SEGMENT_64)
+    _w_u32(out, lc_linkedit_size)
+    _w_name_fixed(out, "__LINKEDIT", 16)
+    _w_u64(out, linkedit_vmaddr)
+    _w_u64(out, linkedit_vmsize)
+    _w_u64(out, linkedit_fileoff)
+    _w_u64(out, linkedit_filesize)
+    _w_u32(out, 1)                                    // maxprot VM_PROT_READ
+    _w_u32(out, 1)                                    // initprot VM_PROT_READ
+    _w_u32(out, 0)                                    // nsects
+    _w_u32(out, 0)                                    // flags
+
     // ── LC_LOAD_DYLINKER /usr/lib/dyld ──
     _w_u32(out, MACHO_LD_LC_LOAD_DYLINKER)
     _w_u32(out, lc_dyld_size)
@@ -538,19 +672,32 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u64(out, text_fileoff + entry_off_in_text)    // entryoff
     _w_u64(out, 0)                                   // stacksize (0 = default)
 
-    // ── LC_SYMTAB (placeholder, nsyms=0 / strsize=0) ──
+    // ── LC_SYMTAB — populated (cycle 4) ──
+    let symoff = linkedit_fileoff
+    let stroff = linkedit_fileoff + symtab_size
     _w_u32(out, MACHO_LD_LC_SYMTAB)
     _w_u32(out, lc_symtab_size)
-    _w_u32(out, 0)                                   // symoff
-    _w_u32(out, 0)                                   // nsyms
-    _w_u32(out, 0)                                   // stroff
-    _w_u32(out, 0)                                   // strsize
+    _w_u32(out, symoff)
+    _w_u32(out, nsyms)
+    _w_u32(out, stroff)
+    _w_u32(out, strsize)
 
-    // ── LC_DYSYMTAB (all zeros — cycle 3 will populate) ──
+    // ── LC_DYSYMTAB — populated (cycle 4) ──
+    // Defined externs (Pass A above) come first → iextdefsym=0,
+    // nextdefsym=count(defined). Undefs (Pass B) follow →
+    // iundefsym=nextdefsym, nundefsym=nsyms - nextdefsym.
     _w_u32(out, MACHO_LD_LC_DYSYMTAB)
     _w_u32(out, lc_dysymtab_size)
+    _w_u32(out, 0)                                   // ilocalsym
+    _w_u32(out, 0)                                   // nlocalsym
+    _w_u32(out, 0)                                   // iextdefsym
+    _w_u32(out, nextdefsym)                          // nextdefsym
+    _w_u32(out, nextdefsym)                          // iundefsym
+    _w_u32(out, nsyms - nextdefsym)                  // nundefsym
+    // Remaining 12 u32 fields all zero (no TOC, modtab, indirect,
+    // ext/loc reloc tables).
     let mut di = 0
-    while di < 18 { _w_u32(out, 0); di = di + 1 }
+    while di < 12 { _w_u32(out, 0); di = di + 1 }
 
     // ── __text payload (cycle 3 fills from concatenated text bytes) ──
     let mut bi = 0
@@ -564,6 +711,36 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     if text_filesize > cur_end {
         _w_zero_n(out, text_filesize - cur_end)
     }
+
+    // ── __LINKEDIT payload — nlist_64 records, then strtab ──
+    //
+    // Each nlist_64 = u32 strx + u8 type + u8 sect + u16 desc + u64 value.
+    // For defined symbols (sect != 0), `n_value` we pushed is a section-
+    // relative offset; convert to absolute VM address now that we know
+    // section_64.__text.addr (= 0x100000000 + text_fileoff).
+    let text_section_addr = 0x100000000 + text_fileoff
+    let mut ni = 0
+    while ni < nsyms {
+        let strx  = nlist_strx[ni]
+        let nty   = nlist_type[ni]
+        let nse   = nlist_sect[ni]
+        let mut nv = nlist_value[ni]
+        if nse != 0 {
+            // Defined symbol — absolute VM address = section base +
+            // section-relative offset we stored in Pass A.
+            nv = text_section_addr + nv
+        }
+        _w_u32(out, strx)
+        out.push(nty & 0xFF)
+        out.push(nse & 0xFF)
+        _w_u16(out, 0)                               // n_desc
+        _w_u64(out, nv)
+        ni = ni + 1
+    }
+    // strtab bytes verbatim + 4-byte alignment pad.
+    let mut si = 0
+    while si < strsize { out.push(strtab[si] & 0xFF); si = si + 1 }
+    _w_zero_n(out, strpad)
 
     write_bytes(out_path, out)
     return 0
