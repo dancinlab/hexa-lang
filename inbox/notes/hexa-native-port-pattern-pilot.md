@@ -7,6 +7,16 @@ implementation, then prove parity against the Python substrate.
 **Result**: parity holds at machine epsilon (≤1e-14 relative, vs the
 spec ceiling of ±0.1 %). Pattern is sound — documented below.
 
+**SSOT cross-link (demiurge D87 + D90 + D93)**: the machine-readable
+8-field-per-row version of this rolling pilot table lives at
+`demiurge:domains/PILOTS.demi`. This `.md` carries the prose dimension
+(algorithm-choice rationale + hexa-lang gotchas + follow-up queue);
+the `.demi` carries the field dimension consumed by Swift loaders
+(`cockpit/Sources/DemiurgeCore/Loaders/PilotLoader.swift` — `find(kernelPath:)`
+/ `find(id:)`). Per-pilot `[pilot-<id>]` cross-link annotations are
+inlined inside each pilot section below; new pilots MUST update both
+files in the same cycle (drift = bug).
+
 **2026-05-20 follow-on — sample #3 LANDED**: `kernels/neural/lif_kernel.hexa`
 (D72 LIF analytic port flagged in §"Follow-ups" of the original
 neural-kernel inbox note; sample #2 was `kernels/mc_transport/` —
@@ -470,18 +480,22 @@ invariants round out the suite — ν = E at e=0, and the conic identity
 
 ## Pilot sample table (rolling — append as pilots land)
 
-| pilot # | kernel                                                  | algorithm                              | parity tier(s)                                                  | result                | landed     |
-|--------:|---------------------------------------------------------|----------------------------------------|-----------------------------------------------------------------|-----------------------|-----------:|
-| #1      | `stdlib/kernels/solar/solar_kernel.hexa`                | Hughes 1985 ephemeris + Haurwitz 1945  | pvlib 0.13.0 substrate parity (6 Phoenix-AZ timestamps)         | 21/21 ≤1e-13 rel      | 2026-05-20 |
-| #2      | `stdlib/kernels/mc_transport/mc_slab_demo.hexa`         | 1-D slab MC, Beer-Lambert oracle       | python-companion (same LCG) bit-identical + analytic √N envelope | 8/8 ~1e-3 rel @ N=1e5 | 2026-05-20 |
-| #3      | `stdlib/kernels/neural/lif_kernel.hexa`                 | LIF analytic per-timestep exact        | numpy 2.x substrate reference                                   | 23/23 ≤2e-15 rel      | 2026-05-20 |
-| #3b     | `stdlib/kernels/graph/` (BFS+Kahn port)                 | BFS + topological sort                 | networkx companion parity                                       | (concurrent branch)   | 2026-05-20 |
-| #4      | `stdlib/kernels/urdf/` (2-link FK port)                 | Forward kinematics, 2-link planar      | yourdfpy companion parity                                       | (concurrent branch)   | 2026-05-20 |
-| #5      | `stdlib/kernels/plasma/plasma_metrics_kernel.hexa`      | NRL Formulary 4 primary + lnΛ          | hand-mirrored Python math closed-form (8 samples)               | 41/41 rel_err=0       | 2026-05-20 |
-| #5b     | `stdlib/kernels/orbital/kepler_2body_kernel.hexa`       | Vallado §2.2 / Curtis §3.6 closed-form 2-body propagator, NR-5 on M = E − e·sin(E) | Python `math` libm closed-form (5 (e, t/T) picks × 4 ecc + 2 invariants; e ∈ {0.0, 0.1, 0.3, 0.7} × t/T ∈ {0.10, 0.25, 0.50, 0.85}) | 27/27 rel_err=0       | 2026-05-20 |
-| #6      | `stdlib/kernels/signal_proc/dft_naive.hexa`             | O(N²) naive DFT + IDFT                 | analytic spectra (impulse / DC / cosine) + Parseval + round-trip | 17/17 ≤1e-12 rel      | 2026-05-20 |
-| #7      | `stdlib/kernels/noc_sim/event_queue.hexa`               | Binary min-heap discrete-event sched.  | python-companion `heapq` parity + FIFO-at-equal-times           | 36/36 exact           | 2026-05-20 |
-| #8      | `stdlib/kernels/mc_transport/transport_kinematics_kernel.hexa` | Special-relativity kinematics + PDG eq. 34.4 T_max + eq. 34.5 Bethe-Bloch dE/dx (δ=0) + 256-step trapezoidal CSDA range | Python `math` libm closed-form (4 KE samples × 4 materials × 4-6 outputs + 7 CSDA ranges + 2 invariants) | 41/41 rel_err=0       | 2026-05-20 |
+> **Cross-link**: each row mirrors a `[pilot-<id>]` section in
+> `demiurge:domains/PILOTS.demi` (D87 + D90 + D93). The `SSOT id`
+> column gives the lookup key for `PilotLoader.find(id:)`.
+
+| pilot # | kernel                                                  | algorithm                              | parity tier(s)                                                  | result                | landed     | SSOT id (demiurge:PILOTS.demi) |
+|--------:|---------------------------------------------------------|----------------------------------------|-----------------------------------------------------------------|-----------------------|-----------:|--------------------------------|
+| #1      | `stdlib/kernels/solar/solar_kernel.hexa`                | Hughes 1985 ephemeris + Haurwitz 1945  | pvlib 0.13.0 substrate parity (6 Phoenix-AZ timestamps)         | 21/21 ≤1e-13 rel      | 2026-05-20 | `pilot-solar`                  |
+| #2      | `stdlib/kernels/mc_transport/mc_slab_demo.hexa`         | 1-D slab MC, Beer-Lambert oracle       | python-companion (same LCG) bit-identical + analytic √N envelope | 8/8 ~1e-3 rel @ N=1e5 | 2026-05-20 | `pilot-mc_transport`           |
+| #3      | `stdlib/kernels/neural/lif_kernel.hexa`                 | LIF analytic per-timestep exact        | numpy 2.x substrate reference                                   | 23/23 ≤2e-15 rel      | 2026-05-20 | `pilot-neural_lif`             |
+| #3b     | `stdlib/kernels/graph/` (BFS+Kahn port)                 | BFS + topological sort                 | networkx companion parity                                       | (concurrent branch)   | 2026-05-20 | `pilot-graph_bfs`              |
+| #4      | `stdlib/kernels/urdf/` (2-link FK port)                 | Forward kinematics, 2-link planar      | yourdfpy companion parity                                       | (concurrent branch)   | 2026-05-20 | `pilot-urdf_fk_2link`          |
+| #5      | `stdlib/kernels/plasma/plasma_metrics_kernel.hexa`      | NRL Formulary 4 primary + lnΛ          | hand-mirrored Python math closed-form (8 samples)               | 41/41 rel_err=0       | 2026-05-20 | `pilot-plasma_metrics`         |
+| #5b     | `stdlib/kernels/orbital/kepler_2body_kernel.hexa`       | Vallado §2.2 / Curtis §3.6 closed-form 2-body propagator, NR-5 on M = E − e·sin(E) | Python `math` libm closed-form (5 (e, t/T) picks × 4 ecc + 2 invariants; e ∈ {0.0, 0.1, 0.3, 0.7} × t/T ∈ {0.10, 0.25, 0.50, 0.85}) | 27/27 rel_err=0       | 2026-05-20 | `pilot-orbital_kepler`         |
+| #6      | `stdlib/kernels/signal_proc/dft_naive.hexa`             | O(N²) naive DFT + IDFT                 | analytic spectra (impulse / DC / cosine) + Parseval + round-trip | 17/17 ≤1e-12 rel      | 2026-05-20 | `pilot-dft_naive`              |
+| #7      | `stdlib/kernels/noc_sim/event_queue.hexa`               | Binary min-heap discrete-event sched.  | python-companion `heapq` parity + FIFO-at-equal-times           | 36/36 exact           | 2026-05-20 | `pilot-event_queue`            |
+| #8      | `stdlib/kernels/mc_transport/transport_kinematics_kernel.hexa` | Special-relativity kinematics + PDG eq. 34.4 T_max + eq. 34.5 Bethe-Bloch dE/dx (δ=0) + 256-step trapezoidal CSDA range | Python `math` libm closed-form (4 KE samples × 4 materials × 4-6 outputs + 7 CSDA ranges + 2 invariants) | 41/41 rel_err=0       | 2026-05-20 | `pilot-transport_kinematics`   |
 
 ### Pilot #6 — DFT (signal_proc / 2026-05-20)
 
