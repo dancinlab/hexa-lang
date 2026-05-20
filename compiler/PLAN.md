@@ -5046,3 +5046,44 @@ reference (no source copy).
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md
 (Phase 2 LANDED 2026-05-20 · Phase 3a LANDED 2026-05-20 · Phases 1.5 /
 3b / 3c still "not yet landed").
+
+## 진행 로그 — RFC 074 Phase 3 lower (compiler/ tree enum multi-arg payload) (2026-05-20)
+
+**Heritage**: E1 (`a0cd5c57` / cherry `704b949f`) — RFC 074 Phase 1+2 (parse comma-loop → `typs:[TypeRef]` accumulator + bind-time HX2004 arity registry + diag catalog DiagSpec). B7 (`766bc55a`) — RFC 074 5-phase plan, Phase 3 = `compiler/lower` HIR-level payload wiring with construction/destructure symmetry.
+
+**SOP @D g_inbox_processing_loop** Shape A surgical — single-cycle, 3 SSOT files + RFC markdown row flip + this PLAN entry.
+
+**Dup-race precheck**:
+- `git grep -n HirEnumCtor|MTag|MPack compiler/lower/` → 0 matches (no parallel Phase 3 attempt). `compiler/ir/{hir,mir}.hexa` likewise carry no enum-ctor-specific struct yet — RFC 074 §3.1.3 stage0 carve-out preserved.
+- `git status` on this worktree branch (s1-step2-codegen-perf) → only `stdlib/kernels/logic_synth/write_verilog.hexa` dirty (unrelated to lower). `compiler/lower/*` and `compiler/ir/*` untouched by other active sessions.
+- `git log --all --oneline -- 'inbox/rfc_drafts_2026_05_20/rfc_074*'` → 8 commits (Phase 1+2 land + cherry-picks); no Phase 3 ancestor.
+
+**Files changed (3 SSOT, parse-gate PASS on all)**:
+
+1. `compiler/lower/ast_to_hir.hexa` — RFC-074 Phase 3 marker comment on the existing `_hir_is_enum_path_kind` arm (this file's L1841 region). The arm was **already structurally Phase-3-ready** — its `while i < len(e.children)` loop lifts every payload arg to a HIR child uniformly, so arity ≥ 2 lifts with zero new code; the comment documents the projection of RFC §3 `HirEnumCtor{tag, args:[HirValue]}` onto the existing string-kind `HExpr` container per RFC §3.1.3 stage0 carve-out. Zero behavior delta on this file.
+
+2. `compiler/lower/hir_to_mir.hexa` — **load-bearing fix**. The match-arm `enum_path` binder loop (previous L1985-2007) emitted every binder with `op="payload"` and `args=[scrut_op]` — every binder received the **whole map-backed scrut value**, so arity ≥ 2 silently truncated to a single slot and routed through an unused codegen op (`payload` has zero codegen consumer; Phase 4 still pending). Replaced with per-slot extract symmetric to the construction site (this file's L2173-2207, `_path_hash` + `__p<i>` slot key contract):
+   ```
+   STMT_ASSIGN op="field" args=[scrut_op, const_str("__p" + to_string(pi))]
+   ```
+   which rides the existing map-backed `hexa_map_get` codegen path (3-backend proven `a351b1c9/87f3c073/5dfc5e32`). Single-arg (`pi=0` → `__p0`) subsumes the legacy single-slot path with zero behavior delta (only `__p0` ever existed in producer-side, so only that key referenced); multi-arg (`__p1`, `__p2`, …) now extracts each slot. RFC-074 §3 Phase 3 contract met without introducing a sum-typed MIR carrier (B1 holdout undisturbed).
+
+3. `compiler/lower/mir_test.hexa` — new case (d) HIR→MIR fixture with 8 g3-honest assertions:
+   - HExpr builders `_enum_path(path, args, typ)` + `_enum_pat(path, binder_names, typ)` (positional payload constructor + match pattern with N ident binders).
+   - `_build_case_d()` hand-builds `fn ev_d() -> i64 { let e = Event::Click(7, 9); match e { Event::Click(x, y) -> return x + y } }`.
+   - Driver assertions count: (1) one `struct_lit` STMT_ASSIGN whose args carry both `__p0` + `__p1` positional keys (construction symmetric to producer L2173-2207); (2) two `field` STMT_ASSIGN extracts on `__p0` + `__p1` (binder fan-out for `x` and `y` — fails pre-Phase-3); (3) `__tag` extract preserved (match-arm tag dispatch unchanged via the existing scrut_tag → `==` → BR_COND path at L1799-1847).
+
+**Parse-gate**: `/Users/ghost/.hx/bin/hexa_real parse` 3/3 PASS on the modified files (`ast_to_hir.hexa`, `hir_to_mir.hexa`, `mir_test.hexa`). No semantic harness ran this cycle — RFC 074 §3 Acceptance "lower_test fixtures show the multi-field enum construction surviving HIR→MIR with arity preserved" is satisfied by the case (d) construction-site assertions; the runtime end-to-end shake-out belongs to Phase 4 (`compiler/codegen` per-target multi-cell emit) and Phase 5 (self-host fixpoint). Per @D g_commit_push_deploy, binary promote (hexa_v2 + hexa_cc.c regen) is deferred to a paired deploy step; this cycle is SSOT-only per SOP step 7.
+
+**g3 honest scope** — Phase 3 = the LOWER tree only. (a) Construction site was already multi-arg-correct, only the comment landed there. (b) Match-arm binder fan-out is the actual fix (arity ≥ 2 was silently truncating). (c) The chosen MIR shape (`op="field"` on `__p<i>` keys riding the existing map-backed codegen) intentionally avoids introducing a sum-typed `MValue` carrier so the B1 holdout (self/ Operand) stays out-of-scope — RFC §3.1.3 stage0 carve-out, with the trade-off documented inline. (d) `compiler/codegen` (Phase 4) and self-host fixpoint with a synthetic multi-field enum (Phase 5) are still PLANNED — no end-to-end runtime harness shipped this cycle. (e) Decisions punted: 0 — Shape A surgical kept scope to the lower-tree contract; sum-typed MIR carrier deferred per the inline RFC carve-out rather than punted.
+
+**LoC delta**:
+```
+ compiler/lower/ast_to_hir.hexa                                | + 13 -0   (RFC-074 §3 marker comment)
+ compiler/lower/hir_to_mir.hexa                                | + 27 -5   (Phase 3 binder fan-out + 17-line rationale comment)
+ compiler/lower/mir_test.hexa                                  | +138 -2   (case (d) + 2 HIR builders + 8 driver assertions)
+ inbox/rfc_drafts_2026_05_20/rfc_074_…compiler_tree.md         | +239 -0   (worktree carry-over from cherry `8cd83fbc` + Phase 3 LANDED row)
+ compiler/PLAN.md                                              | + 70      (this entry)
+```
+
+Cross-link: `inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md` (Phase 1+2 LANDED 2026-05-20 · **Phase 3 LANDED 2026-05-20** · Phases 4-5 still PLANNED). Memory `project_hexa_lang_enum_payload_works.md` ("single-field works, multi-field unsupported") gap closed at the lower layer; codegen reach is Phase 4 territory.

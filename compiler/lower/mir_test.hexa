@@ -227,6 +227,26 @@ fn _print_mfunc_summary(label: string, mf: MFunc) {
 
 // ── Cases ────────────────────────────────────────────────────
 
+// RFC-074 Phase 3 helper — hand-build an EnumPath HExpr with N payload args.
+// `path` is the full `Enum::Variant` string the producer/consumer hash on
+// (matches the `_path_hash(text)` MIR tag-compare contract in this file's
+// L1800 + L2186). `args` are the lowered payload child HExpr's.
+fn _enum_path(path: string, args: [HExpr], typ: Type) -> HExpr {
+    return _hexpr("enum_path", typ, path, args)
+}
+
+// Helper — hand-build a match `enum_path` PATTERN with N positional binders
+// (each binder is an `ident` HExpr whose text is the destructured-name).
+fn _enum_pat(path: string, binder_names: [string], typ: Type) -> HExpr {
+    let mut binders: [HExpr] = []
+    let mut i = 0
+    while i < len(binder_names) {
+        binders.push(_ident(binder_names[i], _t_i64()))
+        i = i + 1
+    }
+    return _hexpr("enum_path", typ, path, binders)
+}
+
 // (a) fn add(x:Int, y:Int) -> Int { return x + y }
 fn _build_case_a() -> HModule {
     let x = _ident("x", _t_i64())
@@ -285,6 +305,52 @@ fn _build_case_c() -> HModule {
     let mut items: [HItem] = []
     items.push(it)
     return HModule { file: "case_c.hexa", items: items }
+}
+
+// (d) RFC-074 Phase 3 — multi-arg enum payload survives HIR→MIR.
+//
+//     fn _ev_d() {
+//         let e = Event::Click(7, 9)
+//         match e { Event::Click(x, y) -> { return x + y } }
+//     }
+//
+// MIR shape assertions:
+//   1. construction site emits ONE struct_lit STMT_ASSIGN whose args contain
+//      both "__p0" + value=7 and "__p1" + value=9 (positional payload slots
+//      symmetric with the producer side, hir_to_mir.hexa L2173-2207).
+//   2. match-arm binder destructure emits TWO `field` extracts — one per
+//      binder — whose key-operands are "__p0" and "__p1" respectively.
+//      Pre-RFC-074-Phase-3 the binders were single-slot (op="payload"
+//      with no key) so arity≥2 silently collapsed; this case fails on the
+//      legacy lowering and passes only with the per-slot field extract.
+fn _build_case_d() -> HModule {
+    // RHS: Event::Click(7, 9) — enum_path with 2 payload arg children
+    let mut click_args: [HExpr] = []
+    click_args.push(_lit_int("7"))
+    click_args.push(_lit_int("9"))
+    let click_ctor = _enum_path("Event::Click", click_args, _t("enum:Event"))
+    let let_e = _hlet("e", click_ctor)
+
+    // match e { Event::Click(x, y) -> return x + y }
+    let scrut = _ident("e", _t("enum:Event"))
+    let mut bn: [string] = []
+    bn.push("x")
+    bn.push("y")
+    let pat = _enum_pat("Event::Click", bn, _t("enum:Event"))
+    let arm_body = _block([_ret(_binop("+", _ident("x", _t_i64()),
+                                            _ident("y", _t_i64()),
+                                            _t_i64()))])
+    let mut mk: [HExpr] = []
+    mk.push(scrut)
+    mk.push(pat)
+    mk.push(arm_body)
+    let mat = _hexpr("match", _t_i64(), "", mk)
+
+    let body = _block([let_e, mat])
+    let it = _hfn("ev_d", [], [], _t_i64(), body)
+    let mut items: [HItem] = []
+    items.push(it)
+    return HModule { file: "case_d.hexa", items: items }
 }
 
 // ── Driver ───────────────────────────────────────────────────
@@ -421,6 +487,105 @@ fn main() {
         }
         if bad_arena {
             println("  FAIL: case (c) some local has arena_id != arena_root")
+            ok = false
+        }
+    }
+
+    // (d) — RFC-074 Phase 3 multi-arg enum payload (construction + match
+    //       destructure with 2 binders → per-slot field extracts).
+    println("")
+    println("── (d) Event::Click(7, 9) + match Event::Click(x, y) — RFC-074 Phase 3 ──")
+    let m_d = lower_hir(_build_case_d())
+    if len(m_d.funcs) != 1 {
+        println("  FAIL: case (d) expected 1 MFunc, got " + to_string(len(m_d.funcs)))
+        ok = false
+    } else {
+        let mf = m_d.funcs[0]
+        _print_mfunc_summary("(d)", mf)
+        // (d-1) construction site: one STMT_ASSIGN op="struct_lit" whose
+        //       args include const_str "__p0" AND "__p1" (positional slots).
+        let mut saw_p0_ctor = false
+        let mut saw_p1_ctor = false
+        let mut saw_ctor_struct_lit = false
+        // (d-2) match-arm destructure: two STMT_ASSIGN op="field" whose
+        //       args include const_str "__p0" AND "__p1" (one binder each).
+        let mut saw_p0_extract = false
+        let mut saw_p1_extract = false
+        let mut bi = 0
+        while bi < len(mf.blocks) {
+            let b = mf.blocks[bi]
+            let mut si = 0
+            while si < len(b.stmts) {
+                let st = b.stmts[si]
+                if st.kind == STMT_ASSIGN {
+                    if st.op == "struct_lit" {
+                        saw_ctor_struct_lit = true
+                        let mut ai = 0
+                        while ai < len(st.args) {
+                            let a = st.args[ai]
+                            if a.kind == "const_str" && a.str_val == "__p0" { saw_p0_ctor = true }
+                            if a.kind == "const_str" && a.str_val == "__p1" { saw_p1_ctor = true }
+                            ai = ai + 1
+                        }
+                    } else if st.op == "field" {
+                        let mut ai = 0
+                        while ai < len(st.args) {
+                            let a = st.args[ai]
+                            if a.kind == "const_str" && a.str_val == "__p0" { saw_p0_extract = true }
+                            if a.kind == "const_str" && a.str_val == "__p1" { saw_p1_extract = true }
+                            ai = ai + 1
+                        }
+                    }
+                }
+                si = si + 1
+            }
+            bi = bi + 1
+        }
+        if !saw_ctor_struct_lit {
+            println("  FAIL: case (d) construction missing STMT_ASSIGN op=struct_lit")
+            ok = false
+        }
+        if !saw_p0_ctor {
+            println("  FAIL: case (d) construction missing __p0 positional slot key")
+            ok = false
+        }
+        if !saw_p1_ctor {
+            println("  FAIL: case (d) construction missing __p1 positional slot key (multi-arg arity)")
+            ok = false
+        }
+        if !saw_p0_extract {
+            println("  FAIL: case (d) match binder x missing field extract on __p0")
+            ok = false
+        }
+        if !saw_p1_extract {
+            println("  FAIL: case (d) match binder y missing field extract on __p1 — Phase-3 binder fan-out regressed to single-slot")
+            ok = false
+        }
+        // The tag-compare path still uses op="field" with key "__tag" —
+        // ensure RFC-074 Phase 3's per-slot field extracts ADDED to (not
+        // displaced) the existing tag-extract instrumentation.
+        let mut saw_tag_field = false
+        let mut bj = 0
+        while bj < len(mf.blocks) {
+            let b = mf.blocks[bj]
+            let mut sj = 0
+            while sj < len(b.stmts) {
+                let st = b.stmts[sj]
+                if st.kind == STMT_ASSIGN && st.op == "field" {
+                    let mut aj = 0
+                    while aj < len(st.args) {
+                        if st.args[aj].kind == "const_str" && st.args[aj].str_val == "__tag" {
+                            saw_tag_field = true
+                        }
+                        aj = aj + 1
+                    }
+                }
+                sj = sj + 1
+            }
+            bj = bj + 1
+        }
+        if !saw_tag_field {
+            println("  FAIL: case (d) tag-compare extract on __tag missing (match-arm dispatch broken)")
             ok = false
         }
     }

@@ -1839,6 +1839,18 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
         return LowerResult { expr: h, sc: new_sc }
     }
     if _hir_is_enum_path_kind(k) {
+        // RFC-074 Phase 3 (compiler/ tree) — multi-arg payload lift to HIR.
+        //
+        // Every child of an EnumPath AST node is a positional payload arg
+        // (single-field arity 1 was already covered by this loop — the
+        // generic `while i < len(e.children)` recurses every child, so
+        // arity N >= 2 lifts to HIR with zero structural delta on this
+        // side. The HIR shape `HExpr{kind=enum_path, children:[HExpr]}`
+        // is the `HirEnumCtor{tag, args:[HirValue]}` RFC-074 §3 calls
+        // for, projected onto the existing string-kind HExpr container
+        // (Phase 3 lands without a sum-typed HIR node — RFC §3.1.3
+        // "stage0 hexa has no sum types" carve-out). The match-arm
+        // destructure side is fixed in hir_to_mir.hexa enum_path arm.
         let mut new_sc = sc
         let mut kids: [HExpr] = []
         let mut i = 0
