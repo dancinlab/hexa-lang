@@ -5764,10 +5764,17 @@ extern HexaVal rt_log2(HexaVal x);
 HexaVal hexa_log2(HexaVal v)  { return rt_log2(hexa_float(__hx_to_double(v))); }
 #endif
 
-// to_float: coerce any scalar to float
+// to_float: coerce any scalar to float. Step-3 cycle 13 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_to_float(HexaVal v) {
     return hexa_float(__hx_to_double(v));
 }
+#else
+extern HexaVal rt_to_float(HexaVal v);
+HexaVal hexa_to_float(HexaVal v) {
+    return rt_to_float(hexa_float(__hx_to_double(v)));
+}
+#endif
 
 // to_int: coerce any scalar to int (truncate toward zero for floats)
 HexaVal hexa_to_int(HexaVal v) {
