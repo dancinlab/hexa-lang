@@ -2389,7 +2389,18 @@ fn _strtab_to_rodata(st: ArmStrTab) -> [LSection] {
 
 // ── Module entry point ───────────────────────────────────────
 
-pub fn codegen_arm64_darwin(module: MModule) -> LModule {
+// RFC 070 G7-A.native impl — Shape B sub-cycle 2026-05-20:
+// entry signature now carries `opts: CodegenOptions` (lifted to
+// compiler/ir/lir.hexa by the B1 iface commit). All callers updated to
+// pass `codegen_options_default()` in this cycle — they all behave
+// exactly as before (opts.shared == 0, opts.target_triple == ""), so
+// the emit body is byte-identical to the pre-iface output. The actual
+// `if opts.shared` GOT-load + `.private_extern` emit-body branches are
+// the NEXT sub-cycle (G7-A.native impl emit). This commit is the
+// signature lift only — measurable falsifier: corpus byte-eq with the
+// default `opts` argument (any diff would mean an accidental capture
+// of `opts.shared` somewhere in the body).
+pub fn codegen_arm64_darwin(module: MModule, opts: CodegenOptions) -> LModule {
     let st = _build_arm_strtab(module)
     let mut funcs = []
     let mut i = 0

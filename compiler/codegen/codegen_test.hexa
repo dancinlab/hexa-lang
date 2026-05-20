@@ -263,8 +263,11 @@ fn main() {
     println("")
     println("── target: arm64-apple-darwin ──")
 
-    let l_id_arm  = codegen_arm64_darwin(mod_id)
-    let l_add_arm = codegen_arm64_darwin(mod_add)
+    // RFC 070 G7-A.native impl — entry signature lifted; pass default
+    // CodegenOptions (shared=0) to preserve baseline emit byte-eq.
+    let __cg_opts = codegen_options_default()
+    let l_id_arm  = codegen_arm64_darwin(mod_id, __cg_opts)
+    let l_add_arm = codegen_arm64_darwin(mod_add, __cg_opts)
 
     if len(l_id_arm.funcs) != 1 {
         println("  FAIL: arm64 id expected 1 func, got " + to_string(len(l_id_arm.funcs)))
@@ -326,8 +329,9 @@ fn main() {
     println("")
     println("── target: x86_64-linux-gnu ──")
 
-    let l_id_x86  = codegen_x86_64_linux(mod_id)
-    let l_add_x86 = codegen_x86_64_linux(mod_add)
+    // RFC 070 G7-A.native impl — entry signature lifted; default opts.
+    let l_id_x86  = codegen_x86_64_linux(mod_id, __cg_opts)
+    let l_add_x86 = codegen_x86_64_linux(mod_add, __cg_opts)
 
     if len(l_id_x86.funcs) != 1 {
         println("  FAIL: x86 id expected 1 func, got " + to_string(len(l_id_x86.funcs)))

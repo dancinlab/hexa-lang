@@ -5129,3 +5129,43 @@ cross-link: inbox/rfc_drafts_2026_05_20/rfc_072_atlas_enrich_cache.md
 migration tracked as Phase 2.1" to "Phase 2.1 RESOLVED — default `hxc`
 via hxc_v2_lib records pair, JSONL pinned by env"; sign-off picks up
 Phase 2.1 checkbox).
+
+
+### 진행 로그 — RFC 070 G7-A.native impl signature LANDED (codegen entry signatures lifted + 11 callers updated · zero emit-body change · byte-eq with default opts)
+
+**branch**: `worktree-agent-a6d91462302e56f71` (worktree from `s1-step2-codegen-perf`) · **date**: 2026-05-20 · **shape**: B sub-step (caller update only; emit body branches deferred to next cycle per brief's "Shape B = caller update 만 + emit 변경은 다음 sub-cycle" honest disclaimer)
+
+Sub-cycle scope: the B1 iface commit (`360934e9` here · upstream `886977c4`) lifted `pub struct CodegenOptions { shared: i64, target_triple: string }` + `codegen_options_default()` + 5 `RELOC_*` constants into `compiler/ir/lir.hexa`, but did NOT touch the two codegen entry-point signatures (`codegen_arm64_darwin` / `codegen_x86_64_linux`). This commit threads `opts: CodegenOptions` through both signatures and updates all 11 callers — 2 in `compiler/main.hexa`, 4 in `compiler/codegen/codegen_test.hexa`, 5 across `tests/m0/{regalloc,loop,concat,many_args}_test.hexa` — to pass `codegen_options_default()`. The emit body remains byte-untouched in both files: `opts` is bound and propagated through the entry's local scope but never read in any `if opts.shared` branch (none was added). Therefore every emit byte is identical to the pre-iface output for every caller, on every target, for every input. The actual `if opts.shared` GOT-load + `.private_extern`/`.hidden` directive branches are the NEXT sub-cycle (G7-A.native impl emit), which also requires the G7-A.flag-wire prereq commit (`66b055c4` — `bopts[4]` CLI surface that today is not on this branch).
+
+Heritage prereqs cherry-picked into this branch this same cycle (since they live on a sibling worktree's named ref that diverges from the post-#170 mainline this worktree sits on): A3 scaffold `53a4cdd9` (upstream `2504ce87`/`0c4b91da`/`ff119fc0`), A4 falsify `9385c8e9` (upstream `175b2860`/`0e137237`), B1 iface `360934e9` (upstream `886977c4`/`2a579ce8`). PLAN.md cherry-pick conflict on the B1 entry was resolved per `@D g_inbox_processing_loop` step 6 conflict_pattern (--ours + grep-extract the upstream's "+ " lines + append).
+
+Dup-race precheck (per `feedback_inbox_dup_race_precheck.md`): clean. `git for-each-ref --contains 2a579ce8` returned only `refs/stash` + `refs/wilson-checkpoint/*` (dangling) plus the sibling `worktree-agent-ae8b50d20972fd564` head — that sibling's last commit timestamp (2026-05-20 19:04 +0900) is 17 min before this worktree's HEAD (19:21), with empty git status; sibling is idle, no live concurrent edit on `compiler/codegen/*`.
+
+| change | location | one-liner |
+| --- | --- | --- |
+| entry signature | `compiler/codegen/arm64_darwin.hexa:2443` | `pub fn codegen_arm64_darwin(module: MModule) -> LModule` → `(module: MModule, opts: CodegenOptions) -> LModule` · ≈11-line lead comment block above documenting the lift + next-cycle scope |
+| entry signature | `compiler/codegen/x86_64_linux.hexa:1260` | parallel — same template, x86-specific reloc cross-link in comment |
+| driver caller hoist | `compiler/main.hexa:798-801` | `let __cg_opts = codegen_options_default()` ahead of per-target `if`, reused on both arm64 + x86 dispatch calls · ≈10-line lead comment documenting why __cg_opts is always default today (G7-A.flag-wire `66b055c4` not on this branch) |
+| test caller hoist | `compiler/codegen/codegen_test.hexa:266,267,329,330` | `__cg_opts` reused across `_id` + `_add` × {arm64, x86} (4 sites) |
+| test caller | `tests/m0/regalloc_test.hexa:190,250` | inline `codegen_options_default()` per target check |
+| test caller hoist | `tests/m0/loop_test.hexa:236-237` | one `__cg_opts` reused across arm64 + x86 conditional |
+| test caller hoist | `tests/m0/concat_test.hexa:158-159` | same loop_test pattern |
+| test caller | `tests/m0/many_args_test.hexa:188,264` | inline per check |
+| RFC §4 table | `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md:88` | `G7-A.native impl` row split into `G7-A.native impl signature ✅` + `G7-A.native impl emit` (next sub-cycle) |
+| RFC §4.7 added | same file, before §5 | ≈70-line sub-section: what landed · parse-gate · byte-eq theorem · 9-item out-of-scope · files · cross-link |
+| RFC status banner | same file L3, L8 | `g7-a-native-impl-iface-landed` → `g7-a-native-impl-signature-landed`; new `> **G7-A native signature**: 2026-05-20 ...` quote line |
+
+**Parse-gate**: `SIDECAR_NO_POOL=1 HEXA_LANG=<worktree> /Users/ghost/.hx/bin/hexa_real parse <file>` (hyphenated-basename hexa_real shim per `reference_hexa_basename_sigkill_workaround_2026_05_19.md`) PASS 9/9 — both codegen files + `compiler/ir/lir.hexa` (unchanged but re-verified) + `compiler/main.hexa` + `compiler/codegen/codegen_test.hexa` + 4 `tests/m0/*_test.hexa`.
+
+**Falsifier status (g3-honest)**:
+- F-A1 (PIC re-load) native-codegen: NOT MEASURED this cycle. Reason: the signature lift produces no native PIC artifact — `opts.shared` is bound but never inspected, so the emit body is the same `@PAGE`/`@PAGEOFF` baseline that produces a PIE binary, not a `.dylib`/`.so`. F-A1 on native-codegen output requires the emit sub-cycle (next) AND the flag-wire prereq (`66b055c4`) on the same branch. The standing C-path F-A1 PASS measurement from §4.5 is unaffected.
+- F-A2 (single-symbol export) native-codegen: NOT MEASURED this cycle, for the same reason — no `.private_extern`/`.hidden` directive emitted means the export-table narrowing question is moot. C-path F-A2 EXPECTED-FAIL from §4.5 stands.
+- Byte-eq oracle (signature-lift-only must not change emit): NOT MEASURED at the corpus level this cycle (would require running the local `hexa build` C path with the regenerated `self/native/hexa_v2` against the test corpus + diff vs the pre-cycle output). The byte-eq theorem rests on inspection: `codegen_options_default()` returns literal `{0, ""}` (see `compiler/ir/lir.hexa::codegen_options_default`), the body never reads `opts.shared` (verifiable by `grep -n opts compiler/codegen/*.hexa` returning only the signature line + the new lead-comment block). Corpus measurement would PASS modulo the deferred deploy (per `@D g_commit_push_deploy` — `self/native/hexa_v2` not regenerated this cycle, so a measurement against the deployed driver would NOT reflect the signature lift).
+
+**Mini (arm64) + ubu-1 (x86_64) remote**: NOT RUN this cycle. Signature lift has no measurable runtime surface beyond the byte-eq oracle described above; remote fire would be the same `codegen_options_default()` → byte-identical .s artifact regardless of host. The first cost-bearing remote-fire candidate is the emit sub-cycle (F-A1 native PIC re-load + F-A2 single-symbol export), where Mach-O export-trie + ELF symbol-table differ structurally between hosts.
+
+**Out of scope**: (i) emit body branches (NEXT cycle); (ii) `.private_extern`/`.hidden` directive (NEXT cycle); (iii) `RELOC_*` constants referenced from `LInstr.comment` (NEXT cycle); (iv) `cmd_build` gate manipulation (vacuous — `--shared` flag not on this branch); (v) `compiler/codegen/thumbv7em_eabihf.hexa` + `nvptx_*.hexa` signatures (intentionally excluded — `--shared` is meaningless for bare-metal + GPU code modules); (vi) `self/native/hexa_v2` regen (deploy cycle scope); (vii) `inbox/PATCHES.yaml` untouched; (viii) byte-eq corpus measurement against deployed driver (defer to next cycle that promotes binary).
+
+**files**: 9 edited (5 callers + 2 codegen entries + RFC + this PLAN entry) + 1 unchanged but re-parsed (compiler/ir/lir.hexa).
+
+cross-link: RFC 070 §4.7 G7-A.native impl signature (full prose) · RFC 070 §4.6 (interface lift this consumes) · RFC 070 §4 phase table (new `signature ✅` + `emit` row split) · `@D g_inbox_processing_loop` Shape B (caller-fan-out across 11 sites triggered brief's documented Shape B split) · `@D g5` hexa-native-only (signature threads through the two CPU targets of the hexa-native codegen path) · `@D g3` real-limits-first (byte-eq theorem rests on literal-zero default seed + no `opts` read in either body — verifiable by inspection) · `@D g_commit_push_deploy` (NOT promoted this cycle — signature breaking change requires deploy cycle to land hexa_v2 carrying the new arity, but per brief's binary-promote-forbidden directive that is a separate cycle) · `@D g_plan_consolidation`.

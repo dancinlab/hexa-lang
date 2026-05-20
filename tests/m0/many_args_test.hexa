@@ -185,7 +185,8 @@ fn _check_arm64(mm: MModule) -> bool {
     println("")
     println("── arm64 / apple-darwin (arm64-apple-darwin) ──")
 
-    let lm = codegen_arm64_darwin(mm)
+    // RFC 070 G7-A.native impl — default CodegenOptions (shared=0).
+    let lm = codegen_arm64_darwin(mm, codegen_options_default())
     let asm = emit_asm(lm)
     println("  emit_asm output (" + to_string(len(asm.chars())) + " bytes):")
     println("------ BEGIN .s ------")
@@ -261,7 +262,8 @@ fn _check_x86_64(mm: MModule) -> bool {
     println("")
     println("── x86_64 / linux-gnu (x86_64-linux-gnu) ──")
 
-    let lm = codegen_x86_64_linux(mm)
+    // RFC 070 G7-A.native impl — default CodegenOptions (shared=0).
+    let lm = codegen_x86_64_linux(mm, codegen_options_default())
     let asm = emit_asm(lm)
     println("  emit_asm output (" + to_string(len(asm.chars())) + " bytes):")
     println("------ BEGIN .s ------")
