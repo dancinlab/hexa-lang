@@ -683,3 +683,16 @@ For each Tier-A sub-phase:
   · sigprocmask · setsockopt · grantpt · unlockpt · ptsname · ttyname
   · getrlimit. Helpers ARE defined but unused → dead-stripped. cycle 58
   will hunt the call sites in native/*.c
+
+### 2026-05-21 — Tier-A.4 native/*.c closure (cycle 58)
+
+- ✅ cycle 58 — Tier-A.4 CLOSED. aprime_cc nm undefined externs
+  79 → **69** (−10 · cumulative **137 → 69 = −68 = 50%**) · smoke
+  exit(42) PASS · binary 1,143,320 B
+- Closed: `_atexit` · `_isatty` · `_sigaction` · `_sigprocmask` ·
+  `_setsockopt` · `_grantpt` · `_unlockpt` · `_ptsname` · `_ttyname`
+  · `_getrlimit`. All call sites in self/native/*.c (persistent_pipe.c,
+  pty.c, term_ffi.c, signal_flock.c, net.c) — these get textually
+  `#include`d into runtime.c by self/runtime.c lines 9229-9341
+- Method: perl name-rewrite in 5 native/*.c files. Helpers from cycle
+  57 now actually used (were dead-stripped before)

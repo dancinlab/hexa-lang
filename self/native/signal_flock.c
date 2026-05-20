@@ -111,7 +111,7 @@ HexaVal hexa_os_sig_install(HexaVal sig_val, HexaVal name_val) {
     act.sa_handler = __hexa_sig_trampoline;
     act.sa_flags = SA_RESTART;
     sigemptyset(&act.sa_mask);
-    if (sigaction(sig, &act, NULL) < 0) return hexa_int(-errno);
+    if (hxlcl_sigaction(sig, &act, NULL) < 0) return hexa_int(-errno);
     const char* name = HX_IS_STR(name_val) ? HX_STR(name_val) : "";
     size_t nlen = strlen(name);
     if (nlen >= sizeof(g_handler_names[sig])) nlen = sizeof(g_handler_names[sig]) - 1;
@@ -129,7 +129,7 @@ HexaVal hexa_os_sig_uninstall(HexaVal sig_val) {
     memset(&act, 0, sizeof(act));
     act.sa_handler = SIG_DFL;
     sigemptyset(&act.sa_mask);
-    if (sigaction(sig, &act, NULL) < 0) return hexa_int(-errno);
+    if (hxlcl_sigaction(sig, &act, NULL) < 0) return hexa_int(-errno);
     g_handler_names[sig][0] = '\0';
     g_handler_set[sig] = 0;
     return hexa_int(0);
@@ -189,7 +189,7 @@ static HexaVal _hexa_sig_mask_op(int which, HexaVal arr_val) {
         int sig = (int)HX_INT(el);
         if (sig > 0 && sig < NSIG) sigaddset(&set, sig);
     }
-    if (sigprocmask(which, &set, NULL) < 0) return hexa_int(-errno);
+    if (hxlcl_sigprocmask(which, &set, NULL) < 0) return hexa_int(-errno);
     return hexa_int(0);
 }
 

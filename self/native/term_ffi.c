@@ -26,8 +26,8 @@
  *     int  term_install_sigint(void)        — SIGINT/SIGTERM → flag for graceful exit
  *     int  term_sigint_pending(void)        — flag; resets to 0 on read
  *   Introspection:
- *     int  term_isatty_stdin(void)          — isatty(0)
- *     int  term_isatty_stdout(void)         — isatty(1)
+ *     int  term_isatty_stdin(void)          — hxlcl_isatty(0)
+ *     int  term_isatty_stdout(void)         — hxlcl_isatty(1)
  *     int  term_getppid(void)               — getppid() for orphan-suicide
  *
  * INVARIANTS
@@ -221,7 +221,7 @@ int term_install_sigwinch(void) {
     sa.sa_handler = _on_sigwinch;
     sa.sa_flags = SA_RESTART;
     sigemptyset(&sa.sa_mask);
-    return (sigaction(SIGWINCH, &sa, NULL) == 0) ? 0 : -1;
+    return (hxlcl_sigaction(SIGWINCH, &sa, NULL) == 0) ? 0 : -1;
 }
 
 int term_sigwinch_pending(void) {
@@ -236,8 +236,8 @@ int term_install_sigint(void) {
     sa.sa_handler = _on_sigint;
     sa.sa_flags = 0;  /* no SA_RESTART — Ctrl-C interrupts blocking reads */
     sigemptyset(&sa.sa_mask);
-    if (sigaction(SIGINT, &sa, NULL) != 0) return -1;
-    if (sigaction(SIGTERM, &sa, NULL) != 0) return -1;
+    if (hxlcl_sigaction(SIGINT, &sa, NULL) != 0) return -1;
+    if (hxlcl_sigaction(SIGTERM, &sa, NULL) != 0) return -1;
     return 0;
 }
 
@@ -250,11 +250,11 @@ int term_sigint_pending(void) {
 /* ─── introspection ─── */
 
 int term_isatty_stdin(void) {
-    return isatty(STDIN_FILENO) ? 1 : 0;
+    return hxlcl_isatty(STDIN_FILENO) ? 1 : 0;
 }
 
 int term_isatty_stdout(void) {
-    return isatty(STDOUT_FILENO) ? 1 : 0;
+    return hxlcl_isatty(STDOUT_FILENO) ? 1 : 0;
 }
 
 /* ─── PTY harness primitives (forward-only "real PTY harness" closure) ─── */
@@ -385,7 +385,7 @@ int term_pty_spawn_sh(const char *cmd, int rows, int cols, int *out_pid) {
 int main(void) {
     int is_tty_in = term_isatty_stdin();
     int is_tty_out = term_isatty_stdout();
-    printf("isatty(stdin)=%d isatty(stdout)=%d\n", is_tty_in, is_tty_out);
+    printf("hxlcl_isatty(stdin)=%d hxlcl_isatty(stdout)=%d\n", is_tty_in, is_tty_out);
 
     int rows = 0, cols = 0;
     if (term_get_winsize(&rows, &cols) == 0) {

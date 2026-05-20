@@ -47,12 +47,12 @@ static HexaVal _hexa_pty_err(int en, const char* tag) {
 HexaVal hexa_pty_open(void) {
     int master = posix_openpt(O_RDWR | O_NOCTTY);
     if (master < 0) return _hexa_pty_err(errno, "posix_openpt");
-    if (grantpt(master) < 0)  { int e = errno; close(master); return _hexa_pty_err(e, "grantpt"); }
-    if (unlockpt(master) < 0) { int e = errno; close(master); return _hexa_pty_err(e, "unlockpt"); }
+    if (hxlcl_grantpt(master) < 0)  { int e = errno; close(master); return _hexa_pty_err(e, "grantpt"); }
+    if (hxlcl_unlockpt(master) < 0) { int e = errno; close(master); return _hexa_pty_err(e, "unlockpt"); }
     char name_buf[256];
 #ifdef __APPLE__
     /* Darwin: ptsname_r doesn't exist; ptsname is documented thread-safe on macOS. */
-    const char* nm = ptsname(master);
+    const char* nm = hxlcl_ptsname(master);
     if (!nm) { int e = errno; close(master); return _hexa_pty_err(e, "ptsname"); }
     strncpy(name_buf, nm, sizeof(name_buf) - 1);
     name_buf[sizeof(name_buf) - 1] = '\0';
@@ -144,12 +144,12 @@ HexaVal hexa_tcsetattr(HexaVal fd_v, HexaVal when_v, HexaVal attrs_v) {
 /* --- tty helpers --- */
 HexaVal hexa_tty_isatty(HexaVal fd_v) {
     if (!HX_IS_INT(fd_v)) return hexa_bool(0);
-    return hexa_bool(isatty((int)HX_INT(fd_v)) == 1);
+    return hexa_bool(hxlcl_isatty((int)HX_INT(fd_v)) == 1);
 }
 
 HexaVal hexa_tty_ttyname(HexaVal fd_v) {
     if (!HX_IS_INT(fd_v)) return hexa_str("");
-    const char* nm = ttyname((int)HX_INT(fd_v));
+    const char* nm = hxlcl_ttyname((int)HX_INT(fd_v));
     return hexa_str(nm ? nm : "");
 }
 

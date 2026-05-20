@@ -139,7 +139,7 @@ HexaVal hexa_net_listen(HexaVal addr_val) {
         /* SO_REUSEADDR mirrors the Rust TcpListener default. Without it,
          * repeat `hexa run` within TIME_WAIT collides. AF_UNIX has no
          * TIME_WAIT — skip. */
-        (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        (void)hxlcl_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     } else if (family == AF_UNIX) {
         /* Filesystem-bound sockets: unlink any stale leftover so bind
          * doesn't fail with EADDRINUSE. Ignore ENOENT (no leftover) and
@@ -451,7 +451,7 @@ HexaVal hexa_net_set_timeout(HexaVal fd_val, HexaVal ms_val) {
     struct timeval tv;
     if (ms <= 0) { tv.tv_sec = 0; tv.tv_usec = 0; }
     else { tv.tv_sec = (time_t)(ms / 1000); tv.tv_usec = (suseconds_t)((ms % 1000) * 1000); }
-    if (setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+    if (hxlcl_setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
         return hexa_int(-errno);
     }
     return hexa_int(0);

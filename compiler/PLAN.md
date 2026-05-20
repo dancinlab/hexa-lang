@@ -8265,3 +8265,20 @@ declarations). Used perl name-rewrite `s/(?<!_)\bNAME\s*\(/hxlcl_NAME(/g`
 with `unless /^\s*(\/\/|#)/ ` skip — same effect, no header conflict.
 
 @cite cycle 56 entry · cycle 46-55 batch.
+
+### 2026-05-21 — RUNTIME.md Phase 1 Tier-A.4 cycle 58 — 10 native/*.c POSIX (137→69, 50%)
+
+cycle 58 = closes Tier-A.4 by rewriting call sites in self/native/*.c
+(included into runtime.c via #include lines 9229-9341). Drops the 10
+helpers that landed unused in cycle 57.
+
+native/*.c files touched: persistent_pipe.c, pty.c, term_ffi.c,
+signal_flock.c, net.c — each got perl substitution of
+`(?<!\w)NAME\s*\(` → `hxlcl_NAME(`.
+
+measured: aprime_cc 79→69 externs (−10), smoke exit(42) PASS, binary
+1,143,320 B (1.14 MB unchanged).
+
+cumulative: 137→69 = −68 = **50% of libc externs removed**.
+
+@cite cycle 57 entry · 14 hxlcl_* Tier-A.4 helpers.

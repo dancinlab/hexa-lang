@@ -110,7 +110,7 @@ static void _hxp_init_table(void) {
     }
     g_pipe_table_inited = 1;
     if (!g_pipe_atexit_installed) {
-        atexit(_hxp_atexit_cleanup);
+        hxlcl_atexit(_hxp_atexit_cleanup);
         g_pipe_atexit_installed = 1;
     }
 }
@@ -119,7 +119,7 @@ static int _hxp_max_handles(void) {
     /* soft cap = min(RLIMIT_NOFILE/4, HXP_MAX_HANDLES). */
     struct rlimit rl;
     int cap = HXP_MAX_HANDLES;
-    if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur > 0) {
+    if (hxlcl_getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur > 0) {
         int soft = (int)(rl.rlim_cur / 4);
         if (soft > 0 && soft < cap) cap = soft;
     }
