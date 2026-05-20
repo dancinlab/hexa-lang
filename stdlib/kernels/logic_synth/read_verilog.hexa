@@ -1898,6 +1898,121 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     }
                 }
             }
+            // ── multi-LHS with-else cond-mux (proc-pass sub-step #3b) ──
+            //   `if (cond) begin lhs1 <= a1 ; lhs2 <= a2 ; … end
+            //    else       begin lhs1 <= b1 ; lhs2 <= b2 ; … end`
+            //   posedge always → per-statement $mux(S=cond, A=else_rhs_i,
+            //   B=then_rhs_i, Y=mux_y_i) + $dff(D=mux_y_i, Q=lhs_i).
+            //   Requires same simple-name LHS sequence in both branches;
+            //   any mismatch falls back to skip-no-emit.
+            if t_ok == 0 && has_else == 1 && is_clocked == 1 {
+                let mut t_stmts: [[str]] = []
+                let mut tcur: [str] = []
+                let mut tsi = 0
+                while tsi < len(then_toks) {
+                    if then_toks[tsi] == ";" {
+                        tcur = tcur.push(then_toks[tsi])
+                        t_stmts = t_stmts.push(tcur)
+                        tcur = []
+                        tsi = tsi + 1
+                        continue
+                    }
+                    tcur = tcur.push(then_toks[tsi])
+                    tsi = tsi + 1
+                }
+                let mut e_stmts: [[str]] = []
+                let mut ecur: [str] = []
+                let mut esi = 0
+                while esi < len(else_toks) {
+                    if else_toks[esi] == ";" {
+                        ecur = ecur.push(else_toks[esi])
+                        e_stmts = e_stmts.push(ecur)
+                        ecur = []
+                        esi = esi + 1
+                        continue
+                    }
+                    ecur = ecur.push(else_toks[esi])
+                    esi = esi + 1
+                }
+                let mut all_ok = 1
+                if len(t_stmts) != len(e_stmts) { all_ok = 0 }
+                if all_ok == 1 && len(t_stmts) < 2 { all_ok = 0 }
+                let mut sj = 0
+                while sj < len(t_stmts) && all_ok == 1 {
+                    let ts = t_stmts[sj]
+                    let es = e_stmts[sj]
+                    if len(ts) < 4 { all_ok = 0 }
+                    if all_ok == 1 && len(es) < 4 { all_ok = 0 }
+                    if all_ok == 1 {
+                        if ts[1] != "<=" { all_ok = 0 }
+                    }
+                    if all_ok == 1 {
+                        if es[1] != "<=" { all_ok = 0 }
+                    }
+                    if all_ok == 1 {
+                        if ts[0] != es[0] { all_ok = 0 }
+                    }
+                    if all_ok == 1 {
+                        if ts[len(ts) - 1] != ";" { all_ok = 0 }
+                    }
+                    if all_ok == 1 {
+                        if es[len(es) - 1] != ";" { all_ok = 0 }
+                    }
+                    sj = sj + 1
+                }
+                if all_ok == 1 {
+                    let cer = _rv_elab_expr(cond_toks, 0, m, 1, tab)
+                    if len(cer.err) == 0 {
+                        m = cer.m
+                        let mut emit_ok = 1
+                        let mut sk = 0
+                        while sk < len(t_stmts) && emit_ok == 1 {
+                            let ts = t_stmts[sk]
+                            let es = e_stmts[sk]
+                            let slhs = ts[0]
+                            let mut trhs: [str] = []
+                            let mut ri = 2
+                            while ri < len(ts) - 1 {
+                                trhs = trhs.push(ts[ri])
+                                ri = ri + 1
+                            }
+                            let mut erhs: [str] = []
+                            let mut ri2 = 2
+                            while ri2 < len(es) - 1 {
+                                erhs = erhs.push(es[ri2])
+                                ri2 = ri2 + 1
+                            }
+                            let ter2 = _rv_elab_expr(trhs, 0, m, 1, tab)
+                            if len(ter2.err) > 0 { emit_ok = 0 }
+                            if emit_ok == 1 {
+                                m = ter2.m
+                                let eer2 = _rv_elab_expr(erhs, 0, m, 1, tab)
+                                if len(eer2.err) > 0 { emit_ok = 0 }
+                                if emit_ok == 1 {
+                                    m = eer2.m
+                                    let mux_y = _rv_fresh_wire(m)
+                                    m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+                                    let mux_n = "$rvmux$" + str(len(m.cells))
+                                    let mut mc = rtlil_cell(mux_n, "$mux", 0)
+                                    mc = rtlil_cell_connect(mc, "A", eer2.wire)
+                                    mc = rtlil_cell_connect(mc, "B", ter2.wire)
+                                    mc = rtlil_cell_connect(mc, "S", cer.wire)
+                                    mc = rtlil_cell_connect(mc, "Y", mux_y)
+                                    m = rtlil_module_add_cell(m, mc)
+                                    let dn = "$rvff$" + str(len(m.cells))
+                                    let mut dc = rtlil_cell(dn, "$dff", 0)
+                                    dc = rtlil_cell_connect(dc, "CLK", clk_wire)
+                                    dc = rtlil_cell_connect(dc, "D", mux_y)
+                                    dc = rtlil_cell_connect(dc, "Q", slhs)
+                                    m = rtlil_module_add_cell(m, dc)
+                                    let _eg = clk_edge
+                                }
+                            }
+                            sk = sk + 1
+                        }
+                    }
+                }
+            }
             if has_begin == 0 { keep_going = 0 }
             continue
         }
@@ -2786,6 +2901,27 @@ fn main() {
         }
         if rtlil_count_cells_of_type(_m37, "$dff") != 1 {
             println("FAIL T37b dff_count got " + str(rtlil_count_cells_of_type(_m37, "$dff")))
+            fails = fails + 1
+        }
+    }
+
+    // T38 — multi-LHS with-else cond-mux (proc-pass sub-step #3b):
+    //       `if (rst) begin q1 <= 0 ; q2 <= 0 ; end
+    //        else      begin q1 <= a ; q2 <= b ; end`
+    //       → 2 $mux + 2 $dff (per-LHS $mux selecting else/then rhs).
+    total = total + 1
+    let _v38 = "module mwe ( input clk , input rst , input a , input b , output reg q1 , output reg q2 ) ; always @ ( posedge clk ) if ( rst ) begin q1 <= 0 ; q2 <= 0 ; end else begin q1 <= a ; q2 <= b ; end endmodule"
+    let _r38 = read_verilog(_v38)
+    if _r38.ok != 1 {
+        println("FAIL T38 cond_mux_welse_multi: " + _r38.message); fails = fails + 1
+    } else {
+        let _m38 = _r38.design.modules[0]
+        if rtlil_count_cells_of_type(_m38, "$mux") != 2 {
+            println("FAIL T38a mux_count got " + str(rtlil_count_cells_of_type(_m38, "$mux")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m38, "$dff") != 2 {
+            println("FAIL T38b dff_count got " + str(rtlil_count_cells_of_type(_m38, "$dff")))
             fails = fails + 1
         }
     }
