@@ -4051,3 +4051,24 @@ inbox/notes/2026-05-20-demiurge-rfc006-yosys-rtlil-handoff.md processed via @D g
 **Files** — touched: `inbox/notes/2026-05-20-demiurge-rfc006-yosys-rtlil-handoff.md` (header: `> **UPSTREAM PROGRESS 2026-05-20**: ALREADY-LANDED no-op cycle ...` marker + Status line "Superseded" suffix); this `compiler/PLAN.md` entry. **No edits** to `stdlib/yosys/*`, `stdlib/kernels/logic_synth/*`, `self/*`, `compiler/*`, `inbox/PATCHES.yaml`. Worktree branch only; no binary promote (`@D g_inbox_processing_loop` step-7 deferred to standard deploy cycle).
 
 **Cross-link**: `inbox/notes/2026-05-20-demiurge-rfc006-yosys-rtlil-handoff.md` · `inbox/notes/2026-05-19-hexa-arch-rfc006-yosys-handoff.md` (preceding handoff item ② is now CLOSED for body-landing scope; §5 area-oracle gate remains the residual open item) · commits `96bd4b09` scaffold + `522c8192` dispatcher + `ec8a51fc` rtlil + `4f70ce46` 6-module body + `0154227d` 2-layer extraction + PR #166 + PR #173 (§5 iter 10+11) · `project_stdlib_cloud_cycle_a.md` memory ("rfc_006 §5 absorption gate progress"). Decisions punted to follow-up: §5 area-oracle ±5% closure (ABC bounded-subprocess + SKY130 lib end-to-end); §4 module-1 (rtlil) follow-on for Cell/SigSpec/Process expansion (handoff note Item ②'s deferred footnote).
+
+---
+
+### 2026-05-20 — inbox/patches/rfc020-enum-payload-variants SSOT closure (dup-race verified)
+
+inbox/patches/rfc020-enum-payload-variants.md (opened 2026-05-10, header `in_progress`) — SOP @D g_inbox_processing_loop dispatch 결과 **dup-race HIT**. 패치가 요구한 핵심 작업 전부가 이미 git history 에 LANDED:
+
+- A1 (parser construction `E::V(x)`) → `3c8be96c` feat(self/parser)
+- A2 (typechecker payload-type 테이블) + A3 (pattern binding) → `005d5427` feat(self/typechecker)
+- A4 (codegen — match-side payload 추출 + arm-scope binding emit) → `a85b8a1c` hand-fix → `4ed9966e` interp parity (15/15 PASS interp+native, byte-eq) → `41ecfb97` SSOT 복원 (regen wipe 가 한 번 발생 → self/codegen_c2.hexa 본체에 port-back)
+- A5 (regression `test_enum_payload_full.hexa`, 15 cases) → `4ed9966e` (15/15 PASS)
+- B1 (`self/ir/Operand` sum-type) → `77254d91` doc(self/ir/instr) — **honest holdout**: stage0 binary (build/hexa_interp.real) 가 A5 fixes 미반영이라 sum-type migration 시 모든 consumer 가 `val_void` 로 깨짐. 5-step prereq TODO 기록.
+
+본 cycle 작업: (i) SOP dup-race precheck 확인, (ii) 5 file parse-gate PASS (parser/type_checker/codegen_c2/test_enum_payload_full/ir.instr), (iii) inbox patch markdown header `in_progress` → `resolved-ssot`, RESOLUTION 섹션 추가 (phase 별 랜딩 커밋 매핑 + B1 honest holdout 근거 + B2/C1 future sub-cycle 명세), (iv) 본 PLAN entry.
+
+honest-scope (g3 over-claim 0):
+- 본 closure 는 **self/ 트리** 의 A1-A5 measured-landed 상태 기록. B1 은 measured-holdout (의도적), B2/C1 은 untouched future. compiler/ 트리의 enum payload 마이그레이션은 본 cycle 미포함.
+- wilson G1 unblock 은 single-field + struct-embed 우회 패턴 기준 — multi-field 가 정말 필요한 경우는 별도 RFC.
+- binary promote 본 cycle 미포함 (SOP g_inbox_processing_loop step 7 — standard deploy cycle 분리).
+
+cross-link: inbox/patches/rfc020-enum-payload-variants.md (RESOLUTION 섹션) · commits 3c8be96c · 005d5427 · a85b8a1c · 4ed9966e · 41ecfb97 · 77254d91
