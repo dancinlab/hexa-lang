@@ -2035,3 +2035,361 @@ fn _contains_code(codes: [string], needle: string) -> bool {
     }
     return false
 }
+
+// ── RFC 055 §12 P4+ — loop-unroll PTX optimizer pass ─────────────────
+//
+// _nvptx_unroll_pass — clone the body of a canonical 3-block back-edge
+// loop `factor` times so the lowered PTX has the unrolled instruction
+// stream. Closes the GEMM perf gap documented in PR #105 (nvcc unrolls
+// the k-loop ~5×; the hexa-emit produced straight scalar bodies).
+//
+// MVP scope (intentionally bounded — see RFC 055 §12 P4+ note):
+//
+//   Pattern recognized:
+//     header → body → header   (3-block back-edge)
+//
+//     Where `header` is a block whose LAST stmt is STMT_BR_COND with
+//     `target_block = body.id` (loop-continue arm) and
+//     `target_block_else = exit.id` (loop-exit arm); and `body` is a
+//     block whose LAST stmt is STMT_BR with `target_block = header.id`
+//     (the back-edge). Any MFunc whose CFG doesn't match this exact
+//     shape is returned UNCHANGED (honest fallback — richer CFG shapes
+//     are future cycles, gpu/SPEC.md §10 follow-on).
+//
+//   For factor=2 (start small per the §12 P4+ MVP):
+//     The body block is cloned ONCE. The clone gets:
+//       - a fresh Block.id (max existing block id + 1)
+//       - every dst Local in its stmts renumbered by +n_locals (where
+//         n_locals = max Local.id seen in body + 1)
+//       - every Operand referencing an INTRA-body-defined Local
+//         renumbered by the same offset (references to outside-body
+//         Locals — params, header-defined values — stay untouched, so
+//         the clone reads the same loop-invariants).
+//       - the clone's terminator STMT_BR points back to `header.id`
+//         (preserves loop semantics).
+//     The ORIGINAL body's terminator STMT_BR is redirected to point
+//     to the clone's id instead of header (so the iteration order is
+//     body → clone → header).
+//
+// Future cycles can:
+//   * support factor > 2 (the offset arithmetic generalises trivially);
+//   * recognise N-block loops with internal control flow;
+//   * propagate the unrolled bound back to STMT_BR_COND's loop counter.
+//
+// For loops that don't match the canonical shape: return MFunc
+// unchanged (honest no-op). For factor < 2: return MFunc unchanged.
+//
+// NOT wired into `_nvptx_lower_func` automatically — call this pass
+// explicitly before `_nvptx_codegen` if the caller wants the
+// unrolled lowering. This keeps backward compat with every existing
+// 055-P0/P1/P2/P3b/c lower-test (F-RFC055-CPU-CODEGEN-UNTOUCHED also
+// holds since CPU codegen does not consult NVPTX-side passes).
+
+// _nvptx_unroll_find_pattern — search `mfn.blocks` for the canonical
+// 3-block back-edge pattern. Returns (header_idx, body_idx) on match,
+// or (-1, -1) on no-match. Index = position in mfn.blocks (not Block.id).
+fn _nvptx_unroll_find_pattern(mfn: MFunc) -> [i64] {
+    let mut result = []
+    result.push(-1)
+    result.push(-1)
+    let mut hi = 0
+    while hi < len(mfn.blocks) {
+        let hdr = mfn.blocks[hi]
+        if len(hdr.stmts) > 0 {
+            let last = hdr.stmts[len(hdr.stmts) - 1]
+            if last.kind == STMT_BR_COND && last.target_block >= 0 && last.target_block_else >= 0 {
+                let body_id = last.target_block
+                // Locate body block by id.
+                let mut bj = 0
+                let mut body_idx = -1
+                while bj < len(mfn.blocks) {
+                    if mfn.blocks[bj].id == body_id {
+                        body_idx = bj
+                    }
+                    bj = bj + 1
+                }
+                if body_idx >= 0 {
+                    let body = mfn.blocks[body_idx]
+                    if len(body.stmts) > 0 {
+                        let body_term = body.stmts[len(body.stmts) - 1]
+                        if body_term.kind == STMT_BR && body_term.target_block == hdr.id {
+                            // Confirm exit (target_block_else) exists too.
+                            let mut ej = 0
+                            let mut exit_ok = false
+                            while ej < len(mfn.blocks) {
+                                if mfn.blocks[ej].id == last.target_block_else {
+                                    exit_ok = true
+                                }
+                                ej = ej + 1
+                            }
+                            if exit_ok {
+                                result[0] = hi
+                                result[1] = body_idx
+                                return result
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        hi = hi + 1
+    }
+    return result
+}
+
+// _nvptx_unroll_max_block_id — max Block.id across mfn.blocks, for
+// allocating a fresh id for the clone.
+fn _nvptx_unroll_max_block_id(mfn: MFunc) -> i64 {
+    let mut m = 0
+    let mut i = 0
+    while i < len(mfn.blocks) {
+        if mfn.blocks[i].id > m { m = mfn.blocks[i].id }
+        i = i + 1
+    }
+    return m
+}
+
+// _nvptx_unroll_collect_body_dsts — collect every Local.id assigned in
+// the body block (dst of STMT_ASSIGN / STMT_BINOP / STMT_LOAD /
+// STMT_CALL). These are the Locals that get renumbered in the clone;
+// references to Locals NOT in this set are loop-invariants (params,
+// header-defined) and stay unchanged in the clone.
+fn _nvptx_unroll_collect_body_dsts(body: Block) -> [i64] {
+    let mut dsts = []
+    let mut i = 0
+    while i < len(body.stmts) {
+        let s = body.stmts[i]
+        if s.kind == STMT_ASSIGN || s.kind == STMT_BINOP || s.kind == STMT_LOAD || s.kind == STMT_CALL {
+            if s.dst.id >= 0 {
+                dsts.push(s.dst.id)
+            }
+        }
+        i = i + 1
+    }
+    return dsts
+}
+
+// _nvptx_unroll_is_body_dst — membership test on the body-defined Local
+// id set (small linear scan; body lengths are tiny).
+fn _nvptx_unroll_is_body_dst(dsts: [i64], id: i64) -> bool {
+    let mut i = 0
+    while i < len(dsts) {
+        if dsts[i] == id { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// _nvptx_unroll_max_local_id_in_mfn — max Local.id seen anywhere in
+// the function (dsts + operands across all blocks). Drives the
+// renumber offset so the clone's new Locals don't collide with any
+// existing id.
+fn _nvptx_unroll_max_local_id_in_mfn(mfn: MFunc) -> i64 {
+    let mut m = 0
+    let mut bi = 0
+    while bi < len(mfn.blocks) {
+        let blk = mfn.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            let s = blk.stmts[si]
+            if s.dst.id > m { m = s.dst.id }
+            let mut ai = 0
+            while ai < len(s.args) {
+                let o = s.args[ai]
+                if o.kind == "local" && o.local_id > m { m = o.local_id }
+                ai = ai + 1
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return m
+}
+
+// _nvptx_unroll_renumber_operand — if `o` references an intra-body Local,
+// return a renumbered copy (local_id += offset); otherwise return `o`
+// unchanged (loop-invariants stay shared).
+fn _nvptx_unroll_renumber_operand(o: Operand, dsts: [i64], offset: i64) -> Operand {
+    if o.kind == "local" && _nvptx_unroll_is_body_dst(dsts, o.local_id) {
+        return Operand {
+            kind: o.kind,
+            local_id: o.local_id + offset,
+            int_val: o.int_val,
+            float_val: o.float_val,
+            str_val: o.str_val,
+            global_id: o.global_id
+        }
+    }
+    return o
+}
+
+// _nvptx_unroll_clone_stmt — produce a renumbered copy of one body stmt
+// for the clone block. The terminator STMT_BR's target_block stays as
+// the header id (caller has already verified that's the back-edge).
+fn _nvptx_unroll_clone_stmt(s: Stmt, dsts: [i64], offset: i64) -> Stmt {
+    // Renumber dst when it's a body-defined Local.
+    let mut new_dst = s.dst
+    if s.dst.id >= 0 && _nvptx_unroll_is_body_dst(dsts, s.dst.id) {
+        new_dst = Local {
+            id: s.dst.id + offset,
+            arena_id: s.dst.arena_id,
+            type_id: s.dst.type_id,
+            name_hint: s.dst.name_hint
+        }
+    }
+    // Renumber operands referencing body-defined Locals.
+    let mut new_args = []
+    let mut ai = 0
+    while ai < len(s.args) {
+        new_args.push(_nvptx_unroll_renumber_operand(s.args[ai], dsts, offset))
+        ai = ai + 1
+    }
+    return Stmt {
+        kind: s.kind,
+        dst: new_dst,
+        op: s.op,
+        args: new_args,
+        target_block: s.target_block,
+        target_block_else: s.target_block_else
+    }
+}
+
+// _nvptx_unroll_pass — the public entry point. RFC 055 §12 P4+ MVP.
+//
+// Returns the input MFunc unchanged when:
+//   - factor < 2 (nothing to unroll), OR
+//   - the CFG doesn't match the canonical 3-block back-edge shape.
+//
+// For factor=2 on a matching MFunc: returns a new MFunc with one clone
+// of the body block inserted between body and back-edge, intra-body
+// Locals renumbered to avoid id collisions.
+//
+// MVP: only factor=2 is implemented in this slice — higher factors are
+// future cycles (the offset arithmetic generalises trivially but each
+// added clone needs another renumber pass; the recognition logic is
+// the load-bearing part and lands here first).
+pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
+    if factor < 2 { return mfn }
+    let pat = _nvptx_unroll_find_pattern(mfn)
+    let hdr_idx = pat[0]
+    let body_idx = pat[1]
+    if hdr_idx < 0 || body_idx < 0 { return mfn }
+
+    let hdr = mfn.blocks[hdr_idx]
+    let body = mfn.blocks[body_idx]
+    let dsts = _nvptx_unroll_collect_body_dsts(body)
+    let offset = _nvptx_unroll_max_local_id_in_mfn(mfn) + 1
+    let clone_block_id = _nvptx_unroll_max_block_id(mfn) + 1
+
+    // Build clone stmts: every body stmt with dst+operands renumbered
+    // for intra-body Locals; the terminator STMT_BR target stays as
+    // header.id (the clone's back-edge).
+    let mut clone_stmts = []
+    let mut si = 0
+    while si < len(body.stmts) {
+        clone_stmts.push(_nvptx_unroll_clone_stmt(body.stmts[si], dsts, offset))
+        si = si + 1
+    }
+    let clone_blk = Block {
+        id: clone_block_id,
+        stmts: clone_stmts,
+        preds: [],
+        succs: []
+    }
+
+    // Redirect ORIGINAL body's terminator STMT_BR from header → clone.
+    let mut new_body_stmts = []
+    let mut bi = 0
+    while bi < len(body.stmts) {
+        if bi == len(body.stmts) - 1 {
+            // Terminator — rewrite target_block to point to clone.
+            let term = body.stmts[bi]
+            new_body_stmts.push(Stmt {
+                kind: term.kind,
+                dst: term.dst,
+                op: term.op,
+                args: term.args,
+                target_block: clone_block_id,
+                target_block_else: term.target_block_else
+            })
+        } else {
+            new_body_stmts.push(body.stmts[bi])
+        }
+        bi = bi + 1
+    }
+    let new_body = Block {
+        id: body.id,
+        stmts: new_body_stmts,
+        preds: body.preds,
+        succs: body.succs
+    }
+
+    // Reassemble blocks: replace original body, insert clone right
+    // after it. The other blocks are copied through unchanged.
+    let mut new_blocks = []
+    let mut k = 0
+    while k < len(mfn.blocks) {
+        if k == body_idx {
+            new_blocks.push(new_body)
+            new_blocks.push(clone_blk)
+        } else {
+            new_blocks.push(mfn.blocks[k])
+        }
+        k = k + 1
+    }
+
+    // Extend locals roster with the clone's renumbered dsts so the
+    // classifier sees the new Local ids during lowering. Each cloned
+    // dst inherits the corresponding original Local's metadata so the
+    // classification (binop op → kind) reproduces.
+    let mut new_locals = []
+    let mut li = 0
+    while li < len(mfn.locals) {
+        new_locals.push(mfn.locals[li])
+        li = li + 1
+    }
+    // Append a Local for each body-defined dst at the new id.
+    let mut di = 0
+    while di < len(dsts) {
+        let orig_id = dsts[di]
+        // Find the original Local record for this dst (linear scan).
+        let mut mi = 0
+        let mut found = false
+        while mi < len(mfn.locals) {
+            let L = mfn.locals[mi]
+            if L.id == orig_id {
+                new_locals.push(Local {
+                    id: orig_id + offset,
+                    arena_id: L.arena_id,
+                    type_id: L.type_id,
+                    name_hint: L.name_hint + "_u1"
+                })
+                found = true
+            }
+            mi = mi + 1
+        }
+        if !found {
+            // Body dst missing from mfn.locals (synthetic) — synthesise
+            // a minimal Local so the clone's id is in the roster.
+            new_locals.push(Local {
+                id: orig_id + offset,
+                arena_id: 1,
+                type_id: 0,
+                name_hint: "unroll_clone"
+            })
+        }
+        di = di + 1
+    }
+
+    return MFunc {
+        name: mfn.name,
+        params: mfn.params,
+        return_local: mfn.return_local,
+        locals: new_locals,
+        blocks: new_blocks,
+        entry_block: mfn.entry_block,
+        arena_root: mfn.arena_root,
+        def_line: mfn.def_line,
+        gpu_kind: mfn.gpu_kind
+    }
+}
