@@ -72,7 +72,16 @@ fn _gate_run_one(label: str, v_path: str, top: str, lib_path: str) -> GateRun {
     stages = stages.push(GateStage { name: label + ":flatten",    ok: r4.ok, detail: r4.message })
     let r5 = pass_opt(r4.design)
     stages = stages.push(GateStage { name: label + ":opt",        ok: r5.ok, detail: r5.message })
-    let r6 = pass_techmap_sky130(r5.design)
+    // rfc_006 §5 absorption iter 12 (a): collapse multi-driver `connect`
+    // rows (e.g. router_d4 `idx` 5-way unroll). Inserted between opt and
+    // techmap so techmap operates on a structurally-clean RTLIL where
+    // every LHS has exactly one driver — mirrors ABC's read_blif
+    // multi-driver rejection (`Signal X defined more than once`). See
+    // pass_clean_multidriver header for the IEEE 1800-2017 §10.4.2 +
+    // Yosys proc_mux + BLIF spec §3 citations.
+    let r5b = pass_clean_multidriver(r5.design)
+    stages = stages.push(GateStage { name: label + ":clean_multidriver", ok: r5b.ok, detail: r5b.message })
+    let r6 = pass_techmap_sky130(r5b.design)
     stages = stages.push(GateStage { name: label + ":techmap",    ok: r6.ok, detail: r6.message })
     let r7 = pass_dfflibmap_sky130(r6.design)
     stages = stages.push(GateStage { name: label + ":dfflibmap",  ok: r7.ok, detail: r7.message })
