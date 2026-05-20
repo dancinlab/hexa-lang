@@ -368,10 +368,13 @@ static const char *__attribute__((noinline)) hxlcl_strerror(int errnum) {
 // cycle 6: strftime forward decl — body after #include
 static size_t hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm);
 // Cycle 52 — minimal printf family. Handles %s/%d/%i/%u/%lld/%ld/%llu/
-// %lu/%zu/%c/%x/%X/%p/%%, basic width + zero-pad. Float specifiers
-// (%f/%g/%e) emit "(float)" placeholder — compiler's hot paths don't
-// print floats. Not bit-exact with libc printf; see RUNTIME.md cycle
-// 52 Log entry for the honest scope.
+// %lu/%zu/%c/%x/%X/%p/%%, basic width + zero-pad.
+// Cycle 56 (2026-05-21) — real %f/%g/%e/%F/%G/%E formatting added
+// (default 6 sig digits / 6 fractional digits; rounding via peek-next).
+// Resolves inbox/patches/stdlib-print-float-emits-type-tag-not-value.md
+// (anima trainer per-step loss/grad-norm monitoring blocker). Not
+// bit-exact with libc's Grisu/Ryu — last few ULPs may differ — but
+// adequate for training observability and diagnostic output.
 static int __attribute__((noinline)) hxlcl_vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap) {
     size_t pos = 0;
     #define HXLCL_PUT(ch) do { if (pos + 1 < cap) buf[pos] = (ch); pos++; } while (0)
@@ -379,6 +382,7 @@ static int __attribute__((noinline)) hxlcl_vsnprintf(char *buf, size_t cap, cons
         if (*fmt != '%') { HXLCL_PUT(*fmt); fmt++; continue; }
         fmt++;
         int leftalign = 0, zeropad = 0, width = 0;
+        int prec = -1;  /* -1 = unset (defaults applied per-conv) */
         if (*fmt == '-') { leftalign = 1; fmt++; }
         if (*fmt == '+') fmt++;
         if (*fmt == ' ') fmt++;
@@ -387,8 +391,9 @@ static int __attribute__((noinline)) hxlcl_vsnprintf(char *buf, size_t cap, cons
         while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt - '0'); fmt++; }
         if (*fmt == '.') {
             fmt++;
-            if (*fmt == '*') { (void)va_arg(ap, int); fmt++; }
-            else while (*fmt >= '0' && *fmt <= '9') fmt++;
+            prec = 0;
+            if (*fmt == '*') { prec = va_arg(ap, int); fmt++; if (prec < 0) prec = 0; }
+            else while (*fmt >= '0' && *fmt <= '9') { prec = prec * 10 + (*fmt - '0'); fmt++; }
         }
         int lng = 0;
         if (*fmt == 'h') { fmt++; if (*fmt == 'h') fmt++; }
@@ -436,9 +441,188 @@ static int __attribute__((noinline)) hxlcl_vsnprintf(char *buf, size_t cap, cons
             else while (v) { int d = (int)(v & 0xF); tmp[tn++] = (d < 10) ? ('0' + (char)d) : (hi + (char)d - 10); v >>= 4; }
             if (conv == 'p') { tmp[tn++] = 'x'; tmp[tn++] = '0'; }
         } else if (conv == 'f' || conv == 'g' || conv == 'e' || conv == 'F' || conv == 'G' || conv == 'E') {
-            (void)va_arg(ap, double);
-            const char *pl = "(float)";
-            for (int k = 0; pl[k]; k++) HXLCL_PUT(pl[k]);
+            /* Cycle 56 — real double-to-string for %f/%g/%e (default 6 sig
+             * digits / 6 fractional digits). Not bit-exact with libc's
+             * Grisu/Ryu but adequate for training observability + diagnostic
+             * use (println(float), step loss/grad-norm logs). Resolves
+             * inbox/patches/stdlib-print-float-emits-type-tag-not-value.md. */
+            double dv = va_arg(ap, double);
+            /* nan/inf via bit pattern (no libc isnan/isinf available). */
+            union { double d; unsigned long long u; } __pun;
+            __pun.d = dv;
+            unsigned long long bits = __pun.u;
+            int signbit = (int)(bits >> 63);
+            unsigned long long exp_bits = (bits >> 52) & 0x7FFULL;
+            unsigned long long mant_bits = bits & 0xFFFFFFFFFFFFFULL;
+            /* fbuf sized for worst case %f of ~1e308 (sign + ~310 digits +
+             * '.' + 6 frac + null). */
+            char fbuf[352]; int fn = 0;
+            int is_upper = (conv == 'F' || conv == 'G' || conv == 'E');
+            if (exp_bits == 0x7FF) {
+                if (mant_bits) {
+                    const char *s = is_upper ? "NAN" : "nan";
+                    for (int k = 0; s[k]; k++) fbuf[fn++] = s[k];
+                } else {
+                    if (signbit) fbuf[fn++] = '-';
+                    const char *s = is_upper ? "INF" : "inf";
+                    for (int k = 0; s[k]; k++) fbuf[fn++] = s[k];
+                }
+            } else {
+                if (signbit) { fbuf[fn++] = '-'; dv = -dv; }
+                /* %f default prec = 6 (fractional digits); %g default = 6
+                 * (significant digits); %e default = 6 (digits after
+                 * decimal in scientific). */
+                int prec_eff = (prec < 0) ? 6 : prec;
+                if ((conv == 'g' || conv == 'G') && prec_eff == 0) prec_eff = 1;
+                if (dv == 0.0) {
+                    fbuf[fn++] = '0';
+                    if (conv == 'f' || conv == 'F') {
+                        if (prec_eff > 0) {
+                            fbuf[fn++] = '.';
+                            for (int k = 0; k < prec_eff; k++) fbuf[fn++] = '0';
+                        }
+                    } else if (conv == 'e' || conv == 'E') {
+                        if (prec_eff > 0) {
+                            fbuf[fn++] = '.';
+                            for (int k = 0; k < prec_eff; k++) fbuf[fn++] = '0';
+                        }
+                        fbuf[fn++] = is_upper ? 'E' : 'e';
+                        fbuf[fn++] = '+'; fbuf[fn++] = '0'; fbuf[fn++] = '0';
+                    }
+                    /* %g of 0.0 → just "0" */
+                } else {
+                    /* Normalize: 1.0 <= dv < 10.0, track decimal exponent. */
+                    int e10 = 0;
+                    while (dv >= 1e16) { dv *= 1e-16; e10 += 16; }
+                    while (dv >= 1e4)  { dv *= 1e-4;  e10 += 4;  }
+                    while (dv >= 10.0) { dv *= 0.1;   e10 += 1;  }
+                    while (dv < 1e-15) { dv *= 1e16;  e10 -= 16; }
+                    while (dv < 1e-3)  { dv *= 1e4;   e10 -= 4;  }
+                    while (dv < 1.0)   { dv *= 10.0;  e10 -= 1;  }
+                    /* digits_needed: for %g, prec_eff sig digits; for %f,
+                     * need e10+1+prec_eff digits if e10>=0 else prec_eff
+                     * (with leading zeros); for %e, prec_eff+1 sig digits. */
+                    int sig_digits;
+                    if (conv == 'g' || conv == 'G') sig_digits = prec_eff;
+                    else if (conv == 'e' || conv == 'E') sig_digits = prec_eff + 1;
+                    else { /* %f */
+                        sig_digits = (e10 >= 0 ? e10 + 1 : 0) + prec_eff;
+                        if (sig_digits < 1) sig_digits = 1;
+                    }
+                    if (sig_digits > 18) sig_digits = 18;
+                    if (sig_digits < 1) sig_digits = 1;
+                    char digits[24]; int n_dig = 0;
+                    for (int k = 0; k < sig_digits; k++) {
+                        int d = (int)dv;
+                        if (d > 9) d = 9; if (d < 0) d = 0;
+                        digits[n_dig++] = (char)('0' + d);
+                        dv = (dv - d) * 10.0;
+                    }
+                    /* round half-up: peek next digit. */
+                    int round_d = (int)dv;
+                    if (round_d >= 5) {
+                        int j = n_dig - 1;
+                        while (j >= 0) {
+                            if (digits[j] < '9') { digits[j]++; break; }
+                            digits[j] = '0';
+                            j--;
+                        }
+                        if (j < 0) {
+                            /* carry overflow: 0.999.. → 1.000.. ; insert '1'
+                             * at front, bump exponent. */
+                            for (int k = n_dig; k > 0; k--) digits[k] = digits[k - 1];
+                            digits[0] = '1';
+                            n_dig++;
+                            e10++;
+                        }
+                    }
+                    /* %g chooses %e vs %f based on exponent. */
+                    char eff_conv = conv;
+                    int g_strip_zeros = 0;
+                    if (conv == 'g' || conv == 'G') {
+                        g_strip_zeros = 1;
+                        if (e10 < -4 || e10 >= prec_eff) {
+                            eff_conv = (conv == 'G') ? 'E' : 'e';
+                        } else {
+                            eff_conv = (conv == 'G') ? 'F' : 'f';
+                            /* For %g→%f: prec after decimal = sig - (e10+1). */
+                            int frac = prec_eff - (e10 + 1);
+                            if (frac < 0) frac = 0;
+                            prec_eff = frac;
+                        }
+                    }
+                    if (eff_conv == 'e' || eff_conv == 'E') {
+                        /* For %g→%e: prec after decimal = sig - 1. */
+                        int e_prec;
+                        if (conv == 'g' || conv == 'G') e_prec = (sig_digits - 1 < 0) ? 0 : sig_digits - 1;
+                        else e_prec = prec_eff;
+                        fbuf[fn++] = digits[0];
+                        int emit_dot = (e_prec > 0);
+                        if (emit_dot) {
+                            fbuf[fn++] = '.';
+                            for (int k = 1; k <= e_prec; k++) {
+                                fbuf[fn++] = (k < n_dig) ? digits[k] : '0';
+                            }
+                        }
+                        if (g_strip_zeros && emit_dot) {
+                            while (fn > 0 && fbuf[fn - 1] == '0') fn--;
+                            if (fn > 0 && fbuf[fn - 1] == '.') fn--;
+                        }
+                        fbuf[fn++] = (eff_conv == 'E') ? 'E' : 'e';
+                        int ev = e10;
+                        if (ev < 0) { fbuf[fn++] = '-'; ev = -ev; } else fbuf[fn++] = '+';
+                        if (ev >= 100) {
+                            fbuf[fn++] = (char)('0' + (ev / 100));
+                            fbuf[fn++] = (char)('0' + ((ev / 10) % 10));
+                            fbuf[fn++] = (char)('0' + (ev % 10));
+                        } else {
+                            fbuf[fn++] = (char)('0' + (ev / 10));
+                            fbuf[fn++] = (char)('0' + (ev % 10));
+                        }
+                    } else {
+                        /* %f or %g→%f. */
+                        int di = 0;
+                        if (e10 >= 0) {
+                            for (int k = 0; k <= e10; k++) {
+                                fbuf[fn++] = (di < n_dig) ? digits[di] : '0';
+                                di++;
+                            }
+                            if (prec_eff > 0) {
+                                fbuf[fn++] = '.';
+                                for (int k = 0; k < prec_eff; k++) {
+                                    fbuf[fn++] = (di < n_dig) ? digits[di] : '0';
+                                    di++;
+                                }
+                            }
+                        } else {
+                            fbuf[fn++] = '0';
+                            if (prec_eff > 0) {
+                                fbuf[fn++] = '.';
+                                int leading_z = (-e10) - 1;
+                                for (int k = 0; k < leading_z && k < prec_eff; k++) fbuf[fn++] = '0';
+                                int remaining = prec_eff - leading_z;
+                                for (int k = 0; k < remaining; k++) {
+                                    fbuf[fn++] = (di < n_dig) ? digits[di] : '0';
+                                    di++;
+                                }
+                            }
+                        }
+                        if (g_strip_zeros) {
+                            int has_dot = 0;
+                            for (int k = 0; k < fn; k++) if (fbuf[k] == '.') { has_dot = 1; break; }
+                            if (has_dot) {
+                                while (fn > 0 && fbuf[fn - 1] == '0') fn--;
+                                if (fn > 0 && fbuf[fn - 1] == '.') fn--;
+                            }
+                        }
+                    }
+                }
+            }
+            int fpad = width - fn; if (fpad < 0) fpad = 0;
+            char fpadc = (zeropad && !leftalign) ? '0' : ' ';
+            if (!leftalign) for (int k = 0; k < fpad; k++) HXLCL_PUT(fpadc);
+            for (int k = 0; k < fn; k++) HXLCL_PUT(fbuf[k]);
+            if (leftalign) for (int k = 0; k < fpad; k++) HXLCL_PUT(' ');
             continue;
         } else {
             HXLCL_PUT('%'); HXLCL_PUT(conv); continue;

@@ -1,5 +1,15 @@
 # `stdlib/flame` — anima Engine A/G dual-head + multi-objective overlay primitives
 
+**Status**: `deprioritized 2026-05-21 — Path B (ag_tape) end-to-end
+demonstrated sufficient for dual-head + composite loss (CE + L_psi +
+L_phi) via canonical template
+stdlib/flame/flame_anima_multi_objective_test.hexa (3 falsifiers
+measured PASS). Path A multi-head primitive set (nn_decoder_init_dual /
+fwd_dual / loss_multi) NOT landed and not recommended unless cost-
+bearing fire at d=3072 reveals Path B tape memory or perf failure.
+See flame-anima-multi-objective-3b-pytorch-benchmark-and-stdlib-
+template.md §Resolution 2026-05-21 for full reasoning.`
+
 **Severity**: medium (blocks anima `.hexa` trainer multi-objective overlay
   per `dancinlab/anima` `@D g_train_via_hexa_cloud_and_hexa_lang.hexa_trainer_mandate`)
 

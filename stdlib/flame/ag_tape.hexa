@@ -143,6 +143,19 @@ pub fn ag_grad(tape: int, tid: int) -> int {
     return to_int(t_get(to_int(t_get(tape, 3)), 1 + idx))
 }
 
+// Multi-objective seed (RFC-anima-multiobj 2026-05-21): accumulate `seed`
+// (len = t_len(seed)) into grad[tid] WITHOUT walking the tape. Lets the
+// caller pre-populate multiple outputs' upstream-grads (e.g. dual-head
+// loss: head_a's CE+L_phi seed AND head_g's L_psi seed) before invoking
+// `ag_backward_reg`, which itself only takes one (out_tid, seed) pair.
+// Walking semantics unchanged: backward_reg seeds its arg first, then
+// iterates ops in reverse, accumulating into reg[input_tid] as it goes —
+// so any pre-seed sitting in reg at walk-start contributes correctly
+// to upstream grad of its corresponding op's input.
+pub fn ag_seed_grad(tape: int, tid: int, seed: int) {
+    _ag_reg_acc(tape, tid, seed, t_len(seed))
+}
+
 pub fn ag_t_count(tape: int) -> int { return to_int(t_get(tape, 0)) }
 
 fn _ag_base(op: int) -> int { return _ag_hdr() + op * _ag_slots() }

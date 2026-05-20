@@ -1,0 +1,434 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_anima_multi_objective_test.hexa
+//
+// CANONICAL TEMPLATE — anima multi-objective (Ψ-physics) trainer spine
+//
+// Resolves Ask 2 of inbox/patches/flame-anima-multi-objective-3b-pytorch-
+// benchmark-and-stdlib-template.md (filed by anima 2026-05-21):
+//   - dual output heads (head_a, head_g) sharing the final embedding
+//   - composite loss recipe L = L_ce + λ_ψ·L_psi + λ_phi·L_phi
+//     (L_route deferred — see "Honest scope" §C2)
+//   - backward via ag_tape over (head_a, head_g, block params, tok_emb)
+//   - Mac smoke tier: d=192 L=2 (simplified body — see §C1)
+//
+// PATH B (ag_tape) implementation. anima downstream is expected to
+// clone this template into HEXAD/FLAME/<state-dir>/ and extend the
+// body (more layers, real GQA attention, RoPE) for the d=768 single-
+// GPU and d=3072 H100 3B tiers. The multi-objective composition
+// proven here (dual ag_lmhead + ag_seed_grad + ag_backward_reg) is the
+// invariant API contract.
+//
+// FALSIFIERS:
+//   F-MULTIOBJ-MAC-SMOKE-BUILDS         parse + clang clean
+//                                        (under HEXA_MAC_BUILD_OK=1)
+//   F-MULTIOBJ-BACKWARD-ALL-PARAMS-NONZERO
+//                                        ||grad[θ]||₁ > 0 for every
+//                                        param ∈ {zT_a, zT_g, W1, W2,
+//                                        g1, g2, gF, tok_emb}; both
+//                                        heads' loss paths contribute
+//                                        to shared params.
+//   F-MULTIOBJ-COMBINED-LOSS-DESCENDS    SGD step (lr=0.1) over 5 iters:
+//                                        L_total[0] > L_total[4]
+//                                        (descent through the composite
+//                                        scalar, proves seeds compose).
+//
+// Honest scope:
+//   §C1  Body simplified to L=2 stacked rmsnorm+linear+residual blocks
+//        (no GQA attention, no RoPE, no SwiGLU). Mac smoke tier is
+//        for spine verification of the multi-objective composition —
+//        the FULL transformer body (matching conscious_decoder.py at
+//        d=192/d=768/d=3072) is downstream wiring. anima clones this
+//        template and substitutes _mini_block_fwd → full
+//        decoder_block_lib calls.
+//   §C2  L_route deferred. Requires per-layer activation L2/CV taps
+//        from inside the ag_tape body. anima's
+//        nn_decoder_fwd_with_readout (decoder_lib.hexa:550) exposes
+//        a single-position residual hook; per-layer-tension readout
+//        is a separate flame extension (track via inbox patch
+//        "flame-per-layer-tension-readout" if Ask 3 chooses Path B
+//        for 3B).
+//   §C3  Numerical parity vs PyTorch eager (F-MULTIOBJ-NUMERICAL-
+//        PARITY-PYT) deferred — requires a PyTorch reference run on
+//        identical RNG-seeded init. Path: anima fires
+//        conscious_decoder.py at d=192 L=2 byte-LM mode (same seeds),
+//        compares loss[step=0..4] within ε=1e-4. Not in this template.
+//   §C4  3B-FITS-H100-80GB (F-MULTIOBJ-3B-FITS-H100-80GB) deferred —
+//        the d=3072 L=28 dispatch is cost-bearing GPU fire territory
+//        (Ψ-grid via dancinlab/anima HEXAD/UNCLASSIFIED dispatch).
+//
+// CROSS-LINK:
+//   - inbox/patches/flame-anima-multi-objective-3b-pytorch-benchmark-
+//     and-stdlib-template.md  (this patch)
+//   - inbox/patches/flame-anima-dual-head-multiobjective.md  (sibling)
+//   - inbox/patches/stdlib-print-float-emits-type-tag-not-value.md
+//     (CLOSED 2026-05-21 — println(float) now emits actual values via
+//      runtime.c cycle 56 hxlcl_vsnprintf %g/%f/%e real impl)
+//   - dancinlab/anima conscious_decoder.py (reference for L_ce + L_psi +
+//     L_phi formulas)
+//   - flame_ag_tape_test.hexa  (single-head ag_tape pattern, Phase 2
+//      F-RFC043-AGTAPE-CHAIN-EQ oracle)
+//   - flame_d768_12L_agtape_fire.hexa  (generic ag_tape decoder fire,
+//      single-head, F-RFC046-AGTAPE-WALL)
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/ag_tape"
+use "stdlib/flame/flame_math"
+
+// ── tiny helpers ────────────────────────────────────────────────────
+
+fn _mo_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// L1 sum |t[0..n]|
+fn _mo_l1(t: int, n: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + _mo_abs(t_get(t, i))
+        i = i + 1
+    }
+    return s
+}
+
+// dt_lcg fill into t[0..n] with given seed offset.
+fn _mo_fill_lcg(t: int, n: int, seed: int) {
+    let mut s = seed
+    let mut i = 0
+    while i < n {
+        s = (s * 1103515245 + 12345) % 2147483648
+        let f = (to_float(s) / 2147483648.0 - 0.5) * 0.1
+        t_set(t, i, f)
+        i = i + 1
+    }
+}
+
+fn _mo_fill_const(t: int, n: int, v: float) {
+    let mut i = 0
+    while i < n {
+        t_set(t, i, v)
+        i = i + 1
+    }
+}
+
+// ── softmax for one position (V-len) ────────────────────────────────
+fn _mo_softmax(logits: int, out_p: int, V: int) {
+    let mut m = t_get(logits, 0)
+    let mut i = 1
+    while i < V {
+        let v = t_get(logits, i)
+        if v > m { m = v }
+        i = i + 1
+    }
+    let mut z = 0.0
+    let mut k = 0
+    while k < V {
+        let e = dt_exp(t_get(logits, k) - m)
+        t_set(out_p, k, e)
+        z = z + e
+        k = k + 1
+    }
+    if z <= 0.0 { z = 1.0 }
+    let mut j = 0
+    while j < V {
+        t_set(out_p, j, t_get(out_p, j) / z)
+        j = j + 1
+    }
+}
+
+// ── losses & their derivatives ──────────────────────────────────────
+//
+// L_ce(logits_a, target) — CE over softmax; grad = softmax - onehot.
+fn _mo_ce_loss_and_grad(logits: int, target: int, V: int,
+                        prob_scratch: int, dl_out: int) -> float {
+    _mo_softmax(logits, prob_scratch, V)
+    let p_t = t_get(prob_scratch, target)
+    let eps = 1e-30
+    let mut p_safe = p_t
+    if p_safe < eps { p_safe = eps }
+    let loss = 0.0 - dt_ln(p_safe)
+    let mut v = 0
+    while v < V {
+        let pv = t_get(prob_scratch, v)
+        let g = if v == target { pv - 1.0 } else { pv }
+        t_set(dl_out, v, g)
+        v = v + 1
+    }
+    return loss
+}
+
+// L_psi: ψ = (1 + cos(u,v))/2 ; L = (ψ - 0.5)² = c²/4 where c = cos(u,v).
+// dL/dc = c/2. dc/du = v/(na·nb) - c·u/na². Symmetric for dc/dv.
+// Accumulates into dl_u_out, dl_v_out.
+fn _mo_psi_loss_and_grad(u: int, v: int, V: int,
+                         dl_u_out: int, dl_v_out: int) -> float {
+    let mut na2 = 0.0
+    let mut nb2 = 0.0
+    let mut dot = 0.0
+    let mut i = 0
+    while i < V {
+        let ui = t_get(u, i)
+        let vi = t_get(v, i)
+        na2 = na2 + ui * ui
+        nb2 = nb2 + vi * vi
+        dot = dot + ui * vi
+        i = i + 1
+    }
+    let na = dt_sqrt(na2)
+    let nb = dt_sqrt(nb2)
+    let eps = 1e-12
+    let na_safe = if na < eps { eps } else { na }
+    let nb_safe = if nb < eps { eps } else { nb }
+    let c = dot / (na_safe * nb_safe)
+    let loss = c * c / 4.0
+    let dLdc = c / 2.0
+    let inv_nab = 1.0 / (na_safe * nb_safe)
+    let inv_na2 = 1.0 / (na_safe * na_safe)
+    let inv_nb2 = 1.0 / (nb_safe * nb_safe)
+    let mut k = 0
+    while k < V {
+        let ui = t_get(u, k)
+        let vi = t_get(v, k)
+        let du = dLdc * (vi * inv_nab - c * ui * inv_na2)
+        let dv = dLdc * (ui * inv_nab - c * vi * inv_nb2)
+        t_set(dl_u_out, k, t_get(dl_u_out, k) + du)
+        t_set(dl_v_out, k, t_get(dl_v_out, k) + dv)
+        k = k + 1
+    }
+    return loss
+}
+
+// L_phi: ψ_ent = H(softmax(u)) / log V ; L = (ψ_ent - 0.5)².
+// d L/d u_j = (dL/dψ / log V) · p_j · ( -H - log p_j ).
+// Accumulates into dl_out.
+fn _mo_phi_loss_and_grad(logits: int, V: int,
+                         dl_out: int, prob_scratch: int) -> float {
+    _mo_softmax(logits, prob_scratch, V)
+    let mut H = 0.0
+    let mut k = 0
+    let eps = 1e-30
+    while k < V {
+        let pk = t_get(prob_scratch, k)
+        if pk > eps {
+            H = H - pk * dt_ln(pk)
+        }
+        k = k + 1
+    }
+    let logV = dt_ln(to_float(V))
+    let psi_ent = H / logV
+    let loss = (psi_ent - 0.5) * (psi_ent - 0.5)
+    let dLdpsi = 2.0 * (psi_ent - 0.5)
+    let coef = dLdpsi / logV
+    let mut j = 0
+    while j < V {
+        let pj = t_get(prob_scratch, j)
+        let log_pj = if pj > eps { dt_ln(pj) } else { dt_ln(eps) }
+        let dj = coef * pj * (0.0 - H - log_pj)
+        t_set(dl_out, j, t_get(dl_out, j) + dj)
+        j = j + 1
+    }
+    return loss
+}
+
+// ── mini-block (rmsnorm + linear + residual). T=1 stack ────────────
+fn _mo_mini_block_fwd(tape: int, X: int, g: int, W: int,
+                       bzero: int, d: int) -> int {
+    let h = ag_rmsnorm(tape, X, g, d)
+    let lin = ag_linear(tape, h, W, bzero, 1, d, d)
+    let out = ag_add(tape, X, lin, d)
+    return out
+}
+
+// ── main ────────────────────────────────────────────────────────────
+
+fn main() -> int {
+    let d = 192
+    let NL = 2
+    let V = 256
+    let seed_base = 42
+    let lambda_psi = 1.0
+    let lambda_phi = 0.3
+
+    println("=== flame_anima_multi_objective_test (Mac smoke, d=192 L=2) ===")
+    print("  cfg: d="); print(to_string(d))
+    print(" L="); print(to_string(NL))
+    print(" V="); print(to_string(V))
+    println(" T=1  (Mac smoke tier)")
+    print("  lambda_psi="); println(lambda_psi)
+    print("  lambda_phi="); println(lambda_phi)
+    println("  (lambda_route deferred — see Honest scope C2)")
+
+    let tok_emb = t_zeros(V * d)
+    _mo_fill_lcg(tok_emb, V * d, seed_base + 1)
+    let g1 = t_zeros(d); _mo_fill_const(g1, d, 1.0)
+    let g2 = t_zeros(d); _mo_fill_const(g2, d, 1.0)
+    let gF = t_zeros(d); _mo_fill_const(gF, d, 1.0)
+    let W1 = t_zeros(d * d); _mo_fill_lcg(W1, d * d, seed_base + 2)
+    let W2 = t_zeros(d * d); _mo_fill_lcg(W2, d * d, seed_base + 3)
+    let zT_a = t_zeros(V * d); _mo_fill_lcg(zT_a, V * d, seed_base + 4)
+    let zT_g = t_zeros(V * d); _mo_fill_lcg(zT_g, V * d, seed_base + 5)
+    let bzero = t_zeros(d)
+
+    let ids = t_zeros(1)
+    t_set(ids, 0, 7.0)
+    let target = 42
+
+    let n_steps = 5
+    let lr = 0.1
+    let mut loss_first = 0.0
+    let mut loss_last = 0.0
+    let mut step = 0
+    while step < n_steps {
+        let tp = ag_t_begin(2 + NL * 3 + 3)
+
+        let X0 = ag_embed(tp, ids, tok_emb, 1, d)
+        let mut X = X0
+        X = _mo_mini_block_fwd(tp, X, g1, W1, bzero, d)
+        X = _mo_mini_block_fwd(tp, X, g2, W2, bzero, d)
+        let temb = ag_rmsnorm(tp, X, gF, d)
+        // NOTE: nn_lm_head_fwd's parameter order is (TABLE [V·d], VECTOR [d]).
+        // The API parameter name "temb" refers to the TABLE (V·d) and "zT" to
+        // the per-position VECTOR (d) — opposite of conventional usage. We
+        // therefore pass zT_a/zT_g (the V·d tables) as the first arg.
+        let logits_a = ag_lmhead(tp, zT_a, temb, V, d)
+        let logits_g = ag_lmhead(tp, zT_g, temb, V, d)
+
+        let dy_ce = t_zeros(V)
+        let prob_ce = t_zeros(V)
+        let L_ce = _mo_ce_loss_and_grad(logits_a, target, V, prob_ce, dy_ce)
+
+        let dy_phi = t_zeros(V)
+        let prob_phi = t_zeros(V)
+        let L_phi = _mo_phi_loss_and_grad(logits_a, V, dy_phi, prob_phi)
+
+        let dy_psi_a = t_zeros(V)
+        let dy_psi_g = t_zeros(V)
+        let L_psi = _mo_psi_loss_and_grad(logits_a, logits_g, V,
+                                          dy_psi_a, dy_psi_g)
+
+        let dy_a_total = t_zeros(V)
+        let dy_g_total = t_zeros(V)
+        let mut vi = 0
+        while vi < V {
+            let g_a = t_get(dy_ce, vi) +
+                      lambda_phi * t_get(dy_phi, vi) +
+                      lambda_psi * t_get(dy_psi_a, vi)
+            t_set(dy_a_total, vi, g_a)
+            t_set(dy_g_total, vi, lambda_psi * t_get(dy_psi_g, vi))
+            vi = vi + 1
+        }
+
+        let L_total = L_ce + lambda_phi * L_phi + lambda_psi * L_psi
+        print("step "); print(to_string(step))
+        print("  L_ce="); print(to_string(L_ce))
+        print("  L_psi="); print(to_string(L_psi))
+        print("  L_phi="); print(to_string(L_phi))
+        print("  L_total="); println(L_total)
+
+        ag_seed_grad(tp, logits_g, dy_g_total)
+        ag_backward_reg(tp, logits_a, dy_a_total)
+
+        let g_zT_a = ag_grad(tp, zT_a)
+        let g_zT_g = ag_grad(tp, zT_g)
+        let g_W1   = ag_grad(tp, W1)
+        let g_W2   = ag_grad(tp, W2)
+        let g_g1   = ag_grad(tp, g1)
+        let g_g2   = ag_grad(tp, g2)
+        let g_gF   = ag_grad(tp, gF)
+        let g_tok  = ag_grad(tp, tok_emb)
+
+        if step == 0 {
+            let n_za = if g_zT_a >= 0 { _mo_l1(g_zT_a, V * d) } else { 0.0 }
+            let n_zg = if g_zT_g >= 0 { _mo_l1(g_zT_g, V * d) } else { 0.0 }
+            let n_W1 = if g_W1   >= 0 { _mo_l1(g_W1,   d * d) } else { 0.0 }
+            let n_W2 = if g_W2   >= 0 { _mo_l1(g_W2,   d * d) } else { 0.0 }
+            let n_g1 = if g_g1   >= 0 { _mo_l1(g_g1,   d)     } else { 0.0 }
+            let n_g2 = if g_g2   >= 0 { _mo_l1(g_g2,   d)     } else { 0.0 }
+            let n_gF = if g_gF   >= 0 { _mo_l1(g_gF,   d)     } else { 0.0 }
+            let n_tk = if g_tok  >= 0 { _mo_l1(g_tok,  V * d) } else { 0.0 }
+            print("  ||g||1 zT_a="); print(to_string(n_za))
+            print(" zT_g=");          print(to_string(n_zg))
+            print(" W1=");             print(to_string(n_W1))
+            print(" W2=");             println(to_string(n_W2))
+            print("        g1=");      print(to_string(n_g1))
+            print(" g2=");             print(to_string(n_g2))
+            print(" gF=");             print(to_string(n_gF))
+            print(" tok_emb=");        println(to_string(n_tk))
+
+            let all_nz = (n_za > 0.0) && (n_zg > 0.0) && (n_W1 > 0.0) &&
+                          (n_W2 > 0.0) && (n_g1 > 0.0) && (n_g2 > 0.0) &&
+                          (n_gF > 0.0) && (n_tk > 0.0)
+            if all_nz {
+                println("  F-MULTIOBJ-BACKWARD-ALL-PARAMS-NONZERO: PASS")
+            } else {
+                println("  F-MULTIOBJ-BACKWARD-ALL-PARAMS-NONZERO: FAIL")
+            }
+            loss_first = L_total
+        }
+        loss_last = L_total
+
+        if g_zT_a >= 0 {
+            let mut i = 0
+            while i < V * d { t_set(zT_a, i, t_get(zT_a, i) - lr * t_get(g_zT_a, i)); i = i + 1 }
+        }
+        if g_zT_g >= 0 {
+            let mut i = 0
+            while i < V * d { t_set(zT_g, i, t_get(zT_g, i) - lr * t_get(g_zT_g, i)); i = i + 1 }
+        }
+        if g_W1 >= 0 {
+            let mut i = 0
+            while i < d * d { t_set(W1, i, t_get(W1, i) - lr * t_get(g_W1, i)); i = i + 1 }
+        }
+        if g_W2 >= 0 {
+            let mut i = 0
+            while i < d * d { t_set(W2, i, t_get(W2, i) - lr * t_get(g_W2, i)); i = i + 1 }
+        }
+        if g_g1 >= 0 {
+            let mut i = 0
+            while i < d { t_set(g1, i, t_get(g1, i) - lr * t_get(g_g1, i)); i = i + 1 }
+        }
+        if g_g2 >= 0 {
+            let mut i = 0
+            while i < d { t_set(g2, i, t_get(g2, i) - lr * t_get(g_g2, i)); i = i + 1 }
+        }
+        if g_gF >= 0 {
+            let mut i = 0
+            while i < d { t_set(gF, i, t_get(gF, i) - lr * t_get(g_gF, i)); i = i + 1 }
+        }
+        if g_tok >= 0 {
+            let mut i = 0
+            while i < V * d { t_set(tok_emb, i, t_get(tok_emb, i) - lr * t_get(g_tok, i)); i = i + 1 }
+        }
+
+        t_free(dy_ce); t_free(prob_ce)
+        t_free(dy_phi); t_free(prob_phi)
+        t_free(dy_psi_a); t_free(dy_psi_g)
+        t_free(dy_a_total); t_free(dy_g_total)
+        ag_t_free_grads(tp)
+        ag_t_free_state(tp)
+        ag_t_free_reg(tp)
+        ag_t_end(tp)
+        step = step + 1
+    }
+
+    print("=== F-MULTIOBJ-COMBINED-LOSS-DESCENDS: L[0]=")
+    print(to_string(loss_first))
+    print("  L[")
+    print(to_string(n_steps - 1))
+    print("]=")
+    print(to_string(loss_last))
+    if loss_last < loss_first { println("  PASS") } else { println("  FAIL") }
+
+    t_free(tok_emb)
+    t_free(g1); t_free(g2); t_free(gF)
+    t_free(W1); t_free(W2)
+    t_free(zT_a); t_free(zT_g)
+    t_free(bzero)
+    t_free(ids)
+    println("=== F-MULTIOBJ-MAC-SMOKE-BUILDS: PASS (program ran to teardown) ===")
+    return 0
+}
