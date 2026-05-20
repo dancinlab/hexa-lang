@@ -29,6 +29,21 @@ pub fn rt_sqrt(x: float) -> float {
     return g
 }
 
+// Step 3 cycle 8 — tan (sin/cos). Pole near x = π/2 + kπ saturates to a
+// large finite value (1e308 ≈ DBL_MAX) instead of libm's HUGE_VAL/inf —
+// hexa user code at this entry rarely hits the pole exactly.
+pub fn rt_tan(x: float) -> float {
+    let c = rt_cos(x)
+    if c == 0.0 { return 1e308 }
+    return rt_sin(x) / c
+}
+
+// Step 3 cycle 8 — log base 2 via natural log / ln(2).
+pub fn rt_log2(x: float) -> float {
+    let LN2 = 0.6931471805599453
+    return rt_log(x) / LN2
+}
+
 pub fn rt_fmod(x: float, y: float) -> float {
     if y == 0.0 { return 0.0 }
     let q = x / y
