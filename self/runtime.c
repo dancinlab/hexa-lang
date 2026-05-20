@@ -3634,6 +3634,8 @@ HexaVal hexa_str_substr(HexaVal s, HexaVal start_v, HexaVal len_v) {
     return hexa_str_substring(s, hexa_int(start), hexa_int(end_idx));
 }
 
+// Step-3 cycle 28 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_bytes(HexaVal s) {
     if (!HX_IS_STR(s)) return hexa_array_new();
     HexaVal out = hexa_array_new();
@@ -3642,6 +3644,13 @@ HexaVal hexa_str_bytes(HexaVal s) {
     }
     return out;
 }
+#else
+extern HexaVal rt_str_bytes(HexaVal s);
+HexaVal hexa_str_bytes(HexaVal s) {
+    if (!HX_IS_STR(s)) return hexa_array_new();
+    return rt_str_bytes(s);
+}
+#endif
 
 // ── bt-71: libc / builtin family wrappers ────────────────────────────
 // interpreter.hexa references bare idents like `exit(code)`, `tanh(x)`,

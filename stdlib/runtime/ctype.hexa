@@ -29,6 +29,20 @@ pub fn rt_isalpha(c: int) -> bool {
     return false
 }
 
+// Step 3 cycle 28 — string → [int] byte array. C body iterated until
+// NULL terminator; hexa version uses byte_len + .byte_at(i) (byte_len is
+// the canonical hexa string length builtin and doesn't depend on NUL).
+pub fn rt_str_bytes(s: string) -> [int] {
+    let mut out: [int] = []
+    let n = byte_len(s)
+    let mut i = 0
+    while i < n {
+        out = out.push(s.byte_at(i))
+        i = i + 1
+    }
+    return out
+}
+
 // Step 3 cycle 27 — count non-overlapping occurrences of substring `sub` in `s`.
 // Matches interpreter's greedy advance (hexa_full.hexa:14954-14973). Empty
 // pattern → 0 (avoids infinite loop on .strstr-equivalent semantics).
