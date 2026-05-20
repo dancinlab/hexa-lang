@@ -134,6 +134,40 @@ fn _ex86_reg32(s: string) -> Int {
     return -1
 }
 
+// x86_64 r64 register name → index 0..15.
+//   rax=0 · rcx=1 · rdx=2 · rbx=3 · rsp=4 · rbp=5 · rsi=6 · rdi=7 ·
+//   r8..r15=8..15 (require REX.B prefix bit).
+// Returns -1 on no match.
+fn _ex86_reg64(s: string) -> Int {
+    if s == "rax" || s == "RAX" { return 0 }
+    if s == "rcx" || s == "RCX" { return 1 }
+    if s == "rdx" || s == "RDX" { return 2 }
+    if s == "rbx" || s == "RBX" { return 3 }
+    if s == "rsp" || s == "RSP" { return 4 }
+    if s == "rbp" || s == "RBP" { return 5 }
+    if s == "rsi" || s == "RSI" { return 6 }
+    if s == "rdi" || s == "RDI" { return 7 }
+    if s == "r8"  || s == "R8"  { return 8 }
+    if s == "r9"  || s == "R9"  { return 9 }
+    if s == "r10" || s == "R10" { return 10 }
+    if s == "r11" || s == "R11" { return 11 }
+    if s == "r12" || s == "R12" { return 12 }
+    if s == "r13" || s == "R13" { return 13 }
+    if s == "r14" || s == "R14" { return 14 }
+    if s == "r15" || s == "R15" { return 15 }
+    return -1
+}
+
+// REX prefix builder.  REX = 0100 W R X B (4-bit fixed + 4 flag bits).
+//   W = 64-bit operand size (1 for r64 ops)
+//   R = extends ModR/M.reg (1 if reg >= 8)
+//   X = extends SIB.index (unused here)
+//   B = extends ModR/M.rm or opcode-reg (1 if reg >= 8)
+// Returns the prefix byte (always emitted for r64; 0x48 is REX.W only).
+fn _ex86_rex(w: Int, r: Int, x: Int, b: Int) -> Int {
+    return 0x40 | ((w & 1) << 3) | ((r & 1) << 2) | ((x & 1) << 1) | (b & 1)
+}
+
 fn _ex86_imm(s: string) -> Int {
     let n = len(s)
     if n < 2 { return 0 }
@@ -271,6 +305,77 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     if op == "JGE_REL8" && len(ops) == 1 { return [0x7D, 0x00] }
     if op == "JLE_REL8" && len(ops) == 1 { return [0x7E, 0x00] }
     if op == "JG_REL8"  && len(ops) == 1 { return [0x7F, 0x00] }
+
+    // ── x86_64 r64 ops (REX.W) ──────────────────────────────────
+    //
+    // MOV r64, #imm32 (sign-extend to 64) — REX.W + C7 /0 id (7 B).
+    //   e.g. MOV RAX, #60 → 48 c7 c0 3c 00 00 00
+    if op == "MOV64" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
+        let rd = _ex86_reg64(ops[0])
+        let imm = _ex86_imm(ops[1])
+        if rd >= 0 {
+            let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
+            let modrm = 0xC0 | (0 << 3) | (rd & 0x7)
+            return [rex, 0xC7, modrm,
+                    imm & 0xFF, (imm >> 8) & 0xFF,
+                    (imm >> 16) & 0xFF, (imm >> 24) & 0xFF]
+        }
+    }
+    // MOV r64, r64 — REX.W + 89 /r ModR/M (3 B).
+    //   e.g. MOV RDI, RAX → 48 89 c7
+    if op == "MOV64" && len(ops) == 2 {
+        let rd = _ex86_reg64(ops[0])
+        let rs = _ex86_reg64(ops[1])
+        if rd >= 0 && rs >= 0 {
+            let rex = _ex86_rex(1, if rs >= 8 { 1 } else { 0 }, 0,
+                                    if rd >= 8 { 1 } else { 0 })
+            return [rex, 0x89, 0xC0 | ((rs & 0x7) << 3) | (rd & 0x7)]
+        }
+    }
+    // ADD r64, #imm32 — REX.W + 81 /0 id (7 B).
+    if op == "ADD64" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
+        let rd = _ex86_reg64(ops[0])
+        let imm = _ex86_imm(ops[1])
+        if rd >= 0 {
+            let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
+            let modrm = 0xC0 | (0 << 3) | (rd & 0x7)
+            return [rex, 0x81, modrm,
+                    imm & 0xFF, (imm >> 8) & 0xFF,
+                    (imm >> 16) & 0xFF, (imm >> 24) & 0xFF]
+        }
+    }
+    // SUB r64, #imm32 — REX.W + 81 /5 id (7 B).
+    if op == "SUB64" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
+        let rd = _ex86_reg64(ops[0])
+        let imm = _ex86_imm(ops[1])
+        if rd >= 0 {
+            let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
+            let modrm = 0xC0 | (5 << 3) | (rd & 0x7)
+            return [rex, 0x81, modrm,
+                    imm & 0xFF, (imm >> 8) & 0xFF,
+                    (imm >> 16) & 0xFF, (imm >> 24) & 0xFF]
+        }
+    }
+    // ADD r64, r64 — REX.W + 01 /r (3 B).
+    if op == "ADD64" && len(ops) == 2 {
+        let rd = _ex86_reg64(ops[0])
+        let rs = _ex86_reg64(ops[1])
+        if rd >= 0 && rs >= 0 {
+            let rex = _ex86_rex(1, if rs >= 8 { 1 } else { 0 }, 0,
+                                    if rd >= 8 { 1 } else { 0 })
+            return [rex, 0x01, 0xC0 | ((rs & 0x7) << 3) | (rd & 0x7)]
+        }
+    }
+    // SUB r64, r64 — REX.W + 29 /r (3 B).
+    if op == "SUB64" && len(ops) == 2 {
+        let rd = _ex86_reg64(ops[0])
+        let rs = _ex86_reg64(ops[1])
+        if rd >= 0 && rs >= 0 {
+            let rex = _ex86_rex(1, if rs >= 8 { 1 } else { 0 }, 0,
+                                    if rd >= 8 { 1 } else { 0 })
+            return [rex, 0x29, 0xC0 | ((rs & 0x7) << 3) | (rd & 0x7)]
+        }
+    }
     return []
 }
 

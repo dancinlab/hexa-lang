@@ -5955,3 +5955,65 @@ ctrlflow +11).
 
 **cc --regen / binary promote**: 미수행 (cycle 25 는 compiler/emit/* +
 test/* only — compiler/main.hexa 영향 없음).
+
+
+### 2026-05-20 — follow-up cycle 26: x86_64 r64 encoding (REX.W) (F-P2-X86-REX64 PASS)
+
+9 new r64 (64-bit register) encoding rules using REX prefix:
+
+- `MOV64 r64, #imm32`  REX.W + C7 /0 id   (7 B, sign-extend)
+- `MOV64 r64, r64`     REX.W + 89 /r       (3 B)
+- `ADD64 r64, #imm32`  REX.W + 81 /0 id   (7 B)
+- `SUB64 r64, #imm32`  REX.W + 81 /5 id   (7 B)
+- `ADD64 r64, r64`     REX.W + 01 /r       (3 B)
+- `SUB64 r64, r64`     REX.W + 29 /r       (3 B)
+- (r8-r15 with REX.B / REX.R extension bits, also verified)
+
+REX prefix builder `_ex86_rex(W, R, X, B)` builds `0100 WRXB` (0x40+).
+- W=1: 64-bit operand size
+- R: extends ModR/M.reg for r8-r15
+- B: extends ModR/M.rm or opcode reg for r8-r15
+
+**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P2_X86_REX64.hexa`):
+
+```
+MOV64 RAX,#60   → 48 c7 c0 3c 00 00 00  (REX.W only)
+MOV64 RDI,#42   → 48 c7 c7 2a 00 00 00
+MOV64 RDI,RAX   → 48 89 c7              (3-byte reg-reg)
+ADD64 RAX,#1    → 48 81 c0 01 00 00 00
+SUB64 RAX,#1    → 48 81 e8 01 00 00 00
+ADD64 RAX,RBX   → 48 01 d8
+SUB64 RAX,RBX   → 48 29 d8
+MOV64 R8,#1     → 49 c7 c0 01 00 00 00  (REX.B=1)
+MOV64 RAX,R8    → 4c 89 c0              (REX.R=1)
+```
+
+Native 64-bit exit(42) program (16 B, vs 12 B in 32-bit):
+
+```
+48 c7 c0 3c 00 00 00   mov rax, #60       (sys_exit)
+48 c7 c7 2a 00 00 00   mov rdi, #42       (exit code)
+0f 05                  syscall
+```
+
+ubu-2 launch → `REMOTE_RC=42`.
+
+**측정 — 11 falsifier 누적**:
+
+| Falsifier | Tier |
+|-----------|------|
+| F-P0-OBJEQ corpus 4/4 | 🛸 |
+| F-P1-RUNEQ | 🛸 |
+| F-P2-LINUX-EXIT · F-P2-MULTIOBJ-RUNEQ | 🛸 ×2 |
+| F-P3-ZERO-EXTERN-OBJ · F-P3-FULL-RUNEQ | 🛸 ×2 |
+| F-P3-DEFAULT-NATIVE · F-P3-HEXA-BACKEND-ENV | ✅ ×2 |
+| F-P2-X86-ARITH · F-P2-X86-CTRLFLOW | 🎉 ×2 |
+| **F-P2-X86-REX64** (new) | **🎉** |
+
+**x86_64 encoder coverage 누적**: 26 rules (32-bit 17 + 64-bit 9).
+
+**RFC 063 phasing 진척**: P0+P1+P2+P3 all closed · 26 cycles · 11
+falsifier · main 머지 완료 · cross-platform binaries production-ready
+(within campaign scope).
+
+**cc --regen / binary promote**: 미수행 (compiler/emit/* + test/* only).
