@@ -3993,3 +3993,75 @@ doesn't need it.
 **Files** — added: `compiler/codegen/nvptx_lower_test.hexa`. Extended:
 `compiler/codegen/nvptx_target.hexa` (+10 lines, `_nvptx_lower_stmt`
 gains the STMT_BR case + the honest-stub comment is rewritten).
+
+### 2026-05-20 — RFC 055 §12 P4+ scaffold batch — 3 follow-on v2 PRs LANDED
+
+Three §12 P4+ scaffolds (predecessors closed because additive auto-merges
+with the #108 atomic_add + #109 warp_shuffle batch produced syntactically
+broken hexa) re-ported manually onto post-batch origin/main and landed
+back-to-back. Each v2 used the same surgical-port pattern: `git diff
+<orig>^ <orig> -- <file>` to extract the predecessor's pure-additive diff,
+then locate the seam on current main + place the snippet by hand so no
+auto-merge runs.
+
+PRs landed (admin-squash, branch deleted):
+- #117 — `_nvptx_unroll_pass` MVP (v2, on current main)
+  • compiler/codegen/nvptx_target.hexa +358 lines: pass that clones
+    the body of a canonical 3-block back-edge loop `factor` times.
+    Pattern recognized: `header → body → header` with header
+    ending in STMT_BR_COND(body, exit) and body ending in
+    STMT_BR(header). Non-matching CFGs returned UNCHANGED (honest
+    passthrough).
+  • compiler/codegen/nvptx_lower_test.hexa +195 lines: Case 10
+    (canonical loop factor=2 unroll) + Case 11 (passthrough byte-eq).
+  • lower_test 9/9 → 11/11 PASS.
+- #121 — Tensor Core MMA scaffold (v2)
+  • nvptx_target.hexa +63 lines: `NVPTX_RKIND_FRAG` constant +
+    `_nvptx_wmma_mnemonic()` table (`gpu_wmma_load_a/_load_b/_mma/
+    _store_c` → m16n16k16 PTX mnemonics, f16×f16→f32 family) +
+    STMT_CALL branch recognition (emits honest stub `// RFC 055 §12
+    P4+ WMMA (scaffold, not yet wired) — <op> -> <mnem>` comment).
+  • nvptx_lower_test.hexa +95 lines: Case 12 `_test_wmma_scaffold`.
+  • lower_test 11/11 → 12/12 PASS.
+- #123 — mixed-precision PTX types scaffold (v2)
+  • nvptx_target.hexa +61 lines: `NVPTX_RKIND_F16/_BF16/_F32`
+    constants + `_nvptx_reg_{f16,bf16,f32}` helpers (prefix `%fh`/
+    `%fb`/`%fs`) + classifier rules for STMT_BINOP `add_f16/_bf16/
+    _f32` opcodes (aspirational — MIR layer does not emit them yet).
+  • nvptx_lower_test.hexa +108 lines: Case 13
+    `_test_mixed_precision_scaffold` asserts `.reg .f16 %fh3` +
+    `.reg .bf16 %fb4` + `.reg .f32 %fs5` declarations clean.
+  • lower_test 12/12 → 13/13 PASS.
+
+Quality gates (all 3 PRs):
+- mir.hexa untouched → F-RFC055-CPU-CODEGEN-UNTOUCHED preserved.
+- CPU codegen / x86_64_linux / arm64_darwin / thumbv7em_eabihf
+  unchanged.
+- hexa_real parse — both files clean per PR.
+- @D g_commit_push_deploy — all 3 edit `compiler/` only; no
+  `self/codegen_c2.hexa` change → no bootstrap regen required.
+- Regression: `nvptx_emit_test` + `nvptx_vec_add_test` +
+  `nvptx_gemm_test` all PASS after each landing.
+
+Honest scope (@D g3) — none of the 3 PRs claim a working impl:
+- Unroll: factor=2 MVP only; multi-exit / nested / non-canonical
+  CFG shapes fall through to passthrough (deferred per
+  gpu/SPEC.md §10).
+- MMA: scaffold MAKES REACHABLE — fragment register-bank allocation,
+  `.shared` staging decl, per-fragment dtypes (`.f16` vs `.f32` vs
+  `.bf16`), `.row` vs `.col` orientation, tile-loop integration are
+  each a follow-on cycle.
+- Mixed-precision: only the classifier + reg-decl side wired; the
+  MIR layer that PRODUCES `add_f16/_bf16/_f32` opcodes is a future
+  hir_to_mir.hexa cycle (per-Local precision tags), and the body
+  lowering (`add.f16 %fh<d>, %fh<a>, %fh<b>` etc.) is similarly
+  deferred.
+
+Pattern lesson — surgical-port-over-cherry-pick when the predecessor
+was closed for auto-merge corruption: don't replay the cherry-pick.
+Extract the diff per-file with `git diff <orig>^ <orig> -- <path>`,
+parse-gate locally, hand-place the snippet at the matching seam on
+current main, repeat per file. This was the pattern that closed
+all 3 PRs cleanly (#117 + #121 + #123).
+
+cross-link: inbox/notes/2026-05-20-rfc055-p4-followons-v2-closure.md
