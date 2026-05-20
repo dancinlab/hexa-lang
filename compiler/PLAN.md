@@ -8410,3 +8410,87 @@ binary 1,140,376 B (+736 B for extra transpile of hexa fns).
 step-2 cumulative: 7 / ~47 hxlcl_* helpers ported = 15% of step 2.
 
 @cite step 2 cycle 1 entry.
+
+### 2026-05-21 binary promote — runtime cycle-66 exec fix + codegen sanitization fixpoint
+
+@D g_commit_push_deploy cycle. Lineage: origin/main after PR #251
+(`c0da064a` runtime cycle 66 restore exec/popen/env) merged via
+admin-squash to `8ea4b75e`. Prior promote was 2026-05-20 `8dd7e61e`
+A5 retry.
+
+Triggers (two in one cycle):
+1. **Runtime exec fix needs deployed** — PR #251 source fix to
+   `self/runtime.c` restored `hxlcl_getenv` (was NULL noop) + `hxlcl_exec*`
+   (were `rt_net_fail()` noops since cycle 61) + `hxlcl_pipe/close/dup2/...`
+   (lost Darwin carry-flag pair-return since cycles 63/64). Without this
+   deploy, every compiled-path `.hexa` calling `exec()`/`env()` silently
+   returns "" or SIGSEGVs; RFC 006 §5 oracle's ABC chain reports a 24h
+   false-positive `[OK] abc_map: ok` while ABC never ran.
+2. **Codegen sanitization regression surfaced by regen** — PR `680dd512`
+   (2026-05-20 PR-B for #4j) renamed the strlit-init aggregator to
+   `void __hexa_strlit_init__<TU>(void)` using `_hexa_cert_module_name()`.
+   That helper strips dir + `.hexa` but did NOT sanitize non-ident
+   chars. `self/main.hexa::runtime_tmpname` (L2333-2336) emits
+   `<dir>/<prefix>.<mono_ns>.tmp` paths, so `hexa run gate_record.hexa`
+   flatten-then-build produced temp file `hexa_build_expanded.<ns>.tmp.hexa`
+   → emitted C identifier `__hexa_strlit_init__hexa_build_expanded.1779302618786307000.tmp`
+   (invalid). First-pass regen succeeded (interim fixpoint at
+   `d6c31135...`); §5 oracle compile-then-exec then hit the bug.
+
+Fixes landed (this commit):
+- `self/codegen_c2.hexa::_hexa_cert_module_name` — 19-line addition:
+  after stripping `.hexa` suffix, sanitize each code-point to `_` if
+  outside `[A-Za-z0-9_]`. Fallback `"module"` if empty. Zero behavior
+  change for already-valid identifiers (single-TU bootstrap +
+  test_*.hexa unaffected — verified by post-fix byte-eq fixpoint).
+- `self/native/hexa_cc.c` md5 `c2159d0b222562d485d2e1a8052da7db`
+  (1503004 B, 23128 lines).
+- `self/native/hexa_v2` md5 `321349ae49c2581554da3f128d002cb2` (1586136 B).
+
+Regen passes:
+
+| Pass | hexa_cc.c md5 | bytes | note |
+|------|---------------|-------|------|
+| pre  | `0f12ffa666fc1b40e7852c8641be67e3` | 1493127 | baseline post-PR-251 |
+| 1    | `eb8f3982fca0d1af458885099168fe24` | 1501738 | substantive (pre-sanitization-fix) |
+| 2    | `d6c31135882af7b6b99229e753326755` | 1501792 | strlit_init rename cascade |
+| 3    | `d6c31135882af7b6b99229e753326755` | 1501792 | interim BYTE-EQ — buggy |
+| — sanitization fix applied — | | | |
+| A    | `c2159d0b222562d485d2e1a8052da7db` | 1503004 | post-fix +19 lines |
+| B    | `c2159d0b222562d485d2e1a8052da7db` | 1503004 | **BYTE-EQ vs A ✅ TRUE FIXPOINT** |
+
+Verification:
+- `exec("which abc")` returns `/Users/ghost/bin/abc` (was ""). Runtime
+  exec stack alive.
+- §5 oracle ran end-to-end (full 7726-byte output via direct cached
+  binary invocation; `hexa.real run` wrapper truncates at 4095 bytes —
+  separate stream-forwarding bug, not blocking).
+
+§5 gate verdict (2026-05-21 measurement): **OPEN — PARTIAL**.
+- d4 + d6 both pass through `read_verilog → proc → flatten → opt →
+  proc_mux → clean_multidriver → techmap → dfflibmap` (9 stages OK).
+- **abc_map FAIL** on both designs: ABC's `NetworkCheck` rejects
+  `router_d4` (node n272 loop → CO `rr_ptr__d`) and `router_d6`
+  (node n372 loop → CO `rr_ptr__d`). Prior `any_grant` SSA-rename
+  blocker (PR #247) IS resolved (7×idx/grant_out/any_grant
+  clean_multidriver collapses observed). NEW blocker is a SEPARATE
+  combinational loop on `rr_ptr__d` — likely needs read_verilog SSA
+  extension to the round-robin pointer register's `always @*` body OR
+  RTL-level review.
+- Cited oracle (61762.99 µm² d4 · 93608.53 µm² d6 · ratio 1.5156×)
+  **UNMEASURED** — ABC rejects before mapping completes.
+
+PRESERVE grep PASS: `self/runtime.c` md5 `f794d186325e7a037f81379b4f9eb654`
+unchanged from post-PR-251 state.
+
+Driver `hexa.real` rebuilt (md5 `48caef89d4095fcdaa109c1aef8d1d5f`,
+601040 B). `/Users/ghost/bin/hexa-{run,c,build,parse}` + `/Users/ghost/
+.hx/bin/hexa.real` replaced with new binary; backups at `*.bak-2026-05-21`.
+
+Cross-links:
+- `inbox/notes/2026-05-21-rfc006-§5-deploy-status.md` — full measurement
+- @D g_commit_push_deploy — source + binary atomic deploy
+- PR #251 — runtime exec fix (merged this cycle)
+- PR #247 / `cdfa8d46` — prior `any_grant` SSA fix (still alive)
+
+@cite g_commit_push_deploy

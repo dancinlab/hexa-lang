@@ -8186,10 +8186,32 @@ fn _hexa_cert_module_name() {
     let base = if slash >= 0 { path.substring(slash + 1, len(path)) } else { path }
     // strip .hexa suffix
     let bn = len(base)
+    let mut stem = base
     if bn >= 5 && base.substring(bn - 5, bn) == ".hexa" {
-        return base.substring(0, bn - 5)
+        stem = base.substring(0, bn - 5)
     }
-    return base
+    // 2026-05-21 sanitize: temp paths like `hexa_build_expanded.<ns>.tmp.hexa`
+    // (runtime_tmpname() in self/main.hexa) leak dots into the C identifier
+    // post-PR #680dd512 (per-TU strlit_init suffix). Replace any non-ident
+    // char with `_` so the emitted symbol stays a valid C identifier.
+    // Accepted: [A-Za-z0-9_]. All other code-points → `_`.
+    let mut out = ""
+    let mut k = 0
+    let sn = len(stem)
+    while k < sn {
+        let cc = stem.substring(k, k + 1)
+        let is_alpha = (cc >= "a" && cc <= "z") || (cc >= "A" && cc <= "Z")
+        let is_digit = cc >= "0" && cc <= "9"
+        let is_under = cc == "_"
+        if is_alpha || is_digit || is_under {
+            out = out + cc
+        } else {
+            out = out + "_"
+        }
+        k = k + 1
+    }
+    if len(out) == 0 { return "module" }
+    return out
 }
 
 fn _hexa_cert_emit(ast) {
