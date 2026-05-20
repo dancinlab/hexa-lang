@@ -6027,15 +6027,316 @@ non-bootstrap module; `self/main.hexa` is untouched).
  compiler/PLAN.md                                          | +<this>   (this entry)
 ```
 
-**Cross-links:** RFC 071 §G8-C
-(`inbox/rfc_drafts_2026_05_20/rfc_071_hexa_ld_incremental_link.md`) ·
-G8-B substrate `efe96da6` (`compiler/link/incr_cache.hexa`) ·
-H2 punted-2 closure `65dd597b` (meta_tsv stub unwire +
-`incr_cache_test.hexa` T1-T7) · B6 scaffold marker `05b814c2` ·
-`@D g5` hexa-native-only (pure hexa over `exec` + `read_file_bytes`
-+ `write_bytes` + `sha256_file` builtins — no new toolchain
-dependency) · `@D g_hxc` (cache file is HXC v2 envelope, second
-in-repo consumer after `compiler/atlas/hxc_loader.hexa`) ·
-`@D g3` real-limits-first (SHA-256 collision-resistance FIPS 180-4 +
-POSIX cp byte preservation + compiler invariant link determinism
-anchor the falsifiers F-C1 / F-C2 / F-C3).
+`.truncate(0)` → `= []` (4 lines). Module-global assignment 은
+index_set codegen 으로 처리되어 새 handle 이 global slot 에 write-back.
+shallow-copy gap 우회.
+
+**측정 — medium scale fixpoint (131-line falsifier)**:
+
+```
+gen1c (aprime_c41 emit-asm):  824,866 B  md5 655d6d1fc7da8db4572bf49d03dbcdf8
+gen2c (hexac_c41 emit-asm):   824,866 B  md5 655d6d1fc7da8db4572bf49d03dbcdf8
+diff: 🎉 BYTE IDENTICAL
+```
+
+**측정 — FULL CLOSURE fixpoint (10.6 MB compiler/main.hexa flat)**:
+
+```
+aprime_c41 emit-asm:
+  10,654,995 B  md5 4197fd52560f3acca059a197b000c83c
+  peak VM 5.77 GB · 47K ctx-sw · ✅ PASS
+
+hexac_c41 emit-asm:
+  10,654,995 B  md5 4197fd52560f3acca059a197b000c83c
+  peak VM 7.03 GB · 5.8K ctx-sw · ✅ PASS
+
+diff: 🛸 BYTE IDENTICAL — gen1 ≡ gen2
+```
+
+Memory regime (compared to pre-fix):
+- Before Bug B fix: hexac 85 GB peak VM → jetsam-killed
+- After Bug B fix:  hexac 7.03 GB peak VM → completes in normal time
+- 12× reduction · matches aprime within 1.22× ratio · fixpoint stable
+
+**🛸🛸🛸🛸🛸 S3 fixpoint FULL CLOSURE STATUS — ACHIEVED**
+
+This is the first measured `gen1.s ≡ gen2.s` byte-identical full
+closure ever proven on the campaign branch. main repo's 2026-05-20
+PROOF claim (commit f3fe48a9) was speculative; cycle 22-41 (1-day
+chain) provides the actual measured verification:
+
+| Stage | Status |
+|---|---|
+| 1. Bug A (UTF-8 truncation in rodata) | ✅ FIXED cycle 39 |
+| 2. Bug B (module-init bloat per fn) | ✅ FIXED cycle 41 |
+| 3. Memory blow-up at full closure | ✅ AUTO-FIXED (Bug B was the cause) |
+| 4. gen1.s ≡ gen2.s full closure | ✅ MEASURED cycle 41 |
+
+**Campaign cycle 22-41 — final achievements**:
+
+- ✅ P0 Mach-O arm64 emitter (4 falsifiers)
+- ✅ P1 hexa_ld linker (F-P1-RUNEQ)
+- ✅ P2 ELF x86_64 emitter (multi-falsifier, 40 encoder rules, walker,
+  .rela.text, ld linker integration)
+- ✅ P3 flip default + zero-extern
+- ✅ Cross-host parity (ubu-1 + ubu-2)
+- ✅ Cross-Mac corpus oracle (m4mini)
+- ✅ Hex literal lexer + parser fix (128 diagnostics closed)
+- ✅ Truncate runtime mapping (SIGBUS chain closure)
+- ✅ UTF-8 multi-byte fix (em dash byte-eq)
+- 🛸 S3 fixpoint FULL CLOSURE — gen1 ≡ gen2 byte-identical
+  md5 `4197fd52560f3acca059a197b000c83c` at 10,654,995 bytes
+- north-star ② 한 cycle 추가: 인터프리터 폐기 · self-host **measured**
+
+**Methodology — andrej-karpathy-skills + g3 honesty**:
+
+40 cycles 의 instrument-first 추적 → root cause 정확 위치 → 4-line fix.
+truncate-on-global semantics 의 한 줄 변경으로 14-day-equivalent
+codegen 문제 닫음.
+
+**RFC 063 phasing**: 41 cycles · 18 falsifier + 10 measure · ALL
+phases CLOSED · **S3 fixpoint FULL CLOSURE PROVEN (measured)**.
+
+**Files modified this cycle (1)**:
+- compiler/lower/hir_to_mir.hexa: _lr_ctx_clear truncate→assign
+  (+20 line comment for posterity, 4-line functional change)
+
+
+### 2026-05-20 — follow-up cycle 42: runtime hexa-native rewrite RFC + 173-extern catalog
+
+cycle 41 S3 closure 직후, north-star ② 의 strict reading 대응:
+**runtime 도 hexa-native** (current C runtime ~16,809 LoC + 45 .c
+files in self/native/ 를 hexa source 로 재작성).
+
+**RFC draft**: `inbox/rfc_drafts_2026_05_20/rfc_runtime_hexa_native_
+rewrite.md` — 3-tier scope decomposition (compiler-essential /
+stdlib / application), 3-phase strategy, acceptance gate.
+
+**External symbol catalog (aprime_c41)** — 173 libc/libsystem
+externs, 0 hexa runtime externs (runtime statically linked):
+
+| 카테고리 | 수 |
+|---------|----|
+| syscalls posix | 32 |
+| memory/stdlib (libc) | 25 |
+| I/O stdio | 19 |
+| math libm | 16 |
+| thread (pthread) | 12 |
+| darwin/macos internal | 12 |
+| net | 11 |
+| misc (dlsym, pty, posix_spawn 등) | ~46 |
+| **total** | **173** |
+
+Catalog raw: `inbox/rfc_drafts_2026_05_20/aprime_c41_externs_catalog.txt`
+
+**Phase 1 scope** (Tier-A, compiler-essential, ~30 fns ~3K LoC):
+
+- HexaVal core (hexa_int, hexa_str, hexa_array_*, hexa_map_*)
+- String (substring, concat, chars/bytes, char_code, eq)
+- Arena (alloc, scope_push/pop, fn_arena_return)
+- I/O (read_file, write_file, println, eprintln)
+- Process (exec, exit)
+- Hash (sha256, sha256_hex)
+
+Strategy: replace each Tier-A C fn with `pub fn` in `stdlib/runtime/`,
+syscalls via `@asm` blocks where needed. libm + malloc/mmap escape
+hatches preserved initially. Acceptance: aprime_cc rebuild with
+Tier-A hexa-native runtime → same S3 fixpoint md5 `4197fd52...`.
+
+**Estimated**: Phase 1 = 8-12 cycle equivalent, Phase 2 (stdlib) =
+4-8 cycles, Phase 3 (crypto/net/GPU) = deferred or 16+ cycles
+depending on policy review.
+
+**Cycle 42 = catalog + RFC only**. Cycle 43+ begins concrete
+implementation per Phase 1 plan.
+
+**Honest scope (g3)**:
+
+Runtime rewrite is multi-week work. Cycle 42 = scope clarified +
+inventory measured. Subsequent cycles will iterate Tier-A symbols.
+
+
+### 2026-05-20 — follow-up cycle 43: dead-strip + -Oz on build_aprime.sh — 55% binary shrink, LEAN S3 fixpoint PRESERVED
+
+cycle 42 의 RFC plan 의 Phase 0 (preparatory) — runtime hexa-native
+rewrite 시작 전 build chain 의 dead-code-strip 가능성 측정.
+
+**Patch — tool/build_aprime.sh stage 4 clang invocation**:
+
+```diff
+- clang -O1 -arch arm64 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
++ clang -Oz -arch arm64 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
++     -ffunction-sections -fdata-sections -Wl,-dead_strip \
+      -I self -I . "$APPOST" -o "$OUT" -lm
+```
+
+`-Oz` (size optimization), `-ffunction-sections + -fdata-sections`
+(per-function sections), `-Wl,-dead_strip` (linker drops unreferenced).
+
+**측정 — aprime_cc**:
+
+| 메트릭 | original (aprime_c41) | lean (aprime_lean3) |
+|--------|----------------------:|--------------------:|
+| binary size | 2,244,568 B | **1,001,664 B** (−55%) |
+| external symbols (libc) | 173 | **137** (−21%) |
+| T symbols (defined runtime fns) | 509 | **186** (−63%) |
+| t symbols (file-local) | 50 | similar |
+
+**LEAN S3 fixpoint full closure (10.6 MB compiler/main.hexa flat)**:
+
+```
+aprime_lean3 emit-asm: 10,657,152 B md5 39dbb35c1606c3cf0886c5fb00e7cabc
+hexac_lean3   emit-asm: 10,657,152 B md5 39dbb35c1606c3cf0886c5fb00e7cabc
+diff: 🛸 BYTE IDENTICAL — lean self-host fixpoint preserved
+```
+
+md5 differs from cycle 41 baseline (`4197fd52...`) by design — `-Oz`
+emits slightly different machine code than `-O1`, but both LEAN
+compilers agree with each other (fixpoint stable within the lean
+toolchain).
+
+**Honest scope** (g3):
+
+cycle 43 = build-time optimization. Did NOT eliminate any externs;
+just removed 36 dead libc references that the compiler didn't
+actually call. The remaining 137 externs are genuine runtime
+dependencies (mmap, write, exit, malloc family, libm, …) — these
+need Phase 1+ source-level replacement to disappear.
+
+**RFC 063 / 067 phasing**: 43 cycles · 18 falsifier + 11 measure ·
+ALL P0-P3 closed · S3 fixpoint full closure PROVEN (cycle 41) +
+LEAN fixpoint PRESERVED (cycle 43).
+
+**Files modified**: tool/build_aprime.sh (3 lines functional + 4
+lines comment).
+
+**cc --regen / binary promote**: 미수행. tool/* change only.
+
+
+### 2026-05-20 — follow-up cycle 44: dead-strip parity in build_hexac.hexa — LEAN S3 fixpoint full closure (lean-both)
+
+cycle 43 의 build_aprime.sh 패턴을 build_hexac.hexa stage 4 clang
+invocation 에도 적용. 두 compiler 모두 같은 `-Oz +
+ffunction-sections + Wl,-dead_strip` flag 사용.
+
+**측정 — hexac binary**:
+
+| 메트릭 | cycle 41 (no dead-strip) | cycle 44 (lean) |
+|--------|-------------------------:|----------------:|
+| binary size | 2,108,536 B | **1,911,720 B** (−9.3%) |
+| externs | 172 | **137** (−21%) |
+
+**S3 fixpoint LEAN44 full closure (10.6 MB compiler/main.hexa flat)**:
+
+```
+aprime_lean3 emit-asm: 10,657,152 B md5 39dbb35c1606c3cf0886c5fb00e7cabc
+hexac_lean4   emit-asm: 10,657,152 B md5 39dbb35c1606c3cf0886c5fb00e7cabc
+diff: 🛸 BYTE IDENTICAL — both-lean fixpoint preserved
+```
+
+**전 두 compiler 의 추가 비교**:
+
+| | aprime_c41 (cycle 41) | aprime_lean3 (cycle 43) | hexac_c41 (cycle 41) | hexac_lean4 (cycle 44) |
+|---|---:|---:|---:|---:|
+| binary | 2.24 MB | 1.00 MB | 2.11 MB | 1.91 MB |
+| externs | 173 | 137 | 172 | 137 |
+| T symbols | 509 | 186 | (n/m) | (n/m) |
+
+**aprime + hexac 의 extern set 일치**: 둘 다 137 — 같은 libc/libsystem
+의 dependencies. 같은 runtime.c 가 dead-strip 후 같은 minimal closure.
+
+**RFC 063/067 phasing**: 44 cycles · 18 falsifier + 12 measure ·
+S3 fixpoint full closure PROVEN (cycle 41) + LEAN fixpoint PRESERVED
+(cycle 43 aprime · cycle 44 both).
+
+**Files modified**: tool/build_hexac.hexa (1 line functional + 3 line
+comment). aprime + hexac build chains 모두 lean.
+
+**cc --regen / binary promote**: 미수행. tool/* change only.
+
+**Next**: cycle 45+ 은 137 externs 의 actual source-level replacement —
+Phase 1 Tier-A runtime hexa-native rewrite. 가장 작은 externs 부터
+교체 (e.g., `_atoi`, `_atof` → hexa source).
+
+
+### 2026-05-20 — cycle 46: hexa_ld v1.7 — RFC 070 G7-B Mach-O Part A (LC_DYLD_INFO_ONLY + LC_DYSYMTAB + LC_ID_DYLIB + zero-fill __got) — SSOT landed, runtime measurement deferred
+
+H1 (`3859c815`) ELF closure 의 후속 — `_link_mach_o_shared` 가 still
+`_build_macho_arm64_image(is_shared=true)` 통과 → dyld reject 명시
+(코멘트 본인이 인정). 본 cycle 은 **Shape-B**: structural Mach-O
+Part A 전체 emit + zero-fill __got 한 commit 으로 land, runtime
+measurement (F-B-LOADABLE-MACHO-WITH-GOT) 는 binary promote 후 다음
+cycle.
+
+**dup-race precheck**:
+- `git grep "LC_DYLD_INFO_ONLY|BIND_OPCODE|__got" compiler/link/`
+  → 코멘트만, 실코드 0 (확인됨).
+- Mach-O Part A 가 main lineage 의 `3248786d`/`32dfa0cf`/`3859c815`
+  3 commits 통과 후에도 `_build_macho_arm64_image` 가 단순히
+  `filetype = 6` + `flags` PIE clear 만 했고 LC_ID_DYLIB / LC_DYLD_INFO_ONLY
+  / LC_DYSYMTAB / __got 는 누락 (H1 보고가 옳음).
+
+**SSOT 변경 — compiler/link/hexa_ld.hexa**:
+- v1.4 → **v1.7** version bump (v1.5/v1.6 는 ELF-side iteration —
+  Mach-O 미터치).
+- 새 헬퍼 4종:
+  - `_push_uleb128(buf, v)` — ULEB128 little-endian encode
+    (LC_DYLD_INFO_ONLY 의 rebase/bind/export 페이로드 사이즈 + 오프셋
+    인코딩, `<mach-o/loader.h>` §exports trie).
+  - `_build_macho_export_trie(sym_name, sym_text_off)` — single-export
+    trie (root 노드 + 1 child label `_<ident>_dispatch` → leaf 터미널
+    flags=REGULAR + offset=text_off). 8-byte 정렬.
+  - `_build_macho_rebase_blob()` — REBASE_OPCODE_DONE 만 (PIC codegen
+    G7-A 의 출력은 절대주소 0).
+  - `_build_macho_bind_blob()` — BIND_OPCODE_DONE 만 (현재 dylib 의
+    외부심볼 0, libSystem 의존 0 — Part B 후속 사이클이 실제
+    BIND_OPCODE_SET_DYLIB_ORDINAL_IMM / BIND_OPCODE_DO_BIND 레코드
+    wire).
+- 새 본체 `_build_macho_arm64_dylib_v17_image(text_bytes, ident)`:
+  - 9 load command 풀세트 — LC_SEGMENT_64 __TEXT (1 section: __text)
+    + LC_SEGMENT_64 __DATA (1 section: __got, S_NON_LAZY_SYMBOL_POINTERS
+    flags, 16 KiB zero page) + LC_SEGMENT_64 __LINKEDIT + LC_DYLD_INFO_ONLY
+    (48 B, rebase+bind+weak+lazy+exports 오프셋/사이즈 wire) + LC_SYMTAB
+    (1 sym: `_<ident>_dispatch`, N_SECT|N_EXT, n_value = __text vaddr)
+    + LC_DYSYMTAB (80 B, nextdefsym=1, 나머지 0) + LC_ID_DYLIB
+    (`<ident>.dylib`, current_version=1.0.0, 8-byte 정렬) + LC_LOAD_DYLINKER
+    + LC_CODE_SIGNATURE.
+  - LINKEDIT 레이아웃: DYLD_INFO 블롭 → symtab → strtab → codesig
+    (ld(64) 컨벤션 일치).
+  - codesign blob 은 기존 `build_macho_codesig` + `_codesig_predicted_size`
+    재사용 (text+data 두 세그먼트 합산이 cdhash 커버리지).
+- `build_macho_arm64_dylib(text_bytes, ident)` pub API 가 새 함수에
+  내부 dispatch. `_link_mach_o_shared` / 호출처 surface 무변경.
+- 코멘트 동기화: v1.7 G7-B CAVEATS · OUT OF SCOPE · Mach-O caveats.
+
+**parse-gate**: `hexa_real parse compiler/link/hexa_ld.hexa` → PASS.
+충돌 marker 0. line count 1827 → 2327 (+500).
+
+**RFC 070 §4 G7-B Mach-O row 진척**:
+- Header-format (F-B3): CLOSED v1.3 (`filetype DYLIB`).
+- Part A (LC_ID_DYLIB · LC_DYLD_INFO_ONLY · LC_DYSYMTAB · __got
+  materialization): SSOT-CLOSED v1.7 (runtime measurement deferred).
+- Part B (BIND_OPCODE_DO_BIND · 진정한 GOT-target wire): OPEN —
+  다음 sub-cycle.
+- F-B-LOADABLE-MACHO-WITH-GOT: SSOT landed, deploy + dyld_info(1) /
+  otool -l / nm -gU / dlopen+dlsym fire 는 binary promote 후 분리
+  사이클.
+
+**Honest scope (g3)**:
+- SSOT 만 변경; binary promote 0 (`hexa cc --regen` 미수행 — `compiler/link/`
+  변경은 self/native/hexa_v2 transpiler 코드와 무관, driver build chain
+  의 별도 rebuild 사이클로 promote).
+- F-B-LOADABLE-MACHO-WITH-GOT 의 실제 dyld 수락 (kernel `dlopen`)
+  은 binary promote + mini arm64 fire 가 필요 — 본 cycle 의 작업은
+  "structural emission spec compliance" 만; runtime 수락 입증 아님.
+- Export trie 의 sym_text_off=0 은 첫 함수 가정 — 진정한 per-function
+  export offset 은 multi-export codegen 동반 (Part B 동시 사이클).
+- BIND_OPCODE_DONE-only blob 은 "외부 의존 0 의 self-contained dylib"
+  의 경우만 dyld 수락 (sentinel 의 minimal valid form). libSystem
+  consumer dispatch 가 들어오면 Part B 가 강제됨.
+
+**Files modified**: `compiler/link/hexa_ld.hexa` (+500 줄, 코멘트
+포함). `inbox/PATCHES.yaml` 미터치 (g_inbox_processing_loop rule g).
+`compiler/PLAN.md` 본 entry append.
+
+**cc --regen / binary promote**: 미수행 (deploy step 별도, SOP step 7).
