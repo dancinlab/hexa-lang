@@ -274,10 +274,23 @@ fn _lr_ctx_restore(saved: LowerArrays) {
 // The module arrays are first allocated at MODULE scope (mark_top == 0 ->
 // heap); they stay heap for the whole pass.
 fn _lr_ctx_clear() {
-    _lr_locals.truncate(0)
-    _lr_blocks.truncate(0)
-    _lr_bindings.truncate(0)
-    _lr_frame_starts.truncate(0)
+    // Cycle 41: aprime_cc's --emit=asm path reads `_lr_blocks` into a
+    // local register before calling `hexa_array_truncate`, so the
+    // runtime mutates the LOCAL handle's metadata length while the
+    // module-global `_lr_blocks` keeps the prior length. Net effect:
+    // `.truncate(0)` on a module-global is a no-op under the asm path.
+    // Across _lower_fn calls, blocks/locals/bindings accumulate. The
+    // synthetic-main's body ends up prepended to every subsequent
+    // user-fn body → 2× instruction count + 23× stack frame + 85 GB
+    // peak VM jetsam (cycle 36-39 evidence chain).
+    //
+    // Fix: replace each module-global with a fresh empty `[]`. Global
+    // assignment goes through `index_set`/global-store codegen which
+    // DOES write the new handle back, defeating the shallow-copy gap.
+    _lr_locals = []
+    _lr_blocks = []
+    _lr_bindings = []
+    _lr_frame_starts = []
 }
 
 // Swap in a FRESH (independent) array set for a nested lowering scope --

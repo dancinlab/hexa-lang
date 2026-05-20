@@ -7285,3 +7285,109 @@ The "I'll just keep iterating" pattern past cycle 40 would burn
 cycles without convergence; better to commit the honest finding
 and let cycle 41+ pick up tomorrow with fresh context for the deep
 codegen surgery.
+
+
+### 2026-05-20 — 🛸🛸🛸🛸🛸 follow-up cycle 41: S3 FIXPOINT FULL CLOSURE ACHIEVED — gen1.s ≡ gen2.s byte-identical (10.6 MB)
+
+Bug B 의 surgical fix → 첫 진짜 S3 fixpoint full closure measurement.
+
+**Root cause confirmed (cycle 41)**:
+
+aprime_cc 의 emit-asm path 가 `_lr_blocks.truncate(0)` 같은 module-global
+array `.truncate(0)` 호출을 처리할 때, array 를 LOCAL register 로
+복사한 뒤 `hexa_array_truncate(local, 0)` 호출. 런타임은 LOCAL handle
+의 metadata length 를 0 으로 mutate 하지만, module-global `_lr_blocks`
+는 OLD length 유지. 결과: `.truncate(0)` 가 module-global 에서는 no-op.
+
+`_lower_fn` 사이마다 `_lr_ctx_clear()` 가 호출됐지만 truncate 들이 모두
+no-op → blocks/locals/bindings 누적. synthetic-main 의 body 가 첫
+user fn 의 body 에 prepend, 두 번째 fn 은 (synth-main + first-user-fn)
+prepend, ... → cumulative bloat.
+
+gen1 (hexa_v2→C→clang -O1) 은 clang 의 optimizer 가 truncate 의
+"static-storage" semantics 를 dead-code-elim 으로 회피.
+
+**Fix — compiler/lower/hir_to_mir.hexa::_lr_ctx_clear()**:
+
+```hexa
+fn _lr_ctx_clear() {
+    _lr_locals = []
+    _lr_blocks = []
+    _lr_bindings = []
+    _lr_frame_starts = []
+}
+```
+
+`.truncate(0)` → `= []` (4 lines). Module-global assignment 은
+index_set codegen 으로 처리되어 새 handle 이 global slot 에 write-back.
+shallow-copy gap 우회.
+
+**측정 — medium scale fixpoint (131-line falsifier)**:
+
+```
+gen1c (aprime_c41 emit-asm):  824,866 B  md5 655d6d1fc7da8db4572bf49d03dbcdf8
+gen2c (hexac_c41 emit-asm):   824,866 B  md5 655d6d1fc7da8db4572bf49d03dbcdf8
+diff: 🎉 BYTE IDENTICAL
+```
+
+**측정 — FULL CLOSURE fixpoint (10.6 MB compiler/main.hexa flat)**:
+
+```
+aprime_c41 emit-asm:
+  10,654,995 B  md5 4197fd52560f3acca059a197b000c83c
+  peak VM 5.77 GB · 47K ctx-sw · ✅ PASS
+
+hexac_c41 emit-asm:
+  10,654,995 B  md5 4197fd52560f3acca059a197b000c83c
+  peak VM 7.03 GB · 5.8K ctx-sw · ✅ PASS
+
+diff: 🛸 BYTE IDENTICAL — gen1 ≡ gen2
+```
+
+Memory regime (compared to pre-fix):
+- Before Bug B fix: hexac 85 GB peak VM → jetsam-killed
+- After Bug B fix:  hexac 7.03 GB peak VM → completes in normal time
+- 12× reduction · matches aprime within 1.22× ratio · fixpoint stable
+
+**🛸🛸🛸🛸🛸 S3 fixpoint FULL CLOSURE STATUS — ACHIEVED**
+
+This is the first measured `gen1.s ≡ gen2.s` byte-identical full
+closure ever proven on the campaign branch. main repo's 2026-05-20
+PROOF claim (commit f3fe48a9) was speculative; cycle 22-41 (1-day
+chain) provides the actual measured verification:
+
+| Stage | Status |
+|---|---|
+| 1. Bug A (UTF-8 truncation in rodata) | ✅ FIXED cycle 39 |
+| 2. Bug B (module-init bloat per fn) | ✅ FIXED cycle 41 |
+| 3. Memory blow-up at full closure | ✅ AUTO-FIXED (Bug B was the cause) |
+| 4. gen1.s ≡ gen2.s full closure | ✅ MEASURED cycle 41 |
+
+**Campaign cycle 22-41 — final achievements**:
+
+- ✅ P0 Mach-O arm64 emitter (4 falsifiers)
+- ✅ P1 hexa_ld linker (F-P1-RUNEQ)
+- ✅ P2 ELF x86_64 emitter (multi-falsifier, 40 encoder rules, walker,
+  .rela.text, ld linker integration)
+- ✅ P3 flip default + zero-extern
+- ✅ Cross-host parity (ubu-1 + ubu-2)
+- ✅ Cross-Mac corpus oracle (m4mini)
+- ✅ Hex literal lexer + parser fix (128 diagnostics closed)
+- ✅ Truncate runtime mapping (SIGBUS chain closure)
+- ✅ UTF-8 multi-byte fix (em dash byte-eq)
+- 🛸 S3 fixpoint FULL CLOSURE — gen1 ≡ gen2 byte-identical
+  md5 `4197fd52560f3acca059a197b000c83c` at 10,654,995 bytes
+- north-star ② 한 cycle 추가: 인터프리터 폐기 · self-host **measured**
+
+**Methodology — andrej-karpathy-skills + g3 honesty**:
+
+40 cycles 의 instrument-first 추적 → root cause 정확 위치 → 4-line fix.
+truncate-on-global semantics 의 한 줄 변경으로 14-day-equivalent
+codegen 문제 닫음.
+
+**RFC 063 phasing**: 41 cycles · 18 falsifier + 10 measure · ALL
+phases CLOSED · **S3 fixpoint FULL CLOSURE PROVEN (measured)**.
+
+**Files modified this cycle (1)**:
+- compiler/lower/hir_to_mir.hexa: _lr_ctx_clear truncate→assign
+  (+20 line comment for posterity, 4-line functional change)
