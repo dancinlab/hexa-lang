@@ -779,11 +779,12 @@ fn main() {
     let ok_pp    = _test_precision_propagate()
     let ok_fw    = _test_frag_width()
     let ok_sd    = _test_shared_decl()
+    let ok_me    = _test_multi_exit_match()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd {
-        println("PASS: RFC 055 + RFC 067 P1/P2 + RFC 068 P1 + RFC 069 P1 — 17/17 cases (incl. F-RFC067-SHARED-DECL)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me {
+        println("PASS: RFC 055 + RFC 067 P1/P2 + RFC 068 P1 + RFC 069 P1/P2 — 18/18 cases (incl. F-RFC069-MULTI-EXIT-MATCH)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -803,9 +804,10 @@ fn main() {
         if !ok_pp   { println("      RFC 068 P1 F-RFC068-PRECISION-PROPAGATE FAILED") }
         if !ok_fw   { println("      RFC 067 P1 F-RFC067-FRAG-WIDTH FAILED") }
         if !ok_sd   { println("      RFC 067 P2 F-RFC067-SHARED-DECL FAILED") }
+        if !ok_me   { println("      RFC 069 P2 F-RFC069-MULTI-EXIT-MATCH FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -1569,5 +1571,139 @@ fn _test_shared_decl() -> bool {
     } else {
         println("  ok: non-WMMA kernel emits zero staging decls (no false-positive)")
     }
+    return ok
+}
+
+// ── Case 18 — RFC 069 P2 `F-RFC069-MULTI-EXIT-MATCH` ──────────────────
+//
+// Verifies the unroll pass accepts a body whose terminator is STMT_BR_COND
+// (multi-exit / break-bearing body), not just STMT_BR (canonical
+// single-exit). The cloner rewrites ONLY the back-edge arm per clone; the
+// early-exit arm stays verbatim so each unrolled instance preserves its
+// break path.
+//
+// CFG shape (3 blocks):
+//   header (block 0): cond, BR_COND(body=1, exit=2)
+//   body   (block 1): t = a + b
+//                     early_cond = a < b
+//                     BR_COND(exit=2, header=0)   # break path = "true" arm
+//   exit   (block 2): return
+//
+// edge_kind on body terminator = "br_cond_else" (header is in the
+// target_block_else slot). After unroll factor=3:
+//   - body's else-arm → first_clone (header) becomes else-arm → block 3
+//   - clone_1 (block 3): same shape, else-arm → block 4
+//   - clone_2 (block 4): same shape, else-arm → header (back-edge)
+//   - the TRUE arm of each (exit=2) stays untouched → break preserved.
+
+fn _build_case_multi_exit_loop() -> MFunc {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let cond = _local(2, "cond")
+    let t = _local(3, "t")
+    let brk = _local(4, "brk")
+
+    // block 0 (header): BR_COND(cond, body=1, exit=2)
+    let mut s0 = []
+    s0.push(_stmt_binop(cond, "lt", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_br_cond(_op_local(cond.id), 1, 2))
+
+    // block 1 (body): t = a + b ; brk = a < b ; BR_COND(brk, exit=2, header=0)
+    let mut s1 = []
+    s1.push(_stmt_binop(t,   "add", _op_local(a.id), _op_local(b.id)))
+    s1.push(_stmt_binop(brk, "lt",  _op_local(a.id), _op_local(b.id)))
+    s1.push(_stmt_br_cond(_op_local(brk.id), 2, 0))   // true→exit, else→header
+
+    // block 2 (exit): return
+    let mut s2 = []
+    s2.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    blocks.push(_block(1, s1))
+    blocks.push(_block(2, s2))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(cond)
+    locals.push(t)
+    locals.push(brk)
+
+    return MFunc {
+        name: "multi_exit_loop_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+}
+
+fn _test_multi_exit_match() -> bool {
+    let mut ok = true
+
+    // factor=3 unroll on multi-exit fixture.
+    let mfn = _nvptx_unroll_pass(_build_case_multi_exit_loop(), 3)
+    let ptx = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn))
+
+    println("")
+    println("── emitted PTX (RFC 069 P2 multi-exit factor=3, sm_80) ──")
+    println(ptx)
+
+    // Sub-case A — body iterations: 3× add.f64 + 3× setp.lt.f64.
+    // Each clone replicates the full body (the binop + the break-cond
+    // computation + the BR_COND).
+    let add_count = _count_substr(ptx, "add.f64")
+    if add_count != 3 {
+        println("  FAIL: factor=3 expected 3× add.f64, got " + to_string(add_count))
+        ok = false
+    } else {
+        println("  ok: factor=3 multi-exit → 3 body iterations (add.f64)")
+    }
+    let setp_count = _count_substr(ptx, "setp.lt.f64")
+    // header has 1 setp, each body has 1 setp → 1 + 3 = 4
+    if setp_count != 4 {
+        println("  FAIL: factor=3 expected 4× setp.lt.f64 (1 header + 3 bodies), got " + to_string(setp_count))
+        ok = false
+    } else {
+        println("  ok: 4 setp.lt.f64 (header + 3 body break-checks)")
+    }
+
+    // Sub-case B — early-exit (break) path PRESERVED per clone instance:
+    // each of the 3 body instances must still BR_COND to exit (block 2).
+    // PTX uses `bra $L_2` for the exit destination — count = 3 ×
+    // (true-arm `bra $L_2`) + 1 (header's `bra $L_2` for exit-direct).
+    // The exact bra count depends on emit lowering; rather than counting
+    // we assert the LABEL $L_2 receives at least 3 incoming branches
+    // by looking for "bra $L_2" occurrences.
+    let bra2_count = _count_substr(ptx, "bra $L_2")
+    if bra2_count < 3 {
+        println("  FAIL: factor=3 expected ≥3 break-edges to $L_2, got " + to_string(bra2_count))
+        ok = false
+    } else {
+        println("  ok: ≥3 break-edges to exit $L_2 (each clone preserves its break)")
+    }
+
+    // Sub-case C — passthrough on single-block (no loop) MFunc is
+    // unchanged. Re-uses the FRAG-width fixture which has no back-edge.
+    // RFC 069 F7 PASSTHROUGH-PRESERVED — strict regression gate.
+    let mod_no_loop = _build_case_frag_width()
+    let mfn_no_loop = mod_no_loop.funcs[0]
+    let ptx_no_unroll = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn_no_loop))
+    let ptx_unrolled  = codegen_emit_ptx_sm80(_wrap_single_mfn(_nvptx_unroll_pass(mfn_no_loop, 3)))
+    if ptx_no_unroll != ptx_unrolled {
+        println("  FAIL: passthrough broken — non-loop MFunc perturbed by unroll pass")
+        ok = false
+    } else {
+        println("  ok: F7 PASSTHROUGH-PRESERVED — non-loop MFunc byte-identical")
+    }
+
     return ok
 }
