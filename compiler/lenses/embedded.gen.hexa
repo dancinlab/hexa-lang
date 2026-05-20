@@ -350,10 +350,46 @@ pub fn lens_apply_paradigm_shift_dual(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_paradigm_shift_adjoint(view: AtlasView) -> array {
-    return empty_candidate_list()
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("adjoint") >= 0 || raw.index_of("dagger") >= 0 || raw.index_of("transpose") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "paradigm_shift.adjoint.signals", family: "paradigm_shift",
+        proposed: "atlas P kind: " + to_string(hits) + " adjoint/dagger/transpose mentions — candidate adjoint-pair audit.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_paradigm_shift_op_lift(view: AtlasView) -> array {
-    return empty_candidate_list()
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("scalar") >= 0 || raw.index_of("vector") >= 0 || raw.index_of("tensor") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "paradigm_shift.op_lift.signals", family: "paradigm_shift",
+        proposed: "atlas P kind: " + to_string(hits) + " scalar/vector/tensor mentions — candidate op-lift hypothesis pool.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+    })
+    return out
 }
 
 pub fn lens_apply_cross_pollinate_borrow_from_qrng(view: AtlasView) -> array {
@@ -408,10 +444,46 @@ pub fn lens_apply_cross_pollinate_borrow_from_qmirror(view: AtlasView) -> array 
     return out
 }
 pub fn lens_apply_cross_pollinate_borrow_from_sim_universe(view: AtlasView) -> array {
-    return empty_candidate_list()
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("universe") >= 0 || raw.index_of("cosm") >= 0 || raw.index_of("Lorentz") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "cross_pollinate.borrow_from_sim_universe.signals", family: "cross_pollinate",
+        proposed: "atlas P kind: " + to_string(hits) + " universe/cosm/Lorentz mentions — candidate stdlib/sim_universe pattern borrowing.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_cross_pollinate_borrow_from_forge(view: AtlasView) -> array {
-    return empty_candidate_list()
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("GPU") >= 0 || raw.index_of("kernel") >= 0 || raw.index_of("fusion") >= 0 || raw.index_of("matmul") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "cross_pollinate.borrow_from_forge.signals", family: "cross_pollinate",
+        proposed: "atlas P kind: " + to_string(hits) + " GPU/kernel/fusion/matmul mentions — candidate self/forge pattern borrowing.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+    })
+    return out
 }
 
 pub fn lens_apply_counterexample_mine_n7_break(view: AtlasView) -> array {
@@ -491,7 +563,25 @@ pub fn lens_apply_counterexample_mine_scale_break(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_counterexample_mine_regime_break(view: AtlasView) -> array {
-    return empty_candidate_list()
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("classical") >= 0 || raw.index_of("relativ") >= 0 || raw.index_of("regime") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "counterexample_mine.regime_break.signals", family: "counterexample_mine",
+        proposed: "atlas P kind: " + to_string(hits) + " classical/relativistic/regime mentions — candidate regime-flip falsification pool.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+    })
+    return out
 }
 
 pub fn lens_apply_invariant_stress_conservation_violation(view: AtlasView) -> array {
@@ -582,7 +672,34 @@ pub fn lens_apply_invariant_stress_monotonicity_break(view: AtlasView) -> array 
     return out
 }
 pub fn lens_apply_invariant_stress_idempotence_break(view: AtlasView) -> array {
-    return empty_candidate_list()
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    // self-cite check: any P node id appearing in its own derives/depends_on.
+    let mut self_cites = 0
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        let e = view.p_nodes[i].edges
+        let mut found = false
+        let dn = len(e.derives)
+        let mut k = 0
+        while k < dn { if e.derives[k] == id { found = true; break } k = k + 1 }
+        if found == false {
+            let pn = len(e.depends_on)
+            k = 0
+            while k < pn { if e.depends_on[k] == id { found = true; break } k = k + 1 }
+        }
+        if found { self_cites = self_cites + 1 }
+        i = i + 1
+    }
+    if self_cites == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "invariant_stress.idempotence_break.self_cite", family: "invariant_stress",
+        proposed: "atlas P kind: " + to_string(self_cites) + " nodes cite themselves — idempotence-break candidate.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+    })
+    return out
 }
 
 pub fn lens_apply_scale_extrapolate_n_to_2n(view: AtlasView) -> array {
@@ -664,7 +781,25 @@ pub fn lens_apply_scale_extrapolate_dim_1d_to_2d(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_scale_extrapolate_dim_2d_to_3d(view: AtlasView) -> array {
-    return empty_candidate_list()
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("2D") >= 0 || raw.index_of("2-D") >= 0 || raw.index_of("plane") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "scale_extrapolate.dim_2d_to_3d.lift", family: "scale_extrapolate",
+        proposed: "atlas P kind: " + to_string(hits) + " 2D/2-D/plane mentions — candidate pool for 3-D lift.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+    })
+    return out
 }
 
 pub fn lens_apply_constraint_flip_flip_sign(view: AtlasView) -> array {
@@ -750,7 +885,25 @@ pub fn lens_apply_constraint_flip_flip_topology(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_constraint_flip_flip_dim(view: AtlasView) -> array {
-    return empty_candidate_list()
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("dim") >= 0 || raw.index_of("axis") >= 0 || raw.index_of("space") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "constraint_flip.flip_dim.signals", family: "constraint_flip",
+        proposed: "atlas P kind: " + to_string(hits) + " dim/axis/space mentions — candidate dimensional-flip survival test pool.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+    })
+    return out
 }
 
 pub fn lens_apply_falsify_self_re_cite_audit(view: AtlasView) -> array {
@@ -913,7 +1066,28 @@ pub fn lens_apply_falsify_self_stale_node_decay(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_falsify_self_contradiction_pair(view: AtlasView) -> array {
-    return empty_candidate_list()
+    let n = len(view.p_nodes)
+    if n < 2 { return empty_candidate_list() }
+    // Find duplicate ids (atlas invariant: ids should be unique).
+    let mut dups = 0
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        let mut j = i + 1
+        while j < n {
+            if view.p_nodes[j].id == id { dups = dups + 1; break }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    if dups == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "falsify_self.contradiction_pair.duplicate_ids", family: "falsify_self",
+        proposed: "atlas P kind: " + to_string(dups) + " duplicate ids — contradiction-pair candidate (atlas unique-id invariant break).",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+    })
+    return out
 }
 
 pub fn lens_apply_unfold_cite_chain(view: AtlasView) -> array {
@@ -1054,7 +1228,22 @@ pub fn lens_apply_unfold_taylor_series(view: AtlasView) -> array {
 }
 
 pub fn lens_apply_unfold_eq_substitution(view: AtlasView) -> array {
-    return empty_candidate_list()
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        if len(view.p_nodes[i].edges.equivalents) > 0 { hits = hits + 1 }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "unfold.eq_substitution.equivalents_present", family: "unfold",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry `==` equivalents — candidate pool for substitution-propagation walks.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+    })
+    return out
 }
 
 // Dispatch: id -> apply fn. Cycle stage 2 (LENS) calls this in a loop
