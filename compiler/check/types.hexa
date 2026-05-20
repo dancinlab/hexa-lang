@@ -934,6 +934,208 @@ fn _types_lower_type_ref(tr: TypeRef) -> Type {
     }
 }
 
+// ── RFC-074 Phase 2.1 — enum variant payload element-type registry ──
+//
+// Module-local lookup table built during `_collect_item_types` and consumed
+// by `_infer_expr` at the `EnumPath` site. Parallel-array shape (mirrors the
+// bind.hexa Phase 2 arity registry layout, one level deeper so we can carry
+// the per-slot `TypeRef` *display* strings rather than just the count):
+//
+//   _types_enum_names[i]                       : enum decl name (e.g. "Event")
+//   _types_enum_variant_offsets[i]             : start index into _types_enum_variant_*[]
+//   _types_enum_variant_counts[i]              : number of variants in enum i
+//   _types_enum_variant_names[j]               : variant name (e.g. "Click")
+//   _types_enum_variant_payload_offsets[j]     : start index into _types_enum_variant_payload_typrefs[]
+//   _types_enum_variant_payload_arities[j]     : payload arity (= len(Param.typs))
+//   _types_enum_variant_payload_typrefs[k]     : flat list of per-slot TypeRef display strings
+//
+// `enum_all_variant_payload_types: [[string]]` semantically — variant j owns
+// the slice `[payload_offsets[j] .. payload_offsets[j] + payload_arities[j])`.
+// Single-field (arity 1) is the degenerate slice of length 1; arity 0 (unit)
+// is an empty slice; arity N≥2 is RFC-074's new territory.
+//
+// Why string display rather than Type? Stage0 cannot store rich structured
+// values in module-globals (no `[Type]` literal initialiser without churn);
+// the display string is also exactly the value we want to thread into the
+// HX2005 diagnostic template's `{expected}` arg, so the equality check
+// reduces to `display_at_slot == _type_display(_infer_expr(child))`. This
+// is the same compare-on-display contract `_emit_hx3001` already uses.
+let mut _types_enum_names: [string] = []
+let mut _types_enum_variant_offsets: [i64] = []
+let mut _types_enum_variant_counts: [i64] = []
+let mut _types_enum_variant_names: [string] = []
+let mut _types_enum_variant_payload_offsets: [i64] = []
+let mut _types_enum_variant_payload_arities: [i64] = []
+let mut _types_enum_variant_payload_typrefs: [string] = []
+
+fn _types_enum_registry_reset() {
+    _types_enum_names = []
+    _types_enum_variant_offsets = []
+    _types_enum_variant_counts = []
+    _types_enum_variant_names = []
+    _types_enum_variant_payload_offsets = []
+    _types_enum_variant_payload_arities = []
+    _types_enum_variant_payload_typrefs = []
+}
+
+// Render a TypeRef into the same display string `_type_display` would
+// produce for the matching Type lowering. Keeps the registry's per-slot
+// "expected" string byte-eq with the inferred-Type display so the HX2005
+// equality check is purely string-on-string.
+fn _types_typeref_display(tr: TypeRef) -> string {
+    if len(tr.kind) == 0 { return "<unknown>" }
+    if tr.kind == "named" {
+        return _type_display(_types_lower_type_ref(tr))
+    }
+    // generic / fn / tuple / atlas_kind — fall through to the lowering's
+    // sentinel shape so the displayed string matches what an inferred Type
+    // with the same kind/name would render.
+    return _type_display(_types_lower_type_ref(tr))
+}
+
+// Populate the registry for one enum Item. No-op for non-enum items.
+// Called from `_collect_item_types` per-item; the registry's lifetime is
+// the enclosing `type_check()` call (reset on entry per @D g_inbox_…
+// surgical scope — one registry per module pass).
+fn _types_register_enum_item_payloads(it: Item) {
+    if !_types_is_enum_item(it.kind) { return }
+    _types_enum_names.push(it.name)
+    _types_enum_variant_offsets.push(len(_types_enum_variant_names))
+    _types_enum_variant_counts.push(len(it.params))
+    let mut vi = 0
+    while vi < len(it.params) {
+        let v = it.params[vi]
+        _types_enum_variant_names.push(v.name)
+        _types_enum_variant_payload_offsets.push(len(_types_enum_variant_payload_typrefs))
+        let arity = len(v.typs)
+        _types_enum_variant_payload_arities.push(arity)
+        let mut si = 0
+        while si < arity {
+            _types_enum_variant_payload_typrefs.push(_types_typeref_display(v.typs[si]))
+            si = si + 1
+        }
+        vi = vi + 1
+    }
+}
+
+// Result of a variant lookup. `found=false` is the "skip" signal — the
+// caller does NOT emit HX2005 for unknown enums (HX2001 already covers
+// the head; HX2004 already covers arity). `payload_types` is the per-slot
+// declared-type display strings, length == arity.
+pub struct VariantPayloadLookup {
+    found: bool,
+    payload_types: [string]
+}
+
+fn _types_miss_variant_lookup() -> VariantPayloadLookup {
+    return VariantPayloadLookup { found: false, payload_types: [] }
+}
+
+fn _types_lookup_variant_payload_types(enum_name: string, variant_name: string) -> VariantPayloadLookup {
+    let mut ei = 0
+    while ei < len(_types_enum_names) {
+        if _types_enum_names[ei] == enum_name {
+            let off = _types_enum_variant_offsets[ei]
+            let cnt = _types_enum_variant_counts[ei]
+            let mut vi = 0
+            while vi < cnt {
+                if _types_enum_variant_names[off + vi] == variant_name {
+                    let poff = _types_enum_variant_payload_offsets[off + vi]
+                    let parity = _types_enum_variant_payload_arities[off + vi]
+                    let mut slots: [string] = []
+                    let mut si = 0
+                    while si < parity {
+                        slots.push(_types_enum_variant_payload_typrefs[poff + si])
+                        si = si + 1
+                    }
+                    return VariantPayloadLookup { found: true, payload_types: slots }
+                }
+                vi = vi + 1
+            }
+            return _types_miss_variant_lookup()
+        }
+        ei = ei + 1
+    }
+    return _types_miss_variant_lookup()
+}
+
+// EnumPath text encodes "Enum::Variant" — mirror of bind.hexa's
+// `_enum_head` / `_enum_variant_tail` (kept module-local here to avoid
+// cross-module dependency between check/types.hexa and check/bind.hexa).
+fn _types_enum_path_head(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut i = 0
+    while i < n - 1 {
+        if chars[i] == ':' && chars[i + 1] == ':' {
+            let mut out = ""
+            let mut j = 0
+            while j < i {
+                out = out + to_string(chars[j])
+                j = j + 1
+            }
+            return out
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _types_enum_path_tail(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut i = 0
+    while i < n - 1 {
+        if chars[i] == ':' && chars[i + 1] == ':' {
+            let mut out = ""
+            let mut j = i + 2
+            while j < n {
+                out = out + to_string(chars[j])
+                j = j + 1
+            }
+            return out
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// ExprKind classifier — mirrors bind.hexa's `_is_enum_path_kind` shape.
+// Stage0 enum-Eq lacks derive, so we hand-roll the exhaustive arm.
+fn _types_is_enum_path_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::EnumPath -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
 // ── TypeEnv ops ──────────────────────────────────────────────
 
 // Define a binding with explicit visibility + owning-module attribution.
@@ -1156,6 +1358,21 @@ fn _emit_hx3005(pos: i64, expected: Type, actual: Type, sp: Span, out: array) {
 fn _emit_hx4001(sp: Span, out: array) {
     let mut b = diag_new("HX4001")
     b = diag_span(b, sp)
+    out.push(diag_emit(b))
+}
+
+// RFC-074 Phase 2.1 — HX2005 emitter: enum variant payload element-type
+// mismatch (per-slot positional). Fired AFTER HX2004 has accepted arity,
+// once per failing slot — multi-slot construction with two bad slots emits
+// two HX2005 (RFC-019 §6 collect-don't-stop convention).
+fn _emit_hx2005(enum_name: string, variant_name: string, pos: i64, expected: string, actual: string, sp: Span, out: array) {
+    let mut b = diag_new("HX2005")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "enum_name", enum_name)
+    b = diag_arg(b, "variant_name", variant_name)
+    b = diag_arg(b, "pos", to_string(pos))
+    b = diag_arg(b, "expected", expected)
+    b = diag_arg(b, "actual", actual)
     out.push(diag_emit(b))
 }
 
@@ -1507,7 +1724,52 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         }
     }
 
-    // Field / Index / StructLit / EnumPath / Wildcard — STUB v1.
+    // RFC-074 Phase 2.1 — EnumPath construction site per-slot element-type
+    // check. Probe the per-module registry built by `_collect_item_types`;
+    // on a hit, compare the inferred type of each `children[i]` to the
+    // declared display string for slot i. Skip silently when:
+    //   - HX2004 (bind-side arity) would already have fired (arity mismatch
+    //     leaves the slot indices ambiguous; we don't speculate types onto
+    //     missing or extra slots);
+    //   - the enum / variant is unknown to this module's registry (HX2001
+    //     covers the head miss; we don't double-emit).
+    // We still walk every child for inner-error surfacing, matching the
+    // legacy STUB-v1 traversal contract.
+    if _types_is_enum_path_kind(e.kind) {
+        let head = _types_enum_path_head(e.text)
+        let tail = _types_enum_path_tail(e.text)
+        let mut do_slot_check = false
+        let mut slots: [string] = []
+        if len(head) > 0 && len(tail) > 0 {
+            let lk = _types_lookup_variant_payload_types(head, tail)
+            if lk.found && len(lk.payload_types) == len(e.children) {
+                do_slot_check = true
+                slots = lk.payload_types
+            }
+        }
+        let mut ei = 0
+        while ei < len(e.children) {
+            let ct = _infer_expr(e.children[ei], env, ctx, out)
+            if do_slot_check {
+                let expected = slots[ei]
+                let actual = _type_display(ct)
+                // Tolerate unknowns on either side — registry holds
+                // `<unknown>` for malformed TypeRefs and `_type_display`
+                // returns the same for empty inferred types. Mirrors
+                // `_types_equal`'s tolerate-on-unknown contract so a
+                // STUB-v1 receiver doesn't false-fire HX2005.
+                if expected != "<unknown>" && actual != "<unknown>"
+                    && expected != actual {
+                    _emit_hx2005(head, tail, ei, expected, actual,
+                        e.children[ei].span, out)
+                }
+            }
+            ei = ei + 1
+        }
+        return _types_empty_type()
+    }
+
+    // Field / Index / StructLit / Wildcard — STUB v1.
     // Walk children for inner errors; return unknown so outer sites that
     // gate on equality tolerate (per _types_equal).
     let mut i = 0
@@ -1952,6 +2214,11 @@ fn _collect_item_types(module: Module, out: array) -> TypeEnv {
         } else if _types_is_enum_item(it.kind) {
             env = _types_env_define_attr(env, it.name, def,
                 _types_enum_type(def), it.is_pub, owning)
+            // RFC-074 Phase 2.1 — populate the per-slot payload type
+            // registry alongside the env binding so `_infer_expr`'s
+            // EnumPath site can resolve declared slot types without a
+            // second pass over module.items.
+            _types_register_enum_item_payloads(it)
         } else {
             // _types_is_let_item
             env = _types_env_define_attr(env, it.name, def,
@@ -1990,6 +2257,11 @@ fn _types_bind_params(env: TypeEnv, it: Item, caller_file: string) -> TypeEnv {
 
 pub fn type_check(module: Module) -> array {
     let mut out = []
+    // RFC-074 Phase 2.1 — reset the per-module enum variant payload type
+    // registry before `_collect_item_types` re-populates it on this run.
+    // `type_check()` is called once per module pass; registry lifetime ==
+    // this call (parallel to bind.hexa's arity registry reset shape).
+    _types_enum_registry_reset()
     // Pre-pass collects item types and emits HX3010 for duplicate pub
     // symbols across files (Stage1 punch list Gap 2).
     let env = _collect_item_types(module, out)

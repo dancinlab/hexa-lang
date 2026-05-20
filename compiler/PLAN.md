@@ -5087,3 +5087,84 @@ cross-link: inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md
 ```
 
 Cross-link: `inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md` (Phase 1+2 LANDED 2026-05-20 · **Phase 3 LANDED 2026-05-20** · Phases 4-5 still PLANNED). Memory `project_hexa_lang_enum_payload_works.md` ("single-field works, multi-field unsupported") gap closed at the lower layer; codegen reach is Phase 4 territory.
+
+## 진행 로그 — RFC 074 Phase 2.1 compiler/check/types.hexa per-slot element-type match (2026-05-20)
+
+**Status**: PHASE-2.1-COMPILER-LANDED · Shape A surgical · 3 SSOT files
+parse-gate PASS · deployed-binary regen deferred (standard
+g_commit_push_deploy cycle, not this sub-cycle). Builds atop Phase 2's
+bind-time HX2004 arity gate (commit `704b949f` in this worktree, mirror
+of origin/main `a0cd5c57`).
+
+**Scope**: RFC 074 §3 Phase 2.1 — `compiler/check/types.hexa`
+element-type matching. Phase 2 (commit `a0cd5c57`) deferred this
+explicitly: "types.hexa per-slot element-type matching —
+`enum_all_variant_payload_types: [[string]]` (per-slot type assertions
+on `E::V(arg0, arg1)` construction)". This cycle lands it without
+touching Phase 3/4/5 ground.
+
+**Files touched** (3, all worktree SSOT):
+- `compiler/check/types.hexa` — added module-local enum variant payload
+  type registry (7 parallel arrays: `_types_enum_names`,
+  `_types_enum_variant_offsets`, `_types_enum_variant_counts`,
+  `_types_enum_variant_names`, `_types_enum_variant_payload_offsets`,
+  `_types_enum_variant_payload_arities`,
+  `_types_enum_variant_payload_typrefs`). Helpers added:
+  `_types_enum_registry_reset`, `_types_typeref_display`,
+  `_types_register_enum_item_payloads`, `_types_miss_variant_lookup`,
+  `_types_lookup_variant_payload_types` returning a `VariantPayloadLookup
+  { found, payload_types }` record. `_collect_item_types`'s enum
+  branch now calls `_types_register_enum_item_payloads(it)` alongside
+  the env define. `type_check()` calls `_types_enum_registry_reset()`
+  on entry. `_infer_expr` got a new pre-STUB `EnumPath` arm: when arity
+  matches the children count, fires `_emit_hx2005(...)` per failing
+  slot; still walks every child for inner-error surfacing. New helpers
+  `_types_enum_path_head`, `_types_enum_path_tail` mirror bind.hexa's
+  string-text encoding without cross-module dependency. New
+  `_types_is_enum_path_kind` exhaustive ExprKind classifier (stage0
+  enum-Eq lacks derive). New `_emit_hx2005` diag helper.
+- `compiler/diag/catalog.hexa` — `DiagSpec { code: "HX2005", title:
+  "enum variant payload element-type mismatch", severity: Error, stage:
+  "S3" }` with template `"enum variant `{enum_name}::{variant_name}`
+  payload slot {pos}: expected `{expected}`, got `{actual}`"`.
+- `compiler/check/types_test.hexa` — added `_variant_multi`,
+  `_variant_unit`, `_enum_item`, `_enum_path` AST builder helpers +
+  cases (f) PASS — `Event::Click(42, "hi")` against `enum Event {
+  Click(int, string) }` expects 0 HX2004 + 0 HX2005, and (g) FAIL —
+  swapped args `Event::Click("hi", 42)` expects exactly 2 HX2005
+  (positional, one per swapped slot, no HX2004 since arity matches).
+
+**Acceptance** (Phase 2.1): `hexa_real parse` PASS on all 3 SSOT files.
+HX2005 emit path is exercised at the catalog spec + types_test fixtures
+(f)/(g). End-to-end harness run gate deferred to standard
+`g_commit_push_deploy` cycle (compiler-source-only diff; bootstrap
+promote out of this cycle per `@D g_inbox_processing_loop` SOP §7).
+
+**Falsifier (F-074-P2.1-CHECK)**: HX2005 fires EXACTLY at the slots
+whose inferred type disagrees with the declared `typs[i]`. Case (g)
+is the contractual minimum: a 2-slot swap on `enum Event { Click(int,
+string) }` emits 2 HX2005 (positional argument 0: expected i64, got
+string · positional argument 1: expected string, got i64). Without
+per-slot check the swap would compile clean and the lowering pass
+would silently store the wrong-typed values.
+
+**DEFERRED** (g3 honest scope):
+- Phase 2.1-PAT — match-arm pattern element-type check (the
+  `_bind_pattern` EnumPath arm already fires HX2004; per-slot pattern
+  type assertion would require S2 to feed `_infer_expr` shape onto
+  binders — outside surgical scope).
+- Phase 3 — compiler/lower HIR multi-field payload wiring.
+- Phase 4 — compiler/codegen per-target multi-cell match-arm emit.
+- Phase 5 — self-host fixpoint with synthetic multi-field enum.
+
+**LoC delta** (this cycle):
+
+```
+ compiler/check/types.hexa                            | +~190
+ compiler/diag/catalog.hexa                           | +12
+ compiler/check/types_test.hexa                       | +~115
+```
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md
+(Phase 1+2+2.1 LANDED 2026-05-20 · Phases 3-5 lower/codegen/fixpoint
+still PLANNED).

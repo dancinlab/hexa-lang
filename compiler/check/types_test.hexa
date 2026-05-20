@@ -176,6 +176,62 @@ fn _param(name: string, typ_name: string, file: string, line: i64, col: i64) -> 
     }
 }
 
+// RFC-074 Phase 2.1 — multi-field variant Param: explicit typs[] vector.
+// `typ` mirrors typs[0] as the legacy degraded projection per RFC-074 §3.1.2.
+fn _variant_multi(name: string, typ_names: [string], file: string, line: i64, col: i64) -> Param {
+    let mut ts: [TypeRef] = []
+    let mut i = 0
+    while i < len(typ_names) {
+        ts.push(_named_type_ref(typ_names[i]))
+        i = i + 1
+    }
+    let first = if len(ts) > 0 { ts[0] } else { _empty_type_ref() }
+    return Param {
+        name: name,
+        typ: first,
+        typs: ts,
+        span: _span(file, line, col, len(name))
+    }
+}
+
+// RFC-074 Phase 2.1 — bare-variant ctor helper (arity 0 → typs is empty).
+fn _variant_unit(name: string, file: string, line: i64, col: i64) -> Param {
+    return Param {
+        name: name,
+        typ: _empty_type_ref(),
+        typs: [],
+        span: _span(file, line, col, len(name))
+    }
+}
+
+// RFC-074 Phase 2.1 — Enum item declaration (variants live in params[]).
+fn _enum_item(name: string, variants: [Param], file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Enum,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: [],
+        params: variants,
+        return_type: _empty_type_ref(),
+        body: _block([], file, line, 1),
+        is_pub: false
+    }
+}
+
+// RFC-074 Phase 2.1 — EnumPath expression: text="Enum::Variant",
+// children[] = payload args. Mirrors parser output shape so type_check
+// reaches the same code path it does for real source.
+fn _enum_path(enum_name: string, variant_name: string, args: [Expr], file: string, line: i64, col: i64) -> Expr {
+    let text = enum_name + "::" + variant_name
+    return Expr {
+        kind: ExprKind::EnumPath,
+        span: _span(file, line, col, len(text)),
+        text: text,
+        children: args,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
 // ── Pretty-print ─────────────────────────────────────────────
 
 fn _sev_str(s: Severity) -> string {
@@ -329,6 +385,61 @@ fn _build_case_e() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// RFC-074 Phase 2.1 — (f) PASS: enum Event { Click(int, string) }
+// fn main() { Event::Click(42, "hi") }   — element types match declared slots.
+fn _build_case_f() -> Module {
+    let f = "case_f.hexa"
+
+    let mut variants = []
+    variants.push(_variant_multi("Click", ["int", "string"], f, 1, 14))
+    let item_enum = _enum_item("Event", variants, f, 1)
+
+    let arg0 = _int_expr("42", f, 2, 22)
+    let arg1 = _string_expr("hi", f, 2, 26)
+    let mut args = []
+    args.push(arg0)
+    args.push(arg1)
+    let ctor = _enum_path("Event", "Click", args, f, 2, 12)
+
+    let mut main_kids = []
+    main_kids.push(ctor)
+    let main_body = _block(main_kids, f, 2, 10)
+    let item_main = _fn_item("main", [], _empty_type_ref(), main_body, f, 2)
+
+    let mut items = []
+    items.push(item_enum)
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// RFC-074 Phase 2.1 — (g) FAIL HX2005: enum Event { Click(int, string) }
+// fn main() { Event::Click("hi", 42) } — args swapped, expect 2 HX2005.
+fn _build_case_g() -> Module {
+    let f = "case_g.hexa"
+
+    let mut variants = []
+    variants.push(_variant_multi("Click", ["int", "string"], f, 1, 14))
+    let item_enum = _enum_item("Event", variants, f, 1)
+
+    // Swapped: string first, int second — both slots must trip HX2005.
+    let arg0 = _string_expr("hi", f, 2, 22)
+    let arg1 = _int_expr("42", f, 2, 28)
+    let mut args = []
+    args.push(arg0)
+    args.push(arg1)
+    let ctor = _enum_path("Event", "Click", args, f, 2, 12)
+
+    let mut main_kids = []
+    main_kids.push(ctor)
+    let main_body = _block(main_kids, f, 2, 10)
+    let item_main = _fn_item("main", [], _empty_type_ref(), main_body, f, 2)
+
+    let mut items = []
+    items.push(item_enum)
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // ── Driver ───────────────────────────────────────────────────
 
 fn _run_case(label: string, m: Module) -> array {
@@ -418,6 +529,27 @@ fn main() {
         ok = false
     } else {
         println("  ok: HX3004 emitted")
+    }
+
+    // RFC-074 Phase 2.1 — (f) PASS: Event::Click(42, "hi") on enum E{Click(int, string)}
+    let diags_f = _run_case("(f) PASS — Event::Click(42,\"hi\") element-type match", _build_case_f())
+    let nf_2005 = _count_code(diags_f, "HX2005")
+    let nf_2004 = _count_code(diags_f, "HX2004")
+    if nf_2005 != 0 || nf_2004 != 0 {
+        println("  FAIL: case (f) expected 0 HX2004 + 0 HX2005, got " + to_string(nf_2004) + " HX2004 / " + to_string(nf_2005) + " HX2005 (total=" + to_string(len(diags_f)) + ")")
+        ok = false
+    } else {
+        println("  ok: 0 HX2004 / 0 HX2005 (element types match)")
+    }
+
+    // RFC-074 Phase 2.1 — (g) FAIL HX2005 ×2: Event::Click("hi", 42) — args swapped
+    let diags_g = _run_case("(g) FAIL HX2005 ×2 — Event::Click(\"hi\",42) element-type swap", _build_case_g())
+    let ng = _count_code(diags_g, "HX2005")
+    if ng != 2 {
+        println("  FAIL: case (g) expected 2 HX2005, got " + to_string(ng) + " (total=" + to_string(len(diags_g)) + ")")
+        ok = false
+    } else {
+        println("  ok: 2 HX2005 emitted (per-slot positional)")
     }
 
     println("")

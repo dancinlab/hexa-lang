@@ -211,6 +211,23 @@ fn _wv_emit_cell(c: Cell, idx: int) -> str {
              + _wv_emit_name(b) + " : "
              + _wv_emit_name(a) + ";\n"
     }
+    // $dff: posedge-clocked D-flip-flop → `always @(posedge clk) q <=
+    //   d;` with a `reg` re-declaration of the Q wire (Verilog requires
+    //   reg-type LHS in clocked always-blocks). The original `wire q;`
+    //   decl is still emitted by `_wv_emit_decl`; substrate yosys's
+    //   `read_verilog` tolerates the double-decl (`wire` then `reg`)
+    //   as a synth-subset compatibility quirk and infers the right
+    //   storage from the always-block usage.
+    if t == "$dff" {
+        let clk = _wv_conn_net(c, "CLK")
+        let d   = _wv_conn_net(c, "D")
+        let q   = _wv_conn_net(c, "Q")
+        return "  reg " + _wv_emit_name(q) + "_reg;\n"
+             + "  always @(posedge " + _wv_emit_name(clk) + ") "
+             + _wv_emit_name(q) + "_reg <= " + _wv_emit_name(d) + ";\n"
+             + "  assign " + _wv_emit_name(q) + " = "
+             + _wv_emit_name(q) + "_reg;\n"
+    }
     let mut out = "  " + c.cell_type + " " + c.name + " ("
     let mut i = 0
     while i < len(c.conns) {
@@ -475,6 +492,34 @@ fn main() {
     let r12 = write_verilog(d12)
     if r12.text.find("assign y = ~a;") < 0 {
         println("FAIL T12 not_behavioural"); fails = fails + 1
+    }
+
+    // T13 — $dff cell emits a posedge-clocked always-block with a
+    //   `_reg` shadow + drive-through `assign`. Substrate yosys reads
+    //   this as a flip-flop (inferred from the always-block LHS being
+    //   reg-declared) and infers `$_DFF_PP_` during `synth`. The
+    //   double wire/reg decl is tolerated as a synth-subset quirk.
+    total = total + 1
+    let mut m13 = rtlil_new_module("mDff")
+    m13 = rtlil_module_add_wire(m13, rtlil_wire("clk", 1, 1, 1))
+    m13 = rtlil_module_add_wire(m13, rtlil_wire("d", 1, 1, 2))
+    m13 = rtlil_module_add_wire(m13, rtlil_wire("q", 1, 2, 3))
+    let mut cDff = rtlil_cell("ff1", "$dff", 0)
+    cDff = rtlil_cell_connect(cDff, "CLK", "clk")
+    cDff = rtlil_cell_connect(cDff, "D",   "d")
+    cDff = rtlil_cell_connect(cDff, "Q",   "q")
+    m13 = rtlil_module_add_cell(m13, cDff)
+    let mut d13 = rtlil_new_design("test")
+    d13 = rtlil_design_add(d13, m13)
+    let r13 = write_verilog(d13)
+    if r13.text.find("always @(posedge clk)") < 0 {
+        println("FAIL T13 dff_always_block"); fails = fails + 1
+    }
+    if r13.text.find("reg q_reg;") < 0 {
+        println("FAIL T13a dff_reg_shadow"); fails = fails + 1
+    }
+    if r13.text.find("assign q = q_reg;") < 0 {
+        println("FAIL T13b dff_drive_through"); fails = fails + 1
     }
 
     if fails > 0 {

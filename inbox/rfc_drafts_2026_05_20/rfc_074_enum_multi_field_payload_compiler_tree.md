@@ -1,6 +1,10 @@
 # RFC 074 — Enum Multi-Field Payload (compiler/ tree B2 + C1 decision lock)
 
+<<<<<<< HEAD
 > **Status**: PHASE-1+2+3-COMPILER-LANDED · Shape A (compiler/ tree parser + AST `typs[]` carrier + bind-time HX2004 arity registry + catalog DiagSpec + lower per-slot binder fan-out + mir_test case (d) HIR→MIR fixture). Parse-gate PASS on 13 SSOT files. Phases 4-5 (codegen → fixpoint) still PLANNED. Original Shape-B scaffold (decision lock + phase plan) preserved below.
+=======
+> **Status**: PHASE-1+2+2.1-COMPILER-LANDED · Shape A (compiler/ tree parser + AST `typs[]` carrier + bind-time HX2004 arity registry + types-side HX2005 per-slot element-type check + catalog DiagSpec). Parse-gate PASS on 13 SSOT files. Phases 3-5 (lower → ir+codegen → fixpoint) still PLANNED. Original Shape-B scaffold (decision lock + phase plan) preserved below.
+>>>>>>> 5792697b (feat(compiler/{check,diag}): RFC 074 Phase 2.1 — types.hexa per-slot element-type match (HX2005))
 > **Opened**: 2026-05-20
 > **Authors**: sub-agent dispatch (per @D g_inbox_processing_loop)
 > **Supersedes / extends**: RFC-020 (`proposals/rfc_020_enum_payload_variants.md`) §3.1 "multi-field deferred" clause
@@ -109,19 +113,26 @@ Two options for how parser stores variant payload arity:
 - **(a) Reuse `Item.params`** as variant rows where each row's `typ` is the *first* payload type and a new sibling `params[]` field on the variant Param carries the rest. *Rejected*: requires `Param`-of-`Param` nesting which the AST schema doesn't support.
 - **(b) Replace `typ: TypeRef`** on the variant `Param` with `typs: [TypeRef]`. *Adopted*. Existing single-field sites have `len(typs) ∈ {0, 1}`; multi-field has `len(typs) ≥ 2`. Migration is a parser-only diff plus consumer-side fan-out at Phases 2-5.
 
-### Phase 2 — `compiler/check` (typecheck payload arity + binder fan-out) — ✅ LANDED 2026-05-20 (arity gate only; element-type match deferred)
+### Phase 2 — `compiler/check` (typecheck payload arity + binder fan-out) — ✅ LANDED 2026-05-20 (arity gate)
 
 **Files** (2 SSOT this cycle):
 - `compiler/check/bind.hexa` — added per-module enum-variant arity registry (`_bind_enum_names`/`_offsets`/`_counts`/`_variant_names`/`_variant_arities`) populated in the pre-pass via `_bind_register_enum_item`. Both EnumPath sites — construction (`_bind_walk_expr` `_is_enum_path_kind` arm) and pattern (`_bind_pattern` `_is_enum_path_kind` arm) — now probe `_bind_lookup_variant_arity(head, tail)` and emit `HX2004` on mismatch. Added helpers `_enum_variant_tail`, `_is_enum_kind`, `_emit_hx2004`. The existing binder-fan-out loop in `_bind_pattern` correctly handles arity ≥ 2 (every Ident-like child becomes a binder).
 - `compiler/diag/catalog.hexa` — `DiagSpec { code: "HX2004", title: "enum variant payload arity mismatch", severity: Error, stage: "S2" }` with template `"enum variant `{enum_name}::{variant_name}` expects {expected} payload {plural}, got {actual}"` and `{plural}` driver-supplied (`"component"` for expected==1, else `"components"`).
 
-**DEFERRED to sub-cycle 2.1** (out of this cycle's scope per Shape-A surgical principle):
-- `compiler/check/types.hexa` element-type matching — `enum_all_variant_payload_types: [[string]]` (per-slot type assertions on `E::V(arg0, arg1)` construction). Bind-side arity gate covers the dominant error class; per-slot type-mismatch can land as a Phase 2.1 add-on without disturbing Phase 3/4/5.
-- `compiler/check/resolve.hexa` multi-field walk — no behavior change required at S1 for arity-only; the resolver still only touches atlas refs.
-
 **Acceptance** (Phase 2): ✅ MET (arity gate). `hexa_real parse` PASS on `bind.hexa`, `catalog.hexa`, plus the 4 `*_test.hexa` files and `discover_smoke.hexa` whose `_param` helpers were widened in Phase 1's lockstep diff. The HX2004 emit path is unit-test-ready (no harness ships in this cycle — measured by the catalog spec + the parse-gate sweep).
 
-**g3 honest scope**: bind-time arity check only — element-type match (Phase 2.1), lower (Phase 3), codegen (Phase 4), self-host fixpoint (Phase 5) all still pending. The arity gate fires HX2004 at S2, before any downstream pass would silently truncate or mis-bind a payload, so it is the load-bearing first half of Phase 2's semantic guarantee.
+**g3 honest scope**: bind-time arity check only — element-type match (Phase 2.1, ✅ LANDED below), lower (Phase 3), codegen (Phase 4), self-host fixpoint (Phase 5) all still pending. The arity gate fires HX2004 at S2, before any downstream pass would silently truncate or mis-bind a payload, so it is the load-bearing first half of Phase 2's semantic guarantee.
+
+### Phase 2.1 — `compiler/check/types.hexa` per-slot element-type match — ✅ LANDED 2026-05-20
+
+**Files** (3 SSOT this cycle):
+- `compiler/check/types.hexa` — added per-module enum variant payload **type** registry (`_types_enum_names` / `_types_enum_variant_{offsets,counts,names}` / `_types_enum_variant_payload_{offsets,arities,typrefs}`). Semantically `enum_all_variant_payload_types: [[string]]` — variant *j* owns the slice `[payload_offsets[j] .. payload_offsets[j] + payload_arities[j])` of `_types_enum_variant_payload_typrefs`. Registry populated by `_types_register_enum_item_payloads` from `_collect_item_types`'s enum branch; reset on every `type_check()` entry (parallel to bind.hexa's arity-registry contract). Per-slot strings come from `_types_typeref_display`, which round-trips through `_types_lower_type_ref` + `_type_display` so the registry's expected-display matches what an inferred Type renders. `_infer_expr` now branches `EnumPath` *before* the legacy STUB-v1 fall-through: probes `_types_lookup_variant_payload_types(head, tail)`, when arity matches the children count fires `_emit_hx2005(head, tail, slot_i, expected, actual, span, out)` per failing slot, and still walks every child for inner-error surfacing. Skip-silent on unknown enum / unknown variant / arity-mismatch (HX2001 + HX2004 own those error classes — no double-emit). Added helpers `_types_enum_path_head`, `_types_enum_path_tail`, `_types_is_enum_path_kind`.
+- `compiler/diag/catalog.hexa` — `DiagSpec { code: "HX2005", title: "enum variant payload element-type mismatch", severity: Error, stage: "S3" }` with template `"enum variant `{enum_name}::{variant_name}` payload slot {pos}: expected `{expected}`, got `{actual}`"`. Explain text spells out the RFC-074 §2.2 `typs[i]`-vs-`children[i]` positional contract and gives the canonical argument-order-swap example.
+- `compiler/check/types_test.hexa` — added `_variant_multi`, `_variant_unit`, `_enum_item`, `_enum_path` AST builder helpers + cases (f) PASS — `Event::Click(42, "hi")` on `enum Event { Click(int, string) }` → 0 HX2004 / 0 HX2005, and (g) FAIL — `Event::Click("hi", 42)` (args swapped) → exactly 2 HX2005 (one per swapped slot, no HX2004). The (g) case is the load-bearing falsifier — without per-slot check the swap would compile silently.
+
+**Acceptance** (Phase 2.1): ✅ MET. `hexa_real parse` PASS on `types.hexa`, `catalog.hexa`, `types_test.hexa`. HX2005 emit path exercised at the catalog spec + types-side registry lookup + types_test fixtures (f)/(g). End-to-end run gate deferred to the standard `g_commit_push_deploy` cycle (compiler-source-only diff + no bootstrap promote per SOP §7).
+
+**g3 honest scope**: types-side element-type check ONLY — match-arm-side patterns (positional binders) reuse the bind.hexa Phase 2 arity gate but currently propagate `<unknown>` types (no element-type assertion on patterns yet; pattern-side element-type would require S2/S3 cross-pollination outside Phase 2.1's surgical scope). The "skip when arity differs" gating is intentional — HX2004 already attributes the mismatch class, so a swapped + extra-arg case fires 1 HX2004 not 1+N HX2005. Phases 3 (lower) / 4 (codegen) / 5 (fixpoint) still pending — types.hexa now reports element-type errors at S3, but downstream still silently drops payloads for arity ≥ 2 in the lower→codegen pipeline.
 
 ### Phase 3 — `compiler/lower` (HIR-level payload child wiring) — ✅ LANDED 2026-05-20
 

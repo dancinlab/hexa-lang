@@ -210,6 +210,38 @@ pub let CATALOG: [DiagSpec] = [
         explain: "The call-site expression's callee resolved to a value whose static type is not a function. Common causes: shadowing a function name with a local let binding, calling a struct field, or accessing a value of a non-fn type as if it were a function. Stage1 punch list C20 surfaces this as HX2003 instead of silently returning unit, so the cascade after Gap 1 multi-file imports stays readable.",
         fix_it_kind: FixItKind::None
     },
+<<<<<<< HEAD
+=======
+    // RFC-074 Phase 2 (2026-05-20) — enum variant payload arity check.
+    // Stage S2 (bind) emits this when an `E::V(...)` expression or
+    // `E::V(...) -> ...` match pattern supplies a different number of payload
+    // components than the variant declaration's positional `typs[]` arity.
+    DiagSpec {
+        code: "HX2004",
+        title: "enum variant payload arity mismatch",
+        severity: Severity::Error,
+        stage: "S2",
+        template: "enum variant `{enum_name}::{variant_name}` expects {expected} payload {plural}, got {actual}",
+        explain: "An enum variant constructor or match pattern supplied a different number of positional payload components than the variant declaration. Under RFC-074 §2.2, enum variants carry a positional `typs[]` payload list (arity = `len(typs)`); arity 0 = unit variant, arity 1 = single-field, arity N≥2 = multi-field. The construction or pattern site must match the declared arity exactly. Fix: add or remove payload components, or amend the enum declaration.",
+        fix_it_kind: FixItKind::None
+    },
+    // RFC-074 Phase 2.1 (2026-05-20) — enum variant payload element-type check.
+    // Stage S3 (types) emits this AFTER HX2004 has confirmed matching arity. For
+    // each positional slot in `E::V(arg_0, arg_1, ..., arg_{N-1})` the inferred
+    // type of arg_i must be assignable to the declared `typs[i]` from the enum
+    // variant declaration. HX2004 (arity) and HX2005 (element-type) form the
+    // matched pair gating the positive type-soundness obligation per RFC-074 §3
+    // Phase 2 + Phase 2.1.
+    DiagSpec {
+        code: "HX2005",
+        title: "enum variant payload element-type mismatch",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "enum variant `{enum_name}::{variant_name}` payload slot {pos}: expected `{expected}`, got `{actual}`",
+        explain: "An enum variant constructor supplied a payload value whose static type does not match the declared positional slot type. Under RFC-074 §2.2 each variant carries a `typs: [TypeRef]` list; the construction site's `children[i]` must be type-assignable to `typs[i]`. Common causes: argument-order swap (e.g. `E::V(\"hi\", 42)` against `enum E { V(int, string) }`), a typo in the enum declaration, or a stale call site after a variant signature change. Fix: reorder the arguments, correct the expression types, or amend the enum variant declaration.",
+        fix_it_kind: FixItKind::None
+    },
+>>>>>>> 5792697b (feat(compiler/{check,diag}): RFC 074 Phase 2.1 — types.hexa per-slot element-type match (HX2005))
     DiagSpec {
         code: "HX3001",
         title: "type mismatch",
