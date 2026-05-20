@@ -229,7 +229,28 @@ pub fn lens_apply_empty_space_degree_hole(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_empty_space_cross_product_gap(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — P × L cross-reference density. Total derives count from P
+    // nodes; if the mean derives-per-node is below 1.0, the P-L surface is
+    // sparse (= many P nodes have no L children), candidate for connectivity audit.
+    let p_n = len(view.p_nodes)
+    if p_n == 0 { return empty_candidate_list() }
+    let mut total_derives = 0
+    let mut i = 0
+    while i < p_n {
+        total_derives = total_derives + len(view.p_nodes[i].edges.derives)
+        i = i + 1
+    }
+    if total_derives >= p_n { return empty_candidate_list() }  // mean ≥ 1.0 = healthy
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "empty_space.cross_product_gap.sparse_derives",
+        family: "empty_space",
+        proposed: "atlas P × L cross-product: " + to_string(total_derives) + " total `->` derives from " + to_string(p_n) + " P nodes (mean < 1.0/node). P-L surface is sparse — candidate for derives enrichment.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_empty_space_zero_coverage_quadrant(view: AtlasView) -> array {
     return empty_candidate_list()
@@ -329,7 +350,29 @@ pub fn lens_apply_counterexample_mine_n7_break(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_counterexample_mine_n5_break(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — n=5 (lower-neighbour) raw-text scan. Mirror of n7_break;
+    // P raw with "= 5" pattern (sopfr=5 et al.) is a candidate pool for
+    // n=5 lattice falsification (does the relation hold one step below n=6?).
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("= 5") >= 0 || raw.index_of("=5") >= 0 { hits = hits + 1 }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "counterexample_mine.n5_break.lower_neighbour",
+        family: "counterexample_mine",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes reference '= 5' in raw (n=5 lower-neighbour). Candidate pool for n=5 falsification — does the identity hold one step below n=6?",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_counterexample_mine_scale_break(view: AtlasView) -> array {
     return empty_candidate_list()
@@ -421,7 +464,29 @@ pub fn lens_apply_scale_extrapolate_dim_2d_to_3d(view: AtlasView) -> array {
 }
 
 pub fn lens_apply_constraint_flip_flip_sign(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — negative-constant raw scan. P raw with " -" prefixed
+    // numbers (e.g. "-1", "-12") are candidates for sign-flip
+    // hypothesis: would the relation survive with opposite sign?
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("= -") >= 0 || raw.index_of("=-") >= 0 { hits = hits + 1 }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "constraint_flip.flip_sign.negative_constants",
+        family: "constraint_flip",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry '= -' (negative-constant assignment) in raw. Candidate pool for sign-flip survival test.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_constraint_flip_flip_ordering(view: AtlasView) -> array {
     return empty_candidate_list()
