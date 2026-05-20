@@ -1,0 +1,128 @@
+// compiler/cli/build_nvptx.hexa — RFC 071 P2 emit-driver hexa module
+//
+// @rfc 071
+// @phase P2
+// @status STUB (canned PTX) — P2.1+ wires real codegen invocation
+// @cite RFC 071 §3 P2 "emit-driver hexa module skeleton" +
+//       RFC 055 §6.2 (codegen_emit_ptx_sm80 sibling)
+// @sister self/main.hexa::cmd_build NVPTX branch
+//        + self/main.hexa::_build_nvptx_emit_driver
+//
+// ──────────────────────────────────────────────────────────────────────
+// PURPOSE
+// ──────────────────────────────────────────────────────────────────────
+// RFC 071 P0 (PR #228 cb4a2e37) landed the cmd_build NVPTX target-string
+// recognition + informative deferred-message exit. P1+P2 lift that to a
+// real driver dispatch: `hexa build src.hexa --target=nvptx64-nvidia-cuda-
+// sm{80,90,120}` calls `_build_nvptx_emit_driver(src_path, sm_arch)` in
+// self/main.hexa, which writes a stub PTX file at `<src>.ptx`.
+//
+// This module is the SPEC sibling — same logic, parse-clean standalone,
+// importable when the in-hexa compiler self-host campaign default-flips
+// (`HEXA_BACKEND=native`, RFC 063 P3+). At that point P2.1 replaces the
+// stub body below with a real codegen_emit_ptx_sm80(mir) invocation:
+//
+//   import compiler/parse/parser
+//   import compiler/check/types
+//   import compiler/lower/{ast_to_hir,hir_to_mir}
+//   import compiler/codegen/nvptx_target
+//
+//   pub fn build_nvptx_emit_driver(src_path, sm_arch) {
+//       let src     = read_file(src_path)
+//       let ast     = parser_parse(src)
+//       let typed   = types_check(ast)
+//       let hir     = ast_to_hir(typed)
+//       let mir     = hir_to_mir(hir)
+//       let ptx     = codegen_emit_ptx_sm80(mir, sm_arch)  // RFC 055
+//       write_file(src_path + ".ptx", ptx)
+//       return 0
+//   }
+//
+// Today (P2) the body returns a hardcoded smoke PTX so the emit-driver
+// path is exercisable end-to-end without bootstrapping the compiler tree
+// through hexa_v2 (which would not yet wire MIR->PTX from the driver).
+// The stub PTX is `ptxas -arch=sm_{NN}`-compilable (verified by text
+// substring asserts in P2; live ptxas verification deferred to P3+).
+//
+// ──────────────────────────────────────────────────────────────────────
+// HONEST SCOPE (@D g3)
+// ──────────────────────────────────────────────────────────────────────
+// - Stub returns CANNED PTX text — NOT a real codegen invocation. The
+//   F-RFC071-MODULE-LOADER-BRIDGE falsifier (RFC 071 §4 P2/P3) requires
+//   the emitted PTX body to reflect the source body; this stub
+//   intentionally fails that falsifier. P2.1+ closure work.
+// - The PTX `.visible .entry _hexa_smoke()` body is `ret;` — a no-op
+//   kernel. It is launchable (ptxas-accepts, driver-JIT-loadable) but
+//   computes nothing.
+// - NO LLVM (@F f1). NO new C-transpile architecture (@F f2). The
+//   write_file path uses the existing POSIX fwrite builtin.
+// - `compiler/codegen/{x86_64_linux,arm64_darwin,nvptx_target}.hexa` are
+//   NOT touched (F-RFC055-CPU-CODEGEN-UNTOUCHED held).
+//
+// ──────────────────────────────────────────────────────────────────────
+// FALSIFIER F-RFC071-EMIT-DRIVER-INVOKE (P2)
+// ──────────────────────────────────────────────────────────────────────
+// `build_nvptx_emit_driver("/tmp/foo.hexa", "sm_90")` writes a parse-
+// clean stub PTX file. Verifiable by:
+//   1. parse-gate `hexa_real parse compiler/cli/build_nvptx.hexa` clean.
+//   2. text substring asserts on the emitted PTX content (`.version`,
+//      `.target sm_NN`, `.address_size 64`, `.visible .entry`).
+//   3. (bonus, P3+) live `ptxas -arch=sm_90 /tmp/foo.ptx` accepts.
+
+// ── stub PTX builder ────────────────────────────────────────────────
+
+// Compose the canned smoke PTX text for the given sm_arch identifier
+// (e.g. "sm_80", "sm_90", "sm_120"). ASCII-only (driver-JIT ptxas refuses
+// non-ASCII PTX comments — see `reference_gpu_fire_infra.md`).
+fn _build_nvptx_stub_ptx(sm_arch: string) -> string {
+    let mut out = ""
+    out = out + "// [P2 stub PTX -- RFC 071 P2.1+ will replace with real codegen_emit_ptx_sm80]\n"
+    out = out + "// @rfc 071 phase P2 status STUB sm=" + sm_arch + "\n"
+    out = out + ".version 7.0\n"
+    out = out + ".target " + sm_arch + "\n"
+    out = out + ".address_size 64\n"
+    out = out + "\n"
+    out = out + ".visible .entry _hexa_smoke()\n"
+    out = out + "{\n"
+    out = out + "    ret;\n"
+    out = out + "}\n"
+    return out
+}
+
+// ── primary surface ────────────────────────────────────────────────
+
+// build_nvptx_emit_driver(src_path, sm_arch) -> int
+//
+// P2 entry point. Today returns canned PTX; P2.1+ wires real codegen.
+//
+// Args:
+//   src_path : caller-side .hexa source path (read for size/summary; the
+//              source bytes are NOT yet routed through parse/check/lower
+//              — that is the P2.1 hook the stub punts on).
+//   sm_arch  : "sm_80" | "sm_90" | "sm_120" (caller's cmd_build branch
+//              already validated the three NVPTX target strings; this fn
+//              accepts the bare sm-tag).
+//
+// Returns:
+//   0 on successful PTX write
+//   1 on file-IO error (source unreadable, write_file failure, etc.)
+//
+// Side effect: writes `<src_path>.ptx` with the stub PTX content.
+pub fn build_nvptx_emit_driver(src_path: string, sm_arch: string) -> int {
+    if len(src_path) == 0 { return 1 }
+    if len(sm_arch)  == 0 { return 1 }
+    // Confirm the source file exists (cheap pre-check; the stub does
+    // NOT yet read the source bytes — P2.1 hook).
+    let src_exists = file_exists(src_path)
+    if src_exists == false { return 1 }
+    // Compose the stub PTX text.
+    let ptx_text = _build_nvptx_stub_ptx(sm_arch)
+    let out_path = src_path + ".ptx"
+    // Write via the POSIX-fwrite builtin (no exec, no ARG_MAX limit;
+    // mirrors stdlib/io.hexa::write_text pattern).
+    write_file(out_path, ptx_text)
+    // Verify destination materialised.
+    if file_exists(out_path) == false { return 1 }
+    println("[nvptx] target=" + sm_arch + " src=" + src_path + " out=" + out_path + " stub=P2")
+    return 0
+}

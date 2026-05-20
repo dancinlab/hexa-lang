@@ -1,0 +1,7 @@
+RFC 070 P1 hex-neighbor smoke
+  device: NVIDIA GeForce RTX 5070 (sm_120)
+  driver: 13000
+  grid: 8x8 = 64 cells, 1 block, 64 threads
+F-RFC070-HEX-NEIGHBOR-NUMERIC PASS -- max|d|=0 mismatches=0/64
+  out[0..15]: 18 23 30 37 44 51 58 63 58 63 70 77 84 91 98 103 
+  ref[0..15]: 18 23 30 37 44 51 58 63 58 63 70 77 84 91 98 103 

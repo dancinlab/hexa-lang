@@ -2639,3 +2639,245 @@ sequentially:
 - SD13 (renumbered from SD9-era "SD10"): more rules — Sum,
   MatMul AST-derived, Compose, elementwise unary family
   (silu, gelu, tanh).
+
+### 진행 로그 — RFC 072 P0 scaffold (d=4096 GPT-3 class benchmark) (2026-05-20)
+
+**Branch**: `rfc072-flame-d4096-scaffold`. **Shape-B per @D g_inbox_processing_loop**
+(RFC + scaffold; zero behavior change). **TaskList #37 Campaign B P0**.
+
+**Landed**:
+- `inbox/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md` —
+  Shape-B RFC; spec (d=4096 · n_layer=24 · seq_len=2048 · batch=8 —
+  GPT-3 6.7B d_model axis per Brown 2020 Table 2.1); 4 falsifiers
+  (F-RFC072-WALL-PT · F-RFC072-WALL-FLAME · F-RFC072-RATIO <1.0 ·
+  F-RFC072-VARIANCE std<5%); 5-phase plan (P0 scaffold $0 → P1 harness
+  $0 → P2 flame fire $1–3 → P3 PT baseline $1–3 → P4 variance+ratio
+  $1–5); g3 honest scope (single shape, NOT general PyTorch replacement,
+  closure flips one GPU.md §10 row only); cross-link to north-star ①,
+  GPU.md §5m measured wins ledger, RFC 067 multi-tile cp.async potential
+  sub-blocker.
+- `stdlib/flame/bench/d4096.hexa` — parse-clean stub (~80 lines). Shape
+  constants as `fn d4096_d_model() -> int { return 4096 }` etc. (avoids
+  script-body `let` ambiguity at module top-level). Stub
+  `pub fn bench_d4096_step1_wall(precision: string) -> float` returns
+  0.0 with explicit TODO P1+ markers locating future work. NO library
+  imports yet (deferred to P1 — zero behavior change contract).
+- `GPU.md` §10 row "flame d=4096 GPT-3 class beats PyTorch eager"
+  annotated with RFC 072 P0 scaffold cross-link; row stays `[ ]` until
+  F-RFC072-RATIO PASSes.
+- This PLAN entry (@D g_plan_consolidation exception clause — flame-domain
+  log stays in `stdlib/flame/PLAN.md`, not `compiler/PLAN.md`).
+
+**Parse-gate**: `/Users/ghost/.hx/bin/hexa_real parse stdlib/flame/bench/d4096.hexa`
+→ `OK: parses cleanly` rc=0.
+
+**g3-honest summary**: P0 = scaffold + spec only. No measurement performed.
+GPU.md §10 closure scoreboard stays at 6/8 ✅ (RFC 072 row remains `[ ]`).
+Multi-session campaign because variance gate needs ≥ 3 fires per arm
+(~$5–20 aggregate budget across P2+P3+P4), PyTorch baseline setup needs
+its own cycle (pinned torch + grad-checkpoint config), and flame d=4096
+may need RFC 067 multi-tile cp.async integration that has not yet landed
+in the perf kernel (GPU.md §5m note). The campaign is now pre-registered
+with explicit pass/fail gates rather than ad-hoc fire-and-measure —
+g3 over-claim 0.
+
+**Cross-link**: north-star ① (NN stack) · GPU.md §10 closure scoreboard ·
+GPU.md §5m measured wins · memory `project_flame_phase4d9_closure`
+(d=768 seed) · memory `project_flame_general_pytorch_replacement_goal`
+(north-star) · memory `reference_gpu_fire_infra` (RTX 5070 ubu-2 fire
+substrate) · @D g3 (honest scope) · @D g_inbox_processing_loop Shape-B.
+
+### 2026-05-20 — SD11 ag_extract — compile-and-run round-trip (north-star ① autograd primitive · AD pipeline END-TO-END for relu)
+
+**SD11 closes the AD loop end-to-end for the simplest case**: the SD5
+relu walker output is no longer just an inspectable string — it is
+WRITTEN to `/tmp/sd11_relu_bwd.hexa` (with an argv-driven `fn main()`
+wrapper), COMPILED via `hexa.real build` (the canonical hexa-native
+toolchain verb, n1 of AGENTS.tape), EXECUTED 32× for LCG-seeded
+(x, dy) pairs, and the parsed output is BYTE-EQ to both the in-process
+AST-interpret reference and the hand-derived `if x > 0 then dy else 0`
+closed form. The measured proof:
+
+```
+three-way max|Δ| across 32 input pairs (LCG seeds 4242 / 31337):
+  interp   vs compiled : 0.0
+  interp   vs hand     : 0.0
+  compiled vs hand     : 0.0
+```
+
+**Falsifier F-RFC043-AUTOGRAD-AUTO-SD11-COMPILE-RUN-BYTE-EQ PASS**.
+
+**Why this matters (north-star ①)**: SD5..SD10 all in-process
+interpret the walker output. The emit step prints hexa source for
+inspection but never runs through the actual compiler. SD11 is the
+END-TO-END proof — source-to-source AD really produces compilable,
+runnable hexa source. The relu vjp's emitted text
+`return (if (x > 0.0) { dy } else { 0.0 })` is no longer "looks like
+hexa source"; it IS hexa source that the toolchain accepts and runs.
+
+**Implementation (surgical · 1 helper + 1 test + this PLAN entry)**:
+- `stdlib/flame/ag_extract.hexa::ag_extract_emit_program_x_dy(arena, bwd_root, fn_name) -> string`
+  emits the bwd fn (via existing `ag_extract_emit_fn`) PLUS an
+  `fn main()` wrapper that reads `argv[1]` / `argv[2]` as floats,
+  calls the emitted fn, prints `json_stringify(dx)` (the
+  shortest-roundtrip codec; runtime_core.c::_shortest_double — loops
+  1..17 digit `%g` checking strtod round-trip on each).
+- `test/flame_ag_extract_sd11_compile_test.hexa` orchestrates the
+  loop: walker → emit → `write_file` → `exec("hexa.real build ...")`
+  with `__RC=$?` sentinel parsing → 32× compiled-binary exec → parse
+  output → three-way byte-eq (interp vs compiled vs hand).
+- Resolves `hexa.real` via 3-tier fallback ($HEXA_LANG/hexa.real →
+  $HOME/.hx/bin/hexa_real → /Users/ghost/core/hexa-lang/hexa.real)
+  so the test runs from worktrees and main repo alike.
+
+**Two non-obvious lessons (recorded so SD12 doesn't relearn)**:
+
+1. **`exec_capture` two-pipe drain hang**. The runtime's exec_capture
+   (runtime.c:6971) uses an alternating-blocking-read drain
+   (`read(stdout_pipe)` then `read(stderr_pipe)`). For a child that
+   writes ~2 KB to stdout and zero to stderr (typical `hexa.real build`
+   output), the parent blocks on `read(stderr_pipe)` until the child
+   closes stderr — which only happens at exit. If the child writes
+   more than ~64 KB to stdout, the kernel pipe buffer fills, the
+   child blocks on `write(stdout)`, and we deadlock. SD11 uses
+   `exec()` (popen-backed, single combined pipe via `2>&1`) plus
+   `; echo __RC=$?` for out-of-band exit-code surfacing. Mirrors the
+   `stdlib/xeno/scripts/akida/nexus_origin/runner.hexa::_exec_capture`
+   idiom (label: "exec → __RC=N trailer parse"). exec_capture is
+   safe for trivial commands (the SD11 sanity test of
+   `echo out; echo err 1>&2; exit 3` works) but unsafe for heavy
+   build subprocesses with one-sided output.
+
+2. **`to_string` for float is `%g` 6-digit (lossy round-trip)**.
+   `runtime_core.c:5078` uses `snprintf("%g")` with the default
+   precision = 6 significant digits. `to_string(0.479429283).to_float()`
+   re-parses as `0.479429` — round-trip loses ~1e-7 precision and
+   broke an early SD11 draft's byte-eq (measured max|Δ| = 4.62e-07).
+   The runtime DOES have a round-trip safe printer
+   (`_shortest_double`, runtime.c:7909, "shortest %g-form decimal
+   that strtod-round-trips to the same double") — it is reachable
+   through `json_stringify`. SD11 emit uses `json_stringify(dx)` for
+   the print and the harness uses `json_stringify(x)` /
+   `json_stringify(dy)` for argv construction; `.to_float()`
+   (strtod-backed) reverses it byte-for-byte. **Pattern for SD12+**:
+   when any future SD's compile-and-run loop needs lossless float
+   round-trip, use `json_stringify` not `to_string`.
+
+**Honest scope (g3, after SD11 closed)**:
+- SD11 PROVED: the walker-emit-compile-run round-trip works for the
+  simplest vjp shape (relu, single Param, pure conditional, no
+  Var_FwdResult, no Var_Upstream). Three-way byte-eq across 32
+  inputs gives a measured guarantee that the emitted source is real
+  hexa code, not just inspectable text.
+- SD11 did NOT prove: multi-input compile-and-run (needs
+  `ag_extract_emit_program_xy` shape — argv reads 3 floats x/y/dy
+  and the harness coordinates 2 binaries, one per direction); the
+  fwd-cache materialisation pattern for `Var_FwdResult`-using
+  emits (SD6 sigmoid, SD7 multi-use, SD10 sigmoid-div all reference
+  `_fwd<N>` symbols that would be unresolved if recompiled — the
+  emitted source for these would need either fwd-recomputation or a
+  shared fwd_cache farr passed through argv); parser integration
+  (SD8). All deferred to SD12+.
+
+**SD1..SD10 regression check (measured 2026-05-20)**:
+- `test/flame_ag_derive_test.hexa` PASS rc=0 (SD1 matmul, SD2 add,
+  SD3 silu_gate — all byte-eq, max|Δ| = 0.0).
+- `test/flame_ag_extract_test.hexa` rc=0 (SD5 PASS, SD6 HONEST
+  5.55e-17, SD7 PASS, SD9 PASS both, SD10 HONEST 5.55e-17 / 1.11e-16
+  — all expected per the existing oracle gates).
+- The ag_extract.hexa edit is additive only: new public function
+  `ag_extract_emit_program_x_dy`; SD5/SD6/SD7/SD9/SD10 surfaces and
+  internals untouched.
+
+**Atlas citations** (g6, in `ag_extract.hexa` SD11 header):
+- Griewank & Walther §3.2 Algorithm 3.6 — reverse-mode emit (the
+  emitted source is the literal output of the reverse walker; SD11
+  closes the loop by recompiling that source through the standard
+  toolchain).
+- Steele & White 1990 "How to print floating-point numbers
+  accurately" — 17 decimal digits suffice for binary64 round-trip;
+  the runtime's `_shortest_double` is the shortest-representation
+  variant (also Steele & White; reachable via json_stringify).
+
+**Future-cycle stop-conditions (g3 carve-outs, after SD11 closed)**:
+- SD8: parser integration (still future-work).
+- SD12: multi-input compile-and-run (`ag_extract_emit_program_xy`
+  helper · 3-arg argv reader · two-binary harness; fwd-cache
+  materialisation for `_fwd<N>` references in sigmoid/multi-use/
+  sigmoid-div compile paths).
+- SD13: per-Param accumulator dict (single-pass alternative to
+  SD9/SD10's per-Param-call shape).
+- SD14 (renumbered from SD13 / SD9-era "SD10"): more rules — Sum,
+  MatMul AST-derived, Compose, elementwise unary family
+  (silu, gelu, tanh).
+
+
+### 진행 로그 — RFC 072 P1 PyTorch eager PROXY baseline (d=4096 GPT-3 class benchmark Campaign B) (2026-05-20)
+
+**Branch**: `rfc072-p1-torch-d2048-proxy`. **Shape-A (surgical baseline tool +
+3 doc updates) per @D g_inbox_processing_loop**. **TaskList #41 Campaign B P1**.
+
+**Landed**:
+- `tool/r072_p1_torch_eager_d2048_proxy.py` — PyTorch eager baseline tool
+  (~250 lines). 5-rung ladder fallback (L1 task-spec → L5 d=1024 6L) for
+  OOM-on-12GB. Adam, FP32, eager (no flash-attn, no torch.compile),
+  cudnn.benchmark=False. 3 warmup + 5 timed via `torch.cuda.Event` +
+  `synchronize()`. Per @D f1/f2: PyTorch is BASELINE reference (g3 honest
+  comparator), NOT hexa codegen — hexa-native-only rule does not apply
+  to the reference arm.
+- `inbox/fires/rfc072_p1_torch_d2048_proxy_2026_05_20/{result.json,fire.log}`
+  — fire artifacts. Chosen rung **L4: d=1024 n_layer=12 batch=2 seq=512**.
+  Measured median 1-step wall **116.286 ms** (std 0.104 ms = **0.089 %**
+  of median — well under 5 % F-RFC072-VARIANCE gate). Peak VRAM
+  5,059.8 MiB. Host: `summer-B650M-K` · RTX 5070 sm_120 · torch
+  2.11.0+cu130 · CUDA 13.0.
+- `inbox/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md` — §3.P1
+  section added with full measurement table + per-falsifier status. §7
+  phasing table updated (P1 ✅ PROXY measured · P1-full deferred to H100
+  cycle). §1 status line updated.
+- `GPU.md` §5m measured-wins ledger — new row "PyTorch eager d=1024 12L
+  FP32 PROXY baseline on RTX 5070" with 116.286 ms median + honest scope
+  caveat. §10 closure row for d=4096 — annotated with P1 PROXY result;
+  row stays `[ ]` until full-spec F-RFC072-RATIO PASSes.
+
+**Hardware-fit finding (P1's main load-bearing discovery)**:
+RTX 5070 12 GB **cannot fit** the RFC 072 §2 spec (d=4096 n_layer=24
+batch=8 seq=2048 FP32) on PyTorch eager. Even **d=2048 n_layer=12
+batch=1 seq=512** OOMs. Root cause: 50,257-token embedding + LM-head
+matrices at d=2048 weigh ~0.82 GiB each (FP32), and Adam triples that
+(weight + m + v) → ~5 GiB fixed overhead for the embed/head pair alone
+before any block activation lands. At d=2048 12L the remaining ~6 GiB
+of VRAM cannot hold attention/FFN forward+backward+Adam state even for
+batch=1 seq=512. **Implication**: the d=4096 24L full-spec PyTorch
+baseline measurement (F-RFC072-WALL-PT-FULL) MUST escalate to H100 80GB
+on RunPod. Cost envelope ~$5/hr · ~1-hr fire = ~$5–10 (multi-session
+$5–20 aggregate per RFC 072 §5).
+
+**Parse-gate**: not applicable (P1 deliverable is .py + .json + 3 doc
+updates; no .hexa source touched). `r072_p1_torch_eager_d2048_proxy.py`
+ran end-to-end on ubu-2 (rc=0, verdict=`PASS_PROXY`).
+
+**g3-honest summary**: P1 closed the cheap, $0, ubu-2-only path of the
+RFC 072 campaign — PyTorch eager wall MEASURED at a SCALED-DOWN proxy
+rung (d=1024 12L vs §2's d=4096 24L), and the L4 116.286 ms median
+with 0.089 % variance gives a clean baseline data point for the d=1024
+trajectory (cross-link: memory `project_flame_phase4d9_closure` has the
+d=768 hexa arm at 191–268 s, but that was 30-step total wall not 1-step
+per-step; the d=1024 measurement here is 1-step, so not directly
+comparable yet). The proxy does NOT close GPU.md §10 row — that stays
+`[ ]` until F-RFC072-RATIO at the full d=4096 24L spec PASSes (multi-
+session H100 budget required). The hardware-fit finding (d=4096 24L
+needs H100, not consumer 12 GB) is the load-bearing P1 deliverable
+for planning the next campaign phase. No claim that flame is faster
+or slower at d=4096; no claim that the d=1024 trajectory generalizes
+to d=4096; no over-claim 0.
+
+**Cross-link**: north-star ① (NN stack) · GPU.md §10 closure scoreboard ·
+GPU.md §5m measured wins (new d=1024 12L row) · RFC 072 §3.P1 · memory
+`project_flame_phase4d9_closure` (d=768 seed) · memory
+`project_flame_general_pytorch_replacement_goal` (north-star · gap (c)
+shape-sweep — this P1 is a tiny step on (c)) · memory
+`reference_gpu_fire_infra` (RTX 5070 ubu-2 substrate $0 · H100 escalation
+path for P1-full) · @D g3 (honest scope — PROXY-vs-full-spec caveat
+explicit at every site) · @D f1/f2 (PyTorch baseline reference exception
+to hexa-native-only · CITED).

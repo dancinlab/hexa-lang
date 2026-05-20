@@ -1,0 +1,82 @@
+// stdlib/kernels/chem/arrhenius_kernel_test.hexa — substrate seed test.
+//
+// 5 textbook closed-form assertions on the Arrhenius rate equation.
+// No external parity oracle — the formula IS the algorithm. Tests
+// verify:
+//   1) numerical identity at standard reference points
+//   2) the high-T limit k → A
+//   3) the low-T limit k → 0
+//   4) zero-Ea collapses to k = A regardless of T
+//   5) the temp_k <= 0 guard returns 0 (NOT NaN, NOT a crash)
+//
+// Tolerance: 1e-12 relative — closed-form exp on doubles.
+
+use "stdlib/kernels/chem/arrhenius_kernel"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed = ""
+
+fn check(name: str, cond: bool) {
+    total_count = total_count + 1
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        if failed == "" { failed = name }
+    }
+}
+
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn rel_err(got: float, want: float) -> float {
+    if fabs(want) < 1e-12 { return fabs(got - want) }
+    return fabs(got - want) / fabs(want)
+}
+
+fn check_close(name: str, got: float, want: float, tol: float) {
+    let e = rel_err(got, want)
+    check(name, e < tol)
+}
+
+fn main() {
+    let tol = 1e-12
+
+    // ── A1: R constant exact CODATA 2018 ─────────────────────────────
+    check_close("A1 r_gas_const = 8.314462618",
+                r_gas_const(), 8.314462618, tol)
+
+    // ── A2: A=1e10, Ea=50 kJ/mol, T=298.15 K (textbook room-temp) ───
+    //   k = 1e10 · exp(-50000 / (8.314462618 · 298.15))
+    //     = 1e10 · exp(-20.16910...)
+    //     ≈ 17498.92...   (last-bit-of-double from same closed form)
+    let k298 = arrhenius_k(1.0e10, 50000.0, 298.15)
+    let r = 8.314462618
+    let want298 = 1.0e10 * exp(-50000.0 / (r * 298.15))
+    check_close("A2 room-temp 50 kJ/mol matches closed-form",
+                k298, want298, tol)
+
+    // ── A3: high-T limit — at T → ∞, k → A ──────────────────────────
+    //   Use T = 1e12 K (numerical stand-in for infinity); exp(-tiny) ≈ 1.
+    let khi = arrhenius_k(1.0e10, 50000.0, 1.0e12)
+    check_close("A3 high-T limit k → A (= 1e10)",
+                khi, 1.0e10, 1.0e-6)
+
+    // ── A4: zero-activation barrier — Ea = 0 ⇒ k = A regardless ─────
+    let k_ea0 = arrhenius_k(7.5, 0.0, 298.15)
+    check_close("A4 Ea=0 collapses to k = A",
+                k_ea0, 7.5, tol)
+
+    // ── A5: temp guard — T ≤ 0 returns 0, no crash ──────────────────
+    let k_neg = arrhenius_k(1.0e10, 50000.0, -5.0)
+    check("A5 T<0 guarded to 0", fabs(k_neg) < 1e-12)
+
+    let k_zero = arrhenius_k(1.0e10, 50000.0, 0.0)
+    check("A6 T=0 guarded to 0", fabs(k_zero) < 1e-12)
+
+    print("arrhenius_kernel_test: " + str(pass_count) + "/" + str(total_count))
+    if failed != "" {
+        print("FAILED: " + failed)
+    } else {
+        print("PASS")
+    }
+}

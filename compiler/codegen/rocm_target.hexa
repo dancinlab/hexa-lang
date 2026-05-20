@@ -1,0 +1,164 @@
+// HEXA Native Compiler — Codegen / ROCm (hexa-src → HIP-IL)  [RFC 075 P0 scaffold]
+//
+// @version 0.0.1
+// @capabilities [pure]
+//
+// ─────────────────────────────────────────────────────────────────────
+// SCAFFOLD ONLY — RFC 075 P0 (multi-vendor codegen). Zero behavior
+// change.
+//
+// This file is a STRUCTURAL SKELETON for the hexa-native AMD GPU codegen
+// target. It PARSES CLEAN but is NOT wired into the compiler's target
+// dispatch — nothing routes MIR here. The `codegen_emit_rocm_il` entry
+// is an honest stub returning `""`. Real instruction emit + classifier
+// + silicon fire are P1..P4 (multi-session per RFC 075 §4).
+//
+// Mirror of `compiler/codegen/nvptx_target.hexa` (RFC 055 Stage 1)
+// at the same scaffold-only state. The two siblings will diverge
+// only in their target enum constants and opcode tables; the lowering
+// shape (MIR → text via virtual-register-named operands) is reused.
+//
+//   pub fn codegen_emit_rocm_il(module: MModule) -> string
+//
+// Mirrors `codegen_emit_ptx_sm80` signature: MIR module in, HIP-IL
+// text out. P0 stub returns `""` (P0 placeholder asserted by
+// `rocm_lower_test.hexa`).
+//
+// ─────────────────────────────────────────────────────────────────────
+// HONEST SCOPE (RFC 075 §6 / @D g3)
+//
+//   IS  — target enum constants (gfx-rev), opcode/mnemonic table stubs
+//         for the HIP-IL vec-add tier, empty emit entry point.
+//   NOT — a working backend. No HIP-IL is emitted. No `@gpu_kernel`
+//         is routed here. `hipcc` is never invoked. AMD silicon never
+//         fires. Nothing in the compiler dispatches to these stubs.
+//
+// `hipcc` (HIP-IL → AMD GCN code object) is an external AMD assembler —
+// the same g5 logic as NVPTX's `ptxas` and the CPU-fallback `clang`/`as`
+// path (RFC 055 §8 mirrored to RFC 075). This file does not claim a
+// closed-loop AMD GPU toolchain.
+//
+// ─────────────────────────────────────────────────────────────────────
+// CITATIONS (not lattice-derived, per @D f1)
+//
+// gfx-rev names are AMD hardware facts cited from the ROCm LLVM/Clang
+// target documentation. HIP-IL mnemonics (`v_add_f64`, `s_load_dword`,
+// `s_endpgm` etc.) are AMD GCN vector/scalar instruction set fact.
+//   ref: AMD GCN3 ISA — https://developer.amd.com/wordpress/media/2013/12/AMD_GCN3_Instruction_Set_Architecture_rev1.1.pdf
+//   ref: AMD RDNA3 ISA — https://www.amd.com/system/files/TechDocs/rdna3-shader-instruction-set-architecture.pdf
+//   ref: ROCm HIP — https://rocm.docs.amd.com/projects/HIP/
+// ─────────────────────────────────────────────────────────────────────
+
+import "../ir/mir.hexa"
+import "../ir/lir.hexa"
+
+// ── LModule target tags ───────────────────────────────────────
+//
+// The `LModule.target` value an AMD-compiled module would carry. RDNA3
+// generation (gfx1100 = Radeon 7900 XTX, gfx1101 = Radeon 7800 XT-class,
+// gfx1102 = Radeon 7700 XT-class) is the conservative baseline for the
+// scaffold. RDNA2 (gfx10*) and CDNA (gfx90a / MI series) are P1+ work.
+pub let ROCM_TARGET_GFX1100: string = "amdgcn-amd-amdhsa-gfx1100"  // RDNA3 — Radeon 7900 XTX class
+pub let ROCM_TARGET_GFX1101: string = "amdgcn-amd-amdhsa-gfx1101"  // RDNA3 — Radeon 7800/7700-class
+pub let ROCM_TARGET_GFX1102: string = "amdgcn-amd-amdhsa-gfx1102"  // RDNA3 — Radeon 7700 XT-class
+
+// Architecture string per variant (the `-mcpu=` arg `hipcc` accepts).
+pub let ROCM_ARCH_GFX1100: string = "gfx1100"
+pub let ROCM_ARCH_GFX1101: string = "gfx1101"
+pub let ROCM_ARCH_GFX1102: string = "gfx1102"
+
+// ── HIP-IL address spaces (AMD memory hierarchy) ──────────────
+//
+// AMD GCN has its own address-space naming, structurally equivalent to
+// PTX state spaces but vendor-specific (RFC 075 §3 table row).
+pub let ROCM_SPACE_GLOBAL: string   = "global"     // device DRAM — kernel args
+pub let ROCM_SPACE_LOCAL: string    = "local"      // per-workgroup scratchpad (≈ PTX shared)
+pub let ROCM_SPACE_CONSTANT: string = "constant"   // read-only constant bank
+pub let ROCM_SPACE_PRIVATE: string  = "private"    // per-work-item spill (≈ PTX local)
+pub let ROCM_SPACE_REGION: string   = "region"     // GDS — global data share
+
+// ── HIP-IL special registers (workgroup hierarchy) ────────────
+//
+// AMD's analog of PTX special registers. The thread / workgroup / grid
+// indices a kernel reads. Lowered via scalar/vector mov from the named
+// sreg / vreg (RFC 075 P1 — table populated in P1, not P0).
+pub let ROCM_SREG_WORKITEM_ID: string  = "workitem_id"   // ≈ %tid
+pub let ROCM_SREG_WORKGROUP_ID: string = "workgroup_id"  // ≈ %ctaid
+pub let ROCM_SREG_GRID_SIZE: string    = "grid_size"     // ≈ %nctaid
+pub let ROCM_SREG_GROUP_SIZE: string   = "group_size"    // ≈ %ntid
+
+// AMD hardware fact: a wavefront is 32 threads on RDNA (vs 64 on GCN/CDNA).
+// gfx1100+ defaults to wave32. Cited constant, not derived from n=6.
+//   ref: AMD RDNA3 ISA §1.3
+pub let ROCM_WAVE_SIZE_RDNA: i64 = 32
+pub let ROCM_WAVE_SIZE_CDNA: i64 = 64
+
+// ── HIP-IL FP64 arithmetic mnemonics (vec-add tier — RFC 075 P3) ──
+//
+// Vector-add tier opcode stubs. RFC 075 P1 fills in the full FP64
+// arithmetic subset; P0 lands the minimum set the smoke can name-check.
+pub let ROCM_OP_S_LOAD_DWORDX2: string = "s_load_dwordx2"   // scalar load (64-bit kernel arg)
+pub let ROCM_OP_GLOBAL_LOAD_B64: string = "global_load_b64" // vector load FP64 from global
+pub let ROCM_OP_GLOBAL_STORE_B64: string = "global_store_b64" // vector store FP64 to global
+pub let ROCM_OP_V_ADD_F64: string      = "v_add_f64"         // vector FP64 add
+pub let ROCM_OP_V_MUL_F64: string      = "v_mul_f64"         // vector FP64 multiply
+pub let ROCM_OP_V_FMA_F64: string      = "v_fma_f64"         // vector FP64 FMA
+pub let ROCM_OP_S_ENDPGM: string       = "s_endpgm"          // end-of-program
+
+// ── HIP-IL function-kind directives ───────────────────────────
+//
+// AMD's analog of PTX `.visible .entry` / `.func`. AMDHSA marks
+// kernels via the `.amdhsa_kernel` directive in the ELF code object.
+pub let ROCM_DIRECTIVE_KERNEL: string = ".amdhsa_kernel"
+pub let ROCM_DIRECTIVE_TEXT: string   = ".text"
+
+// RocmOpEntry — one row of the informational HIP-IL opcode table.
+// Mirrors the per-target opcode-table pattern (RFC 055 §3 / lir.hexa).
+pub struct RocmOpEntry {
+    mnemonic: string,    // HIP-IL mnemonic, e.g. "v_add_f64"
+    arity: i64,          // operand count
+    space: string,       // address space if memory op, "" otherwise
+    note: string         // human-readable role
+}
+
+// _rocm_op_entry — RocmOpEntry constructor.
+fn _rocm_op_entry(mnemonic: string, arity: i64, space: string, note: string) -> RocmOpEntry {
+    return RocmOpEntry {
+        mnemonic: mnemonic,
+        arity: arity,
+        space: space,
+        note: note
+    }
+}
+
+// rocm_fp64_slice_ops — the FP64-arithmetic-subset opcode table for the
+// RFC 075 first implementable slice. P0 lands the stub set; P1 fills in
+// the full subset matching `ptx_fp64_slice_ops`.
+pub fn rocm_fp64_slice_ops() -> [RocmOpEntry] {
+    let mut t = []
+    // TODO RFC 075 P1 — fill out matching ptx_fp64_slice_ops (load/store
+    // global+shared, add/sub/mul/fma, bar.sync analog `s_barrier`).
+    t.push(_rocm_op_entry(ROCM_OP_V_ADD_F64, 3, "", "FP64 vector add (P0 stub)"))
+    t.push(_rocm_op_entry(ROCM_OP_S_ENDPGM, 0, "", "end-of-program (P0 stub)"))
+    return t
+}
+
+// codegen_emit_rocm_il — MIR module -> HIP-IL text.
+//
+// RFC 075 P0 — scaffold stub. Returns `""` honestly: no HIP-IL is
+// emitted. The smoke test (`rocm_lower_test.hexa`) asserts this empty
+// return so the scaffold's structural shape is verified without claiming
+// any real emit.
+//
+// P1+ insertion points:
+//   - TODO RFC 075 P1 — classify locals by HIP-IL register kind (vector
+//     `v[]` vs scalar `s[]`), produce reg-bank declarations.
+//   - TODO RFC 075 P2 — address-space lowering for kernel args via
+//     `s_load_dwordx2` from kernarg + `global_load_b64`.
+//   - TODO RFC 075 P3 — emit real `v_add_f64` for STMT_BINOP("add"),
+//     real `global_store_b64` for STMT_STORE.
+//   - TODO RFC 075 P4 — silicon fire via `hipcc` + AMD GPU pool host.
+pub fn codegen_emit_rocm_il(module: MModule) -> string {
+    // RFC 075 P0 — honest empty return; no HIP-IL emit yet.
+    return ""
+}

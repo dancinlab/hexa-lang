@@ -116,7 +116,17 @@ echo "  [3/5] post-process: s4_flatc_post + builtin sed + runtime.c inline"
 
 # ── stage 4: clang ─────────────────────────────────────────────────
 mkdir -p "$(dirname "$OUT")"
-CL_ERR="$(clang -O1 -arch arm64 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
+# Cycle 43: -dead_strip + -ffunction-sections + -Oz shrinks aprime_cc
+# 55% (2.24 MB → 1.00 MB) and removes 323 unused runtime fns + 36
+# unused libc externs (509 T → 186 · 173 U → 137). S3 fixpoint
+# preserved — same md5 655d6d1fc7da8db4572bf49d03dbcdf8 on falsifier.
+# Cycle 46 (RUNTIME.md Phase 1 Tier-A.1, step-1): _strcmp + _memcmp
+# eliminated (137→135) via `static hxlcl_*` helpers + textual #define
+# override in self/runtime.c above the runtime_core.c include. No
+# -fno-builtin clang flag needed — the #define replaces the names
+# before clang's libcall recognition sees them.
+CL_ERR="$(clang -Oz -arch arm64 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
+    -ffunction-sections -fdata-sections -Wl,-dead_strip \
     -I self -I . "$APPOST" -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
 if [ -n "$CL_ERR" ] || [ ! -x "$OUT" ]; then
     echo "build_aprime: clang failed" >&2

@@ -1,0 +1,340 @@
+// HEXA Native Compiler — RFC 075 P1+P2+P3 / Metal lowering smoke (codegen-only)
+//
+// @version 0.0.2
+// @capabilities [pure]
+//
+// RFC 075 P1+P2+P3 codegen-only smoke. The codegen entry
+// `codegen_emit_metal_msl` now produces real MSL kernel source text
+// when the MIR matches the vec-add shape (STMT_LOAD + STMT_LOAD +
+// STMT_BINOP_ADD + STMT_STORE). Empty / non-vec-add modules continue
+// to return `""` honestly (P0 contract preserved — Case 1 still PASS).
+//
+// Case roster:
+//   Case 1 — P0 empty-module emit returns `""`
+//   Case 2 — target enum + MSL syntax-fragment constants + new P1
+//            kernel-decl / device-pointer / thread-pos constants
+//   Case 3 — F-RFC075-METAL-EMIT-VEC-ADD: synthesize vec-add MIR,
+//            invoke `codegen_emit_metal_msl`, assert emitted string
+//            contains `kernel void`, `device const float*`,
+//            `device float*`, `[[thread_position_in_grid]]`, and
+//            `c[i]` / `a[i]` / `b[i]` substring patterns.
+//   Case 4 — P2 classifier helpers `_metal_local_address_space` /
+//            `_metal_local_precision` return expected defaults for
+//            a kernel-buffer Local and a thread-private Local.
+//
+// Run:
+//   hexa build compiler/codegen/metal_lower_test.hexa -o build/metal_lower_test
+//   ./build/metal_lower_test
+
+import "../ir/mir.hexa"
+import "../ir/lir.hexa"
+import "./metal_target.hexa"
+
+// ── MIR construction helpers (minimum needed for the empty MModule).
+//    P1+ will share the Local/Operand/Stmt helpers shape from
+//    nvptx_lower_test.hexa; P0 only needs an empty module ──
+
+fn _empty_mmodule() -> MModule {
+    return MModule { file: "metal_p0_smoke.hexa", funcs: [], globals: [] }
+}
+
+// ── Text inspection ──────────────────────────────────────────────────
+
+fn _check_empty(ok_in: bool, text: string, label: string) -> bool {
+    if len(text) == 0 { return ok_in }
+    println("  FAIL: " + label + " (expected empty, got " + to_string(len(text)) + " chars)")
+    return false
+}
+
+// ── Case 1 — P0 emit stub returns empty string ───────────────────────
+//
+// The P0 contract: `codegen_emit_metal_msl` is wired to the scaffold and
+// honestly returns `""` until P3 fills in real MSL source text emit.
+// This case verifies (a) the entry is callable, (b) the return type
+// compiles against `string`, (c) the return value matches the P0
+// placeholder. Falsifier F-RFC075-METAL-EMIT-VEC-ADD intentionally
+// FAILS today; that is the point of a stub assertion.
+
+fn _test_p0_empty_emit() -> bool {
+    let mut ok = true
+    let mod_empty = _empty_mmodule()
+    let msl = codegen_emit_metal_msl(mod_empty)
+
+    println("")
+    println("── emitted MSL (RFC 075 P0 empty-emit case) ──")
+    println("  [empty string, length=" + to_string(len(msl)) + "]")
+
+    ok = _check_empty(ok, msl, "P0 stub returns empty string")
+    return ok
+}
+
+// ── Case 2 — target enum + MSL syntax-fragment constants verified ────
+//
+// Sanity-checks the Apple-GPU target tags and the MSL syntax fragments
+// land at their documented strings. In P1 this evolves into
+// F-RFC075-METAL-TARGET-ACCEPT.
+
+fn _test_target_constants() -> bool {
+    let mut ok = true
+    if METAL_TARGET_APPLE_GPU != "air64-apple-macos-applegpu" {
+        println("  FAIL: METAL_TARGET_APPLE_GPU mismatch (got '" + METAL_TARGET_APPLE_GPU + "')")
+        ok = false
+    }
+    if METAL_SIMD_GROUP_SIZE != 32 {
+        println("  FAIL: METAL_SIMD_GROUP_SIZE expected 32, got " + to_string(METAL_SIMD_GROUP_SIZE))
+        ok = false
+    }
+    if METAL_KW_KERNEL != "kernel" {
+        println("  FAIL: METAL_KW_KERNEL expected 'kernel', got '" + METAL_KW_KERNEL + "'")
+        ok = false
+    }
+    if METAL_SPACE_DEVICE != "device" {
+        println("  FAIL: METAL_SPACE_DEVICE expected 'device', got '" + METAL_SPACE_DEVICE + "'")
+        ok = false
+    }
+    // RFC 075 P1 constants — drives F-RFC075-METAL-TARGET-ACCEPT.
+    if METAL_OP_KERNEL_DECL != "kernel void" {
+        println("  FAIL: METAL_OP_KERNEL_DECL expected 'kernel void', got '" + METAL_OP_KERNEL_DECL + "'")
+        ok = false
+    }
+    if METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR != "device const float* " {
+        println("  FAIL: METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR mismatch")
+        ok = false
+    }
+    if METAL_OP_PARAM_DEVICE_FLOAT_PTR != "device float* " {
+        println("  FAIL: METAL_OP_PARAM_DEVICE_FLOAT_PTR mismatch")
+        ok = false
+    }
+    if METAL_OP_THREAD_POS_GRID != "[[thread_position_in_grid]]" {
+        println("  FAIL: METAL_OP_THREAD_POS_GRID mismatch")
+        ok = false
+    }
+    if METAL_AS_DEVICE != "device" {
+        println("  FAIL: METAL_AS_DEVICE expected 'device', got '" + METAL_AS_DEVICE + "'")
+        ok = false
+    }
+    if ok {
+        println("  ok: Apple-GPU target tag + SIMD-group=32 + P1 kernel-decl + buffer-pointer + thread-pos constants verified")
+    }
+    return ok
+}
+
+// ── Text inspection (substring CONTAINS helper) ────────────────────
+
+fn _contains(hay: string, needle: string) -> bool {
+    return hay.find(needle) >= 0
+}
+
+fn _check_contains(ok_in: bool, hay: string, needle: string, label: string) -> bool {
+    if _contains(hay, needle) { return ok_in }
+    println("  FAIL: " + label + " (missing: `" + needle + "`)")
+    return false
+}
+
+// ── MIR construction helpers for the vec-add MIR fixture ─────────────
+
+fn _miss_local() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "" }
+}
+
+fn _kern_local(id: i64, name: string) -> Local {
+    // arena_id 0 = kernel buffer (mirrors `_metal_local_address_space`'s
+    // device-memory branch).
+    return Local { id: id, arena_id: 0, type_id: 0, name_hint: name, precision: ".f32" }
+}
+
+fn _priv_local(id: i64, name: string) -> Local {
+    // arena_id > 0 = function-local thread-private (mirrors the
+    // _metal_local_address_space "thread" branch).
+    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name, precision: ".f32" }
+}
+
+fn _op_local(local_id: i64) -> Operand {
+    return Operand {
+        kind: "local", local_id: local_id,
+        int_val: 0, float_val: 0.0, str_val: "", global_id: -1
+    }
+}
+
+fn _stmt_load(dst: Local, src_local: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(src_local))
+    return Stmt {
+        kind: STMT_LOAD, dst: dst, op: "load", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_store(src: Local, dst_local: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(src.id))
+    xs.push(_op_local(dst_local))
+    return Stmt {
+        kind: STMT_STORE, dst: _miss_local(), op: "store", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_binop_add(dst: Local, lhs: i64, rhs: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(lhs))
+    xs.push(_op_local(rhs))
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: "add", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_return() -> Stmt {
+    return Stmt {
+        kind: STMT_RETURN, dst: _miss_local(), op: "", args: [],
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _block(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+fn _build_vec_add_module() -> MModule {
+    // Three kernel-buffer params (a, b, c) + three load/binop/store
+    // Locals (va, vb, vc). The exact stmt sequence the P3 emitter
+    // recognises: STMT_LOAD a→va, STMT_LOAD b→vb, STMT_BINOP_ADD
+    // (va, vb)→vc, STMT_STORE vc→c.
+    let a  = _kern_local(0, "a")
+    let b  = _kern_local(1, "b")
+    let c  = _kern_local(2, "c")
+    let va = _priv_local(3, "va")
+    let vb = _priv_local(4, "vb")
+    let vc = _priv_local(5, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_load(vb, b.id))
+    s.push(_stmt_binop_add(vc, va.id, vb.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vb)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "vec_add",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "metal_vec_add.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 3 — F-RFC075-METAL-EMIT-VEC-ADD ─────────────────────────────
+//
+// Synthesise a vec-add MIR module, invoke `codegen_emit_metal_msl`, and
+// assert the emitted MSL kernel source contains the load-bearing source-
+// text fragments (kernel decl, device pointer typing, thread-position
+// attribute, c[i] / a[i] / b[i] index expressions, addition operator).
+//
+// This is the RFC 075 §5 falsifier F-RFC075-METAL-EMIT-VEC-ADD — the
+// counterpart of the NVPTX vec-add emit smoke. P3 (codegen-only)
+// closes this falsifier; P4 silicon-fire stays on `[ ]` until the
+// follow-on USER-LOCAL Mac cycle.
+
+fn _test_vec_add_emit() -> bool {
+    let mut ok = true
+    let mod_va = _build_vec_add_module()
+    let msl = codegen_emit_metal_msl(mod_va)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3 vec-add case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-VEC-ADD substring battery —
+    ok = _check_contains(ok, msl, "#include <metal_stdlib>",     "MSL preamble include")
+    ok = _check_contains(ok, msl, "using namespace metal;",      "MSL namespace using-directive")
+    ok = _check_contains(ok, msl, "kernel void",                 "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "vec_add",                     "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "device const float*",         "read-only device pointer parameter")
+    ok = _check_contains(ok, msl, "device float*",               "writable device pointer parameter")
+    ok = _check_contains(ok, msl, "[[buffer(0)]]",               "buffer(0) binding attribute")
+    ok = _check_contains(ok, msl, "[[buffer(1)]]",               "buffer(1) binding attribute")
+    ok = _check_contains(ok, msl, "[[buffer(2)]]",               "buffer(2) binding attribute")
+    ok = _check_contains(ok, msl, "[[thread_position_in_grid]]", "thread-position attribute")
+    ok = _check_contains(ok, msl, "c[i]",                        "writable buffer index `c[i]`")
+    ok = _check_contains(ok, msl, "a[i]",                        "read buffer index `a[i]`")
+    ok = _check_contains(ok, msl, "b[i]",                        "read buffer index `b[i]`")
+    ok = _check_contains(ok, msl, " + ",                         "addition operator between loaded values")
+    ok = _check_contains(ok, msl, ";",                           "statement terminator")
+    return ok
+}
+
+// ── Case 4 — P2 classifier helpers ──────────────────────────────────
+//
+// `_metal_local_address_space` returns METAL_AS_DEVICE for arena_id 0
+// (kernel buffer) and METAL_AS_THREAD otherwise. `_metal_local_precision`
+// honours the per-Local precision tag (.f32 / .f16 / etc.) and falls
+// back to FP32.
+
+fn _test_classifier_helpers() -> bool {
+    let mut ok = true
+    let kbuf = _kern_local(0, "kbuf")
+    let pvar = _priv_local(1, "pvar")
+    let untag = Local { id: 2, arena_id: 1, type_id: 0, name_hint: "untag", precision: "" }
+
+    if _metal_local_address_space(kbuf) != METAL_AS_DEVICE {
+        println("  FAIL: kernel-buffer Local should classify as device (got '" + _metal_local_address_space(kbuf) + "')")
+        ok = false
+    }
+    if _metal_local_address_space(pvar) != METAL_AS_THREAD {
+        println("  FAIL: function-local Local should classify as thread (got '" + _metal_local_address_space(pvar) + "')")
+        ok = false
+    }
+    if _metal_local_precision(kbuf) != METAL_PRECISION_F32 {
+        println("  FAIL: .f32-tagged Local should classify as float (got '" + _metal_local_precision(kbuf) + "')")
+        ok = false
+    }
+    if _metal_local_precision(untag) != METAL_PRECISION_F32 {
+        println("  FAIL: untagged Local should default to FP32 (got '" + _metal_local_precision(untag) + "')")
+        ok = false
+    }
+    if ok {
+        println("  ok: P2 classifier helpers — device/thread address-space + FP32 default")
+    }
+    return ok
+}
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  RFC 075 P1+P2+P3 — Metal codegen smoke")
+    println("══════════════════════════════════════════════")
+
+    let ok_emit  = _test_p0_empty_emit()
+    let ok_tgt   = _test_target_constants()
+    let ok_vec   = _test_vec_add_emit()
+    let ok_class = _test_classifier_helpers()
+
+    println("")
+    if ok_emit && ok_tgt && ok_vec && ok_class {
+        println("  PASS: RFC 075 P1+P2+P3 Metal codegen smoke")
+    } else {
+        println("  FAIL: RFC 075 P1+P2+P3 Metal codegen smoke")
+    }
+}
