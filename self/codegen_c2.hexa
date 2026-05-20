@@ -1326,7 +1326,14 @@ fn codegen_c2(ast) {
         }
         parts.push("}\n")
         // Aggregator that the rest of the codegen still calls.
-        parts.push("static void __hexa_strlit_init(void) {\n")
+        // PR-B (#4j proper fix): emit the per-TU aggregator with a
+        // module-unique suffix and *non-static* linkage so multi-file
+        // driver-link patterns can call it from outside. Within-TU
+        // self-call (the main caller below) still references the
+        // unique-named symbol — same TU, no link mismatch. Chunk-
+        // internal `__hexa_strlit_init_<N>` helpers stay static (file-
+        // scope only, no cross-TU collision risk).
+        parts.push("void __hexa_strlit_init__" + _hexa_cert_module_name() + "(void) {\n")
         let mut _ci = 0
         while _ci < _strlit_chunk_idx {
             parts.push("    __hexa_strlit_init_" + to_string(_ci) + "();\n")
@@ -1386,7 +1393,7 @@ fn codegen_c2(ast) {
     parts.push("    hexa_fp_init();\n")
     // M4: initialize deduplicated string literals before any user init code
     if len(_strlit_keys) > 0 {
-        parts.push("    __hexa_strlit_init();\n")
+        parts.push("    __hexa_strlit_init__" + _hexa_cert_module_name() + "();\n")
     }
     parts.push(init_parts.join(""))
     parts.push(main_parts.join(""))
@@ -7982,7 +7989,8 @@ fn codegen_c2_full(ast) {
             _sli_full = _sli_full + 1
         }
         out_parts.push("}\n")
-        out_parts.push("static void __hexa_strlit_init(void) {\n")
+        // PR-B (#4j proper fix) — see codegen_c2 mirror.
+        out_parts.push("void __hexa_strlit_init__" + _hexa_cert_module_name() + "(void) {\n")
         let mut _ci_full = 0
         while _ci_full < _strlit_chunk_idx_full {
             out_parts.push("    __hexa_strlit_init_" + to_string(_ci_full) + "();\n")
@@ -8018,7 +8026,7 @@ fn codegen_c2_full(ast) {
     out_parts.push("int main(int argc, char** argv) {\n")
     out_parts.push("    hexa_set_args(argc, argv);\n")
     if len(_strlit_keys) > 0 {
-        out_parts.push("    __hexa_strlit_init();\n")
+        out_parts.push("    __hexa_strlit_init__" + _hexa_cert_module_name() + "();\n")
     }
     out_parts.push(init_parts.join(""))
     out_parts.push(main_parts.join(""))
