@@ -6069,11 +6069,23 @@ HexaVal hexa_mul(HexaVal a, HexaVal b) {
 // FMA: fused multiply-add — fma(a,b,c) = a*b + c
 // For floats uses C99 fma() (single rounding, hardware FMA on modern CPUs).
 // For pure ints falls back to a*b+c with int arithmetic.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_fma(HexaVal a, HexaVal b, HexaVal c) {
     if (HX_IS_INT(a) && HX_IS_INT(b) && HX_IS_INT(c))
         return hexa_int(HX_INT(a) * HX_INT(b) + HX_INT(c));
     return hexa_float(fma(__hx_to_double(a), __hx_to_double(b), __hx_to_double(c)));
 }
+#else
+extern HexaVal rt_fma_int(HexaVal a, HexaVal b, HexaVal c);
+extern HexaVal rt_fma_float(HexaVal a, HexaVal b, HexaVal c);
+HexaVal hexa_fma(HexaVal a, HexaVal b, HexaVal c) {
+    if (HX_IS_INT(a) && HX_IS_INT(b) && HX_IS_INT(c))
+        return rt_fma_int(a, b, c);
+    return rt_fma_float(hexa_float(__hx_to_double(a)),
+                        hexa_float(__hx_to_double(b)),
+                        hexa_float(__hx_to_double(c)));
+}
+#endif
 HexaVal hexa_div(HexaVal a, HexaVal b) {
     if (HX_IS_INT(a) && HX_IS_INT(b)) {
         // 이전엔 silent 0 반환 → 버그 은폐. interp 는 이미 throw + void.

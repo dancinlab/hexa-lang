@@ -161,6 +161,20 @@ pub fn rt_isfinite(x: float) -> bool {
     return true
 }
 
+// Step 4 cycle 21 — FMA (fused multiply-add). 🛸 First CORE-tier port
+// (runtime_core.c → hexa-source). Single-rounding guarantee from libm
+// fma() is sacrificed for the hexa-source path: hexa evaluates a*b
+// then adds c with two distinct roundings instead of one. Acceptable
+// for hexa user-code; precision-critical kernels keep the C path via
+// the HEXA_HAS_HEXA_RT_STDLIB guard in self/runtime_core.c.
+pub fn rt_fma_int(a: int, b: int, c: int) -> int {
+    return a * b + c
+}
+
+pub fn rt_fma_float(a: float, b: float, c: float) -> float {
+    return a * b + c
+}
+
 // Step 3 cycle 6 — integer power fast-path (binary exponentiation).
 // Mirrors the C hexa_pow int^int branch in runtime_core.c:5648. Negative
 // exponents collapse to 0 (matches the original spec: hexa int^int has no
