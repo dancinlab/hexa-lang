@@ -1753,6 +1753,37 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     }
                 }
             }
+            // ── no-else sequential cond-mux (proc-pass sub-step #2b) ──
+            //   `if (en) lhs <= d ;` posedge always → $mux(S=en,
+            //   A=lhs[feedback], B=d, Y=mux_y) + $dff(D=mux_y, Q=lhs).
+            //   Combinational no-else is intentionally NOT covered
+            //   (would infer a latch — emit nothing → fallback skip).
+            if t_ok == 1 && has_else == 0 && is_clocked == 1 && then_toks[1] == "<=" {
+                let cer = _rv_elab_expr(cond_toks, 0, m, 1, tab)
+                if len(cer.err) == 0 {
+                    m = cer.m
+                    let ter = _rv_elab_expr(t_rhs, 0, m, 1, tab)
+                    if len(ter.err) == 0 {
+                        m = ter.m
+                        let mux_y = _rv_fresh_wire(m)
+                        m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+                        let mux_n = "$rvmux$" + str(len(m.cells))
+                        let mut mc = rtlil_cell(mux_n, "$mux", 0)
+                        mc = rtlil_cell_connect(mc, "A", t_lhs)
+                        mc = rtlil_cell_connect(mc, "B", ter.wire)
+                        mc = rtlil_cell_connect(mc, "S", cer.wire)
+                        mc = rtlil_cell_connect(mc, "Y", mux_y)
+                        m = rtlil_module_add_cell(m, mc)
+                        let dn = "$rvff$" + str(len(m.cells))
+                        let mut dc = rtlil_cell(dn, "$dff", 0)
+                        dc = rtlil_cell_connect(dc, "CLK", clk_wire)
+                        dc = rtlil_cell_connect(dc, "D", mux_y)
+                        dc = rtlil_cell_connect(dc, "Q", t_lhs)
+                        m = rtlil_module_add_cell(m, dc)
+                        let _eg = clk_edge
+                    }
+                }
+            }
             if has_begin == 0 { keep_going = 0 }
             continue
         }
@@ -2540,6 +2571,25 @@ fn main() {
         }
         if rtlil_count_cells_of_type(_m32, "$dff") != 0 {
             println("FAIL T32b dff_count got " + str(rtlil_count_cells_of_type(_m32, "$dff")))
+            fails = fails + 1
+        }
+    }
+
+    // T33 — no-else cond-mux (enable): `always @(posedge clk) if (en) q <= d ;`
+    //       → 1 $mux + 1 $dff (proc-pass core sub-step #2b).
+    total = total + 1
+    let _v33 = "module dffe ( input clk , input en , input d , output reg q ) ; always @ ( posedge clk ) if ( en ) q <= d ; endmodule"
+    let _r33 = read_verilog(_v33)
+    if _r33.ok != 1 {
+        println("FAIL T33 cond_mux_noelse: " + _r33.message); fails = fails + 1
+    } else {
+        let _m33 = _r33.design.modules[0]
+        if rtlil_count_cells_of_type(_m33, "$mux") != 1 {
+            println("FAIL T33a mux_count got " + str(rtlil_count_cells_of_type(_m33, "$mux")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m33, "$dff") != 1 {
+            println("FAIL T33b dff_count got " + str(rtlil_count_cells_of_type(_m33, "$dff")))
             fails = fails + 1
         }
     }
