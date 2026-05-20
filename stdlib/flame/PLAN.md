@@ -2811,3 +2811,73 @@ hexa source"; it IS hexa source that the toolchain accepts and runs.
   MatMul AST-derived, Compose, elementwise unary family
   (silu, gelu, tanh).
 
+
+### 진행 로그 — RFC 072 P1 PyTorch eager PROXY baseline (d=4096 GPT-3 class benchmark Campaign B) (2026-05-20)
+
+**Branch**: `rfc072-p1-torch-d2048-proxy`. **Shape-A (surgical baseline tool +
+3 doc updates) per @D g_inbox_processing_loop**. **TaskList #41 Campaign B P1**.
+
+**Landed**:
+- `tool/r072_p1_torch_eager_d2048_proxy.py` — PyTorch eager baseline tool
+  (~250 lines). 5-rung ladder fallback (L1 task-spec → L5 d=1024 6L) for
+  OOM-on-12GB. Adam, FP32, eager (no flash-attn, no torch.compile),
+  cudnn.benchmark=False. 3 warmup + 5 timed via `torch.cuda.Event` +
+  `synchronize()`. Per @D f1/f2: PyTorch is BASELINE reference (g3 honest
+  comparator), NOT hexa codegen — hexa-native-only rule does not apply
+  to the reference arm.
+- `inbox/fires/rfc072_p1_torch_d2048_proxy_2026_05_20/{result.json,fire.log}`
+  — fire artifacts. Chosen rung **L4: d=1024 n_layer=12 batch=2 seq=512**.
+  Measured median 1-step wall **116.286 ms** (std 0.104 ms = **0.089 %**
+  of median — well under 5 % F-RFC072-VARIANCE gate). Peak VRAM
+  5,059.8 MiB. Host: `summer-B650M-K` · RTX 5070 sm_120 · torch
+  2.11.0+cu130 · CUDA 13.0.
+- `inbox/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md` — §3.P1
+  section added with full measurement table + per-falsifier status. §7
+  phasing table updated (P1 ✅ PROXY measured · P1-full deferred to H100
+  cycle). §1 status line updated.
+- `GPU.md` §5m measured-wins ledger — new row "PyTorch eager d=1024 12L
+  FP32 PROXY baseline on RTX 5070" with 116.286 ms median + honest scope
+  caveat. §10 closure row for d=4096 — annotated with P1 PROXY result;
+  row stays `[ ]` until full-spec F-RFC072-RATIO PASSes.
+
+**Hardware-fit finding (P1's main load-bearing discovery)**:
+RTX 5070 12 GB **cannot fit** the RFC 072 §2 spec (d=4096 n_layer=24
+batch=8 seq=2048 FP32) on PyTorch eager. Even **d=2048 n_layer=12
+batch=1 seq=512** OOMs. Root cause: 50,257-token embedding + LM-head
+matrices at d=2048 weigh ~0.82 GiB each (FP32), and Adam triples that
+(weight + m + v) → ~5 GiB fixed overhead for the embed/head pair alone
+before any block activation lands. At d=2048 12L the remaining ~6 GiB
+of VRAM cannot hold attention/FFN forward+backward+Adam state even for
+batch=1 seq=512. **Implication**: the d=4096 24L full-spec PyTorch
+baseline measurement (F-RFC072-WALL-PT-FULL) MUST escalate to H100 80GB
+on RunPod. Cost envelope ~$5/hr · ~1-hr fire = ~$5–10 (multi-session
+$5–20 aggregate per RFC 072 §5).
+
+**Parse-gate**: not applicable (P1 deliverable is .py + .json + 3 doc
+updates; no .hexa source touched). `r072_p1_torch_eager_d2048_proxy.py`
+ran end-to-end on ubu-2 (rc=0, verdict=`PASS_PROXY`).
+
+**g3-honest summary**: P1 closed the cheap, $0, ubu-2-only path of the
+RFC 072 campaign — PyTorch eager wall MEASURED at a SCALED-DOWN proxy
+rung (d=1024 12L vs §2's d=4096 24L), and the L4 116.286 ms median
+with 0.089 % variance gives a clean baseline data point for the d=1024
+trajectory (cross-link: memory `project_flame_phase4d9_closure` has the
+d=768 hexa arm at 191–268 s, but that was 30-step total wall not 1-step
+per-step; the d=1024 measurement here is 1-step, so not directly
+comparable yet). The proxy does NOT close GPU.md §10 row — that stays
+`[ ]` until F-RFC072-RATIO at the full d=4096 24L spec PASSes (multi-
+session H100 budget required). The hardware-fit finding (d=4096 24L
+needs H100, not consumer 12 GB) is the load-bearing P1 deliverable
+for planning the next campaign phase. No claim that flame is faster
+or slower at d=4096; no claim that the d=1024 trajectory generalizes
+to d=4096; no over-claim 0.
+
+**Cross-link**: north-star ① (NN stack) · GPU.md §10 closure scoreboard ·
+GPU.md §5m measured wins (new d=1024 12L row) · RFC 072 §3.P1 · memory
+`project_flame_phase4d9_closure` (d=768 seed) · memory
+`project_flame_general_pytorch_replacement_goal` (north-star · gap (c)
+shape-sweep — this P1 is a tiny step on (c)) · memory
+`reference_gpu_fire_infra` (RTX 5070 ubu-2 substrate $0 · H100 escalation
+path for P1-full) · @D g3 (honest scope — PROXY-vs-full-spec caveat
+explicit at every site) · @D f1/f2 (PyTorch baseline reference exception
+to hexa-native-only · CITED).

@@ -1,7 +1,9 @@
 # RFC 072 — flame d=4096 GPT-3 class benchmark (Shape-B scaffold)
 
-**Status**: P0 SCAFFOLD (this cycle); P1–P4 measurement multi-session.
-**Branch**: `rfc072-flame-d4096-scaffold` (P0 scaffold) → multi-session campaign B.
+**Status**: P0 ✅ + P1 ✅ (PyTorch eager PROXY baseline measured on RTX 5070);
+P1-full + P2 + P3 + P4 multi-session pending.
+**Branch**: `rfc072-flame-d4096-scaffold` (P0 scaffold, PR #227 `0b29e340`) ·
+`rfc072-p1-torch-d2048-proxy` (P1 PROXY measurement, this cycle).
 **Date**: 2026-05-20.
 **Authority**: @D g3 (honest scope), @D g5 (hexa-native-only), @D g6
 (citation-enforced), @D g_plan_consolidation (stdlib/flame exception clause),
@@ -82,7 +84,7 @@ wall measurement actually tests.
 
 ## §3 Harness
 
-**Scaffold file** (this cycle): `stdlib/flame/bench/d4096.hexa` — stub
+**Scaffold file** (P0): `stdlib/flame/bench/d4096.hexa` — stub
 function `pub fn bench_d4096_step1_wall(precision: string) -> f64` returning
 0.0 with TODO P1+ markers. Shape constants as `let`-bindings at module
 scope.
@@ -103,6 +105,75 @@ step(s), prints wall.
 2. ≥ 3 timed steps (full fwd + bwd + AdamW).
 3. Report per-step wall (median of 3+); std must be < 5 % (F-RFC072-VARIANCE).
 4. Same protocol for PyTorch eager baseline on the same hardware.
+
+### §3.P1 — PyTorch eager PROXY baseline MEASURED (2026-05-20)
+
+**Fire**: `inbox/fires/rfc072_p1_torch_d2048_proxy_2026_05_20/`
+(`result.json` + `fire.log`). **Tool**:
+`tool/r072_p1_torch_eager_d2048_proxy.py` (~250 lines pure PyTorch eager
+with a 5-rung ladder fallback for OOM-on-12GB).
+
+**Hardware constraint discovered**: RTX 5070 12GB (the $0 ubu-2 pool host)
+**cannot fit** any d=2048 12L FP32 transformer-block + Adam config — even
+**d=2048 n_layer=12 batch=1 seq=512** OOMs on PyTorch eager. Root cause:
+50,257-token embed + LM head with d=2048 alone weighs ~0.82 GiB FP32 per
+matrix · ×2 (embed + head) = ~1.64 GiB · ×3 (param + Adam m + Adam v) =
+~5 GiB of fixed overhead before any attention/FFN activation appears.
+At d=2048 12L the attention/FFN/grad/Adam state for even batch=1 seq=512
+exhausts the remaining ~6 GiB.
+
+**Ladder chosen rung**: **L4 — d=1024 n_layer=12 batch=2 seq=512 FP32**.
+
+**Measured 1-step wall** (5 timed steps after 3 warmup, `torch.cuda.Event`
++ `synchronize()`):
+
+| Step | Wall (ms) |
+|------|----------:|
+| 1    | 116.366   |
+| 2    | 116.286   |
+| 3    | 116.329   |
+| 4    | 116.215   |
+| 5    | 116.105   |
+
+- **Median**: **116.286 ms**
+- **Mean**: 116.260 ms
+- **Std**: 0.104 ms (**0.089 %** of median — well within F-RFC072-VARIANCE
+  std < 5 % gate)
+- **Min/Max**: 116.105 / 116.366 ms
+- **Peak VRAM**: **5,059.8 MiB**
+- **Host**: `summer-B650M-K` · RTX 5070 sm_120 · torch 2.11.0+cu130 · CUDA 13.0
+- **Verdict**: `PASS_PROXY` (variance gate PASS)
+
+**Falsifier mapping** (g3 honest — these are proxy-scoped gates, NOT the
+full-spec gates from §4):
+
+| ID                          | Status      | Notes |
+|-----------------------------|-------------|-------|
+| **F-RFC072-WALL-PT-PROXY**  | **MEASURED** | d=1024 12L batch=2 seq=512 median wall = 116.286 ms (std 0.089 %) |
+| **F-RFC072-VARIANCE-PROXY** | **PASS**     | std 0.104 ms = 0.089 % of median (< 5 % gate) |
+| **F-RFC072-WALL-PT-FULL**   | **DEFERRED** | d=4096 24L batch=8 seq=2048 needs H100 80GB; ~$5+ multi-session |
+| **F-RFC072-WALL-FLAME**     | **DEFERRED** | flame side P2; needs RFC 067 multi-tile cp.async integration question first |
+| **F-RFC072-RATIO**          | **DEFERRED** | both arms required at the same shape; PROXY datum cannot close the d=4096 gate |
+
+**Honest scope (g3)**:
+
+- This is a **PROXY** measurement at d=1024 12L (one quarter the d-axis
+  of the §2 spec; one quarter the seq; one quarter the batch). The
+  PyTorch eager wall trajectory at this rung is **not interpolatable to
+  d=4096** — matmul compute scales as O(d²) for FFN and O(d² · seq) for
+  attention, so the d=4096/d=1024 wall ratio depends on memory-bandwidth
+  vs compute regime crossover that is itself hardware-dependent.
+- The d=4096 full-spec closure (GPU.md §10 row) stays `[ ]` — this P1
+  result does **not** flip it. What this measurement provides:
+  - An honest baseline data point for the d=1024 trajectory (cross-link
+    to memory `project_flame_phase4d9_closure` which has the d=768 hexa
+    arm).
+  - Hardware-fit evidence: **RTX 5070 12GB is too small for the §2
+    spec on either arm**; the full campaign must escalate to H100 80GB.
+- F-RFC072-RATIO-PROXY can be computed *if* P2 measures the flame arm
+  at the **same L4 config** (d=1024 12L batch=2 seq=512); that would
+  be a useful smaller-scale honest comparison even though it doesn't
+  close the d=4096 row.
 
 ---
 
@@ -207,11 +278,12 @@ rounding to claim PASS.
 
 | Phase | Scope                                                              | Cost     | Closure gate                            |
 |-------|--------------------------------------------------------------------|----------|------------------------------------------|
-| **P0**| RFC + scaffold (this cycle) — parse-clean stub, no behavior change | $0       | RFC filed, scaffold parses, GPU.md xref  |
-| **P1**| Harness flesh-out + lib imports + driver wiring                    | $0       | `bench_d4096_step1_wall("fp32")` runs end-to-end on CPU smoke (T=64 cut-down) |
-| **P2**| Single 1-step fire at d=4096 (FP32 first, FP16 second)             | $1–3     | F-RFC072-WALL-FLAME measured             |
-| **P3**| PyTorch eager baseline at d=4096 same hardware                     | $1–3     | F-RFC072-WALL-PT measured                |
-| **P4**| Variance + ratio + closure verdict                                 | $1–5     | F-RFC072-RATIO + F-RFC072-VARIANCE       |
+| **P0**| RFC + scaffold — parse-clean stub, no behavior change              | $0 ✅    | RFC filed, scaffold parses, GPU.md xref (LANDED PR #227 `0b29e340`) |
+| **P1**| PyTorch eager PROXY baseline on $0 consumer GPU                    | $0 ✅    | F-RFC072-WALL-PT-PROXY MEASURED on RTX 5070 (this cycle) — see §3.P1 |
+| **P1-full** | PyTorch eager baseline at d=4096 24L full spec                | $1–3     | F-RFC072-WALL-PT-FULL MEASURED on H100 80GB (deferred — multi-session) |
+| **P2**| flame d=4096 1-step fire (FP32 first, FP16 second)                 | $1–3     | F-RFC072-WALL-FLAME measured             |
+| **P3**| flame d=4096 PROXY (d=1024 12L if doing same-shape PT compare)     | $0       | F-RFC072-RATIO-PROXY at L4 rung (optional smaller-scale parity)     |
+| **P4**| Variance + ratio + closure verdict at full d=4096 spec             | $1–5     | F-RFC072-RATIO + F-RFC072-VARIANCE       |
 
 **Termination conditions**:
 
