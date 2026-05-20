@@ -270,7 +270,31 @@ pub fn lens_apply_cross_pollinate_borrow_from_forge(view: AtlasView) -> array {
 }
 
 pub fn lens_apply_counterexample_mine_n7_break(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — n=6 lattice-lock audit. Atlas P raw contents carry many
+    // hard-coded "= 6" expressions; flag the aggregate count as candidate
+    // "would-break-at-n=7" hypothesis pool.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut locked = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("= 6") >= 0 || raw.index_of("=6") >= 0 {
+            locked = locked + 1
+        }
+        i = i + 1
+    }
+    if locked == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "counterexample_mine.n7_break.lattice_locked",
+        family: "counterexample_mine",
+        proposed: "atlas P kind: " + to_string(locked) + " of " + to_string(n) + " nodes carry hard-coded '= 6' in raw text. These are n=6 lattice-locked expressions — candidate pool for n=7 falsification testing.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_counterexample_mine_n5_break(view: AtlasView) -> array {
     return empty_candidate_list()
@@ -437,7 +461,48 @@ pub fn lens_apply_falsify_self_cite_unreachable(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_falsify_self_stale_node_decay(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — source_file disk presence audit. baked rodata references
+    // `atlas.n6` as source, but per PLAN.md 2026-05-12 the n6/ source was
+    // retired (nexus 2df92aed). Aggregate distinct source paths and
+    // exec test -e once per distinct path; missing paths = stale.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut distinct: array = []
+    let mut i = 0
+    while i < n {
+        let src = view.p_nodes[i].source_file
+        if len(src) > 0 {
+            let dn = len(distinct)
+            let mut found = false
+            let mut k = 0
+            while k < dn {
+                if distinct[k] == src { found = true; break }
+                k = k + 1
+            }
+            if found == false { distinct.push(src) }
+        }
+        i = i + 1
+    }
+    let dn = len(distinct)
+    if dn == 0 { return empty_candidate_list() }
+    let mut missing_count = 0
+    let mut j = 0
+    while j < dn {
+        let r = exec("test -e " + distinct[j] + " && echo Y || echo N").trim()
+        if r == "N" { missing_count = missing_count + 1 }
+        j = j + 1
+    }
+    if missing_count == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "falsify_self.stale_node_decay.source_missing",
+        family: "falsify_self",
+        proposed: "atlas P kind: " + to_string(missing_count) + " of " + to_string(dn) + " distinct source_file paths absent from disk (n6/ source frozen post-nexus 2df92aed per PLAN.md). " + to_string(n) + " P nodes affected.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_falsify_self_contradiction_pair(view: AtlasView) -> array {
     return empty_candidate_list()
@@ -515,7 +580,43 @@ pub fn lens_apply_unfold_cite_chain(view: AtlasView) -> array {
 }
 
 pub fn lens_apply_unfold_transitive_derive(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — depth-2 BFS along `->` derives edges. unfold.cite_chain
+    // handles depth-1; this transitive walk extends one hop further.
+    // Counts total depth-2 paths reachable from each P node's derives
+    // chain (= aggregate "composite derivation" candidates).
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut total_paths = 0
+    let mut i = 0
+    while i < n {
+        let derives = view.p_nodes[i].edges.derives
+        let m = len(derives)
+        let mut k = 0
+        while k < m {
+            let child_id = derives[k]
+            let mut q = 0
+            while q < n {
+                if view.p_nodes[q].id == child_id {
+                    total_paths = total_paths + len(view.p_nodes[q].edges.derives)
+                    break
+                }
+                q = q + 1
+            }
+            k = k + 1
+        }
+        i = i + 1
+    }
+    if total_paths == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "unfold.transitive_derive.depth2_paths",
+        family: "unfold",
+        proposed: "atlas P kind: " + to_string(total_paths) + " transitive depth-2 derive paths from " + to_string(n) + " seed nodes. Each is a candidate composite derivation identity.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 
 pub fn lens_apply_unfold_taylor_series(view: AtlasView) -> array {
