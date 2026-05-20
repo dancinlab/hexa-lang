@@ -1949,6 +1949,129 @@ fn pass_opt_clean(d: Design) -> PassResult {
     }
 }
 
+// ─── clean_multidriver: collapse multiple `connect` rows to same LHS ─────
+
+// CLEAN-ROOM (rfc_006 §5 absorption iter 12 — `idx` multi-driver block):
+// The read_verilog frontend unrolls a `for(i=0;i<P;i=i+1) idx = expr_i;`
+// loop body in a combinational `always @*` into P separate
+// `connect (idx, $rvexpr$N)` rows (one per unrolled iteration). RTLIL's
+// `connections_` SigSpec map (kernel/rtlil.h, ::Module::connections) is
+// a multimap, so the upstream IR accepts this — but ABC's `read_blif`
+// SOP solver rejects multi-driver nets with:
+//
+//   Line N: Signal "idx" is defined more than once.
+//
+// (ABC src `src/base/io/ioReadBlif.c::Io_ReadBlifNetwork`.) This pass
+// collapses each LHS-group of size > 1 to a single connect.
+//
+// Atlas citations (g6 strict-lint stage 4):
+//   - IEEE 1800-2017 §10.4.2 — "If multiple procedural assignments are
+//     made to the same variable, the last assignment shall determine the
+//     value." This is the last-write-wins semantics our collapse uses.
+//   - Yosys src passes/proc/proc_mux.cc — the upstream `proc_mux` pass
+//     builds priority-mux chains from procedural-case constructs that
+//     carry per-branch SigSpec conditions. Our rtlil.hexa `Module` (line
+//     71) records connect_lhs/_rhs as parallel `[str]` arrays with NO
+//     condition column, so the priority-mux shape (mux-chain over cond
+//     SigBits) is structurally unrecoverable here — the condition data
+//     was lost upstream in read_verilog's procedural→connect lowering.
+//   - BLIF spec §3 (UC Berkeley CAD group, BLIF Manual) — `.names`
+//     directives drive a single output net; ABC enforces this in
+//     `Io_ReadBlifNetwork` which is the ABC rejection we are unblocking.
+//
+// SCOPE-A behavior (g3 honest):
+//   - Group connect rows by LHS in list order.
+//   - For each group of size > 1: keep ONLY the LAST connect (Verilog
+//     procedural-assign last-write-wins). Earlier writes drop.
+//   - Emit a `println` line per collapsed LHS naming the count + the
+//     RHS values dropped + the kept RHS — fail-loud so the §5 audit
+//     trail records the lossy collapse honestly (the proper mux-chain
+//     reconstruction is the procedural-conditions read_verilog gap, not
+//     a passes.hexa fix).
+//   - Single-connect LHSs pass through untouched (no warning).
+//
+// HONEST GAP: when the source intent is a priority-mux (per-iteration
+// `if (!any_grant) idx = ...`), last-write-wins loses semantics — the
+// `idx` net ends up driven by the i=P-1 unconditional value only. The
+// real fix is to recover the conditions in read_verilog (Conn struct +
+// `cond_wire` field, then `proc_mux` over the cond tree). This pass
+// unblocks the §5 oracle by removing the ABC-multi-driver error so
+// downstream gate-count / area measurements become observable; it does
+// NOT claim Yosys-equivalent synthesis correctness.
+fn pass_clean_multidriver(d: Design) -> PassResult {
+    let cb = _passes_total_cells(d)
+    let mut out: [Module] = []
+    let mut warn_count = 0
+    let mut mi = 0
+    while mi < len(d.modules) {
+        let m = d.modules[mi]
+        // Build per-LHS occurrence count (linear; gate-§5 designs have
+        // O(10²) distinct LHS strings → quadratic worst-case is fine).
+        let mut new_lhs: [str] = []
+        let mut new_rhs: [str] = []
+        let mut k = 0
+        while k < len(m.connect_lhs) {
+            let cur_lhs = m.connect_lhs[k]
+            // count later occurrences of this LHS (after index k)
+            let mut later = 0
+            let mut earlier = 0
+            let mut j = 0
+            while j < len(m.connect_lhs) {
+                if j != k {
+                    if m.connect_lhs[j] == cur_lhs {
+                        if j > k { later = later + 1 }
+                        if j < k { earlier = earlier + 1 }
+                    }
+                }
+                j = j + 1
+            }
+            if later == 0 {
+                // This is the LAST connect for cur_lhs — keep it.
+                new_lhs = new_lhs.push(cur_lhs)
+                new_rhs = new_rhs.push(m.connect_rhs[k])
+                if earlier > 0 {
+                    // Emit fail-loud diagnostic at the kept row (so the
+                    // dropped-RHS list is logged once per LHS-group).
+                    let dropped_n = earlier
+                    let mut dropped_msg = ""
+                    let mut jj = 0
+                    while jj < k {
+                        if m.connect_lhs[jj] == cur_lhs {
+                            if len(dropped_msg) > 0 { dropped_msg = dropped_msg + "," }
+                            dropped_msg = dropped_msg + m.connect_rhs[jj]
+                        }
+                        jj = jj + 1
+                    }
+                    println("[clean_multidriver] module=" + m.name
+                        + " net=" + cur_lhs
+                        + " collapsed " + str(dropped_n + 1) + " drivers → 1"
+                        + " kept=" + m.connect_rhs[k]
+                        + " dropped=[" + dropped_msg + "]"
+                        + " (Verilog §10.4.2 last-write-wins; conditions"
+                        + " not recoverable from frontend connect-only IR)")
+                    warn_count = warn_count + 1
+                }
+            }
+            // earlier-occurrence rows are dropped silently here; the
+            // last-occurrence row prints the consolidated warning.
+            k = k + 1
+        }
+        let m2 = Module {
+            name: m.name, wires: m.wires, cells: m.cells,
+            processes: m.processes,
+            connect_lhs: new_lhs, connect_rhs: new_rhs,
+        }
+        out = out.push(m2)
+        mi = mi + 1
+    }
+    let d2 = Design { modules: out, source: d.source }
+    return PassResult {
+        ok: 1, design: d2,
+        cells_before: cb, cells_after: _passes_total_cells(d2),
+        message: "clean_multidriver (collapsed " + str(warn_count) + " LHS-group(s))"
+    }
+}
+
 // ─── self-test ───────────────────────────────────────────────────────────
 
 fn main() {
@@ -2979,6 +3102,91 @@ fn main() {
     // Diagnostic message must mention the W-cap (iter-9 scope marker).
     if r_t30.message.find("W=6") < 0 {
         println("FAIL T30c lut6_5_msg_missing_width (got " + r_t30.message + ")"); fails = fails + 1
+    }
+
+    // T31 — rfc_006 §5 absorption iter 12 (a) — multi-driver LHS collapse.
+    // CLEAN-ROOM: 5 connect rows targeting the same LHS net (mirrors the
+    // d4 `idx` shape from /tmp/_hexa_yosys_gate_d4_in.blif). The pass
+    // must collapse to ONE connect (the LAST entry by Verilog last-write-
+    // wins, IEEE 1800-2017 §10.4.2) and the cells/wires must be untouched.
+    total = total + 1
+    let mut m_t31 = rtlil_new_module("md_t31")
+    m_t31 = rtlil_module_add_wire(m_t31, rtlil_wire("idx", 1, 0, 0))
+    m_t31 = rtlil_module_add_wire(m_t31, rtlil_wire("r0", 1, 0, 0))
+    m_t31 = rtlil_module_add_wire(m_t31, rtlil_wire("r1", 1, 0, 0))
+    m_t31 = rtlil_module_add_wire(m_t31, rtlil_wire("r2", 1, 0, 0))
+    m_t31 = rtlil_module_add_wire(m_t31, rtlil_wire("r3", 1, 0, 0))
+    m_t31 = rtlil_module_add_wire(m_t31, rtlil_wire("r4", 1, 0, 0))
+    m_t31 = rtlil_module_connect(m_t31, "idx", "r0")
+    m_t31 = rtlil_module_connect(m_t31, "idx", "r1")
+    m_t31 = rtlil_module_connect(m_t31, "idx", "r2")
+    m_t31 = rtlil_module_connect(m_t31, "idx", "r3")
+    m_t31 = rtlil_module_connect(m_t31, "idx", "r4")
+    let mut d_t31 = rtlil_new_design("test")
+    d_t31 = rtlil_design_add(d_t31, m_t31)
+    let r_t31 = pass_clean_multidriver(d_t31)
+    if r_t31.ok != 1 {
+        println("FAIL T31 clean_multidriver: " + r_t31.message); fails = fails + 1
+    }
+    if len(r_t31.design.modules[0].connect_lhs) != 1 {
+        println("FAIL T31b multidriver_not_collapsed (got "
+            + str(len(r_t31.design.modules[0].connect_lhs))
+            + " connects, want 1)"); fails = fails + 1
+    }
+    if r_t31.design.modules[0].connect_lhs[0] != "idx" {
+        println("FAIL T31c multidriver_lhs_wrong (got "
+            + r_t31.design.modules[0].connect_lhs[0] + ")"); fails = fails + 1
+    }
+    // Last-write-wins: the surviving RHS is r4 (the final connect row).
+    if r_t31.design.modules[0].connect_rhs[0] != "r4" {
+        println("FAIL T31d multidriver_wrong_winner (got "
+            + r_t31.design.modules[0].connect_rhs[0]
+            + ", want r4 by last-write-wins)"); fails = fails + 1
+    }
+
+    // T32 — single-driver LHS passes through unchanged (regression guard).
+    // The pass must NOT remove or rewrite connect rows whose LHS appears
+    // only once — those carry full semantics (single procedural assign or
+    // continuous assign). Build a 3-LHS fixture with one connect per LHS.
+    total = total + 1
+    let mut m_t32 = rtlil_new_module("md_t32")
+    m_t32 = rtlil_module_add_wire(m_t32, rtlil_wire("y0", 1, 0, 0))
+    m_t32 = rtlil_module_add_wire(m_t32, rtlil_wire("y1", 1, 0, 0))
+    m_t32 = rtlil_module_add_wire(m_t32, rtlil_wire("y2", 1, 0, 0))
+    m_t32 = rtlil_module_add_wire(m_t32, rtlil_wire("s0", 1, 0, 0))
+    m_t32 = rtlil_module_add_wire(m_t32, rtlil_wire("s1", 1, 0, 0))
+    m_t32 = rtlil_module_add_wire(m_t32, rtlil_wire("s2", 1, 0, 0))
+    m_t32 = rtlil_module_connect(m_t32, "y0", "s0")
+    m_t32 = rtlil_module_connect(m_t32, "y1", "s1")
+    m_t32 = rtlil_module_connect(m_t32, "y2", "s2")
+    let mut d_t32 = rtlil_new_design("test")
+    d_t32 = rtlil_design_add(d_t32, m_t32)
+    let r_t32 = pass_clean_multidriver(d_t32)
+    if r_t32.ok != 1 {
+        println("FAIL T32 clean_multidriver_single: " + r_t32.message); fails = fails + 1
+    }
+    if len(r_t32.design.modules[0].connect_lhs) != 3 {
+        println("FAIL T32b single_driver_dropped (got "
+            + str(len(r_t32.design.modules[0].connect_lhs))
+            + " connects, want 3)"); fails = fails + 1
+    }
+    // Order + content preserved: connect i is (yI, sI).
+    if r_t32.design.modules[0].connect_lhs[0] != "y0" {
+        println("FAIL T32c single_order_y0"); fails = fails + 1
+    }
+    if r_t32.design.modules[0].connect_rhs[0] != "s0" {
+        println("FAIL T32d single_order_s0"); fails = fails + 1
+    }
+    if r_t32.design.modules[0].connect_lhs[2] != "y2" {
+        println("FAIL T32e single_order_y2"); fails = fails + 1
+    }
+    if r_t32.design.modules[0].connect_rhs[2] != "s2" {
+        println("FAIL T32f single_order_s2"); fails = fails + 1
+    }
+    // Message must report 0 collapsed groups (no warning surfaced).
+    if r_t32.message.find("collapsed 0") < 0 {
+        println("FAIL T32g single_no_collapse_msg (got "
+            + r_t32.message + ")"); fails = fails + 1
     }
 
     if fails > 0 {
