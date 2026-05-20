@@ -2812,6 +2812,194 @@ hexa source"; it IS hexa source that the toolchain accepts and runs.
   (silu, gelu, tanh).
 
 
+### 2026-05-20 — SD12 ag_extract — multi-input compile-and-run round-trip (north-star ① autograd primitive · AD pipeline MULTI-INPUT END-TO-END for bilinear f(x,y) = x*y)
+
+**SD12 lifts the SD11 round-trip from single-Param relu to the simplest
+non-trivial MULTI-INPUT case — the SD9 bilinear MUL `f(x, y) = x * y`.**
+The SD9 reverse walker produces two bwd ASTs (one per target Param);
+each is rendered to a STANDALONE-COMPILABLE program by the new
+`ag_extract_emit_program_xy_dy` helper (3-arg argv reader for x · y · dy),
+written to `/tmp/sd12_{x,y}_bwd.hexa`, COMPILED via `hexa.real build`,
+and EXECUTED 32× for LCG-seeded (x, y, dy) triples. The parsed output
+is BYTE-EQ to both the in-process `ag_extract_interpret_v2_multi`
+reference and the hand-derived Option-A reorder-match. The measured
+proof:
+
+```
+df/dx three-way max|Δ| across 32 input triples (LCG seeds 4242 / 70707 / 31337):
+  interp   vs compiled : 0.0
+  interp   vs hand     : 0.0
+  compiled vs hand     : 0.0
+df/dy three-way max|Δ| across 32 input triples:
+  interp   vs compiled : 0.0
+  interp   vs hand     : 0.0
+  compiled vs hand     : 0.0
+```
+
+**Falsifier F-RFC043-AUTOGRAD-AUTO-SD12-BILINEAR-COMPILE-RUN-BYTE-EQ PASS**
+(all 4 pairwise max|Δ| across both Params = 0.0; 6 max|Δ| values total
+across the two byte-eq matrices, all zero).
+
+**Why this matters (north-star ①)**: SD11 closed the loop for one Param,
+one input, pure conditional (relu). SD12 is the MULTI-INPUT generalisation
+— the new emit shape carries `(x, y, dy)` through argv, the harness
+coordinates TWO compiled binaries (one per Param direction), and the
+bilinear MUL's `Var_FwdResult` nodes resolve to argv-bound identifiers
+through the new `emit_expr_xy` resolver. The emitted source is now
+literal compilable hexa for the 2-Param shape — measurable proof that
+the source-to-source AD pipeline scales beyond the single-Param case.
+
+**Implementation (surgical · 2 helpers + 1 test + this PLAN entry)**:
+- `stdlib/flame/ag_extract.hexa::ag_extract_emit_expr_xy(arena, node) -> string`
+  — variant of `ag_extract_emit_expr` that resolves
+  `Var_FwdResult(fid)` whose `fid` is a Param to that Param's
+  argv-bound identifier (`x` for Param(0), `y` for Param(1)). Falls
+  back to the SD11 `_fwd<id>` lexeme for non-Param fwd-cache references
+  so SD13+ shapes fail as a clearly visible compile error instead of
+  silently miscompiling.
+- `stdlib/flame/ag_extract.hexa::ag_extract_emit_program_xy_dy(arena, bwd_root, fn_name) -> string`
+  — emits a `(x: float, y: float, dy: float) -> float` bwd fn (via
+  the resolved emit) PLUS an `fn main()` argv reader for 3 floats. The
+  print uses `json_stringify` (shortest-roundtrip codec — same SD11
+  lesson).
+- `test/flame_ag_extract_sd12_compile_test.hexa` orchestrates the
+  multi-input loop: SD9-pattern fwd build (`ag_extract_build_bilinear_fwd`)
+  → two `reverse_walk_v2` calls (target=0 + target=1) → emit both
+  programs → `write_file` × 2 → `exec("hexa.real build ...")` × 2 with
+  `__RC=$?` sentinel → 32× compiled-binary exec × 2 → parse output →
+  three-way byte-eq (interp vs compiled vs hand) per Param direction.
+- Reuses the SD11 `hexa.real` 3-tier fallback ($HEXA_LANG/hexa.real →
+  $HOME/.hx/bin/hexa_real → /Users/ghost/core/hexa-lang/hexa.real)
+  so the test runs from worktrees and main repo alike.
+
+**Soundness of the `Var_FwdResult(Param) → identifier` resolution**:
+The bilinear fwd's children are Params directly; the reverse walker's
+MUL rule (`reverse_walk_v2` §MUL) builds `b_cached = mk_var_fwdresult(a)`
+where `a` is a child of MUL — for bilinear MUL that child is Param(0)
+(or Param(1) by symmetry). `ag_extract_eval_fwd_multi`'s Param branch
+writes `param_vals[ix]` into `fwd_cache[param_node_id]` then returns
+it; no arithmetic intervenes. Therefore replacing `_fwd<param_node_id>`
+with the argv-bound identifier `x`/`y` preserves the IEEE-754
+trajectory byte-for-byte. (For SD13+ — sigmoid, sigmoid-div, multi-use
+— fwd-cache values are arithmetic intermediates, NOT Param values; the
+SD12 resolver falls through to the SD11 `_fwd<id>` lexeme, leaving a
+clearly visible undefined-identifier compile error rather than silent
+miscompile. SD13 will materialise the fwd-cache inside the emitted
+main().)
+
+**Emitted bwd source — df/dx (bilinear MUL, target=Param(0))**:
+```hexa
+pub fn f_x_bwd_auto(x: float, y: float, dy: float) -> float {
+    return ((dy * y) + 0.0)
+}
+
+fn main() {
+    let argv = args()
+    // argv layout when invoked directly: [bin, x_repr, y_repr, dy_repr]
+    if len(argv) < 4 {
+        println("usage: <bin> <x> <y> <dy>")
+        exit(2)
+    }
+    let x  = argv[1].to_float()
+    let y  = argv[2].to_float()
+    let dy = argv[3].to_float()
+    let d_param = f_x_bwd_auto(x, y, dy)
+    println(json_stringify(d_param))
+}
+```
+
+**Emitted bwd source — df/dy (bilinear MUL, target=Param(1))**:
+```hexa
+pub fn f_y_bwd_auto(x: float, y: float, dy: float) -> float {
+    return (0.0 + (dy * x))
+}
+
+fn main() {
+    let argv = args()
+    if len(argv) < 4 {
+        println("usage: <bin> <x> <y> <dy>")
+        exit(2)
+    }
+    let x  = argv[1].to_float()
+    let y  = argv[2].to_float()
+    let dy = argv[3].to_float()
+    let d_param = f_y_bwd_auto(x, y, dy)
+    println(json_stringify(d_param))
+}
+```
+
+The `(dy * y) + 0.0` vs `0.0 + (dy * x)` reorder asymmetry is the SD9
+Option-A reorder-match — for target=0 the Param(0) branch returns the
+chain (`dy * y_cached`) and the Param(1) branch returns `Const(0.0)`,
+combined via the walker's `mk_binop_add(ga, gb)`. The hand reference
+follows the same `*` then `+` order — identical IEEE-754 trajectory.
+
+**Honest scope (g3, after SD12 closed)**:
+- SD12 PROVED: multi-input compile-and-run for the simplest 2-Param
+  fwd (bilinear MUL). Three-way byte-eq across 32 input triples for
+  BOTH per-Param directions gives a measured guarantee that the
+  walker-emit-compile-run round-trip generalises beyond the SD11
+  single-Param relu case.
+- SD12 did NOT prove: compile-and-run for fwds whose bwd AST has
+  `Var_FwdResult` pointing to a NON-Param intermediate. Concretely
+  SD6 sigmoid (uses `Var_FwdResult` of the dt_exp output), SD7
+  multi-use (uses `Var_FwdResult` of an intermediate sum), SD10
+  sigmoid-div (uses `Var_FwdResult` of the denominator) all reference
+  `_fwd<N>` symbols whose runtime value is NOT a Param. Compiling these
+  via SD12's helper produces a clearly visible undefined-identifier
+  compile error — that is by design (g3 carve-out: SD13 must add the
+  fwd-cache materialisation step inside the emitted main()).
+- SD12 also did NOT touch: parser integration (SD8 — still future-work),
+  per-Param accumulator dict (SD13/SD14 single-pass alternative). The
+  DIV/NEG round-trip carries SD6's pre-existing ULP-zone (max|Δ| ≈
+  5.55e-17 at the in-process oracle level even on SD10); SD12 does not
+  attempt to close that — the SD12 corpus is bilinear MUL only, where
+  the SD9 in-process byte-eq is already 0.0.
+
+**SD1..SD11 regression check (measured 2026-05-20 in the SD12 worktree)**:
+- `test/flame_ag_derive_test.hexa` rc=0 (SD1 matmul max|Δ|=0, SD2 add
+  max|Δ|=0, SD3 silu-gate max|Δ|=0 — byte-eq).
+- `test/flame_ag_extract_test.hexa` rc=0 (SD5 PASS, SD6 HONEST
+  5.55e-17, SD7 PASS, SD9 PASS both directions, SD10 HONEST 5.55e-17 /
+  1.11e-16 — all expected per pre-SD12 oracle gates).
+- `test/flame_ag_extract_sd11_compile_test.hexa` rc=0 (SD11 three-way
+  byte-eq 0.0 / 0.0 / 0.0 — unchanged).
+- ag_extract.hexa edit is additive only: new public functions
+  `ag_extract_emit_expr_xy`, `ag_extract_emit_program_xy_dy`;
+  `ag_extract_emit_expr`, `ag_extract_emit_fn`, `ag_extract_emit_fn_xy`,
+  `ag_extract_emit_program_x_dy` and all interpret/walker surfaces are
+  untouched (SD11 round-trip still PASS).
+
+**Atlas citations** (g6, in `ag_extract.hexa` SD12 header):
+- Griewank & Walther §3.2 Algorithm 3.6 — reverse-mode emit (the
+  emitted multi-input source is the natural extension of the SD11
+  single-input form: the reverse walker stays the same, the emit step
+  gains a 3-arg argv reader).
+- Griewank & Walther §3.2 "Reverse Mode" MUL VJP rule — `da = dc · b`,
+  `db = dc · a`; SD12's `emit_expr_xy` resolves the symbolic
+  fwd-cache reference (`Var_FwdResult(Param)`) back to its Param
+  identifier, preserving the closed-form gradient.
+- Steele & White 1990 "How to print floating-point numbers
+  accurately" — 17 decimal digits suffice for binary64 round-trip;
+  the runtime's `_shortest_double` is the shortest-representation
+  variant (reachable via `json_stringify`).
+
+**Future-cycle stop-conditions (g3 carve-outs, after SD12 closed)**:
+- SD13: fwd-cache materialisation inside emitted main() — required to
+  compile-and-run sigmoid (SD6), multi-use (SD7), sigmoid-div (SD10).
+  Each `Var_FwdResult(intermediate)` needs the fwd computation to be
+  emitted into the program before the bwd call, OR a shared fwd_cache
+  array passed through argv. The SD6 reorder-match ULP-zone (max|Δ| ≈
+  5.55e-17) will surface in SD13 too — that is the boundary SD13 must
+  honour as g3 honest scope, not paper over.
+- SD8: parser integration (still future-work — outside the SD11/12/13
+  compile-and-run loop).
+- SD14: per-Param accumulator dict (single-pass alternative to
+  SD9/SD10's per-Param-call shape).
+- SD15: more rules — Sum, MatMul AST-derived, Compose, elementwise
+  unary family (silu, gelu, tanh).
+
+
 ### 진행 로그 — RFC 072 P1 PyTorch eager PROXY baseline (d=4096 GPT-3 class benchmark Campaign B) (2026-05-20)
 
 **Branch**: `rfc072-p1-torch-d2048-proxy`. **Shape-A (surgical baseline tool +
