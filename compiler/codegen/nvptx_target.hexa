@@ -2395,15 +2395,21 @@ fn _nvptx_unroll_clone_stmt(s: Stmt, dsts: [i64], offset: i64) -> Stmt {
     }
 }
 
-// RFC 069 marker — Advanced loop unroll. The pass below recognizes
-// ONE CFG shape (canonical 3-block back-edge) and supports ONE factor
-// (2 — the cloning logic is hard-coded). RFC 069 P1
-// (`F-RFC069-FACTOR-N`) generalizes the cloning to factor=N, P2
-// (`F-RFC069-MULTI-EXIT-MATCH`) adds the multi-exit (break-bearing)
-// matcher, and P3 (`F-RFC069-NESTED-PRESERVE`) adds inner-loop
-// preservation. The PR #117 passthrough guarantee (Case 11) is a
-// STRICT regression gate (F7) — every RFC 069 commit MUST keep
-// non-matching CFG output byte-identical. See
+// RFC 069 P1 LANDED — Advanced loop unroll, factor=N. The pass below
+// recognizes ONE CFG shape (canonical 3-block back-edge) and now
+// supports factor=N for 2 ≤ N ≤ 32 (P1 closure, `F-RFC069-FACTOR-N`).
+// Factor outside that range returns mfn unchanged (passthrough — no
+// garbage). Factor=2 byte-identical to PR #117 output (single clone,
+// preserves the back-edge structure).
+//
+// Still pending (P2/P3/P4 — see RFC 069 §3):
+//   P2 (`F-RFC069-MULTI-EXIT-MATCH`) — multi-exit (break-bearing) matcher
+//   P3 (`F-RFC069-NESTED-PRESERVE`) — inner-loop preservation
+//   P4 (`F-RFC069-NUMERIC-EQ`) — real-silicon byte-eq numeric falsifier
+//
+// The PR #117 passthrough guarantee (Case 11) is a STRICT regression
+// gate (F7) — every RFC 069 commit MUST keep non-matching CFG output
+// byte-identical. See
 // `inbox/rfc_drafts_2026_05_20/rfc_069_unroll_advanced.md` §3 for
 // the per-phase plan and §4 for the falsifier battery.
 //
@@ -2421,8 +2427,19 @@ fn _nvptx_unroll_clone_stmt(s: Stmt, dsts: [i64], offset: i64) -> Stmt {
 // future cycles (the offset arithmetic generalises trivially but each
 // added clone needs another renumber pass; the recognition logic is
 // the load-bearing part and lands here first).
+// _nvptx_unroll_max_factor — clamp ceiling per RFC 069 §3 P1
+// (`F-RFC069-FACTOR-N`). Out-of-range factors return MFunc unchanged
+// (passthrough — no garbage). 32 chosen as a defensible bound: practical
+// unrolls rarely exceed 8-16, the offset arithmetic stays safe under
+// i64 multiplication for any realistic Local-id range, and ptxas register
+// pressure becomes catastrophic well before 32 anyway.
+let _nvptx_unroll_max_factor: i64 = 32
+
 pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
     if factor < 2 { return mfn }
+    // RFC 069 §3 P1 clamp — factor > 32 returns mfn unchanged (passthrough).
+    if factor > _nvptx_unroll_max_factor { return mfn }
+
     let pat = _nvptx_unroll_find_pattern(mfn)
     let hdr_idx = pat[0]
     let body_idx = pat[1]
@@ -2431,38 +2448,71 @@ pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
     let hdr = mfn.blocks[hdr_idx]
     let body = mfn.blocks[body_idx]
     let dsts = _nvptx_unroll_collect_body_dsts(body)
-    let offset = _nvptx_unroll_max_local_id_in_mfn(mfn) + 1
-    let clone_block_id = _nvptx_unroll_max_block_id(mfn) + 1
+    let base_offset = _nvptx_unroll_max_local_id_in_mfn(mfn) + 1
+    let max_block_id_base = _nvptx_unroll_max_block_id(mfn)
+    // first_clone_id is also the new target for the original body's
+    // terminator (the back-edge is broken at body → first_clone, then
+    // first_clone → second_clone, ..., last_clone → header).
+    let first_clone_id = max_block_id_base + 1
+    let n_clones = factor - 1   // factor=2 → 1 clone (PR #117 byte-eq path)
 
-    // Build clone stmts: every body stmt with dst+operands renumbered
-    // for intra-body Locals; the terminator STMT_BR target stays as
-    // header.id (the clone's back-edge).
-    let mut clone_stmts = []
-    let mut si = 0
-    while si < len(body.stmts) {
-        clone_stmts.push(_nvptx_unroll_clone_stmt(body.stmts[si], dsts, offset))
-        si = si + 1
-    }
-    let clone_blk = Block {
-        id: clone_block_id,
-        stmts: clone_stmts,
-        preds: [],
-        succs: []
+    // Build N-1 clones. Each clone_i uses offset = i*base_offset so the
+    // intra-body Local ids in clone_i are disjoint from clone_{i-1}.
+    let mut clone_blocks = []
+    let mut i = 1
+    while i <= n_clones {
+        let clone_offset = i * base_offset
+        let clone_block_id = max_block_id_base + i
+        let next_clone_id = max_block_id_base + i + 1
+        let is_last_clone = i == n_clones
+
+        // Clone every body stmt; the terminator is rewritten in a second
+        // pass so the clone chain links forward (last clone keeps the
+        // header back-edge — that's the unrolled-loop's only back-edge).
+        let mut clone_stmts = []
+        let mut si = 0
+        while si < len(body.stmts) {
+            let cs = _nvptx_unroll_clone_stmt(body.stmts[si], dsts, clone_offset)
+            if si == len(body.stmts) - 1 && !is_last_clone {
+                // Non-last clone's terminator → next clone (forward link).
+                clone_stmts.push(Stmt {
+                    kind: cs.kind,
+                    dst: cs.dst,
+                    op: cs.op,
+                    args: cs.args,
+                    target_block: next_clone_id,
+                    target_block_else: cs.target_block_else
+                })
+            } else {
+                // Last clone keeps the back-edge to header (already
+                // pointing there via _nvptx_unroll_clone_stmt's
+                // target_block preservation).
+                clone_stmts.push(cs)
+            }
+            si = si + 1
+        }
+        clone_blocks.push(Block {
+            id: clone_block_id,
+            stmts: clone_stmts,
+            preds: [],
+            succs: []
+        })
+        i = i + 1
     }
 
-    // Redirect ORIGINAL body's terminator STMT_BR from header → clone.
+    // Redirect ORIGINAL body's terminator STMT_BR from header → first_clone.
     let mut new_body_stmts = []
     let mut bi = 0
     while bi < len(body.stmts) {
         if bi == len(body.stmts) - 1 {
-            // Terminator — rewrite target_block to point to clone.
+            // Terminator — rewrite target_block to point to first clone.
             let term = body.stmts[bi]
             new_body_stmts.push(Stmt {
                 kind: term.kind,
                 dst: term.dst,
                 op: term.op,
                 args: term.args,
-                target_block: clone_block_id,
+                target_block: first_clone_id,
                 target_block_else: term.target_block_else
             })
         } else {
@@ -2477,21 +2527,25 @@ pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
         succs: body.succs
     }
 
-    // Reassemble blocks: replace original body, insert clone right
+    // Reassemble blocks: replace original body, insert all clones right
     // after it. The other blocks are copied through unchanged.
     let mut new_blocks = []
     let mut k = 0
     while k < len(mfn.blocks) {
         if k == body_idx {
             new_blocks.push(new_body)
-            new_blocks.push(clone_blk)
+            let mut ci = 0
+            while ci < len(clone_blocks) {
+                new_blocks.push(clone_blocks[ci])
+                ci = ci + 1
+            }
         } else {
             new_blocks.push(mfn.blocks[k])
         }
         k = k + 1
     }
 
-    // Extend locals roster with the clone's renumbered dsts so the
+    // Extend locals roster with each clone's renumbered dsts so the
     // classifier sees the new Local ids during lowering. Each cloned
     // dst inherits the corresponding original Local's metadata so the
     // classification (binop op → kind) reproduces.
@@ -2501,37 +2555,42 @@ pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
         new_locals.push(mfn.locals[li])
         li = li + 1
     }
-    // Append a Local for each body-defined dst at the new id.
-    let mut di = 0
-    while di < len(dsts) {
-        let orig_id = dsts[di]
-        // Find the original Local record for this dst (linear scan).
-        let mut mi = 0
-        let mut found = false
-        while mi < len(mfn.locals) {
-            let L = mfn.locals[mi]
-            if L.id == orig_id {
-                new_locals.push(Local {
-                    id: orig_id + offset,
-                    arena_id: L.arena_id,
-                    type_id: L.type_id,
-                    name_hint: L.name_hint + "_u1"
-                })
-                found = true
+    // For each clone iteration i = 1..n_clones, append a Local per dst.
+    let mut ic = 1
+    while ic <= n_clones {
+        let clone_offset = ic * base_offset
+        let mut di = 0
+        while di < len(dsts) {
+            let orig_id = dsts[di]
+            // Find the original Local record for this dst (linear scan).
+            let mut mi = 0
+            let mut found = false
+            while mi < len(mfn.locals) {
+                let L = mfn.locals[mi]
+                if L.id == orig_id {
+                    new_locals.push(Local {
+                        id: orig_id + clone_offset,
+                        arena_id: L.arena_id,
+                        type_id: L.type_id,
+                        name_hint: L.name_hint + "_u" + to_string(ic)
+                    })
+                    found = true
+                }
+                mi = mi + 1
             }
-            mi = mi + 1
+            if !found {
+                // Body dst missing from mfn.locals (synthetic) — synthesise
+                // a minimal Local so the clone's id is in the roster.
+                new_locals.push(Local {
+                    id: orig_id + clone_offset,
+                    arena_id: 1,
+                    type_id: 0,
+                    name_hint: "unroll_clone"
+                })
+            }
+            di = di + 1
         }
-        if !found {
-            // Body dst missing from mfn.locals (synthetic) — synthesise
-            // a minimal Local so the clone's id is in the roster.
-            new_locals.push(Local {
-                id: orig_id + offset,
-                arena_id: 1,
-                type_id: 0,
-                name_hint: "unroll_clone"
-            })
-        }
-        di = di + 1
+        ic = ic + 1
     }
 
     return MFunc {

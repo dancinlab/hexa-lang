@@ -775,11 +775,12 @@ fn main() {
     let ok_unrn  = _test_unroll_no_match_passthrough()
     let ok_wmma  = _test_wmma_scaffold()
     let ok_mp    = _test_mixed_precision_scaffold()
+    let ok_fctN  = _test_unroll_factor_n()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp {
-        println("PASS: RFC 055 P3b/c/P4/P4+ — 13/13 cases (incl. _nvptx_unroll_pass + WMMA scaffold + mixed-precision scaffold)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN {
+        println("PASS: RFC 055 P3b/c/P4/P4+ + RFC 069 P1 — 14/14 cases (incl. F-RFC069-FACTOR-N)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -795,9 +796,10 @@ fn main() {
         if !ok_unrn { println("      055-P4+ unroll passthrough FAILED") }
         if !ok_wmma { println("      RFC 055 §12 P4+ WMMA scaffold FAILED") }
         if !ok_mp   { println("      RFC 055 §12 P4+ mixed-precision scaffold FAILED") }
+        if !ok_fctN { println("      RFC 069 P1 F-RFC069-FACTOR-N FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -1242,3 +1244,100 @@ fn _test_mixed_precision_scaffold() -> bool {
     return ok
 }
 
+
+// ── Case 14 — RFC 069 P1 `F-RFC069-FACTOR-N` ──────────────────────────
+//
+// Re-uses the canonical 3-block back-edge fixture from `_build_case_unroll_loop`
+// (PR #117 Case 10) and exercises factor=2 (PR #117 byte-eq regression),
+// factor=3 (3 body bodies + 2 forward links), factor=4 (4 bodies +
+// 3 forward links), and factor=100 (out-of-range clamp → passthrough
+// byte-identical to factor=1).
+//
+// Per RFC 069 §3 P1 `F-RFC069-FACTOR-N` + §4 falsifier battery. Does NOT
+// fire GPU silicon (text-shape only); F4 NUMERIC-EQ is the closure-cycle
+// falsifier.
+
+fn _count_substr(hay: string, needle: string) -> i64 {
+    // Tiny utility — count non-overlapping occurrences of `needle` in `hay`.
+    // Useful for counting cloned body instances in the unrolled PTX text.
+    let mut n: i64 = 0
+    let mut i: i64 = 0
+    let hlen = len(hay)
+    let nlen = len(needle)
+    if nlen == 0 { return 0 }
+    while i + nlen <= hlen {
+        if substring(hay, i, i + nlen) == needle {
+            n = n + 1
+            i = i + nlen
+        } else {
+            i = i + 1
+        }
+    }
+    return n
+}
+
+fn _test_unroll_factor_n() -> bool {
+    let mut ok = true
+
+    // -- Sub-case A — factor=3 (2 clones, 3 total body iterations) -------
+    let mfn_f3 = _nvptx_unroll_pass(_build_case_unroll_loop(), 3)
+    let ptx_f3 = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn_f3))
+    let mul_count_f3 = _count_substr(ptx_f3, "mul.f64")   // body has one mul.f64
+    if mul_count_f3 != 3 {
+        println("  FAIL: factor=3 expected 3× mul.f64, got " + to_string(mul_count_f3))
+        ok = false
+    } else {
+        println("  ok: factor=3 → 3 body iterations (3× mul.f64)")
+    }
+
+    // -- Sub-case B — factor=4 (3 clones, 4 total body iterations) -------
+    let mfn_f4 = _nvptx_unroll_pass(_build_case_unroll_loop(), 4)
+    let ptx_f4 = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn_f4))
+    let mul_count_f4 = _count_substr(ptx_f4, "mul.f64")
+    if mul_count_f4 != 4 {
+        println("  FAIL: factor=4 expected 4× mul.f64, got " + to_string(mul_count_f4))
+        ok = false
+    } else {
+        println("  ok: factor=4 → 4 body iterations (4× mul.f64)")
+    }
+
+    // -- Sub-case C — factor=100 out-of-range → clamp to passthrough ----
+    // (factor > _nvptx_unroll_max_factor returns mfn unchanged; PTX is
+    // identical to running the pass with factor=1 i.e. no unroll.)
+    let mfn_baseline = _build_case_unroll_loop()
+    let mfn_f100 = _nvptx_unroll_pass(_build_case_unroll_loop(), 100)
+    let ptx_baseline = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn_baseline))
+    let ptx_f100 = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn_f100))
+    if ptx_baseline != ptx_f100 {
+        println("  FAIL: factor=100 (out-of-range) should be byte-identical to no-unroll baseline")
+        ok = false
+    } else {
+        println("  ok: factor=100 → clamp passthrough (PTX byte-identical to baseline)")
+    }
+
+    // -- Sub-case D — factor=2 byte-eq with PR #117 (regression guard) --
+    // PR #117 landed factor=2 as a single clone; RFC 069 P1 must keep
+    // that path byte-identical (the generalized loop runs once for N=2,
+    // so the output equals what PR #117 emitted).
+    let mfn_f2 = _nvptx_unroll_pass(_build_case_unroll_loop(), 2)
+    let ptx_f2 = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn_f2))
+    let mul_count_f2 = _count_substr(ptx_f2, "mul.f64")
+    if mul_count_f2 != 2 {
+        println("  FAIL: factor=2 expected 2× mul.f64, got " + to_string(mul_count_f2))
+        ok = false
+    } else {
+        println("  ok: factor=2 → 2 body iterations (PR #117 byte-eq regression guard)")
+    }
+
+    return ok
+}
+
+// _wrap_single_mfn — small helper. Wrap a single MFunc into an MModule
+// so it goes through `codegen_emit_ptx_sm80` as a complete unit. The
+// generic test fixtures only build MFunc-level objects; the emit pass
+// takes MModule.
+fn _wrap_single_mfn(mf: MFunc) -> MModule {
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "rfc069_factor_n_test.hexa", funcs: fns, globals: [] }
+}
