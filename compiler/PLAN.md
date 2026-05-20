@@ -4089,3 +4089,54 @@ Bulk triage of `inbox/patches/` per @D g_inbox_processing_loop step-4 variant (n
 
 **g3-honest scope**: this is a TRIAGE cycle only — no source SSOT modified, no fix cycle run, no parse-gate exercised, no binary promote. Only `inbox/patches/*.md` files received one-line marker additions. Heavy mainline build NOT executed. Memory `feedback_inbox_dup_race_precheck` validated by measurement — 35/60 patches were already closed in mainline before this scan, would have wasted 35 redundant fix-cycles without precheck. mini/ubu hosts not used.
 
+
+---
+
+### 2026-05-20 — inbox/patches/g7-hexa-ld-dlopen RFC-promoted (RFC 070 scaffold, Shape B)
+
+Inbox SOP per `@D g_inbox_processing_loop` (worktree
+`worktree-agent-a5ee721cc79a54855`). Source patch
+`inbox/patches/g7-hexa-ld-dlopen.md` (opened 2026-05-10) requested
+`hexa cc --shared` + `hexa_ld --shared` + runtime `dlopen` surface to
+unblock wilson in-process plugin hot-reload.
+
+dup-race precheck:
+- `git log --all` hits = filing commit (`a01fb505`) + JIT pipeline
+  (`9a01aa2a`) + h100 GPU dlopen (`40da809e`) + VOID extern FFI
+  (`bf3d1211`, `d07fc1dc`). All consume libc `dlopen` via FFI but
+  none implement `hexa_ld --shared` or `--shared` codegen.
+- `git grep dlopen self/ stdlib/` = 9 raw FFI callers (no
+  `stdlib/dynlink.hexa` surface).
+- inbox/rfc_drafts_2026_05_20/ slots 070-071-073 free.
+- Verdict: untouched at the surface this RFC requires. Shape B
+  appropriate (multi-phase, falsifier-anchored).
+
+Landed this commit (scaffold-only, zero behavior change):
+- `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md`
+  — full RFC text. 6-phase plan G7-A..G7-F + 9-falsifier battery
+  (F-A1/A2 PIC + nm; F-B1/B2/B3 ELF type/SONAME + Mach-O DYLIB;
+  F-C1/C2 POSIX dlopen + HexaVal round-trip; F-D1/D2 ABI hash +
+  HXC cap manifest; F-F1 Mach-O parity). Anchored on POSIX 2017
+  §dlopen + ELF System V gABI + Mach-O `<mach-o/loader.h>` +
+  nanbox ABI byte-eq compiler invariant (per `@D g3`).
+- `inbox/patches/g7-hexa-ld-dlopen.md` status flipped
+  `spec → rfc-promoted 2026-05-20 (RFC 070)`.
+
+Not landed (deferred to G7-A first cycle):
+- `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` `--shared` flag
+- `compiler/link/hexa_ld.hexa --shared` ET_DYN/MH_DYLIB emit
+- `self/runtime.{c,h}` `hexa_dlopen/dlsym/dlclose/dlerror`
+- `stdlib/dynlink.hexa` new file
+- Binary promote (per SOP step 7, separate deploy cycle).
+
+Honest scope per `@D g3`: this entry closes the "filed RFC stays
+filed" gap only — it is RFC text + status flip, NOT implementation.
+G7-A is the smallest first cycle (codegen flag + F-A1/F-A2 gates)
+and is conditional on wilson measuring G8-incremental cost > G7 cost
+(per RFC §5-3 + source patch §7-3). Option (d) "skip G7" remains
+valid.
+
+cross-link: inbox/patches/g7-hexa-ld-dlopen.md ·
+inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md ·
+`@D g7` inbox-patches-pipeline · `@D g_inbox_processing_loop` ·
+`@D g5` hexa-native-only (libc widening discussion §3.A)

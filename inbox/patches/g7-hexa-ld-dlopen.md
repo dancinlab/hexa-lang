@@ -1,6 +1,7 @@
 # incoming patch: g7-hexa-ld-dlopen — RFC 초안
 
-> **id**: `g7-hexa-ld-dlopen` · **opened**: 2026-05-10 · **status**: `spec` (RFC 초안 — 미land)
+> **id**: `g7-hexa-ld-dlopen` · **opened**: 2026-05-10 · **status**: `rfc-promoted 2026-05-20 (RFC 070)`
+> **promoted-to**: `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md`
 > **trees**: `self/` + `compiler/` (`hexa_ld`, codegen, runtime loader)
 > **source**: wilson plugin 아키텍처 (`~/core/wilson/docs/plugin-interfaces-comms-aot-brainstorm.md` Part C 개정판) — in-process plugin 을 재컴파일 없이 추가하려면 동적 링킹 필요. 현재 `hexa_ld v1.1` 은 static only (ELF64 + Mach-O static).
 > **why this matters**: wilson 의 in-process plugin (provider / tool / hook / view) 은 핫패스라 IPC 부적합 → 정적 링크돼야 함. dlopen 없으면 plugin 켜고 끄기 = `wilson` 재컴파일 (codegen + full relink, 수십초~분). dlopen 있으면 plugin = `.so`/`.dylib` 런타임 로드 (재컴파일 0). **단 — 없어도 wilson 은 동작 가능** (모든 디폴트 번들 plugin 을 `wilson build` 로 흡수 + G8 incremental link 으로 재빌드 단축). 그래서 우선순위 ★ (있으면 좋음, blocking 아님).
