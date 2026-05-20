@@ -1,8 +1,62 @@
 # incoming patch: import-alias-runtime-resolve — `import "..." as <alias>` runtime undefined function
 
-> **id**: `import-alias-runtime-resolve` · **opened**: 2026-05-14 KST PM · **status**: `proposed`
+> **id**: `import-alias-runtime-resolve` · **opened**: 2026-05-14 KST PM · **status**: `resolved-ssot` (closed 2026-05-20 via RFC-016)
 > **source**: `dancinlab/anima` VOICE Phase 1 impl (`tool/hexa_native/intent_proj.hexa` + `tool/hexa_native/voice_bridge.hexa`) — `import "./intent_proj.hexa" as ip` parses OK but runtime `ip.apply(...)` resolves to `Runtime error: undefined function: __mod_ip__apply`.
 > **why this matters**: modular split (intent_proj + voice_bridge + smoke 3-file) → forced collapse to single combined `tool/anima_voice_smoke.hexa` (~350 LoC). VOICE Phase 1 LANDED w/ 5/5 PASS via single-file, but modular split (clean separation of concerns) blocked until this resolves.
+
+---
+
+## RESOLUTION (2026-05-20, dup-race precheck PASS)
+
+**Status flip: `proposed` → `resolved-ssot`**. 메커니즘은 본 patch 가 file 된 직후 RFC-016 (commit `ec6f6a56`, "feat(lang): RFC-016 namespaced & Python-style imports — P1~P4 land") 에서 이미 LANDED. 본 patch 의 §2.0 internal inspection 과 정확히 같은 fix path 가 채택됨.
+
+### 측정 (2026-05-20, `/Users/ghost/.hx/bin/hexa_real run` on /tmp/alias_test/)
+
+```
+$ cat m.hexa
+pub fn add(a: int, b: int) { return a + b }
+
+$ cat caller.hexa
+import "./m.hexa" as m
+fn main() { println(m.add(2, 3)) }
+
+$ hexa run caller.hexa
+5
+rc=0
+```
+
+PASS — alias import 완전 작동.
+
+### Spec 결정 (3 options 중 채택본)
+
+본 patch 가 권장한 §3.2 Option A (default-export-all top-level fn) 가 아니라 **Option B (explicit `pub fn`)** 가 채택됨. 이는 patch §1.1 reproducer 의 `fn add` (non-pub) 가 silently fail 하는 이유 — namespace pollution 방지의 Pro 가 즉시 작동의 Pro 보다 우선시됨. 다운스트림 fix path = module 의 모든 alias-exported fn/let/const/struct/enum 을 `pub` 로 marking.
+
+### 핵심 구현 (이미 land, RFC-016 P1)
+
+| File | Function | Lines | Role |
+|---|---|---|---|
+| `self/parser.hexa` | `parse_stmt` (ImportStmt branch) | 1034-1063 | `import "path" as <ident>` 토큰 처리 → `ImportStmt{name=path, value=alias}` |
+| `self/module_loader.hexa` | `ml_parse_import_alias` | 206-247 | line-level alias 추출 |
+| `self/module_loader.hexa` | `ml_apply_alias_prefix` | 298-369 | provider-side `pub fn/let/const/struct/enum` → `__mod_<alias>__<name>` rewrite + intra-module sibling pub call rewrite |
+| `self/module_loader.hexa` | `ml_rewrite_alias_refs` | 377+ | caller-side `<alias>.<sym>` → `__mod_<alias>__<sym>` rewrite |
+| `self/module_loader.hexa` | `ml_collect_imports_with_alias` | 787-822 | `from "x" import a, b` (P3) + alias-aware import collection |
+| `bench/import_alias_e2e.hexa` | (e2e smoke) | — | `import "stdlib/path.hexa" as pp` + `pp.path_join("a","b")` — production check |
+
+추가로 commit `f3474de6` ("feat(import): register aliased imports in runtime symbol table") + `c85636a4` ("fix(lex,parse): use→import alias · .hexa auto-suffix · multi-main collapse") 가 동일 cycle 에 landed. 본 patch 가 file 되기 전(2026-05-07)에 이미 closure.
+
+### 잔여 (deploy-cycle concern, 본 patch scope outside)
+
+`self/native/parser_v2.c` 의 generated C frontend (`hexa parse` CLI 단독 호출 시 사용) 가 `import...as` 토큰을 거부 (`Parse error at 1:19: unexpected token As ('as')`). 단,
+
+1. `module_loader` 가 line-preprocess 단계에서 `import...as` 를 `// [ml-stripped]` 로 잘라낸 후 expanded source 를 parser 에 넘기므로 **build/run path 무영향** (측정: rc=0).
+2. `parse` standalone path 도 warning 만 발생, rc=0 (validate 통과).
+3. `parser.hexa` SSOT 가 이미 correct (line 1034-1063); `parser_v2.c` 는 deploy regen lag. 다음 standard deploy cycle (`@D g_commit_push_deploy`) 에서 sync 됨.
+
+본 inbox loop 의 step 7 (`promote = 별도 standard deploy step, 본 loop 미포함`) 에 의해 deploy 는 별도 cycle. 패치 본문은 closed.
+
+### 다운스트림 (anima) 액션
+
+`tool/hexa_native/intent_proj.hexa` + `voice_bridge.hexa` 의 alias-exported 함수 (`apply`, `d_intent`, `voice_emit` 등) 에 `pub` 추가하면 modular split 즉시 복원 가능. `tool/anima_voice_smoke.hexa` (`fcdc3cae5`) 의 combined-single-file workaround 는 retire 후 3-file split 로 회귀할 수 있음. 본 fix 는 anima 측 1-keyword/함수 수정으로 끝.
 
 ---
 

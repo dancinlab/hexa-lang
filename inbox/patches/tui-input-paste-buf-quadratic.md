@@ -1,5 +1,7 @@
 # self/tui/input.hexa — `_decode_in_paste` byte-by-byte string concat is O(n²)
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/tui/input.hexa` L64-73 carries the `_paste_bytes: [int]` array (O(1) push) with the comment explicitly crediting this patch and noting `bytes_to_str_raw` 1-shot at close. Close-only marker.
+
 ## Symptom
 
 A wilson user pastes ~3390 lines (~200 KB) into the harness-cli TUI. The terminal

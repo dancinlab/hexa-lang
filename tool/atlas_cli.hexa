@@ -1,28 +1,31 @@
-// tool/atlas_cli.hexa — `hexa atlas {hash|stats|lookup|dump|append-witness|promote|register|pr}`
+// tool/atlas_cli.hexa — `hexa atlas {hash|stats|lookup|dump|append-witness|register|pr}`
 //
-// @version 0.4.0
+// @version 0.5.0
 // @capabilities [fs_read, fs_write, exec]
 // @allow-bare-exec-file (reason: exec() used for date +%s%3N millis timer in
 //   _now_ms() — wall-clock for unique shard filename; matches the same
 //   pattern in tool/atlas_embed_gen.hexa::_now_ms.)
 //
-// Atlas SSOT surface:
+// Atlas SSOT surface (PR-only policy — @D g_atlas_binary_builtin):
 //   - 4 READ subcommands (hash/stats/lookup/dump) resolve against the
 //     compile-time embedded static_atlas() — zero fs read, zero parse.
 //   - WRITE subcommands:
 //       append-witness — record a node as `atlas.append.witness-<ts>-<id>.n6`
 //                        staging shard (picked up by merger.hexa::_discover on next regen).
-//       promote        — fold a staging shard into the LIVE atlas via
-//                        compiler/discover/promote.hexa::promote_to_atlas
-//                        (writes atlas.append.<today>.n6 + a manifest). The `update` arm.
 //       register       — STUB: lex→parse→discover_check→write_staging for a project file's
 //                        `@discover`-annotated fns. Needs the compiler frontend wired into a
 //                        `tool/atlas_register.hexa` companion — spec in
 //                        inbox/patches/hexa-cli-atlas-register-update-or-pr.md.
-//       pr             — the `PR` arm of `update || PR`: fold a staging shard onto a fresh
-//                        git branch, commit the append shard, try `gh pr create` against
-//                        origin. Degrades honestly (write-shard + print exact commands) when
-//                        git/gh are missing or unauthenticated — never fakes a PR.
+//       pr             — the sole landing verb under PR-only policy: fold a staging shard
+//                        onto a fresh git branch, commit the append shard, try `gh pr create`
+//                        against origin. Degrades honestly (write-shard + print exact
+//                        commands) when git/gh are missing or unauthenticated — never fakes
+//                        a PR. Equation flow: register → pr (no direct fold-to-live).
+//
+//   - The legacy `promote` arm (direct fold-to-live without PR) is RETIRED 2026-05-20 per
+//     inbox/patches/hexa-atlas-pr-only-policy.md. promote_to_atlas() is still imported and
+//     used internally by cmd_pr (the PR arm folds onto a branch, then opens the PR), but
+//     no contributor-facing `hexa atlas promote` verb is exposed.
 //
 // Wired from self/main.hexa: `hexa atlas <sub-sub> [args]`.
 // Also runnable directly: `hexa run tool/atlas_cli.hexa <sub-sub> [args]`.
@@ -48,7 +51,7 @@ fn _slice_args() -> array {
     let mut i = 1
     while i < n {
         let a = to_string(av[i])
-        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "append-witness" || a == "promote" || a == "register" || a == "pr" || a == "--help" || a == "-h" || a == "help" {
+        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "append-witness" || a == "register" || a == "pr" || a == "--help" || a == "-h" || a == "help" {
             let mut out = []
             let mut j = i
             while j < n {
@@ -393,52 +396,14 @@ fn cmd_append_witness(rest: array) {
     println(path)
 }
 
-// `hexa atlas promote --staging <file.n6> [--atlas-root <repo-root>]`
-// Fold a staging shard (a `.n6` with `@<kind> <id>` headers — from `hexa atlas
-// append-witness`, or the compiler's auto-discover pass) into the LIVE atlas:
-// runs compiler/discover/promote.hexa::promote_to_atlas, which dedups (fingerprint
-// → alias / id-first wins), writes `atlas.append.<today>.n6` + a manifest under
-// <atlas-root>, and prints a seen/new/merged/rejected summary. The `update` arm of
-// `update || PR` — pair it with `git add atlas.append.<today>.n6 && git commit`.
-fn cmd_promote(rest: array) {
-    let mut staging = ""
-    let mut atlas_root = ""
-    let mut i = 0
-    let n = len(rest)
-    while i < n {
-        let a = to_string(rest[i])
-        if a == "--staging" && i + 1 < n {
-            staging = to_string(rest[i + 1])
-            i = i + 2
-        } else if a == "--atlas-root" && i + 1 < n {
-            atlas_root = to_string(rest[i + 1])
-            i = i + 2
-        } else if a == "--help" || a == "-h" {
-            println("usage: hexa atlas promote --staging <file.n6> [--atlas-root <repo-root>]")
-            return
-        } else if len(staging) == 0 && a.substring(0, 2) != "--" {
-            staging = a
-            i = i + 1
-        } else {
-            println("error: unknown arg: " + a)
-            exit(2)
-        }
-    }
-    if len(staging) == 0 {
-        println("error: hexa atlas promote needs a staging file — `--staging <file.n6>`")
-        println("       (the discover/append shard to fold into the live atlas; e.g. one written by `hexa atlas append-witness`)")
-        exit(2)
-    }
-    if len(atlas_root) == 0 {
-        atlas_root = env_var("HEXA_LANG")
-        if len(atlas_root) == 0 { atlas_root = "." }
-    }
-    let rc = promote_to_atlas(staging, atlas_root)
-    if rc != 0 {
-        println("hexa atlas promote: promote_to_atlas failed (rc=" + to_string(rc) + ", staging=" + staging + ", atlas-root=" + atlas_root + ")")
-        exit(2)
-    }
-}
+// RETIRED 2026-05-20 — `hexa atlas promote` (direct fold-to-live) removed per
+// inbox/patches/hexa-atlas-pr-only-policy.md (wilson governance principle #2 PR-only).
+// The promote_to_atlas() primitive is still imported and called internally by
+// cmd_pr (the PR arm folds onto a branch, then opens the PR). Equation flow:
+//   register → pr  (no direct fold-to-live; every equation lands via reviewable PR.)
+// The former `fn cmd_promote(rest: array)` body has been deleted; the dispatcher
+// arm is gone. Reach out to release-engineering if a post-merge shard-fold helper
+// is needed — that belongs in a CI tool, not in the contributor CLI surface.
 
 // `hexa atlas register` — direct node-generation → embedded.gen.hexa → PR.
 //
@@ -1600,11 +1565,6 @@ fn cmd_help() {
     println("                          [--emitter <name>] [--dir <staging_dir>]")
     println("                          stage a node as atlas.append.witness-<ts>-<id>.n6")
     println("                          default --dir = $HEXA_ATLAS_STAGING or $HOME/core/hexa-lang/n6")
-    println("  promote --staging <file.n6> [--atlas-root <repo-root>]")
-    println("                          fold a staging shard into the LIVE atlas (dedup → alias /")
-    println("                          id-first wins), write atlas.append.<today>.n6 + a manifest.")
-    println("                          the `update` arm of `update || PR` — then git add+commit it.")
-    println("                          default --atlas-root = $HEXA_LANG (else cwd)")
     println("  register --from-verify <fn> <n> <v> [--auto-pr]   (also: <fn> <a> <b> <v> 2-op)")
     println("           --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--auto-pr]")
     println("           --from-check  [args]                       (STUB — extension point)")
@@ -1625,8 +1585,10 @@ fn cmd_help() {
     println("                          @discover-annotated fns. (needs the compiler frontend — see note)")
     println("  pr --staging <file.n6>  [--atlas-root <repo>] [--base <branch>] [--branch <name>]")
     println("                          [--title <text>]")
-    println("                          the `PR` arm of `update || PR`: fold the shard onto a fresh")
-    println("                          branch, commit the append shard, then `gh pr create`.")
+    println("                          PR-only landing verb (@D g_atlas_binary_builtin): fold the")
+    println("                          shard onto a fresh branch, commit the append shard, then")
+    println("                          `gh pr create`. Direct fold-to-live is forbidden — every")
+    println("                          equation lands via reviewable PR (even on owner repo).")
     println("                          degrades honestly when git/gh are absent/unauthed —")
     println("                          writes the shard + prints the exact commands, never fakes a PR.")
     println("")
@@ -1652,7 +1614,6 @@ fn main() {
     else if sub == "lookup" { cmd_lookup(rest) }
     else if sub == "dump" { cmd_dump(rest) }
     else if sub == "append-witness" { cmd_append_witness(rest) }
-    else if sub == "promote" { cmd_promote(rest) }
     else if sub == "register" { cmd_register(rest) }
     else if sub == "pr" { cmd_pr(rest) }
     else if sub == "help" || sub == "--help" || sub == "-h" { cmd_help() }

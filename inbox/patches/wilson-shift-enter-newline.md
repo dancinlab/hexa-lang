@@ -1,5 +1,7 @@
 # L2 input decoder: Shift+Enter / Alt+Enter for multi-line input
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/tui/input.hexa` L255-259 + L435 carries the Cursor/Windsurf Shift+Enter mapping with inline backref to this patch. Close-only marker.
+
 ## Symptom
 
 Wilson's `harness-cli` chat editor uses cp == -1 (Enter) to submit a line.

@@ -1,5 +1,7 @@
 # incoming patch: wilson-needs-hexa-build-out-of-tree
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/main.hexa::cmd_build` carries the [flat] module_loader pipeline (L882+, `__self_dir` resolver $HEXA_LANG fallback). Close-only marker.
+
 > **id**: `wilson-needs-hexa-build-out-of-tree` · **opened**: 2026-05-11 · **landed**: 2026-05-13 KST PM · **status**: `applied` — resolved by `self/main.hexa::cmd_build`'s `[flat] module_loader → … → hexa_v2 → clang` pipeline (commit #12 use-graph flatten landed before this; the `-I` issue was also fixed). Verified live multiple times against wilson v0.1 → v0.6.x — `HEXA_LANG=~/core/hexa-lang hexa build core/main.hexa -o build/<host>/wilson` produces a working binary out-of-tree with no symlink / manual flatten needed.
 > **trees**: build driver (`hexa build` / `hexa cc` command in `compiler/main.hexa` or `self/main.hexa::cmd_build`/`cmd_run`), and the install layout (`~/.hx/bin/`)
 > **priority**: ★★ — currently blocks `hexa build` of any multi-module project that lives outside the hexa-lang tree (= wilson). Workarounds exist (manual flatten + symlink) but they're fragile.

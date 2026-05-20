@@ -47,6 +47,8 @@ fn cmd_help() {
     println("  check <file>                            Verify @invariant DSL blocks (AST-based)")
     println("  build <file> [-o out] [--target=<t>]    Compile to native (RFC-018 5-stage IR;")
     println("                                            atlas baked in 0 ms; ≤2 forks)")
+    println("              [--shared]                    Emit .so/.dylib (RFC 070 G7-A flag-")
+    println("                                            wiring; F-A1/F-A2 next sub-cycle)")
     println("  bench <file> [--runs N] [--json]        Benchmark wall/RSS/alloc")
     println("  cc                                      Rebuild transpiler (hexa_cc)")
     println("  lsp                                     Start LSP server (stdin/stdout JSON-RPC)")
@@ -97,7 +99,10 @@ fn cmd_help() {
     println("  atlas lookup <P|C|L|E> <id>             Read single node")
     println("  atlas dump <P|C|L|E> [--json]           Read full kind")
     println("  atlas append-witness <stage>...         Write staging shard")
-    println("  atlas promote --staging <f.n6>          Write to live (* register/pr = stub)")
+    println("  atlas register --from-verify <fn> <n> <v> [--auto-pr]    in-memory node-gen → embed (PR-only)")
+    println("  atlas register --from-drill --seed \"<text>\" [--auto-pr]  drill verdict → embed (PR-only)")
+    println("  atlas pr --staging <f.n6>               PR-only landing verb (@D g_atlas_binary_builtin)")
+    println("                                          register → pr — direct fold-to-live forbidden")
     println("  atlas-verify [--domain D] [--tier N]     Verdict ledger — 86 entries Stage 1+2+3 hexa-native")
     println("  calc <engine> [args]                    TECS-L calculators (nstate/vortex/n6/perfect/congruence/gamma0)")
     println("  verify <id> | --expr <fn> <n> <v>       Verify claim: atlas+calc → tier (🔵/🟡/🟠/⚪)")
@@ -154,8 +159,8 @@ fn cmd_help() {
     println("    debate      L3 N-variant adversarial debate")
     println("    revive      engine+map v2 resurrect dead rounds (cap enforced)")
     println("")
-    println("EXTERNAL RESOURCES  (19, δ pattern — try-CLI-or-fallback)")
-    println("  HW probes:        qmirror   akida   qrng")
+    println("EXTERNAL RESOURCES  (17, δ pattern — try-CLI-or-fallback)")
+    println("  HW probes:        akida           (qmirror/qrng → STDLIB CLI via RFC 044/045)")
     println("  Data bridges (16): codata  oeis  arxiv  gw  horizons  cmb  nanograv  simbad")
     println("                     icecube  nist-atomic  wikipedia  openalex  gaia  lhc  pubchem  uniprot")
     println("    Live path: HTTP API (~15 s timeout)  ·  Fallback: frozen cache (HEXA_FORCE_FALLBACK=1)")
@@ -172,6 +177,17 @@ fn cmd_help() {
     println("")
     println("  Sister-project tools (rsc / bayes / n6 discover/mine / hexa-principle annotator etc.)")
     println("  분리됨 — 각 sister repo 의 자체 도구로 위치. invoke via `hexa run <sister>/path/main.hexa <verb>`.")
+    println("")
+    println("INTRINSIC SURFACE  (SPEC §16 — absorbed shell-equivalents, 638→752 sites)")
+    println("  Use these IN-PROCESS intrinsics from `compiler/intrinsics/intrinsics.hexa` —")
+    println("  do NOT shell out (HX9xxx fork-storm lint planned). Each ⇆ its shell-equivalent:")
+    println("    cwd()            ⇆ pwd                getenv(k)         ⇆ $VAR")
+    println("    list_dir(path)   ⇆ ls <path>          path_exists(p)    ⇆ test -e <p>")
+    println("    mkdir_p(path)    ⇆ mkdir -p <p>       path_is_dir(p)    ⇆ test -d <p>")
+    println("    rm_file(path)    ⇆ rm <p>             host_target()     ⇆ uname -sm")
+    println("    rm_rf(path)      ⇆ rm -rf <p>         now_ns()          ⇆ date +%s%N")
+    println("  Plus SPEC §18 firmware: stdlib/{core,alloc,hal,embedded,mcu} + firmware/boards/*")
+    println("  (5 absorbed repos; see `hexa hash` / `hexa stats` for the embedded inventory).")
     println("")
     println("STDLIB n=6  (compiler-internal, available as `use \"self/std_n6\"`)")
     println("  n6_lenses · n6_verify · n6_check · n6_consensus · n6_scan · n6_omega")
@@ -1045,10 +1061,15 @@ fn _absorbed_script(verb) {
     if verb == "debate"           { return "compiler/debate/debate.hexa" }
     if verb == "revive"           { return "compiler/revive/revive.hexa" }
 
-    // Phase 4 external (19) — HW probes + kick + 16 bridges.
-    if verb == "qmirror"          { return "compiler/hw_probes/qmirror.hexa" }
+    // Phase 4 external (17) — HW probes + kick + 16 bridges.
+    // RFC 044 (qrng → stdlib/qrng/) + RFC 045 (qmirror → stdlib/quantum/) absorbed
+    // the prior HW-probe stubs into stdlib; the dispatch lives in main() above as
+    // explicit `else if sub == "qrng"/"qmirror"` branches (the stdlib path). The
+    // legacy hw_probes/qrng + hw_probes/qmirror registry entries were RETIRED
+    // 2026-05-20 per inbox/patches/absorbed-verb-qrng-qmirror-superseded-by-stdlib.md
+    // — they silently shadow-claimed the verb names on partial-merge branches and
+    // routed `hexa qmirror` to a misleading 8/8 deterministic-stub.
     if verb == "akida"            { return "compiler/hw_probes/akida.hexa" }
-    if verb == "qrng"             { return "compiler/hw_probes/qrng.hexa" }
     if verb == "kick"             { return "compiler/drill/drill.hexa" }   // alias: kick → drill (ω-cycle ≡ drill apex)
     if verb == "codata"           { return "compiler/bridges/codata.hexa" }
     if verb == "oeis"             { return "compiler/bridges/oeis.hexa" }
@@ -1765,6 +1786,7 @@ fn target_supported_list() {
     return "linux-x86_64-musl, linux-x86_64-glibc, linux-aarch64-musl, linux-aarch64-glibc, darwin-arm64, darwin-x86_64"
 }
 
+// ─── MERGE: HEAD (RFC 071 P2) below, rfc070-g7-native-scaffold below the ━━━ ───
 // ─── RFC 071 P2 — NVPTX stub-PTX builder ──────────────────────────────
 // Live driver-side mirror of compiler/cli/build_nvptx.hexa::
 // _build_nvptx_stub_ptx + build_nvptx_emit_driver. cmd_build cannot yet
@@ -1817,6 +1839,37 @@ fn _build_nvptx_emit_driver(src_path, sm_arch) {
 }
 
 fn cmd_build(src, out, c_only, target) {
+// ━━━ end HEAD / begin rfc070-g7-native-scaffold ━━━
+fn cmd_build(src, out, c_only, target, shared) {
+    // RFC 070 §3.B / G7-A (Shape A flag-wiring sub-cycle, 2026-05-20)
+    //   `shared` = "1" → emit a position-independent shared library
+    //   (`-fPIC -shared` clang pass-through). ELF `ET_DYN` / Mach-O
+    //   `MH_DYLIB` falls out of clang -shared on the respective hosts;
+    //   the F-A1/F-A2 falsifier battery (PIC re-load + 1-exported-symbol
+    //   nm check) is the NEXT measured sub-cycle.
+    //
+    //   This sub-cycle is FLAG WIRING ONLY:
+    //     - `hexa build --shared <plugin>.hexa -o <plugin>.so` parses
+    //     - C-path: clang invocation gets `-fPIC -shared`
+    //     - HEXA_BACKEND=native: refused (native codegen PIC mode is the
+    //       parallel G7-A sub-cycle that touches
+    //       compiler/codegen/{arm64_darwin,x86_64_linux}.hexa; not in
+    //       this commit per @D g_inbox_processing_loop Shape A)
+    //     - --c-only + --shared: refused (no clang step, no -shared)
+    //     - --target=<triple> + --shared: refused for this sub-cycle
+    //       (cross-target PIC requires per-triple validation; gated on
+    //       a separate G7-A.cross sub-cycle)
+    //
+    //   Hidden-visibility default + `<plugin_id>_dispatch`-only export
+    //   (RFC 070 §3.B) is ALSO out of scope here — clang `-shared` alone
+    //   exports every public symbol. F-A2 will measure the gap; the
+    //   visibility / export-list narrowing lands as a follow-up
+    //   sub-cycle once F-A2 quantifies what currently leaks.
+    //
+    //   Cross-link: @D g5 hexa-native-only (libc dlopen is an existing
+    //   FFI consumer per RFC 070 §2 audit; `-shared` widens that
+    //   consumption but does NOT add a new toolchain dependency).
+// ─── END MERGE ───
     // bt 37: AOT 캐시 atomic rename.
     // 문제: 두 `hexa build` 가 동일 `out` 을 쓰면 clang 이 같은 파일을 동시에
     //       open(O_TRUNC) 하여 부분 쓰기/경합 발생 (macOS/Linux 공통). 한 쪽이
@@ -2001,6 +2054,18 @@ fn cmd_build(src, out, c_only, target) {
             println("       cross-compilation runs only on the C (clang/zig) path")
             exit(1)
         }
+        // RFC 070 G7-A.native sub-cycle (deferred — see cmd_build header).
+        // The native MIR→LIR→asm codegen (compiler/codegen/{arm64_darwin,
+        // x86_64_linux}.hexa) does NOT yet emit PIC + hidden-visibility +
+        // ET_DYN/MH_DYLIB. Refuse rather than silently produce a static
+        // .o that would link as an executable, not a loadable .so.
+        if shared == "1" {
+            println("error: --shared is unsupported with HEXA_BACKEND=native")
+            println("       native codegen PIC mode is the parallel G7-A sub-cycle")
+            println("       (compiler/codegen/{arm64_darwin,x86_64_linux}.hexa); use")
+            println("       the default C path (`HEXA_BACKEND= hexa build --shared ...`)")
+            exit(1)
+        }
         // runtime.c resolver — same chain the C path uses below
         // ($HEXA_LANG/self > <install>/self > ./self).
         let __nenvroot = env("HEXA_LANG")
@@ -2091,6 +2156,20 @@ fn cmd_build(src, out, c_only, target) {
         println("error: transpile failed — C file not produced: " + c_file)
         exit(1)
     }
+    // RFC 070 G7-A: mutual-exclusion guards. --shared is a CLANG step
+    // pass-through; --c-only skips clang entirely, --target uses zig cc
+    // (per-triple PIC has not been validated this sub-cycle).
+    if shared == "1" && c_only == "1" {
+        println("error: --shared and --c-only are mutually exclusive")
+        println("       --shared needs the clang link step; --c-only skips it")
+        exit(1)
+    }
+    if shared == "1" && len(target) > 0 {
+        println("error: --shared is not yet supported with --target=" + target)
+        println("       cross-target PIC requires per-triple validation")
+        println("       (G7-A.cross sub-cycle); use the native host clang path")
+        exit(1)
+    }
     // --c-only: transpile only. `out` 는 .c 파일 경로로 해석, clang / codesign /
     //   atomic rename 모두 skip. airgenome 등 외부 빌드 시스템이 직접 clang 을
     //   돌릴 때 유용. flatten_imports 경로는 동일하게 통과하므로 use graph 는
@@ -2137,9 +2216,16 @@ fn cmd_build(src, out, c_only, target) {
     // as a second TU. Long-term (path 2 of the patch file), ship a precompiled
     // runtime.o and link against it; for now compile-from-source.
     let __runtime_c = __self_dir + "/runtime.c"
+    // RFC 070 G7-A: --shared pass-through. `-fPIC -shared` instructs
+    // clang to emit a position-independent shared library (ELF ET_DYN on
+    // Linux, Mach-O MH_DYLIB on macOS). Falsifier F-A1 (PIC re-load at
+    // non-default base) and F-A2 (single-exported-symbol nm) are the
+    // next measured sub-cycle and are NOT executed here.
+    let mut _shared_cflags = ""
+    if shared == "1" { _shared_cflags = "-fPIC -shared " }
     let mut compile = ""
     if len(target) == 0 {
-        compile = "clang -O2 " + os_clang_cflags() + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
+        compile = "clang -O2 " + _shared_cflags + os_clang_cflags() + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
     } else {
         let zt = target_zig_triple(target)
         if len(zt) == 0 {
@@ -2170,7 +2256,13 @@ fn cmd_build(src, out, c_only, target) {
     // buglist#6 phase [2/2]: 컴파일 산출물(tmp) 존재 확인. 실패 시 조기 exit(1)
     // — mv 단계에서 '파일 없음'이 묻혀 false-positive 로 이어지지 않도록.
     // cross-target 산출물은 host 에서 실행 비트만 검사 (-x 는 chmod 만 의미).
-    let tmp_chk = exec("test -x '" + tmp + "' && printf yes || printf no")
+    // RFC 070 G7-A: shared libraries (.so / .dylib) ship as 0644 not 0755
+    // — clang's -shared output is not chmod +x. Relax to existence check
+    // for the --shared path (the F-A1/F-A2 falsifiers will measure the
+    // file type via readelf/otool in the next sub-cycle).
+    let mut _tmp_test = "-x"
+    if shared == "1" { _tmp_test = "-e" }
+    let tmp_chk = exec("test " + _tmp_test + " '" + tmp + "' && printf yes || printf no")
     if tmp_chk != "yes" {
         let _cc_label = "clang"
         if len(target) > 0 { _cc_label = "zig cc" }
@@ -2189,12 +2281,20 @@ fn cmd_build(src, out, c_only, target) {
     if len(mv) > 0 { println("    mv: " + mv) }
     // buglist#6: 최종 산출물 re-verify — clang 실패/mv 실패 등 중간 단계가
     // 어떤 이유로든 silent 하게 지나가더라도 여기서 확실히 실패 exit 하도록.
-    let out_chk = exec("test -x '" + out + "' && printf yes || printf no")
+    // RFC 070 G7-A: --shared output is a 0644 .so/.dylib — see _tmp_test
+    // note above for the -x → -e relaxation.
+    let mut _out_test = "-x"
+    if shared == "1" { _out_test = "-e" }
+    let out_chk = exec("test " + _out_test + " '" + out + "' && printf yes || printf no")
     if out_chk != "yes" {
         println("error: build failed — output binary missing: " + out)
         exit(1)
     }
-    println("OK: built " + out)
+    if shared == "1" {
+        println("OK: built " + out + " (shared library, RFC 070 G7-A flag-wiring only — F-A1/F-A2 next sub-cycle)")
+    } else {
+        println("OK: built " + out)
+    }
 }
 
 fn runtime_tmpdir() {
@@ -3887,36 +3987,42 @@ if len(av) < 3 {
             // hexa_v2 트랜스파일러 회귀: dispatch 블록 내부 `let src = av[3]`
             // decl 이 누락되어 cmd_build(src, ...) 가 undeclared 오류. bench
             // 와 동일한 패턴으로 배열 래핑 우회 —
-            //   bopts[0]=src, [1]=out, [2]=c_only, [3]=target (ROADMAP #20).
-            let mut bopts = [av[3], "build/artifacts/app", "0", ""]
+            //   bopts[0]=src, [1]=out, [2]=c_only, [3]=target (ROADMAP #20),
+            //   bopts[4]=shared (RFC 070 G7-A — "1" = `-fPIC -shared`).
+            let mut bopts = [av[3], "build/artifacts/app", "0", "", "0"]
             let mut i = 4
             while i < len(av) {
                 if av[i] == "-o" {
                     if i + 1 < len(av) {
-                        bopts = [bopts[0], av[i + 1], bopts[2], bopts[3]]
+                        bopts = [bopts[0], av[i + 1], bopts[2], bopts[3], bopts[4]]
                         i = i + 2
                     } else {
                         i = i + 1
                     }
                 } else if av[i] == "--c-only" {
-                    bopts = [bopts[0], bopts[1], "1", bopts[3]]
+                    bopts = [bopts[0], bopts[1], "1", bopts[3], bopts[4]]
                     i = i + 1
                 } else if av[i] == "--target" {
                     if i + 1 < len(av) {
-                        bopts = [bopts[0], bopts[1], bopts[2], av[i + 1]]
+                        bopts = [bopts[0], bopts[1], bopts[2], av[i + 1], bopts[4]]
                         i = i + 2
                     } else {
                         i = i + 1
                     }
                 } else if av[i].starts_with("--target=") {
                     let _v = av[i].substring(9, len(av[i]))
-                    bopts = [bopts[0], bopts[1], bopts[2], _v]
+                    bopts = [bopts[0], bopts[1], bopts[2], _v, bopts[4]]
+                    i = i + 1
+                } else if av[i] == "--shared" {
+                    // RFC 070 G7-A flag wiring. Behavior: clang -fPIC -shared.
+                    // Falsifier battery F-A1/F-A2 = next sub-cycle.
+                    bopts = [bopts[0], bopts[1], bopts[2], bopts[3], "1"]
                     i = i + 1
                 } else {
                     i = i + 1
                 }
             }
-            cmd_build(bopts[0], bopts[1], bopts[2], bopts[3])
+            cmd_build(bopts[0], bopts[1], bopts[2], bopts[3], bopts[4])
         }
     } else if sub == "check" {
         // T3 Phase A: AST-based @invariant DSL checker.

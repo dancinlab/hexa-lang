@@ -1,5 +1,7 @@
 # incoming note: phanes-stdlib-net-os-thread-concurrency-roadmap-62 — stdlib/net concurrency surfaces are logical-only today; multi-tenant SaaS scaling blocked on roadmap 62
 
+> **TRIAGED 2026-05-20**: closure note acknowledged · no action required (option (a) primitives `socket_set_nonblock` + `socket_select` landed 2026-05-19 in stdlib/net/socket.hexa; options (b) OS-thread + (c) fork-after-accept remain downstream-demand-driven follow-ons)
+
 > **id**: `phanes-stdlib-net-os-thread-concurrency-roadmap-62` · **opened**: 2026-05-19 KST · **status**: `resolved-ssot 2026-05-19 — socket_set_nonblock + socket_select landed in stdlib/net/socket.hexa (option (a) minimum primitive); parse-gate clean; binary promote = standard separate deploy step per the 22c27a05 pattern`
 > **trees**: `stdlib/net/http_server.hexa` (`server_serve` — sequential accept-loop) · `stdlib/net/concurrent_serve.hexa` (`run(workers)` — work-stealing deque on top of still-blocking `net_accept`; comment §run says "Stage0 blocking net_accept 때문에 실제로는 단일 스레드 직렬 처리이지만 ... 멀티 OS 스레드는 roadmap 62 통합 후 활성화")
 > **source**: downstream `phanes` (`~/core/phanes`, private SaaS; scope B generic autonomous-cycle platform; HTTP service `service/http_phanes.hexa`).

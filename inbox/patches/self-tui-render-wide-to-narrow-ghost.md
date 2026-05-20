@@ -1,5 +1,13 @@
 # self/tui/render: clear ghost cells when wide glyph is replaced by narrower content
 
+**Status: resolved-ssot (2026-05-20 · worktree agent-a284b7de66bb8f613)**
+
+`render_flush` 의 cell-by-cell loop 에 front-cell width (`f_w`) 계산 + wide→narrow
+shrinkage edge 에서 orphan 컨티뉴에이션 컬럼 ([x+w .. x+f_w)) 마다 명시적 blank
+emission 추가. tcell canonical behavior. `_cols` 가드 + adjacency-aware cursor
+positioning (last_x/last_y 갱신) 보존. parse-gate PASS. binary promote 는 별도
+standard deploy cycle.
+
 **Reported via wilson harness-cli (2026-05-12) — Korean / English alternating input shows 1-cell gaps after Korean syllables, even after `67b99c13` ("track terminal cursor by display width — wide-glyph gap") landed.**
 
 ## What `67b99c13` fixed

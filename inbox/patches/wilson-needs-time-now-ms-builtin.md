@@ -1,5 +1,7 @@
 # Stdlib gap: expose `time_now_ms` builtin so user-side hexa can read ms-precision time
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/codegen_c2.hexa` L4800 maps `time_now_ms`/`now_ms`/`timestamp_ms`/`__builtin_time_now_ms` → `hexa_time_ms()`; `self/runtime.c` L7188 hosts the builtin. Close-only marker.
+
 **Filed by:** wilson. Discovered while trying to bump the spinner from 1 Hz to
 5 Hz (200 ms cell). Sister gap to the bidi-stdio patch (`wilson-mcp-needs-
 bidi-stdio.md`); both fall in the same category — runtime has the C primitive,

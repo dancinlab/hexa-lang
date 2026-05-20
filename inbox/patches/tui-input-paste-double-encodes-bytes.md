@@ -1,5 +1,7 @@
 # self/tui/input.hexa — `_byte_to_str` double-encodes every paste byte ≥ 0x80
 
+> **VERIFIED-CLOSED 2026-05-20** — fixed via the same `_paste_bytes: [int]` array refactor (paste-buf-quadratic, L73): bytes captured raw and reified once at close via `bytes_to_str_raw(_paste_bytes)`, bypassing per-byte `_byte_to_str` encoding. Close-only marker.
+
 ## Symptom
 
 When a user pastes any non-ASCII content into a hexa TUI program with

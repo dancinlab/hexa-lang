@@ -1,5 +1,7 @@
 # RFC 055 — final closure (P3c.e re-classified) — 2026-05-20
 
+> **TRIAGED 2026-05-20**: closure note acknowledged · no action required (RFC 055 SPEC + correctness contract CLOSED via 11 PRs #82/#85/#87/#90-92/#94/#96-99; P3c.e UX polish deferred to downstream consumer demand)
+
 ## Reclassification: P3c.e is UX polish, not a missing primitive
 
 The earlier closure note (`2026-05-20-rfc055-p3c-deploy-cycle.md`)

@@ -1,5 +1,7 @@
 # incoming patch: print-err-builtin-interp-compiled-parity — `print_err` is an interpreter builtin but undeclared in compiled C codegen
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/codegen_c2.hexa` L1535 enumerates `print_err` in the void-builtin set alongside `eprintln`. Close-only marker.
+
 > **id**: `print-err-builtin-interp-compiled-parity` · **opened**: 2026-05-18 KST · **status**: `resolved-ssot 2026-05-19 — codegen_c2.hexa print_err=eprintln-alias landed (resolution (a)); parse-gate clean; binary promote = standard separate deploy step per the 22c27a05 pattern`
 > **trees**: `self/env.hexa` (builtin list — `print_err` registered) · compiled codegen path (`hexa build` → C emission — does NOT declare/emit `print_err`)
 > **source**: downstream `wisp` (`~/core/wisp`, new dancinlab consumer — WebKit shell + hexa-native core). `hexa build core/main.hexa -o wisp-core` on Mac Darwin-arm64.

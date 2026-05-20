@@ -1,5 +1,7 @@
 # incoming patch: wilson-needs-hexa-real-promotion
 
+> **VERIFIED-CLOSED 2026-05-20** — `~/.hx/bin/hexa_real` symlink → `~/core/hexa-lang/hexa.real` resolves. Close-only marker.
+
 > **id**: `wilson-needs-hexa-real-promotion` · **opened**: 2026-05-10 · **status**: `applied` (2026-05-10)
 > **trees**: build artifacts (`~/.hx/bin/hexa_real`, `~/.hx/packages/hexa/hexa.real`) — no source-tree change needed unless the rebuild itself surfaces a bug.
 > **why**: G2 source landed (`9210e024 feat(codegen+stdlib): RFC-022 G2 async integration — wilson gate FINAL CLEAR`; RFC-022 status "Integrated") — but the **deployed interpreter binary doesn't reflect it yet**, so wilson can't compile-verify its `core/` + `plugins/` scaffolds. This is the *last* concrete blocker for wilson P1 verification (G1✅ + G2✅-source + G3✅ — gate is source-clear, runtime-binary not).

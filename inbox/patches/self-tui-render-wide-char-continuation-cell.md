@@ -1,5 +1,7 @@
 # incoming patch: self-tui-render-wide-char-continuation-cell
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/tui/render.hexa` L255 carries `last_x = x + w - 1` width-advance fix. Close-only marker.
+
 > **id**: `self-tui-render-wide-char-continuation-cell` · **opened**: 2026-05-12 · **status**: `applied` (2026-05-12, same session — user said "hexa-lang upstream 개선 바로진행", so the fix landed directly in `self/tui/render.hexa` + `self/tui/widget/text.hexa` rather than waiting for an upstream pickup)
 > **trees**: `self/tui/render.hexa` (L3 diff renderer) + `self/tui/widget/text.hexa` (L4 widget; current workaround that interacts badly with the bug)
 > **why**: any CJK / emoji content in a `self/tui/render`-based TUI displays with a visible 1-cell gap *after every wide glyph* (e.g. Korean `완벽` → `완 벽`, model reply `메시지가` → `메 시 지 가`). Reported from wilson's `harness-cli`; reproducible directly via `self/tui/widget/text::text_draw` on any East-Asian-Wide string.

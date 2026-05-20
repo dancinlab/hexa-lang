@@ -1,5 +1,7 @@
 # `hexa run` (interpreter) hangs indefinitely on this Mac
 
+> **VERIFIED-CLOSED 2026-05-20 — DISSOLVED-BY-INTERP-RETIREMENT** — the tree-walking interpreter is RETIRED per @D g_interp_deprecated (R7 CLOSED 2026-05-19); `self/main.hexa::cmd_run` is now compile-then-exec (L1619-1620, L2311-2317). The original hang premise no longer exists. Close-only marker (no source change).
+
 **From:** wilson (downstream) — 2026-05-13. Filed because it blocked runtime-testing this
 session's hexa-lang work (`hexa atlas promote` in `tool/atlas_cli.hexa`, the `*_smoke.hexa` /
 `test_*.hexa` selftests). `hexa parse` and `hexa build` are unaffected and work fine.

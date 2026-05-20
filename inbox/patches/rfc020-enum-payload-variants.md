@@ -1,9 +1,50 @@
 # incoming patch: rfc020-enum-payload-variants
 
-> **id**: `rfc020-enum-payload-variants` · **opened**: 2026-05-10 · **status**: `in_progress`
-> **trees**: `self/` (대부분 land) + `compiler/` (미반영)
+> **id**: `rfc020-enum-payload-variants` · **opened**: 2026-05-10 · **resolved**: 2026-05-20 · **status**: `resolved-ssot` (A1-A5 landed; B1 honest holdout; B2 follow-up)
+> **trees**: `self/` (A1-A5 LANDED; B1 audit + holdout) + `compiler/` (B2 future cycle)
 > **source**: `proposals/rfc_020_enum_payload_variants.md` + commits below
 > **why this matters**: wilson pi-port 의 load-bearing 갭 G1 — `ai` 패키지의 `AssistantMessageEvent` 가 discriminated union (`{type:"text_delta",...} | {type:"tool_call_start",...} | ...` 수십 종) 이라, hexa-strict 로 표현하려면 다중 ADT 가 필요. RFC-020 결정: **단일 필드 + struct 임베드** 패턴으로 모든 ADT 표현 → `enum AsmEvent { TextDelta(TextDeltaData), ToolCallStart(ToolCallStartData), ... }`. 그게 완전 작동해야 wilson core 착수 가능.
+
+---
+
+## RESOLUTION (2026-05-20)
+
+본 패치의 핵심 SSOT 작업 (A1-A5) 은 **이미 git history 에 LANDED**. dup-race precheck 결과:
+
+| Phase | 상태 | 랜딩 커밋 |
+|---|---|---|
+| **A1** parser construction `E::V(x)` | ✅ LANDED | `3c8be96c` feat(self/parser) RFC-020 A1 |
+| **A2** typechecker payload-type 테이블 | ✅ LANDED | `005d5427` feat(self/typechecker) RFC-020 A2+A3 |
+| **A3** typechecker pattern binding | ✅ LANDED | `005d5427` (above) |
+| **A4** codegen — match-side payload 추출 + binding emit | ✅ LANDED | `a85b8a1c` (gen2_match_cond/gen2_match_stmt) + `4ed9966e` (interp parity 15/15 PASS) + `41ecfb97` (codegen_c2.hexa SSOT 복원 — regen 이 a85b8a1c hand-fix 를 한 번 wiped) |
+| **A5** regression test `test_enum_payload_full.hexa` | ✅ LANDED | `4ed9966e` — 15/15 PASS interp + native, byte-eq |
+| **B1** `self/ir/Operand` sum-type 마이그레이션 | ⚠️ HOLDOUT (honest) | `77254d91` doc(self/ir/instr) — stage0 binary (build/hexa_interp.real) 가 A5 fixes 미반영이라 sum-type migration 시 모든 consumer 가 `val_void` 로 깨짐. 5-step TODO 기록됨. 후속 cycle 의 명확한 prerequisite = build/hexa_interp.real 재빌드 |
+| **B2** `compiler/` 트리 반영 | ⬜ FUTURE | `compiler/parse/ast.hexa` + `compiler/check/*` + `compiler/lower/*` + `compiler/codegen/*` — 별도 cycle |
+| **C1** 다중 필드 variant | ⬜ DEFERRED | RFC §3.1 = struct-embed 1-필드 우선; multi-field 후순위 |
+
+### Verification (worktree parse-gate 2026-05-20)
+
+- `hexa_real parse self/parser.hexa` → OK
+- `hexa_real parse self/type_checker.hexa` → OK
+- `hexa_real parse self/codegen_c2.hexa` → OK
+- `hexa_real parse self/test_enum_payload_full.hexa` → OK
+- `hexa_real parse self/ir/instr.hexa` → OK (B1 audit comments)
+
+A5 regression suite (`self/test_enum_payload_full.hexa`, 15 cases — int/string/struct-embed payload + nested match + Unit 혼재) 의 byte-eq PASS 결과는 `4ed9966e` 의 커밋 메시지에 측정 기록.
+
+### honest-scope caveats (g3 over-claim 0)
+
+- 본 resolution 은 **filing 의무에 대한 SSOT closure** 만 기록. 즉 `self/` 트리의 A1-A5 는 measured LANDED, B1 은 measured HOLDOUT, B2/C1 은 untouched future work.
+- `inbox/wilson-pi-port-prereq` 의 G1 갭 자체는 A4 codegen + `self/codegen_c2.hexa` SSOT 복원 (`41ecfb97`) 으로 unblock 됨 — wilson 의 `AsmEvent` 류 multi-variant payload 가 `hexa build` 경로에서 작동. multi-field variant 가 필요한 경우는 RFC 의 권장대로 single-field + struct-embed 우회.
+- B1 holdout 은 **bug 가 아니라 의도적 보류** — `self/ir/instr.hexa` L57-86 의 5-step TODO 가 prerequisite (build/hexa_interp.real 재빌드 → enum-with-payload destructure 실제값 검증 → migration → selftest parity) 를 명시.
+
+### 후속 sub-cycle 명세 (이번 cycle 범위 외)
+
+1. **B1-prep**: `build/hexa_interp.real` 을 `self/hexa_full.hexa` 에서 재빌드 (interp 은퇴 @D g_interp_deprecated 영향 — 신규 코드 의존 금지, 단 B1 audit 의 prereq 확인용으로만 사용 가능). 또는 B1 자체를 compiled-path-only validation 으로 재설계.
+2. **B2**: `compiler/parse/ast.hexa` `:7-10` STALE 주석 갱신 + `compiler/parse/parser.hexa` A1 동등 + `compiler/check/{resolve,bind,types}.hexa` A2/A3 동등 + `compiler/lower/ast_to_hir.hexa` + `compiler/ir/{hir,mir,lir}.hexa` sum-type + `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` payload 캡처. 큰 작업, 별도 multi-cycle.
+3. **C1**: 다중 필드 variant — positional vs labeled vs tuple 디자인 정착 후 별도 RFC.
+
+cross-link: `compiler/PLAN.md` 진행 로그 entry (본 cycle).
 
 ---
 

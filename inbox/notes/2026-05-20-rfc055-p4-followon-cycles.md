@@ -1,5 +1,7 @@
 # RFC 055 §12 P4+ — named follow-on cycles (closed PRs #110/#111/#112)
 
+> **TRIAGED 2026-05-20**: closure note acknowledged · no action required (3 named follow-on PRs re-ported as v2 landings #117/#121/#123 — see rfc055-p4-followons-v2-closure note)
+
 ## Status (2026-05-20)
 
 §12 P4+ first-batch parallel dispatch (5 agents):

@@ -1,5 +1,7 @@
 # `arr.shift()` — CODEGEN ERROR (unknown builtin method)
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/codegen_c2.hexa` L3306-3307 + L5437-5438 dispatch `shift` → `hexa_array_shift(obj)`. Close-only marker.
+
 **Filed by:** wilson. ROI audit 2026-05-14 (f3 forbidden pattern in `dancinlab/wilson` AGENTS.tape).
 
 **Date:** 2026-05-14.

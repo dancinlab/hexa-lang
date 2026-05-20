@@ -1,5 +1,7 @@
 # Struct constructor: function-reference field arg not auto-wrapped to `HexaVal`
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/codegen_c2.hexa` `__hexa_fn_arena_return` machinery (L1460+) carries the fn-arena escape contract documented in this patch. Close-only marker.
+
 **Filed by:** wilson. ROI audit 2026-05-14 (f2 forbidden pattern in `dancinlab/wilson` AGENTS.tape — closure-as-struct-method workaround). Verified 2026-05-14 with reproducer below.
 
 **Date:** 2026-05-14.

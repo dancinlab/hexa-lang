@@ -1,5 +1,13 @@
 # Patch request — `hexa kick`/`drill`/`omega` Mk.IX engine: expose overlay content for downstream consumption
 
+> **VERIFIED-CLOSED 2026-05-20** — landed on origin/main as `586ed29d feat(drill): --dump-overlay flag — expose Mk.IX overlay content to stdout/file` (2026-05-19). All four entry points (`hexa drill` · `hexa kick` · `hexa omega` · `hexa chain`) accept `--dump-overlay <target>` where target = `stdout` (sentinel-framed flush: `__OVERLAY_BEGIN__ round=<n> lines=<k>` … `__OVERLAY_END__ round=<n>`, mirroring the existing `__BT_AI2__` / `HEXA_DRILL_ANTI_HUB_TRACE` underscore-bracketed-uppercase pattern) or a filesystem path (append-mode, multi-round runs accumulate). Default-byte-identical when flag omitted. Code lives in `compiler/drill/{drill,round}.hexa` + `compiler/omega/{omega,omega_test}.hexa` + `compiler/chain/chain.hexa` on `origin/main`. Branch `s1-step2-codegen-perf` predates the land and will pick it up via the next origin/main merge — no re-implementation here (dup-race precheck per @D g_inbox_processing_loop). Close-only marker.
+
+- **kind:** patch
+- **status:** resolved-ssot (landed 586ed29d on origin/main 2026-05-19; this inbox-loop cycle filed the close-only marker from worktree `s1-step2-codegen-perf` where the implementation has not yet propagated)
+- **source_files:** `compiler/drill/drill.hexa` · `compiler/drill/round.hexa` · `compiler/omega/omega.hexa` · `compiler/omega/omega_test.hexa` · `compiler/chain/chain.hexa`
+- **from:** anima (`dancinlab/anima`) — §69 PROPOSES/DISPOSES blocker
+- **date:** 2026-05-19
+
 **Concept (one per file)**: the Mk.IX 6-stage discovery engine
 (`hexa kick` ≡ `hexa drill` ≡ `hexa omega`) currently emits SUMMARY only
 to stdout (round counts + JSON status). The generated overlay lines (the

@@ -1,5 +1,7 @@
 # self/lexer: make `tokenize` pub for downstream consumers
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/lexer.hexa` L125 `pub fn tokenize(source)`. Close-only marker.
+
 **Filed by:** wilson (downstream consumer of `self/lexer`).
 **Date:** 2026-05-13.
 **One concept.** Change one keyword.

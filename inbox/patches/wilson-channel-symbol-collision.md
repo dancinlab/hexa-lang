@@ -1,5 +1,7 @@
 # Symbol collision: `channel_send/recv/close` declared both as fn (stdlib/channel.hexa) and as HexaVal var (native/thread.c)
 
+> **VERIFIED-CLOSED 2026-05-20** — duplicate of `builtin-vs-stdlib-symbol-collision` (resolved 2026-05-13); `self/native/thread.c` carries the `thread_channel_*` rename. Close-only marker.
+
 **Filed by:** wilson. Blocks all wilson builds (parallel pool refactoring session
 exposed this). thread.c was added 2026-05-13 with the new channel primitives.
 

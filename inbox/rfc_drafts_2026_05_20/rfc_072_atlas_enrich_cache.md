@@ -1,6 +1,7 @@
 # RFC 072 — atlas_enrich cache (RFC 067 inline-enrich follow-on)
 
-- status: DRAFT (cost model + design; impl pending)
+- status: PHASE 1 LANDED (Option A in-memory scaffold; B/C pending)
+- **Phase 1 (Option A) landed 2026-05-20** — `compiler/atlas/parser.hexa::enrich_node` now wraps the parse path with an `_g_enrich_cache: any = {}` id-keyed map. Process-lifetime cache (binary rebuild = fresh process = clean cache; no runtime TTL needed). Observability via `enrich_cache_stats() -> [hits, misses]`. Falsifiers F1/F2/F3 are N/A for Option A (no cross-process / no disk I/O). Phase 2 (Option B disk) + Phase 3 (Option C baked sidecar) tracked in compiler/PLAN.md.
 - created: 2026-05-20
 - authority: `compiler/PLAN.md` RFC 065/067 진행 로그 entries
   ("inline atlas_enrich wire: ~567 parse_edge_lines per cycle, sub-second")
@@ -104,8 +105,9 @@ tool addition.
 
 | phase | deliverable | gate |
 |---|---|---|
-| **A** — this RFC | spec + option survey + Option B pick | reviewable |
-| **B** — impl | `stdlib/loop/state.hexa::enriched_view_*` API + cycle.hexa wire | round-trip test: write+read on synthetic enriched view |
+| **A** — this RFC | spec + option survey + Option B pick | reviewable ✅ |
+| **A.1** — Phase 1 Option A impl ✅ landed 2026-05-20 | `compiler/atlas/parser.hexa::enrich_node` in-memory cache wrap + `enrich_cache_stats()` hook | hexa_real parse PASS |
+| **B** — impl Option B (disk) | `stdlib/loop/state.hexa::enriched_view_*` API + cycle.hexa wire | round-trip test: write+read on synthetic enriched view |
 | **C** — measure | end-to-end `hexa loop --write` wall-clock vs RFC 067 baseline | ≤ 50% of RFC 067 enrich latency on cold cache; ≤ 5% on warm cache |
 
 ## §6 Falsifiers
@@ -138,8 +140,9 @@ tool addition.
 ## Sign-off
 
 - [x] spec drafted
-- [ ] reviewer agree on Option B (vs A/C) and on the cache encoding (JSONL vs HXC)
-- [ ] Phase B impl
+- [x] **Phase 1 / Option A in-memory scaffold landed (2026-05-20)** — `enrich_node` cache + `enrich_cache_stats()` observability; falsifiers F1/F2/F3 are N/A for Option A
+- [ ] reviewer agree on Option B (vs A/C) and on the cache encoding (JSONL vs HXC) for Phase 2
+- [ ] Phase B impl (disk cache; Option B)
 - [ ] Phase C measurement: cold/warm latency vs RFC 067 baseline
 
 ## §9 Measurement environment note (2026-05-20 ubu-2 fire-decision)

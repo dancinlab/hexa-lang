@@ -1,5 +1,7 @@
 # self/tui/input: decode `\e[Z` (CSI Z) as Shift+Tab / BackTab
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/tui/input.hexa` L421 `if final_byte == 90 { return ["key", -2, 0, 0, 1, ""] }     // Z shift+tab` with inline backref to this patch. Close-only marker.
+
 **Filed by:** wilson (downstream consumer of `self/tui/input`).
 **Date:** 2026-05-13.
 **One concept.** Add one CSI-final-byte handler.

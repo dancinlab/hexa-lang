@@ -1,5 +1,7 @@
 # incoming patch: phanes-sigv4-uriencode-query-canonicalization-for-s3-list — `stdlib/aws/sigv4.hexa` punted the SigV4 `UriEncode()` + query-parameter canonicalization; S3/R2 `ListObjectsV2` (any query-bearing request) fails to sign
 
+> **VERIFIED-CLOSED 2026-05-20** — `stdlib/aws/sigv4.hexa` L31-44 carries CanonicalURI + CanonicalQueryString docstrings + impl (RFC-3986 UriEncode). Close-only marker.
+
 > **id**: `phanes-sigv4-uriencode-query-canonicalization-for-s3-list` · **opened**: 2026-05-19 KST · **status**: `resolved-ssot — SigV4 UriEncode + CanonicalQueryString landed in stdlib/aws/sigv4.hexa; sigv4_test 25/25 PASS (compiled path) incl. AWS get-vanilla-query-order-key-case / get-vanilla-query-unreserved / normalize-path/get-space byte-eq oracles (2026-05-19)`
 > **trees**: `stdlib/aws/sigv4.hexa` (the signer — the §"Not done" punt) · `stdlib/aws/sigv4_test.hexa` (today only `get-vanilla`; add the `get-*-query` suite cases)
 > **source**: downstream `phanes` (`~/core/phanes`, public source-available SaaS)

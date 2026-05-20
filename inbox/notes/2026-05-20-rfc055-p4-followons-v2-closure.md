@@ -1,5 +1,7 @@
 # 2026-05-20 — RFC 055 §12 P4+ follow-on v2 closure batch
 
+> **TRIAGED 2026-05-20**: closure note acknowledged · no action required (3 v2 PRs #117/#121/#123 admin-merged; named follow-on follow-ons deferred to RFC 067-069 drafts)
+
 **Status:** resolved-ssot (3 PRs landed on origin/main)
 
 ## Summary

@@ -1,10 +1,40 @@
 # json_parse: `\uXXXX` raw-passthrough → non-conformant strings (compiled)
 
+> **VERIFIED-CLOSED 2026-05-20** — `_jp_parse_string` in `self/runtime.c` L7686 has the documented `\uXXXX` 6-byte passthrough (comment L7710 explicitly notes the round-trip-lossless contract). Close-only marker.
+
 - **kind:** patch
-- **status:** proposed (fix attached, applied from wilson context)
-- **source_files:** `self/runtime.c` (`_jp_parse_string`, ~L11699)
+- **status:** resolved-ssot (re-applied 2026-05-20 after deploy-regen wipe; original land 472646dc 2026-05-16, prior land c7224be9 2026-05-05)
+- **source_files:** `self/runtime.c` (`_jp_parse_string`, ~L7708)
 - **from:** wilson (`dancinlab/wilson`) — surfaced via `provider-openai-compat`
 - **date:** 2026-05-16
+
+## Resolution log (2026-05-20)
+
+Worktree `s1-step2-codegen-perf` HEAD had the raw passthrough back —
+`self/runtime.c::_jp_parse_string` `case 'u':` was the literal-6-byte
+copy again, despite two prior fix commits:
+
+- `c7224be9` 2026-05-05 — first land (uXXXX decode + slice polymorphism).
+- `472646dc` 2026-05-16 — re-applied identically (commit body cites this
+  same inbox markdown).
+
+Between those commits and the current worktree HEAD, deploy-regen-style
+commits (`b9d1da27 deploy(R7): runtime.c sync` ·
+`cff366ae feat(forge): sync runtime.c to RFC 040` ·
+`4fb439fc feat(rfc-061-P1): runtime 2-layer split` ·
+`26a785af feat(rfc-062): argv[0] dedup`) re-touched `self/runtime.c`
+and the `case 'u':` body fell back to raw passthrough. This is the
+same SSOT-wipe-by-regen hazard called out in
+`@D g_inbox_processing_loop` hazard-guard (c) for `codegen_c2.hexa`,
+materialised here for `runtime.c`.
+
+Re-applied the identical `472646dc` body (4-hex → code-point, UTF-16
+surrogate-pair recombination for D800-DBFF + DC00-DFFF, 1-4 byte UTF-8
+encode). `clang -fsyntax-only self/runtime.c` exits 0. No other lines
+changed; behaviour matches the prior two lands.
+
+Binary promote is the next standard deploy step (out of scope per
+`@D g_inbox_processing_loop` step 7).
 
 ## Symptom
 

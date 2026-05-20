@@ -1,5 +1,7 @@
 # format_pure debt — RESOLVED (2026-05-16)
 
+> **VERIFIED-CLOSED 2026-05-20** — `git log` confirms `9f621602` (fix(runtime): close format_pure debt) + `03f1a460` merge present. Close-only marker.
+
 **Status:** ✅ CLOSED by `9f621602` / merge `03f1a460` on `main`
 (also on `stage2-verify`, the branch wilson builds against, via the
 same fix). Reporter: wilson. Surfaced by the strbuf migration audit

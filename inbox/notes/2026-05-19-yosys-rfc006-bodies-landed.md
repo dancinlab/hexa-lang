@@ -1,5 +1,7 @@
 # yosys/rfc_006 — all 7 module bodies landed (next-pickup note)
 
+> **TRIAGED 2026-05-20**: closure note acknowledged · no action required (next-pickup items #1 read_verilog scope LANDED via PR #115; §5 gate iters #145/#149/#158/#166 merged)
+
 date: 2026-05-19
 worktree: /private/tmp/wt-yosys-rfc006 (branch yosys-rfc006, unpushed)
 spec: ~/core/demiurge/proposals/rfc_006_yosys_absorption.md §4/§5/§7

@@ -1,5 +1,7 @@
 # RFC 055 055-P3c — remaining sub-slices (deploy-cycle work) — 2026-05-20
 
+> **TRIAGED 2026-05-20**: closure note acknowledged · no action required (P3c.d landed via PR #99 deploy-cycle; P3c.e reclassified UX-polish per rfc055-final-closure note)
+
 ## Status
 
 3 of 5 055-P3c sub-slices landed via autonomous PRs this session:

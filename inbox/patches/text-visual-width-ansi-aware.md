@@ -1,5 +1,7 @@
 # patch: text-visual-width-ansi-aware
 
+> **VERIFIED-CLOSED 2026-05-20** — `self/tui/widget/text.hexa` L121-160 carries the ANSI-aware `text_visual_width` with the cross-link comment naming this patch. Close-only marker.
+
 _status: applied · added: 2026-05-16 · branch: fix/text-visual-width-ansi (off main)_
 
 ## Problem

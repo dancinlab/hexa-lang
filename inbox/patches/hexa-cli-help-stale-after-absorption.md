@@ -1,5 +1,16 @@
 # `hexa --help` is stale relative to the absorbed builtins/intrinsics
 
+- **status**: resolved-ssot (2026-05-20) — `cmd_help` now ships an INTRINSIC SURFACE
+  section advertising the SPEC §16 absorbed intrinsics with their shell-equivalents
+  (`cwd ⇆ pwd`, `list_dir ⇆ ls`, `mkdir_p ⇆ mkdir -p`, `getenv ⇆ $VAR`,
+  `path_exists ⇆ test -e`, `path_is_dir ⇆ test -d`, `rm_file ⇆ rm`, `rm_rf ⇆ rm -rf`,
+  `host_target ⇆ uname -sm`, `now_ns ⇆ date +%s%N`) plus an SPEC §18 firmware-absorption
+  pointer. The stale `HW probes: qmirror akida qrng` row is now `akida` only with a
+  pointer to STDLIB CLI for the absorbed qmirror/qrng (RFC 044/045 dispatch).
+- **resolved-by**: 3-in-1 inbox cleanup cycle (this commit) — see compiler/PLAN.md.
+- **deferred**: a dedicated `hexa intrinsics [list|--help]` subcommand and a generated
+  fork-storm lint surfacing on `hexa lint --help` — separate cycle.
+
 **From:** wilson (downstream) — observed 2026-05-12 while writing wilson's governance
 operating-principles list (which cites SPEC.md §16 fork-storm prevention / §18 firmware
 absorption / §2.2 atlas embed).
