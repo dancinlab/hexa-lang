@@ -1,0 +1,219 @@
+// compiler/emit/elf_x86_64.hexa
+//
+// RFC 063 § P2 — ELF x86_64 relocatable object emitter.
+//
+// Mirror of `compiler/emit/macho_arm64.hexa` (P0) for the Linux
+// platform. Emits ELF64 little-endian `.o` files for x86_64 from a
+// flat byte-text + symbol/reloc model.
+//
+// STATUS: P2 cycle 1 — header + minimum section headers serialize.
+// x86_64 instruction encoding follows. No code-signing on Linux →
+// P2 achieves RFC 063 § P3's "zero external fork" goal more cleanly.
+
+// ELF64 constants — `ELF_` prefix to avoid macro collision with any
+// `<elf.h>` headers a future runtime.c might pull in.
+
+let ELF_EI_MAG0           = 0x7F
+let ELF_EI_MAG1           = 0x45    // 'E'
+let ELF_EI_MAG2           = 0x4C    // 'L'
+let ELF_EI_MAG3           = 0x46    // 'F'
+let ELF_ELFCLASS64        = 2
+let ELF_ELFDATA2LSB       = 1       // little-endian
+let ELF_EV_CURRENT        = 1
+let ELF_ELFOSABI_NONE     = 0       // System V
+
+let ELF_ET_REL            = 1       // relocatable object
+let ELF_ET_EXEC           = 2
+let ELF_ET_DYN            = 3
+
+let ELF_EM_X86_64         = 0x3E
+let ELF_EM_AARCH64        = 0xB7
+
+let ELF_SHT_NULL          = 0
+let ELF_SHT_PROGBITS      = 1
+let ELF_SHT_SYMTAB        = 2
+let ELF_SHT_STRTAB        = 3
+let ELF_SHT_RELA          = 4
+let ELF_SHT_NOBITS        = 8
+
+let ELF_SHF_WRITE         = 0x1
+let ELF_SHF_ALLOC         = 0x2
+let ELF_SHF_EXECINSTR     = 0x4
+
+let ELF_STB_LOCAL         = 0
+let ELF_STB_GLOBAL        = 1
+let ELF_STT_NOTYPE        = 0
+let ELF_STT_FUNC          = 2
+
+let ELF_R_X86_64_NONE     = 0
+let ELF_R_X86_64_64       = 1
+let ELF_R_X86_64_PC32     = 2
+let ELF_R_X86_64_PLT32    = 4
+
+struct ElfX86Obj {
+    text:    [u8],
+    relocs:  [ElfRel],
+    symbols: [ElfSym],
+    strtab:  [u8],
+}
+
+struct ElfRel {
+    offset:  i64,
+    sym_idx: i64,
+    kind:    i64,
+    addend:  i64,
+}
+
+struct ElfSym {
+    name_offset: i64,
+    section:     i64,
+    value:       i64,
+    size:        i64,
+    bind:        i64,
+    type_:       i64,
+}
+
+fn _ew_u16(out: [Int], v: Int) {
+    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
+}
+fn _ew_u32(out: [Int], v: Int) {
+    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
+    out.push((v >> 16) & 0xFF); out.push((v >> 24) & 0xFF)
+}
+fn _ew_u64(out: [Int], v: Int) {
+    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
+    out.push((v >> 16) & 0xFF); out.push((v >> 24) & 0xFF)
+    out.push((v >> 32) & 0xFF); out.push((v >> 40) & 0xFF)
+    out.push((v >> 48) & 0xFF); out.push((v >> 56) & 0xFF)
+}
+fn _ew_zero(out: [Int], n: Int) {
+    let mut i = 0
+    while i < n { out.push(0); i = i + 1 }
+}
+fn _ew_str(out: [Int], s: string) -> Int {
+    let off = len(out)
+    let n = len(s)
+    let mut i = 0
+    while i < n { out.push(char_code(s, i) & 0xFF); i = i + 1 }
+    out.push(0)
+    return off
+}
+
+// serialize_elf_x86_64 — P2 cycle 1: empty-object byte stream.
+// Layout: header → .text → .symtab → .strtab → .shstrtab → section
+// header table (5 entries: NULL, .text, .symtab, .strtab, .shstrtab).
+pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
+    let out: [Int] = []
+    let text_size = len(obj.text)
+    let nsyms = len(obj.symbols)
+    let symtab_size = 24 * nsyms
+    let strsize = len(obj.strtab)
+
+    let shstrtab: [Int] = []
+    shstrtab.push(0)
+    let off_text     = _ew_str(shstrtab, ".text")
+    let off_symtab   = _ew_str(shstrtab, ".symtab")
+    let off_strtab   = _ew_str(shstrtab, ".strtab")
+    let off_shstrtab = _ew_str(shstrtab, ".shstrtab")
+    let shstrsize = len(shstrtab)
+
+    let elf_header_size = 64
+    let shdr_size = 64
+    let nshdrs = 5
+
+    let text_off     = elf_header_size
+    let text_pad     = (4 - (text_size & 3)) & 3
+    let symtab_off   = text_off + text_size + text_pad
+    let strtab_off   = symtab_off + symtab_size
+    let shstrtab_off = strtab_off + strsize
+    let shdr_off     = shstrtab_off + shstrsize
+
+    // ── ELF64 header ──
+    out.push(ELF_EI_MAG0); out.push(ELF_EI_MAG1)
+    out.push(ELF_EI_MAG2); out.push(ELF_EI_MAG3)
+    out.push(ELF_ELFCLASS64)
+    out.push(ELF_ELFDATA2LSB)
+    out.push(ELF_EV_CURRENT)
+    out.push(ELF_ELFOSABI_NONE)
+    _ew_zero(out, 8)                       // EI_ABIVERSION + 7 pad
+    _ew_u16(out, ELF_ET_REL)
+    _ew_u16(out, ELF_EM_X86_64)
+    _ew_u32(out, ELF_EV_CURRENT)
+    _ew_u64(out, 0)                         // e_entry
+    _ew_u64(out, 0)                         // e_phoff
+    _ew_u64(out, shdr_off)                  // e_shoff
+    _ew_u32(out, 0)                         // e_flags
+    _ew_u16(out, elf_header_size)           // e_ehsize
+    _ew_u16(out, 0)                         // e_phentsize
+    _ew_u16(out, 0)                         // e_phnum
+    _ew_u16(out, shdr_size)                 // e_shentsize
+    _ew_u16(out, nshdrs)                    // e_shnum
+    _ew_u16(out, 4)                         // e_shstrndx
+
+    // ── .text ──
+    let mut ti = 0
+    while ti < text_size { out.push(obj.text[ti] & 0xFF); ti = ti + 1 }
+    _ew_zero(out, text_pad)
+
+    // ── .symtab ──
+    let mut si = 0
+    while si < nsyms {
+        let s = obj.symbols[si]
+        _ew_u32(out, s.name_offset)
+        let st_info = ((s.bind & 0xF) << 4) | (s.type_ & 0xF)
+        out.push(st_info & 0xFF)
+        out.push(0)                          // st_other
+        _ew_u16(out, s.section)
+        _ew_u64(out, s.value)
+        _ew_u64(out, s.size)
+        si = si + 1
+    }
+
+    // ── .strtab ──
+    let mut ki = 0
+    while ki < strsize { out.push(obj.strtab[ki] & 0xFF); ki = ki + 1 }
+
+    // ── .shstrtab ──
+    let mut hi = 0
+    while hi < shstrsize { out.push(shstrtab[hi] & 0xFF); hi = hi + 1 }
+
+    // ── Section header table ──
+    // [0] SHT_NULL.
+    _ew_zero(out, 64)
+    // [1] .text.
+    _ew_u32(out, off_text)
+    _ew_u32(out, ELF_SHT_PROGBITS)
+    _ew_u64(out, ELF_SHF_ALLOC | ELF_SHF_EXECINSTR)
+    _ew_u64(out, 0)
+    _ew_u64(out, text_off)
+    _ew_u64(out, text_size)
+    _ew_u32(out, 0); _ew_u32(out, 0)
+    _ew_u64(out, 4); _ew_u64(out, 0)
+    // [2] .symtab.
+    _ew_u32(out, off_symtab)
+    _ew_u32(out, ELF_SHT_SYMTAB)
+    _ew_u64(out, 0); _ew_u64(out, 0)
+    _ew_u64(out, symtab_off)
+    _ew_u64(out, symtab_size)
+    _ew_u32(out, 3)                         // sh_link → .strtab
+    _ew_u32(out, 1)                         // sh_info
+    _ew_u64(out, 8); _ew_u64(out, 24)
+    // [3] .strtab.
+    _ew_u32(out, off_strtab)
+    _ew_u32(out, ELF_SHT_STRTAB)
+    _ew_u64(out, 0); _ew_u64(out, 0)
+    _ew_u64(out, strtab_off)
+    _ew_u64(out, strsize)
+    _ew_u32(out, 0); _ew_u32(out, 0)
+    _ew_u64(out, 1); _ew_u64(out, 0)
+    // [4] .shstrtab.
+    _ew_u32(out, off_shstrtab)
+    _ew_u32(out, ELF_SHT_STRTAB)
+    _ew_u64(out, 0); _ew_u64(out, 0)
+    _ew_u64(out, shstrtab_off)
+    _ew_u64(out, shstrsize)
+    _ew_u32(out, 0); _ew_u32(out, 0)
+    _ew_u64(out, 1); _ew_u64(out, 0)
+
+    return out
+}

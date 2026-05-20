@@ -5275,3 +5275,93 @@ symbol map 이 link 시점에 patch 된 offset 과 매칭되기 때문 — RUNEQ
 | P3 flip default | final phase |
 
 **cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa.
+
+
+### 2026-05-20 — S7-P2 cycle 1: ELF x86_64 object scaffold + header serialize (F-P2-ELF-HEADER PASS, file recognizes ELF)
+
+🎉 **RFC 063 § P2 시작** — Linux x86_64 ELF emitter scaffold. mirror
+of P0 cycle 1 (Mach-O arm64 header) for ELF format. 417-byte empty
+relocatable object 가 `file` 의 oracle 에 "ELF 64-bit LSB relocatable,
+x86-64, version 1 (SYSV)" 로 인식.
+
+**한 줄**: `compiler/emit/elf_x86_64.hexa` 신규 — ELF64 little-endian
+header + 5 section headers (.text, .symtab, .strtab, .shstrtab, NULL)
+emit. structural assertions 모두 PASS + `file` external oracle 정확
+인식.
+
+**변경 파일** (`compiler/emit/elf_x86_64.hexa`, 새 파일):
+
+- ELF64 상수 — `ELF_` prefix (system header 충돌 회피, P0 cycle 7 의
+  MACHO_ prefix 학습 적용):
+  - EI_MAG0..3 (0x7F + "ELF") · ELFCLASS64 (2) · ELFDATA2LSB (1) ·
+    EV_CURRENT (1) · ELFOSABI_NONE (0)
+  - ET_REL (1) · ET_EXEC (2) · ET_DYN (3)
+  - EM_X86_64 (0x3E) · EM_AARCH64 (0xB7)
+  - SHT_NULL/PROGBITS/SYMTAB/STRTAB/RELA/NOBITS
+  - SHF_WRITE/ALLOC/EXECINSTR
+  - STB_LOCAL/GLOBAL · STT_NOTYPE/FUNC
+  - R_X86_64_NONE/64/PC32/PLT32
+
+- 새 struct: `ElfX86Obj` (text/relocs/symbols/strtab) · `ElfRel`
+  (offset/sym_idx/kind/addend) · `ElfSym` (name_offset/section/value
+  /size/bind/type_)
+
+- LE byte writers (`_ew_u16/u32/u64/zero/str`) — `_ew_` prefix 로
+  Mach-O 쪽 `_w_` 와 분리.
+
+- `serialize_elf_x86_64(obj) -> [Int]` — top-level entry. 64-byte
+  ELF header + .text payload + .symtab + .strtab + .shstrtab + 5
+  section header table entries. shstrtab 안에 ".text"/".symtab"/
+  ".strtab"/".shstrtab" 이름 인덱스. e_shoff 와 e_shstrndx 정확.
+
+**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P2_ELF_HEADER.hexa`):
+
+- 빈 ElfX86Obj 생성 → serialize → bytes 직접 검사:
+  - magic 0x7F 'E' 'L' 'F' (4 bytes)
+  - EI_CLASS=2, EI_DATA=1, EI_VERSION=1
+  - e_type=1 (ET_REL), e_machine=0x3E (EM_X86_64)
+  - e_ehsize=64, e_shentsize=64, e_shnum=5, e_shstrndx=4
+- write_bytes 후 `file` external oracle:
+  - "ELF" 매칭
+  - "64-bit" 매칭
+  - "x86-64" 매칭
+  - "relocatable" 매칭
+
+**측정 (arm64-Mac local — cross-format check)**:
+
+```
+$ /tmp/run_F_P2_ELF_HEADER
+F-P2-ELF-HEADER: serialized 417 bytes
+  wrote 417 bytes to /tmp/p2_c1_empty.elf.o
+=== file ===
+/tmp/p2_c1_empty.elf.o: ELF 64-bit LSB relocatable, x86-64, version 1 (SYSV), not stripped
+
+F-P2-ELF-HEADER PASS — ELF64 x86_64 relocatable object well-formed
+rc=0
+```
+
+**HONEST SCOPE (g3, over-claim 0)**:
+
+- P2 cycle 1 은 **header + section headers** 만. x86_64 LIR walker /
+  instruction encoding (variable-length 1-15 bytes, 250+ rules) /
+  relocation 직렬화 / compiler/main.hexa 와이어링 / F-P2-OBJEQ corpus
+  PASS 는 follow-up cycles 의 baton.
+- `file` 외부 oracle 은 magic+filetype level. `readelf -h` 의 모든
+  fields 검증은 다음 cycle 에서 추가 가능 (macOS host 에서는 `binutils`
+  설치 또는 ubu-2 원격 검증).
+- x86_64 LIR 는 `compiler/codegen/x86_64_linux.hexa` 가 이미 emit 중.
+  Cycle 2 가 그 LIR → ELF byte stream 변환 walker 추가.
+
+**다음 cycle (P2 cycle 2) baton**:
+
+- x86_64 instruction encoding table — variable-length 1-15 bytes per
+  insn (vs arm64 의 fixed 4 byte). ModR/M + SIB + REX prefix 처리.
+  ~250 rules covering compiler/codegen/x86_64_linux.hexa 의 LIR subset.
+- LIR walker `pack_lir_elf(lm) -> ElfX86Obj` — mirror of P0's
+  `pack_lir` (Mach-O 측).
+
+**RFC 063 phasing 진척**: P0 ✅ · P1 ✅ · P2 cycle 1 ✅. 잔여 P2
+cycles 2-N (encoding + walker + linker + RUNEQ) + P3.
+
+**cc --regen / binary promote**: 미수행. compiler/emit/elf_x86_64.hexa
+는 NOT yet imported by compiler/main.hexa.
