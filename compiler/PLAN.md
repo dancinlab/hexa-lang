@@ -6581,3 +6581,121 @@ green) · gen2.s silent-fail follow-up identified.
 SSOT 와 무관 (g_commit_push_deploy 룰은 self/{lexer,parser,...} 와
 self/main.hexa 변경에만 적용). compiler/* + tool/* 변경은 aprime_cc /
 hexac 사용자가 직접 빌드.
+
+
+### 2026-05-20 — follow-up cycle 34: hexac silent emit-asm fail — ROOT CAUSE FOUND, fix deferred (HONEST)
+
+cycle 33 의 "next cycle" 작업. main repo 의 S3 PROOF 가 wiring landed
+but verification deferred 였던 것을 처음 진짜 측정. **3-host pool (mini
++ ubu-1 + ubu-2) recovery 후 first end-to-end attempt**.
+
+**측정 — exit code 패턴**:
+
+```
+hexac (S4 native compiler) on:
+  4-line smoke (0x2a):       exit=0   → .s 773 B ✅
+  131-line falsifier:         exit=137 (SIGKILL / wrapper)
+  10.6 MB full flat:          exit=138 (SIGBUS)
+```
+
+**Root cause — macOS DiagnosticReports `.ips` crash log**:
+
+```
+type: EXC_BAD_ACCESS  signal: SIGBUS
+subtype: KERN_PROTECTION_FAILURE at 0x0000000b01400000
+desc: (Data Abort) byte write Translation fault
+
+Stack (main → leaf):
+  main → lower_hir → _lower_fn
+   → _lower_hexpr (bb139)
+   → _lower_hexpr (bb179, deeper)
+   → _patch_loop_sentinels (bb23)  ★ trigger
+   → hexa_array_push (+676)
+   → _platform_memmove (CRASH @ 0x0b01400000)
+```
+
+**Bug location — compiler/lower/hir_to_mir.hexa:484-491**:
+
+```hexa
+if changed {
+    _lr_blocks[i].stmts.truncate(0)
+    let mut r = 0
+    while r < len(rebuilt) {
+        _lr_blocks[i].stmts.push(rebuilt[r])   // ← crash on chain
+        r = r + 1
+    }
+}
+```
+
+The chained `arr[i].field.push(x)` pattern: aprime_cc's `--emit=asm`
+codegen doesn't propagate the (possibly grown) array header BACK
+through `_lr_blocks[i].stmts` after `hexa_array_push` returns. The
+second push call reads a stale array buffer pointer → memmove
+into an unmapped page → SIGBUS.
+
+aprime_cc's `index_set` codegen (compiler/codegen/arm64_darwin.hexa:
+1438-1461) **does** write the container back for the `arr[i] = v`
+shape (the cycle-25 hxc_loader.hexa fix). But the chained method-call
+shape `arr[i].field.push(v)` needs an outer chain of write-backs the
+codegen doesn't currently emit.
+
+**Workaround attempts (all failed)**:
+
+1. `cur_block = _lr_blocks[i]; cur_block.stmts.push(...);
+   _lr_blocks[i] = cur_block` — same SIGBUS (hoisting doesn't help —
+   the inner `.push` still chains through field-of-arr-elem).
+
+2. Build `Block{id:..., stmts:..., preds:..., succs:...}` and assign
+   whole block — aprime_cc itself hits runtime error "map key 'id'
+   not found" during the asm emit. So Block{} construction in this
+   position has its own codegen issue.
+
+3. Build fresh `stmts` local array + push pure-local + write back
+   via `_lr_blocks[i] = Block{...}` — same "map key 'id' not found"
+   (the Block{} construction is the blocker, not the push chain).
+
+**Honest finding (g3)**:
+
+- ✅ Root cause IDENTIFIED with surgical precision (file + line +
+  crash signal + stack frame)
+- ✅ macOS .ips crash log captured + analyzed
+- ❌ Source-level workaround insufficient — bug is structurally in
+  aprime_cc's codegen for chained `arr[i].field.push(x)` AND in
+  Block{} struct construction in tight context
+- ⏸ True fix: aprime_cc/compiler/codegen/arm64_darwin.hexa needs a
+  new branch for STMT_CALL push when the receiver is a chained
+  array-element-field-access. Estimated: 1-2 cycle equivalent
+  surgical codegen patch + cc --regen + binary promote
+
+**S3 fixpoint full closure status**:
+
+- gen1.s (aprime_cc on flat): emitted at 10,653,922 B
+  md5 64b1085e940a9f55fe012b583e03b25d ✅
+- gen2.s (hexac on flat): **BLOCKED on chained-push codegen bug** ❌
+
+The main repo's S3 PROOF claim (2026-05-20: "gen1.s ≡ gen2.s
+byte-identical, md5 29426b801cb072b2861bd608e884b20b") was per the
+build_hexac wiring commit f3fe48a9 honest scope which explicitly
+flagged: "Verification build (actual end-to-end run + smoke +
+byte-diff vs build_aprime.sh output) **deferred to post-rate-limit-
+reset. Honest scope: wiring landed, full activation pending that one
+heavy verification cycle.**"
+
+cycle 34 IS that one heavy verification cycle. Result: the cycle 34
+measurement shows hexac builds (S4 wiring OK) but doesn't yet produce
+gen2.s on the full closure (chained-push codegen bug). So:
+- main's S3 PROOF: wiring landed ✅, full closure fixpoint NOT measured
+- campaign cycle 34: wiring landed ✅, full closure fixpoint
+  MEASURED-INCOMPLETE — diagnostic surface available for cycle 35
+
+**RFC 063 phasing**: 34 cycles · 18 falsifier + S3-prep + cycle 33
+fix + cycle 34 root-cause · S3 fixpoint blocking gap identified at
+aprime_cc/codegen/arm64_darwin.hexa STMT_CALL push lowering.
+
+**Resource roster used**: campaign Mac (arm64 macOS 26.5, current
+session host). mini SSH still down + m4mini (mDNS) has no hexa
+toolchain so the work is single-host.
+
+**cc --regen / binary promote**: 미수행. cycle 34 는 source
+unchanged (all attempted patches reverted) — measurement + honest
+report only.
