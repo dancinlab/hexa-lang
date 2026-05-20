@@ -88,32 +88,19 @@
 //   pub fn propagate(mu, a, ecc, t) -> [E, nu, r, x, y]   (5-float array)
 //
 // NOTE on parameter name: the stdlib `math/float` module exports a
-// constant function `e()` (Euler's number); we use `ecc` for the
-// eccentricity to avoid the codegen treating a bare identifier `e`
-// as a function reference.
+// constant function `e()` (Euler's number); we historically used
+// `ecc` for eccentricity to dodge a codegen identifier-resolution
+// bug (param `e` shadowed by stdlib `e()` → broken `hexa_fn_new`
+// emit). That bug was fixed in self/codegen_c2.hexa on 2026-05-20
+// (helper `_gen2_should_autowrap_fnref` respects local scope), so
+// the `ecc` name is now legacy-stable rather than load-bearing.
 
 use "stdlib/core/math/float"
-
-// ── helpers ──────────────────────────────────────────────────────────
-
-/// Reduce angle (rad) to (-π, π]. The 2-body closed-form is invariant
-/// under M → M ± 2π·k, but Newton-Raphson from E₀ = M converges
-/// fastest when |M| ≤ π. Implemented as a `fmod(x, 2π)`-style reduce
-/// into [0, 2π) followed by a single shift if > π — this lands in
-/// (-π, π], matching Python's `fmod`-based convention at the +π
-/// boundary (rather than the alternative `floor((x+π)/2π)`
-/// formulation, which would map +π → −π and disagree on the
-/// representative at apoapsis).
-fn wrap_pi(x: float) -> float {
-    let two_pi = 2.0 * pi()
-    // Reduce into [0, 2π) via `x − 2π·floor(x/2π)` (mathematical
-    // floored-modulo — works for negative x too).
-    let mut m = x - two_pi * floor(x / two_pi)
-    // Now shift (π, 2π) → (−π, 0). Note `>` not `≥` — exact +π stays
-    // at +π (matches Python `fmod` + post-shift convention).
-    if m > pi() { m = m - two_pi }
-    return m
-}
+use "stdlib/core/math/wrap_pi"
+// Angle-normalization primitive lifted to stdlib on 2026-05-20
+// alongside the codegen-A fix. The previous in-kernel inline copy
+// is retired — stdlib `wrap_pi` preserves both +π and −π boundaries
+// (Python `math.fmod` parity).
 
 // ── Kepler equation solve ────────────────────────────────────────────
 

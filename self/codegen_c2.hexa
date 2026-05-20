@@ -3385,7 +3385,7 @@ fn gen2_method_builtin(obj_expr, method, args) {
         // indirect-call path). Lambdas and pre-wrapped values pass through.
         let _sb_arg = args[0]
         let mut _sb_arg_expr = gen2_expr(_sb_arg)
-        if type_of(_sb_arg) != "string" && _sb_arg.kind == "Ident" && _is_known_fn_global(_sb_arg.name) {
+        if type_of(_sb_arg) != "string" && _sb_arg.kind == "Ident" && _gen2_should_autowrap_fnref(_sb_arg.name) {
             _sb_arg_expr = "hexa_fn_new((void*)" + _hexa_mangle_ident(_sb_arg.name) + ", 0)"
         }
         return "hexa_array_sort_by(" + obj_expr + ", " + _sb_arg_expr + ")"
@@ -3723,6 +3723,24 @@ fn _gen2_name_in_cur_lets(name) {
         i = i + 1
     }
     return false
+}
+
+// 2026-05-20 orbital-gotcha-A fix: local scope must shadow module-global
+// fn names. The five auto-wrap sites in this file (sort_by arg @ ~3389;
+// struct field @ ~4106; user-fn call arg @ ~4844; method sort_by @ ~5537;
+// indirect-call arg @ ~5608) historically gated only on
+// `_is_known_fn_global(name)` — which made any bare Ident whose name
+// happened to match an exported stdlib fn (e.g. param `e: float` vs
+// stdlib `e()` Euler constant) emit as `hexa_fn_new((void*)e, 0)` and
+// break the C build. This helper centralizes the predicate: "should the
+// bare Ident `name` be auto-wrapped as a TAG_FN fn-reference?". Returns
+// false when the name is shadowed by a current-fn param or let (those
+// take precedence per normal lexical-scope rules).
+fn _gen2_should_autowrap_fnref(name) {
+    if !_is_known_fn_global(name) { return false }
+    if _gen2_name_in_cur_params(name) { return false }
+    if _gen2_name_in_cur_lets(name) { return false }
+    return true
 }
 
 // If `name` is a thunk-able builtin/method, register the thunk and return
@@ -4102,7 +4120,7 @@ fn gen2_expr(node) {
             // inbox/patches/struct-fn-field-wrap.md (2026-05-14).
             let _sfv = node.fields[si].left
             let mut _sfv_expr = gen2_expr(_sfv)
-            if type_of(_sfv) != "string" && _sfv.kind == "Ident" && _is_known_fn_global(_sfv.name) {
+            if type_of(_sfv) != "string" && _sfv.kind == "Ident" && _gen2_should_autowrap_fnref(_sfv.name) {
                 _sfv_expr = "hexa_fn_new((void*)" + _hexa_mangle_ident(_sfv.name) + ", 0)"
             }
             arg_strs.push(_sfv_expr)
@@ -4840,7 +4858,7 @@ fn gen2_expr(node) {
             let mut ai = 0
             while ai < len(node.args) {
                 let _arg = node.args[ai]
-                if type_of(_arg) != "string" && _arg.kind == "Ident" && _is_known_fn_global(_arg.name) {
+                if type_of(_arg) != "string" && _arg.kind == "Ident" && _gen2_should_autowrap_fnref(_arg.name) {
                     arg_strs.push("hexa_fn_new((void*)" + _hexa_mangle_ident(_arg.name) + ", 0)")
                 } else {
                     arg_strs.push(gen2_expr(_arg))
@@ -5533,7 +5551,7 @@ fn gen2_expr(node) {
                 // mirror the gen2_method_builtin arm: auto-wrap bare fn-refs.
                 let _sb_arg = node.args[0]
                 let mut _sb_arg_expr = gen2_expr(_sb_arg)
-                if type_of(_sb_arg) != "string" && _sb_arg.kind == "Ident" && _is_known_fn_global(_sb_arg.name) {
+                if type_of(_sb_arg) != "string" && _sb_arg.kind == "Ident" && _gen2_should_autowrap_fnref(_sb_arg.name) {
                     _sb_arg_expr = "hexa_fn_new((void*)" + _hexa_mangle_ident(_sb_arg.name) + ", 0)"
                 }
                 return "hexa_array_sort_by(" + obj + ", " + _sb_arg_expr + ")"
@@ -5603,7 +5621,7 @@ fn gen2_expr(node) {
         let mut ci = 0
         while ci < nargs {
             let _ca = node.args[ci]
-            if type_of(_ca) != "string" && _ca.kind == "Ident" && _is_known_fn_global(_ca.name) {
+            if type_of(_ca) != "string" && _ca.kind == "Ident" && _gen2_should_autowrap_fnref(_ca.name) {
                 // Wrap function name as TAG_FN value for first-class fn passing
                 cargs.push("hexa_fn_new((void*)" + _hexa_mangle_ident(_ca.name) + ", 0)")
             } else {
