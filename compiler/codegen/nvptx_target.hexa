@@ -405,6 +405,18 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
             out.push(_nvptx_instr(PTX_OP_MOV_U32, a, s.op + "()"))
             return out
         }
+        // RFC 055 §12 P4+ — `gpu_barrier()` block-wide synchronization
+        // (gpu/SPEC.md §5). Lowers to `bar.sync 0;` — a PTX special
+        // instruction that synchronizes all threads in a block. The
+        // return type is void; no dst register written. Required by
+        // the tiled `@shared` GEMM variant (§6.6 named follow-on) for
+        // safe cross-thread reads of shared-memory writes.
+        if s.op == "gpu_barrier" {
+            let mut a = []
+            a.push(_nvptx_op("0"))
+            out.push(_nvptx_instr(PTX_OP_BAR_SYNC, a, "gpu_barrier()"))
+            return out
+        }
         out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported call: " + s.op))
         return out
     }
@@ -627,16 +639,21 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
         while si < len(blk.stmts) {
             let s = blk.stmts[si]
             if s.kind == STMT_ASSIGN || s.kind == STMT_BINOP || s.kind == STMT_CALL {
-                let mut dup = false
-                let mut k = 0
-                while k < len(seen_ids) {
-                    if seen_ids[k] == s.dst.id { dup = true }
-                    k = k + 1
-                }
-                if !dup {
-                    let kind = _nvptx_classify_local_for_stmt(s)
-                    regs.push(PReg { name: _nvptx_reg_name_for(kind, s.dst.id), kind: kind })
-                    seen_ids.push(s.dst.id)
+                // Void-return guard: STMT_CALL with `dst._miss_local()`
+                // (id < 0) — e.g. `gpu_barrier()` — produces no value
+                // and must not get a spurious `.reg` declaration. Skip.
+                if s.dst.id >= 0 {
+                    let mut dup = false
+                    let mut k = 0
+                    while k < len(seen_ids) {
+                        if seen_ids[k] == s.dst.id { dup = true }
+                        k = k + 1
+                    }
+                    if !dup {
+                        let kind = _nvptx_classify_local_for_stmt(s)
+                        regs.push(PReg { name: _nvptx_reg_name_for(kind, s.dst.id), kind: kind })
+                        seen_ids.push(s.dst.id)
+                    }
                 }
             }
             // Pass 1.5 — STMT_LOAD's dst (the loaded VALUE) is classified
