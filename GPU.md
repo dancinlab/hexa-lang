@@ -223,9 +223,9 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 
 ### 3f — Multi-vendor (downstream — orthogonal to NVPTX)
 
-- [ ] **HIP/AMD ROCm backend** — `gfx*` target dispatch
-- [ ] **Metal Performance Shaders** — Apple Silicon GPU (`@gpu_kernel` → MSL or AIR)
-- [ ] **Intel oneAPI / Level Zero / SPIR-V** — Intel iGPU / Xe substrate
+- [ ] **HIP/AMD ROCm backend** — `gfx*` target dispatch (RFC 075 P0 scaffold landed: `compiler/codegen/rocm_target.hexa` + `rocm_lower_test.hexa` — emit stub returns `""`, P1-P4 multi-session)
+- [ ] **Metal Performance Shaders** — Apple Silicon GPU (`@gpu_kernel` → MSL source text; RFC 075 P0 scaffold landed: `compiler/codegen/metal_target.hexa` + `metal_lower_test.hexa` — emit stub returns `""`, P1-P4 multi-session)
+- [ ] **Intel oneAPI / Level Zero / SPIR-V** — Intel iGPU / Xe substrate (deferred to follow-on RFC, see RFC 075 §2)
 - [ ] **WebGPU / SPIR-V** — browser substrate
 - [ ] **Cross-vendor abstraction layer** — shared IR pre-target
 
@@ -482,7 +482,7 @@ The GPU substrate has finite scope. Closure ≠ "all features"; closure = "the l
 - [ ] **§12 P4+ source-to-silicon e2e** — full `.hexa` source → silicon (next layer 2a)
 - [x] **flame d=768 transformer beats PyTorch eager wall** — already measured (project_flame_phase4d9_closure)
 - [ ] **flame d=4096 GPT-3 class beats PyTorch eager**
-- [ ] **Multi-vendor: ROCm or Metal kernel parity** — proves architectural independence
+- [ ] **Multi-vendor: ROCm or Metal kernel parity** — proves architectural independence (RFC 075 P0 scaffold landed 2026-05-20 for BOTH ROCm + Metal sibling backends; closure box stays unchecked until P4 silicon-fire per vendor)
 - [x] **Multi-tile WMMA throughput ≥ 50% of cuBLAS HGEMM** — vendor-comparable on specific kernels: M=N=K=256 ratio = 0.500 ±0.0002 (PR #214 + variance commit `05a85bb9`); caveat: single shape, large-M/N/K scale-up pending
 - [ ] **Whole-program-fusion measurable advantage** — at least one workload where hexa beats cuBLAS-using stack by ≥ 30%
 - [x] **n=6 lattice GPU emit smoke** — bridge to north-star ③ — degree-6 hex-neighbor stencil on axial-coordinate 8x8 grid, FP32 byte-eq vs CPU reference (`max|d|=0`, 0 mismatches / 64 cells) on RTX 5070 sm_120 driver 580 (RFC 070 P1, this branch)
