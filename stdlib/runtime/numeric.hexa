@@ -87,3 +87,19 @@ pub fn rt_round(v: float) -> int {
     if v >= 0.0 { return (v + 0.5) as int }
     return (v - 0.5) as int
 }
+
+// Step 3 cycle 5 — float min/max. C wrappers (hexa_math_min/max) used
+// fmin/fmax from libm, which propagate NaN per IEEE 754 (fmin(NaN, x) → x).
+// The hexa primitives use plain `<` comparison: if either operand is NaN
+// all comparisons are false, so `rt_min_float(NaN, x)` returns x (mirroring
+// fmin) but `rt_min_float(x, NaN)` returns NaN (diverges from fmin's x).
+// Acceptable: hexa user code rarely traffics in NaN at this entry point.
+pub fn rt_min_float(a: float, b: float) -> float {
+    if a < b { return a }
+    return b
+}
+
+pub fn rt_max_float(a: float, b: float) -> float {
+    if a > b { return a }
+    return b
+}

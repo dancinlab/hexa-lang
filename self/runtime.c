@@ -3411,7 +3411,12 @@ HexaVal hexa_math_pow(HexaVal b, HexaVal e) { return hexa_float(pow(HX_FLOAT(b),
 // (int+float-aware dispatch); this is the pure float-only path used by
 // scientific kernels that want the libm semantics directly.
 HexaVal hexa_math_fmod(HexaVal a, HexaVal b) { return hexa_float(hxlcl_fmod(HX_FLOAT(a), HX_FLOAT(b))); }
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_min(HexaVal a, HexaVal b) { return hexa_float(fmin(HX_FLOAT(a), HX_FLOAT(b))); }
+#else
+extern HexaVal rt_min_float(HexaVal a, HexaVal b);
+HexaVal hexa_math_min(HexaVal a, HexaVal b) { return rt_min_float(a, b); }
+#endif
 // G1-FLOAT-PRIM 2026-05-06 — see .roadmap.stdlib.G1-FLOAT-PRIM. lgamma is the
 // log-gamma function used by Beta-Binomial conjugate posteriors throughout
 // the hexa-bio Bayesian audit suite (14 callsites in _python_bridge/module).
@@ -3420,7 +3425,12 @@ HexaVal hexa_math_lgamma(HexaVal x)   { return hexa_float(lgamma(HX_FLOAT(x))); 
 HexaVal hexa_math_isnan(HexaVal x)    { return hexa_bool(isnan(HX_FLOAT(x)) ? 1 : 0); }
 HexaVal hexa_math_isinf(HexaVal x)    { return hexa_bool(isinf(HX_FLOAT(x)) ? 1 : 0); }
 HexaVal hexa_math_isfinite(HexaVal x) { return hexa_bool(isfinite(HX_FLOAT(x)) ? 1 : 0); }
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_max(HexaVal a, HexaVal b) { return hexa_float(fmax(HX_FLOAT(a), HX_FLOAT(b))); }
+#else
+extern HexaVal rt_max_float(HexaVal a, HexaVal b);
+HexaVal hexa_math_max(HexaVal a, HexaVal b) { return rt_max_float(a, b); }
+#endif
 
 // ── ML builtins: matvec, dot ─────────────────────────────────
 HexaVal hexa_matvec(HexaVal w, HexaVal x, HexaVal rows_v, HexaVal cols_v) {
