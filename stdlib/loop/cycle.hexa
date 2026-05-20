@@ -36,6 +36,19 @@ fn _bool_str(b: bool) -> string {
     return "false"
 }
 
+// RFC 065 slug sanitizer — atlas P node ids legitimately carry spaces,
+// `*`, quotes (e.g. `phi * n`, `"오일러 토션트 ..."`) that the file
+// system rejects. Replace fs-unsafe characters with `_` while keeping
+// the slug human-readable.
+fn _safe_slug(s: string) -> string {
+    let mut r = s.replace(" ", "_")
+    r = r.replace("*", "_")
+    r = r.replace("\"", "_")
+    r = r.replace("'", "_")
+    r = r.replace("/", "_")
+    return r
+}
+
 fn cmd_loop_help() {
     println("hexa loop — self-growing atlas cycle (RFC 065)")
     println("")
@@ -210,6 +223,7 @@ fn cycle_draft(cands: array, dry_run: bool) {
             continue
         }
         seen_slugs.push(c.slug)
+        let path_slug = _safe_slug(c.slug)
         // build cite csv
         let mut cite_str = ""
         let cn = len(c.cite)
@@ -221,7 +235,7 @@ fn cycle_draft(cands: array, dry_run: bool) {
         }
         let mut fire_str = "false"
         if c.fire_needed { fire_str = "true" }
-        let path = "inbox/atlas_candidates/" + c.slug + ".md"
+        let path = "inbox/atlas_candidates/" + path_slug + ".md"
         let md = "# " + c.slug + "\n\n"
                + "- family: " + c.family + "\n"
                + "- fire_needed: " + fire_str + "\n"
