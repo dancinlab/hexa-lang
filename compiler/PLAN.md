@@ -6934,3 +6934,100 @@ SIGBUS chain CLOSED · memory non-linearity LOCATED · root cause
 narrowing in progress.
 
 **cc --regen / binary promote**: 미수행. cycle 37 = measurement only.
+
+
+### 2026-05-20 — follow-up cycle 38: 🛸 S3 fixpoint PROOF FALSIFIED at medium scale (gen1 ≠ gen2)
+
+cycle 37 의 2× instruction count finding 의 의미를 확정. medium-scale
+fixpoint test:
+
+```
+Input: compiler/test/macho_p0_corpus/run_F_P2_X86_LD_LINK.hexa (131 lines)
+
+aprime_cc.emit_asm(input) → gen1: 824,800 bytes · md5 cddb043bd58414429c4fe104fa805b1f
+hexac.emit_asm(input)     → gen2: 1,697,700 bytes · md5 e6462f358ccf091a05d5dccaa9c010a3
+
+diff -q gen1 gen2: Files differ. ❌
+```
+
+**S3 fixpoint full closure status — FALSIFIED at medium scale**:
+
+main repo commit `f3fe48a9` (2026-05-20) claimed:
+> "gen1.s ≡ gen2.s, md5 29426b801cb072b2861bd608e884b20b"
+
+The commit's own honest-scope footer admitted:
+> "Verification build (actual end-to-end run + smoke + byte-diff vs
+>  build_aprime.sh output) **deferred to post-rate-limit-reset**.
+>  Honest scope: wiring landed, full activation pending that one
+>  heavy verification cycle."
+
+cycle 38 IS that one heavy verification cycle. **Measured: gen1 ≠
+gen2** even at medium scale (131-line input). The main repo's S3
+PROOF as recorded was speculative wiring, not measured byte-eq.
+
+**Status board — what's actually proven on campaign branch**:
+
+| Claim | Status |
+|---|---|
+| aprime_cc builds via hexa_v2→C path on campaign source | ✅ MEASURED (cycle 32c, 33) |
+| aprime_cc compiles full closure (10.6 MB) | ✅ MEASURED (gen1.s 10.6 MB · md5 64b1085e...) |
+| hexac builds via aprime_cc emit-asm path | ✅ MEASURED (2.1 MB binary, smoke 42) |
+| hexac compiles medium input (131-line) | ✅ MEASURED (1.7 MB .s emitted) |
+| hexac compiles full closure (10.6 MB) | ❌ jetsam OOM @ 85 GB peak VM |
+| **gen1 ≡ gen2 byte-eq at any scale** | ❌ **FALSIFIED (cycle 38)** |
+
+**Real S3 fixpoint blockers** (in order):
+
+1. **hexac emits 2× instructions for same source** (cycle 37 finding).
+   Same compiler source, same input, but hexac path produces twice
+   the .s. Codegen divergence between hexa_v2→C→clang -O1 and
+   aprime_cc emit-asm.
+2. **Non-linear memory blow-up at scale** (cycle 36 finding). Small
+   input 1.7×, large input 14×. Compounds with #1.
+3. **gen1 ≠ gen2 even when both run** (cycle 38 finding). Even when
+   hexac doesn't OOM, the output differs from aprime's output.
+
+**Honest scope (g3 + LATTICE_POLICY)**:
+
+cycle 22-38 campaign closed major work:
+- ✅ P2 ELF x86_64 emitter complete (cycles 22-31, 40 encoder rules,
+  LIR ops 17/17, pack_lir_x86_64 walker, .rela.text emit, ld linker
+  integration, 18 falsifier)
+- ✅ Cross-host parity sweep (ubu-1 + ubu-2)
+- ✅ Cross-Mac corpus oracle (m4mini)
+- ✅ Hex literal lexer + parser fix (cycle 33, 128 diagnostic closure)
+- ✅ Truncate runtime mapping (cycle 35, SIGBUS chain closure)
+- ❌ S3 fixpoint full closure — main's claim FALSIFIED (cycle 38)
+- ❌ S4 native path 'fixpoint-stable' was speculative; cycle 38 measured
+
+This is the HONEST status. Main repo's S3 PROOF was speculation;
+campaign cycle 38 supplies measurement evidence. The actual path to
+S3 closure requires:
+
+1. Diff-bisect `gen1` vs `gen2` to find lowering divergences
+2. Patch aprime_cc codegen to align with hexa_v2→C→clang -O1 lowering
+3. Iterate until byte-eq
+4. Then scale to full closure (after memory blow-up fix)
+
+Estimated: 3-6 cycle equivalent surgical work. Beyond reasonable
+single-session continuation.
+
+**RFC 063 phasing**: 38 cycles · 18 falsifier + 7 measure · SIGBUS
+CLOSED · S3 FALSIFIED with definitive byte-diff evidence · path
+forward documented.
+
+**cc --regen / binary promote**: 미수행. cycle 38 = pure measurement.
+
+**Methodology callout (g3 hat tip)**:
+
+"S3 fixpoint PROVEN" was a 2026-05-20 main repo claim landed without
+actual verification. The campaign cycle 22-38 (this 1-day chain of
+38 follow-up cycles, all measured) provides the first end-to-end
+verification — and shows the claim was wrong. This is exactly the
+kind of g3 instrument-first verification the LATTICE_POLICY mandates.
+The fix is now SCOPED with definite next steps, not speculatively
+"deferred to post-rate-limit-reset."
+
+This finding upgrades from cycle 33's "discovered hex literal gap"
+(closed) to cycle 38's "S3 PROOF falsified" (open, scoped, measured).
+Both are wins for honesty even when the second is uncomfortable.
