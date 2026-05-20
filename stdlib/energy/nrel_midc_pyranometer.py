@@ -1,155 +1,282 @@
-# nrel_midc_pyranometer.py — STUB measured-oracle producer
-# (κ-68 G28b · RFC 013 §6.11 · demiurge design.md D109)
+# nrel_midc_pyranometer.py — REAL measured-oracle producer
+# (κ-68 G29 · RFC 013 §6.11 first cell absorbed=true legitimate flip ·
+#  demiurge design.md D109 · supersedes G28b STUB · this is the
+#  production path)
 #
-# SCOPE — STUB ONLY. Emits a synthetic `measured_oracle` block inside
-# an Energy/verify record JSON so the demiurge cockpit's new typed
-# field (`MeasuredOracleRef`, demiurge commit `4a1a087`) has an end-to-
-# end emit→decode path during κ-68 schema-half land. **This is NOT
-# real NREL MIDC data and NOT a hexa-native parity claim.**
+# Fetches a single day of NREL MIDC pyranometer GHI from the BMS
+# (Baseline Measurement System) at the Solar Radiation Research
+# Laboratory (SRRL) in Golden CO, computes a pvlib Ineichen clearsky
+# modeled GHI, applies a clear-sky filter, and emits an Energy/verify
+# record with the `measured_oracle` block populated by the real
+# measured-vs-modeled comparison.
 #
-# Real production path (κ-69+ follow-on scope):
-#   1. Fetch real NREL MIDC pyranometer GHI from
-#      midc.nrel.gov/apps/data_api.pl (SRRL Golden CO, single clear-
-#      sky day, 1-min cadence) per design.md D109.
-#   2. Compute modeled GHI: hexa-native sun_position_kernel
-#      (stdlib/kernels/solar/solar_kernel.hexa) → pvlib clearsky
-#      (Haurwitz / Ineichen) → transposition (Hay-Davies). The
-#      pvlib clearsky/transposition stack is the trusted bridge
-#      (substrate-parity already proven on pvlib_kernel.py).
-#   3. PASS gate: mean relative error |measured - modeled| / |measured|
-#      ≤ 0.05 over clear-sky daylight hours (D109 PASS criterion).
-#   4. Emit EnergyVerifyRecord JSON with `measured_oracle` block
-#      populated; `absorbed` stays false until G29's explicit-writer
-#      gate runs (D103 dimension-separation · G28b is schema-half).
+# When `mean_rel_err <= 0.05` (the D109 PASS criterion) over the
+# clear-sky daylight window, the emitted record carries
+# `absorbed = true` — this is the κ-68 first cell `absorbed: Bool`
+# legitimate flip, driven by an EXTERNAL measured oracle (not a D95
+# computed projection from substrate-parity).
 #
 # HONESTY (g3 — non-negotiable):
-#   - STUB: synthetic perturbation ε(t) = 0.02·sin(2π t / 30) drives
-#     `mean_rel_err` and `max_rel_err`. No real measurement. The
-#     numbers are deterministic and hand-tuned to demonstrate the
-#     PASS path (≈0.013 mean rel_err vs 0.05 threshold).
-#   - `absorbed = false` ALWAYS — G28b producer wire MUST NOT flip
-#     stored absorbed; the explicit-writer path is G29's scope.
-#   - `oracle_source` field is loudly labeled "STUB" so a downstream
-#     reviewer cannot confuse this with real NREL MIDC data.
-#   - `dataset_citation = null` — no real DOI; the real producer
-#     fills this when it lands.
+#   - The measured side is REAL NREL MIDC pyranometer data (Global
+#     CMP22 (vent/cor) channel — research-grade, vented + thermally
+#     corrected). No synthetic numbers.
+#   - The modeled side is pvlib's Ineichen clearsky model, which
+#     depends on Linke-turbidity climatology and is itself an
+#     atmospheric idealization. Substrate-parity for the bridge stack
+#     (pvlib clearsky + transposition) is already proven on
+#     `stdlib/kernels/solar/pvlib_kernel.py` (κ-65 D80 pilot — solar
+#     21/21 PASS at rel_err <= 1e-13). This producer treats that
+#     bridge as TRUSTED per design.md D109.
+#   - The hexa-native scope per D109 is `solar_position_kernel` (sun
+#     position only). This producer does NOT yet call the hexa
+#     interpreter — sun position is computed by pvlib internally and
+#     the D80 g_hexa_only port to the hexa-native sun-position kernel
+#     is a separate G29-β follow-on (the parity-of-implementation
+#     between pvlib's solar position and `solar_kernel.hexa` was
+#     already established at κ-65; this producer reuses that result).
+#   - Clear-sky filter (`CLEARSKY_RATIO_LO / HI`) is honestly
+#     documented; samples outside the window are DROPPED from the
+#     parity statistic. This is the only way to compute a meaningful
+#     clear-sky-bound parity number on a day with even partial cloud
+#     enhancement / shadow. The dropped count is reported in
+#     `dataset_caveats`.
+#   - D106 illustrative-physics exclusion does NOT apply here —
+#     Energy/solar is a measurement cell (not illustrative).
+#   - D103 dimension-separation: the `hexa_native_parity` field is
+#     left null (substrate parity is a separate axis, established
+#     elsewhere — PILOTS.demi `[pilot-solar]`).
 #
 # Invoked by Swift's EnergyVerifyProducer via:
-#   python3 ~/core/hexa-lang/stdlib/energy/nrel_midc_pyranometer.py <output_dir>
+#   python3 ~/core/hexa-lang/stdlib/energy/nrel_midc_pyranometer.py <output_dir> [date]
+# `date` defaults to a curated clear-sky day if omitted.
 
+import csv
 import datetime as _dt
+import io
 import json
-import math
 import os
 import platform
 import sys
+import urllib.request
+
+import numpy as np
+import pandas as pd
+import pvlib
 
 
-PRODUCER_ID = "nrel_midc_pyranometer_stub"
+PRODUCER_ID = "nrel_midc_pyranometer"
 
-# Stub window: 60 1-minute samples centered on solar noon.
-SAMPLE_COUNT = 60
-# Synthetic perturbation amplitude (drives mean / max rel_err).
-PERTURBATION_AMPLITUDE = 0.02
-# D109 PASS criterion — must match design.md.
+# NREL MIDC site coordinates — SRRL BMS, Golden CO.
+LATITUDE = 39.7423
+LONGITUDE = -105.1785
+ALTITUDE_M = 1828.0
+TZ = "Etc/GMT+7"  # MST = UTC-7 year-round at this gauge
+SITE = "BMS"
+
+# Default date: 2024-06-15 — observed clear-sky-day candidate at SRRL.
+DEFAULT_DATE = "2024-06-15"
+
+# D109 PASS criterion — mean relative error over clear-sky daylight
+# hours. Locked-in by design.md D109; must NOT be tuned post-hoc.
 PASS_THRESHOLD = 0.05
 
+# Clear-sky filter — keep only minutes where measured/modeled lies
+# within a ratio band. Drops cloud shadows (ratio << 1) and
+# cloud-enhancement spikes (ratio > 1).
+CLEARSKY_RATIO_LO = 0.85
+CLEARSKY_RATIO_HI = 1.30
 
-def _synthetic_samples():
-    """Generate 60 (measured, modeled, rel_err) triples.
-
-    Time axis t ∈ [0, 59] one-per-minute. Modeled GHI uses a single
-    cosine bell (peak 1000 W/m² at t=29.5). Measured GHI = modeled ×
-    (1 + ε(t)) with ε(t) = AMPLITUDE × sin(2π t / 30) — half-cycle
-    over the window so the mean of |ε| is well-defined.
-    """
-    measured = []
-    modeled = []
-    rel_errs = []
-    for t in range(SAMPLE_COUNT):
-        # Modeled (peaked cosine bell — synthetic clearsky stand-in)
-        x = (t - 29.5) / 29.5  # normalize to [-1, 1] across window
-        m = 1000.0 * max(0.0, math.cos(0.5 * math.pi * x))
-        # Measured = modeled × (1 + ε(t))
-        eps = PERTURBATION_AMPLITUDE * math.sin(2.0 * math.pi * t / 30.0)
-        meas = m * (1.0 + eps)
-        # Relative error (safe — modeled never zero on the window)
-        if m > 0.0:
-            rel = abs(meas - m) / abs(meas)
-        else:
-            rel = 0.0
-        measured.append(meas)
-        modeled.append(m)
-        rel_errs.append(rel)
-    return measured, modeled, rel_errs
+# Daylight filter — drops near-horizon refraction-dominated samples
+# and the nighttime baseline.
+DAYLIGHT_ZENITH_DEG = 85.0
 
 
-def _build_measured_oracle():
-    """Compose the `measured_oracle` block per MeasuredOracleRef
-    (demiurge commit 4a1a087 · MeasuredOracleRef.swift)."""
-    _, _, rel_errs = _synthetic_samples()
-    mean_rel_err = sum(rel_errs) / float(len(rel_errs))
-    max_rel_err = max(rel_errs)
-    return {
+def _fetch_midc(site, date):
+    """Fetch a single day of NREL MIDC 1-min data."""
+    ymd = date.replace("-", "")
+    url = (
+        f"https://midcdmz.nrel.gov/apps/data_api.pl"
+        f"?site={site}&begin={ymd}&end={ymd}"
+    )
+    with urllib.request.urlopen(url, timeout=60) as resp:
+        return resp.read().decode("utf-8")
+
+
+def _parse_midc(csv_text):
+    """Extract measured GHI + NREL-computed zenith into a DataFrame."""
+    reader = csv.reader(io.StringIO(csv_text))
+    header = next(reader)
+    i_ghi = header.index("Global CMP22 (vent/cor) [W/m^2]")
+    i_zen = header.index("Zenith Angle [degrees]")
+    rows = []
+    for row in reader:
+        try:
+            ghi = float(row[i_ghi])
+            zen = float(row[i_zen])
+        except (ValueError, IndexError):
+            continue
+        rows.append({"measured_ghi": ghi, "nrel_zenith": zen})
+    return pd.DataFrame(rows)
+
+
+def _compute_modeled(date, n_minutes):
+    """pvlib Ineichen clearsky → modeled GHI for the day."""
+    loc = pvlib.location.Location(
+        latitude=LATITUDE, longitude=LONGITUDE,
+        altitude=ALTITUDE_M, tz=TZ)
+    times = pd.date_range(
+        start=f"{date} 00:00:00", periods=n_minutes,
+        freq="1min", tz=TZ)
+    solpos = loc.get_solarposition(times)
+    clearsky = loc.get_clearsky(times, model="ineichen")
+    return pd.DataFrame({
+        "pvlib_zenith": solpos["zenith"].values,
+        "modeled_ghi": clearsky["ghi"].values,
+    })
+
+
+def _build_measured_oracle(date):
+    """Run the full real-data parity pipeline; return the
+    measured_oracle block + summary stats + flip decision."""
+    csv_text = _fetch_midc(SITE, date)
+    measured = _parse_midc(csv_text)
+    n = len(measured)
+    if n == 0:
+        raise RuntimeError("NREL MIDC fetch returned 0 rows")
+
+    modeled = _compute_modeled(date, n_minutes=n)
+    df = measured.reset_index(drop=True).join(modeled.reset_index(drop=True))
+
+    daylight = df[df["pvlib_zenith"] < DAYLIGHT_ZENITH_DEG].copy()
+    daylight["ratio"] = daylight["measured_ghi"] / daylight["modeled_ghi"]
+    clear = daylight[
+        (daylight["ratio"] > CLEARSKY_RATIO_LO) &
+        (daylight["ratio"] < CLEARSKY_RATIO_HI)
+    ].copy()
+
+    if len(clear) == 0:
+        raise RuntimeError(
+            f"no clear-sky samples on {date} after filter "
+            f"({CLEARSKY_RATIO_LO}-{CLEARSKY_RATIO_HI})")
+
+    clear["rel_err"] = (
+        (clear["measured_ghi"] - clear["modeled_ghi"]).abs()
+        / clear["measured_ghi"].abs()
+    )
+    mean_rel_err = float(clear["rel_err"].mean())
+    max_rel_err = float(clear["rel_err"].max())
+
+    daylight_count = int(len(daylight))
+    clear_count = int(len(clear))
+    dropped = daylight_count - clear_count
+
+    pvlib_version = pvlib.__version__
+    measured_oracle = {
         "oracle_source": (
-            "STUB · synthetic 60-sample clear-sky · ε(t)=0.02·sin(2π t/30) "
-            "· κ-68 G28b schema-half (NOT real NREL MIDC data)"
+            f"NREL MIDC {SITE} (SRRL Golden CO) · pyranometer GHI "
+            f"Global CMP22 (vent/cor) · {date} · 1-min cadence"
         ),
         "unit": "W/m^2",
-        "sample_count": SAMPLE_COUNT,
+        "sample_count": clear_count,
         "mean_rel_err": mean_rel_err,
         "max_rel_err": max_rel_err,
         "threshold": PASS_THRESHOLD,
         "dataset_caveats": (
-            "STUB producer — synthetic perturbation, no real measurement. "
-            "Real path = NREL MIDC SRRL Golden CO pyranometer GHI (κ-69+)."
+            f"daylight samples (zenith<{DAYLIGHT_ZENITH_DEG}°): "
+            f"{daylight_count}; clear-sky kept (ratio in "
+            f"[{CLEARSKY_RATIO_LO},{CLEARSKY_RATIO_HI})): "
+            f"{clear_count}; dropped cloudy/cloud-enhanced: {dropped}. "
+            f"modeled = pvlib {pvlib_version} Ineichen clearsky "
+            "(Linke-turbidity climatology · D80 substrate-parity "
+            "PASS at κ-65). measured side = research-grade vented + "
+            "thermally corrected CMP22 pyranometer."
         ),
-        "dataset_citation": None,
+        "dataset_citation": (
+            "https://midcdmz.nrel.gov/apps/sitehome.pl?site=" + SITE
+        ),
+    }
+    pass_flag = mean_rel_err <= PASS_THRESHOLD
+    return measured_oracle, pass_flag, {
+        "daylight_count": daylight_count,
+        "clear_count": clear_count,
+        "dropped": dropped,
+        "pvlib_version": pvlib_version,
     }
 
 
 def main(argv):
     if len(argv) < 2:
         sys.stderr.write(
-            "usage: nrel_midc_pyranometer.py <output_dir>\n")
+            "usage: nrel_midc_pyranometer.py <output_dir> [date=YYYY-MM-DD]\n")
         return 2
 
     output_dir = argv[1]
+    date = argv[2] if len(argv) >= 3 else DEFAULT_DATE
     os.makedirs(output_dir, exist_ok=True)
 
-    measured_oracle = _build_measured_oracle()
+    try:
+        measured_oracle, pass_flag, stats = _build_measured_oracle(date)
+    except Exception as exc:
+        sys.stderr.write(
+            f"nrel_midc_pyranometer: failed to compute measured oracle: "
+            f"{type(exc).__name__}: {exc}\n")
+        return 3
+
     stamp = _dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    # D109 legitimate-flip path — absorbed is set EXPLICITLY by the
+    # writer (this producer) based on the measured-oracle PASS gate.
+    # D95 computed `isHexaNativeAbsorbed` is NOT in this path (D103
+    # dimension separation).
+    absorbed = bool(pass_flag)
+
     record = {
         "domain": "energy",
         "verb": "verify",
-        "kind": "solar_clearsky_ghi_measured_oracle_stub",
+        "kind": "solar_clearsky_ghi_measured_oracle",
         "stamp": stamp,
         "producer": PRODUCER_ID,
-        "measurement_gate": "GATE_OPEN",
-        # D103 + D109 — stored absorbed STAYS false. G29 explicit-
-        # writer gate has NOT run; this producer is schema-half only.
-        "absorbed": False,
+        "measurement_gate": (
+            "GATE_CLOSED_MEASURED" if absorbed else "GATE_OPEN"
+        ),
+        # κ-68 G29: this is the κ-68 FIRST cell absorbed=true
+        # legitimate flip target. The writer (this producer) sets
+        # absorbed explicitly based on `measured_oracle.mean_rel_err`
+        # vs the D109 threshold. D95 computed projection is NOT used.
+        "absorbed": absorbed,
         "scope_caveats": [
-            "STUB producer — synthetic clear-sky samples, no real "
-            "measurement (κ-68 G28b schema-half · real NREL MIDC "
-            "fetch is κ-69+).",
-            "absorbed stays false (D103 dimension-separation · G29 "
-            "explicit-writer gate has not run).",
+            f"single clear-sky day ({date}); mean rel_err over "
+            f"{stats['clear_count']} clear-sky-filtered samples "
+            "vs pvlib Ineichen clearsky modeled GHI.",
+            (
+                "modeled stack uses pvlib clearsky (Ineichen) + sun "
+                "position; the latter has D80 substrate-parity vs "
+                "hexa-native `solar_position_kernel` (κ-65 21/21 "
+                "PASS at rel_err <= 1e-13) — the hexa-native call "
+                "site is a G29-β follow-on (substrate-parity already "
+                "proven, runtime port is the next axis)."
+            ),
+            "Linke-turbidity climatology assumption inherent in "
+            "Ineichen — not site-specific aerosol retrieval.",
         ],
         "citations": [
-            "demiurge commit 4a1a087 — MeasuredOracleRef.swift schema",
             "demiurge design.md D109 — Energy/solar cell + NREL MIDC "
-            "direction (κ-68 G27)",
-            "demiurge ARCH.md §11.4 Round 7 G28 — producer wire scope",
+            "pyranometer GHI direction (κ-68 G27)",
+            "demiurge proposals/rfc_013_hexa_native_parity_connection."
+            "md §6.11 — per-cell measured-oracle parity round",
+            "https://midcdmz.nrel.gov/apps/sitehome.pl?site=" + SITE,
+            "pvlib python " + stats["pvlib_version"],
         ],
         "skipped_reason": None,
-        "kernel_reuse": None,
-        # κ-68 G28b: measured-oracle axis (D103 measured dimension)
-        "measured_oracle": measured_oracle,
-        # κ-67 land: hexa-native parity axis (D103 substrate dimension)
-        # left null here — the stub doesn't make a substrate-parity
-        # claim; that would be wired by a separate producer path.
+        "kernel_reuse": (
+            "pvlib clearsky/transposition trusted bridge (substrate-"
+            "parity proven on stdlib/kernels/solar/pvlib_kernel.py)"
+        ),
+        # D103 dimension-separation — substrate parity axis left null
+        # here; substrate-parity is carried separately by PILOTS.demi
+        # `[pilot-solar]` (21/21 PASS).
         "hexa_native_parity": None,
+        # κ-68 G29 — measured-oracle axis populated from real data.
+        "measured_oracle": measured_oracle,
     }
 
     out_path = os.path.join(
@@ -163,18 +290,22 @@ def main(argv):
         "ok": True,
         "producer": PRODUCER_ID,
         "stamp": stamp,
-        "sample_count": SAMPLE_COUNT,
+        "date": date,
+        "site": SITE,
+        "daylight_count": stats["daylight_count"],
+        "clear_count": stats["clear_count"],
+        "dropped": stats["dropped"],
         "mean_rel_err": measured_oracle["mean_rel_err"],
         "max_rel_err": measured_oracle["max_rel_err"],
         "threshold": PASS_THRESHOLD,
-        "would_pass": (
-            measured_oracle["mean_rel_err"] <= PASS_THRESHOLD),
-        "absorbed": False,  # D103 — never flipped from this producer
+        "pass": pass_flag,
+        "absorbed": absorbed,
         "artifact": os.path.basename(out_path),
         "python_version": platform.python_version(),
+        "pvlib_version": stats["pvlib_version"],
     }
     sys.stderr.write(
-        "ENERGY_VERIFY_MEASURED_ORACLE_STUB_RESULT "
+        "ENERGY_VERIFY_MEASURED_ORACLE_RESULT "
         + json.dumps(summary, sort_keys=True) + "\n")
     sys.stderr.flush()
     return 0
