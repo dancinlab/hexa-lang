@@ -2980,15 +2980,23 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     }
                 }
             }
-            // ── multi-LHS no-else cond-mux (proc-pass sub-step #2c) ──
+            // ── multi-LHS no-else cond-mux (proc-pass sub-step #2c + #4h-a) ──
             //   `if (en) begin lhs1 <= a ; lhs2 <= b ; … end` posedge
             //   always → per-statement $mux(S=en, A=lhs_i[feedback],
-            //   B=rhs_i, Y=mux_y_i) + $dff(D=mux_y_i, Q=lhs_i). Each
-            //   sub-statement must be `LHS <= RHS ;` with a simple-name
-            //   LHS (no indexed LHS in this commit — separate scope).
-            //   Single-statement is already covered by #2b above
-            //   (t_ok==1 path), so this only fires when t_ok==0 and the
-            //   collected then-body splits into ≥2 valid statements.
+            //   B=rhs_i, Y=mux_y_i) + $dff(D=mux_y_i, Q=lhs_i).
+            //
+            //   #2c: simple-name LHS  — `name <= rhs ;`
+            //   #4h-a: static-idx LHS — `name [ <const-expr> ] <= rhs ;`
+            //          (router_d4 reset cascade L101-105 unrolled form
+            //           after for-in-always landing). The const-fold
+            //           value becomes part of the LHS wire name
+            //           (`base[N]`) so existing generate-for-unrolled
+            //           wire decls are matched.
+            //   Dyn-idx LHS (wire-indexed) remains a separate scope
+            //   (sub-step #4h-b).
+            //   Single-statement covered by #2b above (t_ok==1 path),
+            //   so this only fires when t_ok==0 and the collected
+            //   then-body splits into ≥2 valid statements.
             if t_ok == 0 && has_else == 0 && is_clocked == 1 && len(then_toks) > 0 {
                 let mut stmts: [[str]] = []
                 let mut cur: [str] = []
@@ -3011,8 +3019,27 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     let s = stmts[sj]
                     if len(s) < 4 { all_ok = 0 }
                     if all_ok == 1 {
-                        if s[1] != "<=" { all_ok = 0 }
-                        if s[len(s) - 1] != ";" { all_ok = 0 }
+                        // #4h-a: detect indexed-LHS prefix `name [ … ]`
+                        // and locate the operator (`<=`). For simple-
+                        // name LHS the operator is at index 1 as before.
+                        let mut lhs_end = 1
+                        if s[1] == "[" {
+                            let mut depth = 1
+                            let mut q = 2
+                            while q < len(s) && depth > 0 {
+                                if s[q] == "[" { depth = depth + 1 }
+                                if s[q] == "]" {
+                                    depth = depth - 1
+                                    if depth == 0 { q = q + 1; break }
+                                }
+                                q = q + 1
+                            }
+                            if depth != 0 { all_ok = 0 }
+                            lhs_end = q
+                        }
+                        if all_ok == 1 && lhs_end >= len(s) { all_ok = 0 }
+                        if all_ok == 1 && s[lhs_end] != "<=" { all_ok = 0 }
+                        if all_ok == 1 && s[len(s) - 1] != ";" { all_ok = 0 }
                     }
                     sj = sj + 1
                 }
@@ -3024,34 +3051,69 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                         let mut sk = 0
                         while sk < len(stmts) && emit_ok == 1 {
                             let s = stmts[sk]
-                            let slhs = s[0]
-                            let mut srhs: [str] = []
-                            let mut ri = 2
-                            while ri < len(s) - 1 {
-                                srhs = srhs.push(s[ri])
-                                ri = ri + 1
+                            // #4h-a: compute slhs (indexed form) + RHS start.
+                            let mut slhs = s[0]
+                            let mut ri_start = 2
+                            if s[1] == "[" {
+                                let mut depth = 1
+                                let mut q = 2
+                                let mut idx_toks: [str] = []
+                                while q < len(s) && depth > 0 {
+                                    if s[q] == "[" {
+                                        depth = depth + 1
+                                        idx_toks = idx_toks.push(s[q])
+                                        q = q + 1
+                                        continue
+                                    }
+                                    if s[q] == "]" {
+                                        depth = depth - 1
+                                        if depth == 0 { q = q + 1; break }
+                                        idx_toks = idx_toks.push(s[q])
+                                        q = q + 1
+                                        continue
+                                    }
+                                    idx_toks = idx_toks.push(s[q])
+                                    q = q + 1
+                                }
+                                let ev = _rv_eval_expr(idx_toks, 0, tab, 1)
+                                if len(ev.err) > 0 {
+                                    // dyn-idx — not handled by #4h-a;
+                                    // skip this statement (no emit).
+                                    emit_ok = 0
+                                } else {
+                                    slhs = s[0] + "[" + str(ev.value) + "]"
+                                    ri_start = q + 1
+                                }
                             }
-                            let ser = _rv_elab_expr(srhs, 0, m, 1, tab)
-                            if len(ser.err) > 0 {
-                                emit_ok = 0
-                            } else {
-                                m = ser.m
-                                let mux_y = _rv_fresh_wire(m)
-                                m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
-                                let mux_n = "$rvmux$" + str(len(m.cells))
-                                let mut mc = rtlil_cell(mux_n, "$mux", 0)
-                                mc = rtlil_cell_connect(mc, "A", slhs)
-                                mc = rtlil_cell_connect(mc, "B", ser.wire)
-                                mc = rtlil_cell_connect(mc, "S", cer.wire)
-                                mc = rtlil_cell_connect(mc, "Y", mux_y)
-                                m = rtlil_module_add_cell(m, mc)
-                                let dn = "$rvff$" + str(len(m.cells))
-                                let mut dc = rtlil_cell(dn, "$dff", 0)
-                                dc = rtlil_cell_connect(dc, "CLK", clk_wire)
-                                dc = rtlil_cell_connect(dc, "D", mux_y)
-                                dc = rtlil_cell_connect(dc, "Q", slhs)
-                                m = rtlil_module_add_cell(m, dc)
-                                let _eg = clk_edge
+                            if emit_ok == 1 {
+                                let mut srhs: [str] = []
+                                let mut ri = ri_start
+                                while ri < len(s) - 1 {
+                                    srhs = srhs.push(s[ri])
+                                    ri = ri + 1
+                                }
+                                let ser = _rv_elab_expr(srhs, 0, m, 1, tab)
+                                if len(ser.err) > 0 {
+                                    emit_ok = 0
+                                } else {
+                                    m = ser.m
+                                    let mux_y = _rv_fresh_wire(m)
+                                    m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+                                    let mux_n = "$rvmux$" + str(len(m.cells))
+                                    let mut mc = rtlil_cell(mux_n, "$mux", 0)
+                                    mc = rtlil_cell_connect(mc, "A", slhs)
+                                    mc = rtlil_cell_connect(mc, "B", ser.wire)
+                                    mc = rtlil_cell_connect(mc, "S", cer.wire)
+                                    mc = rtlil_cell_connect(mc, "Y", mux_y)
+                                    m = rtlil_module_add_cell(m, mc)
+                                    let dn = "$rvff$" + str(len(m.cells))
+                                    let mut dc = rtlil_cell(dn, "$dff", 0)
+                                    dc = rtlil_cell_connect(dc, "CLK", clk_wire)
+                                    dc = rtlil_cell_connect(dc, "D", mux_y)
+                                    dc = rtlil_cell_connect(dc, "Q", slhs)
+                                    m = rtlil_module_add_cell(m, dc)
+                                    let _eg = clk_edge
+                                }
                             }
                             sk = sk + 1
                         }
@@ -4853,6 +4915,29 @@ fn main() {
     let _r49 = read_verilog(_v49)
     if _r49.ok != 1 {
         println("FAIL T49 initial_skip: " + _r49.message); fails = fails + 1
+    }
+
+    // T51 — sub-step #4h-a: multi-LHS no-else cond-mux with static-idx
+    //       LHS sequence:
+    //       `reg q [0:1]; always @(posedge clk) if (en) begin
+    //          q[0] <= 1; q[1] <= 0; end`
+    //       → 2 $mux + 2 $dff (one $mux/$dff per indexed LHS, each
+    //       feedback-A from q[0]/q[1] respectively).
+    total = total + 1
+    let _v51 = "module mIH ( input clk , input en , input d ) ; reg q [ 0 : 1 ] ; always @ ( posedge clk ) if ( en ) begin q [ 0 ] <= 1 ; q [ 1 ] <= 0 ; end endmodule"
+    let _r51 = read_verilog(_v51)
+    if _r51.ok != 1 {
+        println("FAIL T51 multi_lhs_indexed_noelse: " + _r51.message); fails = fails + 1
+    } else {
+        let _m51 = _r51.design.modules[0]
+        let _mc51 = rtlil_count_cells_of_type(_m51, "$mux")
+        if _mc51 != 2 {
+            println("FAIL T51a mux_count got " + str(_mc51) + " (expected 2)"); fails = fails + 1
+        }
+        let _dc51 = rtlil_count_cells_of_type(_m51, "$dff")
+        if _dc51 != 2 {
+            println("FAIL T51b dff_count got " + str(_dc51) + " (expected 2)"); fails = fails + 1
+        }
     }
 
     // T50 — sub-step #4g: cascaded-if function body with a preceding
