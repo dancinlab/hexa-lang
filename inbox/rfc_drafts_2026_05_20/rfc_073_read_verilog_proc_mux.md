@@ -272,13 +272,36 @@ stdout is preserved (no new test rows added by the opener).
   read_verilog.hexa T55/T56 + rtlil.hexa T11). Self-tests:
   rtlil 10/10→11/11, passes 32/32→35/35, read_verilog 54/54→56/56.
 - **PHASE 1.5**: not yet landed.
-- **PHASE 2**: not yet landed.
+- **PHASE 2 LANDED** 2026-05-20 — branch `rfc-073-phase-2-array-runtime-k`.
+  `_rv_parse_always` for-loop unroller absorbs `if (COND) BODY` inside
+  the procedural for-body; per-iteration COND elaborates to a wire name
+  (iteration-substituted) and each scalar-LHS body statement emits a
+  `connect_cond` row carrying that wire as guard. `pass_proc_mux`
+  (Phase 1) then folds the cond-tagged rows on the same LHS into a
+  left-deep `$mux` chain. Companion fix: for-body span search and
+  post-for jump now handle single-statement bodies (no enclosing
+  `begin`/`end`); the prior code unconditionally walked for a matching
+  `end` and overshot into the enclosing `always begin ... end`, mis-
+  consuming the always's terminator. Falsifiers `F-RFC-RV-ARRAY-INDEX-CONST`,
+  `F-RFC-RV-ARRAY-INDEX-RUNTIME`, `F-RFC-RV-NO-REGRESSION` all PASS
+  (read_verilog.hexa T57/T58 + T1-T56 unchanged). Self-tests: rtlil
+  11/11, passes 35/35, read_verilog 56/56→58/58. **§5 area-oracle did
+  NOT close** — router_d{4,6} body has THREE layers outside Phase 2
+  scope: nested `if` inside the outer guarded body, function-call
+  inlining (`route_xy`), and non-foldable-array-index READ lowering.
+  Each is a separate Phase 3 (or beyond) work item.
 - **PHASE 3**: not yet landed.
-- **§5 absorption-gate**: **STILL OPEN** — Phase 1 did NOT close §5.
-  Post-Phase-1 oracle re-run shows router_d4 area=0.0 µm² (Δ=100%)
-  and router_d6 area=0.0 µm² (Δ=100%). Next blocker surfaced (per
-  g3-honest report in compiler/PLAN.md): runtime-K array-indexed
-  assignment in the router's `idx` grant generation (Phase 2 target,
-  `F-RFC-RV-ARRAY-INDEX-RUNTIME`). Phase 1 ships the proc-mux
-  primitive ($mux emission for condition-guarded writes + nested
-  if-else-if-else chains), not the §5 closure.
+- **§5 absorption-gate**: **STILL OPEN** — Phase 2 did NOT close §5.
+  Post-Phase-2 oracle re-run shows router_d4 area=0.0 µm² (Δ=100%)
+  and router_d6 area=0.0 µm² (Δ=100%) — same numbers as Phase 1 since
+  the router's actual body shape (nested if + function call + non-foldable
+  array-index read) does NOT trigger Phase 2's surgical simple-LHS
+  shape; Phase 2 falls back to skip-no-emit on the router's outer if.
+  Phase 2 ships the iteration-substituted `connect_cond` emission
+  primitive (T57+T58 PASS in isolation), not the §5 closure. Next
+  Phase 3 targets (named in g3-honest report in compiler/PLAN.md):
+  (1) nested-`if`-inside-if-body absorption + guard composition,
+  (2) function-call inlining inside guarded body (or honest gap with
+  a substrate flag), (3) non-foldable-array-index READ lowering to
+  N-way mux (mirrors the dynamic-index WRITE path at line 2592-2642
+  but for read-position).
