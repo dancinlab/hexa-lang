@@ -4565,3 +4565,84 @@ What unblocks each P4 (forward-looking ledger):
 Cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md ·
 `/wilson-fire-gate` instrument-first methodology · this entry +
 sibling sub-agent commit messages for the parallel (b)+(c) cycle.
+
+### 2026-05-20 — RFC 068 P2 — HIR grammar + opcode-suffix LANDED
+
+**Falsifier:** F-RFC068-OPCODE-SUFFIX **PASS** (4 sub-cases — f16 / bf16 /
+f32 / f64-byte-eq-guard). Branch: `rfc068-p2-hir-grammar` (sub-agent
+worktree). Honest scope (`@D g3`): P2 ≠ RFC 068 closure. The MIR opcode
++ Local.precision now flow through HIR→MIR for source-level
+`let t: f16 = a + b`; the reg-bank decl (`.reg .f16`) appears in the
+emitted PTX via PR #148's classifier short-circuit. P3 (BODY-MNEMONIC
+— `add.f16 %fh<dst>, …` instruction emit) and P4 (NUMERIC-EQ — real
+silicon fire) remain OPEN.
+
+What lands:
+
+`compiler/check/types.hexa` (+17 lines)
+- `_types_t_f16()` / `_types_t_bf16()` constructors mirror the f32/f64
+  pattern.
+- TypeRef "named" lookup: `n == "f16"` → t_f16, `n == "bf16"` → t_bf16.
+- `_types_is_numeric` + `_is_float_kind` extend to f16/bf16.
+- Smallest scope: no NEW source-grammar token — `f16`/`bf16` are
+  parsed via the existing `let t: T = …` named-type path. The user
+  prompt's hint ("smallest scope" — let type names suffice) followed.
+
+`compiler/lower/hir_to_mir.hexa` (+103 lines)
+- New helpers: `_precision_from_typ_kind` (HIR Type.kind → ".f16" /
+  ".bf16" / ".f32" / "" tag), `_op_with_precision` (suffix `add` →
+  `add_f16` etc., normalizing frontend `+`/`-`/`*` symbols onto the
+  MIR mnemonic), `_update_local_precision` (replace a Local's
+  precision in `ctx.locals` so downstream walks see the same tag).
+- STMT_BINOP lowering: when `e.typ.kind ∈ {f16,bf16,f32}`, the dst
+  Local AND the Stmt.op carry the precision through to MIR.
+- Comparison ops (lt/le/gt/ge/eq/ne) stay plain (their dst is a
+  PRED — a suffix would mis-classify). f64 stays "" → classifier
+  default path unchanged (byte-eq guard).
+
+`compiler/codegen/nvptx_lower_test.hexa` (+261 lines)
+- Imports `../parse/ast.hexa`, `../ir/hir.hexa`, `../lower/hir_to_mir.hexa`
+  so the test can drive the real `lower_hir` entry point.
+- Case 20 — F-RFC068-OPCODE-SUFFIX. Five sub-cases:
+  (A) f16 binop → op == `add_f16` + dst.precision == `.f16`.
+  (B) bf16 binop → op == `add_bf16` + dst.precision == `.bf16`.
+  (C) f32 binop → op == `add_f32` + dst.precision == `.f32`.
+  (D) f64 byte-eq guard — op stays plain `+`, precision empty (the
+      classifier default path is byte-untouched).
+  (E) end-to-end PTX emission — wraps the f16 MFunc as GPU_KIND_DEVICE
+      and calls `codegen_emit_ptx_sm80`; asserts `.reg .f16 %fh` bank
+      decl appears. Body still emits the P0-style "unsupported
+      binop: add_f16" stub (P3 will fix that — verified by the dump).
+- Driver `main()` extended: 19/19 → 20/20 cases. PASS line updated to
+  `RFC 055 + RFC 067 P1/P2 + RFC 068 P1/P2 + RFC 069 P1/P2/P3`.
+
+Validation:
+- `nvptx_lower_test` 20/20 PASS (incl. F-RFC068-OPCODE-SUFFIX 5
+  sub-cases).
+- `nvptx_emit_test` PASS (CPU/PTX hand-emit unaffected).
+- `nvptx_vec_add_test` PASS (vec-add hand-emit unaffected).
+- `nvptx_gemm_test` PASS (GEMM hand-emit unaffected).
+- `codegen_test` PASS (CPU codegen byte-eq holds — x86_64 + arm64
+  LIR shapes unchanged).
+- `mir_test` case (a)+(b) PASS, case (c) FAIL — but case (c) FAIL
+  is PRE-EXISTING on origin/main (confirmed via `git stash`).
+
+Files NOT touched (gates upheld):
+- `self/codegen_c2.hexa` — @D g_commit_push_deploy honored; no binary
+  promote in this cycle.
+- `self/native/*` — @D g5 hexa-native-only; no bootstrap edits.
+- `compiler/codegen/{x86_64_linux,arm64_darwin,thumbv7em_eabihf}.hexa`
+  — F-RFC055-CPU-CODEGEN-UNTOUCHED gate.
+- `compiler/ir/mir.hexa` — RFC 068 P1 already added the precision
+  field; P2 only USES it.
+
+What still blocks RFC 068 closure (P4 NUMERIC-EQ):
+- P3 BODY-MNEMONIC: extend `_nvptx_lower_stmt` STMT_BINOP branch so
+  `add_f16` op emits `add.f16 %fh<dst>, %fh<a>, %fh<b>;` (and the
+  sub/mul/fma siblings). Currently the body is the honest P0 stub.
+- P4: build an f16 vec-add fixture, ssh ubu-2 RTX 5070, ptxas-JIT,
+  numeric-eq vs f64 baseline ≤ 2 × f16-ULP.
+
+Cross-link: inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md
+§3 P2 · PR #148 (P1 — Local.precision tag thread) · PR #123 (PTX scaffold
++ classifier op-name rules) · RFC 055 §12 P4+ closure plan.
