@@ -1737,6 +1737,7 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     }
                 }
             }
+            if has_begin == 0 { keep_going = 0 }
             continue
         }
         // `for ( GV = INIT ; COND ; GV = STEP ) begin BODY end` inside
