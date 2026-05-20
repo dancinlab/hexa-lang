@@ -5716,7 +5716,12 @@ HexaVal hexa_tan(HexaVal v)   { return hexa_float(tan(__hx_to_double(v))); }
 HexaVal hexa_exp(HexaVal v)   { return hexa_float(hxlcl_exp(__hx_to_double(v))); }
 HexaVal hexa_log(HexaVal v)   { return hexa_float(hxlcl_log(__hx_to_double(v))); }
 HexaVal hexa_log10(HexaVal v) { return hexa_float(log10(__hx_to_double(v))); }
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_round(HexaVal v) { return hexa_int((int64_t)llround(__hx_to_double(v))); }
+#else
+extern HexaVal rt_round(HexaVal v);
+HexaVal hexa_round(HexaVal v) { return rt_round(hexa_float(__hx_to_double(v))); }
+#endif
 HexaVal hexa_tanh(HexaVal v)  { return hexa_float(tanh(__hx_to_double(v))); }
 HexaVal hexa_log2(HexaVal v)  { return hexa_float(log2(__hx_to_double(v))); }
 
