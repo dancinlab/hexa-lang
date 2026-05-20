@@ -11,6 +11,46 @@ Eliminate **all C dependencies** from the hexa-lang compiler binary
 produces only kernel syscall stubs (≤ 5 lines) — zero libc, zero libm,
 zero libsystem.
 
+## End-state path (4 honest steps)
+
+The current libc-unhook campaign (Phase 1) is **step 1 of 4**. Completing
+step 1 alone does NOT delete runtime.c — it removes libc calls FROM
+inside runtime.c by adding `hxlcl_*` C-source helpers, so runtime.c
+actually grows during step 1. runtime.c retirement requires steps 2-4.
+
+```
+step 1 (NOW — Phase 1)    libc extern 제거. runtime.c 안에서 libc →
+                          C-source helper 치환. binary 가 libc 안 부르
+                          지만 runtime.c (C) 는 살아있음.
+                          진척: 137 → 93 externs (32%) · cycle 46-55
+                          잔여: ~93 externs (Tier-A.4 POSIX + A.5 libm
+                          + 잔존 residuals) · est 10-15 cycles
+
+step 2 (Phase 2 part-A)   `hxlcl_*` 47 helpers 를 stdlib/runtime/
+                          <name>.hexa 로 포팅 + codegen `_builtin_
+                          runtime_sym` 라우팅 확장. 끝나면 helpers
+                          C → hexa source. runtime.c HI tier 만 남음.
+                          est 50-80 cycles
+
+step 3 (Phase 3 part-A)   runtime.c HI tier 호출자들 (hexa_str_concat ·
+                          hexa_array_push 등 ~9.5K LoC C) 을 hexa
+                          source 로 마이그. 끝나면 runtime.c 폐기 가능.
+                          est 200-400 cycles (대규모 surface)
+
+step 4 (Phase 3 part-B)   runtime_core.c (281 KB · HexaVal repr · arena
+                          · fuel · GC) 도 동일하게 hexa source 화.
+                          그래야 runtime_core.c 도 폐기. 이게 zero-C-
+                          dep 진짜 종착점.
+                          est 400-800 cycles (HexaVal 자기-참조)
+```
+
+**Total honest scale**: 700-1300 cycles (10분/cycle 기준 multi-week ~
+multi-month). 현재 47/55 cycle = **7% 완료**.
+
+**중요**: RUNTIME.md `## Post-Phase-3` 의 "compile cleanly without
+`-lc`" 조항은 step 1 끝나면 충족되지만, **runtime.c 폐기 ≠ 그 조항**.
+runtime.c 폐기 = step 3 acceptance. zero-C-dep = step 4 acceptance.
+
 ## Domain map (Phase 0 → 3 + post)
 
 ```
