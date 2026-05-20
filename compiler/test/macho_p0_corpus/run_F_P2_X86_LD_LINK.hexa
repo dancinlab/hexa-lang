@@ -1,0 +1,131 @@
+// F-P2-X86-LD-LINK — cycle 31-a. Verify serialize_elf_x86_64 emits a
+// `.o` with a well-formed `.rela.text` section that real `ld` (GNU
+// binutils) on ubu-2 accepts, links into a runnable executable, and
+// the link result returns the expected exit code.
+//
+// This is the final P2-stack proof: cycle 30 emitted reloc RECORDS;
+// cycle 31-a serializes them into `.rela.text`. If `ld` can resolve
+// the PLT32 reloc + produce a working exec, the whole stack works
+// end-to-end (LIR → walker → reloc → serialize → linker → kernel).
+
+import "../../ir/lir.hexa"
+import "../../emit/elf_x86_64.hexa"
+
+fn _reg(name: string) -> LOperand {
+    return LOperand {
+        kind: "reg", reg: PReg { name: name, kind: "gpr" }, imm: 0,
+        mem_base: PReg { name: "", kind: "" }, mem_offset: 0, label: ""
+    }
+}
+fn _imm(v: i64) -> LOperand {
+    return LOperand {
+        kind: "imm", reg: PReg { name: "", kind: "" }, imm: v,
+        mem_base: PReg { name: "", kind: "" }, mem_offset: 0, label: ""
+    }
+}
+fn _lab(name: string) -> LOperand {
+    return LOperand {
+        kind: "label", reg: PReg { name: "", kind: "" }, imm: 0,
+        mem_base: PReg { name: "", kind: "" }, mem_offset: 0, label: name
+    }
+}
+fn _mem(base: string, off: i64) -> LOperand {
+    return LOperand {
+        kind: "mem", reg: PReg { name: "", kind: "" }, imm: 0,
+        mem_base: PReg { name: base, kind: "gpr" }, mem_offset: off, label: ""
+    }
+}
+fn _ins0(op: string) -> LInstr { return LInstr { op: op, args: [], comment: "" } }
+fn _ins1(op: string, a: LOperand) -> LInstr {
+    let xs: [LOperand] = []; xs.push(a)
+    return LInstr { op: op, args: xs, comment: "" }
+}
+fn _ins2(op: string, a: LOperand, b: LOperand) -> LInstr {
+    let xs: [LOperand] = []; xs.push(a); xs.push(b)
+    return LInstr { op: op, args: xs, comment: "" }
+}
+
+fn main() {
+    // Same `compute(a, b) = a + b` + `_start` module as cycle 30.
+    let compute: [LInstr] = []
+    compute.push(_ins1("push", _reg("rbp")))
+    compute.push(_ins2("mov",  _reg("rbp"), _reg("rsp")))
+    compute.push(_ins2("sub",  _reg("rsp"), _imm(16)))
+    compute.push(_ins2("mov",  _mem("rbp", -8),  _reg("rdi")))
+    compute.push(_ins2("mov",  _mem("rbp", -16), _reg("rsi")))
+    compute.push(_ins2("mov",  _reg("rax"),     _mem("rbp", -8)))
+    compute.push(_ins2("mov",  _reg("rcx"),     _mem("rbp", -16)))
+    compute.push(_ins2("add",  _reg("rax"),     _reg("rcx")))
+    compute.push(_ins2("mov",  _reg("rsp"),     _reg("rbp")))
+    compute.push(_ins1("pop",  _reg("rbp")))
+    compute.push(_ins0("ret"))
+
+    let start: [LInstr] = []
+    start.push(_ins2("mov",  _reg("rdi"), _imm(20)))
+    start.push(_ins2("mov",  _reg("rsi"), _imm(22)))
+    start.push(_ins1("call", _lab("compute")))
+    start.push(_ins2("mov",  _reg("rdi"), _reg("rax")))
+    start.push(_ins2("mov",  _reg("rax"), _imm(60)))
+    start.push(_ins0("syscall"))
+
+    let lm = LModule {
+        file: "ld_link",
+        target: "x86_64-linux-gnu",
+        funcs: [
+            LFunc { name: "_start",  target: "x86_64-linux-gnu",
+                    instrs: start,   frame_size: 0,  callee_saved: [], def_line: 0 },
+            LFunc { name: "compute", target: "x86_64-linux-gnu",
+                    instrs: compute, frame_size: 16, callee_saved: [], def_line: 0 },
+        ],
+        rodata: [], bss: [], globals: [], floats: [],
+    }
+
+    let obj = pack_lir_x86_64(lm)
+    let bytes = serialize_elf_x86_64(obj)
+    println("[serialize_elf_x86_64] " + to_string(len(bytes)) +
+            " B · " + to_string(len(obj.symbols)) + " symbol(s) · " +
+            to_string(len(obj.relocs)) + " reloc(s)")
+
+    let o_path = "/tmp/p2_c31a_link.o"
+    write_bytes(o_path, bytes)
+
+    // scp to ubu-2 and link with ld.
+    let scp = exec_capture("scp " + o_path + " ubu-2:" + o_path + " 2>&1")
+    if to_int(scp[2]) != 0 { println("FAIL scp"); exit(1) }
+
+    // Sanity: readelf parses our headers + symbols + reloc records.
+    let r_re = exec_capture("ssh ubu-2 'readelf -h -S " + o_path + " 2>&1 | head -30' 2>&1")
+    println("--- readelf -h -S ---")
+    println(to_string(r_re[0]))
+
+    let r_rel = exec_capture("ssh ubu-2 'readelf -r " + o_path + " 2>&1' 2>&1")
+    println("--- readelf -r (reloc table) ---")
+    println(to_string(r_rel[0]))
+
+    // Link. -static -nostdlib avoids glibc / crt entry points; we
+    // provide _start explicitly. `-e _start` is implicit for ld, but
+    // pass it for clarity.
+    let exe_path = "/tmp/p2_c31a_link.exe"
+    let ld = exec_capture("ssh ubu-2 'ld -static -nostdlib -e _start " +
+                          o_path + " -o " + exe_path + " 2>&1; echo LD_RC=$?' 2>&1")
+    let ld_out = to_string(ld[0])
+    println("--- ld output ---")
+    println(ld_out)
+    if ld_out.find("LD_RC=0") < 0 {
+        println("FAIL: ld returned non-zero")
+        exit(2)
+    }
+
+    // Run the linker output, capture exit code.
+    let run = exec_capture("ssh ubu-2 '" + exe_path + "; echo REMOTE_RC=$?' 2>&1")
+    let rout = to_string(run[0])
+    println("--- exec ---")
+    println(rout)
+    if rout.find("REMOTE_RC=42") < 0 {
+        println("FAIL: linker output did not exit 42")
+        exit(3)
+    }
+
+    println("🎉 F-P2-X86-LD-LINK FULL PASS — serialize_elf_x86_64 → real ld → exec exit 42 on ubu-2")
+    exit(0)
+}

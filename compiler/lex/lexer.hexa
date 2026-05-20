@@ -34,6 +34,13 @@ fn is_digit_ch(c) -> bool {
     return false
 }
 
+fn is_hex_digit_ch(c) -> bool {
+    if is_digit_ch(c) { return true }
+    if c == 'a' || c == 'b' || c == 'c' || c == 'd' || c == 'e' || c == 'f' { return true }
+    if c == 'A' || c == 'B' || c == 'C' || c == 'D' || c == 'E' || c == 'F' { return true }
+    return false
+}
+
 fn is_ident_start(c) -> bool {
     if is_alpha(c) { return true }
     if c == '_' { return true }
@@ -212,10 +219,34 @@ pub fn lex(source: string, file: string) -> [Token] {
             let kind = keyword_kind(word)
             tokens.push(mk_tok(kind, word, span))
         } else if is_digit_ch(ch) {
-            // integer / float literal — accepts 1_000 and 1.5e+3 forms
+            // integer / float / hex literal — accepts 1_000, 1.5e+3, 0xFF_FF
             let start_col = col
             let mut parts = []
             let mut is_float = false
+            // Hex prefix `0x` / `0X` — mirrors self/lexer.hexa:211-231 to
+            // close the long-standing aprime_cc gap that rejected hex
+            // literals in user source (cycle 33). The token emits a
+            // single Number kind with `0xN…N` text — downstream parser
+            // / type-checker decodes it as integer via standard parse.
+            if ch == '0' && pos + 1 < n && (chars[pos + 1] == 'x' || chars[pos + 1] == 'X') {
+                parts.push("0x")
+                pos = pos + 2
+                col = col + 2
+                while pos < n && is_hex_digit_ch(chars[pos]) {
+                    parts.push(to_string(chars[pos]))
+                    pos = pos + 1
+                    col = col + 1
+                    if pos < n && chars[pos] == '_' &&
+                       pos + 1 < n && is_hex_digit_ch(chars[pos + 1]) {
+                        pos = pos + 1
+                        col = col + 1
+                    }
+                }
+                let text = join(parts, "")
+                let span = mk_span(file, line, start_col, col - start_col)
+                tokens.push(mk_tok(TokenKind::Number, text, span))
+                continue
+            }
             while pos < n && is_digit_ch(chars[pos]) {
                 parts.push(to_string(chars[pos]))
                 pos = pos + 1

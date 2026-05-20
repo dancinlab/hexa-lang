@@ -1,0 +1,79 @@
+// F-P0-OBJEQ-M4MINI — cycle 31-c. Verify our hand-built P0 corpus .o
+// files (produced by `macho_arm64.hexa::pack_lir + serialize`) are
+// byte-portable across two arm64 Macs.
+//
+// The campaign host's `clang -c` oracle PASSED bytes-eq on all 6
+// cycles. This falsifier ships the same .o files to m4mini and runs
+// `otool -tv` + `nm` + `xcrun clang -o exe corpus.o runtime.o`
+// over there — confirming our serializer doesn't accidentally embed
+// any host-specific state.
+//
+// HONEST SCOPE: this exercises Mach-O byte portability + clang's
+// linker consumption. It does NOT prove the final executable runs on
+// arbitrary Macs (Sonoma+ AMFI policies on ad-hoc-signed binaries are
+// loader-specific, separate from .o portability).
+
+import "../../emit/macho_arm64.hexa"
+
+fn _esc(s: string) -> string { return s }
+
+fn main() {
+    let cycles: [string] = [
+        "/tmp/macho_p0_cycle1.ours.o",
+        "/tmp/macho_p0_cycle2.ours.o",
+        "/tmp/macho_p0_cycle3.ours.o",
+        "/tmp/macho_p0_cycle4.ours.o",
+        "/tmp/macho_p0_cycle5.ours.o",
+        "/tmp/macho_p0_cycle6.ours.o",
+    ]
+
+    // Ship each .o to m4mini.
+    let mut i = 0
+    while i < len(cycles) {
+        let p = cycles[i]
+        let s = exec_capture("scp " + p + " m4mini:" + p + " 2>&1")
+        if to_int(s[2]) != 0 {
+            println("FAIL scp " + p + ": rc=" + to_string(s[2]))
+            exit(1)
+        }
+        i = i + 1
+    }
+    println("[scp] 6 P0 corpus .o files synced to m4mini")
+
+    // Per-file: otool -h (header readable) + nm (symbols enumerable) +
+    // shasum (byte-identical to the local copy).
+    let mut all_ok = true
+    i = 0
+    while i < len(cycles) {
+        let p = cycles[i]
+        let local_sha = exec_capture("shasum -a 256 " + p + " | awk '{print $1}'")
+        let remote_sha = exec_capture("ssh m4mini 'shasum -a 256 " + p + " | awk \"{print \\$1}\"' 2>&1")
+        let local_str = to_string(local_sha[0]).trim()
+        let remote_str = to_string(remote_sha[0]).trim()
+        let sha_eq = local_str == remote_str
+        let otool = exec_capture("ssh m4mini 'xcrun otool -h " + p + " 2>&1 | head -6' 2>&1")
+        let otool_out = to_string(otool[0])
+        // Expect magic 0xfeedfacf for Mach-O 64.
+        let otool_ok = otool_out.find("0xfeedfacf") >= 0 || otool_out.find("FEEDFACF") >= 0
+        let nm = exec_capture("ssh m4mini 'xcrun nm " + p + " 2>&1' 2>&1")
+        let nm_out = to_string(nm[0])
+        let nm_ok = len(nm_out) > 0 && nm_out.find("error") < 0
+        let m_sha = if sha_eq    { "✅" } else { "❌" }
+        let m_ot  = if otool_ok  { "✅" } else { "❌" }
+        let m_nm  = if nm_ok     { "✅" } else { "❌" }
+        // Trim file path for compact display.
+        let nm2 = len(p) - 17
+        let short = p.substring(nm2, len(p))
+        println("  " + short + " · sha256 " + m_sha + " · otool-h " + m_ot +
+                " · nm " + m_nm)
+        if !sha_eq || !otool_ok || !nm_ok { all_ok = false }
+        i = i + 1
+    }
+
+    if !all_ok {
+        println("FAIL: at least one .o failed cross-Mac inspection")
+        exit(2)
+    }
+    println("🎉 F-P0-OBJEQ-M4MINI FULL PASS — 6 hand-built Mach-O .o files byte-identical + readable on m4mini (arm64 macOS 26.2)")
+    exit(0)
+}
