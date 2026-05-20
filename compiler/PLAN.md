@@ -6017,3 +6017,74 @@ falsifier · main 머지 완료 · cross-platform binaries production-ready
 (within campaign scope).
 
 **cc --regen / binary promote**: 미수행 (compiler/emit/* + test/* only).
+
+
+### 2026-05-20 — follow-up cycle 27: x86_64 NOP/TEST/CQO/IDIV (F-P2-X86-DIV PASS, 84/2=42 on Linux)
+
+5 new x86_64 encoding rules covering compiler/codegen/x86_64_linux.hexa
+의 미지원 LIR ops:
+
+- NOP                  0x90               (1 B padding/no-op)
+- CQO                  48 99              (sign-extend rax → rdx:rax)
+- TEST64 r64, r64      REX.W + 85 /r      (3 B, ZF/SF only)
+- IDIV64 r64           REX.W + F7 /7      (3 B, signed division)
+
+x86_64 encoder coverage 누적: **31 rules** (cycle 22 base 4 + cycle 24
+arith 6 + cycle 25 ctrlflow 11 + cycle 26 rex64 9 + cycle 27 div/misc 5).
+
+**Composite test** (signed division 84/2=42):
+
+```
+[31 B program]
+  48 c7 c0 54 00 00 00   mov rax, #84
+  48 c7 c1 02 00 00 00   mov rcx, #2
+  48 99                  cqo                      (rdx:rax sign-extend)
+  48 f7 f9               idiv rcx                 (rax = rdx:rax / rcx)
+  48 89 c7               mov rdi, rax             (quotient → exit code)
+  48 c7 c0 3c 00 00 00   mov rax, #60             (sys_exit)
+  0f 05                  syscall
+
+ubu-2: REMOTE_RC=42  ✅
+```
+
+**측정 — 12 falsifier 누적**:
+
+| Falsifier | Tier |
+|-----------|------|
+| F-P0-OBJEQ corpus 4/4 | 🛸 |
+| F-P1-RUNEQ | 🛸 |
+| F-P2-LINUX-EXIT · F-P2-MULTIOBJ-RUNEQ | 🛸 ×2 |
+| F-P3-ZERO-EXTERN-OBJ · F-P3-FULL-RUNEQ | 🛸 ×2 |
+| F-P3-DEFAULT-NATIVE · F-P3-HEXA-BACKEND-ENV | ✅ ×2 |
+| F-P2-X86-ARITH · F-P2-X86-CTRLFLOW · F-P2-X86-REX64 | 🎉 ×3 |
+| **F-P2-X86-DIV** (new) | **🎉** |
+
+**LIR ops coverage 갱신**:
+
+| LIR op | uses | status |
+|--------|------|--------|
+| mov | 31 | ✅ (r32 imm/reg, r64 imm/reg) |
+| call | 7 | ✅ (CALL rel32) |
+| add | 3 | ✅ (r32/r64) |
+| sub | 2 | ✅ (r32/r64) |
+| ret | 2 | ✅ |
+| push | 2 | ✅ (r32; r64 needs REX, follow-up) |
+| pop | 2 | ✅ (r32) |
+| jmp | 2 | ✅ (rel8/rel32) |
+| cmp | 1 | ✅ (r32) |
+| test | 1 | ✅ (r64, this cycle) |
+| jz | 1 | ✅ (JE_REL8 alias) |
+| label | 1 | (pseudo-op) |
+| nop | 1 | ✅ (this cycle) |
+| cqo | 1 | ✅ (this cycle) |
+| idiv | 1 | ✅ (this cycle) |
+| movzx | 1 | ❌ next-up |
+| set (setcc) | 1 | ❌ next-up |
+
+x86_64 LIR ops coverage: **15 / 17** unique ops (88%). 잔여 2개:
+movzx (zero-extend) + setcc (set byte on condition).
+
+**RFC 063 phasing 진척**: 27 cycles · 12 falsifier · P0+P1+P2+P3 all
+closed · x86_64 encoder 31 rules · LIR ops 15/17 covered.
+
+**cc --regen / binary promote**: 미수행.

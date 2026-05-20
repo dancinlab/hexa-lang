@@ -376,6 +376,33 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
             return [rex, 0x29, 0xC0 | ((rs & 0x7) << 3) | (rd & 0x7)]
         }
     }
+    // ── Cycle 27 additions — division / sign-extend / NOP / TEST ──
+    //
+    // NOP — 0x90 (1 B). Single-byte no-op for padding / alignment.
+    if op == "NOP" { return [0x90] }
+    // CQO — 48 99 (REX.W + 99). Sign-extend RAX into RDX:RAX (idiv
+    // setup for signed-division).
+    if op == "CQO" { return [0x48, 0x99] }
+    // TEST64 r64, r64 — REX.W + 85 /r (3 B). Sets ZF/SF based on
+    // logical AND (no destination write).
+    if op == "TEST64" && len(ops) == 2 {
+        let rd = _ex86_reg64(ops[0])
+        let rs = _ex86_reg64(ops[1])
+        if rd >= 0 && rs >= 0 {
+            let rex = _ex86_rex(1, if rs >= 8 { 1 } else { 0 }, 0,
+                                    if rd >= 8 { 1 } else { 0 })
+            return [rex, 0x85, 0xC0 | ((rs & 0x7) << 3) | (rd & 0x7)]
+        }
+    }
+    // IDIV r64 — REX.W + F7 /7 (3 B). Signed division of RDX:RAX by
+    // r64, quotient → RAX, remainder → RDX. Caller must CQO first.
+    if op == "IDIV64" && len(ops) == 1 {
+        let rd = _ex86_reg64(ops[0])
+        if rd >= 0 {
+            let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
+            return [rex, 0xF7, 0xC0 | (7 << 3) | (rd & 0x7)]
+        }
+    }
     return []
 }
 
