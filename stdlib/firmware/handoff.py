@@ -135,6 +135,16 @@ def main(out_dir: str) -> int:
         if imgtool_version is not None
         else "firmware_handoff@template"
     )
+    # G7 typed gate_type — install-gated when MCUboot imgtool missing
+    # (sign step honest-skipped); otherwise bundle assembled and no
+    # hexa-native firmware-handoff kernel exists yet → D80
+    # hexa-native-absent + provisional.
+    if imgtool_skip is not None:
+        gate_type = "install-gated"
+        provisional = False
+    else:
+        gate_type = "hexa-native-absent"
+        provisional = True
     record = {
         "domain": "firmware",
         "verb": "handoff",
@@ -146,6 +156,8 @@ def main(out_dir: str) -> int:
         "scope_caveats": scope_caveats,
         "citations": citations,
         "skipped_reason": "imgtool_missing" if imgtool_skip is not None else None,
+        "gate_type": gate_type,
+        "provisional": provisional,
         "artifacts": {
             "sbom": sbom_path.name,
             "sign_probe": sign_path.name,

@@ -56,6 +56,15 @@ def main(out_dir: str) -> int:
         "needs a measured tape J_c(B,T,θ) + workgroup-shared geometry + "
         "ramp-rate-dependent loss validation."
     )
+    # G7 typed gate_type — install-gated when getdp binary missing;
+    # otherwise substrate is ready and no hexa-native 3-D EM kernel
+    # exists yet → D80 hexa-native-absent + provisional.
+    if getdp is None:
+        gate_type = "install-gated"
+        provisional = False
+    else:
+        gate_type = "hexa-native-absent"
+        provisional = True
     record = {
         "domain": "rtsc",
         "verb": "verify",
@@ -71,6 +80,8 @@ def main(out_dir: str) -> int:
         "skipped_reason": (
             "getdp_binary_not_found" if getdp is None else None
         ),
+        "gate_type": gate_type,
+        "provisional": provisional,
         "kernel_note": "em-kernel-promotion candidate (2nd rtsc-EM consumer with pyfemm)",
     }
     rec_path = out / f"rtsc_verify_{stamp}.json"

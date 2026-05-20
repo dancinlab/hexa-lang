@@ -59,6 +59,15 @@ def main(out_dir: str) -> int:
         "verification. Real absorption needs a sourced ephemeris + measured "
         "burn telemetry + signed mission-readiness review."
     )
+    # G7 typed gate_type — install-gated when Basilisk absent; otherwise
+    # substrate is ready and no hexa-native ADCS kernel exists yet →
+    # D80 hexa-native-absent + provisional.
+    if import_err is not None:
+        gate_type = "install-gated"
+        provisional = False
+    else:
+        gate_type = "hexa-native-absent"
+        provisional = True
     record = {
         "domain": "space",
         "verb": "verify",
@@ -76,6 +85,8 @@ def main(out_dir: str) -> int:
         "skipped_reason": (
             "basilisk_import_failed" if import_err is not None else None
         ),
+        "gate_type": gate_type,
+        "provisional": provisional,
     }
     rec_path = out / f"space_verify_{stamp}.json"
     rec_path.write_text(json.dumps(record, indent=2))

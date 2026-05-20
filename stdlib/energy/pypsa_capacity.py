@@ -298,6 +298,24 @@ def main(argv: list) -> int:
         measurements = run_optimization(output_dir)
         ok = True
         err = None
+        # G7 typed gate_type — PyPSA + HiGHS ran a real LP; no
+        # hexa-native power-system-opt kernel exists yet → D80
+        # hexa-native-absent + provisional on the success path.
+        gate_type = "hexa-native-absent"
+    except ImportError as exc:
+        ok = False
+        err = f"{type(exc).__name__}: {exc}"
+        measurements = {
+            "rows": 0,
+            "horizon_hours": HORIZON_HOURS,
+            "total_load_mwh": None,
+            "objective_eur": None,
+            "renewable_share": None,
+            "per_generator": {},
+            "csv_artifact": None,
+        }
+        # G7 — import failure means substrate not installed.
+        gate_type = "install-gated"
     except Exception as exc:
         ok = False
         err = f"{type(exc).__name__}: {exc}"
@@ -310,6 +328,9 @@ def main(argv: list) -> int:
             "per_generator": {},
             "csv_artifact": None,
         }
+        # G7 — LP infeasibility or other runtime is not install/data/
+        # platform; still substrate-side, hexa-native kernel absent.
+        gate_type = "hexa-native-absent"
 
     meta = {
         "ok": ok,
@@ -319,6 +340,8 @@ def main(argv: list) -> int:
         "highs_version": highs_v,
         "python_version": py_v,
         "error": err,
+        "gate_type": gate_type,
+        "provisional": ok,
         "problem": {
             "horizon_hours": HORIZON_HOURS,
             "n_buses": 1,
@@ -363,6 +386,8 @@ def main(argv: list) -> int:
         "pypsa_version": pypsa_v,
         "highs_version": highs_v,
         "python_version": py_v,
+        "gate_type": gate_type,
+        "provisional": ok,
         "rows": measurements["rows"],
         "horizon_hours": measurements["horizon_hours"],
         "total_load_mwh": measurements["total_load_mwh"],

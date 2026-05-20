@@ -144,6 +144,17 @@ def main(out_dir: str) -> int:
         if qemu_version is not None
         else "firmware_verify@absent"
     )
+    # G7 typed gate_type — install-gated when qemu-system-arm or the
+    # synthesize-cell firmware.bin is missing (the chained-bin case
+    # still presents as install/setup to the user); otherwise QEMU
+    # ran the smoke boot and no hexa-native firmware-verify kernel
+    # exists yet → D80 hexa-native-absent + provisional.
+    if skip_reason:
+        gate_type = "install-gated"
+        provisional = False
+    else:
+        gate_type = "hexa-native-absent"
+        provisional = True
     record = {
         "domain": "firmware",
         "verb": "verify",
@@ -155,6 +166,8 @@ def main(out_dir: str) -> int:
         "scope_caveats": scope_caveats,
         "citations": citations,
         "skipped_reason": ("qemu_or_bin_missing" if skip_reason else None),
+        "gate_type": gate_type,
+        "provisional": provisional,
         "artifacts": {
             "verify": verify_path.name,
         },

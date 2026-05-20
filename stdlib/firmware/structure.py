@@ -95,6 +95,16 @@ def main(out_dir: str) -> int:
     producer = (
         f"west@{west_version}" if west_version is not None else "firmware_structure@template"
     )
+    # G7 typed gate_type — install-gated when `west` is missing;
+    # otherwise the arch skeleton wrote and no hexa-native
+    # arch-structure kernel exists yet → D80 hexa-native-absent +
+    # provisional.
+    if skip_reason is not None:
+        gate_type = "install-gated"
+        provisional = False
+    else:
+        gate_type = "hexa-native-absent"
+        provisional = True
     record = {
         "domain": "firmware",
         "verb": "structure",
@@ -106,6 +116,8 @@ def main(out_dir: str) -> int:
         "scope_caveats": scope_caveats,
         "citations": citations,
         "skipped_reason": "west_missing" if skip_reason is not None else None,
+        "gate_type": gate_type,
+        "provisional": provisional,
         "artifacts": {
             "arch": arch_path.name,
         },

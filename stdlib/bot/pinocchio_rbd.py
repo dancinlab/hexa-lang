@@ -328,6 +328,8 @@ def main(argv):
             "geometry_id": GEOMETRY_ID,
             "error": "pinocchio_not_installed",
             "urdf_sha256_16": urdf_hash,
+            # G7 typed gate_type — install-gated skip (pinocchio absent).
+            "gate_type": "install-gated",
         }
         sys.stderr.write(
             "BOT_RBD_RESULT " + json.dumps(summary, sort_keys=True) + "\n")
@@ -348,6 +350,10 @@ def main(argv):
         "urdf_sha256_16": urdf_hash,
         "pinocchio_version": pin_version,
         "python_version": python_version(),
+        # G7 typed gate_type — pinocchio RNEA/CRBA ran; no hexa-native
+        # RBD kernel exists yet → D80 hexa-native-absent + provisional.
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "scenario": {
             "name": "simple_arm_open_loop_torque_v1",
             "kind": "2_link_revolute_arm",
@@ -388,6 +394,8 @@ def main(argv):
         "urdf_sha256_16": urdf_hash,
         "pinocchio_version": pin_version,
         "python_version": python_version(),
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "nq": rbd["nq"],
         "nv": rbd["nv"],
         "tau_rnea_Nm": rbd["tau_rnea_Nm"],

@@ -366,7 +366,8 @@ def main(argv: list) -> int:
             "SCOPE_OPENMDAO_RESULT "
             + json.dumps({"ok": False,
                           "geometry_id": GEOMETRY_ID,
-                          "error": f"import: {exc}"},
+                          "error": f"import: {exc}",
+                          "gate_type": "install-gated"},
                          sort_keys=True)
             + "\n")
         return 3
@@ -392,7 +393,8 @@ def main(argv: list) -> int:
             "SCOPE_OPENMDAO_RESULT "
             + json.dumps({"ok": False,
                           "geometry_id": GEOMETRY_ID,
-                          "error": "no shelf converged"},
+                          "error": "no shelf converged",
+                          "gate_type": "hexa-native-absent"},
                          sort_keys=True)
             + "\n")
         # Still write meta so the consumer can inspect.
@@ -400,6 +402,11 @@ def main(argv: list) -> int:
             json.dump({
                 "ok": False,
                 "geometry_id": GEOMETRY_ID,
+                # G7 typed gate_type — substrate ran but the MDO did
+                # not converge; not an install/data/platform issue and
+                # no hexa-native MDO kernel exists yet.
+                "gate_type": "hexa-native-absent",
+                "provisional": True,
                 "shelves": shelves,
             }, f, indent=2, sort_keys=True)
             f.write("\n")
@@ -437,6 +444,10 @@ def main(argv: list) -> int:
         "openmdao_version": openmdao_v,
         "poppy_version": poppy_kernel.poppy_version(),
         "python_version": platform.python_version(),
+        # G7 typed gate_type — OpenMDAO sizing ran; no hexa-native MDO
+        # kernel exists yet → D80 hexa-native-absent + provisional.
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "design_space": {
             "ftf_lower_m": FTF_LOWER_M,
             "ftf_upper_m": FTF_UPPER_M,
@@ -486,6 +497,8 @@ def main(argv: list) -> int:
         "geometry_id": GEOMETRY_ID,
         "openmdao_version": openmdao_v,
         "poppy_version": meta["poppy_version"],
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "winner_segments": winner["segments"],
         "winner_ftf_m": converged["ftf_m"],
         "winner_objective_j": converged["objective_j"],

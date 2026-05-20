@@ -239,7 +239,10 @@ def main(argv: list) -> int:
         sys.stderr.write(
             f"openmdao_mission: openmdao import failed — {exc}\n")
         summary = {"ok": False, "error": f"openmdao_import: {exc}",
-                   "input_sha256_16": input_hash}
+                   "input_sha256_16": input_hash,
+                   # G7 typed gate_type — install-gated skip
+                   # (openmdao not importable).
+                   "gate_type": "install-gated"}
         sys.stderr.write(
             "OPENMDAO_MISSION_RESULT "
             + json.dumps(summary, sort_keys=True) + "\n")
@@ -288,6 +291,10 @@ def main(argv: list) -> int:
         "openmdao_version": versions["openmdao"],
         "scipy_version": versions["scipy"],
         "numpy_version": versions["numpy"],
+        # G7 typed gate_type — OpenMDAO mission MDO ran; no hexa-native
+        # MDO kernel exists yet → D80 hexa-native-absent + provisional.
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "model": {
             "name": "circular_orbit_insertion_rocket_equation",
             "discipline_count": 1,
@@ -326,6 +333,8 @@ def main(argv: list) -> int:
         "input_sha256_16": input_hash,
         "openmdao_version": versions["openmdao"],
         "scipy_version": versions["scipy"],
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "samples_count": len(per_sample),
         "best_dv_mps": best["dv_mps"] if best else None,
         "best_m_payload_kg": best["m_payload_kg"] if best else None,

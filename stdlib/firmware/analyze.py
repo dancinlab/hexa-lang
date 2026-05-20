@@ -97,6 +97,16 @@ def main(out_dir: str) -> int:
         producer_parts.append(f"cppcheck@{cppcheck_v}")
     producer = " + ".join(producer_parts) if producer_parts else "firmware_analyze@absent"
 
+    # G7 typed gate_type — install-gated when any probe tool is
+    # missing; otherwise the probe succeeded and no hexa-native
+    # static-analysis kernel exists yet → D80 hexa-native-absent +
+    # provisional.
+    if skipped:
+        gate_type = "install-gated"
+        provisional = False
+    else:
+        gate_type = "hexa-native-absent"
+        provisional = True
     record = {
         "domain": "firmware",
         "verb": "analyze",
@@ -108,6 +118,8 @@ def main(out_dir: str) -> int:
         "scope_caveats": scope_caveats,
         "citations": citations,
         "skipped_reason": ",".join(skipped) if skipped else None,
+        "gate_type": gate_type,
+        "provisional": provisional,
         "artifacts": {
             "analysis": analysis_path.name,
         },

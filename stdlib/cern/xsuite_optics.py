@@ -148,6 +148,8 @@ def main(out_dir: str) -> int:
             "scope_caveats": scope_caveats,
             "citations": citations,
             "skipped_reason": "xsuite_import_failed",
+            # G7 typed gate_type — xsuite/xtrack not importable.
+            "gate_type": "install-gated",
         }
         rec_path = out / f"cern_synth_{stamp}.json"
         rec_path.write_text(json.dumps(record, indent=2))
@@ -188,6 +190,11 @@ def main(out_dir: str) -> int:
         "absorbed": bool(parity_pass),
         "scope_caveats": scope_caveats,
         "citations": citations,
+        # G7 typed gate_type — xsuite ran; even when parity_pass closes
+        # the algorithm-level gate, there is no hexa-native accelerator-
+        # optics kernel yet → D80 hexa-native-absent + provisional.
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "parity": {
             "oracle": "Wiedemann §6.2 + §7.4 thick-quad closed form",
             "tolerance_rel": parity_tol,

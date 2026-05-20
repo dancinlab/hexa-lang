@@ -79,6 +79,15 @@ def main(out_dir: str) -> int:
         "annihilation cross-section + sourced geometry + measured "
         "secondary-particle spectra."
     )
+    # G7 typed gate_type — install-gated when Geant4 not installed;
+    # otherwise substrate is ready and no hexa-native MC-transport
+    # kernel has parity yet → D80 hexa-native-absent + provisional.
+    if g4 is None:
+        gate_type = "install-gated"
+        provisional = False
+    else:
+        gate_type = "hexa-native-absent"
+        provisional = True
     record = {
         "domain": "antimatter",
         "verb": "verify",
@@ -94,6 +103,8 @@ def main(out_dir: str) -> int:
         "skipped_reason": (
             "geant4_not_installed" if g4 is None else None
         ),
+        "gate_type": gate_type,
+        "provisional": provisional,
         "kernel_reuse": "kernels/mc_transport/ (D72 — 4th consumer; clearest N+M payoff)",
     }
     rec_path = out / f"antimatter_verify_{stamp}.json"

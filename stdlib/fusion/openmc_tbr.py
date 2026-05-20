@@ -79,6 +79,19 @@ def main(out_dir: str) -> int:
         "Reference DEMO breeder-blanket geometry NOT a sourced engineering "
         "lattice — TBR will be a textbook witness, not a design-grade number."
     )
+    # G7 typed gate_type — install-gated when openmc absent; data-gated
+    # when openmc importable but ENDF/B-VIII.0 not set; otherwise the
+    # benchmark stack is ready and the kernel reuse path is the honest
+    # blocker → D80 hexa-native-absent + provisional.
+    if import_err is not None:
+        gate_type = "install-gated"
+        provisional = False
+    elif data_path is None:
+        gate_type = "data-gated"
+        provisional = False
+    else:
+        gate_type = "hexa-native-absent"
+        provisional = True
     record = {
         "domain": "fusion",
         "verb": "verify",
@@ -98,6 +111,8 @@ def main(out_dir: str) -> int:
             if import_err is not None
             else ("openmc_data_path_unset" if data_path is None else None)
         ),
+        "gate_type": gate_type,
+        "provisional": provisional,
         "kernel_reuse": "kernels/mc_transport/ (D72 — 2nd consumer after antimatter+analyze)",
     }
     rec_path = out / f"fusion_verify_{stamp}.json"

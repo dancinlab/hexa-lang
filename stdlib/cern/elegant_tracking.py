@@ -86,6 +86,15 @@ def main(out_dir: str) -> int:
         "lattice + ≥1e4-turn DA scan + radiation damping + collective "
         "effects."
     )
+    # G7 typed gate_type — install-gated when xsuite/xtrack absent;
+    # otherwise tracking ran → D80 hexa-native-absent + provisional
+    # (no hexa-native accelerator-optics tracking kernel yet).
+    if import_err is not None:
+        gate_type = "install-gated"
+        provisional = False
+    else:
+        gate_type = "hexa-native-absent"
+        provisional = True
     record = {
         "domain": "cern",
         "verb": "analyze",
@@ -103,6 +112,8 @@ def main(out_dir: str) -> int:
         "skipped_reason": (
             "xsuite_import_failed" if import_err is not None else None
         ),
+        "gate_type": gate_type,
+        "provisional": provisional,
         "headline": {
             "num_turns": n_turns,
             "particle_survival": survival,

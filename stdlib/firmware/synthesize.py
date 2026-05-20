@@ -131,6 +131,16 @@ def main(out_dir: str) -> int:
         if skip_reason is None
         else "firmware_synthesize@absent"
     )
+    # G7 typed gate_type — install-gated when arm-none-eabi-* tools
+    # are missing or the cross-compile failed at the toolchain layer;
+    # otherwise ELF/bin emitted and no hexa-native firmware-synthesize
+    # kernel exists yet → D80 hexa-native-absent + provisional.
+    if skip_reason:
+        gate_type = "install-gated"
+        provisional = False
+    else:
+        gate_type = "hexa-native-absent"
+        provisional = True
     record = {
         "domain": "firmware",
         "verb": "synthesize",
@@ -142,6 +152,8 @@ def main(out_dir: str) -> int:
         "scope_caveats": scope_caveats,
         "citations": citations,
         "skipped_reason": "toolchain_missing_or_build_failed" if skip_reason else None,
+        "gate_type": gate_type,
+        "provisional": provisional,
         "artifacts": artifacts,
     }
     rec_path = out / f"firmware_synthesize_{stamp}.json"

@@ -98,6 +98,11 @@ def main(out_dir: str) -> int:
         "scope_caveats": scope_caveats,
         "citations": citations,
         "skipped_reason": None,
+        # G7 typed gate_type — template emit succeeded; no hexa-native
+        # firmware-specify kernel exists yet → D80 hexa-native-absent
+        # + provisional.
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "artifacts": {
             "requirements": req_path.name,
         },

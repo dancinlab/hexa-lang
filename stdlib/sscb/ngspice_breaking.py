@@ -288,7 +288,8 @@ def main(argv: list[str]) -> int:
         sys.stderr.write("SSCB_BREAKING_RESULT "
                          + json.dumps({"ok": False,
                                        "geometry_id": GEOMETRY_ID,
-                                       "error": "ngspice missing"},
+                                       "error": "ngspice missing",
+                                       "gate_type": "install-gated"},
                                       sort_keys=True) + "\n")
         return 3
     ngs_ver = _ngspice_version(ngspice)
@@ -304,7 +305,8 @@ def main(argv: list[str]) -> int:
         sys.stderr.write("SSCB_BREAKING_RESULT "
                          + json.dumps({"ok": False,
                                        "geometry_id": GEOMETRY_ID,
-                                       "error": f"spawn: {exc}"},
+                                       "error": f"spawn: {exc}",
+                                       "gate_type": "install-gated"},
                                       sort_keys=True) + "\n")
         return 4
 
@@ -348,6 +350,11 @@ def main(argv: list[str]) -> int:
         "python_version": platform.python_version(),
         "produced_at_utc": time.strftime(
             "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        # G7 typed gate_type — ngspice ran (success path); no hexa-native
+        # circuit-transient kernel exists yet → D80 hexa-native-absent +
+        # provisional.
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "topology": topology,
         "measurements": measurements,
         "artifacts": {
@@ -372,6 +379,8 @@ def main(argv: list[str]) -> int:
         "netlist_sha256_16": netlist_hash,
         "ngspice_version": ngs_ver,
         "ngspice_exit": ng_exit,
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "rows": len(rows),
         "i_peak_a": measurements["i_peak_a"],
         "i_post_clear_a": measurements["i_post_clear_a"],

@@ -54,6 +54,15 @@ def main(out_dir: str) -> int:
         "payload / actuator-fault verification. Real absorption needs a "
         "measured arm + measured payload + signed safety-case dossier."
     )
+    # G7 typed gate_type — install-gated when pydrake absent; otherwise
+    # the Drake stack is ready but no hexa-native verify primitive
+    # exists yet → D80 hexa-native-absent + provisional.
+    if import_err is not None:
+        gate_type = "install-gated"
+        provisional = False
+    else:
+        gate_type = "hexa-native-absent"
+        provisional = True
     record = {
         "domain": "bot",
         "verb": "verify",
@@ -71,6 +80,8 @@ def main(out_dir: str) -> int:
         "skipped_reason": (
             "pydrake_import_failed" if import_err is not None else None
         ),
+        "gate_type": gate_type,
+        "provisional": provisional,
     }
     rec_path = out / f"bot_verify_{stamp}.json"
     rec_path.write_text(json.dumps(record, indent=2))

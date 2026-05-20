@@ -252,6 +252,12 @@ def main(argv: list[str]) -> int:
         "femmt_version": femmt_ver,
         "python_version": platform.python_version(),
         "solver": solver,
+        # G7 typed gate_type (GateType.swift). The analytic-fallback /
+        # femmt-param-sweep path emits a result but no hexa-native
+        # magnetics kernel exists yet → D80 hexa-native-absent +
+        # provisional.
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "target": {
             "L_target_H": L_TARGET_H,
             "I_peak_A": I_PEAK_A,
@@ -287,6 +293,8 @@ def main(argv: list[str]) -> int:
         "fingerprint": fp,
         "femmt_version": femmt_ver,
         "solver": solver,
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "rows": len(rows),
         "best_core_id": best["core_id"],
         "best_turns": best["turns"],

@@ -63,6 +63,9 @@ def main(out_dir: str) -> int:
             "citations": citations,
             "platform": sysname,
             "skipped_reason": "macos_host_hard_blocked",
+            # G7 typed gate_type — CARLA has no maintained macOS build
+            # (Unreal + multi-GB GPU); Linux pool only.
+            "gate_type": "platform-gated",
         }
         rec_path = out / f"mobility_verify_{stamp}.json"
         rec_path.write_text(json.dumps(record, indent=2))
@@ -81,6 +84,15 @@ def main(out_dir: str) -> int:
         "Real absorption needs a sourced ODD (operational design domain) + "
         "≥1000 scenarios + measured KPIs (TTC, dispersion, NCAP-style)."
     )
+    # G7 typed gate_type — Linux path: install-gated when carla not
+    # importable; otherwise no hexa-native AD-sim kernel exists yet →
+    # D80 hexa-native-absent + provisional.
+    if import_err is not None:
+        gate_type = "install-gated"
+        provisional = False
+    else:
+        gate_type = "hexa-native-absent"
+        provisional = True
     record = {
         "domain": "mobility",
         "verb": "verify",
@@ -99,6 +111,8 @@ def main(out_dir: str) -> int:
         "skipped_reason": (
             "carla_import_failed" if import_err is not None else None
         ),
+        "gate_type": gate_type,
+        "provisional": provisional,
     }
     rec_path = out / f"mobility_verify_{stamp}.json"
     rec_path.write_text(json.dumps(record, indent=2))

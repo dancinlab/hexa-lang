@@ -150,6 +150,8 @@ def main(out_dir: str) -> int:
             "scope_caveats": scope_caveats,
             "citations": citations,
             "skipped_reason": "ccx_binary_not_found",
+            # G7 typed gate_type — ccx binary not on PATH.
+            "gate_type": "install-gated",
         }
         rec_path = out / f"component_analyze_{stamp}.json"
         rec_path.write_text(json.dumps(record, indent=2))
@@ -187,6 +189,11 @@ def main(out_dir: str) -> int:
         "ccx_returncode": cp.returncode if cp else None,
         "ccx_stderr_tail": (cp.stderr.splitlines()[-5:] if cp else None),
         "inp_path": str(inp.name),
+        # G7 typed gate_type — ccx ran (success path); no hexa-native
+        # FEM-thermomech kernel exists yet → D80 hexa-native-absent +
+        # provisional.
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
     }
     rec_path = out / f"component_analyze_{stamp}.json"
     rec_path.write_text(json.dumps(record, indent=2))

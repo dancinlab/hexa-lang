@@ -67,6 +67,19 @@ def main(out_dir: str) -> int:
         "CEFR benchmark. Real absorption requires the published benchmark "
         "geometry + measured k-eff."
     )
+    # G7 typed gate_type — install-gated when openmc absent; data-gated
+    # when openmc importable but ENDF/B-VIII.0 not set; otherwise the
+    # benchmark stack is ready and the kernel-reuse path is the honest
+    # blocker → D80 hexa-native-absent + provisional.
+    if import_err is not None:
+        gate_type = "install-gated"
+        provisional = False
+    elif data_path is None:
+        gate_type = "data-gated"
+        provisional = False
+    else:
+        gate_type = "hexa-native-absent"
+        provisional = True
     record = {
         "domain": "energy",
         "verb": "verify",
@@ -86,6 +99,8 @@ def main(out_dir: str) -> int:
             if import_err is not None
             else ("openmc_data_path_unset" if data_path is None else None)
         ),
+        "gate_type": gate_type,
+        "provisional": provisional,
         "kernel_reuse": "kernels/mc_transport/ (D72 — 3rd consumer; N+M payoff visible)",
     }
     rec_path = out / f"energy_verify_{stamp}.json"

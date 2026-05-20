@@ -365,7 +365,8 @@ def main(argv: list) -> int:
             "SCOPE_VERIFY_RESULT "
             + json.dumps({"ok": False,
                           "geometry_id": GEOMETRY_ID,
-                          "error": f"import: {exc}"},
+                          "error": f"import: {exc}",
+                          "gate_type": "install-gated"},
                          sort_keys=True)
             + "\n")
         return 3
@@ -428,6 +429,11 @@ def main(argv: list) -> int:
         "webbpsf_version": webbpsf_v,
         "synphot_version": synphot_v,
         "python_version": platform.python_version(),
+        # G7 typed gate_type — poppy PSF verify ran (success or
+        # failing-required-check); no hexa-native wave-optics kernel
+        # has parity yet → D80 hexa-native-absent + provisional.
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "aperture": {
             "segments_requested": REF_SEGMENTS,
             "rings": rings,
@@ -470,6 +476,8 @@ def main(argv: list) -> int:
         "poppy_version": version,
         "webbpsf_version": webbpsf_v,
         "synphot_version": synphot_v,
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "n_required": n_required,
         "n_passed": n_passed,
         "n_skipped": n_skipped,

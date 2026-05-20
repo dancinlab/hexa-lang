@@ -81,6 +81,9 @@ def main(out_dir: str) -> int:
             "citations": citations,
             "platform": sysname,
             "skipped_reason": "macos_host_femm_windows_binary_only",
+            # G7 typed gate_type — FEMM is Windows-native; macOS host
+            # cannot run the binary path natively.
+            "gate_type": "platform-gated",
         }
         rec_path = out / f"rtsc_analyze_{stamp}.json"
         rec_path.write_text(json.dumps(record, indent=2))
@@ -105,6 +108,8 @@ def main(out_dir: str) -> int:
             "citations": citations,
             "platform": sysname,
             "skipped_reason": "pyfemm_import_failed",
+            # G7 typed gate_type — pyfemm/femm not importable on PATH.
+            "gate_type": "install-gated",
         }
         rec_path = out / f"rtsc_analyze_{stamp}.json"
         rec_path.write_text(json.dumps(record, indent=2))
@@ -163,6 +168,10 @@ def main(out_dir: str) -> int:
         "scope_caveats": scope_caveats,
         "citations": citations,
         "platform": sysname,
+        # G7 typed gate_type — FEMM ran on Linux; no hexa-native 2-D
+        # EM kernel exists yet → D80 hexa-native-absent + provisional.
+        "gate_type": "hexa-native-absent",
+        "provisional": True,
         "headline": {
             "b_magnitude_T_at_centre_of_proxy_tape": b_mag,
         },

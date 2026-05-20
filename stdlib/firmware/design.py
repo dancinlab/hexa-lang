@@ -94,6 +94,16 @@ def main(out_dir: str) -> int:
         if gcc_version is not None
         else "firmware_design@template"
     )
+    # G7 typed gate_type — install-gated when arm-none-eabi-gcc is
+    # missing; otherwise the CMake skeleton wrote and no hexa-native
+    # firmware-design kernel exists yet → D80 hexa-native-absent +
+    # provisional.
+    if skip_reason is not None:
+        gate_type = "install-gated"
+        provisional = False
+    else:
+        gate_type = "hexa-native-absent"
+        provisional = True
     record = {
         "domain": "firmware",
         "verb": "design",
@@ -105,6 +115,8 @@ def main(out_dir: str) -> int:
         "scope_caveats": scope_caveats,
         "citations": citations,
         "skipped_reason": "arm_none_eabi_gcc_missing" if skip_reason is not None else None,
+        "gate_type": gate_type,
+        "provisional": provisional,
         "artifacts": {
             "cmake": f"source/{cmake_path.name}",
             "hello_c": f"source/{hello_path.name}",
