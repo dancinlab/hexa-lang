@@ -545,13 +545,28 @@ pub let NVPTX_RKIND_F64: string = "fpr"     // %fd<id>   .reg .f64
 pub let NVPTX_RKIND_U32: string = "gpr32"   // %r<id>    .reg .u32
 pub let NVPTX_RKIND_U64: string = "gpr64"   // %rd<id>   .reg .u64
 pub let NVPTX_RKIND_PRED: string = "pred"   // %p<id>    .reg .pred
+// RFC 055 §12 P4+ — mixed-precision PTX type SCAFFOLD. New register
+// banks for F16 / BF16 / F32 sit alongside the F64/U32/U64/PRED set.
+// SCAFFOLD-ONLY: only the classifier + .reg-declaration side is wired;
+// the MIR layer that PRODUCES the matching binop opcodes (add_f16 etc.)
+// is a future cycle. Until that lands, these banks are reachable only
+// through synthetic test fixtures that hand-build the new opcodes.
+pub let NVPTX_RKIND_F16: string = "fpr16"     // %fh<id>   .reg .f16
+pub let NVPTX_RKIND_BF16: string = "fpr16bf"  // %fb<id>   .reg .bf16
+pub let NVPTX_RKIND_F32: string = "fpr32"     // %fs<id>   .reg .f32
 
 // _nvptx_reg_name_for — the PTX virtual-register name for (kind, id).
-// Dispatches to the 055-P0/P1 helpers (`_nvptx_reg_{f64,u32,u64,pred}`).
+// Dispatches to the 055-P0/P1 helpers (`_nvptx_reg_{f64,u32,u64,pred}`)
+// plus the §12 P4+ mixed-precision SCAFFOLD helpers
+// (`_nvptx_reg_{f16,bf16,f32}`).
 fn _nvptx_reg_name_for(kind: string, id: i64) -> string {
     if kind == NVPTX_RKIND_U32 { return _nvptx_reg_u32(id) }
     if kind == NVPTX_RKIND_U64 { return _nvptx_reg_u64(id) }
     if kind == NVPTX_RKIND_PRED { return _nvptx_reg_pred(id) }
+    // RFC 055 §12 P4+ — mixed-precision banks (scaffold).
+    if kind == NVPTX_RKIND_F16 { return _nvptx_reg_f16(id) }
+    if kind == NVPTX_RKIND_BF16 { return _nvptx_reg_bf16(id) }
+    if kind == NVPTX_RKIND_F32 { return _nvptx_reg_f32(id) }
     return _nvptx_reg_f64(id)   // F64 default
 }
 
@@ -560,6 +575,10 @@ fn _nvptx_kind_to_ptx_ty(kind: string) -> string {
     if kind == NVPTX_RKIND_U32 { return ".u32" }
     if kind == NVPTX_RKIND_U64 { return ".u64" }
     if kind == NVPTX_RKIND_PRED { return ".pred" }
+    // RFC 055 §12 P4+ — mixed-precision type-tags (scaffold).
+    if kind == NVPTX_RKIND_F16 { return ".f16" }
+    if kind == NVPTX_RKIND_BF16 { return ".bf16" }
+    if kind == NVPTX_RKIND_F32 { return ".f32" }
     return ".f64"
 }
 
@@ -581,7 +600,16 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
         if s.op == "ge" { return NVPTX_RKIND_PRED }
         if s.op == "eq" { return NVPTX_RKIND_PRED }
         if s.op == "ne" { return NVPTX_RKIND_PRED }
-        // Arithmetic binops — the 055-P0 FP64 subset.
+        // RFC 055 §12 P4+ — mixed-precision binop opcodes (SCAFFOLD).
+        // These opcodes are ASPIRATIONAL: the lowering layer that
+        // produces them (hir_to_mir.hexa with per-Local precision tags)
+        // is a future cycle. The scaffold proves the classifier +
+        // reg-decl pipeline can route mixed-precision Locals to the
+        // right reg bank once the upstream MIR emits these opcodes.
+        if s.op == "add_f16" { return NVPTX_RKIND_F16 }
+        if s.op == "add_bf16" { return NVPTX_RKIND_BF16 }
+        if s.op == "add_f32" { return NVPTX_RKIND_F32 }
+        // Arithmetic binops — the 055-P0 FP64 subset (default).
         return NVPTX_RKIND_F64
     }
     if s.kind == STMT_CALL {
@@ -1094,6 +1122,34 @@ fn _nvptx_reg_u32(id: i64) -> string {
 // _nvptx_reg_pred — PTX predicate register name.
 fn _nvptx_reg_pred(id: i64) -> string {
     return "%p" + to_string(id)
+}
+
+// RFC 055 §12 P4+ — mixed-precision reg-name helpers (SCAFFOLD).
+//
+// These mirror `_nvptx_reg_f64` / `_nvptx_reg_u32` etc., one helper per
+// new register bank. The prefix choice (`%fh` / `%fb` / `%fs`) keeps
+// each bank disambiguated from the existing F64 / U32 / U64 / PRED
+// banks; PTX itself does not care about the textual prefix, but the
+// classifier roster ↔ lookup machinery relies on prefix uniqueness so
+// `_nvptx_lookup_reg_for_local` can tell the banks apart for one Local
+// id (a future cycle that extends the lookup is on the roadmap; the
+// scaffold here only requires the .reg-decl side to emit cleanly).
+
+// _nvptx_reg_f16 — PTX virtual register for an FP16 value.
+fn _nvptx_reg_f16(id: i64) -> string {
+    return "%fh" + to_string(id)
+}
+
+// _nvptx_reg_bf16 — PTX virtual register for a BF16 value. Note the
+// separate `%fb` prefix (not `%fh`): PTX distinguishes `.f16` and
+// `.bf16` as different storage types even though both are 16-bit.
+fn _nvptx_reg_bf16(id: i64) -> string {
+    return "%fb" + to_string(id)
+}
+
+// _nvptx_reg_f32 — PTX virtual register for an FP32 value.
+fn _nvptx_reg_f32(id: i64) -> string {
+    return "%fs" + to_string(id)
 }
 
 // _nvptx_param_ref — `[<kernel>_param_<i>]` operand for `ld.param.*`.
