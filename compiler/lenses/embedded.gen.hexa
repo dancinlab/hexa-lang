@@ -384,7 +384,28 @@ pub fn lens_apply_cross_pollinate_borrow_from_qrng(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_cross_pollinate_borrow_from_qmirror(view: AtlasView) -> array {
-    return empty_candidate_list()
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("quantum") >= 0 || raw.index_of("qubit") >= 0 || raw.index_of("Bell") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "cross_pollinate.borrow_from_qmirror.quantum_signals",
+        family: "cross_pollinate",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry quantum/qubit/Bell in raw — candidate for stdlib/quantum (qmirror) pattern borrowing.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_cross_pollinate_borrow_from_sim_universe(view: AtlasView) -> array {
     return empty_candidate_list()
@@ -446,7 +467,28 @@ pub fn lens_apply_counterexample_mine_n5_break(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_counterexample_mine_scale_break(view: AtlasView) -> array {
-    return empty_candidate_list()
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("10^") >= 0 || raw.index_of("2^") >= 0 || raw.index_of("e+") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "counterexample_mine.scale_break.large_N",
+        family: "counterexample_mine",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry exponential/large-N notation in raw — candidate for scale-sweep falsification.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_counterexample_mine_regime_break(view: AtlasView) -> array {
     return empty_candidate_list()
@@ -572,7 +614,28 @@ pub fn lens_apply_scale_extrapolate_n_to_2n(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_scale_extrapolate_n_to_n_div_2(view: AtlasView) -> array {
-    return empty_candidate_list()
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("/2") >= 0 || raw.index_of(" / 2") >= 0 || raw.index_of("half") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "scale_extrapolate.n_to_n_div_2.halving",
+        family: "scale_extrapolate",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry `/2` / `half` in raw — candidate pool for n→n/2 refinement.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_scale_extrapolate_dim_1d_to_2d(view: AtlasView) -> array {
     // C-1.d — dimensionality keyword scan. P raw mentioning `1D` / `1-D` /
@@ -663,7 +726,28 @@ pub fn lens_apply_constraint_flip_flip_ordering(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_constraint_flip_flip_topology(view: AtlasView) -> array {
-    return empty_candidate_list()
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("topology") >= 0 || raw.index_of("planar") >= 0 || raw.index_of("toroidal") >= 0 || raw.index_of("genus") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "constraint_flip.flip_topology.topology_signals",
+        family: "constraint_flip",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry topology/planar/toroidal/genus in raw — candidate pool for topology-flip survival test.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_constraint_flip_flip_dim(view: AtlasView) -> array {
     return empty_candidate_list()
