@@ -258,6 +258,23 @@ fn pass_opt(d: Design) -> PassResult {
 //   logical-operator lowering (Kahng/Lienig/Markov/Hu "VLSI Physical
 //   Design" §5; de Micheli "Synthesis and Optimization of Digital
 //   Circuits" §3 — logical operators reduce-then-combine).
+//
+// CLEAN-ROOM PROVENANCE for $logic_not lowering (rfc_006 §5 bug (a) iter 4):
+//   The OR-reduce + invert shape is re-derived from the Verilog logical-
+//   NOT identity `!A = ~(|A)` (IEEE 1364-2005 §5.1.10 logical operators —
+//   the single operand is first reduced to a single bit via reduction-OR,
+//   then that scalar result is inverted; the result is always 1 bit
+//   regardless of operand width). Unary operator — only the A operand
+//   exists; the result Y is single-bit.
+//   The SKY130 cells used are documented in
+//   `sky130_fd_sc_hd__tt_025C_1v80.lib`:
+//     - sky130_fd_sc_hd__or2_1 — 2-input OR  (A,B → X)
+//     - sky130_fd_sc_hd__inv_1 — 1-input NOT (A   → Y)
+//   No upstream Yosys source is copied; the shape is the textbook
+//   logical-operator lowering (Kahng/Lienig/Markov/Hu "VLSI Physical
+//   Design" §5; de Micheli "Synthesis and Optimization of Digital
+//   Circuits" §3 — logical operators reduce-then-combine, with the
+//   "combine" stage collapsing to a single invert for unary logical-NOT).
 
 // CLEAN-ROOM: count the per-bit input "slots" of an $eq-shaped cell.
 //
@@ -691,6 +708,140 @@ fn _passes_lower_logic_and_cell(c: Cell) -> LogicAndLowerResult {
     return LogicAndLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
 }
 
+// CLEAN-ROOM: count the per-bit input slots of a $logic_not operand.
+// $logic_not is unary — only the A operand exists. Two pin conventions
+// are accepted, in priority order (same shape as _passes_logic_and_width
+// but specialised to the single A operand — IEEE 1364-2005 §5.1.10
+// reduces the lone operand to one bit, then inverts):
+//   (1) Bit-indexed pins  : conns include "A[0]","A[1]",…
+//       Width = count of distinct "A[i]" pins (0-based dense).
+//   (2) Single-bit fallback: only "A" present → width = 1.
+// A pin not present at all → width = 0 (lowering skipped).
+fn _passes_logic_not_width(c: Cell) -> int {
+    let mut has_plain = 0
+    let mut max_idx = 0 - 1
+    let mut i = 0
+    while i < len(c.conns) {
+        let p = c.conns[i].pin
+        let lp = len(p)
+        if lp == 1 {
+            if p[0] == 'A' { has_plain = 1 }
+        }
+        if lp >= 4 {
+            // shortest indexed form is "A[0]" (4 chars)
+            if p[0] == 'A' {
+                if p[1] == '[' {
+                    if p[lp - 1] == ']' {
+                        let mut k = 2
+                        let mut v = 0
+                        let mut ok = 1
+                        while k < lp - 1 {
+                            let ch = p[k]
+                            if ch >= '0' {
+                                if ch <= '9' {
+                                    v = v * 10 + (ch - '0')
+                                } else { ok = 0 }
+                            } else { ok = 0 }
+                            k = k + 1
+                        }
+                        if ok == 1 {
+                            if v > max_idx { max_idx = v }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    if max_idx >= 0 { return max_idx + 1 }
+    if has_plain == 1 { return 1 }
+    return 0
+}
+
+// CLEAN-ROOM: lower one $logic_not cell into a tree of SKY130 cells +
+// the internal wires those cells need. Returns (new_cells, new_wires).
+//
+// Shape (IEEE 1364-2005 §5.1.10):
+//   logic_not(A) = NOT (OR_i A[i])
+//   width(A)=1 : 1 × inv_1                              (a → Y)
+//   width(A)=N : (N-1) × or2_1 reducing A → 1 × inv_1
+//   Output is always 1 bit regardless of operand width.
+//
+// Naming convention for fresh wires/cells:
+//   <cellname>$lnAred$<i>  — output of i-th A-side OR-reducer (i = 1..N-1)
+//   <cellname>$lnAor$<i>   — i-th A-side or2_1 cell instance
+//   <cellname>$lninv$0     — the final inv_1 cell instance
+// All freshly added wires are width=1, internal (dir_kind=0, port_id=0).
+struct LogicNotLowerResult {
+    cells: [Cell],
+    wires: [Wire],
+    ok:    int,         // 1 = lowered, 0 = unsupported shape
+}
+
+fn _passes_lower_logic_not_cell(c: Cell) -> LogicNotLowerResult {
+    let wa = _passes_logic_not_width(c)
+    if wa <= 0 {
+        return LogicNotLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let y_net = _passes_pin_net(c, "Y")
+    if y_net == "" {
+        return LogicNotLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+
+    // ── A-side reduction → single bit a_red ─────────────────────────
+    // wa == 1: pass the lone A bit through to the final invert.
+    // wa  > 1: (wa-1) × or2_1 linear chain; output = a_red.
+    let mut a_red: str = ""
+    if wa == 1 {
+        a_red = _passes_pin_net(c, "A")
+        if a_red == "" {
+            return LogicNotLowerResult { cells: [], wires: [], ok: 0 }
+        }
+    } else {
+        let mut a_bits: [str] = []
+        let mut i = 0
+        while i < wa {
+            let pa = "A[" + str(i) + "]"
+            let a_net = _passes_pin_net(c, pa)
+            if a_net == "" {
+                return LogicNotLowerResult { cells: [], wires: [], ok: 0 }
+            }
+            a_bits = a_bits.push(a_net)
+            i = i + 1
+        }
+        // Linear OR chain: acc0 = a_bits[0] OR a_bits[1]
+        //                  acc1 = acc0      OR a_bits[2]   ...
+        //                  final OR output = a_red (fresh wire).
+        let mut acc = a_bits[0]
+        let mut j = 1
+        while j < wa {
+            let next_net = a_bits[j]
+            let or_out = c.name + "$lnAred$" + str(j)
+            out_wires = out_wires.push(rtlil_wire(or_out, 1, 0, 0))
+            let mut o2 = rtlil_cell(c.name + "$lnAor$" + str(j),
+                                    "sky130_fd_sc_hd__or2_1", 1)
+            o2 = rtlil_cell_connect(o2, "A", acc)
+            o2 = rtlil_cell_connect(o2, "B", next_net)
+            o2 = rtlil_cell_connect(o2, "X", or_out)
+            out_cells = out_cells.push(o2)
+            acc = or_out
+            j = j + 1
+        }
+        a_red = acc
+    }
+
+    // ── Final NOT: ~(a_red) → y_net ─────────────────────────────────
+    let mut i1 = rtlil_cell(c.name + "$lninv$0",
+                            "sky130_fd_sc_hd__inv_1", 1)
+    i1 = rtlil_cell_connect(i1, "A", a_red)
+    i1 = rtlil_cell_connect(i1, "Y", y_net)
+    out_cells = out_cells.push(i1)
+
+    return LogicNotLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
+}
+
 fn pass_techmap_sky130(d: Design) -> PassResult {
     let cb = _passes_total_cells(d)
     let mut out: [Module] = []
@@ -773,6 +924,23 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                         while lawi < len(lar.wires) {
                             new_wires = new_wires.push(lar.wires[lawi])
                             lawi = lawi + 1
+                        }
+                        expanded = 1
+                    }
+                }
+                if c.cell_type == "$logic_not" {
+                    let lnr = _passes_lower_logic_not_cell(c)
+                    if lnr.ok == 1 {
+                        // splice expansion in place of the $logic_not cell
+                        let mut lni = 0
+                        while lni < len(lnr.cells) {
+                            new_cells = new_cells.push(lnr.cells[lni])
+                            lni = lni + 1
+                        }
+                        let mut lnwi = 0
+                        while lnwi < len(lnr.wires) {
+                            new_wires = new_wires.push(lnr.wires[lnwi])
+                            lnwi = lnwi + 1
                         }
                         expanded = 1
                     }
@@ -1357,6 +1525,117 @@ fn main() {
     }
     if rtlil_check_no_dangling(r_la4.design.modules[0]) != 0 {
         println("FAIL T18e la4_dangling_pin"); fails = fails + 1
+    }
+
+    // T19 — $logic_not lowering (1-bit, plain A/Y conns) →
+    // 0 or2_1 + 1 inv_1. CLEAN-ROOM: rfc_006 §5 bug (a) iter 4. The
+    // lone operand single-bit ⇒ the OR-reduce is a no-op (pass-through
+    // to the final invert); the lowered shape is a single SKY130
+    // inv_1 (IEEE 1364-2005 §5.1.10).
+    total = total + 1
+    let mut m_ln1 = rtlil_new_module("ln1")
+    m_ln1 = rtlil_module_add_wire(m_ln1, rtlil_wire("a",  1, 1, 1))
+    m_ln1 = rtlil_module_add_wire(m_ln1, rtlil_wire("ln", 1, 2, 2))
+    let mut c_ln1 = rtlil_cell("u_ln1", "$logic_not", 0)
+    c_ln1 = rtlil_cell_connect(c_ln1, "A", "a")
+    c_ln1 = rtlil_cell_connect(c_ln1, "Y", "ln")
+    m_ln1 = rtlil_module_add_cell(m_ln1, c_ln1)
+    let mut d_ln1 = rtlil_new_design("test")
+    d_ln1 = rtlil_design_add(d_ln1, m_ln1)
+    let r_ln1 = pass_techmap_sky130(d_ln1)
+    if r_ln1.ok != 1 {
+        println("FAIL T19 ln1: " + r_ln1.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln1.design.modules[0], "sky130_fd_sc_hd__or2_1") != 0 {
+        println("FAIL T19b ln1_no_or (got "
+            + str(rtlil_count_cells_of_type(r_ln1.design.modules[0], "sky130_fd_sc_hd__or2_1"))
+            + ", want 0)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln1.design.modules[0], "sky130_fd_sc_hd__inv_1") != 1 {
+        println("FAIL T19c ln1_inv_count (got "
+            + str(rtlil_count_cells_of_type(r_ln1.design.modules[0], "sky130_fd_sc_hd__inv_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln1.design.modules[0], "$logic_not") != 0 {
+        println("FAIL T19d ln1_residual"); fails = fails + 1
+    }
+
+    // T20 — $logic_not lowering 2-bit (bit-indexed A[0]/A[1]/Y) →
+    // 1 or2_1 (reducing two bits to one) + 1 inv_1 (inverting the
+    // reduced bit).
+    total = total + 1
+    let mut m_ln2 = rtlil_new_module("ln2")
+    m_ln2 = rtlil_module_add_wire(m_ln2, rtlil_wire("a0", 1, 1, 1))
+    m_ln2 = rtlil_module_add_wire(m_ln2, rtlil_wire("a1", 1, 1, 2))
+    m_ln2 = rtlil_module_add_wire(m_ln2, rtlil_wire("ln", 1, 2, 3))
+    let mut c_ln2 = rtlil_cell("u_ln2", "$logic_not", 0)
+    c_ln2 = rtlil_cell_connect(c_ln2, "A[0]", "a0")
+    c_ln2 = rtlil_cell_connect(c_ln2, "A[1]", "a1")
+    c_ln2 = rtlil_cell_connect(c_ln2, "Y",    "ln")
+    m_ln2 = rtlil_module_add_cell(m_ln2, c_ln2)
+    let mut d_ln2 = rtlil_new_design("test")
+    d_ln2 = rtlil_design_add(d_ln2, m_ln2)
+    let r_ln2 = pass_techmap_sky130(d_ln2)
+    if r_ln2.ok != 1 {
+        println("FAIL T20 ln2: " + r_ln2.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln2.design.modules[0], "sky130_fd_sc_hd__or2_1") != 1 {
+        println("FAIL T20b ln2_or_count (got "
+            + str(rtlil_count_cells_of_type(r_ln2.design.modules[0], "sky130_fd_sc_hd__or2_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln2.design.modules[0], "sky130_fd_sc_hd__inv_1") != 1 {
+        println("FAIL T20c ln2_inv_count (got "
+            + str(rtlil_count_cells_of_type(r_ln2.design.modules[0], "sky130_fd_sc_hd__inv_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln2.design.modules[0], "$logic_not") != 0 {
+        println("FAIL T20d ln2_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_ln2.design.modules[0]) != 0 {
+        println("FAIL T20e ln2_dangling_pin"); fails = fails + 1
+    }
+
+    // T21 — $logic_not lowering 4-bit → 3 or2_1 (linear chain reducing
+    // 4 bits to 1) + 1 inv_1 (final invert).
+    total = total + 1
+    let mut m_ln4 = rtlil_new_module("ln4")
+    let mut lnwi = 0
+    while lnwi < 4 {
+        m_ln4 = rtlil_module_add_wire(m_ln4,
+            rtlil_wire("a" + str(lnwi), 1, 1, lnwi + 1))
+        lnwi = lnwi + 1
+    }
+    m_ln4 = rtlil_module_add_wire(m_ln4, rtlil_wire("ln", 1, 2, 5))
+    let mut c_ln4 = rtlil_cell("u_ln4", "$logic_not", 0)
+    let mut lnwk = 0
+    while lnwk < 4 {
+        c_ln4 = rtlil_cell_connect(c_ln4, "A[" + str(lnwk) + "]", "a" + str(lnwk))
+        lnwk = lnwk + 1
+    }
+    c_ln4 = rtlil_cell_connect(c_ln4, "Y", "ln")
+    m_ln4 = rtlil_module_add_cell(m_ln4, c_ln4)
+    let mut d_ln4 = rtlil_new_design("test")
+    d_ln4 = rtlil_design_add(d_ln4, m_ln4)
+    let r_ln4 = pass_techmap_sky130(d_ln4)
+    if r_ln4.ok != 1 {
+        println("FAIL T21 ln4: " + r_ln4.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln4.design.modules[0], "sky130_fd_sc_hd__or2_1") != 3 {
+        println("FAIL T21b ln4_or_count (got "
+            + str(rtlil_count_cells_of_type(r_ln4.design.modules[0], "sky130_fd_sc_hd__or2_1"))
+            + ", want 3)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln4.design.modules[0], "sky130_fd_sc_hd__inv_1") != 1 {
+        println("FAIL T21c ln4_inv_count (got "
+            + str(rtlil_count_cells_of_type(r_ln4.design.modules[0], "sky130_fd_sc_hd__inv_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln4.design.modules[0], "$logic_not") != 0 {
+        println("FAIL T21d ln4_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_ln4.design.modules[0]) != 0 {
+        println("FAIL T21e ln4_dangling_pin"); fails = fails + 1
     }
 
     if fails > 0 {
