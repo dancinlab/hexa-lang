@@ -4362,4 +4362,46 @@ Remaining for north-star ② (interpreter retired · self-host) — N/A
 
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md ·
 PR #161 Fire-decision #1 (next: ubu-2 toolchain bootstrap + 3 P4 fires)
->>>>>>> c9fb34ec (docs(compiler/PLAN): RFC 067 wmma-emit + RFC 068 P3 + RFC 069 wiring — codegen-side ALL CLOSED (closure entry))
+
+### 2026-05-20 — rfc_006 §5 absorption iter 13 — `.names` buffer → `.gate buf_1` switch · ABC SOP-check BLOCKER REMOVED
+
+`stdlib/kernels/logic_synth/abc_map.hexa` — single-file surgical (~13 LoC body change in `abc_emit_blif` + T7 selftest rewrite). Iter 12 (PR #180) collapsed multi-driver `connect` rows, exposing the next layer: ABC rejected the iter-11 `.names <rhs> <lhs>\n1 1\n` non-constant-connect emission with `Abc_SopCheck: SOP has a mismatch between its cover size (400) and its fanin number (1). NodeCheck: SOP check for node "$rvexpr$26$c$lutc1_net" has failed. Io_ReadBlifMv: The network check has failed for model router_d4.`  The root cause is ABC's truth-table line-continuation lookahead: after parsing `.names a y\n1 1\n`, the reader treated the next `.gate ...` line as a phantom additional truth-table row, inflating the cover-size accumulator off the input fanin.
+
+Minimal repro (4-line BLIF):
+
+```
+.model t
+.inputs a b
+.outputs y
+.names z y
+1 1
+.gate sky130_fd_sc_hd__xnor2_1 A=a B=b X=z
+.end
+```
+
+→ `Abc_SopCheck: SOP has a mismatch between its cover size (272) and its fanin number (2). NodeCheck: SOP check for node "z" has failed.`  Replacing `.names z y\n1 1\n` with `.gate sky130_fd_sc_hd__buf_1 A=z X=y\n` makes ABC `read_blif; strash; map` accept the same network cleanly.  Iter-10's docstring had already flagged this failure mode for the 0-input `.names <net>` constant form and migrated to `.gate inv_1`; iter-11's 1-input identity SOP path inherited the same race.  Iter-13 finishes the migration: ALL `connect`-emitted buffers (constant-1 inv_1 already iter-10 form; non-constant buffer now `.gate buf_1`) flow through ABC as `.gate`-only directives, with `.names` confined to the `read_verilog`-cells path (which currently emits only `.gate $<op>`, no SOPs).
+
+Measured (worktree `rfc006-absorption-a-sop-form` off origin/main `3129473b`):
+
+- `abc_map` selftest 7/7 PASS (T6+T6e iter-10 invariants preserved; T7 flipped to assert `.gate buf_1` substring + ordering; T7e self-loop suppression checks both `.gate buf_1` and `.names` leakage).
+- `hexa-run stdlib/yosys/gate_record.hexa --lib /Users/ghost/core/OpenROAD-flow-scripts/flow/platforms/sky130hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib`:
+  - d4: read_verilog → hierarchy → proc → flatten → opt → clean_multidriver → techmap → dfflibmap → **abc_map: ok** (was: `[FAIL] d4:abc_map`)
+  - d6: same pipeline, **abc_map: ok** (was: `[FAIL] d6:abc_map`)
+- ABC produces a mapped BLIF for both designs (24 lines for d4, 32 for d6), but every output is `_const0_`/`_const1_` (zero area).
+
+Honest scope `@D g3`:
+- The iter-13 fix CLOSES the §5 absorption-pipeline ABC-rejection layer (`Abc_SopCheck` is gone). The §5 area-oracle gate is STILL OPEN — `router_d4 area=0.0 µm² oracle=61763 µm² Δ=100.0% FAIL (±5%)`, same for d6 — because the read_verilog frontend lacks procedural-mux / always-block coverage, so the design outputs (`out_data[*]`, `out_valid[*]`, `in_ready[*]`) have no live combinational drivers in the lowered RTLIL.  ABC honestly maps the constant-tied outputs to `_const0_`/`_const1_` zero-area cells.  This is the next layer down, NOT an iter-13 regression.
+- 13 iters of cell-chain / connect-row Shape-A absorption are now closed.  The remaining §5 gate closure requires **structural Shape-B work** on `read_verilog.hexa`:
+  - `always @(*)` block elaboration with case / if-else procedural mux (Yosys `passes/proc/proc_mux.cc`).
+  - Condition-aware connect rows: preserve the `if (cond) y = a; else y = b;` guard as an RTLIL `$mux` cell instead of collapsing both writes to a single last-write driver via `pass_clean_multidriver`.
+  - Array-indexed assignment (`grant[i] = …`) elaboration that preserves the per-index gating.
+- Cell-chain Shape-A pattern (iters 1-13) is COMPLETE: all observed BLIF / ABC-acceptance blockers in the gate-§5 pipeline have been closed via surgical hexa-native fixes.  Structural Shape-B (read_verilog procedural-mux scope) remains and is multi-cycle.
+- The `_minimal_repro.blif` falsifier is permanent: if iter-13's `.gate buf_1` form is ever reverted to a `.names` buffer, the minimal 4-line repro re-triggers `Abc_SopCheck` instantly.  T7 in `abc_map.hexa::main` enforces the invariant at every selftest.
+
+Atlas citations: BLIF spec §2 (`.names` truth-table line continuation — the rule whose interaction with `.gate` causes the failure) + SKY130 PDK `sky130_fd_sc_hd__buf_1` (Apache-2 / CC-BY-4.0; A → X, is_combinational, function "A"; verified present in `sky130_fd_sc_hd__tt_025C_1v80.lib`).
+
+Files: `stdlib/kernels/logic_synth/abc_map.hexa` (body + T7 selftest + iter-13 docstring).
+Parse-gate: `hexa_real parse` PASS.
+Selftest: 7/7 PASS (T1..T7f).
+Pipeline: d4 + d6 both reach `abc_map: ok`.
+g3 verdict: §5 absorption-pipeline ABC-rejection layer CLOSED; §5 area-oracle gate remains OPEN pending read_verilog procedural-mux scope (Shape-B).

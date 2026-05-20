@@ -121,20 +121,26 @@ fn _abc_log(line: str) {
 //     `map` absorbs the residual constant-driven fanout as don't-
 //     cares — measured strash-after-load `and=0` lev=0 on a 3-tie
 //     fixture (test_invones.blif during iter-10 R&D 2026-05-20).
-//   - any other RHS (non-constant net) → iter-11 emits a 1-input SOP
-//     buffer `.names <rhs> <lhs>\n1 1\n`. RTLIL `connect (lhs, rhs)`
-//     with non-constant rhs is a wire alias / continuous `assign` /
-//     buffer — semantically "lhs is driven by the same logic that
-//     drives rhs". BLIF spec §3 SOP form `.names a y\n1 1` is the
-//     canonical 1-input identity (truth-table row: input=1 →
-//     output=1; input=0 → output=0 by SOP default-zero), accepted
-//     universally by ABC's read_blif without any liberty cell
-//     dependency. ABC's `strash` collapses the buffer to the rhs
-//     AIG node (same structural hash), so it is free post-mapping.
-//     Note: this canonical 1-input row is NOT vulnerable to the
-//     iter-6 SopCheck failure — that failure was the 0-input
-//     `.names <net>` form (constant SOP, no input column),
-//     ambiguous with `.gate` directive continuations.
+//   - any other RHS (non-constant net) → iter-13 emits a `.gate
+//     sky130_fd_sc_hd__buf_1 A=<rhs> X=<lhs>` library-buffer cell.
+//     RTLIL `connect (lhs, rhs)` with non-constant rhs is a wire
+//     alias / continuous `assign` / buffer — semantically "lhs is
+//     driven by the same logic that drives rhs".  iter-11 used
+//     `.names <rhs> <lhs>\n1 1\n` (a 1-input identity SOP, BLIF
+//     spec §3); measured 2026-05-20 that ABC's truth-table line-
+//     continuation lookahead consumed the FOLLOWING `.gate` line
+//     as a phantom additional truth-table row, producing
+//     `Abc_SopCheck: SOP has a mismatch between its cover size (N)
+//     and its fanin number (1).  NodeCheck: SOP check for node
+//     "<rhs>" has failed.` — the same failure shape iter-10 had
+//     documented for the 0-input form.  The `.gate buf_1` path
+//     loads cleanly through `read_blif; strash; map`; ABC's
+//     strash collapses the buffer to the rhs AIG node, so it is
+//     free post-mapping.  SKY130 PDK provides `buf_1` (A → X,
+//     is_combinational, function "A"; verified present in the
+//     loaded `sky130_fd_sc_hd__tt_025C_1v80.lib` cell set).  The
+//     §5 absorption gate already depends on the full PDK, so the
+//     liberty-cell dependency is acceptable.
 //
 // Atlas citations:
 //   - IEEE 1800-2017 §6.7 — net-driver `assign` semantics (RTLIL
@@ -206,18 +212,60 @@ fn abc_emit_blif(d: Design) -> str {
             } else if rhs == "1'b0" {
                 // RHS == "1'b0" → no emission (ABC auto-tie undriven net)
             } else {
-                // iter 11 — non-constant net alias / continuous-assign /
-                // buffer. Skip degenerate self-loops (lhs == rhs) which
-                // would produce a `.names a a` directive that ABC's
-                // SOP solver would parse as combinational feedback.
-                // Skip empty endpoints defensively.
+                // iter 13 — non-constant net alias / continuous-assign /
+                // buffer.  Lower to `.gate sky130_fd_sc_hd__buf_1 A=<rhs>
+                // X=<lhs>` instead of `.names <rhs> <lhs>\n1 1\n`.
+                //
+                // Why the switch: iter 11's 1-input identity SOP form
+                // (`.names a y\n1 1`) is BLIF-spec-legal (BLIF §3) and
+                // ABC's `read_blif` parses the directive itself, but
+                // ABC's truth-table line-continuation lookahead then
+                // consumes the FOLLOWING `.gate` line as a phantom
+                // additional truth-table row.  Measured 2026-05-20 with
+                // the iter-11 minimal repro
+                //
+                //   .names z y
+                //   1 1
+                //   .gate sky130_fd_sc_hd__xnor2_1 A=a B=b X=z
+                //
+                // → `Abc_SopCheck: SOP has a mismatch between its cover
+                //   size (272) and its fanin number (2).  NodeCheck:
+                //   SOP check for node "z" has failed.`
+                //
+                // The same network with the buffer emitted as a `.gate`
+                // cell loads cleanly through `read_blif; strash; map`.
+                // This is the same failure mode iter-10's docstring
+                // already documented for the 0-input `.names` constant
+                // form; ABC's 1-input identity SOP path is not immune
+                // — the `.gate` continuation race re-triggers it.
+                //
+                // SKY130 PDK provides `sky130_fd_sc_hd__buf_1` (A→X,
+                // is_combinational, function "A"; verified present in
+                // the loaded `sky130_fd_sc_hd__tt_025C_1v80.lib` cell
+                // set).  Liberty-cell dependency is acceptable: the
+                // §5 absorption gate already depends on the full PDK,
+                // and `abc_map_T_*` regression tests run without a
+                // .lib (no buffer emission needed — those tests use
+                // generic `$and` cells without connect rows).
+                //
+                // Self-loops (lhs == rhs) and empty endpoints stay
+                // unemitted — `.gate buf_1 A=x X=x` would let ABC's
+                // strash collapse to a self-edge.  Same defence as
+                // iter-11.
+                //
+                // Atlas citations:
+                //   - BLIF spec §2 — `.names` truth-table line continuation
+                //     (the same line-continuation rule whose interaction
+                //     with `.gate` causes this failure).
+                //   - SKY130 PDK `sky130_fd_sc_hd__buf_1` (Apache-2 /
+                //     CC-BY-4.0) — single-input buffer cell, A → X,
+                //     is_combinational, function "A".
                 if len(lhs) > 0 {
                     if len(rhs) > 0 {
                         if lhs != rhs {
-                            // .names <rhs> <lhs>
-                            // 1 1
-                            buf = buf + ".names " + rhs + " " + lhs + "\n"
-                            buf = buf + "1 1\n"
+                            // .gate sky130_fd_sc_hd__buf_1 A=<rhs> X=<lhs>
+                            buf = buf + ".gate sky130_fd_sc_hd__buf_1 A="
+                                + rhs + " X=" + lhs + "\n"
                         }
                     }
                 }
@@ -567,16 +615,21 @@ fn main() {
             + " ≥ and_pos=" + str(and_pos) + ")"); fails = fails + 1
     }
 
-    // T7 — RTLIL connect with NON-constant RHS lowers to a 1-input
-    // SOP buffer `.names <rhs> <lhs>\n1 1\n`. rfc_006 §5 bug (a) iter
-    // 11 fix — previously, `assign y = a`-style connects (where rhs
-    // is a regular net, not "1'b0"/"1'b1") fell through the iter-10
-    // walk with no BLIF emission, causing ABC to auto-tie y to
-    // constant 0 and the mapped BLIF to collapse outputs.
+    // T7 — RTLIL connect with NON-constant RHS lowers to a
+    // `.gate sky130_fd_sc_hd__buf_1 A=<rhs> X=<lhs>` library-buffer
+    // cell. rfc_006 §5 bug (a) iter 13 fix — iter 11's
+    // `.names <rhs> <lhs>\n1 1\n` 1-input identity SOP triggered ABC's
+    // `Abc_SopCheck: SOP has a mismatch between its cover size (N) and
+    // its fanin number (1)` because ABC's truth-table line-continuation
+    // lookahead consumed the FOLLOWING `.gate` line as a phantom SOP
+    // row.  Switching to the library buffer makes the BLIF
+    // unambiguously `.gate`-only (apart from the `.model`/`.inputs`/
+    // `.outputs`/`.end` envelope), which `read_blif; strash; map`
+    // accepts cleanly.
     //
-    // ordering invariant preserved: the .names buffer line must
-    // appear BEFORE any subsequent `.gate` cell line that references
-    // the LHS, just like the iter-10 constant-1 inv_1 driver.
+    // ordering invariant preserved: the buffer .gate line must appear
+    // BEFORE any subsequent `.gate` cell line that references the LHS,
+    // just like the iter-10 constant-1 inv_1 driver.
     total = total + 1
     let mut m7 = rtlil_new_module("c7")
     m7 = rtlil_module_add_wire(m7, rtlil_wire("a", 1, 1, 1))
@@ -586,40 +639,39 @@ fn main() {
     let mut d7 = rtlil_new_design("test")
     d7 = rtlil_design_add(d7, m7)
     let blif7 = abc_emit_blif(d7)
-    // T7a — non-constant connect emits a `.names` buffer
-    if blif7.find(".names a y") < 0 {
-        println("FAIL T7 blif_names_buffer_missing"); fails = fails + 1
+    // T7a — non-constant connect emits a `.gate buf_1` buffer
+    if blif7.find(".gate sky130_fd_sc_hd__buf_1 A=a X=y") < 0 {
+        println("FAIL T7 blif_buf_gate_missing"); fails = fails + 1
     }
-    // T7b — SOP body row "1 1" is present
-    if blif7.find("\n1 1\n") < 0 {
-        println("FAIL T7b blif_names_sop_row_missing"); fails = fails + 1
+    // T7b — no residual `.names` row for the buffer (iter-11 form)
+    if blif7.find(".names a y") >= 0 {
+        println("FAIL T7b blif_names_buffer_leaked"); fails = fails + 1
     }
-    // T7c — no buf_1 .gate line (we chose .names fallback for the
-    // zero-liberty-dependency property)
-    if blif7.find(".gate sky130_fd_sc_hd__buf_1") >= 0 {
-        println("FAIL T7c blif_buf_gate_leaked"); fails = fails + 1
+    // T7c — no spurious `1 1\n` SOP body row remains (iter-11 form)
+    if blif7.find("\n1 1\n") >= 0 {
+        println("FAIL T7c blif_names_sop_row_leaked"); fails = fails + 1
     }
-    // T7d — ordering: the .names line must precede `.end` and follow
-    // `.outputs`. (No subsequent `.gate` in this fixture; the iter-10
-    // ordering invariant is asserted in T6e.)
-    let names_pos = blif7.find(".names a y")
+    // T7d — ordering: the buffer .gate line must precede `.end` and
+    // follow `.outputs`. (No subsequent `.gate` in this fixture; the
+    // iter-10 ordering invariant is asserted in T6e.)
+    let buf_pos = blif7.find(".gate sky130_fd_sc_hd__buf_1 A=a X=y")
     let outputs_pos = blif7.find(".outputs y")
     let end_pos = blif7.find(".end")
-    if names_pos < 0 { /* already reported by T7 */ }
+    if buf_pos < 0 { /* already reported by T7 */ }
     else if outputs_pos < 0 {
         println("FAIL T7d blif_outputs_missing"); fails = fails + 1
     }
     else if end_pos < 0 {
         println("FAIL T7d2 blif_end_missing"); fails = fails + 1
     }
-    else if names_pos <= outputs_pos {
-        println("FAIL T7d3 blif_names_before_outputs (names_pos="
-            + str(names_pos) + " ≤ outputs_pos=" + str(outputs_pos)
+    else if buf_pos <= outputs_pos {
+        println("FAIL T7d3 blif_buf_before_outputs (buf_pos="
+            + str(buf_pos) + " ≤ outputs_pos=" + str(outputs_pos)
             + ")"); fails = fails + 1
     }
-    else if names_pos >= end_pos {
-        println("FAIL T7d4 blif_names_after_end (names_pos="
-            + str(names_pos) + " ≥ end_pos=" + str(end_pos)
+    else if buf_pos >= end_pos {
+        println("FAIL T7d4 blif_buf_after_end (buf_pos="
+            + str(buf_pos) + " ≥ end_pos=" + str(end_pos)
             + ")"); fails = fails + 1
     }
     // T7e — self-loop connect (lhs == rhs) MUST be suppressed
@@ -630,8 +682,11 @@ fn main() {
     let mut d7e = rtlil_new_design("test")
     d7e = rtlil_design_add(d7e, m7e)
     let blif7e = abc_emit_blif(d7e)
-    if blif7e.find(".names z z") >= 0 {
+    if blif7e.find(".gate sky130_fd_sc_hd__buf_1 A=z X=z") >= 0 {
         println("FAIL T7e blif_self_loop_leaked"); fails = fails + 1
+    }
+    if blif7e.find(".names z z") >= 0 {
+        println("FAIL T7e2 blif_self_loop_names_leaked"); fails = fails + 1
     }
     // T7f — connect-walk + cell-walk ordering with both a non-const
     // connect AND a downstream cell consuming the LHS.
@@ -651,17 +706,17 @@ fn main() {
     let mut d7f = rtlil_new_design("test")
     d7f = rtlil_design_add(d7f, m7f)
     let blif7f = abc_emit_blif(d7f)
-    let names_pos7f = blif7f.find(".names a t")
+    let buf_pos7f = blif7f.find(".gate sky130_fd_sc_hd__buf_1 A=a X=t")
     let and_pos7f = blif7f.find(".gate sky130_fd_sc_hd__and2_1")
-    if names_pos7f < 0 {
-        println("FAIL T7f blif_names_alias_missing"); fails = fails + 1
+    if buf_pos7f < 0 {
+        println("FAIL T7f blif_buf_alias_missing"); fails = fails + 1
     }
     else if and_pos7f < 0 {
         println("FAIL T7f2 blif_and_cell_missing"); fails = fails + 1
     }
-    else if names_pos7f >= and_pos7f {
-        println("FAIL T7f3 blif_names_after_cell (names_pos="
-            + str(names_pos7f) + " ≥ and_pos=" + str(and_pos7f)
+    else if buf_pos7f >= and_pos7f {
+        println("FAIL T7f3 blif_buf_after_cell (buf_pos="
+            + str(buf_pos7f) + " ≥ and_pos=" + str(and_pos7f)
             + ")"); fails = fails + 1
     }
 
