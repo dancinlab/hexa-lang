@@ -1466,6 +1466,160 @@ pub fn ag_extract_bilinear_bwd_via_ast(arena: int, fwd_root: int, bwd_root: int,
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// SD10 — multi-input arithmetic vjp (SD6 ULP zone × SD9 multi-input)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// SD10 closes the "multi-input arithmetic" gap by composing SD6's per-op
+// rules (DIV / NEG / ADD / dt_exp) with SD9's multi-input target_ix
+// machinery. Test function: `f(x, y) = x / (1 + dt_exp(0 − y))`. This is
+// the sigmoid-weighted scalar division — `f = x · s(y)` algebraically
+// where `s(y) = 1/(1+exp(-y))`, but the source shape uses DIV at the
+// root rather than MUL, so the walker emits a structurally different
+// bwd than SD9's bilinear MUL.
+//
+// Mathematical gradients (the answer the walker is checked against):
+//
+//   df/dx = 1 / (1 + exp(-y)) = s(y)
+//   df/dy = x · s(y) · (1 − s(y))         (sigmoid-derivative reappears
+//                                           — the SD6 ULP zone)
+//
+// SD10 exercises the cross-product of SD6 and SD9 — multi-input AND
+// arithmetic-ladder rules in the same fwd. Two new properties get
+// tested that SD9 (pure MUL) did not stress:
+//   (i)  DIV at the root of a multi-input fwd: the walker's DIV rule
+//        threads `da_local = upstream / b_cached` and `db_local =
+//        NEG(upstream × c_cached / b_cached_2)` — for target=x, only
+//        `ga = walk(Param(0), da_local, 0)` is non-zero and reduces to
+//        `dy / d`. The reference, following the task brief's "SD6's
+//        exact form, use 1-s", computes `dy × s` where
+//        `s = 1.0 / d` is recomputed in the manual.
+//        Walker emits `dy / d` (one DIV); reference emits
+//        `dy × (1.0 / d)` (DIV + MUL). Different IEEE-754 trajectory ⇒
+//        df/dx is expected to be HONEST 1-ULP (or possibly byte-eq
+//        when rounding accidentally aligns; the test reports the
+//        verdict honestly without preselecting which).
+//   (ii) DIV + NEG + dt_exp recursion under target=y: only the
+//        sigmoid-of-y subtree is non-zero; the walker emits a long
+//        chain `NEG(MUL(db_local, e_cached))` where
+//        `db_local = NEG(DIV(MUL(dy, c_cached), d_cached_2))` —
+//        nesting THREE algebraic-identity opportunities. Reference
+//        uses SD6's `dy × x × s × (1 − s)` form (recomputes s and
+//        1−s manually). Same SD6 reorder lesson under multi-input —
+//        HONEST 1-ULP zone expected. Both ways of writing the
+//        gradient are mathematically equal:
+//        `dy × c × e / d  =  dy × (x/d) × e / d  =  dy × x × s × (e/d)
+//        =  dy × x × s × (1 − s)`.
+//
+// What SD10 PROVES: the SD6 walker's per-op rule table composes
+// faithfully with SD9's target_ix indirection. No walker edits needed.
+// The HONEST 1-ULP outcome (where it occurs) confirms that SD6's
+// reorder-lesson generalizes to the multi-input case — multi-input
+// does not magically erase IEEE-754 last-bit divergence; it preserves
+// it edge-for-edge. The PASS outcome (where the algebraic shape
+// happens to align with the walker emit) confirms that some
+// composed-arithmetic shapes are exactly byte-equal even under
+// multi-input.
+//
+// What SD10 does NOT prove (g3 honest carve-outs):
+//   - Multi-output Jacobian column-stack (still a scalar-output fwd).
+//   - Parser integration (SD8 stays out-of-scope; hand-built fwd).
+//   - Single-pass per-Param accumulator dict (still SD12; SD10 calls
+//     the walker twice, once per Param direction, the SD9 idiom).
+//   - Sum / MatMul / Compose / silu-gelu-tanh rule coverage — those
+//     are now SD13 (renumbered from the SD9-era "SD10" carve-out;
+//     this cycle re-uses the SD10 slot per task brief).
+//
+// Atlas anchors (g6 — same set as SD5/6/7/9 plus SD6's reorder note):
+//   - Griewank & Walther §3.2 Algorithm 3.6 — reverse-mode VJP, here
+//     specialized to two Params + DIV-rooted fwd. The per-direction
+//     call recovers one Jacobian column at a time.
+//   - Griewank & Walther §3.2 elementary-primitives table — DIV rule
+//     `da = dc/b · db = -dc·c/b` and dt_exp rule `da = dc · c_cached`.
+//   - SD6 reorder note (this file's SD6 header) — algebraic-identity
+//     ULP divergence: walker's `e/d` and reference's `1 − s` are
+//     mathematically equal but differ in last-bit rounding; the same
+//     divergence appears in SD10 under multi-input.
+//   - Pearlmutter & Siskind §3 — compositional vjp; each Param is an
+//     independent leaf, target-ix selects which Param direction.
+//
+// ─── SD10 forward AST builder: f(x, y) = x / (1 + dt_exp(0 − y)) ───────
+// Hand-builds the SD10 fwd AST. Two distinct Param indices (0=x,
+// 1=y); root is BinOp_DIV whose denominator is the SD6 sigmoid
+// shape `1 + dt_exp(0 − y)` (without the outer `1/(…)` — that's the
+// `d_node` slot, and we let the OUTER DIV produce `x / d` directly).
+//
+// `cache_out` writes (mirror SD9 convention for caller introspection):
+//   cache_out[0] = root_node (the DIV — the f output)
+//   cache_out[1] = x_node    (Param(0))
+//   cache_out[2] = y_node    (Param(1))
+//   cache_out[3] = d_node    (the denominator 1 + dt_exp(0 − y))
+//
+// Slot count: 8 fwd nodes (x, y, zero_a, u=zero_a-y, e=dt_exp(u),
+// one_a, d=one_a+e, root=DIV(x,d)). Leaves headroom for ~17 bwd
+// nodes per Param direction (full DIV/NEG/dt_exp recursion), so two
+// per-Param walks under the 64-slot capacity (sized 8 + 17 + 17 = 42).
+pub fn ag_extract_build_sigmoid_div_multi_fwd(arena: int, cache_out: int) -> int {
+    // x (param index 0) — numerator
+    let x_node       = ag_extract_mk_param(arena, 0)
+    // y (param index 1) — input to sigmoid-shaped denominator
+    let y_node       = ag_extract_mk_param(arena, 1)
+    // 0.0 (literal — used in `0 − y`, mirrors SD6's NEG-via-SUB shape)
+    let zero_node_a  = ag_extract_mk_const(arena, 0.0)
+    // u = 0.0 − y (the input negation; reserved BinOp_NEG kind stays
+    // for future unary-prefix syntax — SD6 convention)
+    let u_node       = ag_extract_mk_binop_sub(arena, zero_node_a, y_node)
+    // e = dt_exp(u)
+    let e_node       = ag_extract_mk_call_dtexp(arena, u_node)
+    // 1.0 (literal — denominator's leading constant)
+    let one_node_a   = ag_extract_mk_const(arena, 1.0)
+    // d = 1.0 + e
+    let d_node       = ag_extract_mk_binop_add(arena, one_node_a, e_node)
+    // root = x / d  (the f output — same shape an honest parser would
+    // emit for `pub fn f(x, y) = x / (1.0 + dt_exp(0.0 − y))`)
+    let root         = ag_extract_mk_binop_div(arena, x_node, d_node)
+    t_set(cache_out, 0, to_float(root))
+    t_set(cache_out, 1, to_float(x_node))
+    t_set(cache_out, 2, to_float(y_node))
+    t_set(cache_out, 3, to_float(d_node))
+    return root
+}
+
+// ─── SD10 elementwise driver: sigmoid-div multi bwd via AST ────────────
+// `ag_extract_sigmoid_div_multi_bwd_via_ast(arena, fwd_root, bwd_root,
+//  x_arr, y_arr, dy_arr, d_out, len, fwd_cache, param_vals)` — runs the
+// 2-input fwd + 1-Param bwd elementwise. Symmetric to SD9's
+// `ag_extract_bilinear_bwd_via_ast` (identical signature) — called
+// twice in the SD10 test (once with the x-target bwd_root, once with
+// the y-target bwd_root). Mechanically identical to SD9's driver; we
+// add a thin SD10-named alias for self-documenting call sites.
+//
+// (We could call SD9's `ag_extract_bilinear_bwd_via_ast` directly —
+// the param_vals + fwd_cache + interpret_v2_multi machinery is
+// op-agnostic — but the named wrapper makes the test's two paths
+// (SD9 bilinear vs SD10 sigmoid-div) trivially greppable.)
+pub fn ag_extract_sigmoid_div_multi_bwd_via_ast(arena: int,
+                                                  fwd_root: int, bwd_root: int,
+                                                  x_arr: int, y_arr: int, dy_arr: int,
+                                                  d_out: int, len: int,
+                                                  fwd_cache: int, param_vals: int) {
+    let mut i = 0
+    while i < len {
+        let xi  = t_get(x_arr, i)
+        let yi  = t_get(y_arr, i)
+        let dyi = t_get(dy_arr, i)
+        // Populate param_vals farr for this i.
+        t_set(param_vals, 0, xi)
+        t_set(param_vals, 1, yi)
+        // Populate fwd_cache by evaluating fwd at (x_i, y_i).
+        let _ = ag_extract_eval_fwd_multi(arena, fwd_root, param_vals, fwd_cache)
+        // Interpret bwd AST against (param_vals, dy_i, fwd_cache).
+        let d_i = ag_extract_interpret_v2_multi(arena, bwd_root, param_vals, dyi, fwd_cache)
+        t_set(d_out, i, d_i)
+        i = i + 1
+    }
+}
+
 // ─── Future work (g3 carve-outs) ───────────────────────────────────────
 //
 // SD5 established the AST→walk→emit pipeline shape for ONE op (relu).
@@ -1479,11 +1633,18 @@ pub fn ag_extract_bilinear_bwd_via_ast(arena: int, fwd_root: int, bwd_root: int,
 // (Option A) so byte-eq holds. SD7 also proved the foundational point
 // that ANY non-trivial expression (with reused vars) flows through
 // this accumulator path — without it, no real-world model would work.
-// SD9 (this cycle) demonstrated MULTI-INPUT VJP — calling the walker
-// once per target Param recovers ∇f for `f(x, y) = x * y`. The
-// foundational claim: the `target_param_ix` parameter already in the
-// walker's signature suffices for n-input vjp; no walker edits needed,
-// only a param-vals-aware fwd-eval + bwd-interpret pair.
+// SD9 demonstrated MULTI-INPUT VJP — calling the walker once per
+// target Param recovers ∇f for `f(x, y) = x * y`. The foundational
+// claim: the `target_param_ix` parameter already in the walker's
+// signature suffices for n-input vjp; no walker edits needed.
+// SD10 (this cycle) demonstrated MULTI-INPUT ARITHMETIC VJP — SD6's
+// per-op rule table composed with SD9's target_ix indirection on
+// `f(x, y) = x / (1 + dt_exp(0 − y))`. The DIV at the root, the
+// `0 − y` SUB inside the dt_exp, and the multi-input target ix
+// machinery all compose with zero walker edits; the byte-eq verdict
+// per Param direction is reported honestly (SD6's algebraic-identity
+// ULP zone applies under multi-input — last-bit divergence is not
+// erased by the multi-input mechanism).
 //
 // To extend to true source-to-source AD over arbitrary hexa-lang
 // functions, the following structural blockers remain (each its own SD):
@@ -1495,14 +1656,6 @@ pub fn ag_extract_bilinear_bwd_via_ast(arena: int, fwd_root: int, bwd_root: int,
 //         significantly. The right cycle is to expose a thin
 //         `parse_function_body(path, fn_name) -> Expr` surface that
 //         strips the parser-internal state.
-//
-//   SD10 — more reverse-mode rules. SD6 covers ADD/SUB/MUL/DIV/NEG +
-//          dt_exp; SD5 covers IfElse. Generic vjp coverage needs Sum
-//          (reduce-axis), MatMul (transpose × upstream — SD1's body,
-//          AST-derived this time), Compose (let-binding chain rule),
-//          and the elementwise unary family (silu, gelu, tanh — each
-//          adds one rule, all citation-anchored in Griewank–Walther
-//          Tables 4.1–4.3).
 //
 //   SD11 — re-emit-and-recompile loop. The SD6 emit step produces a
 //          hexa source string referencing _fwd<id> cached values.
@@ -1518,6 +1671,15 @@ pub fn ag_extract_bilinear_bwd_via_ast(arena: int, fwd_root: int, bwd_root: int,
 //          when n is large. Honest carve-out: not needed for the
 //          near-term flame use case (n ≤ a few hundred Params per
 //          layer; n walker calls suffices).
+//
+//   SD13 — more reverse-mode rules (renumbered from the SD9-era
+//          "SD10" slot). SD5/6/9/10 cover ADD/SUB/MUL/DIV/NEG +
+//          dt_exp + IfElse. Generic vjp coverage still needs Sum
+//          (reduce-axis), MatMul (transpose × upstream — SD1's body,
+//          AST-derived this time), Compose (let-binding chain rule),
+//          and the elementwise unary family (silu, gelu, tanh — each
+//          adds one rule, all citation-anchored in Griewank–Walther
+//          Tables 4.1–4.3).
 //
 // Each future SD has its own falsifier registered before work
 // starts (per the scoping note §4 "each SD has its own falsifier
