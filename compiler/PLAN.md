@@ -7762,3 +7762,44 @@ PR #233 closed PIECE 1).
 **cross-link**: RUNTIME.md ## Log "2026-05-20 — Phase 1 Tier-A.1 step-1 (cycle 46)" entry · RUNTIME.md ### Tier-A.1 의 `_strcmp/_memcmp` [partial] flip + `_strlen` [pending] 메모. Phase 1 cumulative gate (`≤ 5 external syscalls + 16 libm`) 는 ~10 cycle 후 측정.
 
 @cite RFC 061 §4.1 (runtime split) · `inbox/rfc_drafts_2026_05_20/rfc_runtime_hexa_native_rewrite.md` (cycle 42 draft) · `inbox/rfc_drafts_2026_05_20/aprime_c41_externs_catalog.txt` (173-symbol raw).
+
+### 2026-05-20 — RUNTIME.md Phase 1 Tier-A.1 cycle 47 — 5 more string libc symbols unhooked (137→130 cumulative)
+
+**작업 = cycle 47 batch surgery, same `hxlcl_* + #define` method**. cycle 46 (#241 merged · `0bece833`) 가 `_strcmp + _memcmp` 2개 + `_strlen` 잔류 1 으로 닫혔고, 본 cycle 이 `_strcat` 을 추가해서 strcat 와 함께 chained 되어있던 `_strlen` 잔류를 동반 제거, 그리고 5개 trivial string symbol (`_strchr · _strstr · _strndup` + 잔류 케이스 `_strdup · _strncmp · _strrchr`) batch 일괄 처리.
+
+**measured delta**: aprime_cc nm undefined externs **135 → 130 (−5)** · 누적 `137 → 130 = −7` · smoke `exit(6*7)==42` PASS · 바이너리 1,120,024 → 1,119,976 B (−48 B, 실질 무변).
+
+**closed this cycle (5 symbols)**:
+- `_strcat` — 5 사이트 substitution (runtime_core.c)
+- `_strlen` — cycle 46 잔류 1개가 strcat 와 동반 제거 (`bl _strcat` → `bl _strlen` inline chain)
+- `_strchr` — 2 사이트
+- `_strstr` — 9 사이트
+- `_strndup` — 3 사이트
+
+**residual (3 symbols · clang reverse-libcall recognition)**:
+- `_strdup` — `__hxa_exec_argv_core` 내부에서 `hxlcl_strdup` 의 `malloc(n+1) + byte copy` 패턴을 clang 이 `_strdup` 로 reverse-recognize. 1 libc call site.
+- `_strncmp` — `hxlcl_memcmp(a, b, k)` constant `k` 패턴을 `_strncmp` 로 reverse-recognize. 1 site (e.g. "unix:" prefix check).
+- `_strrchr` — `hxlcl_strchr` reverse-iterate 패턴 변환. 1 site (e.g. ':' last-char search).
+
+각각 `-fno-builtin-NAME` flag 시도했으나 -Oz 하에서는 reverse-recognition pass 가 builtin check 보다 먼저 발화 → flag 무효. cycle 48+ 가 (a) `@asm` block 으로 패턴 회피, (b) explicit side-effect 추가, 또는 (c) step-2 hexa-source 포트 중 하나로 정리.
+
+**method 확장**: cycle 46 의 `hxlcl_* + #define` 패턴이 batch 적용 가능 확인 — 1 cycle 에 6-9 심볼 처리 가능. `-fno-builtin*` flag 는 cycle 47 에서 실측 검증 후 REMOVED (no help, kept build script clean).
+
+**honest scope (unchanged from cycle 46)**:
+- step-1 (C-source scaffold) — `hxlcl_*` 9개 helpers 도 결국 폐기 대상. step-2 가 `stdlib/runtime/<name>.hexa` 마이그.
+- "libc-free" / "Tier-A.1 closure" 주장 금지 — Tier-A.1 acceptance "~125 externs" 까지 5 externs 남음 + 3 residual 처리 cycle 추가 필요.
+- S3 fixpoint check DEFERRED to Phase 1 cumulative gate.
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +30 -8
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +88 (6 new helpers + 6 new defines)
+ self/runtime_core.c  | ~48 substitutions in place
+ tool/build_aprime.sh | comment-only update (no flag change net)
+```
+
+**cross-link**: RUNTIME.md ## Log "cycle 47" entry · Tier-A.1 7 `[x]` + 3 `[pending]` flips · cycle 46 entry above · PR #241 (cycle 46) merged `0bece833`.
+
+@cite cycle 46 entry above · RFC 061 §4.1.
