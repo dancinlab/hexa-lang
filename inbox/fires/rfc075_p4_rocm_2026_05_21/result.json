@@ -1,0 +1,50 @@
+{
+  "rfc": "075-P4-ROCm",
+  "kernel": "vec_add",
+  "falsifier": "F-RFC075-ROCM-P4-SILICON-NUMERIC-EQ",
+  "verdict": "NO-STOCK-BLOCK",
+  "verdict_reason": "MI300X provisioning failed 17 consecutive times across ~16 minutes (>= 15-min threshold per task spec) — RunPod returned 'There are no longer any instances available with the requested specifications' across SECURE + COMMUNITY tiers + ROCm 6.1 + ROCm 7.1.1 templates",
+  "shape": "N=1024 FP32 (planned)",
+  "max_delta": null,
+  "mismatches": null,
+  "device": "AMD Instinct MI300X OAM (planned, not provisioned)",
+  "provider": "RunPod",
+  "datacenter": "EU-RO-1 (sole RunPod DC carrying MI300X per `runpodctl datacenter list`)",
+  "rocm_version": null,
+  "wall_time_s": 0,
+  "cost_estimate_usd": 0,
+  "pod_id": null,
+  "termination_confirmed_bool": true,
+  "termination_confirmed_reason": "No pod was provisioned; nothing to terminate. `runpodctl pod list` cross-checked: pre-existing pods (s187-3b-A/D/D) are unrelated long-running pods owned by other sessions, not touched.",
+  "provision_attempts": {
+    "total": 17,
+    "phase_a_initial": 1,
+    "phase_a_without_dc_pin": 1,
+    "phase_a_community_tier": 1,
+    "phase_a_rocm71_template": 1,
+    "phase_b_poll_60s_x5": 5,
+    "phase_c_poll_60s_x12_followup": 12,
+    "all_rejected": true,
+    "first_attempt_ts": "Thu May 21 03:38:00 KST 2026",
+    "last_attempt_ts": "Thu May 21 03:54:22 KST 2026",
+    "cumulative_wall_minutes": 16.4
+  },
+  "honest_scope": {
+    "is": "RunPod MI300X stock unavailable for >=15 min on 2026-05-21 ~03:38..03:54 KST · provisioning blocked at RunPod inventory layer · no HIP/ROCm toolchain reach attempted · GPU.md §10 multi-vendor row stays [ ] for ROCm half",
+    "is_not": "AMD/ROCm/HIP capability statement · vec_add.hip / host.cpp not silicon-validated · gfx942 not exercised · permanent stock outage (transient RunPod inventory state)"
+  },
+  "artifact_ready": {
+    "vec_add_hip": "vec_add.hip — HIP kernel source, ready for next-attempt fire",
+    "host_cpp": "host.cpp — HIP host launcher (C++, deterministic LCG seed matches Metal P4 0xC0FFEEDEADBEEF, max|d|=0 gate)",
+    "build_command": "hipcc -O2 host.cpp vec_add.hip -o host",
+    "run_command": "./host",
+    "next_attempt_protocol": "Re-run provisioning when RunPod MI300X stock returns (check `runpodctl datacenter list` stockStatus). Same artifact files transfer via scp; expect ~5-10 min e2e wall once a pod ssh-binds."
+  },
+  "alternative_providers_considered": [
+    "vast.ai (typically has MI200/MI250 + some MI300; CLI not preinstalled on this host)",
+    "TensorWave (MI300X-focused but requires separate account+API key not provisioned)",
+    "AMD Cloud (academic-access, requires application)",
+    "User-local AMD GPU pool (none in this user's pool per current inventory)"
+  ],
+  "next_cycle_recommendation": "Retry provisioning every 30-60 min over next 24 h. If sustained no-stock >24 h, escalate to alternate provider (vast.ai MI250/MI300) after operator approval; or defer ROCm half of §10 row indefinitely and let Metal P4 alone serve as multi-vendor parity evidence (note: row text reads 'P4 silicon-fire per vendor', so single-vendor parity does not satisfy strict reading)."
+}

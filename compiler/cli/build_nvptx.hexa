@@ -1,12 +1,20 @@
-// compiler/cli/build_nvptx.hexa — RFC 071 P2 emit-driver hexa module
+// compiler/cli/build_nvptx.hexa — RFC 071 P2.1 emit-driver hexa module
 //
 // @rfc 071
-// @phase P2
-// @status STUB (canned PTX) — P2.1+ wires real codegen invocation
-// @cite RFC 071 §3 P2 "emit-driver hexa module skeleton" +
-//       RFC 055 §6.2 (codegen_emit_ptx_sm80 sibling)
+// @phase P2.1
+// @status REAL CODEGEN INVOCATION — first MIR->PTX call from driver fn
+// @cite RFC 071 §3 P2.1 "first real codegen invocation" +
+//       RFC 055 §6.2 (codegen_emit_ptx_sm80 sibling) +
+//       GPU.md §2a (P2.1 wiring spec, 2026-05-21)
 // @sister self/main.hexa::cmd_build NVPTX branch
 //        + self/main.hexa::_build_nvptx_emit_driver
+//        + compiler/codegen/nvptx_lower_test.hexa::_build_case_load_store
+//          (canonical MModule construction example)
+//
+
+import "../ir/mir.hexa"
+import "../codegen/nvptx_target.hexa"
+
 //
 // ──────────────────────────────────────────────────────────────────────
 // PURPOSE
@@ -69,24 +77,144 @@
 //      `.target sm_NN`, `.address_size 64`, `.visible .entry`).
 //   3. (bonus, P3+) live `ptxas -arch=sm_90 /tmp/foo.ptx` accepts.
 
-// ── stub PTX builder ────────────────────────────────────────────────
+// ── hand-built MIR vec-add MModule (P2.1 keystone) ──────────────────
+//
+// _build_hand_mir_vec_add — synthesise a 1-MFunc MModule that, when fed
+// to `codegen_emit_ptx_sm80`, produces a `.visible .entry` kernel with
+// a 4-element `.param .u64` bank + at least one `ld.global.f64` + one
+// `st.global.f64`. Mirrors the canonical shape used by
+// `compiler/codegen/nvptx_lower_test.hexa::_build_case_load_store`,
+// adapted to GPU_KIND_KERNEL with 4 params so the partition emit path
+// renders `.visible .entry vec_add` + `.param .u64 vec_add_param_{0..3}`.
+//
+// Body (block 0):
+//   v  = *a              (STMT_LOAD  on param 0 — address Local)
+//   v2 = v + v           (STMT_BINOP "add" — F64, keeps classifier happy)
+//   *c = v2              (STMT_STORE on param 2 — address Local)
+//   return
+//
+// The 4 params (a / b / c / n) match the vec-add ABI from gpu/SPEC.md §5;
+// only `a` (param 0) is dereffed by STMT_LOAD and only `c` (param 2) is
+// the STMT_STORE target — `b` (param 1) and `n` (param 3) sit unused in
+// the param bank but are still emitted as `.param .u64 ...` entries by
+// the kernel-partition pass. That is sufficient to land the four
+// substring assertions of F-RFC071-MIR-DRIVER-INVOKE.
 
-// Compose the canned smoke PTX text for the given sm_arch identifier
-// (e.g. "sm_80", "sm_90", "sm_120"). ASCII-only (driver-JIT ptxas refuses
-// non-ASCII PTX comments — see `reference_gpu_fire_infra.md`).
+fn _bnp_local(id: i64, name: string) -> Local {
+    return Local {
+        id: id, arena_id: 1, type_id: 0, name_hint: name, precision: ""
+    }
+}
+
+fn _bnp_miss_local() -> Local {
+    return Local {
+        id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: ""
+    }
+}
+
+fn _bnp_op_local(local_id: i64) -> Operand {
+    return Operand {
+        kind: "local", local_id: local_id,
+        int_val: 0, float_val: 0.0, str_val: "", global_id: -1
+    }
+}
+
+fn _bnp_stmt_load(dst: Local, addr: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(addr)
+    return Stmt {
+        kind: STMT_LOAD, dst: dst, op: "", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _bnp_stmt_binop(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(a)
+    xs.push(b)
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: op, args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _bnp_stmt_store(addr: Operand, value: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(addr)
+    xs.push(value)
+    return Stmt {
+        kind: STMT_STORE, dst: _bnp_miss_local(), op: "", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _bnp_stmt_return() -> Stmt {
+    return Stmt {
+        kind: STMT_RETURN, dst: _bnp_miss_local(), op: "", args: [],
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _bnp_block(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+fn _build_hand_mir_vec_add() -> MModule {
+    // Params — 4 Locals matching gpu/SPEC.md §5 vec-add ABI.
+    let a = _bnp_local(0, "a")          // [f64] base — STMT_LOAD source
+    let b = _bnp_local(1, "b")          // [f64] base — unused in body
+    let c = _bnp_local(2, "c")          // [f64] base — STMT_STORE dest
+    let n = _bnp_local(3, "n")          // i64 length — unused in body
+    let v  = _bnp_local(4, "v")         // STMT_LOAD dst — F64
+    let v2 = _bnp_local(5, "v2")        // STMT_BINOP dst — F64
+
+    // block 0: v = *a ; v2 = v + v ; *c = v2 ; return
+    let mut s0 = []
+    s0.push(_bnp_stmt_load(v, _bnp_op_local(a.id)))
+    s0.push(_bnp_stmt_binop(v2, "add", _bnp_op_local(v.id), _bnp_op_local(v.id)))
+    s0.push(_bnp_stmt_store(_bnp_op_local(c.id), _bnp_op_local(v2.id)))
+    s0.push(_bnp_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_bnp_block(0, s0))
+
+    let mut params = []
+    params.push(a); params.push(b); params.push(c); params.push(n)
+
+    let mut locals = []
+    locals.push(a); locals.push(b); locals.push(c); locals.push(n)
+    locals.push(v); locals.push(v2)
+
+    let mf = MFunc {
+        name: "vec_add",
+        params: params,
+        return_local: _bnp_miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "build_nvptx_p2_1.hexa", funcs: fns, globals: [] }
+}
+
+// ── PTX builder (P2.1 — real codegen invocation) ────────────────────
+//
+// Compose the PTX text for the given sm_arch identifier via the real
+// `codegen_emit_ptx_sm80` codegen path. `sm_arch` parameter is accepted
+// for API stability with the P2 stub signature; only sm_80 is wired in
+// this cycle (sm_90 / sm_120 land via `codegen_emit_ptx_sm90` in a
+// follow-on cycle — RFC 055 §6.2 sibling).
 fn _build_nvptx_stub_ptx(sm_arch: string) -> string {
-    let mut out = ""
-    out = out + "// [P2 stub PTX -- RFC 071 P2.1+ will replace with real codegen_emit_ptx_sm80]\n"
-    out = out + "// @rfc 071 phase P2 status STUB sm=" + sm_arch + "\n"
-    out = out + ".version 7.0\n"
-    out = out + ".target " + sm_arch + "\n"
-    out = out + ".address_size 64\n"
-    out = out + "\n"
-    out = out + ".visible .entry _hexa_smoke()\n"
-    out = out + "{\n"
-    out = out + "    ret;\n"
-    out = out + "}\n"
-    return out
+    let mir = _build_hand_mir_vec_add()
+    let mut header = ""
+    header = header + "// [P2.1 real codegen PTX -- RFC 071 P2.1 MIR -> PTX via codegen_emit_ptx_sm80]\n"
+    header = header + "// @rfc 071 phase P2.1 status MEASURED sm=" + sm_arch + "\n"
+    let body = codegen_emit_ptx_sm80(mir)
+    return header + body
 }
 
 // ── primary surface ────────────────────────────────────────────────

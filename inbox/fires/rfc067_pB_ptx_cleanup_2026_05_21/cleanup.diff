@@ -1,0 +1,4 @@
+(empty — no edit applied. See result.json `verdict` field: NO-OP. The
+premise of a redundant non-.global stub variant is not reproducible in
+the current codebase; the codegen emits a single `.shared` mnemonic per
+op-key. See fire.log for evidence.)

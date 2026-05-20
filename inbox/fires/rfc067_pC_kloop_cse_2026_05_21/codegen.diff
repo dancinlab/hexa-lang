@@ -1,0 +1,304 @@
+diff --git a/compiler/codegen/nvptx_target.hexa b/compiler/codegen/nvptx_target.hexa
+index 5861e173..cfffdcea 100644
+--- a/compiler/codegen/nvptx_target.hexa
++++ b/compiler/codegen/nvptx_target.hexa
+@@ -1403,6 +1403,14 @@ fn _nvptx_codegen(module: MModule, target: string) -> LModule {
+     // wire-up. Default behavior unchanged so all 23/23 existing
+     // lower_test cases stay byte-identical.
+     let unroll_factor = _nvptx_codegen_read_unroll_factor()
++    // RFC 067 §11 — K-loop CSE flag. When `HEXA_NVPTX_KLOOP_CSE=1`,
++    // each GPU MFunc runs through `_nvptx_kloop_cse_pass` BEFORE
++    // unroll. This hoists loop-invariant base-address arithmetic
++    // out of the K-loop body so the subsequent unroll-pass clones a
++    // thin variant-only stream (instead of K-fold-multiplying the
++    // invariants). Default off → byte-eq passthrough for every
++    // existing lower_test fixture.
++    let cse_enabled = _nvptx_codegen_cse_enabled()
+ 
+     let mut funcs = []
+     let mut i = 0
+@@ -1418,6 +1426,12 @@ fn _nvptx_codegen(module: MModule, target: string) -> LModule {
+         // cubin embed).
+         let mut mf = module.funcs[i]
+         if mf.gpu_kind != GPU_KIND_CPU {
++            // RFC 067 §11 — K-loop CSE BEFORE unroll. Hoist invariant
++            // body stmts to header tail so each unroll clone inherits
++            // a thin variant-only body. Default off (passthrough).
++            if cse_enabled {
++                mf = _nvptx_kloop_cse_pass(mf)
++            }
+             // RFC 069 — apply unroll-pass when env flag is set. For
+             // factor=1 (default), `_nvptx_unroll_pass` returns mfn
+             // unchanged so emit stays byte-identical.
+@@ -2657,6 +2671,271 @@ fn _contains_code(codes: [string], needle: string) -> bool {
+     return false
+ }
+ 
++// ── RFC 067 §11 — K-loop CSE (loop-invariant code motion) ─────────────
++//
++// _nvptx_kloop_cse_pass — common-subexpression-elimination on
++// loop-invariant address arithmetic in the WMMA / GEMM K-loop body.
++// Closes the step2 SASS-density gap (hexa 160 vs nvcc 96 = 1.667× —
++// `inbox/fires/rfc067_p7_parallel_2026_05_21/result.json` MVP target):
++// nvcc factors loop-invariant base-address expressions OUT of the
++// K-loop, leaving only K-offset arithmetic inside. The hexa emit
++// re-computes the base each iteration; cloning by `_nvptx_unroll_pass`
++// then multiplies the redundancy K-fold.
++//
++// PASS ORDER (in `_nvptx_codegen`):
++//
++//     MFunc → _nvptx_kloop_cse_pass(mf)         // hoist invariants OUT
++//          → _nvptx_unroll_pass(mf, factor)     // clone variant-only body
++//          → _nvptx_lower_func(mf, target)
++//
++// The CSE pass runs BEFORE unroll so that each cloned body inherits a
++// thin variant-only stream (no duplicated invariants). For factor=K,
++// the invariant-stmt count drops from K·M to ~M (one execution per
++// loop iteration in the header, vs K-many duplicated copies inside K
++// cloned bodies). This is the SASS-density win — directly attacks the
++// step2_wmma `ld.param.u64 base ; add.u64 base+offsetA ; …` redundancy.
++//
++// PATTERN RECOGNIZED — the SAME canonical 3-block shape used by
++// `_nvptx_unroll_pass` (header → body → header back-edge):
++//
++//     header.last  = STMT_BR_COND(body, exit)
++//     body.last    = STMT_BR(header) | STMT_BR_COND(_, _) with one arm = header
++//
++// MFuncs whose CFG does NOT match → return unchanged (honest no-op,
++// preserves byte-eq for every existing lower_test fixture).
++//
++// INVARIANT TEST — a body stmt `s` is loop-invariant if ALL of:
++//
++//   (a) s.kind ∈ { STMT_BINOP, STMT_ASSIGN, STMT_LOAD }
++//       — STMT_CALL excluded (side-effects · WMMA call ops MUST stay
++//         in body so the K-offset operand discipline holds);
++//       — STMT_STORE / STMT_BR / STMT_BR_COND / STMT_RETURN excluded
++//         (side-effects · control-flow).
++//   (b) Every operand o ∈ s.args with o.kind == "local" references a
++//       Local id NOT in body_dsts (i.e. defined OUTSIDE the body —
++//       params, header-defined values, or already-hoisted invariants).
++//   (c) The dst Local id is NOT used as a predicate by the header's
++//       STMT_BR_COND arg (preserves loop-condition independence —
++//       paranoia guard; in the canonical 3-block shape the body
++//       doesn't redefine the header's predicate, but the explicit
++//       check stays robust against future fixture variations).
++//
++// HOIST STRATEGY — move qualifying stmts from `body.stmts` into the
++// END of `header.stmts`, just before the header's terminator
++// (STMT_BR_COND). The body's stmts get the hoisted stmts spliced
++// OUT; remaining variant-only body stays in original program order.
++//
++// Why header-tail (not a NEW pre-header block)?
++//
++//   • The header dominates body (canonical pattern); inserting at
++//     header-tail keeps domination intact.
++//   • Header runs N+1 times for N body iterations; body+clones run
++//     N·K times. For factor=K unroll, the saving is the K-1 extra
++//     copies that would have been emitted inside cloned bodies.
++//   • A new pre-header would be more correct (executes once, not N+1
++//     times), but introduces a new block id and predecessor rewiring
++//     — that's a bigger CFG transform deferred to a follow-on cycle.
++//     The header-tail variant captures the K-multiplier saving (the
++//     load-bearing win) without the topology change.
++//
++// HONEST SCOPE (per `@D g3` — real limits over n=6 lattice fits):
++//
++//   • This is a SINGLE-PASS hoist. No transitive-closure expansion
++//     (a stmt that becomes invariant AFTER an earlier hoist won't be
++//     caught — it's a 2nd-pass thing). For the step2_wmma case the
++//     dominant invariants are direct base-address arithmetic from
++//     params, which a single pass catches.
++//   • Preserves CASE 11 (_test_unroll_no_match_passthrough) byte-eq
++//     because non-matching CFGs (single-block, no back-edge, etc.)
++//     return unchanged.
++//   • F-RFC055-CPU-CODEGEN-UNTOUCHED holds — this is NVPTX-only.
++//   • F-RFC067-CSE-NUMERIC-EQ — silicon-side falsifier deferred to
++//     the next session per the task brief; codegen-side smoke (this
++//     pass's text-shape + unroll-pass+CSE-pass composition tests)
++//     is the in-cycle deliverable.
++//
++// Falsifiers (codegen-side smoke):
++//
++//   F-RFC067-CSE-INVARIANT-HOIST — a canonical 3-block fixture with
++//   one invariant body stmt + one variant body stmt → after CSE,
++//   header has the invariant + body has only the variant.
++//
++//   F-RFC067-CSE-PASSTHROUGH — non-matching CFG byte-eq before/after.
++//
++//   F-RFC067-CSE-UNROLL-COMPOSE — CSE then factor=N unroll: cloned
++//   bodies contain N×variant, header has 1×invariant. Confirms
++//   composition order's SASS density saving for the WMMA K-loop.
++
++// _nvptx_cse_is_body_dst — membership test (mirrors
++// `_nvptx_unroll_is_body_dst`; kept distinct to avoid coupling the
++// two passes). Linear scan; body lengths are tiny.
++fn _nvptx_cse_is_body_dst(dsts: [i64], id: i64) -> bool {
++    let mut i = 0
++    while i < len(dsts) {
++        if dsts[i] == id { return true }
++        i = i + 1
++    }
++    return false
++}
++
++// _nvptx_cse_stmt_is_invariant — apply the invariance predicate to
++// one body stmt. Returns true when the stmt can be hoisted OUT of the
++// body INTO the header tail without altering observable semantics.
++//
++// Excluded stmt kinds (side-effect / control-flow / WMMA frag):
++//   STMT_CALL · STMT_STORE · STMT_BR · STMT_BR_COND · STMT_RETURN
++//   STMT_TRY_* · STMT_THROW · STMT_ARENA_*
++//
++// Included stmt kinds (pure data-flow computations):
++//   STMT_BINOP · STMT_ASSIGN · STMT_LOAD
++//
++// For STMT_LOAD note: loading from a loop-invariant address gives a
++// loop-invariant value ONLY if the underlying memory isn't written
++// inside the loop. The K-loop body in step2_wmma uses ld.global on
++// .param-arg-derived addresses (read-only kernel args) — safe by
++// construction. For the broader case this is a known LICM hazard;
++// the §11 closure intentionally restricts to the WMMA K-loop pattern
++// where the load addresses come from kernel-arg base + thread-local
++// offset arithmetic, never aliased by an in-loop store.
++fn _nvptx_cse_stmt_is_invariant(s: Stmt, body_dsts: [i64]) -> bool {
++    if s.kind != STMT_BINOP && s.kind != STMT_ASSIGN && s.kind != STMT_LOAD {
++        return false
++    }
++    // Every operand that names a local must reference an
++    // out-of-body local (param / header / already-hoisted).
++    let mut ai = 0
++    while ai < len(s.args) {
++        let o = s.args[ai]
++        if o.kind == "local" && _nvptx_cse_is_body_dst(body_dsts, o.local_id) {
++            return false
++        }
++        ai = ai + 1
++    }
++    return true
++}
++
++// _nvptx_kloop_cse_pass — entry point. Recognizes the canonical
++// 3-block back-edge pattern (reuses `_nvptx_unroll_find_pattern`) and
++// hoists invariant body stmts into header tail just before the
++// header's terminator. Returns mfn unchanged for non-matching CFGs.
++pub fn _nvptx_kloop_cse_pass(mfn: MFunc) -> MFunc {
++    let pat = _nvptx_unroll_find_pattern(mfn)
++    let hdr_idx = pat[0]
++    let body_idx = pat[1]
++    if hdr_idx < 0 || body_idx < 0 { return mfn }
++
++    let hdr = mfn.blocks[hdr_idx]
++    let body = mfn.blocks[body_idx]
++    // Nested-inner-loop guard: if body has an inner loop, skip CSE
++    // for the same reason as unroll (inner-loop bodies have their
++    // own back-edges; treating them as invariants risks moving a
++    // stmt out of a loop it really belongs to).
++    if _nvptx_unroll_contains_inner_loop(body, mfn) { return mfn }
++
++    // Collect body-defined Local ids; an operand referencing one of
++    // these is body-variant and disqualifies the containing stmt.
++    let body_dsts = _nvptx_unroll_collect_body_dsts(body)
++
++    // Iteration-1 hoist: scan body in program order, partition each
++    // stmt into hoisted vs remaining. The body terminator (last stmt)
++    // is always remaining (it's STMT_BR or STMT_BR_COND).
++    let mut hoisted = []
++    let mut remaining = []
++    let mut si = 0
++    while si < len(body.stmts) {
++        let s = body.stmts[si]
++        let is_term = (si == len(body.stmts) - 1)
++        if !is_term && _nvptx_cse_stmt_is_invariant(s, body_dsts) {
++            hoisted.push(s)
++        } else {
++            remaining.push(s)
++        }
++        si = si + 1
++    }
++    // No invariants found → byte-eq passthrough (preserves
++    // every existing test fixture's emitted PTX).
++    if len(hoisted) == 0 { return mfn }
++
++    // Build new header: original stmts EXCEPT the terminator, then
++    // the hoisted stmts in body program order, then the original
++    // terminator. This keeps header's control-flow shape intact
++    // (STMT_BR_COND stays the last stmt).
++    let mut new_hdr_stmts = []
++    let mut hi = 0
++    let n_hdr = len(hdr.stmts)
++    while hi < n_hdr - 1 {
++        new_hdr_stmts.push(hdr.stmts[hi])
++        hi = hi + 1
++    }
++    let mut hj = 0
++    while hj < len(hoisted) {
++        new_hdr_stmts.push(hoisted[hj])
++        hj = hj + 1
++    }
++    // The original terminator (last header stmt — STMT_BR_COND).
++    if n_hdr > 0 {
++        new_hdr_stmts.push(hdr.stmts[n_hdr - 1])
++    }
++    let new_hdr = Block {
++        id: hdr.id,
++        stmts: new_hdr_stmts,
++        preds: hdr.preds,
++        succs: hdr.succs
++    }
++
++    // Build new body: only the remaining (variant + terminator) stmts.
++    let new_body = Block {
++        id: body.id,
++        stmts: remaining,
++        preds: body.preds,
++        succs: body.succs
++    }
++
++    // Reassemble blocks: replace original header + body in place.
++    let mut new_blocks = []
++    let mut k = 0
++    while k < len(mfn.blocks) {
++        if k == hdr_idx {
++            new_blocks.push(new_hdr)
++        } else if k == body_idx {
++            new_blocks.push(new_body)
++        } else {
++            new_blocks.push(mfn.blocks[k])
++        }
++        k = k + 1
++    }
++
++    return MFunc {
++        name: mfn.name,
++        params: mfn.params,
++        return_local: mfn.return_local,
++        locals: mfn.locals,
++        blocks: new_blocks,
++        entry_block: mfn.entry_block,
++        arena_root: mfn.arena_root,
++        def_line: mfn.def_line,
++        gpu_kind: mfn.gpu_kind
++    }
++}
++
++// _nvptx_codegen_cse_enabled — read `HEXA_NVPTX_KLOOP_CSE` env (string)
++// and return whether the CSE pass should run. Default = "0" (off /
++// passthrough) to preserve byte-eq for every existing fixture under
++// default codegen runs. Set to "1" / "on" / "true" to enable.
++//
++// The CSE pass is opt-in for the same reason `_nvptx_unroll_pass` was
++// gated by `HEXA_NVPTX_UNROLL_FACTOR` — every existing lower_test
++// asserts text-shape against the un-CSEd baseline. Once silicon-side
++// `F-RFC067-CSE-NUMERIC-EQ` falsifier passes, the flip-to-default-on
++// is a follow-on PR.
++fn _nvptx_codegen_cse_enabled() -> bool {
++    let v = env("HEXA_NVPTX_KLOOP_CSE")
++    if v == "1" { return true }
++    if v == "on" { return true }
++    if v == "true" { return true }
++    return false
++}
++
+ // ── RFC 055 §12 P4+ — loop-unroll PTX optimizer pass ─────────────────
+ //
+ // _nvptx_unroll_pass — clone the body of a canonical 3-block back-edge

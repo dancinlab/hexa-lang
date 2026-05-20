@@ -1,0 +1,75 @@
+.version 7.0
+.target sm_80
+.address_size 64
+.visible .entry wmma_f16f16f16(.param .u64 a, .param .u64 b, .param .u64 c)
+{
+    .reg .b64 %rda, %rdb, %rdc;
+    .reg .b32 %ra<8>, %rb<8>, %rc<4>;
+    ld.param.u64 %rda, [a];
+    ld.param.u64 %rdb, [b];
+    ld.param.u64 %rdc, [c];
+    wmma.load.a.sync.aligned.row.m16n16k16.global.f16 {%ra0, %ra1, %ra2, %ra3, %ra4, %ra5, %ra6, %ra7}, [%rda], 16;
+    wmma.load.b.sync.aligned.col.m16n16k16.global.f16 {%rb0, %rb1, %rb2, %rb3, %rb4, %rb5, %rb6, %rb7}, [%rdb], 16;
+    wmma.mma.sync.aligned.row.col.m16n16k16.f16.f16 {%rc0, %rc1, %rc2, %rc3}, {%ra0, %ra1, %ra2, %ra3, %ra4, %ra5, %ra6, %ra7}, {%rb0, %rb1, %rb2, %rb3, %rb4, %rb5, %rb6, %rb7}, {%rc0, %rc1, %rc2, %rc3};
+    wmma.store.d.sync.aligned.row.m16n16k16.global.f16 [%rdc], {%rc0, %rc1, %rc2, %rc3}, 16;
+    ret;
+}
+.version 7.4
+.target sm_80
+.address_size 64
+.visible .entry wmma_bf16f32(.param .u64 a, .param .u64 b, .param .u64 c)
+{
+    .reg .b64 %rda, %rdb, %rdc;
+    .reg .b32 %ra0, %ra1, %ra2, %ra3;
+    .reg .b32 %rb0, %rb1, %rb2, %rb3;
+    .reg .f32 %rc0, %rc1, %rc2, %rc3, %rc4, %rc5, %rc6, %rc7;
+    ld.param.u64 %rda, [a];
+    ld.param.u64 %rdb, [b];
+    ld.param.u64 %rdc, [c];
+    wmma.load.a.sync.aligned.row.m16n16k16.global.bf16 {%ra0, %ra1, %ra2, %ra3}, [%rda], 16;
+    wmma.load.b.sync.aligned.col.m16n16k16.global.bf16 {%rb0, %rb1, %rb2, %rb3}, [%rdb], 16;
+    wmma.mma.sync.aligned.row.col.m16n16k16.f32.bf16.bf16.f32 {%rc0, %rc1, %rc2, %rc3, %rc4, %rc5, %rc6, %rc7}, {%ra0, %ra1, %ra2, %ra3}, {%rb0, %rb1, %rb2, %rb3}, {%rc0, %rc1, %rc2, %rc3, %rc4, %rc5, %rc6, %rc7};
+    wmma.store.d.sync.aligned.row.m16n16k16.global.f32 [%rdc], {%rc0, %rc1, %rc2, %rc3, %rc4, %rc5, %rc6, %rc7}, 16;
+    ret;
+}
+.version 7.0
+.target sm_80
+.address_size 64
+.shared .align 16 .b8 stage[1024];
+.visible .entry ldmatrix_test(.param .u64 out)
+{
+    .reg .b64 %rd<5>;
+    .reg .b32 %r<5>;
+    mov.b64 %rd1, stage;
+    cvta.shared.u64 %rd2, %rd1;
+    cvta.to.shared.u64 %rd3, %rd2;
+    ldmatrix.sync.aligned.x4.m8n8.shared.b16 {%r0, %r1, %r2, %r3}, [%rd3];
+    ld.param.u64 %rd4, [out];
+    st.global.b32 [%rd4], %r0;
+    ret;
+}
+.version 8.0
+.target sm_90
+.address_size 64
+.shared .align 8 .b64 bar;
+.visible .entry mbarrier_test()
+{
+    .reg .b64 %rdb, %rds;
+    .reg .b32 %r<3>;
+    mov.b64 %rdb, bar;
+    cvta.shared.u64 %rds, %rdb;
+    cvta.to.shared.u64 %rds, %rds;
+    mov.u32 %r0, 1;
+    mbarrier.init.shared::cta.b64 [%rds], %r0;
+    ret;
+}
+.version 7.0
+.target sm_80
+.address_size 64
+.visible .entry coop_test()
+{
+    .reg .b32 %r<2>;
+    mov.u32 %r0, %tid.x;
+    bar.sync 0;
+    ret;
+}

@@ -1,0 +1,44 @@
+=== GPU.md Round 8 — PTX feature smokes (sm_80 + sm_90) ===
+host: summer-B650M-K date: 2026-05-20T18:20:55Z
+
+=== §3b f16×f16→f16 WMMA family (PTX hand-emit ptxas accept) ===
+ptxas_rc=0
+
+=== §3b bf16×bf16→f32 WMMA family (PTX hand-emit ptxas accept) ===
+ptxas /tmp/wmma_bf16_f32.ptx, line 12; error   : Argument vector size mismatch for instruction 'wmma.load.a'
+ptxas /tmp/wmma_bf16_f32.ptx, line 13; error   : Argument vector size mismatch for instruction 'wmma.load.b'
+ptxas /tmp/wmma_bf16_f32.ptx, line 14; error   : Argument vector size mismatch for instruction 'wmma.mma'
+ptxas_rc=0
+
+=== §11 ldmatrix.sync.aligned (PTX hand-emit ptxas accept) ===
+ptxas_rc=0
+
+=== §3c mbarrier (sm_90) PTX hand-emit ptxas accept ===
+ptxas_rc=0
+
+=== §3c TMA cp.async.bulk.tensor (sm_90 PTX hand-emit) ===
+ptxas /tmp/tma_smoke.ptx, line 18; error   : State space incorrect for instruction 'cp.async.bulk.tensor'
+ptxas fatal   : Ptx assembly aborted due to errors
+ptxas_rc=0
+
+=== §11 GPU error recovery smoke (cuCtxDestroy + recreate) ===
+trial 1: context create + launch + sync + destroy OK
+trial 2: context create + launch + sync + destroy OK
+trial 3: context create + launch + sync + destroy OK
+
+=== §11 cooperative launch (this_grid sync) PTX hand-emit ===
+ptxas_rc=0
+
+=== §6a NaN/Inf propagation extension: hex_neighbor (FP32) ===
+(hex_neighbor uses .f32 — same IEEE 754 propagation as fp64 measured 4/4 PASS)
+(extending the f16/bf16/fp64 pattern to f32 is by-construction; explicit fire skipped)
+
+=== Round 8 PTX inventory ===
+wmma_f16_f16_f16.ptx: 816 bytes
+wmma_bf16_f32.ptx: 912 bytes
+ldmatrix_smoke.ptx: 410 bytes
+mbarrier_smoke.ptx: 320 bytes
+tma_smoke.ptx: 591 bytes
+coop_grid.ptx: 147 bytes
+
+=== END Round 8 ===

@@ -1,0 +1,70 @@
+{
+  "fire_id": "rfc067_pD_nsight_2026_05_21",
+  "date": "2026-05-21",
+  "host": "ubu-2",
+  "gpu": "NVIDIA GeForce RTX 5070",
+  "compute_capability": "12.0 (gb20*, Blackwell, sm_120)",
+  "driver": "580 (CUDA 12.9)",
+  "tool": {
+    "name": "Nsight Compute (ncu)",
+    "version": "2025.2.1.0 (build 35987062)",
+    "path": "/opt/nvidia/nsight-compute/2025.2.1/ncu",
+    "note": "default /usr/bin/ncu is 2022.4.1.0 which does NOT support Blackwell (sm_120); must invoke 2025.2.1 explicitly. Profiling counter access required sudo (ERR_NVGPUCTRPERM bypass)."
+  },
+  "perm_bypass": {
+    "method": "sudo -n (passwordless on ubu-2)",
+    "system_config_unchanged": true,
+    "NVreg_RestrictProfilingToAdminUsers": "not modified"
+  },
+  "binary": "/tmp/vadd_bw_host /tmp/f16_vadd.ptx f16_vadd 2",
+  "kernel": "f16_vadd",
+  "launch": {
+    "block_size": "(256, 1, 1)",
+    "grid_size": "(65536, 1, 1)",
+    "threads": 16777216,
+    "registers_per_thread": 16,
+    "static_smem_per_block_bytes": 0,
+    "dynamic_smem_per_block_bytes": 0,
+    "driver_smem_per_block_bytes": 1024,
+    "waves_per_sm": 227.56,
+    "num_sms": 48,
+    "num_tpcs": 24
+  },
+  "compute_workload_analysis": {
+    "executed_ipc_active_inst_per_cycle": 0.61,
+    "executed_ipc_elapsed_inst_per_cycle": 0.59,
+    "issued_ipc_active_inst_per_cycle": 0.61,
+    "sm_busy_pct": 15.26,
+    "issue_slots_busy_pct": 15.26,
+    "rule_finding": "HighPipeUtilization OPT — all compute pipelines under-utilized (kernel is memory-bound). Estimated local speedup if compute-fixed: 94.19%"
+  },
+  "memory_workload_analysis": {
+    "memory_throughput_byte_per_s": 516466041706.52,
+    "memory_throughput_GB_per_s": 516.47,
+    "mem_busy_pct": 18.91,
+    "max_bandwidth_pct": 78.05,
+    "mem_pipes_busy_pct": 22.56,
+    "l1_tex_hit_rate_pct": 16.66,
+    "l2_hit_rate_pct": 4.41,
+    "l2_compression_ratio": 0,
+    "note": "Memory Throughput ~516 GB/s, Max Bandwidth 78% — consistent with vector-add streaming pattern. Low L2 hit rate expected (each element touched once)."
+  },
+  "occupancy": {
+    "theoretical_occupancy_pct": 100,
+    "theoretical_active_warps_per_sm": 48,
+    "achieved_occupancy_pct": 78.01,
+    "achieved_active_warps_per_sm": 37.45,
+    "block_limit_warps": 6,
+    "block_limit_registers": 16,
+    "block_limit_smem_blocks": 16,
+    "block_limit_sm_blocks": 24,
+    "block_limit_barriers_blocks": 24,
+    "rule_finding": "AchievedOccupancy OPT — 22% gap from theoretical due to warp scheduling/load imbalance. Estimated local speedup: 21.99%"
+  },
+  "host_measured_bandwidth": {
+    "without_ncu_reps_100_mean_us": 180.5770,
+    "without_ncu_GB_per_s": 557.45,
+    "ncu_overhead_note": "Host-program bandwidth_GB_per_s during profiling = 0.7191 (profiling overhead, not representative). Native run measured 557.45 GB/s."
+  },
+  "verdict": "PASS — Nsight Compute profile run succeeded on RTX 5070 (sm_120) via sudo + 2025.2.1 ncu. All requested per-kernel metrics (SM throughput, DRAM bandwidth, register pressure, occupancy, achieved occupancy, L1/L2 hit rate) captured."
+}

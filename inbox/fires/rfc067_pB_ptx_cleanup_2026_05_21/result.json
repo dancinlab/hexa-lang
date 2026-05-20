@@ -1,0 +1,70 @@
+{
+  "fire": "rfc067_pB_ptx_cleanup",
+  "date": "2026-05-21",
+  "host": "darwin-arm64 (Mac local — read-only investigation, no GPU fire)",
+  "goal": "Close §11 PTX-emit cleanup pass — eliminate redundant non-.global wmma.{load,store,mma} stub variants in step1-equivalent emit.",
+  "verdict": "NO-OP — premise not reproducible; no redundant emit found in current codegen",
+  "honest_scope_g3": "Investigation only. Source files unchanged. F-RFC067-PASSTHROUGH-PRESERVED + F-RFC055-CPU-CODEGEN-UNTOUCHED trivially hold (zero diff).",
+  "evidence": {
+    "wmma_mnemonic_table_loc": "compiler/codegen/nvptx_target.hexa:458-464",
+    "wmma_mnemonic_table_emits": [
+      "wmma.load.a.sync.aligned.row.m16n16k16.f16.shared",
+      "wmma.load.b.sync.aligned.col.m16n16k16.f16.shared",
+      "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32",
+      "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared"
+    ],
+    "wmma_mnemonic_family_loc": "compiler/codegen/nvptx_target.hexa:1100-1136",
+    "wmma_mnemonic_family_emits": [
+      "(.bf16) wmma.load.a.sync.aligned.row.m16n16k16.bf16.shared",
+      "(.bf16) wmma.load.b.sync.aligned.col.m16n16k16.bf16.shared",
+      "(.bf16) wmma.mma.sync.aligned.row.col.m16n16k16.f32.bf16.bf16.f32",
+      "(.bf16) wmma.store.d.sync.aligned.row.m16n16k16.f32.shared",
+      "(.f16 d-role) wmma.mma.sync.aligned.row.col.m16n16k16.f16.f16.f16.f16",
+      "(.f16) wmma.load.a.sync.aligned.row.m16n16k16.f16.shared",
+      "(.f16) wmma.load.b.sync.aligned.col.m16n16k16.f16.shared",
+      "(.f16) wmma.store.d.sync.aligned.row.m16n16k16.f16.shared",
+      "(.f16) wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32"
+    ],
+    "lower_stmt_call_site": "compiler/codegen/nvptx_target.hexa:611-672 (STMT_CALL gpu_wmma_* branch)",
+    "lower_stmt_emit_count_per_op": "Each gpu_wmma_load_a / _b / _mma / _store_c emits EXACTLY ONE PTX instruction via out.push(_nvptx_instr(wmma_mnem, ...)). No double-emit, no fall-through second branch.",
+    "grep_global_variant": {
+      "cmd": "grep -rn 'm16n16k16.global' compiler/codegen/ self/ stdlib/",
+      "matches": 0,
+      "interpretation": ".global-suffixed wmma mnemonics DO NOT appear anywhere in the codegen source tree."
+    },
+    "grep_all_wmma_emit_sites_in_codegen": {
+      "cmd": "grep -n 'wmma\\.' compiler/codegen/nvptx_target.hexa",
+      "match_lines": [459, 460, 461, 462, 1109, 1110, 1111, 1112, 1121, 1127, 1128, 1129, 1132],
+      "interpretation": "13 emit-string literals total — 4 from the canonical PR #150 table (f16×f16→f32 .shared family) + 9 from the P3 family-keyed table (bf16/f16-acc/f16). Each is the single mnemonic returned for one (op, dtype, layout) tuple. None of the 13 is a non-.global redundant scaffold of another."
+    },
+    "hand_emit_global_ptx_location": {
+      "file": "inbox/fires/rfc067_pA_round8_2026_05_21/hand_emit_ptx.txt",
+      "lines_11_14": "wmma.{load.a,load.b,mma,store.d}.sync.aligned...m16n16k16.global.f16 ...",
+      "interpretation": "These .global mnemonics live in a HAND-EMITTED PTX fixture used for ptxas-accept smokes (Round 8 §3b f16×f16→f16 family), NOT in the codegen emit path. Hand-emit fixtures exercise the ptxas frontend directly; the codegen never produces these strings."
+    }
+  },
+  "diff_stat": {
+    "files_modified": 0,
+    "lines_added": 0,
+    "lines_removed": 0,
+    "before_after_step1_ptx": "IDENTICAL (no edit applied)"
+  },
+  "parse_gate": {
+    "cmd": "SIDECAR_NO_POOL=1 build/hexa_cli_driver parse compiler/codegen/nvptx_target.hexa",
+    "result": "OK: parses cleanly (baseline only — no edit to revalidate)"
+  },
+  "lower_test_status": "Not invoked (no source change → no regression to verify). Case 23 (`_test_wmma_instr_emit`) assertions at nvptx_lower_test.hexa:2434-2441 already pin the canonical .shared mnemonics, so any future non-.global redundant emit would already be caught by these substring checks (no scaffold-stub leak guard at L2453-2458 also covers this).",
+  "task_premise_review": {
+    "task_claims": "Step1 PTX emits BOTH `wmma.load.a.sync.aligned.row.m16n16k16.global.f16` (canonical, used) AND `wmma.load.a.sync.aligned.row.m16n16k16.f16` (no .global, redundant scaffold-stub).",
+    "code_truth": "Codegen emits ONE variant per op-key: `wmma.load.a.sync.aligned.row.m16n16k16.f16.shared` (note `.shared`, not `.global`). The .shared form is the RFC 067 P2 design — load/store fragments via a 2048 B `_hexa_wmma_stage` shared-memory slot (compiler/codegen/nvptx_target.hexa:620-623). Going through `.global` directly would skip the staging buffer entirely.",
+    "possible_origin": "The `.global` variants in the task description match the hand-emit PTX fixture in rfc067_pA_round8 (lines 11-14 of hand_emit_ptx.txt), which is a SEPARATE ptxas-accept smoke for the f16×f16→f16 family — not output by codegen. The task may have conflated the two paths.",
+    "inbox/fires/rfc067_p6_revalidate_2026_05_21/result.json": "Referenced in task description but does not exist in tree. Cannot cross-check the claimed §11 cleanup item against its source."
+  },
+  "recommendation": {
+    "action": "Reject the cleanup as not-applicable. The codegen already emits one mnemonic per op-key (no redundancy to remove).",
+    "if_user_wants_global_path": "That would be a NEW emit path (skip .shared staging, load fragments directly from device DRAM). Separate design decision, not a 'cleanup'. Would touch _nvptx_wmma_mnemonic + _nvptx_wmma_mnemonic_family + STMT_CALL lowering branch + Case 23 + per-op offset logic — non-trivial; not a cosmetic edit.",
+    "if_user_meant_drop_shared_suffix": "The `.shared` state-space suffix is REQUIRED by PTX ISA §9.7.13.4 for wmma.load/store when the address operand points at a `.shared` slot (which is what `_hexa_wmma_stage` is — see line 812 P2 declaration). Removing `.shared` would make ptxas reject the instruction. NOT a safe cleanup."
+  },
+  "f_passthrough_preserved": "TRIVIAL PASS (zero source edits)",
+  "f_cpu_codegen_untouched": "TRIVIAL PASS (zero edits to x86_64_linux / arm64_darwin / thumbv7em_eabihf)"
+}

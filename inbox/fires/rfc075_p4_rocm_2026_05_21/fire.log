@@ -1,0 +1,79 @@
+===== MI300X stock poll start Thu May 21 03:39:02 KST 2026 =====
+--- attempt 1  t+0s  Thu May 21 03:39:02 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 2  t+61s  Thu May 21 03:40:03 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 3  t+122s  Thu May 21 03:41:04 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 4  t+182s  Thu May 21 03:42:04 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 5  t+243s  Thu May 21 03:43:05 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+===== end Thu May 21 03:43:06 KST 2026 =====
+===== MI300X stock poll continue Thu May 21 03:43:15 KST 2026 =====
+--- attempt 1  t+0s  Thu May 21 03:43:15 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 2  t+60s  Thu May 21 03:44:15 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 3  t+121s  Thu May 21 03:45:16 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 4  t+182s  Thu May 21 03:46:17 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 5  t+242s  Thu May 21 03:47:17 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 6  t+303s  Thu May 21 03:48:18 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 7  t+364s  Thu May 21 03:49:19 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 8  t+424s  Thu May 21 03:50:19 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 9  t+485s  Thu May 21 03:51:20 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 10  t+545s  Thu May 21 03:52:20 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 11  t+606s  Thu May 21 03:53:21 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+--- attempt 12  t+667s  Thu May 21 03:54:22 KST 2026 ---
+{"error":"There are no longer any instances available with the requested specifications. Please refresh and try again."}
+Usage:
+  runpodctl pod create [flags]
+===== end Thu May 21 03:54:22 KST 2026 =====
+
+===== verdict: NO-STOCK-BLOCK =====
+17 consecutive provision failures over ~16 minutes (5 initial @60s + 12 followup @60s, plus 1 initial probe and 1 retry without DC pin)
+GPU: AMD Instinct MI300X OAM (gpuId='AMD Instinct MI300X OAM') · DC: EU-RO-1 (only DC carrying MI300X) · stockStatus=''
+Templates tried: runpod-torch-v240-rocm61 (official ROCm 6.1) + pjxo1lx3lq (ROCm 7.1.1) · both rejected
+Tiers tried: SECURE + COMMUNITY · both rejected
+No pod was provisioned · cost spent on this fire = $0

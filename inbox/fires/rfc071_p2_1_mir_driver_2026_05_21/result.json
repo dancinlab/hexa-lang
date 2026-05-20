@@ -1,0 +1,106 @@
+{
+  "fire_id": "rfc071_p2_1_mir_driver_2026_05_21",
+  "rfc": "071",
+  "phase": "P2.1",
+  "falsifier_target": "F-RFC071-MIR-DRIVER-INVOKE",
+  "date_utc": "2026-05-21",
+  "branch_at_edit": "feat/cloud-subbinary-help-scoping-2026-05-21",
+  "head_at_edit": "d7932ff7 feat(self/main+tool/build_hexa_cloud): cloud sub-binary + help-scoping",
+  "verdict_parse_gate": "PASS",
+  "verdict_runtime_substring": "DEFERRED",
+  "scope": {
+    "scope_done": [
+      "compiler/cli/build_nvptx.hexa edited: 2 import lines + _build_hand_mir_vec_add() + _build_nvptx_stub_ptx now wraps codegen_emit_ptx_sm80",
+      "Parse-gate via build/hexa_cli_driver — OK clean",
+      "F-RFC055-CPU-CODEGEN-UNTOUCHED held (no edit to nvptx_target.hexa or x86_64_linux/arm64_darwin)"
+    ],
+    "scope_deferred": [
+      "Runtime substring verification (the four PTX markers .visible .entry / .param .u64 quartet / ld.global.f64 / st.global.f64) — requires building the compiler tree with HEXA_BACKEND=native module-loader import. Smoke driver (/tmp/rfc071_p2_1/p2_1_smoke.hexa) parse-gates clean but the existing 'hexa build' link path fails on pre-existing 624-duplicate-symbol error reproducible on stock nvptx_vec_add_test.hexa as well — environment/runtime double-link issue independent of this edit.",
+      "Per g_commit_push_deploy: a follow-on session must rebuild hexa_cli_driver/hexa_v2 with the linker double-link resolved before runtime substring assert can run."
+    ],
+    "scope_not_touched": [
+      "compiler/codegen/nvptx_target.hexa",
+      "compiler/codegen/x86_64_linux.hexa",
+      "compiler/codegen/arm64_darwin.hexa",
+      "self/main.hexa::cmd_build NVPTX branch (already P0-wired)"
+    ]
+  },
+  "expected_emitted_ptx_excerpt_design": {
+    "comment": "Expected output shape of `codegen_emit_ptx_sm80(_build_hand_mir_vec_add())` based on the canonical MModule pattern shared with compiler/codegen/nvptx_lower_test.hexa::_build_case_load_store (proven by that test's substring asserts in 055-P3b), plus the GPU_KIND_KERNEL partition path verified by Case 6 (_build_case_partition) of the same file.",
+    "directives": [
+      "// [P2.1 real codegen PTX -- RFC 071 P2.1 MIR -> PTX via codegen_emit_ptx_sm80]",
+      "// @rfc 071 phase P2.1 status MEASURED sm=sm_80",
+      ".version 7.8",
+      ".target sm_80",
+      ".address_size 64",
+      ".visible .entry vec_add(",
+      "    .param .u64 vec_add_param_0,",
+      "    .param .u64 vec_add_param_1,",
+      "    .param .u64 vec_add_param_2,",
+      "    .param .u64 vec_add_param_3",
+      ")",
+      "{",
+      "    .reg .u64 %rd0;",
+      "    .reg .f64 %fd1;",
+      "    .reg .f64 %fd2;",
+      "$L_0:",
+      "    ld.global.f64 %fd1, [%rd0];",
+      "    add.f64 %fd2, %fd1, %fd1;",
+      "    st.global.f64 [%rd0], %fd2;",
+      "    ret;",
+      "}"
+    ]
+  },
+  "substring_check_table": [
+    {
+      "marker": ".visible .entry",
+      "status": "DESIGN-PASS",
+      "reason": "GPU_KIND_KERNEL partition path emits .visible .entry — proven by nvptx_lower_test.hexa Case 6 (line 574 check)."
+    },
+    {
+      "marker": ".param .u64 vec_add_param_0",
+      "status": "DESIGN-PASS",
+      "reason": "Kernel partition param-bank pass renders MFunc.params[i] as .param .u64 <name>_param_<i> — proven by nvptx_lower_test.hexa Case 6 (line 577)."
+    },
+    {
+      "marker": ".param .u64 vec_add_param_1",
+      "status": "DESIGN-PASS",
+      "reason": "Same pass, i=1."
+    },
+    {
+      "marker": ".param .u64 vec_add_param_2",
+      "status": "DESIGN-PASS",
+      "reason": "Same pass, i=2 (STMT_STORE address Local — also Pass-2 propagated to .u64 bank for %rd register)."
+    },
+    {
+      "marker": ".param .u64 vec_add_param_3",
+      "status": "DESIGN-PASS",
+      "reason": "Same pass, i=3."
+    },
+    {
+      "marker": "ld.global.f64",
+      "status": "DESIGN-PASS",
+      "reason": "STMT_LOAD generic lowering emits ld.global.f64 %fd<dst>, [%rd<addr>] — proven by nvptx_lower_test.hexa Case 5 (line 518)."
+    },
+    {
+      "marker": "st.global.f64",
+      "status": "DESIGN-PASS",
+      "reason": "STMT_STORE generic lowering emits st.global.f64 [%rd<addr>], %fd<val> — proven by nvptx_lower_test.hexa Case 5 (line 523)."
+    }
+  ],
+  "honest_scope_g3": {
+    "what_this_fire_proves": [
+      "compiler/cli/build_nvptx.hexa now imports MIR + nvptx_target modules.",
+      "_build_nvptx_stub_ptx body is no longer a string-concat constant; it invokes the real codegen pipeline.",
+      "Parse-gate is clean — syntactic edit is valid hexa."
+    ],
+    "what_this_fire_does_NOT_prove": [
+      "Runtime execution of codegen_emit_ptx_sm80(_build_hand_mir_vec_add()) — blocked by pre-existing 624-symbol duplicate-link issue in current build path (reproducible against stock nvptx_vec_add_test.hexa). Resolution requires hexa_cli_driver / hexa_v2 rebuild in a separate session with runtime double-link fixed.",
+      "F-RFC071-MIR-DRIVER-INVOKE PASS verdict — design-PASS only; runtime-PASS deferred until linker-rebuild closes the bootstrap gap."
+    ],
+    "f_rfc055_cpu_codegen_untouched": "HELD — only compiler/cli/build_nvptx.hexa edited."
+  },
+  "gpu_md_section_10_closure_box_flip": "NOT-FLIPPED",
+  "gpu_md_section_2a_paragraph": "UPDATED — see GPU.md §2a 'Update 2026-05-21 (RFC 071 P2.1 LANDED)' paragraph.",
+  "next_session_action": "Rebuild hexa_cli_driver with linker double-link fix, then run /tmp/rfc071_p2_1/p2_1_smoke.hexa for runtime substring assert; flip F-RFC071-MIR-DRIVER-INVOKE row note to RUNTIME-PASS."
+}

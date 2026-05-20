@@ -1,0 +1,43 @@
+{
+  "rfc": "075-P4",
+  "kernel": "vec_add",
+  "falsifier": "F-RFC075-METAL-P4-SILICON-NUMERIC-EQ",
+  "verdict": "PASS",
+  "shape": "N=1024 FP32",
+  "max_delta": 0,
+  "mismatches": 0,
+  "device": "Apple M3",
+  "host_os": "macOS 26.5 (build 25F71)",
+  "toolchain": {
+    "xcode": "Xcode 26.4.1 Build 17E202",
+    "metal_compiler": "Apple metal version 32023.883 (metalfe-32023.883)",
+    "metal_toolchain_component": "Metal Toolchain 17E188 (downloaded via xcodebuild -downloadComponent MetalToolchain)",
+    "swiftc": "xcrun --sdk macosx swiftc"
+  },
+  "msl_source": "vec_add.metal",
+  "msl_source_provenance": "byte-identical to compiler/codegen/metal_target.hexa::codegen_emit_metal_msl output (verified by hand-trace of _metal_emit_preamble + _metal_emit_kernel_signature('vec_add') + _metal_emit_vec_add_body); compiler not re-invoked because metal_target.hexa is not yet wired into self/codegen_c2.hexa dispatcher (RFC 075 §3: codegen-only, no @gpu_kernel target dispatch wiring)",
+  "pipeline": [
+    "xcrun --sdk macosx metal -c vec_add.metal -o vec_add.air",
+    "xcrun --sdk macosx metallib vec_add.air -o vec_add.metallib",
+    "xcrun --sdk macosx swiftc host.swift -o host",
+    "./host"
+  ],
+  "method": {
+    "N": 1024,
+    "rng": "deterministic LCG (seed 0xC0FFEEDEADBEEF, 24-bit mantissa) -> [0,1) then *100-50 for [-50,50) range",
+    "reference": "CPU host-side a[i]+b[i] in Swift Float (FP32)",
+    "comparison": "exact bitwise (max|Δ| across all 1024 elements)",
+    "tolerance": 0,
+    "rationale": "Single FP32 add is exactly representable on both CPU (x86/arm64 IEEE 754) and Apple GPU FP32 SIMD ALU; no fma fusion possible (single add, not a*b+c), so byte-equality is the correct gate per @D g3"
+  },
+  "honest_scope": {
+    "is": "Apple M3 GPU executes the emitter's canonical MSL output byte-eq vs CPU reference for N=1024 FP32 vec-add",
+    "is_not": "general MFunc -> MSL emission (vec-add shape only) · driver-wired @gpu_kernel dispatch (codegen-only artifact) · larger-shape numeric coverage (FMA, FP16, threadgroup) · M1/M2 family validation (M3 only this fire)"
+  },
+  "samples": {
+    "c[0]": -72.20519,
+    "ref[0]": -72.20519,
+    "c[1023]": -64.93775,
+    "ref[1023]": -64.93775
+  }
+}
