@@ -496,6 +496,7 @@ invariants round out the suite — ν = E at e=0, and the conic identity
 | #6      | `stdlib/kernels/signal_proc/dft_naive.hexa`             | O(N²) naive DFT + IDFT                 | analytic spectra (impulse / DC / cosine) + Parseval + round-trip | 17/17 ≤1e-12 rel      | 2026-05-20 | `pilot-dft_naive`              |
 | #7      | `stdlib/kernels/noc_sim/event_queue.hexa`               | Binary min-heap discrete-event sched.  | python-companion `heapq` parity + FIFO-at-equal-times           | 36/36 exact           | 2026-05-20 | `pilot-event_queue`            |
 | #8      | `stdlib/kernels/mc_transport/transport_kinematics_kernel.hexa` | Special-relativity kinematics + PDG eq. 34.4 T_max + eq. 34.5 Bethe-Bloch dE/dx (δ=0) + 256-step trapezoidal CSDA range | Python `math` libm closed-form (4 KE samples × 4 materials × 4-6 outputs + 7 CSDA ranges + 2 invariants) | 41/41 rel_err=0       | 2026-05-20 | `pilot-transport_kinematics`   |
+| #9      | `stdlib/kernels/circuit/breaker_trace_reduce_kernel.hexa` | Composite trapezoidal I²t / clearing-energy + |·|-threshold-crossing breaker FOMs (UL 489I / IEC 60947-2 §4.3, Burden & Faires §4.3) | Python `math` libm closed-form (3 synthetic traces × 7 outputs + 3 invariants: 1 cleared / 1 non-cleared / 1 non-uniform grid) | 24/24 rel_err=0       | 2026-05-20 | `pilot-breaker_trace_reduce`   |
 
 ### Pilot #6 — DFT (signal_proc / 2026-05-20)
 
@@ -676,13 +677,117 @@ rather than dodging anything.
   range at LEO scales) and a nuclear-stop tail. The kernel returns
   the CSDA mean — the caller owns the variance caveat.
 
+### Pilot #9 — Breaker trace reducer (circuit / 2026-05-20)
+
+**Scope**: 10th pilot, 1st in the `circuit` kernel family (the
+existing circuit kernels — devsim / vdmos / wolfspeed — were all
+born-hexa-native; this is the first circuit kernel ported FROM a
+Python `.py` substrate). Ports the domain-agnostic numeric primitives
+of `stdlib/sscb/ngspice_breaking.py`'s inline `_measure` reducer
+(40 LOC) — composite trapezoidal I²t / clearing-energy integrals over
+a non-uniform timestep grid + `|·|`-threshold-crossing search for the
+breaker clearing event. The ngspice CLI orchestration + netlist
+generation + `wrdata` CSV parser remain on the .py side (subprocess
+adapter, not a closed-form math kernel).
+
+**Algorithm choice**: `ngspice_breaking.py` is a `sscb + verify`
+adapter that runs a bolted-fault SPICE transient and reduces the
+resulting (time, v_sw, i_load) trace to the UL 489I / IEC 60947-2
+§4.3 breaker figures-of-merit. The reducer is closed-form
+numerics — peak scan + |·|-threshold search + composite trapezoidal
+integration on a NON-uniform partition. None of it cares about
+SPICE itself; the same primitives work on any breaker-style
+(time, voltage, current) trace from any source (HVDC interrupter
+testbench, MOSFET SCB lab capture, even an analytic synthetic
+shape). So the ①a kernel slice is the reducer; the SPICE side stays
+①b adapter.
+
+**Algorithm provenance**: (a) Burden & Faires, "Numerical Analysis"
+10th ed. (Cengage 2016), §4.3 — Composite Trapezoidal Rule for a
+NON-uniform partition: I ≈ Σ_i 0.5·(f_i + f_{i+1})·(t_{i+1} − t_i).
+(b) UL 489I (Molded-Case Circuit Breakers for DC, ed. 1) + IEC
+60947-2 §4.3 — breaker figures-of-merit: I_peak (peak prospective
+fault current), I²t let-through, clearing time t_c = time until
+|i| ≤ 1 % of I_peak after trip, clearing energy ∫v·i dt over the
+clearing interval. No ngspice source-code inspection, no Berkeley
+SPICE3 code reading — composite trapezoid + threshold-crossing are
+textbook numerics that pre-date SPICE by decades.
+
+**Parity results**: 24/24 PASS at `rel_err = 0.0` (literal IEEE-754
+bit-exact) on every assertion. Three synthetic analytic traces ×
+7-output `breaker_metrics` vector (= 21) + 3 invariants
+(`∫_0^1 x dx == 0.5`, `trace_peak_abs` on a signed list, threshold-
+crossing on a monotone list) = 24 assertions. The trapezoidal sums
+are bit-stable because the kernel and the Python reference both walk
+i = i_lo..i_hi-1 with the same 0.5·(a+b)·dt step, and `math.exp` /
+`math.fabs` bit-mirror libm on darwin-arm64. D80 ceiling 1e-10
+relative; observed gap = 0 across all checks.
+
+**Test envelope**:
+- **Trace A** — RC discharge i(t) = 100·exp(−100·t), t ∈ [0, 0.01],
+  11 uniform samples, t_det = 0.0. At t = 0.01, i ≈ 36.79 A is
+  above the 1 % threshold → exercises the "no-clear" branch +
+  whole-post-trip-window integration.
+- **Trace B** — Same shape extended to t ∈ [0, 0.05], 21 uniform
+  samples. At t = 0.05, i ≈ 0.674 A is below threshold →
+  exercises the "cleared" branch + clearing-time search.
+- **Trace C** — Triangular pulse on a 50 A DC pedestal that drops
+  to zero at t = 0.0055; NON-uniform 13-sample grid clustered
+  around the clearing event; t_det = 0.005. Exercises (a) the
+  non-uniform-grid trapezoidal path, (b) the t_det-aware
+  threshold-search start, (c) the residual-current readback at
+  `i_hi - 1`.
+
+**Hexa-lang gotchas found**: none new. The pilot used `.push(x)`
+for dynamic array growth (idiom from `kernels/logic_synth/`,
+`kernels/circuit/wolfspeed.hexa`), `break` inside `while` for the
+threshold-index scan (idiom from `kernels/logic_synth/read_verilog`),
+fixed-length `[float]` return arrays (idiom from #5b kepler and
+#8 transport_kinematics), and `to_float(int)` to bridge `int → float`
+for the per-sample time computation. The `.push(...)` rebuild idiom
+(O(N) per push for `[float]`) is fine at the trace sizes the breaker
+domain produces (≤ 1e4 samples); the struct-array in-place
+assignment limitation called out by #7 (event_queue) does not bite
+here because the kernel only allocates flat `[float]` buffers.
+
+**What this does NOT prove**:
+
+- `absorbed=true` is NOT flipped on any demiurge cell. Same
+  `HexaNativeParityRef` schema gate as pilots #1 / #2 / #5 / #5b /
+  #8. The SSCB cell stays `measurement_gate = GATE_OPEN` /
+  `absorbed = false` until (a) a real ngspice-trace round-trip
+  parity test lands (kernel reduces the same SPICE trace as the
+  Python `_measure` and matches bit-for-bit), AND (b) an accredited-
+  lab UL 489I type-test result is wired into the demiurge cell
+  (months out).
+- The ngspice CLI / netlist generator / `wrdata` parser is NOT
+  ported. That is subprocess orchestration over the ngspice binary
+  and lives on the .py side until either (a) a hexa-native SPICE
+  solver lands (multi-year — devsim.hexa / vdmos.hexa are the
+  closest existing pieces, but they are TCAD device physics, not
+  circuit-level transient solvers), or (b) the orchestration is
+  re-pointed at a wholly different (hexa-native or otherwise)
+  transient solver.
+- The 1 % clearing-threshold ratio is hardcoded in this iteration
+  (UL 489I / IEC 60947-2 convention). A future caller domain that
+  needs a different ratio (HVDC interrupter at 5 %, DC-link SCB at
+  0.1 %, etc.) would extend the kernel signature with an explicit
+  `threshold_ratio: float` parameter — straightforward follow-on.
+- Composite trapezoid is O(h²) accurate; for traces with sharp
+  clearing-edge slopes a Simpson / Romberg refinement would close
+  faster. The breaker domain in practice uses adaptive-timestep
+  SPICE traces with samples clustered around the event, so
+  trapezoidal accuracy ≪ measurement noise floor — refinement is
+  not blocking and is queued.
+
 ### Cumulative status across pilots (2026-05-20)
 
-- 9 pilots landed/in-flight (#1-#5, #5b on origin/main, #6+#7+#8
-  landing this cycle; #3b + #4 are concurrent branch ports), ≥214
-  assertions PASS across them (21+8+23+41+27+17+36+41 = 214 on the
-  landed pilots alone — #8 adds 41 from transport_kinematics_kernel)
-- 6 hexa-lang followups filed in this audit round:
+- 10 pilots landed/in-flight (#1-#5, #5b on origin/main, #6+#7+#8+#9
+  landing this cycle; #3b + #4 are concurrent branch ports), ≥238
+  assertions PASS across them (21+8+23+41+27+17+36+41+24 = 238 on
+  the landed pilots alone — #9 adds 24 from
+  breaker_trace_reduce_kernel)
+- 6 hexa-lang followups filed in this audit round (none new in #9):
   - parser `-`/`->` continuation footgun (#1, #7)
   - `fmod` libm shim missing (#1)
   - `str_full(float)` for full-precision dump (#1)
