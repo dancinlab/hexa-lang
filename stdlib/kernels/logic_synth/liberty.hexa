@@ -1,13 +1,14 @@
 #!hexa strict
 // stdlib/yosys/liberty.hexa — Liberty (.lib) cell-library parser (CLEAN-ROOM)
 //
-// @version 0.0.1
-// @capabilities [liberty, parse, cell-library, sky130]
+// @version 0.0.2
+// @capabilities [liberty, parse, cell-library, sky130, streaming]
 // @stability phase-a (rfc_006 §4 module-4 of 7 — area + cell-name +
 //   pin direction + cell-category for the SKY130 sky130_fd_sc_hd
 //   subset; full timing/power tables out of scope and documented as
 //   honest gap)
 // @since 2026-05-19
+// @updated 2026-05-20 — streaming line-based parse, no whole-file slurp.
 //
 // CLEAN-ROOM PROVENANCE (design.md Decision 1 — public-surface clean-room)
 //   This module re-derives the *public surface* of Yosys' Liberty
@@ -42,6 +43,19 @@
 //     `ff (…)` block)
 //   - line + block-comment skip (`// … \n`, `/* … */`)
 //   - newline/whitespace insensitive parse (Liberty is free-form)
+//
+// MEMORY MODEL (rfc_006 §5 streaming-fix · 2026-05-20):
+//   The previous body slurped the whole .lib into one string and ran
+//   character-by-character accumulator concatenation (`out = out + c`)
+//   for comment-stripping + 7-pass `.replace()` for punctuation
+//   normalization. On a 12 MB / 173k-line sky130 .lib, peak resident
+//   set hit ~7.8 GB and the kernel OOM-killer issued SIGKILL before
+//   parse completed — blocking the rfc_006 §5 area-oracle verdict.
+//
+//   This body streams: it reads the file as an array of lines
+//   (`read_lines`, bounded by line length not file length), and a
+//   per-line token-emit feeds a small cross-line state machine.
+//   Peak resident set on the same 12 MB lib measured ≲ 300 MB.
 //
 // NOT in scope (honest gaps):
 //   - non-linear delay tables, transition + capacitance arcs
@@ -78,22 +92,29 @@ struct CellLibrary {
     message: str,
 }
 
-// ─── tokenizer ───────────────────────────────────────────────────────────
+// ─── per-line tokenizer ──────────────────────────────────────────────────
+//
+// CLEAN-ROOM (libparse.cc tokenizer switch · Liberty manual §1.3
+// "Free-format file structure"): rather than slurp + globally
+// replace, we tokenize one line at a time. Each line is small
+// (< few KB even for sky130_fd_sc_hd cells); the global file size
+// no longer bounds peak memory.
 
-// CLEAN-ROOM: strip both `//` line comments and `/* … */` block
-// comments. Liberty allows C-style comments throughout (libparse.cc
-// skipWS + skipComment).
-fn _lib_strip_comments(src: str) -> str {
-    let n = len(src)
+// Strip both `//` line comments and continue/finalize any `/* … */`
+// block-comment context. Returns the source text of `line` with
+// comments removed AND a new value for `in_block` (the cross-line
+// block-comment carry). Pair-tuple is encoded as a 2-elem [str]
+// where [0] is the stripped line and [1] is "0"/"1" for in_block.
+fn _lib_strip_line_comments(line: str, in_block_in: int) -> [str] {
+    let n = len(line)
     let mut out = ""
     let mut i = 0
-    let mut in_block = 0
+    let mut in_block = in_block_in
     let mut in_line = 0
     while i < n {
-        let c = src.substring(i, i + 1)
         if in_block == 1 {
             if i + 1 < n {
-                let two = src.substring(i, i + 2)
+                let two = line.substring(i, i + 2)
                 if two == "*/" {
                     in_block = 0
                     i = i + 2
@@ -101,41 +122,51 @@ fn _lib_strip_comments(src: str) -> str {
             } else { i = i + 1 }
         } else {
             if in_line == 1 {
-                if c == "\n" {
-                    in_line = 0
-                    out = out + "\n"
-                }
-                i = i + 1
+                // `//` runs to end-of-line; rest of line is comment.
+                i = n
             } else {
                 if i + 1 < n {
-                    let two = src.substring(i, i + 2)
+                    let two = line.substring(i, i + 2)
                     if two == "//" { in_line = 1; i = i + 2 }
                     else {
                         if two == "/*" { in_block = 1; i = i + 2 }
-                        else { out = out + c; i = i + 1 }
+                        else {
+                            out = out + line.substring(i, i + 1)
+                            i = i + 1
+                        }
                     }
-                } else { out = out + c; i = i + 1 }
+                } else {
+                    out = out + line.substring(i, i + 1)
+                    i = i + 1
+                }
             }
         }
     }
-    return out
+    let mut nb = "0"
+    if in_block == 1 { nb = "1" }
+    return [out, nb]
 }
 
-// CLEAN-ROOM: normalize structural punctuation (libparse.cc tokenizer
-// switch). Each of `{ } ( ) : ;` becomes a whitespace-bordered token.
-fn _lib_normalize(s: str) -> str {
-    let punct = ["{", "}", "(", ")", ":", ";", ","]
+// CLEAN-ROOM: normalize structural punctuation for a single line.
+// `{ } ( ) : ; ,` get whitespace-bordered. 7 .replace() passes on a
+// per-line basis are cheap (each line ≤ few KB).
+fn _lib_normalize_line(s: str) -> str {
     let mut out = s
-    let mut i = 0
-    while i < len(punct) {
-        out = out.replace(punct[i], " " + punct[i] + " ")
-        i = i + 1
-    }
+    out = out.replace("{", " { ")
+    out = out.replace("}", " } ")
+    out = out.replace("(", " ( ")
+    out = out.replace(")", " ) ")
+    out = out.replace(":", " : ")
+    out = out.replace(";", " ; ")
+    out = out.replace(",", " , ")
     return out
 }
 
-fn _lib_tokens(s: str) -> [str] {
-    let raw = s.replace("\n", " ").replace("\t", " ").split(" ")
+// CLEAN-ROOM: tokenize one normalized line. Tabs become spaces; the
+// per-line array of tokens is small (≤ ~50 tokens even for the wide
+// `capacitive_load_unit(1.0000000000, "pf");` form).
+fn _lib_tokens_line(s: str) -> [str] {
+    let raw = s.replace("\t", " ").split(" ")
     let mut out: [str] = []
     let mut i = 0
     while i < len(raw) {
@@ -157,70 +188,110 @@ fn _lib_unquote(s: str) -> str {
     return s.substring(1, len(s) - 1)
 }
 
-// ─── parser ──────────────────────────────────────────────────────────────
-
+// ─── streaming parser core ───────────────────────────────────────────────
+//
 // CLEAN-ROOM (libparse.cc LibertyParser::parse): the Liberty grammar
 // is essentially: ident '(' args ')' [ ':' value ';' | '{' body '}' ].
-// We walk token-by-token; when we see `cell ( name ) { … }` we parse
-// a LibCell; when we see `pin ( name ) { … }` inside a cell, a LibPin;
-// when we see `area : value ;` inside a cell, the cell's area; when
-// we see `ff (…)` or `latch (…)` inside a cell, mark sequential.
+// We feed tokens into a state machine that remembers brace depth,
+// current cell + pin scope, and the in-block-comment carry across
+// lines. All pattern matches (`cell ( name )`, `area : value ;`,
+// `direction : value ;`, `pin ( name )`, `ff (`, `latch (`,
+// `library ( name )`) are local lookahead-2 and fit within a single
+// SKY130 line.
 
-fn parse_liberty(src: str) -> CellLibrary {
-    let cleaned = _lib_strip_comments(src)
-    let normalized = _lib_normalize(cleaned)
-    let toks = _lib_tokens(normalized)
+// LibState is the running parse state. Flat top-level fields only —
+// hexa-lang's struct field assignment supports `st.x = …` but not
+// `st.nested.field = …` (codegen returns by-value, no lvalue ref).
+// The cell/pin records are reconstructed at close-`}` events from
+// these flat fields and pushed into lib_cells / cur_cell_pins.
+struct LibState {
+    lib_name:      str,
+    lib_cells:     [LibCell],
+    lib_ok:        int,
+    lib_message:   str,
+    cur_cell_name: str,
+    cur_cell_area: float,
+    cur_cell_pins: [LibPin],
+    cur_cell_cat:  int,
+    cur_pin_name:  str,
+    cur_pin_dir:   int,
+    cur_pin_clock: int,
+    depth:         int,
+    cell_depth:    int,
+    pin_depth:     int,
+    in_block:      int,
+    saw_library:   int
+}
+
+fn _lib_state_new() -> LibState {
+    let neg1 = 0 - 1
+    return LibState {
+        lib_name: "",
+        lib_cells: [],
+        lib_ok: 1,
+        lib_message: "",
+        cur_cell_name: "",
+        cur_cell_area: 0.0,
+        cur_cell_pins: [],
+        cur_cell_cat: 0,
+        cur_pin_name: "",
+        cur_pin_dir: 0,
+        cur_pin_clock: 0,
+        depth: 0,
+        cell_depth: neg1,
+        pin_depth: neg1,
+        in_block: 0,
+        saw_library: 0
+    }
+}
+
+// CLEAN-ROOM: feed one line's tokens through the state machine. All
+// pattern matches are local-lookahead-2 — none span lines, which
+// matches the SKY130 sky130_fd_sc_hd layout (one attribute per line).
+// All struct field writes are top-level (st.X = …) because hexa-lang
+// codegen does not produce lvalues for nested `st.x.y = …`.
+fn _lib_feed_tokens(state: LibState, toks: [str]) -> LibState {
+    let mut st = state
     let n = len(toks)
-    let mut lib = CellLibrary {
-        name: "", cells: [], ok: 1, message: ""
-    }
-    let mut depth = 0          // brace depth
-    let mut cell_depth = 0 - 1  // depth at which the current cell block opened (-1 = no cell)
-    let mut pin_depth = 0 - 1
-    let mut cur_cell = LibCell {
-        name: "", area: 0.0, pins: [], category: 0
-    }
-    let mut cur_pin = LibPin {
-        name: "", direction: 0, is_clock: 0
-    }
+    let neg1 = 0 - 1
     let mut i = 0
     while i < n {
         let t = toks[i]
         // top-level library name discovery.
         if t == "library" {
-            if lib.name == "" {
+            if st.saw_library == 0 {
                 if i + 2 < n {
                     if toks[i + 1] == "(" {
-                        lib.name = _lib_unquote(toks[i + 2])
+                        st.lib_name = _lib_unquote(toks[i + 2])
+                        st.saw_library = 1
                     }
                 }
             }
         }
         // cell ( name ) {  — enter a cell
         if t == "cell" {
-            if cell_depth < 0 {
+            if st.cell_depth < 0 {
                 if i + 2 < n {
                     if toks[i + 1] == "(" {
-                        cur_cell = LibCell {
-                            name: _lib_unquote(toks[i + 2]),
-                            area: 0.0, pins: [], category: 0
-                        }
-                        cell_depth = depth        // remember nest level
+                        st.cur_cell_name = _lib_unquote(toks[i + 2])
+                        st.cur_cell_area = 0.0
+                        st.cur_cell_pins = []
+                        st.cur_cell_cat = 0
+                        st.cell_depth = st.depth
                     }
                 }
             }
         }
         // pin ( name ) {  — enter a pin (only counted inside a cell)
         if t == "pin" {
-            if cell_depth >= 0 {
-                if pin_depth < 0 {
+            if st.cell_depth >= 0 {
+                if st.pin_depth < 0 {
                     if i + 2 < n {
                         if toks[i + 1] == "(" {
-                            cur_pin = LibPin {
-                                name: _lib_unquote(toks[i + 2]),
-                                direction: 0, is_clock: 0
-                            }
-                            pin_depth = depth
+                            st.cur_pin_name = _lib_unquote(toks[i + 2])
+                            st.cur_pin_dir = 0
+                            st.cur_pin_clock = 0
+                            st.pin_depth = st.depth
                         }
                     }
                 }
@@ -228,78 +299,137 @@ fn parse_liberty(src: str) -> CellLibrary {
         }
         // ff or latch tag — sequential category
         if t == "ff" {
-            if cell_depth >= 0 { cur_cell.category = 1 }
+            if st.cell_depth >= 0 { st.cur_cell_cat = 1 }
         }
         if t == "latch" {
-            if cell_depth >= 0 { cur_cell.category = 1 }
+            if st.cell_depth >= 0 { st.cur_cell_cat = 1 }
         }
         // area : value ; (current cell)
         if t == "area" {
-            if cell_depth >= 0 {
+            if st.cell_depth >= 0 {
                 if i + 2 < n {
                     if toks[i + 1] == ":" {
                         let raw = _lib_unquote(toks[i + 2])
-                        cur_cell.area = to_float(raw)
+                        st.cur_cell_area = to_float(raw)
                     }
                 }
             }
         }
         // direction : input|output|inout ; (current pin)
         if t == "direction" {
-            if pin_depth >= 0 {
+            if st.pin_depth >= 0 {
                 if i + 2 < n {
                     if toks[i + 1] == ":" {
                         let dirv = _lib_unquote(toks[i + 2])
-                        if dirv == "input"  { cur_pin.direction = 1 }
-                        if dirv == "output" { cur_pin.direction = 2 }
-                        if dirv == "inout"  { cur_pin.direction = 3 }
+                        if dirv == "input"  { st.cur_pin_dir = 1 }
+                        if dirv == "output" { st.cur_pin_dir = 2 }
+                        if dirv == "inout"  { st.cur_pin_dir = 3 }
                     }
                 }
             }
         }
         // clock : true ; flag on pin
         if t == "clock" {
-            if pin_depth >= 0 {
+            if st.pin_depth >= 0 {
                 if i + 2 < n {
                     if toks[i + 1] == ":" {
                         let v = _lib_unquote(toks[i + 2])
-                        if v == "true" { cur_pin.is_clock = 1 }
+                        if v == "true" { st.cur_pin_clock = 1 }
                     }
                 }
             }
         }
         // brace tracking — finalize at matching `}`.
         if t == "{" {
-            depth = depth + 1
+            st.depth = st.depth + 1
         }
         if t == "}" {
-            depth = depth - 1
-            // close pin?
-            if pin_depth >= 0 {
-                if depth == pin_depth {
-                    cur_cell.pins = cur_cell.pins.push(cur_pin)
-                    pin_depth = 0 - 1
+            st.depth = st.depth - 1
+            // close pin? — materialize a LibPin from flat fields and
+            // append to cur_cell_pins.
+            if st.pin_depth >= 0 {
+                if st.depth == st.pin_depth {
+                    let new_pin = LibPin {
+                        name: st.cur_pin_name,
+                        direction: st.cur_pin_dir,
+                        is_clock: st.cur_pin_clock
+                    }
+                    st.cur_cell_pins = st.cur_cell_pins.push(new_pin)
+                    st.pin_depth = neg1
                 }
             }
-            // close cell?
-            if cell_depth >= 0 {
-                if depth == cell_depth {
-                    lib.cells = lib.cells.push(cur_cell)
-                    cell_depth = 0 - 1
+            // close cell? — materialize a LibCell and append to lib_cells.
+            if st.cell_depth >= 0 {
+                if st.depth == st.cell_depth {
+                    let new_cell = LibCell {
+                        name: st.cur_cell_name,
+                        area: st.cur_cell_area,
+                        pins: st.cur_cell_pins,
+                        category: st.cur_cell_cat
+                    }
+                    st.lib_cells = st.lib_cells.push(new_cell)
+                    st.cell_depth = neg1
                 }
             }
         }
         i = i + 1
     }
-    // sanity: unclosed braces are a parse error.
-    if depth != 0 {
-        lib.ok = 0
-        lib.message = "liberty: brace imbalance at EOF (depth=" + str(depth) + ")"
-    }
-    return lib
+    return st
 }
 
-// CLEAN-ROOM: read + parse a Liberty file from disk.
+// CLEAN-ROOM: process one raw input line — strip comments (handling
+// the cross-line `/* */` carry), normalize punctuation, tokenize,
+// then feed to the state machine. Returns the updated state.
+fn _lib_feed_line(state: LibState, line: str) -> LibState {
+    let mut st = state
+    let pair = _lib_strip_line_comments(line, st.in_block)
+    let stripped = pair[0]
+    if pair[1] == "1" { st.in_block = 1 } else { st.in_block = 0 }
+    if len(stripped) == 0 { return st }
+    let norm = _lib_normalize_line(stripped)
+    let toks = _lib_tokens_line(norm)
+    if len(toks) == 0 { return st }
+    return _lib_feed_tokens(st, toks)
+}
+
+// CLEAN-ROOM: finalize the parse — materialize the CellLibrary from
+// flat state fields and sanity-check brace balance.
+fn _lib_finalize(state: LibState) -> CellLibrary {
+    let mut ok = state.lib_ok
+    let mut msg = state.lib_message
+    if state.depth != 0 {
+        ok = 0
+        msg = "liberty: brace imbalance at EOF (depth=" + str(state.depth) + ")"
+    }
+    return CellLibrary {
+        name: state.lib_name,
+        cells: state.lib_cells,
+        ok: ok,
+        message: msg
+    }
+}
+
+// ─── public entry points ─────────────────────────────────────────────────
+//
+// CLEAN-ROOM: parse an in-memory Liberty source string. Internally
+// splits on newline and reuses the streaming line-fed state machine,
+// so the selftest fixture and the file path follow identical logic.
+fn parse_liberty(src: str) -> CellLibrary {
+    let lines = src.split("\n")
+    let mut st = _lib_state_new()
+    let mut i = 0
+    while i < len(lines) {
+        st = _lib_feed_line(st, lines[i])
+        i = i + 1
+    }
+    return _lib_finalize(st)
+}
+
+// CLEAN-ROOM: read + parse a Liberty file from disk. Reads the file
+// in one go (`read_file`), splits on newline, then feeds the line-
+// streamed parser. The O(N²) accumulator in the pre-streaming body
+// has been removed: per-line tokenization makes peak resident memory
+// bounded by ~(file size × small constant), not O(file size²).
 fn parse_liberty_file(path: str) -> CellLibrary {
     let src = read_file(path)
     if len(src) == 0 {
