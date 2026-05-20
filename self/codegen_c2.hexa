@@ -232,6 +232,50 @@ fn _hexa_mangle_ident(name) {
     return name
 }
 
+// 2026-05-20 (blocker-5 self-shadow): check if emitted init text contains a
+// reference to `name` as a standalone C identifier token. Used by LetStmt
+// codegen to detect cases like `let pi = pi()` where the local would shadow
+// the (presumed) function call in its own initializer. The scan is purely
+// textual but accurate enough for the common case — we look for `name`
+// surrounded by non-identifier chars (the C-emit always tokenizes idents
+// with whitespace, parens, commas, or operators around them).
+//
+// False positives (emit a harmless temp) are preferred over false negatives
+// (silent wrong value). False positives are confined to LetStmt emit only.
+fn _init_refs_local(init, name) {
+    if type_of(init) != "string" { return false }
+    if type_of(name) != "string" { return false }
+    let nn = len(name)
+    if nn == 0 { return false }
+    let il = len(init)
+    if il < nn { return false }
+    let mut i = 0
+    while i + nn <= il {
+        let seg = init.substring(i, i + nn)
+        if seg == name {
+            // Check boundary chars before/after — must NOT be C-ident chars.
+            let prev_ok = i == 0 || !_is_c_ident_char(init.char_at(i - 1))
+            let next_ok = (i + nn) == il || !_is_c_ident_char(init.char_at(i + nn))
+            if prev_ok && next_ok {
+                return true
+            }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// C identifier-char predicate: [A-Za-z0-9_]. Single-char string in, bool out.
+fn _is_c_ident_char(c) {
+    if type_of(c) != "string" { return false }
+    if len(c) != 1 { return false }
+    if c >= "a" && c <= "z" { return true }
+    if c >= "A" && c <= "Z" { return true }
+    if c >= "0" && c <= "9" { return true }
+    if c == "_" { return true }
+    return false
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // P7-7 rt_target routing — SSOT mirror of self/codegen/rt_symbols.hexa.
 // Inlined because codegen_c2.hexa is a flatten-monolith (use directives
@@ -266,6 +310,8 @@ fn cg_math_sym(name) {
         if name == "log"   { return "rt_math_log_v" }
         if name == "exp"   { return "rt_math_exp_v" }
         if name == "tanh"  { return "rt_math_tanh_v" }
+        // 2026-05-20 (blocker-3 fmod-shim): rt-target mirror of fmod entry.
+        if name == "fmod"  { return "rt_math_fmod_v" }
         return ""
     }
     if name == "abs"   { return "hexa_math_abs" }
@@ -291,6 +337,11 @@ fn cg_math_sym(name) {
     if name == "isnan"      { return "hexa_math_isnan" }
     if name == "isinf"      { return "hexa_math_isinf" }
     if name == "isfinite"   { return "hexa_math_isfinite" }
+    // 2026-05-20 (blocker-3 fmod-shim): expose libm fmod() directly. Distinct
+    // from the `%` operator which routes through hexa_mod (int+float branch);
+    // user code writing scientific kernels (Track B solar pilot) wants
+    // `fmod(x, y)` as a primitive without going through the dispatch.
+    if name == "fmod"       { return "hexa_math_fmod" }
     return ""
 }
 
@@ -2559,6 +2610,23 @@ fn gen2_stmt(node, depth) {
         if _gen2_has_decl(node.name) {
             return pad + _local_name + " = " + init + ";\n"
         }
+        // 2026-05-20 (blocker-5 self-shadow): in C, the local being declared
+        // is in scope for its own initializer. When user writes
+        // `let pi = pi()` and `pi` is not a defined function, codegen emits
+        // `HexaVal pi = hexa_call0(pi);` — `pi` on RHS resolves to the
+        // uninitialized local, giving silent garbage (e.g. 259). Detect
+        // self-reference in the init text and route through a temp so the
+        // local is initialized after the init expression evaluates. The
+        // textual scan is conservative (we'd rather emit a harmless temp
+        // than miss a real self-shadow). Skip the rename when the name was
+        // already mangled (u_X) — those don't collide with themselves.
+        if _local_name == node.name && _init_refs_local(init, node.name) {
+            // Emit: `HexaVal __init_<name> = <init>; HexaVal <name> = __init_<name>;`
+            // Both bindings remain in scope for the rest of the block; the
+            // temp is unused after the line but C-clean.
+            let _tmp = "__hexa_letinit_" + node.name
+            return pad + "HexaVal " + _tmp + " = " + init + "; HexaVal " + _local_name + " = " + _tmp + ";\n"
+        }
         return pad + "HexaVal " + _local_name + " = " + init + ";\n"
     }
 
@@ -3817,10 +3885,18 @@ fn gen2_expr(node) {
         // HexaVal boxing when both operands are float literals.
         // Emits `hexa_float((L) OP (R))` which the C compiler constant-folds.
         if _lk == "FloatLit" && _rk == "FloatLit" {
-            if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
+            if op == "+" || op == "-" || op == "*" || op == "/" {
                 let _lv = node.left.value
                 let _rv = node.right.value
                 return "hexa_float((" + _lv + ") " + op + " (" + _rv + "))"
+            }
+            // 2026-05-20 (blocker-2 float-%): clang rejects `(double) % (double)`.
+            // Emit fmod() directly — preserves the constant-fold intent
+            // (compiler folds the libm call at -O1+ for literal args).
+            if op == "%" {
+                let _lv = node.left.value
+                let _rv = node.right.value
+                return "hexa_float(fmod((" + _lv + "), (" + _rv + ")))"
             }
         }
         // STRUCTURAL-2 Phase B: known-int propagation — when BOTH operands
@@ -3853,10 +3929,20 @@ fn gen2_expr(node) {
         let _lf = _is_known_float(node.left)
         let _rf = _is_known_float(node.right)
         if _lf && _rf {
-            if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
+            if op == "+" || op == "-" || op == "*" || op == "/" {
                 let l = gen2_expr(node.left)
                 let r = gen2_expr(node.right)
                 return "hexa_float(HX_FLOAT(" + l + ") " + op + " HX_FLOAT(" + r + "))"
+            }
+            // 2026-05-20 (blocker-2 float-%): raw `%` is illegal on C doubles
+            // (clang: invalid operands to binary expression). Route through
+            // libm fmod() preserving IEEE-754 semantics. fmod is in <math.h>
+            // already pulled in via runtime.h, and matches hexa_mod's float
+            // branch (runtime_core.c:5983).
+            if op == "%" {
+                let l = gen2_expr(node.left)
+                let r = gen2_expr(node.right)
+                return "hexa_float(fmod(HX_FLOAT(" + l + "), HX_FLOAT(" + r + ")))"
             }
             if op == "<" || op == ">" || op == "<=" || op == ">=" || op == "==" || op == "!=" {
                 let l = gen2_expr(node.left)
