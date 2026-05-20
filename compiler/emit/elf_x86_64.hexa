@@ -158,6 +158,32 @@ fn _ex86_reg64(s: string) -> Int {
     return -1
 }
 
+// x86_64 r8 (low-byte) register name → index 0..15.
+//   al=0 · cl=1 · dl=2 · bl=3 · spl=4 · bpl=5 · sil=6 · dil=7 ·
+//   r8b..r15b=8..15 (require REX.B prefix bit).
+// Note: ah/ch/dh/bh (high-byte aliases) cannot coexist with REX
+// prefix; SETcc/MOVZX usage here only targets low-byte names.
+// Returns -1 on no match.
+fn _ex86_reg8(s: string) -> Int {
+    if s == "al"  || s == "AL"  { return 0 }
+    if s == "cl"  || s == "CL"  { return 1 }
+    if s == "dl"  || s == "DL"  { return 2 }
+    if s == "bl"  || s == "BL"  { return 3 }
+    if s == "spl" || s == "SPL" { return 4 }
+    if s == "bpl" || s == "BPL" { return 5 }
+    if s == "sil" || s == "SIL" { return 6 }
+    if s == "dil" || s == "DIL" { return 7 }
+    if s == "r8b"  || s == "R8B"  { return 8 }
+    if s == "r9b"  || s == "R9B"  { return 9 }
+    if s == "r10b" || s == "R10B" { return 10 }
+    if s == "r11b" || s == "R11B" { return 11 }
+    if s == "r12b" || s == "R12B" { return 12 }
+    if s == "r13b" || s == "R13B" { return 13 }
+    if s == "r14b" || s == "R14B" { return 14 }
+    if s == "r15b" || s == "R15B" { return 15 }
+    return -1
+}
+
 // REX prefix builder.  REX = 0100 W R X B (4-bit fixed + 4 flag bits).
 //   W = 64-bit operand size (1 for r64 ops)
 //   R = extends ModR/M.reg (1 if reg >= 8)
@@ -401,6 +427,56 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
         if rd >= 0 {
             let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
             return [rex, 0xF7, 0xC0 | (7 << 3) | (rd & 0x7)]
+        }
+    }
+    // ── Cycle 28 additions — zero-extend / set-byte-on-condition ──
+    //
+    // MOVZX r32, r8 — 0F B6 /r (low-byte zero-extend to 32-bit).
+    // 1-byte source register encoding: AL=0, CL=1, DL=2, BL=3,
+    // SPL=4 (REX), BPL=5 (REX), SIL=6 (REX), DIL=7 (REX). For r8-r15
+    // low-byte SPL/BPL/SIL/DIL we need REX (any REX byte forces new
+    // encoding). Common case here is AL/CL/DL/BL → no REX needed.
+    if op == "MOVZX" && len(ops) == 2 {
+        let rd = _ex86_reg32(ops[0])
+        let rs = _ex86_reg8(ops[1])
+        if rd >= 0 && rs >= 0 {
+            // No REX for AL/CL/DL/BL → 0F B6 /r (3 B).
+            if rs <= 3 && rd <= 7 {
+                return [0x0F, 0xB6, 0xC0 | ((rd & 0x7) << 3) | (rs & 0x7)]
+            }
+            // REX path for high-byte regs (SPL..DIL or r8b..r15b).
+            let rex = _ex86_rex(0, if rd >= 8 { 1 } else { 0 }, 0,
+                                    if rs >= 8 { 1 } else { 0 })
+            return [rex, 0x0F, 0xB6,
+                    0xC0 | ((rd & 0x7) << 3) | (rs & 0x7)]
+        }
+    }
+    // SETcc r8 — 0F 9x /r (set 1 byte on condition).
+    //   SETE   0F 94    (==, ZF=1)
+    //   SETNE  0F 95    (!=, ZF=0)
+    //   SETL   0F 9C    (signed <, SF≠OF)
+    //   SETGE  0F 9D    (signed >=, SF=OF)
+    //   SETLE  0F 9E    (signed <=, ZF=1 or SF≠OF)
+    //   SETG   0F 9F    (signed >, ZF=0 and SF=OF)
+    // Operand is r8 (AL/CL/DL/BL by default; SPL..DIL via REX).
+    if (op == "SETE" || op == "SETNE" ||
+        op == "SETL" || op == "SETGE" ||
+        op == "SETLE" || op == "SETG") && len(ops) == 1 {
+        let rd = _ex86_reg8(ops[0])
+        if rd >= 0 {
+            let mut opcode = 0
+            if op == "SETE"  { opcode = 0x94 }
+            if op == "SETNE" { opcode = 0x95 }
+            if op == "SETL"  { opcode = 0x9C }
+            if op == "SETGE" { opcode = 0x9D }
+            if op == "SETLE" { opcode = 0x9E }
+            if op == "SETG"  { opcode = 0x9F }
+            if rd <= 3 {
+                return [0x0F, opcode, 0xC0 | (rd & 0x7)]
+            }
+            // REX path for SPL..DIL (rd=4..7 force REX) or r8..r15.
+            let rex = _ex86_rex(0, 0, 0, if rd >= 8 { 1 } else { 0 })
+            return [rex, 0x0F, opcode, 0xC0 | (rd & 0x7)]
         }
     }
     return []

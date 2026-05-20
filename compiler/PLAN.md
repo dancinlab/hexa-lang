@@ -6088,3 +6088,77 @@ movzx (zero-extend) + setcc (set byte on condition).
 closed · x86_64 encoder 31 rules · LIR ops 15/17 covered.
 
 **cc --regen / binary promote**: 미수행.
+
+
+### 2026-05-20 — follow-up cycle 28: x86_64 MOVZX + SETcc (F-P2-X86-SETCC PASS, LIR ops 17/17 = 100%)
+
+2 new x86_64 ops covering the last 2 LIR opcodes used by
+compiler/codegen/x86_64_linux.hexa:
+
+- MOVZX r32, r8        0F B6 /r       (3 B, zero-extend low byte → 32-bit)
+- SETE/NE/L/GE/LE/G r8 0F 9{4|5|C|D|E|F} /r  (3 B, set 1 byte on condition)
+- REX path for SPL..DIL / r8b..r15b verified (SETE R10B = 41 0F 94 c2)
+
+x86_64 encoder coverage 누적: **33 rules** (cycle 22 base 4 + cycle 24
+arith 6 + cycle 25 ctrlflow 11 + cycle 26 rex64 9 + cycle 27 div/misc 5 +
+cycle 28 setcc/movzx 8 — counting the 6 SETcc + MOVZX + r8 helper).
+
+**Composite test** (`(7 > 3) ? 1 : 0` predicate):
+
+```
+[25 B program]
+  b8 07 00 00 00      mov eax, #7
+  b9 03 00 00 00      mov ecx, #3
+  39 c8               cmp eax, ecx
+  0f 9f c0            setg al           ; al = 1 (7 > 3)
+  0f b6 f8            movzx edi, al     ; edi = 0x00000001
+  b8 3c 00 00 00      mov eax, #60      ; sys_exit
+  0f 05               syscall
+
+ubu-2: REMOTE_RC=1  ✅
+```
+
+**LIR ops coverage 갱신 — 17 / 17 = 100%**:
+
+| LIR op | uses | status |
+|--------|------|--------|
+| mov | 31 | ✅ (r32 imm/reg, r64 imm/reg) |
+| call | 7 | ✅ (CALL rel32) |
+| add | 3 | ✅ (r32/r64) |
+| sub | 2 | ✅ (r32/r64) |
+| ret | 2 | ✅ |
+| push | 2 | ✅ (r32) |
+| pop | 2 | ✅ (r32) |
+| jmp | 2 | ✅ (rel8/rel32) |
+| cmp | 1 | ✅ (r32) |
+| test | 1 | ✅ (r64) |
+| jz | 1 | ✅ (JE_REL8 alias) |
+| label | 1 | (pseudo-op) |
+| nop | 1 | ✅ |
+| cqo | 1 | ✅ |
+| idiv | 1 | ✅ |
+| movzx | 1 | ✅ |
+| set (setcc) | 1 | ✅ (6 variants — e/ne/l/ge/le/g) |
+
+**총 falsifier 13 + 100% LIR ops coverage 달성**:
+
+| Falsifier | Tier |
+|-----------|------|
+| F-P0-OBJEQ corpus 4/4 | 🛸 |
+| F-P1-RUNEQ | 🛸 |
+| F-P2-LINUX-EXIT · F-P2-MULTIOBJ-RUNEQ | 🛸 ×2 |
+| F-P3-ZERO-EXTERN-OBJ · F-P3-FULL-RUNEQ | 🛸 ×2 |
+| F-P3-DEFAULT-NATIVE · F-P3-HEXA-BACKEND-ENV | ✅ ×2 |
+| F-P2-X86-ARITH · CTRLFLOW · REX64 · DIV | 🎉 ×4 |
+| **F-P2-X86-SETCC** (new) | **🎉** |
+
+이로써 x86_64 인코더가 **compiler/codegen/x86_64_linux.hexa 의 LIR op
+스펙트럼을 가득 채운다** — 다음 단계는 LIR walker (`pack_lir_elf` /
+`pack_lir_x86_64`) 가 모듈 함수들을 실제 op 순회로 직렬화하는 일이고,
+인코딩 측에서 막히는 LIR op 는 더 이상 없다.
+
+**RFC 063 phasing 진척**: 28 cycles · 13 falsifier · P0+P1+P2+P3 all
+closed · x86_64 encoder 33 rules · **LIR ops 17/17 = 100%**.
+
+**cc --regen / binary promote**: 미수행 (compiler/emit/* + test/* only,
+deployed driver 거치지 않음).
