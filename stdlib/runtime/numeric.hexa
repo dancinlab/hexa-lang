@@ -21,3 +21,35 @@ pub fn rt_abs_float(v: float) -> float {
     if v < 0.0 { return 0.0 - v }
     return v
 }
+
+// Step 3 cycle 2 — floor/ceil. hexa's `as int` truncates toward 0; we
+// adjust to truncate toward -inf (floor) or +inf (ceil).
+pub fn rt_floor(v: float) -> int {
+    let i = v as int
+    if v >= 0.0 { return i }
+    // Negative: if non-integral, subtract 1
+    let f = i as float
+    if f == v { return i }
+    return i - 1
+}
+
+pub fn rt_ceil(v: float) -> int {
+    let i = v as int
+    if v <= 0.0 { return i }
+    let f = i as float
+    if f == v { return i }
+    return i + 1
+}
+
+// Step 3 cycle 2 — u_floor (unsigned integer floor div).
+pub fn rt_u_floor(a: int, b: int) -> int {
+    if b == 0 { return 0 }
+    let q = a / b
+    let r = a - q * b
+    // floor semantics: when signs differ and remainder non-zero, round down
+    if r != 0 {
+        let signs_differ = (a < 0) != (b < 0)
+        if signs_differ { return q - 1 }
+    }
+    return q
+}

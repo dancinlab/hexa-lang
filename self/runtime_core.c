@@ -5653,28 +5653,39 @@ HexaVal hexa_pow(HexaVal base, HexaVal exp) {
     return hexa_float(pow(__hx_to_double(base), __hx_to_double(exp)));
 }
 
+// Step 3 cycle 2 — hexa_floor/ceil/u_floor delegate to hexa-source.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_floor(HexaVal v) {
     return hexa_int((int64_t)floor(__hx_to_double(v)));
 }
-
-/* FIX-A (Anima serving unblock, 2026-04-19): unsigned integer floor division.
- * ML kernels use `u_floor(a, b)` as the Python `a // b` surrogate for
- * non-negative operands (e.g., `n_heads // 2`). Defined on non-negative
- * int64 — for negative dividend, still truncates toward -inf like floor. */
 HexaVal hexa_u_floor(HexaVal a, HexaVal b) {
     int64_t ai = HX_IS_INT(a) ? HX_INT(a) : (int64_t)__hx_to_double(a);
     int64_t bi = HX_IS_INT(b) ? HX_INT(b) : (int64_t)__hx_to_double(b);
     if (bi == 0) return hexa_int(0);
     int64_t q = ai / bi;
     int64_t r = ai % bi;
-    /* floor semantics: when signs differ and remainder non-zero, round down */
     if (r != 0 && ((ai < 0) != (bi < 0))) q -= 1;
     return hexa_int(q);
 }
-
 HexaVal hexa_ceil(HexaVal v) {
     return hexa_int((int64_t)ceil(__hx_to_double(v)));
 }
+#else
+extern HexaVal rt_floor(HexaVal v);
+extern HexaVal rt_ceil(HexaVal v);
+extern HexaVal rt_u_floor(HexaVal a, HexaVal b);
+HexaVal hexa_floor(HexaVal v) {
+    return rt_floor(hexa_float(__hx_to_double(v)));
+}
+HexaVal hexa_ceil(HexaVal v) {
+    return rt_ceil(hexa_float(__hx_to_double(v)));
+}
+HexaVal hexa_u_floor(HexaVal a, HexaVal b) {
+    int64_t ai = HX_IS_INT(a) ? HX_INT(a) : (int64_t)__hx_to_double(a);
+    int64_t bi = HX_IS_INT(b) ? HX_INT(b) : (int64_t)__hx_to_double(b);
+    return rt_u_floor(hexa_int(ai), hexa_int(bi));
+}
+#endif
 
 // RUNTIME.md step-3 cycle 1 POC — first HI-tier hexa-source delegation
 // from runtime_core.c. Source of truth: stdlib/runtime/numeric.hexa

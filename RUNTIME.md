@@ -936,3 +936,13 @@ For each Tier-A sub-phase:
 - Note: hexa_abs lives in runtime_core.c file but its LOGIC is HI-tier
   (HexaVal value-level macros only, no arena/GC touch). Step 3 vs 4
   boundary per RUNTIME.md is about LOGIC tier, not source file
+
+### 2026-05-21 — step 3 cycle 2: hexa_floor + hexa_ceil + hexa_u_floor
+
+- ✅ 3 more HI-tier fns ported. `stdlib/runtime/numeric.hexa` extended
+  with `rt_floor` / `rt_ceil` / `rt_u_floor`. Removes libc `floor()` /
+  `ceil()` dependency in hexa-source path (replaced with `as int`
+  truncation + sign-aware adjustment for floor/ceil semantics)
+- aprime_cc smoke exit(42) PASS · 5 externs preserved
+- step-3 cumulative: **4 HI-tier fns ported** (hexa_abs + hexa_floor +
+  hexa_ceil + hexa_u_floor)
