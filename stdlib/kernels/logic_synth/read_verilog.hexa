@@ -3728,8 +3728,15 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
         let q_base = _ps_peek(st)
         st = _ps_take(st)
         let mut q = q_base
-        // optional `[ <const> ]` on LHS
+        // optional `[ <expr> ]` on LHS — record whether the bracket
+        // was present, whether the index const-folded, and (when it
+        // didn't) the raw idx tokens so the dyn-LHS demux emit below
+        // can synthesize the per-element ($eq + $mux + $dff) chain.
+        let mut had_brack = 0
+        let mut idx_folded = 0
+        let mut idx_toks_saved: [str] = []
         if _ps_peek(st) == "[" {
+            had_brack = 1
             st = _ps_take(st)
             let mut idxtoks: [str] = []
             let mut depth = 1
@@ -3754,6 +3761,9 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
             let ev = _rv_eval_expr(idxtoks, 0, tab, 1)
             if len(ev.err) == 0 {
                 q = q_base + "[" + str(ev.value) + "]"
+                idx_folded = 1
+            } else {
+                idx_toks_saved = idxtoks
             }
         }
         let opk = _ps_peek(st)
@@ -3777,6 +3787,70 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
             return RvStep { st: _ps_fail(st, er.err), m: m }
         }
         m = er.m
+        // RFC 073 Phase 3d — dynamic-LHS clocked-write demux (bare path).
+        //   Shape: `always @(posedge clk) [begin] name [ K ] <= rhs ; [end]`
+        //   where K is a runtime wire (does NOT const-fold) and `name`
+        //   is an array decl with bound P = _rv_array_bound(m, name).
+        //   Lower to N parallel ($eq(A=K, B=i, Y=eq_y_i) + $mux(A=name[i],
+        //   B=rhs, S=eq_y_i, Y=mux_y_i) + $dff(CLK=clk, D=mux_y_i,
+        //   Q=name[i])) per i in 0..P-1 — the one-hot demux complement
+        //   of the array-READ $eq/$mux/$dff chain (read_verilog.hexa:2933,
+        //   PR #174). Without this lowering the prior code silently
+        //   dropped the index and emitted a single `$dff(Q=name)` (no
+        //   slot), losing every per-cycle write to the declared array
+        //   when the LHS appears at the always-body top-level (i.e.
+        //   outside the multi-LHS handlers at L2933 / L3001 / L3131).
+        //   @cite IEEE 1364-2005 §9.5 sequential block + §10.4.2
+        //   procedural assign + Yosys passes/proc/proc_mux.cc demux.
+        //   The combinational variant (is_clocked==0) emits the same
+        //   ($eq + $mux) chain but `connect`s name[i] direct (no $dff).
+        //   `_rv_array_bound==0` (unknown bound) falls through to the
+        //   legacy single-cell emit so the diagnostic blame stays on
+        //   the array decl rather than the write site.
+        let dyn_bound = 0
+        let mut dyn_bound_use = dyn_bound
+        if had_brack == 1 && idx_folded == 0 {
+            dyn_bound_use = _rv_array_bound(m, q_base)
+        }
+        if had_brack == 1 && idx_folded == 0 && dyn_bound_use > 0 {
+            let ier = _rv_elab_expr(idx_toks_saved, 0, m, 1, tab)
+            if len(ier.err) == 0 {
+                m = ier.m
+                let mut dk = 0
+                while dk < dyn_bound_use {
+                    let elem = q_base + "[" + str(dk) + "]"
+                    let eq_y = _rv_fresh_wire(m)
+                    m = rtlil_module_add_wire(m, rtlil_wire(eq_y, 1, 0, 0))
+                    let mut eqc = rtlil_cell(eq_y + "$eq", "$eq", 0)
+                    eqc = rtlil_cell_connect(eqc, "A", ier.wire)
+                    eqc = rtlil_cell_connect(eqc, "B", str(dk))
+                    eqc = rtlil_cell_connect(eqc, "Y", eq_y)
+                    m = rtlil_module_add_cell(m, eqc)
+                    let mux_y = _rv_fresh_wire(m)
+                    m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+                    let mut muxc = rtlil_cell(mux_y + "$mux", "$mux", 0)
+                    muxc = rtlil_cell_connect(muxc, "A", elem)
+                    muxc = rtlil_cell_connect(muxc, "B", er.wire)
+                    muxc = rtlil_cell_connect(muxc, "S", eq_y)
+                    muxc = rtlil_cell_connect(muxc, "Y", mux_y)
+                    m = rtlil_module_add_cell(m, muxc)
+                    if is_clocked == 1 {
+                        let dn = "$rvff$" + str(len(m.cells))
+                        let mut dc = rtlil_cell(dn, "$dff", 0)
+                        dc = rtlil_cell_connect(dc, "CLK", clk_wire)
+                        dc = rtlil_cell_connect(dc, "D", mux_y)
+                        dc = rtlil_cell_connect(dc, "Q", elem)
+                        m = rtlil_module_add_cell(m, dc)
+                        let _eg = clk_edge
+                    } else {
+                        m = rtlil_module_connect(m, elem, mux_y)
+                    }
+                    dk = dk + 1
+                }
+                if has_begin == 0 { keep_going = 0 }
+                continue
+            }
+        }
         if is_clocked == 1 {
             let cn = "$rvff$" + str(len(m.cells))
             let mut c = rtlil_cell(cn, "$dff", 0)
@@ -5212,6 +5286,96 @@ fn main() {
                     + " (expected 3 = 1 per cond row)")
                 fails = fails + 1
             }
+        }
+    }
+
+    // T67 — RFC 073 Phase 3d (F-RFC-RV-DYN-LHS-CLOCKED, bare path).
+    //   Bare dyn-LHS clocked write: `always @(posedge clk) mem [ k ] <=
+    //   a ;` with `reg mem [ 0 : 2 ]` (P=3) and `k` a runtime wire.
+    //   Expected lowering: per-element ($eq + $mux + $dff) chain × 3 →
+    //   3 $eq + 3 $mux + 3 $dff (no $and because the demux isn't gated
+    //   by an outer `if`; the bare path is the demux complement of the
+    //   single-statement #4d path at read_verilog.hexa:2933 and of the
+    //   multi-LHS #4h-b path at L3001 — both of which sit inside an
+    //   outer cond guard). Pre-fix: the eval-fail branch silently set
+    //   `q = q_base` and emitted one `$dff(Q=mem)` losing all per-cycle
+    //   writes.  @cite IEEE 1364-2005 §9.5 + §10.4.2 + Yosys proc_mux.
+    total = total + 1
+    let _v67 = "module dlc ( input clk , input k , input a , output reg mem [ 0 : 2 ] ) ; always @ ( posedge clk ) mem [ k ] <= a ; endmodule"
+    let _r67 = read_verilog(_v67)
+    if _r67.ok != 1 {
+        println("FAIL T67 dyn_lhs_clocked: " + _r67.message); fails = fails + 1
+    } else {
+        let _m67 = _r67.design.modules[0]
+        let _t67_eq = rtlil_count_cells_of_type(_m67, "$eq")
+        let _t67_mux = rtlil_count_cells_of_type(_m67, "$mux")
+        let _t67_dff = rtlil_count_cells_of_type(_m67, "$dff")
+        if _t67_eq != 3 {
+            println("FAIL T67a eq_count got " + str(_t67_eq) + " (expected 3)")
+            fails = fails + 1
+        }
+        if _t67_mux != 3 {
+            println("FAIL T67b mux_count got " + str(_t67_mux) + " (expected 3)")
+            fails = fails + 1
+        }
+        if _t67_dff != 3 {
+            println("FAIL T67c dff_count got " + str(_t67_dff) + " (expected 3)")
+            fails = fails + 1
+        }
+        // Each $dff must drive a distinct mem[i] slot.
+        let mut _t67_q0 = 0
+        let mut _t67_q1 = 0
+        let mut _t67_q2 = 0
+        let mut _t67_ci = 0
+        while _t67_ci < len(_m67.cells) {
+            let _t67_c = _m67.cells[_t67_ci]
+            if _t67_c.cell_type == "$dff" {
+                let mut _t67_pi = 0
+                while _t67_pi < len(_t67_c.conns) {
+                    let _t67_p = _t67_c.conns[_t67_pi]
+                    if _t67_p.pin == "Q" {
+                        if _t67_p.net == "mem[0]" { _t67_q0 = 1 }
+                        if _t67_p.net == "mem[1]" { _t67_q1 = 1 }
+                        if _t67_p.net == "mem[2]" { _t67_q2 = 1 }
+                    }
+                    _t67_pi = _t67_pi + 1
+                }
+            }
+            _t67_ci = _t67_ci + 1
+        }
+        if _t67_q0 != 1 { println("FAIL T67d missing $dff Q=mem[0]"); fails = fails + 1 }
+        if _t67_q1 != 1 { println("FAIL T67e missing $dff Q=mem[1]"); fails = fails + 1 }
+        if _t67_q2 != 1 { println("FAIL T67f missing $dff Q=mem[2]"); fails = fails + 1 }
+    }
+
+    // T68 — RFC 073 Phase 3d (F-RFC-RV-DYN-LHS-CLOCKED, begin/end).
+    //   Same shape as T67 but wrapped in `begin … end` to exercise the
+    //   has_begin==1 path through the bare dyn-LHS demux emit. Also
+    //   bumps the array bound to P=4 so the chain emits 4 of each cell.
+    //   Identity: $eq=4, $mux=4, $dff=4. Without the begin/end loop
+    //   continuation the bare path would short-circuit after one
+    //   statement.
+    total = total + 1
+    let _v68 = "module dlcb ( input clk , input k , input a , output reg mem [ 0 : 3 ] ) ; always @ ( posedge clk ) begin mem [ k ] <= a ; end endmodule"
+    let _r68 = read_verilog(_v68)
+    if _r68.ok != 1 {
+        println("FAIL T68 dyn_lhs_clocked_begin: " + _r68.message); fails = fails + 1
+    } else {
+        let _m68 = _r68.design.modules[0]
+        if rtlil_count_cells_of_type(_m68, "$eq") != 4 {
+            println("FAIL T68a eq_count got "
+                + str(rtlil_count_cells_of_type(_m68, "$eq")) + " (expected 4)")
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m68, "$mux") != 4 {
+            println("FAIL T68b mux_count got "
+                + str(rtlil_count_cells_of_type(_m68, "$mux")) + " (expected 4)")
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m68, "$dff") != 4 {
+            println("FAIL T68c dff_count got "
+                + str(rtlil_count_cells_of_type(_m68, "$dff")) + " (expected 4)")
+            fails = fails + 1
         }
     }
 
