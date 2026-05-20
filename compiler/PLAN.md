@@ -7031,3 +7031,80 @@ The fix is now SCOPED with definite next steps, not speculatively
 This finding upgrades from cycle 33's "discovered hex literal gap"
 (closed) to cycle 38's "S3 PROOF falsified" (open, scoped, measured).
 Both are wins for honesty even when the second is uncomfortable.
+
+
+### 2026-05-20 — follow-up cycle 39: gen1 vs gen2 byte-diff bisect — TWO structural bugs
+
+cycle 38 의 gen1 ≠ gen2 (medium scale) 를 byte-diff bisect.
+
+**Bug A — UTF-8 multi-byte string truncation in hexac**:
+
+```
+gen1.s line 1 (aprime_cc emit): "; hexa-lang emit pass — target=..."
+  bytes: 3b 20 ... 70 61 73 73 20 e2 80 94 20 74 61 72 67 65 74
+                                ^^^^^^^^^^^^ proper U+2014 em dash
+
+gen2.s line 1 (hexac emit):     "; hexa-lang emit pass � target=..."
+  bytes: 3b 20 ... 70 61 73 73 20 e2 20 74 61 72 67 65 74
+                                ^^^^^ truncated to 2 bytes!
+```
+
+hexac mangles multi-byte UTF-8 sequences in string literals: drops
+all but the first continuation byte then writes a space (0x20). This
+suggests the runtime's string-byte-iterator reads one byte per
+character (assuming ASCII) instead of decoding UTF-8 properly.
+
+The source file uses em dashes / arrows / box-drawing chars in
+comments (e.g., `≡`, `→`, `╱╲`). All these get corrupted when hexac
+emits the string.
+
+**Bug B — per-function instruction bloat**:
+
+```
+Same fn `_ew_u16` in both outputs:
+  gen1 (aprime): ~50 instructions
+  gen2 (hexac):  ~100 instructions
+
+Sample at line 1000 of each file shows:
+  gen1 line 1000: in fn `_ex86_reg64_bb40` (already 40+ blocks deep)
+  gen2 line 1000: in fn `_ew_u16_bb2` (still in 2nd helper fn)
+```
+
+The 2× ratio at falsifier scale (824 KB vs 1.7 MB) is per-fn instr
+bloat. At full closure (10.6 MB) this ratio explodes non-linearly
+(14× memory). Hypothesis: hexac's `_emit_arm64_stmt` path emits
+extra runtime housekeeping (scope_push/pop / fn_arena_return
+wrappers around expressions) that hexa_v2→C→clang -O1 collapses or
+inlines.
+
+**Honest scope (g3)**:
+
+- ✅ Two structural bugs LOCATED with byte-level evidence
+- ✅ Both reproducible at falsifier scale (cheap measurement bed)
+- ❌ Real fix needs:
+  - Bug A: hexa runtime string byte-iterator UTF-8 handling
+  - Bug B: aprime_cc codegen emit-asm path optimization to match
+    hexa_v2→C→clang -O1 lowering
+- ⏸ Both are multi-cycle deep work (3-6 cycle equivalent total)
+
+**S3 fixpoint full closure path (4 stage estimate)**:
+
+1. Bug A fix (UTF-8 string emit) → falsifier byte-diff probably
+   shrinks; not enough alone
+2. Bug B fix (per-fn instr bloat) → gen1 ≡ gen2 at falsifier scale
+3. Memory blow-up follow-up (separate from bug B?) → hexac compiles
+   full closure
+4. Final gen1.s ≡ gen2.s byte-eq measurement at full closure
+
+**RFC 063 phasing**: 39 cycles · 18 falsifier + 8 measure · SIGBUS
+CLOSED · S3 PROOF falsified + decomposed into 2 sub-bugs · path
+forward concrete.
+
+**Methodology + accountability**:
+
+Main repo's "S3 fixpoint PROVEN 2026-05-20" claim landed without
+verification. Campaign cycle 22-39 (1-day chain, 8 of which are
+pure measurement cycles) provides the first end-to-end verification
+and decomposes the gap into 2 surgical bugs.
+
+cc --regen / binary promote: 미수행. cycle 39 = pure measurement.
