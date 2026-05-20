@@ -1,5 +1,28 @@
+=== run 1 (numeric+timing, full log) ===
 Numeric gate: hexa=PASS (max|d|=0 mism=0/65536) cublas=PASS (max|d|=0 mism=0/65536) tol=0.000703125 max_ref=0.0703125
 Shape M=256 N=256 K=256, reps=1000, warmup=10
-hexa-emit WMMA   mean=0.0082 ms  TFLOPS=4.0951
-cuBLAS GemmEx    mean=0.0041 ms  TFLOPS=8.2685
-ratio hexa/cublas = 0.4953  (cublas/hexa = 2.0191)
+hexa-emit WMMA   mean=0.0082 ms  TFLOPS=4.0962
+cuBLAS GemmEx    mean=0.0041 ms  TFLOPS=8.1882
+ratio hexa/cublas = 0.5003  (cublas/hexa = 1.9990)
+
+=== runs 2-6 (timing only, variance check) ===
+-- run 2 --
+hexa-emit WMMA   mean=0.0082 ms  TFLOPS=4.0964
+cuBLAS GemmEx    mean=0.0041 ms  TFLOPS=8.1921
+ratio hexa/cublas = 0.5000  (cublas/hexa = 1.9998)
+-- run 3 --
+hexa-emit WMMA   mean=0.0082 ms  TFLOPS=4.0957
+cuBLAS GemmEx    mean=0.0041 ms  TFLOPS=8.1857
+ratio hexa/cublas = 0.5003  (cublas/hexa = 1.9986)
+-- run 4 --
+hexa-emit WMMA   mean=0.0082 ms  TFLOPS=4.0957
+cuBLAS GemmEx    mean=0.0041 ms  TFLOPS=8.1942
+ratio hexa/cublas = 0.4998  (cublas/hexa = 2.0007)
+-- run 5 --
+hexa-emit WMMA   mean=0.0082 ms  TFLOPS=4.0957
+cuBLAS GemmEx    mean=0.0041 ms  TFLOPS=8.1919
+ratio hexa/cublas = 0.5000  (cublas/hexa = 2.0001)
+-- run 6 --
+hexa-emit WMMA   mean=0.0082 ms  TFLOPS=4.0965
+cuBLAS GemmEx    mean=0.0041 ms  TFLOPS=8.1918
+ratio hexa/cublas = 0.5001  (cublas/hexa = 1.9997)

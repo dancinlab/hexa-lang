@@ -14,13 +14,13 @@
     "max_abs_ref": 0.0703125
   },
   "timing": {
-    "hexa_total_ms": 8.193440,
-    "hexa_mean_ms": 0.008193,
-    "hexa_tflops": 4.095280,
-    "cublas_total_ms": 4.097184,
-    "cublas_mean_ms": 0.004097,
-    "cublas_tflops": 8.189632,
-    "ratio_hexa_over_cublas": 0.500057,
-    "ratio_cublas_over_hexa": 1.999774
+    "hexa_total_ms": 8.198176,
+    "hexa_mean_ms": 0.008198,
+    "hexa_tflops": 4.092914,
+    "cublas_total_ms": 4.068352,
+    "cublas_mean_ms": 0.004068,
+    "cublas_tflops": 8.247671,
+    "ratio_hexa_over_cublas": 0.496251,
+    "ratio_cublas_over_hexa": 2.015110
   }
 }
