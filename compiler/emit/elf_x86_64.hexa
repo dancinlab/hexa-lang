@@ -229,6 +229,48 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
             return [0x39, 0xC0 | (rs << 3) | rd]
         }
     }
+    // MOV r32, r32 — 89 /r ModR/M (dst as r/m, src as reg).
+    //   e.g. MOV EDI, EAX → 89 c7  (src=eax=0, dst=edi=7 → 0xC0|(0<<3)|7 = 0xC7)
+    if op == "MOV" && len(ops) == 2 {
+        let rd = _ex86_reg32(ops[0])
+        let rs = _ex86_reg32(ops[1])
+        if rd >= 0 && rs >= 0 {
+            return [0x89, 0xC0 | (rs << 3) | rd]
+        }
+    }
+    // PUSH r32 — 50+r (1 byte, x86_64 implicit pushes 64-bit value).
+    if op == "PUSH" && len(ops) == 1 {
+        let rd = _ex86_reg32(ops[0])
+        if rd >= 0 { return [0x50 | rd] }
+    }
+    // POP r32 — 58+r.
+    if op == "POP" && len(ops) == 1 {
+        let rd = _ex86_reg32(ops[0])
+        if rd >= 0 { return [0x58 | rd] }
+    }
+    // JMP rel8 — EB cb (2 bytes). Caller computes imm8 PC-rel.
+    // imm8 = target - (jmp_end_addr).  Stored at offset 1.
+    // Cycle 25 emits placeholder 0; linker / caller patches.
+    if op == "JMP_REL8" && len(ops) == 1 {
+        return [0xEB, 0x00]
+    }
+    // JMP rel32 — E9 cd (5 bytes).
+    if op == "JMP_REL32" && len(ops) == 1 {
+        return [0xE9, 0x00, 0x00, 0x00, 0x00]
+    }
+    // Conditional jumps rel8 — 7c+cc (2 bytes).
+    //   JE rel8  74 cb
+    //   JNE      75
+    //   JL       7C
+    //   JGE      7D
+    //   JLE      7E
+    //   JG       7F
+    if op == "JE_REL8"  && len(ops) == 1 { return [0x74, 0x00] }
+    if op == "JNE_REL8" && len(ops) == 1 { return [0x75, 0x00] }
+    if op == "JL_REL8"  && len(ops) == 1 { return [0x7C, 0x00] }
+    if op == "JGE_REL8" && len(ops) == 1 { return [0x7D, 0x00] }
+    if op == "JLE_REL8" && len(ops) == 1 { return [0x7E, 0x00] }
+    if op == "JG_REL8"  && len(ops) == 1 { return [0x7F, 0x00] }
     return []
 }
 

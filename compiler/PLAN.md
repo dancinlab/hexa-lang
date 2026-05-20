@@ -5892,3 +5892,66 @@ on `s7-p0-cycle1`.
 이미 `c0bbeedb` 에서 land 됐고 self-host fixpoint 검증 완료 (hexa_cc.c
 byte-identical). 본 cycle 의 compiler/main.hexa env-var 추가는 자체
 self-host 와 무관 (driver flag) — main 머지 시 자동 적용.
+
+
+### 2026-05-20 — follow-up cycle 25: x86_64 control-flow encoding + countdown loop (F-P2-X86-CTRLFLOW PASS)
+
+11 new x86_64 encoding rules (cycle 25 add):
+- MOV r32, r32       89 /r ModR/M       (2 B)
+- PUSH r32           50+r               (1 B)
+- POP r32            58+r               (1 B)
+- JMP rel8/rel32     EB cb / E9 cd      (2/5 B placeholder)
+- Jcc rel8           74-7F + imm8       (2 B placeholder, 6 conditions:
+                                          JE/JNE/JL/JGE/JLE/JG)
+
+**Composite test** (countdown loop):
+
+```
+B8 0A 00 00 00    mov eax, #10
+81 E8 01 00 00 00 sub eax, #1         (loop body)
+81 F8 00 00 00 00 cmp eax, #0
+75 F2             jne loop (imm8 = -14)
+89 C7             mov edi, eax
+B8 3C 00 00 00    mov eax, #60
+0F 05             syscall
+                  (28 B total, 9 loop iterations)
+```
+
+ubu-2 launch → `REMOTE_RC=0` (eax counted down to 0, exit syscall with
+edi=eax=0).
+
+**측정 — 10 falsifier 누적**:
+
+| Falsifier | Tier | 결과 |
+|-----------|------|------|
+| F-P0-OBJEQ corpus 4/4 | 🛸 | byte-eq vs clang |
+| F-P1-RUNEQ | 🛸 | trivial → exit 42 macOS |
+| F-P2-LINUX-EXIT | 🛸 | SVC exec → exit 42 ubu-2 |
+| F-P2-MULTIOBJ-RUNEQ | 🛸 | CALL reloc → exit 42 |
+| F-P3-ZERO-EXTERN-OBJ | 🛸 | stripped PATH PASS |
+| F-P3-FULL-RUNEQ | 🛸 | end-to-end no fork |
+| F-P3-DEFAULT-NATIVE | ✅ | backend=native default |
+| F-P2-X86-ARITH | 🎉 | 6 arith ops + add-exit |
+| F-P3-HEXA-BACKEND-ENV | ✅ | env var honored |
+| **F-P2-X86-CTRLFLOW** (new) | **🎉** | **11 ctrl ops + countdown loop** |
+
+**RFC 063 phasing 누적 (post-cycle 25)**:
+
+P0 ✅ + P1 ✅ + P2 (4 base cycles + arith + ctrlflow follow-ups) ✅
++ P3 (1 base + 3 follow-up falsifiers) ✅. 총 25 cycles on
+`s7-p0-cycle1`. x86_64 encoder 누적 17 rules (시작 4 → arith +6 →
+ctrlflow +11).
+
+**Follow-up cycle closure status 업데이트**:
+
+| Follow-up | 상태 | 비고 |
+|-----------|------|------|
+| compiler/main.hexa default flip + L1→L3 | ✅ cycle 23 | done |
+| HEXA_BACKEND env var support | ✅ cycle 24 | done |
+| x86_64 ADD/SUB/CMP encoding (6 rules) | ✅ cycle 24 | done |
+| ✨ x86_64 control-flow encoding (11 rules) | ✅ cycle 25 (this) | done |
+| 추가 LIR ops ~185 (estimate down from 200) | follow-up | x86_64 encoder 17/250 rules |
+| ... (remaining multi-week follow-ups same as before) | | |
+
+**cc --regen / binary promote**: 미수행 (cycle 25 는 compiler/emit/* +
+test/* only — compiler/main.hexa 영향 없음).
