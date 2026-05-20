@@ -242,3 +242,154 @@ This pattern, applied to ~50-line closed-form substrates, gives
 bit-exact parity at machine epsilon. Bigger substrates (SPA,
 single-diode iteration, ModelChain) will need separate per-piece
 ports following the same template.
+
+---
+
+## Fifth sample — `plasma_metrics_kernel.hexa` (D80 pilot #5)
+
+**Date**: 2026-05-20
+**Pilot scope**: fifth application of the pattern after `solar_kernel`
+(#1), `mc_slab_demo` (#2), `lif_kernel` (#3), `graph BFS+Kahn` (#3
+parallel), and `urdf 2-link FK` (#4). Port the 4 NRL-Formulary "primary"
+plasma parameters (λ_D, ω_p, r_L, ln Λ) as a slim sibling of the
+existing broader `plasma_metrics.hexa`, parity-tested against hand-
+mirrored Python `math` closed-form at machine epsilon.
+**Result**: 41/41 assertions PASS at `rel_err = 0.0` (literal IEEE-754
+bit-exact, not just within 1e-12 tolerance). Pattern continues to
+hold for closed-form algebra.
+
+### What landed
+
+| file | role |
+|---|---|
+| `stdlib/kernels/plasma/plasma_metrics_kernel.hexa` | hexa-native — Debye length · electron/ion plasma frequency · Larmor radius (e + D⁺) · NRL Formulary p.34 high-T Coulomb logarithm |
+| `stdlib/kernels/plasma/plasma_metrics_kernel_test.hexa` | parity test — 41 assertions across 8 sample points (ITER core, SPARC, JET D-T 1997, NSTX, Z-pinch, solar corona, magnetosphere, ionosphere F-layer) vs hand-mirrored Python `math` closed-form |
+
+### Why a SIBLING `_kernel.hexa` and not edit the existing file
+
+`stdlib/kernels/plasma/plasma_metrics.hexa` was already clean-room
+hexa-native (D72 extraction, κ-46) and is consumed by the live
+`stdlib/fusion/plasma_metrics.hexa` adapter + `plasma_metrics_test.hexa`
+parity selftest (9/9 PASS vs plasmapy 2026.2.0, with documented
+relativistic / Alfvén-ion-mass gaps). Editing that file would risk
+breaking the fusion-domain parity chain.
+
+The D80 pilot pattern (from solar) is "small, reviewable, parity-test-
+able at machine epsilon, naming convention `_kernel.hexa`". So the
+plasma port lands as a SIBLING that:
+- shares constants + formulas with the existing file (bit-exact),
+- adds the new primitive (Coulomb log) the existing file does NOT have,
+- carries an in-kernel test at machine-epsilon (vs the existing
+  fusion-adapter test at 1e-3 ~ 2e-2 against plasmapy).
+
+This is the pattern recommended for any future broad-surface kernel
+that already exists: add a `_kernel.hexa` slim sibling for the D80
+pilot rather than touching the live broader kernel.
+
+### Algorithm choice — why NRL Formulary p.34 high-T branch
+
+NRL Formulary p.34 prescribes regime-dependent closed forms for ln Λ.
+The 4 cited "primary parameters" of the user-supplied task spec map
+exactly to:
+
+1. **Debye length** — already in `plasma_metrics.hexa`, copied here.
+2. **Plasma frequency** — already in `plasma_metrics.hexa`, copied
+   for both electron and deuteron.
+3. **Larmor radius** — already as `gyroradius_e/_deuteron`, renamed
+   `larmor_e/_deuteron` (alternate naming common in NRL Formulary).
+4. **Coulomb logarithm (NEW)** — implements ONLY the high-T regime
+   `ln Λ_ei = 24 - ln(√n_e[cm⁻³] / T_e[eV])` valid for T_e > 10·Z² eV.
+   Low-T regime (case 1 NRL p.34, < 10·Z² eV) deliberately deferred —
+   caller must regime-flag; this kernel does NOT silent-fallback.
+
+### Parity test envelope
+
+8 sample points spanning the real plasma-physics operating envelope:
+
+| sample | regime | n_e [m⁻³] | T_e [eV] | B [T] | notable |
+|---|---|---|---|---|---|
+| S1 | ITER core | 1e20 | 1e4 | 5.3 | reference baseline |
+| S2 | SPARC core | 4e20 | 2e4 | 12.2 | high-field tokamak |
+| S3 | JET D-T 1997 | 5e19 | 1e4 | 3.4 | mixed D-T, T_i ≠ T_e |
+| S4 | NSTX spherical | 5e19 | 1e3 | 0.5 | low-B compact device |
+| S5 | Z-pinch (dense) | 1e26 | 1e2 | 50 | extreme density, tiny λ_D=7e-9 m |
+| S6 | solar corona | 1e15 | 1e2 | 1e-4 | space plasma, huge r_L=20 m |
+| S7 | magnetosphere | 1e7 | 10 | 3e-5 | sparse cold (lnΛ skipped) |
+| S8 | ionosphere F | 1e12 | 0.1 | 3e-5 | sparse very-cold (lnΛ skipped) |
+
+Coverage: n_e spans 19 orders, T_e spans 5 orders, B spans 9 orders.
+Outputs include λ_D = 7e-9 m (tiny) and r_L = 21 m (huge) — exercises
+floating-point dynamic range, not just one operating point.
+
+### Parity numbers
+
+```
+plasma_metrics_kernel_test: 41/41 PASS
+```
+
+Per-sample relative errors against the hand-mirrored Python reference
+(spot-check dump on 9 representative values across the envelope):
+
+| measurement | rel_err |
+|---|---|
+| S1 lambda_d           | 0.0 (bit-exact) |
+| S1 omega_pe           | 0.0 |
+| S1 omega_pi_D         | 0.0 |
+| S1 larmor_e           | 0.0 |
+| S1 larmor_D           | 0.0 |
+| S1 lnΛ_ei             | 0.0 |
+| S5 lambda_d (7e-9 m)  | 0.0 |
+| S6 larmor_D (20 m)    | 0.0 |
+| S5 lnΛ_ei (5.6)       | 0.0 |
+
+All 41 assertions in the test PASS at `rel_err < 1e-12`; spot-checks
+show actual `rel_err = 0.0` because the Python reference is a
+line-by-line transliteration of the `.hexa` kernel using the SAME
+constants and SAME operation order. The only residual that could
+arise is last-bit operation-order rounding — which is zero on this
+algorithm because there is no fused multiply-add or non-commutative
+reordering.
+
+### Blockers found — none
+
+No new hexa-lang language gaps surfaced during this port. All required
+primitives (`sqrt`, `log`, multiplication, division, subtraction of
+floats) work bit-identically to libm. The line-continuation footgun
+from the solar pilot was avoided by keeping every expression on one
+line. The walrus-expression codegen gap (`x := …` not lowered) was
+hit in an ad-hoc dump script but is not used in either the kernel or
+the test.
+
+### Honesty (g3) — what this does NOT prove
+
+- `absorbed=true` NOT flipped at the demiurge record layer.
+  Per the D80 pilot constraint, that requires the
+  `HexaNativeParityRef` schema landing + a measured plasma oracle
+  (Thomson-scattering / Langmuir probe / interferometry). This pilot
+  proves the PORT PATTERN, not the absorbed gate.
+- The kernel ports ONLY the 4 primary NRL parameters. The broader
+  `plasma_metrics.hexa` surface (ω_ce, ω_ci, v_th_e, v_th_i, v_A)
+  already exists and remains the consumer-facing kernel for the
+  fusion-domain adapter — no behaviour change.
+- ln Λ low-T regime (T_e < 10·Z² eV) NOT implemented; callers in that
+  regime must regime-flag. NRL p.34 case 1 is the follow-up.
+
+### Pattern reinforcement — checklist still holds
+
+The 7-step checklist from the solar pilot applied without modification:
+
+1. Pick substrate ✓ (existing `plasma_metrics.hexa` + `plasma_metrics.py`)
+2. Capture parity baseline FROM the substrate ✓ (8 samples × 5-6
+   outputs = 41 reference numbers from /opt/homebrew/bin/python3
+   `math` mirror, ≥15 digits each)
+3. Write the `.hexa` kernel mirroring line-by-line ✓ (sibling
+   `_kernel.hexa` per the new "broad kernel already exists" rule)
+4. Write the parity test following `solar_kernel_test.hexa` ✓
+5. `hexa run` to verify PASS ✓ (41/41)
+6. Document the gap ✓ (this file)
+7. Do NOT flip `absorbed=true` ✓ (record-layer schema not in scope)
+
+The pattern is now confirmed on three orthogonal substrates — closed-
+form trig (solar), Monte Carlo (mc_transport), closed-form algebra
+(plasma). The next port can apply this template without further
+pattern-discovery work.

@@ -1,0 +1,188 @@
+// stdlib/kernels/plasma/plasma_metrics_kernel_test.hexa — D80 g_hexa_only
+// pilot Stage 3 parity check (ABSORPTION.md §"hexa 포팅 단계").
+//
+// Cross-checks the clean-room hexa-native primary-parameter
+// derivations in `plasma_metrics_kernel.hexa` against a hand-mirrored
+// Python `math`-only reference captured on 2026-05-20 from
+// /opt/homebrew/bin/python3 on darwin-arm64. The Python reference
+// uses the SAME CODATA-2022 constants and the SAME closed-form
+// expressions as the .hexa kernel (it is a line-by-line transliteration
+// in the opposite direction) — so parity should hit machine epsilon
+// (≤1e-12 relative) for IEEE 754 double-precision arithmetic.
+//
+// Why hand-mirrored Python and NOT plasmapy as the parity oracle:
+//   - plasmapy applies (a) relativistic γ corrections to gyroradius at
+//     T_e ≳ 5 keV, (b) a different effective ion-mass convention to
+//     Alfvén speed than to ω_ci, (c) more-rigorous Coulomb-log forms
+//     (Spitzer, Gericke-Murillo-Schlanges) rather than the NRL
+//     closed-form. All of those are HONEST physics improvements but
+//     they make plasmapy != textbook-closed-form at the 1e-3 …  1e-2
+//     level. The D80 spec is ±0.1% absorbed parity vs the SAME
+//     algorithm — not vs a different (better) algorithm. The
+//     ①b adapter is where plasmapy parity lives
+//     (`stdlib/fusion/plasma_metrics_test.hexa`, ~1e-3 .. 2e-2 rel
+//     by design).
+//
+// 8 sample points spanning the operating envelope:
+//   • S1 ITER core              (n_e=1e20 m⁻³, T_e=10 keV, B=5.3 T)
+//   • S2 SPARC core             (n_e=4e20,    T_e=20 keV, B=12.2 T)
+//   • S3 JET D-T 1997           (n_e=5e19,    T_e=10 keV, B=3.4 T)
+//   • S4 NSTX spherical tokamak (n_e=5e19,    T_e=1 keV,  B=0.5 T)
+//   • S5 Z-pinch (dense)        (n_e=1e26,    T_e=100 eV, B=50 T)
+//   • S6 solar corona           (n_e=1e15,    T_e=100 eV, B=1e-4 T)
+//   • S7 magnetosphere          (n_e=1e7,     T_e=10 eV,  B=3e-5 T)
+//   • S8 ionosphere F-layer     (n_e=1e12,    T_e=0.1 eV, B=3e-5 T)
+//
+// Coverage:
+//   • n_e spans 19 orders of magnitude   (1e7 → 1e26 m⁻³)
+//   • T_e spans 5 orders of magnitude    (0.1 eV → 20 keV)
+//   • B   spans 9 orders of magnitude    (3e-5 T → 50 T)
+//   • outputs include both extreme-tiny (λ_D = 7e-9 m) and
+//     extreme-huge (r_L = 21 m) regimes — so the test exercises
+//     dynamic range, not just one operating point.
+//
+// Coulomb log is checked only for S1–S6 (T_e > 10 eV regime where the
+// NRL high-T closed-form is the valid branch); S7/S8 are SKIPPED for
+// ln Λ — the low-T regime needs the NRL case-1 expression, NOT
+// implemented in this pilot (documented in kernel header).
+
+use "stdlib/kernels/plasma/plasma_metrics_kernel"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed = ""
+
+fn check(name: str, cond: bool) {
+    total_count = total_count + 1
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        if failed == "" { failed = name }
+    }
+}
+
+fn fabs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn rel_err(got: float, want: float) -> float {
+    if fabs(want) < 1e-300 { return fabs(got - want) }
+    return fabs(got - want) / fabs(want)
+}
+
+fn check_close(name: str, got: float, want: float, tol: float) {
+    let e = rel_err(got, want)
+    check(name, e < tol)
+}
+
+fn main() {
+    // ── Tolerance: 1e-12 relative (machine epsilon for IEEE 754
+    //   double — same closed-form on both sides, only residual is
+    //   operation-order last-bit rounding). ────────────────────────
+    let tol = 1.0e-12
+
+    // ── S1: ITER core reference (n_e=1e20, T_e=10 keV, B=5.3 T) ───
+    check_close("S1 lambda_d",   lambda_d(10000.0, 1.0e20),
+                7.433941994700463e-05, tol)
+    check_close("S1 omega_pe",   omega_pe(1.0e20),
+                564146023118.0626, tol)
+    check_close("S1 omega_pi_D", omega_pi_deuteron(1.0e20),
+                9311720416.904772, tol)
+    check_close("S1 larmor_e",   larmor_e(10000.0, 5.3),
+                6.362509285752777e-05, tol)
+    check_close("S1 larmor_D",   larmor_deuteron(10000.0, 5.3),
+                0.003854695104561881, tol)
+    check_close("S1 lnΛ_ei",     coulomb_log_ei_high_T(10000.0, 1.0e20, 1.0),
+                17.092244721017863, tol)
+
+    // ── S2: SPARC core (n_e=4e20, T_e=20 keV, B=12.2 T) ──────────
+    check_close("S2 lambda_d",   lambda_d(20000.0, 4.0e20),
+                5.256590795400147e-05, tol)
+    check_close("S2 omega_pe",   omega_pe(4.0e20),
+                1128292046236.1252, tol)
+    check_close("S2 omega_pi_D", omega_pi_deuteron(4.0e20),
+                18623440833.809544, tol)
+    check_close("S2 larmor_e",   larmor_e(20000.0, 12.2),
+                3.908944154915783e-05, tol)
+    check_close("S2 larmor_D",   larmor_deuteron(20000.0, 12.2),
+                0.002368214680912157, tol)
+    check_close("S2 lnΛ_ei",     coulomb_log_ei_high_T(20000.0, 4.0e20, 1.0),
+                17.092244721017863, tol)
+
+    // ── S3: JET D-T 1997 (n_e=5e19, T_e=10 keV, T_i=20 keV, B=3.4 T) ─
+    check_close("S3 lambda_d",   lambda_d(10000.0, 5.0e19),
+                0.00010513181590800294, tol)
+    check_close("S3 omega_pe",   omega_pe(5.0e19),
+                398911478526.20496, tol)
+    check_close("S3 omega_pi_D", omega_pi_deuteron(5.0e19),
+                6584380651.306589, tol)
+    check_close("S3 larmor_e",   larmor_e(10000.0, 3.4),
+                9.91802918073227e-05, tol)
+    check_close("S3 larmor_D",   larmor_deuteron(20000.0, 3.4),
+                0.008497711502096564, tol)
+    check_close("S3 lnΛ_ei",     coulomb_log_ei_high_T(10000.0, 5.0e19, 1.0),
+                17.438818311297837, tol)
+
+    // ── S4: NSTX spherical tokamak (n_e=5e19, T_e=1 keV, B=0.5 T) ─
+    check_close("S4 lambda_d",   lambda_d(1000.0, 5.0e19),
+                3.324559928188123e-05, tol)
+    check_close("S4 omega_pe",   omega_pe(5.0e19),
+                398911478526.20496, tol)
+    check_close("S4 larmor_e",   larmor_e(1000.0, 0.5),
+                0.0002132722223556687, tol)
+    check_close("S4 larmor_D",   larmor_deuteron(1500.0, 0.5),
+                0.01582492014135595, tol)
+    check_close("S4 lnΛ_ei",     coulomb_log_ei_high_T(1000.0, 5.0e19, 1.0),
+                15.13623321830379, tol)
+
+    // ── S5: dense Z-pinch (n_e=1e26, T_e=100 eV, B=50 T) — tiny λ_D
+    check_close("S5 lambda_d",   lambda_d(100.0, 1.0e26),
+                7.4339419947004626e-09, tol)
+    check_close("S5 omega_pe",   omega_pe(1.0e26),
+                564146023118062.8, tol)
+    check_close("S5 larmor_e",   larmor_e(100.0, 50.0),
+                6.744259842897943e-07, tol)
+    check_close("S5 larmor_D",   larmor_deuteron(100.0, 50.0),
+                4.085976810835594e-05, tol)
+    check_close("S5 lnΛ_ei",     coulomb_log_ei_high_T(100.0, 1.0e26, 1.0),
+                5.579319256047633, tol)
+
+    // ── S6: solar corona (n_e=1e15, T_e=100 eV, B=1e-4 T) — huge r_L
+    check_close("S6 lambda_d",   lambda_d(100.0, 1.0e15),
+                0.0023508188696828836, tol)
+    check_close("S6 omega_pe",   omega_pe(1.0e15),
+                1783986365.9790838, tol)
+    check_close("S6 larmor_e",   larmor_e(100.0, 1.0e-4),
+                0.3372129921448972, tol)
+    check_close("S6 larmor_D",   larmor_deuteron(100.0, 1.0e-4),
+                20.429884054177975, tol)
+    check_close("S6 lnΛ_ei",     coulomb_log_ei_high_T(100.0, 1.0e15, 1.0),
+                18.243537267514885, tol)
+
+    // ── S7: magnetosphere (n_e=1e7, T_e=10 eV, B=3e-5 T) — sparse
+    //   (Coulomb log SKIPPED — low-T regime not in this pilot.) ──
+    check_close("S7 lambda_d",   lambda_d(10.0, 1.0e7),
+                7.433941994700463, tol)
+    check_close("S7 omega_pe",   omega_pe(1.0e7),
+                178398.63659790836, tol)
+    check_close("S7 larmor_e",   larmor_e(10.0, 3.0e-5),
+                0.3554537039261145, tol)
+    check_close("S7 larmor_D",   larmor_deuteron(10.0, 3.0e-5),
+                21.534988648119068, tol)
+
+    // ── S8: ionosphere F-layer (n_e=1e12, T_e=0.1 eV, B=3e-5 T) ──
+    //   (Coulomb log SKIPPED — low-T regime not in this pilot.) ──
+    check_close("S8 lambda_d",   lambda_d(0.1, 1.0e12),
+                0.0023508188696828836, tol)
+    check_close("S8 omega_pe",   omega_pe(1.0e12),
+                56414602.31180627, tol)
+    check_close("S8 larmor_e",   larmor_e(0.1, 3.0e-5),
+                0.03554537039261145, tol)
+    check_close("S8 larmor_D",   larmor_deuteron(0.1, 3.0e-5),
+                2.153498864811907, tol)
+
+    print("plasma_metrics_kernel_test: " + str(pass_count) + "/" + str(total_count))
+    if failed != "" {
+        print("FAILED: " + failed)
+    } else {
+        print("PASS")
+    }
+}

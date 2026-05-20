@@ -12,7 +12,8 @@ from physics first principles.
 
 | file | role |
 |---|---|
-| `plasma_metrics.hexa` | Debye length · electron/ion plasma frequency · electron/ion cyclotron frequency · thermal speeds · Alfvén speed · gyroradii. CODATA-2022 SI constants. Pure functions — given `n_e`, `T`, `B`, ion species, returns the derived parameters that such a plasma would have. |
+| `plasma_metrics.hexa` | Broad-surface kernel: Debye length · electron/ion plasma frequency · electron/ion cyclotron frequency · thermal speeds · Alfvén speed · gyroradii. CODATA-2022 SI constants. Pure functions — given `n_e`, `T`, `B`, ion species, returns the derived parameters that such a plasma would have. Consumed by `stdlib/fusion/plasma_metrics.hexa` adapter. |
+| `plasma_metrics_kernel.hexa` | D80 `g_hexa_only` pilot — slimmer-surface (4 primary params: λ_D, ω_p, r_L, ln Λ) sibling kernel following the `solar_kernel.hexa` naming convention. Same constants + same closed-form as `plasma_metrics.hexa`; adds the NRL-Formulary high-T Coulomb log. Parity-tested at machine epsilon (≤1e-12 rel) on 8 sample points across 19 orders of n_e and 5 orders of T_e — see `plasma_metrics_kernel_test.hexa`. |
 
 ## 2-layer (ABSORPTION.md ①)
 
@@ -49,6 +50,11 @@ adapter `stdlib/fusion/`, NOT here.
   scenario aggregator).
 - `stdlib/fusion/plasma_metrics_test.hexa` — Stage 3 parity selftest
   (kept beside the fusion adapter it also imports).
+- `stdlib/kernels/plasma/plasma_metrics_kernel_test.hexa` — D80 pilot
+  in-kernel parity selftest (8 samples, ≤1e-12 rel vs hand-mirrored
+  Python `math` reference). Validates that the `_kernel.hexa` slim
+  surface holds bit-exact parity over a 19-orders-of-magnitude
+  operating envelope.
 
 Callers import the kernel via `use "stdlib/kernels/plasma/
 plasma_metrics"` (repo-root-relative). The plasmapy substrate producer
