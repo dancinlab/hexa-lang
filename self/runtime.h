@@ -289,6 +289,10 @@ HexaVal hexa_byte_len(HexaVal v);                     /* runtime.c:5326 — byte
 HexaVal hexa_json_stringify(HexaVal v);               /* runtime.c:10639 — HexaVal → JSON */
 HexaVal hexa_bytes_to_str_raw(HexaVal arr);           /* runtime.c:7718 — byte array → raw string */
 HexaVal rt_append_file(HexaVal path, HexaVal content); /* runtime.c:9830 — fs append (HexaVal-typed wrapper) */
+HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data);                /* runtime.c — G5 (A2) POSIX O_APPEND atomic write(2), returns bytes_written or -errno */
+HexaVal rt_fs_stat(HexaVal path);                                       /* runtime.c — G5 (B) POSIX stat(2), returns [size, mtime_ns, is_dir, mode] or void */
+HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal suffix); /* runtime.c — G5 (B) single-proc atomic rotate via rename(2) */
+HexaVal rt_fs_mkdir_p(HexaVal path);                                    /* runtime.c — G5 (B) POSIX mkdir(2) loop, fork-free */
 HexaVal rt_str_to_lower(HexaVal s);                   /* runtime.c:5407 — ASCII lowercase */
 
 /* rt_* high-layer stdlib (runtime_hi_gen.c — autogen from runtime_hi.hexa
