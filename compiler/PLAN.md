@@ -42,6 +42,41 @@
 
 (append-only)
 
+### 2026-05-20 — RFC 071 P1+P2 — NVPTX emit-driver dispatch + spec module skeleton (canned stub)
+
+**작업 = P1+P2 codegen-only push** — P0 (PR #228 `cb4a2e37`) 의 deferred-print + exit(1) 분기를 real driver dispatch 로 교체 + spec sibling module `compiler/cli/build_nvptx.hexa` 신규. P3 (module_loader `@gpu_kernel` discovery) + P4 (silicon fire) 는 명시 multi-cycle 연기. `@F f1` (no LLVM) + `@F f2` (no C-transpile in architecture) 보존 — emit-driver 는 POSIX `write_file` builtin 만 사용. CPU codegen 경로 byte-identical (md5 pre/post 동일).
+
+**deliverable (2 file)**:
+1. `compiler/cli/build_nvptx.hexa` (NEW FILE, ~115 lines) — Spec sibling 모듈. `pub fn build_nvptx_emit_driver(src_path, sm_arch) -> int` + private `fn _build_nvptx_stub_ptx(sm_arch)`. Body = canned stub PTX text (`.version 7.0` / `.target sm_NN` / `.address_size 64` / `.visible .entry _hexa_smoke() { ret; }`) + `write_file(<src>.ptx, ptx_text)`. 모듈 docstring 에 P2.1 replacement-shape (parse → check → lower → codegen_emit_ptx_sm80) 인라인 — `HEXA_BACKEND=native` default-flip 후 import 가능.
+2. `self/main.hexa` — (a) `cmd_build` 의 P0 deferred-print 블록을 `_build_nvptx_emit_driver(src, sm_arch)` call + `exit(_rc)` 로 교체. (b) 동일 파일에 sibling helper `fn _build_nvptx_stub_ptx(sm_arch)` + `fn _build_nvptx_emit_driver(src_path, sm_arch)` 추가 (self/main.hexa 는 module import 없음 → inline). compiler/cli/build_nvptx.hexa 와 byte-identical 스텁 PTX emit.
+
+**falsifier battery (RFC 071 §4)**:
+| ID                                     | claim                                                                  | status      |
+| -------------------------------------- | ---------------------------------------------------------------------- | ----------- |
+| F-RFC071-TARGET-ACCEPT                 | cmd_build 3 NVPTX target → driver fn dispatch                          | PASS        |
+| F-RFC071-EMIT-DRIVER-INVOKE            | driver fn writes parse-clean stub PTX (`.visible .entry`)              | PASS (stub) |
+| F-RFC071-MODULE-LOADER-BRIDGE          | source `@gpu_kernel` body shows up in emitted PTX                      | deferred    |
+| F-RFC071-E2E-NUMERIC-EQ                | src → PTX → silicon → max\|d\|=0 vs CPU                                | deferred    |
+| F-RFC055-CPU-CODEGEN-UNTOUCHED         | compiler/codegen/{x86_64_linux,arm64_darwin}.hexa byte-eq              | PASS (md5)  |
+
+parse-gate:
+- `/Users/ghost/.hx/bin/hexa_real parse self/main.hexa` → `OK: self/main.hexa parses cleanly`
+- `/Users/ghost/.hx/bin/hexa_real parse compiler/cli/build_nvptx.hexa` → `OK: compiler/cli/build_nvptx.hexa parses cleanly`
+
+md5 (pre-edit = post-edit, byte-identical):
+- `compiler/codegen/x86_64_linux.hexa` `702d78f96b91c4c693ecc21563614184`
+- `compiler/codegen/arm64_darwin.hexa` `2b2aee9e9da55a4c93dfd2560796721e`
+
+**honest punt (@D g3)**: P2 의 emit-driver body 는 CANNED PTX 만 emit — `codegen_emit_ptx_sm80(mir)` 실제 호출 NOT WIRED. `_hexa_smoke() { ret; }` 는 no-op kernel — ptxas-compilable + driver-JIT-loadable 한 텍스트 스킴이지만, source 의 어떤 body 도 반영 안 함. F-RFC071-MODULE-LOADER-BRIDGE 는 INTENTIONALLY 미해결 — P2.1 (multi-cycle, compiler/codegen/nvptx_target.hexa::codegen_emit_ptx_sm80 를 cmd_build 에서 invoke 가능하게 만드는 작업) 에서 닫힘. 본 cycle = "driver fn 호출 가능 + stub PTX 작성 가능" 두 가지 외 zero closure.
+
+**bootstrap regen 비대상**: `self/main.hexa` 드라이버 분기 + 새 sibling helper 만 추가. `@D g_commit_push_deploy` 의 narrow rule — `self/{lexer,parser,type_checker,codegen_c2}.hexa` 미터치, codegen 영향 없음. compiler/cli/build_nvptx.hexa 는 self-host import 체인 (P3+) 까지는 dead code (cmd_build 가 inline helper 만 사용). 다음 standard deploy cycle 에서 자연 promote.
+
+**punted (RFC 071 P2.1 → P4)**:
+- P2.1: compiler/cli/build_nvptx.hexa 의 stub body 를 real codegen 으로 교체 — parse → check → lower → `codegen_emit_ptx_sm80(mir)`. self-host import 체인 + hexa_v2 가 compiler/parse/parser, compiler/check/*, compiler/lower/*, compiler/codegen/nvptx_target.hexa 를 single-entry-point 로 expose 해야 함.
+- P3: `module_loader.hexa` `@gpu_kernel` annotation discovery + CPU/GPU 함수 분리 dispatch.
+- P4: 진짜 `.hexa` source → PTX → ubu-2 silicon fire → max|d|=0 vs CPU reference (F-RFC071-E2E-NUMERIC-EQ); GPU.md §10 closure box flip 조건.
+
+
 ### 2026-05-19 — codegen: ExternFnDecl in statement position — FFI wrapper mangle parity + nested-decl hoist
 
 keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/test_keyword_audit.hexa` L376 `extern fn getpid() -> Int` 는 두 갈래로 깨졌었다.
