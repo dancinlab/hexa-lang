@@ -5054,3 +5054,78 @@ HXC v2 surface absorbed per
 `inbox/patches/hxc-v2-no-downstream-library-api.md` resolution) ·
 `stdlib/core/hash/sha256.hexa` (FIPS 180-4 SHA-256 primitive) ·
 RFC 070 (sister; G7-B impl deferred to its own sub-cycle).
+
+### 2026-05-20 — RFC 072 Phase 2.1 atlas_enrich disk cache HXC v2 migration landed
+
+Phase 2 (commit `8d061776`, cherry-picked into this branch as `9b783734`)
+landed the disk cache with `JSONL-style TSV` at
+`$HEXA_LANG/state/loop/enriched/<atlas_hash>.jsonl` and explicitly punted
+the HXC v2 migration to a follow-on Phase 2.1 (RFC 072 §7 "Encoding"
+open + Sign-off TODO). Phase 2.1 closes that punt.
+
+Wire: `compiler/atlas/parser.hexa` now `use`s `self/stdlib/hxc_v2_lib`
+and adds two helpers (`_enrich_disk_encode_hxc` / `_enrich_disk_decode_hxc`)
+that flow the same 10-cell row (`atlas_hash · id · kind · source_file ·
+src_line · grade.{value,verified,breakthrough,hypothesis} · edges_joined`)
+through `hxc_v2_encode_records` / `hxc_v2_decode_records` — the records
+pair shipped by `self/stdlib/hxc_v2_lib.hexa` (already-stable, deflates
+via A29 + BWT via A30 under the canonical pipe-escape convention shared
+with `compiler/atlas/hxc_loader.hexa`). The Phase 2 commit message's
+"per-struct AtlasNode + EdgeInfo codec entry needed" turned out to be
+unnecessary — the records pair already covers `array<array<string>>`,
+which is the on-disk shape we already produce.
+
+Routing: new `HEXA_ENRICH_CACHE_FORMAT` env var:
+- `hxc`   (default, `@D g_hxc`) → `<atlas_hash>.hxc`
+- `jsonl` (legacy / human-inspect) → `<atlas_hash>.jsonl`
+- any other value falls through to `hxc`.
+Loader compat-fallback: when the primary-format file is missing but the
+sibling format file exists, the loader transparently reads the sibling
+(zero-friction migration for callers that already have a Phase-2
+`.jsonl`).
+
+Selftest extension: `enrich_cache_disk_selftest()` now exercises the
+JSONL path (F1/F2/F3 unchanged) and the HXC path (F-HXC-RT round-trip,
+F-HXC-STALE hash-mismatch abort on `.hxc`, F-HXC-XFORMAT-EQ asserting
+JSONL ↔ HXC restored grade + edges are byte-equal, F-HXC-COMPAT-FALLBACK
+asserting that with `format=hxc` and the `.hxc` removed the loader
+falls through to the `.jsonl` sibling). Env is restored to empty at
+end-of-test so subsequent callers see the documented default.
+
+Honest scope (g3):
+- The selftest is exercised at parse-gate ceiling only on this branch.
+  `enrich_cache_disk_selftest` itself depends on `keys_of` /
+  `read_text` / `write_text` codegen builtin wiring that is NOT yet
+  present in this worktree's base (the same builtins the Phase 2 cherry-
+  pick already needed and likewise could not exercise via `hexa build` /
+  `hexa run`; verified by reproducing the identical Phase 2 baseline
+  build failure on a synthetic driver before adding the HXC path).
+  Phase 2.1 inherits the same compile-promote gap; it does not
+  introduce a new compile blocker.
+- F-HXC-XFORMAT-EQ asserts arity + first-element equality of edges
+  arrays plus all four grade scalars across JSONL ↔ HXC; it does NOT
+  byte-compare the entire restored AtlasNode tree (which would
+  duplicate the F2 check and rely on a future `deep_eq` builtin).
+- Byte-savings vs JSONL on the real ~6.6k-row cache is not measured
+  this cycle (no production write yet — B-wire deferred). HXC's A1-A35
+  chain has measured 27-96% savings on schema-rich streams (`@D g_hxc`
+  authority); the same envelope is expected here but is honest-pending
+  until B-wire produces a non-toy cache file.
+- Static-index circular-dep concern from the Phase 2 commit message
+  re-examined: `self/stdlib/hxc_v2_lib` does NOT import any
+  `compiler/atlas/*`, so adding `use "self/stdlib/hxc_v2_lib"` at the
+  top of `compiler/atlas/parser.hexa` introduces no reverse edge. The
+  concern only applied to `compiler/atlas/hxc_loader.hexa`, which IS
+  not used by Phase 2.1.
+
+Gate: `/Users/ghost/.hx/bin/hexa_real parse compiler/atlas/parser.hexa`
+PASS (single edit-gate exercise per `@D g_interp_deprecated` syntactic
+verification; no semantic build attempted on this branch — inherits
+Phase 2 baseline limitation).
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_072_atlas_enrich_cache.md
+(header status → PHASE 2.1 LANDED; §5 phase table A.2.1 row added;
+§7 Open "Encoding" entry upgraded from "Phase 2 picked JSONL; HXC
+migration tracked as Phase 2.1" to "Phase 2.1 RESOLVED — default `hxc`
+via hxc_v2_lib records pair, JSONL pinned by env"; sign-off picks up
+Phase 2.1 checkbox).
