@@ -7502,3 +7502,49 @@ LEAN fixpoint PRESERVED (cycle 43).
 lines comment).
 
 **cc --regen / binary promote**: 미수행. tool/* change only.
+
+
+### 2026-05-20 — follow-up cycle 44: dead-strip parity in build_hexac.hexa — LEAN S3 fixpoint full closure (lean-both)
+
+cycle 43 의 build_aprime.sh 패턴을 build_hexac.hexa stage 4 clang
+invocation 에도 적용. 두 compiler 모두 같은 `-Oz +
+ffunction-sections + Wl,-dead_strip` flag 사용.
+
+**측정 — hexac binary**:
+
+| 메트릭 | cycle 41 (no dead-strip) | cycle 44 (lean) |
+|--------|-------------------------:|----------------:|
+| binary size | 2,108,536 B | **1,911,720 B** (−9.3%) |
+| externs | 172 | **137** (−21%) |
+
+**S3 fixpoint LEAN44 full closure (10.6 MB compiler/main.hexa flat)**:
+
+```
+aprime_lean3 emit-asm: 10,657,152 B md5 39dbb35c1606c3cf0886c5fb00e7cabc
+hexac_lean4   emit-asm: 10,657,152 B md5 39dbb35c1606c3cf0886c5fb00e7cabc
+diff: 🛸 BYTE IDENTICAL — both-lean fixpoint preserved
+```
+
+**전 두 compiler 의 추가 비교**:
+
+| | aprime_c41 (cycle 41) | aprime_lean3 (cycle 43) | hexac_c41 (cycle 41) | hexac_lean4 (cycle 44) |
+|---|---:|---:|---:|---:|
+| binary | 2.24 MB | 1.00 MB | 2.11 MB | 1.91 MB |
+| externs | 173 | 137 | 172 | 137 |
+| T symbols | 509 | 186 | (n/m) | (n/m) |
+
+**aprime + hexac 의 extern set 일치**: 둘 다 137 — 같은 libc/libsystem
+의 dependencies. 같은 runtime.c 가 dead-strip 후 같은 minimal closure.
+
+**RFC 063/067 phasing**: 44 cycles · 18 falsifier + 12 measure ·
+S3 fixpoint full closure PROVEN (cycle 41) + LEAN fixpoint PRESERVED
+(cycle 43 aprime · cycle 44 both).
+
+**Files modified**: tool/build_hexac.hexa (1 line functional + 3 line
+comment). aprime + hexac build chains 모두 lean.
+
+**cc --regen / binary promote**: 미수행. tool/* change only.
+
+**Next**: cycle 45+ 은 137 externs 의 actual source-level replacement —
+Phase 1 Tier-A runtime hexa-native rewrite. 가장 작은 externs 부터
+교체 (e.g., `_atoi`, `_atof` → hexa source).

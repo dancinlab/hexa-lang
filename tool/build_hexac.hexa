@@ -142,7 +142,10 @@ write_file(shim, shim_src)
 println("  [4/4] clang assemble + link -> " + out)
 let out_dir = exec("dirname '" + out + "'").trim()
 let _mk = exec("mkdir -p '" + out_dir + "' 2>/dev/null")
-let cl_cmd = "clang -O2 -arch arm64 -I '" + repo + "/self' '" + flats + "' '" + shim + "' '" + repo + "/self/runtime.c' -o '" + out + "' 2>&1"
+// Cycle 44: parallel dead-strip + -Oz to build_aprime.sh (cycle 43)
+// — same 55% binary shrink expected for hexac. clang here is just
+// assembler+link so -Oz applies to the runtime.c re-compile path.
+let cl_cmd = "clang -Oz -arch arm64 -ffunction-sections -fdata-sections -Wl,-dead_strip -I '" + repo + "/self' '" + flats + "' '" + shim + "' '" + repo + "/self/runtime.c' -o '" + out + "' 2>&1"
 let _r4 = exec(cl_cmd)
 if exec("test -x '" + out + "' && printf yes || printf no") != "yes" {
     println("build_hexac: clang assemble+link failed:")
