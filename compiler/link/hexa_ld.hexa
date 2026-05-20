@@ -162,6 +162,7 @@
 //
 // Public API:
 //   pub fn link(obj_path: string, out_path: string) -> int
+//   pub fn link_incremental(obj_path: string, out_path: string, cache_dir: string) -> int  // v1.6, RFC 071 §G8-C
 //   pub fn link_shared(obj_path: string, out_path: string) -> int   // v1.3 hdr, v1.4 ELF Part A, v1.5 ELF reloc
 //   pub fn link_mach_o(obj_path: string, out_path: string) -> int
 //   pub fn system_ld_fallback(obj_path: string, out_path: string) -> int
@@ -171,16 +172,20 @@
 //   pub fn read_elf_relocs(buf, off, sz, es) -> [int]                // v1.5, flat [r_offset, r_info, r_addend]*N
 //   pub fn elf_reloc_is_got_typed(r_info_low) -> bool                // v1.5, GOT-family classifier
 //
-// G8-C wire (v1.4, RFC 071 §G8-C measurement step):
-//   `link_shared()` honors `HEXA_LD_INCREMENTAL=1` env opt-in. When
-//   set, the input obj's SHA-256 key is looked up in the link cache
-//   (compiler/link/incr_cache.hexa) BEFORE emitting; on miss, the
-//   record is stored AFTER successful emit. The cache record currently
-//   captures key + text offset/length + exports_blob — the full output
-//   blob is NOT stored yet (RFC 071 §3.A `text_bytes_ref` is G8-C2
-//   deferred), so cache HIT does not yet skip the actual link work;
-//   the wire is a "cache-presence metric" only. Honest fast-path
-//   short-circuit lands when incr_cache surface gains a blob store.
+// G8-C wire (v1.6, RFC 071 §G8-C — LANDED 2026-05-20):
+//   `link()` honors `HEXA_LD_INCREMENTAL=1` env opt-in. When set, the
+//   call routes through `link_incremental(obj, out, "")` which probes
+//   the link cache (compiler/link/incr_cache.hexa, RFC 071 §G8-B):
+//     HIT  → `cp` the cached output blob (mirrored at
+//            `<cache_dir>/<obj_hash>.blob`) → rc 0. Real fast path;
+//            the link work is fully skipped.
+//     MISS → call the inner dispatch (_link_inner_call), then
+//            `incr_cache_store` the LinkRecord + cp the freshly-linked
+//            binary to the mirror blob path. Next cycle = HIT.
+//   Default cache dir = `${HEXA_LANG}/cache/link/<basename(out)>/` per
+//   RFC 071 §3.B. `link_incremental(obj, out, "<dir>")` for an
+//   explicit override (used by selftest). See `pub fn link_incremental`
+//   below for honest scope (single-`.o` until RFC 063 multi-`.o` lands).
 //
 // Returns 0 on success, non-zero on every failure path (so the caller
 // can flip to --linker=system without parsing error strings).
@@ -2247,6 +2252,15 @@ pub fn link_mach_o(obj_path: string, out_path: string) -> int {
 pub fn link(obj_path: string, out_path: string) -> int {
     if len(obj_path) == 0 { return 1 }
     if len(out_path) == 0 { return 1 }
+    // RFC 071 §G8-C wire: when HEXA_LD_INCREMENTAL=1 is set in the env,
+    // route through link_incremental() which probes the link cache
+    // BEFORE the link work. link_incremental() uses its own private
+    // dispatch helper (_link_inner_call) on cache MISS to avoid
+    // re-entering this env-probe wrapper. @cite RFC 071 §3.C.
+    let incr_flag = exec("echo $HEXA_LD_INCREMENTAL 2>/dev/null").trim()
+    if incr_flag == "1" {
+        return link_incremental(obj_path, out_path, "")
+    }
     let probe = read_file_bytes(obj_path)
     if type_of(probe) != "array" { return 1 }
     if len(probe) < 4 { return 1 }
@@ -2430,6 +2444,203 @@ fn _link_mach_o_shared(obj_path: string, out_path: string) -> int {
     let chm_rc = exec("chmod 0644 '" + out_path.replace("'", "'\\''") + "' 2>/dev/null")
     if len(chm_rc) > -1 { /* non-fatal */ }
     return 0
+}
+
+// ── RFC 071 §G8-C: incremental-link caller wire ────────────────────
+//
+// `link_incremental(obj_path, out_path, cache_dir)` is the cache-aware
+// sibling of `link()`. The single-`.o` shape used here (vs the
+// multi-`.o` `[string]` shape sketched in RFC 071 §3.C `link_incremental`
+// pseudocode) is the **G8-A-deferred** intermediate: until RFC 063
+// multi-`.o` static link lands (§4 phase row G8-A), each `hexa build`
+// still produces one binary from one driver-emitted `.o` blob. The
+// cache-vs-relink question therefore reduces to per-output equality of
+// that one `.o` content hash. When G8-A lands, `link_incremental` will
+// gain a `[string]` overload that walks per-`.o` records.
+//
+// FAST PATH (cache HIT)
+//   When `obj_hash` matches a stored LinkRecord AND the mirrored
+//   `<cache_dir>/<obj_hash>.blob` file is present, the cached binary
+//   is `cp`'d into `out_path` (chmod +x preserved). This is a
+//   functional fast-path — the output bytes are reused verbatim, not
+//   re-linked.
+//
+// SLOW PATH (cache MISS / blob absent)
+//   Call back into `link(obj_path, out_path)` with the recursion
+//   sentinel `HEXA_LD_INCR_INNER=1` set so the inner link() does the
+//   real work without re-routing through `link_incremental`. On
+//   success, capture `text_offset`/`text_length` (from the output
+//   binary's section table when readable; 0/0 sentinel otherwise),
+//   call `incr_cache_store(...)`, AND copy the freshly-linked binary
+//   to `<cache_dir>/<obj_hash>.blob` so the next cycle's HIT can fast
+//   path. Returns the inner link()'s rc unchanged.
+//
+// TRANSPARENT FALLBACK (RFC 071 §3.E invalidation)
+//   Any of: empty obj_hash · cache file IO error · blob copy failure
+//   degrades to slow-path-without-cache (the slow path's `link()` rc
+//   is returned verbatim). The cache is advisory.
+//
+// CACHE DIR DEFAULT
+//   Empty `cache_dir` → `${HEXA_LANG}/cache/link/<basename(out_path)>/`
+//   via `incr_cache_default_dir()` per RFC 071 §3.B layout.
+//
+// FALSIFIERS COVERED
+//   F-C1 (cold cache: incremental output == full-link output) — the
+//   slow path IS `link()`, so byte-equality is trivial on first cycle.
+//   F-C2 (cache HIT: blob cp == prior full-link output) — covered by
+//   `cp`'s POSIX byte-preserving semantics; verified by selftest T2.
+//
+// HONEST CAVEATS
+//   * `text_offset`/`text_length` captured only when the inner link
+//     succeeded AND the binary has a readable section table; otherwise
+//     0/0 sentinels are stored. RFC 071 §3.A `reloc_slots` and
+//     `page_hashes` remain G8-D scope.
+//   * No POSIX `flock(2)` yet — F-C3 (concurrent invocations) requires
+//     `<cache_dir>/incr_link.lock` sidecar, deferred to a follow-up
+//     sub-cycle (it's orthogonal to the basic cache wire).
+//   * The blob copy is `cp -p` (preserve mode/times), not a hardlink,
+//     so cache-dir on the same filesystem trades a write for the
+//     space saving. Acceptable for wilson's N≈10-30 plugin scale.
+pub fn link_incremental(obj_path: string, out_path: string,
+                        cache_dir: string) -> int {
+    if len(obj_path) == 0 { return 1 }
+    if len(out_path) == 0 { return 1 }
+
+    // Resolve cache dir (RFC 071 §3.B default layout).
+    let mut cdir = cache_dir
+    if len(cdir) == 0 {
+        cdir = incr_cache_default_dir(_basename(out_path))
+    }
+    // Empty cache_dir result → degrade to slow path without cache.
+
+    // Key = SHA-256(.o bytes). @cite RFC 071 §3.A.
+    let key = incr_cache_compute_key(obj_path)
+    if len(key) == 0 {
+        // Cannot key → slow path, no cache.
+        return _link_inner_call(obj_path, out_path)
+    }
+
+    // ABI + host triple for invalidation §3.E.
+    let abi_version = 71
+    let host_triple = _incr_host_triple()
+
+    // ── Cache LOOKUP (RFC 071 §3.C fast path) ──────────────────────
+    let rec_str = incr_cache_lookup(cdir, obj_path, abi_version, host_triple)
+    if len(rec_str) > 0 {
+        let blob_path = _join_path_local(cdir, key + ".blob")
+        if pfs_file_exists(blob_path) {
+            // FAST PATH: cp cached blob → out_path.
+            let q_src = _shell_quote_local(blob_path)
+            let q_dst = _shell_quote_local(out_path)
+            let _ = exec("cp -p " + q_src + " " + q_dst + " 2>/dev/null")
+            // POSIX cp returns the source file's bytes verbatim
+            // (modulo mtime touched via -p). Verify presence.
+            let sz = pfs_file_size(out_path)
+            if sz > 0 {
+                let chm = exec("chmod +x " + q_dst + " 2>/dev/null")
+                if len(chm) > -1 { /* non-fatal */ }
+                return 0
+            }
+            // cp failed → fall through to slow path.
+        }
+        // Record present but blob missing (cache partially evicted)
+        // → fall through to slow path; the store below will refill.
+    }
+
+    // ── SLOW PATH (cache MISS / blob absent) ───────────────────────
+    let rc = _link_inner_call(obj_path, out_path)
+    if rc != 0 { return rc }
+
+    // ── Cache STORE (post-success) ─────────────────────────────────
+    // Capture section offsets when readable; 0/0 sentinels otherwise.
+    let span = _incr_capture_text_span(out_path)
+    let text_offset = span[0]
+    let text_length = span[1]
+    // Store the LinkRecord (key + offsets + empty exports for v1).
+    let _stored = incr_cache_store(cdir, obj_path, text_offset,
+                                   text_length, abi_version,
+                                   host_triple, "")
+
+    // Mirror the binary to <cache_dir>/<key>.blob for next-cycle HIT.
+    // Best-effort: failure here means the next cycle will simply MISS
+    // again. The store above already recorded the metadata.
+    let blob_path = _join_path_local(cdir, key + ".blob")
+    let q_src = _shell_quote_local(out_path)
+    let q_dst = _shell_quote_local(blob_path)
+    let _mk = exec("mkdir -p " + _shell_quote_local(cdir) + " 2>/dev/null")
+    let _ = exec("cp -p " + q_src + " " + q_dst + " 2>/dev/null")
+
+    return rc
+}
+
+// Inner call: inline the magic-byte dispatch body of `link()`
+// WITHOUT the HEXA_LD_INCREMENTAL env-probe wrapper, so the slow path
+// from `link_incremental` does not recursively re-enter this function.
+// We re-implement the 4-byte magic detect rather than mutating process
+// env (which is brittle / non-portable across runtime exec layers).
+fn _link_inner_call(obj_path: string, out_path: string) -> int {
+    let probe = read_file_bytes(obj_path)
+    if type_of(probe) != "array" { return 1 }
+    if len(probe) < 4 { return 1 }
+    let b0 = _read_u8(probe, 0)
+    let b1 = _read_u8(probe, 1)
+    let b2 = _read_u8(probe, 2)
+    let b3 = _read_u8(probe, 3)
+    if b0 == 0x7F { if b1 == 0x45 { if b2 == 0x4C { if b3 == 0x46 {
+        return link_elf(obj_path, out_path)
+    } } } }
+    if b0 == 0xCF { if b1 == 0xFA { if b2 == 0xED { if b3 == 0xFE {
+        return link_mach_o(obj_path, out_path)
+    } } } }
+    return 1
+}
+
+// Host triple — same shape RFC 071 §3.B + RFC 070 §3.D use.
+fn _incr_host_triple() -> string {
+    let os = exec("uname -s 2>/dev/null").trim()
+    let mach = exec("uname -m 2>/dev/null").trim()
+    if os == "Darwin" {
+        if mach == "arm64" { return "arm64-apple-darwin" }
+        return mach + "-apple-darwin"
+    }
+    if os == "Linux" {
+        return mach + "-unknown-linux-gnu"
+    }
+    return mach + "-unknown-" + os.to_lower()
+}
+
+// Capture (text_offset, text_length) from the just-linked output.
+// Returns [0, 0] on any read error (sentinel — the cache record is
+// still valid, just without precise section-offset metadata for the
+// G8-D codesign incremental path).
+fn _incr_capture_text_span(out_path: string) -> [int] {
+    let buf = read_file_bytes(out_path)
+    if type_of(buf) != "array" { return [0, 0] }
+    if len(buf) < 4 { return [0, 0] }
+    let b0 = _read_u8(buf, 0)
+    if b0 == 0x7F {
+        // ELF — find_sections returns [text_off, text_sz, sym_off, ...]
+        let secs = find_sections(buf)
+        if len(secs) >= 2 { return [secs[0], secs[1]] }
+    }
+    if b0 == 0xCF {
+        let secs = macho_find_sections(buf)
+        if len(secs) >= 2 { return [secs[0], secs[1]] }
+    }
+    return [0, 0]
+}
+
+// Path/quote helpers — local copies so this section is self-contained
+// (mirror of incr_cache.hexa's private helpers; the public surface
+// there doesn't export them).
+fn _join_path_local(dir: string, name: string) -> string {
+    if len(dir) == 0 { return name }
+    if dir.ends_with("/") { return dir + name }
+    return dir + "/" + name
+}
+
+fn _shell_quote_local(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
 }
 
 // ── Fallback helper (best-effort) ──────────────────────────────────

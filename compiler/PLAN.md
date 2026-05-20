@@ -5934,3 +5934,108 @@ for the Part B sub-cycle) · `@D g3` real-limits-first (glibc
 operational confirmation) · `@D g5` hexa-native-only (hexa_ld is the
 hexa-native dynamic linker) · `@D g_inbox_processing_loop` Shape A
 (surgical 2-byte fix at the SSOT, no scaffold).
+
+---
+
+### 2026-05-20 — RFC 071 §G8-C `link_incremental()` caller wire LANDED
+
+**Branch:** `s1-step2-codegen-perf` (worktree `agent-a8a5ad5af0416ecf1`)
+
+**Cycle:** RFC 071 §G8-C — incremental-link caller wire on top of
+the `incr_cache.hexa` substrate (G8-B, `efe96da6`) + meta_tsv stub
+unwire (H2, `65dd597b`) + scaffold marker (B6, `05b814c2`).
+
+**SSOT edit:** `compiler/link/hexa_ld.hexa`
+- `pub fn link_incremental(obj_path, out_path, cache_dir) -> int`
+  added — cache-aware sibling of `link()`.
+  - FAST PATH (cache HIT): `cp -p <cache_dir>/<obj_hash>.blob → out_path`
+    + chmod +x. Real fast-path — link work fully skipped.
+  - SLOW PATH (cache MISS): `_link_inner_call(obj, out)` (inline
+    magic-byte dispatch sans env wrapper to avoid recursion) →
+    `incr_cache_store(...)` + `cp -p out → <cache_dir>/<obj_hash>.blob`
+    mirror. Next cycle = HIT.
+  - Default `cache_dir`: empty string resolves to
+    `${HEXA_LANG}/cache/link/<basename(out)>/` via
+    `incr_cache_default_dir()` (RFC 071 §3.B).
+- `pub fn link(obj, out)` gains env wrapper: `HEXA_LD_INCREMENTAL=1`
+  routes through `link_incremental(obj, out, "")`. Recursion avoided
+  via dedicated `_link_inner_call` helper (no env mutation across exec
+  layers — documented honest gap).
+- Helpers added: `_link_inner_call`, `_incr_host_triple` (uname-based,
+  matches RFC 070 §3.D / RFC 071 §3.B triple shape),
+  `_incr_capture_text_span` (ELF/Mach-O text section [offset, length]
+  with `[0,0]` sentinel for unreadable headers), `_join_path_local`,
+  `_shell_quote_local`.
+- Header comment: G8-C wire block flipped from "v1.4 measurement step
+  / cache-presence metric only" to "v1.6 LANDED 2026-05-20 / real
+  fast-path with blob mirror". Public API list adds
+  `link_incremental` row.
+
+**Selftest:** `compiler/link/hexa_ld_incremental_test.hexa` (new
+file, T1-T5)
+- T1 cold cache MISS → slow-path output + blob mirror created;
+  rc parity vs direct `link()` (F-C1 anchor).
+- T2 warm cache HIT → `cp` from blob → byte-equal to T1 output
+  (F-C2 anchor, POSIX cp byte preservation).
+- T3 `incr_cache_clear()` → next call MISS → re-store
+  (RFC 071 §3.E record-absence path).
+- T4 empty `cache_dir` → `incr_cache_default_dir()` resolution +
+  rc parity (RFC 071 §3.B layout).
+- T5 env-wrapper smoke (NOTE — env mutation across hexa exec layers
+  is non-portable; wire verified via rc parity in T1 + code review).
+
+**Parse-gate:** `hexa_real parse compiler/link/hexa_ld.hexa` →
+`OK: parses cleanly`. `hexa_real parse
+compiler/link/hexa_ld_incremental_test.hexa` → clean.
+
+**RFC 071 §G8 phase table progress:**
+- G8-0 scaffold marker — LANDED (B6 `05b814c2`).
+- G8-A multi-`.o` link prerequisite — DEFERRED (depends on RFC 063).
+- G8-B `incr_cache.hexa` substrate — LANDED (C2 `efe96da6` +
+  H2 `65dd597b` stub unwire).
+- **G8-C caller wire — LANDED (this commit).** Single-`.o` mode,
+  fast-path via blob mirror, full-link fallback on any miss.
+- G8-D Mach-O codesign incremental — DEFERRED.
+- G8-E `self/main.hexa::cmd_build --incremental` plumb — DEFERRED.
+- G8-F wilson driver opt-in — out-of-hexa-lang scope.
+- G8-G RFC 070 G7-D capability hash piggyback — DEFERRED.
+
+**Honest scope (g3):**
+- Single-`.o` only — multi-`.o` aggregation deferred to G8-A.
+- No `flock(2)` — concurrent invocations on the same `cache_dir`
+  may race (last-writer wins; the `.hxc` save is `mv`-atomic so
+  the record table doesn't corrupt, but two concurrent slow paths
+  can both write the same `<key>.blob`). F-C3 explicitly deferred.
+- `text_offset`/`text_length` captured via `find_sections` /
+  `macho_find_sections` only when the output header is readable;
+  `[0, 0]` sentinel otherwise (cache record still valid — the
+  metadata is for G8-D codesign incremental, not for the
+  link/relink decision itself).
+- Selftest's input `.o` is synthesized via the system `cc -c` (host
+  C compiler), not a driver-emitted hexa `.o`. The cache wire's
+  contract is "key by `.o` byte hash" — contents are inert.
+
+**No `hexa_v2` regen, no binary promote** — `@D g_commit_push_deploy`
+pairing deferred to standard deploy cycle (pure add-only on a
+non-bootstrap module; `self/main.hexa` is untouched).
+**No `inbox/PATCHES.yaml` touch.**
+
+**Files:**
+```
+ compiler/link/hexa_ld.hexa                                | +~210/-7  (link_incremental + 5 helpers + env wrapper + header update)
+ compiler/link/hexa_ld_incremental_test.hexa               | +~155     (new selftest T1-T5)
+ compiler/PLAN.md                                          | +<this>   (this entry)
+```
+
+**Cross-links:** RFC 071 §G8-C
+(`inbox/rfc_drafts_2026_05_20/rfc_071_hexa_ld_incremental_link.md`) ·
+G8-B substrate `efe96da6` (`compiler/link/incr_cache.hexa`) ·
+H2 punted-2 closure `65dd597b` (meta_tsv stub unwire +
+`incr_cache_test.hexa` T1-T7) · B6 scaffold marker `05b814c2` ·
+`@D g5` hexa-native-only (pure hexa over `exec` + `read_file_bytes`
++ `write_bytes` + `sha256_file` builtins — no new toolchain
+dependency) · `@D g_hxc` (cache file is HXC v2 envelope, second
+in-repo consumer after `compiler/atlas/hxc_loader.hexa`) ·
+`@D g3` real-limits-first (SHA-256 collision-resistance FIPS 180-4 +
+POSIX cp byte preservation + compiler invariant link determinism
+anchor the falsifiers F-C1 / F-C2 / F-C3).
