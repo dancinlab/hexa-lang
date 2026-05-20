@@ -1718,9 +1718,41 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
             let mut e_ok = 0
             let mut e_lhs = ""
             let mut e_rhs: [str] = []
+            let mut e_op_str = ""
             if has_else == 1 {
                 if len(else_toks) >= 4 {
+                    let mut e_op_pos = 0 - 1
+                    let mut e_lhs_str = ""
                     if else_toks[1] == "<=" || else_toks[1] == "=" {
+                        e_lhs_str = else_toks[0]
+                        e_op_pos = 1
+                    }
+                    if else_toks[1] == "[" {
+                        let mut ebd = 1
+                        let mut ep = 2
+                        let mut e_idx_toks: [str] = []
+                        while ep < len(else_toks) {
+                            if else_toks[ep] == "[" { ebd = ebd + 1 }
+                            if else_toks[ep] == "]" {
+                                ebd = ebd - 1
+                                if ebd == 0 { break }
+                            }
+                            e_idx_toks = e_idx_toks.push(else_toks[ep])
+                            ep = ep + 1
+                        }
+                        if ep < len(else_toks) && else_toks[ep] == "]" {
+                            if ep + 1 < len(else_toks) {
+                                if else_toks[ep + 1] == "<=" || else_toks[ep + 1] == "=" {
+                                    let eev = _rv_eval_expr(e_idx_toks, 0, tab, 1)
+                                    if len(eev.err) == 0 {
+                                        e_lhs_str = else_toks[0] + "[" + str(eev.value) + "]"
+                                        e_op_pos = ep + 1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if e_op_pos > 0 {
                         let mut last_s2 = 0 - 1
                         let mut sc2 = 0
                         let mut ei = 0
@@ -1733,8 +1765,9 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                         }
                         if sc2 == 1 && last_s2 == len(else_toks) - 1 {
                             e_ok = 1
-                            e_lhs = else_toks[0]
-                            let mut ei2 = 2
+                            e_lhs = e_lhs_str
+                            e_op_str = else_toks[e_op_pos]
+                            let mut ei2 = e_op_pos + 1
                             while ei2 < len(else_toks) - 1 {
                                 e_rhs = e_rhs.push(else_toks[ei2])
                                 ei2 = ei2 + 1
@@ -1749,8 +1782,8 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
             // connect sink). Any mismatch → fall back to skip-no-emit.
             let mut op_match = 0
             if t_ok == 1 && e_ok == 1 {
-                if then_toks[1] == else_toks[1] {
-                    let topr = then_toks[1]
+                if t_op_str == e_op_str {
+                    let topr = t_op_str
                     if topr == "<=" && is_clocked == 1 { op_match = 1 }
                     if topr == "=" && is_clocked == 0 { op_match = 1 }
                 }
@@ -2922,6 +2955,27 @@ fn main() {
         }
         if rtlil_count_cells_of_type(_m38, "$dff") != 2 {
             println("FAIL T38b dff_count got " + str(rtlil_count_cells_of_type(_m38, "$dff")))
+            fails = fails + 1
+        }
+    }
+
+    // T39 — with-else indexed-LHS cond-mux, same simple-name LHS with
+    //       static const idx in both branches:
+    //       `if (sel) q[1] <= a ; else q[1] <= b ;`
+    //       → 1 $mux + 1 $dff with Q="q[1]".
+    total = total + 1
+    let _v39 = "module mei ( input clk , input sel , input a , input b ) ; reg q [ 0 : 3 ] ; always @ ( posedge clk ) if ( sel ) q [ 1 ] <= a ; else q [ 1 ] <= b ; endmodule"
+    let _r39 = read_verilog(_v39)
+    if _r39.ok != 1 {
+        println("FAIL T39 cond_mux_welse_indexed: " + _r39.message); fails = fails + 1
+    } else {
+        let _m39 = _r39.design.modules[0]
+        if rtlil_count_cells_of_type(_m39, "$mux") != 1 {
+            println("FAIL T39a mux_count got " + str(rtlil_count_cells_of_type(_m39, "$mux")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m39, "$dff") != 1 {
+            println("FAIL T39b dff_count got " + str(rtlil_count_cells_of_type(_m39, "$dff")))
             fails = fails + 1
         }
     }
