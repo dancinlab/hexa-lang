@@ -917,3 +917,22 @@ For each Tier-A sub-phase:
 - Remaining gap: 2 C-only stubs (getenv + strerror) which are
   architectural exceptions (init-order + lifetime), not unfinished
   porting work. Step 2 effectively CLOSED.
+
+## Phase 3 — step 3 (runtime.c/runtime_core.c HI tier)
+
+### 2026-05-21 — 🛸 step 3 cycle 1 POC: hexa_abs C → hexa source
+
+- ✅ first HI-tier function ported. `stdlib/runtime/numeric.hexa`
+  created with `pub fn rt_abs_int(v: int) -> int` + `rt_abs_float`.
+  `hexa_abs` C wrapper in self/runtime_core.c:5679 now dispatches on
+  HX_IS_INT then calls the matching hexa fn directly (no HexaVal
+  round-trip — hexa fn signature already accepts/returns HexaVal)
+- aprime_cc smoke exit(42) PASS · 5 externs preserved · binary
+  1,141,528 B
+- Mechanism validates for runtime_core.c too (not just runtime.c).
+  Same `#ifndef HEXA_HAS_HEXA_RT_STDLIB` two-mode pattern from step 2
+  (standalone smoke keeps C body; ap_post.c gets macro defined →
+  hexa-source bodies win)
+- Note: hexa_abs lives in runtime_core.c file but its LOGIC is HI-tier
+  (HexaVal value-level macros only, no arena/GC touch). Step 3 vs 4
+  boundary per RUNTIME.md is about LOGIC tier, not source file

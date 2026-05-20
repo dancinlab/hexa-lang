@@ -1,0 +1,23 @@
+// stdlib/runtime/numeric.hexa — RUNTIME.md step-3 cycle 1 POC.
+//
+// First HI-tier hexa-source replacement. `hexa_abs` C body in
+// self/runtime_core.c:5679 splits on HexaVal tag (int vs float) and
+// returns the corresponding signed absolute. We split the polymorphism
+// into two hexa fns (rt_abs_int + rt_abs_float) since hexa typing
+// doesn't model the HexaVal union directly; the C wrapper dispatches
+// based on HX_IS_INT.
+//
+// This is step 3 (not step 4) by intent even though hexa_abs lives in
+// runtime_core.c — the function logic is HI-tier (HexaVal value-level
+// macros, no arena/GC touch). Step 3/4 split per RUNTIME.md is about
+// which LOGIC moves to hexa, not which FILE the C wrapper lives in.
+
+pub fn rt_abs_int(v: int) -> int {
+    if v < 0 { return 0 - v }
+    return v
+}
+
+pub fn rt_abs_float(v: float) -> float {
+    if v < 0.0 { return 0.0 - v }
+    return v
+}

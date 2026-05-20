@@ -5676,10 +5676,24 @@ HexaVal hexa_ceil(HexaVal v) {
     return hexa_int((int64_t)ceil(__hx_to_double(v)));
 }
 
+// RUNTIME.md step-3 cycle 1 POC — first HI-tier hexa-source delegation
+// from runtime_core.c. Source of truth: stdlib/runtime/numeric.hexa
+// (rt_abs_int + rt_abs_float). #ifndef guard mirrors step-2 pattern:
+// standalone build keeps C body; ap_post.c gets HEXA_HAS_HEXA_RT_STDLIB
+// → hexa-emitted bodies win as strong symbols.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_abs(HexaVal v) {
     if (HX_IS_INT(v)) return hexa_int(HX_INT(v) < 0 ? -HX_INT(v) : HX_INT(v));
     return hexa_float(fabs(HX_FLOAT(v)));
 }
+#else
+extern HexaVal rt_abs_int(HexaVal v);
+extern HexaVal rt_abs_float(HexaVal v);
+HexaVal hexa_abs(HexaVal v) {
+    if (HX_IS_INT(v)) return rt_abs_int(v);
+    return rt_abs_float(v);
+}
+#endif
 
 // P7-6 math coverage (2026-04-19): transcendentals + rounding + conversions
 // used by training/inference codegen. All route through __hx_to_double to
