@@ -1,0 +1,30 @@
+// stdlib/runtime/ctype.hexa — RUNTIME.md step-2 cycle 1 POC.
+//
+// Hexa-source replacements for C-side `hxlcl_isalnum`/`hxlcl_isalpha`
+// helpers in self/runtime.c (cycle 59). The C-side wrappers thin-shim
+// onto these hexa fns via the standard HexaVal calling convention
+// (every hexa pub fn emits `HexaVal name(HexaVal ...)` after hexa_v2
+// transpile).
+//
+// This is the first proof of step 2 of RUNTIME.md's 4-step path:
+//   step 1 (cycles 46-65): libc unhook via C-source hxlcl_* helpers
+//   step 2 (NOW):          port hxlcl_* helpers C → hexa source
+//   step 3 (later):        runtime.c HI tier C → hexa source
+//   step 4 (final):        runtime_core.c CORE tier C → hexa source
+//
+// ASCII classifiers — locale-free. Per ANSI C `isalnum(c)` /
+// `isalpha(c)` definition restricted to the C locale (matches the
+// cycle-59 hxlcl_isalnum/_isalpha bodies).
+
+pub fn rt_isalnum(c: int) -> bool {
+    if c >= 48 && c <= 57 { return true }   // '0'..'9'
+    if c >= 65 && c <= 90 { return true }   // 'A'..'Z'
+    if c >= 97 && c <= 122 { return true }  // 'a'..'z'
+    return false
+}
+
+pub fn rt_isalpha(c: int) -> bool {
+    if c >= 65 && c <= 90 { return true }   // 'A'..'Z'
+    if c >= 97 && c <= 122 { return true }  // 'a'..'z'
+    return false
+}

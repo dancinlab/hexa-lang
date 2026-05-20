@@ -789,15 +789,14 @@ static double __attribute__((noinline)) hxlcl_sin(double x) {
     const double PI_HALF = 1.5707963267948966;
     return hxlcl_cos(x - PI_HALF);
 }
-static int __attribute__((noinline)) hxlcl_isalnum(int c) {
-    return ((c >= '0' && c <= '9') ||
-            (c >= 'A' && c <= 'Z') ||
-            (c >= 'a' && c <= 'z')) ? 1 : 0;
-}
-static int __attribute__((noinline)) hxlcl_isalpha(int c) {
-    return ((c >= 'A' && c <= 'Z') ||
-            (c >= 'a' && c <= 'z')) ? 1 : 0;
-}
+// RUNTIME.md step-2 cycle 1 — bodies MOVED below `#include
+// "runtime_core.c"` so they can use HexaVal / hexa_int / hexa_truthy
+// to delegate to the hexa-source `rt_isalnum`/_isalpha (defined in
+// stdlib/runtime/ctype.hexa, transpile-emitted into ap_post.c).
+// Forward decl here so call sites in cycle-46 helpers earlier in
+// this file can still link.
+static int hxlcl_isalnum(int c);
+static int hxlcl_isalpha(int c);
 // Cycle 60 — pthread stubs. aprime_cc is single-threaded
 // (compile-then-exit). thread/channel runtime in self/native/thread.c
 // is linked but unreachable. All stubs return 0 = success.
@@ -1165,6 +1164,45 @@ static int __attribute__((noinline)) hxlcl_posix_openpt(int flags) {
 // direct calls; no #define indirection needed.
 
 #include "runtime_core.c"
+
+// RUNTIME.md step-2 cycle 1 POC — thin C shim for `hxlcl_isalnum`/_isalpha
+// delegating to hexa-source `rt_isalnum`/_isalpha (in stdlib/runtime/
+// ctype.hexa, emitted into ap_post.c by transpile). Two scenarios:
+//
+//   (a) full aprime_cc build: ap_post.c defines `HEXA_HAS_HEXA_RT_STDLIB`
+//       above `#include "runtime.c"` (build_aprime.sh post-process
+//       prepends it), the hexa-source rt_isalnum/rt_isalpha definitions
+//       win as the strong symbols, and the C fallbacks here are
+//       skipped.
+//
+//   (b) standalone smoke / consumer build: no hexa stdlib transpile
+//       output, so runtime.c provides the C fallback bodies. These
+//       mirror the hexa source 1-for-1 (ASCII classifiers — locale-
+//       free per ANSI C).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
+HexaVal rt_isalnum(HexaVal c) {
+    int64_t v = HX_INT(c);
+    int b = ((v >= 48 && v <= 57) ||
+             (v >= 65 && v <= 90) ||
+             (v >= 97 && v <= 122)) ? 1 : 0;
+    return hexa_bool(b);
+}
+HexaVal rt_isalpha(HexaVal c) {
+    int64_t v = HX_INT(c);
+    int b = ((v >= 65 && v <= 90) ||
+             (v >= 97 && v <= 122)) ? 1 : 0;
+    return hexa_bool(b);
+}
+#else
+extern HexaVal rt_isalnum(HexaVal c);
+extern HexaVal rt_isalpha(HexaVal c);
+#endif
+static int hxlcl_isalnum(int c) {
+    return hexa_truthy(rt_isalnum(hexa_int((int64_t)c))) ? 1 : 0;
+}
+static int hxlcl_isalpha(int c) {
+    return hexa_truthy(rt_isalpha(hexa_int((int64_t)c))) ? 1 : 0;
+}
 
 // ── Extern FFI: dlopen / dlsym / dispatch ───────────────
 

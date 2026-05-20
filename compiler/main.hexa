@@ -57,6 +57,11 @@ import "./codegen/stream.hexa"
 // UNTOUCHED holds by construction (new `else if`, no edit to existing).
 import "./codegen/nvptx_target.hexa"
 import "./check/target_gate.hexa"
+// RUNTIME.md step-2 cycle 1 POC — port `hxlcl_isalnum`/`_isalpha`
+// from self/runtime.c (cycle 59 C-source) to hexa source. The thin
+// C shims in runtime.c now delegate to `rt_isalnum`/`rt_isalpha`
+// via the standard HexaVal calling convention.
+import "../stdlib/runtime/ctype.hexa"
 import "./emit/asm.hexa"
 import "./emit/macho_arm64.hexa"
 import "./diag/catalog.hexa"

@@ -8373,3 +8373,27 @@ then runtime.c, then runtime_core.c) is multi-week work per the
 RUNTIME.md 4-step honest end-state path.
 
 @cite cycle 63+64 entries.
+
+### 2026-05-21 — 🛸 RUNTIME.md step 2 cycle 1 POC — hexa source helpers
+
+step 2 begins. POC ported hxlcl_isalnum + hxlcl_isalpha from C source
+(self/runtime.c cycle 59) to hexa source (stdlib/runtime/ctype.hexa).
+
+mechanism:
+- `pub fn rt_isalnum(c: int) -> bool` in stdlib/runtime/ctype.hexa
+- imported by compiler/main.hexa
+- transpile emits `HexaVal rt_isalnum(HexaVal)` into ap_post.c
+- runtime.c's `hxlcl_isalnum` thin C shim wraps int → HexaVal, calls,
+  unwraps bool. clang -Oz dead_strip inlines the rt_isalnum body
+- two-mode runtime.c with `#ifndef HEXA_HAS_HEXA_RT_STDLIB` guard:
+  ap_post.c gets the macro defined (build_aprime.sh sed prepend),
+  smoke test does not (falls back to C body in runtime.c)
+
+aprime_cc build PASS, smoke exit(42) PASS, 5 externs unchanged.
+binary 1,139,640 B (same as cycle 65 end).
+
+This proves the mechanism for porting the remaining ~45 hxlcl_*
+helpers from step 1 to hexa source. Cost ~5ns per call (HexaVal
+wrap+unwrap); acceptable for aprime_cc compile-then-exit flow.
+
+@cite cycle 65 entry (step 1 acceptance).

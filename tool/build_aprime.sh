@@ -112,6 +112,14 @@ sed -E -e 's/hexa_call1\(sha256_hex,[ ]*([^)]*)\)/hexa_sha256(\1)/g' \
 # single-TU build: inline runtime.c (so static-inline helpers resolve).
 sed -i.bak 's|#include "runtime.h"|#include "runtime.c"|' "$APPOST"
 rm -f "$APPOST.bak"
+# RUNTIME.md step-2 cycle 1: signal runtime.c that hexa-source stdlib/
+# runtime/* fns are present in this TU, so it should skip the C
+# fallback definitions of rt_isalnum/rt_isalpha (cycle 59 → cycle-step2
+# hexa-port). Prepend the macro definition above runtime.c #include.
+sed -i.bak3 '1i\
+#define HEXA_HAS_HEXA_RT_STDLIB 1
+' "$APPOST"
+rm -f "$APPOST.bak3"
 echo "  [3/5] post-process: s4_flatc_post + builtin sed + runtime.c inline"
 
 # ── stage 4: clang ─────────────────────────────────────────────────

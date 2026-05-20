@@ -807,3 +807,29 @@ For each Tier-A sub-phase:
   libsystem" — **MEASURED**. Zero libm (cycle 59) ✓ · zero libsystem
   pthread/socket/exec/pty (cycle 60-61) ✓ · 5 residuals consist of 3
   compiler-rt + 2 clang artifacts (not libc per se)
+
+## Phase 2 — Tier-B stdlib primitives (step 2)
+
+### 2026-05-21 — 🛸 step 2 POC: hxlcl_isalnum + isalpha → stdlib/runtime/ctype.hexa (cycle 1)
+
+- ✅ first hexa-source helper LANDED. `stdlib/runtime/ctype.hexa`
+  created with `pub fn rt_isalnum(c: int) -> bool` + `rt_isalpha`
+  bodies. Imported from `compiler/main.hexa`
+- ✅ aprime_cc rebuild PASS · smoke exit(42) PASS · 5 externs
+  unchanged (step-1 acceptance preserved) · binary 1,139,640 B
+- Path: transpile emits `HexaVal rt_isalnum(HexaVal c) { ... }` C
+  body into ap_post.c · runtime.c `hxlcl_isalnum` thin shim calls
+  `rt_isalnum` via HexaVal wrap/unwrap · clang -Oz `-dead_strip`
+  inlines the rt_isalnum body into hxlcl_isalnum (rt_isalnum symbol
+  doesn't appear in final binary `nm` output — inlined)
+- Two-mode runtime.c: `#ifndef HEXA_HAS_HEXA_RT_STDLIB` → C
+  fallback body (smoke test / standalone consumer). `#define
+  HEXA_HAS_HEXA_RT_STDLIB 1` prepended to ap_post.c by post-process
+  → fallback skipped, hexa-source body wins
+- POC validates the mechanism: hexa-source IS the new source of
+  truth, C runtime.c just wraps. Re-applicable to any of the 47
+  hxlcl_* helpers from step 1
+- Cost per call: 1 `hexa_int()` wrap + 1 `hexa_truthy()` unwrap
+  (~5 ns each). Acceptable for compile-then-exit aprime_cc; if
+  flame/NN hot loops were affected, would need direct extern int
+  ABI (deferred Phase 3 issue)
