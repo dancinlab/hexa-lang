@@ -2007,6 +2007,11 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
             let mut t_lhs = ""
             let mut t_rhs: [str] = []
             let mut t_op_str = ""
+            let mut t_dyn_base = ""
+            let mut t_dyn_idx_toks: [str] = []
+            let mut t_dyn_op_str = ""
+            let mut t_dyn_rhs: [str] = []
+            let mut t_dyn_ok = 0
             if len(then_toks) >= 4 {
                 let mut op_pos = 0 - 1
                 let mut lhs_str = ""
@@ -2045,11 +2050,6 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                 // build a P-way $eq+$and+$mux+$dff chain via
                 // _rv_array_bound. Only fires when the simple/static
                 // paths above failed to capture op_pos.
-                let mut t_dyn_base = ""
-                let mut t_dyn_idx_toks: [str] = []
-                let mut t_dyn_op_str = ""
-                let mut t_dyn_rhs: [str] = []
-                let mut t_dyn_ok = 0
                 if op_pos <= 0 && then_toks[1] == "[" {
                     let mut bd2 = 1
                     let mut p2 = 2
