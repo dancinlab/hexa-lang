@@ -5365,3 +5365,79 @@ cycles 2-N (encoding + walker + linker + RUNEQ) + P3.
 
 **cc --regen / binary promote**: 미수행. compiler/emit/elf_x86_64.hexa
 는 NOT yet imported by compiler/main.hexa.
+
+
+### 2026-05-20 — S7-P2 cycle 2: x86_64 instruction encoding minimum subset (F-P2-X86-ENCODE PASS, 4 rules byte-eq)
+
+RFC 063 § P2 cycle 2 — x86_64 instruction encoding 의 최소 subset 추가.
+variable-length 1-15 byte instructions (vs arm64 의 fixed 4-byte).
+Linux x86_64 BSD syscall exit(N) path 용 4 rules: MOV r32 imm32 (5B),
+SYSCALL (2B), RET (1B).
+
+**한 줄**: `mov eax,#60; mov edi,#42; syscall` 12-byte sequence 가
+`b8 3c 00 00 00 bf 2a 00 00 00 0f 05` 로 정확 encode. ELF .o 안에
+embedded + `file` 가 ELF 인식.
+
+**변경 파일** (`compiler/emit/elf_x86_64.hexa`):
+
+새 함수 3개:
+- `_ex86_reg32(s) -> Int` — 32-bit register name → index (eax=0,
+  ecx=1, edx=2, ebx=3, esp=4, ebp=5, esi=6, edi=7).
+- `_ex86_imm(s) -> Int` — "#N" / bare integer 파싱.
+- `_ex86_mov_r32_imm32(reg_idx, imm) -> [Int]` — `B8+r` opcode +
+  imm32 LE.
+
+`pub fn encode_x86_64_insn(op, ops) -> [Int]` — variable-length
+return (vs arm64 의 Int return). 현재 rules:
+- MOV r32, #imm32 (5 bytes: `B8+r imm32`)
+- SYSCALL (2 bytes: `0F 05`)
+- RET (1 byte: `C3`)
+
+**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P2_X86_ENCODE.hexa`):
+
+- 4 개별 instruction encoding byte-eq:
+  - mov eax, #60 → `b8 3c 00 00 00`
+  - mov edi, #42 → `bf 2a 00 00 00`
+  - syscall      → `0f 05`
+  - ret          → `c3`
+- 3개 instr 를 ElfX86Obj.text 에 concat (12 bytes)
+- serialize → ELF .o → `file` external oracle 통과
+
+**측정 (arm64-Mac local — cross-architecture encode check)**:
+
+```
+$ /tmp/run_F_P2_X86_ENCODE
+mov eax, #60  → b8 3c 00 00 00
+mov edi, #42  → bf 2a 00 00 00
+syscall       → 0f 05
+ret           → c3
+
+full 12-byte exit(42): b8 3c 00 00 00 bf 2a 00 00 00 0f 05
+
+=== file ===
+/tmp/p2_c2_exit42.elf.o: ELF 64-bit LSB relocatable, x86-64, version 1 (SYSV)
+F-P2-X86-ENCODE PASS — 3 x86_64 instructions byte-eq + ELF .o emit
+```
+
+**HONEST SCOPE (g3, over-claim 0)**:
+
+- 4 minimum rules 만. compiler/codegen/x86_64_linux.hexa 의 LIR subset
+  전체 (~250 ops) 는 follow-up. ModR/M + SIB + REX prefix 처리 필요.
+- ubu-2 (linux x86_64) 원격 실행은 미시도. cycle 3+ 에서 file 동기화
+  + 실행 시도 (wilson-pool autosync 또는 명시적 scp).
+- ELF executable (ET_EXEC + program headers + PT_LOAD) 는 cycle 3+
+  의 baton. cycle 2 는 relocatable (.o) 만.
+
+**다음 cycle (P2 cycle 3) baton**:
+
+- ELF executable layout — PT_LOAD program headers + ET_EXEC e_type +
+  e_entry address. 실제 Linux 에서 launch 가능한 ELF exec.
+- ubu-2 원격 실행 — scp / sync the file + ssh ubu-2 ./exec → exit 42.
+  P1 cycle 7 의 arm64 SVC syscall 의 x86_64 analog.
+- 더 많은 encoding rules (ADD, SUB, CMP, JMP, CALL, PUSH/POP, etc.)
+  for richer corpus.
+
+**RFC 063 phasing 진척**: P0 ✅ · P1 ✅ · P2 cycles 1-2 ✅. 잔여 P2
+cycles 3-N (exec emit + ubu-2 launch test + walker + linker) + P3.
+
+**cc --regen / binary promote**: 미수행. compiler/emit/elf_x86_64.hexa.

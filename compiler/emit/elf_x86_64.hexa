@@ -99,6 +99,76 @@ fn _ew_str(out: [Int], s: string) -> Int {
     return off
 }
 
+// ─────────────────────────────────────────────────────────────────
+// x86_64 instruction encoding — P2 cycle 2
+// ─────────────────────────────────────────────────────────────────
+//
+// `encode_x86_64_insn(op, ops) -> [Int]` returns a *variable-length*
+// byte array (unlike arm64's fixed 4-byte word).  x86_64 encoding
+// breakdown:
+//
+//   [legacy prefix] [REX] [opcode 1-3B] [ModR/M] [SIB] [disp 0/8/32] [imm 0/8/16/32/64]
+//
+// Cycle 2 ships the minimum subset for a Linux `exit(N)` syscall:
+//
+//   MOV EAX, #N      B8 imm32          5 B  (32-bit MOV zero-extends to RAX)
+//   MOV EDI, #N      BF imm32          5 B  (same for RDI)
+//   MOV ESI, #N      BE imm32          5 B  (RSI arg)
+//   MOV EDX, #N      BA imm32          5 B  (RDX arg)
+//   SYSCALL          0F 05             2 B  (kernel trap)
+//   RET              C3                1 B
+//
+// 32-bit register names parse to indices 0-7 (eax=0, ecx=1, edx=2,
+// ebx=3, esp=4, ebp=5, esi=6, edi=7). The opcode for `MOV r32, imm32`
+// is `B8 + reg_idx`.
+
+fn _ex86_reg32(s: string) -> Int {
+    if s == "eax" || s == "EAX" { return 0 }
+    if s == "ecx" || s == "ECX" { return 1 }
+    if s == "edx" || s == "EDX" { return 2 }
+    if s == "ebx" || s == "EBX" { return 3 }
+    if s == "esp" || s == "ESP" { return 4 }
+    if s == "ebp" || s == "EBP" { return 5 }
+    if s == "esi" || s == "ESI" { return 6 }
+    if s == "edi" || s == "EDI" { return 7 }
+    return -1
+}
+
+fn _ex86_imm(s: string) -> Int {
+    let n = len(s)
+    if n < 2 { return 0 }
+    if s.substring(0, 1) != "#" { return s.to_int() }
+    return s.substring(1, n).to_int()
+}
+
+// Emit `MOV r32, imm32`. Encoding: `B8+r` opcode, then imm32 LE.
+fn _ex86_mov_r32_imm32(reg_idx: Int, imm: Int) -> [Int] {
+    let out: [Int] = []
+    out.push(0xB8 | (reg_idx & 0x7))
+    out.push(imm & 0xFF)
+    out.push((imm >> 8) & 0xFF)
+    out.push((imm >> 16) & 0xFF)
+    out.push((imm >> 24) & 0xFF)
+    return out
+}
+
+pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
+    // MOV r32, imm32  (caller passes uppercase MOV, lowercase reg name)
+    if op == "MOV" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
+        let rd = _ex86_reg32(ops[0])
+        let imm = _ex86_imm(ops[1])
+        if rd >= 0 { return _ex86_mov_r32_imm32(rd, imm) }
+    }
+    if op == "SYSCALL" {
+        return [0x0F, 0x05]
+    }
+    if op == "RET" {
+        return [0xC3]
+    }
+    // Unknown op — return empty (caller treats as encoding failure).
+    return []
+}
+
 // serialize_elf_x86_64 — P2 cycle 1: empty-object byte stream.
 // Layout: header → .text → .symtab → .strtab → .shstrtab → section
 // header table (5 entries: NULL, .text, .symtab, .strtab, .shstrtab).
