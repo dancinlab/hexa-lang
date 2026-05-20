@@ -7870,3 +7870,48 @@ PR #233 closed PIECE 1).
 
 **Cross-link**: RFC 070 §G7-B Mach-O Part B · §3.B "1-symbol fat .so" · `@D g3` honest scope · `@D g_inbox_processing_loop` step 7 (deploy step separation) · `1a56f087` (G7-A.native DEFERRED 패턴 mirror).
 
+
+---
+
+### 진행 로그 — RFC 070 G7-A.native K2 — CLI gate-drop + driver `--shared` wiring LANDED (2026-05-20)
+
+**branch**: `worktree-agent-a5489c112942a8fb6` (worktree from `s1-step2-codegen-perf`) · **date**: 2026-05-20 · **shape**: A (surgical — `self/main.hexa` gate-drop + native-path `--shared` flag pass-through + `compiler/main.hexa` flag accept + `CodegenOptions.shared = 1` overlay)
+
+K1 of the RFC 070 G7-A campaign landed Mach-O Part B (`929749c6`) and shipped 3 deferreds — native CLI gate-drop, binary promote, F-A1/F-A2 measurement. K2 (this sub-cycle) closes deferred #1 and prepares for #2 (deploy cycle) + #3 (mini arm64 measurement).
+
+**Prerequisite cherry-pick** (`cc5568d1` this cycle, picked from `886977c4` upstream): RFC 070 G7-A.native impl iface — the `CodegenOptions` struct + 5 `RELOC_*` constants in `compiler/ir/lir.hexa` that the K2 driver overlay constructs. The iface cascade was missing from both `origin/main` and `origin/s1-step2-codegen-perf` per the prior probe (`1a56f087` DEFERRED note); this cycle picks the minimum iface needed for the driver compile (PLAN.md + RFC draft conflicts resolved via `--ours` to preserve worktree HEAD).
+
+Dup-race precheck (per `feedback_inbox_dup_race_precheck.md`): `git log --all --oneline | grep -iE "K2|gate-drop|--shared.*driver"` returned no other parallel session — clean.
+
+| change | location | one-liner |
+| --- | --- | --- |
+| native+shared gate-drop | `self/main.hexa:2057-2068` | refusal block replaced with K2 enablement comment (heritage `8fdb29e2` D1 + `b62809f8` D2 + `06bc2ea4` C1 + `886977c4`→`cc5568d1` iface) |
+| aprime_cc `--shared` pass-through | `self/main.hexa:2096-2104` | `__nshared_flag` interpolated into the aprime_cc invocation when CLI `shared == "1"` |
+| clang link `-fPIC -shared` (native) | `self/main.hexa:2110-2122` | `__nshared_link` prepended to clang flags (mirrors C-path `_shared_cflags` ~L2224) |
+| existence-check fallback | `self/main.hexa:2117-2132` | tmp/out chmod test relaxed from `-x` → `-e` for 0644 .so/.dylib (mirrors C-path `_tmp_test` ~L2264) |
+| `--shared` flag accept | `compiler/main.hexa:393` + `434-441` | `shared_flag: bool` + flag parse branch |
+| `CodegenOptions` overlay | `compiler/main.hexa:816-826` | `__cg_opts` mutated to `{shared: 1, target_triple: ""}` when `shared_flag` is set |
+
+**Parse-gate** (per `reference_hexa_basename_sigkill_workaround_2026_05_19.md`): `/Users/ghost/.hx/bin/hexa_real parse` PASS on `compiler/main.hexa` + `compiler/ir/lir.hexa` + `compiler/codegen/arm64_darwin.hexa` + `compiler/codegen/x86_64_linux.hexa`. `self/main.hexa` shows the pre-existing EOF off-by-one (verified by `git stash` round-trip — present pre-K2 on `cc5568d1` HEAD as well); orthogonal to this cycle.
+
+**RFC 070 §4 — G7-A.native impl row progress** (post K2):
+
+  - iface ✅       (B1 `886977c4` → K2 pick `cc5568d1`)
+  - signature ✅   (C1 `06bc2ea4`)
+  - emit-body ✅   (D1 arm64 `8fdb29e2` + D2 x86_64 `b62809f8`)
+  - cli-wire ✅    (K2 this cycle — gate-drop + `--shared` pass-through + driver overlay)
+  - visibility    (pending — `.hidden` / `.private_extern` directives; G7-A.visibility scaffold `fd480da9` landed marker comments only)
+  - falsify       (pending — F-A1 dlopen byte-eq + F-A2 nm single-export, K2 deferred #3 → next cycle)
+
+**Out of scope (`@D g3` honest — K1 deferred #2+#3 NOT closed this cycle)**:
+
+  1. **Binary promote** (K1 deferred #2 — `@D g_commit_push_deploy`) — `self/native/hexa_cc.c` + `hexa_v2` NOT regenerated. Reason: K2 is a worktree-branch SSOT commit; binary promote happens on a paired deploy commit when the branch lands. `hexa cc --regen` + 3-pass fixpoint is the standard deploy step, not part of inbox processing loop step 7.
+  2. **F-A1/F-A2 measurement** (K1 deferred #3) — mini arm64 native PIC dlopen + nm single-export NOT measured. Reason: measurement requires the promoted binary from deferred #2; chain is K2 SSOT → deploy → measure. Falsifier targets stay scoped per RFC 070 §4.5 (5-byte dlopen invoke + nm T+D count).
+  3. **Visibility directives** — `.hidden` (ELF) / `.private_extern` (Mach-O) NOT emitted by codegen back-ends. Reason: G7-A.visibility scaffold (`fd480da9`) is marker-comments only; impl is a follow-on sub-cycle.
+  4. **Downstream consumer** — `hexa_dlopen` / `stdlib/dynlink.hexa` (G7-C scope) NOT created. Reason: G7-C is a separate phase; G7-A K2 only opens the producer side.
+
+**`@D g_commit_push_deploy` posture**: this commit changes compiler source (`self/main.hexa` `cmd_build` body + `compiler/main.hexa` flag parser + driver) but is filed on a worktree branch (`worktree-agent-a5489c112942a8fb6`), not `origin/s1-step2-codegen-perf` or `origin/main`. The deploy step (regen `hexa_cc.c` + rebuild `hexa_v2` + 3-pass fixpoint) lands when the branch is picked back to the source branch — same pattern as `cc5568d1` iface pick.
+
+**Files**: `self/main.hexa` (gate-drop comment + `--shared` flag forwarding + clang link flag + existence-check) · `compiler/main.hexa` (`--shared` flag accept + `CodegenOptions` overlay) · `compiler/ir/lir.hexa` (iface cherry-pick `cc5568d1`, separate commit) · `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` (scaffold marker text update from iface pick, separate commit) · `compiler/PLAN.md` (this entry).
+
+**Cross-link**: RFC 070 §4 G7-A.native impl row · K1 closure (`929749c6` Mach-O Part B) · K2 deferred #2 (binary promote, next cycle) · K2 deferred #3 (F-A1/F-A2 measurement, next cycle) · `@D g_commit_push_deploy` (deploy step posture) · `@D g_inbox_processing_loop` Shape A · `@D g5` hexa-native-only · `@D g_plan_consolidation`.

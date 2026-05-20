@@ -2054,18 +2054,18 @@ fn cmd_build(src, out, c_only, target, shared) {
             println("       cross-compilation runs only on the C (clang/zig) path")
             exit(1)
         }
-        // RFC 070 G7-A.native sub-cycle (deferred — see cmd_build header).
-        // The native MIR→LIR→asm codegen (compiler/codegen/{arm64_darwin,
-        // x86_64_linux}.hexa) does NOT yet emit PIC + hidden-visibility +
-        // ET_DYN/MH_DYLIB. Refuse rather than silently produce a static
-        // .o that would link as an executable, not a loadable .so.
-        if shared == "1" {
-            println("error: --shared is unsupported with HEXA_BACKEND=native")
-            println("       native codegen PIC mode is the parallel G7-A sub-cycle")
-            println("       (compiler/codegen/{arm64_darwin,x86_64_linux}.hexa); use")
-            println("       the default C path (`HEXA_BACKEND= hexa build --shared ...`)")
-            exit(1)
-        }
+        // RFC 070 G7-A.native gate-drop (2026-05-20 — sub-cycle K2 of the
+        // K1 deferred trio). The native MIR→LIR→asm codegen now emits PIC
+        // GOT-load sequences in `--shared` mode (D1 arm64 `8fdb29e2` + D2
+        // x86_64 `b62809f8`); the entry-fn signatures accept
+        // `CodegenOptions` (C1 `06bc2ea4`); the iface struct + RELOC_*
+        // constants live in `compiler/ir/lir.hexa` (iface `886977c4` —
+        // worktree pick `cc5568d1`). The aprime_cc driver now forwards
+        // `--shared` from CLI bopts[4] through to
+        // `codegen_options_default()` overlay (Step K2.2 below in
+        // `compiler/main.hexa`). What stays out of scope: hidden visibility
+        // directives (`.hidden` / `.private_extern`) — measured by the
+        // F-A2 falsifier in Step K2.5.
         // runtime.c resolver — same chain the C path uses below
         // ($HEXA_LANG/self > <install>/self > ./self).
         let __nenvroot = env("HEXA_LANG")
@@ -2093,7 +2093,13 @@ fn cmd_build(src, out, c_only, target, shared) {
         let _nmk = exec("mkdir -p build/artifacts 2>/dev/null")
         let __nstem = basename_stem(out)
         let __nasm = "build/artifacts/" + __nstem + ".s"
-        let __ncmd = "'" + __ncc + "' _drv.hexa --emit=asm -o '" + __nasm + "' '" + __actual_src + "' 2>&1"
+        // K2.2 — `--shared` flag pass-through to aprime_cc. When set,
+        // the compiler driver overlays `codegen_options_default()` with
+        // `opts.shared = 1`, gating the GOT-load emit-body branches in
+        // both arm64 + x86_64 codegen back-ends.
+        let mut __nshared_flag = ""
+        if shared == "1" { __nshared_flag = " --shared" }
+        let __ncmd = "'" + __ncc + "' _drv.hexa --emit=asm" + __nshared_flag + " -o '" + __nasm + "' '" + __actual_src + "' 2>&1"
         println("  [native 1/2] " + __ncmd)
         let __nr = exec(__ncmd)
         if len(__nr) > 0 { println("    " + __nr) }
@@ -2104,12 +2110,22 @@ fn cmd_build(src, out, c_only, target, shared) {
         }
         // Stage 2: clang assembles `.s` + links runtime.c → `<out>.tmp.<PID>`.
         // atomic rename mirrors the C path's bt 37 (concurrent same-out safe).
+        // K2.3 — `--shared` adds `-fPIC -shared` to clang link (mirrors the
+        // C-path's `_shared_cflags` block ~L2224). Output is a loadable
+        // .so/.dylib (0644), not an executable (0755).
+        let mut __nshared_link = ""
+        if shared == "1" { __nshared_link = "-fPIC -shared " }
         let __ntmp = exec("printf '%s.tmp.%s' '" + out + "' \"$$\"")
-        let __nlink = "clang -O2 " + os_clang_cflags() + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __nself + "' '" + __nasm + "' '" + __nrtc + "' -o '" + __ntmp + "'" + os_clang_ldflags() + " 2>&1"
+        let __nlink = "clang -O2 " + __nshared_link + os_clang_cflags() + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __nself + "' '" + __nasm + "' '" + __nrtc + "' -o '" + __ntmp + "'" + os_clang_ldflags() + " 2>&1"
         println("  [native 2/2] " + __nlink)
         let __nr2 = exec(__nlink)
         if len(__nr2) > 0 { println("    " + __nr2) }
-        let __ntmp_chk = exec("test -x '" + __ntmp + "' && printf yes || printf no")
+        // K2.4 — shared output is 0644 not 0755, so `test -x` fails for
+        // the .so/.dylib path. Fall back to `test -e` (existence) in
+        // shared mode (mirrors C-path L2264).
+        let mut __ntmp_test = "-x"
+        if shared == "1" { __ntmp_test = "-e" }
+        let __ntmp_chk = exec("test " + __ntmp_test + " '" + __ntmp + "' && printf yes || printf no")
         if __ntmp_chk != "yes" {
             println("error: native link failed — binary not produced: " + __ntmp)
             exit(1)
@@ -2117,12 +2133,18 @@ fn cmd_build(src, out, c_only, target, shared) {
         codesign_if_macos(__ntmp)
         let __nmv = exec("mv -f '" + __ntmp + "' '" + out + "' 2>&1")
         if len(__nmv) > 0 { println("    mv: " + __nmv) }
-        let __nout_chk = exec("test -x '" + out + "' && printf yes || printf no")
+        let mut __nout_test = "-x"
+        if shared == "1" { __nout_test = "-e" }
+        let __nout_chk = exec("test " + __nout_test + " '" + out + "' && printf yes || printf no")
         if __nout_chk != "yes" {
             println("error: build failed — output binary missing: " + out)
             exit(1)
         }
-        println("OK: built " + out + " (native backend)")
+        if shared == "1" {
+            println("OK: built " + out + " (native backend, shared library — RFC 070 G7-A K2 gate-drop)")
+        } else {
+            println("OK: built " + out + " (native backend)")
+        }
         return ""
     }
     let stem = basename_stem(out)

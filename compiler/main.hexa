@@ -391,6 +391,11 @@ if len(_opt_env) > 0 {
 // flags don't break old wrappers.
 let mut want_help = false
 let mut want_version = false
+// RFC 070 G7-A.native K2.2 — `--shared` flag (forwarded by self/main.hexa's
+// `cmd_build` when `HEXA_BACKEND=native + --shared`). Overlays
+// `codegen_options_default()` with `opts.shared = 1` to gate the GOT-load
+// emit-body branches in arm64_darwin + x86_64_linux back-ends.
+let mut shared_flag = false
 let mut ai = 0
 while ai < len(user_argv) {
     let a = user_argv[ai]
@@ -433,6 +438,12 @@ while ai < len(user_argv) {
         ai = ai + 1
     } else if a == "--stream" {
         stream_mode = true
+        ai = ai + 1
+    } else if a == "--shared" {
+        // RFC 070 G7-A.native K2.2 — overlay opts.shared = 1. See block
+        // comment at `shared_flag` decl. Native back-ends gate GOT-load
+        // (arm64 adrp+ldr / x86_64 RIP-rel GOTPCREL) on this.
+        shared_flag = true
         ai = ai + 1
     } else if a == "--keep-temp" {
         keep_temp = true
@@ -813,7 +824,16 @@ if stream_mode && target == "arm64-apple-darwin" {
     // in `target_triple` from `target` and forward `bopts[4]` as
     // `shared`. Default-construct keeps emit byte-identical (verified
     // by F-RFC055-CPU-CODEGEN-UNTOUCHED on `--target=nvptx64-*`).
-    let __cg_opts = codegen_options_default()
+    // RFC 070 G7-A.native K2.2 — overlay opts.shared from CLI flag.
+    // Default (shared_flag == false) keeps emit byte-identical to pre-K2
+    // output for every existing caller (verified by F-RFC055-CPU-CODEGEN-
+    // UNTOUCHED on `--target=nvptx64-*`); `--shared` flips the GOT-load
+    // branch in both arm64_darwin + x86_64_linux emit-body (D1 `8fdb29e2`,
+    // D2 `b62809f8`).
+    let mut __cg_opts = codegen_options_default()
+    if shared_flag {
+        __cg_opts = CodegenOptions { shared: 1, target_triple: __cg_opts.target_triple }
+    }
     let lmodule = if target == "arm64-apple-darwin" {
         codegen_arm64_darwin(mmodule, __cg_opts)
     } else if target == "x86_64-linux-gnu" {
