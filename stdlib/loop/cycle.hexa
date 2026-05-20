@@ -25,6 +25,7 @@ use "compiler/lenses/embedded.gen"
 use "compiler/atlas/by_kind/p.gen"
 use "compiler/atlas/by_kind/l.gen"
 use "compiler/atlas/parser"
+use "compiler/atlas/hxc_loader"
 use "stdlib/loop/state"
 use "stdlib/io"
 
@@ -93,9 +94,22 @@ fn cycle_lens() -> array {
         enriched_p.push(enrich_node(ATLAS_P_NODES[ep_i]))
         ep_i = ep_i + 1
     }
+    // RFC 066 B-1b: C kind via HXC sidecar runtime fetch (skip if file absent).
+    let mut c_nodes_loaded: array = []
+    let hxc_path = "dist/atlas.hxc"
+    let exists = exec("test -e " + hxc_path + " && echo Y || echo N").trim()
+    if exists == "Y" {
+        let all_atlas = load_atlas_hxc(hxc_path)
+        let an = len(all_atlas)
+        let mut ai = 0
+        while ai < an {
+            if all_atlas[ai].kind == "C" { c_nodes_loaded.push(all_atlas[ai]) }
+            ai = ai + 1
+        }
+    }
     let view = AtlasView {
         p_nodes: enriched_p,
-        c_nodes: [],
+        c_nodes: c_nodes_loaded,
         l_nodes: ATLAS_L_NODES,
         f_nodes: [],
         r_nodes: [], s_nodes: [], x_nodes: [], q_nodes: [],
