@@ -76,10 +76,15 @@
 //     dyld bind fixups). The LC_DYLD_INFO_ONLY blob carries:
 //       - rebase opcodes  = single REBASE_OPCODE_DONE (no rebases — the
 //                           emitted code is position-independent).
-//       - bind opcodes    = single BIND_OPCODE_DONE (no required binds
-//                           yet — Part B will wire BIND_OPCODE_SET_DYLIB_*
-//                           + BIND_OPCODE_DO_BIND records once a real
-//                           libSystem symbol consumer lands).
+//       - bind opcodes    = (Part B, 2026-05-20) real bind sequence
+//                           targeting `_dyld_stub_binder` from libSystem
+//                           (dylib ordinal 1) into __DATA __got slot 0.
+//                           Sequence: SET_DYLIB_ORDINAL_IMM(1) +
+//                           SET_SYMBOL_TRAILING_FLAGS_IMM(0,name) +
+//                           SET_TYPE_IMM(POINTER=1) +
+//                           SET_SEGMENT_AND_OFFSET_ULEB(__DATA,0) +
+//                           DO_BIND + DONE. Requires LC_LOAD_DYLIB
+//                           libSystem (also landed in Part B).
 //       - weak_bind       = empty.
 //       - lazy_bind       = empty (lazy stub path is G7-C).
 //       - export trie     = ONE-NODE trie that resolves "_<ident>_dispatch"
@@ -90,11 +95,12 @@
 //     LC_ID_DYLIB carries `<basename>.dylib` as the install_name (per
 //     `man dyld(1)`); current/compat = 1.0.0 (per Apple ld(64) default).
 //     __DATA,__got is allocated 4 KiB of zero bytes so dyld has a target
-//     page if/when Part B's BIND_OPCODE_DO_BIND records land — until
-//     then it is structurally present but functionally unused. F-B-LOADABLE
-//     for Mach-O remains gated on Part B (real bind opcodes) but the
-//     header + linkedit shape is now what `dyld_info(1)` / `otool -l` /
-//     `nm -gU` expect.
+//     page; Part B (also landed 2026-05-20) now writes the first __got
+//     slot via BIND_OPCODE_DO_BIND targeting `_dyld_stub_binder` from
+//     libSystem (LC_LOAD_DYLIB added). `dyld_info -bind <out>` reports
+//     the bind record; `nm -m <out>` shows the imported symbol; F-B-
+//     LOADABLE for Mach-O is the Part B falsifier (deferred separate
+//     measure cycle).
 //   * v1.4 (2026-05-20, RFC 070 G7-B impl Part A): ELF path now emits
 //     PT_DYNAMIC + .dynsym + .dynstr + .hash + .dynamic section with
 //     ONE export symbol `<ident>_dispatch`. The DT_HASH/DT_SYMTAB/
@@ -112,9 +118,11 @@
 //     full runtime smoke is gated on G7-A.
 //   * Mach-O MH_DYLIB output: v1.7 lands Mach-O Part A — LC_ID_DYLIB +
 //     LC_DYLD_INFO_ONLY + LC_DYSYMTAB + __DATA,__got triplet (see the
-//     v1.7 paragraph above). Part B (BIND_OPCODE_DO_BIND records
-//     consuming actual undefined symbols) is the next sub-cycle and
-//     will replace the placeholder `BIND_OPCODE_DONE`-only blob.
+//     v1.7 paragraph above). Part B (BIND_OPCODE_DO_BIND record
+//     targeting `_dyld_stub_binder` from libSystem + LC_LOAD_DYLIB
+//     ordinal 1) landed 2026-05-20 — replaces the placeholder
+//     `BIND_OPCODE_DONE`-only blob. dyld now executes the bind at
+//     load time, writing dyld_stub_binder's address to __got[0].
 //   * No PIC codegen consumed yet — G7-A (codegen `--shared`) is a
 //     prerequisite for actually-loadable output. Until then, `.text`
 //     bytes have absolute relocations baked in by the static codegen
@@ -133,11 +141,12 @@
 //   * Multiple input .o files / archive (.a) handling.
 //   * Relocation processing beyond the trivial case (R_X86_64_NONE,
 //     ARM64_RELOC_UNSIGNED-equivalent).
-//   * v1.7 ships Mach-O Part A (LC_DYLD_INFO_ONLY export trie +
-//     LC_DYSYMTAB + LC_ID_DYLIB + zero-fill __got). PLT/GOT real bind
-//     records (BIND_OPCODE_DO_BIND with non-zero dylib ordinal) +
-//     TLS/IFUNC remain out of scope; Part B follow-up replaces the
-//     placeholder bind blob.
+//   * v1.7 ships Mach-O Part A + B (Part A: LC_DYLD_INFO_ONLY export
+//     trie + LC_DYSYMTAB + LC_ID_DYLIB + zero-fill __got; Part B:
+//     BIND_OPCODE_DO_BIND with dylib ordinal 1 targeting
+//     `_dyld_stub_binder` from libSystem, + LC_LOAD_DYLIB). Real
+//     per-consumer fixups (load/store/branch through __got from
+//     emitted PIC code) + TLS/IFUNC remain out of scope.
 //   * Notarization, team identifiers, requirement blobs — ad-hoc only.
 //   * .rodata / .bss / .data — v1.x collapses everything to .text/__text.
 //   * DWARF line-info, symbol versioning, weak/strong, ICF.
@@ -2126,15 +2135,51 @@ fn _build_macho_rebase_blob() -> [int] {
 }
 
 // ── Mach-O bind opcodes (LC_DYLD_INFO_ONLY bind field) ─────────────
-// BIND_OPCODE_DONE = 0x00. v1.7 emits the placeholder "no required
-// binds" blob — the emitted dylib has zero external symbols (PIC
-// dispatch, self-contained). Part B (next sub-cycle) replaces this
-// with real BIND_OPCODE_SET_DYLIB_ORDINAL_IMM + BIND_OPCODE_SET_TYPE_IMM
-// + BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM + BIND_OPCODE_DO_BIND
-// records once a real libSystem symbol consumer lands.
+//
+// PART B (RFC 070 §G7-B): Real bind records — emit a single bind
+// targeting `_dyld_stub_binder` from libSystem (dylib ordinal 1) into
+// the first __DATA __got slot. This proves the bind-opcode plumbing
+// end-to-end (dyld actually fixes the slot at load time).
+//
+// Opcode sequence (per `<mach-o/loader.h>` §bind_opcodes):
+//   SET_DYLIB_ORDINAL_IMM(1)               opcode 0x10 | 0x01
+//   SET_SYMBOL_TRAILING_FLAGS_IMM(0,name)  opcode 0x40 | 0x00 + name+NUL
+//   SET_TYPE_IMM(BIND_TYPE_POINTER=1)      opcode 0x50 | 0x01
+//   SET_SEGMENT_AND_OFFSET_ULEB(__DATA=1,0) opcode 0x70 | 0x01 + uleb(0)
+//   DO_BIND                                opcode 0x90
+//   DONE                                   opcode 0x00
+//
+// Constants:
+//   BIND_OPCODE_DONE                              = 0x00
+//   BIND_OPCODE_SET_DYLIB_ORDINAL_IMM             = 0x10
+//   BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM     = 0x40
+//   BIND_OPCODE_SET_TYPE_IMM                      = 0x50
+//   BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB       = 0x70
+//   BIND_OPCODE_DO_BIND                           = 0x90
+//
+// HONEST SCOPE: The bind targets `dyld_stub_binder`, which every
+// libSystem-linked image carries — so dyld can resolve it without us
+// shipping a real consumer call site. The fixup lands at __DATA[0]
+// (first __got slot). Future cycles wire per-symbol fixups from
+// real consumer call sites (load/store/branch through __got).
 fn _build_macho_bind_blob() -> [int] {
     let mut blob = []
-    _push_u8(blob, 0x00)                         // BIND_OPCODE_DONE
+    // SET_DYLIB_ORDINAL_IMM(1) — dylib ordinal 1 = first LC_LOAD_DYLIB
+    _push_u8(blob, 0x10 + 1)
+    // SET_SYMBOL_TRAILING_FLAGS_IMM(flags=0, "_dyld_stub_binder\0")
+    _push_u8(blob, 0x40)
+    _push_ascii_str(blob, "dyld_stub_binder")
+    _push_u8(blob, 0)                            // NUL terminator
+    // SET_TYPE_IMM(BIND_TYPE_POINTER = 1)
+    _push_u8(blob, 0x50 + 1)
+    // SET_SEGMENT_AND_OFFSET_ULEB(seg_idx=1=__DATA, offset=0)
+    _push_u8(blob, 0x70 + 1)
+    _push_uleb128(blob, 0)
+    // DO_BIND
+    _push_u8(blob, 0x90)
+    // DONE
+    _push_u8(blob, 0x00)
+    // Pad to 8-byte alignment
     while len(blob) - (len(blob) / 8) * 8 != 0 {
         _push_u8(blob, 0)
     }
@@ -2389,8 +2434,18 @@ fn _build_macho_arm64_dylib_v17_image(text_bytes, ident: string) {
     let id_dylib_unpadded = id_dylib_hdr + install_name_len
     let id_dylib_cmdsize = _align_up(id_dylib_unpadded, 8)
 
+    // ── LC_LOAD_DYLIB libSystem path (RFC 070 G7-B Mach-O Part B) ──
+    // Same layout as LC_ID_DYLIB (cmd 0x0C). Required so bind ordinal 1
+    // resolves to libSystem (where `dyld_stub_binder` lives — guaranteed
+    // present in every macOS process).
+    let libsys_name = "/usr/lib/libSystem.B.dylib"
+    let libsys_chars_arr = libsys_name.chars()
+    let libsys_name_len = len(libsys_chars_arr) + 1   // NUL
+    let libsys_unpadded = 24 + libsys_name_len
+    let load_dylib_cmdsize = _align_up(libsys_unpadded, 8)
+
     // ── ncmds + sizeofcmds ──
-    // We emit 9 load commands:
+    // We emit 10 load commands (Part B adds LC_LOAD_DYLIB):
     //   1. LC_SEGMENT_64 __TEXT       (152 B)  [1 section: __text]
     //   2. LC_SEGMENT_64 __DATA       (152 B)  [1 section: __got]
     //   3. LC_SEGMENT_64 __LINKEDIT   (72 B)
@@ -2398,10 +2453,11 @@ fn _build_macho_arm64_dylib_v17_image(text_bytes, ident: string) {
     //   5. LC_SYMTAB                  (24 B)
     //   6. LC_DYSYMTAB                (80 B)
     //   7. LC_ID_DYLIB                (variable)
-    //   8. LC_LOAD_DYLINKER           (32 B)
-    //   9. LC_CODE_SIGNATURE          (16 B)
-    let ncmds = 9
-    let sizeofcmds = 152 + 152 + 72 + 48 + 24 + 80 + id_dylib_cmdsize + 32 + 16
+    //   8. LC_LOAD_DYLIB libSystem    (variable)  ★ Part B
+    //   9. LC_LOAD_DYLINKER           (32 B)
+    //  10. LC_CODE_SIGNATURE          (16 B)
+    let ncmds = 10
+    let sizeofcmds = 152 + 152 + 72 + 48 + 24 + 80 + id_dylib_cmdsize + load_dylib_cmdsize + 32 + 16
 
     // ── LINKEDIT layout: DYLD_INFO blobs · symtab · strtab · codesig ──
     // Per ld(64) convention, DYLD_INFO blobs come first.
@@ -2564,6 +2620,24 @@ fn _build_macho_arm64_dylib_v17_image(text_bytes, ident: string) {
     while padn < id_dylib_cmdsize {
         _push_u8(out, 0)
         padn = padn + 1
+    }
+
+    // ── LC_LOAD_DYLIB libSystem (RFC 070 G7-B Mach-O Part B) ──
+    // Provides dylib ordinal 1 (referenced by SET_DYLIB_ORDINAL_IMM(1)
+    // in the bind blob). dyld resolves `_dyld_stub_binder` from here.
+    _push_u32le(out, 0x0C)                        // LC_LOAD_DYLIB
+    _push_u32le(out, load_dylib_cmdsize)          // cmdsize
+    _push_u32le(out, 24)                          // name.offset
+    _push_u32le(out, 0)                           // timestamp
+    _push_u32le(out, 0x00010000)                  // current_version = 1.0.0
+    _push_u32le(out, 0x00010000)                  // compatibility_version = 1.0.0
+    _push_ascii_str(out, libsys_name)
+    _push_u8(out, 0)                              // NUL
+    // Pad name to load_dylib_cmdsize total
+    let mut ldpadn = libsys_unpadded
+    while ldpadn < load_dylib_cmdsize {
+        _push_u8(out, 0)
+        ldpadn = ldpadn + 1
     }
 
     // ── LC_LOAD_DYLINKER (32 B) ──
