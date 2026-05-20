@@ -4931,3 +4931,126 @@ Yosys passes/proc/proc_mux.cc behavioural reference (no source copy).
 
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md
 (Phase 2 LANDED 2026-05-20; phases 1.5 / 3 still "not yet landed").
+
+
+### 2026-05-20 — RFC 071 §G8-B substrate — `compiler/link/incr_cache.hexa` (HXC v2 cache I/O)
+
+RFC 071 (`hexa_ld --incremental`) §G8-B substrate landed as a single
+new file `compiler/link/incr_cache.hexa` (≈360 LoC, pure-hexa over
+`self/stdlib/hxc_v2_lib` + `stdlib/portable_fs` + the `sha256` /
+`sha256_file` / `read_file_bytes` / `write_bytes` / `write_text` /
+`exec` builtins). Public surface per RFC 071 §G8-B:
+
+```
+pub fn incr_cache_compute_key(obj_path: string) -> string
+pub fn incr_cache_lookup(cache_dir, obj_path, abi_version, host_triple) -> string
+pub fn incr_cache_store(cache_dir, obj_path, text_offset, text_length,
+                        abi_version, host_triple, exports_blob) -> bool
+pub fn incr_cache_decode_record(rec_str: string) -> array
+pub fn incr_cache_clear(cache_dir: string) -> bool
+pub fn incr_cache_default_dir(output_basename: string) -> string
+pub fn incr_cache_format_version() -> int
+```
+
+**Cache layout** (RFC 071 §3.B): `<cache_dir>/incr_link.hxc` is the
+SSOT, encoded via `hxc_v2_encode_records` ([[string]] → HXC v2 envelope
+per `@D g_hxc`). Sibling `<cache_dir>/incr_link.meta.tsv` is a
+human-readable mirror for ops inspection (g3-honest second eye; the
+.hxc blob remains authoritative). Top-level row shape:
+
+- `row 0` = `[@hdr, format_version, abi_version, host_triple, created]`
+- `row N` = `[@rec, obj_hash, obj_size, text_offset, text_length,
+            abi_version, host_triple, created, exports_blob]`
+
+`exports_blob` is a pipe-escaped serialization of the
+`(name, offset, kind)` triples (RFC 071 §3.A LinkRecord.symbol_exports),
+keeping the records layer flat-2D while letting LinkRecord stay
+internally structured.
+
+**Invalidation** (RFC 071 §3.E enforced at `_load_cache_rows` +
+`incr_cache_lookup`): format_version (§3.E.1), abi_version (§3.E.2),
+runtime_hash via abi_version bump (§3.E.3), host_triple (§3.E.4),
+record-absent natural by-key miss (§3.E.5), defense-in-depth obj
+re-hash on lookup (§3.E.6). Caller falls back to full-link
+transparently on any None return.
+
+**Falsifier coverage** (RFC 071 §4.1, anchored per `@D g3`):
+- **F-B1** save→load round-trip (HXC v2 byte-canonical) — substrate
+  shape supports it; measurement is the next sub-cycle (binary promote
+  required to execute compiled smoke; `@D g_commit_push_deploy` honest
+  deferral per `@D g_inbox_processing_loop` step 7).
+- **F-B2** SHA-256 collision-resistance (NIST FIPS 180-4) — delegated
+  to the `sha256_file` builtin's own corpus (stdlib/core/hash/sha256
+  is the SSOT for the primitive; G8-B is a consumer).
+
+**Other RFC 071 phases** (out of scope this cycle):
+- G8-A multi-`.o` baseline (RFC 063 prerequisite)
+- G8-C `hexa_ld --incremental` caller wire (consumes this substrate)
+- G8-D Mach-O codesign incremental
+- G8-E `self/main.hexa` flag plumb
+- G8-F wilson-side opt-in (downstream)
+- G8-G RFC 070 G7-D capability piggyback
+
+**Header-comment marker** added to `compiler/link/hexa_ld.hexa`
+(zero behavior change, ≈30 lines) documenting the RFC 071 G8
+integration point + the G8-B sibling file's status. The
+`link*()` functions in `hexa_ld.hexa` are **NOT** wired to
+`incr_cache_*` yet — that wire is G8-C per the §4 phase table.
+
+**Cycle scope decision (g3-honest)**: this prompt asked for a 2-in-1
+sub-cycle (G7-B PT_DYNAMIC + LC_DYLD_INFO impl **plus** G8-B
+incr_cache). Per the prompt's "if both too expensive" branch, this
+cycle lands **Part B only** (G8-B substrate). Rationale:
+
+1. Part A (G7-B) requires the v1.3 `link_shared` scaffold from commit
+   `3530a98d` (`feat(compiler/link): hexa_ld v1.3 — RFC 070 G7-B
+   ET_DYN/MH_DYLIB scaffold`) as a baseline, and the current branch
+   (`s1-step2-codegen-perf`, base `b4fe52ba`) does not have it merged
+   in yet. A clean G7-B impl needs the scaffold cherry-picked first,
+   which is a separate landing with its own conflict-resolution
+   (PLAN.md auto-merge fails between the v1.3 entry and main's
+   subsequent additions).
+2. Part B (G8-B substrate) is fully self-contained and works against
+   the existing v1.2 baseline without scaffold dependencies. It also
+   becomes the second in-repo HXC v2 consumer after
+   `compiler/atlas/hxc_loader.hexa`, exercising the
+   `self/stdlib/hxc_v2_lib` downstream surface per
+   `inbox/patches/hxc-v2-no-downstream-library-api.md` resolution.
+
+**RFC SSOT updates** (the `rfc_070_hexa_ld_dlopen_shared.md` G7-B row
++ the `rfc_071_hexa_ld_incremental_link.md` G8-B row tick) are NOT
+performed in this worktree — both RFC drafts live in sibling worktrees
+(commit `05b814c2` lineage) that the current branch hasn't merged.
+A follow-up cherry-pick / rebase will pick those up; this cycle's
+substrate stands without them per the RFC's own §4.2 scaffold-first
+phasing philosophy. `inbox/patches/wilson-pi-port-6-gap-prereq.md` G8
+row likewise unchanged (sibling commit territory).
+
+**Files** — surgical: `compiler/link/incr_cache.hexa` (NEW, ≈360 LoC) ·
+`compiler/link/hexa_ld.hexa` (header-comment marker, +30 LoC zero-behavior) ·
+`compiler/PLAN.md` (this entry).
+
+**Verify**: `/Users/ghost/.hx/bin/hexa_real parse` PASS on both edited
+files. F-B1 round-trip + end-to-end smoke deferred to G8-C cycle when
+the hexa_ld caller wire exists (no consumer in v1.2 means no e2e path
+to exercise — measuring substrate in isolation requires a one-off
+smoke harness that's out of scope for this surgical landing per
+`@D g_inbox_processing_loop` Shape A).
+
+@D g5 hexa-native-only · @D g6 citation-enforced (RFC 071 §3.A/§3.B/
+§3.E anchors in the file's @cite block) · @D g_hxc (HXC v2 wire) ·
+@D g_atlas_binary_builtin (orthogonal — cache lives at
+${HEXA_LANG}/cache/link/, not in the atlas) · @D g_stdlib_ownership
+(hexa-lang owns the file; downstream consumers drive via existing
+`hexa build` CLI once G8-C wires it) · @D g_inbox_processing_loop
+Shape A (single surgical commit, parse-gated, no binary promote).
+
+cross-link: `inbox/rfc_drafts_2026_05_20/rfc_071_hexa_ld_incremental_link.md`
+(sibling worktree SSOT) · `inbox/patches/wilson-pi-port-6-gap-prereq.md`
+G8 row · `compiler/atlas/hxc_loader.hexa` (first in-repo HXC v2
+consumer; this substrate is the second) · `self/stdlib/hxc_v2_lib.hexa`
+(`pub fn hxc_v2_encode_records` / `_decode_records` — the downstream
+HXC v2 surface absorbed per
+`inbox/patches/hxc-v2-no-downstream-library-api.md` resolution) ·
+`stdlib/core/hash/sha256.hexa` (FIPS 180-4 SHA-256 primitive) ·
+RFC 070 (sister; G7-B impl deferred to its own sub-cycle).

@@ -75,6 +75,37 @@
 //
 // Returns 0 on success, non-zero on every failure path (so the caller
 // can flip to --linker=system without parsing error strings).
+//
+// ── RFC 071 G8 scaffold (2026-05-20) ────────────────────────────────
+//
+// RFC 071 (`hexa_ld --incremental`) targets wilson's "core + N plugin"
+// relink cost (35-180s per cycle, RFC 071 §1). This file is the §G8
+// integration point. **Current state**: single-`.o` full link only
+// (`pub fn link(obj_path, out_path) -> int` below at the SSOT). No
+// incremental code path runs today; this comment block marks where
+// `fn link_incremental(obj_paths: [string], out_path, cache_dir) -> int`
+// will land per RFC 071 §3.C once G8-A (multi-`.o` baseline) ships.
+//
+// **G8-B substrate (2026-05-20)**: `compiler/link/incr_cache.hexa`
+// (sibling file, this cycle) implements the HXC v2 cache I/O —
+// `incr_cache_compute_key / lookup / store / decode_record / clear` +
+// `incr_cache_default_dir`. The substrate is **not yet consumed** by
+// any `link*()` function here; that wire is RFC 071 §G8-C scope.
+//
+// Falsifier hooks (RFC 071 §4.1, real-limits anchored per @D g3):
+//   F-A1   multi-`.o` link section-offset spec (G8-A precondition)
+//   F-B1   incr_cache save→load round-trip (HXC v2 byte-canonical)
+//   F-B2   SHA-256 collision-resistance floor (FIPS 180-4)
+//   F-C1   incremental-link cold-cache byte-eq with full-link
+//   F-C2   single-`.o` change → output delta matches link_one_object
+//   F-D1   Mach-O incremental codesign byte-eq with full codesign
+//   F-D2   Mach-O incremental codesign kernel acceptance
+//
+// **Honest scope (@D g3)**: G8-B substrate landed; G8-C caller wire
+// deferred to a follow-up sub-cycle. The substrate stands alone (its
+// public surface is self-contained + smoke-testable), so consumers can
+// exercise incr_cache.hexa today without `hexa_ld --incremental`
+// existing.
 
 import "../../stdlib/portable_fs.hexa"
 
