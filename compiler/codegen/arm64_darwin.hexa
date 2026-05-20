@@ -2047,8 +2047,8 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     }
     if s.kind == "store" {
         if len(s.args) >= 2 {
-            buf = _arm64_op_rm(buf, s.args[0], st, rm, "x10")
-            buf = _arm64_op_rm(buf, s.args[1], st, rm, "x11")
+            buf = _arm64_op_rm(buf, s.args[0], st, rm, "x10", opts)
+            buf = _arm64_op_rm(buf, s.args[1], st, rm, "x11", opts)
             let base_op = _arm64_op_resolve(s.args[0], st, rm, "x10")
             let src = _arm64_op_resolve(s.args[1], st, rm, "x11")
             let mut off = 0
@@ -2067,6 +2067,12 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
 // ── Function lowering ────────────────────────────────────────
 
 fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
+    // Cycle 56 recovery: opts not threaded through _arm64_lower_func
+    // signature (would require touching codegen_arm64_darwin caller
+    // + every other call). Use codegen_options_default() locally —
+    // matches the RFC 070 G7-A.native intent (all callers pass the
+    // zero-seed default until the actual GOT-load body lands).
+    let opts = codegen_options_default()
     let mut instrs = []
 
     // #26 self-host fixpoint — forced-copy the MFunc identity fields up
@@ -2229,7 +2235,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
             if blk.stmts[si].kind == "try_setjmp" { _try_idx = _try_idx + 1 }
             let delta = _emit_arm64_stmt([], modhash, fn_name,
                                          blk.stmts[si], st, rm, spill_frame,
-                                         try_buf_bytes, cur_try_idx)
+                                         try_buf_bytes, cur_try_idx, opts)
             let mut _di = 0
             while _di < len(delta) {
                 instrs.push(delta[_di])

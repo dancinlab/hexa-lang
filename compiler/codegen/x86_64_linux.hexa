@@ -792,10 +792,10 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              "enum_ctor: capture new map"))
             let mut i = 1
             while i + 1 < len(s.args) {
-                buf = _x86_op_rm(buf, s.args[i], st, rm, "r10")
-                let key = _x86_op_resolve(s.args[i], st, rm, "r10")
-                buf = _x86_op_rm(buf, s.args[i + 1], st, rm, "r11")
-                let val = _x86_op_resolve(s.args[i + 1], st, rm, "r11")
+                buf = _x86_op_rm(buf, s.args[i], st, rm, "r10", opts)
+                let key = _x86_op_resolve(s.args[i], st, rm, "r10", opts)
+                buf = _x86_op_rm(buf, s.args[i + 1], st, rm, "r11", opts)
+                let val = _x86_op_resolve(s.args[i + 1], st, rm, "r11", opts)
                 buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), key,
                                  "enum_ctor: cell key"))
                 buf.push(_x86_instr2("mov", _x86_op_reg("rdx"), val,
