@@ -6423,3 +6423,113 @@ any downstream pass mis-binds or truncates).
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md
 (Phase 1+2 LANDED 2026-05-20 · Phase 2.1 element-type match, Phases 3-5
 lower/codegen/fixpoint still PLANNED).
+
+## 진행 로그 — RFC 070 §G7-A.native impl.falsify RETRY PROBE (2026-05-20, DEFERRED — heritage cascade absent on `worktree-agent-ad2ddf5f5886b924a` HEAD `116cdbf7`)
+
+User-requested paired retry of G7-A native-codegen F-A1 + F-A2 on this
+downstream worktree (premise: "현재 main 에 G7-A 전체 (flag-wire
+`66b055c4` + native scaffold `0c4b91da` + native iface `2a579ce8` +
+emit signature `06bc2ea4` + emit body arm64 `8fdb29e2` + emit body
+x86_64 `9ea52f4b` + visibility scaffold `1729d9ac`) 모두 land"). Probe
+falsifies the premise and re-confirms G3 (`92caea74`) DEFERRED with
+bit-identical blocker set.
+
+**Topology probe** (`git merge-base --is-ancestor` per commit) — 8/8
+heritage commits **NOT ancestors** of either `origin/main` HEAD
+(`b4ed80a7` after `git fetch origin main`) or
+`worktree-agent-ad2ddf5f5886b924a` HEAD (`116cdbf7`). The cascade lives
+on parallel branch `rfc070-g7-native-scaffold` (and on
+`s1-step2-codegen-perf`'s tip, 14 commits ahead of where this
+worktree branched).
+
+**Three stacked blockers measured**:
+
+1. **Deployed-driver wire absent** (heritage `66b055c4` not in any
+   reachable binary on this worktree). `SIDECAR_NO_POOL=1
+   HEXA_MAC_BUILD_OK=1 HEXA_BACKEND=native hexa_real build --shared
+   --target darwin-arm64 -o /tmp/g7a_native.dylib /tmp/g7a_test.hexa` →
+   `error: source file not found: --shared`. Same verbatim refusal as
+   G3's record on sibling branch. `/Users/ghost/.hx/bin/hexa.real` size
+   `599424`, mtime `May 20 06:59`, predates the heritage cascade.
+
+2. **Worktree SSOT wire absent**. `grep -nE '"--shared"|shared_mode|
+   CodegenOptions|RELOC_|GOTPCREL|private_extern|_visibility_directive|
+   \.private_extern|\.hidden' compiler/codegen/arm64_darwin.hexa
+   compiler/codegen/x86_64_linux.hexa compiler/emit/asm.hexa
+   self/main.hexa` → zero matches for the wire markers (two faint
+   matches are unrelated prior-art comments). So even regenerating
+   `hexa.real` from THIS worktree's `self/main.hexa` would not unblock
+   #1 — the wire was authored on the sibling branch, never merged
+   here.
+
+3. **`aprime_cc` binary absent**. `find . -name aprime_cc -type f` →
+   empty. `self/main.hexa::resolve_native_cc()` (L1586) would return
+   `""`; `cmd_build` L1989 would call `die_no_native_cc()` printing
+   `HEXA_BACKEND=native requires a built aprime_cc` and `exit(1)`.
+   This is the third blocker, stacked under #1+#2.
+
+**Empirical** (probe of #1's stack interaction): plain `HEXA_BACKEND=
+native hexa_real build /tmp/g7a_test.hexa -o /tmp/g7a_native_b` ran the
+C-path silently (`[1/2] hexa_v2 ... → [2/2] clang ...`, **no** `[native
+1/2]` / `[native 2/2]` markers from L2032/L2044). The
+`HEXA_BACKEND=native` dispatch block at L1986-2062 is in the SSOT but
+NOT in the deployed binary — consistent with mtime ordering.
+
+**F-A1 / F-A2 status** (paired to §4.5 C-path table):
+
+| platform | F-A1 native | F-A2 native | reason |
+| --- | --- | --- | --- |
+| macOS arm64 (mini, worktree HEAD) | DEFERRED | DEFERRED | blockers #1+#2+#3 stacked |
+| ELF x86_64 (ubu-1 / ubu-2) | DEFERRED — not attempted | DEFERRED — not attempted | blockers are source/binary-pair properties, not host. ubu-1 (aiden@10.142.0.1 + ubu1-ts-d) both SSH-timeout; ubu-2 reachable (`/usr/bin/clang` present) but would run the same `hexa.real` → identical refusal, no new information. |
+
+**Visibility scaffold effect on F-A2** (separate from F-A1): heritage
+`1729d9ac` (the `.private_extern` / `.hidden` per-function directive
+emission) is the SSOT change that would flip F-A2 from the §4.5
+measured `611/560` exported-everything to a narrowed export set. Zero
+matches for `_visibility_directive` / `.private_extern` / `.hidden`
+in `compiler/emit/asm.hexa` on worktree HEAD — the scaffold itself is
+absent. So F-A2 native-narrowing cannot be probed even if dispatch
+worked.
+
+**ABORT classification** (per task spec): the two user-listed ABORT
+conditions (multi-arg fn unsupported, F-A2 ALL-EXPORT) are **neither
+reachable nor refutable** from this worktree HEAD because the cascade
+that would enable measurement is absent. The blocker is the
+earlier-in-pipeline "wire is absent + binary stale + aprime_cc absent"
+triple, which is the third (implicit) ABORT — heritage absent. Honest
+report per `@D g3`: native-codegen retry probe **DEFERRED**. Forward
+path = heritage cascade landing on `origin/main` (or worktree branch
+rebased onto a tip that contains it) → deploy step (rebuild
+`hexa.real` + build `aprime_cc` via `tool/build_aprime.sh`) →
+follow-on measurement cycle. Three deploy-class prerequisites,
+`@D g_inbox_processing_loop` step 7 out-of-scope for this cycle.
+
+**Files (SSOT docs only, zero code change)**:
+
+- `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` —
+  copied from `s1-step2-codegen-perf` into this worktree (did not yet
+  exist on this branch because the worktree branched before A4's RFC
+  promote); status header updated, §4 phase-table G7-A.native
+  impl.falsify row gains the retry-probe cross-link, **new §4.5b
+  appendix** (≈90 LoC) added documenting the retry probe + DEFERRED
+  record with full blocker enumeration and topology proof.
+- `compiler/PLAN.md` — this 진행 로그 entry per `@D
+  g_plan_consolidation`.
+
+**Out of scope (`@D g3`-honest)**: zero edit to `compiler/codegen/`,
+`compiler/emit/`, `compiler/ir/`, `compiler/link/`, `self/runtime.{c,h}`,
+`self/codegen_c2.hexa`, `self/main.hexa`. No `hexa_v2` regen. No
+`aprime_cc` build. No `hexa.real` promote. No cherry-pick of the
+heritage cascade (would be a multi-commit merge, single-cycle out of
+scope). `inbox/PATCHES.yaml` untouched. Other-session WIP files
+untouched per `@D g_inbox_processing_loop` hazard guard (d). G7-A.native
+impl.falsify row stays UNCHECKED in §4 phase table — measurement
+remains owed and pinned to the cascade landing.
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md
+§4.5b · G3 (`92caea74`) parallel DEFERRED record on `s1-step2-codegen-
+perf` (bit-identical blocker set, different host pair) · §4.5 G7-A
+C-path measurement (the table this retry mirrors) · `@D
+g_inbox_processing_loop` Shape B · `@D g3` honest scope · `@D
+g_commit_push_deploy` (deployed `hexa.real` predates cascade even on
+sibling SSOT-bearing branch).

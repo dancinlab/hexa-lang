@@ -4,6 +4,7 @@
 > **opened**: 2026-05-20 (promoted from `inbox/patches/g7-hexa-ld-dlopen.md`, opened 2026-05-10)
 > **G7-A flag wire**: 2026-05-20 (`self/main.hexa::cmd_build` + dispatch — flag-wiring only, zero falsifier coverage yet)
 > **G7-A falsify** : 2026-05-20 (F-A1/F-A2 measured on C path · macOS arm64 dylib + ubu-1 ELF x86_64 .so · §4.5 below)
+> **G7-A.native impl.falsify retry probe** : 2026-05-20 (DEFERRED on `worktree-agent-ad2ddf5f5886b924a` HEAD `116cdbf7` — heritage cascade `66b055c4`/`0c4b91da`/`2a579ce8`/`06bc2ea4`/`8fdb29e2`/`9ea52f4b`/`1729d9ac` absent from both `origin/main` and worktree branch; `--shared` rejected as source-arg, `HEXA_BACKEND=native` silently ignored, `aprime_cc` absent · re-confirms G3 (`92caea74`) DEFERRED · §4.5b below)
 > **G7-D scaffold** : 2026-05-20 (design choice locked + section layout + skeleton stubs · §4.6 below · zero behavior change · falsifier F-D1/F-D2 unmeasured)
 > **owner**: hexa-lang compiler (`compiler/codegen/` · `compiler/link/hexa_ld.hexa` · `self/runtime.{c,h}`)
 > **consumer demand**: wilson in-process plugins (hot-path provider/tool/hook/view). Out-of-scope reuse: anima/nexus, generally any consumer that wants "drop a `.so`, no relink".
@@ -88,7 +89,7 @@ Manifest section name (proposed): ELF `.hexa.cap` / Mach-O `__HEXA,__cap` (16-by
 | G7-A.native impl.signature ✅ | `codegen_arm64_darwin(module, opts: CodegenOptions)` + `codegen_x86_64_linux(module, opts)` entry signatures lifted; 11 caller sites updated to pass `codegen_options_default()`. Emit body byte-identical with `opts.shared == 0`. **LANDED 2026-05-20** (commit `06bc2ea4`). | G7-A.native impl.iface | corpus byte-eq (default opts) |
 | G7-A.native impl.emit-body ✅ | `_arm64_op_rm` + `_x86_op_rm` / `_x86_op_resolve` honor `opts.shared`. PIC mode emits: (a) `adrp Xn, sym@GOTPAGE` + `ldr Xn, [Xn, sym@GOTPAGEOFF]` for arm64 global refs (`MACHO_ARM64_RELOC_GOT_LOAD_*` / `R_AARCH64_*_GOT_*`); (b) `mov scratch, [rip+sym@GOTPCREL]` for x86_64 global refs (`R_X86_64_GOTPCREL`). `emit/asm.hexa::_fmt_mem` honors the new `label`-as-offset memory operand shape. Per-instruction reloc-kind tag carried via `LInstr.comment` suffix `[reloc=…]` for the future asm-text emitter dispatch. arm64 = commit `8fdb29e2` (D1 partial). x86_64 = this sub-cycle (D2 — `_x86_op_rm` global+`opts.shared==1` GOT-load branch + `_x86_op_resolve` global→reg fallback). Default `opts.shared == 0` keeps both backends byte-identical with pre-iface output. | G7-A.native impl.signature | corpus byte-eq (default opts), measured F-A1/F-A2 deferred → G7-A.native impl.falsify |
 | G7-A.native impl.visibility | (a) per-function `.hidden` (ELF) / `.private_extern` (Mach-O) directive default; (b) `.globl` only for `<plugin_id>_dispatch`. Sits in the LIR→asm text emitter (currently `compiler/emit/asm.hexa` plus a future per-function visibility hook). Carries the export-set narrowing that flips F-A2 from EXPECTED-FAIL to PASS (today's clang `-shared` exports every public symbol — see G7-A.falsify caveat). | G7-A.native impl.emit-body | F-A2 (native) |
-| G7-A.native impl.falsify | Run F-A1 (dlopen + dlsym + call on native-codegen output) + F-A2 (single-`.globl` export set) on the native-emit artifact on both macOS arm64 + ubu-1 x86_64. | G7-A.native impl.visibility | F-A1, F-A2 (native) |
+| G7-A.native impl.falsify | Run F-A1 (dlopen + dlsym + call on native-codegen output) + F-A2 (single-`.globl` export set) on the native-emit artifact on both macOS arm64 + ubu-1 x86_64. **Retry probe 2026-05-20 (§4.5b) — DEFERRED on `worktree-agent-ad2ddf5f5886b924a` HEAD `116cdbf7`**: heritage cascade (`66b055c4` + `0c4b91da` + `2a579ce8` + `06bc2ea4` + `8fdb29e2` + `9ea52f4b` + `1729d9ac`) absent from both `origin/main` and this worktree branch; `--shared` rejected as source-arg, `HEXA_BACKEND=native` silently ignored, `aprime_cc` binary absent. Re-confirms G3 (`92caea74`) DEFERRED with bit-identical blocker set. | G7-A.native impl.visibility | F-A1, F-A2 (native) |
 | G7-A.falsify ✅ | F-A1 PASS both platforms (dlopen + dlsym(`add`) + call → 5 byte-equally · macOS arm64 dylib + ubu-1 ELF x86_64 .so). F-A2 EXPECTED-FAIL both platforms per §4.3 caveat (Mach-O = 611 exported T/D symbols · ELF = 560 exported T/D symbols · `add` is one of them, not the sole one — clang `-shared` alone exports every public symbol; single-symbol narrowing is G7-A.native impl scope). Measured 2026-05-20, **C path only** (`hexa_v2 → clang -fPIC -shared`, NOT native-codegen). | G7-A.flag-wire | F-A1, F-A2 (measured · F-A2 = expected-fail caveat) |
 | G7-B (v1.3 scaffold) ✅ | header-only ET_DYN/MH_DYLIB stub (no dynamic section / export trie) | G7-A | F-B1, F-B3 (header-format only) |
 | G7-B (v1.4 ELF Part A) ✅ | `build_elf64_dyn_with_dynamic` adds PT_DYNAMIC + .dynsym + .dynstr + .hash + DT_SONAME + 1 exported FUNC symbol `<ident>_dispatch` | G7-B (v1.3) | F-B1, F-B2, F-B-DYNSYM-ELF (audit-EXPECTED) |
@@ -208,6 +209,78 @@ Side-anchor (free byproduct, **not the gated falsifier**): the readelf/otool out
 **files**: `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` (status flip, §4 G7-A.falsify row update, this §4.5 ≈60 added lines) · `compiler/PLAN.md` (single entry).
 
 cross-link: §4.1 falsifier battery (F-A1, F-A2, F-B1, F-B3 anchors) · §4.3 G7-A.flag-wire (the `-shared` pass-through this sub-cycle exercises) · `@D g_inbox_processing_loop` Shape A (smallest measurement closure) · `@D g3` real-limits-first (F-A1 anchored on OS page granularity + nanbox byte-eq; F-A2 anchored on ELF/Mach-O symbol-table format spec) · `@D g_commit_push_deploy` (deployed `hexa.real` predates `66b055c4` — manual pipeline measures the SAME `-fPIC -shared` clang invocation that `cmd_build` injects).
+
+### 4.5b G7-A.native impl.falsify retry probe (2026-05-20, **DEFERRED — heritage absent on `worktree-agent-ad2ddf5f5886b924a` HEAD `116cdbf7`**)
+
+After G3 (`92caea74`) re-confirmed the C-path on a different host pair and formally DEFERRED native-codegen on `s1-step2-codegen-perf`, the user requested a **paired retry cycle from a downstream worktree** (`worktree-agent-ad2ddf5f5886b924a`, branched off main before the G7-A cascade landed) on the premise that "현재 main 에 G7-A 전체 ... 모두 land". The premise was tested directly; this sub-section records the **probe diagnostic** that re-confirms DEFERRED with the explicit blocker pair surfaced.
+
+**Branch topology probed** (2026-05-20):
+
+| commit | role | ancestor of `worktree-agent-ad2ddf5f5886b924a` HEAD (`116cdbf7`)? | ancestor of `origin/main`? |
+| --- | --- | --- | --- |
+| `66b055c4` | G7-A.flag-wire (`self/main.hexa` `--shared` parser) | NO | NO |
+| `0c4b91da` | G7-A.native scaffold (codegen headers) | NO | NO |
+| `2a579ce8` | G7-A.native impl.iface (`CodegenOptions` + 5 RELOC_* consts) | NO | NO |
+| `06bc2ea4` | G7-A.native impl.signature (11 caller sites) | NO | NO |
+| `8fdb29e2` | G7-A.native impl.emit-body arm64 (`_arm64_op_rm` GOT-load) | NO | NO |
+| `9ea52f4b` | G7-A.native impl.emit-body x86_64 (`_x86_op_rm` GOT-load) | NO | NO |
+| `1729d9ac` | G7-A.visibility scaffold (`.private_extern`/`.hidden`) | NO | NO |
+| `92caea74` | G3 C-path re-run + DEFERRED record | NO | NO |
+
+All eight heritage commits live on the parallel branch `rfc070-g7-native-scaffold` (and on `s1-step2-codegen-perf`'s tip — both 14 commits ahead of where this worktree branched). `origin/main` HEAD (`b4ed80a7` after `git fetch origin main`, 2026-05-20) reaches NONE of them. The user-stated premise "현재 main 에 G7-A 전체 ... 모두 land" is **factually incorrect for both `origin/main` and this worktree's HEAD** as of measurement time.
+
+**Probe — two stacked blockers measured on the worktree HEAD**:
+
+1. **Driver wire absence** (heritage `66b055c4` not landed). Direct shell:
+
+   ```
+   $ SIDECAR_NO_POOL=1 HEXA_MAC_BUILD_OK=1 HEXA_BACKEND=native \
+       /Users/ghost/.hx/bin/hexa_real build --shared --target darwin-arm64 \
+       -o /tmp/g7a_native.dylib /tmp/g7a_test.hexa
+   error: source file not found: --shared
+   ```
+
+   The deployed `hexa.real` (size `599424`, mtime `May 20 06:59`) refuses `--shared` (consumed positionally as a source path). Same refusal verbatim as G3's record: G3 measured this on `s1-step2-codegen-perf`; the re-measurement on this worktree branch reproduces it deterministically.
+
+2. **Source-side wire absence on worktree HEAD** (heritage `66b055c4` not in `self/main.hexa` either). `grep -nE '"--shared"|shared_mode|CodegenOptions|RELOC_|GOTPCREL|private_extern|_visibility_directive|\.private_extern|\.hidden' compiler/codegen/arm64_darwin.hexa compiler/codegen/x86_64_linux.hexa compiler/emit/asm.hexa self/main.hexa` → **zero matches** for `--shared` / `CodegenOptions` / `RELOC_` / `GOTPCREL` / `private_extern` / `_visibility_directive` / `.private_extern` / `.hidden`. Two faint matches (one in each codegen file) are prior-art comments about "shared MIR" / "hidden first arg" — semantically unrelated. So even if the deployed driver were regenerated from THIS worktree's `self/main.hexa`, the rebuilt `hexa.real` would STILL not recognize `--shared` (the wire was added on a sibling branch, not here).
+
+3. **`aprime_cc` binary absent** (stacks on top of #1+#2). `find . -name aprime_cc -type f` → empty. `self/main.hexa::resolve_native_cc()` (L1586) returns `""`; `cmd_build` L1989 calls `die_no_native_cc()` which prints `HEXA_BACKEND=native requires a built aprime_cc` and `exit(1)`. So even if blockers #1+#2 were removed, `HEXA_BACKEND=native` would die-loud before any codegen attempt. (The C-path runs because `HEXA_BACKEND=native` is silently ignored by the current deployed driver — the dispatch block at L1986-2062 is in the SSOT but not in the deployed binary.)
+
+**Empirical confirmation that `HEXA_BACKEND=native` is silently ignored by the deployed driver** (= probe of #1's stack interaction):
+
+```
+$ SIDECAR_NO_POOL=1 HEXA_MAC_BUILD_OK=1 HEXA_BACKEND=native \
+    /Users/ghost/.hx/bin/hexa_real build /tmp/g7a_test.hexa -o /tmp/g7a_native_b
+=== Building /tmp/g7a_test.hexa -> /tmp/g7a_native_b ===
+  [1/2] HEXA_MEM_CAP_MB=4096 .../hexa_v2 /tmp/g7a_test.hexa build/artifacts/g7a_native_b.c
+    OK: build/artifacts/g7a_native_b.c
+  [2/2] clang -O2 ... build/artifacts/g7a_native_b.c .../runtime.c -o ...
+OK: built /tmp/g7a_native_b
+```
+
+No `[native 1/2]` / `[native 2/2]` lines (which would be the SSOT-side native dispatch markers at L2032/L2044). The driver ran the C-path silently. This proves the L1986-2062 native-dispatch block is NOT present in the deployed `hexa.real` — the binary was built from a pre-`66b055c4` source snapshot, consistent with the binary's `mtime` (06:59 UTC) preceding `66b055c4` on the sibling branch.
+
+**Per-platform F-A1 / F-A2 status** (paired to the §4.5 C-path measurement table):
+
+| platform | F-A1 native | F-A2 native | reason |
+| --- | --- | --- | --- |
+| macOS arm64 (mini, this worktree HEAD) | **DEFERRED** | **DEFERRED** | blocker #1 (`--shared` rejected as source-arg) + blocker #2 (worktree SSOT also missing wire) + blocker #3 (no `aprime_cc`) |
+| ELF x86_64 (ubu-1 / ubu-2) | **DEFERRED — not attempted** | **DEFERRED — not attempted** | same three blockers are properties of the source/binary pair, not the host. ubu-1 (`aiden@10.142.0.1` + `ubu1-ts-d`) both timed out at SSH connect; ubu-2 (`/usr/bin/clang` present) would run the same `hexa.real` (same `--shared` rejection) and the same heritage-absent SSOT, so a measurement there adds no information beyond #1-#3 already-surfaced on macOS. |
+
+**Visibility scaffold effect on F-A2** (separate from F-A1 dispatch dispute): the `_visibility_directive` + `.private_extern` / `.hidden` per-function directive emission (heritage `1729d9ac`) is the SSOT change that would flip F-A2 from the §4.5 measured `611/560` "exported-everything" failure into a narrowed export set. This worktree HEAD has **zero matches** for `.private_extern` / `.hidden` / `_visibility_directive` in `compiler/emit/asm.hexa` — the scaffold itself is absent. So F-A2 native-narrowing **cannot be probed** here even if the dispatch worked. The visibility-effect measurement remains pinned to the heritage cascade landing on this branch.
+
+**ABORT classification** (per task spec):
+
+- The two ABORT conditions explicitly listed by the user — "native backend가 multi-arg fn 미지원" and "F-A2 native가 여전히 ALL-EXPORT (visibility scaffold 무효)" — are **neither reachable nor refutable** from this worktree HEAD because the cascade that would enable measurement is not in scope. The blocker is the **earlier-in-pipeline** "wire is absent + binary stale" pair, which is the third (implicit) ABORT — heritage absent. Honest report per `@D g3`: native-codegen retry probe **DEFERRED**; the only forward path is the heritage cascade landing on `origin/main` (or the worktree branch being rebased onto a tip that contains it), followed by a fresh deploy step regenerating `hexa.real`, followed by an `aprime_cc` build (`tool/build_aprime.sh`). Three deploy steps are SOP-bounded prerequisites — `@D g_inbox_processing_loop` step 7 explicitly out-of-scope for this cycle.
+
+**Files (SSOT docs only, zero code change)**:
+
+- `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` — copied from `s1-step2-codegen-perf` into this worktree (the file did not yet exist here because the worktree branched before A4's RFC promote); this §4.5b appendix appended documenting the retry probe + DEFERRED record.
+- `compiler/PLAN.md` — single 진행 로그 entry per `@D g_plan_consolidation`, cross-linking this §4.5b.
+
+**Out of scope (`@D g3`-honest)**: zero edit to `compiler/codegen/`, `compiler/emit/`, `compiler/ir/`, `compiler/link/`, `self/runtime.{c,h}`, `self/codegen_c2.hexa`, `self/main.hexa`. No `hexa_v2` regen. No `aprime_cc` build. No `hexa.real` promote. No cherry-pick of the heritage cascade (would be its own multi-commit merge, out of single-cycle scope). `inbox/PATCHES.yaml` untouched. Other-session WIP files untouched per `@D g_inbox_processing_loop` hazard guard (d). G7-A.native impl.falsify row in the §4 phase table stays UNCHECKED (no `✅`) — measurement remains owed and is pinned to the cascade's landing on this branch.
+
+cross-link: §4.5 G7-A.falsify C-path measurement (the table this retry mirrors) · §4.4 G7-A.native scaffold (the cascade row this retry would advance) · `@D g_inbox_processing_loop` Shape B + `@D g3` honest scope (retry surfaces blockers, does not advance state without measurement) · `@D g_commit_push_deploy` (deployed `hexa.real` predates `66b055c4` even on the SSOT-bearing sibling branch — a fresh deploy step is the cross-branch prerequisite) · G3 (`92caea74`) parallel DEFERRED record (this retry's blocker set is bit-identical to G3's diagnostic).
 
 ### 4.6 G7-D scaffold (2026-05-20, **Shape B — design decision lock + skeleton, zero behavior change**)
 
