@@ -253,7 +253,32 @@ pub fn lens_apply_empty_space_cross_product_gap(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_empty_space_zero_coverage_quadrant(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — grade-quadrant audit. Partition P kind into LOW (grade<5) /
+    // MID (5..9) / HIGH (>=10) buckets; flag if any bucket has 0 entries.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut lo = 0
+    let mut mid = 0
+    let mut hi = 0
+    let mut i = 0
+    while i < n {
+        let g = view.p_nodes[i].grade.value
+        if g >= 0 && g < 5 { lo = lo + 1 }
+        if g >= 5 && g <= 9 { mid = mid + 1 }
+        if g >= 10 { hi = hi + 1 }
+        i = i + 1
+    }
+    if lo > 0 && mid > 0 && hi > 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "empty_space.zero_coverage_quadrant.grade_bucket_empty",
+        family: "empty_space",
+        proposed: "atlas P kind grade buckets: lo<5=" + to_string(lo) + " mid5-9=" + to_string(mid) + " hi>=10=" + to_string(hi) + ". One or more bucket is empty — coverage gap.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 
 pub fn lens_apply_paradigm_shift_inversion(view: AtlasView) -> array {
@@ -332,7 +357,31 @@ pub fn lens_apply_paradigm_shift_op_lift(view: AtlasView) -> array {
 }
 
 pub fn lens_apply_cross_pollinate_borrow_from_qrng(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — entropy / random keyword scan. P raw mentioning entropy or
+    // randomness = candidate for stdlib/qrng pattern borrowing (audit +
+    // backend abstraction).
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("entropy") >= 0 || raw.index_of("random") >= 0 || raw.index_of("entrop") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "cross_pollinate.borrow_from_qrng.entropy_signals",
+        family: "cross_pollinate",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry `entropy` / `random` in raw — candidate for stdlib/qrng pattern borrowing (audit + multi-backend abstraction).",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_cross_pollinate_borrow_from_qmirror(view: AtlasView) -> array {
     return empty_candidate_list()
@@ -464,7 +513,31 @@ pub fn lens_apply_invariant_stress_symmetry_break(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_invariant_stress_monotonicity_break(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — grade non-monotonicity. As P node index increases, grade
+    // values should ideally form a near-monotone sequence; count inversions
+    // (where grade[i] < grade[i-1]) and flag if non-trivial.
+    let n = len(view.p_nodes)
+    if n < 2 { return empty_candidate_list() }
+    let mut inversions = 0
+    let mut prev = view.p_nodes[0].grade.value
+    let mut i = 1
+    while i < n {
+        let g = view.p_nodes[i].grade.value
+        if g >= 0 && prev >= 0 && g < prev { inversions = inversions + 1 }
+        prev = g
+        i = i + 1
+    }
+    if inversions == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "invariant_stress.monotonicity_break.grade_inversions",
+        family: "invariant_stress",
+        proposed: "atlas P kind grade sequence: " + to_string(inversions) + " inversions across " + to_string(n) + " nodes (where grade decreases between consecutive entries). Monotonicity-break candidate.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_invariant_stress_idempotence_break(view: AtlasView) -> array {
     return empty_candidate_list()
@@ -502,7 +575,30 @@ pub fn lens_apply_scale_extrapolate_n_to_n_div_2(view: AtlasView) -> array {
     return empty_candidate_list()
 }
 pub fn lens_apply_scale_extrapolate_dim_1d_to_2d(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — dimensionality keyword scan. P raw mentioning `1D` / `1-D` /
+    // `linear` = candidate for 2-D lift.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("1D") >= 0 || raw.index_of("1-D") >= 0 || raw.index_of("linear") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "scale_extrapolate.dim_1d_to_2d.lift_candidates",
+        family: "scale_extrapolate",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry `1D` / `1-D` / `linear` in raw — candidate pool for 2-D lift extrapolation.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_scale_extrapolate_dim_2d_to_3d(view: AtlasView) -> array {
     return empty_candidate_list()
