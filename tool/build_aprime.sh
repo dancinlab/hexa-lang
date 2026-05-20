@@ -120,13 +120,17 @@ mkdir -p "$(dirname "$OUT")"
 # 55% (2.24 MB → 1.00 MB) and removes 323 unused runtime fns + 36
 # unused libc externs (509 T → 186 · 173 U → 137). S3 fixpoint
 # preserved — same md5 655d6d1fc7da8db4572bf49d03dbcdf8 on falsifier.
-# Cycle 46 (RUNTIME.md Phase 1 Tier-A.1, step-1): _strcmp + _memcmp
-# eliminated (137→135) via `static hxlcl_*` helpers + textual #define
-# override in self/runtime.c above the runtime_core.c include. No
-# -fno-builtin clang flag needed — the #define replaces the names
-# before clang's libcall recognition sees them.
+# Cycle 46-50 (RUNTIME.md Phase 1 Tier-A.1 + Tier-A.2/A.6 partial):
+# hxlcl_* helpers + textual #define override + selected disable flags
+# eliminate 24+ libc symbols (137 → ~113 externs).
+# -fno-builtin-{bzero,memcpy} : libcall-recognition residuals
+# -D_FORTIFY_SOURCE=0          : ___memcpy_chk etc fortified wrappers
+# -fno-stack-protector         : ___stack_chk_fail/_guard
+# These flags are link-equivalent — no source change required.
 CL_ERR="$(clang -Oz -arch arm64 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections -Wl,-dead_strip \
+    -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
+    -D_FORTIFY_SOURCE=0 -fno-stack-protector \
     -I self -I . "$APPOST" -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
 if [ -n "$CL_ERR" ] || [ ! -x "$OUT" ]; then
     echo "build_aprime: clang failed" >&2

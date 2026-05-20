@@ -819,6 +819,24 @@ fn _rv_elab_primary(toks: [str], pos: int, m_in: Module, tab: SymTab) -> ElabRes
     }
     if t == "1'b0" { return ElabResult { wire: "$const_0", m: m, pos: pos + 1, err: "" } }
     if t == "1'b1" { return ElabResult { wire: "$const_1", m: m, pos: pos + 1, err: "" } }
+    // RFC 073 Phase 3e — generic sized-literal handling. Any Verilog
+    // `<size>'<base><digits>` (e.g. `3'd0`, `8'hFF`, `4'b1010`) folds
+    // to `$const_<value>`. Without this, untyped literals fell through
+    // to the bare-wire path, leaving raw Verilog tokens like `3'd0`
+    // in the BLIF as wire names — which ABC then rejected. The
+    // `_rv_literal_value` helper handles all four bases (d/h/b/o,
+    // upper + lower case) per IEEE 1364-2005 §3.5.1. @cite IEEE
+    // 1364-2005 §3.5.1 (integer numbers).
+    if t.find("'") >= 0 {
+        let lv = _rv_literal_value(t)
+        if lv >= 0 {
+            let cn = "$const_" + str(lv)
+            if rtlil_find_wire(m, cn) < 0 {
+                m = rtlil_module_add_wire(m, rtlil_wire(cn, 1, 0, 0))
+            }
+            return ElabResult { wire: cn, m: m, pos: pos + 1, err: "" }
+        }
+    }
     // Fold a bare localparam/parameter identifier into a synthesized
     // `$const_<N>` wire (IEEE 1364-2005 §5.1.1 — a parameter reference
     // in an expression is replaced by its constant value). Required so
@@ -2159,6 +2177,518 @@ fn _rv_emit_for_if_stmts(
     return RvEmitRes { m: m, ok: 1 }
 }
 
+// ─── RFC 073 Phase 3e — shared single-arm cond-mux helper ────────────────
+// `_rv_emit_body_v2` is the SUPER-set of `_rv_emit_for_if_stmts`. It
+// recursively walks a body-token stream and emits per-LHS cond-tagged
+// connect_cond rows for the D-input of each tracked LHS. Constructs:
+//   - `begin … end` blocks (strip, recurse with same guard)
+//   - `if (cond) THEN [else ELSE]` — recurse with composed guards
+//     (`cond AND outer` / `NOT cond AND outer`); inline $and /
+//     $logic_not cells per IEEE 1364-2005 §9.4.
+//   - `for (gv = init; cond; gv = step) body` — static-unroll while
+//     `cond` const-folds non-zero (≤1024 iters); per-iteration body
+//     recurse with iter-substituted symtab + same outer guard.
+//   - `LHS [<=|=] RHS ;`         — guarded write
+//   - `LHS [ const ] [<=|=] RHS` — guarded indexed write (static idx)
+//   - `LHS [ wire ] [<=|=] RHS`  — guarded indexed write (dyn idx) —
+//     emits a per-element ($eq + $and) chain composing the guard with
+//     the per-slot select; one (wire-D, rhs, slot_guard) row per slot.
+//   - `LHS [ idx1 ] [ idx2 ]`    — 2-D indexed: graceful-skip (NOT on
+//     §5 critical path).
+//
+// Emission model — instead of emitting `$mux+$dff` per leaf (which
+// produces multi-driver $dff cells when an LHS is written from
+// multiple arms), the helper emits:
+//   (a) `connect_cond(<lhs>__d, rhs_wire, guard_wire)` per leaf write,
+//   (b) `tracked_lhs[]` accumulator listing every unique LHS seen.
+// The CALLER (the always-handler) is responsible for emitting one
+// `$dff(D=<lhs>__d, Q=<lhs>)` per tracked LHS PLUS one unconditional
+// feedback default `connect(<lhs>__d, <lhs>)` so `pass_proc_mux` sees
+// the cond-tagged rows + default and folds them into a single $mux
+// chain driving each $dff. Result: every clocked LHS has exactly ONE
+// $dff (no multi-driver), and the chain expresses the priority-mux
+// composition per IEEE 1364-2005 §10.4.2 + Yosys
+// passes/proc/proc_mux.cc.
+//
+// For combinational `=` writes the rows go to `connect_cond` directly
+// without the `<lhs>__d` indirection (no $dff needed).
+//
+// Returns ok=1 always (honest-gap statements skip-with-no-emit; an
+// arm must still emit the writes it CAN emit lest §5 gate sees 0 area).
+struct RvEmitV2Res {
+    m: Module,
+    tracked_lhs: [str],
+    ok: int,
+}
+
+// CLEAN-ROOM helper: append `lhs` to `tracked` if not already there.
+fn _rv_v2_track(tracked: [str], lhs: str) -> [str] {
+    let mut i = 0
+    while i < len(tracked) {
+        if tracked[i] == lhs { return tracked }
+        i = i + 1
+    }
+    return tracked.push(lhs)
+}
+
+// CLEAN-ROOM helper: per-LHS D-wire naming. Stable string so multiple
+// recursion paths writing to the same LHS share the same D-wire.
+fn _rv_v2_dwire(lhs: str) -> str {
+    return lhs + "__d"
+}
+
+fn _rv_emit_body_v2(
+    body_toks: [str],
+    cond_wire: str,
+    m_in: Module,
+    tab_in: SymTab,
+    is_clocked: int,
+    clk_wire: str,
+    tracked_in: [str]
+) -> RvEmitV2Res {
+    let mut m = m_in
+    let mut tab = tab_in
+    let mut tracked = tracked_in
+    let mut bp = 0
+    let n = len(body_toks)
+    while bp < n {
+        let t0 = body_toks[bp]
+        if t0 == ";" { bp = bp + 1; continue }
+        // ── `begin … end` wrapper — strip & recurse with same guard.
+        if t0 == "begin" {
+            bp = bp + 1
+            let mut sd = 1
+            let mut inner: [str] = []
+            while bp < n && sd > 0 {
+                let tt = body_toks[bp]
+                if tt == "begin" { sd = sd + 1 }
+                if tt == "end" {
+                    sd = sd - 1
+                    if sd == 0 { bp = bp + 1; break }
+                }
+                inner = inner.push(tt)
+                bp = bp + 1
+            }
+            let sub = _rv_emit_body_v2(inner, cond_wire, m, tab, is_clocked, clk_wire, tracked)
+            m = sub.m
+            tracked = sub.tracked_lhs
+            continue
+        }
+        // ── `if (cond) THEN [else ELSE]` — recurse with composed guard.
+        if t0 == "if" {
+            bp = bp + 1
+            // collect ( cond )
+            let mut inner_cond: [str] = []
+            if bp < n && body_toks[bp] == "(" {
+                bp = bp + 1
+                let mut pd = 1
+                while bp < n {
+                    let pt = body_toks[bp]
+                    if pt == "(" { pd = pd + 1; inner_cond = inner_cond.push(pt); bp = bp + 1; continue }
+                    if pt == ")" {
+                        pd = pd - 1
+                        if pd == 0 { bp = bp + 1; break }
+                        inner_cond = inner_cond.push(pt); bp = bp + 1; continue
+                    }
+                    inner_cond = inner_cond.push(pt); bp = bp + 1
+                }
+            }
+            // collect THEN body (begin/end OR single stmt to `;`)
+            let mut then_toks: [str] = []
+            if bp < n && body_toks[bp] == "begin" {
+                bp = bp + 1
+                let mut sd = 1
+                while bp < n {
+                    let tt = body_toks[bp]
+                    if tt == "begin" { sd = sd + 1; then_toks = then_toks.push(tt); bp = bp + 1; continue }
+                    if tt == "end" {
+                        sd = sd - 1
+                        if sd == 0 { bp = bp + 1; break }
+                        then_toks = then_toks.push(tt); bp = bp + 1; continue
+                    }
+                    then_toks = then_toks.push(tt); bp = bp + 1
+                }
+            } else {
+                // single statement (may be nested-if or for) — collect with
+                // structural-balance tracking like the for-body walker.
+                let mut pdepth = 0
+                let mut bdepth = 0
+                while bp < n {
+                    let tt = body_toks[bp]
+                    if tt == "(" || tt == "[" { pdepth = pdepth + 1 }
+                    if tt == ")" || tt == "]" { pdepth = pdepth - 1 }
+                    if tt == "begin" { bdepth = bdepth + 1; then_toks = then_toks.push(tt); bp = bp + 1; continue }
+                    if tt == "end" {
+                        bdepth = bdepth - 1
+                        then_toks = then_toks.push(tt); bp = bp + 1
+                        if pdepth == 0 && bdepth == 0 {
+                            if bp < n && body_toks[bp] == "else" { continue }
+                            break
+                        }
+                        continue
+                    }
+                    if tt == ";" && pdepth == 0 && bdepth == 0 {
+                        then_toks = then_toks.push(tt); bp = bp + 1
+                        if bp < n && body_toks[bp] == "else" { continue }
+                        break
+                    }
+                    then_toks = then_toks.push(tt); bp = bp + 1
+                }
+            }
+            // optional ELSE
+            let mut has_else = 0
+            let mut else_toks: [str] = []
+            if bp < n && body_toks[bp] == "else" {
+                has_else = 1
+                bp = bp + 1
+                if bp < n && body_toks[bp] == "begin" {
+                    bp = bp + 1
+                    let mut sd = 1
+                    while bp < n {
+                        let tt = body_toks[bp]
+                        if tt == "begin" { sd = sd + 1; else_toks = else_toks.push(tt); bp = bp + 1; continue }
+                        if tt == "end" {
+                            sd = sd - 1
+                            if sd == 0 { bp = bp + 1; break }
+                            else_toks = else_toks.push(tt); bp = bp + 1; continue
+                        }
+                        else_toks = else_toks.push(tt); bp = bp + 1
+                    }
+                } else {
+                    let mut pdepth = 0
+                    let mut bdepth = 0
+                    while bp < n {
+                        let tt = body_toks[bp]
+                        if tt == "(" || tt == "[" { pdepth = pdepth + 1 }
+                        if tt == ")" || tt == "]" { pdepth = pdepth - 1 }
+                        if tt == "begin" { bdepth = bdepth + 1; else_toks = else_toks.push(tt); bp = bp + 1; continue }
+                        if tt == "end" {
+                            bdepth = bdepth - 1
+                            else_toks = else_toks.push(tt); bp = bp + 1
+                            if pdepth == 0 && bdepth == 0 { break }
+                            continue
+                        }
+                        if tt == ";" && pdepth == 0 && bdepth == 0 {
+                            else_toks = else_toks.push(tt); bp = bp + 1; break
+                        }
+                        else_toks = else_toks.push(tt); bp = bp + 1
+                    }
+                }
+            }
+            // elaborate inner cond → cond-wire
+            let ier = _rv_elab_expr(inner_cond, 0, m, 1, tab)
+            if len(ier.err) > 0 { continue }
+            m = ier.m
+            // THEN guard = outer AND inner
+            let mut then_guard = ier.wire
+            if len(cond_wire) > 0 {
+                let andw = _rv_fresh_wire(m)
+                m = rtlil_module_add_wire(m, rtlil_wire(andw, 1, 0, 0))
+                let mut andc = rtlil_cell(andw + "$and", "$and", 0)
+                andc = rtlil_cell_connect(andc, "A", cond_wire)
+                andc = rtlil_cell_connect(andc, "B", ier.wire)
+                andc = rtlil_cell_connect(andc, "Y", andw)
+                m = rtlil_module_add_cell(m, andc)
+                then_guard = andw
+            }
+            let then_sub = _rv_emit_body_v2(then_toks, then_guard, m, tab, is_clocked, clk_wire, tracked)
+            m = then_sub.m
+            tracked = then_sub.tracked_lhs
+            // ELSE guard = outer AND NOT(inner)
+            if has_else == 1 {
+                let notw = _rv_fresh_wire(m)
+                m = rtlil_module_add_wire(m, rtlil_wire(notw, 1, 0, 0))
+                let mut notc = rtlil_cell(notw + "$c", "$logic_not", 0)
+                notc = rtlil_cell_connect(notc, "A", ier.wire)
+                notc = rtlil_cell_connect(notc, "Y", notw)
+                m = rtlil_module_add_cell(m, notc)
+                let mut else_guard = notw
+                if len(cond_wire) > 0 {
+                    let andw2 = _rv_fresh_wire(m)
+                    m = rtlil_module_add_wire(m, rtlil_wire(andw2, 1, 0, 0))
+                    let mut andc2 = rtlil_cell(andw2 + "$and", "$and", 0)
+                    andc2 = rtlil_cell_connect(andc2, "A", cond_wire)
+                    andc2 = rtlil_cell_connect(andc2, "B", notw)
+                    andc2 = rtlil_cell_connect(andc2, "Y", andw2)
+                    m = rtlil_module_add_cell(m, andc2)
+                    else_guard = andw2
+                }
+                let else_sub = _rv_emit_body_v2(else_toks, else_guard, m, tab, is_clocked, clk_wire, tracked)
+                m = else_sub.m
+                tracked = else_sub.tracked_lhs
+            }
+            continue
+        }
+        // ── `for (gv = init; cond; gv = step) body` — static unroll.
+        if t0 == "for" {
+            bp = bp + 1
+            if bp >= n || body_toks[bp] != "(" { continue }
+            bp = bp + 1
+            if bp >= n { continue }
+            let fgv = body_toks[bp]
+            bp = bp + 1
+            if bp >= n || body_toks[bp] != "=" { continue }
+            bp = bp + 1
+            let mut finit: [str] = []
+            while bp < n {
+                let tt = body_toks[bp]
+                if tt == ";" { bp = bp + 1; break }
+                finit = finit.push(tt); bp = bp + 1
+            }
+            let f_init_ev = _rv_eval_expr(finit, 0, tab, 1)
+            if len(f_init_ev.err) > 0 { continue }
+            tab = symtab_put(tab, fgv, f_init_ev.value)
+            let mut fcond: [str] = []
+            while bp < n {
+                let tt = body_toks[bp]
+                if tt == ";" { bp = bp + 1; break }
+                fcond = fcond.push(tt); bp = bp + 1
+            }
+            if bp < n { bp = bp + 1 }     // skip gv name in step
+            if bp < n && body_toks[bp] == "=" { bp = bp + 1 }
+            let mut fstep: [str] = []
+            while bp < n {
+                let tt = body_toks[bp]
+                if tt == ")" { bp = bp + 1; break }
+                fstep = fstep.push(tt); bp = bp + 1
+            }
+            // body: begin/end or single statement (track depth to find end)
+            let mut for_body: [str] = []
+            if bp < n && body_toks[bp] == "begin" {
+                bp = bp + 1
+                let mut sd = 1
+                while bp < n {
+                    let tt = body_toks[bp]
+                    if tt == "begin" { sd = sd + 1; for_body = for_body.push(tt); bp = bp + 1; continue }
+                    if tt == "end" {
+                        sd = sd - 1
+                        if sd == 0 { bp = bp + 1; break }
+                        for_body = for_body.push(tt); bp = bp + 1; continue
+                    }
+                    for_body = for_body.push(tt); bp = bp + 1
+                }
+            } else {
+                let mut pdepth = 0
+                let mut bdepth = 0
+                while bp < n {
+                    let tt = body_toks[bp]
+                    if tt == "(" || tt == "[" { pdepth = pdepth + 1 }
+                    if tt == ")" || tt == "]" { pdepth = pdepth - 1 }
+                    if tt == "begin" { bdepth = bdepth + 1; for_body = for_body.push(tt); bp = bp + 1; continue }
+                    if tt == "end" {
+                        bdepth = bdepth - 1
+                        for_body = for_body.push(tt); bp = bp + 1
+                        if pdepth == 0 && bdepth == 0 { break }
+                        continue
+                    }
+                    if tt == ";" && pdepth == 0 && bdepth == 0 {
+                        for_body = for_body.push(tt); bp = bp + 1; break
+                    }
+                    for_body = for_body.push(tt); bp = bp + 1
+                }
+            }
+            // unroll
+            let mut fiter = 0
+            while fiter < 1024 {
+                let fcv = _rv_eval_expr(fcond, 0, tab, 1)
+                if len(fcv.err) > 0 { break }
+                if fcv.value == 0 { break }
+                let iter_sub = _rv_emit_body_v2(for_body, cond_wire, m, tab, is_clocked, clk_wire, tracked)
+                m = iter_sub.m
+                tracked = iter_sub.tracked_lhs
+                let f_step_ev = _rv_eval_expr(fstep, 0, tab, 1)
+                if len(f_step_ev.err) > 0 { break }
+                tab = symtab_put(tab, fgv, f_step_ev.value)
+                fiter = fiter + 1
+            }
+            continue
+        }
+        // ── leaf statement: `LHS [op] RHS ;` (with optional [idx] [idx2]).
+        // Collect until `;` at depth 0.
+        let mut stmt: [str] = []
+        let mut pd = 0
+        let mut bd = 0
+        while bp < n {
+            let tt = body_toks[bp]
+            if tt == "(" || tt == "[" { pd = pd + 1 }
+            if tt == ")" || tt == "]" { pd = pd - 1 }
+            if tt == "begin" { bd = bd + 1 }
+            if tt == "end" { bd = bd - 1 }
+            stmt = stmt.push(tt); bp = bp + 1
+            if tt == ";" && pd == 0 && bd == 0 { break }
+        }
+        if len(stmt) < 4 { continue }
+        if stmt[len(stmt) - 1] != ";" { continue }
+        // Find the LHS extent and operator. LHS may be:
+        //   (a) simple-name  →  op at stmt[1]
+        //   (b) name [ idx ] →  op at stmt[idx_close + 1]
+        //   (c) name [ idx1 ] [ idx2 ] → 2-D (graceful skip)
+        let lhs_base = stmt[0]
+        let mut op_pos = 0 - 1
+        let mut idx1_toks: [str] = []
+        let mut has_idx1 = 0
+        let mut has_idx2 = 0
+        if stmt[1] == "<=" || stmt[1] == "=" {
+            op_pos = 1
+        } else if stmt[1] == "[" {
+            has_idx1 = 1
+            let mut depth = 1
+            let mut p = 2
+            while p < len(stmt) && depth > 0 {
+                if stmt[p] == "[" { depth = depth + 1; idx1_toks = idx1_toks.push(stmt[p]); p = p + 1; continue }
+                if stmt[p] == "]" {
+                    depth = depth - 1
+                    if depth == 0 { p = p + 1; break }
+                    idx1_toks = idx1_toks.push(stmt[p]); p = p + 1; continue
+                }
+                idx1_toks = idx1_toks.push(stmt[p]); p = p + 1
+            }
+            // optional second [ idx2 ] — 2-D, graceful skip
+            if p < len(stmt) && stmt[p] == "[" {
+                has_idx2 = 1
+                let mut d2 = 1
+                p = p + 1
+                while p < len(stmt) && d2 > 0 {
+                    if stmt[p] == "[" { d2 = d2 + 1 }
+                    if stmt[p] == "]" {
+                        d2 = d2 - 1
+                        if d2 == 0 { p = p + 1; break }
+                    }
+                    p = p + 1
+                }
+            }
+            if p < len(stmt) && (stmt[p] == "<=" || stmt[p] == "=") { op_pos = p }
+        }
+        if has_idx2 == 1 { continue }              // 2-D — honest skip
+        if op_pos <= 0 { continue }
+        let op = stmt[op_pos]
+        if op == "<=" && is_clocked == 0 { continue }
+        if op == "="  && is_clocked == 1 { continue }
+        // Collect RHS tokens (between op_pos+1 and trailing `;`)
+        let mut rhs: [str] = []
+        let mut ri = op_pos + 1
+        while ri < len(stmt) - 1 { rhs = rhs.push(stmt[ri]); ri = ri + 1 }
+        let rer = _rv_elab_expr(rhs, 0, m, 1, tab)
+        if len(rer.err) > 0 { continue }
+        m = rer.m
+        // ── leaf emission (Phase 3e per-LHS D-wire model) ──
+        // For clocked writes: emit `connect_cond(<lhs>__d, rhs, guard)`
+        //   and track <lhs> for $dff stitching at the always-handler
+        //   level. The <lhs>__d wire is the shared per-LHS D-input that
+        //   `pass_proc_mux` folds via the cond-tagged rows.
+        // For combinational writes: emit `connect_cond(<lhs>, rhs, guard)`
+        //   directly (no $dff needed). pass_proc_mux still folds.
+        // Resolve LHS wire name(s).
+        if has_idx1 == 0 {
+            // simple LHS
+            let lhs = lhs_base
+            if is_clocked == 1 {
+                let dw = _rv_v2_dwire(lhs)
+                if rtlil_find_wire(m, dw) < 0 {
+                    m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                }
+                m = rtlil_module_connect_cond(m, dw, rer.wire, cond_wire)
+                tracked = _rv_v2_track(tracked, lhs)
+            } else {
+                m = rtlil_module_connect_cond(m, lhs, rer.wire, cond_wire)
+            }
+            continue
+        }
+        // indexed LHS: try const-fold first
+        let ev = _rv_eval_expr(idx1_toks, 0, tab, 1)
+        if len(ev.err) == 0 {
+            // static idx — name[const] is a wire
+            let lhs = lhs_base + "[" + str(ev.value) + "]"
+            if is_clocked == 1 {
+                let dw = _rv_v2_dwire(lhs)
+                if rtlil_find_wire(m, dw) < 0 {
+                    m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                }
+                m = rtlil_module_connect_cond(m, dw, rer.wire, cond_wire)
+                tracked = _rv_v2_track(tracked, lhs)
+            } else {
+                m = rtlil_module_connect_cond(m, lhs, rer.wire, cond_wire)
+            }
+            continue
+        }
+        // dyn idx — per-element ($eq + $and) chain composes a per-slot
+        // guard; each slot emits one cond-tagged row (lhs[i]__d <= rhs
+        // when index==i AND outer_guard).
+        let bound = _rv_array_bound(m, lhs_base)
+        if bound <= 0 { continue }
+        let ier2 = _rv_elab_expr(idx1_toks, 0, m, 1, tab)
+        if len(ier2.err) > 0 { continue }
+        m = ier2.m
+        let mut dk = 0
+        while dk < bound {
+            let elem = lhs_base + "[" + str(dk) + "]"
+            // const wire for dk
+            let cdk = "$const_" + str(dk)
+            if rtlil_find_wire(m, cdk) < 0 {
+                m = rtlil_module_add_wire(m, rtlil_wire(cdk, 1, 0, 0))
+            }
+            let eq_y = _rv_fresh_wire(m)
+            m = rtlil_module_add_wire(m, rtlil_wire(eq_y, 1, 0, 0))
+            let mut eqc = rtlil_cell(eq_y + "$eq", "$eq", 0)
+            eqc = rtlil_cell_connect(eqc, "A", ier2.wire)
+            eqc = rtlil_cell_connect(eqc, "B", cdk)
+            eqc = rtlil_cell_connect(eqc, "Y", eq_y)
+            m = rtlil_module_add_cell(m, eqc)
+            let mut sel_w = eq_y
+            if len(cond_wire) > 0 {
+                let en_y = _rv_fresh_wire(m)
+                m = rtlil_module_add_wire(m, rtlil_wire(en_y, 1, 0, 0))
+                let mut andc = rtlil_cell(en_y + "$and", "$and", 0)
+                andc = rtlil_cell_connect(andc, "A", cond_wire)
+                andc = rtlil_cell_connect(andc, "B", eq_y)
+                andc = rtlil_cell_connect(andc, "Y", en_y)
+                m = rtlil_module_add_cell(m, andc)
+                sel_w = en_y
+            }
+            if is_clocked == 1 {
+                let dw = _rv_v2_dwire(elem)
+                if rtlil_find_wire(m, dw) < 0 {
+                    m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                }
+                m = rtlil_module_connect_cond(m, dw, rer.wire, sel_w)
+                tracked = _rv_v2_track(tracked, elem)
+            } else {
+                m = rtlil_module_connect_cond(m, elem, rer.wire, sel_w)
+            }
+            dk = dk + 1
+        }
+    }
+    return RvEmitV2Res { m: m, tracked_lhs: tracked, ok: 1 }
+}
+
+// CLEAN-ROOM helper: emit $dff cells per tracked LHS plus an
+// unconditional feedback-default connect (lhs__d <= lhs) so that
+// pass_proc_mux folds the cond-tagged rows into a $mux chain feeding
+// each $dff. Run AFTER all `_rv_emit_body_v2` calls for an always.
+fn _rv_emit_dff_for_tracked(
+    m_in: Module,
+    tracked: [str],
+    clk_wire: str
+) -> Module {
+    let mut m = m_in
+    let mut i = 0
+    while i < len(tracked) {
+        let lhs = tracked[i]
+        let dw = _rv_v2_dwire(lhs)
+        // feedback default — no cond tag, becomes pass_proc_mux's default
+        m = rtlil_module_connect(m, dw, lhs)
+        // $dff with D=<lhs>__d, Q=<lhs>
+        let dn = "$rvff$" + str(len(m.cells))
+        let mut dc = rtlil_cell(dn, "$dff", 0)
+        dc = rtlil_cell_connect(dc, "CLK", clk_wire)
+        dc = rtlil_cell_connect(dc, "D", dw)
+        dc = rtlil_cell_connect(dc, "Q", lhs)
+        m = rtlil_module_add_cell(m, dc)
+        i = i + 1
+    }
+    return m
+}
+
 // CLEAN-ROOM: parse a Verilog `always @( SENS ) [begin] BODY [end]`
 // block and lower it to an RTLIL register/combinational cell tree.
 // SCOPE — this body landing covers the basic case yosys's `proc` pass
@@ -3188,7 +3718,14 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
             //   posedge always → per-statement $mux(S=cond, A=else_rhs_i,
             //   B=then_rhs_i, Y=mux_y_i) + $dff(D=mux_y_i, Q=lhs_i).
             //   Requires same simple-name LHS sequence in both branches;
-            //   any mismatch falls back to skip-no-emit.
+            //   any mismatch falls back to RFC 073 Phase 3e v2 helper below.
+            // RFC 073 Phase 3e — track whether the legacy with-else
+            // handler emitted ANY $dff; if not (all_ok==0), the v2
+            // helper fallback (L3780+) runs the recursive cond-mux
+            // decomposition on each arm. Without this guard, the legacy
+            // handler silently dropped mismatched arms (the §5 router's
+            // `if (rst) <for> else <for; for; if>` shape).
+            let mut _3e_legacy_emitted = 0
             if t_ok == 0 && has_else == 1 && is_clocked == 1 {
                 let mut t_stmts: [[str]] = []
                 let mut tcur: [str] = []
@@ -3290,11 +3827,87 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                                     dc = rtlil_cell_connect(dc, "Q", slhs)
                                     m = rtlil_module_add_cell(m, dc)
                                     let _eg = clk_edge
+                                    _3e_legacy_emitted = 1
                                 }
                             }
                             sk = sk + 1
                         }
                     }
+                }
+            }
+            // ── RFC 073 Phase 3e — with-else NON-MATCHING bodies fallback. ──
+            // When all preceding positional handlers bailed (single-LHS
+            // pair, multi-LHS positional pair, nested else-if chain),
+            // recurse into each arm via `_rv_emit_body_v2` with the cond /
+            // !cond guard. The v2 helper handles for-loop static unroll,
+            // nested if/else, indexed-LHS (static + dyn), and graceful skip
+            // for 2-D indexed LHS (not on §5 area critical path). Each leaf
+            // write emits a guarded $dff which the downstream multi-driver
+            // pipeline reconciles. Trigger conditions (fall-through pattern):
+            //   (a) `t_ok==0` — t-arm shape not captured by positional
+            //       handler. Includes router_d{4,6}'s outer `if (rst)
+            //       <for> else <for; for; if>` shape.
+            //   (b) `t_ok==1 && e_ok==0` — single-LHS THEN-arm matched but
+            //       ELSE-arm has multiple statements (`if (c) y<=a; else
+            //       begin y<=b; z<=c; end`); the legacy single-LHS handler
+            //       silently drops the ELSE-arm's writes. T71 falsifier.
+            // In case (b), the legacy single-LHS path ALREADY emitted a
+            // $dff for the t_lhs/e_lhs pair before the fallback fires.
+            // Re-emitting via v2 would double-drive — guard via the
+            // `_3e_legacy_emitted` flag (also set when nested_chain_ok ==
+            // 1 or single-LHS shape emitted). @cite IEEE 1364-2005 §9.4 +
+            // §10.4.2 + Yosys passes/proc/proc_mux.cc.
+            // Mark legacy-emit for single-LHS path (L2863-2896) + nested-
+            // chain path (L2799-2850) by checking their preconditions.
+            let mut _3e_single_emitted = 0
+            if nested_chain_ok == 0 && t_ok == 1 && e_ok == 1 && t_lhs == e_lhs && op_match == 1 {
+                _3e_single_emitted = 1
+            }
+            if nested_chain_ok == 1 { _3e_single_emitted = 1 }
+            // No-else single-LHS path (L2902) fires only with has_else==0;
+            // not relevant here.
+            let mut _3e_fire_a = 0
+            let mut _3e_fire_b = 0
+            if t_ok == 0 && has_else == 1 && is_clocked == 1 && _3e_legacy_emitted == 0 { _3e_fire_a = 1 }
+            if t_ok == 1 && e_ok == 0 && has_else == 1 && is_clocked == 1 && _3e_single_emitted == 0 { _3e_fire_b = 1 }
+            // NOTE: fire_c (single-LHS handler emitted + ELSE has extra
+            // writes) would require tracking which LHSs the single-LHS
+            // handler covered, so the v2 helper can skip them. Deferred
+            // until Phase 3f — currently the §5 critical path doesn't
+            // require it (router_d{4,6}'s outer if is t_ok==0 → fire_a).
+            let _ = _3e_single_emitted
+            // case (c) — single-LHS path already emitted $dff for the
+            // common LHS, but ELSE-arm may have ADDITIONAL writes that
+            // weren't captured (e.g. `if (c) y<=a; else begin y<=b; z<=c; end`
+            // — the single-LHS path emits y, but z is dropped). For this
+            // case, we recurse into the ELSE-arm ONLY (with NOT cond guard).
+            // The THEN-arm was already fully covered by the single-LHS handler.
+            if _3e_fire_a == 1 || _3e_fire_b == 1 {
+                let _3e_cer = _rv_elab_expr(cond_toks, 0, m, 1, tab)
+                if len(_3e_cer.err) == 0 {
+                    m = _3e_cer.m
+                    let mut _3e_tracked: [str] = []
+                    let _3e_then = _rv_emit_body_v2(
+                        then_toks, _3e_cer.wire, m, tab, is_clocked, clk_wire, _3e_tracked)
+                    m = _3e_then.m
+                    _3e_tracked = _3e_then.tracked_lhs
+                    let _3e_notw = _rv_fresh_wire(m)
+                    m = rtlil_module_add_wire(m, rtlil_wire(_3e_notw, 1, 0, 0))
+                    let mut _3e_notc = rtlil_cell(_3e_notw + "$c", "$logic_not", 0)
+                    _3e_notc = rtlil_cell_connect(_3e_notc, "A", _3e_cer.wire)
+                    _3e_notc = rtlil_cell_connect(_3e_notc, "Y", _3e_notw)
+                    m = rtlil_module_add_cell(m, _3e_notc)
+                    let _3e_else = _rv_emit_body_v2(
+                        else_toks, _3e_notw, m, tab, is_clocked, clk_wire, _3e_tracked)
+                    m = _3e_else.m
+                    _3e_tracked = _3e_else.tracked_lhs
+                    // Emit ONE $dff per tracked LHS + unconditional
+                    // `connect(<lhs>__d, <lhs>)` feedback default. The
+                    // single-driver $dff invariant is preserved across
+                    // arbitrary arm recursion depth; pass_proc_mux folds
+                    // the cond-tagged rows into the $dff's D input.
+                    m = _rv_emit_dff_for_tracked(m, _3e_tracked, clk_wire)
+                    let _ = clk_edge
                 }
             }
             if has_begin == 0 { keep_going = 0 }
@@ -3723,6 +4336,15 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
             let mut f_after = f_after_end
             if f_has_begin == 0 { f_after = f_after_stmt }
             st = PState { toks: st.toks, pos: f_after, err: "" }
+            // RFC 073 Phase 3e — terminate the outer always's keep_going
+            // loop when the always has NO enclosing `begin`/`end` and the
+            // for-statement WAS the always's single body statement.
+            // Without this, the outer loop re-iterates against the
+            // post-for cursor (typically `endmodule`) and the scalar
+            // LHS path mis-reads it as a statement (emitting an empty-
+            // bopk diagnostic). The `if`/scalar branches already set
+            // `keep_going=0` symmetrically.
+            if has_begin == 0 { keep_going = 0 }
             continue
         }
         let q_base = _ps_peek(st)
@@ -5416,6 +6038,172 @@ fn main() {
                 + str(rtlil_count_cells_of_type(_m69, "$dff")) + " (expected 6)")
             fails = fails + 1
         }
+    }
+
+    // T70 — RFC 073 Phase 3e (F-RFC-RV-CLOCKED-FOR-INDEXED-LHS).
+    //   Unrolled clocked for-loop with static-idx LHS:
+    //     `always @(posedge clk) for (i = 0; i < 3; i = i + 1)
+    //         name[i] <= rhs(i)`
+    //   The for-body handler unrolls i ∈ {0,1,2} and emits one $dff per
+    //   iteration with Q = name[<const>] (no $mux feedback — unguarded
+    //   write inside posedge-always). Expected: 3 $dff with Q=name[0],
+    //   name[1], name[2]. @cite IEEE 1364-2005 §10.3.5 (for-loop) +
+    //   §10.4.2 (procedural assign).
+    total = total + 1
+    let _v70 = "module fil ( input clk , input a , input b , input c , output reg name [ 0 : 2 ] ) ; integer i ; always @ ( posedge clk ) for ( i = 0 ; i < 3 ; i = i + 1 ) name [ i ] <= a ; endmodule"
+    let _r70 = read_verilog(_v70)
+    if _r70.ok != 1 {
+        println("FAIL T70 for_indexed_lhs: " + _r70.message); fails = fails + 1
+    } else {
+        let _m70 = _r70.design.modules[0]
+        if rtlil_count_cells_of_type(_m70, "$dff") != 3 {
+            println("FAIL T70a dff_count got "
+                + str(rtlil_count_cells_of_type(_m70, "$dff")) + " (expected 3)")
+            fails = fails + 1
+        }
+        // Each $dff must drive a distinct name[i] slot.
+        let mut _t70_q0 = 0
+        let mut _t70_q1 = 0
+        let mut _t70_q2 = 0
+        let mut _t70_ci = 0
+        while _t70_ci < len(_m70.cells) {
+            let _t70_c = _m70.cells[_t70_ci]
+            if _t70_c.cell_type == "$dff" {
+                let mut _t70_pi = 0
+                while _t70_pi < len(_t70_c.conns) {
+                    let _t70_p = _t70_c.conns[_t70_pi]
+                    if _t70_p.pin == "Q" {
+                        if _t70_p.net == "name[0]" { _t70_q0 = 1 }
+                        if _t70_p.net == "name[1]" { _t70_q1 = 1 }
+                        if _t70_p.net == "name[2]" { _t70_q2 = 1 }
+                    }
+                    _t70_pi = _t70_pi + 1
+                }
+            }
+            _t70_ci = _t70_ci + 1
+        }
+        if _t70_q0 != 1 { println("FAIL T70b missing $dff Q=name[0]"); fails = fails + 1 }
+        if _t70_q1 != 1 { println("FAIL T70c missing $dff Q=name[1]"); fails = fails + 1 }
+        if _t70_q2 != 1 { println("FAIL T70d missing $dff Q=name[2]"); fails = fails + 1 }
+    }
+
+    // T71 — RFC 073 Phase 3e (F-RFC-RV-WITH-ELSE-NONMATCHING-BODIES).
+    //   With-else where THEN-arm is a single simple-LHS write and ELSE-
+    //   arm is a TWO-statement block (mismatched arm shapes — THEN has
+    //   1 stmt, ELSE has 2). Pre-Phase-3e the positional multi-LHS
+    //   with-else handler bailed silently because `len(t_stmts) !=
+    //   len(e_stmts)`. Post-Phase-3e the `_rv_emit_body_v2` fallback
+    //   recurses into each arm with the cond / !cond guard, emitting
+    //   per-LHS cond-tagged `connect_cond(<lhs>__d, rhs, guard)` rows
+    //   PLUS one $dff per tracked LHS (with D=<lhs>__d, Q=<lhs>) and an
+    //   unconditional `connect(<lhs>__d, <lhs>)` feedback default.
+    //   `pass_proc_mux` later folds the cond-tagged rows into a $mux
+    //   chain feeding each $dff. Single $dff per LHS = no multi-driver.
+    //   Expected post-read_verilog (BEFORE pass_proc_mux):
+    //     $dff = 2 (one per LHS y, z — single-driver invariant)
+    //     $logic_not ≥ 1 (NOT(cond) for ELSE-arm guard)
+    //     connect_cond rows ≥ 3 (THEN y, ELSE y, ELSE z) + 2 feedback
+    //   @cite IEEE 1364-2005 §9.4 (control) + §10.4.2 (procedural
+    //   assign) + Yosys passes/proc/proc_mux.cc (priority-mux fold).
+    total = total + 1
+    let _v71 = "module sm71 ( input clk , input c , input a , input b , output reg y , output reg z ) ; always @ ( posedge clk ) if ( c ) y <= a ; else begin y <= b ; z <= c ; end endmodule"
+    let _r71 = read_verilog(_v71)
+    if _r71.ok != 1 {
+        println("FAIL T71 with_else_nonmatching: " + _r71.message); fails = fails + 1
+    } else {
+        let _m71 = _r71.design.modules[0]
+        let _t71_dff = rtlil_count_cells_of_type(_m71, "$dff")
+        let _t71_not = rtlil_count_cells_of_type(_m71, "$logic_not")
+        if _t71_dff != 2 {
+            println("FAIL T71a dff_count got " + str(_t71_dff) + " (expected 2 — one per LHS)")
+            fails = fails + 1
+        }
+        if _t71_not < 1 {
+            println("FAIL T71b logic_not_count got " + str(_t71_not) + " (expected ≥1)")
+            fails = fails + 1
+        }
+        // Each $dff must drive a distinct Q (y, z).
+        let mut _t71_qy = 0
+        let mut _t71_qz = 0
+        let mut _t71_ci = 0
+        while _t71_ci < len(_m71.cells) {
+            let _t71_c = _m71.cells[_t71_ci]
+            if _t71_c.cell_type == "$dff" {
+                let mut _t71_pi = 0
+                while _t71_pi < len(_t71_c.conns) {
+                    let _t71_p = _t71_c.conns[_t71_pi]
+                    if _t71_p.pin == "Q" {
+                        if _t71_p.net == "y" { _t71_qy = 1 }
+                        if _t71_p.net == "z" { _t71_qz = 1 }
+                    }
+                    _t71_pi = _t71_pi + 1
+                }
+            }
+            _t71_ci = _t71_ci + 1
+        }
+        if _t71_qy != 1 { println("FAIL T71c missing $dff Q=y"); fails = fails + 1 }
+        if _t71_qz != 1 { println("FAIL T71d missing $dff Q=z"); fails = fails + 1 }
+        // Per-LHS D-wires (y__d, z__d) must exist + drive each $dff's D.
+        if rtlil_find_wire(_m71, "y__d") < 0 {
+            println("FAIL T71e missing y__d D-wire"); fails = fails + 1
+        }
+        if rtlil_find_wire(_m71, "z__d") < 0 {
+            println("FAIL T71f missing z__d D-wire"); fails = fails + 1
+        }
+    }
+
+    // T72 — RFC 073 Phase 3e (F-RFC-RV-NESTED-IF-INSIDE-ELSE-BODY).
+    //   Nested if/else chain where the else-body is itself an `if (c2)`
+    //   (i.e. `else if`). The else-arm shape forces the Phase 3e v2
+    //   helper recursion to fire on a body that contains a nested `if`.
+    //   Pre-Phase-3e: the cascaded else-if path at L2636 handled this
+    //   only when both arms were simple `LHS <= RHS ;`; with-else mode
+    //   was untouched and the inner nesting was dropped. Post-Phase-3e:
+    //   the v2 helper recurses through the else-body's `if (c2)`,
+    //   composing `!c1 AND c2` as the inner-write guard, producing
+    //   ≥2 $logic_not (one per else-arm at each level) and ≥2 $and
+    //   (composed-guard wires). @cite IEEE 1364-2005 §9.4.
+    total = total + 1
+    let _v72 = "module sm72 ( input clk , input c1 , input c2 , input a , input b , output reg y ) ; always @ ( posedge clk ) if ( c1 ) y <= a ; else if ( c2 ) y <= b ; endmodule"
+    let _r72 = read_verilog(_v72)
+    if _r72.ok != 1 {
+        println("FAIL T72 nested_if_else_body: " + _r72.message); fails = fails + 1
+    } else {
+        let _m72 = _r72.design.modules[0]
+        let _t72_mux = rtlil_count_cells_of_type(_m72, "$mux")
+        let _t72_dff = rtlil_count_cells_of_type(_m72, "$dff")
+        // Either the nested-chain handler (cascaded-mux tree) OR the
+        // Phase 3e v2 helper fires here. Both produce ≥2 $mux + ≥1 $dff
+        // for Q=y. The pre-Phase-3e handler at L2636+ already covers
+        // this shape via the cascaded `else if` chain detector
+        // (nested_chain_ok==1 path), so T72 anchors that path's continued
+        // operation — it MUST not regress when v2 fallback is wired.
+        if _t72_mux < 2 {
+            println("FAIL T72a mux_count got " + str(_t72_mux) + " (expected ≥2)")
+            fails = fails + 1
+        }
+        if _t72_dff < 1 {
+            println("FAIL T72b dff_count got " + str(_t72_dff) + " (expected ≥1)")
+            fails = fails + 1
+        }
+        // The single $dff must drive Q=y.
+        let mut _t72_qy = 0
+        let mut _t72_ci = 0
+        while _t72_ci < len(_m72.cells) {
+            let _t72_c = _m72.cells[_t72_ci]
+            if _t72_c.cell_type == "$dff" {
+                let mut _t72_pi = 0
+                while _t72_pi < len(_t72_c.conns) {
+                    let _t72_p = _t72_c.conns[_t72_pi]
+                    if _t72_p.pin == "Q" {
+                        if _t72_p.net == "y" { _t72_qy = 1 }
+                    }
+                    _t72_pi = _t72_pi + 1
+                }
+            }
+            _t72_ci = _t72_ci + 1
+        }
+        if _t72_qy != 1 { println("FAIL T72c missing $dff Q=y"); fails = fails + 1 }
     }
 
     if fails > 0 {

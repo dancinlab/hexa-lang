@@ -57,25 +57,45 @@ to libc). Step-2 (later cycle) ports each `hxlcl_*` to
 `stdlib/runtime/<name>.hexa` + codegen routing; runtime.c itself
 retires once its callers move to hexa-source.
 
-- [partial] `_strcmp` — removed cycle 46 (`hxlcl_strcmp` + #define)
-- [partial] `_memcmp` — removed cycle 46 (`hxlcl_memcmp` + #define)
-- [pending] `_strlen` — `hxlcl_strlen` landed + #define; 1 residual
-      libc call remains chained from `_strcat` inline path (cycle 47
-      lands `_strcat` and closes this in the same surgery)
-- [ ] `_atoi` — string → i64. → `stdlib/runtime/atoi.hexa`
-- [ ] `_atof` — string → f64 (scaled accumulator + decimal exponent)
-- [ ] `_atoll` — string → i64 (alias of atoi or longer-range variant)
-- [ ] `_strtol`, `_strtod`, `_strtoul` — strtok-like with end-ptr
-- [ ] `_strcpy`, `_strncpy`, `_strcat` — byte copy
-- [ ] `_strncmp` — byte compare (n-prefixed; cycle 47)
-- [ ] `_strchr`, `_strstr` — substring search
-- [ ] `_strdup` — strlen + malloc + memcpy
-- [ ] `_bzero` — fill with zero
-- [ ] `_qsort` — sort-array helper (rare; review usage)
-- [ ] `_bsearch` — binary search (rare; review usage)
+- [x] `_strcmp` — removed cycle 46 (`hxlcl_strcmp` + #define)
+- [x] `_memcmp` — removed cycle 46 (`hxlcl_memcmp` + #define)
+- [x] `_strlen` — removed cycle 47 (closed with strcat surgery)
+- [x] `_strcat` — removed cycle 47 (`hxlcl_strcat` + #define)
+- [x] `_strchr` — removed cycle 47 (`hxlcl_strchr` + #define)
+- [x] `_strstr` — removed cycle 47 (`hxlcl_strstr` + #define)
+- [x] `_strndup` — removed cycle 47 (`hxlcl_strndup` + #define)
+- [x] `_strdup` — removed cycle 48 (cycle-47 "residual" was actually
+      broken `#define hxlcl_strdup hxlcl_strdup` self-redefine from
+      perl mis-substitution; fix → clean removal)
+- [x] `_strncmp` — removed cycle 48 (same broken-#define cause)
+- [x] `_strrchr` — removed cycle 48 (same broken-#define cause)
+- [x] `_atoi` — removed cycle 48 (`hxlcl_atoi` + #define)
+- [x] `_atoll` — removed cycle 48 (`hxlcl_atoll` + #define)
+- [x] `_atof` — removed cycle 48 (`hxlcl_atof` + #define, simple
+      decimal-exponent impl; bit-exactness not yet verified against
+      libm path — gated under Phase 1 cumulative S3 fixpoint check)
+- [x] `_strtoll` — removed cycle 48 (`hxlcl_strtoll` + #define, full
+      base+endptr semantics)
+- [x] `_strtoull` — removed cycle 48 (`hxlcl_strtoull` + #define)
+- [pending] `_bzero` — `hxlcl_bzero` + #define landed cycle 48 but
+      `-fno-builtin-bzero` flag (added to build_aprime.sh) does NOT
+      stop clang -Oz from emitting bzero. Mechanism: `memset(p,0,n)`
+      auto-converted to bzero before tokenization sees our #define.
+      Defer to cycle that replaces memset call sites too.
+- [pending] `_strncpy` — newly emerged after cycle 48 (was not in
+      baseline 137; clang -Oz converted some other loop pattern in
+      our helpers / runtime into strncpy). 1 call site.
+- [ ] `_strcpy` — byte copy
+- [ ] `_qsort` — sort-array helper (already dead-stripped; 0 source
+      sites in current build, may need attention if reachable code
+      grows)
+- [ ] `_bsearch` — binary search (already dead-stripped; same as
+      qsort)
+- [ ] `_strtod` — already dead-stripped; 0 in current externs
 
 Acceptance: 12+ libc symbols removed → 137 → ~125 externs.
-Cycle 46 partial: 137 → 135 (−2 measured).
+Cycle 46-48 cumulative: 137 → 122 (**−15 measured · 15 of 12+ symbols
+dropped · ~125 target REACHED**, surpassed by 3 externs).
 
 ### Tier-A.2 — Memory allocator family
 
@@ -363,3 +383,223 @@ For each Tier-A sub-phase:
 - S3 fixpoint validation DEFERRED to Phase 1 cumulative gate —
   this step is a single sub-symbol edit; preserving gen1 ≡ gen2
   is gated when full Tier-A.1 lands
+
+### 2026-05-20 — Phase 1 Tier-A.1 step-1 (cycle 47)
+
+- ✅ cycle 47 — 5 more libc symbols removed (135 → 130 externs ·
+  cumulative 137 → 130 = −7 vs Phase 0 baseline). aprime_cc smoke
+  exit(42) PASS · binary 1,120,024 → 1,119,976 B (−48 B,
+  effectively unchanged)
+- Removed this cycle: `_strcat` · `_strlen` (residual closed
+  alongside strcat) · `_strchr` · `_strstr` · `_strndup`
+- Added helpers: `hxlcl_strcat` · `hxlcl_strchr` · `hxlcl_strrchr`
+  · `hxlcl_strstr` · `hxlcl_strncmp` · `hxlcl_strdup` ·
+  `hxlcl_strndup` (7 helpers; all in `self/runtime.c` above the
+  runtime_core.c include, all with `noinline` + volatile reads)
+- Added `#define` redirects for those names
+- Source delta: `self/runtime.c` (+9 helpers + 7 defines · ~95
+  lines net) · `self/runtime_core.c` (perl substitutions across
+  the 6 new symbols)
+- `tool/build_aprime.sh` comment updated. `-fno-builtin-{strncmp,
+  strdup,strrchr}` flag combo tested — DID NOT help (still 130
+  externs, same 3 residuals); flags removed to keep the build
+  recipe clean
+- 3 stubborn residuals: `_strdup` · `_strncmp` · `_strrchr`. All
+  1 libc call each via clang `-Oz` reverse-libcall recognition
+  converting our `hxlcl_*` patterns back to libc-shaped calls
+  (e.g. `hxlcl_memcmp(a, b, k)` with constant `k` → `_strncmp`;
+  `malloc(n+1) + byte copy` → `_strdup`). `-fno-builtin-NAME`
+  flag is insufficient on -Oz; the optimizer pass that does the
+  reverse-recognition fires before the builtin check
+- Defer cycle: rewrite the 3 helpers either (a) as `@asm` blocks
+  that the optimizer can't pattern-match, (b) with explicit
+  side-effects to escape pattern fingerprinting, or (c) port to
+  hexa-source per the canonical step-2 path
+- S3 fixpoint check still DEFERRED to Phase 1 cumulative gate
+
+### 2026-05-20 — Phase 1 Tier-A.1 step-1 (cycle 48) — acceptance reached
+
+- ✅ cycle 48 — Tier-A.1 acceptance "12+ symbols removed → ~125
+  externs" **REACHED measured**. aprime_cc nm undefined externs
+  127 → 122 (−5 this cycle · cumulative 137 → 122 = **−15**) ·
+  smoke exit(42) PASS · binary 1,119,896 B (vs baseline 1,119,480
+  B, +416 B = 0.04%)
+- Bug correction: cycle 47's "stubborn 3 residual via clang
+  reverse-libcall" hypothesis was WRONG. Real cause = broken
+  `#define` block: perl substitution from cycle 47 hit the LHS
+  of its own newly-added `#define strncmp(...) hxlcl_strncmp(...)`
+  lines and converted them to `#define hxlcl_strncmp(...)
+  hxlcl_strncmp(...)` self-redefines (no-op). Fixed by typing out
+  the correct LHS names directly + updating future perl skip rule
+  to `unless (/^\s*\/\/|^\s*#\s*define\b/)`
+- Closed cycle 48: `_strdup` + `_strncmp` + `_strrchr` (broken-
+  define fix) · `_atoi` + `_atoll` + `_atof` + `_strtoll` +
+  `_strtoull` (numeric batch). 8 symbols dropped this cycle. Plus
+  `-fno-builtin-bzero` added to build_aprime.sh (unsuccessful for
+  bzero, but documents the attempt)
+- 2 residuals open: `_bzero` (clang memset-to-bzero conversion;
+  `-fno-builtin-bzero` insufficient) · `_strncpy` (newly emerged
+  via clang loop-to-strncpy conversion in our helpers). Both 1
+  call site each, address in cycle 49+
+- atof simple impl is NOT bit-exact with libc — may break S3
+  fixpoint when Phase 1 cumulative gate fires. Mitigation options
+  documented in RFC draft: (i) accept FP drift if gen1/gen2 both
+  go through hxlcl_atof, (ii) keep libm path for atof, (iii) port
+  to bit-exact Pade/Dekker scheme
+
+### 2026-05-20 — Tier-A.1 final stragglers + Tier-A.2 partial (cycle 49)
+
+- ✅ cycle 49 — aprime_cc nm undefined externs 122 → **117** (−5
+  this cycle · cumulative **137 → 117 = −20**) · smoke exit(42)
+  PASS · binary 1,119,896 → 1,119,992 B (+96 B = 0.04% from
+  baseline 1,119,480)
+- Closed: `_bzero` (closed via memset replacement chain · clang's
+  memset→bzero conversion goes silent once no memset literals
+  remain) · `_strncpy` (formerly "newly emerged" — also resolved)
+  · `_strcpy` · `_strerror` (constant-string stub by errno class)
+  · `_strftime` (zero-return stub; compiler-binary fallbacks tested
+  to handle no-op output) · `_memset` · `_memmove` · BONUS
+  `___memcpy_chk` (fortified variant dropped automatically once
+  non-fortified memcpy unhooked)
+- Tier-A.2 partial (3 of 8 memory symbols dropped): memset +
+  memmove + ___memcpy_chk. `_memcpy` residual = 2 call sites of
+  constant-size-160 `*dst = *src` aggregate assignments clang
+  lowers to libc memcpy below the `#define` layer. `-fno-builtin-
+  memcpy` added but ineffective for this codegen path
+- Tier-A.2 still OPEN: `_malloc` · `_free` · `_realloc` ·
+  `_calloc` · `_mmap` · `_munmap` (5 symbols). These underpin
+  `hxlcl_strdup` plus the hexa arena allocator (`hexa_arena_
+  alloc`). A cycle to port them needs either (a) a hexa-native
+  bump allocator + mmap-syscall shim, or (b) interpose at the
+  arena layer
+- 22 `hxlcl_*` helpers now in `self/runtime.c`: strlen · strcmp ·
+  memcmp · strcat · strchr · strrchr · strstr · strncmp · strdup
+  · strndup · atoi · atoll · atof · strtoll · strtoull · bzero ·
+  memcpy · memset · memmove · strncpy · strcpy · strerror ·
+  strftime (23 entries; strerror+strftime are stubs)
+
+### 2026-05-20 — Tier-A.6 fortification/stack-protector flags (cycle 50)
+
+- ✅ cycle 50 — flag-only closure of compiler-rt residuals.
+  `-D_FORTIFY_SOURCE=0` + `-fno-stack-protector` added to
+  build_aprime.sh; clang stops emitting `___stack_chk_fail` and
+  `___stack_chk_guard` runtime symbols (fortified `___memcpy_chk`
+  already dropped automatically via cycle 49's memcpy unhook).
+  Result: aprime_cc nm undefined externs 117 → **115** (−2 ·
+  cumulative **137 → 115 = −22**) · smoke exit(42) PASS · binary
+  1,119,992 → 1,119,784 B (−208 B; smaller since stack-canary
+  prologues no longer emitted)
+- `-fno-builtin-sincos` also attempted to drop `___sincos_stret`
+  (macOS-specific paired-trig stret call) — INEFFECTIVE; clang's
+  stret packing fires after the builtin check. Defer
+- Tier-A.6 remaining: `___chkstk_darwin` · `___sincos_stret` ·
+  `___darwin_check_fd_set_overflow` · `___error` · `___stderrp` ·
+  `___stdoutp` · `__DefaultRuneLocale` (dropped earlier?). These
+  need either source touches (stderrp/stdoutp → fd-0/1 constants)
+  or compiler-flag deeper changes (chkstk_darwin: `-mstack-arg-
+  probe-size=0` or `-fno-stack-clash-protection`)
+- No source changes this cycle — `self/runtime.c` unchanged from
+  cycle 49 state. Pure build-script update.
+
+### 2026-05-20 — cycle 51 (small maintenance, no extern delta)
+
+- ⚠ cycle 51 — no extern reduction (115 → 115). 3 attempts:
+  - `-fno-builtin-sincos` flag: INEFFECTIVE for `___sincos_stret`
+    (macOS stret pack-pair fires after builtin check) · removed
+  - `-mllvm -disable-loop-idiom-memcpy=true`: INEFFECTIVE for the
+    2 constant-size 160-byte aggregate memcpy calls · removed
+  - `__attribute__((no_builtin("memcpy")))` on hexa_val_heapify
+    + hexa_valstruct_set_by_key (the 2 caller fns identified by
+    disasm): INEFFECTIVE · KEPT (valid attribute, harmless,
+    documents the attempt)
+- aprime_cc smoke exit(42) PASS · binary 1,119,784 B unchanged
+  (no codegen change net)
+- Conclusion: `_memcpy` residual closure requires source-level
+  rewrite of the 160-byte `*dst = *src` aggregate-assign in those
+  two fns (via explicit byte-loop or `__builtin_memcpy_inline`).
+  Deferred to a cycle that touches the source pattern directly
+- Phase 1 Tier-A.1 acceptance maintained (137 → 115 = -22, 8
+  better than `~125` target)
+
+### 2026-05-20 — cycle 52 — Tier-A.3 stdio printf-family minimal impl (-7 externs)
+
+- ✅ cycle 52 — aprime_cc nm undefined externs 115 → **108**
+  (−7 measured · cumulative **137 → 108 = −29**) · smoke
+  exit(42) PASS · binary 1,119,784 → 1,119,608 B (−176 B)
+- Closed: `_printf` · `_fprintf` · `_snprintf` · `_fputs` ·
+  `_fputc` · `_fflush` · `_putchar` · `_perror` · plus
+  `_strlen` residual from new code's string-scan loops (closed
+  via `-fno-builtin-strlen` flag · this flag was tried + failed
+  in cycle 47 but works now because the new code surface
+  triggers a different optimization pass)
+- Method: minimal-but-correct `hxlcl_vsnprintf` (~90 LoC)
+  handles `%s/%d/%i/%u/%lld/%ld/%llu/%lu/%zu/%c/%x/%X/%p/%%`,
+  basic width + zero-pad + left-align. Float specifiers
+  (`%f/%g/%e/%F/%G/%E`) emit `(float)` placeholder — compiler's
+  hot paths don't print floats. `printf` → `write(1, ...)` ·
+  `fprintf` → `write(stderr ? 2 : 1, ...)` · `fputs/fputc/
+  putchar/perror` → direct `write()`
+- Tier-A.3 still OPEN: `_fopen` · `_fclose` · `_fread` ·
+  `_fwrite` · `_fseek` · `_ftell` · `_fdopen` · `_flock` ·
+  `_setvbuf` (9 file-stream symbols · need FILE* abstraction
+  layer; defer until either (a) hexa runtime stops using FILE*
+  for compiler-side IO, or (b) write a minimal FILE struct +
+  open/read/write/close wrappers)
+- Honest scope: hxlcl_printf is NOT bit-exact with libc printf
+  (no `%a`, no locale, no positional args, simplified width/
+  precision handling, `(float)` placeholder for FP). Compiler
+  binary uses printf only for error messages + diagnostics
+  where format-string subset is well-defined; smoke shows
+  acceptable output. Bit-exactness with libm printf path is
+  gated under Phase 1 cumulative S3 fixpoint check (deferred)
+- `__attribute__((no_builtin("memcpy")))` from cycle 51 kept
+  (still no benefit but harmless · documents the attempt)
+
+### 2026-05-20 — cycle 53 — Tier-A.2 mmap-backed bump allocator (-4 externs)
+
+- ✅ cycle 53 — Tier-A.2 memory family port. aprime_cc nm
+  undefined externs 108 → **104** (−4 measured · cumulative
+  **137 → 104 = −33**) · smoke exit(42) PASS · binary
+  1,119,608 → 1,119,144 B (−464 B)
+- Closed: `_free` · `_realloc` · `_calloc` · `_munmap`
+- Method: mmap-backed bump allocator. `hxlcl_malloc` 16-byte-
+  aligns + bumps within a 4 MB mmap chunk; grows on overflow.
+  `hxlcl_free` is a noop (compiler binary leaks until exit —
+  acceptable for one-shot tool). `hxlcl_realloc` = malloc-new +
+  byte copy. `hxlcl_calloc` = malloc + zero. `hxlcl_munmap` is a
+  noop (we never release mmap chunks)
+- Tier-A.2 progress: **6 of 8 dropped** (cycle 49: memset +
+  memmove + ___memcpy_chk · cycle 53: free + realloc + calloc
+  + munmap)
+- Tier-A.2 residual: `_malloc` (1 call site in `_hxlcl_strdup`
+  · clang -Oz fuses `volatile-loop + malloc(n+1) + byte-copy`
+  back to libc strdup-shape and emits `_malloc`; `volatile`
+  cast in source insufficient) · `_memcpy` (cycle 51 residual)
+- Tier-A.2 NEW floor: `_mmap` (1 call from `hxlcl_malloc`) —
+  this single extern is the allocator floor until @asm syscall
+  inlining lands (Tier-A.4 path-c)
+- Honest scope: bump allocator + noop free is functionally
+  correct for compiler binary lifetime; memory grows monotonic-
+  ally per build, peaks at ~tens of MB based on aprime_cc usage
+  pattern. NOT suitable for long-running daemons. atexit() not
+  hooked; the OS reclaims chunks at exit
+### 2026-05-20 — cycle 54 — Tier-A.3 file-stream batch (-7 externs)
+
+- ✅ cycle 54 — Tier-A.3 stdio file-stream subset closed.
+  aprime_cc nm undefined externs 104 → **97** (−7 measured ·
+  cumulative **137 → 97 = −40**) · smoke exit(42) PASS · binary
+  1,119,144 → 1,118,952 B (−192 B)
+- Closed: `_fopen` · `_fclose` · `_fread` · `_fwrite` ·
+  `_fseek` · `_ftell` · `_fdopen` · `_flock` · `_setvbuf`
+- Method: FILE* encoded as `(void *)(uintptr_t)(fd + 1)` so 0
+  doesn't alias NULL. _hxlcl_fp_fd helper checks if value is
+  "small" (<0x1000) → our encoding, else libc FILE* → pointer
+  compare against stderr/stdout/stdin. fopen uses `open()`
+  syscall; fread/fwrite call `read`/`write`; fseek/ftell call
+  `lseek`. flock + setvbuf = noop stubs (compiler binary doesn't
+  rely on file locks or specific buffering modes)
+- Tier-A.3 closure: 8 cycle-52 + 9 cycle-54 = **17 of 19**
+  symbols. acceptance "~19 stdio → 117 → ~98 externs" REACHED
+  at 97 (1 better than target). Remaining 2 Tier-A.3-ish:
+  none in current externs
+- Carryover residuals: `_malloc` · `_memcpy` · `_mmap`
