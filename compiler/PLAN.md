@@ -5263,3 +5263,139 @@ cross-link: D3 harvest `5f37a884` · E3 audit `10e87cd1` ·
 B2 design lock `c54b76f3` · RFC 070 §G7-D row (out-of-worktree;
 fix lands here for cherry-pick once RFC enters mainline).
 
+
+## 2026-05-20 — RFC 070 G7-B v1.5 ELF PIC text reloc consumption (Shape-B fallback)
+
+**Scope:** `compiler/link/hexa_ld.hexa` — extend v1.4 ELF Part A (PT_DYNAMIC
++ .dynsym + .dynstr + .hash + .dynamic) with **PIC text relocation record
+consumption** for GOT-family reloc types. ELF-only per task spec
+Shape-B fallback — Mach-O Part B (LC_DYLD_INFO_ONLY binds for `__got`
+references) deferred to the next sub-cycle.
+
+**Why now:** F1 (`0a5ef2d2` v1.5 Mach-O Part A draft) sits on an
+unmerged detached commit and is not in the current `s1-step2-codegen-perf`
+HEAD (`e7044621`). The honest landing path is to build PIC reloc
+consumption directly on v1.4 (which IS in the tree) and let Mach-O
+Part A land separately whenever F1 (or its successor) gets reviewed.
+Independence verified: dup-race precheck (`grep -nE "R_X86_64_GOTPCREL|R_AARCH64_ADR_GOT_PAGE|RELOC_GOT_LOAD" compiler/link/`) returned zero hits — first-mover.
+
+**What landed:**
+
+- **9 named GOT-family reloc constants** (gABI §4.5.4 + IHI 0056F §5.7.4):
+  - x86_64: `R_X86_64_GOT32` (3), `R_X86_64_GLOB_DAT` (6),
+    `R_X86_64_JUMP_SLOT` (7), `R_X86_64_RELATIVE` (8),
+    `R_X86_64_GOTPCREL` (9)
+  - aarch64: `R_AARCH64_ADR_GOT_PAGE` (311), `R_AARCH64_LD64_GOT_LO12_NC`
+    (312), `R_AARCH64_GLOB_DAT` (1025), `R_AARCH64_JUMP_SLOT` (1026),
+    `R_AARCH64_RELATIVE` (1027)
+  - DT_RELA / DT_RELASZ / DT_RELAENT / DT_PLTGOT dynamic tags exposed
+    as named constants alongside the existing DT_HASH/STRTAB/SYMTAB set.
+
+- **`pub fn find_rela_text(buf) -> [int]`** — walks the input `.o`
+  section table for SHT_RELA + section name `.rela.text`; returns
+  `[rela_off, rela_sz, rela_es]` or `[]` when absent. Matches the name
+  the codegen E2 ELF emitter (`compiler/emit/elf_x86_64.hexa`) already
+  uses for its own reloc section.
+
+- **`pub fn read_elf_relocs(buf, off, sz, es) -> [int]`** — Elf64_Rela
+  (24 B) decoder; returns flat `[r_offset, r_info, r_addend]*N`. Flat
+  form keeps the surface allocation-light and avoids needing an
+  `ElfRela` struct in `hexa_ld`.
+
+- **`pub fn elf_reloc_is_got_typed(r_info_low) -> bool`** — single
+  dispatch over both x86_64 + aarch64 type spaces (disjoint type
+  numbers make joint classification safe). Used to filter input
+  relocs down to the subset that materializes into `.rela.dyn`.
+
+- **`pub fn build_elf64_dyn_with_dynamic_reloc(text_bytes, ident, relocs_flat, import_names) -> [int]`**
+  — superset of v1.4's `build_elf64_dyn_with_dynamic`. Extends
+  `.dynsym` with one STN_UNDEF (STB_GLOBAL | STT_NOTYPE) entry per
+  unique import name, appends a `.rela.dyn` section after `.dynamic`,
+  and conditionally wires DT_RELA / DT_RELASZ / DT_RELAENT into the
+  dynamic chain (omitted when no GOT-typed relocs exist, per gABI
+  §5.5 — readers accept either form). DT_PLTGOT placeholder = 0 since
+  `.got` materialization is OUT-OF-SCOPE for v1.5 (G7-C runtime work).
+  Same 3-PT_LOAD layout as v1.4 — only the R+W payload grows.
+
+- **`_link_elf_shared(obj, out)` rewire** — actually invokes the v1.4
+  Part A builder (previous v1.4 doc claimed this, but the call site
+  still reached the v1.3 `build_elf64_dyn` — drift fixed); when
+  `.rela.text` exists, dispatches to the new v1.5 builder; otherwise
+  falls back to v1.4. Import names are resolved from the input
+  `.symtab` via the GOT-typed reloc's `sym_idx`. Linear-scan dedup
+  (n_imports stays small for hexa's RFC 070 §3.B "1-symbol fat .so
+  convention"). The output `<ident>_dispatch` export name and
+  `<ident>.so` soname are derived via a new `_basename_strip_ext`
+  helper.
+
+**Verification status (honest per @D g3):**
+
+- **Parse-gate PASS** — `/Users/ghost/.hx/bin/hexa_real parse
+  compiler/link/hexa_ld.hexa` clean both before edit (baseline) and
+  after each of the 4 staged Edit blocks (constants/helpers, builder,
+  rewire, header doc). marker count = 0.
+- **F-B-LOADABLE smoke (dlopen on Linux x86_64 / macOS arm64): MEASUREMENT-DEFERRED.**
+  The smoke requires (i) E2 codegen patched to emit `R_X86_64_GOTPCREL`
+  for `extern fn` calls (currently emits PLT32 only — confirmed via
+  `grep -nE "R_X86_64_GOTPCREL|R_AARCH64_ADR_GOT_PAGE" compiler/emit/`),
+  (ii) a binary-promoted `hexa_ld` driver (forbidden this cycle per
+  task spec), (iii) a host that can both build and `dlopen` (ubu-1
+  reachable, mini ssh timed out). Falsifier battery is ready; the
+  gate exists, the codegen side does not yet produce qualifying
+  input. g3-honest: this cycle CLOSES the linker-side gap; G7-A
+  codegen GOT-load emission remains the unblocking prerequisite for
+  end-to-end runtime smoke.
+- **Codegen-side reloc inventory** (independence check for honest
+  scoping): `compiler/emit/elf_x86_64.hexa` defines NONE/64/PC32/PLT32
+  only. `compiler/emit/macho_arm64.hexa` defines
+  UNSIGNED/BRANCH26/PAGE21/PAGEOFF12 only. v1.5 linker is therefore
+  forward-compatible — when codegen adds GOT-load emission (G7-A
+  sub-cycle), no further linker change is needed for the
+  consumption side.
+
+**Honest scope caveats:**
+
+- v1.5 is **ELF-only** per task spec Shape-B fallback. Mach-O
+  `.dylib` still hits `build_macho_arm64_dylib` (header-only v1.3
+  shape); LC_DYLD_INFO_ONLY binds for `__got` references is the next
+  sub-cycle. F1's Mach-O Part A (export trie + dysymtab) is an
+  orthogonal prerequisite that must land first.
+- `.got` materialization is NOT done. v1.5 emits DT_PLTGOT = 0
+  placeholder. Runtime resolution requires either (i) PIC text that
+  inlines its own GOT stub (typical for hexa-codegen-emitted
+  position-independent `<ident>_dispatch`) or (ii) a future v1.6
+  `.got` allocator.
+- The reloc → import-slot mapping in v1.5 is **conservative
+  round-robin** (`map_idx = rela_count mod n_imports`). When the
+  input `.o` provides ordered sym names per reloc, the mapping is
+  trivially `sym_idx → name`; the round-robin path exists only as a
+  defensive fallback for inputs with unusual symtab ordering. This
+  could mis-bind in pathological cases — accepted scope limit for
+  v1.5.
+
+**LoC delta:**
+
+```
+ compiler/link/hexa_ld.hexa | +595 -22   (constants + 3 readers + 1 builder + _link_elf_shared rewire + header docs)
+ compiler/PLAN.md           | +<this>    (this entry)
+```
+
+**Real-limit anchor (@D g3):** ELF gABI § 5.5 (DT_RELA / DT_RELASZ /
+DT_RELAENT well-formedness) — the test is whether `readelf -d` on
+the output reports the dynamic entries in canonical order without
+the "BAD" tag. Anchor is structural (binary spec compliance), not
+lattice-tautological.
+
+**Cross-refs:**
+- RFC 070 G7-B (`inbox/rfc_drafts_2026_05_20/`)
+- v1.4 baseline: existing `build_elf64_dyn_with_dynamic` + the v1.4
+  doc-block at file head
+- F1 detached commit `0a5ef2d2` — Mach-O Part A draft (not in any
+  branch; awaits independent review/cherry-pick)
+- Codegen counterparts: `compiler/emit/elf_x86_64.hexa` (E2),
+  `compiler/emit/macho_arm64.hexa` (D1) — currently emit non-GOT
+  reloc kinds only
+
+Self-host fixpoint impact: NONE (this file is a pure ELF emitter;
+the compiler self-build path uses `system_ld_fallback` until v1.x
+gains multi-`.o` link). No `self/native/hexa_v2` regen required.

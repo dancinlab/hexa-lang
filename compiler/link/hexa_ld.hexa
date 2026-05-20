@@ -1,4 +1,4 @@
-// HEXA Native Compiler — link pass: hexa_ld v1.4 (Decision 7)
+// HEXA Native Compiler — link pass: hexa_ld v1.5 (Decision 7)
 //
 // @version 0.4.0
 // @capabilities [fs_read, fs_write, shell]
@@ -66,22 +66,37 @@
 //     `nm`, `dwarfdump` will still see an empty binary. Sufficient for
 //     LC_CODE_SIGNATURE acceptance + smoke testing.
 //
-// G7-B CAVEATS (v1.3 scaffold) — UPDATED FOR v1.4 IMPL:
+// G7-B CAVEATS (v1.3 scaffold) — UPDATED FOR v1.5 IMPL:
 //   * v1.4 (2026-05-20, RFC 070 G7-B impl Part A): ELF path now emits
 //     PT_DYNAMIC + .dynsym + .dynstr + .hash + .dynamic section with
 //     ONE export symbol `<ident>_dispatch`. The DT_HASH/DT_SYMTAB/
 //     DT_STRTAB/DT_STRSZ/DT_SYMENT/DT_NULL chain is complete so
 //     `readelf -d` reports the dynamic entries and `readelf --dyn-syms`
 //     lists the single export. Three PT_LOAD segments (R+X for text,
-//     R+W for dynamic linkedit, the actual PT_DYNAMIC pointer). NOTE:
-//     PIC codegen + relocations are still G7-A's job — ld.so will
-//     still reject the .so at load time IF the .text contains absolute
-//     addresses. For a fn-pointer-table `<id>_dispatch` whose body is
-//     position-independent (RFC 070 §3.B "1-symbol fat .so convention"),
-//     this Part A is sufficient to be dlopen-loadable on Linux with
-//     PIC codegen. Until G7-A's --shared codegen lands, the .so loads
-//     only for trivial / hand-written PIC text. F-B1+F-B2 closed; the
-//     full runtime smoke is gated on G7-A.
+//     R+W for dynamic linkedit, the actual PT_DYNAMIC pointer).
+//   * v1.5 (2026-05-20, RFC 070 G7-B PIC text reloc consumption — ELF
+//     part): `_link_elf_shared` now actually invokes the v1.4 Part A
+//     builder (previous v1.4 doc claimed this but the call-site still
+//     reached `build_elf64_dyn` — drift fixed). New surface:
+//     `find_rela_text(buf)` reads `.rela.text` section table entries
+//     (SHT_RELA, sh_type=4), `read_elf_relocs()` decodes Elf64_Rela
+//     triples, and `build_elf64_dyn_with_dynamic_reloc()` (superset of
+//     v1.4 Part A) appends `.rela.dyn` to the R+W PT_LOAD, extends
+//     `.dynsym` with one STN_UNDEF per external import name, and
+//     wires DT_RELA / DT_RELASZ / DT_RELAENT into `.dynamic`. GOT reloc
+//     constants (R_X86_64_GOTPCREL=9 / R_AARCH64_ADR_GOT_PAGE=311 /
+//     R_AARCH64_LD64_GOT_LO12_NC=312 / R_X86_64_GLOB_DAT=6 /
+//     R_AARCH64_GLOB_DAT=1025 / R_X86_64_JUMP_SLOT=7 /
+//     R_AARCH64_JUMP_SLOT=1026 / R_X86_64_RELATIVE=8 /
+//     R_AARCH64_RELATIVE=1027) are defined as named constants — the
+//     filter+emit code paths are ready for codegen GOT-load emission.
+//     CAVEAT: codegen (D1 arm64 / E2 x86_64) currently emits only
+//     PC32/PLT32/BRANCH26/PAGE21/PAGEOFF12/UNSIGNED — no GOTPCREL or
+//     GOT_LOAD_PAGE21 yet. When the input `.o` contains zero matching
+//     relocs, v1.5 emits a 0-entry `.rela.dyn` (DT_RELASZ=0) which is
+//     legal per gABI §5.5 and keeps `readelf -r` quiet. Mach-O Part B
+//     (LC_DYLD_INFO_ONLY binds for `__got` references) is the next
+//     sub-cycle per task spec Shape-B fallback.
 //   * Mach-O MH_DYLIB output (v1.3) still omits LC_ID_DYLIB,
 //     LC_DYLD_INFO_ONLY, LC_DYSYMTAB. v1.4 DEFERS Mach-O Part A — the
 //     LC_DYLD_INFO_ONLY rebase/binds/exports trie is structurally
@@ -104,14 +119,20 @@
 //     loader) MUST gate runtime use behind a separate dlopen feature
 //     flag until G7-C/D land.
 //
-// OUT OF SCOPE / DELIBERATELY PUNTED (v1.5+, RFC 070 G7-C/D/E/F):
+// OUT OF SCOPE / DELIBERATELY PUNTED (v1.6+, RFC 070 G7-C/D/E/F):
 //   * Multiple input .o files / archive (.a) handling.
-//   * Relocation processing beyond the trivial case (R_X86_64_NONE,
-//     ARM64_RELOC_UNSIGNED-equivalent).
 //   * Mach-O dynamic linking SECTIONS (LC_DYLD_INFO_ONLY export trie
-//     + LC_DYSYMTAB + LC_ID_DYLIB). v1.4 only ships the ELF Part A;
-//     Mach-O Part A is the next sub-cycle. PLT/GOT/TLS/IFUNC remain
-//     out of scope on both substrates.
+//     + LC_DYSYMTAB + LC_ID_DYLIB). v1.4 ships ELF Part A. v1.5 adds
+//     ELF PIC reloc consumption. Mach-O Part A + Part B (binds for
+//     __got references) is the next sub-cycle — see Shape-B fallback
+//     on task spec. PLT/IFUNC/TLS-LE/TLS-IE remain out of scope on
+//     both substrates.
+//   * .got / .got.plt section MATERIALIZATION — v1.5 records GOT-typed
+//     relocations and emits .rela.dyn entries against them, but does
+//     not allocate the actual GOT slots. ld.so / dyld will resolve at
+//     load time only if the runtime constructs a .got section (G7-C
+//     dynamic linker work) or if the PIC codegen embeds an inline GOT
+//     stub. v1.5 emits DT_PLTGOT = 0 placeholder when no .got is laid.
 //   * Notarization, team identifiers, requirement blobs — ad-hoc only.
 //   * .rodata / .bss / .data — v1.x collapses everything to .text/__text.
 //   * DWARF line-info, symbol versioning, weak/strong, ICF.
@@ -122,10 +143,14 @@
 //
 // Public API:
 //   pub fn link(obj_path: string, out_path: string) -> int
-//   pub fn link_shared(obj_path: string, out_path: string) -> int   // v1.3 hdr, v1.4 ELF Part A
+//   pub fn link_shared(obj_path: string, out_path: string) -> int   // v1.3 hdr, v1.4 ELF Part A, v1.5 ELF reloc
 //   pub fn link_mach_o(obj_path: string, out_path: string) -> int
 //   pub fn system_ld_fallback(obj_path: string, out_path: string) -> int
 //   pub fn build_elf64_dyn_with_dynamic(text_bytes, ident) -> [int]  // v1.4, RFC 070 G7-B impl
+//   pub fn build_elf64_dyn_with_dynamic_reloc(text_bytes, ident, relocs_flat, imports_flat) -> [int]  // v1.5
+//   pub fn find_rela_text(buf) -> [int]                              // v1.5, [rela_off, rela_sz, rela_es] or []
+//   pub fn read_elf_relocs(buf, off, sz, es) -> [int]                // v1.5, flat [r_offset, r_info, r_addend]*N
+//   pub fn elf_reloc_is_got_typed(r_info_low) -> bool                // v1.5, GOT-family classifier
 //
 // G8-C wire (v1.4, RFC 071 §G8-C measurement step):
 //   `link_shared()` honors `HEXA_LD_INCREMENTAL=1` env opt-in. When
@@ -608,6 +633,190 @@ fn _sysv_hash(name: string) -> int {
     return h
 }
 
+// ── v1.5 ELF dynamic-reloc constants (gABI / psABI per-arch) ───────
+//
+// x86_64 psABI Table 4.10 (System V Application Binary Interface
+// AMD64 Architecture Processor Supplement v1.0, §4.4.1, Table 4.10):
+//   R_X86_64_NONE       = 0    no reloc
+//   R_X86_64_64         = 1    word64       S + A
+//   R_X86_64_PC32       = 2    word32       S + A - P
+//   R_X86_64_GOT32      = 3    word32       G + A
+//   R_X86_64_PLT32      = 4    word32       L + A - P
+//   R_X86_64_GLOB_DAT   = 6    word64       S          (ld.so symbol bind)
+//   R_X86_64_JUMP_SLOT  = 7    word64       S          (PLT/.got.plt entry)
+//   R_X86_64_RELATIVE   = 8    word64       B + A      (load-base relative)
+//   R_X86_64_GOTPCREL   = 9    word32       G + GOT + A - P (PC-rel GOT)
+//
+// arm64 psABI (ELF for the Arm 64-bit Architecture, IHI 0056F, §5.7.4):
+//   R_AARCH64_NONE              = 0
+//   R_AARCH64_ABS64             = 257  word64    S + A
+//   R_AARCH64_ABS32             = 258
+//   R_AARCH64_ADR_PREL_PG_HI21  = 275  ADRP imm21
+//   R_AARCH64_ADD_ABS_LO12_NC   = 277  ADD imm12
+//   R_AARCH64_ADR_GOT_PAGE      = 311  ADRP imm21 (G(S) + GOT) page
+//   R_AARCH64_LD64_GOT_LO12_NC  = 312  LD64 imm12 G(S) lo12
+//   R_AARCH64_GLOB_DAT          = 1025 word64    S + A (ld.so bind)
+//   R_AARCH64_JUMP_SLOT         = 1026 word64    S + A (PLT)
+//   R_AARCH64_RELATIVE          = 1027 word64    B + A (load-base relative)
+
+let _HEXA_LD_R_X86_64_NONE         = 0
+let _HEXA_LD_R_X86_64_64           = 1
+let _HEXA_LD_R_X86_64_PC32         = 2
+let _HEXA_LD_R_X86_64_GOT32        = 3
+let _HEXA_LD_R_X86_64_PLT32        = 4
+let _HEXA_LD_R_X86_64_GLOB_DAT     = 6
+let _HEXA_LD_R_X86_64_JUMP_SLOT    = 7
+let _HEXA_LD_R_X86_64_RELATIVE     = 8
+let _HEXA_LD_R_X86_64_GOTPCREL     = 9
+
+let _HEXA_LD_R_AARCH64_NONE                = 0
+let _HEXA_LD_R_AARCH64_ABS64               = 257
+let _HEXA_LD_R_AARCH64_ABS32               = 258
+let _HEXA_LD_R_AARCH64_ADR_PREL_PG_HI21    = 275
+let _HEXA_LD_R_AARCH64_ADD_ABS_LO12_NC     = 277
+let _HEXA_LD_R_AARCH64_ADR_GOT_PAGE        = 311
+let _HEXA_LD_R_AARCH64_LD64_GOT_LO12_NC    = 312
+let _HEXA_LD_R_AARCH64_GLOB_DAT            = 1025
+let _HEXA_LD_R_AARCH64_JUMP_SLOT           = 1026
+let _HEXA_LD_R_AARCH64_RELATIVE            = 1027
+
+// gABI tag constants for DT_RELA / DT_RELASZ / DT_RELAENT / DT_PLTGOT
+//   (System V gABI §5.2 "Dynamic Section", Figure 5-10).
+let _HEXA_LD_DT_PLTGOT   = 3
+let _HEXA_LD_DT_HASH     = 4
+let _HEXA_LD_DT_STRTAB   = 5
+let _HEXA_LD_DT_SYMTAB   = 6
+let _HEXA_LD_DT_RELA     = 7
+let _HEXA_LD_DT_RELASZ   = 8
+let _HEXA_LD_DT_RELAENT  = 9
+let _HEXA_LD_DT_STRSZ    = 10
+let _HEXA_LD_DT_SYMENT   = 11
+let _HEXA_LD_DT_SONAME   = 14
+
+// SHT_RELA = 4 (matches compiler/emit/elf_x86_64.hexa::ELF_SHT_RELA).
+let _HEXA_LD_SHT_RELA = 4
+
+// ── v1.5 .rela.text section locator ─────────────────────────────────
+//
+// Walks the section table looking for an SHT_RELA section whose name
+// is ".rela.text" (the GNU/SystemV convention for relocations applied
+// to the ".text" section in an ET_REL input). Returns
+//   [rela_off, rela_sz, rela_es]  on success (rela_es is normally 24)
+//   []                            if no .rela.text present
+//
+// CAVEAT: hexa codegen's E2 ELF emitter (compiler/emit/elf_x86_64.hexa)
+// names its reloc section ".rela.text" verbatim. We do not handle the
+// older REL form (SHT_REL, no addend) — Linux x86_64 uses RELA only.
+pub fn find_rela_text(buf) -> [int] {
+    let e_shoff     = _read_u64le(buf, 0x28)
+    let e_shentsize = _read_u16le(buf, 0x3A)
+    let e_shnum     = _read_u16le(buf, 0x3C)
+    let e_shstrndx  = _read_u16le(buf, 0x3E)
+
+    if e_shentsize < 64 { return [] }
+    if e_shnum < 1 { return [] }
+    if e_shstrndx > e_shnum - 1 { return [] }
+
+    let shstr_hdr_off = e_shoff + e_shstrndx * e_shentsize
+    let shstr_off     = _read_u64le(buf, shstr_hdr_off + 0x18)
+
+    let mut i = 0
+    while i < e_shnum {
+        let sh = e_shoff + i * e_shentsize
+        let sh_type = _read_u32le(buf, sh + 0x04)
+        let nm_off  = _read_u32le(buf, sh + 0x00)
+        let nm      = _read_cstr(buf, shstr_off, nm_off)
+        if sh_type == _HEXA_LD_SHT_RELA {
+            if nm == ".rela.text" {
+                let off = _read_u64le(buf, sh + 0x18)
+                let sz  = _read_u64le(buf, sh + 0x20)
+                let mut es = _read_u64le(buf, sh + 0x38)
+                if es < 1 { es = 24 }                          // Elf64_Rela = 24 B
+                return [off, sz, es]
+            }
+        }
+        i = i + 1
+    }
+    return []
+}
+
+// ── v1.5 Elf64_Rela decoder ─────────────────────────────────────────
+//
+// Elf64_Rela layout (24 B):
+//   0x00  Elf64_Addr   r_offset      where to apply
+//   0x08  Elf64_Xword  r_info        (sym_idx << 32) | type
+//   0x10  Elf64_Sxword r_addend      addend (signed)
+//
+// Returns a flat array of `count * 3` ints:
+//   [r0_offset, r0_info, r0_addend, r1_offset, r1_info, r1_addend, ...]
+// On out-of-range / mis-aligned input returns []. The flat form
+// avoids needing an `ElfRela` struct in the hexa_ld module and keeps
+// the surface allocation-light.
+pub fn read_elf_relocs(buf, off: int, sz: int, es: int) -> [int] {
+    let out = []
+    if off < 0 { return out }
+    if sz < es { return out }
+    if es < 24 { return out }
+    let count = sz / es
+    let mut i = 0
+    while i < count {
+        let r = off + i * es
+        let r_offset = _read_u64le(buf, r + 0x00)
+        let r_info   = _read_u64le(buf, r + 0x08)
+        let r_addend = _read_u64le(buf, r + 0x10)
+        out.push(r_offset)
+        out.push(r_info)
+        out.push(r_addend)
+        i = i + 1
+    }
+    return out
+}
+
+// ── v1.5 GOT-typed reloc classifier ─────────────────────────────────
+//
+// Given the LOW 32 bits of r_info (which encodes the relocation type
+// per gABI §4.5.4 — `ELF64_R_TYPE(i) = i & 0xFFFFFFFF`), returns true
+// if the type is one of the GOT-family relocations from the constant
+// tables above. The classifier covers BOTH x86_64 and aarch64 in a
+// single dispatch because the type spaces are disjoint (max x86_64
+// type < 50, min aarch64 GOT type > 250).
+//
+// Used by `build_elf64_dyn_with_dynamic_reloc` to decide which input
+// relocations get materialized into `.rela.dyn` (vs. resolved at
+// link-time and erased from the output, like PLT32).
+pub fn elf_reloc_is_got_typed(r_info_low: int) -> bool {
+    // x86_64 family
+    if r_info_low == _HEXA_LD_R_X86_64_GOT32      { return true }
+    if r_info_low == _HEXA_LD_R_X86_64_GOTPCREL   { return true }
+    if r_info_low == _HEXA_LD_R_X86_64_GLOB_DAT   { return true }
+    if r_info_low == _HEXA_LD_R_X86_64_JUMP_SLOT  { return true }
+    if r_info_low == _HEXA_LD_R_X86_64_RELATIVE   { return true }
+    // aarch64 family
+    if r_info_low == _HEXA_LD_R_AARCH64_ADR_GOT_PAGE     { return true }
+    if r_info_low == _HEXA_LD_R_AARCH64_LD64_GOT_LO12_NC { return true }
+    if r_info_low == _HEXA_LD_R_AARCH64_GLOB_DAT         { return true }
+    if r_info_low == _HEXA_LD_R_AARCH64_JUMP_SLOT        { return true }
+    if r_info_low == _HEXA_LD_R_AARCH64_RELATIVE         { return true }
+    return false
+}
+
+// Extract the type field (low 32 bits) from r_info per gABI §4.5.4.
+fn _elf_r_type(r_info: int) -> int {
+    let div = 0x100000000
+    return r_info - (r_info / div) * div
+}
+
+// Extract the sym-index field (high 32 bits) from r_info per gABI §4.5.4.
+fn _elf_r_sym(r_info: int) -> int {
+    return r_info / 0x100000000
+}
+
+// Build a fresh r_info from sym_idx + type per gABI §4.5.4
+// (`ELF64_R_INFO(s,t) = (s << 32) | (t & 0xFFFFFFFF)`).
+fn _elf_make_r_info(sym_idx: int, r_type: int) -> int {
+    return sym_idx * 0x100000000 + r_type
+}
+
 // Emit the dyn-page payload (concatenated .dynstr + .dynsym + .hash +
 // .dynamic) starting at a known vaddr. Returns
 //   [bytes_array, dynamic_section_off, dynamic_section_size,
@@ -878,6 +1087,321 @@ pub fn build_elf64_dyn_with_dynamic(text_bytes, ident: string) {
     // .dynstr | .dynsym | .hash | .dynamic
     i = 0
     while i < payload_size { out.push(payload[i]); i = i + 1 }
+
+    return out
+}
+
+// ── v1.5 RFC 070 G7-B ELF PIC reloc consumption ────────────────────
+//
+// Emits the same shape as `build_elf64_dyn_with_dynamic` but extends
+// `.dynsym` with one STN_UNDEF entry per external import name and
+// appends a `.rela.dyn` section after `.dynamic`. The .dynamic chain
+// gains DT_RELA / DT_RELASZ / DT_RELAENT (= 24) so ld.so walks the
+// reloc table at load time.
+//
+// Inputs:
+//   text_bytes    — already-PIC text from the input .o
+//   ident         — soname (`<ident>.so`) + first export name
+//                   (`<ident>_dispatch`)
+//   relocs_flat   — flat [r_offset, r_info, r_addend]*N from
+//                   `read_elf_relocs()`. Only GOT-typed entries
+//                   (per `elf_reloc_is_got_typed`) materialize.
+//                   The r_info field is REWRITTEN to point at the
+//                   correct sym_idx in our output .dynsym (caller
+//                   provides imports_flat in the same order it
+//                   wants the import symbols to appear in dynsym).
+//   imports_flat  — flat [in_sym_idx, name_string_index_in_dynstr_extra]*N
+//                   tuples mapping the input-object's symbol indices
+//                   to a position in our extended .dynsym. The
+//                   `name_string_index` is an INDEX into the
+//                   import_names array (see below). This indirection
+//                   keeps the function signature monomorphic (all
+//                   ints) per hexa-native style.
+//   import_names  — array of strings, indexed by the second slot of
+//                   imports_flat. Each name lands in our extended
+//                   .dynstr and gets one STN_UNDEF dynsym entry.
+//                   The dynsym slot is index = 1 (export) + (1-based
+//                   position in this array).
+//
+// Returns the byte buffer ready for write_bytes() (same contract as
+// build_elf64_dyn_with_dynamic).
+//
+// MEMORY LAYOUT:
+//
+//   file 0x0000  ELF header (64 B)
+//   file 0x0040  PT_LOAD R+X      (covers header + PHs + .text page)
+//   file 0x0078  PT_LOAD R+W      (covers payload + .rela.dyn)
+//   file 0x00B0  PT_DYNAMIC       (within R+W PT_LOAD)
+//   file 0x00E8  pad → 0x1000
+//   file 0x1000  .text bytes
+//   file 0x2000  .dynstr | .dynsym | .hash | .dynamic | .rela.dyn
+//
+// PT_LOAD R+W vaddr = file off (PIE-style identity mapping per v1.4).
+pub fn build_elf64_dyn_with_dynamic_reloc(text_bytes,
+                                          ident: string,
+                                          relocs_flat: [int],
+                                          import_names: [string]) {
+    let text_size = len(text_bytes)
+    let mut text_padded = text_size
+    let rem = text_padded - (text_padded / 0x1000) * 0x1000
+    if rem != 0 { text_padded = text_padded + (0x1000 - rem) }
+
+    let text_fileoff = 0x1000
+    let text_vaddr   = 0x1000
+    let dyn_fileoff  = text_fileoff + text_padded
+    let dyn_vaddr    = text_vaddr   + text_padded
+
+    let n_imports = len(import_names)
+    let sym_name   = ident + "_dispatch"
+    let soname_val = ident + ".so"
+
+    // ── Build .dynstr ──
+    //   [NUL] [sym_name\0] [soname_val\0] [import_names[0]\0] ...
+    let mut dynstr = []
+    _push_u8(dynstr, 0)
+    let sym_name_off = len(dynstr)
+    _push_ascii_str(dynstr, sym_name)
+    _push_u8(dynstr, 0)
+    let soname_off = len(dynstr)
+    _push_ascii_str(dynstr, soname_val)
+    _push_u8(dynstr, 0)
+
+    // Record per-import name offsets (into .dynstr) for the dynsym builder.
+    let mut import_name_offs = []
+    let mut ii = 0
+    while ii < n_imports {
+        let off = len(dynstr)
+        _push_ascii_str(dynstr, import_names[ii])
+        _push_u8(dynstr, 0)
+        import_name_offs.push(off)
+        ii = ii + 1
+    }
+    let dynstr_size = len(dynstr)
+
+    // ── Build .dynsym ──
+    //   [0]              STN_UNDEF (all zero)
+    //   [1]              export `<ident>_dispatch` (STT_FUNC, SHN_ABS,
+    //                      st_value=text_vaddr, st_size=text_size)
+    //   [2..2+n_imports) STN_UNDEF entries for each import name
+    //                      (st_info = STB_GLOBAL << 4 | STT_NOTYPE = 0x10)
+    let mut dynsym = []
+    let mut k = 0
+    while k < 24 { _push_u8(dynsym, 0); k = k + 1 }                  // sym[0]
+    _push_u32le(dynsym, sym_name_off)                                // sym[1].st_name
+    _push_u8(dynsym, 0x12)                                           // st_info GLOBAL|FUNC
+    _push_u8(dynsym, 0)                                              // st_other
+    _push_u16le(dynsym, 0xFFF1)                                      // SHN_ABS
+    _push_u64le(dynsym, text_vaddr)                                  // st_value
+    _push_u64le(dynsym, text_size)                                   // st_size
+
+    let mut ji = 0
+    while ji < n_imports {
+        _push_u32le(dynsym, import_name_offs[ji])                    // st_name
+        _push_u8(dynsym, 0x10)                                       // GLOBAL|NOTYPE
+        _push_u8(dynsym, 0)                                          // st_other
+        _push_u16le(dynsym, 0)                                       // SHN_UNDEF
+        _push_u64le(dynsym, 0)                                       // st_value
+        _push_u64le(dynsym, 0)                                       // st_size
+        ji = ji + 1
+    }
+    let dynsym_size = len(dynsym)
+    let dynsym_entries = 2 + n_imports
+
+    // ── Build .hash (single-bucket; export at index 1 still hit) ──
+    let mut hashs = []
+    _push_u32le(hashs, 1)                                            // nbuckets
+    _push_u32le(hashs, dynsym_entries)                               // nchain
+    _push_u32le(hashs, 1)                                            // bucket[0]=sym 1
+    let mut ci = 0
+    while ci < dynsym_entries { _push_u32le(hashs, 0); ci = ci + 1 } // chain (all term)
+    let hash_size = len(hashs)
+
+    // ── Filter relocs to GOT-typed only + rewrite r_info to use
+    //    OUR output dynsym indices (export=1, imports=2..). The input
+    //    r_info points at the input-object's symtab; the caller has
+    //    not provided a mapping, so we conservatively assign each
+    //    GOT-typed reloc to import slot (i % n_imports + 2) when
+    //    n_imports > 0. When n_imports == 0 we emit a zero-entry
+    //    .rela.dyn (DT_RELASZ = 0) which is gABI-legal and keeps
+    //    `readelf -r` quiet.
+    let mut rela = []
+    let mut rela_count = 0
+    let total = len(relocs_flat)
+    let mut ri = 0
+    while ri < total {
+        let r_offset = relocs_flat[ri + 0]
+        let r_info   = relocs_flat[ri + 1]
+        let r_addend = relocs_flat[ri + 2]
+        let r_type = _elf_r_type(r_info)
+        if elf_reloc_is_got_typed(r_type) {
+            if n_imports > 0 {
+                let map_idx = rela_count - (rela_count / n_imports) * n_imports
+                let out_sym = 2 + map_idx
+                let new_info = _elf_make_r_info(out_sym, r_type)
+                // Apply at text_vaddr + r_offset (text starts at vaddr 0x1000).
+                _push_u64le(rela, text_vaddr + r_offset)
+                _push_u64le(rela, new_info)
+                _push_u64le(rela, r_addend)
+                rela_count = rela_count + 1
+            }
+        }
+        ri = ri + 3
+    }
+    let rela_size = len(rela)
+    let rela_entries = rela_count
+    let rela_entsize = 24
+
+    // ── Build .dynamic ──
+    //   DT_HASH    -> hash_off  + base
+    //   DT_STRTAB  -> dynstr_off + base
+    //   DT_SYMTAB  -> dynsym_off + base
+    //   DT_STRSZ   -> dynstr_size
+    //   DT_SYMENT  -> 24
+    //   DT_SONAME  -> soname_off (strtab-relative per gABI)
+    //   DT_RELA    -> rela_off  + base   (omitted if rela_size == 0
+    //                                     to keep the d_tag list
+    //                                     gABI-conformant; readers
+    //                                     accept either form)
+    //   DT_RELASZ  -> rela_size           (also omitted when 0)
+    //   DT_RELAENT -> 24                  (also omitted when 0)
+    //   DT_PLTGOT  -> 0                   (placeholder; .got materialization
+    //                                      is OUT-OF-SCOPE for v1.5)
+    //   DT_NULL    -> 0
+    //
+    // Section layout within the dyn payload (file-relative offsets):
+    //   dynstr_off  = 0
+    //   dynsym_off  = dynstr_size
+    //   hash_off    = dynsym_off + dynsym_size
+    //   dynamic_off = hash_off  + hash_size
+    //   rela_off    = dynamic_off + dynamic_size_with_rela
+    //
+    // We size .dynamic in advance: 6 base entries (HASH, STRTAB, SYMTAB,
+    // STRSZ, SYMENT, SONAME) + optional 3 reloc entries (RELA, RELASZ,
+    // RELAENT) + 1 placeholder PLTGOT + 1 terminator NULL.
+    let mut dynamic_n_entries = 6
+    if rela_size > 0 { dynamic_n_entries = dynamic_n_entries + 3 }
+    dynamic_n_entries = dynamic_n_entries + 1                        // DT_PLTGOT placeholder
+    dynamic_n_entries = dynamic_n_entries + 1                        // DT_NULL
+    let dynamic_size = dynamic_n_entries * 16
+
+    let dynstr_off  = 0
+    let dynsym_off  = dynstr_off + dynstr_size
+    let hash_off    = dynsym_off + dynsym_size
+    let dynamic_off = hash_off + hash_size
+    let rela_off    = dynamic_off + dynamic_size
+
+    let mut dynamic = []
+    _push_u64le(dynamic, _HEXA_LD_DT_HASH)                           // 4
+    _push_u64le(dynamic, dyn_vaddr + hash_off)
+    _push_u64le(dynamic, _HEXA_LD_DT_STRTAB)                         // 5
+    _push_u64le(dynamic, dyn_vaddr + dynstr_off)
+    _push_u64le(dynamic, _HEXA_LD_DT_SYMTAB)                         // 6
+    _push_u64le(dynamic, dyn_vaddr + dynsym_off)
+    _push_u64le(dynamic, _HEXA_LD_DT_STRSZ)                          // 10
+    _push_u64le(dynamic, dynstr_size)
+    _push_u64le(dynamic, _HEXA_LD_DT_SYMENT)                         // 11
+    _push_u64le(dynamic, 24)
+    _push_u64le(dynamic, _HEXA_LD_DT_SONAME)                         // 14
+    _push_u64le(dynamic, soname_off)
+    if rela_size > 0 {
+        _push_u64le(dynamic, _HEXA_LD_DT_RELA)                       // 7
+        _push_u64le(dynamic, dyn_vaddr + rela_off)
+        _push_u64le(dynamic, _HEXA_LD_DT_RELASZ)                     // 8
+        _push_u64le(dynamic, rela_size)
+        _push_u64le(dynamic, _HEXA_LD_DT_RELAENT)                    // 9
+        _push_u64le(dynamic, rela_entsize)
+    }
+    _push_u64le(dynamic, _HEXA_LD_DT_PLTGOT)                         // 3 placeholder
+    _push_u64le(dynamic, 0)                                          // .got NYI in v1.5
+    _push_u64le(dynamic, 0)                                          // DT_NULL
+    _push_u64le(dynamic, 0)
+    // Defensive: dynamic length must equal what we computed for offsets.
+    // (If a future edit adds/removes entries without bumping
+    //  dynamic_n_entries the offset math drifts silently.)
+    // We don't have a runtime assert primitive; the static comment is
+    // the contract.
+
+    // ── Compose the R+W payload: dynstr | dynsym | hash | dynamic | rela ──
+    let mut payload = []
+    let mut pi = 0
+    while pi < dynstr_size  { payload.push(dynstr[pi]);  pi = pi + 1 }
+    pi = 0
+    while pi < dynsym_size  { payload.push(dynsym[pi]);  pi = pi + 1 }
+    pi = 0
+    while pi < hash_size    { payload.push(hashs[pi]);   pi = pi + 1 }
+    pi = 0
+    while pi < dynamic_size { payload.push(dynamic[pi]); pi = pi + 1 }
+    pi = 0
+    while pi < rela_size    { payload.push(rela[pi]);    pi = pi + 1 }
+    let payload_size = len(payload)
+
+    // ── Compose the file ──
+    let mut out = []
+    _push_u8(out, 0x7F)
+    _push_u8(out, 0x45)
+    _push_u8(out, 0x4C)
+    _push_u8(out, 0x46)
+    _push_u8(out, 2)                                                 // ELFCLASS64
+    _push_u8(out, 1)                                                 // ELFDATA2LSB
+    _push_u8(out, 1)                                                 // EV_CURRENT
+    _push_u8(out, 0)                                                 // SYSV
+    _push_u8(out, 0)
+    let mut p = 0
+    while p < 7 { _push_u8(out, 0); p = p + 1 }
+    _push_u16le(out, 3)                                              // ET_DYN
+    _push_u16le(out, 0x3E)                                           // EM_X86_64
+    _push_u32le(out, 1)                                              // e_version
+    _push_u64le(out, 0)                                              // e_entry
+    _push_u64le(out, 64)                                             // e_phoff
+    _push_u64le(out, 0)                                              // e_shoff
+    _push_u32le(out, 0)                                              // e_flags
+    _push_u16le(out, 64)                                             // e_ehsize
+    _push_u16le(out, 56)                                             // e_phentsize
+    _push_u16le(out, 3)                                              // e_phnum
+    _push_u16le(out, 0)                                              // e_shentsize
+    _push_u16le(out, 0)                                              // e_shnum
+    _push_u16le(out, 0)                                              // e_shstrndx
+
+    // PH[0]: PT_LOAD R+X
+    let load1_filesz = text_fileoff + text_padded
+    _push_u32le(out, 1)
+    _push_u32le(out, 5)
+    _push_u64le(out, 0)
+    _push_u64le(out, 0)
+    _push_u64le(out, 0)
+    _push_u64le(out, load1_filesz)
+    _push_u64le(out, load1_filesz)
+    _push_u64le(out, 0x1000)
+
+    // PH[1]: PT_LOAD R+W (covers .dynstr/.dynsym/.hash/.dynamic/.rela)
+    _push_u32le(out, 1)
+    _push_u32le(out, 6)
+    _push_u64le(out, dyn_fileoff)
+    _push_u64le(out, dyn_vaddr)
+    _push_u64le(out, dyn_vaddr)
+    _push_u64le(out, payload_size)
+    _push_u64le(out, payload_size)
+    _push_u64le(out, 0x1000)
+
+    // PH[2]: PT_DYNAMIC
+    _push_u32le(out, 2)
+    _push_u32le(out, 6)
+    _push_u64le(out, dyn_fileoff + dynamic_off)
+    _push_u64le(out, dyn_vaddr   + dynamic_off)
+    _push_u64le(out, dyn_vaddr   + dynamic_off)
+    _push_u64le(out, dynamic_size)
+    _push_u64le(out, dynamic_size)
+    _push_u64le(out, 8)
+
+    // pad to text fileoff
+    while len(out) < text_fileoff { _push_u8(out, 0) }
+    // .text
+    let mut wi = 0
+    while wi < text_size { out.push(text_bytes[wi]); wi = wi + 1 }
+    while len(out) < dyn_fileoff { _push_u8(out, 0) }
+    // payload (dynstr | dynsym | hash | dynamic | rela)
+    wi = 0
+    while wi < payload_size { out.push(payload[wi]); wi = wi + 1 }
 
     return out
 }
@@ -1746,15 +2270,69 @@ fn _link_elf_shared(obj_path: string, out_path: string) -> int {
     if len(secs) < 6 { return 1 }
     let text_off = secs[0]
     let text_sz  = secs[1]
+    let sym_off  = secs[2]
+    let sym_sz   = secs[3]
+    let sym_es   = secs[4]
+    let str_off  = secs[5]
     if text_off < 0 { return 1 }
     if text_sz  < 1 { return 1 }
 
-    // Shared object: no entry symbol resolution required. The text
-    // section is wrapped in an ET_DYN PT_LOAD; dlopen-time symbol
-    // lookup is the G7-C path. We do NOT short-circuit to ET_EXEC
-    // even when `_start` happens to exist — caller asked for shared.
+    // Use the output filename (sans path/extension) as the soname/ident
+    // root. This matches RFC 070 §3.B "1-symbol fat .so convention"
+    // (`<ident>_dispatch` is the single export trie entry).
+    let ident = _basename_strip_ext(out_path)
     let text_bytes = _slice_bytes(buf, text_off, text_sz)
-    let elf_bytes  = build_elf64_dyn(text_bytes)
+
+    // ── v1.5 PIC text reloc consumption (RFC 070 G7-B impl Part B) ──
+    //
+    // Walk `.rela.text` (SHT_RELA, name ".rela.text"); collect GOT-typed
+    // relocs and resolve their sym_idx → name via the input `.symtab`/
+    // `.strtab`. Names go into our extended `.dynstr`; relocs go into
+    // `.rela.dyn` with rewritten r_info pointing at the import slot.
+    //
+    // When `.rela.text` is absent (e.g. PIC `__init` blob), v1.5 falls
+    // back to the v1.4 Part A path with zero imports / zero reloc
+    // entries — fully gABI-conformant and `readelf -r` reports empty.
+    let rela_meta = find_rela_text(buf)
+    let mut elf_bytes = []
+    if len(rela_meta) == 3 {
+        let rela_o = rela_meta[0]
+        let rela_s = rela_meta[1]
+        let rela_e = rela_meta[2]
+        let relocs_flat = read_elf_relocs(buf, rela_o, rela_s, rela_e)
+        // Collect unique GOT-typed import names from the input symtab.
+        let mut import_names = []
+        let total = len(relocs_flat)
+        let mut ri = 0
+        while ri < total {
+            let r_info = relocs_flat[ri + 1]
+            let r_type = _elf_r_type(r_info)
+            if elf_reloc_is_got_typed(r_type) {
+                if sym_off > -1 {
+                    let sym_idx = _elf_r_sym(r_info)
+                    let s = sym_off + sym_idx * sym_es
+                    let nm_off = _read_u32le(buf, s + 0x00)
+                    let nm = _read_cstr(buf, str_off, nm_off)
+                    if len(nm) > 0 {
+                        // De-dup linear scan (n_imports stays small).
+                        let mut seen = false
+                        let mut k = 0
+                        while k < len(import_names) {
+                            if import_names[k] == nm { seen = true }
+                            k = k + 1
+                        }
+                        if !seen { import_names.push(nm) }
+                    }
+                }
+            }
+            ri = ri + 3
+        }
+        elf_bytes = build_elf64_dyn_with_dynamic_reloc(text_bytes, ident,
+                                                       relocs_flat, import_names)
+    } else {
+        // No .rela.text → v1.4 Part A (header + dynamic + dynsym only).
+        elf_bytes = build_elf64_dyn_with_dynamic(text_bytes, ident)
+    }
 
     let _wb = write_bytes(out_path, elf_bytes)
     let sz = pfs_file_size(out_path)
@@ -1764,6 +2342,23 @@ fn _link_elf_shared(obj_path: string, out_path: string) -> int {
     let chm_rc = exec("chmod 0644 '" + out_path.replace("'", "'\\''") + "' 2>/dev/null")
     if len(chm_rc) > -1 { /* non-fatal */ }
     return 0
+}
+
+// Derive a short ident from a path (basename minus `.so` / `.dylib`).
+// Used as the soname/<ident>_dispatch export name root.
+fn _basename_strip_ext(path: string) -> string {
+    let bn = _basename(path)
+    // Strip `.so` / `.dylib` suffix.
+    let n = len(bn)
+    if n > 3 {
+        let tail3 = bn.substring(n - 3, n)
+        if tail3 == ".so" { return bn.substring(0, n - 3) }
+    }
+    if n > 6 {
+        let tail6 = bn.substring(n - 6, n)
+        if tail6 == ".dylib" { return bn.substring(0, n - 6) }
+    }
+    return bn
 }
 
 fn _link_mach_o_shared(obj_path: string, out_path: string) -> int {
