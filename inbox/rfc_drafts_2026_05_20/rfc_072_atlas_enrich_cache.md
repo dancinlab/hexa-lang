@@ -141,3 +141,32 @@ tool addition.
 - [ ] reviewer agree on Option B (vs A/C) and on the cache encoding (JSONL vs HXC)
 - [ ] Phase B impl
 - [ ] Phase C measurement: cold/warm latency vs RFC 067 baseline
+
+## §9 Measurement environment note (2026-05-20 ubu-2 fire-decision)
+
+A cross-platform measurement attempt on ubu-2 (x86_64 Linux, RTX 5070
+sm_120) revealed an infra constraint:
+
+```
+build attempt: `hexa build stdlib/loop/cycle.hexa` on ubu-2
+result       : sh: self/native/hexa_v2: Exec format error
+diagnosis    : ubu-2's self/native/hexa_v2 (and all .bak.*) are Mac arm64
+                Mach-O binaries — ubu-2 is a sync receiver, not a native
+                Linux compile target (memory ubu_arch_transpiler_constraint:
+                "ubu(x86_64) S4 arm64 byte-diff 산출 불가(Mac-intrinsic)")
+implication  : RFC 072 Phase C cold/warm latency measurement is
+                **macOS-only** (Mac arm64 host) for this spec. A Linux-
+                native measurement requires a separate RFC to wire
+                `hexa_v2_linux` (x86_64 ELF transpiler) — non-trivial
+                because the transpiler emits Mac-intrinsic patterns.
+
+fire-decision: A. fire (genuinely uncertain on ubu-2 portability)
+               outcome: SETTLED by single measurement — cross-platform
+               build path is blocked at the transpiler-binary layer.
+               do NOT re-fire on ubu-2 (analytical: same Exec format
+               error guaranteed until hexa_v2_linux exists).
+```
+
+Phase C measurement scope therefore narrows to: cold/warm latency on
+**Mac arm64 only**, vs the same Mac arm64 RFC 067 baseline. Cross-
+platform validation deferred to a separate Linux-toolchain RFC.
