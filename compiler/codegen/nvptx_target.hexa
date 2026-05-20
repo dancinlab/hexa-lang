@@ -2395,6 +2395,18 @@ fn _nvptx_unroll_clone_stmt(s: Stmt, dsts: [i64], offset: i64) -> Stmt {
     }
 }
 
+// RFC 069 marker — Advanced loop unroll. The pass below recognizes
+// ONE CFG shape (canonical 3-block back-edge) and supports ONE factor
+// (2 — the cloning logic is hard-coded). RFC 069 P1
+// (`F-RFC069-FACTOR-N`) generalizes the cloning to factor=N, P2
+// (`F-RFC069-MULTI-EXIT-MATCH`) adds the multi-exit (break-bearing)
+// matcher, and P3 (`F-RFC069-NESTED-PRESERVE`) adds inner-loop
+// preservation. The PR #117 passthrough guarantee (Case 11) is a
+// STRICT regression gate (F7) — every RFC 069 commit MUST keep
+// non-matching CFG output byte-identical. See
+// `inbox/rfc_drafts_2026_05_20/rfc_069_unroll_advanced.md` §3 for
+// the per-phase plan and §4 for the falsifier battery.
+//
 // _nvptx_unroll_pass — the public entry point. RFC 055 §12 P4+ MVP.
 //
 // Returns the input MFunc unchanged when:
