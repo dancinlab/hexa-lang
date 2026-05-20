@@ -42,6 +42,80 @@
 
 (append-only)
 
+### 2026-05-20 — RFC 075 P1+P2+P3 — Metal codegen text-emit (codegen-only, no silicon fire)
+
+**작업 = Campaign C — Metal vendor P1+P2+P3 codegen-only land** — RFC 075 의 Metal-side phases 를 codegen 텍스트 emit 까지 진행. silicon fire (P4) 는 follow-on USER-LOCAL Mac cycle 로 명시 punt. ROCm 측은 P0 유지 — pool 에 AMD GPU 없어 P1+ multi-session blocked. NVPTX path byte-identically 미변경. `self/codegen_c2.hexa` 미터치 (@D g_commit_push_deploy).
+
+**Motivation**: RFC 075 §4 의 Metal P1→P3 가 P0 scaffold landed 직후 멈춰 있었다 (PR #232 `a1a2a8fa`). Campaign C 는 codegen-only 로 P1/P2/P3 까지 끌어올려 F-RFC075-METAL-EMIT-VEC-ADD falsifier 를 PASS 로 만든다. silicon fire 는 별도 USER-LOCAL 사이클 — `xcrun -sdk macosx metal` + MetalKit runtime 은 Mac toolchain 보유 호스트에서만 가능.
+
+**Files (5 edits)**:
+- edit `compiler/codegen/metal_target.hexa` (~190→~340 lines, +~150) — P1 syntax-fragment constants (METAL_OP_KERNEL_DECL, METAL_OP_PARAM_DEVICE_{CONST_,}FLOAT_PTR, METAL_OP_THREAD_POS_GRID, METAL_OP_{ADD,SUB,MUL,DIV,ASSIGN,RETURN_NONE,STMT_TERM,LOAD/STORE_F32_TEMPLATE,PREAMBLE_INCLUDE,PREAMBLE_USING,BUFFER_BINDING_{PREFIX,SUFFIX}}, METAL_AS_{DEVICE,THREADGROUP,CONSTANT,THREAD}, METAL_PRECISION_{F32,F16,F64,I32,U32,BOOL}, METAL_TYPE_{UINT,INT,BOOL}) + 11-row `metal_fp32_slice_ops()` table + P2 classifier helpers `_metal_local_precision(local)` / `_metal_local_address_space(local)` + P3 emit helpers `_metal_emit_preamble` / `_metal_emit_kernel_signature(name)` / `_metal_emit_vec_add_body` / `_metal_mfunc_is_vec_add_shape(mfn)` + real `codegen_emit_metal_msl(module)` MSL emitter for vec-add MIR shape (STMT_LOAD + STMT_LOAD + STMT_BINOP_ADD + STMT_STORE in entry block).
+- edit `compiler/codegen/metal_lower_test.hexa` (~104→~270 lines, +~166) — Case 1 P0 empty-emit preserved (fixed `text.length` → `len(text)` for runtime correctness) · Case 2 extended with new P1 constants (METAL_OP_KERNEL_DECL · METAL_OP_PARAM_DEVICE_{CONST_,}FLOAT_PTR · METAL_OP_THREAD_POS_GRID · METAL_AS_DEVICE) · **Case 3** F-RFC075-METAL-EMIT-VEC-ADD: build vec-add MIR fixture (`_build_vec_add_module` — 3 kernel-buffer params + 3 priv Locals + STMT_LOAD/LOAD/BINOP_ADD/STORE/RETURN in entry block), invoke `codegen_emit_metal_msl`, assert 15 substring patterns · **Case 4** P2 classifier helpers — `_metal_local_address_space` returns METAL_AS_DEVICE for arena_id=0 (kernel buffer) and METAL_AS_THREAD otherwise · `_metal_local_precision` honours `.f32` tag and defaults FP32.
+- edit `inbox/rfc_drafts_2026_05_20/rfc_075_multi_vendor_codegen.md` — status header updated · §4 P0/P1/P2/P3/P4 rows annotated with Metal LANDED + ROCm DEFERRED state · honest g3 callout on P3 vec-add MIR shape hardcoding.
+- edit `GPU.md` §3f Metal entry — annotated "RFC 075 P1+P2+P3 codegen-only LANDED 2026-05-20 Campaign C ... P4 silicon-fire = follow-on USER-LOCAL Mac cycle"; ROCm entry annotated "P1+ multi-session BLOCKED — no AMD GPU in pool".
+- edit `GPU.md` §10 multi-vendor closure box — annotated Metal P1-P3 codegen LANDED + Metal P4 USER-LOCAL Mac + ROCm AMD-GPU pool procurement gate.
+- edit `compiler/PLAN.md` — this entry.
+
+**Parse-gate** (`/Users/ghost/.hx/bin/hexa_real parse <file>`):
+- `compiler/codegen/metal_target.hexa` — `OK: parses cleanly`
+- `compiler/codegen/metal_lower_test.hexa` — `OK: parses cleanly`
+- `compiler/codegen/rocm_target.hexa` — `OK: parses cleanly` (unchanged from PR #232)
+- `compiler/codegen/rocm_lower_test.hexa` — `OK: parses cleanly` (unchanged from PR #232)
+
+4/4 parse-clean.
+
+**Build + run** (`HEXA_MAC_BUILD_OK=1 hexa_real build compiler/codegen/metal_lower_test.hexa -o build/metal_lower_test && ./build/metal_lower_test`):
+
+```
+══════════════════════════════════════════════
+  RFC 075 P1+P2+P3 — Metal codegen smoke
+══════════════════════════════════════════════
+
+── emitted MSL (RFC 075 P0 empty-emit case) ──
+  [empty string, length=0]
+  ok: Apple-GPU target tag + SIMD-group=32 + P1 kernel-decl + buffer-pointer + thread-pos constants verified
+
+── emitted MSL (RFC 075 P3 vec-add case) ──
+#include <metal_stdlib>
+using namespace metal;
+
+kernel void vec_add(
+    device const float* a [[buffer(0)]],
+    device const float* b [[buffer(1)]],
+    device float* c [[buffer(2)]],
+    uint i [[thread_position_in_grid]])
+{
+    c[i] = a[i] + b[i];
+}
+
+  ok: P2 classifier helpers — device/thread address-space + FP32 default
+
+  PASS: RFC 075 P1+P2+P3 Metal codegen smoke
+```
+
+**Falsifier outcome**:
+- F-RFC075-METAL-TARGET-ACCEPT (Case 2): PASS — 9 constant assertions (`METAL_TARGET_APPLE_GPU` · `METAL_SIMD_GROUP_SIZE=32` · `METAL_KW_KERNEL` · `METAL_SPACE_DEVICE` · `METAL_OP_KERNEL_DECL="kernel void"` · `METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR` · `METAL_OP_PARAM_DEVICE_FLOAT_PTR` · `METAL_OP_THREAD_POS_GRID` · `METAL_AS_DEVICE`)
+- F-RFC075-METAL-EMIT-VEC-ADD (Case 3): PASS — 15 substring assertions on emitted MSL kernel source
+- F-RFC075-METAL-SILICON-FIRE: NOT measured this cycle (P4 = follow-on USER-LOCAL Mac)
+- F-RFC075-NUMERIC-EQ: NOT measured this cycle (gates on P4)
+
+**Honest scope (g3)**:
+- IS: codegen-only text emit for the vec-add MIR shape on Metal/Apple-GPU. Real MSL source text (`kernel void` + device pointers + thread-pos attribute + `c[i] = a[i] + b[i];`) is produced and verified by 15-substring smoke. P2 classifier helpers `_metal_local_{precision,address_space}` operational.
+- NOT: general MFunc → MSL lowering. The P3 emitter **hardcodes** the vec-add MIR shape (single STMT_LOAD + STMT_LOAD + STMT_BINOP_ADD + STMT_STORE in entry block); other MIR shapes return `""` honestly. General MIR-walk MSL lowering is multi-session work mirroring the NVPTX P3 timeline (`_nvptx_lower_func`).
+- NOT: silicon fire. P4 (`xcrun -sdk macosx metal` + MetalKit runtime dispatch + numeric parity vs CPU reference) is a follow-on USER-LOCAL Mac cycle requiring the Metal toolchain. Codegen-only this cycle.
+- NOT: `@gpu_kernel` target dispatch wiring. Nothing in `self/main.hexa::cmd_build` routes MIR through `codegen_emit_metal_msl` — this is invoke-able only via the lower-test fixture today. Wiring is independent multi-session work.
+- NOT: ROCm P1+. AMD GPU absent from pool; HIP-IL text emit would land without silicon-fire validation. Filing as multi-session block.
+- NOT: NVPTX-side regression. NVPTX codegen path byte-identically untouched (the existing `nvptx_lower_test.hexa` / `nvptx_emit_test.hexa` / `nvptx_vec_add_test.hexa` battery untouched).
+- NOT: `self/codegen_c2.hexa` modification per @D g_commit_push_deploy. All edits land in `compiler/codegen/metal_*` sibling files + docs.
+- GPU.md §10 closure box stays `[ ]`. Codegen-only P3 landing ≠ closure; P4 silicon-fire per vendor is still gate.
+
+**Next cycles** (multi-session):
+- Cycle +1 (USER-LOCAL Mac): Metal P4 silicon fire — `xcrun -sdk macosx metal` compile of emitted MSL into a metallib, MetalKit `MTLComputeCommandEncoder.dispatchThreads` runtime path, FP32 numeric parity vs CPU vec-add reference (max|Δ| ≤ 1e-6). User-side Mac toolchain required.
+- Cycle +N (general): Metal MIR-walk lowering for non-vec-add shapes (GEMM tier, control-flow, threadgroup atomics). Mirror NVPTX `_nvptx_lower_func` against MSL output.
+- Cycle ??? (gated on AMD-GPU procurement): ROCm P1+P2+P3+P4 — full HIP-IL text emit + silicon-fire validation. Pool host with AMD GPU required.
+
+cross-link: RFC 055 NVPTX P3 timeline (sibling pattern) · RFC 075 §4 (Metal P1+P2+P3 rows annotated LANDED) · @D g_inbox_processing_loop Shape-B (codegen-only land, no behavior wiring) · @D f2 no-LLVM (MSL is source text — Apple's `metal` compiler ingests text the same way `ptxas` ingests PTX) · @D g_commit_push_deploy (zero `self/codegen_c2.hexa` edits)
+
 ### 2026-05-20 — RFC 071 P0 scaffold — source-to-silicon e2e (GPU.md §2a) 정식 RFC + cmd_build NVPTX 타깃 스트링 인식
 
 **작업 = Shape-B 1차 commit** — RFC drafted + `self/main.hexa::cmd_build` 의 target-string 인식 분기만 land. P1-P4 (실제 emit-driver synth + module_loader bridge + e2e silicon fire) 는 명시 multi-cycle 연기. byte-identical CPU codegen 경로 — `--target=` 빈 문자열 / 기존 `linux-*` / `darwin-*` 모두 미변경. `@F f1` (no LLVM) + `@F f2` (no C-transpile in architecture) 보존.
