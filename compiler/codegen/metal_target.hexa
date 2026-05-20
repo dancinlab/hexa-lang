@@ -1,0 +1,190 @@
+// HEXA Native Compiler — Codegen / Metal (hexa-src → MSL source)  [RFC 075 P0 scaffold]
+//
+// @version 0.0.1
+// @capabilities [pure]
+//
+// ─────────────────────────────────────────────────────────────────────
+// SCAFFOLD ONLY — RFC 075 P0 (multi-vendor codegen). Zero behavior
+// change.
+//
+// This file is a STRUCTURAL SKELETON for the hexa-native Apple GPU
+// codegen target. It PARSES CLEAN but is NOT wired into the compiler's
+// target dispatch — nothing routes MIR here. The `codegen_emit_metal_msl`
+// entry is an honest stub returning `""`. Real MSL source emit +
+// classifier + silicon fire are P1..P4 (multi-session per RFC 075 §4).
+//
+// Mirror of `compiler/codegen/nvptx_target.hexa` (RFC 055 Stage 1) and
+// `compiler/codegen/rocm_target.hexa` (RFC 075 P0 sibling). The Metal
+// target is different in one structural way: Metal's vendor-input format
+// is SOURCE TEXT (.metal files in MSL — Apple's C++-flavored shading
+// language) rather than a virtual-ISA text like PTX or HIP-IL. The
+// opcodes below are therefore MSL syntax fragments, not virtual-ISA
+// mnemonics. The emit pass produces MSL source code, which Apple's
+// `metal` compiler (Xcode) ingests the same way `ptxas` ingests PTX.
+//
+//   pub fn codegen_emit_metal_msl(module: MModule) -> string
+//
+// Mirrors `codegen_emit_ptx_sm80` signature: MIR module in, MSL source
+// text out. P0 stub returns `""` (P0 placeholder asserted by
+// `metal_lower_test.hexa`).
+//
+// ─────────────────────────────────────────────────────────────────────
+// HONEST SCOPE (RFC 075 §6 / @D g3)
+//
+//   IS  — target enum constant (Apple GPU rev), MSL syntax-fragment
+//         table stubs for the vec-add tier, empty emit entry point.
+//   NOT — a working backend. No MSL source is emitted. No `@gpu_kernel`
+//         is routed here. `xcrun -sdk macosx metal` is never invoked.
+//         Apple silicon never fires. Nothing in the compiler dispatches
+//         to these stubs.
+//
+// `xcrun metal` (MSL source -> AIR bytecode -> metallib) is an external
+// Apple compiler — the same g5 logic as NVPTX's `ptxas` and ROCm's
+// `hipcc` (RFC 055 §8 mirrored to RFC 075). This file does not claim a
+// closed-loop Apple GPU toolchain.
+//
+// Choosing MSL source over AIR bytecode keeps @D f2 ("no LLVM linkage")
+// intact: AIR is an LLVM-bitcode container produced by Apple's `metal`
+// compiler. Emitting bitcode directly would re-introduce LLVM coupling.
+// Emitting MSL source text mirrors the PTX-text / HIP-IL-text pattern.
+//
+// ─────────────────────────────────────────────────────────────────────
+// CITATIONS (not lattice-derived, per @D f1)
+//
+// MSL syntax keywords (`kernel`, `device`, `threadgroup`, attribute
+// `[[thread_position_in_grid]]`) and Apple-GPU generation names (M1/M2/M3)
+// are Apple platform facts cited from Apple's Metal Shading Language
+// Specification.
+//   ref: Metal Shading Language Specification — https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf
+//   ref: Metal Performance Shaders — https://developer.apple.com/documentation/metalperformanceshaders
+// ─────────────────────────────────────────────────────────────────────
+
+import "../ir/mir.hexa"
+import "../ir/lir.hexa"
+
+// ── LModule target tags ───────────────────────────────────────
+//
+// The `LModule.target` value an Apple-compiled module would carry.
+// Three Apple-GPU generations as the conservative scaffold: M1 (Apple7),
+// M2 (Apple8), M3 (Apple9). Apple does NOT publish a stable per-GPU
+// arch string the way NVIDIA does for sm_*; the user-facing target is
+// the macOS deployment target + the Metal feature set. The strings here
+// are a hexa-internal convention for `LModule.target`, not an Apple-API
+// arch tag.
+pub let METAL_TARGET_APPLE_GPU_M1: string = "air64-apple-macos-applegpu-m1"
+pub let METAL_TARGET_APPLE_GPU_M2: string = "air64-apple-macos-applegpu-m2"
+pub let METAL_TARGET_APPLE_GPU_M3: string = "air64-apple-macos-applegpu-m3"
+pub let METAL_TARGET_APPLE_GPU: string    = "air64-apple-macos-applegpu"  // generation-agnostic default
+
+// MSL language version directive (top of the emitted .metal file).
+// Metal 3.0 is the macOS 13+ baseline; 2.4 covers macOS 12+ if needed.
+pub let METAL_LANG_VERSION_3_0: string = "metal_3_0"
+pub let METAL_LANG_VERSION_2_4: string = "metal_2_4"
+
+// ── MSL address spaces (Apple memory hierarchy) ───────────────
+//
+// Apple MSL has four address-space qualifiers, mirrored to PTX state
+// spaces but vendor-specific (RFC 075 §3 table row).
+pub let METAL_SPACE_DEVICE: string      = "device"       // device DRAM (≈ PTX global)
+pub let METAL_SPACE_THREADGROUP: string = "threadgroup"  // per-block scratchpad (≈ PTX shared)
+pub let METAL_SPACE_CONSTANT: string    = "constant"     // read-only constant (≈ PTX const)
+pub let METAL_SPACE_THREAD: string      = "thread"       // per-thread private (≈ PTX local)
+
+// ── MSL kernel attributes (thread hierarchy) ──────────────────
+//
+// MSL uses C++ attribute syntax to bind kernel arguments to thread
+// hierarchy positions. These are SOURCE-TEXT fragments — emitted
+// literally into the kernel signature, e.g.
+//   uint tid [[thread_position_in_grid]]
+pub let METAL_ATTR_TID: string    = "[[thread_position_in_grid]]"
+pub let METAL_ATTR_BID: string    = "[[threadgroup_position_in_grid]]"
+pub let METAL_ATTR_NTID: string   = "[[threads_per_threadgroup]]"
+pub let METAL_ATTR_NCTAID: string = "[[threadgroups_per_grid]]"
+
+// Apple hardware fact: SIMD-group (warp equivalent) is 32 wide on all
+// Apple GPUs through M3. Cited constant, not derived from n=6.
+//   ref: Metal Shading Language Specification §6.9.2 SIMD-group functions
+pub let METAL_SIMD_GROUP_SIZE: i64 = 32
+
+// ── MSL syntax fragments (vec-add tier — RFC 075 P3) ──────────
+//
+// MSL is source text, so the "opcodes" below are language fragments
+// the emit pass concatenates rather than virtual-ISA mnemonics. RFC 075
+// P1 fills in the full FP64 / FP32 vector-arithmetic subset; P0 lands
+// the minimum set the smoke can name-check.
+pub let METAL_KW_KERNEL: string     = "kernel"          // declares a compute kernel
+pub let METAL_KW_VOID: string       = "void"            // kernel return type (always void)
+pub let METAL_KW_CONST: string      = "const"           // immutable qualifier
+pub let METAL_TYPE_FLOAT: string    = "float"           // FP32 scalar
+pub let METAL_TYPE_FLOAT_PTR: string = "device float*"  // FP32 device pointer (kernel arg)
+pub let METAL_TYPE_DOUBLE: string   = "double"          // FP64 scalar (Apple-GPU FP64 is emulated/limited)
+pub let METAL_OP_ADD: string        = "+"               // binop add (source-text fragment)
+pub let METAL_OP_MUL: string        = "*"               // binop mul
+pub let METAL_OP_INDEX_OPEN: string = "["               // array indexing open
+pub let METAL_OP_INDEX_CLOSE: string = "]"              // array indexing close
+
+// ── MSL function-kind keyword ─────────────────────────────────
+//
+// Apple's analog of PTX `.visible .entry` is the `kernel` keyword in
+// MSL source. Device-only helpers are unqualified (or `inline`).
+pub let METAL_DIRECTIVE_KERNEL: string = "kernel"
+pub let METAL_DIRECTIVE_DEVICE: string = ""  // unqualified function (device-only callable)
+
+// MetalOpEntry — one row of the informational MSL syntax-fragment table.
+// Mirrors the per-target opcode-table pattern (RFC 055 §3 / lir.hexa).
+// "mnemonic" is a misnomer for MSL (source text), but the field name is
+// kept aligned with PtxOpEntry / RocmOpEntry for the cross-vendor
+// scaffold pattern.
+pub struct MetalOpEntry {
+    mnemonic: string,    // MSL fragment, e.g. "+" or "kernel"
+    arity: i64,          // operand count
+    space: string,       // address space if memory op, "" otherwise
+    note: string         // human-readable role
+}
+
+// _metal_op_entry — MetalOpEntry constructor.
+fn _metal_op_entry(mnemonic: string, arity: i64, space: string, note: string) -> MetalOpEntry {
+    return MetalOpEntry {
+        mnemonic: mnemonic,
+        arity: arity,
+        space: space,
+        note: note
+    }
+}
+
+// metal_fp32_slice_ops — the FP32-arithmetic-subset syntax table for the
+// RFC 075 first implementable slice. Note: Apple-GPU FP64 is emulated
+// on most M-series silicon (limited hardware FP64); FP32 is the
+// canonical first slice on Metal, whereas NVPTX/ROCm started with FP64
+// because data-center NVIDIA/AMD silicon has hardware FP64. RFC 075 P1
+// flips this table to the full FP32 subset.
+pub fn metal_fp32_slice_ops() -> [MetalOpEntry] {
+    let mut t = []
+    // TODO RFC 075 P1 — fill out matching ptx_fp64_slice_ops shape
+    // (load via [device float* arg + tid], store, +, *, fma intrinsic).
+    t.push(_metal_op_entry(METAL_OP_ADD, 2, "", "FP32 scalar add (P0 stub)"))
+    t.push(_metal_op_entry(METAL_KW_KERNEL, 0, "", "kernel directive (P0 stub)"))
+    return t
+}
+
+// codegen_emit_metal_msl — MIR module -> MSL source text.
+//
+// RFC 075 P0 — scaffold stub. Returns `""` honestly: no MSL is emitted.
+// The smoke test (`metal_lower_test.hexa`) asserts this empty return so
+// the scaffold's structural shape is verified without claiming any real
+// emit.
+//
+// P1+ insertion points:
+//   - TODO RFC 075 P1 — emit MSL preamble: `#include <metal_stdlib>` +
+//     `using namespace metal;` + language-version directive.
+//   - TODO RFC 075 P2 — kernel signature emit: `kernel void <name>(
+//       device float* a [[buffer(0)]], ..., uint tid [[thread_position_in_grid]])`.
+//     Per-Local classifier picks `float` vs `int` vs `bool`.
+//   - TODO RFC 075 P3 — emit real `c[tid] = a[tid] + b[tid];` for vec-add;
+//     i-j-k nested loop for naive GEMM (matches RFC 055 P2 shape).
+//   - TODO RFC 075 P4 — silicon fire via `xcrun -sdk macosx metal`
+//     + Metal Performance Shaders runtime + M-series GPU.
+pub fn codegen_emit_metal_msl(module: MModule) -> string {
+    // RFC 075 P0 — honest empty return; no MSL emit yet.
+    return ""
+}

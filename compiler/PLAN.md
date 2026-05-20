@@ -68,6 +68,46 @@ P0 = F-RFC071-TARGET-ACCEPT 측정-증명만. **parse-gate (`/Users/ghost/.hx/bi
 
 **punted (RFC 071 P1+)**: (a) emit-driver synth source 작성 + hexa_v2 컴파일 + exec (Approach A); (b) `compiler/cli/build_nvptx.hexa` 실제 모듈 + 진짜 compiler/parse + check + lower + codegen 와이어링 (Approach A 정식화); (c) `module_loader.hexa` 의 `@gpu_kernel` discovery 확장 — 한 .hexa 파일 안의 CPU+GPU 함수 분기; (d) 진짜 `.hexa` source → PTX → ubu-2 silicon fire → numeric byte-eq vs CPU reference (F-RFC071-E2E-NUMERIC-EQ); (e) north-star ② CPU self-host campaign default-flip 후 Approach B 수렴 (RFC 063 Px ledger 와 동기). 본 cycle 은 P0 scaffold only, 즉 "RFC drafted + arg parser accept" 두 가지 외 zero behavior change.
 
+### 2026-05-20 — RFC 075 P0 — multi-vendor GPU codegen scaffold (ROCm + Metal sibling backends)
+
+**작업 = Shape-B P0 scaffold only** — RFC drafted + 4 sibling files + GPU.md cross-links. Zero behavior change. No `self/codegen_c2.hexa` edits (per @D g_commit_push_deploy). NVPTX path byte-identically untouched.
+
+**Motivation**: GPU.md §10 closure box `[ ] Multi-vendor: ROCm or Metal kernel parity — proves architectural independence` cannot tick until a sibling vendor's kernel runs from the same `@gpu_kernel` source. This cycle lands the **scaffold** for two siblings (RFC 055 NVPTX gets two cousins): ROCm (AMD HIP-IL text) + Metal (Apple MSL source text). oneAPI (SPIR-V / Level Zero) deferred to a follow-on RFC because (a) no Intel hardware in pool, (b) SPIR-V bytecode + Level Zero runtime ABI add a third runtime dimension that dilutes the ROCm/Metal-specific design.
+
+**Renumbering note**: dispatch task called this "RFC 073"; renumbered to **RFC 075** because RFC 073 (read_verilog procedural-mux) + RFC 074 (enum multi-field payload) were already allocated in `inbox/rfc_drafts_2026_05_20/`. All cross-links use the final RFC 075 number.
+
+**Files (8 edits)**:
+- new `inbox/rfc_drafts_2026_05_20/rfc_075_multi_vendor_codegen.md` (~220 lines) — §1 problem / §2 scope+oneAPI-deferral / §3 vendor pairing table / §4 P0-P4 phasing per vendor / §5 falsifier battery / §6 honest scope g3 / §7 cross-links / §8 next cycles
+- new `compiler/codegen/rocm_target.hexa` (~135 lines) — `ROCM_TARGET_GFX{1100,1101,1102}` enum, `ROCM_OP_{V_ADD_F64,V_MUL_F64,V_FMA_F64,GLOBAL_LOAD_B64,GLOBAL_STORE_B64,S_ENDPGM,...}` opcode constants, `ROCM_SPACE_{GLOBAL,LOCAL,CONSTANT,PRIVATE,REGION}` address-space constants, `ROCM_WAVE_SIZE_RDNA=32`, `RocmOpEntry` struct + `rocm_fp64_slice_ops()` table, empty `codegen_emit_rocm_il(module: MModule) -> string` returning `""`
+- new `compiler/codegen/metal_target.hexa` (~150 lines) — `METAL_TARGET_APPLE_GPU{,_M1,_M2,_M3}` enum, `METAL_KW_{KERNEL,VOID,CONST}` + `METAL_TYPE_{FLOAT,FLOAT_PTR,DOUBLE}` + `METAL_OP_{ADD,MUL,INDEX_*}` syntax-fragment constants (MSL is source text, not virtual ISA), `METAL_SPACE_{DEVICE,THREADGROUP,CONSTANT,THREAD}` + `METAL_ATTR_{TID,BID,NTID,NCTAID}` attribute strings, `METAL_SIMD_GROUP_SIZE=32`, `MetalOpEntry` struct + `metal_fp32_slice_ops()` table (FP32 first slice on Metal because M-series FP64 is emulated), empty `codegen_emit_metal_msl(module: MModule) -> string` returning `""`
+- new `compiler/codegen/rocm_lower_test.hexa` (~95 lines) — `_test_p0_empty_emit` asserts P0 contract (`codegen_emit_rocm_il` returns `""`); `_test_target_constants` verifies `ROCM_ARCH_GFX1100 == "gfx1100"` / `ROCM_TARGET_GFX1100` / `ROCM_WAVE_SIZE_RDNA == 32`
+- new `compiler/codegen/metal_lower_test.hexa` (~100 lines) — `_test_p0_empty_emit` asserts P0 contract (`codegen_emit_metal_msl` returns `""`); `_test_target_constants` verifies `METAL_TARGET_APPLE_GPU` / `METAL_SIMD_GROUP_SIZE == 32` / `METAL_KW_KERNEL == "kernel"` / `METAL_SPACE_DEVICE == "device"`
+- edit `GPU.md` §3f — annotate ROCm/Metal [ ] entries with "RFC 075 P0 scaffold landed: <path> — emit stub returns `""`, P1-P4 multi-session"; oneAPI [ ] gets "deferred to follow-on RFC, see RFC 075 §2"
+- edit `GPU.md` §10 — annotate multi-vendor closure box with "RFC 075 P0 scaffold landed 2026-05-20 for BOTH ROCm + Metal sibling backends; closure box stays unchecked until P4 silicon-fire per vendor"
+- edit `compiler/PLAN.md` — this entry
+
+**Parse-gate** (`/Users/ghost/.hx/bin/hexa_real parse <file>`):
+- `compiler/codegen/rocm_target.hexa` — `OK: parses cleanly`
+- `compiler/codegen/metal_target.hexa` — `OK: parses cleanly`
+- `compiler/codegen/rocm_lower_test.hexa` — `OK: parses cleanly`
+- `compiler/codegen/metal_lower_test.hexa` — `OK: parses cleanly`
+
+4/4 parse-clean. No runtime smoke executed (P0 stubs return `""`; P1+ is multi-session per vendor).
+
+**Honest scope (g3)**:
+- IS: structural scaffold per vendor (target enum, opcode/syntax-fragment tables, empty emit entry point, 1 smoke file each asserting P0 placeholder)
+- NOT: real emit (both `codegen_emit_*` return `""`), not wired into target dispatch, no `hipcc`/`xcrun metal` invocation, no AMD/Apple silicon fire this cycle, no oneAPI, no `self/codegen_c2.hexa` edits
+- Falsifier battery defined in RFC 075 §5 — F-RFC075-{ROCM,METAL}-{TARGET-ACCEPT,EMIT-VEC-ADD,SILICON-FIRE} + F-RFC075-NUMERIC-EQ. P0 today INTENTIONALLY fails EMIT-VEC-ADD (stub returns `""`) — that is the point of a scaffold smoke.
+- GPU.md §10 closure box stays `[ ]`. P0 scaffold landing ≠ closure.
+
+**Next cycles** (multi-session per vendor):
+- Cycle +1: ROCm P1 — fill `rocm_target.hexa` opcode constants (full vec-add subset) + `_test_target_accept` to drive F-RFC075-ROCM-TARGET-ACCEPT
+- Cycle +2: Metal P1 — same shape on `metal_target.hexa`
+- Cycle +3..n: P2/P3 per vendor (independent scheduling)
+- Cycle +N: P4 silicon fire (ROCm gated on AMD GPU procurement; Metal can proceed on user's M-series laptop)
+
+cross-link: RFC 055 (NVPTX sibling pattern) · GPU.md §3f / §10 · @D g_inbox_processing_loop Shape-B · @D f2 no-LLVM (HIP-IL is text, MSL is source text) · @D g_commit_push_deploy (no codegen_c2.hexa edits)
+
 ### 2026-05-20 — #18 S1-step-2 — `lower_hir` super-linear 제거 (O(N²) → near-linear, byte-eq PASS)
 
 **작업 = correctness-preserving 성능 리팩터** — emit asm 는 byte-identical 유지. S1-step-1 이 측정한 `lower_hir` O(N²) 곡선을 제거.
