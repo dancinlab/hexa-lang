@@ -108,7 +108,7 @@ fn _abc_log(line: str) {
 //   `Abc_SopCheck: SOP has a mismatch between its cover size (288) and
 //    its fanin number (2)` and rejecting the module.
 //
-// iter-10 BLIF emission of RTLIL connect rows:
+// iter-10/11 BLIF emission of RTLIL connect rows:
 //   - RHS = "1'b0" → SKIP. ABC's read_blif auto-adds constant-0
 //     drivers for any undriven net (emits its standard "Constant-0
 //     drivers added to N non-driven nets" diagnostic during load),
@@ -121,8 +121,20 @@ fn _abc_log(line: str) {
 //     `map` absorbs the residual constant-driven fanout as don't-
 //     cares — measured strash-after-load `and=0` lev=0 on a 3-tie
 //     fixture (test_invones.blif during iter-10 R&D 2026-05-20).
-//   - any other RHS → fall through (non-constant connect; out of
-//     iter-10 scope, would need a buffer cell).
+//   - any other RHS (non-constant net) → iter-11 emits a 1-input SOP
+//     buffer `.names <rhs> <lhs>\n1 1\n`. RTLIL `connect (lhs, rhs)`
+//     with non-constant rhs is a wire alias / continuous `assign` /
+//     buffer — semantically "lhs is driven by the same logic that
+//     drives rhs". BLIF spec §3 SOP form `.names a y\n1 1` is the
+//     canonical 1-input identity (truth-table row: input=1 →
+//     output=1; input=0 → output=0 by SOP default-zero), accepted
+//     universally by ABC's read_blif without any liberty cell
+//     dependency. ABC's `strash` collapses the buffer to the rhs
+//     AIG node (same structural hash), so it is free post-mapping.
+//     Note: this canonical 1-input row is NOT vulnerable to the
+//     iter-6 SopCheck failure — that failure was the 0-input
+//     `.names <net>` form (constant SOP, no input column),
+//     ambiguous with `.gate` directive continuations.
 //
 // Atlas citations:
 //   - IEEE 1800-2017 §6.7 — net-driver `assign` semantics (RTLIL
@@ -132,6 +144,15 @@ fn _abc_log(line: str) {
 //     our `connect_lhs[]` / `connect_rhs[]` parallel arrays).
 //   - BLIF spec §3 — `.gate <type> <pin>=<net> ...` for technology-
 //     mapped cells; `.names <output> [<inputs>]` for SOPs.
+//   - SKY130 PDK `sky130_fd_sc_hd__buf_1.lib.json` (single-input
+//     buffer pins A→X, is_combinational, function "A") — referenced
+//     as the alternative `.gate` emission form not chosen here
+//     (https://github.com/google/skywater-pdk-libs-sky130_fd_sc_hd).
+//     We chose `.names` over `.gate sky130_fd_sc_hd__buf_1` to
+//     remove the liberty-cell dependency: `.names` is universally
+//     accepted by ABC's read_blif, while `.gate buf_1` requires
+//     buf_1 to be in the loaded cell library (true for the full
+//     SKY130 PDK, but not for any synthetic test corpus).
 //
 // HONEST SCOPE — this emitter walks `module.connect_lhs / _rhs` and
 // `module.cells`. `module.processes` is untouched (post-`proc` pass
@@ -162,6 +183,16 @@ fn abc_emit_blif(d: Design) -> str {
         // The shared helper net `$blif_helper_zero` is never driven
         // explicitly, so ABC ties IT to constant 0 as well, and each
         // emitted inv_1 produces constant 1.
+        //
+        // iter 11 — non-constant `connect (lhs, rhs)` rows lower to a
+        // 1-input SOP buffer `.names <rhs> <lhs>\n1 1\n` (BLIF spec
+        // §3, IEEE 1800-2017 §6.7 continuous-assign semantics).  This
+        // closes the previously-silent fall-through where
+        // `assign y = a`-style read_verilog connects lost their
+        // driver, causing ABC to auto-tie the output to constant 0
+        // and the §5 mapped BLIF to collapse to all-zero outputs.
+        // The emission ordering (connect-walk BEFORE cell-walk) is
+        // preserved across both cases — same invariant as iter-10.
         let mut have_one_tie = 0
         let mut kj = 0
         while kj < len(m.connect_lhs) {
@@ -172,8 +203,25 @@ fn abc_emit_blif(d: Design) -> str {
                 // .gate sky130_fd_sc_hd__inv_1 A=$blif_helper_zero Y=<lhs>
                 buf = buf + ".gate sky130_fd_sc_hd__inv_1 A=$blif_helper_zero Y="
                     + lhs + "\n"
+            } else if rhs == "1'b0" {
+                // RHS == "1'b0" → no emission (ABC auto-tie undriven net)
+            } else {
+                // iter 11 — non-constant net alias / continuous-assign /
+                // buffer. Skip degenerate self-loops (lhs == rhs) which
+                // would produce a `.names a a` directive that ABC's
+                // SOP solver would parse as combinational feedback.
+                // Skip empty endpoints defensively.
+                if len(lhs) > 0 {
+                    if len(rhs) > 0 {
+                        if lhs != rhs {
+                            // .names <rhs> <lhs>
+                            // 1 1
+                            buf = buf + ".names " + rhs + " " + lhs + "\n"
+                            buf = buf + "1 1\n"
+                        }
+                    }
+                }
             }
-            // RHS == "1'b0" → no emission (ABC auto-tie)
             kj = kj + 1
         }
         // each cell -> .gate <type> <pin>=<net> ...
@@ -517,6 +565,104 @@ fn main() {
     else if inv_pos >= and_pos {
         println("FAIL T6e blif_const1_ordering (inv_pos=" + str(inv_pos)
             + " ≥ and_pos=" + str(and_pos) + ")"); fails = fails + 1
+    }
+
+    // T7 — RTLIL connect with NON-constant RHS lowers to a 1-input
+    // SOP buffer `.names <rhs> <lhs>\n1 1\n`. rfc_006 §5 bug (a) iter
+    // 11 fix — previously, `assign y = a`-style connects (where rhs
+    // is a regular net, not "1'b0"/"1'b1") fell through the iter-10
+    // walk with no BLIF emission, causing ABC to auto-tie y to
+    // constant 0 and the mapped BLIF to collapse outputs.
+    //
+    // ordering invariant preserved: the .names buffer line must
+    // appear BEFORE any subsequent `.gate` cell line that references
+    // the LHS, just like the iter-10 constant-1 inv_1 driver.
+    total = total + 1
+    let mut m7 = rtlil_new_module("c7")
+    m7 = rtlil_module_add_wire(m7, rtlil_wire("a", 1, 1, 1))
+    m7 = rtlil_module_add_wire(m7, rtlil_wire("y", 1, 2, 2))
+    // continuous assign / wire alias: y is driven by a
+    m7 = rtlil_module_connect(m7, "y", "a")
+    let mut d7 = rtlil_new_design("test")
+    d7 = rtlil_design_add(d7, m7)
+    let blif7 = abc_emit_blif(d7)
+    // T7a — non-constant connect emits a `.names` buffer
+    if blif7.find(".names a y") < 0 {
+        println("FAIL T7 blif_names_buffer_missing"); fails = fails + 1
+    }
+    // T7b — SOP body row "1 1" is present
+    if blif7.find("\n1 1\n") < 0 {
+        println("FAIL T7b blif_names_sop_row_missing"); fails = fails + 1
+    }
+    // T7c — no buf_1 .gate line (we chose .names fallback for the
+    // zero-liberty-dependency property)
+    if blif7.find(".gate sky130_fd_sc_hd__buf_1") >= 0 {
+        println("FAIL T7c blif_buf_gate_leaked"); fails = fails + 1
+    }
+    // T7d — ordering: the .names line must precede `.end` and follow
+    // `.outputs`. (No subsequent `.gate` in this fixture; the iter-10
+    // ordering invariant is asserted in T6e.)
+    let names_pos = blif7.find(".names a y")
+    let outputs_pos = blif7.find(".outputs y")
+    let end_pos = blif7.find(".end")
+    if names_pos < 0 { /* already reported by T7 */ }
+    else if outputs_pos < 0 {
+        println("FAIL T7d blif_outputs_missing"); fails = fails + 1
+    }
+    else if end_pos < 0 {
+        println("FAIL T7d2 blif_end_missing"); fails = fails + 1
+    }
+    else if names_pos <= outputs_pos {
+        println("FAIL T7d3 blif_names_before_outputs (names_pos="
+            + str(names_pos) + " ≤ outputs_pos=" + str(outputs_pos)
+            + ")"); fails = fails + 1
+    }
+    else if names_pos >= end_pos {
+        println("FAIL T7d4 blif_names_after_end (names_pos="
+            + str(names_pos) + " ≥ end_pos=" + str(end_pos)
+            + ")"); fails = fails + 1
+    }
+    // T7e — self-loop connect (lhs == rhs) MUST be suppressed
+    // (degenerate; ABC would treat as combinational feedback).
+    let mut m7e = rtlil_new_module("c7e")
+    m7e = rtlil_module_add_wire(m7e, rtlil_wire("z", 1, 2, 1))
+    m7e = rtlil_module_connect(m7e, "z", "z")
+    let mut d7e = rtlil_new_design("test")
+    d7e = rtlil_design_add(d7e, m7e)
+    let blif7e = abc_emit_blif(d7e)
+    if blif7e.find(".names z z") >= 0 {
+        println("FAIL T7e blif_self_loop_leaked"); fails = fails + 1
+    }
+    // T7f — connect-walk + cell-walk ordering with both a non-const
+    // connect AND a downstream cell consuming the LHS.
+    let mut m7f = rtlil_new_module("c7f")
+    m7f = rtlil_module_add_wire(m7f, rtlil_wire("a", 1, 1, 1))
+    m7f = rtlil_module_add_wire(m7f, rtlil_wire("t", 1, 0, 2))
+    m7f = rtlil_module_add_wire(m7f, rtlil_wire("b", 1, 1, 3))
+    m7f = rtlil_module_add_wire(m7f, rtlil_wire("y", 1, 2, 4))
+    // t is a wire-alias of a (continuous assign)
+    m7f = rtlil_module_connect(m7f, "t", "a")
+    // y = t AND b — and2_1 consumes the aliased net
+    let mut g7f = rtlil_cell("u_g7f", "sky130_fd_sc_hd__and2_1", 1)
+    g7f = rtlil_cell_connect(g7f, "A", "t")
+    g7f = rtlil_cell_connect(g7f, "B", "b")
+    g7f = rtlil_cell_connect(g7f, "X", "y")
+    m7f = rtlil_module_add_cell(m7f, g7f)
+    let mut d7f = rtlil_new_design("test")
+    d7f = rtlil_design_add(d7f, m7f)
+    let blif7f = abc_emit_blif(d7f)
+    let names_pos7f = blif7f.find(".names a t")
+    let and_pos7f = blif7f.find(".gate sky130_fd_sc_hd__and2_1")
+    if names_pos7f < 0 {
+        println("FAIL T7f blif_names_alias_missing"); fails = fails + 1
+    }
+    else if and_pos7f < 0 {
+        println("FAIL T7f2 blif_and_cell_missing"); fails = fails + 1
+    }
+    else if names_pos7f >= and_pos7f {
+        println("FAIL T7f3 blif_names_after_cell (names_pos="
+            + str(names_pos7f) + " ≥ and_pos=" + str(and_pos7f)
+            + ")"); fails = fails + 1
     }
 
     if fails > 0 {
