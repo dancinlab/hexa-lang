@@ -3239,7 +3239,9 @@ HexaVal hexa_array_scan(HexaVal arr, HexaVal init, HexaVal fn) {
 }
 
 // product(a): multiplicative reduce. Mirrors hexa_sum but with mult.
-// Empty array returns int 1 (multiplicative identity).
+// Empty array returns int 1 (multiplicative identity). Step-3 cycle 23
+// port (all-float fast path).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_product(HexaVal arr) {
     if (!HX_IS_ARRAY(arr)) return hexa_int(1);
     int64_t n = HX_ARR_LEN(arr);
@@ -3254,6 +3256,25 @@ HexaVal hexa_array_product(HexaVal arr) {
     if (has_float) return hexa_float((double)int_total * float_total);
     return hexa_int(int_total);
 }
+#else
+extern HexaVal rt_array_product_float(HexaVal arr);
+HexaVal hexa_array_product(HexaVal arr) {
+    if (!HX_IS_ARRAY(arr)) return hexa_int(1);
+    int64_t n = HX_ARR_LEN(arr);
+    if (n == 0) return hexa_int(1);
+    if (_arr_all_float(arr)) return rt_array_product_float(arr);
+    int has_float = 0;
+    int64_t int_total = 1;
+    double float_total = 1.0;
+    for (int64_t i = 0; i < n; i++) {
+        HexaVal e = HX_ARR_ITEMS(arr)[i];
+        if (HX_IS_FLOAT(e)) { has_float = 1; float_total *= HX_FLOAT(e); }
+        else { int_total *= HX_INT(e); }
+    }
+    if (has_float) return hexa_float((double)int_total * float_total);
+    return hexa_int(int_total);
+}
+#endif
 
 // mean(a): float average. Empty array returns float 0.0.
 // Step-3 cycle 20 port.
@@ -9450,7 +9471,9 @@ HexaVal hexa_argmax(HexaVal a) {
 #endif
 
 // sum(a): reduce-sum; returns int if all elements int, float otherwise.
-// Matches interpreter hexa_full.hexa:13232.
+// Matches interpreter hexa_full.hexa:13232. Step-3 cycle 23 port (all-
+// float fast path via hexa-source; mixed arrays stay polymorphic C).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_sum(HexaVal a) {
     if (!HX_IS_ARRAY(a)) return hexa_int(0);
     int64_t n = (int64_t)HX_ARR_LEN(a);
@@ -9465,6 +9488,25 @@ HexaVal hexa_sum(HexaVal a) {
     if (has_float) return hexa_float((double)int_total + float_total);
     return hexa_int(int_total);
 }
+#else
+extern HexaVal rt_array_sum_float(HexaVal arr);
+HexaVal hexa_sum(HexaVal a) {
+    if (!HX_IS_ARRAY(a)) return hexa_int(0);
+    int64_t n = (int64_t)HX_ARR_LEN(a);
+    if (n == 0) return hexa_int(0);
+    if (_arr_all_float(a)) return rt_array_sum_float(a);
+    int has_float = 0;
+    int64_t int_total = 0;
+    double float_total = 0.0;
+    for (int64_t i = 0; i < n; i++) {
+        HexaVal e = hexa_array_get(a, i);
+        if (HX_IS_FLOAT(e)) { has_float = 1; float_total += HX_FLOAT(e); }
+        else { int_total += HX_INT(e); }
+    }
+    if (has_float) return hexa_float((double)int_total + float_total);
+    return hexa_int(int_total);
+}
+#endif
 
 // clamp(x, lo, hi): scalar clamp, float result. Step-3 cycle 3 port.
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
