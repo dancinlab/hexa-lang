@@ -1005,46 +1005,217 @@ pub fn ag_extract_sigmoid_bwd_via_ast(arena: int, fwd_root: int, bwd_root: int,
     }
 }
 
+// ─── SD7: multi-use Param accumulation (foundational autograd primitive) ─
+// SD7 closes the "multi-use Param" gap left open by SD6. SD6's walker
+// v2 was scoped to fwd graphs where each fwd-intermediate has at most
+// one use along the path to the target Param. Sigmoid satisfies that
+// (`s = 1/(1+exp(-x))` references x once via `0 − x`). But ANY non-
+// trivial elementwise expression — `f(x) = x*x + dt_exp(x)` is the
+// canonical multi-use shape — references the SAME target Param more
+// than once. The vjp must SUM gradient contributions from every
+// usage site (reverse-mode accumulator semantics —
+// Griewank & Walther, "Evaluating Derivatives" 2nd ed., §3.2
+// "Reverse-Mode Adjoints" Algorithm 3.6, the v̄_i = Σ_j v̄_j · ∂v_j/∂v_i
+// accumulation step; Pearlmutter & Siskind §3 lambda-the-ultimate
+// vjp transformer also handles multi-use via let-binding's
+// compositional reverse-mode rule).
+//
+// CRITICAL OBSERVATION (foundational): SD6's walker
+// `ag_extract_reverse_walk_v2` ALREADY produces the accumulator
+// semantics structurally — each `BinOp_*` case recurses into BOTH
+// children with their respective derived `dc`, then combines the two
+// branches via a fresh `BinOp_ADD`. When the same Param leaf is
+// reached along multiple recursion paths, the per-path `dc` is the
+// per-usage-site contribution; the ADD nodes at the binop levels are
+// where the SUM happens. The Param leaf rule (`return upstream_grad`
+// when ix matches) returns the path-local upstream UNTOUCHED — so
+// multi-use is the natural recursion shape, not a special case.
+//
+// SD7 PROVES this by EXERCISING the walker on a 2-use input. No
+// walker code changes are required to support multi-use; the
+// foundational v_i = Σ_j ... accumulator is already inscribed by the
+// SD6 BinOp_*-emits-ADD pattern. What SD7 adds:
+//
+//   - A new fwd-AST builder for `f(x) = x*x + dt_exp(x)` —
+//     `ag_extract_build_multiuse_fwd`. The Param `x` appears 3 times
+//     (twice as the two operands of `x*x`, once as the operand of
+//     dt_exp). Each occurrence is a SEPARATE fwd-arena Param node so
+//     the AST is structurally a tree (each slot has its own fwd_cache
+//     entry, written independently by ag_extract_eval_fwd).
+//
+//   - A new elementwise driver `ag_extract_multiuse_bwd_via_ast` —
+//     same shape as ag_extract_sigmoid_bwd_via_ast (fwd-cache populate
+//     then bwd-interpret per i), one renaming for the multi-use
+//     scenario semantics.
+//
+//   - A new oracle gate F-RFC043-AUTOGRAD-AUTO-SD7-MULTIUSE-BYTE-EQ
+//     (registered in test/flame_ag_extract_test.hexa).
+//
+// Byte-eq strategy (g3-honest, per task §6 Option A —
+// "match the reference's order exactly"):
+//
+//   The walker's natural emit for `f(x) = (x*x) + dt_exp(x)` walked
+//   with upstream = dy and target Param ix = 0, executed top-down,
+//   produces this bwd expression (after the per-op rule chain):
+//
+//     ADD(
+//       ADD(                                # MUL(x,x) branch
+//         MUL(dy, FwdResult(slot_of_2nd_x)),   # = dy * x  (from da_contrib = dc * b_cached)
+//         MUL(dy, FwdResult(slot_of_1st_x))    # = dy * x  (from db_contrib = dc * a_cached)
+//       ),
+//       MUL(dy, FwdResult(slot_of_dtexp))    # = dy * exp(x) (from Call_DTEXP rule)
+//     )
+//
+//   Evaluated under interpret_v2 with the fwd cache populated, this
+//   computes the scalar value
+//
+//     (((dy * x) + (dy * x)) + (dy * exp_x))
+//
+//   exactly — same multiplications, same additions, same operand
+//   order. The hand-written reference `multiuse_bwd_manual` below
+//   computes the SAME expression with the SAME operand sequence
+//   (no re-association into `dy * (2*x + exp(x))`), giving
+//   IEEE-754 byte-eq (max|Δ| = 0).
+//
+//   Option A choice: we structure the REFERENCE to mirror the
+//   walker's natural emit order, rather than re-associating the
+//   walker's output to match the textbook form `dy*(2x+e^x)`. This
+//   is the same "match the IEEE-754 trajectory" technique SD5
+//   used (its reference computed `if x>0 then dy else 0` via the
+//   identical `>` then select). SD6 had to declare byte-eq impossible
+//   for sigmoid because the walker emitted `e/d` while the textbook
+//   form used `1−s` — algebraic identity, different floating-point
+//   trajectory. SD7's multi-use shape does NOT have an algebraic-
+//   identity collapse (the walker's emit IS the textbook accumulator
+//   form, modulo associativity choice), so Option A is achievable.
+//
+// What SD7 PROVES (g3-positive deliverables):
+//   - The walker handles multi-use Param accumulation CORRECTLY
+//     (foundational autograd primitive).
+//   - The byte-eq gate PASSES under Option A (reference matches
+//     walker order) — proving the multi-use pipeline produces a
+//     deterministic, reorder-stable floating-point trajectory.
+//   - The "save forward, reuse in backward" cache populates one
+//     entry per Param-occurrence slot; cache reads are byte-stable
+//     because the same x_val is written to all three slots.
+//   - SD1+SD2+SD3+SD5+SD6 regression gates remain green (zero edits
+//     to the walker / interpret_v2 / eval_fwd surfaces; only new
+//     builder + driver added).
+//
+// What SD7 does NOT prove (honest carve-outs for SD8+):
+//   - Parser integration (SD8 future). The multiuse fwd is
+//     hand-built, same idiom as SD5+SD6.
+//   - More than one Param (multi-input vjp; SD9 future).
+//   - Operator coverage beyond ADD/MUL/dt_exp on the multi-use path
+//     (e.g. multi-use through DIV/NEG would exercise the same
+//     accumulator machinery but the byte-eq form may differ).
+//
+// Atlas anchor (g6): Griewank & Walther §3.2 Algorithm 3.6 reverse-
+// mode accumulator semantics; Pearlmutter & Siskind §3 compositional
+// vjp; same atlas entries SD5/SD6 cite — multi-use is a property of
+// the accumulator step, not a new theorem.
+
+// ─── SD7 forward AST builder: f(x) = x*x + dt_exp(x) ───────────────────
+// Hand-builds the multi-use fwd AST. The Param `x` appears 3 times,
+// each as a SEPARATE fwd-arena Param node (tree, not DAG) so each
+// occurrence has its own fwd_cache slot under eval_fwd. The walker
+// then visits each occurrence via independent recursion paths and
+// the accumulator (the BinOp_ADD that combines the two MUL branches
+// + the top-level BinOp_ADD that combines MUL_xx with dt_exp) is
+// the sum-of-contributions step.
+//
+// `cache_out` writes:
+//   cache_out[0] = root (the BinOp_ADD at the top)
+//   cache_out[1] = mul_xx_node (x*x intermediate)
+//   cache_out[2] = exp_x_node  (dt_exp(x) intermediate)
+//   cache_out[3] = (reserved 0 — kept for caller farr-shape parity)
+//
+// Returned: the root slot-id (the top-level ADD).
+pub fn ag_extract_build_multiuse_fwd(arena: int, cache_out: int) -> int {
+    // Three independent Param(0) nodes — one per occurrence of x in
+    // the source `x*x + dt_exp(x)`. Each gets its own arena slot, so
+    // eval_fwd populates fwd_cache[slot] = x_val three times (one
+    // per slot); the walker's MUL rule reads each via Var_FwdResult.
+    let x_node_a = ag_extract_mk_param(arena, 0)   // 1st x in x*x
+    let x_node_b = ag_extract_mk_param(arena, 0)   // 2nd x in x*x
+    let x_node_c = ag_extract_mk_param(arena, 0)   // x inside dt_exp
+    // x*x
+    let mul_xx   = ag_extract_mk_binop_mul(arena, x_node_a, x_node_b)
+    // dt_exp(x)
+    let exp_x    = ag_extract_mk_call_dtexp(arena, x_node_c)
+    // (x*x) + dt_exp(x)
+    let root     = ag_extract_mk_binop_add(arena, mul_xx, exp_x)
+    // Publish cache slots.
+    t_set(cache_out, 0, to_float(root))
+    t_set(cache_out, 1, to_float(mul_xx))
+    t_set(cache_out, 2, to_float(exp_x))
+    t_set(cache_out, 3, 0.0)
+    return root
+}
+
+// ─── SD7 elementwise driver: multi-use bwd via AST ─────────────────────
+// `ag_extract_multiuse_bwd_via_ast(arena, fwd_root, bwd_root, x_arr,
+//  dy_arr, dx_out, len, fwd_cache)` — same shape as sigmoid driver;
+// renamed for the multi-use scenario semantics. Per i: populate
+// fwd_cache via eval_fwd, then interpret_v2 the bwd-AST root against
+// (x, dy, fwd_cache).
+pub fn ag_extract_multiuse_bwd_via_ast(arena: int, fwd_root: int, bwd_root: int,
+                                        x_arr: int, dy_arr: int, dx_out: int,
+                                        len: int, fwd_cache: int) {
+    let mut i = 0
+    while i < len {
+        let xi = t_get(x_arr, i)
+        let dyi = t_get(dy_arr, i)
+        let _ = ag_extract_eval_fwd(arena, fwd_root, xi, fwd_cache)
+        let dxi = ag_extract_interpret_v2(arena, bwd_root, xi, dyi, fwd_cache)
+        t_set(dx_out, i, dxi)
+        i = i + 1
+    }
+}
+
 // ─── Future work (g3 carve-outs) ───────────────────────────────────────
 //
 // SD5 established the AST→walk→emit pipeline shape for ONE op (relu).
-// SD6 (this cycle) demonstrated GENERALIZATION to a SECOND op (sigmoid)
-// by adding per-op reverse-mode rules for the elementary primitives
-// (ADD, SUB, MUL, DIV, NEG, dt_exp) and a "save forward, reuse in
-// backward" fwd-result cache (Var_FwdResult). What SD6 PROVED: the
-// AST→reverse-walk→emit pipeline scales beyond the IfElse-specific
-// shape — the per-op rule table is the extension point.
+// SD6 demonstrated GENERALIZATION to a SECOND op (sigmoid) via the
+// per-op rule table (ADD/SUB/MUL/DIV/NEG/dt_exp) + Var_FwdResult cache.
+// SD7 (this cycle) demonstrated MULTI-USE Param gradient accumulation
+// — the foundational autograd primitive — on `f(x) = x*x + dt_exp(x)`.
+// What SD7 PROVED: the walker's existing recursion structure (each
+// BinOp emits ADD combining its two child contributions) IS the
+// accumulator; no walker edits needed. Reference matches walker order
+// (Option A) so byte-eq holds. SD7 also proved the foundational point
+// that ANY non-trivial expression (with reused vars) flows through
+// this accumulator path — without it, no real-world model would work.
 //
 // To extend to true source-to-source AD over arbitrary hexa-lang
 // functions, the following structural blockers remain (each its own SD):
 //
-//   SD7 — parser integration. The compiler/parse/ast.hexa Module/
+//   SD8 — parser integration. The compiler/parse/ast.hexa Module/
 //         Item/Expr types are available, but importing them into a
 //         stdlib file pulls in compiler/lex + compiler/parse + diag,
 //         which would expand stdlib/flame's transitive dep
 //         significantly. The right cycle is to expose a thin
 //         `parse_function_body(path, fn_name) -> Expr` surface that
-//         strips the parser-internal state. (Was numbered SD6 in the
-//         SD5 ledger — renumbered after SD6 closed the second-op
-//         generalization gap first; parser integration moves to SD7.)
+//         strips the parser-internal state. (Was numbered SD7 in the
+//         SD6 ledger — renumbered after SD7 closed the multi-use
+//         accumulation gap first; parser integration moves to SD8.)
 //
-//   SD8 — multi-input + multi-output + gradient accumulation. SD6's
-//         walker v2 limits itself to fwd graphs where each
-//         intermediate has exactly one use (sigmoid satisfies this).
-//         True Wengert-tape accumulation across multi-use variables
-//         requires wiring the walker into ag_tape's `_ag_reg_acc`
-//         accumulator. SD8 also generalizes the single (x_val, dy_val)
-//         scalar pair to a param vector + an output-grad vector.
+//   SD9 — multi-input + multi-output. SD7's walker handles multi-USE
+//         of a SINGLE Param. True multi-INPUT (∂f/∂x, ∂f/∂y for
+//         f(x,y)) needs the walker to invoke once per target_param_ix
+//         OR maintain a per-Param accumulator dict in a single pass.
+//         Also generalizes the (x_val, dy_val) scalar pair to a
+//         param vector + output-grad vector.
 //
-//   SD9 — more reverse-mode rules. SD6 covers ADD/SUB/MUL/DIV/NEG +
-//         dt_exp; SD5 covers IfElse. Generic vjp coverage needs Sum
-//         (reduce-axis), MatMul (transpose × upstream — SD1's body,
-//         AST-derived this time), Compose (let-binding chain rule),
-//         and the elementwise unary family (silu, gelu, tanh — each
-//         adds one rule, all citation-anchored in Griewank–Walther
-//         Tables 4.1–4.3).
+//   SD10 — more reverse-mode rules. SD6 covers ADD/SUB/MUL/DIV/NEG +
+//          dt_exp; SD5 covers IfElse. Generic vjp coverage needs Sum
+//          (reduce-axis), MatMul (transpose × upstream — SD1's body,
+//          AST-derived this time), Compose (let-binding chain rule),
+//          and the elementwise unary family (silu, gelu, tanh — each
+//          adds one rule, all citation-anchored in Griewank–Walther
+//          Tables 4.1–4.3).
 //
-//   SD10 — re-emit-and-recompile loop. The SD6 emit step produces a
+//   SD11 — re-emit-and-recompile loop. The SD6 emit step produces a
 //          hexa source string referencing _fwd<id> cached values.
 //          A future cycle wires the emitted source through the
 //          compiler so it is actually loaded and called (closing

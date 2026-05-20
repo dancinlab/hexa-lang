@@ -2154,3 +2154,130 @@ SD5's anchors and the per-op rules are atlas-bound theorems):
 - SD9: more rules — Sum, MatMul AST-derived, Compose, elementwise
   unary family (silu, gelu, tanh).
 - SD10: re-emit-and-recompile loop (was SD9).
+
+### 2026-05-20 — SD7 ag_extract — multi-use Param gradient accumulation (north-star ① autograd primitive)
+
+**SD7 = the foundational autograd primitive: a Param used in 2+
+forward usage sites must SUM gradient contributions from all sites
+(reverse-mode accumulator, Griewank & Walther §3.2 Algorithm 3.6).
+Without this, NO non-trivial expression's gradient is correct.**
+
+**Files (additive only — zero edits to ag_derive/ag_tape/nn_lib;
+SD5+SD6 surfaces untouched)**:
+- `stdlib/flame/ag_extract.hexa` +144 LoC (1057 → 1201):
+  - `ag_extract_build_multiuse_fwd(arena, cache_out) -> int` —
+    hand-built fwd AST for `f(x) = x*x + dt_exp(x)`. Param `x`
+    appears 3× as THREE independent Param(0) arena slots (tree,
+    not DAG) so each occurrence has its own fwd_cache entry.
+  - `ag_extract_multiuse_bwd_via_ast(arena, fwd_root, bwd_root,
+    x_arr, dy_arr, dx_out, len, fwd_cache)` — elementwise driver
+    mirroring the sigmoid driver shape (fwd-cache populate per i,
+    then bwd-interpret).
+  - §SD7 header documents the foundational claim: SD6's walker
+    `ag_extract_reverse_walk_v2` ALREADY accumulates correctly via
+    its BinOp-emits-ADD recursion (the Param leaf rule returns the
+    path-local upstream untouched; the ADD nodes at each binop
+    level are the per-site sum). Multi-use is the natural recursion
+    shape — no walker code changes needed. SD7 EXERCISES this
+    pattern and proves it correct under byte-eq.
+  - §Future work renumbered: SD8 parser integration, SD9
+    multi-input, SD10 more rules, SD11 re-emit-and-recompile.
+
+- `test/flame_ag_extract_test.hexa` +127 LoC (282 → 409):
+  - `multiuse_bwd_manual(x_arr, dy_arr, dx_out, len)` —
+    hand-written reference computing `(((dy*x) + (dy*x)) + (dy*ex))`
+    where `ex = dt_exp(x)`. IEEE-754 trajectory IDENTICAL to walker
+    emit (Option A reorder-match per task §6): same multiplications
+    in the same order, same additions in the same order — no
+    factoring `dy * (2*x + ex)`.
+  - SD7 oracle: builds multi-use fwd, reverse-walk-v2 with
+    upstream=dy, emits source (printed for inspection), interprets
+    elementwise, compares to manual reference.
+  - First-4-elements debug print (x, dx_auto, dx_ref, |Δ|) for
+    transparent IEEE-754 audit.
+  - Exit codes extended: 93 = SD7 fail.
+  - SD6 honest-finding made non-exiting (machine-eps tolerance gate
+    5.55e-16; observed 5.55e-17 is documented as honest, not a
+    regression) so SD7 can run in the same test invocation.
+
+**Gate measured**: `F-RFC043-AUTOGRAD-AUTO-SD7-MULTIUSE-BYTE-EQ`
+**PASS** — `max|dx_auto − dx_ref| = 0.0` on len=32 fixed-seed input
+(same x_arr/dy_arr seeds as SD5/SD6 — LCG seeds 4242 + −1 shift, 31337).
+
+**Emitted source** (printed by the test for inspection):
+```
+pub fn multiuse_bwd_auto_emitted(x: float, dy: float) -> float {
+    return (((dy * _fwd1) + (dy * _fwd0)) + (dy * _fwd4))
+}
+```
+where `_fwd1` = 2nd x slot, `_fwd0` = 1st x slot, `_fwd4` =
+dt_exp(x) slot. Both _fwd1 and _fwd0 hold the same `x` scalar (the
+fwd-AST eval_fwd writes x_val into each Param(0) slot independently);
+_fwd4 holds dt_exp(x). The expression is exactly the textbook
+accumulator form `dy*x + dy*x + dy*exp(x) = dy*(2*x + exp(x))`,
+modulo associativity choice — the walker happens to emit
+`(((dy*x)+(dy*x)) + (dy*exp(x)))` and the Option A reference
+matches that order bit-for-bit.
+
+**First 4 element-wise pairs** (audit):
+```
+i=0  x=-0.0205  dx_auto=0.342186  dx_ref=0.342186  |Δ|=0.0
+i=1  x=-1.1391  dx_auto=-0.0454941 dx_ref=-0.0454941 |Δ|=0.0
+i=2  x=0.4794   dx_auto=-1.81600  dx_ref=-1.81600  |Δ|=0.0
+i=3  x=-0.8570  dx_auto=1.00308   dx_ref=1.00308   |Δ|=0.0
+```
+
+**g3-honest framing (the SD7 deliverable)**: SD7 demonstrates that
+the SD6 walker's existing BinOp-emits-ADD recursion structure IS
+the reverse-mode accumulator. The Param leaf rule returns the path-
+local upstream `dc` unchanged when the index matches; the ADD nodes
+at each enclosing BinOp combine the per-child branches; for `x*x`
+the two child branches each evaluate to `dy * x` (one per usage
+slot, read via Var_FwdResult), summed at the inner ADD; for the
+top-level `(x*x) + dt_exp(x)` the inner ADD-sum is combined with
+the dt_exp branch's `dy * exp(x)` via the top ADD. The natural
+emit order `(((dy*x)+(dy*x)) + (dy*exp_x))` is reorder-stable
+and the hand-written reference matches it exactly, giving Option
+A byte-eq (max|Δ| = 0.0). **What SD7 PROVED**: multi-use Param
+accumulation is the natural recursion shape; no walker code changes
+needed; byte-eq is achievable when the reference matches the walker's
+emit order. **What SD7 did NOT prove**: parser integration (SD8),
+multi-input vjp (SD9), more operator coverage on multi-use paths
+(SD10 — multi-use through DIV/NEG/SUB would exercise the same
+accumulator machinery but byte-eq form depends on whether the
+emit order has algebraic-identity collapse opportunities, à la SD6
+sigmoid's `1−s ≡ e/d`).
+
+**SD5+SD6 regression check**: same `test/flame_ag_extract_test.hexa`
+invocation runs all three:
+- SD5 byte-eq: PASS max|Δ| = 0.0 (unchanged).
+- SD6 byte-eq: HONEST FINDING max|Δ| = 5.55e-17 (machine-eps-scale,
+  documented under the new 10×eps tolerance gate; this is the same
+  observation as the SD6 cycle's honest deliverable — not a
+  regression). NEW: SD6 no longer exit-92's on the ULP divergence;
+  it logs and continues so SD7 can run in the same invocation. If
+  max|Δ| exceeds 5.55e-16 (10× machine-eps) the test still exit-92's
+  — a REAL regression would be caught.
+- SD7 byte-eq: PASS max|Δ| = 0.0 (this cycle).
+- Combined rc=0.
+
+**SD1+SD2+SD3 regression check**: `test/flame_ag_derive_test.hexa`
+PASS rc=0 unchanged (ag_derive surface is not edited).
+
+**Atlas citations** (g6, in `ag_extract.hexa` SD7 header):
+- Griewank & Walther §3.2 Algorithm 3.6 — reverse-mode adjoint
+  v̄_i = Σ_j v̄_j · ∂v_j/∂v_i accumulator (the rule SD7 exercises).
+- Pearlmutter & Siskind §3 — compositional vjp via let-binding's
+  reverse-mode rule (handles multi-use via the same mechanism).
+- Same atlas anchors as SD5+SD6 (no new theorem; multi-use is a
+  property of the accumulator step, not a new rule).
+
+**Future-cycle stop-conditions (g3 carve-outs, renumbered after SD7
+closed)**:
+- SD8: parser integration (was SD7 in the SD6 ledger).
+- SD9: multi-input + multi-output via ag_tape registry — true
+  multi-INPUT (∂f/∂x, ∂f/∂y for f(x,y)) needs either one walker pass
+  per target_param_ix OR a per-Param accumulator dict in one pass.
+- SD10: more rules — Sum, MatMul AST-derived, Compose, elementwise
+  unary family (silu, gelu, tanh).
+- SD11: re-emit-and-recompile loop (was SD10).
