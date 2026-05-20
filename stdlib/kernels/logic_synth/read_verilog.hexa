@@ -1348,6 +1348,125 @@ fn _rv_parse_function(st_in: PState) -> RvFuncStep {
     }
 }
 
+// CLEAN-ROOM: collapse a cascaded-if function body into a single
+// return-expr statement using nested ternary (sub-step #4f). The
+// recognised shape is
+//   if ( c1 ) fname = e1 ; else if ( c2 ) fname = e2 ; …
+//                                       else fname = eN ;
+// which collapses to
+//   fname = ( c1 ) ? ( e1 ) : ( ( c2 ) ? ( e2 ) : … ( eN ) ) ;
+// Any deviation (no terminal else, missing fname assignments, no `if`
+// at the head) returns an empty list — caller falls back to the
+// original body. Pre-`if` statements (e.g. local `reg` decls or
+// blocking assignments to local vars) are NOT handled — those need
+// proper function-body proc-pass, separate sub-step.
+fn _rv_collapse_cascaded_if_body(body: [str], fname: str) -> [str] {
+    let mut conds: [[str]] = []
+    let mut exprs: [[str]] = []
+    let mut else_expr: [str] = []
+    let mut i = 0
+    let n = len(body)
+    let mut ok = 1
+    let mut done = 0
+    while i < n && ok == 1 && done == 0 {
+        if body[i] != "if" { ok = 0; break }
+        i = i + 1
+        if i >= n || body[i] != "(" { ok = 0; break }
+        i = i + 1
+        let mut cond: [str] = []
+        let mut depth = 1
+        while i < n && depth > 0 {
+            if body[i] == "(" {
+                depth = depth + 1
+                cond = cond.push(body[i])
+                i = i + 1
+                continue
+            }
+            if body[i] == ")" {
+                depth = depth - 1
+                if depth == 0 { i = i + 1; break }
+                cond = cond.push(body[i])
+                i = i + 1
+                continue
+            }
+            cond = cond.push(body[i])
+            i = i + 1
+        }
+        if depth != 0 { ok = 0; break }
+        if i >= n || body[i] != fname { ok = 0; break }
+        i = i + 1
+        if i >= n || body[i] != "=" { ok = 0; break }
+        i = i + 1
+        let mut expr: [str] = []
+        while i < n && body[i] != ";" {
+            expr = expr.push(body[i])
+            i = i + 1
+        }
+        if i >= n { ok = 0; break }
+        i = i + 1
+        conds = conds.push(cond)
+        exprs = exprs.push(expr)
+        if i >= n || body[i] != "else" { ok = 0; break }
+        i = i + 1
+        if i < n && body[i] == "if" {
+            continue
+        }
+        if i >= n || body[i] != fname { ok = 0; break }
+        i = i + 1
+        if i >= n || body[i] != "=" { ok = 0; break }
+        i = i + 1
+        while i < n && body[i] != ";" {
+            else_expr = else_expr.push(body[i])
+            i = i + 1
+        }
+        if i >= n { ok = 0; break }
+        i = i + 1
+        done = 1
+    }
+    if ok == 0 || done == 0 { return [] }
+    if i < n { return [] }
+    let mut result: [str] = else_expr
+    let mut k = len(conds) - 1
+    while k >= 0 {
+        let mut nr: [str] = []
+        nr = nr.push("(")
+        let mut ci = 0
+        while ci < len(conds[k]) {
+            nr = nr.push(conds[k][ci])
+            ci = ci + 1
+        }
+        nr = nr.push(")")
+        nr = nr.push("?")
+        nr = nr.push("(")
+        let mut xi = 0
+        while xi < len(exprs[k]) {
+            nr = nr.push(exprs[k][xi])
+            xi = xi + 1
+        }
+        nr = nr.push(")")
+        nr = nr.push(":")
+        nr = nr.push("(")
+        let mut ri = 0
+        while ri < len(result) {
+            nr = nr.push(result[ri])
+            ri = ri + 1
+        }
+        nr = nr.push(")")
+        result = nr
+        k = k - 1
+    }
+    let mut out: [str] = []
+    out = out.push(fname)
+    out = out.push("=")
+    let mut oi = 0
+    while oi < len(result) {
+        out = out.push(result[oi])
+        oi = oi + 1
+    }
+    out = out.push(";")
+    return out
+}
+
 // CLEAN-ROOM: token-level inlining of function calls inside the
 // remaining module body. Handles the minimal shape:
 //   call site:  `func_name ( arg1_toks , arg2_toks , … )`
@@ -1405,18 +1524,29 @@ fn _rv_inline_func_calls(toks_in: [str], funcs: [VFunc]) -> [str] {
             }
             if depth != 0 { ok = 0 }
             let vf = funcs[fidx]
-            if ok == 1 && len(args) == len(vf.args) && len(vf.body) >= 4 {
-                if vf.body[0] != vf.name { ok = 0 }
-                if ok == 1 && vf.body[1] != "=" { ok = 0 }
-                if ok == 1 && vf.body[len(vf.body) - 1] != ";" { ok = 0 }
+            // Try collapsing cascaded-if function body into a single
+            // return-expr with nested ternary (sub-step #4f). If the
+            // collapse succeeds, use the collapsed body for the
+            // remaining shape checks + substitution.
+            let collapsed = _rv_collapse_cascaded_if_body(vf.body, vf.name)
+            let mut body_use: [str] = []
+            if len(collapsed) > 0 {
+                body_use = collapsed
+            } else {
+                body_use = vf.body
+            }
+            if ok == 1 && len(args) == len(vf.args) && len(body_use) >= 4 {
+                if body_use[0] != vf.name { ok = 0 }
+                if ok == 1 && body_use[1] != "=" { ok = 0 }
+                if ok == 1 && body_use[len(body_use) - 1] != ";" { ok = 0 }
             } else {
                 ok = 0
             }
             if ok == 1 {
                 let mut expr_toks: [str] = []
                 let mut ei = 2
-                while ei < len(vf.body) - 1 {
-                    let et = vf.body[ei]
+                while ei < len(body_use) - 1 {
+                    let et = body_use[ei]
                     let mut sub = 0 - 1
                     let mut sk = 0
                     while sk < len(vf.args) {
@@ -3292,6 +3422,23 @@ fn main() {
         let _m44 = _r44.design.modules[0]
         if rtlil_count_cells_of_type(_m44, "$mux") != 1 {
             println("FAIL T44a mux_count got " + str(rtlil_count_cells_of_type(_m44, "$mux")))
+            fails = fails + 1
+        }
+    }
+
+    // T45 — cascaded-if function body collapse (sub-step #4f). Body
+    //       `if (a) f = b; else if (c) f = d; else f = e;` collapses
+    //       to `f = (a) ? (b) : ((c) ? (d) : (e));` and then inlines
+    //       at the call site as 2 nested $mux cells.
+    total = total + 1
+    let _v45 = "module fci ( input a , input b , input c , input d , input e , output z ) ; function [ 0 : 0 ] f ( input p , input q , input r , input s , input t ) ; if ( p ) f = q ; else if ( r ) f = s ; else f = t ; endfunction assign z = f ( a , b , c , d , e ) ; endmodule"
+    let _r45 = read_verilog(_v45)
+    if _r45.ok != 1 {
+        println("FAIL T45 cascaded_if_collapse: " + _r45.message); fails = fails + 1
+    } else {
+        let _m45 = _r45.design.modules[0]
+        if rtlil_count_cells_of_type(_m45, "$mux") != 2 {
+            println("FAIL T45a mux_count got " + str(rtlil_count_cells_of_type(_m45, "$mux")))
             fails = fails + 1
         }
     }
