@@ -3070,7 +3070,8 @@ HexaVal hexa_array_free(HexaVal arr) {
     return hexa_void();
 }
 
-// take(n): first n elements (or entire array if n ≥ len).
+// take(n) / drop(n). Step-3 cycle 24 port (float-only fast path).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_take(HexaVal arr, HexaVal nv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3083,8 +3084,6 @@ HexaVal hexa_array_take(HexaVal arr, HexaVal nv) {
     }
     return out;
 }
-
-// drop(n): skip first n elements, return remainder.
 HexaVal hexa_array_drop(HexaVal arr, HexaVal nv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3096,6 +3095,35 @@ HexaVal hexa_array_drop(HexaVal arr, HexaVal nv) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_take_float(HexaVal arr, HexaVal n);
+extern HexaVal rt_array_drop_float(HexaVal arr, HexaVal n);
+HexaVal hexa_array_take(HexaVal arr, HexaVal nv) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
+    if (_arr_all_float(arr)) return rt_array_take_float(arr, hexa_int(n));
+    int64_t len = HX_ARR_LEN(arr);
+    int64_t k = n < len ? n : len;
+    if (k < 0) k = 0;
+    for (int64_t i = 0; i < k; i++) {
+        out = hexa_array_push(out, HX_ARR_ITEMS(arr)[i]);
+    }
+    return out;
+}
+HexaVal hexa_array_drop(HexaVal arr, HexaVal nv) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
+    if (_arr_all_float(arr)) return rt_array_drop_float(arr, hexa_int(n));
+    int64_t len = HX_ARR_LEN(arr);
+    int64_t start = n < 0 ? 0 : (n > len ? len : n);
+    for (int64_t i = start; i < len; i++) {
+        out = hexa_array_push(out, HX_ARR_ITEMS(arr)[i]);
+    }
+    return out;
+}
+#endif
 
 // zip(other): pairs [a_i, b_i] up to min(len(a), len(b)).
 // Matches interpreter at hexa_full.hexa:15258-15270.

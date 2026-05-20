@@ -104,6 +104,37 @@ pub fn rt_max_float(a: float, b: float) -> float {
     return b
 }
 
+// Step 3 cycle 24 — array take/drop (float copy slices). Same dispatch
+// pattern as cycle 22-23 (C wrapper does _arr_all_float scan, falls back
+// to polymorphic path for mixed arrays).
+pub fn rt_array_take_float(arr: [float], n: int) -> [float] {
+    let mut out: [float] = []
+    let arr_len = len(arr)
+    let mut k = n
+    if k > arr_len { k = arr_len }
+    if k < 0 { k = 0 }
+    let mut i = 0
+    while i < k {
+        out = out.push(arr[i])
+        i = i + 1
+    }
+    return out
+}
+
+pub fn rt_array_drop_float(arr: [float], n: int) -> [float] {
+    let mut out: [float] = []
+    let arr_len = len(arr)
+    let mut start = n
+    if start < 0 { start = 0 }
+    if start > arr_len { start = arr_len }
+    let mut i = start
+    while i < arr_len {
+        out = out.push(arr[i])
+        i = i + 1
+    }
+    return out
+}
+
 // Step 3 cycle 23 — array sum/product (float reduce). Identical dispatch
 // pattern as min/max — C wrapper checks _arr_all_float, mixed arrays stay
 // on the polymorphic C path. Empty sum → 0.0, empty product → 1.0 (mult
