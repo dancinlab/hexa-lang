@@ -724,6 +724,19 @@ fn _nvptx_kind_to_ptx_ty(kind: string) -> string {
 // identically. Order: predicate-producing binops first, then arithmetic
 // binops (FP64), then known gpu intrinsic calls (u32), then default.
 fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
+    // RFC 068 P1 LANDED — explicit precision tag wins. When the dst Local
+    // carries an explicit precision annotation (e.g. ".f16" from a future
+    // HIR `@f16 a + b` source-level annotation, or a synthetic test
+    // fixture), it overrides the op-name rules below. Empty string (the
+    // default) means "no explicit annotation" and we fall through to the
+    // op-name / intrinsic rules. See
+    // `inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
+    // §3 P1.
+    if s.dst.precision == ".f16" { return NVPTX_RKIND_F16 }
+    if s.dst.precision == ".bf16" { return NVPTX_RKIND_BF16 }
+    if s.dst.precision == ".f32" { return NVPTX_RKIND_F32 }
+    // (no explicit .f64 case — that's the default fallback at the end.)
+
     if s.kind == STMT_BINOP {
         // Comparison binops (gpu/SPEC.md §4 — allowed inside @gpu_*)
         // produce a Boolean predicate; PTX represents these as a `.pred`
@@ -2375,7 +2388,8 @@ fn _nvptx_unroll_clone_stmt(s: Stmt, dsts: [i64], offset: i64) -> Stmt {
             id: s.dst.id + offset,
             arena_id: s.dst.arena_id,
             type_id: s.dst.type_id,
-            name_hint: s.dst.name_hint
+            name_hint: s.dst.name_hint,
+        precision: ""
         }
     }
     // Renumber operands referencing body-defined Locals.
@@ -2572,7 +2586,8 @@ pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
                         id: orig_id + clone_offset,
                         arena_id: L.arena_id,
                         type_id: L.type_id,
-                        name_hint: L.name_hint + "_u" + to_string(ic)
+                        name_hint: L.name_hint + "_u" + to_string(ic),
+        precision: ""
                     })
                     found = true
                 }
@@ -2585,7 +2600,8 @@ pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
                     id: orig_id + clone_offset,
                     arena_id: 1,
                     type_id: 0,
-                    name_hint: "unroll_clone"
+                    name_hint: "unroll_clone",
+        precision: ""
                 })
             }
             di = di + 1

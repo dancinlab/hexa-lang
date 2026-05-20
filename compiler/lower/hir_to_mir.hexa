@@ -60,7 +60,7 @@ pub let mut _lr_lambda_ctr: i64 = 0
 // ── Sentinels ────────────────────────────────────────────────
 
 fn _miss_local() -> Local {
-    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "" }
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "" }
 }
 
 fn _const_int_op(v: i64) -> Operand {
@@ -236,7 +236,8 @@ fn _fresh_local(ctx: LowerCtx, t: Type, hint: string) -> LowerCtx {
         id: id,
         arena_id: ctx.arena_root,
         type_id: _type_id_of(t),
-        name_hint: hint
+        name_hint: hint,
+        precision: ""
     }
     let mut locals = ctx.locals
     locals.push(l)
@@ -1212,7 +1213,8 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         id: gid,
                         arena_id: -999,
                         type_id: _type_id_of(e.children[1].typ),
-                        name_hint: lhs.text
+                        name_hint: lhs.text,
+        precision: ""
                     }
                     is_global = true
                 }
@@ -2612,7 +2614,8 @@ pub fn lower_hir(module: HModule) -> MModule {
                 id: len(globals),
                 arena_id: 0,
                 type_id: _type_id_of(itk.sig_return),
-                name_hint: nm
+                name_hint: nm,
+        precision: ""
             }
             globals.push(l)
         }

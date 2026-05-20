@@ -39,11 +39,11 @@ import "./nvptx_ptx_ops.hexa"
 //    self-contained for the test-harness pattern) ────────────────────
 
 fn _local(id: i64, name: string) -> Local {
-    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name }
+    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name, precision: "" }
 }
 
 fn _miss_local() -> Local {
-    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "" }
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "" }
 }
 
 fn _op_local(local_id: i64) -> Operand {
@@ -776,11 +776,12 @@ fn main() {
     let ok_wmma  = _test_wmma_scaffold()
     let ok_mp    = _test_mixed_precision_scaffold()
     let ok_fctN  = _test_unroll_factor_n()
+    let ok_pp    = _test_precision_propagate()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN {
-        println("PASS: RFC 055 P3b/c/P4/P4+ + RFC 069 P1 — 14/14 cases (incl. F-RFC069-FACTOR-N)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp {
+        println("PASS: RFC 055 + RFC 068 P1 + RFC 069 P1 — 15/15 cases (incl. F-RFC068-PRECISION-PROPAGATE + F-RFC069-FACTOR-N)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -797,9 +798,10 @@ fn main() {
         if !ok_wmma { println("      RFC 055 §12 P4+ WMMA scaffold FAILED") }
         if !ok_mp   { println("      RFC 055 §12 P4+ mixed-precision scaffold FAILED") }
         if !ok_fctN { println("      RFC 069 P1 F-RFC069-FACTOR-N FAILED") }
+        if !ok_pp   { println("      RFC 068 P1 F-RFC068-PRECISION-PROPAGATE FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -1340,4 +1342,102 @@ fn _wrap_single_mfn(mf: MFunc) -> MModule {
     let mut fns = []
     fns.push(mf)
     return MModule { file: "rfc069_factor_n_test.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 15 — RFC 068 P1 `F-RFC068-PRECISION-PROPAGATE` ───────────────
+//
+// Verifies that an explicit precision tag on a Local routes the classifier
+// to the matching NVPTX_RKIND_* bank BEFORE the op-name rules apply. The
+// HIR-side annotation propagation (`@f16 a + b` source grammar) is a
+// follow-on cycle — this case exercises only the codegen-side read of
+// `Local.precision`. Three sub-cases (.f16 / .bf16 / .f32) verify the
+// new banks are reachable via the explicit tag.
+//
+// Honest scope (`@D g3`): this is the data-plumbing falsifier for P1.
+// Real source-level `@f16` annotation grammar lands in a separate cycle.
+
+fn _local_with_precision(id: i64, name: string, precision: string) -> Local {
+    return Local {
+        id: id,
+        arena_id: 1,
+        type_id: 0,
+        name_hint: name,
+        precision: precision
+    }
+}
+
+fn _build_case_precision_propagate() -> MModule {
+    // Two params (a, b) + three precision-tagged temps. The dst Locals
+    // carry .f16/.bf16/.f32 tags; the op names are plain "add" so the
+    // classifier's op-name rules DON'T fire — only the precision tag
+    // does. This isolates the new behavior from #123's existing scaffold
+    // (which routes via op-name "add_f16" etc.).
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let t_f16  = _local_with_precision(3, "t_f16",  ".f16")
+    let t_bf16 = _local_with_precision(4, "t_bf16", ".bf16")
+    let t_f32  = _local_with_precision(5, "t_f32",  ".f32")
+
+    let mut s0 = []
+    // Op name "add" (NOT "add_f16") — proves the precision-tag short-
+    // circuit wins over the op-name rules.
+    s0.push(_stmt_binop(t_f16,  "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_binop(t_bf16, "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_binop(t_f32,  "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(t_f16)
+    locals.push(t_bf16)
+    locals.push(t_f32)
+
+    let mf = MFunc {
+        name: "precision_propagate_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_precision_propagate.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_precision_propagate() -> bool {
+    let mut ok = true
+    let mod_pp = _build_case_precision_propagate()
+    let ptx = codegen_emit_ptx_sm80(mod_pp)
+
+    println("")
+    println("── emitted PTX (RFC 068 P1 precision-tag propagate, sm_80) ──")
+    println(ptx)
+
+    // The 3 explicit-tag Locals should declare in their respective banks.
+    ok = _check(ok, ptx, ".reg .f16 %fh3",  "precision .f16 → .reg .f16 %fh3")
+    ok = _check(ok, ptx, ".reg .bf16 %fb4", "precision .bf16 → .reg .bf16 %fb4")
+    ok = _check(ok, ptx, ".reg .f32 %fs5",  "precision .f32 → .reg .f32 %fs5")
+    // CRITICAL: the op name "add" (without _f16/_bf16/_f32 suffix) MUST
+    // have produced these banks via the PRECISION-TAG path, NOT the
+    // op-name rules. If the classifier had fallen through to F64 default
+    // (op="add" → NVPTX_RKIND_F64), we'd see ".reg .f64 %fd<n>" instead.
+    // The substring guard:
+    if _contains(ptx, ".reg .f64 %fd3") || _contains(ptx, ".reg .f64 %fd4") || _contains(ptx, ".reg .f64 %fd5") {
+        println("  FAIL: precision-tagged Locals fell through to F64 default — classifier short-circuit broken")
+        ok = false
+    } else {
+        println("  ok: precision tag wins over op-name fallthrough (no .f64 for precision-tagged dsts)")
+    }
+    return ok
 }
