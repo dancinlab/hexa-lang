@@ -4552,3 +4552,30 @@ follow-ons (RFC 067-069 drafted).
 **files**: `inbox/patches/wilson-pi-port-6-gap-prereq.md` (status flip + audit table append) · `compiler/PLAN.md` (본 entry). binary promote 미포함 (cycle 외).
 
 cross-link: `inbox/patches/g7-hexa-ld-dlopen.md` (G7 SSOT, RFC-promoted 2026-05-20) · `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` (G7 RFC scaffold) · `inbox/patches/rfc020-enum-payload-variants.md` (G1 closure) · `proposals/rfc_022_async_model.md` (G2 spec) · `stdlib/cancel.hexa` (G3) · `stdlib/jsonl_pool.hexa` (G6) · `@D g_inbox_processing_loop` (AGENTS.tape §3 SOP).
+
+### 진행 로그 — RFC 070 G7-A.flag-wire LANDED (`hexa build --shared` clang `-fPIC -shared` pass-through, C-path only)
+
+Date: 2026-05-20 · Branch: `s1-step2-codegen-perf` worktree `agent-a47b2ee2bb1987958` · Shape A (flag wiring · zero falsifier coverage yet)
+
+Dup-race precheck (per `feedback_inbox_dup_race_precheck.md`): clean. `git log --all --oneline | grep -iE "rfc.?070|--shared|PIC|ET_DYN|MH_DYLIB"` returned only the two scaffold-promote commits (`abc50fa7`, `5c380081`). `git grep -nE "fpic|--shared|PIC|ET_DYN|MH_DYLIB" self/codegen_c2.hexa self/main.hexa` returned **zero hits** — codegen SSOT was untouched, no parallel session had raced this work.
+
+Sub-cycle scope (per RFC 070 §4.3 — explicitly **smallest behavior change**, NOT the full G7-A): wire `--shared` through the C-path build pipeline only.
+
+| change | location | one-liner |
+| --- | --- | --- |
+| flag parse | `self/main.hexa` build dispatch (≈L3362-L3396) | `bopts` array grows 4→5 (`bopts[4]=shared`); `--shared` recognizer flips to `"1"` |
+| signature | `self/main.hexa` `fn cmd_build(src, out, c_only, target, shared)` (L1781) | new 5th param `shared`, "0"/"1" string contract matching existing `c_only` |
+| clang pass-through | `self/main.hexa` C-path compile (≈L2120-L2127) | `_shared_cflags = "-fPIC -shared "` when `shared == "1"`, prepended to native-host clang invocation only |
+| mutex guards | `self/main.hexa` x3 | `HEXA_BACKEND=native` + `--shared`, `--c-only` + `--shared`, `--target=<triple>` + `--shared` all `exit(1)` with explicit message |
+| stat-test relax | `self/main.hexa` `tmp_chk` / `out_chk` | `-x` → `-e` when `shared == "1"` (shared libs ship 0644, not 0755) |
+| OK line | `self/main.hexa` | `--shared` builds print `OK: built <out> (shared library, RFC 070 G7-A flag-wiring only — F-A1/F-A2 next sub-cycle)` |
+| help text | `self/main.hexa::cmd_help` | adds `[--shared]` line under `build` with RFC pointer |
+| RFC status | `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` | status `drafted → g7-a-flag-wire-landed` · §4 phase table grows G7-A.flag-wire/G7-A.native/G7-A.falsify sub-rows · §4.3 follow-up section appended (the 6-bullet list) |
+
+**Parse-gate**: `/tmp/hexa-parse-rfc070 parse self/main.hexa` (hyphenated-basename hexa_real shim per `reference_hexa_basename_sigkill_workaround_2026_05_19.md`, `SIDECAR_NO_POOL=1` + `HEXA_LANG=...` env) → `OK: ... parses cleanly`.
+
+**Out of scope (g3-honest)**: F-A1 (PIC re-load at non-default base, real-limit = OS page granularity) + F-A2 (single-`T`/`D` `<plugin_id>_dispatch` via `nm`) are NOT measured. Today's `-shared` exports every public symbol — F-A2 may pass for trivial 1-fn sources by luck only, the SSOT does not enforce. Native-codegen PIC mode (compiler/codegen/{arm64_darwin,x86_64_linux}.hexa) is the parallel G7-A.native sub-cycle, refused-with-message here. No binary promote (per SOP step 7). `inbox/PATCHES.yaml` untouched. Cross-target PIC is gated on G7-A.cross. `compiler/codegen/` files are entirely unchanged.
+
+**files**: `self/main.hexa` (5 edit blocks · ≈40 net added lines including comments) · `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` (status + phase rows + §4.3) · `compiler/PLAN.md` (본 entry).
+
+cross-link: `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` · `inbox/patches/g7-hexa-ld-dlopen.md` (source patch, status remains `rfc-promoted`) · `@D g_inbox_processing_loop` Shape A · `@D g5` hexa-native-only (libc dlopen is pre-existing FFI consumer per RFC §2 audit; `--shared` widens but does not add).

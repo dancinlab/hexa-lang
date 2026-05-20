@@ -1,7 +1,8 @@
 # RFC 070 — `hexa_ld --shared` + runtime `dlopen` (fat .so single-symbol convention)
 
-> **status**: `drafted` (scaffold + RFC text · no behavior change · multi-cycle phased)
+> **status**: `g7-a-flag-wire-landed` (`hexa build --shared` parses + clang `-fPIC -shared` pass-through; F-A1/F-A2 falsifiers are the next measured sub-cycle)
 > **opened**: 2026-05-20 (promoted from `inbox/patches/g7-hexa-ld-dlopen.md`, opened 2026-05-10)
+> **G7-A flag wire**: 2026-05-20 (`self/main.hexa::cmd_build` + dispatch — flag-wiring only, zero falsifier coverage yet)
 > **owner**: hexa-lang compiler (`compiler/codegen/` · `compiler/link/hexa_ld.hexa` · `self/runtime.{c,h}`)
 > **consumer demand**: wilson in-process plugins (hot-path provider/tool/hook/view). Out-of-scope reuse: anima/nexus, generally any consumer that wants "drop a `.so`, no relink".
 > **priority**: ★ (have-it-is-nice, blocking-none) — without G7 wilson stays on G8-incremental + busybox-multi-call paths (option (d) of the source patch).
@@ -79,6 +80,9 @@ Manifest section name (proposed): ELF `.hexa.cap` / Mach-O `__HEXA,__cap` (16-by
 | phase | deliverable | depends on | falsifier |
 |-------|-------------|-----------|-----------|
 | G7-A  | `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` accepts `--shared` mode flag; PIC code paths; hidden-visibility default; only `<plugin_id>_dispatch` exported | none | F-A1, F-A2 |
+| G7-A.flag-wire ✅ | `hexa build --shared <plugin>.hexa -o <plugin>.so` parses on the C path → clang `-fPIC -shared` pass-through (LANDED 2026-05-20, `self/main.hexa::cmd_build`). HEXA_BACKEND=native + `--c-only` + `--target=<triple>` paths refuse `--shared` rather than silently producing the wrong artifact. Hidden-visibility + 1-symbol export NOT yet enforced (`-shared` alone exports every public symbol — that gap is what F-A2 measures). | none | none yet — wiring only |
+| G7-A.native | `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` PIC mode (MIR→LIR with PC-relative addressing + GOT-routed externs). Falsifiers F-A1/F-A2 run on the native-codegen output. | G7-A.flag-wire | F-A1, F-A2 (native) |
+| G7-A.falsify | F-A1 (PIC re-load at non-default base) + F-A2 (single-`T`/`D` `<plugin_id>_dispatch` symbol via `nm`) measured on the C-path `.so`/`.dylib` produced by G7-A.flag-wire. | G7-A.flag-wire | F-A1, F-A2 |
 | G7-B  | `compiler/link/hexa_ld.hexa --shared` emits `ET_DYN`/`MH_DYLIB` with 1-symbol dynsym/export-trie | G7-A | F-B1, F-B2, F-B3 |
 | G7-C  | `self/runtime.{c,h}` adds `hexa_dlopen/dlsym/dlclose/dlerror`; `stdlib/dynlink.hexa` ships | G7-B (or independent if consuming pre-built `.so` only) | F-C1, F-C2 |
 | G7-D  | `.so` capability manifest section + ABI stamp + host gate | G7-C | F-D1, F-D2 |
@@ -107,6 +111,20 @@ This commit is **Shape B scaffold** per `@D g_inbox_processing_loop`:
 4. 1-line entry in `compiler/PLAN.md` `## 진행 로그` pointing here.
 
 G7-A/B/C/D each require their own measured cycle. The first measured cycle (G7-A) is the smallest: codegen flag plumbing + F-A1/F-A2 gates. It is **not in this commit**.
+
+### 4.3 G7-A.flag-wire follow-up (2026-05-20, **the smallest behavior change**)
+
+After 4.2 (the scaffold-only RFC promote commit `abc50fa7`), the very next sub-cycle landed the **flag wiring** on the C path only. Concretely:
+1. `self/main.hexa::cmd_build` takes a new 5th arg `shared` (default `"0"`).
+2. The `build` dispatch grew a `--shared` recognizer that flips `bopts[4]` to `"1"`.
+3. The C-path `clang -O2 ...` invocation is prefixed with `-fPIC -shared` when `shared == "1"`.
+4. Three mutual-exclusion gates raise `error: ... exit(1)` rather than silently misbehaving: `HEXA_BACKEND=native + --shared`, `--c-only + --shared`, `--target=<triple> + --shared`.
+5. `cmd_help` documents `--shared` with the RFC pointer.
+6. `tmp_chk` / `out_chk` relax `-x` to `-e` for the shared path (shared libs ship 0644, not 0755).
+
+The **hidden-visibility default** + **1-symbol export** narrowing from §3.B is NOT done here. The `-shared` clang invocation today exports every public symbol, which is what F-A2 will quantify in the next sub-cycle (it MAY pass for a trivial 1-fn `.hexa` source by luck — but the SSOT does not enforce single-symbol export yet). All falsifiers (F-A1, F-A2, F-B*, F-C*, F-D*) remain unmeasured.
+
+This sub-cycle is honest **flag wiring only** per `@D g3` (no over-claim). The `OK: built` line for `--shared` builds prints the explicit caveat `(shared library, RFC 070 G7-A flag-wiring only — F-A1/F-A2 next sub-cycle)`.
 
 ## 5. Open questions (verbatim from source patch §7 + 2026-05-20 status)
 
