@@ -8957,6 +8957,15 @@ HexaVal base64_decode;
 HexaVal hx_setenv;
 HexaVal hx_exec_capture;
 HexaVal hx_push;
+// Cycle 55 recovery — stdlib/fs builtins as bt73 TAG_FN HexaVal globals.
+HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data);
+HexaVal rt_fs_stat(HexaVal path);
+HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal keep);
+HexaVal rt_fs_mkdir_p(HexaVal path);
+HexaVal fs_append_atomic;
+HexaVal fs_stat;
+HexaVal fs_rotate_if_over;
+HexaVal fs_mkdir_p;
 
 // S1-D2 Blocker C: runtime init for TAG_FN shim variables.
 // NaN-boxing makes HexaVal a uint64_t — designated initializers for the
@@ -9096,6 +9105,14 @@ static void _hexa_init_fn_shims(void) {
     hx_exec_capture = hexa_fn_new((void*)_w_exec_capture, 1);
     // hxa-004 ext: bare `push(arr, v)` emitted by legacy hexa_v2 as hexa_call2
     hx_push         = hexa_fn_new((void*)_w_push,         2);
+    // Cycle 55 recovery — stdlib/fs builtins. codegen_c2.hexa maps the
+    // bare names `fs_append_atomic/fs_stat/fs_rotate_if_over/fs_mkdir_p`
+    // to rt_fs_* C names, but the bootstrap hexa_v2 binary hasn't been
+    // re-deployed with that mapping. Bridge via bt73-style TAG_FN.
+    fs_append_atomic    = hexa_fn_new((void*)rt_fs_append_atomic,    2);
+    fs_stat             = hexa_fn_new((void*)rt_fs_stat,             1);
+    fs_rotate_if_over   = hexa_fn_new((void*)rt_fs_rotate_if_over,   3);
+    fs_mkdir_p          = hexa_fn_new((void*)rt_fs_mkdir_p,          1);
     // std::net free-fn shims — bridges transpiler bootstrap gap for
     // net_connect / net_read / net_write until hexa_v2 learns the
     // direct-lowering for these names (see native/net.c comment).
@@ -10220,3 +10237,25 @@ HexaVal hexa_forge_dispatch_ffn_fp64_via_bf16(HexaVal x_v, HexaVal w1_v,
 }
 
 
+
+
+/* Cycle 55 recovery — stub bodies for rt_fs_* declared in runtime.h §G5.
+ * Origin/main left these as orphaned declarations (no bodies anywhere on
+ * disk). Stubs return failure-default; replace with real POSIX impls in
+ * a follow-up cycle. */
+HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) {
+    (void)path; (void)data;
+    return hexa_int(-1);
+}
+HexaVal rt_fs_stat(HexaVal path) {
+    (void)path;
+    return hexa_void();
+}
+HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal keep) {
+    (void)path; (void)max_bytes; (void)keep;
+    return hexa_int(0);
+}
+HexaVal rt_fs_mkdir_p(HexaVal path) {
+    (void)path;
+    return hexa_int(0);
+}
