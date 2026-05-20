@@ -72,9 +72,15 @@ struct AbcMapResult {
 // CLEAN-ROOM: locate the ABC binary on PATH. Returns "" when absent —
 // caller MUST treat that as fail-loud (D18 forbids silent fallback).
 fn abc_binary_path() -> str {
-    // `command -v` follows PATH and exits 0 with the resolved path,
-    // exits 1 silent on absent. We capture stdout and trim.
-    let raw = exec("command -v abc 2>/dev/null || true")
+    // `which abc` (NOT `command -v abc 2>/dev/null || true`) — the
+    // shell-meta-free form is required so hexa_exec's
+    // posix_spawnp-based fast path can fire when
+    // HEXA_EXEC_NO_SHELL=1; the meta-bearing form falls into popen
+    // which has a broken-pipe bug in the current runtime build
+    // (see inbox/notes/2026-05-21-hexa-exec-broken-pipe.md).
+    // Returns "" silently if `which` exits non-zero (abc absent on
+    // PATH) — same semantic as the prior `command -v … || true`.
+    let raw = exec("which abc")
     let s = to_string(raw).trim()
     return s
 }
