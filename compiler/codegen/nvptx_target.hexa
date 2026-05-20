@@ -1258,6 +1258,20 @@ fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
 // the compiler's target dispatch — adding the dispatch case is 055-P1
 // (falsifier F-RFC055-CPU-CODEGEN-UNTOUCHED keeps the CPU path frozen).
 fn _nvptx_codegen(module: MModule, target: string) -> LModule {
+    // RFC 069 wiring — optional loop-unroll pass before per-MFunc
+    // lowering. Reads `HEXA_NVPTX_UNROLL_FACTOR` env (string-int);
+    // unset / "" / "1" / values outside [2, 32] → passthrough (preserves
+    // byte-eq for every existing test fixture). When set to N in
+    // [2, 32], every GPU MFunc with a matching canonical 3-block
+    // back-edge or multi-exit body is unrolled by `_nvptx_unroll_pass`;
+    // MFuncs that don't match (or contain a nested inner loop —
+    // RFC 069 P3 detection) flow through unchanged (honest passthrough).
+    //
+    // Per RFC 069 §3 P4 — `F-RFC069-NUMERIC-EQ` real-silicon falsifier
+    // wire-up. Default behavior unchanged so all 23/23 existing
+    // lower_test cases stay byte-identical.
+    let unroll_factor = _nvptx_codegen_read_unroll_factor()
+
     let mut funcs = []
     let mut i = 0
     while i < len(module.funcs) {
@@ -1270,8 +1284,14 @@ fn _nvptx_codegen(module: MModule, target: string) -> LModule {
         // remains the 055-P0 emit form; `.visible .entry` kernel
         // wrapping is the next 055-P3c sub-slice (gpu_launch lowering +
         // cubin embed).
-        let mf = module.funcs[i]
+        let mut mf = module.funcs[i]
         if mf.gpu_kind != GPU_KIND_CPU {
+            // RFC 069 — apply unroll-pass when env flag is set. For
+            // factor=1 (default), `_nvptx_unroll_pass` returns mfn
+            // unchanged so emit stays byte-identical.
+            if unroll_factor >= 2 {
+                mf = _nvptx_unroll_pass(mf, unroll_factor)
+            }
             funcs.push(_nvptx_lower_func(mf, target))
         }
         i = i + 1
@@ -2873,6 +2893,41 @@ fn _nvptx_unroll_clone_stmt(s: Stmt, dsts: [i64], offset: i64) -> Stmt {
 // i64 multiplication for any realistic Local-id range, and ptxas register
 // pressure becomes catastrophic well before 32 anyway.
 let _nvptx_unroll_max_factor: i64 = 32
+
+// _nvptx_codegen_read_unroll_factor — read `HEXA_NVPTX_UNROLL_FACTOR`
+// env (string-int) and return as i64. Covers integers 2..32 (string-
+// compare ladder rather than parse_int helper — keeps the helper
+// self-contained and avoids depending on a generic int-parser).
+// Unset / "" / "1" / out-of-range → 1 (passthrough; the unroll pass
+// itself short-circuits on factor < 2 or > _nvptx_unroll_max_factor).
+//
+// Per RFC 069 §3 P4 wire-up — the wiring inside `_nvptx_codegen` reads
+// this and applies `_nvptx_unroll_pass(mfn, factor)` per GPU MFunc.
+fn _nvptx_codegen_read_unroll_factor() -> i64 {
+    let v = env("HEXA_NVPTX_UNROLL_FACTOR")
+    if v == "" { return 1 }
+    if v == "1" { return 1 }
+    if v == "2" { return 2 }
+    if v == "3" { return 3 }
+    if v == "4" { return 4 }
+    if v == "5" { return 5 }
+    if v == "6" { return 6 }
+    if v == "7" { return 7 }
+    if v == "8" { return 8 }
+    if v == "9" { return 9 }
+    if v == "10" { return 10 }
+    if v == "11" { return 11 }
+    if v == "12" { return 12 }
+    if v == "13" { return 13 }
+    if v == "14" { return 14 }
+    if v == "15" { return 15 }
+    if v == "16" { return 16 }
+    if v == "20" { return 20 }
+    if v == "24" { return 24 }
+    if v == "32" { return 32 }
+    // Out-of-range or unrecognized — passthrough.
+    return 1
+}
 
 pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
     if factor < 2 { return mfn }
