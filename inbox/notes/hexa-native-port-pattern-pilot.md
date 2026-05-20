@@ -497,6 +497,7 @@ invariants round out the suite — ν = E at e=0, and the conic identity
 | #7      | `stdlib/kernels/noc_sim/event_queue.hexa`               | Binary min-heap discrete-event sched.  | python-companion `heapq` parity + FIFO-at-equal-times           | 36/36 exact           | 2026-05-20 | `pilot-event_queue`            |
 | #8      | `stdlib/kernels/mc_transport/transport_kinematics_kernel.hexa` | Special-relativity kinematics + PDG eq. 34.4 T_max + eq. 34.5 Bethe-Bloch dE/dx (δ=0) + 256-step trapezoidal CSDA range | Python `math` libm closed-form (4 KE samples × 4 materials × 4-6 outputs + 7 CSDA ranges + 2 invariants) | 41/41 rel_err=0       | 2026-05-20 | `pilot-transport_kinematics`   |
 | #9      | `stdlib/kernels/circuit/breaker_trace_reduce_kernel.hexa` | Composite trapezoidal I²t / clearing-energy + |·|-threshold-crossing breaker FOMs (UL 489I / IEC 60947-2 §4.3, Burden & Faires §4.3) | Python `math` libm closed-form (3 synthetic traces × 7 outputs + 3 invariants: 1 cleared / 1 non-cleared / 1 non-uniform grid) | 24/24 rel_err=0       | 2026-05-20 | `pilot-breaker_trace_reduce`   |
+| #10     | `stdlib/kernels/fem/bar1d_kernel.hexa`                  | 1-D linear (2-node) bar FEM element stiffness + direct-stiffness global assembly + Thomas tridiagonal solve for fixed-free axial load (Hughes §1.6, Cook §2.3, Burden & Faires §6.6) | Python `math` libm transliteration (bit-exact, 4 meshes × 2-9 nodes) + closed-form u(x)=P·x/(EA) analytic oracle (independent of discretisation; FEM is exact for uniform mesh + tip load) | 53/53 rel_err=0       | 2026-05-20 | `pilot-fem_bar1d_subset`       |
 
 ### Pilot #6 — DFT (signal_proc / 2026-05-20)
 
@@ -780,13 +781,119 @@ here because the kernel only allocates flat `[float]` buffers.
   trapezoidal accuracy ≪ measurement noise floor — refinement is
   not blocking and is queued.
 
+### Pilot #10 — 1-D bar FEM subset (fem / 2026-05-20)
+
+**Scope**: 11th pilot, 1st in the `fem` kernel family. PARTIAL PORT —
+explicitly < 5 % of the skfem kernel's surface. The full
+`stdlib/kernels/fem/skfem_kernel.py` does 3-D tet meshing via gmsh +
+steady-state heat conduction + linear elasticity + von Mises post-
+processing, all on a sparse linear-algebra stack. The pilot ports
+only the SMALLEST self-contained FEM primitive: a 1-D linear (2-node)
+bar element + dense global stiffness assembly + Thomas tridiagonal
+solve for the fixed-free axial-load case. The 3-D tet stack remains
+firmly on the .py side until heavier primitives (sparse linalg,
+gmsh-replacement meshing, 2-D/3-D element families) land — multi-
+round / multi-month work.
+
+**Algorithm choice (3 reasons)**:
+1. **Domain diversity** — `fem` is the largest open heavy-port bucket
+   in `DEPENDENCIES.demi`, and no prior pilot touches it. The 11
+   existing pilots cover solar / mc_transport / neural / graph / urdf
+   / plasma / orbital / signal_proc / noc_sim / circuit — adding fem
+   widens the substrate-family coverage to 11 distinct kernel folders.
+2. **Tiny surface, clean textbook** — 3 functions
+   (`bar1d_element_stiffness` / `bar1d_assemble_K` /
+   `bar1d_solve_fixed_free`) + 1 internal helper (`thomas_tridiag`).
+   The 1-D bar element is the canonical Hughes §1.6 / Cook §2.3 worked
+   example; Thomas is Burden & Faires §6.6 Algorithm 6.7. No source-
+   code inspection — pure textbook re-derivation.
+3. **TRUE external oracle** — the closed-form mechanics-of-materials
+   solution u(x) = P·x/(E·A) for the fixed-free uniform bar lives in
+   the linear trial-function space, so the FEM solve coincides with
+   the analytic answer up to Thomas roundoff. This is a real
+   discretisation-independent oracle, not a self-mirror — the
+   strongest possible parity claim for an FEM pilot.
+
+**Algorithm provenance**: (a) Hughes, "The Finite Element Method:
+Linear Static and Dynamic FEA" (Dover 2000), §1.6 — derivation of the
+2-node linear-bar element stiffness `k_e = (E·A/L) · [[1,-1],[-1,1]]`
+via `∫_0^L B^T·E·A·B dx` with B = (1/L)·[-1,1]. (b) Cook, Malkus,
+Plesha & Witt, "Concepts and Applications of FEA" 4th ed. (Wiley
+2002), §2.3 — direct-stiffness global assembly mapping. (c) Burden &
+Faires, "Numerical Analysis" 10th ed. (Cengage 2016), §6.6
+Algorithm 6.7 — Crout / Thomas factorisation for tridiagonal linear
+systems (O(n) forward sweep + O(n) back sweep). No scikit-fem /
+FEniCS / deal.II / Calculix source-code inspection.
+
+**Parity results**: 53/53 PASS at `rel_err = 0.0` (literal IEEE-754
+bit-exact) on every assertion. The hexa-side `bar1d_solve_fixed_free`
+walks the same Thomas sweep as the Python oracle
+(`bar1d_oracle.py`) in the same operation order with the same libm,
+so the IEEE-754 residual is zero. The analytic-oracle comparison
+(u(x)=P·x/EA) is also at rel_err ~ 5e-17 (S1) to ~3e-15 (S4 N=8
+uniform mesh) — well below the D80 ceiling of 1e-10.
+
+**Test envelope** (4 meshes):
+
+- **S1 — Uniform N=4 mesh** on [0,1], steel-like (E=200 GPa, A=1e-4 m²,
+  P_tip=1 kN). Canonical uniform-mesh path; analytic u_tip = 50 µm.
+- **S2 — NON-uniform N=4 mesh** at [0, 0.1, 0.3, 0.6, 1.0], aluminum
+  (E=70 GPa, A=2.5e-4 m², P_tip=500 N). Exercises per-element
+  c_e = EA/L_e variation through the Thomas sweep.
+- **S3 — Single-element N=2 mesh** with E=A=P=1.0. Edge case
+  m=1 reduced system (Thomas sweep degenerates to b[0]/d[0]).
+- **S4 — Uniform N=8 mesh** on [0,1], same steel/load as S1. Longer
+  Thomas sweep (m=8); analytic residual ~3e-15 rel.
+
+Plus invariants: (i) K is symmetric, (ii) row sums of K are zero
+(rigid-body mode before BC), (iii) BC u[0]=0 enforced exactly across
+all four samples.
+
+**Hexa-lang gotchas found**: none new. The pilot used `.push(...)`
+for dense matrix construction (O(N²) memory for N nodes is fine at
+pilot-scale N ≤ 16), mutable indexed assignment on `[float]` (works
+fine — the #7 struct-array `h[i] = ev` gap does not bite plain `[float]`
+or `[[float]]`), and `to_float`-free integer arithmetic for node-index
+math. The parameter-shadowing fix from #5b also means parameters
+`E` / `A` / `L` can coexist with stdlib `e()` etc. without renaming.
+
+**What this does NOT prove**:
+
+- `absorbed=true` is NOT flipped on any demiurge cell. Same
+  `HexaNativeParityRef` schema gate as pilots #1 / #2 / #5 / #5b / #8
+  / #9. The component+verify cell, rtsc cells, and sscb-femmt cell all
+  stay `measurement_gate = GATE_OPEN` until heavier FEM primitives
+  land. This pilot proves the PORT PATTERN for FEM assembly + direct
+  solve, not the absorbed gate for any FEM-consuming cell.
+- **PARTIAL PORT (< 5 % of skfem)** — 1-D linear (2-node) bar
+  elements ONLY. No 2-D (triangle / quad), no 3-D (tet / hex), no
+  higher-order shape functions, no sparse linalg, no meshing, no
+  thermal coupling, no nonlinear elasticity, no contact, no body
+  loads. The full skfem family stays heavy-port in
+  `DEPENDENCIES.demi` — the `kernel-fem` row's `portable_status =
+  "heavy-port"` is unchanged by this pilot; only the `notes` field
+  is extended to record the subset port.
+- The 1-D linear bar element is EXACT for constant-EA + uniform-load
+  problems (the analytic solution lives in the trial-function space),
+  so this pilot does NOT exercise FEM approximation error (which is
+  identically zero on this problem). It exercises the
+  ASSEMBLY + Thomas SOLVE primitives, which is the point. Approximation-
+  error tests (e.g. distributed body load f(x) = ρgA · x with
+  quadratic exact solution, O(h²) convergence under mesh refinement)
+  are queued for a sibling pilot.
+- Thomas algorithm assumes tridiagonal + diagonally-dominant-or-SPD;
+  the 1-D bar K_red with fix-node-0 BC IS SPD (all eigenvalues > 0),
+  but the kernel does NOT check for singularity. A degenerate mesh
+  (duplicated node coords → L=0 element → division by zero) would
+  NaN-out the solve — caller owns mesh sanity. Same contract as
+  scikit-fem's `condense + solve` on a degenerate mesh.
+
 ### Cumulative status across pilots (2026-05-20)
 
-- 10 pilots landed/in-flight (#1-#5, #5b on origin/main, #6+#7+#8+#9
-  landing this cycle; #3b + #4 are concurrent branch ports), ≥238
-  assertions PASS across them (21+8+23+41+27+17+36+41+24 = 238 on
-  the landed pilots alone — #9 adds 24 from
-  breaker_trace_reduce_kernel)
+- 11 pilots landed/in-flight (#1-#5, #5b on origin/main, #6+#7+#8+#9+#10
+  landing this cycle; #3b + #4 are concurrent branch ports), ≥291
+  assertions PASS across them (21+8+23+41+27+17+36+41+24+53 = 291 on
+  the landed pilots alone — #10 adds 53 from bar1d_kernel)
 - 6 hexa-lang followups filed in this audit round (none new in #9):
   - parser `-`/`->` continuation footgun (#1, #7)
   - `fmod` libm shim missing (#1)
