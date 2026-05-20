@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 // HEXA Native Compiler — link pass: hexa_ld v1.2 (Decision 7)
+=======
+// HEXA Native Compiler — link pass: hexa_ld v1.4 (Decision 7)
+>>>>>>> f242501e (harvest(rate-limited): D2 partial — hexa_ld.hexa edits (parse-gate PASS))
 //
 // @version 0.3.0
 // @capabilities [fs_read, fs_write, shell]
@@ -54,12 +58,61 @@
 //     `nm`, `dwarfdump` will still see an empty binary. Sufficient for
 //     LC_CODE_SIGNATURE acceptance + smoke testing.
 //
+<<<<<<< HEAD
 // OUT OF SCOPE / DELIBERATELY PUNTED (v1.3+):
 //   * Multiple input .o files / archive (.a) handling.
 //   * Relocation processing beyond the trivial case (R_X86_64_NONE,
 //     ARM64_RELOC_UNSIGNED-equivalent).
 //   * Dynamic linking (PT_INTERP/PT_DYNAMIC for ELF, LC_LOAD_DYLIB for
 //     Mach-O), PLT/GOT/TLS/IFUNC.
+=======
+// G7-B CAVEATS (v1.3 scaffold) — UPDATED FOR v1.4 IMPL:
+//   * v1.4 (2026-05-20, RFC 070 G7-B impl Part A): ELF path now emits
+//     PT_DYNAMIC + .dynsym + .dynstr + .hash + .dynamic section with
+//     ONE export symbol `<ident>_dispatch`. The DT_HASH/DT_SYMTAB/
+//     DT_STRTAB/DT_STRSZ/DT_SYMENT/DT_NULL chain is complete so
+//     `readelf -d` reports the dynamic entries and `readelf --dyn-syms`
+//     lists the single export. Three PT_LOAD segments (R+X for text,
+//     R+W for dynamic linkedit, the actual PT_DYNAMIC pointer). NOTE:
+//     PIC codegen + relocations are still G7-A's job — ld.so will
+//     still reject the .so at load time IF the .text contains absolute
+//     addresses. For a fn-pointer-table `<id>_dispatch` whose body is
+//     position-independent (RFC 070 §3.B "1-symbol fat .so convention"),
+//     this Part A is sufficient to be dlopen-loadable on Linux with
+//     PIC codegen. Until G7-A's --shared codegen lands, the .so loads
+//     only for trivial / hand-written PIC text. F-B1+F-B2 closed; the
+//     full runtime smoke is gated on G7-A.
+//   * Mach-O MH_DYLIB output (v1.3) still omits LC_ID_DYLIB,
+//     LC_DYLD_INFO_ONLY, LC_DYSYMTAB. v1.4 DEFERS Mach-O Part A — the
+//     LC_DYLD_INFO_ONLY rebase/binds/exports trie is structurally
+//     heavier and is its own sub-cycle. `dyld` will reject the .dylib
+//     at runtime; `otool -hv` and `file(1)` will correctly report
+//     `filetype DYLIB` / `Mach-O 64-bit dynamically linked shared
+//     library` — that closes F-B3 only at the header-format level.
+//     g3-honest: Mach-O Part A is the next sub-cycle.
+//   * No PIC codegen consumed yet — G7-A (codegen `--shared`) is a
+//     prerequisite for actually-loadable output. Until then, `.text`
+//     bytes have absolute relocations baked in by the static codegen
+//     path, so the kernel would map but the linker would mis-resolve.
+//   * The shared output keeps the same ad-hoc codesign blob shape as
+//     the executable path on Mach-O (so the kernel cdhash check would
+//     pass) but dyld validates a stricter signature for dylibs in
+//     SIP-enforced contexts; treat the .dylib as "header valid,
+//     runtime TBD".
+//   * `link_shared()` returns 0 on header emission success — it does
+//     NOT claim the artifact is loadable. The caller (wilson plugin
+//     loader) MUST gate runtime use behind a separate dlopen feature
+//     flag until G7-C/D land.
+//
+// OUT OF SCOPE / DELIBERATELY PUNTED (v1.5+, RFC 070 G7-C/D/E/F):
+//   * Multiple input .o files / archive (.a) handling.
+//   * Relocation processing beyond the trivial case (R_X86_64_NONE,
+//     ARM64_RELOC_UNSIGNED-equivalent).
+//   * Mach-O dynamic linking SECTIONS (LC_DYLD_INFO_ONLY export trie
+//     + LC_DYSYMTAB + LC_ID_DYLIB). v1.4 only ships the ELF Part A;
+//     Mach-O Part A is the next sub-cycle. PLT/GOT/TLS/IFUNC remain
+//     out of scope on both substrates.
+>>>>>>> f242501e (harvest(rate-limited): D2 partial — hexa_ld.hexa edits (parse-gate PASS))
 //   * Notarization, team identifiers, requirement blobs — ad-hoc only.
 //   * .rodata / .bss / .data — v1.x collapses everything to .text/__text.
 //   * DWARF line-info, symbol versioning, weak/strong, ICF.
@@ -70,8 +123,24 @@
 //
 // Public API:
 //   pub fn link(obj_path: string, out_path: string) -> int
+<<<<<<< HEAD
+=======
+//   pub fn link_shared(obj_path: string, out_path: string) -> int   // v1.3 hdr, v1.4 ELF Part A
+>>>>>>> f242501e (harvest(rate-limited): D2 partial — hexa_ld.hexa edits (parse-gate PASS))
 //   pub fn link_mach_o(obj_path: string, out_path: string) -> int
 //   pub fn system_ld_fallback(obj_path: string, out_path: string) -> int
+//   pub fn build_elf64_dyn_with_dynamic(text_bytes, ident) -> [int]  // v1.4, RFC 070 G7-B impl
+//
+// G8-C wire (v1.4, RFC 071 §G8-C measurement step):
+//   `link_shared()` honors `HEXA_LD_INCREMENTAL=1` env opt-in. When
+//   set, the input obj's SHA-256 key is looked up in the link cache
+//   (compiler/link/incr_cache.hexa) BEFORE emitting; on miss, the
+//   record is stored AFTER successful emit. The cache record currently
+//   captures key + text offset/length + exports_blob — the full output
+//   blob is NOT stored yet (RFC 071 §3.A `text_bytes_ref` is G8-C2
+//   deferred), so cache HIT does not yet skip the actual link work;
+//   the wire is a "cache-presence metric" only. Honest fast-path
+//   short-circuit lands when incr_cache surface gains a blob store.
 //
 // Returns 0 on success, non-zero on every failure path (so the caller
 // can flip to --linker=system without parsing error strings).
@@ -108,6 +177,7 @@
 // existing.
 
 import "../../stdlib/portable_fs.hexa"
+import "./incr_cache.hexa"
 
 // ── byte-buffer helpers (little-endian, x86_64) ─────────────────────
 
@@ -402,6 +472,393 @@ pub fn build_elf64_exec(text_bytes, entry_vaddr: int) {
     return out
 }
 
+<<<<<<< HEAD
+=======
+pub fn build_elf64_exec(text_bytes, entry_vaddr: int) {
+    return _build_elf64_image(text_bytes, entry_vaddr, false)
+}
+
+// RFC 070 G7-B: emit ET_DYN ELF64 image (shared-object header shape).
+// Scaffold only — see G7-B CAVEATS at top of file. ld.so will reject
+// the artifact at load time because PT_DYNAMIC + .dynsym are absent;
+// `readelf -h` / `file(1)` will however correctly identify it as
+// `Type: DYN (Shared object file)`, closing F-B1.
+pub fn build_elf64_dyn(text_bytes) {
+    return _build_elf64_image(text_bytes, 0, true)
+}
+
+// ── ASCII string -> byte helper (broad-coverage; covers any printable
+//   ASCII in an identifier or filename — used by the v1.4 dynamic
+//   section emitter for .dynstr names).
+fn _ascii_char_to_byte(c: string) -> int {
+    // Walk the ASCII tables and return the matching byte. Returns
+    // 0x3F ('?') for anything outside ASCII printable range, mirroring
+    // _read_cstr's loss-tolerant return on > 0x7F.
+    if c == " "  { return 0x20 }
+    if c == "_"  { return 0x5F }
+    if c == "."  { return 0x2E }
+    if c == "-"  { return 0x2D }
+    if c == "/"  { return 0x2F }
+    if c == "+"  { return 0x2B }
+    if c == ":"  { return 0x3A }
+    let mut k = 0
+    while k < 10 {
+        let digits = ["0","1","2","3","4","5","6","7","8","9"]
+        if c == digits[k] { return 0x30 + k }
+        k = k + 1
+    }
+    k = 0
+    while k < 26 {
+        let lower = ["a","b","c","d","e","f","g","h","i","j","k","l","m",
+                     "n","o","p","q","r","s","t","u","v","w","x","y","z"]
+        let upper = ["A","B","C","D","E","F","G","H","I","J","K","L","M",
+                     "N","O","P","Q","R","S","T","U","V","W","X","Y","Z"]
+        if c == lower[k] { return 0x61 + k }
+        if c == upper[k] { return 0x41 + k }
+        k = k + 1
+    }
+    return 0x3F  // '?' fallback
+}
+
+fn _push_ascii_str(buf, s: string) {
+    let cs = s.chars()
+    let n = len(cs)
+    let mut i = 0
+    while i < n {
+        _push_u8(buf, _ascii_char_to_byte(cs[i]))
+        i = i + 1
+    }
+}
+
+// ── ELF64 dynamic-section emitter (v1.4, RFC 070 G7-B impl Part A) ──
+//
+// Emits a loadable ET_DYN ELF64 image with a minimal-but-complete
+// dynamic linking layer:
+//   * PT_DYNAMIC program header pointing at .dynamic
+//   * Two PT_LOAD segments (R+X text page, R+W dynamic-data page)
+//   * .dynsym section: STN_UNDEF + 1 global FUNC export
+//   * .dynstr section: empty-string + "<ident>_dispatch" + "<ident>.so"
+//   * .hash section: 1-bucket SysV hash that always lands on index 1
+//   * .dynamic section: DT_HASH, DT_STRTAB, DT_SYMTAB, DT_STRSZ,
+//     DT_SYMENT, DT_SONAME, DT_NULL
+//
+// LAYOUT (page = 0x1000 = 4 KiB):
+//   file 0x0000  ELF header (64 B)
+//   file 0x0040  PT_LOAD R+X      (56 B, p_vaddr 0x0000, p_filesz/memsz
+//                                       = 0x1000 + text_size_aligned)
+//   file 0x0078  PT_LOAD R+W      (56 B, p_vaddr 0x2000 + page-aligned,
+//                                       p_filesz/memsz = dyn_blob_size)
+//   file 0x00B0  PT_DYNAMIC       (56 B, p_vaddr/p_offset = dyn_section_off
+//                                       within the R+W PT_LOAD)
+//   file 0x00E8  pad → 0x1000
+//   file 0x1000  .text bytes      (vaddr 0x1000)
+//   file 0x2000  .dynstr  .dynsym  .hash  .dynamic  (vaddr = file off,
+//                                       PIE-style identity mapping)
+//
+// Why same vaddr=fileoff: matches the loader expectation for the dyn
+// section's PT_LOAD chunk; the kernel mmaps file → vaddr at this
+// offset, and the dynamic linker walks DT_* by adding the load base.
+fn _sysv_hash(name: string) -> int {
+    // SysV ELF hash (gABI §4.5.1, page 86).
+    let cs = name.chars()
+    let n = len(cs)
+    let mut h = 0
+    let mut i = 0
+    while i < n {
+        let b = _ascii_char_to_byte(cs[i])
+        h = h * 16 + b
+        let g = h - (h / 0x10000000) * 0x10000000  // h & 0x0FFFFFFF
+        let g_top = h / 0x10000000                  // top 4 nibbles
+        // Strictly h & 0xF0000000 → bits 31..28. We approximate via
+        // h / 0x01000000 — only the high 4 bits matter for the XOR.
+        let g28 = h / 0x10000000
+        if g28 > 0 {
+            // h ^= (g28 << 24); then h &= 0x0FFFFFFF. The XOR-and-mask
+            // collapses to "drop the high nibble" because g28's bits
+            // [27..24] are guaranteed zero in the low part.
+            // Result: h = g (which is h & 0x0FFFFFFF).
+            h = g
+        }
+        i = i + 1
+    }
+    return h
+}
+
+// Emit the dyn-page payload (concatenated .dynstr + .dynsym + .hash +
+// .dynamic) starting at a known vaddr. Returns
+//   [bytes_array, dynamic_section_off, dynamic_section_size,
+//    dynsym_off, dynstr_off, hash_off, payload_size]
+// All offsets are file-offsets within the returned buffer (caller
+// adds the page base to get the absolute file/vaddr).
+fn _build_elf64_dyn_payload(ident: string) -> [int] {
+    let sym_name   = ident + "_dispatch"
+    let soname_val = ident + ".so"
+
+    // .dynstr: [NUL, sym_name, NUL, soname, NUL]
+    let mut dynstr = []
+    _push_u8(dynstr, 0)                              // STN_UNDEF name
+    let sym_name_off = len(dynstr)
+    _push_ascii_str(dynstr, sym_name)
+    _push_u8(dynstr, 0)
+    let soname_off = len(dynstr)
+    _push_ascii_str(dynstr, soname_val)
+    _push_u8(dynstr, 0)
+    let dynstr_size = len(dynstr)
+
+    // .dynsym: 2 entries × 24 B
+    //   [0] STN_UNDEF (all zero)
+    //   [1] global FUNC export `<ident>_dispatch`
+    //       st_info = (STB_GLOBAL=1 << 4) | STT_FUNC=2 = 0x12
+    //       st_other = STV_DEFAULT = 0
+    //       st_shndx = SHN_ABS = 0xFFF1 (we don't emit a real section
+    //                                    table; absolute keeps the
+    //                                    linker happy without one)
+    //       st_value = 0x1000 (the .text vaddr)
+    //       st_size  = text_size (filled in by caller via patch — we
+    //                              stub 0 here and the caller patches
+    //                              once it knows text_size)
+    let mut dynsym = []
+    let mut k = 0
+    while k < 24 {                                   // sym[0] = NULL
+        _push_u8(dynsym, 0)
+        k = k + 1
+    }
+    _push_u32le(dynsym, sym_name_off)                // st_name
+    _push_u8(dynsym, 0x12)                           // st_info
+    _push_u8(dynsym, 0)                              // st_other
+    _push_u16le(dynsym, 0xFFF1)                      // st_shndx = SHN_ABS
+    _push_u64le(dynsym, 0x1000)                      // st_value
+    _push_u64le(dynsym, 0)                           // st_size (caller patch)
+    let dynsym_size = len(dynsym)
+
+    // .hash: minimal 1-bucket form.
+    //   nbuckets=1, nchain=2, buckets=[1], chain=[0, 0]
+    //   Any name hashes to bucket 0 → chain[1] → symbol index 1 →
+    //   our export. chain[0] = 0 (STN_UNDEF terminator).
+    let mut hashs = []
+    _push_u32le(hashs, 1)                            // nbuckets
+    _push_u32le(hashs, 2)                            // nchain
+    _push_u32le(hashs, 1)                            // bucket[0] = sym idx 1
+    _push_u32le(hashs, 0)                            // chain[0]  = STN_UNDEF
+    _push_u32le(hashs, 0)                            // chain[1]  = terminator
+    let hash_size = len(hashs)
+
+    // Concatenate in order: dynstr | dynsym | hash | dynamic
+    // and remember each section's offset within the payload.
+    let dynstr_off  = 0
+    let dynsym_off  = dynstr_off + dynstr_size
+    let hash_off    = dynsym_off + dynsym_size
+    let dynamic_off = hash_off + hash_size
+
+    // .dynamic: 7 entries × 16 B (Elf64_Dyn = i64 d_tag, u64 d_val).
+    //   DT_HASH    (4)  -> hash_off  (vaddr/file off identity)
+    //   DT_STRTAB  (5)  -> dynstr_off
+    //   DT_SYMTAB  (6)  -> dynsym_off
+    //   DT_STRSZ   (10) -> dynstr_size
+    //   DT_SYMENT  (11) -> 24
+    //   DT_SONAME  (14) -> soname_off  (offset within .dynstr)
+    //   DT_NULL    (0)  -> 0  (terminator)
+    let mut dynamic = []
+    // Caller patches the offset entries with PAGE_BASE added when it
+    // knows the absolute vaddr. We emit the relative offsets here and
+    // tag them so the patch step (see below) is mechanical.
+    _push_u64le(dynamic, 4)
+    _push_u64le(dynamic, hash_off)                   // patched +base
+    _push_u64le(dynamic, 5)
+    _push_u64le(dynamic, dynstr_off)                 // patched +base
+    _push_u64le(dynamic, 6)
+    _push_u64le(dynamic, dynsym_off)                 // patched +base
+    _push_u64le(dynamic, 10)
+    _push_u64le(dynamic, dynstr_size)
+    _push_u64le(dynamic, 11)
+    _push_u64le(dynamic, 24)
+    _push_u64le(dynamic, 14)
+    _push_u64le(dynamic, soname_off)                 // patched +base
+    _push_u64le(dynamic, 0)
+    _push_u64le(dynamic, 0)
+    let dynamic_size = len(dynamic)
+
+    // Compose final payload.
+    let mut payload = []
+    let mut i = 0
+    while i < dynstr_size  { payload.push(dynstr[i]);  i = i + 1 }
+    i = 0
+    while i < dynsym_size  { payload.push(dynsym[i]);  i = i + 1 }
+    i = 0
+    while i < hash_size    { payload.push(hashs[i]);   i = i + 1 }
+    i = 0
+    while i < dynamic_size { payload.push(dynamic[i]); i = i + 1 }
+    let payload_size = len(payload)
+
+    // Return everything the caller needs to patch + emit PHs.
+    let info = []
+    info.push(payload_size)
+    info.push(dynamic_off)
+    info.push(dynamic_size)
+    info.push(dynsym_off)
+    info.push(dynstr_off)
+    info.push(hash_off)
+    info.push(dynstr_size)
+    info.push(soname_off)
+    // Stash the payload too — return as flattened array prefixed by
+    // header info. Caller reads info[0..7] then payload[8..].
+    let out = []
+    let mut j = 0
+    while j < 8 { out.push(info[j]); j = j + 1 }
+    j = 0
+    while j < payload_size {
+        out.push(payload[j])
+        j = j + 1
+    }
+    return out
+}
+
+// Patch a u64 little-endian field already written into `buf` at byte
+// offset `off`. Used by the dynamic-section emitter to add the page
+// base to the DT_HASH/DT_STRTAB/DT_SYMTAB/DT_SONAME offsets after the
+// payload's absolute vaddr is known.
+fn _patch_u64le_at(buf, off: int, v: int) {
+    let mut x = v
+    let mut i = 0
+    while i < 8 {
+        let byte = x - (x / 256) * 256
+        buf[off + i] = byte
+        x = x / 256
+        i = i + 1
+    }
+}
+
+// v1.4 RFC 070 G7-B ELF Part A emitter: full ET_DYN with dynamic
+// section. Returns the byte buffer ready to write to disk.
+pub fn build_elf64_dyn_with_dynamic(text_bytes, ident: string) {
+    let text_size = len(text_bytes)
+    // Align text up to the next page so the dyn page starts on its
+    // own R+W mapping. Page = 0x1000.
+    let mut text_padded = text_size
+    let rem = text_padded - (text_padded / 0x1000) * 0x1000
+    if rem != 0 { text_padded = text_padded + (0x1000 - rem) }
+
+    let text_fileoff = 0x1000
+    let text_vaddr   = 0x1000
+    let dyn_fileoff  = text_fileoff + text_padded
+    let dyn_vaddr    = text_vaddr   + text_padded
+
+    let info_and_payload = _build_elf64_dyn_payload(ident)
+    let payload_size = info_and_payload[0]
+    let dynamic_off  = info_and_payload[1]
+    let dynamic_size = info_and_payload[2]
+    let dynsym_off   = info_and_payload[3]
+    let dynstr_off   = info_and_payload[4]
+    let hash_off     = info_and_payload[5]
+    let dynstr_size  = info_and_payload[6]
+    let soname_off   = info_and_payload[7]
+
+    // Extract the payload bytes (8-byte info prefix stripped).
+    let mut payload = []
+    let mut i = 8
+    while i < 8 + payload_size {
+        payload.push(info_and_payload[i])
+        i = i + 1
+    }
+    // Patch DT_HASH/DT_STRTAB/DT_SYMTAB/DT_SONAME with absolute vaddrs.
+    // Each Elf64_Dyn entry is 16 B: 8 B d_tag + 8 B d_val. The d_val
+    // field starts at dynamic_off + entry_index*16 + 8.
+    //   entry 0 = DT_HASH    -> +base
+    //   entry 1 = DT_STRTAB  -> +base
+    //   entry 2 = DT_SYMTAB  -> +base
+    //   entry 5 = DT_SONAME  -> +dynstr_base (= base, since dynstr is
+    //                                          first in the payload)
+    let dyn_section_filebase = dyn_fileoff
+    let dyn_section_vaddr    = dyn_vaddr
+    _patch_u64le_at(payload, dynamic_off + 0 * 16 + 8, dyn_section_vaddr + hash_off)
+    _patch_u64le_at(payload, dynamic_off + 1 * 16 + 8, dyn_section_vaddr + dynstr_off)
+    _patch_u64le_at(payload, dynamic_off + 2 * 16 + 8, dyn_section_vaddr + dynsym_off)
+    _patch_u64le_at(payload, dynamic_off + 5 * 16 + 8, soname_off)  // DT_SONAME = strtab offset (relative), per gABI
+
+    // Patch the sym[1].st_size with the actual text_size (we stubbed 0
+    // in the builder). sym[1] starts at dynsym_off + 24; st_size sits
+    // at sym[1]+16 = dynsym_off+24+16 = dynsym_off+40.
+    _patch_u64le_at(payload, dynsym_off + 40, text_size)
+
+    // ── Compose the file ──
+    let mut out = []
+
+    // ELF header (64 B)
+    _push_u8(out, 0x7F)
+    _push_u8(out, 0x45)
+    _push_u8(out, 0x4C)
+    _push_u8(out, 0x46)
+    _push_u8(out, 2)                              // EI_CLASS = ELFCLASS64
+    _push_u8(out, 1)                              // EI_DATA  = ELFDATA2LSB
+    _push_u8(out, 1)                              // EI_VERSION = EV_CURRENT
+    _push_u8(out, 0)                              // EI_OSABI = SYSV
+    _push_u8(out, 0)                              // EI_ABIVERSION
+    let mut p = 0
+    while p < 7 { _push_u8(out, 0); p = p + 1 }   // EI_PAD
+    _push_u16le(out, 3)                           // e_type = ET_DYN
+    _push_u16le(out, 0x3E)                        // e_machine = EM_X86_64
+    _push_u32le(out, 1)                           // e_version
+    _push_u64le(out, 0)                           // e_entry (none for shared)
+    _push_u64le(out, 64)                          // e_phoff
+    _push_u64le(out, 0)                           // e_shoff (none)
+    _push_u32le(out, 0)                           // e_flags
+    _push_u16le(out, 64)                          // e_ehsize
+    _push_u16le(out, 56)                          // e_phentsize
+    _push_u16le(out, 3)                           // e_phnum = 3
+    _push_u16le(out, 0)                           // e_shentsize
+    _push_u16le(out, 0)                           // e_shnum
+    _push_u16le(out, 0)                           // e_shstrndx
+
+    // PH[0]: PT_LOAD R+X (covers ELF header + PHs + text page)
+    //   file [0, text_fileoff + text_padded) → vaddr [0, text_vaddr+text_padded)
+    let load1_filesz = text_fileoff + text_padded
+    _push_u32le(out, 1)                           // p_type = PT_LOAD
+    _push_u32le(out, 5)                           // p_flags = R | X
+    _push_u64le(out, 0)                           // p_offset
+    _push_u64le(out, 0)                           // p_vaddr
+    _push_u64le(out, 0)                           // p_paddr
+    _push_u64le(out, load1_filesz)                // p_filesz
+    _push_u64le(out, load1_filesz)                // p_memsz
+    _push_u64le(out, 0x1000)                      // p_align
+
+    // PH[1]: PT_LOAD R+W (covers .dynstr/.dynsym/.hash/.dynamic)
+    let load2_filesz = payload_size
+    _push_u32le(out, 1)                           // p_type = PT_LOAD
+    _push_u32le(out, 6)                           // p_flags = R | W
+    _push_u64le(out, dyn_fileoff)                 // p_offset
+    _push_u64le(out, dyn_vaddr)                   // p_vaddr
+    _push_u64le(out, dyn_vaddr)                   // p_paddr
+    _push_u64le(out, load2_filesz)                // p_filesz
+    _push_u64le(out, load2_filesz)                // p_memsz
+    _push_u64le(out, 0x1000)                      // p_align
+
+    // PH[2]: PT_DYNAMIC (points at .dynamic within the R+W PT_LOAD)
+    _push_u32le(out, 2)                           // p_type = PT_DYNAMIC
+    _push_u32le(out, 6)                           // p_flags = R | W
+    _push_u64le(out, dyn_fileoff + dynamic_off)   // p_offset
+    _push_u64le(out, dyn_vaddr   + dynamic_off)   // p_vaddr
+    _push_u64le(out, dyn_vaddr   + dynamic_off)   // p_paddr
+    _push_u64le(out, dynamic_size)                // p_filesz
+    _push_u64le(out, dynamic_size)                // p_memsz
+    _push_u64le(out, 8)                           // p_align
+
+    // pad to text fileoff
+    while len(out) < text_fileoff { _push_u8(out, 0) }
+
+    // .text bytes
+    i = 0
+    while i < text_size { out.push(text_bytes[i]); i = i + 1 }
+    // pad text out to next page boundary
+    while len(out) < dyn_fileoff { _push_u8(out, 0) }
+
+    // .dynstr | .dynsym | .hash | .dynamic
+    i = 0
+    while i < payload_size { out.push(payload[i]); i = i + 1 }
+
+    return out
+}
+
+>>>>>>> f242501e (harvest(rate-limited): D2 partial — hexa_ld.hexa edits (parse-gate PASS))
 // ── extract a slice [off, off+size) from an int-array byte buffer ──
 
 fn _slice_bytes(buf, off: int, size: int) {
