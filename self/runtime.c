@@ -3428,7 +3428,12 @@ HexaVal hexa_math_min(HexaVal a, HexaVal b) { return rt_min_float(a, b); }
 // log-gamma function used by Beta-Binomial conjugate posteriors throughout
 // the hexa-bio Bayesian audit suite (14 callsites in _python_bridge/module).
 // isnan/isinf/isfinite mirror C99 classifiers; emit hexa boolean.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_lgamma(HexaVal x)   { return hexa_float(lgamma(HX_FLOAT(x))); }
+#else
+extern HexaVal rt_lgamma(HexaVal x);
+HexaVal hexa_math_lgamma(HexaVal x)   { return rt_lgamma(hexa_float(HX_FLOAT(x))); }
+#endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_isnan(HexaVal x)    { return hexa_bool(isnan(HX_FLOAT(x)) ? 1 : 0); }
 HexaVal hexa_math_isinf(HexaVal x)    { return hexa_bool(isinf(HX_FLOAT(x)) ? 1 : 0); }

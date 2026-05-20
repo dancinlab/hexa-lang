@@ -50,6 +50,41 @@ pub fn rt_log10(x: float) -> float {
     return rt_log(x) / LN10
 }
 
+// Step 3 cycle 14 — log gamma via Stirling series with shift.
+// Stirling: log Γ(z) ≈ (z-0.5)log(z) - z + 0.5*log(2π) + Σ B_{2k}/(2k(2k-1)z^{2k-1})
+// = (z-0.5)log(z) - z + 0.918938533204673 +
+//   1/(12z) - 1/(360z^3) + 1/(1260z^5) - 1/(1680z^7) + 1/(1188z^9)
+// Series accurate for z >= 7; shift up via Γ(z)=Γ(z+1)/z so we always
+// evaluate at z' >= 7. Returns log of the resulting Γ.
+// Reflection (Γ(z)Γ(1-z)=π/sin(πz)) handles z<=0; conservative 1e308
+// at non-positive integer poles.
+pub fn rt_lgamma(z: float) -> float {
+    let LOG_SQRT_2PI = 0.9189385332046727
+    let PI = 3.141592653589793
+    if z <= 0.0 {
+        let zi = z as int
+        if (zi as float) == z { return 1e308 }
+        let sinpz = rt_sin(PI * z)
+        if sinpz == 0.0 { return 1e308 }
+        let abss = if sinpz < 0.0 { 0.0 - sinpz } else { sinpz }
+        return rt_log(PI / abss) - rt_lgamma(1.0 - z)
+    }
+    let mut x = z
+    let mut shift = 0.0
+    while x < 7.0 {
+        shift = shift + rt_log(x)
+        x = x + 1.0
+    }
+    let inv = 1.0 / x
+    let inv2 = inv * inv
+    let series = inv * (1.0 / 12.0)
+                - inv * inv2 * (1.0 / 360.0)
+                + inv * inv2 * inv2 * (1.0 / 1260.0)
+                - inv * inv2 * inv2 * inv2 * (1.0 / 1680.0)
+                + inv * inv2 * inv2 * inv2 * inv2 * (1.0 / 1188.0)
+    return (x - 0.5) * rt_log(x) - x + LOG_SQRT_2PI + series - shift
+}
+
 // Step 3 cycle 11 — float power. Composes rt_exp + rt_log to remove the
 // last libm pow() dependency in self/runtime{,_core}.c.
 //   pow(b, e) = exp(e * log(b))  when b > 0
