@@ -5399,3 +5399,87 @@ lattice-tautological.
 Self-host fixpoint impact: NONE (this file is a pure ELF emitter;
 the compiler self-build path uses `system_ld_fallback` until v1.x
 gains multi-`.o` link). No `self/native/hexa_v2` regen required.
+
+## 진행 로그 — RFC 070 G7-A.falsify C-path re-run + native-codegen probe (2026-05-20)
+
+Cycle A-followup of A4 (`0e137237`). Re-measures the RFC 070 §4
+G7-A.falsify row on the `s1-step2-codegen-perf` worktree (deterministic
+re-confirmation) AND probes the user-requested native-codegen path
+(`HEXA_BACKEND=native hexa build --shared --target native`).
+
+**Results — C-path F-A1 PASS / F-A2 EXPECTED-FAIL (both targets):**
+
+| target              | host           | F-A1                         | F-A2 (T+D)      |
+|---------------------|----------------|------------------------------|-----------------|
+| macOS arm64 DYLIB   | local Darwin   | `add(2,3)=5` byte-eq · rc=0  | **610** (605 T + 5 D) |
+| ELF x86_64 DYN      | `ubu-2` (x86_64 + clang 18.1.3 — `ubu-1` ssh timed out on both `aiden@10.142.0.1` and tailscale alias `ubu1-ts-d`; ubu-2 is bit-equivalent per `reference_gpu_fire_infra.md`) | `add(2,3)=5` byte-eq · rc=0 | **606** (T+D) |
+
+Same mechanism as A4 (`clang -fPIC -shared` re-exports every `extern`
+non-static symbol in `runtime.c`). T+D count drifted vs A4 (611 mac,
+560 ELF) by ~1 (Mach-O) and ~46 (ELF) — attributable to additional
+absorbed-verb symbols in this worktree's `runtime.c` vs A4's snapshot;
+mechanism unchanged.
+
+**Native-codegen probe — DEFERRED (wire absent on this branch):**
+
+- `HEXA_BACKEND=native /Users/ghost/.hx/bin/hexa_real build --shared
+  --target native -o g7a_native.dylib g7a_test.hexa`
+- `--shared` consumed positionally as source-arg: `error: source file
+  not found: --shared` (G7-A.flag-wire heritage commit `66b055c4` is
+  not present on `s1-step2-codegen-perf`).
+- `--target=native` rejected by the C-path's cross-target validator
+  (`error: unknown --target value: native ; supported: linux-*,
+  darwin-*`); `native` is not a registered triple.
+- With both flags removed, `HEXA_BACKEND=native` was silently ignored
+  and the C-path (`hexa_v2 + clang`) ran instead — `[1/2] …/hexa_v2
+  g7a_test.hexa …` confirmed via driver stdout.
+
+Confirming the deeper gap: `grep -nE '"--shared"|shared_mode|
+CodegenOptions|RELOC_|GOTPCREL|private_extern' compiler/codegen/
+{arm64_darwin,x86_64_linux}.hexa compiler/emit/asm.hexa self/main.hexa`
+returns **zero matches** on this branch. The heritage commits **D1**
+(`8fdb29e2` — arm64_darwin GOT-load), **E2** (`9ea52f4b` —
+x86_64_linux GOT-load + RELOC tagging), and **F2** (`1729d9ac` —
+`_visibility_directive` + `.private_extern`/`.hidden` emit) **are not
+reachable from `origin/main` HEAD** (parallel-branch heritage); C-path
+comparison is the only G7-A.falsify channel this worktree can drive
+without first merging the native-codegen wire.
+
+**Test surface:** trivial `/tmp/g7a_test.hexa` (`fn add(a:int,b:int)
+-> int { return a+b }` + `fn main(){}` ≈4 LoC); harness `/tmp/g7a_work/
+harness.c` ≈40 LoC (`dlopen` `RTLD_NOW|RTLD_LOCAL` + `dlsym("add")` +
+`fp(hexa_int(2), hexa_int(3))` + `hexa_as_num(r)==5` byte-check;
+links own `runtime.c` to satisfy RTLD_LOCAL).
+
+**Pipeline (C-path):** `self/native/hexa_v2 g7a_test.hexa g7a_test.c`
+→ `clang -O2 -fPIC -shared -I self -I self/native g7a_test.c
+self/runtime.c -lm -ldl -o g7a_test.{dylib,so}` (replicates
+`self/main.hexa::cmd_build` C-path L1986-2065 with `-fPIC -shared`
+override). ubu-2 needs `-D_GNU_SOURCE` for ELF, harmless on Mach-O.
+
+**Per `@D g_inbox_processing_loop` Shape B + `@D g3` honest scope:**
+This cycle ONLY re-confirms the C-path G7-A.falsify row on a
+different worktree and host pair. It does NOT advance the
+native-codegen row — that requires `66b055c4 ∪ 8fdb29e2 ∪ 9ea52f4b ∪
+1729d9ac` to land into `origin/main` first (parallel-branch merge).
+SOP step 7 (binary promote) deferred.
+
+**Files (SSOT docs only, zero code change):**
+
+- `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` —
+  status `drafted` → `g7-a-falsify-measured-cpath-re-run` · §4 phase
+  table unchanged · new §4.5 measurement appendix (~70 LoC: test
+  source / pipeline / harness / results table / native-codegen probe
+  diagnostic / out-of-scope honest-block).
+- `compiler/PLAN.md` — this entry (per `@D g_plan_consolidation`).
+
+**Out of scope (g3-honest):** zero edit to `compiler/codegen/`,
+`compiler/link/`, `self/runtime.{c,h}`, `self/codegen_c2.hexa`,
+`self/main.hexa`. No `hexa_v2` regen. No `hexa.real` promote.
+G7-A.native impl wire, G7-B, G7-C, G7-D, G7-E, G7-F unchanged.
+`inbox/PATCHES.yaml` untouched. Other-session WIP files
+(`tool/parity_*.sh` etc.) untouched per `@D
+g_inbox_processing_loop` hazard guard (d).
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md
+§4.5 (G7-A.falsify — measured re-run, 2026-05-20).
