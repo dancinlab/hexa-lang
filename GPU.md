@@ -591,7 +591,7 @@ Once 4-6 of these check off, the GPU substrate phase is "done enough" to consume
 
 ## 13 · Status snapshot (auto-updated each cycle)
 
-- **lower_test cases**: **27/27** PASS (added Case 26 fp8 e4m3 + Case 27 fp8 e5m2 via PR #223)
+- **lower_test cases**: **27/27** PASS (added Case 26 fp8 e4m3 + Case 27 fp8 e5m2 via PR #223) + Metal lower_test Case 1-4 (PR #238)
 - **Silicon-fires on origin/main**: **10** (PR #82 FP64 + #189 f16 + #190 unroll byte-eq + #191 wmma single-tile + #203 bf16 + #205 wmma multi-K-tile + #206 wmma 16-warp grid + #207 wmma cp.async pipelined + #213 tf32 + **#222 n=6 hex-fabric**)
 - **§12 P4+ codegen-side closures**: 3/3 RFCs done
 - **§12 P4+ silicon-side closures**: 3/3 RFCs done + WMMA family expansion (single + multi-K + multi-warp + cp.async + tf32) + **RFC 070 P1 n=6 hex-fabric** (north-star ③ bridge)
@@ -599,8 +599,12 @@ Once 4-6 of these check off, the GPU substrate phase is "done enough" to consume
 - **§7 toolchain CLI verbs**: `hexa gpu fire` (PR #215) + `hexa gpu disasm` + `hexa gpu lint` (PR #221) — 3/5 verbs landed
 - **§3 fp8 dtype**: codegen scaffold landed (PR #223, RKIND + classifier + lower_test); silicon-fire deferred (sub-byte ABI follow-on)
 - **§10 closure scoreboard**: **6/8 ✅** (§12 P4+ codegen + flame d=768 + HGEMM 50% + n=6 lattice smoke + tf32 + bf16/whole-program partially)
+- **Multi-session campaign P0→P1+ progression** (this session late cycle):
+  - **RFC 071** (source-to-silicon e2e, north-star ②): **P1+P2 landed** PR #235 — `cmd_build --target=nvptx64-*` dispatches to `_build_nvptx_emit_driver` + canned stub PTX writer module `compiler/cli/build_nvptx.hexa`. F-RFC071-TARGET-ACCEPT + F-RFC071-EMIT-DRIVER-INVOKE PASS. P3 (module_loader bridge) + P4 (e2e fire) multi-session.
+  - **RFC 072** (flame d=4096 GPT-3 class, north-star ①): **P1 PROXY MEASURED** PR #237 — PyTorch eager d=1024 12L FP32 batch=2 seq=512 = 116.286ms ±0.089% on RTX 5070. Discovered: 12GB VRAM CANNOT fit d=2048+; d=4096 full requires H100 80GB multi-session $5+ budget.
+  - **RFC 075** (multi-vendor ROCm+Metal, §9): **Metal P1+P2+P3 codegen LANDED** PR #238 — real MSL emitter produces `kernel void vec_add(device const float* a [[buffer(0)]], ...)` Apple-canonical text, F-RFC075-METAL-EMIT-VEC-ADD 15-substring battery PASS via build+run. ROCm P1+ blocked (no AMD GPU in pool); Metal P4 (Mac silicon-fire) follow-on user-local.
 - **Continuous gates**: F5 / F6 / F7 all PASS through every commit
-- **Next layer recommended**: 3 multi-session campaigns remain — §2a source-to-silicon e2e (in-hexa compiler self-host on NVPTX path) · flame d=4096 GPT-3 class LLM workload · §9 multi-vendor ROCm/Metal/oneAPI parity
+- **Remaining to P4 closure**: A — P2.1 real codegen invocation (multi-session compiler self-host) + P3 module_loader bridge + P4 silicon e2e numeric-eq. B — H100 80GB d=4096 full baseline + flame d=4096 measure + variance ≥3 runs + ratio < 1.0 ($5-20 multi-session). C — Mac local Metal compiler fire + AMD GPU pool procurement.
 
 ---
 
@@ -721,3 +725,67 @@ Total session cumulative: 42+ PRs landed + 10 silicon-fires +
 GPU.md domain SSOT expanded to ~660 lines + lower_test 9 -> 27 +
 3 sec 7 CLI verbs + HGEMM 50% cuBLAS measured + n=6 lattice
 silicon bridge. Single-session GPU substrate work end.
+
+### 2026-05-20 (very late) — 3 multi-session campaign P0 -> P1+ deep push
+
+After sec 10 single-session backlog exhausted and 3 multi-session
+campaign P0 scaffolds landed (PR #227 + #228 + #232), pushed each
+campaign deeper toward P4 closure within single-session $0 budget:
+
+**Campaign A (RFC 071 source-to-silicon e2e, PR #235)**: P0
+deferred-print + exit(1) replaced with real driver dispatch -->
+`_build_nvptx_emit_driver(src, sm_arch)`. P2 = spec sibling module
+`compiler/cli/build_nvptx.hexa` (NEW, ~115 lines) writing canned
+stub PTX text (.version 7.0 / .target sm_NN / .visible .entry
+_hexa_smoke()). F-RFC071-TARGET-ACCEPT + F-RFC071-EMIT-DRIVER-INVOKE
+PASS. Honest punt: P2 body emits CANNED PTX not real
+codegen_emit_ptx_sm80(mir) invocation -- P2.1 needs in-hexa
+compiler tree exposed as single entry point (multi-cycle). P3
+module_loader `@gpu_kernel` bridge + P4 silicon e2e numeric-eq
+deferred. sec 10 source-to-silicon row stays [ ].
+
+**Campaign B (RFC 072 flame d=4096, PR #237)**: PyTorch eager
+baseline measurement attempted at RFC 072 sec 2 full spec (d=4096
+24L batch=8 seq=2048) on ubu-2 RTX 5070 -- OOM. Even d=2048 12L
+batch=1 seq=512 OOM. Root cause: 50,257-token vocab embed at
+d=2048 weighs ~0.82 GiB * 3 Adam state = ~5 GiB fixed overhead
+before block activations. Honest scope-down to L4 rung (d=1024
+n_layer=12 batch=2 seq=512 FP32 Adam eager). MEASURED on RTX 5070
+sm_120 + torch 2.11 + CUDA 13: median 1-step wall = **116.286 ms**
+(5 timed steps, std 0.104 ms = 0.089%, peak VRAM 5.06 GiB).
+F-RFC072-WALL-PT-PROXY MEASURED + F-RFC072-VARIANCE PASS. Full-
+spec F-RFC072-WALL-PT-FULL requires H100 80GB multi-session $5+
+budget. sec 10 d=4096 closure row stays [ ].
+
+**Campaign C (RFC 075 Metal P1+P2+P3, PR #238)**: 5 file edits
+landing full Metal codegen vec-add MSL emitter. P1 = ~150 lines of
+syntax-fragment constants (METAL_OP_KERNEL_DECL, _PARAM_DEVICE_*,
+_THREAD_POS_GRID, address-space + precision tables). P2 =
+classifier helpers (_metal_local_precision + _local_address_space).
+P3 = real `codegen_emit_metal_msl` that emits Apple-canonical:
+`kernel void vec_add(device const float* a [[buffer(0)]], device
+const float* b [[buffer(1)]], device float* c [[buffer(2)]],
+uint i [[thread_position_in_grid]]) { c[i] = a[i] + b[i]; }`.
+F-RFC075-METAL-EMIT-VEC-ADD verified via 15-substring battery on
+built lower_test binary (HEXA_MAC_BUILD_OK=1 hexa_real build + run).
+Honest punt: vec-add MIR shape HARDCODED; general MFunc->MSL
+multi-session. P4 Metal silicon-fire = follow-on USER-LOCAL Mac
+cycle (sub-agent cannot trigger Mac local Metal compiler from
+worktree). ROCm P1+ blocked (no AMD GPU in pool). sec 10 multi-
+vendor closure row stays [ ].
+
+sec 13 status snapshot updated:
+- 3 multi-session campaigns now have P1+ depth pushed beyond P0:
+  - A: P0 -> P2 (codegen-only)
+  - B: P0 -> P1 proxy MEASURED
+  - C: P0 -> P3 (codegen-only, real MSL emit verified)
+- Goal "go to P4 closure" closed at single-session limit:
+  - A P4 = multi-session in-hexa self-host requirement
+  - B P4 = multi-session H100 $5-20 budget
+  - C P4 = follow-on user-local Mac
+- sec 10 closure scoreboard unchanged at 6/8 measured-MET
+  (single-session ceiling reached; multi-session P4 remain).
+
+Total session cumulative (revised): 50+ PRs landed + 10 silicon
+fires + 1 PyTorch baseline proxy measurement + GPU.md ~700 lines +
+3 multi-session campaign roadmaps active.

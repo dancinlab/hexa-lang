@@ -838,6 +838,170 @@ pub fn ag_extract_emit_program_x_dy(arena: int, bwd_root: int, fn_name: string) 
     return bwd_src + main_src
 }
 
+// ─── SD12: multi-input compile-and-run emit ────────────────────────────
+// `ag_extract_emit_expr_xy(arena, node)` — variant of `emit_expr` that
+// resolves a `Var_FwdResult(fid)` REFERENCING A PARAM directly back to
+// that Param's identifier ("x" for Param(0), "y" for Param(1)).
+//
+// Why this is sound for SD12's scope (bilinear MUL `f(x, y) = x * y`):
+// the reverse walker's MUL rule (ag_extract_reverse_walk_v2 §MUL) builds
+// `b_cached = mk_var_fwdresult(a)` and `a_cached = mk_var_fwdresult(b)`
+// where `a` and `b` are the MUL's children. For the bilinear fwd those
+// children are Param(0) and Param(1) DIRECTLY — so every Var_FwdResult
+// emitted by the SD9 bwd points to a Param leaf. The fwd-cache value
+// for a Param leaf is, by `ag_extract_eval_fwd_multi`, exactly the
+// argv-supplied float (no arithmetic intervenes). Therefore replacing
+// `_fwd<param_node_id>` with the argv-bound identifier yields IDENTICAL
+// IEEE-754 trajectory — the compiled binary executes the same scalar
+// expression the in-process `interpret_v2_multi` walker evaluates.
+//
+// Sub-AST graphs whose Var_FwdResult points to a NON-Param node (SD13+
+// scope: sigmoid, sigmoid-div, multi-use intermediates — all use the
+// `_fwd<id>` symbol that names a precomputed intermediate) fall back
+// to the SD11 `_fwd<id>` lexeme, leaving them as a clearly visible
+// compile-time-undefined-variable error rather than silently producing
+// wrong gradients. SD13+ will materialise the fwd-cache pre-call inside
+// `fn main()` to close those shapes.
+//
+// Atlas cite: @cite Griewank-Walther §3.2 "Reverse Mode" — the bwd AST
+// node `a_cached = b` follows directly from the MUL VJP rule
+// `da = dc · b`; SD12 emits that `b` by resolving the symbolic
+// fwd-cache reference back to its Param identifier.
+pub fn ag_extract_emit_expr_xy(arena: int, node: int) -> string {
+    let k = ag_extract_kind(arena, node)
+    if k == ag_extract_k_var_fwdresult() {
+        let fid = ag_extract_fwdresult_id(arena, node)
+        let target_k = ag_extract_kind(arena, fid)
+        if target_k == ag_extract_k_param() {
+            // The fwd-cache value of a Param leaf equals the Param's
+            // argv-supplied scalar verbatim (eval_fwd_multi's Param
+            // branch writes `param_vals[ix]` into fwd_cache[node] then
+            // returns it). Emitting the identifier directly preserves
+            // byte-eq with interpret_v2_multi.
+            let ix = ag_extract_param_ix(arena, fid)
+            if ix == 0 { return "x" }
+            if ix == 1 { return "y" }
+            return "p" + to_string(ix)
+        }
+        // SD13+ scope: fwd-cache references to non-Param intermediates
+        // need an emitted pre-call materialisation. SD12 punts via the
+        // SD11 `_fwd<id>` lexeme (kept identical so any accidental SD13
+        // overlap shows up as an obvious compile error, not silent
+        // miscompile).
+        return "_fwd" + to_string(fid)
+    }
+    if k == ag_extract_k_param() {
+        let ix = ag_extract_param_ix(arena, node)
+        if ix == 0 { return "x" }
+        if ix == 1 { return "y" }
+        return "p" + to_string(ix)
+    }
+    if k == ag_extract_k_const() {
+        let v = ag_extract_const_value(arena, node)
+        return float_to_string(v)
+    }
+    if k == ag_extract_k_var_upstream() {
+        return "dy"
+    }
+    if k == ag_extract_k_binop_add() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return "(" + ag_extract_emit_expr_xy(arena, l) + " + " + ag_extract_emit_expr_xy(arena, r) + ")"
+    }
+    if k == ag_extract_k_binop_sub() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return "(" + ag_extract_emit_expr_xy(arena, l) + " - " + ag_extract_emit_expr_xy(arena, r) + ")"
+    }
+    if k == ag_extract_k_binop_mul() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return "(" + ag_extract_emit_expr_xy(arena, l) + " * " + ag_extract_emit_expr_xy(arena, r) + ")"
+    }
+    if k == ag_extract_k_binop_div() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return "(" + ag_extract_emit_expr_xy(arena, l) + " / " + ag_extract_emit_expr_xy(arena, r) + ")"
+    }
+    if k == ag_extract_k_binop_neg() {
+        let l = ag_extract_child(arena, node, 0)
+        return "(0.0 - " + ag_extract_emit_expr_xy(arena, l) + ")"
+    }
+    if k == ag_extract_k_binop_gt() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return "(" + ag_extract_emit_expr_xy(arena, l) + " > " + ag_extract_emit_expr_xy(arena, r) + ")"
+    }
+    if k == ag_extract_k_ifelse() {
+        let c = ag_extract_child(arena, node, 0)
+        let t_br = ag_extract_child(arena, node, 1)
+        let e_br = ag_extract_child(arena, node, 2)
+        return "(if " + ag_extract_emit_expr_xy(arena, c)
+             + " { " + ag_extract_emit_expr_xy(arena, t_br)
+             + " } else { " + ag_extract_emit_expr_xy(arena, e_br) + " })"
+    }
+    if k == ag_extract_k_call_dtexp() {
+        let l = ag_extract_child(arena, node, 0)
+        return "dt_exp(" + ag_extract_emit_expr_xy(arena, l) + ")"
+    }
+    return "/* unsupported kind " + to_string(k) + " */"
+}
+
+// SD12: emit a STANDALONE-COMPILABLE program for a per-Param bwd of a
+// 2-input fwd `f(x, y)`. Mirrors `ag_extract_emit_program_x_dy` (SD11)
+// but reads THREE floats from argv (x · y · dy), calls a 3-arg bwd fn,
+// and emits one shortest-roundtrip line via `json_stringify`. Used by
+// the SD12 harness to compile both `f_x_bwd_auto` and `f_y_bwd_auto`
+// derived from the bilinear MUL fwd, then exec each binary 32× and
+// three-way byte-eq the output against the in-process interpret walker
+// and the hand reference.
+//
+// Honest scope (SD12, g3): for `f(x, y) = x * y`, the SD9 reverse_walk_v2
+// MUL rule produces a bwd AST containing ONLY Var_FwdResult nodes that
+// target Params — `emit_expr_xy` resolves these to their identifiers.
+// Other fwds (sigmoid, sigmoid-div, multi-use) require fwd-cache
+// materialisation INSIDE the emitted main(); that is SD13+ work.
+//
+// Atlas cite: @cite Griewank-Walther §3.2 elementary-vjp emit (multi-input
+// extension is the natural generalisation: the reverse walker stays the
+// same, the emit step gains a 3-arg argv reader; the bwd AST already
+// reads `x`, `y`, `dy` as named leaves; SD11's round-trip lemma carries
+// over verbatim).
+//
+// Round-trip invariant for byte-eq (binary64 IEEE-754):
+//   compiled_binary(json_stringify(x), json_stringify(y), json_stringify(dy))
+//     .parse_first_line_as_float()
+//   ≡  ag_extract_interpret_v2_multi(arena, bwd_root, [x, y], dy, fwd_cache)
+//   ≡  hand_reference(x, y, dy)
+// where `hand_reference(x, y, dy) = dy * y + 0.0` for df/dx and
+// `0.0 + dy * x` for df/dy (the Option-A reorder-match the SD9 manual
+// uses; both columns flow through identical IEEE-754 ops).
+pub fn ag_extract_emit_program_xy_dy(arena: int, bwd_root: int, fn_name: string) -> string {
+    let mut bwd_src = "pub fn " + fn_name + "(x: float, y: float, dy: float) -> float {\n"
+    bwd_src = bwd_src + "    return " + ag_extract_emit_expr_xy(arena, bwd_root) + "\n"
+    bwd_src = bwd_src + "}\n"
+    let mut main_src = ""
+    main_src = main_src + "\n"
+    main_src = main_src + "fn main() {\n"
+    main_src = main_src + "    let argv = args()\n"
+    main_src = main_src + "    // argv layout when invoked directly: [bin, x_repr, y_repr, dy_repr]\n"
+    main_src = main_src + "    if len(argv) < 4 {\n"
+    main_src = main_src + "        println(\"usage: <bin> <x> <y> <dy>\")\n"
+    main_src = main_src + "        exit(2)\n"
+    main_src = main_src + "    }\n"
+    main_src = main_src + "    let x  = argv[1].to_float()\n"
+    main_src = main_src + "    let y  = argv[2].to_float()\n"
+    main_src = main_src + "    let dy = argv[3].to_float()\n"
+    main_src = main_src + "    let d_param = " + fn_name + "(x, y, dy)\n"
+    main_src = main_src + "    // json_stringify is round-trip safe (shortest %g-form\n"
+    main_src = main_src + "    // strtod-checked; runtime_core.c::_shortest_double).\n"
+    main_src = main_src + "    // Plain to_string for float uses %g (6 digits) — would\n"
+    main_src = main_src + "    // lose byte-eq across the recompile boundary.\n"
+    main_src = main_src + "    println(json_stringify(d_param))\n"
+    main_src = main_src + "}\n"
+    return bwd_src + main_src
+}
+
 // ─── interpret step: bwd AST → numerical evaluation ────────────────────
 // `ag_extract_interpret(arena, bwd_root, x_val, dy_val)` — tree-walks
 // the bwd AST applying each node's semantics. Produces the same scalar

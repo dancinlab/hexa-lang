@@ -194,36 +194,36 @@ static void _hexa_init_path_augment(void) {
 
     // Build new PATH = <missing candidates joined by ':'> + ':' + old.
     // Worst-case length: sum of all candidates + separators + old + NUL.
-    size_t cap = strlen(old) + 1;
-    for (int i = 0; candidates[i]; i++) cap += strlen(candidates[i]) + 1;
+    size_t cap = hxlcl_strlen(old) + 1;
+    for (int i = 0; candidates[i]; i++) cap += hxlcl_strlen(candidates[i]) + 1;
     char* buf = (char*)malloc(cap);
     if (!buf) return;
     buf[0] = '\0';
 
     for (int i = 0; candidates[i]; i++) {
         const char* c = candidates[i];
-        size_t clen = strlen(c);
+        size_t clen = hxlcl_strlen(c);
         // Substring search for ":<c>:", "<c>:" (start), or ":<c>" (end), or
         // exact match. Cheap O(n*m) scan — PATH is rarely > 4 KB and this
         // runs once at process start.
         int found = 0;
         const char* p = old;
         while (*p) {
-            const char* q = strchr(p, ':');
-            size_t seg = q ? (size_t)(q - p) : strlen(p);
-            if (seg == clen && memcmp(p, c, clen) == 0) { found = 1; break; }
+            const char* q = hxlcl_strchr(p, ':');
+            size_t seg = q ? (size_t)(q - p) : hxlcl_strlen(p);
+            if (seg == clen && hxlcl_memcmp(p, c, clen) == 0) { found = 1; break; }
             if (!q) break;
             p = q + 1;
         }
         if (!found) {
-            strcat(buf, c);
-            strcat(buf, ":");
+            hxlcl_strcat(buf, c);
+            hxlcl_strcat(buf, ":");
         }
     }
-    strcat(buf, old);
+    hxlcl_strcat(buf, old);
 
     // Only call setenv if we actually added something (buf longer than old).
-    if (strlen(buf) > strlen(old)) {
+    if (hxlcl_strlen(buf) > hxlcl_strlen(old)) {
         setenv("PATH", buf, 1);
     }
     free(buf);
@@ -278,7 +278,7 @@ static void _hexa_init_mem_cap(void) {
     // cap. HEXA_MEM_UNLIMITED=1 forces it back off (and is the default).
     const char* lim = getenv("HEXA_MEM_LIMIT");
     if (lim && lim[0] != '\0') {
-        long long mb = atoll(lim);
+        long long mb = hxlcl_atoll(lim);
         if (mb > 0) {
             _hx_mem_cap_bytes = (size_t)mb * 1024ull * 1024ull;
             _hx_mem_cap_disabled = 0;
@@ -286,7 +286,7 @@ static void _hexa_init_mem_cap(void) {
     }
     const char* cap = getenv("HEXA_MEM_CAP_MB");
     if (cap && cap[0] != '\0') {
-        long long mb = atoll(cap);
+        long long mb = hxlcl_atoll(cap);
         if (mb > 0) {
             _hx_mem_cap_bytes = (size_t)mb * 1024ull * 1024ull;
             _hx_mem_cap_disabled = 0;
@@ -420,7 +420,7 @@ void _hx_emit_fuel_abort(const char* kind,
 #else
     gmtime_r(&now, &tmv);
 #endif
-    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tmv);
+    hxlcl_strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tmv);
 
     // RUSAGE snapshot (best-effort; on failure leave zeros).
     long utime_us = 0, stime_us = 0, maxrss_kb = 0;
@@ -451,9 +451,9 @@ void _hx_emit_fuel_abort(const char* kind,
         args_buf[apos++] = '"';
         char esc[256];
         _hx_fuel_json_esc(esc, sizeof(esc), _hexa_argv[i]);
-        size_t elen = strlen(esc);
+        size_t elen = hxlcl_strlen(esc);
         if (apos + elen + 2 >= sizeof(args_buf)) { apos--; break; }
-        memcpy(args_buf + apos, esc, elen); apos += elen;
+        hxlcl_memcpy(args_buf + apos, esc, elen); apos += elen;
         args_buf[apos++] = '"';
         wrote = 1;
     }
@@ -496,11 +496,11 @@ void _hx_emit_fuel_abort(const char* kind,
     // Best-effort mkdir of immediate parent dir; silent on failure.
     {
         char dir[1024];
-        size_t pl = strlen(path);
+        size_t pl = hxlcl_strlen(path);
         size_t cut = pl;
         while (cut > 0 && path[cut - 1] != '/') cut--;
         if (cut > 0 && cut < sizeof(dir)) {
-            memcpy(dir, path, cut - 1);
+            hxlcl_memcpy(dir, path, cut - 1);
             dir[cut - 1] = '\0';
             // TODO(fuel-worker): full mkdir -p chain. state/ usually exists.
             (void)mkdir(dir, 0755);
@@ -682,7 +682,7 @@ static inline char* hexa_strbuf_alloc(size_t len) {
 static inline char* hexa_strbuf_dup_n(const char* src, size_t len) {
     char* buf = hexa_strbuf_alloc(len);
     if (!buf) return NULL;
-    if (len > 0 && src) memcpy(buf, src, len);
+    if (len > 0 && src) hxlcl_memcpy(buf, src, len);
     return buf;
 }
 
@@ -697,7 +697,7 @@ static inline size_t hexa_strlen_v_inline(const char* s) {
     // sizeof(struct{...; char data[]}) == offset of flex array → header size
     HexaStrHdr* hdr = (HexaStrHdr*)((const char*)s - sizeof(HexaStrHdr));
     if (hdr->magic == HEXA_STR_MAGIC) return hdr->len;
-    return strlen(s);
+    return hxlcl_strlen(s);
 }
 
 #define HX_STRLEN(v)    hexa_strlen_v_inline(HX_STR(v))
@@ -709,7 +709,7 @@ static inline size_t hexa_strlen_v_inline(const char* s) {
 // The returned pointer is owned by the intern table -- callers must NOT free it.
 static const char* hexa_intern(const char* s) {
     if (HX_UNLIKELY(!s)) return s;
-    size_t slen = strlen(s);
+    size_t slen = hxlcl_strlen(s);
     if (HX_UNLIKELY(slen >= INTERN_MAX_LEN)) {
         // H03 Q9: count strings rejected by length cap.
         if (_hx_stats_on()) _hx_stats_intern_skip++;
@@ -728,7 +728,7 @@ static const char* hexa_intern(const char* s) {
     // the slot-occupied loop and the hash-equal+strcmp-hit branch as taken.
     while (HX_LIKELY(__hexa_intern.buckets[idx] != NULL)) {
         if (HX_LIKELY(__hexa_intern.hashes[idx] == h) &&
-            strcmp(__hexa_intern.buckets[idx], s) == 0) {
+            hxlcl_strcmp(__hexa_intern.buckets[idx], s) == 0) {
             // H03 Q9: hit — table contained an equal canonical pointer.
             if (_hx_stats_on()) _hx_stats_intern_hit++;
             return __hexa_intern.buckets[idx];  // already interned
@@ -1253,7 +1253,7 @@ double __hx_to_double(HexaVal v) {
     // ComptimeConst eval: to_float("3.14") at compile time needs string parsing.
     // Without this branch, returned 0.0, silently producing wrong constants.
     // atof handles both ints and floats correctly ("3" → 3.0, "3.14" → 3.14).
-    if (HX_IS_STR(v) && HX_STR(v))   return atof(HX_STR(v));
+    if (HX_IS_STR(v) && HX_STR(v))   return hxlcl_atof(HX_STR(v));
     if (HX_IS_VALSTRUCT(v) && HX_VS(v)) {
         if (HX_VSF(v, tag_i) == TAG_FLOAT) return HX_VSF(v, float_val);
         if (HX_VSF(v, tag_i) == TAG_INT)   return (double)HX_VSF(v, int_val);
@@ -1273,7 +1273,7 @@ int64_t hexa_as_num(HexaVal v) {
         const char* cs = HX_STR(v); const char* p = cs;
         if (*p == '+' || *p == '-') p++;
         int base = (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) ? 16 : 10;
-        return strtoll(cs, NULL, base);
+        return hxlcl_strtoll(cs, NULL, base);
     }
     if (HX_IS_VALSTRUCT(v) && HX_VS(v)) {
         if (HX_VSF(v, tag_i) == TAG_INT)   return HX_VSF(v, int_val);
@@ -1283,7 +1283,7 @@ int64_t hexa_as_num(HexaVal v) {
             const char* cs = HX_STR(HX_VSF(v, str_val)); const char* p = cs;
             if (*p == '+' || *p == '-') p++;
             int base = (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) ? 16 : 10;
-            return strtoll(cs, NULL, base);
+            return hxlcl_strtoll(cs, NULL, base);
         }
     }
     return 0;
@@ -1359,7 +1359,7 @@ HexaVal hexa_str(const char* s) {
         HX_SET_STR(v, (char*)interned);  // owned by intern table, not caller
     } else {
         // Long/unique strings: header-allocate so HX_STRLEN is O(1) instead of strlen.
-        size_t slen = strlen(s);
+        size_t slen = hxlcl_strlen(s);
         HX_SET_STR(v, hexa_strbuf_dup_n(s, slen));
     }
     return v;
@@ -1375,7 +1375,7 @@ HexaVal hexa_str(const char* s) {
 // to skip the input strlen.
 HexaVal hexa_str_own(char* s) {
     if (!s) return (HexaVal){.tag=TAG_STR, .s=NULL};
-    size_t len = strlen(s);
+    size_t len = hxlcl_strlen(s);
     char* buf = hexa_strbuf_dup_n(s, len);
     return (HexaVal){.tag=TAG_STR, .s=buf};
 }
@@ -1693,7 +1693,7 @@ static HexaVal* hexa_array_promote_to_heap(HexaVal* arena_items, int len, int ne
     HexaVal* heap = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)new_cap);
     if (!heap) return NULL;
     if (arena_items && len > 0) {
-        memcpy(heap, arena_items, sizeof(HexaVal) * (size_t)len);
+        hxlcl_memcpy(heap, arena_items, sizeof(HexaVal) * (size_t)len);
     }
     return heap;
 }
@@ -1736,7 +1736,7 @@ HexaVal hexa_array_shallow_clone(HexaVal v) {
     HexaVal* items = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)new_cap);
     if (!items) { fprintf(stderr, "OOM in array_shallow_clone items\n"); exit(1); }
     if (n > 0 && HX_ARR_ITEMS(v)) {
-        memcpy(items, HX_ARR_ITEMS(v), sizeof(HexaVal) * (size_t)n);
+        hxlcl_memcpy(items, HX_ARR_ITEMS(v), sizeof(HexaVal) * (size_t)n);
     }
     HX_SET_ARR_ITEMS(out, items);
     HX_SET_ARR_LEN(out, n);
@@ -1838,7 +1838,7 @@ HexaVal hexa_array_push(HexaVal arr, HexaVal item) {
             }
             if (next_items) {
                 if (HX_ARR_LEN(arr) > 0) {
-                    memcpy(next_items, HX_ARR_ITEMS(arr), sizeof(HexaVal) * (size_t)HX_ARR_LEN(arr));
+                    hxlcl_memcpy(next_items, HX_ARR_ITEMS(arr), sizeof(HexaVal) * (size_t)HX_ARR_LEN(arr));
                 }
                 HX_SET_ARR_ITEMS(arr, next_items);
                 HX_SET_ARR_CAP(arr, -new_cap);
@@ -1971,7 +1971,7 @@ HexaVal hexa_array_slice_fast(HexaVal arr, HexaVal start, HexaVal end) {
         items = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)m);
         if (!items) { fprintf(stderr, "OOM in array_slice_fast\n"); exit(1); }
     }
-    memcpy(items, HX_ARR_ITEMS(arr) + a, sizeof(HexaVal) * (size_t)m);
+    hxlcl_memcpy(items, HX_ARR_ITEMS(arr) + a, sizeof(HexaVal) * (size_t)m);
     HX_SET_ARR_ITEMS(out, items);
     HX_SET_ARR_LEN(out, m);
     HX_SET_ARR_CAP(out, use_arena ? -m : m);
@@ -2146,7 +2146,7 @@ static int hmap_find(HexaMapTable* t, const char* key, uint32_t h) {
     uint32_t mask = (uint32_t)(t->ht_cap - 1);
     uint32_t idx = h & mask;
     while (t->slots[idx].key) {
-        if (t->slots[idx].hash == h && strcmp(t->slots[idx].key, key) == 0)
+        if (t->slots[idx].hash == h && hxlcl_strcmp(t->slots[idx].key, key) == 0)
             return (int)idx;
         idx = (idx + 1) & mask;
     }
@@ -2200,8 +2200,8 @@ HexaVal hexa_struct_pack_map(const char* type_name, int n,
         // also strdup'd; for arena path we instead arena-alloc to keep the
         // bulk-free property.
         if (from_arena) {
-            char* kdup = (char*)hexa_arena_alloc(strlen("__type__") + 1);
-            memcpy(kdup, "__type__", 9);
+            char* kdup = (char*)hexa_arena_alloc(hxlcl_strlen("__type__") + 1);
+            hxlcl_memcpy(kdup, "__type__", 9);
             t->slots[idx].key = kdup;
             // perf-31: even on the arena path, the VALUE string must use the
             // heap header allocator — HX_STRLEN reads bytes [-16] before the
@@ -2209,7 +2209,7 @@ HexaVal hexa_struct_pack_map(const char* type_name, int n,
             // (could segfault at the start of a fresh arena block). Map keys
             // stay in arena since they're never read via HX_STRLEN (slot.key
             // is a raw char* used only for strcmp during lookup).
-            size_t tnl = strlen(type_name);
+            size_t tnl = hxlcl_strlen(type_name);
             HexaVal tv = {.tag=TAG_STR, .s=hexa_strbuf_dup_n(type_name, tnl)};
             t->slots[idx].hash = h;
             t->slots[idx].order_idx = t->len;  // ROI-24
@@ -2217,11 +2217,11 @@ HexaVal hexa_struct_pack_map(const char* type_name, int n,
             t->order_keys[t->len] = t->slots[idx].key;
             t->order_vals[t->len] = tv;
         } else {
-            t->slots[idx].key = strdup("__type__");
+            t->slots[idx].key = hxlcl_strdup("__type__");
             t->slots[idx].hash = h;
             t->slots[idx].order_idx = t->len;  // ROI-24
             // perf-31: header-alloc replaces strdup so HX_STRLEN is O(1).
-            size_t tnl = strlen(type_name);
+            size_t tnl = hxlcl_strlen(type_name);
             HexaVal tv = {.tag=TAG_STR, .s=hexa_strbuf_dup_n(type_name, tnl)};
             t->vals[idx] = tv;
             t->order_keys[t->len] = t->slots[idx].key;
@@ -2235,12 +2235,12 @@ HexaVal hexa_struct_pack_map(const char* type_name, int n,
         uint32_t idx = h & mask;
         while (t->slots[idx].key) idx = (idx + 1) & mask;
         if (from_arena) {
-            size_t kl = strlen(k);
+            size_t kl = hxlcl_strlen(k);
             char* kdup = (char*)hexa_arena_alloc(kl + 1);
-            memcpy(kdup, k, kl + 1);
+            hxlcl_memcpy(kdup, k, kl + 1);
             t->slots[idx].key = kdup;
         } else {
-            t->slots[idx].key = strdup(k);
+            t->slots[idx].key = hxlcl_strdup(k);
         }
         t->slots[idx].hash = h;
         t->slots[idx].order_idx = t->len;  // ROI-24
@@ -2295,7 +2295,7 @@ HexaVal hexa_map_set(HexaVal m, const char* key, HexaVal val) {
     uint32_t mask = (uint32_t)(t->ht_cap - 1);
     uint32_t idx = h & mask;
     while (t->slots[idx].key) idx = (idx + 1) & mask;
-    t->slots[idx].key  = strdup(key);
+    t->slots[idx].key  = hxlcl_strdup(key);
     t->slots[idx].hash = h;
     t->slots[idx].order_idx = t->len;  // ROI-24: record order position
     t->vals[idx] = val;
@@ -2312,8 +2312,8 @@ HexaVal hexa_map_set(HexaVal m, const char* key, HexaVal val) {
             char** new_keys = (char**)malloc(sizeof(char*) * new_cap);
             HexaVal* new_vals = (HexaVal*)malloc(sizeof(HexaVal) * new_cap);
             if (!new_keys || !new_vals) { fprintf(stderr, "OOM in map_set grow\n"); exit(1); }
-            memcpy(new_keys, t->order_keys, sizeof(char*) * t->len);
-            memcpy(new_vals, t->order_vals, sizeof(HexaVal) * t->len);
+            hxlcl_memcpy(new_keys, t->order_keys, sizeof(char*) * t->len);
+            hxlcl_memcpy(new_vals, t->order_vals, sizeof(HexaVal) * t->len);
             t->order_keys = new_keys;
             t->order_vals = new_vals;
         } else {
@@ -2724,14 +2724,14 @@ HexaVal hexa_index_set(HexaVal container, HexaVal key, HexaVal val) {
 // Uses hash lookup instead of linear scan.
 int hexa_is_type(HexaVal v, const char* type_name) {
     if (HX_IS_VALSTRUCT(v)) {
-        return type_name && strcmp(type_name, "Val") == 0;
+        return type_name && hxlcl_strcmp(type_name, "Val") == 0;
     }
     if (!HX_IS_MAP(v) || !HX_MAP_TBL(v)) return 0;
     uint32_t h = hexa_fnv1a_str("__type__");
     int si = hmap_find(HX_MAP_TBL(v), "__type__", h);
     if (si < 0) return 0;
     HexaVal t = HX_MAP_TBL(v)->vals[si];
-    return HX_IS_STR(t) && HX_STR(t) && strcmp(HX_STR(t), type_name) == 0;
+    return HX_IS_STR(t) && HX_STR(t) && hxlcl_strcmp(HX_STR(t), type_name) == 0;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -2844,33 +2844,33 @@ HexaVal hexa_valstruct_get_by_key(HexaVal v, const char* key) {
     if (!key) return hexa_void();
     switch (key[0]) {
         case 't':
-            if (!strcmp(key, "tag"))           return hexa_int(HX_VSF(v, tag_i));
+            if (!hxlcl_strcmp(key, "tag"))           return hexa_int(HX_VSF(v, tag_i));
             break;
         case 'i':
-            if (!strcmp(key, "int_val"))       return hexa_int(HX_VSF(v, int_val));
+            if (!hxlcl_strcmp(key, "int_val"))       return hexa_int(HX_VSF(v, int_val));
             break;
         case 'f':
-            if (!strcmp(key, "float_val"))     return hexa_float(HX_VSF(v, float_val));
-            if (!strcmp(key, "fn_name"))       return HX_VSF(v, fn_name);
-            if (!strcmp(key, "fn_params"))     return HX_VSF(v, fn_params);
-            if (!strcmp(key, "fn_body"))       return HX_VSF(v, fn_body);
+            if (!hxlcl_strcmp(key, "float_val"))     return hexa_float(HX_VSF(v, float_val));
+            if (!hxlcl_strcmp(key, "fn_name"))       return HX_VSF(v, fn_name);
+            if (!hxlcl_strcmp(key, "fn_params"))     return HX_VSF(v, fn_params);
+            if (!hxlcl_strcmp(key, "fn_body"))       return HX_VSF(v, fn_body);
             break;
         case 'b':
-            if (!strcmp(key, "bool_val"))      return hexa_bool(HX_VSF(v, bool_val));
+            if (!hxlcl_strcmp(key, "bool_val"))      return hexa_bool(HX_VSF(v, bool_val));
             break;
         case 's':
-            if (!strcmp(key, "str_val"))       return HX_VSF(v, str_val);
-            if (!strcmp(key, "struct_name"))   return HX_VSF(v, struct_name);
-            if (!strcmp(key, "struct_fields")) return HX_VSF(v, struct_fields);
+            if (!hxlcl_strcmp(key, "str_val"))       return HX_VSF(v, str_val);
+            if (!hxlcl_strcmp(key, "struct_name"))   return HX_VSF(v, struct_name);
+            if (!hxlcl_strcmp(key, "struct_fields")) return HX_VSF(v, struct_fields);
             break;
         case 'c':
-            if (!strcmp(key, "char_val"))      return HX_VSF(v, char_val);
+            if (!hxlcl_strcmp(key, "char_val"))      return HX_VSF(v, char_val);
             break;
         case 'a':
-            if (!strcmp(key, "array_val"))     return HX_VSF(v, array_val);
+            if (!hxlcl_strcmp(key, "array_val"))     return HX_VSF(v, array_val);
             break;
         case '_':
-            if (!strcmp(key, "__type__"))      return hexa_str("Val");
+            if (!hxlcl_strcmp(key, "__type__"))      return hexa_str("Val");
             break;
     }
     fprintf(stderr, "valstruct_get: unknown key '%s'\n", key);
@@ -2903,44 +2903,44 @@ HexaVal hexa_valstruct_set_by_key(HexaVal v, const char* key, HexaVal val) {
     HX_SET_VS(out, cow);
     switch (key[0]) {
         case 't':
-            if (!strcmp(key, "tag")) {
+            if (!hxlcl_strcmp(key, "tag")) {
                 cow->tag_i = HX_IS_INT(val) ? HX_INT(val) : cow->tag_i;
                 return out;
             }
             break;
         case 'i':
-            if (!strcmp(key, "int_val")) {
+            if (!hxlcl_strcmp(key, "int_val")) {
                 cow->int_val = HX_IS_INT(val) ? HX_INT(val) : cow->int_val;
                 return out;
             }
             break;
         case 'f':
-            if (!strcmp(key, "float_val")) {
+            if (!hxlcl_strcmp(key, "float_val")) {
                 if (HX_IS_FLOAT(val)) cow->float_val = HX_FLOAT(val);
                 else if (HX_IS_INT(val)) cow->float_val = (double)HX_INT(val);
                 return out;
             }
-            if (!strcmp(key, "fn_name"))   { cow->fn_name   = val; return out; }
-            if (!strcmp(key, "fn_params")) { cow->fn_params = val; return out; }
-            if (!strcmp(key, "fn_body"))   { cow->fn_body   = val; return out; }
+            if (!hxlcl_strcmp(key, "fn_name"))   { cow->fn_name   = val; return out; }
+            if (!hxlcl_strcmp(key, "fn_params")) { cow->fn_params = val; return out; }
+            if (!hxlcl_strcmp(key, "fn_body"))   { cow->fn_body   = val; return out; }
             break;
         case 'b':
-            if (!strcmp(key, "bool_val")) {
+            if (!hxlcl_strcmp(key, "bool_val")) {
                 cow->bool_val = HX_IS_BOOL(val) ? HX_BOOL(val) :
                                  (HX_IS_INT(val) ? (int)HX_INT(val) : cow->bool_val);
                 return out;
             }
             break;
         case 's':
-            if (!strcmp(key, "str_val"))       { cow->str_val       = val; return out; }
-            if (!strcmp(key, "struct_name"))   { cow->struct_name   = val; return out; }
-            if (!strcmp(key, "struct_fields")) { cow->struct_fields = val; return out; }
+            if (!hxlcl_strcmp(key, "str_val"))       { cow->str_val       = val; return out; }
+            if (!hxlcl_strcmp(key, "struct_name"))   { cow->struct_name   = val; return out; }
+            if (!hxlcl_strcmp(key, "struct_fields")) { cow->struct_fields = val; return out; }
             break;
         case 'c':
-            if (!strcmp(key, "char_val"))  { cow->char_val  = val; return out; }
+            if (!hxlcl_strcmp(key, "char_val"))  { cow->char_val  = val; return out; }
             break;
         case 'a':
-            if (!strcmp(key, "array_val")) { cow->array_val = val; return out; }
+            if (!hxlcl_strcmp(key, "array_val")) { cow->array_val = val; return out; }
             break;
     }
     fprintf(stderr, "valstruct_set: unknown key '%s'\n", key);
@@ -3192,7 +3192,7 @@ static int hexa_val_arena_on(void) {
 static void* hexa_val_arena_calloc(size_t n) {
     void* p = hexa_arena_alloc(n);
     if (!p) return calloc(1, n);
-    memset(p, 0, n);
+    hxlcl_memset(p, 0, n);
     return p;
 }
 
@@ -3385,7 +3385,7 @@ static HexaMapTable* hmap_heapify(HexaMapTable* src) {
         uint32_t h = hexa_fnv1a_str(k);
         uint32_t idx = h & mask;
         while (dst->slots[idx].key) idx = (idx + 1) & mask;
-        dst->slots[idx].key = strdup(k);
+        dst->slots[idx].key = hxlcl_strdup(k);
         dst->slots[idx].hash = h;
         dst->slots[idx].order_idx = dst->len;  // ROI-24
         HexaVal nv = hexa_val_heapify(src->order_vals[i]);
@@ -3480,7 +3480,7 @@ HexaVal hexa_val_heapify(HexaVal v) {
                 if (HX_STR(v) >= base && HX_STR(v) < end) {
                     // perf-31: heapify into header-allocated buffer so the
                     // surviving HexaVal supports O(1) HX_STRLEN.
-                    size_t arena_len = strlen(HX_STR(v));
+                    size_t arena_len = hxlcl_strlen(HX_STR(v));
                     HX_SET_STR(v, hexa_strbuf_dup_n(HX_STR(v), arena_len));
                     if (_hx_stats_on()) _hx_stats_str_arena_heapify++;
                     break;
@@ -3853,7 +3853,7 @@ HexaVal hexa_val_copy_into_arena(HexaVal v) {
             size_t slen = HX_STRLEN(v);
             char* buf = (char*)hexa_arena_alloc(slen + 1);
             if (!buf) return v;  // arena OOM
-            if (slen > 0) memcpy(buf, HX_STR(v), slen);
+            if (slen > 0) hxlcl_memcpy(buf, HX_STR(v), slen);
             buf[slen] = '\0';
             HX_SET_STR(v, buf);
             return v;
@@ -3993,8 +3993,8 @@ HexaVal hexa_str_concat(HexaVal a, HexaVal b) {
     // (token + token, prefix + name). Hint truthy on HX_IS_STR.
     char* sa = HX_LIKELY(HX_IS_STR(a)) ? HX_STR(a) : "";
     char* sb = HX_LIKELY(HX_IS_STR(b)) ? HX_STR(b) : "";
-    size_t la = strlen(sa);
-    size_t lb = strlen(sb);
+    size_t la = hxlcl_strlen(sa);
+    size_t lb = hxlcl_strlen(sb);
     // ROI-36: empty-string elision — skip alloc+memcpy when one side is "".
     // Empty-side is uncommon on the hot self-host path (parser keyword
     // accumulator), so hint the non-empty arms.
@@ -4014,8 +4014,8 @@ HexaVal hexa_str_concat(HexaVal a, HexaVal b) {
         result = (char*)malloc(total);
     }
     // memcpy avoids the strcpy+strcat double walk.
-    memcpy(result, sa, la);
-    memcpy(result + la, sb, lb);
+    hxlcl_memcpy(result, sa, la);
+    hxlcl_memcpy(result + la, sb, lb);
     result[la + lb] = '\0';
     return hexa_str_own(result);
 }
@@ -4084,14 +4084,14 @@ HexaVal hexa_str_chars(HexaVal s) {
 }
 
 int hexa_str_contains(HexaVal s, HexaVal sub) {
-    return strstr(HX_STR(s), HX_STR(sub)) != NULL;
+    return hxlcl_strstr(HX_STR(s), HX_STR(sub)) != NULL;
 }
 
 int hexa_str_eq(HexaVal a, HexaVal b) {
     if (!HX_IS_STR(a) || !HX_IS_STR(b)) return 0;
     // Optimization #11: interned strings share pointers
     if (HX_STR(a) == HX_STR(b)) return 1;
-    return strcmp(HX_STR(a), HX_STR(b)) == 0;
+    return hxlcl_strcmp(HX_STR(a), HX_STR(b)) == 0;
 }
 
 // M1 full · str_ext Step 5 (hxa-20260423-003): rt_str_starts_with/ends_with —
@@ -4099,7 +4099,7 @@ int hexa_str_eq(HexaVal a, HexaVal b) {
 int rt_str_starts_with(HexaVal s, HexaVal prefix) {
     if (!HX_IS_STR(s) || !HX_IS_STR(prefix)) return 0;
     size_t plen = HX_STRLEN(prefix);
-    return strncmp(HX_STR(s), HX_STR(prefix), plen) == 0;
+    return hxlcl_strncmp(HX_STR(s), HX_STR(prefix), plen) == 0;
 }
 
 int rt_str_ends_with(HexaVal s, HexaVal suffix) {
@@ -4107,7 +4107,7 @@ int rt_str_ends_with(HexaVal s, HexaVal suffix) {
     size_t slen = HX_STRLEN(s);
     size_t sfxlen = HX_STRLEN(suffix);
     if (sfxlen > slen) return 0;
-    return strcmp(HX_STR(s) + slen - sfxlen, HX_STR(suffix)) == 0;
+    return hxlcl_strcmp(HX_STR(s) + slen - sfxlen, HX_STR(suffix)) == 0;
 }
 
 HexaVal hexa_str_substring(HexaVal s, HexaVal start, HexaVal end) {
@@ -4120,13 +4120,13 @@ HexaVal hexa_str_substring(HexaVal s, HexaVal start, HexaVal end) {
     // perf-31: write straight into header-allocated buffer — eliminates the
     // hexa_str_own copy that would otherwise re-strlen + re-malloc + memcpy.
     char* buf = hexa_strbuf_alloc((size_t)(b - a));
-    memcpy(buf, HX_STR(s) + a, (size_t)(b - a));
+    hxlcl_memcpy(buf, HX_STR(s) + a, (size_t)(b - a));
     return (HexaVal){.tag=TAG_STR, .s=buf};
 }
 
 int64_t hexa_str_index_of(HexaVal s, HexaVal sub) {
     if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
-    char* p = strstr(HX_STR(s), HX_STR(sub));
+    char* p = hxlcl_strstr(HX_STR(s), HX_STR(sub));
     if (!p) return -1;
     return (int64_t)(p - HX_STR(s));
 }
@@ -4138,13 +4138,13 @@ int64_t hexa_str_index_of(HexaVal s, HexaVal sub) {
 int64_t hexa_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start) {
     if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
     const char* hay = HX_STR(s);
-    size_t hlen = strlen(hay);
+    size_t hlen = hxlcl_strlen(hay);
     int64_t st = HX_INT(start);
     if (st < 0) st = 0;
     if ((size_t)st > hlen) return -1;
     const char* needle = HX_STR(sub);
     if (*needle == '\0') return st;
-    const char* p = strstr(hay + st, needle);
+    const char* p = hxlcl_strstr(hay + st, needle);
     if (!p) return -1;
     return (int64_t)(p - hay);
 }
@@ -4156,13 +4156,13 @@ int64_t hexa_str_last_index_of(HexaVal s, HexaVal sub) {
     if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
     const char* hay = HX_STR(s);
     const char* needle = HX_STR(sub);
-    size_t nlen = strlen(needle);
-    size_t hlen = strlen(hay);
+    size_t nlen = hxlcl_strlen(needle);
+    size_t hlen = hxlcl_strlen(hay);
     if (nlen == 0) return (int64_t)hlen;
     if (nlen > hlen) return -1;
     int64_t last = -1;
     const char* p = hay;
-    while ((p = strstr(p, needle)) != NULL) {
+    while ((p = hxlcl_strstr(p, needle)) != NULL) {
         last = (int64_t)(p - hay);
         p += 1;  // overlap-safe
     }
@@ -4324,7 +4324,7 @@ HexaVal hexa_array_reverse(HexaVal arr) {
     // via Val-level byte reverse; AOT was silently wrong.
     if (HX_IS_STR(arr)) {
         const char* s = HX_STR(arr);
-        size_t n = strlen(s);
+        size_t n = hxlcl_strlen(s);
         char* buf = (char*)malloc(n + 1);
         for (size_t i = 0; i < n; i++) buf[i] = s[n - 1 - i];
         buf[n] = '\0';
@@ -4348,7 +4348,7 @@ static int hexa_sort_cmp(const void* a, const void* b) {
     if (HX_IS_INT(va) && HX_IS_INT(vb)) return HX_INT(va) < HX_INT(vb) ? -1 : HX_INT(va) > HX_INT(vb) ? 1 : 0;
     if (HX_IS_FLOAT(va) && HX_IS_FLOAT(vb)) return HX_FLOAT(va) < HX_FLOAT(vb) ? -1 : HX_FLOAT(va) > HX_FLOAT(vb) ? 1 : 0;
     if (HX_IS_STR(va) && HX_IS_STR(vb)) {
-        int r = strcmp(HX_STR(va), HX_STR(vb));
+        int r = hxlcl_strcmp(HX_STR(va), HX_STR(vb));
         return r < 0 ? -1 : r > 0 ? 1 : 0;
     }
     // mixed-numeric (int vs float): promote to float for the compare
@@ -4482,10 +4482,10 @@ static int hexa_cmd_has_shell_meta(const char* s) {
 static char** hexa_tokenize_argv(const char* cmd, int* out_argc) {
     *out_argc = 0;
     if (!cmd) return NULL;
-    size_t len = strlen(cmd);
+    size_t len = hxlcl_strlen(cmd);
     char* buf = (char*)malloc(len + 1);
     if (!buf) return NULL;
-    memcpy(buf, cmd, len + 1);
+    hxlcl_memcpy(buf, cmd, len + 1);
     int argc = 0;
     int in_tok = 0;
     for (size_t i = 0; i < len; i++) {
@@ -4607,7 +4607,7 @@ HexaVal hexa_exec(HexaVal cmd) {
         // +1 for the trailing NUL we always append so HX_STR() remains a
         // valid C-string for ABI consumers (see caveat above).
         while (total + n + 1 > cap) { cap *= 2; result = (char*)realloc(result, cap); }
-        memcpy(result + total, buf, n);
+        hxlcl_memcpy(result + total, buf, n);
         total += n;
     }
     result[total] = '\0';
@@ -4732,7 +4732,7 @@ HexaVal hexa_exec_with_status(HexaVal cmd) {
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), fp)) > 0) {
         while (total + n + 1 > cap) { cap *= 2; result = (char*)realloc(result, cap); }
-        memcpy(result + total, buf, n);
+        hxlcl_memcpy(result + total, buf, n);
         total += n;
     }
     result[total] = '\0';
@@ -4781,8 +4781,8 @@ static const char* __hexa_print_float_fmt(void) {
     if (!cached) {
         const char* env = getenv("HEXA_FLOAT_REPR");
         if (env) {
-            if (strcmp(env, "g17") == 0) fmt = "%.17g";
-            else if (strcmp(env, "g15") == 0) fmt = "%.15g";
+            if (hxlcl_strcmp(env, "g17") == 0) fmt = "%.17g";
+            else if (hxlcl_strcmp(env, "g15") == 0) fmt = "%.15g";
             // unknown values fall back to "%g" (silent) — strict mode could
             // surface a stderr warning here, but print-path is hot so keep
             // the fast default.
@@ -5253,7 +5253,7 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
         case TAG_INT: return hexa_bool(HX_INT(a) == HX_INT(b));
         case TAG_FLOAT: return hexa_bool(HX_FLOAT(a) == HX_FLOAT(b));
         case TAG_BOOL: return hexa_bool(HX_BOOL(a) == HX_BOOL(b));
-        case TAG_STR: return hexa_bool(HX_STR(a) == HX_STR(b) || strcmp(HX_STR(a), HX_STR(b)) == 0);
+        case TAG_STR: return hexa_bool(HX_STR(a) == HX_STR(b) || hxlcl_strcmp(HX_STR(a), HX_STR(b)) == 0);
         case TAG_VOID: return hexa_bool(1);
         // rt 32-G: Val identity is pointer-equality of heap struct (matches
         // TAG_MAP semantics — two separately constructed maps never compare
@@ -5347,7 +5347,7 @@ HexaVal rt_write_file(HexaVal path, HexaVal content) {
     FILE* f = fopen(HX_STR(path), "wb");
     if (!f) return hexa_bool(0);
     const char* s = HX_STR(content);
-    size_t len = s ? strlen(s) : 0;
+    size_t len = s ? hxlcl_strlen(s) : 0;
     fwrite(s, 1, len, f);
     fclose(f);
     return hexa_bool(1);
@@ -5705,16 +5705,16 @@ HexaVal hexa_to_int(HexaVal v) {
 HexaVal hexa_format(HexaVal fmt, HexaVal arg) {
     // Single arg: replace first {} with arg
     if (!HX_IS_STR(fmt)) return fmt;
-    char* pos = strstr(HX_STR(fmt), "{}");
+    char* pos = hxlcl_strstr(HX_STR(fmt), "{}");
     if (!pos) return fmt;
     HexaVal sarg = hexa_to_string(arg);
     int before = pos - HX_STR(fmt);
-    int after_len = strlen(pos + 2);
+    int after_len = hxlcl_strlen(pos + 2);
     char* result = malloc(before + (int)HX_STRLEN(sarg) + after_len + 1);
-    strncpy(result, HX_STR(fmt), before);
+    hxlcl_strncpy(result, HX_STR(fmt), before);
     result[before] = 0;
-    strcat(result, HX_STR(sarg));
-    strcat(result, pos + 2);
+    hxlcl_strcat(result, HX_STR(sarg));
+    hxlcl_strcat(result, pos + 2);
     return hexa_str_own(result);
 }
 
@@ -5730,16 +5730,16 @@ HexaVal hexa_format_n(HexaVal fmt, HexaVal args) {
     while (*src) {
         if (src[0] == '{' && ai < HX_ARR_LEN(args)) {
             // Find closing }
-            char* close = strchr(src, '}');
+            char* close = hxlcl_strchr(src, '}');
             if (close) {
                 int speclen = (int)(close - src - 1);
                 char spec[32] = {0};
-                if (speclen > 0 && speclen < 31) memcpy(spec, src+1, speclen);
+                if (speclen > 0 && speclen < 31) hxlcl_memcpy(spec, src+1, speclen);
                 char buf[128];
                 HexaVal arg = HX_ARR_ITEMS(args)[ai++];
                 if (spec[0] == ':' && spec[1] == '.') {
                     // Precision format {:.N} or {:.Nf}
-                    int prec = atoi(spec + 2);
+                    int prec = hxlcl_atoi(spec + 2);
                     double val = HX_IS_FLOAT(arg) ? HX_FLOAT(arg) : (double)HX_INT(arg);
                     snprintf(buf, sizeof(buf), "%.*f", prec, val);
                 } else if (spec[0] == ':') {
@@ -5761,31 +5761,31 @@ HexaVal hexa_format_n(HexaVal fmt, HexaVal args) {
                     int pad = width > slen ? width - slen : 0;
                     int bp = 0;
                     if (align == 'L') {
-                        memcpy(buf + bp, HX_STR(s), slen); bp += slen;
+                        hxlcl_memcpy(buf + bp, HX_STR(s), slen); bp += slen;
                         for (int q = 0; q < pad && bp < (int)sizeof(buf) - 1; q++) buf[bp++] = fill;
                     } else if (align == 'C') {
                         int lp = pad / 2, rp = pad - lp;
                         for (int q = 0; q < lp && bp < (int)sizeof(buf) - 1; q++) buf[bp++] = fill;
-                        memcpy(buf + bp, HX_STR(s), slen); bp += slen;
+                        hxlcl_memcpy(buf + bp, HX_STR(s), slen); bp += slen;
                         for (int q = 0; q < rp && bp < (int)sizeof(buf) - 1; q++) buf[bp++] = fill;
                     } else {
                         for (int q = 0; q < pad && bp < (int)sizeof(buf) - 1; q++) buf[bp++] = fill;
-                        memcpy(buf + bp, HX_STR(s), slen); bp += slen;
+                        hxlcl_memcpy(buf + bp, HX_STR(s), slen); bp += slen;
                     }
                     if (bp >= (int)sizeof(buf)) bp = sizeof(buf) - 1;
                     buf[bp] = 0;
                 } else if (spec[0] == 0) {
                     // Simple {}
                     HexaVal s = hexa_to_string(arg);
-                    strncpy(buf, HX_STR(s), sizeof(buf)-1); buf[sizeof(buf)-1]=0;
+                    hxlcl_strncpy(buf, HX_STR(s), sizeof(buf)-1); buf[sizeof(buf)-1]=0;
                 } else {
                     // Indexed {N} — best-effort; non-numeric falls through to to_string
                     HexaVal s = hexa_to_string(arg);
-                    strncpy(buf, HX_STR(s), sizeof(buf)-1); buf[sizeof(buf)-1]=0;
+                    hxlcl_strncpy(buf, HX_STR(s), sizeof(buf)-1); buf[sizeof(buf)-1]=0;
                 }
-                size_t blen = strlen(buf);
+                size_t blen = hxlcl_strlen(buf);
                 while (total + blen + 1 > cap) { cap *= 2; result = realloc(result, cap); }
-                memcpy(result + total, buf, blen);
+                hxlcl_memcpy(result + total, buf, blen);
                 total += blen;
                 result[total] = 0;
                 src = close + 1;
@@ -5810,12 +5810,12 @@ HexaVal hexa_format_n(HexaVal fmt, HexaVal args) {
 HexaVal hexa_str_split(HexaVal s, HexaVal delim) {
     HexaVal arr = hexa_array_new();
     if (!HX_IS_STR(s) || !HX_IS_STR(delim)) return arr;
-    char* src = strdup(HX_STR(s));
+    char* src = hxlcl_strdup(HX_STR(s));
     char* d = HX_STR(delim);
-    int dlen = strlen(d);
+    int dlen = hxlcl_strlen(d);
     char* pos = src;
     while (1) {
-        char* found = strstr(pos, d);
+        char* found = hxlcl_strstr(pos, d);
         if (!found) { arr = hexa_array_push(arr, hexa_str(pos)); break; }
         *found = 0;
         arr = hexa_array_push(arr, hexa_str(pos));
@@ -5838,9 +5838,9 @@ HexaVal rt_str_trim(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
     char* str = HX_STR(s);
     while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') str++;
-    int len = strlen(str);
+    int len = hxlcl_strlen(str);
     while (len > 0 && (str[len-1] == ' ' || str[len-1] == '\t' || str[len-1] == '\n' || str[len-1] == '\r')) len--;
-    char* result = strndup(str, len);
+    char* result = hxlcl_strndup(str, len);
     return hexa_str_own(result);
 }
 
@@ -5854,20 +5854,20 @@ HexaVal hexa_str_replace(HexaVal s, HexaVal old, HexaVal new_s) {
     int oldlen = (int)HX_STRLEN(old);
     size_t newlen = HX_STRLEN(new_s);
     while (1) {
-        char* found = strstr(pos, HX_STR(old));
+        char* found = hxlcl_strstr(pos, HX_STR(old));
         if (!found) {
-            size_t rlen = strlen(pos);
+            size_t rlen = hxlcl_strlen(pos);
             while (total + rlen + 1 > cap) { cap *= 2; result = realloc(result, cap); }
-            memcpy(result + total, pos, rlen);
+            hxlcl_memcpy(result + total, pos, rlen);
             total += rlen;
             result[total] = 0;
             break;
         }
         size_t seg = (size_t)(found - pos);
         while (total + seg + newlen + 1 > cap) { cap *= 2; result = realloc(result, cap); }
-        memcpy(result + total, pos, seg);
+        hxlcl_memcpy(result + total, pos, seg);
         total += seg;
-        memcpy(result + total, HX_STR(new_s), newlen);
+        hxlcl_memcpy(result + total, HX_STR(new_s), newlen);
         total += newlen;
         result[total] = 0;
         pos = found + oldlen;
@@ -5879,14 +5879,14 @@ HexaVal hexa_str_replace(HexaVal s, HexaVal old, HexaVal new_s) {
 // codegen emits rt_str_* directly; hexa_str_to_upper/lower shims retired.
 HexaVal rt_str_to_upper(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
-    char* r = strdup(HX_STR(s));
+    char* r = hxlcl_strdup(HX_STR(s));
     for (int i = 0; r[i]; i++) if (r[i] >= 'a' && r[i] <= 'z') r[i] -= 32;
     return hexa_str_own(r);
 }
 
 HexaVal rt_str_to_lower(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
-    char* r = strdup(HX_STR(s));
+    char* r = hxlcl_strdup(HX_STR(s));
     for (int i = 0; r[i]; i++) if (r[i] >= 'A' && r[i] <= 'Z') r[i] += 32;
     return hexa_str_own(r);
 }
@@ -5904,12 +5904,12 @@ HexaVal hexa_str_join(HexaVal arr, HexaVal sep) {
     size_t total = 0;
     for (int i = 0; i < HX_ARR_LEN(arr); i++) {
         if (i > 0) {
-            memcpy(result + total, HX_STR(sep), seplen);
+            hxlcl_memcpy(result + total, HX_STR(sep), seplen);
             total += seplen;
         }
         HexaVal s = hexa_to_string(HX_ARR_ITEMS(arr)[i]);
         size_t slen = HX_STRLEN(s);
-        memcpy(result + total, HX_STR(s), slen);
+        hxlcl_memcpy(result + total, HX_STR(s), slen);
         total += slen;
     }
     result[total] = 0;
@@ -5942,8 +5942,8 @@ HexaVal hexa_pad_left(HexaVal s, HexaVal width) {
     if (cplen >= w) return str;
     int pad = w - cplen;
     char* result = malloc(bytelen + pad + 1);
-    memset(result, ' ', pad);
-    strcpy(result + pad, HX_STR(str));
+    hxlcl_memset(result, ' ', pad);
+    hxlcl_strcpy(result + pad, HX_STR(str));
     return hexa_str_own(result);
 }
 
@@ -5962,8 +5962,8 @@ HexaVal hexa_pad_right(HexaVal s, HexaVal width) {
     if (cplen >= w) return str;
     int pad = w - cplen;
     char* result = malloc(bytelen + pad + 1);
-    strcpy(result, HX_STR(str));
-    memset(result + bytelen, ' ', pad);
+    hxlcl_strcpy(result, HX_STR(str));
+    hxlcl_memset(result + bytelen, ' ', pad);
     result[bytelen + pad] = 0;
     return hexa_str_own(result);
 }
@@ -6026,28 +6026,28 @@ HexaVal hexa_mod(HexaVal a, HexaVal b) {
 // 의미 없는 순서 (abc>abb=false 같은 오류).
 HexaVal hexa_cmp_lt(HexaVal a, HexaVal b) {
     if (HX_IS_STR(a) && HX_IS_STR(b))
-        return hexa_bool(strcmp(HX_STR(a), HX_STR(b)) < 0);
+        return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) < 0);
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b))
         return hexa_bool(__hx_to_double(a) < __hx_to_double(b));
     return hexa_bool(HX_INT(a) < HX_INT(b));
 }
 HexaVal hexa_cmp_gt(HexaVal a, HexaVal b) {
     if (HX_IS_STR(a) && HX_IS_STR(b))
-        return hexa_bool(strcmp(HX_STR(a), HX_STR(b)) > 0);
+        return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) > 0);
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b))
         return hexa_bool(__hx_to_double(a) > __hx_to_double(b));
     return hexa_bool(HX_INT(a) > HX_INT(b));
 }
 HexaVal hexa_cmp_le(HexaVal a, HexaVal b) {
     if (HX_IS_STR(a) && HX_IS_STR(b))
-        return hexa_bool(strcmp(HX_STR(a), HX_STR(b)) <= 0);
+        return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) <= 0);
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b))
         return hexa_bool(__hx_to_double(a) <= __hx_to_double(b));
     return hexa_bool(HX_INT(a) <= HX_INT(b));
 }
 HexaVal hexa_cmp_ge(HexaVal a, HexaVal b) {
     if (HX_IS_STR(a) && HX_IS_STR(b))
-        return hexa_bool(strcmp(HX_STR(a), HX_STR(b)) >= 0);
+        return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) >= 0);
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b))
         return hexa_bool(__hx_to_double(a) >= __hx_to_double(b));
     return hexa_bool(HX_INT(a) >= HX_INT(b));
@@ -6067,11 +6067,11 @@ HexaVal hexa_str_count_substr(HexaVal s, HexaVal sub) {
     if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return hexa_int(0);
     const char* src = HX_STR(s);
     const char* pat = HX_STR(sub);
-    int plen = (int)strlen(pat);
+    int plen = (int)hxlcl_strlen(pat);
     if (plen == 0) return hexa_int(0);
     int64_t cnt = 0;
     const char* p = src;
-    while ((p = strstr(p, pat)) != NULL) {
+    while ((p = hxlcl_strstr(p, pat)) != NULL) {
         cnt++;
         p += plen; // non-overlapping
     }

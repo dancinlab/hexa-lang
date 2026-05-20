@@ -7729,6 +7729,183 @@ cross-link: inbox/notes/2026-05-20-rfc006-§5-phase-3d-relanded-t69.md
 (this branch's status note · re-confirms Phase 3e opener plan after
 PR #233 closed PIECE 1).
 
+### 2026-05-20 — RUNTIME.md Phase 1 Tier-A.1 cycle 46 — `_strcmp` + `_memcmp` libc unhook (step-1 C-scaffold)
+
+**작업 = RUNTIME.md Phase 1 Tier-A.1 첫 cycle, step-1 (C-source scaffold)**. RUNTIME.md (PR #234 cycle 45 SSOT) 의 north-star ② "Eliminate all C dependencies from aprime_cc/hexac" 를 향한 첫 measurable extern delta. Phase 0 baseline (cycle 43-44) 가 173→137 extern 으로 닫혔고, 본 cycle 이 Phase 1 의 첫 surgical drop.
+
+**measured delta**: aprime_cc nm undefined-externs **137 → 135 (−2)** · `_strcmp` + `_memcmp` 제거 · smoke `exit(6*7)==42` PASS · 바이너리 1,119,480 → 1,120,024 B (+544 B). worktree `/tmp/wt-runtime-tier-a1-v2` (origin/main 694914cc 기반).
+
+**method (재현 가능)**:
+
+1. `self/runtime.c` 에 `#include "runtime_core.c"` **위로** 3개 static helper 추가 — `hxlcl_strlen` / `hxlcl_memcmp` / `hxlcl_strcmp`. 각각 `__attribute__((noinline))` 로 clang 의 libcall recognition (loop pattern → libc strlen 재인식) 1차 방어.
+2. 동일 블록 직후 `#define strlen hxlcl_strlen` / `#define memcmp ...` / `#define strcmp ...` 의 텍스트 redirect. 후속 #include 들 (runtime_core.c · post-process flatten 출력) 의 *모든* call site + macro expansion + inline header body 가 텍스트 단계에서 hxlcl_* 으로 치환됨.
+3. `self/runtime.c` 의 17 직접 호출 사이트 + `self/runtime_core.c` 의 30 strlen + 39 strcmp + 1 memcmp 사이트를 perl 일괄 치환 (comment-only line `^\s*//` 제외 · `strncmp` 보호용 lookbehind `(?<!strn)\bstrcmp`).
+4. `tool/build_aprime.sh` 의 `-Oz` clang 명령은 **변경 없음** — `-fno-builtin-{memcmp,strlen}` 시도 결과 strcmp 가 되려 되돌아오는 회귀가 났고, `-fno-builtin` 전체는 동일하게 137 유지. `#define` 텍스트 치환이 가장 깨끗한 path 였음 (comment 만 업데이트).
+
+**residual**: `_strlen` 1 잔류 — disasm `0x100000820 bl _strcat` → `0x100000824 bl _strlen` 시퀀스로 보아 libc strcat 의 inline impl 이 strlen 을 호출하는 path. cycle 47 이 `_strcat` 을 `hxlcl_strcat` 으로 unhook 하면서 동일 surgery 로 닫힘 (두 extern 동시 제거 예상 → 135 → 133).
+
+**honest scope**:
+- 본 cycle 은 **step-1 (C-source scaffold)** — `hxlcl_*` 자체도 폐기 예정. step-2 (후속 cycle) 에서 각 helper 를 `stdlib/runtime/<name>.hexa` 로 옮기고 codegen 의 `_builtin_runtime_sym` 매핑 확장으로 runtime.c 호출자와 연결. runtime.c HI tier 가 hexa-source 로 마이그되면 step-2 helpers + 본 scaffold 가 함께 사라짐.
+- S3 fixpoint check (`gen1.s ≡ gen2.s`) **DEFERRED to Phase 1 cumulative gate** — 본 cycle 은 단일 sub-symbol surgery 이고, Tier-A.1 전체 (~12 심볼) 가 들어온 시점에 gen1/gen2 byte-eq + LEAN size ±20% 게이트 일괄 측정. RUNTIME.md "Methodology checkpoints" 의 acceptance 시점 정의 일치.
+- "libc 호출 0" 또는 "Tier-A.1 closure" 주장 **금지** — cycle 46 = 2 심볼 measurable drop, 그 이상도 이하도 아님 (@F f1 g3-honest).
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +26 -3
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +37 (helper block + #define + 17 substitutions)
+ self/runtime_core.c  | 70 substitutions in place (LoC ~ unchanged)
+ tool/build_aprime.sh | +3 -3 (comment-only)
+```
+
+**cross-link**: RUNTIME.md ## Log "2026-05-20 — Phase 1 Tier-A.1 step-1 (cycle 46)" entry · RUNTIME.md ### Tier-A.1 의 `_strcmp/_memcmp` [partial] flip + `_strlen` [pending] 메모. Phase 1 cumulative gate (`≤ 5 external syscalls + 16 libm`) 는 ~10 cycle 후 측정.
+
+@cite RFC 061 §4.1 (runtime split) · `inbox/rfc_drafts_2026_05_20/rfc_runtime_hexa_native_rewrite.md` (cycle 42 draft) · `inbox/rfc_drafts_2026_05_20/aprime_c41_externs_catalog.txt` (173-symbol raw).
+
+### 2026-05-20 — RUNTIME.md Phase 1 Tier-A.1 cycle 47 — 5 more string libc symbols unhooked (137→130 cumulative)
+
+**작업 = cycle 47 batch surgery, same `hxlcl_* + #define` method**. cycle 46 (#241 merged · `0bece833`) 가 `_strcmp + _memcmp` 2개 + `_strlen` 잔류 1 으로 닫혔고, 본 cycle 이 `_strcat` 을 추가해서 strcat 와 함께 chained 되어있던 `_strlen` 잔류를 동반 제거, 그리고 5개 trivial string symbol (`_strchr · _strstr · _strndup` + 잔류 케이스 `_strdup · _strncmp · _strrchr`) batch 일괄 처리.
+
+**measured delta**: aprime_cc nm undefined externs **135 → 130 (−5)** · 누적 `137 → 130 = −7` · smoke `exit(6*7)==42` PASS · 바이너리 1,120,024 → 1,119,976 B (−48 B, 실질 무변).
+
+**closed this cycle (5 symbols)**:
+- `_strcat` — 5 사이트 substitution (runtime_core.c)
+- `_strlen` — cycle 46 잔류 1개가 strcat 와 동반 제거 (`bl _strcat` → `bl _strlen` inline chain)
+- `_strchr` — 2 사이트
+- `_strstr` — 9 사이트
+- `_strndup` — 3 사이트
+
+**residual (3 symbols · clang reverse-libcall recognition)**:
+- `_strdup` — `__hxa_exec_argv_core` 내부에서 `hxlcl_strdup` 의 `malloc(n+1) + byte copy` 패턴을 clang 이 `_strdup` 로 reverse-recognize. 1 libc call site.
+- `_strncmp` — `hxlcl_memcmp(a, b, k)` constant `k` 패턴을 `_strncmp` 로 reverse-recognize. 1 site (e.g. "unix:" prefix check).
+- `_strrchr` — `hxlcl_strchr` reverse-iterate 패턴 변환. 1 site (e.g. ':' last-char search).
+
+각각 `-fno-builtin-NAME` flag 시도했으나 -Oz 하에서는 reverse-recognition pass 가 builtin check 보다 먼저 발화 → flag 무효. cycle 48+ 가 (a) `@asm` block 으로 패턴 회피, (b) explicit side-effect 추가, 또는 (c) step-2 hexa-source 포트 중 하나로 정리.
+
+**method 확장**: cycle 46 의 `hxlcl_* + #define` 패턴이 batch 적용 가능 확인 — 1 cycle 에 6-9 심볼 처리 가능. `-fno-builtin*` flag 는 cycle 47 에서 실측 검증 후 REMOVED (no help, kept build script clean).
+
+**honest scope (unchanged from cycle 46)**:
+- step-1 (C-source scaffold) — `hxlcl_*` 9개 helpers 도 결국 폐기 대상. step-2 가 `stdlib/runtime/<name>.hexa` 마이그.
+- "libc-free" / "Tier-A.1 closure" 주장 금지 — Tier-A.1 acceptance "~125 externs" 까지 5 externs 남음 + 3 residual 처리 cycle 추가 필요.
+- S3 fixpoint check DEFERRED to Phase 1 cumulative gate.
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +30 -8
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +88 (6 new helpers + 6 new defines)
+ self/runtime_core.c  | ~48 substitutions in place
+ tool/build_aprime.sh | comment-only update (no flag change net)
+```
+
+**cross-link**: RUNTIME.md ## Log "cycle 47" entry · Tier-A.1 7 `[x]` + 3 `[pending]` flips · cycle 46 entry above · PR #241 (cycle 46) merged `0bece833`.
+
+@cite cycle 46 entry above · RFC 061 §4.1.
+
+### 2026-05-20 — RUNTIME.md Phase 1 Tier-A.1 cycle 48 — acceptance reached (137→122, -15 cumulative) + cycle-47 bug correction
+
+**작업 = (a) cycle-47 의 broken #define 버그 수정 + (b) numeric batch (atoi/atof/atoll/strtoll/strtoull) + bzero**. 결과로 Phase 1 Tier-A.1 acceptance target `~125 externs` measured **REACHED** (실측 122, 3 extern 더 좋음).
+
+**measured delta**: aprime_cc nm undefined externs **127 → 122 (−5)** · 누적 cycles 46+47+48 = **137 → 122 = −15** · smoke `exit(6*7)==42` PASS · 바이너리 1,119,480 → 1,119,896 B (+416 B, +0.04%).
+
+**closed this cycle (8 symbols)**:
+- broken-#define 수정: `_strdup` · `_strncmp` · `_strrchr` (cycle 47 의 "stubborn residual" 정정 — 실제로는 clang reverse-libcall recognition 이 아니라 내 perl 이 자기 `#define strncmp(...) hxlcl_strncmp(...)` 의 LHS 도 substitute 해서 `#define hxlcl_strncmp(...) hxlcl_strncmp(...)` self-redefine 으로 만든 게 진짜 원인)
+- numeric batch: `_atoi` · `_atoll` · `_atof` · `_strtoll` · `_strtoull` (5 helpers + #defines + perl substitution with `unless (/^\s*\/\/|^\s*#\s*define\b/)` skip rule)
+
+**cycle 47 회고 (g3-honest correction)**:
+> 이전 cycle 47 entry 의 "clang `-Oz` reverse-libcall recognition converts our `hxlcl_*` patterns back to libc-shaped calls" 는 **틀린 진단**. 실제 원인은 내 perl substitution 이 `#define strncmp(a,b,n) hxlcl_strncmp(...)` 의 첫번째 `strncmp` 토큰까지 `hxlcl_strncmp` 로 바꿔서 self-redefine 으로 망친 것. `-fno-builtin-strncmp` 시도가 효과 없었던 이유도 이걸로 설명됨. cycle 48 가 #define 들을 명시 재기재하고 perl 규칙에 `#define` skip 추가해서 닫음. 이 회고가 향후 같은 함정을 막기 위한 record.
+
+**residual (2 · 각 1 site)**:
+- `_bzero` — `hxlcl_bzero` + `#define bzero hxlcl_bzero` + `-fno-builtin-bzero` 플래그 모두 적용했으나 여전히 잔류. clang -Oz 가 `memset(p, 0, n)` 패턴을 토큰화 이전에 bzero 로 변환하는 어떤 메커니즘 (instcombine 또는 libcall-simplify-pre-preprocessor). `-fno-builtin-memset` 시도 미실행 (memset 전반 영향 risk). cycle 49 에 (a) memset 사이트도 hxlcl_memset 로 redirect 또는 (b) `__attribute__((no_builtin("bzero")))` per-fn 으로 시도.
+- `_strncpy` — cycle 48 후 새로 등장. baseline 137 에 없던 심볼. clang 이 어떤 hxlcl_* helper 또는 다른 loop 패턴을 strncpy 로 reverse-recognize 한 것. 1 call site, cycle 49 에 추적.
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +35 (8 [pending]→[x] flips + cycle 48 Log entry)
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +97 (6 numeric helpers + 6 new #defines · #define block typo fix)
+ self/runtime_core.c  | perl substitution in place
+ tool/build_aprime.sh | +3 -3 (comment update + -fno-builtin-bzero attempt)
+```
+
+**acceptance check (Phase 1 Tier-A.1, per RUNTIME.md)**:
+- "12+ libc symbols removed" — **15 removed** ✓ (strlen/strcmp/memcmp/strcat/strchr/strncmp/strrchr/strstr/strdup/strndup/atoi/atof/atoll/strtoll/strtoull)
+- "→ ~125 externs" — **122 measured** ✓ (3 better than target)
+- aprime_cc smoke exit(42) PASS ✓
+- binary size within ±20% of cycle-44 baseline — +0.04% ✓ (well within)
+
+Phase 1 cumulative gate (S3 fixpoint + Tier-A.{2,3,4,5,6} 까지) 는 후속 cycle. 이번 cycle 은 Tier-A.1 단독 acceptance.
+
+**cross-link**: RUNTIME.md ## Log "cycle 48" entry + ### Tier-A.1 8 추가 `[x]` flip + 2 `[pending]` (bzero/strncpy) + acceptance line 갱신 · PR #241 (cycle 46) + PR #243 (cycle 47) merged · cycle 48 = direct push to main (user directive).
+
+@cite cycle 47 entry above · RFC 061 §4.1.
+
+### 2026-05-20 — RUNTIME.md cycle 49 — Tier-A.1 final stragglers + Tier-A.2 memory triple partial (137→117, -20 cumulative)
+
+**작업 = Tier-A.1 final closure (bzero/strncpy/strcpy/strerror/strftime) + Tier-A.2 memory partial (memset/memmove)**. memset 의 hxlcl_ shim 화가 clang 의 memset→bzero 자동변환 path 를 차단해 bzero residual 도 동반 closure (cycle 48 의 "residual 1" 정리).
+
+**measured delta**: aprime_cc nm undefined externs **122 → 117 (−5)** · 누적 cycles 46+47+48+49 = **137 → 117 = −20** · smoke `exit(6*7)==42` PASS · 바이너리 1,119,896 → 1,119,992 B (+96 B 누적 0.04%).
+
+**closed this cycle (7 + 1 bonus symbols)**:
+- Tier-A.1 final: `_bzero` (cycle 48 residual 1 closed) · `_strncpy` (cycle 48 residual 2 closed — clang loop-to-strncpy variant은 hxlcl_memcpy/strcpy 화가 chain-eliminate) · `_strcpy` · `_strerror` (errno-class const-string stub) · `_strftime` (zero-return stub; compiler-binary fallback OK)
+- Tier-A.2 memory triple: `_memset` · `_memmove` · BONUS `___memcpy_chk` (fortified variant 자동 drop)
+
+**residual (1)**:
+- `_memcpy` — 2 call sites, both `bl _memcpy(w2=#0xa0)` = constant-size 160 byte struct copy. clang 이 `*dst = *src` aggregate assignment 를 libc memcpy 로 lower 하는 path 는 `-fno-builtin-memcpy` 보다 더 낮은 codegen 단계. cycle 50+ 가 (a) 해당 source 의 struct copy 를 명시 loop 로 변환, (b) `__builtin_memcpy_inline` 사용, 또는 (c) `-mllvm -enable-memcpy-elim=false` 류 LLVM 옵션 시도.
+
+**Tier-A.2 OPEN (5 symbols)**: malloc · free · realloc · calloc · mmap · munmap. `hxlcl_strdup` 와 `hexa_arena_alloc` 가 의존. 다음 cycle 에 hexa-native bump allocator + mmap syscall wrapper 도입 시 일괄 closure 가능.
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +30 (cycle 49 ## Log entry · Tier-A.1 7 [pending]→[x] + Tier-A.2 3 [partial])
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +120 (7 new helpers · 9 new #defines)
+ self/runtime_core.c  | perl substitution in place
+ tool/build_aprime.sh | -fno-builtin-memcpy 추가 (insufficient · documented)
+```
+
+**Phase 1 progress check**:
+- Tier-A.1 (trivial libc): **CLOSED** (15 of 12+ symbols 137→122 cycle 48, 122→117 cycle 49 closes residuals)
+- Tier-A.2 (memory): **3 of 8 dropped** (memset/memmove/___memcpy_chk) · 5 open (malloc/free/realloc/calloc/mmap/munmap) + 1 residual (memcpy)
+- Tier-A.3-A.6: OPEN
+
+**cross-link**: RUNTIME.md ## Log "cycle 49" + Tier-A.1 acceptance line maintained + Tier-A.2 partial · cycle 46-48 entries above · `4b101123` cycle 48 commit on main.
+
+@cite cycle 48 entry above · RFC 061 §4.1 · RUNTIME.md Tier-A.2 specification.
+
+### 2026-05-20 — RUNTIME.md cycle 50 — Tier-A.6 fortification + stack-protector disable (137→115, -22)
+
+**작업 = flag-only closure**. `-D_FORTIFY_SOURCE=0 -fno-stack-protector` 추가로 clang 이 `___stack_chk_fail` + `___stack_chk_guard` 런타임 심볼을 더 이상 emit 안 함. `___memcpy_chk` 는 cycle 49 에서 memcpy unhook 시 자동 drop 됨 (fortified 변종 자동 제거 패턴).
+
+**measured delta**: aprime_cc nm undefined externs **117 → 115 (−2)** · 누적 cycles 46-50 = **137 → 115 = −22** · smoke `exit(6*7)==42` PASS · 바이너리 1,119,992 → 1,119,784 B (−208 B = stack canary prologue 코드 사라짐).
+
+**closed**: `___stack_chk_fail` · `___stack_chk_guard`
+
+**flag-tried-ineffective**: `-fno-builtin-sincos` (macOS-specific `___sincos_stret` stret-pack 변환은 builtin check 후에 발화).
+
+**Tier-A.6 OPEN (6)**: `___chkstk_darwin` · `___sincos_stret` · `___darwin_check_fd_set_overflow` · `___error` · `___stderrp` · `___stdoutp`. 다음 cycle 후보:
+- `___chkstk_darwin` — `-mstack-arg-probe-size=0` or `-fno-stack-clash-protection`
+- `___stderrp` / `___stdoutp` — source-level treatment (fd 0/1/2 상수 사용으로 redirect)
+- `___error` — errno 접근. hexa TLS errno store 필요 (multi-cycle)
+
+**Tier-A.5 libm 잔류 검토**: `_cos` · `_exp` · `_fmod` 등 4 symbols 잔류. RUNTIME.md path (a) bit-exact 교체 또는 path (b) "libm-only-extern" 허용 정책 결정 필요. Phase 1 cumulative 게이트 정의가 `≤ 5 syscalls + 16 libm` 이므로 path (b) 가 spec 정합. cycle 51+ 에 결정.
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +18 (cycle 50 ## Log entry)
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | unchanged
+ self/runtime_core.c  | unchanged
+ tool/build_aprime.sh | +1 -1 (added -D_FORTIFY_SOURCE=0 -fno-stack-protector -fno-builtin-sincos)
+```
+
+**cross-link**: RUNTIME.md ## Log cycle 50 · cycles 46-49 entries · `8186bcfc` cycle 49 commit / `0121f98a` cycle 49 rebased on main.
+
 
 ### 진행 로그 — RFC 073 Phase 3e — 3 named §5 blockers CLOSED · new comb-loop layer exposed (cycle 2026-05-20)
 
