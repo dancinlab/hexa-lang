@@ -270,6 +270,169 @@ fn _func_label(target: string, name: string) -> string {
     return _fmt_label(target, name) + ":"
 }
 
+// ── RFC 070 G7-A.visibility scaffold ────────────────────────
+//
+// Per-symbol visibility scoping — Mach-O `.private_extern <sym>` and
+// ELF `.hidden <sym>`. Entry symbols (main / _start) keep default
+// (publicly exported) visibility; every other emitted function carries
+// the platform-specific hidden marker so downstream linkers can drop
+// the symbol from the dynamic symbol table when producing PIE/shared
+// artifacts.
+//
+// This is the codegen-side scaffold for RFC 070 §4 G7-A.visibility.
+// emit_body for D1 (arm64) + D2 (x86_64) lives on sister branches
+// (`d2-x86_64-emit-body`, harvest 8fdb29e2 / 9ea52f4b) and has not
+// merged into this branch yet — the scaffold below is the
+// branch-agnostic surface that those PRs converge on.
+//
+// Heuristic for entry detection: hexa lowers `fn main(...)` to the
+// LFunc with `name == "main"`. POSIX/ELF entries also use `_start`.
+// Everything else is internal-by-default. The heuristic is conservative
+// (false-positive favours visibility, never silent hide) — a future
+// cycle can attach an explicit `entry: bool` to LFunc once the IR
+// shape is allowed to evolve (currently locked by the emit-only
+// constraint at top of file).
+fn _is_entry_symbol(name: string) -> bool {
+    if name == "main"   { return true }
+    if name == "_start" { return true }
+    return false
+}
+
+// Returns the platform-specific hidden-visibility directive line
+// (including trailing "\n"), or "" when the symbol is an entry or
+// the target has no concept of visibility scoping (e.g. bare-metal
+// Thumb-2). The caller must emit this AFTER `.globl` and BEFORE the
+// function label — both Mach-O `as` and GNU `as` accept that order.
+fn _visibility_directive(target: string, sym: string) -> string {
+    if _is_entry_symbol(sym) { return "" }
+    if _is_thumb(target)     { return "" }   // bare-metal: no dynamic table
+    let mangled = _fmt_label(target, sym)
+    if _is_darwin(target) {
+        return ".private_extern " + mangled + "\n"
+    }
+    // ELF (x86_64-linux-gnu and any future ELF target)
+    return ".hidden " + mangled + "\n"
+}
+
+// ── RFC 070 G7-D.codegen scaffold (capability + ABI sections) ─
+//
+// Emit two metadata sections per module:
+//   __HEXA,__cap  (Mach-O)  /  .hexa.cap   (ELF)  — capability manifest
+//   __HEXA,__abi  (Mach-O)  /  .hexa.abi   (ELF)  — 12-byte ABI stamp
+//
+// ABI stamp layout (RFC 070 §G7-D.B2, harvest c54b76f3):
+//   offset 0  u32  runtime_version          (little-endian)
+//   offset 4  u64  nanbox_layout_hash       (little-endian, FNV-1a)
+//
+// The capability payload depends on the `@plugin(capabilities=[...])`
+// AST (parser harvest 9401be63) and the HXC v2 manifest encoder
+// (stdlib/dynlink_caps.hexa, harvest 5f37a884). Both pre-merge on this
+// branch as of 2026-05-20 — the codegen surface emits the section
+// HEADERS unconditionally with an empty (zero-length) payload, so the
+// `__HEXA,__cap` / `.hexa.cap` section is always present and
+// downstream tooling (`hexa-ld` capability gate) sees an explicit
+// no-capabilities decision instead of a silently-missing section.
+//
+// E3 audit cross-ref (10e87cd1) — D3 capability-bypass risk: a
+// malformed manifest whose first cell is not `'H'` USED to silently
+// parse-empty in dynlink_caps._parse_manifest, granting the loader a
+// degenerate `caps=[]` decision indistinguishable from the
+// honest-empty case. The follow-on cycle in the dynlink_caps SSOT
+// (when the file merges to this branch) must flip that path to a
+// `GateResult{kind:"parse_error"}` explicit reject. Recorded as
+// punted in this cycle's commit — emitting the section header here
+// makes the missing-vs-empty distinction observable from the linker
+// side without depending on the not-yet-merged SSOT.
+
+// CURRENT RUNTIME — bump on every wire-shape change.
+let HEXA_RUNTIME_VERSION: i64 = 1
+
+// NaN-boxing layout hash — placeholder constant. A future cycle will
+// derive this from compiler/runtime/nanbox.hexa via FNV-1a over the
+// 16-byte HexaVal struct shape (tag lo, payload hi). Holding a fixed
+// constant here keeps the 12-byte stamp size invariant and lets
+// downstream tooling exercise the parser before the hash function
+// lands.
+let HEXA_NANBOX_LAYOUT_HASH: i64 = 0  // populated in G7-D.B2 follow-on
+
+// Hex string for one byte in the little-endian encoded ABI stamp.
+fn _abi_byte_hex(byte: i64) -> string {
+    let hi = (byte / 16) & 15
+    let lo = byte & 15
+    let mut s = ""
+    if hi < 10 { s = s + to_string(hi) } else {
+        if hi == 10 { s = s + "a" }
+        if hi == 11 { s = s + "b" }
+        if hi == 12 { s = s + "c" }
+        if hi == 13 { s = s + "d" }
+        if hi == 14 { s = s + "e" }
+        if hi == 15 { s = s + "f" }
+    }
+    if lo < 10 { s = s + to_string(lo) } else {
+        if lo == 10 { s = s + "a" }
+        if lo == 11 { s = s + "b" }
+        if lo == 12 { s = s + "c" }
+        if lo == 13 { s = s + "d" }
+        if lo == 14 { s = s + "e" }
+        if lo == 15 { s = s + "f" }
+    }
+    return s
+}
+
+// Little-endian byte sequence for an i64, low n bytes only.
+// n=4 → u32 runtime_version; n=8 → u64 nanbox_layout_hash.
+fn _abi_le_bytes(value: i64, n: i64) -> string {
+    let mut out = ""
+    let mut i = 0
+    let mut v = value
+    while i < n {
+        out = out + _abi_byte_hex(v & 255)
+        v = v / 256
+        i = i + 1
+    }
+    return out
+}
+
+// 12-byte ABI stamp = 4-byte runtime_version + 8-byte nanbox_layout_hash.
+fn _abi_stamp_hex() -> string {
+    return _abi_le_bytes(HEXA_RUNTIME_VERSION, 4) +
+           _abi_le_bytes(HEXA_NANBOX_LAYOUT_HASH, 8)
+}
+
+fn _cap_section_directive(target: string) -> string {
+    if _is_darwin(target) {
+        return ".section __HEXA,__cap"
+    }
+    if _is_thumb(target) {
+        return ""   // bare-metal: no capability gate
+    }
+    return ".section .hexa.cap,\"\",@progbits"
+}
+
+fn _abi_section_directive(target: string) -> string {
+    if _is_darwin(target) {
+        return ".section __HEXA,__abi"
+    }
+    if _is_thumb(target) {
+        return ""   // bare-metal: no dynamic ABI surface
+    }
+    return ".section .hexa.abi,\"\",@progbits"
+}
+
+// Emit a complete section (header + label + hex bytes). Empty payload
+// emits only the header — the section's mere presence is the signal.
+fn _emit_meta_section(directive: string, label: string, payload_hex: string) -> string {
+    if len(directive) == 0 { return "" }
+    let mut out = directive + "\n"
+    if len(label) > 0 {
+        out = out + label + ":\n"
+    }
+    if len(payload_hex) > 0 {
+        out = out + _emit_section_bytes(payload_hex)
+    }
+    return out
+}
+
 // ── Section payload (rodata / bss) ──────────────────────────
 //
 // LSection.bytes is hex-encoded payload (per LIR docstring). For
@@ -326,6 +489,11 @@ fn _emit_section(target: string, sec: LSection, header: string) -> string {
 fn _emit_func(target: string, f: LFunc) -> string {
     let mut out = ""
     out = out + _globl_directive(target, f.name) + "\n"
+    // RFC 070 G7-A.visibility — hidden marker for non-entry symbols.
+    // `.private_extern` (Mach-O) / `.hidden` (ELF). Entry (main /
+    // _start) keeps default-public visibility. Empty string when the
+    // target has no visibility concept (Thumb-2 bare-metal).
+    out = out + _visibility_directive(target, f.name)
     if _is_darwin(target) {
         // Apple/Mach-O: .p2align 2 (4-byte) for ARM64
         out = out + "    .p2align 2\n"
@@ -464,6 +632,31 @@ pub fn emit_asm(module: LModule) -> string {
             parts.push("    .p2align 3\n" + f.label + ":\n    .double " + f.text + "\n")
             fi2 = fi2 + 1
         }
+    }
+
+    // ---- RFC 070 G7-D.codegen — capability manifest + ABI stamp ----
+    //
+    // `__HEXA,__cap` / `.hexa.cap` carries the per-module capability
+    // manifest (HXC v2 payload). Currently empty: the AST has
+    // `@plugin(capabilities=[...])` (parser harvest 9401be63) but the
+    // `_pending_annotations` → HXC manifest encoder (dynlink_caps.hexa
+    // harvest 5f37a884) has not merged into this branch. The empty
+    // section is the no-capabilities signal the loader gate distinguishes
+    // from missing-section — see capability-bypass note in the
+    // _emit_meta_section commentary above.
+    //
+    // `__HEXA,__abi` / `.hexa.abi` is the 12-byte ABI stamp
+    // (u32 runtime_version + u64 nanbox_layout_hash, little-endian) —
+    // RFC 070 §G7-D.B2 (harvest c54b76f3). The loader rejects a
+    // module whose stamp doesn't match the host runtime's expected
+    // pair.
+    let cap_dir = _cap_section_directive(target)
+    if len(cap_dir) > 0 {
+        parts.push(_emit_meta_section(cap_dir, "_hexa_cap_manifest", ""))
+    }
+    let abi_dir = _abi_section_directive(target)
+    if len(abi_dir) > 0 {
+        parts.push(_emit_meta_section(abi_dir, "_hexa_abi_stamp", _abi_stamp_hex()))
     }
 
     return parts.join("")

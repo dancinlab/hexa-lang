@@ -42,7 +42,42 @@
 
 (append-only)
 
-### 2026-05-20 — RFC 075 P1+P2+P3 — Metal codegen text-emit (codegen-only, no silicon fire)
+### 2026-05-20 — RFC 070 G7-A.visibility + G7-D.codegen — 2-in-1 emit scaffold (D1 follow-on + D3 follow-on)
+
+**작업 = emit-side scaffold (Shape B)** — `compiler/emit/asm.hexa` 단일 파일 surgical. parse-gate PASS. behavior change = 신규 directive/section emit (entry 외 hidden 마킹 + `__HEXA,__cap`/`.hexa.cap` empty manifest + `__HEXA,__abi`/`.hexa.abi` 12B stamp).
+
+**Part A — G7-A.visibility (D1 follow-on)**:
+- `_is_entry_symbol(name)` — heuristic `main` || `_start` (LFunc shape 동결 제약 하에 가장 보수적 — false-positive 가 silent-hide 보다 안전).
+- `_visibility_directive(target, sym)` — Mach-O `.private_extern <sym>` (entry 제외) · ELF `.hidden <sym>` (entry 제외) · Thumb-2 ""(no-op). `_globl_directive` 바로 다음 라인에 emit (`as`/GNU-as 모두 그 순서 허용).
+- `_fmt_mem` ELF cross-target 버그 (사용자 명세) 확인: 현재 본 브랜치의 `_fmt_mem` 는 이미 `_is_darwin` / `_is_thumb` / x86 3-way 분기로 옳게 라우팅됨. `_arm64_op_mem_label` 변형은 본 브랜치에 없음 (D1 emit-body harvest 8fdb29e2 이 sister branch `d2-x86_64-emit-body` 에 격리, origin/main HEAD 53a667bf 의 ancestor 아님). risk 가 실제 코드로 도달하지 않음 — D1 emit-body 가 merge 될 때 그 branch 의 `_fmt_mem` 라우팅에 `_is_darwin(target)` 분기를 함께 land 해야 (E3 audit 10e87cd1 의 D1 ELF cross-target bug). 본 cycle 에서는 punt.
+
+**Part B — G7-D.codegen (D3 follow-on)**:
+- `_cap_section_directive(target)` · `_abi_section_directive(target)` — Mach-O `__HEXA,__cap` / `__HEXA,__abi` · ELF `.hexa.cap` / `.hexa.abi` (`,"",@progbits`).
+- `HEXA_RUNTIME_VERSION = 1` (u32) + `HEXA_NANBOX_LAYOUT_HASH = 0` (u64 placeholder — nanbox FNV-1a 는 별 cycle). `_abi_stamp_hex()` = 4-byte LE version + 8-byte LE hash = 12 B (B2 spec, harvest c54b76f3).
+- `_emit_meta_section(directive, label, payload_hex)` — header + label + hex bytes. empty payload 도 header 는 항상 emit (manifest 의 "missing vs no-capabilities" 차이를 linker 가 본다).
+- `emit_asm` 끝에 `__HEXA,__cap` (empty `_hexa_cap_manifest` 레이블) + `__HEXA,__abi` (`_hexa_abi_stamp` 레이블, 12 B 페이로드) 두 섹션 emit.
+
+**capability-bypass fix (D3 dynlink_caps `_parse_manifest`) — PUNTED**:
+사용자 명세의 fix 대상 (`malformed-non-'H'-first-cell` 가 silently empty parse → `GateResult{kind:"parse_error"}` 명시 reject) 의 SSOT 인 `stdlib/dynlink_caps.hexa` 는 D3 harvest 5f37a884 이 본 브랜치에 미 merge — 파일 자체 부재. emit 측에서 `__HEXA,__cap` header 를 무조건 emit 하게 함으로써 "section 없음 = 의심 / section empty = 명시적 no-caps" 구분을 loader 가 관측 가능하게 만든 것이 본 cycle 의 partial mitigation. 진짜 reject 는 dynlink_caps.hexa 가 merge 된 사이클의 follow-on.
+
+**검증**:
+- `/Users/ghost/.hx/bin/hexa_real parse compiler/emit/asm.hexa` → `OK: ... parses cleanly`.
+- `grep -cF "<<<<<<<" compiler/emit/asm.hexa` → `0` (conflict marker 0).
+- binary promote 금지 (g_inbox_processing_loop step 7 — 별도 deploy cycle).
+- inbox/PATCHES.yaml 미터치.
+
+**g3 honest scope**: scaffold + emit 가 land. byte-eq falsifier(F-RFC070-VIS-EMIT / F-RFC070-CAP-EMIT) 는 본 cycle 에서 측정하지 않음 (next cycle: rebuild + 1 fixture 의 stage-1 asm 에 `.private_extern` 라인 + `__HEXA,__cap`/`__HEXA,__abi` 섹션 출현 확인 + 기존 fixture 의 .text/.rodata 부분 byte-identical 확인). RFC 070 §4 G7-A.visibility · G7-D.codegen 행 진척 = "emit-side scaffold LANDED, falsifier deferred".
+
+**heritage cross-ref**: D1 8fdb29e2 (arm64 emit-body, sister branch) · E2 9ea52f4b (x86_64 emit-body, sister branch) · D3 5f37a884 (plugin_attr_scaffold + dynlink_caps body, sister branch) · C3+C5 9401be63·a0cd5c57 (parser `@plugin(capabilities=[...])` + AST, sister branch) · E3 10e87cd1 (D-wave audit) · B2 c54b76f3 (12 B ABI stamp 스펙). 본 cycle = origin/main HEAD 53a667bf 에서 분기한 `s1-step2-codegen-perf` 브랜치에 emit-측 scaffold 만 land — codegen-side D1/D2/D3 PR 이 main 으로 merge 되면 두 surface 가 자연 합류.
+
+**LoC delta**:
+
+```
+ compiler/emit/asm.hexa  | +178 (visibility helpers + cap/abi section helpers + emit wiring)
+ compiler/PLAN.md        | + 48 (this entry)
+```
+
+### 2026-05-20 — #18 S1-step-2 — `lower_hir` super-linear 제거 (O(N²) → near-linear, byte-eq PASS)
 
 **작업 = Campaign C — Metal vendor P1+P2+P3 codegen-only land** — RFC 075 의 Metal-side phases 를 codegen 텍스트 emit 까지 진행. silicon fire (P4) 는 follow-on USER-LOCAL Mac cycle 로 명시 punt. ROCm 측은 P0 유지 — pool 에 AMD GPU 없어 P1+ multi-session blocked. NVPTX path byte-identically 미변경. `self/codegen_c2.hexa` 미터치 (@D g_commit_push_deploy).
 
