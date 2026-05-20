@@ -7876,3 +7876,32 @@ Phase 1 cumulative gate (S3 fixpoint + Tier-A.{2,3,4,5,6} 까지) 는 후속 cyc
 **cross-link**: RUNTIME.md ## Log "cycle 49" + Tier-A.1 acceptance line maintained + Tier-A.2 partial · cycle 46-48 entries above · `4b101123` cycle 48 commit on main.
 
 @cite cycle 48 entry above · RFC 061 §4.1 · RUNTIME.md Tier-A.2 specification.
+
+### 2026-05-20 — RUNTIME.md cycle 50 — Tier-A.6 fortification + stack-protector disable (137→115, -22)
+
+**작업 = flag-only closure**. `-D_FORTIFY_SOURCE=0 -fno-stack-protector` 추가로 clang 이 `___stack_chk_fail` + `___stack_chk_guard` 런타임 심볼을 더 이상 emit 안 함. `___memcpy_chk` 는 cycle 49 에서 memcpy unhook 시 자동 drop 됨 (fortified 변종 자동 제거 패턴).
+
+**measured delta**: aprime_cc nm undefined externs **117 → 115 (−2)** · 누적 cycles 46-50 = **137 → 115 = −22** · smoke `exit(6*7)==42` PASS · 바이너리 1,119,992 → 1,119,784 B (−208 B = stack canary prologue 코드 사라짐).
+
+**closed**: `___stack_chk_fail` · `___stack_chk_guard`
+
+**flag-tried-ineffective**: `-fno-builtin-sincos` (macOS-specific `___sincos_stret` stret-pack 변환은 builtin check 후에 발화).
+
+**Tier-A.6 OPEN (6)**: `___chkstk_darwin` · `___sincos_stret` · `___darwin_check_fd_set_overflow` · `___error` · `___stderrp` · `___stdoutp`. 다음 cycle 후보:
+- `___chkstk_darwin` — `-mstack-arg-probe-size=0` or `-fno-stack-clash-protection`
+- `___stderrp` / `___stdoutp` — source-level treatment (fd 0/1/2 상수 사용으로 redirect)
+- `___error` — errno 접근. hexa TLS errno store 필요 (multi-cycle)
+
+**Tier-A.5 libm 잔류 검토**: `_cos` · `_exp` · `_fmod` 등 4 symbols 잔류. RUNTIME.md path (a) bit-exact 교체 또는 path (b) "libm-only-extern" 허용 정책 결정 필요. Phase 1 cumulative 게이트 정의가 `≤ 5 syscalls + 16 libm` 이므로 path (b) 가 spec 정합. cycle 51+ 에 결정.
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +18 (cycle 50 ## Log entry)
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | unchanged
+ self/runtime_core.c  | unchanged
+ tool/build_aprime.sh | +1 -1 (added -D_FORTIFY_SOURCE=0 -fno-stack-protector -fno-builtin-sincos)
+```
+
+**cross-link**: RUNTIME.md ## Log cycle 50 · cycles 46-49 entries · `8186bcfc` cycle 49 commit / `0121f98a` cycle 49 rebased on main.

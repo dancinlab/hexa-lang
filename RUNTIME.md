@@ -477,3 +477,26 @@ For each Tier-A sub-phase:
   · strndup · atoi · atoll · atof · strtoll · strtoull · bzero ·
   memcpy · memset · memmove · strncpy · strcpy · strerror ·
   strftime (23 entries; strerror+strftime are stubs)
+
+### 2026-05-20 — Tier-A.6 fortification/stack-protector flags (cycle 50)
+
+- ✅ cycle 50 — flag-only closure of compiler-rt residuals.
+  `-D_FORTIFY_SOURCE=0` + `-fno-stack-protector` added to
+  build_aprime.sh; clang stops emitting `___stack_chk_fail` and
+  `___stack_chk_guard` runtime symbols (fortified `___memcpy_chk`
+  already dropped automatically via cycle 49's memcpy unhook).
+  Result: aprime_cc nm undefined externs 117 → **115** (−2 ·
+  cumulative **137 → 115 = −22**) · smoke exit(42) PASS · binary
+  1,119,992 → 1,119,784 B (−208 B; smaller since stack-canary
+  prologues no longer emitted)
+- `-fno-builtin-sincos` also attempted to drop `___sincos_stret`
+  (macOS-specific paired-trig stret call) — INEFFECTIVE; clang's
+  stret packing fires after the builtin check. Defer
+- Tier-A.6 remaining: `___chkstk_darwin` · `___sincos_stret` ·
+  `___darwin_check_fd_set_overflow` · `___error` · `___stderrp` ·
+  `___stdoutp` · `__DefaultRuneLocale` (dropped earlier?). These
+  need either source touches (stderrp/stdoutp → fd-0/1 constants)
+  or compiler-flag deeper changes (chkstk_darwin: `-mstack-arg-
+  probe-size=0` or `-fno-stack-clash-protection`)
+- No source changes this cycle — `self/runtime.c` unchanged from
+  cycle 49 state. Pure build-script update.
