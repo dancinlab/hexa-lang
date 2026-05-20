@@ -7,6 +7,8 @@ aura/bot/energy domain recovery.
 | file | role |
 |---|---|
 | `urdf_kernel.py` | `kinematic_metrics(urdf_path)` · `joint_breakdown` · `urdf_sha256_16` · `yourdfpy_version` — given any URDF file, parse it and reduce the kinematic tree to deterministic facts (link / joint counts, DOF, mass, bbox). |
+| `fk_2link_kernel.hexa` | D80 g_hexa_only pilot #3 — clean-room hexa-native 2-link planar revolute-arm forward kinematics (closed form + SE(3) 4×4 transform). Substrate parity vs numpy 2.0.x at machine epsilon (≤ 1e-15 absolute / ≤ 1.5e-16 relative on the one operation-order-sensitive SE(3) translation channel) across 5 joint configurations (test below). Heavier substrates (general-tree URDF walk in hexa-native) still live in `urdf_kernel.py` / yourdfpy until follow-on ports land. |
+| `fk_2link_kernel_test.hexa` | Substrate parity check for `fk_2link_kernel.hexa` — 28 assertions across 5 joint configurations spanning zero / 90° / fold / right-angle / asymmetric. Run: `hexa run stdlib/kernels/urdf/fk_2link_kernel_test.hexa`. |
 
 ## 2-layer (ABSORPTION.md ①)
 
