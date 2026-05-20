@@ -5639,9 +5639,16 @@ HexaVal hexa_real_args() {
 
 // T39: math helpers route through __hx_to_double so TAG_VALSTRUCT
 // wrappers (interpreter Vals) don't cast vs pointer bits to double.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_sqrt(HexaVal v) {
     return hexa_float(sqrt(__hx_to_double(v)));
 }
+#else
+extern HexaVal rt_sqrt(HexaVal v);
+HexaVal hexa_sqrt(HexaVal v) {
+    return rt_sqrt(hexa_float(__hx_to_double(v)));
+}
+#endif
 
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_pow(HexaVal base, HexaVal exp) {

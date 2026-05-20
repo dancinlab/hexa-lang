@@ -10,6 +10,25 @@
 // TAG_FLOAT slot) + return unwrap is `HX_FLOAT`. Two ~5ns each
 // surrounding a ~100ns Taylor body. Acceptable for any caller.
 
+// Step 3 cycle 7 — square root (Newton-Raphson). Replaces libm sqrt()
+// in self/runtime_core.c::hexa_sqrt. Convergence is quadratic; the 40-
+// iter cap is conservative for double precision (typical convergence
+// at ~6 iterations). Negative input clamps to 0.0 (matches libm sqrt's
+// domain-error → NaN replaced with conservative 0 for hexa user code).
+pub fn rt_sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x * 0.5
+    if g < 1.0 { g = 1.0 }
+    let mut i = 0
+    while i < 40 {
+        let next = 0.5 * (g + x / g)
+        if next == g { return next }
+        g = next
+        i = i + 1
+    }
+    return g
+}
+
 pub fn rt_fmod(x: float, y: float) -> float {
     if y == 0.0 { return 0.0 }
     let q = x / y
