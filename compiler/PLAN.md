@@ -6859,3 +6859,78 @@ the immediate blocker. Larger RAM host (none in current roster)
 would let hexac complete the 85-GB run as a baseline measurement.
 
 **cc --regen / binary promote**: 미수행. cycle 36 = pure measurement.
+
+
+### 2026-05-20 — follow-up cycle 37: hexac emits 2× asm instructions for same source — non-linear blow-up source
+
+cycle 36 의 85 GB peak VM 의 deeper root cause. 작은 입력 (131-line
+falsifier) 에서 측정:
+
+```
+aprime_cc emit-asm:  21,333 lines  · peak VM  542 MB
+hexac    emit-asm:   42,504 lines  · peak VM  918 MB
+
+Ratio: 2.0× instructions · 1.7× memory
+```
+
+Same compiler source (compiler/*) compiled the same input (falsifier).
+But hexac emits **2× the asm instructions** vs aprime_cc. This is the
+seed of the non-linear blow-up on full closure (14× memory):
+
+```
+Input scale   →  Instruction bloat  →  Memory peak
+131 lines        2.0×                  1.7×
+10.6 MB          (presumably much higher)   14×
+```
+
+**Hypothesis**: hexac's lowering / lower_hir / hir_to_mir / regalloc
+chain takes a different path than aprime_cc's, producing MORE
+intermediate state. Possibly:
+
+1. **Arena rewind invalidates map refs** — the comment at
+   compiler/codegen/arm64_darwin.hexa:2087 mentions a known issue
+   where "the resident `mf` map invalidated by the rewind makes
+   `mf.blocks` a map-miss (len 0) after the first statement". The
+   `mf_blocks = mf.blocks` line hoists once to avoid this. If a
+   similar issue exists somewhere else in the lowering chain, hexac
+   may be re-running expensive computations.
+
+2. **Per-statement delta accumulation** (cycle h20 comment, lines
+   2095-2106) — this was already optimized for aprime_cc's
+   instruction emission. But the resulting heapify pattern may
+   still leak when chained through the asm-path runtime.
+
+3. **fn_arena scope_push/pop emission gap** — grep on emitted asm
+   shows ZERO `scope_push` / `scope_pop` / `fn_arena_return`
+   symbols in either /tmp/probe_c35.s or /tmp/aprime_falsifier.s
+   (both compiled by aprime_cc). The macros may be inlined into
+   `__hexa_fn_arena_return` calls. The 2× ratio suggests hexac is
+   generating 2× the `__hexa_fn_arena_return` call sites for the
+   same source — which would explain both 2× instr count AND 14×
+   memory at scale.
+
+**Honest scope** (g3):
+
+cycle 37 = measurement + hypothesis. To CLOSE the root cause:
+- need to diff specific function bodies in probe_c35.s vs
+  aprime_falsifier.s to find which fn is 2× as long
+- once located, identify what lowering decision diverges
+- patch in aprime_cc/compiler/codegen/arm64_darwin.hexa
+
+This is multi-cycle deep work. cycle 38+ is the diff-bisect step.
+
+**S3 fixpoint full closure status (unchanged from cycle 36)**:
+
+- gen1.s (aprime_cc on flat): 10.6 MB md5 64b1085e... ✅
+- gen2.s (hexac on flat): BLOCKED on 85 GB peak VM jetsam-kill
+- Cycle 35 truncate fix solved SIGBUS chain (medium PASS) ✅
+- Cycle 36 quantified memory regime ✅
+- Cycle 37 located instruction-count non-linearity (2× small, 14× large)
+- Cycle 38+: diff-bisect probe_c35.s vs aprime_falsifier.s to find
+  the lowering divergence
+
+**RFC 063 phasing**: 37 cycles · 18 falsifier + 6 measure ·
+SIGBUS chain CLOSED · memory non-linearity LOCATED · root cause
+narrowing in progress.
+
+**cc --regen / binary promote**: 미수행. cycle 37 = measurement only.
