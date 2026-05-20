@@ -1652,12 +1652,47 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                 }
             }
             // ── cond-mux shape detection: both bodies = single
-            //    `LHS <= RHS ;` with same simple-name LHS ──
+            //    `LHS <= RHS ;` (or `=`). LHS may be simple-name
+            //    (then_toks[0]) OR indexed with a const-foldable index
+            //    (then_toks[0] `[` const_expr `]`) — yielding the
+            //    canonical `name[idx_value]` SigSpec string. ──
             let mut t_ok = 0
             let mut t_lhs = ""
             let mut t_rhs: [str] = []
+            let mut t_op_str = ""
             if len(then_toks) >= 4 {
+                let mut op_pos = 0 - 1
+                let mut lhs_str = ""
                 if then_toks[1] == "<=" || then_toks[1] == "=" {
+                    lhs_str = then_toks[0]
+                    op_pos = 1
+                }
+                if then_toks[1] == "[" {
+                    let mut bd = 1
+                    let mut p = 2
+                    let mut idx_toks: [str] = []
+                    while p < len(then_toks) {
+                        if then_toks[p] == "[" { bd = bd + 1 }
+                        if then_toks[p] == "]" {
+                            bd = bd - 1
+                            if bd == 0 { break }
+                        }
+                        idx_toks = idx_toks.push(then_toks[p])
+                        p = p + 1
+                    }
+                    if p < len(then_toks) && then_toks[p] == "]" {
+                        if p + 1 < len(then_toks) {
+                            if then_toks[p + 1] == "<=" || then_toks[p + 1] == "=" {
+                                let ev = _rv_eval_expr(idx_toks, 0, tab, 1)
+                                if len(ev.err) == 0 {
+                                    lhs_str = then_toks[0] + "[" + str(ev.value) + "]"
+                                    op_pos = p + 1
+                                }
+                            }
+                        }
+                    }
+                }
+                if op_pos > 0 {
                     let mut last_semi = 0 - 1
                     let mut semi_count = 0
                     let mut ti = 0
@@ -1670,8 +1705,9 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     }
                     if semi_count == 1 && last_semi == len(then_toks) - 1 {
                         t_ok = 1
-                        t_lhs = then_toks[0]
-                        let mut ti2 = 2
+                        t_lhs = lhs_str
+                        t_op_str = then_toks[op_pos]
+                        let mut ti2 = op_pos + 1
                         while ti2 < len(then_toks) - 1 {
                             t_rhs = t_rhs.push(then_toks[ti2])
                             ti2 = ti2 + 1
@@ -1758,7 +1794,7 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
             //   A=lhs[feedback], B=d, Y=mux_y) + $dff(D=mux_y, Q=lhs).
             //   Combinational no-else is intentionally NOT covered
             //   (would infer a latch — emit nothing → fallback skip).
-            if t_ok == 1 && has_else == 0 && is_clocked == 1 && then_toks[1] == "<=" {
+            if t_ok == 1 && has_else == 0 && is_clocked == 1 && t_op_str == "<=" {
                 let cer = _rv_elab_expr(cond_toks, 0, m, 1, tab)
                 if len(cer.err) == 0 {
                     m = cer.m
@@ -2729,6 +2765,27 @@ fn main() {
         }
         if rtlil_count_cells_of_type(_m36, "$dff") != 2 {
             println("FAIL T36b dff_count got " + str(rtlil_count_cells_of_type(_m36, "$dff")))
+            fails = fails + 1
+        }
+    }
+
+    // T37 — single-stmt indexed-LHS no-else cond-mux (proc-pass sub-step
+    //       #3a, static const index only):
+    //       `reg q [0:3]; always @(posedge clk) if (en) q[2] <= d ;`
+    //       → 1 $mux + 1 $dff with Q wire = "q[2]".
+    total = total + 1
+    let _v37 = "module mi ( input clk , input en , input d ) ; reg q [ 0 : 3 ] ; always @ ( posedge clk ) if ( en ) q [ 2 ] <= d ; endmodule"
+    let _r37 = read_verilog(_v37)
+    if _r37.ok != 1 {
+        println("FAIL T37 cond_mux_indexed_noelse: " + _r37.message); fails = fails + 1
+    } else {
+        let _m37 = _r37.design.modules[0]
+        if rtlil_count_cells_of_type(_m37, "$mux") != 1 {
+            println("FAIL T37a mux_count got " + str(rtlil_count_cells_of_type(_m37, "$mux")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m37, "$dff") != 1 {
+            println("FAIL T37b dff_count got " + str(rtlil_count_cells_of_type(_m37, "$dff")))
             fails = fails + 1
         }
     }
