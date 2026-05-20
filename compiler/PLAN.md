@@ -3999,3 +3999,38 @@ Remaining (non-gating, this session's autonomy queue):
   step 5 — parse_edge_lines `=>` description filter (NEW, this commit)
 
 RFC 065+066 commits cumulative : 27
+
+## 진행 로그 — RFC 065 steps 2+5 measured PASS (2026-05-20)
+
+★ step 2 (driver arg-forwarding via `hexa loop --write`) and step 5
+(parser noise filter) both measured PASS.
+
+step 5 (`4ed74946`): parse_edge_lines `=>` description filter — skip
+body if string-quoted (description annotation) so unfold/cite_unreachable
+do not emit Korean docstring text as cite ids. Slug quality cleaned;
+total still 65 emit (cap 32 per lens dominates).
+
+step 2 (no commit needed — already closed by `f8caef3f` found_hexa
+fallback): direct measurement of the driver path:
+  rm -rf state/loop/ inbox/atlas_candidates/
+  HEXA_MAC_BUILD_OK=1 hexa loop --write   # via /tmp/hexadrv loop --write
+  ->
+    flags: once=true no_fire=true dry_run=false       (--write forwarded)
+    [6/8 DRAFT] 65 candidate(s) -> inbox/atlas_candidates/<slug>.md
+  ls inbox/atlas_candidates/ | wc -l  ->  60 files
+  cleanup -> 0 files
+
+The cmd_run path (self/main.hexa:2244) already iterates extra_args and
+appends shq'd to the compiled binary invocation; cycle.hexa's
+found_hexa fallback then routes `--write` past the .hexa-scan to its
+flag handler. End-to-end PATH-level `hexa loop --write` materializes
+the atlas-growth candidate stream in inbox/atlas_candidates/.
+
+PR-only invariant verified again on the driver path: zero
+compiler/atlas/* / compiler/lenses/* writes.
+
+Remaining (autonomy queue):
+  step 3 — C-1.d more lens body populates (incremental, PR-driven)
+  step 4 — RFC 066 B-1b C-kind HXC sidecar (heavy 1-2 sprint)
+
+RFC 065+066 commits cumulative : 28
