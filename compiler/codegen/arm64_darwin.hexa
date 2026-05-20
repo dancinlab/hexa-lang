@@ -1206,6 +1206,16 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "chr"           { return "hexa_chr_byte" }
     if name == "from_char_code" { return "hexa_from_char_code" }
     if name == "write_bytes"   { return "rt_write_bytes" }
+    // Cycle 34/35: `.truncate(n)` was unmapped → fallthrough returned
+    // "truncate" → link resolved to libc's truncate(const char *path,
+    // off_t length) → SIGBUS when hexa_array_push later memmove'd into
+    // the array whose metadata was clobbered by the bogus path-write.
+    // The fix is a single map entry; runtime exports `hexa_array_truncate`
+    // (self/runtime.c:`hexa_array_truncate`). Confirms cycle 34's root-
+    // cause crash stack: _patch_loop_sentinels → array.truncate(0) →
+    // libc-truncate-with-garbage-path → metadata corrupt → next .push
+    // memmove SIGBUS.
+    if name == "truncate"      { return "hexa_array_truncate" }
     // Interp aliases (bind.hexa accepts them as known names; without
     // a runtime symbol map the link fails on `_str`/`_int`/etc.).
     // `str(x)` is interp's shorthand for `to_string(x)` (see

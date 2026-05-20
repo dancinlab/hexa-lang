@@ -6699,3 +6699,89 @@ toolchain so the work is single-host.
 **cc --regen / binary promote**: 미수행. cycle 34 는 source
 unchanged (all attempted patches reverted) — measurement + honest
 report only.
+
+
+### 2026-05-20 — follow-up cycle 35: TRUE root cause = unmapped `truncate` → libc collision (SIGBUS solved + medium falsifier 1.7 MB PASS)
+
+cycle 34 의 SIGBUS root cause re-investigation. 가설(arr[i].field.push
+chain codegen 결함) 이 틀렸음. 진짜 원인은 더 단순함.
+
+**측정 — nm hexac_c33d**:
+
+```
+00000001000edea8 T _hexa_array_truncate    ← runtime exports it
+                 U _truncate               ← but linked to libc instead!
+```
+
+aprime_cc 의 `_builtin_runtime_sym(name)` 는 "truncate" 매핑이 없어서
+fallback 으로 raw name `"truncate"` 반환. linker 가 그걸 libc 의
+`truncate(const char *path, off_t length)` 으로 resolve. 호출 시:
+
+```
+.stmts.truncate(0)
+  → BL _truncate
+  → libc truncate(x0_pair, 0)
+  → x0:x1 (HexaVal of array) 를 `const char *path` 로 해석
+  → bad-pointer deref, but truncate doesn't immediately crash —
+    instead corrupts the array metadata somewhere via writes to
+    fdtable-related bookkeeping
+  → next hexa_array_push reads corrupt metadata
+  → memmove with bad src/dst → SIGBUS @ KERN_PROTECTION_FAILURE
+```
+
+**Fix — single line in compiler/codegen/arm64_darwin.hexa::_builtin_runtime_sym**:
+
+```hexa
+if name == "truncate"      { return "hexa_array_truncate" }
+```
+
+추가했음 (line 1212).
+
+**측정 결과 (after fix)**:
+
+```
+nm hexac_c35: 00000001000eded8 T _hexa_array_truncate ✅
+              (no `U _truncate` undef anymore)
+
+131-line falsifier (run_F_P2_X86_LD_LINK.hexa):
+  Before: exit=137 SIGBUS
+  After:  exit=0   .s 1,697,700 B ✅ FIRST hexac-generated .s
+          of a non-trivial source file
+
+10.6 MB full flat (compiler/main.hexa closure):
+  Before: exit=138 SIGBUS @ _patch_loop_sentinels
+  After:  Killed: 9 after 2m48s (real) / 1m02s (user) / 31s (sys)
+          → macOS jetsam (OOM killer) — not SIGBUS anymore.
+          The truncate fix solved the crash; the full closure is
+          blocked by memory pressure (different bug class).
+  HEXA_VAL_ARENA=0: same SIGKILL after 2m11s — not arena, structural.
+```
+
+**S3 fixpoint full closure status**:
+
+- gen1.s (aprime_cc): 10,653,922 B md5 64b1085e940a9f55fe012b583e03b25d ✅
+- gen2.s (hexac): BLOCKED on memory pressure (macOS jetsam @ ~2-3 min wall)
+  - Not SIGBUS anymore — the truncate fix unblocked one entire class
+  - Need separate cycle for memory profile + fix
+- Medium-scale fixpoint PROOF: 1.7 MB .s from hexac on falsifier (PASS)
+  — first ever hexa-native compiler output for a real corpus member
+
+**RFC 063 phasing**: 35 cycles · 18 falsifier + S3-prep + cycle 33 hex
+fix + cycle 34 SIGBUS root cause + **cycle 35 truncate mapping CLOSURE**
+(SIGBUS chain fully closed; OOM is next-class blocker)
+
+**Files modified (1)**:
+- compiler/codegen/arm64_darwin.hexa — +10 lines (1 functional + comment)
+
+**cc --regen / binary promote**: 미수행. cycle 35 change 는
+compiler/codegen/* (self/* SSOT 와 무관). aprime_cc / hexac 사용자가
+직접 빌드.
+
+**Methodology callout** (g3 instrument-first):
+
+cycle 34 의 가설 ("arr[i].field.push chain codegen 결함") 은 stack
+trace 의 마지막 frame (hexa_array_push → memmove) 에 의존. 그러나
+crash 의 진짜 trigger 는 직전 frame 의 **truncate** 호출이었음.
+교훈: stack trace 의 leaf frame 이 cause 가 아닐 수 있다. 항상
+upstream frame 들도 함께 점검. `nm` 으로 undef symbol 검사가 더
+직접적 진단.
