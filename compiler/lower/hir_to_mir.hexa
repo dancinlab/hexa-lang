@@ -893,6 +893,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             return _value(ctx2, _local_op(sc_val.id))
         }
     }
+    // RFC 068 marker — Mixed-precision MIR layer. This is the seam where
+    // RFC 068 P1 (`F-RFC068-PRECISION-PROPAGATE`) adds the precision-tag
+    // dispatcher and P2 (`F-RFC068-OPCODE-SUFFIX`) rewrites the emitted
+    // STMT_BINOP op from `add` to `add_f16` / `add_bf16` / `add_f32`
+    // when the dst Local has an explicit precision annotation. See
+    // `inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
+    // §3 P1/P2.
+    //
     // ── binop → STMT_BINOP ──────────────────────────────────
     if k == "binop" {
         if len(e.children) < 2 { return _no_value(ctx) }
