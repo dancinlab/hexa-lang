@@ -3967,3 +3967,35 @@ PR gate added.
   cooldown N            : 5 (Decision 5 — RFC §7 exhaust = 3 consecutive 0 ∧ empty)
   RFC 065+066 commits   : 25
   other-session interleaved : 6+ (FIRMWARE roadmap + yosys + runtime fix)
+
+## 진행 로그 — RFC 065 --write measure (63 files) + parse_edge_lines noise (2026-05-20)
+
+★ Direct-binary --write path measured: 65 candidates -> 63 markdown
+materialized in inbox/atlas_candidates/. PR-only invariant verified
+(zero compiler/atlas/* / compiler/lenses/* writes; cleanup recovered 0).
+
+Numbers:
+  lens emit         : 65 (1 audit + 32 cite_unreachable + 32 unfold.cite_chain)
+  files materialized: 63 (= 2 slug collisions: dangling id cited by multi P nodes)
+  pipeline cost     : sub-second (567 parse_edge_lines + 63 write_text)
+
+★ Honest finding (new step 5): parse_edge_lines over-recognizes the
+atlas `=>` sigil. In atlas grammar `=>` opens BOTH "applications"
+edges (identifier RHS) AND `=> "description annotation"` (string-
+quoted RHS). The parser currently dumps both into edges.applications,
+so unfold/cite_unreachable see description text as "cited ids"
+-> false-positive Candidate. Sample noise slug:
+  unfold.cite_chain."오일러 토션트 — 이진성의 근원"
+  cite: ["오일러 토션트 — 이진성의 근원"]
+
+Fix candidate: 1-line filter in parse_edge_lines (skip quoted RHS) or
+atlas-grammar-level docstring/edge split. Filed as step 5 follow-up;
+PR-only invariant catches it in human review.
+
+Remaining (non-gating, this session's autonomy queue):
+  step 2 — driver arg-forwarding fix (`hexa loop --write` via PATH)
+  step 3 — C-1.d more lens body populates
+  step 4 — RFC 066 B-1b C-kind HXC sidecar (heavy)
+  step 5 — parse_edge_lines `=>` description filter (NEW, this commit)
+
+RFC 065+066 commits cumulative : 27
