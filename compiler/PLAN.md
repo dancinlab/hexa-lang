@@ -5169,3 +5169,134 @@ Dup-race precheck (per `feedback_inbox_dup_race_precheck.md`): clean. `git for-e
 **files**: 9 edited (5 callers + 2 codegen entries + RFC + this PLAN entry) + 1 unchanged but re-parsed (compiler/ir/lir.hexa).
 
 cross-link: RFC 070 §4.7 G7-A.native impl signature (full prose) · RFC 070 §4.6 (interface lift this consumes) · RFC 070 §4 phase table (new `signature ✅` + `emit` row split) · `@D g_inbox_processing_loop` Shape B (caller-fan-out across 11 sites triggered brief's documented Shape B split) · `@D g5` hexa-native-only (signature threads through the two CPU targets of the hexa-native codegen path) · `@D g3` real-limits-first (byte-eq theorem rests on literal-zero default seed + no `opts` read in either body — verifiable by inspection) · `@D g_commit_push_deploy` (NOT promoted this cycle — signature breaking change requires deploy cycle to land hexa_v2 carrying the new arity, but per brief's binary-promote-forbidden directive that is a separate cycle) · `@D g_plan_consolidation`.
+
+## 진행 로그 — self/parser.hexa 2-in-1 sub-cycle: RFC 070 G7-D.impl.parser + RFC 074 Phase 1 (self/ tree) (2026-05-20)
+
+**Two RFCs, one parser file** — both targets are surgical extensions of the
+M0 attribute-dispatcher loop (Part A) and the `parse_enum_decl` comma-loop
+(Part B) on `self/parser.hexa`. No overlap; landed together because the SSOT
+is the same file and parse-gate runs once for both.
+
+### Part A — RFC 070 G7-D.impl.parser (`@plugin(capabilities=[...])`)
+
+Continues the `c54b76f3` (G7-D.scaffold) work that locked the
+authoring-surface decision to in-source attribute (option A in §4.6.1
+trade-off matrix). Scaffold landed `stdlib/dynlink_caps.hexa` skeleton +
+`compiler/codegen/plugin_attr_scaffold.hexa` header marker but punted parser
+support to G7-D.impl ("`@plugin(...)` is **still a parse error** today" —
+§4.6.5). This sub-cycle removes that punt:
+
+- `self/parser.hexa::parse_stmt` (M0 attribute loop, ~L805) — new
+  `else if attr_name == "plugin" && p_peek_kind() == "LParen"` branch,
+  positioned between `@symbol`/`@link` and `@select`. Mirrors `@cli`/`@flag`/
+  `@doc`/`@schema`/`@gate`/`@memo` storage pattern (L905-937): paren-balanced
+  raw-token accumulator, depth counter aware of LBracket/RBracket for the
+  `capabilities=[...]` string-array, StringLit re-quoted for round-trip.
+  Serialised as `"plugin|<raw-tokens>"` into `p_pending_annotations`, and
+  the attribute name itself appended to `p_pending_attrs` (same channel as
+  `depth`, `contract`, etc.).
+- Tolerant grammar: caller may write `capabilities = [..]`, `capabilities=[..]`,
+  or bare positional string-array. Unknown kwargs (e.g. future `plugin_id`)
+  pass through the same raw-token stream; downstream `compiler/codegen` will
+  destructure into the `CapManifest` schema at G7-D.impl.codegen.
+- Self-test: `@plugin(capabilities = ["net.outbound", "fs.read"]) fn …` →
+  `hexa_real parse OK`.
+
+**Storage rationale** (§4.6.5 + this sub-cycle decision): the
+`annotation|raw` channel was already plumbed end-to-end (parse → AST →
+codegen consumers grep prefix), so no new AST field needed. G7-D.impl.codegen
+just needs to parse the `plugin|...` annotation prefix and emit `__HEXA,__cap` /
+`.hexa.cap` sections per §4.6.2. Zero AST schema change keeps this
+sub-cycle's blast radius at the dispatcher arm + comment.
+
+### Part B — RFC 074 Phase 1 self/ tree (multi-field enum payload)
+
+RFC 074 (`inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md`,
+landed `8cd83fbc` as Shape B scaffold) targeted `compiler/parse/` for its
+5-phase plan, but the **self/** tree (which the deployed hexa_v2 transpiler
+consumes) was the original B7 (`766bc55a`) request: `Param.typ` carrier-shape
+generalisation. This sub-cycle lands the self/ Phase 1 equivalent (parser
++ ast comment), mirroring the compiler/ Phase 1 strategy without churning
+`Param.typ → Param.typs` (that migration is Phase 2-4 territory because it
+touches every consumer of fn-param `Param`).
+
+- `self/parser.hexa::parse_enum_decl` (L1924+) — the existing comma-loop
+  accumulator already pushes per-token into the variant's `vtypes` array
+  (good news from earlier audits); upgraded `vtypes.push(p_expect_ident())`
+  → `vtypes.push(parse_type_annotation())` so payload types are no longer
+  restricted to bare idents. Now admits `[int]`, `string?`, `Foo<T>`, etc.
+  Header comment block added documenting RFC 074 Phase 1 scope.
+- `self/ast.hexa` — `EnumDecl.variants` comment refreshed: "serialized
+  [(name, optional_types)] — optional_types ∈ [string]" makes the positional
+  payload arity convention explicit. `Param` struct gets a parallel comment
+  noting that fn-param backward-compat keeps `typ: string` for now; the
+  enum-variant payload list lives on `EnumVariant.items: [string]` (per
+  parser dict-emit at L1943-1949). Migration of `Param.typ → Param.typs:
+  [string]` deferred to Phase 2-4.
+
+**Carrier-shape decision** (RFC 074 §3.1.1 mirror, applied to self/): chose
+option (b) — payload list lives on the variant node's existing `items`
+array, NOT on a synthetic `Param.params[]` nesting (rejected for the same
+schema reason as compiler/). Single-field path (`len(items) ∈ {0, 1}`)
+unchanged; multi-field (`len(items) ≥ 2`) round-trips through the same dict
+shape.
+
+### Falsifiers + parse-gate
+
+- `hexa_real parse self/parser.hexa` → OK (cleanly, both Part A and Part B
+  edits in the same file).
+- `hexa_real parse self/ast.hexa` → OK (Part B comment-only).
+- `hexa_real parse selftest_plugin.hexa` → OK
+  (`@plugin(capabilities = ["net.outbound", "fs.read"])`).
+- `hexa_real parse selftest_enum.hexa` → OK
+  (`enum Event { None, Single(int), Pair(int, string), Triple(int, string, bool) }`).
+- `hexa_real parse selftest_enum_richtype.hexa` → FAIL **as expected** (the
+  deployed `hexa_real` is pre-Phase-1; rejects `[int]` payload at `LBracket`).
+  Confirms the upgrade target is real; once `g_commit_push_deploy` cycle
+  regenerates `self/native/hexa_v2`, this fixture flips to OK. The SSOT-edit
+  gate (this cycle's contract) is fully measured PASS.
+
+### g3-honest scope
+
+This sub-cycle is **parse + AST only**. Both halves intentionally stop short
+of codegen and typechecker work:
+
+- **Part A**: zero codegen emit of `__cap` / `__abi` sections (G7-D.impl.codegen
+  next), zero `dynlink_caps.hexa` body wiring (G7-D.impl.runtime later), zero
+  `hexa_dlopen` integration (G7-C territory).
+- **Part B**: zero typechecker arity check (RFC 074 Phase 2), zero HIR/MIR
+  payload wiring (Phase 3, may bump into self/ Operand B1 holdout), zero
+  match-arm payload capture codegen (Phase 4).
+
+Deployed-binary regen + `self/native/hexa_v2` rebuild is the next standard
+deploy step (`@D g_commit_push_deploy`) — explicitly NOT included in this
+sub-cycle per `@D g_inbox_processing_loop` step 7. `inbox/PATCHES.yaml`
+untouched. No worktree-other-session WIP files modified.
+
+### Heritage chain
+
+- RFC 020 (`proposals/rfc_020_enum_payload_variants.md`) — original enum
+  payload RFC; single-field landed (A1-A5, commits `3c8be96c`…`41ecfb97`).
+- F-cycle `bfda8c9b` — single-field closure, multi-field punted to RFC 074.
+- B7 `766bc55a` — RFC 074 drafted, C1 positional decision locked, 5-phase
+  plan with parser as Phase 1.
+- B2 `c54b76f3` — RFC 070 G7-D capability authoring LOCKED, parser hook
+  punted to G7-D.impl.
+- inbox `inbox/patches/rfc020-enum-payload-variants.md` — multi-field row
+  → `B2 RFC-074 drafted; C1 decision-locked positional`, this cycle adds
+  `Phase 1 self/ landed`.
+- This cycle (commit follows) — both punts retired: `@plugin` parses, enum
+  multi-field carries arbitrary type annotations.
+
+**LoC delta:**
+
+```
+ self/parser.hexa                                                        | + 60  -2
+ self/ast.hexa                                                           | + 16  -2
+ inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md            | +  4  -1
+ inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md | +  9  -2
+ compiler/PLAN.md                                                        | + 130
+```
+
+cross-link: RFC 070 (G7-D.impl.parser row split + status header flip),
+RFC 074 (status `PHASE-1-SELF-LANDED` + Phase 1 self/ sub-section).

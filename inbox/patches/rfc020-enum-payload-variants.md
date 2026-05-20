@@ -1,9 +1,50 @@
 # incoming patch: rfc020-enum-payload-variants
 
-> **id**: `rfc020-enum-payload-variants` · **opened**: 2026-05-10 · **status**: `in_progress`
-> **trees**: `self/` (대부분 land) + `compiler/` (미반영)
-> **source**: `proposals/rfc_020_enum_payload_variants.md` + commits below
+> **id**: `rfc020-enum-payload-variants` · **opened**: 2026-05-10 · **resolved**: 2026-05-20 · **status**: `resolved-ssot` (A1-A5 landed; B1 honest holdout; B2 RFC-074 drafted; C1 decision-locked positional; **RFC-074 Phase 1 self/ tree LANDED 2026-05-20** — `self/parser.hexa::parse_enum_decl` accumulator upgraded to `parse_type_annotation` per payload slot; `self/ast.hexa` EnumDecl/Param comments refreshed; parse-gate PASS; deployed-binary regen pending standard deploy cycle)
+> **trees**: `self/` (A1-A5 LANDED; B1 audit + holdout) + `compiler/` (B2 planned via RFC-074)
+> **source**: `proposals/rfc_020_enum_payload_variants.md` + commits below + `inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md`
 > **why this matters**: wilson pi-port 의 load-bearing 갭 G1 — `ai` 패키지의 `AssistantMessageEvent` 가 discriminated union (`{type:"text_delta",...} | {type:"tool_call_start",...} | ...` 수십 종) 이라, hexa-strict 로 표현하려면 다중 ADT 가 필요. RFC-020 결정: **단일 필드 + struct 임베드** 패턴으로 모든 ADT 표현 → `enum AsmEvent { TextDelta(TextDeltaData), ToolCallStart(ToolCallStartData), ... }`. 그게 완전 작동해야 wilson core 착수 가능.
+
+---
+
+## RESOLUTION (2026-05-20)
+
+본 패치의 핵심 SSOT 작업 (A1-A5) 은 **이미 git history 에 LANDED**. dup-race precheck 결과:
+
+| Phase | 상태 | 랜딩 커밋 |
+|---|---|---|
+| **A1** parser construction `E::V(x)` | ✅ LANDED | `3c8be96c` feat(self/parser) RFC-020 A1 |
+| **A2** typechecker payload-type 테이블 | ✅ LANDED | `005d5427` feat(self/typechecker) RFC-020 A2+A3 |
+| **A3** typechecker pattern binding | ✅ LANDED | `005d5427` (above) |
+| **A4** codegen — match-side payload 추출 + binding emit | ✅ LANDED | `a85b8a1c` (gen2_match_cond/gen2_match_stmt) + `4ed9966e` (interp parity 15/15 PASS) + `41ecfb97` (codegen_c2.hexa SSOT 복원 — regen 이 a85b8a1c hand-fix 를 한 번 wiped) |
+| **A5** regression test `test_enum_payload_full.hexa` | ✅ LANDED | `4ed9966e` — 15/15 PASS interp + native, byte-eq |
+| **B1** `self/ir/Operand` sum-type 마이그레이션 | ⚠️ HOLDOUT (honest) | `77254d91` doc(self/ir/instr) — stage0 binary (build/hexa_interp.real) 가 A5 fixes 미반영이라 sum-type migration 시 모든 consumer 가 `val_void` 로 깨짐. 5-step TODO 기록됨. 후속 cycle 의 명확한 prerequisite = build/hexa_interp.real 재빌드. **NEW (2026-05-20 addendum)**: RFC-074 §3 Phase-3 cross-link — compiler/ MIR 의 동등 sum-type 작업이 B1 prereq 없이도 compiler/ 쪽에서 독립적으로 land 가능 (양 트리 분기 명시). |
+| **B2** `compiler/` 트리 반영 | 📋 RFC-DRAFTED · self/ Phase-1-LANDED | **2026-05-20 RFC-074** `inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md` — 5 phase plan (parse → check → lower → ir+codegen → fixpoint), positional design lock (C1 참조), 5 falsifier 정의. Phase 1 = 1-cycle Shape-A surgical land. Phase 3 만 B1 cross-dep (양 트리 중 하나 선조건). **2026-05-20 후속 cycle**: self/ 트리 Phase 1 LANDED (parser comma-loop accumulator → `parse_type_annotation`; ast.hexa EnumDecl/Param 코멘트 갱신; parse-gate PASS). compiler/ 트리 Phase 1 (compiler/parse/{ast,parser}.hexa) 는 별도 후속 cycle. |
+| **C1** 다중 필드 variant 디자인 | 🟢 DECIDED — POSITIONAL | **2026-05-20 RFC-074 §2 결정**: positional (Rust-style) `enum E { V(int, string) }` · construction `E::V(42, "hi")` · match `E::V(n, s) -> …`. Rationale: (1) minimum surgical (parser comma-loop · bind.hexa children[] walk 둘 다 이미 multi-field-ready scaffolding), (2) Rust/TS-port convention (wilson `AssistantMessageEvent` 출처), (3) single-field 가 arity-1 case 로 자연 subsume (A1-A5 zero churn), (4) `self/ir/Operand` (B1 타겟) 가 본디 positional sum, (5) lattice-as-tool (n=6 의견 없음). 대안 (labeled / tuple) = 별도 future RFC (C2 / tuple-RFC). |
+
+### Verification (worktree parse-gate 2026-05-20)
+
+- `hexa_real parse self/parser.hexa` → OK
+- `hexa_real parse self/type_checker.hexa` → OK
+- `hexa_real parse self/codegen_c2.hexa` → OK
+- `hexa_real parse self/test_enum_payload_full.hexa` → OK
+- `hexa_real parse self/ir/instr.hexa` → OK (B1 audit comments)
+
+A5 regression suite (`self/test_enum_payload_full.hexa`, 15 cases — int/string/struct-embed payload + nested match + Unit 혼재) 의 byte-eq PASS 결과는 `4ed9966e` 의 커밋 메시지에 측정 기록.
+
+### honest-scope caveats (g3 over-claim 0)
+
+- 본 resolution 은 **filing 의무에 대한 SSOT closure** 만 기록. 즉 `self/` 트리의 A1-A5 는 measured LANDED, B1 은 measured HOLDOUT, B2/C1 은 untouched future work.
+- `inbox/wilson-pi-port-prereq` 의 G1 갭 자체는 A4 codegen + `self/codegen_c2.hexa` SSOT 복원 (`41ecfb97`) 으로 unblock 됨 — wilson 의 `AsmEvent` 류 multi-variant payload 가 `hexa build` 경로에서 작동. multi-field variant 가 필요한 경우는 RFC 의 권장대로 single-field + struct-embed 우회.
+- B1 holdout 은 **bug 가 아니라 의도적 보류** — `self/ir/instr.hexa` L57-86 의 5-step TODO 가 prerequisite (build/hexa_interp.real 재빌드 → enum-with-payload destructure 실제값 검증 → migration → selftest parity) 를 명시.
+
+### 후속 sub-cycle 명세 (이번 cycle 범위 외)
+
+1. **B1-prep**: `build/hexa_interp.real` 을 `self/hexa_full.hexa` 에서 재빌드 (interp 은퇴 @D g_interp_deprecated 영향 — 신규 코드 의존 금지, 단 B1 audit 의 prereq 확인용으로만 사용 가능). 또는 B1 자체를 compiled-path-only validation 으로 재설계.
+2. **B2** — **2026-05-20 RFC-074 으로 RFC-drafted**: 5 phase plan (Phase 1 parse → Phase 2 check → Phase 3 lower → Phase 4 ir+codegen → Phase 5 fixpoint). `inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md` §3 참조. Phase 1 만 단독 land 가능 (1-cycle Shape-A). Phase 3 = B1 cross-dep.
+3. **C1** — **2026-05-20 RFC-074 §2 decision-locked**: positional (Rust-style). Labeled/tuple 는 별도 future RFC.
+
+cross-link: `compiler/PLAN.md` 진행 로그 entry (본 cycle 포함) + `inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md`.
 
 ---
 
@@ -88,12 +129,13 @@ enum Operand {
 
 ## 5. 처리 체크리스트
 
-- [ ] A4-finish: `gen2_match_cond` payload 추출 + binding emit (self/)
-- [ ] A4-finish: interp 경로 binding 일치 확인 + payload-mismatch 에러
+- [x] A4-finish: `gen2_match_cond` payload 추출 + binding emit (self/) — `a85b8a1c`
+- [x] A4-finish: interp 경로 binding 일치 확인 + payload-mismatch 에러 — `4ed9966e`
 - [x] A5: `self/test_enum_payload_full.hexa` 작성 (← 본 patch)
-- [ ] A5: interp + native 양쪽 PASS + byte-eq, selftest 매트릭스 등록
-- [ ] B1: `self/ir/Operand` sum type 마이그레이션
-- [ ] B2: `compiler/` 트리 반영 + ast.hexa STALE 주석 갱신
-- [ ] C1 (옵션): 다중 필드 variant
+- [x] A5: interp + native 양쪽 PASS + byte-eq — `4ed9966e` 15/15 PASS
+- [ ] A5: selftest 매트릭스 등록 (`tool/raw_all.hexa`) — minor follow-up
+- [⚠️] B1: `self/ir/Operand` sum type 마이그레이션 — HOLDOUT (stage0 binary prereq · `77254d91`)
+- [📋] B2: `compiler/` 트리 반영 + ast.hexa STALE 주석 갱신 — **RFC-074 drafted 2026-05-20** (5-phase plan, positional decision-locked)
+- [🟢] C1: 다중 필드 variant 디자인 — **DECIDED 2026-05-20 = positional** (Rust-style), RFC-074 §2
 - [ ] `.roadmap.codegen` 엔트리 4개 배치 (unlock → append → lock)
 - [ ] `PATCHES.yaml` status `in_progress` → `synced` (A5 양쪽 PASS 후) → `archived` (B 정착 후)

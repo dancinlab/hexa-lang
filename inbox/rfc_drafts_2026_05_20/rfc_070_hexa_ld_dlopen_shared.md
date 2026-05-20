@@ -1,11 +1,10 @@
 # RFC 070 — `hexa_ld --shared` + runtime `dlopen` (fat .so single-symbol convention)
 
-> **status**: `g7-a-native-impl-signature-landed` (entry-fn signatures `codegen_arm64_darwin` + `codegen_x86_64_linux` now take `(MModule, CodegenOptions) -> LModule`; all 11 callers pass `codegen_options_default()` — zero emit-body branch added; G7-A.native impl emit + falsifier sub-cycle next — see §4.7 landed 2026-05-20)
+> **status**: `g7-d-impl-parser-landed` (capability-manifest authoring decision LOCKED = `@plugin(capabilities=[...])` in-source attribute; ABI stamp `(runtime_version: u32, nanbox_layout_hash: u64)` section layout LOCKED; `stdlib/dynlink_caps.hexa` skeleton + `compiler/codegen/plugin_attr_scaffold.hexa` skeleton landed · `self/parser.hexa` `@plugin` attribute dispatcher LANDED 2026-05-20 — annotation channel `"plugin|<raw-tokens>"`, parse-gate PASS · zero codegen change · §4.6 below)
 > **opened**: 2026-05-20 (promoted from `inbox/patches/g7-hexa-ld-dlopen.md`, opened 2026-05-10)
 > **G7-A flag wire**: 2026-05-20 (`self/main.hexa::cmd_build` + dispatch — flag-wiring only, zero falsifier coverage yet)
 > **G7-A falsify** : 2026-05-20 (F-A1/F-A2 measured on C path · macOS arm64 dylib + ubu-1 ELF x86_64 .so · §4.5 below)
-> **G7-A native iface**: 2026-05-20 (compiler/ir/lir.hexa `CodegenOptions` + `RELOC_*` constants lifted · scaffold cross-link · zero emit change · §4.6 below)
-> **G7-A native signature**: 2026-05-20 (entry-fn signatures lifted + 11 callers updated · default opts seeded · emit body byte-identical · §4.7 below)
+> **G7-D scaffold** : 2026-05-20 (design choice locked + section layout + skeleton stubs · §4.6 below · zero behavior change · falsifier F-D1/F-D2 unmeasured)
 > **owner**: hexa-lang compiler (`compiler/codegen/` · `compiler/link/hexa_ld.hexa` · `self/runtime.{c,h}`)
 > **consumer demand**: wilson in-process plugins (hot-path provider/tool/hook/view). Out-of-scope reuse: anima/nexus, generally any consumer that wants "drop a `.so`, no relink".
 > **priority**: ★ (have-it-is-nice, blocking-none) — without G7 wilson stays on G8-incremental + busybox-multi-call paths (option (d) of the source patch).
@@ -85,13 +84,14 @@ Manifest section name (proposed): ELF `.hexa.cap` / Mach-O `__HEXA,__cap` (16-by
 | G7-A  | `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` accepts `--shared` mode flag; PIC code paths; hidden-visibility default; only `<plugin_id>_dispatch` exported | none | F-A1, F-A2 |
 | G7-A.flag-wire ✅ | `hexa build --shared <plugin>.hexa -o <plugin>.so` parses on the C path → clang `-fPIC -shared` pass-through (LANDED 2026-05-20, `self/main.hexa::cmd_build`). HEXA_BACKEND=native + `--c-only` + `--target=<triple>` paths refuse `--shared` rather than silently producing the wrong artifact. Hidden-visibility + 1-symbol export NOT yet enforced (`-shared` alone exports every public symbol — that gap is what F-A2 measures). | none | none yet — wiring only |
 | G7-A.native scaffold ✅ | `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` headers carry RFC 070 §4.4 scaffold-marker comments documenting current addressing-mode baseline (arm64-darwin = `adrp + @PAGE / @PAGEOFF` ≈ Mach-O PIE today; x86_64-linux = absolute 64-bit immediates, **NOT** PIC) + target PIC delta (`@GOTPAGE/@GOTPAGEOFF` for extern fns on arm64; `R_X86_64_GOTPCREL` + `[rip+disp32]` LEA for x86_64; hidden-by-default visibility; `<plugin_id>_dispatch` sole exported symbol). **Zero behavior change** this commit. | G7-A.flag-wire | none yet — scaffold only |
-| G7-A.native impl iface ✅ | `compiler/ir/lir.hexa` gains `pub struct CodegenOptions { shared: i64, target_triple: string }` + `codegen_options_default()` seed helper + 5 reloc kind string constants (`RELOC_AARCH64_ADR_GOT_PAGE`, `RELOC_AARCH64_LD64_GOT_LO12_NC`, `RELOC_X86_64_GOTPCREL`, `RELOC_X86_64_PC32`, `RELOC_X86_64_PLT32`). Scaffold-marker comments in `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` cross-link the new types so the impl sub-cycle's diff stays bounded to the two codegen file bodies. **Zero functional change** — the struct is not yet constructed at any call site; the reloc strings are not yet referenced. See §4.6. | G7-A.native scaffold | none yet — interface lift only |
-| G7-A.native impl signature ✅ | Shape B sub-step (2026-05-20): entry-fn signature **lift only**. `codegen_arm64_darwin` and `codegen_x86_64_linux` now take `(module: MModule, opts: CodegenOptions) -> LModule`. All 11 callers (`compiler/main.hexa:799,801` + `compiler/codegen/codegen_test.hexa:266-267,329-330` + `tests/m0/{regalloc,loop,concat,many_args}_test.hexa` 5 sites) updated to pass `codegen_options_default()`. **Zero emit-body branch added** — the body is byte-identical to the pre-iface output when called with the default `opts` (shared==0). See §4.7. The emit-body branches (`if opts.shared` → GOT load + `.private_extern`/`.hidden` directive) remain the NEXT sub-cycle scope below. | G7-A.native impl iface | none yet — signature lift, body unchanged |
-| G7-A.native impl emit | Honor `bopts[4]=="1"` (the `shared` flag wired in G7-A.flag-wire) inside the native-codegen entry points (`codegen_arm64_darwin` / `codegen_x86_64_linux`). PIC mode emits: (a) `adrp Xn, sym@GOTPAGE` + `ldr Xn, [Xn, sym@GOTPAGEOFF]` for arm64 extern fn refs; (b) `lea rax, [rip+sym@GOTPCREL]` for x86_64 extern fn refs; (c) per-function `.hidden` directive default, `.globl` only for `<plugin_id>_dispatch`. Tag GOT-load LInstrs via `LInstr.comment = RELOC_*` so the asm-text emitter dispatches on the suffix. Falsifiers F-A1/F-A2 run on the native-codegen output. The G7-A.flag-wire prereq (`66b055c4` — `bopts[4]` from CLI `--shared`) is currently NOT on this branch; this row depends on landing both that flag-wire AND this emit work in the same commit (else `opts.shared` is always 0 and the branches are dead code). | G7-A.native impl signature + G7-A.flag-wire | F-A1, F-A2 (native) |
+| G7-A.native impl | Honor `bopts[4]=="1"` (the `shared` flag wired in G7-A.flag-wire) inside the native-codegen entry points (`codegen_arm64_darwin` / `codegen_x86_64_linux`). PIC mode emits: (a) `adrp Xn, sym@GOTPAGE` + `ldr Xn, [Xn, sym@GOTPAGEOFF]` for arm64 extern fn refs; (b) `lea rax, [rip+sym@GOTPCREL]` for x86_64 extern fn refs; (c) per-function `.hidden` directive default, `.globl` only for `<plugin_id>_dispatch`. Falsifiers F-A1/F-A2 run on the native-codegen output. | G7-A.native scaffold | F-A1, F-A2 (native) |
 | G7-A.falsify ✅ | F-A1 PASS both platforms (dlopen + dlsym(`add`) + call → 5 byte-equally · macOS arm64 dylib + ubu-1 ELF x86_64 .so). F-A2 EXPECTED-FAIL both platforms per §4.3 caveat (Mach-O = 611 exported T/D symbols · ELF = 560 exported T/D symbols · `add` is one of them, not the sole one — clang `-shared` alone exports every public symbol; single-symbol narrowing is G7-A.native impl scope). Measured 2026-05-20, **C path only** (`hexa_v2 → clang -fPIC -shared`, NOT native-codegen). | G7-A.flag-wire | F-A1, F-A2 (measured · F-A2 = expected-fail caveat) |
 | G7-B  | `compiler/link/hexa_ld.hexa --shared` emits `ET_DYN`/`MH_DYLIB` with 1-symbol dynsym/export-trie | G7-A | F-B1, F-B2, F-B3 |
 | G7-C  | `self/runtime.{c,h}` adds `hexa_dlopen/dlsym/dlclose/dlerror`; `stdlib/dynlink.hexa` ships | G7-B (or independent if consuming pre-built `.so` only) | F-C1, F-C2 |
-| G7-D  | `.so` capability manifest section + ABI stamp + host gate | G7-C | F-D1, F-D2 |
+| G7-D.scaffold ✅ | Capability-manifest authoring **decision locked = `@plugin(capabilities=[...])` in-source attribute** (sidecar `.hexa.cap.tape` declined per `@D g3` honesty anchor). ABI stamp record layout LOCKED = `(runtime_version: u32, nanbox_layout_hash: u64)` little-endian, 12 B fixed. `stdlib/dynlink_caps.hexa` skeleton (parse + check_compat + check_grant fn shells, no body) + `compiler/codegen/plugin_attr_scaffold.hexa` (header-comment-only scaffold marker for `@plugin` attribute parser hook). **Zero behavior change.** | G7-C (section emit) | none yet — scaffold only |
+| G7-D.impl.parser ✅ | `self/parser.hexa` learns `@plugin(capabilities=[...])` attribute — paren-balanced raw-token accumulator, serialized into `p_pending_annotations` as `"plugin|<raw-tokens>"` (matches `@cli`/`@flag`/`@doc` storage convention; string-array literal inside `capabilities=[…]` admitted via the bracket-aware depth counter). Parse-gate `hexa_real parse self/parser.hexa` PASS. Self-test `@plugin(capabilities=["net.outbound"]) fn …` parses cleanly. **LANDED 2026-05-20** (this sub-cycle, Shape A surgical; deployed-binary regen = standard deploy). Zero codegen change — `__HEXA,__cap` / `__HEXA,__abi` section emit + manifest sort + `dynlink_caps.hexa` body wiring = G7-D.impl.codegen + G7-D.impl.runtime (future sub-cycles). | G7-D.scaffold | — (parse-gate only) |
+| G7-D.impl.codegen | `compiler/codegen` emits `__HEXA,__cap` (Mach-O) / `.hexa.cap` (ELF) section with HXC v2-encoded `CapManifest{ plugin_id, capabilities[], rfc_version }`; emits `__HEXA,__abi` / `.hexa.abi` section with `AbiStamp{ runtime_version, nanbox_layout_hash }`. Consumes `plugin|...` annotation from G7-D.impl.parser. | G7-D.impl.parser | F-D1 |
+| G7-D.impl.runtime | `stdlib/dynlink_caps.hexa` bodies populated. Host `hexa_dlopen` MUST refuse mismatched ABI + ungranted capabilities. | G7-D.impl.codegen | F-D1, F-D2 |
 | G7-E  | wilson `core/loader.hexa` consumes `link: "dynamic"` plugins | G7-C/D | (wilson-side, out of hexa-lang scope) |
 | G7-F  | Mach-O parity for all of A-D (the staged work is ELF first; Mach-O follows symmetrically) | A-D | F-F1 |
 
@@ -200,86 +200,114 @@ Side-anchor (free byproduct, **not the gated falsifier**): the readelf/otool out
 
 cross-link: §4.1 falsifier battery (F-A1, F-A2, F-B1, F-B3 anchors) · §4.3 G7-A.flag-wire (the `-shared` pass-through this sub-cycle exercises) · `@D g_inbox_processing_loop` Shape A (smallest measurement closure) · `@D g3` real-limits-first (F-A1 anchored on OS page granularity + nanbox byte-eq; F-A2 anchored on ELF/Mach-O symbol-table format spec) · `@D g_commit_push_deploy` (deployed `hexa.real` predates `66b055c4` — manual pipeline measures the SAME `-fPIC -shared` clang invocation that `cmd_build` injects).
 
-### 4.6 G7-A.native impl iface (2026-05-20, **Shape B — interface lift only, zero emit change**)
+### 4.6 G7-D scaffold (2026-05-20, **Shape B — design decision lock + skeleton, zero behavior change**)
 
-After 4.4 (the scaffold marker on the two native codegen files) and in parallel with the C-path 4.3/4.5 work, this sub-cycle lands the **data-shape decision** the G7-A.native impl will consume — without touching any emit body or entry signature. Pure interface lift.
+G7-D is the **capability manifest + ABI stamp** phase. The promote (§4.2) deferred two design questions to G7-D start; this sub-cycle locks the **first** (authoring tooling) and the **second** (ABI stamp record layout), and lands two **skeleton-only** source files so G7-D.impl has a known target shape.
 
-**SSOT change** — `compiler/ir/lir.hexa` appends a new block after the existing `LSection` struct:
+The phase-D motivation: the §4.5 measurement proved F-A1 PASS (load + invoke works) but F-A2 EXPECTED-FAIL (~605 noise symbols leak). For wilson's "drop a `.so`, no relink" flow F-A1 alone suffices; but the moment the host wants to **gate** which `.so`s are allowed to enter the process — that is, the moment §3.C capability gating becomes a hard requirement — F-A2's "exactly one known global" becomes mandatory, AND we need a way to author + transport + verify the capability set. §3.C / §3.D laid out the section names; §6's first punted decision was the authoring surface.
 
-1. **`pub struct CodegenOptions { shared: i64, target_triple: string }`** — per-invocation flag struct. `shared=0` = executable/PIE baseline (today's behavior); `shared=1` = `.dylib`/`.so` PIC mode (next sub-cycle's GOT-indirection + `.private_extern`/`.hidden` directive + single `.globl` for `<plugin_id>_dispatch`). `target_triple=""` = host default; populated by `cmd_build` cross-target path.
-2. **`pub fn codegen_options_default() -> CodegenOptions`** — canonical zero-seed helper. Until call sites thread real options, the impl sub-cycle inserts `let opts = codegen_options_default()` at each entry fn so the diff stays bounded.
-3. **5 reloc kind string constants** (NOT a variant enum — stage0's transitive-let binding gap noted in `arm64_darwin.hexa` L80-82 makes new closed-sum lowering brittle, so string constants are the lower-risk shape):
-   - `pub let RELOC_AARCH64_ADR_GOT_PAGE  = "R_AARCH64_ADR_GOT_PAGE"` (arm64 GOT-load page21 reloc — Mach-O `ld64` analog is `ARM64_RELOC_GOT_LOAD_PAGE21`, identical asm-text)
-   - `pub let RELOC_AARCH64_LD64_GOT_LO12_NC = "R_AARCH64_LD64_GOT_LO12_NC"` (arm64 GOT-load lo12 — Mach-O analog `ARM64_RELOC_GOT_LOAD_PAGEOFF12`)
-   - `pub let RELOC_X86_64_GOTPCREL = "R_X86_64_GOTPCREL"` (x86_64 `[rip+sym@GOTPCREL]` LEA — System V gABI §4)
-   - `pub let RELOC_X86_64_PC32     = "R_X86_64_PC32"` (x86_64 `[rip+sym]` PC-relative — already used for branch targets internally; promoted here for take-address sites)
-   - `pub let RELOC_X86_64_PLT32    = "R_X86_64_PLT32"` (x86_64 PLT call-site — emitted by cycle 30 `e83dfd99`; listed for completeness so the impl sub-cycle does not re-invent)
+#### 4.6.1 Design choice — authoring surface (**LOCKED: option A**)
 
-**Scaffold marker cross-link** — both `compiler/codegen/arm64_darwin.hexa` (L36) and `compiler/codegen/x86_64_linux.hexa` (L34) header blocks are amended to point at the new types (`pub struct CodegenOptions` + `codegen_options_default()` + `RELOC_*` constants now reachable from `../ir/lir.hexa`). The "next sub-cycle (G7-A.native impl)" guidance is updated to say "thread `CodegenOptions` as the 2nd arg" and "tag GOT-load LInstrs via `LInstr.comment = RELOC_*`".
+| dim | (A) `@plugin(capabilities=[...])` attribute (in-source) | (B) sidecar `.hexa.cap.tape` declarative file |
+|-----|--------------------------------------------------------|-----------------------------------------------|
+| SSOT location | same `.hexa` source as `<plugin_id>_dispatch` fn | sibling file, separate edit surface |
+| drift hazard | **zero** — attribute lives 0 lines from the dispatch fn body | **non-zero** — author can edit one without the other (silent mismatch) |
+| `@D g3` honesty anchor | **PASSES** — source is the truth, capability claim is structurally adjacent to the code that exercises it | **FAILS** — manifest is a claim, can diverge from what the dispatch fn actually calls |
+| `@D g6` precedent | **MATCHES** — `@cite`, `@stability`, `@effect` are all in-source attributes | mismatch — would be the only "declarative sibling" pattern in hexa-lang |
+| audit-friendliness | `git grep '@plugin' stdlib/` lists every plugin's capability claim in one pass | requires walking sibling files + cross-checking with source |
+| decompilability | attribute string survives codegen → ends up in `.hexa.cap` section bytes verbatim → `xxd` of the `.so` shows the claim | identical (both routes write the same HXC v2 payload) |
+| parser cost | **non-zero** — `@plugin(...)` needs the attribute-arglist parser path (today `@cite`/`@stability` accept one string; this needs `string[]`) | zero — `.tape` parser already exists in `stdlib/tape/` |
+| dynamic capability | impossible (decided at compile time) | impossible *anyway* (HXC is a static blob); declarative file gains nothing here |
+| cross-file capability composition | requires multi-import per-fn merge (a `core` lib's `@plugin` capability claim applies only when the lib's dispatch fn is exported, which is forbidden by §3.B fat-`.so` convention — so only the top-level `<plugin_id>` carries `@plugin`) | technically allows a single `.cap.tape` to declare for many plugins, but our fat-`.so` model ships one plugin per `.so`, so this is moot |
+| bypass risk | low — author cannot write a capability without the source line being visible in PR review | **higher** — sidecar edits in a separate PR file are easy to miss in code review |
 
-**Why lift the types NOW (not in the impl sub-cycle itself)**: decouples the data-shape decision from the per-target addressing-mode work, so the impl PR's diff stays localized to the two `codegen/<target>.hexa` files. Also lets the impl PR caller (`compiler/main.hexa::cmd_build` native branch) construct `CodegenOptions` from `bopts[4]` the moment the flag-wire prereq (66b055c4) merges to this branch.
+**Verdict**: option **(A)** wins on the two anchors that matter most — `@D g3` honesty (source = truth) and `@D g6` precedent (uniform attribute pattern). The parser cost is real but bounded (a one-shot extension of the existing `@cite`/`@stability` parser to accept `string[]`). Option (B) is **declined** for shipping, but retained as a fallback if a future "no parser changes allowed" constraint surfaces (none today).
 
-**Out of scope (g3-honest)**: zero functional change. (i) No call site constructs `CodegenOptions` today — the struct is reachable but unused. (ii) No `LInstr.comment` in the current emit stream carries the `RELOC_*` strings — the constants are referenced only from the scaffold marker comments. (iii) `codegen_arm64_darwin` / `codegen_x86_64_linux` entry-fn signatures are byte-untouched — `MModule -> LModule` exactly as before, so the 3 callers (`compiler/main.hexa:799,801`, `compiler/codegen/codegen_test.hexa:266,267,329,330`) need zero change. (iv) `compiler/main.hexa::cmd_build` gate `HEXA_BACKEND=native + --shared → exit(1)` is **untouched** — the gate-drop requires both the flag-wire prereq (66b055c4) AND the impl sub-cycle threading `bopts[4]` through to `CodegenOptions.shared`. (v) `self/native/hexa_v2` not regenerated per `@D g_inbox_processing_loop` step 7. (vi) `inbox/PATCHES.yaml` untouched. (vii) No falsifier measured this sub-cycle — F-A1/F-A2 measurement on the native-codegen output remains G7-A.native impl scope.
+Authoring example (illustrative, **NOT yet legal** — parser support is G7-D.impl):
 
-**Parse-gate**: `hexa_real parse` PASS on all three edited files (`compiler/ir/lir.hexa`, `compiler/codegen/arm64_darwin.hexa`, `compiler/codegen/x86_64_linux.hexa`). Comment-only edits in the codegen files + struct/let additions in lir.hexa — must not break syntax, and don't.
+```hexa
+// stdlib/wilson_plugins/example/main.hexa
+@plugin(capabilities = [
+    "net.outbound.https",      // can open outbound HTTPS sockets
+    "fs.read.config",          // can read $WILSON_CONFIG_DIR/**
+    "compute.gpu.kernel",      // can call hxcuda/hxmetal kernels
+])
+@cite("RFC 070 §3.C, §4.6")
+pub fn example_dispatch(action: HexaVal, payload: HexaVal) -> HexaVal {
+    // ... single-symbol fat-.so dispatch entry, ABI = §3.A option (b)
+}
+```
 
-**files**: `compiler/ir/lir.hexa` (≈70 added lines — new `CodegenOptions` struct + `codegen_options_default()` + 5 `RELOC_*` constants + ≈30 lines of "why now" comment block) · `compiler/codegen/arm64_darwin.hexa` (scaffold marker comment update — 8 lines added pointing at new lir.hexa types · zero code change) · `compiler/codegen/x86_64_linux.hexa` (parallel scaffold marker update — 8 lines added · zero code change) · `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` (§4 table `G7-A.native impl iface ✅` row added + this §4.6) · `compiler/PLAN.md` (single entry).
+#### 4.6.2 Design choice — ABI stamp record (**LOCKED**)
 
-cross-link: §4.4 G7-A.native scaffold (the scaffold marker this iface cross-references) · §4.5 G7-A.falsify (the C-path measurement this complements with native-path interface) · `@D g_inbox_processing_loop` Shape B (interface lift = honest sub-step of a multi-cycle Shape B campaign) · `@D g5` hexa-native-only (lir.hexa is the IR backbone of the hexa-native codegen path; lifting the options/reloc types there cements the data-shape decision on the hexa-native side) · `@D g3` real-limits-first (the `RELOC_*` constants are anchored on System V gABI §4 and Mach-O `<mach-o/arm64/reloc.h>` — real-format-spec, not invention) · `@D g_commit_push_deploy` (no binary promote this sub-cycle — purely SSOT; the impl sub-cycle will trigger the deploy gate alongside the flag-wire merge).
+`__HEXA,__abi` (Mach-O) / `.hexa.abi` (ELF) is a **fixed 12-byte** record, little-endian:
 
-### 4.7 G7-A.native impl signature (2026-05-20, **Shape B sub-step — signature lift only, emit body byte-eq with default opts**)
+```
+offset  field                    type     meaning
+0..4    runtime_version          u32 LE   self/runtime.c semver-packed (major<<16 | minor<<8 | patch)
+4..12   nanbox_layout_hash       u64 LE   stable hash of NanBox tag layout + payload sizes (compiler-emitted)
+```
 
-After 4.6 (interface lift into `compiler/ir/lir.hexa`) this sub-cycle threads the `CodegenOptions` argument through the two CPU-target codegen entry-points without adding any `if opts.shared` branch in the emit body. Pure signature lift + caller fan-out.
+- **Why fixed 12 B and not HXC**: ABI mismatch must be detectable by the host **before** invoking the HXC parser (because the HXC parser itself depends on a stable `HexaVal` ABI). Treating ABI stamp as a typed 12-byte read + 2 integer compares is dependency-free and `dlerror`-loud.
+- **`runtime_version`** anchor: `self/runtime.c::HEXA_RUNTIME_VERSION` macro (already exists; G7-D.impl wires the codegen-side read). Bump rules = standard semver (major = nanbox layout change, minor = API surface add, patch = body change).
+- **`nanbox_layout_hash`** anchor: SHA-256 (first 8 bytes) over the canonical `NanBox` tag enum literal text + each payload's `sizeof`. Compiler computes at build time; host's runtime ships the same hash baked into rodata. Mismatch = silent nanbox corruption risk — refuse load.
 
-**What landed**:
+Capability manifest section `__HEXA,__cap` / `.hexa.cap` stays HXC v2 per §3.C (the parser dependency is OK once `__abi` has gated ABI compat). Schema:
 
-- `compiler/codegen/arm64_darwin.hexa::codegen_arm64_darwin` — signature `(module: MModule) -> LModule` → `(module: MModule, opts: CodegenOptions) -> LModule`. ≈11-line lead comment block above the entry documenting the lift + the next sub-cycle (emit body branches).
-- `compiler/codegen/x86_64_linux.hexa::codegen_x86_64_linux` — parallel change (same comment template, x86-specific reloc names in cross-link).
-- 11 callers fanned out to pass `codegen_options_default()`:
-  - `compiler/main.hexa` L798-801 — driver branch (single `__cg_opts` binding hoisted ahead of the per-target `if`, reused on both arm64 + x86 calls). The lead comment documents that `--shared` flag pass-through (G7-A.flag-wire prereq `66b055c4`) is **not** on this branch yet, so `__cg_opts` is always default.
-  - `compiler/codegen/codegen_test.hexa` L266,267,329,330 — both `_id` and `_add` cases on each target (4 sites, one shared `__cg_opts` per `_check_*` body).
-  - `tests/m0/regalloc_test.hexa` L190,250 — `_check_arm64` + `_check_x86_64`, inline `codegen_options_default()`.
-  - `tests/m0/loop_test.hexa` L236,237 — single `__cg_opts` reused across the arm64 + x86 branches.
-  - `tests/m0/concat_test.hexa` L158,159 — same pattern as loop_test.
-  - `tests/m0/many_args_test.hexa` L188,264 — inline `codegen_options_default()`, one per target check.
+```
+CapManifest {
+    plugin_id:       string,        // matches <plugin_id>_dispatch sole exported symbol
+    capabilities:    string[],      // verbatim from @plugin attribute (sorted ascending for determinism)
+    rfc_version:     u32,           // RFC 070 revision number (this RFC = 1)
+    compiler_id:     string,        // "hexa_v2 <build hash>" (audit trail; not gated on)
+}
+```
 
-**Parse-gate**: `SIDECAR_NO_POOL=1 HEXA_LANG=<worktree> /Users/ghost/.hx/bin/hexa_real parse <file>` (hyphenated-basename hexa_real shim per `reference_hexa_basename_sigkill_workaround_2026_05_19.md`) PASS 9/9 — both codegen files + `compiler/ir/lir.hexa` (unchanged but re-verified) + 6 caller files (`compiler/main.hexa`, `compiler/codegen/codegen_test.hexa`, 4 `tests/m0/*_test.hexa`).
+Host gate (G7-D.impl pseudocode, **not landed this sub-cycle**):
 
-**Byte-eq theorem**: `codegen_options_default()` returns `CodegenOptions { shared: 0, target_triple: "" }` (see `compiler/ir/lir.hexa::codegen_options_default`). The emit-body branches that would change behavior are not added this commit — `opts` is bound and propagated but never inspected inside either `codegen_arm64_darwin` or `codegen_x86_64_linux`. Therefore every emit byte produced by the entry points is identical to the pre-iface output for every caller, on every target. The remote `tool/parity_*.sh` corpus harness would observe zero `.s` diff (not measured this cycle — see §4.7-out-of-scope; cost-bound triage is in §6).
+```hexa
+// stdlib/dynlink_caps.hexa (skeleton-only this commit; bodies = G7-D.impl)
+pub fn dynlink_check_compat(so_path: string) -> int {
+    // 1. read __abi 12 B; if mismatch, hexa_dlerror = "ABI: host vN.M.P vs plugin vN'.M'.P'"
+    // 2. read __cap HXC; parse CapManifest
+    // 3. for each c in cap.capabilities: if !grant_table.contains(c) -> refuse, hexa_dlerror = "CAP: <c> not granted"
+    // 4. return handle id on PASS; 0 on any refusal
+    return 0  // skeleton stub
+}
+```
 
-**Out of scope (g3-honest)**:
+#### 4.6.3 What this commit lands (Shape B scaffold, **zero behavior change**)
 
-(i) No `if opts.shared` branch added in either codegen body — the emit stream is byte-identical to pre-iface output.
+1. **This §4.6** (the section you are reading) + §6 first-punted-decision flipped to RESOLVED + §4 phase table G7-D row split into `G7-D.scaffold ✅` + `G7-D.impl` (mirrors the §4.3 / §4.4 / §4.5 scaffold-row pattern).
+2. **`stdlib/dynlink_caps.hexa`** — new file, **skeleton only**. Contains: file header (`// @cite RFC 070 §4.6`), three fn signatures with `return 0` / empty bodies, two struct definitions (`CapManifest`, `AbiStamp`). **No** parser/codegen wiring, **no** import into `stdlib/dynlink.hexa` (which itself doesn't exist yet — G7-C scope), **no** test. Pure shape lock.
+3. **`compiler/codegen/plugin_attr_scaffold.hexa`** — new file, **header-comment-only scaffold marker**. ≈40 lines documenting where `@plugin(capabilities=[...])` parser hook + `__HEXA,__cap` / `__HEXA,__abi` section-emit will land in `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` at G7-D.impl. **No** code, no parser change.
+4. **`compiler/PLAN.md`** — 1-line entry pointing to this §4.6.
 
-(ii) No `.private_extern` (Mach-O) / `.hidden` (ELF) directive emitted — visibility-narrowing remains the next sub-cycle (G7-A.native impl emit).
+**Out of scope (`@D g3`-honest)**:
+- No `compiler/parser` change. `@plugin(...)` is **still a parse error** today.
+- No `compiler/codegen` change. `.so` artifacts still have **zero** `__HEXA,__cap` / `__HEXA,__abi` sections.
+- No `self/runtime.c` change. `hexa_dlopen` (which itself doesn't exist yet — G7-C scope) does **not** gate on ABI or capabilities.
+- No `stdlib/dynlink.hexa` (G7-C). No `stdlib/dynlink_caps.hexa` body — only the file skeleton. No host gate. No F-D1/F-D2 measurement.
+- No `hexa_v2` regen, no binary promote (`@D g_commit_push_deploy` waits for G7-D.impl).
+- No `inbox/PATCHES.yaml` touch.
 
-(iii) No `RELOC_AARCH64_*` / `RELOC_X86_64_GOTPCREL` constant referenced from any LInstr.comment — the constants are still only cited from the scaffold-marker comments.
+#### 4.6.4 Falsifier reaffirmation (real-limit anchored per `@D g3`)
 
-(iv) No GOT-load (`adrp Xn, sym@GOTPAGE` + `ldr Xn, [Xn, sym@GOTPAGEOFF]` / `lea rax, [rip+sym@GOTPCREL]`) emission — `@PAGE/@PAGEOFF` baseline preserved on arm64; absolute-64-bit-immediate baseline preserved on x86_64.
+§4.1's F-D1 + F-D2 are **unmeasured**; G7-D.scaffold reaffirms the contract they will gate on:
 
-(v) `self/main.hexa::cmd_build` gate `HEXA_BACKEND=native + --shared → exit(1)` — neither dropped nor added this cycle. The G7-A.flag-wire prereq commit (`66b055c4` — `bopts[4]` CLI surface) is **not** on this branch, so there is no `--shared` flag to even reach `cmd_build`'s native dispatch. Gate-drop is the next sub-cycle's joint scope (signature emit-body + flag-wire on the same commit).
+- **F-D1** (compiler invariant, ABI stamp): `dlopen` of a `.so` whose `.hexa.abi` 12-byte record disagrees with the host's `(runtime_version, nanbox_layout_hash)` MUST refuse with a `dlerror` string matching the regex `^ABI: host v\d+\.\d+\.\d+ vs plugin v\d+\.\d+\.\d+$` OR `^ABI: nanbox_layout_hash mismatch \([0-9a-f]{16} vs [0-9a-f]{16}\)$`. Real-limit anchor = ABI invariant (a stale `.so` MUST NOT execute against a runtime whose `HexaVal` shape it was not compiled against — silent execution = guaranteed memory corruption per nanbox tagging spec).
+- **F-D2** (compiler invariant, capability gate): `dlopen` of a `.so` whose `.hexa.cap` `CapManifest.capabilities` list contains a capability NOT in the host's `grant_table` MUST refuse with a `dlerror` string matching `^CAP: <c> not granted$` where `<c>` is the **first** ungranted capability in sort order. Real-limit anchor = least-privilege contract (`@D g4`-flavored honesty: an untrusted plugin getting net.outbound when the host config only granted fs.read.config is a privilege escalation; refusing is the **only** sound response).
 
-(vi) F-A1/F-A2 native-codegen measurement deferred — the signature lift produces no native-PIC artifact to inspect. The C-path F-A1 PASS + F-A2 EXPECTED-FAIL from §4.5 remain the standing measurement.
+Both falsifiers are deterministic and replicable from a 1-fn `.hexa` source + a 2-line host-config grant table. G7-D.impl will land a `tool/g7d_falsify.sh` harness mirroring the `tool/g7a_falsify.sh` pattern from §4.5.
 
-(vii) `self/native/hexa_v2` NOT regenerated (per `@D g_inbox_processing_loop` step 7 — binary promote is a separate deploy cycle, NOT this commit).
+#### 4.6.5 Files this commit touches
 
-(viii) `inbox/PATCHES.yaml` untouched.
+- `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` — status header `g7-a-falsify-measured` → `g7-d-scaffold`; §4 phase table G7-D row split; §4.6 added (this section, ≈120 lines); §6 first punted decision flipped to RESOLVED with cross-link to §4.6.1.
+- `stdlib/dynlink_caps.hexa` — new file, ≈45 lines (skeleton fn signatures + struct shapes + `@cite RFC 070 §4.6.2`).
+- `compiler/codegen/plugin_attr_scaffold.hexa` — new file, ≈40 lines (header-comment scaffold marker + integration plan).
+- `compiler/PLAN.md` — 1-line entry pointing to this §4.6.
 
-(ix) `compiler/codegen/thumbv7em_eabihf.hexa` (3rd CPU target) + `compiler/codegen/nvptx_*.hexa` (NVPTX targets) — signature unchanged. Their entry points (`codegen_thumbv7em_eabihf`, `codegen_nvptx_sm{80,90}`) take only `MModule` — `--shared` is meaningless for bare-metal (thumbv7em) and a GPU code module (NVPTX), so they are intentionally excluded from the lift. The driver branch in `compiler/main.hexa` reaches them on different `if target ==` arms that do not see `__cg_opts`.
-
-**files**:
-- `compiler/codegen/arm64_darwin.hexa` (≈11 added lines lead comment + entry signature `+ , opts: CodegenOptions`)
-- `compiler/codegen/x86_64_linux.hexa` (parallel ≈11 added lines + signature change)
-- `compiler/main.hexa` L798-801 (≈10 added lines lead comment + `let __cg_opts = codegen_options_default()` hoist + 2 call-site `, __cg_opts` adds)
-- `compiler/codegen/codegen_test.hexa` L266-267, L329-330 (3 added lines lead comment + 1 hoist + 4 call-site adds)
-- `tests/m0/regalloc_test.hexa` L190, L250 (2 added lead comments + 2 inline `, codegen_options_default()` adds)
-- `tests/m0/loop_test.hexa` L236-237 (1 hoist + 2 call-site adds)
-- `tests/m0/concat_test.hexa` L158-159 (1 hoist + 2 call-site adds)
-- `tests/m0/many_args_test.hexa` L188, L264 (2 added lead comments + 2 inline adds)
-- `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` (§4 table row split into `signature ✅` + `emit` + this §4.7)
-- `compiler/PLAN.md` (single entry per `@D g_plan_consolidation`)
-
-cross-link: §4.6 G7-A.native impl iface (the data-shape this signature lift consumes) · §4.5 G7-A.falsify (the C-path measurement this preserves byte-equivalence with) · §4 table row `G7-A.native impl emit` (the next sub-cycle that this signature unblocks) · `@D g_inbox_processing_loop` Shape B (Shape A — signature is surgical, but caller fan-out across 11 sites triggered the brief's documented Shape B path "= caller update 만 + emit 변경은 다음 sub-cycle") · `@D g5` hexa-native-only (lift threads through the two CPU targets of the hexa-native codegen path; thumbv7em + NVPTX excluded because `--shared` semantics do not apply) · `@D g3` real-limits-first (default-`opts` byte-eq theorem rests on `codegen_options_default()` returning literal `{0, ""}` — verifiable by inspection of `compiler/ir/lir.hexa::codegen_options_default`, no inference) · `@D g_commit_push_deploy` (no binary promote this sub-cycle — signature change requires both the emit sub-cycle and the flag-wire prereq to land before the deployed-driver gate is meaningful).
+cross-link: §3.C capability gate · §3.D ABI version stamp · §4.1 F-D1/F-D2 falsifier anchors · §4.4 G7-A.native scaffold (parallel "scaffold-only marker for impl sub-cycle" pattern) · §6 first punted decision (now RESOLVED) · `@D g3` real-limits-first (F-D1 anchored on nanbox ABI invariant; F-D2 anchored on least-privilege contract) · `@D g5` hexa-native-only (decision **A** stays in-source = hexa-native; **B** would have introduced a sidecar file format dependency) · `@D g6` citation-enforced-strict-lint (in-source attribute pattern mirrors `@cite`) · `@D g_hxc` HXC v2 wire (CapManifest payload only — ABI stamp is fixed 12 B for dependency-free verification) · `@D g_inbox_processing_loop` Shape B (scaffold + design decision lock; impl is a separate measured cycle).
 
 ## 5. Open questions (verbatim from source patch §7 + 2026-05-20 status)
 
@@ -290,7 +318,7 @@ cross-link: §4.6 G7-A.native impl iface (the data-shape this signature lift con
 
 ## 6. Decision punted
 
-- **Tooling for capability manifest authoring** (Phase D): is it a `@plugin(capabilities=...)` attribute on the dispatch fn, or a sidecar `.hexa.cap.tape` declarative file? Decide at G7-D start.
+- **Tooling for capability manifest authoring** (Phase D): ~~is it a `@plugin(capabilities=...)` attribute on the dispatch fn, or a sidecar `.hexa.cap.tape` declarative file? Decide at G7-D start.~~ **RESOLVED 2026-05-20 G7-D scaffold (§4.6)** — adopted **(A) `@plugin(capabilities=...)` in-source attribute** on the dispatch fn. Sidecar `.hexa.cap.tape` declined per `@D g3` real-limits-first (source ≠ manifest is a silent-drift hazard; in-source attribute lives in the same SSOT as the dispatch fn body, so an audit grep can prove no capability is claimed without the dispatch fn observing it). See §4.6.1 for the full trade-off matrix.
 - **Hot reload semantics**: does `dynlink_close` followed by `dynlink_open` of an updated `.so` require quiescence on outstanding handles? Decide at G7-E.
 - **Versioned `dlsym` (a la ELF symbol versioning `@@VER`)**: probably no for the fat-single-symbol model; revisit if (a) full-dynamic is later adopted.
 
