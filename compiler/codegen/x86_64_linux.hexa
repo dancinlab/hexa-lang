@@ -51,8 +51,14 @@
 // G7-A.native impl delta (the next sub-cycle):
 //   1. Honor `bopts[4]=="1"` (the `shared` flag wired in G7-A.flag-wire)
 //      inside `codegen_x86_64_linux` entry — branch addressing-mode
-//      selection on it. Plumb `shared: string` through the codegen
-//      module-level options struct (currently absent; add one).
+//      selection on it. Plumb `shared: i64` through the codegen
+//      module-level options struct. **CodegenOptions struct lifted to
+//      `compiler/ir/lir.hexa` 2026-05-20 (interface-only commit)** —
+//      see `pub struct CodegenOptions { shared: i64, target_triple: string }`
+//      + `codegen_options_default()` seed helper. This sub-cycle threads
+//      it as an optional 2nd arg to `codegen_x86_64_linux` (signature
+//      change synchronized with `compiler/main.hexa:801` + 2 callers in
+//      `compiler/codegen/codegen_test.hexa`).
 //   2. Cross-fn symbol references in shared mode:
 //        - Extern fn/data: `lea rax, [rip+sym@GOTPCREL]` then
 //          `mov rax, [rax]` for data, or `call qword [rax]` for fn.
@@ -61,6 +67,11 @@
 //        - Local/PIE-style: `lea rax, [rip+sym]` with `R_X86_64_PC32`
 //          reloc (already used for branch targets internally; promote
 //          to data/fn-addr take-address sites too).
+//      **Reloc kind string constants lifted to `compiler/ir/lir.hexa`
+//      as `pub let RELOC_X86_64_GOTPCREL` + `RELOC_X86_64_PC32` +
+//      `RELOC_X86_64_PLT32` (cycle 30's existing) 2026-05-20** — tag
+//      RIP-relative LInstrs via `LInstr.comment` so the asm-text
+//      emitter can dispatch on the suffix.
 //   3. Hidden-visibility default: emit `.hidden <sym>` directive for
 //      every defined fn EXCEPT `<plugin_id>_dispatch`, which alone
 //      gets `.globl`. ELF dynsym then carries exactly 1 global entry.

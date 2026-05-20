@@ -90,3 +90,83 @@ pub struct LSection {
     bytes: string,       // hex-encoded payload
     align: i64
 }
+
+// ── RFC 070 G7-A.native impl — interface lift (2026-05-20) ────────────
+//
+// Sibling lift to the scaffold markers in `codegen/arm64_darwin.hexa` (L36)
+// and `codegen/x86_64_linux.hexa` (L34). Adds the **types** the next
+// sub-cycle needs (CodegenOptions + reloc kind string constants) WITHOUT
+// touching any emit body or entry signature — pure interface-only change.
+//
+// Honest scope (@D g3): zero functional change. No struct is yet
+// constructed at any call site; no reloc kind string is yet referenced
+// from any LInstr.comment. The next sub-cycle (G7-A.native impl, after
+// `compiler/main.hexa` lands the `--shared` flag wiring per RFC 070
+// §4.3 — currently isolated to PR 66b055c4) will (1) seed a per-target
+// `CodegenOptions` at the entry fn, (2) honor `opts.shared` inside
+// `_arm64_lower_func` / `_x86_64_lower_func` addressing-mode selection,
+// and (3) tag GOT-loads via `LInstr.comment` with the reloc kind string
+// for the asm-emit stream to materialize as `@GOTPAGE` / `@GOTPCREL` etc.
+//
+// Why lift the types NOW (not in the impl sub-cycle itself):
+//   - Decouples the data-shape decision (this commit) from the per-target
+//     addressing-mode work (next commit), so the impl PR's diff stays
+//     localized to the two codegen/<target>.hexa files.
+//   - Lets the impl PR caller (`compiler/main.hexa::cmd_build` native
+//     branch) construct `CodegenOptions` from `bopts[4]` the moment the
+//     flag-wire prereq merges to this branch.
+
+// CodegenOptions — per-invocation flags that gate addressing-mode and
+// visibility choices in the per-target lowering pass. SCAFFOLD-ONLY:
+// the struct is reachable from outside, but no code path constructs it
+// today; default-seed helper below documents the canonical zero value.
+pub struct CodegenOptions {
+    // 0 = executable / PIE (default; current behavior — `adrp+@PAGE`
+    //     baseline on arm64-darwin, absolute-imm/PLT32 baseline on
+    //     x86_64-linux). 1 = `.dylib`/`.so` PIC (next sub-cycle:
+    //     GOT-indirection for extern refs, `.private_extern`/`.hidden`
+    //     directive for hidden-by-default visibility — exactly one
+    //     `<plugin_id>_dispatch` exported per F-A2 hook).
+    shared: i64,
+    // Target triple in canonical Rust/LLVM form. "" = host default.
+    // Used by `compiler/main.hexa::cmd_build` cross-target build path.
+    target_triple: string
+}
+
+// codegen_options_default — canonical zero-seed used until call sites
+// thread real options through. Keeps the next sub-cycle's diff bounded
+// to a single helper call at each entry fn.
+pub fn codegen_options_default() -> CodegenOptions {
+    return CodegenOptions { shared: 0, target_triple: "" }
+}
+
+// ── Reloc kind constants (G7-A.native impl) ──────────────────────────
+//
+// Centralized as string constants (NOT a variant enum — stage0 lacks
+// closed-sum lowering for newly-introduced enums per the stage0
+// transitive-let binding gap noted in arm64_darwin.hexa L80-82). The
+// per-target asm-emit stream maps these strings → assembler directives
+// (e.g. `R_AARCH64_ADR_GOT_PAGE` → `@GOTPAGE`, `R_X86_64_GOTPCREL` →
+// `(%rip)` + `lea ... @GOTPCREL(...)`).
+//
+// SCAFFOLD-ONLY: no LInstr.comment in the current emit stream carries
+// these strings. The impl sub-cycle will tag GOT-load LInstrs with the
+// reloc kind via `comment` so the asm-text emitter (`compiler/lir/emit_asm.hexa`
+// or equivalent) can dispatch on it.
+//
+// Authority:
+//   - arm64: `<mach-o/arm64/reloc.h>` (ARM64_RELOC_GOT_LOAD_PAGE21,
+//     ARM64_RELOC_GOT_LOAD_PAGEOFF12 are the Mach-O `ld64` relocation
+//     types; the ELF equivalents `R_AARCH64_ADR_GOT_PAGE` / `R_AARCH64_LD64_GOT_LO12_NC`
+//     are mirrored here for cross-target uniformity since the asm-text
+//     produced is identical — `adrp Xn, sym@GOTPAGE` + `ldr Xn, [Xn, sym@GOTPAGEOFF]`).
+//   - x86_64: System V ABI gABI §4 (`R_X86_64_GOTPCREL`, `R_X86_64_PC32`).
+//     `R_X86_64_PLT32` for call sites already emitted by cycle 30
+//     (`e83dfd99`) — listed here for completeness so the impl sub-cycle
+//     does not re-invent the constant.
+
+pub let RELOC_AARCH64_ADR_GOT_PAGE: string  = "R_AARCH64_ADR_GOT_PAGE"
+pub let RELOC_AARCH64_LD64_GOT_LO12_NC: string = "R_AARCH64_LD64_GOT_LO12_NC"
+pub let RELOC_X86_64_GOTPCREL: string       = "R_X86_64_GOTPCREL"
+pub let RELOC_X86_64_PC32: string           = "R_X86_64_PC32"
+pub let RELOC_X86_64_PLT32: string          = "R_X86_64_PLT32"
