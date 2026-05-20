@@ -1,0 +1,184 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/ag_derive.hexa — flame autograd-auto Sub-Deliverable 1
+// (RFC 043, scoping note inbox/notes/2026-05-20-flame-autograd-auto-scoping.md)
+//
+// PURPOSE — Source-to-source reverse-mode AD via a vjp-rule registry
+// (Option B in the scoping note). SD1 lands the registry data structure
+// + ONE rule for `farr_matmul` (the linear-fwd primitive). The derived
+// bwd MUST be byte-identical (max|Δ| = 0.0) to the existing hand-written
+// `nn_linear_bwd` reference — that is the SD1 gate
+// (F-RFC043-AUTOGRAD-AUTO-MATMUL-BYTE-EQ).
+//
+// SCOPE (g3 — what this file IS and IS NOT):
+//   IS  : a manually-keyed rule registry. `ag_derive_register(op_kind,
+//         …)` installs a rule; `matmul_bwd_auto(x, W, dy, …)` looks up
+//         the matmul rule and invokes it.
+//   IS  : the rule for `farr_matmul` whose closed-form vjp is the
+//         chain-rule application
+//           y     = x · W                (forward: matmul)
+//           dW    = xᵀ · dy              (vjp wrt W)
+//           dx    = dy · Wᵀ              (vjp wrt x)
+//         This is the standard analytic vjp pair for matmul (see e.g.
+//         Tapenade/Zygote/JAX literature; equivalently c3_outer + c3_
+//         matvec_t in anima d_train3_lib.hexa, the cross-repo verified
+//         reference). The rule's emitted body reduces in the same
+//         ikj-style order as the hand-written `nn_linear_bwd` so the
+//         floating-point sum order matches byte-for-byte.
+//   NOT : true AST-driven derivation from the source of `nn_linear_fwd`
+//         (the scoping note "honest stop-condition" — SD5 if compile-
+//         time AST introspection lands; SD1 keys rules by op_kind).
+//   NOT : integrated into ag_tape's `ag_backward_reg` dispatch — that is
+//         SD4. SD1 verifies the rule's output standalone vs
+//         `nn_linear_bwd`.
+//   NOT : bias-grad. `nn_linear_bwd` also produces `db`; SD1's
+//         `matmul_bwd_auto` covers ONLY the matmul vjp pair {dW, dx},
+//         because the bias is a separate fwd primitive (broadcast-add,
+//         not matmul) — its vjp rule will land separately as SD2's
+//         `add_bwd_auto`.
+//
+// Hexa-native CPU only ($0). Strict-lint: @raw117_exempt (flame stdlib
+// convention; the formula prose above carries the atlas-derivation
+// citation, mirroring the @raw117_exempt header in nn_lib.hexa /
+// ag_tape.hexa).
+//
+// Atlas anchor (g6 — the formula's derivation):
+//   - Closed-form vjp of matmul = chain-rule application
+//     · dx = ∂L/∂x = (∂L/∂y) · (∂y/∂x) = dy · Wᵀ
+//     · dW = ∂L/∂W = (∂L/∂y) · (∂y/∂W) = xᵀ · dy
+//   - The closed-form coincides with anima d_train3_lib.hexa
+//     `c3_matvec_t` (input-grad) + `c3_outer` (W-grad accumulator),
+//     which `nn_lib::nn_linear_bwd` reproduces ikj-fashion in the
+//     hand-written reference.
+//   - Citation: hexa-lang.atlas (built-in) "matmul-vjp = transpose
+//     × upstream" — the rule's `bwd` body reproduces the algebra
+//     without re-deriving it (the algebra IS the registry value).
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+// ─── op-kind IDs (registry keys) ───────────────────────────────────────
+// Match ag_tape's ag_k_* ID space ONLY for the ops where a rule exists.
+// SD1: only `ag_derive_k_matmul` (1) is meaningful. Future SDs (2-13)
+// claim additional kinds in lockstep with ag_tape's ag_k_*. We do NOT
+// reuse ag_tape's literals because ag_derive is a self-contained
+// registry — adding a rule for op_kind X here MUST be a deliberate edit,
+// not "whatever ag_tape happens to use".
+pub fn ag_derive_k_matmul() -> int { return 1 }
+// Reserved for future SDs (do not invoke yet — registry rejects unknown):
+//   2 = add, 3 = rmsnorm, 4 = rope, 5 = lmhead, 6 = swiglu, 7 = embed,
+//   8 = attn, 9 = silu_gate, 10 = slice, 11 = rope_mh, 12 = rmsnorm_mh,
+//   13 = attn_dt — SD2/SD3 will register these.
+
+// ─── registry: flat farr-backed table ──────────────────────────────────
+// Layout: a single farr where each "slot" is 4 cells:
+//   [op_kind, registered_flag, reserved, reserved]
+// Slot index ≡ op_kind − 1 (so matmul → slot 0). 16-slot table is
+// vastly more than SD1 needs but matches the 13 op_kinds the scoping
+// note enumerates (and leaves room for SD2's add + SD3 expansion).
+//
+// The registry stores op-kind presence (a manually-keyed lookup). The
+// rule's BODY is a separate `pub fn` per kind — dispatch is via the
+// kind-id switch in `matmul_bwd_auto` (and future siblings), which the
+// registry guards: "lookup says present → call the body; lookup says
+// absent → fault".
+//
+// Why a flat farr (not a struct array): the scoping note constrains
+// SD1 to flame stdlib idiom (farr-backed, ag_tape style). This mirrors
+// how ag_tape's tape itself is a flat farr of {kind, ids…, dims…}.
+
+fn _ag_derive_slots() -> int { return 16 }
+fn _ag_derive_stride() -> int { return 4 }
+
+pub fn ag_derive_registry_new() -> int {
+    let n = _ag_derive_slots() * _ag_derive_stride()
+    let r = t_zeros(n)
+    return r
+}
+
+pub fn ag_derive_register(reg: int, op_kind: int) -> int {
+    let slots = _ag_derive_slots()
+    if op_kind < 1 { return 0 }
+    if op_kind > slots { return 0 }
+    let base = (op_kind - 1) * _ag_derive_stride()
+    t_set(reg, base + 0, to_float(op_kind))
+    t_set(reg, base + 1, 1.0)
+    return 1
+}
+
+pub fn ag_derive_is_registered(reg: int, op_kind: int) -> int {
+    let slots = _ag_derive_slots()
+    if op_kind < 1 { return 0 }
+    if op_kind > slots { return 0 }
+    let base = (op_kind - 1) * _ag_derive_stride()
+    let flag = t_get(reg, base + 1)
+    if flag == 1.0 { return 1 }
+    return 0
+}
+
+// ─── rule body: matmul vjp (op_kind = 1) ───────────────────────────────
+// Closed-form chain-rule application — the registry's payload for
+// `farr_matmul`. Reduction order chosen to match `nn_linear_bwd` (and
+// equivalently `ref_linear_bwd` in flame_nn_test.hexa) byte-for-byte:
+//   · dW[d,c] = Σ_b x[b,d] · dy[b,c]    (outer dimension `d`, inner `c`,
+//                                         innermost reduction `b`)
+//   · dx[b,d] = Σ_c dy[b,c] · W[d,c]    (outer dimension `b`, inner `d`,
+//                                         innermost reduction `c`)
+// Same loop nesting + same scalar-multiplication associativity ⇒ same
+// IEEE-754 last-bit ⇒ max|Δ| = 0.0 vs the hand-written reference.
+//
+// Caller-allocated outputs (dW_out, dx_out) — writes in place; this
+// keeps the surface aligned with `nn_linear_bwd` so the byte-eq oracle
+// compares like-for-like and SD2/SD4 can swap the call sites without
+// reshaping the surrounding code.
+pub fn ag_derive_matmul_bwd_body(x: int, W: int, dy: int,
+                                 dW_out: int, dx_out: int,
+                                 B: int, D: int, C: int) {
+    // dW = xᵀ · dy  — outer (d, c), inner-most reduction over b.
+    let mut d = 0
+    while d < D {
+        let mut c = 0
+        while c < C {
+            let mut acc = 0.0
+            let mut bi = 0
+            while bi < B {
+                acc = acc + t_get(x, bi * D + d) * t_get(dy, bi * C + c)
+                bi = bi + 1
+            }
+            t_set(dW_out, d * C + c, acc)
+            c = c + 1
+        }
+        d = d + 1
+    }
+    // dx = dy · Wᵀ  — outer (b, d), inner-most reduction over c.
+    let mut b2 = 0
+    while b2 < B {
+        let mut d2 = 0
+        while d2 < D {
+            let mut acc2 = 0.0
+            let mut c2 = 0
+            while c2 < C {
+                acc2 = acc2 + t_get(dy, b2 * C + c2) * t_get(W, d2 * C + c2)
+                c2 = c2 + 1
+            }
+            t_set(dx_out, b2 * D + d2, acc2)
+            d2 = d2 + 1
+        }
+        b2 = b2 + 1
+    }
+}
+
+// ─── public entry: matmul_bwd_auto ─────────────────────────────────────
+// Consume the rule registry. Lookup the matmul rule; if registered,
+// invoke its body. If NOT registered, write zeros (the SD1 test
+// registers the rule, so this is the success path; absence is a
+// deliberate fault to surface integration bugs in SD4).
+pub fn matmul_bwd_auto(reg: int, x: int, W: int, dy: int,
+                       dW_out: int, dx_out: int,
+                       B: int, D: int, C: int) -> int {
+    if ag_derive_is_registered(reg, ag_derive_k_matmul()) == 0 {
+        return 0
+    }
+    ag_derive_matmul_bwd_body(x, W, dy, dW_out, dx_out, B, D, C)
+    return 1
+}
