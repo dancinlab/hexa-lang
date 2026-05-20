@@ -790,11 +790,13 @@ fn main() {
     let ok_wie   = _test_wmma_instr_emit()
     let ok_gkw   = _test_gemm_k_loop_wiring()
     let ok_fls   = _test_f16_load_store()
+    let ok_fp8a  = _test_f8_e4m3_load_store()
+    let ok_fp8b  = _test_f8_e5m2_load_store()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls {
-        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 069 — 25/25 cases (incl. f16 ld/st)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b {
+        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 — 27/27 cases (incl. fp8 e4m3 + e5m2 ld/st)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -822,9 +824,11 @@ fn main() {
         if !ok_wie  { println("      RFC 067 WMMA instr-emit FAILED") }
         if !ok_gkw  { println("      RFC 069 GEMM K-loop wiring FAILED") }
         if !ok_fls  { println("      RFC 068 P4 f16 ld/st FAILED") }
+        if !ok_fp8a { println("      RFC 068 §3 fp8 e4m3 scaffold FAILED") }
+        if !ok_fp8b { println("      RFC 068 §3 fp8 e5m2 scaffold FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -2657,6 +2661,178 @@ fn _test_f16_load_store() -> bool {
         ok = false
     } else {
         println("  ok: no .f16 storage mnemonic (silicon-canonical .b16 only)")
+    }
+    return ok
+}
+
+// ── Case 26 — RFC 068 §3 fp8 e4m3 scaffold (ld/st round-trip) ─────────
+//
+// Verifies that an fp8 e4m3-tagged Local (`Local.precision = ".f8_e4m3"`)
+// routes through the codegen pipeline end-to-end:
+//   - classifier short-circuits to NVPTX_RKIND_F8_E4M3
+//   - `.reg .b8 %fe3<id>` directive is emitted (PTX has no native
+//     `.e4m3` reg type tag — `.b8` raw container is silicon-canonical)
+//   - `ld.global.b8` / `st.global.b8` mnemonics dispatch
+//
+// Honest scope (`@D g3`): codegen-only scaffold. No silicon fire — fp8
+// sub-byte ABI (kernel-arg packing, addr alignment) + the matching
+// `wmma.mma.sync...e4m3.e4m3.f32` mnemonic family are follow-on cycles.
+// Parser-side grammar for the `@f8_e4m3` named-type primitive is also
+// follow-on; this test hand-builds the precision tag the same way
+// Case 25 (f16) hand-builds `.f16`.
+
+fn _build_case_f8_e4m3_ld_st() -> MFunc {
+    let addr_a = _local_with_precision(20, "addr_a", "")
+    let addr_c = _local_with_precision(21, "addr_c", "")
+    let val_loaded = _local_with_precision(22, "v_in",  ".f8_e4m3")
+    let val_to_store = _local_with_precision(23, "v_out", ".f8_e4m3")
+
+    let mut s0 = []
+    s0.push(_stmt_load(val_loaded, _op_local(addr_a.id)))
+    s0.push(_stmt_store(_op_local(addr_c.id), _op_local(val_loaded.id)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(addr_a)
+    params.push(addr_c)
+    let mut locals = []
+    locals.push(addr_a)
+    locals.push(addr_c)
+    locals.push(val_loaded)
+    locals.push(val_to_store)
+
+    return MFunc {
+        name: "f8_e4m3_ld_st_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+}
+
+fn _test_f8_e4m3_load_store() -> bool {
+    let mut ok = true
+    let mfn = _build_case_f8_e4m3_ld_st()
+    let ptx = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn))
+
+    println("")
+    println("── emitted PTX (RFC 068 §3 fp8 e4m3 ld/st scaffold, sm_80) ──")
+    println(ptx)
+
+    // Positive: silicon-canonical `.b8` storage mnemonics fire.
+    ok = _check(ok, ptx, "ld.global.b8",  "ld.global.b8 mnemonic emitted (silicon-canonical fp8 e4m3 LOAD)")
+    ok = _check(ok, ptx, "st.global.b8",  "st.global.b8 mnemonic emitted (silicon-canonical fp8 e4m3 STORE)")
+    // Positive: `%fe3<id>` reg-bank prefix (distinct from f16 `%fh`,
+    // bf16 `%fb`, f32 `%fs`).
+    ok = _check(ok, ptx, "%fe3", "%fe3<id> reg-bank prefix emitted (RFC 068 §3 e4m3 bank)")
+    // Positive: `.reg .b8` directive (PTX has no native `.e4m3` type).
+    ok = _check(ok, ptx, ".reg .b8", ".reg .b8 directive emitted (silicon-canonical fp8 container)")
+    // Negative guards — neither the f64 default NOR the spec-but-not-
+    // silicon `.f8_e4m3` storage form should fire.
+    if _contains(ptx, "ld.global.f64 %fe3") || _contains(ptx, "st.global.f64 %fe3") {
+        println("  FAIL: f64 mnemonic emitted on fp8-tagged Locals — kind dispatch broken")
+        ok = false
+    } else {
+        println("  ok: no f64 mnemonic on fp8 e4m3-tagged ld/st (kind dispatch live)")
+    }
+    if _contains(ptx, "ld.global.e4m3") || _contains(ptx, "st.global.e4m3") {
+        println("  FAIL: ld.global.e4m3 / st.global.e4m3 emitted — ptxas would reject (silicon mismatch)")
+        ok = false
+    } else {
+        println("  ok: no .e4m3 storage mnemonic (silicon-canonical .b8 only)")
+    }
+    return ok
+}
+
+// ── Case 27 — RFC 068 §3 fp8 e5m2 scaffold (ld/st round-trip) ─────────
+//
+// Same shape as Case 26 but for the e5m2 variant (5-bit exponent,
+// 2-bit mantissa, 1 sign bit). Verifies the second fp8 reg bank
+// (`%fe5<id>`) is independently reachable + the `.b8` storage
+// mnemonics dispatch identically (the storage type is bank-agnostic;
+// only the consumer opcode interprets the bit pattern).
+
+fn _build_case_f8_e5m2_ld_st() -> MFunc {
+    let addr_a = _local_with_precision(30, "addr_a", "")
+    let addr_c = _local_with_precision(31, "addr_c", "")
+    let val_loaded = _local_with_precision(32, "v_in",  ".f8_e5m2")
+    let val_to_store = _local_with_precision(33, "v_out", ".f8_e5m2")
+
+    let mut s0 = []
+    s0.push(_stmt_load(val_loaded, _op_local(addr_a.id)))
+    s0.push(_stmt_store(_op_local(addr_c.id), _op_local(val_loaded.id)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(addr_a)
+    params.push(addr_c)
+    let mut locals = []
+    locals.push(addr_a)
+    locals.push(addr_c)
+    locals.push(val_loaded)
+    locals.push(val_to_store)
+
+    return MFunc {
+        name: "f8_e5m2_ld_st_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+}
+
+fn _test_f8_e5m2_load_store() -> bool {
+    let mut ok = true
+    let mfn = _build_case_f8_e5m2_ld_st()
+    let ptx = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn))
+
+    println("")
+    println("── emitted PTX (RFC 068 §3 fp8 e5m2 ld/st scaffold, sm_80) ──")
+    println(ptx)
+
+    // Positive: silicon-canonical `.b8` storage mnemonics fire.
+    ok = _check(ok, ptx, "ld.global.b8",  "ld.global.b8 mnemonic emitted (silicon-canonical fp8 e5m2 LOAD)")
+    ok = _check(ok, ptx, "st.global.b8",  "st.global.b8 mnemonic emitted (silicon-canonical fp8 e5m2 STORE)")
+    // Positive: `%fe5<id>` reg-bank prefix (distinct from e4m3 `%fe3`
+    // and from f16 `%fh`, bf16 `%fb`, f32 `%fs`).
+    ok = _check(ok, ptx, "%fe5", "%fe5<id> reg-bank prefix emitted (RFC 068 §3 e5m2 bank)")
+    // Positive: `.reg .b8` directive (shared with e4m3 — storage type
+    // is identical; only the consumer opcode differentiates).
+    ok = _check(ok, ptx, ".reg .b8", ".reg .b8 directive emitted (silicon-canonical fp8 container)")
+    // Negative guards.
+    if _contains(ptx, "ld.global.f64 %fe5") || _contains(ptx, "st.global.f64 %fe5") {
+        println("  FAIL: f64 mnemonic emitted on fp8-tagged Locals — kind dispatch broken")
+        ok = false
+    } else {
+        println("  ok: no f64 mnemonic on fp8 e5m2-tagged ld/st (kind dispatch live)")
+    }
+    if _contains(ptx, "ld.global.e5m2") || _contains(ptx, "st.global.e5m2") {
+        println("  FAIL: ld.global.e5m2 / st.global.e5m2 emitted — ptxas would reject (silicon mismatch)")
+        ok = false
+    } else {
+        println("  ok: no .e5m2 storage mnemonic (silicon-canonical .b8 only)")
+    }
+    // Negative guard: the e4m3 bank prefix MUST NOT appear in an
+    // e5m2-only fixture (verifies bank isolation).
+    if _contains(ptx, "%fe3") {
+        println("  FAIL: %fe3 (e4m3 bank) appeared in e5m2-only fixture — bank crosstalk")
+        ok = false
+    } else {
+        println("  ok: no %fe3 (e4m3 bank) in e5m2-only fixture (banks are disjoint)")
     }
     return ok
 }

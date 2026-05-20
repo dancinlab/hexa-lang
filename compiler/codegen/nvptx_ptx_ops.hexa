@@ -66,6 +66,16 @@ pub let PTX_OP_LD_GLOBAL_BF16: string = "ld.global.b16"
 pub let PTX_OP_ST_GLOBAL_BF16: string = "st.global.b16"
 pub let PTX_OP_LD_GLOBAL_F32: string  = "ld.global.f32"
 pub let PTX_OP_ST_GLOBAL_F32: string  = "st.global.f32"
+// RFC 068 §3 fp8 scaffold — Hopper-class (sm_90+) e4m3 / e5m2 ld/st.
+// PTX has no native `.e4m3` / `.e5m2` ld/st type tag; both variants use
+// `.b8` raw container storage (matching the f16/bf16 → `.b16` PR #189
+// pattern). The fp8 INTERPRETATION lives in the consumer opcode
+// (`cvt.rn.f16.e4m3` / `wmma.mma.sync...e4m3.e4m3.f32`), not the ld/st.
+//   ref: PTX ISA 8.7 §5.4.1 (raw container types) + §9.7.13.5 (fp8 WMMA).
+// SCAFFOLD-ONLY — no silicon fire in this cycle; sub-byte ABI work
+// (kernel-arg packing, addr alignment) is a follow-on cycle.
+pub let PTX_OP_LD_GLOBAL_F8: string   = "ld.global.b8"
+pub let PTX_OP_ST_GLOBAL_F8: string   = "st.global.b8"
 pub let PTX_OP_LD_SHARED_F64: string  = "ld.shared.f64"
 pub let PTX_OP_ST_SHARED_F64: string  = "st.shared.f64"
 pub let PTX_OP_LD_PARAM_U64: string   = "ld.param.u64"

@@ -274,6 +274,8 @@ fn _nvptx_lookup_reg_for_local(kinds: [PReg], id: i64) -> string {
     let n_f16 = _nvptx_reg_f16(id)
     let n_bf16 = _nvptx_reg_bf16(id)
     let n_f32 = _nvptx_reg_f32(id)
+    let n_e4m3 = _nvptx_reg_f8_e4m3(id)
+    let n_e5m2 = _nvptx_reg_f8_e5m2(id)
     let mut i = 0
     while i < len(kinds) {
         let n = kinds[i].name
@@ -284,6 +286,8 @@ fn _nvptx_lookup_reg_for_local(kinds: [PReg], id: i64) -> string {
         if n == n_f16 { return n_f16 }
         if n == n_bf16 { return n_bf16 }
         if n == n_f32 { return n_f32 }
+        if n == n_e4m3 { return n_e4m3 }
+        if n == n_e5m2 { return n_e5m2 }
         i = i + 1
     }
     return n_f64
@@ -301,6 +305,8 @@ fn _nvptx_lookup_kind_for_local(kinds: [PReg], id: i64) -> string {
     let n_f16 = _nvptx_reg_f16(id)
     let n_bf16 = _nvptx_reg_bf16(id)
     let n_f32 = _nvptx_reg_f32(id)
+    let n_e4m3 = _nvptx_reg_f8_e4m3(id)
+    let n_e5m2 = _nvptx_reg_f8_e5m2(id)
     let mut i = 0
     while i < len(kinds) {
         let r = kinds[i]
@@ -311,6 +317,8 @@ fn _nvptx_lookup_kind_for_local(kinds: [PReg], id: i64) -> string {
         if r.name == n_f16 { return NVPTX_RKIND_F16 }
         if r.name == n_bf16 { return NVPTX_RKIND_BF16 }
         if r.name == n_f32 { return NVPTX_RKIND_F32 }
+        if r.name == n_e4m3 { return NVPTX_RKIND_F8_E4M3 }
+        if r.name == n_e5m2 { return NVPTX_RKIND_F8_E5M2 }
         i = i + 1
     }
     return NVPTX_RKIND_F64
@@ -322,6 +330,11 @@ fn _nvptx_ld_mnem_for_kind(kind: string) -> string {
     if kind == NVPTX_RKIND_F16 { return PTX_OP_LD_GLOBAL_F16 }
     if kind == NVPTX_RKIND_BF16 { return PTX_OP_LD_GLOBAL_BF16 }
     if kind == NVPTX_RKIND_F32 { return PTX_OP_LD_GLOBAL_F32 }
+    // RFC 068 §3 fp8 scaffold — both e4m3 / e5m2 use `.b8` storage
+    // (PTX has no native 8-bit float type tag; the reg interp is
+    // selected by the consuming opcode, not the ld/st itself).
+    if kind == NVPTX_RKIND_F8_E4M3 { return PTX_OP_LD_GLOBAL_F8 }
+    if kind == NVPTX_RKIND_F8_E5M2 { return PTX_OP_LD_GLOBAL_F8 }
     return PTX_OP_LD_GLOBAL_F64
 }
 
@@ -330,6 +343,9 @@ fn _nvptx_st_mnem_for_kind(kind: string) -> string {
     if kind == NVPTX_RKIND_F16 { return PTX_OP_ST_GLOBAL_F16 }
     if kind == NVPTX_RKIND_BF16 { return PTX_OP_ST_GLOBAL_BF16 }
     if kind == NVPTX_RKIND_F32 { return PTX_OP_ST_GLOBAL_F32 }
+    // RFC 068 §3 fp8 scaffold — `.b8` storage for both e4m3 and e5m2.
+    if kind == NVPTX_RKIND_F8_E4M3 { return PTX_OP_ST_GLOBAL_F8 }
+    if kind == NVPTX_RKIND_F8_E5M2 { return PTX_OP_ST_GLOBAL_F8 }
     return PTX_OP_ST_GLOBAL_F64
 }
 
@@ -338,6 +354,8 @@ fn _nvptx_kind_short_label(kind: string) -> string {
     if kind == NVPTX_RKIND_F16 { return "f16" }
     if kind == NVPTX_RKIND_BF16 { return "bf16" }
     if kind == NVPTX_RKIND_F32 { return "f32" }
+    if kind == NVPTX_RKIND_F8_E4M3 { return "f8_e4m3" }
+    if kind == NVPTX_RKIND_F8_E5M2 { return "f8_e5m2" }
     return "f64"
 }
 
@@ -828,6 +846,26 @@ pub let NVPTX_RKIND_F16: string = "fpr16"     // %fh<id>   .reg .f16
 pub let NVPTX_RKIND_BF16: string = "fpr16bf"  // %fb<id>   .reg .bf16
 pub let NVPTX_RKIND_F32: string = "fpr32"     // %fs<id>   .reg .f32
 
+// RFC 068 §3 fp8 scaffold — Hopper-class (sm_90+) Tensor Core dtypes.
+// Both variants live in a single 8-bit container (`.b8`) — PTX has no
+// native `.reg .e4m3` / `.reg .e5m2` type tag; the silicon-canonical
+// pattern is `.reg .b8 <reg>` + the fp8-specific opcode (`cvt.rn.f16.e4m3
+// %fh, %fe3` etc.) selecting the interpretation. This mirrors PR #189's
+// f16 → `.b16` storage finding: spec lists `.f16` as a valid ld/st type,
+// but real silicon prefers the raw container type with the precision
+// implied by the operand register's true interpretation.
+//   ref: PTX ISA 8.7 §5.4.1 (fundamental types) + §9.7.13.5 (fp8 WMMA);
+//        NVIDIA "FP8 Format Specification" (e4m3 = 4-bit exponent,
+//        3-bit mantissa + sign; e5m2 = 5-bit exponent, 2-bit mantissa +
+//        sign; both 8-bit single-byte storage).
+// SCAFFOLD-ONLY: the classifier + reg-decl pipeline route Locals tagged
+// `precision=".f8_e4m3"` / `".f8_e5m2"` to these banks; producing the
+// matching MIR opcodes (`add_f8_e4m3` etc.) and the silicon-canonical
+// `wmma.mma.sync...e4m3...` mnemonic table re-key are follow-on cycles
+// (no silicon fire in this cycle — sub-byte ABI work pending).
+pub let NVPTX_RKIND_F8_E4M3: string = "fpr8e4m3"   // %fe3<id>  .reg .b8 (e4m3 interp)
+pub let NVPTX_RKIND_F8_E5M2: string = "fpr8e5m2"   // %fe5<id>  .reg .b8 (e5m2 interp)
+
 // RFC 067 P1 LANDED — Fragment-as-tile-vector. WMMA fragments distribute
 // 256 elements across a 32-thread warp as 8 32-bit-packed values per
 // thread (m16n16k16 canonical layout). Both f16 A/B fragments (8×
@@ -879,6 +917,9 @@ fn _nvptx_reg_name_for(kind: string, id: i64) -> string {
     if kind == NVPTX_RKIND_F16 { return _nvptx_reg_f16(id) }
     if kind == NVPTX_RKIND_BF16 { return _nvptx_reg_bf16(id) }
     if kind == NVPTX_RKIND_F32 { return _nvptx_reg_f32(id) }
+    // RFC 068 §3 fp8 scaffold — Hopper-class fp8 banks (e4m3 / e5m2).
+    if kind == NVPTX_RKIND_F8_E4M3 { return _nvptx_reg_f8_e4m3(id) }
+    if kind == NVPTX_RKIND_F8_E5M2 { return _nvptx_reg_f8_e5m2(id) }
     // RFC 067 P1 — WMMA fragment base name. Elements are
     // `<base>_e<i>` for i in 0.._nvptx_frag_width.
     if kind == NVPTX_RKIND_FRAG { return _nvptx_reg_frag(id) }
@@ -900,6 +941,12 @@ fn _nvptx_kind_to_ptx_ty(kind: string) -> string {
     if kind == NVPTX_RKIND_F16 { return ".f16" }
     if kind == NVPTX_RKIND_BF16 { return ".bf16" }
     if kind == NVPTX_RKIND_F32 { return ".f32" }
+    // RFC 068 §3 fp8 scaffold — PTX has no native `.e4m3` / `.e5m2` reg
+    // type tag. Both banks declare as `.b8` (raw 8-bit container); the
+    // semantic interpretation is selected by the consuming fp8 opcode
+    // (e.g. `cvt.rn.f16.e4m3 %fh<n>, %fe3<n>;`). See PTX ISA §9.7.13.5.
+    if kind == NVPTX_RKIND_F8_E4M3 { return ".b8" }
+    if kind == NVPTX_RKIND_F8_E5M2 { return ".b8" }
     return ".f64"
 }
 
@@ -921,6 +968,13 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
     if s.dst.precision == ".f16" { return NVPTX_RKIND_F16 }
     if s.dst.precision == ".bf16" { return NVPTX_RKIND_BF16 }
     if s.dst.precision == ".f32" { return NVPTX_RKIND_F32 }
+    // RFC 068 §3 fp8 scaffold — Hopper-class (sm_90+) e4m3 / e5m2 dtypes.
+    // Named-type primitive `@f8_e4m3` / `@f8_e5m2` propagates to the
+    // Local's precision tag as `.f8_e4m3` / `.f8_e5m2`. Parser-side
+    // grammar for the `@f8_*` annotation is a follow-on (this scaffold
+    // exercises only the codegen-side read, mirroring P1 f16/bf16/f32).
+    if s.dst.precision == ".f8_e4m3" { return NVPTX_RKIND_F8_E4M3 }
+    if s.dst.precision == ".f8_e5m2" { return NVPTX_RKIND_F8_E5M2 }
     // (no explicit .f64 case — that's the default fallback at the end.)
 
     if s.kind == STMT_BINOP {
@@ -1716,6 +1770,24 @@ fn _nvptx_reg_bf16(id: i64) -> string {
 // _nvptx_reg_f32 — PTX virtual register for an FP32 value.
 fn _nvptx_reg_f32(id: i64) -> string {
     return "%fs" + to_string(id)
+}
+
+// RFC 068 §3 fp8 scaffold — Hopper-class (sm_90+) e4m3 / e5m2 reg-name
+// helpers. Prefix uniqueness is REQUIRED for the bank roster lookup —
+// `%fe3` / `%fe5` keep these disambiguated from the existing FP16 (`%fh`),
+// BF16 (`%fb`), and FP32 (`%fs`) banks. The numeric portion (3/5) mirrors
+// the exponent-bit count of each fp8 variant per NVIDIA's official spec.
+
+// _nvptx_reg_f8_e4m3 — PTX virtual register for an fp8 e4m3 value
+// (4-bit exponent, 3-bit mantissa, 1 sign bit; 8-bit total).
+fn _nvptx_reg_f8_e4m3(id: i64) -> string {
+    return "%fe3" + to_string(id)
+}
+
+// _nvptx_reg_f8_e5m2 — PTX virtual register for an fp8 e5m2 value
+// (5-bit exponent, 2-bit mantissa, 1 sign bit; 8-bit total).
+fn _nvptx_reg_f8_e5m2(id: i64) -> string {
+    return "%fe5" + to_string(id)
 }
 
 // _nvptx_param_ref — `[<kernel>_param_<i>]` operand for `ld.param.*`.
