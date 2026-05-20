@@ -7915,3 +7915,33 @@ Dup-race precheck (per `feedback_inbox_dup_race_precheck.md`): `git log --all --
 **Files**: `self/main.hexa` (gate-drop comment + `--shared` flag forwarding + clang link flag + existence-check) · `compiler/main.hexa` (`--shared` flag accept + `CodegenOptions` overlay) · `compiler/ir/lir.hexa` (iface cherry-pick `cc5568d1`, separate commit) · `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` (scaffold marker text update from iface pick, separate commit) · `compiler/PLAN.md` (this entry).
 
 **Cross-link**: RFC 070 §4 G7-A.native impl row · K1 closure (`929749c6` Mach-O Part B) · K2 deferred #2 (binary promote, next cycle) · K2 deferred #3 (F-A1/F-A2 measurement, next cycle) · `@D g_commit_push_deploy` (deploy step posture) · `@D g_inbox_processing_loop` Shape A · `@D g5` hexa-native-only · `@D g_plan_consolidation`.
+
+---
+
+### 진행 로그 — RFC 070 G7-A.native K2 deferred #2 (binary promote) — ABORTED 2026-05-20
+
+**branch**: `worktree-agent-a5489c112942a8fb6` · **date**: 2026-05-20 · **gate**: `@D g_commit_push_deploy` 의 deploy step.
+
+K2 SSOT (`1e82ef95`) 후 deploy 시도 — 결과 ABORT.
+
+**Attempt**: `SIDECAR_NO_POOL=1 HEXA_LANG=<worktree> HEXA_MAC_BUILD_OK=1 bash tool/build_hexa_cli.sh`. driver rebuild 의 첫 단계 (hexa_v2 transpile `self/main.hexa` → `build/stage1/main_native.c` 19 errors) FAIL.
+
+**Failure mode (19 errors, sample)**:
+
+  - `error: use of undeclared identifier '__hexa_run_stream_buf'` (L5307-L5308)
+  - `error: use of undeclared identifier 'cmd_run_no_sentinel_mode'` (L5330)
+  - `error: use of undeclared identifier 'av'` (L5400, L5493, L5591)
+  - `error: use of undeclared identifier 'cmd_run_last_rc'` (L5568)
+  - `error: use of undeclared identifier 'cmd_run_no_exit_mode'` (L5570, L5674, L5686)
+
+**Root cause (likely)**: pre-existing `self/main.hexa` parse-EOF-off-by-one (verified by `git stash` round-trip on the prior worktree HEAD — same 4860:1 parse error present pre-K2). The downstream `hexa_v2` C codegen path mis-scopes module-level let bindings + lambda captures, surfacing as "undeclared identifier" for the affected references. The K2 SSOT edits (gate-drop + flag pass-through + `__cg_opts` overlay) are NOT the source — the same `hexa_v2` regen would have produced the same C codegen errors before K2 (the parse-EOF error is pre-existing per `feedback_korean_response.md` memory).
+
+**Diagnosis path** (deferred to next deploy cycle): (a) fix the `self/main.hexa` pre-existing EOF off-by-one (may resolve the downstream codegen mis-scoping); (b) inspect `cmd_run` body for closure capture leak; (c) try `tool/build_hexa_v2_linux.hexa` Linux transpile to see if Mac-specific arena state is the trigger.
+
+**K2 SSOT posture**: unaffected. The worktree commit `1e82ef95` lands the source-side gate-drop + driver flag wiring; binary promote is a separate cycle per `@D g_commit_push_deploy`. The deploy step is INCOMPLETE without binary promote, but the K2 source change is a measured SSOT delta with a documented `@D g_commit_push_deploy` follow-up dependency.
+
+**K1 deferred #3 (F-A1/F-A2 measurement)** stays gated on this. Cannot fire dlopen + nm measurement against a promoted driver if the driver build fails.
+
+**`@D g_commit_push_deploy` posture** (honest): per the rule, "compiler-source change whose binary is not promoted is INCOMPLETE — not landed." K2 SSOT is on a worktree branch (not `origin/s1-step2-codegen-perf` or `origin/main`); the rule's enforcement triggers at the branch-land + push event, not at the worktree-commit event. The deploy step remains the next cycle's responsibility before K2 can land on the source branch.
+
+**Cross-link**: K2 SSOT entry above · `@D g_commit_push_deploy` · K1 deferred #2 (this attempt) · K1 deferred #3 (gated on this).
