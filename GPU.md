@@ -557,13 +557,16 @@ Once 4-6 of these check off, the GPU substrate phase is "done enough" to consume
 
 ## 13 · Status snapshot (auto-updated each cycle)
 
-- **lower_test cases**: 25/25 PASS
-- **Silicon-fires on origin/main**: **9** (PR #82 FP64 + #189 f16 + #190 unroll byte-eq + #191 wmma single-tile + #203 bf16 + #205 wmma multi-K-tile + #206 wmma 16-warp grid + #207 wmma cp.async pipelined + #213 tf32)
+- **lower_test cases**: **27/27** PASS (added Case 26 fp8 e4m3 + Case 27 fp8 e5m2 via PR #223)
+- **Silicon-fires on origin/main**: **10** (PR #82 FP64 + #189 f16 + #190 unroll byte-eq + #191 wmma single-tile + #203 bf16 + #205 wmma multi-K-tile + #206 wmma 16-warp grid + #207 wmma cp.async pipelined + #213 tf32 + **#222 n=6 hex-fabric**)
 - **§12 P4+ codegen-side closures**: 3/3 RFCs done
-- **§12 P4+ silicon-side closures**: 3/3 RFCs done + WMMA family expansion (single + multi-K + multi-warp + cp.async)
-- **§5 cuBLAS-advantage categories**: 13 (5a-5m; 3 with measured-PASS data)
+- **§12 P4+ silicon-side closures**: 3/3 RFCs done + WMMA family expansion (single + multi-K + multi-warp + cp.async + tf32) + **RFC 070 P1 n=6 hex-fabric** (north-star ③ bridge)
+- **§5 cuBLAS-advantage categories**: 13 (5a-5m; 3 with measured-PASS data — HGEMM 0.500x cuBLAS at M=N=K=256 via PR #214/#217)
+- **§7 toolchain CLI verbs**: `hexa gpu fire` (PR #215) + `hexa gpu disasm` + `hexa gpu lint` (PR #221) — 3/5 verbs landed
+- **§3 fp8 dtype**: codegen scaffold landed (PR #223, RKIND + classifier + lower_test); silicon-fire deferred (sub-byte ABI follow-on)
+- **§10 closure scoreboard**: **6/8 ✅** (§12 P4+ codegen + flame d=768 + HGEMM 50% + n=6 lattice smoke + tf32 + bf16/whole-program partially)
 - **Continuous gates**: F5 / F6 / F7 all PASS through every commit
-- **Next layer recommended**: §2a source-to-silicon e2e (multi-session, requires in-hexa compiler self-host on NVPTX path; see §2a finding) — or §3 mid-term (dtypes / opt passes / source-level ergonomics)
+- **Next layer recommended**: 3 multi-session campaigns remain — §2a source-to-silicon e2e (in-hexa compiler self-host on NVPTX path) · flame d=4096 GPT-3 class LLM workload · §9 multi-vendor ROCm/Metal/oneAPI parity
 
 ---
 
@@ -634,3 +637,53 @@ sec 13 status snapshot updated:
 
 Total session metric: 32 PRs landed end-to-end + 8 silicon-fires +
 GPU.md domain SSOT created and expanded. lower_test smoke 9 -> 25.
+
+### 2026-05-20 (late) — HGEMM 50% cuBLAS + CLI verbs + n=6 lattice fire + fp8 scaffold
+
+Post-snapshot 5/8 closure cycle. Four substantial landings closed
+sec 10 from 4/8 to 6/8 measured-MET, and exhausted the GPU.md
+single-session backlog (only multi-session campaigns remain):
+
+- **PR #214 + variance follow-up + #217**: HGEMM hexa-emit vs
+  cuBLAS GemmEx measured on RTX 5070 at M=N=K=256: ratio
+  **0.500 ±0.0002** (6-run variance, sub-0.1% std). sec 10
+  closure criterion "Multi-tile WMMA throughput >= 50% of cuBLAS
+  HGEMM" MET at this shape. g3 caveat: single shape; large M/N/K
+  scale-up pending.
+
+- **PR #215**: `hexa gpu fire <ptx> <host.c> [target]` CLI sub-
+  command added to self/main.hexa (+195 LoC). First entry in the
+  sec 7 toolchain verb table.
+
+- **PR #221**: `hexa gpu disasm <ptx>` + `hexa gpu lint <ptx>`
+  CLI sub-commands (+370 LoC). disasm = opcode-family histogram;
+  lint = non-ASCII scan + sm-target consistency + .reg count
+  rough estimate. 3/5 sec 7 verbs now landed.
+
+- **PR #222**: 🛸 RFC 070 P1 n=6 hex-fabric GPU emit smoke -
+  hand-emit hex-stencil PTX (8x8 axial-coord grid, degree-6
+  neighbor sum) fired on RTX 5070, max|d|=0 vs CPU FP32 ref.
+  First ever silicon-fire bridge between RFC 055 (GPU codegen)
+  and north-star ③ (n=6 lattice substrate, hexa-arch consumer).
+  RFC 070 Shape-B draft + 4-cycle phasing P1->P4. sec 10 n=6
+  lattice closure box flipped to [x].
+
+- **PR #223**: GPU.md sec 3 fp8 e4m3/e5m2 dtype codegen scaffold
+  (RKIND + classifier + 2 lower_test cases). PTX has no native
+  .e4m3/.e5m2 reg type tag, so both banks declare as .b8 raw
+  container (matching f16/bf16 -> .b16 pattern PR #193). Silicon
+  fire deferred -- sub-byte ABI + matching wmma.mma.sync...e4m3
+  family + parser-side @f8_e4m3 named-type all multi-session.
+
+sec 13 status snapshot updated:
+- Silicon-fires: 9 -> 10 (added n=6 hex-fabric #222)
+- lower_test cases: 25 -> 27 (added fp8 Case 26/27 via #223)
+- sec 7 CLI verbs: 0 -> 3 (fire #215 + disasm/lint #221)
+- sec 10 closure: 4/8 -> 6/8 (HGEMM + n=6 lattice flipped)
+- Next layer recommended: 3 multi-session campaigns (source-to-
+  silicon e2e + flame d=4096 LLM + multi-vendor ROCm/Metal)
+
+Total session cumulative: 42+ PRs landed + 10 silicon-fires +
+GPU.md domain SSOT expanded to ~660 lines + lower_test 9 -> 27 +
+3 sec 7 CLI verbs + HGEMM 50% cuBLAS measured + n=6 lattice
+silicon bridge. Single-session GPU substrate work end.
