@@ -72,6 +72,9 @@ pub let PTX_OP_BAR_SYNC: string       = "bar.sync"     // block-wide barrier
 pub let PTX_OP_BRA: string            = "bra"          // branch
 pub let PTX_OP_RET: string            = "ret"          // return from entry/func
 
+// ── PTX atomics (RFC 055 §12 P4+ — gpu/SPEC.md §5) ────────────
+pub let PTX_OP_ATOM_ADD_F64: string   = "atom.add.f64"  // global-mem FP64 atomic add (returns old)
+
 // ── PTX function-kind directives ──────────────────────────────
 //
 // The GPU analogue of "exported symbol vs static helper" (RFC 055 §6.3).
@@ -119,5 +122,6 @@ pub fn ptx_fp64_slice_ops() -> [PtxOpEntry] {
     t.push(_ptx_op_entry(PTX_OP_MUL_F64, 3, "", "FP64 multiply"))
     t.push(_ptx_op_entry(PTX_OP_FMA_RN_F64, 4, "", "FP64 fused multiply-add, round-to-nearest"))
     t.push(_ptx_op_entry(PTX_OP_BAR_SYNC, 1, "", "block-wide barrier"))
+    t.push(_ptx_op_entry(PTX_OP_ATOM_ADD_F64, 3, PTX_SPACE_GLOBAL, "FP64 atomic add (returns old)"))
     return t
 }
