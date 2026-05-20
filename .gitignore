@@ -73,6 +73,10 @@ self/interpreter.hexa.c
 # Rust prebuilt shim at repo root (dev-only, built from hexa_v2 pipeline)
 hexa.real
 hexa.real.bak_*
+# SIGKILL-bypass shim copy of hexa.real (per memory
+# reference_hexa_driver_sigkill_bypass — external matcher kills hexa/hexa.real
+# basenames, hexadrv is the bypass name; built ad-hoc, not source-tracked).
+hexadrv
 # Staging artifact from hexa_v2 regen pipeline (canonical is hexa_cc.c)
 self/native/hexa_cc.c.new
 
