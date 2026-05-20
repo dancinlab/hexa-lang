@@ -70,6 +70,19 @@ fn _passes_total_cells(d: Design) -> int {
     return n
 }
 
+// CLEAN-ROOM (rfc_006 §5 iter 10): count module-level RTLIL `connect`
+// rows whose RHS matches a constant string (e.g. "1'b0", "1'b1").
+// Mirrors `rtlil_count_cells_of_type` for the connect axis.
+fn _passes_count_connect_const(m: Module, rhs: str) -> int {
+    let mut n = 0
+    let mut i = 0
+    while i < len(m.connect_rhs) {
+        if m.connect_rhs[i] == rhs { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
 // ─── proc: lift Processes into Cells ─────────────────────────────────────
 
 // CLEAN-ROOM (passes/proc/proc.cc): the `proc` pass replaces every
@@ -986,34 +999,53 @@ fn _passes_add_width(c: Cell) -> int {
 //   <cellname>$cyo$<i>   — i-th FA's COUT wire (i = 0..N-1)
 //   <cellname>$cin0      — constant-0 tie wire (Y of the $_const0_)
 //   <cellname>$fa$<i>    — i-th fa_1 cell instance
-//   <cellname>$tie$0     — the $_const0_ driver instance for cin0
+//   <cellname>$cin0      — constant-0 tie wire (RTLIL `connect` to 1'b0)
 // All freshly added wires are width=1, internal (dir_kind=0, port_id=0).
+//
+// rfc_006 §5 bug (a) iter 10 — constant-0 tie is an RTLIL module-level
+// `connect (cin0_net, 1'b0)` statement, NOT a `$_const0_` driver cell.
+// The connect list is returned in AddLowerResult.connect_lhs/_rhs and
+// the dispatch site (pass_techmap_sky130) splices it into the new
+// Module's connect arrays. abc_emit_blif (abc_map.hexa) translates a
+// 1'b0 connect by SKIPPING emission of the tied net — ABC's read_blif
+// auto-adds constant-0 drivers for any undriven net (its "Constant-0
+// drivers added to N non-driven nets" diagnostic).  This eliminates
+// the `.names <net>` BLIF emission that iter 6-9 used, which triggered
+// `Abc_SopCheck: SOP has a mismatch ...` when followed directly by a
+// `.gate` line (ABC's parser consumed the next `.gate` as a truth-
+// table continuation).  See IEEE 1800-2017 §6.7 (`assign` semantics)
+// + Yosys reference manual Ch. 4 (RTLIL Module data structure).
 struct AddLowerResult {
-    cells: [Cell],
-    wires: [Wire],
-    ok:    int,         // 1 = lowered, 0 = unsupported shape
+    cells:       [Cell],
+    wires:       [Wire],
+    connect_lhs: [str],   // module-level RTLIL `connect` LHS nets
+    connect_rhs: [str],   // module-level RTLIL `connect` RHS (constant)
+    ok:          int,     // 1 = lowered, 0 = unsupported shape
 }
 
 fn _passes_lower_add_cell(c: Cell) -> AddLowerResult {
     let w = _passes_add_width(c)
     if w <= 0 {
-        return AddLowerResult { cells: [], wires: [], ok: 0 }
+        return AddLowerResult {
+            cells: [], wires: [],
+            connect_lhs: [], connect_rhs: [],
+            ok: 0
+        }
     }
-    let mut out_cells: [Cell] = []
-    let mut out_wires: [Wire] = []
+    let mut out_cells:    [Cell] = []
+    let mut out_wires:    [Wire] = []
+    let mut out_clhs:     [str]  = []
+    let mut out_crhs:     [str]  = []
 
-    // ── constant cin[0] = 0 tie (one $_const0_ sentinel per $add cell) ─
-    // rfc_006 §5 bug (a) iter 6: emit a `$_const0_` driver instead of a
-    // Liberty `sky130_fd_sc_hd__conb_1` cell. abc_map.hexa translates
-    // this sentinel to a `.names <cin0_net>` BLIF line (constant 0, zero
-    // truth-table rows), which ABC parses directly without needing the
-    // Liberty cell's constant function to be mappable.
+    // ── constant cin[0] = 0 tie (RTLIL connect to 1'b0) ──────────────
+    // rfc_006 §5 bug (a) iter 10: record `connect (cin0_net, 1'b0)` as
+    // a module-level assignment.  abc_emit_blif translates this by
+    // omitting any driver for cin0_net; ABC's read_blif then auto-ties
+    // the undriven net to constant 0 (its standard behavior).
     let cin0_net = c.name + "$cin0"
     out_wires = out_wires.push(rtlil_wire(cin0_net, 1, 0, 0))
-    let mut tie = rtlil_cell(c.name + "$tie$0",
-                             "$_const0_", 0)
-    tie = rtlil_cell_connect(tie, "Y", cin0_net)
-    out_cells = out_cells.push(tie)
+    out_clhs = out_clhs.push(cin0_net)
+    out_crhs = out_crhs.push("1'b0")
 
     // ── N-bit ripple-carry chain ────────────────────────────────────
     // For each bit i in 0..w-1, instantiate one fa_1 driving SUM=Y[i]
@@ -1041,9 +1073,9 @@ fn _passes_lower_add_cell(c: Cell) -> AddLowerResult {
             b_net = _passes_pin_net(c, pb)
             y_net = _passes_pin_net(c, py)
         }
-        if a_net == "" { return AddLowerResult { cells: [], wires: [], ok: 0 } }
-        if b_net == "" { return AddLowerResult { cells: [], wires: [], ok: 0 } }
-        if y_net == "" { return AddLowerResult { cells: [], wires: [], ok: 0 } }
+        if a_net == "" { return AddLowerResult { cells: [], wires: [], connect_lhs: [], connect_rhs: [], ok: 0 } }
+        if b_net == "" { return AddLowerResult { cells: [], wires: [], connect_lhs: [], connect_rhs: [], ok: 0 } }
+        if y_net == "" { return AddLowerResult { cells: [], wires: [], connect_lhs: [], connect_rhs: [], ok: 0 } }
 
         // fresh COUT wire for this bit (always pushed so the FA's COUT
         // pin references a wire present in the module — RTLIL's no-
@@ -1064,7 +1096,11 @@ fn _passes_lower_add_cell(c: Cell) -> AddLowerResult {
         i = i + 1
     }
 
-    return AddLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
+    return AddLowerResult {
+        cells: out_cells, wires: out_wires,
+        connect_lhs: out_clhs, connect_rhs: out_crhs,
+        ok: 1
+    }
 }
 
 // ─── $mod lowering (rfc_006 §5 absorption bug (a) iter 7) ───────────────
@@ -1223,13 +1259,17 @@ fn _passes_mod_y_bit(c: Cell, yw: int, i: int) -> str {
 fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
     if w > 5 {
         return ModLowerResult {
-            cells: [], wires: [], ok: 0, ok_kind: 2,
+            cells: [], wires: [],
+            connect_lhs: [], connect_rhs: [],
+            ok: 0, ok_kind: 2,
             message: "lower_mod: cell `" + c.name + "` has non-power-of-2 const divisor B=" + str(nval) + " with A-width W=" + str(w) + " > 5 (rfc_006 §5 iter 9 — LUT lowering capped at W≤5 / 32-row truth table; restoring-divider expansion is out of iter 9 scope)"
         }
     }
     if w < 1 {
         return ModLowerResult {
-            cells: [], wires: [], ok: 0, ok_kind: 3,
+            cells: [], wires: [],
+            connect_lhs: [], connect_rhs: [],
+            ok: 0, ok_kind: 3,
             message: "lower_mod: cell `" + c.name + "` has unrecognised A-width W=" + str(w)
         }
     }
@@ -1237,7 +1277,9 @@ fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
     let yw = _passes_mod_yw(c)
     if yw < 1 {
         return ModLowerResult {
-            cells: [], wires: [], ok: 0, ok_kind: 3,
+            cells: [], wires: [],
+            connect_lhs: [], connect_rhs: [],
+            ok: 0, ok_kind: 3,
             message: "lower_mod: cell `" + c.name + "` has no Y output pin"
         }
     }
@@ -1245,10 +1287,12 @@ fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
     let nrows = _passes_pow2(w)
     let mut out_cells: [Cell] = []
     let mut out_wires: [Wire] = []
+    let mut out_clhs:  [str]  = []
+    let mut out_crhs:  [str]  = []
 
-    // Shared $_const1_ driver — used by single-literal-minterm "buffer"
-    // ties (Y = lit AND 1) and by all-ones output-bit ties. Emitted
-    // once and reused across all output bits.
+    // Shared 1'b1 net — used by single-literal-minterm "buffer" ties
+    // (Y = lit AND 1) and by all-ones output-bit ties. Emitted once
+    // as one RTLIL `connect (c1_net, 1'b1)` and reused.
     let c1_net = c.name + "$lutc1_net"
     let mut c1_emitted = 0
 
@@ -1266,7 +1310,9 @@ fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
         let y_net = _passes_mod_y_bit(c, yw, i)
         if y_net == "" {
             return ModLowerResult {
-                cells: [], wires: [], ok: 0, ok_kind: 3,
+                cells: [], wires: [],
+                connect_lhs: [], connect_rhs: [],
+                ok: 0, ok_kind: 3,
                 message: "lower_mod: cell `" + c.name + "` missing Y[" + str(i) + "] pin"
             }
         }
@@ -1284,22 +1330,19 @@ fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
             a = a + 1
         }
 
-        // Degenerate output cases.
+        // Degenerate output cases — iter 10: emit RTLIL `connect`
+        // statements instead of `$_const{0,1}_` driver cells.
         if len(minterms) == 0 {
-            // Y[i] = 0 — tie to $_const0_.
-            let mut z = rtlil_cell(c.name + "$lutc0$" + str(i),
-                                   "$_const0_", 0)
-            z = rtlil_cell_connect(z, "Y", y_net)
-            out_cells = out_cells.push(z)
+            // Y[i] = 0 — RTLIL connect (y_net, 1'b0).
+            out_clhs = out_clhs.push(y_net)
+            out_crhs = out_crhs.push("1'b0")
             i = i + 1
             continue
         }
         if len(minterms) == nrows {
-            // Y[i] = 1 — tie to $_const1_.
-            let mut o = rtlil_cell(c.name + "$lutc1bit$" + str(i),
-                                   "$_const1_", 0)
-            o = rtlil_cell_connect(o, "Y", y_net)
-            out_cells = out_cells.push(o)
+            // Y[i] = 1 — RTLIL connect (y_net, 1'b1).
+            out_clhs = out_clhs.push(y_net)
+            out_crhs = out_crhs.push("1'b1")
             i = i + 1
             continue
         }
@@ -1319,7 +1362,9 @@ fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
                 let a_v = _passes_mod_a_bit(c, w, v)
                 if a_v == "" {
                     return ModLowerResult {
-                        cells: [], wires: [], ok: 0, ok_kind: 3,
+                        cells: [], wires: [],
+                        connect_lhs: [], connect_rhs: [],
+                        ok: 0, ok_kind: 3,
                         message: "lower_mod: cell `" + c.name + "` missing A[" + str(v) + "] pin"
                     }
                 }
@@ -1383,13 +1428,14 @@ fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
             // single minterm — wire the AND-tree top to y_net via a
             // second and2_1 buffer (we already emitted one if single-
             // literal, but we still need to alias to y_net). Use
-            // `Y = and_top AND const_1` — same buffer pattern.
+            // `Y = and_top AND 1'b1` — buffer pattern. Iter 10: the
+            // shared 1'b1 driver is emitted as a single RTLIL
+            // `connect (c1_net, 1'b1)` (abc_emit_blif translates it
+            // to an `inv_1 A=$blif_helper_zero Y=c1_net` cell in BLIF).
             if c1_emitted == 0 {
                 out_wires = out_wires.push(rtlil_wire(c1_net, 1, 0, 0))
-                let mut c1_tie = rtlil_cell(c.name + "$lutc1",
-                                            "$_const1_", 0)
-                c1_tie = rtlil_cell_connect(c1_tie, "Y", c1_net)
-                out_cells = out_cells.push(c1_tie)
+                out_clhs = out_clhs.push(c1_net)
+                out_crhs = out_crhs.push("1'b1")
                 c1_emitted = 1
             }
             let mut tail = rtlil_cell(
@@ -1428,7 +1474,9 @@ fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
     }
 
     return ModLowerResult {
-        cells: out_cells, wires: out_wires, ok: 1, ok_kind: 2, message: ""
+        cells: out_cells, wires: out_wires,
+        connect_lhs: out_clhs, connect_rhs: out_crhs,
+        ok: 1, ok_kind: 2, message: ""
     }
 }
 
@@ -1471,35 +1519,46 @@ fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
 //
 // Naming convention for fresh wires/cells (case A):
 //   <cellname>$mskand$<i> — i-th and2_1 cell instance (low-bit mask)
-//   <cellname>$mskhi$<i>  — i-th $_const0_ cell instance (high-bit zero)
-//   <cellname>$c1         — shared $_const1_ driver instance
-//   <cellname>$c1_net     — shared $const_1 net carrying the AND mask
+//   <cellname>$c1_net     — shared 1'b1 net carrying the AND mask
+//                            (RTLIL connect to 1'b1; see iter-10 note)
 //
 // Naming convention for fresh wires/cells (case B LUT):
-//   <cellname>$lutc1_net          — shared $_const1_ wire (buffer ties)
-//   <cellname>$lutc1              — shared $_const1_ driver
+//   <cellname>$lutc1_net          — shared 1'b1 net (buffer ties)
 //   <cellname>$lutinv$<i>$<v>     — inv_1 for negated literal A[v] at bit i
 //   <cellname>$lutniv$<i>$<v>     — net carrying ~A[v] at bit i
 //   <cellname>$lutand$<i>$<m>$<g> — g-th and2_1 in AND-tree for minterm m, bit i
 //   <cellname>$luta$<i>$<m>$<g>   — net out of that and2_1
 //   <cellname>$lutor$<i>$<g>      — g-th or2_1 in OR-tree, bit i
 //   <cellname>$luto$<i>$<g>       — net out of that or2_1
-//   <cellname>$lutc0$<i>          — $_const0_ tie for all-zero output bit
-//   <cellname>$lutc1bit$<i>       — $_const1_ tie for all-one output bit
-//   <cellname>$lutbuf$<i>         — and2_1 buffer (single-literal minterm)
+//
+// rfc_006 §5 bug (a) iter 10 — high-bit zero ties (case A) and all-
+// zero / all-one degenerate output bits (case B) and the shared 1'b1
+// driver are emitted as RTLIL module-level `connect` statements (RHS
+// = "1'b0" / "1'b1"), NOT as `$_const0_/_const1_` driver cells.
+// abc_emit_blif (abc_map.hexa) translates these by:
+//   - 1'b0 → SKIP emission (ABC's read_blif auto-ties undriven nets)
+//   - 1'b1 → emit `sky130_fd_sc_hd__inv_1 A=$blif_helper_zero Y=<lhs>`
+//            (helper net is undriven, ABC auto-ties to 0, inv outputs
+//            1; ABC's strash absorbs the resulting constant chain).
+// See IEEE 1800-2017 §6.7 (`assign` semantics) + Yosys reference
+// manual Ch. 4 (RTLIL Module data structure).
 struct ModLowerResult {
-    cells:   [Cell],
-    wires:   [Wire],
-    ok:      int,        // 1 = lowered, 0 = unsupported shape
-    ok_kind: int,        // 1 = case A · 2 = case B · 3 = case C
-    message: str,        // empty on case A; diagnostic on B/C
+    cells:       [Cell],
+    wires:       [Wire],
+    connect_lhs: [str],   // module-level RTLIL `connect` LHS nets
+    connect_rhs: [str],   // module-level RTLIL `connect` RHS (constant)
+    ok:          int,     // 1 = lowered, 0 = unsupported shape
+    ok_kind:     int,     // 1 = case A · 2 = case B · 3 = case C
+    message:     str,     // empty on case A; diagnostic on B/C
 }
 
 fn _passes_lower_mod_cell(c: Cell) -> ModLowerResult {
     let w = _passes_add_width(c)
     if w <= 0 {
         return ModLowerResult {
-            cells: [], wires: [], ok: 0, ok_kind: 3,
+            cells: [], wires: [],
+            connect_lhs: [], connect_rhs: [],
+            ok: 0, ok_kind: 3,
             message: "lower_mod: cell `" + c.name + "` has no A/B pins (unrecognised shape)"
         }
     }
@@ -1515,20 +1574,26 @@ fn _passes_lower_mod_cell(c: Cell) -> ModLowerResult {
     if b_main == "" { b_main = _passes_pin_net(c, "B[0]") }
     if b_main == "" {
         return ModLowerResult {
-            cells: [], wires: [], ok: 0, ok_kind: 3,
+            cells: [], wires: [],
+            connect_lhs: [], connect_rhs: [],
+            ok: 0, ok_kind: 3,
             message: "lower_mod: cell `" + c.name + "` has no B operand (unrecognised shape)"
         }
     }
     let nval = _passes_parse_const_net(b_main)
     if nval < 0 {
         return ModLowerResult {
-            cells: [], wires: [], ok: 0, ok_kind: 3,
+            cells: [], wires: [],
+            connect_lhs: [], connect_rhs: [],
+            ok: 0, ok_kind: 3,
             message: "lower_mod: cell `" + c.name + "` has variable / unfoldable divisor B=`" + b_main + "` (rfc_006 §5 iter 7 — case C: only $const_<N> divisors are lowered; localparam-name folding requires read_verilog substitution, out of iter 7 scope)"
         }
     }
     if nval == 0 {
         return ModLowerResult {
-            cells: [], wires: [], ok: 0, ok_kind: 2,
+            cells: [], wires: [],
+            connect_lhs: [], connect_rhs: [],
+            ok: 0, ok_kind: 2,
             message: "lower_mod: cell `" + c.name + "` has divisor 0 (undefined per IEEE 1364-2005 §5.1.5)"
         }
     }
@@ -1544,16 +1609,19 @@ fn _passes_lower_mod_cell(c: Cell) -> ModLowerResult {
     // ── case A: divisor = 2^k — mask lowering ───────────────────────
     let mut out_cells: [Cell] = []
     let mut out_wires: [Wire] = []
+    let mut out_clhs:  [str]  = []
+    let mut out_crhs:  [str]  = []
 
-    // shared $const_1 driver (Y → $const_1_net); reused by every
-    // mask-AND on the low k bits. Only emitted if there is at least one
-    // low bit to mask (k > 0).
+    // Shared 1'b1 net (Y → c1_net); reused by every mask-AND on the
+    // low k bits. Only declared if there is at least one low bit to
+    // mask (k > 0). Iter 10: emitted as one RTLIL `connect (c1_net,
+    // 1'b1)` — abc_emit_blif translates this into a single
+    // `inv_1 A=$blif_helper_zero Y=c1_net` cell in BLIF.
     let c1_net = c.name + "$c1_net"
     if k > 0 {
         out_wires = out_wires.push(rtlil_wire(c1_net, 1, 0, 0))
-        let mut c1_tie = rtlil_cell(c.name + "$c1", "$_const1_", 0)
-        c1_tie = rtlil_cell_connect(c1_tie, "Y", c1_net)
-        out_cells = out_cells.push(c1_tie)
+        out_clhs = out_clhs.push(c1_net)
+        out_crhs = out_crhs.push("1'b1")
     }
 
     let mut i = 0
@@ -1575,13 +1643,17 @@ fn _passes_lower_mod_cell(c: Cell) -> ModLowerResult {
         }
         if a_net == "" {
             return ModLowerResult {
-                cells: [], wires: [], ok: 0, ok_kind: 3,
+                cells: [], wires: [],
+                connect_lhs: [], connect_rhs: [],
+                ok: 0, ok_kind: 3,
                 message: "lower_mod: cell `" + c.name + "` missing A[" + str(i) + "] pin"
             }
         }
         if y_net == "" {
             return ModLowerResult {
-                cells: [], wires: [], ok: 0, ok_kind: 3,
+                cells: [], wires: [],
+                connect_lhs: [], connect_rhs: [],
+                ok: 0, ok_kind: 3,
                 message: "lower_mod: cell `" + c.name + "` missing Y[" + str(i) + "] pin"
             }
         }
@@ -1595,19 +1667,20 @@ fn _passes_lower_mod_cell(c: Cell) -> ModLowerResult {
             g = rtlil_cell_connect(g, "X", y_net)
             out_cells = out_cells.push(g)
         } else {
-            // high bit: Y[i] tied to constant 0 via a `$_const0_`
-            // sentinel (same convention as $add cin0 tie — abc_map.hexa
-            // emits BLIF `.names <net>` with zero rows for ABC).
-            let mut z = rtlil_cell(c.name + "$mskhi$" + str(i),
-                                   "$_const0_", 0)
-            z = rtlil_cell_connect(z, "Y", y_net)
-            out_cells = out_cells.push(z)
+            // high bit: Y[i] tied to constant 0 via an RTLIL
+            // `connect (y_net, 1'b0)` (iter 10 — no `$_const0_` cell).
+            // abc_emit_blif skips emitting any driver for y_net; ABC's
+            // read_blif then auto-adds a constant-0 driver.
+            out_clhs = out_clhs.push(y_net)
+            out_crhs = out_crhs.push("1'b0")
         }
         i = i + 1
     }
 
     return ModLowerResult {
-        cells: out_cells, wires: out_wires, ok: 1, ok_kind: 1, message: ""
+        cells: out_cells, wires: out_wires,
+        connect_lhs: out_clhs, connect_rhs: out_crhs,
+        ok: 1, ok_kind: 1, message: ""
     }
 }
 
@@ -1619,6 +1692,11 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
         let m = d.modules[mi]
         let mut new_cells: [Cell] = []
         let mut new_wires: [Wire] = m.wires
+        // rfc_006 §5 iter 10 — accumulate constant-tie `connect` rows
+        // emitted by $add / $mod lowering helpers, parallel to cells
+        // and wires. Preserves any pre-existing module-level connects.
+        let mut new_clhs:  [str] = m.connect_lhs
+        let mut new_crhs:  [str] = m.connect_rhs
         let mut ci = 0
         while ci < len(m.cells) {
             let c = m.cells[ci]
@@ -1728,6 +1806,13 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                             new_wires = new_wires.push(adr.wires[adwi])
                             adwi = adwi + 1
                         }
+                        // iter 10: splice constant-tie connects.
+                        let mut adkj = 0
+                        while adkj < len(adr.connect_lhs) {
+                            new_clhs = new_clhs.push(adr.connect_lhs[adkj])
+                            new_crhs = new_crhs.push(adr.connect_rhs[adkj])
+                            adkj = adkj + 1
+                        }
                         expanded = 1
                     }
                 }
@@ -1744,6 +1829,13 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                         while mdwi < len(mdr.wires) {
                             new_wires = new_wires.push(mdr.wires[mdwi])
                             mdwi = mdwi + 1
+                        }
+                        // iter 10: splice constant-tie connects.
+                        let mut mdkj = 0
+                        while mdkj < len(mdr.connect_lhs) {
+                            new_clhs = new_clhs.push(mdr.connect_lhs[mdkj])
+                            new_crhs = new_crhs.push(mdr.connect_rhs[mdkj])
+                            mdkj = mdkj + 1
                         }
                         expanded = 1
                     } else {
@@ -1765,8 +1857,8 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
         out = out.push(Module {
             name: m.name, wires: new_wires, cells: new_cells,
             processes: m.processes,
-            connect_lhs: m.connect_lhs,
-            connect_rhs: m.connect_rhs,
+            connect_lhs: new_clhs,
+            connect_rhs: new_crhs,
         })
         mi = mi + 1
     }
@@ -2446,13 +2538,13 @@ fn main() {
         println("FAIL T21e ln4_dangling_pin"); fails = fails + 1
     }
 
-    // T22 — $add lowering (1-bit, plain A/B/Y conns) → 1 fa_1 + 1
-    // $_const0_ (cin=0 tie). CLEAN-ROOM: rfc_006 §5 bug (a) iter 6 —
-    // the cin=0 tie is a `$_const0_` sigspec-constant driver (not a
-    // Liberty `conb_1`), so the BLIF emitter turns it into a `.names`
-    // constant-0 line that ABC accepts directly. One full-adder
-    // computes SUM=Y and COUT into a fresh internal wire so the
-    // no-dangling invariant on the FA pins holds (Weste-Eshraghian §11).
+    // T22 — $add lowering (1-bit, plain A/B/Y conns) → 1 fa_1 +
+    // 1 RTLIL `connect` row to 1'b0 (cin=0 tie). CLEAN-ROOM:
+    // rfc_006 §5 bug (a) iter 10 — the cin=0 tie is a module-
+    // level RTLIL `connect (cin0_net, 1'b0)`, NOT a `$_const0_`
+    // driver cell (iter-6..9 form that broke ABC's BLIF parser).
+    // abc_emit_blif emits NO BLIF text for a 1'b0 connect; ABC
+    // auto-ties undriven nets to constant 0.
     total = total + 1
     let mut m_ad1 = rtlil_new_module("ad1")
     m_ad1 = rtlil_module_add_wire(m_ad1, rtlil_wire("a", 1, 1, 1))
@@ -2474,15 +2566,18 @@ fn main() {
             + str(rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__fa_1"))
             + ", want 1)"); fails = fails + 1
     }
-    // iter 6: cin=0 tie is now a `$_const0_` sentinel (BLIF `.names`
-    // constant-0), NOT a Liberty `sky130_fd_sc_hd__conb_1` cell.
-    if rtlil_count_cells_of_type(r_ad1.design.modules[0], "$_const0_") != 1 {
-        println("FAIL T22c ad1_const0_count (got "
-            + str(rtlil_count_cells_of_type(r_ad1.design.modules[0], "$_const0_"))
+    // iter 10: cin=0 tie is one RTLIL `connect (..., 1'b0)` row.
+    if _passes_count_connect_const(r_ad1.design.modules[0], "1'b0") != 1 {
+        println("FAIL T22c ad1_const0_connect_count (got "
+            + str(_passes_count_connect_const(r_ad1.design.modules[0], "1'b0"))
             + ", want 1)"); fails = fails + 1
     }
+    // iter 10: no $_const0_/_const1_ driver cells survive.
+    if rtlil_count_cells_of_type(r_ad1.design.modules[0], "$_const0_") != 0 {
+        println("FAIL T22c2 ad1_no_const0_cell"); fails = fails + 1
+    }
     if rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__conb_1") != 0 {
-        println("FAIL T22c2 ad1_no_conb (got "
+        println("FAIL T22c3 ad1_no_conb (got "
             + str(rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__conb_1"))
             + ", want 0)"); fails = fails + 1
     }
@@ -2494,8 +2589,9 @@ fn main() {
     }
 
     // T23 — $add lowering 2-bit (bit-indexed A[0..1]/B[0..1]/Y[0..1]) →
-    // 2 fa_1 (ripple chain) + 1 $_const0_ (cin0 tie). iter 6: cin0 tie
-    // is a `$_const0_` sentinel (BLIF `.names`-constant), not a conb_1.
+    // 2 fa_1 (ripple chain) + 1 RTLIL `connect (cin0, 1'b0)` row.
+    // iter 10: cin0 tie is a module-level connect, not a `$_const0_`
+    // driver cell (no Liberty conb_1).
     total = total + 1
     let mut m_ad2 = rtlil_new_module("ad2")
     m_ad2 = rtlil_module_add_wire(m_ad2, rtlil_wire("a0", 1, 1, 1))
@@ -2523,13 +2619,16 @@ fn main() {
             + str(rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__fa_1"))
             + ", want 2)"); fails = fails + 1
     }
-    if rtlil_count_cells_of_type(r_ad2.design.modules[0], "$_const0_") != 1 {
-        println("FAIL T23c ad2_const0_count (got "
-            + str(rtlil_count_cells_of_type(r_ad2.design.modules[0], "$_const0_"))
+    if _passes_count_connect_const(r_ad2.design.modules[0], "1'b0") != 1 {
+        println("FAIL T23c ad2_const0_connect_count (got "
+            + str(_passes_count_connect_const(r_ad2.design.modules[0], "1'b0"))
             + ", want 1)"); fails = fails + 1
     }
+    if rtlil_count_cells_of_type(r_ad2.design.modules[0], "$_const0_") != 0 {
+        println("FAIL T23c2 ad2_no_const0_cell"); fails = fails + 1
+    }
     if rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__conb_1") != 0 {
-        println("FAIL T23c2 ad2_no_conb (got "
+        println("FAIL T23c3 ad2_no_conb (got "
             + str(rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__conb_1"))
             + ", want 0)"); fails = fails + 1
     }
@@ -2541,9 +2640,9 @@ fn main() {
     }
 
     // T24 — $add lowering 4-bit → 4 fa_1 (linear ripple chain over four
-    // bits with carry-in tied to 0 via one $_const0_) + 1 $_const0_.
-    // iter 6: cin0 tie is a `$_const0_` sentinel (BLIF `.names`-constant),
-    // not a Liberty conb_1.
+    // bits with carry-in tied to 0 via one RTLIL `connect (cin0, 1'b0)`).
+    // iter 10: cin0 tie is a module-level connect row, not a `$_const0_`
+    // driver cell (no Liberty conb_1).
     total = total + 1
     let mut m_ad4 = rtlil_new_module("ad4")
     let mut adwi = 0
@@ -2576,13 +2675,16 @@ fn main() {
             + str(rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__fa_1"))
             + ", want 4)"); fails = fails + 1
     }
-    if rtlil_count_cells_of_type(r_ad4.design.modules[0], "$_const0_") != 1 {
-        println("FAIL T24c ad4_const0_count (got "
-            + str(rtlil_count_cells_of_type(r_ad4.design.modules[0], "$_const0_"))
+    if _passes_count_connect_const(r_ad4.design.modules[0], "1'b0") != 1 {
+        println("FAIL T24c ad4_const0_connect_count (got "
+            + str(_passes_count_connect_const(r_ad4.design.modules[0], "1'b0"))
             + ", want 1)"); fails = fails + 1
     }
+    if rtlil_count_cells_of_type(r_ad4.design.modules[0], "$_const0_") != 0 {
+        println("FAIL T24c2 ad4_no_const0_cell"); fails = fails + 1
+    }
     if rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__conb_1") != 0 {
-        println("FAIL T24c2 ad4_no_conb (got "
+        println("FAIL T24c3 ad4_no_conb (got "
             + str(rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__conb_1"))
             + ", want 0)"); fails = fails + 1
     }
@@ -2595,8 +2697,10 @@ fn main() {
 
     // T25 — $mod lowering 1-bit · const divisor 2 (k=1, pow-of-2) →
     //   1× sky130_fd_sc_hd__and2_1 on bit 0, 0× high-bit zero,
-    //   1× $_const1_ (shared mask driver), 0× residual $mod.
-    //   (mod-to-mask identity: Y[0] = A[0] & 1.)
+    //   1× RTLIL `connect (c1_net, 1'b1)` shared mask driver,
+    //   0× residual $mod. (mod-to-mask identity: Y[0] = A[0] & 1.)
+    //   iter 10: c1 driver is a module-level connect, not a
+    //   `$_const1_` cell.
     total = total + 1
     let mut m_md1 = rtlil_new_module("md1")
     m_md1 = rtlil_module_add_wire(m_md1, rtlil_wire("a0",        1, 1, 1))
@@ -2618,23 +2722,28 @@ fn main() {
             + str(rtlil_count_cells_of_type(r_md1.design.modules[0], "sky130_fd_sc_hd__and2_1"))
             + ", want 1)"); fails = fails + 1
     }
-    if rtlil_count_cells_of_type(r_md1.design.modules[0], "$_const1_") != 1 {
-        println("FAIL T25c md1_const1_count (got "
-            + str(rtlil_count_cells_of_type(r_md1.design.modules[0], "$_const1_"))
+    if _passes_count_connect_const(r_md1.design.modules[0], "1'b1") != 1 {
+        println("FAIL T25c md1_const1_connect_count (got "
+            + str(_passes_count_connect_const(r_md1.design.modules[0], "1'b1"))
             + ", want 1)"); fails = fails + 1
     }
-    if rtlil_count_cells_of_type(r_md1.design.modules[0], "$_const0_") != 0 {
-        println("FAIL T25d md1_const0_count (got "
-            + str(rtlil_count_cells_of_type(r_md1.design.modules[0], "$_const0_"))
+    if _passes_count_connect_const(r_md1.design.modules[0], "1'b0") != 0 {
+        println("FAIL T25d md1_const0_connect_count (got "
+            + str(_passes_count_connect_const(r_md1.design.modules[0], "1'b0"))
             + ", want 0)"); fails = fails + 1
+    }
+    // iter 10: no $_const0_/_const1_ driver cells.
+    if rtlil_count_cells_of_type(r_md1.design.modules[0], "$_const1_") != 0 {
+        println("FAIL T25d2 md1_no_const1_cell"); fails = fails + 1
     }
     if rtlil_count_cells_of_type(r_md1.design.modules[0], "$mod") != 0 {
         println("FAIL T25e md1_residual"); fails = fails + 1
     }
 
     // T26 — $mod lowering 3-bit · const divisor 4 (k=2, pow-of-2) →
-    //   2× and2_1 on bits 0,1, 1× $_const0_ tie on bit 2, 1× $_const1_
-    //   shared mask driver, 0× residual $mod.
+    //   2× and2_1 on bits 0,1; 1× connect(y2, 1'b0) high-bit tie;
+    //   1× connect(c1_net, 1'b1) shared mask driver; 0× residual $mod.
+    //   iter 10: zero/one ties are module-level connect rows.
     //   (mod-to-mask identity: Y[0..1] = A[0..1] & 1, Y[2] = 0.)
     total = total + 1
     let mut m_md3 = rtlil_new_module("md3")
@@ -2667,15 +2776,21 @@ fn main() {
             + str(rtlil_count_cells_of_type(r_md3.design.modules[0], "sky130_fd_sc_hd__and2_1"))
             + ", want 2)"); fails = fails + 1
     }
-    if rtlil_count_cells_of_type(r_md3.design.modules[0], "$_const0_") != 1 {
-        println("FAIL T26c md3_const0_count (got "
-            + str(rtlil_count_cells_of_type(r_md3.design.modules[0], "$_const0_"))
+    if _passes_count_connect_const(r_md3.design.modules[0], "1'b0") != 1 {
+        println("FAIL T26c md3_const0_connect_count (got "
+            + str(_passes_count_connect_const(r_md3.design.modules[0], "1'b0"))
             + ", want 1)"); fails = fails + 1
     }
-    if rtlil_count_cells_of_type(r_md3.design.modules[0], "$_const1_") != 1 {
-        println("FAIL T26d md3_const1_count (got "
-            + str(rtlil_count_cells_of_type(r_md3.design.modules[0], "$_const1_"))
+    if _passes_count_connect_const(r_md3.design.modules[0], "1'b1") != 1 {
+        println("FAIL T26d md3_const1_connect_count (got "
+            + str(_passes_count_connect_const(r_md3.design.modules[0], "1'b1"))
             + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md3.design.modules[0], "$_const0_") != 0 {
+        println("FAIL T26c2 md3_no_const0_cell"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md3.design.modules[0], "$_const1_") != 0 {
+        println("FAIL T26d2 md3_no_const1_cell"); fails = fails + 1
     }
     if rtlil_count_cells_of_type(r_md3.design.modules[0], "$mod") != 0 {
         println("FAIL T26e md3_residual"); fails = fails + 1
@@ -2750,13 +2865,23 @@ fn main() {
     if rtlil_count_cells_of_type(r_t28.design.modules[0], "$mod") != 0 {
         println("FAIL T28b lut3_5_residual"); fails = fails + 1
     }
-    if rtlil_count_cells_of_type(r_t28.design.modules[0], "$_const1_") < 1 {
-        println("FAIL T28c lut3_5_no_const1"); fails = fails + 1
+    // iter 10: shared 1'b1 mask driver is a module-level connect row.
+    if _passes_count_connect_const(r_t28.design.modules[0], "1'b1") < 1 {
+        println("FAIL T28c lut3_5_no_const1_connect"); fails = fails + 1
+    }
+    // No all-zero output bit in this table (Y[0..2] all have ≥ 1
+    // minterm), so the degenerate-zero `connect (..., 1'b0)` row
+    // count must stay at 0.
+    if _passes_count_connect_const(r_t28.design.modules[0], "1'b0") != 0 {
+        println("FAIL T28d lut3_5_unexpected_const0_connect (got "
+            + str(_passes_count_connect_const(r_t28.design.modules[0], "1'b0"))
+            + ", want 0)"); fails = fails + 1
     }
     if rtlil_count_cells_of_type(r_t28.design.modules[0], "$_const0_") != 0 {
-        println("FAIL T28d lut3_5_unexpected_const0 (got "
-            + str(rtlil_count_cells_of_type(r_t28.design.modules[0], "$_const0_"))
-            + ", want 0)"); fails = fails + 1
+        println("FAIL T28d2 lut3_5_no_const0_cell"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t28.design.modules[0], "$_const1_") != 0 {
+        println("FAIL T28d3 lut3_5_no_const1_cell"); fails = fails + 1
     }
     // Direct unit-call to assert the kind tag.
     let r_t28_u = _passes_lower_mod_cell(c_t28)
@@ -2805,8 +2930,11 @@ fn main() {
     if rtlil_count_cells_of_type(r_t29.design.modules[0], "$mod") != 0 {
         println("FAIL T29b lut3_7_residual"); fails = fails + 1
     }
-    if rtlil_count_cells_of_type(r_t29.design.modules[0], "$_const1_") < 1 {
-        println("FAIL T29c lut3_7_no_const1"); fails = fails + 1
+    if _passes_count_connect_const(r_t29.design.modules[0], "1'b1") < 1 {
+        println("FAIL T29c lut3_7_no_const1_connect"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t29.design.modules[0], "$_const1_") != 0 {
+        println("FAIL T29c2 lut3_7_no_const1_cell"); fails = fails + 1
     }
     if rtlil_check_no_dangling(r_t29.design.modules[0]) != 0 {
         println("FAIL T29d lut3_7_dangling_pin"); fails = fails + 1
