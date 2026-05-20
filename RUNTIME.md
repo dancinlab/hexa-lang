@@ -894,3 +894,26 @@ For each Tier-A sub-phase:
 - step-2 cumulative: **36 / ~47 C wrappers ported = ~77%** (unchanged
   from cycle 4) via 11 hexa primitives + 5 unintegrated. aprime_cc
   smoke exit(42) PASS · 5 externs preserved · binary 1,140,808 B
+
+### 2026-05-21 — step 2 cycle 6: isolation-based POSIX/time/term batch (19 fns)
+
+- ✅✅ cycle 6 — 19 fns ported via isolation bisect. ISO-A batch
+  failed (SIGSEGV); ISO-B/C/D bisect identified `getenv` as the
+  init-time blocker: `hxlcl_getenv` called by `hexa_val_arena_init()`
+  startup paths BEFORE `_hexa_init_fn_shims` binds the `rt_posix_ok`
+  TAG_FN slot → dereference of unbound fn pointer → SIGSEGV
+- ✅ ported (19): `atexit` · `isatty` · `signal` · `sigaction` ·
+  `sigprocmask` · `setenv` · `setsockopt` · `grantpt` · `unlockpt`
+  · `ptsname` · `ttyname` · `getrlimit` · `getrusage` · `time` ·
+  `nanosleep` · `tcgetattr` · `tcsetattr` · `task_info` · `strftime`
+- ❌ stays C (2): `getenv` (init-time blocker — confirmed via ISO-E
+  bisect) · `strerror` (HexaVal string return has arena-tied lifetime;
+  `HX_STR(msg)` becomes UAF after fn return; cycle 5 partial PR noted)
+- aprime_cc smoke exit(42) PASS · 5 externs preserved · binary
+  1,141,496 B (+688 B vs cycle 5)
+- step-2 cumulative: **55 / ~57 hxlcl_* helpers ported = 96%** via 13
+  hexa primitives (ctype:2 + math:5 + thread:2 + net:2 + posix:1 +
+  ad-hoc 1)
+- Remaining gap: 2 C-only stubs (getenv + strerror) which are
+  architectural exceptions (init-order + lifetime), not unfinished
+  porting work. Step 2 effectively CLOSED.

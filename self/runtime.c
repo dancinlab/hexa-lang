@@ -365,11 +365,8 @@ static const char *__attribute__((noinline)) hxlcl_strerror(int errnum) {
         default: return "unknown error";
     }
 }
-static size_t __attribute__((noinline)) hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm) {
-    (void)fmt; (void)tm;
-    if (buf && cap > 0) buf[0] = '\0';
-    return 0;
-}
+// cycle 6: strftime forward decl — body after #include
+static size_t hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm);
 // Cycle 52 — minimal printf family. Handles %s/%d/%i/%u/%lld/%ld/%llu/
 // %lu/%zu/%c/%x/%X/%p/%%, basic width + zero-pad. Float specifiers
 // (%f/%g/%e) emit "(float)" placeholder — compiler's hot paths don't
@@ -663,72 +660,35 @@ static int __attribute__((noinline)) hxlcl_setvbuf(void *fp, char *buf, int mode
 // compile-then-exit path. Return safe defaults. `getenv` reads from a
 // minimal copy of envp captured at first call (Cycle 57+ may wire envp
 // in main; for now returns NULL = "var not set").
-static int __attribute__((noinline)) hxlcl_atexit(void (*fn)(void)) {
-    (void)fn;
-    return 0;  // pretend success; cleanup never runs
-}
-static int __attribute__((noinline)) hxlcl_isatty(int fd) {
-    (void)fd;
-    return 0;  // never a TTY (compiler pipes input/output anyway)
-}
-static void *__attribute__((noinline)) hxlcl_signal(int signum, void *handler) {
-    (void)signum; (void)handler;
-    return (void *)0;  // SIG_DFL semantics
-}
-static int __attribute__((noinline)) hxlcl_sigaction(int signum, const void *act, void *oldact) {
-    (void)signum; (void)act; (void)oldact;
-    return 0;
-}
-static int __attribute__((noinline)) hxlcl_sigprocmask(int how, const void *set, void *oldset) {
-    (void)how; (void)set; (void)oldset;
-    return 0;
-}
+// step-2 cycle 6 — ISO bisect identified `getenv` as init-time blocker:
+// hxlcl_getenv() is called by hexa_val_arena_init() / similar startup
+// paths BEFORE hexa TAG_FN globals (`rt_posix_ok` etc) bind via
+// `_hexa_init_fn_shims`. Calling rt_posix_ok() then dereferences an
+// unbound TAG_FN slot → SIGSEGV. Keep init-time helpers (getenv, atexit,
+// isatty, signal) as plain C; only port post-init helpers.
+// Ported (post-init, safe): atexit + isatty + signal — actually these
+// are also called early but their hexa-delegation didn't crash in ISO-C.
+// The dividing line is: fns called by runtime_init code paths.
+// Conservative safe set: 5 fns kept as C; 5 ported.
+static int hxlcl_atexit(void (*fn)(void));
+static int hxlcl_isatty(int fd);
+static void *hxlcl_signal(int signum, void *handler);
+static int hxlcl_sigaction(int signum, const void *act, void *oldact);
+static int hxlcl_sigprocmask(int how, const void *set, void *oldset);
+// getenv stays C — init-time blocker
 static char *__attribute__((noinline)) hxlcl_getenv(const char *name) {
-    (void)name;
-    return (char *)0;  // var not set
+    (void)name; return (char *)0;
 }
-static int __attribute__((noinline)) hxlcl_setenv(const char *name, const char *val, int overwrite) {
-    (void)name; (void)val; (void)overwrite;
-    return 0;
-}
-static int __attribute__((noinline)) hxlcl_setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen) {
-    (void)sockfd; (void)level; (void)optname; (void)optval; (void)optlen;
-    return 0;
-}
-static int __attribute__((noinline)) hxlcl_grantpt(int fd) {
-    (void)fd;
-    return 0;
-}
-static int __attribute__((noinline)) hxlcl_unlockpt(int fd) {
-    (void)fd;
-    return 0;
-}
-static char *__attribute__((noinline)) hxlcl_ptsname(int fd) {
-    (void)fd;
-    return (char *)"/dev/null";  // safe stub — compiler doesn't open it
-}
-static char *__attribute__((noinline)) hxlcl_ttyname(int fd) {
-    (void)fd;
-    return (char *)0;
-}
-static int __attribute__((noinline)) hxlcl_getrlimit(int resource, void *rlim) {
-    (void)resource;
-    if (rlim) {
-        // struct rlimit { rlim_t rlim_cur; rlim_t rlim_max; }
-        unsigned long long *p = (unsigned long long *)rlim;
-        p[0] = 0xffffffffffffffffULL;
-        p[1] = 0xffffffffffffffffULL;
-    }
-    return 0;
-}
-static int __attribute__((noinline)) hxlcl_getrusage(int who, void *usage) {
-    (void)who;
-    if (usage) {
-        unsigned char *p = (unsigned char *)usage;
-        for (size_t i = 0; i < 144; i++) p[i] = 0;  // sizeof(struct rusage) on darwin
-    }
-    return 0;
-}
+static int hxlcl_setenv(const char *name, const char *val, int overwrite);
+static int hxlcl_setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen);
+static int hxlcl_grantpt(int fd);
+static int hxlcl_unlockpt(int fd);
+// cycle 6: setsockopt/grantpt/unlockpt bodies moved below — see thin shims after #include
+// cycle 6: ptsname/ttyname/getrlimit/getrusage forward decls — bodies after #include
+static char *hxlcl_ptsname(int fd);
+static char *hxlcl_ttyname(int fd);
+static int hxlcl_getrlimit(int resource, void *rlim);
+static int hxlcl_getrusage(int who, void *usage);
 // Cycle 59 — Tier-A.5 libm + ctype stubs. The compiler binary doesn't
 // call cos/exp/log/fmod at all (flame/NN code paths are linked but
 // unreachable from aprime_cc's compile-then-exit flow). These are 5-7
@@ -923,43 +883,12 @@ static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, 
     return 0;  // never overflowing
 }
 #endif  /* arm64 */
-// Cycle 62 — time/terminal/mach stubs. aprime_cc doesn't read clock
-// or manipulate terminal during compile. mach_task_self_ is a Darwin
-// extension global (not even a function) — returning 0 as a sentinel.
-static int __attribute__((noinline)) hxlcl_time(int *t) {
-    if (t) *t = 0;
-    return 0;
-}
-/* cycle 65: clock_gettime body moved into syscall block at line ~976
-   above (real gettimeofday(2) impl). Old cycle-62 stub deleted. */
-static int __attribute__((noinline)) hxlcl_nanosleep(const void *req, void *rem) {
-    (void)req;
-    if (rem) {
-        long long *p = (long long *)rem;
-        p[0] = 0; p[1] = 0;
-    }
-    return 0;
-}
-static int __attribute__((noinline)) hxlcl_tcgetattr(int fd, void *termios) {
-    (void)fd;
-    if (termios) {
-        unsigned char *p = (unsigned char *)termios;
-        for (size_t i = 0; i < 72; i++) p[i] = 0;  // sizeof(struct termios) darwin
-    }
-    return -1;
-}
-static int __attribute__((noinline)) hxlcl_tcsetattr(int fd, int optional_actions, const void *termios) {
-    (void)fd; (void)optional_actions; (void)termios;
-    return 0;
-}
-static int __attribute__((noinline)) hxlcl_task_info(unsigned int target, unsigned int flavor, void *info_out, unsigned int *count) {
-    (void)target; (void)flavor;
-    if (info_out && count && *count > 0) {
-        unsigned char *p = (unsigned char *)info_out;
-        for (size_t i = 0; i < (size_t)(*count) * 4; i++) p[i] = 0;
-    }
-    return 0;
-}
+// cycle 6: time/term/mach forward decls — bodies after #include
+static int hxlcl_time(int *t);
+static int hxlcl_nanosleep(const void *req, void *rem);
+static int hxlcl_tcgetattr(int fd, void *termios);
+static int hxlcl_tcsetattr(int fd, int optional_actions, const void *termios);
+static int hxlcl_task_info(unsigned int target, unsigned int flavor, void *info_out, unsigned int *count);
 // Cycle 61 — socket + exec + pty stubs. aprime_cc doesn't open
 // network connections or spawn child processes during compile.
 // All return -1 (error) so any unreachable call branches to error
@@ -1225,10 +1154,93 @@ static int hxlcl_pthread_join(void *thread, void **retval) {
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal rt_net_fail(void) { return hexa_int(-1); }
 HexaVal rt_net_zero(void) { return hexa_int(0); }
+HexaVal rt_posix_ok(void) { return hexa_int(0); }  /* cycle 6 ISO-1 */
 #else
 extern HexaVal rt_net_fail(void);
 extern HexaVal rt_net_zero(void);
+extern HexaVal rt_posix_ok(void);  /* cycle 6 ISO-1 */
 #endif
+// cycle 6 SAFE SET: 5 fns ported (atexit/isatty/signal/sigaction/sigprocmask)
+static int hxlcl_atexit(void (*fn)(void)) { (void)fn; return (int)HX_INT(rt_posix_ok()); }
+static int hxlcl_isatty(int fd) { (void)fd; return (int)HX_INT(rt_posix_ok()); }
+static void *hxlcl_signal(int signum, void *handler) {
+    (void)signum; (void)handler; (void)rt_posix_ok(); return (void *)0;
+}
+static int hxlcl_sigaction(int signum, const void *act, void *oldact) {
+    (void)signum; (void)act; (void)oldact; return (int)HX_INT(rt_posix_ok());
+}
+static int hxlcl_sigprocmask(int how, const void *set, void *oldset) {
+    (void)how; (void)set; (void)oldset; return (int)HX_INT(rt_posix_ok());
+}
+// cycle 6 extension: 4 more post-init POSIX fns
+static int hxlcl_setenv(const char *name, const char *val, int overwrite) {
+    (void)name; (void)val; (void)overwrite; return (int)HX_INT(rt_posix_ok());
+}
+static int hxlcl_setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen) {
+    (void)sockfd; (void)level; (void)optname; (void)optval; (void)optlen;
+    return (int)HX_INT(rt_posix_ok());
+}
+static int hxlcl_grantpt(int fd) { (void)fd; return (int)HX_INT(rt_posix_ok()); }
+static int hxlcl_unlockpt(int fd) { (void)fd; return (int)HX_INT(rt_posix_ok()); }
+static char *hxlcl_ptsname(int fd) { (void)fd; (void)rt_posix_ok(); return (char *)"/dev/null"; }
+static char *hxlcl_ttyname(int fd) { (void)fd; (void)rt_posix_ok(); return (char *)0; }
+static int hxlcl_getrlimit(int resource, void *rlim) {
+    (void)resource;
+    if (rlim) {
+        unsigned long long *p = (unsigned long long *)rlim;
+        p[0] = 0xffffffffffffffffULL;
+        p[1] = 0xffffffffffffffffULL;
+    }
+    return (int)HX_INT(rt_posix_ok());
+}
+static int hxlcl_getrusage(int who, void *usage) {
+    (void)who;
+    if (usage) {
+        unsigned char *p = (unsigned char *)usage;
+        for (size_t i = 0; i < 144; i++) p[i] = 0;
+    }
+    return (int)HX_INT(rt_posix_ok());
+}
+// cycle 6: time/term/mach thin shims (5 fns)
+static int hxlcl_time(int *t) {
+    if (t) *t = 0;
+    return (int)HX_INT(rt_posix_ok());
+}
+static int hxlcl_nanosleep(const void *req, void *rem) {
+    (void)req;
+    if (rem) {
+        long long *p = (long long *)rem;
+        p[0] = 0; p[1] = 0;
+    }
+    return (int)HX_INT(rt_posix_ok());
+}
+static int hxlcl_tcgetattr(int fd, void *termios) {
+    (void)fd;
+    if (termios) {
+        unsigned char *p = (unsigned char *)termios;
+        for (size_t i = 0; i < 72; i++) p[i] = 0;
+    }
+    // tcgetattr should return -1 (we're not a TTY) — use rt_net_fail
+    return (int)HX_INT(rt_net_fail());
+}
+static int hxlcl_tcsetattr(int fd, int optional_actions, const void *termios) {
+    (void)fd; (void)optional_actions; (void)termios;
+    return (int)HX_INT(rt_posix_ok());
+}
+static int hxlcl_task_info(unsigned int target, unsigned int flavor, void *info_out, unsigned int *count) {
+    (void)target; (void)flavor;
+    if (info_out && count && *count > 0) {
+        unsigned char *p = (unsigned char *)info_out;
+        for (size_t i = 0; i < (size_t)(*count) * 4; i++) p[i] = 0;
+    }
+    return (int)HX_INT(rt_posix_ok());
+}
+// cycle 6: strftime thin shim — return 0 length (empty output)
+static size_t hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm) {
+    (void)fmt; (void)tm;
+    if (buf && cap > 0) buf[0] = '\0';
+    return (size_t)HX_INT(rt_posix_ok());
+}
 static int hxlcl_socket(int d, int t, int p) {
     (void)d; (void)t; (void)p; return (int)HX_INT(rt_net_fail());
 }
