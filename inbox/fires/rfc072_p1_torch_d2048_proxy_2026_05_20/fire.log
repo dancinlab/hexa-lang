@@ -1,0 +1,108 @@
+[host] hostname=summer-B650M-K gpu=NVIDIA GeForce RTX 5070 sm_120 torch=2.11.0+cu130 cuda=13.0
+[try] L1_task_spec: d=2048 n_layer=12 batch=4 seq=1024
+[oom] L1_task_spec: CUDA out of memory. Tried to allocate 786.00 MiB. GPU 0 has a total capacity of 11.50 GiB of which 251.19 MiB is free. Including non-PyTorch memory, this process has 11.24 GiB memory in use. Of the allocated memory 11.00 GiB is allocated by PyTorch, and 48.53 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+[try] L2_half_mem: d=2048 n_layer=12 batch=2 seq=512
+[oom] L2_half_mem: CUDA out of memory. Tried to allocate 64.00 MiB. GPU 0 has a total capacity of 11.50 GiB of which 31.19 MiB is free. Including non-PyTorch memory, this process has 11.46 GiB memory in use. Of the allocated memory 11.08 GiB is allocated by PyTorch, and 183.93 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+[try] L3_micro: d=2048 n_layer=12 batch=1 seq=512
+[oom] L3_micro: CUDA out of memory. Tried to allocate 64.00 MiB. GPU 0 has a total capacity of 11.50 GiB of which 3.19 MiB is free. Including non-PyTorch memory, this process has 11.48 GiB memory in use. Of the allocated memory 11.17 GiB is allocated by PyTorch, and 117.96 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+[try] L4_d1024: d=1024 n_layer=12 batch=2 seq=512
+[ok]  L4_d1024: timings_ms=[116.36630249023438, 116.28620910644531, 116.32902526855469, 116.21542358398438, 116.1046371459961] peak=5059.8MiB
+
+[done] wrote result.json
+{
+  "rfc": "RFC-072-P1",
+  "phase": "P1",
+  "scope": "PROXY (NOT d=4096 24L full spec \u2014 that needs H100 80GB)",
+  "honest_caveat": "This is a SCALED-DOWN PROXY measurement on RTX 5070 12GB. Full RFC 072 \u00a72 spec (d=4096 n_layer=24 batch=8 seq=2048 FP32) requires ~80GB+ VRAM (H100 80GB \u00b7 multi-session $5+ budget). F-RFC072-WALL-PT-PROXY = MEASURED at the chosen ladder rung. F-RFC072-WALL-PT-FULL = DEFERRED until H100 fire cycle. F-RFC072-RATIO closure stays [ ] in GPU.md \u00a710.",
+  "host": {
+    "hostname": "summer-B650M-K",
+    "gpu": "NVIDIA GeForce RTX 5070",
+    "sm": "sm_120",
+    "torch_version": "2.11.0+cu130",
+    "cuda_version": "13.0"
+  },
+  "protocol": {
+    "warmup_steps": 3,
+    "timed_steps": 5,
+    "precision": "fp32",
+    "mode": "eager",
+    "optimizer": "Adam",
+    "cudnn_benchmark": false
+  },
+  "attempts": [
+    {
+      "label": "L1_task_spec",
+      "config": {
+        "label": "L1_task_spec",
+        "d": 2048,
+        "n_layer": 12,
+        "batch": 4,
+        "seq": 1024
+      },
+      "ok": false,
+      "err": "OOM: CUDA out of memory. Tried to allocate 786.00 MiB. GPU 0 has a total capacity of 11.50 GiB of which 251.19 MiB is free. Including non-PyTorch memory, this process has 11.24 GiB memory in use. Of the allocated memory 11.00 GiB is allocated by PyTorch, and 48.53 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+    },
+    {
+      "label": "L2_half_mem",
+      "config": {
+        "label": "L2_half_mem",
+        "d": 2048,
+        "n_layer": 12,
+        "batch": 2,
+        "seq": 512
+      },
+      "ok": false,
+      "err": "OOM: CUDA out of memory. Tried to allocate 64.00 MiB. GPU 0 has a total capacity of 11.50 GiB of which 31.19 MiB is free. Including non-PyTorch memory, this process has 11.46 GiB memory in use. Of the allocated memory 11.08 GiB is allocated by PyTorch, and 183.93 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+    },
+    {
+      "label": "L3_micro",
+      "config": {
+        "label": "L3_micro",
+        "d": 2048,
+        "n_layer": 12,
+        "batch": 1,
+        "seq": 512
+      },
+      "ok": false,
+      "err": "OOM: CUDA out of memory. Tried to allocate 64.00 MiB. GPU 0 has a total capacity of 11.50 GiB of which 3.19 MiB is free. Including non-PyTorch memory, this process has 11.48 GiB memory in use. Of the allocated memory 11.17 GiB is allocated by PyTorch, and 117.96 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+    },
+    {
+      "label": "L4_d1024",
+      "config": {
+        "label": "L4_d1024",
+        "d": 1024,
+        "n_layer": 12,
+        "batch": 2,
+        "seq": 512
+      },
+      "ok": true,
+      "err": null
+    }
+  ],
+  "chosen_config": {
+    "label": "L4_d1024",
+    "d": 1024,
+    "n_layer": 12,
+    "batch": 2,
+    "seq": 512
+  },
+  "wall_ms": {
+    "samples": [
+      116.36630249023438,
+      116.28620910644531,
+      116.32902526855469,
+      116.21542358398438,
+      116.1046371459961
+    ],
+    "median": 116.28620910644531,
+    "mean": 116.26031951904297,
+    "std": 0.10353234663220102,
+    "std_pct_of_median": 0.08903235166728177,
+    "min": 116.1046371459961,
+    "max": 116.36630249023438
+  },
+  "mem_peak_mib": 5059.83251953125,
+  "verdict": "PASS_PROXY",
+  "variance_gate_5pct": "PASS",
+  "g3_summary": "PyTorch eager wall measured at PROXY config L4_d1024 (d=1024 n_layer=12 batch=2 seq=512): median 1-step wall = 116.29ms over 5 timed steps (std 0.104ms = 0.09% of median). Peak VRAM = 5059.8MiB on RTX 5070 12GB. This is NOT the d=4096 24L full-spec datum \u2014 that's deferred to H100 multi-session campaign. Provides honest baseline at smaller scale for north-star \u2460 trajectory."
+}

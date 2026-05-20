@@ -89,26 +89,26 @@ struct ParsedReloc {
 // "small object" working assumption (P0 outputs are 296-1KB).
 
 fn _r_u8(buf: [Int], off: Int) -> Int {
-    return buf[off] & 0xFF
+    return buf[off] & 0xff
 }
 fn _r_u16(buf: [Int], off: Int) -> Int {
-    return (buf[off] & 0xFF) | ((buf[off + 1] & 0xFF) << 8)
+    return (buf[off] & 0xff) | ((buf[off + 1] & 0xff) << 8)
 }
 fn _r_u32(buf: [Int], off: Int) -> Int {
-    return (buf[off]     & 0xFF)
-         | ((buf[off + 1] & 0xFF) << 8)
-         | ((buf[off + 2] & 0xFF) << 16)
-         | ((buf[off + 3] & 0xFF) << 24)
+    return (buf[off]     & 0xff)
+         | ((buf[off + 1] & 0xff) << 8)
+         | ((buf[off + 2] & 0xff) << 16)
+         | ((buf[off + 3] & 0xff) << 24)
 }
 fn _r_u64(buf: [Int], off: Int) -> Int {
-    return (buf[off]     & 0xFF)
-         | ((buf[off + 1] & 0xFF) << 8)
-         | ((buf[off + 2] & 0xFF) << 16)
-         | ((buf[off + 3] & 0xFF) << 24)
-         | ((buf[off + 4] & 0xFF) << 32)
-         | ((buf[off + 5] & 0xFF) << 40)
-         | ((buf[off + 6] & 0xFF) << 48)
-         | ((buf[off + 7] & 0xFF) << 56)
+    return (buf[off]     & 0xff)
+         | ((buf[off + 1] & 0xff) << 8)
+         | ((buf[off + 2] & 0xff) << 16)
+         | ((buf[off + 3] & 0xff) << 24)
+         | ((buf[off + 4] & 0xff) << 32)
+         | ((buf[off + 5] & 0xff) << 40)
+         | ((buf[off + 6] & 0xff) << 48)
+         | ((buf[off + 7] & 0xff) << 56)
 }
 // Read a fixed-length name field (16-byte segname/sectname): bytes
 // up to (but not including) the first NUL.
@@ -116,7 +116,7 @@ fn _r_name16(buf: [Int], off: Int) -> string {
     let mut out = ""
     let mut i = 0
     while i < 16 {
-        let b = buf[off + i] & 0xFF
+        let b = buf[off + i] & 0xff
         if b == 0 { break }
         out = out + chr(b)
         i = i + 1
@@ -128,7 +128,7 @@ fn _r_cstr(buf: [Int], base: Int, strx: Int) -> string {
     let mut out = ""
     let mut i = 0
     while true {
-        let b = buf[base + strx + i] & 0xFF
+        let b = buf[base + strx + i] & 0xff
         if b == 0 { break }
         out = out + chr(b)
         i = i + 1
@@ -202,7 +202,7 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
     }
 
     let mut ti = 0
-    while ti < text_size { text.push(buf[text_offset + ti] & 0xFF); ti = ti + 1 }
+    while ti < text_size { text.push(buf[text_offset + ti] & 0xff); ti = ti + 1 }
 
     let mut defined:     [LinkSym] = []
     let mut extern_refs: [LinkSym] = []
@@ -227,11 +227,11 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
         let r_off       = text_reloff + 8 * ri
         let r_address   = _r_u32(buf, r_off)
         let bits        = _r_u32(buf, r_off + 4)
-        let r_symbolnum = bits & 0xFFFFFF
+        let r_symbolnum = bits & 0xffffff
         let r_pcrel     = (bits >> 24) & 0x1
         let r_length    = (bits >> 25) & 0x3
         let r_extern    = (bits >> 27) & 0x1
-        let r_type      = (bits >> 28) & 0xF
+        let r_type      = (bits >> 28) & 0xf
         let mut sym_name = ""
         if r_extern != 0 {
             let entry_off = symoff + 16 * r_symbolnum
@@ -328,17 +328,17 @@ let MACHO_LD_S_REG              = 0x80000400         // S_REGULAR | PURE+SOME_IN
 // tool/ lives outside compiler/'s import graph and circular `use`
 // is fragile in hexa.)
 fn _w_u16(out: [Int], v: Int) {
-    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
+    out.push(v & 0xff); out.push((v >> 8) & 0xff)
 }
 fn _w_u32(out: [Int], v: Int) {
-    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
-    out.push((v >> 16) & 0xFF); out.push((v >> 24) & 0xFF)
+    out.push(v & 0xff); out.push((v >> 8) & 0xff)
+    out.push((v >> 16) & 0xff); out.push((v >> 24) & 0xff)
 }
 fn _w_u64(out: [Int], v: Int) {
-    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
-    out.push((v >> 16) & 0xFF); out.push((v >> 24) & 0xFF)
-    out.push((v >> 32) & 0xFF); out.push((v >> 40) & 0xFF)
-    out.push((v >> 48) & 0xFF); out.push((v >> 56) & 0xFF)
+    out.push(v & 0xff); out.push((v >> 8) & 0xff)
+    out.push((v >> 16) & 0xff); out.push((v >> 24) & 0xff)
+    out.push((v >> 32) & 0xff); out.push((v >> 40) & 0xff)
+    out.push((v >> 48) & 0xff); out.push((v >> 56) & 0xff)
 }
 fn _w_zero_n(out: [Int], n: Int) {
     let mut i = 0
@@ -349,7 +349,7 @@ fn _w_name_fixed(out: [Int], s: string, n: Int) {
     let sn = len(s)
     let mut i = 0
     while i < n {
-        if i < sn { out.push(char_code(s, i) & 0xFF) }
+        if i < sn { out.push(char_code(s, i) & 0xff) }
         else { out.push(0) }
         i = i + 1
     }
@@ -359,7 +359,7 @@ fn _w_name_fixed(out: [Int], s: string, n: Int) {
 fn _w_pstr_align4(out: [Int], s: string) -> Int {
     let sn = len(s)
     let mut i = 0
-    while i < sn { out.push(char_code(s, i) & 0xFF); i = i + 1 }
+    while i < sn { out.push(char_code(s, i) & 0xff); i = i + 1 }
     out.push(0)                                      // NUL
     let written = sn + 1
     let rem = written & 3
@@ -430,7 +430,7 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
         // Append this obj's text bytes.
         let mut ti = 0
         while ti < len(obj.text) {
-            text_bytes.push(obj.text[ti] & 0xFF)
+            text_bytes.push(obj.text[ti] & 0xff)
             ti = ti + 1
         }
         oi = oi + 1
@@ -466,11 +466,11 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                     let w2 = text_bytes[patch_off + 2]
                     let w3 = text_bytes[patch_off + 3]
                     let cur = w0 | (w1 << 8) | (w2 << 16) | (w3 << 24)
-                    let patched = (cur & 0xFC000000) | (delta & 0x03FFFFFF)
-                    text_bytes[patch_off + 0] = patched & 0xFF
-                    text_bytes[patch_off + 1] = (patched >> 8) & 0xFF
-                    text_bytes[patch_off + 2] = (patched >> 16) & 0xFF
-                    text_bytes[patch_off + 3] = (patched >> 24) & 0xFF
+                    let patched = (cur & 0xfc000000) | (delta & 0x03ffffff)
+                    text_bytes[patch_off + 0] = patched & 0xff
+                    text_bytes[patch_off + 1] = (patched >> 8) & 0xff
+                    text_bytes[patch_off + 2] = (patched >> 16) & 0xff
+                    text_bytes[patch_off + 3] = (patched >> 24) & 0xff
                 }
             }
             ri = ri + 1
@@ -522,7 +522,7 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                 let strx = len(strtab)
                 let nn = len(d.name)
                 let mut k = 0
-                while k < nn { strtab.push(char_code(d.name, k) & 0xFF); k = k + 1 }
+                while k < nn { strtab.push(char_code(d.name, k) & 0xff); k = k + 1 }
                 strtab.push(0)
                 nlist_strx.push(strx)
                 // n_type = N_SECT (0x0e) | N_EXT (0x01)
@@ -558,17 +558,17 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                 let mut eq = true
                 let mut z = 0
                 while z < mn {
-                    if (strtab[off + z] & 0xFF) != char_code(e.name, z) { eq = false; break }
+                    if (strtab[off + z] & 0xff) != char_code(e.name, z) { eq = false; break }
                     z = z + 1
                 }
-                if eq && (strtab[off + mn] & 0xFF) == 0 { found = true; break }
+                if eq && (strtab[off + mn] & 0xff) == 0 { found = true; break }
                 ck = ck + 1
             }
             if !found {
                 let strx = len(strtab)
                 let nn = len(e.name)
                 let mut k = 0
-                while k < nn { strtab.push(char_code(e.name, k) & 0xFF); k = k + 1 }
+                while k < nn { strtab.push(char_code(e.name, k) & 0xff); k = k + 1 }
                 strtab.push(0)
                 nlist_strx.push(strx)
                 // n_type = N_UNDF (0) | N_EXT (0x01)
@@ -819,8 +819,8 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u32(out, MACHO_LD_LC_BUILD_VERSION)
     _w_u32(out, lc_buildver_size)
     _w_u32(out, 1)                                   // PLATFORM_MACOS
-    _w_u32(out, 0x000E0000)                          // minos 14.0.0 (Sonoma)
-    _w_u32(out, 0x000E0000)                          // sdk   14.0.0
+    _w_u32(out, 0x000e0000)                          // minos 14.0.0 (Sonoma)
+    _w_u32(out, 0x000e0000)                          // sdk   14.0.0
     _w_u32(out, 0)                                   // ntools
 
     // ── LC_SOURCE_VERSION ──
@@ -851,7 +851,7 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
 
     // ── __text payload (cycle 3 fills from concatenated text bytes) ──
     let mut bi = 0
-    while bi < text_size { out.push(text_bytes[bi] & 0xFF); bi = bi + 1 }
+    while bi < text_size { out.push(text_bytes[bi] & 0xff); bi = bi + 1 }
 
     // Pad the __TEXT segment file region up to its page-aligned end
     // so `filesize` matches actual bytes. dyld's load-from-file logic
@@ -906,15 +906,15 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
             nv = text_section_addr + nv
         }
         _w_u32(out, strx)
-        out.push(nty & 0xFF)
-        out.push(nse & 0xFF)
+        out.push(nty & 0xff)
+        out.push(nse & 0xff)
         _w_u16(out, 0)                               // n_desc
         _w_u64(out, nv)
         ni = ni + 1
     }
     // strtab bytes verbatim + 4-byte alignment pad.
     let mut si = 0
-    while si < strsize { out.push(strtab[si] & 0xFF); si = si + 1 }
+    while si < strsize { out.push(strtab[si] & 0xff); si = si + 1 }
     _w_zero_n(out, strpad)
 
     // ── Code-signature placeholder — zero-filled CODESIG_RESERVE bytes ──

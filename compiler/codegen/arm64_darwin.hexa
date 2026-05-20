@@ -1198,6 +1198,25 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "to_float"      { return "hexa_to_float" }
     if name == "to_bool"       { return "hexa_to_bool" }
     if name == "to_string"     { return "hexa_to_string" }
+    // `chr(N)` byte-level alias — same as `from_char_code` but with
+    // raw byte semantics (codegen ABI: name & N & 0xff). The runtime
+    // exports both `hexa_chr_byte` (this) and `hexa_from_char_code`
+    // (round-trip UTF-8 of codepoint N). For aprime_cc's native path
+    // we keep `chr` consistent with the self/* convention. Cycle 33.
+    if name == "chr"           { return "hexa_chr_byte" }
+    if name == "from_char_code" { return "hexa_from_char_code" }
+    if name == "write_bytes"   { return "rt_write_bytes" }
+    if name == "bytes"         { return "hexa_str_bytes" }
+    // Cycle 34/35: `.truncate(n)` was unmapped → fallthrough returned
+    // "truncate" → link resolved to libc's truncate(const char *path,
+    // off_t length) → SIGBUS when hexa_array_push later memmove'd into
+    // the array whose metadata was clobbered by the bogus path-write.
+    // The fix is a single map entry; runtime exports `hexa_array_truncate`
+    // (self/runtime.c:`hexa_array_truncate`). Confirms cycle 34's root-
+    // cause crash stack: _patch_loop_sentinels → array.truncate(0) →
+    // libc-truncate-with-garbage-path → metadata corrupt → next .push
+    // memmove SIGBUS.
+    if name == "truncate"      { return "hexa_array_truncate" }
     // Interp aliases (bind.hexa accepts them as known names; without
     // a runtime symbol map the link fails on `_str`/`_int`/etc.).
     // `str(x)` is interp's shorthand for `to_string(x)` (see
@@ -2362,11 +2381,19 @@ fn _byte_code(ch: string) -> i64 {
 }
 
 fn _str_to_hex_bytes(s: string) -> string {
-    let cs = s.chars()
+    // Cycle 39: `s.chars()` returns UTF-8 CODEPOINTS (since 2026-05-19
+    // parity-gate t45b). _byte_code(cs[i]) only returns the FIRST BYTE
+    // of each multi-byte codepoint, dropping continuation bytes. That
+    // truncated em-dashes / box-drawing chars / arrows in string
+    // literals → gen1.s (aprime via hexa_v2→C→clang) preserved them
+    // via clang's static rodata, but gen2.s (hexac via aprime emit-asm
+    // → asm path) lost them through this pool. Use `s.bytes()` which
+    // returns per-byte i64 entries (raw 0..255), preserving UTF-8.
+    let bs = s.bytes()
     let mut out = ""
     let mut i = 0
-    while i < len(cs) {
-        out = out + _byte_to_hex(_byte_code(cs[i]))
+    while i < len(bs) {
+        out = out + _byte_to_hex(bs[i])
         i = i + 1
     }
     out = out + "00" // NUL terminator

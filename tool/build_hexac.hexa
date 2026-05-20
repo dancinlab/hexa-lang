@@ -127,7 +127,13 @@ if exec("test -s '" + flats + "' && printf yes || printf no") != "yes" {
 // bridges those to the hexa_* runtime exports. The asm path needs the
 // same bridge as a small linkable .c. Mirrors /tmp/gen2_shim.c.
 println("  [3/4] write asm-path naming shim -> " + shim)
-let shim_src = "/* asm-path naming bridge: native-asm builtin names ->\n   hexa_* runtime exports. Mirrors tool/s4_flatc_post.py's sed\n   rewrites on the C path. */\n#include \"runtime.h\"\nHexaVal sha256_hex(HexaVal s) { return hexa_sha256(s); }\nHexaVal list_dir(HexaVal p)   { return hexa_list_dir(p); }\nHexaVal mono_ns(void)         { return hexa_mono_ns(); }\n"
+// Cycle 33: aprime_cc now compiles stdlib/core/hash/sha256.hexa which
+// defines `sha256_hex` as a hexa pub fn — so the shim's sha256_hex
+// triggers `duplicate symbol _sha256_hex` at link. `list_dir` is
+// defined in compiler/intrinsics/intrinsics.hexa BUT aprime_cc's
+// codegen doesn't emit its body (intrinsic-vs-impl ambiguity), so
+// the shim's list_dir bridge stays. mono_ns is pure runtime — keep.
+let shim_src = "/* asm-path naming bridge: native-asm builtin names ->\n   hexa_* runtime exports. Cycle 33 trimmed sha256_hex (defined as\n   real hexa fn in stdlib/core/hash/sha256.hexa now that aprime_cc\n   accepts hex literals); list_dir + mono_ns still need bridging. */\n#include \"runtime.h\"\nHexaVal list_dir(HexaVal p)   { return hexa_list_dir(p); }\nHexaVal mono_ns(void)         { return hexa_mono_ns(); }\n"
 write_file(shim, shim_src)
 
 // ── Stage 4 — clang assemble + link ──
@@ -136,7 +142,10 @@ write_file(shim, shim_src)
 println("  [4/4] clang assemble + link -> " + out)
 let out_dir = exec("dirname '" + out + "'").trim()
 let _mk = exec("mkdir -p '" + out_dir + "' 2>/dev/null")
-let cl_cmd = "clang -O2 -arch arm64 -I '" + repo + "/self' '" + flats + "' '" + shim + "' '" + repo + "/self/runtime.c' -o '" + out + "' 2>&1"
+// Cycle 44: parallel dead-strip + -Oz to build_aprime.sh (cycle 43)
+// — same 55% binary shrink expected for hexac. clang here is just
+// assembler+link so -Oz applies to the runtime.c re-compile path.
+let cl_cmd = "clang -Oz -arch arm64 -ffunction-sections -fdata-sections -Wl,-dead_strip -I '" + repo + "/self' '" + flats + "' '" + shim + "' '" + repo + "/self/runtime.c' -o '" + out + "' 2>&1"
 let _r4 = exec(cl_cmd)
 if exec("test -x '" + out + "' && printf yes || printf no") != "yes" {
     println("build_hexac: clang assemble+link failed:")
