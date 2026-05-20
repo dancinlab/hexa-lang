@@ -257,7 +257,29 @@ pub fn lens_apply_empty_space_zero_coverage_quadrant(view: AtlasView) -> array {
 }
 
 pub fn lens_apply_paradigm_shift_inversion(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — division-form raw scan. P raw with `/` operator = inverse
+    // relation candidates (sigma/phi, tau/n, etc.). Aggregate as
+    // candidate inversion-survival hypothesis pool.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("/") >= 0 { hits = hits + 1 }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "paradigm_shift.inversion.division_forms",
+        family: "paradigm_shift",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry `/` in raw — candidate inversion-form pool (would the relation hold for the multiplicative inverse?).",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_paradigm_shift_dual(view: AtlasView) -> array {
     // C-1.d — n=6 lattice signature audit. The atlas's P kind should
@@ -382,7 +404,30 @@ pub fn lens_apply_counterexample_mine_regime_break(view: AtlasView) -> array {
 }
 
 pub fn lens_apply_invariant_stress_conservation_violation(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — sum-form (`+`) raw scan. Conservation laws in atlas are
+    // typically equality of two sums (sigma = sum_of_divisors etc.).
+    // Aggregate count of nodes with sum-form expressions as
+    // conservation-invariant candidate pool.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of(" + ") >= 0 || raw.index_of("+ ") >= 0 { hits = hits + 1 }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "invariant_stress.conservation_violation.sum_forms",
+        family: "invariant_stress",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry sum-form `+` in raw — candidate pool for conservation-law violation testing.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_invariant_stress_symmetry_break(view: AtlasView) -> array {
     // C-1.d — identifier-ASCII invariant audit. P node ids should be
@@ -489,7 +534,37 @@ pub fn lens_apply_constraint_flip_flip_sign(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_constraint_flip_flip_ordering(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — depends_on vs derives balance. A well-formed P kind has
+    // similar volumes of `<-` (depends_on) and `->` (derives). Large
+    // skew = candidate for ordering-flip / dual-direction audit.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut deps_total = 0
+    let mut der_total = 0
+    let mut i = 0
+    while i < n {
+        let e = view.p_nodes[i].edges
+        deps_total = deps_total + len(e.depends_on)
+        der_total = der_total + len(e.derives)
+        i = i + 1
+    }
+    let sum = deps_total + der_total
+    if sum == 0 { return empty_candidate_list() }
+    // skew = abs ratio. integer math: flag if either side < 1/3 of total.
+    let third = sum / 3
+    if deps_total >= third && der_total >= third {
+        return empty_candidate_list()  // balanced
+    }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "constraint_flip.flip_ordering.skew",
+        family: "constraint_flip",
+        proposed: "atlas P kind directional skew: depends_on=" + to_string(deps_total) + " vs derives=" + to_string(der_total) + " (sum " + to_string(sum) + "). One side below 1/3 of total — ordering-flip candidate.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_constraint_flip_flip_topology(view: AtlasView) -> array {
     return empty_candidate_list()
@@ -773,7 +848,29 @@ pub fn lens_apply_unfold_transitive_derive(view: AtlasView) -> array {
 }
 
 pub fn lens_apply_unfold_taylor_series(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — power-series raw scan. Taylor expansion candidates carry
+    // exponentiation operators in their raw form (`^`, `**`, `power`).
+    // Aggregate as candidate Taylor-series expansion pool.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("^") >= 0 || raw.index_of("**") >= 0 { hits = hits + 1 }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "unfold.taylor_series.power_forms",
+        family: "unfold",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry `^` or `**` in raw — candidate Taylor-series expansion pool.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 
 pub fn lens_apply_unfold_eq_substitution(view: AtlasView) -> array {
