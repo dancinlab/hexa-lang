@@ -681,10 +681,12 @@ pub fn ag_extract_emit_expr(arena: int, node: int) -> string {
     let k = ag_extract_kind(arena, node)
     if k == ag_extract_k_param() {
         let ix = ag_extract_param_ix(arena, node)
-        // SD5 only handles a 1-input fwd (relu(x)), so param 0 = x. Future
-        // multi-input fwds will need a name-table; for SD5 the convention
-        // is fixed.
+        // SD9 extends the 1-param "x" convention to a 2-param "(x, y)"
+        // convention for the bilinear vjp test. Higher indices fall back
+        // to the SD5 `p<ix>` naming. A future SD with parser integration
+        // (SD8) will swap this for the parsed Param's actual identifier.
         if ix == 0 { return "x" }
+        if ix == 1 { return "y" }
         return "p" + to_string(ix)
     }
     if k == ag_extract_k_const() {
@@ -761,6 +763,17 @@ fn float_to_string(v: float) -> string {
 
 pub fn ag_extract_emit_fn(arena: int, bwd_root: int, fn_name: string) -> string {
     return "pub fn " + fn_name + "(x: float, dy: float) -> float {\n"
+         + "    return " + ag_extract_emit_expr(arena, bwd_root) + "\n"
+         + "}\n"
+}
+
+// SD9: emit a per-Param backward function for a 2-input fwd `f(x, y)`.
+// The signature carries BOTH inputs so a future re-compile pass can
+// call `f_x_bwd_auto(x_i, y_i, dy_i)` and `f_y_bwd_auto(x_i, y_i, dy_i)`
+// once per i in a tight loop. SD9 only renders this for inspection; the
+// in-process byte-eq oracle goes through interpret_v2_multi.
+pub fn ag_extract_emit_fn_xy(arena: int, bwd_root: int, fn_name: string) -> string {
+    return "pub fn " + fn_name + "(x: float, y: float, dy: float) -> float {\n"
          + "    return " + ag_extract_emit_expr(arena, bwd_root) + "\n"
          + "}\n"
 }
@@ -1173,12 +1186,292 @@ pub fn ag_extract_multiuse_bwd_via_ast(arena: int, fwd_root: int, bwd_root: int,
     }
 }
 
+// ─── SD9: multi-input vjp primitive (one VJP per Param) ────────────────
+// SD9 closes the "multi-input" carve-out left open by SD7. The walker
+// already accepts `target_param_ix` (SD6's `ag_extract_reverse_walk_v2`
+// signature); SD5/SD6/SD7 only invoked it with ix=0 because each fwd
+// AST had a single Param. SD9 EXERCISES that parameter on a 2-input
+// fwd — `f(x, y) = x * y` — by invoking the walker TWICE (once per
+// target Param), producing TWO independent bwd ASTs that, when
+// interpreted under a 2-slot param-value vector, yield the two
+// gradients `df/dx = y` and `df/dy = x` (each scaled by the upstream
+// `dy`). This is one column of the Jacobian per call — the literal
+// reverse-mode "vector-Jacobian product (VJP)" primitive of Griewank
+// & Walther §3.2 Algorithm 3.6: for a scalar output, the VJP IS the
+// gradient; for an n-input function, calling the VJP n times (once
+// per Param-direction) recovers the full ∇f. Pearlmutter & Siskind
+// §3 frames the same as compositional reverse-mode where multiple
+// Params are independent leaves of the same recursion tree.
+//
+// What SD9 adds (additive only; SD5/6/7 surfaces untouched):
+//   - `ag_extract_build_bilinear_fwd(arena, cache_out) -> int` —
+//     hand-built fwd AST for `f(x, y) = x * y`. Param(0) = x, Param(1)
+//     = y; root is a BinOp_MUL. `cache_out[0] = root`, [1] = x_slot,
+//     [2] = y_slot, [3] reserved.
+//   - `ag_extract_eval_fwd_multi(arena, node, param_vals, fwd_cache)`
+//     — same shape as `ag_extract_eval_fwd` but reads each Param's
+//     scalar from `param_vals[param_ix]` instead of a single `x_val`.
+//     Used by the 2-input fwd to populate the cache (x at the x_slot,
+//     y at the y_slot, x*y at the root slot).
+//   - `ag_extract_interpret_v2_multi(arena, node, param_vals, dy_val,
+//     fwd_cache)` — same shape as `interpret_v2` but resolves Param
+//     leaves against `param_vals` rather than a single `x_val`. Each
+//     emitted bwd AST has at most one Var_Upstream (`dy`), so `dy_val`
+//     remains scalar — symmetric with SD5/6/7.
+//   - `ag_extract_bilinear_bwd_via_ast(arena, fwd_root, bwd_root,
+//     x_arr, y_arr, dy_arr, dx_out, len, fwd_cache)` — elementwise
+//     driver for ONE Param's gradient. Per i: build a 2-cell
+//     param_vals farr [x[i], y[i]], populate fwd_cache via
+//     eval_fwd_multi, then interpret the bwd AST via
+//     interpret_v2_multi. Same shape is used twice in the test —
+//     once with the x-target bwd_root (output goes into dx_out),
+//     once with the y-target bwd_root (output goes into dy_out).
+//     "Separate per-Param backward functions" (task brief §3 design
+//     choice): each invocation returns ONE Param's gradient; calling
+//     it n times recovers the full ∇f.
+//
+// Walker recursion proof (no walker edits needed — same proof shape
+// as SD7's multi-use): the walker's Param leaf rule returns
+//   if ix == target_param_ix { upstream_grad } else { Const(0.0) }
+// For `f(x, y) = x * y` with target_ix = 0:
+//   walk(MUL(Param(0), Param(1)), upstream=dy, target=0)
+//     ⇒ a_cached = Var_FwdResult(slot_of_Param(0))   = x_cached
+//     ⇒ b_cached = Var_FwdResult(slot_of_Param(1))   = y_cached
+//     ⇒ dc_b     = MUL(dy, b_cached)                 = MUL(dy, y_cached)
+//     ⇒ dc_a     = MUL(dy, a_cached)                 = MUL(dy, x_cached)
+//     ⇒ ga       = walk(Param(0), dc_b, target=0)    = dc_b   (ix matches)
+//     ⇒ gb       = walk(Param(1), dc_a, target=0)    = Const(0.0)  (ix differs)
+//     ⇒ root     = ADD(ga, gb)                       = ADD(MUL(dy, y_cached), Const(0.0))
+// Interpret_v2_multi yields `(dy * y) + 0.0` — IEEE-754 byte-equal to
+// the textbook `dy * y`? The hand-written reference adopts Option A
+// (mirror the walker's emit order verbatim): reference computes
+// `t1 = dy * y; t2 = 0.0; dx = t1 + t2` so the trajectory matches.
+// Symmetric for target_ix = 1 ⇒ ADD(Const(0.0), MUL(dy, x_cached)),
+// reference computes `t1 = 0.0; t2 = dy * x; dy_out = t1 + t2`.
+//
+// Honest scope (g3):
+//   IS  : a minimum-viable 2-Param walker exercise. One call per
+//         Param-direction; n calls for n inputs. Scalar upstream;
+//         scalar output gradient. Tree fwd AST (no DAG sharing of
+//         Param slots — each Param is its own arena node).
+//   IS  : verified by byte-eq vs hand-written manual references on a
+//         fixed-seed input (len=32) — F-RFC043-AUTOGRAD-AUTO-SD9-
+//         BILINEAR-BYTE-EQ. Both `df/dx` and `df/dy` gates measured
+//         simultaneously; one PASS verdict requires BOTH gates green.
+//   NOT : multi-output (Jacobian column-stack via repeated VJP would
+//         be required; SD9 stays scalar-output).
+//   NOT : true autograd over a hexa-lang `fn` (parser integration is
+//         still SD10's job; the bilinear fwd is hand-built).
+//   NOT : a per-Param accumulator dict pass (the alternative design
+//         where one walker traversal builds N bwd ASTs simultaneously
+//         via a Param→accumulator map). Separate per-Param walker
+//         calls is the simpler shape and is what SD9 ships.
+//   NOT : matmul / Sum / Compose / arbitrary tensor reductions —
+//         still SD10's rule-coverage cycle.
+//
+// Atlas anchor (g6 — same atlas entries as SD5/6/7; multi-input VJP
+// is the literal Algorithm 3.6 specialization to a scalar output):
+//   - Griewank & Walther §3.2 Algorithm 3.6: reverse-mode VJP
+//     u^T J = grad(u^T f); for u = 1 (scalar output) and
+//     target-direction i, the result is ∂f/∂x_i. Calling the
+//     algorithm once per i ∈ [0, n) recovers ∇f.
+//   - Pearlmutter & Siskind §3: each Param is an independent leaf of
+//     the recursion; the per-Param-index leaf rule (return upstream
+//     if matching, Const(0.0) otherwise) is the compositional
+//     identity for multi-input vjp.
+
+// ─── SD9 forward AST builder: f(x, y) = x * y ──────────────────────────
+// Hand-builds the bilinear fwd AST. Two distinct Param indices (0 and
+// 1), both wired into a single BinOp_MUL. Returns the root MUL slot.
+//
+// `cache_out` writes (mirror SD7 convention for caller introspection):
+//   cache_out[0] = root  (the MUL node — the f output)
+//   cache_out[1] = x_node (Param(0) slot)
+//   cache_out[2] = y_node (Param(1) slot)
+//   cache_out[3] = 0      (reserved)
+pub fn ag_extract_build_bilinear_fwd(arena: int, cache_out: int) -> int {
+    let x_node = ag_extract_mk_param(arena, 0)   // f's first param
+    let y_node = ag_extract_mk_param(arena, 1)   // f's second param
+    let root   = ag_extract_mk_binop_mul(arena, x_node, y_node)
+    t_set(cache_out, 0, to_float(root))
+    t_set(cache_out, 1, to_float(x_node))
+    t_set(cache_out, 2, to_float(y_node))
+    t_set(cache_out, 3, 0.0)
+    return root
+}
+
+// ─── SD9 fwd eval with param-vals vector ───────────────────────────────
+// `ag_extract_eval_fwd_multi(arena, node, param_vals, fwd_cache)` —
+// same shape as `ag_extract_eval_fwd` but resolves each Param leaf
+// against `param_vals[param_ix]` rather than a single x_val. Mirrors
+// every op branch of eval_fwd verbatim (so identical IEEE-754
+// trajectory for any single-Param sub-AST when param_vals[0] == x_val).
+pub fn ag_extract_eval_fwd_multi(arena: int, node: int, param_vals: int, fwd_cache: int) -> float {
+    let k = ag_extract_kind(arena, node)
+
+    if k == ag_extract_k_param() {
+        let ix = ag_extract_param_ix(arena, node)
+        let v = t_get(param_vals, ix)
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    if k == ag_extract_k_const() {
+        let v = ag_extract_const_value(arena, node)
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    if k == ag_extract_k_binop_add() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        let va = ag_extract_eval_fwd_multi(arena, a, param_vals, fwd_cache)
+        let vb = ag_extract_eval_fwd_multi(arena, b, param_vals, fwd_cache)
+        let v = va + vb
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    if k == ag_extract_k_binop_sub() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        let va = ag_extract_eval_fwd_multi(arena, a, param_vals, fwd_cache)
+        let vb = ag_extract_eval_fwd_multi(arena, b, param_vals, fwd_cache)
+        let v = va - vb
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    if k == ag_extract_k_binop_mul() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        let va = ag_extract_eval_fwd_multi(arena, a, param_vals, fwd_cache)
+        let vb = ag_extract_eval_fwd_multi(arena, b, param_vals, fwd_cache)
+        let v = va * vb
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    if k == ag_extract_k_binop_div() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        let va = ag_extract_eval_fwd_multi(arena, a, param_vals, fwd_cache)
+        let vb = ag_extract_eval_fwd_multi(arena, b, param_vals, fwd_cache)
+        let v = va / vb
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    if k == ag_extract_k_binop_neg() {
+        let a = ag_extract_child(arena, node, 0)
+        let va = ag_extract_eval_fwd_multi(arena, a, param_vals, fwd_cache)
+        let v = 0.0 - va
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    if k == ag_extract_k_call_dtexp() {
+        let a = ag_extract_child(arena, node, 0)
+        let va = ag_extract_eval_fwd_multi(arena, a, param_vals, fwd_cache)
+        let v = dt_exp(va)
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    return 0.0
+}
+
+// ─── SD9 bwd interpret with param-vals vector ──────────────────────────
+// `ag_extract_interpret_v2_multi(arena, node, param_vals, dy_val,
+//  fwd_cache)` — same shape as `interpret_v2` but resolves Param
+// leaves against the `param_vals` farr rather than a single x_val.
+// The upstream `dy_val` remains scalar (each emitted bwd AST has a
+// single Var_Upstream leaf — symmetric across all prior SDs).
+pub fn ag_extract_interpret_v2_multi(arena: int, node: int,
+                                      param_vals: int, dy_val: float,
+                                      fwd_cache: int) -> float {
+    let k = ag_extract_kind(arena, node)
+    if k == ag_extract_k_const() {
+        return ag_extract_const_value(arena, node)
+    }
+    if k == ag_extract_k_var_upstream() {
+        return dy_val
+    }
+    if k == ag_extract_k_param() {
+        let ix = ag_extract_param_ix(arena, node)
+        return t_get(param_vals, ix)
+    }
+    if k == ag_extract_k_var_fwdresult() {
+        let fid = ag_extract_fwdresult_id(arena, node)
+        return t_get(fwd_cache, fid)
+    }
+    if k == ag_extract_k_binop_add() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return ag_extract_interpret_v2_multi(arena, l, param_vals, dy_val, fwd_cache)
+             + ag_extract_interpret_v2_multi(arena, r, param_vals, dy_val, fwd_cache)
+    }
+    if k == ag_extract_k_binop_sub() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return ag_extract_interpret_v2_multi(arena, l, param_vals, dy_val, fwd_cache)
+             - ag_extract_interpret_v2_multi(arena, r, param_vals, dy_val, fwd_cache)
+    }
+    if k == ag_extract_k_binop_mul() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return ag_extract_interpret_v2_multi(arena, l, param_vals, dy_val, fwd_cache)
+             * ag_extract_interpret_v2_multi(arena, r, param_vals, dy_val, fwd_cache)
+    }
+    if k == ag_extract_k_binop_div() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return ag_extract_interpret_v2_multi(arena, l, param_vals, dy_val, fwd_cache)
+             / ag_extract_interpret_v2_multi(arena, r, param_vals, dy_val, fwd_cache)
+    }
+    if k == ag_extract_k_binop_neg() {
+        let l = ag_extract_child(arena, node, 0)
+        return 0.0 - ag_extract_interpret_v2_multi(arena, l, param_vals, dy_val, fwd_cache)
+    }
+    if k == ag_extract_k_call_dtexp() {
+        let l = ag_extract_child(arena, node, 0)
+        let av = ag_extract_interpret_v2_multi(arena, l, param_vals, dy_val, fwd_cache)
+        return dt_exp(av)
+    }
+    return 0.0
+}
+
+// ─── SD9 elementwise driver: bilinear bwd via AST (one Param dir) ──────
+// `ag_extract_bilinear_bwd_via_ast(arena, fwd_root, bwd_root, x_arr,
+//  y_arr, dy_arr, d_out, len, fwd_cache, param_vals)` — runs the
+// 2-input fwd + 1-Param bwd elementwise. `bwd_root` is a per-Param
+// bwd AST (produced by calling reverse_walk_v2 with target_param_ix
+// = 0 for the df/dx direction, or 1 for df/dy); `d_out` receives the
+// chosen Param's gradient. The caller supplies a reusable 2-cell
+// `param_vals` farr (overwritten each i: [x[i], y[i]]).
+//
+// Calling this twice (once per per-Param bwd_root) gets both
+// gradients — the "separate per-Param backward functions" shape
+// from task brief §3.
+pub fn ag_extract_bilinear_bwd_via_ast(arena: int, fwd_root: int, bwd_root: int,
+                                        x_arr: int, y_arr: int, dy_arr: int,
+                                        d_out: int, len: int,
+                                        fwd_cache: int, param_vals: int) {
+    let mut i = 0
+    while i < len {
+        let xi  = t_get(x_arr, i)
+        let yi  = t_get(y_arr, i)
+        let dyi = t_get(dy_arr, i)
+        // Populate param_vals farr for this i.
+        t_set(param_vals, 0, xi)
+        t_set(param_vals, 1, yi)
+        // Populate fwd_cache by evaluating fwd at (x_i, y_i).
+        let _ = ag_extract_eval_fwd_multi(arena, fwd_root, param_vals, fwd_cache)
+        // Interpret bwd AST against (param_vals, dy_i, fwd_cache).
+        let d_i = ag_extract_interpret_v2_multi(arena, bwd_root, param_vals, dyi, fwd_cache)
+        t_set(d_out, i, d_i)
+        i = i + 1
+    }
+}
+
 // ─── Future work (g3 carve-outs) ───────────────────────────────────────
 //
 // SD5 established the AST→walk→emit pipeline shape for ONE op (relu).
 // SD6 demonstrated GENERALIZATION to a SECOND op (sigmoid) via the
 // per-op rule table (ADD/SUB/MUL/DIV/NEG/dt_exp) + Var_FwdResult cache.
-// SD7 (this cycle) demonstrated MULTI-USE Param gradient accumulation
+// SD7 demonstrated MULTI-USE Param gradient accumulation
 // — the foundational autograd primitive — on `f(x) = x*x + dt_exp(x)`.
 // What SD7 PROVED: the walker's existing recursion structure (each
 // BinOp emits ADD combining its two child contributions) IS the
@@ -1186,6 +1479,11 @@ pub fn ag_extract_multiuse_bwd_via_ast(arena: int, fwd_root: int, bwd_root: int,
 // (Option A) so byte-eq holds. SD7 also proved the foundational point
 // that ANY non-trivial expression (with reused vars) flows through
 // this accumulator path — without it, no real-world model would work.
+// SD9 (this cycle) demonstrated MULTI-INPUT VJP — calling the walker
+// once per target Param recovers ∇f for `f(x, y) = x * y`. The
+// foundational claim: the `target_param_ix` parameter already in the
+// walker's signature suffices for n-input vjp; no walker edits needed,
+// only a param-vals-aware fwd-eval + bwd-interpret pair.
 //
 // To extend to true source-to-source AD over arbitrary hexa-lang
 // functions, the following structural blockers remain (each its own SD):
@@ -1196,16 +1494,7 @@ pub fn ag_extract_multiuse_bwd_via_ast(arena: int, fwd_root: int, bwd_root: int,
 //         which would expand stdlib/flame's transitive dep
 //         significantly. The right cycle is to expose a thin
 //         `parse_function_body(path, fn_name) -> Expr` surface that
-//         strips the parser-internal state. (Was numbered SD7 in the
-//         SD6 ledger — renumbered after SD7 closed the multi-use
-//         accumulation gap first; parser integration moves to SD8.)
-//
-//   SD9 — multi-input + multi-output. SD7's walker handles multi-USE
-//         of a SINGLE Param. True multi-INPUT (∂f/∂x, ∂f/∂y for
-//         f(x,y)) needs the walker to invoke once per target_param_ix
-//         OR maintain a per-Param accumulator dict in a single pass.
-//         Also generalizes the (x_val, dy_val) scalar pair to a
-//         param vector + output-grad vector.
+//         strips the parser-internal state.
 //
 //   SD10 — more reverse-mode rules. SD6 covers ADD/SUB/MUL/DIV/NEG +
 //          dt_exp; SD5 covers IfElse. Generic vjp coverage needs Sum
@@ -1220,6 +1509,15 @@ pub fn ag_extract_multiuse_bwd_via_ast(arena: int, fwd_root: int, bwd_root: int,
 //          A future cycle wires the emitted source through the
 //          compiler so it is actually loaded and called (closing
 //          the source-to-source loop).
+//
+//   SD12 — single-pass multi-input via per-Param accumulator dict.
+//          SD9 uses the simpler "n walker calls, one per Param"
+//          shape. An alternative is one walker traversal that
+//          maintains a Param→accumulator map, building all n bwd
+//          ASTs simultaneously. Equivalent VJP semantics; cheaper
+//          when n is large. Honest carve-out: not needed for the
+//          near-term flame use case (n ≤ a few hundred Params per
+//          layer; n walker calls suffices).
 //
 // Each future SD has its own falsifier registered before work
 // starts (per the scoping note §4 "each SD has its own falsifier
