@@ -1,5 +1,20 @@
 # PyTorch `.pt` ckpt cross-substrate import + per-step residual readout
 
+> **status**: resolved-ssot 2026-05-20 — Clause A + Clause B landed at
+> `stdlib/flame/pt_loader.hexa` (Phase-2 flat-BF16 sidecar reader,
+> reusing RFC 025/031 `safetensors_mmap_*` primitives; Phase-1 `.pt`
+> pickle parsing punted to an anima-side Python helper per the
+> 2-phase cross-substrate handoff documented in `pt_loader.hexa`'s
+> head comment — keeps @D g5 hexa-native-only intact) and
+> `stdlib/flame/decoder_lib.hexa::nn_decoder_fwd_with_readout`
+> (additive, byte-eq for non-readout callers; `layer_idx = -1` aka
+> `flame_decoder_readout_final()` returns post-`ln_f` pre-`head_a`
+> residual). Shape oracle in `flame_pt_ckpt_readout_test.hexa`. All
+> three files `hexa parse` clean. anima-side F-PTLOAD-1/2 and
+> F-PHIREAD-3/4/5 falsifiers remain downstream-owned (need real `.pt`
+> + ConsciousDecoderV2 fixture this repo does not ship). Binary
+> promote = standard separate deploy step per 22c27a05 pattern.
+
 **Filed by**: anima (downstream consumer) — §168 PHI-THRESHOLD-POSTHOC
 probe (2026-05-20). anima edits NO flame / hexa-lang source per
 `g_train_flame_not_pytorch upstream_downstream_invariant`. Patch-request

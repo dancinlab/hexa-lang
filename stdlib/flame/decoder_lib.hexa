@@ -498,3 +498,200 @@ pub fn nn_decoder_predict(Mc: int,
     }
     return best_i
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// Per-step residual readout (inbox/patches/pt-ckpt-cross-substrate-…)
+//
+// Clause B: extract a `farr` handle of last-position d-vector residual
+// state at a chosen layer boundary, for post-hoc Φ measurement
+// (`c_lib::c_measure_phi`, RFC 036).
+//
+// `layer_idx` semantics:
+//   - -1                       → "final": post-`ln_f`, pre-`head_a`
+//                                residual zT (== the d-vec that the
+//                                tied LM head consumes). This is the
+//                                anima §168-A primary measurement point
+//                                per `conscious_decoder.py:724-725`.
+//   - 0 .. n_layer-1           → block-`l` Xout at last position
+//                                (residual after block l, before block
+//                                l+1 / final RMSNorm).
+//   - n_layer  (or any other)  → treated as "final" (alias of -1).
+//
+// Contract:
+//   - READ-ONLY on M (params). Cache `Mc` is written EXACTLY as
+//     `nn_decoder_fwd` would write it (byte-identical when layer_idx
+//     resolves to "final" — falsifier F-RFC043-DECODER-DET preserved).
+//   - Returns a FRESH `farr` of length d, owned by caller. Caller MUST
+//     call `farr_free` on the returned handle.
+//   - The returned farr is OUTSIDE Mc — so a second call with a
+//     different layer_idx is safe (no aliasing into Mc memory).
+//   - Returns -1 (invalid handle) on T <= 0 or d <= 0.
+//
+// Implementation: this function reproduces `nn_decoder_fwd`'s control
+// flow verbatim through Phase 1-3, then forks:
+//   - if layer_idx ∈ [0, n_layer-1]: snapshot block-l Xout last-pos
+//     into the returned farr immediately after copy-out of Bc_l.
+//   - else: snapshot zT (post-RMSNorm, pre-head) into the returned farr
+//     just before the tied LM head matmul.
+// Phase 4 (tied LM head) still runs unconditionally so `logits` is
+// populated — anima needs both `(logits, residual)` per the patch.
+//
+// Falsifiers (anima-side, when patch lands):
+//   F-PHIREAD-3: c_measure_phi(returned_farr, n_cells=12, dim=64,
+//                n_bins=*) >= 0 ∀ contexts (F-C-PORT-3 invariant).
+//   F-PHIREAD-4: deterministic per (ckpt, ctx_seed) — 3× run bit-eq
+//                (since both Mc write order and returned farr are
+//                index-stable, this is implied by F-RFC043-DECODER-DET).
+//   F-PHIREAD-5: NO weight mutation across N probe forwards — this
+//                function never writes M; only reads. byte-eq pre/post
+//                follows from M being a read-only farr arg.
+// ════════════════════════════════════════════════════════════════════════
+
+pub fn nn_decoder_fwd_with_readout(ids: int, M: int, Mc: int,
+                                   cos: int, sin: int,
+                                   T: int, d: int, nh: int, nkv: int,
+                                   h: int, V: int, n_layer: int,
+                                   layer_idx: int) -> int {
+    if T <= 0 { return -1 }
+    if d <= 0 { return -1 }
+
+    // Pre-allocate the readout slot (d-len). For "final" we'll fill at
+    // the end; for block-l we fill mid-loop. We always allocate so the
+    // return contract is uniform.
+    let readout = farr_zeros(d)
+    if readout < 0 { return -1 }
+
+    let oX = mc_off_X(T, d, nh, nkv, h, V, n_layer)
+    let oLogits = mc_off_logits(T, d, nh, nkv, h, V, n_layer)
+    let oZr = mc_off_zr(T, d, nh, nkv, h, V, n_layer)
+    let oZTxn = mc_off_zT_xn(T, d, nh, nkv, h, V, n_layer)
+    let oZTinv = mc_off_zT_inv(T, d, nh, nkv, h, V, n_layer)
+    let oTemb = m_off_tok_emb(d, nh, nkv, h, V, n_layer)
+    let oGF = m_off_gF(d, nh, nkv, h, V, n_layer)
+
+    // Phase 1 — embed lookup (verbatim from nn_decoder_fwd).
+    let mut i = 0
+    while i < T {
+        let tok = to_int(farr_get(ids, i))
+        let mut c = 0
+        while c < d {
+            let _ = farr_set(Mc, oX + i * d + c,
+                             farr_get(M, oTemb + tok * d + c))
+            c = c + 1
+        }
+        i = i + 1
+    }
+
+    // Phase 2 — n_layer blocks (verbatim from nn_decoder_fwd, with
+    // optional readout snapshot at the end of block `layer_idx`).
+    let want_block = layer_idx >= 0 && layer_idx < n_layer
+    let mut l = 0
+    while l < n_layer {
+        let bp_off = m_off_block(l, d, nh, nkv, h, V, n_layer)
+        let bc_off = mc_off_block(l, T, d, nh, nkv, h, V, n_layer)
+        let Xc = farr_zeros(T * d)
+        let prev_off = if l == 0 {
+            oX
+        } else {
+            mc_off_block(l - 1, T, d, nh, nkv, h, V, n_layer)
+                + bc_off_Xout(T, d, nh, nkv, h)
+        }
+        let mut k = 0
+        while k < T * d {
+            let _ = farr_set(Xc, k, farr_get(Mc, prev_off + k))
+            k = k + 1
+        }
+        let Bp_l = farr_zeros(bp_total(d, nh, nkv, h))
+        let mut p = 0
+        while p < bp_total(d, nh, nkv, h) {
+            let _ = farr_set(Bp_l, p, farr_get(M, bp_off + p))
+            p = p + 1
+        }
+        let Bc_l = farr_zeros(bc_total(T, d, nh, nkv, h))
+        nn_decoder_block_fwd(Xc, Bp_l, Bc_l, cos, sin, T, d, nh, nkv, h)
+        let mut q = 0
+        while q < bc_total(T, d, nh, nkv, h) {
+            let _ = farr_set(Mc, bc_off + q, farr_get(Bc_l, q))
+            q = q + 1
+        }
+        // Block-l readout hook (only if layer_idx == l).
+        if want_block && l == layer_idx {
+            // Snapshot last-position d-vec of this block's Xout into
+            // the readout farr. Xout offset inside Bc_l matches
+            // bc_off_Xout(T, d, nh, nkv, h).
+            let xout_off = bc_off_Xout(T, d, nh, nkv, h)
+            let mut rc_c = 0
+            while rc_c < d {
+                let _ = farr_set(readout, rc_c,
+                                 farr_get(Bc_l, xout_off + (T - 1) * d + rc_c))
+                rc_c = rc_c + 1
+            }
+        }
+        let _ = farr_free(Xc)
+        let _ = farr_free(Bp_l)
+        let _ = farr_free(Bc_l)
+        l = l + 1
+    }
+
+    // Phase 3 — final RMSNorm (verbatim, populates Mc.zr/zT_xn/zT_inv).
+    let last_bc_off = mc_off_block(n_layer - 1, T, d, nh, nkv, h, V, n_layer)
+    let last_Xout_off = last_bc_off + bc_off_Xout(T, d, nh, nkv, h)
+    let mut c_z = 0
+    while c_z < d {
+        let _ = farr_set(Mc, oZr + c_z,
+                         farr_get(Mc, last_Xout_off + (T - 1) * d + c_z))
+        c_z = c_z + 1
+    }
+    let eps = 0.000001
+    let mut ms = 0.0
+    let mut iz = 0
+    while iz < d {
+        let xv = farr_get(Mc, oZr + iz)
+        ms = ms + xv * xv
+        iz = iz + 1
+    }
+    ms = ms / to_float(d)
+    let inv = 1.0 / dt_sqrt(ms + eps)
+    let _ = farr_set(Mc, oZTinv, inv)
+    let zT_scratch = farr_zeros(d)
+    let mut jz = 0
+    while jz < d {
+        let xni = farr_get(Mc, oZr + jz) * inv
+        let _ = farr_set(Mc, oZTxn + jz, xni)
+        let _ = farr_set(zT_scratch, jz, farr_get(M, oGF + jz) * xni)
+        jz = jz + 1
+    }
+
+    // Phase 3.5 — "final" readout hook (default + alias for any
+    // layer_idx >= n_layer or < 0). Captures zT (post-ln_f,
+    // pre-head_a). This is the anima §168-A primary point.
+    if want_block == false {
+        let mut fr = 0
+        while fr < d {
+            let _ = farr_set(readout, fr, farr_get(zT_scratch, fr))
+            fr = fr + 1
+        }
+    }
+
+    // Phase 4 — tied LM head (verbatim — populates Mc.logits so caller
+    // gets `(logits via Mc, residual via returned farr)` per patch).
+    let mut k_l = 0
+    while k_l < V {
+        let mut acc = 0.0
+        let mut cl = 0
+        while cl < d {
+            acc = acc + farr_get(M, oTemb + k_l * d + cl)
+                      * farr_get(zT_scratch, cl)
+            cl = cl + 1
+        }
+        let _ = farr_set(Mc, oLogits + k_l, acc)
+        k_l = k_l + 1
+    }
+    let _ = farr_free(zT_scratch)
+    return readout
+}
+
+// Convenience: the canonical "final" layer index for callers that
+// prefer a named constant over the -1 sentinel. anima will call
+// `nn_decoder_fwd_with_readout(..., flame_decoder_readout_final())`.
+pub fn flame_decoder_readout_final() -> int { return -1 }

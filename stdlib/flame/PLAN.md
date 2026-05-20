@@ -1969,3 +1969,36 @@ forge-route 확인 — 미측정 over-claim 0).
 안전. (copy_slice/transpose CPU-fallback 은 비차단 잔재로 별도 추적.)
 
 ### 2026-05-20 — flame spiking primitives status flip — patch md verified-closed against commit 4426d4e4 (anima §138 inbox loop closure).
+안전. (copy_slice/transpose CPU-fallback 은 비차단 잔차로 별도 추적.)
+
+### 2026-05-20 — pt-ckpt cross-substrate residual readout patch landed (Shape A)
+- `inbox/patches/pt-ckpt-cross-substrate-residual-readout.md` (anima §168
+  PHI-THRESHOLD-POSTHOC) resolved-ssot via additive surgical edits.
+- **Clause A** — new `stdlib/flame/pt_loader.hexa`
+  (`flame_load_flat_bf16_state_dict` + `flame_pt_loader_selftest` +
+  diag accessors). 2-phase cross-substrate handoff: Phase-1 `.pt` →
+  flat BF16 sidecar handled by anima-side Python script (punt
+  documented; pickle parser in hexa would be ~2k LoC of pure CPython
+  protocol replication, violates @D g5 hexa-native-only spirit); Phase-2
+  reads the flat sidecar via existing RFC 025/031 `safetensors_mmap_*`
+  primitives (mmap+BF16→F32 widen on offset-0 byte range — no new
+  runtime C surface required). MoE/PureFieldFFN/dual head_g skipped via
+  manifest-driven `skipped_keys` (Phase-1 side); hexa side just trusts
+  the manifest's `n_elem` against `m_total(d,nh,nkv,h,V,n_layer)`.
+- **Clause B** — `decoder_lib.hexa::nn_decoder_fwd_with_readout` added
+  (additive; existing `nn_decoder_fwd` byte-identical, F-RFC043-DECODER-*
+  invariants preserved). `layer_idx` semantics: `-1` (or any
+  `>= n_layer`) → "final" post-`ln_f` pre-`head_a` zT vector (anima's
+  primary §168-A measurement point per `conscious_decoder.py:724-725`);
+  `0..n_layer-1` → block-l Xout last-position d-vec. Returns a FRESH
+  caller-owned d-len `farr`; never aliases into Mc/M. Phase 4 (tied
+  LM head) still populates `Mc.logits` so caller gets `(logits, residual)`
+  per patch contract.
+- **In-repo gate**: `flame_pt_ckpt_readout_test.hexa` — shape-only
+  smoke (alloc handles distinct, `farr_len == d`, selftest rc=0).
+  Full F-PTLOAD-1/2 + F-PHIREAD-3/4/5 falsifiers are anima-side
+  (need real `.pt` + ConsciousDecoderV2 fixture not shipped here).
+- **Parse-gate**: all 3 edited files `hexa_real parse` clean.
+- **Binary promote**: deferred to standard deploy cycle per @D
+  g_commit_push_deploy + 22c27a05 pattern — NOT in this commit (per
+  @D g_inbox_processing_loop step-7 explicit exclusion).
