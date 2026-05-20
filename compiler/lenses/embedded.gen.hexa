@@ -760,31 +760,102 @@ pub fn lens_apply_invariant_stress_idempotence_break(view: AtlasView) -> array {
 }
 
 pub fn lens_apply_scale_extrapolate_n_to_2n(view: AtlasView) -> array {
-    // C-1.d — n-doubling raw-text scan. P raw contents that carry
-    // "n=6" hard-coded are candidates for n=12 (2n) extrapolation
-    // hypothesis: would the same relation hold at the doubled lattice?
-    // Aggregate count; specific extrapolations are Phase D body work.
+    // C-1.d strengthened — atlas-specific n=6 → 2n=12 OEIS-grounded
+    // extrapolation hypotheses. For each hexa primitive present in atlas,
+    // emit a named Candidate with the computed value at the doubled lattice.
     let n = len(view.p_nodes)
     if n == 0 { return empty_candidate_list() }
-    let mut doubling_targets = 0
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut tau_p = false
+    let mut j2_p = false
+    let mut mu_p = false
+    let mut sopfr_p = false
+    let mut m3_p = false
     let mut i = 0
     while i < n {
-        let raw = view.p_nodes[i].raw
-        if raw.index_of("n=6") >= 0 || raw.index_of("n = 6") >= 0 {
-            doubling_targets = doubling_targets + 1
-        }
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "tau" { tau_p = true }
+        if id == "J2" { j2_p = true }
+        if id == "mu" { mu_p = true }
+        if id == "sopfr" { sopfr_p = true }
+        if id == "M3" { m3_p = true }
         i = i + 1
     }
-    if doubling_targets == 0 { return empty_candidate_list() }
     let mut out: array = []
-    out.push(Candidate {
-        slug: "scale_extrapolate.n_to_2n.candidates",
-        family: "scale_extrapolate",
-        proposed: "atlas P kind: " + to_string(doubling_targets) + " of " + to_string(n) + " nodes contain 'n=6' raw — candidate pool for n=12 doubling extrapolation (would the same identity hold at the doubled lattice?).",
-        cite: ["n"],
-        fire_needed: false,
-        fire_estimate_usd: 0.0
-    })
+    if sigma_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_2n.sigma_at_12",
+            family: "scale_extrapolate",
+            proposed: "n→2n: sigma(6)=12 → sigma(12)=28 (divisors 1+2+3+4+6+12). Candidate atlas node sigma_12=28.",
+            cite: ["sigma", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if phi_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_2n.phi_at_12",
+            family: "scale_extrapolate",
+            proposed: "n→2n: phi(6)=2 → phi(12)=4 (Euler totient at doubled lattice). Candidate atlas node phi_12=4.",
+            cite: ["phi", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if tau_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_2n.tau_at_12",
+            family: "scale_extrapolate",
+            proposed: "n→2n: tau(6)=4 → tau(12)=6 (divisor count at doubled lattice). Candidate atlas node tau_12=6.",
+            cite: ["tau", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if j2_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_2n.j2_at_12",
+            family: "scale_extrapolate",
+            proposed: "n→2n: J2(6)=24 → J2(12)=96 (Jordan totient k=2; 12²·(1−1/4)·(1−1/9) = 96). Candidate atlas node J2_12=96.",
+            cite: ["J2", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if mu_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_2n.mu_at_12",
+            family: "scale_extrapolate",
+            proposed: "n→2n: mu(6)=1 → mu(12)=0 (Möbius vanishes at non-squarefree 12=2²·3). Candidate atlas node mu_12=0.",
+            cite: ["mu", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if sopfr_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_2n.sopfr_at_12",
+            family: "scale_extrapolate",
+            proposed: "n→2n: sopfr(6)=5 → sopfr(12)=7 (2+2+3=7 — sum of prime factors with multiplicity). Candidate atlas node sopfr_12=7.",
+            cite: ["sopfr", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if m3_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_2n.m_4",
+            family: "scale_extrapolate",
+            proposed: "n→2n analog: M3=mersenne(3)=7 → M4=mersenne(4)=15 (=2⁴−1; non-prime, breaks Mersenne primality chain). Candidate atlas node M4=15 (composite witness).",
+            cite: ["M3", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
     return out
 }
 pub fn lens_apply_scale_extrapolate_n_to_n_div_2(view: AtlasView) -> array {
