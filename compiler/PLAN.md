@@ -4147,23 +4147,219 @@ ABC now READS the lib (334 cells loaded) — that's progress over the pre-iter-1
 
 **Files** — extended only: `stdlib/kernels/logic_synth/liberty.hexa` (+226 / -96 LoC). No `self/`, no compiler binary promote (@D g_commit_push_deploy N/A — stdlib change, not compiler source). @D g5 (pure hexa-lang) · g6 (atlas @cite Liberty Reference Manual — preserved in CLEAN-ROOM provenance block) · g3 honest · g_stdlib_ownership · g_plan_consolidation. Companion `inbox/notes/2026-05-20-rfc006-liberty-streaming-oom-fix.md`.
 
-### 2026-05-20 — rfc_006 §5 absorption iter 12 (a) — multi-driver `connect` collapse · `idx` blocker REMOVED
 
-`stdlib/kernels/logic_synth/passes.hexa` (+147 LoC body + ~85 LoC T31/T32 selftest) + `stdlib/yosys/gate_record.hexa` (+9 LoC pipeline-wire). New `pass_clean_multidriver(d)` inserted between `pass_opt` and `pass_techmap_sky130`. Iter 11 (#173) closed the silent fall-through where non-constant RTLIL `connect (lhs, rhs)` rows lost their driver in BLIF (lhs auto-tied to constant 0 by ABC), but exposed the next layer: the read_verilog frontend unrolls `for(i=0;i<P;i=i+1) idx = (rr_ptr+i)%P;` inside `always @*` into P parallel `connect (idx, $rvexpr$N)` rows (5 in router_d4 / 7 in router_d6), and iter 11 dutifully emitted P `.names $rvexpr$N idx\n1 1\n` lines — ABC's `read_blif` rejected with `Line 52: Signal "idx" is defined more than once`.
+### 2026-05-20 — RFC 067 wmma instr-emit + RFC 068 P3 + RFC 069 wiring — codegen-side ALL CLOSED
 
-**Pre-iter-12-(a) BLIF diagnostic** (`/tmp/_hexa_yosys_gate_d4_in.blif`): 5 `.names $rvexpr$N idx` lines at lines 50/52/54/56/58 with RHSs `$rvexpr$26 / $28 / $30 / $32 / $34`. router_d6 BLIF: 7 multi-driver lines on `idx`.
+Three substantial cycles closing the remaining codegen-side prereqs
+identified in PR #161 Fire-decision #1. After this batch, ALL P1/P2/P3
++ codegen-instruction-emit + pipeline-wiring layers are LANDED for
+RFC 067/068/069. Only the P4 real-silicon GPU-fire falsifiers remain,
+gated on ubu-2 toolchain bootstrap.
 
-**Choice of pass site**: option **(B)** — a self-contained `pass_clean_multidriver` after `pass_opt`. Chosen over (A) editing `pass_proc` because the `rtlil.hexa::Module` connect_lhs/_rhs structure is two parallel `[str]` arrays with NO condition column — the priority-mux shape (`y = c1?a:(c2?b:d)`) is structurally unrecoverable from a connect-only IR at this layer. The condition data was lost upstream in `read_verilog`'s procedural→connect lowering. So no mux can be synthesised honestly; the only correct collapse is Verilog procedural-assign last-write-wins (IEEE 1800-2017 §10.4.2).
+PRs landed (admin-squash, branch deleted):
+- #175 — RFC 068 P3 body-emit (F-RFC068-BODY-MNEMONIC PASS)
+  • compiler/codegen/nvptx_target.hexa +27 lines: `_nvptx_binop_mnemonic`
+    extended with 9 new entries (3 ops × 3 dtypes — add/sub/mul ×
+    f16/bf16/f32). Real PTX `add.f16 %fh<d>, %fh<a>, %fh<b>;` (and
+    bf16/f32 + sub/mul siblings) now emit when source-level
+    `let t: f16 = a + b` lowers through P1/P2/P3 chain.
+  • compiler/codegen/nvptx_lower_test.hexa +34 lines: Case 22
+    `_test_body_mnemonic` (3 mnemonic substring asserts + stub-
+    fallthrough negative guard).
+  • lower_test 21/21 → 22/22.
+- #177 — RFC 067 wmma INSTR-EMIT (replaces scaffold stub comment)
+  • compiler/codegen/nvptx_target.hexa +85 lines:
+    `_nvptx_wmma_frag_tuple(id, count)` helper (emits curly-braced
+    8-element operand tuple). STMT_CALL gpu_wmma_* branch rewritten:
+    4 real PTX wmma mnemonics + per-op staging offsets (A=0, B=512,
+    D=1024). Replaces the scaffold-only comment-stub path landed in
+    PR #121.
+  • compiler/codegen/nvptx_lower_test.hexa +121 / -12 lines: Case 12
+    updated to assert real-emit (was scaffold-stub strings); new
+    Case 23 `_test_wmma_instr_emit` with broader 4-op verification
+    (4 mnemonics + 3 staging offsets + 4 frag-element refs + scaffold-
+    leak negative guard).
+  • lower_test 22/22 → 23/23.
+- #179 — RFC 069 codegen pipeline wiring + GEMM K-loop fixture
+  • compiler/codegen/nvptx_target.hexa +65 lines:
+    `_nvptx_codegen_read_unroll_factor()` reads
+    `HEXA_NVPTX_UNROLL_FACTOR` env (string-compare ladder factors
+    1..16 + 20/24/32). `_nvptx_codegen` invokes the env-reader, then
+    applies `_nvptx_unroll_pass(mf, factor)` per GPU MFunc when factor
+    >= 2. Composable with P1/P2/P3 matcher guarantees + nested-loop
+    detection.
+  • compiler/codegen/nvptx_lower_test.hexa +96 lines: Case 24
+    `_test_gemm_k_loop_wiring` with canonical 3-block GEMM K-loop MIR
+    fixture (header → body → header). Default-env asserts (passthrough
+    behavior preserved + matcher recognises shape + env-reader returns
+    1 default).
+  • lower_test 23/23 → 24/24.
+  • Env-toggle verification (manual smoke):
+    - Default env unset → 24/24 PASS (passthrough, byte-eq with #177).
+    - `HEXA_NVPTX_UNROLL_FACTOR=3` → Case 10 fails intentionally
+      (the wiring fires + double-applies on a fixture that already
+      passes factor explicitly — PROVES wiring is live).
 
-**Semantics**: group connect rows by LHS in list order; for each group of size > 1, keep ONLY the LAST connect; emit a `println` diagnostic naming the LHS, kept RHS, and dropped RHS list. Single-driver LHSs pass through untouched (regression-guarded by T32). Honest gap: per-iteration semantics of the source `for` loop are LOST — `idx` ends up driven by `i=P-1` only. The full reconstruction is a `read_verilog.hexa` Conn-with-cond change for a future iteration. This pass unblocks the §5 oracle from the ABC multi-driver rejection so further blockers become observable; it does NOT claim Yosys-equivalent synthesis correctness.
+Quality gates (all 3 PRs):
+- All modified files parse-clean (`hexa_real parse`).
+- CPU codegen byte-identical (F-RFC055-CPU-CODEGEN-UNTOUCHED preserved).
+- mir.hexa untouched.
+- @D g_commit_push_deploy — `self/codegen_c2.hexa` untouched across
+  all 3 PRs; no bootstrap regen required.
+- @D g3 — each commit body distinguishes "codegen-side closure"
+  (this batch) from "RFC closure" (each requires P4 GPU-fire,
+  separate cycle requiring ubu-2 toolchain bootstrap).
+- Regression: `nvptx_emit_test` + `nvptx_vec_add_test` +
+  `nvptx_gemm_test` all PASS after each landing.
 
-**Citations (@D g6 strict-lint stage 4)**: IEEE 1800-2017 §10.4.2 last-write-wins · Yosys `passes/proc/proc_mux.cc` (cited as the unreachable upstream alternative under the structural constraint) · BLIF spec §3 (UC Berkeley CAD group) for the ABC read_blif multi-driver rejection · ABC source `src/base/io/ioReadBlif.c::Io_ReadBlifNetwork`.
+Honest scope `@D g3`:
+- RFC 067 wmma instr-emit currently uses placeholder `_hexa_wmma_stage`
+  staging-slot reference (no per-fn suffix matching P2's per-fn slot
+  naming). Per-fn-name plumbing into `_nvptx_lower_stmt` is a small
+  follow-on Shape-A.
+- RFC 067 gpu_wmma_mma source-operand tuples are placeholders when
+  the upstream MIR doesn't attach A/B/C fragments. Real GEMM K-loop
+  integration that threads s.args fragments through is the P4 wiring
+  follow-on cycle.
+- RFC 068 P3 enables end-to-end f16/bf16/f32 source → PTX. Real
+  silicon execution + numeric-eq vs FP64 baseline (≤ 2× f16-ULP) is
+  P4 GPU-fire.
+- RFC 069 wiring is composable with all P1/P2/P3 guarantees; default
+  env passthrough preserves byte-eq for every existing fixture.
+  Env=N changes behavior (proving live wiring); real GEMM K-loop
+  fire on ubu-2 is P4.
 
-**Selftest 32/32 PASS**: T31 builds a 5-row `idx ← {r0..r4}` fixture and asserts (a) exactly 1 connect remains, (b) LHS is `idx`, (c) RHS is `r4` (last-write-wins), (d) one `[clean_multidriver]` diagnostic prints. T32 builds 3 single-driver connects `(y0,s0)(y1,s1)(y2,s2)` and asserts (a) all 3 preserved, (b) order preserved, (c) message reports `collapsed 0` (no warning). Sibling regression check: `passes 32/32` · `abc_map 7/7` · `rtlil 10/10` · `read_verilog 54/54` · `liberty 8/8` · `write_verilog 7/7` — zero regression.
+Cumulative §12 P4+ chain status (post-batch):
+- RFC 067: P1 (frag-vec) + P2 (.shared) + P3 (dtype-family) + INSTR-EMIT (real wmma)
+- RFC 068: P1 (precision tag) + P2 (opcode suffix) + P3 (body mnemonic)
+- RFC 069: P1 (factor=N) + P2 (multi-exit) + P3 (nested-preserve) + WIRING (env-gated)
 
-**§5 oracle outcome** (PATH=/opt/homebrew/bin:$PATH `gate_record.hexa`): d4 + d6 both clear `clean_multidriver` OK and reach `abc_map` with the `idx` multi-driver error GONE. ABC moves past the previous `Line 52` blocker. New blocker named: `Abc_SopCheck: SOP has a mismatch between its cover size (128) and its fanin number (1). NodeCheck: SOP check for node "$rvexpr$26$c$lutc1_net" has failed.` — this is a DIFFERENT layer (iter-7 `$mod`-LUT case-B `lutc1_net` constant-tie shape from `passes.hexa::_passes_lower_mod_case_b_lut` interacting with iter-10's `inv-of-helper-zero` driver pattern). NOT the multi-driver issue. d4 ABC stops at `$rvexpr$26$c$lutc1_net`; d6 stops at `$rvexpr$36$c$lutc1_net`. Diagnostic confirmed: post-fix BLIF has `grep -c "^.names" = 24` for d4 with every LHS appearing exactly once.
+ALL codegen-side cycles closed. P4 real-silicon fires (3 total)
+remain — gated on ubu-2 toolchain bootstrap (broken `hexa_real`
+symlink at `/Users/ghost/core/...` → Mac paths; requires fresh
+hexa_v2 build on Linux x86_64).
 
-**§5 verdict (g3 honest)**: §5 remains **OPEN**. The `idx` multi-driver block is **CLOSED** — measurable progression by one observable layer (the next ABC error is structurally different and lives in `passes.hexa` `_passes_lower_mod_case_b_lut` or `abc_map.hexa` constant-tie SOP shape, not in connect-multi-driver). NOT claiming "Yosys absorbed". NOT claiming areas match ±5% (mapped BLIF still not produced). Claiming: multi-driver is no longer the §5 blocker; the next iter (`$rvexpr$N$c$lutc1_net` SOP cover-size/fanin reconciliation) can take §5 forward.
+Cumulative today (full §12 P4+ arc 2026-05-20, 6 batches):
+- Batch 1 — Shape-A v2 surgical-port (#117 + #121 + #123 + #127). lower_test 9/9 → 13/13.
+- Batch 2 — Shape-B P0 RFC drafts (#138 + #140 + #141 + #143). RFC text only.
+- Batch 3 — P1 implementations (#147 + #148 + #150 + #151). lower_test 13/13 → 16/16.
+- Batch 4 — P2/P3 surgical (#155 + #156 + #159 + #160). lower_test 16/16 → 19/19.
+- Batch 5 — Fire-decision + parallel P2/P3 sub-agents (#161 + #170). lower_test 19/19 → 21/21.
+- Batch 6 — Substantial codegen-side (#175 + #177 + #179 + this closure). lower_test 21/21 → 24/24.
 
-**Files** — extended only: `stdlib/kernels/logic_synth/passes.hexa` (+232 LoC pass body + selftest) · `stdlib/yosys/gate_record.hexa` (+9 LoC pipeline wire). No `self/`, no compiler binary promote (@D g_commit_push_deploy N/A — stdlib change, not compiler source). @D g5 (pure hexa-lang) · g6 (atlas @cite IEEE 1800-2017 §10.4.2 + BLIF spec §3 + Yosys proc_mux + ABC ioReadBlif.c) · g3 honest · g_stdlib_ownership · g_plan_consolidation.
+Total today: **18 PRs** (11 implementation + 7 docs/closure). Per-batch
+average 3 PRs. **lower_test ratchet: 9 → 24 cases (+15, 2.67×).**
 
+Remaining for north-star ② (interpreter retired · self-host) — N/A
+(separate goal). RFC 067/068/069 closure requires P4 GPU fires only.
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md ·
+PR #161 Fire-decision #1 (next: ubu-2 toolchain bootstrap + 3 P4 fires)
+### 2026-05-20 — RFC 067 wmma instr-emit + RFC 068 P3 + RFC 069 wiring — codegen-side ALL CLOSED
+
+Three substantial cycles closing the remaining codegen-side prereqs
+identified in PR #161 Fire-decision #1. After this batch, ALL P1/P2/P3
++ codegen-instruction-emit + pipeline-wiring layers are LANDED for
+RFC 067/068/069. Only the P4 real-silicon GPU-fire falsifiers remain,
+gated on ubu-2 toolchain bootstrap.
+
+PRs landed (admin-squash, branch deleted):
+- #175 — RFC 068 P3 body-emit (F-RFC068-BODY-MNEMONIC PASS)
+  • compiler/codegen/nvptx_target.hexa +27 lines: `_nvptx_binop_mnemonic`
+    extended with 9 new entries (3 ops × 3 dtypes — add/sub/mul ×
+    f16/bf16/f32). Real PTX `add.f16 %fh<d>, %fh<a>, %fh<b>;` (and
+    bf16/f32 + sub/mul siblings) now emit when source-level
+    `let t: f16 = a + b` lowers through P1/P2/P3 chain.
+  • compiler/codegen/nvptx_lower_test.hexa +34 lines: Case 22
+    `_test_body_mnemonic` (3 mnemonic substring asserts + stub-
+    fallthrough negative guard).
+  • lower_test 21/21 → 22/22.
+- #177 — RFC 067 wmma INSTR-EMIT (replaces scaffold stub comment)
+  • compiler/codegen/nvptx_target.hexa +85 lines:
+    `_nvptx_wmma_frag_tuple(id, count)` helper (emits curly-braced
+    8-element operand tuple). STMT_CALL gpu_wmma_* branch rewritten:
+    4 real PTX wmma mnemonics + per-op staging offsets (A=0, B=512,
+    D=1024). Replaces the scaffold-only comment-stub path landed in
+    PR #121.
+  • compiler/codegen/nvptx_lower_test.hexa +121 / -12 lines: Case 12
+    updated to assert real-emit (was scaffold-stub strings); new
+    Case 23 `_test_wmma_instr_emit` with broader 4-op verification
+    (4 mnemonics + 3 staging offsets + 4 frag-element refs + scaffold-
+    leak negative guard).
+  • lower_test 22/22 → 23/23.
+- #179 — RFC 069 codegen pipeline wiring + GEMM K-loop fixture
+  • compiler/codegen/nvptx_target.hexa +65 lines:
+    `_nvptx_codegen_read_unroll_factor()` reads
+    `HEXA_NVPTX_UNROLL_FACTOR` env (string-compare ladder factors
+    1..16 + 20/24/32). `_nvptx_codegen` invokes the env-reader, then
+    applies `_nvptx_unroll_pass(mf, factor)` per GPU MFunc when factor
+    >= 2. Composable with P1/P2/P3 matcher guarantees + nested-loop
+    detection.
+  • compiler/codegen/nvptx_lower_test.hexa +96 lines: Case 24
+    `_test_gemm_k_loop_wiring` with canonical 3-block GEMM K-loop MIR
+    fixture (header → body → header). Default-env asserts (passthrough
+    behavior preserved + matcher recognises shape + env-reader returns
+    1 default).
+  • lower_test 23/23 → 24/24.
+  • Env-toggle verification (manual smoke):
+    - Default env unset → 24/24 PASS (passthrough, byte-eq with #177).
+    - `HEXA_NVPTX_UNROLL_FACTOR=3` → Case 10 fails intentionally
+      (the wiring fires + double-applies on a fixture that already
+      passes factor explicitly — PROVES wiring is live).
+
+Quality gates (all 3 PRs):
+- All modified files parse-clean (`hexa_real parse`).
+- CPU codegen byte-identical (F-RFC055-CPU-CODEGEN-UNTOUCHED preserved).
+- mir.hexa untouched.
+- @D g_commit_push_deploy — `self/codegen_c2.hexa` untouched across
+  all 3 PRs; no bootstrap regen required.
+- @D g3 — each commit body distinguishes "codegen-side closure"
+  (this batch) from "RFC closure" (each requires P4 GPU-fire,
+  separate cycle requiring ubu-2 toolchain bootstrap).
+- Regression: `nvptx_emit_test` + `nvptx_vec_add_test` +
+  `nvptx_gemm_test` all PASS after each landing.
+
+Honest scope `@D g3`:
+- RFC 067 wmma instr-emit currently uses placeholder `_hexa_wmma_stage`
+  staging-slot reference (no per-fn suffix matching P2's per-fn slot
+  naming). Per-fn-name plumbing into `_nvptx_lower_stmt` is a small
+  follow-on Shape-A.
+- RFC 067 gpu_wmma_mma source-operand tuples are placeholders when
+  the upstream MIR doesn't attach A/B/C fragments. Real GEMM K-loop
+  integration that threads s.args fragments through is the P4 wiring
+  follow-on cycle.
+- RFC 068 P3 enables end-to-end f16/bf16/f32 source → PTX. Real
+  silicon execution + numeric-eq vs FP64 baseline (≤ 2× f16-ULP) is
+  P4 GPU-fire.
+- RFC 069 wiring is composable with all P1/P2/P3 guarantees; default
+  env passthrough preserves byte-eq for every existing fixture.
+  Env=N changes behavior (proving live wiring); real GEMM K-loop
+  fire on ubu-2 is P4.
+
+Cumulative §12 P4+ chain status (post-batch):
+- RFC 067: P1 (frag-vec) + P2 (.shared) + P3 (dtype-family) + INSTR-EMIT (real wmma)
+- RFC 068: P1 (precision tag) + P2 (opcode suffix) + P3 (body mnemonic)
+- RFC 069: P1 (factor=N) + P2 (multi-exit) + P3 (nested-preserve) + WIRING (env-gated)
+
+ALL codegen-side cycles closed. P4 real-silicon fires (3 total)
+remain — gated on ubu-2 toolchain bootstrap (broken `hexa_real`
+symlink at `/Users/ghost/core/...` → Mac paths; requires fresh
+hexa_v2 build on Linux x86_64).
+
+Cumulative today (full §12 P4+ arc 2026-05-20, 6 batches):
+- Batch 1 — Shape-A v2 surgical-port (#117 + #121 + #123 + #127). lower_test 9/9 → 13/13.
+- Batch 2 — Shape-B P0 RFC drafts (#138 + #140 + #141 + #143). RFC text only.
+- Batch 3 — P1 implementations (#147 + #148 + #150 + #151). lower_test 13/13 → 16/16.
+- Batch 4 — P2/P3 surgical (#155 + #156 + #159 + #160). lower_test 16/16 → 19/19.
+- Batch 5 — Fire-decision + parallel P2/P3 sub-agents (#161 + #170). lower_test 19/19 → 21/21.
+- Batch 6 — Substantial codegen-side (#175 + #177 + #179 + this closure). lower_test 21/21 → 24/24.
+
+Total today: **18 PRs** (11 implementation + 7 docs/closure). Per-batch
+average 3 PRs. **lower_test ratchet: 9 → 24 cases (+15, 2.67×).**
+
+Remaining for north-star ② (interpreter retired · self-host) — N/A
+(separate goal). RFC 067/068/069 closure requires P4 GPU fires only.
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md ·
+PR #161 Fire-decision #1 (next: ubu-2 toolchain bootstrap + 3 P4 fires)
+>>>>>>> c9fb34ec (docs(compiler/PLAN): RFC 067 wmma-emit + RFC 068 P3 + RFC 069 wiring — codegen-side ALL CLOSED (closure entry))
