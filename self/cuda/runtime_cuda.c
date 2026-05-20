@@ -2996,6 +2996,115 @@ int _hx_cuda_farr_transpose_2d_gpu(int64_t src_id, int64_t soff,
     return 0;
 }
 
+/* ── flame spiking STDP pair-based GPU kernel ───────────────────────
+ * inbox/patches/flame-stdp-pair-gpu-kernel.md (anima LEGO arc §141).
+ * One thread per (i, j) weight cell on an N×N grid. Output bytes
+ * match the CPU oracle spiking_lib.hexa::flame_stdp_pair exactly —
+ * single-precision-free scalar fp64 arithmetic, no fma/__dmul_rn
+ * substitution, same (ltp - ltd) subtraction order, same diagonal
+ * passthrough + clip. F-STDP-GPU-1 / -2 / -3 are enforced by
+ * construction. F-STDP-GPU-4 (scale speedup) is a fire-time measure-
+ * ment gate, not a construction-time invariant. */
+__global__ void _hx_cuda_kern_stdp_pair(const double* __restrict__ W,
+                                        const double* __restrict__ tr_pre,
+                                        const double* __restrict__ tr_post,
+                                        const double* __restrict__ spike,
+                                        double* __restrict__ out,
+                                        int64_t n,
+                                        double A_plus, double A_minus,
+                                        double w_max) {
+    int64_t i = (int64_t)blockIdx.y * (int64_t)blockDim.y + (int64_t)threadIdx.y;
+    int64_t j = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
+    if (i >= n || j >= n) return;
+    int64_t idx = i * n + j;
+    double  w_ij = W[idx];
+    double  wd;
+    if (i == j) {
+        wd = w_ij;
+    } else {
+        /* IMPORTANT — fma-free byte-equality with the CPU oracle.
+         * nvcc auto-fuses `a*b + c` into __fma_rn by default; this would
+         * silently diverge from the CPU loop (single-precision-free fp64
+         * mul-then-add). Use __dmul_rn / __dadd_rn / __dsub_rn so each
+         * scalar op rounds at IEEE-754 round-to-nearest in isolation,
+         * matching the host scalar order in spiking_lib.hexa
+         * flame_stdp_pair exactly. See feedback memory
+         * flame_transcendental_byteeq_hazard.md mechanism (3). */
+        double s_i      = spike[i];
+        double trpost_i = tr_post[i];
+        double tmp1     = __dmul_rn(A_plus,  s_i);
+        double ltp      = __dmul_rn(tmp1,    tr_pre[j]);
+        double tmp2     = __dmul_rn(A_minus, trpost_i);
+        double ltd      = __dmul_rn(tmp2,    spike[j]);
+        double dlt      = __dsub_rn(ltp, ltd);
+        wd              = __dadd_rn(w_ij, dlt);
+    }
+    double neg_w_max = 0.0 - w_max;
+    if (wd > w_max)     wd = w_max;
+    if (wd < neg_w_max) wd = neg_w_max;
+    out[idx] = wd;
+}
+
+int _hx_cuda_farr_stdp_pair_gpu(int64_t W_id, int64_t tr_pre_id,
+                                int64_t tr_post_id, int64_t spike_id,
+                                int64_t out_id, int64_t n,
+                                double A_plus, double A_minus,
+                                double w_max) {
+    if (W_id < 0 || tr_pre_id < 0 || tr_post_id < 0 ||
+        spike_id < 0 || out_id < 0) {
+        fprintf(stderr, "[cuda] stdp_pair: bad ids\n");
+        return -1;
+    }
+    if (n <= 0) {
+        fprintf(stderr, "[cuda] stdp_pair: bad n=%lld\n", (long long)n);
+        return -1;
+    }
+    if (W_id      >= _hx_farr_count || tr_pre_id >= _hx_farr_count ||
+        tr_post_id>= _hx_farr_count || spike_id  >= _hx_farr_count ||
+        out_id    >= _hx_farr_count) {
+        fprintf(stderr, "[cuda] stdp_pair: id out of range\n");
+        return -1;
+    }
+    int64_t nn = n * n;
+    if (_hx_farr_table[W_id].len      < nn ||
+        _hx_farr_table[tr_pre_id].len < n  ||
+        _hx_farr_table[tr_post_id].len< n  ||
+        _hx_farr_table[spike_id].len  < n  ||
+        _hx_farr_table[out_id].len    < nn) {
+        fprintf(stderr, "[cuda] stdp_pair: host len mismatch\n");
+        return -1;
+    }
+    if (_h2d(W_id) != 0)       return -1;
+    if (_h2d(tr_pre_id) != 0)  return -1;
+    if (_h2d(tr_post_id) != 0) return -1;
+    if (_h2d(spike_id) != 0)   return -1;
+    if (_ensure_dev_buf(out_id, nn) != 0) return -1;
+    const double* W      = g_slots[W_id].d_buf;
+    const double* tr_pre = g_slots[tr_pre_id].d_buf;
+    const double* tr_post= g_slots[tr_post_id].d_buf;
+    const double* spike  = g_slots[spike_id].d_buf;
+    double*       out    = g_slots[out_id].d_buf;
+    /* 2D grid, 16×16 block — one thread per (i,j) cell. Cap each grid
+     * dim at 65535 (legacy CUDA 1-D grid ceiling we use elsewhere); at
+     * block=16 that covers N up to 16·65535 = 1,048,560 per dim, well
+     * past the LEGO arc target (N≤16k). */
+    int block_dim = 16;
+    int64_t need = (n + block_dim - 1) / block_dim;
+    int grid_dim = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));
+    dim3 block(block_dim, block_dim, 1);
+    dim3 grid(grid_dim, grid_dim, 1);
+    _hx_cuda_kern_stdp_pair<<<grid, block>>>(W, tr_pre, tr_post, spike,
+                                             out, n, A_plus, A_minus, w_max);
+    cudaError_t er = cudaGetLastError();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] stdp_pair launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(out_id, nn) != 0) return -1;
+    return 0;
+}
+
 
 #endif /* HEXA_CUDA — Agent #25 Phase B elementwise block (opened at line 944) */
 

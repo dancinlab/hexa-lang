@@ -2001,3 +2001,52 @@ forge-route 확인 — 미측정 over-claim 0).
 - **Binary promote**: deferred to standard deploy cycle per @D
   g_commit_push_deploy + 22c27a05 pattern — NOT in this commit (per
   @D g_inbox_processing_loop step-7 explicit exclusion).
+
+---
+
+### 2026-05-20 — flame spiking RFC: `flame_stdp_pair_gpu` device kernel (inbox/patches/flame-stdp-pair-gpu-kernel.md)
+
+anima LEGO arc §141 GPU follow-up to PR #77 의 CPU spiking primitives.
+spiking_lib.hexa 의 O(N²) `flame_stdp_pair` 의 outer-product 가중치
+업데이트를 2D-grid `__global__` 커널(`_hx_cuda_kern_stdp_pair`, 16×16
+block, one thread per (i,j) cell)로 dispatch — anima의 LEGO 대형-N
+(N=16k+) LIF fire 의 핵심 블로커 해제.
+
+**구조**: bare-wrapper seam 패턴 (`forge_dispatch_matmul` /
+`forge_dispatch_ffn_fp64_via_bf16` 와 동일) — bootstrap 재빌드 불필요.
+
+- `self/cuda/runtime_cuda.c` — `__global__ _hx_cuda_kern_stdp_pair` + launcher `_hx_cuda_farr_stdp_pair_gpu` (H2D inputs, ensure_dev_buf out, launch, D2H out — mk2-C5 패턴 그대로)
+- `self/runtime.c` — `hexa_forge_dispatch_stdp_pair` (CUDA → `_hx_cuda_farr_stdp_pair_gpu` / no-CUDA → byte-identical CPU oracle) + bare seam wrapper `forge_dispatch_stdp_pair`
+- `self/runtime.h` — 두 prototype 추가 (runtime.h-split seam)
+- `self/codegen_c2.hexa` — 8-arg builtin `forge_dispatch_stdp_pair` 등록 (새 `len(node.args) == 8` branch 추가)
+- `stdlib/flame/spiking_lib.hexa` — `pub fn flame_stdp_pair_gpu(W, tr_pre, tr_post, spike, A_plus, A_minus, w_max) -> int` 7-arg flame-facing wrapper. 안에서 `t_zeros(n*n)` out alloc + `forge_dispatch_stdp_pair` 호출.
+
+**측정 (ubu-2 RTX 5070, sm_80 PTX driver JIT, standalone .cu cheap oracle, cuda/12.0)**:
+- F-STDP-GPU-1 BYTE-EQUAL-VS-CPU: N=256 mismatch=0 max|Δ|=0.000e+00 · N=4096 mismatch=0 max|Δ|=0.000e+00 ✅
+- F-STDP-GPU-2 DIAGONAL-ZERO: PASS ✅
+- F-STDP-GPU-3 CLIP-BOUNDED: PASS ✅
+- F-STDP-GPU-4 SCALE-SPEEDUP @ N=4096: CPU 30.57 ms vs GPU 0.64 ms = **47.9× speedup** ✅
+
+**중요 lesson (재확인)**: 초기 plain `*`/`+` 커널은 N=256 에 mismatch=235 ·
+max|Δ|=1.110e-16 = 1 ULP 으로 FAIL. nvcc 가 `a*b + c` 를 `__fma_rn` 으로
+auto-fuse → CPU 의 single-precision-free fp64 mul-then-add 와 diverge.
+fix = `__dmul_rn` / `__dadd_rn` / `__dsub_rn` intrinsic 명시. memory
+`feedback_flame_transcendental_byteeq_hazard.md` mechanism (3) 의 재현이며
+mk2-C5 (`_hx_cuda_kern_silu_gate` 등) 가 이미 사용하던 패턴. GPU kernel
+byte-eq 작업은 무조건 fma-explicit-disable.
+
+**Binary promote 미수행** (per `g_inbox_processing_loop` step 7) — 본
+cycle 은 SSOT 갭 closure + cheap-oracle 측정 PASS 까지. 컴파일러 자체
+재빌드 + flame-side hexa build 검증은 standard separate deploy step
+(22c27a05/e5c4c0ef 패턴) 에서 진행.
+
+**잔여 (비차단, g3-honest)**:
+1. flame-side `hexa build stdlib/flame/spiking_lib.hexa` 의 compiled-path
+   end-to-end smoke 는 미수행 — 호스트가 no-CUDA macOS 이고 fire surface
+   는 cheap .cu oracle 에서 측정. CUDA-host (ubu-2) 측 hexa build 는
+   별도 cycle 에서 ubu-2 cross-compile 또는 deploy-step 회수.
+2. mk2-C5 의 `DEVICE_KEEP` register / device-residency state machine 과의
+   상호작용 (예: 다음 forge op 가 이 out farr 를 device 입력으로 받는
+   chain) 은 본 패치 범위 외 — 패치 명세는 "output is a new device
+   `farr`" 인데 본 wrapper 는 host-D2H 후 반환 (mk2-C5 `_d2h_out` 기본
+   경로). 후속 LEGO arc 에서 device-keep wiring 필요 시 별도 패치.

@@ -886,6 +886,29 @@ HexaVal forge_dispatch_ffn_fp64_via_bf16(HexaVal x_v, HexaVal w1_v,
                                          HexaVal m_v, HexaVal d_v,
                                          HexaVal fd_v);                 /* runtime.c — RFC 050 PERF seam */
 
+/* ── flame spiking STDP pair-based GPU dispatch wrapper ─────────────
+ * `forge_dispatch_stdp_pair(W, tr_pre, tr_post, spike, out,
+ *                           A_plus, A_minus, w_max)` — 8-arg builtin.
+ * Caller-allocated output (matches mk2-C5 silu_gate / rmsnorm_mh
+ * device-residency contract). On HEXA_CUDA: 2D-grid __global__ kernel
+ * `_hx_cuda_kern_stdp_pair`, one thread per (i, j) weight cell. On
+ * no-CUDA: byte-identical CPU oracle (mirrors spiking_lib.hexa
+ * flame_stdp_pair scalar order). Returns 0 on success, -1 on error.
+ * Same bare-symbol seam as forge_dispatch_matmul / _ffn above — the
+ * deployed hexa_v2 emits a literal forge_dispatch_stdp_pair(...) call,
+ * these prototypes resolve it to the runtime.c wrappers without a
+ * bootstrap rebuild. Body (SSOT): self/runtime.c + self/cuda/
+ * runtime_cuda.c. Patch SSOT:
+ *   inbox/patches/flame-stdp-pair-gpu-kernel.md (anima LEGO §141).  */
+HexaVal hexa_forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
+                                      HexaVal tr_post_v, HexaVal spike_v,
+                                      HexaVal out_v, HexaVal A_plus_v,
+                                      HexaVal A_minus_v, HexaVal w_max_v); /* runtime.c — flame STDP GPU */
+HexaVal forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
+                                 HexaVal tr_post_v, HexaVal spike_v,
+                                 HexaVal out_v, HexaVal A_plus_v,
+                                 HexaVal A_minus_v, HexaVal w_max_v);      /* runtime.c — flame STDP GPU seam */
+
 /* ── safetensors mmap-backed zero-copy load (RFC 025) ──────────────
  * codegen_c2.hexa lowers safetensors_mmap_* builtins to direct
  * `hexa_safetensors_mmap_*` calls (1-arg: open/header/data_offset/
