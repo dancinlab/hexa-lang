@@ -2980,6 +2980,51 @@ fn main() {
         }
     }
 
+    // T40 — synchronous reset via existing cond-mux (sub-step #4b
+    //       coverage verification): `if (rst) q <= 0 ; else q <= d ;`
+    //       posedge always → 1 $mux + 1 $dff. ABC tech-map lowers
+    //       the $mux+$dff combo to the target library's `dfrtp` (D
+    //       flip-flop with reset) cell on SKY130 — no $adff cell type
+    //       emission needed at read_verilog level.
+    total = total + 1
+    let _v40 = "module r1 ( input clk , input rst , input d , output reg q ) ; always @ ( posedge clk ) if ( rst ) q <= 0 ; else q <= d ; endmodule"
+    let _r40 = read_verilog(_v40)
+    if _r40.ok != 1 {
+        println("FAIL T40 reset_via_condmux: " + _r40.message); fails = fails + 1
+    } else {
+        let _m40 = _r40.design.modules[0]
+        if rtlil_count_cells_of_type(_m40, "$mux") != 1 {
+            println("FAIL T40a mux_count got " + str(rtlil_count_cells_of_type(_m40, "$mux")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m40, "$dff") != 1 {
+            println("FAIL T40b dff_count got " + str(rtlil_count_cells_of_type(_m40, "$dff")))
+            fails = fails + 1
+        }
+    }
+
+    // T41 — multi-LHS reset via existing with-else multi-LHS cond-mux:
+    //       `if (rst) begin q1 <= 0 ; q2 <= 0 ; end
+    //        else      begin q1 <= a ; q2 <= b ; end`
+    //       → 2 $mux + 2 $dff. (Same shape as T38, but framed as the
+    //       reset-style use case to verify sub-step #4b coverage.)
+    total = total + 1
+    let _v41 = "module r2 ( input clk , input rst , input a , input b , output reg q1 , output reg q2 ) ; always @ ( posedge clk ) if ( rst ) begin q1 <= 0 ; q2 <= 0 ; end else begin q1 <= a ; q2 <= b ; end endmodule"
+    let _r41 = read_verilog(_v41)
+    if _r41.ok != 1 {
+        println("FAIL T41 reset_multi_via_condmux: " + _r41.message); fails = fails + 1
+    } else {
+        let _m41 = _r41.design.modules[0]
+        if rtlil_count_cells_of_type(_m41, "$mux") != 2 {
+            println("FAIL T41a mux_count got " + str(rtlil_count_cells_of_type(_m41, "$mux")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m41, "$dff") != 2 {
+            println("FAIL T41b dff_count got " + str(rtlil_count_cells_of_type(_m41, "$dff")))
+            fails = fails + 1
+        }
+    }
+
     // T29 — body `reg [W-1:0] q;` with parameter-folded width.
     total = total + 1
     let _v29 = "module rg #( parameter W = 8 ) ( input clk ) ; reg [ W - 1 : 0 ] q ; endmodule"
