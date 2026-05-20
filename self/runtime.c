@@ -3399,7 +3399,8 @@ HexaVal hexa_array_unique(HexaVal arr) {
 #endif
 
 // rotate(k): k>0 shifts left (items[k] becomes new head); k<0 shifts right.
-// k is normalized mod len — matches interpreter at hexa_full.hexa:15486-15499.
+// k normalized mod len. Step-3 cycle 30 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_rotate(HexaVal arr, HexaVal kv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3413,6 +3414,23 @@ HexaVal hexa_array_rotate(HexaVal arr, HexaVal kv) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_rotate_float(HexaVal arr, HexaVal k);
+HexaVal hexa_array_rotate(HexaVal arr, HexaVal kv) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t n = HX_ARR_LEN(arr);
+    if (n == 0) return out;
+    int64_t k = HX_IS_INT(kv) ? HX_INT(kv) : (int64_t)__hx_to_double(kv);
+    if (_arr_all_float(arr)) return rt_array_rotate_float(arr, hexa_int(k));
+    k = k % n;
+    if (k < 0) k += n;
+    for (int64_t i = 0; i < n; i++) {
+        out = hexa_array_push(out, HX_ARR_ITEMS(arr)[(i + k) % n]);
+    }
+    return out;
+}
+#endif
 
 // partition(pred): returns [matching, non_matching] as a 2-element array.
 // Matches interpreter at hexa_full.hexa:15437-15449.

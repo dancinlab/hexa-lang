@@ -203,6 +203,22 @@ pub fn rt_array_drop_float(arr: [float], n: int) -> [float] {
     return out
 }
 
+// Step 3 cycle 30 — array rotate(k). k>0 shifts left, k<0 right.
+// k normalized mod n. Matches interpreter at hexa_full.hexa:15486-15499.
+pub fn rt_array_rotate_float(arr: [float], k: int) -> [float] {
+    let mut out: [float] = []
+    let n = len(arr)
+    if n == 0 { return out }
+    let mut kk = k % n
+    if kk < 0 { kk = kk + n }
+    let mut i = 0
+    while i < n {
+        out = out.push(arr[(i + kk) % n])
+        i = i + 1
+    }
+    return out
+}
+
 // Step 3 cycle 23 — array sum/product (float reduce). Identical dispatch
 // pattern as min/max — C wrapper checks _arr_all_float, mixed arrays stay
 // on the polymorphic C path. Empty sum → 0.0, empty product → 1.0 (mult
