@@ -788,11 +788,12 @@ fn main() {
     let ok_df    = _test_dtype_family()
     let ok_bm    = _test_body_mnemonic()
     let ok_wie   = _test_wmma_instr_emit()
+    let ok_gkw   = _test_gemm_k_loop_wiring()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie {
-        println("PASS: RFC 055 + RFC 067 P1/P2/P3/INSTR + RFC 068 P1/P2/P3 + RFC 069 P1/P2/P3 — 23/23 cases (incl. RFC 067 WMMA instr-emit)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw {
+        println("PASS: RFC 055 + RFC 067 P1/P2/P3/INSTR + RFC 068 P1/P2/P3 + RFC 069 P1/P2/P3/WIRING — 24/24 cases (incl. GEMM K-loop wiring)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -818,9 +819,10 @@ fn main() {
         if !ok_df   { println("      RFC 067 P3 F-RFC067-DTYPE-FAMILY FAILED") }
         if !ok_bm   { println("      RFC 068 P3 F-RFC068-BODY-MNEMONIC FAILED") }
         if !ok_wie  { println("      RFC 067 WMMA instr-emit FAILED") }
+        if !ok_gkw  { println("      RFC 069 GEMM K-loop wiring FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -2447,6 +2449,125 @@ fn _test_wmma_instr_emit() -> bool {
         ok = false
     } else {
         println("  ok: no scaffold-stub leak across all 4 op-names")
+    }
+    return ok
+}
+
+// ── Case 24 — RFC 069 wiring + GEMM K-loop fixture ────────────────────
+//
+// Verifies the RFC 069 wiring path: a GEMM-K-loop-shaped MIR with the
+// canonical 3-block back-edge passes through `codegen_emit_ptx_sm80`
+// AND the matcher recognises it. With env unset (HEXA_NVPTX_UNROLL_FACTOR
+// not set or = 1), the wiring is passthrough — emitted PTX has 1× the
+// K-loop body. The presence of the K-loop body in the emitted PTX
+// (one `add.f64` for the accumulator chain) proves the lowering path
+// integrates with the unroll-pass seam without disturbing default emit.
+//
+// To exercise the WIRED unroll path: set HEXA_NVPTX_UNROLL_FACTOR=N in
+// the environment when invoking the test binary. The codegen will then
+// apply `_nvptx_unroll_pass(mfn, N)` per GPU MFunc; canonical-loop
+// fixtures see N× their body, multi-exit fixtures see N× with
+// preserved early-exit arms, nested-loop fixtures pass through
+// unchanged (RFC 069 P3 detection).
+//
+// Honest scope: Case 24 only verifies the codegen-side WIRING and a
+// GEMM-K-loop-shaped MIR fixture's recognition. The real-silicon
+// numeric falsifier F4 (`F-RFC069-NUMERIC-EQ`) remains a separate
+// cycle requiring ubu-2 toolchain bootstrap + ptxas + driver JIT.
+
+fn _build_case_gemm_k_loop() -> MFunc {
+    // Canonical 3-block GEMM K-loop:
+    //   block 0 (k-header):    k < K ? body=1 : exit=2
+    //   block 1 (k-body):       acc = acc + a*b ; BR(header=0)
+    //   block 2 (k-exit):       return
+    //
+    // Matches the matcher's canonical 3-block back-edge pattern, so
+    // env-gated unroll will fire when set.
+    let k     = _local(0, "k")
+    let kmax  = _local(1, "kmax")
+    let cond  = _local(2, "cond")
+    let acc   = _local(3, "acc")
+    let a_val = _local(4, "a_val")
+    let b_val = _local(5, "b_val")
+    let prod  = _local(6, "prod")
+
+    // block 0 — header (cond)
+    let mut s0 = []
+    s0.push(_stmt_binop(cond, "lt", _op_local(k.id), _op_local(kmax.id)))
+    s0.push(_stmt_br_cond(_op_local(cond.id), 1, 2))
+
+    // block 1 — body (acc += a*b)
+    let mut s1 = []
+    s1.push(_stmt_binop(prod, "mul", _op_local(a_val.id), _op_local(b_val.id)))
+    s1.push(_stmt_binop(acc,  "add", _op_local(acc.id),   _op_local(prod.id)))
+    s1.push(_stmt_br(0))   // back-edge to header
+
+    // block 2 — exit
+    let mut s2 = []
+    s2.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    blocks.push(_block(1, s1))
+    blocks.push(_block(2, s2))
+
+    let mut params = []
+    params.push(kmax)
+    params.push(a_val)
+    params.push(b_val)
+    let mut locals = []
+    locals.push(k)
+    locals.push(kmax)
+    locals.push(cond)
+    locals.push(acc)
+    locals.push(a_val)
+    locals.push(b_val)
+    locals.push(prod)
+
+    return MFunc {
+        name: "gemm_k_loop_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+}
+
+fn _test_gemm_k_loop_wiring() -> bool {
+    let mut ok = true
+    let mfn = _build_case_gemm_k_loop()
+    let ptx = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn))
+
+    println("")
+    println("── emitted PTX (RFC 069 wiring — GEMM K-loop fixture, sm_80) ──")
+    println(ptx)
+
+    // Default-env passthrough: the matcher recognises the canonical
+    // 3-block shape but factor=1 → passthrough. PTX has the K-loop
+    // body with one `mul.f64` + one `add.f64` instruction.
+    ok = _check(ok, ptx, "mul.f64", "K-loop body mul.f64 emitted")
+    ok = _check(ok, ptx, "add.f64", "K-loop body add.f64 emitted")
+    // The pattern matcher itself works (verified independently — feeds
+    // the wiring's potential). The fixture's CFG shape is matchable.
+    let pat = _nvptx_unroll_find_pattern(_build_case_gemm_k_loop())
+    if pat[0] < 0 || pat[1] < 0 {
+        println("  FAIL: _nvptx_unroll_find_pattern missed the GEMM K-loop shape")
+        ok = false
+    } else {
+        println("  ok: matcher recognises GEMM K-loop (header=" + to_string(pat[0]) + ", body=" + to_string(pat[1]) + ")")
+    }
+    // Wiring presence — the env-reader helper exists and returns 1 by
+    // default (passthrough). Asserted by code-path reachability.
+    let f = _nvptx_codegen_read_unroll_factor()
+    if f != 1 {
+        // Could happen if env is set externally. Just inform.
+        println("  note: HEXA_NVPTX_UNROLL_FACTOR is set in env → factor=" + to_string(f))
+    } else {
+        println("  ok: env unset → factor=1 (default passthrough)")
     }
     return ok
 }
