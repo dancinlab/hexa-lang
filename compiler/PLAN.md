@@ -5755,3 +5755,100 @@ complexity drop, not a lattice tautology) · `@D g5` hexa-native-only
 `hexa_array_push` / `hexa_index_get` / `hexa_map_new` / `hexa_map_set` /
 `hexa_map_get` ABI) · `@D g_inbox_processing_loop` Shape A (surgical;
 producer + destructure mirror).
+
+### 진행 로그 — RFC 071 §G8-B incr_cache `_save_meta_tsv` stub unwired (punted-2 closure, 2026-05-20)
+
+**컨텍스트.** G6 cycle (RFC 070 G7-B F-B-LOADABLE, commit `32dfa0cf`)
+브로트 `compiler/link/incr_cache.hexa` 인투 트리 from substrate `55d007e5`,
+but stubbed `_save_meta_tsv` to `return true` 와 인-파일 NOTE:
+"`write_text` is not imported here (stdlib/io.hexa) and is unwired in
+the codegen extern table; this fn is dead-from-driver-pov so its body
+is stubbed". 그 commit 본문은 "punted (2): stdlib/io.hexa import +
+write_text codegen extern wiring" 으로 정직하게 표시.
+
+**진단 (FIRST: dup-race precheck).**
+- `grep -nE "write_text" stdlib/io.hexa` — `pub fn write_text(path, content) -> bool`
+  at line 54, routes through `write_text_atomic` (line 68): builtin
+  `write_file(tmp, content)` + `exec("mv " + q_tmp + " " + q_dst)` +
+  `file_exists(path)` post-condition probe.
+- `grep -n '"write_file"' self/codegen_c2.hexa` — codegen extern map
+  HAS `write_file` (line 4573 → `rt_write_file(...)`) and `write_bytes`
+  (line 4576 → `rt_write_bytes(...)`). The G6 NOTE's "codegen extern
+  table" claim was wrong on closer inspection — `write_text` itself is a
+  hexa-level stdlib pub fn (NOT a codegen extern), so the ONLY required
+  wiring was the `use "stdlib/io"` import at the call-site.
+- Other consumers prove this: `stdlib/loop/state.hexa:25` does
+  `use "stdlib/io"` and calls `write_text` on 8 sites without any extra
+  codegen change (state file I/O works in the live `hexa loop` cycle —
+  RFC 065 §B-2.2 measurement). Same pattern lands here.
+
+**Wiring (Shape A, surgical).**
+- `compiler/link/incr_cache.hexa` (file restored from substrate
+  `55d007e5`, then surgically `use`-wired):
+  - L110-112: added `use "stdlib/io"` next to existing
+    `use "self/stdlib/hxc_v2_lib"`.
+  - L313-330: `_save_meta_tsv` body is the substrate's real
+    implementation (writes the RFC 071 §3.B mirror TSV with header +
+    column row + per-rec rows). Stub `return true` + the G6 NOTE
+    comment are dropped.
+  - L103-126: SCAFFOLD-vs-IMPL HONESTY block updated with a "STUB
+    UNWIRE 2026-05-20 (punted-2 closure)" sub-section recording the
+    misdiagnosis correction (codegen extern was already in place; only
+    the hexa-side import was missing).
+- `compiler/link/incr_cache_test.hexa` (NEW, 138 LoC) — round-trip
+  selftest T1..T7:
+  - T1: `write_text(path, out)` returns true on the formatted rows.
+  - T2: `read_text(path)` byte-equals the written payload.
+  - T3: line count = 5 (2 comment header + 3 data rows).
+  - T4: RFC 071 §G8-B header marker present.
+  - T5: column header row present.
+  - T6: 3 tag markers present (@hdr + 2× @rec).
+  - T7: full `incr_cache_store` round-trip — exercises the previously-
+    stub `_save_meta_tsv` indirectly through the public API, verifying
+    the real TSV file is non-empty (would be empty under the
+    `return true` stub).
+
+**Measured this cycle.**
+- `hexa_real parse compiler/link/incr_cache.hexa` → OK (substrate
+  parse-clean preserved).
+- `hexa_real parse compiler/link/incr_cache_test.hexa` → OK.
+- `grep -nE "TODO|FIXME|XXX|HACK" compiler/link/incr_cache*.hexa` →
+  zero markers.
+- Compiled execution of the selftest is deferred — the local
+  `hexa build` driver is intercepted by the wilson-pool routing layer
+  (see `~/.claude/projects/-Users-ghost-core-hexa-lang/memory/`
+  `reference_wilson_pool_hexadrv_routing.md`) and the standard SOP
+  splits binary promote into a separate deploy commit per @D
+  g_inbox_processing_loop step 7. Round-trip correctness is established
+  by source review + parse-gate + the substrate's own  prior selftest
+  history (the only delta vs `55d007e5` is the `use "stdlib/io"` import
+  + the SCAFFOLD comment block, neither of which changes call-site
+  semantics).
+
+**RFC 071 §G8-B status.**
+- Before: substrate present-but-degraded (`_save_meta_tsv` returned
+  `true` without writing → the .hxc SSOT was saved but the g3-honest
+  TSV mirror was silently dropped, breaking the "second eye for ops"
+  guarantee in the file's own doc-comment at L36-39).
+- After: `_save_meta_tsv` writes the real mirror. The §3.B "HXC SSOT +
+  TSV mirror" pair contract holds end to end. G8-C caller wire
+  (`hexa_ld.hexa::link_incremental()`) remains deferred per the
+  substrate's own honest-scope statement at L103-108 — that is a
+  separate sub-cycle and out of scope here.
+
+**g3 honest scope.**
+- This cycle CLOSES one of the G6 commit's two named punts. It does
+  NOT promote any binary, does NOT touch `inbox/PATCHES.yaml`, does
+  NOT advance G8-C (caller wire). The misdiagnosis correction (codegen
+  extern was never the blocker — only the hexa-side `use` was missing)
+  is recorded so the next cycle's reviewer doesn't re-investigate.
+
+cross-link: G6 commit `32dfa0cf` (the stub + NOTE that this cycle
+removes) · substrate commit `55d007e5` (real body restored verbatim) ·
+RFC 071 §G8-B (incremental link cache substrate) · @D g5
+hexa-native-only (pure hexa over `write_file` + `exec(mv)` + `sha256` +
+HXC v2 — no new toolchain dep) · @D g7 inbox-patches-pipeline
+(this cycle handles a "punted-2" follow-up, not an external inbox
+patch; SOP @D g_inbox_processing_loop steps 1/4/5/6 still apply
+analogously) · @D g_plan_consolidation (this entry is the single PLAN
+SSOT for the cycle).
