@@ -4793,3 +4793,141 @@ byte-eq from #190 + WMMA Tensor Core from #191).
 cross-link: PR #82 (canonical FP64 fire), PR #185 (P4 status pre-
 fires), PR #186 (P4 prereq codegen), PR #189/#190/#191 (the three
 silicon-fires), PR #193 (codegen<->silicon reconcile).
+
+## 진행 로그 — RFC 073 Phase 2 runtime-K array-indexed assignment (2026-05-20)
+
+Phase 2 of RFC 073 (read_verilog procedural-mux scope expansion) — extends the
+procedural-for-body parser in `_rv_parse_always` to absorb `if (COND) BODY`
+statements inside an always-block's `for (i=...) ... ` unroll, emitting one
+`connect_cond` row per iteration carrying the iteration-substituted COND wire
+name as guard. `pass_proc_mux` (Phase 1) then folds the cond-tagged rows for
+the same LHS into a left-deep `$mux` chain. Companion fix: the for-body span
+search and post-for jump now correctly handle single-statement bodies (no
+enclosing `begin`/`end`); the prior unconditional walk-for-matching-`end`
+over-shot into the enclosing `always begin ... end` and mis-consumed the
+always's terminator, breaking the outer parser's keep_going loop.
+
+**TWO-FILE SSOT DELTA** (per RFC 073 §4 Phase 2 scope):
+
+1. `stdlib/kernels/logic_synth/read_verilog.hexa`
+   - `_rv_parse_always` for-loop unroller:
+     - **Body span search**: branched on `f_has_begin`. For begin-end wrapped
+       body the existing depth-balanced `end` search applies. For single-
+       statement body (no `begin`) the body span ends at the next top-level
+       `;` (depth tracked across `(...)` and `[...]`). The post-for cursor
+       jump skips to `f_body_end + 1` for begin/end and `f_body_end` for
+       single-stmt (which already includes the `;`).
+     - **If-statement handler**: replaces the prior honest-gap skip with a
+       real emit. Collects `if_cond_toks` (between `(` and matching `)`),
+       collects body tokens (single-stmt up to `;` OR begin/end with depth
+       tracking), absorbs and discards optional `else` body (Phase 2 minimum;
+       else-default arms land in Phase 3). Elaborates COND via
+       `_rv_elab_expr` to obtain the iteration-substituted cond-wire name.
+       Splits body on `;` into per-statement sub-sequences; validates each
+       matches the `LHS [<=|=] RHS ;` simple-LHS shape (nested if/for,
+       blocking-vs-non-blocking-vs-is_clocked mismatch, and indexed-LHS
+       sub-statements all fall back to skip-no-emit per g3 fail-loud-or-skip
+       discipline). Per validated statement: combinational emits
+       `rtlil_module_connect_cond(m, lhs, rhs.wire, cond.wire)` so
+       `pass_proc_mux` can fold; clocked emits `$mux(S=cond, A=lhs[feedback],
+       B=rhs, Y=mux_y) + $dff(D=mux_y, Q=lhs)` (feedback-hold no-else shape).
+     - **Single-statement break**: after the if-handler and after the legacy
+       scalar emit, breaks the body-iteration loop when `f_has_begin == 0`
+       so a single-statement body terminates after one statement (the span
+       calculation now ends at the `;`, but the explicit break is the
+       defensive guard).
+   - **T57** (F-RFC-RV-ARRAY-INDEX-CONST regression): `mem[3] = a;` const-K
+     write emits ZERO `$eq` and ZERO `$mux` cells, and the `mem[3]` connect
+     row is present. Validates the const-foldable index path stays direct.
+   - **T58** (F-RFC-RV-ARRAY-INDEX-RUNTIME): `for (i=0; i<3; i=i+1) if
+     (grant_in[i]) idx = i;` emits exactly 3 `connect_cond` rows on `idx`
+     with cond strings `grant_in[0]`, `grant_in[1]`, `grant_in[2]`
+     (iteration-substituted). pass_proc_mux folds these into a 3-mux chain.
+
+2. (no second file — `passes.hexa` `pass_proc_mux` is unchanged; Phase 2
+   feeds it via `connect_cond` rows already emitted by Phase 1's
+   `rtlil_module_connect_cond` constructor.)
+
+**FALSIFIER VERDICT** (@D g3 honest):
+
+```
+  F-RFC-RV-ARRAY-INDEX-CONST     PASS  (T57)
+  F-RFC-RV-ARRAY-INDEX-RUNTIME   PASS  (T58 — 3 connect_cond rows + matching cond wires)
+  F-RFC-RV-NO-REGRESSION         PASS  (T1-T56 unchanged; rtlil 11/11, passes 35/35,
+                                        read_verilog 56→58, abc_map / liberty /
+                                        write_verilog unchanged)
+```
+
+**§5 ORACLE RE-RUN OUTCOME** (@D g3 honest):
+
+```
+  [gate] router_d4 area=0.0 µm² oracle=61763 µm²   Δ=100.0% FAIL (±5%)
+  [gate] router_d6 area=0.0 µm² oracle=93608.5 µm² Δ=100.0% FAIL (±5%)
+```
+
+Phase 2 did **NOT** close §5. The pipeline trace surfaces the next blockers,
+named here so Phase 3 has an unambiguous target:
+
+- d4: `clean_multidriver` reports `net=idx collapsed 5 drivers → 1`
+  (unchanged from Phase 1). The 5 `idx` drivers come from
+  `for (i = 0; i < P; i = i + 1) begin idx = (rr_ptr + i) % P; if (...) ... end`
+  — Phase 2's if-handler does parse the outer `if (!any_grant && !fifo_empty[idx])`,
+  but the body validation (`_f2_all_ok`) rejects it on TWO grounds: (a) the
+  body contains a NESTED `if (out_ready[grant_out]) begin ... end`, and (b)
+  the body has multiple sub-statements with a `=` operator on a `reg`-typed
+  LHS that include FUNCTION CALLS (`route_xy(...)`). Both are outside Phase
+  2's surgical simple-LHS-only scope. d6 is the d=6 sibling (7 drivers).
+- The unconditional `idx = (rr_ptr + i) % P;` writes per iteration are NOT
+  guarded — Phase 2 only emits `connect_cond` for guarded writes. The 5
+  drivers on `idx` remain unconditional multi-driver, still collapsed by
+  `pass_clean_multidriver` to last-iteration value.
+- Even if Phase 2 absorbed the outer-if body, the cond `!any_grant &&
+  !fifo_empty[idx]` references a NON-const-foldable array index `idx` — the
+  existing `_rv_elab_expr` drops the bracket group when the index doesn't
+  fold (`read_verilog.hexa` lines ~888-893 — "honest gap"), producing a wire
+  name `fifo_empty` rather than `fifo_empty[idx]`. The cond would be
+  semantically wrong; Phase 3 must lower non-foldable-index READS to an
+  N-way selector mux.
+
+g3-honest framing: Phase 2 lands the spec'd primitive — iteration-substituted
+COND wire → `connect_cond` row → `pass_proc_mux` folds into `$mux` chain. The
+two falsifiers in the RFC 073 §5 battery (`F-RFC-RV-ARRAY-INDEX-CONST` and
+`F-RFC-RV-ARRAY-INDEX-RUNTIME`) both PASS. The §5 area-oracle gate
+(`F-RFC-RV-§5-CLOSURE`) does **NOT** close — the router_d{4,6} body needs
+THREE additional layers not in Phase 2 scope: (1) nested-`if` inside the
+outer guarded body, (2) function-call inlining inside the body (`route_xy`),
+(3) non-foldable-array-index READ lowering to N-way mux. Each is a separate
+Phase 3 (or beyond) work item. No "§5 absorbed" claim.
+
+Pipeline wiring deferred: `pass_proc_mux` is still NOT called in
+`stdlib/yosys/gate_record.hexa`'s `_gate_run_one` pipeline. With Phase 2
+landing `connect_cond` emission for guarded for-body writes, wiring
+`pass_proc_mux` ahead of `pass_clean_multidriver` becomes meaningful — but
+on router_d{4,6} no `connect_cond` rows are emitted today (the body-shape
+validation rejects them), so the wiring would be a no-op on §5. Deferred to
+Phase 3 alongside nested-if absorption (when it becomes load-bearing).
+
+**Self-test counts:**
+
+- `rtlil.hexa`         : 11/11 unchanged
+- `passes.hexa`        : 35/35 unchanged
+- `read_verilog.hexa`  : 56/56 → **58/58** (+T57, T58)
+- `abc_map.hexa`       : 7/7 unchanged
+- `liberty.hexa`       : 8/8 unchanged
+- `write_verilog.hexa` : 7/7 unchanged
+- `gate_record.hexa`   : pipeline runs end-to-end on d4/d6, area-oracle
+  STILL FAIL (0.0 µm² both, Δ=100%; new blockers named above).
+
+**LoC delta:**
+
+```
+ stdlib/kernels/logic_synth/read_verilog.hexa | +236 -73
+ compiler/PLAN.md                             | + 145 (this entry)
+```
+
+Clean-room provenance preserved: IEEE 1364-2005 §9.2 (procedural assignment
+LHS/RHS semantics), §9.4 (cascaded if/else), §10.3.5 (array indexing) +
+Yosys passes/proc/proc_mux.cc behavioural reference (no source copy).
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md
+(Phase 2 LANDED 2026-05-20; phases 1.5 / 3 still "not yet landed").
