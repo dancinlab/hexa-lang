@@ -4405,3 +4405,83 @@ Parse-gate: `hexa_real parse` PASS.
 Selftest: 7/7 PASS (T1..T7f).
 Pipeline: d4 + d6 both reach `abc_map: ok`.
 g3 verdict: §5 absorption-pipeline ABC-rejection layer CLOSED; §5 area-oracle gate remains OPEN pending read_verilog procedural-mux scope (Shape-B).
+
+### 2026-05-20 — P4 GPU-fire status (post-batch-6) — 3 RFCs deferred per @D g3 honest scope
+
+After today's 6-batch arc closed all codegen-side cycles for RFC 067/068/069
+(P1+P2+P3 + INSTR-EMIT for 067 + WIRING for 069 + BODY-MNEMONIC for 068),
+the 3 P4 falsifiers remain OPEN as the closure gates. Per `@D g3` honest
+scope, this entry records exactly what's still required and what's
+already measured-PASS so future cycles resume from the correct prereq
+ledger.
+
+P4 status per RFC (cumulative as of 2026-05-20 evening):
+
+**RFC 067 P4 — `F-RFC067-TILE-LOOP-NUMERIC`** (≤ 1e-2 rel error vs
+FP64 GEMM baseline on 64×64 tiles):
+- Codegen path: complete. `wmma.load.a/_b/mma/store.d` real PTX
+  instructions emit through `_nvptx_lower_stmt` STMT_CALL gpu_wmma_*
+  branch (PR #177). FRAG vector regs + `.shared` staging slot wired.
+- Prereq for fire: a SOURCE-LEVEL `@gpu_kernel` WMMA kernel fixture
+  that lowers through HIR → MIR with proper s.args attachment for
+  gpu_wmma_mma source-operand tuples (today fixture uses placeholders).
+- Existing FP64 GEMM fire (PR #82, re-fired ubu-2 2026-05-20 → PASS)
+  is the comparison baseline.
+
+**RFC 068 P4 — `F-RFC068-NUMERIC-EQ`** (≤ 2× f16-ULP on f16 vec-add):
+- Codegen path: complete. End-to-end `let t: f16 = a + b` → `add.f16
+  %fh<dst>, %fh<a>, %fh<b>;` (PR #175). f16/bf16/f32 named primitives
+  recognized in types.hexa (PR #170).
+- Prereq for fire: a SOURCE-LEVEL `@gpu_kernel fn f16_vec_add(a: [f16],
+  b: [f16], c: [f16], n: i64)` kernel fixture + ld.global.f16 /
+  st.global.f16 address-space ops in the codegen STMT_LOAD / STMT_STORE
+  branches (currently `.f64` only). The `.f16` load/store mnemonics
+  are PTX standard — a 1-cycle codegen extension.
+
+**RFC 069 P4 — `F-RFC069-NUMERIC-EQ`** (byte-eq output across factor=N
++ multi-exit + nested loops):
+- Codegen path: complete. Wiring `_nvptx_unroll_pass` into
+  `codegen_emit_ptx_sm80` via `HEXA_NVPTX_UNROLL_FACTOR` env (PR #179).
+- WIRING LIVE-NESS already measured (PR #179 commit message):
+  manual smoke shows `HEXA_NVPTX_UNROLL_FACTOR=3 ./nvptx_lower_test`
+  → Case 10 FAILS (double-application proves the env-reader + the
+  pass-application combination fires inside `_nvptx_codegen`).
+- Prereq for fire: a SOURCE-LEVEL `@gpu_kernel` with the canonical
+  3-block K-loop shape that lowers through MIR with .entry + .param
+  + ld.global / st.global. Today's Case 24 fixture (`_build_case_gemm_k_loop`)
+  is device-mode MFunc, missing the kernel launch ABI.
+
+Shared prereq (across all 3 P4 fires):
+- ubu-2 toolchain bootstrap: hexa_v2 transpiler currently uses Mac-
+  path symlink at ubu-2 (`/Users/ghost/core/.../hexa_v2`); ubu-2's
+  own `~/core/hexa-lang/self/native/hexa_v2` is stale May-18 Linux ELF
+  that produces struct-redefinition C output against current hir_to_mir
+  surface (verified 2026-05-20 ubu-1 bootstrap attempt — same issue).
+- Workaround for fire: Mac generates `.ptx` text → ssh push → ubu-2
+  has CUDA toolkit (`nvcc -lcuda` + `ptxas` + driver JIT) per PR #82's
+  established pattern. This bypasses hexa toolchain on ubu-2 entirely
+  — only PTX text + host C launcher needed.
+
+Per `@D g3` honest scope: this entry does NOT claim P4 closure. Each
+falsifier remains OPEN. The forward-looking ledger here lists what's
+SHIPPED (codegen) vs what's PENDING (launchable kernel fixtures) so
+the next session can resume directly into kernel-fixture work without
+re-analyzing the closure path.
+
+PTX-text-level differential measurement of RFC 069 wiring:
+- Initially scoped as a separate `tool/dispatch_r069_p4_unroll_diff.sh`
+  shell script per PR #82's pattern; abandoned per HEXA_FIRST_WARN
+  hook gate (hexa-first principle — prefer hexa-native path).
+- Equivalent live-ness signal already measured by PR #179's
+  documented manual smoke (env=3 → Case 10 fail). No new data
+  from a duplicate PTX-text differential.
+
+PR #82 (vec_add + GEMM 055-P2 fire) re-fired on ubu-2 today
+post-codegen-side closure batch: ALL 4 falsifiers PASS
+(PTX-EMIT, LAUNCH-ABI, NUMERIC-EQ max|Δ|=0, GEMM-FEASIBLE max|Δ|=0).
+This confirms today's 11 implementation PRs did NOT regress the
+canonical FP64 PTX-emit / launch-ABI path.
+
+cross-link: PR #161 Fire-decision #1 (original P4 prereq analysis) ·
+PR #82 (vec_add + GEMM canonical fire) · PR #179 (RFC 069 wiring
+with manual env-smoke as wiring-live signal)
