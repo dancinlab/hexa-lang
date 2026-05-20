@@ -859,3 +859,16 @@ For each Tier-A sub-phase:
   1,140,456 B (+80 B)
 - step-2 cumulative: **19 / ~47 helpers C-wrappers ported** (~40%) via
   9 hexa fns (ctype: 2, math: 5, thread: 2)
+
+### 2026-05-21 — step 2 cycle 4: net/exec/pty (17 fns via 2 hexa primitives)
+
+- ✅ 17 net/exec/pty stubs ported via `rt_net_fail` (returns -1) +
+  `rt_net_zero` (returns 0 for inet_pton invalid input). Same dead-
+  strip consolidation as cycle 3
+- Bonus cleanup: `unlink()` call in self/native/net.c (AF_UNIX socket
+  bind path) was reintroducing `_unlink` extern; replaced with no-op
+  comment (compiler doesn't open AF_UNIX sockets — dead code path)
+- aprime_cc smoke exit(42) PASS · 5 externs preserved · binary
+  1,140,808 B
+- step-2 cumulative: **36 / ~47 C wrappers ported = ~77%**, via 11
+  hexa primitives (ctype:2 + math:5 + thread:2 + net:2)

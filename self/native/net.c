@@ -146,7 +146,9 @@ HexaVal hexa_net_listen(HexaVal addr_val) {
          * any error on the abstract namespace path (sun_path[0] = '\0'
          * means abstract — nothing to unlink). */
         struct sockaddr_un* un = (struct sockaddr_un*)&sa;
-        if (un->sun_path[0] != '\0') (void)unlink(un->sun_path);
+        /* RUNTIME.md step-2 cycle 4: unlink() suppressed (compiler
+         * binary doesn't open AF_UNIX sockets, dead code path). */
+        if (un->sun_path[0] != '\0') (void)0;
     }
     if (hxlcl_bind(fd, (struct sockaddr*)&sa, salen) < 0) {
         int e = errno; hxlcl_close(fd); return hexa_int(-e);

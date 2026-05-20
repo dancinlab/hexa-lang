@@ -964,57 +964,25 @@ static int __attribute__((noinline)) hxlcl_task_info(unsigned int target, unsign
 // network connections or spawn child processes during compile.
 // All return -1 (error) so any unreachable call branches to error
 // handling. errno not set (hxlcl_errno stays 0).
-static int __attribute__((noinline)) hxlcl_socket(int d, int t, int p) {
-    (void)d; (void)t; (void)p; return -1;
-}
-static int __attribute__((noinline)) hxlcl_bind(int s, const void *addr, unsigned int len) {
-    (void)s; (void)addr; (void)len; return -1;
-}
-static int __attribute__((noinline)) hxlcl_listen(int s, int backlog) {
-    (void)s; (void)backlog; return -1;
-}
-static int __attribute__((noinline)) hxlcl_accept(int s, void *addr, unsigned int *len) {
-    (void)s; (void)addr; (void)len; return -1;
-}
-static int __attribute__((noinline)) hxlcl_connect(int s, const void *addr, unsigned int len) {
-    (void)s; (void)addr; (void)len; return -1;
-}
-static long __attribute__((noinline)) hxlcl_recv(int s, void *b, unsigned long n, int f) {
-    (void)s; (void)b; (void)n; (void)f; return -1;
-}
-static long __attribute__((noinline)) hxlcl_send(int s, const void *b, unsigned long n, int f) {
-    (void)s; (void)b; (void)n; (void)f; return -1;
-}
-static long __attribute__((noinline)) hxlcl_recvmsg(int s, void *m, int f) {
-    (void)s; (void)m; (void)f; return -1;
-}
-static long __attribute__((noinline)) hxlcl_sendmsg(int s, const void *m, int f) {
-    (void)s; (void)m; (void)f; return -1;
-}
-static int __attribute__((noinline)) hxlcl_inet_pton(int af, const char *src, void *dst) {
-    (void)af; (void)src; (void)dst; return 0;  // invalid
-}
-static int __attribute__((noinline)) hxlcl_execl(const char *path, const char *arg, ...) {
-    (void)path; (void)arg; return -1;
-}
-static int __attribute__((noinline)) hxlcl_execve(const char *path, char *const argv[], char *const envp[]) {
-    (void)path; (void)argv; (void)envp; return -1;
-}
-static int __attribute__((noinline)) hxlcl_execvp(const char *file, char *const argv[]) {
-    (void)file; (void)argv; return -1;
-}
-static void *__attribute__((noinline)) hxlcl_popen(const char *cmd, const char *mode) {
-    (void)cmd; (void)mode; return (void *)0;
-}
-static int __attribute__((noinline)) hxlcl_pclose(void *stream) {
-    (void)stream; return -1;
-}
-static int __attribute__((noinline)) hxlcl_forkpty(int *amaster, char *name, void *termp, void *winp) {
-    (void)amaster; (void)name; (void)termp; (void)winp; return -1;
-}
-static int __attribute__((noinline)) hxlcl_posix_openpt(int flags) {
-    (void)flags; return -1;
-}
+// RUNTIME.md step-2 cycle 4 — net/exec/pty stubs MOVED to
+// stdlib/runtime/net.hexa. Forward decls only; bodies after include.
+static int hxlcl_socket(int d, int t, int p);
+static int hxlcl_bind(int s, const void *addr, unsigned int len);
+static int hxlcl_listen(int s, int backlog);
+static int hxlcl_accept(int s, void *addr, unsigned int *len);
+static int hxlcl_connect(int s, const void *addr, unsigned int len);
+static long hxlcl_recv(int s, void *b, unsigned long n, int f);
+static long hxlcl_send(int s, const void *b, unsigned long n, int f);
+static long hxlcl_recvmsg(int s, void *m, int f);
+static long hxlcl_sendmsg(int s, const void *m, int f);
+static int hxlcl_inet_pton(int af, const char *src, void *dst);
+static int hxlcl_execl(const char *path, const char *arg, ...);
+static int hxlcl_execve(const char *path, char *const argv[], char *const envp[]);
+static int hxlcl_execvp(const char *file, char *const argv[]);
+static void *hxlcl_popen(const char *cmd, const char *mode);
+static int hxlcl_pclose(void *stream);
+static int hxlcl_forkpty(int *amaster, char *name, void *termp, void *winp);
+static int hxlcl_posix_openpt(int flags);
 
 // Textual override of any residual libc references in subsequent code
 // (runtime_core.c + HI tier + transpile output). The helper bodies
@@ -1250,6 +1218,67 @@ static int hxlcl_pthread_join(void *thread, void **retval) {
     (void)thread;
     if (retval) *retval = (void *)0;
     return (int)HX_INT(rt_pthread_noop());
+}
+
+// RUNTIME.md step-2 cycle 4 — net/exec/pty delegation via single
+// rt_net_fail (-1) + rt_net_zero (0 for inet_pton invalid).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
+HexaVal rt_net_fail(void) { return hexa_int(-1); }
+HexaVal rt_net_zero(void) { return hexa_int(0); }
+#else
+extern HexaVal rt_net_fail(void);
+extern HexaVal rt_net_zero(void);
+#endif
+static int hxlcl_socket(int d, int t, int p) {
+    (void)d; (void)t; (void)p; return (int)HX_INT(rt_net_fail());
+}
+static int hxlcl_bind(int s, const void *addr, unsigned int len) {
+    (void)s; (void)addr; (void)len; return (int)HX_INT(rt_net_fail());
+}
+static int hxlcl_listen(int s, int backlog) {
+    (void)s; (void)backlog; return (int)HX_INT(rt_net_fail());
+}
+static int hxlcl_accept(int s, void *addr, unsigned int *len) {
+    (void)s; (void)addr; (void)len; return (int)HX_INT(rt_net_fail());
+}
+static int hxlcl_connect(int s, const void *addr, unsigned int len) {
+    (void)s; (void)addr; (void)len; return (int)HX_INT(rt_net_fail());
+}
+static long hxlcl_recv(int s, void *b, unsigned long n, int f) {
+    (void)s; (void)b; (void)n; (void)f; return (long)HX_INT(rt_net_fail());
+}
+static long hxlcl_send(int s, const void *b, unsigned long n, int f) {
+    (void)s; (void)b; (void)n; (void)f; return (long)HX_INT(rt_net_fail());
+}
+static long hxlcl_recvmsg(int s, void *m, int f) {
+    (void)s; (void)m; (void)f; return (long)HX_INT(rt_net_fail());
+}
+static long hxlcl_sendmsg(int s, const void *m, int f) {
+    (void)s; (void)m; (void)f; return (long)HX_INT(rt_net_fail());
+}
+static int hxlcl_inet_pton(int af, const char *src, void *dst) {
+    (void)af; (void)src; (void)dst; return (int)HX_INT(rt_net_zero());
+}
+static int hxlcl_execl(const char *path, const char *arg, ...) {
+    (void)path; (void)arg; return (int)HX_INT(rt_net_fail());
+}
+static int hxlcl_execve(const char *path, char *const argv[], char *const envp[]) {
+    (void)path; (void)argv; (void)envp; return (int)HX_INT(rt_net_fail());
+}
+static int hxlcl_execvp(const char *file, char *const argv[]) {
+    (void)file; (void)argv; return (int)HX_INT(rt_net_fail());
+}
+static void *hxlcl_popen(const char *cmd, const char *mode) {
+    (void)cmd; (void)mode; (void)rt_net_fail(); return (void *)0;
+}
+static int hxlcl_pclose(void *stream) {
+    (void)stream; return (int)HX_INT(rt_net_fail());
+}
+static int hxlcl_forkpty(int *amaster, char *name, void *termp, void *winp) {
+    (void)amaster; (void)name; (void)termp; (void)winp; return (int)HX_INT(rt_net_fail());
+}
+static int hxlcl_posix_openpt(int flags) {
+    (void)flags; return (int)HX_INT(rt_net_fail());
 }
 
 // ── Extern FFI: dlopen / dlsym / dispatch ───────────────
