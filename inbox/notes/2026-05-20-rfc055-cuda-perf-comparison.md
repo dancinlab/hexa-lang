@@ -1,5 +1,7 @@
 # RFC 055 — hexa-emit vs nvcc -O3 CUDA perf comparison (cheap oracle)
 
+> **TRIAGED 2026-05-20**: closure note acknowledged · no action required (PR #102 landed; PTX-diff perf oracle documented)
+
 ## TL;DR
 
 For the RFC 055 §6.6 FP64-arithmetic subset, hexa-emit PTX and nvcc-O3

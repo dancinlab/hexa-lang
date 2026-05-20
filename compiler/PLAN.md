@@ -4490,3 +4490,36 @@ in this cycle (no behaviour change). inbox/PATCHES.yaml untouched.
 Cross-link: @D g_inbox_processing_loop SOP (Shape A close-only branch
 for already-landed proposals); @D g_atlas_binary_builtin (no atlas
 touch — pure inbox triage).
+## 진행 로그 — inbox/notes bulk-triage 2026-05-20 (9 notes, FYI/closure pass)
+
+9 inbox/notes FYI/closure 노트에 TRIAGED 2026-05-20 마커를 일괄 추가
+(per @D g_inbox_processing_loop bulk-triage 변형, SSOT-only edit, binary
+promote 미포함, inbox/PATCHES.yaml 미터치):
+
+- 2026-05-19-hexa-arch-rfc006-yosys-handoff.md → handoff (item ②는
+  commit `97e6c9db` 가 처리; §5 absorption iters PR #145/#149/#158/#166
+  downstream landed)
+- 2026-05-19-yosys-rfc006-bodies-landed.md → closure (next-pickup
+  #1 read_verilog scope LANDED PR #115; §5 gate iters merged)
+- 2026-05-20-rfc055-cuda-perf-comparison.md → closure (PR #102 PTX-diff
+  perf oracle)
+- 2026-05-20-rfc055-cycle-closure.md → closure (5 enumerated items
+  resolved-ssot; 055-P3c follow-on)
+- 2026-05-20-rfc055-final-closure.md → closure (RFC 055 SPEC + correctness
+  contract CLOSED via 11 PRs #82/#85/#87/#90-92/#94/#96-99)
+- 2026-05-20-rfc055-p3c-deploy-cycle.md → closure (P3c.d via PR #99;
+  P3c.e UX polish reclassified)
+- 2026-05-20-rfc055-p4-followon-cycles.md → closure (3 v2 re-ports
+  #117/#121/#123 landed)
+- 2026-05-20-rfc055-p4-followons-v2-closure.md → closure (admin-merged;
+  named follow-on follow-ons deferred to RFC 067-069 drafts)
+- phanes-stdlib-net-os-thread-concurrency-roadmap-62.md → closure
+  (option (a) `socket_set_nonblock` + `socket_select` landed 2026-05-19
+  stdlib/net/socket.hexa; options b/c downstream-demand-driven)
+
+분류 요약: handoff×1 (이미 처리), closure×8. **actionable 신규 work 0**
+— 모든 항목이 자기 status 에 `resolved-ssot` 또는 `closure` 명시. 다음
+dispatch 후보 없음. RFC 055 본체는 이미 CLOSED (SPEC + 11 PR + falsifier
+6/6); 잔여는 UX polish(downstream-demand-driven) 와 named follow-on
+follow-ons (RFC 067-069 drafted).
+

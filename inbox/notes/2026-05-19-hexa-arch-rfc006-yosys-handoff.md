@@ -1,5 +1,7 @@
 # hexa-arch → hexa-lang handoff: rfc_006 Yosys §4 + booksim push + seam context
 
+> **TRIAGED 2026-05-20**: handoff item ② processed in commit `97e6c9db` (`docs(inbox): rfc_006 yosys §4 rtlil handoff — already-landed no-op cycle`); §5 absorption iter PRs #145 / #149 / #158 / #166 also landed downstream
+
 **Date:** 2026-05-19
 **Source repo:** `~/core/hexa-arch/` (commit `c98a3af`, main, pushed)
 **Target repo:** `~/core/hexa-lang/` (branch `rfc043-hexa-torch`)
