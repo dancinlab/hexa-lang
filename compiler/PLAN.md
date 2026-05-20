@@ -6785,3 +6785,77 @@ crash 의 진짜 trigger 는 직전 frame 의 **truncate** 호출이었음.
 교훈: stack trace 의 leaf frame 이 cause 가 아닐 수 있다. 항상
 upstream frame 들도 함께 점검. `nm` 으로 undef symbol 검사가 더
 직접적 진단.
+
+
+### 2026-05-20 — follow-up cycle 36: instrument-first memory profile (peak VM 85 GB blocker IDENTIFIED)
+
+cycle 35 truncate fix 후 OOM 이 SIGBUS 와 다른 클래스로 노출됨.
+정공법: `/usr/bin/time -l` 로 RSS + peak VM 측정. 두 경로 비교.
+
+**측정 — same input (10.6 MB compiler/main.hexa flatten), same host (M3
+Pro 24 GB RAM, macOS 26.5 jetsam armed)**:
+
+| metric | aprime_cc (C/clang -O1) | hexac (asm path) |
+|---|---|---|
+| real | 112 s ✅ PASS | 136 s+ → SIGKILL (jetsam) |
+| user | 76 s | 52 s |
+| sys | 2.6 s | **23 s — 9× syscall** |
+| max RSS | 3.91 GB | 3.77 GB |
+| **peak VM footprint** | **5.80 GB** | **85.4 GB — 14× explosion** |
+| voluntary ctx-sw | n/a | 145,973 |
+| involuntary ctx-sw | n/a | 271,375 (heavy memory pressure) |
+
+System physical RAM 25.77 GB. hexac peak VM 85 GB = **3.3× physical**
+→ heavy swap thrash → macOS jetsam kills hexac (largest process).
+
+**Root cause (hypothesis)**:
+
+hexac (asm path) virtually allocates 14× more than aprime_cc (C path
++ clang -O1) for the SAME input. RSS is similar (~3.8 GB) but virtual
+memory peak diverges massively, suggesting many mmap'd but mostly-
+unfaulted regions. Likely candidates:
+
+1. **Per-fn arena reservation** — runtime allocates a large mmap for
+   each function compilation arena. C path's `clang -O1` may inline /
+   reuse these; asm path emits literal arena-init calls per fn → each
+   reserves a huge VM region.
+2. **Module-global growable arrays** (`_lr_blocks`, `_lr_bindings`,
+   etc.) — if each push triggers an over-eager realloc (doubling +
+   slack), heavy LIR construction explodes VM.
+3. **No memory release between passes** — lower_hir → hir_to_mir →
+   regalloc → codegen all keep their intermediate buffers; asm path
+   may not free aggressively while C path's compiler optimizes
+   reuse.
+
+**Honest finding (g3)**:
+
+cycle 36 = pure measurement cycle. NO source change. The data shows:
+
+- ✅ SIGBUS fully closed by cycle 35 (medium falsifier 1.7 MB PASS)
+- ✅ Memory regime quantified (85 GB peak VM)
+- ❌ Root cause hypothesis NOT yet narrowed to a specific allocator
+  call site
+- ⏸ Fix requires `vmmap` / `heap` / `sample` tooling to identify the
+  blowup site, then a targeted source patch — likely 1-3 cycle
+  equivalent surgical fix to either pre-shrink mmap reservations or
+  release intermediate arenas between passes
+
+**S3 fixpoint full closure status**:
+
+- gen1.s (aprime_cc on flat): 10,653,922 B
+  md5 64b1085e940a9f55fe012b583e03b25d ✅
+- gen2.s (hexac on flat): BLOCKED on 85 GB peak VM jetsam-kill
+- Medium-scale fixpoint (131-line .hexa → 1.7 MB .s via hexac): PASS ✅
+  — first ever hexa-native compiler output for a real corpus member
+- **Cycle 36 closes the diagnostic side; cycle 37+ closes the fix
+  side via vmmap-driven instrumentation**
+
+**RFC 063 phasing**: 36 cycles · 18 falsifier + 5 measure · S3
+SIGBUS chain fully closed (cycle 35) + memory regime quantified
+(cycle 36) · S3 full closure 1 step removed (vmmap fix).
+
+**Resource roster**: campaign Mac (M3 Pro 24 GB) — host's jetsam is
+the immediate blocker. Larger RAM host (none in current roster)
+would let hexac complete the 85-GB run as a baseline measurement.
+
+**cc --regen / binary promote**: 미수행. cycle 36 = pure measurement.
