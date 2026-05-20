@@ -712,3 +712,16 @@ For each Tier-A sub-phase:
   added for completeness — they were already inlined by clang
 - Tier-A.5 acceptance per RUNTIME.md was `≤ 5 libm symbols` — now
   measured **0 libm externs in aprime_cc** (target exceeded)
+
+### 2026-05-21 — pthread batch (cycle 60)
+
+- ✅ cycle 60 — pthread 12 fns CLOSED. aprime_cc nm undefined externs
+  64 → **52** (−12 · cumulative **137 → 52 = −85 = 62%**) · smoke
+  exit(42) PASS · binary 1,143,944 B
+- Closed: `_pthread_mutex_{init,destroy,lock,unlock}` ·
+  `_pthread_cond_{init,destroy,signal,broadcast,wait,timedwait}` ·
+  `_pthread_create` · `_pthread_join`
+- All noop stubs returning 0 = success. pthread_create runs
+  start_routine synchronously (single-threaded fallback). aprime_cc
+  is single-threaded compile-then-exit; thread/channel runtime in
+  self/native/thread.c linked but unreachable

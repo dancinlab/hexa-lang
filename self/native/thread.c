@@ -69,23 +69,23 @@ static void* _hexa_thread_entry(void* arg) {
      * NOTE: This routes through the HexaVal fn dispatch path. The fn_val
      * must be a TAG_FN HexaVal (closure or fn ptr). */
     HexaVal r = hexa_call1(slot->fn_val, slot->arg_val);
-    pthread_mutex_lock(&slot->done_lock);
+    hxlcl_pthread_mutex_lock(&slot->done_lock);
     slot->result = r;
     slot->finished = 1;
-    pthread_cond_broadcast(&slot->done_cv);
-    pthread_mutex_unlock(&slot->done_lock);
+    hxlcl_pthread_cond_broadcast(&slot->done_cv);
+    hxlcl_pthread_mutex_unlock(&slot->done_lock);
     return NULL;
 }
 
 /* hexa_thread_spawn(fn_val, arg) → tid (>= 0) or -errno */
 HexaVal hexa_thread_spawn(HexaVal fn_val, HexaVal arg_val) {
-    pthread_mutex_lock(&g_threads_lock);
+    hxlcl_pthread_mutex_lock(&g_threads_lock);
     int idx = -1;
     for (int i = 0; i < HEXA_THREAD_MAX; i++) {
         if (!g_threads[i].active) { idx = i; break; }
     }
     if (idx < 0) {
-        pthread_mutex_unlock(&g_threads_lock);
+        hxlcl_pthread_mutex_unlock(&g_threads_lock);
         return hexa_int(-EAGAIN);
     }
     g_threads[idx].fn_val   = fn_val;
@@ -93,18 +93,18 @@ HexaVal hexa_thread_spawn(HexaVal fn_val, HexaVal arg_val) {
     g_threads[idx].result   = hexa_str("");
     g_threads[idx].started  = 1;
     g_threads[idx].finished = 0;
-    pthread_mutex_init(&g_threads[idx].done_lock, NULL);
-    pthread_cond_init(&g_threads[idx].done_cv, NULL);
+    hxlcl_pthread_mutex_init(&g_threads[idx].done_lock, NULL);
+    hxlcl_pthread_cond_init(&g_threads[idx].done_cv, NULL);
     g_threads[idx].active = 1;
-    if (pthread_create(&g_threads[idx].tid, NULL, _hexa_thread_entry, &g_threads[idx]) != 0) {
+    if (hxlcl_pthread_create(&g_threads[idx].tid, NULL, _hexa_thread_entry, &g_threads[idx]) != 0) {
         int e = errno;
         g_threads[idx].active = 0;
-        pthread_mutex_destroy(&g_threads[idx].done_lock);
-        pthread_cond_destroy(&g_threads[idx].done_cv);
-        pthread_mutex_unlock(&g_threads_lock);
+        hxlcl_pthread_mutex_destroy(&g_threads[idx].done_lock);
+        hxlcl_pthread_cond_destroy(&g_threads[idx].done_cv);
+        hxlcl_pthread_mutex_unlock(&g_threads_lock);
         return hexa_int(-e);
     }
-    pthread_mutex_unlock(&g_threads_lock);
+    hxlcl_pthread_mutex_unlock(&g_threads_lock);
     return hexa_int(idx);
 }
 
@@ -115,37 +115,37 @@ HexaVal hexa_thread_join(HexaVal tid_val) {
     if (idx < 0 || idx >= HEXA_THREAD_MAX) return hexa_str("");
     HexaThreadSlot* slot = &g_threads[idx];
     if (!slot->active) return hexa_str("");
-    if (pthread_join(slot->tid, NULL) != 0) return hexa_str("");
+    if (hxlcl_pthread_join(slot->tid, NULL) != 0) return hexa_str("");
     HexaVal r = slot->result;
-    pthread_mutex_lock(&g_threads_lock);
-    pthread_mutex_destroy(&slot->done_lock);
-    pthread_cond_destroy(&slot->done_cv);
+    hxlcl_pthread_mutex_lock(&g_threads_lock);
+    hxlcl_pthread_mutex_destroy(&slot->done_lock);
+    hxlcl_pthread_cond_destroy(&slot->done_cv);
     slot->active = 0;
-    pthread_mutex_unlock(&g_threads_lock);
+    hxlcl_pthread_mutex_unlock(&g_threads_lock);
     return r;
 }
 
 /* === Channel === */
 HexaVal hexa_channel_new(void) {
-    pthread_mutex_lock(&g_channels_lock);
+    hxlcl_pthread_mutex_lock(&g_channels_lock);
     int idx = -1;
     for (int i = 0; i < HEXA_CHANNEL_MAX; i++) {
         if (g_channels[i] == NULL) { idx = i; break; }
     }
     if (idx < 0) {
-        pthread_mutex_unlock(&g_channels_lock);
+        hxlcl_pthread_mutex_unlock(&g_channels_lock);
         return hexa_int(-EAGAIN);
     }
     HexaChannel* ch = (HexaChannel*)calloc(1, sizeof(HexaChannel));
     if (!ch) {
-        pthread_mutex_unlock(&g_channels_lock);
+        hxlcl_pthread_mutex_unlock(&g_channels_lock);
         return hexa_int(-ENOMEM);
     }
-    pthread_mutex_init(&ch->lock, NULL);
-    pthread_cond_init(&ch->not_empty, NULL);
-    pthread_cond_init(&ch->not_full, NULL);
+    hxlcl_pthread_mutex_init(&ch->lock, NULL);
+    hxlcl_pthread_cond_init(&ch->not_empty, NULL);
+    hxlcl_pthread_cond_init(&ch->not_full, NULL);
     g_channels[idx] = ch;
-    pthread_mutex_unlock(&g_channels_lock);
+    hxlcl_pthread_mutex_unlock(&g_channels_lock);
     return hexa_int(idx);
 }
 
@@ -154,19 +154,19 @@ HexaVal hexa_channel_send(HexaVal ch_val, HexaVal v) {
     int idx = (int)HX_INT(ch_val);
     if (idx < 0 || idx >= HEXA_CHANNEL_MAX || !g_channels[idx]) return hexa_int(-EBADF);
     HexaChannel* ch = g_channels[idx];
-    pthread_mutex_lock(&ch->lock);
+    hxlcl_pthread_mutex_lock(&ch->lock);
     while (ch->count == HEXA_CHANNEL_CAP && !ch->closed) {
-        pthread_cond_wait(&ch->not_full, &ch->lock);
+        hxlcl_pthread_cond_wait(&ch->not_full, &ch->lock);
     }
     if (ch->closed) {
-        pthread_mutex_unlock(&ch->lock);
+        hxlcl_pthread_mutex_unlock(&ch->lock);
         return hexa_int(-EPIPE);
     }
     ch->slots[ch->tail] = v;
     ch->tail = (ch->tail + 1) % HEXA_CHANNEL_CAP;
     ch->count++;
-    pthread_cond_signal(&ch->not_empty);
-    pthread_mutex_unlock(&ch->lock);
+    hxlcl_pthread_cond_signal(&ch->not_empty);
+    hxlcl_pthread_mutex_unlock(&ch->lock);
     return hexa_int(0);
 }
 
@@ -181,14 +181,14 @@ HexaVal hexa_channel_recv(HexaVal ch_val, HexaVal timeout_ms_val) {
     if (idx < 0 || idx >= HEXA_CHANNEL_MAX || !g_channels[idx]) return hexa_str("");
     HexaChannel* ch = g_channels[idx];
     long long ms = HX_IS_INT(timeout_ms_val) ? (long long)HX_INT(timeout_ms_val) : -1;
-    pthread_mutex_lock(&ch->lock);
+    hxlcl_pthread_mutex_lock(&ch->lock);
     if (ms == 0 && ch->count == 0) {
-        pthread_mutex_unlock(&ch->lock);
+        hxlcl_pthread_mutex_unlock(&ch->lock);
         return hexa_str("");
     }
     if (ms < 0) {
         while (ch->count == 0 && !ch->closed) {
-            pthread_cond_wait(&ch->not_empty, &ch->lock);
+            hxlcl_pthread_cond_wait(&ch->not_empty, &ch->lock);
         }
     } else if (ms > 0) {
         struct timespec ts;
@@ -197,22 +197,22 @@ HexaVal hexa_channel_recv(HexaVal ch_val, HexaVal timeout_ms_val) {
         ts.tv_nsec += (ms % 1000) * 1000000;
         if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
         while (ch->count == 0 && !ch->closed) {
-            int rc = pthread_cond_timedwait(&ch->not_empty, &ch->lock, &ts);
+            int rc = hxlcl_pthread_cond_timedwait(&ch->not_empty, &ch->lock, &ts);
             if (rc == ETIMEDOUT) {
-                pthread_mutex_unlock(&ch->lock);
+                hxlcl_pthread_mutex_unlock(&ch->lock);
                 return hexa_str("");
             }
         }
     }
     if (ch->count == 0 && ch->closed) {
-        pthread_mutex_unlock(&ch->lock);
+        hxlcl_pthread_mutex_unlock(&ch->lock);
         return hexa_str("");
     }
     HexaVal v = ch->slots[ch->head];
     ch->head = (ch->head + 1) % HEXA_CHANNEL_CAP;
     ch->count--;
-    pthread_cond_signal(&ch->not_full);
-    pthread_mutex_unlock(&ch->lock);
+    hxlcl_pthread_cond_signal(&ch->not_full);
+    hxlcl_pthread_mutex_unlock(&ch->lock);
     return v;
 }
 
@@ -221,11 +221,11 @@ HexaVal hexa_channel_close(HexaVal ch_val) {
     int idx = (int)HX_INT(ch_val);
     if (idx < 0 || idx >= HEXA_CHANNEL_MAX || !g_channels[idx]) return hexa_int(-EBADF);
     HexaChannel* ch = g_channels[idx];
-    pthread_mutex_lock(&ch->lock);
+    hxlcl_pthread_mutex_lock(&ch->lock);
     ch->closed = 1;
-    pthread_cond_broadcast(&ch->not_empty);
-    pthread_cond_broadcast(&ch->not_full);
-    pthread_mutex_unlock(&ch->lock);
+    hxlcl_pthread_cond_broadcast(&ch->not_empty);
+    hxlcl_pthread_cond_broadcast(&ch->not_full);
+    hxlcl_pthread_mutex_unlock(&ch->lock);
     return hexa_int(0);
 }
 

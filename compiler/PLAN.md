@@ -8296,3 +8296,14 @@ Tier-A.5 acceptance ("≤ 5 libm externs") now reads ZERO — target
 exceeded. Stubs are not bit-exact; compiler binary never reaches them.
 
 @cite cycle 58 entry · libm 5-term Taylor approximations.
+
+### 2026-05-21 — RUNTIME.md cycle 60 — pthread 12 stubs (137→52, 62%)
+
+cycle 60 = pthread CLOSED. 12 noop stubs, perl substitution in
+self/native/thread.c + runtime.c + runtime_core.c. Single-threaded
+fallback (pthread_create runs synchronously).
+
+measured: aprime_cc 64→52 externs (−12), cumulative 137→52 = 62%,
+smoke exit(42) PASS.
+
+@cite cycle 59 entry.

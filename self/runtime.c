@@ -774,6 +774,51 @@ static int __attribute__((noinline)) hxlcl_isalpha(int c) {
     return ((c >= 'A' && c <= 'Z') ||
             (c >= 'a' && c <= 'z')) ? 1 : 0;
 }
+// Cycle 60 — pthread stubs. aprime_cc is single-threaded
+// (compile-then-exit). thread/channel runtime in self/native/thread.c
+// is linked but unreachable. All stubs return 0 = success.
+// pthread_create runs start_routine synchronously so any unreachable
+// code that DOES execute behaves like serial reduction.
+static int __attribute__((noinline)) hxlcl_pthread_mutex_init(void *m, const void *a) {
+    (void)m; (void)a; return 0;
+}
+static int __attribute__((noinline)) hxlcl_pthread_mutex_destroy(void *m) {
+    (void)m; return 0;
+}
+static int __attribute__((noinline)) hxlcl_pthread_mutex_lock(void *m) {
+    (void)m; return 0;
+}
+static int __attribute__((noinline)) hxlcl_pthread_mutex_unlock(void *m) {
+    (void)m; return 0;
+}
+static int __attribute__((noinline)) hxlcl_pthread_cond_init(void *c, const void *a) {
+    (void)c; (void)a; return 0;
+}
+static int __attribute__((noinline)) hxlcl_pthread_cond_destroy(void *c) {
+    (void)c; return 0;
+}
+static int __attribute__((noinline)) hxlcl_pthread_cond_signal(void *c) {
+    (void)c; return 0;
+}
+static int __attribute__((noinline)) hxlcl_pthread_cond_broadcast(void *c) {
+    (void)c; return 0;
+}
+static int __attribute__((noinline)) hxlcl_pthread_cond_wait(void *c, void *m) {
+    (void)c; (void)m; return 0;
+}
+static int __attribute__((noinline)) hxlcl_pthread_cond_timedwait(void *c, void *m, const void *ts) {
+    (void)c; (void)m; (void)ts; return 0;
+}
+static int __attribute__((noinline)) hxlcl_pthread_create(void *thread, const void *attr, void *(*start)(void *), void *arg) {
+    (void)thread; (void)attr;
+    if (start) (void)start(arg);
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_pthread_join(void *thread, void **retval) {
+    (void)thread;
+    if (retval) *retval = (void *)0;
+    return 0;
+}
 
 // Textual override of any residual libc references in subsequent code
 // (runtime_core.c + HI tier + transpile output). The helper bodies
