@@ -4357,3 +4357,9 @@ Shape A (2-line surgical) — `self/tui/input.hexa::input_init` 가 `term_raw_en
 Files: `self/tui/input.hexa` (input_init +1 line, input_close +1 line).
 Parse-gate: PASS.
 Patch markdown: `inbox/patches/tui-input-needs-decset-2004-bracketed-paste.md` status → resolved-ssot.
+
+
+## 2026-05-20 · self/tui/render: wide→narrow ghost-cell clear (inbox)
+
+Inbox patch `inbox/patches/self-tui-render-wide-to-narrow-ghost.md` (wilson harness-cli 2026-05-12 보고) 흡수. `render_flush` cell-by-cell loop 에 front-cell display width (`f_w = char_width_at(_front[idx][0])`) 계산을 추가 + `f_w > w` 분기에서 orphan 컨티뉴에이션 컬럼 `[x+w .. x+f_w)` 마다 명시적 `space` (`_cols` 가드 + `last_x+1` adjacency-aware cursor 위치) emission. tcell canonical 동작 — 직전 프레임의 wide glyph (2-cell 점유) 가 narrower 컨텐츠로 교체될 때, 대부분의 터미널 (macOS Terminal.app · iTerm2) 이 자동 클리어하지 않는 우측 컬럼 X+1 의 stale 픽셀이 한국어 ↔ ASCII alternation (`한a한a` IME 토글) 에서 1-cell gap 으로 보였던 회귀를 닫는다. `67b99c13` ("track terminal cursor by display width") 의 forward direction (wide ADD) fix 와 대칭 — 본 변경은 wide REMOVE/SHRINK 경로. 비용: shrinkage edge 마다 ~5 ANSI 바이트, 프레임당 보통 희소. `last_x`/`last_y`/`changed` 카운터는 ghost-emit 루프에서도 일관 갱신하여 후속 cell 의 adjacency 최적화 보존. 검증: `/Users/ghost/.hx/bin/hexa_real parse self/tui/render.hexa` OK. Shape-A surgical (1 파일 `self/tui/render.hexa` 의 단일 region 편집 + 패치 markdown status flip + 본 PLAN entry). binary promote 는 별도 standard deploy cycle 책임 (@D g_commit_push_deploy). g3-honest: parse-gate 만 확인 — 한국어 alternation 행동 검증은 실제 wilson interactive 세션 + 부트스트랩 재빌드 + 라이브 터미널 fire 필요.
+

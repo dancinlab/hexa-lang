@@ -223,6 +223,20 @@ pub fn render_flush() -> int {
                 let cw = char_width_at(ch, 0)[0]
                 if cw < 1 { 1 } else { cw }
             }
+            // Front-cell display width — used to detect wide → narrow
+            // replacement (the prior-frame wide glyph at column x owned
+            // visual cells x and x+1 in the terminal; when this frame
+            // shrinks that footprint to a narrower glyph, the terminal's
+            // right-half pixels at x+1 are NOT cleared automatically by
+            // most macOS/iTerm2-class terminals → ghost-cell trailing.
+            // tcell canonical behavior: explicitly emit a clearing space
+            // at each orphaned continuation cell. See
+            // inbox/patches/self-tui-render-wide-to-narrow-ghost.md.)
+            let f_ch = f_cell[0]
+            let f_w = if f_ch == "" { 1 } else {
+                let fcw = char_width_at(f_ch, 0)[0]
+                if fcw < 1 { 1 } else { fcw }
+            }
             if !_cell_eq(f_cell, b_cell) {
                 // Cursor positioning only when not adjacent to last write. last_x
                 // tracks the column the terminal cursor parked at after the prior
@@ -255,6 +269,31 @@ pub fn render_flush() -> int {
                 last_x = x + w - 1
                 last_y = y
                 changed = changed + 1
+            }
+            // Wide-to-narrow ghost clear. If the front cell was wider than
+            // the back cell, the terminal still shows the trailing pixels
+            // of the old wide glyph at columns [x+w .. x+f_w). Write an
+            // explicit blank to each orphan column so the terminal's own
+            // cell-clear logic erases those right-half pixels. Cost: ~5
+            // ANSI bytes per ghost cell, fires only on the actual
+            // shrinkage edge (typically rare per frame).
+            if f_w > w {
+                let mut gx = x + w
+                while gx < x + f_w && gx < _cols {
+                    if gx != last_x + 1 || y != last_y {
+                        parts.push(chr(27))
+                        parts.push("[")
+                        parts.push(to_string(y + 1))
+                        parts.push(";")
+                        parts.push(to_string(gx + 1))
+                        parts.push("H")
+                    }
+                    parts.push(" ")
+                    last_x = gx
+                    last_y = y
+                    changed = changed + 1
+                    gx = gx + 1
+                }
             }
             // Skip the continuation cell of a wide glyph entirely (tcell
             // canonical contract: "If a second character is displayed
