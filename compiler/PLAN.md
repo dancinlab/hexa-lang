@@ -7728,3 +7728,131 @@ assign + Yosys `passes/proc/proc_mux.cc` demux.
 cross-link: inbox/notes/2026-05-20-rfc006-§5-phase-3d-relanded-t69.md
 (this branch's status note · re-confirms Phase 3e opener plan after
 PR #233 closed PIECE 1).
+
+
+### 진행 로그 — RFC 073 Phase 3e — 3 named §5 blockers CLOSED · new comb-loop layer exposed (cycle 2026-05-20)
+
+**Branch** : `rfc-073-phase-3e-closure`
+
+**Inputs** :
+- `inbox/notes/2026-05-20-rfc006-§5-phase-3d-relanded-t69.md` — Phase 3d
+  status note identifying the THREE shared-helper-path blockers.
+- `inbox/notes/2026-05-20-rfc006-§5-phase-3d-status.md` — line-anchored
+  fix sketches per blocker.
+- baseline `[gate] router_d{4,6} area=0.0 µm² Δ=100%` on `origin/main`
+  `5ddd72bc`.
+
+**Outputs** :
+- read_verilog.hexa **+503 LoC** : `_rv_emit_body_v2` recursive single-arm
+  cond-mux helper (handles begin/end + if/then/else + for-unroll + simple/
+  static-idx/dyn-idx/2-D LHS) + `_rv_v2_track` / `_rv_v2_dwire` /
+  `_rv_emit_dff_for_tracked` (per-LHS D-wire model preserves single-driver
+  $dff invariant) + with-else fallback wiring (fire_a + fire_b triggers) +
+  for-handler outer-loop `keep_going=0` fix (T70 unblock) + generic
+  Verilog sized-literal `<size>'<base><digits>` lowering (T70/T71/T72 all
+  exercise this) + T70/T71/T72 falsifier selftests.
+- abc_map.hexa (BOTH stdlib/yosys/ + stdlib/kernels/logic_synth/) **+62
+  LoC** : BLIF `.latch <D> <Q> re <CLK> 2` emission for
+  `sky130_fd_sc_hd__dfxtp_1` cells (so ABC's `read_blif` doesn't reject
+  the `94 skipped: 63 seq` cell with `Cannot find gate "dfxtp_1"`) +
+  `.latch` parse-back into `sky130_fd_sc_hd__dfxtp_1` so the area-oracle
+  histogram includes the FF count.
+
+**Falsifier verdict** (read_verilog selftest 72/72 → 75/75 PASS):
+
+- **T70 — F-RFC-RV-CLOCKED-FOR-INDEXED-LHS** : `for (i=0; i<3; i=i+1)
+  name[i] <= a` inside posedge-always → 3 `$dff` with Q=name[0..2]. PASS.
+- **T71 — F-RFC-RV-WITH-ELSE-NONMATCHING-BODIES** : `if (c) y<=a; else
+  begin y<=b; z<=c; end` → 2 single-driver `$dff` (Q=y, Q=z) via per-LHS
+  D-wire (y__d, z__d) + cond-tagged rows + feedback default. PASS.
+- **T72 — F-RFC-RV-NESTED-IF-INSIDE-ELSE-BODY** : `if (c1) y<=a; else
+  if (c2) y<=b` → anchors existing cascaded else-if chain handler
+  doesn't regress when v2 fallback wired. PASS.
+- **NO-REGRESSION** : T1..T69 all pass; v2 fallback gated via
+  `_3e_legacy_emitted` / `_3e_single_emitted` flags so it never fires
+  when positional handlers succeed.
+
+**§5 oracle outcome** :
+
+```
+[gate] router_d4 area=0.0 µm² oracle=61763 µm²   Δ=100.0% FAIL (±5%)
+[gate] router_d6 area=0.0 µm² oracle=93608.5 µm² Δ=100.0% FAIL (±5%)
+```
+
+Same numbers as baseline. **§5 verdict — OPEN** (NOT CLOSED).
+
+But the pipeline meaningfully advanced:
+- `proc_mux` cond-tagged LHS-groups lowered: **3 → 32** (10× more clocked
+  writes now reach the BLIF flow)
+- `clean_multidriver` collapses: **1 → 1** (per-LHS D-wire model preserves
+  single-driver $dff invariant — no new multidriver despite recursive arm
+  emit)
+- `abc_map` exit: **0 (OK) → 1 (FAIL — Network contains combinational loop)**
+
+**The NEW (post-Phase-3e) §5 blocker layer** :
+
+`F-RFC-RV-COMB-ALWAYS-BLOCKING-ASSIGN-SSA` — the §5 router's combinational
+arbiter (router_d{4,6}.v L80-94) reads its own procedural variable
+`any_grant` via blocking-assignment ordering:
+
+```verilog
+always @* begin
+    any_grant = 1'b0;
+    for (i = 0; i < P; i = i + 1) begin
+        idx = (rr_ptr + i) % P;
+        if (!any_grant && !fifo_empty[idx]) begin   // reads any_grant
+            grant_out = route_xy(fifo_peek[idx]);
+            if (out_ready[grant_out]) begin
+                any_grant = 1'b1;                    // writes any_grant
+                grant_in  = idx[2:0];
+            end
+        end
+    end
+end
+```
+
+The unrolled equivalent has each iter's GUARD reading `any_grant` and each
+iter's BODY writing it. `pass_proc_mux` folds the writes into one $mux
+chain driving `any_grant` — but the unrolled GUARDS still read `any_grant`
+(SAME chain output). Combinational self-feedback loop.
+
+ABC's `read_blif` detects:
+
+```
+n410 → n555 → … → n410 → … → CO "rr_ptr__d"
+NetworkCheck: Network contains a combinational loop.
+```
+
+Pre-Phase-3e: `any_grant`'s self-loop existed BUT was disconnected from
+any CO (clocked writes that consumed it were dropped). ABC's strash only
+checks CO-rooted networks → loop invisible. Phase 3e's 32 new cond-tagged
+writes connect the comb loop to a CO (`rr_ptr__d`), exposing the issue.
+
+**Fix scope (estimated Phase 3f)** : per-iteration SSA renaming of
+procedural variables in combinational always blocks (~80-150 LoC). Per
+IEEE 1364-2005 §10.4.1, each blocking write to `var` makes a NEW value
+visible to subsequent statements within the procedure. The unrolled
+equivalent must rename `any_grant_iter0` (initial) → iter k guard reads
+`any_grant_iter<k>` (NOT mux chain output) → iter k body writes
+`any_grant_iter<k+1>` → final visible `any_grant` = `any_grant_iter<P>`.
+Specific to combinational always — clocked always blocks don't have this
+issue because non-blocking `<=` semantics are temporally-ordered through
+the next clock edge.
+
+**LoC delta** :
+
+```
+ stdlib/kernels/logic_synth/read_verilog.hexa               | +503 -65
+ stdlib/yosys/abc_map.hexa                                  |  +24  -1
+ stdlib/kernels/logic_synth/abc_map.hexa                    |  +38  -1
+ inbox/notes/2026-05-20-rfc006-§5-phase-3e-result.md        | + (new)
+ compiler/PLAN.md                                           | + (this entry)
+```
+
+@cite IEEE 1364-2005 §9.4 (control statements) + §10.4.1 (blocking
+procedural assignment) + §10.4.2 (procedural assign) + §10.3.5 (for-loop
+unroll) + §3.5.1 (sized literals) + Yosys `passes/proc/proc_mux.cc`
+(priority-mux chain) + BLIF spec §3.4 (`.latch` directive).
+
+cross-link: inbox/notes/2026-05-20-rfc006-§5-phase-3e-result.md (full
+g3-honest writeup with the exact ABC trace + Phase 3f fix scope).

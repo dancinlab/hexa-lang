@@ -272,10 +272,33 @@ fn abc_emit_blif(d: Design) -> str {
             }
             kj = kj + 1
         }
-        // each cell -> .gate <type> <pin>=<net> ...
+        // RFC 073 Phase 3e: emit sequential cells (dfxtp_1) as `.latch`
+        // BLIF directives so ABC treats them as register boundaries
+        // (rising-edge D-FF). The mapped-BLIF reader translates them
+        // back via `.latch` handler in abc_parse_mapped_blif. Without
+        // this, ABC's `read_blif` rejects dfxtp_1 as "skipped: 63 seq"
+        // (the Liberty file marks it sequential, so ABC's combinational
+        // mapper refuses the cell — `Cannot find gate "dfxtp_1"`).
+        // @cite BLIF spec §3.4 (sequential logic, `.latch`) + Yosys
+        // passes/techmap/dfflibmap.cc shape.
         let mut ci = 0
         while ci < len(m.cells) {
             let c = m.cells[ci]
+            if c.cell_type == "sky130_fd_sc_hd__dfxtp_1" {
+                let mut d_net = ""
+                let mut q_net = ""
+                let mut clk_net = ""
+                let mut pi = 0
+                while pi < len(c.conns) {
+                    if c.conns[pi].pin == "D" { d_net = c.conns[pi].net }
+                    if c.conns[pi].pin == "Q" { q_net = c.conns[pi].net }
+                    if c.conns[pi].pin == "CLK" { clk_net = c.conns[pi].net }
+                    pi = pi + 1
+                }
+                buf = buf + ".latch " + d_net + " " + q_net + " re " + clk_net + " 2\n"
+                ci = ci + 1
+                continue
+            }
             buf = buf + ".gate " + c.cell_type
             let mut pi = 0
             while pi < len(c.conns) {
@@ -376,6 +399,20 @@ fn abc_parse_mapped_blif(text: str) -> Design {
                     }
                     k = k + 1
                 }
+                m = rtlil_module_add_cell(m, c)
+            }
+        }
+        // RFC 073 Phase 3e: parse `.latch <D> <Q> re <CLK> [<init>]`
+        // back into a `sky130_fd_sc_hd__dfxtp_1` cell so the area
+        // oracle's histogram includes the FF count. Mirrors the
+        // emitter above. @cite BLIF spec §3.4.
+        if head == ".latch" {
+            if len(parts) >= 5 {
+                let cname = "ff_" + str(len(m.cells))
+                let mut c = rtlil_cell(cname, "sky130_fd_sc_hd__dfxtp_1", 1)
+                c = rtlil_cell_connect(c, "D", parts[1])
+                c = rtlil_cell_connect(c, "Q", parts[2])
+                c = rtlil_cell_connect(c, "CLK", parts[4])
                 m = rtlil_module_add_cell(m, c)
             }
         }
