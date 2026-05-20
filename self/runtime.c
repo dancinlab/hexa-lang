@@ -2160,6 +2160,11 @@ HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(_hexa_f(x))); }
 HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(_hexa_f(x))); }
 HexaVal hexa_math_round(HexaVal x){ return hexa_float(round(_hexa_f(x))); }
 HexaVal hexa_math_pow(HexaVal b, HexaVal e) { return hexa_float(pow(_hexa_f(b), _hexa_f(e))); }
+// 2026-05-20 (blocker-3 fmod-shim): direct libm fmod() exposed as `fmod(x, y)`
+// from hexa user code. Distinct from `%` which routes through hexa_mod
+// (int+float-aware dispatch); this is the pure float-only path used by
+// scientific kernels that want the libm semantics directly.
+HexaVal hexa_math_fmod(HexaVal a, HexaVal b) { return hexa_float(fmod(_hexa_f(a), _hexa_f(b))); }
 HexaVal hexa_math_min(HexaVal a, HexaVal b) { return hexa_float(fmin(_hexa_f(a), _hexa_f(b))); }
 // G1-FLOAT-PRIM 2026-05-06 — see .roadmap.stdlib.G1-FLOAT-PRIM. lgamma is the
 // log-gamma function used by Beta-Binomial conjugate posteriors throughout
