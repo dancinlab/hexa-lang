@@ -1,28 +1,38 @@
 // @raw117_exempt
 // ════════════════════════════════════════════════════════════════════════
-// test/flame_ag_derive_test.hexa — flame autograd-auto SD1 byte-eq oracle
+// test/flame_ag_derive_test.hexa — flame autograd-auto SD1+SD2 byte-eq oracle
 //
-// Falsifier:
+// Falsifiers:
 //   F-RFC043-AUTOGRAD-AUTO-MATMUL-BYTE-EQ
 //     matmul_bwd_auto(x, W, dy, …) output {dW, dx} byte-identical
 //     (max|Δ| = 0.0) to nn_linear_bwd's {dW, dx} on a fixed-seed input
-//     B=4·D=8·C=6.
+//     B=4·D=8·C=6.                                              (SD1)
+//   F-RFC043-AUTOGRAD-AUTO-ADD-BYTE-EQ
+//     add_bwd_auto(x, b, dy, …) output {db} byte-identical
+//     (max|Δ| = 0.0) to nn_linear_bwd's {db} on the same fixed-seed
+//     input B=4·D=8·C=6 (re-using SD1's dy and shapes for parallelism
+//     across the matmul ⊕ broadcast-bias-add halves of nn_linear).
+//                                                                (SD2)
 //
 // Scope (matches inbox/notes/2026-05-20-flame-autograd-auto-scoping.md):
-//   - Pure-CPU, $0, single oracle.
-//   - Compares ag_derive's matmul_bwd_auto OUTPUT against
-//     nn_linear_bwd's {dW, dx} ONLY (db is the bias-grad which lives
-//     in a separate fwd primitive — SD2 will register `add_bwd_auto`
-//     and the test there will fold db in).
-//   - The fwd is `y = x · W` (no bias) — `farr_matmul` directly, NOT
-//     `nn_linear_fwd` (which wraps matmul + bias broadcast). This
-//     isolates the matmul vjp rule from the bias-add vjp; SD1 verifies
-//     ONLY the matmul rule.
+//   - Pure-CPU, $0, two oracles in one binary.
+//   - SD1 compares ag_derive's matmul_bwd_auto OUTPUT against
+//     nn_linear_bwd's {dW, dx} (matmul vjp pair).
+//   - SD2 compares ag_derive's add_bwd_auto OUTPUT against
+//     nn_linear_bwd's {db} (broadcast-bias vjp = reduce-sum along
+//     axis=0). The dx-half of the bias-add vjp is the identity
+//     adjoint (dy verbatim), so the SD2 oracle is solely db.
+//   - The fwd is `y = x · W + b` decomposed: `farr_matmul` directly
+//     produces y0 = x · W (SD1's regime), then the bias broadcast
+//     `y[i,j] += b[j]` is the surface SD2's rule targets. The two
+//     halves are independent vjps that compose in nn_linear_bwd; SD2
+//     keeps them independent here.
 //
 // Exit codes (rfc_003 idiom):
-//   0  PASS — registered rule + max|Δ_dW|=0 + max|Δ_dx|=0.
-//   91 FAIL — any of: register failed / dispatch returned 0 /
-//             dW deviation / dx deviation.
+//   0  PASS — both SD1 and SD2 oracles PASS (max|Δ|=0 across {dW, dx,
+//             db_auto − db_ref}).
+//   91 FAIL — any of: SD1 register/dispatch/byte-eq fail OR
+//             SD2 register/dispatch/byte-eq fail.
 // ════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/tensor_lib"
@@ -112,13 +122,63 @@ println("")
 if dW_dev == 0.0 {
     if dx_dev == 0.0 {
         println("PASS  F-RFC043-AUTOGRAD-AUTO-MATMUL-BYTE-EQ  max|{dW, dx}_auto − {dW, dx}_ref| = 0.0 (byte-eq · matmul-vjp registry rule ≡ nn_linear_bwd hand-written reference)")
-        println("=== SD1 PASS ===")
-        exit(0)
     } else {
         println("FAIL  F-RFC043-AUTOGRAD-AUTO-MATMUL-BYTE-EQ  dx deviation non-zero")
         exit(91)
     }
 } else {
     println("FAIL  F-RFC043-AUTOGRAD-AUTO-MATMUL-BYTE-EQ  dW deviation non-zero")
+    exit(91)
+}
+
+// ─── SD2: broadcast bias-add vjp byte-eq oracle ────────────────────────
+// Same registry, same fixed-seed dy, same shapes B=4·D=8·C=6. We
+// register ag_derive_k_add() and call add_bwd_auto. The bias `b`
+// (length C) is generated with a third LCG base so it is independent
+// of x, W, dy.
+//
+// Reference `db_ref` was already produced by `nn_linear_bwd` above —
+// SD2's oracle is simply: does add_bwd_auto's db_auto equal db_ref
+// byte-for-byte?
+
+println("=== flame autograd-auto SD2 selftest (ag_derive · add vjp byte-eq) ===")
+
+// b is length C; LCG base 4242 — distinct from x(9372)/W(1337)/dy(31337).
+// The closed-form vjp does not READ b (db = Σ_i dy[i,j] only), but we
+// still allocate + fill it so the add_bwd_auto surface gets a real
+// tensor id (parity with SD4's future tape integration where b WILL be
+// a recorded input).
+let bb = t_zeros(C)
+t_fill_lcg(bb, C, 4242, 0.25)
+
+let reg_add_rc = ag_derive_register(reg, ag_derive_k_add())
+if reg_add_rc == 0 {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-ADD-BYTE-EQ  registry rejected add kind")
+    exit(91)
+}
+let is_reg_add = ag_derive_is_registered(reg, ag_derive_k_add())
+if is_reg_add == 0 {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-ADD-BYTE-EQ  registry lookup returned 0 after register")
+    exit(91)
+}
+
+let db_auto = t_zeros(C)
+let add_dispatch_rc = add_bwd_auto(reg, x, bb, dy, db_auto, B, C)
+if add_dispatch_rc == 0 {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-ADD-BYTE-EQ  add_bwd_auto dispatch returned 0")
+    exit(91)
+}
+
+let db_dev = ag_dt_maxdev(db_auto, db_ref, C)
+print("db max|Δ| = ")
+print(db_dev)
+println("")
+
+if db_dev == 0.0 {
+    println("PASS  F-RFC043-AUTOGRAD-AUTO-ADD-BYTE-EQ  max|db_auto − db_ref| = 0.0 (byte-eq · broadcast-bias-add vjp registry rule ≡ nn_linear_bwd db-block reference)")
+    println("=== SD1 + SD2 PASS ===")
+    exit(0)
+} else {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-ADD-BYTE-EQ  db deviation non-zero")
     exit(91)
 }
