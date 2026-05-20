@@ -18,6 +18,7 @@ import "../ir/mir.hexa"
 import "../ir/lir.hexa"
 import "./arm64_darwin.hexa"
 import "./x86_64_linux.hexa"
+import "./thumbv7em_eabihf.hexa"
 
 // ── MIR construction helpers ─────────────────────────────────
 
@@ -485,6 +486,28 @@ fn main() {
     }
     if x86_set != 3 {
         println("  FAIL: x86 enum_ctor expected 3 hexa_map_set (one per __pN cell), got " + to_string(x86_set))
+        ok = false
+    }
+
+    // G1 follow-on (I5, 2026-05-20) — thumb backend codegen_test 통합.
+    // RFC 074 P4 fixture mirror per G1 punted (1). thumb 도 enum_ctor 분기
+    // 가 _build_case_enum_ctor3 fixture 의 3-cell payload 를 1 map_new + 3
+    // map_set 으로 emit 한다는 invariant 확인.
+    let l_enum3_thumb = codegen_thumbv7em_eabihf(mod_enum3)
+    if len(l_enum3_thumb.funcs) != 1 {
+        println("  FAIL: thumb mk_rgb expected 1 func")
+        ok = false
+    }
+    let lf_enum3_thumb = l_enum3_thumb.funcs[0]
+    _print_summary("thumb", "mk_rgb (RFC074 P4)", lf_enum3_thumb)
+    let thumb_new = _count_call(lf_enum3_thumb, "bl", "hexa_map_new")
+    let thumb_set = _count_call(lf_enum3_thumb, "bl", "hexa_map_set")
+    if thumb_new != 1 {
+        println("  FAIL: thumb enum_ctor expected 1 hexa_map_new, got " + to_string(thumb_new))
+        ok = false
+    }
+    if thumb_set != 3 {
+        println("  FAIL: thumb enum_ctor expected 3 hexa_map_set (one per __pN cell), got " + to_string(thumb_set))
         ok = false
     }
 
