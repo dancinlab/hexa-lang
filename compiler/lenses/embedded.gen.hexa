@@ -509,30 +509,38 @@ pub fn lens_apply_paradigm_shift_op_lift(view: AtlasView) -> array {
 }
 
 pub fn lens_apply_cross_pollinate_borrow_from_qrng(view: AtlasView) -> array {
-    // C-1.d — entropy / random keyword scan. P raw mentioning entropy or
-    // randomness = candidate for stdlib/qrng pattern borrowing (audit +
-    // backend abstraction).
+    // C-1.d strengthened — atlas-anchored entropy/randomness dual: mu
+    // (Möbius) is the information-theoretic randomness proxy in number
+    // theory (squarefree-or-not = 1-bit randomness signal).
     let n = len(view.p_nodes)
     if n == 0 { return empty_candidate_list() }
-    let mut hits = 0
+    let mut mu_p = false
+    let mut sigma_p = false
     let mut i = 0
     while i < n {
-        let raw = view.p_nodes[i].raw
-        if raw.index_of("entropy") >= 0 || raw.index_of("random") >= 0 || raw.index_of("entrop") >= 0 {
-            hits = hits + 1
-        }
+        let id = view.p_nodes[i].id
+        if id == "mu" { mu_p = true }
+        if id == "sigma" { sigma_p = true }
         i = i + 1
     }
-    if hits == 0 { return empty_candidate_list() }
     let mut out: array = []
-    out.push(Candidate {
-        slug: "cross_pollinate.borrow_from_qrng.entropy_signals",
-        family: "cross_pollinate",
-        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry `entropy` / `random` in raw — candidate for stdlib/qrng pattern borrowing (audit + multi-backend abstraction).",
-        cite: ["n"],
-        fire_needed: false,
-        fire_estimate_usd: 0.0
-    })
+    if mu_p {
+        out.push(Candidate {
+            slug: "cross_pollinate.borrow_from_qrng.mu_as_entropy_proxy",
+            family: "cross_pollinate",
+            proposed: "stdlib/qrng pattern borrow: mu(n) ∈ {-1, 0, +1} is a 1-trit randomness proxy (Möbius parity). At n=6, mu=+1 (squarefree-composite). Hypothesis: NIST SP 800-22 monobit test on mu-sequence over sliding n.",
+            cite: ["mu"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if sigma_p {
+        out.push(Candidate {
+            slug: "cross_pollinate.borrow_from_qrng.sigma_as_audit_anchor",
+            family: "cross_pollinate",
+            proposed: "stdlib/qrng audit pattern: sigma(n) = divisor sum acts as an arithmetic checksum (sigma(6)=12 = perfect). Hypothesis: sigma-audit gate on entropy streams analogous to NIST tier-1 SP 800-22.",
+            cite: ["sigma"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
     return out
 }
 pub fn lens_apply_cross_pollinate_borrow_from_qmirror(view: AtlasView) -> array {
@@ -560,45 +568,73 @@ pub fn lens_apply_cross_pollinate_borrow_from_qmirror(view: AtlasView) -> array 
     return out
 }
 pub fn lens_apply_cross_pollinate_borrow_from_sim_universe(view: AtlasView) -> array {
+    // C-1.d strengthened — cosmological-sum analogy. sigma(n) =
+    // divisor-sum is the partition-function analog (sum of orbit sizes),
+    // and Mersenne primes anchor perfect-number cosmology.
     let n = len(view.p_nodes)
     if n == 0 { return empty_candidate_list() }
-    let mut hits = 0
+    let mut sigma_p = false
+    let mut m3_p = false
     let mut i = 0
     while i < n {
-        let raw = view.p_nodes[i].raw
-        if raw.index_of("universe") >= 0 || raw.index_of("cosm") >= 0 || raw.index_of("Lorentz") >= 0 {
-            hits = hits + 1
-        }
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "M3" { m3_p = true }
         i = i + 1
     }
-    if hits == 0 { return empty_candidate_list() }
     let mut out: array = []
-    out.push(Candidate {
-        slug: "cross_pollinate.borrow_from_sim_universe.signals", family: "cross_pollinate",
-        proposed: "atlas P kind: " + to_string(hits) + " universe/cosm/Lorentz mentions — candidate stdlib/sim_universe pattern borrowing.",
-        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
-    })
+    if sigma_p && m3_p {
+        out.push(Candidate {
+            slug: "cross_pollinate.borrow_from_sim_universe.perfect_number_universe",
+            family: "cross_pollinate",
+            proposed: "stdlib/sim_universe borrow: 6 = 2^(3-1)·M3 = 2·7? No — Euclid-Euler: perfect n = 2^(p-1)·(2^p−1) for prime p. With p=3: 2²·M3 = 4·7 = 28 (next perfect), and 6 = 2¹·M2 = 2·3. Hypothesis: hexa primitive lattice n=6 is the seed of the perfect-number cosmology tower.",
+            cite: ["sigma", "M3"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if sigma_p {
+        out.push(Candidate {
+            slug: "cross_pollinate.borrow_from_sim_universe.sigma_as_partition_function",
+            family: "cross_pollinate",
+            proposed: "stdlib/sim_universe borrow: sigma(n) is the orbit-counting partition function for Z/n action. At n=6, sigma=12 = number of orbits = 2·n (perfect). Hypothesis: sigma/n ratio is the cosmological-degeneracy proxy.",
+            cite: ["sigma"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
     return out
 }
 pub fn lens_apply_cross_pollinate_borrow_from_forge(view: AtlasView) -> array {
+    // C-1.d strengthened — parallel-degree dual. tau(n) = divisor count =
+    // number of (a,b) factorizations = natural parallelization width,
+    // mapping to forge GPU SM count.
     let n = len(view.p_nodes)
     if n == 0 { return empty_candidate_list() }
-    let mut hits = 0
+    let mut tau_p = false
+    let mut j2_p = false
     let mut i = 0
     while i < n {
-        let raw = view.p_nodes[i].raw
-        if raw.index_of("GPU") >= 0 || raw.index_of("kernel") >= 0 || raw.index_of("fusion") >= 0 || raw.index_of("matmul") >= 0 {
-            hits = hits + 1
-        }
+        let id = view.p_nodes[i].id
+        if id == "tau" { tau_p = true }
+        if id == "J2" { j2_p = true }
         i = i + 1
     }
-    if hits == 0 { return empty_candidate_list() }
     let mut out: array = []
-    out.push(Candidate {
-        slug: "cross_pollinate.borrow_from_forge.signals", family: "cross_pollinate",
-        proposed: "atlas P kind: " + to_string(hits) + " GPU/kernel/fusion/matmul mentions — candidate self/forge pattern borrowing.",
-        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
-    })
+    if tau_p {
+        out.push(Candidate {
+            slug: "cross_pollinate.borrow_from_forge.tau_as_parallel_width",
+            family: "cross_pollinate",
+            proposed: "self/forge borrow: tau(n=6)=4 = number of (a,b) factorizations = natural matrix-multiply tile-width for n=6 lattice. Hypothesis: tau-tiled GEMM as the n=6-native forge kernel decomposition.",
+            cite: ["tau"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if j2_p {
+        out.push(Candidate {
+            slug: "cross_pollinate.borrow_from_forge.j2_as_matmul_dim",
+            family: "cross_pollinate",
+            proposed: "self/forge borrow: J2(n=6)=24 = 2-tensor index space size on Z/6. Hypothesis: J2 is the natural matmul DOF count for n=6 GPU kernels; J2-aligned SM packing.",
+            cite: ["J2"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
     return out
 }
 
