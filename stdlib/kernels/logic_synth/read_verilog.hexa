@@ -2594,6 +2594,47 @@ fn main() {
         }
     }
 
+    // T34 — cond-mux inside multi-statement begin/end body, mixed with a
+    //       plain non-blocking assign on a different LHS.
+    //       `begin if (sel) q1 <= a ; else q1 <= b ; q2 <= c ; end`
+    //       → 1 $mux + 2 $dff.
+    total = total + 1
+    let _v34 = "module mb ( input clk , input sel , input a , input b , input c , output reg q1 , output reg q2 ) ; always @ ( posedge clk ) begin if ( sel ) q1 <= a ; else q1 <= b ; q2 <= c ; end endmodule"
+    let _r34 = read_verilog(_v34)
+    if _r34.ok != 1 {
+        println("FAIL T34 cond_mux_in_begin: " + _r34.message); fails = fails + 1
+    } else {
+        let _m34 = _r34.design.modules[0]
+        if rtlil_count_cells_of_type(_m34, "$mux") != 1 {
+            println("FAIL T34a mux_count got " + str(rtlil_count_cells_of_type(_m34, "$mux")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m34, "$dff") != 2 {
+            println("FAIL T34b dff_count got " + str(rtlil_count_cells_of_type(_m34, "$dff")))
+            fails = fails + 1
+        }
+    }
+
+    // T35 — no-else cond-mux inside multi-statement begin/end body.
+    //       Closest router-d4 shape this far: `begin if (en) q <= d ; end`.
+    //       → 1 $mux + 1 $dff.
+    total = total + 1
+    let _v35 = "module mbn ( input clk , input en , input d , output reg q ) ; always @ ( posedge clk ) begin if ( en ) q <= d ; end endmodule"
+    let _r35 = read_verilog(_v35)
+    if _r35.ok != 1 {
+        println("FAIL T35 cond_mux_noelse_in_begin: " + _r35.message); fails = fails + 1
+    } else {
+        let _m35 = _r35.design.modules[0]
+        if rtlil_count_cells_of_type(_m35, "$mux") != 1 {
+            println("FAIL T35a mux_count got " + str(rtlil_count_cells_of_type(_m35, "$mux")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m35, "$dff") != 1 {
+            println("FAIL T35b dff_count got " + str(rtlil_count_cells_of_type(_m35, "$dff")))
+            fails = fails + 1
+        }
+    }
+
     // T29 — body `reg [W-1:0] q;` with parameter-folded width.
     total = total + 1
     let _v29 = "module rg #( parameter W = 8 ) ( input clk ) ; reg [ W - 1 : 0 ] q ; endmodule"
