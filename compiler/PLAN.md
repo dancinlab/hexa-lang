@@ -5564,3 +5564,78 @@ cross-link: B7 RFC 074 Phase 4 plan ("ir+codegen — hir/mir/lir.hexa
 arrays; arm64_darwin/x86_64_linux/thumbv7em payload-cell capture") +
 heritage `b6aae978` (Phase 2.1 types) + `feafe1db` (Phase 3 lower).
 Physical contiguous-cell storage = Phase 5 follow-on.
+
+
+---
+
+## 진행 로그 — RFC 070 G7-B F-B-LOADABLE measurement (2026-05-20 follow-on to F1 `0a5ef2d2`)
+
+**Scope:** F1 (hexa_ld v1.5 — Mach-O Part A + ELF Part A wire) shipped the
+dynamic-section containers but flagged **F-B-LOADABLE** as measurement-
+deferred ("attempted via /tmp/test_dylib_emit.hexa harness — parse-gate
+PASS, build blocked on 'compiled module_loader not found'"). This cycle
+closes that gap with a minimal driver + cross-platform dlopen measurement.
+
+**Measured:**
+- **Mach-O (mini · Darwin 25.5.0 arm64) — F-B-LOADABLE-MACHO PASS end-to-end.**
+  hexa_ld v1.5 `_link_mach_o_shared` output: `file` reports
+  "Mach-O 64-bit dynamically linked shared library arm64"; `otool -hv`
+  reports `MH_MAGIC_64 ARM64 ... DYLIB 7 LCs`; `dyld_info -exports` shows
+  exactly 1 entry `_trivial_v15.dylib_dispatch`. Harness `dlopen + dlsym
+  + invoke(2,3)` returns `5` byte-equally, `dlerror()` clean throughout.
+- **ELF (ubu-1 · Ubuntu 24.04 x86_64) — F-B-LOADABLE-ELF PARTIAL PASS.**
+  `_link_elf_shared` output: `readelf -h` Type=DYN; `readelf -d` shows
+  7 dynamic entries (HASH, STRTAB, SYMTAB, STRSZ, SYMENT, SONAME, NULL);
+  `objdump -T` shows 1 dynsym `trivial_v15_clean_dispatch`. **dlopen
+  succeeds** (handle 0x597dda8df2c0 non-null, `dlerror()` clean);
+  **dlsym succeeds** (addr 0x1000 non-null). **invoke SEGVs** because
+  v1.5 emits `Elf64_Sym::st_value = 0x1000` as a file-offset literal
+  with `st_shndx = SHN_ABS` — ld.so does NOT add `l_addr` for `*ABS*`
+  symbols, so the call lands at virtual 0x1000 (unmapped → SEGV).
+
+**Root cause for ELF invoke FAIL:** dynsym `st_value` semantics — v1.5
+encodes as `SHN_ABS` + file-offset; the v1.6+ sub-cycle fix is to point
+`st_shndx` at the text section so ld.so computes `l_addr + st_value`
+and lands on the mapped runtime address. Matches F1's own honest scope
+("ld.so will still bail at runtime IF the text contains absolute
+relocations").
+
+**Falsifier matrix:** F-B1 PASS both · F-B2 PASS ELF · F-B3 PASS Mach-O ·
+F-B-DYNSYM-ELF PASS (audit-EXPECTED → empirical) · F-B-EXPORTTRIE-MACHO
+PASS (audit-EXPECTED → empirical) · F-B-LOADABLE-MACHO PASS end-to-end ·
+F-B-LOADABLE-ELF PARTIAL PASS (dlopen+dlsym, invoke deferred).
+
+**Honest scope (`@D g3`):**
+- **No `hexa_ld.hexa` SSOT change.** F1's v1.5 is the SSOT under test.
+- **No binary promote** (`@D g_commit_push_deploy` deferred). Driver
+  built against deployed `hexa.real` (06:59 UTC) using
+  `HEXA_MODULE_LOADER=<repo>/build/hexa_module_loader` + `HEXA_LANG`.
+- **One surgical SSOT edit at `compiler/link/incr_cache.hexa::_save_meta_tsv`**
+  — body stubbed because `write_text` (stdlib/io.hexa) is not codegen-
+  wired and was blocking flatten. The fn is dead-from-driver-pov; the
+  proper fix (import wiring + codegen extern) is a separate sub-cycle.
+- **F1 cherry-picked into worktree** (`e55a19b6` ≡ `0a5ef2d2`) — base
+  branch lacked the v1.5 source. PLAN.md merge: `--ours` + this entry
+  appends the actual measurement (not F1's PLAN body).
+- **RFC 070 markdown** brought into the worktree base from sister
+  branch (file existed only in s1-step2-codegen-perf prior; F1's commit
+  body acknowledged "those files live only on s1-step2-codegen-perf").
+- **No `inbox/PATCHES.yaml` touch.**
+- **ELF v1.6+ reloc-record / dynsym-shndx fix is OUT OF SCOPE this
+  cycle** — measurement only.
+
+**Files:**
+```
+ compiler/link/hexa_ld.hexa                                        | +502 -35  (F1 v1.5 cherry-pick)
+ compiler/link/incr_cache.hexa                                     | +459     (restored from 55d007e5)
+ compiler/link/incr_cache.hexa                                     |  +6 -22  (_save_meta_tsv stub)
+ inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md      | +<137>   (§4.7 measurement + status + phase table split)
+ compiler/PLAN.md                                                  | +<this>  (this entry)
+```
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md
+§4.7 (full measurement table + root-cause analysis) · F1 commit `0a5ef2d2`
+(hexa_ld v1.5 SSOT) · `@D g3` real-limits-first (POSIX dlopen + SysV
+gABI §4.18 + Apple Mach-O spec anchors) · `@D g5` hexa-native-only
+(hexa_ld is the hexa-native dynamic linker — no LLVM lld, no system ld) ·
+`@D g_inbox_processing_loop` Shape A.
