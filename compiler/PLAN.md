@@ -4523,3 +4523,32 @@ dispatch 후보 없음. RFC 055 본체는 이미 CLOSED (SPEC + 11 PR + falsifie
 6/6); 잔여는 UX polish(downstream-demand-driven) 와 named follow-on
 follow-ons (RFC 067-069 drafted).
 
+
+### 2026-05-20 — wilson-pi-port 6-gap META audit (audit-only · no fix dispatch)
+
+**작업** = meta-gate audit. `inbox/patches/wilson-pi-port-6-gap-prereq.md` (opened 2026-05-10, status `spec`) 의 8 child gap (G1..G8) 각각에 대해 mainline 진척 quantify + dispatch readiness 평가. SOP `@D g_inbox_processing_loop`. SSOT 편집 = patch markdown status flip (`spec` → `audited-2026-05-20`) + per-gap status table 추가 + 본 PLAN.md 1-entry. 신규 fix cycle = 0. 코드 미변경.
+
+**6-gap audit summary table** (mainline 측정 기준 2026-05-20):
+
+| gap | status | mainline 증거 | next |
+|---|---|---|---|
+| G1 enum payload | **CLOSED** | `36daab7d → a85b8a1c → 4ed9966e → 41ecfb97 → 645ed1c0 → bfda8c9b` (RFC-020 A1-A5 LANDED, B1 honest holdout) | — |
+| G2 async runtime | **CLOSED** | `925846d0` (RFC-022 spec) → `9210e024` (G2 wilson gate FINAL CLEAR; codegen+stdlib/future) | — |
+| G3 cancel handle | **CLOSED (substrate)** | `925846d0` (stdlib/cancel.hexa + tests) · `c04714df` (jsonl_pool cancel-aware variants) | exec/http_sse consumer wiring = consumer-side |
+| G4 jsonschema | **OPEN** | (없음) | **★★ next-dispatch 1순위** (S-NEW-JSONSCHEMA, Shape-A surgical) |
+| G5 fs atomic-append | **OPEN** | (없음) | **★★ next-dispatch 2순위** (S-FS-ATOMIC-APPEND, Shape-A · G4 와 병렬 가능) |
+| G6 jsonl_pool + channel | **CLOSED 2026-05-13** | `17c9e1d5` (G6 jsonl_pool + channel v0.2.0) · `c04714df` (v0.2.0 cancel-aware) | — |
+| G7 hexa_ld dlopen | **RFC-PROMOTED** | `a01fb505` (RFC draft filing) → `abc50fa7` (RFC 070 scaffold-only). 기존 `hexa_ld v1.1/v1.2` static-only baseline. | RFC 070 implementation cycle (Shape-B phasing, ★ blocking 아님) |
+| G8 incremental link | **OPEN** | (없음) | wilson dev 압력 도달 시 (G7 옵션 (d) 우회의 인프라) |
+
+**dispatch readiness summary**:
+- 6/8 갭 closed (G1·G2·G3·G6 fully · G7 RFC-promoted scaffold).
+- wilson core 착수 게이트 = G1+G2(+G3) **DONE** — wilson 본격 코어 포팅 unblock.
+- 잔여 open = G4·G5·G8. G4/G5 = 저위험·독립·바로 가능 (depends_on 없음); G8 = dev-UX 차순위.
+- next-dispatch 권장: G4 + G5 병렬 Shape-A surgical 사이클. G7 implementation = Shape-B follow-up. G8 = wilson dev 압력 발생 시.
+
+**g3 honesty**: meta-gate spec 자체는 audit cycle 만 수행 (fix 는 child gap 별). RFC 070 scaffold = "RFC drafted + scaffold landed", implementation 미완. G3 cancel substrate 는 stdlib 면 closed; wilson `exec_stream`/`http_sse` 의 consumer-side `cancel_token` 인자 wiring 은 wilson 쪽 책임.
+
+**files**: `inbox/patches/wilson-pi-port-6-gap-prereq.md` (status flip + audit table append) · `compiler/PLAN.md` (본 entry). binary promote 미포함 (cycle 외).
+
+cross-link: `inbox/patches/g7-hexa-ld-dlopen.md` (G7 SSOT, RFC-promoted 2026-05-20) · `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` (G7 RFC scaffold) · `inbox/patches/rfc020-enum-payload-variants.md` (G1 closure) · `proposals/rfc_022_async_model.md` (G2 spec) · `stdlib/cancel.hexa` (G3) · `stdlib/jsonl_pool.hexa` (G6) · `@D g_inbox_processing_loop` (AGENTS.tape §3 SOP).

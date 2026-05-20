@@ -1,6 +1,6 @@
 # incoming patch: wilson-pi-port-6-gap-prereq
 
-> **id**: `wilson-pi-port-6-gap-prereq` · **opened**: 2026-05-10 · **status**: `spec`
+> **id**: `wilson-pi-port-6-gap-prereq` · **opened**: 2026-05-10 · **status**: `audited-2026-05-20`
 > **trees**: `self/` + `compiler/`
 > **source**: `~/core/wilson/docs/hexa-lang-gap-audit.md` (commit `dancinlab/wilson`)
 > **why**: wilson core = pi-mono `{agent→core, ai, tui, coding-agent}` 의 hexa-native 재포팅. hive 가 그걸 하다 `core`/`ai` 핵심 모듈을 BLOCKED 낸 게 hexa-lang 부족 때문. wilson 착수 전 hexa-lang 이 채워야 할 갭.
@@ -8,6 +8,26 @@
 > **갱신 2026-05-10**: (1) hexa-lang = 컴파일 언어 전환 (인터프리터 retire) → **G2 의 "interp parity" 하위갭 소멸** (`exec_stream_async` 가 AOT-only 인 게 더는 갭 아님 — 컴파일 언어가 그냥 갖는다). G2 = "async 실행 의미론 완성 + codegen 통합" 만. (2) wilson 의 모든 것(core+모든 plugin+모든 도구)은 hexa-lang 으로 — TS 0. (3) plugin 아키텍처(`wilson/docs/plugin-interfaces-comms-aot-brainstorm.md` Part C 개정판)가 강제하는 신규 갭 후보 **G7/G8** 추가.
 >
 > **갱신 2026-05-13 — G6 LANDED**: `stdlib/jsonl_pool.hexa` v0.1.0 + `stdlib/channel.hexa` v0.2.0 구현·테스트 완료 (이 세션). `stdlib/test/test_jsonl_pool.hexa` 22/22 PASS (interp, macOS arm64). `.roadmap.stdlib` 의 `S-NEW-JSONL-POOL` = CLOSED. (channel.ai.md C3 노트 갱신은 follow-up.) wilson 쪽 후속 = `plugins/swarm/main.hexa` de-STUB (`use "stdlib/jsonl_pool"`) + `wilson build --bundle cell` (core/dispatch_table.hexa regen 의존). 나머지 갭(G4 jsonschema / G5 fs atomic-append / G7 dlopen / G8 incremental link) 미시작.
+>
+> **갱신 2026-05-20 — META-GATE AUDIT (audit-only cycle, no fix dispatch)**:
+>
+> | gap | 현재 상태 (2026-05-20 mainline audit) | mainline 증거 | 우선순위 |
+> |---|---|---|---|
+> | **G1** payload enum | **CLOSED** — A1-A5 LANDED, B1 honest holdout | commits `36daab7d → a85b8a1c → 4ed9966e → 41ecfb97 → 645ed1c0 → bfda8c9b` (RFC-020 closure, codegen_c2 match-side payload extraction + A5 regression PASS + interp 폐기 후 stage0 holdout 명시) | DONE |
+> | **G2** async runtime model | **CLOSED (mainline)** — RFC-022 promoted, codegen+stdlib G2 wilson gate FINAL CLEAR | commits `925846d0` (RFC-022 spec + stdlib cancel token) → `9210e024` (codegen+stdlib RFC-022 G2 wilson gate FINAL CLEAR; `proposals/rfc_022_async_model.md` + `self/codegen_c2.hexa` + `self/native/hexa_cc.c` + `stdlib/future.hexa` + `self/test_async_codegen.hexa`) | DONE |
+> | **G3** cancellation handle | **CLOSED (substrate)** — `stdlib/cancel.hexa` v0 + tests + cancel-token-aware jsonl_pool variants. exec/http_sse wiring은 consumer surface | commits `925846d0` (stdlib/cancel.hexa + stdlib/cancel.ai.md + stdlib/test/test_cancel.hexa) · `c04714df` (stdlib/jsonl_pool v0.2.0 — pool_grow + cancel-token-aware variants) | DONE (substrate) · wilson consumer wiring = consumer-side |
+> | **G4** stdlib/jsonschema | **OPEN** — `stdlib/jsonschema.hexa` 부재. mainline 흔적 0 (B29 closure_roadmap.json 은 정책 schema 라 다른 컨텍스트) | (없음) | ★★ **next-dispatch 1순위** (저위험·바로 가능, depends_on 없음) |
+> | **G5** self/stdlib/fs atomic-append | **OPEN** — `self/stdlib/fs.hexa` 존재하나 `fs_append_atomic`/`fs_rotate_if_over` 등 wilson-요구 보강 미시작. mainline 흔적 0 | (없음) | ★★ **next-dispatch 2순위** (저위험·G4와 병렬 가능) |
+> | **G6** jsonl_pool + channel backpressure | **CLOSED 2026-05-13** (이미 위에서 확인) — additionally v0.2.0 cancel-aware variants landed | commits `17c9e1d5` (G6 jsonl_pool + channel v0.2.0) · `c04714df` (pool_grow + cancel-aware additive bump) | DONE |
+> | **G7** `hexa_ld` dlopen / shared lib | **RFC-PROMOTED 2026-05-20** — `inbox/patches/g7-hexa-ld-dlopen.md` (옵션 (b) fat .so + 단일 dispatch 심볼 컨벤션 권장) → `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` scaffold-only. 코드 미구현 (codegen PIC + hexa_ld --shared + runtime dlopen/dlsym 3-way). | commits `a01fb505` (g7-hexa-ld-dlopen RFC draft filing) → `abc50fa7` (RFC-promote → RFC 070 scaffold-only); 기존 `hexa_ld v1.1` ELF/Mach-O static (`758659eb`) + v1.2 ad-hoc codesign (`96aa37e8`); runtime `hexa @jit` dlopen 경로(`9a01aa2a`)는 별 path (FFI JIT 용, plugin loader 아님) | ★ (있으면 plugin UX ↑, 없어도 wilson 동작 가능) — **RFC 070 implementation cycle** = follow-up |
+> | **G8** `hexa_ld` incremental link | **OPEN** — mainline 흔적 0. G7 옵션 (d) 우회 (incremental relink + busybox-multi-call) 의 인프라가 됨. | (없음) | ★ (dev UX) · G7 implementation 또는 wilson incremental dev 가 압력 가할 때 |
+>
+> **dispatch readiness**:
+> - **6/8 갭 closed**(G1·G2·G3·G6 fully · G7 RFC-promoted scaffold).
+> - **wilson core 착수 게이트 = G1+G2(+G3) DONE** ✅ — wilson 본격 코어 포팅 unblock.
+> - **잔여 open = G4 jsonschema · G5 fs atomic-append · G8 incremental link**. G4/G5 는 저위험·독립·바로 가능 (depends_on 없음); G8 은 dev-UX 차순위.
+> - **next-dispatch 권장**: G4 (S-NEW-JSONSCHEMA, paste-ready roadmap entry 본 문서 §`.roadmap.stdlib`) + G5 (S-FS-ATOMIC-APPEND) 병렬 Shape-A surgical 사이클. G7 implementation = Shape-B (RFC 070 implementation phasing 별 사이클; 본 audit 범위 아님). G8 = wilson dev 압력 도달 시.
+> - **본 audit-only cycle 결론**: 6 갭 spec 의 mainline 진척 quantified. fix 사이클은 child gap 별 후속.
 
 ---
 
