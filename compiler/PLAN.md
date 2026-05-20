@@ -6340,3 +6340,86 @@ cycle.
 `compiler/PLAN.md` 본 entry append.
 
 **cc --regen / binary promote**: 미수행 (deploy step 별도, SOP step 7).
+
+## 진행 로그 — RFC 074 Phase 1+2 compiler/ tree multi-field enum payload (2026-05-20)
+
+**Status**: PHASE-1+2-COMPILER-LANDED · Shape A surgical · 10 SSOT files
+parse-gate PASS · deployed-binary regen deferred (standard
+g_commit_push_deploy cycle, not this sub-cycle).
+
+**Scope**: RFC 074 Phase 1 (parser accept multi-field) + Phase 2 (bind-
+time arity check) collapsed into one cycle. The two are surgical and
+the registry+diag is the minimum useful semantic — Phase 1 alone would
+silently truncate to single-field at every downstream consumer.
+
+**Files touched** (10, all worktree SSOT):
+- `compiler/parse/ast.hexa` — header refresh + `Param.typs: [TypeRef]`
+  positional payload carrier (single-field sites mirror `typs[0] == typ`;
+  multi-field populate full `typs[]` and `typ` holds `typs[0]` as legacy
+  degraded projection per RFC-074 §3.1.2 carrier-shape (b)).
+- `compiler/parse/parser.hexa` — `parse_enum_item` comma-drain replaced
+  with `v_typs[]` accumulator; `parse_param` + struct-field push set
+  `typs: [ty]` for arity-1 backward-compat.
+- `compiler/parse/parser_test.hexa` — `case_enum_multi_field` fixture
+  exercises `enum Event { Unit, Click(i64, i64), Triple(i64, i64, i64),
+  Tag(string) }` + per-variant match destructure.
+- `compiler/check/bind.hexa` — per-module enum variant arity registry
+  (`_bind_enum_names`/`_offsets`/`_counts`/`_variant_names`/
+  `_variant_arities`) populated by `_bind_register_enum_item` in
+  `bind()`'s pre-pass. Both EnumPath sites (`_bind_walk_expr`
+  construction + `_bind_pattern` match-arm) probe
+  `_bind_lookup_variant_arity(head, tail)` and emit HX2004 on mismatch.
+  Helpers added: `_enum_variant_tail`, `_is_enum_kind`, `_emit_hx2004`.
+- `compiler/diag/catalog.hexa` — new `DiagSpec { code: "HX2004", title:
+  "enum variant payload arity mismatch", severity: Error, stage: "S2"
+  }`. Template `"enum variant `{enum_name}::{variant_name}` expects
+  {expected} payload {plural}, got {actual}"` with driver-supplied
+  plural (`"component"` for expected==1, else `"components"`).
+- `compiler/check/{bind,types,units,equational}_test.hexa` (×4) +
+  `compiler/discover/discover_smoke.hexa` — `_param` helpers widened
+  in lockstep (struct literals are total-init under the existing
+  hexa stage0 grammar, so every Param literal in the codebase had to
+  carry the new `typs` field to keep parse-gate green).
+
+**Acceptance** (Phase 2): ✅ MET — `hexa_real parse` PASS on all 10
+files. The HX2004 emit path is exercised at the catalog spec + bind-time
+registry lookup; an end-to-end smoke harness was NOT shipped this cycle
+(g3-honest scope: arity gate is unit-test-ready, full harness deferred).
+
+**DEFERRED to sub-cycles**:
+- Phase 2.1 — `compiler/check/types.hexa` element-type matching
+  (`enum_all_variant_payload_types: [[string]]` per-slot type
+  assertions on `E::V(arg0, arg1)`). Bind-side arity gate already
+  covers the dominant error class.
+- Phase 3 — `compiler/lower` HIR-level multi-field payload child wiring.
+- Phase 4 — `compiler/codegen` per-target match-arm payload capture
+  emit (arm64-darwin · x86_64-linux · thumbv7em).
+- Phase 5 — self-host fixpoint with synthetic multi-field enum
+  exercising the bootstrap.
+
+**g3 honest scope**: parser accept + AST carrier + bind-time arity
+gate landed. Lower/codegen still drop payloads silently for arity ≥ 2
+— Phase 3+ closes that. This cycle's load-bearing contribution is the
+S2 arity gate (catches the dominant arity-mismatch error class BEFORE
+any downstream pass mis-binds or truncates).
+
+**LoC delta** (this cycle):
+
+```
+ compiler/parse/ast.hexa                              | +18 -3
+ compiler/parse/parser.hexa                           | +27 -8
+ compiler/parse/parser_test.hexa                      | +11 -0
+ compiler/check/bind.hexa                             | +138 -6
+ compiler/check/bind_test.hexa                        | +3 -1
+ compiler/check/types_test.hexa                       | +3 -1
+ compiler/check/units_test.hexa                       | +3 -1
+ compiler/check/equational_test.hexa                  | +3 -1
+ compiler/discover/discover_smoke.hexa                | +3 -1
+ compiler/diag/catalog.hexa                           | +14 -0
+ inbox/rfc_drafts_2026_05_20/rfc_074_…md              | +28 -8  (Phase 1+2 status flip)
+ compiler/PLAN.md                                     | this entry
+```
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md
+(Phase 1+2 LANDED 2026-05-20 · Phase 2.1 element-type match, Phases 3-5
+lower/codegen/fixpoint still PLANNED).

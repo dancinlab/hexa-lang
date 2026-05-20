@@ -9,6 +9,14 @@
 // payload data lives in the surrounding struct fields (`children`, `text`,
 // `atlas_ref`, etc.) since stage0 enum variants cannot carry payloads yet.
 //
+// RFC-074 Phase 2 (2026-05-20) — `Param.typs: [TypeRef]` adds the positional
+// multi-field enum payload carrier (§3.1.2 carrier-shape (b)). Single-field
+// sites (`typs.len ∈ {0,1}`) keep backward-compat with the legacy `typ` slot
+// — for arity 0 typs is empty and typ is empty_type; for arity 1 typs[0]
+// mirrors typ; for arity N≥2 typs carries N slots and typ holds typs[0] as a
+// legacy degraded projection. Consumers walking multi-field enum variants
+// MUST iterate `typs` (not `typ`). See RFC-074 §3.1 Phase 1+2.
+//
 // AtlasRef.kind and Annotation.name remain `string` — they are more dynamic
 // (e.g. annotation names extend over time per RFC-017 §5) and not exhaustive.
 
@@ -44,6 +52,13 @@ pub struct TypeRef {
 pub struct Param {
     name: string,
     typ: TypeRef,        // `type` is reserved in hexa stage0 → use `typ`
+    // RFC-074 Phase 2 — positional multi-field enum payload carrier.
+    //   function param / struct field : typs.len == 1, typs[0] == typ
+    //   enum variant arity 0          : typs.len == 0, typ empty_type
+    //   enum variant arity 1          : typs.len == 1, typs[0] == typ
+    //   enum variant arity N≥2        : typs.len == N, typ holds typs[0]
+    // Legacy single-slot readers see typ; multi-field consumers iterate typs.
+    typs: [TypeRef],
     span: Span
 }
 

@@ -1478,7 +1478,9 @@ fn parse_param() -> Param {
     let name_tok = expect(TokenKind::Ident)
     eat(TokenKind::Colon)
     let ty = parse_type()
-    return Param { name: name_tok.text, typ: ty, span: name_tok.span }
+    // RFC-074 Phase 2 — Param.typs is the positional payload carrier.
+    // Function params are always arity-1; mirror `typ` into `typs[0]`.
+    return Param { name: name_tok.text, typ: ty, typs: [ty], span: name_tok.span }
 }
 
 fn parse_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
@@ -1583,7 +1585,8 @@ fn parse_struct_item(is_pub: bool, anns: [Annotation]) -> Item {
         let f_name = expect(TokenKind::Ident)
         eat(TokenKind::Colon)
         let f_ty = parse_type()
-        fields.push(Param { name: f_name.text, typ: f_ty, span: f_name.span })
+        // RFC-074 Phase 2 — struct fields are arity-1 (single typed slot).
+        fields.push(Param { name: f_name.text, typ: f_ty, typs: [f_ty], span: f_name.span })
         if check_kind(TokenKind::Comma) { advance() }
     }
     eat(TokenKind::RBrace)
@@ -1599,10 +1602,12 @@ fn parse_struct_item(is_pub: bool, anns: [Annotation]) -> Item {
     }
 }
 
-// enum Name { Variant1, Variant2(Type), Variant3 }
-// Each variant is stored as a Param entry — name=variant name, type carries
-// the (optional, single-field) payload type. Multi-field payload deferred per
-// RFC-020 until the checker can model tuple variants.
+// enum Name { Variant1, Variant2(Type), Variant3, Triple(int, string, bool) }
+// Each variant is stored as a Param entry — name=variant name, `typs[]` is
+// the positional payload carrier (RFC-074 §2.2 / Phase 2). Single-field
+// (arity ≤ 1) sites keep `typ` populated as a legacy mirror of `typs[0]`;
+// multi-field (arity ≥ 2) populate `typs[]` fully and `typ` carries `typs[0]`
+// only for legacy single-slot readers (lower/codegen pending Phase 3+).
 fn parse_enum_item(is_pub: bool, anns: [Annotation]) -> Item {
     let kw = peek()
     eat(TokenKind::KwEnum)
@@ -1611,22 +1616,27 @@ fn parse_enum_item(is_pub: bool, anns: [Annotation]) -> Item {
     let mut variants = []
     while !check_kind(TokenKind::RBrace) && !at_eof() {
         let v_name = expect(TokenKind::Ident)
-        let mut v_ty = empty_type()
+        let mut v_typs = []
         if check_kind(TokenKind::LParen) {
             advance()
             if !check_kind(TokenKind::RParen) {
-                v_ty = parse_type()
-                // RFC-020: multi-field payload deferred — drain trailing
-                // arguments so the brace stream stays balanced.
+                // RFC-074 Phase 2 — accumulate every comma-separated payload
+                // type into v_typs[] (was: only the first was retained, rest
+                // were drained for grammar balance).
+                v_typs.push(parse_type())
                 while check_kind(TokenKind::Comma) {
                     advance()
                     if check_kind(TokenKind::RParen) { break }
-                    parse_type()
+                    v_typs.push(parse_type())
                 }
             }
             eat(TokenKind::RParen)
         }
-        variants.push(Param { name: v_name.text, typ: v_ty, span: v_name.span })
+        // Legacy slot: arity 0 → empty_type; arity ≥ 1 → first payload type.
+        // Multi-field readers MUST iterate `typs` (not `typ`).
+        let mut v_ty = empty_type()
+        if len(v_typs) > 0 { v_ty = v_typs[0] }
+        variants.push(Param { name: v_name.text, typ: v_ty, typs: v_typs, span: v_name.span })
         if check_kind(TokenKind::Comma) { advance() }
     }
     eat(TokenKind::RBrace)

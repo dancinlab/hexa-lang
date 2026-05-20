@@ -90,6 +90,16 @@ fn case_enum_and_match() {
     dump_module("case 4: enum + match", src)
 }
 
+// RFC-074 Phase 2 fixture — multi-field positional enum payload (arity ≥ 2)
+// parses cleanly. Each variant Param row has `typs[]` matching the declared
+// arity (0 / 1 / 2 / 3 in this fixture). Construction + match destructure
+// both round-trip through the parser; bind/type-check arity verification
+// fires HX2004 on mismatch (see bind.hexa _bind_lookup_variant_arity).
+fn case_enum_multi_field() {
+    let src = "enum Event { Unit, Click(i64, i64), Triple(i64, i64, i64), Tag(string) }\nfn handle(e: Event) -> i64 { return match e { Event::Unit -> 0, Event::Click(x, y) -> x + y, Event::Triple(a, b, c) -> a + b + c, Event::Tag(s) -> 1 } }"
+    dump_module("case 4b: RFC-074 multi-field enum payload (arity 0/1/2/3)", src)
+}
+
 fn case_struct_literal() {
     let src = "struct Pt { x: i64, y: i64 }\nfn make() -> Pt { return Pt { x: 1, y: 2 } }"
     dump_module("case 5: struct literal", src)
@@ -132,6 +142,7 @@ case_basic_fn()
 case_atlas_and_annotation()
 case_struct_let_import()
 case_enum_and_match()
+case_enum_multi_field()
 case_struct_literal()
 case_for_loop()
 case_assignment()

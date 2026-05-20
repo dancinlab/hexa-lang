@@ -46,6 +46,72 @@ pub struct BindScope {
     next_index: i64
 }
 
+// ── RFC-074 Phase 2 — enum variant payload arity registry ───
+// Module-local lookup table built once per `bind()` call (reset on entry).
+// We do NOT thread the arity table through the walker — module-level state
+// matches the self/type_checker.hexa convention (enum_all_variant_payload_*).
+//
+// Layout (flat parallel arrays, indexed by variant ordinal across the module):
+//   _bind_enum_names[i]            : enum decl name (e.g. "Event")
+//   _bind_enum_variant_offsets[i]  : start index into _bind_enum_variant_*[]
+//   _bind_enum_variant_counts[i]   : number of variants in enum i
+//   _bind_enum_variant_names[j]    : variant name (e.g. "Click")
+//   _bind_enum_variant_arities[j]  : payload arity (= len(Param.typs)) — 0 unit / 1 single / N multi
+//
+// Arity is recovered from Param.typs.len; the parser populates this per
+// RFC-074 §3.1 (compiler/parse/parser.hexa parse_enum_item).
+let mut _bind_enum_names: [string] = []
+let mut _bind_enum_variant_offsets: [i64] = []
+let mut _bind_enum_variant_counts: [i64] = []
+let mut _bind_enum_variant_names: [string] = []
+let mut _bind_enum_variant_arities: [i64] = []
+
+fn _bind_enum_registry_reset() {
+    _bind_enum_names = []
+    _bind_enum_variant_offsets = []
+    _bind_enum_variant_counts = []
+    _bind_enum_variant_names = []
+    _bind_enum_variant_arities = []
+}
+
+fn _bind_register_enum_item(it: Item) {
+    if !_is_enum_kind(it.kind) { return }
+    _bind_enum_names.push(it.name)
+    _bind_enum_variant_offsets.push(len(_bind_enum_variant_names))
+    _bind_enum_variant_counts.push(len(it.params))
+    let mut vi = 0
+    while vi < len(it.params) {
+        let v = it.params[vi]
+        _bind_enum_variant_names.push(v.name)
+        _bind_enum_variant_arities.push(len(v.typs))
+        vi = vi + 1
+    }
+}
+
+// Returns the declared arity (≥ 0) for enum_name::variant_name, or -1 if
+// the enum or variant is not known. The -1 sentinel is the "skip" signal —
+// the caller treats it as "no arity claim" and emits no diagnostic, since
+// unknown enum heads are handled separately (HX2001 in _bind_walk_expr).
+fn _bind_lookup_variant_arity(enum_name: string, variant_name: string) -> i64 {
+    let mut ei = 0
+    while ei < len(_bind_enum_names) {
+        if _bind_enum_names[ei] == enum_name {
+            let off = _bind_enum_variant_offsets[ei]
+            let cnt = _bind_enum_variant_counts[ei]
+            let mut vi = 0
+            while vi < cnt {
+                if _bind_enum_variant_names[off + vi] == variant_name {
+                    return _bind_enum_variant_arities[off + vi]
+                }
+                vi = vi + 1
+            }
+            return -1
+        }
+        ei = ei + 1
+    }
+    return -1
+}
+
 // ── Helpers ──────────────────────────────────────────────────
 
 fn _bind_empty_fixit() -> FixIt {
@@ -557,6 +623,20 @@ fn _emit_hx2001(name: string, span: Span, suggest: string, out: array) {
     out.push(diag_emit(b))
 }
 
+// RFC-074 Phase 2 — HX2004 emitter: enum variant payload arity mismatch.
+fn _emit_hx2004(enum_name: string, variant_name: string, expected: i64, actual: i64, span: Span, out: array) {
+    let mut b = diag_new("HX2004")
+    b = diag_span(b, span)
+    b = diag_arg(b, "enum_name", enum_name)
+    b = diag_arg(b, "variant_name", variant_name)
+    b = diag_arg(b, "expected", to_string(expected))
+    b = diag_arg(b, "actual", to_string(actual))
+    let mut plural = "components"
+    if expected == 1 { plural = "component" }
+    b = diag_arg(b, "plural", plural)
+    out.push(diag_emit(b))
+}
+
 // ── `let` text decoder ──────────────────────────────────────
 // parse_let_expr stashes the binding name in `text`, prefixed with
 // "mut:" if it was declared mutable. Strip the prefix for binding.
@@ -594,6 +674,27 @@ fn _enum_head(t: string) -> string {
         out = out + to_string(chars[i])
     }
     return out
+}
+
+// RFC-074 Phase 2 — extract the variant tail from "Enum::Variant" text.
+// Returns "" if no "::" separator is found.
+fn _enum_variant_tail(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut i = 0
+    while i < n - 1 {
+        if chars[i] == ':' && chars[i + 1] == ':' {
+            let mut out = ""
+            let mut j = i + 2
+            while j < n {
+                out = out + to_string(chars[j])
+                j = j + 1
+            }
+            return out
+        }
+        i = i + 1
+    }
+    return ""
 }
 
 // ── Walker (collect-don't-stop) ──────────────────────────────
@@ -661,6 +762,21 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
             if hit.index < 0 {
                 let suggest = _suggest_name(sc, head, 2)
                 _emit_hx2001(head, e.span, suggest, out)
+            }
+            // RFC-074 Phase 2 — payload arity check (construction site).
+            // Compare the actual children count against the declared `typs`
+            // arity from the enum registry. Skip when the enum/variant is
+            // unknown (registry returns -1) — those are caught by HX2001 on
+            // the head above, no need to double-emit.
+            let tail = _enum_variant_tail(e.text)
+            if len(tail) > 0 {
+                let expected = _bind_lookup_variant_arity(head, tail)
+                if expected >= 0 {
+                    let actual = len(e.children)
+                    if expected != actual {
+                        _emit_hx2004(head, tail, expected, actual, e.span, out)
+                    }
+                }
             }
         }
         // Payload children (when used as an expression, not pattern).
@@ -813,6 +929,20 @@ fn _bind_pattern(p: Expr, in_sc: BindScope, mod_file: string, out: array) -> Bin
         // We DON'T resolve the enum head here — pattern context permits
         // unresolved nominal types in stage0 (S3 will type-check them).
         // Instead bind every Ident-like payload child as a fresh binder.
+        //
+        // RFC-074 Phase 2 — match-arm arity check. The pattern's
+        // children[] count must equal the variant's declared payload arity.
+        let pat_head = _enum_head(p.text)
+        let pat_tail = _enum_variant_tail(p.text)
+        if len(pat_head) > 0 && len(pat_tail) > 0 {
+            let pat_expected = _bind_lookup_variant_arity(pat_head, pat_tail)
+            if pat_expected >= 0 {
+                let pat_actual = len(p.children)
+                if pat_expected != pat_actual {
+                    _emit_hx2004(pat_head, pat_tail, pat_expected, pat_actual, p.span, out)
+                }
+            }
+        }
         let mut i = 0
         while i < len(p.children) {
             let c = p.children[i]
@@ -865,6 +995,17 @@ fn _is_import_kind(k: ItemKind) -> bool {
         ItemKind::Let -> false,
         ItemKind::Struct -> false,
         ItemKind::Enum -> false
+    }
+}
+
+// RFC-074 Phase 2 — used to gate registry population in _bind_register_enum_item.
+fn _is_enum_kind(k: ItemKind) -> bool {
+    return match k {
+        ItemKind::Enum -> true,
+        ItemKind::Fn -> false,
+        ItemKind::Let -> false,
+        ItemKind::Struct -> false,
+        ItemKind::Import -> false
     }
 }
 
@@ -962,6 +1103,11 @@ pub fn bind(module: Module) -> array {
     let mut out = []
     let mod_file = module.file
 
+    // RFC-074 Phase 2 — reset the per-module enum variant arity registry
+    // before the pre-pass populates it. `bind()` is called once per module;
+    // the registry's lifetime is exactly this call.
+    _bind_enum_registry_reset()
+
     // ── Pre-pass: register host-runtime builtins so identifier lookups
     // don't surface as HX2001. Anchored to mod_file so the same scope
     // shape is exercised regardless of import topology.
@@ -976,6 +1122,10 @@ pub fn bind(module: Module) -> array {
     let mut i = 0
     while i < len(module.items) {
         let it = module.items[i]
+        // RFC-074 Phase 2 — populate the enum variant arity registry while
+        // we walk top-level items. Done in the SAME pass to keep ordering
+        // simple — Enum items have no body to walk anyway.
+        _bind_register_enum_item(it)
         if !_is_import_kind(it.kind) {
             // Top-level `let mut X` carries it.name = "mut:X" (parser
             // parse_let_item). Without stripping, the module scope held

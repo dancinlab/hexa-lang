@@ -119,9 +119,11 @@ fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
 }
 
 fn _param(name: string, typ_name: string, file: string, line: i64, col: i64) -> Param {
+    let t = _named_type_ref(typ_name)
     return Param {
         name: name,
-        typ: _named_type_ref(typ_name),
+        typ: t,
+        typs: [t],  // RFC-074 Phase 2 — arity-1 default
         span: _span(file, line, col, len(name))
     }
 }
