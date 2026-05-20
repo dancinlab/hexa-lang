@@ -83,6 +83,7 @@ self/native/hexa_cc.c.new
 # R7 track B absorbed-verb sub-binaries — built via `hexa build stdlib/<verb>/<verb>.hexa`.
 # Arch-specific Mach-O / ELF, not source of truth. Rebuild with tool/build_hexa_<verb>.sh.
 bin/hexa-qrng
+bin/hexa-cloud
 bin/hexa-qmirror
 bin/hexa-sim-universe
 bin/hexa-convergence

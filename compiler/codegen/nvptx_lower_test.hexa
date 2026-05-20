@@ -1,0 +1,1863 @@
+// HEXA Native Compiler — RFC 055 055-P3b / generic NVPTX lowering primitives smoke
+//
+// @version 0.0.1
+// @capabilities [pure]
+//
+// RFC 055 055-P3b — exercises the generic `_nvptx_lower_func` MIR walk
+// on stmt kinds beyond the 055-P0 FP64-arithmetic straight-line subset.
+// This file's role is the *primitives* gate: each new MIR construct the
+// generic lowering learns to handle lands a `_test_<construct>` case
+// here, hand-built MIR + substring asserts on the emitted PTX text.
+//
+// 055-P0 already proved STMT_ASSIGN / STMT_BINOP{add,sub,mul} / STMT_RETURN
+// via `nvptx_emit_test.hexa`. 055-P1 / 055-P2 proved the hand-emit form
+// (kernel `.visible .entry` + bank + intrinsics + control flow) via
+// `nvptx_vec_add_test.hexa` / `nvptx_gemm_test.hexa` + a real GPU fire.
+// What this file picks up: the GENERIC MIR-walk lowering of those same
+// constructs, one stmt kind at a time, each verified by a tiny synthetic
+// MModule the same way `codegen_test.hexa` verifies the CPU codegens.
+//
+// 055-P3b first slice landed here:
+//   STMT_BR — unconditional branch → `bra $L_<target>;`
+//
+// 055-P3b still TBD (per-Local type tracking required before each):
+//   STMT_BR_COND — predicate-register dance (`%p<id>` separate from `%fd<id>`)
+//   STMT_CALL    — known gpu intrinsic names → sreg `mov.u32`
+//   STMT_LOAD / STMT_STORE — `.global.f64` address-space ops
+//
+// Run:
+//   hexa build compiler/codegen/nvptx_lower_test.hexa -o build/nvptx_lower_test
+//   ./build/nvptx_lower_test
+
+import "../ir/mir.hexa"
+import "../ir/lir.hexa"
+import "./nvptx_target.hexa"
+import "./nvptx_ptx_ops.hexa"
+
+// ── MIR construction helpers (mirror of codegen_test.hexa /
+//    nvptx_emit_test.hexa — same shape, kept local to keep this file
+//    self-contained for the test-harness pattern) ────────────────────
+
+fn _local(id: i64, name: string) -> Local {
+    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name, precision: "" }
+}
+
+fn _miss_local() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "" }
+}
+
+fn _op_local(local_id: i64) -> Operand {
+    return Operand {
+        kind: "local", local_id: local_id,
+        int_val: 0, float_val: 0.0, str_val: "", global_id: -1
+    }
+}
+
+fn _stmt_binop(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(a)
+    xs.push(b)
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: op, args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_return() -> Stmt {
+    return Stmt {
+        kind: STMT_RETURN, dst: _miss_local(), op: "", args: [],
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_br(target: i64) -> Stmt {
+    return Stmt {
+        kind: STMT_BR, dst: _miss_local(), op: "", args: [],
+        target_block: target, target_block_else: -1
+    }
+}
+
+fn _block(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+// ── Text inspection ──────────────────────────────────────────────────
+
+fn _contains(hay: string, needle: string) -> bool {
+    return hay.find(needle) >= 0
+}
+
+fn _check(ok_in: bool, hay: string, needle: string, label: string) -> bool {
+    if _contains(hay, needle) { return ok_in }
+    println("  FAIL: " + label + " (missing: `" + needle + "`)")
+    return false
+}
+
+// ── Case 1 — STMT_BR (unconditional branch) ───────────────────────────
+//
+// Two-block MFunc: block 0 computes an f64 add then BR's to block 1,
+// block 1 returns. Proves the generic `_nvptx_lower_func` emits:
+//   - the block-0 label `$L_0:` and an `add.f64` for the binop
+//   - an unconditional `bra $L_1;` terminator at the end of block 0
+//   - the block-1 label `$L_1:` and a `ret;` terminator
+//
+// Verifies the 055-P3b STMT_BR primitive lands correctly without
+// disturbing the 055-P0 STMT_ASSIGN/BINOP/RETURN handling.
+
+fn _build_case_br() -> MModule {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let r = _local(2, "r")
+
+    // block 0: r = a + b ; br -> block 1
+    let mut s0 = []
+    s0.push(_stmt_binop(r, "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_br(1))
+
+    // block 1: return
+    let mut s1 = []
+    s1.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    blocks.push(_block(1, s1))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(r)
+
+    let mf = MFunc {
+        name: "br_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_br.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_stmt_br() -> bool {
+    let mut ok = true
+    let mod_br = _build_case_br()
+    let ptx = codegen_emit_ptx_sm80(mod_br)
+
+    println("")
+    println("── emitted PTX (STMT_BR case, sm_80) ──")
+    println(ptx)
+
+    // 055-P0 carry-over — module header survives the generic path
+    ok = _check(ok, ptx, ".version 7.8",    "sm_80 .version directive")
+    ok = _check(ok, ptx, ".target sm_80",   "sm_80 .target directive")
+    // Block-0 body: label + f64 add
+    ok = _check(ok, ptx, "$L_0:",           "block-0 label")
+    ok = _check(ok, ptx, "add.f64 %fd2",    "f64 add into result register")
+    // 055-P3b STMT_BR primitive — explicit `bra $L_1;` terminator
+    ok = _check(ok, ptx, "bra $L_1",        "STMT_BR -> bra $L_1")
+    // Block-1 body: label + ret
+    ok = _check(ok, ptx, "$L_1:",           "block-1 label")
+    ok = _check(ok, ptx, "ret;",            "ret terminator")
+    return ok
+}
+
+// ── Case 2 — per-Local kind classification (predicate via comparison) ──
+//
+// 055-P3b second slice: `_nvptx_classify_locals` walks the MIR and
+// classifies each Local by its defining stmt. A STMT_BINOP with op="lt"
+// (or le/gt/ge/eq/ne) produces a Boolean predicate → the dst Local is
+// classified PRED → the `.reg` declaration emits `.reg .pred %p<id>;`
+// instead of the 055-P0 default `.reg .f64`. Mixed kinds in one MFunc
+// (an arithmetic binop producing f64 + a comparison producing pred)
+// must produce the two banks separately.
+//
+// This test hand-builds:
+//   block 0: t  = a + b      // STMT_BINOP "add"  → t is .f64  (%fd2)
+//            p  = t < b      // STMT_BINOP "lt"   → p is .pred (%p3)
+//            return
+//
+// The lowering of "lt" itself is still a 055-P0 honest stub in the
+// emitted PTX text (the BINOP-mnemonic table only carries add/sub/mul);
+// what this test verifies is the CLASSIFICATION + REG-DECL machinery,
+// which is the prerequisite for a real `setp` lowering in a later
+// cycle. PASS = both `.reg .f64 %fd2;` and `.reg .pred %p3;` appear.
+
+fn _stmt_binop_cmp(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
+    // Same shape as _stmt_binop — kept as a separate helper to keep the
+    // test's intent (a COMPARISON binop) visible at the call site.
+    return _stmt_binop(dst, op, a, b)
+}
+
+fn _build_case_classify_pred() -> MModule {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let t = _local(2, "t")     // expected .reg .f64 %fd2
+    let p = _local(3, "p")     // expected .reg .pred %p3
+
+    let mut s0 = []
+    s0.push(_stmt_binop(t, "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_binop_cmp(p, "lt", _op_local(t.id), _op_local(b.id)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(t)
+    locals.push(p)
+
+    let mf = MFunc {
+        name: "cmp_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_classify.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_classify_pred() -> bool {
+    let mut ok = true
+    let mod_cmp = _build_case_classify_pred()
+    let ptx = codegen_emit_ptx_sm80(mod_cmp)
+
+    println("")
+    println("── emitted PTX (classification case, sm_80) ──")
+    println(ptx)
+
+    // F64 bank — t came from STMT_BINOP "add" → fpr → .reg .f64 %fd2
+    ok = _check(ok, ptx, ".reg .f64 %fd2",  "f64 bank for arithmetic-binop dst")
+    // PRED bank — p came from STMT_BINOP "lt" → pred → .reg .pred %p3
+    ok = _check(ok, ptx, ".reg .pred %p3",  "pred bank for comparison-binop dst")
+    // Header carry-over
+    ok = _check(ok, ptx, ".target sm_80",   "sm_80 .target directive")
+    return ok
+}
+
+// ── Case 3 — STMT_BR_COND + setp comparison body ─────────────────────
+//
+// 055-P3b third slice: paired setp lowering + STMT_BR_COND. A two-block
+// MFunc with a predicate-producing comparison binop in block 0 followed
+// by a STMT_BR_COND that branches on it, with block 1 = `then` and
+// block 2 = `else` (both returning). Verifies:
+//   - the comparison binop body emits `setp.<cond>.f64 %p<dst>, <a>, <b>;`
+//     (not the stub comment from the prior P3b slice)
+//   - STMT_BR_COND emits `@<pred> bra $L_<true>;` + a fall-through
+//     `bra $L_<false>;`
+//   - the .reg .pred bank carries the predicate Local
+
+fn _stmt_br_cond(pred: Operand, t_block: i64, e_block: i64) -> Stmt {
+    let mut xs = []
+    xs.push(pred)
+    return Stmt {
+        kind: STMT_BR_COND, dst: _miss_local(), op: "", args: xs,
+        target_block: t_block, target_block_else: e_block
+    }
+}
+
+fn _build_case_setp_br_cond() -> MModule {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let p = _local(2, "p")     // expected .pred (setp produces predicate)
+
+    // block 0: p = a < b ; br_cond p -> block 1, else block 2
+    let mut s0 = []
+    s0.push(_stmt_binop(p, "lt", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_br_cond(_op_local(p.id), 1, 2))
+
+    // block 1: then-arm — return
+    let mut s1 = []
+    s1.push(_stmt_return())
+    // block 2: else-arm — return
+    let mut s2 = []
+    s2.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    blocks.push(_block(1, s1))
+    blocks.push(_block(2, s2))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(p)
+
+    let mf = MFunc {
+        name: "br_cond_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_br_cond.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_setp_and_br_cond() -> bool {
+    let mut ok = true
+    let mod_bc = _build_case_setp_br_cond()
+    let ptx = codegen_emit_ptx_sm80(mod_bc)
+
+    println("")
+    println("── emitted PTX (setp + STMT_BR_COND case, sm_80) ──")
+    println(ptx)
+
+    // setp body for `lt`
+    ok = _check(ok, ptx, "setp.lt.f64 %p2",     "setp.lt.f64 with pred dst")
+    // STMT_BR_COND lowering
+    ok = _check(ok, ptx, "@%p2 bra $L_1",       "predicated br -> $L_1 (then)")
+    ok = _check(ok, ptx, "bra $L_2",            "fall-through br -> $L_2 (else)")
+    // .reg .pred bank
+    ok = _check(ok, ptx, ".reg .pred %p2",      "pred bank for the comparison dst")
+    // All three blocks present
+    ok = _check(ok, ptx, "$L_0:",               "block-0 label")
+    ok = _check(ok, ptx, "$L_1:",               "block-1 (then) label")
+    ok = _check(ok, ptx, "$L_2:",               "block-2 (else) label")
+    return ok
+}
+
+// ── Case 4 — STMT_CALL gpu intrinsic body ─────────────────────────────
+//
+// 055-P3b fourth slice: STMT_CALL with the known gpu thread-index
+// intrinsic names lowers to `mov.u32 %r<dst>, <sreg>.<axis>;`. The
+// classifier puts the dst into the `.reg .u32` bank; this verifies the
+// body emission. Uses three intrinsics across the x axis:
+// gpu_block_id_x, gpu_block_dim_x, gpu_thread_id_x — the same three
+// the 055-P1 hand-emit vec-add reads as the gid-compose preamble.
+
+fn _stmt_call(dst: Local, callee: string) -> Stmt {
+    return Stmt {
+        kind: STMT_CALL, dst: dst, op: callee, args: [],
+        target_block: -1, target_block_else: -1
+    }
+}
+
+// _stmt_call_with_args — STMT_CALL with operand arguments. Used by the
+// 055-P4+ `gpu_atomic_add(addr, v)` case (mirrors _stmt_load / _stmt_store
+// shape — explicit operand carrier for an intrinsic that consumes args).
+fn _stmt_call_with_args(dst: Local, callee: string, args: [Operand]) -> Stmt {
+    return Stmt {
+        kind: STMT_CALL, dst: dst, op: callee, args: args,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _build_case_call_intrinsic() -> MModule {
+    let ctaid_x = _local(0, "ctaid_x")
+    let ntid_x  = _local(1, "ntid_x")
+    let tid_x   = _local(2, "tid_x")
+
+    let mut s0 = []
+    s0.push(_stmt_call(ctaid_x, "gpu_block_id_x"))
+    s0.push(_stmt_call(ntid_x,  "gpu_block_dim_x"))
+    s0.push(_stmt_call(tid_x,   "gpu_thread_id_x"))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut locals = []
+    locals.push(ctaid_x)
+    locals.push(ntid_x)
+    locals.push(tid_x)
+
+    let mf = MFunc {
+        name: "intrin_smoke",
+        params: [],
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_intrinsics.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_call_intrinsic() -> bool {
+    let mut ok = true
+    let mod_in = _build_case_call_intrinsic()
+    let ptx = codegen_emit_ptx_sm80(mod_in)
+
+    println("")
+    println("── emitted PTX (STMT_CALL gpu intrinsic body, sm_80) ──")
+    println(ptx)
+
+    // .reg .u32 bank for each intrinsic dst
+    ok = _check(ok, ptx, ".reg .u32 %r0",                "u32 bank %r0 (ctaid_x)")
+    ok = _check(ok, ptx, ".reg .u32 %r1",                "u32 bank %r1 (ntid_x)")
+    ok = _check(ok, ptx, ".reg .u32 %r2",                "u32 bank %r2 (tid_x)")
+    // mov.u32 from PTX special registers
+    ok = _check(ok, ptx, "mov.u32 %r0, %ctaid.x",        "gpu_block_id_x() -> %ctaid.x")
+    ok = _check(ok, ptx, "mov.u32 %r1, %ntid.x",         "gpu_block_dim_x() -> %ntid.x")
+    ok = _check(ok, ptx, "mov.u32 %r2, %tid.x",          "gpu_thread_id_x() -> %tid.x")
+    return ok
+}
+
+// ── Case 5 — STMT_LOAD + STMT_STORE generic lowering ──────────────────
+//
+// 055-P3b fifth (last) slice: memory ops. STMT_LOAD lowers to
+// `ld.global.f64 %fd<dst>, [%rd<addr>];` and STMT_STORE lowers to
+// `st.global.f64 [%rd<addr>], %fd<value>;`. The classifier's Pass 2
+// has propagated the address-operand source Local into the `.u64`
+// bank so the emitted PTX renders `%rd<id>` for the address.
+//
+// Fixture: a one-block MFunc with a STMT_LOAD that loads from address
+// Local 0 (a function param treated as a u64 farr base) followed by a
+// STMT_STORE that writes a value to the same address. Verifies:
+//   - `.reg .u64 %rd0` declared (Pass 2 propagation of the address Local)
+//   - `ld.global.f64 %fd1, [%rd0];` for the load
+//   - `st.global.f64 [%rd0], %fd1;` for the store
+
+fn _stmt_load(dst: Local, addr: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(addr)
+    return Stmt {
+        kind: STMT_LOAD, dst: dst, op: "", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_store(addr: Operand, value: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(addr)
+    xs.push(value)
+    return Stmt {
+        kind: STMT_STORE, dst: _miss_local(), op: "", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _build_case_load_store() -> MModule {
+    let p = _local(0, "p")           // address Local — propagated to U64 by Pass 2
+    let v = _local(1, "v")           // STMT_LOAD dst — F64
+    let v2 = _local(2, "v2")         // arithmetic intermediate — F64
+
+    // block 0:
+    //   v  = *p              (STMT_LOAD)
+    //   v2 = v + v           (STMT_BINOP "add" — F64)
+    //   *p = v2              (STMT_STORE)
+    //   return
+    let mut s0 = []
+    s0.push(_stmt_load(v, _op_local(p.id)))
+    s0.push(_stmt_binop(v2, "add", _op_local(v.id), _op_local(v.id)))
+    s0.push(_stmt_store(_op_local(p.id), _op_local(v2.id)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(p)
+    let mut locals = []
+    locals.push(p)
+    locals.push(v)
+    locals.push(v2)
+
+    let mf = MFunc {
+        name: "ld_st_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_ld_st.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_load_store() -> bool {
+    let mut ok = true
+    let mod_ls = _build_case_load_store()
+    let ptx = codegen_emit_ptx_sm80(mod_ls)
+
+    println("")
+    println("── emitted PTX (STMT_LOAD + STMT_STORE case, sm_80) ──")
+    println(ptx)
+
+    // Pass 2 retroactive U64 classification of the address Local (param)
+    ok = _check(ok, ptx, ".reg .u64 %rd0",                    "u64 bank for address (Pass 2)")
+    // STMT_LOAD lowering
+    ok = _check(ok, ptx, "ld.global.f64 %fd1, [%rd0]",        "ld.global.f64 dst <- [addr]")
+    // F64 bank for the loaded value + the arithmetic intermediate
+    ok = _check(ok, ptx, ".reg .f64 %fd1",                    "f64 bank for STMT_LOAD dst")
+    ok = _check(ok, ptx, ".reg .f64 %fd2",                    "f64 bank for arithmetic intermediate")
+    // STMT_STORE lowering
+    ok = _check(ok, ptx, "st.global.f64 [%rd0], %fd2",        "st.global.f64 [addr] <- val")
+    return ok
+}
+
+// ── Case 6 — 055-P3c MFunc.gpu_kind partition ─────────────────────────
+//
+// 055-P3c: `_nvptx_codegen` only lowers MFuncs whose gpu_kind !=
+// GPU_KIND_CPU. Build a mixed-kind MModule and assert the partition:
+//   - cpu_only        — GPU_KIND_CPU    (expected FILTERED OUT)
+//   - dev_helper      — GPU_KIND_DEVICE (expected emitted)
+//   - kernel_entry    — GPU_KIND_KERNEL (expected emitted)
+
+fn _mfunc_partition(name: string, kind: i64) -> MFunc {
+    // Same body across all three fns — the only diff the partition can
+    // act on is gpu_kind. Body: `r = a + b ; return`.
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let r = _local(2, "r")
+    let mut s = []
+    s.push(_stmt_binop(r, "add", _op_local(a.id), _op_local(b.id)))
+    s.push(_stmt_return())
+    let mut blocks = []
+    blocks.push(_block(0, s))
+    let mut params = []
+    params.push(a); params.push(b)
+    let mut locals = []
+    locals.push(a); locals.push(b); locals.push(r)
+    return MFunc {
+        name: name, params: params, return_local: _miss_local(),
+        locals: locals, blocks: blocks, entry_block: 0,
+        arena_root: 1, def_line: 0, gpu_kind: kind
+    }
+}
+
+fn _build_case_partition() -> MModule {
+    let mut fns = []
+    fns.push(_mfunc_partition("cpu_only",     GPU_KIND_CPU))
+    fns.push(_mfunc_partition("dev_helper",   GPU_KIND_DEVICE))
+    fns.push(_mfunc_partition("kernel_entry", GPU_KIND_KERNEL))
+    return MModule { file: "case_partition.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_partition() -> bool {
+    let mut ok = true
+    let mod_p = _build_case_partition()
+    let ptx = codegen_emit_ptx_sm80(mod_p)
+    println("")
+    println("── emitted PTX (055-P3c partition case, sm_80) ──")
+    println(ptx)
+    ok = _check(ok, ptx, ".func dev_helper",   "device fn emitted as .func")
+    // 055-P3c — KERNEL emits as `.visible .entry`, not `.func`
+    ok = _check(ok, ptx, ".visible .entry kernel_entry", "kernel emitted as .visible .entry")
+    // 055-P3c (param-bank sub-slice) — KERNEL renders MFunc.params as
+    // `.param .u64 <name>_param_<i>` entries in the kernel header.
+    ok = _check(ok, ptx, ".param .u64 kernel_entry_param_0",
+        "kernel param 0 in .visible .entry list")
+    ok = _check(ok, ptx, ".param .u64 kernel_entry_param_1",
+        "kernel param 1 in .visible .entry list")
+    // KERNEL must NOT also appear with the `.func` directive nor with
+    // the raw prefixed name.
+    if _contains(ptx, ".func kernel_entry") {
+        println("  FAIL: kernel_entry must NOT appear as .func")
+        ok = false
+    }
+    if _contains(ptx, "__nvptx_kernel__") {
+        println("  FAIL: NVPTX_KERNEL_PREFIX must be stripped in emitted PTX")
+        ok = false
+    }
+    if _contains(ptx, ".func cpu_only") {
+        println("  FAIL: cpu_only must NOT be emitted (partition filter)")
+        ok = false
+    }
+    // The kernel param list must NOT leak into `.reg` declarations.
+    if _contains(ptx, ".reg .param") {
+        println("  FAIL: param PRegs must render as kernel param list, not as .reg .param")
+        ok = false
+    }
+    return ok
+}
+
+// ── Case 7 — 055-P4 gpu_barrier() intrinsic ───────────────────────────
+//
+// RFC 055 §12 P4+ — block-wide synchronization. STMT_CALL with
+// op="gpu_barrier" lowers to `bar.sync 0;`. Returns void (no dst
+// register, no `.reg` decl from this call site). Required for tiled
+// `@shared` kernels (gpu/SPEC.md §6) that must synchronize between
+// shared-memory writes and cross-thread reads.
+
+fn _build_case_barrier() -> MModule {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let r = _local(2, "r")
+
+    // block 0: r = a + b ; gpu_barrier() ; return
+    let mut s0 = []
+    s0.push(_stmt_binop(r, "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_call(_miss_local(), "gpu_barrier"))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(r)
+
+    let mf = MFunc {
+        name: "barrier_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_barrier.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_barrier() -> bool {
+    let mut ok = true
+    let mod_b = _build_case_barrier()
+    let ptx = codegen_emit_ptx_sm80(mod_b)
+
+    println("")
+    println("── emitted PTX (055-P4 gpu_barrier case, sm_80) ──")
+    println(ptx)
+
+    ok = _check(ok, ptx, "bar.sync 0",       "gpu_barrier() -> bar.sync 0")
+    // Sandwiched between add (before) and ret (after).
+    ok = _check(ok, ptx, "add.f64",          "preceding f64 add still emitted")
+    ok = _check(ok, ptx, "ret;",             "ret terminator after barrier")
+    // No .reg for the barrier call dst (void return — _miss_local has id=-1
+    // which wouldn't classify, but verify no spurious "-1" reg name).
+    if _contains(ptx, ".reg .f64 %fd-1") {
+        println("  FAIL: void-return barrier must not produce a %fd-1 reg decl")
+        ok = false
+    }
+    return ok
+}
+
+// ── Case 8 — 055-P4+ gpu_atomic_add(addr, v) intrinsic ───────────────
+//
+// RFC 055 §12 P4+ — device-DRAM FP64 atomic add. STMT_CALL with
+// op="gpu_atomic_add", args[0]=address (Local in u64 bank), args[1]=value
+// (f64) lowers to `atom.add.f64 %fd<dst>, [%rd<addr>], %fd<v>;`. The
+// destination Local holds the OLD value at the address (PTX atom-instruction
+// semantics) and is classified F64 by the default classifier path. The
+// address operand's source Local is propagated to the U64 bank by
+// `_nvptx_classify_locals` Pass 2 (extended to recognise this STMT_CALL).
+//
+// Fixture: a one-block MFunc with a single `r = gpu_atomic_add(p, v)`
+// call followed by return. Verifies:
+//   - `.reg .u64 %rd0` declared (Pass 2 propagation of the address Local)
+//   - `.reg .f64 %fd2` declared (the OLD-value dst — default F64)
+//   - `atom.add.f64 %fd2, [%rd0], %fd1;` for the atomic add body
+
+fn _build_case_atomic_add() -> MModule {
+    let p = _local(0, "p")           // address Local (param) — propagated to U64 by Pass 2
+    let a = _local(1, "a")           // value source (param) — used by binop below
+    let v = _local(2, "v")           // value operand — F64 via binop dst (Pass 1)
+    let r = _local(3, "r")           // dst (old value) — F64 via default classifier
+
+    // block 0:
+    //   v = a + a                   (STMT_BINOP — gets v into the F64 bank)
+    //   r = gpu_atomic_add(p, v)    (STMT_CALL — args[0]=addr, args[1]=val)
+    //   return
+    //
+    // The binop intermediate is the same pattern as _test_load_store's v2;
+    // it keeps the test focused on the new STMT_CALL lowering + Pass 2
+    // address-operand propagation, without depending on whether param
+    // Locals get a `.reg` decl (they don't, by design — params render
+    // directly via their `%fd<id>` / `%rd<id>` name).
+    let mut atom_args = []
+    atom_args.push(_op_local(p.id))
+    atom_args.push(_op_local(v.id))
+
+    let mut s0 = []
+    s0.push(_stmt_binop(v, "add", _op_local(a.id), _op_local(a.id)))
+    s0.push(_stmt_call_with_args(r, "gpu_atomic_add", atom_args))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(p)
+    params.push(a)
+    let mut locals = []
+    locals.push(p)
+    locals.push(a)
+    locals.push(v)
+    locals.push(r)
+
+    let mf = MFunc {
+        name: "atomic_add_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_atomic_add.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_atomic_add() -> bool {
+    let mut ok = true
+    let mod_aa = _build_case_atomic_add()
+    let ptx = codegen_emit_ptx_sm80(mod_aa)
+
+    println("")
+    println("-- emitted PTX (055-P4+ gpu_atomic_add case, sm_80) --")
+    println(ptx)
+
+    // Pass 2 retroactive U64 classification of the address Local (param)
+    ok = _check(ok, ptx, ".reg .u64 %rd0",                    "u64 bank for address (Pass 2)")
+    // F64 banks — binop intermediate v + atomic-add dst (old value)
+    ok = _check(ok, ptx, ".reg .f64 %fd2",                    "f64 bank for value operand (binop dst)")
+    ok = _check(ok, ptx, ".reg .f64 %fd3",                    "f64 bank for atomic-add dst (old value)")
+    // STMT_CALL gpu_atomic_add lowering — dst=%fd3, addr=[%rd0], val=%fd2
+    ok = _check(ok, ptx, "atom.add.f64 %fd3, [%rd0], %fd2",   "atom.add.f64 dst, [addr], val")
+    // ret after the atomic add
+    ok = _check(ok, ptx, "ret;",                              "ret terminator after atomic add")
+    return ok
+}
+
+// ── Driver ───────────────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  RFC 055 055-P3b + P3c + P4 — generic NVPTX lowering smoke")
+    println("══════════════════════════════════════════════")
+
+    let ok_br    = _test_stmt_br()
+    let ok_cls   = _test_classify_pred()
+    let ok_setp  = _test_setp_and_br_cond()
+    let ok_intr  = _test_call_intrinsic()
+    let ok_ls    = _test_load_store()
+    let ok_part  = _test_partition()
+    let ok_barr  = _test_barrier()
+    let ok_atom  = _test_atomic_add()
+    let ok_shuf  = _test_warp_shuffle()
+    let ok_unr   = _test_unroll_pass()
+    let ok_unrn  = _test_unroll_no_match_passthrough()
+    let ok_wmma  = _test_wmma_scaffold()
+    let ok_mp    = _test_mixed_precision_scaffold()
+    let ok_fctN  = _test_unroll_factor_n()
+    let ok_pp    = _test_precision_propagate()
+    let ok_fw    = _test_frag_width()
+    let ok_sd    = _test_shared_decl()
+    let ok_me    = _test_multi_exit_match()
+    let ok_np    = _test_nested_preserve()
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np {
+        println("PASS: RFC 055 + RFC 067 P1/P2 + RFC 068 P1 + RFC 069 P1/P2/P3 — 19/19 cases (incl. F-RFC069-NESTED-PRESERVE)")
+    } else {
+        println("FAIL: RFC 055 smoke not satisfied.")
+        if !ok_br   { println("      STMT_BR FAILED") }
+        if !ok_cls  { println("      classify (pred bank) FAILED") }
+        if !ok_setp { println("      setp + STMT_BR_COND FAILED") }
+        if !ok_intr { println("      STMT_CALL gpu intrinsic FAILED") }
+        if !ok_ls   { println("      STMT_LOAD / STMT_STORE FAILED") }
+        if !ok_part { println("      055-P3c gpu_kind partition FAILED") }
+        if !ok_barr { println("      055-P4 gpu_barrier() FAILED") }
+        if !ok_atom { println("      055-P4+ gpu_atomic_add() FAILED") }
+        if !ok_shuf { println("      055-P4+ gpu_warp_shuffle() FAILED") }
+        if !ok_unr  { println("      055-P4+ _nvptx_unroll_pass FAILED") }
+        if !ok_unrn { println("      055-P4+ unroll passthrough FAILED") }
+        if !ok_wmma { println("      RFC 055 §12 P4+ WMMA scaffold FAILED") }
+        if !ok_mp   { println("      RFC 055 §12 P4+ mixed-precision scaffold FAILED") }
+        if !ok_fctN { println("      RFC 069 P1 F-RFC069-FACTOR-N FAILED") }
+        if !ok_pp   { println("      RFC 068 P1 F-RFC068-PRECISION-PROPAGATE FAILED") }
+        if !ok_fw   { println("      RFC 067 P1 F-RFC067-FRAG-WIDTH FAILED") }
+        if !ok_sd   { println("      RFC 067 P2 F-RFC067-SHARED-DECL FAILED") }
+        if !ok_me   { println("      RFC 069 P2 F-RFC069-MULTI-EXIT-MATCH FAILED") }
+        if !ok_np   { println("      RFC 069 P3 F-RFC069-NESTED-PRESERVE FAILED") }
+    }
+    println("══════════════════════════════════════════════")
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np) { exit(1) }
+}
+
+// ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
+//
+// RFC 055 §12 P4+ — warp-lane data exchange. STMT_CALL with
+// op="gpu_warp_shuffle" lowers to `shfl.sync.idx.b32 %r<dst>, %r<src>,
+// %r<lane>, 0x1f, 0xffffffff;`. The dst Local is classified U32.
+// Value + lane operands render via hand-typed `%r<id>` references.
+
+fn _build_case_warp_shuffle() -> MModule {
+    let v = _local(0, "v")           // STMT_CALL gpu_thread_id_x -> U32 %r0
+    let lane = _local(1, "lane")     // STMT_CALL gpu_thread_id_y -> U32 %r1
+    let r = _local(2, "r")           // gpu_warp_shuffle dst — U32 %r2
+
+    let mut shuf_args = []
+    shuf_args.push(_op_local(v.id))
+    shuf_args.push(_op_local(lane.id))
+
+    let mut s0 = []
+    s0.push(_stmt_call(v, "gpu_thread_id_x"))
+    s0.push(_stmt_call(lane, "gpu_thread_id_y"))
+    s0.push(_stmt_call_with_args(r, "gpu_warp_shuffle", shuf_args))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut locals = []
+    locals.push(v)
+    locals.push(lane)
+    locals.push(r)
+
+    let mf = MFunc {
+        name: "warp_shuffle_smoke",
+        params: [],
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_warp_shuffle.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_warp_shuffle() -> bool {
+    let mut ok = true
+    let mod_ws = _build_case_warp_shuffle()
+    let ptx = codegen_emit_ptx_sm80(mod_ws)
+
+    println("")
+    println("-- emitted PTX (055-P4+ gpu_warp_shuffle case, sm_80) --")
+    println(ptx)
+
+    ok = _check(ok, ptx, ".reg .u32 %r2",                                      "u32 bank for warp_shuffle dst")
+    ok = _check(ok, ptx, "shfl.sync.idx.b32 %r2, %r0, %r1, 0x1f, 0xffffffff",  "shfl.sync.idx.b32 full operand list")
+    return ok
+}
+// ── Case 8 — 055-P4+ _nvptx_unroll_pass (canonical 3-block back-edge) ─
+//
+// RFC 055 §12 P4+ MVP: the loop-unroll pass clones the body of a
+// canonical 3-block back-edge loop `factor` times so the lowered PTX
+// has the unrolled instruction stream. Closes the GEMM perf gap noted
+// in PR #105 (nvcc unrolls the k-loop ~5×; hexa-emit produces straight
+// scalar bodies).
+//
+// Fixture (3-block back-edge loop):
+//   block 0 (header): t = a + b ; p = t < b ; br_cond p -> body, else exit
+//   block 1 (body)  : q = a * b               ; br -> header   (back-edge)
+//   block 2 (exit)  : return
+//
+// Apply `_nvptx_unroll_pass(mfn, 2)` BEFORE codegen. Expected effect:
+//   - body's STMT_BR target rewritten from header → clone block id
+//   - a new clone block inserted with `q' = a * b ; br -> header`,
+//     where `q'` is a renumbered Local id (offset = max-local-id + 1)
+//   - header (and its setp / br_cond) stays unchanged — only the body
+//     is cloned in the §12 P4+ MVP slice
+//
+// Honest-scope note (g3 over-claim 0): the generic MIR-walk lowering
+// only emits FP64 arithmetic mnemonics for STMT_BINOP today (add/sub/mul
+// — `_nvptx_binop_mnemonic`); `fma.rn.f64` + `add.s32` are produced
+// only by the hand-emit P2 GEMM path (`_nvptx_p2_*` helpers), not by
+// the generic lowering. So this MVP test asserts on what the generic
+// path actually emits — duplicate counts of `mul.f64` and a single
+// preserved `setp.lt.f64` (header NOT cloned). The unroll pass itself
+// is opcode-agnostic: when a future cycle teaches the generic lowering
+// to emit `fma.rn.f64` for a MIR (mul + add) fusion, the same unroll
+// pass will duplicate that fma — the duplication is structural, not
+// mnemonic-specific.
+
+// _count_occurrences — count non-overlapping occurrences of `needle`
+// in `hay`. Used to assert that the unroll pass produced N copies of
+// a given mnemonic in the emitted PTX.
+fn _count_occurrences(hay: string, needle: string) -> i64 {
+    if len(needle) == 0 { return 0 }
+    let mut n = 0
+    let mut from = 0
+    while from <= len(hay) - len(needle) {
+        // `find` has no start-offset overload; slice the suffix.
+        let suffix = hay.substring(from, len(hay))
+        let pos = suffix.find(needle)
+        if pos < 0 { return n }
+        n = n + 1
+        from = from + pos + len(needle)
+    }
+    return n
+}
+
+fn _check_count(ok_in: bool, hay: string, needle: string, want: i64, label: string) -> bool {
+    let got = _count_occurrences(hay, needle)
+    if got == want { return ok_in }
+    println("  FAIL: " + label + " (want " + to_string(want) + " occurrences of `" + needle + "`, got " + to_string(got) + ")")
+    return false
+}
+
+fn _build_case_unroll_loop() -> MFunc {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let t = _local(2, "t")     // header: t = a + b   (.f64)
+    let p = _local(3, "p")     // header: p = t < b   (.pred)
+    let q = _local(4, "q")     // body  : q = a * b   (.f64)
+
+    // block 0 (header): t = a + b ; p = t < b ; br_cond p -> 1, else 2
+    let mut s0 = []
+    s0.push(_stmt_binop(t, "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_binop(p, "lt",  _op_local(t.id), _op_local(b.id)))
+    s0.push(_stmt_br_cond(_op_local(p.id), 1, 2))
+
+    // block 1 (body): q = a * b ; br -> 0 (back-edge)
+    let mut s1 = []
+    s1.push(_stmt_binop(q, "mul", _op_local(a.id), _op_local(b.id)))
+    s1.push(_stmt_br(0))
+
+    // block 2 (exit): return
+    let mut s2 = []
+    s2.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    blocks.push(_block(1, s1))
+    blocks.push(_block(2, s2))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a); locals.push(b)
+    locals.push(t); locals.push(p); locals.push(q)
+
+    return MFunc {
+        name: "unroll_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+}
+
+fn _test_unroll_pass() -> bool {
+    let mut ok = true
+
+    // Build the same MFunc twice — once for the un-unrolled baseline
+    // (sanity assert: one `mul.f64`), once for the unrolled output
+    // (the §12 P4+ assertion: two `mul.f64`).
+    let mfn_baseline = _build_case_unroll_loop()
+    let mfn_unrolled = _nvptx_unroll_pass(_build_case_unroll_loop(), 2)
+
+    // Baseline: 1 `mul.f64`, 1 `setp.lt.f64`, 1 `add.f64`.
+    let mut funcs_b = []
+    funcs_b.push(mfn_baseline)
+    let mod_b = MModule { file: "unroll_baseline.hexa", funcs: funcs_b, globals: [] }
+    let ptx_b = codegen_emit_ptx_sm80(mod_b)
+    println("")
+    println("── emitted PTX (baseline, no unroll, sm_80) ──")
+    println(ptx_b)
+    ok = _check_count(ok, ptx_b, "mul.f64",     1, "baseline body has 1 mul.f64")
+    ok = _check_count(ok, ptx_b, "setp.lt.f64", 1, "baseline header has 1 setp.lt.f64")
+
+    // Unrolled: the §12 P4+ assertion. Body cloned once → 2× mul.f64.
+    // Header NOT cloned → still 1× setp.lt.f64 and 1× add.f64. Two
+    // STMT_BR back-edges (orig body → clone, clone → header) → 2× `bra`
+    // emitted from the body chain (in addition to whatever the header
+    // / exit emit).
+    let mut funcs_u = []
+    funcs_u.push(mfn_unrolled)
+    let mod_u = MModule { file: "unroll_factor2.hexa", funcs: funcs_u, globals: [] }
+    let ptx_u = codegen_emit_ptx_sm80(mod_u)
+    println("")
+    println("── emitted PTX (unrolled, factor=2, sm_80) ──")
+    println(ptx_u)
+
+    // The load-bearing assertion: body's mul appears TWICE post-unroll.
+    ok = _check_count(ok, ptx_u, "mul.f64",     2, "unrolled body has 2x mul.f64 (clone inserted)")
+    // Header is untouched — exactly one setp.lt and one add.f64.
+    ok = _check_count(ok, ptx_u, "setp.lt.f64", 1, "header setp.lt.f64 preserved (header NOT cloned)")
+    ok = _check_count(ok, ptx_u, "add.f64",     1, "header add.f64 preserved (header NOT cloned)")
+    // The clone's dst is a renumbered Local — distinct from the orig.
+    // Original body emits %fd4, clone emits %fd9 (offset = max_local+1
+    // = 4+1 = 5; 4+5 = 9). The exact id is implementation detail of
+    // the offset arithmetic; the structural property we assert is that
+    // both register names appear so the two mul.f64 don't write the
+    // same dst (which would be SSA-illegal).
+    ok = _check(ok, ptx_u, "%fd4", "original body's mul dst (%fd4) present")
+    ok = _check(ok, ptx_u, "%fd9", "cloned body's mul dst (%fd9 = 4+offset) present")
+
+    return ok
+}
+
+// ── Case 9 — _nvptx_unroll_pass honest-fallback (no-match CFG) ────────
+//
+// The unroll pass MUST return MFunc unchanged when the CFG doesn't
+// match the canonical 3-block back-edge shape. Builds a single-block
+// straight-line MFunc (no STMT_BR_COND, no back-edge) and asserts the
+// emitted PTX is byte-identical before/after the pass.
+
+fn _test_unroll_no_match_passthrough() -> bool {
+    let mut ok = true
+    // Reuse the BR fixture (2-block: a+b then bra then ret). No header
+    // → no STMT_BR_COND → no match.
+    let mod_pre  = _build_case_br()
+    let ptx_pre  = codegen_emit_ptx_sm80(mod_pre)
+
+    // Apply unroll pass to each func and rebuild the module.
+    let mut funcs_post = []
+    let mut i = 0
+    while i < len(mod_pre.funcs) {
+        funcs_post.push(_nvptx_unroll_pass(mod_pre.funcs[i], 2))
+        i = i + 1
+    }
+    let mod_post = MModule { file: mod_pre.file, funcs: funcs_post, globals: mod_pre.globals }
+    let ptx_post = codegen_emit_ptx_sm80(mod_post)
+
+    if ptx_pre != ptx_post {
+        println("  FAIL: unroll pass perturbed non-matching CFG")
+        println("    pre  = " + ptx_pre)
+        println("    post = " + ptx_post)
+        ok = false
+    } else {
+        println("  ok: non-matching CFG → PTX byte-identical (honest passthrough)")
+    }
+    return ok
+}
+// ── Case 12 — RFC 055 §12 P4+ Tensor Core MMA scaffold ─────────────────
+//
+// SCAFFOLD ONLY — this case proves the new `gpu_wmma_mma` STMT_CALL op
+// name is RECOGNIZED by the lowering and that the WMMA mnemonic table
+// (`_nvptx_wmma_mnemonic`) is reachable from `_nvptx_lower_stmt`'s
+// STMT_CALL branch. It does NOT verify a working WMMA emit; the
+// emitted PTX is an honest stub comment line carrying the resolved
+// mnemonic. A real WMMA emit needs (see `_nvptx_wmma_mnemonic`'s
+// docstring): fragment register-bank allocation (PReg.kind="frag" →
+// tile, not scalar), `.shared` staging-area declaration, per-fragment
+// data-type tags (.f16 vs .f32 vs .bf16), row/col orientation, and
+// tile-loop integration around the 16×16 MMA tile. None of those are
+// implemented in this scaffold.
+//
+// Fixture: a one-block MFunc whose body is a single STMT_CALL with
+// op="gpu_wmma_mma" (dst = void via `_miss_local`, args = []). The
+// scaffold lowering emits a `// RFC 055 §12 P4+ WMMA (scaffold, not
+// yet wired) — gpu_wmma_mma -> wmma.mma.sync...` comment line. The
+// surrounding `add.f64` (before) and `ret;` (after) verify the
+// scaffold doesn't disturb existing 055-P0 lowering.
+
+fn _build_case_wmma_scaffold() -> MModule {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let r = _local(2, "r")
+
+    // block 0: r = a + b ; gpu_wmma_mma() ; return
+    let mut s0 = []
+    s0.push(_stmt_binop(r, "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_call(_miss_local(), "gpu_wmma_mma"))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(r)
+
+    let mf = MFunc {
+        name: "wmma_scaffold_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_wmma_scaffold.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_wmma_scaffold() -> bool {
+    let mut ok = true
+    let mod_w = _build_case_wmma_scaffold()
+    let ptx = codegen_emit_ptx_sm80(mod_w)
+
+    println("")
+    println("── emitted PTX (RFC 055 §12 P4+ WMMA scaffold case, sm_80) ──")
+    println(ptx)
+
+    // Scaffold marker line — substring assertion on the emitted PTX.
+    ok = _check(ok, ptx, "WMMA (scaffold",
+        "WMMA scaffold marker line emitted")
+    // Resolved mnemonic carried by the marker (proves
+    // `_nvptx_wmma_mnemonic` is reachable from the STMT_CALL branch).
+    ok = _check(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32",
+        "wmma.mma mnemonic resolved into marker")
+    // The op name `gpu_wmma_mma` appears in the marker, NOT as the
+    // legacy "unsupported call:" stub (which would mean the scaffold
+    // didn't intercept the op).
+    ok = _check(ok, ptx, "gpu_wmma_mma",
+        "gpu_wmma_mma op name preserved in marker")
+    if _contains(ptx, "RFC 055 055-P0 - unsupported call: gpu_wmma_mma") {
+        println("  FAIL: gpu_wmma_mma must be intercepted by the WMMA scaffold, not fall through to unsupported-call stub")
+        ok = false
+    }
+    // Surrounding 055-P0 instructions still emit (scaffold is non-disturbing).
+    ok = _check(ok, ptx, "add.f64",          "preceding f64 add still emitted")
+    ok = _check(ok, ptx, "ret;",             "ret terminator after scaffold")
+    return ok
+}
+
+// ── Case 13 — RFC 055 §12 P4+ mixed-precision PTX types SCAFFOLD ──────
+//
+// SCAFFOLD-ONLY: this case proves the CLASSIFIER + REG-DECL pipeline
+// can route mixed-precision Locals to the right PTX register bank
+// (.reg .f16 / .reg .bf16 / .reg .f32) once the upstream MIR emits
+// the matching binop opcodes (`add_f16` / `add_bf16` / `add_f32`).
+//
+// The opcodes themselves are ASPIRATIONAL — the lowering layer that
+// would PRODUCE them is a future cycle (hir_to_mir.hexa would need
+// per-Local precision tags). The body of each binop in the emitted
+// PTX text is therefore an honest 055-P0-style stub (the binop
+// mnemonic table only carries f64 add/sub/mul); what this scaffold
+// test verifies is the CLASSIFICATION + REG-DECL machinery, which
+// is the prerequisite for a real `add.f16` / `add.bf16` / `add.f32`
+// lowering in a later cycle.
+//
+// Single-block MFunc:
+//   block 0: t16  = a + b   // STMT_BINOP "add_f16"  → .f16  (%fh3)
+//            tbf  = a + b   // STMT_BINOP "add_bf16" → .bf16 (%fb4)
+//            t32  = a + b   // STMT_BINOP "add_f32"  → .f32  (%fs5)
+//            return
+//
+// PASS = all three `.reg .f16 %fh3;` + `.reg .bf16 %fb4;` +
+// `.reg .f32 %fs5;` DECLARATIONS appear in the emitted PTX text.
+//
+// Honest scope (per RFC 055 g3):
+//   - SCAFFOLD does NOT add the MIR layer that produces mixed-precision
+//     binop opcodes (future hir_to_mir cycle).
+//   - SCAFFOLD does NOT add body lowering for mixed-precision binops
+//     (`add.f16 %fh<dst>, %fh<a>, %fh<b>` etc. — future cycle).
+//   - SCAFFOLD does NOT handle Tensor-Core paired BF16 (MMA cycle).
+// What the scaffold makes REACHABLE: once a future MIR layer emits
+// the new opcodes, the classifier + reg-decl side is ready.
+
+fn _stmt_binop_mp(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
+    // Same shape as _stmt_binop — separate helper so the call site reads
+    // as a MIXED-PRECISION binop (aspirational opcode).
+    return _stmt_binop(dst, op, a, b)
+}
+
+fn _build_case_mixed_precision_scaffold() -> MModule {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let t16 = _local(3, "t16")   // expected .reg .f16  %fh3
+    let tbf = _local(4, "tbf")   // expected .reg .bf16 %fb4
+    let t32 = _local(5, "t32")   // expected .reg .f32  %fs5
+
+    let mut s0 = []
+    s0.push(_stmt_binop_mp(t16, "add_f16",  _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_binop_mp(tbf, "add_bf16", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_binop_mp(t32, "add_f32",  _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(t16)
+    locals.push(tbf)
+    locals.push(t32)
+
+    let mf = MFunc {
+        name: "mixed_precision_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_mixed_precision_scaffold.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_mixed_precision_scaffold() -> bool {
+    let mut ok = true
+    let mod_mp = _build_case_mixed_precision_scaffold()
+    let ptx = codegen_emit_ptx_sm80(mod_mp)
+
+    println("")
+    println("── emitted PTX (RFC 055 §12 P4+ mixed-precision scaffold, sm_80) ──")
+    println(ptx)
+
+    // SCAFFOLD verification — the three new reg banks declare cleanly.
+    ok = _check(ok, ptx, ".reg .f16 %fh3",   "f16 bank for add_f16 dst")
+    ok = _check(ok, ptx, ".reg .bf16 %fb4",  "bf16 bank for add_bf16 dst")
+    ok = _check(ok, ptx, ".reg .f32 %fs5",   "f32 bank for add_f32 dst")
+    // Header carry-over — sm_80 target intact under mixed-kind classification.
+    ok = _check(ok, ptx, ".target sm_80",    "sm_80 .target directive")
+    // 055-P0 F64 default still intact — params + ext temps stay %fd.
+    // (Params aren't classified by an assignment but show up as %fd in
+    // body operand text via the F64 fallback. No %fd-N reg for invalid
+    // ids; the scaffold reuses ids 0/1 for params + 3/4/5 for assigned
+    // Locals so id=2 deliberately stays unassigned.)
+    return ok
+}
+
+
+// ── Case 14 — RFC 069 P1 `F-RFC069-FACTOR-N` ──────────────────────────
+//
+// Re-uses the canonical 3-block back-edge fixture from `_build_case_unroll_loop`
+// (PR #117 Case 10) and exercises factor=2 (PR #117 byte-eq regression),
+// factor=3 (3 body bodies + 2 forward links), factor=4 (4 bodies +
+// 3 forward links), and factor=100 (out-of-range clamp → passthrough
+// byte-identical to factor=1).
+//
+// Per RFC 069 §3 P1 `F-RFC069-FACTOR-N` + §4 falsifier battery. Does NOT
+// fire GPU silicon (text-shape only); F4 NUMERIC-EQ is the closure-cycle
+// falsifier.
+
+fn _count_substr(hay: string, needle: string) -> i64 {
+    // Tiny utility — count non-overlapping occurrences of `needle` in `hay`.
+    // Useful for counting cloned body instances in the unrolled PTX text.
+    let mut n: i64 = 0
+    let mut i: i64 = 0
+    let hlen = len(hay)
+    let nlen = len(needle)
+    if nlen == 0 { return 0 }
+    while i + nlen <= hlen {
+        if substring(hay, i, i + nlen) == needle {
+            n = n + 1
+            i = i + nlen
+        } else {
+            i = i + 1
+        }
+    }
+    return n
+}
+
+fn _test_unroll_factor_n() -> bool {
+    let mut ok = true
+
+    // -- Sub-case A — factor=3 (2 clones, 3 total body iterations) -------
+    let mfn_f3 = _nvptx_unroll_pass(_build_case_unroll_loop(), 3)
+    let ptx_f3 = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn_f3))
+    let mul_count_f3 = _count_substr(ptx_f3, "mul.f64")   // body has one mul.f64
+    if mul_count_f3 != 3 {
+        println("  FAIL: factor=3 expected 3× mul.f64, got " + to_string(mul_count_f3))
+        ok = false
+    } else {
+        println("  ok: factor=3 → 3 body iterations (3× mul.f64)")
+    }
+
+    // -- Sub-case B — factor=4 (3 clones, 4 total body iterations) -------
+    let mfn_f4 = _nvptx_unroll_pass(_build_case_unroll_loop(), 4)
+    let ptx_f4 = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn_f4))
+    let mul_count_f4 = _count_substr(ptx_f4, "mul.f64")
+    if mul_count_f4 != 4 {
+        println("  FAIL: factor=4 expected 4× mul.f64, got " + to_string(mul_count_f4))
+        ok = false
+    } else {
+        println("  ok: factor=4 → 4 body iterations (4× mul.f64)")
+    }
+
+    // -- Sub-case C — factor=100 out-of-range → clamp to passthrough ----
+    // (factor > _nvptx_unroll_max_factor returns mfn unchanged; PTX is
+    // identical to running the pass with factor=1 i.e. no unroll.)
+    let mfn_baseline = _build_case_unroll_loop()
+    let mfn_f100 = _nvptx_unroll_pass(_build_case_unroll_loop(), 100)
+    let ptx_baseline = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn_baseline))
+    let ptx_f100 = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn_f100))
+    if ptx_baseline != ptx_f100 {
+        println("  FAIL: factor=100 (out-of-range) should be byte-identical to no-unroll baseline")
+        ok = false
+    } else {
+        println("  ok: factor=100 → clamp passthrough (PTX byte-identical to baseline)")
+    }
+
+    // -- Sub-case D — factor=2 byte-eq with PR #117 (regression guard) --
+    // PR #117 landed factor=2 as a single clone; RFC 069 P1 must keep
+    // that path byte-identical (the generalized loop runs once for N=2,
+    // so the output equals what PR #117 emitted).
+    let mfn_f2 = _nvptx_unroll_pass(_build_case_unroll_loop(), 2)
+    let ptx_f2 = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn_f2))
+    let mul_count_f2 = _count_substr(ptx_f2, "mul.f64")
+    if mul_count_f2 != 2 {
+        println("  FAIL: factor=2 expected 2× mul.f64, got " + to_string(mul_count_f2))
+        ok = false
+    } else {
+        println("  ok: factor=2 → 2 body iterations (PR #117 byte-eq regression guard)")
+    }
+
+    return ok
+}
+
+// _wrap_single_mfn — small helper. Wrap a single MFunc into an MModule
+// so it goes through `codegen_emit_ptx_sm80` as a complete unit. The
+// generic test fixtures only build MFunc-level objects; the emit pass
+// takes MModule.
+fn _wrap_single_mfn(mf: MFunc) -> MModule {
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "rfc069_factor_n_test.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 15 — RFC 068 P1 `F-RFC068-PRECISION-PROPAGATE` ───────────────
+//
+// Verifies that an explicit precision tag on a Local routes the classifier
+// to the matching NVPTX_RKIND_* bank BEFORE the op-name rules apply. The
+// HIR-side annotation propagation (`@f16 a + b` source grammar) is a
+// follow-on cycle — this case exercises only the codegen-side read of
+// `Local.precision`. Three sub-cases (.f16 / .bf16 / .f32) verify the
+// new banks are reachable via the explicit tag.
+//
+// Honest scope (`@D g3`): this is the data-plumbing falsifier for P1.
+// Real source-level `@f16` annotation grammar lands in a separate cycle.
+
+fn _local_with_precision(id: i64, name: string, precision: string) -> Local {
+    return Local {
+        id: id,
+        arena_id: 1,
+        type_id: 0,
+        name_hint: name,
+        precision: precision
+    }
+}
+
+fn _build_case_precision_propagate() -> MModule {
+    // Two params (a, b) + three precision-tagged temps. The dst Locals
+    // carry .f16/.bf16/.f32 tags; the op names are plain "add" so the
+    // classifier's op-name rules DON'T fire — only the precision tag
+    // does. This isolates the new behavior from #123's existing scaffold
+    // (which routes via op-name "add_f16" etc.).
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let t_f16  = _local_with_precision(3, "t_f16",  ".f16")
+    let t_bf16 = _local_with_precision(4, "t_bf16", ".bf16")
+    let t_f32  = _local_with_precision(5, "t_f32",  ".f32")
+
+    let mut s0 = []
+    // Op name "add" (NOT "add_f16") — proves the precision-tag short-
+    // circuit wins over the op-name rules.
+    s0.push(_stmt_binop(t_f16,  "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_binop(t_bf16, "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_binop(t_f32,  "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(t_f16)
+    locals.push(t_bf16)
+    locals.push(t_f32)
+
+    let mf = MFunc {
+        name: "precision_propagate_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_precision_propagate.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_precision_propagate() -> bool {
+    let mut ok = true
+    let mod_pp = _build_case_precision_propagate()
+    let ptx = codegen_emit_ptx_sm80(mod_pp)
+
+    println("")
+    println("── emitted PTX (RFC 068 P1 precision-tag propagate, sm_80) ──")
+    println(ptx)
+
+    // The 3 explicit-tag Locals should declare in their respective banks.
+    ok = _check(ok, ptx, ".reg .f16 %fh3",  "precision .f16 → .reg .f16 %fh3")
+    ok = _check(ok, ptx, ".reg .bf16 %fb4", "precision .bf16 → .reg .bf16 %fb4")
+    ok = _check(ok, ptx, ".reg .f32 %fs5",  "precision .f32 → .reg .f32 %fs5")
+    // CRITICAL: the op name "add" (without _f16/_bf16/_f32 suffix) MUST
+    // have produced these banks via the PRECISION-TAG path, NOT the
+    // op-name rules. If the classifier had fallen through to F64 default
+    // (op="add" → NVPTX_RKIND_F64), we'd see ".reg .f64 %fd<n>" instead.
+    // The substring guard:
+    if _contains(ptx, ".reg .f64 %fd3") || _contains(ptx, ".reg .f64 %fd4") || _contains(ptx, ".reg .f64 %fd5") {
+        println("  FAIL: precision-tagged Locals fell through to F64 default — classifier short-circuit broken")
+        ok = false
+    } else {
+        println("  ok: precision tag wins over op-name fallthrough (no .f64 for precision-tagged dsts)")
+    }
+    return ok
+}
+
+// ── Case 16 — RFC 067 P1 `F-RFC067-FRAG-WIDTH` ────────────────────────
+//
+// Verifies that a Local classified as NVPTX_RKIND_FRAG emits 8 PTX
+// register declarations (`.reg .b32 %fra<id>_e0` .. `_e7`) per the
+// NVIDIA canonical sm_80 m16n16k16 layout (256 elements / 32-thread
+// warp = 8 32-bit-packed values per thread).
+//
+// Fixture: a one-block MFunc with STMT_CALL `gpu_wmma_load_a` whose
+// dst is a real (non-miss) Local. The classifier routes the dst kind
+// to NVPTX_RKIND_FRAG, and the reg-decl loop in `_emit_ptx_func` emits
+// the 8-element vector form.
+//
+// Honest scope (`@D g3`): this is the reg-bank seam falsifier for P1.
+// Body lowering (actual `wmma.load.a.sync...` PTX instruction emit)
+// + `.shared` staging decl + per-fragment dtype/role are P2/P3.
+
+fn _build_case_frag_width() -> MModule {
+    // Dst of the gpu_wmma_load_a call — classifier sets kind=FRAG.
+    let frag_dst = _local(7, "frag_a")
+
+    let mut s0 = []
+    // STMT_CALL with op=gpu_wmma_load_a and a real dst Local.
+    s0.push(_stmt_call(frag_dst, "gpu_wmma_load_a"))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut locals = []
+    locals.push(frag_dst)
+
+    let mf = MFunc {
+        name: "frag_width_smoke",
+        params: [],
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_frag_width.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_frag_width() -> bool {
+    let mut ok = true
+    let mod_fw = _build_case_frag_width()
+    let ptx = codegen_emit_ptx_sm80(mod_fw)
+
+    println("")
+    println("── emitted PTX (RFC 067 P1 fragment-width = 8, sm_80) ──")
+    println(ptx)
+
+    // The fragment dst (id=7) should produce 8 `.reg .b32 %fra7_e<i>`
+    // declarations, one per element of the canonical sm_80 m16n16k16
+    // fragment layout.
+    let mut ei = 0
+    while ei < 8 {
+        ok = _check(ok, ptx, ".reg .b32 %fra7_e" + to_string(ei),
+            "fragment element %fra7_e" + to_string(ei) + " emitted")
+        ei = ei + 1
+    }
+    // CRITICAL guard: the FRAG dst MUST NOT emit a single scalar `.reg
+    // .f16 %fh7` (the PR #121 SCAFFOLD placeholder). If it did, the
+    // P1 vector-emit path didn't fire.
+    if _contains(ptx, ".reg .f16 %fh7") || _contains(ptx, ".reg .f64 %fd7") {
+        println("  FAIL: FRAG dst fell back to scalar reg — P1 vector-emit path broken")
+        ok = false
+    } else {
+        println("  ok: FRAG dst routed to vector emit (no scalar .reg fallback)")
+    }
+    return ok
+}
+
+// ── Case 17 — RFC 067 P2 `F-RFC067-SHARED-DECL` ───────────────────────
+//
+// Verifies that an MFunc containing a WMMA fragment (a callee_saved
+// entry with kind=FRAG, produced when STMT_CALL gpu_wmma_load_a/_b/_mma
+// runs through the classifier) emits a `.shared .align 16 .b8` staging
+// declaration in the PTX function header. The slot-name carries the
+// kernel name so multiple WMMA kernels in one module don't collide.
+//
+// Honest scope: P2 lands the staging-area decl. P3 will introduce
+// per-fragment role + dtype tags so the staging-slot SIZE adapts to
+// the fragment family (today: hard-coded 2048 B for the canonical
+// f16×f16→f32 family).
+
+fn _test_shared_decl() -> bool {
+    let mut ok = true
+    let mod_sd = _build_case_frag_width()      // re-uses the P1 fixture
+    let ptx = codegen_emit_ptx_sm80(mod_sd)
+
+    println("")
+    println("── emitted PTX (RFC 067 P2 .shared staging, sm_80) ──")
+    println(ptx)
+
+    // The MFunc is named "frag_width_smoke" (from _build_case_frag_width).
+    // The .shared decl uses the kernel basename (NVPTX_KERNEL_PREFIX
+    // stripped if present; for non-kernel device fns the name is used
+    // verbatim).
+    ok = _check(ok, ptx, ".shared .align 16 .b8 _hexa_wmma_stage_frag_width_smoke[2048]",
+        "`.shared` staging decl emitted with stable per-fn name")
+    // Sanity: only ONE staging decl in this single-fn module.
+    let n_shared = _count_substr(ptx, ".shared .align 16 .b8 _hexa_wmma_stage_")
+    if n_shared != 1 {
+        println("  FAIL: expected 1 staging decl, got " + to_string(n_shared))
+        ok = false
+    } else {
+        println("  ok: single staging decl per WMMA-containing kernel")
+    }
+    // Negative guard: a non-WMMA MFunc must NOT emit a staging decl
+    // (re-use the unroll fixture from PR #117 / RFC 069 P1 — no FRAG).
+    let mod_no_wmma = _wrap_single_mfn(_build_case_unroll_loop())
+    let ptx_no_wmma = codegen_emit_ptx_sm80(mod_no_wmma)
+    if _contains(ptx_no_wmma, ".shared .align 16 .b8 _hexa_wmma_stage_") {
+        println("  FAIL: non-WMMA kernel emitted spurious staging decl")
+        ok = false
+    } else {
+        println("  ok: non-WMMA kernel emits zero staging decls (no false-positive)")
+    }
+    return ok
+}
+
+// ── Case 18 — RFC 069 P2 `F-RFC069-MULTI-EXIT-MATCH` ──────────────────
+//
+// Verifies the unroll pass accepts a body whose terminator is STMT_BR_COND
+// (multi-exit / break-bearing body), not just STMT_BR (canonical
+// single-exit). The cloner rewrites ONLY the back-edge arm per clone; the
+// early-exit arm stays verbatim so each unrolled instance preserves its
+// break path.
+//
+// CFG shape (3 blocks):
+//   header (block 0): cond, BR_COND(body=1, exit=2)
+//   body   (block 1): t = a + b
+//                     early_cond = a < b
+//                     BR_COND(exit=2, header=0)   # break path = "true" arm
+//   exit   (block 2): return
+//
+// edge_kind on body terminator = "br_cond_else" (header is in the
+// target_block_else slot). After unroll factor=3:
+//   - body's else-arm → first_clone (header) becomes else-arm → block 3
+//   - clone_1 (block 3): same shape, else-arm → block 4
+//   - clone_2 (block 4): same shape, else-arm → header (back-edge)
+//   - the TRUE arm of each (exit=2) stays untouched → break preserved.
+
+fn _build_case_multi_exit_loop() -> MFunc {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let cond = _local(2, "cond")
+    let t = _local(3, "t")
+    let brk = _local(4, "brk")
+
+    // block 0 (header): BR_COND(cond, body=1, exit=2)
+    let mut s0 = []
+    s0.push(_stmt_binop(cond, "lt", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_br_cond(_op_local(cond.id), 1, 2))
+
+    // block 1 (body): t = a + b ; brk = a < b ; BR_COND(brk, exit=2, header=0)
+    let mut s1 = []
+    s1.push(_stmt_binop(t,   "add", _op_local(a.id), _op_local(b.id)))
+    s1.push(_stmt_binop(brk, "lt",  _op_local(a.id), _op_local(b.id)))
+    s1.push(_stmt_br_cond(_op_local(brk.id), 2, 0))   // true→exit, else→header
+
+    // block 2 (exit): return
+    let mut s2 = []
+    s2.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    blocks.push(_block(1, s1))
+    blocks.push(_block(2, s2))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(cond)
+    locals.push(t)
+    locals.push(brk)
+
+    return MFunc {
+        name: "multi_exit_loop_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+}
+
+fn _test_multi_exit_match() -> bool {
+    let mut ok = true
+
+    // factor=3 unroll on multi-exit fixture.
+    let mfn = _nvptx_unroll_pass(_build_case_multi_exit_loop(), 3)
+    let ptx = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn))
+
+    println("")
+    println("── emitted PTX (RFC 069 P2 multi-exit factor=3, sm_80) ──")
+    println(ptx)
+
+    // Sub-case A — body iterations: 3× add.f64 + 3× setp.lt.f64.
+    // Each clone replicates the full body (the binop + the break-cond
+    // computation + the BR_COND).
+    let add_count = _count_substr(ptx, "add.f64")
+    if add_count != 3 {
+        println("  FAIL: factor=3 expected 3× add.f64, got " + to_string(add_count))
+        ok = false
+    } else {
+        println("  ok: factor=3 multi-exit → 3 body iterations (add.f64)")
+    }
+    let setp_count = _count_substr(ptx, "setp.lt.f64")
+    // header has 1 setp, each body has 1 setp → 1 + 3 = 4
+    if setp_count != 4 {
+        println("  FAIL: factor=3 expected 4× setp.lt.f64 (1 header + 3 bodies), got " + to_string(setp_count))
+        ok = false
+    } else {
+        println("  ok: 4 setp.lt.f64 (header + 3 body break-checks)")
+    }
+
+    // Sub-case B — early-exit (break) path PRESERVED per clone instance:
+    // each of the 3 body instances must still BR_COND to exit (block 2).
+    // PTX uses `bra $L_2` for the exit destination — count = 3 ×
+    // (true-arm `bra $L_2`) + 1 (header's `bra $L_2` for exit-direct).
+    // The exact bra count depends on emit lowering; rather than counting
+    // we assert the LABEL $L_2 receives at least 3 incoming branches
+    // by looking for "bra $L_2" occurrences.
+    let bra2_count = _count_substr(ptx, "bra $L_2")
+    if bra2_count < 3 {
+        println("  FAIL: factor=3 expected ≥3 break-edges to $L_2, got " + to_string(bra2_count))
+        ok = false
+    } else {
+        println("  ok: ≥3 break-edges to exit $L_2 (each clone preserves its break)")
+    }
+
+    // Sub-case C — passthrough on single-block (no loop) MFunc is
+    // unchanged. Re-uses the FRAG-width fixture which has no back-edge.
+    // RFC 069 F7 PASSTHROUGH-PRESERVED — strict regression gate.
+    let mod_no_loop = _build_case_frag_width()
+    let mfn_no_loop = mod_no_loop.funcs[0]
+    let ptx_no_unroll = codegen_emit_ptx_sm80(_wrap_single_mfn(mfn_no_loop))
+    let ptx_unrolled  = codegen_emit_ptx_sm80(_wrap_single_mfn(_nvptx_unroll_pass(mfn_no_loop, 3)))
+    if ptx_no_unroll != ptx_unrolled {
+        println("  FAIL: passthrough broken — non-loop MFunc perturbed by unroll pass")
+        ok = false
+    } else {
+        println("  ok: F7 PASSTHROUGH-PRESERVED — non-loop MFunc byte-identical")
+    }
+
+    return ok
+}
+
+// ── Case 19 — RFC 069 P3 `F-RFC069-NESTED-PRESERVE` ───────────────────
+//
+// Verifies that an MFunc carrying a nested-loop CFG triggers the
+// unroll pass's early-return (P3 honest-preservation) — the MFunc
+// is returned UNCHANGED so the inner loop is semantically intact.
+//
+// CFG shape (nested loop, canonical 5-block layout):
+//   block 0 (outer header):  cond, BR_COND(body=1, exit=4)
+//   block 1 (outer body):    setup, BR(inner_header=2)   ← BRANCHES INTO INNER
+//   block 2 (inner header):  cond, BR_COND(inner_body=3, outer_header=0)
+//   block 3 (inner body):    stmt, BR(inner_header=2)    ← inner back-edge
+//   block 4 (exit):          return
+//
+// The pattern matcher finds (outer_header=0, body=1) as the outer
+// loop seed. Block 1's terminator is BR(2) — that target (block 2,
+// inner header) has a terminator BR_COND with target_block_else=0,
+// pointing to a block with id (0) < its own id (2). This is the
+// back-edge marker, so `_nvptx_unroll_contains_inner_loop` returns
+// true and the unroll pass returns the MFunc unchanged.
+//
+// Honest scope: P3 lands DETECTION + EARLY-RETURN. Full nested
+// unroll (multi-block-region cloning with renumbered inner-loop
+// blocks per outer clone) is P5.
+
+fn _build_case_nested_loop() -> MFunc {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let oc = _local(2, "oc")    // outer cond
+    let ic = _local(3, "ic")    // inner cond
+    let t = _local(4, "t")
+
+    // block 0 (outer header)
+    let mut s0 = []
+    s0.push(_stmt_binop(oc, "lt", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_br_cond(_op_local(oc.id), 1, 4))
+
+    // block 1 (outer body): just enter the inner loop
+    let mut s1 = []
+    s1.push(_stmt_br(2))
+
+    // block 2 (inner header): BR_COND(inner_body=3, outer_header=0)
+    let mut s2 = []
+    s2.push(_stmt_binop(ic, "lt", _op_local(a.id), _op_local(b.id)))
+    s2.push(_stmt_br_cond(_op_local(ic.id), 3, 0))
+
+    // block 3 (inner body): stmt, BR(inner_header=2) → back-edge
+    let mut s3 = []
+    s3.push(_stmt_binop(t, "add", _op_local(a.id), _op_local(b.id)))
+    s3.push(_stmt_br(2))
+
+    // block 4 (exit)
+    let mut s4 = []
+    s4.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    blocks.push(_block(1, s1))
+    blocks.push(_block(2, s2))
+    blocks.push(_block(3, s3))
+    blocks.push(_block(4, s4))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(oc)
+    locals.push(ic)
+    locals.push(t)
+
+    return MFunc {
+        name: "nested_loop_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+}
+
+fn _test_nested_preserve() -> bool {
+    let mut ok = true
+
+    let baseline = _build_case_nested_loop()
+    let after = _nvptx_unroll_pass(_build_case_nested_loop(), 4)
+
+    let ptx_before = codegen_emit_ptx_sm80(_wrap_single_mfn(baseline))
+    let ptx_after  = codegen_emit_ptx_sm80(_wrap_single_mfn(after))
+
+    println("")
+    println("── emitted PTX (RFC 069 P3 nested-preserve, baseline) ──")
+    println(ptx_before)
+
+    // Sub-case A — byte-eq guarantee: nested-loop MFunc is unchanged by
+    // the unroll pass (factor=4 attempted; detection short-circuits).
+    if ptx_before != ptx_after {
+        println("  FAIL: nested-loop MFunc was perturbed by unroll pass (P3 detection broken)")
+        ok = false
+    } else {
+        println("  ok: P3 nested-preserve — unroll(nested, 4) byte-identical to baseline")
+    }
+
+    // Sub-case B — inner loop's PTX SIGNATURE present (setp.lt.f64 +
+    // bra) confirming the inner loop survived the pass.
+    let setp_count = _count_substr(ptx_after, "setp.lt.f64")
+    if setp_count < 2 {
+        println("  FAIL: expected ≥2 setp.lt.f64 (outer + inner header), got " + to_string(setp_count))
+        ok = false
+    } else {
+        println("  ok: inner+outer loop conditions intact (" + to_string(setp_count) + "× setp.lt.f64)")
+    }
+    let bra_count = _count_substr(ptx_after, "bra ")
+    if bra_count < 3 {
+        println("  FAIL: expected ≥3 bra instructions (inner back-edge + others), got " + to_string(bra_count))
+        ok = false
+    } else {
+        println("  ok: inner back-edge + branches preserved (" + to_string(bra_count) + "× bra)")
+    }
+
+    // Sub-case C — direct helper assertion: `_nvptx_unroll_contains_inner_loop`
+    // returns true for the body block of this MFunc, false for the
+    // non-nested fixture from PR #117 Case 10.
+    let nested = _build_case_nested_loop()
+    let body_nested = nested.blocks[1]   // block 1 = outer body
+    if !_nvptx_unroll_contains_inner_loop(body_nested, nested) {
+        println("  FAIL: detection helper missed nested-loop body")
+        ok = false
+    } else {
+        println("  ok: _nvptx_unroll_contains_inner_loop(nested.body) = true")
+    }
+    // Negative guard: PR #117 fixture (canonical single-loop) has no
+    // inner loop in its body.
+    let canonical = _build_case_unroll_loop()
+    // Locate the body block in canonical fixture via the pattern matcher.
+    let pat = _nvptx_unroll_find_pattern(canonical)
+    if pat[1] >= 0 {
+        let body_canonical = canonical.blocks[pat[1]]
+        if _nvptx_unroll_contains_inner_loop(body_canonical, canonical) {
+            println("  FAIL: detection helper false-positive on PR #117 canonical fixture")
+            ok = false
+        } else {
+            println("  ok: _nvptx_unroll_contains_inner_loop(canonical.body) = false (no false-positive)")
+        }
+    }
+
+    return ok
+}

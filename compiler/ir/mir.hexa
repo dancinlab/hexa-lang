@@ -10,13 +10,35 @@
 //   Every Local has an arena_id; arena lifetime is implicit per function.
 //   Long-lived objects (atlas, rodata) are Global with arena_id = 0.
 
+// ── RFC 055 055-P3c — MFunc.gpu_kind enum ─────────────────────
+//
+// Distinguishes the partition each MFunc belongs to so the per-target
+// codegen pipeline (CPU vs NVPTX) routes funcs by attribute rather than
+// by file. Set by `compiler/lower/hir_to_mir.hexa::_lower_fn` from the
+// HIR FnDecl's `@gpu_*` annotation; consumed by `_nvptx_codegen` to
+// filter `@gpu_*` funcs into the PTX output (gpu/SPEC.md §2 partition).
+// CPU codegen targets ignore the field — F-RFC055-CPU-CODEGEN-UNTOUCHED.
+
+pub let GPU_KIND_CPU: i64 = 0      // ordinary host function (default)
+pub let GPU_KIND_KERNEL: i64 = 1   // @gpu_kernel  → PTX `.visible .entry`
+pub let GPU_KIND_DEVICE: i64 = 2   // @gpu_device  → PTX `.func`
+
 // ── Local + arena ─────────────────────────────────────────────
 
 pub struct Local {
     id: i64,
     arena_id: i64,       // 0 = global/static, >0 = function-local arena
     type_id: i64,        // index into type interning table
-    name_hint: string    // optional, for debug
+    name_hint: string,   // optional, for debug
+    // RFC 068 P1 — Mixed-precision MIR layer. Per-Local precision tag.
+    // "" (default) = classifier-driven (op-name rules / F64 fallback);
+    // ".f16" / ".bf16" / ".f32" = explicit precision annotation that
+    // `_nvptx_classify_local_for_stmt` honors BEFORE the op-name rules.
+    // HIR-side propagation (e.g. `@f16 a + b` source annotation) is a
+    // follow-on cycle — currently no source-grammar feeds this field,
+    // so it stays "" in every codegen run today. Synthetic test
+    // fixtures verify the lowering side independently of HIR.
+    precision: string
 }
 
 // ── Operands ──────────────────────────────────────────────────
@@ -97,9 +119,23 @@ pub struct MFunc {
     blocks: [Block],
     entry_block: i64,
     arena_root: i64,     // function's owning arena id
-    def_line: i64        // source line of the fn definition (HItem.span.line);
+    def_line: i64,       // source line of the fn definition (HItem.span.line);
                          // drives the DWARF `.loc` directive in codegen.
                          // 0 = unknown (synthesised fn / test fixture).
+    gpu_kind: i64        // RFC 055 055-P3c — partition mark.
+                         //   0 = CPU / none  (default for every existing
+                         //                    site; CPU codegen ignores)
+                         //   1 = @gpu_kernel (PTX `.visible .entry`)
+                         //   2 = @gpu_device (PTX `.func`)
+                         // Set by `compiler/lower/hir_to_mir.hexa::_lower_fn`
+                         // from the HIR FnDecl's `@gpu_*` annotation.
+                         // Consumed by `_nvptx_codegen` to filter which
+                         // MFuncs reach the NVPTX target (gpu_kind != 0)
+                         // — the @gpu_kernel partition gpu/SPEC.md §2.
+                         // CPU codegen targets ignore the field, so the
+                         // CPU output is byte-identical when no @gpu_*
+                         // function is present (F-RFC055-CPU-CODEGEN-
+                         // UNTOUCHED holds).
 }
 
 // ── Module ────────────────────────────────────────────────────

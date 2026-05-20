@@ -1,0 +1,63 @@
+#!hexa strict
+// stdlib/fusion/plasma_metrics.hexa — ①b fusion adapter
+// (demiurge design.md D72 2-layer STDLIB restructure).
+//
+// THIN adapter over the domain-agnostic ①a plasma kernel
+// `stdlib/kernels/plasma/plasma_metrics.hexa`. The kernel owns the
+// standard plasma-physics algebra (Debye / plasma-frequency / Lorentz
+// / thermal-speed / Alfvén / gyroradius); this adapter owns ONLY the
+// fusion-domain operating point — the textbook ITER core reference
+// scenario — and the honesty caveat that those inputs are NOT a
+// device measurement.
+//
+// @version 0.1.0
+// @capabilities [pure]
+// @stability stage-2 substrate. Stage 3 parity vs plasmapy 2026.2.0 is
+//   exercised by `plasma_metrics_test.hexa` (kept beside this adapter).
+// @since 2026-05-20
+//
+// 2-layer (ABSORPTION.md ①):
+//   ①a kernel  — `stdlib/kernels/plasma/plasma_metrics.hexa`. Domain-
+//                independent plasma-physics algebra. The day a Stage 3
+//                parity round passes, absorbed=true flips HERE in the
+//                kernel — once — not in every domain adapter.
+//   ①b adapter — THIS FILE. Owns the ITER core operating point.
+//
+// HONESTY (g3 — non-negotiable):
+//   • The derived parameters ARE mathematical facts (kernel algebra).
+//   • BUT the *input* operating point (n_e=1e20, T_e=10 keV, B=5.3 T)
+//     is textbook ITER reference, NOT a real-device shot. Any consumer
+//     must keep gate=GATE_OPEN / absorbed=false unless the inputs come
+//     from a measured Thomson-scattering / interferometry / magnetic-
+//     probe reading from an actual tokamak.
+
+use "stdlib/kernels/plasma/plasma_metrics"
+
+// ── ITER core reference scenario aggregator ──────────────────────────
+
+/// ITER baseline core-plasma operating point (textbook):
+///   n_e = 1.0e20 m⁻³ · T_e = T_i = 10 keV · B = 5.3 T · majority D+
+/// — NOT a device measurement (g3 — scope_caveats records this).
+pub fn iter_core_n_e() -> float    { return 1.0e20 }
+pub fn iter_core_t_e_ev() -> float { return 10000.0 }
+pub fn iter_core_t_i_ev() -> float { return 10000.0 }
+pub fn iter_core_b_t() -> float    { return 5.3 }
+
+/// Compute ω_pe for the ITER core reference scenario (smoke test
+/// helper for parity check against plasmapy 2026.2.0).
+/// Expected (plasmapy): ω_pe ≈ 5.64146e+11 rad/s.
+pub fn iter_core_omega_pe() -> float {
+    return omega_pe(iter_core_n_e())
+}
+
+/// Compute λ_D for the ITER core reference scenario.
+/// Expected (plasmapy): λ_D ≈ 7.43394e-5 m.
+pub fn iter_core_lambda_d() -> float {
+    return lambda_d(iter_core_t_e_ev(), iter_core_n_e())
+}
+
+/// Compute v_A for the ITER core reference scenario.
+/// Expected (plasmapy): v_A ≈ 8.17534e+6 m/s.
+pub fn iter_core_v_alfven() -> float {
+    return v_alfven_deuteron(iter_core_b_t(), iter_core_n_e())
+}

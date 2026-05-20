@@ -61,6 +61,18 @@ fn main() {
     check("hull: below by -0.25", fabs(energy_above_hull([0.25, -1.75], refs) - (-0.25)) < 0.0000001)
     check("hull: endpoint A exact", fabs(energy_above_hull([0.0, -1.0], refs)) < 0.0000001)
 
+    // crystal Stage-2: N-point lower convex hull
+    // 3-point V-shape: middle on the hull.
+    let refs3 = [[0.0, 0.0], [0.5, -1.0], [1.0, 0.0]]
+    check("hull3: on hull -> 0", fabs(energy_above_hull([0.25, -0.5], refs3)) < 0.0000001)
+    check("hull3: above +0.5", fabs(energy_above_hull([0.25, 0.0], refs3) - 0.5) < 0.0000001)
+    // 4-point: one reference ABOVE the hull is excluded by the chain.
+    let refs4 = [[0.0, 0.0], [0.33, 1.0], [0.66, -1.0], [1.0, 0.0]]
+    check("hull4: above-hull ref excluded -> +0.5",
+          fabs(energy_above_hull([0.33, 0.0], refs4) - 0.5) < 0.0000001)
+    check("hull4: on segment -> 0",
+          fabs(energy_above_hull([0.33, -0.5], refs4)) < 0.0000001)
+
     // crystal Stage-2: structure_from_cif (cubic NaCl, label-only)
     let nacl_cif = "" + "data_NaCl\n" + "_cell_length_a 5.6402\n"
         + "_cell_length_b 5.6402\n" + "_cell_length_c 5.6402\n"

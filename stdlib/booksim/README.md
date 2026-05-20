@@ -1,10 +1,20 @@
-# `stdlib/booksim/` — hexa-native re-derivation of BookSim2 (minimal subset)
+# `stdlib/booksim/` — chip-domain NoC adapter (①b layer; demiurge D72)
 
-> **Status: skeleton, no bodies — pending rfc_001 §8 GREEN.**
-> No body returns a useful value yet. Every function is a TBD stub that
-> hard-exits `91` (rfc_048 raw-91 doctrine) when called. This directory
-> exists as the typed-interface scaffold the bodies will land into.
-> Do **NOT** wire this into `self/main.hexa` until §8 GREEN.
+> **D72 2-layer restructure:** the six domain-agnostic NoC-simulation
+> engine modules (`anynet` · `iq_router` · `traffic` · `sweep` ·
+> `wire_delay` · `leighton`, listed in the table below) were relocated
+> to `stdlib/kernels/noc_sim/` — the ①a kernel layer (see
+> `stdlib/kernels/noc_sim/README.md`). This directory now holds only
+> the chip-domain ①b adapter:
+>
+> | file | role |
+> |---|---|
+> | `booksim.hexa` | `hexa-arch booksim` CLI dispatcher + F1F2-record (rfc_002 §3) serialization (demiurge `chip+analyze`). |
+> | `sweep_oracle_parity.hexa` | rfc_001 §B+§D oracle-parity orchestrator (demiurge `chip+verify`). |
+>
+> Both adapters import the engine via `use "stdlib/kernels/noc_sim/
+> <module>"`. The adapter file paths are unchanged — the demiurge
+> `hexa run <adapter>.hexa` spawn is transparent to the move.
 
 This module re-derives the rfc_001 §3 minimal subset of
 [BookSim2](https://github.com/booksim/booksim2) (BSD-2-Clause; Stanford

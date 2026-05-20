@@ -60,7 +60,7 @@
 //         deliverable) · rfc_003 §3.5 / Phase C / Falsifier C1 · §5
 //         provenance map · design.md Decision 1 + Decision 5.
 
-use "stdlib/booksim/anynet"
+use "stdlib/kernels/noc_sim/anynet"
 
 // ─── public types ────────────────────────────────────────────────────────
 

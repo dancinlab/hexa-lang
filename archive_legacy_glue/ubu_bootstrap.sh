@@ -62,13 +62,12 @@ cmd_transpile() {
     log "transpile: self/main.hexa → $MAIN_OUT"
     [ -x "$HEXA_V2" ] || die "hexa_v2 binary missing or not executable: $HEXA_V2"
     [ -f "$MAIN_SRC" ] || die "source missing: $MAIN_SRC"
-    [ -f "$FULL_SRC" ] || die "source missing: $FULL_SRC"
+    # NOTE: self/hexa_full.hexa (the interpreter) was removed by the
+    # interpreter retirement (@D g_interp_deprecated) — transpile is
+    # main-only now; the legacy FULL_OUT path is dead.
     "$HEXA_V2" "$MAIN_SRC" "$MAIN_OUT"
-    log "transpile: self/hexa_full.hexa → $FULL_OUT"
-    "$HEXA_V2" "$FULL_SRC" "$FULL_OUT"
     [ -s "$MAIN_OUT" ] || die "transpile produced empty $MAIN_OUT"
-    [ -s "$FULL_OUT" ] || die "transpile produced empty $FULL_OUT"
-    log "transpile: OK ($(wc -c <"$MAIN_OUT" | tr -d ' ') B main, $(wc -c <"$FULL_OUT" | tr -d ' ') B full)"
+    log "transpile: OK ($(wc -c <"$MAIN_OUT" | tr -d ' ') B main)"
 }
 
 cmd_sync() {
@@ -172,6 +171,52 @@ cmd_verify() {
     log "verify: OK"
 }
 
+# cmd_bootstrap — pure-from-source linux self-host, run ON the linux
+# host from a fresh clone (no mac-transpile, no rsync, no interpreter).
+# Verified 2026-05-19 on mac arm64 + linux/amd64 (the phanes Cloudflare
+# Containers Dockerfile encodes this exact chain). Resolves inbox patch
+# phanes-linux-self-host-build-driver-for-containerization.
+#   Usage:  ubu_bootstrap.sh bootstrap [<hx-bin-dir>]   (default ~/.hx/bin)
+cmd_bootstrap() {
+    local hxbin="${1:-$HOME/.hx/bin}"
+    cd "$REPO_ROOT" || die "repo root missing"
+    command -v clang >/dev/null || die "clang required"
+    mkdir -p "$hxbin"
+    # [1] genesis transpiler — hexa_cc.c + runtime.c. NOT single-file:
+    #     hexa_cc.c #includes only runtime.h (decls); the defs are in
+    #     self/runtime.c, which MUST be on the clang line.
+    log "bootstrap [1/4] clang → self/native/hexa_v2"
+    clang -O2 -std=c11 -D_GNU_SOURCE -I self \
+          self/native/hexa_cc.c self/runtime.c \
+          -o self/native/hexa_v2 -lm || die "[1] hexa_v2 link failed"
+    # [2] transpile the build driver — self/main.hexa is import-free,
+    #     so the single-file transpiler handles it standalone.
+    log "bootstrap [2/4] hexa_v2 self/main.hexa → $MAIN_OUT"
+    ./self/native/hexa_v2 self/main.hexa "$MAIN_OUT" || die "[2] transpile failed"
+    # [3] link the full `hexa` driver (build subcommand + import flatten).
+    #     -D_GNU_SOURCE: runtime.c uses POSIX (nanosleep/fdopen/kill/…) —
+    #     strict -std=c11 hides them on linux glibc (macOS headers laxer).
+    log "bootstrap [3/4] clang → $hxbin/hexa.real"
+    clang -O2 -std=c11 -D_GNU_SOURCE -I self "$MAIN_OUT" self/runtime.c \
+          -o "$hxbin/hexa.real" -lm || die "[3] driver link failed"
+    # [3b] the compiled module loader — REQUIRED for correct import
+    #      flatten. self/module_loader.hexa is import-free → hexa_v2
+    #      transpiles it standalone. Without build/hexa_module_loader,
+    #      `hexa build` of an import-bearing program silently falls back
+    #      to raw-src and emits `extern` stubs (undeclared-symbol clang
+    #      errors). Built so downstream `hexa build` flattens correctly.
+    log "bootstrap [3b] clang → build/hexa_module_loader"
+    mkdir -p build
+    ./self/native/hexa_v2 self/module_loader.hexa /tmp/hexa_ml.c || die "[3b] ml transpile failed"
+    clang -O2 -std=c11 -D_GNU_SOURCE -I self /tmp/hexa_ml.c self/runtime.c \
+          -o build/hexa_module_loader -lm || die "[3b] module_loader link failed"
+    # [4] wrapper
+    log "bootstrap [4/4] wrapper → $hxbin/hexa"
+    printf '#!/bin/bash\nexec "%s/hexa.real" "$@"\n' "$hxbin" > "$hxbin/hexa"
+    chmod +x "$hxbin/hexa"
+    log "bootstrap: OK — $("$hxbin/hexa.real" --version 2>/dev/null | head -1 || echo 'hexa.real built')"
+}
+
 cmd_help() {
     sed -n '1,40p' "$0"
 }
@@ -188,6 +233,7 @@ case "$sub" in
     sync)      cmd_sync      "$@" ;;
     build)     cmd_build     "$@" ;;
     install)   cmd_install   "$@" ;;
+    bootstrap) cmd_bootstrap "$@" ;;
     verify)    cmd_verify    "$@" ;;
     help|-h|--help) cmd_help ;;
     *)

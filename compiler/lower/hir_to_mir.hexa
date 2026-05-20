@@ -60,7 +60,7 @@ pub let mut _lr_lambda_ctr: i64 = 0
 // ── Sentinels ────────────────────────────────────────────────
 
 fn _miss_local() -> Local {
-    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "" }
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "" }
 }
 
 fn _const_int_op(v: i64) -> Operand {
@@ -315,7 +315,8 @@ fn _fresh_local(ctx: LowerCtx, t: Type, hint: string) -> LowerCtx {
         id: id,
         arena_id: ctx.arena_root,
         type_id: _type_id_of(t),
-        name_hint: hint
+        name_hint: hint,
+        precision: ""
     }
     _lr_locals.push(l)
     return LowerCtx {
@@ -897,6 +898,14 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             return _value(ctx2, _local_op(sc_val.id))
         }
     }
+    // RFC 068 marker — Mixed-precision MIR layer. This is the seam where
+    // RFC 068 P1 (`F-RFC068-PRECISION-PROPAGATE`) adds the precision-tag
+    // dispatcher and P2 (`F-RFC068-OPCODE-SUFFIX`) rewrites the emitted
+    // STMT_BINOP op from `add` to `add_f16` / `add_bf16` / `add_f32`
+    // when the dst Local has an explicit precision annotation. See
+    // `inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
+    // §3 P1/P2.
+    //
     // ── binop → STMT_BINOP ──────────────────────────────────
     if k == "binop" {
         if len(e.children) < 2 { return _no_value(ctx) }
@@ -1208,7 +1217,8 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         id: gid,
                         arena_id: -999,
                         type_id: _type_id_of(e.children[1].typ),
-                        name_hint: lhs.text
+                        name_hint: lhs.text,
+        precision: ""
                     }
                     is_global = true
                 }
@@ -2319,7 +2329,8 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
         blocks: _lr_blocks,
         entry_block: lam_entry,
         arena_root: lctx.arena_root,
-        def_line: e.span.line
+        def_line: e.span.line,
+        gpu_kind: GPU_KIND_CPU
     }
     _lr_lambdas.push(lam_func)
     // restore the enclosing fn's accumulators before lowering the site.
@@ -2527,6 +2538,19 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     }
 
     let ret_local = _miss_local()
+    // RFC 055 055-P3c — propagate the HIR FnDecl's `@gpu_kernel` /
+    // `@gpu_device` annotation to MFunc.gpu_kind so the NVPTX codegen
+    // can partition the module's functions. CPU codegen targets ignore
+    // the field (F-RFC055-CPU-CODEGEN-UNTOUCHED holds; the CPU emit
+    // path is byte-identical when no @gpu_* function is present).
+    let mut __gpu_kind = GPU_KIND_CPU
+    let mut __ai = 0
+    while __ai < len(it.annotations) {
+        let __an = it.annotations[__ai].name
+        if __an == "gpu_kernel" { __gpu_kind = GPU_KIND_KERNEL }
+        if __an == "gpu_device" { __gpu_kind = GPU_KIND_DEVICE }
+        __ai = __ai + 1
+    }
     return MFunc {
         // F6 P0c-2 — forced copy: it.name is the HItem's name handle
         // (hmodule outlives the streaming loop). PLAN-stage3-footprint-F6.md.
@@ -2539,7 +2563,8 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         arena_root: ctx.arena_root,
         // #13 DWARF .loc — carry the fn-definition source line through to
         // codegen so it can emit a `.loc 1 <line> 0` directive.
-        def_line: it.span.line
+        def_line: it.span.line,
+        gpu_kind: __gpu_kind
     }
 }
 
@@ -2570,7 +2595,8 @@ pub fn lower_hir(module: HModule) -> MModule {
                 id: len(globals),
                 arena_id: 0,
                 type_id: _type_id_of(itk.sig_return),
-                name_hint: nm
+                name_hint: nm,
+        precision: ""
             }
             globals.push(l)
         }

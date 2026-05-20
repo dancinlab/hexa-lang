@@ -80,11 +80,11 @@
 // gate · rfc_003 §3.4 / §4 §B acceptance / Phase B Falsifier B2 · §5
 // provenance map · design.md Decision 1 + Decision 5.
 
-use "stdlib/booksim/anynet"
-use "stdlib/booksim/iq_router"
-use "stdlib/booksim/traffic"
-use "stdlib/booksim/wire_delay"
-use "stdlib/booksim/leighton"
+use "stdlib/kernels/noc_sim/anynet"
+use "stdlib/kernels/noc_sim/iq_router"
+use "stdlib/kernels/noc_sim/traffic"
+use "stdlib/kernels/noc_sim/wire_delay"
+use "stdlib/kernels/noc_sim/leighton"
 
 // ─── public types ────────────────────────────────────────────────────────
 

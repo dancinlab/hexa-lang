@@ -569,7 +569,7 @@
   detail: patches/runtime-h-incomplete-after-phase-1-3-b.md
 
 - id: modifyotherkeys-non-ascii-decoder-gap
-  source_commit: pending
+  source_commit: bf943479
   source_files:
     - self/tui/input.hexa
   compiler_impact: |
@@ -583,12 +583,12 @@
     wilson harness-cli — Korean / CJK / emoji input when modifyOtherKeys
     level 2 is on. Wilson also pushes ESC[>4;1m (level 1) as a workaround
     to keep IME text as raw UTF-8.
-  status: pending
+  status: applied
   opened: 2026-05-18
   detail: patches/modifyotherkeys-non-ascii-decoder-gap.md
 
 - id: input-decoder-chr-vs-from_char_code
-  source_commit: pending
+  source_commit: 7c98cf03  # + ec468224 (decoder cluster B — CSI u L454)
   source_files:
     - self/tui/input.hexa
   compiler_impact: |
@@ -607,7 +607,7 @@
     follow-up swaps both decoder paths to `from_char_code` so the
     full UTF-8 sequence reaches the editor buffer. Verified end-to-
     end via `tmux send-keys -l '안녕 하세요 🌌'`.
-  status: pending
+  status: applied
   opened: 2026-05-18
   detail: inbox/patches/input-decoder-chr-vs-from_char_code.md
 
@@ -757,3 +757,36 @@
 
     g3: scaffold landed ≠ Yosys absorbed. Self/main.hexa branch
     `hexa yosys` is NOT wired yet (skeleton phase).
+
+- id: stdlib-yosys-rtlil-body
+  source_commit: ec8a51fc
+  source_files:
+    - stdlib/yosys/rtlil.hexa
+  compiler_impact: |
+    Pure stdlib/yosys/ addition (1 file: rtlil.hexa minimum body) —
+    leaf module, no compiler/ or self/ change. First BODY landing of
+    the stdlib-yosys-rfc006-scaffold phase plan (rtlil → read_verilog
+    → passes → liberty → write_verilog → abc_map → dispatcher).
+  selftest_delta: "+16 module-level invariants (hexa run stdlib/yosys/rtlil.hexa → 16/16 PASS); NOT yet wired into the hexa-lang aggregate selftest harness count — honest g3, no harness delta claimed until the module is in the harness manifest"
+  downstream_consumer: |
+    rfc_006 §4 module-2 (read_verilog) — produces rtlil.Design values;
+    module-6 (write_verilog) consumes them. demiurge cockpit chip+
+    synthesize cell (already wired κ-31/D53 — spawns hexa run yosys.hexa).
+  status: pending
+  opened: 2026-05-20
+  branch: rfc006-yosys-rtlil-skeleton
+  note: |
+    Filed from a demiurge session 2026-05-20 under the user's
+    /goal "완료시까지 진행" + "hexa upstream 필요시도 이 세션에서 진행"
+    autonomy. Continues stdlib-yosys-rfc006-scaffold's phase plan:
+    lands module-1 (rtlil) Wire+Module+Design minimum data-model body.
+
+    Scope this cycle: Design ⇄ Module ⇄ Wire only. Cell / SigSpec /
+    SigBit / Const / Process / Memory remain raw-91 (sibling phases).
+
+    g3: 1/7 modules body landed ≠ Yosys absorbed. rfc_006 §5 area-
+    oracle gate (G1-G4 in stdlib-yosys-rfc006-scaffold) REMAINS OPEN.
+
+    Audit trail: inbox/notes/2026-05-20-demiurge-rfc006-yosys-rtlil-
+    handoff.md. Branch cut from t4-emt-calc 0626febc; final PR target
+    rfc043-hexa-torch per the 2026-05-19 handoff.

@@ -28,9 +28,9 @@
 //
 // Source: rfc_001 §3 minimal subset (measurement loop) + §8 measurement gate.
 
-use "stdlib/booksim/anynet"
-use "stdlib/booksim/iq_router"
-use "stdlib/booksim/traffic"
+use "stdlib/kernels/noc_sim/anynet"
+use "stdlib/kernels/noc_sim/iq_router"
+use "stdlib/kernels/noc_sim/traffic"
 
 // ─── public types ────────────────────────────────────────────────────────
 

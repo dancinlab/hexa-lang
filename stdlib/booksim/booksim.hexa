@@ -43,12 +43,12 @@
 // (and currently triggers the hexa-compiler enum bug noted in
 // rfc_003 — RegionShape/TrafficKind undeclared). They get wired in
 // per-module as each Phase B/C/D body lands.
-use "stdlib/booksim/anynet"
-use "stdlib/booksim/leighton"
-use "stdlib/booksim/wire_delay"
-use "stdlib/booksim/iq_router"
-use "stdlib/booksim/traffic"
-use "stdlib/booksim/sweep"
+use "stdlib/kernels/noc_sim/anynet"
+use "stdlib/kernels/noc_sim/leighton"
+use "stdlib/kernels/noc_sim/wire_delay"
+use "stdlib/kernels/noc_sim/iq_router"
+use "stdlib/kernels/noc_sim/traffic"
+use "stdlib/kernels/noc_sim/sweep"
 
 let VERSION = "0.0.1"
 

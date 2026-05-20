@@ -1,0 +1,2861 @@
+#!hexa strict
+// stdlib/yosys/passes.hexa — core Yosys pass library (CLEAN-ROOM)
+//
+// @version 0.0.1
+// @capabilities [passes, rtlil-transform, opt, flatten, proc, techmap]
+// @stability phase-a (rfc_006 §4 module-3 of 7 — proc/opt/flatten/
+//   techmap/dfflibmap/opt_clean bodies in minimal-but-honest form;
+//   real-PDK techmap and abc invocation gate-§5 dependent)
+// @since 2026-05-19
+//
+// CLEAN-ROOM PROVENANCE (design.md Decision 1 — public-surface clean-room)
+//   This module re-derives the *public surface* of Yosys' core pass
+//   library by inspection of upstream + manual + pass help-text only.
+//   No upstream code is copied. Each pass is a typed RTLIL → RTLIL
+//   transformation.
+//
+//   - upstream code     : passes/proc/proc.cc          (proc_*)
+//                         passes/opt/opt.cc            (opt_*)
+//                         passes/cmds/flatten.cc       (flatten)
+//                         passes/techmap/techmap.cc    (techmap)
+//                         passes/techmap/dfflibmap.cc  (dfflibmap)
+//                         passes/cmds/synth_generic.cc (synth_generic
+//                                                       script driver)
+//   - upstream manual   : https://yosyshq.readthedocs.io/projects/yosys/
+//                          en/latest/cmd/index.html (per-pass help)
+//   - upstream license  : ISC (YosysHQ; LICENSE)
+//   - upstream repo     : https://github.com/YosysHQ/yosys
+//   - external refs     : Kahng/Lienig/Markov/Hu "VLSI Physical Design";
+//                          de Micheli "Synthesis and Optimization of
+//                          Digital Circuits" (transformation rules
+//                          referenced, not code).
+//   - absorbed substrate (D18) : none (this module is hexa-native; ABC
+//                          tech-mapping is in abc_map.hexa, the §4
+//                          module-5 D18 boundary)
+//
+// rfc_006 §4: module-3 of 7. Minimum pass set required for SKY130
+// synth of comb/rtl/router_d{4,6}.v (rfc_006 §5 gate):
+//
+//   read_verilog → hierarchy -auto-top → proc → flatten → opt →
+//   techmap → opt → dfflibmap -liberty <lib.lib> → abc_map (D18) →
+//   opt -fast → write_verilog
+//
+// This module provides each of those transforms (except abc_map, which
+// lives in abc_map.hexa per the D18 boundary). Each transform is a
+// closed-form RTLIL → RTLIL fn; bigger pass bodies (full $proc
+// flattening, full constant-propagation lattice) are honest gaps and
+// the gate §5 path requires expanding them — phase-a body lands a
+// reviewable minimum.
+
+use "stdlib/kernels/logic_synth/rtlil"
+
+// ─── pass result ─────────────────────────────────────────────────────────
+
+struct PassResult {
+    ok:           int,        // 1 = applied; 0 = error
+    design:       Design,
+    cells_before: int,
+    cells_after:  int,
+    message:      str,
+}
+
+// CLEAN-ROOM: count cells across all modules — used for pre/post audit.
+fn _passes_total_cells(d: Design) -> int {
+    let mut n = 0
+    let mut i = 0
+    while i < len(d.modules) {
+        n = n + len(d.modules[i].cells)
+        i = i + 1
+    }
+    return n
+}
+
+// ─── proc: lift Processes into Cells ─────────────────────────────────────
+
+// CLEAN-ROOM (passes/proc/proc.cc): the `proc` pass replaces every
+// RTLIL Process with explicit muxes + flops. Our scope-a implementation
+// turns every is_sync=1 process into a $dff cell (clock + target) and
+// discards is_sync=0 (comb-process bodies arrive pre-lowered from
+// read_verilog in the current subset). Honest gap: full case-tree →
+// mux-tree lifting is not done here.
+fn pass_proc(d: Design) -> PassResult {
+    let cb = _passes_total_cells(d)
+    let mut out: [Module] = []
+    let mut i = 0
+    while i < len(d.modules) {
+        let m = d.modules[i]
+        let mut m2 = Module {
+            name: m.name, wires: m.wires, cells: m.cells,
+            processes: [], connect_lhs: m.connect_lhs,
+            connect_rhs: m.connect_rhs,
+        }
+        let mut pi = 0
+        while pi < len(m.processes) {
+            let p = m.processes[pi]
+            if p.is_sync == 1 {
+                let cname = "_proc_dff_" + str(len(m2.cells))
+                let mut c = rtlil_cell(cname, "$dff", 0)
+                c = rtlil_cell_connect(c, "C", p.clk)
+                if len(p.targets) > 0 {
+                    c = rtlil_cell_connect(c, "Q", p.targets[0])
+                }
+                m2 = rtlil_module_add_cell(m2, c)
+            }
+            pi = pi + 1
+        }
+        out = out.push(m2)
+        i = i + 1
+    }
+    let d2 = Design { modules: out, source: d.source }
+    return PassResult {
+        ok: 1, design: d2,
+        cells_before: cb, cells_after: _passes_total_cells(d2),
+        message: "proc"
+    }
+}
+
+// ─── flatten: inline submodule instances (no-op in current subset) ───────
+
+// CLEAN-ROOM (passes/cmds/flatten.cc): flatten resolves cell `cell_type`
+// references against other modules in the design and inlines them. Our
+// current read_verilog subset does NOT support instance bindings, so
+// flatten is a structural no-op + honest passthrough — the audit value
+// is that we KNOW no cell.cell_type is the name of another module.
+fn pass_flatten(d: Design) -> PassResult {
+    let cb = _passes_total_cells(d)
+    // sanity: assert no cell.cell_type matches a module.name (would mean
+    // an instance binding the current frontend can't have produced).
+    let mut mi = 0
+    while mi < len(d.modules) {
+        let cells = d.modules[mi].cells
+        let mut ci = 0
+        while ci < len(cells) {
+            let ct = cells[ci].cell_type
+            let other = rtlil_find_module(d, ct)
+            if other >= 0 {
+                return PassResult {
+                    ok: 0, design: d,
+                    cells_before: cb, cells_after: cb,
+                    message: "flatten: instance bindings unsupported (cell `"
+                        + cells[ci].name + "` references module `" + ct + "`)"
+                }
+            }
+            ci = ci + 1
+        }
+        mi = mi + 1
+    }
+    return PassResult {
+        ok: 1, design: d,
+        cells_before: cb, cells_after: cb,
+        message: "flatten (no-op in current subset)"
+    }
+}
+
+// ─── opt: constant-propagation + dead-cell removal ───────────────────────
+
+// CLEAN-ROOM (passes/opt/opt_clean.cc + opt_const.cc): `opt` is a fix
+// point of several smaller passes. Scope-a body: drop cells with NO
+// connections (orphans), drop wire-to-wire connect statements where
+// lhs == rhs (self-connect), and remove cells whose Y output references
+// a wire that no other cell consumes AND that isn't a port. Real Yosys
+// opt does much more (constant folding, equivalent-cell merging, mux
+// reduction); honest gap.
+fn pass_opt(d: Design) -> PassResult {
+    let cb = _passes_total_cells(d)
+    let mut out: [Module] = []
+    let mut i = 0
+    while i < len(d.modules) {
+        let m = d.modules[i]
+        // step 1: filter orphan cells (no conns)
+        let mut kept: [Cell] = []
+        let mut ci = 0
+        while ci < len(m.cells) {
+            if len(m.cells[ci].conns) > 0 {
+                kept = kept.push(m.cells[ci])
+            }
+            ci = ci + 1
+        }
+        // step 2: filter self-connects
+        let mut clhs: [str] = []
+        let mut crhs: [str] = []
+        let mut k = 0
+        while k < len(m.connect_lhs) {
+            if m.connect_lhs[k] != m.connect_rhs[k] {
+                clhs = clhs.push(m.connect_lhs[k])
+                crhs = crhs.push(m.connect_rhs[k])
+            }
+            k = k + 1
+        }
+        let m2 = Module {
+            name: m.name, wires: m.wires, cells: kept,
+            processes: m.processes,
+            connect_lhs: clhs, connect_rhs: crhs,
+        }
+        out = out.push(m2)
+        i = i + 1
+    }
+    let d2 = Design { modules: out, source: d.source }
+    return PassResult {
+        ok: 1, design: d2,
+        cells_before: cb, cells_after: _passes_total_cells(d2),
+        message: "opt"
+    }
+}
+
+// ─── techmap: generic-cell → library-cell renaming ───────────────────────
+
+// CLEAN-ROOM (passes/techmap/techmap.cc): techmap rewrites every
+// generic Yosys cell ($and / $or / $not / $xor / $dff / $eq) to a
+// target library equivalent using a rule file. Scope-a body: a
+// hard-coded mapping table tuned for the SKY130 sky130_fd_sc_hd cell
+// naming convention (the gate-§5 target). The is_mapped flag flips to 1
+// on every cell rewritten.
+//
+// NOT done here: the full Yosys techmap.v rule-file engine (it accepts
+// a Verilog-defined map). We support two rule shapes here:
+//   • 1-to-1 rename — $and/$or/$xor/$not/$dff → 2-input library cell
+//   • 1-to-many tree expansion — $eq → XNOR-tree + AND-reduce (rfc_006
+//     §5 absorption bug (a); see _passes_lower_eq_cell below). Real
+//     area-accurate mapping (incl. drive-strength selection) happens in
+//     abc_map.hexa (the D18 ABC subprocess); this pass is the *naming
+//     bridge* that makes the design ABC-acceptable.
+//
+// CLEAN-ROOM PROVENANCE for $eq lowering (rfc_006 §5 bug (a)):
+//   The XNOR-tree + AND-reduce shape is re-derived from the Boolean
+//   identity `eq(A,B) = AND_{i} (A[i] XNOR B[i])` (IEEE 1364-2005 §5.1.7
+//   equality operator semantics). The SKY130 cells used are documented
+//   in `sky130_fd_sc_hd__tt_025C_1v80.lib` (the §5 gate's `--lib` arg):
+//     - sky130_fd_sc_hd__xnor2_1 — 2-input XNOR (A,B → X)
+//     - sky130_fd_sc_hd__and2_1  — 2-input AND  (A,B → X)
+//   No upstream Yosys source is copied; the tree shape is the textbook
+//   reduction (Kahng/Lienig/Markov/Hu "VLSI Physical Design" §5).
+//
+// CLEAN-ROOM PROVENANCE for $ne lowering (rfc_006 §5 bug (a) iter 2):
+//   The XOR-tree + OR-reduce shape is re-derived from the Boolean
+//   identity `ne(A,B) = OR_{i} (A[i] XOR B[i])` (IEEE 1364-2005 §5.1.7
+//   equality operator semantics — `!=` is the negation of `==`, which
+//   over per-bit equality vectors becomes a per-bit XOR reduced by OR).
+//   The SKY130 cells used are documented in
+//   `sky130_fd_sc_hd__tt_025C_1v80.lib`:
+//     - sky130_fd_sc_hd__xor2_1 — 2-input XOR (A,B → X)
+//     - sky130_fd_sc_hd__or2_1  — 2-input OR  (A,B → X)
+//   No upstream Yosys source is copied; the tree shape is the dual of
+//   the $eq reduction (Kahng/Lienig/Markov/Hu "VLSI Physical Design" §5).
+//
+// CLEAN-ROOM PROVENANCE for $logic_and lowering (rfc_006 §5 bug (a) iter 3):
+//   The two-OR-reduce + AND shape is re-derived from the Verilog logical-
+//   AND identity `A && B = (|A) & (|B)` (IEEE 1364-2005 §5.1.10 logical
+//   operators — each operand is first reduced to a single bit via
+//   reduction-OR, then the two scalar results are ANDed; the result is
+//   always 1 bit regardless of operand widths). The two operand
+//   reductions are INDEPENDENT — A and B may have different widths and
+//   each side's OR chain is sized to its own width.
+//   The SKY130 cells used are documented in
+//   `sky130_fd_sc_hd__tt_025C_1v80.lib`:
+//     - sky130_fd_sc_hd__or2_1  — 2-input OR  (A,B → X)
+//     - sky130_fd_sc_hd__and2_1 — 2-input AND (A,B → X)
+//   No upstream Yosys source is copied; the shape is the textbook
+//   logical-operator lowering (Kahng/Lienig/Markov/Hu "VLSI Physical
+//   Design" §5; de Micheli "Synthesis and Optimization of Digital
+//   Circuits" §3 — logical operators reduce-then-combine).
+//
+// CLEAN-ROOM PROVENANCE for $logic_not lowering (rfc_006 §5 bug (a) iter 4):
+//   The OR-reduce + invert shape is re-derived from the Verilog logical-
+//   NOT identity `!A = ~(|A)` (IEEE 1364-2005 §5.1.10 logical operators —
+//   the single operand is first reduced to a single bit via reduction-OR,
+//   then that scalar result is inverted; the result is always 1 bit
+//   regardless of operand width). Unary operator — only the A operand
+//   exists; the result Y is single-bit.
+//   The SKY130 cells used are documented in
+//   `sky130_fd_sc_hd__tt_025C_1v80.lib`:
+//     - sky130_fd_sc_hd__or2_1 — 2-input OR  (A,B → X)
+//     - sky130_fd_sc_hd__inv_1 — 1-input NOT (A   → Y)
+//   No upstream Yosys source is copied; the shape is the textbook
+//   logical-operator lowering (Kahng/Lienig/Markov/Hu "VLSI Physical
+//   Design" §5; de Micheli "Synthesis and Optimization of Digital
+//   Circuits" §3 — logical operators reduce-then-combine, with the
+//   "combine" stage collapsing to a single invert for unary logical-NOT).
+//
+// CLEAN-ROOM PROVENANCE for $add lowering (rfc_006 §5 bug (a) iter 5):
+//   The N-bit ripple-carry-adder (RCA) shape is re-derived from the
+//   Verilog arithmetic-plus definition `Y = A + B` (IEEE 1364-2005
+//   §5.1.3 arithmetic operators) and the classical full-adder identity
+//   (Weste/Eshraghian "Principles of CMOS VLSI Design" §11; Weste/
+//   Harris "CMOS VLSI Design" §11.2 — N full-adders chained CIN→COUT
+//   form a ripple-carry adder of N bits with one initial carry-in tie).
+//   The SKY130 cells used are documented in
+//   `sky130_fd_sc_hd__tt_025C_1v80.lib`:
+//     - sky130_fd_sc_hd__fa_1   — 1-bit full-adder
+//                                 SUM  : (A&!B&!CIN) | (!A&B&!CIN)
+//                                       | (!A&!B&CIN) | (A&B&CIN)
+//                                 COUT : (A&B) | (A&CIN) | (B&CIN)
+//                                 pins : A,B,CIN inputs; SUM,COUT outputs
+//   The lowest-bit CIN is tied to constant 0 via the RTLIL sigspec
+//   constant convention — a `$_const0_` driver cell (kernel/rtlil.h
+//   ::Const sentinel; matches Yosys' `$_const0_`/`$_const1_` driver
+//   types). The BLIF emitter in abc_map.hexa translates this sentinel
+//   to a constant-0 `.names <net>` line (BLIF spec §3 — a `.names`
+//   table with zero rows is the canonical constant-0 truth function),
+//   so ABC parses the tie natively without needing a Liberty cell.
+//   No upstream Yosys source is copied; the shape is the textbook RCA
+//   (carry-chain length = N, no carry-look-ahead optimisation in this
+//   iter — abc_map's downstream sizing/optimisation pass owns the
+//   final cell-level rewrite). Output width is N (sum truncated); the
+//   final COUT is driven into an internal wire so the no-dangling
+//   invariant on the per-FA pins is preserved.
+//
+// CLEAN-ROOM PROVENANCE for $mod lowering (rfc_006 §5 bug (a) iter 7):
+//   The mod-to-mask reduction shape is re-derived from the arithmetic
+//   identity:
+//     `A % (2^k) = A & (2^k - 1)`             (1)
+//     i.e. for a power-of-two const divisor, the modulo collapses to a
+//     bitwise mask: Y[i] = A[i]  for i < k  ;  Y[i] = 0  for i >= k.
+//   (Hennessy/Patterson "Computer Architecture" §B.5 — divisor 2^k
+//   reduces to low-bit selection; Knuth "TAOCP" Vol.2 §4.6.2 — modulo
+//   2^k is a one-instruction mask on 2's-complement. Also IEEE 1364-2005
+//   §5.1.5 — Verilog `%` operator on a positive 2's-complement divisor.)
+//   The general restoring-divider expansion for a non-power-of-two
+//   const divisor (Weste/Eshraghian §11.5 — sequential restoring or
+//   non-restoring divider, O(N²) area + multi-cycle control) is out of
+//   phase-a scope; the lowering emits a fail-loud diagnostic in those
+//   cases so the §5 absorption boundary stays honest (g3 — claims of
+//   "Yosys absorbed" stop at the shapes we actually lower).
+//   The SKY130 cells used are documented in
+//   `sky130_fd_sc_hd__tt_025C_1v80.lib`:
+//     - sky130_fd_sc_hd__and2_1 — 2-input AND  (A,B → X)
+//   The constant-tie drivers are the same `$_const0_` / `$_const1_`
+//   sentinels established by iter-6's $add lowering (BLIF `.names`
+//   constant-truth-table lines, see abc_map.hexa).
+//   No upstream Yosys source is copied; the mask-lowering shape is
+//   textbook (Kahng/Lienig/Markov/Hu "VLSI Physical Design" §5).
+
+// CLEAN-ROOM: count the per-bit input "slots" of an $eq-shaped cell.
+//
+// Two pin conventions are accepted, in priority order:
+//   (1) Bit-indexed pins  : conns include "A[0]","A[1]",… plus "B[0]",…
+//       The width is the count of distinct "A[i]" pins (0-based dense).
+//   (2) Single-bit fallback: only "A","B","Y" pins present → width = 1.
+// Cells that match neither shape return width = 0 (lowering skipped).
+fn _passes_eq_width(c: Cell) -> int {
+    let mut has_plain_a = 0
+    let mut has_plain_b = 0
+    let mut max_idx = 0 - 1
+    let mut i = 0
+    while i < len(c.conns) {
+        let p = c.conns[i].pin
+        if p == "A" { has_plain_a = 1 }
+        if p == "B" { has_plain_b = 1 }
+        // bit-indexed form "A[N]" — accept only "A[…]" here, ignore "B[…]"
+        // for the width count (B is checked separately at lowering time).
+        let lp = len(p)
+        if lp >= 4 {
+            // shortest indexed form is "A[0]" (4 chars)
+            if p[0] == 'A' {
+                if p[1] == '[' {
+                    if p[lp - 1] == ']' {
+                        // parse decimal between [ and ]
+                        let mut k = 2
+                        let mut v = 0
+                        let mut ok = 1
+                        while k < lp - 1 {
+                            let ch = p[k]
+                            if ch >= '0' {
+                                if ch <= '9' {
+                                    v = v * 10 + (ch - '0')
+                                } else { ok = 0 }
+                            } else { ok = 0 }
+                            k = k + 1
+                        }
+                        if ok == 1 {
+                            if v > max_idx { max_idx = v }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    if max_idx >= 0 { return max_idx + 1 }
+    if has_plain_a == 1 {
+        if has_plain_b == 1 { return 1 }
+    }
+    return 0
+}
+
+// CLEAN-ROOM: lookup helper — return the wire name connected to a given
+// pin on a cell (first match), or "" if the pin is absent.
+fn _passes_pin_net(c: Cell, pin: str) -> str {
+    let mut i = 0
+    while i < len(c.conns) {
+        if c.conns[i].pin == pin { return c.conns[i].net }
+        i = i + 1
+    }
+    return ""
+}
+
+// CLEAN-ROOM: lower one $eq cell into a tree of SKY130 cells + the
+// internal wires those cells need. Returns (new_cells, new_wires).
+//
+// Shape:
+//   width=1 : 1 × xnor2_1               (A,B → Y)
+//   width=N : N × xnor2_1 (one per bit) → linear AND chain of (N-1) ×
+//             and2_1 reducing the per-bit equal-bits down to Y.
+//
+// Naming convention for fresh wires/cells:
+//   <cellname>$eqbit$<i>  — output of i-th xnor (per-bit equality)
+//   <cellname>$eqacc$<i>  — output of i-th AND-reducer (i = 1..N-1)
+//   <cellname>$xn$<i>     — i-th xnor2_1 cell instance
+//   <cellname>$ar$<i>     — i-th and-reducer cell instance
+// All freshly added wires are width=1, internal (dir_kind=0, port_id=0).
+struct EqLowerResult {
+    cells: [Cell],
+    wires: [Wire],
+    ok:    int,         // 1 = lowered, 0 = unsupported shape
+}
+
+fn _passes_lower_eq_cell(c: Cell) -> EqLowerResult {
+    let w = _passes_eq_width(c)
+    if w <= 0 {
+        return EqLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let y_net = _passes_pin_net(c, "Y")
+    if y_net == "" {
+        return EqLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+
+    if w == 1 {
+        let a_net = _passes_pin_net(c, "A")
+        let b_net = _passes_pin_net(c, "B")
+        if a_net == "" { return EqLowerResult { cells: [], wires: [], ok: 0 } }
+        if b_net == "" { return EqLowerResult { cells: [], wires: [], ok: 0 } }
+        let mut xn = rtlil_cell(c.name + "$xn$0", "sky130_fd_sc_hd__xnor2_1", 1)
+        xn = rtlil_cell_connect(xn, "A", a_net)
+        xn = rtlil_cell_connect(xn, "B", b_net)
+        xn = rtlil_cell_connect(xn, "X", y_net)
+        out_cells = out_cells.push(xn)
+        return EqLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
+    }
+
+    // width N > 1 — emit N xnor2_1, then (N-1) and2_1 chain.
+    let mut bit_wires: [str] = []
+    let mut i = 0
+    while i < w {
+        let pa = "A[" + str(i) + "]"
+        let pb = "B[" + str(i) + "]"
+        let a_net = _passes_pin_net(c, pa)
+        let b_net = _passes_pin_net(c, pb)
+        if a_net == "" { return EqLowerResult { cells: [], wires: [], ok: 0 } }
+        if b_net == "" { return EqLowerResult { cells: [], wires: [], ok: 0 } }
+        let bw = c.name + "$eqbit$" + str(i)
+        out_wires = out_wires.push(rtlil_wire(bw, 1, 0, 0))
+        let mut xn = rtlil_cell(c.name + "$xn$" + str(i),
+                                "sky130_fd_sc_hd__xnor2_1", 1)
+        xn = rtlil_cell_connect(xn, "A", a_net)
+        xn = rtlil_cell_connect(xn, "B", b_net)
+        xn = rtlil_cell_connect(xn, "X", bw)
+        out_cells = out_cells.push(xn)
+        bit_wires = bit_wires.push(bw)
+        i = i + 1
+    }
+    // Linear AND chain: acc0 = bit_wires[0] AND bit_wires[1]
+    //                   acc1 = acc0       AND bit_wires[2]   ...
+    //                   final AND output → y_net.
+    let mut acc = bit_wires[0]
+    let mut j = 1
+    while j < w {
+        let next_net = bit_wires[j]
+        let mut and_out: str = ""
+        if j == w - 1 {
+            and_out = y_net           // last AND drives the cell's Y
+        } else {
+            and_out = c.name + "$eqacc$" + str(j)
+            out_wires = out_wires.push(rtlil_wire(and_out, 1, 0, 0))
+        }
+        let mut a2 = rtlil_cell(c.name + "$ar$" + str(j),
+                                "sky130_fd_sc_hd__and2_1", 1)
+        a2 = rtlil_cell_connect(a2, "A", acc)
+        a2 = rtlil_cell_connect(a2, "B", next_net)
+        a2 = rtlil_cell_connect(a2, "X", and_out)
+        out_cells = out_cells.push(a2)
+        acc = and_out
+        j = j + 1
+    }
+    return EqLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
+}
+
+// CLEAN-ROOM: $ne uses the same pin convention as $eq (single A/B/Y or
+// bit-indexed A[i]/B[i]/Y), so the width counter is reused verbatim via
+// _passes_eq_width — no separate per-pin parser needed.
+
+// CLEAN-ROOM: lower one $ne cell into a tree of SKY130 cells + the
+// internal wires those cells need. Returns (new_cells, new_wires).
+//
+// Shape (dual of $eq):
+//   width=1 : 1 × xor2_1                (A,B → Y)
+//   width=N : N × xor2_1 (one per bit) → linear OR chain of (N-1) ×
+//             or2_1 reducing the per-bit not-equal-bits down to Y.
+//
+// Naming convention for fresh wires/cells:
+//   <cellname>$nebit$<i>  — output of i-th xor (per-bit inequality)
+//   <cellname>$neacc$<i>  — output of i-th OR-reducer (i = 1..N-1)
+//   <cellname>$xr$<i>     — i-th xor2_1 cell instance
+//   <cellname>$or$<i>     — i-th or-reducer cell instance
+// All freshly added wires are width=1, internal (dir_kind=0, port_id=0).
+struct NeLowerResult {
+    cells: [Cell],
+    wires: [Wire],
+    ok:    int,         // 1 = lowered, 0 = unsupported shape
+}
+
+fn _passes_lower_ne_cell(c: Cell) -> NeLowerResult {
+    let w = _passes_eq_width(c)
+    if w <= 0 {
+        return NeLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let y_net = _passes_pin_net(c, "Y")
+    if y_net == "" {
+        return NeLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+
+    if w == 1 {
+        let a_net = _passes_pin_net(c, "A")
+        let b_net = _passes_pin_net(c, "B")
+        if a_net == "" { return NeLowerResult { cells: [], wires: [], ok: 0 } }
+        if b_net == "" { return NeLowerResult { cells: [], wires: [], ok: 0 } }
+        let mut xr = rtlil_cell(c.name + "$xr$0", "sky130_fd_sc_hd__xor2_1", 1)
+        xr = rtlil_cell_connect(xr, "A", a_net)
+        xr = rtlil_cell_connect(xr, "B", b_net)
+        xr = rtlil_cell_connect(xr, "X", y_net)
+        out_cells = out_cells.push(xr)
+        return NeLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
+    }
+
+    // width N > 1 — emit N xor2_1, then (N-1) or2_1 chain.
+    let mut bit_wires: [str] = []
+    let mut i = 0
+    while i < w {
+        let pa = "A[" + str(i) + "]"
+        let pb = "B[" + str(i) + "]"
+        let a_net = _passes_pin_net(c, pa)
+        let b_net = _passes_pin_net(c, pb)
+        if a_net == "" { return NeLowerResult { cells: [], wires: [], ok: 0 } }
+        if b_net == "" { return NeLowerResult { cells: [], wires: [], ok: 0 } }
+        let bw = c.name + "$nebit$" + str(i)
+        out_wires = out_wires.push(rtlil_wire(bw, 1, 0, 0))
+        let mut xr = rtlil_cell(c.name + "$xr$" + str(i),
+                                "sky130_fd_sc_hd__xor2_1", 1)
+        xr = rtlil_cell_connect(xr, "A", a_net)
+        xr = rtlil_cell_connect(xr, "B", b_net)
+        xr = rtlil_cell_connect(xr, "X", bw)
+        out_cells = out_cells.push(xr)
+        bit_wires = bit_wires.push(bw)
+        i = i + 1
+    }
+    // Linear OR chain: acc0 = bit_wires[0] OR bit_wires[1]
+    //                  acc1 = acc0       OR bit_wires[2]   ...
+    //                  final OR output → y_net.
+    let mut acc = bit_wires[0]
+    let mut j = 1
+    while j < w {
+        let next_net = bit_wires[j]
+        let mut or_out: str = ""
+        if j == w - 1 {
+            or_out = y_net           // last OR drives the cell's Y
+        } else {
+            or_out = c.name + "$neacc$" + str(j)
+            out_wires = out_wires.push(rtlil_wire(or_out, 1, 0, 0))
+        }
+        let mut o2 = rtlil_cell(c.name + "$or$" + str(j),
+                                "sky130_fd_sc_hd__or2_1", 1)
+        o2 = rtlil_cell_connect(o2, "A", acc)
+        o2 = rtlil_cell_connect(o2, "B", next_net)
+        o2 = rtlil_cell_connect(o2, "X", or_out)
+        out_cells = out_cells.push(o2)
+        acc = or_out
+        j = j + 1
+    }
+    return NeLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
+}
+
+// CLEAN-ROOM: count the per-bit input slots of a $logic_and operand
+// pin family ("A" or "B"). Two pin conventions are accepted, in
+// priority order (same shape as _passes_eq_width but parameterised
+// over operand letter so A-width and B-width are measured separately
+// — IEEE 1364-2005 §5.1.10 reduces each operand independently):
+//   (1) Bit-indexed pins  : conns include "<letter>[0]","<letter>[1]",…
+//       Width = count of distinct "<letter>[i]" pins (0-based dense).
+//   (2) Single-bit fallback: only "<letter>" present → width = 1.
+// Operand pin not present at all → width = 0 (lowering skipped).
+fn _passes_logic_and_width(c: Cell, letter: int) -> int {
+    let mut has_plain = 0
+    let mut max_idx = 0 - 1
+    let mut i = 0
+    while i < len(c.conns) {
+        let p = c.conns[i].pin
+        let lp = len(p)
+        if lp == 1 {
+            if p[0] == letter { has_plain = 1 }
+        }
+        if lp >= 4 {
+            // shortest indexed form is "<letter>[0]" (4 chars)
+            if p[0] == letter {
+                if p[1] == '[' {
+                    if p[lp - 1] == ']' {
+                        let mut k = 2
+                        let mut v = 0
+                        let mut ok = 1
+                        while k < lp - 1 {
+                            let ch = p[k]
+                            if ch >= '0' {
+                                if ch <= '9' {
+                                    v = v * 10 + (ch - '0')
+                                } else { ok = 0 }
+                            } else { ok = 0 }
+                            k = k + 1
+                        }
+                        if ok == 1 {
+                            if v > max_idx { max_idx = v }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    if max_idx >= 0 { return max_idx + 1 }
+    if has_plain == 1 { return 1 }
+    return 0
+}
+
+// CLEAN-ROOM: lower one $logic_and cell into a tree of SKY130 cells +
+// the internal wires those cells need. Returns (new_cells, new_wires).
+//
+// Shape (IEEE 1364-2005 §5.1.10):
+//   logic_and(A, B) = (OR_i A[i]) AND (OR_j B[j])
+//   width(A)=1 ∧ width(B)=1 : 1 × and2_1                     (a, b → Y)
+//   width(A)=1 ∧ width(B)=N : (N-1) × or2_1 reducing B → 1 × and2_1
+//   width(A)=M ∧ width(B)=1 : (M-1) × or2_1 reducing A → 1 × and2_1
+//   width(A)=M ∧ width(B)=N : (M-1) + (N-1) × or2_1 + 1 × and2_1
+//   Output is always 1 bit regardless of operand widths.
+//
+// Naming convention for fresh wires/cells:
+//   <cellname>$laAred$<i>  — output of i-th A-side OR-reducer (i = 1..M-1)
+//   <cellname>$laBred$<i>  — output of i-th B-side OR-reducer (i = 1..N-1)
+//   <cellname>$laAor$<i>   — i-th A-side or2_1 cell instance
+//   <cellname>$laBor$<i>   — i-th B-side or2_1 cell instance
+//   <cellname>$laand$0     — the final and2_1 cell instance
+// All freshly added wires are width=1, internal (dir_kind=0, port_id=0).
+struct LogicAndLowerResult {
+    cells: [Cell],
+    wires: [Wire],
+    ok:    int,         // 1 = lowered, 0 = unsupported shape
+}
+
+fn _passes_lower_logic_and_cell(c: Cell) -> LogicAndLowerResult {
+    let wa = _passes_logic_and_width(c, 'A')
+    let wb = _passes_logic_and_width(c, 'B')
+    if wa <= 0 {
+        return LogicAndLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    if wb <= 0 {
+        return LogicAndLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let y_net = _passes_pin_net(c, "Y")
+    if y_net == "" {
+        return LogicAndLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+
+    // ── A-side reduction → single bit a_red ─────────────────────────
+    // wa == 1: pass the lone A bit through to the final AND.
+    // wa  > 1: (wa-1) × or2_1 linear chain; output = a_red.
+    let mut a_red: str = ""
+    if wa == 1 {
+        a_red = _passes_pin_net(c, "A")
+        if a_red == "" {
+            return LogicAndLowerResult { cells: [], wires: [], ok: 0 }
+        }
+    } else {
+        let mut a_bits: [str] = []
+        let mut i = 0
+        while i < wa {
+            let pa = "A[" + str(i) + "]"
+            let a_net = _passes_pin_net(c, pa)
+            if a_net == "" {
+                return LogicAndLowerResult { cells: [], wires: [], ok: 0 }
+            }
+            a_bits = a_bits.push(a_net)
+            i = i + 1
+        }
+        // Linear OR chain: acc0 = a_bits[0] OR a_bits[1]
+        //                  acc1 = acc0      OR a_bits[2]   ...
+        //                  final OR output = a_red (fresh wire).
+        let mut acc = a_bits[0]
+        let mut j = 1
+        while j < wa {
+            let next_net = a_bits[j]
+            let or_out = c.name + "$laAred$" + str(j)
+            out_wires = out_wires.push(rtlil_wire(or_out, 1, 0, 0))
+            let mut o2 = rtlil_cell(c.name + "$laAor$" + str(j),
+                                    "sky130_fd_sc_hd__or2_1", 1)
+            o2 = rtlil_cell_connect(o2, "A", acc)
+            o2 = rtlil_cell_connect(o2, "B", next_net)
+            o2 = rtlil_cell_connect(o2, "X", or_out)
+            out_cells = out_cells.push(o2)
+            acc = or_out
+            j = j + 1
+        }
+        a_red = acc
+    }
+
+    // ── B-side reduction → single bit b_red ─────────────────────────
+    let mut b_red: str = ""
+    if wb == 1 {
+        b_red = _passes_pin_net(c, "B")
+        if b_red == "" {
+            return LogicAndLowerResult { cells: [], wires: [], ok: 0 }
+        }
+    } else {
+        let mut b_bits: [str] = []
+        let mut i = 0
+        while i < wb {
+            let pb = "B[" + str(i) + "]"
+            let b_net = _passes_pin_net(c, pb)
+            if b_net == "" {
+                return LogicAndLowerResult { cells: [], wires: [], ok: 0 }
+            }
+            b_bits = b_bits.push(b_net)
+            i = i + 1
+        }
+        let mut acc = b_bits[0]
+        let mut j = 1
+        while j < wb {
+            let next_net = b_bits[j]
+            let or_out = c.name + "$laBred$" + str(j)
+            out_wires = out_wires.push(rtlil_wire(or_out, 1, 0, 0))
+            let mut o2 = rtlil_cell(c.name + "$laBor$" + str(j),
+                                    "sky130_fd_sc_hd__or2_1", 1)
+            o2 = rtlil_cell_connect(o2, "A", acc)
+            o2 = rtlil_cell_connect(o2, "B", next_net)
+            o2 = rtlil_cell_connect(o2, "X", or_out)
+            out_cells = out_cells.push(o2)
+            acc = or_out
+            j = j + 1
+        }
+        b_red = acc
+    }
+
+    // ── Final AND: (a_red) AND (b_red) → y_net ──────────────────────
+    let mut a2 = rtlil_cell(c.name + "$laand$0",
+                            "sky130_fd_sc_hd__and2_1", 1)
+    a2 = rtlil_cell_connect(a2, "A", a_red)
+    a2 = rtlil_cell_connect(a2, "B", b_red)
+    a2 = rtlil_cell_connect(a2, "X", y_net)
+    out_cells = out_cells.push(a2)
+
+    return LogicAndLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
+}
+
+// CLEAN-ROOM: count the per-bit input slots of a $logic_not operand.
+// $logic_not is unary — only the A operand exists. Two pin conventions
+// are accepted, in priority order (same shape as _passes_logic_and_width
+// but specialised to the single A operand — IEEE 1364-2005 §5.1.10
+// reduces the lone operand to one bit, then inverts):
+//   (1) Bit-indexed pins  : conns include "A[0]","A[1]",…
+//       Width = count of distinct "A[i]" pins (0-based dense).
+//   (2) Single-bit fallback: only "A" present → width = 1.
+// A pin not present at all → width = 0 (lowering skipped).
+fn _passes_logic_not_width(c: Cell) -> int {
+    let mut has_plain = 0
+    let mut max_idx = 0 - 1
+    let mut i = 0
+    while i < len(c.conns) {
+        let p = c.conns[i].pin
+        let lp = len(p)
+        if lp == 1 {
+            if p[0] == 'A' { has_plain = 1 }
+        }
+        if lp >= 4 {
+            // shortest indexed form is "A[0]" (4 chars)
+            if p[0] == 'A' {
+                if p[1] == '[' {
+                    if p[lp - 1] == ']' {
+                        let mut k = 2
+                        let mut v = 0
+                        let mut ok = 1
+                        while k < lp - 1 {
+                            let ch = p[k]
+                            if ch >= '0' {
+                                if ch <= '9' {
+                                    v = v * 10 + (ch - '0')
+                                } else { ok = 0 }
+                            } else { ok = 0 }
+                            k = k + 1
+                        }
+                        if ok == 1 {
+                            if v > max_idx { max_idx = v }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    if max_idx >= 0 { return max_idx + 1 }
+    if has_plain == 1 { return 1 }
+    return 0
+}
+
+// CLEAN-ROOM: lower one $logic_not cell into a tree of SKY130 cells +
+// the internal wires those cells need. Returns (new_cells, new_wires).
+//
+// Shape (IEEE 1364-2005 §5.1.10):
+//   logic_not(A) = NOT (OR_i A[i])
+//   width(A)=1 : 1 × inv_1                              (a → Y)
+//   width(A)=N : (N-1) × or2_1 reducing A → 1 × inv_1
+//   Output is always 1 bit regardless of operand width.
+//
+// Naming convention for fresh wires/cells:
+//   <cellname>$lnAred$<i>  — output of i-th A-side OR-reducer (i = 1..N-1)
+//   <cellname>$lnAor$<i>   — i-th A-side or2_1 cell instance
+//   <cellname>$lninv$0     — the final inv_1 cell instance
+// All freshly added wires are width=1, internal (dir_kind=0, port_id=0).
+struct LogicNotLowerResult {
+    cells: [Cell],
+    wires: [Wire],
+    ok:    int,         // 1 = lowered, 0 = unsupported shape
+}
+
+fn _passes_lower_logic_not_cell(c: Cell) -> LogicNotLowerResult {
+    let wa = _passes_logic_not_width(c)
+    if wa <= 0 {
+        return LogicNotLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let y_net = _passes_pin_net(c, "Y")
+    if y_net == "" {
+        return LogicNotLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+
+    // ── A-side reduction → single bit a_red ─────────────────────────
+    // wa == 1: pass the lone A bit through to the final invert.
+    // wa  > 1: (wa-1) × or2_1 linear chain; output = a_red.
+    let mut a_red: str = ""
+    if wa == 1 {
+        a_red = _passes_pin_net(c, "A")
+        if a_red == "" {
+            return LogicNotLowerResult { cells: [], wires: [], ok: 0 }
+        }
+    } else {
+        let mut a_bits: [str] = []
+        let mut i = 0
+        while i < wa {
+            let pa = "A[" + str(i) + "]"
+            let a_net = _passes_pin_net(c, pa)
+            if a_net == "" {
+                return LogicNotLowerResult { cells: [], wires: [], ok: 0 }
+            }
+            a_bits = a_bits.push(a_net)
+            i = i + 1
+        }
+        // Linear OR chain: acc0 = a_bits[0] OR a_bits[1]
+        //                  acc1 = acc0      OR a_bits[2]   ...
+        //                  final OR output = a_red (fresh wire).
+        let mut acc = a_bits[0]
+        let mut j = 1
+        while j < wa {
+            let next_net = a_bits[j]
+            let or_out = c.name + "$lnAred$" + str(j)
+            out_wires = out_wires.push(rtlil_wire(or_out, 1, 0, 0))
+            let mut o2 = rtlil_cell(c.name + "$lnAor$" + str(j),
+                                    "sky130_fd_sc_hd__or2_1", 1)
+            o2 = rtlil_cell_connect(o2, "A", acc)
+            o2 = rtlil_cell_connect(o2, "B", next_net)
+            o2 = rtlil_cell_connect(o2, "X", or_out)
+            out_cells = out_cells.push(o2)
+            acc = or_out
+            j = j + 1
+        }
+        a_red = acc
+    }
+
+    // ── Final NOT: ~(a_red) → y_net ─────────────────────────────────
+    let mut i1 = rtlil_cell(c.name + "$lninv$0",
+                            "sky130_fd_sc_hd__inv_1", 1)
+    i1 = rtlil_cell_connect(i1, "A", a_red)
+    i1 = rtlil_cell_connect(i1, "Y", y_net)
+    out_cells = out_cells.push(i1)
+
+    return LogicNotLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
+}
+
+// CLEAN-ROOM: count the per-bit input "slots" of an $add-shaped cell.
+//
+// $add is binary — both A and B operands exist with matching width. Two
+// pin conventions are accepted, in priority order (same shape as
+// _passes_eq_width but specialised to arithmetic-plus — IEEE 1364-2005
+// §5.1.3 / Weste-Eshraghian §11):
+//   (1) Bit-indexed pins  : conns include "A[0]","A[1]",… plus "B[0]",…
+//       Width = max( count("A[i]"), count("B[i]") ).
+//   (2) Single-bit fallback: only "A","B" present → width = 1.
+// A or B pin not present at all → width = 0 (lowering skipped).
+fn _passes_add_width(c: Cell) -> int {
+    let mut has_plain_a = 0
+    let mut has_plain_b = 0
+    let mut max_idx_a = 0 - 1
+    let mut max_idx_b = 0 - 1
+    let mut i = 0
+    while i < len(c.conns) {
+        let p = c.conns[i].pin
+        let lp = len(p)
+        if lp == 1 {
+            if p[0] == 'A' { has_plain_a = 1 }
+            if p[0] == 'B' { has_plain_b = 1 }
+        }
+        if lp >= 4 {
+            // shortest indexed form is "A[0]" / "B[0]" (4 chars)
+            if p[1] == '[' {
+                if p[lp - 1] == ']' {
+                    let mut k = 2
+                    let mut v = 0
+                    let mut ok = 1
+                    while k < lp - 1 {
+                        let ch = p[k]
+                        if ch >= '0' {
+                            if ch <= '9' {
+                                v = v * 10 + (ch - '0')
+                            } else { ok = 0 }
+                        } else { ok = 0 }
+                        k = k + 1
+                    }
+                    if ok == 1 {
+                        if p[0] == 'A' {
+                            if v > max_idx_a { max_idx_a = v }
+                        }
+                        if p[0] == 'B' {
+                            if v > max_idx_b { max_idx_b = v }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    let wa = max_idx_a + 1   // -1 → 0
+    let wb = max_idx_b + 1
+    let mut w = wa
+    if wb > w { w = wb }
+    if w > 0 { return w }
+    if has_plain_a == 1 {
+        if has_plain_b == 1 { return 1 }
+    }
+    return 0
+}
+
+// CLEAN-ROOM: lower one $add cell into a tree of SKY130 cells + the
+// internal wires those cells need. Returns (new_cells, new_wires).
+//
+// Shape (Weste/Eshraghian §11 — N-bit ripple-carry adder):
+//   add(A, B) = SUM_i with carry chain
+//     fa_i : (SUM[i], COUT[i]) = fa_1(A[i], B[i], CIN[i])
+//     CIN[0] = Y output of one `$_const0_` driver (constant-0 sigspec)
+//     CIN[i] = COUT[i-1] for i = 1..N-1
+//   Sum width = N (the lowering does NOT propagate the final COUT to a
+//   Y[N] bit; output truncation matches the typical Verilog
+//   `assign y[N-1:0] = a + b` shape produced by read_verilog before
+//   width elaboration).  COUT[N-1] is driven to a fresh internal wire
+//   so the no-dangling invariant holds.
+//
+// rfc_006 §5 bug (a) iter 6 — the constant-0 driver is a `$_const0_`
+// sentinel cell, NOT a Liberty `sky130_fd_sc_hd__conb_1` instance.
+// ABC's BLIF parser rejects `.gate sky130_fd_sc_hd__conb_1` because
+// that Liberty cell has only constant outputs (no boolean function);
+// the canonical BLIF form for a constant-0 net is `.names <net>` with
+// zero rows (BLIF spec §3), which abc_map.hexa emits when it sees the
+// `$_const0_` sentinel. The post-ABC mapped design absorbs the tie
+// into the adjacent fa_1 (ABC's `map` pass treats constant inputs as
+// don't-cares), so no `$_const0_` survives downstream.
+//
+// Naming convention for fresh wires/cells:
+//   <cellname>$cyo$<i>   — i-th FA's COUT wire (i = 0..N-1)
+//   <cellname>$cin0      — constant-0 tie wire (Y of the $_const0_)
+//   <cellname>$fa$<i>    — i-th fa_1 cell instance
+//   <cellname>$tie$0     — the $_const0_ driver instance for cin0
+// All freshly added wires are width=1, internal (dir_kind=0, port_id=0).
+struct AddLowerResult {
+    cells: [Cell],
+    wires: [Wire],
+    ok:    int,         // 1 = lowered, 0 = unsupported shape
+}
+
+fn _passes_lower_add_cell(c: Cell) -> AddLowerResult {
+    let w = _passes_add_width(c)
+    if w <= 0 {
+        return AddLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+
+    // ── constant cin[0] = 0 tie (one $_const0_ sentinel per $add cell) ─
+    // rfc_006 §5 bug (a) iter 6: emit a `$_const0_` driver instead of a
+    // Liberty `sky130_fd_sc_hd__conb_1` cell. abc_map.hexa translates
+    // this sentinel to a `.names <cin0_net>` BLIF line (constant 0, zero
+    // truth-table rows), which ABC parses directly without needing the
+    // Liberty cell's constant function to be mappable.
+    let cin0_net = c.name + "$cin0"
+    out_wires = out_wires.push(rtlil_wire(cin0_net, 1, 0, 0))
+    let mut tie = rtlil_cell(c.name + "$tie$0",
+                             "$_const0_", 0)
+    tie = rtlil_cell_connect(tie, "Y", cin0_net)
+    out_cells = out_cells.push(tie)
+
+    // ── N-bit ripple-carry chain ────────────────────────────────────
+    // For each bit i in 0..w-1, instantiate one fa_1 driving SUM=Y[i]
+    // and COUT=cy[i]. CIN[0] = cin0_net; CIN[i] = cy[i-1] for i >= 1.
+    let mut cin = cin0_net
+    let mut i = 0
+    while i < w {
+        // resolve per-bit operand nets — accept either bit-indexed or
+        // (for w == 1) the plain single-bit pin convention.
+        let mut a_net: str = ""
+        let mut b_net: str = ""
+        let mut y_net: str = ""
+        if w == 1 {
+            a_net = _passes_pin_net(c, "A")
+            if a_net == "" { a_net = _passes_pin_net(c, "A[0]") }
+            b_net = _passes_pin_net(c, "B")
+            if b_net == "" { b_net = _passes_pin_net(c, "B[0]") }
+            y_net = _passes_pin_net(c, "Y")
+            if y_net == "" { y_net = _passes_pin_net(c, "Y[0]") }
+        } else {
+            let pa = "A[" + str(i) + "]"
+            let pb = "B[" + str(i) + "]"
+            let py = "Y[" + str(i) + "]"
+            a_net = _passes_pin_net(c, pa)
+            b_net = _passes_pin_net(c, pb)
+            y_net = _passes_pin_net(c, py)
+        }
+        if a_net == "" { return AddLowerResult { cells: [], wires: [], ok: 0 } }
+        if b_net == "" { return AddLowerResult { cells: [], wires: [], ok: 0 } }
+        if y_net == "" { return AddLowerResult { cells: [], wires: [], ok: 0 } }
+
+        // fresh COUT wire for this bit (always pushed so the FA's COUT
+        // pin references a wire present in the module — RTLIL's no-
+        // dangling invariant on cell pins, not on net sinks).
+        let cy_net = c.name + "$cyo$" + str(i)
+        out_wires = out_wires.push(rtlil_wire(cy_net, 1, 0, 0))
+
+        let mut fa = rtlil_cell(c.name + "$fa$" + str(i),
+                                "sky130_fd_sc_hd__fa_1", 1)
+        fa = rtlil_cell_connect(fa, "A",    a_net)
+        fa = rtlil_cell_connect(fa, "B",    b_net)
+        fa = rtlil_cell_connect(fa, "CIN",  cin)
+        fa = rtlil_cell_connect(fa, "SUM",  y_net)
+        fa = rtlil_cell_connect(fa, "COUT", cy_net)
+        out_cells = out_cells.push(fa)
+
+        cin = cy_net
+        i = i + 1
+    }
+
+    return AddLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
+}
+
+// ─── $mod lowering (rfc_006 §5 absorption bug (a) iter 7) ───────────────
+//
+// CLEAN-ROOM: parse a `$const_<N>` net name into the underlying integer
+// constant; returns N >= 0 on success, -1 on a net that is not in the
+// `$const_<dec>` form. This is the convention established by
+// read_verilog.hexa lines 791-792 (`$const_0` / `$const_1` for 1'b0 /
+// 1'b1) — iter 7 generalises the recogniser to any non-negative
+// decimal so a foldable divisor reaching the $mod B-pin can be
+// recognised by the lowering. (read_verilog.hexa does NOT yet fold
+// localparam-named divisors into this form — that is an honest gap and
+// the iter 7 lowering reports it as case-C "variable divisor".)
+fn _passes_parse_const_net(net: str) -> int {
+    let prefix = "$const_"
+    let lp = len(prefix)
+    let ln = len(net)
+    if ln <= lp { return 0 - 1 }
+    // prefix match
+    let mut k = 0
+    while k < lp {
+        if net[k] != prefix[k] { return 0 - 1 }
+        k = k + 1
+    }
+    // decimal suffix
+    let mut v = 0
+    let mut any = 0
+    let mut j = lp
+    while j < ln {
+        let ch = net[j]
+        if ch < '0' { return 0 - 1 }
+        if ch > '9' { return 0 - 1 }
+        v = v * 10 + (ch - '0')
+        any = 1
+        j = j + 1
+    }
+    if any == 0 { return 0 - 1 }
+    return v
+}
+
+// CLEAN-ROOM: is `n` a non-negative power of two (1, 2, 4, 8, …) ?
+// Returns log2(n) on yes (k >= 0), -1 on no. Uses the textbook
+// bit-trick `(n & (n-1)) == 0` for n > 0, then counts shifts.
+fn _passes_log2_pow2(n: int) -> int {
+    if n <= 0 { return 0 - 1 }
+    // (n & (n-1)) == 0 iff n is a power of 2
+    let mut m = n
+    let mut k = 0
+    while m > 1 {
+        // odd → not a pow2 (use modulo operator directly — the
+        // textbook `(m - (m/2)*2)` odd-trick assumes truncating
+        // integer division which is not the language semantic here)
+        if (m % 2) != 0 { return 0 - 1 }
+        m = m / 2
+        k = k + 1
+    }
+    return k
+}
+
+// CLEAN-ROOM: integer pow(2, k) for k >= 0.
+fn _passes_pow2(k: int) -> int {
+    let mut v = 1
+    let mut i = 0
+    while i < k {
+        v = v * 2
+        i = i + 1
+    }
+    return v
+}
+
+// CLEAN-ROOM: count Y-output bits on a $mod cell. Plain "Y" (width=1)
+// or bit-indexed "Y[i]" — returns the maximum (i+1) found, defaulting
+// to 1 when only plain "Y" exists.
+fn _passes_mod_yw(c: Cell) -> int {
+    let mut has_plain_y = 0
+    let mut max_idx_y = 0 - 1
+    let mut i = 0
+    while i < len(c.conns) {
+        let p = c.conns[i].pin
+        let lp = len(p)
+        if lp == 1 {
+            if p[0] == 'Y' { has_plain_y = 1 }
+        }
+        if lp >= 4 {
+            if p[0] == 'Y' {
+                if p[1] == '[' {
+                    if p[lp - 1] == ']' {
+                        let mut k = 2
+                        let mut v = 0
+                        let mut ok = 1
+                        while k < lp - 1 {
+                            let ch = p[k]
+                            if ch >= '0' {
+                                if ch <= '9' {
+                                    v = v * 10 + (ch - '0')
+                                } else { ok = 0 }
+                            } else { ok = 0 }
+                            k = k + 1
+                        }
+                        if ok == 1 {
+                            if v > max_idx_y { max_idx_y = v }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    if max_idx_y >= 0 { return max_idx_y + 1 }
+    if has_plain_y == 1 { return 1 }
+    return 0
+}
+
+// CLEAN-ROOM: resolve the input net carrying bit `v` of the A operand
+// of cell `c`. Convention mirrors _passes_lower_mod_cell case A —
+// plain "A" net when the cell has width=1 and only one A pin; otherwise
+// indexed "A[v]". Returns "" if the pin is missing.
+fn _passes_mod_a_bit(c: Cell, w: int, v: int) -> str {
+    if w == 1 {
+        let plain = _passes_pin_net(c, "A")
+        if plain != "" { return plain }
+        return _passes_pin_net(c, "A[0]")
+    }
+    return _passes_pin_net(c, "A[" + str(v) + "]")
+}
+
+// CLEAN-ROOM: resolve the output net carrying bit `i` of the Y operand
+// of cell `c`. Same convention as the A reader.
+fn _passes_mod_y_bit(c: Cell, yw: int, i: int) -> str {
+    if yw == 1 {
+        let plain = _passes_pin_net(c, "Y")
+        if plain != "" { return plain }
+        return _passes_pin_net(c, "Y[0]")
+    }
+    return _passes_pin_net(c, "Y[" + str(i) + "]")
+}
+
+// CLEAN-ROOM: case-B LUT lowering for $mod with bounded input width.
+//
+// Theorem (Mano/Kime "Logic and Computer Design Fundamentals" §3-3 ·
+// Kohavi/Jha "Switching and Finite Automata Theory" Ch. 4):
+//   Any Boolean function f: {0,1}^W → {0,1} admits a canonical
+//   sum-of-products representation: f(x) = OR over m in M of
+//   AND over v in 0..W of (x_v if bit_v(m)=1 else ~x_v), where
+//   M is the set of minterms (input assignments where f=1).
+//
+// We apply this per output bit Y[i] of A mod N. The truth table
+// has 2^W rows; we emit one and2_1-tree per minterm with f=1, then
+// or2_1-reduce the AND outputs into Y[i]. Negated literals are
+// emitted via inv_1 once per (bit, source-input-bit) and reused.
+//
+// Returns ok=1 on successful LUT lowering (W ≤ 5). Returns ok=0
+// ok_kind=2 with a fail-loud diagnostic when W > 5 (LUT table > 32
+// rows → cell-count blow-up; restoring-divider is the correct
+// substrate at that envelope and is out of iter-9 scope).
+fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
+    if w > 5 {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 2,
+            message: "lower_mod: cell `" + c.name + "` has non-power-of-2 const divisor B=" + str(nval) + " with A-width W=" + str(w) + " > 5 (rfc_006 §5 iter 9 — LUT lowering capped at W≤5 / 32-row truth table; restoring-divider expansion is out of iter 9 scope)"
+        }
+    }
+    if w < 1 {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 3,
+            message: "lower_mod: cell `" + c.name + "` has unrecognised A-width W=" + str(w)
+        }
+    }
+
+    let yw = _passes_mod_yw(c)
+    if yw < 1 {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 3,
+            message: "lower_mod: cell `" + c.name + "` has no Y output pin"
+        }
+    }
+
+    let nrows = _passes_pow2(w)
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+
+    // Shared $_const1_ driver — used by single-literal-minterm "buffer"
+    // ties (Y = lit AND 1) and by all-ones output-bit ties. Emitted
+    // once and reused across all output bits.
+    let c1_net = c.name + "$lutc1_net"
+    let mut c1_emitted = 0
+
+    // Negated-literal handling: we emit one inv_1 per (output-bit i,
+    // minterm m, source-bit v) occurrence rather than deduping via an
+    // index map. ABC's structural-hash pass (strash) collapses the
+    // duplicate inverters during AIG normalisation, so this costs no
+    // mapped-area but keeps the lowering free of int-keyed arrays
+    // (hexa-native doubles tend to taint arithmetic with float, which
+    // breaks `arr[key]` shape).
+
+    // Per output bit Y[i] — build the SOP.
+    let mut i = 0
+    while i < yw {
+        let y_net = _passes_mod_y_bit(c, yw, i)
+        if y_net == "" {
+            return ModLowerResult {
+                cells: [], wires: [], ok: 0, ok_kind: 3,
+                message: "lower_mod: cell `" + c.name + "` missing Y[" + str(i) + "] pin"
+            }
+        }
+        // Truth column for Y[i]: list of A-values where bit i of (A%nval)
+        // is 1. Each such A is a minterm.
+        let mut minterms: [int] = []
+        let mut a = 0
+        while a < nrows {
+            let rem = a % nval
+            // bit i of `rem` (integer divide-and-mod)
+            let bit_i = (rem / _passes_pow2(i)) % 2
+            if bit_i == 1 {
+                minterms = minterms.push(a)
+            }
+            a = a + 1
+        }
+
+        // Degenerate output cases.
+        if len(minterms) == 0 {
+            // Y[i] = 0 — tie to $_const0_.
+            let mut z = rtlil_cell(c.name + "$lutc0$" + str(i),
+                                   "$_const0_", 0)
+            z = rtlil_cell_connect(z, "Y", y_net)
+            out_cells = out_cells.push(z)
+            i = i + 1
+            continue
+        }
+        if len(minterms) == nrows {
+            // Y[i] = 1 — tie to $_const1_.
+            let mut o = rtlil_cell(c.name + "$lutc1bit$" + str(i),
+                                   "$_const1_", 0)
+            o = rtlil_cell_connect(o, "Y", y_net)
+            out_cells = out_cells.push(o)
+            i = i + 1
+            continue
+        }
+
+        // Non-degenerate: emit a 2-level SOP. Compute per-minterm
+        // AND-tree outputs, then OR-reduce.
+        let mut and_outs: [str] = []
+        let mut mi = 0
+        while mi < len(minterms) {
+            let mt = minterms[mi]
+            // Collect literal nets — positive (A[v]) or negative (~A[v])
+            // — in source-bit-index order v=0..W-1.
+            let mut lits: [str] = []
+            let mut v = 0
+            while v < w {
+                let bit_v = (mt / _passes_pow2(v)) % 2
+                let a_v = _passes_mod_a_bit(c, w, v)
+                if a_v == "" {
+                    return ModLowerResult {
+                        cells: [], wires: [], ok: 0, ok_kind: 3,
+                        message: "lower_mod: cell `" + c.name + "` missing A[" + str(v) + "] pin"
+                    }
+                }
+                if bit_v == 1 {
+                    lits = lits.push(a_v)
+                } else {
+                    // negated literal — emit a per-minterm inv_1 driving
+                    // a fresh wire. Structural-hash dedup happens in
+                    // ABC's `strash`; this avoids a hexa int-keyed
+                    // dedup map (see header note re float-taint).
+                    let niv = c.name + "$lutniv$" + str(i) + "$" + str(mi) + "$" + str(v)
+                    out_wires = out_wires.push(rtlil_wire(niv, 1, 0, 0))
+                    let mut inv_c = rtlil_cell(
+                        c.name + "$lutinv$" + str(i) + "$" + str(mi) + "$" + str(v),
+                        "sky130_fd_sc_hd__inv_1", 1)
+                    inv_c = rtlil_cell_connect(inv_c, "A", a_v)
+                    inv_c = rtlil_cell_connect(inv_c, "Y", niv)
+                    out_cells = out_cells.push(inv_c)
+                    lits = lits.push(niv)
+                }
+                v = v + 1
+            }
+
+            // AND-tree over `lits`. Special cases:
+            //   1 literal — no AND-tree needed; the literal IS the
+            //               minterm output. The OR-tree (or its single-
+            //               minterm degenerate `Y = top AND const_1`
+            //               alias) is responsible for the final write
+            //               to y_net, so no extra buffer is emitted here.
+            //   2+        — pairwise reduce with and2_1 in a binary tree;
+            //               cell name carries gate index `g` 0..len-2.
+            let mut and_top: str = ""
+            if len(lits) == 1 {
+                and_top = lits[0]
+            } else {
+                // Binary AND-tree — reduce lits[0..] left-to-right.
+                // gate g combines current `acc` with lits[g+1].
+                let mut acc: str = lits[0]
+                let mut g = 0
+                while g < len(lits) - 1 {
+                    let aout = c.name + "$luta$" + str(i) + "$" + str(mi) + "$" + str(g)
+                    out_wires = out_wires.push(rtlil_wire(aout, 1, 0, 0))
+                    let mut and_c = rtlil_cell(
+                        c.name + "$lutand$" + str(i) + "$" + str(mi) + "$" + str(g),
+                        "sky130_fd_sc_hd__and2_1", 1)
+                    and_c = rtlil_cell_connect(and_c, "A", acc)
+                    and_c = rtlil_cell_connect(and_c, "B", lits[g + 1])
+                    and_c = rtlil_cell_connect(and_c, "X", aout)
+                    out_cells = out_cells.push(and_c)
+                    acc = aout
+                    g = g + 1
+                }
+                and_top = acc
+            }
+            and_outs = and_outs.push(and_top)
+            mi = mi + 1
+        }
+
+        // OR-tree over `and_outs`. The last OR drives y_net directly.
+        if len(and_outs) == 1 {
+            // single minterm — wire the AND-tree top to y_net via a
+            // second and2_1 buffer (we already emitted one if single-
+            // literal, but we still need to alias to y_net). Use
+            // `Y = and_top AND const_1` — same buffer pattern.
+            if c1_emitted == 0 {
+                out_wires = out_wires.push(rtlil_wire(c1_net, 1, 0, 0))
+                let mut c1_tie = rtlil_cell(c.name + "$lutc1",
+                                            "$_const1_", 0)
+                c1_tie = rtlil_cell_connect(c1_tie, "Y", c1_net)
+                out_cells = out_cells.push(c1_tie)
+                c1_emitted = 1
+            }
+            let mut tail = rtlil_cell(
+                c.name + "$lutor$" + str(i) + "$0",
+                "sky130_fd_sc_hd__and2_1", 1)
+            tail = rtlil_cell_connect(tail, "A", and_outs[0])
+            tail = rtlil_cell_connect(tail, "B", c1_net)
+            tail = rtlil_cell_connect(tail, "X", y_net)
+            out_cells = out_cells.push(tail)
+        } else {
+            // Multi-minterm — binary OR-tree. The last OR drives y_net.
+            let mut acc: str = and_outs[0]
+            let mut g = 0
+            while g < len(and_outs) - 1 {
+                let is_last = 0
+                let mut out_net: str = ""
+                if g == len(and_outs) - 2 {
+                    out_net = y_net
+                } else {
+                    out_net = c.name + "$luto$" + str(i) + "$" + str(g)
+                    out_wires = out_wires.push(rtlil_wire(out_net, 1, 0, 0))
+                }
+                let mut or_c = rtlil_cell(
+                    c.name + "$lutor$" + str(i) + "$" + str(g),
+                    "sky130_fd_sc_hd__or2_1", 1)
+                or_c = rtlil_cell_connect(or_c, "A", acc)
+                or_c = rtlil_cell_connect(or_c, "B", and_outs[g + 1])
+                or_c = rtlil_cell_connect(or_c, "X", out_net)
+                out_cells = out_cells.push(or_c)
+                acc = out_net
+                g = g + 1
+            }
+        }
+
+        i = i + 1
+    }
+
+    return ModLowerResult {
+        cells: out_cells, wires: out_wires, ok: 1, ok_kind: 2, message: ""
+    }
+}
+
+// CLEAN-ROOM: lower one $mod cell. The Y-output is the A-operand
+// reduced modulo the divisor on the B-pin. Three cases:
+//
+//   case A — const divisor 2^k          → log2(N) per-bit AND with
+//                                          $const_1 on the low k bits,
+//                                          $_const0_ tie on bits >= k
+//   case B — const divisor non-pow-of-2 → bounded-LUT (W ≤ 5):
+//                                          per-output-bit truth-table
+//                                          to 2-level SOP (AND-tree
+//                                          minterms + OR-tree reduce).
+//                                          Beyond W=5 → fail-loud
+//                                          (restoring-divider out of
+//                                          phase-a scope).
+//   case C — variable / unfoldable B    → fail-loud (out of phase-a)
+//
+// Returns ok=1 in case A or case B (LUT-lowered). Case B-overflow
+// (W > 5) and case C return ok=0 with a distinct ok_kind so the
+// caller's outer pass can report which boundary the design hit.
+//
+// LUT theorem citation (case B):
+//   For A ∈ [0, 2^W) and constant N ≥ 2, f(A) = A mod N is a
+//   function f: {0,1}^W → {0,1}^ceil(log2(N)). Each output bit
+//   Y[i] is a Boolean function of W input bits; its canonical
+//   sum-of-products has 2^W minterms and a textbook 2-level
+//   AND-OR realization (one AND-gate per minterm where Y[i]=1,
+//   one OR-gate reducing them). Atlas citation:
+//     · Mano/Kime, "Logic and Computer Design Fundamentals", §3-3
+//       (combinational synthesis from a truth table).
+//     · Kohavi/Jha, "Switching and Finite Automata Theory",
+//       Ch. 4 (canonical SOP via minterm expansion).
+//   Honest scope: bounded-input LUT lowering — NOT a general
+//   variable-divisor or wide-A restoring-divider. Works because
+//   the router_d{4,6} fixtures have W ≤ 5 after read_verilog's
+//   width inference. Beyond W=5 the truth table is > 32 rows and
+//   the SOP cell-count blows up; that envelope demands a real
+//   restoring-divider (out of iter-9 scope).
+//
+// Naming convention for fresh wires/cells (case A):
+//   <cellname>$mskand$<i> — i-th and2_1 cell instance (low-bit mask)
+//   <cellname>$mskhi$<i>  — i-th $_const0_ cell instance (high-bit zero)
+//   <cellname>$c1         — shared $_const1_ driver instance
+//   <cellname>$c1_net     — shared $const_1 net carrying the AND mask
+//
+// Naming convention for fresh wires/cells (case B LUT):
+//   <cellname>$lutc1_net          — shared $_const1_ wire (buffer ties)
+//   <cellname>$lutc1              — shared $_const1_ driver
+//   <cellname>$lutinv$<i>$<v>     — inv_1 for negated literal A[v] at bit i
+//   <cellname>$lutniv$<i>$<v>     — net carrying ~A[v] at bit i
+//   <cellname>$lutand$<i>$<m>$<g> — g-th and2_1 in AND-tree for minterm m, bit i
+//   <cellname>$luta$<i>$<m>$<g>   — net out of that and2_1
+//   <cellname>$lutor$<i>$<g>      — g-th or2_1 in OR-tree, bit i
+//   <cellname>$luto$<i>$<g>       — net out of that or2_1
+//   <cellname>$lutc0$<i>          — $_const0_ tie for all-zero output bit
+//   <cellname>$lutc1bit$<i>       — $_const1_ tie for all-one output bit
+//   <cellname>$lutbuf$<i>         — and2_1 buffer (single-literal minterm)
+struct ModLowerResult {
+    cells:   [Cell],
+    wires:   [Wire],
+    ok:      int,        // 1 = lowered, 0 = unsupported shape
+    ok_kind: int,        // 1 = case A · 2 = case B · 3 = case C
+    message: str,        // empty on case A; diagnostic on B/C
+}
+
+fn _passes_lower_mod_cell(c: Cell) -> ModLowerResult {
+    let w = _passes_add_width(c)
+    if w <= 0 {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 3,
+            message: "lower_mod: cell `" + c.name + "` has no A/B pins (unrecognised shape)"
+        }
+    }
+    // Probe the B-pin net string. We accept either the plain "B" pin
+    // (width=1 shape) or the bit-indexed "B[0]" (the divisor's LSB
+    // when read_verilog has elaborated B as a multibit constant). For
+    // a uniform `$const_<N>` convention, all B[i] should point at the
+    // same `$const_<N>` net carrying the full divisor value — but
+    // read_verilog currently emits the divisor as a wire-name only
+    // (case C). Both lookups must agree; otherwise the divisor is
+    // not foldable → case C.
+    let mut b_main = _passes_pin_net(c, "B")
+    if b_main == "" { b_main = _passes_pin_net(c, "B[0]") }
+    if b_main == "" {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 3,
+            message: "lower_mod: cell `" + c.name + "` has no B operand (unrecognised shape)"
+        }
+    }
+    let nval = _passes_parse_const_net(b_main)
+    if nval < 0 {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 3,
+            message: "lower_mod: cell `" + c.name + "` has variable / unfoldable divisor B=`" + b_main + "` (rfc_006 §5 iter 7 — case C: only $const_<N> divisors are lowered; localparam-name folding requires read_verilog substitution, out of iter 7 scope)"
+        }
+    }
+    if nval == 0 {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 2,
+            message: "lower_mod: cell `" + c.name + "` has divisor 0 (undefined per IEEE 1364-2005 §5.1.5)"
+        }
+    }
+    let k = _passes_log2_pow2(nval)
+    if k < 0 {
+        // case B — non-pow-of-2 const divisor. rfc_006 §5 iter 9:
+        // bounded-LUT lowering (W ≤ 5) replaces the iter-7 fail-loud.
+        // The LUT helper returns ok=1 on success, ok=0 ok_kind=2 with
+        // the W-cap diagnostic when out of envelope.
+        return _passes_lower_mod_case_b_lut(c, nval, w)
+    }
+
+    // ── case A: divisor = 2^k — mask lowering ───────────────────────
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+
+    // shared $const_1 driver (Y → $const_1_net); reused by every
+    // mask-AND on the low k bits. Only emitted if there is at least one
+    // low bit to mask (k > 0).
+    let c1_net = c.name + "$c1_net"
+    if k > 0 {
+        out_wires = out_wires.push(rtlil_wire(c1_net, 1, 0, 0))
+        let mut c1_tie = rtlil_cell(c.name + "$c1", "$_const1_", 0)
+        c1_tie = rtlil_cell_connect(c1_tie, "Y", c1_net)
+        out_cells = out_cells.push(c1_tie)
+    }
+
+    let mut i = 0
+    while i < w {
+        // resolve per-bit operand / output nets — same convention as
+        // _passes_lower_add_cell (width=1 plain, multi-bit indexed).
+        let mut a_net: str = ""
+        let mut y_net: str = ""
+        if w == 1 {
+            a_net = _passes_pin_net(c, "A")
+            if a_net == "" { a_net = _passes_pin_net(c, "A[0]") }
+            y_net = _passes_pin_net(c, "Y")
+            if y_net == "" { y_net = _passes_pin_net(c, "Y[0]") }
+        } else {
+            let pa = "A[" + str(i) + "]"
+            let py = "Y[" + str(i) + "]"
+            a_net = _passes_pin_net(c, pa)
+            y_net = _passes_pin_net(c, py)
+        }
+        if a_net == "" {
+            return ModLowerResult {
+                cells: [], wires: [], ok: 0, ok_kind: 3,
+                message: "lower_mod: cell `" + c.name + "` missing A[" + str(i) + "] pin"
+            }
+        }
+        if y_net == "" {
+            return ModLowerResult {
+                cells: [], wires: [], ok: 0, ok_kind: 3,
+                message: "lower_mod: cell `" + c.name + "` missing Y[" + str(i) + "] pin"
+            }
+        }
+
+        if i < k {
+            // low bit: Y[i] = A[i] AND 1
+            let mut g = rtlil_cell(c.name + "$mskand$" + str(i),
+                                   "sky130_fd_sc_hd__and2_1", 1)
+            g = rtlil_cell_connect(g, "A", a_net)
+            g = rtlil_cell_connect(g, "B", c1_net)
+            g = rtlil_cell_connect(g, "X", y_net)
+            out_cells = out_cells.push(g)
+        } else {
+            // high bit: Y[i] tied to constant 0 via a `$_const0_`
+            // sentinel (same convention as $add cin0 tie — abc_map.hexa
+            // emits BLIF `.names <net>` with zero rows for ABC).
+            let mut z = rtlil_cell(c.name + "$mskhi$" + str(i),
+                                   "$_const0_", 0)
+            z = rtlil_cell_connect(z, "Y", y_net)
+            out_cells = out_cells.push(z)
+        }
+        i = i + 1
+    }
+
+    return ModLowerResult {
+        cells: out_cells, wires: out_wires, ok: 1, ok_kind: 1, message: ""
+    }
+}
+
+fn pass_techmap_sky130(d: Design) -> PassResult {
+    let cb = _passes_total_cells(d)
+    let mut out: [Module] = []
+    let mut mi = 0
+    while mi < len(d.modules) {
+        let m = d.modules[mi]
+        let mut new_cells: [Cell] = []
+        let mut new_wires: [Wire] = m.wires
+        let mut ci = 0
+        while ci < len(m.cells) {
+            let c = m.cells[ci]
+            let mut mapped_type = c.cell_type
+            let mut mapped = c.is_mapped
+            let mut expanded = 0
+            if c.is_mapped == 0 {
+                if c.cell_type == "$and" {
+                    mapped_type = "sky130_fd_sc_hd__and2_1"
+                    mapped = 1
+                }
+                if c.cell_type == "$or" {
+                    mapped_type = "sky130_fd_sc_hd__or2_1"
+                    mapped = 1
+                }
+                if c.cell_type == "$xor" {
+                    mapped_type = "sky130_fd_sc_hd__xor2_1"
+                    mapped = 1
+                }
+                if c.cell_type == "$not" {
+                    mapped_type = "sky130_fd_sc_hd__inv_1"
+                    mapped = 1
+                }
+                if c.cell_type == "$dff" {
+                    mapped_type = "sky130_fd_sc_hd__dfxtp_1"
+                    mapped = 1
+                }
+                if c.cell_type == "$eq" {
+                    let lr = _passes_lower_eq_cell(c)
+                    if lr.ok == 1 {
+                        // splice expansion in place of the $eq cell
+                        let mut ei = 0
+                        while ei < len(lr.cells) {
+                            new_cells = new_cells.push(lr.cells[ei])
+                            ei = ei + 1
+                        }
+                        let mut wi = 0
+                        while wi < len(lr.wires) {
+                            new_wires = new_wires.push(lr.wires[wi])
+                            wi = wi + 1
+                        }
+                        expanded = 1
+                    }
+                }
+                if c.cell_type == "$ne" {
+                    let nr = _passes_lower_ne_cell(c)
+                    if nr.ok == 1 {
+                        // splice expansion in place of the $ne cell
+                        let mut nei = 0
+                        while nei < len(nr.cells) {
+                            new_cells = new_cells.push(nr.cells[nei])
+                            nei = nei + 1
+                        }
+                        let mut nwi = 0
+                        while nwi < len(nr.wires) {
+                            new_wires = new_wires.push(nr.wires[nwi])
+                            nwi = nwi + 1
+                        }
+                        expanded = 1
+                    }
+                }
+                if c.cell_type == "$logic_and" {
+                    let lar = _passes_lower_logic_and_cell(c)
+                    if lar.ok == 1 {
+                        // splice expansion in place of the $logic_and cell
+                        let mut lai = 0
+                        while lai < len(lar.cells) {
+                            new_cells = new_cells.push(lar.cells[lai])
+                            lai = lai + 1
+                        }
+                        let mut lawi = 0
+                        while lawi < len(lar.wires) {
+                            new_wires = new_wires.push(lar.wires[lawi])
+                            lawi = lawi + 1
+                        }
+                        expanded = 1
+                    }
+                }
+                if c.cell_type == "$logic_not" {
+                    let lnr = _passes_lower_logic_not_cell(c)
+                    if lnr.ok == 1 {
+                        // splice expansion in place of the $logic_not cell
+                        let mut lni = 0
+                        while lni < len(lnr.cells) {
+                            new_cells = new_cells.push(lnr.cells[lni])
+                            lni = lni + 1
+                        }
+                        let mut lnwi = 0
+                        while lnwi < len(lnr.wires) {
+                            new_wires = new_wires.push(lnr.wires[lnwi])
+                            lnwi = lnwi + 1
+                        }
+                        expanded = 1
+                    }
+                }
+                if c.cell_type == "$add" {
+                    let adr = _passes_lower_add_cell(c)
+                    if adr.ok == 1 {
+                        // splice expansion in place of the $add cell
+                        let mut adi = 0
+                        while adi < len(adr.cells) {
+                            new_cells = new_cells.push(adr.cells[adi])
+                            adi = adi + 1
+                        }
+                        let mut adwi = 0
+                        while adwi < len(adr.wires) {
+                            new_wires = new_wires.push(adr.wires[adwi])
+                            adwi = adwi + 1
+                        }
+                        expanded = 1
+                    }
+                }
+                if c.cell_type == "$mod" {
+                    let mdr = _passes_lower_mod_cell(c)
+                    if mdr.ok == 1 {
+                        // splice expansion in place of the $mod cell
+                        let mut mdi = 0
+                        while mdi < len(mdr.cells) {
+                            new_cells = new_cells.push(mdr.cells[mdi])
+                            mdi = mdi + 1
+                        }
+                        let mut mdwi = 0
+                        while mdwi < len(mdr.wires) {
+                            new_wires = new_wires.push(mdr.wires[mdwi])
+                            mdwi = mdwi + 1
+                        }
+                        expanded = 1
+                    } else {
+                        // case B (non-pow2) / case C (variable divisor):
+                        // fail-loud — surface the diagnostic so the
+                        // absorption boundary stays honest (g3).
+                        println("techmap_sky130: " + mdr.message)
+                    }
+                }
+            }
+            if expanded == 0 {
+                new_cells = new_cells.push(Cell {
+                    name: c.name, cell_type: mapped_type,
+                    conns: c.conns, is_mapped: mapped,
+                })
+            }
+            ci = ci + 1
+        }
+        out = out.push(Module {
+            name: m.name, wires: new_wires, cells: new_cells,
+            processes: m.processes,
+            connect_lhs: m.connect_lhs,
+            connect_rhs: m.connect_rhs,
+        })
+        mi = mi + 1
+    }
+    let d2 = Design { modules: out, source: d.source }
+    return PassResult {
+        ok: 1, design: d2,
+        cells_before: cb, cells_after: _passes_total_cells(d2),
+        message: "techmap_sky130"
+    }
+}
+
+// ─── dfflibmap: only-DFF techmap shim ────────────────────────────────────
+
+// CLEAN-ROOM (passes/techmap/dfflibmap.cc): like techmap but selective
+// — only $dff/$dffsr/$_DFF_* family cells, leaving combinational
+// generics for abc_map. Scope-a body: rewrite $dff → sky130 dfxtp_1
+// only, skip combinational.
+fn pass_dfflibmap_sky130(d: Design) -> PassResult {
+    let cb = _passes_total_cells(d)
+    let mut out: [Module] = []
+    let mut mi = 0
+    while mi < len(d.modules) {
+        let m = d.modules[mi]
+        let mut new_cells: [Cell] = []
+        let mut ci = 0
+        while ci < len(m.cells) {
+            let c = m.cells[ci]
+            let mut mapped_type = c.cell_type
+            let mut mapped = c.is_mapped
+            if c.cell_type == "$dff" {
+                mapped_type = "sky130_fd_sc_hd__dfxtp_1"
+                mapped = 1
+            }
+            new_cells = new_cells.push(Cell {
+                name: c.name, cell_type: mapped_type,
+                conns: c.conns, is_mapped: mapped,
+            })
+            ci = ci + 1
+        }
+        out = out.push(Module {
+            name: m.name, wires: m.wires, cells: new_cells,
+            processes: m.processes,
+            connect_lhs: m.connect_lhs,
+            connect_rhs: m.connect_rhs,
+        })
+        mi = mi + 1
+    }
+    let d2 = Design { modules: out, source: d.source }
+    return PassResult {
+        ok: 1, design: d2,
+        cells_before: cb, cells_after: _passes_total_cells(d2),
+        message: "dfflibmap_sky130"
+    }
+}
+
+// ─── hierarchy: pick / verify top module ─────────────────────────────────
+
+// CLEAN-ROOM (passes/cmds/hierarchy.cc): `hierarchy -top <name>` checks
+// the named module exists and (optionally) elaborates it. Scope-a:
+// check existence + return original design unchanged. Fail-loud on
+// missing top.
+fn pass_hierarchy_top(d: Design, top: str) -> PassResult {
+    let cb = _passes_total_cells(d)
+    if rtlil_find_module(d, top) < 0 {
+        return PassResult {
+            ok: 0, design: d,
+            cells_before: cb, cells_after: cb,
+            message: "hierarchy: top module `" + top + "` not found"
+        }
+    }
+    return PassResult {
+        ok: 1, design: d,
+        cells_before: cb, cells_after: cb,
+        message: "hierarchy_top=" + top
+    }
+}
+
+// ─── opt_clean: final-pass cleanup (= opt with same scope) ────────────────
+
+// CLEAN-ROOM (passes/opt/opt_clean.cc): the final cleanup pass. Scope-a:
+// alias of pass_opt — same orphan/self-connect removal.
+fn pass_opt_clean(d: Design) -> PassResult {
+    let r = pass_opt(d)
+    return PassResult {
+        ok: r.ok, design: r.design,
+        cells_before: r.cells_before, cells_after: r.cells_after,
+        message: "opt_clean"
+    }
+}
+
+// ─── self-test ───────────────────────────────────────────────────────────
+
+fn main() {
+    let mut fails = 0
+    let mut total = 0
+
+    // Build a small fixture: top module with $and + $or + $not + a
+    // dummy sync process (→ $dff after proc).
+    let mut m = rtlil_new_module("fix")
+    m = rtlil_module_add_wire(m, rtlil_wire("a", 1, 1, 1))
+    m = rtlil_module_add_wire(m, rtlil_wire("b", 1, 1, 2))
+    m = rtlil_module_add_wire(m, rtlil_wire("clk", 1, 1, 3))
+    m = rtlil_module_add_wire(m, rtlil_wire("q", 1, 2, 4))
+    m = rtlil_module_add_wire(m, rtlil_wire("y", 1, 2, 5))
+    let mut c_and = rtlil_cell("u_and", "$and", 0)
+    c_and = rtlil_cell_connect(c_and, "A", "a")
+    c_and = rtlil_cell_connect(c_and, "B", "b")
+    c_and = rtlil_cell_connect(c_and, "Y", "y")
+    m = rtlil_module_add_cell(m, c_and)
+    let c_orphan = rtlil_cell("u_orphan", "$or", 0)
+    m = rtlil_module_add_cell(m, c_orphan)
+    m = rtlil_module_add_process(m, Process {
+        name: "p_q", is_sync: 1, clk: "clk", targets: ["q"]
+    })
+    let mut d = rtlil_new_design("test")
+    d = rtlil_design_add(d, m)
+
+    // T1 — proc lifts the process into a $dff cell.
+    total = total + 1
+    let r1 = pass_proc(d)
+    if r1.ok != 1 {
+        println("FAIL T1 proc: " + r1.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r1.design.modules[0], "$dff") != 1 {
+        println("FAIL T1b proc_dff_count"); fails = fails + 1
+    }
+
+    // T2 — flatten OK on no-instance design.
+    total = total + 1
+    let r2 = pass_flatten(r1.design)
+    if r2.ok != 1 {
+        println("FAIL T2 flatten: " + r2.message); fails = fails + 1
+    }
+
+    // T3 — opt drops the orphan u_orphan cell (0 conns).
+    total = total + 1
+    let r3 = pass_opt(r2.design)
+    if r3.ok != 1 {
+        println("FAIL T3 opt: " + r3.message); fails = fails + 1
+    }
+    if r3.cells_after >= r3.cells_before {
+        println("FAIL T3b opt_no_drop (before=" + str(r3.cells_before)
+            + " after=" + str(r3.cells_after) + ")"); fails = fails + 1
+    }
+
+    // T4 — hierarchy on existing top.
+    total = total + 1
+    let r4 = pass_hierarchy_top(r3.design, "fix")
+    if r4.ok != 1 {
+        println("FAIL T4 hierarchy: " + r4.message); fails = fails + 1
+    }
+
+    // T5 — hierarchy fail-loud on missing top.
+    total = total + 1
+    let r5 = pass_hierarchy_top(r3.design, "ghost")
+    if r5.ok != 0 {
+        println("FAIL T5 hierarchy_missing_should_fail"); fails = fails + 1
+    }
+
+    // T6 — techmap renames $and → sky130 cell.
+    total = total + 1
+    let r6 = pass_techmap_sky130(r3.design)
+    if r6.ok != 1 {
+        println("FAIL T6 techmap: " + r6.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r6.design.modules[0], "sky130_fd_sc_hd__and2_1") != 1 {
+        println("FAIL T6b techmap_sky130_and"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r6.design.modules[0], "$and") != 0 {
+        println("FAIL T6c techmap_old_remains"); fails = fails + 1
+    }
+
+    // T7 — dfflibmap on $dff (after a fresh proc, before techmap).
+    total = total + 1
+    let r7 = pass_dfflibmap_sky130(r1.design)
+    if r7.ok != 1 {
+        println("FAIL T7 dfflibmap: " + r7.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r7.design.modules[0], "sky130_fd_sc_hd__dfxtp_1") != 1 {
+        println("FAIL T7b dfflibmap_dfxtp"); fails = fails + 1
+    }
+
+    // T8 — opt_clean is opt-equivalent.
+    total = total + 1
+    let r8 = pass_opt_clean(r3.design)
+    if r8.ok != 1 {
+        println("FAIL T8 opt_clean: " + r8.message); fails = fails + 1
+    }
+
+    // T9 — full minimum pipeline runs without error (proc → flatten →
+    // opt → techmap → dfflibmap → opt_clean).
+    total = total + 1
+    let mut dd = d
+    let p1 = pass_proc(dd);             dd = p1.design
+    let p2 = pass_flatten(dd);          dd = p2.design
+    let p3 = pass_opt(dd);              dd = p3.design
+    let p4 = pass_techmap_sky130(dd);   dd = p4.design
+    let p5 = pass_dfflibmap_sky130(dd); dd = p5.design
+    let p6 = pass_opt_clean(dd);        dd = p6.design
+    let all_ok = p1.ok * p2.ok * p3.ok * p4.ok * p5.ok * p6.ok
+    if all_ok != 1 {
+        println("FAIL T9 pipeline"); fails = fails + 1
+    }
+
+    // T10 — $eq lowering (1-bit, plain A/B/Y conns) → 1 xnor2_1, 0 and2_1.
+    // CLEAN-ROOM: rfc_006 §5 bug (a). Build a 1-bit $eq cell and confirm
+    // pass_techmap_sky130 expands it into a single SKY130 xnor2_1 cell
+    // (the degenerate width=1 case of the XNOR-tree + AND-reduce design).
+    total = total + 1
+    let mut m_eq1 = rtlil_new_module("eq1")
+    m_eq1 = rtlil_module_add_wire(m_eq1, rtlil_wire("a",  1, 1, 1))
+    m_eq1 = rtlil_module_add_wire(m_eq1, rtlil_wire("b",  1, 1, 2))
+    m_eq1 = rtlil_module_add_wire(m_eq1, rtlil_wire("eq", 1, 2, 3))
+    let mut c_eq1 = rtlil_cell("u_eq1", "$eq", 0)
+    c_eq1 = rtlil_cell_connect(c_eq1, "A", "a")
+    c_eq1 = rtlil_cell_connect(c_eq1, "B", "b")
+    c_eq1 = rtlil_cell_connect(c_eq1, "Y", "eq")
+    m_eq1 = rtlil_module_add_cell(m_eq1, c_eq1)
+    let mut d_eq1 = rtlil_new_design("test")
+    d_eq1 = rtlil_design_add(d_eq1, m_eq1)
+    let r_eq1 = pass_techmap_sky130(d_eq1)
+    if r_eq1.ok != 1 {
+        println("FAIL T10 eq1: " + r_eq1.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq1.design.modules[0], "sky130_fd_sc_hd__xnor2_1") != 1 {
+        println("FAIL T10b eq1_xnor_count (got "
+            + str(rtlil_count_cells_of_type(r_eq1.design.modules[0], "sky130_fd_sc_hd__xnor2_1"))
+            + ")"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq1.design.modules[0], "sky130_fd_sc_hd__and2_1") != 0 {
+        println("FAIL T10c eq1_no_and"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq1.design.modules[0], "$eq") != 0 {
+        println("FAIL T10d eq1_residual"); fails = fails + 1
+    }
+
+    // T11 — $eq lowering 2-bit (bit-indexed A[0]/A[1]/B[0]/B[1]/Y) →
+    //       2 xnor2_1 + 1 and2_1 (linear AND chain reducing to Y).
+    total = total + 1
+    let mut m_eq2 = rtlil_new_module("eq2")
+    m_eq2 = rtlil_module_add_wire(m_eq2, rtlil_wire("a0", 1, 1, 1))
+    m_eq2 = rtlil_module_add_wire(m_eq2, rtlil_wire("a1", 1, 1, 2))
+    m_eq2 = rtlil_module_add_wire(m_eq2, rtlil_wire("b0", 1, 1, 3))
+    m_eq2 = rtlil_module_add_wire(m_eq2, rtlil_wire("b1", 1, 1, 4))
+    m_eq2 = rtlil_module_add_wire(m_eq2, rtlil_wire("eq", 1, 2, 5))
+    let mut c_eq2 = rtlil_cell("u_eq2", "$eq", 0)
+    c_eq2 = rtlil_cell_connect(c_eq2, "A[0]", "a0")
+    c_eq2 = rtlil_cell_connect(c_eq2, "A[1]", "a1")
+    c_eq2 = rtlil_cell_connect(c_eq2, "B[0]", "b0")
+    c_eq2 = rtlil_cell_connect(c_eq2, "B[1]", "b1")
+    c_eq2 = rtlil_cell_connect(c_eq2, "Y",    "eq")
+    m_eq2 = rtlil_module_add_cell(m_eq2, c_eq2)
+    let mut d_eq2 = rtlil_new_design("test")
+    d_eq2 = rtlil_design_add(d_eq2, m_eq2)
+    let r_eq2 = pass_techmap_sky130(d_eq2)
+    if r_eq2.ok != 1 {
+        println("FAIL T11 eq2: " + r_eq2.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq2.design.modules[0], "sky130_fd_sc_hd__xnor2_1") != 2 {
+        println("FAIL T11b eq2_xnor_count (got "
+            + str(rtlil_count_cells_of_type(r_eq2.design.modules[0], "sky130_fd_sc_hd__xnor2_1"))
+            + ", want 2)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq2.design.modules[0], "sky130_fd_sc_hd__and2_1") != 1 {
+        println("FAIL T11c eq2_and_count (got "
+            + str(rtlil_count_cells_of_type(r_eq2.design.modules[0], "sky130_fd_sc_hd__and2_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq2.design.modules[0], "$eq") != 0 {
+        println("FAIL T11d eq2_residual"); fails = fails + 1
+    }
+    // no-dangling: the new internal xnor outputs must be added as wires.
+    if rtlil_check_no_dangling(r_eq2.design.modules[0]) != 0 {
+        println("FAIL T11e eq2_dangling_pin"); fails = fails + 1
+    }
+
+    // T12 — $eq lowering 4-bit → 4 xnor2_1 + 3 and2_1 (3-stage chain).
+    total = total + 1
+    let mut m_eq4 = rtlil_new_module("eq4")
+    let mut wi = 0
+    while wi < 4 {
+        m_eq4 = rtlil_module_add_wire(m_eq4,
+            rtlil_wire("a" + str(wi), 1, 1, wi + 1))
+        wi = wi + 1
+    }
+    let mut wj = 0
+    while wj < 4 {
+        m_eq4 = rtlil_module_add_wire(m_eq4,
+            rtlil_wire("b" + str(wj), 1, 1, wj + 5))
+        wj = wj + 1
+    }
+    m_eq4 = rtlil_module_add_wire(m_eq4, rtlil_wire("eq", 1, 2, 9))
+    let mut c_eq4 = rtlil_cell("u_eq4", "$eq", 0)
+    let mut wk = 0
+    while wk < 4 {
+        c_eq4 = rtlil_cell_connect(c_eq4, "A[" + str(wk) + "]", "a" + str(wk))
+        c_eq4 = rtlil_cell_connect(c_eq4, "B[" + str(wk) + "]", "b" + str(wk))
+        wk = wk + 1
+    }
+    c_eq4 = rtlil_cell_connect(c_eq4, "Y", "eq")
+    m_eq4 = rtlil_module_add_cell(m_eq4, c_eq4)
+    let mut d_eq4 = rtlil_new_design("test")
+    d_eq4 = rtlil_design_add(d_eq4, m_eq4)
+    let r_eq4 = pass_techmap_sky130(d_eq4)
+    if r_eq4.ok != 1 {
+        println("FAIL T12 eq4: " + r_eq4.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq4.design.modules[0], "sky130_fd_sc_hd__xnor2_1") != 4 {
+        println("FAIL T12b eq4_xnor_count (got "
+            + str(rtlil_count_cells_of_type(r_eq4.design.modules[0], "sky130_fd_sc_hd__xnor2_1"))
+            + ", want 4)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq4.design.modules[0], "sky130_fd_sc_hd__and2_1") != 3 {
+        println("FAIL T12c eq4_and_count (got "
+            + str(rtlil_count_cells_of_type(r_eq4.design.modules[0], "sky130_fd_sc_hd__and2_1"))
+            + ", want 3)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq4.design.modules[0], "$eq") != 0 {
+        println("FAIL T12d eq4_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_eq4.design.modules[0]) != 0 {
+        println("FAIL T12e eq4_dangling_pin"); fails = fails + 1
+    }
+
+    // T13 — $ne lowering (1-bit, plain A/B/Y conns) → 1 xor2_1, 0 or2_1.
+    // CLEAN-ROOM: rfc_006 §5 bug (a) iter 2. Build a 1-bit $ne cell and
+    // confirm pass_techmap_sky130 expands it into a single SKY130 xor2_1
+    // cell (the degenerate width=1 case of the XOR-tree + OR-reduce shape).
+    total = total + 1
+    let mut m_ne1 = rtlil_new_module("ne1")
+    m_ne1 = rtlil_module_add_wire(m_ne1, rtlil_wire("a",  1, 1, 1))
+    m_ne1 = rtlil_module_add_wire(m_ne1, rtlil_wire("b",  1, 1, 2))
+    m_ne1 = rtlil_module_add_wire(m_ne1, rtlil_wire("ne", 1, 2, 3))
+    let mut c_ne1 = rtlil_cell("u_ne1", "$ne", 0)
+    c_ne1 = rtlil_cell_connect(c_ne1, "A", "a")
+    c_ne1 = rtlil_cell_connect(c_ne1, "B", "b")
+    c_ne1 = rtlil_cell_connect(c_ne1, "Y", "ne")
+    m_ne1 = rtlil_module_add_cell(m_ne1, c_ne1)
+    let mut d_ne1 = rtlil_new_design("test")
+    d_ne1 = rtlil_design_add(d_ne1, m_ne1)
+    let r_ne1 = pass_techmap_sky130(d_ne1)
+    if r_ne1.ok != 1 {
+        println("FAIL T13 ne1: " + r_ne1.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne1.design.modules[0], "sky130_fd_sc_hd__xor2_1") != 1 {
+        println("FAIL T13b ne1_xor_count (got "
+            + str(rtlil_count_cells_of_type(r_ne1.design.modules[0], "sky130_fd_sc_hd__xor2_1"))
+            + ")"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne1.design.modules[0], "sky130_fd_sc_hd__or2_1") != 0 {
+        println("FAIL T13c ne1_no_or"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne1.design.modules[0], "$ne") != 0 {
+        println("FAIL T13d ne1_residual"); fails = fails + 1
+    }
+
+    // T14 — $ne lowering 2-bit (bit-indexed A[0]/A[1]/B[0]/B[1]/Y) →
+    //       2 xor2_1 + 1 or2_1 (linear OR chain reducing to Y).
+    total = total + 1
+    let mut m_ne2 = rtlil_new_module("ne2")
+    m_ne2 = rtlil_module_add_wire(m_ne2, rtlil_wire("a0", 1, 1, 1))
+    m_ne2 = rtlil_module_add_wire(m_ne2, rtlil_wire("a1", 1, 1, 2))
+    m_ne2 = rtlil_module_add_wire(m_ne2, rtlil_wire("b0", 1, 1, 3))
+    m_ne2 = rtlil_module_add_wire(m_ne2, rtlil_wire("b1", 1, 1, 4))
+    m_ne2 = rtlil_module_add_wire(m_ne2, rtlil_wire("ne", 1, 2, 5))
+    let mut c_ne2 = rtlil_cell("u_ne2", "$ne", 0)
+    c_ne2 = rtlil_cell_connect(c_ne2, "A[0]", "a0")
+    c_ne2 = rtlil_cell_connect(c_ne2, "A[1]", "a1")
+    c_ne2 = rtlil_cell_connect(c_ne2, "B[0]", "b0")
+    c_ne2 = rtlil_cell_connect(c_ne2, "B[1]", "b1")
+    c_ne2 = rtlil_cell_connect(c_ne2, "Y",    "ne")
+    m_ne2 = rtlil_module_add_cell(m_ne2, c_ne2)
+    let mut d_ne2 = rtlil_new_design("test")
+    d_ne2 = rtlil_design_add(d_ne2, m_ne2)
+    let r_ne2 = pass_techmap_sky130(d_ne2)
+    if r_ne2.ok != 1 {
+        println("FAIL T14 ne2: " + r_ne2.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne2.design.modules[0], "sky130_fd_sc_hd__xor2_1") != 2 {
+        println("FAIL T14b ne2_xor_count (got "
+            + str(rtlil_count_cells_of_type(r_ne2.design.modules[0], "sky130_fd_sc_hd__xor2_1"))
+            + ", want 2)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne2.design.modules[0], "sky130_fd_sc_hd__or2_1") != 1 {
+        println("FAIL T14c ne2_or_count (got "
+            + str(rtlil_count_cells_of_type(r_ne2.design.modules[0], "sky130_fd_sc_hd__or2_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne2.design.modules[0], "$ne") != 0 {
+        println("FAIL T14d ne2_residual"); fails = fails + 1
+    }
+    // no-dangling: the new internal xor outputs must be added as wires.
+    if rtlil_check_no_dangling(r_ne2.design.modules[0]) != 0 {
+        println("FAIL T14e ne2_dangling_pin"); fails = fails + 1
+    }
+
+    // T15 — $ne lowering 4-bit → 4 xor2_1 + 3 or2_1 (3-stage chain).
+    total = total + 1
+    let mut m_ne4 = rtlil_new_module("ne4")
+    let mut nwi = 0
+    while nwi < 4 {
+        m_ne4 = rtlil_module_add_wire(m_ne4,
+            rtlil_wire("a" + str(nwi), 1, 1, nwi + 1))
+        nwi = nwi + 1
+    }
+    let mut nwj = 0
+    while nwj < 4 {
+        m_ne4 = rtlil_module_add_wire(m_ne4,
+            rtlil_wire("b" + str(nwj), 1, 1, nwj + 5))
+        nwj = nwj + 1
+    }
+    m_ne4 = rtlil_module_add_wire(m_ne4, rtlil_wire("ne", 1, 2, 9))
+    let mut c_ne4 = rtlil_cell("u_ne4", "$ne", 0)
+    let mut nwk = 0
+    while nwk < 4 {
+        c_ne4 = rtlil_cell_connect(c_ne4, "A[" + str(nwk) + "]", "a" + str(nwk))
+        c_ne4 = rtlil_cell_connect(c_ne4, "B[" + str(nwk) + "]", "b" + str(nwk))
+        nwk = nwk + 1
+    }
+    c_ne4 = rtlil_cell_connect(c_ne4, "Y", "ne")
+    m_ne4 = rtlil_module_add_cell(m_ne4, c_ne4)
+    let mut d_ne4 = rtlil_new_design("test")
+    d_ne4 = rtlil_design_add(d_ne4, m_ne4)
+    let r_ne4 = pass_techmap_sky130(d_ne4)
+    if r_ne4.ok != 1 {
+        println("FAIL T15 ne4: " + r_ne4.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne4.design.modules[0], "sky130_fd_sc_hd__xor2_1") != 4 {
+        println("FAIL T15b ne4_xor_count (got "
+            + str(rtlil_count_cells_of_type(r_ne4.design.modules[0], "sky130_fd_sc_hd__xor2_1"))
+            + ", want 4)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne4.design.modules[0], "sky130_fd_sc_hd__or2_1") != 3 {
+        println("FAIL T15c ne4_or_count (got "
+            + str(rtlil_count_cells_of_type(r_ne4.design.modules[0], "sky130_fd_sc_hd__or2_1"))
+            + ", want 3)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne4.design.modules[0], "$ne") != 0 {
+        println("FAIL T15d ne4_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_ne4.design.modules[0]) != 0 {
+        println("FAIL T15e ne4_dangling_pin"); fails = fails + 1
+    }
+
+    // T16 — $logic_and lowering (1-bit ⋀ 1-bit, plain A/B/Y conns) →
+    // 0 or2_1 + 1 and2_1. CLEAN-ROOM: rfc_006 §5 bug (a) iter 3. Both
+    // operands single-bit ⇒ each side's OR-reduce is a no-op (pass-
+    // through to the final AND); the lowered shape is a single SKY130
+    // and2_1 (IEEE 1364-2005 §5.1.10).
+    total = total + 1
+    let mut m_la1 = rtlil_new_module("la1")
+    m_la1 = rtlil_module_add_wire(m_la1, rtlil_wire("a",  1, 1, 1))
+    m_la1 = rtlil_module_add_wire(m_la1, rtlil_wire("b",  1, 1, 2))
+    m_la1 = rtlil_module_add_wire(m_la1, rtlil_wire("la", 1, 2, 3))
+    let mut c_la1 = rtlil_cell("u_la1", "$logic_and", 0)
+    c_la1 = rtlil_cell_connect(c_la1, "A", "a")
+    c_la1 = rtlil_cell_connect(c_la1, "B", "b")
+    c_la1 = rtlil_cell_connect(c_la1, "Y", "la")
+    m_la1 = rtlil_module_add_cell(m_la1, c_la1)
+    let mut d_la1 = rtlil_new_design("test")
+    d_la1 = rtlil_design_add(d_la1, m_la1)
+    let r_la1 = pass_techmap_sky130(d_la1)
+    if r_la1.ok != 1 {
+        println("FAIL T16 la1: " + r_la1.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_la1.design.modules[0], "sky130_fd_sc_hd__or2_1") != 0 {
+        println("FAIL T16b la1_no_or (got "
+            + str(rtlil_count_cells_of_type(r_la1.design.modules[0], "sky130_fd_sc_hd__or2_1"))
+            + ", want 0)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_la1.design.modules[0], "sky130_fd_sc_hd__and2_1") != 1 {
+        println("FAIL T16c la1_and_count (got "
+            + str(rtlil_count_cells_of_type(r_la1.design.modules[0], "sky130_fd_sc_hd__and2_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_la1.design.modules[0], "$logic_and") != 0 {
+        println("FAIL T16d la1_residual"); fails = fails + 1
+    }
+
+    // T17 — $logic_and lowering 2-bit ⋀ 2-bit (bit-indexed A[0]/A[1]/
+    // B[0]/B[1]/Y) → 2 or2_1 (one per operand reducing two bits to
+    // one) + 1 and2_1 (combining the two reduced bits).
+    total = total + 1
+    let mut m_la2 = rtlil_new_module("la2")
+    m_la2 = rtlil_module_add_wire(m_la2, rtlil_wire("a0", 1, 1, 1))
+    m_la2 = rtlil_module_add_wire(m_la2, rtlil_wire("a1", 1, 1, 2))
+    m_la2 = rtlil_module_add_wire(m_la2, rtlil_wire("b0", 1, 1, 3))
+    m_la2 = rtlil_module_add_wire(m_la2, rtlil_wire("b1", 1, 1, 4))
+    m_la2 = rtlil_module_add_wire(m_la2, rtlil_wire("la", 1, 2, 5))
+    let mut c_la2 = rtlil_cell("u_la2", "$logic_and", 0)
+    c_la2 = rtlil_cell_connect(c_la2, "A[0]", "a0")
+    c_la2 = rtlil_cell_connect(c_la2, "A[1]", "a1")
+    c_la2 = rtlil_cell_connect(c_la2, "B[0]", "b0")
+    c_la2 = rtlil_cell_connect(c_la2, "B[1]", "b1")
+    c_la2 = rtlil_cell_connect(c_la2, "Y",    "la")
+    m_la2 = rtlil_module_add_cell(m_la2, c_la2)
+    let mut d_la2 = rtlil_new_design("test")
+    d_la2 = rtlil_design_add(d_la2, m_la2)
+    let r_la2 = pass_techmap_sky130(d_la2)
+    if r_la2.ok != 1 {
+        println("FAIL T17 la2: " + r_la2.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_la2.design.modules[0], "sky130_fd_sc_hd__or2_1") != 2 {
+        println("FAIL T17b la2_or_count (got "
+            + str(rtlil_count_cells_of_type(r_la2.design.modules[0], "sky130_fd_sc_hd__or2_1"))
+            + ", want 2)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_la2.design.modules[0], "sky130_fd_sc_hd__and2_1") != 1 {
+        println("FAIL T17c la2_and_count (got "
+            + str(rtlil_count_cells_of_type(r_la2.design.modules[0], "sky130_fd_sc_hd__and2_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_la2.design.modules[0], "$logic_and") != 0 {
+        println("FAIL T17d la2_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_la2.design.modules[0]) != 0 {
+        println("FAIL T17e la2_dangling_pin"); fails = fails + 1
+    }
+
+    // T18 — $logic_and lowering 4-bit ⋀ 4-bit → 6 or2_1 (3 per operand,
+    // linear chain reducing 4 bits to 1) + 1 and2_1 (final combine).
+    total = total + 1
+    let mut m_la4 = rtlil_new_module("la4")
+    let mut lawi = 0
+    while lawi < 4 {
+        m_la4 = rtlil_module_add_wire(m_la4,
+            rtlil_wire("a" + str(lawi), 1, 1, lawi + 1))
+        lawi = lawi + 1
+    }
+    let mut lawj = 0
+    while lawj < 4 {
+        m_la4 = rtlil_module_add_wire(m_la4,
+            rtlil_wire("b" + str(lawj), 1, 1, lawj + 5))
+        lawj = lawj + 1
+    }
+    m_la4 = rtlil_module_add_wire(m_la4, rtlil_wire("la", 1, 2, 9))
+    let mut c_la4 = rtlil_cell("u_la4", "$logic_and", 0)
+    let mut lawk = 0
+    while lawk < 4 {
+        c_la4 = rtlil_cell_connect(c_la4, "A[" + str(lawk) + "]", "a" + str(lawk))
+        c_la4 = rtlil_cell_connect(c_la4, "B[" + str(lawk) + "]", "b" + str(lawk))
+        lawk = lawk + 1
+    }
+    c_la4 = rtlil_cell_connect(c_la4, "Y", "la")
+    m_la4 = rtlil_module_add_cell(m_la4, c_la4)
+    let mut d_la4 = rtlil_new_design("test")
+    d_la4 = rtlil_design_add(d_la4, m_la4)
+    let r_la4 = pass_techmap_sky130(d_la4)
+    if r_la4.ok != 1 {
+        println("FAIL T18 la4: " + r_la4.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_la4.design.modules[0], "sky130_fd_sc_hd__or2_1") != 6 {
+        println("FAIL T18b la4_or_count (got "
+            + str(rtlil_count_cells_of_type(r_la4.design.modules[0], "sky130_fd_sc_hd__or2_1"))
+            + ", want 6)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_la4.design.modules[0], "sky130_fd_sc_hd__and2_1") != 1 {
+        println("FAIL T18c la4_and_count (got "
+            + str(rtlil_count_cells_of_type(r_la4.design.modules[0], "sky130_fd_sc_hd__and2_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_la4.design.modules[0], "$logic_and") != 0 {
+        println("FAIL T18d la4_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_la4.design.modules[0]) != 0 {
+        println("FAIL T18e la4_dangling_pin"); fails = fails + 1
+    }
+
+    // T19 — $logic_not lowering (1-bit, plain A/Y conns) →
+    // 0 or2_1 + 1 inv_1. CLEAN-ROOM: rfc_006 §5 bug (a) iter 4. The
+    // lone operand single-bit ⇒ the OR-reduce is a no-op (pass-through
+    // to the final invert); the lowered shape is a single SKY130
+    // inv_1 (IEEE 1364-2005 §5.1.10).
+    total = total + 1
+    let mut m_ln1 = rtlil_new_module("ln1")
+    m_ln1 = rtlil_module_add_wire(m_ln1, rtlil_wire("a",  1, 1, 1))
+    m_ln1 = rtlil_module_add_wire(m_ln1, rtlil_wire("ln", 1, 2, 2))
+    let mut c_ln1 = rtlil_cell("u_ln1", "$logic_not", 0)
+    c_ln1 = rtlil_cell_connect(c_ln1, "A", "a")
+    c_ln1 = rtlil_cell_connect(c_ln1, "Y", "ln")
+    m_ln1 = rtlil_module_add_cell(m_ln1, c_ln1)
+    let mut d_ln1 = rtlil_new_design("test")
+    d_ln1 = rtlil_design_add(d_ln1, m_ln1)
+    let r_ln1 = pass_techmap_sky130(d_ln1)
+    if r_ln1.ok != 1 {
+        println("FAIL T19 ln1: " + r_ln1.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln1.design.modules[0], "sky130_fd_sc_hd__or2_1") != 0 {
+        println("FAIL T19b ln1_no_or (got "
+            + str(rtlil_count_cells_of_type(r_ln1.design.modules[0], "sky130_fd_sc_hd__or2_1"))
+            + ", want 0)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln1.design.modules[0], "sky130_fd_sc_hd__inv_1") != 1 {
+        println("FAIL T19c ln1_inv_count (got "
+            + str(rtlil_count_cells_of_type(r_ln1.design.modules[0], "sky130_fd_sc_hd__inv_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln1.design.modules[0], "$logic_not") != 0 {
+        println("FAIL T19d ln1_residual"); fails = fails + 1
+    }
+
+    // T20 — $logic_not lowering 2-bit (bit-indexed A[0]/A[1]/Y) →
+    // 1 or2_1 (reducing two bits to one) + 1 inv_1 (inverting the
+    // reduced bit).
+    total = total + 1
+    let mut m_ln2 = rtlil_new_module("ln2")
+    m_ln2 = rtlil_module_add_wire(m_ln2, rtlil_wire("a0", 1, 1, 1))
+    m_ln2 = rtlil_module_add_wire(m_ln2, rtlil_wire("a1", 1, 1, 2))
+    m_ln2 = rtlil_module_add_wire(m_ln2, rtlil_wire("ln", 1, 2, 3))
+    let mut c_ln2 = rtlil_cell("u_ln2", "$logic_not", 0)
+    c_ln2 = rtlil_cell_connect(c_ln2, "A[0]", "a0")
+    c_ln2 = rtlil_cell_connect(c_ln2, "A[1]", "a1")
+    c_ln2 = rtlil_cell_connect(c_ln2, "Y",    "ln")
+    m_ln2 = rtlil_module_add_cell(m_ln2, c_ln2)
+    let mut d_ln2 = rtlil_new_design("test")
+    d_ln2 = rtlil_design_add(d_ln2, m_ln2)
+    let r_ln2 = pass_techmap_sky130(d_ln2)
+    if r_ln2.ok != 1 {
+        println("FAIL T20 ln2: " + r_ln2.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln2.design.modules[0], "sky130_fd_sc_hd__or2_1") != 1 {
+        println("FAIL T20b ln2_or_count (got "
+            + str(rtlil_count_cells_of_type(r_ln2.design.modules[0], "sky130_fd_sc_hd__or2_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln2.design.modules[0], "sky130_fd_sc_hd__inv_1") != 1 {
+        println("FAIL T20c ln2_inv_count (got "
+            + str(rtlil_count_cells_of_type(r_ln2.design.modules[0], "sky130_fd_sc_hd__inv_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln2.design.modules[0], "$logic_not") != 0 {
+        println("FAIL T20d ln2_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_ln2.design.modules[0]) != 0 {
+        println("FAIL T20e ln2_dangling_pin"); fails = fails + 1
+    }
+
+    // T21 — $logic_not lowering 4-bit → 3 or2_1 (linear chain reducing
+    // 4 bits to 1) + 1 inv_1 (final invert).
+    total = total + 1
+    let mut m_ln4 = rtlil_new_module("ln4")
+    let mut lnwi = 0
+    while lnwi < 4 {
+        m_ln4 = rtlil_module_add_wire(m_ln4,
+            rtlil_wire("a" + str(lnwi), 1, 1, lnwi + 1))
+        lnwi = lnwi + 1
+    }
+    m_ln4 = rtlil_module_add_wire(m_ln4, rtlil_wire("ln", 1, 2, 5))
+    let mut c_ln4 = rtlil_cell("u_ln4", "$logic_not", 0)
+    let mut lnwk = 0
+    while lnwk < 4 {
+        c_ln4 = rtlil_cell_connect(c_ln4, "A[" + str(lnwk) + "]", "a" + str(lnwk))
+        lnwk = lnwk + 1
+    }
+    c_ln4 = rtlil_cell_connect(c_ln4, "Y", "ln")
+    m_ln4 = rtlil_module_add_cell(m_ln4, c_ln4)
+    let mut d_ln4 = rtlil_new_design("test")
+    d_ln4 = rtlil_design_add(d_ln4, m_ln4)
+    let r_ln4 = pass_techmap_sky130(d_ln4)
+    if r_ln4.ok != 1 {
+        println("FAIL T21 ln4: " + r_ln4.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln4.design.modules[0], "sky130_fd_sc_hd__or2_1") != 3 {
+        println("FAIL T21b ln4_or_count (got "
+            + str(rtlil_count_cells_of_type(r_ln4.design.modules[0], "sky130_fd_sc_hd__or2_1"))
+            + ", want 3)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln4.design.modules[0], "sky130_fd_sc_hd__inv_1") != 1 {
+        println("FAIL T21c ln4_inv_count (got "
+            + str(rtlil_count_cells_of_type(r_ln4.design.modules[0], "sky130_fd_sc_hd__inv_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ln4.design.modules[0], "$logic_not") != 0 {
+        println("FAIL T21d ln4_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_ln4.design.modules[0]) != 0 {
+        println("FAIL T21e ln4_dangling_pin"); fails = fails + 1
+    }
+
+    // T22 — $add lowering (1-bit, plain A/B/Y conns) → 1 fa_1 + 1
+    // $_const0_ (cin=0 tie). CLEAN-ROOM: rfc_006 §5 bug (a) iter 6 —
+    // the cin=0 tie is a `$_const0_` sigspec-constant driver (not a
+    // Liberty `conb_1`), so the BLIF emitter turns it into a `.names`
+    // constant-0 line that ABC accepts directly. One full-adder
+    // computes SUM=Y and COUT into a fresh internal wire so the
+    // no-dangling invariant on the FA pins holds (Weste-Eshraghian §11).
+    total = total + 1
+    let mut m_ad1 = rtlil_new_module("ad1")
+    m_ad1 = rtlil_module_add_wire(m_ad1, rtlil_wire("a", 1, 1, 1))
+    m_ad1 = rtlil_module_add_wire(m_ad1, rtlil_wire("b", 1, 1, 2))
+    m_ad1 = rtlil_module_add_wire(m_ad1, rtlil_wire("y", 1, 2, 3))
+    let mut c_ad1 = rtlil_cell("u_ad1", "$add", 0)
+    c_ad1 = rtlil_cell_connect(c_ad1, "A", "a")
+    c_ad1 = rtlil_cell_connect(c_ad1, "B", "b")
+    c_ad1 = rtlil_cell_connect(c_ad1, "Y", "y")
+    m_ad1 = rtlil_module_add_cell(m_ad1, c_ad1)
+    let mut d_ad1 = rtlil_new_design("test")
+    d_ad1 = rtlil_design_add(d_ad1, m_ad1)
+    let r_ad1 = pass_techmap_sky130(d_ad1)
+    if r_ad1.ok != 1 {
+        println("FAIL T22 ad1: " + r_ad1.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__fa_1") != 1 {
+        println("FAIL T22b ad1_fa_count (got "
+            + str(rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__fa_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    // iter 6: cin=0 tie is now a `$_const0_` sentinel (BLIF `.names`
+    // constant-0), NOT a Liberty `sky130_fd_sc_hd__conb_1` cell.
+    if rtlil_count_cells_of_type(r_ad1.design.modules[0], "$_const0_") != 1 {
+        println("FAIL T22c ad1_const0_count (got "
+            + str(rtlil_count_cells_of_type(r_ad1.design.modules[0], "$_const0_"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__conb_1") != 0 {
+        println("FAIL T22c2 ad1_no_conb (got "
+            + str(rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__conb_1"))
+            + ", want 0)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad1.design.modules[0], "$add") != 0 {
+        println("FAIL T22d ad1_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_ad1.design.modules[0]) != 0 {
+        println("FAIL T22e ad1_dangling_pin"); fails = fails + 1
+    }
+
+    // T23 — $add lowering 2-bit (bit-indexed A[0..1]/B[0..1]/Y[0..1]) →
+    // 2 fa_1 (ripple chain) + 1 $_const0_ (cin0 tie). iter 6: cin0 tie
+    // is a `$_const0_` sentinel (BLIF `.names`-constant), not a conb_1.
+    total = total + 1
+    let mut m_ad2 = rtlil_new_module("ad2")
+    m_ad2 = rtlil_module_add_wire(m_ad2, rtlil_wire("a0", 1, 1, 1))
+    m_ad2 = rtlil_module_add_wire(m_ad2, rtlil_wire("a1", 1, 1, 2))
+    m_ad2 = rtlil_module_add_wire(m_ad2, rtlil_wire("b0", 1, 1, 3))
+    m_ad2 = rtlil_module_add_wire(m_ad2, rtlil_wire("b1", 1, 1, 4))
+    m_ad2 = rtlil_module_add_wire(m_ad2, rtlil_wire("y0", 1, 2, 5))
+    m_ad2 = rtlil_module_add_wire(m_ad2, rtlil_wire("y1", 1, 2, 6))
+    let mut c_ad2 = rtlil_cell("u_ad2", "$add", 0)
+    c_ad2 = rtlil_cell_connect(c_ad2, "A[0]", "a0")
+    c_ad2 = rtlil_cell_connect(c_ad2, "A[1]", "a1")
+    c_ad2 = rtlil_cell_connect(c_ad2, "B[0]", "b0")
+    c_ad2 = rtlil_cell_connect(c_ad2, "B[1]", "b1")
+    c_ad2 = rtlil_cell_connect(c_ad2, "Y[0]", "y0")
+    c_ad2 = rtlil_cell_connect(c_ad2, "Y[1]", "y1")
+    m_ad2 = rtlil_module_add_cell(m_ad2, c_ad2)
+    let mut d_ad2 = rtlil_new_design("test")
+    d_ad2 = rtlil_design_add(d_ad2, m_ad2)
+    let r_ad2 = pass_techmap_sky130(d_ad2)
+    if r_ad2.ok != 1 {
+        println("FAIL T23 ad2: " + r_ad2.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__fa_1") != 2 {
+        println("FAIL T23b ad2_fa_count (got "
+            + str(rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__fa_1"))
+            + ", want 2)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad2.design.modules[0], "$_const0_") != 1 {
+        println("FAIL T23c ad2_const0_count (got "
+            + str(rtlil_count_cells_of_type(r_ad2.design.modules[0], "$_const0_"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__conb_1") != 0 {
+        println("FAIL T23c2 ad2_no_conb (got "
+            + str(rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__conb_1"))
+            + ", want 0)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad2.design.modules[0], "$add") != 0 {
+        println("FAIL T23d ad2_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_ad2.design.modules[0]) != 0 {
+        println("FAIL T23e ad2_dangling_pin"); fails = fails + 1
+    }
+
+    // T24 — $add lowering 4-bit → 4 fa_1 (linear ripple chain over four
+    // bits with carry-in tied to 0 via one $_const0_) + 1 $_const0_.
+    // iter 6: cin0 tie is a `$_const0_` sentinel (BLIF `.names`-constant),
+    // not a Liberty conb_1.
+    total = total + 1
+    let mut m_ad4 = rtlil_new_module("ad4")
+    let mut adwi = 0
+    while adwi < 4 {
+        m_ad4 = rtlil_module_add_wire(m_ad4,
+            rtlil_wire("a" + str(adwi), 1, 1, adwi + 1))
+        m_ad4 = rtlil_module_add_wire(m_ad4,
+            rtlil_wire("b" + str(adwi), 1, 1, adwi + 5))
+        m_ad4 = rtlil_module_add_wire(m_ad4,
+            rtlil_wire("y" + str(adwi), 1, 2, adwi + 9))
+        adwi = adwi + 1
+    }
+    let mut c_ad4 = rtlil_cell("u_ad4", "$add", 0)
+    let mut adwk = 0
+    while adwk < 4 {
+        c_ad4 = rtlil_cell_connect(c_ad4, "A[" + str(adwk) + "]", "a" + str(adwk))
+        c_ad4 = rtlil_cell_connect(c_ad4, "B[" + str(adwk) + "]", "b" + str(adwk))
+        c_ad4 = rtlil_cell_connect(c_ad4, "Y[" + str(adwk) + "]", "y" + str(adwk))
+        adwk = adwk + 1
+    }
+    m_ad4 = rtlil_module_add_cell(m_ad4, c_ad4)
+    let mut d_ad4 = rtlil_new_design("test")
+    d_ad4 = rtlil_design_add(d_ad4, m_ad4)
+    let r_ad4 = pass_techmap_sky130(d_ad4)
+    if r_ad4.ok != 1 {
+        println("FAIL T24 ad4: " + r_ad4.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__fa_1") != 4 {
+        println("FAIL T24b ad4_fa_count (got "
+            + str(rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__fa_1"))
+            + ", want 4)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad4.design.modules[0], "$_const0_") != 1 {
+        println("FAIL T24c ad4_const0_count (got "
+            + str(rtlil_count_cells_of_type(r_ad4.design.modules[0], "$_const0_"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__conb_1") != 0 {
+        println("FAIL T24c2 ad4_no_conb (got "
+            + str(rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__conb_1"))
+            + ", want 0)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad4.design.modules[0], "$add") != 0 {
+        println("FAIL T24d ad4_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_ad4.design.modules[0]) != 0 {
+        println("FAIL T24e ad4_dangling_pin"); fails = fails + 1
+    }
+
+    // T25 — $mod lowering 1-bit · const divisor 2 (k=1, pow-of-2) →
+    //   1× sky130_fd_sc_hd__and2_1 on bit 0, 0× high-bit zero,
+    //   1× $_const1_ (shared mask driver), 0× residual $mod.
+    //   (mod-to-mask identity: Y[0] = A[0] & 1.)
+    total = total + 1
+    let mut m_md1 = rtlil_new_module("md1")
+    m_md1 = rtlil_module_add_wire(m_md1, rtlil_wire("a0",        1, 1, 1))
+    m_md1 = rtlil_module_add_wire(m_md1, rtlil_wire("$const_2",  1, 0, 0))
+    m_md1 = rtlil_module_add_wire(m_md1, rtlil_wire("y0",        1, 2, 2))
+    let mut c_md1 = rtlil_cell("u_md1", "$mod", 0)
+    c_md1 = rtlil_cell_connect(c_md1, "A", "a0")
+    c_md1 = rtlil_cell_connect(c_md1, "B", "$const_2")
+    c_md1 = rtlil_cell_connect(c_md1, "Y", "y0")
+    m_md1 = rtlil_module_add_cell(m_md1, c_md1)
+    let mut d_md1 = rtlil_new_design("test")
+    d_md1 = rtlil_design_add(d_md1, m_md1)
+    let r_md1 = pass_techmap_sky130(d_md1)
+    if r_md1.ok != 1 {
+        println("FAIL T25 md1: " + r_md1.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md1.design.modules[0], "sky130_fd_sc_hd__and2_1") != 1 {
+        println("FAIL T25b md1_and2_count (got "
+            + str(rtlil_count_cells_of_type(r_md1.design.modules[0], "sky130_fd_sc_hd__and2_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md1.design.modules[0], "$_const1_") != 1 {
+        println("FAIL T25c md1_const1_count (got "
+            + str(rtlil_count_cells_of_type(r_md1.design.modules[0], "$_const1_"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md1.design.modules[0], "$_const0_") != 0 {
+        println("FAIL T25d md1_const0_count (got "
+            + str(rtlil_count_cells_of_type(r_md1.design.modules[0], "$_const0_"))
+            + ", want 0)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md1.design.modules[0], "$mod") != 0 {
+        println("FAIL T25e md1_residual"); fails = fails + 1
+    }
+
+    // T26 — $mod lowering 3-bit · const divisor 4 (k=2, pow-of-2) →
+    //   2× and2_1 on bits 0,1, 1× $_const0_ tie on bit 2, 1× $_const1_
+    //   shared mask driver, 0× residual $mod.
+    //   (mod-to-mask identity: Y[0..1] = A[0..1] & 1, Y[2] = 0.)
+    total = total + 1
+    let mut m_md3 = rtlil_new_module("md3")
+    let mut mdwi = 0
+    while mdwi < 3 {
+        m_md3 = rtlil_module_add_wire(m_md3,
+            rtlil_wire("a" + str(mdwi), 1, 1, mdwi + 1))
+        m_md3 = rtlil_module_add_wire(m_md3,
+            rtlil_wire("y" + str(mdwi), 1, 2, mdwi + 5))
+        mdwi = mdwi + 1
+    }
+    m_md3 = rtlil_module_add_wire(m_md3, rtlil_wire("$const_4", 1, 0, 0))
+    let mut c_md3 = rtlil_cell("u_md3", "$mod", 0)
+    let mut mdwk = 0
+    while mdwk < 3 {
+        c_md3 = rtlil_cell_connect(c_md3, "A[" + str(mdwk) + "]", "a" + str(mdwk))
+        c_md3 = rtlil_cell_connect(c_md3, "Y[" + str(mdwk) + "]", "y" + str(mdwk))
+        mdwk = mdwk + 1
+    }
+    c_md3 = rtlil_cell_connect(c_md3, "B[0]", "$const_4")
+    m_md3 = rtlil_module_add_cell(m_md3, c_md3)
+    let mut d_md3 = rtlil_new_design("test")
+    d_md3 = rtlil_design_add(d_md3, m_md3)
+    let r_md3 = pass_techmap_sky130(d_md3)
+    if r_md3.ok != 1 {
+        println("FAIL T26 md3: " + r_md3.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md3.design.modules[0], "sky130_fd_sc_hd__and2_1") != 2 {
+        println("FAIL T26b md3_and2_count (got "
+            + str(rtlil_count_cells_of_type(r_md3.design.modules[0], "sky130_fd_sc_hd__and2_1"))
+            + ", want 2)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md3.design.modules[0], "$_const0_") != 1 {
+        println("FAIL T26c md3_const0_count (got "
+            + str(rtlil_count_cells_of_type(r_md3.design.modules[0], "$_const0_"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md3.design.modules[0], "$_const1_") != 1 {
+        println("FAIL T26d md3_const1_count (got "
+            + str(rtlil_count_cells_of_type(r_md3.design.modules[0], "$_const1_"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md3.design.modules[0], "$mod") != 0 {
+        println("FAIL T26e md3_residual"); fails = fails + 1
+    }
+
+    // T27 — $mod lowering · 1-bit A · const divisor 3 (case B: non-
+    //   pow-of-2). rfc_006 §5 iter 9 — LUT lowering now SUCCEEDS at
+    //   the bounded envelope (W=1 ≤ 5). Truth table: A∈{0,1},
+    //   A%3 = A → minterm {1}, single positive literal → Y = A AND 1.
+    //   Expected: ok=1 ok_kind=2 (case-B-LUT), 1× and2_1, 1× $_const1_,
+    //   0× residual $mod.
+    total = total + 1
+    let mut m_md_b = rtlil_new_module("mdb")
+    m_md_b = rtlil_module_add_wire(m_md_b, rtlil_wire("a0",       1, 1, 1))
+    m_md_b = rtlil_module_add_wire(m_md_b, rtlil_wire("$const_3", 1, 0, 0))
+    m_md_b = rtlil_module_add_wire(m_md_b, rtlil_wire("y0",       1, 2, 2))
+    let mut c_md_b = rtlil_cell("u_mdb", "$mod", 0)
+    c_md_b = rtlil_cell_connect(c_md_b, "A", "a0")
+    c_md_b = rtlil_cell_connect(c_md_b, "B", "$const_3")
+    c_md_b = rtlil_cell_connect(c_md_b, "Y", "y0")
+    m_md_b = rtlil_module_add_cell(m_md_b, c_md_b)
+    // Direct unit-call on the lowering so we can assert ok_kind=2.
+    let r_md_b = _passes_lower_mod_cell(c_md_b)
+    if r_md_b.ok != 1 {
+        println("FAIL T27 mdb_should_lower (ok=" + str(r_md_b.ok) + ", msg=" + r_md_b.message + ")"); fails = fails + 1
+    }
+    if r_md_b.ok_kind != 2 {
+        println("FAIL T27b mdb_kind (got " + str(r_md_b.ok_kind) + ", want 2)"); fails = fails + 1
+    }
+
+    // T28 — $mod lowering 3-bit A · const divisor 5 (case B LUT).
+    //   Y = A % 5 for A in 0..7 → {0,1,2,3,4,0,1,2}. Y is 3-bit
+    //   ([0:2]); per-bit truth-columns:
+    //     Y[0]: {0,1,0,1,0,0,1,0} → minterms {1,3,6}
+    //     Y[1]: {0,0,1,1,0,0,0,1} → minterms {2,3,7}
+    //     Y[2]: {0,0,0,0,1,0,0,0} → minterms {4}
+    //   Each non-degenerate output bit emits one and2_1 chain per
+    //   minterm (W=3 lits each → 2 and2_1 per minterm) plus the
+    //   inv_1 cells for negated literals (deduped per (bit, src-bit))
+    //   and one or2_1 per minterm-pair (3 minterms → 2 OR per bit).
+    //   The exact cell-count is invariant-checked via the techmap
+    //   pass; we assert (a) the lowering succeeded, (b) no residual
+    //   $mod cell remains, (c) at least one $_const1_ driver, (d) no
+    //   $_const0_ tie (no all-zero output bit in this table — all
+    //   three Y bits have ≥ 1 minterm).
+    total = total + 1
+    let mut m_t28 = rtlil_new_module("md_t28")
+    let mut wi28 = 0
+    while wi28 < 3 {
+        m_t28 = rtlil_module_add_wire(m_t28,
+            rtlil_wire("a" + str(wi28), 1, 1, wi28 + 1))
+        m_t28 = rtlil_module_add_wire(m_t28,
+            rtlil_wire("y" + str(wi28), 1, 2, wi28 + 5))
+        wi28 = wi28 + 1
+    }
+    m_t28 = rtlil_module_add_wire(m_t28, rtlil_wire("$const_5", 1, 0, 0))
+    let mut c_t28 = rtlil_cell("u_t28", "$mod", 0)
+    let mut wj28 = 0
+    while wj28 < 3 {
+        c_t28 = rtlil_cell_connect(c_t28, "A[" + str(wj28) + "]", "a" + str(wj28))
+        c_t28 = rtlil_cell_connect(c_t28, "Y[" + str(wj28) + "]", "y" + str(wj28))
+        wj28 = wj28 + 1
+    }
+    c_t28 = rtlil_cell_connect(c_t28, "B[0]", "$const_5")
+    m_t28 = rtlil_module_add_cell(m_t28, c_t28)
+    let mut d_t28 = rtlil_new_design("test")
+    d_t28 = rtlil_design_add(d_t28, m_t28)
+    let r_t28 = pass_techmap_sky130(d_t28)
+    if r_t28.ok != 1 {
+        println("FAIL T28 lut3_5: " + r_t28.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t28.design.modules[0], "$mod") != 0 {
+        println("FAIL T28b lut3_5_residual"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t28.design.modules[0], "$_const1_") < 1 {
+        println("FAIL T28c lut3_5_no_const1"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t28.design.modules[0], "$_const0_") != 0 {
+        println("FAIL T28d lut3_5_unexpected_const0 (got "
+            + str(rtlil_count_cells_of_type(r_t28.design.modules[0], "$_const0_"))
+            + ", want 0)"); fails = fails + 1
+    }
+    // Direct unit-call to assert the kind tag.
+    let r_t28_u = _passes_lower_mod_cell(c_t28)
+    if r_t28_u.ok_kind != 2 {
+        println("FAIL T28e lut3_5_kind (got " + str(r_t28_u.ok_kind) + ", want 2)"); fails = fails + 1
+    }
+    // No-dangling check on the techmap'd module.
+    if rtlil_check_no_dangling(r_t28.design.modules[0]) != 0 {
+        println("FAIL T28f lut3_5_dangling_pin"); fails = fails + 1
+    }
+
+    // T29 — $mod lowering 3-bit A · const divisor 7 (case B LUT).
+    //   Y = A % 7 for A in 0..7 → {0,1,2,3,4,5,6,0}. Y is 3-bit;
+    //   per-bit truth-columns:
+    //     Y[0]: {0,1,0,1,0,1,0,0} → minterms {1,3,5}
+    //     Y[1]: {0,0,1,1,0,0,1,0} → minterms {2,3,6}
+    //     Y[2]: {0,0,0,0,1,1,1,0} → minterms {4,5,6}
+    //   Same invariants as T28 — no all-zero / all-one degenerate
+    //   bit, so no $_const0_ tie expected.
+    total = total + 1
+    let mut m_t29 = rtlil_new_module("md_t29")
+    let mut wi29 = 0
+    while wi29 < 3 {
+        m_t29 = rtlil_module_add_wire(m_t29,
+            rtlil_wire("a" + str(wi29), 1, 1, wi29 + 1))
+        m_t29 = rtlil_module_add_wire(m_t29,
+            rtlil_wire("y" + str(wi29), 1, 2, wi29 + 5))
+        wi29 = wi29 + 1
+    }
+    m_t29 = rtlil_module_add_wire(m_t29, rtlil_wire("$const_7", 1, 0, 0))
+    let mut c_t29 = rtlil_cell("u_t29", "$mod", 0)
+    let mut wj29 = 0
+    while wj29 < 3 {
+        c_t29 = rtlil_cell_connect(c_t29, "A[" + str(wj29) + "]", "a" + str(wj29))
+        c_t29 = rtlil_cell_connect(c_t29, "Y[" + str(wj29) + "]", "y" + str(wj29))
+        wj29 = wj29 + 1
+    }
+    c_t29 = rtlil_cell_connect(c_t29, "B[0]", "$const_7")
+    m_t29 = rtlil_module_add_cell(m_t29, c_t29)
+    let mut d_t29 = rtlil_new_design("test")
+    d_t29 = rtlil_design_add(d_t29, m_t29)
+    let r_t29 = pass_techmap_sky130(d_t29)
+    if r_t29.ok != 1 {
+        println("FAIL T29 lut3_7: " + r_t29.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t29.design.modules[0], "$mod") != 0 {
+        println("FAIL T29b lut3_7_residual"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t29.design.modules[0], "$_const1_") < 1 {
+        println("FAIL T29c lut3_7_no_const1"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_t29.design.modules[0]) != 0 {
+        println("FAIL T29d lut3_7_dangling_pin"); fails = fails + 1
+    }
+    let r_t29_u = _passes_lower_mod_cell(c_t29)
+    if r_t29_u.ok_kind != 2 {
+        println("FAIL T29e lut3_7_kind (got " + str(r_t29_u.ok_kind) + ", want 2)"); fails = fails + 1
+    }
+
+    // T30 — $mod lowering 6-bit A · const divisor 5 (case B LUT cap).
+    //   W=6 > 5 → LUT lowering rejects with the W-cap diagnostic.
+    //   Lowering returns ok=0 ok_kind=2 (case-B over-envelope);
+    //   the $mod cell stays in the design (not silently stripped).
+    //   Restoring-divider expansion is out of iter-9 scope.
+    total = total + 1
+    let mut m_t30 = rtlil_new_module("md_t30")
+    let mut wi30 = 0
+    while wi30 < 6 {
+        m_t30 = rtlil_module_add_wire(m_t30,
+            rtlil_wire("a" + str(wi30), 1, 1, wi30 + 1))
+        m_t30 = rtlil_module_add_wire(m_t30,
+            rtlil_wire("y" + str(wi30), 1, 2, wi30 + 11))
+        wi30 = wi30 + 1
+    }
+    m_t30 = rtlil_module_add_wire(m_t30, rtlil_wire("$const_5", 1, 0, 0))
+    let mut c_t30 = rtlil_cell("u_t30", "$mod", 0)
+    let mut wj30 = 0
+    while wj30 < 6 {
+        c_t30 = rtlil_cell_connect(c_t30, "A[" + str(wj30) + "]", "a" + str(wj30))
+        c_t30 = rtlil_cell_connect(c_t30, "Y[" + str(wj30) + "]", "y" + str(wj30))
+        wj30 = wj30 + 1
+    }
+    c_t30 = rtlil_cell_connect(c_t30, "B[0]", "$const_5")
+    m_t30 = rtlil_module_add_cell(m_t30, c_t30)
+    let r_t30 = _passes_lower_mod_cell(c_t30)
+    if r_t30.ok != 0 {
+        println("FAIL T30 lut6_5_should_fail (ok=" + str(r_t30.ok) + ")"); fails = fails + 1
+    }
+    if r_t30.ok_kind != 2 {
+        println("FAIL T30b lut6_5_kind (got " + str(r_t30.ok_kind) + ", want 2)"); fails = fails + 1
+    }
+    // Diagnostic message must mention the W-cap (iter-9 scope marker).
+    if r_t30.message.find("W=6") < 0 {
+        println("FAIL T30c lut6_5_msg_missing_width (got " + r_t30.message + ")"); fails = fails + 1
+    }
+
+    if fails > 0 {
+        println("passes selftest: " + str(total - fails) + "/" + str(total) + " — FAIL")
+        exit(1)
+    }
+    println("passes selftest: " + str(total) + "/" + str(total) + " PASS")
+}

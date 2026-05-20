@@ -1,0 +1,213 @@
+// stdlib/component/heat_conduction.hexa — Stage 2 hexa-native port
+// of the thermal portion of `component + verify` (D66 / κ-44 in
+// demiurge/design.md).
+//
+// SCOPE (g3 — honest, narrow):
+//   Closed-form 1D steady-state heat conduction through a uniform
+//   rectangular column with a uniform body heat source on the top
+//   Δh slab, adiabatic top + sides, and Dirichlet T = T_amb on the
+//   back face (z = 0). All quantities SI; lengths in METERS,
+//   temperatures in KELVIN, power in WATTS, thermal conductivity in
+//   W / (m·K).
+//
+//   The geometry is the SAME die proxy as the Python Stage-1
+//   substrate (`stdlib/component/gmsh_skfem.py`): a 10×10×2 mm
+//   silicon box with 5 W deposited uniformly through the top 1 mm
+//   slab and the back face held at 298.15 K (25 °C ambient). The
+//   point of THIS module is to give the closed-form analytic answer
+//   that the Stage-1 FEM substrate run can be compared against
+//   (Stage-3 parity).
+//
+// WHAT IS STAGE 2 HERE (clean-room re-derivation, no Python spawn):
+//   - 1D Fourier closed-form (energy balance + adiabatic boundary)
+//     for the column-direction temperature profile
+//   - Identical input constants to the Stage-1 substrate run
+//   - Output T_max (K), ΔT (K), T at the bottom of the heated slab
+//     (K) — three numbers a downstream consumer can witness
+//
+// WHAT IS NOT STAGE 2 (deferred to follow-up phases):
+//   - 3D FEM solve (mesh + sparse linear solver) — waits for a
+//     hexa-lang sparse-matrix + Krylov / direct solver stdlib
+//   - Structural FEM (linear elasticity) — 1D analytic cannot
+//     capture the back-face clamp's Poisson-induced edge stress
+//     concentration that produces the substrate run's σ_vM_max
+//     peak; structural parity needs the full 3D FEM port
+//   - Convection / radiation BCs (only Dirichlet + adiabatic here)
+//   - Anisotropy (Si is treated as isotropic — k_||c ≈ k_⊥c ≈ 148
+//     W/m·K at 300 K; off by ~1 % for high-symmetry crystals)
+//   - Mesh I/O — this module has no mesh; geometry is the column
+//     L × A
+//
+// CLEAN-ROOM re-derivation (no scikit-fem code touched):
+//   Steady state, 1D, k constant:    ∂/∂z (k ∂T/∂z) + q_v(z) = 0
+//
+//   With q_v(z) = q_top for z ∈ [L-Δh, L], else 0, and BCs
+//   T(0) = T_amb, ∂T/∂z(L) = 0:
+//
+//   Lower region [0, L-Δh] (no source):
+//     -k ∂T/∂z = -P/A  (heat flowing in -z, exiting at z=0)
+//      ⇒ ∂T/∂z = P / (k·A)         (positive — T rises with z)
+//      ⇒ T(z) = T_amb + (P / (k·A)) · z
+//      ⇒ T(L-Δh) = T_amb + (P / (k·A)) · (L - Δh)
+//
+//   Upper region [L-Δh, L] (with source q_top = P / (A·Δh)):
+//     -k ∂T/∂z (z) =  q_top · (z - L)   for z ∈ [L-Δh, L]
+//      ⇒ ∂T/∂z = -q_top · (z - L) / k = q_top · (L - z) / k
+//      ⇒ ΔT_within_slab = ∫_{L-Δh}^{L} ∂T/∂z dz =
+//                         q_top / (2k) · Δh²
+//
+//   Final:  T_max = T(L) = T_amb +
+//                    (P / (k·A)) · (L - Δh)         (lower-region rise)
+//                  + q_top / (2k) · Δh²              (within-slab rise)
+//
+// PARITY (Stage 3, against the Stage-1 FEM substrate run on the
+// same die proxy box at swift run DemiurgeCLI action verify
+// component on 2026-05-20):
+//
+//   3D FEM (scikit-fem 12.0.1, 686 nodes / 2232 tets):
+//       ΔT = 0.528 K, T_max = 298.68 K
+//   1D analytic (this module):
+//       ΔT = 0.507 K, T_max = 298.66 K
+//   Parity diff = (0.528 - 0.507) / 0.528 ≈ 4.0 %  <  5 % tolerance
+//   ⇒ Stage 3 thermal parity ✓ for the toy die proxy. The remaining
+//     4 % is 3D lateral spreading (the 3D FEM lets a bit of heat
+//     escape sideways through the adiabatic side faces' discrete
+//     mesh; analytic 1D pins it column-direction only).
+//
+// HONESTY (g3 — non-negotiable):
+//   This module's output is a *first hexa-native witness* of the
+//   thermal verdict. It is NOT an absorbed component verdict — the
+//   geometry is a TOY box, the material is textbook Si, and only
+//   thermal is covered. measurement_gate stays GATE_OPEN and
+//   absorbed = false ALWAYS until (real STEP + measured material +
+//   structural FEM + mesh convergence + 3rd-party signoff tool
+//   cross-check) all land. The Stage-3 parity ✓ above is *between
+//   the FEM substrate and this 1D analytic*, NOT between either of
+//   them and a measured component.
+
+
+// ─── helpers ──────────────────────────────────────────────────────
+
+fn fabs(x: float) -> float {
+    if x < 0.0 { return -x }
+    return x
+}
+
+
+// ─── closed-form 1D solver ────────────────────────────────────────
+
+// Lower-region temperature rise (z in [0, L-Δh], no source). The
+// uniform heat-flux column conducting P watts through cross-section
+// area A with conductivity k over height (L-Δh) gives this
+// (Fourier law, integrated once).
+fn lower_region_rise(
+    power_w:                   float,
+    cross_section_area_m2:     float,
+    k_w_per_mk:                float,
+    length_below_slab_m:       float
+) -> float {
+    return (power_w / (k_w_per_mk * cross_section_area_m2))
+           * length_below_slab_m
+}
+
+// Within-slab additional rise (z in [L-Δh, L], uniform source). The
+// adiabatic top BC + uniform q_v gives a parabolic profile; this is
+// the half-Δh² · q_v/k closed-form (derivation in the header above).
+fn within_slab_rise(
+    power_w:                   float,
+    cross_section_area_m2:     float,
+    heating_thickness_m:       float,
+    k_w_per_mk:                float
+) -> float {
+    // q_v = P / (A · Δh);  rise = q_v / (2k) · Δh²  = P·Δh / (2·k·A)
+    return (power_w * heating_thickness_m)
+           / (2.0 * k_w_per_mk * cross_section_area_m2)
+}
+
+// Full closed-form 1D ΔT_max for the die proxy column. Returns the
+// peak rise above ambient (K).
+fn delta_t_max_1d(
+    power_w:                   float,
+    cross_section_area_m2:     float,
+    length_z_m:                float,
+    heating_thickness_m:       float,
+    k_w_per_mk:                float
+) -> float {
+    let below = length_z_m - heating_thickness_m
+    let rise_lower = lower_region_rise(
+        power_w, cross_section_area_m2, k_w_per_mk, below)
+    let rise_slab = within_slab_rise(
+        power_w, cross_section_area_m2, heating_thickness_m, k_w_per_mk)
+    return rise_lower + rise_slab
+}
+
+
+// ─── self-test ────────────────────────────────────────────────────
+//
+// Runs the closed-form on the canonical die proxy box and checks
+// parity against the recorded Stage-1 FEM substrate run.
+
+fn main() {
+    // Canonical inputs — must match
+    // stdlib/component/gmsh_skfem.py::{GEOMETRY, MATERIAL, LOAD}.
+    let length_z      = 0.002         // 2 mm   (z, conduction direction)
+    let heating_h     = 0.001         // 1 mm   (top slab thickness)
+    let area          = 0.01 * 0.01   // 10×10 mm cross section
+    let power         = 5.0           // W   (die dissipation)
+    let k_si          = 148.0         // W/(m·K)  textbook Si at 300 K
+    let t_amb         = 298.15        // K   (25 °C ambient)
+
+    // Stage-1 FEM substrate reference values (measured on 2026-05-20
+    // via `swift run DemiurgeCLI action verify component`, scikit-fem
+    // 12.0.1 + gmsh 4.15.2, mesh 686 nodes / 2232 tets):
+    let fem_delta_t   = 0.528          // K
+    let fem_t_max     = 298.68         // K
+
+    // 1D closed-form
+    let delta_t = delta_t_max_1d(
+        power, area, length_z, heating_h, k_si)
+    let t_max = t_amb + delta_t
+    let t_slab_bottom = t_amb
+        + lower_region_rise(power, area, k_si, length_z - heating_h)
+
+    // parity vs FEM
+    let diff_delta_t = fabs(delta_t - fem_delta_t) / fem_delta_t
+    let diff_t_max   = fabs(t_max   - fem_t_max)   / fem_t_max
+
+    println("hexa-native 1D thermal — die_proxy_box_v1 (Stage 2)")
+    println("  inputs: P=5.0 W · L_z=2 mm · Δh=1 mm · A=10×10 mm · "
+            + "k=148 W/m·K · T_amb=298.15 K")
+    println("  ΔT_max          = " + str(delta_t)        + " K")
+    println("  T_max           = " + str(t_max)          + " K")
+    println("  T_at_slab_bot   = " + str(t_slab_bottom)  + " K")
+    println("---")
+    println("  FEM ΔT_max      = " + str(fem_delta_t)    + " K")
+    println("  FEM T_max       = " + str(fem_t_max)      + " K")
+    println("  parity diff ΔT  = " + str(diff_delta_t * 100.0)
+            + " %")
+    println("  parity diff Tm  = " + str(diff_t_max   * 100.0)
+            + " %")
+
+    let mut pass_count = 0
+    let mut total_count = 0
+
+    total_count = total_count + 1
+    if diff_delta_t < 0.05 {
+        pass_count = pass_count + 1
+    }
+
+    total_count = total_count + 1
+    if diff_t_max < 0.05 {
+        pass_count = pass_count + 1
+    }
+
+    if pass_count == total_count {
+        println("__COMPONENT_HEAT_1D_STAGE2__ PASS ("
+                + str(pass_count) + "/" + str(total_count)
+                + ") — Stage 3 thermal parity ✓ vs scikit-fem 12.0.1")
+    } else {
+        println("__COMPONENT_HEAT_1D_STAGE2__ FAIL ("
+                + str(pass_count) + "/" + str(total_count)
+                + ")")
+    }
+}

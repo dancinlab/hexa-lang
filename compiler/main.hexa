@@ -1,5 +1,16 @@
 // @allow-bare-exec-file
-// L2-migration scaffolding: external-tool exec() sites (as / ld / xcrun) remain by design (L1 keepers); intrinsified sites use compiler/intrinsics/intrinsics.hexa.
+// L1→L3 marker (RFC 063 § P3, 2026-05-20):
+//   - `as` fork site (line ~836): L1 → **L3 RETIRING** — the
+//     `--backend=native` path (default for arm64-apple-darwin obj emit)
+//     uses `compiler/emit/macho_arm64.hexa::pack_lir + serialize` and
+//     forks 0 external tools (F-P3-ZERO-EXTERN-OBJ measured 2026-05-20).
+//     `as` fork remains as the `--backend=system` opt-out path.
+//   - `ld` fork site (line ~885): L1 → L3-RETIRING — `tool/hexa_ld.hexa`
+//     replaces `ld` for static-link with synthetic stubs (F-P1-RUNEQ
+//     measured). Real-runtime link still uses `ld` (follow-up RFC).
+//   - `xcrun --show-sdk-path` (line ~882): L1 keeper — OS sysroot
+//     probe, no native equivalent.
+// Intrinsified sites use `compiler/intrinsics/intrinsics.hexa`.
 // HEXA Native Compiler — Entry Point (Phase A1+B1+B2+B3+B3+B4+lower+codegen+emit)
 //
 // Authoritative design: SPEC.yaml + RFC-018 §2 (pipeline order).
@@ -38,8 +49,16 @@ import "./codegen/arm64_darwin.hexa"
 import "./codegen/x86_64_linux.hexa"
 import "./codegen/thumbv7em_eabihf.hexa"
 import "./codegen/stream.hexa"
+// RFC 055 055-P3 — NVPTX (hexa-src -> PTX) codegen target. Sibling to the
+// CPU targets above; the dispatch branch routes --target=nvptx64-nvidia-
+// cuda-sm90/sm80 to codegen_nvptx_sm90/sm80 and emits .ptx text (no
+// assemble/link — ptxas is downstream, RFC 055 §6.2). The CPU dispatch
+// branches are byte-identically untouched — F-RFC055-CPU-CODEGEN-
+// UNTOUCHED holds by construction (new `else if`, no edit to existing).
+import "./codegen/nvptx_target.hexa"
 import "./check/target_gate.hexa"
 import "./emit/asm.hexa"
+import "./emit/macho_arm64.hexa"
 import "./diag/catalog.hexa"
 import "./diag/builder.hexa"
 import "./diag/render.hexa"
@@ -121,7 +140,7 @@ fn print_help() {
     println("")
     println("flags:")
     println("  -o OUT                 output binary path (default: a.out)")
-    println("  --target=TRIPLE        arm64-apple-darwin | x86_64-linux-gnu (default: detected)")
+    println("  --target=TRIPLE        arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf | nvptx64-nvidia-cuda-sm{80,90} (default: detected)")
     println("  --emit=KIND            asm | obj | exec   (default: exec)")
     println("  --error-format=MODE    pretty | short | json | github (default: pretty)")
     println("  --linker=KIND          hexa | system     (default: system; hexa_ld not yet landed)")
@@ -300,6 +319,18 @@ let mut target = detect_default_target()
 let mut emit_kind = "exec"
 let mut error_format = "pretty"
 let mut linker_kind = "system"
+// RFC 063 § P0+P3 (S7) — `--backend=native` selects the hexa-native
+// Mach-O arm64 object emitter (`compiler/emit/macho_arm64.hexa
+// ::pack_lir + serialize`) instead of writing `.s` text and forking
+// `as`. After P0 closure (F-P0-OBJEQ corpus 4/4 byte-eq, 2026-05-20)
+// the default flips to `native` for arm64-apple-darwin obj emit;
+// `--backend=system` retains the legacy path as opt-out.
+//
+// The flip is applied AFTER arg parsing (so `--backend=system` user
+// override wins) and is conditional on (target == arm64-apple-darwin
+// && emit_kind == "obj"). Other targets / emit modes keep `system`.
+let mut backend_kind = "system"
+let mut backend_kind_user_set = false
 let mut source_path = ""
 let mut keep_temp = false
 let mut verbose = false
@@ -380,6 +411,14 @@ while ai < len(user_argv) {
     } else if len(a) >= 9 && a.substring(0, 9) == "--linker=" {
         linker_kind = a.substring(9, len(a))
         ai = ai + 1
+    } else if len(a) >= 10 && a.substring(0, 10) == "--backend=" {
+        // S7 P0 — `--backend=native` routes `--emit=obj` through the
+        // hexa-side Mach-O writer. Any other value (incl. "system")
+        // keeps the legacy `as`/clang path. P3 (2026-05-20): explicit
+        // user-set flag wins over the default flip applied below.
+        backend_kind = a.substring(10, len(a))
+        backend_kind_user_set = true
+        ai = ai + 1
     } else if len(a) > 5 && a.substring(0, 6) == "--opt=" {
         opt_level = to_int(a.substring(6, len(a)))
         ai = ai + 1
@@ -421,6 +460,15 @@ while ai < len(user_argv) {
 
 if want_help { print_help(); exit(0) }
 if want_version { print_version(); exit(0) }
+
+// RFC 063 § P3 — flip the default. If user didn't explicitly set
+// `--backend=`, default to `native` for arm64-apple-darwin obj emit
+// (post-P0-closure 2026-05-20). Opt-out via `--backend=system`.
+if !backend_kind_user_set
+    && target == "arm64-apple-darwin"
+    && emit_kind == "obj" {
+    backend_kind = "native"
+}
 
 if len(source_path) == 0 {
     eprintln("hexa-compiler: missing SOURCE.hexa")
@@ -741,6 +789,12 @@ if stream_mode && target == "arm64-apple-darwin" {
 
     // Stage1 punch list C15: single if-expression binding for the
     // per-target codegen branch.
+    //
+    // RFC 055 055-P3 — NVPTX is the fourth target, sibling to the three
+    // CPU targets. The CPU `else if` branches are byte-identically
+    // untouched (F-RFC055-CPU-CODEGEN-UNTOUCHED). The NVPTX branch is
+    // added BEFORE the unsupported-target fallthrough so an explicit
+    // --target=nvptx64-* lands here, not in the error message.
     let lmodule = if target == "arm64-apple-darwin" {
         codegen_arm64_darwin(mmodule)
     } else if target == "x86_64-linux-gnu" {
@@ -750,9 +804,13 @@ if stream_mode && target == "arm64-apple-darwin" {
         // hexa-cern firmware boards). Soft-float fallback variant
         // (`-eabi`) is a tier_2 follow-up; v1 ships hf only.
         codegen_thumbv7em_eabihf(mmodule)
+    } else if target == NVPTX_TARGET_SM90 {
+        codegen_nvptx_sm90(mmodule)
+    } else if target == NVPTX_TARGET_SM80 {
+        codegen_nvptx_sm80(mmodule)
     } else {
         eprintln("hexa-compiler: unsupported --target=" + target)
-        eprintln("  supported: arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf")
+        eprintln("  supported: arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf | nvptx64-nvidia-cuda-sm90 | nvptx64-nvidia-cuda-sm80")
         exit(2)
     }
 
@@ -765,7 +823,34 @@ if stream_mode && target == "arm64-apple-darwin" {
     // arm64 stmt-loop O(N^2), the residual lives in lower_hir.
     cg_profile_mark("codegen")
 
-    asm_text = emit_asm(lmodule)
+    // ── Emit OBJ (native, RFC 063 § P0) ─────────────────────────
+    //
+    // When `--backend=native` and `target=arm64-apple-darwin`, write
+    // the Mach-O `.o` directly via `pack_lir` + `serialize`. Skips
+    // `.s` text + `as`/clang fork entirely. Branches early — out_path
+    // is final and we exit here.
+    if emit_kind == "obj" && backend_kind == "native" && target == "arm64-apple-darwin" {
+        let obj_data = pack_lir(lmodule)
+        let obj_bytes = serialize(obj_data)
+        write_bytes(out_path, obj_bytes)
+        if verbose {
+            eprintln("hexa-compiler: emitted Mach-O .o via native backend ("
+                     + to_string(len(obj_bytes)) + " bytes) to " + out_path)
+        }
+        exit(0)
+    }
+
+    // RFC 055 055-P3 — NVPTX uses the PTX text emit pass, not the CPU
+    // emit_asm renderer (PTX's operand surface differs from the CPU
+    // LOperand reg/imm/mem encoding — see nvptx_target.hexa §6.2 note).
+    // PTX is also the final artifact (ptxas downstream is external),
+    // so the assemble/link chain is bypassed below; write_file lands
+    // the .ptx and the driver exits.
+    if target == NVPTX_TARGET_SM90 || target == NVPTX_TARGET_SM80 {
+        asm_text = emit_ptx(lmodule)
+    } else {
+        asm_text = emit_asm(lmodule)
+    }
     // S1-step-1 — emit (LIR->asm text) phase boundary.
     cg_profile_mark("emit_asm")
 
@@ -776,6 +861,16 @@ if stream_mode && target == "arm64-apple-darwin" {
 }
 
 // ── Emit ASM ─────────────────────────────────────────────────
+
+// RFC 055 055-P3 — for the NVPTX target the PTX text IS the final
+// artifact (ptxas/cubin is downstream, external to hexa). There is no
+// system `as`/`ld` step; write the .ptx and exit, regardless of the
+// requested --emit kind. The CPU emit_kind == "asm" branch below is
+// reached only for CPU targets and is byte-identically untouched.
+if target == NVPTX_TARGET_SM90 || target == NVPTX_TARGET_SM80 {
+    write_file(out_path, asm_text)
+    exit(0)
+}
 
 if emit_kind == "asm" {
     write_file(out_path, asm_text)
@@ -804,7 +899,10 @@ write_file(asm_path, asm_text)
 // we surface verbatim.
 
 let as_cmd = "as " + asm_path + " -o " + obj_path + " 2>&1"
-// L1 keeper: external assembler invocation; replaced when self-as lands.
+// L1 → L3-RETIRING (RFC 063 § P3, 2026-05-20): replaced by
+// `compiler/emit/macho_arm64.hexa::pack_lir + serialize` when
+// `--backend=native` (default for arm64-apple-darwin obj emit).
+// This `as` fork runs only for `--backend=system` opt-out path.
 let as_out = exec(as_cmd)
 // TODO(L2): replace with file_exists intrinsic candidate.
 let as_status = exec("test -f " + obj_path + " && echo ok || echo fail").trim()

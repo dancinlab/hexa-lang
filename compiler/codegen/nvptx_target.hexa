@@ -85,6 +85,15 @@ import "./nvptx_ptx_ops.hexa"
 pub let NVPTX_TARGET_SM90: string = "nvptx64-nvidia-cuda-sm90"
 pub let NVPTX_TARGET_SM80: string = "nvptx64-nvidia-cuda-sm80"
 
+// RFC 055 055-P3c — kernel-marker prefix on LFunc.name. The 055-P3c
+// codegen partition routes `@gpu_kernel` MFuncs through
+// `_nvptx_lower_func` and tags the resulting LFunc.name with this
+// sentinel so the emit pass can render `.visible .entry <real_name>`
+// (the PTX form a host can `cuLaunchKernel`) instead of `.func`. The
+// prefix is unlikely to clash with any user-defined symbol; the emit
+// pass strips it before writing the kernel name to PTX.
+pub let NVPTX_KERNEL_PREFIX: string = "__nvptx_kernel__"
+
 // PTX `.target` directive arch string per variant.
 pub let NVPTX_ARCH_SM90: string = "sm_90"
 pub let NVPTX_ARCH_SM80: string = "sm_80"
@@ -233,6 +242,47 @@ fn _nvptx_operand_text(o: Operand) -> string {
     return "0d0000000000000000"
 }
 
+// _nvptx_operand_text_kinds — 055-P3b kind-aware operand renderer. When
+// the operand references a MIR Local, consult the classified PReg roster
+// to pick the right register name (`%fd`/`%r`/`%rd`/`%p`) instead of the
+// 055-P0 unconditional `%fd<id>`. Falls back to `%fd<id>` for operands
+// referencing Locals that don't appear in the roster (function params
+// + caller-side temporaries that weren't classified by an assignment).
+fn _nvptx_operand_text_kinds(o: Operand, kinds: [PReg]) -> string {
+    if o.kind == "local" {
+        return _nvptx_lookup_reg_for_local(kinds, o.local_id)
+    }
+    if o.kind == "const_float" {
+        return to_string(o.float_val)
+    }
+    if o.kind == "const_int" {
+        return to_string(o.int_val)
+    }
+    return "0d0000000000000000"
+}
+
+// _nvptx_lookup_reg_for_local — given a classified roster (one PReg per
+// assignment-target Local), return the PTX register name for `id`. Each
+// MIR Local maps to exactly one of `%fd<id>` / `%r<id>` / `%rd<id>` /
+// `%p<id>` — test the four candidate names against the roster. Falls
+// back to `%fd<id>` if the Local isn't classified (params + ext temps).
+fn _nvptx_lookup_reg_for_local(kinds: [PReg], id: i64) -> string {
+    let n_f64 = _nvptx_reg_f64(id)
+    let n_u32 = _nvptx_reg_u32(id)
+    let n_u64 = _nvptx_reg_u64(id)
+    let n_pred = _nvptx_reg_pred(id)
+    let mut i = 0
+    while i < len(kinds) {
+        let n = kinds[i].name
+        if n == n_f64 { return n_f64 }
+        if n == n_u32 { return n_u32 }
+        if n == n_u64 { return n_u64 }
+        if n == n_pred { return n_pred }
+        i = i + 1
+    }
+    return n_f64
+}
+
 // _nvptx_binop_mnemonic — map a MIR binop opcode to its PTX FP64
 // mnemonic. Covers the FP64 arithmetic subset (RFC 055 §6.6); a MIR
 // binop outside that subset returns "" so the caller emits an honest
@@ -241,6 +291,80 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
     if op == "add" || op == "+" { return PTX_OP_ADD_F64 }
     if op == "sub" || op == "-" { return PTX_OP_SUB_F64 }
     if op == "mul" || op == "*" { return PTX_OP_MUL_F64 }
+    return ""
+}
+
+// _nvptx_cmp_mnemonic — map a MIR comparison binop opcode to the PTX
+// `setp.<cond>.f64` mnemonic. PTX condition names match the MIR opcodes
+// 1:1 (`lt` / `le` / `gt` / `ge` / `eq` / `ne`); 055-P3b uses `.f64` as
+// the comparand type to match the FP64-first scope (gpu/SPEC.md §8) —
+// integer comparisons (`.s32`) come with the STMT_LOAD index-arithmetic
+// follow-on cycle. Returns "" for non-comparison ops.
+fn _nvptx_cmp_mnemonic(op: string) -> string {
+    if op == "lt" { return "setp.lt.f64" }
+    if op == "le" { return "setp.le.f64" }
+    if op == "gt" { return "setp.gt.f64" }
+    if op == "ge" { return "setp.ge.f64" }
+    if op == "eq" { return "setp.eq.f64" }
+    if op == "ne" { return "setp.ne.f64" }
+    return ""
+}
+
+// _nvptx_gpu_intrinsic_sreg — map a known gpu intrinsic STMT_CALL op
+// name to the PTX special-register reference its body lowers to (a
+// `mov.u32 %r<dst>, <sreg>.<axis>;`). gpu/SPEC.md §5 specifies the
+// per-axis names; the classifier already routes the call dst into a
+// `.reg .u32` bank, so the lowering only needs the `sreg.axis` string.
+// Returns "" for non-intrinsic call names.
+fn _nvptx_gpu_intrinsic_sreg(op: string) -> string {
+    if op == "gpu_thread_id_x" { return PTX_SREG_TID + ".x" }
+    if op == "gpu_thread_id_y" { return PTX_SREG_TID + ".y" }
+    if op == "gpu_thread_id_z" { return PTX_SREG_TID + ".z" }
+    if op == "gpu_block_id_x"  { return PTX_SREG_CTAID + ".x" }
+    if op == "gpu_block_id_y"  { return PTX_SREG_CTAID + ".y" }
+    if op == "gpu_block_id_z"  { return PTX_SREG_CTAID + ".z" }
+    if op == "gpu_block_dim_x" { return PTX_SREG_NTID + ".x" }
+    if op == "gpu_block_dim_y" { return PTX_SREG_NTID + ".y" }
+    if op == "gpu_block_dim_z" { return PTX_SREG_NTID + ".z" }
+    if op == "gpu_grid_dim_x"  { return PTX_SREG_NCTAID + ".x" }
+    if op == "gpu_grid_dim_y"  { return PTX_SREG_NCTAID + ".y" }
+    if op == "gpu_grid_dim_z"  { return PTX_SREG_NCTAID + ".z" }
+    return ""
+}
+
+// RFC 067 marker — Real WMMA emit. The mnemonic table below is the
+// SEAM that RFC 067 P3 re-keys by (op, role, dtype, layout) so non-
+// canonical families (bf16×bf16→f32, f16×f16→f16, tf32) become
+// reachable. See `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md`
+// §3 P3 for the re-key plan and §4 F3 (F-RFC067-DTYPE-FAMILY) for the
+// substring falsifier that closes that phase.
+//
+// _nvptx_wmma_mnemonic — map a `gpu_wmma_*` STMT_CALL op name to the
+// PTX WMMA mnemonic (RFC 055 §12 P4+ Tensor Core MMA). SCAFFOLD ONLY —
+// recognizing the op and resolving its mnemonic is all this returns.
+// The lowering site emits a `// RFC 055 §12 P4+ WMMA (scaffold ...` stub
+// comment, NOT a real PTX wmma instruction. A working emit needs (per
+// the deferred-work list below) fragment register-bank allocation, a
+// `.shared` staging declaration, per-fragment dtype tags, row/col
+// orientation handling, and tile-loop integration — none of which this
+// scaffold provides.
+//
+// First mnemonic table — the f16×f16→f32 family on the canonical
+// m16n16k16 tile geometry (PTX ISA §9.7.13.4). The mnemonics are
+// shaped so a later cycle can swap in per-fragment overrides without
+// touching the call-site lookup.
+//   gpu_wmma_load_a  — load matrix-A fragment from .shared, row-major, f16
+//   gpu_wmma_load_b  — load matrix-B fragment from .shared, col-major, f16
+//   gpu_wmma_mma     — multiply-accumulate, A.row × B.col → C.f32
+//   gpu_wmma_store_c — store matrix-D (= C accumulator) to .shared, row-major, f32
+//
+// Returns "" for non-WMMA ops so the call-site can fall through to
+// the next handler (or the unsupported-call stub).
+fn _nvptx_wmma_mnemonic(op: string) -> string {
+    if op == "gpu_wmma_load_a"  { return "wmma.load.a.sync.aligned.row.m16n16k16.f16.shared" }
+    if op == "gpu_wmma_load_b"  { return "wmma.load.b.sync.aligned.col.m16n16k16.f16.shared" }
+    if op == "gpu_wmma_mma"     { return "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32" }
+    if op == "gpu_wmma_store_c" { return "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared" }
     return ""
 }
 
@@ -258,42 +382,219 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
 // lowers to an honest stub LInstr (op = "//") so the emitted PTX text
 // stays readable and never silently drops a statement. Control flow
 // (`bra`, `setp`) and global/shared load/store are 055-P1+.
-fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt) -> [LInstr] {
+fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
     let mut out = buf
     if s.kind == STMT_ASSIGN {
         if len(s.args) >= 1 {
+            // 055-P3b kind-aware — destination reg picks .f64 / .u32 /
+            // .u64 / .pred from the classifier; operand text likewise
+            // resolves via `_nvptx_operand_text_kinds`.
             let mut a = []
-            a.push(_nvptx_op(_nvptx_reg_f64(s.dst.id)))
-            a.push(_nvptx_op(_nvptx_operand_text(s.args[0])))
+            a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
+            a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[0], kinds)))
             out.push(_nvptx_instr("mov.f64", a, "assign"))
         }
         return out
     }
+    // RFC 068 marker — Mixed-precision MIR body lowering. The STMT_BINOP
+    // body branch below emits only `.f64` mnemonics today (`add.f64`,
+    // `sub.f64`, `mul.f64`). RFC 068 P3 (`F-RFC068-BODY-MNEMONIC`)
+    // extends the dispatcher to read the dst Local's precision tag (or
+    // its classified RKIND) and emit `add.{f16,bf16,f32}` siblings
+    // alongside the existing `.f64` path. See
+    // `inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
+    // §3 P3 for the per-dtype mnemonic table.
     if s.kind == STMT_BINOP {
         if len(s.args) >= 2 {
+            // 055-P3b comparison-binop lowering — `setp.<cond>.f64 %p<dst>,
+            // <a>, <b>;` for lt/le/gt/ge/eq/ne. The destination is a
+            // predicate (.pred bank) per the classifier; PTX `setp.<cond>`
+            // takes the SAME mnemonic as the MIR opcode (1:1 mapping).
+            let cmp = _nvptx_cmp_mnemonic(s.op)
+            if len(cmp) > 0 {
+                let mut a = []
+                a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
+                a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[0], kinds)))
+                a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[1], kinds)))
+                out.push(_nvptx_instr(cmp, a, "cmp " + s.op))
+                return out
+            }
+            // 055-P0 arithmetic binop fallthrough.
             let mnem = _nvptx_binop_mnemonic(s.op)
             if len(mnem) > 0 {
                 let mut a = []
-                a.push(_nvptx_op(_nvptx_reg_f64(s.dst.id)))
-                a.push(_nvptx_op(_nvptx_operand_text(s.args[0])))
-                a.push(_nvptx_op(_nvptx_operand_text(s.args[1])))
+                a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
+                a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[0], kinds)))
+                a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[1], kinds)))
                 out.push(_nvptx_instr(mnem, a, "binop " + s.op))
             } else {
                 // RFC 055 055-P0 — binop outside the FP64 arithmetic
-                // subset (e.g. div / compare / bitwise). Honest stub.
-                out.push(_nvptx_instr("//", [], "RFC 055 055-P0 — unsupported binop: " + s.op))
+                // subset (e.g. div / bitwise). Honest stub.
+                out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported binop: " + s.op))
             }
         }
+        return out
+    }
+    // 055-P3b STMT_CALL — lower known gpu intrinsic names (gpu/SPEC.md
+    // §5) to a `mov.u32 %r<dst>, <sreg>.<axis>;` read. The classifier
+    // has already put the dst Local into the `.reg .u32` bank; this
+    // emits the body. Non-intrinsic STMT_CALLs remain a stub (a real
+    // call ABI is 055-P3c-territory).
+    if s.kind == STMT_CALL {
+        let sreg = _nvptx_gpu_intrinsic_sreg(s.op)
+        if len(sreg) > 0 {
+            let mut a = []
+            a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
+            a.push(_nvptx_op(sreg))
+            out.push(_nvptx_instr(PTX_OP_MOV_U32, a, s.op + "()"))
+            return out
+        }
+        // RFC 055 §12 P4+ — `gpu_barrier()` block-wide synchronization
+        // (gpu/SPEC.md §5). Lowers to `bar.sync 0;` — a PTX special
+        // instruction that synchronizes all threads in a block. The
+        // return type is void; no dst register written. Required by
+        // the tiled `@shared` GEMM variant (§6.6 named follow-on) for
+        // safe cross-thread reads of shared-memory writes.
+        if s.op == "gpu_barrier" {
+            let mut a = []
+            a.push(_nvptx_op("0"))
+            out.push(_nvptx_instr(PTX_OP_BAR_SYNC, a, "gpu_barrier()"))
+            return out
+        }
+        // RFC 055 §12 P4+ — `gpu_atomic_add(addr, v) -> f64` device-DRAM
+        // atomic add (gpu/SPEC.md §5). Lowers to `atom.add.f64 %fd<dst>,
+        // [%rd<addr>], %fd<v>;`. The dst Local holds the OLD value (PTX
+        // atom-instruction semantics) — classifier default F64 covers it.
+        // The address operand's source Local is propagated to U64 by
+        // `_nvptx_classify_locals` Pass 2 (mirrors STMT_LOAD/STORE).
+        // args[0] = address (Local in u64 bank); args[1] = value (f64).
+        if s.op == "gpu_atomic_add" {
+            if len(s.args) >= 2 {
+                let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+                let addr_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+                let val_reg = _nvptx_operand_text_kinds(s.args[1], kinds)
+                let mut a = []
+                a.push(_nvptx_op(dst_reg))
+                a.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
+                a.push(_nvptx_op(val_reg))
+                out.push(_nvptx_instr(PTX_OP_ATOM_ADD_F64, a, "gpu_atomic_add()"))
+            }
+            return out
+        }
+        // RFC 055 §12 P4+ — `gpu_warp_shuffle(v, lane) -> u32` warp-lane
+        // data exchange (gpu/SPEC.md §5). Lowers to
+        //   `shfl.sync.idx.b32 %r<dst>, %r<src>, %r<lane>, 0x1f, 0xffffffff;`
+        // — the `idx` mode selects the source lane by its index; `0x1f`
+        // c-operand encodes lane-mask=31 (full warp) + clamp-mode=idx;
+        // `0xffffffff` is the membermask covering all 32 warp lanes
+        // (matches CUDA's `__shfl_sync` __FULL_MASK). 32-bit baseline
+        // (`.b32`) per the §12 P4+ first slice — FP64 / 64-bit shuffle
+        // composes from two 32-bit halves in a later sub-phase. The dst
+        // Local is U32 (matching `_nvptx_classify_local_for_stmt` rule
+        // below); the value + lane operands render via hand-typed
+        // `_nvptx_reg_u32(<arg local_id>)` references — the PTX shfl.sync
+        // 32-bit form requires `.b32`-class registers for both inputs.
+        //   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync.
+        if s.op == "gpu_warp_shuffle" {
+            if len(s.args) >= 2 {
+                let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+                let src_reg = _nvptx_reg_u32(s.args[0].local_id)
+                let lane_reg = _nvptx_reg_u32(s.args[1].local_id)
+                let mut a = []
+                a.push(_nvptx_op(dst_reg))
+                a.push(_nvptx_op(src_reg))
+                a.push(_nvptx_op(lane_reg))
+                a.push(_nvptx_op("0x1f"))
+                a.push(_nvptx_op("0xffffffff"))
+                out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_IDX_B32, a,
+                    "gpu_warp_shuffle(v, lane)"))
+            }
+            return out
+        }
+        // RFC 055 §12 P4+ — Tensor Core MMA (Warp Matrix Multiply Accumulate)
+        // SCAFFOLD-ONLY recognition. `_nvptx_wmma_mnemonic` resolves the
+        // canonical PTX mnemonic for the `gpu_wmma_*` family; the lowering
+        // emits a `// RFC 055 §12 P4+ WMMA (scaffold ...` marker comment
+        // line carrying the mnemonic so a later cycle's PTX-emit code can
+        // grep for the seam. This is NOT a working WMMA emit — see
+        // `_nvptx_wmma_mnemonic`'s docstring for the deferred-work list
+        // (fragment regs · .shared decls · per-fragment dtypes · tile loop).
+        let wmma_mnem = _nvptx_wmma_mnemonic(s.op)
+        if len(wmma_mnem) > 0 {
+            out.push(_nvptx_instr("//", [],
+                "RFC 055 §12 P4+ WMMA (scaffold, not yet wired) — " + s.op + " -> " + wmma_mnem))
+            return out
+        }
+        out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported call: " + s.op))
         return out
     }
     if s.kind == STMT_RETURN {
         out.push(_nvptx_instr(PTX_OP_RET, [], "return"))
         return out
     }
-    // RFC 055 055-P0 — statement outside the straight-line FP64 slice.
-    // STMT_CALL / STMT_BR* / STMT_LOAD / STMT_STORE / STMT_THROW etc. are
-    // 055-P1+ (control flow, address-space load/store). Honest stub.
-    out.push(_nvptx_instr("//", [], "RFC 055 055-P0 — unsupported stmt kind: " + s.kind))
+    // 055-P3b STMT_BR (unconditional) — `bra $L_<target>;`. PTX has no
+    // fall-through convention; every block must end in a terminator,
+    // so the lowering emits an explicit `bra` even when the target
+    // follows in source order.
+    if s.kind == STMT_BR {
+        let mut a = []
+        a.push(_nvptx_op("$L_" + to_string(s.target_block)))
+        out.push(_nvptx_instr(PTX_OP_BRA, a, "br -> $L_" + to_string(s.target_block)))
+        return out
+    }
+    // 055-P3b STMT_BR_COND — `@<pred> bra $L_<true>; bra $L_<false>;`.
+    // The predicate operand (args[0]) is a Local in the `.pred` bank
+    // (classified by its defining comparison binop). PTX guards the
+    // first branch with the predicate; the second is an unconditional
+    // fall-through to the else target.
+    if s.kind == STMT_BR_COND {
+        if len(s.args) >= 1 {
+            let pred_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+            let mut a1 = []
+            a1.push(_nvptx_op("$L_" + to_string(s.target_block)))
+            out.push(_nvptx_instr("@" + pred_reg + " " + PTX_OP_BRA, a1,
+                "br_cond true -> $L_" + to_string(s.target_block)))
+            let mut a2 = []
+            a2.push(_nvptx_op("$L_" + to_string(s.target_block_else)))
+            out.push(_nvptx_instr(PTX_OP_BRA, a2,
+                "br_cond false -> $L_" + to_string(s.target_block_else)))
+        }
+        return out
+    }
+    // 055-P3b STMT_LOAD — `ld.global.f64 %fd<dst>, [%rd<addr>];`. The
+    // 055-P3b first slice for memory ops keeps the value type FP64
+    // (§8 FP64-first scope) and the address state-space `.global` (the
+    // farr arg is device-resident). The classifier's Pass 2 has already
+    // ensured the address operand's source Local is in the `.u64` bank.
+    // Address = args[0] (a Local operand); dst = the loaded value.
+    if s.kind == STMT_LOAD {
+        if len(s.args) >= 1 {
+            let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+            let addr_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+            let mut a = []
+            a.push(_nvptx_op(dst_reg))
+            a.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
+            out.push(_nvptx_instr(PTX_OP_LD_GLOBAL_F64, a, "load f64"))
+        }
+        return out
+    }
+    // 055-P3b STMT_STORE — `st.global.f64 [%rd<addr>], %fd<value>;`.
+    // Symmetric to STMT_LOAD. Address = args[0]; value = args[1].
+    if s.kind == STMT_STORE {
+        if len(s.args) >= 2 {
+            let addr_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+            let val_reg = _nvptx_operand_text_kinds(s.args[1], kinds)
+            let mut a = []
+            a.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
+            a.push(_nvptx_op(val_reg))
+            out.push(_nvptx_instr(PTX_OP_ST_GLOBAL_F64, a, "store f64"))
+        }
+        return out
+    }
+    // RFC 055 055-P0 - statement outside the FP64 slice + the 055-P3b
+    // primitives above. STMT_THROW / STMT_TRY_* / STMT_ARENA_* /
+    // STMT_CALL_INDIRECT etc. are later 055-P4+ cycles. Honest stub.
+    out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported stmt kind: " + s.kind))
     return out
 }
 
@@ -327,6 +628,331 @@ fn _nvptx_collect_f64_regs(mfn: MFunc) -> [i64] {
     return ids
 }
 
+// ── RFC 055 055-P3b — per-Local PTX register-kind classification ──────
+//
+// The 055-P0 generic lowering assumed every assignment-target MIR Local
+// is FP64 (`%fd<id>` in a `.reg .f64` bank). That's correct for the
+// straight-line FP64 arithmetic subset (vec-add of three [f64] arrays,
+// axpb) but breaks the moment a kernel touches the rest of the slice
+// gpu/SPEC.md §3 allows: an i64/i32 index, a bool predicate, a global-
+// memory address pointer. Each needs a different PTX register class:
+//
+//   .f64  %fd<id>   FP64 values + arithmetic
+//   .u32  %r<id>    32-bit integer indices + sreg reads (PTX %tid.x etc.)
+//   .u64  %rd<id>   64-bit addresses + address-arithmetic temporaries
+//   .pred %p<id>    Boolean predicates (comparison results, branch guards)
+//
+// The classification is INFERRED from each Local's defining statement —
+// no MIR type-id table read is required (the type table is intern'd
+// elsewhere and not visible to this file). Each rule is a single named
+// case in `_nvptx_classify_local_for_stmt`; unknown defs default to FP64
+// so the existing 055-P0 axpb / 055-P3b STMT_BR smoke fixtures continue
+// to classify identically (regression-safe).
+
+pub let NVPTX_RKIND_F64: string = "fpr"     // %fd<id>   .reg .f64
+pub let NVPTX_RKIND_U32: string = "gpr32"   // %r<id>    .reg .u32
+pub let NVPTX_RKIND_U64: string = "gpr64"   // %rd<id>   .reg .u64
+pub let NVPTX_RKIND_PRED: string = "pred"   // %p<id>    .reg .pred
+
+// RFC 067 P1 + P2 LANDED — Fragment-as-tile-vector + `.shared` staging.
+// P1 (`F-RFC067-FRAG-WIDTH`): `NVPTX_RKIND_FRAG` emits 8 PTX registers
+// (`.reg .b32 %fra<id>_e0` .. `_e7`) per the canonical sm_80 m16n16k16
+// layout (256 elements ÷ 32-thread warp = 8 32-bit-packed regs/thread).
+// P2 (`F-RFC067-SHARED-DECL`): `_emit_ptx_func` emits one
+// `.shared .align 16 .b8 _hexa_wmma_stage_<fn>[2048];` declaration in
+// the function header when any callee_saved entry has kind=FRAG.
+// 2048 B = one 16×16 f16 tile (512 B) × 4 staging slots (A, B,
+// ping-pong double-buffer). Per-fragment role + dtype tags (A/B vs
+// C/D, f16 vs f32 vs bf16) are P3. See
+// `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md` §3 P1/P2.
+//
+// RFC 055 §12 P4+ — Tensor Core MMA (Warp Matrix Multiply Accumulate)
+// SCAFFOLD ONLY. The "frag" kind marks a Local whose value is a WMMA
+// fragment (a 16×16 tile distributed across a warp), not a scalar
+// register. A full implementation will:
+//   - allocate a fragment as a vector of N PTX regs (N depends on .f16
+//     vs .f32 vs .bf16 element type — see _nvptx_kind_to_ptx_ty caveat)
+//   - declare the `.shared` staging area for load/store
+//   - thread per-fragment data-type tags through the lowering
+// The current scaffold only RECOGNIZES the kind tag so future cycles
+// don't have to retrofit a new constant; the kind currently maps to
+// `.f16` as a placeholder (most common fragment element type for the
+// f16×f16→f32 MMA family). NOT a working register allocation.
+pub let NVPTX_RKIND_FRAG: string = "frag"   // wmma fragment (scaffold — see RFC 055 §12 P4+)
+
+// RFC 055 §12 P4+ — mixed-precision PTX type SCAFFOLD. New register
+// banks for F16 / BF16 / F32 sit alongside the F64/U32/U64/PRED set.
+// SCAFFOLD-ONLY: only the classifier + .reg-declaration side is wired;
+// the MIR layer that PRODUCES the matching binop opcodes (add_f16 etc.)
+// is a future cycle. Until that lands, these banks are reachable only
+// through synthetic test fixtures that hand-build the new opcodes.
+pub let NVPTX_RKIND_F16: string = "fpr16"     // %fh<id>   .reg .f16
+pub let NVPTX_RKIND_BF16: string = "fpr16bf"  // %fb<id>   .reg .bf16
+pub let NVPTX_RKIND_F32: string = "fpr32"     // %fs<id>   .reg .f32
+
+// RFC 067 P1 LANDED — Fragment-as-tile-vector. WMMA fragments distribute
+// 256 elements across a 32-thread warp as 8 32-bit-packed values per
+// thread (m16n16k16 canonical layout). Both f16 A/B fragments (8×
+// .f16x2 i.e. 16-bit pairs packed into .b32) and f32 C/D fragments (8×
+// .f32) carry the same fragment-width of 8 PTX regs per thread.
+// SCAFFOLD-PHASE: the width is hard-coded for the f16×f16→f32 family;
+// P3 introduces per-fragment dtype tags + role (A/B/C/D) so the width
+// can vary. See `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md`
+// §3 P1 / §4 F1 (`F-RFC067-FRAG-WIDTH`).
+pub let _nvptx_frag_width: i64 = 8
+
+// _nvptx_reg_f16x2 — PTX virtual register name for one element of an
+// f16-packed WMMA fragment. The `_e<n>` suffix distinguishes the
+// fragment elements (e.g., `%fra3_e0` .. `%fra3_e7` for Local id=3).
+fn _nvptx_reg_frag(id: i64) -> string {
+    return "%fra" + to_string(id)
+}
+
+// _nvptx_reg_name_for — the PTX virtual-register name for (kind, id).
+// Dispatches to the 055-P0/P1 helpers (`_nvptx_reg_{f64,u32,u64,pred}`)
+// plus the §12 P4+ mixed-precision SCAFFOLD helpers
+// (`_nvptx_reg_{f16,bf16,f32}`) and the §12 P4+ WMMA fragment helper
+// (`_nvptx_reg_frag` — base name only; the `_emit_ptx_func` decl loop
+// appends `_e<i>` per fragment element). Per RFC 067 P1
+// (`F-RFC067-FRAG-WIDTH`), a FRAG kind reg is a vector of
+// `_nvptx_frag_width` PTX regs, not a single scalar.
+fn _nvptx_reg_name_for(kind: string, id: i64) -> string {
+    if kind == NVPTX_RKIND_U32 { return _nvptx_reg_u32(id) }
+    if kind == NVPTX_RKIND_U64 { return _nvptx_reg_u64(id) }
+    if kind == NVPTX_RKIND_PRED { return _nvptx_reg_pred(id) }
+    // RFC 055 §12 P4+ — mixed-precision banks (scaffold).
+    if kind == NVPTX_RKIND_F16 { return _nvptx_reg_f16(id) }
+    if kind == NVPTX_RKIND_BF16 { return _nvptx_reg_bf16(id) }
+    if kind == NVPTX_RKIND_F32 { return _nvptx_reg_f32(id) }
+    // RFC 067 P1 — WMMA fragment base name. Elements are
+    // `<base>_e<i>` for i in 0.._nvptx_frag_width.
+    if kind == NVPTX_RKIND_FRAG { return _nvptx_reg_frag(id) }
+    return _nvptx_reg_f64(id)   // F64 default
+}
+
+// _nvptx_kind_to_ptx_ty — `.reg .<ty>` directive type tag for a kind.
+fn _nvptx_kind_to_ptx_ty(kind: string) -> string {
+    if kind == NVPTX_RKIND_U32 { return ".u32" }
+    if kind == NVPTX_RKIND_U64 { return ".u64" }
+    if kind == NVPTX_RKIND_PRED { return ".pred" }
+    // RFC 055 §12 P4+ WMMA fragment scaffold — `.f16` is the placeholder
+    // element type (the f16×f16→f32 family is the most common first
+    // target). Precise per-fragment dtypes (`.f16` for A/B operands vs
+    // `.f32` for the C accumulator vs `.bf16` for the bf16 variant) is
+    // a follow-on cycle — NOT implemented here.
+    if kind == NVPTX_RKIND_FRAG { return ".f16" }
+    // RFC 055 §12 P4+ — mixed-precision type-tags (scaffold).
+    if kind == NVPTX_RKIND_F16 { return ".f16" }
+    if kind == NVPTX_RKIND_BF16 { return ".bf16" }
+    if kind == NVPTX_RKIND_F32 { return ".f32" }
+    return ".f64"
+}
+
+// _nvptx_classify_local_for_stmt — infer the PTX register kind from the
+// role of a Local's defining statement. The rules cover the gpu/SPEC.md
+// §3 allowlist + the §5 thread-index intrinsics; any unrecognised def
+// falls through to FP64 so the existing 055-P0 fixtures classify
+// identically. Order: predicate-producing binops first, then arithmetic
+// binops (FP64), then known gpu intrinsic calls (u32), then default.
+fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
+    // RFC 068 P1 LANDED — explicit precision tag wins. When the dst Local
+    // carries an explicit precision annotation (e.g. ".f16" from a future
+    // HIR `@f16 a + b` source-level annotation, or a synthetic test
+    // fixture), it overrides the op-name rules below. Empty string (the
+    // default) means "no explicit annotation" and we fall through to the
+    // op-name / intrinsic rules. See
+    // `inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
+    // §3 P1.
+    if s.dst.precision == ".f16" { return NVPTX_RKIND_F16 }
+    if s.dst.precision == ".bf16" { return NVPTX_RKIND_BF16 }
+    if s.dst.precision == ".f32" { return NVPTX_RKIND_F32 }
+    // (no explicit .f64 case — that's the default fallback at the end.)
+
+    if s.kind == STMT_BINOP {
+        // Comparison binops (gpu/SPEC.md §4 — allowed inside @gpu_*)
+        // produce a Boolean predicate; PTX represents these as a `.pred`
+        // register written by `setp.<cond>.<ty>`. Every comparison binop
+        // the MIR layer emits maps to a predicate dst here.
+        if s.op == "lt" { return NVPTX_RKIND_PRED }
+        if s.op == "le" { return NVPTX_RKIND_PRED }
+        if s.op == "gt" { return NVPTX_RKIND_PRED }
+        if s.op == "ge" { return NVPTX_RKIND_PRED }
+        if s.op == "eq" { return NVPTX_RKIND_PRED }
+        if s.op == "ne" { return NVPTX_RKIND_PRED }
+        // RFC 055 §12 P4+ — mixed-precision binop opcodes (SCAFFOLD).
+        // These opcodes are ASPIRATIONAL: the lowering layer that
+        // produces them (hir_to_mir.hexa with per-Local precision tags)
+        // is a future cycle. The scaffold proves the classifier +
+        // reg-decl pipeline can route mixed-precision Locals to the
+        // right reg bank once the upstream MIR emits these opcodes.
+        if s.op == "add_f16" { return NVPTX_RKIND_F16 }
+        if s.op == "add_bf16" { return NVPTX_RKIND_BF16 }
+        if s.op == "add_f32" { return NVPTX_RKIND_F32 }
+        // Arithmetic binops — the 055-P0 FP64 subset (default).
+        return NVPTX_RKIND_F64
+    }
+    if s.kind == STMT_CALL {
+        // gpu/SPEC.md §5 — thread-hierarchy + sync intrinsics. The
+        // thread-index reads (`gpu_thread_id_*` / `gpu_block_id_*` /
+        // `gpu_block_dim_*` / `gpu_grid_dim_*`) lower to a `mov.u32`
+        // from a PTX special register; the result is a 32-bit unsigned
+        // integer Local — `.reg .u32`. `gpu_barrier()` returns nothing
+        // (void), so it doesn't appear here as an assignment-target.
+        if s.op == "gpu_thread_id_x" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_thread_id_y" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_thread_id_z" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_block_id_x" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_block_id_y" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_block_id_z" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_block_dim_x" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_block_dim_y" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_block_dim_z" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_grid_dim_x" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_grid_dim_y" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_grid_dim_z" { return NVPTX_RKIND_U32 }
+        // RFC 055 §12 P4+ — gpu_warp_shuffle returns a 32-bit register.
+        if s.op == "gpu_warp_shuffle" { return NVPTX_RKIND_U32 }
+        // RFC 067 P1 — WMMA fragment-producing intrinsics. `gpu_wmma_load_a`,
+        // `gpu_wmma_load_b`, and `gpu_wmma_mma` all RETURN a WMMA fragment
+        // (16×16 tile distributed across the warp); the dst Local for
+        // each is classified as FRAG so the reg-decl loop emits the
+        // 8-element `.reg .b32 %fra<id>_e<n>` vector form. `gpu_wmma_store_c`
+        // is store-only (void dst) so it doesn't appear in this classifier
+        // path. Body lowering for these calls (the actual `wmma.load.*`
+        // PTX instructions) lands in a follow-on P-phase per RFC 067 §3 —
+        // P1 only wires the reg-bank side.
+        if s.op == "gpu_wmma_load_a" { return NVPTX_RKIND_FRAG }
+        if s.op == "gpu_wmma_load_b" { return NVPTX_RKIND_FRAG }
+        if s.op == "gpu_wmma_mma"    { return NVPTX_RKIND_FRAG }
+        return NVPTX_RKIND_F64
+    }
+    // STMT_ASSIGN default + everything else default — FP64. A real type
+    // propagation pass would forward the source operand's kind; the
+    // current rules cover the gpu/SPEC.md §5 / §6.6 first-cut surface.
+    return NVPTX_RKIND_F64
+}
+
+// _nvptx_classify_locals — produce the per-function PReg roster the
+// emit pass needs to declare. Two passes:
+//   Pass 1 — walk every assignment-target Local; infer kind via
+//            `_nvptx_classify_local_for_stmt`; emit one PReg per Local.
+//   Pass 2 — walk every STMT_LOAD / STMT_STORE; for each Local USED as
+//            an address operand, ensure it's in the roster as U64
+//            (.global / .shared loads address through `.u64` registers).
+//            Locals that were already classified by Pass 1 keep their
+//            kind (a Local can't be both an arith result and an address
+//            in well-formed MIR); previously-unclassified Locals
+//            (function params, ext temps used directly as addresses)
+//            get a new U64 PReg row.
+//
+// This is the 055-P3b replacement for `_nvptx_collect_f64_regs`: the
+// older collector returns [i64] (just ids — every reg becomes .f64);
+// this returns [PReg] (kind + name preserved). _nvptx_collect_f64_regs
+// stays in place for callers that genuinely want the FP64-only roster.
+fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
+    let mut regs = []
+    let mut seen_ids = []
+    // Pass 1 — defining-stmt classification.
+    let mut bi = 0
+    while bi < len(mfn.blocks) {
+        let blk = mfn.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            let s = blk.stmts[si]
+            if s.kind == STMT_ASSIGN || s.kind == STMT_BINOP || s.kind == STMT_CALL {
+                // Void-return guard: STMT_CALL with `dst._miss_local()`
+                // (id < 0) — e.g. `gpu_barrier()` — produces no value
+                // and must not get a spurious `.reg` declaration. Skip.
+                if s.dst.id >= 0 {
+                    let mut dup = false
+                    let mut k = 0
+                    while k < len(seen_ids) {
+                        if seen_ids[k] == s.dst.id { dup = true }
+                        k = k + 1
+                    }
+                    if !dup {
+                        let kind = _nvptx_classify_local_for_stmt(s)
+                        regs.push(PReg { name: _nvptx_reg_name_for(kind, s.dst.id), kind: kind })
+                        seen_ids.push(s.dst.id)
+                    }
+                }
+            }
+            // Pass 1.5 — STMT_LOAD's dst (the loaded VALUE) is classified
+            // here too. The 055-P3b LOAD/STORE slice keeps the value to
+            // FP64 (matches the §8 FP64-first scope); a future cycle
+            // will propagate the loaded type from a real type table.
+            if s.kind == STMT_LOAD {
+                let mut dup = false
+                let mut k = 0
+                while k < len(seen_ids) {
+                    if seen_ids[k] == s.dst.id { dup = true }
+                    k = k + 1
+                }
+                if !dup {
+                    regs.push(PReg { name: _nvptx_reg_f64(s.dst.id), kind: NVPTX_RKIND_F64 })
+                    seen_ids.push(s.dst.id)
+                }
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    // Pass 2 — STMT_LOAD/STORE address-operand U64 propagation. Walks
+    // the same blocks; whenever a STMT_LOAD or STMT_STORE references a
+    // Local as its address operand AND that Local isn't already in the
+    // roster, add it as U64. The arg-index convention matches the
+    // lowering: STMT_LOAD address = args[0], STMT_STORE address = args[0].
+    let mut bj = 0
+    while bj < len(mfn.blocks) {
+        let blk = mfn.blocks[bj]
+        let mut sj = 0
+        while sj < len(blk.stmts) {
+            let s = blk.stmts[sj]
+            if s.kind == STMT_LOAD || s.kind == STMT_STORE {
+                if len(s.args) >= 1 {
+                    let addr = s.args[0]
+                    if addr.kind == "local" {
+                        let mut dup = false
+                        let mut k = 0
+                        while k < len(seen_ids) {
+                            if seen_ids[k] == addr.local_id { dup = true }
+                            k = k + 1
+                        }
+                        if !dup {
+                            regs.push(PReg { name: _nvptx_reg_u64(addr.local_id), kind: NVPTX_RKIND_U64 })
+                            seen_ids.push(addr.local_id)
+                        }
+                    }
+                }
+            }
+            // RFC 055 §12 P4+ — STMT_CALL `gpu_atomic_add(addr, v)` also
+            // takes args[0] as an address operand (mirrors STMT_LOAD/STORE).
+            // Propagate its source Local into the U64 bank so the emitted
+            // PTX renders `[%rd<id>]` for the address.
+            if s.kind == STMT_CALL && s.op == "gpu_atomic_add" {
+                if len(s.args) >= 1 {
+                    let addr = s.args[0]
+                    if addr.kind == "local" {
+                        let mut dup = false
+                        let mut k = 0
+                        while k < len(seen_ids) {
+                            if seen_ids[k] == addr.local_id { dup = true }
+                            k = k + 1
+                        }
+                        if !dup {
+                            regs.push(PReg { name: _nvptx_reg_u64(addr.local_id), kind: NVPTX_RKIND_U64 })
+                            seen_ids.push(addr.local_id)
+                        }
+                    }
+                }
+            }
+            sj = sj + 1
+        }
+        bj = bj + 1
+    }
+    return regs
+}
+
 // ── Codegen helpers (055-P0 — real MIR -> PTX-LIR lowering) ───
 
 // _nvptx_lower_func — lower one MIR function to a PTX-flavored LFunc.
@@ -345,6 +971,13 @@ fn _nvptx_collect_f64_regs(mfn: MFunc) -> [i64] {
 // (one PReg per FP64 virtual register) so the emit pass can declare
 // them — a structural reuse of the LFunc field, not a CPU regalloc.
 fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
+    // 055-P3b — classify every assignment-target Local ONCE before the
+    // lowering walk, then thread the kinds roster through every
+    // `_nvptx_lower_stmt` call. The same roster doubles as callee_saved
+    // so the emit pass declares each register with the matching
+    // `.reg .<ty>` directive. Computing it once avoids re-walking the
+    // MIR per-stmt.
+    let regs = _nvptx_classify_locals(mfn)
     let mut instrs = []
     let mut bi = 0
     while bi < len(mfn.blocks) {
@@ -354,26 +987,52 @@ fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
         instrs.push(_nvptx_instr("label", [_nvptx_op("$L_" + to_string(blk.id))], ""))
         let mut si = 0
         while si < len(blk.stmts) {
-            instrs = _nvptx_lower_stmt(instrs, blk.stmts[si])
+            instrs = _nvptx_lower_stmt(instrs, blk.stmts[si], regs)
             si = si + 1
         }
         bi = bi + 1
     }
-    // Record the FP64 virtual registers as PReg rows in callee_saved so
-    // the emit pass can declare them with `.reg .f64`.
-    let reg_ids = _nvptx_collect_f64_regs(mfn)
-    let mut regs = []
+    // 055-P3c — `.visible .entry` kernel wrapping. PTX distinguishes
+    // launchable kernels (`.visible .entry`) from device-only helpers
+    // (`.func`); the host can only `cuLaunchKernel` a `.visible .entry`.
+    // Encode the gpu_kind in LFunc.name via a sentinel prefix
+    // (NVPTX_KERNEL_PREFIX); _emit_ptx_func strips the prefix and emits
+    // the matching directive. This avoids adding a kind field to LFunc
+    // (which would break every CPU codegen's LFunc constructor).
+    let lf_name = if mfn.gpu_kind == GPU_KIND_KERNEL {
+        NVPTX_KERNEL_PREFIX + mfn.name
+    } else {
+        mfn.name
+    }
+    // 055-P3c (param-bank sub-slice) — for a KERNEL, materialise the
+    // `.param .u64 <name>_param_<i>;` declarations from MFunc.params by
+    // PREPENDING one PReg per param to callee_saved. PReg.kind == "param"
+    // signals the emit pass to render this PReg as a PTX param-list
+    // entry; the reg-bank PRegs follow with their existing kinds. All
+    // params are `.u64` for the §8 FP64-first scope — matches the
+    // hand-emit P1/P2 (`a: [f64]` farr bases + `n: i64` extents).
+    let mut full_regs = []
+    if mfn.gpu_kind == GPU_KIND_KERNEL {
+        let mut pi = 0
+        while pi < len(mfn.params) {
+            full_regs.push(PReg {
+                name: mfn.name + "_param_" + to_string(pi),
+                kind: "param"
+            })
+            pi = pi + 1
+        }
+    }
     let mut ri = 0
-    while ri < len(reg_ids) {
-        regs.push(PReg { name: _nvptx_reg_f64(reg_ids[ri]), kind: "fpr" })
+    while ri < len(regs) {
+        full_regs.push(regs[ri])
         ri = ri + 1
     }
     return LFunc {
-        name: mfn.name,
+        name: lf_name,
         target: target,
         instrs: instrs,
         frame_size: 0,
-        callee_saved: regs,
+        callee_saved: full_regs,
         def_line: mfn.def_line
     }
 }
@@ -389,9 +1048,19 @@ fn _nvptx_codegen(module: MModule, target: string) -> LModule {
     let mut funcs = []
     let mut i = 0
     while i < len(module.funcs) {
-        // RFC 055 055-P0 — partition by @gpu_* attribute is a 055-P1
-        // step. Today every fn is lowered as a device `.func`.
-        funcs.push(_nvptx_lower_func(module.funcs[i], target))
+        // RFC 055 055-P3c — `@gpu_kernel` / `@gpu_device` partition.
+        // Only MFuncs marked GPU_KIND_KERNEL or GPU_KIND_DEVICE reach the
+        // NVPTX output; GPU_KIND_CPU funcs are filtered out so a mixed
+        // host+device source file (`@gpu_kernel fn vadd(...) ; fn main()
+        // {...}`) produces a PTX module with ONLY the GPU functions
+        // (gpu/SPEC.md §2 partition). Lowering each as a device `.func`
+        // remains the 055-P0 emit form; `.visible .entry` kernel
+        // wrapping is the next 055-P3c sub-slice (gpu_launch lowering +
+        // cubin embed).
+        let mf = module.funcs[i]
+        if mf.gpu_kind != GPU_KIND_CPU {
+            funcs.push(_nvptx_lower_func(mf, target))
+        }
         i = i + 1
     }
     return LModule {
@@ -474,7 +1143,7 @@ fn _nvptx_arch_for_target(target: string) -> string {
 fn _emit_ptx_header(target: string) -> string {
     let arch = _nvptx_arch_for_target(target)
     let mut s = ""
-    s = s + "// RFC 055 055-P0 — hexa-native NVPTX emit · target=" + target + "\n"
+    s = s + "// RFC 055 055-P0 - hexa-native NVPTX emit | target=" + target + "\n"
     s = s + PTX_VERSION_DIRECTIVE + " " + _NVPTX_PTX_VERSION + "\n"
     s = s + PTX_TARGET_DIRECTIVE + " " + arch + "\n"
     // PTX `.address_size 64` — nvptx64 is a 64-bit address ABI.
@@ -517,24 +1186,106 @@ fn _emit_ptx_instr(instr: LInstr) -> string {
 //
 // RFC 055 055-P0 — every fn is emitted as a device `.func` (the
 // `.visible .entry` kernel form + `.param` bank is 055-P1; see header).
-// The `.reg .f64` declarations come from LFunc.callee_saved (the FP64
-// virtual registers `_nvptx_lower_func` recorded there).
+// 055-P3b — `.reg` declarations are kind-aware: the LFunc.callee_saved
+// rows carry one PReg per assignment-target Local + the PTX register
+// class (`fpr` / `gpr32` / `gpr64` / `pred`) inferred by
+// `_nvptx_classify_locals`. The 055-P0 axpb fixture still emits
+// `.reg .f64` for every Local (FP64 arithmetic only); a kernel that
+// touches indexes / predicates now declares the matching bank.
 fn _emit_ptx_func(f: LFunc) -> string {
     let mut parts: [string] = []
-    // 055-P0 — device-fn form. `.visible .entry` kernel form is 055-P1.
-    parts.push(PTX_DIRECTIVE_FUNC + " " + f.name + "\n")
+    // 055-P3c — kernel-marker prefix + param-bank materialisation.
+    //   1. If LFunc.name starts with NVPTX_KERNEL_PREFIX, this is a
+    //      KERNEL — emit `.visible .entry <real_name> ( <params> )`.
+    //   2. Otherwise — emit `.func <name>` (DEVICE form, 055-P0).
+    //   3. The param list comes from callee_saved entries whose
+    //      kind == "param" (prepended by `_nvptx_lower_func` for KERNEL).
+    //   4. The `.reg .<ty>` declarations come from the remaining
+    //      callee_saved entries (the 055-P3b reg-bank kinds).
+    let kp_len = len(NVPTX_KERNEL_PREFIX)
+    let is_kernel = len(f.name) > kp_len && f.name.substring(0, kp_len) == NVPTX_KERNEL_PREFIX
+    if is_kernel {
+        let real_name = f.name.substring(kp_len, len(f.name))
+        // Collect the `.param .u64 <p>` entries from callee_saved.
+        let mut param_names = []
+        let mut pi = 0
+        while pi < len(f.callee_saved) {
+            if f.callee_saved[pi].kind == "param" {
+                param_names.push(f.callee_saved[pi].name)
+            }
+            pi = pi + 1
+        }
+        parts.push(PTX_DIRECTIVE_ENTRY + " " + real_name + " (")
+        if len(param_names) > 0 {
+            parts.push("\n")
+            let mut pj = 0
+            while pj < len(param_names) {
+                parts.push("    .param .u64 " + param_names[pj])
+                if pj < len(param_names) - 1 { parts.push(",") }
+                parts.push("\n")
+                pj = pj + 1
+            }
+        }
+        parts.push(")\n")
+    } else {
+        // 055-P0 — device-fn form for non-kernel funcs.
+        parts.push(PTX_DIRECTIVE_FUNC + " " + f.name + "\n")
+    }
     parts.push("{\n")
-    // `.reg .f64` declarations — PTX requires every virtual register be
-    // declared before use. One declaration per FP64 register the body
-    // computes into.
+    // RFC 067 P2 LANDED — `.shared` WMMA staging-area declaration.
+    // When any callee_saved entry has kind=FRAG (i.e., this function
+    // uses WMMA fragments), emit one `.shared .align 16 .b8 …[2048];`
+    // declaration in the function header. 2048 bytes = one 16×16 f16
+    // tile (16×16×2 = 512 B) × 4 staging slots (A, B, ping-pong double-
+    // buffer). The slot name carries the function name as a suffix so
+    // multiple WMMA kernels in the same PTX module don't collide.
+    // Per RFC 067 §3 P2 / §4 F2 (`F-RFC067-SHARED-DECL`).
+    let mut has_frag = false
+    let mut fi_scan = 0
+    while fi_scan < len(f.callee_saved) {
+        if f.callee_saved[fi_scan].kind == NVPTX_RKIND_FRAG { has_frag = true }
+        fi_scan = fi_scan + 1
+    }
+    if has_frag {
+        // Slot-name uses the LFunc.name (kernel-prefix stripped if present)
+        // to give per-kernel uniqueness without a module-global counter.
+        let mut slot_base = f.name
+        let kp_len2 = len(NVPTX_KERNEL_PREFIX)
+        if len(slot_base) > kp_len2 && slot_base.substring(0, kp_len2) == NVPTX_KERNEL_PREFIX {
+            slot_base = slot_base.substring(kp_len2, len(slot_base))
+        }
+        parts.push("    .shared .align 16 .b8 _hexa_wmma_stage_" + slot_base + "[2048];\n")
+    }
+    // `.reg .<ty>` declarations, one per Local — PTX requires every
+    // virtual register be declared before use. The `<ty>` comes from
+    // the PReg.kind set by 055-P3b classification (`.f64` is the default
+    // / 055-P0 backward-compat fallback). Skip kind == "param" entries
+    // — those rendered as the kernel param list above, not as `.reg`s.
     let mut ri = 0
     while ri < len(f.callee_saved) {
-        parts.push("    .reg .f64 " + f.callee_saved[ri].name + ";\n")
+        let r = f.callee_saved[ri]
+        if r.kind == NVPTX_RKIND_FRAG {
+            // RFC 067 P1 — Fragment-as-tile-vector. Each WMMA fragment
+            // distributes 256 elements over a 32-thread warp as 8 32-bit-
+            // packed values per thread (canonical sm_80 m16n16k16 layout
+            // for f16×f16→f32). We emit `.reg .b32` storage with an
+            // `_e<i>` suffix per element so each fragment's elements have
+            // unique PTX register names. P3 introduces per-fragment role
+            // tags so f16 A/B fragments emit `.b32` (packed f16x2) and
+            // f32 C/D fragments emit `.f32` directly — for now everything
+            // uses `.b32` as the storage container (raw 32-bit bits, with
+            // packing semantics implied by the wmma instruction's dtype
+            // qualifier rather than the .reg declaration).
+            let mut fei = 0
+            while fei < _nvptx_frag_width {
+                parts.push("    .reg .b32 " + r.name + "_e" + to_string(fei) + ";\n")
+                fei = fei + 1
+            }
+        } else if r.kind != "param" {
+            parts.push("    .reg " + _nvptx_kind_to_ptx_ty(r.kind) + " " + r.name + ";\n")
+        }
         ri = ri + 1
     }
-    // RFC 055 055-P0 — `.reg .s32` / `.reg .pred` / `.param` declarations
-    // for index registers, predicates and kernel parameters are 055-P1
-    // (they pair with control flow + the launch ABI).
     let mut i = 0
     while i < len(f.instrs) {
         parts.push(_emit_ptx_instr(f.instrs[i]) + "\n")
@@ -626,6 +1377,34 @@ fn _nvptx_reg_u32(id: i64) -> string {
 // _nvptx_reg_pred — PTX predicate register name.
 fn _nvptx_reg_pred(id: i64) -> string {
     return "%p" + to_string(id)
+}
+
+// RFC 055 §12 P4+ — mixed-precision reg-name helpers (SCAFFOLD).
+//
+// These mirror `_nvptx_reg_f64` / `_nvptx_reg_u32` etc., one helper per
+// new register bank. The prefix choice (`%fh` / `%fb` / `%fs`) keeps
+// each bank disambiguated from the existing F64 / U32 / U64 / PRED
+// banks; PTX itself does not care about the textual prefix, but the
+// classifier roster ↔ lookup machinery relies on prefix uniqueness so
+// `_nvptx_lookup_reg_for_local` can tell the banks apart for one Local
+// id (a future cycle that extends the lookup is on the roadmap; the
+// scaffold here only requires the .reg-decl side to emit cleanly).
+
+// _nvptx_reg_f16 — PTX virtual register for an FP16 value.
+fn _nvptx_reg_f16(id: i64) -> string {
+    return "%fh" + to_string(id)
+}
+
+// _nvptx_reg_bf16 — PTX virtual register for a BF16 value. Note the
+// separate `%fb` prefix (not `%fh`): PTX distinguishes `.f16` and
+// `.bf16` as different storage types even though both are 16-bit.
+fn _nvptx_reg_bf16(id: i64) -> string {
+    return "%fb" + to_string(id)
+}
+
+// _nvptx_reg_f32 — PTX virtual register for an FP32 value.
+fn _nvptx_reg_f32(id: i64) -> string {
+    return "%fs" + to_string(id)
 }
 
 // _nvptx_param_ref — `[<kernel>_param_<i>]` operand for `ld.param.*`.
@@ -956,7 +1735,7 @@ fn _nvptx_build_vec_add_kernel(target: string) -> NvptxKernelFn {
     let mut tr_args = []
     tr_args.push(_nvptx_op(_nvptx_reg_u32(4)))
     tr_args.push(_nvptx_op(_nvptx_reg_u64(3)))
-    buf.push(_nvptx_instr("cvt.u32.u64", tr_args, "n (i64 → u32 truncate for cmp)"))
+    buf.push(_nvptx_instr("cvt.u32.u64", tr_args, "n (i64 -> u32 truncate for cmp)"))
     buf = _nvptx_p1_setp_lt_s32(buf, _nvptx_reg_pred(0), _nvptx_reg_u32(3), _nvptx_reg_u32(4),
         "p0 = (gid < n)")
     buf = _nvptx_p1_bra_if_not(buf, _nvptx_reg_pred(0), "$L_END", "skip OOB lane")
@@ -965,7 +1744,7 @@ fn _nvptx_build_vec_add_kernel(target: string) -> NvptxKernelFn {
     // add, store C. PTX byte addressing uses .u64 — widen gid → u64,
     // scale by sizeof(f64) = 8, add to each base.
     buf.push(_nvptx_instr("label", [_nvptx_op("$L_BODY")], ""))
-    buf = _nvptx_p1_cvt_u64_u32(buf, _nvptx_reg_u64(4), _nvptx_reg_u32(3), "widen gid → u64")
+    buf = _nvptx_p1_cvt_u64_u32(buf, _nvptx_reg_u64(4), _nvptx_reg_u32(3), "widen gid -> u64")
     buf = _nvptx_p1_mul_lo_u64(buf,  _nvptx_reg_u64(5), _nvptx_reg_u64(4), "8", "byte offset = gid * 8")
     buf = _nvptx_p1_add_u64(buf,     _nvptx_reg_u64(6), _nvptx_reg_u64(0), _nvptx_reg_u64(5), "&a[gid]")
     buf = _nvptx_p1_add_u64(buf,     _nvptx_reg_u64(7), _nvptx_reg_u64(1), _nvptx_reg_u64(5), "&b[gid]")
@@ -1014,6 +1793,295 @@ fn _nvptx_build_vec_add_kernel(target: string) -> NvptxKernelFn {
 // pipes to `ptxas` for F-RFC055-PTX-EMIT.
 pub fn emit_ptx_vec_add_module(target: string) -> string {
     let kf = _nvptx_build_vec_add_kernel(target)
+    let mut parts: [string] = []
+    parts.push(_emit_ptx_header(target))
+    parts.push("\n")
+    parts.push(emit_ptx_kernel(kf))
+    return parts.join("")
+}
+
+// ════════════════════════════════════════════════════════════════════
+// RFC 055 055-P2 — FP64 GEMM `@gpu_kernel` (naive slice)
+// ════════════════════════════════════════════════════════════════════
+//
+// 055-P2 extends the 055-P1 vec-add emitter to a naive FP64 GEMM — the
+// RFC 055 §12 P2 deliverable, gated by F-RFC055-GEMM-FEASIBLE (a
+// CORRECTNESS gate; per RFC 055 §7, GEMM perf vs cuBLAS is an honest
+// measurement, NOT a gate). The kernel:
+//
+//   @gpu_kernel
+//   fn gemm(a: [f64], b: [f64], c: [f64], m: i64, n: i64, k: i64) {
+//       let row = gpu_block_id_y() * gpu_block_dim_y() + gpu_thread_id_y()
+//       let col = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+//       if row < m && col < n {
+//           let mut acc = 0.0
+//           let mut kk = 0
+//           while kk < k {
+//               acc = acc + a[row*k + kk] * b[kk*n + col]   // → fma.rn.f64
+//               kk = kk + 1
+//           }
+//           c[row*n + col] = acc
+//       }
+//   }
+//
+// One thread computes one C element — A is row-major m×k, B is k×n,
+// C is m×n. The accumulate `acc + a*b` lowers to a single `fma.rn.f64`
+// (round-to-nearest fused multiply-add). This is the **naive** GEMM;
+// the **tiled** `@shared` + `gpu_barrier()` variant (gpu/SPEC.md §6)
+// is the named 055-P2-tiled follow-on — naive satisfies the correctness
+// gate at the lowest fire risk (no shared-memory tiling-boundary bug
+// can cost a GPU fire), and RFC 055 §12 scopes P2 as "naive/tiled".
+//
+// New vs vec-add: a real PTX loop (`$L_LOOP` back-edge via unconditional
+// `bra`, `setp.lt.s32` loop guard), `fma.rn.f64`, `mul.lo.s32` index
+// arithmetic, the `.y`-axis thread-index sregs, and an FP64 zero-init
+// `mov.f64`. F-RFC055-CPU-CODEGEN-UNTOUCHED holds by construction — this
+// section only ADDS functions; no CPU codegen path is touched.
+
+// ── 055-P2 helper LInstr emitters ────────────────────────────────────
+//
+// Same pattern as the `_nvptx_p1_*` helpers — thin wrappers over the
+// 055-P0 `_nvptx_instr` / `_nvptx_op` primitives. The 055-P2 lowering
+// pass (055-P3 productization) will produce identical LInstr records.
+
+// mov.u32 %r<dst>, <sreg>.<axis>;   (thread-hierarchy sreg read, any axis)
+fn _nvptx_p2_mov_sreg(buf: [LInstr], dst_reg: string, sreg: string, axis: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(sreg + "." + axis))
+    out.push(_nvptx_instr(PTX_OP_MOV_U32, a, note))
+    return out
+}
+
+// mov.u32 %r<dst>, <imm>;   (integer-immediate move — e.g. loop init kk=0)
+fn _nvptx_p2_mov_u32_imm(buf: [LInstr], dst_reg: string, imm_text: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(imm_text))
+    out.push(_nvptx_instr(PTX_OP_MOV_U32, a, note))
+    return out
+}
+
+// mov.f64 %fd<dst>, <imm>;   (FP64-immediate move — accumulator zero-init.
+// PTX FP64 literals are the `0d`-prefixed 16-hex-digit IEEE-754 form;
+// 0d0000000000000000 is exactly +0.0.)
+fn _nvptx_p2_mov_f64_imm(buf: [LInstr], dst_reg: string, imm_text: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(imm_text))
+    out.push(_nvptx_instr("mov.f64", a, note))
+    return out
+}
+
+// cvt.u32.u64 %r<dst>, %rd<src>;   (truncate a 64-bit param to 32-bit
+// for index/compare arithmetic — the 055-P1 slice guarantees m/n/k fit
+// in s32, gpu/SPEC.md §8 FP64-first scope.)
+fn _nvptx_p2_cvt_u32_u64(buf: [LInstr], dst_reg: string, src_reg: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(src_reg))
+    out.push(_nvptx_instr("cvt.u32.u64", a, note))
+    return out
+}
+
+// mul.lo.s32 %r<dst>, %r<a>, %r<b>;   (32-bit index multiply, low half)
+fn _nvptx_p2_mul_lo_s32(buf: [LInstr], dst_reg: string, a_reg: string, b_reg: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(a_reg))
+    a.push(_nvptx_op(b_reg))
+    out.push(_nvptx_instr(PTX_OP_MUL_LO_S32, a, note))
+    return out
+}
+
+// add.s32 %r<dst>, %r<a>, <reg-or-imm>;   (32-bit index add — `b_text`
+// may be a register or an immediate, e.g. the `kk = kk + 1` increment)
+fn _nvptx_p2_add_s32(buf: [LInstr], dst_reg: string, a_reg: string, b_text: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(dst_reg))
+    a.push(_nvptx_op(a_reg))
+    a.push(_nvptx_op(b_text))
+    out.push(_nvptx_instr(PTX_OP_ADD_S32, a, note))
+    return out
+}
+
+// fma.rn.f64 %fd<dst>, %fd<a>, %fd<b>, %fd<c>;   ( dst = a*b + c,
+// round-to-nearest — the GEMM inner-product accumulate step )
+fn _nvptx_p2_fma_rn_f64(buf: [LInstr], dst_reg: string, a_reg: string, b_reg: string, c_reg: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut args = []
+    args.push(_nvptx_op(dst_reg))
+    args.push(_nvptx_op(a_reg))
+    args.push(_nvptx_op(b_reg))
+    args.push(_nvptx_op(c_reg))
+    out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, args, note))
+    return out
+}
+
+// bra <label>;   (unconditional branch — the loop back-edge)
+fn _nvptx_p2_bra(buf: [LInstr], label: string, note: string) -> [LInstr] {
+    let mut out = buf
+    let mut a = []
+    a.push(_nvptx_op(label))
+    out.push(_nvptx_instr(PTX_OP_BRA, a, note))
+    return out
+}
+
+// ── Reference naive GEMM kernel build + emit (055-P2 keystone) ────────
+//
+// _nvptx_build_gemm_kernel — hand-construct the PTX-flavored LFunc for
+// the naive FP64 GEMM kernel (see the section header for the hexa
+// source it mirrors). This is the same shape the 055-P3 MIR lowering
+// will produce; 055-P2 hand-emits it so the dispatch script can fire it
+// end-to-end before the `@gpu_kernel` attribute-parse + MIR partition
+// land.
+//
+// Register convention:
+//   %r0  %ctaid.y   %r1  %ntid.y   %r2  %tid.y
+//   %r3  row = ctaid.y*ntid.y + tid.y
+//   %r4  %ctaid.x   %r5  %ntid.x   %r6  %tid.x
+//   %r7  col = ctaid.x*ntid.x + tid.x
+//   %r8  m   %r9  n   %r10 k   (params truncated u64→u32)
+//   %r11 kk (loop counter)     %r12 row*k (A row base)
+//   %r13 row*k+kk   %r14 kk*n   %r15 kk*n+col
+//   %r16 row*n      %r17 row*n+col
+//   %rd0 a base  %rd1 b base  %rd2 c base  %rd3 m  %rd4 n  %rd5 k
+//   %rd6..8   A element address compose   %rd9..11  B element address
+//   %rd12..14 C element address compose
+//   %p0 row<m   %p1 col<n   %p2 kk<k
+//   %fd0 acc    %fd1 a[*]    %fd2 b[*]
+fn _nvptx_build_gemm_kernel(target: string) -> NvptxKernelFn {
+    let mut buf = []
+
+    // Block 0 — entry. Load .param.u64 bases + the m/n/k extents.
+    buf.push(_nvptx_instr("label", [_nvptx_op("$L_0")], ""))
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(0), "gemm", 0, "load a base ptr (row-major mxk)")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(1), "gemm", 1, "load b base ptr (row-major kxn)")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(2), "gemm", 2, "load c base ptr (row-major mxn)")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(3), "gemm", 3, "load m (rows of A/C)")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(4), "gemm", 4, "load n (cols of B/C)")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(5), "gemm", 5, "load k (contraction dim)")
+
+    // row = ctaid.y*ntid.y + tid.y   (gpu/SPEC.md §5 — y-axis sregs)
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(0), PTX_SREG_CTAID, "y", "gpu_block_id_y()")
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(1), PTX_SREG_NTID,  "y", "gpu_block_dim_y()")
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(2), PTX_SREG_TID,   "y", "gpu_thread_id_y()")
+    buf = _nvptx_p1_mad_lo_s32(buf, _nvptx_reg_u32(3),
+        _nvptx_reg_u32(0), _nvptx_reg_u32(1), _nvptx_reg_u32(2),
+        "row = block_id_y * block_dim_y + thread_id_y")
+
+    // col = ctaid.x*ntid.x + tid.x   (gpu/SPEC.md §5 — x-axis sregs)
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(4), PTX_SREG_CTAID, "x", "gpu_block_id_x()")
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(5), PTX_SREG_NTID,  "x", "gpu_block_dim_x()")
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(6), PTX_SREG_TID,   "x", "gpu_thread_id_x()")
+    buf = _nvptx_p1_mad_lo_s32(buf, _nvptx_reg_u32(7),
+        _nvptx_reg_u32(4), _nvptx_reg_u32(5), _nvptx_reg_u32(6),
+        "col = block_id_x * block_dim_x + thread_id_x")
+
+    // Truncate m/n/k to s32 for the index + compare arithmetic
+    // (gpu/SPEC.md §8 — the FP64-first slice guarantees they fit s32).
+    buf = _nvptx_p2_cvt_u32_u64(buf, _nvptx_reg_u32(8),  _nvptx_reg_u64(3), "m (i64 -> u32 for index/cmp)")
+    buf = _nvptx_p2_cvt_u32_u64(buf, _nvptx_reg_u32(9),  _nvptx_reg_u64(4), "n (i64 -> u32 for index/cmp)")
+    buf = _nvptx_p2_cvt_u32_u64(buf, _nvptx_reg_u32(10), _nvptx_reg_u64(5), "k (i64 -> u32 for index/cmp)")
+
+    // Bounds — a thread off the m×n grid does nothing. Two guards, both
+    // skipping to the common $L_END exit.
+    buf = _nvptx_p1_setp_lt_s32(buf, _nvptx_reg_pred(0), _nvptx_reg_u32(3), _nvptx_reg_u32(8),
+        "p0 = (row < m)")
+    buf = _nvptx_p1_bra_if_not(buf, _nvptx_reg_pred(0), "$L_END", "skip OOB row")
+    buf = _nvptx_p1_setp_lt_s32(buf, _nvptx_reg_pred(1), _nvptx_reg_u32(7), _nvptx_reg_u32(9),
+        "p1 = (col < n)")
+    buf = _nvptx_p1_bra_if_not(buf, _nvptx_reg_pred(1), "$L_END", "skip OOB col")
+
+    // acc = 0.0 ; kk = 0 ; row*k = A-row base offset (loop-invariant).
+    buf = _nvptx_p2_mov_f64_imm(buf, _nvptx_reg_f64(0), "0d0000000000000000", "acc = 0.0")
+    buf = _nvptx_p2_mov_u32_imm(buf, _nvptx_reg_u32(11), "0", "kk = 0")
+    buf = _nvptx_p2_mul_lo_s32(buf, _nvptx_reg_u32(12), _nvptx_reg_u32(3), _nvptx_reg_u32(10),
+        "row*k - A-row base index (loop-invariant)")
+
+    // Block 1 — the contraction loop `while kk < k`.
+    buf.push(_nvptx_instr("label", [_nvptx_op("$L_LOOP")], ""))
+    buf = _nvptx_p1_setp_lt_s32(buf, _nvptx_reg_pred(2), _nvptx_reg_u32(11), _nvptx_reg_u32(10),
+        "p2 = (kk < k)")
+    buf = _nvptx_p1_bra_if_not(buf, _nvptx_reg_pred(2), "$L_LOOPEND", "loop exit when kk >= k")
+
+    // av = a[row*k + kk]
+    buf = _nvptx_p2_add_s32(buf, _nvptx_reg_u32(13), _nvptx_reg_u32(12), _nvptx_reg_u32(11), "row*k + kk")
+    buf = _nvptx_p1_cvt_u64_u32(buf, _nvptx_reg_u64(6), _nvptx_reg_u32(13), "widen A index -> u64")
+    buf = _nvptx_p1_mul_lo_u64(buf, _nvptx_reg_u64(7), _nvptx_reg_u64(6), "8", "A byte offset = idx * 8")
+    buf = _nvptx_p1_add_u64(buf, _nvptx_reg_u64(8), _nvptx_reg_u64(0), _nvptx_reg_u64(7), "&a[row*k+kk]")
+    buf = _nvptx_p1_ld_global_f64(buf, _nvptx_reg_f64(1), _nvptx_reg_u64(8), "av = a[row*k+kk]")
+
+    // bv = b[kk*n + col]
+    buf = _nvptx_p2_mul_lo_s32(buf, _nvptx_reg_u32(14), _nvptx_reg_u32(11), _nvptx_reg_u32(9), "kk*n")
+    buf = _nvptx_p2_add_s32(buf, _nvptx_reg_u32(15), _nvptx_reg_u32(14), _nvptx_reg_u32(7), "kk*n + col")
+    buf = _nvptx_p1_cvt_u64_u32(buf, _nvptx_reg_u64(9), _nvptx_reg_u32(15), "widen B index -> u64")
+    buf = _nvptx_p1_mul_lo_u64(buf, _nvptx_reg_u64(10), _nvptx_reg_u64(9), "8", "B byte offset = idx * 8")
+    buf = _nvptx_p1_add_u64(buf, _nvptx_reg_u64(11), _nvptx_reg_u64(1), _nvptx_reg_u64(10), "&b[kk*n+col]")
+    buf = _nvptx_p1_ld_global_f64(buf, _nvptx_reg_f64(2), _nvptx_reg_u64(11), "bv = b[kk*n+col]")
+
+    // acc = av*bv + acc   (single round-to-nearest fused multiply-add)
+    buf = _nvptx_p2_fma_rn_f64(buf, _nvptx_reg_f64(0), _nvptx_reg_f64(1), _nvptx_reg_f64(2), _nvptx_reg_f64(0),
+        "acc = fma(av, bv, acc)")
+    // kk = kk + 1 ; back-edge to the loop guard.
+    buf = _nvptx_p2_add_s32(buf, _nvptx_reg_u32(11), _nvptx_reg_u32(11), "1", "kk = kk + 1")
+    buf = _nvptx_p2_bra(buf, "$L_LOOP", "loop back-edge")
+
+    // Block 2 — loop exit: write the C element.
+    buf.push(_nvptx_instr("label", [_nvptx_op("$L_LOOPEND")], ""))
+    buf = _nvptx_p2_mul_lo_s32(buf, _nvptx_reg_u32(16), _nvptx_reg_u32(3), _nvptx_reg_u32(9), "row*n")
+    buf = _nvptx_p2_add_s32(buf, _nvptx_reg_u32(17), _nvptx_reg_u32(16), _nvptx_reg_u32(7), "row*n + col")
+    buf = _nvptx_p1_cvt_u64_u32(buf, _nvptx_reg_u64(12), _nvptx_reg_u32(17), "widen C index -> u64")
+    buf = _nvptx_p1_mul_lo_u64(buf, _nvptx_reg_u64(13), _nvptx_reg_u64(12), "8", "C byte offset = idx * 8")
+    buf = _nvptx_p1_add_u64(buf, _nvptx_reg_u64(14), _nvptx_reg_u64(2), _nvptx_reg_u64(13), "&c[row*n+col]")
+    buf = _nvptx_p1_st_global_f64(buf, _nvptx_reg_u64(14), _nvptx_reg_f64(0), "c[row*n+col] = acc")
+
+    // Block 3 — common exit.
+    buf.push(_nvptx_instr("label", [_nvptx_op("$L_END")], ""))
+    buf.push(_nvptx_instr(PTX_OP_RET, [], "return from kernel"))
+
+    // FP64 register bank (`.reg .f64 %fd0..2`) — carried in callee_saved
+    // per the 055-P0 contract.
+    let mut fp64_regs = []
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(0), kind: "fpr" })
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(1), kind: "fpr" })
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(2), kind: "fpr" })
+
+    let f = LFunc {
+        name: "gemm",
+        target: target,
+        instrs: buf,
+        frame_size: 0,
+        callee_saved: fp64_regs,
+        def_line: 0
+    }
+
+    // Param bank — three `.u64` farr bases + three `.u64` extents.
+    let mut ps = []
+    ps.push(_nvptx_param_spec("gemm_param_0", ".u64", "a: [f64]  (device-resident farr base, mxk)"))
+    ps.push(_nvptx_param_spec("gemm_param_1", ".u64", "b: [f64]  (device-resident farr base, kxn)"))
+    ps.push(_nvptx_param_spec("gemm_param_2", ".u64", "c: [f64]  (device-resident farr base, mxn)"))
+    ps.push(_nvptx_param_spec("gemm_param_3", ".u64", "m: i64    (rows of A / C)"))
+    ps.push(_nvptx_param_spec("gemm_param_4", ".u64", "n: i64    (cols of B / C)"))
+    ps.push(_nvptx_param_spec("gemm_param_5", ".u64", "k: i64    (contraction dimension)"))
+
+    // Register banks — body uses %r0..17 (18 .u32), %rd0..14 (15 .u64),
+    // %p0..2 (3 .pred), %fd0..2 (3 .f64 from callee_saved above).
+    return _nvptx_kernel_fn(f, ps, 18, 15, 3)
+}
+
+// emit_ptx_gemm_module — render the full PTX module text for the 055-P2
+// naive FP64 GEMM kernel. The returned string is ptxas-ready (header +
+// `.visible .entry` body) and is what `tool/dispatch_r055_p2_gemm.sh`
+// pipes to `ptxas` for F-RFC055-PTX-EMIT / F-RFC055-GEMM-FEASIBLE.
+pub fn emit_ptx_gemm_module(target: string) -> string {
+    let kf = _nvptx_build_gemm_kernel(target)
     let mut parts: [string] = []
     parts.push(_emit_ptx_header(target))
     parts.push("\n")
@@ -1204,4 +2272,574 @@ fn _contains_code(codes: [string], needle: string) -> bool {
         i = i + 1
     }
     return false
+}
+
+// ── RFC 055 §12 P4+ — loop-unroll PTX optimizer pass ─────────────────
+//
+// _nvptx_unroll_pass — clone the body of a canonical 3-block back-edge
+// loop `factor` times so the lowered PTX has the unrolled instruction
+// stream. Closes the GEMM perf gap documented in PR #105 (nvcc unrolls
+// the k-loop ~5×; the hexa-emit produced straight scalar bodies).
+//
+// MVP scope (intentionally bounded — see RFC 055 §12 P4+ note):
+//
+//   Pattern recognized:
+//     header → body → header   (3-block back-edge)
+//
+//     Where `header` is a block whose LAST stmt is STMT_BR_COND with
+//     `target_block = body.id` (loop-continue arm) and
+//     `target_block_else = exit.id` (loop-exit arm); and `body` is a
+//     block whose LAST stmt is STMT_BR with `target_block = header.id`
+//     (the back-edge). Any MFunc whose CFG doesn't match this exact
+//     shape is returned UNCHANGED (honest fallback — richer CFG shapes
+//     are future cycles, gpu/SPEC.md §10 follow-on).
+//
+//   For factor=2 (start small per the §12 P4+ MVP):
+//     The body block is cloned ONCE. The clone gets:
+//       - a fresh Block.id (max existing block id + 1)
+//       - every dst Local in its stmts renumbered by +n_locals (where
+//         n_locals = max Local.id seen in body + 1)
+//       - every Operand referencing an INTRA-body-defined Local
+//         renumbered by the same offset (references to outside-body
+//         Locals — params, header-defined values — stay untouched, so
+//         the clone reads the same loop-invariants).
+//       - the clone's terminator STMT_BR points back to `header.id`
+//         (preserves loop semantics).
+//     The ORIGINAL body's terminator STMT_BR is redirected to point
+//     to the clone's id instead of header (so the iteration order is
+//     body → clone → header).
+//
+// Future cycles can:
+//   * support factor > 2 (the offset arithmetic generalises trivially);
+//   * recognise N-block loops with internal control flow;
+//   * propagate the unrolled bound back to STMT_BR_COND's loop counter.
+//
+// For loops that don't match the canonical shape: return MFunc
+// unchanged (honest no-op). For factor < 2: return MFunc unchanged.
+//
+// NOT wired into `_nvptx_lower_func` automatically — call this pass
+// explicitly before `_nvptx_codegen` if the caller wants the
+// unrolled lowering. This keeps backward compat with every existing
+// 055-P0/P1/P2/P3b/c lower-test (F-RFC055-CPU-CODEGEN-UNTOUCHED also
+// holds since CPU codegen does not consult NVPTX-side passes).
+
+// _nvptx_unroll_find_pattern — search `mfn.blocks` for the canonical
+// 3-block back-edge pattern. Returns (header_idx, body_idx) on match,
+// or (-1, -1) on no-match. Index = position in mfn.blocks (not Block.id).
+fn _nvptx_unroll_find_pattern(mfn: MFunc) -> [i64] {
+    let mut result = []
+    result.push(-1)
+    result.push(-1)
+    let mut hi = 0
+    while hi < len(mfn.blocks) {
+        let hdr = mfn.blocks[hi]
+        if len(hdr.stmts) > 0 {
+            let last = hdr.stmts[len(hdr.stmts) - 1]
+            if last.kind == STMT_BR_COND && last.target_block >= 0 && last.target_block_else >= 0 {
+                let body_id = last.target_block
+                // Locate body block by id.
+                let mut bj = 0
+                let mut body_idx = -1
+                while bj < len(mfn.blocks) {
+                    if mfn.blocks[bj].id == body_id {
+                        body_idx = bj
+                    }
+                    bj = bj + 1
+                }
+                if body_idx >= 0 {
+                    let body = mfn.blocks[body_idx]
+                    if len(body.stmts) > 0 {
+                        let body_term = body.stmts[len(body.stmts) - 1]
+                        // RFC 069 P2 LANDED — accept either STMT_BR(header) [canonical
+                        // single-exit, PR #117 MVP] or STMT_BR_COND with one arm
+                        // pointing to header [multi-exit / break-bearing body].
+                        // `_nvptx_unroll_back_edge_kind` returns: "br" / "br_cond_true"
+                        // / "br_cond_else" / "" depending on which terminator-arm is
+                        // the back-edge. Both forms permit unroll because the cloner
+                        // only needs to rewrite the back-edge arm; the early-exit
+                        // arm flows untouched to its destination per clone instance.
+                        let edge_kind = _nvptx_unroll_back_edge_kind(body_term, hdr.id)
+                        if edge_kind != "" {
+                            // Confirm exit (target_block_else) exists too.
+                            let mut ej = 0
+                            let mut exit_ok = false
+                            while ej < len(mfn.blocks) {
+                                if mfn.blocks[ej].id == last.target_block_else {
+                                    exit_ok = true
+                                }
+                                ej = ej + 1
+                            }
+                            if exit_ok {
+                                result[0] = hi
+                                result[1] = body_idx
+                                return result
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        hi = hi + 1
+    }
+    return result
+}
+
+// _nvptx_unroll_back_edge_kind — classify the body terminator's
+// back-edge form (RFC 069 P2 `F-RFC069-MULTI-EXIT-MATCH`).
+//
+//   "br"           — STMT_BR(header)              [PR #117 canonical]
+//   "br_cond_true" — STMT_BR_COND(header, exit)   [multi-exit, true=back-edge]
+//   "br_cond_else" — STMT_BR_COND(exit, header)   [multi-exit, else=back-edge]
+//   ""             — not a back-edge terminator   [unroll passthrough]
+//
+// The cloner reads this classification to know which arm to rewrite
+// when building each clone's forward link.
+fn _nvptx_unroll_back_edge_kind(term: Stmt, header_id: i64) -> string {
+    if term.kind == STMT_BR && term.target_block == header_id {
+        return "br"
+    }
+    if term.kind == STMT_BR_COND {
+        if term.target_block == header_id { return "br_cond_true" }
+        if term.target_block_else == header_id { return "br_cond_else" }
+    }
+    return ""
+}
+
+// _nvptx_unroll_contains_inner_loop — detect whether the body block
+// branches into an inner loop (RFC 069 P3 `F-RFC069-NESTED-PRESERVE`).
+//
+// Inner loop = any Block reachable from `body` via STMT_BR or
+// STMT_BR_COND whose own terminator carries a back-edge (a target
+// pointing to itself OR to a Block with id < target's own id).
+//
+// Honest scope (`@D g3` — NARROWER than the original RFC F3 draft text):
+// the P3 implementation here detects nested-loop PRESENCE and returns
+// the MFunc UNCHANGED when detected — the inner loop is preserved by
+// not touching the outer at all. Full multi-block-region nested unroll
+// (cloning the inner loop's blocks per outer iteration with renumbered
+// block IDs) is genuinely substantial work — reframed as P5 by the
+// 2026-05-20 PLAN entry. The "preserve" semantics still hold: today,
+// the canonical 3-block matcher wouldn't match a nested-loop MFunc
+// anyway (body's BR doesn't go to outer header in that shape), so
+// the visible behavior is identical (passthrough). The detection
+// helper makes the no-op contract OBSERVABLE — a downstream
+// callsite can `if (contains_inner_loop) skip_unroll_advice = true`.
+fn _nvptx_unroll_contains_inner_loop(body: Block, mfn: MFunc) -> bool {
+    let mut si = 0
+    while si < len(body.stmts) {
+        let s = body.stmts[si]
+        let mut targets = []
+        if s.kind == STMT_BR && s.target_block >= 0 {
+            targets.push(s.target_block)
+        }
+        if s.kind == STMT_BR_COND {
+            if s.target_block >= 0       { targets.push(s.target_block) }
+            if s.target_block_else >= 0  { targets.push(s.target_block_else) }
+        }
+        let mut ti = 0
+        while ti < len(targets) {
+            let tid = targets[ti]
+            if tid != body.id {
+                let mut bj = 0
+                while bj < len(mfn.blocks) {
+                    let candidate = mfn.blocks[bj]
+                    if candidate.id == tid && len(candidate.stmts) > 0 {
+                        let cterm = candidate.stmts[len(candidate.stmts) - 1]
+                        // Self-loop or back-edge: target ≤ own id.
+                        if cterm.kind == STMT_BR {
+                            if cterm.target_block == candidate.id { return true }
+                            if cterm.target_block >= 0 && cterm.target_block < candidate.id { return true }
+                        }
+                        if cterm.kind == STMT_BR_COND {
+                            if cterm.target_block == candidate.id { return true }
+                            if cterm.target_block_else == candidate.id { return true }
+                            if cterm.target_block >= 0 && cterm.target_block < candidate.id { return true }
+                            if cterm.target_block_else >= 0 && cterm.target_block_else < candidate.id { return true }
+                        }
+                    }
+                    bj = bj + 1
+                }
+            }
+            ti = ti + 1
+        }
+        si = si + 1
+    }
+    return false
+}
+
+// _nvptx_unroll_rewrite_arm — rewrite the BACK-EDGE arm of a body/clone
+// terminator (RFC 069 P2 `F-RFC069-MULTI-EXIT-MATCH`). The other arm
+// (early-exit destination for BR_COND) is preserved verbatim, so
+// each unroll instance's break path still reaches the same exit.
+//
+// edge_kind:
+//   "br"           — rewrite STMT_BR target_block
+//   "br_cond_true" — rewrite STMT_BR_COND target_block (true arm = back-edge)
+//   "br_cond_else" — rewrite STMT_BR_COND target_block_else (else arm = back-edge)
+//   ""             — passthrough (caller shouldn't have selected the loop)
+fn _nvptx_unroll_rewrite_arm(term: Stmt, edge_kind: string, new_target: i64) -> Stmt {
+    if edge_kind == "br" || edge_kind == "br_cond_true" {
+        return Stmt {
+            kind: term.kind,
+            dst: term.dst,
+            op: term.op,
+            args: term.args,
+            target_block: new_target,
+            target_block_else: term.target_block_else
+        }
+    }
+    if edge_kind == "br_cond_else" {
+        return Stmt {
+            kind: term.kind,
+            dst: term.dst,
+            op: term.op,
+            args: term.args,
+            target_block: term.target_block,
+            target_block_else: new_target
+        }
+    }
+    return term
+}
+
+// _nvptx_unroll_max_block_id — max Block.id across mfn.blocks, for
+// allocating a fresh id for the clone.
+fn _nvptx_unroll_max_block_id(mfn: MFunc) -> i64 {
+    let mut m = 0
+    let mut i = 0
+    while i < len(mfn.blocks) {
+        if mfn.blocks[i].id > m { m = mfn.blocks[i].id }
+        i = i + 1
+    }
+    return m
+}
+
+// _nvptx_unroll_collect_body_dsts — collect every Local.id assigned in
+// the body block (dst of STMT_ASSIGN / STMT_BINOP / STMT_LOAD /
+// STMT_CALL). These are the Locals that get renumbered in the clone;
+// references to Locals NOT in this set are loop-invariants (params,
+// header-defined) and stay unchanged in the clone.
+fn _nvptx_unroll_collect_body_dsts(body: Block) -> [i64] {
+    let mut dsts = []
+    let mut i = 0
+    while i < len(body.stmts) {
+        let s = body.stmts[i]
+        if s.kind == STMT_ASSIGN || s.kind == STMT_BINOP || s.kind == STMT_LOAD || s.kind == STMT_CALL {
+            if s.dst.id >= 0 {
+                dsts.push(s.dst.id)
+            }
+        }
+        i = i + 1
+    }
+    return dsts
+}
+
+// _nvptx_unroll_is_body_dst — membership test on the body-defined Local
+// id set (small linear scan; body lengths are tiny).
+fn _nvptx_unroll_is_body_dst(dsts: [i64], id: i64) -> bool {
+    let mut i = 0
+    while i < len(dsts) {
+        if dsts[i] == id { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// _nvptx_unroll_max_local_id_in_mfn — max Local.id seen anywhere in
+// the function (dsts + operands across all blocks). Drives the
+// renumber offset so the clone's new Locals don't collide with any
+// existing id.
+fn _nvptx_unroll_max_local_id_in_mfn(mfn: MFunc) -> i64 {
+    let mut m = 0
+    let mut bi = 0
+    while bi < len(mfn.blocks) {
+        let blk = mfn.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            let s = blk.stmts[si]
+            if s.dst.id > m { m = s.dst.id }
+            let mut ai = 0
+            while ai < len(s.args) {
+                let o = s.args[ai]
+                if o.kind == "local" && o.local_id > m { m = o.local_id }
+                ai = ai + 1
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return m
+}
+
+// _nvptx_unroll_renumber_operand — if `o` references an intra-body Local,
+// return a renumbered copy (local_id += offset); otherwise return `o`
+// unchanged (loop-invariants stay shared).
+fn _nvptx_unroll_renumber_operand(o: Operand, dsts: [i64], offset: i64) -> Operand {
+    if o.kind == "local" && _nvptx_unroll_is_body_dst(dsts, o.local_id) {
+        return Operand {
+            kind: o.kind,
+            local_id: o.local_id + offset,
+            int_val: o.int_val,
+            float_val: o.float_val,
+            str_val: o.str_val,
+            global_id: o.global_id
+        }
+    }
+    return o
+}
+
+// _nvptx_unroll_clone_stmt — produce a renumbered copy of one body stmt
+// for the clone block. The terminator STMT_BR's target_block stays as
+// the header id (caller has already verified that's the back-edge).
+fn _nvptx_unroll_clone_stmt(s: Stmt, dsts: [i64], offset: i64) -> Stmt {
+    // Renumber dst when it's a body-defined Local.
+    let mut new_dst = s.dst
+    if s.dst.id >= 0 && _nvptx_unroll_is_body_dst(dsts, s.dst.id) {
+        new_dst = Local {
+            id: s.dst.id + offset,
+            arena_id: s.dst.arena_id,
+            type_id: s.dst.type_id,
+            name_hint: s.dst.name_hint,
+        precision: ""
+        }
+    }
+    // Renumber operands referencing body-defined Locals.
+    let mut new_args = []
+    let mut ai = 0
+    while ai < len(s.args) {
+        new_args.push(_nvptx_unroll_renumber_operand(s.args[ai], dsts, offset))
+        ai = ai + 1
+    }
+    return Stmt {
+        kind: s.kind,
+        dst: new_dst,
+        op: s.op,
+        args: new_args,
+        target_block: s.target_block,
+        target_block_else: s.target_block_else
+    }
+}
+
+// RFC 069 P1 + P2 + P3 LANDED — Advanced loop unroll.
+//   P1 (`F-RFC069-FACTOR-N`)         — factor=N for 2 ≤ N ≤ 32.
+//   P2 (`F-RFC069-MULTI-EXIT-MATCH`) — body terminator can be STMT_BR
+//      (canonical) OR STMT_BR_COND with one arm to header. Cloner
+//      rewrites ONLY the back-edge arm; early-exit arm stays verbatim.
+//   P3 (`F-RFC069-NESTED-PRESERVE`)  — detects nested-loop presence
+//      via `_nvptx_unroll_contains_inner_loop` and returns mfn
+//      unchanged (preserves inner loop semantically; full multi-block-
+//      region cloning is P5).
+// Factor=2 single-exit byte-identical to PR #117 output.
+//
+// Still pending (P4 — see RFC 069 §3):
+//   P4 (`F-RFC069-NUMERIC-EQ`) — real-silicon byte-eq numeric falsifier
+//
+// The PR #117 passthrough guarantee (Case 11) is a STRICT regression
+// gate (F7) — every RFC 069 commit MUST keep non-matching CFG output
+// byte-identical. See
+// `inbox/rfc_drafts_2026_05_20/rfc_069_unroll_advanced.md` §3 for
+// the per-phase plan and §4 for the falsifier battery.
+//
+// _nvptx_unroll_pass — the public entry point. RFC 055 §12 P4+ MVP.
+//
+// Returns the input MFunc unchanged when:
+//   - factor < 2 (nothing to unroll), OR
+//   - the CFG doesn't match the canonical 3-block back-edge shape.
+//
+// For factor=2 on a matching MFunc: returns a new MFunc with one clone
+// of the body block inserted between body and back-edge, intra-body
+// Locals renumbered to avoid id collisions.
+//
+// MVP: only factor=2 is implemented in this slice — higher factors are
+// future cycles (the offset arithmetic generalises trivially but each
+// added clone needs another renumber pass; the recognition logic is
+// the load-bearing part and lands here first).
+// _nvptx_unroll_max_factor — clamp ceiling per RFC 069 §3 P1
+// (`F-RFC069-FACTOR-N`). Out-of-range factors return MFunc unchanged
+// (passthrough — no garbage). 32 chosen as a defensible bound: practical
+// unrolls rarely exceed 8-16, the offset arithmetic stays safe under
+// i64 multiplication for any realistic Local-id range, and ptxas register
+// pressure becomes catastrophic well before 32 anyway.
+let _nvptx_unroll_max_factor: i64 = 32
+
+pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
+    if factor < 2 { return mfn }
+    // RFC 069 §3 P1 clamp — factor > 32 returns mfn unchanged (passthrough).
+    if factor > _nvptx_unroll_max_factor { return mfn }
+
+    let pat = _nvptx_unroll_find_pattern(mfn)
+    let hdr_idx = pat[0]
+    let body_idx = pat[1]
+    if hdr_idx < 0 || body_idx < 0 { return mfn }
+
+    let hdr = mfn.blocks[hdr_idx]
+    let body = mfn.blocks[body_idx]
+    // RFC 069 P3 `F-RFC069-NESTED-PRESERVE` — if the matched outer body
+    // contains an inner loop (one of its outgoing branches lands in a
+    // Block carrying a back-edge), DO NOT unroll. Returning mfn unchanged
+    // preserves the inner loop semantically — outer unroll would, in
+    // general, require multi-block-region cloning (each clone of outer
+    // body's branch to inner_header would need a freshly-renumbered
+    // inner loop) which is deferred to P5 (deeper-nesting + irregular
+    // back-edge cycle). This early-return makes the no-op observable.
+    if _nvptx_unroll_contains_inner_loop(body, mfn) { return mfn }
+    let dsts = _nvptx_unroll_collect_body_dsts(body)
+    let base_offset = _nvptx_unroll_max_local_id_in_mfn(mfn) + 1
+    let max_block_id_base = _nvptx_unroll_max_block_id(mfn)
+    // first_clone_id is also the new target for the original body's
+    // terminator (the back-edge is broken at body → first_clone, then
+    // first_clone → second_clone, ..., last_clone → header).
+    let first_clone_id = max_block_id_base + 1
+    let n_clones = factor - 1   // factor=2 → 1 clone (PR #117 byte-eq path)
+
+    // RFC 069 P2 — back-edge classification for multi-exit support.
+    // The body's last stmt may be STMT_BR (canonical PR #117 path) or
+    // STMT_BR_COND with one arm pointing to header (multi-exit / break-
+    // bearing body). The cloner reads this kind to know WHICH arm of
+    // the terminator to rewrite when building each forward link.
+    let body_term_for_kind = body.stmts[len(body.stmts) - 1]
+    let edge_kind = _nvptx_unroll_back_edge_kind(body_term_for_kind, hdr.id)
+
+    // Build N-1 clones. Each clone_i uses offset = i*base_offset so the
+    // intra-body Local ids in clone_i are disjoint from clone_{i-1}.
+    let mut clone_blocks = []
+    let mut i = 1
+    while i <= n_clones {
+        let clone_offset = i * base_offset
+        let clone_block_id = max_block_id_base + i
+        let next_clone_id = max_block_id_base + i + 1
+        let is_last_clone = i == n_clones
+
+        // Clone every body stmt; the terminator's BACK-EDGE arm is
+        // rewritten so the clone chain links forward. Multi-exit (P2):
+        // when edge_kind=="br_cond_else", the back-edge lives in
+        // target_block_else (not target_block) — `_nvptx_unroll_rewrite_arm`
+        // honors that. The OTHER arm (the early-exit destination) is
+        // preserved verbatim per clone, so every clone-instance's break
+        // still reaches the same exit block. Last clone keeps its
+        // back-edge pointing to header (the unrolled-loop's only
+        // back-edge after the cascade).
+        let mut clone_stmts = []
+        let mut si = 0
+        while si < len(body.stmts) {
+            let cs = _nvptx_unroll_clone_stmt(body.stmts[si], dsts, clone_offset)
+            if si == len(body.stmts) - 1 && !is_last_clone {
+                // Non-last clone's terminator → next clone (forward link).
+                clone_stmts.push(_nvptx_unroll_rewrite_arm(cs, edge_kind, next_clone_id))
+            } else {
+                // Last clone keeps the back-edge to header (already
+                // pointing there via _nvptx_unroll_clone_stmt's
+                // target_block preservation).
+                clone_stmts.push(cs)
+            }
+            si = si + 1
+        }
+        clone_blocks.push(Block {
+            id: clone_block_id,
+            stmts: clone_stmts,
+            preds: [],
+            succs: []
+        })
+        i = i + 1
+    }
+
+    // Redirect ORIGINAL body's terminator from header → first_clone.
+    // RFC 069 P2 — for multi-exit bodies (edge_kind=="br_cond_*"),
+    // only the back-edge arm is rewritten; the other arm (early-exit
+    // destination) stays unchanged so the break path is preserved.
+    let mut new_body_stmts = []
+    let mut bi = 0
+    while bi < len(body.stmts) {
+        if bi == len(body.stmts) - 1 {
+            new_body_stmts.push(_nvptx_unroll_rewrite_arm(body.stmts[bi], edge_kind, first_clone_id))
+        } else {
+            new_body_stmts.push(body.stmts[bi])
+        }
+        bi = bi + 1
+    }
+    let new_body = Block {
+        id: body.id,
+        stmts: new_body_stmts,
+        preds: body.preds,
+        succs: body.succs
+    }
+
+    // Reassemble blocks: replace original body, insert all clones right
+    // after it. The other blocks are copied through unchanged.
+    let mut new_blocks = []
+    let mut k = 0
+    while k < len(mfn.blocks) {
+        if k == body_idx {
+            new_blocks.push(new_body)
+            let mut ci = 0
+            while ci < len(clone_blocks) {
+                new_blocks.push(clone_blocks[ci])
+                ci = ci + 1
+            }
+        } else {
+            new_blocks.push(mfn.blocks[k])
+        }
+        k = k + 1
+    }
+
+    // Extend locals roster with each clone's renumbered dsts so the
+    // classifier sees the new Local ids during lowering. Each cloned
+    // dst inherits the corresponding original Local's metadata so the
+    // classification (binop op → kind) reproduces.
+    let mut new_locals = []
+    let mut li = 0
+    while li < len(mfn.locals) {
+        new_locals.push(mfn.locals[li])
+        li = li + 1
+    }
+    // For each clone iteration i = 1..n_clones, append a Local per dst.
+    let mut ic = 1
+    while ic <= n_clones {
+        let clone_offset = ic * base_offset
+        let mut di = 0
+        while di < len(dsts) {
+            let orig_id = dsts[di]
+            // Find the original Local record for this dst (linear scan).
+            let mut mi = 0
+            let mut found = false
+            while mi < len(mfn.locals) {
+                let L = mfn.locals[mi]
+                if L.id == orig_id {
+                    new_locals.push(Local {
+                        id: orig_id + clone_offset,
+                        arena_id: L.arena_id,
+                        type_id: L.type_id,
+                        name_hint: L.name_hint + "_u" + to_string(ic),
+        precision: ""
+                    })
+                    found = true
+                }
+                mi = mi + 1
+            }
+            if !found {
+                // Body dst missing from mfn.locals (synthetic) — synthesise
+                // a minimal Local so the clone's id is in the roster.
+                new_locals.push(Local {
+                    id: orig_id + clone_offset,
+                    arena_id: 1,
+                    type_id: 0,
+                    name_hint: "unroll_clone",
+        precision: ""
+                })
+            }
+            di = di + 1
+        }
+        ic = ic + 1
+    }
+
+    return MFunc {
+        name: mfn.name,
+        params: mfn.params,
+        return_local: mfn.return_local,
+        locals: new_locals,
+        blocks: new_blocks,
+        entry_block: mfn.entry_block,
+        arena_root: mfn.arena_root,
+        def_line: mfn.def_line,
+        gpu_kind: mfn.gpu_kind
+    }
 }

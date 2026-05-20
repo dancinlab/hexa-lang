@@ -214,11 +214,15 @@ not a silent miscompile.
 ## 10. Cross-references
 
 - `gpu/design.md` — Decision 1 (format) · 2 (dir) · 3 (this file = SSOT)
+  · 4 (055-P2 scope)
 - `gpu/HANDOFF.md` — next-steps brief + honest performance framing
 - **RFC 055** (`inbox/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md`)
   — the NVPTX codegen *implementation* that consumes this spec; §6
   references this file. Phasing: 055-P0 (PTX text emit, landed) →
-  055-P1 (vector-add end-to-end) → 055-P2 (FP64 GEMM).
+  055-P1 (vec-add) + 055-P2 (naive FP64 GEMM) — **both LANDED + the
+  RFC 055 §7 falsifier battery measured PASS on an NVIDIA RTX 5070,
+  2026-05-20** → 055-P3 (MIR partition + `gpu_launch` lowering + cubin
+  embed — wire the codegen into the main compile pipeline).
 - `self/native/gpu_codegen_stub.c` — rt#45 codegen skeleton; the
   intrinsic table + allowlist/denylist here match it; superseded by
   RFC 055's `compiler/codegen/nvptx_target.hexa`.

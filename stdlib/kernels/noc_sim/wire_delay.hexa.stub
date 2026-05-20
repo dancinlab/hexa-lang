@@ -27,7 +27,7 @@
 // Source: rfc_001 §4 (the absorption's largest fidelity risk + primary
 //         engineering deliverable). See rfc_003 §3.5.
 
-use "stdlib/booksim/anynet"
+use "stdlib/kernels/noc_sim/anynet"
 
 // ─── public types ────────────────────────────────────────────────────────
 
