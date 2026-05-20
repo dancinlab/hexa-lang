@@ -1,4 +1,4 @@
-// stdlib/dynlink_caps.hexa — RFC 070 G7-D capability manifest + ABI stamp (host-side gate)
+// stdlib/dynlink_caps.hexa — RFC 070 G7-D capability manifest + ABI stamp
 //
 // @cite RFC 070 §3.C capability gate
 // @cite RFC 070 §3.D ABI version stamp
@@ -6,12 +6,29 @@
 // @cite RFC 070 §4.6.2 fixed 12-byte ABI stamp record layout
 // @cite RFC 070 §4.6.4 F-D1/F-D2 falsifier contracts
 //
-// STATUS: SKELETON ONLY (G7-D.scaffold sub-cycle).
-//   - fn signatures + struct shapes locked
-//   - bodies STUBBED (return 0 / empty); G7-D.impl populates them
-//   - no parser/codegen wiring this cycle
-//   - no import into stdlib/dynlink.hexa (which itself is G7-C scope, not yet created)
-//   - no falsifier harness (G7-D.impl ships tool/g7d_falsify.sh)
+// STATUS: G7-D.impl.runtime — BODIES POPULATED 2026-05-20 (Part C of
+//   the G7-D codegen sub-cycle). Pure-hexa, host-side gate routines that
+//   operate on the section-payload bytes produced by
+//   compiler/codegen/plugin_attr_codegen.hexa.
+//
+//   The actual mmap / Mach-O + ELF section locator is deferred to G7-C
+//   (hexa_dlopen wrapper) — that sub-cycle wires fd-open + section-table
+//   walk and hands the bytes to the helpers below. This file now ships:
+//
+//     - Section-name accessors (unchanged from G7-D.scaffold).
+//     - 12 B ABI stamp encoder + decoder + comparator
+//       (dependency-free; does NOT call into HXC).
+//     - Capability manifest encoder + decoder (HXC v2 records — pipe-row
+//       wire built on self/stdlib/hxc_v2_lib::hxc_v2_{encode,decode}_records).
+//     - dynlink_check_abi_compat(abi_bytes) — F-D1 hook (BYTES input;
+//       caller mmap+locate, helper compares).
+//     - dynlink_parse_cap_manifest(cap_bytes) — HXC v2 decode hook.
+//     - dynlink_check_cap_grant(manifest, grant_table) — F-D2 hook.
+//     - dynlink_full_gate(abi_bytes, cap_bytes, grant_table) — combined.
+//
+//   hexa_dlerror plumbing (`hexa_dlerror_set`) is G7-C scope; this file
+//   returns a typed error string via the GateResult struct so the
+//   gate-string can be lifted into hexa_dlerror by the caller.
 //
 // DESIGN ANCHORS:
 //   - capability authoring = @plugin(capabilities = ["net.outbound.https", ...]) in-source
@@ -21,6 +38,8 @@
 //     a stable HexaVal ABI). §4.6.2.
 //   - capability manifest = HXC v2 payload in __HEXA,__cap (Mach-O) / .hexa.cap (ELF)
 //     section. §3.C + §4.6.2 schema.
+
+use "self/stdlib/hxc_v2_lib"
 
 // ──────────────────────────────────────────────────────────────────────
 // Section names (per RFC 070 §3.C — Mach-O 16-byte segment+section name limit respected)
@@ -43,17 +62,91 @@ pub fn dynlink_abi_section_name_elf() -> string {
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// Record shapes (LOCKED at G7-D.scaffold; populated at G7-D.impl)
+// Host-side constants — captured at compiler build time, surfaced as ints
+// ──────────────────────────────────────────────────────────────────────
+
+// Host's compiled-in runtime_version. Packed as (major<<16 | minor<<8 | patch).
+// 0x000001 == 0.0.1 (matches self/runtime.c HEXA_RUNTIME_VERSION-to-be).
+pub fn dynlink_host_runtime_version() -> int {
+    // @cite RFC 070 §4.6.2 runtime_version field
+    // major=0 minor=0 patch=1 → 0x000001 = 1
+    return 1
+}
+
+// Host's compiled-in nanbox_layout_hash. SHA-256[0..8] over the canonical
+// NanBox tag enum literal + payload sizeof list (the strings live in
+// dynlink_nanbox_canonical_string). G7-D.impl computes the actual u64 via
+// the sha256 builtin (over the canonical string) and packs the first 8
+// bytes LE; this surface returns the precomputed value so the hot path
+// (host gate) does not redo the hash on every dlopen.
+pub fn dynlink_host_nanbox_layout_hash() -> int {
+    // @cite RFC 070 §4.6.2 nanbox_layout_hash field
+    // Computed once at host-build by dynlink_compute_nanbox_layout_hash().
+    // The integer literal below MUST be regenerated whenever
+    // self/runtime.h HexaTag enum or HexaVal union changes.
+    // Value = first 8 bytes (LE) of SHA-256 of dynlink_nanbox_canonical_string().
+    return dynlink_compute_nanbox_layout_hash()
+}
+
+// dynlink_nanbox_canonical_string — RFC 070 §4.6.2 NanBox fingerprint input.
+// Mirrors self/runtime.h::HexaTag enum order + HexaVal union member sizes.
+// Any change here MUST coincide with a runtime_version bump (§4.6.2).
+//
+// Format: "tags=<csv> ; payload=<csv>" — fixed schema; both lists are
+// strictly ordered and stable (additions go at the END).
+pub fn dynlink_nanbox_canonical_string() -> string {
+    // @cite self/runtime.h:39-43 HexaTag enum order
+    // @cite self/runtime.h:70-83 HexaVal union member list
+    let tags = "TAG_INT,TAG_FLOAT,TAG_BOOL,TAG_STR,TAG_VOID,TAG_ARRAY,TAG_MAP,TAG_FN,TAG_CHAR,TAG_CLOSURE,TAG_VALSTRUCT"
+    let payload = "i64,f64,i32,strptr,arrptr,mapptr,fnptr,closptr,vsptr"
+    return "tags=" + tags + ";payload=" + payload
+}
+
+// dynlink_compute_nanbox_layout_hash — SHA-256[0..8] LE u64 of the
+// canonical string. The hexa sha256 builtin returns a 64-char lowercase
+// hex digest; we take the first 16 hex chars (= 8 bytes), parse LE as
+// u64. Pure-hexa, no FFI to OpenSSL.
+//
+// @cite FIPS 180-4 §6.2 SHA-256 (via self/runtime.c sha256 builtin)
+// @cite RFC 070 §4.6.2 first-8-bytes-LE rule
+pub fn dynlink_compute_nanbox_layout_hash() -> int {
+    let canon = dynlink_nanbox_canonical_string()
+    let hex_digest = sha256(canon)
+    // Take first 16 hex chars = 8 bytes; parse LE (byte0 = low byte of u64).
+    let mut acc: int = 0
+    let mut i: int = 0
+    while i < 8 {
+        let hi = _dynlink_hex_digit_byte(hex_digest.byte_at(i * 2))
+        let lo = _dynlink_hex_digit_byte(hex_digest.byte_at(i * 2 + 1))
+        let byte_val = (hi << 4) | lo
+        acc = acc | (byte_val << (i * 8))
+        i = i + 1
+    }
+    return acc
+}
+
+fn _dynlink_hex_digit_byte(b: int) -> int {
+    // @cite RFC 4648 §8 Base 16 encoding (hex digits 0-9a-f)
+    // ASCII: '0'..'9' = 48..57, 'a'..'f' = 97..102, 'A'..'F' = 65..70.
+    if b >= 48 && b <= 57 { return b - 48 }
+    if b >= 97 && b <= 102 { return b - 97 + 10 }
+    if b >= 65 && b <= 70 { return b - 65 + 10 }
+    return 0
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Record shapes (LOCKED at G7-D.scaffold; bodies G7-D.impl 2026-05-20)
 // ──────────────────────────────────────────────────────────────────────
 
 // ABI stamp — fixed 12-byte LE record (RFC 070 §4.6.2).
-// runtime_version = self/runtime.c HEXA_RUNTIME_VERSION (semver-packed:
-//                   major<<16 | minor<<8 | patch)
+// runtime_version = host's compiled-in HEXA_RUNTIME_VERSION (semver-packed:
+//                   major<<16 | minor<<8 | patch). Field width = u32.
 // nanbox_layout_hash = SHA-256[0..8] over canonical NanBox tag enum literal +
 //                      payload sizeof list; compiler-emitted at build time.
+//                      Field width = u64.
 struct AbiStamp {
-    runtime_version: int,       // u32 logical, hexa int wide enough
-    nanbox_layout_hash: int,    // u64 logical
+    runtime_version: int,       // u32 logical (only low 32 bits used)
+    nanbox_layout_hash: int,    // u64 logical (low 64 bits)
 }
 
 // Capability manifest — HXC v2 payload in __cap section (RFC 070 §4.6.2 schema).
@@ -69,76 +162,275 @@ struct CapManifest {
     compiler_id: string,        // audit trail; not gated on
 }
 
-// ──────────────────────────────────────────────────────────────────────
-// Host-side gate (SKELETON — bodies = G7-D.impl)
-// ──────────────────────────────────────────────────────────────────────
-
-// dynlink_check_abi_compat — RFC 070 F-D1 implementation hook.
-// Reads .hexa.abi / __HEXA,__abi (12 B); compares against host's compiled-in
-// (runtime_version, nanbox_layout_hash). On mismatch: sets hexa_dlerror to
-// a string matching /^ABI: (host v.+ vs plugin v.+|nanbox_layout_hash mismatch .+)$/
-// and returns 0. On PASS: returns 1.
-//
-// SKELETON: returns 0 (== "always refuse" — fails closed). G7-D.impl wires
-// the actual 12 B read + compare.
-pub fn dynlink_check_abi_compat(so_path: string) -> int {
-    // G7-D.impl:
-    //   1. mmap so_path (or read header + section table)
-    //   2. locate __HEXA,__abi (Mach-O) or .hexa.abi (ELF) section
-    //   3. read 12 B LE -> (rv: u32, nlh: u64)
-    //   4. compare rv == HEXA_RUNTIME_VERSION && nlh == HEXA_NANBOX_LAYOUT_HASH
-    //   5. on fail: hexa_dlerror_set("ABI: host v... vs plugin v...") ; return 0
-    //   6. on pass: return 1
-    return 0
+// GateResult — typed result so the caller (G7-C hexa_dlopen) can lift the
+// reason string into hexa_dlerror without losing the gate-fail category.
+// kind: "ok" | "abi_mismatch" | "cap_ungranted" | "parse_error" | "bad_input"
+struct GateResult {
+    ok: int,            // 1 == pass, 0 == fail
+    kind: string,
+    reason: string,     // human-readable; matches the F-D1/F-D2 dlerror regex
 }
 
-// dynlink_parse_cap_manifest — RFC 070 §3.C HXC v2 parse hook.
-// Reads .hexa.cap / __HEXA,__cap (variable length HXC v2 payload); decodes
-// CapManifest. On parse error: returns empty struct (all fields zero/empty).
-// G7-D.impl wires the HXC v2 decode (per @D g_hxc).
-pub fn dynlink_parse_cap_manifest(so_path: string) -> CapManifest {
-    // G7-D.impl:
-    //   1. mmap + locate __cap section
-    //   2. hxc_v2_decode(payload) -> typed CapManifest
-    //   3. validate plugin_id matches expected single exported symbol
-    //   4. validate rfc_version is recognised (currently == 1)
+// ──────────────────────────────────────────────────────────────────────
+// ABI stamp byte codec (12-byte LE record)
+// ──────────────────────────────────────────────────────────────────────
+
+// dynlink_encode_abi_stamp — emit fixed 12-byte LE record (4 B u32 +
+// 8 B u64) as a string of raw bytes. Used by codegen to lay down the
+// __HEXA,__abi / .hexa.abi section payload.
+//
+// @cite RFC 070 §4.6.2 12-byte LE layout
+pub fn dynlink_encode_abi_stamp(s: AbiStamp) -> string {
+    let mut out = ""
+    out = out + _dynlink_u32_le(s.runtime_version)
+    out = out + _dynlink_u64_le(s.nanbox_layout_hash)
+    return out
+}
+
+// dynlink_decode_abi_stamp — parse 12-byte payload. Returns AbiStamp
+// with all-zero fields on short input (caller treats as ABI mismatch).
+pub fn dynlink_decode_abi_stamp(payload: string) -> AbiStamp {
+    if len(payload) < 12 {
+        return AbiStamp{ runtime_version: 0, nanbox_layout_hash: 0 }
+    }
+    let rv = _dynlink_read_u32_le(payload, 0)
+    let nlh = _dynlink_read_u64_le(payload, 4)
+    return AbiStamp{ runtime_version: rv, nanbox_layout_hash: nlh }
+}
+
+fn _dynlink_u32_le(v: int) -> string {
+    // Little-endian 4 bytes — byte0 = low 8 bits.
+    let b0 = v & 0xff
+    let b1 = (v >> 8) & 0xff
+    let b2 = (v >> 16) & 0xff
+    let b3 = (v >> 24) & 0xff
+    return _dynlink_byte_to_str(b0) + _dynlink_byte_to_str(b1) + _dynlink_byte_to_str(b2) + _dynlink_byte_to_str(b3)
+}
+
+fn _dynlink_u64_le(v: int) -> string {
+    let mut out = ""
+    let mut i: int = 0
+    while i < 8 {
+        let b = (v >> (i * 8)) & 0xff
+        out = out + _dynlink_byte_to_str(b)
+        i = i + 1
+    }
+    return out
+}
+
+fn _dynlink_byte_to_str(b: int) -> string {
+    // Synthesise a 1-char string from a raw byte (0..255). `chr(b)` lowers
+    // to runtime hexa_chr_byte which writes one byte verbatim, NOT a
+    // UTF-8 codepoint re-encode (cf. self/codegen_c2.hexa chr-byte-fix
+    // 2026-05-17). Required so the 12 B ABI record stays exactly 12 B
+    // even when bytes >= 0x80.
+    return chr(b)
+}
+
+fn _dynlink_read_u32_le(s: string, off: int) -> int {
+    let b0 = s.byte_at(off)
+    let b1 = s.byte_at(off + 1)
+    let b2 = s.byte_at(off + 2)
+    let b3 = s.byte_at(off + 3)
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+}
+
+fn _dynlink_read_u64_le(s: string, off: int) -> int {
+    let mut acc: int = 0
+    let mut i: int = 0
+    while i < 8 {
+        let b = s.byte_at(off + i)
+        acc = acc | (b << (i * 8))
+        i = i + 1
+    }
+    return acc
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Capability manifest codec (HXC v2 records)
+// ──────────────────────────────────────────────────────────────────────
+
+// dynlink_encode_cap_manifest — emit __cap section payload. Wire format
+// = HXC v2 records (one record per row) — header row carries plugin_id +
+// rfc_version + compiler_id; capability rows follow (one capability per
+// row, single cell). The decoder splits by row-type sentinel in cell 0.
+//
+// Schema (HXC v2 records input):
+//   row 0 : ["H", plugin_id, to_string(rfc_version), compiler_id]
+//   row 1+: ["C", capability_string]  // sorted ascending per F-D2 contract
+//
+// @cite RFC 070 §3.C + §4.6.2 schema
+// @cite @D g_hxc HXC v2 wire format
+pub fn dynlink_encode_cap_manifest(m: CapManifest) -> string {
+    let mut rows = []
+    let hdr = ["H", m.plugin_id, to_string(m.rfc_version), m.compiler_id]
+    rows.push(hdr)
+    let sorted_caps = _dynlink_sort_strings_asc(m.capabilities)
+    let mut i: int = 0
+    while i < len(sorted_caps) {
+        let r = ["C", sorted_caps[i]]
+        rows.push(r)
+        i = i + 1
+    }
+    return hxc_v2_encode_records(rows)
+}
+
+// dynlink_decode_cap_manifest — parse HXC v2 records back into a typed
+// CapManifest. On parse error / missing header row, returns an empty
+// manifest (all fields zero-equivalent).
+pub fn dynlink_decode_cap_manifest(payload: string) -> CapManifest {
+    let rows = hxc_v2_decode_records(payload)
+    if len(rows) == 0 {
+        return CapManifest{ plugin_id: "", capabilities: [], rfc_version: 0, compiler_id: "" }
+    }
+    let hdr = rows[0]
+    if len(hdr) < 4 || hdr[0] != "H" {
+        return CapManifest{ plugin_id: "", capabilities: [], rfc_version: 0, compiler_id: "" }
+    }
+    let plugin_id = hdr[1]
+    let rfc_v = _dynlink_parse_int(hdr[2])
+    let compiler_id = hdr[3]
+    let mut caps = []
+    let mut i: int = 1
+    while i < len(rows) {
+        let r = rows[i]
+        if len(r) >= 2 && r[0] == "C" {
+            caps.push(r[1])
+        }
+        i = i + 1
+    }
     return CapManifest{
-        plugin_id: "",
-        capabilities: [],
-        rfc_version: 0,
-        compiler_id: "",
+        plugin_id: plugin_id,
+        capabilities: caps,
+        rfc_version: rfc_v,
+        compiler_id: compiler_id,
     }
 }
 
-// dynlink_check_cap_grant — RFC 070 F-D2 implementation hook.
-// For each declared capability c in manifest.capabilities, checks the host's
-// grant_table. On any ungranted c: sets hexa_dlerror to "CAP: <c> not granted"
-// (first ungranted in sort order) and returns 0. On PASS: returns 1.
+fn _dynlink_parse_int(s: string) -> int {
+    let mut acc: int = 0
+    let mut i: int = 0
+    while i < len(s) {
+        let c = s.byte_at(i)
+        if c < 48 || c > 57 { return acc }  // non-digit terminates
+        acc = acc * 10 + (c - 48)
+        i = i + 1
+    }
+    return acc
+}
+
+fn _dynlink_sort_strings_asc(xs: [string]) -> [string] {
+    // @cite TAOCP vol 3 §5.2.3 simple insertion sort (n typically <= 8 capabilities)
+    let mut out = []
+    let mut i: int = 0
+    while i < len(xs) {
+        out.push(xs[i])
+        i = i + 1
+    }
+    let n = len(out)
+    let mut k: int = 1
+    while k < n {
+        let cur = out[k]
+        let mut j: int = k - 1
+        while j >= 0 && out[j] > cur {
+            out[j + 1] = out[j]
+            j = j - 1
+        }
+        out[j + 1] = cur
+        k = k + 1
+    }
+    return out
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Host-side gate (G7-D.impl bodies — operate on BYTES, not paths)
+// ──────────────────────────────────────────────────────────────────────
+
+// dynlink_check_abi_compat — RFC 070 F-D1 implementation.
+// Caller (G7-C hexa_dlopen) mmaps the .so and locates the __HEXA,__abi /
+// .hexa.abi section, then passes the 12 B payload here. Helper compares
+// against host's compiled-in (runtime_version, nanbox_layout_hash).
 //
-// SKELETON: returns 0 (fails closed). G7-D.impl wires:
-//   - host config -> grant_table[string] (env var HEXA_PLUGIN_GRANTS or
-//     $WILSON_CONFIG_DIR/plugin_grants.tape)
-//   - sorted iteration matching F-D2 contract
-pub fn dynlink_check_cap_grant(manifest: CapManifest, grant_table: [string]) -> int {
-    // G7-D.impl:
-    //   for each c in manifest.capabilities (sorted ascending):
-    //       if !grant_table.contains(c):
-    //           hexa_dlerror_set("CAP: " + c + " not granted")
-    //           return 0
-    //   return 1
-    return 0
+// On PASS: returns GateResult{ ok=1, kind="ok", reason="" }.
+// On FAIL: returns GateResult with kind="abi_mismatch" and reason matching
+//   /^ABI: (host v.+ vs plugin v.+|nanbox_layout_hash mismatch .+)$/.
+//
+// @cite RFC 070 §4.6.4 F-D1 contract
+pub fn dynlink_check_abi_compat(abi_bytes: string) -> GateResult {
+    if len(abi_bytes) < 12 {
+        return GateResult{ ok: 0, kind: "bad_input", reason: "ABI: section too short (need 12 B, got " + to_string(len(abi_bytes)) + ")" }
+    }
+    let plugin = dynlink_decode_abi_stamp(abi_bytes)
+    let host_rv = dynlink_host_runtime_version()
+    let host_nlh = dynlink_host_nanbox_layout_hash()
+    if plugin.runtime_version != host_rv {
+        return GateResult{
+            ok: 0,
+            kind: "abi_mismatch",
+            reason: "ABI: host v" + to_string(host_rv) + " vs plugin v" + to_string(plugin.runtime_version),
+        }
+    }
+    if plugin.nanbox_layout_hash != host_nlh {
+        return GateResult{
+            ok: 0,
+            kind: "abi_mismatch",
+            reason: "ABI: nanbox_layout_hash mismatch host=" + to_string(host_nlh) + " plugin=" + to_string(plugin.nanbox_layout_hash),
+        }
+    }
+    return GateResult{ ok: 1, kind: "ok", reason: "" }
+}
+
+// dynlink_parse_cap_manifest — alias name preserved for §4.6 scaffold
+// callers. Identical to dynlink_decode_cap_manifest.
+//
+// @cite RFC 070 §3.C HXC v2 parse hook
+pub fn dynlink_parse_cap_manifest(cap_bytes: string) -> CapManifest {
+    return dynlink_decode_cap_manifest(cap_bytes)
+}
+
+// dynlink_check_cap_grant — RFC 070 F-D2 implementation.
+// For each declared capability c in manifest.capabilities (already sorted
+// ascending by dynlink_encode_cap_manifest), checks the host's grant_table.
+// On any ungranted c: returns GateResult kind="cap_ungranted" with
+// reason "CAP: <c> not granted" (first ungranted in sort order).
+// On PASS: returns GateResult ok=1.
+//
+// @cite RFC 070 §4.6.4 F-D2 contract (least-privilege, first-fail)
+pub fn dynlink_check_cap_grant(manifest: CapManifest, grant_table: [string]) -> GateResult {
+    let mut i: int = 0
+    while i < len(manifest.capabilities) {
+        let c = manifest.capabilities[i]
+        if !_dynlink_table_contains(grant_table, c) {
+            return GateResult{
+                ok: 0,
+                kind: "cap_ungranted",
+                reason: "CAP: " + c + " not granted",
+            }
+        }
+        i = i + 1
+    }
+    return GateResult{ ok: 1, kind: "ok", reason: "" }
+}
+
+fn _dynlink_table_contains(tbl: [string], needle: string) -> bool {
+    let mut i: int = 0
+    while i < len(tbl) {
+        if tbl[i] == needle { return true }
+        i = i + 1
+    }
+    return false
 }
 
 // dynlink_full_gate — combined F-D1 + F-D2 check, used by hexa_dlopen (G7-C).
-// SKELETON: returns 0 (fails closed; matches "no .so passes the gate until
-// G7-D.impl lands the real check").
-pub fn dynlink_full_gate(so_path: string, grant_table: [string]) -> int {
-    if dynlink_check_abi_compat(so_path) == 0 {
-        return 0
+// Caller passes the bytes of both sections (and an empty string if a
+// section is missing — which is treated as fail-closed).
+//
+// @cite RFC 070 §4.6.4 combined gate (F-D1 first, F-D2 only if F-D1 passes)
+pub fn dynlink_full_gate(abi_bytes: string, cap_bytes: string, grant_table: [string]) -> GateResult {
+    let abi_res = dynlink_check_abi_compat(abi_bytes)
+    if abi_res.ok == 0 {
+        return abi_res
     }
-    let m = dynlink_parse_cap_manifest(so_path)
-    if dynlink_check_cap_grant(m, grant_table) == 0 {
-        return 0
-    }
-    return 1
+    let m = dynlink_decode_cap_manifest(cap_bytes)
+    return dynlink_check_cap_grant(m, grant_table)
 }
