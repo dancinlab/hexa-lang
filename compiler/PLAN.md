@@ -7445,3 +7445,60 @@ implementation per Phase 1 plan.
 
 Runtime rewrite is multi-week work. Cycle 42 = scope clarified +
 inventory measured. Subsequent cycles will iterate Tier-A symbols.
+
+
+### 2026-05-20 — follow-up cycle 43: dead-strip + -Oz on build_aprime.sh — 55% binary shrink, LEAN S3 fixpoint PRESERVED
+
+cycle 42 의 RFC plan 의 Phase 0 (preparatory) — runtime hexa-native
+rewrite 시작 전 build chain 의 dead-code-strip 가능성 측정.
+
+**Patch — tool/build_aprime.sh stage 4 clang invocation**:
+
+```diff
+- clang -O1 -arch arm64 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
++ clang -Oz -arch arm64 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
++     -ffunction-sections -fdata-sections -Wl,-dead_strip \
+      -I self -I . "$APPOST" -o "$OUT" -lm
+```
+
+`-Oz` (size optimization), `-ffunction-sections + -fdata-sections`
+(per-function sections), `-Wl,-dead_strip` (linker drops unreferenced).
+
+**측정 — aprime_cc**:
+
+| 메트릭 | original (aprime_c41) | lean (aprime_lean3) |
+|--------|----------------------:|--------------------:|
+| binary size | 2,244,568 B | **1,001,664 B** (−55%) |
+| external symbols (libc) | 173 | **137** (−21%) |
+| T symbols (defined runtime fns) | 509 | **186** (−63%) |
+| t symbols (file-local) | 50 | similar |
+
+**LEAN S3 fixpoint full closure (10.6 MB compiler/main.hexa flat)**:
+
+```
+aprime_lean3 emit-asm: 10,657,152 B md5 39dbb35c1606c3cf0886c5fb00e7cabc
+hexac_lean3   emit-asm: 10,657,152 B md5 39dbb35c1606c3cf0886c5fb00e7cabc
+diff: 🛸 BYTE IDENTICAL — lean self-host fixpoint preserved
+```
+
+md5 differs from cycle 41 baseline (`4197fd52...`) by design — `-Oz`
+emits slightly different machine code than `-O1`, but both LEAN
+compilers agree with each other (fixpoint stable within the lean
+toolchain).
+
+**Honest scope** (g3):
+
+cycle 43 = build-time optimization. Did NOT eliminate any externs;
+just removed 36 dead libc references that the compiler didn't
+actually call. The remaining 137 externs are genuine runtime
+dependencies (mmap, write, exit, malloc family, libm, …) — these
+need Phase 1+ source-level replacement to disappear.
+
+**RFC 063 / 067 phasing**: 43 cycles · 18 falsifier + 11 measure ·
+ALL P0-P3 closed · S3 fixpoint full closure PROVEN (cycle 41) +
+LEAN fixpoint PRESERVED (cycle 43).
+
+**Files modified**: tool/build_aprime.sh (3 lines functional + 4
+lines comment).
+
+**cc --regen / binary promote**: 미수행. tool/* change only.
