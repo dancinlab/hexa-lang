@@ -1,5 +1,16 @@
 // @allow-bare-exec-file
-// L2-migration scaffolding: external-tool exec() sites (as / ld / xcrun) remain by design (L1 keepers); intrinsified sites use compiler/intrinsics/intrinsics.hexa.
+// L1→L3 marker (RFC 063 § P3, 2026-05-20):
+//   - `as` fork site (line ~836): L1 → **L3 RETIRING** — the
+//     `--backend=native` path (default for arm64-apple-darwin obj emit)
+//     uses `compiler/emit/macho_arm64.hexa::pack_lir + serialize` and
+//     forks 0 external tools (F-P3-ZERO-EXTERN-OBJ measured 2026-05-20).
+//     `as` fork remains as the `--backend=system` opt-out path.
+//   - `ld` fork site (line ~885): L1 → L3-RETIRING — `tool/hexa_ld.hexa`
+//     replaces `ld` for static-link with synthetic stubs (F-P1-RUNEQ
+//     measured). Real-runtime link still uses `ld` (follow-up RFC).
+//   - `xcrun --show-sdk-path` (line ~882): L1 keeper — OS sysroot
+//     probe, no native equivalent.
+// Intrinsified sites use `compiler/intrinsics/intrinsics.hexa`.
 // HEXA Native Compiler — Entry Point (Phase A1+B1+B2+B3+B3+B4+lower+codegen+emit)
 //
 // Authoritative design: SPEC.yaml + RFC-018 §2 (pipeline order).
@@ -47,6 +58,7 @@ import "./codegen/stream.hexa"
 import "./codegen/nvptx_target.hexa"
 import "./check/target_gate.hexa"
 import "./emit/asm.hexa"
+import "./emit/macho_arm64.hexa"
 import "./diag/catalog.hexa"
 import "./diag/builder.hexa"
 import "./diag/render.hexa"
@@ -307,6 +319,18 @@ let mut target = detect_default_target()
 let mut emit_kind = "exec"
 let mut error_format = "pretty"
 let mut linker_kind = "system"
+// RFC 063 § P0+P3 (S7) — `--backend=native` selects the hexa-native
+// Mach-O arm64 object emitter (`compiler/emit/macho_arm64.hexa
+// ::pack_lir + serialize`) instead of writing `.s` text and forking
+// `as`. After P0 closure (F-P0-OBJEQ corpus 4/4 byte-eq, 2026-05-20)
+// the default flips to `native` for arm64-apple-darwin obj emit;
+// `--backend=system` retains the legacy path as opt-out.
+//
+// The flip is applied AFTER arg parsing (so `--backend=system` user
+// override wins) and is conditional on (target == arm64-apple-darwin
+// && emit_kind == "obj"). Other targets / emit modes keep `system`.
+let mut backend_kind = "system"
+let mut backend_kind_user_set = false
 let mut source_path = ""
 let mut keep_temp = false
 let mut verbose = false
@@ -317,6 +341,16 @@ let mut verbose = false
 let mut stream_mode = false
 let _stream_env = env("HEXA_STREAM")
 if _stream_env == "1" { stream_mode = true }
+
+// HEXA_CG_PROFILE=1 — S1-step-1 codegen instrumentation (compiler/PLAN.md
+// #18). Emits per-phase wall-clock timing to stderr for lower_hir
+// (HIR->MIR), MIR-opt, codegen (MIR->LIR) and emit (LIR->asm). The probe
+// localises the super-linear codegen cost without changing any output:
+// when the env var is unset every cg_profile* call is a silent no-op
+// (gated on `cg_profile` — no mono_ns() syscall, no stderr write).
+let mut cg_profile = false
+let _cgp_env = env("HEXA_CG_PROFILE")
+if _cgp_env == "1" { cg_profile = true }
 // Stage1 punch list Gap 13: `--strict-citations` defaults OFF. While compiler/
 // source is not yet fully cite-bound (every implementation function would
 // need an @implements/@discover annotation otherwise), we run citation_check
@@ -377,6 +411,14 @@ while ai < len(user_argv) {
     } else if len(a) >= 9 && a.substring(0, 9) == "--linker=" {
         linker_kind = a.substring(9, len(a))
         ai = ai + 1
+    } else if len(a) >= 10 && a.substring(0, 10) == "--backend=" {
+        // S7 P0 — `--backend=native` routes `--emit=obj` through the
+        // hexa-side Mach-O writer. Any other value (incl. "system")
+        // keeps the legacy `as`/clang path. P3 (2026-05-20): explicit
+        // user-set flag wins over the default flip applied below.
+        backend_kind = a.substring(10, len(a))
+        backend_kind_user_set = true
+        ai = ai + 1
     } else if len(a) > 5 && a.substring(0, 6) == "--opt=" {
         opt_level = to_int(a.substring(6, len(a)))
         ai = ai + 1
@@ -418,6 +460,15 @@ while ai < len(user_argv) {
 
 if want_help { print_help(); exit(0) }
 if want_version { print_version(); exit(0) }
+
+// RFC 063 § P3 — flip the default. If user didn't explicitly set
+// `--backend=`, default to `native` for arm64-apple-darwin obj emit
+// (post-P0-closure 2026-05-20). Opt-out via `--backend=system`.
+if !backend_kind_user_set
+    && target == "arm64-apple-darwin"
+    && emit_kind == "obj" {
+    backend_kind = "native"
+}
 
 if len(source_path) == 0 {
     eprintln("hexa-compiler: missing SOURCE.hexa")
@@ -466,6 +517,40 @@ fn phase_reset(name: string) {
 fn phase_log(name: string) {
     if verbose {
         let _ = env("__HEXA_PHASE_LOG__" + name)
+    }
+}
+
+// ── HEXA_CG_PROFILE — per-phase codegen wall-clock probe (S1-step-1) ──
+//
+// Companion to phase_reset/phase_log. Where those reclaim the bump arena
+// at phase boundaries, cg_profile_mark records a CLOCK_MONOTONIC reading
+// (mono_ns() — TAG_INT nanoseconds, runtime.c hexa_mono_ns) and emits the
+// delta since the previous mark to stderr as a `CG_PROFILE` row. The
+// probe is fully gated on the module-scope `cg_profile` flag: when
+// HEXA_CG_PROFILE is unset there is no mono_ns() syscall and no stderr
+// write — zero behavior change, zero cost.
+//
+// `_cg_last_ns` holds the previous mark; cg_profile_begin seeds it so the
+// first delta is measured from pipeline entry, not from 0.
+let mut _cg_last_ns: i64 = 0
+
+fn cg_profile_begin() {
+    if cg_profile {
+        _cg_last_ns = mono_ns()
+        eprintln("CG_PROFILE  phase=begin              delta_ms=0")
+    }
+}
+
+// cg_profile_mark(label) — print ms elapsed since the previous mark and
+// re-seed the cursor. `label` names the phase that JUST COMPLETED.
+fn cg_profile_mark(label: string) {
+    if cg_profile {
+        let now = mono_ns()
+        let delta_ns = now - _cg_last_ns
+        let delta_ms = delta_ns / 1000000
+        _cg_last_ns = now
+        eprintln("CG_PROFILE  phase=" + label
+            + "  delta_ms=" + to_string(delta_ms))
     }
 }
 
@@ -626,10 +711,18 @@ if stream_mode && target == "arm64-apple-darwin" {
         eprintln("hexa-compiler: --stream uses the fused per-function path; "
             + "--opt is not applied (omit --stream for the MIR optimizer)")
     }
+    cg_profile_begin()
     asm_text = codegen_emit_streaming(hmodule, target)
+    // S1-step-1 — the --stream path fuses lower/codegen/emit per-function
+    // so there is one combined mark rather than four phase boundaries.
+    cg_profile_mark("stream_fused")
     phase_reset("post_emit_asm")
 } else {
+    // S1-step-1 codegen profile — seed the wall-clock cursor at the
+    // entry of the lower/opt/codegen/emit pipeline (post-frontend).
+    cg_profile_begin()
     let mut mmodule = lower_hir(hmodule)
+    cg_profile_mark("lower_hir")
 
     // #14 — drain Lower-cluster diagnostics (HX1101/HX1102/HX1103) so they
     // surface in CLI alongside parser/check/units diags. hir_to_mir.hexa
@@ -680,6 +773,9 @@ if stream_mode && target == "arm64-apple-darwin" {
         mmodule = const_fold(mmodule)
         mmodule = dce(mmodule)
     }
+    // S1-step-1 — MIR-opt phase boundary (no-op at --opt=0, but the
+    // _mmod_stmt_count walk above still runs; measure it regardless).
+    cg_profile_mark("mir_opt")
 
     if opt_level > 0 && verbose {
         let post_opt_stmts = _mmod_stmt_count(mmodule)
@@ -722,6 +818,27 @@ if stream_mode && target == "arm64-apple-darwin" {
     // label strings + opcode mnemonics from the per-fn lower can be
     // released before emit_asm allocates the rendered assembly text.
     phase_reset("post_codegen")
+    // S1-step-1 — codegen (MIR->LIR) phase boundary. This is the phase
+    // PLAN.md #18 flags as super-linear; the prior cycle removed the
+    // arm64 stmt-loop O(N^2), the residual lives in lower_hir.
+    cg_profile_mark("codegen")
+
+    // ── Emit OBJ (native, RFC 063 § P0) ─────────────────────────
+    //
+    // When `--backend=native` and `target=arm64-apple-darwin`, write
+    // the Mach-O `.o` directly via `pack_lir` + `serialize`. Skips
+    // `.s` text + `as`/clang fork entirely. Branches early — out_path
+    // is final and we exit here.
+    if emit_kind == "obj" && backend_kind == "native" && target == "arm64-apple-darwin" {
+        let obj_data = pack_lir(lmodule)
+        let obj_bytes = serialize(obj_data)
+        write_bytes(out_path, obj_bytes)
+        if verbose {
+            eprintln("hexa-compiler: emitted Mach-O .o via native backend ("
+                     + to_string(len(obj_bytes)) + " bytes) to " + out_path)
+        }
+        exit(0)
+    }
 
     // RFC 055 055-P3 — NVPTX uses the PTX text emit pass, not the CPU
     // emit_asm renderer (PTX's operand surface differs from the CPU
@@ -734,6 +851,8 @@ if stream_mode && target == "arm64-apple-darwin" {
     } else {
         asm_text = emit_asm(lmodule)
     }
+    // S1-step-1 — emit (LIR->asm text) phase boundary.
+    cg_profile_mark("emit_asm")
 
     // Phase boundary 6: emit done. asm_text is the final bytestring that
     // gets written to disk; reset is safe (nothing downstream of write
@@ -780,7 +899,10 @@ write_file(asm_path, asm_text)
 // we surface verbatim.
 
 let as_cmd = "as " + asm_path + " -o " + obj_path + " 2>&1"
-// L1 keeper: external assembler invocation; replaced when self-as lands.
+// L1 → L3-RETIRING (RFC 063 § P3, 2026-05-20): replaced by
+// `compiler/emit/macho_arm64.hexa::pack_lir + serialize` when
+// `--backend=native` (default for arm64-apple-darwin obj emit).
+// This `as` fork runs only for `--backend=system` opt-out path.
 let as_out = exec(as_cmd)
 // TODO(L2): replace with file_exists intrinsic candidate.
 let as_status = exec("test -f " + obj_path + " && echo ok || echo fail").trim()

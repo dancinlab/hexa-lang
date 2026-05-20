@@ -1,0 +1,106 @@
+// F-P0-OBJEQ-TEXT — cycle 2 sub-falsifier (RFC 063 § P0).
+//
+// Checks that `compiler/emit/macho_arm64.hexa::pack_lir()` emits the
+// correct 4-byte little-endian instruction words for a synthetic
+// 2-instruction LFunc:
+//
+//   mov x0, #42      → encoded 0xD2800540
+//   ret              → encoded 0xD65F03C0
+//
+// Compares the `__text` section bytes byte-for-byte to a hand-built
+// reference word table. Stack-only — no LIR frontend required.
+
+import "../../emit/macho_arm64.hexa"
+import "../../ir/lir.hexa"
+
+fn _hex8(v: Int) -> string {
+    // Format `v` (0..255) as a 2-digit lowercase hex byte. Stack-only,
+    // no stdlib hex helpers.
+    let hi = (v >> 4) & 0xF
+    let lo = v & 0xF
+    let digits = "0123456789abcdef"
+    return digits.substring(hi, hi + 1) + digits.substring(lo, lo + 1)
+}
+
+fn _bytes_to_hex(bytes: [Int]) -> string {
+    let n = len(bytes)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        if i > 0 { out = out + " " }
+        out = out + _hex8(bytes[i] & 0xFF)
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    // Build a synthetic LFunc — bypass the frontend entirely.
+    //   mov x0, #42
+    //   ret
+    let x0 = PReg { name: "x0", kind: "gpr" }
+
+    let mov_args: [LOperand] = [
+        LOperand { kind: "reg", reg: x0, imm: 0, mem_base: x0, mem_offset: 0, label: "" },
+        LOperand { kind: "imm", reg: x0, imm: 42, mem_base: x0, mem_offset: 0, label: "" },
+    ]
+    let mov_ins = LInstr { op: "mov", args: mov_args, comment: "" }
+
+    let ret_args: [LOperand] = []
+    let ret_ins = LInstr { op: "ret", args: ret_args, comment: "" }
+
+    let f = LFunc {
+        name:         "trivial",
+        target:       "arm64-apple-darwin",
+        instrs:       [mov_ins, ret_ins],
+        frame_size:   0,
+        callee_saved: [],
+        def_line:     0,
+    }
+    let lm = LModule {
+        file:    "test_trivial.hexa",
+        target:  "arm64-apple-darwin",
+        funcs:   [f],
+        rodata:  [],
+        bss:     [],
+        globals: [],
+        floats:  [],
+    }
+
+    let obj = pack_lir(lm)
+    let text_len = len(obj.text)
+    println("F-P0-OBJEQ-TEXT: packed " + to_string(text_len) + " bytes of __text")
+    println("  ours: " + _bytes_to_hex(obj.text))
+
+    // Reference: MOVZ X0, #42 = 0xD2800540 → LE bytes 40 05 80 d2
+    //            RET           = 0xD65F03C0 → LE bytes c0 03 5f d6
+    let expected: [Int] = [
+        0x40, 0x05, 0x80, 0xD2,     // mov x0, #42
+        0xC0, 0x03, 0x5F, 0xD6,     // ret
+    ]
+    let exp_len = len(expected)
+    if text_len != exp_len {
+        println("  FAIL: text length " + to_string(text_len) + " != expected " + to_string(exp_len))
+        exit(1)
+    }
+    let mut i = 0
+    while i < text_len {
+        if (obj.text[i] & 0xFF) != expected[i] {
+            println("  FAIL: byte " + to_string(i) + " is 0x" + _hex8(obj.text[i] & 0xFF) +
+                    " expected 0x" + _hex8(expected[i]))
+            println("  expected: " + _bytes_to_hex(expected))
+            exit(2)
+        }
+        i = i + 1
+    }
+
+    // Now serialize through the full Mach-O writer (cycle 1) and write
+    // a real .o that `otool -d` can disassemble — proves the integration
+    // path holds end-to-end.
+    let bytes = serialize(obj)
+    write_bytes("/tmp/macho_p0_cycle2.ours.o", bytes)
+    println("  wrote " + to_string(len(bytes)) + " bytes to /tmp/macho_p0_cycle2.ours.o")
+
+    println("F-P0-OBJEQ-TEXT PASS — __text bytes match expected arm64 encoding")
+    exit(0)
+}

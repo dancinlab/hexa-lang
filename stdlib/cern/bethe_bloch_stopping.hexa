@@ -1,0 +1,309 @@
+#!hexa strict
+// stdlib/cern/bethe_bloch_stopping.hexa — antiproton dE/dx via Bethe-Bloch (CLEAN-ROOM)
+//
+// @version 0.0.1
+// @capabilities [analytic, stopping-power, oracle, fs_write]
+// @stability stage-2 — hexa-native re-derivation of the Stage 1 Python
+//            substrate (`bethe_bloch_stopping.py`); selftest validates
+//            numeric parity against the substrate's reference points.
+// @since 2026-05-20
+//
+// CLEAN-ROOM PROVENANCE (demiurge design.md Decision 1)
+//   *** This module is NOT a Geant4 re-derivation. ***
+//   It re-derives the PDG Review of Particle Physics' published closed-
+//   form for the mean stopping power dE/dx (Bethe-Bloch, density-
+//   correction δ = 0), evaluated on PDG-aggregated measured constants.
+//   The formula is a public textbook result — no Geant4 source-code
+//   inspection, only the PDG review + standard atomic-physics tables.
+//   - external formula : Particle Data Group, "Review of Particle
+//                         Physics", §34 "Passage of particles through
+//                         matter", eq. 34.5 (Bethe-Bloch mean stopping
+//                         power), eq. 34.7 (T_max relativistic).
+//                         Workman et al., Phys. Rev. D 110 (2024) 030001.
+//   - external table   : PDG Atomic & Nuclear Properties, Table 34.1
+//                         (mean excitation energy I per element).
+//   - external constant: K = 4πN_Ar_e²m_ec² = 0.307075 MeV·cm²·g⁻¹.
+//   - external masses  : antiproton 938.27208816 MeV/c², electron
+//                         0.51099895 MeV/c² (PDG 2024 — folded here as
+//                         compile-time constants; no run-time PDG dep,
+//                         unlike the Stage 1 substrate's `particle` use).
+//
+// STAGE LADDER (demiurge ABSORPTION.md §"hexa 포팅 단계")
+//   Stage 1  bethe_bloch_stopping.py        substrate, particle + uproot
+//   Stage 2  THIS FILE                      hexa-native re-derivation
+//   Stage 3  selftest() parity gate         numeric match vs substrate
+//   Stage 4  absorbed=true                  only after a Geant4-MC
+//                                           parity round (shell + density
+//                                           + straggling + nuclear) —
+//                                           NOT reachable from this file
+//
+// HONESTY (g3 — non-negotiable)
+//   Bethe-Bloch is the closed-form Geant4 G4hIonisation populates its
+//   tables from in the non-relativistic regime; this re-derivation
+//   omits the SAME four pieces the Stage 1 substrate omits: shell
+//   corrections, density-effect δ, straggling distribution, nuclear
+//   stopping channel. So even with a hexa-native body the cell stays
+//   measurement_gate = GATE_OPEN / absorbed = false. Stage 4 needs a
+//   Geant4-MC parity round, out of scope here.
+//
+// Parity (Stage 3): the dE/dx values MUST match the Stage 1 Python
+// substrate within 1e-6 relative — both evaluate the identical closed
+// form on the identical constants, so the only spread is float64
+// round-off + libm-vs-libm `log` differences. selftest() pins four
+// reference points captured from a substrate run (particle 0.26.2).
+
+use "stdlib/core/math/float"
+
+// ─── public types ────────────────────────────────────────────────────────
+
+// One target-material row (Z, A, I_eV) per PDG Table 34.1.
+struct StoppingMaterial {
+    name:   str,        // "Al" / "Cu" / "W" / "Pb"
+    z:      int,        // atomic number
+    a_mol:  float,      // atomic mass g/mol (natural-mix avg for W/Pb)
+    i_ev:   float,      // mean excitation energy in eV
+}
+
+// One projectile spec (mass + charge magnitude).
+struct StoppingProjectile {
+    name:      str,     // "antiproton"
+    mass_mev:  float,   // rest mass MeV/c²
+    z_charge:  int,     // charge magnitude (sign drops in z² of the formula)
+}
+
+// One (projectile, KE, material) output point.
+struct StoppingPoint {
+    material:  str,
+    z_target:  int,
+    a_target:  float,
+    i_ev:      float,
+    ke_mev:    float,
+    beta:      float,
+    gamma:     float,
+    tmax_mev:  float,
+    dedx:      float,   // MeV·cm²/g
+}
+
+// ─── constants (fn form — `pub let` is not AOT-stable, math/float.hexa) ───
+
+// Bethe-Bloch K factor: 4πN_A r_e² m_ec² = 0.307075 MeV·cm²·g⁻¹ (PDG eq. 34.5).
+fn k_bb() -> float { return 0.307075 }
+
+// Electron rest mass MeV/c² (PDG 2024).
+fn electron_mass_mev() -> float { return 0.51099895 }
+
+// Antiproton rest mass MeV/c² (PDG 2024 — charge-conjugate of the proton).
+fn antiproton_mass_mev() -> float { return 938.27208816 }
+
+// ─── core evaluation ──────────────────────────────────────────────────────
+
+// Evaluate Bethe-Bloch at one (projectile, KE_MeV, material) point.
+// PDG eq. 34.5 with the density-effect term δ = 0 (low/mid-energy
+// regime). Mirrors `bethe_bloch_stopping.py::bethe_bloch_dedx`.
+//
+//   γ      = 1 + KE / (m_proj·c²)
+//   β²     = 1 − 1/γ²
+//   T_max  = 2·m_e·β²·γ² / (1 + 2γ·m_e/m_proj + (m_e/m_proj)²)
+//   I_MeV  = I_eV · 1e-6
+//   −dE/dx = K·z²·(Z/A)·(1/β²)·[½·ln(2·m_e·β²·γ²·T_max / I_MeV²) − β²]
+fn evaluate(proj: StoppingProjectile, ke_mev: float,
+            mat: StoppingMaterial) -> StoppingPoint {
+    let m_proj = proj.mass_mev
+    let m_e = electron_mass_mev()
+
+    let gamma = 1.0 + ke_mev / m_proj
+    let beta2 = 1.0 - 1.0 / (gamma * gamma)
+    let beta = sqrt(beta2)
+
+    let me_over_mp = m_e / m_proj
+    let tmax_num = 2.0 * m_e * beta2 * gamma * gamma
+    let tmax_den = 1.0 + 2.0 * gamma * me_over_mp + me_over_mp * me_over_mp
+    let tmax = tmax_num / tmax_den
+
+    let i_mev = mat.i_ev * 0.000001
+    let log_arg = 2.0 * m_e * beta2 * gamma * gamma * tmax / (i_mev * i_mev)
+
+    let z2 = to_float(proj.z_charge * proj.z_charge)
+    let z_over_a = to_float(mat.z) / mat.a_mol
+    let dedx = k_bb() * z2 * z_over_a * (0.5 * log(log_arg) - beta2) / beta2
+
+    return StoppingPoint {
+        material: mat.name,
+        z_target: mat.z,
+        a_target: mat.a_mol,
+        i_ev:     mat.i_ev,
+        ke_mev:   ke_mev,
+        beta:     beta,
+        gamma:    gamma,
+        tmax_mev: tmax,
+        dedx:     dedx,
+    }
+}
+
+// ─── canonical inputs (mirror the Stage 1 substrate's tables) ─────────────
+
+// The antiproton projectile.
+fn antiproton() -> StoppingProjectile {
+    return StoppingProjectile {
+        name: "antiproton", mass_mev: antiproton_mass_mev(), z_charge: 1
+    }
+}
+
+// Four CERN-style shielding / trap materials (PDG Table 34.1).
+fn cern_materials() -> [StoppingMaterial] {
+    let mut mats: [StoppingMaterial] = []
+    mats = mats.push(StoppingMaterial { name: "Al", z: 13, a_mol: 26.9815, i_ev: 166.0 })
+    mats = mats.push(StoppingMaterial { name: "Cu", z: 29, a_mol: 63.5460, i_ev: 322.0 })
+    mats = mats.push(StoppingMaterial { name: "W",  z: 74, a_mol: 183.840, i_ev: 727.0 })
+    mats = mats.push(StoppingMaterial { name: "Pb", z: 82, a_mol: 207.200, i_ev: 823.0 })
+    return mats
+}
+
+// Seven kinetic-energy sample points (1 MeV–1 GeV) — ELENA injection
+// scale to fixed-target scale. Coarse grid (premature-optimization
+// avoidance per the substrate's scope_caveat).
+fn ke_samples() -> [float] {
+    return [1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0]
+}
+
+// Sweep evaluate over (materials × KE samples). Output preserves the
+// substrate's row order: material-major, KE-minor.
+fn sweep_table(proj: StoppingProjectile,
+               mats: [StoppingMaterial],
+               kes: [float]) -> [StoppingPoint] {
+    let mut table: [StoppingPoint] = []
+    let mut mi = 0
+    while mi < len(mats) {
+        let mut ki = 0
+        while ki < len(kes) {
+            table = table.push(evaluate(proj, kes[ki], mats[mi]))
+            ki = ki + 1
+        }
+        mi = mi + 1
+    }
+    return table
+}
+
+// ─── CSV emission ─────────────────────────────────────────────────────────
+
+// Render the sweep table as CSV text. Column order matches the Stage 1
+// substrate's `cern_g4_stopping_v1.csv` header; numeric formatting is
+// hexa's `str()` (NOT the substrate's `%.10g`) — Stage 3 parity is on
+// the numeric VALUES (1e-6 relative), not byte-identical text.
+fn emit_csv(table: [StoppingPoint]) -> str {
+    let mut s = "material,z_target,a_target_gpermol,i_ev,ke_mev,"
+    s = s + "beta,gamma,tmax_mev,dedx_mevcm2_per_g\n"
+    let mut i = 0
+    while i < len(table) {
+        let p = table[i]
+        s = s + p.material + ","
+        s = s + str(p.z_target) + ","
+        s = s + str(p.a_target) + ","
+        s = s + str(p.i_ev) + ","
+        s = s + str(p.ke_mev) + ","
+        s = s + str(p.beta) + ","
+        s = s + str(p.gamma) + ","
+        s = s + str(p.tmax_mev) + ","
+        s = s + str(p.dedx) + "\n"
+        i = i + 1
+    }
+    return s
+}
+
+// ─── Stage 3 parity selftest ──────────────────────────────────────────────
+
+// Relative-error helper. Both inputs finite + nonzero in our use.
+fn rel_err(got: float, want: float) -> float {
+    let d = got - want
+    let a = if d < 0.0 { 0.0 - d } else { d }
+    let w = if want < 0.0 { 0.0 - want } else { want }
+    return a / w
+}
+
+// One parity check against a Stage 1 substrate reference point.
+// Prints PASS/FAIL; returns 1 on pass, 0 on fail.
+fn check_point(label: str, got: float, want: float, tol: float) -> int {
+    let e = rel_err(got, want)
+    if e <= tol {
+        println("  PASS " + label + " — dedx=" + str(got)
+            + " (ref " + str(want) + ", relerr " + str(e) + ")")
+        return 1
+    }
+    println("  FAIL " + label + " — dedx=" + str(got)
+        + " (ref " + str(want) + ", relerr " + str(e) + " > tol " + str(tol) + ")")
+    return 0
+}
+
+// Stage 3 numeric-parity selftest. The four reference dE/dx values
+// were captured from a Stage 1 Python substrate run (particle 0.26.2,
+// uproot 5.7.4) — see demiurge PLAN.md κ-42. Tolerance 1e-6 relative:
+// both sides evaluate the identical closed form, so only float64
+// round-off + libm `log` spread remains.
+fn selftest() -> int {
+    println("bethe_bloch_stopping.hexa — Stage 3 parity selftest")
+    let proj = antiproton()
+    let mats = cern_materials()
+
+    let al = mats[0]   // Al
+    let pb = mats[3]   // Pb
+    let tol = 0.000001
+
+    let mut pass = 0
+    let mut total = 0
+
+    // Al @ 1 MeV — substrate dedx = 178.824652
+    let al1 = evaluate(proj, 1.0, al)
+    pass = pass + check_point("Al@1MeV", al1.dedx, 178.824652, tol)
+    total = total + 1
+
+    // Al @ 1000 MeV — substrate dedx = 1.766629737
+    let al1000 = evaluate(proj, 1000.0, al)
+    pass = pass + check_point("Al@1GeV", al1000.dedx, 1.766629737, tol)
+    total = total + 1
+
+    // Pb @ 100 MeV — substrate dedx = 3.609992692
+    let pb100 = evaluate(proj, 100.0, pb)
+    pass = pass + check_point("Pb@100MeV", pb100.dedx, 3.609992692, tol)
+    total = total + 1
+
+    // Pb @ 1000 MeV — substrate dedx = 1.196980424
+    let pb1000 = evaluate(proj, 1000.0, pb)
+    pass = pass + check_point("Pb@1GeV", pb1000.dedx, 1.196980424, tol)
+    total = total + 1
+
+    println("bethe_bloch_stopping.hexa selftest: " + str(pass) + "/"
+        + str(total) + " PASS")
+    if pass == total { return 1 }
+    return 0
+}
+
+// ─── CLI entry ────────────────────────────────────────────────────────────
+
+// `hexa run stdlib/cern/bethe_bloch_stopping.hexa` — the rfc_003 idiom:
+// `hexa run` calls `main()` with NO arguments, so this entry sweeps the
+// canonical (4 × 7) table, writes a demo CSV to a fixed path, then runs
+// the Stage 3 parity selftest. exit 0 = parity PASS, 90 = parity FAIL
+// (gate-unmet, rfc_048 exit-code policy).
+//
+// A dynamic <out_dir> (the demiurge CernVerifyProducer spawn contract)
+// arrives once the `hexa-arch cern stopping --emit <dir>` dispatcher is
+// wired — same staging booksim followed (`hexa-arch booksim measure
+// --emit`). Until then the demiurge Swift wrapper keeps spawning the
+// Stage 1 Python substrate; this file is the Stage 2 deliverable +
+// Stage 3 parity gate.
+fn main() {
+    let proj = antiproton()
+    let table = sweep_table(proj, cern_materials(), ke_samples())
+
+    let csv_path = "/tmp/cern_g4_stopping_hexa.csv"
+    write_file(csv_path, emit_csv(table))
+    println("bethe_bloch_stopping.hexa — wrote " + str(len(table))
+        + " rows → " + csv_path)
+
+    let st = selftest()
+    if st == 1 {
+        println("STAGE-3 PARITY: GREEN")
+    } else {
+        println("STAGE-3 PARITY: RED — gate stays unmet (g3)")
+    }
+}

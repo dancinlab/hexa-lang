@@ -1566,6 +1566,50 @@ fn resolve_hexa_v2() {
     return ""
 }
 
+// S5 native-codegen campaign: resolve the native compiler binary
+// (compiler/main.hexa → built as `aprime_cc`). Mirrors resolve_hexa_v2()'s
+// probe order: env override > <install>/build/aprime_cc > ./build/aprime_cc
+// > $HEXA_LANG/build/aprime_cc. Returns "" when no binary is found — the
+// caller (cmd_build, HEXA_BACKEND=native) then fails LOUD, never silently
+// falling back to the C path.
+fn resolve_native_cc() {
+    let env_cc = exec("printf '%s' \"$HEXA_APRIME_CC\"")
+    if len(env_cc) > 0 {
+        let env_chk = exec("test -x '" + env_cc + "' && printf yes || printf no")
+        if env_chk == "yes" { return env_cc }
+    }
+    let inst = install_dir_from_argv0()
+    if len(inst) > 0 {
+        let inst_cc = inst + "/build/aprime_cc"
+        let inst_chk = exec("test -x '" + inst_cc + "' && printf yes || printf no")
+        if inst_chk == "yes" { return inst_cc }
+    }
+    let cwd_chk = exec("test -x './build/aprime_cc' && printf yes || printf no")
+    if cwd_chk == "yes" { return "./build/aprime_cc" }
+    let home_cc = exec("printf '%s' \"$HEXA_LANG/build/aprime_cc\"")
+    if len(home_cc) > 0 {
+        let home_chk = exec("test -x '" + home_cc + "' && printf yes || printf no")
+        if home_chk == "yes" { return home_cc }
+    }
+    return ""
+}
+
+// S5: fail-loud when HEXA_BACKEND=native but no native compiler binary.
+fn die_no_native_cc() {
+    println("error: native compiler binary (aprime_cc) not found")
+    println("       HEXA_BACKEND=native requires a built aprime_cc")
+    println("       searched:")
+    println("         $HEXA_APRIME_CC  (env override)")
+    let inst = install_dir_from_argv0()
+    if len(inst) > 0 {
+        println("         " + inst + "/build/aprime_cc  (from argv[0])")
+    }
+    println("         ./build/aprime_cc  (cwd)")
+    println("         $HEXA_LANG/build/aprime_cc  (dev fallback)")
+    println("       build it: bash tool/build_aprime.sh -o build/aprime_cc")
+    exit(1)
+}
+
 // R7 Cycle C closure — resolve_interp() and _probe_interp_at() removed.
 // The tree-walking interpreter is retired (g_interp_deprecated); no code
 // path resolves a build/hexa_interp binary anymore. `cmd_run` is compile-
@@ -1830,6 +1874,104 @@ fn cmd_build(src, out, c_only, target) {
         } else {
             println("  [flat] warn: compiled module_loader not found — falling back to raw src")
         }
+    }
+    // ─── S5 native-codegen backend selector ────────────────────────────
+    // HEXA_BACKEND=native → after the flatten step above, dispatch CODEGEN
+    // to the native compiler (aprime_cc) instead of the hexa_v2 transpiler.
+    // ADDITIVE + env-gated: HEXA_BACKEND unset or =c is the default and runs
+    // the C path below COMPLETELY UNCHANGED.
+    //
+    // Pipeline (native): aprime_cc --emit=asm → `<stem>.s`, then clang
+    // assembles the `.s` and links it against self/runtime.c (2nd TU) — the
+    // SAME final-link recipe the C path already uses. We deliberately do NOT
+    // use aprime_cc's own `--emit=exec`: as of the current build its built-in
+    // `ld` invocation links only the user `.o` (no runtime.o, no crt), so any
+    // program touching a runtime builtin — even `exit(6*7)`, which lowers to
+    // `_hexa_exit`/`_hexa_mul`/`_hexa_set_args` — fails `ld` with "symbol(s)
+    // not found". Self-sufficient `--emit=exec` linking is an S1-S4 native-
+    // linker-integration item; until it lands, --emit=asm + clang link is the
+    // proven recipe (it is exactly what tool/build_aprime.sh stage-5 does).
+    //
+    // HONEST SCOPE (S5): this wires the dispatch and smoke-verifies it on a
+    // trivial program. Full-corpus correctness of the native backend is
+    // gated on S1-S4 (codegen perf + self-host fixpoint), still in progress.
+    // The native path stays opt-in until then.
+    let __backend = env("HEXA_BACKEND")
+    if __backend == "native" {
+        let __ncc = resolve_native_cc()
+        if len(__ncc) == 0 {
+            die_no_native_cc()
+        }
+        // --c-only has no meaning for the native path (aprime_cc emits asm,
+        // not C) — refuse rather than silently ignore.
+        if c_only == "1" {
+            println("error: --c-only is unsupported with HEXA_BACKEND=native")
+            println("       the native compiler emits assembly, not C")
+            exit(1)
+        }
+        if len(target) > 0 {
+            println("error: --target is unsupported with HEXA_BACKEND=native")
+            println("       cross-compilation runs only on the C (clang/zig) path")
+            exit(1)
+        }
+        // runtime.c resolver — same chain the C path uses below
+        // ($HEXA_LANG/self > <install>/self > ./self).
+        let __nenvroot = env("HEXA_LANG")
+        let mut __nself = __inst + "/self"
+        if len(__nenvroot) > 0 && file_exists(__nenvroot + "/self/runtime.c") {
+            __nself = __nenvroot + "/self"
+        } else if !file_exists(__nself + "/runtime.c") {
+            if file_exists("./self/runtime.c") { __nself = "./self" }
+        }
+        let __nrtc = __nself + "/runtime.c"
+        // Stage 1: aprime_cc --emit=asm → `<stem>.s`.
+        // EXACT arg shape (confirmed against compiler/main.hexa's
+        // _normalize_argv() ~L73 + flag parser ~L355-419, and the canonical
+        // standalone invocation in tool/build_aprime.sh stage-5 smoke L132):
+        //
+        //   aprime_cc <runner>.hexa --emit=asm -o OUT.s SOURCE.hexa
+        //
+        // The leading `<runner>.hexa` token is REQUIRED: when aprime_cc runs
+        // as a standalone Mach-O, _normalize_argv() scans argv for the first
+        // arg ending in `.hexa` and treats everything up to+including it as a
+        // `hexa run compiler/main.hexa …` runner prefix. Without a leading
+        // `.hexa` placeholder it would consume the user's real source as the
+        // prefix and drop every flag → "missing SOURCE.hexa". The placeholder
+        // path need not exist; build_aprime.sh passes the literal `_drv.hexa`.
+        let _nmk = exec("mkdir -p build/artifacts 2>/dev/null")
+        let __nstem = basename_stem(out)
+        let __nasm = "build/artifacts/" + __nstem + ".s"
+        let __ncmd = "'" + __ncc + "' _drv.hexa --emit=asm -o '" + __nasm + "' '" + __actual_src + "' 2>&1"
+        println("  [native 1/2] " + __ncmd)
+        let __nr = exec(__ncmd)
+        if len(__nr) > 0 { println("    " + __nr) }
+        let __nasm_chk = exec("test -f '" + __nasm + "' && printf yes || printf no")
+        if __nasm_chk != "yes" {
+            println("error: native codegen failed — asm not produced: " + __nasm)
+            exit(1)
+        }
+        // Stage 2: clang assembles `.s` + links runtime.c → `<out>.tmp.<PID>`.
+        // atomic rename mirrors the C path's bt 37 (concurrent same-out safe).
+        let __ntmp = exec("printf '%s.tmp.%s' '" + out + "' \"$$\"")
+        let __nlink = "clang -O2 " + os_clang_cflags() + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __nself + "' '" + __nasm + "' '" + __nrtc + "' -o '" + __ntmp + "'" + os_clang_ldflags() + " 2>&1"
+        println("  [native 2/2] " + __nlink)
+        let __nr2 = exec(__nlink)
+        if len(__nr2) > 0 { println("    " + __nr2) }
+        let __ntmp_chk = exec("test -x '" + __ntmp + "' && printf yes || printf no")
+        if __ntmp_chk != "yes" {
+            println("error: native link failed — binary not produced: " + __ntmp)
+            exit(1)
+        }
+        codesign_if_macos(__ntmp)
+        let __nmv = exec("mv -f '" + __ntmp + "' '" + out + "' 2>&1")
+        if len(__nmv) > 0 { println("    mv: " + __nmv) }
+        let __nout_chk = exec("test -x '" + out + "' && printf yes || printf no")
+        if __nout_chk != "yes" {
+            println("error: build failed — output binary missing: " + out)
+            exit(1)
+        }
+        println("OK: built " + out + " (native backend)")
+        return ""
     }
     let stem = basename_stem(out)
     let c_file = "build/artifacts/" + stem + ".c"

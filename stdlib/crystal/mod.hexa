@@ -457,30 +457,94 @@ pub fn structure_from_spacegroup(sg: int, L: Lattice, species: any, coords: any)
     return Structure { lattice: L, species: out_sp, frac_coords: out_fc }
 }
 
-// ── Stage-2 kernel: 2-endpoint convex-hull distance ─────────────────
-// pymatgen PhaseDiagram.get_e_above_hull, restricted to a binary
-// (2-endpoint) tie-line — the bounded case hexa-matter's NOVEL
-// candidate screen uses. `refs` = [[x0, e0], [x1, e1]] two reference
-// points (composition fraction x in [0,1], formation energy e per
-// atom); query = [x, e]. Returns e − e_hull(x) where e_hull is the
-// linear interpolation between the two endpoints (0 on the tie-line,
-// >0 above, <0 below — caller clamps if a strict hull is wanted).
-// Full multi-point lower-convex-hull is Stage-2.5 (needs a hull
-// sweep + facet search; this binary form is exact and self-checked).
+// ── Stage-2 kernel: N-point lower-convex-hull distance ──────────────
+// pymatgen PhaseDiagram.get_e_above_hull. `refs` = [[x,e], ...] N>=2
+// reference points (composition fraction x, formation energy e per
+// atom); query = [x, e]. Builds the LOWER convex hull (Andrew's
+// monotone chain) and returns e − e_hull(x) where e_hull is the hull
+// segment value at x (0 on the hull, >0 above, <0 below). Binary
+// refs reduce to the exact tie-line. Query x outside [min,max] of
+// refs is undefined (caller's responsibility) — e_hull returns 0.0.
+
+fn _crystal_cross(o: any, a: any, b: any) -> float {
+    let v1 = (a[0] - o[0]) * (b[1] - o[1])
+    let v2 = (a[1] - o[1]) * (b[0] - o[0])
+    return v1 - v2
+}
+
 pub fn energy_above_hull(query: any, refs: any) -> float {
-    let r0 = refs[0]
-    let r1 = refs[1]
-    let x0 = r0[0]
-    let e0 = r0[1]
-    let x1 = r1[0]
-    let e1 = r1[1]
+    // copy + insertion-sort refs by x ascending
+    let mut s: any = []
+    let mut ci = 0
+    while ci < len(refs) { s.push(refs[ci]); ci = ci + 1 }
+    let n = len(s)
+    let mut p = 1
+    while p < n {
+        let key = s[p]
+        let kx = key[0]
+        let mut q = p - 1
+        let mut placed = false
+        while placed == false {
+            if q < 0 {
+                placed = true
+            } else {
+                let sq = s[q]
+                if sq[0] > kx {
+                    s[q + 1] = sq
+                    q = q - 1
+                } else {
+                    placed = true
+                }
+            }
+        }
+        s[q + 1] = key
+        p = p + 1
+    }
+    // lower convex hull via monotone chain. hexa array .pop() does not
+    // shrink, so the hull stack uses an explicit logical length hlen.
+    let mut hull: any = []
+    let mut hlen = 0
+    let mut i = 0
+    while i < n {
+        let pt = s[i]
+        let mut go = true
+        while go {
+            if hlen < 2 {
+                go = false
+            } else {
+                let o = hull[hlen - 2]
+                let a = hull[hlen - 1]
+                let cr = _crystal_cross(o, a, pt)
+                if cr <= 0.0 {
+                    hlen = hlen - 1
+                } else {
+                    go = false
+                }
+            }
+        }
+        if hlen < len(hull) { hull[hlen] = pt } else { hull.push(pt) }
+        hlen = hlen + 1
+        i = i + 1
+    }
+    // interpolate e_hull at query x along the spanning hull segment
     let qx = query[0]
     let qe = query[1]
-    let frac = (qx - x0) / (x1 - x0)
-    let e_hull = e0 + frac * (e1 - e0)
+    let mut e_hull = 0.0
+    let mut j = 0
+    while j < hlen - 1 {
+        let pa = hull[j]
+        let pb = hull[j + 1]
+        if pa[0] <= qx && qx <= pb[0] {
+            let frac = (qx - pa[0]) / (pb[0] - pa[0])
+            e_hull = pa[1] + frac * (pb[1] - pa[1])
+            j = hlen
+        } else {
+            j = j + 1
+        }
+    }
     return qe - e_hull
 }
 
 pub fn crystal_status() -> str {
-    return "STAGE-2 (partial) — Stage-1 + lattice coords/angles + energy_above_hull(binary) + structure_from_cif + structure_from_spacegroup(P1,Fm-3m) (absorbs: pymatgen, mp_api; full-Wyckoff/multi-point-hull/MP-net still Stage-2.5)"
+    return "STAGE-2 — Stage-1 + lattice coords/angles + energy_above_hull(N-point lower hull) + structure_from_cif + structure_from_spacegroup(P1,Fm-3m) (absorbs: pymatgen, mp_api; full-Wyckoff/CIF-net still Stage-2.5)"
 }

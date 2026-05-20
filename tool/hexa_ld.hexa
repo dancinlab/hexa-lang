@@ -1,0 +1,1020 @@
+// tool/hexa_ld.hexa
+//
+// S7-P1 SCAFFOLD — Native Mach-O arm64 linker.
+//
+// RFC 063 § P1. Replaces the `ld` / `ld64` fork in `aprime_cc
+// --emit=exec` (and the system `ld` invoked by `clang` at link time
+// in the current build path). Parses Mach-O `.o` files, resolves
+// symbols across them + against a runtime object, applies relocation
+// fix-ups, writes a Mach-O arm64 executable.
+//
+// NOT to be confused with `tool/hexa_link.hexa` — that file is a
+// clang wrapper (its own header: "Thin clang wrapper. Takes N .c
+// files ... clang handles C-level symbol resolution") and is a
+// C-path artifact. RFC 063 § P3 retires it; until then it stays
+// untouched.
+//
+// STATUS: SCAFFOLD — CLI shape + types + stub link function + RFC
+// markers only. The Mach-O parsing, symbol resolution, and
+// relocation fix-up land in the P1 implementation cycles.
+//
+// Falsifier (from RFC 063 § P1): `F-P1-RUNEQ` — programs linked by
+// hexa_ld behave equivalently (same exit code, same stdout) to those
+// linked by system `ld` on a corpus {smoke exit-42, fib, hexac}.
+// Mach-O byte-eq is NOT required (system ld64 and ours differ on
+// non-functional ordering / padding); runtime equivalence is the
+// contract.
+//
+// Usage (P1, after implementation):
+//   hexa run tool/hexa_ld.hexa -o <out> <a.o> [b.o ...] [--lc-main <sym>]
+//
+// Flags:
+//   -o OUT          output executable path
+//   --lc-main SYM   entry-point symbol for LC_MAIN (default: `_main`)
+//   --static        no dyld / no libSystem (P1.b — single-binary)
+
+fn show_usage() {
+    println("usage: hexa run tool/hexa_ld.hexa -o <out> <a.o> [b.o ...]")
+    println("       [--lc-main SYM] [--static]")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Parsed Mach-O object representation
+// ─────────────────────────────────────────────────────────────────
+
+struct ParsedObj {
+    path:     string,
+    // __text section bytes from the .o (will be concatenated into
+    // the output executable's __text section, with relocations
+    // adjusted to the new base offset).
+    text:     [u8],
+    // Symbols this object DEFINES (visible to other objects).
+    defined:  [LinkSym],
+    // Symbols this object REFERENCES but does not define (resolved
+    // against the union of all other objects' `defined`).
+    extern_refs: [LinkSym],
+    // Relocations within this object's __text — patched after
+    // section concatenation when the new offsets are known.
+    relocs:   [ParsedReloc],
+    // Optional DWARF __debug_line — concatenated to output if all
+    // objects carry it; otherwise dropped.
+    dwarf_line: [u8],
+}
+
+struct LinkSym {
+    name:    string,
+    // Object-local offset into this .o's __text. Final address is
+    // (text_section_base_in_exe + this_obj's_text_offset_in_concat
+    //  + this offset).
+    offset:  i64,
+    // 0 = global/external, 1 = local/private.
+    scope:   i64,
+}
+
+struct ParsedReloc {
+    offset:  i64,
+    sym_name: string,   // name to resolve at link time
+    kind:    i64,       // ARM64_RELOC_* (mirrors macho_arm64.hexa)
+    pcrel:   i64,
+    length:  i64,
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Mach-O byte-stream reader — RFC 063 § P1, cycle 1
+// ─────────────────────────────────────────────────────────────────
+//
+// Little-endian readers indexed by absolute byte offset. The whole
+// `.o` is slurped into memory by `read_file_bytes(path)` and the
+// readers index into that buffer — no streaming I/O, matching the
+// "small object" working assumption (P0 outputs are 296-1KB).
+
+fn _r_u8(buf: [Int], off: Int) -> Int {
+    return buf[off] & 0xFF
+}
+fn _r_u16(buf: [Int], off: Int) -> Int {
+    return (buf[off] & 0xFF) | ((buf[off + 1] & 0xFF) << 8)
+}
+fn _r_u32(buf: [Int], off: Int) -> Int {
+    return (buf[off]     & 0xFF)
+         | ((buf[off + 1] & 0xFF) << 8)
+         | ((buf[off + 2] & 0xFF) << 16)
+         | ((buf[off + 3] & 0xFF) << 24)
+}
+fn _r_u64(buf: [Int], off: Int) -> Int {
+    return (buf[off]     & 0xFF)
+         | ((buf[off + 1] & 0xFF) << 8)
+         | ((buf[off + 2] & 0xFF) << 16)
+         | ((buf[off + 3] & 0xFF) << 24)
+         | ((buf[off + 4] & 0xFF) << 32)
+         | ((buf[off + 5] & 0xFF) << 40)
+         | ((buf[off + 6] & 0xFF) << 48)
+         | ((buf[off + 7] & 0xFF) << 56)
+}
+// Read a fixed-length name field (16-byte segname/sectname): bytes
+// up to (but not including) the first NUL.
+fn _r_name16(buf: [Int], off: Int) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < 16 {
+        let b = buf[off + i] & 0xFF
+        if b == 0 { break }
+        out = out + chr(b)
+        i = i + 1
+    }
+    return out
+}
+// Read a NUL-terminated string from the strtab at `strx`.
+fn _r_cstr(buf: [Int], base: Int, strx: Int) -> string {
+    let mut out = ""
+    let mut i = 0
+    while true {
+        let b = buf[base + strx + i] & 0xFF
+        if b == 0 { break }
+        out = out + chr(b)
+        i = i + 1
+    }
+    return out
+}
+
+// Parse a Mach-O 64-bit arm64 object file into ParsedObj. Mirrors
+// the inverse of `compiler/emit/macho_arm64.hexa::serialize`.
+//
+// Failures (wrong magic, unsupported cputype) print to stderr + exit
+// rc=2; the linker treats any unparseable input as hard error.
+pub fn parse_macho_obj(path: string) -> ParsedObj {
+    let buf = read_file_bytes(path)
+    let n = len(buf)
+    if n < 32 {
+        eprintln("hexa_ld: " + path + ": file too small (" + to_string(n) + " bytes)")
+        exit(2)
+    }
+    let magic = _r_u32(buf, 0)
+    if magic != 0xfeedfacf {
+        eprintln("hexa_ld: " + path + ": bad magic")
+        exit(2)
+    }
+    let cputype = _r_u32(buf, 4)
+    if cputype != 0x0100000c {
+        eprintln("hexa_ld: " + path + ": unsupported cputype (need ARM64)")
+        exit(2)
+    }
+    let ncmds = _r_u32(buf, 16)
+
+    let mut text:        [Int] = []
+    let mut symoff       = 0
+    let mut nsyms        = 0
+    let mut stroff       = 0
+    let mut strsize      = 0
+    let mut text_reloff  = 0
+    let mut text_nreloc  = 0
+    let mut text_offset  = 0
+    let mut text_size    = 0
+
+    let mut lc_off = 32
+    let mut ci = 0
+    while ci < ncmds {
+        let cmd     = _r_u32(buf, lc_off)
+        let cmdsize = _r_u32(buf, lc_off + 4)
+        if cmd == 0x19 {                              // LC_SEGMENT_64
+            let nsects = _r_u32(buf, lc_off + 64)
+            let mut s = 0
+            let mut sect_off = lc_off + 72
+            while s < nsects {
+                let sectname = _r_name16(buf, sect_off)
+                if sectname == "__text" {
+                    text_size   = _r_u64(buf, sect_off + 40)
+                    text_offset = _r_u32(buf, sect_off + 48)
+                    text_reloff = _r_u32(buf, sect_off + 56)
+                    text_nreloc = _r_u32(buf, sect_off + 60)
+                }
+                sect_off = sect_off + 80
+                s = s + 1
+            }
+        }
+        if cmd == 0x02 {                              // LC_SYMTAB
+            symoff  = _r_u32(buf, lc_off + 8)
+            nsyms   = _r_u32(buf, lc_off + 12)
+            stroff  = _r_u32(buf, lc_off + 16)
+            strsize = _r_u32(buf, lc_off + 20)
+        }
+        lc_off = lc_off + cmdsize
+        ci = ci + 1
+    }
+
+    let mut ti = 0
+    while ti < text_size { text.push(buf[text_offset + ti] & 0xFF); ti = ti + 1 }
+
+    let mut defined:     [LinkSym] = []
+    let mut extern_refs: [LinkSym] = []
+    let mut si = 0
+    while si < nsyms {
+        let entry_off = symoff + 16 * si
+        let strx    = _r_u32(buf, entry_off)
+        let n_type  = _r_u8 (buf, entry_off + 4)
+        let n_sect  = _r_u8 (buf, entry_off + 5)
+        let n_value = _r_u64(buf, entry_off + 8)
+        let name    = _r_cstr(buf, stroff, strx)
+        let n_ext   = n_type & 0x01
+        let scope_v = 1 - n_ext
+        let sym = LinkSym { name: name, offset: n_value, scope: scope_v }
+        if n_sect == 0 { extern_refs.push(sym) } else { defined.push(sym) }
+        si = si + 1
+    }
+
+    let mut relocs: [ParsedReloc] = []
+    let mut ri = 0
+    while ri < text_nreloc {
+        let r_off       = text_reloff + 8 * ri
+        let r_address   = _r_u32(buf, r_off)
+        let bits        = _r_u32(buf, r_off + 4)
+        let r_symbolnum = bits & 0xFFFFFF
+        let r_pcrel     = (bits >> 24) & 0x1
+        let r_length    = (bits >> 25) & 0x3
+        let r_extern    = (bits >> 27) & 0x1
+        let r_type      = (bits >> 28) & 0xF
+        let mut sym_name = ""
+        if r_extern != 0 {
+            let entry_off = symoff + 16 * r_symbolnum
+            let strx = _r_u32(buf, entry_off)
+            sym_name = _r_cstr(buf, stroff, strx)
+        }
+        relocs.push(ParsedReloc {
+            offset:   r_address,
+            sym_name: sym_name,
+            kind:     r_type,
+            pcrel:    r_pcrel,
+            length:   r_length,
+        })
+        ri = ri + 1
+    }
+
+    return ParsedObj {
+        path:        path,
+        text:        text,
+        defined:     defined,
+        extern_refs: extern_refs,
+        relocs:      relocs,
+        dwarf_line:  [],
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Public entry — link N .o -> Mach-O arm64 executable
+// ─────────────────────────────────────────────────────────────────
+
+// pub fn link_macho_arm64(objs: [ParsedObj], out_path: string,
+//                        lc_main_sym: string, is_static: i64) -> i64
+//
+// RFC 063 § P1 IMPLEMENTATION CHECKLIST (in dispatch order):
+//   1. Mach-O parser — read each input .o, populate ParsedObj
+//      (header / load commands / __text / relocs / symtab).
+//   2. Symbol resolution — union of all `defined`, sweep each
+//      `extern_refs` against the union; unresolved = link error
+//      (mirror system ld's "Undefined symbols" output for diag
+//      compatibility with existing build harnesses).
+//   3. Section concatenation — gather all __text sections in a
+//      deterministic order (input order), record per-obj base
+//      offsets in the merged __text.
+//   4. Relocation fix-up — for each ParsedReloc, compute the final
+//      target address (resolved symbol's final offset) and patch
+//      the instruction word at (obj_base + reloc.offset).
+//      - ARM64_RELOC_BRANCH26: 26-bit immediate, byte-units = 4,
+//        range +/- 128 MB; emit stub if out-of-range.
+//      - ARM64_RELOC_PAGE21 + ARM64_RELOC_PAGEOFF12: ADRP / ADD
+//        pair, page-aligned base + 12-bit offset.
+//      - ARM64_RELOC_UNSIGNED: 64-bit absolute (for symbol pointers
+//        in __got / __data).
+//   5. Mach-O serialization — header (`MH_EXECUTE`, `MH_PIE`),
+//      load commands (LC_SEGMENT_64 __PAGEZERO / __TEXT / __DATA /
+//      __LINKEDIT, LC_MAIN, LC_LOAD_DYLINKER unless --static,
+//      LC_LOAD_DYLIB libSystem unless --static, LC_SYMTAB,
+//      LC_DYSYMTAB, LC_CODE_SIGNATURE placeholder).
+//   6. Write to `out_path`.
+//   7. Post-link: ad-hoc codesign (`codesign -s -`, OS Gatekeeper
+//      requirement — documented in RFC 063 as the ONE remaining
+//      fork on macOS, not a toolchain dependency).
+//
+// Mach-O 64 + arm64 constants for the EXECUTABLE side (P1 only).
+// Names mirror `<mach-o/loader.h>` with the `MACHO_LD_` prefix to
+// avoid the `#define` collisions that bit P0 (CPU_TYPE_ARM64 etc.).
+let MACHO_LD_MAGIC_64           = 0xfeedfacf
+let MACHO_LD_CPU_TYPE_ARM64     = 0x0100000c
+let MACHO_LD_CPU_SUBTYPE_ALL    = 0
+let MACHO_LD_MH_EXECUTE         = 2
+let MACHO_LD_MH_PIE             = 0x200000           // position-independent exec
+let MACHO_LD_MH_TWOLEVEL        = 0x80               // two-level namespace
+let MACHO_LD_MH_NOUNDEFS        = 0                  // not set — we have externs
+let MACHO_LD_LC_SEGMENT_64      = 0x19
+let MACHO_LD_LC_SYMTAB          = 0x02
+let MACHO_LD_LC_DYSYMTAB        = 0x0b
+let MACHO_LD_LC_LOAD_DYLINKER   = 0x0e
+let MACHO_LD_LC_LOAD_DYLIB      = 0x0c
+let MACHO_LD_LC_MAIN            = 0x80000028         // 0x28 | LC_REQ_DYLD
+let MACHO_LD_LC_BUILD_VERSION   = 0x32
+let MACHO_LD_LC_CODE_SIGNATURE      = 0x1d
+let MACHO_LD_LC_UUID                = 0x1b
+let MACHO_LD_LC_SOURCE_VERSION      = 0x2a
+let MACHO_LD_LC_DYLD_EXPORTS_TRIE   = 0x80000033   // LC_REQ_DYLD | 0x33
+let MACHO_LD_LC_DYLD_CHAINED_FIXUPS = 0x80000034   // LC_REQ_DYLD | 0x34
+
+let MACHO_LD_VM_PROT_RX         = 5                  // VM_PROT_READ|EXECUTE
+let MACHO_LD_VM_PROT_RW         = 3                  // VM_PROT_READ|WRITE
+let MACHO_LD_VM_PROT_NONE       = 0                  // __PAGEZERO
+
+let MACHO_LD_S_REG              = 0x80000400         // S_REGULAR | PURE+SOME_INSTRS
+
+// LE byte writers — local to the linker; mirror macho_arm64.hexa's
+// emit-side helpers. (We can't `import` macho_arm64.hexa here because
+// tool/ lives outside compiler/'s import graph and circular `use`
+// is fragile in hexa.)
+fn _w_u16(out: [Int], v: Int) {
+    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
+}
+fn _w_u32(out: [Int], v: Int) {
+    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
+    out.push((v >> 16) & 0xFF); out.push((v >> 24) & 0xFF)
+}
+fn _w_u64(out: [Int], v: Int) {
+    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
+    out.push((v >> 16) & 0xFF); out.push((v >> 24) & 0xFF)
+    out.push((v >> 32) & 0xFF); out.push((v >> 40) & 0xFF)
+    out.push((v >> 48) & 0xFF); out.push((v >> 56) & 0xFF)
+}
+fn _w_zero_n(out: [Int], n: Int) {
+    let mut i = 0
+    while i < n { out.push(0); i = i + 1 }
+}
+// Push ASCII bytes of `s`, NUL-pad to total length `n`.
+fn _w_name_fixed(out: [Int], s: string, n: Int) {
+    let sn = len(s)
+    let mut i = 0
+    while i < n {
+        if i < sn { out.push(char_code(s, i) & 0xFF) }
+        else { out.push(0) }
+        i = i + 1
+    }
+}
+// Push ASCII bytes of `s` followed by NUL and 4-byte aligned pad.
+// Used for LC_LOAD_DYLINKER / LC_LOAD_DYLIB path payloads.
+fn _w_pstr_align4(out: [Int], s: string) -> Int {
+    let sn = len(s)
+    let mut i = 0
+    while i < sn { out.push(char_code(s, i) & 0xFF); i = i + 1 }
+    out.push(0)                                      // NUL
+    let written = sn + 1
+    let rem = written & 3
+    let mut pad = 0
+    if rem != 0 { pad = 4 - rem }
+    _w_zero_n(out, pad)
+    return written + pad
+}
+
+// link_macho_arm64 — cycle 2: emit a *skeleton* MH_EXECUTE Mach-O
+// header + load commands that `otool -hV / -l` recognise as
+// well-formed. The actual code bytes + relocation fix-ups + lazy-
+// bind stubs + codesign land in cycles 3-5. This commit lays the
+// load-command shape so subsequent cycles can fill in payload.
+//
+// Layout (cycle 2 skeleton — input ignored except for `out_path`):
+//
+//   mach_header_64                                  32 B
+//   LC_SEGMENT_64 __PAGEZERO  (no sections)         72 B
+//   LC_SEGMENT_64 __TEXT (1 section: __text)       152 B (72 + 80)
+//   LC_LOAD_DYLINKER /usr/lib/dyld                  ~32 B
+//   LC_LOAD_DYLIB   /usr/lib/libSystem.B.dylib      ~56 B
+//   LC_MAIN                                          24 B
+//   LC_SYMTAB                                        24 B
+//   LC_DYSYMTAB                                      80 B
+//   __text (placeholder 0 bytes — cycle 3 fills)     0 B
+//
+// Returns 0 on success.
+//
+// Cycle 3 — first ParsedObj's `text` becomes the executable's __text
+// payload; LC_MAIN.entryoff points to the resolved `entry` symbol's
+// final file offset. Multi-obj concat + symtab populate + lazy-bind
+// land in cycles 4-5.
+fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_static: i64) -> Int {
+    let out: [Int] = []
+
+    // Concat text from all input objects in input order + collect a
+    // global symbol → final-text-offset map so cycle 8's inter-module
+    // BL reloc fix-up can resolve cross-obj calls. Per-obj base offset
+    // is the running `len(text_bytes)` before that obj's text is
+    // appended.
+    let mut text_bytes: [Int] = []
+    let mut entry_off_in_text: Int = 0
+    let mut entry_found = false
+    // Global defined-symbol resolution table (parallel arrays).
+    let mut def_names:    [string] = []
+    let mut def_offsets:  [Int]    = []
+    // Per-obj base offset (used during reloc pass to locate the
+    // calling instruction's final position).
+    let mut obj_bases: [Int] = []
+    let mut oi = 0
+    while oi < len(objs) {
+        let obj = objs[oi]
+        let base = len(text_bytes)
+        obj_bases.push(base)
+        // Register defined symbols globally.
+        let mut di = 0
+        while di < len(obj.defined) {
+            let d = obj.defined[di]
+            def_names.push(d.name)
+            def_offsets.push(base + d.offset)
+            if !entry_found && d.name == entry {
+                entry_off_in_text = base + d.offset
+                entry_found = true
+            }
+            di = di + 1
+        }
+        // Append this obj's text bytes.
+        let mut ti = 0
+        while ti < len(obj.text) {
+            text_bytes.push(obj.text[ti] & 0xFF)
+            ti = ti + 1
+        }
+        oi = oi + 1
+    }
+
+    // Cycle 8 — inter-module BL reloc fix-up. For each obj's reloc
+    // record, if the target symbol resolves to a globally-defined
+    // symbol (i.e. another obj's `defined`), patch the BL imm26 in
+    // text_bytes with the PC-rel delta. Unresolved targets stay as
+    // bare 0x94000000 — they need lazy-bind (cycle 8+ extension).
+    let mut ro = 0
+    while ro < len(objs) {
+        let obj = objs[ro]
+        let base = obj_bases[ro]
+        let mut ri = 0
+        while ri < len(obj.relocs) {
+            let r = obj.relocs[ri]
+            // ARM64_RELOC_BRANCH26 only (cycle 8 minimal).
+            if r.kind == 2 {
+                let patch_off = base + r.offset
+                // Look up target symbol in the global defined map.
+                let mut found_idx = -1
+                let mut sk = 0
+                while sk < len(def_names) {
+                    if def_names[sk] == r.sym_name { found_idx = sk; break }
+                    sk = sk + 1
+                }
+                if found_idx >= 0 {
+                    let tgt_off = def_offsets[found_idx]
+                    let delta = (tgt_off - patch_off) / 4
+                    let w0 = text_bytes[patch_off + 0]
+                    let w1 = text_bytes[patch_off + 1]
+                    let w2 = text_bytes[patch_off + 2]
+                    let w3 = text_bytes[patch_off + 3]
+                    let cur = w0 | (w1 << 8) | (w2 << 16) | (w3 << 24)
+                    let patched = (cur & 0xFC000000) | (delta & 0x03FFFFFF)
+                    text_bytes[patch_off + 0] = patched & 0xFF
+                    text_bytes[patch_off + 1] = (patched >> 8) & 0xFF
+                    text_bytes[patch_off + 2] = (patched >> 16) & 0xFF
+                    text_bytes[patch_off + 3] = (patched >> 24) & 0xFF
+                }
+            }
+            ri = ri + 1
+        }
+        ro = ro + 1
+    }
+    if !entry_found {
+        eprintln("hexa_ld: entry symbol '" + entry + "' not defined in any input object")
+        return 3
+    }
+
+    let text_size = len(text_bytes)
+
+    // ── Cycle 4: build symbol table + string table from inputs ────
+    //
+    // Symbol ordering follows clang/ld64 convention: defined externs
+    // FIRST (so LC_DYSYMTAB.iextdefsym=0, nextdefsym=count), then
+    // undefined externs (iundefsym=nextdefsym, nundefsym=count).
+    // Locals (scope==1) would go FIRST before defined externs but
+    // cycle 4 ships defined-extern + undef-extern only.
+    //
+    // strtab convention: byte 0 = NUL; each name pushed as ASCII +
+    // NUL; n_strx in nlist_64 = byte offset of name in strtab.
+    let strtab: [Int] = []
+    strtab.push(0)                                   // strtab[0] = NUL
+    // nlist_64 records emitted as parallel arrays of (strx, type, sect, value)
+    // so we can serialize into __LINKEDIT after layout is known.
+    let nlist_strx:  [Int] = []
+    let nlist_type:  [Int] = []
+    let nlist_sect:  [Int] = []
+    let nlist_value: [Int] = []
+
+    let mut nextdefsym: Int = 0
+
+    // Pass A — defined externals (scope==0) from each input obj. The
+    // per-obj `defined.offset` is section-relative; we already
+    // concatenated text by recording the running `len(text_bytes)`
+    // so each sym's final value = (text_section.addr) + running base
+    // + sym.offset. Cycle 3's `entry_off_in_text` used the same
+    // accumulation.
+    let mut text_base_acc = 0
+    let mut oa = 0
+    while oa < len(objs) {
+        let obj = objs[oa]
+        let mut di = 0
+        while di < len(obj.defined) {
+            let d = obj.defined[di]
+            if d.scope == 0 {
+                let strx = len(strtab)
+                let nn = len(d.name)
+                let mut k = 0
+                while k < nn { strtab.push(char_code(d.name, k) & 0xFF); k = k + 1 }
+                strtab.push(0)
+                nlist_strx.push(strx)
+                // n_type = N_SECT (0x0e) | N_EXT (0x01)
+                nlist_type.push(0x0e | 0x01)
+                nlist_sect.push(1)                  // 1-based section idx: __text
+                // n_value = absolute VM address of the symbol. Filled
+                // below once we know section_64.__text.addr (which
+                // depends on text_fileoff which depends on the load-
+                // command extent — we patch n_value in a 2nd pass).
+                nlist_value.push(text_base_acc + d.offset)
+                nextdefsym = nextdefsym + 1
+            }
+            di = di + 1
+        }
+        text_base_acc = text_base_acc + len(obj.text)
+        oa = oa + 1
+    }
+    // Pass B — undefined externals (extern_refs from each obj).
+    // De-duplicate by name across objs (multiple objects might
+    // reference the same `_hexa_exit`); first occurrence wins.
+    let mut ob = 0
+    while ob < len(objs) {
+        let obj = objs[ob]
+        let mut ei = 0
+        while ei < len(obj.extern_refs) {
+            let e = obj.extern_refs[ei]
+            // Is this name already in our nlist?
+            let mut found = false
+            let mut ck = 0
+            while ck < len(nlist_strx) {
+                let off = nlist_strx[ck]
+                let mn = len(e.name)
+                let mut eq = true
+                let mut z = 0
+                while z < mn {
+                    if (strtab[off + z] & 0xFF) != char_code(e.name, z) { eq = false; break }
+                    z = z + 1
+                }
+                if eq && (strtab[off + mn] & 0xFF) == 0 { found = true; break }
+                ck = ck + 1
+            }
+            if !found {
+                let strx = len(strtab)
+                let nn = len(e.name)
+                let mut k = 0
+                while k < nn { strtab.push(char_code(e.name, k) & 0xFF); k = k + 1 }
+                strtab.push(0)
+                nlist_strx.push(strx)
+                // n_type = N_UNDF (0) | N_EXT (0x01)
+                nlist_type.push(0x00 | 0x01)
+                nlist_sect.push(0)                  // NO_SECT
+                nlist_value.push(0)
+            }
+            ei = ei + 1
+        }
+        ob = ob + 1
+    }
+    let nsyms   = len(nlist_strx)
+    let strsize = len(strtab)
+    // strtab is 4-byte aligned in __LINKEDIT (Mach-O convention; ld64
+    // pads to 8 for safety, we go 4 to match minimal).
+    let strrem  = strsize & 3
+    let mut strpad = 0
+    if strrem != 0 { strpad = 4 - strrem }
+
+    // Load-command sizes pre-computed so the header can record
+    // ncmds + sizeofcmds correctly.
+    let lc_pagezero_size = 72
+    let lc_text_size     = 72 + 80                   // segment + 1 section
+    let lc_linkedit_size = 72                        // segment, 0 sections
+    let lc_main_size     = 24
+    let lc_symtab_size   = 24
+    let lc_dysymtab_size = 80
+
+    // dyld path is `/usr/lib/dyld` (13 + NUL = 14). LC_LOAD_DYLINKER
+    // total = 12 (cmd+cmdsize+name_off) + payload; cmdsize MUST be a
+    // multiple of 8 in 64-bit Mach-O. 12 + 20 = 32 → payload padded 20.
+    let dyld_path        = "/usr/lib/dyld"
+    let dyld_path_padded = 20                        // 13 + 1 NUL + 6 pad → 20 (32-total LC)
+    let lc_dyld_size     = 12 + dyld_path_padded
+
+    // libSystem path: `/usr/lib/libSystem.B.dylib` (26 + NUL = 27).
+    // dylib_command header = 24 bytes (cmd + cmdsize + name_off +
+    // timestamp + current_version + compatibility_version). Total LC
+    // = 24 + payload; 24 + 32 = 56 → 8-aligned.
+    let lib_path         = "/usr/lib/libSystem.B.dylib"
+    let lib_path_padded  = 32                        // 26 + 1 NUL + 5 pad → 32 (56-total LC)
+    let lc_lib_size      = 24 + lib_path_padded
+
+    // LC_CODE_SIGNATURE — 16-byte linkedit_data_command (cmd+cmdsize+
+    // dataoff+datasize). MUST be pre-allocated in our emit so `codesign
+    // -s -` fills the existing slot instead of in-place inserting a
+    // new LC (which would push __text bytes after it, corrupting them
+    // — cycle 5 falsifier had a false-positive bug here: nm/codesign
+    // -dvv passed but `otool -tv` showed `udf` instead of the actual
+    // instructions, because section_64.__text.offset still pointed to
+    // where __text WAS before codesign's in-place insertion).
+    let lc_codesig_size = 16
+
+    // LC_BUILD_VERSION — required by macOS Big Sur+ loader.
+    // Layout: cmd u32 + cmdsize u32 + platform u32 + minos u32 +
+    // sdk u32 + ntools u32 = 24 bytes (no tool entries).
+    let lc_buildver_size = 24
+
+    // ── macOS Sonoma loader requires 4 additional LCs (cycle 7) ──
+    // All are linkedit_data_command or fixed-size: 16 bytes each
+    // except UUID (24) and SOURCE_VERSION (16).
+    let lc_chained_fixups_size = 16          // linkedit_data_command
+    let lc_exports_trie_size   = 16          // linkedit_data_command
+    let lc_uuid_size           = 24          // cmd+cmdsize+16-byte UUID
+    let lc_source_version_size = 16          // cmd+cmdsize+8-byte version
+
+    // LC count = 14
+    //   PAGEZERO + __TEXT + __LINKEDIT
+    //   + DYLD_CHAINED_FIXUPS + DYLD_EXPORTS_TRIE
+    //   + DYLINKER + DYLIB
+    //   + UUID + BUILD_VERSION + SOURCE_VERSION
+    //   + MAIN + SYMTAB + DYSYMTAB
+    //   + CODE_SIGNATURE
+    let ncmds = 14
+    let sizeofcmds = lc_pagezero_size + lc_text_size + lc_linkedit_size
+                   + lc_chained_fixups_size + lc_exports_trie_size
+                   + lc_dyld_size + lc_lib_size
+                   + lc_uuid_size + lc_buildver_size + lc_source_version_size
+                   + lc_main_size + lc_symtab_size + lc_dysymtab_size
+                   + lc_codesig_size
+
+    // ── mach_header_64 ──
+    // MH_NOUNDEFS (0x1) — set when no undefined externs.
+    // MH_DYLDLINK (0x4) — built to use dyld. Required by macOS Sonoma
+    // loader; clang emits unconditionally. Without it, dyld kills the
+    // process at very-early load stage (rc=137).
+    let mut mh_flags = MACHO_LD_MH_PIE | MACHO_LD_MH_TWOLEVEL | 0x4
+    if nsyms - nextdefsym == 0 { mh_flags = mh_flags | 0x1 }
+    _w_u32(out, MACHO_LD_MAGIC_64)
+    _w_u32(out, MACHO_LD_CPU_TYPE_ARM64)
+    _w_u32(out, MACHO_LD_CPU_SUBTYPE_ALL)
+    _w_u32(out, MACHO_LD_MH_EXECUTE)
+    _w_u32(out, ncmds)
+    _w_u32(out, sizeofcmds)
+    _w_u32(out, mh_flags)
+    _w_u32(out, 0)                                   // reserved
+
+    // ── LC_SEGMENT_64 __PAGEZERO ──
+    // 4 GB null page at vmaddr=0. No sections, no file backing.
+    _w_u32(out, MACHO_LD_LC_SEGMENT_64)
+    _w_u32(out, lc_pagezero_size)
+    _w_name_fixed(out, "__PAGEZERO", 16)
+    _w_u64(out, 0)                                   // vmaddr
+    _w_u64(out, 0x100000000)                         // vmsize 4 GB
+    _w_u64(out, 0)                                   // fileoff
+    _w_u64(out, 0)                                   // filesize
+    _w_u32(out, MACHO_LD_VM_PROT_NONE)               // maxprot
+    _w_u32(out, MACHO_LD_VM_PROT_NONE)               // initprot
+    _w_u32(out, 0)                                   // nsects
+    _w_u32(out, 0)                                   // flags
+
+    // ── LC_SEGMENT_64 __TEXT (1 section: __text) ──
+    let header_size = 32
+    let text_fileoff = header_size + sizeofcmds      // start of __text bytes
+    // __TEXT segment file extent — page-align upward so dyld is happy.
+    let text_seg_end_unrounded = text_fileoff + text_size
+    let mut text_filesize = text_seg_end_unrounded
+    let page = 0x4000
+    let rem = text_filesize & (page - 1)
+    if rem != 0 { text_filesize = text_filesize + (page - rem) }
+    _w_u32(out, MACHO_LD_LC_SEGMENT_64)
+    _w_u32(out, lc_text_size)
+    _w_name_fixed(out, "__TEXT", 16)
+    _w_u64(out, 0x100000000)                         // vmaddr (after __PAGEZERO)
+    _w_u64(out, text_filesize)                       // vmsize = filesize (page-aligned)
+    _w_u64(out, 0)                                   // fileoff (segment starts at 0)
+    _w_u64(out, text_filesize)                       // filesize
+    _w_u32(out, MACHO_LD_VM_PROT_RX)
+    _w_u32(out, MACHO_LD_VM_PROT_RX)
+    _w_u32(out, 1)                                   // nsects (just __text)
+    _w_u32(out, 0)                                   // flags
+    // section_64 __text
+    _w_name_fixed(out, "__text", 16)
+    _w_name_fixed(out, "__TEXT", 16)
+    _w_u64(out, 0x100000000 + text_fileoff)          // addr
+    _w_u64(out, text_size)                           // actual code byte count
+    _w_u32(out, text_fileoff)
+    _w_u32(out, 2)                                   // align log2(4) for arm64
+    _w_u32(out, 0)                                   // reloff
+    _w_u32(out, 0)                                   // nreloc
+    _w_u32(out, MACHO_LD_S_REG)
+    _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)   // reserved1/2/3
+
+    // ── LC_SEGMENT_64 __LINKEDIT (read-only segment) ──
+    //
+    // __LINKEDIT sits AFTER __TEXT in the file. fileoff = text_filesize.
+    // Cycle 7 layout (extends cycle 4-6 with chained_fixups + exports_trie):
+    //
+    //   chained_fixups   48 B    (28 header + 16 starts_in_image + 4 pad)
+    //   exports_trie      8 B    (2 actual + 6 pad)
+    //   symtab          16*nsyms
+    //   strtab          strsize + strpad
+    //   codesig_blob   1024 B reserved (1 KB for ad-hoc CMS)
+    //
+    // ld64 ordering convention; macOS Sonoma loader rejects out-of-order.
+    let linkedit_fileoff = text_filesize
+    // chained_fixups data:
+    //   28 B header + 4 B pad (8-aligning starts_in_image) +
+    //   16 B starts_in_image (seg_count=3 + 3 zero offsets) + 8 B trailing
+    //   pad to 8-byte align → 56 B (matches clang's empty fixups layout).
+    let chained_fixups_size = 56
+    let exports_trie_size   = 8
+    let chained_fixups_off  = linkedit_fileoff
+    let exports_trie_off    = chained_fixups_off + chained_fixups_size
+    let symoff_pre          = exports_trie_off   + exports_trie_size
+    let symtab_size  = 16 * nsyms
+    let strtab_total = strsize + strpad
+    // CMS ad-hoc signature for a small Mach-O is ~250-300 bytes; reserve
+    // 1024 (1 KB) to cover any realistic growth.
+    let codesig_reserve = 1024
+    let codesig_fileoff = symoff_pre + symtab_size + strtab_total
+    let mut linkedit_filesize = chained_fixups_size + exports_trie_size
+                              + symtab_size + strtab_total + codesig_reserve
+    let lrem = linkedit_filesize & (page - 1)
+    let mut linkedit_vmsize = linkedit_filesize
+    if lrem != 0 { linkedit_vmsize = linkedit_filesize + (page - lrem) }
+    let linkedit_vmaddr = 0x100000000 + text_filesize
+    _w_u32(out, MACHO_LD_LC_SEGMENT_64)
+    _w_u32(out, lc_linkedit_size)
+    _w_name_fixed(out, "__LINKEDIT", 16)
+    _w_u64(out, linkedit_vmaddr)
+    _w_u64(out, linkedit_vmsize)
+    _w_u64(out, linkedit_fileoff)
+    _w_u64(out, linkedit_filesize)
+    _w_u32(out, 1)                                    // maxprot VM_PROT_READ
+    _w_u32(out, 1)                                    // initprot VM_PROT_READ
+    _w_u32(out, 0)                                    // nsects
+    _w_u32(out, 0)                                    // flags
+
+    // Cycle 7: emit LCs in CLANG's order — macOS Sonoma's loader cares
+    // about LC ordering. Clang's ld64 places them as:
+    //   CHAINED_FIXUPS, EXPORTS_TRIE, SYMTAB, DYSYMTAB,
+    //   LOAD_DYLINKER, UUID, BUILD_VERSION, SOURCE_VERSION,
+    //   MAIN, LOAD_DYLIB, CODE_SIGNATURE
+
+    // ── LC_DYLD_CHAINED_FIXUPS — empty fixups for Sonoma loader ──
+    _w_u32(out, MACHO_LD_LC_DYLD_CHAINED_FIXUPS)
+    _w_u32(out, lc_chained_fixups_size)
+    _w_u32(out, chained_fixups_off)
+    _w_u32(out, chained_fixups_size)
+
+    // ── LC_DYLD_EXPORTS_TRIE — empty exports trie ──
+    _w_u32(out, MACHO_LD_LC_DYLD_EXPORTS_TRIE)
+    _w_u32(out, lc_exports_trie_size)
+    _w_u32(out, exports_trie_off)
+    _w_u32(out, exports_trie_size)
+
+    // ── LC_SYMTAB — populated (cycle 4) ──
+    let symoff = symoff_pre
+    let stroff = symoff + symtab_size
+    _w_u32(out, MACHO_LD_LC_SYMTAB)
+    _w_u32(out, lc_symtab_size)
+    _w_u32(out, symoff)
+    _w_u32(out, nsyms)
+    _w_u32(out, stroff)
+    _w_u32(out, strsize)
+
+    // ── LC_DYSYMTAB — populated (cycle 4) ──
+    _w_u32(out, MACHO_LD_LC_DYSYMTAB)
+    _w_u32(out, lc_dysymtab_size)
+    _w_u32(out, 0)                                   // ilocalsym
+    _w_u32(out, 0)                                   // nlocalsym
+    _w_u32(out, 0)                                   // iextdefsym
+    _w_u32(out, nextdefsym)                          // nextdefsym
+    _w_u32(out, nextdefsym)                          // iundefsym
+    _w_u32(out, nsyms - nextdefsym)                  // nundefsym
+    let mut di = 0
+    while di < 12 { _w_u32(out, 0); di = di + 1 }
+
+    // ── LC_LOAD_DYLINKER /usr/lib/dyld ──
+    _w_u32(out, MACHO_LD_LC_LOAD_DYLINKER)
+    _w_u32(out, lc_dyld_size)
+    _w_u32(out, 12)                                  // name_off
+    _w_name_fixed(out, dyld_path, dyld_path_padded)
+
+    // ── LC_UUID ──
+    _w_u32(out, MACHO_LD_LC_UUID)
+    _w_u32(out, lc_uuid_size)
+    out.push(0x01); out.push(0x23); out.push(0x45); out.push(0x67)
+    out.push(0x89); out.push(0xab); out.push(0x4d); out.push(0xef)
+    out.push(0x80); out.push(0x00); out.push(0x12); out.push(0x34)
+    out.push(0x56); out.push(0x78); out.push(0x9a); out.push(0xbc)
+
+    // ── LC_BUILD_VERSION ──
+    // Bump minos to 14.0 (Sonoma); ancient 11.0 sometimes triggers
+    // stricter loader paths. clang on this host emits 26.x but 14.0
+    // is the conservative widely-accepted value.
+    _w_u32(out, MACHO_LD_LC_BUILD_VERSION)
+    _w_u32(out, lc_buildver_size)
+    _w_u32(out, 1)                                   // PLATFORM_MACOS
+    _w_u32(out, 0x000E0000)                          // minos 14.0.0 (Sonoma)
+    _w_u32(out, 0x000E0000)                          // sdk   14.0.0
+    _w_u32(out, 0)                                   // ntools
+
+    // ── LC_SOURCE_VERSION ──
+    _w_u32(out, MACHO_LD_LC_SOURCE_VERSION)
+    _w_u32(out, lc_source_version_size)
+    _w_u64(out, 0)
+
+    // ── LC_MAIN ──
+    _w_u32(out, MACHO_LD_LC_MAIN)
+    _w_u32(out, lc_main_size)
+    _w_u64(out, text_fileoff + entry_off_in_text)    // entryoff
+    _w_u64(out, 0)                                   // stacksize (0 = default)
+
+    // ── LC_LOAD_DYLIB /usr/lib/libSystem.B.dylib ──
+    _w_u32(out, MACHO_LD_LC_LOAD_DYLIB)
+    _w_u32(out, lc_lib_size)
+    _w_u32(out, 24)                                  // name_off
+    _w_u32(out, 2)                                   // timestamp
+    _w_u32(out, 0x051f3c01)                          // current_version
+    _w_u32(out, 0x00010000)                          // compatibility_version
+    _w_name_fixed(out, lib_path, lib_path_padded)
+
+    // ── LC_CODE_SIGNATURE — reserve slot for codesign blob ──
+    _w_u32(out, MACHO_LD_LC_CODE_SIGNATURE)
+    _w_u32(out, lc_codesig_size)
+    _w_u32(out, codesig_fileoff)
+    _w_u32(out, codesig_reserve)
+
+    // ── __text payload (cycle 3 fills from concatenated text bytes) ──
+    let mut bi = 0
+    while bi < text_size { out.push(text_bytes[bi] & 0xFF); bi = bi + 1 }
+
+    // Pad the __TEXT segment file region up to its page-aligned end
+    // so `filesize` matches actual bytes. dyld's load-from-file logic
+    // requires this — short files trigger "past end of file" loader
+    // errors at runtime.
+    let cur_end = text_fileoff + text_size
+    if text_filesize > cur_end {
+        _w_zero_n(out, text_filesize - cur_end)
+    }
+
+    // ── __LINKEDIT payload — cycle 7 prefix: chained_fixups + exports_trie ──
+    //
+    // dyld_chained_fixups_header (28 bytes) + 4-byte pad to 8-align
+    // starts_in_image. Matches clang's empty-fixups layout exactly.
+    _w_u32(out, 0)                                 // fixups_version
+    _w_u32(out, 32)                                // starts_offset (8-aligned after header+pad)
+    _w_u32(out, 48)                                // imports_offset
+    _w_u32(out, 48)                                // symbols_offset (no imports/symbols)
+    _w_u32(out, 0)                                 // imports_count
+    _w_u32(out, 1)                                 // imports_format = DYLD_CHAINED_IMPORT
+    _w_u32(out, 0)                                 // symbols_format = uncompressed
+    _w_zero_n(out, 4)                              // 4-byte pad to 8-align (offset 28 → 32)
+    // dyld_chained_starts_in_image @ offset 32:
+    _w_u32(out, 3)                                 // seg_count = PAGEZERO + TEXT + LINKEDIT
+    _w_u32(out, 0)                                 // seg_info_offset[0] = 0 (no fixups)
+    _w_u32(out, 0)                                 // seg_info_offset[1]
+    _w_u32(out, 0)                                 // seg_info_offset[2]
+    _w_zero_n(out, 8)                              // 8-byte trailing pad to 56 total
+
+    // dyld_exports_trie (2 bytes minimum: terminal=0, child_count=0)
+    // + 6 bytes pad → 8 bytes total.
+    out.push(0)                                    // terminal_size
+    out.push(0)                                    // child_count
+    _w_zero_n(out, 6)                              // pad to 8 bytes
+
+    // ── __LINKEDIT payload — nlist_64 records, then strtab ──
+    //
+    // Each nlist_64 = u32 strx + u8 type + u8 sect + u16 desc + u64 value.
+    // For defined symbols (sect != 0), `n_value` we pushed is a section-
+    // relative offset; convert to absolute VM address now that we know
+    // section_64.__text.addr (= 0x100000000 + text_fileoff).
+    let text_section_addr = 0x100000000 + text_fileoff
+    let mut ni = 0
+    while ni < nsyms {
+        let strx  = nlist_strx[ni]
+        let nty   = nlist_type[ni]
+        let nse   = nlist_sect[ni]
+        let mut nv = nlist_value[ni]
+        if nse != 0 {
+            // Defined symbol — absolute VM address = section base +
+            // section-relative offset we stored in Pass A.
+            nv = text_section_addr + nv
+        }
+        _w_u32(out, strx)
+        out.push(nty & 0xFF)
+        out.push(nse & 0xFF)
+        _w_u16(out, 0)                               // n_desc
+        _w_u64(out, nv)
+        ni = ni + 1
+    }
+    // strtab bytes verbatim + 4-byte alignment pad.
+    let mut si = 0
+    while si < strsize { out.push(strtab[si] & 0xFF); si = si + 1 }
+    _w_zero_n(out, strpad)
+
+    // ── Code-signature placeholder — zero-filled CODESIG_RESERVE bytes ──
+    // `codesign -s -` writes the actual CMS blob into this region.
+    _w_zero_n(out, codesig_reserve)
+
+    write_bytes(out_path, out)
+
+    // ── Cycle 5: ad-hoc codesign post-link ─────────────────────────
+    //
+    // macOS Sonoma+ rejects unsigned executables on launch. `codesign
+    // -s -` adds an ad-hoc CMS signature (no identity) — the binary
+    // becomes loadable to the dyld stage. This is the ONE remaining
+    // external fork on macOS (RFC 063 § P1 documents it as an OS
+    // Gatekeeper requirement, not a toolchain dependency).
+    //
+    // `codesign` runs `chmod +x` implicitly is NOT true — we set
+    // execute permission separately. The OS infers it from the
+    // Mach-O filetype (MH_EXECUTE) for `posix_spawn`, but for
+    // shell invocation the permission bit is required.
+    // Two-step codesign — `--remove-signature` first (idempotent;
+    // strips our placeholder LC_CODE_SIGNATURE and re-anchors section
+    // offsets), then `-s -` adds a fresh ad-hoc signature with correct
+    // dataoff/datasize. Doing just `-s -` on a placeholder produces
+    // "invalid or unsupported format for signature" because the zero-
+    // filled placeholder blob doesn't parse.
+    let rs_res = exec_capture("codesign --remove-signature " + out_path + " 2>&1")
+    // remove-signature can return rc=1 with "object is not signed at
+    // all" when our placeholder is technically not a valid signature.
+    // That's fine — the next `codesign -s -` proceeds cleanly.
+    let _rs_rc = to_int(rs_res[2])
+    let cs_cmd = "codesign -s - " + out_path + " 2>&1"
+    let cs_res = exec_capture(cs_cmd)
+    let cs_rc  = to_int(cs_res[2])
+    if cs_rc != 0 {
+        eprintln("hexa_ld: codesign failed (rc=" + to_string(cs_rc) + ")")
+        eprintln(to_string(cs_res[1]))
+        return 5
+    }
+    // Set the +x bit so the loader / shell will posix_spawn it.
+    let chmod_res = exec_capture("chmod +x " + out_path + " 2>&1")
+    let chmod_rc  = to_int(chmod_res[2])
+    if chmod_rc != 0 {
+        eprintln("hexa_ld: chmod +x failed (rc=" + to_string(chmod_rc) + ")")
+        return 6
+    }
+
+    return 0
+}
+
+// ─────────────────────────────────────────────────────────────────
+// CLI — wrapped in `fn main()` so an `import "../tool/hexa_ld.hexa"`
+// from a test driver does NOT auto-run the CLI dispatch. Tests call
+// `parse_macho_obj(...)` etc. directly; only an `aprime_cc`-built
+// hexa_ld binary or `hexa run tool/hexa_ld.hexa …` invokes main().
+// ─────────────────────────────────────────────────────────────────
+
+fn main() {
+    let raw_args = argv()
+    let mut out = ""
+    let mut input_objs: [string] = []
+    let mut lc_main = "_main"
+    let mut is_static = 0
+
+    let mut i = 2  // skip [hexa_program, script_path]
+    while i < len(raw_args) {
+        let a = raw_args[i]
+        if a == "-o" {
+            if i + 1 < len(raw_args) {
+                out = raw_args[i + 1]
+                i = i + 2
+            } else { show_usage() exit(1) }
+        } else if a == "--lc-main" {
+            if i + 1 < len(raw_args) {
+                lc_main = raw_args[i + 1]
+                i = i + 2
+            } else { show_usage() exit(1) }
+        } else if a == "--static" {
+            is_static = 1
+            i = i + 1
+        } else if a == "-h" || a == "--help" {
+            show_usage()
+            exit(0)
+        } else if len(a) > 2 && a.substring(len(a) - 2, len(a)) == ".o" {
+            input_objs.push(a)
+            i = i + 1
+        } else {
+            println("hexa_ld: unknown arg '" + a + "'")
+            show_usage()
+            exit(1)
+        }
+    }
+
+    if len(out) == 0 || len(input_objs) == 0 {
+        show_usage()
+        exit(1)
+    }
+
+    // Driver dispatch — once link_macho_arm64 is implemented, this
+    // parses each input .o into ParsedObj and calls into the linker.
+    let rc = link_macho_arm64(0, out, lc_main, is_static)
+    exit(rc)
+}
