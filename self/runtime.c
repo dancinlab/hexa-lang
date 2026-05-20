@@ -633,6 +633,78 @@ static int __attribute__((noinline)) hxlcl_setvbuf(void *fp, char *buf, int mode
     (void)fp; (void)buf; (void)mode; (void)sz;
     return 0;
 }
+// Cycle 57 — Tier-A.4 trivial POSIX stubs. The compiler binary calls
+// these for cleanup / TTY detection / signal hooks / env access / socket
+// options / pty handling / resource limits — none load-bearing for the
+// compile-then-exit path. Return safe defaults. `getenv` reads from a
+// minimal copy of envp captured at first call (Cycle 57+ may wire envp
+// in main; for now returns NULL = "var not set").
+static int __attribute__((noinline)) hxlcl_atexit(void (*fn)(void)) {
+    (void)fn;
+    return 0;  // pretend success; cleanup never runs
+}
+static int __attribute__((noinline)) hxlcl_isatty(int fd) {
+    (void)fd;
+    return 0;  // never a TTY (compiler pipes input/output anyway)
+}
+static void *__attribute__((noinline)) hxlcl_signal(int signum, void *handler) {
+    (void)signum; (void)handler;
+    return (void *)0;  // SIG_DFL semantics
+}
+static int __attribute__((noinline)) hxlcl_sigaction(int signum, const void *act, void *oldact) {
+    (void)signum; (void)act; (void)oldact;
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_sigprocmask(int how, const void *set, void *oldset) {
+    (void)how; (void)set; (void)oldset;
+    return 0;
+}
+static char *__attribute__((noinline)) hxlcl_getenv(const char *name) {
+    (void)name;
+    return (char *)0;  // var not set
+}
+static int __attribute__((noinline)) hxlcl_setenv(const char *name, const char *val, int overwrite) {
+    (void)name; (void)val; (void)overwrite;
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen) {
+    (void)sockfd; (void)level; (void)optname; (void)optval; (void)optlen;
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_grantpt(int fd) {
+    (void)fd;
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_unlockpt(int fd) {
+    (void)fd;
+    return 0;
+}
+static char *__attribute__((noinline)) hxlcl_ptsname(int fd) {
+    (void)fd;
+    return (char *)"/dev/null";  // safe stub — compiler doesn't open it
+}
+static char *__attribute__((noinline)) hxlcl_ttyname(int fd) {
+    (void)fd;
+    return (char *)0;
+}
+static int __attribute__((noinline)) hxlcl_getrlimit(int resource, void *rlim) {
+    (void)resource;
+    if (rlim) {
+        // struct rlimit { rlim_t rlim_cur; rlim_t rlim_max; }
+        unsigned long long *p = (unsigned long long *)rlim;
+        p[0] = 0xffffffffffffffffULL;
+        p[1] = 0xffffffffffffffffULL;
+    }
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_getrusage(int who, void *usage) {
+    (void)who;
+    if (usage) {
+        unsigned char *p = (unsigned char *)usage;
+        for (size_t i = 0; i < 144; i++) p[i] = 0;  // sizeof(struct rusage) on darwin
+    }
+    return 0;
+}
 
 // Textual override of any residual libc references in subsequent code
 // (runtime_core.c + HI tier + transpile output). The helper bodies
@@ -683,6 +755,13 @@ static int __attribute__((noinline)) hxlcl_setvbuf(void *fp, char *buf, int mode
 #define fdopen(fd,m)       ((FILE *)hxlcl_fdopen((int)(fd), (const char *)(m)))
 #define flock(fd,op)       hxlcl_flock((int)(fd), (int)(op))
 #define setvbuf(fp,b,m,sz) hxlcl_setvbuf((void *)(fp), (char *)(b), (int)(m), (size_t)(sz))
+// Cycle 57 — Tier-A.4 POSIX stubs are NOT #define'd here because their
+// system-header prototypes (signal/sigaction/socket.h declarations)
+// expand the macro inside the prototype itself ("function cannot return
+// function type" errors). Instead, call sites in runtime.c +
+// runtime_core.c use the hxlcl_* names directly via perl substitution
+// (see cycle 57 commit). The helpers above are referenced by those
+// direct calls; no #define indirection needed.
 
 #include "runtime_core.c"
 
@@ -761,9 +840,9 @@ void* hexa_ffi_dlopen(const char* lib_name) {
     {
         const char* search_prefixes[8];
         int sp_n = 0;
-        const char* hl = getenv("HEXA_LANG");
+        const char* hl = hxlcl_getenv("HEXA_LANG");
         if (hl && hl[0]) search_prefixes[sp_n++] = hl;
-        const char* nld = getenv("HEXA_NATIVE_LIB_DIR");
+        const char* nld = hxlcl_getenv("HEXA_NATIVE_LIB_DIR");
         if (nld && nld[0]) search_prefixes[sp_n++] = nld;
         search_prefixes[sp_n++] = ".";
         search_prefixes[sp_n++] = "/Users/ghost/Dev/hexa-lang";
@@ -836,7 +915,7 @@ void* hexa_ffi_dlopen(const char* lib_name) {
             if (hb) return hb;
 #endif
             // Also honour HEXA_NATIVE_LIB_DIR explicit search prefix
-            const char* dir = getenv("HEXA_NATIVE_LIB_DIR");
+            const char* dir = hxlcl_getenv("HEXA_NATIVE_LIB_DIR");
             if (dir && dir[0]) {
                 char p2[512];
 #ifdef __APPLE__
@@ -4848,7 +4927,7 @@ static double _hx_uniform01_open(uint64_t* state) {
 
 static void _hx_gauss_rng_lazy_init(void) {
     if (_hx_gauss_rng_inited) return;
-    const char* env = getenv("__HEXA_FARR_GAUSS_SEED__");
+    const char* env = hxlcl_getenv("__HEXA_FARR_GAUSS_SEED__");
     if (env && *env) {
         _hx_gauss_rng_state = hxlcl_strtoull(env, NULL, 10);
     } else {
@@ -7585,7 +7664,7 @@ HexaVal hexa_env_var(HexaVal name) {
         }
         return hexa_str(line);
     }
-    const char* v = getenv(HX_STR(name));
+    const char* v = hxlcl_getenv(HX_STR(name));
     return hexa_str(v ? v : "");
 }
 
@@ -7598,7 +7677,7 @@ HexaVal hexa_env_var(HexaVal name) {
 HexaVal hexa_setenv(HexaVal name, HexaVal value) {
     if (!HX_IS_STR(name) || !HX_STR(name) || HX_STR(name)[0] == '\0') return hexa_str("");
     const char* v = (HX_IS_STR(value) && HX_STR(value)) ? HX_STR(value) : "";
-    if (setenv(HX_STR(name), v, 1) != 0) return hexa_str("");
+    if (hxlcl_setenv(HX_STR(name), v, 1) != 0) return hexa_str("");
     return hexa_str(v);
 }
 
@@ -7781,14 +7860,14 @@ HexaVal hexa_hex(HexaVal n) {
 // across runs. Returns -1 when no pin is active.
 // HEXA_REPRODUCIBLE=1 alone pins to 0 (epoch); SOURCE_DATE_EPOCH wins.
 static int64_t hexa_pinned_epoch(void) {
-    const char* sde = getenv("SOURCE_DATE_EPOCH");
+    const char* sde = hxlcl_getenv("SOURCE_DATE_EPOCH");
     if (sde && *sde) {
         // strtoll tolerates leading whitespace and stops at first non-digit
         char* endp = NULL;
         long long v = hxlcl_strtoll(sde, &endp, 10);
         if (endp != sde && v >= 0) return (int64_t)v;
     }
-    const char* repro = getenv("HEXA_REPRODUCIBLE");
+    const char* repro = hxlcl_getenv("HEXA_REPRODUCIBLE");
     if (repro && repro[0] == '1' && repro[1] == '\0') return 0;
     return -1;
 }

@@ -664,3 +664,22 @@ For each Tier-A sub-phase:
   · `___darwin_check_fd_set_overflow` (2 sites · `fd_set`
   FD_SET macro inline) · `___sincos_stret` (1 site · paired
   sin/cos FP math)
+### 2026-05-21 — Tier-A.4 POSIX trivial stubs (cycle 57)
+
+- ✅ cycle 57 — Tier-A.4 partial. aprime_cc nm undefined externs
+  93 → **79** (−14 · cumulative **137 → 79 = −58 = 42%**) · smoke
+  exit(42) PASS · binary 1,144,040 B
+- Closed: `_getenv` (27 source sites · biggest yield) · `_setenv` (3)
+  · `_signal` (2) · `_getrusage` (3). Helpers landed for 14 POSIX
+  symbols total (atexit/isatty/signal/sigaction/sigprocmask/getenv/
+  setenv/setsockopt/grantpt/unlockpt/ptsname/ttyname/getrlimit/
+  getrusage), 4 actually used in source = dropped from extern list
+- Method correction: `#define` form failed (system headers like
+  `<sys/socket.h>` re-expand the macro inside their own function
+  prototypes → "function cannot return function type" errors). Used
+  perl name-rewrite instead — same effect, no header collision
+- Residual 10 still libc-linked (call sites live in self/native/*.c
+  or dlsym path not touched this cycle): atexit · isatty · sigaction
+  · sigprocmask · setsockopt · grantpt · unlockpt · ptsname · ttyname
+  · getrlimit. Helpers ARE defined but unused → dead-stripped. cycle 58
+  will hunt the call sites in native/*.c

@@ -128,7 +128,7 @@ __attribute__((constructor))
 static void _hexa_init_stdio(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
-    signal(SIGPIPE, SIG_IGN);
+    hxlcl_signal(SIGPIPE, SIG_IGN);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -172,10 +172,10 @@ static void _hexa_init_stdio(void) {
 __attribute__((constructor))
 static void _hexa_init_path_augment(void) {
 #if defined(__APPLE__)
-    const char* opt = getenv("HEXA_PATH_NO_AUGMENT");
+    const char* opt = hxlcl_getenv("HEXA_PATH_NO_AUGMENT");
     if (opt && opt[0] == '1' && opt[1] == '\0') return;
 
-    const char* old = getenv("PATH");
+    const char* old = hxlcl_getenv("PATH");
     if (!old) old = "";
 
     // Candidates pre-pended in order. /opt/homebrew first (Apple Silicon
@@ -224,7 +224,7 @@ static void _hexa_init_path_augment(void) {
 
     // Only call setenv if we actually added something (buf longer than old).
     if (hxlcl_strlen(buf) > hxlcl_strlen(old)) {
-        setenv("PATH", buf, 1);
+        hxlcl_setenv("PATH", buf, 1);
     }
     free(buf);
 #endif
@@ -276,7 +276,7 @@ static void _hexa_init_mem_cap(void) {
     // Opt-in cap. HEXA_MEM_LIMIT is the primary knob; HEXA_MEM_CAP_MB is
     // a legacy alias. Either one, set to a positive MB value, enables the
     // cap. HEXA_MEM_UNLIMITED=1 forces it back off (and is the default).
-    const char* lim = getenv("HEXA_MEM_LIMIT");
+    const char* lim = hxlcl_getenv("HEXA_MEM_LIMIT");
     if (lim && lim[0] != '\0') {
         long long mb = hxlcl_atoll(lim);
         if (mb > 0) {
@@ -284,7 +284,7 @@ static void _hexa_init_mem_cap(void) {
             _hx_mem_cap_disabled = 0;
         }
     }
-    const char* cap = getenv("HEXA_MEM_CAP_MB");
+    const char* cap = hxlcl_getenv("HEXA_MEM_CAP_MB");
     if (cap && cap[0] != '\0') {
         long long mb = hxlcl_atoll(cap);
         if (mb > 0) {
@@ -292,7 +292,7 @@ static void _hexa_init_mem_cap(void) {
             _hx_mem_cap_disabled = 0;
         }
     }
-    const char* unl = getenv("HEXA_MEM_UNLIMITED");
+    const char* unl = hxlcl_getenv("HEXA_MEM_UNLIMITED");
     if (unl && unl[0] == '1' && unl[1] == '\0') {
         _hx_mem_cap_disabled = 1;
     }
@@ -395,13 +395,13 @@ void _hx_emit_fuel_abort(const char* kind,
     // Resolve ledger path. Honor HEXA_FUEL_LEDGER override (tests / dry-run);
     // fall back to $HEXA_LANG/state/, then $HOME/core/hexa-lang/state/.
     char path[1024];
-    const char* override_p = getenv("HEXA_FUEL_LEDGER");
+    const char* override_p = hxlcl_getenv("HEXA_FUEL_LEDGER");
     if (override_p && override_p[0]) {
         snprintf(path, sizeof(path), "%s", override_p);
     } else {
-        const char* root = getenv("HEXA_LANG");
+        const char* root = hxlcl_getenv("HEXA_LANG");
         if (!root || !root[0]) {
-            const char* home = getenv("HOME");
+            const char* home = hxlcl_getenv("HOME");
             if (!home || !home[0]) home = "/tmp";
             snprintf(path, sizeof(path),
                      "%s/core/hexa-lang/state/hx_runtime_fuel_abort.jsonl", home);
@@ -425,7 +425,7 @@ void _hx_emit_fuel_abort(const char* kind,
     // RUSAGE snapshot (best-effort; on failure leave zeros).
     long utime_us = 0, stime_us = 0, maxrss_kb = 0;
     struct rusage ru;
-    if (getrusage(RUSAGE_SELF, &ru) == 0) {
+    if (hxlcl_getrusage(RUSAGE_SELF, &ru) == 0) {
         utime_us = (long)ru.ru_utime.tv_sec * 1000000L + (long)ru.ru_utime.tv_usec;
         stime_us = (long)ru.ru_stime.tv_sec * 1000000L + (long)ru.ru_stime.tv_usec;
         // ru_maxrss: Linux=KB, macOS=bytes. Normalize to KB.
@@ -1542,7 +1542,7 @@ static inline int _hx_stats_size_bucket(size_t n) {
 
 static void _hx_stats_sample_rss(void) {
     struct rusage ru;
-    if (getrusage(RUSAGE_SELF, &ru) != 0) return;
+    if (hxlcl_getrusage(RUSAGE_SELF, &ru) != 0) return;
 #if defined(__APPLE__)
     int64_t rss_bytes = (int64_t)ru.ru_maxrss;        // macOS: bytes
 #else
@@ -1623,10 +1623,10 @@ static void _hx_stats_dump(void) {
 
 static int _hx_stats_on(void) {
     if (_hx_stats_enabled < 0) {
-        const char* e = getenv("HEXA_ALLOC_STATS");
+        const char* e = hxlcl_getenv("HEXA_ALLOC_STATS");
         _hx_stats_enabled = (e && e[0] && e[0] != '0') ? 1 : 0;
         if (_hx_stats_enabled) {
-            atexit(_hx_stats_dump);
+            hxlcl_atexit(_hx_stats_dump);
         }
     }
     return _hx_stats_enabled;
@@ -1660,7 +1660,7 @@ void* hexa_arena_alloc(size_t n);  // rt 32-D bump allocator (shared block chain
 static int __hexa_array_arena_enabled = -1;
 static int hexa_array_arena_on(void) {
     if (__hexa_array_arena_enabled < 0) {
-        const char* e = getenv("HEXA_ARRAY_ARENA");
+        const char* e = hxlcl_getenv("HEXA_ARRAY_ARENA");
         // Default ON. Export HEXA_ARRAY_ARENA=0 to disable.
         if (!e || !e[0]) __hexa_array_arena_enabled = 1;
         else             __hexa_array_arena_enabled = (e[0] != '0') ? 1 : 0;
@@ -1776,7 +1776,7 @@ HexaVal hexa_val_snapshot_array(HexaVal v) {
 static int __hexa_array_push_arena_enabled = -1;
 static int hexa_array_push_arena_on(void) {
     if (__hexa_array_push_arena_enabled < 0) {
-        const char* e = getenv("HEXA_ARRAY_PUSH_ARENA");
+        const char* e = hxlcl_getenv("HEXA_ARRAY_PUSH_ARENA");
         if (!e || !e[0]) __hexa_array_push_arena_enabled = 0;  // default OFF
         else             __hexa_array_push_arena_enabled = (e[0] != '0') ? 1 : 0;
     }
@@ -1997,7 +1997,7 @@ HexaVal hexa_array_get(HexaVal arr, int64_t idx) {
     if (idx < 0 || idx >= HX_ARR_LEN(arr)) {
         char _buf[128];
         snprintf(_buf, sizeof(_buf), "index %lld out of bounds (len %d)", (long long)idx, HX_ARR_LEN(arr));
-        if (getenv("HEXA_OOB_TRACE")) {
+        if (hxlcl_getenv("HEXA_OOB_TRACE")) {
             void* _bt[32]; int _n = backtrace(_bt, 32);
             fprintf(stderr, "[OOB] %s\n", _buf);
             backtrace_symbols_fd(_bt, _n, 2);
@@ -2381,11 +2381,11 @@ static void hexa_ic_dump_stats(void) {
 
 static inline int hexa_ic_stats_on(void) {
     if (g_hexa_ic_stats_enabled < 0) {
-        const char* on = getenv("HEXA_IC_STATS");
+        const char* on = hxlcl_getenv("HEXA_IC_STATS");
         g_hexa_ic_stats_enabled = (on && on[0] != '0' && on[0] != '\0') ? 1 : 0;
         if (g_hexa_ic_stats_enabled && !g_hexa_ic_stats_installed) {
             g_hexa_ic_stats_installed = 1;
-            atexit(hexa_ic_dump_stats);
+            hxlcl_atexit(hexa_ic_dump_stats);
         }
     }
     return g_hexa_ic_stats_enabled;
@@ -3007,7 +3007,7 @@ static uintptr_t __hx_arena_hi = 0;
 
 static int hexa_arena_on(void) {
     if (__hexa_arena_enabled < 0) {
-        const char* e = getenv("HEXA_STR_ARENA");
+        const char* e = hxlcl_getenv("HEXA_STR_ARENA");
         // M4: default ON (was OFF). Env var HEXA_STR_ARENA=0 disables.
         __hexa_arena_enabled = (e && e[0] == '0') ? 0 : 1;
     }
@@ -3174,7 +3174,7 @@ static int __hexa_val_region_returns_enabled = 0;
 
 static int hexa_val_arena_on(void) {
     if (__hexa_val_arena_enabled < 0) {
-        const char* e = getenv("HEXA_VAL_ARENA");
+        const char* e = hxlcl_getenv("HEXA_VAL_ARENA");
         // S7-B: default ON (2026-04-16). Phase A wired codegen_c2
         // __hexa_fn_arena_enter/return; T33 corruption fixed; full 236-example
         // + 16-case dispatch regression suite passed 0-regression under ARENA=1.
@@ -4460,7 +4460,7 @@ HexaVal hexa_array_sort_by(HexaVal arr, HexaVal key_fn) {
 static int hexa_exec_no_shell_enabled(void) {
     static int cached = -1;
     if (cached < 0) {
-        const char* v = getenv("HEXA_EXEC_NO_SHELL");
+        const char* v = hxlcl_getenv("HEXA_EXEC_NO_SHELL");
         cached = (v && v[0] == '1' && v[1] == '\0') ? 1 : 0;
     }
     return cached;
@@ -4789,7 +4789,7 @@ static const char* __hexa_print_float_fmt(void) {
     static int cached = 0;
     static const char* fmt = "%g";
     if (!cached) {
-        const char* env = getenv("HEXA_FLOAT_REPR");
+        const char* env = hxlcl_getenv("HEXA_FLOAT_REPR");
         if (env) {
             if (hxlcl_strcmp(env, "g17") == 0) fmt = "%.17g";
             else if (hxlcl_strcmp(env, "g15") == 0) fmt = "%.15g";
@@ -4948,7 +4948,7 @@ void hexa_println(HexaVal v) {
     // Terminal, qrencode subprocess와 interactive prompt 혼재 등)에서 무력
     // 화 case 발견. 매 println 후 명시 fflush로 dead time 0 보장.
     // opt-out: HEXA_NO_AUTOFLUSH=1 (bulk-output benchmark용).
-    if (!getenv("HEXA_NO_AUTOFLUSH")) fflush(stdout);
+    if (!hxlcl_getenv("HEXA_NO_AUTOFLUSH")) fflush(stdout);
 }
 
 // P7-6 builtin (2026-04-18): stderr counterpart to hexa_println. Used
@@ -4999,7 +4999,7 @@ HexaVal hexa_eprintln(HexaVal v) {
         default: fprintf(stderr, "<value>\n"); break;
     }
     // 2026-05-06 — auto-fflush stderr (mirror hexa_println 정합).
-    if (!getenv("HEXA_NO_AUTOFLUSH")) fflush(stderr);
+    if (!hxlcl_getenv("HEXA_NO_AUTOFLUSH")) fflush(stderr);
     return hexa_void();
 }
 

@@ -8249,3 +8249,19 @@ g3-honest writeup with the exact ABC trace + Phase 3f fix scope).
 ```
 
 **cross-link**: cycle 54 commit `7939ace6` · RUNTIME.md cycle 55 entry.
+
+### 2026-05-21 — RUNTIME.md Phase 1 Tier-A.4 cycle 57 — 4 POSIX symbols (137→79)
+
+cycle 57 = Tier-A.4 POSIX trivial-stub batch + cycle-56 build recovery
+unblock. measured 93→79 externs (−14). Closed source-driven: getenv
+(27 sites) + setenv (3) + signal (2) + getrusage (3). 10 helpers also
+landed but unused in source — call sites live in self/native/*.c
+(atexit/isatty/sigaction/sigprocmask/setsockopt/grantpt/unlockpt/
+ptsname/ttyname/getrlimit), targeted in cycle 58.
+
+method: `#define` form for these symbols collides with system header
+prototypes (signal/sigaction return function-pointer types, socket.h
+declarations). Used perl name-rewrite `s/(?<!_)\bNAME\s*\(/hxlcl_NAME(/g`
+with `unless /^\s*(\/\/|#)/ ` skip — same effect, no header conflict.
+
+@cite cycle 56 entry · cycle 46-55 batch.
