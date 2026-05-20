@@ -4187,3 +4187,58 @@ deploy-regen pattern that periodically wipes runtime.c edits.
 Until that pattern is fixed at the deploy tooling layer, the same
 wipe can recur. No claim that this cycle prevents recurrence —
 only that the SSOT is currently correct again.
+
+## 진행 로그 — inbox/notes/neural-kernel-hexa-native-lif-port-target survey closure (2026-05-20)
+
+inbox note `2026-05-20-neural-kernel-hexa-native-lif-port-target.md` —
+demiurge D72 2-layer restructure 가 `stdlib/kernels/neural/lif_kernel.py`
+를 `.py` substrate 로 추출한 뒤 hexa-native LIF integrator 가 future
+port target 으로 등록되어 있던 건. severity = low (no functional
+blocker).
+
+dup-race precheck 결과: 본 inbox note 가 file 된 같은 날
+(2026-05-20 17:44 KST) origin/main commit `299db935`
+"feat(stdlib/kernels/neural): D80 g_hexa_only pilot #3 — LIF
+analytic exact-update integrator (no brian2)" 가 이미 hexa-native
+kernel 을 land 시킴 — 신규 skeleton 생성 불필요, status-flip-only.
+
+landed artefacts (`stdlib/kernels/neural/`):
+- `lif_kernel.hexa` (229 LoC) — clean-room hexa-native, no brian2.
+  Exposes `v_step` / `v_step_general` / `decay_factor` / `isi_period` /
+  `firing_rate` / `simulate`. Analytic exact per-step update
+  `v(t+dt) = I + (v(t) - I) · exp(-dt/τ)` (Stein 1965, Tuckwell
+  1988 vol.1 ch.3; same closed form brian2 `method='exact'` applies).
+- `lif_kernel_test.hexa` (201 LoC) — 23/23 PASS on numpy 2.x analytic
+  reference, per-sample relative error ≤ 2e-15 (machine epsilon).
+- `README.md` — points at the new hexa-native kernel.
+
+본 cycle 에서 한 일 (Shape A surgical):
+1. `inbox/notes/2026-05-20-neural-kernel-hexa-native-lif-port-target.md`
+   status `open → resolved-ssot` flip + PROGRESS marker append (landed
+   commit hash, file list, honesty box, follow-on milestone).
+2. compiler/PLAN.md 본 entry (single append, conflict-marker-disjoint).
+
+honesty (g3 unchanged from #299db935):
+- Substrate parity proves the PORT PATTERN scales to a third sample
+  (after solar `122620de` + mc_transport `dd3dad19`). Does NOT flip
+  `absorbed=true` at the demiurge record layer — that gate stays on
+  (a) demiurge-side `HexaNativeParityRef` schema update and (b) a
+  measured patch-clamp oracle (Sim4Life MDDT / Allen Brain Atlas).
+- LIF model is a textbook abstraction; no biological neuron absorbed.
+- `.py` substrate **retained** because `stdlib/brain/lif_brian2.py`
+  adapter still spawns it. Re-pointing the adapter is a follow-on
+  gated on the Producer ABI redesign (JSON I/O hexa-native side).
+- `g_stdlib_ownership` preserved: hexa-lang owns the kernel SSOT.
+
+scope punted (NOT in this cycle):
+- Producer spawn ABI redesign + adapter re-point + demiurge D72
+  `.py` substrate flag flip.
+- binary promote (per SOP step 7, separate deploy cycle).
+
+cross-link: commit `299db935` (D80 g_hexa_only pilot #3) · sibling
+pilots `122620de` (solar) + `dd3dad19` (mc_transport) ·
+`inbox/notes/2026-05-20-d80-lif-kernel-hexa-native-port-landed.md`
+(closure record) · `inbox/notes/hexa-native-port-pattern-pilot.md`
+(pilot pattern catalog) · @D g7 inbox-patches-pipeline ·
+@D g_inbox_processing_loop ·
+@D g_stdlib_ownership.
