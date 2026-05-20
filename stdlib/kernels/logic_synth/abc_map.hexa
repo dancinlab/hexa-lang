@@ -98,6 +98,15 @@ fn _abc_log(line: str) {
 // the read_verilog subset ($and, $or, $not, $xor, $dff). Multi-bit
 // arithmetic cells are out of scope and would fail emission with a
 // clear diagnostic.
+//
+// rfc_006 §5 bug (a) iter 6 — constant-tie cells (`$_const0_` /
+// `$_const1_`) emit as BLIF `.names` constants rather than `.gate`
+// lines (BLIF spec §3 — `.names <net>` with zero rows = constant 0;
+// with a single `1` row = constant 1). This avoids instantiating a
+// Liberty `sky130_fd_sc_hd__conb_1` cell, which ABC's `read_blif`
+// rejects because its outputs are pure constants with no boolean
+// function. The driving pin convention is `Y=<net>` (matching the
+// RTLIL `$_const{0,1}_` sigspec-constant cell shape).
 fn abc_emit_blif(d: Design) -> str {
     let mut buf = ""
     let mut mi = 0
@@ -119,16 +128,38 @@ fn abc_emit_blif(d: Design) -> str {
         if have_i == 1 { buf = buf + ibuf + "\n" }
         if have_o == 1 { buf = buf + obuf + "\n" }
         // each cell -> .gate <type> <pin>=<net> ...
+        // …except `$_const{0,1}_` driver sentinels, which become
+        // BLIF `.names` constant-truth-table lines (see header).
         let mut ci = 0
         while ci < len(m.cells) {
             let c = m.cells[ci]
-            buf = buf + ".gate " + c.cell_type
-            let mut pi = 0
-            while pi < len(c.conns) {
-                buf = buf + " " + c.conns[pi].pin + "=" + c.conns[pi].net
-                pi = pi + 1
+            if c.cell_type == "$_const0_" {
+                // emit constant 0: `.names <Y-net>` with zero rows
+                let mut yi = 0
+                while yi < len(c.conns) {
+                    if c.conns[yi].pin == "Y" {
+                        buf = buf + ".names " + c.conns[yi].net + "\n"
+                    }
+                    yi = yi + 1
+                }
+            } else if c.cell_type == "$_const1_" {
+                // emit constant 1: `.names <Y-net>` with single `1` row
+                let mut yi = 0
+                while yi < len(c.conns) {
+                    if c.conns[yi].pin == "Y" {
+                        buf = buf + ".names " + c.conns[yi].net + "\n1\n"
+                    }
+                    yi = yi + 1
+                }
+            } else {
+                buf = buf + ".gate " + c.cell_type
+                let mut pi = 0
+                while pi < len(c.conns) {
+                    buf = buf + " " + c.conns[pi].pin + "=" + c.conns[pi].net
+                    pi = pi + 1
+                }
+                buf = buf + "\n"
             }
-            buf = buf + "\n"
             ci = ci + 1
         }
         buf = buf + ".end\n"
@@ -362,6 +393,38 @@ fn main() {
     total = total + 1
     if len(r4.message) == 0 {
         println("FAIL T5 message_empty"); fails = fails + 1
+    }
+
+    // T6 — `$_const{0,1}_` driver sentinels become BLIF `.names`
+    // constant lines, NOT `.gate` lines. rfc_006 §5 bug (a) iter 6
+    // fix — ABC's read_blif accepts `.names <net>` with zero rows
+    // (constant 0) and with a single `1` row (constant 1), but
+    // rejects a `.gate sky130_fd_sc_hd__conb_1 LO=...` because the
+    // Liberty conb_1 outputs are pure constants (no boolean function).
+    total = total + 1
+    let mut m6 = rtlil_new_module("c6")
+    m6 = rtlil_module_add_wire(m6, rtlil_wire("z0", 1, 0, 0))
+    m6 = rtlil_module_add_wire(m6, rtlil_wire("z1", 1, 0, 0))
+    let mut c0 = rtlil_cell("u_c0", "$_const0_", 0)
+    c0 = rtlil_cell_connect(c0, "Y", "z0")
+    m6 = rtlil_module_add_cell(m6, c0)
+    let mut c1 = rtlil_cell("u_c1", "$_const1_", 0)
+    c1 = rtlil_cell_connect(c1, "Y", "z1")
+    m6 = rtlil_module_add_cell(m6, c1)
+    let mut d6 = rtlil_new_design("test")
+    d6 = rtlil_design_add(d6, m6)
+    let blif6 = abc_emit_blif(d6)
+    if blif6.find(".names z0\n") < 0 {
+        println("FAIL T6 blif_const0_names_missing"); fails = fails + 1
+    }
+    if blif6.find(".names z1\n1\n") < 0 {
+        println("FAIL T6b blif_const1_names_missing"); fails = fails + 1
+    }
+    if blif6.find(".gate $_const0_") >= 0 {
+        println("FAIL T6c blif_const0_leaked_as_gate"); fails = fails + 1
+    }
+    if blif6.find(".gate $_const1_") >= 0 {
+        println("FAIL T6d blif_const1_leaked_as_gate"); fails = fails + 1
     }
 
     if fails > 0 {
