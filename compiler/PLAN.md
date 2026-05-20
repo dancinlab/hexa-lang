@@ -4890,3 +4890,126 @@ cycle 6 baton
 corpus PASS) + P2 + P3.
 
 **cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa.
+
+
+### 2026-05-20 — S7-P1 cycle 6: extern-free SVC exec + LC_CODE_SIGNATURE pre-alloc + LC_BUILD_VERSION (cycle 5 latent bug surfaced + fixed)
+
+🎉 **BREAKTHROUGH 발견** — cycle 5 falsifier 가 **false-positive bug** 를
+가지고 있었음. `codesign -s -` 가 placeholder 없는 binary 에 LC_CODE_
+SIGNATURE 을 in-place 삽입하면서 `__text` 영역을 덮어쓰기 했음. cycle 5
+의 `nm` / `codesign -dvv` 체크는 통과했지만 `otool -tv` 가 `udf #0x1d`
+(= LC_CODE_SIGNATURE bytes 의 첫 워드) 를 보여주는 corruption.
+
+본 cycle 의 falsifier (3-instr SVC syscall) 가 `__text` byte-correctness
+요구하면서 surface. fix 후 cycle 3-5 모든 binary 의 `__text` 가 정확.
+
+**한 줄**: hand-built 12-byte SVC exit syscall 코드 → hexa_ld → exec.
+otool -tv 가 `mov x16,#1; mov x0,#42; svc #0x80` 정확히 disassemble.
+launch 는 여전히 rc=137 — macOS Sonoma loader 가 `LC_DYLD_CHAINED_FIXUPS`
++ `LC_DYLD_EXPORTS_TRIE` + `LC_UUID` + `LC_SOURCE_VERSION` 요구 (clang 이
+무조건 emit) — cycle 7 의 명확한 baton.
+
+**변경 파일** (`tool/hexa_ld.hexa`):
+
+1. **LC_CODE_SIGNATURE pre-allocation** (16-byte linkedit_data_command
+   + 1024-byte signature blob space in __LINKEDIT):
+   - 추가 LC + ncmds 8→10 + sizeofcmds 적절히
+   - dataoff = linkedit_fileoff + symtab_size + strtab_total
+   - datasize = 1024 (ad-hoc CMS blob 은 ~250-300, 안전 margin)
+   - __LINKEDIT.filesize 에 codesig_reserve 포함
+
+2. **LC_BUILD_VERSION** (24-byte build_version_command):
+   - platform=1 (PLATFORM_MACOS), minos=0x000B0000 (11.0),
+     sdk=0x000B0000, ntools=0
+   - macOS Big Sur+ loader 가 LC_BUILD_VERSION 없으면 "Bad executable"
+     로 거부.
+
+3. **MH_NOUNDEFS flag** (extern_refs 빈 경우):
+   - nsyms - nextdefsym == 0 이면 flags |= 0x1
+   - dyld 가 symbol resolution skip 하고 LC_MAIN 직접 transfer 가능
+     (extern-free 케이스만)
+
+4. **codesign 2-step workflow**:
+   - `codesign --remove-signature` (idempotent, placeholder LC 제거 +
+     section offsets 재정렬)
+   - `codesign -s -` (fresh ad-hoc 서명)
+   - 1-step `-s -` 만으로는 placeholder bytes 를 "invalid signature"
+     로 오인.
+
+**Cycle 5 false-positive bug** (본 cycle 발견 + fix):
+
+cycle 5 의 falsifier 는 (a) `codesign -dvv` 가 ad-hoc sig 인식 + (b)
+launch rc=137 (expected) 만 검증. **__text 의 byte-correctness 미검증**.
+실제 binary 는:
+- section_64.__text.offset = 544 (= 0x220, 원래 위치)
+- 실제 __text bytes 는 560 (= 0x230) 으로 shifted (codesign 이 LC_CODE_
+  SIGNATURE in-place 삽입하면서)
+- offset 544 에는 LC_CODE_SIGNATURE header bytes (cmd=0x1d, cmdsize=16,
+  dataoff=0x4060, datasize=0x47a0)
+- otool -tv 가 section_64.__text.offset 가 가리키는 544 의 bytes 를
+  disassemble → `udf #0x1d` (decoded LC_CODE_SIGNATURE 의 cmd field)
+
+본 cycle 의 pre-alloc + 2-step codesign 후: section_64.__text.offset 가
+real __text 위치 (0x248 in cycle 6, 0x230 in cycle 5 등) 로 정확 update.
+모든 12 instructions reproduce.
+
+**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P1_SVC_EXIT.hexa`):
+
+- 합성 ParsedObj — 12-byte text = `[0x30,0x00,0x80,0xD2, 0x40,0x05,0x80,0xD2,
+  0x01,0x10,0x00,0xD4]` (`mov x16,#1; mov x0,#42; svc #0x80`)
+- defined = [`_main`@0], extern_refs/relocs = []
+- link → otool -tv check 3 expected strings + launch rc 보고
+
+**측정 (arm64-Mac local)**:
+
+```
+$ /tmp/run_F_P1_SVC_EXIT
+=== otool -hV ===
+EXECUTE 10 552  NOUNDEFS TWOLEVEL PIE        ← ncmds=10, NOUNDEFS set
+
+=== otool -tv ===
+_main:
+0000000100000248  mov  x16, #0x1
+000000010000024c  mov  x0,  #0x2a
+0000000100000250  svc  #0x80
+
+=== launch ===
+  rc=137 (expected 42 once cycle 7 lands)
+
+F-P1-SVC-EXIT cycle 6 PARTIAL — struct fixes landed (otool -tv reads
+  3 SVC instructions correctly · codesign valid · LC_BUILD_VERSION present)
+  rc=137 gates cycle 7: LC_DYLD_CHAINED_FIXUPS +
+  LC_DYLD_EXPORTS_TRIE + LC_UUID + LC_SOURCE_VERSION required by
+  macOS Sonoma loader (clang emits all 4 unconditionally).
+```
+
+**cycle 3-5 모든 falsifier 재검증**: 새 LC_CODE_SIGNATURE pre-alloc + LC_
+BUILD_VERSION 후 cycle 3 (EXEC-TEXT), cycle 4 (EXEC-SYMTAB), cycle 5
+(CODESIGN) 모두 PASS. cycle 3 의 12-instruction trivial disassembly 도
+이제 정확 (`stp x29, x30, [sp, #-0x10]! / mov x29, sp / bl ... / ret`).
+
+**HONEST SCOPE (g3, over-claim 0)**:
+
+- launch rc=42 미달성 — cycle 7 의 4 LC (CHAINED_FIXUPS, EXPORTS_TRIE,
+  UUID, SOURCE_VERSION) 가 macOS Sonoma loader gate. 본 cycle 의 닫음은
+  형식 정합성 (otool 정확) + codesign 정합성 (-s - PASS).
+- LC_DYLD_CHAINED_FIXUPS 는 인코딩 복잡 (chained-fixups header + imports
+  + symbol pool + segment_info + page_starts). cycle 7 의 가장 큰 작업.
+- cycle 7+ 이 done 하면 cycle 6 의 falsifier 가 자동으로 FULL PASS 로
+  전환 (rc=42).
+
+**다음 cycle (P1 cycle 7) baton**:
+
+- LC_DYLD_CHAINED_FIXUPS (cmd 0x80000034) — chained-fixups header
+  (version=2, starts_offset, imports_offset, symbols_offset,
+  imports_count, symbols_format, page_size, segment_count) + 빈 imports
+  (extern-free 케이스) + 빈 segment_info + 빈 page_starts.
+- LC_DYLD_EXPORTS_TRIE (cmd 0x80000033) — empty exports trie (1 byte:
+  terminal-size=0).
+- LC_UUID (cmd 0x1b, 24 bytes) — 16-byte random UUID.
+- LC_SOURCE_VERSION (cmd 0x2a, 16 bytes) — version u64.
+
+**RFC 063 phasing 진척**: P0 ✅ · P1 cycles 1-6 ✅. 잔여 P1 cycle 7
+(4 LCs for Sonoma loader) + cycle 8 (lazy-bind, real corpus) + P2 + P3.
+
+**cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa.
