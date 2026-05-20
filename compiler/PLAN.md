@@ -7391,3 +7391,57 @@ phases CLOSED · **S3 fixpoint FULL CLOSURE PROVEN (measured)**.
 **Files modified this cycle (1)**:
 - compiler/lower/hir_to_mir.hexa: _lr_ctx_clear truncate→assign
   (+20 line comment for posterity, 4-line functional change)
+
+
+### 2026-05-20 — follow-up cycle 42: runtime hexa-native rewrite RFC + 173-extern catalog
+
+cycle 41 S3 closure 직후, north-star ② 의 strict reading 대응:
+**runtime 도 hexa-native** (current C runtime ~16,809 LoC + 45 .c
+files in self/native/ 를 hexa source 로 재작성).
+
+**RFC draft**: `inbox/rfc_drafts_2026_05_20/rfc_runtime_hexa_native_
+rewrite.md` — 3-tier scope decomposition (compiler-essential /
+stdlib / application), 3-phase strategy, acceptance gate.
+
+**External symbol catalog (aprime_c41)** — 173 libc/libsystem
+externs, 0 hexa runtime externs (runtime statically linked):
+
+| 카테고리 | 수 |
+|---------|----|
+| syscalls posix | 32 |
+| memory/stdlib (libc) | 25 |
+| I/O stdio | 19 |
+| math libm | 16 |
+| thread (pthread) | 12 |
+| darwin/macos internal | 12 |
+| net | 11 |
+| misc (dlsym, pty, posix_spawn 등) | ~46 |
+| **total** | **173** |
+
+Catalog raw: `inbox/rfc_drafts_2026_05_20/aprime_c41_externs_catalog.txt`
+
+**Phase 1 scope** (Tier-A, compiler-essential, ~30 fns ~3K LoC):
+
+- HexaVal core (hexa_int, hexa_str, hexa_array_*, hexa_map_*)
+- String (substring, concat, chars/bytes, char_code, eq)
+- Arena (alloc, scope_push/pop, fn_arena_return)
+- I/O (read_file, write_file, println, eprintln)
+- Process (exec, exit)
+- Hash (sha256, sha256_hex)
+
+Strategy: replace each Tier-A C fn with `pub fn` in `stdlib/runtime/`,
+syscalls via `@asm` blocks where needed. libm + malloc/mmap escape
+hatches preserved initially. Acceptance: aprime_cc rebuild with
+Tier-A hexa-native runtime → same S3 fixpoint md5 `4197fd52...`.
+
+**Estimated**: Phase 1 = 8-12 cycle equivalent, Phase 2 (stdlib) =
+4-8 cycles, Phase 3 (crypto/net/GPU) = deferred or 16+ cycles
+depending on policy review.
+
+**Cycle 42 = catalog + RFC only**. Cycle 43+ begins concrete
+implementation per Phase 1 plan.
+
+**Honest scope (g3)**:
+
+Runtime rewrite is multi-week work. Cycle 42 = scope clarified +
+inventory measured. Subsequent cycles will iterate Tier-A symbols.
