@@ -1969,7 +1969,6 @@ forge-route 확인 — 미측정 over-claim 0).
 안전. (copy_slice/transpose CPU-fallback 은 비차단 잔재로 별도 추적.)
 
 ### 2026-05-20 — flame spiking primitives status flip — patch md verified-closed against commit 4426d4e4 (anima §138 inbox loop closure).
-안전. (copy_slice/transpose CPU-fallback 은 비차단 잔차로 별도 추적.)
 
 ### 2026-05-20 — pt-ckpt cross-substrate residual readout patch landed (Shape A)
 - `inbox/patches/pt-ckpt-cross-substrate-residual-readout.md` (anima §168
