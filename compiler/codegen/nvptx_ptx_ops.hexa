@@ -75,6 +75,9 @@ pub let PTX_OP_RET: string            = "ret"          // return from entry/func
 // ── PTX atomics (RFC 055 §12 P4+ — gpu/SPEC.md §5) ────────────
 pub let PTX_OP_ATOM_ADD_F64: string   = "atom.add.f64"  // global-mem FP64 atomic add (returns old)
 
+// ── PTX warp-level data movement (RFC 055 §12 P4+ — gpu/SPEC.md §5) ──
+pub let PTX_OP_SHFL_SYNC_IDX_B32: string = "shfl.sync.idx.b32"  // warp-lane shuffle by source-lane idx; ref NVIDIA PTX ISA 9.7.13.4
+
 // ── PTX function-kind directives ──────────────────────────────
 //
 // The GPU analogue of "exported symbol vs static helper" (RFC 055 §6.3).

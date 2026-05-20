@@ -770,11 +770,12 @@ fn main() {
     let ok_part  = _test_partition()
     let ok_barr  = _test_barrier()
     let ok_atom  = _test_atomic_add()
+    let ok_shuf  = _test_warp_shuffle()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom {
-        println("PASS: RFC 055 P3b/c/P4 — 8/8 cases (incl. partition + gpu_barrier + gpu_atomic_add)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf {
+        println("PASS: RFC 055 P3b/c/P4 — 9/9 cases (incl. partition + gpu_barrier + gpu_atomic_add + gpu_warp_shuffle)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -785,7 +786,68 @@ fn main() {
         if !ok_part { println("      055-P3c gpu_kind partition FAILED") }
         if !ok_barr { println("      055-P4 gpu_barrier() FAILED") }
         if !ok_atom { println("      055-P4+ gpu_atomic_add() FAILED") }
+        if !ok_shuf { println("      055-P4+ gpu_warp_shuffle() FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf) { exit(1) }
+}
+
+// ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
+//
+// RFC 055 §12 P4+ — warp-lane data exchange. STMT_CALL with
+// op="gpu_warp_shuffle" lowers to `shfl.sync.idx.b32 %r<dst>, %r<src>,
+// %r<lane>, 0x1f, 0xffffffff;`. The dst Local is classified U32.
+// Value + lane operands render via hand-typed `%r<id>` references.
+
+fn _build_case_warp_shuffle() -> MModule {
+    let v = _local(0, "v")           // STMT_CALL gpu_thread_id_x -> U32 %r0
+    let lane = _local(1, "lane")     // STMT_CALL gpu_thread_id_y -> U32 %r1
+    let r = _local(2, "r")           // gpu_warp_shuffle dst — U32 %r2
+
+    let mut shuf_args = []
+    shuf_args.push(_op_local(v.id))
+    shuf_args.push(_op_local(lane.id))
+
+    let mut s0 = []
+    s0.push(_stmt_call(v, "gpu_thread_id_x"))
+    s0.push(_stmt_call(lane, "gpu_thread_id_y"))
+    s0.push(_stmt_call_with_args(r, "gpu_warp_shuffle", shuf_args))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut locals = []
+    locals.push(v)
+    locals.push(lane)
+    locals.push(r)
+
+    let mf = MFunc {
+        name: "warp_shuffle_smoke",
+        params: [],
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_warp_shuffle.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_warp_shuffle() -> bool {
+    let mut ok = true
+    let mod_ws = _build_case_warp_shuffle()
+    let ptx = codegen_emit_ptx_sm80(mod_ws)
+
+    println("")
+    println("-- emitted PTX (055-P4+ gpu_warp_shuffle case, sm_80) --")
+    println(ptx)
+
+    ok = _check(ok, ptx, ".reg .u32 %r2",                                      "u32 bank for warp_shuffle dst")
+    ok = _check(ok, ptx, "shfl.sync.idx.b32 %r2, %r0, %r1, 0x1f, 0xffffffff",  "shfl.sync.idx.b32 full operand list")
+    return ok
 }
