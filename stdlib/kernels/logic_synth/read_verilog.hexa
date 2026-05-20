@@ -790,6 +790,35 @@ fn _rv_elab_primary(toks: [str], pos: int, m_in: Module, tab: SymTab) -> ElabRes
     }
     if t == "1'b0" { return ElabResult { wire: "$const_0", m: m, pos: pos + 1, err: "" } }
     if t == "1'b1" { return ElabResult { wire: "$const_1", m: m, pos: pos + 1, err: "" } }
+    // Fold a bare localparam/parameter identifier into a synthesized
+    // `$const_<N>` wire (IEEE 1364-2005 §5.1.1 — a parameter reference
+    // in an expression is replaced by its constant value). Required so
+    // downstream lowerings (`passes::lower_mod`, future $add/$sub
+    // const-foldings) see an integer divisor on a B-pin instead of the
+    // localparam *name*. rfc_006 §5 absorption iter 8: closes the
+    // case-C→case-B transition for the lowering reported at
+    // passes.hexa:1181 ("variable / unfoldable divisor B=`P`"). Scope:
+    // non-negative values only — `$const_<N>` (passes.hexa:1098-1099)
+    // accepts only decimal digits; negative parameter values keep the
+    // wire-name fallback (honest gap, still case C). The substitution
+    // happens only when the token is not followed by `[` — a parameter
+    // name as an array index has already been folded into the wire
+    // name by the index-eval branch below; here we handle the operand
+    // position. (@cite IEEE 1364-2005 §5.1 constant-expression
+    // operands.)
+    if ((pos + 1 >= n) || (toks[pos + 1] != "[")) && (symtab_has(tab, t) == 1) {
+        let pv = symtab_get(tab, t)
+        if pv >= 0 {
+            let cn = "$const_" + str(pv)
+            // dedupe: only add the wire if not already present in the
+            // module (multiple operands referencing the same value
+            // share the wire — naming convention match).
+            if rtlil_find_wire(m, cn) < 0 {
+                m = rtlil_module_add_wire(m, rtlil_wire(cn, 1, 0, 0))
+            }
+            return ElabResult { wire: cn, m: m, pos: pos + 1, err: "" }
+        }
+    }
     // bare token = wire reference, optionally followed by one or more
     // `[ ... ]` index groups (unpacked-array element after generate-
     // unrolling, packed part-select, or chained 2-D access like
@@ -3039,6 +3068,121 @@ fn main() {
             if _r29.design.modules[0].wires[_qi].width != 8 {
                 println("FAIL T29b q_width"); fails = fails + 1
             }
+        }
+    }
+
+    // T-fold-A — pow-of-2 localparam folded into $const_<N> on the
+    // B-pin of a `$mod` cell. After read_verilog, the cell's B-pin
+    // must reference `$const_4` (not the bare `K` localparam name).
+    // (rfc_006 §5 absorption iter 8 — IEEE 1364-2005 §5.1.1.)
+    total = total + 1
+    let _vFA = "module modk ( input wire [ 3 : 0 ] x , output wire [ 3 : 0 ] y ) ; localparam integer K = 4 ; assign y = x % K ; endmodule"
+    let _rFA = read_verilog(_vFA)
+    if _rFA.ok != 1 {
+        println("FAIL T-fold-A read: " + _rFA.message); fails = fails + 1
+    } else {
+        let _mFA = _rFA.design.modules[0]
+        let mut _foundFA = 0
+        let mut _ci = 0
+        while _ci < len(_mFA.cells) {
+            let _cFA = _mFA.cells[_ci]
+            if _cFA.cell_type == "$mod" {
+                let mut _pi = 0
+                while _pi < len(_cFA.conns) {
+                    if _cFA.conns[_pi].pin == "B" {
+                        if _cFA.conns[_pi].net == "$const_4" { _foundFA = 1 }
+                    }
+                    _pi = _pi + 1
+                }
+            }
+            _ci = _ci + 1
+        }
+        if _foundFA != 1 {
+            println("FAIL T-fold-A mod_B_not_const4"); fails = fails + 1
+        }
+        if rtlil_find_wire(_mFA, "$const_4") < 0 {
+            println("FAIL T-fold-A const_wire_missing"); fails = fails + 1
+        }
+    }
+
+    // T-fold-B — non-pow-of-2 localparam (router_d4 shape) folds into
+    // `$const_5`. Iter-7 $mod lowering will then route this through
+    // case B; read_verilog's responsibility ends with the constant
+    // substitution.
+    total = total + 1
+    let _vFB = "module mod5 ( input wire [ 3 : 0 ] x , output wire [ 3 : 0 ] y ) ; localparam integer P = 5 ; assign y = x % P ; endmodule"
+    let _rFB = read_verilog(_vFB)
+    if _rFB.ok != 1 {
+        println("FAIL T-fold-B read: " + _rFB.message); fails = fails + 1
+    } else {
+        let _mFB = _rFB.design.modules[0]
+        let mut _foundFB = 0
+        let mut _ci = 0
+        while _ci < len(_mFB.cells) {
+            let _cFB = _mFB.cells[_ci]
+            if _cFB.cell_type == "$mod" {
+                let mut _pi = 0
+                while _pi < len(_cFB.conns) {
+                    if _cFB.conns[_pi].pin == "B" {
+                        if _cFB.conns[_pi].net == "$const_5" { _foundFB = 1 }
+                    }
+                    _pi = _pi + 1
+                }
+            }
+            _ci = _ci + 1
+        }
+        if _foundFB != 1 {
+            println("FAIL T-fold-B mod_B_not_const5"); fails = fails + 1
+        }
+    }
+
+    // T-fold-C — localparam in an `$add` cell. Same substitution
+    // discipline: a known parameter at operand position becomes a
+    // `$const_<N>` wire on the cell B-pin.
+    total = total + 1
+    let _vFC = "module addq ( input wire [ 3 : 0 ] x , output wire [ 3 : 0 ] y ) ; localparam integer Q = 7 ; assign y = x + Q ; endmodule"
+    let _rFC = read_verilog(_vFC)
+    if _rFC.ok != 1 {
+        println("FAIL T-fold-C read: " + _rFC.message); fails = fails + 1
+    } else {
+        let _mFC = _rFC.design.modules[0]
+        let mut _foundFC = 0
+        let mut _ci = 0
+        while _ci < len(_mFC.cells) {
+            let _cFC = _mFC.cells[_ci]
+            if _cFC.cell_type == "$add" {
+                let mut _pi = 0
+                while _pi < len(_cFC.conns) {
+                    if _cFC.conns[_pi].pin == "B" {
+                        if _cFC.conns[_pi].net == "$const_7" { _foundFC = 1 }
+                    }
+                    _pi = _pi + 1
+                }
+            }
+            _ci = _ci + 1
+        }
+        if _foundFC != 1 {
+            println("FAIL T-fold-C add_B_not_const7"); fails = fails + 1
+        }
+    }
+
+    // T-fold-D — dedupe: two references to the same localparam share
+    // a single `$const_<N>` wire (avoid duplicate-wire blow-up).
+    total = total + 1
+    let _vFD = "module dup ( input wire [ 3 : 0 ] x , input wire [ 3 : 0 ] z , output wire [ 3 : 0 ] y , output wire [ 3 : 0 ] w ) ; localparam integer R = 3 ; assign y = x + R ; assign w = z + R ; endmodule"
+    let _rFD = read_verilog(_vFD)
+    if _rFD.ok != 1 {
+        println("FAIL T-fold-D read: " + _rFD.message); fails = fails + 1
+    } else {
+        let _mFD = _rFD.design.modules[0]
+        let mut _ndup = 0
+        let mut _wi = 0
+        while _wi < len(_mFD.wires) {
+            if _mFD.wires[_wi].name == "$const_3" { _ndup = _ndup + 1 }
+            _wi = _wi + 1
+        }
+        if _ndup != 1 {
+            println("FAIL T-fold-D dedupe got " + str(_ndup) + " (expected 1)"); fails = fails + 1
         }
     }
 
