@@ -61,6 +61,7 @@
 // `_rv_parse_assign`, plus the no-op `pass_proc_mux` stub.
 
 use "stdlib/kernels/logic_synth/rtlil"
+use "stdlib/kernels/logic_synth/passes"
 
 // ─── parse result ────────────────────────────────────────────────────────
 
@@ -4876,6 +4877,163 @@ fn main() {
         }
         if _mux != 1 {
             println("FAIL T50b mux_count got " + str(_mux) + " (expected 1)"); fails = fails + 1
+        }
+    }
+
+    // ─── RFC 073 Phase 3c — for-loop iteration-guard end-to-end gate ─────
+    //
+    // T64..T66 verify the full pipeline:
+    //
+    //   read_verilog  →  pass_proc_mux  →  pass_clean_multidriver
+    //
+    // for the canonical for-loop guarded-write shape (T58 already locks
+    // down the read_verilog half — that 3 cond-tagged rows are produced
+    // with iteration-substituted guards `sel[0]`, `sel[1]`, `sel[2]`).
+    // T65 asserts the new `pass_clean_multidriver` cond-aware skip
+    // (group with ≥1 cond-tagged row is left untouched, deferred to
+    // proc_mux). T66 asserts `pass_proc_mux` folds the 3 cond-tagged
+    // rows into a 2-level left-deep `$mux` chain ending in one
+    // unconditional connect to the LHS.
+    //
+    // @cite IEEE 1364-2005 §10.3.5 (for-loop unroll) + §10.4.2
+    // (procedural assignment — last-write-wins reduces to one-hot mux
+    // when guards are mutually exclusive) + Yosys passes/proc/proc_mux.cc
+    // (clean-room behavioural reference, no source copy).
+
+    // T64 — read_verilog half (T58 mirror with `sel` LHS-array, narrower
+    // assertion: 3 connect_cond rows on `y` with conds `sel[0..2]`).
+    total = total + 1
+    let _v64 = "module fg64 ( input wire [ 2 : 0 ] sel , output reg [ 7 : 0 ] y ) ; integer i ; always @ ( * ) begin for ( i = 0 ; i < 3 ; i = i + 1 ) if ( sel [ i ] ) y = i ; end endmodule"
+    let _r64 = read_verilog(_v64)
+    if _r64.ok != 1 {
+        println("FAIL T64 for_guarded_y: " + _r64.message); fails = fails + 1
+    } else {
+        let _m64 = _r64.design.modules[0]
+        let mut _t64_rows = 0
+        let mut _t64_g0 = 0
+        let mut _t64_g1 = 0
+        let mut _t64_g2 = 0
+        let mut _k64 = 0
+        while _k64 < len(_m64.connect_lhs) {
+            if _m64.connect_lhs[_k64] == "y" {
+                let _c64 = _m64.connect_cond[_k64]
+                if len(_c64) > 0 {
+                    _t64_rows = _t64_rows + 1
+                    if _c64 == "sel[0]" { _t64_g0 = 1 }
+                    if _c64 == "sel[1]" { _t64_g1 = 1 }
+                    if _c64 == "sel[2]" { _t64_g2 = 1 }
+                }
+            }
+            _k64 = _k64 + 1
+        }
+        if _t64_rows != 3 {
+            println("FAIL T64a row_cnt got " + str(_t64_rows) + " (expected 3)"); fails = fails + 1
+        }
+        if _t64_g0 != 1 { println("FAIL T64b missing cond=sel[0]"); fails = fails + 1 }
+        if _t64_g1 != 1 { println("FAIL T64c missing cond=sel[1]"); fails = fails + 1 }
+        if _t64_g2 != 1 { println("FAIL T64d missing cond=sel[2]"); fails = fails + 1 }
+    }
+
+    // T65 — pass_clean_multidriver MUST NOT collapse cond-tagged groups.
+    //
+    // Feed the T64 design directly into `pass_clean_multidriver`. The 3
+    // cond-tagged rows on `y` must survive untouched (Phase 3c skip
+    // rule). Other LHS-groups (purely unconditional) collapse as before.
+    total = total + 1
+    let _r65 = read_verilog(_v64)
+    if _r65.ok != 1 {
+        println("FAIL T65 setup: " + _r65.message); fails = fails + 1
+    } else {
+        let _r65b = pass_clean_multidriver(_r65.design)
+        if _r65b.ok != 1 {
+            println("FAIL T65 clean_multidriver: " + _r65b.message); fails = fails + 1
+        } else {
+            let _m65 = _r65b.design.modules[0]
+            // Count cond-tagged rows on y after clean_multidriver — must
+            // STILL be 3 (group deferred to proc_mux per Phase 3c).
+            let mut _t65_rows = 0
+            let mut _t65_g0 = 0
+            let mut _t65_g1 = 0
+            let mut _t65_g2 = 0
+            let mut _k65 = 0
+            while _k65 < len(_m65.connect_lhs) {
+                if _m65.connect_lhs[_k65] == "y" {
+                    let _c65 = _m65.connect_cond[_k65]
+                    if len(_c65) > 0 {
+                        _t65_rows = _t65_rows + 1
+                        if _c65 == "sel[0]" { _t65_g0 = 1 }
+                        if _c65 == "sel[1]" { _t65_g1 = 1 }
+                        if _c65 == "sel[2]" { _t65_g2 = 1 }
+                    }
+                }
+                _k65 = _k65 + 1
+            }
+            if _t65_rows != 3 {
+                println("FAIL T65a survived_rows got " + str(_t65_rows)
+                    + " (expected 3 — clean_multidriver must defer cond-tagged groups)")
+                fails = fails + 1
+            }
+            if _t65_g0 != 1 { println("FAIL T65b lost cond=sel[0]"); fails = fails + 1 }
+            if _t65_g1 != 1 { println("FAIL T65c lost cond=sel[1]"); fails = fails + 1 }
+            if _t65_g2 != 1 { println("FAIL T65d lost cond=sel[2]"); fails = fails + 1 }
+        }
+    }
+
+    // T66 — pass_proc_mux folds the 3 cond-tagged rows into a left-deep
+    // `$mux` chain (3 muxes total — one per cond level) and emits a
+    // single unconditional connect to `y` on the chain's output.
+    //
+    // Chain shape (per `_passes_proc_mux_emit_chain` left-deep build):
+    //   inner_0 = base (LHS feedback `y` — no untagged default in T64)
+    //   k=2: $mux(S=sel[2], A=y,       B=2, Y=$procmux_y$y$2)
+    //   k=1: $mux(S=sel[1], A=$pm.y.2, B=1, Y=$procmux_y$y$1)
+    //   k=0: $mux(S=sel[0], A=$pm.y.1, B=0, Y=$procmux_y$y$0)
+    //   final: connect(y, $procmux_y$y$0)
+    //
+    // After proc_mux: 0 cond-tagged rows on y, 1 unconditional connect
+    // (y ← $procmux_y$y$0), +3 new $mux cells added to module.
+    total = total + 1
+    let _r66 = read_verilog(_v64)
+    if _r66.ok != 1 {
+        println("FAIL T66 setup: " + _r66.message); fails = fails + 1
+    } else {
+        let _mux_before = rtlil_count_cells_of_type(_r66.design.modules[0], "$mux")
+        let _r66b = pass_proc_mux(_r66.design)
+        if _r66b.ok != 1 {
+            println("FAIL T66 proc_mux: " + _r66b.message); fails = fails + 1
+        } else {
+            let _m66 = _r66b.design.modules[0]
+            // 1. No cond-tagged rows on y survive.
+            let mut _t66_cond_rows = 0
+            let mut _t66_uncond_y = 0
+            let mut _k66 = 0
+            while _k66 < len(_m66.connect_lhs) {
+                if _m66.connect_lhs[_k66] == "y" {
+                    if len(_m66.connect_cond[_k66]) > 0 {
+                        _t66_cond_rows = _t66_cond_rows + 1
+                    } else {
+                        _t66_uncond_y = _t66_uncond_y + 1
+                    }
+                }
+                _k66 = _k66 + 1
+            }
+            if _t66_cond_rows != 0 {
+                println("FAIL T66a cond_rows after proc_mux got "
+                    + str(_t66_cond_rows) + " (expected 0)")
+                fails = fails + 1
+            }
+            if _t66_uncond_y < 1 {
+                println("FAIL T66b unconditional connect on y missing")
+                fails = fails + 1
+            }
+            // 2. proc_mux added 3 new $mux cells (one per cond level).
+            let _mux_after = rtlil_count_cells_of_type(_m66, "$mux")
+            let _mux_delta = _mux_after - _mux_before
+            if _mux_delta != 3 {
+                println("FAIL T66c mux_delta got " + str(_mux_delta)
+                    + " (expected 3 = 1 per cond row)")
+                fails = fails + 1
+            }
         }
     }
 
