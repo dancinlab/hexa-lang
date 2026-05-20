@@ -3217,6 +3217,8 @@ HexaVal hexa_array_product(HexaVal arr) {
 }
 
 // mean(a): float average. Empty array returns float 0.0.
+// Step-3 cycle 20 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_mean(HexaVal arr) {
     if (!HX_IS_ARRAY(arr)) return hexa_float(0.0);
     int64_t n = HX_ARR_LEN(arr);
@@ -3227,6 +3229,13 @@ HexaVal hexa_array_mean(HexaVal arr) {
     }
     return hexa_float(total / (double)n);
 }
+#else
+extern HexaVal rt_array_mean(HexaVal arr);
+HexaVal hexa_array_mean(HexaVal arr) {
+    if (!HX_IS_ARRAY(arr)) return hexa_float(0.0);
+    return rt_array_mean(arr);
+}
+#endif
 
 // swap(i, j): returns new array with items at i and j swapped.
 // Out-of-range indices return original array copy.

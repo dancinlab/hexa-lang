@@ -104,6 +104,21 @@ pub fn rt_max_float(a: float, b: float) -> float {
     return b
 }
 
+// Step 3 cycle 20 — array mean (float reduce). Empty array → 0.0 matches
+// the C body's defensive return. Element promotion (int→float) is handled
+// by codegen at the `arr[i]` index since arr is declared [float].
+pub fn rt_array_mean(arr: [float]) -> float {
+    let n = len(arr)
+    if n == 0 { return 0.0 }
+    let mut total = 0.0
+    let mut i = 0
+    while i < n {
+        total = total + arr[i]
+        i = i + 1
+    }
+    return total / (n as float)
+}
+
 // Step 3 cycle 13 — to_float pass-through. C wrapper unboxes any scalar
 // via __hx_to_double then rewraps as hexa_float; this hexa primitive is
 // the identity at the typed-float layer, exercised only for ABI path
