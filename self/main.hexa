@@ -1838,8 +1838,6 @@ fn _build_nvptx_emit_driver(src_path, sm_arch) {
     return 0
 }
 
-fn cmd_build(src, out, c_only, target) {
-// ━━━ end HEAD / begin rfc070-g7-native-scaffold ━━━
 fn cmd_build(src, out, c_only, target, shared) {
     // RFC 070 §3.B / G7-A (Shape A flag-wiring sub-cycle, 2026-05-20)
     //   `shared` = "1" → emit a position-independent shared library
