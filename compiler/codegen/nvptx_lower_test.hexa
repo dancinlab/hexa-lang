@@ -774,11 +774,12 @@ fn main() {
     let ok_unr   = _test_unroll_pass()
     let ok_unrn  = _test_unroll_no_match_passthrough()
     let ok_wmma  = _test_wmma_scaffold()
+    let ok_mp    = _test_mixed_precision_scaffold()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma {
-        println("PASS: RFC 055 P3b/c/P4/P4+ — 12/12 cases (incl. _nvptx_unroll_pass + WMMA scaffold)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp {
+        println("PASS: RFC 055 P3b/c/P4/P4+ — 13/13 cases (incl. _nvptx_unroll_pass + WMMA scaffold + mixed-precision scaffold)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -793,9 +794,10 @@ fn main() {
         if !ok_unr  { println("      055-P4+ _nvptx_unroll_pass FAILED") }
         if !ok_unrn { println("      055-P4+ unroll passthrough FAILED") }
         if !ok_wmma { println("      RFC 055 §12 P4+ WMMA scaffold FAILED") }
+        if !ok_mp   { println("      RFC 055 §12 P4+ mixed-precision scaffold FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -1132,6 +1134,111 @@ fn _test_wmma_scaffold() -> bool {
     // Surrounding 055-P0 instructions still emit (scaffold is non-disturbing).
     ok = _check(ok, ptx, "add.f64",          "preceding f64 add still emitted")
     ok = _check(ok, ptx, "ret;",             "ret terminator after scaffold")
+    return ok
+}
+
+// ── Case 13 — RFC 055 §12 P4+ mixed-precision PTX types SCAFFOLD ──────
+//
+// SCAFFOLD-ONLY: this case proves the CLASSIFIER + REG-DECL pipeline
+// can route mixed-precision Locals to the right PTX register bank
+// (.reg .f16 / .reg .bf16 / .reg .f32) once the upstream MIR emits
+// the matching binop opcodes (`add_f16` / `add_bf16` / `add_f32`).
+//
+// The opcodes themselves are ASPIRATIONAL — the lowering layer that
+// would PRODUCE them is a future cycle (hir_to_mir.hexa would need
+// per-Local precision tags). The body of each binop in the emitted
+// PTX text is therefore an honest 055-P0-style stub (the binop
+// mnemonic table only carries f64 add/sub/mul); what this scaffold
+// test verifies is the CLASSIFICATION + REG-DECL machinery, which
+// is the prerequisite for a real `add.f16` / `add.bf16` / `add.f32`
+// lowering in a later cycle.
+//
+// Single-block MFunc:
+//   block 0: t16  = a + b   // STMT_BINOP "add_f16"  → .f16  (%fh3)
+//            tbf  = a + b   // STMT_BINOP "add_bf16" → .bf16 (%fb4)
+//            t32  = a + b   // STMT_BINOP "add_f32"  → .f32  (%fs5)
+//            return
+//
+// PASS = all three `.reg .f16 %fh3;` + `.reg .bf16 %fb4;` +
+// `.reg .f32 %fs5;` DECLARATIONS appear in the emitted PTX text.
+//
+// Honest scope (per RFC 055 g3):
+//   - SCAFFOLD does NOT add the MIR layer that produces mixed-precision
+//     binop opcodes (future hir_to_mir cycle).
+//   - SCAFFOLD does NOT add body lowering for mixed-precision binops
+//     (`add.f16 %fh<dst>, %fh<a>, %fh<b>` etc. — future cycle).
+//   - SCAFFOLD does NOT handle Tensor-Core paired BF16 (MMA cycle).
+// What the scaffold makes REACHABLE: once a future MIR layer emits
+// the new opcodes, the classifier + reg-decl side is ready.
+
+fn _stmt_binop_mp(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
+    // Same shape as _stmt_binop — separate helper so the call site reads
+    // as a MIXED-PRECISION binop (aspirational opcode).
+    return _stmt_binop(dst, op, a, b)
+}
+
+fn _build_case_mixed_precision_scaffold() -> MModule {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let t16 = _local(3, "t16")   // expected .reg .f16  %fh3
+    let tbf = _local(4, "tbf")   // expected .reg .bf16 %fb4
+    let t32 = _local(5, "t32")   // expected .reg .f32  %fs5
+
+    let mut s0 = []
+    s0.push(_stmt_binop_mp(t16, "add_f16",  _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_binop_mp(tbf, "add_bf16", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_binop_mp(t32, "add_f32",  _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(t16)
+    locals.push(tbf)
+    locals.push(t32)
+
+    let mf = MFunc {
+        name: "mixed_precision_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_mixed_precision_scaffold.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_mixed_precision_scaffold() -> bool {
+    let mut ok = true
+    let mod_mp = _build_case_mixed_precision_scaffold()
+    let ptx = codegen_emit_ptx_sm80(mod_mp)
+
+    println("")
+    println("── emitted PTX (RFC 055 §12 P4+ mixed-precision scaffold, sm_80) ──")
+    println(ptx)
+
+    // SCAFFOLD verification — the three new reg banks declare cleanly.
+    ok = _check(ok, ptx, ".reg .f16 %fh3",   "f16 bank for add_f16 dst")
+    ok = _check(ok, ptx, ".reg .bf16 %fb4",  "bf16 bank for add_bf16 dst")
+    ok = _check(ok, ptx, ".reg .f32 %fs5",   "f32 bank for add_f32 dst")
+    // Header carry-over — sm_80 target intact under mixed-kind classification.
+    ok = _check(ok, ptx, ".target sm_80",    "sm_80 .target directive")
+    // 055-P0 F64 default still intact — params + ext temps stay %fd.
+    // (Params aren't classified by an assignment but show up as %fd in
+    // body operand text via the F64 fallback. No %fd-N reg for invalid
+    // ids; the scaffold reuses ids 0/1 for params + 3/4/5 for assigned
+    // Locals so id=2 deliberately stays unassigned.)
     return ok
 }
 
