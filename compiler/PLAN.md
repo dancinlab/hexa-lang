@@ -8084,3 +8084,36 @@ g3-honest writeup with the exact ABC trace + Phase 3f fix scope).
 ```
 
 **cross-link**: RUNTIME.md cycle 52 entry · cycles 46-51 entries · `66d4ffe5` cycle 51 commit baseline.
+
+### 2026-05-20 — RUNTIME.md cycle 53 — Tier-A.2 mmap-backed bump allocator (137→104, -33 cumulative)
+
+**작업 = Tier-A.2 memory family port via mmap-backed bump allocator**. `hxlcl_malloc/free/realloc/calloc/munmap` 추가, 4 MB mmap chunk bump + 16-byte align. free/munmap = noop (compiler binary leak-at-exit policy). #define block 으로 redirect.
+
+**measured delta**: aprime_cc nm undefined externs **108 → 104 (−4)** · 누적 cycles 46-53 = **137 → 104 = −33** · smoke `exit(6*7)==42` PASS · 바이너리 1,119,608 → 1,119,144 B (−464 B).
+
+**closed this cycle (4)**: `_free` · `_realloc` · `_calloc` · `_munmap`.
+
+**residual (1 new + 2 carryover)**:
+- `_malloc` — clang -Oz 가 `hxlcl_strdup` 본체의 `volatile-loop + malloc(n+1) + byte-copy` 패턴을 libc strdup-shape 으로 fuse 해서 `_malloc` 호출 emit. `volatile` cast 도 부족. 다음 cycle 에 (a) `__attribute__((no_builtin("strdup","malloc")))` 또는 (b) `asm volatile("" ::: "memory")` barrier 추가
+- `_memcpy` — cycle 51 carryover, source struct-assign 필요
+- `_mmap` — 1 call from hxlcl_malloc · 다음 (Tier-A.4 `@asm syscall` 시) eliminate 가능
+
+**Tier-A.2 progress**: 6 of 8 dropped (cycle 49: memset/memmove/___memcpy_chk · cycle 53: free/realloc/calloc/munmap). 잔류 malloc + memcpy. mmap 은 새 floor (allocator 의존).
+
+**Phase 1 progress update**:
+- Tier-A.1: CLOSED (15/12+)
+- Tier-A.2: **6 of 8** dropped (75%) · 1 new floor (mmap)
+- Tier-A.3: 8 of 19 (file-stream subset 9 OPEN)
+- Tier-A.6: 2 of ~12
+- Tier-A.4/A.5: OPEN
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +24 (cycle 53 entry)
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +60 (5 allocator helpers + 5 #defines)
+ tool/build_aprime.sh | unchanged
+```
+
+**cross-link**: RUNTIME.md cycle 53 entry · cycles 46-52 entries · `eac4d2ff` cycle 52 commit.

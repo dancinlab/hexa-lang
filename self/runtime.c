@@ -476,6 +476,57 @@ static void __attribute__((noinline)) hxlcl_perror(const char *s) {
     }
     write(2, "error\n", 6);
 }
+// Cycle 53 — Tier-A.2 mmap-backed bump allocator. malloc never frees;
+// free is a noop; realloc bump-allocates new region + byte copy.
+// Trade-off: compiler binary leaks memory until exit (a one-shot tool;
+// acceptable). Calls libc `mmap` for fresh 4 MB chunks; that single
+// `_mmap` extern is the floor for the allocator family. Once @asm
+// blocks are wired (Tier-A.4 path), `mmap` itself can be syscall-
+// inlined and the family becomes zero-extern.
+#define HXLCL_ALLOC_CHUNK_SZ (4u * 1024u * 1024u)
+static char *_hxlcl_alloc_ptr = (char *)0;
+static char *_hxlcl_alloc_end = (char *)0;
+static void *__attribute__((noinline)) hxlcl_malloc(size_t n) {
+    if (n == 0) n = 1;
+    n = (n + (size_t)15) & ~(size_t)15;
+    if (!_hxlcl_alloc_ptr || _hxlcl_alloc_ptr + n > _hxlcl_alloc_end) {
+        size_t chunk = (n > HXLCL_ALLOC_CHUNK_SZ) ? n : HXLCL_ALLOC_CHUNK_SZ;
+        void *m = mmap((void *)0, chunk, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (m == MAP_FAILED) return (void *)0;
+        _hxlcl_alloc_ptr = (char *)m;
+        _hxlcl_alloc_end = _hxlcl_alloc_ptr + chunk;
+    }
+    void *p = _hxlcl_alloc_ptr;
+    _hxlcl_alloc_ptr += n;
+    return p;
+}
+static void __attribute__((noinline)) hxlcl_free(void *p) {
+    (void)p;
+}
+static void *__attribute__((noinline)) hxlcl_realloc(void *p, size_t n) {
+    if (!p) return hxlcl_malloc(n);
+    if (n == 0) return (void *)0;
+    void *np = hxlcl_malloc(n);
+    if (!np) return (void *)0;
+    unsigned char *d = (unsigned char *)np;
+    const unsigned char *s = (const unsigned char *)p;
+    for (size_t i = 0; i < n; i++) d[i] = s[i];
+    return np;
+}
+static void *__attribute__((noinline)) hxlcl_calloc(size_t nmemb, size_t size) {
+    size_t total = nmemb * size;
+    void *p = hxlcl_malloc(total);
+    if (p) {
+        unsigned char *q = (unsigned char *)p;
+        for (size_t i = 0; i < total; i++) q[i] = 0;
+    }
+    return p;
+}
+static int __attribute__((noinline)) hxlcl_munmap(void *addr, size_t length) {
+    (void)addr; (void)length;
+    return 0;
+}
 
 // Textual override of any residual libc references in subsequent code
 // (runtime_core.c + HI tier + transpile output). The helper bodies
@@ -512,6 +563,11 @@ static void __attribute__((noinline)) hxlcl_perror(const char *s) {
 #define fflush(fp)         hxlcl_fflush((void *)(fp))
 #define putchar(c)         hxlcl_putchar((int)(c))
 #define perror(s)          hxlcl_perror((const char *)(s))
+#define malloc(n)          hxlcl_malloc((size_t)(n))
+#define free(p)            hxlcl_free((void *)(p))
+#define realloc(p,n)       hxlcl_realloc((void *)(p), (size_t)(n))
+#define calloc(nm,sz)      hxlcl_calloc((size_t)(nm), (size_t)(sz))
+#define munmap(a,l)        hxlcl_munmap((void *)(a), (size_t)(l))
 
 #include "runtime_core.c"
 

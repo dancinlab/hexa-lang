@@ -554,3 +554,32 @@ For each Tier-A sub-phase:
   gated under Phase 1 cumulative S3 fixpoint check (deferred)
 - `__attribute__((no_builtin("memcpy")))` from cycle 51 kept
   (still no benefit but harmless · documents the attempt)
+
+### 2026-05-20 — cycle 53 — Tier-A.2 mmap-backed bump allocator (-4 externs)
+
+- ✅ cycle 53 — Tier-A.2 memory family port. aprime_cc nm
+  undefined externs 108 → **104** (−4 measured · cumulative
+  **137 → 104 = −33**) · smoke exit(42) PASS · binary
+  1,119,608 → 1,119,144 B (−464 B)
+- Closed: `_free` · `_realloc` · `_calloc` · `_munmap`
+- Method: mmap-backed bump allocator. `hxlcl_malloc` 16-byte-
+  aligns + bumps within a 4 MB mmap chunk; grows on overflow.
+  `hxlcl_free` is a noop (compiler binary leaks until exit —
+  acceptable for one-shot tool). `hxlcl_realloc` = malloc-new +
+  byte copy. `hxlcl_calloc` = malloc + zero. `hxlcl_munmap` is a
+  noop (we never release mmap chunks)
+- Tier-A.2 progress: **6 of 8 dropped** (cycle 49: memset +
+  memmove + ___memcpy_chk · cycle 53: free + realloc + calloc
+  + munmap)
+- Tier-A.2 residual: `_malloc` (1 call site in `_hxlcl_strdup`
+  · clang -Oz fuses `volatile-loop + malloc(n+1) + byte-copy`
+  back to libc strdup-shape and emits `_malloc`; `volatile`
+  cast in source insufficient) · `_memcpy` (cycle 51 residual)
+- Tier-A.2 NEW floor: `_mmap` (1 call from `hxlcl_malloc`) —
+  this single extern is the allocator floor until @asm syscall
+  inlining lands (Tier-A.4 path-c)
+- Honest scope: bump allocator + noop free is functionally
+  correct for compiler binary lifetime; memory grows monotonic-
+  ally per build, peaks at ~tens of MB based on aprime_cc usage
+  pattern. NOT suitable for long-running daemons. atexit() not
+  hooked; the OS reclaims chunks at exit
