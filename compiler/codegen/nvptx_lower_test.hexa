@@ -2638,16 +2638,25 @@ fn _test_f16_load_store() -> bool {
     println("── emitted PTX (RFC 068 P4 f16 ld/st, sm_80) ──")
     println(ptx)
 
-    // The f16-precision-tagged Local should drive ld.global.f16 emit.
-    ok = _check(ok, ptx, "ld.global.f16",  "ld.global.f16 mnemonic emitted (f16 LOAD)")
-    ok = _check(ok, ptx, "st.global.f16",  "st.global.f16 mnemonic emitted (f16 STORE)")
-    // Negative guard — the legacy f64-only path must NOT fire for
-    // f16-tagged ops.
+    // The f16-precision-tagged Local should drive ld.global.b16 emit
+    // (silicon-canonical: ptxas rejects ld.global.f16 + accepts .b16
+    // storage with .reg .f16 operand via PTX type-cast — see PR #189
+    // silicon-fire finding).
+    ok = _check(ok, ptx, "ld.global.b16",  "ld.global.b16 mnemonic emitted (silicon-canonical f16 LOAD)")
+    ok = _check(ok, ptx, "st.global.b16",  "st.global.b16 mnemonic emitted (silicon-canonical f16 STORE)")
+    // Negative guards — neither the legacy f64-only path NOR the
+    // spec-but-not-silicon ld.global.f16 form should fire.
     if _contains(ptx, "ld.global.f64 %fh") || _contains(ptx, "st.global.f64 %fh") {
         println("  FAIL: f64 mnemonic emitted on f16-tagged Locals — kind dispatch broken")
         ok = false
     } else {
         println("  ok: no f64 mnemonic on f16-tagged ld/st (kind dispatch live)")
+    }
+    if _contains(ptx, "ld.global.f16") || _contains(ptx, "st.global.f16") {
+        println("  FAIL: ld.global.f16 / st.global.f16 emitted — ptxas would reject (silicon mismatch)")
+        ok = false
+    } else {
+        println("  ok: no .f16 storage mnemonic (silicon-canonical .b16 only)")
     }
     return ok
 }

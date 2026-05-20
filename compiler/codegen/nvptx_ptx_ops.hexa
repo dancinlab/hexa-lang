@@ -51,14 +51,19 @@ pub let PTX_WARP_SIZE: i64 = 32
 // ── PTX FP64 arithmetic mnemonics (first slice — RFC 055 §6.6) ──
 pub let PTX_OP_LD_GLOBAL_F64: string  = "ld.global.f64"
 pub let PTX_OP_ST_GLOBAL_F64: string  = "st.global.f64"
-// RFC 068 P4 — mixed-precision global load/store mnemonics.
-// `.f16` / `.bf16` are 16-bit; `.f32` is 32-bit. PTX uses the same
-// `ld.global.<ty>` / `st.global.<ty>` syntax across all FP types
-// (NVIDIA PTX ISA §8.7).
-pub let PTX_OP_LD_GLOBAL_F16: string  = "ld.global.f16"
-pub let PTX_OP_ST_GLOBAL_F16: string  = "st.global.f16"
-pub let PTX_OP_LD_GLOBAL_BF16: string = "ld.global.bf16"
-pub let PTX_OP_ST_GLOBAL_BF16: string = "st.global.bf16"
+// RFC 068 P4 codegen↔silicon reconcile (PR #189 finding):
+// ptxas (CUDA 12.0) rejects `ld.global.f16` / `st.global.f16` —
+// even though PTX ISA §8.7 spec lists `.f16` as a valid type for ld/st.
+// Canonical NVIDIA-emitted code for `__half` ld/st uses `.b16` storage
+// (the raw 16-bit container type) which ptxas accepts and silently
+// type-casts to the `.reg .f16` register operand. The same applies to
+// bf16 → `.b16` storage (the bf16 reg type itself fails to parse in
+// PTX 7.8 on older toolkits, so the bf16 codegen path stays minimal).
+// `.f32` and `.f64` work directly with their own type tags.
+pub let PTX_OP_LD_GLOBAL_F16: string  = "ld.global.b16"
+pub let PTX_OP_ST_GLOBAL_F16: string  = "st.global.b16"
+pub let PTX_OP_LD_GLOBAL_BF16: string = "ld.global.b16"
+pub let PTX_OP_ST_GLOBAL_BF16: string = "st.global.b16"
 pub let PTX_OP_LD_GLOBAL_F32: string  = "ld.global.f32"
 pub let PTX_OP_ST_GLOBAL_F32: string  = "st.global.f32"
 pub let PTX_OP_LD_SHARED_F64: string  = "ld.shared.f64"
