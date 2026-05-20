@@ -144,6 +144,23 @@ P3+ convergence path once north-star ②'s CPU self-host campaign
 default-flips. Approach C remains the codegen-author fast iteration
 shell — RFC 071 introduces a new path, not a replacement.
 
+**Update 2026-05-20 (RFC 071 P1+P2 landed):** P1 replaced the
+deferred-print + exit(1) branch with a call to
+`self/main.hexa::_build_nvptx_emit_driver(src, sm_arch)` (F-RFC071-
+TARGET-ACCEPT PASS). P2 added the spec sibling module
+`compiler/cli/build_nvptx.hexa` defining
+`pub fn build_nvptx_emit_driver(src_path, sm_arch) -> int` with a
+canned stub PTX writer (`.version 7.0` / `.target sm_NN` /
+`.address_size 64` / `.visible .entry _hexa_smoke() { ret; }`) —
+F-RFC071-EMIT-DRIVER-INVOKE PASS as a STUB. **Honest punt (@D g3):**
+the body emits CANNED PTX — F-RFC071-MODULE-LOADER-BRIDGE is
+INTENTIONALLY deferred until P2.1 wires `codegen_emit_ptx_sm80(mir)`
+(parse → check → lower → codegen chain documented in the module
+docstring). CPU codegen byte-identical (`F-RFC055-CPU-CODEGEN-
+UNTOUCHED` PASS by md5; @F f1/@F f2 honored). §10 box `[ ] §12 P4+
+source-to-silicon e2e` stays `[ ]` per @D g3 — only the P4 numeric-eq
+falsifier flips it.
+
 ### 2b — Multi-tile WMMA GEMM K-loop (RFC 067 §3 P4 spec form)
 
 PR #191 closed the *single-tile* WMMA fire. The RFC 067 §3 P4 spec asks for 64×64 GEMM = 4×4 output tiles × 4 K-tiles = 64 `wmma.mma` calls with `.shared` staging.
@@ -494,7 +511,7 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 The GPU substrate has finite scope. Closure ≠ "all features"; closure = "the listed north-star metrics are silicon-measured PASS":
 
 - [x] **§12 P4+ codegen end-to-end** — hand-emit path works on silicon (today's session)
-- [ ] **§12 P4+ source-to-silicon e2e** — full `.hexa` source → silicon (next layer 2a). **RFC 071 P0 scaffold landed 2026-05-20** (target-string recognition in `cmd_build` + RFC drafted + P1-P4 phasing + 4 falsifiers); box stays `[ ]` until F-RFC071-E2E-NUMERIC-EQ measures PASS at P4.
+- [ ] **§12 P4+ source-to-silicon e2e** — full `.hexa` source → silicon (next layer 2a). **RFC 071 P0+P1+P2 scaffold landed 2026-05-20** (P0: target-string recognition; P1: `_build_nvptx_emit_driver` dispatch; P2: `compiler/cli/build_nvptx.hexa` spec module + canned stub PTX writer — F-RFC071-TARGET-ACCEPT + F-RFC071-EMIT-DRIVER-INVOKE PASS; F-RFC071-MODULE-LOADER-BRIDGE intentionally deferred to P2.1+); box stays `[ ]` until F-RFC071-E2E-NUMERIC-EQ measures PASS at P4.
 - [x] **flame d=768 transformer beats PyTorch eager wall** — already measured (project_flame_phase4d9_closure)
 - [ ] **flame d=4096 GPT-3 class beats PyTorch eager** — gate pre-registered as **RFC 072** (`inbox/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md`, P0 scaffold landed branch `rfc072-flame-d4096-scaffold`). Harness stub: `stdlib/flame/bench/d4096.hexa`. Spec: d=4096 · n_layer=24 · seq_len=2048 · batch=8 (GPT-3 6.7B d_model axis per Brown 2020 Table 2.1). Falsifiers: F-RFC072-WALL-PT · F-RFC072-WALL-FLAME · F-RFC072-RATIO < 1.0 · F-RFC072-VARIANCE std < 5 %. Multi-session (P2 flame fire + P3 PT baseline + P4 variance, ~$5–20). Stays `[ ]` until F-RFC072-RATIO PASSes.
 - [ ] **Multi-vendor: ROCm or Metal kernel parity** — proves architectural independence (RFC 075 P0 scaffold landed 2026-05-20 for BOTH ROCm + Metal sibling backends; closure box stays unchecked until P4 silicon-fire per vendor)
