@@ -9463,6 +9463,8 @@ HexaVal hexa_rms_norm(HexaVal x, HexaVal gamma, HexaVal epsv) {
 }
 
 // softmax(a): stable softmax — subtract max, exp, normalize by sum.
+// Step-3 cycle 15 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_softmax(HexaVal a) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(a)) return out;
@@ -9485,6 +9487,13 @@ HexaVal hexa_softmax(HexaVal a) {
     free(tmp);
     return out;
 }
+#else
+extern HexaVal rt_softmax(HexaVal a);
+HexaVal hexa_softmax(HexaVal a) {
+    if (!HX_IS_ARRAY(a)) return hexa_array_new();
+    return rt_softmax(a);
+}
+#endif
 
 // matmul(A, B, M, N, K): row-major C[M*N] = A[M*K] @ B[K*N], naive O(M*N*K).
 // Positional arg order is cblas-style (M, N, K) — output rows, output cols,
