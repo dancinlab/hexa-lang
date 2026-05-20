@@ -793,3 +793,251 @@ pub fn serialize_elf_exec_x86_64(text: [Int]) -> [Int] {
 
     return out
 }
+
+// ─────────────────────────────────────────────────────────────────
+// LIR walker — `LModule` → byte stream (RFC 063 § P2, cycle 29)
+// ─────────────────────────────────────────────────────────────────
+//
+// `pack_lir_x86_64(lm)` mirrors `compiler/emit/macho_arm64.hexa::
+// pack_lir` for the Linux x86_64 platform. It walks `LModule.funcs`,
+// dispatches each `LInstr` through `encode_x86_64_insn`, and patches
+// intra-fn branch deltas.
+//
+// Cycle 29 subset:
+//
+//   - register / imm / label operands (mem is cycle-30 work — needs
+//     `[base + off]` ModR/M+SIB+disp encoding).
+//   - intra-fn JMP_REL8 / JE_REL8 family / JMP_REL32 patching by
+//     name → offset map. JMP_REL32 (5 B) is the default — REL8
+//     auto-promotion is cycle-30 work.
+//   - the `label` pseudo-op (`op == "label"`, name in `comment` or
+//     `args[0].label`) records the current `text` offset.
+//   - CALL with a label arg → emits `e8 00 00 00 00` placeholder and
+//     bubbles to the caller's `pending_*` lists for cycle-30 reloc.
+//   - width dispatch — `mov rax, ...` → MOV64 (REX.W form), `mov eax,
+//     ...` → MOV. Detection by leading char of first reg operand.
+//
+// Out of scope (cycle 30+):
+//
+//   - mem operands with offsets (`[rbp - 8]`).
+//   - cross-fn / extern `CALL` → `R_X86_64_PLT32` reloc record.
+//   - JMP REL8 ↔ REL32 promotion / shrink based on resolved delta.
+//   - `.rodata` / `.data` sections (currently `.text`-only).
+//
+// Walker is silent on unsupported ops: encoder returns `[]` and zero
+// bytes are appended (so the byte stream stays length-correct for
+// later inspection via `objdump -d`).
+
+fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
+    // 0/1-arg ops with no width variant.
+    if op == "ret"     { return "RET" }
+    if op == "syscall" { return "SYSCALL" }
+    if op == "nop"     { return "NOP" }
+    if op == "cqo"     { return "CQO" }
+    if op == "push"    { return "PUSH" }
+    if op == "pop"     { return "POP" }
+    if op == "call"    { return "CALL" }
+    if op == "jmp"     { return "JMP_REL32" }
+    // Conditional branches (lower-case LIR → encoder's REL8 forms).
+    if op == "je"  || op == "jz"  { return "JE_REL8" }
+    if op == "jne" || op == "jnz" { return "JNE_REL8" }
+    if op == "jl"  { return "JL_REL8" }
+    if op == "jge" { return "JGE_REL8" }
+    if op == "jle" { return "JLE_REL8" }
+    if op == "jg"  { return "JG_REL8" }
+    // setcc — kept lowercase in LIR, uppercased here.
+    if op == "sete"  { return "SETE" }
+    if op == "setne" { return "SETNE" }
+    if op == "setl"  { return "SETL" }
+    if op == "setge" { return "SETGE" }
+    if op == "setle" { return "SETLE" }
+    if op == "setg"  { return "SETG" }
+    if op == "movzx" { return "MOVZX" }
+    if op == "idiv"  { return "IDIV64" }    // 64-bit-only in encoder
+    if op == "test"  { return "TEST64" }    // 64-bit-only in encoder
+
+    // Width-dispatched ops — detect 64-bit operand by reg name prefix.
+    let mut is64 = false
+    if len(ops) > 0 && ops[0].kind == "reg" {
+        let rn = ops[0].reg.name
+        if len(rn) > 0 {
+            let c = rn.substring(0, 1)
+            if c == "r" || c == "R" { is64 = true }
+        }
+    }
+    if op == "mov" { if is64 { return "MOV64" }; return "MOV" }
+    if op == "add" { if is64 { return "ADD64" }; return "ADD" }
+    if op == "sub" { if is64 { return "SUB64" }; return "SUB" }
+    if op == "cmp" { return "CMP" }    // r32 only for now (cycle-30 widens)
+    return op
+}
+
+fn _lir_operand_str_x86(op: LOperand) -> string {
+    if op.kind == "reg"   { return op.reg.name }
+    if op.kind == "imm"   { return "#" + to_string(op.imm) }
+    if op.kind == "label" { return op.label }
+    if op.kind == "mem" {
+        return "[" + op.mem_base.name + " + " + to_string(op.mem_offset) + "]"
+    }
+    return "<?" + op.kind + "?>"
+}
+
+fn _lookup_label_x86(names: [string], offsets: [Int], target: string) -> Int {
+    let n = len(names)
+    let mut i = 0
+    while i < n {
+        if names[i] == target { return offsets[i] }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _pack_fn_x86(out_text: [Int],
+                pending_offsets: [Int], pending_names: [string],
+                f: LFunc) {
+    let label_names:     [string] = []
+    let label_offsets:   [Int]    = []
+    let unresolved_brs:  [Int]    = []
+    let unresolved_to:   [string] = []
+    // Kind tag: 0 = REL8 (2-B insn, imm8 at off+1)
+    //           1 = REL32 jmp/call (5-B insn, imm32 at off+1)
+    let unresolved_kind: [Int]    = []
+
+    let n = len(f.instrs)
+    let mut i = 0
+    while i < n {
+        let ins = f.instrs[i]
+        if ins.op == "label" {
+            let mut name = ins.comment
+            if len(name) == 0 && len(ins.args) > 0 { name = ins.args[0].label }
+            label_names.push(name)
+            label_offsets.push(len(out_text))
+            i = i + 1
+            continue
+        }
+
+        // CALL with a label arg — emit placeholder, bubble to pending.
+        if ins.op == "call" && len(ins.args) == 1 && ins.args[0].kind == "label" {
+            let cur_off = len(out_text)
+            out_text.push(0xE8)
+            out_text.push(0); out_text.push(0); out_text.push(0); out_text.push(0)
+            unresolved_brs.push(cur_off)
+            unresolved_to.push(ins.args[0].label)
+            unresolved_kind.push(1)
+            i = i + 1
+            continue
+        }
+        // Conditional branches to labels — REL8 placeholder (2 B).
+        let is_cc = (ins.op == "je"  || ins.op == "jz"  ||
+                     ins.op == "jne" || ins.op == "jnz" ||
+                     ins.op == "jl"  || ins.op == "jge" ||
+                     ins.op == "jle" || ins.op == "jg")
+        if is_cc && len(ins.args) == 1 && ins.args[0].kind == "label" {
+            let cur_off = len(out_text)
+            let up = _lir_op_uppercase_x86(ins.op, ins.args)
+            let bs = encode_x86_64_insn(up, ["x"])
+            let mut bi = 0
+            while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
+            unresolved_brs.push(cur_off)
+            unresolved_to.push(ins.args[0].label)
+            unresolved_kind.push(0)
+            i = i + 1
+            continue
+        }
+        // Unconditional JMP to label — REL32 form (5 B).
+        if ins.op == "jmp" && len(ins.args) == 1 && ins.args[0].kind == "label" {
+            let cur_off = len(out_text)
+            let bs = encode_x86_64_insn("JMP_REL32", ["x"])
+            let mut bi = 0
+            while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
+            unresolved_brs.push(cur_off)
+            unresolved_to.push(ins.args[0].label)
+            unresolved_kind.push(1)
+            i = i + 1
+            continue
+        }
+
+        // Default — format operands, dispatch encoder.
+        let ops: [string] = []
+        let na = len(ins.args)
+        let mut k = 0
+        while k < na {
+            ops.push(_lir_operand_str_x86(ins.args[k]))
+            k = k + 1
+        }
+        let up = _lir_op_uppercase_x86(ins.op, ins.args)
+        let bs = encode_x86_64_insn(up, ops)
+        let mut bi = 0
+        while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
+        i = i + 1
+    }
+
+    // Resolve intra-fn branches. REL8: imm8 at off+1, delta = toff-(off+2).
+    // REL32: imm32 at off+1, delta = toff-(off+5).
+    let nb = len(unresolved_brs)
+    let mut bi = 0
+    while bi < nb {
+        let off    = unresolved_brs[bi]
+        let kind   = unresolved_kind[bi]
+        let target = unresolved_to[bi]
+        let toff   = _lookup_label_x86(label_names, label_offsets, target)
+        if toff < 0 {
+            // Extern / cross-fn — bubble to pending; cycle 30 builds reloc.
+            pending_offsets.push(off)
+            pending_names.push(target)
+            bi = bi + 1
+            continue
+        }
+        if kind == 0 {
+            let delta = toff - (off + 2)
+            out_text[off + 1] = delta & 0xFF
+        } else {
+            let delta = toff - (off + 5)
+            out_text[off + 1] =  delta        & 0xFF
+            out_text[off + 2] = (delta >> 8)  & 0xFF
+            out_text[off + 3] = (delta >> 16) & 0xFF
+            out_text[off + 4] = (delta >> 24) & 0xFF
+        }
+        bi = bi + 1
+    }
+}
+
+// Public entry — walk all LFuncs in `lm`, produce an `ElfX86Obj`
+// with `text` + `symbols` + `strtab` populated. Cycle 29 leaves
+// `relocs` empty; cycle 30 attaches `R_X86_64_PLT32` records for
+// cross-fn / extern CALL/JMP targets that bubble up unresolved.
+pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
+    let obj = ElfX86Obj {
+        text:    [],
+        relocs:  [],
+        symbols: [],
+        strtab:  [],
+    }
+    // ELF strtab convention: index 0 is the empty string (NUL terminator).
+    obj.strtab.push(0)
+
+    let pending_offsets: [Int]    = []
+    let pending_names:   [string] = []
+
+    let nf = len(lm.funcs)
+    let mut i = 0
+    while i < nf {
+        let f = lm.funcs[i]
+        let fn_start = len(obj.text)
+        let strx = _ew_str(obj.strtab, f.name)
+        _pack_fn_x86(obj.text, pending_offsets, pending_names, f)
+        // ElfSym pushed after packing so `size` is final (hexa rvalue
+        // restriction prevents `obj.symbols[k].size = ...` patching).
+        obj.symbols.push(ElfSym {
+            name_offset: strx,
+            section:     1,    // .text (1-based ELF section index)
+            value:       fn_start,
+            size:        len(obj.text) - fn_start,
+            bind:        1,    // STB_GLOBAL
+            type_:       2,    // STT_FUNC
+        })
+        i = i + 1
+    }
+    // pending_offsets / pending_names → cycle-30 reloc records.
+    return obj
+}

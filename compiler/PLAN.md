@@ -6162,3 +6162,79 @@ closed · x86_64 encoder 33 rules · **LIR ops 17/17 = 100%**.
 
 **cc --regen / binary promote**: 미수행 (compiler/emit/* + test/* only,
 deployed driver 거치지 않음).
+
+
+### 2026-05-20 — follow-up cycle 29: pack_lir_x86_64 walker (F-P2-X86-LIR-WALK PASS, synthetic LIR → ELF → exit 42)
+
+The first `LModule → bytes` walker for x86_64. Mirrors
+`compiler/emit/macho_arm64.hexa::pack_lir` (arm64 P0 cycle 2) for the
+Linux ELF side: walks `LModule.funcs`, dispatches each `LInstr`
+through the cycle 22–28 encoder, resolves intra-fn label branches.
+
+**API** (compiler/emit/elf_x86_64.hexa):
+- `pack_lir_x86_64(lm: LModule) -> ElfX86Obj`
+- `_pack_fn_x86()` — per-fn instr walker with label/branch tracking
+- `_lir_op_uppercase_x86(op, ops)` — lowercase LIR → uppercase encoder key,
+  width-dispatches `mov`/`add`/`sub` to MOV64 vs MOV by reg prefix
+- `_lir_operand_str_x86()` — LOperand → encoder string form
+
+**Cycle 29 subset coverage**:
+- ✅ register / imm / label operands
+- ✅ intra-fn JMP_REL8 / JE_REL8 family / JMP_REL32 delta patch
+- ✅ `label` pseudo-op records offset; zero bytes emitted
+- ✅ Width dispatch (eax→MOV, rax→MOV64)
+- ✅ Cross-fn / extern CALL bubbles to `pending_*` (cycle-30 reloc)
+- ❌ mem operands `[rbp - 8]` (cycle-30 work)
+- ❌ JMP REL8 ↔ REL32 auto-promote (cycle-30)
+- ❌ `R_X86_64_PLT32` reloc record emission (cycle-30)
+
+**Synthetic LIR program tested** — equivalent C:
+```
+  int n = 10;
+  do { n -= 1; } while (n != 0);   // backward jne (REL8 delta=-14, 0xF2)
+  int p = (7 > 3) ? 1 : 0;         // cmp + setg + movzx
+  int x = n + 41 + p;              // = 0 + 41 + 1 = 42 (AL contamination
+                                   //   from setg requires mov eax,41 reset)
+  exit(x);                         // sys_exit(42)
+```
+
+**Walker output (51 B)**:
+```
+b8 0a 00 00 00     mov eax, 10
+81 e8 01 00 00 00  sub eax, 1       (label "loop" anchor at offset 5)
+81 f8 00 00 00 00  cmp eax, 0
+75 f2              jne loop         (delta = -14 = 0xF2)  ← patched by walker
+b9 07 00 00 00     mov ecx, 7
+ba 03 00 00 00     mov edx, 3
+39 d1              cmp ecx, edx
+0f 9f c0           setg al          (clobbers EAX low byte)
+0f b6 f8           movzx edi, al    (edi = 1)
+b8 29 00 00 00     mov eax, 41      (reset post-AL contamination)
+01 c7              add edi, eax     (edi = 1 + 41 = 42)
+b8 3c 00 00 00     mov eax, 60
+0f 05              syscall
+
+ubu-2: REMOTE_RC=42  ✅
+```
+
+**측정 — 14 falsifier 누적, x86_64 encoder + walker 동작**:
+- F-P2-X86-LIR-WALK (new) — synthetic LIR → ELF → ubu-2 exit 42
+- ✅ byte-eq spot checks (mov / sub / jne 0xF2 patch)
+- ✅ remote exec contract (51-byte ELF runs, returns expected)
+
+**Honest scope** (g3): cycle 29 는 **synthetic LIR → ELF bytes** 까지.
+real `x86_64_linux.hexa::codegen_module()` → `pack_lir_x86_64()` 와이어링은
+cycle 30 의 일이다 (relocs + mem operands + symbol-table 출력 + .o file
+header complete). 인코더는 17/17, walker 는 intra-fn label branches +
+register / imm / label operands 다룬다. 즉 simple LFuncs (extern call /
+stack frame 없이) 는 이 walker 가 처음부터 끝까지 실행 가능한 .text 를
+만든다 — 측정으로 입증.
+
+**Resource note**: mini + ubu-1 두 호스트 ssh 도달 불가
+(LAN ping 0/1 · Tailscale 100.96.193.56:22 timeout · mini-ts alias 없음).
+cycle 29 는 ubu-2 단독 (사용자 선택 1).
+
+**RFC 063 phasing**: 29 cycles · 14 falsifier · P0+P1+P2+P3 all closed ·
+x86_64 encoder 33 rules · LIR ops 17/17 · **pack_lir_x86_64 walker 도입**.
+
+**cc --regen / binary promote**: 미수행 (compiler/emit/* + test/* only).
