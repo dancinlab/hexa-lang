@@ -1,9 +1,11 @@
 # demiurge → hexa-lang handoff: rfc_006 Yosys §4 module-1 (rtlil) PROGRESS
 
+> **UPSTREAM PROGRESS 2026-05-20**: ALREADY-LANDED no-op cycle — all 6 remaining modules + dispatcher integration found body-complete on `origin/main` at note-processing time (commits `4f70ce46` "rfc_006 §4 bodies landed for 7 modules" + `522c8192` dispatcher body + `0154227d` logic_synth ①a/①b 2-layer extraction). Parse-gate 7/7 PASS (rtlil 346L · read_verilog 2253L · passes 473L · liberty 481L · abc_map 361L · write_verilog 293L · yosys.hexa dispatcher 367L). Dispatcher's `use` lines (read_verilog/passes/liberty/abc_map/write_verilog) are ACTIVE (not commented) — point at `stdlib/kernels/logic_synth/` (the §5 absorption substrate). No SSOT edit needed this cycle. **§5 area-oracle gate remains OPEN** (`absorbed=true` still BANNED per g3 — separate cycle).
+
 **Date:** 2026-05-20
 **Source repo:** `~/core/demiurge/` (audit trail commits pending; design.md D68, PLAN.md κ-45, ABSORPTION.md row "진행")
 **Target repo:** `~/core/hexa-lang/` (branch `rfc006-yosys-rtlil-skeleton`, HEAD `ec8a51fc`)
-**Status:** PROGRESS — first hexa-native body of the 7-module rfc_006 absorption is GREEN. Six modules + dispatcher integration still raw-91.
+**Status:** PROGRESS — first hexa-native body of the 7-module rfc_006 absorption is GREEN. Six modules + dispatcher integration still raw-91. (Superseded — see UPSTREAM PROGRESS above.)
 **Mode:** D61 (demiurge = pointer / spawn wrapper ONLY) 준수 — demiurge `.swift` 0줄 수정. hexa-lang 측 body landing. Filed from a demiurge session under the user's `/goal "완료시까지 진행"` + "hexa upstream 필요시도 이 세션에서 진행" autonomy.
 
 This continues `~/core/hexa-lang/inbox/notes/2026-05-19-hexa-arch-rfc006-yosys-handoff.md` item ② ("IMPLEMENT rfc_006 Yosys §4 modules") — author chain: hexa-arch (rfc author) → demiurge (this note) → hexa-lang (future implementer).

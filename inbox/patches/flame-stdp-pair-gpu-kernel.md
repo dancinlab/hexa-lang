@@ -4,7 +4,26 @@
 (2026-05-20). anima edits NO hexa-lang source per
 `g_train_flame_not_pytorch upstream_downstream_invariant`; patch-request only.
 
-**Status**: `request — drafted 2026-05-20`. Companion to
+**Status**: `resolved-ssot 2026-05-20` — kernel landed at
+`self/cuda/runtime_cuda.c::_hx_cuda_kern_stdp_pair` + launcher
+`_hx_cuda_farr_stdp_pair_gpu`; hexa-callable seam at
+`self/runtime.c::hexa_forge_dispatch_stdp_pair` (runtime.h prototype
+included; bare-wrapper seam follows `forge_dispatch_matmul` /
+`forge_dispatch_ffn_fp64_via_bf16` pattern — no bootstrap rebuild
+required); 8-arg codegen registration at
+`self/codegen_c2.hexa::len(node.args) == 8`; flame-side wrapper
+`flame_stdp_pair_gpu` at `stdlib/flame/spiking_lib.hexa`. CPU fallback
+byte-identical to `flame_stdp_pair` enforced by construction (same
+scalar order, fma-free).
+
+**Falsifier results** (ubu-2 RTX 5070, sm_80 PTX driver JIT):
+- F-STDP-GPU-1 BYTE-EQUAL-VS-CPU **PASS** (N=256 mismatch=0 max|Δ|=0.000e+00; N=4096 mismatch=0 max|Δ|=0.000e+00) — required `__dmul_rn`/`__dadd_rn`/`__dsub_rn` to defeat nvcc auto-fma fusion (heritage: `feedback_flame_transcendental_byteeq_hazard.md` mechanism (3))
+- F-STDP-GPU-2 DIAGONAL-ZERO **PASS** (N=256, N=4096)
+- F-STDP-GPU-3 CLIP-BOUNDED **PASS** (N=256, N=4096)
+- F-STDP-GPU-4 SCALE-SPEEDUP **PASS** (N=4096: CPU 30.57 ms vs GPU 0.64 ms = **47.9× speedup**; N=256: 9.8×)
+
+Binary promote = standard separate deploy step per 22c27a05/e5c4c0ef
+pattern. Companion to
 `flame-spiking-substrate-primitives.md` (§138/§139, the CPU primitives —
 PR #77, merged/pending). This patch is the **GPU** follow-up.
 

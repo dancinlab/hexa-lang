@@ -125,3 +125,38 @@ pub fn flame_stdp_pair(W: int, tr_pre: int, tr_post: int, spike: int,
     }
     return out
 }
+
+// ── F-SPIKE-3-GPU: STDP pair-based weight update — GPU dispatch ─────────
+// Same semantics as flame_stdp_pair (above) — byte-identical output —
+// but routed through the forge_dispatch_stdp_pair builtin which (on a
+// HEXA_CUDA build) launches a 2D-grid __global__ kernel with one thread
+// per (i, j) weight cell. The output farr is allocated here (caller-
+// owned, t_free); the dispatcher fills it in place. On a no-CUDA build
+// the dispatcher's CPU oracle (self/runtime.c) is byte-identical to the
+// loop in flame_stdp_pair, so F-STDP-GPU-1 BYTE-EQUAL-VS-CPU holds by
+// construction.
+//
+// Filed-as: inbox/patches/flame-stdp-pair-gpu-kernel.md
+//   (anima LEGO arc §141, GPU follow-up to PR #77's CPU primitives).
+//
+// HONEST CARVE-OUT (g3):
+//   This wrapper preserves the local-learning-rule contract — the
+//   weight update depends ONLY on {spike, tr_pre, tr_post}, NEVER on a
+//   loss gradient. Deliberately NOT routed through autograd_lib for the
+//   same reason flame_stdp_pair is not (spiking plasticity is event-
+//   driven, not backprop-driven).
+pub fn flame_stdp_pair_gpu(W: int, tr_pre: int, tr_post: int, spike: int,
+                           A_plus: float, A_minus: float, w_max: float) -> int {
+    let n = t_len(spike)
+    let out = t_zeros(n * n)
+    // forge_dispatch_stdp_pair is an 8-arg builtin lowered by
+    // codegen_c2.hexa to hexa_forge_dispatch_stdp_pair (self/runtime.c),
+    // which on HEXA_CUDA hosts launches _hx_cuda_kern_stdp_pair (one
+    // thread per (i,j) cell) and on no-CUDA hosts runs a byte-identical
+    // CPU oracle. Returns 0 on success, -1 on error; callers should
+    // treat a negative rc as a fatal dispatch failure (shape mismatch
+    // or device alloc failure).
+    let _rc = forge_dispatch_stdp_pair(W, tr_pre, tr_post, spike, out,
+                                       A_plus, A_minus, w_max)
+    return out
+}

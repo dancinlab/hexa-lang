@@ -1141,6 +1141,24 @@ HexaVal forge_dispatch_ffn_fp64_via_bf16(HexaVal x, HexaVal w1, HexaVal w2,
                                          HexaVal fd) {
     return hexa_forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, m, d, fd);
 }
+// flame spiking RFC — STDP pair-based GPU dispatch bare-wrapper seam
+// (inbox/patches/flame-stdp-pair-gpu-kernel.md, anima LEGO arc §141).
+// 8-arg ≥5-arg direct-C path; the generated user.c only sees
+// runtime.h, so this extern wrapper + the runtime.h prototype below
+// link-resolve the symbol without a bootstrap rebuild.
+//   forge_dispatch_stdp_pair(W, tr_pre, tr_post, spike, out,
+//                            A_plus, A_minus, w_max) -> int rc
+HexaVal hexa_forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
+                                      HexaVal tr_post_v, HexaVal spike_v,
+                                      HexaVal out_v, HexaVal A_plus_v,
+                                      HexaVal A_minus_v, HexaVal w_max_v);
+HexaVal forge_dispatch_stdp_pair(HexaVal W, HexaVal tr_pre,
+                                 HexaVal tr_post, HexaVal spike,
+                                 HexaVal out, HexaVal A_plus,
+                                 HexaVal A_minus, HexaVal w_max) {
+    return hexa_forge_dispatch_stdp_pair(W, tr_pre, tr_post, spike,
+                                         out, A_plus, A_minus, w_max);
+}
 // 5e817564 — interp dispatch added `farr_apply_single_farr(...)` and
 // `farr_apply_cnot(...)` literal calls (6-arg / 7-arg, past the
 // hexa_callN ceiling) but never grew the matching shims. Without
@@ -9620,6 +9638,119 @@ HexaVal hexa_forge_dispatch_ffn_fp64_via_bf16(HexaVal x_v, HexaVal w1_v,
     (void)x_v; (void)w1_v; (void)w2_v; (void)y_v;
     (void)m_v; (void)d_v;  (void)fd_v;
     return hexa_int(-1);
+#endif
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * hexa_forge_dispatch_stdp_pair — flame spiking STDP GPU dispatch.
+ *
+ * The hexa-callable wrapper around the device CUDA kernel for the local
+ * pair-based STDP weight update. flame's spiking stdlib (PR #77,
+ * stdlib/flame/spiking_lib.hexa::flame_stdp_pair) provides the pure-CPU
+ * outer-product oracle; this wrapper takes the same shape contract and
+ * routes the O(N²) outer-product to a 2D-grid __global__ kernel
+ * (one thread per (i,j) weight cell) on HEXA_CUDA hosts.
+ *
+ *   forge_dispatch_stdp_pair(W_id, tr_pre_id, tr_post_id, spike_id,
+ *                            out_id, A_plus, A_minus, w_max) -> int rc
+ *
+ * Shapes: W [N·N], tr_pre [N], tr_post [N], spike [N], out [N·N].
+ * Output is CALLER-ALLOCATED (matches the device-residency contract
+ * used by rmsnorm_mh / silu_gate / attn_dt_fwd in mk2-C5) — the wrapper
+ * fills it in place. Returns 0 on success, -1 on shape/ID error.
+ *
+ * CUDA path: validates handles, derives N from spike.len, ensures all
+ * inputs are H2D'd, ensures out has a device buffer, launches the
+ * stdp_pair kernel, then D2H's out so the host caller sees results
+ * (mirrors mk2-C5 _hx_cuda_farr_silu_gate_gpu wiring).
+ *
+ * No-CUDA path: byte-identical CPU oracle (mirrors spiking_lib.hexa
+ * flame_stdp_pair exactly). The same outer-product + clip + diagonal-
+ * zero contract — F-STDP-GPU-1 BYTE-EQUAL-VS-CPU is enforced by
+ * construction on no-CUDA hosts, and on CUDA hosts the device kernel
+ * uses the same scalar arithmetic order (single-precision-free,
+ * fma-free) for bit-for-bit oracle equivalence.
+ *
+ * Falsifiers (from inbox/patches/flame-stdp-pair-gpu-kernel.md):
+ *   F-STDP-GPU-1 BYTE-EQUAL-VS-CPU  byte-equal vs flame_stdp_pair (CPU)
+ *   F-STDP-GPU-2 DIAGONAL-ZERO      dW[i][i] == 0 (no self-connection)
+ *   F-STDP-GPU-3 CLIP-BOUNDED       all output ∈ [−w_max, w_max]
+ *   F-STDP-GPU-4 SCALE-SPEEDUP      GPU wall < CPU wall at N≥4096
+ *                                   (measured, not assumed; ubu-2 RTX 5070)
+ * ═══════════════════════════════════════════════════════════════════ */
+#ifdef HEXA_CUDA
+extern int _hx_cuda_farr_stdp_pair_gpu(int64_t W_id, int64_t tr_pre_id,
+                                       int64_t tr_post_id, int64_t spike_id,
+                                       int64_t out_id, int64_t n,
+                                       double A_plus, double A_minus,
+                                       double w_max);
+#endif
+
+HexaVal hexa_forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
+                                      HexaVal tr_post_v, HexaVal spike_v,
+                                      HexaVal out_v, HexaVal A_plus_v,
+                                      HexaVal A_minus_v, HexaVal w_max_v) {
+    int64_t W_id      = hexa_as_num(W_v);
+    int64_t tr_pre_id = hexa_as_num(tr_pre_v);
+    int64_t tr_post_id= hexa_as_num(tr_post_v);
+    int64_t spike_id  = hexa_as_num(spike_v);
+    int64_t out_id    = hexa_as_num(out_v);
+    double  A_plus    = __hx_to_double(A_plus_v);
+    double  A_minus   = __hx_to_double(A_minus_v);
+    double  w_max     = __hx_to_double(w_max_v);
+
+    if (W_id      < 0 || W_id      >= _hx_farr_count) return hexa_int(-1);
+    if (tr_pre_id < 0 || tr_pre_id >= _hx_farr_count) return hexa_int(-1);
+    if (tr_post_id< 0 || tr_post_id>= _hx_farr_count) return hexa_int(-1);
+    if (spike_id  < 0 || spike_id  >= _hx_farr_count) return hexa_int(-1);
+    if (out_id    < 0 || out_id    >= _hx_farr_count) return hexa_int(-1);
+    int64_t n = _hx_farr_table[spike_id].len;
+    if (n <= 0) return hexa_int(-1);
+    if (_hx_farr_table[tr_pre_id].len  < n) return hexa_int(-1);
+    if (_hx_farr_table[tr_post_id].len < n) return hexa_int(-1);
+    int64_t nn = n * n;
+    if (_hx_farr_table[W_id].len   < nn) return hexa_int(-1);
+    if (_hx_farr_table[out_id].len < nn) return hexa_int(-1);
+
+#ifdef HEXA_CUDA
+    int rc = _hx_cuda_farr_stdp_pair_gpu(W_id, tr_pre_id, tr_post_id,
+                                         spike_id, out_id, n,
+                                         A_plus, A_minus, w_max);
+    return hexa_int(rc);
+#else
+    /* No-CUDA host: CPU byte-identical oracle. Mirrors
+     * stdlib/flame/spiking_lib.hexa::flame_stdp_pair scalar arithmetic
+     * order exactly — diagonal-passthrough + clip, off-diagonal LTP/LTD
+     * with the SAME (ltp - ltd) subtraction and the SAME (w_ij + delta)
+     * accumulation. F-STDP-GPU-1 BYTE-EQUAL-VS-CPU is enforced by
+     * construction here. */
+    double *W      = _hx_farr_table[W_id].buf;
+    double *tr_pre = _hx_farr_table[tr_pre_id].buf;
+    double *tr_post= _hx_farr_table[tr_post_id].buf;
+    double *spike  = _hx_farr_table[spike_id].buf;
+    double *out    = _hx_farr_table[out_id].buf;
+    if (!W || !tr_pre || !tr_post || !spike || !out) return hexa_int(-1);
+    double neg_w_max = 0.0 - w_max;
+    for (int64_t i = 0; i < n; i++) {
+        double s_i      = spike[i];
+        double trpost_i = tr_post[i];
+        for (int64_t j = 0; j < n; j++) {
+            int64_t idx = i * n + j;
+            double  w_ij = W[idx];
+            double  wd;
+            if (i == j) {
+                wd = w_ij;
+            } else {
+                double ltp = A_plus  * s_i      * tr_pre[j];
+                double ltd = A_minus * trpost_i * spike[j];
+                wd = w_ij + (ltp - ltd);
+            }
+            if (wd > w_max)     wd = w_max;
+            if (wd < neg_w_max) wd = neg_w_max;
+            out[idx] = wd;
+        }
+    }
+    return hexa_int(0);
 #endif
 }
 

@@ -5303,6 +5303,19 @@ fn gen2_expr(node) {
                     return "hexa_farr_apply_cnot(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
                 }
             }
+            if len(node.args) == 8 {
+                // flame spiking RFC — STDP pair-based GPU dispatch
+                // (inbox/patches/flame-stdp-pair-gpu-kernel.md).
+                // forge_dispatch_stdp_pair(W, tr_pre, tr_post, spike, out,
+                //                          A_plus, A_minus, w_max) -> int rc
+                // CUDA build → __global__ stdp_pair kernel (2D grid, one
+                // thread per (i,j)); no-CUDA build → byte-identical CPU
+                // _hx_farr_stdp_pair_cpu oracle. Output farr is caller-
+                // allocated; this dispatcher fills it in place.
+                if name == "forge_dispatch_stdp_pair" {
+                    return "hexa_forge_dispatch_stdp_pair(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ", " + arg_strs[7] + ")"
+                }
+            }
             if len(node.args) == 9 {
                 // RFC 037 (2026-05-13): whole-Hamiltonian Pauli-expectation
                 // batch kernel. Single C call replaces the per-iter
