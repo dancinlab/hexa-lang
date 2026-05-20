@@ -396,6 +396,14 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
         }
         return out
     }
+    // RFC 068 marker — Mixed-precision MIR body lowering. The STMT_BINOP
+    // body branch below emits only `.f64` mnemonics today (`add.f64`,
+    // `sub.f64`, `mul.f64`). RFC 068 P3 (`F-RFC068-BODY-MNEMONIC`)
+    // extends the dispatcher to read the dst Local's precision tag (or
+    // its classified RKIND) and emit `add.{f16,bf16,f32}` siblings
+    // alongside the existing `.f64` path. See
+    // `inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
+    // §3 P3 for the per-dtype mnemonic table.
     if s.kind == STMT_BINOP {
         if len(s.args) >= 2 {
             // 055-P3b comparison-binop lowering — `setp.<cond>.f64 %p<dst>,
