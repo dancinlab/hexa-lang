@@ -498,6 +498,7 @@ invariants round out the suite — ν = E at e=0, and the conic identity
 | #8      | `stdlib/kernels/mc_transport/transport_kinematics_kernel.hexa` | Special-relativity kinematics + PDG eq. 34.4 T_max + eq. 34.5 Bethe-Bloch dE/dx (δ=0) + 256-step trapezoidal CSDA range | Python `math` libm closed-form (4 KE samples × 4 materials × 4-6 outputs + 7 CSDA ranges + 2 invariants) | 41/41 rel_err=0       | 2026-05-20 | `pilot-transport_kinematics`   |
 | #9      | `stdlib/kernels/circuit/breaker_trace_reduce_kernel.hexa` | Composite trapezoidal I²t / clearing-energy + |·|-threshold-crossing breaker FOMs (UL 489I / IEC 60947-2 §4.3, Burden & Faires §4.3) | Python `math` libm closed-form (3 synthetic traces × 7 outputs + 3 invariants: 1 cleared / 1 non-cleared / 1 non-uniform grid) | 24/24 rel_err=0       | 2026-05-20 | `pilot-breaker_trace_reduce`   |
 | #10     | `stdlib/kernels/fem/bar1d_kernel.hexa`                  | 1-D linear (2-node) bar FEM element stiffness + direct-stiffness global assembly + Thomas tridiagonal solve for fixed-free axial load (Hughes §1.6, Cook §2.3, Burden & Faires §6.6) | Python `math` libm transliteration (bit-exact, 4 meshes × 2-9 nodes) + closed-form u(x)=P·x/(EA) analytic oracle (independent of discretisation; FEM is exact for uniform mesh + tip load) | 53/53 rel_err=0       | 2026-05-20 | `pilot-fem_bar1d_subset`       |
+| #11     | `stdlib/kernels/autodiff/dual_forward_kernel.hexa`      | Forward-mode automatic differentiation via dual numbers — value-tangent pair propagated through 5 arithmetic + 6 transcendental/power primitives (Griewank & Walther 2008 §3.1, Rall 1981, Wengert 1964) | Two-tier: (a) ANALYTIC closed-form derivatives of 9 elementary functions (x², sin·cos, exp, (x²+1)/(x−1), √(1+x²), log(x²+1), sin(x²), x³, 1/x) at fixed evaluation points + 3 invariants + 1 chain-rule cross-check + 1 linearity invariant — abs residual ≤1e-13 / typically ≤1e-15; (b) BIT-EXACT Python `math` libm oracle (dual_oracle.py) on the same 9 cases at rel_err = 0 | 48/48 PASS — analytic abs ≤7e-16 + companion rel_err=0 | 2026-05-20 | `pilot-autodiff_dual_forward`  |
 
 ### Pilot #6 — DFT (signal_proc / 2026-05-20)
 
@@ -888,13 +889,109 @@ math. The parameter-shadowing fix from #5b also means parameters
   NaN-out the solve — caller owns mesh sanity. Same contract as
   scikit-fem's `condense + solve` on a degenerate mesh.
 
+### Pilot #11 — Forward-mode automatic differentiation (autodiff / 2026-05-20)
+
+**Scope**: 12th pilot, FIRST in a brand-new `autodiff` kernel folder.
+Adds substrate-family coverage to a 12th distinct domain (autodiff,
+not in the prior solar / mc_transport / neural / graph / urdf / plasma
+/ orbital / signal_proc / noc_sim / circuit / fem families). The
+companion kernel that DEPENDENCIES.demi flagged as "Needs … an
+autodiff/gradient framework" — `stdlib/scope/openmdao_sizing.py` (the
+MDAO heavy-port row) — sits directly on top of this primitive in any
+gradient-based optimiser; this pilot is the substrate floor for that
+future ①b adapter.
+
+**Algorithm choice (3 reasons)**:
+1. **NEW domain** — `autodiff` is the 12th kernel folder under
+   `stdlib/kernels/`, and the underlying need is cited verbatim in
+   `DEPENDENCIES.demi:domain-scope_openmdao_sizing` (`portable_status =
+   heavy-port`, "Needs poppy port + an autodiff/gradient framework —
+   multi-round"). The pilot ports the SMALLEST cited slice of that
+   multi-round stack (forward-mode dual numbers, scalar I/O), opening
+   the substrate-family count to 12.
+2. **Tiny surface, clean textbook** — 11 primitives total (5
+   arithmetic + 6 transcendental/power), each one a single chain-rule
+   pushforward in 1-3 lines of code. Provenance is Griewank & Walther
+   2008 §3.1 (the canonical reference for forward-mode AD), Rall 1981
+   (the LNCS 120 monograph on dual-number AD), Wengert 1964 (the
+   original Comm. ACM letter introducing the technique). No JAX /
+   PyTorch / Autograd / OpenMDAO / Tapenade / ADOL-C / CasADi source-
+   code inspection — pure textbook re-derivation.
+3. **STRONGEST possible parity oracle** — closed-form analytic
+   derivatives of elementary functions ARE THEMSELVES elementary, so
+   we can compare `(f(x_0), f'(x_0))` against an exact algebraic
+   answer at IEEE-754 roundoff. No second AD library is needed as a
+   parity baseline; the math itself is the oracle. Reinforced by a
+   Python `math` libm transliteration (`dual_oracle.py`) for the
+   bit-exact `rel_err = 0` companion tier — same approach used in
+   pilots #5 (plasma) / #5b (kepler) / #8 (transport) / #9 (breaker)
+   / #10 (bar1d).
+
+**Algorithm provenance**: (a) A. Griewank & A. Walther, "Evaluating
+Derivatives: Principles and Techniques of Algorithmic Differentiation"
+2nd ed. (SIAM 2008), §3.1 — definition of the tangent (forward) mode
+on dual numbers ℝ[ε]/⟨ε²⟩, with every primitive φ replaced by
+(φ(v), φ'(v) · dv). (b) L.B. Rall, "Automatic Differentiation:
+Techniques and Applications", LNCS 120 (Springer 1981) — the original
+monograph treatment of dual-number AD in modern form. (c) R.E.
+Wengert, "A simple automatic derivative evaluation program",
+Comm. ACM 7(8) (1964) — the original publication of the technique.
+(d) M. Bartholomew-Biggs et al., "Automatic differentiation of
+algorithms", J. Comput. Appl. Math. 124 (2000), 171–190 — survey of
+the chain-rule pushforwards for sin / cos / exp / log / sqrt / pow.
+
+**Parity results**: 48/48 PASS at the D80 1e-10 ceiling.
+- **Analytic tier** — 9 functions × `(f, f')` at fixed x₀, absolute
+  residual ≤ 1e-13 (most ≤ 1e-15; cos²−sin² at π/4 has ~2.2e-16 abs
+  residual, 2x·cos(x²) at √(π/2) has ~7e-16 abs residual from
+  sqrt(π/2)² ≠ π/2 exactly). Both are well below the ceiling.
+- **Companion tier** — 9 cases bit-identical at `rel_err = 0` against
+  `dual_oracle.py` (math libm transliteration), same operation order
+  on darwin-arm64 → same IEEE-754 result.
+- **Invariants** — `dual_const`/`dual_var` accessors, `a + (-a) = 0`
+  bit-exact, `d_pow_int(x, 0) = [1, 0]`, `(sin x)²` two-way build
+  (`d_mul(sin, sin)` ≡ `d_pow_int(sin x, 2)` at ≤ 1e-15 abs),
+  linearity of `α·sin(x) + β·cos(x)` at x = 0.7.
+
+**Hexa-lang gotchas found**: none new. The `[float]`-of-length-2
+Dual representation (matches pilot #6's `[Xr, Xi]` convention)
+sidesteps the pilot #7 struct-array element-assignment gap entirely.
+One Python-side note for FUTURE PILOTS: `f"{x:.17e}"` rendering of a
+float can produce a string whose `0xN` mantissa is OFF BY 3 ULPs from
+the original — the `.17e` form rounds to 17 significant decimal
+digits, which is one digit MORE than float64 carries, so it adds
+spurious low-bit noise. Use `repr(x)` (`0.8` not `0.8000000000000004`)
+or `x.hex()` to dump bit-exact literals. Found and fixed during the
+first run of this pilot's test (T6 companion check).
+
+**What this does NOT prove**:
+- `absorbed=true` is NOT flipped on any demiurge cell. Same
+  `HexaNativeParityRef` schema gate as every other pilot. The
+  `scope_openmdao_sizing` cell (MDAO) stays `measurement_gate =
+  GATE_OPEN` until a gradient-based optimiser ①b adapter wires this
+  kernel into a real design loop — multi-round / multi-month.
+- **FORWARD MODE only** — for n-input gradients ∇f(x₁..xₙ) the caller
+  pays O(n · cost(f)) (one forward sweep per input). For n ≫ m where
+  m is the number of outputs, reverse mode (one backward sweep per
+  output) is asymptotically cheaper; that port is queued.
+- **SCALAR I/O only** — vector-mode (multiple seeds at once → all
+  directional derivatives in one pass) is mechanical but expands the
+  Dual representation; not in this round.
+- **No control-flow capture** — `if x > 0 { ... } else { ... }`
+  returns whichever branch the caller's float comparison picks. No
+  subdifferentials, no smoothing — matches every operator-overloading
+  AD framework (JAX `jax.numpy.where`, PyTorch `torch.where`).
+- **Integer pow only** in `d_pow_int`. Real-exponent
+  `u^p = exp(p · log u)` is a one-line caller composition built from
+  the existing `d_log` + `d_mul` + `d_exp` primitives.
+
 ### Cumulative status across pilots (2026-05-20)
 
-- 11 pilots landed/in-flight (#1-#5, #5b on origin/main, #6+#7+#8+#9+#10
-  landing this cycle; #3b + #4 are concurrent branch ports), ≥291
-  assertions PASS across them (21+8+23+41+27+17+36+41+24+53 = 291 on
-  the landed pilots alone — #10 adds 53 from bar1d_kernel)
-- 6 hexa-lang followups filed in this audit round (none new in #9):
+- 12 pilots landed/in-flight (#1-#5, #5b on origin/main, #6+#7+#8+#9+#10+#11
+  landing this cycle; #3b + #4 are concurrent branch ports), ≥339
+  assertions PASS across them (21+8+23+41+27+17+36+41+24+53+48 = 339
+  on the landed pilots alone — #11 adds 48 from dual_forward_kernel)
+- 6 hexa-lang followups filed in this audit round (none new in #9/#10/#11):
   - parser `-`/`->` continuation footgun (#1, #7)
   - `fmod` libm shim missing (#1)
   - `str_full(float)` for full-precision dump (#1)

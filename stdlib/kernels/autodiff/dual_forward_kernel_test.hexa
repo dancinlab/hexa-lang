@@ -1,0 +1,230 @@
+// stdlib/kernels/autodiff/dual_forward_kernel_test.hexa
+// D80 g_hexa_only pilot #11 — parity test for dual_forward_kernel.hexa.
+//
+// Two tiers (per the D80 pattern from pilots #1-#10):
+//   (1) ANALYTIC parity — for elementary f(x) with elementary closed-
+//       form derivative f'(x), the dual-number forward-mode AD must
+//       reproduce (f(x_0), f'(x_0)) at IEEE-754 roundoff. Tolerance
+//       is set ABSOLUTE 1e-13 (where the analytic answer is non-trivial)
+//       since (a) some `want` values like 0.0 admit only an absolute
+//       bound and (b) sin(x²) at x=√(π/2) has ~7e-16 abs tangent
+//       residual coming from sin/cos roundoff at the boundary.
+//   (2) BIT-EXACT companion parity — the Python oracle
+//       `dual_oracle.py` mirrors this kernel line-by-line using
+//       `math` libm; we hard-code its dumped values as `want` and
+//       require rel_err = 0 (literal IEEE-754 bit-exact) on the
+//       9 cases.
+//
+// D80 ceiling: rel_err ≤ 1e-10. The analytic tier passes with abs
+// residuals ≤ ~7e-16 (well under 1e-10); the companion tier passes at
+// rel_err = 0 (literal bit-exactness).
+
+use "stdlib/kernels/autodiff/dual_forward_kernel"
+use "stdlib/core/math/float"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed = ""
+
+fn check(name: str, cond: bool) {
+    total_count = total_count + 1
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        if failed == "" { failed = name }
+        print("FAIL " + name)
+    }
+}
+
+fn fabs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn check_pair_abs(name: str, got: [float], want_v: float, want_dv: float, tol: float) {
+    let ev = fabs(got[0] - want_v)
+    let edv = fabs(got[1] - want_dv)
+    if ev > tol || edv > tol {
+        print(name + " |Δv|=" + str(ev) + " |Δdv|=" + str(edv))
+    }
+    check(name + " v", ev <= tol)
+    check(name + " dv", edv <= tol)
+}
+
+fn check_pair_exact(name: str, got: [float], want_v: float, want_dv: float) {
+    let ev = fabs(got[0] - want_v)
+    let edv = fabs(got[1] - want_dv)
+    if ev > 0.0 || edv > 0.0 {
+        print(name + " (bit-exact) |Δv|=" + str(ev) + " |Δdv|=" + str(edv))
+    }
+    check(name + " v bit-exact", ev == 0.0)
+    check(name + " dv bit-exact", edv == 0.0)
+}
+
+fn main() {
+    // ────────────────────────────────────────────────────────────────
+    // Invariants — constructors and accessors
+    // ────────────────────────────────────────────────────────────────
+    let c5 = dual_const(5.0)
+    check("I1a dual_const value", d_value(c5) == 5.0)
+    check("I1b dual_const tangent", d_tangent(c5) == 0.0)
+    let v3 = dual_var(3.0)
+    check("I2a dual_var value", d_value(v3) == 3.0)
+    check("I2b dual_var tangent", d_tangent(v3) == 1.0)
+    let neg_sum = d_add(v3, d_neg(v3))
+    check("I3a a + (-a) value zero", d_value(neg_sum) == 0.0)
+    check("I3b a + (-a) tangent zero", d_tangent(neg_sum) == 0.0)
+
+    // ────────────────────────────────────────────────────────────────
+    // T1: f(x) = x²  at x = 3.  Analytic: (9, 6).
+    //     Built via d_pow_int(dual_var(3), 2).
+    // ────────────────────────────────────────────────────────────────
+    let r1 = d_pow_int(dual_var(3.0), 2)
+    print("T1 x² @ x=3  → (v=" + str(r1[0]) + ", dv=" + str(r1[1]) + ")")
+    check_pair_abs("T1 analytic", r1, 9.0, 6.0, 1e-13)
+    check_pair_exact("T1 companion", r1, 9.0, 6.0)
+
+    // ────────────────────────────────────────────────────────────────
+    // T2: f(x) = sin(x)·cos(x)  at x = π/4.  Analytic: (0.5, 0).
+    //     Built via d_mul(d_sin(xv), d_cos(xv)).
+    //     Companion tangent residual is ~2.22e-16 (sin/cos roundoff
+    //     at π/4 produces cos²−sin² != 0 exactly). The companion
+    //     check uses the captured Python value, NOT 0.
+    // ────────────────────────────────────────────────────────────────
+    let x2 = pi() / 4.0
+    let xv2 = dual_var(x2)
+    let r2 = d_mul(d_sin(xv2), d_cos(xv2))
+    print("T2 sin·cos @ x=π/4  → (v=" + str(r2[0]) + ", dv=" + str(r2[1]) + ")")
+    check_pair_abs("T2 analytic", r2, 0.5, 0.0, 1e-13)
+    // companion: value bit-exact at 0.5; tangent bit-exact at the
+    // Python `math` libm roundoff value 2.22044604925031308e-16
+    check_pair_exact("T2 companion", r2, 0.5, 2.220446049250313e-16)
+
+    // ────────────────────────────────────────────────────────────────
+    // T3: f(x) = exp(x)  at x = 1.  Analytic: (e, e).
+    //     Captured Python value: e = 2.71828182845904509e+00.
+    // ────────────────────────────────────────────────────────────────
+    let r3 = d_exp(dual_var(1.0))
+    print("T3 exp @ x=1  → (v=" + str(r3[0]) + ", dv=" + str(r3[1]) + ")")
+    check_pair_abs("T3 analytic", r3, e(), e(), 1e-13)
+    check_pair_exact("T3 companion", r3,
+        2.718281828459045, 2.718281828459045)
+
+    // ────────────────────────────────────────────────────────────────
+    // T4: f(x) = (x²+1)/(x−1)  at x = 2.  Analytic: (5, −1).
+    //     Built via d_div(d_add(d_pow_int(xv,2), const(1)),
+    //                     d_sub(xv, const(1))).
+    // ────────────────────────────────────────────────────────────────
+    let xv4 = dual_var(2.0)
+    let num4 = d_add(d_pow_int(xv4, 2), dual_const(1.0))
+    let den4 = d_sub(xv4, dual_const(1.0))
+    let r4 = d_div(num4, den4)
+    print("T4 (x²+1)/(x−1) @ x=2  → (v=" + str(r4[0]) + ", dv=" + str(r4[1]) + ")")
+    check_pair_abs("T4 analytic", r4, 5.0, 0.0 - 1.0, 1e-13)
+    check_pair_exact("T4 companion", r4, 5.0, 0.0 - 1.0)
+
+    // ────────────────────────────────────────────────────────────────
+    // T5: f(x) = √(1+x²)  at x = 3.  Analytic: (√10, 3/√10).
+    //     Captured Python: v=3.16227766016837952e+00,
+    //                      dv=9.48683298050513768e-01.
+    // ────────────────────────────────────────────────────────────────
+    let xv5 = dual_var(3.0)
+    let r5 = d_sqrt(d_add(dual_const(1.0), d_pow_int(xv5, 2)))
+    print("T5 √(1+x²) @ x=3  → (v=" + str(r5[0]) + ", dv=" + str(r5[1]) + ")")
+    let want_v5 = sqrt(10.0)
+    let want_dv5 = 3.0 / sqrt(10.0)
+    check_pair_abs("T5 analytic", r5, want_v5, want_dv5, 1e-13)
+    check_pair_exact("T5 companion", r5,
+        3.1622776601683795, 0.9486832980505138)
+
+    // ────────────────────────────────────────────────────────────────
+    // T6: f(x) = log(x²+1)  at x = 2.  Analytic: (log 5, 4/5).
+    //     Captured Python: v=1.60943791243410028e+00,
+    //                      dv=8.00000000000000044e-01.
+    // ────────────────────────────────────────────────────────────────
+    let xv6 = dual_var(2.0)
+    let r6 = d_log(d_add(d_pow_int(xv6, 2), dual_const(1.0)))
+    print("T6 log(x²+1) @ x=2  → (v=" + str(r6[0]) + ", dv=" + str(r6[1]) + ")")
+    check_pair_abs("T6 analytic", r6, log(5.0), 4.0 / 5.0, 1e-13)
+    check_pair_exact("T6 companion", r6,
+        1.6094379124341003, 0.8)
+
+    // ────────────────────────────────────────────────────────────────
+    // T7: f(x) = sin(x²)  at x = √(π/2).  Analytic: (1, 0).
+    //     Captured Python tangent ~7.10e-16 from cos(x²) roundoff at
+    //     x²=π/2 (cos isn't exactly 0 since √(π/2)² !== π/2 exactly).
+    //     Companion check uses captured Python value, NOT 0.
+    // ────────────────────────────────────────────────────────────────
+    let x7 = sqrt(pi() / 2.0)
+    let xv7 = dual_var(x7)
+    let r7 = d_sin(d_pow_int(xv7, 2))
+    print("T7 sin(x²) @ x=√(π/2)  → (v=" + str(r7[0]) + ", dv=" + str(r7[1]) + ")")
+    check_pair_abs("T7 analytic", r7, 1.0, 0.0, 1e-13)
+    check_pair_exact("T7 companion", r7, 1.0, 7.10069999593308696e-16)
+
+    // ────────────────────────────────────────────────────────────────
+    // T8: f(x) = x³  at x = 4.  Analytic: (64, 48).
+    // ────────────────────────────────────────────────────────────────
+    let r8 = d_pow_int(dual_var(4.0), 3)
+    print("T8 x³ @ x=4  → (v=" + str(r8[0]) + ", dv=" + str(r8[1]) + ")")
+    check_pair_abs("T8 analytic", r8, 64.0, 48.0, 1e-13)
+    check_pair_exact("T8 companion", r8, 64.0, 48.0)
+
+    // ────────────────────────────────────────────────────────────────
+    // T9: f(x) = 1/x = x^(-1)  at x = 0.5.  Analytic: (2, -4).
+    //     Exercises the n < 0 branch of d_pow_int.
+    // ────────────────────────────────────────────────────────────────
+    let r9 = d_pow_int(dual_var(0.5), 0 - 1)
+    print("T9 1/x @ x=0.5  → (v=" + str(r9[0]) + ", dv=" + str(r9[1]) + ")")
+    check_pair_abs("T9 analytic", r9, 2.0, 0.0 - 4.0, 1e-13)
+    check_pair_exact("T9 companion", r9, 2.0, 0.0 - 4.0)
+
+    // ────────────────────────────────────────────────────────────────
+    // T10: d_pow_int sanity at n=0 → always [1, 0] regardless of input.
+    // ────────────────────────────────────────────────────────────────
+    let p0 = d_pow_int(dual_var(7.3), 0)
+    check("T10 pow0 v == 1", p0[0] == 1.0)
+    check("T10 pow0 dv == 0", p0[1] == 0.0)
+
+    // ────────────────────────────────────────────────────────────────
+    // T11: Chain-rule cross-check via two independent expressions of
+    //      the same function. f(x) = (sin x)² has two natural builds:
+    //        (a) d_mul(d_sin(xv), d_sin(xv))
+    //        (b) d_pow_int(d_sin(xv), 2)
+    //      Both must produce IDENTICAL Duals (the chain rule applied
+    //      twice must equal applied-once-then-squared).
+    // ────────────────────────────────────────────────────────────────
+    let xv11 = dual_var(1.2)
+    let sx = d_sin(xv11)
+    let a11 = d_mul(sx, sx)
+    let b11 = d_pow_int(sx, 2)
+    check("T11 (sin x)² via mul == via pow_int value",
+        fabs(a11[0] - b11[0]) <= 1e-15)
+    check("T11 (sin x)² via mul == via pow_int tangent",
+        fabs(a11[1] - b11[1]) <= 1e-15)
+
+    // ────────────────────────────────────────────────────────────────
+    // T12: Linearity invariant. For any Duals a and b and constant α:
+    //      d_value (α·a + β·b) = α·v(a) + β·v(b)
+    //      d_tangent (α·a + β·b) = α·dv(a) + β·dv(b)
+    //      Constants multiplied as dual_const are correctly inert.
+    // ────────────────────────────────────────────────────────────────
+    let xv12 = dual_var(0.7)
+    let a12 = d_sin(xv12)
+    let b12 = d_cos(xv12)
+    let alpha = dual_const(3.0)
+    let beta  = dual_const(0.0 - 2.0)
+    let combo = d_add(d_mul(alpha, a12), d_mul(beta, b12))
+    // independent direct computation:
+    let want_v_12  = 3.0 * sin(0.7) - 2.0 * cos(0.7)
+    let want_dv_12 = 3.0 * cos(0.7) + 2.0 * sin(0.7)   // d/dx[-2 cos x] = +2 sin x
+    check("T12 linearity value",
+        fabs(combo[0] - want_v_12) <= 1e-13)
+    check("T12 linearity tangent",
+        fabs(combo[1] - want_dv_12) <= 1e-13)
+
+    print("dual_forward_kernel_test: " + str(pass_count) + "/" + str(total_count))
+    if failed != "" {
+        print("FAILED: " + failed)
+        exit(1)
+    } else {
+        print("PASS")
+    }
+}
