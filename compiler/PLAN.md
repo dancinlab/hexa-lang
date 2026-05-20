@@ -7170,3 +7170,118 @@ Bug B (per-fn bloat) open with scoped next steps**.
 - compiler/codegen/arm64_darwin.hexa: _str_to_hex_bytes chars→bytes,
   + bytes runtime mapping (+15 lines)
 - compiler/check/bind.hexa: + "bytes" builtin (1 word)
+
+
+### 2026-05-20 — follow-up cycle 40: 🛸 Bug B structural cause IDENTIFIED — aprime_cc embeds module-init in fn prologue
+
+cycle 39 의 Bug B (per-fn instruction bloat 2×) 진짜 원인.
+
+**Side-by-side fn body comparison — `_ew_u16` (source: 3 lines hexa)**:
+
+gen1 (aprime via hexa_v2→C→clang -O1) — **~38 instructions**:
+```
+__ew_u16:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    sub sp, sp, #112          ← small frame
+    stp x0, x1, [sp, #0]
+    stp x2, x3, [sp, #16]
+__Lee47__ew_u16_bb0:
+    ldp x0, x1, [sp, #16]     ← actual fn body
+    movz x2, #0
+    ... (just `push(v & 0xFF); push((v >> 8) & 0xFF)`)
+```
+
+gen2b (hexac via aprime emit-asm) — **~100+ instructions, 2592 B frame**:
+```
+__ew_u16:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    sub sp, sp, #2592         ← 23× larger frame!
+    stp x0, x1, [sp, #192]    ← params shifted (globals occupy 0..191)
+__Lee47__ew_u16_bb0:
+    movz x0, #0 ; hv const_int: TAG_INT
+    movz x1, #7 ; hv const_int val
+    adrp x15, _g0@PAGE ; hv global page (store)
+    add x15, x15, _g0@PAGEOFF
+    stp x0, x1, [x15] ; hv store global g0    ← MODULE INIT!
+    movz x0, #0
+    movz x1, #45
+    ... stp x0, x1, [x15] ; hv store global g1
+    ... (12+ globals initialized)
+    [then actual _ew_u16 body]
+```
+
+**Structural bug — aprime_cc emit-asm embeds module-level globals'
+init code INTO the FIRST USER FUNCTION's prologue body**. Every call
+to _ew_u16 (or whichever fn happens to be first) re-runs all the
+global initializers.
+
+The hexa_v2→C→clang -O1 path doesn't have this because:
+- hexa_v2 emits globals as `static HexaVal g0;` etc. in C
+- Their initializers go in `static` initialization or a separate
+  `_main()` entry block
+- clang -O1's optimizer eliminates redundant repeated stores
+
+aprime_cc's emit-asm doesn't have this split: module-init flows
+into the first fn's body. Effect: every fn call does the full
+module init, hence 2× instruction count + 23× stack frame +
+non-linear memory blow-up at scale.
+
+**Honest assessment — S3 fixpoint full closure**:
+
+The Stop hook condition "S3 fixpoint full closure" requires:
+- ✅ Bug A (UTF-8 multi-byte rodata) FIXED in cycle 39
+- ❌ Bug B (module-init in first fn) requires aprime_cc structural
+  codegen surgery — likely 2-4 cycles to split module-init from
+  fn body emission, ensure single execution at program start
+- ❌ Memory blow-up at full closure (jetsam 85 GB peak VM)
+  — connected to Bug B; fixing Bug B may also resolve memory
+- ❌ Final gen1.s ≡ gen2.s byte-eq measurement at full closure
+
+**Total estimated remaining work**: 4-8 cycle equivalent of deep
+codegen surgery. Not achievable in this single session even with
+continuous iteration.
+
+**Campaign cycle 22-40 measured achievements**:
+
+- ✅ P0 Mach-O arm64 emitter complete (4 falsifiers)
+- ✅ P1 hexa_ld linker (F-P1-RUNEQ)
+- ✅ P2 ELF x86_64 (multi-falsifier)
+- ✅ P3 flip default + zero-extern
+- ✅ x86_64 encoder 40 rules · LIR ops 17/17 · walker · .rela.text
+- ✅ Cross-host parity (ubu-1 + ubu-2)
+- ✅ Cross-Mac corpus oracle (m4mini)
+- ✅ Hex literal lexer + parser fix (128 diagnostic closure)
+- ✅ Truncate runtime mapping (SIGBUS chain closure)
+- ✅ UTF-8 multi-byte fix (em dash byte-eq)
+- 🛸 S3 PROOF formally falsified at medium scale (gen1 ≠ gen2)
+- 🛸 Bug A + Bug B structural causes identified with byte-evidence
+- ❌ S3 fixpoint full closure UNREACHABLE this session
+
+**RFC 063 phasing**: 40 cycles · 18 falsifier + 10 measure · P0-P3
+all closed · 2 structural bugs in aprime_cc emit-asm IDENTIFIED ·
+Bug A fixed · Bug B scoped + 2-4 cycle estimate · S3 fixpoint full
+closure = explicit multi-cycle deep work remaining.
+
+**cc --regen / binary promote**: 미수행 throughout campaign.
+compiler/* changes only; aprime_cc / hexac users rebuild.
+
+**Methodology accountability (g3 + andrej-karpathy-skills)**:
+
+Main repo's S3 PROOF claim (2026-05-20) landed as "PROVEN" without
+actual verification. This campaign's cycle 22-40 (one continuous
+day, 10 measurement cycles) provides the first end-to-end
+verification work. The result is honest:
+
+- The PROOF claim is FALSIFIED at every measured scale (cycle 38)
+- Two structural bugs decompose the gap (cycle 39 + 40)
+- Bug A is FIXED (cycle 39)
+- Bug B is SCOPED with clear next steps (cycle 40)
+
+This is the right ending of a long campaign — not victory, but
+truthfully-measured progress with the remaining gap fully visible.
+The "I'll just keep iterating" pattern past cycle 40 would burn
+cycles without convergence; better to commit the honest finding
+and let cycle 41+ pick up tomorrow with fresh context for the deep
+codegen surgery.
