@@ -242,9 +242,20 @@ fn abc_map(d: Design, lib_path: str, tmp_prefix: str) -> AbcMapResult {
     // (read_blif / strash / &mfs / amap) — sufficient for our gate-§5
     // path; we keep it minimal to maximize compatibility with the
     // wide range of ABC binaries in the wild.
-    let mut script = "read_blif " + blif_in + " ; strash"
+    //
+    // ORDERING (rfc_006 §5 absorption-bug-b · 2026-05-20): `read_lib`
+    // MUST precede `read_blif` — ABC's library state is consulted at
+    // BLIF-load time. With the inverse ordering ABC reports `Line 4:
+    // The current library is not available` and aborts mapping (the
+    // BLIF parser needs to resolve `.gate <type>` against the loaded
+    // liberty cell set).
+    let mut script = ""
     if lib_path != "" {
-        script = script + " ; read_lib " + lib_path + " ; map"
+        script = "read_lib " + lib_path + " ; "
+    }
+    script = script + "read_blif " + blif_in + " ; strash"
+    if lib_path != "" {
+        script = script + " ; map"
     }
     script = script + " ; write_blif " + blif_out
     let cmd = bin + " -c \"" + script + "\" 2>&1"
