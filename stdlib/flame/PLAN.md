@@ -1967,3 +1967,5 @@ forge-route 확인 — 미측정 over-claim 0).
 **머지-안전성**: build GREEN + GOAL step1 PASS 측정 → rfc043-hexa-torch
 의 A/B/C 머지가 검증됨. git-clean(FF) + 런타임 측정-PASS → main 머지
 안전. (copy_slice/transpose CPU-fallback 은 비차단 잔재로 별도 추적.)
+
+### 2026-05-20 — flame spiking primitives status flip — patch md verified-closed against commit 4426d4e4 (anima §138 inbox loop closure).
