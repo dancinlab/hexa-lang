@@ -7803,3 +7803,42 @@ PR #233 closed PIECE 1).
 **cross-link**: RUNTIME.md ## Log "cycle 47" entry · Tier-A.1 7 `[x]` + 3 `[pending]` flips · cycle 46 entry above · PR #241 (cycle 46) merged `0bece833`.
 
 @cite cycle 46 entry above · RFC 061 §4.1.
+
+### 2026-05-20 — RUNTIME.md Phase 1 Tier-A.1 cycle 48 — acceptance reached (137→122, -15 cumulative) + cycle-47 bug correction
+
+**작업 = (a) cycle-47 의 broken #define 버그 수정 + (b) numeric batch (atoi/atof/atoll/strtoll/strtoull) + bzero**. 결과로 Phase 1 Tier-A.1 acceptance target `~125 externs` measured **REACHED** (실측 122, 3 extern 더 좋음).
+
+**measured delta**: aprime_cc nm undefined externs **127 → 122 (−5)** · 누적 cycles 46+47+48 = **137 → 122 = −15** · smoke `exit(6*7)==42` PASS · 바이너리 1,119,480 → 1,119,896 B (+416 B, +0.04%).
+
+**closed this cycle (8 symbols)**:
+- broken-#define 수정: `_strdup` · `_strncmp` · `_strrchr` (cycle 47 의 "stubborn residual" 정정 — 실제로는 clang reverse-libcall recognition 이 아니라 내 perl 이 자기 `#define strncmp(...) hxlcl_strncmp(...)` 의 LHS 도 substitute 해서 `#define hxlcl_strncmp(...) hxlcl_strncmp(...)` self-redefine 으로 만든 게 진짜 원인)
+- numeric batch: `_atoi` · `_atoll` · `_atof` · `_strtoll` · `_strtoull` (5 helpers + #defines + perl substitution with `unless (/^\s*\/\/|^\s*#\s*define\b/)` skip rule)
+
+**cycle 47 회고 (g3-honest correction)**:
+> 이전 cycle 47 entry 의 "clang `-Oz` reverse-libcall recognition converts our `hxlcl_*` patterns back to libc-shaped calls" 는 **틀린 진단**. 실제 원인은 내 perl substitution 이 `#define strncmp(a,b,n) hxlcl_strncmp(...)` 의 첫번째 `strncmp` 토큰까지 `hxlcl_strncmp` 로 바꿔서 self-redefine 으로 망친 것. `-fno-builtin-strncmp` 시도가 효과 없었던 이유도 이걸로 설명됨. cycle 48 가 #define 들을 명시 재기재하고 perl 규칙에 `#define` skip 추가해서 닫음. 이 회고가 향후 같은 함정을 막기 위한 record.
+
+**residual (2 · 각 1 site)**:
+- `_bzero` — `hxlcl_bzero` + `#define bzero hxlcl_bzero` + `-fno-builtin-bzero` 플래그 모두 적용했으나 여전히 잔류. clang -Oz 가 `memset(p, 0, n)` 패턴을 토큰화 이전에 bzero 로 변환하는 어떤 메커니즘 (instcombine 또는 libcall-simplify-pre-preprocessor). `-fno-builtin-memset` 시도 미실행 (memset 전반 영향 risk). cycle 49 에 (a) memset 사이트도 hxlcl_memset 로 redirect 또는 (b) `__attribute__((no_builtin("bzero")))` per-fn 으로 시도.
+- `_strncpy` — cycle 48 후 새로 등장. baseline 137 에 없던 심볼. clang 이 어떤 hxlcl_* helper 또는 다른 loop 패턴을 strncpy 로 reverse-recognize 한 것. 1 call site, cycle 49 에 추적.
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +35 (8 [pending]→[x] flips + cycle 48 Log entry)
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +97 (6 numeric helpers + 6 new #defines · #define block typo fix)
+ self/runtime_core.c  | perl substitution in place
+ tool/build_aprime.sh | +3 -3 (comment update + -fno-builtin-bzero attempt)
+```
+
+**acceptance check (Phase 1 Tier-A.1, per RUNTIME.md)**:
+- "12+ libc symbols removed" — **15 removed** ✓ (strlen/strcmp/memcmp/strcat/strchr/strncmp/strrchr/strstr/strdup/strndup/atoi/atof/atoll/strtoll/strtoull)
+- "→ ~125 externs" — **122 measured** ✓ (3 better than target)
+- aprime_cc smoke exit(42) PASS ✓
+- binary size within ±20% of cycle-44 baseline — +0.04% ✓ (well within)
+
+Phase 1 cumulative gate (S3 fixpoint + Tier-A.{2,3,4,5,6} 까지) 는 후속 cycle. 이번 cycle 은 Tier-A.1 단독 acceptance.
+
+**cross-link**: RUNTIME.md ## Log "cycle 48" entry + ### Tier-A.1 8 추가 `[x]` flip + 2 `[pending]` (bzero/strncpy) + acceptance line 갱신 · PR #241 (cycle 46) + PR #243 (cycle 47) merged · cycle 48 = direct push to main (user directive).
+
+@cite cycle 47 entry above · RFC 061 §4.1.

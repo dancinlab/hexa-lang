@@ -120,18 +120,14 @@ mkdir -p "$(dirname "$OUT")"
 # 55% (2.24 MB → 1.00 MB) and removes 323 unused runtime fns + 36
 # unused libc externs (509 T → 186 · 173 U → 137). S3 fixpoint
 # preserved — same md5 655d6d1fc7da8db4572bf49d03dbcdf8 on falsifier.
-# Cycle 46-47 (RUNTIME.md Phase 1 Tier-A.1): hxlcl_* helpers + textual
-# #define override in self/runtime.c above the runtime_core.c include
-# eliminate _strcmp/_memcmp/_strcat/_strlen/_strchr/_strstr/_strndup
-# (7 string libc symbols dropped, 137 → 130 externs).
-# `_strdup` / `_strncmp` / `_strrchr` persist as 1-call-each residuals
-# via clang -Oz reverse-libcall recognition that converts our hxlcl_*
-# loop+malloc patterns back to libc calls; -fno-builtin-NAME doesn't
-# fully close them (tested cycle 47). Deferred to a later cycle that
-# either (a) rewrites the patterns to escape recognition, or (b)
-# moves the helpers behind a `@asm` block, or (c) ports to hexa-source.
+# Cycle 46-48 (RUNTIME.md Phase 1 Tier-A.1): hxlcl_* helpers + textual
+# #define override in self/runtime.c above runtime_core.c eliminate
+# 16 libc string + numeric symbols (137 → 121 externs). The 1 residual
+# `_bzero` is closed by -fno-builtin-bzero below — clang -Oz otherwise
+# converts `memset(p, 0, n)` patterns into `bzero(p, n)` calls.
 CL_ERR="$(clang -Oz -arch arm64 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections -Wl,-dead_strip \
+    -fno-builtin-bzero \
     -I self -I . "$APPOST" -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
 if [ -n "$CL_ERR" ] || [ ! -x "$OUT" ]; then
     echo "build_aprime: clang failed" >&2

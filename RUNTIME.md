@@ -64,24 +64,38 @@ retires once its callers move to hexa-source.
 - [x] `_strchr` — removed cycle 47 (`hxlcl_strchr` + #define)
 - [x] `_strstr` — removed cycle 47 (`hxlcl_strstr` + #define)
 - [x] `_strndup` — removed cycle 47 (`hxlcl_strndup` + #define)
-- [pending] `_strdup` — helper + #define landed cycle 47 but clang
-      `-Oz` reverse-libcall recognition converts `malloc(n+1) + copy`
-      pattern in `__hxa_exec_argv_core` back to `_strdup`. Defer to
-      cycle that rewrites pattern (@asm block or hexa-source port).
-- [pending] `_strncmp` — same as above (reverse-libcall from
-      `hxlcl_memcmp(a, b, k)` constant-size into `_strncmp`)
-- [pending] `_strrchr` — same as above (reverse-libcall residual)
-- [ ] `_atoi` — string → i64. → `stdlib/runtime/atoi.hexa`
-- [ ] `_atof` — string → f64 (scaled accumulator + decimal exponent)
-- [ ] `_atoll` — string → i64 (alias of atoi or longer-range variant)
-- [ ] `_strtol`, `_strtod`, `_strtoul` — strtok-like with end-ptr
-- [ ] `_strcpy`, `_strncpy` — byte copy (strcat done above)
-- [ ] `_bzero` — fill with zero
-- [ ] `_qsort` — sort-array helper (rare; review usage)
-- [ ] `_bsearch` — binary search (rare; review usage)
+- [x] `_strdup` — removed cycle 48 (cycle-47 "residual" was actually
+      broken `#define hxlcl_strdup hxlcl_strdup` self-redefine from
+      perl mis-substitution; fix → clean removal)
+- [x] `_strncmp` — removed cycle 48 (same broken-#define cause)
+- [x] `_strrchr` — removed cycle 48 (same broken-#define cause)
+- [x] `_atoi` — removed cycle 48 (`hxlcl_atoi` + #define)
+- [x] `_atoll` — removed cycle 48 (`hxlcl_atoll` + #define)
+- [x] `_atof` — removed cycle 48 (`hxlcl_atof` + #define, simple
+      decimal-exponent impl; bit-exactness not yet verified against
+      libm path — gated under Phase 1 cumulative S3 fixpoint check)
+- [x] `_strtoll` — removed cycle 48 (`hxlcl_strtoll` + #define, full
+      base+endptr semantics)
+- [x] `_strtoull` — removed cycle 48 (`hxlcl_strtoull` + #define)
+- [pending] `_bzero` — `hxlcl_bzero` + #define landed cycle 48 but
+      `-fno-builtin-bzero` flag (added to build_aprime.sh) does NOT
+      stop clang -Oz from emitting bzero. Mechanism: `memset(p,0,n)`
+      auto-converted to bzero before tokenization sees our #define.
+      Defer to cycle that replaces memset call sites too.
+- [pending] `_strncpy` — newly emerged after cycle 48 (was not in
+      baseline 137; clang -Oz converted some other loop pattern in
+      our helpers / runtime into strncpy). 1 call site.
+- [ ] `_strcpy` — byte copy
+- [ ] `_qsort` — sort-array helper (already dead-stripped; 0 source
+      sites in current build, may need attention if reachable code
+      grows)
+- [ ] `_bsearch` — binary search (already dead-stripped; same as
+      qsort)
+- [ ] `_strtod` — already dead-stripped; 0 in current externs
 
 Acceptance: 12+ libc symbols removed → 137 → ~125 externs.
-Cycle 46-47 cumulative: 137 → 130 (−7 measured · 7 of 12+ symbols dropped).
+Cycle 46-48 cumulative: 137 → 122 (**−15 measured · 15 of 12+ symbols
+dropped · ~125 target REACHED**, surpassed by 3 externs).
 
 ### Tier-A.2 — Memory allocator family
 
@@ -402,3 +416,33 @@ For each Tier-A sub-phase:
   side-effects to escape pattern fingerprinting, or (c) port to
   hexa-source per the canonical step-2 path
 - S3 fixpoint check still DEFERRED to Phase 1 cumulative gate
+
+### 2026-05-20 — Phase 1 Tier-A.1 step-1 (cycle 48) — acceptance reached
+
+- ✅ cycle 48 — Tier-A.1 acceptance "12+ symbols removed → ~125
+  externs" **REACHED measured**. aprime_cc nm undefined externs
+  127 → 122 (−5 this cycle · cumulative 137 → 122 = **−15**) ·
+  smoke exit(42) PASS · binary 1,119,896 B (vs baseline 1,119,480
+  B, +416 B = 0.04%)
+- Bug correction: cycle 47's "stubborn 3 residual via clang
+  reverse-libcall" hypothesis was WRONG. Real cause = broken
+  `#define` block: perl substitution from cycle 47 hit the LHS
+  of its own newly-added `#define strncmp(...) hxlcl_strncmp(...)`
+  lines and converted them to `#define hxlcl_strncmp(...)
+  hxlcl_strncmp(...)` self-redefines (no-op). Fixed by typing out
+  the correct LHS names directly + updating future perl skip rule
+  to `unless (/^\s*\/\/|^\s*#\s*define\b/)`
+- Closed cycle 48: `_strdup` + `_strncmp` + `_strrchr` (broken-
+  define fix) · `_atoi` + `_atoll` + `_atof` + `_strtoll` +
+  `_strtoull` (numeric batch). 8 symbols dropped this cycle. Plus
+  `-fno-builtin-bzero` added to build_aprime.sh (unsuccessful for
+  bzero, but documents the attempt)
+- 2 residuals open: `_bzero` (clang memset-to-bzero conversion;
+  `-fno-builtin-bzero` insufficient) · `_strncpy` (newly emerged
+  via clang loop-to-strncpy conversion in our helpers). Both 1
+  call site each, address in cycle 49+
+- atof simple impl is NOT bit-exact with libc — may break S3
+  fixpoint when Phase 1 cumulative gate fires. Mitigation options
+  documented in RFC draft: (i) accept FP drift if gen1/gen2 both
+  go through hxlcl_atof, (ii) keep libm path for atof, (iii) port
+  to bit-exact Pade/Dekker scheme

@@ -278,7 +278,7 @@ static void _hexa_init_mem_cap(void) {
     // cap. HEXA_MEM_UNLIMITED=1 forces it back off (and is the default).
     const char* lim = getenv("HEXA_MEM_LIMIT");
     if (lim && lim[0] != '\0') {
-        long long mb = atoll(lim);
+        long long mb = hxlcl_atoll(lim);
         if (mb > 0) {
             _hx_mem_cap_bytes = (size_t)mb * 1024ull * 1024ull;
             _hx_mem_cap_disabled = 0;
@@ -286,7 +286,7 @@ static void _hexa_init_mem_cap(void) {
     }
     const char* cap = getenv("HEXA_MEM_CAP_MB");
     if (cap && cap[0] != '\0') {
-        long long mb = atoll(cap);
+        long long mb = hxlcl_atoll(cap);
         if (mb > 0) {
             _hx_mem_cap_bytes = (size_t)mb * 1024ull * 1024ull;
             _hx_mem_cap_disabled = 0;
@@ -1253,7 +1253,7 @@ double __hx_to_double(HexaVal v) {
     // ComptimeConst eval: to_float("3.14") at compile time needs string parsing.
     // Without this branch, returned 0.0, silently producing wrong constants.
     // atof handles both ints and floats correctly ("3" → 3.0, "3.14" → 3.14).
-    if (HX_IS_STR(v) && HX_STR(v))   return atof(HX_STR(v));
+    if (HX_IS_STR(v) && HX_STR(v))   return hxlcl_atof(HX_STR(v));
     if (HX_IS_VALSTRUCT(v) && HX_VS(v)) {
         if (HX_VSF(v, tag_i) == TAG_FLOAT) return HX_VSF(v, float_val);
         if (HX_VSF(v, tag_i) == TAG_INT)   return (double)HX_VSF(v, int_val);
@@ -1273,7 +1273,7 @@ int64_t hexa_as_num(HexaVal v) {
         const char* cs = HX_STR(v); const char* p = cs;
         if (*p == '+' || *p == '-') p++;
         int base = (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) ? 16 : 10;
-        return strtoll(cs, NULL, base);
+        return hxlcl_strtoll(cs, NULL, base);
     }
     if (HX_IS_VALSTRUCT(v) && HX_VS(v)) {
         if (HX_VSF(v, tag_i) == TAG_INT)   return HX_VSF(v, int_val);
@@ -1283,7 +1283,7 @@ int64_t hexa_as_num(HexaVal v) {
             const char* cs = HX_STR(HX_VSF(v, str_val)); const char* p = cs;
             if (*p == '+' || *p == '-') p++;
             int base = (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) ? 16 : 10;
-            return strtoll(cs, NULL, base);
+            return hxlcl_strtoll(cs, NULL, base);
         }
     }
     return 0;
@@ -5739,7 +5739,7 @@ HexaVal hexa_format_n(HexaVal fmt, HexaVal args) {
                 HexaVal arg = HX_ARR_ITEMS(args)[ai++];
                 if (spec[0] == ':' && spec[1] == '.') {
                     // Precision format {:.N} or {:.Nf}
-                    int prec = atoi(spec + 2);
+                    int prec = hxlcl_atoi(spec + 2);
                     double val = HX_IS_FLOAT(arg) ? HX_FLOAT(arg) : (double)HX_INT(arg);
                     snprintf(buf, sizeof(buf), "%.*f", prec, val);
                 } else if (spec[0] == ':') {

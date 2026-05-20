@@ -154,6 +154,124 @@ static char *__attribute__((noinline)) hxlcl_strndup(const char *s, size_t cap) 
     out[n] = '\0';
     return out;
 }
+// Cycle 48 batch — numeric parse + bzero.
+static long long __attribute__((noinline)) hxlcl_atoll(const char *s) {
+    if (!s) return 0;
+    size_t i = 0;
+    while (s[i] == ' ' || s[i] == '\t' || s[i] == '\n') i++;
+    int sign = 1;
+    if (s[i] == '-') { sign = -1; i++; }
+    else if (s[i] == '+') i++;
+    unsigned long long n = 0;
+    while (s[i] >= '0' && s[i] <= '9') {
+        n = n * 10ULL + (unsigned long long)(s[i] - '0');
+        i++;
+    }
+    return (long long)((sign < 0) ? -(long long)n : (long long)n);
+}
+static int __attribute__((noinline)) hxlcl_atoi(const char *s) {
+    return (int)hxlcl_atoll(s);
+}
+static long long __attribute__((noinline)) hxlcl_strtoll(const char *nptr, char **endptr, int base) {
+    if (!nptr) { if (endptr) *endptr = (char *)nptr; return 0; }
+    const char *s = nptr;
+    while (*s == ' ' || *s == '\t' || *s == '\n') s++;
+    int sign = 1;
+    if (*s == '-') { sign = -1; s++; }
+    else if (*s == '+') s++;
+    if (base == 0) {
+        if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { base = 16; s += 2; }
+        else if (s[0] == '0') { base = 8; s++; }
+        else base = 10;
+    } else if (base == 16 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        s += 2;
+    }
+    unsigned long long n = 0;
+    for (;;) {
+        char c = *s;
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'Z') d = c - 'A' + 10;
+        else break;
+        if (d >= base) break;
+        n = n * (unsigned long long)base + (unsigned long long)d;
+        s++;
+    }
+    if (endptr) *endptr = (char *)s;
+    return (long long)((sign < 0) ? -(long long)n : (long long)n);
+}
+static unsigned long long __attribute__((noinline)) hxlcl_strtoull(const char *nptr, char **endptr, int base) {
+    if (!nptr) { if (endptr) *endptr = (char *)nptr; return 0; }
+    const char *s = nptr;
+    while (*s == ' ' || *s == '\t' || *s == '\n') s++;
+    if (*s == '+') s++;
+    if (base == 0) {
+        if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { base = 16; s += 2; }
+        else if (s[0] == '0') { base = 8; s++; }
+        else base = 10;
+    } else if (base == 16 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        s += 2;
+    }
+    unsigned long long n = 0;
+    for (;;) {
+        char c = *s;
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'Z') d = c - 'A' + 10;
+        else break;
+        if (d >= base) break;
+        n = n * (unsigned long long)base + (unsigned long long)d;
+        s++;
+    }
+    if (endptr) *endptr = (char *)s;
+    return n;
+}
+static double __attribute__((noinline)) hxlcl_atof(const char *s) {
+    if (!s) return 0.0;
+    size_t i = 0;
+    while (s[i] == ' ' || s[i] == '\t' || s[i] == '\n') i++;
+    int sign = 1;
+    if (s[i] == '-') { sign = -1; i++; }
+    else if (s[i] == '+') i++;
+    double n = 0.0;
+    while (s[i] >= '0' && s[i] <= '9') {
+        n = n * 10.0 + (double)(s[i] - '0');
+        i++;
+    }
+    if (s[i] == '.') {
+        i++;
+        double frac = 0.1;
+        while (s[i] >= '0' && s[i] <= '9') {
+            n += (double)(s[i] - '0') * frac;
+            frac *= 0.1;
+            i++;
+        }
+    }
+    if (s[i] == 'e' || s[i] == 'E') {
+        i++;
+        int esign = 1;
+        if (s[i] == '-') { esign = -1; i++; }
+        else if (s[i] == '+') i++;
+        int exp_val = 0;
+        while (s[i] >= '0' && s[i] <= '9') {
+            exp_val = exp_val * 10 + (s[i] - '0');
+            i++;
+        }
+        double mul = 1.0;
+        for (int k = 0; k < exp_val; k++) mul *= 10.0;
+        if (esign < 0) n /= mul;
+        else n *= mul;
+    }
+    return (sign < 0) ? -n : n;
+}
+static void __attribute__((noinline)) hxlcl_bzero(void *s, size_t n) {
+    unsigned char *p = (unsigned char *)s;
+    for (size_t i = 0; i < n; i++) {
+        p[i] = 0;
+    }
+}
 
 // Textual override of any residual libc references in subsequent code
 // (runtime_core.c + HI tier + transpile output). The helper bodies
@@ -162,12 +280,18 @@ static char *__attribute__((noinline)) hxlcl_strndup(const char *s, size_t cap) 
 #define memcmp(a,b,n)  hxlcl_memcmp((const void *)(a), (const void *)(b), (size_t)(n))
 #define strcmp(a,b)    hxlcl_strcmp((const char *)(a), (const char *)(b))
 #define strcat(d,s)    hxlcl_strcat((char *)(d), (const char *)(s))
-#define hxlcl_strncmp(a,b,n) hxlcl_strncmp((const char *)(a), (const char *)(b), (size_t)(n))
-#define hxlcl_strchr(s,c)    ((char *)hxlcl_strchr((const char *)(s), (c)))
-#define hxlcl_strrchr(s,c)   ((char *)hxlcl_strrchr((const char *)(s), (c)))
-#define hxlcl_strstr(h,n)    ((char *)hxlcl_strstr((const char *)(h), (const char *)(n)))
-#define hxlcl_strdup(s)      hxlcl_strdup((const char *)(s))
-#define hxlcl_strndup(s,n)   hxlcl_strndup((const char *)(s), (size_t)(n))
+#define strncmp(a,b,n) hxlcl_strncmp((const char *)(a), (const char *)(b), (size_t)(n))
+#define strchr(s,c)    ((char *)hxlcl_strchr((const char *)(s), (c)))
+#define strrchr(s,c)   ((char *)hxlcl_strrchr((const char *)(s), (c)))
+#define strstr(h,n)    ((char *)hxlcl_strstr((const char *)(h), (const char *)(n)))
+#define strdup(s)      hxlcl_strdup((const char *)(s))
+#define strndup(s,n)   hxlcl_strndup((const char *)(s), (size_t)(n))
+#define atoi(s)        hxlcl_atoi((const char *)(s))
+#define atoll(s)       hxlcl_atoll((const char *)(s))
+#define atof(s)        hxlcl_atof((const char *)(s))
+#define strtoll(p,e,b) hxlcl_strtoll((const char *)(p), (char **)(e), (int)(b))
+#define strtoull(p,e,b) hxlcl_strtoull((const char *)(p), (char **)(e), (int)(b))
+#define bzero(p,n)     hxlcl_bzero((void *)(p), (size_t)(n))
 
 #include "runtime_core.c"
 
@@ -1491,7 +1615,7 @@ HexaVal hexa_str_parse_int(HexaVal s) {
     int base = 10;
     if (digit_start[0] == '0' && (digit_start[1] == 'x' || digit_start[1] == 'X')) base = 16;
     char* endptr = NULL;
-    long long v = strtoll(p, &endptr, base);
+    long long v = hxlcl_strtoll(p, &endptr, base);
     if (endptr == p) {
         // no digits consumed — "abc", "--", "" after trim handled above
         char msg[256];
@@ -4335,7 +4459,7 @@ static void _hx_gauss_rng_lazy_init(void) {
     if (_hx_gauss_rng_inited) return;
     const char* env = getenv("__HEXA_FARR_GAUSS_SEED__");
     if (env && *env) {
-        _hx_gauss_rng_state = strtoull(env, NULL, 10);
+        _hx_gauss_rng_state = hxlcl_strtoull(env, NULL, 10);
     } else {
         _hx_gauss_rng_state = (uint64_t)time(NULL) ^
                               ((uint64_t)getpid() << 16);
@@ -7270,7 +7394,7 @@ static int64_t hexa_pinned_epoch(void) {
     if (sde && *sde) {
         // strtoll tolerates leading whitespace and stops at first non-digit
         char* endp = NULL;
-        long long v = strtoll(sde, &endp, 10);
+        long long v = hxlcl_strtoll(sde, &endp, 10);
         if (endp != sde && v >= 0) return (int64_t)v;
     }
     const char* repro = getenv("HEXA_REPRODUCIBLE");
@@ -7880,8 +8004,8 @@ static HexaVal _jp_parse_number(const char* s, size_t n, size_t* pi) {
     if (k >= sizeof(buf)) k = sizeof(buf) - 1;
     memcpy(buf, s + start, k);
     buf[k] = 0;
-    if (is_float) return hexa_float(atof(buf));
-    return hexa_int((int64_t)strtoll(buf, NULL, 10));
+    if (is_float) return hexa_float(hxlcl_atof(buf));
+    return hexa_int((int64_t)hxlcl_strtoll(buf, NULL, 10));
 }
 
 static HexaVal _jp_parse_array(const char* s, size_t n, size_t* pi) {
