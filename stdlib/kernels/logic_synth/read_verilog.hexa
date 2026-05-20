@@ -1428,6 +1428,33 @@ fn _rv_inline_func_calls(toks_in: [str], funcs: [VFunc]) -> [str] {
     return out
 }
 
+// CLEAN-ROOM: count the elements of an unpacked-array reg by scanning
+// the module's wires for the `base[k]` pattern. Used by the dynamic-
+// indexing cond-mux lowering (proc-pass sub-step #4d) to size the
+// per-element $eq/$mux/$dff chain. Returns 0 if no elements found
+// (caller should fall back to no-emit).
+//
+// Assumes contiguous indices 0..P-1 (router_d{4,6}'s array decls
+// follow this convention).
+fn _rv_array_bound(m: Module, base: str) -> int {
+    let mut count = 0
+    let prefix = base + "["
+    let pl = len(prefix)
+    let mut i = 0
+    while i < len(m.wires) {
+        let wn = m.wires[i].name
+        if len(wn) > pl {
+            if wn.substring(0, pl) == prefix {
+                if wn.substring(len(wn) - 1, len(wn)) == "]" {
+                    count = count + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return count
+}
+
 // CLEAN-ROOM: linear lookup of a function by name; -1 if absent.
 fn _rv_find_function(funcs: [VFunc], name: str) -> int {
     let mut i = 0
@@ -3198,6 +3225,25 @@ fn main() {
         let _m42 = _r42.design.modules[0]
         if rtlil_count_cells_of_type(_m42, "$xor") != 1 {
             println("FAIL T42a xor_count got " + str(rtlil_count_cells_of_type(_m42, "$xor")))
+            fails = fails + 1
+        }
+    }
+
+    // T43 — array-bound infrastructure for dynamic-indexing lowering
+    //       (proc-pass sub-step #4d, infrastructure only — the
+    //       per-element $eq/$mux/$dff emit using this helper is a
+    //       separate-session sub-step). `reg q [0:3]` declares 4
+    //       elements; _rv_array_bound(m, "q") must return 4.
+    total = total + 1
+    let _v43 = "module ab ( ) ; reg q [ 0 : 3 ] ; endmodule"
+    let _r43 = read_verilog(_v43)
+    if _r43.ok != 1 {
+        println("FAIL T43 array_bound: " + _r43.message); fails = fails + 1
+    } else {
+        let _m43 = _r43.design.modules[0]
+        let _ab = _rv_array_bound(_m43, "q")
+        if _ab != 4 {
+            println("FAIL T43a array_bound got " + str(_ab))
             fails = fails + 1
         }
     }
