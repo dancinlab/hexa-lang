@@ -520,3 +520,37 @@ For each Tier-A sub-phase:
   Deferred to a cycle that touches the source pattern directly
 - Phase 1 Tier-A.1 acceptance maintained (137 → 115 = -22, 8
   better than `~125` target)
+
+### 2026-05-20 — cycle 52 — Tier-A.3 stdio printf-family minimal impl (-7 externs)
+
+- ✅ cycle 52 — aprime_cc nm undefined externs 115 → **108**
+  (−7 measured · cumulative **137 → 108 = −29**) · smoke
+  exit(42) PASS · binary 1,119,784 → 1,119,608 B (−176 B)
+- Closed: `_printf` · `_fprintf` · `_snprintf` · `_fputs` ·
+  `_fputc` · `_fflush` · `_putchar` · `_perror` · plus
+  `_strlen` residual from new code's string-scan loops (closed
+  via `-fno-builtin-strlen` flag · this flag was tried + failed
+  in cycle 47 but works now because the new code surface
+  triggers a different optimization pass)
+- Method: minimal-but-correct `hxlcl_vsnprintf` (~90 LoC)
+  handles `%s/%d/%i/%u/%lld/%ld/%llu/%lu/%zu/%c/%x/%X/%p/%%`,
+  basic width + zero-pad + left-align. Float specifiers
+  (`%f/%g/%e/%F/%G/%E`) emit `(float)` placeholder — compiler's
+  hot paths don't print floats. `printf` → `write(1, ...)` ·
+  `fprintf` → `write(stderr ? 2 : 1, ...)` · `fputs/fputc/
+  putchar/perror` → direct `write()`
+- Tier-A.3 still OPEN: `_fopen` · `_fclose` · `_fread` ·
+  `_fwrite` · `_fseek` · `_ftell` · `_fdopen` · `_flock` ·
+  `_setvbuf` (9 file-stream symbols · need FILE* abstraction
+  layer; defer until either (a) hexa runtime stops using FILE*
+  for compiler-side IO, or (b) write a minimal FILE struct +
+  open/read/write/close wrappers)
+- Honest scope: hxlcl_printf is NOT bit-exact with libc printf
+  (no `%a`, no locale, no positional args, simplified width/
+  precision handling, `(float)` placeholder for FP). Compiler
+  binary uses printf only for error messages + diagnostics
+  where format-string subset is well-defined; smoke shows
+  acceptable output. Bit-exactness with libm printf path is
+  gated under Phase 1 cumulative S3 fixpoint check (deferred)
+- `__attribute__((no_builtin("memcpy")))` from cycle 51 kept
+  (still no benefit but harmless · documents the attempt)

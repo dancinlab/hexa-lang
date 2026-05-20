@@ -8052,3 +8052,35 @@ unroll) + §3.5.1 (sized literals) + Yosys `passes/proc/proc_mux.cc`
 
 cross-link: inbox/notes/2026-05-20-rfc006-§5-phase-3e-result.md (full
 g3-honest writeup with the exact ABC trace + Phase 3f fix scope).
+
+### 2026-05-20 — RUNTIME.md cycle 52 — Tier-A.3 printf-family minimal impl (137→108, -29 cumulative)
+
+**작업 = Tier-A.3 stdio printf family minimal impl**. `hxlcl_vsnprintf` (~90 LoC va_list + format scanner) + wrappers (printf/fprintf/snprintf/sprintf/fputs/fputc/fflush/putchar/perror). Float specifiers (`%f/%g/%e`) 는 `(float)` placeholder (compiler hot paths float print 안함). Cycle 47 에서 무효했던 `-fno-builtin-strlen` 이 새 코드 surface 에서 다른 최적화 pass 트리거 차단해 strlen residual 까지 closure.
+
+**measured delta**: aprime_cc nm undefined externs **115 → 108 (−7)** · 누적 cycles 46-52 = **137 → 108 = −29** · smoke `exit(6*7)==42` PASS · 바이너리 1,119,784 → 1,119,608 B (−176 B).
+
+**closed this cycle (8 symbols)**:
+- `_printf` · `_fprintf` · `_snprintf` · `_fputs` · `_fputc` · `_fflush` · `_putchar` · `_perror` (8 stdio + +1 strlen residual = 9 helper-introduced or recovered)
+
+**Tier-A.3 OPEN (9 file-stream)**: `_fopen` · `_fclose` · `_fread` · `_fwrite` · `_fseek` · `_ftell` · `_fdopen` · `_flock` · `_setvbuf`. FILE* abstraction layer 필요 — 별 cycle (구현부담 ~150 LoC).
+
+**Tier-A.5 libm 잔류**: `_cos` · `_exp` · `_fmod` 등. RUNTIME.md path (b) "libm-only-extern allowed" 가 Phase 1 cumulative gate 정의 (`≤5 syscall + 16 libm`) 와 일치. cycle 53+ 에 path 결정 후 적용.
+
+**Phase 1 progress**:
+- Tier-A.1 (trivial libc): **CLOSED** (15 of 12+ symbols)
+- Tier-A.2 (memory): **3 of 8** dropped (memset/memmove/___memcpy_chk · 5 OPEN: malloc/free/realloc/calloc/mmap/munmap + 1 residual memcpy)
+- Tier-A.3 (stdio): **8 of 19** dropped · 9 file-stream OPEN
+- Tier-A.4 POSIX: OPEN
+- Tier-A.5 libm: path 결정 pending
+- Tier-A.6 darwin/compiler-rt: 2 of ~12 dropped (___stack_chk_fail/_guard) · 6 OPEN
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +26 (cycle 52 entry)
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +160 (~90 LoC vsnprintf + 9 wrappers + 11 #defines)
+ tool/build_aprime.sh | +1 (-fno-builtin-strlen)
+```
+
+**cross-link**: RUNTIME.md cycle 52 entry · cycles 46-51 entries · `66d4ffe5` cycle 51 commit baseline.

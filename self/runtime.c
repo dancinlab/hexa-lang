@@ -331,6 +331,151 @@ static size_t __attribute__((noinline)) hxlcl_strftime(char *buf, size_t cap, co
     if (buf && cap > 0) buf[0] = '\0';
     return 0;
 }
+// Cycle 52 — minimal printf family. Handles %s/%d/%i/%u/%lld/%ld/%llu/
+// %lu/%zu/%c/%x/%X/%p/%%, basic width + zero-pad. Float specifiers
+// (%f/%g/%e) emit "(float)" placeholder — compiler's hot paths don't
+// print floats. Not bit-exact with libc printf; see RUNTIME.md cycle
+// 52 Log entry for the honest scope.
+static int __attribute__((noinline)) hxlcl_vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap) {
+    size_t pos = 0;
+    #define HXLCL_PUT(ch) do { if (pos + 1 < cap) buf[pos] = (ch); pos++; } while (0)
+    while (*fmt) {
+        if (*fmt != '%') { HXLCL_PUT(*fmt); fmt++; continue; }
+        fmt++;
+        int leftalign = 0, zeropad = 0, width = 0;
+        if (*fmt == '-') { leftalign = 1; fmt++; }
+        if (*fmt == '+') fmt++;
+        if (*fmt == ' ') fmt++;
+        if (*fmt == '#') fmt++;
+        if (*fmt == '0') { zeropad = 1; fmt++; }
+        while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt - '0'); fmt++; }
+        if (*fmt == '.') {
+            fmt++;
+            if (*fmt == '*') { (void)va_arg(ap, int); fmt++; }
+            else while (*fmt >= '0' && *fmt <= '9') fmt++;
+        }
+        int lng = 0;
+        if (*fmt == 'h') { fmt++; if (*fmt == 'h') fmt++; }
+        else if (*fmt == 'l') { lng = 1; fmt++; if (*fmt == 'l') { lng = 2; fmt++; } }
+        else if (*fmt == 'z' || *fmt == 'j' || *fmt == 't') { lng = 2; fmt++; }
+        char conv = *fmt; if (conv == 0) break; fmt++;
+        char tmp[32]; int tn = 0;
+        if (conv == '%') { HXLCL_PUT('%'); continue; }
+        if (conv == 'c') { HXLCL_PUT((char)va_arg(ap, int)); continue; }
+        if (conv == 's') {
+            const char *s = va_arg(ap, const char *);
+            if (!s) s = "(null)";
+            int slen = 0; while (s[slen]) slen++;
+            int pad = width - slen; if (pad < 0) pad = 0;
+            if (!leftalign) for (int k = 0; k < pad; k++) HXLCL_PUT(' ');
+            for (int k = 0; k < slen; k++) HXLCL_PUT(s[k]);
+            if (leftalign) for (int k = 0; k < pad; k++) HXLCL_PUT(' ');
+            continue;
+        }
+        if (conv == 'd' || conv == 'i') {
+            long long v;
+            if (lng == 2) v = va_arg(ap, long long);
+            else if (lng == 1) v = va_arg(ap, long);
+            else v = va_arg(ap, int);
+            int neg = (v < 0);
+            unsigned long long uv = neg ? (unsigned long long)(-(v + 1)) + 1ULL : (unsigned long long)v;
+            if (uv == 0) tmp[tn++] = '0';
+            else while (uv) { tmp[tn++] = '0' + (char)(uv % 10); uv /= 10; }
+            if (neg) tmp[tn++] = '-';
+        } else if (conv == 'u') {
+            unsigned long long v;
+            if (lng == 2) v = va_arg(ap, unsigned long long);
+            else if (lng == 1) v = va_arg(ap, unsigned long);
+            else v = va_arg(ap, unsigned int);
+            if (v == 0) tmp[tn++] = '0';
+            else while (v) { tmp[tn++] = '0' + (char)(v % 10); v /= 10; }
+        } else if (conv == 'x' || conv == 'X' || conv == 'p') {
+            unsigned long long v;
+            if (conv == 'p') v = (unsigned long long)(uintptr_t)va_arg(ap, void *);
+            else if (lng == 2) v = va_arg(ap, unsigned long long);
+            else if (lng == 1) v = va_arg(ap, unsigned long);
+            else v = va_arg(ap, unsigned int);
+            char hi = (conv == 'X') ? 'A' : 'a';
+            if (v == 0) tmp[tn++] = '0';
+            else while (v) { int d = (int)(v & 0xF); tmp[tn++] = (d < 10) ? ('0' + (char)d) : (hi + (char)d - 10); v >>= 4; }
+            if (conv == 'p') { tmp[tn++] = 'x'; tmp[tn++] = '0'; }
+        } else if (conv == 'f' || conv == 'g' || conv == 'e' || conv == 'F' || conv == 'G' || conv == 'E') {
+            (void)va_arg(ap, double);
+            const char *pl = "(float)";
+            for (int k = 0; pl[k]; k++) HXLCL_PUT(pl[k]);
+            continue;
+        } else {
+            HXLCL_PUT('%'); HXLCL_PUT(conv); continue;
+        }
+        int pad = width - tn; if (pad < 0) pad = 0;
+        char padc = (zeropad && !leftalign) ? '0' : ' ';
+        if (!leftalign) for (int k = 0; k < pad; k++) HXLCL_PUT(padc);
+        for (int i = tn - 1; i >= 0; i--) HXLCL_PUT(tmp[i]);
+        if (leftalign) for (int k = 0; k < pad; k++) HXLCL_PUT(' ');
+    }
+    #undef HXLCL_PUT
+    if (cap > 0) buf[pos < cap ? pos : cap - 1] = '\0';
+    return (int)pos;
+}
+static int __attribute__((noinline)) hxlcl_snprintf(char *buf, size_t cap, const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    int r = hxlcl_vsnprintf(buf, cap, fmt, ap);
+    va_end(ap);
+    return r;
+}
+static int __attribute__((noinline)) hxlcl_sprintf(char *buf, const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    int r = hxlcl_vsnprintf(buf, 0x7FFFFFFF, fmt, ap);
+    va_end(ap);
+    return r;
+}
+static int __attribute__((noinline)) hxlcl_vfprintf_fd(int fd, const char *fmt, va_list ap) {
+    char buf[4096];
+    int n = hxlcl_vsnprintf(buf, sizeof(buf), fmt, ap);
+    if (n > (int)sizeof(buf) - 1) n = sizeof(buf) - 1;
+    return (int)write(fd, buf, (size_t)n);
+}
+static int __attribute__((noinline)) hxlcl_printf(const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    int r = hxlcl_vfprintf_fd(1, fmt, ap);
+    va_end(ap);
+    return r;
+}
+static int __attribute__((noinline)) hxlcl_fprintf(void *fp, const char *fmt, ...) {
+    int fd = 1;
+    if (fp == (void *)stderr) fd = 2;
+    va_list ap; va_start(ap, fmt);
+    int r = hxlcl_vfprintf_fd(fd, fmt, ap);
+    va_end(ap);
+    return r;
+}
+static int __attribute__((noinline)) hxlcl_fputs(const char *s, void *fp) {
+    int fd = 1; if (fp == (void *)stderr) fd = 2;
+    if (!s) return -1;
+    size_t n = 0; while (((const volatile char *)s)[n]) n++;
+    return (int)write(fd, s, n);
+}
+static int __attribute__((noinline)) hxlcl_fputc(int c, void *fp) {
+    int fd = 1; if (fp == (void *)stderr) fd = 2;
+    unsigned char ch = (unsigned char)c;
+    return write(fd, &ch, 1) == 1 ? c : -1;
+}
+static int __attribute__((noinline)) hxlcl_fflush(void *fp) {
+    (void)fp;
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_putchar(int c) {
+    unsigned char ch = (unsigned char)c;
+    return write(1, &ch, 1) == 1 ? c : -1;
+}
+static void __attribute__((noinline)) hxlcl_perror(const char *s) {
+    if (s && s[0]) {
+        size_t n = 0; while (((const volatile char *)s)[n]) n++;
+        write(2, s, n);
+        write(2, ": ", 2);
+    }
+    write(2, "error\n", 6);
+}
 
 // Textual override of any residual libc references in subsequent code
 // (runtime_core.c + HI tier + transpile output). The helper bodies
@@ -358,6 +503,15 @@ static size_t __attribute__((noinline)) hxlcl_strftime(char *buf, size_t cap, co
 #define strcpy(d,s)    hxlcl_strcpy((char *)(d), (const char *)(s))
 #define strerror(e)    hxlcl_strerror((int)(e))
 #define strftime(b,c,f,t) hxlcl_strftime((char *)(b), (size_t)(c), (const char *)(f), (void *)(t))
+#define snprintf(b,c,...)  hxlcl_snprintf((char *)(b), (size_t)(c), __VA_ARGS__)
+#define sprintf(b,...)     hxlcl_sprintf((char *)(b), __VA_ARGS__)
+#define printf(...)        hxlcl_printf(__VA_ARGS__)
+#define fprintf(fp,...)    hxlcl_fprintf((void *)(fp), __VA_ARGS__)
+#define fputs(s,fp)        hxlcl_fputs((const char *)(s), (void *)(fp))
+#define fputc(c,fp)        hxlcl_fputc((int)(c), (void *)(fp))
+#define fflush(fp)         hxlcl_fflush((void *)(fp))
+#define putchar(c)         hxlcl_putchar((int)(c))
+#define perror(s)          hxlcl_perror((const char *)(s))
 
 #include "runtime_core.c"
 

@@ -129,7 +129,7 @@ mkdir -p "$(dirname "$OUT")"
 # These flags are link-equivalent — no source change required.
 CL_ERR="$(clang -Oz -arch arm64 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections -Wl,-dead_strip \
-    -fno-builtin-bzero -fno-builtin-memcpy \
+    -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
     -D_FORTIFY_SOURCE=0 -fno-stack-protector \
     -I self -I . "$APPOST" -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
 if [ -n "$CL_ERR" ] || [ ! -x "$OUT" ]; then
