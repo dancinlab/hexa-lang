@@ -485,7 +485,7 @@ The GPU substrate has finite scope. Closure ≠ "all features"; closure = "the l
 - [ ] **Multi-vendor: ROCm or Metal kernel parity** — proves architectural independence
 - [x] **Multi-tile WMMA throughput ≥ 50% of cuBLAS HGEMM** — vendor-comparable on specific kernels: M=N=K=256 ratio = 0.500 ±0.0002 (PR #214 + variance commit `05a85bb9`); caveat: single shape, large-M/N/K scale-up pending
 - [ ] **Whole-program-fusion measurable advantage** — at least one workload where hexa beats cuBLAS-using stack by ≥ 30%
-- [ ] **n=6 lattice GPU emit smoke** — bridge to north-star ③
+- [x] **n=6 lattice GPU emit smoke** — bridge to north-star ③ — degree-6 hex-neighbor stencil on axial-coordinate 8x8 grid, FP32 byte-eq vs CPU reference (`max|d|=0`, 0 mismatches / 64 cells) on RTX 5070 sm_120 driver 580 (RFC 070 P1, this branch)
 
 Once 4-6 of these check off, the GPU substrate phase is "done enough" to consume from the higher-level NN / agent / chip layers without re-touching.
 

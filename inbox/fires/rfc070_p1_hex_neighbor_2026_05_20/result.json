@@ -1,0 +1,18 @@
+{
+  "rfc": "070-P1-hex-neighbor-smoke",
+  "kernel": "hex_neighbor",
+  "falsifier": "F-RFC070-HEX-NEIGHBOR-NUMERIC",
+  "grid": {"q":8,"r":8,"cells":64},
+  "host": {
+    "hostname": "summer-B650M-K",
+    "device": "NVIDIA GeForce RTX 5070",
+    "sm": "sm_120",
+    "driver": 13000
+  },
+  "numeric": {
+    "verdict": "PASS",
+    "max_delta": 0,
+    "mismatches": 0,
+    "n_cells": 64
+  }
+}
