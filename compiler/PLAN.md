@@ -5300,3 +5300,141 @@ untouched. No worktree-other-session WIP files modified.
 
 cross-link: RFC 070 (G7-D.impl.parser row split + status header flip),
 RFC 074 (status `PHASE-1-SELF-LANDED` + Phase 1 self/ sub-section).
+
+### 진행 로그 — RFC 070 G7-A.native impl emit-body LANDED on x86_64 (D1 arm64 + D2 x86_64 parity · `--shared` mode GOT-load emits · default opts byte-eq) (2026-05-20)
+
+This sub-cycle completes the **emit-body** delta for the `G7-A.native impl`
+row of RFC 070 §4 across both native CPU backends. The D1 partial harvest
+(commit `8fdb29e2`) introduced the `--shared`-mode `adrp+ldr` GOT-load
+sequence into `compiler/codegen/arm64_darwin.hexa::_arm64_op_rm`'s `global`
+branch + threaded `opts: CodegenOptions` through `_emit_arm64_stmt` and
+`_arm64_op_rm`, plus added the `_arm64_op_mem_label` helper and the
+`label`-as-offset rendering path in `compiler/emit/asm.hexa::_fmt_mem`.
+That harvest was rate-limit-truncated mid-cycle; it shipped arm64-only,
+left x86_64 untouched, and never produced its own `compiler/PLAN.md`
+entry. **D2 (this sub-cycle)** lands the x86_64 parity half — every
+codegen-side change required so `codegen_x86_64_linux(module, opts)`
+emits PIC-safe code when `opts.shared == 1` — and reconciles the
+missing D1 PLAN entry into this single consolidated record.
+
+#### x86_64 emit-body delta (D2 — this commit)
+
+The x86_64 backend's call shape differs from arm64: `_x86_op_resolve`
+returns a **label `LOperand`** for `o.kind == "global"` today (vs arm64's
+`_arm64_op_resolve`, which already returns a register because the
+`@PAGE/@PAGEOFF` materialization is the only valid way to address a
+symbol on arm64). The label is then rendered as a bare immediate in the
+next x86_64 instruction (assembler then emits `R_X86_64_64` / `R_X86_64_32S`
+fixups). For a `.so` produced from this path, the resulting text section
+carries non-relocatable absolute fixups, which `ld.so` rejects for
+`ET_DYN`. The D2 delta is therefore three-way:
+
+| change | scope | rationale |
+|--------|-------|-----------|
+| `_x86_op_rm(..., opts)` `global` branch | `compiler/codegen/x86_64_linux.hexa:572-605` | When `opts.shared == 1`, emit a single `mov scratch, [rip+g<id>@GOTPCREL]` to materialize the GOT entry's runtime address into the caller-provided scratch register. Tag the instruction's `LInstr.comment` with `[reloc=R_X86_64_GOTPCREL]` so the asm-text emitter can dispatch on the kind without re-deriving it. When `opts.shared == 0`, branch is a no-op — emit is byte-identical to pre-D2. |
+| `_x86_op_resolve(..., opts)` `global` branch | `compiler/codegen/x86_64_linux.hexa:614-636` | When `opts.shared == 1`, return `_x86_op_reg(scratch)` (the register `_x86_op_rm` just loaded the GOT entry into). When `opts.shared == 0`, return the bare `g<id>` label as before. |
+| `_emit_x86_64_stmt` + `_x86_64_lower_func` + `codegen_x86_64_linux` thread `opts` | `compiler/codegen/x86_64_linux.hexa:618 · 924 · 1259` + 17 internal call-sites updated | Mechanical signature lift to plumb `opts` from the public entry point down to the two leaf helpers. Mirrors D1's `_emit_arm64_stmt` lift. |
+
+Each x86_64 call-site that previously read `_x86_op_rm(buf, o, st, rm, scratch)` or `_x86_op_resolve(o, st, rm, scratch)` is updated in-place to thread `opts` as the trailing argument. The 17 call-sites span `_STMT_ASSIGN` (array_lit / struct_lit / field / fallthrough assign), `_STMT_BINOP`, the call-emit overflow + reg-arg loops, `_STMT_RETURN`, `_STMT_BR_COND`, `load`, and `store` — every operand-materialization site in the x86_64 emitter.
+
+#### arm64 emit-body delta (D1 — backfilled into this PLAN entry)
+
+D1 (commit `8fdb29e2`) had landed but lacked a PLAN record. Restating its
+content for the consolidated SSOT:
+
+| change | scope | rationale |
+|--------|-------|-----------|
+| `_arm64_op_rm(..., opts)` `global` branch GOT-load | `compiler/codegen/arm64_darwin.hexa:874-938` | When `opts.shared == 1`, emit `adrp scratch, g<id>@GOTPAGE` + `ldr scratch, [scratch, g<id>@GOTPAGEOFF]` (Mach-O `ARM64_RELOC_GOT_LOAD_*` / ELF `R_AARCH64_*_GOT_*`). When `opts.shared == 0`, keep the baseline `adrp+@PAGE/add+@PAGEOFF` (Mach-O PIE) — byte-identical to pre-D1. |
+| `_arm64_op_mem_label` helper | `compiler/codegen/arm64_darwin.hexa:106-124` | New: label-as-offset memory-operand constructor (`[Xn, g<id>@GOTPAGEOFF]`). Mem-operand `label` field carries the relocation-prefixed symbol; `mem_offset=0` (the integer-offset slot is unused on this path — label substitutes). |
+| `_emit_arm64_stmt(..., opts)` + `_arm64_op_rm(..., opts)` signature lift | `compiler/codegen/arm64_darwin.hexa:1338-1342 · 1938-1942` | Threading `opts` from the codegen entry through the leaf helper. Matches D2's x86_64 lift. |
+| `_fmt_mem` honors `op.label` | `compiler/emit/asm.hexa:76-86` | When the LOperand carries a non-empty `label`, render `[mem_base.name, label]` for every target (covers both arm64 `@GOTPAGEOFF` and the future x86_64 `[rip+sym]` shape). Default integer-offset path unchanged for callers passing `label=""` (every pre-D1 call). |
+
+#### Parity, byte-eq, and honest scope
+
+- **Default-opts byte-eq theorem** (per-backend): every existing caller of
+  `codegen_{arm64_darwin,x86_64_linux}` passes `codegen_options_default()`
+  (= `{shared: 0, target_triple: ""}`). In both backends the new
+  `opts.shared == 1` branch is gated; on the baseline path neither
+  `_arm64_op_rm`/`_x86_op_rm` nor `_arm64_op_resolve`/`_x86_op_resolve`
+  reads `opts`. Therefore emit is bit-identical with the pre-D1/D2
+  output for every input on every caller. Verifiable by inspection of
+  the two `if opts.shared == 1` blocks added in this cycle.
+- **arm64 ↔ x86_64 invariant**: in `--shared` mode both backends emit a
+  single load-from-GOT sequence into a caller-provided scratch register,
+  carry the reloc kind as an `LInstr.comment` suffix `[reloc=…]`, and
+  honor the local-fn-ref baseline unchanged. The asm-text dispatcher
+  (future cycle) can compute the per-instruction reloc-kind directly
+  from the comment suffix without re-walking IR.
+- **Out of scope** (g3-honest):
+  - `.hidden` (ELF) / `.private_extern` (Mach-O) visibility directives
+    NOT emitted — the asm-text emitter does not yet have a per-function
+    visibility hook. This is **G7-A.native impl.visibility** in the
+    revised RFC 070 §4 table; the falsifier F-A2 (single-`.globl` export
+    set) stays EXPECTED-FAIL until that sub-cycle lands.
+  - F-A1 / F-A2 NOT measured on the native-codegen artifact — the
+    falsifier-on-native-emit step is **G7-A.native impl.falsify**
+    (separate sub-cycle).
+  - `_x86_op_rm` does NOT yet emit `R_X86_64_PC32` for local-symbol
+    refs in `--shared` mode (the existing `g<id>` label path is
+    sufficient under `R_X86_64_PLT32` for call sites + the linker
+    chooses absolute vs PC32 for the data half). If a future load with
+    local-fn-ref-as-data shape needs explicit PIC, that's a separate
+    refinement under `G7-A.native impl.falsify`.
+  - `self/native/hexa_v2` NOT regenerated — binary promote is the
+    standard deploy cycle per `@D g_commit_push_deploy` /
+    `@D g_inbox_processing_loop` step 7. The signature breaking change
+    (entry `+ opts`) does require a deploy cycle to land hexa_v2
+    carrying the new arity before the consumer-driven cycle (D3+) can
+    invoke `--shared` end-to-end on the native backend.
+  - `inbox/PATCHES.yaml` untouched. No worktree-other-session WIP files
+    modified.
+
+#### Parse-gate (measured)
+
+```
+hexa_real parse compiler/codegen/x86_64_linux.hexa  → OK
+hexa_real parse compiler/codegen/arm64_darwin.hexa  → OK
+hexa_real parse compiler/emit/asm.hexa              → OK
+```
+
+#### Heritage chain
+
+- A3 `0c4b91da` — RFC 070 §4.4 scaffold marker comments in both codegen
+  files (zero behavior change · landed 2026-05-20).
+- B1 `2a579ce8` — `CodegenOptions` struct + `codegen_options_default()`
+  + 5 `RELOC_*` string constants in `compiler/ir/lir.hexa` (interface
+  only).
+- C1 `06bc2ea4` — `codegen_arm64_darwin` / `codegen_x86_64_linux`
+  signatures lifted to accept `opts: CodegenOptions`; 11 callers updated
+  to pass `codegen_options_default()` (emit body byte-eq with default
+  opts; PLAN entry above L5134).
+- D1 `8fdb29e2` — arm64 emit-body delta + `emit/asm.hexa::_fmt_mem`
+  label-as-offset support (rate-limited harvest; PLAN entry **omitted at
+  the time**, restored by this consolidated record).
+- D2 (this commit) — x86_64 emit-body delta. Closes the arm64-x86_64
+  parity gap left open by D1's rate-limit truncation. RFC 070 §4
+  `G7-A.native impl` row split into iface ✅ / signature ✅ / emit-body
+  ✅ / visibility (pending) / falsify (pending).
+
+#### LoC delta
+
+```
+ compiler/codegen/x86_64_linux.hexa                                       | + 50  - 22
+ inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md             | +  5  -  1
+ compiler/PLAN.md                                                         | +175
+```
+
+cross-link: RFC 070 §4 phase table (G7-A.native impl row split into
+iface ✅ / signature ✅ / emit-body ✅ / visibility / falsify) ·
+`@D g5` hexa-native-only (the native CPU backend is the hexa-native
+path; this cycle keeps the `.dylib`/`.so` artifact under the native
+emitter rather than handing the PIC concern off to clang) ·
+`@D g3` real-limits-first (default-opts byte-eq theorem rests on
+literal-zero `opts.shared` default + gated emit branches — verifiable
+by inspection without a deploy cycle) · `@D g_plan_consolidation`
+(single per-cycle entry in `compiler/PLAN.md`) ·
+`@D g_inbox_processing_loop` Shape A (surgical SSOT edit, three files
+touched, no scaffold-only RFC churn) · `@D g_commit_push_deploy`
+(deferred — entry-arity break must be paired with a hexa_v2 regen in
+the next deploy cycle before consumers can invoke `--shared` end-to-end
+on the native backend; this cycle ships the SSOT delta only).
