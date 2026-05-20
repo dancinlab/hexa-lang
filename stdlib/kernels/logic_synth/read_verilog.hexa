@@ -1818,6 +1818,236 @@ fn _rv_parse_generate(st_in: PState, m_in: Module, tab_in: SymTab) -> RvGenStep 
 
 // ─── always-block inference (rfc_006 §4 m2, D68) ─────────────────────────
 
+// RFC 073 Phase 3a — nested-if inside for-body if. The for-body if-handler
+// (in `_rv_parse_always`) splits the if's THEN/ELSE body into statements
+// and emits one `connect_cond` row (combinational) or `$mux + $dff` pair
+// (clocked) per LHS, carrying the outer if's COND wire as the guard. When
+// a body statement is itself another `if (innercond) … [else …]`, this
+// helper composes the guard with `cond AND inner` (then-arm) or
+// `cond AND NOT inner` (else-arm) — emitting `$and` / `$logic_not` cells
+// inline — and recurses on the inner body with the composed guard. Per
+// IEEE 1364-2005 §9.4 (nested conditional statements) + Yosys
+// passes/proc/proc_mux.cc (clean-room).
+struct RvEmitRes {
+    m: Module,
+    ok: int,                                // 1 = all stmts emitted, 0 = honest-gap (drop)
+}
+
+fn _rv_emit_for_if_stmts(
+    body_toks: [str],
+    cond_wire: str,
+    m_in: Module,
+    tab: SymTab,
+    is_clocked: int,
+    clk_wire: str
+) -> RvEmitRes {
+    let mut m = m_in
+    let mut bp = 0
+    let n = len(body_toks)
+    while bp < n {
+        let t0 = body_toks[bp]
+        // skip stray separators (defensive; the splitter below produces
+        // `;`-terminated runs, but recursion may re-enter with begin/end
+        // wrappers stripped).
+        if t0 == ";" { bp = bp + 1; continue }
+        if t0 == "begin" {
+            // begin/end wrapper inside a body — strip and process inner
+            // tokens recursively at the same guard.
+            bp = bp + 1
+            let mut sd = 1
+            let mut inner_toks: [str] = []
+            while bp < n && sd > 0 {
+                let tt = body_toks[bp]
+                if tt == "begin" { sd = sd + 1 }
+                if tt == "end" {
+                    sd = sd - 1
+                    if sd == 0 { bp = bp + 1; break }
+                }
+                inner_toks = inner_toks.push(tt)
+                bp = bp + 1
+            }
+            let sub = _rv_emit_for_if_stmts(inner_toks, cond_wire, m, tab, is_clocked, clk_wire)
+            if sub.ok == 0 { return RvEmitRes { m: m_in, ok: 0 } }
+            m = sub.m
+            continue
+        }
+        if t0 == "if" {
+            // nested if — consume `( COND ) THEN [else ELSE]`
+            bp = bp + 1
+            let mut inner_cond: [str] = []
+            if bp < n && body_toks[bp] == "(" {
+                bp = bp + 1
+                let mut pd = 1
+                while bp < n {
+                    let pt = body_toks[bp]
+                    if pt == "(" { pd = pd + 1; inner_cond = inner_cond.push(pt); bp = bp + 1; continue }
+                    if pt == ")" {
+                        pd = pd - 1
+                        if pd == 0 { bp = bp + 1; break }
+                        inner_cond = inner_cond.push(pt); bp = bp + 1; continue
+                    }
+                    inner_cond = inner_cond.push(pt); bp = bp + 1
+                }
+            } else {
+                return RvEmitRes { m: m_in, ok: 0 }
+            }
+            // collect THEN-body
+            let mut then_toks: [str] = []
+            if bp < n && body_toks[bp] == "begin" {
+                bp = bp + 1
+                let mut sd = 1
+                while bp < n {
+                    let tt = body_toks[bp]
+                    if tt == "begin" { sd = sd + 1; then_toks = then_toks.push(tt); bp = bp + 1; continue }
+                    if tt == "end" {
+                        sd = sd - 1
+                        if sd == 0 { bp = bp + 1; break }
+                        then_toks = then_toks.push(tt); bp = bp + 1; continue
+                    }
+                    then_toks = then_toks.push(tt); bp = bp + 1
+                }
+            } else {
+                // single statement (could itself be a nested-if — collect
+                // up to ; OR up to a matched if-tail). Simplest: collect
+                // tokens up to `;` (terminator). Nested-if-without-begin
+                // inside is then a single `if (…) … ;` run, which the
+                // recursive call splits again.
+                while bp < n {
+                    let tt = body_toks[bp]
+                    if tt == ";" { then_toks = then_toks.push(tt); bp = bp + 1; break }
+                    then_toks = then_toks.push(tt); bp = bp + 1
+                }
+            }
+            // optional ELSE
+            let mut has_else = 0
+            let mut else_toks: [str] = []
+            if bp < n && body_toks[bp] == "else" {
+                has_else = 1
+                bp = bp + 1
+                if bp < n && body_toks[bp] == "begin" {
+                    bp = bp + 1
+                    let mut sd = 1
+                    while bp < n {
+                        let tt = body_toks[bp]
+                        if tt == "begin" { sd = sd + 1; else_toks = else_toks.push(tt); bp = bp + 1; continue }
+                        if tt == "end" {
+                            sd = sd - 1
+                            if sd == 0 { bp = bp + 1; break }
+                            else_toks = else_toks.push(tt); bp = bp + 1; continue
+                        }
+                        else_toks = else_toks.push(tt); bp = bp + 1
+                    }
+                } else {
+                    while bp < n {
+                        let tt = body_toks[bp]
+                        if tt == ";" { else_toks = else_toks.push(tt); bp = bp + 1; break }
+                        else_toks = else_toks.push(tt); bp = bp + 1
+                    }
+                }
+            }
+            // Elaborate inner cond → inner_wire. On failure, honest gap.
+            let ier = _rv_elab_expr(inner_cond, 0, m, 1, tab)
+            if len(ier.err) > 0 { return RvEmitRes { m: m_in, ok: 0 } }
+            m = ier.m
+            // Compose THEN guard = cond_wire AND ier.wire — emit $and cell
+            // unless cond_wire is empty (top-level: guard collapses to the
+            // inner cond itself; matches Phase 2 single-level behaviour).
+            let mut then_guard = ier.wire
+            if len(cond_wire) > 0 {
+                let andw = _rv_fresh_wire(m)
+                m = rtlil_module_add_wire(m, rtlil_wire(andw, 1, 0, 0))
+                let mut andc = rtlil_cell(andw + "$and", "$and", 0)
+                andc = rtlil_cell_connect(andc, "A", cond_wire)
+                andc = rtlil_cell_connect(andc, "B", ier.wire)
+                andc = rtlil_cell_connect(andc, "Y", andw)
+                m = rtlil_module_add_cell(m, andc)
+                then_guard = andw
+            }
+            // Recurse on THEN body with composed guard.
+            let then_sub = _rv_emit_for_if_stmts(then_toks, then_guard, m, tab, is_clocked, clk_wire)
+            if then_sub.ok == 0 { return RvEmitRes { m: m_in, ok: 0 } }
+            m = then_sub.m
+            // ELSE arm — guard = cond_wire AND NOT(ier.wire); when no outer
+            // guard, guard collapses to just NOT(ier.wire).
+            if has_else == 1 {
+                let notw = _rv_fresh_wire(m)
+                m = rtlil_module_add_wire(m, rtlil_wire(notw, 1, 0, 0))
+                let mut notc = rtlil_cell(notw + "$c", "$logic_not", 0)
+                notc = rtlil_cell_connect(notc, "A", ier.wire)
+                notc = rtlil_cell_connect(notc, "Y", notw)
+                m = rtlil_module_add_cell(m, notc)
+                let mut else_guard = notw
+                if len(cond_wire) > 0 {
+                    let andw2 = _rv_fresh_wire(m)
+                    m = rtlil_module_add_wire(m, rtlil_wire(andw2, 1, 0, 0))
+                    let mut andc2 = rtlil_cell(andw2 + "$and", "$and", 0)
+                    andc2 = rtlil_cell_connect(andc2, "A", cond_wire)
+                    andc2 = rtlil_cell_connect(andc2, "B", notw)
+                    andc2 = rtlil_cell_connect(andc2, "Y", andw2)
+                    m = rtlil_module_add_cell(m, andc2)
+                    else_guard = andw2
+                }
+                let else_sub = _rv_emit_for_if_stmts(else_toks, else_guard, m, tab, is_clocked, clk_wire)
+                if else_sub.ok == 0 { return RvEmitRes { m: m_in, ok: 0 } }
+                m = else_sub.m
+            }
+            continue
+        }
+        // Otherwise: must be a regular `LHS op RHS ;` statement.
+        // Collect until next `;` (matching the original splitter).
+        let mut stmt: [str] = []
+        while bp < n {
+            let tt = body_toks[bp]
+            stmt = stmt.push(tt)
+            bp = bp + 1
+            if tt == ";" { break }
+        }
+        if len(stmt) < 4 { return RvEmitRes { m: m_in, ok: 0 } }
+        if stmt[len(stmt) - 1] != ";" { return RvEmitRes { m: m_in, ok: 0 } }
+        let op = stmt[1]
+        if op != "<=" && op != "=" { return RvEmitRes { m: m_in, ok: 0 } }
+        if op == "<=" && is_clocked == 0 { return RvEmitRes { m: m_in, ok: 0 } }
+        if op == "="  && is_clocked == 1 { return RvEmitRes { m: m_in, ok: 0 } }
+        let lhs = stmt[0]
+        let mut rhs: [str] = []
+        let mut ri = 2
+        while ri < len(stmt) - 1 {
+            rhs = rhs.push(stmt[ri])
+            ri = ri + 1
+        }
+        let rer = _rv_elab_expr(rhs, 0, m, 1, tab)
+        if len(rer.err) > 0 { return RvEmitRes { m: m_in, ok: 0 } }
+        m = rer.m
+        if is_clocked == 1 {
+            // Clocked guarded write: $mux feedback-hold + $dff sink.
+            // @cite IEEE 1364-2005 §9.2 (non-blocking) + §9.4 (nested
+            // conditional) + Yosys proc_mux $mux-feedback shape.
+            let mux_y = _rv_fresh_wire(m)
+            m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+            let mux_n = "$rvmux$" + str(len(m.cells))
+            let mut mc = rtlil_cell(mux_n, "$mux", 0)
+            mc = rtlil_cell_connect(mc, "A", lhs)
+            mc = rtlil_cell_connect(mc, "B", rer.wire)
+            mc = rtlil_cell_connect(mc, "S", cond_wire)
+            mc = rtlil_cell_connect(mc, "Y", mux_y)
+            m = rtlil_module_add_cell(m, mc)
+            let dn = "$rvff$" + str(len(m.cells))
+            let mut dc = rtlil_cell(dn, "$dff", 0)
+            dc = rtlil_cell_connect(dc, "CLK", clk_wire)
+            dc = rtlil_cell_connect(dc, "D", mux_y)
+            dc = rtlil_cell_connect(dc, "Q", lhs)
+            m = rtlil_module_add_cell(m, dc)
+        } else {
+            // Combinational guarded write — emit a connect_cond row.
+            // pass_proc_mux folds multiple cond-tagged rows on the same
+            // LHS into a left-deep $mux chain. @cite IEEE 1364-2005 §9.2
+            // + §9.4 + RFC 073 §4 Phase 3a (F-RFC-RV-NESTED-IF).
+            m = rtlil_module_connect_cond(m, lhs, rer.wire, cond_wire)
+        }
+    }
+    return RvEmitRes { m: m, ok: 1 }
+}
+
 // CLEAN-ROOM: parse a Verilog `always @( SENS ) [begin] BODY [end]`
 // block and lower it to an RTLIL register/combinational cell tree.
 // SCOPE — this body landing covers the basic case yosys's `proc` pass
@@ -2924,19 +3154,58 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     f_body_end = f_body_end + 1
                 }
             } else {
-                // Single-statement body: walk until next `;` at depth 0
-                // (depth tracks `(` … `)` and `[` … `]`; the body itself
-                // contains no inner `begin`/`end` by construction).
+                // Single-statement body: walk until the structural
+                // terminator at depth 0. Depth tracks `(` … `)`,
+                // `[` … `]`, AND `begin` … `end`. The terminator is
+                // either:
+                //   (a) `;` at f_pdepth==0 and f_bdepth==0 — simple
+                //       statement end (e.g. `y = a ;`), OR
+                //   (b) `end` that drops f_bdepth from 1 → 0 AND is
+                //       NOT followed by `else` — closes a compound
+                //       statement wrapped in `begin` … `end` (e.g.
+                //       `if (c) begin … end`). Followed-by-`else`
+                //       means the if-statement continues with an
+                //       else arm; keep walking.
+                // RFC 073 Phase 3a — the begin/end depth + end-of-
+                // compound-statement detection are needed because a
+                // single-statement for-body may itself be a compound
+                // `if (c) begin … end` (or nested if-else chain
+                // wrapped in begin/end). Without this rule the first
+                // inner `;` short-circuits the span (begin/end depth
+                // absent) OR the lack of trailing `;` (begin/end depth
+                // present) walks past EOF.
                 let mut f_pdepth = 0
+                let mut f_bdepth = 0
                 while f_body_end < len(st.toks) {
                     let t = st.toks[f_body_end]
                     if t == "(" || t == "[" { f_pdepth = f_pdepth + 1 }
                     if t == ")" || t == "]" { f_pdepth = f_pdepth - 1 }
-                    if t == ";" && f_pdepth == 0 {
+                    if t == "begin" { f_bdepth = f_bdepth + 1 }
+                    if t == "end" {
+                        f_bdepth = f_bdepth - 1
+                        if f_pdepth == 0 && f_bdepth == 0 {
+                            // Include this `end` in the body span.
+                            f_body_end = f_body_end + 1
+                            // If `else` follows, the if-statement
+                            // continues — keep walking.
+                            if f_body_end < len(st.toks) && st.toks[f_body_end] == "else" {
+                                continue
+                            }
+                            break
+                        }
+                        f_body_end = f_body_end + 1
+                        continue
+                    }
+                    if t == ";" && f_pdepth == 0 && f_bdepth == 0 {
                         // Include the terminating `;` in the body span
                         // so the per-iteration parser sees a complete
                         // statement.
                         f_body_end = f_body_end + 1
+                        // If `else` follows, the if-statement
+                        // continues — keep walking.
+                        if f_body_end < len(st.toks) && st.toks[f_body_end] == "else" {
+                            continue
+                        }
                         break
                     }
                     f_body_end = f_body_end + 1
@@ -3035,132 +3304,90 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                                 bst = _ps_take(bst)
                             }
                         }
-                        // Optional `else` — Phase 2 honest gap: skip the
-                        // else arm tokens (no emit). Phase 3 will add
-                        // explicit else-default arms; T58 uses no-else
-                        // shape per RFC 073 §4 Phase 2.
+                        // Optional `else` — RFC 073 Phase 3a: collect the
+                        // else-body tokens instead of skipping. The shared
+                        // `_rv_emit_for_if_stmts` helper below recurses on
+                        // both arms, composing the outer cond with
+                        // NOT(inner) for the else-arm guard. Phase 2's
+                        // no-else shape (T58) is preserved as the
+                        // has_else=0 special case (no second helper call).
+                        let mut _f2_has_else = 0
+                        let mut _f2_else_toks: [str] = []
                         if _ps_peek(bst) == "else" {
+                            _f2_has_else = 1
                             bst = _ps_take(bst)
                             if _ps_peek(bst) == "begin" {
                                 bst = _ps_take(bst)
                                 let mut sd2 = 1
                                 while bst.pos < len(bst.toks) {
                                     let et = _ps_peek(bst)
-                                    if et == "begin" { sd2 = sd2 + 1 }
+                                    if et == "begin" {
+                                        sd2 = sd2 + 1
+                                        _f2_else_toks = _f2_else_toks.push(et)
+                                        bst = _ps_take(bst)
+                                        continue
+                                    }
                                     if et == "end" {
                                         sd2 = sd2 - 1
                                         if sd2 == 0 { bst = _ps_take(bst); break }
+                                        _f2_else_toks = _f2_else_toks.push(et)
+                                        bst = _ps_take(bst)
+                                        continue
                                     }
+                                    _f2_else_toks = _f2_else_toks.push(et)
                                     bst = _ps_take(bst)
                                 }
                             } else {
                                 while bst.pos < len(bst.toks) {
-                                    if _ps_peek(bst) == ";" { bst = _ps_take(bst); break }
+                                    let et = _ps_peek(bst)
+                                    if et == ";" {
+                                        _f2_else_toks = _f2_else_toks.push(et)
+                                        bst = _ps_take(bst)
+                                        break
+                                    }
+                                    _f2_else_toks = _f2_else_toks.push(et)
                                     bst = _ps_take(bst)
                                 }
                             }
                         }
-                        // ── Elaborate COND → cond-wire (@cite IEEE 1364-2005
-                        //    §9.2 procedural assignment; §9.4 control statements).
-                        //    On elab failure, fall back to skip-no-emit (legacy
-                        //    behaviour — preserves byte-eq with pre-Phase-2
-                        //    builds when COND has an unsupported operand).
+                        // ── Elaborate outer COND → cond-wire (@cite IEEE
+                        //    1364-2005 §9.2 procedural assignment; §9.4
+                        //    control statements / nested conditional). On
+                        //    elab failure, fall back to skip-no-emit
+                        //    (legacy behaviour — preserves byte-eq with
+                        //    pre-Phase-2 builds when COND has an
+                        //    unsupported operand).
                         let _f2_cer = _rv_elab_expr(if_cond_toks, 0, m, 1, tab)
                         if len(_f2_cer.err) == 0 {
                             m = _f2_cer.m
-                            // Split the body into `;`-terminated statements.
-                            // Each statement must match `LHS [<=|=] RHS ;`
-                            // with simple-name LHS; nested `if`/`for`, blocking-
-                            // operator-mismatch, or indexed-LHS sub-statements
-                            // are honest gaps (drop the whole if as no-emit
-                            // to preserve g3 fail-loud-or-skip discipline).
-                            let mut _f2_stmts: [[str]] = []
-                            let mut _f2_cur: [str] = []
-                            let mut _f2_si = 0
-                            while _f2_si < len(if_body_toks) {
-                                if if_body_toks[_f2_si] == ";" {
-                                    _f2_cur = _f2_cur.push(if_body_toks[_f2_si])
-                                    _f2_stmts = _f2_stmts.push(_f2_cur)
-                                    _f2_cur = []
-                                    _f2_si = _f2_si + 1
-                                    continue
-                                }
-                                _f2_cur = _f2_cur.push(if_body_toks[_f2_si])
-                                _f2_si = _f2_si + 1
-                            }
-                            // Validate every statement matches simple-LHS shape.
-                            let mut _f2_all_ok = 1
-                            if len(_f2_stmts) < 1 { _f2_all_ok = 0 }
-                            let mut _f2_sj = 0
-                            while _f2_sj < len(_f2_stmts) && _f2_all_ok == 1 {
-                                let _s = _f2_stmts[_f2_sj]
-                                if len(_s) < 4 { _f2_all_ok = 0 }
-                                if _f2_all_ok == 1 {
-                                    let _op = _s[1]
-                                    if _op != "<=" && _op != "=" { _f2_all_ok = 0 }
-                                    if _op == "<=" && is_clocked == 0 { _f2_all_ok = 0 }
-                                    if _op == "="  && is_clocked == 1 { _f2_all_ok = 0 }
-                                    if _f2_all_ok == 1 {
-                                        if _s[len(_s) - 1] != ";" { _f2_all_ok = 0 }
-                                    }
-                                }
-                                _f2_sj = _f2_sj + 1
-                            }
-                            if _f2_all_ok == 1 {
-                                let mut _f2_sk = 0
-                                while _f2_sk < len(_f2_stmts) && _f2_all_ok == 1 {
-                                    let _s = _f2_stmts[_f2_sk]
-                                    let _slhs = _s[0]
-                                    let _sop  = _s[1]
-                                    let mut _srhs: [str] = []
-                                    let mut _ri = 2
-                                    while _ri < len(_s) - 1 {
-                                        _srhs = _srhs.push(_s[_ri])
-                                        _ri = _ri + 1
-                                    }
-                                    let _ser = _rv_elab_expr(_srhs, 0, m, 1, tab)
-                                    if len(_ser.err) > 0 {
-                                        _f2_all_ok = 0
-                                    } else {
-                                        m = _ser.m
-                                        if is_clocked == 1 {
-                                            // Clocked guarded write: $mux feedback-hold
-                                            // + $dff sink. @cite IEEE 1364-2005 §9.2
-                                            // (non-blocking assignment) + Yosys
-                                            // proc_mux $mux-feedback shape.
-                                            let _mux_y = _rv_fresh_wire(m)
-                                            m = rtlil_module_add_wire(m, rtlil_wire(_mux_y, 1, 0, 0))
-                                            let _mux_n = "$rvmux$" + str(len(m.cells))
-                                            let mut _mc = rtlil_cell(_mux_n, "$mux", 0)
-                                            _mc = rtlil_cell_connect(_mc, "A", _slhs)
-                                            _mc = rtlil_cell_connect(_mc, "B", _ser.wire)
-                                            _mc = rtlil_cell_connect(_mc, "S", _f2_cer.wire)
-                                            _mc = rtlil_cell_connect(_mc, "Y", _mux_y)
-                                            m = rtlil_module_add_cell(m, _mc)
-                                            let _dn = "$rvff$" + str(len(m.cells))
-                                            let mut _dc = rtlil_cell(_dn, "$dff", 0)
-                                            _dc = rtlil_cell_connect(_dc, "CLK", clk_wire)
-                                            _dc = rtlil_cell_connect(_dc, "D", _mux_y)
-                                            _dc = rtlil_cell_connect(_dc, "Q", _slhs)
-                                            m = rtlil_module_add_cell(m, _dc)
-                                            let _eg = clk_edge
-                                        } else {
-                                            // Combinational guarded write —
-                                            // emit a connect_cond row carrying
-                                            // the COND wire name. pass_proc_mux
-                                            // (passes.hexa) folds multiple cond-
-                                            // tagged rows on the same LHS into
-                                            // a left-deep $mux chain. @cite
-                                            // IEEE 1364-2005 §9.2 + RFC 073 §4
-                                            // Phase 2.
-                                            m = rtlil_module_connect_cond(m, _slhs, _ser.wire, _f2_cer.wire)
-                                        }
-                                    }
-                                    let _ = _sop
-                                    _f2_sk = _f2_sk + 1
+                            // RFC 073 Phase 3a — recurse into THEN body
+                            // with the outer cond as guard. The helper
+                            // composes deeper guards via $and on each
+                            // nested if level. On honest-gap (unsupported
+                            // stmt shape), the helper returns ok=0 and
+                            // leaves the module unchanged — matching the
+                            // Phase 2 _f2_all_ok=0 drop-all behaviour.
+                            let _f2_then = _rv_emit_for_if_stmts(
+                                if_body_toks, _f2_cer.wire, m, tab, is_clocked, clk_wire)
+                            if _f2_then.ok == 1 {
+                                m = _f2_then.m
+                                if _f2_has_else == 1 {
+                                    // Compose NOT(outer_cond) as the else
+                                    // guard. @cite IEEE 1364-2005 §9.4
+                                    // (else-branch semantics).
+                                    let _f2_notw = _rv_fresh_wire(m)
+                                    m = rtlil_module_add_wire(m, rtlil_wire(_f2_notw, 1, 0, 0))
+                                    let mut _f2_notc = rtlil_cell(_f2_notw + "$c", "$logic_not", 0)
+                                    _f2_notc = rtlil_cell_connect(_f2_notc, "A", _f2_cer.wire)
+                                    _f2_notc = rtlil_cell_connect(_f2_notc, "Y", _f2_notw)
+                                    m = rtlil_module_add_cell(m, _f2_notc)
+                                    let _f2_else = _rv_emit_for_if_stmts(
+                                        _f2_else_toks, _f2_notw, m, tab, is_clocked, clk_wire)
+                                    if _f2_else.ok == 1 { m = _f2_else.m }
                                 }
                             }
                             let _ = if_body_has_begin
+                            let _ = clk_edge
                         }
                         // RFC 073 Phase 2 — single-statement for-body
                         // (no `begin`/`end` wrapping) terminates after
@@ -4360,6 +4587,119 @@ fn main() {
         }
         if _g2 != 1 {
             println("FAIL T58d missing cond=grant_in[2]"); fails = fails + 1
+        }
+    }
+
+    // T59 — RFC 073 Phase 3a (F-RFC-RV-NESTED-IF, 2-level no-else).
+    //   `for (i=0;i<1;i++) if (c1) if (c2) y = a;` — the inner if's
+    //   COND elaborates to `c2`'s 1-bit wire; the outer cond is `c1`'s
+    //   wire. Phase 3a composes the THEN-arm guard via `$and(c1, c2)`
+    //   and emits ONE `connect_cond` row on `y` carrying the AND-wire
+    //   as guard. Exactly one `$and` cell appears in the elaborated
+    //   module. @cite IEEE 1364-2005 §9.4 (nested conditional) + RFC
+    //   073 §4 Phase 3a falsifier battery (F-RFC-RV-NESTED-IF).
+    total = total + 1
+    let _v59 = "module n2 ( input wire c1 , input wire c2 , input wire a , output reg y ) ; integer i ; always @ ( * ) begin for ( i = 0 ; i < 1 ; i = i + 1 ) if ( c1 ) if ( c2 ) y = a ; end endmodule"
+    let _r59 = read_verilog(_v59)
+    if _r59.ok != 1 {
+        println("FAIL T59 nested_if_2lvl: " + _r59.message); fails = fails + 1
+    } else {
+        let _m59 = _r59.design.modules[0]
+        // Expect exactly 1 cond-tagged connect_cond row on y.
+        let mut _y_rows = 0
+        let mut _ci59 = 0
+        while _ci59 < len(_m59.connect_lhs) {
+            if _m59.connect_lhs[_ci59] == "y" {
+                if len(_m59.connect_cond[_ci59]) > 0 { _y_rows = _y_rows + 1 }
+            }
+            _ci59 = _ci59 + 1
+        }
+        if _y_rows != 1 {
+            println("FAIL T59a y_rows got " + str(_y_rows) + " (expected 1)")
+            fails = fails + 1
+        }
+        // Exactly 1 $and cell (the c1∧c2 guard composition).
+        if rtlil_count_cells_of_type(_m59, "$and") != 1 {
+            println("FAIL T59b and_count got " + str(rtlil_count_cells_of_type(_m59, "$and")))
+            fails = fails + 1
+        }
+        // No $logic_not — no else arm in this test.
+        if rtlil_count_cells_of_type(_m59, "$logic_not") != 0 {
+            println("FAIL T59c logic_not_count got " + str(rtlil_count_cells_of_type(_m59, "$logic_not")))
+            fails = fails + 1
+        }
+    }
+
+    // T60 — RFC 073 Phase 3a (F-RFC-RV-NESTED-IF, 2-level with else).
+    //   `for (i=0;i<1;i++) if (c1) begin if (c2) y = a; else y = b; end`
+    //   — the inner if has both arms. Phase 3a emits two `connect_cond`
+    //   rows on y: one guarded by `$and(c1, c2)` for `a`, one guarded
+    //   by `$and(c1, $logic_not(c2))` for `b`. Cells: 2× `$and`, 1×
+    //   `$logic_not`. @cite IEEE 1364-2005 §9.4 (if-else-with-else).
+    total = total + 1
+    let _v60 = "module n2e ( input wire c1 , input wire c2 , input wire a , input wire b , output reg y ) ; integer i ; always @ ( * ) begin for ( i = 0 ; i < 1 ; i = i + 1 ) if ( c1 ) begin if ( c2 ) y = a ; else y = b ; end end endmodule"
+    let _r60 = read_verilog(_v60)
+    if _r60.ok != 1 {
+        println("FAIL T60 nested_if_2lvl_else: " + _r60.message); fails = fails + 1
+    } else {
+        let _m60 = _r60.design.modules[0]
+        let mut _y_rows60 = 0
+        let mut _ci60 = 0
+        while _ci60 < len(_m60.connect_lhs) {
+            if _m60.connect_lhs[_ci60] == "y" {
+                if len(_m60.connect_cond[_ci60]) > 0 { _y_rows60 = _y_rows60 + 1 }
+            }
+            _ci60 = _ci60 + 1
+        }
+        if _y_rows60 != 2 {
+            println("FAIL T60a y_rows got " + str(_y_rows60) + " (expected 2)")
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m60, "$and") != 2 {
+            println("FAIL T60b and_count got " + str(rtlil_count_cells_of_type(_m60, "$and")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m60, "$logic_not") != 1 {
+            println("FAIL T60c logic_not_count got " + str(rtlil_count_cells_of_type(_m60, "$logic_not")))
+            fails = fails + 1
+        }
+    }
+
+    // T61 — RFC 073 Phase 3a (F-RFC-RV-NESTED-IF, 3-level no-else).
+    //   `for (i=0;i<1;i++) if (c1) if (c2) if (c3) y = a;` — three
+    //   nested ifs, no else. Phase 3a composes guards left-deep:
+    //   level 1 = c1, level 2 = $and(c1, c2), level 3 = $and(prev, c3).
+    //   Exactly 2 `$and` cells emerge (one per composition step; the
+    //   innermost cond is consumed directly into the second $and's B
+    //   input — no $and for the c1-alone level since it's the bare
+    //   outer cond wire). One `connect_cond` row on y.
+    total = total + 1
+    let _v61 = "module n3 ( input wire c1 , input wire c2 , input wire c3 , input wire a , output reg y ) ; integer i ; always @ ( * ) begin for ( i = 0 ; i < 1 ; i = i + 1 ) if ( c1 ) if ( c2 ) if ( c3 ) y = a ; end endmodule"
+    let _r61 = read_verilog(_v61)
+    if _r61.ok != 1 {
+        println("FAIL T61 nested_if_3lvl: " + _r61.message); fails = fails + 1
+    } else {
+        let _m61 = _r61.design.modules[0]
+        let mut _y_rows61 = 0
+        let mut _ci61 = 0
+        while _ci61 < len(_m61.connect_lhs) {
+            if _m61.connect_lhs[_ci61] == "y" {
+                if len(_m61.connect_cond[_ci61]) > 0 { _y_rows61 = _y_rows61 + 1 }
+            }
+            _ci61 = _ci61 + 1
+        }
+        if _y_rows61 != 1 {
+            println("FAIL T61a y_rows got " + str(_y_rows61) + " (expected 1)")
+            fails = fails + 1
+        }
+        // Two composition steps → two $and cells.
+        if rtlil_count_cells_of_type(_m61, "$and") != 2 {
+            println("FAIL T61b and_count got " + str(rtlil_count_cells_of_type(_m61, "$and")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m61, "$logic_not") != 0 {
+            println("FAIL T61c logic_not_count got " + str(rtlil_count_cells_of_type(_m61, "$logic_not")))
+            fails = fails + 1
         }
     }
 
