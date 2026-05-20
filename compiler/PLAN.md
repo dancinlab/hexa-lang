@@ -4125,3 +4125,75 @@ current main, repeat per file. This was the pattern that closed
 all 3 PRs cleanly (#117 + #121 + #123).
 
 cross-link: inbox/notes/2026-05-20-rfc055-p4-followons-v2-closure.md
+
+### 2026-05-20 — RFC 067 + 068 + 069 — 3 Shape-B drafts LANDED (next layer = P1 implementations)
+
+Three Shape-B "RFC drafted + scaffold marker" cycles for the deferred
+follow-on follow-ons named in the 2026-05-20 §12 P4+ closure note
+(#127). Each was a single-commit zero-behavior-change PR per the Shape-
+B SOP (`@D g_inbox_processing_loop`): RFC file in
+`inbox/rfc_drafts_2026_05_20/` + RFC-comment-marker on the relevant
+codegen seam + parse-gate + regression smoke (lower_test 13/13 PASS).
+
+PRs landed (admin-squash, branch deleted):
+- #138 — RFC 067 Real WMMA PTX emit (Shape-B scaffold)
+  • Successor to PR #121 (MMA scaffold).
+  • inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md (+199 lines)
+  • 2 marker comments in nvptx_target.hexa (mnemonic-table seam +
+    NVPTX_RKIND_FRAG seam).
+  • Phasing P0..P5: P1 fragment-as-tile-vector, P2 .shared decl,
+    P3 per-fragment dtype + layout, P4 tile-loop integration (first
+    GPU fire), P5 multi-family bf16 + f16-accum (deferred).
+  • Falsifiers F1..F6 (F4 = TILE-LOOP-NUMERIC, real-silicon ≤1e-2
+    rel error vs FP64 baseline).
+- #140 — RFC 068 Mixed-precision MIR layer (Shape-B scaffold)
+  • Successor to PR #123 (mixed-precision scaffold).
+  • inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md
+    (+198 lines)
+  • 2 marker comments (hir_to_mir.hexa binop seam + nvptx_target.hexa
+    STMT_BINOP body branch).
+  • Phasing P0..P5: P1 per-Local precision-tag thread (HIR→MIR), P2
+    STMT_BINOP op-name generation from precision, P3 body lowering
+    (add.f16/.bf16/.f32 mnemonics), P4 numeric falsifier (first GPU
+    fire, ≤2× f16-ULP), P5 mixed-family arithmetic (deferred).
+- #141 — RFC 069 Advanced loop unroll (Shape-B scaffold)
+  • Successor to PR #117 (unroll MVP).
+  • inbox/rfc_drafts_2026_05_20/rfc_069_unroll_advanced.md (+199 lines)
+  • 1 marker comment (_nvptx_unroll_pass public entry).
+  • Phasing P0..P5: P1 factor parameterization (factor=N), P2 multi-
+    exit recognition, P3 nested-loop preservation (1-level depth),
+    P4 numeric falsifier (byte-eq output, first GPU fire), P5
+    deferred (deeper nesting + while-with-early-return + irregular
+    back-edges).
+  • Unique F7: PASSTHROUGH-PRESERVED — every RFC 069 cycle MUST keep
+    PR #117's Case 11 (non-matching CFG passthrough) byte-identical.
+
+Quality gates (all 3 PRs):
+- Parse-gate clean (`hexa_real parse` on every modified file).
+- nvptx_lower_test regression 13/13 PASS (markers are comment-only).
+- @D g_commit_push_deploy — no `self/codegen_c2.hexa` change → no
+  bootstrap regen required for any of the 3.
+- F5 NO-LLVM-NO-CTRANS + F6 CPU-CODEGEN-UNTOUCHED continuous gates
+  begin on every draft (zero LLVM/clang-target-nvptx repo-wide; CPU
+  codegen byte-identical).
+
+Honest scope (`@D g3`) — none of the 3 PRs claim implementation:
+- Each RFC §7 explicitly states "closure of THIS RFC = P4 numeric
+  falsifier PASS on real silicon". P1..P4 are subsequent cycles.
+- The 3 drafts give the 3 deferred items from #127 closure note a
+  written plan + falsifier battery + marker seam — they do NOT
+  implement WMMA / mixed-precision / advanced unroll.
+
+Next layer = P1 implementation cycles. Each P1 lands working code
+(not a doc + marker), measured against the F1 falsifier of its
+respective RFC. P1 lands cannot be batched in a single autonomous
+session — each carries data-model changes (fragment-vector PReg
+extension; Local.precision field) and per-cycle byte-eq + parse
+gates that warrant a focused implementation pass.
+
+Cumulative drafts: 3 RFCs (067 + 068 + 069), 4 marker comments,
++597 RFC text lines. Today's full §12 P4+ arc (closure + 3 drafts):
+4 PRs across two doc-only batches (#127 closure + #138/#140/#141
+drafts).
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md
