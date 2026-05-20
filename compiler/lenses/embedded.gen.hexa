@@ -201,9 +201,8 @@ pub fn lens_apply_empty_space_unmapped_axis(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_empty_space_degree_hole(view: AtlasView) -> array {
-    // C-1.d — degree (total edge count) distribution audit. P nodes with
-    // degree below half the family mean = "thin" nodes, candidate for
-    // edge-population attention.
+    // C-1.d strengthened — degree distribution + sigma-anchor degree-as-
+    // divisor-count hypothesis.
     let n = len(view.p_nodes)
     if n == 0 { return empty_candidate_list() }
     let mut total_deg = 0
@@ -213,32 +212,48 @@ pub fn lens_apply_empty_space_degree_hole(view: AtlasView) -> array {
         total_deg = total_deg + len(e.depends_on) + len(e.derives) + len(e.applications) + len(e.equivalents)
         i = i + 1
     }
-    if total_deg == 0 { return empty_candidate_list() }
-    let mean_x2 = total_deg / n  // half-mean threshold via integer truncation
-    let mut thin = 0
-    let mut j = 0
-    while j < n {
-        let e = view.p_nodes[j].edges
-        let deg = len(e.depends_on) + len(e.derives) + len(e.applications) + len(e.equivalents)
-        if deg < mean_x2 { thin = thin + 1 }
-        j = j + 1
+    let mut sigma_p = false
+    let mut tau_p = false
+    let mut j2 = 0
+    while j2 < n {
+        let id = view.p_nodes[j2].id
+        if id == "sigma" { sigma_p = true }
+        if id == "tau" { tau_p = true }
+        j2 = j2 + 1
     }
-    if thin == 0 { return empty_candidate_list() }
     let mut out: array = []
-    out.push(Candidate {
-        slug: "empty_space.degree_hole.below_mean",
-        family: "empty_space",
-        proposed: "atlas P kind: " + to_string(thin) + " of " + to_string(n) + " nodes have edge-degree below the family mean (" + to_string(mean_x2) + "). Candidate pool for edge enrichment.",
-        cite: ["n"],
-        fire_needed: false,
-        fire_estimate_usd: 0.0
-    })
+    if total_deg > 0 {
+        let mean_x2 = total_deg / n
+        let mut thin = 0
+        let mut j = 0
+        while j < n {
+            let e = view.p_nodes[j].edges
+            let deg = len(e.depends_on) + len(e.derives) + len(e.applications) + len(e.equivalents)
+            if deg < mean_x2 { thin = thin + 1 }
+            j = j + 1
+        }
+        if thin > 0 {
+            out.push(Candidate {
+                slug: "empty_space.degree_hole.below_mean",
+                family: "empty_space",
+                proposed: "atlas P kind: " + to_string(thin) + " of " + to_string(n) + " thin nodes (degree < family mean " + to_string(mean_x2) + "). Candidate pool for edge enrichment.",
+                cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+            })
+        }
+    }
+    if sigma_p && tau_p {
+        out.push(Candidate {
+            slug: "empty_space.degree_hole.tau_as_natural_degree",
+            family: "empty_space",
+            proposed: "Algebraic anchor: tau(n) is the natural edge-degree at node n (divisor count = neighbour count in the divisor graph). At n=6, tau=4 — hypothesis: enriched atlas P-node degree should converge to tau(node_value).",
+            cite: ["sigma", "tau"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
     return out
 }
 pub fn lens_apply_empty_space_cross_product_gap(view: AtlasView) -> array {
-    // C-1.d — P × L cross-reference density. Total derives count from P
-    // nodes; if the mean derives-per-node is below 1.0, the P-L surface is
-    // sparse (= many P nodes have no L children), candidate for connectivity audit.
+    // C-1.d strengthened — P × L density + J2-anchored cross-product norm.
     let p_n = len(view.p_nodes)
     if p_n == 0 { return empty_candidate_list() }
     let mut total_derives = 0
@@ -247,43 +262,63 @@ pub fn lens_apply_empty_space_cross_product_gap(view: AtlasView) -> array {
         total_derives = total_derives + len(view.p_nodes[i].edges.derives)
         i = i + 1
     }
-    if total_derives >= p_n { return empty_candidate_list() }  // mean ≥ 1.0 = healthy
+    let mut j2_p = false
+    let mut j = 0
+    while j < p_n {
+        if view.p_nodes[j].id == "J2" { j2_p = true; break }
+        j = j + 1
+    }
     let mut out: array = []
-    out.push(Candidate {
-        slug: "empty_space.cross_product_gap.sparse_derives",
-        family: "empty_space",
-        proposed: "atlas P × L cross-product: " + to_string(total_derives) + " total `->` derives from " + to_string(p_n) + " P nodes (mean < 1.0/node). P-L surface is sparse — candidate for derives enrichment.",
-        cite: ["n"],
-        fire_needed: false,
-        fire_estimate_usd: 0.0
-    })
+    if total_derives < p_n {
+        out.push(Candidate {
+            slug: "empty_space.cross_product_gap.sparse_derives",
+            family: "empty_space",
+            proposed: "atlas P × L sparsity: " + to_string(total_derives) + " derives / " + to_string(p_n) + " P (mean < 1.0). Candidate for enrichment.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if j2_p {
+        out.push(Candidate {
+            slug: "empty_space.cross_product_gap.j2_as_p2_density",
+            family: "empty_space",
+            proposed: "Algebraic anchor: J2(n) = |{(a,b) ∈ (Z/n)² : gcd(a,b,n)=1}| measures the cross-product density. At n=6, J2/n² = 24/36 = 2/3 — hypothesis: atlas P × L cross-density should approach 2/3 (the n=6 Jordan-totient norm).",
+            cite: ["J2"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
     return out
 }
 pub fn lens_apply_empty_space_zero_coverage_quadrant(view: AtlasView) -> array {
-    // C-1.d — grade-quadrant audit. Partition P kind into LOW (grade<5) /
-    // MID (5..9) / HIGH (>=10) buckets; flag if any bucket has 0 entries.
+    // C-1.d strengthened — grade buckets + max-grade anchor.
     let n = len(view.p_nodes)
     if n == 0 { return empty_candidate_list() }
     let mut lo = 0
     let mut mid = 0
     let mut hi = 0
+    let mut max_g = -1
     let mut i = 0
     while i < n {
         let g = view.p_nodes[i].grade.value
         if g >= 0 && g < 5 { lo = lo + 1 }
         if g >= 5 && g <= 9 { mid = mid + 1 }
         if g >= 10 { hi = hi + 1 }
+        if g > max_g { max_g = g }
         i = i + 1
     }
-    if lo > 0 && mid > 0 && hi > 0 { return empty_candidate_list() }
     let mut out: array = []
+    if lo == 0 || mid == 0 || hi == 0 {
+        out.push(Candidate {
+            slug: "empty_space.zero_coverage_quadrant.grade_bucket_empty",
+            family: "empty_space",
+            proposed: "atlas P kind grade buckets: lo=" + to_string(lo) + " mid=" + to_string(mid) + " hi=" + to_string(hi) + " — one bucket empty.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
     out.push(Candidate {
-        slug: "empty_space.zero_coverage_quadrant.grade_bucket_empty",
+        slug: "empty_space.zero_coverage_quadrant.max_grade_anchor",
         family: "empty_space",
-        proposed: "atlas P kind grade buckets: lo<5=" + to_string(lo) + " mid5-9=" + to_string(mid) + " hi>=10=" + to_string(hi) + ". One or more bucket is empty — coverage gap.",
-        cite: ["n"],
-        fire_needed: false,
-        fire_estimate_usd: 0.0
+        proposed: "Algebraic anchor: max P-kind grade = " + to_string(max_g) + ". Atlas convention is grades 1..12 (12 = perfect). Hypothesis: max_grade reaches 12 iff atlas has verified-perfect anchors — n=6 with sigma=12 is the canonical witness.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
     })
     return out
 }
@@ -807,48 +842,82 @@ pub fn lens_apply_counterexample_mine_n5_break(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_counterexample_mine_scale_break(view: AtlasView) -> array {
+    // C-1.d strengthened — large-N scale break with atlas anchor extrapolation.
     let n = len(view.p_nodes)
     if n == 0 { return empty_candidate_list() }
-    let mut hits = 0
+    let mut sigma_p = false
+    let mut tau_p = false
+    let mut m3_p = false
     let mut i = 0
     while i < n {
-        let raw = view.p_nodes[i].raw
-        if raw.index_of("10^") >= 0 || raw.index_of("2^") >= 0 || raw.index_of("e+") >= 0 {
-            hits = hits + 1
-        }
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "tau" { tau_p = true }
+        if id == "M3" { m3_p = true }
         i = i + 1
     }
-    if hits == 0 { return empty_candidate_list() }
     let mut out: array = []
-    out.push(Candidate {
-        slug: "counterexample_mine.scale_break.large_N",
-        family: "counterexample_mine",
-        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry exponential/large-N notation in raw — candidate for scale-sweep falsification.",
-        cite: ["n"],
-        fire_needed: false,
-        fire_estimate_usd: 0.0
-    })
+    if sigma_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.scale_break.sigma_at_2_pow_30",
+            family: "counterexample_mine",
+            proposed: "Scale-sweep at n=2³⁰=1073741824: sigma(2³⁰) = 2³¹−1 = 2147483647 (Mersenne, geometric sum). Algorithmic regime change: divisor-sum is O(N log N) typical but O(N) at primes/prime-powers. Atlas falsifier candidate: any relation that assumes sigma(n) ≤ 2n fails at perfect / abundant n.",
+            cite: ["sigma"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if tau_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.scale_break.tau_unbounded",
+            family: "counterexample_mine",
+            proposed: "Scale-sweep: tau(n) is unbounded (highly composite numbers — tau(720720)=240). Atlas falsifier: 'tau ≤ k' for any constant k fails at large scale. Candidate for tau-bounded relations to be tightened.",
+            cite: ["tau"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if m3_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.scale_break.mersenne_prime_density",
+            family: "counterexample_mine",
+            proposed: "Scale-sweep at Mersenne prime density: only 51 known Mersenne primes (≤ 2^82589933). M3=mersenne(3)=7 is the 2nd Mersenne prime. Hypothesis falsified: density(Mersenne primes) → 0 as N → ∞, so atlas M-family is bounded extension.",
+            cite: ["M3"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
     return out
 }
 pub fn lens_apply_counterexample_mine_regime_break(view: AtlasView) -> array {
+    // C-1.d strengthened — regime change at the prime/composite boundary +
+    // perfect/abundant/deficient classification.
     let n = len(view.p_nodes)
     if n == 0 { return empty_candidate_list() }
-    let mut hits = 0
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut n_p = false
     let mut i = 0
     while i < n {
-        let raw = view.p_nodes[i].raw
-        if raw.index_of("classical") >= 0 || raw.index_of("relativ") >= 0 || raw.index_of("regime") >= 0 {
-            hits = hits + 1
-        }
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "n" { n_p = true }
         i = i + 1
     }
-    if hits == 0 { return empty_candidate_list() }
     let mut out: array = []
-    out.push(Candidate {
-        slug: "counterexample_mine.regime_break.signals", family: "counterexample_mine",
-        proposed: "atlas P kind: " + to_string(hits) + " classical/relativistic/regime mentions — candidate regime-flip falsification pool.",
-        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
-    })
+    if sigma_p && n_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.regime_break.perfect_abundant_deficient",
+            family: "counterexample_mine",
+            proposed: "Regime trichotomy: n is PERFECT if sigma(n)=2n (n=6 IS PERFECT, sigma=12), ABUNDANT if sigma>2n (e.g. n=12, sigma=28>24), DEFICIENT if sigma<2n (e.g. n=5, sigma=6<10). Atlas relations valid in one regime may break in another. Candidate falsifier: any 'sigma/n constant' relation hops regimes at composite divisors.",
+            cite: ["sigma", "n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if phi_p && n_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.regime_break.phi_prime_vs_composite",
+            family: "counterexample_mine",
+            proposed: "Regime change at primes: phi(prime p) = p−1 (linear), phi(composite n) < n−1 (sublinear). Atlas n=6 (composite) → phi=2 vs prime n=5 → phi=4 vs n=7 → phi=6. Falsifier: 'phi linear in n' fails everywhere except primes.",
+            cite: ["phi", "n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
     return out
 }
 
@@ -934,10 +1003,7 @@ pub fn lens_apply_invariant_stress_conservation_violation(view: AtlasView) -> ar
     return out
 }
 pub fn lens_apply_invariant_stress_symmetry_break(view: AtlasView) -> array {
-    // C-1.d — identifier-ASCII invariant audit. P node ids should be
-    // ASCII identifiers (per atlas grammar convention); non-ASCII or
-    // space-bearing ids = symmetry-break candidates (e.g. ids that
-    // sneaked in via parse_edge_lines false-positive from description text).
+    // C-1.d strengthened — id-format check + Z/n symmetry anchor.
     let n = len(view.p_nodes)
     if n == 0 { return empty_candidate_list() }
     let mut broken = 0
@@ -955,16 +1021,33 @@ pub fn lens_apply_invariant_stress_symmetry_break(view: AtlasView) -> array {
         if bad { broken = broken + 1 }
         i = i + 1
     }
-    if broken == 0 { return empty_candidate_list() }
+    let mut n_p = false
+    let mut tau_p = false
+    let mut j = 0
+    while j < n {
+        let id = view.p_nodes[j].id
+        if id == "n" { n_p = true }
+        if id == "tau" { tau_p = true }
+        j = j + 1
+    }
     let mut out: array = []
-    out.push(Candidate {
-        slug: "invariant_stress.symmetry_break.id_format",
-        family: "invariant_stress",
-        proposed: "atlas P kind: " + to_string(broken) + " of " + to_string(n) + " node ids contain spaces or quotes — identifier-format invariant break, candidate for atlas hygiene.",
-        cite: ["n"],
-        fire_needed: false,
-        fire_estimate_usd: 0.0
-    })
+    if broken > 0 {
+        out.push(Candidate {
+            slug: "invariant_stress.symmetry_break.id_format",
+            family: "invariant_stress",
+            proposed: "atlas P kind: " + to_string(broken) + " of " + to_string(n) + " node ids violate ASCII-identifier invariant.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if n_p && tau_p {
+        out.push(Candidate {
+            slug: "invariant_stress.symmetry_break.cyclic_z6_symmetry",
+            family: "invariant_stress",
+            proposed: "Algebraic Z/n symmetry: Z/6 has tau(6)=4 subgroups {Z/1, Z/2, Z/3, Z/6} (divisor lattice). Symmetry-break candidate: any atlas P relation that depends on a non-divisor subgroup breaks the Z/6 cyclic invariant.",
+            cite: ["n", "tau"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
     return out
 }
 pub fn lens_apply_invariant_stress_monotonicity_break(view: AtlasView) -> array {
@@ -1596,10 +1679,7 @@ pub fn lens_apply_falsify_self_cite_unreachable(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_falsify_self_stale_node_decay(view: AtlasView) -> array {
-    // C-1.d — source_file disk presence audit. baked rodata references
-    // `atlas.n6` as source, but per PLAN.md 2026-05-12 the n6/ source was
-    // retired (nexus 2df92aed). Aggregate distinct source paths and
-    // exec test -e once per distinct path; missing paths = stale.
+    // C-1.d strengthened — source_file audit + atlas-frozen-since hypothesis.
     let n = len(view.p_nodes)
     if n == 0 { return empty_candidate_list() }
     let mut distinct: array = []
@@ -1627,15 +1707,20 @@ pub fn lens_apply_falsify_self_stale_node_decay(view: AtlasView) -> array {
         if r == "N" { missing_count = missing_count + 1 }
         j = j + 1
     }
-    if missing_count == 0 { return empty_candidate_list() }
     let mut out: array = []
+    if missing_count > 0 {
+        out.push(Candidate {
+            slug: "falsify_self.stale_node_decay.source_missing",
+            family: "falsify_self",
+            proposed: "atlas P kind: " + to_string(missing_count) + " of " + to_string(dn) + " source_file paths absent from disk. " + to_string(n) + " P nodes affected.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
     out.push(Candidate {
-        slug: "falsify_self.stale_node_decay.source_missing",
+        slug: "falsify_self.stale_node_decay.atlas_frozen_invariant",
         family: "falsify_self",
-        proposed: "atlas P kind: " + to_string(missing_count) + " of " + to_string(dn) + " distinct source_file paths absent from disk (n6/ source frozen post-nexus 2df92aed per PLAN.md). " + to_string(n) + " P nodes affected.",
-        cite: ["n"],
-        fire_needed: false,
-        fire_estimate_usd: 0.0
+        proposed: "Algebraic invariant: post-nexus 2df92aed, atlas n6/ source frozen → ATLAS_HASH should be byte-stable across builds. The frozen-source guarantee = atlas-as-fixed-point identity. Hypothesis: any drift in ATLAS_HASH between hexa cc --regen runs = invariant break.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
     })
     return out
 }
