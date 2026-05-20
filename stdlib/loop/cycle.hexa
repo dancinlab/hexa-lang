@@ -175,10 +175,27 @@ fn cycle_draft(cands: array, dry_run: bool) {
     // candidates land in inbox/* for human review and `hexa atlas pr`
     // / `hexa lens pr` to fold into the binary built-in.
     let _ = exec("mkdir -p inbox/atlas_candidates")
+    let mut seen_slugs: array = []
     let mut i = 0
     let mut written = 0
+    let mut dedup_skipped = 0
     while i < n {
         let c = cands[i]
+        // dedup within this cycle — multi-lens emit of the same slug
+        // would otherwise overwrite each other on the file system.
+        let sn = len(seen_slugs)
+        let mut dup = false
+        let mut sk = 0
+        while sk < sn {
+            if seen_slugs[sk] == c.slug { dup = true; break }
+            sk = sk + 1
+        }
+        if dup {
+            dedup_skipped = dedup_skipped + 1
+            i = i + 1
+            continue
+        }
+        seen_slugs.push(c.slug)
         // build cite csv
         let mut cite_str = ""
         let cn = len(c.cite)
@@ -202,7 +219,7 @@ fn cycle_draft(cands: array, dry_run: bool) {
         written = written + 1
         i = i + 1
     }
-    println("  [6/8 DRAFT]   " + to_string(written) + " candidate(s) -> inbox/atlas_candidates/<slug>.md")
+    println("  [6/8 DRAFT]   " + to_string(written) + " candidate(s) -> inbox/atlas_candidates/<slug>.md (dedup skipped " + to_string(dedup_skipped) + ")")
 }
 
 fn cycle_audit(cands: array, cycle_no: int) {
