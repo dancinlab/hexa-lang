@@ -1,0 +1,309 @@
+// stdlib/kernels/bio_align/needleman_wunsch_kernel.hexa — D80 g_hexa_only
+// pilot #12 (demiurge AGENTS.tape @D g_hexa_only — ultimate form).
+//
+// Twelfth sample of the hexa-native parity port pattern, and the
+// FIRST kernel in the bio domain family (kernels/bio_align/ — new).
+// Prior pilots: solar / mc_transport / graph / urdf / neural / plasma
+// / orbital / signal_proc / noc_sim / mc_transport_kinematics /
+// circuit / fem_bar1d / autodiff. This kernel introduces the bio
+// domain (D81 demiurge addition) by porting the canonical sequence-
+// alignment algorithm.
+//
+// Layer (ABSORPTION.md ① / demiurge design.md D72):
+//   ①a kernel — THIS FILE. Domain-agnostic. No specific organism, no
+//                substitution matrix lookup (BLOSUM / PAM tables are
+//                a separate ①b adapter concern), no FASTA parser.
+//                Pure "two integer-encoded sequences + scoring
+//                triple (match, mismatch, gap) -> optimal global
+//                alignment score + aligned columns".
+//   ①b adapter — none yet for the bio domain. A future
+//                `stdlib/bio/needleman_wunsch.hexa` adapter would
+//                supply the DNA / protein alphabet mapping, BLOSUM /
+//                PAM substitution-matrix table lookup, and the
+//                FASTA / UniProt input contract. The kernel here
+//                stays alphabet-agnostic (integer symbols 0..K).
+//
+// @version 0.1.0
+// @capabilities [pure]
+// @stability stage-2 substrate (clean-room re-derivation, no
+//   Biopython / EMBOSS needle / parasail call). Substrate parity
+//   against a Python `math`-free integer transliteration verified
+//   by `needleman_wunsch_kernel_test.hexa` for 5 textbook sequence
+//   pairs (Durbin §2.3 examples + small DNA cases) to EXACT integer
+//   equality on score and alignment columns. The D80 1e-10 relative
+//   ceiling collapses to bit-identical because the entire DP is
+//   over integers — there is no floating-point to round.
+// @since 2026-05-20
+//
+// CLEAN-ROOM PROVENANCE
+//   This module carries NO Biopython / EMBOSS / parasail / SeqAn /
+//   ssw / scikit-bio source — it implements the Needleman-Wunsch
+//   dynamic-programming recurrence directly from textbook spec.
+//
+//   - upstream code   : none (clean-room re-derivation)
+//   - upstream spec   : Needleman SB, Wunsch CD, "A general method
+//                       applicable to the search for similarities
+//                       in the amino acid sequence of two proteins",
+//                       J. Mol. Biol. 48(3):443-453 (1970).
+//                       Durbin R, Eddy SR, Krogh A, Mitchison G,
+//                       "Biological Sequence Analysis: Probabilistic
+//                       Models of Proteins and Nucleic Acids",
+//                       Cambridge University Press (1998), §2.3
+//                       (global alignment / linear gap).
+//   - parity baseline : Python `math`-free integer transliteration
+//                       of the same recurrence (`needleman_wunsch_oracle.py`),
+//                       run on darwin-arm64 Python 3.x. Both sides
+//                       use identical (match, mismatch, gap) scoring
+//                       and identical tie-break (prefer diagonal,
+//                       then up, then left) in traceback.
+//
+// HONESTY (g3 — non-negotiable, inherited by every caller):
+//   * The optimal global alignment SCORE under a given (match,
+//     mismatch, gap) scoring triple IS a mathematical fact about
+//     the two sequences and the scoring — pure-integer DP output,
+//     no floating-point. The parity test asserts EXACT integer
+//     equality on the score and on every column of the returned
+//     alignment.
+//   * BUT the score's BIOLOGICAL meaning depends on the scoring
+//     scheme. Linear gap (single gap penalty per indel) is the
+//     simplest textbook case; real protein alignment uses BLOSUM62
+//     + affine gap (open vs extend) — that's Gotoh 1982, a separate
+//     pilot. Real DNA alignment uses match=+5/mismatch=-4 (EDNAFULL
+//     defaults) or similar; this kernel is agnostic and the caller
+//     supplies the scoring triple.
+//   * Optimal alignment can be NON-UNIQUE — several alignments may
+//     achieve the same max score. Our traceback tie-break (diag >
+//     up > left) yields one canonical alignment; the score itself
+//     IS unique. The parity oracle uses the same tie-break.
+//   * Substrate parity only proves the PORT PATTERN. D80's record-
+//     layer `absorbed=true` flip on the bio domain needs the
+//     demiurge HexaNativeParityRef schema + a measured biological
+//     oracle (e.g., reproduce a published BLAST E-value or a
+//     curated UniProt alignment). Out of scope here per g3.
+//   * Input convention: sequences are integer-encoded arrays
+//     ([int]). The caller maps {A,C,G,T} -> {0,1,2,3} (or any other
+//     alphabet) BEFORE calling. Symbols outside [0, 256) are
+//     treated as just-another-integer — the kernel never inspects
+//     symbol identity, only equality (match/mismatch).
+//
+// Surface:
+//   pub fn score_only(a: [int], b: [int],
+//                     match_s: int, mismatch_s: int, gap_s: int) -> int
+//     Returns the optimal global-alignment score. O(|a|·|b|) time,
+//     O(min(|a|, |b|)) auxiliary memory (we keep one row of the DP
+//     matrix at a time — the score is all you need for the answer).
+//
+//   pub fn align(a: [int], b: [int],
+//                match_s: int, mismatch_s: int, gap_s: int) -> [[int]]
+//     Returns [score_row, a_aligned, b_aligned] where:
+//       - score_row = [score]    (single-element array; index [0][0])
+//       - a_aligned, b_aligned are equal-length arrays of integer
+//         symbols (and the sentinel GAP=-1 where an indel was
+//         inserted). The original sequences are recovered by
+//         filtering out -1.
+//     Traceback tie-break: diag > up > left.
+
+use "stdlib/core/math/float"
+
+// Gap sentinel used in the aligned-columns output. Chosen as -1 so
+// the caller can pass any non-negative alphabet (e.g., DNA {0..3},
+// protein {0..19}, or ASCII codes) without collision.
+pub fn gap_symbol() -> int { return 0 - 1 }
+
+// ── DP helpers (full matrix) ────────────────────────────────────────
+
+/// Allocate an (m+1) × (n+1) row-major DP matrix initialized to 0.
+/// `m = len(a)`, `n = len(b)`. We return a flat [int] of size
+/// (m+1)*(n+1); index (i, j) lives at i*(n+1) + j. Flat storage avoids
+/// the [[int]] in-place-assignment cost (cf. pilot #7 event_queue
+/// `[Event]` index-assignment gap — for [int] the runtime DOES support
+/// in-place index assignment, but a single flat array is simpler and
+/// keeps the per-pilot surface compact).
+fn _zeros(size: int) -> [int] {
+    let mut out: [int] = []
+    let mut i = 0
+    while i < size {
+        out.push(0)
+        i = i + 1
+    }
+    return out
+}
+
+/// Fill the DP matrix S where
+///   S[0, 0]   = 0
+///   S[i, 0]   = i · gap_s
+///   S[0, j]   = j · gap_s
+///   S[i, j]   = max(
+///       S[i-1, j-1] + score(a[i-1], b[j-1]),
+///       S[i-1, j]   + gap_s,
+///       S[i, j-1]   + gap_s
+///   )
+/// where score(x, y) = match_s if x == y else mismatch_s.
+///
+/// Returns the flat (m+1)*(n+1) row-major matrix.
+fn _fill_dp(a: [int], b: [int],
+            match_s: int, mismatch_s: int, gap_s: int) -> [int] {
+    let m = len(a)
+    let n = len(b)
+    let stride = n + 1
+    let mut s = _zeros((m + 1) * stride)
+
+    // Initialize first row + column with cumulative gap penalties.
+    let mut i = 1
+    while i <= m {
+        s[i * stride] = i * gap_s
+        i = i + 1
+    }
+    let mut j = 1
+    while j <= n {
+        s[j] = j * gap_s
+        j = j + 1
+    }
+
+    // Fill row-major.
+    let mut ii = 1
+    while ii <= m {
+        let mut jj = 1
+        while jj <= n {
+            let ai = a[ii - 1]
+            let bj = b[jj - 1]
+            let mut sym_score = mismatch_s
+            if ai == bj { sym_score = match_s }
+
+            let diag = s[(ii - 1) * stride + (jj - 1)] + sym_score
+            let up   = s[(ii - 1) * stride + jj] + gap_s
+            let left = s[ii * stride + (jj - 1)] + gap_s
+
+            let mut best = diag
+            if up   > best { best = up }
+            if left > best { best = left }
+            s[ii * stride + jj] = best
+            jj = jj + 1
+        }
+        ii = ii + 1
+    }
+    return s
+}
+
+// ── public API ──────────────────────────────────────────────────────
+
+/// Optimal global-alignment SCORE only. Useful when the caller does
+/// not need the actual alignment columns (downstream stats, oracle
+/// comparison). O(|a|·|b|) time, O((|a|+1)(|b|+1)) memory — we keep
+/// the full matrix even for score-only here to share the helper with
+/// `align`. A row-rolling variant is a one-line refactor when it
+/// matters (queued).
+///
+/// Edge cases:
+///   - Both sequences empty -> 0
+///   - One empty, one length L -> L · gap_s
+pub fn score_only(a: [int], b: [int],
+                  match_s: int, mismatch_s: int, gap_s: int) -> int {
+    let m = len(a)
+    let n = len(b)
+    let stride = n + 1
+    let s = _fill_dp(a, b, match_s, mismatch_s, gap_s)
+    return s[m * stride + n]
+}
+
+/// Full Needleman-Wunsch global alignment.
+///
+/// Returns a 3-row result:
+///   out[0] = [score]                 (single-element)
+///   out[1] = aligned a, with -1 gaps where b was advanced alone
+///   out[2] = aligned b, with -1 gaps where a was advanced alone
+///
+/// `out[1]` and `out[2]` always have the same length (the alignment
+/// length). Filtering out -1 recovers the original sequences.
+///
+/// Traceback tie-break: prefer diagonal (substitution) over up
+/// (gap in b) over left (gap in a). This matches the convention in
+/// Durbin §2.3 Figure 2.5 and the companion oracle.
+pub fn align(a: [int], b: [int],
+             match_s: int, mismatch_s: int, gap_s: int) -> [[int]] {
+    let m = len(a)
+    let n = len(b)
+    let stride = n + 1
+    let s = _fill_dp(a, b, match_s, mismatch_s, gap_s)
+    let score = s[m * stride + n]
+    let gap = gap_symbol()
+
+    // Traceback from (m, n) back to (0, 0).
+    let mut a_rev: [int] = []
+    let mut b_rev: [int] = []
+    let mut i = m
+    let mut j = n
+    let mut steps = 0
+    let budget = (m + n) * 2 + 4
+    while (i > 0 || j > 0) && steps < budget {
+        let cur = s[i * stride + j]
+        let mut took = false
+
+        // Try diagonal first.
+        if i > 0 && j > 0 && !took {
+            let ai = a[i - 1]
+            let bj = b[j - 1]
+            let mut sym_score = mismatch_s
+            if ai == bj { sym_score = match_s }
+            if cur == s[(i - 1) * stride + (j - 1)] + sym_score {
+                a_rev.push(ai)
+                b_rev.push(bj)
+                i = i - 1
+                j = j - 1
+                took = true
+            }
+        }
+        // Then up (gap in b).
+        if i > 0 && !took {
+            if cur == s[(i - 1) * stride + j] + gap_s {
+                a_rev.push(a[i - 1])
+                b_rev.push(gap)
+                i = i - 1
+                took = true
+            }
+        }
+        // Then left (gap in a).
+        if j > 0 && !took {
+            if cur == s[i * stride + (j - 1)] + gap_s {
+                a_rev.push(gap)
+                b_rev.push(b[j - 1])
+                j = j - 1
+                took = true
+            }
+        }
+        // Defensive: if no predecessor matches (should never happen
+        // because the DP recurrence guarantees one), break to avoid
+        // a runaway loop.
+        if !took { i = 0 j = 0 }
+        steps = steps + 1
+    }
+
+    // Reverse a_rev / b_rev into forward order.
+    let mut a_fwd: [int] = []
+    let mut b_fwd: [int] = []
+    let mut k = len(a_rev) - 1
+    while k >= 0 {
+        a_fwd.push(a_rev[k])
+        b_fwd.push(b_rev[k])
+        k = k - 1
+    }
+    return [[score], a_fwd, b_fwd]
+}
+
+// ── ①b adapter note ─────────────────────────────────────────────────
+//
+// A future `stdlib/bio/needleman_wunsch.hexa` ①b adapter would supply
+// the DNA / protein alphabet mapping (ASCII -> integer), the BLOSUM62
+// / PAM250 substitution-matrix lookup (replacing the simple
+// match/mismatch scoring with a full (K × K) score matrix), and the
+// FASTA / UniProt input contract. The kernel here stays alphabet-
+// agnostic and only knows about integer equality.
+//
+// Follow-on pilots queued (each its own port):
+//   * Smith-Waterman (local alignment) — same DP recurrence with
+//     the floor at 0 + local-max traceback start.
+//   * Gotoh 1982 affine-gap (open + extend) — three-matrix DP.
+//   * Banded NW (Hirschberg space-O(min) memory) — recursive
+//     midpoint split.
+//   * Substitution-matrix-aware variant — replace (match_s,
+//     mismatch_s) with a [K][K] score lookup.

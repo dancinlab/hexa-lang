@@ -499,6 +499,7 @@ invariants round out the suite — ν = E at e=0, and the conic identity
 | #9      | `stdlib/kernels/circuit/breaker_trace_reduce_kernel.hexa` | Composite trapezoidal I²t / clearing-energy + |·|-threshold-crossing breaker FOMs (UL 489I / IEC 60947-2 §4.3, Burden & Faires §4.3) | Python `math` libm closed-form (3 synthetic traces × 7 outputs + 3 invariants: 1 cleared / 1 non-cleared / 1 non-uniform grid) | 24/24 rel_err=0       | 2026-05-20 | `pilot-breaker_trace_reduce`   |
 | #10     | `stdlib/kernels/fem/bar1d_kernel.hexa`                  | 1-D linear (2-node) bar FEM element stiffness + direct-stiffness global assembly + Thomas tridiagonal solve for fixed-free axial load (Hughes §1.6, Cook §2.3, Burden & Faires §6.6) | Python `math` libm transliteration (bit-exact, 4 meshes × 2-9 nodes) + closed-form u(x)=P·x/(EA) analytic oracle (independent of discretisation; FEM is exact for uniform mesh + tip load) | 53/53 rel_err=0       | 2026-05-20 | `pilot-fem_bar1d_subset`       |
 | #11     | `stdlib/kernels/autodiff/dual_forward_kernel.hexa`      | Forward-mode automatic differentiation via dual numbers — value-tangent pair propagated through 5 arithmetic + 6 transcendental/power primitives (Griewank & Walther 2008 §3.1, Rall 1981, Wengert 1964) | Two-tier: (a) ANALYTIC closed-form derivatives of 9 elementary functions (x², sin·cos, exp, (x²+1)/(x−1), √(1+x²), log(x²+1), sin(x²), x³, 1/x) at fixed evaluation points + 3 invariants + 1 chain-rule cross-check + 1 linearity invariant — abs residual ≤1e-13 / typically ≤1e-15; (b) BIT-EXACT Python `math` libm oracle (dual_oracle.py) on the same 9 cases at rel_err = 0 | 48/48 PASS — analytic abs ≤7e-16 + companion rel_err=0 | 2026-05-20 | `pilot-autodiff_dual_forward`  |
+| #12     | `stdlib/kernels/bio_align/needleman_wunsch_kernel.hexa` | Needleman-Wunsch global pairwise sequence alignment via integer dynamic-programming recurrence + diagonal>up>left traceback tie-break (Needleman & Wunsch 1970, J. Mol. Biol. 48(3):443-453; Durbin et al. 1998 §2.3, linear gap) — FIRST kernel in the bio domain family | Clean-room Python `math`-free integer transliteration (needleman_wunsch_oracle.py) on 7 textbook sequence pairs (Durbin §2.3 sequences with simple scoring, Wikipedia GATTACA/GCATGCU, identity ACGT, empty/L, disjoint AAAA/TTTT, EDNAFULL-style DNA +5/-3/-4, single-insertion AT/ACT) + 5 invariants (self-alignment, symmetry, empty/empty, gap-stripped recovers original both sides) | 36/36 PASS — exact integer equality (rel_err=0 trivially; pure-integer DP, no float) | 2026-05-20 | `pilot-bio_align_nw`           |
 
 ### Pilot #6 — DFT (signal_proc / 2026-05-20)
 
@@ -985,13 +986,71 @@ first run of this pilot's test (T6 companion check).
   `u^p = exp(p · log u)` is a one-line caller composition built from
   the existing `d_log` + `d_mul` + `d_exp` primitives.
 
+### Pilot #12 — Needleman-Wunsch (bio_align / 2026-05-20)
+
+**Scope**: 12th pilot, **FIRST kernel in the bio domain family**.
+Bio was added to demiurge in D81 (2026-05-20) with `hexa-bio/` as
+the sibling SSOT but no hexa-native substrate yet — the G report's
+"T3 in-progress" line. Needleman-Wunsch is the canonical
+bio-textbook algorithm (Durbin §2.3 — the chapter that introduces
+the entire field). Pure-integer dynamic programming, so the 1e-10
+spec ceiling collapses to bit-exact (rel_err = 0 trivially).
+
+**Algorithm choice — why NW + simple scoring**:
+
+1. NW is the *smallest* fully-cited bio algorithm — 23 lines of
+   recurrence + ~30 lines of traceback. Smith-Waterman and Gotoh
+   affine-gap are mechanical extensions but each merits its own
+   pilot row.
+2. Linear gap (single penalty per indel) keeps the recurrence on
+   one DP matrix. Affine gap (Gotoh 1982) needs three matrices —
+   queued.
+3. Match/mismatch scoring (instead of BLOSUM62 / PAM250
+   substitution matrices) keeps the kernel alphabet-agnostic. The
+   caller maps `{A,C,G,T} -> {0,1,2,3}` (or ASCII as we do in the
+   test) before calling. A `[K][K]` substitution-matrix variant
+   is queued as the first real ①b adapter consumer.
+
+**Parity results**: 36/36 PASS — 7 sequence pairs (Durbin §2.3
+sequences with simple +1/-1/-2 scoring; Wikipedia GATTACA/GCATGCU
++1/-1/-1; identity ACGT; empty-vs-ACGT; disjoint AAAA/TTTT;
+EDNAFULL-style ACACACTA/AGCACACA +5/-3/-4; single-insertion AT/ACT)
+plus 5 invariants (self-alignment = len*match; symmetry
+score(a,b)=score(b,a); empty/empty=0; gap-stripped rows recover the
+original sequences for both `a` and `b`). Every assertion is exact
+integer equality — there is no float roundoff to gate against.
+
+**Hexa-lang gotchas found**: none new. The kernel uses only `[int]`
+arrays (flat row-major DP matrix), `len(…)`, in-place `arr[i] = v`
+assignment for primitive `int` elements (works fine — the pilot #7
+limitation was struct-typed arrays specifically), and integer
+arithmetic. The `0 - 1` idiom for negative literals (instead of
+`-1`) is the existing convention from earlier pilots.
+
+**What this does NOT prove**:
+
+- `absorbed=true` is NOT flipped on any demiurge bio cell. Same
+  `HexaNativeParityRef` schema gate as the prior 11 pilots.
+- BLOSUM62 / PAM250 substitution-matrix scoring is NOT ported yet
+  — the alphabet-agnostic (match, mismatch, gap) triple is one
+  floor below real protein alignment. The matrix variant is the
+  first real ①b adapter consumer and is queued.
+- Smith-Waterman (local alignment), Gotoh affine gap, and
+  Hirschberg space-O(min) are separate pilots — same DP family,
+  each its own reviewable port.
+- This kernel is the closed-form anchor for the bio family the
+  way DFT (#6) was for signal_proc — a future BLAST / HMMER /
+  AlphaFold-tier port would build on top of the alphabet-agnostic
+  DP scaffolding established here.
+
 ### Cumulative status across pilots (2026-05-20)
 
-- 12 pilots landed/in-flight (#1-#5, #5b on origin/main, #6+#7+#8+#9+#10+#11
-  landing this cycle; #3b + #4 are concurrent branch ports), ≥339
-  assertions PASS across them (21+8+23+41+27+17+36+41+24+53+48 = 339
-  on the landed pilots alone — #11 adds 48 from dual_forward_kernel)
-- 6 hexa-lang followups filed in this audit round (none new in #9/#10/#11):
+- 13 pilots landed/in-flight (#1-#5, #5b on origin/main, #6+#7+#8+#9+#10+#11
+  landing prior cycle; #12 lands this cycle; #3b + #4 are concurrent
+  branch ports), ≥375 assertions PASS across them
+  (21+8+23+41+27+17+36+41+24+53+48+36 = 375 on the landed pilots
+  alone — #12 adds 36 from needleman_wunsch_kernel)
+- 6 hexa-lang followups filed in this audit round (none new in #9/#10/#11/#12):
   - parser `-`/`->` continuation footgun (#1, #7)
   - `fmod` libm shim missing (#1)
   - `str_full(float)` for full-precision dump (#1)
