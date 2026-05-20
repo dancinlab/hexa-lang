@@ -1,5 +1,27 @@
 # string `+` in unbounded loop is O(n²) + accumulates arena RSS → 4 GB cap kill
 
+> **VERIFIED-CLOSED 2026-05-20** — every option in §"Upstream fix sketches" has
+> already shipped on `main`:
+> - **Option A (strbuf primitive)** — `self/stdlib/strbuf.hexa` (commit
+>   `ed04d3e1`, 2026-05-16) exposes the 5-fn surface (`strbuf_new` /
+>   `strbuf_push` / `strbuf_finish` / `strbuf_len` / `strbuf_chunks`) with
+>   mutation-through-parameter semantics verified interp + compiled.
+> - **Option C (compile-time lint / rewrite)** — `self/ai_native_pass.hexa`
+>   M981 + **M981b** AST rewrite (commit `c9e6bf0f`, ROI #137) detects
+>   `s = s + x` inside while/for and emits the parts-array + `.join("")`
+>   form under the documented precision guards.
+> - **Internal migration of the 4 known offender sites** — commits
+>   `7d10dde2` / `233628cc` (3 sites) + merge `b6aa40e2` (4th site) +
+>   `9f621602` (format_pure debt closure / self-contained strbuf).
+> - **Sibling patch** `tui-input-paste-buf-quadratic.md` is itself
+>   `VERIFIED-CLOSED 2026-05-20` (root-cause sibling — closing it here
+>   covers the same underlying trap class).
+>
+> Close-only marker; sketches below are preserved verbatim as the
+> historical proposal. **Option B (runtime in-place grow on refcount==1)
+> is intentionally deferred** — strbuf + M981b lint cover the ecosystem;
+> Option B's refcount-discipline change is non-trivial and not blocking.
+
 ## TL;DR
 
 The same root cause as `tui-input-paste-buf-quadratic.md` (filed earlier) keeps

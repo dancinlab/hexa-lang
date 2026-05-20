@@ -4455,3 +4455,38 @@ g3-honest scope: the symptom class (wilson production `▸ test3test3` single-ro
 Next-cycle action if symptom returns: capture the failing wilson harness-cli snapshot under `HEXA_RT_TRACE=1` to distinguish push-path corruption from upstream string-concatenation in `handle_pump_ev` or the queue-row formatter.
 
 Files touched: `inbox/patches/toplevel-mut-array-push-mismutation-from-fn.md` (closure note + Status header added; original prose preserved verbatim). No SSOT code change; defense-in-depth workaround at `self/tui/input.hexa:113-130` retained.
+
+---
+
+## 진행 로그 (2026-05-20) — inbox: string-concat-in-unbounded-loop-quadratic-rss close-only
+
+VERIFIED-CLOSED marker added to
+`inbox/patches/string-concat-in-unbounded-loop-quadratic-rss.md`
+(language-level proposal for the `out = out + chunk` quadratic-RSS trap
+class, root-cause sibling of tui-input-paste-buf-quadratic).
+
+dup-race precheck surfaced all three Upstream fix sketches already on main:
+- Option A (strbuf primitive): `self/stdlib/strbuf.hexa` landed
+  `ed04d3e1` (2026-05-16) — 5-fn API (new/push/finish/len/chunks),
+  mutation-through-parameter semantics verified interp + compiled.
+- Option C (compile-time lint / AST rewrite): `self/ai_native_pass.hexa`
+  M981 detector + M981b rewrite landed `c9e6bf0f` (ROI #137) — converts
+  `s = s + x` inside while/for to parts-array + `.join("")`.
+- Internal migration of the 4 known offender sites: `7d10dde2` /
+  `233628cc` (3 sites) + merge `b6aa40e2` (4th site) + `9f621602`
+  (format_pure debt closure / self-contained strbuf).
+- Sibling patch `tui-input-paste-buf-quadratic.md` itself carries the
+  VERIFIED-CLOSED 2026-05-20 marker (`67771578 fix(tui/input)`).
+
+Option B (runtime in-place grow on refcount==1) is intentionally
+deferred — A + C already cover the ecosystem; B's refcount-discipline
+change is non-trivial and not blocking. Recorded as such in the marker.
+
+Shape A (surgical close-only marker, no SSOT behaviour change).
+No `hexa_real parse` gate needed — marker is .md only; the strbuf /
+ai_native_pass behaviour landed on main weeks ago. binary promote not
+in this cycle (no behaviour change). inbox/PATCHES.yaml untouched.
+
+Cross-link: @D g_inbox_processing_loop SOP (Shape A close-only branch
+for already-landed proposals); @D g_atlas_binary_builtin (no atlas
+touch — pure inbox triage).
