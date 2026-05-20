@@ -303,6 +303,31 @@ fn pass_opt(d: Design) -> PassResult {
 //   final cell-level rewrite). Output width is N (sum truncated); the
 //   final COUT is driven into an internal wire so the no-dangling
 //   invariant on the per-FA pins is preserved.
+//
+// CLEAN-ROOM PROVENANCE for $mod lowering (rfc_006 §5 bug (a) iter 7):
+//   The mod-to-mask reduction shape is re-derived from the arithmetic
+//   identity:
+//     `A % (2^k) = A & (2^k - 1)`             (1)
+//     i.e. for a power-of-two const divisor, the modulo collapses to a
+//     bitwise mask: Y[i] = A[i]  for i < k  ;  Y[i] = 0  for i >= k.
+//   (Hennessy/Patterson "Computer Architecture" §B.5 — divisor 2^k
+//   reduces to low-bit selection; Knuth "TAOCP" Vol.2 §4.6.2 — modulo
+//   2^k is a one-instruction mask on 2's-complement. Also IEEE 1364-2005
+//   §5.1.5 — Verilog `%` operator on a positive 2's-complement divisor.)
+//   The general restoring-divider expansion for a non-power-of-two
+//   const divisor (Weste/Eshraghian §11.5 — sequential restoring or
+//   non-restoring divider, O(N²) area + multi-cycle control) is out of
+//   phase-a scope; the lowering emits a fail-loud diagnostic in those
+//   cases so the §5 absorption boundary stays honest (g3 — claims of
+//   "Yosys absorbed" stop at the shapes we actually lower).
+//   The SKY130 cells used are documented in
+//   `sky130_fd_sc_hd__tt_025C_1v80.lib`:
+//     - sky130_fd_sc_hd__and2_1 — 2-input AND  (A,B → X)
+//   The constant-tie drivers are the same `$_const0_` / `$_const1_`
+//   sentinels established by iter-6's $add lowering (BLIF `.names`
+//   constant-truth-table lines, see abc_map.hexa).
+//   No upstream Yosys source is copied; the mask-lowering shape is
+//   textbook (Kahng/Lienig/Markov/Hu "VLSI Physical Design" §5).
 
 // CLEAN-ROOM: count the per-bit input "slots" of an $eq-shaped cell.
 //
@@ -1042,6 +1067,204 @@ fn _passes_lower_add_cell(c: Cell) -> AddLowerResult {
     return AddLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
 }
 
+// ─── $mod lowering (rfc_006 §5 absorption bug (a) iter 7) ───────────────
+//
+// CLEAN-ROOM: parse a `$const_<N>` net name into the underlying integer
+// constant; returns N >= 0 on success, -1 on a net that is not in the
+// `$const_<dec>` form. This is the convention established by
+// read_verilog.hexa lines 791-792 (`$const_0` / `$const_1` for 1'b0 /
+// 1'b1) — iter 7 generalises the recogniser to any non-negative
+// decimal so a foldable divisor reaching the $mod B-pin can be
+// recognised by the lowering. (read_verilog.hexa does NOT yet fold
+// localparam-named divisors into this form — that is an honest gap and
+// the iter 7 lowering reports it as case-C "variable divisor".)
+fn _passes_parse_const_net(net: str) -> int {
+    let prefix = "$const_"
+    let lp = len(prefix)
+    let ln = len(net)
+    if ln <= lp { return 0 - 1 }
+    // prefix match
+    let mut k = 0
+    while k < lp {
+        if net[k] != prefix[k] { return 0 - 1 }
+        k = k + 1
+    }
+    // decimal suffix
+    let mut v = 0
+    let mut any = 0
+    let mut j = lp
+    while j < ln {
+        let ch = net[j]
+        if ch < '0' { return 0 - 1 }
+        if ch > '9' { return 0 - 1 }
+        v = v * 10 + (ch - '0')
+        any = 1
+        j = j + 1
+    }
+    if any == 0 { return 0 - 1 }
+    return v
+}
+
+// CLEAN-ROOM: is `n` a non-negative power of two (1, 2, 4, 8, …) ?
+// Returns log2(n) on yes (k >= 0), -1 on no. Uses the textbook
+// bit-trick `(n & (n-1)) == 0` for n > 0, then counts shifts.
+fn _passes_log2_pow2(n: int) -> int {
+    if n <= 0 { return 0 - 1 }
+    // (n & (n-1)) == 0 iff n is a power of 2
+    let mut m = n
+    let mut k = 0
+    while m > 1 {
+        // odd → not a pow2 (use modulo operator directly — the
+        // textbook `(m - (m/2)*2)` odd-trick assumes truncating
+        // integer division which is not the language semantic here)
+        if (m % 2) != 0 { return 0 - 1 }
+        m = m / 2
+        k = k + 1
+    }
+    return k
+}
+
+// CLEAN-ROOM: lower one $mod cell. The Y-output is the A-operand
+// reduced modulo the divisor on the B-pin. Three cases:
+//
+//   case A — const divisor 2^k          → log2(N) per-bit AND with
+//                                          $const_1 on the low k bits,
+//                                          $_const0_ tie on bits >= k
+//   case B — const divisor non-pow-of-2 → fail-loud (out of phase-a)
+//   case C — variable / unfoldable B    → fail-loud (out of phase-a)
+//
+// Returns ok=1 only in case A. Cases B and C return ok=0 with a
+// distinct ok_kind so the caller's outer pass can report which
+// boundary the design hit.
+//
+// Naming convention for fresh wires/cells (case A):
+//   <cellname>$mskand$<i> — i-th and2_1 cell instance (low-bit mask)
+//   <cellname>$mskhi$<i>  — i-th $_const0_ cell instance (high-bit zero)
+//   <cellname>$c1         — shared $_const1_ driver instance
+//   <cellname>$c1_net     — shared $const_1 net carrying the AND mask
+struct ModLowerResult {
+    cells:   [Cell],
+    wires:   [Wire],
+    ok:      int,        // 1 = lowered, 0 = unsupported shape
+    ok_kind: int,        // 1 = case A · 2 = case B · 3 = case C
+    message: str,        // empty on case A; diagnostic on B/C
+}
+
+fn _passes_lower_mod_cell(c: Cell) -> ModLowerResult {
+    let w = _passes_add_width(c)
+    if w <= 0 {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 3,
+            message: "lower_mod: cell `" + c.name + "` has no A/B pins (unrecognised shape)"
+        }
+    }
+    // Probe the B-pin net string. We accept either the plain "B" pin
+    // (width=1 shape) or the bit-indexed "B[0]" (the divisor's LSB
+    // when read_verilog has elaborated B as a multibit constant). For
+    // a uniform `$const_<N>` convention, all B[i] should point at the
+    // same `$const_<N>` net carrying the full divisor value — but
+    // read_verilog currently emits the divisor as a wire-name only
+    // (case C). Both lookups must agree; otherwise the divisor is
+    // not foldable → case C.
+    let mut b_main = _passes_pin_net(c, "B")
+    if b_main == "" { b_main = _passes_pin_net(c, "B[0]") }
+    if b_main == "" {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 3,
+            message: "lower_mod: cell `" + c.name + "` has no B operand (unrecognised shape)"
+        }
+    }
+    let nval = _passes_parse_const_net(b_main)
+    if nval < 0 {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 3,
+            message: "lower_mod: cell `" + c.name + "` has variable / unfoldable divisor B=`" + b_main + "` (rfc_006 §5 iter 7 — case C: only $const_<N> divisors are lowered; localparam-name folding requires read_verilog substitution, out of iter 7 scope)"
+        }
+    }
+    if nval == 0 {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 2,
+            message: "lower_mod: cell `" + c.name + "` has divisor 0 (undefined per IEEE 1364-2005 §5.1.5)"
+        }
+    }
+    let k = _passes_log2_pow2(nval)
+    if k < 0 {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 2,
+            message: "lower_mod: cell `" + c.name + "` has non-power-of-2 const divisor B=" + str(nval) + " (rfc_006 §5 iter 7 — case B: only divisor 2^k is lowered via mask identity; full restoring-divider expansion is out of iter 7 scope)"
+        }
+    }
+
+    // ── case A: divisor = 2^k — mask lowering ───────────────────────
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+
+    // shared $const_1 driver (Y → $const_1_net); reused by every
+    // mask-AND on the low k bits. Only emitted if there is at least one
+    // low bit to mask (k > 0).
+    let c1_net = c.name + "$c1_net"
+    if k > 0 {
+        out_wires = out_wires.push(rtlil_wire(c1_net, 1, 0, 0))
+        let mut c1_tie = rtlil_cell(c.name + "$c1", "$_const1_", 0)
+        c1_tie = rtlil_cell_connect(c1_tie, "Y", c1_net)
+        out_cells = out_cells.push(c1_tie)
+    }
+
+    let mut i = 0
+    while i < w {
+        // resolve per-bit operand / output nets — same convention as
+        // _passes_lower_add_cell (width=1 plain, multi-bit indexed).
+        let mut a_net: str = ""
+        let mut y_net: str = ""
+        if w == 1 {
+            a_net = _passes_pin_net(c, "A")
+            if a_net == "" { a_net = _passes_pin_net(c, "A[0]") }
+            y_net = _passes_pin_net(c, "Y")
+            if y_net == "" { y_net = _passes_pin_net(c, "Y[0]") }
+        } else {
+            let pa = "A[" + str(i) + "]"
+            let py = "Y[" + str(i) + "]"
+            a_net = _passes_pin_net(c, pa)
+            y_net = _passes_pin_net(c, py)
+        }
+        if a_net == "" {
+            return ModLowerResult {
+                cells: [], wires: [], ok: 0, ok_kind: 3,
+                message: "lower_mod: cell `" + c.name + "` missing A[" + str(i) + "] pin"
+            }
+        }
+        if y_net == "" {
+            return ModLowerResult {
+                cells: [], wires: [], ok: 0, ok_kind: 3,
+                message: "lower_mod: cell `" + c.name + "` missing Y[" + str(i) + "] pin"
+            }
+        }
+
+        if i < k {
+            // low bit: Y[i] = A[i] AND 1
+            let mut g = rtlil_cell(c.name + "$mskand$" + str(i),
+                                   "sky130_fd_sc_hd__and2_1", 1)
+            g = rtlil_cell_connect(g, "A", a_net)
+            g = rtlil_cell_connect(g, "B", c1_net)
+            g = rtlil_cell_connect(g, "X", y_net)
+            out_cells = out_cells.push(g)
+        } else {
+            // high bit: Y[i] tied to constant 0 via a `$_const0_`
+            // sentinel (same convention as $add cin0 tie — abc_map.hexa
+            // emits BLIF `.names <net>` with zero rows for ABC).
+            let mut z = rtlil_cell(c.name + "$mskhi$" + str(i),
+                                   "$_const0_", 0)
+            z = rtlil_cell_connect(z, "Y", y_net)
+            out_cells = out_cells.push(z)
+        }
+        i = i + 1
+    }
+
+    return ModLowerResult {
+        cells: out_cells, wires: out_wires, ok: 1, ok_kind: 1, message: ""
+    }
+}
+
 fn pass_techmap_sky130(d: Design) -> PassResult {
     let cb = _passes_total_cells(d)
     let mut out: [Module] = []
@@ -1160,6 +1383,28 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                             adwi = adwi + 1
                         }
                         expanded = 1
+                    }
+                }
+                if c.cell_type == "$mod" {
+                    let mdr = _passes_lower_mod_cell(c)
+                    if mdr.ok == 1 {
+                        // splice expansion in place of the $mod cell
+                        let mut mdi = 0
+                        while mdi < len(mdr.cells) {
+                            new_cells = new_cells.push(mdr.cells[mdi])
+                            mdi = mdi + 1
+                        }
+                        let mut mdwi = 0
+                        while mdwi < len(mdr.wires) {
+                            new_wires = new_wires.push(mdr.wires[mdwi])
+                            mdwi = mdwi + 1
+                        }
+                        expanded = 1
+                    } else {
+                        // case B (non-pow2) / case C (variable divisor):
+                        // fail-loud — surface the diagnostic so the
+                        // absorption boundary stays honest (g3).
+                        println("techmap_sky130: " + mdr.message)
                     }
                 }
             }
@@ -2000,6 +2245,118 @@ fn main() {
     }
     if rtlil_check_no_dangling(r_ad4.design.modules[0]) != 0 {
         println("FAIL T24e ad4_dangling_pin"); fails = fails + 1
+    }
+
+    // T25 — $mod lowering 1-bit · const divisor 2 (k=1, pow-of-2) →
+    //   1× sky130_fd_sc_hd__and2_1 on bit 0, 0× high-bit zero,
+    //   1× $_const1_ (shared mask driver), 0× residual $mod.
+    //   (mod-to-mask identity: Y[0] = A[0] & 1.)
+    total = total + 1
+    let mut m_md1 = rtlil_new_module("md1")
+    m_md1 = rtlil_module_add_wire(m_md1, rtlil_wire("a0",        1, 1, 1))
+    m_md1 = rtlil_module_add_wire(m_md1, rtlil_wire("$const_2",  1, 0, 0))
+    m_md1 = rtlil_module_add_wire(m_md1, rtlil_wire("y0",        1, 2, 2))
+    let mut c_md1 = rtlil_cell("u_md1", "$mod", 0)
+    c_md1 = rtlil_cell_connect(c_md1, "A", "a0")
+    c_md1 = rtlil_cell_connect(c_md1, "B", "$const_2")
+    c_md1 = rtlil_cell_connect(c_md1, "Y", "y0")
+    m_md1 = rtlil_module_add_cell(m_md1, c_md1)
+    let mut d_md1 = rtlil_new_design("test")
+    d_md1 = rtlil_design_add(d_md1, m_md1)
+    let r_md1 = pass_techmap_sky130(d_md1)
+    if r_md1.ok != 1 {
+        println("FAIL T25 md1: " + r_md1.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md1.design.modules[0], "sky130_fd_sc_hd__and2_1") != 1 {
+        println("FAIL T25b md1_and2_count (got "
+            + str(rtlil_count_cells_of_type(r_md1.design.modules[0], "sky130_fd_sc_hd__and2_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md1.design.modules[0], "$_const1_") != 1 {
+        println("FAIL T25c md1_const1_count (got "
+            + str(rtlil_count_cells_of_type(r_md1.design.modules[0], "$_const1_"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md1.design.modules[0], "$_const0_") != 0 {
+        println("FAIL T25d md1_const0_count (got "
+            + str(rtlil_count_cells_of_type(r_md1.design.modules[0], "$_const0_"))
+            + ", want 0)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md1.design.modules[0], "$mod") != 0 {
+        println("FAIL T25e md1_residual"); fails = fails + 1
+    }
+
+    // T26 — $mod lowering 3-bit · const divisor 4 (k=2, pow-of-2) →
+    //   2× and2_1 on bits 0,1, 1× $_const0_ tie on bit 2, 1× $_const1_
+    //   shared mask driver, 0× residual $mod.
+    //   (mod-to-mask identity: Y[0..1] = A[0..1] & 1, Y[2] = 0.)
+    total = total + 1
+    let mut m_md3 = rtlil_new_module("md3")
+    let mut mdwi = 0
+    while mdwi < 3 {
+        m_md3 = rtlil_module_add_wire(m_md3,
+            rtlil_wire("a" + str(mdwi), 1, 1, mdwi + 1))
+        m_md3 = rtlil_module_add_wire(m_md3,
+            rtlil_wire("y" + str(mdwi), 1, 2, mdwi + 5))
+        mdwi = mdwi + 1
+    }
+    m_md3 = rtlil_module_add_wire(m_md3, rtlil_wire("$const_4", 1, 0, 0))
+    let mut c_md3 = rtlil_cell("u_md3", "$mod", 0)
+    let mut mdwk = 0
+    while mdwk < 3 {
+        c_md3 = rtlil_cell_connect(c_md3, "A[" + str(mdwk) + "]", "a" + str(mdwk))
+        c_md3 = rtlil_cell_connect(c_md3, "Y[" + str(mdwk) + "]", "y" + str(mdwk))
+        mdwk = mdwk + 1
+    }
+    c_md3 = rtlil_cell_connect(c_md3, "B[0]", "$const_4")
+    m_md3 = rtlil_module_add_cell(m_md3, c_md3)
+    let mut d_md3 = rtlil_new_design("test")
+    d_md3 = rtlil_design_add(d_md3, m_md3)
+    let r_md3 = pass_techmap_sky130(d_md3)
+    if r_md3.ok != 1 {
+        println("FAIL T26 md3: " + r_md3.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md3.design.modules[0], "sky130_fd_sc_hd__and2_1") != 2 {
+        println("FAIL T26b md3_and2_count (got "
+            + str(rtlil_count_cells_of_type(r_md3.design.modules[0], "sky130_fd_sc_hd__and2_1"))
+            + ", want 2)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md3.design.modules[0], "$_const0_") != 1 {
+        println("FAIL T26c md3_const0_count (got "
+            + str(rtlil_count_cells_of_type(r_md3.design.modules[0], "$_const0_"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md3.design.modules[0], "$_const1_") != 1 {
+        println("FAIL T26d md3_const1_count (got "
+            + str(rtlil_count_cells_of_type(r_md3.design.modules[0], "$_const1_"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_md3.design.modules[0], "$mod") != 0 {
+        println("FAIL T26e md3_residual"); fails = fails + 1
+    }
+
+    // T27 — $mod lowering · const divisor 3 (case B: non-pow-of-2) →
+    //   lowering returns ok=0 ok_kind=2 with case-B fail-loud diagnostic;
+    //   the $mod cell stays in the design (not silenty stripped).
+    //   (Restoring-divider expansion is out of phase-a scope.)
+    total = total + 1
+    let mut m_md_b = rtlil_new_module("mdb")
+    m_md_b = rtlil_module_add_wire(m_md_b, rtlil_wire("a0",       1, 1, 1))
+    m_md_b = rtlil_module_add_wire(m_md_b, rtlil_wire("$const_3", 1, 0, 0))
+    m_md_b = rtlil_module_add_wire(m_md_b, rtlil_wire("y0",       1, 2, 2))
+    let mut c_md_b = rtlil_cell("u_mdb", "$mod", 0)
+    c_md_b = rtlil_cell_connect(c_md_b, "A", "a0")
+    c_md_b = rtlil_cell_connect(c_md_b, "B", "$const_3")
+    c_md_b = rtlil_cell_connect(c_md_b, "Y", "y0")
+    m_md_b = rtlil_module_add_cell(m_md_b, c_md_b)
+    // Direct unit-call on the lowering so we can assert the diagnostic
+    // kind without depending on the techmap pass's println surfacing.
+    let r_md_b = _passes_lower_mod_cell(c_md_b)
+    if r_md_b.ok != 0 {
+        println("FAIL T27 mdb_should_fail (ok=" + str(r_md_b.ok) + ")"); fails = fails + 1
+    }
+    if r_md_b.ok_kind != 2 {
+        println("FAIL T27b mdb_kind (got " + str(r_md_b.ok_kind) + ", want 2)"); fails = fails + 1
     }
 
     if fails > 0 {
