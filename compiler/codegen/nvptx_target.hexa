@@ -168,6 +168,8 @@ pub fn nvptx_intrinsic_map() -> [NvptxIntrinsic] {
     m.push(_nvptx_intrinsic("gpu_block_dim", PTX_SREG_NTID, "gpu_block_dim_*"))
     m.push(_nvptx_intrinsic("gpu_grid_dim", PTX_SREG_NCTAID, "gpu_grid_dim_*"))
     m.push(_nvptx_intrinsic("gpu_barrier", PTX_OP_BAR_SYNC, "gpu_sync"))
+    // RFC 055 §12 P4+ — warp-lane data exchange (gpu/SPEC.md §5).
+    m.push(_nvptx_intrinsic("gpu_warp_shuffle", PTX_OP_SHFL_SYNC_IDX_B32, "gpu_warp_shuffle"))
     return m
 }
 
@@ -417,6 +419,38 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
             out.push(_nvptx_instr(PTX_OP_BAR_SYNC, a, "gpu_barrier()"))
             return out
         }
+        // RFC 055 §12 P4+ — `gpu_warp_shuffle(v, lane)` warp-lane data
+        // exchange (gpu/SPEC.md §5). Lowers to
+        //   `shfl.sync.idx.b32 %r<dst>, %r<src>, %r<lane>, 0x1f, 0xffffffff;`
+        // — the `idx` mode selects the source lane by its index; the
+        // `0x1f` c-operand is lane-mask = 31 (full warp, clamp mode); the
+        // `0xffffffff` membermask covers all 32 lanes (matches CUDA's
+        // `__FULL_MASK`). 32-bit baseline (`.b32`) per the §12 P4+
+        // first slice — FP64 / 64-bit shuffle is composed from two
+        // 32-bit halves in a later sub-phase. The dst Local is U32 (see
+        // the matching `_nvptx_classify_local_for_stmt` rule above); the
+        // value + lane operands are emitted as hand-typed `%r<id>`
+        // references so the lowering renders correctly even when the
+        // operand Locals (e.g. function params) were not separately
+        // classified by Pass 1 — the PTX shfl.sync 32-bit form requires
+        // `.b32`-class registers for both source and lane.
+        //   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync.
+        if s.op == "gpu_warp_shuffle" {
+            if len(s.args) >= 2 {
+                let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+                let src_reg = _nvptx_reg_u32(s.args[0].local_id)
+                let lane_reg = _nvptx_reg_u32(s.args[1].local_id)
+                let mut a = []
+                a.push(_nvptx_op(dst_reg))
+                a.push(_nvptx_op(src_reg))
+                a.push(_nvptx_op(lane_reg))
+                a.push(_nvptx_op("0x1f"))
+                a.push(_nvptx_op("0xffffffff"))
+                out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_IDX_B32, a,
+                    "gpu_warp_shuffle(v, lane)"))
+            }
+            return out
+        }
         out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported call: " + s.op))
         return out
     }
@@ -603,6 +637,12 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
         if s.op == "gpu_grid_dim_x" { return NVPTX_RKIND_U32 }
         if s.op == "gpu_grid_dim_y" { return NVPTX_RKIND_U32 }
         if s.op == "gpu_grid_dim_z" { return NVPTX_RKIND_U32 }
+        // RFC 055 §12 P4+ — `gpu_warp_shuffle(v, lane)` returns a 32-bit
+        // shuffled value (gpu/SPEC.md §5 → `shfl.sync.idx.b32`). The
+        // PTX shfl.sync 32-bit baseline produces a `.b32`-class result;
+        // the dst Local goes into the `.reg .u32` bank by analogy with
+        // the gpu_thread_id_* family above.
+        if s.op == "gpu_warp_shuffle" { return NVPTX_RKIND_U32 }
         return NVPTX_RKIND_F64
     }
     // STMT_ASSIGN default + everything else default — FP64. A real type

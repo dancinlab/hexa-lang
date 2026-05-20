@@ -359,6 +359,15 @@ fn _stmt_call(dst: Local, callee: string) -> Stmt {
     }
 }
 
+// Hand-built STMT_CALL with positional args — used by the 055-P4
+// `gpu_warp_shuffle(v, lane)` case where the callee has two arg locals.
+fn _stmt_call_with_args(dst: Local, callee: string, xs: [Operand]) -> Stmt {
+    return Stmt {
+        kind: STMT_CALL, dst: dst, op: callee, args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
 fn _build_case_call_intrinsic() -> MModule {
     let ctaid_x = _local(0, "ctaid_x")
     let ntid_x  = _local(1, "ntid_x")
@@ -655,6 +664,92 @@ fn _test_barrier() -> bool {
     return ok
 }
 
+// ── Case 8 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
+//
+// RFC 055 §12 P4+ — warp-lane data exchange. STMT_CALL with
+// op="gpu_warp_shuffle" lowers to
+//   `shfl.sync.idx.b32 %r<dst>, %r<src>, %r<lane>, 0x1f, 0xffffffff;`
+// — the PTX `idx` shuffle mode selects the source lane by its index
+// (gpu/SPEC.md §5 `gpu_warp_shuffle(v, lane)`). The dst Local is
+// classified U32 (matching `gpu_thread_id_x` etc. — see the
+// `_nvptx_classify_local_for_stmt` rule); the value + lane operand
+// Locals render with hand-typed `%r<id>` references because the PTX
+// shfl.sync 32-bit baseline requires `.b32`-class registers.
+//
+// Fixture: a one-block MFunc that materializes both inputs through
+// thread-index intrinsics (so each input Local is U32-classified)
+// and then calls `gpu_warp_shuffle(v, lane)` — proves the body
+// emission, the dst U32 reg-decl, and that the operand `%r` names
+// resolve correctly.
+//   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync —
+//        https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-shfl-sync
+
+fn _build_case_warp_shuffle() -> MModule {
+    let v = _local(0, "v")           // STMT_CALL gpu_thread_id_x -> U32 %r0
+    let lane = _local(1, "lane")     // STMT_CALL gpu_thread_id_y -> U32 %r1
+    let r = _local(2, "r")           // gpu_warp_shuffle dst — expected U32 %r2
+
+    let mut shuf_args = []
+    shuf_args.push(_op_local(v.id))
+    shuf_args.push(_op_local(lane.id))
+
+    // block 0: v = gpu_thread_id_x() ; lane = gpu_thread_id_y() ;
+    //          r = gpu_warp_shuffle(v, lane) ; return
+    let mut s0 = []
+    s0.push(_stmt_call(v, "gpu_thread_id_x"))
+    s0.push(_stmt_call(lane, "gpu_thread_id_y"))
+    s0.push(_stmt_call_with_args(r, "gpu_warp_shuffle", shuf_args))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut locals = []
+    locals.push(v)
+    locals.push(lane)
+    locals.push(r)
+
+    let mf = MFunc {
+        name: "warp_shuffle_smoke",
+        params: [],
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_warp_shuffle.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_warp_shuffle() -> bool {
+    let mut ok = true
+    let mod_w = _build_case_warp_shuffle()
+    let ptx = codegen_emit_ptx_sm80(mod_w)
+
+    println("")
+    println("── emitted PTX (055-P4 gpu_warp_shuffle case, sm_80) ──")
+    println(ptx)
+
+    // U32 bank for the dst (classifier rule)
+    ok = _check(ok, ptx, ".reg .u32 %r2",
+        "u32 bank %r2 (gpu_warp_shuffle dst)")
+    // The shuffle body — mnemonic + dst register
+    ok = _check(ok, ptx, "shfl.sync.idx.b32 %r2",
+        "shfl.sync.idx.b32 with U32 dst")
+    // Operand list — src + lane render as %r<id>, c-op + membermask appended
+    ok = _check(ok, ptx, "shfl.sync.idx.b32 %r2, %r0, %r1, 0x1f, 0xffffffff",
+        "full shfl.sync.idx.b32 operand list")
+    // Sandwiched between the U32-producing intrinsic calls and ret.
+    ok = _check(ok, ptx, "mov.u32 %r0, %tid.x",      "preceding gpu_thread_id_x() emitted")
+    ok = _check(ok, ptx, "mov.u32 %r1, %tid.y",      "preceding gpu_thread_id_y() emitted")
+    ok = _check(ok, ptx, "ret;",                     "ret terminator after shuffle")
+    return ok
+}
+
 // ── Driver ───────────────────────────────────────────────────────────
 
 fn main() {
@@ -669,11 +764,12 @@ fn main() {
     let ok_ls    = _test_load_store()
     let ok_part  = _test_partition()
     let ok_barr  = _test_barrier()
+    let ok_shuf  = _test_warp_shuffle()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr {
-        println("PASS: RFC 055 P3b/c/P4 — 7/7 cases (incl. partition + gpu_barrier)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_shuf {
+        println("PASS: RFC 055 P3b/c/P4 — 8/8 cases (incl. partition + gpu_barrier + gpu_warp_shuffle)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -683,7 +779,8 @@ fn main() {
         if !ok_ls   { println("      STMT_LOAD / STMT_STORE FAILED") }
         if !ok_part { println("      055-P3c gpu_kind partition FAILED") }
         if !ok_barr { println("      055-P4 gpu_barrier() FAILED") }
+        if !ok_shuf { println("      055-P4 gpu_warp_shuffle() FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_shuf) { exit(1) }
 }

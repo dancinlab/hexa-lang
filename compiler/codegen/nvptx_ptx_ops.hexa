@@ -72,6 +72,19 @@ pub let PTX_OP_BAR_SYNC: string       = "bar.sync"     // block-wide barrier
 pub let PTX_OP_BRA: string            = "bra"          // branch
 pub let PTX_OP_RET: string            = "ret"          // return from entry/func
 
+// ── PTX warp-level data movement (RFC 055 §12 P4+) ────────────
+//
+// `shfl.sync.idx.b32 %dst, %src, %lane, 0x1f, 0xffffffff;` — warp-lane
+// shuffle by source-lane index (gpu/SPEC.md §5 `gpu_warp_shuffle`).
+// The trailing `0x1f` is the c-operand encoding lane-mask=31 (full
+// warp) and clamp-mode = idx; `0xffffffff` is the membermask covering
+// all 32 lanes of the warp (matches `__shfl_sync` __FULL_MASK in CUDA).
+// 32-bit baseline (b32); FP64 / 64-bit shuffle is a later sub-phase
+// composed from two 32-bit halves (PTX has no native b64 shfl.sync).
+//   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync —
+//        https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-shfl-sync
+pub let PTX_OP_SHFL_SYNC_IDX_B32: string = "shfl.sync.idx.b32"
+
 // ── PTX function-kind directives ──────────────────────────────
 //
 // The GPU analogue of "exported symbol vs static helper" (RFC 055 §6.3).
