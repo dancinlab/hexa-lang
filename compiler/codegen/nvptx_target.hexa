@@ -332,6 +332,13 @@ fn _nvptx_gpu_intrinsic_sreg(op: string) -> string {
     return ""
 }
 
+// RFC 067 marker — Real WMMA emit. The mnemonic table below is the
+// SEAM that RFC 067 P3 re-keys by (op, role, dtype, layout) so non-
+// canonical families (bf16×bf16→f32, f16×f16→f16, tf32) become
+// reachable. See `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md`
+// §3 P3 for the re-key plan and §4 F3 (F-RFC067-DTYPE-FAMILY) for the
+// substring falsifier that closes that phase.
+//
 // _nvptx_wmma_mnemonic — map a `gpu_wmma_*` STMT_CALL op name to the
 // PTX WMMA mnemonic (RFC 055 §12 P4+ Tensor Core MMA). SCAFFOLD ONLY —
 // recognizing the op and resolving its mnemonic is all this returns.
@@ -639,6 +646,12 @@ pub let NVPTX_RKIND_U32: string = "gpr32"   // %r<id>    .reg .u32
 pub let NVPTX_RKIND_U64: string = "gpr64"   // %rd<id>   .reg .u64
 pub let NVPTX_RKIND_PRED: string = "pred"   // %p<id>    .reg .pred
 
+// RFC 067 marker — Real WMMA emit. `NVPTX_RKIND_FRAG` below is the
+// scalar-placeholder kind; RFC 067 P1 (`F-RFC067-FRAG-WIDTH`) extends
+// it to a vector of N PTX regs (8× `.f16x2` per A/B-frag, 8× `.f32`
+// per C/D-frag — NVIDIA canonical sm_80 m16n16k16 layout). See
+// `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md` §3 P1.
+//
 // RFC 055 §12 P4+ — Tensor Core MMA (Warp Matrix Multiply Accumulate)
 // SCAFFOLD ONLY. The "frag" kind marks a Local whose value is a WMMA
 // fragment (a 16×16 tile distributed across a warp), not a scalar
