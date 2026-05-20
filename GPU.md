@@ -177,7 +177,7 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 - [ ] **bf16 full silicon validation** (depends on 2c)
 - [ ] **tf32 support** — `mma.sync.aligned.row.col.m16n16k8.f32.tf32.tf32.f32` for fp32 acceleration
 - [ ] **int8 / int4** — quantization-friendly types; `dp4a` / `dp2a` instructions
-- [ ] **fp8 e4m3 / e5m2** (Hopper sm_90+) — Hopper-class GEMM dtype
+- [x] **fp8 e4m3 / e5m2** (Hopper sm_90+) — codegen scaffold landed (RFC 068 §3): `NVPTX_RKIND_F8_E4M3` / `_F8_E5M2` constants + `%fe3<id>` / `%fe5<id>` reg banks (silicon-canonical `.b8` container per PTX ISA §5.4.1 + §9.7.13.5) + classifier short-circuit on `.f8_e4m3` / `.f8_e5m2` precision tag + `ld.global.b8` / `st.global.b8` ld/st dispatch + Case 26/27 lower_test (ld/st round-trip, bank-isolation negative guard). **No silicon fire** — fp8 WMMA mnemonic family (`wmma.mma.sync...e4m3.e4m3.f32`) + sub-byte ABI (kernel-arg packing, addr alignment) + parser-side `@f8_*` named-type grammar are follow-on cycles.
 - [ ] **posit** — custom dtype emission (lattice-friendly arithmetic; experimental)
 - [ ] **MXFP4 / NVFP4** — Blackwell sm_120+ dtypes if applicable to RTX 5070
 
