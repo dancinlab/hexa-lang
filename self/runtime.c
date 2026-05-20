@@ -752,51 +752,21 @@ static double hxlcl_sin(double x);
 // this file can still link.
 static int hxlcl_isalnum(int c);
 static int hxlcl_isalpha(int c);
-// Cycle 60 — pthread stubs. aprime_cc is single-threaded
-// (compile-then-exit). thread/channel runtime in self/native/thread.c
-// is linked but unreachable. All stubs return 0 = success.
-// pthread_create runs start_routine synchronously so any unreachable
-// code that DOES execute behaves like serial reduction.
-static int __attribute__((noinline)) hxlcl_pthread_mutex_init(void *m, const void *a) {
-    (void)m; (void)a; return 0;
-}
-static int __attribute__((noinline)) hxlcl_pthread_mutex_destroy(void *m) {
-    (void)m; return 0;
-}
-static int __attribute__((noinline)) hxlcl_pthread_mutex_lock(void *m) {
-    (void)m; return 0;
-}
-static int __attribute__((noinline)) hxlcl_pthread_mutex_unlock(void *m) {
-    (void)m; return 0;
-}
-static int __attribute__((noinline)) hxlcl_pthread_cond_init(void *c, const void *a) {
-    (void)c; (void)a; return 0;
-}
-static int __attribute__((noinline)) hxlcl_pthread_cond_destroy(void *c) {
-    (void)c; return 0;
-}
-static int __attribute__((noinline)) hxlcl_pthread_cond_signal(void *c) {
-    (void)c; return 0;
-}
-static int __attribute__((noinline)) hxlcl_pthread_cond_broadcast(void *c) {
-    (void)c; return 0;
-}
-static int __attribute__((noinline)) hxlcl_pthread_cond_wait(void *c, void *m) {
-    (void)c; (void)m; return 0;
-}
-static int __attribute__((noinline)) hxlcl_pthread_cond_timedwait(void *c, void *m, const void *ts) {
-    (void)c; (void)m; (void)ts; return 0;
-}
-static int __attribute__((noinline)) hxlcl_pthread_create(void *thread, const void *attr, void *(*start)(void *), void *arg) {
-    (void)thread; (void)attr;
-    if (start) (void)start(arg);
-    return 0;
-}
-static int __attribute__((noinline)) hxlcl_pthread_join(void *thread, void **retval) {
-    (void)thread;
-    if (retval) *retval = (void *)0;
-    return 0;
-}
+// RUNTIME.md step-2 cycle 3 — pthread stubs MOVED to
+// stdlib/runtime/thread.hexa (single noop + create policy hexa fns).
+// Thin C shims delegate. forward decls only here; bodies after include.
+static int hxlcl_pthread_mutex_init(void *m, const void *a);
+static int hxlcl_pthread_mutex_destroy(void *m);
+static int hxlcl_pthread_mutex_lock(void *m);
+static int hxlcl_pthread_mutex_unlock(void *m);
+static int hxlcl_pthread_cond_init(void *c, const void *a);
+static int hxlcl_pthread_cond_destroy(void *c);
+static int hxlcl_pthread_cond_signal(void *c);
+static int hxlcl_pthread_cond_broadcast(void *c);
+static int hxlcl_pthread_cond_wait(void *c, void *m);
+static int hxlcl_pthread_cond_timedwait(void *c, void *m, const void *ts);
+static int hxlcl_pthread_create(void *thread, const void *attr, void *(*start)(void *), void *arg);
+static int hxlcl_pthread_join(void *thread, void **retval);
 // Cycle 63 — Darwin BSD ABI syscall wrappers via inline `svc 0x80`.
 // Each call: x16 = syscall number, x0..x5 = args, svc 0x80 → x0 = ret.
 // Replaces libc syscall wrappers (_read, _write, _open, etc) with
@@ -1228,6 +1198,59 @@ static double hxlcl_exp(double x) { return HX_FLOAT(rt_exp(hexa_float(x))); }
 static double hxlcl_log(double x) { return HX_FLOAT(rt_log(hexa_float(x))); }
 static double hxlcl_cos(double x) { return HX_FLOAT(rt_cos(hexa_float(x))); }
 static double hxlcl_sin(double x) { return HX_FLOAT(rt_sin(hexa_float(x))); }
+
+// RUNTIME.md step-2 cycle 3 — pthread delegation via single noop hexa
+// fn (`rt_pthread_noop` returns 0) + create policy (returns 1 = run
+// synchronously).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
+HexaVal rt_pthread_noop(void) { return hexa_int(0); }
+HexaVal rt_pthread_create_policy(void) { return hexa_int(1); }
+#else
+extern HexaVal rt_pthread_noop(void);
+extern HexaVal rt_pthread_create_policy(void);
+#endif
+static int hxlcl_pthread_mutex_init(void *m, const void *a) {
+    (void)m; (void)a; return (int)HX_INT(rt_pthread_noop());
+}
+static int hxlcl_pthread_mutex_destroy(void *m) {
+    (void)m; return (int)HX_INT(rt_pthread_noop());
+}
+static int hxlcl_pthread_mutex_lock(void *m) {
+    (void)m; return (int)HX_INT(rt_pthread_noop());
+}
+static int hxlcl_pthread_mutex_unlock(void *m) {
+    (void)m; return (int)HX_INT(rt_pthread_noop());
+}
+static int hxlcl_pthread_cond_init(void *c, const void *a) {
+    (void)c; (void)a; return (int)HX_INT(rt_pthread_noop());
+}
+static int hxlcl_pthread_cond_destroy(void *c) {
+    (void)c; return (int)HX_INT(rt_pthread_noop());
+}
+static int hxlcl_pthread_cond_signal(void *c) {
+    (void)c; return (int)HX_INT(rt_pthread_noop());
+}
+static int hxlcl_pthread_cond_broadcast(void *c) {
+    (void)c; return (int)HX_INT(rt_pthread_noop());
+}
+static int hxlcl_pthread_cond_wait(void *c, void *m) {
+    (void)c; (void)m; return (int)HX_INT(rt_pthread_noop());
+}
+static int hxlcl_pthread_cond_timedwait(void *c, void *m, const void *ts) {
+    (void)c; (void)m; (void)ts; return (int)HX_INT(rt_pthread_noop());
+}
+static int hxlcl_pthread_create(void *thread, const void *attr, void *(*start)(void *), void *arg) {
+    (void)thread; (void)attr;
+    if (start && (int)HX_INT(rt_pthread_create_policy()) == 1) {
+        (void)start(arg);
+    }
+    return 0;
+}
+static int hxlcl_pthread_join(void *thread, void **retval) {
+    (void)thread;
+    if (retval) *retval = (void *)0;
+    return (int)HX_INT(rt_pthread_noop());
+}
 
 // ── Extern FFI: dlopen / dlsym / dispatch ───────────────
 

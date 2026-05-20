@@ -63,6 +63,7 @@ import "./check/target_gate.hexa"
 // via the standard HexaVal calling convention.
 import "../stdlib/runtime/ctype.hexa"
 import "../stdlib/runtime/math.hexa"
+import "../stdlib/runtime/thread.hexa"
 import "./emit/asm.hexa"
 import "./emit/macho_arm64.hexa"
 import "./diag/catalog.hexa"

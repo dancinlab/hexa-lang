@@ -848,3 +848,14 @@ For each Tier-A sub-phase:
 - step-2 cumulative: **7 / ~47 hxlcl_* helpers ported** (~15%)
 - Next batch candidates: pthread stubs (12 fns · all noop return 0
   · trivial port), then libm-adjacent (atexit/exit/etc)
+
+### 2026-05-21 — step 2 cycle 3: pthread stubs → stdlib/runtime/thread.hexa
+
+- ✅ 12 pthread fns ported via single hexa fn `rt_pthread_noop` (returns 0)
+  + `rt_pthread_create_policy` (returns 1 = run synchronously). All 12
+  C wrappers delegate to these two hexa fns. clang dead-strip
+  consolidates
+- aprime_cc smoke exit(42) PASS · 5 externs preserved · binary
+  1,140,456 B (+80 B)
+- step-2 cumulative: **19 / ~47 helpers C-wrappers ported** (~40%) via
+  9 hexa fns (ctype: 2, math: 5, thread: 2)
