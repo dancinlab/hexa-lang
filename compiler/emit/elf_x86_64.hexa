@@ -287,3 +287,64 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
 
     return out
 }
+
+// ─────────────────────────────────────────────────────────────────
+// serialize_elf_exec_x86_64 — P2 cycle 3: minimum ELF executable
+// ─────────────────────────────────────────────────────────────────
+//
+// Static ELF exec for Linux x86_64. No dynamic linker, no symbol
+// table — just header + one PT_LOAD segment containing entry code.
+// Kernel maps segment at e_entry and starts execution there.
+//
+// Layout (132 bytes for a 12-byte exit syscall):
+//   ELF64 header  64 B   e_type=ET_EXEC e_entry=vaddr+120
+//   PT_LOAD phdr  56 B   p_offset=0 p_vaddr=0x400000 PF_R|PF_X
+//   code bytes     N B
+pub fn serialize_elf_exec_x86_64(text: [Int]) -> [Int] {
+    let out: [Int] = []
+    let text_size = len(text)
+
+    let elf_header_size = 64
+    let phdr_size = 56
+    let phnum = 1
+    let code_off = elf_header_size + phdr_size * phnum     // 120
+    let vaddr_base = 0x400000
+    let entry_vaddr = vaddr_base + code_off
+    let file_size = code_off + text_size
+
+    out.push(ELF_EI_MAG0); out.push(ELF_EI_MAG1)
+    out.push(ELF_EI_MAG2); out.push(ELF_EI_MAG3)
+    out.push(ELF_ELFCLASS64)
+    out.push(ELF_ELFDATA2LSB)
+    out.push(ELF_EV_CURRENT)
+    out.push(ELF_ELFOSABI_NONE)
+    _ew_zero(out, 8)
+    _ew_u16(out, ELF_ET_EXEC)
+    _ew_u16(out, ELF_EM_X86_64)
+    _ew_u32(out, ELF_EV_CURRENT)
+    _ew_u64(out, entry_vaddr)
+    _ew_u64(out, elf_header_size)           // e_phoff
+    _ew_u64(out, 0)                         // e_shoff
+    _ew_u32(out, 0)                         // e_flags
+    _ew_u16(out, elf_header_size)
+    _ew_u16(out, phdr_size)
+    _ew_u16(out, phnum)
+    _ew_u16(out, 0)                         // e_shentsize
+    _ew_u16(out, 0)                         // e_shnum
+    _ew_u16(out, 0)                         // e_shstrndx
+
+    // PT_LOAD
+    _ew_u32(out, 1)                         // p_type = PT_LOAD
+    _ew_u32(out, 5)                         // p_flags = PF_R | PF_X
+    _ew_u64(out, 0)                         // p_offset
+    _ew_u64(out, vaddr_base)                // p_vaddr
+    _ew_u64(out, vaddr_base)                // p_paddr
+    _ew_u64(out, file_size)                 // p_filesz
+    _ew_u64(out, file_size)                 // p_memsz
+    _ew_u64(out, 0x1000)                    // p_align
+
+    let mut i = 0
+    while i < text_size { out.push(text[i] & 0xFF); i = i + 1 }
+
+    return out
+}

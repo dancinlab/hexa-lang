@@ -5441,3 +5441,105 @@ F-P2-X86-ENCODE PASS — 3 x86_64 instructions byte-eq + ELF .o emit
 cycles 3-N (exec emit + ubu-2 launch test + walker + linker) + P3.
 
 **cc --regen / binary promote**: 미수행. compiler/emit/elf_x86_64.hexa.
+
+
+### 2026-05-20 — S7-P2 cycle 3: 🛸 첫 실행 가능 hexa-ld ELF exec on Linux (F-P2-LINUX-EXIT FULL PASS, REMOTE_RC=42)
+
+🛸🛸🛸 **HISTORIC TRANSCEND** — RFC 063 § P2 의 첫 실행 가능 Linux
+x86_64 binary 측정 증명. macOS arm64 host 에서 hexa-side emit + scp
+ubu-2 + ssh ubu-2 launch → exit(42). cross-platform cross-architecture
+single-source path 가 작동.
+
+**한 줄**: 132-byte static ELF exec 가 hexa_ld 의 `serialize_elf_exec
+_x86_64` 출력으로 만들어지고, ubu-2 (Linux x86_64) 로 scp 후 kernel 이
+직접 load + execute. exit code = 42 확인.
+
+**변경 파일** (`compiler/emit/elf_x86_64.hexa`):
+
+`pub fn serialize_elf_exec_x86_64(text: [Int]) -> [Int]` — 새 함수.
+Layout (132 bytes for 12-byte exit syscall):
+
+```
+0x00  ELF64 header  64 B
+        e_type=ET_EXEC (2)
+        e_machine=EM_X86_64 (0x3E)
+        e_entry=0x400000+120=0x400078
+        e_phoff=64, e_phnum=1
+        e_shoff/e_shnum=0 (no section table — static binary)
+0x40  PT_LOAD phdr  56 B
+        p_type=1 (PT_LOAD)
+        p_flags=5 (PF_R|PF_X)
+        p_offset=0, p_vaddr=0x400000
+        p_filesz=p_memsz=file_size
+        p_align=0x1000 (4 KB page)
+0x78  code bytes    N B
+```
+
+vaddr_base 0x400000 = 4 MB — Linux 의 classic static-binary base.
+이 아래 4 MB 가 unmapped null-region (Mach-O 의 __PAGEZERO equivalent).
+
+**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P2_LINUX_EXIT.hexa`):
+
+1. P2 cycle 2 의 encode_x86_64_insn 으로 12-byte exit(42) sequence:
+   `B8 3C 00 00 00 BF 2A 00 00 00 0F 05`
+2. serialize_elf_exec_x86_64 → 132-byte ELF binary
+3. `file` 검증 → "ELF 64-bit LSB executable, x86-64, statically
+   linked, no section header"
+4. `scp /tmp/p2_c3_linux_exit.elf ubu-2:/tmp/p2_c3_linux_exit.elf`
+5. `ssh ubu-2 'chmod +x ... && ./exec; echo REMOTE_RC=$?'`
+6. expect `REMOTE_RC=42`
+
+**측정 (arm64-Mac local + ubu-2 remote)**:
+
+```
+$ /tmp/run_F_P2_LINUX_EXIT
+encoded 12-byte exit(42): len=12
+wrote 132 bytes to /tmp/p2_c3_linux_exit.elf
+=== file ===
+/tmp/p2_c3_linux_exit.elf: ELF 64-bit LSB executable, x86-64,
+  version 1 (SYSV), statically linked, no section header
+=== scp to ubu-2 ===
+=== launch on ubu-2 ===
+REMOTE_RC=42
+
+🛸 F-P2-LINUX-EXIT FULL PASS — hexa-ld-built ELF exec runs on Linux + exits 42
+```
+
+**Cross-platform cross-architecture path 측정**:
+
+| Host | Emit | Format | Arch | Launch | Result |
+|------|------|--------|------|--------|--------|
+| arm64-mac | aprime_cc+hexa_ld P0+P1 | Mach-O | arm64 | macOS | 🛸 exit 42 (cycle P1-7+8) |
+| arm64-mac | serialize_elf_exec_x86_64 P2 | ELF | x86_64 | ubu-2 (Linux) | 🛸 exit 42 (this cycle) |
+
+한 hexa-lang 코드베이스 가 **두 OS × 두 ISA** 의 실행 binary 를 외부
+toolchain 0건 (codesign 제외, ELF 는 fork 0) 으로 만들어냄.
+
+**HONEST SCOPE (g3, over-claim 0)**:
+
+- ELF exec 는 **direct SVC syscall** 한정 — extern symbol 없음.
+  Real corpus (`_hexa_set_args`/`_hexa_exit`) 의 ELF static-link 는
+  cycle 4+ 의 baton (P1 cycle 8 의 ELF analog — synthetic runtime
+  stub + inter-module BL reloc 해소).
+- ELF exec 는 statically-linked, no section table — 가장 minimal
+  shape. cycle 4+ 에서 dynamic linker / GOT/PLT 의 follow-up.
+- Linux kernel 의 ELF 로더 가 X 헤더 (`PT_INTERP`, `PT_DYNAMIC` 등)
+  를 요구하지 않는 static-exec 케이스. RFC 063 § P2 의 진척 측정점.
+
+**다음 cycle (P2 cycle 4) baton**:
+
+- x86_64 LIR walker `pack_lir_elf(lm) -> ElfX86Obj` (mirror of P0's
+  pack_lir for Mach-O).
+- 더 많은 encoding rules (ADD/SUB/CMP/JMP/CALL/PUSH/POP/MOV reg-reg
+  for general-purpose code).
+- ELF static-link path 의 multi-obj concat + inter-module reloc
+  resolution (P1 cycle 8 의 ELF analog).
+- F-P2-RUNEQ corpus PASS — trivial/fib/while/if 가 hexa-side ELF
+  emit 으로 ubu-2 에서 실행 (P1 cycle 8 의 Mach-O corpus PASS 와
+  동일한 contract).
+
+**RFC 063 phasing 진척**: P0 ✅ · P1 ✅ · P2 cycles 1-3 ✅
+(scaffold + encoding + exec launch). 잔여 P2 cycles 4-N (walker +
+linker + RUNEQ corpus) + P3.
+
+**cc --regen / binary promote**: 미수행. compiler/emit/elf_x86_64.hexa.
