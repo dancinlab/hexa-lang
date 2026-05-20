@@ -4406,6 +4406,86 @@ Selftest: 7/7 PASS (T1..T7f).
 Pipeline: d4 + d6 both reach `abc_map: ok`.
 g3 verdict: §5 absorption-pipeline ABC-rejection layer CLOSED; §5 area-oracle gate remains OPEN pending read_verilog procedural-mux scope (Shape-B).
 
+
+## 진행 로그 — RFC 073 read_verilog proc_mux Shape-B opener (2026-05-20)
+
+13 iters of cell-chain Shape-A absorption merged (PRs #130-#183).
+Iter 13 (squash `9ea50568`) declared the verdict: **cell-chain pattern
+COMPLETE; structural Shape-B work needed on `read_verilog.hexa`** to
+close the §5 area oracle (currently router_d{4,6} area = 0.0 µm²
+because design outputs end up `_const0_`/`_const1_`-tied after ABC
+`map` — ABC honestly maps constant-tied outputs to zero-area cells).
+
+The structural blockers named by the iter-13 verdict:
+1. `always @(*)` block elaboration with procedural mux (if/else
+   chains, case statements) — current `_rv_parse_always` body covers
+   the narrow single-statement shape only.
+2. Condition-guarded multi-driver writes: today's
+   `pass_clean_multidriver` (PR #180 iter-12) collapses `if (cond)
+   y = a; else y = b;` to last-wins, which is correct for true
+   conflicts but loses the `$mux` for cond-guarded forms.
+3. Array-indexed assignment `mem[K] = expr` with runtime-K: today
+   only const-foldable K works (via generate-for unroll); runtime-K
+   in a `for (i=0; i<N; …)` loop drops to nothing.
+
+This cycle ships the **OPENER** per @D g_inbox_processing_loop Shape-B
+(multi-cycle work, RFC + scaffold + falsifier battery, NOT
+implementation):
+
+- `inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md` —
+  full RFC draft (§1 problem · §2 goals G-073-0..4 · §3 atlas-citable
+  refs: IEEE 1364-2005 §9.2 / §9.5, IEEE 1800-2017 §10.4.2, Yosys
+  Manual Ch. 5 §5.41, behavioural-only ref to
+  `passes/proc/proc_mux.cc` clean-room · §4 three-phase plan
+  (Phase 1 if/else, Phase 1.5 case, Phase 2 array-index, Phase 3
+  router_d{4,6} ±5% measurement) · §5 falsifier battery (7 gates:
+  PROC-MUX-IF-ELSE, PROC-MUX-NESTED, PROC-MUX-CASE,
+  ARRAY-INDEX-CONST, ARRAY-INDEX-RUNTIME, §5-CLOSURE,
+  NO-REGRESSION) · §6 scaffold inventory · §7 g3 honest scope · §8
+  sign-off).
+- `stdlib/kernels/logic_synth/read_verilog.hexa` (header lines
+  ~51-62) — file-header RFC 073 cross-link block.
+- `stdlib/kernels/logic_synth/read_verilog.hexa::_rv_parse_assign`
+  (~lines 980-985) — RFC 073 SCAFFOLD: array-indexed assign comment
+  marker at LHS-`[…]` parse site.
+- `stdlib/kernels/logic_synth/read_verilog.hexa::_rv_parse_always`
+  (~lines 1902-1912) — RFC 073 SCAFFOLD: pass_proc_mux site comment
+  marker at if/else cond-mux detection block.
+- `stdlib/kernels/logic_synth/read_verilog.hexa` (post-
+  `read_verilog_file`, pre-`main`) — `pass_proc_mux(d: Design) ->
+  Design` no-op stub (returns input unchanged) as the typed
+  insertion point for phase-1.
+
+All four landings are pure documentation / no-op insertion. Zero
+behaviour change; `F-RFC-RV-NO-REGRESSION` satisfied trivially.
+
+Constraints honoured (@D g5 hexa-native, @D g6 atlas-cite, @D g3
+honest, @D g_inbox_processing_loop Shape-B):
+- No touch to passes.hexa / abc_map.hexa / liberty.hexa (per
+  dispatch).
+- Scaffold only; the RFC explicitly does NOT claim "§5 absorbed"
+  or "phase 1 complete" — the §5 absorption-gate remains OPEN
+  (iter-13 verdict stands).
+- Clean-room provenance preserved: upstream `passes/proc/proc_mux.cc`
+  named as *behavioural reference only*, no source copy.
+
+`hexa_real parse stdlib/kernels/logic_synth/read_verilog.hexa` PASS
+(before and after scaffold).
+
+Next cycles (one PR per falsifier-gated phase):
+- Phase 1 — `pass_proc_mux` for if/else cond-mux (gates on
+  `F-RFC-RV-PROC-MUX-IF-ELSE` + `F-RFC-RV-PROC-MUX-NESTED`).
+- Phase 1.5 — `case` statement lowering (gates on
+  `F-RFC-RV-PROC-MUX-CASE`).
+- Phase 2 — array-indexed runtime-K assignment (gates on
+  `F-RFC-RV-ARRAY-INDEX-RUNTIME`; const-K already passes).
+- Phase 3 — router_d{4,6} re-target + ±5% §5 area-oracle measurement
+  (gates on `F-RFC-RV-§5-CLOSURE`; either CLOSURE or honest mismatch
+  report closes the RFC).
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md
+(opener landed; phases 1 / 1.5 / 2 / 3 all marked "not yet landed").
+
 ### 2026-05-20 — P4 GPU-fire status (post-batch-6) — 3 RFCs deferred per @D g3 honest scope
 
 After today's 6-batch arc closed all codegen-side cycles for RFC 067/068/069

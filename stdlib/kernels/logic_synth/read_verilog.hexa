@@ -48,6 +48,17 @@
 //
 // Gate-§5 path: enlarge the subset under the same idiom (each new
 // construct = one new fn, one new self-test, fail-loud on unsupported).
+//
+// RFC 073 — read_verilog procedural-mux scope expansion (Shape-B,
+// OPENER landed 2026-05-20 — see inbox/rfc_drafts_2026_05_20/
+// rfc_073_read_verilog_proc_mux.md). Three-phase plan for §5
+// absorption-gate closure: phase-1 `pass_proc_mux` skeleton for
+// if/else cond-mux + nested chains; phase-1.5 `case` statement
+// lowering; phase-2 array-indexed runtime-K assignment; phase-3
+// router_d{4,6} re-target + ±5% area-oracle measurement (or honest
+// mismatch report). This opener cycle ships SCAFFOLD ONLY — zero
+// behaviour change. See SCAFFOLD markers in `_rv_parse_always` and
+// `_rv_parse_assign`, plus the no-op `pass_proc_mux` stub.
 
 use "stdlib/kernels/logic_synth/rtlil"
 
@@ -966,6 +977,12 @@ fn _rv_parse_assign(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
     let lhs_base = _ps_peek(st)
     st = _ps_take(st)
     let mut lhs = lhs_base
+    // RFC 073 SCAFFOLD: array-indexed assign — phase-2 extends the
+    // const-foldable `[<const>]` LHS form below to runtime-K (e.g.
+    // `grant[i] = …` inside a `for (i=0; i<N; …)` loop) by emitting
+    // a per-index `$eq`/`$mux` selector chain (N×$eq + N×$mux per
+    // write site). Const-K stays on the existing single-`connect`
+    // path (zero regression). No behaviour change this cycle.
     // optional `[ <const> ]` index on the LHS (unpacked array element
     // after generate-unrolling or pre-elaborated indexed wire).
     if _ps_peek(st) == "[" {
@@ -1888,6 +1905,14 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
             st = _ps_take(st)
             break
         }
+        // RFC 073 SCAFFOLD: pass_proc_mux site — phase-1 expands the
+        // single-statement if/else cond-mux below to multi-statement
+        // bodies + nested if/else chains + case statements (IEEE
+        // 1364-2005 §9.5; Yosys proc_mux behavioural reference). The
+        // current narrow shape already emits `$mux` correctly; phase-1
+        // generalises the detection so multi-driver condition-guarded
+        // writes flow here BEFORE pass_clean_multidriver collapses them.
+        // No behaviour change this cycle — marker + RFC link only.
         // `if (...) [begin] body [end] [else [begin] body [end]]` inside
         // always — proc-pass core sub-step #1: cond-mux emission for the
         // narrow shape `if (COND) LHS <= TRHS ; else LHS <= ERHS ;` with
@@ -2818,6 +2843,21 @@ fn read_verilog_file(path: str) -> ReadVerilogResult {
         }
     }
     return read_verilog(src)
+}
+
+// ─── RFC 073 SCAFFOLD: pass_proc_mux no-op stub ──────────────────────────
+//
+// Phase-1 placeholder per inbox/rfc_drafts_2026_05_20/
+// rfc_073_read_verilog_proc_mux.md §6. Phase-1 will walk
+// `d.modules[*]` and convert condition-guarded multi-driver writes
+// into RTLIL `$mux` cells BEFORE pass_clean_multidriver collapses
+// them. This stub is the typed insertion point — returns input
+// unchanged, parses cleanly, and satisfies F-RFC-RV-NO-REGRESSION
+// (no observable behaviour change). @cite IEEE 1364-2005 §9.2 / §9.5;
+// Yosys passes/proc/proc_mux.cc (behavioural reference only,
+// clean-room translation).
+fn pass_proc_mux(d: Design) -> Design {
+    return d
 }
 
 // ─── self-test (rfc_003 idiom) ───────────────────────────────────────────
