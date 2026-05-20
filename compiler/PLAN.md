@@ -7828,3 +7828,45 @@ PR #233 closed PIECE 1).
 
 **Cross-link**: RFC 070 §4.6 · §3.C capability gate · §3.D ABI stamp · §4.4 G7-A.native scaffold (동일 Shape-B "marker before impl" 패턴) · `@D g_inbox_processing_loop` Shape B · `@D g3`/`g5`/`g6`/`g_hxc`.
 
+## 진행 로그 — RFC 070 G7-B Mach-O Part B impl (real bind opcodes + LC_LOAD_DYLIB) LANDED (2026-05-20)
+
+**근거**: s1-step2-codegen-perf 4-cycle consolidated push. 본 entry 는 그 중 **Step 2 — Mach-O Part B** 1건 (Shape A surgical SSOT) 만 측정 land. Step 1 (binary promote) · Step 4 (gen2≡gen3 fixpoint) · Step 5 (Native F-A1/F-A2) 는 본 cycle 미포함 — heavy build + CLI gate 해제가 30분 cap + 단일 worktree 컨텍스트에서 g3 honest 처리 불가. `g_inbox_processing_loop` step 7 "binary promote 별도 standard deploy step. 본 cycle 미포함" 패턴 + `1a56f087` (G7-A.native impl DEFERRED) honest 패턴 유지.
+
+**Shape A (single surgical SSOT) 작업** — `compiler/link/hexa_ld.hexa` 1 file (103+ / 29-):
+1. `_build_macho_bind_blob()` 본체 교체 — `BIND_OPCODE_DONE`-only placeholder 를 진짜 bind opcode 시퀀스로:
+   - `SET_DYLIB_ORDINAL_IMM(1)`              (0x11)
+   - `SET_SYMBOL_TRAILING_FLAGS_IMM(0,name)` (0x40) + `"dyld_stub_binder"` + NUL
+   - `SET_TYPE_IMM(BIND_TYPE_POINTER=1)`     (0x51)
+   - `SET_SEGMENT_AND_OFFSET_ULEB(__DATA=1,0)` (0x71) + uleb(0)
+   - `DO_BIND`                                (0x90)
+   - `DONE`                                   (0x00)
+   - 8-byte align padding 유지.
+2. `_build_macho_arm64_dylib_v17_image()` 에 **LC_LOAD_DYLIB libSystem** 추가 — `cmd=0x0C`, name=`/usr/lib/libSystem.B.dylib`, name padded to 8-byte. dylib ordinal 1 이 SET_DYLIB_ORDINAL_IMM(1) 에 대응.
+3. `ncmds` 9 → 10. `sizeofcmds` 재계산 (`+ load_dylib_cmdsize`).
+4. 헤더 docblock 3 블록 갱신 — Part B 의 bind sequence 명시 + "Part B follow-up replaces..." → "Part B LANDED 2026-05-20".
+
+**측정 결과**:
+- `/Users/ghost/.hx/bin/hexa_real parse compiler/link/hexa_ld.hexa` → **OK** (parse-gate PASS).
+- 본 cycle commit on worktree branch: `54792a3d`.
+- binary regen (hexa cc --regen + hexa_v2 rebuild) NOT YET — 별도 deploy step 으로 분리.
+
+**Falsifier 계약 (RFC 070 G7-B F-B-LOADABLE for Mach-O)**:
+- 검증 가설: `_build_macho_arm64_dylib_v17_image()` 가 emit 한 dylib 가 `dyld_info -bind <out>` 에서 1개 bind record (ordinal=1, segment=__DATA, offset=0, symbol=`dyld_stub_binder`, type=POINTER) 를 report 해야.
+- 1차 측정 deferred — binary regen + dylib 실제 emit + dyld_info 호출 cycle 분리.
+- 회귀 위험: bind blob size 변경 (1 → ~26 B) + LC_LOAD_DYLIB cmdsize (~56 B) 가 linkedit_filesize/codesig_off 계산 chain 통과 — 산식 자체는 모두 동일 ladder (`linkedit_fileoff + DYLD_INFO_blobs + symtab + strtab + align_16 + codesig`) 라 위반 없음.
+
+**g3 honest scope**:
+- 본 land = SSOT-only + parse-gate PASS. binary 가 실제 emit 한 dylib 의 dyld 적재 거동은 **미측정**.
+- target symbol `dyld_stub_binder` 는 모든 libSystem-linked image 가 보유 — dyld 가 resolve 가능. 단 호출 site (PIC `load __got[0]` etc.) 미존재 → 적재만 되고 binder 가 실제 호출되지는 않음.
+- F-B-LOADABLE Mach-O = 별도 cycle (binary regen → dylib emit → `otool -l -bind` + `dlopen()+dlsym()`).
+
+**Out of scope (별도 cycle)**:
+- Step 1 binary promote (`hexa cc --regen` + hexa_v2 rebuild + 3-pass fixpoint).
+- Step 4 RFC 074 P6 self-host fixpoint (gen2 ≡ gen3 byte-eq after multi-field enum).
+- Step 5 RFC 070 G7-A.native F-A1/F-A2 falsify — CLI gate `--shared HEXA_BACKEND=native` refused at `self/main.hexa:2062` (RFC 070 G7-A.native CLI 해제 sub-cycle 별도).
+- 측정 cycle (dyld_info / otool / dlopen) deferred.
+
+**Files**: `compiler/link/hexa_ld.hexa` (Shape A surgical, +103 / -29) · `compiler/PLAN.md` (this entry).
+
+**Cross-link**: RFC 070 §G7-B Mach-O Part B · §3.B "1-symbol fat .so" · `@D g3` honest scope · `@D g_inbox_processing_loop` step 7 (deploy step separation) · `1a56f087` (G7-A.native DEFERRED 패턴 mirror).
+
