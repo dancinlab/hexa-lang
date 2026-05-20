@@ -45,6 +45,10 @@
   stdlib/qrng/ -> "★ Quantum RNG — 9 backends T0..T3 + NIST SP 800-22 audit. RFC 044 absorption of ~/core/qrng (헌법 v2 룰 4 reference impl). see §0 qrng_stack."
   stdlib/sim_universe/ -> "★ Sim-Universe — virtual-universe runtime (26 modules · ~32k LoC · τ-clock + multiverse + qpu_bridge + 16 experiments). RFC 046 absorption of ~/core/sim-universe. see §0 sim_universe_stack."
   stdlib/quantum/ -> "★ Quantum Mirror — ≤30-qubit laptop-grade substrate (38 module dirs · 62k LoC · Aer-compat state-vector kernel + 27 algorithms + chemistry_vqe). RFC 045 absorption of ~/core/qmirror. see §0 qmirror_stack."
+  compiler/lenses/ -> "★ binary built-in lens SSOT (RFC 065) — types.hexa + embedded.gen.hexa (36 lens / 9 family x 4 — adds `unfold` for archive-nexus heritage). 36/36 real bodies measured 2026-05-20. PR-only via @D g_atlas_binary_builtin symmetry."
+  compiler/atlas/by_kind/ -> "★ RFC 066 B-1a per-kind atlas split — {p,l,e,f,r,s,x,q}.gen.hexa (8 kinds; C deferred to B-1b HXC sidecar dist/atlas.hxc). stdlib consumers import only the kinds they need, bypassing the 4 GB hexa_v2 memcap of the full embedded.gen.hexa."
+  stdlib/loop/ -> "★ `hexa loop` self-growing atlas cycle runtime (RFC 065) — cycle.hexa (8-stage SCAN/LENS/DEDUP/GATE/FIRE/DRAFT/AUDIT/EXHAUST? with inline atlas_enrich) + state.hexa (8-file state I/O at \$HEXA_LANG/state/loop/<cwd_hash>/). Live: 36 lens dispatch -> 91 candidate/cycle -> inbox/atlas_candidates/<slug>.md, PR-only invariant preserved."
+  tool/atlas_split_by_kind.hexa -> "RFC 066 B-1a generator — emits compiler/atlas/by_kind/<k>.gen.hexa from compiler/atlas/embedded.gen.hexa. hexa-native (hexa-first guard). C kind skipped (HXC sidecar path)."
 
 # ─── §0 PROJECT-WIDE QRNG STACK (2026-05-16) ─────────────────────────
 # stdlib/qrng/ 는 헌법 v2 룰 4 (외부 자원 try-CLI-or-fallback) 의 모범 사례.
