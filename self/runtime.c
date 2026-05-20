@@ -3422,9 +3422,18 @@ HexaVal hexa_math_min(HexaVal a, HexaVal b) { return rt_min_float(a, b); }
 // the hexa-bio Bayesian audit suite (14 callsites in _python_bridge/module).
 // isnan/isinf/isfinite mirror C99 classifiers; emit hexa boolean.
 HexaVal hexa_math_lgamma(HexaVal x)   { return hexa_float(lgamma(HX_FLOAT(x))); }
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_isnan(HexaVal x)    { return hexa_bool(isnan(HX_FLOAT(x)) ? 1 : 0); }
 HexaVal hexa_math_isinf(HexaVal x)    { return hexa_bool(isinf(HX_FLOAT(x)) ? 1 : 0); }
 HexaVal hexa_math_isfinite(HexaVal x) { return hexa_bool(isfinite(HX_FLOAT(x)) ? 1 : 0); }
+#else
+extern HexaVal rt_isnan(HexaVal x);
+extern HexaVal rt_isinf(HexaVal x);
+extern HexaVal rt_isfinite(HexaVal x);
+HexaVal hexa_math_isnan(HexaVal x)    { return rt_isnan(hexa_float(HX_FLOAT(x))); }
+HexaVal hexa_math_isinf(HexaVal x)    { return rt_isinf(hexa_float(HX_FLOAT(x))); }
+HexaVal hexa_math_isfinite(HexaVal x) { return rt_isfinite(hexa_float(HX_FLOAT(x))); }
+#endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_max(HexaVal a, HexaVal b) { return hexa_float(fmax(HX_FLOAT(a), HX_FLOAT(b))); }
 #else
