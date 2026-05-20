@@ -4072,3 +4072,37 @@ honest-scope (g3 over-claim 0):
 - binary promote 본 cycle 미포함 (SOP g_inbox_processing_loop step 7 — standard deploy cycle 분리).
 
 cross-link: inbox/patches/rfc020-enum-payload-variants.md (RESOLUTION 섹션) · commits 3c8be96c · 005d5427 · a85b8a1c · 4ed9966e · 41ecfb97 · 77254d91
+
+### 2026-05-20 — RFC-020 **B2 RFC-drafted + C1 decision-locked** (Shape B scaffold · slot 074)
+
+**작업** = `inbox/patches/rfc020-enum-payload-variants.md` 의 F-agent (`bfda8c9b`) punted decisions (3) "B2 multi-cycle scope — 별도 RFC drafting 후 진행" + (4) "C1 multi-field 디자인 — positional vs labeled vs tuple — 1차 정착 후 별도 RFC" 두 가지를 한 cycle 에 RFC scaffold + design lock 으로 closure. memory `project_hexa_lang_enum_payload_works.md` 의 "단일 필드 작동, 다중 필드만 미지원" 갭 = 본 RFC 의 1차 타겟.
+
+**산출 (3 파일, markdown only)**:
+- `inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md` (신규, slot 074) — Shape B: RFC + 5 phase plan + decision lock. **C1 = positional (Rust-style)** 정착. **B2 = 5 phase plan** (Phase 1 parse → Phase 2 check → Phase 3 lower → Phase 4 ir+codegen → Phase 5 self-host fixpoint). 각 phase 별 falsifier (F-074-P1…P5) 명세 + dependency graph (linear; Phase 3 만 self/ B1 또는 compiler/MIR sum-type cross-dep). Out-of-scope = labeled (future C2), nested EnumPath destructure (C3), tuple-types, self/ B1 완료.
+- `inbox/patches/rfc020-enum-payload-variants.md` — header status `resolved-ssot` 보존 + 새 sub-status `B2 RFC-074 drafted; C1 decision-locked positional` + RESOLUTION table 의 B1/B2/C1 row 갱신 (B2 ⬜→📋 RFC-DRAFTED, C1 ⬜→🟢 DECIDED-POSITIONAL, B1 ⚠️ HOLDOUT 보존 + RFC-074 §3 Phase-3 cross-link 추가) + 후속 sub-cycle 명세 RFC 참조로 swap + 처리 체크리스트 진척.
+- `compiler/PLAN.md` — 본 entry (단일 row, `@D g_plan_consolidation` 준수).
+
+**dup-race precheck** (`@D g_inbox_processing_loop` step 1, 메모리 `inbox_dup_race_precheck` 참조):
+- `git log --all --oneline | grep -iE "rfc020|enum.*payload.*compiler|multi.*field.*enum"` → `bfda8c9b` F-agent closure 가 최신 (B1 HOLDOUT + B2/C1 punted). 풀-fix dup 없음.
+- `git grep -nE "enum.*Variant|payload_types|MultiField" compiler/...` → multi-field 흔적 없음 (정확히 미구현 상태). 단 `compiler/check/bind.hexa:815-828` 의 `children[]` walk + `compiler/parse/parser.hexa:1619-1625` comma-drain 둘 다 이미 multi-field-ready scaffolding 으로 land 되어 있음 — RFC §1.1 표 참조.
+- RFC slot 사전 audit (`git log --all --oneline | grep -iE "RFC 07[0-9]"`): 067/068/069 committed; 070 (G8 hexa_ld 시스터-브랜치), 071 (G8 partial relink 시스터-브랜치), 072 (atlas_enrich cache), **073 (stdlib/kernels/logic_synth proc_mux, PRs #188+#192 — 1차 시도 충돌 발견 후 회피)**, **074 사용** (현 cycle 의 first-free slot).
+- **dup-race precheck 결과: 없음. RFC slot 충돌만 1차 발견, 074 로 재배치.**
+
+**C1 positional 결정 근거** (5점, RFC-074 §2.1):
+1. minimum surgical — parser comma-loop · bind.hexa children[] walk 둘 다 이미 multi-field scaffolding (~3-line diff 로 accumulator 화);
+2. Rust/TS-port convention (wilson `AssistantMessageEvent` 출처가 positional discriminated union);
+3. single-field 가 arity-1 case 로 자연 subsume → A1-A5 zero churn;
+4. `self/ir/Operand` (B1 타겟; `Value(ValueId)`/`ImmI64(IntData)`/`Cmp(CmpData)` 등) 가 본디 positional sum — C1 결정이 B1 churn 사전제거;
+5. lattice-as-tool — n=6 의견 없음 (downstream-ergonomics 결정, `@D g_lattice` 준수).
+
+**B2 phase 1 단독 land 가능성**: `compiler/parse/parser.hexa::parse_enum_item` (L1606-1643) 의 comma-drain (L1619-1625) 을 accumulator 로 교체 + `compiler/parse/ast.hexa` L7-10 STALE 주석 갱신 + carrier-shape = `Param.typ` → `Param.typs: [TypeRef]` (RFC §3.1.1 결정; 이유 = AST 의 Param-of-Param nesting 미지원). 1-cycle Shape-A surgical, parse-gate 만으로 검증 가능 — semantic 은 Phase 2 typecheck 위임.
+
+**parse-gate**: 본 cycle 은 markdown only — `.hexa` 무수정. `hexa_real parse` 불필요. compiler/parse/parser.hexa L1602-1643 + compiler/check/bind.hexa L794-837 + compiler/parse/ast.hexa L1-80 모두 *read-only* 분석 후 RFC §3.1.1 carrier-shape 결정 record.
+
+**g3 honest scope**: Shape B scaffold (RFC + decision lock + inbox SSOT 갱신). **zero impl**, zero behavior change, zero `.hexa` 편집. RFC-074 §3 Phase 1-5 는 각각 후속 cycle 의 Shape-A surgical land 대상 (총 5 surgical cycles 예상, GPU fire 0, $0). Binary promote 미포함 (markdown-only, SOP §7). `inbox/PATCHES.yaml` 미터치. `inbox/patches/rfc020-enum-payload-variants.md` header status `resolved-ssot` 보존 (F-agent closure revoke 하지 않음, B1/B2/C1 row 진척 추가만).
+
+**worktree 격리 노트**: 본 작업은 1차 시도에서 main worktree `/Users/ghost/core/hexa-lang` 가 다른 세션의 branch shift (s1-step2-codegen-perf → rfc006-yosys-param-initial-dispatch) 및 file wipe 에 노출 — 메모리 `feedback_hexa_lang_shared_worktree_branch_hazard` 경고 그대로. 격리 worktree `/tmp/wt-rfc020-b2` (branch `rfc020-b2-c1-rfc074`, base = F-agent closure `bfda8c9b`) 에서 재작업하여 race-condition 0 으로 land. SOP `@D g_inbox_processing_loop` step 3 (격리 worktree dispatch) 의 측정-증명 패턴 적용.
+
+**files**: `inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md` (신규) · `inbox/patches/rfc020-enum-payload-variants.md` (header + RESOLUTION rows + 후속 명세 + 체크리스트 갱신) · `compiler/PLAN.md` (이 entry).
+
+cross-link: RFC-074 §2 C1 decision · §3 B2 5 phase plan · §5 5 falsifier · self/ A1-A5 commits `3c8be96c`/`005d5427`/`a85b8a1c`/`4ed9966e`/`41ecfb97` (heritage) · self/ B1 commit `77254d91` (HOLDOUT 출처) · `proposals/rfc_020_enum_payload_variants.md` §3.1 "multi-field deferred" 조항 (본 RFC 가 supersede) · `@D g_inbox_processing_loop` Shape B (RFC + scaffold) · `@D g_plan_consolidation` (이 entry) · `@D g6` citation-enforced (RFC §5 falsifier 가 strict-lint-stage acceptance proof 의 substrate) · 메모리 `inbox_dup_race_precheck` (RFC slot 충돌 재배치 사례 추가).
