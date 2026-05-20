@@ -4126,3 +4126,24 @@ RFC 067 P3 — `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md` §3 P3. E
 
 **Files** — extended only: `compiler/ir/lir.hexa` (+15 lines — 3 new struct fields with RFC 067 P3 docstring); `compiler/codegen/nvptx_target.hexa` (+~95 lines — 4 new helpers `_nvptx_frag_{role,dtype,layout}_for_op` + `_nvptx_wmma_mnemonic_family`, classifier Pass 1 metadata stamping, 8 existing PReg constructor sites updated); `compiler/codegen/arm64_darwin.hexa` · `x86_64_linux.hexa` · `thumbv7em_eabihf.hexa` · `emit/asm_test.hexa` (+2 lines each — `_*_preg_gpr` / `_*_empty_preg` helpers carry the 3 default-empty fields); `compiler/codegen/nvptx_lower_test.hexa` (+~180 lines — Case 20 `_test_dtype_family` + main() registration + PASS line). No binary promote; F-RFC055-CPU-CODEGEN-UNTOUCHED gate preserved (arm64/x86_64 backends only added default-empty fields to their PReg helpers — no behavior change). No edits to `self/codegen_c2.hexa` or `self/native/*`.
 
+### 2026-05-20 — rfc_006 §5 absorption iter 12 — `liberty.hexa` streaming parse · OOM blocker REMOVED
+
+`stdlib/kernels/logic_synth/liberty.hexa` — full surgical rewrite (226+/96-, single file). Pre-fix `parse_liberty_file` ran a character-by-character output accumulator (`out = out + c` for 12 M chars) inside `_lib_strip_comments` plus seven full-string `.replace()` passes in `_lib_normalize` on the 12 MB sky130_fd_sc_hd__tt_025C_1v80.lib (173k lines). Peak RSS hit ~7.8 GB and macOS issued SIGKILL during the §5 verdict step — measured pre-fix: `gate_record.hexa --lib /Users/ghost/core/OpenROAD-flow-scripts/flow/platforms/sky130hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib` died with `Killed: 9` after both d4/d6 pipelines OK'd but before any area-oracle could run. Iter 12 streams: `read_file` + `.split("\n")` once, then per-line `_lib_strip_line_comments` (with cross-line `/* */` carry bit) + `_lib_normalize_line` + `_lib_tokens_line` + `_lib_feed_tokens` state machine. State is FLAT (`st.field = …` only — hexa-lang codegen produces no lvalue for `st.x.y = …`); LibCell / LibPin records are materialized at close-`}` events from flat working fields and pushed into `lib_cells` / `cur_cell_pins`.
+
+**Measurement (post-fix, probe-only)**: `lib.ok = 1` · `lib.name = "sky130_fd_sc_hd__tt_025C_1v80"` · `lib.cells = 428` · `cell[0] = sky130_fd_sc_hd__a2111o_1, area = 11.2608 µm²` · `sky130_fd_sc_hd__inv_1 area = 3.7536 µm²` (matches Liberty source) · `Σ area = 6880.34 µm²`. **Selftest**: 8/8 PASS (T1 empty · T2 minimal corpus · T3 inv_1 area + combinational · T4 dfxtp_1 sequential · T5 clock pin · T6 brace-imbalance fail-loud · T7 lib_total_area sum · T8 pin directions).
+
+**Gate `_run` (rebased on origin/main · iter 11 #173 + #172 + #174)**: real time 12.07 s · peak RSS 311 MB (down from 7.8 GB pre-fix, and 21 s / 2.85 GB on a pre-rebase intermediate run). d4/d6 read_verilog → hierarchy → proc → flatten → opt → techmap → dfflibmap all OK. d4/d6 `abc_map` FAIL with a NEW error path uncovered:
+
+```
+Library "sky130_fd_sc_hd__tt_025C_1v80" ... has 334 cells (94 skipped). Time = 0.13 sec
+Warning: Detected 9 multi-output cells (for example, "sky130_fd_sc_hd__fa_1").
+Line 52: Signal "idx" is defined more than once.
+Reading network from file has failed.
+```
+
+ABC now READS the lib (334 cells loaded) — that's progress over the pre-iter-10 path. But the BLIF emitted by iter 11's non-const-connect `.names` path duplicates an `idx` signal, and ABC's `read_blif` rejects the file. This is an INDEPENDENT blocker, not a `liberty.hexa` issue.
+
+**§5 verdict (g3 honest)**: §5 remains OPEN. The OOM that prevented the verdict step from running is REMOVED. The remaining gap is downstream of `liberty.hexa` — an `idx`-signal duplicate in the iter-11+ BLIF emit path. NOT claiming "Yosys absorbed". NOT claiming areas match ±5%. Claiming: liberty parsing is no longer the §5 blocker; the next iter (`rtlil.hexa` or `abc_map.hexa` non-const-connect signal-uniquing) can take §5 forward.
+
+**Files** — extended only: `stdlib/kernels/logic_synth/liberty.hexa` (+226 / -96 LoC). No `self/`, no compiler binary promote (@D g_commit_push_deploy N/A — stdlib change, not compiler source). @D g5 (pure hexa-lang) · g6 (atlas @cite Liberty Reference Manual — preserved in CLEAN-ROOM provenance block) · g3 honest · g_stdlib_ownership · g_plan_consolidation. Companion `inbox/notes/2026-05-20-rfc006-liberty-streaming-oom-fix.md`.
+
