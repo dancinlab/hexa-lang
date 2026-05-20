@@ -28,3 +28,33 @@ pub fn rt_isalpha(c: int) -> bool {
     if c >= 97 && c <= 122 { return true }  // 'a'..'z'
     return false
 }
+
+// Step 3 cycle 27 — count non-overlapping occurrences of substring `sub` in `s`.
+// Matches interpreter's greedy advance (hexa_full.hexa:14954-14973). Empty
+// pattern → 0 (avoids infinite loop on .strstr-equivalent semantics).
+pub fn rt_str_count_substr(s: string, sub: string) -> int {
+    let slen = byte_len(s)
+    let plen = byte_len(sub)
+    if plen == 0 { return 0 }
+    let mut cnt = 0
+    let mut i = 0
+    while i + plen <= slen {
+        let mut k = 0
+        let mut ok = true
+        while k < plen {
+            if s.byte_at(i + k) != sub.byte_at(k) {
+                ok = false
+                k = plen
+            } else {
+                k = k + 1
+            }
+        }
+        if ok {
+            cnt = cnt + 1
+            i = i + plen
+        } else {
+            i = i + 1
+        }
+    }
+    return cnt
+}

@@ -6168,6 +6168,8 @@ int hexa_array_contains(HexaVal arr, HexaVal item) {
 
 // count_substr(s, substr): number of non-overlapping occurrences.
 // Matches interpreter's greedy advance (hexa_full.hexa:14954-14973).
+// Step-3 cycle 27 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_count_substr(HexaVal s, HexaVal sub) {
     if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return hexa_int(0);
     const char* src = HX_STR(s);
@@ -6182,6 +6184,13 @@ HexaVal hexa_str_count_substr(HexaVal s, HexaVal sub) {
     }
     return hexa_int(cnt);
 }
+#else
+extern HexaVal rt_str_count_substr(HexaVal s, HexaVal sub);
+HexaVal hexa_str_count_substr(HexaVal s, HexaVal sub) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return hexa_int(0);
+    return rt_str_count_substr(s, sub);
+}
+#endif
 
 HexaVal hexa_format_float(HexaVal f, HexaVal prec) {
     double v = __hx_to_double(f);
