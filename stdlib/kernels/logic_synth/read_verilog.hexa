@@ -1377,6 +1377,111 @@ fn _rv_parse_function(st_in: PState) -> RvFuncStep {
 // original body. Pre-`if` statements (e.g. local `reg` decls or
 // blocking assignments to local vars) are NOT handled — those need
 // proper function-body proc-pass, separate sub-step.
+// CLEAN-ROOM: extension of _rv_collapse_cascaded_if_body that also
+// handles a preceding prefix of local declarations + blocking
+// assignments, optionally wrapped in `begin … end`. router_d4's
+// route_xy has the shape:
+//
+//   function automatic [2:0] route_xy(input [W-1:0] pkt);
+//       reg signed [...] dx, dy;       ← decl(s) — skipped
+//       begin                          ← optional block-wrap — skipped
+//           dx = dst_x_of(pkt) - my_x; ← blocking assign — substituted
+//           dy = dst_y_of(pkt) - my_y; ← blocking assign — substituted
+//           if (dx > 0) route_xy = 3'd2;  …
+//           else if (dy > 0) route_xy = 3'd0;
+//           …
+//           else route_xy = 3'd4;
+//       end                            ← matched `end`
+//   endfunction
+//
+// The recognised cascaded-if tail is collapsed via the existing
+// `_rv_collapse_cascaded_if_body`. Then every `<name>` that appeared
+// as a blocking-assign LHS is substituted token-wise with `( <rhs> )`
+// (SSA-style; works for the route_xy shape where each local is
+// assigned exactly once and only consumed downstream). Returns the
+// `fname = ( ternary ) ;` token form on success, or `[]` for any
+// shape mismatch — caller falls back to plain _rv_collapse, then
+// to vf.body unchanged.
+fn _rv_collapse_func_body_with_prefix(body: [str], fname: str) -> [str] {
+    let mut subst_names: [str] = []
+    let mut subst_exprs: [[str]] = []
+    let mut i = 0
+    let n = len(body)
+    let mut has_begin = 0
+    while i < n {
+        let t = body[i]
+        if t == "reg" || t == "integer" || t == "wire" {
+            // skip a single declaration up to `;` (range / signed / list)
+            while i < n && body[i] != ";" { i = i + 1 }
+            if i < n { i = i + 1 }
+            continue
+        }
+        if t == "begin" {
+            has_begin = 1
+            i = i + 1
+            continue
+        }
+        if t == "if" { break }
+        // blocking-assign: `<name> = <expr> ;` (name is not a keyword)
+        if i + 1 < n && body[i + 1] == "=" {
+            let lhs = t
+            i = i + 2
+            let mut expr: [str] = []
+            while i < n && body[i] != ";" {
+                expr = expr.push(body[i])
+                i = i + 1
+            }
+            if i >= n { return [] }
+            i = i + 1
+            subst_names = subst_names.push(lhs)
+            subst_exprs = subst_exprs.push(expr)
+            continue
+        }
+        // anything else → shape mismatch
+        return []
+    }
+    // tail = body[i..(n - optional `end`)]. Build a slice for the
+    // existing cascaded-if collapser.
+    let mut tail_end = n
+    if has_begin == 1 && n > 0 && body[n - 1] == "end" { tail_end = n - 1 }
+    let mut tail: [str] = []
+    let mut j = i
+    while j < tail_end {
+        tail = tail.push(body[j])
+        j = j + 1
+    }
+    if len(tail) == 0 { return [] }
+    let collapsed = _rv_collapse_cascaded_if_body(tail, fname)
+    if len(collapsed) == 0 { return [] }
+    // Substitute each subst name with `( <expr> )` token-wise across
+    // the collapsed token stream.
+    if len(subst_names) == 0 { return collapsed }
+    let mut out: [str] = []
+    let mut ci = 0
+    while ci < len(collapsed) {
+        let ct = collapsed[ci]
+        let mut idx = 0 - 1
+        let mut sk = 0
+        while sk < len(subst_names) {
+            if subst_names[sk] == ct { idx = sk; sk = len(subst_names) }
+            sk = sk + 1
+        }
+        if idx >= 0 {
+            out = out.push("(")
+            let mut ei = 0
+            while ei < len(subst_exprs[idx]) {
+                out = out.push(subst_exprs[idx][ei])
+                ei = ei + 1
+            }
+            out = out.push(")")
+        } else {
+            out = out.push(ct)
+        }
+        ci = ci + 1
+    }
+    return out
+}
+
 fn _rv_collapse_cascaded_if_body(body: [str], fname: str) -> [str] {
     let mut conds: [[str]] = []
     let mut exprs: [[str]] = []
@@ -1541,16 +1646,21 @@ fn _rv_inline_func_calls(toks_in: [str], funcs: [VFunc]) -> [str] {
             }
             if depth != 0 { ok = 0 }
             let vf = funcs[fidx]
-            // Try collapsing cascaded-if function body into a single
-            // return-expr with nested ternary (sub-step #4f). If the
-            // collapse succeeds, use the collapsed body for the
-            // remaining shape checks + substitution.
-            let collapsed = _rv_collapse_cascaded_if_body(vf.body, vf.name)
+            // Sub-step #4g: try function body with preceding-stmt
+            // prefix first (decls + blocking-assigns + cascaded-if,
+            // router_d4 route_xy shape). Falls back to bare cascaded-
+            // if collapse (#4f), then to vf.body unchanged.
+            let collapsed_g = _rv_collapse_func_body_with_prefix(vf.body, vf.name)
             let mut body_use: [str] = []
-            if len(collapsed) > 0 {
-                body_use = collapsed
+            if len(collapsed_g) > 0 {
+                body_use = collapsed_g
             } else {
-                body_use = vf.body
+                let collapsed = _rv_collapse_cascaded_if_body(vf.body, vf.name)
+                if len(collapsed) > 0 {
+                    body_use = collapsed
+                } else {
+                    body_use = vf.body
+                }
             }
             if ok == 1 && len(args) == len(vf.args) && len(body_use) >= 4 {
                 if body_use[0] != vf.name { ok = 0 }
@@ -4743,6 +4853,30 @@ fn main() {
     let _r49 = read_verilog(_v49)
     if _r49.ok != 1 {
         println("FAIL T49 initial_skip: " + _r49.message); fails = fails + 1
+    }
+
+    // T50 — sub-step #4g: cascaded-if function body with a preceding
+    // local-decl + blocking-assign prefix. Shape mirrors router_d4's
+    // `route_xy`: reg decl, begin/end wrap, blocking assign substitutes
+    // the call-site arg into the cascaded-if's branch expressions, then
+    // ternary lowers each level to a $mux. After inline at the assign
+    // site, `r = f(h)` should reach the ternary collapse + emit the
+    // $mux + $gt cells (no "name not found" fallback).
+    total = total + 1
+    let _v50 = "module rg ( input wire [ 3 : 0 ] h , output wire [ 1 : 0 ] r ) ; function automatic [ 1 : 0 ] f ( input [ 3 : 0 ] x ) ; reg [ 3 : 0 ] dx ; begin dx = x ; if ( dx > 0 ) f = 1 ; else f = 0 ; end endfunction assign r = f ( h ) ; endmodule"
+    let _r50 = read_verilog(_v50)
+    if _r50.ok != 1 {
+        println("FAIL T50 func_inline_with_prefix: " + _r50.message); fails = fails + 1
+    } else {
+        let _m50 = _r50.design.modules[0]
+        let _gt = rtlil_count_cells_of_type(_m50, "$gt")
+        let _mux = rtlil_count_cells_of_type(_m50, "$mux")
+        if _gt != 1 {
+            println("FAIL T50a gt_count got " + str(_gt) + " (expected 1)"); fails = fails + 1
+        }
+        if _mux != 1 {
+            println("FAIL T50b mux_count got " + str(_mux) + " (expected 1)"); fails = fails + 1
+        }
     }
 
     if fails > 0 {
