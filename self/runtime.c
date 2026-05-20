@@ -675,9 +675,27 @@ static int hxlcl_isatty(int fd);
 static void *hxlcl_signal(int signum, void *handler);
 static int hxlcl_sigaction(int signum, const void *act, void *oldact);
 static int hxlcl_sigprocmask(int how, const void *set, void *oldset);
-// getenv stays C — init-time blocker
+// getenv: cycle 66 — restore real environ-walk (cycle 61's noop stub
+// silently disabled every env-flag in the runtime, including
+// HEXA_EXEC_NO_SHELL → posix_spawnp fast path → exec() returned "").
+// Resolves inbox/patches/yosys-exec-runtime-regression-cycles-61-64.md
+// + inbox/patches/runtime-env-and-exec-capture-stubs-block-cli-tools.md.
+// Walks the `environ` global directly; matches libc getenv semantics
+// (case-sensitive, returns first match, NULL on miss).
+extern char **environ;
 static char *__attribute__((noinline)) hxlcl_getenv(const char *name) {
-    (void)name; return (char *)0;
+    if (!name) return (char *)0;
+    char **e = environ;
+    if (!e) return (char *)0;
+    size_t nlen = hxlcl_strlen(name);
+    while (*e) {
+        const char *entry = *e;
+        size_t i = 0;
+        while (i < nlen && entry[i] && entry[i] == name[i]) i++;
+        if (i == nlen && entry[i] == '=') return (char *)(entry + nlen + 1);
+        e++;
+    }
+    return (char *)0;
 }
 static int hxlcl_setenv(const char *name, const char *val, int overwrite);
 static int hxlcl_setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen);
@@ -794,30 +812,48 @@ static inline long _hxlcl_syscall6(long nr, long a0, long a1, long a2, long a3, 
     return x0;
 }
 
+// cycle 66 — libc read/write (carry-flag issue + EINTR handling).
+extern long read(int fd, void *buf, unsigned long n);
+extern long write(int fd, const void *buf, unsigned long n);
 static long __attribute__((noinline)) hxlcl_read(int fd, void *buf, unsigned long n) {
-    return _hxlcl_syscall3(HXLCL_SYS_READ, (long)fd, (long)buf, (long)n);
+    return read(fd, buf, n);
 }
 static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) {
-    return _hxlcl_syscall3(HXLCL_SYS_WRITE, (long)fd, (long)buf, (long)n);
+    return write(fd, buf, n);
 }
+// cycle 66 — restore libc close. The svc 0x80 path returned errno on
+// failure without distinguishing from success-fd convention (no carry
+// flag access in inline asm), breaking pipe-close-then-read patterns.
+extern int close(int fd);
 static int __attribute__((noinline)) hxlcl_close(int fd) {
-    return (int)_hxlcl_syscall1(HXLCL_SYS_CLOSE, (long)fd);
+    return close(fd);
 }
 static int __attribute__((noinline)) hxlcl_getpid(void) {
     return (int)_hxlcl_syscall1(HXLCL_SYS_GETPID, 0);
 }
+// cycle 66 — libc dup2 (same carry-flag issue as close).
+extern int dup2(int oldfd, int newfd);
 static int __attribute__((noinline)) hxlcl_dup2(int oldfd, int newfd) {
-    return (int)_hxlcl_syscall2(HXLCL_SYS_DUP2, (long)oldfd, (long)newfd);
+    return dup2(oldfd, newfd);
 }
+// cycle 66 — restore libc pipe() backing. The cycle 63+64 svc-0x80
+// path mis-handled the Darwin pipe(2) pair-return: the kernel
+// returns the two fds in x0/x1 registers, NOT in the user-provided
+// int[2] memory. The svc wrapper only captures x0, so fds[1] stayed
+// uninitialized → child's dup2(pipe[1], 1) wrote to a garbage fd →
+// parent's read(pipe[0], …) saw EOF immediately → exec() emitted
+// "". Resolves inbox/patches/yosys-exec-runtime-regression-cycles-
+// 61-64.md Secondary suspect (cycles 63+64 pipe machinery).
+extern int pipe(int fds[2]);
 static int __attribute__((noinline)) hxlcl_pipe(int fds[2]) {
-    long r = _hxlcl_syscall1(HXLCL_SYS_PIPE, (long)fds);
-    // Darwin: pipe returns r=x0, w=x1 in pair-return convention. The
-    // syscall ABI stores both in x0/x1 of the trap frame. For simplicity
-    // we fall back to expecting the kernel wrote `int fds[2]` for us.
-    return (r < 0) ? -1 : 0;
+    return pipe(fds);
 }
+// cycle 66 — libc fork (BSD pair-return convention; svc 0x80 path
+// captured only x0, missing the carry-flag-disambiguates-parent-vs-
+// child convention).
+extern int fork(void);
 static int __attribute__((noinline)) hxlcl_fork(void) {
-    return (int)_hxlcl_syscall1(HXLCL_SYS_FORK, 0);
+    return fork();
 }
 static int __attribute__((noinline)) hxlcl_kill(int pid, int sig) {
     return (int)_hxlcl_syscall2(HXLCL_SYS_KILL, (long)pid, (long)sig);
@@ -837,8 +873,11 @@ static int __attribute__((noinline)) hxlcl_select(int nfds, void *r, void *w, vo
 static int __attribute__((noinline)) hxlcl_poll(void *fds, unsigned int nfds, int timeout) {
     return (int)_hxlcl_syscall3(HXLCL_SYS_POLL, (long)fds, (long)nfds, (long)timeout);
 }
+// cycle 66 — libc waitpid (wait4 syscall has 4 args + needs proper
+// errno/EINTR handling that the raw syscall path drops).
+extern int waitpid(int pid, int *status, int options);
 static int __attribute__((noinline)) hxlcl_waitpid(int pid, int *status, int options) {
-    return (int)_hxlcl_syscall4(HXLCL_SYS_WAIT4, (long)pid, (long)status, (long)options, 0);
+    return waitpid(pid, status, options);
 }
 /* Cycle 65: variadic to handle both 2-arg and 3-arg open() callers. */
 static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags, ...) {
@@ -1271,20 +1310,125 @@ static long hxlcl_sendmsg(int s, const void *m, int f) {
 static int hxlcl_inet_pton(int af, const char *src, void *dst) {
     (void)af; (void)src; (void)dst; return (int)HX_INT(rt_net_zero());
 }
-static int hxlcl_execl(const char *path, const char *arg, ...) {
-    (void)path; (void)arg; return (int)HX_INT(rt_net_fail());
-}
+// cycle 66 — restore real exec/popen bodies. Cycle 61 dropped these as
+// noop stubs with rationale "aprime_cc never spawns children". But the
+// runtime that backs `hexa run` and stdlib's exec() / exec_capture() /
+// gate_record DOES spawn children — and the stubs silently broke every
+// subprocess-dependent stdlib (yosys/ABC, anima trainers, pool CLI).
+// posix_spawnp + posix_spawn_file_actions_* are already linked in via
+// runtime_core.c's hexa_spawn_no_shell, so the libc symbols for
+// execve/execvp/execl/popen/pclose are also reachable — just pass
+// through. Resolves inbox/patches/yosys-exec-runtime-regression-cycles-
+// 61-64.md (Part 1, exec path).
+extern int execve(const char *path, char *const argv[], char *const envp[]);
+extern int execvp(const char *file, char *const argv[]);
 static int hxlcl_execve(const char *path, char *const argv[], char *const envp[]) {
-    (void)path; (void)argv; (void)envp; return (int)HX_INT(rt_net_fail());
+    return execve(path, argv, envp);
 }
 static int hxlcl_execvp(const char *file, char *const argv[]) {
-    (void)file; (void)argv; return (int)HX_INT(rt_net_fail());
+    return execvp(file, argv);
+}
+// execl is variadic; gather varargs into a char* argv[] then call execvp.
+// Mirrors libc semantics — last arg must be (char*)NULL.
+static int hxlcl_execl(const char *path, const char *arg, ...) {
+    enum { HXLCL_EXECL_MAX = 256 };
+    char *argv[HXLCL_EXECL_MAX];
+    int n = 0;
+    argv[n++] = (char *)arg;
+    va_list ap;
+    va_start(ap, arg);
+    while (n < HXLCL_EXECL_MAX - 1) {
+        char *next = va_arg(ap, char *);
+        argv[n++] = next;
+        if (!next) break;
+    }
+    argv[HXLCL_EXECL_MAX - 1] = (char *)0;
+    va_end(ap);
+    return execve(path, argv, environ);
+}
+// hxlcl_popen — manual pipe+fork+execve replacement for libc popen.
+// Returns a "fake FILE*" compatible with hxlcl_fdopen's `(void*)(fd+1)`
+// convention so hxlcl_fread can read from it. The libc popen path
+// (extern FILE* popen) returns a real heap FILE* which the hxlcl_fread
+// macro mis-interprets (it expects fd-encoded "FILE*"s from
+// hxlcl_fdopen, not heap pointers) — so we replicate popen here using
+// the syscall primitives that now work post cycles 63/64 + the cycle
+// 66 fix to libc pipe/execve. To track the child pid for pclose we
+// stash it in a small linear table keyed by the read-fd. Mode "r"
+// only — the only mode hexa_exec uses.
+#define HXLCL_POPEN_MAX 64
+static int  _hxlcl_popen_fds[HXLCL_POPEN_MAX];
+static int  _hxlcl_popen_pids[HXLCL_POPEN_MAX];
+static int  _hxlcl_popen_init_done = 0;
+static void _hxlcl_popen_init(void) {
+    if (_hxlcl_popen_init_done) return;
+    for (int i = 0; i < HXLCL_POPEN_MAX; i++) {
+        _hxlcl_popen_fds[i] = -1;
+        _hxlcl_popen_pids[i] = -1;
+    }
+    _hxlcl_popen_init_done = 1;
+}
+static void _hxlcl_popen_remember(int fd, int pid) {
+    _hxlcl_popen_init();
+    for (int i = 0; i < HXLCL_POPEN_MAX; i++) {
+        if (_hxlcl_popen_fds[i] < 0) {
+            _hxlcl_popen_fds[i] = fd;
+            _hxlcl_popen_pids[i] = pid;
+            return;
+        }
+    }
+}
+static int _hxlcl_popen_forget(int fd) {
+    _hxlcl_popen_init();
+    for (int i = 0; i < HXLCL_POPEN_MAX; i++) {
+        if (_hxlcl_popen_fds[i] == fd) {
+            int pid = _hxlcl_popen_pids[i];
+            _hxlcl_popen_fds[i] = -1;
+            _hxlcl_popen_pids[i] = -1;
+            return pid;
+        }
+    }
+    return -1;
 }
 static void *hxlcl_popen(const char *cmd, const char *mode) {
-    (void)cmd; (void)mode; (void)rt_net_fail(); return (void *)0;
+    if (!cmd) return (void *)0;
+    /* Only "r" supported — hexa_exec only reads child stdout. */
+    if (!mode || mode[0] != 'r') return (void *)0;
+    int pfd[2];
+    if (hxlcl_pipe(pfd) != 0) return (void *)0;
+    fflush(NULL);
+    pid_t pid = hxlcl_fork();
+    if (pid < 0) {
+        hxlcl_close(pfd[0]); hxlcl_close(pfd[1]);
+        return (void *)0;
+    }
+    if (pid == 0) {
+        /* child */
+        hxlcl_dup2(pfd[1], 1);
+        hxlcl_close(pfd[0]);
+        hxlcl_close(pfd[1]);
+        hxlcl_execl("/bin/sh", "sh", "-c", cmd, (char *)0);
+        _exit(127);
+    }
+    /* parent */
+    hxlcl_close(pfd[1]);
+    _hxlcl_popen_remember(pfd[0], pid);
+    /* hxlcl_fdopen returns (void*)(fd+1); hxlcl_fread expects this
+     * encoding via _hxlcl_fp_fd. */
+    return hxlcl_fdopen(pfd[0], "r");
 }
 static int hxlcl_pclose(void *stream) {
-    (void)stream; return (int)HX_INT(rt_net_fail());
+    if (!stream) return -1;
+    /* Decode the fd from the fake FILE* via the same offset
+     * hxlcl_fdopen uses. */
+    int fd = (int)((uintptr_t)stream) - 1;
+    if (fd < 0) return -1;
+    int pid = _hxlcl_popen_forget(fd);
+    hxlcl_close(fd);
+    if (pid <= 0) return -1;
+    int status = 0;
+    (void)hxlcl_waitpid(pid, &status, 0);
+    return status;
 }
 static int hxlcl_forkpty(int *amaster, char *name, void *termp, void *winp) {
     (void)amaster; (void)name; (void)termp; (void)winp; return (int)HX_INT(rt_net_fail());
