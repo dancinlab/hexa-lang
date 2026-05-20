@@ -153,20 +153,152 @@ fn _ex86_mov_r32_imm32(reg_idx: Int, imm: Int) -> [Int] {
 }
 
 pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
-    // MOV r32, imm32  (caller passes uppercase MOV, lowercase reg name)
     if op == "MOV" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg32(ops[0])
         let imm = _ex86_imm(ops[1])
         if rd >= 0 { return _ex86_mov_r32_imm32(rd, imm) }
     }
-    if op == "SYSCALL" {
-        return [0x0F, 0x05]
+    if op == "SYSCALL" { return [0x0F, 0x05] }
+    if op == "RET"     { return [0xC3] }
+    // CALL rel32 — 5 bytes: E8 + 4-byte signed PC-relative offset.
+    // The imm32 placeholder is emitted as 0; linker patches via
+    // R_X86_64_PLT32 (or R_X86_64_PC32) at link time.
+    if op == "CALL" && len(ops) == 1 {
+        return [0xE8, 0x00, 0x00, 0x00, 0x00]
     }
-    if op == "RET" {
-        return [0xC3]
-    }
-    // Unknown op — return empty (caller treats as encoding failure).
     return []
+}
+
+// ─────────────────────────────────────────────────────────────────
+// link_elf_x86_64 — P2 cycle 4: ELF multi-obj static-link
+// ─────────────────────────────────────────────────────────────────
+//
+// Mirror of P1's `link_macho_arm64` but for ELF. Take N ElfX86Obj +
+// concat their texts, resolve inter-obj CALL relocations, wrap in
+// ET_EXEC PT_LOAD shell.
+//
+// Reloc handling (cycle 4 minimal):
+//   - R_X86_64_PLT32 (kind=4) / R_X86_64_PC32 (kind=2): patch the
+//     CALL instruction's imm32 field with the PC-relative offset to
+//     the target symbol. Per x86_64 convention, the offset is
+//     measured from the END of the CALL (so patch_addr+4-byte for
+//     the imm32 field; target = sym_addr; delta = sym_addr -
+//     (patch_addr + 4) + addend).
+pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> Int {
+    // Concatenate text + record per-obj base + global symbol map.
+    let mut text_bytes: [Int] = []
+    let mut entry_off = 0
+    let mut entry_found = false
+    let mut def_names:   [string] = []
+    let mut def_offsets: [Int]    = []
+    let mut obj_bases:   [Int]    = []
+    let mut obj_strtab_local: [string] = []     // running per-obj sym-name resolution
+
+    let mut oi = 0
+    while oi < len(objs) {
+        let obj = objs[oi]
+        let base = len(text_bytes)
+        obj_bases.push(base)
+        // Resolve each symbol's name from the obj's local strtab.
+        let mut di = 0
+        while di < len(obj.symbols) {
+            let s = obj.symbols[di]
+            // Read name from strtab starting at s.name_offset (NUL-term).
+            let mut name = ""
+            let mut k = 0
+            while true {
+                let b = obj.strtab[s.name_offset + k] & 0xFF
+                if b == 0 { break }
+                name = name + chr(b)
+                k = k + 1
+            }
+            // Defined (section != 0) → global map.
+            if s.section != 0 {
+                def_names.push(name)
+                def_offsets.push(base + s.value)
+                if !entry_found && name == entry {
+                    entry_off = base + s.value
+                    entry_found = true
+                }
+            }
+            di = di + 1
+        }
+        // Append text.
+        let mut ti = 0
+        while ti < len(obj.text) {
+            text_bytes.push(obj.text[ti] & 0xFF)
+            ti = ti + 1
+        }
+        oi = oi + 1
+    }
+    if !entry_found {
+        eprintln("hexa_ld(elf): entry '" + entry + "' not defined in any obj")
+        return 3
+    }
+
+    // Resolve relocations.
+    let mut ro = 0
+    while ro < len(objs) {
+        let obj = objs[ro]
+        let base = obj_bases[ro]
+        let mut ri = 0
+        while ri < len(obj.relocs) {
+            let r = obj.relocs[ri]
+            // Look up target sym name via the obj's symtab + strtab.
+            let sym = obj.symbols[r.sym_idx]
+            let mut name = ""
+            let mut k = 0
+            while true {
+                let b = obj.strtab[sym.name_offset + k] & 0xFF
+                if b == 0 { break }
+                name = name + chr(b)
+                k = k + 1
+            }
+            // Find target in global defined map.
+            let mut found_idx = -1
+            let mut sk = 0
+            while sk < len(def_names) {
+                if def_names[sk] == name { found_idx = sk; break }
+                sk = sk + 1
+            }
+            if found_idx >= 0 {
+                let tgt_off = def_offsets[found_idx]
+                // ELF reloc formula: imm32 = S + A - P
+                //   S = target symbol's address (here a text offset
+                //       since we omit the vaddr base — both target
+                //       and patch live in the same segment).
+                //   A = addend (e.g. -4 for x86_64 CALL).
+                //   P = patch site address (the imm32 field).
+                // For CALL E8 imm32, A=-4 reproduces the canonical
+                // imm32 = target - call_start - 5 (call_start =
+                // patch_off - 1, so imm32 = target - patch_off - 4).
+                let patch_off = base + r.offset
+                let delta = tgt_off + r.addend - patch_off
+                text_bytes[patch_off + 0] = delta & 0xFF
+                text_bytes[patch_off + 1] = (delta >> 8) & 0xFF
+                text_bytes[patch_off + 2] = (delta >> 16) & 0xFF
+                text_bytes[patch_off + 3] = (delta >> 24) & 0xFF
+            }
+            ri = ri + 1
+        }
+        ro = ro + 1
+    }
+
+    // The exec's entry symbol must be at offset 0 of __text for our
+    // minimal PT_LOAD layout (e_entry = vaddr_base + code_off where
+    // code_off is the file position of the FIRST byte of text). If
+    // entry symbol isn't at offset 0, shift the entry's text to the
+    // front. For cycle 4 we require entry@offset 0 (caller's
+    // responsibility) — entry_off != 0 returns rc=4.
+    if entry_off != 0 {
+        eprintln("hexa_ld(elf): entry symbol must be at text offset 0 (got " +
+                 to_string(entry_off) + ")")
+        return 4
+    }
+
+    let bytes = serialize_elf_exec_x86_64(text_bytes)
+    write_bytes(out_path, bytes)
+    return 0
 }
 
 // serialize_elf_x86_64 — P2 cycle 1: empty-object byte stream.

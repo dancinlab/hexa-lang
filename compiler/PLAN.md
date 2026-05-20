@@ -5543,3 +5543,99 @@ toolchain 0건 (codesign 제외, ELF 는 fork 0) 으로 만들어냄.
 linker + RUNEQ corpus) + P3.
 
 **cc --regen / binary promote**: 미수행. compiler/emit/elf_x86_64.hexa.
+
+
+### 2026-05-20 — S7-P2 cycle 4: 🛸 ELF multi-obj static-link + CALL reloc (F-P2-MULTIOBJ-RUNEQ FULL PASS, REMOTE_RC=42)
+
+RFC 063 § P2 cycle 4 — Linux analog of P1 cycle 8 (Mach-O static-link
+with synthetic runtime stub). 2 synthetic ElfX86Obj (main + runtime
+stub) → multi-obj static-link → ELF exec → ubu-2 launch → exit 42.
+
+**한 줄**: `_main: CALL _exit_helper` + `_exit_helper: mov eax,60; mov
+edi,42; syscall` 2-obj 가 hexa-side static-link 후 CALL reloc 정확히
+patch 되어 Linux 에서 exit 42. P1 cycle 8 의 Mach-O static-link RUNEQ
+의 Linux 대응 완료.
+
+**변경 파일** (`compiler/emit/elf_x86_64.hexa`):
+
+1. `encode_x86_64_insn` 에 **CALL rel32** 추가:
+   - `CALL imm32` → `[E8, 00, 00, 00, 00]` (5 bytes, imm32 placeholder)
+   - 링커가 R_X86_64_PLT32 reloc 으로 patch.
+
+2. **`pub fn link_elf_x86_64(objs, out_path, entry) -> Int`** — 새 함수:
+   - Per-obj base 누적 + text concat (P1's link_macho_arm64 와 동일
+     패턴).
+   - Per-obj symtab + strtab walk — defined symbols (section != 0) 을
+     global map (def_names/def_offsets) 에 등록. ElfSym.name_offset
+     으로 strtab 에서 name lookup.
+   - Per-obj reloc walk — ElfRel.sym_idx 로 sym 찾고 그 name 으로
+     global map 검색. 매칭되면 patch.
+   - **Reloc formula**: ELF 의 `imm32 = S + A - P` (S = symbol value,
+     A = addend, P = patch site). x86_64 CALL 의 addend = -4 (GCC
+     convention) → 결과적으로 imm32 = target - patch_off - 4 =
+     target - call_start - 5 (canonical PC-rel offset).
+   - Entry symbol 가 text offset 0 에 있어야 함 (cycle 4 제약 —
+     entry@0 이 아니면 rc=4).
+   - serialize_elf_exec_x86_64 로 ET_EXEC wrap → write_bytes.
+
+**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P2_MULTIOBJ_RUNEQ.hexa`):
+
+```
+main_obj:
+  text:    E8 00 00 00 00     CALL _exit_helper (imm32 patched)
+  symbols: _main@0 (defined, GLOBAL FUNC) · _exit_helper (UNDEF, GLOBAL)
+  relocs:  offset=1, sym_idx=1, kind=R_X86_64_PLT32 (4), addend=-4
+
+runtime_obj:
+  text:    B8 3C 00 00 00     mov eax, #60   (sys_exit)
+           BF 2A 00 00 00     mov edi, #42   (code)
+           0F 05              syscall
+  symbols: _exit_helper@0 (defined, GLOBAL FUNC)
+  relocs:  []
+```
+
+링커 결과:
+- text concat = 17 bytes (5 + 12)
+- def map: _main@0, _exit_helper@5
+- CALL reloc resolve: imm32 = 5 + (-4) - 1 = 0
+  → `E8 00 00 00 00` → CALL (rip+5 = byte 5 = _exit_helper) ✓
+
+**측정 (arm64-Mac local + ubu-2 remote)**:
+
+```
+$ /tmp/run_F_P2_MULTIOBJ_RUNEQ
+=== file ===
+/tmp/p2_c4_multiobj.elf: ELF 64-bit LSB executable, x86-64, version 1 (SYSV),
+  statically linked, no section header
+
+=== launch on ubu-2 ===
+REMOTE_RC=42
+
+🛸 F-P2-MULTIOBJ-RUNEQ FULL PASS — ELF multi-obj static-link + CALL reloc works on Linux
+```
+
+**HONEST SCOPE (g3, over-claim 0)**:
+
+- 합성 2-obj 한정. real corpus_trivial.hexa 의 x86_64 LIR 출력 →
+  ParsedElf 변환 path 는 cycle 5+ 의 baton (compiler/codegen/x86_64_linux.hexa
+  LIR walker `pack_lir_elf` 필요).
+- 1 reloc type (R_X86_64_PLT32) 만 지원. R_X86_64_64 (data ptrs),
+  R_X86_64_PC32, R_X86_64_GOTPCREL 등 추가는 cycle 5+.
+- entry symbol 가 text offset 0 에 있어야 함 (cycle 4 제약). multi-fn
+  binary 에서 _main 이 첫 함수가 아니면 entry shift 또는 jump trampoline
+  필요 — follow-up.
+
+**RFC 063 phasing 진척**: P0 ✅ · P1 ✅ · P2 cycles 1-4 ✅. 잔여
+P2 cycle 5+ (LIR walker + corpus real RUNEQ) + P3 (flip default +
+F-P3-ZERO-EXTERN).
+
+**Cross-platform cross-arch matrix 갱신**:
+
+| Host | Emit | Format | Arch | Launch | Result | Cycle |
+|------|------|--------|------|--------|--------|-------|
+| arm64-mac | aprime_cc P0 (.o) | Mach-O | arm64 | (link only) | byte-eq vs clang | P0-7 🛸 |
+| arm64-mac | aprime_cc+hexa_ld P0+P1 | Mach-O | arm64 | macOS native | exit 42 | P1-8 🛸 |
+| arm64-mac | serialize_elf_exec_x86_64 P2 | ELF | x86_64 | ubu-2 (Linux) | exit 42 | P2-3 🛸 |
+| arm64-mac | link_elf_x86_64 multi-obj P2 | ELF | x86_64 | ubu-2 (Linux) | exit 42 | P2-4 🛸 |
+
+**cc --regen / binary promote**: 미수행. compiler/emit/elf_x86_64.hexa.
