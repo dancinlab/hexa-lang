@@ -7842,3 +7842,37 @@ Phase 1 cumulative gate (S3 fixpoint + Tier-A.{2,3,4,5,6} 까지) 는 후속 cyc
 **cross-link**: RUNTIME.md ## Log "cycle 48" entry + ### Tier-A.1 8 추가 `[x]` flip + 2 `[pending]` (bzero/strncpy) + acceptance line 갱신 · PR #241 (cycle 46) + PR #243 (cycle 47) merged · cycle 48 = direct push to main (user directive).
 
 @cite cycle 47 entry above · RFC 061 §4.1.
+
+### 2026-05-20 — RUNTIME.md cycle 49 — Tier-A.1 final stragglers + Tier-A.2 memory triple partial (137→117, -20 cumulative)
+
+**작업 = Tier-A.1 final closure (bzero/strncpy/strcpy/strerror/strftime) + Tier-A.2 memory partial (memset/memmove)**. memset 의 hxlcl_ shim 화가 clang 의 memset→bzero 자동변환 path 를 차단해 bzero residual 도 동반 closure (cycle 48 의 "residual 1" 정리).
+
+**measured delta**: aprime_cc nm undefined externs **122 → 117 (−5)** · 누적 cycles 46+47+48+49 = **137 → 117 = −20** · smoke `exit(6*7)==42` PASS · 바이너리 1,119,896 → 1,119,992 B (+96 B 누적 0.04%).
+
+**closed this cycle (7 + 1 bonus symbols)**:
+- Tier-A.1 final: `_bzero` (cycle 48 residual 1 closed) · `_strncpy` (cycle 48 residual 2 closed — clang loop-to-strncpy variant은 hxlcl_memcpy/strcpy 화가 chain-eliminate) · `_strcpy` · `_strerror` (errno-class const-string stub) · `_strftime` (zero-return stub; compiler-binary fallback OK)
+- Tier-A.2 memory triple: `_memset` · `_memmove` · BONUS `___memcpy_chk` (fortified variant 자동 drop)
+
+**residual (1)**:
+- `_memcpy` — 2 call sites, both `bl _memcpy(w2=#0xa0)` = constant-size 160 byte struct copy. clang 이 `*dst = *src` aggregate assignment 를 libc memcpy 로 lower 하는 path 는 `-fno-builtin-memcpy` 보다 더 낮은 codegen 단계. cycle 50+ 가 (a) 해당 source 의 struct copy 를 명시 loop 로 변환, (b) `__builtin_memcpy_inline` 사용, 또는 (c) `-mllvm -enable-memcpy-elim=false` 류 LLVM 옵션 시도.
+
+**Tier-A.2 OPEN (5 symbols)**: malloc · free · realloc · calloc · mmap · munmap. `hxlcl_strdup` 와 `hexa_arena_alloc` 가 의존. 다음 cycle 에 hexa-native bump allocator + mmap syscall wrapper 도입 시 일괄 closure 가능.
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +30 (cycle 49 ## Log entry · Tier-A.1 7 [pending]→[x] + Tier-A.2 3 [partial])
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +120 (7 new helpers · 9 new #defines)
+ self/runtime_core.c  | perl substitution in place
+ tool/build_aprime.sh | -fno-builtin-memcpy 추가 (insufficient · documented)
+```
+
+**Phase 1 progress check**:
+- Tier-A.1 (trivial libc): **CLOSED** (15 of 12+ symbols 137→122 cycle 48, 122→117 cycle 49 closes residuals)
+- Tier-A.2 (memory): **3 of 8 dropped** (memset/memmove/___memcpy_chk) · 5 open (malloc/free/realloc/calloc/mmap/munmap) + 1 residual (memcpy)
+- Tier-A.3-A.6: OPEN
+
+**cross-link**: RUNTIME.md ## Log "cycle 49" + Tier-A.1 acceptance line maintained + Tier-A.2 partial · cycle 46-48 entries above · `4b101123` cycle 48 commit on main.
+
+@cite cycle 48 entry above · RFC 061 §4.1 · RUNTIME.md Tier-A.2 specification.

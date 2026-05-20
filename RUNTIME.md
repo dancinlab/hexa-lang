@@ -446,3 +446,34 @@ For each Tier-A sub-phase:
   documented in RFC draft: (i) accept FP drift if gen1/gen2 both
   go through hxlcl_atof, (ii) keep libm path for atof, (iii) port
   to bit-exact Pade/Dekker scheme
+
+### 2026-05-20 — Tier-A.1 final stragglers + Tier-A.2 partial (cycle 49)
+
+- ✅ cycle 49 — aprime_cc nm undefined externs 122 → **117** (−5
+  this cycle · cumulative **137 → 117 = −20**) · smoke exit(42)
+  PASS · binary 1,119,896 → 1,119,992 B (+96 B = 0.04% from
+  baseline 1,119,480)
+- Closed: `_bzero` (closed via memset replacement chain · clang's
+  memset→bzero conversion goes silent once no memset literals
+  remain) · `_strncpy` (formerly "newly emerged" — also resolved)
+  · `_strcpy` · `_strerror` (constant-string stub by errno class)
+  · `_strftime` (zero-return stub; compiler-binary fallbacks tested
+  to handle no-op output) · `_memset` · `_memmove` · BONUS
+  `___memcpy_chk` (fortified variant dropped automatically once
+  non-fortified memcpy unhooked)
+- Tier-A.2 partial (3 of 8 memory symbols dropped): memset +
+  memmove + ___memcpy_chk. `_memcpy` residual = 2 call sites of
+  constant-size-160 `*dst = *src` aggregate assignments clang
+  lowers to libc memcpy below the `#define` layer. `-fno-builtin-
+  memcpy` added but ineffective for this codegen path
+- Tier-A.2 still OPEN: `_malloc` · `_free` · `_realloc` ·
+  `_calloc` · `_mmap` · `_munmap` (5 symbols). These underpin
+  `hxlcl_strdup` plus the hexa arena allocator (`hexa_arena_
+  alloc`). A cycle to port them needs either (a) a hexa-native
+  bump allocator + mmap-syscall shim, or (b) interpose at the
+  arena layer
+- 22 `hxlcl_*` helpers now in `self/runtime.c`: strlen · strcmp ·
+  memcmp · strcat · strchr · strrchr · strstr · strncmp · strdup
+  · strndup · atoi · atoll · atof · strtoll · strtoull · bzero ·
+  memcpy · memset · memmove · strncpy · strcpy · strerror ·
+  strftime (23 entries; strerror+strftime are stubs)

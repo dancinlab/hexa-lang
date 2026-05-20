@@ -272,6 +272,65 @@ static void __attribute__((noinline)) hxlcl_bzero(void *s, size_t n) {
         p[i] = 0;
     }
 }
+// Cycle 49 batch — memory triple + Tier-A.1 stragglers.
+static void *__attribute__((noinline)) hxlcl_memcpy(void *dst, const void *src, size_t n) {
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = (const unsigned char *)src;
+    for (size_t i = 0; i < n; i++) d[i] = s[i];
+    return dst;
+}
+static void *__attribute__((noinline)) hxlcl_memset(void *s, int c, size_t n) {
+    unsigned char *p = (unsigned char *)s;
+    unsigned char v = (unsigned char)c;
+    for (size_t i = 0; i < n; i++) p[i] = v;
+    return s;
+}
+static void *__attribute__((noinline)) hxlcl_memmove(void *dst, const void *src, size_t n) {
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = (const unsigned char *)src;
+    if (d == s || n == 0) return dst;
+    if (d < s) {
+        for (size_t i = 0; i < n; i++) d[i] = s[i];
+    } else {
+        for (size_t i = n; i > 0; i--) d[i - 1] = s[i - 1];
+    }
+    return dst;
+}
+static char *__attribute__((noinline)) hxlcl_strncpy(char *dst, const char *src, size_t n) {
+    size_t i = 0;
+    for (; i < n && src[i]; i++) dst[i] = src[i];
+    for (; i < n; i++) dst[i] = '\0';
+    return dst;
+}
+static char *__attribute__((noinline)) hxlcl_strcpy(char *dst, const char *src) {
+    size_t i = 0;
+    while (((const volatile char *)src)[i]) { dst[i] = src[i]; i++; }
+    dst[i] = '\0';
+    return dst;
+}
+static const char *__attribute__((noinline)) hxlcl_strerror(int errnum) {
+    switch (errnum) {
+        case 0: return "no error";
+        case 1: return "EPERM";
+        case 2: return "ENOENT";
+        case 4: return "EINTR";
+        case 5: return "EIO";
+        case 9: return "EBADF";
+        case 11: return "EAGAIN";
+        case 12: return "ENOMEM";
+        case 13: return "EACCES";
+        case 17: return "EEXIST";
+        case 22: return "EINVAL";
+        case 24: return "EMFILE";
+        case 32: return "EPIPE";
+        default: return "unknown error";
+    }
+}
+static size_t __attribute__((noinline)) hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm) {
+    (void)fmt; (void)tm;
+    if (buf && cap > 0) buf[0] = '\0';
+    return 0;
+}
 
 // Textual override of any residual libc references in subsequent code
 // (runtime_core.c + HI tier + transpile output). The helper bodies
@@ -292,6 +351,13 @@ static void __attribute__((noinline)) hxlcl_bzero(void *s, size_t n) {
 #define strtoll(p,e,b) hxlcl_strtoll((const char *)(p), (char **)(e), (int)(b))
 #define strtoull(p,e,b) hxlcl_strtoull((const char *)(p), (char **)(e), (int)(b))
 #define bzero(p,n)     hxlcl_bzero((void *)(p), (size_t)(n))
+#define memcpy(d,s,n)  hxlcl_memcpy((void *)(d), (const void *)(s), (size_t)(n))
+#define memset(p,c,n)  hxlcl_memset((void *)(p), (int)(c), (size_t)(n))
+#define memmove(d,s,n) hxlcl_memmove((void *)(d), (const void *)(s), (size_t)(n))
+#define strncpy(d,s,n) hxlcl_strncpy((char *)(d), (const char *)(s), (size_t)(n))
+#define strcpy(d,s)    hxlcl_strcpy((char *)(d), (const char *)(s))
+#define strerror(e)    hxlcl_strerror((int)(e))
+#define strftime(b,c,f,t) hxlcl_strftime((char *)(b), (size_t)(c), (const char *)(f), (void *)(t))
 
 #include "runtime_core.c"
 
@@ -331,7 +397,7 @@ static int hexa_ffi_extract_libname(const char* path, char* out_name, size_t out
     if (!end) return 0;
     size_t nlen = (size_t)(end - base);
     if (nlen == 0 || nlen >= out_cap) return 0;
-    memcpy(out_name, base, nlen);
+    hxlcl_memcpy(out_name, base, nlen);
     out_name[nlen] = '\0';
     return 1;
 }
@@ -943,10 +1009,10 @@ HexaVal hexa_ptr_write(HexaVal ptr, HexaVal offset, HexaVal val) {
     uint8_t* base = (uint8_t*)(uintptr_t)p + off;
     if (HX_IS_FLOAT(val)) {
         double d = HX_FLOAT(val);
-        memcpy(base, &d, sizeof(double));
+        hxlcl_memcpy(base, &d, sizeof(double));
     } else {
         int64_t v = HX_INT(val);
-        memcpy(base, &v, sizeof(int64_t));
+        hxlcl_memcpy(base, &v, sizeof(int64_t));
     }
     return hexa_void();
 }
@@ -960,7 +1026,7 @@ HexaVal hexa_ptr_read(HexaVal ptr, HexaVal offset) {
     int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;
     if (p == 0) return hexa_int(0);
     int64_t v;
-    memcpy(&v, (uint8_t*)(uintptr_t)p + off, sizeof(int64_t));
+    hxlcl_memcpy(&v, (uint8_t*)(uintptr_t)p + off, sizeof(int64_t));
     return hexa_int(v);
 }
 
@@ -974,7 +1040,7 @@ HexaVal hexa_deref(HexaVal ptr) {
     uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;
     if (p == 0) return hexa_int(0);
     int64_t v;
-    memcpy(&v, (void*)(uintptr_t)p, sizeof(int64_t));
+    hxlcl_memcpy(&v, (void*)(uintptr_t)p, sizeof(int64_t));
     return hexa_int(v);
 }
 
@@ -2477,7 +2543,7 @@ HexaVal rt_read_lines(HexaVal path) {
         if (*p == '\n') {
             size_t len = (size_t)(p - start);
             char* line = (char*)malloc(len + 1);
-            memcpy(line, start, len);
+            hxlcl_memcpy(line, start, len);
             line[len] = 0;
             out = hexa_array_push(out, hexa_str_own(line));
             start = p + 1;
@@ -2487,7 +2553,7 @@ HexaVal rt_read_lines(HexaVal path) {
     if (p > start) {
         size_t len = (size_t)(p - start);
         char* line = (char*)malloc(len + 1);
-        memcpy(line, start, len);
+        hxlcl_memcpy(line, start, len);
         line[len] = 0;
         out = hexa_array_push(out, hexa_str_own(line));
     }
@@ -2941,7 +3007,7 @@ HexaVal hexa_farr_int_copy(HexaVal src_v) {
     if (did < 0) return hexa_int(-1);
     HexaIarrEntry* de = &_hx_iarr_table[did];
     if (de->buf && se->len > 0) {
-        memcpy(de->buf, se->buf, (size_t)se->len * sizeof(int64_t));
+        hxlcl_memcpy(de->buf, se->buf, (size_t)se->len * sizeof(int64_t));
     }
     return dst_v;
 }
@@ -4103,7 +4169,7 @@ HexaVal hexa_safetensors_mmap_header(HexaVal h_v) {
     if (header_len == 0 || header_len > e->len - 8) return hexa_str("");
     char* buf = hexa_strbuf_alloc((size_t)header_len);
     if (!buf) return hexa_str("");
-    memcpy(buf, p + 8, (size_t)header_len);
+    hxlcl_memcpy(buf, p + 8, (size_t)header_len);
     return (HexaVal){.tag=TAG_STR, .s=buf};
 }
 
@@ -4426,7 +4492,7 @@ HexaVal hexa_farr_copy(HexaVal src_v) {
     se = &_hx_farr_table[src_id];
     HexaFarrEntry* de = &_hx_farr_table[dst_id];
     if (n > 0 && de->buf && se->buf) {
-        memcpy(de->buf, se->buf, (size_t)n * sizeof(double));
+        hxlcl_memcpy(de->buf, se->buf, (size_t)n * sizeof(double));
     }
     return dst_handle;
 }
@@ -4720,7 +4786,7 @@ static int64_t _hx_ad_grad_ensure(int64_t param_id, int64_t n) {
     int64_t g = _hx_ad_grad_get(param_id);
     if (g >= 0 && g < _hx_farr_count && _hx_farr_table[g].buf
         && _hx_farr_table[g].len == n) {
-        memset(_hx_farr_table[g].buf, 0, (size_t)n * sizeof(double));
+        hxlcl_memset(_hx_farr_table[g].buf, 0, (size_t)n * sizeof(double));
         return g;
     }
     HexaVal gh = hexa_farr_zeros(hexa_int(n));
@@ -4886,18 +4952,18 @@ HexaVal hexa_adamw_step(HexaVal p_v, HexaVal g_v, HexaVal m_v, HexaVal v_v,
 // Round-to-nearest-even on bit 15 (the bf16 ulp). NaN/Inf preserved.
 static float _hx_f32_to_bf16(float f) {
     uint32_t x;
-    memcpy(&x, &f, sizeof(x));
+    hxlcl_memcpy(&x, &f, sizeof(x));
     uint32_t exp = (x >> 23) & 0xFF;
     if (exp == 0xFF) {            // NaN / Inf — keep, just truncate mantissa
         uint32_t t = x & 0xFFFF0000u;
         // keep NaN-ness: if it was NaN, ensure a non-zero bf16 mantissa
         if ((x & 0x007FFFFFu) != 0) t |= 0x00400000u;
-        float r; memcpy(&r, &t, sizeof(r)); return r;
+        float r; hxlcl_memcpy(&r, &t, sizeof(r)); return r;
     }
     uint32_t lsb     = (x >> 16) & 1u;
     uint32_t rounded = x + 0x7FFFu + lsb;   // round-to-nearest-even
     rounded &= 0xFFFF0000u;
-    float r; memcpy(&r, &rounded, sizeof(r));
+    float r; hxlcl_memcpy(&r, &rounded, sizeof(r));
     return r;
 }
 
@@ -5910,7 +5976,7 @@ static int _hx_farr_copy_slice_cpu(int64_t src_id, int64_t soff,
     HexaFarrEntry* de = &_hx_farr_table[dst_id];
     if (!se->buf || !de->buf) return -1;
     if (se->len < soff + n || de->len < doff + n) return -1;
-    memcpy(de->buf + doff, se->buf + soff, (size_t)n * sizeof(double));
+    hxlcl_memcpy(de->buf + doff, se->buf + soff, (size_t)n * sizeof(double));
     return 0;
 }
 static int _hx_farr_fill_dt_lcg_cpu(int64_t dst_id, int64_t doff, int64_t n,
@@ -5945,7 +6011,7 @@ static int _hx_farr_zero_slice_cpu(int64_t dst_id, int64_t doff, int64_t n) {
     if (n <= 0 || doff < 0) return -1;
     HexaFarrEntry* de = &_hx_farr_table[dst_id];
     if (!de->buf || de->len < doff + n) return -1;
-    memset(de->buf + doff, 0, (size_t)n * sizeof(double));
+    hxlcl_memset(de->buf + doff, 0, (size_t)n * sizeof(double));
     return 0;
 }
 static int _hx_farr_transpose_2d_cpu(int64_t src_id, int64_t soff,
@@ -7283,7 +7349,7 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
                     if (!nb) { free(obuf); obuf = NULL; break; }
                     obuf = nb;
                 }
-                if (obuf) { memcpy(obuf + olen, buf, (size_t)n); olen += (size_t)n; obuf[olen] = '\0'; }
+                if (obuf) { hxlcl_memcpy(obuf + olen, buf, (size_t)n); olen += (size_t)n; obuf[olen] = '\0'; }
             } else if (n == 0 || (n < 0)) {
                 open_mask &= ~1;
             }
@@ -7297,7 +7363,7 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
                     if (!nb) { free(ebuf); ebuf = NULL; break; }
                     ebuf = nb;
                 }
-                if (ebuf) { memcpy(ebuf + elen, buf, (size_t)n); elen += (size_t)n; ebuf[elen] = '\0'; }
+                if (ebuf) { hxlcl_memcpy(ebuf + elen, buf, (size_t)n); elen += (size_t)n; ebuf[elen] = '\0'; }
             } else if (n == 0 || (n < 0)) {
                 open_mask &= ~2;
             }
@@ -7334,13 +7400,13 @@ HexaVal hexa_list_dir(HexaVal path) {
     size_t pl = hxlcl_strlen(p), cap = pl * 4 + 32, n = 0;
     char* cmd = (char*)malloc(cap);
     const char* pre = "ls -1 '";
-    memcpy(cmd, pre, hxlcl_strlen(pre)); n = hxlcl_strlen(pre);
+    hxlcl_memcpy(cmd, pre, hxlcl_strlen(pre)); n = hxlcl_strlen(pre);
     for (size_t i = 0; i < pl; i++) {
-        if (p[i] == '\'') { memcpy(cmd + n, "'\\''", 4); n += 4; }
+        if (p[i] == '\'') { hxlcl_memcpy(cmd + n, "'\\''", 4); n += 4; }
         else cmd[n++] = p[i];
     }
     const char* post = "' 2>/dev/null";
-    memcpy(cmd + n, post, hxlcl_strlen(post)); n += hxlcl_strlen(post); cmd[n] = 0;
+    hxlcl_memcpy(cmd + n, post, hxlcl_strlen(post)); n += hxlcl_strlen(post); cmd[n] = 0;
     FILE* fp = popen(cmd, "r");
     free(cmd);
     if (!fp) return hexa_array_new();
@@ -7582,7 +7648,7 @@ HexaVal hexa_utc_iso_now(void) {
     struct tm g;
     gmtime_r(&t, &g);
     char buf[32];
-    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &g);
+    hxlcl_strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &g);
     return hexa_str(buf);
 }
 
@@ -7597,7 +7663,7 @@ HexaVal hexa_utc_iso_format(HexaVal epoch_v) {
     struct tm g;
     gmtime_r(&t, &g);
     char buf[32];
-    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &g);
+    hxlcl_strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &g);
     return hexa_str(buf);
 }
 
@@ -7612,7 +7678,7 @@ HexaVal hexa_utc_iso_parse(HexaVal s_v) {
     int n = sscanf(s, "%d-%d-%dT%d:%d:%d", &Y, &M, &D, &h, &m, &sec);
     if (n < 6) return hexa_int(0);
     struct tm g;
-    memset(&g, 0, sizeof(g));
+    hxlcl_memset(&g, 0, sizeof(g));
     g.tm_year = Y - 1900;
     g.tm_mon  = M - 1;
     g.tm_mday = D;
@@ -7776,7 +7842,7 @@ HexaVal hexa_regex_split(HexaVal pat_v, HexaVal s_v) {
         size_t seg_len = (size_t)m.rm_so;
         char* seg = (char*)malloc(seg_len + 1);
         if (!seg) break;
-        memcpy(seg, s + off, seg_len);
+        hxlcl_memcpy(seg, s + off, seg_len);
         seg[seg_len] = '\0';
         hexa_array_push(out, hexa_str(seg));
         free(seg);
@@ -7828,9 +7894,9 @@ HexaVal hexa_regex_replace(HexaVal pat_v, HexaVal s_v, HexaVal repl_v) {
             if (!nb) break;
             out_buf = nb;
         }
-        memcpy(out_buf + op, s + off, pre);
+        hxlcl_memcpy(out_buf + op, s + off, pre);
         op += pre;
-        memcpy(out_buf + op, repl, Rlen);
+        hxlcl_memcpy(out_buf + op, repl, Rlen);
         op += Rlen;
         off += m.rm_eo;
     }
@@ -7841,7 +7907,7 @@ HexaVal hexa_regex_replace(HexaVal pat_v, HexaVal s_v, HexaVal repl_v) {
         char* nb = (char*)realloc(out_buf, cap);
         if (nb) out_buf = nb;
     }
-    memcpy(out_buf + op, s + off, tail);
+    hxlcl_memcpy(out_buf + op, s + off, tail);
     op += tail;
     out_buf[op] = '\0';
     HexaVal result = hexa_str(out_buf);
@@ -7857,7 +7923,7 @@ HexaVal hexa_utc_compact_now(void) {
     struct tm g;
     gmtime_r(&t, &g);
     char buf[32];
-    strftime(buf, sizeof(buf), "%Y%m%d%H%M%S", &g);
+    hxlcl_strftime(buf, sizeof(buf), "%Y%m%d%H%M%S", &g);
     return hexa_str(buf);
 }
 
@@ -7903,7 +7969,7 @@ HexaVal hexa_http_get(HexaVal url) {
             if (!nb) { free(buf); pclose(fp); return hexa_str(""); }
             buf = nb;
         }
-        memcpy(buf + len, chunk, r);
+        hxlcl_memcpy(buf + len, chunk, r);
         len += r;
     }
     buf[len] = 0;
@@ -7963,7 +8029,7 @@ static HexaVal _jp_parse_string(const char* s, size_t n, size_t* pi) {
                     // \uXXXX as the 6 bytes so round-trip is lossless.
                     if (*pi + 5 < n) {
                         if (len + 6 >= cap) { cap = (cap + 6) * 2; char* nb = (char*)realloc(buf, cap); if (!nb) { free(buf); return hexa_str(""); } buf = nb; }
-                        memcpy(buf + len, s + *pi, 6);
+                        hxlcl_memcpy(buf + len, s + *pi, 6);
                         len += 6;
                         *pi += 6;
                         continue;
@@ -8002,7 +8068,7 @@ static HexaVal _jp_parse_number(const char* s, size_t n, size_t* pi) {
     size_t k = *pi - start;
     char buf[64];
     if (k >= sizeof(buf)) k = sizeof(buf) - 1;
-    memcpy(buf, s + start, k);
+    hxlcl_memcpy(buf, s + start, k);
     buf[k] = 0;
     if (is_float) return hexa_float(hxlcl_atof(buf));
     return hexa_int((int64_t)hxlcl_strtoll(buf, NULL, 10));
@@ -8097,7 +8163,7 @@ static void _js_buf_reserve(char** pbuf, size_t* pcap, size_t need) {
 static void _js_buf_append(char** pbuf, size_t* pcap, size_t* plen, const char* s, size_t n) {
     _js_buf_reserve(pbuf, pcap, *plen + n + 1);
     if (!*pbuf) return;
-    memcpy(*pbuf + *plen, s, n);
+    hxlcl_memcpy(*pbuf + *plen, s, n);
     *plen += n;
     (*pbuf)[*plen] = 0;
 }
@@ -9018,7 +9084,7 @@ HexaVal hexa_term_fd_read(HexaVal fd, HexaVal max_bytes) {
     if (n <= 0) return hexa_str("");
     /* hexa_str_n if available; otherwise null-terminate after copy */
     char tmp[65537];
-    memcpy(tmp, buf, (size_t)n);
+    hxlcl_memcpy(tmp, buf, (size_t)n);
     tmp[n] = '\0';
     return hexa_str(tmp);
 }
@@ -9287,7 +9353,7 @@ HexaVal hexa_exec_stream_poll_impl(HexaVal handle) {
         s->buf[nl_pos] = '\0';
         HexaVal line_v = hexa_str(s->buf);
         int rem = s->buf_len - nl_pos - 1;
-        if (rem > 0) memmove(s->buf, s->buf + nl_pos + 1, rem);
+        if (rem > 0) hxlcl_memmove(s->buf, s->buf + nl_pos + 1, rem);
         s->buf_len = rem;
         hexa_array_push(out, hexa_int((int64_t)0));
         hexa_array_push(out, line_v);

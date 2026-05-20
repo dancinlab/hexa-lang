@@ -420,7 +420,7 @@ void _hx_emit_fuel_abort(const char* kind,
 #else
     gmtime_r(&now, &tmv);
 #endif
-    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tmv);
+    hxlcl_strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tmv);
 
     // RUSAGE snapshot (best-effort; on failure leave zeros).
     long utime_us = 0, stime_us = 0, maxrss_kb = 0;
@@ -453,7 +453,7 @@ void _hx_emit_fuel_abort(const char* kind,
         _hx_fuel_json_esc(esc, sizeof(esc), _hexa_argv[i]);
         size_t elen = hxlcl_strlen(esc);
         if (apos + elen + 2 >= sizeof(args_buf)) { apos--; break; }
-        memcpy(args_buf + apos, esc, elen); apos += elen;
+        hxlcl_memcpy(args_buf + apos, esc, elen); apos += elen;
         args_buf[apos++] = '"';
         wrote = 1;
     }
@@ -500,7 +500,7 @@ void _hx_emit_fuel_abort(const char* kind,
         size_t cut = pl;
         while (cut > 0 && path[cut - 1] != '/') cut--;
         if (cut > 0 && cut < sizeof(dir)) {
-            memcpy(dir, path, cut - 1);
+            hxlcl_memcpy(dir, path, cut - 1);
             dir[cut - 1] = '\0';
             // TODO(fuel-worker): full mkdir -p chain. state/ usually exists.
             (void)mkdir(dir, 0755);
@@ -682,7 +682,7 @@ static inline char* hexa_strbuf_alloc(size_t len) {
 static inline char* hexa_strbuf_dup_n(const char* src, size_t len) {
     char* buf = hexa_strbuf_alloc(len);
     if (!buf) return NULL;
-    if (len > 0 && src) memcpy(buf, src, len);
+    if (len > 0 && src) hxlcl_memcpy(buf, src, len);
     return buf;
 }
 
@@ -1693,7 +1693,7 @@ static HexaVal* hexa_array_promote_to_heap(HexaVal* arena_items, int len, int ne
     HexaVal* heap = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)new_cap);
     if (!heap) return NULL;
     if (arena_items && len > 0) {
-        memcpy(heap, arena_items, sizeof(HexaVal) * (size_t)len);
+        hxlcl_memcpy(heap, arena_items, sizeof(HexaVal) * (size_t)len);
     }
     return heap;
 }
@@ -1736,7 +1736,7 @@ HexaVal hexa_array_shallow_clone(HexaVal v) {
     HexaVal* items = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)new_cap);
     if (!items) { fprintf(stderr, "OOM in array_shallow_clone items\n"); exit(1); }
     if (n > 0 && HX_ARR_ITEMS(v)) {
-        memcpy(items, HX_ARR_ITEMS(v), sizeof(HexaVal) * (size_t)n);
+        hxlcl_memcpy(items, HX_ARR_ITEMS(v), sizeof(HexaVal) * (size_t)n);
     }
     HX_SET_ARR_ITEMS(out, items);
     HX_SET_ARR_LEN(out, n);
@@ -1838,7 +1838,7 @@ HexaVal hexa_array_push(HexaVal arr, HexaVal item) {
             }
             if (next_items) {
                 if (HX_ARR_LEN(arr) > 0) {
-                    memcpy(next_items, HX_ARR_ITEMS(arr), sizeof(HexaVal) * (size_t)HX_ARR_LEN(arr));
+                    hxlcl_memcpy(next_items, HX_ARR_ITEMS(arr), sizeof(HexaVal) * (size_t)HX_ARR_LEN(arr));
                 }
                 HX_SET_ARR_ITEMS(arr, next_items);
                 HX_SET_ARR_CAP(arr, -new_cap);
@@ -1971,7 +1971,7 @@ HexaVal hexa_array_slice_fast(HexaVal arr, HexaVal start, HexaVal end) {
         items = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)m);
         if (!items) { fprintf(stderr, "OOM in array_slice_fast\n"); exit(1); }
     }
-    memcpy(items, HX_ARR_ITEMS(arr) + a, sizeof(HexaVal) * (size_t)m);
+    hxlcl_memcpy(items, HX_ARR_ITEMS(arr) + a, sizeof(HexaVal) * (size_t)m);
     HX_SET_ARR_ITEMS(out, items);
     HX_SET_ARR_LEN(out, m);
     HX_SET_ARR_CAP(out, use_arena ? -m : m);
@@ -2201,7 +2201,7 @@ HexaVal hexa_struct_pack_map(const char* type_name, int n,
         // bulk-free property.
         if (from_arena) {
             char* kdup = (char*)hexa_arena_alloc(hxlcl_strlen("__type__") + 1);
-            memcpy(kdup, "__type__", 9);
+            hxlcl_memcpy(kdup, "__type__", 9);
             t->slots[idx].key = kdup;
             // perf-31: even on the arena path, the VALUE string must use the
             // heap header allocator — HX_STRLEN reads bytes [-16] before the
@@ -2237,7 +2237,7 @@ HexaVal hexa_struct_pack_map(const char* type_name, int n,
         if (from_arena) {
             size_t kl = hxlcl_strlen(k);
             char* kdup = (char*)hexa_arena_alloc(kl + 1);
-            memcpy(kdup, k, kl + 1);
+            hxlcl_memcpy(kdup, k, kl + 1);
             t->slots[idx].key = kdup;
         } else {
             t->slots[idx].key = hxlcl_strdup(k);
@@ -2312,8 +2312,8 @@ HexaVal hexa_map_set(HexaVal m, const char* key, HexaVal val) {
             char** new_keys = (char**)malloc(sizeof(char*) * new_cap);
             HexaVal* new_vals = (HexaVal*)malloc(sizeof(HexaVal) * new_cap);
             if (!new_keys || !new_vals) { fprintf(stderr, "OOM in map_set grow\n"); exit(1); }
-            memcpy(new_keys, t->order_keys, sizeof(char*) * t->len);
-            memcpy(new_vals, t->order_vals, sizeof(HexaVal) * t->len);
+            hxlcl_memcpy(new_keys, t->order_keys, sizeof(char*) * t->len);
+            hxlcl_memcpy(new_vals, t->order_vals, sizeof(HexaVal) * t->len);
             t->order_keys = new_keys;
             t->order_vals = new_vals;
         } else {
@@ -3192,7 +3192,7 @@ static int hexa_val_arena_on(void) {
 static void* hexa_val_arena_calloc(size_t n) {
     void* p = hexa_arena_alloc(n);
     if (!p) return calloc(1, n);
-    memset(p, 0, n);
+    hxlcl_memset(p, 0, n);
     return p;
 }
 
@@ -3853,7 +3853,7 @@ HexaVal hexa_val_copy_into_arena(HexaVal v) {
             size_t slen = HX_STRLEN(v);
             char* buf = (char*)hexa_arena_alloc(slen + 1);
             if (!buf) return v;  // arena OOM
-            if (slen > 0) memcpy(buf, HX_STR(v), slen);
+            if (slen > 0) hxlcl_memcpy(buf, HX_STR(v), slen);
             buf[slen] = '\0';
             HX_SET_STR(v, buf);
             return v;
@@ -4014,8 +4014,8 @@ HexaVal hexa_str_concat(HexaVal a, HexaVal b) {
         result = (char*)malloc(total);
     }
     // memcpy avoids the strcpy+strcat double walk.
-    memcpy(result, sa, la);
-    memcpy(result + la, sb, lb);
+    hxlcl_memcpy(result, sa, la);
+    hxlcl_memcpy(result + la, sb, lb);
     result[la + lb] = '\0';
     return hexa_str_own(result);
 }
@@ -4120,7 +4120,7 @@ HexaVal hexa_str_substring(HexaVal s, HexaVal start, HexaVal end) {
     // perf-31: write straight into header-allocated buffer — eliminates the
     // hexa_str_own copy that would otherwise re-strlen + re-malloc + memcpy.
     char* buf = hexa_strbuf_alloc((size_t)(b - a));
-    memcpy(buf, HX_STR(s) + a, (size_t)(b - a));
+    hxlcl_memcpy(buf, HX_STR(s) + a, (size_t)(b - a));
     return (HexaVal){.tag=TAG_STR, .s=buf};
 }
 
@@ -4485,7 +4485,7 @@ static char** hexa_tokenize_argv(const char* cmd, int* out_argc) {
     size_t len = hxlcl_strlen(cmd);
     char* buf = (char*)malloc(len + 1);
     if (!buf) return NULL;
-    memcpy(buf, cmd, len + 1);
+    hxlcl_memcpy(buf, cmd, len + 1);
     int argc = 0;
     int in_tok = 0;
     for (size_t i = 0; i < len; i++) {
@@ -4607,7 +4607,7 @@ HexaVal hexa_exec(HexaVal cmd) {
         // +1 for the trailing NUL we always append so HX_STR() remains a
         // valid C-string for ABI consumers (see caveat above).
         while (total + n + 1 > cap) { cap *= 2; result = (char*)realloc(result, cap); }
-        memcpy(result + total, buf, n);
+        hxlcl_memcpy(result + total, buf, n);
         total += n;
     }
     result[total] = '\0';
@@ -4732,7 +4732,7 @@ HexaVal hexa_exec_with_status(HexaVal cmd) {
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), fp)) > 0) {
         while (total + n + 1 > cap) { cap *= 2; result = (char*)realloc(result, cap); }
-        memcpy(result + total, buf, n);
+        hxlcl_memcpy(result + total, buf, n);
         total += n;
     }
     result[total] = '\0';
@@ -5711,7 +5711,7 @@ HexaVal hexa_format(HexaVal fmt, HexaVal arg) {
     int before = pos - HX_STR(fmt);
     int after_len = hxlcl_strlen(pos + 2);
     char* result = malloc(before + (int)HX_STRLEN(sarg) + after_len + 1);
-    strncpy(result, HX_STR(fmt), before);
+    hxlcl_strncpy(result, HX_STR(fmt), before);
     result[before] = 0;
     hxlcl_strcat(result, HX_STR(sarg));
     hxlcl_strcat(result, pos + 2);
@@ -5734,7 +5734,7 @@ HexaVal hexa_format_n(HexaVal fmt, HexaVal args) {
             if (close) {
                 int speclen = (int)(close - src - 1);
                 char spec[32] = {0};
-                if (speclen > 0 && speclen < 31) memcpy(spec, src+1, speclen);
+                if (speclen > 0 && speclen < 31) hxlcl_memcpy(spec, src+1, speclen);
                 char buf[128];
                 HexaVal arg = HX_ARR_ITEMS(args)[ai++];
                 if (spec[0] == ':' && spec[1] == '.') {
@@ -5761,31 +5761,31 @@ HexaVal hexa_format_n(HexaVal fmt, HexaVal args) {
                     int pad = width > slen ? width - slen : 0;
                     int bp = 0;
                     if (align == 'L') {
-                        memcpy(buf + bp, HX_STR(s), slen); bp += slen;
+                        hxlcl_memcpy(buf + bp, HX_STR(s), slen); bp += slen;
                         for (int q = 0; q < pad && bp < (int)sizeof(buf) - 1; q++) buf[bp++] = fill;
                     } else if (align == 'C') {
                         int lp = pad / 2, rp = pad - lp;
                         for (int q = 0; q < lp && bp < (int)sizeof(buf) - 1; q++) buf[bp++] = fill;
-                        memcpy(buf + bp, HX_STR(s), slen); bp += slen;
+                        hxlcl_memcpy(buf + bp, HX_STR(s), slen); bp += slen;
                         for (int q = 0; q < rp && bp < (int)sizeof(buf) - 1; q++) buf[bp++] = fill;
                     } else {
                         for (int q = 0; q < pad && bp < (int)sizeof(buf) - 1; q++) buf[bp++] = fill;
-                        memcpy(buf + bp, HX_STR(s), slen); bp += slen;
+                        hxlcl_memcpy(buf + bp, HX_STR(s), slen); bp += slen;
                     }
                     if (bp >= (int)sizeof(buf)) bp = sizeof(buf) - 1;
                     buf[bp] = 0;
                 } else if (spec[0] == 0) {
                     // Simple {}
                     HexaVal s = hexa_to_string(arg);
-                    strncpy(buf, HX_STR(s), sizeof(buf)-1); buf[sizeof(buf)-1]=0;
+                    hxlcl_strncpy(buf, HX_STR(s), sizeof(buf)-1); buf[sizeof(buf)-1]=0;
                 } else {
                     // Indexed {N} — best-effort; non-numeric falls through to to_string
                     HexaVal s = hexa_to_string(arg);
-                    strncpy(buf, HX_STR(s), sizeof(buf)-1); buf[sizeof(buf)-1]=0;
+                    hxlcl_strncpy(buf, HX_STR(s), sizeof(buf)-1); buf[sizeof(buf)-1]=0;
                 }
                 size_t blen = hxlcl_strlen(buf);
                 while (total + blen + 1 > cap) { cap *= 2; result = realloc(result, cap); }
-                memcpy(result + total, buf, blen);
+                hxlcl_memcpy(result + total, buf, blen);
                 total += blen;
                 result[total] = 0;
                 src = close + 1;
@@ -5858,16 +5858,16 @@ HexaVal hexa_str_replace(HexaVal s, HexaVal old, HexaVal new_s) {
         if (!found) {
             size_t rlen = hxlcl_strlen(pos);
             while (total + rlen + 1 > cap) { cap *= 2; result = realloc(result, cap); }
-            memcpy(result + total, pos, rlen);
+            hxlcl_memcpy(result + total, pos, rlen);
             total += rlen;
             result[total] = 0;
             break;
         }
         size_t seg = (size_t)(found - pos);
         while (total + seg + newlen + 1 > cap) { cap *= 2; result = realloc(result, cap); }
-        memcpy(result + total, pos, seg);
+        hxlcl_memcpy(result + total, pos, seg);
         total += seg;
-        memcpy(result + total, HX_STR(new_s), newlen);
+        hxlcl_memcpy(result + total, HX_STR(new_s), newlen);
         total += newlen;
         result[total] = 0;
         pos = found + oldlen;
@@ -5904,12 +5904,12 @@ HexaVal hexa_str_join(HexaVal arr, HexaVal sep) {
     size_t total = 0;
     for (int i = 0; i < HX_ARR_LEN(arr); i++) {
         if (i > 0) {
-            memcpy(result + total, HX_STR(sep), seplen);
+            hxlcl_memcpy(result + total, HX_STR(sep), seplen);
             total += seplen;
         }
         HexaVal s = hexa_to_string(HX_ARR_ITEMS(arr)[i]);
         size_t slen = HX_STRLEN(s);
-        memcpy(result + total, HX_STR(s), slen);
+        hxlcl_memcpy(result + total, HX_STR(s), slen);
         total += slen;
     }
     result[total] = 0;
@@ -5942,8 +5942,8 @@ HexaVal hexa_pad_left(HexaVal s, HexaVal width) {
     if (cplen >= w) return str;
     int pad = w - cplen;
     char* result = malloc(bytelen + pad + 1);
-    memset(result, ' ', pad);
-    strcpy(result + pad, HX_STR(str));
+    hxlcl_memset(result, ' ', pad);
+    hxlcl_strcpy(result + pad, HX_STR(str));
     return hexa_str_own(result);
 }
 
@@ -5962,8 +5962,8 @@ HexaVal hexa_pad_right(HexaVal s, HexaVal width) {
     if (cplen >= w) return str;
     int pad = w - cplen;
     char* result = malloc(bytelen + pad + 1);
-    strcpy(result, HX_STR(str));
-    memset(result + bytelen, ' ', pad);
+    hxlcl_strcpy(result, HX_STR(str));
+    hxlcl_memset(result + bytelen, ' ', pad);
     result[bytelen + pad] = 0;
     return hexa_str_own(result);
 }
