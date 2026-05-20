@@ -785,11 +785,12 @@ fn main() {
     let ok_me    = _test_multi_exit_match()
     let ok_np    = _test_nested_preserve()
     let ok_os    = _test_opcode_suffix()
+    let ok_df    = _test_dtype_family()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os {
-        println("PASS: RFC 055 + RFC 067 P1/P2 + RFC 068 P1/P2 + RFC 069 P1/P2/P3 — 20/20 cases (incl. F-RFC068-OPCODE-SUFFIX)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df {
+        println("PASS: RFC 055 + RFC 067 P1/P2/P3 + RFC 068 P1/P2 + RFC 069 P1/P2/P3 — 21/21 cases (incl. F-RFC068-OPCODE-SUFFIX + F-RFC067-DTYPE-FAMILY)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -812,9 +813,10 @@ fn main() {
         if !ok_me   { println("      RFC 069 P2 F-RFC069-MULTI-EXIT-MATCH FAILED") }
         if !ok_np   { println("      RFC 069 P3 F-RFC069-NESTED-PRESERVE FAILED") }
         if !ok_os   { println("      RFC 068 P2 F-RFC068-OPCODE-SUFFIX FAILED") }
+        if !ok_df   { println("      RFC 067 P3 F-RFC067-DTYPE-FAMILY FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -2113,6 +2115,200 @@ fn _test_opcode_suffix() -> bool {
     // + `.reg .f16` bank decl. Specific id depends on local-numbering;
     // assert the bank-decl prefix appears.
     ok = _check(ok, ptx_f16, ".reg .f16 %fh", "f16 reg bank declared (end-to-end P1+P2)")
+    return ok
+}
+
+// ── Case 21 — RFC 067 P3 `F-RFC067-DTYPE-FAMILY` ──────────────────────
+//
+// Verifies that the new `_nvptx_wmma_mnemonic_family(op, role, dtype,
+// layout)` re-keyed mnemonic table resolves the correct PTX wmma mnemonic
+// for three canonical sm_80 m16n16k16 fragment families per NVIDIA PTX
+// ISA §9.7.13.4:
+//
+//   (1) canonical f16×f16→f32  (role=*, dtype=.f16/.f32, layout=.row/.col)
+//   (2) bf16×bf16→f32          (role=*, dtype=.bf16/.f32, layout=.row/.col)
+//   (3) f16×f16→f16            (role=d,  dtype=.f16,      layout=.row)
+//
+// Honest scope (@D g3): this test exercises the METADATA-ATTACHING and
+// MNEMONIC-RE-KEYING seams only. The PReg roster carries the new
+// frag_role/frag_dtype/frag_layout fields, and the re-keyed mnemonic
+// helper resolves family-specific PTX strings — but the lowering site
+// in `_nvptx_lower_stmt` still emits the SCAFFOLD comment, NOT a real
+// `wmma.mma.sync...` instruction. Real wmma instruction-emit (referencing
+// the FRAG vector regs + .shared slot via the family-aware mnemonic)
+// is a follow-on cycle. NO GPU FIRE.
+//
+// Sub-case A — pure mnemonic-helper assertions on three families
+// (verifies `_nvptx_wmma_mnemonic_family` table correctness).
+//
+// Sub-case B — fixture-based PReg metadata round-trip: synthesize a
+// FRAG-classified Local via STMT_CALL gpu_wmma_load_a/_b/_mma and
+// verify the classifier stamps the expected role/dtype/layout on the
+// emitted PReg.
+
+fn _test_dtype_family() -> bool {
+    let mut ok = true
+
+    println("")
+    println("── RFC 067 P3 F-RFC067-DTYPE-FAMILY (mnemonic + metadata seams, sm_80) ──")
+
+    // ─── Sub-case A — mnemonic-helper assertions (3 families) ────────────
+
+    // Family 1 — canonical f16×f16→f32 (default empty inputs → backward-
+    // compat fallthrough to PR #150's `_nvptx_wmma_mnemonic`).
+    let mnem_canonical = _nvptx_wmma_mnemonic_family("gpu_wmma_mma", "", "", "")
+    let expect_canonical = "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32"
+    if mnem_canonical != expect_canonical {
+        println("  FAIL: canonical f16×f16→f32 family mnemonic mismatch")
+        println("        got:  " + mnem_canonical)
+        println("        want: " + expect_canonical)
+        ok = false
+    } else {
+        println("  ok: canonical f16xf16 -> f32  -> " + mnem_canonical)
+    }
+
+    // Family 2 — bf16×bf16→f32 (dtype=.bf16 routes to the bf16 table).
+    let mnem_bf16 = _nvptx_wmma_mnemonic_family("gpu_wmma_mma", "d", ".bf16", ".row")
+    let expect_bf16 = "wmma.mma.sync.aligned.row.col.m16n16k16.f32.bf16.bf16.f32"
+    if mnem_bf16 != expect_bf16 {
+        println("  FAIL: bf16xbf16 -> f32 family mnemonic mismatch")
+        println("        got:  " + mnem_bf16)
+        println("        want: " + expect_bf16)
+        ok = false
+    } else {
+        println("  ok: bf16xbf16 -> f32     -> " + mnem_bf16)
+    }
+
+    // Family 3 — f16×f16→f16 (dtype=.f16 + role=d routes to the f16-acc
+    // mma instruction; verifies the role discriminator on _mma).
+    let mnem_f16acc = _nvptx_wmma_mnemonic_family("gpu_wmma_mma", "d", ".f16", ".row")
+    let expect_f16acc = "wmma.mma.sync.aligned.row.col.m16n16k16.f16.f16.f16.f16"
+    if mnem_f16acc != expect_f16acc {
+        println("  FAIL: f16xf16 -> f16 family mnemonic mismatch")
+        println("        got:  " + mnem_f16acc)
+        println("        want: " + expect_f16acc)
+        ok = false
+    } else {
+        println("  ok: f16xf16 -> f16       -> " + mnem_f16acc)
+    }
+
+    // ─── Sub-case B — PReg metadata round-trip via classifier ──────────
+
+    // Synthesize an MFunc whose first STMT_CALL is gpu_wmma_load_a so the
+    // classifier sees the op-name + stamps the metadata on its PReg.
+    let frag_a = _local(10, "frag_a")
+    let frag_b = _local(11, "frag_b")
+    let frag_d = _local(12, "frag_d")
+
+    let mut s0 = []
+    s0.push(_stmt_call(frag_a, "gpu_wmma_load_a"))
+    s0.push(_stmt_call(frag_b, "gpu_wmma_load_b"))
+    s0.push(_stmt_call(frag_d, "gpu_wmma_mma"))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut locals = []
+    locals.push(frag_a)
+    locals.push(frag_b)
+    locals.push(frag_d)
+
+    let mfn_meta = MFunc {
+        name: "dtype_family_meta",
+        params: [],
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+
+    let regs = _nvptx_classify_locals(mfn_meta)
+
+    // Scan the roster for the three FRAG entries; verify each carries
+    // the expected role/dtype/layout per `_nvptx_frag_{role,dtype,layout}_for_op`.
+    let mut found_a = false
+    let mut found_b = false
+    let mut found_d = false
+    let mut ri = 0
+    while ri < len(regs) {
+        let r = regs[ri]
+        if r.kind == NVPTX_RKIND_FRAG {
+            if r.frag_role == "a" && r.frag_dtype == ".f16" && r.frag_layout == ".row" {
+                found_a = true
+            }
+            if r.frag_role == "b" && r.frag_dtype == ".f16" && r.frag_layout == ".col" {
+                found_b = true
+            }
+            if r.frag_role == "d" && r.frag_dtype == ".f32" && r.frag_layout == ".row" {
+                found_d = true
+            }
+        }
+        ri = ri + 1
+    }
+    if !found_a {
+        println("  FAIL: gpu_wmma_load_a FRAG metadata mismatch — expected role=a dtype=.f16 layout=.row")
+        ok = false
+    } else {
+        println("  ok: gpu_wmma_load_a -> role=a, dtype=.f16, layout=.row")
+    }
+    if !found_b {
+        println("  FAIL: gpu_wmma_load_b FRAG metadata mismatch — expected role=b dtype=.f16 layout=.col")
+        ok = false
+    } else {
+        println("  ok: gpu_wmma_load_b -> role=b, dtype=.f16, layout=.col")
+    }
+    if !found_d {
+        println("  FAIL: gpu_wmma_mma FRAG metadata mismatch — expected role=d dtype=.f32 layout=.row")
+        ok = false
+    } else {
+        println("  ok: gpu_wmma_mma    -> role=d, dtype=.f32, layout=.row")
+    }
+
+    // Non-FRAG PReg sanity — a F64 binop's roster entry must keep all
+    // three metadata fields empty (no leakage from the wmma fragments).
+    let scalar = _local(20, "scalar")
+    let a = _local(21, "a")
+    let b = _local(22, "b")
+    let mut s_scalar = []
+    s_scalar.push(_stmt_binop(scalar, "add", _op_local(a.id), _op_local(b.id)))
+    s_scalar.push(_stmt_return())
+    let mut sb = []
+    sb.push(_block(0, s_scalar))
+    let mut sl = []
+    sl.push(a)
+    sl.push(b)
+    sl.push(scalar)
+    let mfn_scalar = MFunc {
+        name: "dtype_family_scalar",
+        params: [],
+        return_local: _miss_local(),
+        locals: sl,
+        blocks: sb,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let scalar_regs = _nvptx_classify_locals(mfn_scalar)
+    let mut leaked = false
+    let mut si = 0
+    while si < len(scalar_regs) {
+        let r = scalar_regs[si]
+        if r.frag_role != "" || r.frag_dtype != "" || r.frag_layout != "" {
+            leaked = true
+        }
+        si = si + 1
+    }
+    if leaked {
+        println("  FAIL: non-FRAG PReg leaked frag_* metadata — default-empty invariant broken")
+        ok = false
+    } else {
+        println("  ok: non-FRAG PRegs keep frag_* = \"\" (default invariant)")
+    }
 
     return ok
 }
