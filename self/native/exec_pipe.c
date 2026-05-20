@@ -87,7 +87,7 @@ HexaVal hexa_exec_pipe_open(HexaVal argv_v, HexaVal env_v) {
             extern char** environ;
             environ = envp;
         }
-        execvp(argv[0], argv);
+        hxlcl_execvp(argv[0], argv);
         /* exec failed */
         _exit(127);
     }

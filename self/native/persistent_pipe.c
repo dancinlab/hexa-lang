@@ -178,7 +178,7 @@ HexaVal hexa_pipe_spawn(HexaVal cmd_val) {
         dup2(out_pipe[1], 1);
         close(in_pipe[0]);  close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
-        execl("/bin/sh", "sh", "-c", cmd, (char*)NULL);
+        hxlcl_execl("/bin/sh", "sh", "-c", cmd, (char*)NULL);
         _exit(127);
     }
 

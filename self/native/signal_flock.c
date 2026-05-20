@@ -35,7 +35,7 @@
  * printf, no lock. The trampoline writes 1 byte == signal number to the
  * self-pipe; the scheduler (pure hexa code) drains via hexa_os_sig_drain.
  *
- * O_CLOEXEC: flock fd is opened CLOEXEC so execve(3) does not leak the
+ * O_CLOEXEC: flock fd is opened CLOEXEC so hxlcl_execve(3) does not leak the
  * lock into child processes (locks are per-(pid,open-file-description)
  * on POSIX, and CLOEXEC avoids accidental lock promotion through exec).
  */

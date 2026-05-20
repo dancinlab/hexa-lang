@@ -74,7 +74,7 @@ static int _hexa_net_parse_addr(const char* addr, struct sockaddr_in* sa_out) {
         sa_out->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     } else if (strcmp(host, "0.0.0.0") == 0 || strcmp(host, "*") == 0) {
         sa_out->sin_addr.s_addr = htonl(INADDR_ANY);
-    } else if (inet_pton(AF_INET, host, &sa_out->sin_addr) != 1) {
+    } else if (hxlcl_inet_pton(AF_INET, host, &sa_out->sin_addr) != 1) {
         return -EINVAL;
     }
     return 0;
@@ -132,7 +132,7 @@ HexaVal hexa_net_listen(HexaVal addr_val) {
     socklen_t salen = 0;
     int family = _hexa_net_parse_any(addr, &sa, &salen);
     if (family < 0) return hexa_int(family);
-    int fd = socket(family, SOCK_STREAM, 0);
+    int fd = hxlcl_socket(family, SOCK_STREAM, 0);
     if (fd < 0) return hexa_int(-errno);
     if (family == AF_INET) {
         int one = 1;
@@ -148,10 +148,10 @@ HexaVal hexa_net_listen(HexaVal addr_val) {
         struct sockaddr_un* un = (struct sockaddr_un*)&sa;
         if (un->sun_path[0] != '\0') (void)unlink(un->sun_path);
     }
-    if (bind(fd, (struct sockaddr*)&sa, salen) < 0) {
+    if (hxlcl_bind(fd, (struct sockaddr*)&sa, salen) < 0) {
         int e = errno; close(fd); return hexa_int(-e);
     }
-    if (listen(fd, 64) < 0) {
+    if (hxlcl_listen(fd, 64) < 0) {
         int e = errno; close(fd); return hexa_int(-e);
     }
     return hexa_int(fd);
@@ -160,7 +160,7 @@ HexaVal hexa_net_listen(HexaVal addr_val) {
 HexaVal hexa_net_accept(HexaVal listen_val) {
     int64_t listen_fd = hexa_as_num(listen_val);
     if (listen_fd < 0) return hexa_int(-EINVAL);
-    int client = accept((int)listen_fd, NULL, NULL);
+    int client = hxlcl_accept((int)listen_fd, NULL, NULL);
     if (client < 0) return hexa_int(-errno);
     return hexa_int(client);
 }
@@ -176,7 +176,7 @@ HexaVal hexa_net_close(HexaVal fd_val) {
  *
  * Sets O_NONBLOCK on the fd. Subsequent net_read / net_accept on the
  * fd returns immediately if no data / no pending connection (with
- * recv() yielding -1 / EAGAIN, mapped to "" by net_read; net_accept
+ * hxlcl_recv() yielding -1 / EAGAIN, mapped to "" by net_read; net_accept
  * yields -1 / EAGAIN, mapped to -errno by hexa_net_accept). Pair with
  * hexa_net_select to wait on N fds without per-fd blocking.
  */
@@ -267,7 +267,7 @@ HexaVal hexa_net_select(HexaVal fds_val, HexaVal timeout_ms_val) {
  * captures the first received fd (multi-fd cmsg arrays are out of
  * MVP scope -- callers needing multiple fds per message can loop).
  *
- * Cross-platform POSIX (macOS + Linux). Both have sendmsg(2) and
+ * Cross-platform POSIX (macOS + Linux). Both have hxlcl_sendmsg(2) and
  * SCM_RIGHTS in the kernel ABI.
  */
 
@@ -302,7 +302,7 @@ HexaVal hexa_net_send_fd(HexaVal sock_v, HexaVal fd_v, HexaVal payload_v) {
     cmsg->cmsg_len   = CMSG_LEN(sizeof(int));
     int* fd_ptr = (int*)CMSG_DATA(cmsg);
     *fd_ptr = send_fd;
-    if (sendmsg(sock, &msg, 0) < 0) return hexa_int((int64_t)-errno);
+    if (hxlcl_sendmsg(sock, &msg, 0) < 0) return hexa_int((int64_t)-errno);
     return hexa_int(0);
 }
 
@@ -339,7 +339,7 @@ HexaVal hexa_net_recv_fd(HexaVal sock_v, HexaVal max_payload_v) {
     msg.msg_iovlen  = 1;
     msg.msg_control = cmsg_buf.cbuf;
     msg.msg_controllen = sizeof(cmsg_buf.cbuf);
-    ssize_t n = recvmsg(sock, &msg, 0);
+    ssize_t n = hxlcl_recvmsg(sock, &msg, 0);
     if (n < 0) {
         int e = errno;
         free(buf);
@@ -371,9 +371,9 @@ HexaVal hexa_net_connect(HexaVal addr_val) {
     socklen_t salen = 0;
     int family = _hexa_net_parse_any(addr, &sa, &salen);
     if (family < 0) return hexa_int(family);
-    int fd = socket(family, SOCK_STREAM, 0);
+    int fd = hxlcl_socket(family, SOCK_STREAM, 0);
     if (fd < 0) return hexa_int(-errno);
-    if (connect(fd, (struct sockaddr*)&sa, salen) < 0) {
+    if (hxlcl_connect(fd, (struct sockaddr*)&sa, salen) < 0) {
         int e = errno; close(fd); return hexa_int(-e);
     }
     return hexa_int(fd);
@@ -387,7 +387,7 @@ HexaVal hexa_net_read(HexaVal fd_val) {
     int64_t fd = hexa_as_num(fd_val);
     if (fd < 0) return hexa_str("");
     char buf[4096];
-    ssize_t n = recv((int)fd, buf, sizeof(buf) - 1, 0);
+    ssize_t n = hxlcl_recv((int)fd, buf, sizeof(buf) - 1, 0);
     if (n <= 0) return hexa_str("");
     buf[n] = '\0';
     /* hexa_str dup + interns the string — safe to hand back the stack buf. */
@@ -397,7 +397,7 @@ HexaVal hexa_net_read(HexaVal fd_val) {
 /* Looping read that accumulates up to `n` bytes before returning.
  *
  * Semantics (roadmap 56 / B7 HTTP POST body prereq):
- *   - Calls recv() repeatedly until either (a) we have received exactly
+ *   - Calls hxlcl_recv() repeatedly until either (a) we have received exactly
  *     `n` bytes, (b) the peer closed the connection (recv returns 0 —
  *     treated as EOF), or (c) a non-retryable error occurs. Returns a
  *     hexa string whose length is therefore in [0, n].
@@ -421,7 +421,7 @@ HexaVal hexa_net_read_n(HexaVal fd_val, HexaVal n_val) {
     if (!buf) return hexa_str("");
     size_t got = 0;
     while ((int64_t)got < want) {
-        ssize_t r = recv((int)fd, buf + got, (size_t)(want - (int64_t)got), 0);
+        ssize_t r = hxlcl_recv((int)fd, buf + got, (size_t)(want - (int64_t)got), 0);
         if (r > 0) { got += (size_t)r; continue; }
         if (r == 0) break;                /* EOF */
         if (errno == EINTR) continue;     /* retry */
@@ -440,7 +440,7 @@ HexaVal hexa_net_read_n(HexaVal fd_val, HexaVal n_val) {
     return out;
 }
 
-/* Apply a recv() timeout on the socket via SO_RCVTIMEO. Returns 0 on
+/* Apply a hxlcl_recv() timeout on the socket via SO_RCVTIMEO. Returns 0 on
  * success, -errno on failure. ms <= 0 disables the timeout. Follow-on
  * hexa_net_read / hexa_net_read_n calls that would block beyond the
  * timeout surface EAGAIN/EWOULDBLOCK (read_n treats as EOF). */
@@ -470,7 +470,7 @@ HexaVal hexa_net_write(HexaVal fd_val, HexaVal data_val) {
     size_t total = strlen(data);
     size_t sent = 0;
     while (sent < total) {
-        ssize_t n = send((int)fd, data + sent, total - sent, 0);
+        ssize_t n = hxlcl_send((int)fd, data + sent, total - sent, 0);
         if (n < 0) {
             if (errno == EINTR) continue;
             return hexa_int(-errno);
@@ -507,7 +507,7 @@ HexaVal hexa_net_write_bytes(HexaVal fd_val, HexaVal arr_val) {
         if (use_write) {
             s = write((int)fd, (const void*)(buf + sent), total - sent);
         } else {
-            s = send((int)fd, (const char*)(buf + sent), total - sent, 0);
+            s = hxlcl_send((int)fd, (const char*)(buf + sent), total - sent, 0);
             if (s < 0 && errno == ENOTSOCK) {
                 use_write = 1;
                 continue;
@@ -535,9 +535,9 @@ HexaVal hexa_net_read_bytes(HexaVal fd_val, HexaVal max_val) {
     if (max > 65536) max = 65536;
     unsigned char* buf = (unsigned char*)malloc((size_t)max);
     if (!buf) return hexa_array_new();
-    /* Try recv() first (socket fast path); fall back to read() if the
+    /* Try hxlcl_recv() first (socket fast path); fall back to read() if the
      * fd isn't a socket — needed for pty/pipe fds. */
-    ssize_t n = recv((int)fd, (char*)buf, (size_t)max, 0);
+    ssize_t n = hxlcl_recv((int)fd, (char*)buf, (size_t)max, 0);
     if (n < 0 && errno == ENOTSOCK) {
         n = read((int)fd, buf, (size_t)max);
     }

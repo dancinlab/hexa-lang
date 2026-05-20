@@ -45,7 +45,7 @@ static HexaVal _hexa_pty_err(int en, const char* tag) {
 
 /* --- pty_open: open a master/slave pair via posix_openpt + grantpt + unlockpt --- */
 HexaVal hexa_pty_open(void) {
-    int master = posix_openpt(O_RDWR | O_NOCTTY);
+    int master = hxlcl_posix_openpt(O_RDWR | O_NOCTTY);
     if (master < 0) return _hexa_pty_err(errno, "posix_openpt");
     if (hxlcl_grantpt(master) < 0)  { int e = errno; close(master); return _hexa_pty_err(e, "grantpt"); }
     if (hxlcl_unlockpt(master) < 0) { int e = errno; close(master); return _hexa_pty_err(e, "unlockpt"); }
@@ -196,7 +196,7 @@ HexaVal hexa_pty_forkexec(HexaVal argv_v, HexaVal env_v, HexaVal rows_v, HexaVal
         wp = &w;
     }
     int master = -1;
-    pid_t pid = forkpty(&master, NULL, NULL, wp);
+    pid_t pid = hxlcl_forkpty(&master, NULL, NULL, wp);
     if (pid < 0) {
         int e = errno;
         for (int i = 0; i < argc; i++) free(argv[i]);
@@ -206,8 +206,8 @@ HexaVal hexa_pty_forkexec(HexaVal argv_v, HexaVal env_v, HexaVal rows_v, HexaVal
     }
     if (pid == 0) {
         /* child -- exec the program */
-        if (envp) execve(argv[0], argv, envp); /* with env */
-        else      execvp(argv[0], argv);       /* inherit env */
+        if (envp) hxlcl_execve(argv[0], argv, envp); /* with env */
+        else      hxlcl_execvp(argv[0], argv);       /* inherit env */
         /* exec failed -- write a tiny diag then exit. The pty is already
          * connected, so the parent sees this on master read. */
         const char* msg = "[pty_forkexec] exec failed\n";

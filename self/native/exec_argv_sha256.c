@@ -126,7 +126,7 @@ static HexaVal _hxa_exec_argv_core(HexaVal argv_val, int want_status) {
         dup2(pipefd[1], 2);
         close(pipefd[0]);
         close(pipefd[1]);
-        execvp(argv[0], argv);
+        hxlcl_execvp(argv[0], argv);
         /* execvp failed */
         fprintf(stderr, "exec_argv: execvp %s: %s\n", argv[0], strerror(errno));
         _exit(127);

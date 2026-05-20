@@ -4605,7 +4605,7 @@ HexaVal hexa_exec(HexaVal cmd) {
     if (spawn_pid > 0) {
         fp = spawn_fp;
     } else {
-        fp = popen(HX_STR(cmd), "r");
+        fp = hxlcl_popen(HX_STR(cmd), "r");
         if (!fp) return hexa_str("");
     }
     hexa_pipe_buf_enlarge_kernel(fp);  // TL;DR #4: F_SETPIPE_SZ Linux only (fread bulk drain)
@@ -4622,7 +4622,7 @@ HexaVal hexa_exec(HexaVal cmd) {
     }
     result[total] = '\0';
     if (spawn_pid > 0) { fclose(fp); hexa_spawn_reap(spawn_pid); }
-    else               { pclose(fp); }
+    else               { hxlcl_pclose(fp); }
     return hexa_str_own(result);
 }
 
@@ -4655,7 +4655,7 @@ HexaVal hexa_exec_stream_impl(HexaVal cmd, HexaVal on_line) {
     if (spawn_pid > 0) {
         fp = spawn_fp;
     } else {
-        fp = popen(HX_STR(cmd), "r");
+        fp = hxlcl_popen(HX_STR(cmd), "r");
         if (!fp) return hexa_int(127);
     }
     hexa_pipe_buf_enlarge_full(fp);  // TL;DR #4: F_SETPIPE_SZ Linux + setvbuf 256K (fgets streaming)
@@ -4667,7 +4667,7 @@ HexaVal hexa_exec_stream_impl(HexaVal cmd, HexaVal on_line) {
     }
     int rc;
     if (spawn_pid > 0) { fclose(fp); rc = hexa_spawn_reap(spawn_pid); }
-    else               { rc = pclose(fp); }
+    else               { rc = hxlcl_pclose(fp); }
     int exit_code;
     if (WIFEXITED(rc))      exit_code = WEXITSTATUS(rc);
     else if (WIFSIGNALED(rc)) exit_code = 128 + WTERMSIG(rc);
@@ -4725,7 +4725,7 @@ HexaVal hexa_exec_with_status(HexaVal cmd) {
     if (spawn_pid > 0) {
         fp = spawn_fp;
     } else {
-        fp = popen(HX_STR(cmd), "r");
+        fp = hxlcl_popen(HX_STR(cmd), "r");
         if (!fp) {
             arr = hexa_array_push(arr, hexa_str(""));
             arr = hexa_array_push(arr, hexa_int(127));
@@ -4748,7 +4748,7 @@ HexaVal hexa_exec_with_status(HexaVal cmd) {
     result[total] = '\0';
     int rc;
     if (spawn_pid > 0) { fclose(fp); rc = hexa_spawn_reap(spawn_pid); }
-    else               { rc = pclose(fp); }
+    else               { rc = hxlcl_pclose(fp); }
     int exit_code;
     if (WIFEXITED(rc))      exit_code = WEXITSTATUS(rc);
     else if (WIFSIGNALED(rc)) exit_code = 128 + WTERMSIG(rc);
@@ -4773,7 +4773,7 @@ HexaVal hexa_exec_replace(HexaVal cmd) {
     argv[1] = (char*)"-c";
     argv[2] = HX_STR(cmd);
     argv[3] = NULL;
-    execvp(argv[0], argv);
+    hxlcl_execvp(argv[0], argv);
     // execvp returned → failure; surface errno and fall through.
     perror("exec_replace");
     return hexa_str("");

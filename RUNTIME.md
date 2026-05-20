@@ -725,3 +725,17 @@ For each Tier-A sub-phase:
   start_routine synchronously (single-threaded fallback). aprime_cc
   is single-threaded compile-then-exit; thread/channel runtime in
   self/native/thread.c linked but unreachable
+
+### 2026-05-21 — socket + exec + pty batch (cycle 61)
+
+- ✅ cycle 61 — 17 network/exec/pty fns CLOSED. aprime_cc nm undefined
+  externs 52 → **34** (−18 incl. bonus `_unlink` · cumulative
+  **137 → 34 = −103 = 75%**) · smoke exit(42) PASS · binary 1,140,520 B
+- Closed: `_socket · _bind · _listen · _accept · _connect · _recv ·
+  _send · _recvmsg · _sendmsg · _inet_pton` (10 net) + `_execl ·
+  _execve · _execvp` (3 exec) + `_popen · _pclose · _forkpty ·
+  _posix_openpt` (4 pty/spawn) + `_unlink` (bonus dead-strip)
+- All return -1 / NULL stubs. aprime_cc never opens network
+  connections or spawns child processes during compile-then-exit;
+  callers (self/native/net.c · exec_pipe.c · pty.c · etc) are
+  reachable code in flame/runtime but not exercised by compile flow

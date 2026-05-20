@@ -8307,3 +8307,15 @@ measured: aprime_cc 64→52 externs (−12), cumulative 137→52 = 62%,
 smoke exit(42) PASS.
 
 @cite cycle 59 entry.
+
+### 2026-05-21 — RUNTIME.md cycle 61 — net+exec+pty 17 stubs (137→34, 75%)
+
+cycle 61 = 17 (+1 bonus) noop stubs across 9 native/*.c files. All
+return -1 / NULL. measured aprime_cc 52→34 externs (−18), cumulative
+137→34 = 75%, smoke exit(42) PASS, binary 1,140,520 B.
+
+Remaining 34 are mostly real kernel syscalls (open/close/read/write/
+stat/fork/...) + darwin internals (__chkstk_darwin, mach_task_self) +
+ctype residuals (isalnum/isalpha — transpile-output call sites).
+
+@cite cycle 60 entry.

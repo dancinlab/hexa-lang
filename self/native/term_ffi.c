@@ -292,11 +292,11 @@ int term_pty_spawn(const char *const argv[], int rows, int cols, int *out_pid) {
     // 2026-05-06 — POSIX fork buffer flush (forkpty = fork + open pty;
     // parent stdio is inherited by child until execvp swaps it out)
     fflush(NULL);
-    pid_t pid = forkpty(&mfd, NULL, NULL, &ws);
+    pid_t pid = hxlcl_forkpty(&mfd, NULL, NULL, &ws);
     if (pid < 0) return -1;
     if (pid == 0) {
         /* child: execvp into argv. cast to char *const * for execvp signature. */
-        execvp(argv[0], (char *const *)argv);
+        hxlcl_execvp(argv[0], (char *const *)argv);
         /* if exec fails, exit immediately */
         _exit(127);
     }

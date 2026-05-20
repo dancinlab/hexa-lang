@@ -819,6 +819,61 @@ static int __attribute__((noinline)) hxlcl_pthread_join(void *thread, void **ret
     if (retval) *retval = (void *)0;
     return 0;
 }
+// Cycle 61 — socket + exec + pty stubs. aprime_cc doesn't open
+// network connections or spawn child processes during compile.
+// All return -1 (error) so any unreachable call branches to error
+// handling. errno not set (hxlcl_errno stays 0).
+static int __attribute__((noinline)) hxlcl_socket(int d, int t, int p) {
+    (void)d; (void)t; (void)p; return -1;
+}
+static int __attribute__((noinline)) hxlcl_bind(int s, const void *addr, unsigned int len) {
+    (void)s; (void)addr; (void)len; return -1;
+}
+static int __attribute__((noinline)) hxlcl_listen(int s, int backlog) {
+    (void)s; (void)backlog; return -1;
+}
+static int __attribute__((noinline)) hxlcl_accept(int s, void *addr, unsigned int *len) {
+    (void)s; (void)addr; (void)len; return -1;
+}
+static int __attribute__((noinline)) hxlcl_connect(int s, const void *addr, unsigned int len) {
+    (void)s; (void)addr; (void)len; return -1;
+}
+static long __attribute__((noinline)) hxlcl_recv(int s, void *b, unsigned long n, int f) {
+    (void)s; (void)b; (void)n; (void)f; return -1;
+}
+static long __attribute__((noinline)) hxlcl_send(int s, const void *b, unsigned long n, int f) {
+    (void)s; (void)b; (void)n; (void)f; return -1;
+}
+static long __attribute__((noinline)) hxlcl_recvmsg(int s, void *m, int f) {
+    (void)s; (void)m; (void)f; return -1;
+}
+static long __attribute__((noinline)) hxlcl_sendmsg(int s, const void *m, int f) {
+    (void)s; (void)m; (void)f; return -1;
+}
+static int __attribute__((noinline)) hxlcl_inet_pton(int af, const char *src, void *dst) {
+    (void)af; (void)src; (void)dst; return 0;  // invalid
+}
+static int __attribute__((noinline)) hxlcl_execl(const char *path, const char *arg, ...) {
+    (void)path; (void)arg; return -1;
+}
+static int __attribute__((noinline)) hxlcl_execve(const char *path, char *const argv[], char *const envp[]) {
+    (void)path; (void)argv; (void)envp; return -1;
+}
+static int __attribute__((noinline)) hxlcl_execvp(const char *file, char *const argv[]) {
+    (void)file; (void)argv; return -1;
+}
+static void *__attribute__((noinline)) hxlcl_popen(const char *cmd, const char *mode) {
+    (void)cmd; (void)mode; return (void *)0;
+}
+static int __attribute__((noinline)) hxlcl_pclose(void *stream) {
+    (void)stream; return -1;
+}
+static int __attribute__((noinline)) hxlcl_forkpty(int *amaster, char *name, void *termp, void *winp) {
+    (void)amaster; (void)name; (void)termp; (void)winp; return -1;
+}
+static int __attribute__((noinline)) hxlcl_posix_openpt(int flags) {
+    (void)flags; return -1;
+}
 
 // Textual override of any residual libc references in subsequent code
 // (runtime_core.c + HI tier + transpile output). The helper bodies
@@ -7839,7 +7894,7 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
         dup2(err_pipe[1], 2);
         close(out_pipe[0]); close(out_pipe[1]);
         close(err_pipe[0]); close(err_pipe[1]);
-        execl("/bin/sh", "sh", "-c", HX_STR(cmd), (char*)NULL);
+        hxlcl_execl("/bin/sh", "sh", "-c", HX_STR(cmd), (char*)NULL);
         _exit(127);
     }
     // parent: close write ends, drain both pipes.
@@ -7925,7 +7980,7 @@ HexaVal hexa_list_dir(HexaVal path) {
     }
     const char* post = "' 2>/dev/null";
     hxlcl_memcpy(cmd + n, post, hxlcl_strlen(post)); n += hxlcl_strlen(post); cmd[n] = 0;
-    FILE* fp = popen(cmd, "r");
+    FILE* fp = hxlcl_popen(cmd, "r");
     free(cmd);
     if (!fp) return hexa_array_new();
     HexaVal arr = hexa_array_new();
@@ -7935,7 +7990,7 @@ HexaVal hexa_list_dir(HexaVal path) {
         if (got > 0) arr = hexa_array_push(arr, hexa_str(line));
     }
     if (line) free(line);
-    pclose(fp);
+    hxlcl_pclose(fp);
     return arr;
 }
 
@@ -8473,25 +8528,25 @@ HexaVal hexa_http_get(HexaVal url) {
     if (k < 0 || (size_t)k >= sizeof(cmd)) return hexa_str("");
     // 2026-05-06 — POSIX fork buffer flush before popen (mirrors hexa_exec)
     fflush(NULL);
-    FILE* fp = popen(cmd, "r");
+    FILE* fp = hxlcl_popen(cmd, "r");
     if (!fp) return hexa_str("");
     size_t cap = 4096, len = 0;
     char* buf = (char*)malloc(cap);
-    if (!buf) { pclose(fp); return hexa_str(""); }
+    if (!buf) { hxlcl_pclose(fp); return hexa_str(""); }
     size_t r;
     char chunk[2048];
     while ((r = fread(chunk, 1, sizeof(chunk), fp)) > 0) {
         if (len + r + 1 >= cap) {
             while (len + r + 1 >= cap) cap *= 2;
             char* nb = (char*)realloc(buf, cap);
-            if (!nb) { free(buf); pclose(fp); return hexa_str(""); }
+            if (!nb) { free(buf); hxlcl_pclose(fp); return hexa_str(""); }
             buf = nb;
         }
         hxlcl_memcpy(buf + len, chunk, r);
         len += r;
     }
     buf[len] = 0;
-    pclose(fp);
+    hxlcl_pclose(fp);
     return hexa_str_own(buf);
 }
 
@@ -9478,7 +9533,7 @@ static void _hexa_init_fn_shims(void) {
  * Exposes hexa_os_sig_* (install / raise / drain / block / …) and
  * hexa_os_flock_* (open / close) for the stdlib/os/{signal,flock}.hexa
  * modules. Async-signal-safe self-pipe trampoline; O_CLOEXEC on flock
- * fds so execve(3) does not leak locks into children.
+ * fds so hxlcl_execve(3) does not leak locks into children.
  *
  * Implementation: native/signal_flock.c (see header comment for full
  * contract + semantics).
@@ -9702,7 +9757,7 @@ typedef struct {
     /* v1.3 (2026-05-11, wilson tool-core ESC-cancel): own child pid so
        exec_stream_kill can SIGTERM->SIGKILL the whole process *group*.
        _async forks /bin/sh -c cmd directly (setpgid(0,0) in the child)
-       instead of popen(), so pid == child sh pid == the group leader pgid.
+       instead of hxlcl_popen(), so pid == child sh pid == the group leader pgid.
        pid <= 0 -> legacy popen fallback (fork/pipe failed): no pid, so
        exec_stream_kill on that slot is best-effort fclose only & returns
        -1 (C3 honest C3 - prompt-kill needs the fork path). */
@@ -9770,7 +9825,7 @@ HexaVal hexa_exec_stream_async_impl(HexaVal cmd) {
                     dup2(pipefd[1], STDOUT_FILENO);
                     close(pipefd[1]);
                 }
-                execl("/bin/sh", "sh", "-c", cmd_s, (char*)NULL);
+                hxlcl_execl("/bin/sh", "sh", "-c", cmd_s, (char*)NULL);
                 _exit(127);                    // execl failed
             } else if (pid > 0) {
                 // parent
@@ -9786,7 +9841,7 @@ HexaVal hexa_exec_stream_async_impl(HexaVal cmd) {
         }
     }
     if (!fp) {
-        fp = popen(cmd_s, "r");
+        fp = hxlcl_popen(cmd_s, "r");
         if (!fp) return hexa_int((int64_t)-1);
         child_pid = (pid_t)-1;                  // popen path: no usable pid
     }
@@ -9938,7 +9993,7 @@ HexaVal hexa_exec_stream_close_impl(HexaVal handle) {
             break;
         }
     } else {
-        raw_rc = pclose(s->fp);  /* legacy popen fallback */
+        raw_rc = hxlcl_pclose(s->fp);  /* legacy popen fallback */
     }
     /* v1.1 WIFEXITED + WEXITSTATUS proper rc decode (C3 honest C3 — caller가
        표준 exit code 패턴 사용 가능). Signal exit 시 negative signal 반환. */
@@ -10106,7 +10161,7 @@ HexaVal hexa_exec_stream_open_impl(HexaVal cmd) {
             close(pipe_out[1]);
         }
         close(pipe_out[0]);
-        execl("/bin/sh", "sh", "-c", cmd_s, (char*)NULL);
+        hxlcl_execl("/bin/sh", "sh", "-c", cmd_s, (char*)NULL);
         _exit(127);
     }
     // parent
