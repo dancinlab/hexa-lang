@@ -492,6 +492,7 @@ fn read_verilog(src: str) -> ReadVerilogResult {
             let mut m = rtlil_new_module(name)
             let mut tab = symtab_new()
             let mut funcs: [VFunc] = []
+            let mut inlined = 0
             // optional `#( parameter NAME = EXPR , … )` header
             if _ps_peek(st) == "#" {
                 let ph = _rv_parse_param_header(st, tab)
@@ -533,6 +534,22 @@ fn read_verilog(src: str) -> ReadVerilogResult {
                 let bt = _ps_peek(st)
                 if bt == "endmodule" {
                     st = _ps_take(st); break
+                }
+                // proc-pass core sub-step #4c (multi-day work, partial):
+                // once at least one function is collected and we're past
+                // the function decl region, rewrite the remaining tokens
+                // by inlining single-stmt return-expr function calls.
+                if inlined == 0 && len(funcs) > 0 && bt != "function" {
+                    let mut rest: [str] = []
+                    let mut ri = st.pos
+                    while ri < len(st.toks) {
+                        rest = rest.push(st.toks[ri])
+                        ri = ri + 1
+                    }
+                    let pp = _rv_inline_func_calls(rest, funcs)
+                    st = PState { toks: pp, pos: 0, err: st.err }
+                    inlined = 1
+                    continue
                 }
                 // wire / input / output / inout declarations
                 if bt == "input" {
@@ -1297,6 +1314,118 @@ fn _rv_parse_function(st_in: PState) -> RvFuncStep {
         func: VFunc { name: fname, args: argnames, body: body },
         err: ""
     }
+}
+
+// CLEAN-ROOM: token-level inlining of function calls inside the
+// remaining module body. Handles the minimal shape:
+//   call site:  `func_name ( arg1_toks , arg2_toks , … )`
+//   func body:  `func_name = expr_toks ;`        (single return-expr)
+// Anything outside that shape (multi-stmt bodies, nested calls,
+// args using `(`/`)` deeper than the call's own parens, mismatched
+// arity) is left untouched so the parser still sees the original
+// token stream and either parses correctly or fails loudly.
+fn _rv_inline_func_calls(toks_in: [str], funcs: [VFunc]) -> [str] {
+    let mut out: [str] = []
+    let mut i = 0
+    while i < len(toks_in) {
+        let nm = toks_in[i]
+        let mut fidx = 0 - 1
+        let mut k = 0
+        while k < len(funcs) {
+            if funcs[k].name == nm { fidx = k; k = len(funcs) }
+            k = k + 1
+        }
+        if fidx >= 0 && i + 1 < len(toks_in) && toks_in[i + 1] == "(" {
+            // collect args, depth-balanced on `(`/`)`, split on `,`
+            let mut args: [[str]] = []
+            let mut cur: [str] = []
+            let mut p = i + 2
+            let mut depth = 1
+            let mut ok = 1
+            while p < len(toks_in) && depth > 0 {
+                let t = toks_in[p]
+                if t == "(" {
+                    depth = depth + 1
+                    cur = cur.push(t)
+                    p = p + 1
+                    continue
+                }
+                if t == ")" {
+                    depth = depth - 1
+                    if depth == 0 {
+                        if len(cur) > 0 { args = args.push(cur) }
+                        cur = []
+                        p = p + 1
+                        break
+                    }
+                    cur = cur.push(t)
+                    p = p + 1
+                    continue
+                }
+                if t == "," && depth == 1 {
+                    if len(cur) > 0 { args = args.push(cur) }
+                    cur = []
+                    p = p + 1
+                    continue
+                }
+                cur = cur.push(t)
+                p = p + 1
+            }
+            if depth != 0 { ok = 0 }
+            let vf = funcs[fidx]
+            if ok == 1 && len(args) == len(vf.args) && len(vf.body) >= 4 {
+                if vf.body[0] != vf.name { ok = 0 }
+                if ok == 1 && vf.body[1] != "=" { ok = 0 }
+                if ok == 1 && vf.body[len(vf.body) - 1] != ";" { ok = 0 }
+            } else {
+                ok = 0
+            }
+            if ok == 1 {
+                let mut expr_toks: [str] = []
+                let mut ei = 2
+                while ei < len(vf.body) - 1 {
+                    let et = vf.body[ei]
+                    let mut sub = 0 - 1
+                    let mut sk = 0
+                    while sk < len(vf.args) {
+                        if vf.args[sk] == et { sub = sk; sk = len(vf.args) }
+                        sk = sk + 1
+                    }
+                    if sub >= 0 {
+                        let av = args[sub]
+                        // wrap the substituted arg tokens in `(` / `)`
+                        // so operator precedence at the call site is
+                        // preserved (e.g. `~(a^b)` doesn't bind tighter
+                        // than the substituted expression's own ops).
+                        expr_toks = expr_toks.push("(")
+                        let mut av_i = 0
+                        while av_i < len(av) {
+                            expr_toks = expr_toks.push(av[av_i])
+                            av_i = av_i + 1
+                        }
+                        expr_toks = expr_toks.push(")")
+                    } else {
+                        expr_toks = expr_toks.push(et)
+                    }
+                    ei = ei + 1
+                }
+                // wrap the whole inlined body in `(` / `)` too — the
+                // call site might be inside a larger expression.
+                out = out.push("(")
+                let mut xi = 0
+                while xi < len(expr_toks) {
+                    out = out.push(expr_toks[xi])
+                    xi = xi + 1
+                }
+                out = out.push(")")
+                i = p
+                continue
+            }
+        }
+        out = out.push(toks_in[i])
+        i = i + 1
+    }
+    return out
 }
 
 // CLEAN-ROOM: linear lookup of a function by name; -1 if absent.
@@ -3050,6 +3179,25 @@ fn main() {
         }
         if rtlil_count_cells_of_type(_m41, "$dff") != 2 {
             println("FAIL T41b dff_count got " + str(rtlil_count_cells_of_type(_m41, "$dff")))
+            fails = fails + 1
+        }
+    }
+
+    // T42 — function-call inline at expression site (proc-pass core
+    //       sub-step #4c, partial — single-stmt return-expr only).
+    //       `function [0:0] xf ( input x , input y ) ; xf = x ^ y ;
+    //        endfunction ; assign z = xf ( a , b ) ;`
+    //       After token-level inlining the assign becomes
+    //       `assign z = ( ( a ) ^ ( b ) ) ;` and elabs to 1 $xor cell.
+    total = total + 1
+    let _v42 = "module fc ( input a , input b , output z ) ; function [ 0 : 0 ] xf ( input x , input y ) ; xf = x ^ y ; endfunction assign z = xf ( a , b ) ; endmodule"
+    let _r42 = read_verilog(_v42)
+    if _r42.ok != 1 {
+        println("FAIL T42 func_inline: " + _r42.message); fails = fails + 1
+    } else {
+        let _m42 = _r42.design.modules[0]
+        if rtlil_count_cells_of_type(_m42, "$xor") != 1 {
+            println("FAIL T42a xor_count got " + str(rtlil_count_cells_of_type(_m42, "$xor")))
             fails = fails + 1
         }
     }
