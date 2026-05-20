@@ -3125,8 +3125,8 @@ HexaVal hexa_array_drop(HexaVal arr, HexaVal nv) {
 }
 #endif
 
-// zip(other): pairs [a_i, b_i] up to min(len(a), len(b)).
-// Matches interpreter at hexa_full.hexa:15258-15270.
+// zip(other): pairs [a_i, b_i] up to min(len(a), len(b)). Step-3 cycle 25.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_zip(HexaVal a, HexaVal b) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(a) || !HX_IS_ARRAY(b)) return out;
@@ -3140,6 +3140,23 @@ HexaVal hexa_array_zip(HexaVal a, HexaVal b) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_zip_float(HexaVal a, HexaVal b);
+HexaVal hexa_array_zip(HexaVal a, HexaVal b) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(a) || !HX_IS_ARRAY(b)) return out;
+    if (_arr_all_float(a) && _arr_all_float(b)) return rt_array_zip_float(a, b);
+    int64_t na = HX_ARR_LEN(a), nb = HX_ARR_LEN(b);
+    int64_t k = na < nb ? na : nb;
+    for (int64_t i = 0; i < k; i++) {
+        HexaVal pair = hexa_array_new();
+        pair = hexa_array_push(pair, HX_ARR_ITEMS(a)[i]);
+        pair = hexa_array_push(pair, HX_ARR_ITEMS(b)[i]);
+        out = hexa_array_push(out, pair);
+    }
+    return out;
+}
+#endif
 
 // chunk(n): split into non-overlapping chunks of size n (last may be shorter).
 // Matches interpreter at hexa_full.hexa:15363-15378.
@@ -3327,7 +3344,8 @@ HexaVal hexa_array_mean(HexaVal arr) {
 
 // swap(i, j): returns new array with items at i and j swapped.
 // Out-of-range indices return original array copy.
-// Matches interpreter at hexa_full.hexa:15497-15512.
+// Matches interpreter at hexa_full.hexa:15497-15512. Step-3 cycle 25 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_swap(HexaVal arr, HexaVal iv, HexaVal jv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3345,6 +3363,27 @@ HexaVal hexa_array_swap(HexaVal arr, HexaVal iv, HexaVal jv) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_swap_float(HexaVal arr, HexaVal i, HexaVal j);
+HexaVal hexa_array_swap(HexaVal arr, HexaVal iv, HexaVal jv) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t i = HX_IS_INT(iv) ? HX_INT(iv) : (int64_t)__hx_to_double(iv);
+    int64_t j = HX_IS_INT(jv) ? HX_INT(jv) : (int64_t)__hx_to_double(jv);
+    if (_arr_all_float(arr)) return rt_array_swap_float(arr, hexa_int(i), hexa_int(j));
+    int64_t n = HX_ARR_LEN(arr);
+    if (i < 0 || j < 0 || i >= n || j >= n) {
+        for (int64_t k = 0; k < n; k++) out = hexa_array_push(out, HX_ARR_ITEMS(arr)[k]);
+        return out;
+    }
+    for (int64_t k = 0; k < n; k++) {
+        if (k == i) out = hexa_array_push(out, HX_ARR_ITEMS(arr)[j]);
+        else if (k == j) out = hexa_array_push(out, HX_ARR_ITEMS(arr)[i]);
+        else out = hexa_array_push(out, HX_ARR_ITEMS(arr)[k]);
+    }
+    return out;
+}
+#endif
 
 // group_by: apply fn(item) → key, bucket items into map[str(key)] = [items].
 // Interpreter (self/hexa_full.hexa:15323-15344) compares keys via

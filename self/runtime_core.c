@@ -4327,11 +4327,8 @@ HexaVal hexa_array_shift(HexaVal arr) {
     return first;
 }
 
+// Step-3 cycle 25 port (float array fast-path).
 HexaVal hexa_array_reverse(HexaVal arr) {
-    // Polymorphic — string.reverse() / array.reverse() share codegen emit.
-    // Previously fell through for strings ("abc".reverse() → "abc" no-op)
-    // because the `!HX_IS_ARRAY` guard returned early. Interp handled it
-    // via Val-level byte reverse; AOT was silently wrong.
     if (HX_IS_STR(arr)) {
         const char* s = HX_STR(arr);
         size_t n = hxlcl_strlen(s);
@@ -4341,6 +4338,16 @@ HexaVal hexa_array_reverse(HexaVal arr) {
         return hexa_str_own(buf);
     }
     if (!HX_IS_ARRAY(arr)) return arr;
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+    extern HexaVal rt_array_reverse_float(HexaVal arr);
+    // Inline _arr_all_float (helper lives in runtime.c — declared static there)
+    int all_float = 1;
+    int64_t arr_n = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < arr_n; i++) {
+        if (!HX_IS_FLOAT(HX_ARR_ITEMS(arr)[i])) { all_float = 0; break; }
+    }
+    if (all_float) return rt_array_reverse_float(arr);
+#endif
     HexaVal result = hexa_array_new();
     for (int i = HX_ARR_LEN(arr) - 1; i >= 0; i--)
         result = hexa_array_push(result, HX_ARR_ITEMS(arr)[i]);
