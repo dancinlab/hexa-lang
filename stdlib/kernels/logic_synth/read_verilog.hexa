@@ -2039,6 +2039,58 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                         }
                     }
                 }
+                // sub-step #4d dynamic-index detection — indexed LHS
+                // whose index expression does NOT const-fold. We still
+                // capture the (base, idx_toks) so the emit path can
+                // build a P-way $eq+$and+$mux+$dff chain via
+                // _rv_array_bound. Only fires when the simple/static
+                // paths above failed to capture op_pos.
+                let mut t_dyn_base = ""
+                let mut t_dyn_idx_toks: [str] = []
+                let mut t_dyn_op_str = ""
+                let mut t_dyn_rhs: [str] = []
+                let mut t_dyn_ok = 0
+                if op_pos <= 0 && then_toks[1] == "[" {
+                    let mut bd2 = 1
+                    let mut p2 = 2
+                    let mut idx2_toks: [str] = []
+                    while p2 < len(then_toks) {
+                        if then_toks[p2] == "[" { bd2 = bd2 + 1 }
+                        if then_toks[p2] == "]" {
+                            bd2 = bd2 - 1
+                            if bd2 == 0 { break }
+                        }
+                        idx2_toks = idx2_toks.push(then_toks[p2])
+                        p2 = p2 + 1
+                    }
+                    if p2 < len(then_toks) && then_toks[p2] == "]" {
+                        if p2 + 1 < len(then_toks) {
+                            if then_toks[p2 + 1] == "<=" || then_toks[p2 + 1] == "=" {
+                                let mut last_s3 = 0 - 1
+                                let mut sc3 = 0
+                                let mut tj = 0
+                                while tj < len(then_toks) {
+                                    if then_toks[tj] == ";" {
+                                        last_s3 = tj
+                                        sc3 = sc3 + 1
+                                    }
+                                    tj = tj + 1
+                                }
+                                if sc3 == 1 && last_s3 == len(then_toks) - 1 {
+                                    t_dyn_ok = 1
+                                    t_dyn_base = then_toks[0]
+                                    t_dyn_idx_toks = idx2_toks
+                                    t_dyn_op_str = then_toks[p2 + 1]
+                                    let mut tj2 = p2 + 2
+                                    while tj2 < len(then_toks) - 1 {
+                                        t_dyn_rhs = t_dyn_rhs.push(then_toks[tj2])
+                                        tj2 = tj2 + 1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 if op_pos > 0 {
                     let mut last_semi = 0 - 1
                     let mut semi_count = 0
@@ -2197,6 +2249,62 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                         dc = rtlil_cell_connect(dc, "Q", t_lhs)
                         m = rtlil_module_add_cell(m, dc)
                         let _eg = clk_edge
+                    }
+                }
+            }
+            // ── dynamic-index no-else cond-mux (proc-pass sub-step #4d
+            //    emit-chain). `if (en) name [ wire_idx ] <= rhs ;`
+            //    posedge always → per-element ($eq + $and + $mux +
+            //    $dff) chain × P. Requires _rv_array_bound(m, base)>0;
+            //    if 0 (unknown array size) we fall back to skip-no-emit.
+            if t_dyn_ok == 1 && has_else == 0 && is_clocked == 1 && t_dyn_op_str == "<=" {
+                let bound = _rv_array_bound(m, t_dyn_base)
+                if bound > 0 {
+                    let cer = _rv_elab_expr(cond_toks, 0, m, 1, tab)
+                    if len(cer.err) == 0 {
+                        m = cer.m
+                        let ier = _rv_elab_expr(t_dyn_idx_toks, 0, m, 1, tab)
+                        if len(ier.err) == 0 {
+                            m = ier.m
+                            let ter = _rv_elab_expr(t_dyn_rhs, 0, m, 1, tab)
+                            if len(ter.err) == 0 {
+                                m = ter.m
+                                let mut dk = 0
+                                while dk < bound {
+                                    let elem = t_dyn_base + "[" + str(dk) + "]"
+                                    let eq_y = _rv_fresh_wire(m)
+                                    m = rtlil_module_add_wire(m, rtlil_wire(eq_y, 1, 0, 0))
+                                    let mut eqc = rtlil_cell(eq_y + "$eq", "$eq", 0)
+                                    eqc = rtlil_cell_connect(eqc, "A", ier.wire)
+                                    eqc = rtlil_cell_connect(eqc, "B", str(dk))
+                                    eqc = rtlil_cell_connect(eqc, "Y", eq_y)
+                                    m = rtlil_module_add_cell(m, eqc)
+                                    let en_y = _rv_fresh_wire(m)
+                                    m = rtlil_module_add_wire(m, rtlil_wire(en_y, 1, 0, 0))
+                                    let mut andc = rtlil_cell(en_y + "$and", "$and", 0)
+                                    andc = rtlil_cell_connect(andc, "A", cer.wire)
+                                    andc = rtlil_cell_connect(andc, "B", eq_y)
+                                    andc = rtlil_cell_connect(andc, "Y", en_y)
+                                    m = rtlil_module_add_cell(m, andc)
+                                    let mux_y = _rv_fresh_wire(m)
+                                    m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+                                    let mut muxc = rtlil_cell(mux_y + "$mux", "$mux", 0)
+                                    muxc = rtlil_cell_connect(muxc, "A", elem)
+                                    muxc = rtlil_cell_connect(muxc, "B", ter.wire)
+                                    muxc = rtlil_cell_connect(muxc, "S", en_y)
+                                    muxc = rtlil_cell_connect(muxc, "Y", mux_y)
+                                    m = rtlil_module_add_cell(m, muxc)
+                                    let dn = "$rvff$" + str(len(m.cells))
+                                    let mut dc = rtlil_cell(dn, "$dff", 0)
+                                    dc = rtlil_cell_connect(dc, "CLK", clk_wire)
+                                    dc = rtlil_cell_connect(dc, "D", mux_y)
+                                    dc = rtlil_cell_connect(dc, "Q", elem)
+                                    m = rtlil_module_add_cell(m, dc)
+                                    let _eg = clk_edge
+                                    dk = dk + 1
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -3439,6 +3547,31 @@ fn main() {
         let _m45 = _r45.design.modules[0]
         if rtlil_count_cells_of_type(_m45, "$mux") != 2 {
             println("FAIL T45a mux_count got " + str(rtlil_count_cells_of_type(_m45, "$mux")))
+            fails = fails + 1
+        }
+    }
+
+    // T46 — dynamic-index emit-chain (sub-step #4d). Body
+    //       `if (en) q[idx] <= d ;` posedge always with `reg q [0:3]`
+    //       → per-element ($eq + $and + $mux + $dff) chain × 4
+    //       → 4 $eq + 4 $and + 4 $mux + 4 $dff = 16 cells total.
+    total = total + 1
+    let _v46 = "module dyni ( input clk , input en , input idx , input d ) ; reg q [ 0 : 3 ] ; always @ ( posedge clk ) if ( en ) q [ idx ] <= d ; endmodule"
+    let _r46 = read_verilog(_v46)
+    if _r46.ok != 1 {
+        println("FAIL T46 dyn_idx: " + _r46.message); fails = fails + 1
+    } else {
+        let _m46 = _r46.design.modules[0]
+        if rtlil_count_cells_of_type(_m46, "$eq") != 4 {
+            println("FAIL T46a eq_count got " + str(rtlil_count_cells_of_type(_m46, "$eq")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m46, "$mux") != 4 {
+            println("FAIL T46b mux_count got " + str(rtlil_count_cells_of_type(_m46, "$mux")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m46, "$dff") != 4 {
+            println("FAIL T46c dff_count got " + str(rtlil_count_cells_of_type(_m46, "$dff")))
             fails = fails + 1
         }
     }
