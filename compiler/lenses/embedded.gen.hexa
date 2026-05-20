@@ -207,7 +207,47 @@ pub fn lens_apply_paradigm_shift_inversion(view: AtlasView) -> array {
     return empty_candidate_list()
 }
 pub fn lens_apply_paradigm_shift_dual(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — n=6 lattice signature audit. The atlas's P kind should
+    // anchor on the 8 hexa primitives (n=6, sigma=12, phi=2, tau=4,
+    // sopfr=5, J2=24, mu=1, M3=7) per AGENTS.tape signature
+    // "n=6 primitives". Verify presence; flag total presence as a
+    // single summary Candidate if anything is missing.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut anchors: array = []
+    anchors.push("n")
+    anchors.push("sigma")
+    anchors.push("phi")
+    anchors.push("tau")
+    anchors.push("sopfr")
+    anchors.push("J2")
+    anchors.push("mu")
+    anchors.push("M3")
+    let an = len(anchors)
+    let mut missing_count = 0
+    let mut a = 0
+    while a < an {
+        let anchor = anchors[a]
+        let mut found = false
+        let mut p = 0
+        while p < n {
+            if view.p_nodes[p].id == anchor { found = true; break }
+            p = p + 1
+        }
+        if found == false { missing_count = missing_count + 1 }
+        a = a + 1
+    }
+    if missing_count == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "paradigm_shift.dual.anchor_audit",
+        family: "paradigm_shift",
+        proposed: "atlas P kind anchor audit: " + to_string(an - missing_count) + "/" + to_string(an) + " of the 8 hexa primitives (n, sigma, phi, tau, sopfr, J2, mu, M3) present. " + to_string(missing_count) + " missing — candidate for baking attention.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_paradigm_shift_adjoint(view: AtlasView) -> array {
     return empty_candidate_list()
