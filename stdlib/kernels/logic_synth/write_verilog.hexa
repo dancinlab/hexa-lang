@@ -139,7 +139,78 @@ fn _wv_emit_decl(w: Wire) -> str {
 }
 
 // CLEAN-ROOM: emit a cell instance: `<type> <name> (.A(a), .Y(y));`.
+// CLEAN-ROOM: look up a cell connection's net by pin name.
+fn _wv_conn_net(c: Cell, pin: str) -> str {
+    let mut i = 0
+    while i < len(c.conns) {
+        if c.conns[i].pin == pin { return c.conns[i].net }
+        i = i + 1
+    }
+    return ""
+}
+
+// CLEAN-ROOM: emit a cell as behavioural Verilog. RTLIL internal
+// primitive types (`$add`, `$eq`, `$mux`, etc.) become `assign`
+// statements with the corresponding operator so substrate yosys's
+// `read_verilog` lowers them as combinational logic instead of
+// opaque module references. Cells without a catalogued operator
+// fall back to the IEEE 1364 cell-instance form so user-extracted
+// designs still emit even when this writer hasn't covered their
+// primitive yet.
+//
+// Coverage: binop (16 ops: + - * / % & | ^ == != < > <= >= << >>
+// && ||), unary (~, !, -), $mux ternary. Sequential cells (`$dff`/
+// `$adff`/`$sdff`) remain as instance form — they need always-block
+// emission, which is a separate writer-side sub-step.
 fn _wv_emit_cell(c: Cell, idx: int) -> str {
+    let t = c.cell_type
+    let mut op = ""
+    if t == "$add" { op = "+"  }
+    if t == "$sub" { op = "-"  }
+    if t == "$mul" { op = "*"  }
+    if t == "$div" { op = "/"  }
+    if t == "$mod" { op = "%"  }
+    if t == "$and" { op = "&"  }
+    if t == "$or"  { op = "|"  }
+    if t == "$xor" { op = "^"  }
+    if t == "$eq"  { op = "==" }
+    if t == "$ne"  { op = "!=" }
+    if t == "$lt"  { op = "<"  }
+    if t == "$gt"  { op = ">"  }
+    if t == "$le"  { op = "<=" }
+    if t == "$ge"  { op = ">=" }
+    if t == "$shl" { op = "<<" }
+    if t == "$shr" { op = ">>" }
+    if t == "$logic_and" { op = "&&" }
+    if t == "$logic_or"  { op = "||" }
+    if op != "" {
+        let a = _wv_conn_net(c, "A")
+        let b = _wv_conn_net(c, "B")
+        let y = _wv_conn_net(c, "Y")
+        return "  assign " + _wv_emit_name(y) + " = "
+             + _wv_emit_name(a) + " " + op + " " + _wv_emit_name(b) + ";\n"
+    }
+    let mut unop = ""
+    if t == "$not"       { unop = "~" }
+    if t == "$logic_not" { unop = "!" }
+    if t == "$neg"       { unop = "-" }
+    if unop != "" {
+        let a = _wv_conn_net(c, "A")
+        let y = _wv_conn_net(c, "Y")
+        return "  assign " + _wv_emit_name(y) + " = "
+             + unop + _wv_emit_name(a) + ";\n"
+    }
+    if t == "$mux" {
+        // RTLIL convention: A is 0-select, B is 1-select.
+        let s = _wv_conn_net(c, "S")
+        let a = _wv_conn_net(c, "A")
+        let b = _wv_conn_net(c, "B")
+        let y = _wv_conn_net(c, "Y")
+        return "  assign " + _wv_emit_name(y) + " = "
+             + _wv_emit_name(s) + " ? "
+             + _wv_emit_name(b) + " : "
+             + _wv_emit_name(a) + ";\n"
+    }
     let mut out = "  " + c.cell_type + " " + c.name + " ("
     let mut i = 0
     while i < len(c.conns) {
@@ -345,6 +416,65 @@ fn main() {
     let r9 = write_verilog(d9)
     if r9.text.find("\\name[3] ;") < 0 {
         println("FAIL T9 escaped_ident"); fails = fails + 1
+    }
+
+    // T10 — $add cell emits as `assign y = a + b;` behavioural form
+    //   (rfc_006 §5 substrate handoff: yosys recognises operator
+    //    assigns as combinational primitives, but treats cell
+    //    instances of RTLIL types like `$add name (.A, .B, .Y)` as
+    //    references to a missing module).
+    total = total + 1
+    let mut m10 = rtlil_new_module("mAdd")
+    m10 = rtlil_module_add_wire(m10, rtlil_wire("a", 4, 1, 1))
+    m10 = rtlil_module_add_wire(m10, rtlil_wire("b", 4, 1, 2))
+    m10 = rtlil_module_add_wire(m10, rtlil_wire("y", 4, 2, 3))
+    let mut cAdd = rtlil_cell("c1", "$add", 0)
+    cAdd = rtlil_cell_connect(cAdd, "A", "a")
+    cAdd = rtlil_cell_connect(cAdd, "B", "b")
+    cAdd = rtlil_cell_connect(cAdd, "Y", "y")
+    m10 = rtlil_module_add_cell(m10, cAdd)
+    let mut d10 = rtlil_new_design("test")
+    d10 = rtlil_design_add(d10, m10)
+    let r10 = write_verilog(d10)
+    if r10.text.find("assign y = a + b;") < 0 {
+        println("FAIL T10 add_behavioural"); fails = fails + 1
+    }
+
+    // T11 — $mux cell emits as `assign y = s ? b : a;` (RTLIL: A is
+    //   0-select, B is 1-select, so the ternary takes B for true).
+    total = total + 1
+    let mut m11 = rtlil_new_module("mMux")
+    m11 = rtlil_module_add_wire(m11, rtlil_wire("s", 1, 1, 1))
+    m11 = rtlil_module_add_wire(m11, rtlil_wire("a", 1, 1, 2))
+    m11 = rtlil_module_add_wire(m11, rtlil_wire("b", 1, 1, 3))
+    m11 = rtlil_module_add_wire(m11, rtlil_wire("y", 1, 2, 4))
+    let mut cMux = rtlil_cell("c2", "$mux", 0)
+    cMux = rtlil_cell_connect(cMux, "S", "s")
+    cMux = rtlil_cell_connect(cMux, "A", "a")
+    cMux = rtlil_cell_connect(cMux, "B", "b")
+    cMux = rtlil_cell_connect(cMux, "Y", "y")
+    m11 = rtlil_module_add_cell(m11, cMux)
+    let mut d11 = rtlil_new_design("test")
+    d11 = rtlil_design_add(d11, m11)
+    let r11 = write_verilog(d11)
+    if r11.text.find("assign y = s ? b : a;") < 0 {
+        println("FAIL T11 mux_behavioural"); fails = fails + 1
+    }
+
+    // T12 — $not unary emits as `assign y = ~a;`.
+    total = total + 1
+    let mut m12 = rtlil_new_module("mNot")
+    m12 = rtlil_module_add_wire(m12, rtlil_wire("a", 1, 1, 1))
+    m12 = rtlil_module_add_wire(m12, rtlil_wire("y", 1, 2, 2))
+    let mut cNot = rtlil_cell("c3", "$not", 0)
+    cNot = rtlil_cell_connect(cNot, "A", "a")
+    cNot = rtlil_cell_connect(cNot, "Y", "y")
+    m12 = rtlil_module_add_cell(m12, cNot)
+    let mut d12 = rtlil_new_design("test")
+    d12 = rtlil_design_add(d12, m12)
+    let r12 = write_verilog(d12)
+    if r12.text.find("assign y = ~a;") < 0 {
+        println("FAIL T12 not_behavioural"); fails = fails + 1
     }
 
     if fails > 0 {
