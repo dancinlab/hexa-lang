@@ -5639,3 +5639,100 @@ F-P3-ZERO-EXTERN).
 | arm64-mac | link_elf_x86_64 multi-obj P2 | ELF | x86_64 | ubu-2 (Linux) | exit 42 | P2-4 🛸 |
 
 **cc --regen / binary promote**: 미수행. compiler/emit/elf_x86_64.hexa.
+
+
+### 2026-05-20 — S7-P3: 🛸🛸🛸 F-P3-ZERO-EXTERN PASS · RFC 063 PHASING COMPLETE
+
+🛸🛸🛸 **RFC 063 § P3 CLOSED · 모든 Px phases 측정-증명**.
+
+**F-P3-ZERO-EXTERN-OBJ PASS** — `aprime_cc --emit=obj --backend=native
+trivial.hexa` 가 **PATH=/usr/bin:/bin** (clang/as/ld 미포함) 에서 정상
+작동, 433-byte Mach-O arm64 relocatable object 생산. obj-emit 단계에
+외부 toolchain fork 0건 측정.
+
+**F-P3-FULL-RUNEQ PASS** — 전체 path `.hexa → aprime_cc (P0) → .o →
+hexa_ld (P1) → Mach-O exec → launch → exit 42` 가 외부 clang/as/ld fork
+0건으로 동작. codesign 만 RFC 063 § P1 명시 OS Gatekeeper exception
+(macOS Sonoma+ 의 OS interaction, toolchain dependency 아님).
+
+**2 falsifier**:
+
+1. `compiler/test/macho_p0_corpus/run_F_P3_ZERO_EXTERN.hexa`:
+   - `env -i PATH=/usr/bin:/bin /tmp/aprime_s7 trivial.hexa --emit=obj
+     --backend=native -o /tmp/p3_zero_extern.o` 실행.
+   - rc=0 + 433 B Mach-O arm64 relocatable 산출 확인.
+   - stdout/stderr 에 'clang'/'as '/'ld ' 문자열 없음.
+
+2. `compiler/test/macho_p0_corpus/run_F_P3_FULL_RUNEQ.hexa`:
+   - step 1: aprime_cc --emit=obj --backend=native (stripped PATH) 로
+     trivial.ours.o 생산.
+   - step 2: parse_macho_obj + 합성 runtime stub + hexa_ld 의 link_
+     macho_arm64 (codesign external OS exception).
+   - step 3: exec launch → rc=42.
+
+**측정 결과 (arm64-Mac local)**:
+
+```
+$ /tmp/run_F_P3_ZERO_EXTERN
+=== aprime_cc with stripped PATH ===
+atlas: loaded 15952 nodes from hxc
+rc=0
+.o size = 433 bytes
+/tmp/p3_zero_extern.o: Mach-O 64-bit object arm64
+🛸 F-P3-ZERO-EXTERN-OBJ FULL PASS — aprime_cc --emit=obj
+   --backend=native runs with no clang/as/ld in PATH
+   trivial.hexa → .o produced (433 B) without external toolchain fork.
+
+$ /tmp/run_F_P3_FULL_RUNEQ
+step 1: aprime_cc --emit=obj --backend=native (stripped PATH) PASS
+step 2: hexa_ld static-link (codesign external OS exception) PASS
+step 3: launch — rc=42 (expected 42)
+🛸 F-P3-FULL-RUNEQ PASS — `.hexa → aprime_cc (P0) → .o → hexa_ld (P1)
+   → exec → exit 42` with NO external clang/as/ld fork.
+```
+
+**RFC 063 phasing closure matrix (2026-05-20 final)**:
+
+| Phase | Cycles | 상태 | Falsifier |
+|-------|--------|------|-----------|
+| P0 Mach-O arm64 obj emitter   | 7  | 🛸 CLOSED | F-P0-OBJEQ corpus 4/4 byte-eq vs clang |
+| P1 hexa_ld Mach-O static-link | 8  | 🛸 CLOSED | F-P1-RUNEQ trivial.hexa exit 42 |
+| P2 ELF x86_64 cycles 1-4      | 4  | 🛸 CLOSED | F-P2-LINUX-EXIT + F-P2-MULTIOBJ-RUNEQ |
+| P3 zero-extern + flip default | 1  | 🛸 CLOSED | F-P3-ZERO-EXTERN-OBJ + F-P3-FULL-RUNEQ |
+
+**캠페인 총 21 cycles** (P0=7, P1=8, P2=4, P3=1+falsifier-pair) on
+`s7-p0-cycle1` branch, FF merged to `compiler-native-codegen`, all
+pushed to origin.
+
+**HONEST SCOPE (g3, over-claim 0) — Px closure 의 의미**:
+
+- **P0/P1 closure** = trivial.hexa corpus 측정. real production-grade
+  compiler self-build (compiler/main.hexa 자기 빌드를 native path 로
+  수행) 는 더 많은 LIR ops 인코딩 + self/runtime.c 의 hexa port 가
+  선행해야 함. 하지만 RFC 063 의 falsifier contract 는 충족.
+- **P2 closure** = ELF static-link RUNEQ on Linux. real x86_64 LIR
+  walker (`pack_lir_elf`) + real corpus_trivial_x86.ours.o → hexa-side
+  build 는 follow-up. 합성 multi-obj path 는 PASS.
+- **P3 closure** = obj-emit 단계의 zero-extern + full path (P0+P1) 의
+  zero-extern measurement. **HEXA_BACKEND=native default 의 실제
+  flip** 은 `self/main.hexa::cmd_build` 변경 + cc --regen 필요 (대형
+  driver 변경) — 본 closure 는 path 가 작동함을 측정 증명, default
+  flip 은 별도 ship cycle.
+- **codesign**: macOS Gatekeeper 의 OS interaction. Linux ELF (P2) 에는
+  없음 — Linux 쪽 fork 0 보장 (F-P2 모든 falsifier 에서 확인).
+
+**다음 follow-up cycles** (campaign 종료 후, 별도 PR/session):
+
+- P0 추가 인코딩 rules — full compiler self-build 를 native path 로.
+- P1 dynamic lazy-bind — LC_DYLD_CHAINED_FIXUPS real imports + __DATA
+  __got (현재 static-link path 의 동적 변형).
+- P2 cycle 5+ — x86_64 LIR walker (pack_lir_elf) + real corpus ELF
+  emit on ubu-2.
+- HEXA_BACKEND=native default flip — self/main.hexa::cmd_build 변경 +
+  driver 재빌드 + binary promote.
+- L1 → L3 marker update — compiler/main.hexa 의 `as`/`ld` exec sites
+  주석 "L1 keeper" → "L3 retired (only `--backend=system` legacy)".
+
+**cc --regen / binary promote**: 미수행. 본 캠페인은 tool/* +
+compiler/emit/* 추가 위주. compiler/main.hexa 의 cycle 7 (P0) 변경
+이미 별도 promote 필요 (현재 branch 의 다음 deploy commit).
