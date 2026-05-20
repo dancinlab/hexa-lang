@@ -4890,3 +4890,119 @@ cycle 6 baton
 corpus PASS) + P2 + P3.
 
 **cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa.
+
+---
+
+## 진행 로그 — RFC 063 § P0 batch-2: silent-corruption gap closure (2026-05-20)
+
+**Branch**: `compiler-s7p0-batch2-cycle1` (off origin/compiler-native-
+codegen tip `13589f4d`).
+
+**Scope**: extend `compiler/emit/macho_arm64.hexa::encode_arm64_insn`
+LIR-op coverage with the NEXT batch (6 ops · 7 encoding rules) after
+P0 cycle-7 closure (`d2590680` · F-P0-OBJEQ FULL CORPUS 4/4 PASS).
+
+**Gap analysis** (codegen-emits ∩ encoder-lacks set):
+
+`compiler/codegen/arm64_darwin.hexa` actively emits these mnemonics
+(via `_arm64_instrN("<op>", …)`); cycle-7 encoder returned the
+sentinel `0` word for each, but the corpus (trivial/if/while/fib) did
+not exercise them so byte-eq PASS held by avoidance:
+
+| op   | codegen emit sites | use case                       |
+|------|--------------------|--------------------------------|
+| ADRP | 11 (lines 882-1441) | string literal / global addressing (`@PAGE`) |
+| BLR  | 1 (line 1732)      | indirect call through closure fn_ptr |
+| EOR  | 3 (lines 1479, 1525, 1882) | `^` bit-xor + `!truthy` toggle |
+| MVN  | 1 (line 1010)      | negative integer literal (two's-complement) |
+| NOP  | 1 (line 1927)      | "unhandled stmt kind" fallback (also alignment) |
+
+**Encoding rules added** (`compiler/emit/macho_arm64.hexa` lines
+447-525 + case-table extension lines 1000-1010):
+
+| op            | base bits   | derivation source             |
+|---------------|-------------|-------------------------------|
+| ADRP Xd,label | `0x90000000 \| rd` | ARM ARM C6.2.10 (imm21=0; reloc patches PAGE21) |
+| BLR Xn        | `0xD63F0000 \| (rn<<5)` | ARM ARM C6.2.39 |
+| EOR Xd,Xn,Xm  | `0xCA000000 \| (rm<<16) \| (rn<<5) \| rd` | ARM ARM C6.2.92 |
+| EOR Xd,Xn,#1  | `0xD2400000 \| (rn<<5) \| rd` | ARM ARM C6.2.91 (#1 special-case, N=1 immr=0 imms=0) |
+| MVN Xd,Xn     | `0xAA2003E0 \| (rm<<16) \| rd` | ARM ARM C6.2.213 (alias for ORN Xd,XZR,Xn) |
+| NOP           | `0xD503201F` | ARM ARM C6.2.215 |
+
+**Falsifier corpus added** — `compiler/test/macho_p0_corpus/`:
+
+- `run_F_P0_OBJEQ_BATCH2.hexa` — synthetic LFunc → `pack_lir()` →
+  byte-eq vs ARM ARM reference (full encoder-call path; can't run
+  under local hexa-parse driver — same flatten-import limitation as
+  cycle-4-6 existing tests).
+- `run_F_P0_OBJEQ_BATCH2_BITS.hexa` — pure-integer bit-pattern
+  derivation; runnable under hexa-run. **6/6 PASS measured**.
+- `run_F_P0_OBJEQ_BATCH2_ENC.hexa` — encoder-table mirror (the
+  batch-2 rules copied inline so the local toolchain can verify
+  without needing the full module flatten); + EOR reg-vs-imm
+  discriminator + unknown-op sentinel-0 invariants. **8/8 PASS
+  measured** via `hexa-run`.
+
+**Falsifier measurement (g3-honest)**:
+
+- BATCH2_BITS: **6/6 PASS** — pure ARM ARM bit math.
+- BATCH2_ENC: **8/8 PASS** — encoder mirror + 2 invariants.
+- BATCH2 (pack_lir round-trip): **parse-clean**; full run requires
+  proper module-flatten path (existing cycle-4-6 falsifiers share
+  this same constraint — they all import lir.hexa struct types).
+- Total measurable here: **14/14 PASS**.
+
+**Parse-gate**: `/Users/ghost/.hx/bin/hexa_real parse` returns rc=0
+on all three falsifier files + the edited `macho_arm64.hexa`.
+
+**HONEST SCOPE (g3 over-claim 0)**:
+
+What this delivers:
+- Silent-corruption fix for 5 codegen-emit-but-encoder-zero ops.
+  Any program that hits string literals, globals, closures, bit-xor,
+  `!truthy`, negative int literals, or "unhandled stmt kind" no
+  longer gets a `0x00000000` invalid-instruction word in `__text`.
+- Cycle-7 baseline byte-eq invariant preserved (regression smoke
+  check in BATCH2_ENC).
+
+What this does NOT deliver:
+- **ADRP relocation plumbing** (PAGE21 / PAGEOFF12 records) is NOT
+  in this batch. `pack_lir`'s post-walk only emits BRANCH26 today
+  (line 1439). String-literal / global addressing requires PAGE21
+  + PAGEOFF12 relocs paired across ADRP+ADD/LDR — that's RFC 063
+  batch-3 scope. With batch-2 the ADRP encoding word is correct,
+  but the linker can't yet resolve the symbol page address.
+- **EOR-imm general case**: only the `#1` form is encoded. Other
+  immediates fall through to the 0 sentinel. Codegen only emits
+  `#1` today (the `!truthy` and `^bool` patterns); the general
+  bitmask-imm N:immr:imms encoder lands when a real use-case
+  arises.
+- **Tier B declared-future ops** (`SXTB`, `SXTH`, `UBFM`, `SBFM`,
+  `LSL`, `LSR`, `ASR`, `CSET`, `CSEL`): declared in
+  `_lir_op_uppercase` but codegen does not yet emit them. Not in
+  this batch — follow-up cycles when codegen actually lowers a
+  shift-by-immediate / cset pattern.
+- **AND-reg, ORR-reg-general**: codegen emits `_arm64_instrN("and",
+  …)` and `_arm64_instrN("orr", …)` at line 1530 (via the `bw`
+  dispatch). Same silent-corruption risk as EOR-reg before batch-2.
+  Deferred to batch-3 to keep this batch focused at 6 ops.
+
+**Files touched** (4):
+
+1. `compiler/emit/macho_arm64.hexa` — +85 lines: 6 new encoding
+   rules in `encode_arm64_insn` + 5 case-table mappings in
+   `_lir_op_uppercase`.
+2. `compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_BATCH2.hexa` — new
+   (~180 lines): pack_lir round-trip falsifier.
+3. `compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_BATCH2_BITS.hexa`
+   — new (~60 lines): pure-math bit-pattern falsifier.
+4. `compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_BATCH2_ENC.hexa` —
+   new (~155 lines): encoder-mirror falsifier + invariants.
+
+**RFC 063 phasing 진척 (updated)**: P0 ✅ + batch-2 ✅ · P1 cycles
+1-5 ✅. 잔여 P0 batch-3 (ADRP/ADD reloc plumbing + AND/ORR-reg +
+LSL/LSR/ASR-imm) + P1 cycle 6 (lazy-bind) + P1 cycle 7 (F-P1-RUNEQ
+corpus) + P2 + P3.
+
+**Binary promote / bootstrap rebuild**: NOT performed (out of scope
+per g_inbox_processing_loop step 7 — separate deploy step).

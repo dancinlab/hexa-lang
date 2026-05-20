@@ -445,6 +445,83 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         return 0xB5000000 | rt
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // RFC 063 § P0 batch-2 — close silent-corruption gaps for ops
+    // that `compiler/codegen/arm64_darwin.hexa` actively emits but
+    // the cycle-1..7 encoder lacked. Each op below was returning the
+    // sentinel 0 word; corpus PASS held only because trivial / if /
+    // while / fib happen not to exercise them. The next layer of
+    // real programs (string literals, globals, closures, bit-xor,
+    // unop `!`, negative int literals, NOP fallback) does — so these
+    // are correctness-required, not nice-to-have.
+    // ─────────────────────────────────────────────────────────────
+
+    // ADRP Xd, label  (page-relative address; imm21 patched by
+    // ARM64_RELOC_PAGE21 reloc — emit bare bits with imm=0).
+    // ARM ARM C6.2.10 / C6.2.11. Encoding:
+    //   1|immlo(2)|10000|immhi(19)|Rd(5)
+    // Base with imm21=0 is 0x90000000; bits[30:29]=immlo, bits[23:5]=immhi.
+    if op == "ADRP" && len(ops) == 2 {
+        let rd = xreg_idx(ops[0])
+        if rd >= 0 { return 0x90000000 | rd }
+    }
+
+    // BLR Xn   (branch with link, register — indirect call).
+    // ARM ARM C6.2.39. Encoding:
+    //   11010110 0011 1111 0000 00 Rn(5) 00000
+    //   = 0xD63F0000 | (Rn<<5)
+    if op == "BLR" && len(ops) == 1 {
+        let rn = xreg_idx(ops[0])
+        if rn >= 0 { return 0xD63F0000 | (rn << 5) }
+    }
+
+    // EOR Xd, Xn, Xm   (exclusive-or, shifted register, shift=00 amt=0).
+    // ARM ARM C6.2.92. Encoding:
+    //   sf|10|01010|shift|0|Rm|imm6|Rn|Rd
+    //   sf=1, opc=10 (EOR), 64-bit form base = 0xCA000000.
+    if op == "EOR" && len(ops) == 3 && ops[2].substring(0, 1) != "#" {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let rm = xreg_idx(ops[2])
+        return 0xCA000000 | (rm << 16) | (rn << 5) | rd
+    }
+    // EOR Xd, Xn, #imm   (logical-immediate form; bitmask-imm encoding).
+    // ARM ARM C6.2.91. The full bitmask-imm encoding (N:immr:imms) is
+    // complex; codegen only emits `#1` today (the `!truthy` toggle and
+    // the `^ <bool>` patterns). For #1 the bitmask encoding is
+    // N=1, immr=000000, imms=000000 — base 0xD2000000 + N(bit22) =
+    // 0xD2400000. The general bitmask encoder lands when codegen
+    // actually emits other immediate xor patterns; until then the
+    // narrow special-case is honest about coverage.
+    if op == "EOR" && len(ops) == 3 && ops[2].substring(0, 1) == "#" {
+        let rd  = xreg_idx(ops[0])
+        let rn  = xreg_idx(ops[1])
+        let imm = imm_val(ops[2])
+        if imm == 1 {
+            return 0xD2400000 | (rn << 5) | rd
+        }
+        // Other immediates fall through to the 0 sentinel — caller
+        // sees the encoding-failure marker and triages.
+    }
+
+    // MVN Xd, Xn   (bitwise NOT — alias for ORN Xd, XZR, Xn).
+    // ARM ARM C6.2.213 (MVN alias) / C6.2.224 (ORN base). Encoding:
+    //   ORN base = 0xAA200000 | (Rm<<16) | (Rn<<5) | Rd
+    //   With Rn=31 (XZR) → 0xAA2003E0 | (Rm<<16) | Rd
+    //   Codegen calls `mvn Xd, Xn` — ops[1] is the source register
+    //   (= Rm in the underlying ORN), not Rn.
+    if op == "MVN" && len(ops) == 2 {
+        let rd = xreg_idx(ops[0])
+        let rm = xreg_idx(ops[1])
+        if rd >= 0 && rm >= 0 {
+            return 0xAA2003E0 | (rm << 16) | rd
+        }
+    }
+
+    // NOP   (no-operation; alignment + "unhandled stmt kind" fallback).
+    // ARM ARM C6.2.215. Encoding = 0xD503201F (fixed bit pattern).
+    if op == "NOP" && len(ops) == 0 { return 0xD503201F }
+
     // Unknown op — caller checks for 0 as failure marker.
     return 0
 }
@@ -922,6 +999,14 @@ fn _lir_op_uppercase(op: string) -> string {
     if op == "asr"   { return "ASR"  }
     if op == "cset"  { return "CSET" }
     if op == "csel"  { return "CSEL" }
+    // RFC 063 § P0 batch-2 — close gap between codegen-emit and encoder.
+    // arm64_darwin.hexa emits these lowercase ops; the encoder side
+    // (RFC 063 batch-2) added the upper-case rules.
+    if op == "adrp"  { return "ADRP" }
+    if op == "blr"   { return "BLR"  }
+    if op == "eor"   { return "EOR"  }
+    if op == "mvn"   { return "MVN"  }
+    if op == "nop"   { return "NOP"  }
     // Conditional branch: `b.eq` -> `B.EQ`. The encoder reads the
     // condition from the suffix; uppercasing the whole token preserves
     // the dot.

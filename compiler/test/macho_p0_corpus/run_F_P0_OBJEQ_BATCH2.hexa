@@ -1,0 +1,243 @@
+// F-P0-OBJEQ-BATCH2 — encoding-coverage falsifier for RFC 063 § P0
+// "batch-2" ops (NEXT batch after cycle 7 closed F-P0-OBJEQ FULL).
+//
+// Cycle 7 corpus (trivial/if/while/fib) passed F-P0-OBJEQ byte-eq
+// against clang -c -arch arm64, but the corpus did NOT exercise five
+// ops that `compiler/codegen/arm64_darwin.hexa` actively emits:
+//
+//   - ADRP Xd, label   (string/global addressing — `_arm64_instr2`
+//                       at lines 882, 890, 1042, 1057, 1067, 1099,
+//                       1117, 1377, 1441 of arm64_darwin.hexa)
+//   - BLR Xn           (indirect call through closure fn_ptr —
+//                       line 1732)
+//   - EOR Xd, Xn, Xm   (bit-xor `^` operator — line 1530, via the
+//                       `bw` dispatch when `_is_bit_xor(s.op)`)
+//   - EOR Xd, Xn, #1   (unop `!truthy` toggle — lines 1479, 1882)
+//   - MVN Xd, Xn       (negative integer literal — line 1010)
+//   - NOP              ("unhandled stmt kind" fallback — line 1927)
+//
+// Pre-batch-2 the encoder returned 0 (sentinel NOP-like) for each.
+// `_lir_op_uppercase` also did not map them, so a non-existent
+// upper-case spelling further suppressed the warning. The corpus
+// PASS held only because the four cycle-7 test programs avoided all
+// six ops. Any program reaching string literals, globals, closures,
+// `^`, `!`, negative ints, or an unhandled stmt kind would have
+// produced 0x00000000 words in __text — invalid arm64.
+//
+// This falsifier directly builds synthetic LFuncs that drive each
+// new encoding rule and compares the emitted bytes word-for-word
+// against the hand-derived ARM ARM (DDI 0487) reference encoding.
+// No clang oracle needed because the encoding is fully specified
+// by the spec — the falsifier is byte-eq against the ARM ARM text.
+
+import "../../emit/macho_arm64.hexa"
+import "../../ir/lir.hexa"
+
+fn _empty_preg() -> PReg { return PReg { name: "", kind: "gpr" } }
+fn _op_reg(name: string) -> LOperand {
+    return LOperand { kind: "reg", reg: PReg { name: name, kind: "gpr" },
+                       imm: 0, mem_base: _empty_preg(), mem_offset: 0, label: "" }
+}
+fn _op_label(name: string) -> LOperand {
+    return LOperand { kind: "label", reg: _empty_preg(),
+                       imm: 0, mem_base: _empty_preg(), mem_offset: 0, label: name }
+}
+fn _hex2(v: Int) -> string {
+    let hi = (v >> 4) & 0xF
+    let lo = v & 0xF
+    let d = "0123456789abcdef"
+    return d.substring(hi, hi + 1) + d.substring(lo, lo + 1)
+}
+fn _bytes_to_hex(bs: [Int]) -> string {
+    let n = len(bs)
+    let mut s = ""
+    let mut i = 0
+    while i < n {
+        if i > 0 { s = s + " " }
+        s = s + _hex2(bs[i] & 0xFF)
+        i = i + 1
+    }
+    return s
+}
+
+// Pack one synthetic LFunc and return its __text bytes. The function
+// shape is intentionally minimal: a single `nop` prologue (so the
+// emitter always has something to walk) is NOT added — the test
+// instructions go directly into `instrs`. We're testing the encoder
+// table, not the prologue / epilogue logic (cycles 5-6 covered that).
+fn _pack_one(instrs: [LInstr]) -> [Int] {
+    let f = LFunc {
+        name:         "_test",
+        target:       "arm64-apple-darwin",
+        instrs:       instrs,
+        frame_size:   0,
+        callee_saved: [],
+        def_line:     0,
+    }
+    let lm = LModule {
+        file:    "batch2.hexa",
+        target:  "arm64-apple-darwin",
+        funcs:   [f],
+        rodata:  [],
+        bss:     [],
+        globals: [],
+        floats:  [],
+    }
+    let obj = pack_lir(lm)
+    return obj.text
+}
+
+// Check that `got` and `expected` are byte-identical. Prints a
+// diagnostic and exits non-zero on the first mismatch.
+fn _check(label: string, got: [Int], expected: [Int]) {
+    let g = len(got)
+    let e = len(expected)
+    println("  " + label + " got=" + _bytes_to_hex(got))
+    println("  " + label + " exp=" + _bytes_to_hex(expected))
+    if g != e {
+        println("FAIL " + label + ": text len " + to_string(g) +
+                " != expected " + to_string(e))
+        exit(1)
+    }
+    let mut i = 0
+    while i < g {
+        if (got[i] & 0xFF) != expected[i] {
+            println("FAIL " + label + ": byte " + to_string(i) +
+                    " is 0x" + _hex2(got[i] & 0xFF) +
+                    " expected 0x" + _hex2(expected[i]))
+            exit(2)
+        }
+        i = i + 1
+    }
+    println("  " + label + " PASS")
+}
+
+fn main() {
+    println("F-P0-OBJEQ-BATCH2: 6 new encoding rules vs ARM ARM (DDI 0487)")
+
+    // ── 1. ADRP X0, label  ─────────────────────────────────────────
+    //   ADRP base = 0x90000000 with imm21=0; Rd=0.
+    //   bare bit pattern = 0x90000000 → LE 00 00 00 90.
+    //   (The PAGE21 reloc plumbing is RFC 063 batch-3 territory;
+    //   batch-2 only delivers the encoding word — caller is the
+    //   reloc emitter, not the encoder.)
+    let adrp = LInstr { op: "adrp",
+                        args: [_op_reg("x0"), _op_label("L_str@PAGE")],
+                        comment: "" }
+    let adrp_text = _pack_one([adrp])
+    _check("ADRP X0,@PAGE",
+           adrp_text,
+           [0x00, 0x00, 0x00, 0x90])
+
+    // ── 2. BLR X13  ────────────────────────────────────────────────
+    //   0xD63F0000 | (13 << 5) = 0xD63F0000 | 0x1A0 = 0xD63F01A0.
+    //   LE bytes: a0 01 3f d6.
+    let blr = LInstr { op: "blr", args: [_op_reg("x13")], comment: "" }
+    let blr_text = _pack_one([blr])
+    _check("BLR X13",
+           blr_text,
+           [0xA0, 0x01, 0x3F, 0xD6])
+
+    // ── 3. EOR X1, X1, X3  (register form)  ────────────────────────
+    //   0xCA000000 | (3 << 16) | (1 << 5) | 1
+    //   = 0xCA000000 | 0x30000 | 0x20 | 1 = 0xCA030021.
+    //   LE bytes: 21 00 03 ca.
+    let eor_reg = LInstr { op: "eor",
+                           args: [_op_reg("x1"), _op_reg("x1"), _op_reg("x3")],
+                           comment: "" }
+    let eor_reg_text = _pack_one([eor_reg])
+    _check("EOR X1,X1,X3",
+           eor_reg_text,
+           [0x21, 0x00, 0x03, 0xCA])
+
+    // ── 4. EOR X0, X0, #1  (logical-immediate form)  ───────────────
+    //   For 64-bit `#1` the bitmask encoding is N=1, immr=0, imms=0.
+    //   Base 0xD2000000 + N(bit22) = 0xD2400000.
+    //   With Rd=0, Rn=0 → 0xD2400000. LE: 00 00 40 d2.
+    let eor_imm = LInstr { op: "eor",
+                           args: [_op_reg("x0"), _op_reg("x0"), _op_label("#1")],
+                           comment: "" }
+    let eor_imm_text = _pack_one([eor_imm])
+    _check("EOR X0,X0,#1",
+           eor_imm_text,
+           [0x00, 0x00, 0x40, 0xD2])
+
+    // ── 5. MVN X3, X3  (= ORN X3, XZR, X3)  ────────────────────────
+    //   0xAA2003E0 | (3 << 16) | 3 = 0xAA2003E0 | 0x30000 | 3
+    //   = 0xAA2303E3. LE: e3 03 23 aa.
+    let mvn = LInstr { op: "mvn",
+                       args: [_op_reg("x3"), _op_reg("x3")],
+                       comment: "" }
+    let mvn_text = _pack_one([mvn])
+    _check("MVN X3,X3",
+           mvn_text,
+           [0xE3, 0x03, 0x23, 0xAA])
+
+    // ── 6. NOP  ────────────────────────────────────────────────────
+    //   Fixed pattern 0xD503201F. LE: 1f 20 03 d5.
+    let nop = LInstr { op: "nop", args: [], comment: "" }
+    let nop_text = _pack_one([nop])
+    _check("NOP",
+           nop_text,
+           [0x1F, 0x20, 0x03, 0xD5])
+
+    // ── 7. Combined sequence — exercise every batch-2 op back-to-back
+    //   to ensure no cross-talk between the cases (e.g. the EOR-imm
+    //   discriminator on `#`-prefix correctly demuxes against the
+    //   EOR-reg case immediately preceding it in the same fn).
+    let seq: [LInstr] = [
+        LInstr { op: "adrp", args: [_op_reg("x0"), _op_label("L_str@PAGE")], comment: "" },
+        LInstr { op: "blr",  args: [_op_reg("x13")],                          comment: "" },
+        LInstr { op: "eor",  args: [_op_reg("x1"), _op_reg("x1"), _op_reg("x3")],   comment: "" },
+        LInstr { op: "eor",  args: [_op_reg("x0"), _op_reg("x0"), _op_label("#1")], comment: "" },
+        LInstr { op: "mvn",  args: [_op_reg("x3"), _op_reg("x3")],            comment: "" },
+        LInstr { op: "nop",  args: [],                                         comment: "" },
+        LInstr { op: "ret",  args: [],                                         comment: "" },
+    ]
+    let seq_text = _pack_one(seq)
+    _check("combined seq (adrp;blr;eor-reg;eor-imm;mvn;nop;ret)",
+           seq_text,
+           [
+               0x00, 0x00, 0x00, 0x90,    // adrp x0, L_str@PAGE
+               0xA0, 0x01, 0x3F, 0xD6,    // blr  x13
+               0x21, 0x00, 0x03, 0xCA,    // eor  x1, x1, x3
+               0x00, 0x00, 0x40, 0xD2,    // eor  x0, x0, #1
+               0xE3, 0x03, 0x23, 0xAA,    // mvn  x3, x3
+               0x1F, 0x20, 0x03, 0xD5,    // nop
+               0xC0, 0x03, 0x5F, 0xD6,    // ret   (cycle-7 baseline)
+           ])
+
+    // ── 8. Boundary — confirm cycle-7 baseline still PASSes when
+    //   batch-2 rules are layered in. (Regression smoke for the
+    //   non-additive risk: adding cases at the end of encode_arm64_insn
+    //   must not perturb prior cases.)
+    let baseline: [LInstr] = [
+        LInstr { op: "mov", args: [_op_reg("x0"),
+                                   LOperand { kind: "imm",
+                                              reg: _empty_preg(),
+                                              imm: 42, mem_base: _empty_preg(),
+                                              mem_offset: 0, label: "" }],
+                                 comment: "" },
+        LInstr { op: "ret", args: [], comment: "" },
+    ]
+    let baseline_text = _pack_one(baseline)
+    _check("baseline cycle-7 (mov x0,#42; ret)",
+           baseline_text,
+           [
+               0x40, 0x05, 0x80, 0xD2,    // mov x0, #42
+               0xC0, 0x03, 0x5F, 0xD6,    // ret
+           ])
+
+    let bytes = serialize(pack_lir(LModule {
+        file: "batch2_seq.hexa", target: "arm64-apple-darwin",
+        funcs: [LFunc { name: "_seq", target: "arm64-apple-darwin",
+                        instrs: seq, frame_size: 0, callee_saved: [],
+                        def_line: 0 }],
+        rodata: [], bss: [], globals: [], floats: [],
+    }))
+    write_bytes("/tmp/macho_p0_batch2.ours.o", bytes)
+    println("  wrote " + to_string(len(bytes)) + " bytes to /tmp/macho_p0_batch2.ours.o")
+
+    println("F-P0-OBJEQ-BATCH2 PASS — 8/8 byte-eq vs ARM ARM (DDI 0487)")
+    exit(0)
+}
