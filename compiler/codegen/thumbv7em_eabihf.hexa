@@ -54,11 +54,11 @@ import "../ir/lir.hexa"
 // ── PReg / LOperand helpers ──────────────────────────────────
 
 fn _thumb_preg_gpr(name: string) -> PReg {
-    return PReg { name: name, kind: "gpr" }
+    return PReg { name: name, kind: "gpr", frag_role: "", frag_dtype: "", frag_layout: "" }
 }
 
 fn _thumb_empty_preg() -> PReg {
-    return PReg { name: "", kind: "" }
+    return PReg { name: "", kind: "", frag_role: "", frag_dtype: "", frag_layout: "" }
 }
 
 fn _thumb_op_reg(name: string) -> LOperand {
