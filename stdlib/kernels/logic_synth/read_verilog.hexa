@@ -6598,6 +6598,101 @@ fn main() {
         }
     }
 
+    // T74 — RFC 073 Phase 3f minimal SSA (F-RFC-RV-COMB-ALWAYS-BLOCKING-ASSIGN-SSA).
+    //
+    //   Minimum-shape exerciser for the per-iteration SSA renamer in
+    //   `_rv_parse_always` (L4255-4374). T73 anchors the priority-arbiter
+    //   pattern (router_d{4,6}.v L80-94 idiom); T74 anchors the dual
+    //   read-then-blocking-write shape with NO inner `if` — an OR-fold
+    //   accumulator `v = v | cond[i]`. This is the smallest body that
+    //   triggers the filter rule (`_rv_signal_is_read_in_body` finds
+    //   `v` as an RHS read, `_rv_collect_blocking_lhs` finds `v` as an
+    //   LHS blocking-write, so SSA fires).
+    //
+    //   Pattern (P=3 iterations):
+    //
+    //     always @* begin
+    //       v = 1'b0;
+    //       for (i = 0; i < 3; i = i + 1) v = v | cond [ i ];
+    //     end
+    //
+    //   Unrolled SSA form:
+    //     v__ssa0 = v          (pre-loop alias)
+    //     v__ssa1 = v__ssa0    (default-hold, before iter 0)
+    //     v__ssa1 = v__ssa0 | cond[0]   (cond-tagged, iter 0)
+    //     v__ssa2 = v__ssa1    (default-hold, before iter 1)
+    //     v__ssa2 = v__ssa1 | cond[1]   (cond-tagged, iter 1)
+    //     v__ssa3 = v__ssa2    (default-hold, before iter 2)
+    //     v__ssa3 = v__ssa2 | cond[2]   (cond-tagged, iter 2)
+    //     v       = v__ssa3    (final publish to outer scope)
+    //
+    //   Expected SSA wires: v__ssa0..v__ssa3 (4 versions). Acceptance:
+    //   all 4 wires + final publish `connect(v, v__ssa3)`. No inner-if
+    //   guard variant — distinguishes from T73's `if (!pick) … pick = 1`.
+    //
+    //   @cite IEEE 1364-2005 §9.1.1.2 (blocking assignment ordering —
+    //   each read sees the most-recent blocking write within the same
+    //   evaluation pass). Yosys `passes/proc/proc_dlatch.cc` is the
+    //   behavioural upstream reference for per-iteration anti-dependency
+    //   resolution.
+    total = total + 1
+    let _v74 = "module sm74 ( input wire [ 2 : 0 ] cond , output reg v ) ; integer i ; always @ ( * ) begin v = 1'b0 ; for ( i = 0 ; i < 3 ; i = i + 1 ) v = v | cond [ i ] ; end endmodule"
+    let _r74 = read_verilog(_v74)
+    if _r74.ok != 1 {
+        println("FAIL T74 simple_ssa_or_fold: " + _r74.message); fails = fails + 1
+    } else {
+        let _m74 = _r74.design.modules[0]
+        // SSA versioned wires for `v` — pre-fix these don't exist; the
+        // pre-loop alias + per-iter default-hold + post-loop publish path
+        // emits exactly P+1 = 4 wires (ssa0..ssa3).
+        let mut _t74_ssa_missing = 0
+        let mut _t74_k = 0
+        while _t74_k <= 3 {
+            if rtlil_find_wire(_m74, "v__ssa" + str(_t74_k)) < 0 {
+                _t74_ssa_missing = _t74_ssa_missing + 1
+            }
+            _t74_k = _t74_k + 1
+        }
+        if _t74_ssa_missing > 0 {
+            println("FAIL T74a v__ssa<k> missing count = "
+                + str(_t74_ssa_missing) + " (expected 0 — 4 versions ssa0..ssa3)")
+            fails = fails + 1
+        }
+        // Final publish: connect(v, v__ssa3) — unconditional (no cond tag).
+        let mut _t74_publish = 0
+        let mut _t74_ci = 0
+        while _t74_ci < len(_m74.connect_lhs) {
+            if _m74.connect_lhs[_t74_ci] == "v"
+                && _m74.connect_rhs[_t74_ci] == "v__ssa3"
+                && len(_m74.connect_cond[_t74_ci]) == 0 {
+                _t74_publish = 1
+            }
+            _t74_ci = _t74_ci + 1
+        }
+        if _t74_publish != 1 {
+            println("FAIL T74b missing final publish connect(v, v__ssa3)")
+            fails = fails + 1
+        }
+        // Pre-loop alias: connect(v__ssa0, v) — unconditional. This is the
+        // "loop entry value" that BREAKS the comb self-feedback: iter 0
+        // reads v__ssa0 (an alias of pre-loop v), NOT a wire that some
+        // later iter will rewrite.
+        let mut _t74_entry = 0
+        let mut _t74_ej = 0
+        while _t74_ej < len(_m74.connect_lhs) {
+            if _m74.connect_lhs[_t74_ej] == "v__ssa0"
+                && _m74.connect_rhs[_t74_ej] == "v"
+                && len(_m74.connect_cond[_t74_ej]) == 0 {
+                _t74_entry = 1
+            }
+            _t74_ej = _t74_ej + 1
+        }
+        if _t74_entry != 1 {
+            println("FAIL T74c missing pre-loop alias connect(v__ssa0, v)")
+            fails = fails + 1
+        }
+    }
+
     if fails > 0 {
         println("read_verilog selftest: " + str(total - fails) + "/" + str(total) + " — FAIL")
         exit(1)
