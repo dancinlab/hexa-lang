@@ -332,6 +332,35 @@ fn _nvptx_gpu_intrinsic_sreg(op: string) -> string {
     return ""
 }
 
+// _nvptx_wmma_mnemonic — map a `gpu_wmma_*` STMT_CALL op name to the
+// PTX WMMA mnemonic (RFC 055 §12 P4+ Tensor Core MMA). SCAFFOLD ONLY —
+// recognizing the op and resolving its mnemonic is all this returns.
+// The lowering site emits a `// RFC 055 §12 P4+ WMMA (scaffold ...` stub
+// comment, NOT a real PTX wmma instruction. A working emit needs (per
+// the deferred-work list below) fragment register-bank allocation, a
+// `.shared` staging declaration, per-fragment dtype tags, row/col
+// orientation handling, and tile-loop integration — none of which this
+// scaffold provides.
+//
+// First mnemonic table — the f16×f16→f32 family on the canonical
+// m16n16k16 tile geometry (PTX ISA §9.7.13.4). The mnemonics are
+// shaped so a later cycle can swap in per-fragment overrides without
+// touching the call-site lookup.
+//   gpu_wmma_load_a  — load matrix-A fragment from .shared, row-major, f16
+//   gpu_wmma_load_b  — load matrix-B fragment from .shared, col-major, f16
+//   gpu_wmma_mma     — multiply-accumulate, A.row × B.col → C.f32
+//   gpu_wmma_store_c — store matrix-D (= C accumulator) to .shared, row-major, f32
+//
+// Returns "" for non-WMMA ops so the call-site can fall through to
+// the next handler (or the unsupported-call stub).
+fn _nvptx_wmma_mnemonic(op: string) -> string {
+    if op == "gpu_wmma_load_a"  { return "wmma.load.a.sync.aligned.row.m16n16k16.f16.shared" }
+    if op == "gpu_wmma_load_b"  { return "wmma.load.b.sync.aligned.col.m16n16k16.f16.shared" }
+    if op == "gpu_wmma_mma"     { return "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32" }
+    if op == "gpu_wmma_store_c" { return "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared" }
+    return ""
+}
+
 // _nvptx_lower_stmt — lower one MIR statement to PTX-flavored LInstr
 // records, appending to `buf`. FP64-arithmetic subset only (RFC 055 §6.6).
 //
@@ -435,6 +464,20 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
                 a.push(_nvptx_op(val_reg))
                 out.push(_nvptx_instr(PTX_OP_ATOM_ADD_F64, a, "gpu_atomic_add()"))
             }
+            return out
+        }
+        // RFC 055 §12 P4+ — Tensor Core MMA (Warp Matrix Multiply Accumulate)
+        // SCAFFOLD-ONLY recognition. `_nvptx_wmma_mnemonic` resolves the
+        // canonical PTX mnemonic for the `gpu_wmma_*` family; the lowering
+        // emits a `// RFC 055 §12 P4+ WMMA (scaffold ...` marker comment
+        // line carrying the mnemonic so a later cycle's PTX-emit code can
+        // grep for the seam. This is NOT a working WMMA emit — see
+        // `_nvptx_wmma_mnemonic`'s docstring for the deferred-work list
+        // (fragment regs · .shared decls · per-fragment dtypes · tile loop).
+        let wmma_mnem = _nvptx_wmma_mnemonic(s.op)
+        if len(wmma_mnem) > 0 {
+            out.push(_nvptx_instr("//", [],
+                "RFC 055 §12 P4+ WMMA (scaffold, not yet wired) — " + s.op + " -> " + wmma_mnem))
             return out
         }
         out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported call: " + s.op))
@@ -566,6 +609,20 @@ pub let NVPTX_RKIND_U32: string = "gpr32"   // %r<id>    .reg .u32
 pub let NVPTX_RKIND_U64: string = "gpr64"   // %rd<id>   .reg .u64
 pub let NVPTX_RKIND_PRED: string = "pred"   // %p<id>    .reg .pred
 
+// RFC 055 §12 P4+ — Tensor Core MMA (Warp Matrix Multiply Accumulate)
+// SCAFFOLD ONLY. The "frag" kind marks a Local whose value is a WMMA
+// fragment (a 16×16 tile distributed across a warp), not a scalar
+// register. A full implementation will:
+//   - allocate a fragment as a vector of N PTX regs (N depends on .f16
+//     vs .f32 vs .bf16 element type — see _nvptx_kind_to_ptx_ty caveat)
+//   - declare the `.shared` staging area for load/store
+//   - thread per-fragment data-type tags through the lowering
+// The current scaffold only RECOGNIZES the kind tag so future cycles
+// don't have to retrofit a new constant; the kind currently maps to
+// `.f16` as a placeholder (most common fragment element type for the
+// f16×f16→f32 MMA family). NOT a working register allocation.
+pub let NVPTX_RKIND_FRAG: string = "frag"   // wmma fragment (scaffold — see RFC 055 §12 P4+)
+
 // _nvptx_reg_name_for — the PTX virtual-register name for (kind, id).
 // Dispatches to the 055-P0/P1 helpers (`_nvptx_reg_{f64,u32,u64,pred}`).
 fn _nvptx_reg_name_for(kind: string, id: i64) -> string {
@@ -580,6 +637,12 @@ fn _nvptx_kind_to_ptx_ty(kind: string) -> string {
     if kind == NVPTX_RKIND_U32 { return ".u32" }
     if kind == NVPTX_RKIND_U64 { return ".u64" }
     if kind == NVPTX_RKIND_PRED { return ".pred" }
+    // RFC 055 §12 P4+ WMMA fragment scaffold — `.f16` is the placeholder
+    // element type (the f16×f16→f32 family is the most common first
+    // target). Precise per-fragment dtypes (`.f16` for A/B operands vs
+    // `.f32` for the C accumulator vs `.bf16` for the bf16 variant) is
+    // a follow-on cycle — NOT implemented here.
+    if kind == NVPTX_RKIND_FRAG { return ".f16" }
     return ".f64"
 }
 
