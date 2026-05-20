@@ -1,7 +1,8 @@
 # RFC 075 — Multi-Vendor GPU Codegen Backend (ROCm + Metal)
 
-- status: **DRAFT — Shape-B P0 SCAFFOLD ONLY** (no behavior change this cycle)
+- status: **DRAFT — Metal P1+P2+P3 codegen-only LANDED · ROCm P0 only (no AMD GPU in pool)**
 - created: 2026-05-20
+- updated: 2026-05-20 — Campaign C: Metal P1 (full vec-add MSL syntax-fragment table) + P2 (per-Local precision + address-space classifier helpers) + P3 (real MSL source emit for vec-add MIR shape — hardcoded for STMT_LOAD + STMT_LOAD + STMT_BINOP_ADD + STMT_STORE). F-RFC075-METAL-{TARGET-ACCEPT,EMIT-VEC-ADD} PASS via `metal_lower_test.hexa` (build + run, 15 substring asserts). NVPTX path byte-identically untouched. No `self/codegen_c2.hexa` edits. ROCm side remains P0-only (multi-session blocked — no AMD GPU in pool).
 - supersedes / extends: RFC 055 (hexa-src → NVPTX) — this RFC adds sibling vendor backends, NVPTX itself is untouched.
 - numbering note: opened as "RFC 073" in the dispatch task; renumbered to
   **RFC 075** because RFC 073 (read_verilog procedural-mux) and RFC 074
@@ -91,36 +92,39 @@ Same five-stage pattern that RFC 055 used for NVPTX (Stage-1 scaffold +
 P0 emit + P1 kernel + P2 sample + P3 dispatch + P4 silicon-fire). Per
 vendor, independently:
 
-- **P0 — Scaffold** (THIS CYCLE)
-  - Target enum constants (gfx-rev / Apple-GPU-rev)
-  - Opcode / mnemonic table stubs (vec-add tier, 5-10 entries)
-  - Empty `pub fn codegen_emit_<vendor>(module: MModule) -> string` stub returning `""`
-  - 1 lower-test smoke file per vendor calling the stub and asserting `len(out) == 0` (the P0 placeholder)
+- **P0 — Scaffold** (LANDED 2026-05-20 PR #232 a1a2a8fa — both vendors)
+  - Target enum constants (gfx-rev / Apple-GPU-rev) ✅
+  - Opcode / mnemonic table stubs (vec-add tier, 5-10 entries) ✅
+  - Empty `pub fn codegen_emit_<vendor>(module: MModule) -> string` stub returning `""` ✅
+  - 1 lower-test smoke file per vendor calling the stub and asserting `len(out) == 0` (the P0 placeholder) ✅
 
-- **P1 — Target enum + opcode tables filled**
-  - Real opcode mnemonics (full FP64 vector-add subset)
-  - Address-space constants (per §3 table row)
-  - `<vendor>OpEntry` struct populated
-  - Smoke test: opcode lookup returns expected mnemonic for "add.f64" / equivalent
+- **P1 — Target enum + opcode tables filled** (Metal LANDED 2026-05-20 Campaign C · ROCm DEFERRED — no AMD GPU in pool, multi-session blocked)
+  - Metal: real MSL syntax-fragment constants (kernel-decl `kernel void`, device-pointer params `device const float* ` / `device float* `, thread-position `[[thread_position_in_grid]]`, FP32 binop fragments `+ - * /`, load/store templates, address-space aliases METAL_AS_{DEVICE,THREADGROUP,CONSTANT,THREAD}, precision constants METAL_PRECISION_{F32,F16,F64,I32,U32,BOOL}) ✅
+  - Metal: `metal_fp32_slice_ops()` table filled with 11 entries (kernel decl, 2 device-pointer typings, thread-pos, 4 binops, load/store templates, return-none) ✅
+  - Metal smoke: F-RFC075-METAL-TARGET-ACCEPT — Case 2 `_test_target_constants` asserts on new constants — PASS ✅
+  - ROCm: P1+ deferred — no AMD GPU in pool, would land HIP-IL text the cycle can't silicon-fire-validate. Filing as multi-session block.
 
-- **P2 — Address-space + reg-kind classifier**
-  - Per-Local classification (mirror of `_nvptx_classify_locals`):
-    `RKIND_F64 / _U32 / _U64 / _PRED` for ROCm; equivalent for MSL (which
-    has user-facing C++ types but still needs per-Local lowering)
-  - Smoke test: classifier output for hand-built MIR matches table
+- **P2 — Address-space + reg-kind classifier** (Metal LANDED 2026-05-20 Campaign C · ROCm DEFERRED)
+  - Metal: `_metal_local_precision(local)` honours `local.precision` (`.f32` / `.f16` / `.f64` / `.i32` / `.u32` / `.bool`) and defaults FP32 ✅
+  - Metal: `_metal_local_address_space(local)` returns METAL_AS_DEVICE for kernel-buffer Locals (arena_id 0) and METAL_AS_THREAD otherwise — mirrors NVPTX `.global` vs `.local` ✅
+  - Metal smoke: Case 4 `_test_classifier_helpers` PASS ✅
+  - ROCm: deferred same gate.
 
-- **P3 — Real instruction emit**
-  - vec-add kernel emitted: text-substring asserts on the emitted
-    HIP-IL / MSL (mirror of `codegen_emit_ptx_sm80` test)
-  - F-RFC075-{ROCM,METAL}-EMIT-VEC-ADD: emit string contains
-    add.f64 mnemonic (or MSL `+` between `float` operands), address-
-    space load/store, thread-index intrinsic.
+- **P3 — Real instruction emit** (Metal LANDED 2026-05-20 Campaign C · ROCm DEFERRED)
+  - Metal: `codegen_emit_metal_msl` emits real MSL source when the first MFunc matches the vec-add shape (STMT_LOAD + STMT_LOAD + STMT_BINOP_ADD + STMT_STORE in entry block). Empty / non-vec-add module → "" honestly (P0 contract preserved) ✅
+  - Metal: emitted text contains `#include <metal_stdlib>` + `using namespace metal;` + `kernel void <name>(device const float* a [[buffer(0)]], device const float* b [[buffer(1)]], device float* c [[buffer(2)]], uint i [[thread_position_in_grid]]) { c[i] = a[i] + b[i]; }` ✅
+  - Metal smoke: F-RFC075-METAL-EMIT-VEC-ADD — Case 3 `_test_vec_add_emit` synthesises vec-add MIR, invokes the emitter, asserts 15 substring patterns (`#include <metal_stdlib>` · `using namespace metal;` · `kernel void` · `vec_add` · `device const float*` · `device float*` · `[[buffer(0)]]` · `[[buffer(1)]]` · `[[buffer(2)]]` · `[[thread_position_in_grid]]` · `c[i]` · `a[i]` · `b[i]` · ` + ` · `;`) — PASS ✅
+  - HONEST g3: P3 vec-add MIR shape is **hardcoded** — emitter recognises one MIR pattern only. General MFunc → MSL lowering is multi-session work mirroring the NVPTX P3 timeline (`_nvptx_lower_func` MIR-walk). Other MIR shapes return `""` honestly.
 
-- **P4 — Silicon fire**
+- **P4 — Silicon fire** (DEFERRED — Metal = follow-on USER-LOCAL Mac cycle · ROCm = AMD-GPU pool gate)
   - ROCm: build via `hipcc` on a pool host with AMD GPU (procurement
-    pending) — F-RFC075-ROCM-SILICON-FIRE
+    pending) — F-RFC075-ROCM-SILICON-FIRE — blocked.
   - Metal: build via `xcrun -sdk macosx metal` on the user's M-series
-    laptop — F-RFC075-METAL-SILICON-FIRE
+    laptop — F-RFC075-METAL-SILICON-FIRE. **This is a USER-LOCAL cycle**
+    requiring the Metal toolchain. Codegen-only P3 emits the MSL text;
+    `xcrun metal` invocation + MetalKit runtime dispatch + numeric
+    parity vs CPU reference (F-RFC075-NUMERIC-EQ) all live in the
+    follow-on cycle.
   - F-RFC075-NUMERIC-EQ: vec-add output FP32-equivalent to CPU reference
 
 Each vendor is independently phaseable. P0 (this cycle) lands the

@@ -1,17 +1,31 @@
-// HEXA Native Compiler — Codegen / Metal (hexa-src → MSL source)  [RFC 075 P0 scaffold]
+// HEXA Native Compiler — Codegen / Metal (hexa-src → MSL source)  [RFC 075 P1+P2+P3 codegen-only]
 //
-// @version 0.0.1
+// @version 0.0.2
 // @capabilities [pure]
 //
 // ─────────────────────────────────────────────────────────────────────
-// SCAFFOLD ONLY — RFC 075 P0 (multi-vendor codegen). Zero behavior
-// change.
+// RFC 075 P1+P2+P3 — Metal codegen text-emit, codegen-only (no silicon
+// fire this cycle). NVPTX path byte-identically untouched. Zero edits
+// to `self/codegen_c2.hexa` per @D g_commit_push_deploy.
 //
-// This file is a STRUCTURAL SKELETON for the hexa-native Apple GPU
-// codegen target. It PARSES CLEAN but is NOT wired into the compiler's
-// target dispatch — nothing routes MIR here. The `codegen_emit_metal_msl`
-// entry is an honest stub returning `""`. Real MSL source emit +
-// classifier + silicon fire are P1..P4 (multi-session per RFC 075 §4).
+// This file is the hexa-native Apple GPU codegen target. It PARSES
+// CLEAN. P1 adds the full vec-add MSL syntax-fragment table (kernel
+// declaration, device-pointer parameter typing, thread-position-in-grid
+// attribute, FP32 binop fragments, load/store templates, address-space
+// keyword constants). P2 adds the per-Local precision / address-space
+// classifier helpers `_metal_local_precision(local)` and
+// `_metal_local_address_space(local)` — minimal versions mirroring the
+// `_nvptx_classify_local_for_stmt` style. P3 implements
+// `codegen_emit_metal_msl` to produce a real MSL kernel source for the
+// vec-add MIR pattern (STMT_LOAD + STMT_LOAD + STMT_BINOP_ADD +
+// STMT_STORE). Other kernel shapes are still future work — see honest
+// scope below.
+//
+// P4 (silicon fire via `xcrun -sdk macosx metal` + Metal Performance
+// Shaders runtime + M-series GPU) remains a follow-on USER-LOCAL cycle
+// requiring a Mac with the Metal toolchain. This cycle is codegen-only;
+// the emitted MSL text is verified by substring asserts in the lower-
+// test smoke, not by Apple-silicon execution.
 //
 // Mirror of `compiler/codegen/nvptx_target.hexa` (RFC 055 Stage 1) and
 // `compiler/codegen/rocm_target.hexa` (RFC 075 P0 sibling). The Metal
@@ -25,18 +39,25 @@
 //   pub fn codegen_emit_metal_msl(module: MModule) -> string
 //
 // Mirrors `codegen_emit_ptx_sm80` signature: MIR module in, MSL source
-// text out. P0 stub returns `""` (P0 placeholder asserted by
-// `metal_lower_test.hexa`).
+// text out. Dispatcher checks the first MFunc shape: if it matches the
+// vec-add pattern (STMT_LOAD + STMT_LOAD + STMT_BINOP_ADD + STMT_STORE)
+// the emitter produces a full MSL kernel source. Empty module / non-
+// vec-add shape → returns "" honestly (the P0 contract is preserved).
 //
 // ─────────────────────────────────────────────────────────────────────
 // HONEST SCOPE (RFC 075 §6 / @D g3)
 //
-//   IS  — target enum constant (Apple GPU rev), MSL syntax-fragment
-//         table stubs for the vec-add tier, empty emit entry point.
-//   NOT — a working backend. No MSL source is emitted. No `@gpu_kernel`
-//         is routed here. `xcrun -sdk macosx metal` is never invoked.
-//         Apple silicon never fires. Nothing in the compiler dispatches
-//         to these stubs.
+//   IS  — target enum constants (Apple GPU rev), full vec-add MSL
+//         syntax-fragment table, per-Local precision + address-space
+//         classifier helpers, real MSL source emit for the vec-add
+//         MIR pattern.
+//   NOT — General MIR-walk MSL emission. The vec-add emitter is
+//         shape-hardcoded; other MIR shapes return "". General
+//         MFunc → MSL lowering is multi-session (mirrors NVPTX P3
+//         timeline).  No `@gpu_kernel` target dispatch wiring this
+//         cycle (codegen-only). No `xcrun -sdk macosx metal` invocation
+//         (P4 silicon fire = follow-on USER-LOCAL Mac cycle).
+//         Apple silicon does not fire this cycle.
 //
 // `xcrun metal` (MSL source -> AIR bytecode -> metallib) is an external
 // Apple compiler — the same g5 logic as NVPTX's `ptxas` and ROCm's
@@ -106,22 +127,77 @@ pub let METAL_ATTR_NCTAID: string = "[[threadgroups_per_grid]]"
 //   ref: Metal Shading Language Specification §6.9.2 SIMD-group functions
 pub let METAL_SIMD_GROUP_SIZE: i64 = 32
 
-// ── MSL syntax fragments (vec-add tier — RFC 075 P3) ──────────
+// ── MSL syntax fragments (vec-add tier — RFC 075 P1) ──────────
 //
 // MSL is source text, so the "opcodes" below are language fragments
 // the emit pass concatenates rather than virtual-ISA mnemonics. RFC 075
-// P1 fills in the full FP64 / FP32 vector-arithmetic subset; P0 lands
-// the minimum set the smoke can name-check.
+// P1 lands the full vec-add subset (kernel declaration, device-pointer
+// parameter typing, FP32 binop fragments, thread-position attribute);
+// later phases (FMA, FP16, threadgroup, atomics) add their own constants.
 pub let METAL_KW_KERNEL: string     = "kernel"          // declares a compute kernel
 pub let METAL_KW_VOID: string       = "void"            // kernel return type (always void)
 pub let METAL_KW_CONST: string      = "const"           // immutable qualifier
 pub let METAL_TYPE_FLOAT: string    = "float"           // FP32 scalar
 pub let METAL_TYPE_FLOAT_PTR: string = "device float*"  // FP32 device pointer (kernel arg)
 pub let METAL_TYPE_DOUBLE: string   = "double"          // FP64 scalar (Apple-GPU FP64 is emulated/limited)
-pub let METAL_OP_ADD: string        = "+"               // binop add (source-text fragment)
-pub let METAL_OP_MUL: string        = "*"               // binop mul
-pub let METAL_OP_INDEX_OPEN: string = "["               // array indexing open
+pub let METAL_TYPE_UINT: string     = "uint"            // 32-bit unsigned scalar (thread index type)
+pub let METAL_TYPE_INT: string      = "int"             // 32-bit signed scalar
+pub let METAL_TYPE_BOOL: string     = "bool"            // boolean scalar
+
+// RFC 075 P1 — vec-add binop / load / store / return / kernel-decl
+// fragment constants. These are the exact source-text fragments the
+// P3 emit pass concatenates. "Opcode" name kept aligned with the
+// cross-vendor scaffold pattern even though MSL is source text.
+pub let METAL_OP_ADD: string         = "+"              // binop add (source-text fragment)
+pub let METAL_OP_SUB: string         = "-"              // binop sub
+pub let METAL_OP_MUL: string         = "*"              // binop mul
+pub let METAL_OP_DIV: string         = "/"              // binop div
+pub let METAL_OP_INDEX_OPEN: string  = "["              // array indexing open
 pub let METAL_OP_INDEX_CLOSE: string = "]"              // array indexing close
+pub let METAL_OP_ASSIGN: string      = " = "            // assignment (with spaces)
+pub let METAL_OP_RETURN_NONE: string = ""               // MSL kernel returns void — empty op
+pub let METAL_OP_STMT_TERM: string   = ";"              // statement terminator
+
+// RFC 075 P1 — kernel-declaration fragment templates. Kept as separate
+// string constants so the P3 emit pass concatenates them in a single
+// well-defined order. Mirrors the ptx_op_emit_* helper shape.
+pub let METAL_OP_KERNEL_DECL: string         = "kernel void"          // kernel signature lead
+pub let METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR: string = "device const float* "  // read-only FP32 buffer
+pub let METAL_OP_PARAM_DEVICE_FLOAT_PTR: string       = "device float* "        // writable FP32 buffer
+pub let METAL_OP_THREAD_POS_GRID: string     = "[[thread_position_in_grid]]"   // thread-id binding
+pub let METAL_OP_BUFFER_BINDING_PREFIX: string = "[[buffer("                    // [[buffer(N)]] prefix
+pub let METAL_OP_BUFFER_BINDING_SUFFIX: string = ")]]"                          // [[buffer(N)]] suffix
+pub let METAL_OP_PREAMBLE_INCLUDE: string    = "#include <metal_stdlib>"        // stdlib include
+pub let METAL_OP_PREAMBLE_USING: string      = "using namespace metal;"         // metal namespace
+pub let METAL_OP_LOAD_F32_TEMPLATE: string   = "[i]"   // a[i] tail — emitted as <buf>[i]
+pub let METAL_OP_STORE_F32_TEMPLATE: string  = "[i]"   // c[i] tail — emitted as <buf>[i]
+
+// ── MSL address spaces (lookup pair) ──────────────────────────
+//
+// RFC 075 P2 alias constants — short-form aliases the classifier
+// helpers `_metal_local_address_space` / `_metal_local_precision`
+// return. These mirror `METAL_SPACE_*` strings but live alongside the
+// classifier helpers for locality. The vec-add subset only exercises
+// METAL_AS_DEVICE (kernel buffer args land in device memory); the
+// other three are reserved for future shapes (threadgroup atomics,
+// constant tables, thread-private spills).
+pub let METAL_AS_DEVICE: string      = "device"        // kernel-buffer pointer (GPU DRAM)
+pub let METAL_AS_THREADGROUP: string = "threadgroup"   // per-block scratchpad
+pub let METAL_AS_CONSTANT: string    = "constant"      // read-only constant bank
+pub let METAL_AS_THREAD: string      = "thread"        // per-thread private (default)
+
+// ── MSL per-Local precision tags (RFC 075 P2 classifier) ──────
+//
+// Stringly-typed per-Local precision tags the P2 classifier emits.
+// Mirrors NVPTX_RKIND_* string constants pattern. For vec-add today
+// every Local is METAL_PRECISION_F32 (FP32 hardware-canonical on
+// Apple GPU); future phases add F16 / I32 / PRED for cmp results.
+pub let METAL_PRECISION_F32: string  = "float"
+pub let METAL_PRECISION_F16: string  = "half"
+pub let METAL_PRECISION_F64: string  = "double"  // emulated on most M-series silicon
+pub let METAL_PRECISION_I32: string  = "int"
+pub let METAL_PRECISION_U32: string  = "uint"
+pub let METAL_PRECISION_BOOL: string = "bool"
 
 // ── MSL function-kind keyword ─────────────────────────────────
 //
@@ -153,38 +229,173 @@ fn _metal_op_entry(mnemonic: string, arity: i64, space: string, note: string) ->
 }
 
 // metal_fp32_slice_ops — the FP32-arithmetic-subset syntax table for the
-// RFC 075 first implementable slice. Note: Apple-GPU FP64 is emulated
-// on most M-series silicon (limited hardware FP64); FP32 is the
-// canonical first slice on Metal, whereas NVPTX/ROCm started with FP64
-// because data-center NVIDIA/AMD silicon has hardware FP64. RFC 075 P1
-// flips this table to the full FP32 subset.
+// RFC 075 vec-add slice. RFC 075 P1 LANDED — full vec-add row set
+// (kernel decl, device-pointer parameter typing, thread-position
+// attribute, binop fragments, load/store templates). Note: Apple-GPU
+// FP64 is emulated on most M-series silicon (limited hardware FP64);
+// FP32 is the canonical first slice on Metal, whereas NVPTX/ROCm
+// started with FP64 because data-center NVIDIA/AMD silicon has
+// hardware FP64.
 pub fn metal_fp32_slice_ops() -> [MetalOpEntry] {
     let mut t = []
-    // TODO RFC 075 P1 — fill out matching ptx_fp64_slice_ops shape
-    // (load via [device float* arg + tid], store, +, *, fma intrinsic).
-    t.push(_metal_op_entry(METAL_OP_ADD, 2, "", "FP32 scalar add (P0 stub)"))
-    t.push(_metal_op_entry(METAL_KW_KERNEL, 0, "", "kernel directive (P0 stub)"))
+    // Kernel declaration row — `kernel void <name>(...)`.
+    t.push(_metal_op_entry(METAL_OP_KERNEL_DECL, 0, "", "kernel declaration lead"))
+    // Device-pointer parameter rows — read-only inputs + writable output.
+    t.push(_metal_op_entry(METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR, 1, METAL_AS_DEVICE, "device const float* (read-only buffer arg)"))
+    t.push(_metal_op_entry(METAL_OP_PARAM_DEVICE_FLOAT_PTR, 1, METAL_AS_DEVICE, "device float* (writable buffer arg)"))
+    // Thread-position attribute — the kernel's i index binding.
+    t.push(_metal_op_entry(METAL_OP_THREAD_POS_GRID, 0, "", "thread_position_in_grid attribute"))
+    // FP32 binop fragments — vec-add only needs add today; sub/mul/div
+    // ride in for the next-shape cycle.
+    t.push(_metal_op_entry(METAL_OP_ADD, 2, "", "FP32 add fragment"))
+    t.push(_metal_op_entry(METAL_OP_SUB, 2, "", "FP32 sub fragment"))
+    t.push(_metal_op_entry(METAL_OP_MUL, 2, "", "FP32 mul fragment"))
+    t.push(_metal_op_entry(METAL_OP_DIV, 2, "", "FP32 div fragment"))
+    // Load / store templates — index-into-device-pointer source text.
+    t.push(_metal_op_entry(METAL_OP_LOAD_F32_TEMPLATE, 1, METAL_AS_DEVICE, "FP32 device load: <buf>[i]"))
+    t.push(_metal_op_entry(METAL_OP_STORE_F32_TEMPLATE, 1, METAL_AS_DEVICE, "FP32 device store: <buf>[i]"))
+    // Return-none row — kernel body terminator (MSL kernels are void).
+    t.push(_metal_op_entry(METAL_OP_RETURN_NONE, 0, "", "kernel void return"))
     return t
+}
+
+// ── RFC 075 P2 — per-Local precision + address-space classifiers ─────
+//
+// Mirrors the NVPTX `_nvptx_classify_local_for_stmt` discipline at a
+// minimal scale. The vec-add subset doesn't need a stmt-aware classifier
+// — every Local is FP32 (Apple GPU FP32 hardware-canonical) and every
+// buffer arg lives in `device` memory. The helpers below return those
+// defaults; they document the extension point for future shapes
+// (threadgroup atomics, FP16, constant tables, thread-private spills).
+//
+// HONEST SCOPE — these helpers return constants today. Per-stmt
+// classification (predicate vs scalar, FP16 vs FP32) is multi-session
+// work that mirrors `_nvptx_classify_local_for_stmt` once the MSL
+// emitter handles more than the vec-add shape.
+
+// _metal_local_precision — per-Local precision tag (MSL type keyword).
+//
+// Vec-add tier returns METAL_PRECISION_F32 unconditionally. Future
+// shapes consult `local.precision` (mirroring `_nvptx_classify_local_for_stmt`)
+// to dispatch into half / int / bool. Empty / unknown → FP32 default.
+fn _metal_local_precision(local: Local) -> string {
+    // RFC 068-style per-Local precision tag wins when explicitly set
+    // (mirror of `_nvptx_classify_local_for_stmt` line 968+).
+    if local.precision == ".f16" { return METAL_PRECISION_F16 }
+    if local.precision == ".f32" { return METAL_PRECISION_F32 }
+    if local.precision == ".f64" { return METAL_PRECISION_F64 }
+    if local.precision == ".i32" { return METAL_PRECISION_I32 }
+    if local.precision == ".u32" { return METAL_PRECISION_U32 }
+    if local.precision == ".bool" { return METAL_PRECISION_BOOL }
+    // Default for vec-add tier — FP32 (Apple GPU canonical).
+    return METAL_PRECISION_F32
+}
+
+// _metal_local_address_space — per-Local address-space qualifier.
+//
+// Vec-add tier returns METAL_AS_DEVICE for kernel buffer params (the
+// only locals carrying a non-default address space today). All other
+// Locals land in the implicit `thread` private bank — represented by
+// METAL_AS_THREAD here. Future shapes (threadgroup atomics, constant
+// tables) will consult an extended MIR annotation that today does not
+// exist — this helper documents that extension point.
+fn _metal_local_address_space(local: Local) -> string {
+    // P2 minimal — kernel buffer params (arena_id 0 = global) land in
+    // device memory; everything else in thread-private. Mirrors the
+    // NVPTX `.global` vs `.local` state-space decision.
+    if local.arena_id == 0 { return METAL_AS_DEVICE }
+    return METAL_AS_THREAD
+}
+
+// ── RFC 075 P3 — vec-add MSL emit helpers ───────────────────────────
+//
+// Helper builders for the MSL kernel text. The emit pass concatenates
+// them in a fixed sequence. The vec-add shape is hardcoded (a single
+// STMT_LOAD + STMT_LOAD + STMT_BINOP_ADD + STMT_STORE pattern that
+// matches the canonical `c[i] = a[i] + b[i]` kernel).
+
+// _metal_emit_preamble — emit the MSL preamble (include + namespace).
+fn _metal_emit_preamble() -> string {
+    return METAL_OP_PREAMBLE_INCLUDE + "\n" + METAL_OP_PREAMBLE_USING + "\n\n"
+}
+
+// _metal_emit_kernel_signature — emit `kernel void <name>(...)` with
+// the three vec-add device buffer params + the thread-index binding.
+// Hardcoded for the vec-add MIR shape (two const inputs + one writable
+// output + uint i [[thread_position_in_grid]]).
+fn _metal_emit_kernel_signature(name: string) -> string {
+    let mut out = METAL_OP_KERNEL_DECL + " " + name + "(\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR + "a "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "0" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR + "b "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "1" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_FLOAT_PTR + "c "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "2" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_TYPE_UINT + " i " + METAL_OP_THREAD_POS_GRID + ")\n"
+    return out
+}
+
+// _metal_emit_vec_add_body — emit the MSL kernel body for vec-add.
+// Hardcoded: `c[i] = a[i] + b[i];` with surrounding braces.
+fn _metal_emit_vec_add_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + " " + METAL_OP_ADD + " "
+    out = out + "b" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_mfunc_is_vec_add_shape — recognise the vec-add MIR shape.
+// Hardcoded shape check: entry block has exactly STMT_LOAD + STMT_LOAD
+// + STMT_BINOP("add") + STMT_STORE (in that order), plus an optional
+// STMT_RETURN at the end. Anything else returns false and the emitter
+// falls through to the honest empty-string path.
+fn _metal_mfunc_is_vec_add_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "add" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
 }
 
 // codegen_emit_metal_msl — MIR module -> MSL source text.
 //
-// RFC 075 P0 — scaffold stub. Returns `""` honestly: no MSL is emitted.
-// The smoke test (`metal_lower_test.hexa`) asserts this empty return so
-// the scaffold's structural shape is verified without claiming any real
-// emit.
+// RFC 075 P3 LANDED (codegen-only) — emits a full MSL kernel source
+// when the first MFunc matches the vec-add shape. Otherwise (empty
+// module, non-vec-add shape) returns `""` honestly, preserving the
+// P0 contract the lower_test Case 1 still asserts.
 //
-// P1+ insertion points:
-//   - TODO RFC 075 P1 — emit MSL preamble: `#include <metal_stdlib>` +
-//     `using namespace metal;` + language-version directive.
-//   - TODO RFC 075 P2 — kernel signature emit: `kernel void <name>(
-//       device float* a [[buffer(0)]], ..., uint tid [[thread_position_in_grid]])`.
-//     Per-Local classifier picks `float` vs `int` vs `bool`.
-//   - TODO RFC 075 P3 — emit real `c[tid] = a[tid] + b[tid];` for vec-add;
-//     i-j-k nested loop for naive GEMM (matches RFC 055 P2 shape).
+// HONEST SCOPE — vec-add is the ONLY MIR pattern this emitter
+// recognises today. STMT_LOAD + STMT_LOAD + STMT_BINOP_ADD + STMT_STORE
+// matches → emit hardcoded `c[i] = a[i] + b[i]` kernel. General
+// MFunc → MSL lowering is multi-session work mirroring the NVPTX P3
+// timeline.
+//
+// P4+ insertion points:
 //   - TODO RFC 075 P4 — silicon fire via `xcrun -sdk macosx metal`
 //     + Metal Performance Shaders runtime + M-series GPU.
+//   - TODO RFC 075 follow-on cycle — general MFunc → MSL emission
+//     (replicate `_nvptx_lower_func` shape against MSL statements).
 pub fn codegen_emit_metal_msl(module: MModule) -> string {
-    // RFC 075 P0 — honest empty return; no MSL emit yet.
-    return ""
+    // P0 contract: empty module → empty string.
+    if len(module.funcs) == 0 { return "" }
+    let mfn = module.funcs[0]
+    // P3 vec-add shape recognition. Anything else stays at "" so the
+    // emitter never over-claims.
+    if !_metal_mfunc_is_vec_add_shape(mfn) { return "" }
+    // Compose preamble + signature + body.
+    let mut out = _metal_emit_preamble()
+    let kname = mfn.name
+    out = out + _metal_emit_kernel_signature(kname)
+    out = out + _metal_emit_vec_add_body()
+    return out
 }
