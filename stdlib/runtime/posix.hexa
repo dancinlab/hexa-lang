@@ -1,0 +1,31 @@
+// stdlib/runtime/posix.hexa — RUNTIME.md step-2 cycle 5.
+//
+// POSIX trivial stubs + time/term/mach + ctype residuals + syscall
+// policy (cycles 57-58, 62, 65 C bodies in self/runtime.c).
+// Consolidates to 5 hexa primitives via dead-strip:
+//   rt_posix_ok  : returns 0 (success)
+//   rt_posix_err : returns -1 (error)
+//   rt_posix_one : returns 1 (truthy)
+//   rt_strerror_msg : returns generic "error" string for non-zero errno
+//   rt_strftime_zero_len : returns 0 (empty buffer length)
+
+pub fn rt_posix_ok() -> int { return 0 }
+pub fn rt_posix_err() -> int { return -1 }
+pub fn rt_posix_one() -> int { return 1 }
+pub fn rt_strerror_msg(errnum: int) -> string {
+    if errnum == 0 { return "no error" }
+    if errnum == 1 { return "EPERM" }
+    if errnum == 2 { return "ENOENT" }
+    if errnum == 4 { return "EINTR" }
+    if errnum == 5 { return "EIO" }
+    if errnum == 9 { return "EBADF" }
+    if errnum == 11 { return "EAGAIN" }
+    if errnum == 12 { return "ENOMEM" }
+    if errnum == 13 { return "EACCES" }
+    if errnum == 17 { return "EEXIST" }
+    if errnum == 22 { return "EINVAL" }
+    if errnum == 24 { return "EMFILE" }
+    if errnum == 32 { return "EPIPE" }
+    return "unknown error"
+}
+pub fn rt_strftime_zero_len() -> int { return 0 }

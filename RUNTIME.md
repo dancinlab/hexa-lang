@@ -872,3 +872,25 @@ For each Tier-A sub-phase:
   1,140,808 B
 - step-2 cumulative: **36 / ~47 C wrappers ported = ~77%**, via 11
   hexa primitives (ctype:2 + math:5 + thread:2 + net:2)
+
+### 2026-05-21 — step 2 cycle 5 PARTIAL: posix.hexa scaffolded, runtime.c integration deferred
+
+- ⚠️ cycle 5 PARTIAL — `stdlib/runtime/posix.hexa` scaffolded with 5
+  primitives (`rt_posix_ok` / `_err` / `_one` / `_strerror_msg` /
+  `_strftime_zero_len`) ready for integration. Imported from
+  compiler/main.hexa
+- ❌ runtime.c thin-shim integration of cycle 57-58 POSIX stubs +
+  cycle 62 time/term/mach + cycle 49 strerror DEFERRED. Initial
+  attempt caused aprime_cc to segfault (exit=139) at startup
+- Suspected root causes: (a) hexa-fn return HexaVal string has
+  arena-tied lifetime; HX_STR(msg) becomes UAF after fn return,
+  (b) ~14 POSIX shims + 5 time/term/mach all replaced simultaneously
+  may trigger init-order issue with hexa fn TAG_FN globals not yet
+  bound when runtime helpers fire at startup
+- Cycle 5 deliverable: posix.hexa file + import line (preparation
+  only). Actual runtime.c delegation pushed to **cycle 6+** after
+  isolating the failing fn (likely getenv/getrlimit/atexit called
+  during process init)
+- step-2 cumulative: **36 / ~47 C wrappers ported = ~77%** (unchanged
+  from cycle 4) via 11 hexa primitives + 5 unintegrated. aprime_cc
+  smoke exit(42) PASS · 5 externs preserved · binary 1,140,808 B
