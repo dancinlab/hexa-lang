@@ -2895,6 +2895,10 @@ HexaVal hexa_is_empty(HexaVal v) {
 // min/max: reduction by element. Uses hexa_cmp_lt/gt which already handle
 // int/float mixing. Empty array returns void (matches interpreter at
 // hexa_full.hexa:15344).
+// Step-3 cycle 22 port. Polymorphic int/float element compare stays
+// C-side; if the array is *purely* float-typed (TAG_FLOAT every element)
+// the hexa-source rt_array_min_float / max_float path takes over.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_min(HexaVal arr) {
     if (!HX_IS_ARRAY(arr)) return hexa_void();
     int64_t n = HX_ARR_LEN(arr);
@@ -2918,6 +2922,41 @@ HexaVal hexa_array_max(HexaVal arr) {
     }
     return best;
 }
+#else
+extern HexaVal rt_array_min_float(HexaVal arr);
+extern HexaVal rt_array_max_float(HexaVal arr);
+static int _arr_all_float(HexaVal arr) {
+    int64_t n = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < n; i++) {
+        if (!HX_IS_FLOAT(HX_ARR_ITEMS(arr)[i])) return 0;
+    }
+    return 1;
+}
+HexaVal hexa_array_min(HexaVal arr) {
+    if (!HX_IS_ARRAY(arr)) return hexa_void();
+    int64_t n = HX_ARR_LEN(arr);
+    if (n == 0) return hexa_void();
+    if (_arr_all_float(arr)) return rt_array_min_float(arr);
+    HexaVal best = HX_ARR_ITEMS(arr)[0];
+    for (int64_t i = 1; i < n; i++) {
+        HexaVal it = HX_ARR_ITEMS(arr)[i];
+        if (hexa_truthy(hexa_cmp_lt(it, best))) best = it;
+    }
+    return best;
+}
+HexaVal hexa_array_max(HexaVal arr) {
+    if (!HX_IS_ARRAY(arr)) return hexa_void();
+    int64_t n = HX_ARR_LEN(arr);
+    if (n == 0) return hexa_void();
+    if (_arr_all_float(arr)) return rt_array_max_float(arr);
+    HexaVal best = HX_ARR_ITEMS(arr)[0];
+    for (int64_t i = 1; i < n; i++) {
+        HexaVal it = HX_ARR_ITEMS(arr)[i];
+        if (hexa_truthy(hexa_cmp_gt(it, best))) best = it;
+    }
+    return best;
+}
+#endif
 
 // flatten: one-level; non-array elements passed through.
 // Matches interpreter semantics at hexa_full.hexa:15316-15327.
