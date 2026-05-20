@@ -313,8 +313,17 @@ fn _absorb_edge_line(line: string, edges: EdgeInfo) {
         }
         if op2 == "=>" {
             // Application — string payload, store the whole rest as one entry.
+            // RFC 065 noise filter (added 2026-05-20): atlas grammar uses
+            // `=> "..."` for plain-text description annotations (the dominant
+            // form in baked rodata) — skip those so unfold/cite_unreachable
+            // lenses do not treat description text as cited atlas ids.
+            // Identifier-RHS applications (no leading quote) still pass.
             let body = _trim_aparser(s.substring(2, n))
-            if len(body) > 0 { edges.applications.push(body) }
+            if len(body) > 0 {
+                if body.substring(0, 1) != "\"" {
+                    edges.applications.push(body)
+                }
+            }
             return
         }
         if op2 == "==" {

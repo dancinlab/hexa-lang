@@ -51,6 +51,31 @@ pub let PTX_WARP_SIZE: i64 = 32
 // ── PTX FP64 arithmetic mnemonics (first slice — RFC 055 §6.6) ──
 pub let PTX_OP_LD_GLOBAL_F64: string  = "ld.global.f64"
 pub let PTX_OP_ST_GLOBAL_F64: string  = "st.global.f64"
+// RFC 068 P4 codegen↔silicon reconcile (PR #189 finding):
+// ptxas (CUDA 12.0) rejects `ld.global.f16` / `st.global.f16` —
+// even though PTX ISA §8.7 spec lists `.f16` as a valid type for ld/st.
+// Canonical NVIDIA-emitted code for `__half` ld/st uses `.b16` storage
+// (the raw 16-bit container type) which ptxas accepts and silently
+// type-casts to the `.reg .f16` register operand. The same applies to
+// bf16 → `.b16` storage (the bf16 reg type itself fails to parse in
+// PTX 7.8 on older toolkits, so the bf16 codegen path stays minimal).
+// `.f32` and `.f64` work directly with their own type tags.
+pub let PTX_OP_LD_GLOBAL_F16: string  = "ld.global.b16"
+pub let PTX_OP_ST_GLOBAL_F16: string  = "st.global.b16"
+pub let PTX_OP_LD_GLOBAL_BF16: string = "ld.global.b16"
+pub let PTX_OP_ST_GLOBAL_BF16: string = "st.global.b16"
+pub let PTX_OP_LD_GLOBAL_F32: string  = "ld.global.f32"
+pub let PTX_OP_ST_GLOBAL_F32: string  = "st.global.f32"
+// RFC 068 §3 fp8 scaffold — Hopper-class (sm_90+) e4m3 / e5m2 ld/st.
+// PTX has no native `.e4m3` / `.e5m2` ld/st type tag; both variants use
+// `.b8` raw container storage (matching the f16/bf16 → `.b16` PR #189
+// pattern). The fp8 INTERPRETATION lives in the consumer opcode
+// (`cvt.rn.f16.e4m3` / `wmma.mma.sync...e4m3.e4m3.f32`), not the ld/st.
+//   ref: PTX ISA 8.7 §5.4.1 (raw container types) + §9.7.13.5 (fp8 WMMA).
+// SCAFFOLD-ONLY — no silicon fire in this cycle; sub-byte ABI work
+// (kernel-arg packing, addr alignment) is a follow-on cycle.
+pub let PTX_OP_LD_GLOBAL_F8: string   = "ld.global.b8"
+pub let PTX_OP_ST_GLOBAL_F8: string   = "st.global.b8"
 pub let PTX_OP_LD_SHARED_F64: string  = "ld.shared.f64"
 pub let PTX_OP_ST_SHARED_F64: string  = "st.shared.f64"
 pub let PTX_OP_LD_PARAM_U64: string   = "ld.param.u64"
@@ -71,6 +96,12 @@ pub let PTX_OP_SETP_LT_S32: string    = "setp.lt.s32"  // predicate compare
 pub let PTX_OP_BAR_SYNC: string       = "bar.sync"     // block-wide barrier
 pub let PTX_OP_BRA: string            = "bra"          // branch
 pub let PTX_OP_RET: string            = "ret"          // return from entry/func
+
+// ── PTX atomics (RFC 055 §12 P4+ — gpu/SPEC.md §5) ────────────
+pub let PTX_OP_ATOM_ADD_F64: string   = "atom.add.f64"  // global-mem FP64 atomic add (returns old)
+
+// ── PTX warp-level data movement (RFC 055 §12 P4+ — gpu/SPEC.md §5) ──
+pub let PTX_OP_SHFL_SYNC_IDX_B32: string = "shfl.sync.idx.b32"  // warp-lane shuffle by source-lane idx; ref NVIDIA PTX ISA 9.7.13.4
 
 // ── PTX function-kind directives ──────────────────────────────
 //
@@ -119,5 +150,6 @@ pub fn ptx_fp64_slice_ops() -> [PtxOpEntry] {
     t.push(_ptx_op_entry(PTX_OP_MUL_F64, 3, "", "FP64 multiply"))
     t.push(_ptx_op_entry(PTX_OP_FMA_RN_F64, 4, "", "FP64 fused multiply-add, round-to-nearest"))
     t.push(_ptx_op_entry(PTX_OP_BAR_SYNC, 1, "", "block-wide barrier"))
+    t.push(_ptx_op_entry(PTX_OP_ATOM_ADD_F64, 3, PTX_SPACE_GLOBAL, "FP64 atomic add (returns old)"))
     return t
 }

@@ -1,0 +1,152 @@
+// stdlib/kernels/solar/solar_kernel_test.hexa — D80 g_hexa_only pilot
+// Stage 3 parity check (ABSORPTION.md §"hexa 포팅 단계").
+//
+// Cross-checks the clean-room hexa-native ephemeris + Haurwitz
+// derivations in `solar_kernel.hexa` against pvlib 0.13.0 numbers
+// captured on 2026-05-20 from a real Python 3 run on darwin-arm64.
+// Reference timestamps span:
+//   • Phoenix AZ (33.4484°N, 112.0740°W)
+//   • Summer solstice: dawn / noon / afternoon / night
+//   • Winter solstice: solar noon (low max sun)
+//   • Spring equinox: solar noon
+// — 6 samples covering low/high/horizon/below-horizon sun states.
+//
+// Tolerances:
+//   • Geometric ephemeris (zenith / azimuth / elevation / solar_time)
+//     — both sides run the SAME closed-form Sandia 1985 algorithm in
+//     double precision; expect agreement to ~1e-9 relative (constant-
+//     table noise + Kepler-iteration stopping float bit jitter).
+//   • Refraction-corrected apparent zenith — same algorithm, same
+//     tolerance.
+//   • Haurwitz GHI — closed-form exp/cos, same tolerance.
+//
+// D80 spec calls for ±0.1 % parity; we exceed that by ~6 orders of
+// magnitude because pvlib's ephemeris and Haurwitz are pure closed-
+// form trig (no SPA iteration). The 0.1 % envelope would have been
+// the tolerance against a DIFFERENT solar-position algorithm (e.g.
+// pvlib SPA vs textbook Spencer). Reporting the tighter actual gap
+// is more honest than gating on the spec ceiling.
+
+use "stdlib/kernels/solar/solar_kernel"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed = ""
+
+fn check(name: str, cond: bool) {
+    total_count = total_count + 1
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        if failed == "" { failed = name }
+    }
+}
+
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn rel_err(got: float, want: float) -> float {
+    if fabs(want) < 1e-12 { return fabs(got - want) }
+    return fabs(got - want) / fabs(want)
+}
+
+fn check_close(name: str, got: float, want: float, tol: float) {
+    let e = rel_err(got, want)
+    check(name, e < tol)
+}
+
+fn main() {
+    // ── Phoenix AZ — pvlib 0.13.0 ephemeris reference values
+    //    captured 2026-05-20 (darwin-arm64, python 3.x). ────────────
+
+    let lat = 33.4484
+    let lon = -112.0740      // east-positive convention
+    let pressure = 101325.0   // Pa (pvlib default)
+    let temp = 12.0           // °C (pvlib default)
+    let tol = 0.000000001     // 1e-9 relative
+
+    // Sample 1: 2024-06-21 13:00 UTC (~6am MST) — low sun
+    //   doy(2024-06-21) = 173, utc_hour = 13.0
+    let z1 = solar_zenith(2024, 173, 13.0, lat, lon)
+    check_close("S1 zenith (dawn solstice, 1e-9 rel)",
+                z1, 83.193802044761, tol)
+    let az1 = solar_azimuth(2024, 173, 13.0, lat, lon)
+    check_close("S1 azimuth (dawn solstice, 1e-9 rel)",
+                az1, 66.347995379271, tol)
+    let appz1 = apparent_zenith(2024, 173, 13.0, lat, lon, pressure, temp)
+    check_close("S1 app_zenith (dawn solstice, 1e-9 rel)",
+                appz1, 83.069907592121, tol)
+    let ghi1 = haurwitz_ghi(appz1)
+    check_close("S1 GHI Haurwitz (dawn solstice, 1e-6 rel)",
+                ghi1, 81.244886263567, 0.000001)
+
+    // Sample 2: 2024-06-21 19:00 UTC (~noon MST) — high sun
+    let z2 = solar_zenith(2024, 173, 19.0, lat, lon)
+    check_close("S2 zenith (noon solstice, 1e-9 rel)",
+                z2, 12.016882777356, tol)
+    let az2 = solar_azimuth(2024, 173, 19.0, lat, lon)
+    check_close("S2 azimuth (noon solstice, 1e-9 rel)",
+                az2, 144.500909272122, tol)
+    let appz2 = apparent_zenith(2024, 173, 19.0, lat, lon, pressure, temp)
+    check_close("S2 app_zenith (noon solstice, 1e-9 rel)",
+                appz2, 12.013471674244, tol)
+    let ghi2 = haurwitz_ghi(appz2)
+    check_close("S2 GHI Haurwitz (noon solstice, 1e-6 rel)",
+                ghi2, 1011.085520048903, 0.000001)
+
+    // Sample 3: 2024-06-21 22:00 UTC (~3pm MST)
+    let z3 = solar_zenith(2024, 173, 22.0, lat, lon)
+    check_close("S3 zenith (afternoon solstice, 1e-9 rel)",
+                z3, 34.188425584452, tol)
+    let az3 = solar_azimuth(2024, 173, 22.0, lat, lon)
+    check_close("S3 azimuth (afternoon solstice, 1e-9 rel)",
+                az3, 262.860410995614, tol)
+    let appz3 = apparent_zenith(2024, 173, 22.0, lat, lon, pressure, temp)
+    check_close("S3 app_zenith (afternoon solstice, 1e-9 rel)",
+                appz3, 34.177545356059, tol)
+    let ghi3 = haurwitz_ghi(appz3)
+    check_close("S3 GHI Haurwitz (afternoon solstice, 1e-6 rel)",
+                ghi3, 845.850330027598, 0.000001)
+
+    // Sample 4: 2024-06-22 04:00 UTC (~9pm MST) — below horizon
+    //   doy(2024-06-22) = 174
+    let z4 = solar_zenith(2024, 174, 4.0, lat, lon)
+    check_close("S4 zenith (night solstice, 1e-9 rel)",
+                z4, 104.235708935247, tol)
+    let appz4 = apparent_zenith(2024, 174, 4.0, lat, lon, pressure, temp)
+    check_close("S4 app_zenith (night solstice, 1e-9 rel)",
+                appz4, 104.235708935247, tol)
+    let ghi4 = haurwitz_ghi(appz4)
+    // GHI = 0 when sun is below horizon — exact match, not relative.
+    check("S4 GHI Haurwitz (night → 0 W/m²)", fabs(ghi4) < 1e-12)
+
+    // Sample 5: 2024-12-21 19:30 UTC — winter solstice noon
+    //   doy(2024-12-21) = 356, utc_hour = 19.5
+    let z5 = solar_zenith(2024, 356, 19.5, lat, lon)
+    check_close("S5 zenith (winter noon, 1e-9 rel)",
+                z5, 56.888946624726, tol)
+    let appz5 = apparent_zenith(2024, 356, 19.5, lat, lon, pressure, temp)
+    check_close("S5 app_zenith (winter noon, 1e-9 rel)",
+                appz5, 56.864443123412, tol)
+    let ghi5 = haurwitz_ghi(appz5)
+    check_close("S5 GHI Haurwitz (winter noon, 1e-6 rel)",
+                ghi5, 538.782342024188, 0.000001)
+
+    // Sample 6: 2024-03-20 19:00 UTC — spring equinox noon
+    //   doy(2024-03-20) = 80
+    let z6 = solar_zenith(2024, 80, 19.0, lat, lon)
+    check_close("S6 zenith (equinox noon, 1e-9 rel)",
+                z6, 34.218761927570, tol)
+    let appz6 = apparent_zenith(2024, 80, 19.0, lat, lon, pressure, temp)
+    check_close("S6 app_zenith (equinox noon, 1e-9 rel)",
+                appz6, 34.207869314859, tol)
+    let ghi6 = haurwitz_ghi(appz6)
+    check_close("S6 GHI Haurwitz (equinox noon, 1e-6 rel)",
+                ghi6, 845.524545795274, 0.000001)
+
+    print("solar_kernel_test: " + str(pass_count) + "/" + str(total_count))
+    if failed != "" {
+        print("FAILED: " + failed)
+    } else {
+        print("PASS")
+    }
+}

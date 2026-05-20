@@ -18,6 +18,9 @@
 //     would require either matching plasmapy's relativistic correction
 //     OR redefining the "gyroradius" surface to mean classical only.
 
+// ①a kernel — domain-agnostic plasma-physics algebra (ω_ce, v_th, …).
+// ①b adapter — fusion-domain ITER core reference aggregator.
+use "stdlib/kernels/plasma/plasma_metrics"
 use "stdlib/fusion/plasma_metrics"
 
 let mut pass_count = 0

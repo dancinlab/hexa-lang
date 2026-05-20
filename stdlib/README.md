@@ -2,10 +2,13 @@
 
 사용자가 `import "../stdlib/xxx.hexa"` 로 쓰는 고수준 모듈.
 
+전체 인벤토리 SSOT: **[STDLIB.json](STDLIB.json)** — 99 entries (50 dir + 36
+module + 6 test + 7 ai-doc). 이 README 의 표는 자주 쓰는 일부 발췌.
+
 | 파일 | 역할 |
 |---|---|
 | collections.hexa | 컬렉션 (List, Set, Map 확장) |
-| math.hexa | 수학 함수 |
+| math.hexa | 수학 함수 (core/math/ 에 `wrap_pi` 등 각도 normalize primitive 포함) |
 | nn.hexa | 신경망 |
 | optim.hexa | 옵티마이저 |
 | string.hexa | 문자열 유틸 |

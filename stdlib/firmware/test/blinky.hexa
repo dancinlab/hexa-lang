@@ -1,0 +1,58 @@
+// stdlib/firmware/test/blinky.hexa — FIRMWARE.md G-F0 reference fixture
+//
+// @version 0.0.1-skeleton
+// @authority FIRMWARE.md §4 G-F0 — exit fixture for the firmware codegen lane
+//
+// G-F0 exit criterion: this file builds with `arm-none-eabi-gcc` (the
+// .c artifact is codegen output, not authored) and produces a `.elf`
+// whose `.text` md5 is byte-stable across two clean rebuilds.
+//
+// The exit cannot be measured today — `@target(firmware)` is a stub
+// per RFC 063. Once that lands, this file is the smoke fixture that
+// proves the G-F0 capability.
+//
+// USAGE (after RFC 063):
+//   hexa build --target=firmware,arch=cortex-m0 \
+//              stdlib/firmware/test/blinky.hexa \
+//              -o build/firmware/cortex-m0/blinky.elf
+//   md5 build/firmware/cortex-m0/blinky.elf
+//   # rebuild
+//   md5 build/firmware/cortex-m0/blinky.elf
+//   # the two md5 must match for G-F0 PASS
+
+// use "stdlib/firmware/target"    // pending RFC 063 — currently exits 91
+// use "stdlib/firmware/mmio"      // pending RFC 063 G-F2
+// use "stdlib/firmware/startup"   // pending RFC 063 G-F1
+
+// On a Cortex-M0 reference part (e.g. RP2040 boot in M0 mode, or
+// nRF51), GPIO toggle at a fixed period.
+//
+//   @target(firmware, arch="cortex-m0", core="armv6-m", layout="rp2040_m0")
+//   fn main() {
+//       // GPIO_OUT register at MMIO addr 0xD0000010 on RP2040 SIO
+//       @mmio(addr=0xD0000010, width=32, ordering=preserve)
+//       let mut GPIO_OUT: u32 = 0
+//       loop {
+//           GPIO_OUT = 1
+//           _delay(1000000)
+//           GPIO_OUT = 0
+//           _delay(1000000)
+//       }
+//   }
+//
+//   fn _delay(n: int) {
+//       let mut i = 0
+//       while i < n { i = i + 1 }
+//   }
+//
+// Both annotations (`@target`, `@mmio`) are parser-recognised but
+// codegen-pending. Until RFC 063 lands, this file documents the
+// eventual shape; `hexa build --target=firmware ...` will refuse to
+// emit until the codegen lane is wired.
+
+fn main() {
+    println("stdlib/firmware/test/blinky: pending RFC 063 — see FIRMWARE.md G-F0")
+    exit(91)
+}
+
+main()

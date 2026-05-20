@@ -67,6 +67,9 @@ fn cmd_help() {
     println("  qrng selftest | chain | meta --backend=NAME")
     println("                                          provider sweep · resolved chain · backend meta")
     println("    e.g. hexa qrng collect --bytes=32 --source=mock_qrng --seed=42")
+    println("  cloud [run|nohup|poll|copy-to|copy-from] <host> [--port N] [--insecure] -- <argv...>")
+    println("                                          structured-argv remote dispatch (PR #81/#84/#86/#88)")
+    println("    e.g. hexa cloud run ubu-2 -- python3 train.py    (also: cloud copy-to / copy-from)")
     println("  sim-universe [status|selftest|anu|multiverse|qpu|qrng|bostrom|godel|")
     println("                fvd|stark|qdarwin|ca-qm|supremacy|mbs|dtc|z2gauge|")
     println("                preheating|multipolar|surface-code|ssh|hofstadter|dqpt|wdw]")
@@ -77,6 +80,17 @@ fn cmd_help() {
     println("           qdrift|cdr|wigner|qfi|shallow|gme-steer|mabk|mirror-bench]")
     println("                                          quantum mirror substrate (38 modules, RFC 045)")
     println("    e.g. hexa qmirror chsh                CHSH Bell test (Tsirelson-class S)")
+    println("  loop [--once|--budget N|--time D] [--lenses ...] [--no-fire|--fire --budget U]")
+    println("                                          self-growing atlas cycle — 8 stage (RFC 065)")
+    println("                                          binary built-in lens table + PR-only candidates")
+    println("    e.g. hexa loop                        --once --no-fire --dry-run (safe default)")
+    println("    e.g. hexa loop --status               print state-dir + LENS_COUNT + active families")
+    println("  gpu fire <kernel.ptx> <host.c> [target] Remote GPU fire harness (GPU.md §7c)")
+    println("                                          scp + nvcc + run + pull result.json")
+    println("                                          default target = ubu-2 (RTX 5070 sm_120)")
+    println("    e.g. hexa gpu fire wmma_16x16.ptx host.c   (HEXA_GPU_DRY=1 plans only)")
+    println("  gpu disasm <kernel.ptx>                 PTX opcode-family histogram (pure hexa)")
+    println("  gpu lint   <kernel.ptx>                 PTX static checks (non-ASCII / sm_target / .reg)")
     println("")
     println("ATLAS SSOT  (zero-I/O rodata, ATLAS_HASH pinned, ~6594 P/C/L nodes)")
     println("  atlas hash | stats                      Read meta")
@@ -1769,6 +1783,32 @@ fn cmd_build(src, out, c_only, target) {
         println("error: source file not found: " + src)
         exit(1)
     }
+    // ─── RFC 071 P0 scaffold — NVPTX target string recognition ───────────
+    // RFC 071 (inbox/rfc_drafts_2026_05_20/rfc_071_source_to_silicon_e2e.md)
+    // formalises the source-to-silicon e2e gap GPU.md §2a identified: the
+    // existing `--target=` table (target_zig_triple) routes through
+    // hexa_v2 → C → clang/zig cc, which emits host CPU binaries. The
+    // NVPTX path needs a categorically different pipeline (in-hexa compiler
+    // self-host → MIR → codegen_emit_ptx_sm80 → PTX text), tracked as
+    // RFC 071 P1-P4. This P0 branch ONLY recognises the canonical NVPTX
+    // target strings so P1+ wiring can plug in real dispatch without
+    // re-touching the arg parser. Per @D g3 (honest scope) we exit 1 with
+    // an informative deferred-message — we do NOT silently fall through
+    // to the zig-cc table (which would print "unknown --target value:" +
+    // confuse the caller about whether NVPTX is a supported target name).
+    if len(target) > 0 {
+        let mut _is_nvptx = 0
+        if target == "nvptx64-nvidia-cuda-sm80"  { _is_nvptx = 1 }
+        if target == "nvptx64-nvidia-cuda-sm90"  { _is_nvptx = 1 }
+        if target == "nvptx64-nvidia-cuda-sm120" { _is_nvptx = 1 }
+        if _is_nvptx == 1 {
+            println("error: --target=" + target + " recognized but not yet wired")
+            println("       NVPTX target: deferred to RFC 071 P1+ wiring;")
+            println("       use hand-emit PTX + `hexa gpu fire` for now (see GPU.md §7c)")
+            println("       RFC: inbox/rfc_drafts_2026_05_20/rfc_071_source_to_silicon_e2e.md")
+            exit(1)
+        }
+    }
     // ─── Darwin build refusal (2026-04-20 kernel panic prevention) ──────
     // Root-cause of 2026-04-20 03:33 Mac kernel panic: a train_alm_lora.hexa
     // source was compiled to /private/tmp/train_alm_lora_mac on Darwin, then
@@ -2932,6 +2972,547 @@ fn cmd_bench(file, runs, json_mode, compare_bin) {
 //     판정한다. 바이너리 자체 exit 코드 버그는 별도 추적.
 //   - 출력 .c 는 /tmp/hexa_parse_check_$$.c 로 임시. 후처리 삭제.
 //   - 성공: "OK" 한 줄, exit 0. 실패: 파서 에러 라인 그대로 + exit(1).
+// ─── `hexa gpu` — GPU CLI dispatcher (GPU.md §7c) ─────────────────────
+// Wraps the recurring per-fire pattern: scp PTX + host C → target host →
+// nvcc + ./binary → pull result.json. Single hexa-side command, no .sh
+// dependency. Default target host = "ubu-2" (RTX 5070, see
+// `reference_gpu_fire_infra` memory).
+//
+// Usage:  hexa gpu fire <kernel.ptx> <host.c> [target-host]
+//
+// REMOTE workdir is derived from the kernel basename (sans .ptx):
+//   /tmp/hexa_gpu_fire_<basename_noext>/
+//
+// Pipeline (each step prints stdout, propagates non-zero rc):
+//   1. ssh <host> mkdir -p $REMOTE
+//   2. scp <ptx> <host_c> <host>:$REMOTE/
+//   3. ssh <host> "cd $REMOTE && nvcc -O2 -arch=sm_90 -o fire_bin <host_c_basename> -lcuda && ./fire_bin <ptx_basename>"
+//   4. scp <host>:$REMOTE/result.json ./<ptx_basename>.result.json   (best-effort)
+//
+// HEXA_GPU_DRY=1 prints the planned commands instead of executing them
+// (used by the parse-gate smoke test when ssh is unreachable).
+fn _gpu_basename_noext(path) {
+    // basename minus a trailing `.<ext>` (single dot tail). Single-quote
+    // safe because shq-style escaping is the caller's responsibility for
+    // the path that goes INTO the shell; this helper just trims for the
+    // workdir/result-name suffix.
+    let b = exec("basename '" + path + "' 2>/dev/null | tr -d '\\n'")
+    let n = len(b)
+    let mut i = n - 1
+    while i >= 0 {
+        if b.substring(i, i + 1) == "." {
+            return b.substring(0, i)
+        }
+        i = i - 1
+    }
+    return b
+}
+
+fn _gpu_basename(path) {
+    return exec("basename '" + path + "' 2>/dev/null | tr -d '\\n'")
+}
+
+fn _gpu_run_step(label, cmd) {
+    // Run `cmd` via exec, stream stdout, propagate rc. Returns 0 on success;
+    // exits with the captured rc otherwise.
+    println("[gpu " + label + "] " + cmd)
+    if env_var("HEXA_GPU_DRY") == "1" {
+        return 0
+    }
+    let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+    let marker = "__HEXA_SHIM_RC__="
+    let mlen = len(marker)
+    let mut midx = -1
+    let mut si = len(out) - mlen
+    while si >= 0 {
+        if out.substring(si, si + mlen) == marker {
+            midx = si
+            si = -1
+        } else {
+            si = si - 1
+        }
+    }
+    if midx >= 0 {
+        let body = out.substring(0, midx)
+        let rc_str = out.substring(midx + mlen, len(out))
+        print(body)
+        let mut rs = rc_str
+        let rsl = len(rs)
+        if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+            rs = rs.substring(0, rsl - 1)
+        }
+        let rc = parse_int_str(rs)
+        return rc
+    } else {
+        print(out)
+        return 0
+    }
+}
+
+// ─── `hexa gpu disasm <ptx>` ──────────────────────────────────────────
+// Pure hexa PTX opcode-family histogram. No subprocess, no ptxas — read
+// the text, line-split, extract leading opcode token per instruction
+// line, bin by first dotted segment (ld.param.u64 → "ld"; wmma.load.a.* →
+// "wmma"), print sorted-descending counts.
+//
+// Why pure hexa: g_commit_push_deploy + hexa-native-only (g5) + the
+// 'compiled-path 사용' policy. ptxas as subprocess would fail offline.
+// This is a structural read — it does NOT decode SASS, it bins PTX
+// opcodes by family. Use case: confirm a PTX file contains the wmma
+// instructions you expected to emit.
+fn _gpu_ptx_strip_pred(tok) {
+    // PTX predicate prefix: '@p' or '@!p' — strip if present so the
+    // family bucketing reflects the real opcode.
+    if len(tok) == 0 { return tok }
+    if tok.substring(0, 1) != "@" { return tok }
+    return ""  // predicated lines: we treat the @predicate token as
+              // non-instruction; the real opcode is on a subsequent
+              // whitespace-separated token. Caller advances.
+}
+
+fn _gpu_ptx_family(opcode) {
+    // First dotted segment, or the whole token if there's no dot.
+    let n = len(opcode)
+    let mut i = 0
+    while i < n {
+        if opcode.substring(i, i + 1) == "." {
+            return opcode.substring(0, i)
+        }
+        i = i + 1
+    }
+    return opcode
+}
+
+fn _gpu_ptx_extract_opcode(line) {
+    // Trim left whitespace; if first non-space char is '@' (predicate),
+    // skip the predicate token. Then return the leading word until the
+    // next whitespace / ';' / '{' / '['. Return "" if line is empty,
+    // directive ('.'), label (ends with ':' on first token), or comment.
+    let trimmed = line.trim()
+    if len(trimmed) == 0 { return "" }
+    let first = trimmed.substring(0, 1)
+    if first == "/" { return "" }       // '//' comment
+    if first == "." { return "" }       // PTX directive (.version, .reg, …)
+    if first == "{" { return "" }
+    if first == "}" { return "" }
+    if first == "(" { return "" }
+    if first == ")" { return "" }
+    if first == ";" { return "" }
+    // Skip leading '@predicate' token (e.g. '@p1', '@!p2').
+    let mut body = trimmed
+    if first == "@" {
+        let bn = len(body)
+        let mut j = 0
+        while j < bn {
+            let c = body.substring(j, j + 1)
+            if c == " " || c == "\t" {
+                // Advance past the predicate token to the real opcode.
+                body = body.substring(j + 1, bn).trim()
+                j = bn  // break
+            } else {
+                j = j + 1
+            }
+        }
+        if len(body) == 0 { return "" }
+        let bf = body.substring(0, 1)
+        if bf == "." || bf == "/" { return "" }
+    }
+    // Now `body` starts with the opcode. Scan until whitespace / ; / { / [
+    let bn2 = len(body)
+    let mut k = 0
+    while k < bn2 {
+        let c2 = body.substring(k, k + 1)
+        if c2 == " " || c2 == "\t" || c2 == ";" || c2 == "{" || c2 == "[" || c2 == "," {
+            return body.substring(0, k)
+        }
+        k = k + 1
+    }
+    return body
+}
+
+fn _gpu_hist_add(names, counts, family) {
+    // Linear lookup-or-append. PTX has ~30 op families; O(N²) here is
+    // a few thousand cmp ops at worst — well under any cost-bearing
+    // floor.
+    let n = len(names)
+    let mut i = 0
+    while i < n {
+        if names[i] == family {
+            counts[i] = counts[i] + 1
+            return
+        }
+        i = i + 1
+    }
+    names.push(family)
+    counts.push(1)
+}
+
+fn _gpu_hist_sort_desc(names, counts) {
+    // In-place insertion sort by count descending. Tiny n.
+    let n = len(names)
+    let mut i = 1
+    while i < n {
+        let mut j = i
+        while j > 0 && counts[j] > counts[j - 1] {
+            let tc = counts[j]
+            counts[j] = counts[j - 1]
+            counts[j - 1] = tc
+            let tn = names[j]
+            names[j] = names[j - 1]
+            names[j - 1] = tn
+            j = j - 1
+        }
+        i = i + 1
+    }
+}
+
+fn cmd_gpu_disasm(args) {
+    if len(args) == 0 {
+        eprintln("usage: hexa gpu disasm <kernel.ptx>")
+        exit(2)
+    }
+    let path = args[0]
+    if !file_exists(path) {
+        eprintln("error: ptx file not found: " + path)
+        exit(1)
+    }
+    let text = read_file(path)
+    let lines = text.split("\n")
+    let total_lines = len(lines)
+    let mut instr_count = 0
+    let mut names = []
+    let mut counts = []
+    let mut li = 0
+    while li < total_lines {
+        let opcode = _gpu_ptx_extract_opcode(lines[li])
+        if len(opcode) > 0 {
+            let family = _gpu_ptx_family(opcode)
+            // Skip lone fragment-register continuation lines like
+            // '{%ra0, %ra1, ...}' which extract_opcode already returns "".
+            if len(family) > 0 && family.substring(0, 1) != "%" {
+                _gpu_hist_add(names, counts, family)
+                instr_count = instr_count + 1
+            }
+        }
+        li = li + 1
+    }
+    _gpu_hist_sort_desc(names, counts)
+    println("[gpu disasm] " + path)
+    println("[gpu disasm] " + to_string(total_lines) + " lines, " + to_string(instr_count) + " instructions, " + to_string(len(names)) + " families")
+    println("")
+    println("FAMILY            COUNT")
+    let nf = len(names)
+    let mut fi = 0
+    while fi < nf {
+        // Pad family name to width 16 (visual alignment; we don't have
+        // printf-style formatting builtin so concat-pad).
+        let nm = names[fi]
+        let mut padded = nm
+        let mut pi = len(nm)
+        while pi < 16 {
+            padded = padded + " "
+            pi = pi + 1
+        }
+        println("  " + padded + to_string(counts[fi]))
+        fi = fi + 1
+    }
+}
+
+// ─── `hexa gpu lint <ptx>` ────────────────────────────────────────────
+// Static checks on a PTX file:
+//   (1) non-ASCII byte detection — driver JIT (cuModuleLoadDataEx)
+//       rejects PTX with non-ASCII bytes in comments. Standalone ptxas
+//       is lenient. See `reference_gpu_fire_infra` memory.
+//   (2) sm-target presence — every PTX must carry '.target sm_NN'.
+//   (3) .reg decl count — rough register-pressure indicator (PTX is
+//       virtual-register, but per-thread .reg decl count correlates
+//       with cubin register footprint after ptxas).
+// Exit 0 = clean, 1 = at least one finding.
+fn cmd_gpu_lint(args) {
+    if len(args) == 0 {
+        eprintln("usage: hexa gpu lint <kernel.ptx>")
+        exit(2)
+    }
+    let path = args[0]
+    if !file_exists(path) {
+        eprintln("error: ptx file not found: " + path)
+        exit(1)
+    }
+    let text = read_file(path)
+    let mut findings = 0
+    println("[gpu lint] " + path)
+
+    // Check 1 — non-ASCII byte scan. hexa_str_bytes returns int per
+    // byte; flag any > 127.
+    let bytes = hexa_str_bytes(text)
+    let nb = len(bytes)
+    let mut bi = 0
+    let mut lineno = 1
+    let mut col = 1
+    let mut nonascii_hits = 0
+    let mut first_nonascii_line = 0
+    let mut first_nonascii_col = 0
+    let mut first_nonascii_byte = 0
+    while bi < nb {
+        let b = bytes[bi]
+        if b > 127 {
+            nonascii_hits = nonascii_hits + 1
+            if first_nonascii_line == 0 {
+                first_nonascii_line = lineno
+                first_nonascii_col = col
+                first_nonascii_byte = b
+            }
+        }
+        if b == 10 {
+            lineno = lineno + 1
+            col = 1
+        } else {
+            col = col + 1
+        }
+        bi = bi + 1
+    }
+    if nonascii_hits > 0 {
+        findings = findings + 1
+        println("  [WARN] non-ASCII bytes: " + to_string(nonascii_hits)
+            + " (first at L" + to_string(first_nonascii_line)
+            + ":C" + to_string(first_nonascii_col)
+            + " byte=0x" + hex(first_nonascii_byte) + ")")
+        println("         driver JIT (cuModuleLoadDataEx) rejects non-ASCII PTX.")
+    } else {
+        println("  [OK]   ASCII-clean (" + to_string(nb) + " bytes)")
+    }
+
+    // Check 2 — '.target sm_NN' presence + extract NN.
+    let lines = text.split("\n")
+    let nl = len(lines)
+    let mut sm_target = ""
+    let mut sm_lineno = 0
+    let mut li = 0
+    while li < nl {
+        let trimmed = lines[li].trim()
+        if len(trimmed) >= 11 && trimmed.substring(0, 11) == ".target sm_" {
+            // Strip trailing comma + features after sm_NN (e.g. ',texmode_independent').
+            let rest = trimmed.substring(11, len(trimmed))
+            let rn = len(rest)
+            let mut ri = 0
+            let mut sm_digits = ""
+            while ri < rn {
+                let c = rest.substring(ri, ri + 1)
+                if c == "," || c == " " || c == "\t" {
+                    ri = rn
+                } else {
+                    sm_digits = sm_digits + c
+                    ri = ri + 1
+                }
+            }
+            sm_target = sm_digits
+            sm_lineno = li + 1
+            li = nl
+        } else {
+            li = li + 1
+        }
+    }
+    if len(sm_target) == 0 {
+        findings = findings + 1
+        println("  [WARN] missing '.target sm_NN' directive")
+    } else {
+        println("  [OK]   .target sm_" + sm_target + " (L" + to_string(sm_lineno) + ")")
+    }
+
+    // Check 3 — .reg decl count + opcode-vs-sm consistency.
+    let mut reg_decls = 0
+    let mut has_wmma_mma = false
+    let mut has_wgmma = false
+    let mut has_tcgen05 = false
+    let mut has_bf16 = false
+    let mut li2 = 0
+    while li2 < nl {
+        let ln = lines[li2].trim()
+        if len(ln) >= 4 && ln.substring(0, 4) == ".reg" {
+            reg_decls = reg_decls + 1
+        }
+        // Substring search: '.bf16' anywhere; 'wmma.mma' / 'wgmma' /
+        // 'tcgen05' at start of opcode (after trim).
+        let lnn = len(ln)
+        if lnn >= 8 {
+            let op = _gpu_ptx_extract_opcode(lines[li2])
+            if len(op) >= 8 && op.substring(0, 8) == "wmma.mma" { has_wmma_mma = true }
+            if len(op) >= 5 && op.substring(0, 5) == "wgmma" { has_wgmma = true }
+            if len(op) >= 7 && op.substring(0, 7) == "tcgen05" { has_tcgen05 = true }
+        }
+        // .bf16 scan — anywhere on the line (PTX type suffix).
+        let mut ci2 = 0
+        while ci2 + 4 < lnn {
+            if ln.substring(ci2, ci2 + 5) == ".bf16" {
+                has_bf16 = true
+                ci2 = lnn
+            } else {
+                ci2 = ci2 + 1
+            }
+        }
+        li2 = li2 + 1
+    }
+    println("  [OK]   .reg decl lines: " + to_string(reg_decls))
+
+    // sm-vs-opcode consistency.
+    if len(sm_target) > 0 {
+        let sm_n = parse_int_str(sm_target)
+        if has_wmma_mma && sm_n < 70 {
+            findings = findings + 1
+            println("  [WARN] wmma.mma found but .target sm_" + sm_target + " < sm_70")
+        }
+        if has_bf16 && sm_n < 80 {
+            findings = findings + 1
+            println("  [WARN] .bf16 type found but .target sm_" + sm_target + " < sm_80")
+        }
+        if has_wgmma && sm_n < 90 {
+            findings = findings + 1
+            println("  [WARN] wgmma found but .target sm_" + sm_target + " < sm_90")
+        }
+        if has_tcgen05 && sm_n < 100 {
+            findings = findings + 1
+            println("  [WARN] tcgen05 found but .target sm_" + sm_target + " < sm_100")
+        }
+    }
+
+    println("")
+    if findings == 0 {
+        println("[gpu lint] clean (0 findings)")
+    } else {
+        println("[gpu lint] " + to_string(findings) + " finding(s)")
+        exit(1)
+    }
+}
+
+fn cmd_gpu(args) {
+    // args = av[3..]  (i.e. starts with the gpu sub-verb)
+    if len(args) == 0 {
+        println("usage: hexa gpu <fire|disasm|lint> ...")
+        println("  GPU CLI dispatcher (GPU.md §7c)")
+        println("  fire    scp PTX + host C → remote → nvcc + run → pull result.json")
+        println("  disasm  PTX opcode-family histogram (pure hexa scan, no ptxas)")
+        println("  lint    static checks: non-ASCII / sm-target / .reg count")
+        println("  env     HEXA_GPU_DRY=1  print the planned commands, do not execute")
+        exit(1)
+    }
+    let sub = args[0]
+    if sub == "disasm" {
+        let mut rest = []
+        let mut ri = 1
+        while ri < len(args) {
+            rest.push(args[ri])
+            ri = ri + 1
+        }
+        cmd_gpu_disasm(rest)
+        return 0
+    }
+    if sub == "lint" {
+        let mut rest2 = []
+        let mut rj = 1
+        while rj < len(args) {
+            rest2.push(args[rj])
+            rj = rj + 1
+        }
+        cmd_gpu_lint(rest2)
+        return 0
+    }
+    if sub == "fire" {
+        if len(args) < 3 {
+            eprintln("usage: hexa gpu fire <kernel.ptx> <host.c> [target-host]")
+            exit(2)
+        }
+        let ptx = args[1]
+        let host_c = args[2]
+        let mut target = "ubu-2"
+        if len(args) >= 4 { target = args[3] }
+
+        // Local existence check — fail fast before any ssh.
+        if env_var("HEXA_GPU_DRY") != "1" {
+            if !file_exists(ptx) {
+                eprintln("error: kernel.ptx not found: " + ptx)
+                exit(1)
+            }
+            if !file_exists(host_c) {
+                eprintln("error: host.c not found: " + host_c)
+                exit(1)
+            }
+        }
+
+        let ptx_base = _gpu_basename(ptx)
+        let host_c_base = _gpu_basename(host_c)
+        let ptx_stem = _gpu_basename_noext(ptx)
+        let remote_dir = "/tmp/hexa_gpu_fire_" + ptx_stem
+
+        println("[gpu] target = " + target)
+        println("[gpu] remote = " + remote_dir)
+        println("[gpu] ptx    = " + ptx + " (" + ptx_base + ")")
+        println("[gpu] host.c = " + host_c + " (" + host_c_base + ")")
+
+        // Step 1 — ensure remote workdir.
+        let mk_cmd = "ssh " + shq(target) + " " + shq("mkdir -p " + remote_dir)
+        let rc1 = _gpu_run_step("mkdir", mk_cmd)
+        if rc1 != 0 {
+            eprintln("[gpu] step 1 (mkdir) failed rc=" + str(rc1))
+            exit(rc1)
+        }
+
+        // Step 2 — scp both files in one transfer.
+        let scp_cmd = "scp " + shq(ptx) + " " + shq(host_c) + " " + shq(target + ":" + remote_dir + "/")
+        let rc2 = _gpu_run_step("scp", scp_cmd)
+        if rc2 != 0 {
+            eprintln("[gpu] step 2 (scp) failed rc=" + str(rc2))
+            exit(rc2)
+        }
+
+        // Step 3 — remote nvcc + run. The whole remote command goes through
+        // shq as a single argument; ssh re-parses it server-side as one shell
+        // string. Single-quote tooling inside that string is unsupported
+        // (shq enforces no embedded single quote), so use double-quoted
+        // double-args downstream of the outer shq.
+        let remote_cmd = "cd " + remote_dir + " && nvcc -O2 -arch=sm_90 -o fire_bin " + host_c_base + " -lcuda && ./fire_bin " + ptx_base
+        let run_cmd = "ssh " + shq(target) + " " + shq(remote_cmd)
+        let rc3 = _gpu_run_step("nvcc+run", run_cmd)
+        if rc3 != 0 {
+            eprintln("[gpu] step 3 (nvcc+run) failed rc=" + str(rc3))
+            exit(rc3)
+        }
+
+        // Step 4 — best-effort pull of result.json. Don't fail the whole
+        // pipeline if the host kernel didn't emit one.
+        let local_result = "./" + ptx_stem + ".result.json"
+        let pull_cmd = "scp " + shq(target + ":" + remote_dir + "/result.json") + " " + shq(local_result) + " 2>/dev/null"
+        let rc4 = _gpu_run_step("pull-result", pull_cmd)
+        if rc4 != 0 {
+            println("[gpu] no result.json (rc=" + str(rc4) + ") — skipped")
+        } else {
+            println("[gpu] result.json → " + local_result)
+        }
+
+        println("[gpu] fire complete")
+    } else if sub == "help" || sub == "--help" || sub == "-h" {
+        println("hexa gpu — GPU CLI dispatcher (GPU.md §7c)")
+        println("")
+        println("USAGE")
+        println("  hexa gpu fire   <kernel.ptx> <host.c> [target-host]")
+        println("  hexa gpu disasm <kernel.ptx>")
+        println("  hexa gpu lint   <kernel.ptx>")
+        println("")
+        println("  fire    target-host defaults to 'ubu-2' (RTX 5070, sm_120).")
+        println("          Remote workdir = /tmp/hexa_gpu_fire_<basename_noext>")
+        println("          Pipeline: ssh-mkdir → scp → nvcc -O2 -arch=sm_90 + run → pull result.json")
+        println("  disasm  PTX opcode-family histogram (pure hexa, no ptxas).")
+        println("  lint    Static checks: non-ASCII bytes / .target sm_NN / .reg count /")
+        println("          opcode-vs-sm consistency (wmma.mma ≥ sm_70, .bf16 ≥ sm_80, wgmma ≥ sm_90).")
+        println("")
+        println("ENV")
+        println("  HEXA_GPU_DRY=1   print planned commands, do not execute (fire only)")
+    } else {
+        eprintln("error: unknown gpu sub-verb '" + sub + "'")
+        eprintln("usage: hexa gpu <fire|disasm|lint> ...")
+        exit(2)
+    }
+}
+
 fn cmd_parse(src) {
     let src_exists = exec("test -f '" + src + "' && printf yes || printf no")
     if src_exists != "yes" {
@@ -3839,6 +4420,77 @@ if len(av) < 3 {
             }
             cmd_run(qrng_script, qrng_args)
         }
+    } else if sub == "cloud" {
+        // stdlib/cloud dispatch (PR #81 cycle A · #84 cloud_copy · #86 runpod · #88 CLI-first).
+        // stdlib/cloud/cloud_cli.hexa parses argv subcommand
+        // (run / nohup / poll / copy-to / copy-from / help / version;
+        // --port / --insecure connection flags) and dispatches to
+        // cloud_run / cloud_nohup / cloud_poll / cloud_copy_to /
+        // cloud_copy_from. Structured-argv discipline — every element
+        // POSIX-quoted, no remote-shell re-parse class.
+        //
+        // Preferred path = standalone compiled bin/hexa-cloud binary built
+        // by `hexa build stdlib/cloud/cloud_cli.hexa`. Falls back to
+        // cmd_run() (compile-then-exec after R7) when the binary is absent.
+        let __inst_c = install_dir_from_argv0()
+        let mut cloud_args = []
+        let mut ci = 3
+        while ci < len(av) {
+            cloud_args.push(av[ci])
+            ci = ci + 1
+        }
+        let mut cloud_bin = ""
+        if len(__inst_c) > 0 {
+            let inst_bin = __inst_c + "/bin/hexa-cloud"
+            if file_exists(inst_bin) { cloud_bin = inst_bin }
+        }
+        if len(cloud_bin) == 0 && file_exists("bin/hexa-cloud") {
+            cloud_bin = "bin/hexa-cloud"
+        }
+        if len(cloud_bin) > 0 {
+            let cli_c = shq(cloud_bin)
+            let mut cmd = cli_c
+            let mut ai = 0
+            while ai < len(cloud_args) {
+                let q = shq(cloud_args[ai])
+                cmd = cmd + " " + q
+                ai = ai + 1
+            }
+            let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+            let marker = "__HEXA_SHIM_RC__="
+            let mlen = len(marker)
+            let mut midx = -1
+            let mut si = len(out) - mlen
+            while si >= 0 {
+                if out.substring(si, si + mlen) == marker {
+                    midx = si
+                    si = -1
+                } else {
+                    si = si - 1
+                }
+            }
+            if midx >= 0 {
+                let body = out.substring(0, midx)
+                let rc_str = out.substring(midx + mlen, len(out))
+                print(body)
+                let mut rs = rc_str
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" {
+                    rs = rs.substring(0, rsl - 1)
+                }
+                let rc = parse_int_str(rs)
+                if rc != 0 { exit(rc) }
+            } else {
+                print(out)
+            }
+        } else {
+            let mut cloud_script = "stdlib/cloud/cloud_cli.hexa"
+            if len(__inst_c) > 0 {
+                let inst_path = __inst_c + "/stdlib/cloud/cloud_cli.hexa"
+                if file_exists(inst_path) { cloud_script = inst_path }
+            }
+            cmd_run(cloud_script, cloud_args)
+        }
     } else if sub == "sim-universe" {
         // RFC 046 — stdlib/sim_universe dispatch.
         // stdlib/sim_universe/sim_universe.hexa parses argv subcommand
@@ -3980,6 +4632,40 @@ if len(av) < 3 {
             }
             cmd_run(qm_script, qm_args)
         }
+    } else if sub == "loop" {
+        // RFC 065 — stdlib/loop/cycle.hexa dispatch.
+        // 8-stage self-growing atlas cycle (SCAN · LENS · DEDUP · GATE ·
+        // FIRE · DRAFT · AUDIT · EXHAUST?) with binary built-in lens table
+        // sibling to atlas (compiler/lenses/embedded.gen.hexa). Output goes
+        // to inbox/{atlas,lens}_candidates/ — PR-only, never direct fold.
+        // Phase B-2.1: cycle/end state-file I/O wired.
+        // Phase B-3   : this verb dispatch (current commit).
+        // Phase C     : lens bodies + first inbox/atlas_candidates/ PR.
+        let __inst_lp = install_dir_from_argv0()
+        let mut lp_args = []
+        let mut lpi = 3
+        while lpi < len(av) {
+            lp_args.push(av[lpi])
+            lpi = lpi + 1
+        }
+        let mut lp_script = "stdlib/loop/cycle.hexa"
+        if len(__inst_lp) > 0 {
+            let inst_path = __inst_lp + "/stdlib/loop/cycle.hexa"
+            if file_exists(inst_path) { lp_script = inst_path }
+        }
+        cmd_run(lp_script, lp_args)
+    } else if sub == "gpu" {
+        // GPU.md §7c — toolchain ergonomics. `hexa gpu fire <ptx> <host.c>
+        // [target-host]` wraps the recurring remote-fire pattern (scp →
+        // nvcc → run → pull result.json). See cmd_gpu() above for the
+        // pipeline; default target host = "ubu-2" (RTX 5070 sm_120).
+        let mut gpu_args = []
+        let mut gpi = 3
+        while gpi < len(av) {
+            gpu_args.push(av[gpi])
+            gpi = gpi + 1
+        }
+        cmd_gpu(gpu_args)
     } else if is_absorbed_verb(sub) {
         // nexus absorption surface (2026-05-13 final consolidation):
         //

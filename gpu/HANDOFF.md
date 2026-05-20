@@ -5,22 +5,38 @@
 > is "what to do next" plus the honest performance framing that the
 > work must not violate.
 
-## State (2026-05-19)
+## State (2026-05-20)
 
-- **SPEC LANDED · codegen in progress under RFC 055.**
+- **SPEC LANDED · 055-P1 + 055-P2 codegen LANDED + measured PASS on a real GPU.**
 - Decision 1 LOCKED — kernel source format = `@gpu` annotation on
   ordinary `.hexa` files; no `.hxk` extension. (`design.md` D1)
 - Decision 2 LOCKED — directory = `hexa-lang/gpu/`. (`design.md` D2)
 - Decision 3 LOCKED — `gpu/SPEC.md` is the `@gpu` subset SSOT; RFC 055
   §6 references it. (`design.md` D3)
+- Decision 4 LOCKED — 055-P2 scope = the naive GEMM emitter + a measured
+  GPU fire; the MIR-partition / `gpu_launch` lowering / cubin embed are
+  055-P3 (productization). (`design.md` D4)
 - **`gpu/SPEC.md` written** — the full `@gpu` subset: `@gpu_kernel` /
   `@gpu_device` attributes, type allowlist, statement allowlist /
   denylist, thread-index + sync intrinsics, `@shared` memory, the
   `gpu_launch` ABI, FP64-first scope, the `GPU0N` strict-lint codes.
 - **RFC 055 is the codegen implementation** — `hexa-src → NVPTX`. It
-  consumes `gpu/SPEC.md`. Status: `055-P0` PTX text emit pass landed
-  (`compiler/codegen/nvptx_target.hexa` — FP64 arithmetic subset emits
-  real PTX); not yet wired into main target dispatch.
+  consumes `gpu/SPEC.md`. Status: `055-P0` (PTX emit pass) → `055-P1`
+  (vec-add `@gpu_kernel` + GPU0N validator) → **`055-P2` (naive FP64
+  GEMM `@gpu_kernel`) — LANDED 2026-05-20**.
+- **GPU fire — full falsifier battery measured PASS** on an NVIDIA RTX
+  5070 (sm_120 · driver 580.126.09), $0 on the wilson-pool GPU host
+  `ubu-2`: `F-RFC055-PTX-EMIT` · `-NUMERIC-EQ` (vec-add `max|Δ|=0`) ·
+  `-GEMM-FEASIBLE` (GEMM `max|Δ|=0`) · `-LAUNCH-ABI` · `-NO-LLVM` ·
+  `-CPU-CODEGEN-UNTOUCHED` — all PASS. Evidence:
+  `state/rfc055_p2_2026_05_20/result.json`. Reproduce:
+  `tool/dispatch_r055_p2_gemm.sh [gpu-ssh-host]`.
+- **What's left — 055-P3 (productization):** the codegen is hand-emitted
+  (`emit_ptx_{vec_add,gemm}_module`) and fired via a dispatch script; it
+  is NOT yet wired into the main compile pipeline. 055-P3 = the MIR
+  partition routing a real `@gpu_*` FnDecl → `codegen_nvptx_sm*`, the
+  `gpu_launch(...)` host-side lowering, the cubin `.rodata` `LSection`
+  embed, and the tiled `@shared`+`gpu_barrier()` GEMM (055-P2-tiled).
 - Existing scaffold — `self/native/gpu_codegen_stub.c` is the rt#45
   `@gpu` codegen skeleton; superseded by RFC 055's `nvptx_target.hexa`.
 
@@ -68,22 +84,28 @@ For `@gpu` fused-kernel perf work:
 ## Next steps (suggested order)
 
 1. ~~**Spec the `@gpu` subset**~~ — **DONE**: `gpu/SPEC.md` (Decision 3).
-2. **`@gpu_kernel` attribute parse + strict-lint** — wire the `GPU0N`
-   validation pass (`gpu/SPEC.md` §9) into the compiler frontend; emit
-   the `GPU01`–`GPU07` diagnostics. This is RFC 055 phase **055-P1**.
-3. **FP64 vector-add end-to-end** — a `@gpu_kernel` `c[i]=a[i]+b[i]`
-   compiles through the NVPTX target, `ptxas`-assembles to a `cubin`,
-   launches via `gpu_launch`, byte-eq vs the CPU hexa reference
-   (F-RFC055-PTX-EMIT, -NUMERIC-EQ, -LAUNCH-ABI). RFC 055 **055-P1**.
-4. **FP64 GEMM `@gpu_kernel`** — naive / tiled, `@shared` + `gpu_barrier`;
-   correctness gate vs CPU hexa GEMM (F-RFC055-GEMM-FEASIBLE). Perf vs
-   cuBLAS is an honest measurement, **not** a gate. RFC 055 **055-P2**.
-5. **Benchmark vs torch.compile** — once a fused `@gpu` kernel exists,
-   measure per-step wall vs torch.compile on the same A100 workload at
-   matched T / batch / precision (see the honesty guard below).
+2. ~~**`@gpu_kernel` attribute parse + strict-lint**~~ — **DONE** (055-P1):
+   the `GPU0N` decision table (`nvptx_validate_gpu_subset`) + `@gpu_*`
+   attribute recognition, in `compiler/codegen/nvptx_target.hexa`.
+3. ~~**FP64 vector-add end-to-end**~~ — **DONE** (055-P2 fire, 2026-05-20):
+   `emit_ptx_vec_add_module` PTX, fired on a real GPU — F-RFC055-PTX-EMIT,
+   -NUMERIC-EQ (`max|Δ|=0`), -LAUNCH-ABI all PASS.
+4. ~~**FP64 GEMM `@gpu_kernel`**~~ — **DONE** (055-P2, 2026-05-20):
+   `emit_ptx_gemm_module` — naive (one thread / C element), real PTX
+   contraction loop, `fma.rn.f64`. F-RFC055-GEMM-FEASIBLE PASS
+   (`max|Δ|=0` vs CPU reference, RTX 5070).
+5. **055-P3 — wire into the compile pipeline.** The codegen is currently
+   hand-emitted + fired via `tool/dispatch_r055_p2_gemm.sh`. 055-P3: the
+   MIR partition routing a real `@gpu_*` FnDecl → `codegen_nvptx_sm*`;
+   the `gpu_launch(...)` host-side lowering → `_hx_cuda_launch_kernel`;
+   the cubin `.rodata` `LSection` embed; the tiled `@shared` +
+   `gpu_barrier()` GEMM (055-P2-tiled).
+6. **Benchmark vs torch.compile** — once a *fused* `@gpu` kernel exists,
+   measure per-step wall vs torch.compile at matched T / batch /
+   precision (see the honesty guard above). Not before 055-P3.
 
-Steps 2–4 are the RFC 055 phasing — `gpu/` (this directory) owns the
-*spec*; RFC 055 owns the *codegen implementation*.
+`gpu/` (this directory) owns the *spec*; RFC 055 owns the *codegen
+implementation*.
 
 ## Open items
 

@@ -49,6 +49,13 @@ import "./codegen/arm64_darwin.hexa"
 import "./codegen/x86_64_linux.hexa"
 import "./codegen/thumbv7em_eabihf.hexa"
 import "./codegen/stream.hexa"
+// RFC 055 055-P3 — NVPTX (hexa-src -> PTX) codegen target. Sibling to the
+// CPU targets above; the dispatch branch routes --target=nvptx64-nvidia-
+// cuda-sm90/sm80 to codegen_nvptx_sm90/sm80 and emits .ptx text (no
+// assemble/link — ptxas is downstream, RFC 055 §6.2). The CPU dispatch
+// branches are byte-identically untouched — F-RFC055-CPU-CODEGEN-
+// UNTOUCHED holds by construction (new `else if`, no edit to existing).
+import "./codegen/nvptx_target.hexa"
 import "./check/target_gate.hexa"
 import "./emit/asm.hexa"
 import "./emit/macho_arm64.hexa"
@@ -133,7 +140,7 @@ fn print_help() {
     println("")
     println("flags:")
     println("  -o OUT                 output binary path (default: a.out)")
-    println("  --target=TRIPLE        arm64-apple-darwin | x86_64-linux-gnu (default: detected)")
+    println("  --target=TRIPLE        arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf | nvptx64-nvidia-cuda-sm{80,90} (default: detected)")
     println("  --emit=KIND            asm | obj | exec   (default: exec)")
     println("  --error-format=MODE    pretty | short | json | github (default: pretty)")
     println("  --linker=KIND          hexa | system     (default: system; hexa_ld not yet landed)")
@@ -791,6 +798,12 @@ if stream_mode && target == "arm64-apple-darwin" {
 
     // Stage1 punch list C15: single if-expression binding for the
     // per-target codegen branch.
+    //
+    // RFC 055 055-P3 — NVPTX is the fourth target, sibling to the three
+    // CPU targets. The CPU `else if` branches are byte-identically
+    // untouched (F-RFC055-CPU-CODEGEN-UNTOUCHED). The NVPTX branch is
+    // added BEFORE the unsupported-target fallthrough so an explicit
+    // --target=nvptx64-* lands here, not in the error message.
     let lmodule = if target == "arm64-apple-darwin" {
         codegen_arm64_darwin(mmodule)
     } else if target == "x86_64-linux-gnu" {
@@ -800,9 +813,13 @@ if stream_mode && target == "arm64-apple-darwin" {
         // hexa-cern firmware boards). Soft-float fallback variant
         // (`-eabi`) is a tier_2 follow-up; v1 ships hf only.
         codegen_thumbv7em_eabihf(mmodule)
+    } else if target == NVPTX_TARGET_SM90 {
+        codegen_nvptx_sm90(mmodule)
+    } else if target == NVPTX_TARGET_SM80 {
+        codegen_nvptx_sm80(mmodule)
     } else {
         eprintln("hexa-compiler: unsupported --target=" + target)
-        eprintln("  supported: arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf")
+        eprintln("  supported: arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf | nvptx64-nvidia-cuda-sm90 | nvptx64-nvidia-cuda-sm80")
         exit(2)
     }
 
@@ -832,7 +849,17 @@ if stream_mode && target == "arm64-apple-darwin" {
         exit(0)
     }
 
-    asm_text = emit_asm(lmodule)
+    // RFC 055 055-P3 — NVPTX uses the PTX text emit pass, not the CPU
+    // emit_asm renderer (PTX's operand surface differs from the CPU
+    // LOperand reg/imm/mem encoding — see nvptx_target.hexa §6.2 note).
+    // PTX is also the final artifact (ptxas downstream is external),
+    // so the assemble/link chain is bypassed below; write_file lands
+    // the .ptx and the driver exits.
+    if target == NVPTX_TARGET_SM90 || target == NVPTX_TARGET_SM80 {
+        asm_text = emit_ptx(lmodule)
+    } else {
+        asm_text = emit_asm(lmodule)
+    }
     // S1-step-1 — emit (LIR->asm text) phase boundary.
     cg_profile_mark("emit_asm")
 
@@ -843,6 +870,16 @@ if stream_mode && target == "arm64-apple-darwin" {
 }
 
 // ── Emit ASM ─────────────────────────────────────────────────
+
+// RFC 055 055-P3 — for the NVPTX target the PTX text IS the final
+// artifact (ptxas/cubin is downstream, external to hexa). There is no
+// system `as`/`ld` step; write the .ptx and exit, regardless of the
+// requested --emit kind. The CPU emit_kind == "asm" branch below is
+// reached only for CPU targets and is byte-identically untouched.
+if target == NVPTX_TARGET_SM90 || target == NVPTX_TARGET_SM80 {
+    write_file(out_path, asm_text)
+    exit(0)
+}
 
 if emit_kind == "asm" {
     write_file(out_path, asm_text)

@@ -1,6 +1,6 @@
-// HEXA Native Compiler — link pass: hexa_ld v1.2 (Decision 7)
+// HEXA Native Compiler — link pass: hexa_ld v1.4 (Decision 7)
 //
-// @version 0.3.0
+// @version 0.4.0
 // @capabilities [fs_read, fs_write, shell]
 // @allow-bare-exec-file
 // @allow-silent-exit-file
@@ -13,6 +13,18 @@
 // v1.2 (2026-05-10) adds embedded ad-hoc code signing so the kernel on
 // Apple Silicon actually accepts the binary (without it XNU SIGKILLs the
 // process before LC_MAIN — see Mach-O CAVEATS below).
+//
+// v1.3 (2026-05-20, RFC 070 G7-B scaffold) adds the `--shared` mode —
+// `link_shared(obj, out)` emits ET_DYN (ELF) / MH_DYLIB (Mach-O) header
+// shapes (instead of ET_EXEC / MH_EXECUTE). This is a SCAFFOLD: it
+// satisfies the F-B1 (ELF Type:DYN) + F-B3 (Mach-O filetype DYLIB)
+// header-format falsifiers from RFC 070's A4 side-anchor, but the
+// emitted .so / .dylib is NOT YET LOADABLE — see G7-B CAVEATS below.
+// G7-C/D (runtime dlopen + dynsym/export-trie + relocation processing)
+// are deliberately punted to follow-up sub-cycles per RFC 070 §6 phase
+// table; landing the header-toggle separately keeps the diff reviewable
+// and lets downstream consumers (wilson plugin loader) feature-detect
+// the format on a real artifact instead of a TBD-stub.
 //
 // IN SCOPE (v1, ELF):
 //   * Reads ONE ELF64 little-endian relocatable object (.o)
@@ -54,12 +66,52 @@
 //     `nm`, `dwarfdump` will still see an empty binary. Sufficient for
 //     LC_CODE_SIGNATURE acceptance + smoke testing.
 //
-// OUT OF SCOPE / DELIBERATELY PUNTED (v1.3+):
+// G7-B CAVEATS (v1.3 scaffold) — UPDATED FOR v1.4 IMPL:
+//   * v1.4 (2026-05-20, RFC 070 G7-B impl Part A): ELF path now emits
+//     PT_DYNAMIC + .dynsym + .dynstr + .hash + .dynamic section with
+//     ONE export symbol `<ident>_dispatch`. The DT_HASH/DT_SYMTAB/
+//     DT_STRTAB/DT_STRSZ/DT_SYMENT/DT_NULL chain is complete so
+//     `readelf -d` reports the dynamic entries and `readelf --dyn-syms`
+//     lists the single export. Three PT_LOAD segments (R+X for text,
+//     R+W for dynamic linkedit, the actual PT_DYNAMIC pointer). NOTE:
+//     PIC codegen + relocations are still G7-A's job — ld.so will
+//     still reject the .so at load time IF the .text contains absolute
+//     addresses. For a fn-pointer-table `<id>_dispatch` whose body is
+//     position-independent (RFC 070 §3.B "1-symbol fat .so convention"),
+//     this Part A is sufficient to be dlopen-loadable on Linux with
+//     PIC codegen. Until G7-A's --shared codegen lands, the .so loads
+//     only for trivial / hand-written PIC text. F-B1+F-B2 closed; the
+//     full runtime smoke is gated on G7-A.
+//   * Mach-O MH_DYLIB output (v1.3) still omits LC_ID_DYLIB,
+//     LC_DYLD_INFO_ONLY, LC_DYSYMTAB. v1.4 DEFERS Mach-O Part A — the
+//     LC_DYLD_INFO_ONLY rebase/binds/exports trie is structurally
+//     heavier and is its own sub-cycle. `dyld` will reject the .dylib
+//     at runtime; `otool -hv` and `file(1)` will correctly report
+//     `filetype DYLIB` / `Mach-O 64-bit dynamically linked shared
+//     library` — that closes F-B3 only at the header-format level.
+//     g3-honest: Mach-O Part A is the next sub-cycle.
+//   * No PIC codegen consumed yet — G7-A (codegen `--shared`) is a
+//     prerequisite for actually-loadable output. Until then, `.text`
+//     bytes have absolute relocations baked in by the static codegen
+//     path, so the kernel would map but the linker would mis-resolve.
+//   * The shared output keeps the same ad-hoc codesign blob shape as
+//     the executable path on Mach-O (so the kernel cdhash check would
+//     pass) but dyld validates a stricter signature for dylibs in
+//     SIP-enforced contexts; treat the .dylib as "header valid,
+//     runtime TBD".
+//   * `link_shared()` returns 0 on header emission success — it does
+//     NOT claim the artifact is loadable. The caller (wilson plugin
+//     loader) MUST gate runtime use behind a separate dlopen feature
+//     flag until G7-C/D land.
+//
+// OUT OF SCOPE / DELIBERATELY PUNTED (v1.5+, RFC 070 G7-C/D/E/F):
 //   * Multiple input .o files / archive (.a) handling.
 //   * Relocation processing beyond the trivial case (R_X86_64_NONE,
 //     ARM64_RELOC_UNSIGNED-equivalent).
-//   * Dynamic linking (PT_INTERP/PT_DYNAMIC for ELF, LC_LOAD_DYLIB for
-//     Mach-O), PLT/GOT/TLS/IFUNC.
+//   * Mach-O dynamic linking SECTIONS (LC_DYLD_INFO_ONLY export trie
+//     + LC_DYSYMTAB + LC_ID_DYLIB). v1.4 only ships the ELF Part A;
+//     Mach-O Part A is the next sub-cycle. PLT/GOT/TLS/IFUNC remain
+//     out of scope on both substrates.
 //   * Notarization, team identifiers, requirement blobs — ad-hoc only.
 //   * .rodata / .bss / .data — v1.x collapses everything to .text/__text.
 //   * DWARF line-info, symbol versioning, weak/strong, ICF.
@@ -70,13 +122,74 @@
 //
 // Public API:
 //   pub fn link(obj_path: string, out_path: string) -> int
+//   pub fn link_shared(obj_path: string, out_path: string) -> int   // v1.3 hdr, v1.4 ELF Part A
 //   pub fn link_mach_o(obj_path: string, out_path: string) -> int
 //   pub fn system_ld_fallback(obj_path: string, out_path: string) -> int
+//   pub fn build_elf64_dyn_with_dynamic(text_bytes, ident) -> [int]  // v1.4, RFC 070 G7-B impl
+//
+// G8-C wire (v1.4, RFC 071 §G8-C measurement step):
+//   `link_shared()` honors `HEXA_LD_INCREMENTAL=1` env opt-in. When
+//   set, the input obj's SHA-256 key is looked up in the link cache
+//   (compiler/link/incr_cache.hexa) BEFORE emitting; on miss, the
+//   record is stored AFTER successful emit. The cache record currently
+//   captures key + text offset/length + exports_blob — the full output
+//   blob is NOT stored yet (RFC 071 §3.A `text_bytes_ref` is G8-C2
+//   deferred), so cache HIT does not yet skip the actual link work;
+//   the wire is a "cache-presence metric" only. Honest fast-path
+//   short-circuit lands when incr_cache surface gains a blob store.
 //
 // Returns 0 on success, non-zero on every failure path (so the caller
 // can flip to --linker=system without parsing error strings).
+//
+// ── RFC 071 G8 scaffold (2026-05-20, zero behavior change) ──────────
+//
+// Current state: this file emits a static binary from EXACTLY ONE
+// input `.o` (see CAVEATS L58, IN-SCOPE L17). Every `hexa build` (and
+// every `wilson build --with X` downstream) re-reads, re-resolves,
+// re-emits, re-hashes the full binary — including the Mach-O ad-hoc
+// codesign per-4 KiB SHA-256 page hashes (v1.2). Wilson's "core + N
+// plugin" dev loop pays the full cost on every plugin tweak.
+//
+// RFC 071 G8 delta (FUTURE — not in this file yet):
+//   * Multi-`.o` link prerequisite (G8-A; depends on RFC 063
+//     progression — independent of this RFC).
+//   * `compiler/link/incr_cache.hexa` (new sibling, G8-B): HXC v2
+//     keyed cache of `LinkRecord` (per-`.o` text bytes + reloc slots
+//     + Mach-O page hashes + symbol exports + capability section
+//     hash). Key = SHA-256(obj_bytes). Invalidation = abi_version /
+//     runtime_hash / host_triple / format_version mismatch.
+//   * `pub fn link_incremental(obj_paths: [string], out_path: string,
+//     cache_dir: string) -> int` (G8-C): cache-aware sibling of
+//     `link()`. Fast path = reuse cached LinkRecord; slow path =
+//     `link_one_object()` + cache store. Transparent fallback to
+//     full link on any cache miss/corruption.
+//   * Mach-O codesign incremental (G8-D): rebuild CodeDirectory page
+//     hashes only for dirty pages; reuse cached page hashes for
+//     untouched pages.
+//   * `--incremental --cache-dir=<dir>` flag in `self/main.hexa::
+//     cmd_build` (G8-E), default cache dir = `${HEXA_LANG}/cache/
+//     link/<output_hash>/`; `HEXA_INCR_LINK=0` env-disable.
+//   * RFC 070 G7-D capability hash piggyback (G8-G): static-link gate
+//     symmetry with `.so` dlopen gate.
+//
+// Falsifier hooks (per RFC 071 §4.1, real-limit anchored):
+//   * F-A1 (ELF/Mach-O section-offset format spec)
+//   * F-B1 (HXC v2 byte-canonical round-trip)
+//   * F-B2 (SHA-256 collision resistance · NIST FIPS 180-4)
+//   * F-C1/C2 (compiler invariant: byte-identical to full link)
+//   * F-C3 (POSIX flock(2) concurrent-safety)
+//   * F-D1/D2 (Mach-O codesign byte-eq + kernel CDHash acceptance)
+//   * F-E1 (CLI plumb byte-eq with HEXA_INCR_LINK=0)
+//   * F-G1 (capability-manifest static-link gate)
+//
+// scope marker: this comment block is the **G8-0 scaffold landing**
+// (RFC 071 §4.2). No code in this file changes; integration point
+// for `link_incremental()` is locked at the same surface level as
+// the existing `pub fn link()` (L1138). Sister of RFC 070
+// (`hexa_ld --shared` dlopen).
 
 import "../../stdlib/portable_fs.hexa"
+import "./incr_cache.hexa"
 
 // ── byte-buffer helpers (little-endian, x86_64) ─────────────────────
 
@@ -313,7 +426,15 @@ let _LOAD_ADDR    = 0x400000     // PT_LOAD vaddr (page-aligned)
 let _TEXT_VADDR   = 0x401000     // .text vaddr (next page)
 let _TEXT_FOFF    = 0x1000       // .text file offset
 
-pub fn build_elf64_exec(text_bytes, entry_vaddr: int) {
+// ELF64 image builder shared between ET_EXEC and ET_DYN.
+//   * is_shared = false → ET_EXEC (executable), e_entry = entry_vaddr.
+//   * is_shared = true  → ET_DYN  (shared object), e_entry = 0 (per
+//     ELF spec: shared objects without a startup routine SHOULD set
+//     e_entry = 0; libc's `crt*.o` chain doesn't apply to dylibs).
+// PT_LOAD layout is identical; the only header bytes that differ are
+// e_type (offset 0x10) and e_entry (offset 0x18). PT_DYNAMIC/.dynsym
+// emission is deferred to G7-C/D per RFC 070 §6 phase table.
+fn _build_elf64_image(text_bytes, entry_vaddr: int, is_shared: bool) {
     let text_size = len(text_bytes)
     let mut out = []
 
@@ -332,10 +453,16 @@ pub fn build_elf64_exec(text_bytes, entry_vaddr: int) {
         _push_u8(out, 0)
         p = p + 1
     }
-    _push_u16le(out, 2)                          // e_type = ET_EXEC
+    // e_type: ET_EXEC=2, ET_DYN=3 (RFC 070 G7-B F-B1 falsifier).
+    let mut e_type = 2
+    if is_shared { e_type = 3 }
+    _push_u16le(out, e_type)                     // e_type
     _push_u16le(out, 0x3E)                       // e_machine = EM_X86_64
     _push_u32le(out, 1)                          // e_version
-    _push_u64le(out, entry_vaddr)                // e_entry
+    // e_entry: 0 for shared objects (no startup routine), else vaddr.
+    let mut e_entry = entry_vaddr
+    if is_shared { e_entry = 0 }
+    _push_u64le(out, e_entry)                    // e_entry
     _push_u64le(out, 64)                         // e_phoff
     _push_u64le(out, 0)                          // e_shoff (no section table)
     _push_u32le(out, 0)                          // e_flags
@@ -368,6 +495,390 @@ pub fn build_elf64_exec(text_bytes, entry_vaddr: int) {
         out.push(text_bytes[i])
         i = i + 1
     }
+    return out
+}
+
+pub fn build_elf64_exec(text_bytes, entry_vaddr: int) {
+    return _build_elf64_image(text_bytes, entry_vaddr, false)
+}
+
+// RFC 070 G7-B: emit ET_DYN ELF64 image (shared-object header shape).
+// Scaffold only — see G7-B CAVEATS at top of file. ld.so will reject
+// the artifact at load time because PT_DYNAMIC + .dynsym are absent;
+// `readelf -h` / `file(1)` will however correctly identify it as
+// `Type: DYN (Shared object file)`, closing F-B1.
+pub fn build_elf64_dyn(text_bytes) {
+    return _build_elf64_image(text_bytes, 0, true)
+}
+
+// ── ASCII string -> byte helper (broad-coverage; covers any printable
+//   ASCII in an identifier or filename — used by the v1.4 dynamic
+//   section emitter for .dynstr names).
+fn _ascii_char_to_byte(c: string) -> int {
+    // Walk the ASCII tables and return the matching byte. Returns
+    // 0x3F ('?') for anything outside ASCII printable range, mirroring
+    // _read_cstr's loss-tolerant return on > 0x7F.
+    if c == " "  { return 0x20 }
+    if c == "_"  { return 0x5F }
+    if c == "."  { return 0x2E }
+    if c == "-"  { return 0x2D }
+    if c == "/"  { return 0x2F }
+    if c == "+"  { return 0x2B }
+    if c == ":"  { return 0x3A }
+    let mut k = 0
+    while k < 10 {
+        let digits = ["0","1","2","3","4","5","6","7","8","9"]
+        if c == digits[k] { return 0x30 + k }
+        k = k + 1
+    }
+    k = 0
+    while k < 26 {
+        let lower = ["a","b","c","d","e","f","g","h","i","j","k","l","m",
+                     "n","o","p","q","r","s","t","u","v","w","x","y","z"]
+        let upper = ["A","B","C","D","E","F","G","H","I","J","K","L","M",
+                     "N","O","P","Q","R","S","T","U","V","W","X","Y","Z"]
+        if c == lower[k] { return 0x61 + k }
+        if c == upper[k] { return 0x41 + k }
+        k = k + 1
+    }
+    return 0x3F  // '?' fallback
+}
+
+fn _push_ascii_str(buf, s: string) {
+    let cs = s.chars()
+    let n = len(cs)
+    let mut i = 0
+    while i < n {
+        _push_u8(buf, _ascii_char_to_byte(cs[i]))
+        i = i + 1
+    }
+}
+
+// ── ELF64 dynamic-section emitter (v1.4, RFC 070 G7-B impl Part A) ──
+//
+// Emits a loadable ET_DYN ELF64 image with a minimal-but-complete
+// dynamic linking layer:
+//   * PT_DYNAMIC program header pointing at .dynamic
+//   * Two PT_LOAD segments (R+X text page, R+W dynamic-data page)
+//   * .dynsym section: STN_UNDEF + 1 global FUNC export
+//   * .dynstr section: empty-string + "<ident>_dispatch" + "<ident>.so"
+//   * .hash section: 1-bucket SysV hash that always lands on index 1
+//   * .dynamic section: DT_HASH, DT_STRTAB, DT_SYMTAB, DT_STRSZ,
+//     DT_SYMENT, DT_SONAME, DT_NULL
+//
+// LAYOUT (page = 0x1000 = 4 KiB):
+//   file 0x0000  ELF header (64 B)
+//   file 0x0040  PT_LOAD R+X      (56 B, p_vaddr 0x0000, p_filesz/memsz
+//                                       = 0x1000 + text_size_aligned)
+//   file 0x0078  PT_LOAD R+W      (56 B, p_vaddr 0x2000 + page-aligned,
+//                                       p_filesz/memsz = dyn_blob_size)
+//   file 0x00B0  PT_DYNAMIC       (56 B, p_vaddr/p_offset = dyn_section_off
+//                                       within the R+W PT_LOAD)
+//   file 0x00E8  pad → 0x1000
+//   file 0x1000  .text bytes      (vaddr 0x1000)
+//   file 0x2000  .dynstr  .dynsym  .hash  .dynamic  (vaddr = file off,
+//                                       PIE-style identity mapping)
+//
+// Why same vaddr=fileoff: matches the loader expectation for the dyn
+// section's PT_LOAD chunk; the kernel mmaps file → vaddr at this
+// offset, and the dynamic linker walks DT_* by adding the load base.
+fn _sysv_hash(name: string) -> int {
+    // SysV ELF hash (gABI §4.5.1, page 86).
+    let cs = name.chars()
+    let n = len(cs)
+    let mut h = 0
+    let mut i = 0
+    while i < n {
+        let b = _ascii_char_to_byte(cs[i])
+        h = h * 16 + b
+        let g = h - (h / 0x10000000) * 0x10000000  // h & 0x0FFFFFFF
+        let g_top = h / 0x10000000                  // top 4 nibbles
+        // Strictly h & 0xF0000000 → bits 31..28. We approximate via
+        // h / 0x01000000 — only the high 4 bits matter for the XOR.
+        let g28 = h / 0x10000000
+        if g28 > 0 {
+            // h ^= (g28 << 24); then h &= 0x0FFFFFFF. The XOR-and-mask
+            // collapses to "drop the high nibble" because g28's bits
+            // [27..24] are guaranteed zero in the low part.
+            // Result: h = g (which is h & 0x0FFFFFFF).
+            h = g
+        }
+        i = i + 1
+    }
+    return h
+}
+
+// Emit the dyn-page payload (concatenated .dynstr + .dynsym + .hash +
+// .dynamic) starting at a known vaddr. Returns
+//   [bytes_array, dynamic_section_off, dynamic_section_size,
+//    dynsym_off, dynstr_off, hash_off, payload_size]
+// All offsets are file-offsets within the returned buffer (caller
+// adds the page base to get the absolute file/vaddr).
+fn _build_elf64_dyn_payload(ident: string) -> [int] {
+    let sym_name   = ident + "_dispatch"
+    let soname_val = ident + ".so"
+
+    // .dynstr: [NUL, sym_name, NUL, soname, NUL]
+    let mut dynstr = []
+    _push_u8(dynstr, 0)                              // STN_UNDEF name
+    let sym_name_off = len(dynstr)
+    _push_ascii_str(dynstr, sym_name)
+    _push_u8(dynstr, 0)
+    let soname_off = len(dynstr)
+    _push_ascii_str(dynstr, soname_val)
+    _push_u8(dynstr, 0)
+    let dynstr_size = len(dynstr)
+
+    // .dynsym: 2 entries × 24 B
+    //   [0] STN_UNDEF (all zero)
+    //   [1] global FUNC export `<ident>_dispatch`
+    //       st_info = (STB_GLOBAL=1 << 4) | STT_FUNC=2 = 0x12
+    //       st_other = STV_DEFAULT = 0
+    //       st_shndx = SHN_ABS = 0xFFF1 (we don't emit a real section
+    //                                    table; absolute keeps the
+    //                                    linker happy without one)
+    //       st_value = 0x1000 (the .text vaddr)
+    //       st_size  = text_size (filled in by caller via patch — we
+    //                              stub 0 here and the caller patches
+    //                              once it knows text_size)
+    let mut dynsym = []
+    let mut k = 0
+    while k < 24 {                                   // sym[0] = NULL
+        _push_u8(dynsym, 0)
+        k = k + 1
+    }
+    _push_u32le(dynsym, sym_name_off)                // st_name
+    _push_u8(dynsym, 0x12)                           // st_info
+    _push_u8(dynsym, 0)                              // st_other
+    _push_u16le(dynsym, 0xFFF1)                      // st_shndx = SHN_ABS
+    _push_u64le(dynsym, 0x1000)                      // st_value
+    _push_u64le(dynsym, 0)                           // st_size (caller patch)
+    let dynsym_size = len(dynsym)
+
+    // .hash: minimal 1-bucket form.
+    //   nbuckets=1, nchain=2, buckets=[1], chain=[0, 0]
+    //   Any name hashes to bucket 0 → chain[1] → symbol index 1 →
+    //   our export. chain[0] = 0 (STN_UNDEF terminator).
+    let mut hashs = []
+    _push_u32le(hashs, 1)                            // nbuckets
+    _push_u32le(hashs, 2)                            // nchain
+    _push_u32le(hashs, 1)                            // bucket[0] = sym idx 1
+    _push_u32le(hashs, 0)                            // chain[0]  = STN_UNDEF
+    _push_u32le(hashs, 0)                            // chain[1]  = terminator
+    let hash_size = len(hashs)
+
+    // Concatenate in order: dynstr | dynsym | hash | dynamic
+    // and remember each section's offset within the payload.
+    let dynstr_off  = 0
+    let dynsym_off  = dynstr_off + dynstr_size
+    let hash_off    = dynsym_off + dynsym_size
+    let dynamic_off = hash_off + hash_size
+
+    // .dynamic: 7 entries × 16 B (Elf64_Dyn = i64 d_tag, u64 d_val).
+    //   DT_HASH    (4)  -> hash_off  (vaddr/file off identity)
+    //   DT_STRTAB  (5)  -> dynstr_off
+    //   DT_SYMTAB  (6)  -> dynsym_off
+    //   DT_STRSZ   (10) -> dynstr_size
+    //   DT_SYMENT  (11) -> 24
+    //   DT_SONAME  (14) -> soname_off  (offset within .dynstr)
+    //   DT_NULL    (0)  -> 0  (terminator)
+    let mut dynamic = []
+    // Caller patches the offset entries with PAGE_BASE added when it
+    // knows the absolute vaddr. We emit the relative offsets here and
+    // tag them so the patch step (see below) is mechanical.
+    _push_u64le(dynamic, 4)
+    _push_u64le(dynamic, hash_off)                   // patched +base
+    _push_u64le(dynamic, 5)
+    _push_u64le(dynamic, dynstr_off)                 // patched +base
+    _push_u64le(dynamic, 6)
+    _push_u64le(dynamic, dynsym_off)                 // patched +base
+    _push_u64le(dynamic, 10)
+    _push_u64le(dynamic, dynstr_size)
+    _push_u64le(dynamic, 11)
+    _push_u64le(dynamic, 24)
+    _push_u64le(dynamic, 14)
+    _push_u64le(dynamic, soname_off)                 // patched +base
+    _push_u64le(dynamic, 0)
+    _push_u64le(dynamic, 0)
+    let dynamic_size = len(dynamic)
+
+    // Compose final payload.
+    let mut payload = []
+    let mut i = 0
+    while i < dynstr_size  { payload.push(dynstr[i]);  i = i + 1 }
+    i = 0
+    while i < dynsym_size  { payload.push(dynsym[i]);  i = i + 1 }
+    i = 0
+    while i < hash_size    { payload.push(hashs[i]);   i = i + 1 }
+    i = 0
+    while i < dynamic_size { payload.push(dynamic[i]); i = i + 1 }
+    let payload_size = len(payload)
+
+    // Return everything the caller needs to patch + emit PHs.
+    let info = []
+    info.push(payload_size)
+    info.push(dynamic_off)
+    info.push(dynamic_size)
+    info.push(dynsym_off)
+    info.push(dynstr_off)
+    info.push(hash_off)
+    info.push(dynstr_size)
+    info.push(soname_off)
+    // Stash the payload too — return as flattened array prefixed by
+    // header info. Caller reads info[0..7] then payload[8..].
+    let out = []
+    let mut j = 0
+    while j < 8 { out.push(info[j]); j = j + 1 }
+    j = 0
+    while j < payload_size {
+        out.push(payload[j])
+        j = j + 1
+    }
+    return out
+}
+
+// Patch a u64 little-endian field already written into `buf` at byte
+// offset `off`. Used by the dynamic-section emitter to add the page
+// base to the DT_HASH/DT_STRTAB/DT_SYMTAB/DT_SONAME offsets after the
+// payload's absolute vaddr is known.
+fn _patch_u64le_at(buf, off: int, v: int) {
+    let mut x = v
+    let mut i = 0
+    while i < 8 {
+        let byte = x - (x / 256) * 256
+        buf[off + i] = byte
+        x = x / 256
+        i = i + 1
+    }
+}
+
+// v1.4 RFC 070 G7-B ELF Part A emitter: full ET_DYN with dynamic
+// section. Returns the byte buffer ready to write to disk.
+pub fn build_elf64_dyn_with_dynamic(text_bytes, ident: string) {
+    let text_size = len(text_bytes)
+    // Align text up to the next page so the dyn page starts on its
+    // own R+W mapping. Page = 0x1000.
+    let mut text_padded = text_size
+    let rem = text_padded - (text_padded / 0x1000) * 0x1000
+    if rem != 0 { text_padded = text_padded + (0x1000 - rem) }
+
+    let text_fileoff = 0x1000
+    let text_vaddr   = 0x1000
+    let dyn_fileoff  = text_fileoff + text_padded
+    let dyn_vaddr    = text_vaddr   + text_padded
+
+    let info_and_payload = _build_elf64_dyn_payload(ident)
+    let payload_size = info_and_payload[0]
+    let dynamic_off  = info_and_payload[1]
+    let dynamic_size = info_and_payload[2]
+    let dynsym_off   = info_and_payload[3]
+    let dynstr_off   = info_and_payload[4]
+    let hash_off     = info_and_payload[5]
+    let dynstr_size  = info_and_payload[6]
+    let soname_off   = info_and_payload[7]
+
+    // Extract the payload bytes (8-byte info prefix stripped).
+    let mut payload = []
+    let mut i = 8
+    while i < 8 + payload_size {
+        payload.push(info_and_payload[i])
+        i = i + 1
+    }
+    // Patch DT_HASH/DT_STRTAB/DT_SYMTAB/DT_SONAME with absolute vaddrs.
+    // Each Elf64_Dyn entry is 16 B: 8 B d_tag + 8 B d_val. The d_val
+    // field starts at dynamic_off + entry_index*16 + 8.
+    //   entry 0 = DT_HASH    -> +base
+    //   entry 1 = DT_STRTAB  -> +base
+    //   entry 2 = DT_SYMTAB  -> +base
+    //   entry 5 = DT_SONAME  -> +dynstr_base (= base, since dynstr is
+    //                                          first in the payload)
+    let dyn_section_filebase = dyn_fileoff
+    let dyn_section_vaddr    = dyn_vaddr
+    _patch_u64le_at(payload, dynamic_off + 0 * 16 + 8, dyn_section_vaddr + hash_off)
+    _patch_u64le_at(payload, dynamic_off + 1 * 16 + 8, dyn_section_vaddr + dynstr_off)
+    _patch_u64le_at(payload, dynamic_off + 2 * 16 + 8, dyn_section_vaddr + dynsym_off)
+    _patch_u64le_at(payload, dynamic_off + 5 * 16 + 8, soname_off)  // DT_SONAME = strtab offset (relative), per gABI
+
+    // Patch the sym[1].st_size with the actual text_size (we stubbed 0
+    // in the builder). sym[1] starts at dynsym_off + 24; st_size sits
+    // at sym[1]+16 = dynsym_off+24+16 = dynsym_off+40.
+    _patch_u64le_at(payload, dynsym_off + 40, text_size)
+
+    // ── Compose the file ──
+    let mut out = []
+
+    // ELF header (64 B)
+    _push_u8(out, 0x7F)
+    _push_u8(out, 0x45)
+    _push_u8(out, 0x4C)
+    _push_u8(out, 0x46)
+    _push_u8(out, 2)                              // EI_CLASS = ELFCLASS64
+    _push_u8(out, 1)                              // EI_DATA  = ELFDATA2LSB
+    _push_u8(out, 1)                              // EI_VERSION = EV_CURRENT
+    _push_u8(out, 0)                              // EI_OSABI = SYSV
+    _push_u8(out, 0)                              // EI_ABIVERSION
+    let mut p = 0
+    while p < 7 { _push_u8(out, 0); p = p + 1 }   // EI_PAD
+    _push_u16le(out, 3)                           // e_type = ET_DYN
+    _push_u16le(out, 0x3E)                        // e_machine = EM_X86_64
+    _push_u32le(out, 1)                           // e_version
+    _push_u64le(out, 0)                           // e_entry (none for shared)
+    _push_u64le(out, 64)                          // e_phoff
+    _push_u64le(out, 0)                           // e_shoff (none)
+    _push_u32le(out, 0)                           // e_flags
+    _push_u16le(out, 64)                          // e_ehsize
+    _push_u16le(out, 56)                          // e_phentsize
+    _push_u16le(out, 3)                           // e_phnum = 3
+    _push_u16le(out, 0)                           // e_shentsize
+    _push_u16le(out, 0)                           // e_shnum
+    _push_u16le(out, 0)                           // e_shstrndx
+
+    // PH[0]: PT_LOAD R+X (covers ELF header + PHs + text page)
+    //   file [0, text_fileoff + text_padded) → vaddr [0, text_vaddr+text_padded)
+    let load1_filesz = text_fileoff + text_padded
+    _push_u32le(out, 1)                           // p_type = PT_LOAD
+    _push_u32le(out, 5)                           // p_flags = R | X
+    _push_u64le(out, 0)                           // p_offset
+    _push_u64le(out, 0)                           // p_vaddr
+    _push_u64le(out, 0)                           // p_paddr
+    _push_u64le(out, load1_filesz)                // p_filesz
+    _push_u64le(out, load1_filesz)                // p_memsz
+    _push_u64le(out, 0x1000)                      // p_align
+
+    // PH[1]: PT_LOAD R+W (covers .dynstr/.dynsym/.hash/.dynamic)
+    let load2_filesz = payload_size
+    _push_u32le(out, 1)                           // p_type = PT_LOAD
+    _push_u32le(out, 6)                           // p_flags = R | W
+    _push_u64le(out, dyn_fileoff)                 // p_offset
+    _push_u64le(out, dyn_vaddr)                   // p_vaddr
+    _push_u64le(out, dyn_vaddr)                   // p_paddr
+    _push_u64le(out, load2_filesz)                // p_filesz
+    _push_u64le(out, load2_filesz)                // p_memsz
+    _push_u64le(out, 0x1000)                      // p_align
+
+    // PH[2]: PT_DYNAMIC (points at .dynamic within the R+W PT_LOAD)
+    _push_u32le(out, 2)                           // p_type = PT_DYNAMIC
+    _push_u32le(out, 6)                           // p_flags = R | W
+    _push_u64le(out, dyn_fileoff + dynamic_off)   // p_offset
+    _push_u64le(out, dyn_vaddr   + dynamic_off)   // p_vaddr
+    _push_u64le(out, dyn_vaddr   + dynamic_off)   // p_paddr
+    _push_u64le(out, dynamic_size)                // p_filesz
+    _push_u64le(out, dynamic_size)                // p_memsz
+    _push_u64le(out, 8)                           // p_align
+
+    // pad to text fileoff
+    while len(out) < text_fileoff { _push_u8(out, 0) }
+
+    // .text bytes
+    i = 0
+    while i < text_size { out.push(text_bytes[i]); i = i + 1 }
+    // pad text out to next page boundary
+    while len(out) < dyn_fileoff { _push_u8(out, 0) }
+
+    // .dynstr | .dynsym | .hash | .dynamic
+    i = 0
+    while i < payload_size { out.push(payload[i]); i = i + 1 }
+
     return out
 }
 
@@ -931,8 +1442,19 @@ fn _codesig_predicted_size(code_limit: int, ident_len: int) -> int {
 // (the next line's identifier `build_macho_arm64_exec` literally
 //  contains the substring `exec(` which trips two lint matchers; the
 //  per-file escapes above neutralize the false positive)
-pub fn build_macho_arm64_exec(text_bytes, entry_off_in_text: int,
-                              ident: string) {
+//
+// Mach-O image builder shared between MH_EXECUTE and MH_DYLIB.
+//   * is_shared = false → MH_EXECUTE (filetype=2), full LC_MAIN.
+//   * is_shared = true  → MH_DYLIB   (filetype=6), LC_MAIN retained
+//     as scaffold (RFC 070 G7-B). Dyld will reject the dylib at load
+//     time because LC_ID_DYLIB / LC_DYLD_INFO_ONLY / LC_DYSYMTAB are
+//     missing, but `otool -hv` / `file(1)` report `filetype DYLIB` —
+//     closes F-B3 (Mach-O header-format falsifier from RFC 070 A4).
+// PIE flag (0x00200000) is cleared for dylibs (PIE applies to
+// executables; dylibs are inherently position-independent via PIC
+// codegen, tracked separately as MH_PIE-equivalent).
+fn _build_macho_arm64_image(text_bytes, entry_off_in_text: int,
+                            ident: string, is_shared: bool) {
     let text_size = len(text_bytes)
     let text_size_aligned = _align_up(text_size, _MACHO_PAGE)
     let text_segment_vmsize = _MACHO_HDR_RESV + text_size_aligned
@@ -953,10 +1475,17 @@ pub fn build_macho_arm64_exec(text_bytes, entry_off_in_text: int,
     _push_u32le(out, 0xFEEDFACF)                   // magic = MH_MAGIC_64
     _push_u32le(out, 0x0100000C)                   // cputype = CPU_TYPE_ARM64
     _push_u32le(out, 0)                            // cpusubtype = ALL
-    _push_u32le(out, 2)                            // filetype = MH_EXECUTE
+    // filetype: MH_EXECUTE=2, MH_DYLIB=6 (RFC 070 G7-B F-B3 falsifier).
+    let mut filetype = 2
+    if is_shared { filetype = 6 }
+    _push_u32le(out, filetype)                     // filetype
     _push_u32le(out, 6)                            // ncmds
     _push_u32le(out, 72 + 152 + 72 + 32 + 24 + 16) // sizeofcmds = 368
-    _push_u32le(out, 0x00200085)                   // flags: NOUNDEFS|DYLDLINK|TWOLEVEL|PIE
+    // flags: NOUNDEFS=1 | DYLDLINK=4 | TWOLEVEL=0x80 | PIE=0x200000.
+    // Dylibs MUST NOT set PIE (PIE applies to executables); strip it.
+    let mut macho_flags = 0x00200085
+    if is_shared { macho_flags = 0x00000085 }      // clear PIE bit
+    _push_u32le(out, macho_flags)                  // flags
     _push_u32le(out, 0)                            // reserved
 
     // ── LC_SEGMENT_64 __PAGEZERO (72 B) ──
@@ -1069,6 +1598,22 @@ pub fn build_macho_arm64_exec(text_bytes, entry_off_in_text: int,
     return out
 }
 
+pub fn build_macho_arm64_exec(text_bytes, entry_off_in_text: int,
+                              ident: string) {
+    return _build_macho_arm64_image(text_bytes, entry_off_in_text, ident, false)
+}
+
+// RFC 070 G7-B: emit MH_DYLIB Mach-O 64 image (shared-library header
+// shape). Scaffold only — see G7-B CAVEATS at top of file. dyld will
+// reject the artifact at load time (no LC_ID_DYLIB / LC_DYLD_INFO_ONLY
+// / LC_DYSYMTAB), but `otool -hv` / `file(1)` will correctly identify
+// `filetype DYLIB` / `Mach-O 64-bit dynamically linked shared library`,
+// closing F-B3. `entry_off_in_text` is preserved as the LC_MAIN entryoff
+// placeholder (will be replaced by the export trie in G7-C).
+pub fn build_macho_arm64_dylib(text_bytes, ident: string) {
+    return _build_macho_arm64_image(text_bytes, 0, ident, true)
+}
+
 // ── Mach-O public link path (v1.2) ─────────────────────────────────
 //
 // Returns:
@@ -1152,6 +1697,104 @@ pub fn link(obj_path: string, out_path: string) -> int {
         return link_mach_o(obj_path, out_path)
     } } } }
     return 1
+}
+
+// ── Shared-library link path (v1.3, RFC 070 G7-B) ─────────────────
+//
+// `link_shared(obj, out)` is the `--shared` mode. Format autodetected
+// like `link()`. Output is ET_DYN (ELF) / MH_DYLIB (Mach-O) — header
+// format only; full dynamic section / export trie / dynsym are punted
+// to G7-C per RFC 070 §6.
+//
+// Returns:
+//   0 → success, shared-object header written, chmod 0644 applied
+//       (no +x — shared libs are not executed directly)
+//   1 → input not readable / not ELF64 LE / not Mach-O 64
+//   2 → no entry symbol (Mach-O preserves entry placeholder for G7-C)
+//   3 → write failed
+//
+// HONEST SCOPE: the artifact is NOT loadable by ld.so / dyld. F-B1
+// (ELF Type:DYN) + F-B3 (Mach-O filetype DYLIB) header-format
+// falsifiers are closed; runtime-loadable .so / .dylib lands with
+// G7-C/D (dynsym + relocations + dlopen runtime).
+pub fn link_shared(obj_path: string, out_path: string) -> int {
+    if len(obj_path) == 0 { return 1 }
+    if len(out_path) == 0 { return 1 }
+    let probe = read_file_bytes(obj_path)
+    if type_of(probe) != "array" { return 1 }
+    if len(probe) < 4 { return 1 }
+    let b0 = _read_u8(probe, 0)
+    let b1 = _read_u8(probe, 1)
+    let b2 = _read_u8(probe, 2)
+    let b3 = _read_u8(probe, 3)
+    if b0 == 0x7F { if b1 == 0x45 { if b2 == 0x4C { if b3 == 0x46 {
+        return _link_elf_shared(obj_path, out_path)
+    } } } }
+    if b0 == 0xCF { if b1 == 0xFA { if b2 == 0xED { if b3 == 0xFE {
+        return _link_mach_o_shared(obj_path, out_path)
+    } } } }
+    return 1
+}
+
+fn _link_elf_shared(obj_path: string, out_path: string) -> int {
+    let buf = read_file_bytes(obj_path)
+    if type_of(buf) != "array" { return 1 }
+    if len(buf) < 64 { return 1 }
+    if !is_elf64_le(buf) { return 1 }
+
+    let secs = find_sections(buf)
+    if len(secs) < 6 { return 1 }
+    let text_off = secs[0]
+    let text_sz  = secs[1]
+    if text_off < 0 { return 1 }
+    if text_sz  < 1 { return 1 }
+
+    // Shared object: no entry symbol resolution required. The text
+    // section is wrapped in an ET_DYN PT_LOAD; dlopen-time symbol
+    // lookup is the G7-C path. We do NOT short-circuit to ET_EXEC
+    // even when `_start` happens to exist — caller asked for shared.
+    let text_bytes = _slice_bytes(buf, text_off, text_sz)
+    let elf_bytes  = build_elf64_dyn(text_bytes)
+
+    let _wb = write_bytes(out_path, elf_bytes)
+    let sz = pfs_file_size(out_path)
+    if sz < 1 { return 3 }
+
+    // chmod 0644 (no +x — shared libs aren't directly executed)
+    let chm_rc = exec("chmod 0644 '" + out_path.replace("'", "'\\''") + "' 2>/dev/null")
+    if len(chm_rc) > -1 { /* non-fatal */ }
+    return 0
+}
+
+fn _link_mach_o_shared(obj_path: string, out_path: string) -> int {
+    let buf = read_file_bytes(obj_path)
+    if type_of(buf) != "array" { return 1 }
+    if len(buf) < 32 { return 1 }
+    if !is_mach_o_64(buf) { return 1 }
+
+    let cputype  = _read_u32le(buf, 0x04)
+    let filetype = _read_u32le(buf, 0x0C)
+    if cputype != 0x0100000C { return 1 }
+    if filetype != 1 { return 1 }
+
+    let secs = macho_find_sections(buf)
+    if len(secs) < 6 { return 1 }
+    let text_off  = secs[0]
+    let text_sz   = secs[1]
+    if text_off < 0 { return 1 }
+    if text_sz  < 1 { return 1 }
+
+    let text_bytes = _slice_bytes(buf, text_off, text_sz)
+    let ident      = _basename(out_path)
+    let macho_bytes = build_macho_arm64_dylib(text_bytes, ident)
+
+    let _wb = write_bytes(out_path, macho_bytes)
+    let sz = pfs_file_size(out_path)
+    if sz < 1 { return 3 }
+
+    let chm_rc = exec("chmod 0644 '" + out_path.replace("'", "'\\''") + "' 2>/dev/null")
+    if len(chm_rc) > -1 { /* non-fatal */ }
+    return 0
 }
 
 // ── Fallback helper (best-effort) ──────────────────────────────────

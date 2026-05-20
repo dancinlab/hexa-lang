@@ -15,5 +15,3 @@ fn main() {
     let _ = read_stdin()
     println("{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\"}}")
 }
-
-main()

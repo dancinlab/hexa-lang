@@ -1,23 +1,40 @@
-# lif_brian2.py — single LIF spike-rate producer for `brain + analyze`
-# (demiurge κ-40 / D62 cohort producer, D61 hexa-lang stdlib SSOT).
+# lif_brian2.py — ①b brain adapter (demiurge design.md D72 2-layer).
+#
+# THIN adapter over the domain-agnostic ①a LIF kernel
+# `stdlib/kernels/neural/lif_kernel.py`. The kernel owns the brian2
+# LIF integration + ISI/CV statistics; this adapter owns ONLY the
+# brain-domain model — the textbook leaky-integrate-and-fire neuron
+# parameter values — and the producer I/O (meta.json / spikes.json /
+# the BRAIN_LIF_RESULT stderr line) that demiurge consumes.
 #
 # SSOT LOCATION (D61 / D17 generalized — hexa-lang owns ALL reusable
 # producers; demiurge is a *pointer* consumer): this script lives in
 # `~/core/hexa-lang/stdlib/brain/`. demiurge's BrainAnalyzeProducer.swift
-# spawns it but never copies it. cockpit/scripts/*.py is FORBIDDEN by
-# AGENTS.tape `g_demiurge_pointer_only` — only the demiurge worktree
-# would violate ownership by carrying its own copy.
+# spawns it BY ABSOLUTE PATH but never copies it. cockpit/scripts/*.py
+# is FORBIDDEN by AGENTS.tape `g_demiurge_pointer_only`. The D72
+# restructure keeps this script at the same path/name, so the Swift
+# Producer needs NO change.
 #
 # Invoked by demiurge Swift's BrainAnalyzeProducer via:
 #   /usr/bin/python3 ~/core/hexa-lang/stdlib/brain/lif_brian2.py <output_dir>
 #
+# 2-layer (ABSORPTION.md ①):
+#   ①a kernel  — `stdlib/kernels/neural/lif_kernel.py`. Domain-agnostic
+#                LIF integration. brian2 is an EXTERNAL library; the
+#                kernel is a `.py` SUBSTRATE — a hexa-native LIF
+#                integrator is the future porting target (g3 /
+#                hexa-first principle). When it lands, absorbed=true
+#                flips in the kernel — once.
+#   ①b adapter — THIS FILE. Owns the textbook neuron parameters +
+#                producer I/O.
+#
 # What it does (HONEST scope — single, well-known textbook model):
 #   1. Simulates ONE leaky integrate-and-fire (LIF) neuron with constant
-#      DC drive for 1 second of biological time, using brian2 2.6.0 as
-#      the IEEE-754 integrator.
+#      DC drive for 1 second of biological time, via the ①a LIF kernel
+#      (brian2 2.6.0 as the IEEE-754 integrator).
 #         tau_m = 10 ms
 #         dv/dt = (I - v) / tau     (dimensionless, v_thr = 1, v_reset = 0)
-#         I = 2.0  (well above threshold → tonic firing ~140 Hz)
+#         I = 2.0  (well above threshold -> tonic firing ~140 Hz)
 #         method = 'exact' (analytic for linear ODE — no integration error)
 #   2. Counts spikes via brian2's SpikeMonitor. Headline measurement =
 #      firing_rate_hz = spike_count / sim_time_s.
@@ -40,11 +57,18 @@
 #     measurement of any biological brain signal. domains/brain.md §2
 #     proprietary gap (Sim4Life MDDT) is untouched.
 
-import hashlib
 import json
 import os
-import subprocess
 import sys
+
+# --- Locate the ①a LIF kernel relative to this adapter's own file
+# (stdlib/brain/ -> stdlib/kernels/neural/). The Swift spawn sets an
+# arbitrary cwd, so a path relative to __file__ is the only robust
+# anchor — same convention as stdlib/grid/networkx_basics.py.
+_KERNEL_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "kernels", "neural")
+if _KERNEL_DIR not in sys.path:
+    sys.path.insert(0, _KERNEL_DIR)
 
 
 GEOMETRY_ID = "lif_brian2_v1"
@@ -64,93 +88,17 @@ I : 1
 """
 
 
-def equation_hash() -> str:
-    """SHA-256 of the equation + parameter tuple (truncated 16 hex)."""
-    blob = (EQS
-            + f"|tau_ms={TAU_MS}"
-            + f"|v_thr={V_THR}"
-            + f"|v_reset={V_RESET}"
-            + f"|I={I_DRIVE}"
-            + f"|sim_s={SIM_TIME_S}"
-            + f"|method={METHOD}")
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
-
-
-def brian2_version_safe() -> str:
-    try:
-        import brian2
-        return getattr(brian2, "__version__", "unknown")
-    except Exception:
-        return "unavailable"
-
-
-def run_lif(output_dir: str) -> dict:
-    """Run the LIF simulation and return the measurements dict + raw
-    spike-time list (truncated). Honest g3: brian2 IS the instrument,
-    and the values are real numerical outputs of the integrator — but
-    the *model* is textbook, not fitted to any neuron.
-    """
-    try:
-        import brian2 as b2
-    except ImportError as exc:
-        return {
-            "ok": False,
-            "error": f"brian2_import: {exc}",
-            "measurements": None,
-            "spike_times_s": None,
-        }
-
-    b2.start_scope()
-    tau = TAU_MS * b2.ms
-    G = b2.NeuronGroup(1, EQS, threshold=f"v > {V_THR}",
-                       reset=f"v = {V_RESET}", method=METHOD,
-                       namespace={"tau": tau})
-    G.I = I_DRIVE
-    spikes = b2.SpikeMonitor(G)
-
-    try:
-        b2.run(SIM_TIME_S * b2.second)
-    except Exception as exc:
-        return {
-            "ok": False,
-            "error": f"brian2_run: {exc}",
-            "measurements": None,
-            "spike_times_s": None,
-        }
-
-    n = int(spikes.num_spikes)
-    times = [float(t / b2.second) for t in spikes.t]
-
-    # Mean ISI + CV of ISI. Tonic constant-drive LIF → CV ≈ 0
-    # (deterministic). Surfaced as a sanity gate downstream.
-    mean_isi = None
-    cv_isi = None
-    if len(times) >= 2:
-        isis = [times[i + 1] - times[i] for i in range(len(times) - 1)]
-        mean_isi = sum(isis) / len(isis)
-        if mean_isi > 0:
-            var = sum((x - mean_isi) ** 2 for x in isis) / len(isis)
-            cv_isi = (var ** 0.5) / mean_isi
-
-    return {
-        "ok": (n > 0),
-        "error": None,
-        "measurements": {
-            "spike_count": n,
-            "sim_time_s": SIM_TIME_S,
-            "firing_rate_hz": n / SIM_TIME_S,
-            "mean_isi_s": mean_isi,
-            "cv_isi": cv_isi,
-            "first_spike_s": times[0] if times else None,
-            "last_spike_s": times[-1] if times else None,
-        },
-        # Truncate at 200 to keep meta.json bounded; firing_rate is
-        # the headline so the full vector is not needed for the record.
-        "spike_times_s": times[:200],
-    }
-
-
 def main(argv: list) -> int:
+    # Import the ①a kernel — honest gap if the kernel module is missing.
+    try:
+        import lif_kernel as kernel
+    except Exception as exc:
+        sys.stderr.write(
+            f"lif_brian2: ①a LIF kernel import failed — {exc}. "
+            "Expected at stdlib/kernels/neural/lif_kernel.py (g3 — "
+            "structural gap, not an engine gap).\n")
+        return 4
+
     if len(argv) < 2:
         sys.stderr.write("usage: lif_brian2.py <output_dir>\n")
         return 2
@@ -160,11 +108,15 @@ def main(argv: list) -> int:
     meta_path = os.path.join(output_dir, f"{GEOMETRY_ID}.meta.json")
     spikes_path = os.path.join(output_dir, f"{GEOMETRY_ID}.spikes.json")
 
-    eq_hash = equation_hash()
-    version = brian2_version_safe()
+    eq_hash = kernel.equation_hash(
+        EQS, TAU_MS, V_THR, V_RESET, I_DRIVE, SIM_TIME_S, METHOD)
+    version = kernel.brian2_version()
     sys.stderr.write(f"lif_brian2: brian2={version} eq_sha={eq_hash}\n")
 
-    result = run_lif(output_dir)
+    # --- Delegate ALL LIF integration to the ①a kernel.
+    result = kernel.simulate_lif(
+        EQS, TAU_MS, V_THR, V_RESET, I_DRIVE, SIM_TIME_S, METHOD,
+        spike_truncate=200)
     ok = bool(result.get("ok"))
 
     meta = {

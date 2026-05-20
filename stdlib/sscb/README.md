@@ -1,10 +1,17 @@
-# `stdlib/sscb/` — hexa-native absorption of SiC power-MOSFET device models
+# `stdlib/sscb/` — SiC power-MOSFET / SSCB domain adapter
 
+> **D72 2-layer restructure:** the domain-agnostic circuit engine
+> (`wolfspeed.hexa` SPICE parser, `vdmos.hexa` VDMOS DC model,
+> `devsim.hexa` DEVSIM bridge) now lives in `stdlib/kernels/circuit/`
+> (①a kernel). This directory keeps the ①b SSCB-domain adapter:
+> `sscb.hexa` (CLI dispatcher), `ngspice.hexa` (SSCB hard-switching
+> transient producer — demiurge `SSCBProducer.swift` spawn target,
+> path unchanged), `wolfspeed_parity.hexa` (C3M0021120K datasheet
+> parity), the `fixtures/` datasheet models, and the engine selftests.
+>
 > **Status: all module bodies landed (κ-41) — no `.stub` files remain.**
-> `wolfspeed.hexa` (SPICE `.lib` parser), `ngspice.hexa` (transient
-> producer), `devsim.hexa` (DEVSIM TCAD bridge), `vdmos.hexa`
-> (hexa-native VDMOS DC model) and `sscb.hexa` (CLI dispatcher) are all
-> GREEN with selftests. See §"Measured progress".
+> The kernel modules + `ngspice.hexa` + `sscb.hexa` are all GREEN with
+> selftests. See §"Measured progress".
 >
 > `absorbed=true` is earned for the **sscb DC device model**:
 > `vdmos.hexa` reproduces the Wolfspeed C3M0021120K data sheet R_DS(on)
@@ -29,15 +36,22 @@ of the generic-R_on/R_off regime (κ-34) into device-faithful regime:
 
 ## Module index
 
+_①a circuit kernel — relocated to `stdlib/kernels/circuit/` (D72):_
+
 | file | purpose | re-derives from |
 |---|---|---|
-| `wolfspeed.hexa` ⭐ | SPICE `.lib` lexer + `.SUBCKT … .ENDS` parser; `.PARAM` resolver; `.MODEL` reader (VDMOS / D / Q kind preserved). **κ-41 — 35/35 selftest GREEN.** | ngspice `manual.pdf` §11 / §16 (`.MODEL VDMOS`) |
-| `wolfspeed_test.hexa` ⭐ | round-trip selftest — 35 structural assertions over `fixtures/sample_sic_mosfet.lib`. `hexa run` exits 0 GREEN / 1 FAIL | (in-repo, no upstream) |
+| `kernels/circuit/wolfspeed.hexa` ⭐ | SPICE `.lib` lexer + `.SUBCKT … .ENDS` parser; `.PARAM` resolver; `.MODEL` reader (VDMOS / D / Q kind preserved). **κ-41 — 35/35 selftest GREEN.** | ngspice `manual.pdf` §11 / §16 (`.MODEL VDMOS`) |
+| `kernels/circuit/devsim.hexa` ⭐ | DEVSIM TCAD bridge — generates + spawns a DEVSIM Python script for a real 1-D Si PN-diode drift-diffusion I-V sweep | DEVSIM JOSS 10.21105/joss.03898; `simple_physics` helper API |
+| `kernels/circuit/vdmos.hexa` ⭐ | **hexa-native VDMOS Level-1 DC device model** — square-law I-D + channel-length modulation + series RS/RD, with 1-D Newton solvers for R_DS(on) and V_GS(th). ZERO subprocess — pure hexa arithmetic. This is the `absorbed=true` engine for the sscb DC device model. | Shichman-Hodges Level-1 MOSFET model (IEEE JSSC 1968; Sedra/Smith) |
+
+_①b SSCB-domain adapter — this directory:_
+
+| file | purpose | re-derives from |
+|---|---|---|
+| `wolfspeed_test.hexa` ⭐ | round-trip selftest for `kernels/circuit/wolfspeed` — 35 structural assertions over `fixtures/sample_sic_mosfet.lib`. `hexa run` exits 0 GREEN / 1 FAIL | (in-repo, no upstream) |
 | `ngspice.hexa` ⭐ | hexa-native SSCB transient producer — writes a hard-switching netlist, spawns `ngspice -b`, parses the tran table, emits `sscb_v1.meta.json` + an `SSCB_NGSPICE_RESULT` summary. κ-41 port of `ngspice.py` (9/9 measurement parity vs the Python it replaced) | κ-34 `sscb_ngspice.py`; ngspice 46 batch I/O |
-| `devsim.hexa` ⭐ | DEVSIM TCAD bridge — generates + spawns a DEVSIM Python script for a real 1-D Si PN-diode drift-diffusion I-V sweep | DEVSIM JOSS 10.21105/joss.03898; `simple_physics` helper API |
-| `devsim_test.hexa` ⭐ | DEVSIM-bridge selftest — 7 physics assertions (rectification, monotonic forward I-V, exponential growth). SKIPs cleanly (exit 0) if the devsim wheel is absent | (in-repo, no upstream) |
-| `vdmos.hexa` ⭐ | **hexa-native VDMOS Level-1 DC device model** — square-law I-D + channel-length modulation + series RS/RD, with 1-D Newton solvers for R_DS(on) and V_GS(th). ZERO subprocess — pure hexa arithmetic. This is the `absorbed=true` engine for the sscb DC device model. | Shichman-Hodges Level-1 MOSFET model (IEEE JSSC 1968; Sedra/Smith) |
-| `vdmos_test.hexa` ⭐ | hexa-native datasheet parity selftest — parses `c3m0021120k.lib`, runs `vdmos.hexa` solvers, checks R_DS(on)/V_GS(th) vs the data sheet within ±10 %, **no ngspice in the loop**. PASS = absorbed-eligible. | (in-repo) |
+| `devsim_test.hexa` ⭐ | selftest for `kernels/circuit/devsim` — 7 physics assertions (rectification, monotonic forward I-V, exponential growth). SKIPs cleanly (exit 0) if the devsim wheel is absent | (in-repo, no upstream) |
+| `vdmos_test.hexa` ⭐ | hexa-native datasheet parity selftest — parses `c3m0021120k.lib`, runs `kernels/circuit/vdmos` solvers, checks R_DS(on)/V_GS(th) vs the data sheet within ±10 %, **no ngspice in the loop**. PASS = absorbed-eligible. | (in-repo) |
 | `wolfspeed_parity.hexa` ⭐ | ngspice substrate cross-check — generates ngspice decks at the datasheet test conditions, confirms `vdmos.hexa` independently | Wolfspeed C3M0021120K data sheet Rev.4 (public PDF) — spec table only |
 | `sscb.hexa` ⭐ | dispatcher = `hexa run sscb.hexa <subcmd>` — routes `parse-lib` (wolfspeed) + `diode-iv` (devsim) + `datasheet-parity` (wolfspeed_parity) | `stdlib/booksim/booksim.hexa`; rfc_047 §4 |
 | `fixtures/sample_sic_mosfet.lib` | hand-written synthetic SPICE `.SUBCKT` (parser unit-test fixture) — clean-room, topology mock | (in-repo) |

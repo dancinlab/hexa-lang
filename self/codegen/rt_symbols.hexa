@@ -60,6 +60,8 @@
     if name == "log"   { return "rt_math_log_v" }
     if name == "exp"   { return "rt_math_exp_v" }
     if name == "tanh"  { return "rt_math_tanh_v" }
+    // 2026-05-20 (blocker-3 fmod-shim): SSOT mirror of codegen_c2.hexa.
+    if name == "fmod"  { return "rt_math_fmod_v" }
     return ""
 }
 
@@ -82,6 +84,8 @@
     if name == "log"   { return "hexa_math_log" }
     if name == "exp"   { return "hexa_math_exp" }
     if name == "tanh"  { return "hexa_math_tanh" }
+    // 2026-05-20 (blocker-3 fmod-shim): direct libm fmod() shim.
+    if name == "fmod"  { return "hexa_math_fmod" }
     return ""
 }
 

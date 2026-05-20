@@ -423,5 +423,3 @@ fn main() {
     }
     route(mode, rest)
 }
-
-main()

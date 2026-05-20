@@ -842,6 +842,8 @@ HexaVal hexa_math_floor(HexaVal x);
 HexaVal hexa_math_ceil(HexaVal x);
 HexaVal hexa_math_round(HexaVal x);
 HexaVal hexa_math_pow(HexaVal b, HexaVal e);
+// 2026-05-20 (blocker-3 fmod-shim): direct libm fmod() entry point.
+HexaVal hexa_math_fmod(HexaVal a, HexaVal b);
 HexaVal hexa_math_min(HexaVal a, HexaVal b);
 HexaVal hexa_math_max(HexaVal a, HexaVal b);
 // G1-FLOAT-PRIM 2026-05-06: Beta-Binomial Bayesian audit + calibration stability.
@@ -4767,6 +4769,29 @@ HexaVal hexa_exec_replace(HexaVal cmd) {
     return hexa_str("");
 }
 
+// 2026-05-20 (blocker-4 print-precision): opt-in higher-precision float
+// formatter for human-readable `print`/`println`/`eprint`/`eprintln`. Default
+// stays at "%g" (6 significant digits) — round-trip-loss but matches existing
+// snapshots / golden outputs. Set HEXA_FLOAT_REPR=g17 to switch to "%.17g"
+// (IEEE-754 double round-trip-safe). Cached static so the getenv() call
+// happens once per process.
+static const char* __hexa_print_float_fmt(void) {
+    static int cached = 0;
+    static const char* fmt = "%g";
+    if (!cached) {
+        const char* env = getenv("HEXA_FLOAT_REPR");
+        if (env) {
+            if (strcmp(env, "g17") == 0) fmt = "%.17g";
+            else if (strcmp(env, "g15") == 0) fmt = "%.15g";
+            // unknown values fall back to "%g" (silent) — strict mode could
+            // surface a stderr warning here, but print-path is hot so keep
+            // the fast default.
+        }
+        cached = 1;
+    }
+    return fmt;
+}
+
 // ── Stderr ──────────────────────────────────────────
 void hexa_eprint_val(HexaVal v) {
     // 2026-04-20 silent-fallback fix: prior body dropped TAG_VOID /
@@ -4774,11 +4799,12 @@ void hexa_eprint_val(HexaVal v) {
     // "<value>"). User-visible path is eprintln(arr) / eprintln(map) —
     // emitting nothing is strictly worse than the hexa_to_string repr.
     // One-hop TAG_VALSTRUCT unwrap mirrors hexa_print_val.
+    const char* __ff = __hexa_print_float_fmt();
     if (HX_IS_VALSTRUCT(v) && HX_VS(v)) {
         HexaValStruct* vs = HX_VS(v);
         switch (vs->tag_i) {
             case TAG_INT:   fprintf(stderr, "%lld", (long long)vs->int_val); return;
-            case TAG_FLOAT: fprintf(stderr, "%g", vs->float_val); return;
+            case TAG_FLOAT: fprintf(stderr, __ff, vs->float_val); return;
             case TAG_BOOL:  fprintf(stderr, "%s", vs->bool_val ? "true" : "false"); return;
             case TAG_STR: {
                 const char* cs = HX_STR(vs->str_val);
@@ -4794,7 +4820,7 @@ void hexa_eprint_val(HexaVal v) {
         else fprintf(stderr, "<str null>");
     }
     else if (HX_IS_INT(v)) fprintf(stderr, "%lld", (long long)HX_INT(v));
-    else if (HX_IS_FLOAT(v)) fprintf(stderr, "%g", HX_FLOAT(v));
+    else if (HX_IS_FLOAT(v)) fprintf(stderr, __ff, HX_FLOAT(v));
     else if (HX_IS_BOOL(v)) fprintf(stderr, HX_BOOL(v) ? "true" : "false");
     else if (HX_IS_VOID(v)) fprintf(stderr, "void");
     else if (HX_IS_ARRAY(v) || HX_IS_MAP(v)) {
@@ -4855,11 +4881,12 @@ void hexa_throw(HexaVal err) {
 void hexa_print_val(HexaVal v) {
     // One-hop TAG_VALSTRUCT unwrap. Not recursive — a VS wrapping a VS is
     // already a corruption signal we surface via the fallback tail.
+    const char* __ff = __hexa_print_float_fmt();
     if (HX_IS_VALSTRUCT(v) && HX_VS(v)) {
         HexaValStruct* vs = HX_VS(v);
         switch (vs->tag_i) {
             case TAG_INT:   printf("%lld", (long long)vs->int_val); return;
-            case TAG_FLOAT: printf("%g", vs->float_val); return;
+            case TAG_FLOAT: printf(__ff, vs->float_val); return;
             case TAG_BOOL:  printf("%s", vs->bool_val ? "true" : "false"); return;
             case TAG_STR: {
                 const char* cs = HX_STR(vs->str_val);
@@ -4875,7 +4902,7 @@ void hexa_print_val(HexaVal v) {
     }
     switch (HX_TAG(v)) {
         case TAG_INT: printf("%lld", (long long)HX_INT(v)); break;
-        case TAG_FLOAT: printf("%g", HX_FLOAT(v)); break;
+        case TAG_FLOAT: printf(__ff, HX_FLOAT(v)); break;
         case TAG_BOOL: printf("%s", HX_BOOL(v) ? "true" : "false"); break;
         case TAG_STR:
             // Null-pointer guard: a corrupted TAG_STR (str_val=NULL) would
@@ -4923,11 +4950,13 @@ HexaVal hexa_eprintln(HexaVal v) {
     // Route through the same hexa_print_val logic but redirect the
     // writes to stderr. We cannot reuse hexa_print_val directly because
     // it hard-codes printf() — mirror the body with fprintf(stderr).
+    const char* __ff = __hexa_print_float_fmt();
+    char __ffln[16]; snprintf(__ffln, sizeof(__ffln), "%s\n", __ff);
     if (HX_IS_VALSTRUCT(v) && HX_VS(v)) {
         HexaValStruct* vs = HX_VS(v);
         switch (vs->tag_i) {
             case TAG_INT:   fprintf(stderr, "%lld\n", (long long)vs->int_val); return hexa_void();
-            case TAG_FLOAT: fprintf(stderr, "%g\n", vs->float_val); return hexa_void();
+            case TAG_FLOAT: fprintf(stderr, __ffln, vs->float_val); return hexa_void();
             case TAG_BOOL:  fprintf(stderr, "%s\n", vs->bool_val ? "true" : "false"); return hexa_void();
             case TAG_STR: {
                 const char* cs = HX_STR(vs->str_val);
@@ -4940,7 +4969,7 @@ HexaVal hexa_eprintln(HexaVal v) {
     }
     switch (HX_TAG(v)) {
         case TAG_INT: fprintf(stderr, "%lld\n", (long long)HX_INT(v)); break;
-        case TAG_FLOAT: fprintf(stderr, "%g\n", HX_FLOAT(v)); break;
+        case TAG_FLOAT: fprintf(stderr, __ffln, HX_FLOAT(v)); break;
         case TAG_BOOL: fprintf(stderr, "%s\n", HX_BOOL(v) ? "true" : "false"); break;
         case TAG_STR:
             if (HX_STR(v)) fprintf(stderr, "%s\n", HX_STR(v));
@@ -4972,11 +5001,12 @@ HexaVal hexa_eprintln(HexaVal v) {
 // which pre-2026-04-20 fell through to hexa_call1(eprint,...) and produced a
 // clang link error in AOT. Interp path also route-checks this name.
 HexaVal hexa_eprint(HexaVal v) {
+    const char* __ff = __hexa_print_float_fmt();
     if (HX_IS_VALSTRUCT(v) && HX_VS(v)) {
         HexaValStruct* vs = HX_VS(v);
         switch (vs->tag_i) {
             case TAG_INT:   fprintf(stderr, "%lld", (long long)vs->int_val); return hexa_void();
-            case TAG_FLOAT: fprintf(stderr, "%g", vs->float_val); return hexa_void();
+            case TAG_FLOAT: fprintf(stderr, __ff, vs->float_val); return hexa_void();
             case TAG_BOOL:  fprintf(stderr, "%s", vs->bool_val ? "true" : "false"); return hexa_void();
             case TAG_STR: {
                 const char* cs = HX_STR(vs->str_val);
@@ -4988,7 +5018,7 @@ HexaVal hexa_eprint(HexaVal v) {
     }
     switch (HX_TAG(v)) {
         case TAG_INT: fprintf(stderr, "%lld", (long long)HX_INT(v)); break;
-        case TAG_FLOAT: fprintf(stderr, "%g", HX_FLOAT(v)); break;
+        case TAG_FLOAT: fprintf(stderr, __ff, HX_FLOAT(v)); break;
         case TAG_BOOL: fprintf(stderr, "%s", HX_BOOL(v) ? "true" : "false"); break;
         case TAG_STR:
             if (HX_STR(v)) fprintf(stderr, "%s", HX_STR(v));

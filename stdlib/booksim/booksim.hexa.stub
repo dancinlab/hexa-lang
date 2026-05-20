@@ -38,12 +38,12 @@
 //
 // Source: rfc_001 §7.2 + §7.3; rfc_003 §3.7.
 
-use "stdlib/booksim/anynet"
-use "stdlib/booksim/iq_router"
-use "stdlib/booksim/traffic"
-use "stdlib/booksim/sweep"
-use "stdlib/booksim/wire_delay"
-use "stdlib/booksim/leighton"
+use "stdlib/kernels/noc_sim/anynet"
+use "stdlib/kernels/noc_sim/iq_router"
+use "stdlib/kernels/noc_sim/traffic"
+use "stdlib/kernels/noc_sim/sweep"
+use "stdlib/kernels/noc_sim/wire_delay"
+use "stdlib/kernels/noc_sim/leighton"
 
 let VERSION = "0.0.1-skeleton"
 

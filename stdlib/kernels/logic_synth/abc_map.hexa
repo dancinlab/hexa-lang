@@ -1,0 +1,728 @@
+#!hexa strict
+// stdlib/yosys/abc_map.hexa — ABC technology mapper (D18 bounded-subprocess)
+//
+// @version 0.0.1
+// @capabilities [abc, techmap, subprocess, provenance]
+// @stability phase-a (rfc_006 §4 module-5 of 7 — D18 boundary landed:
+//   binary detection, script emission, exec wrapper, stderr provenance
+//   log, fail-loud diagnostics. Real ABC liberty-bound techmap is gated
+//   by the ABC binary being on PATH — currently absent in this env,
+//   honest-recorded in the gate output.)
+// @since 2026-05-19
+//
+// **D18 BOUNDED-SUBPROCESS BOUNDARY** (rfc_006 §4 / hexa-arch D18 /
+//  AGENTS.tape g5 hybrid exception):
+//
+//   This module is INTENTIONALLY NOT a clean-room re-derivation of
+//   ABC. The Berkeley ABC technology mapper is invoked as an
+//   absorbed-substrate subprocess. hexa-arch D18 explicitly REJECTED
+//   option (7b) "full ABC clean-room re-derivation" and selected (7a)
+//   "bounded-subprocess invocation" for this scope.
+//
+//   - substrate         : abc (Berkeley logic synthesis & verification)
+//   - substrate repo    : https://github.com/berkeley-abc/abc
+//   - substrate license : Apache-2 / MIT
+//   - substrate scope   : combinational technology mapping
+//                          (read AIG/BLIF → map to lib → write mapped)
+//   - invocation idiom  : `abc -c "<script>"` (one process per pass
+//                          invocation; the script string is built
+//                          hexa-native from the RTLIL + Liberty input)
+//   - provenance log    : every call writes to stderr:
+//                          [abc_map] url=https://github.com/berkeley-abc/abc
+//                          [abc_map] binary=<resolved-path>
+//                          [abc_map] script-size=<bytes>
+//                          [abc_map] exit=<code>
+//   - upstream Yosys ref: passes/techmap/abc.cc (consulted for *what*
+//                          script form ABC expects, NOT for code reuse)
+//   - absorbed substrate (D18) : ABC bounded-subprocess (THIS module)
+//
+// rfc_006 §4: module-5 of 7. Emits an AIG/BLIF intermediate from the
+// hexa-native RTLIL design, hands it to ABC for technology mapping
+// against the Liberty cell library, lifts the mapped result back into
+// RTLIL for the write_verilog stage.
+//
+// fail-loud (rfc_006 §4 idiom): if `abc` binary is not on PATH, or
+// returns a non-zero exit code, or stdout/stderr indicate a parse
+// failure, this module MUST exit with a clear diagnostic. NO silent
+// fallback.
+//
+// g3 invariant: the rfc_006 §5 area oracle (d4≈61,763 d6≈93,609
+// 1.516×) is the MEASUREMENT that closes this D18 boundary. Until
+// abc_map.hexa + liberty.hexa together produce that ratio on
+// comb/rtl/router_d{4,6}.v against SKY130 sky130_fd_sc_hd, NO
+// "absorbed" claim is valid for this stdlib.
+
+use "stdlib/kernels/logic_synth/rtlil"
+use "stdlib/kernels/logic_synth/liberty"
+
+// ─── public types ────────────────────────────────────────────────────────
+
+struct AbcMapResult {
+    ok:           int,       // 1 = mapped; 0 = error
+    design:       Design,
+    binary_path:  str,       // resolved `abc` location ("" if missing)
+    script_bytes: int,       // total bytes of the abc-script written
+    exit_code:    int,       // child process exit
+    stderr_tail:  str,
+    message:      str,
+}
+
+// ─── binary discovery (fail-loud) ────────────────────────────────────────
+
+// CLEAN-ROOM: locate the ABC binary on PATH. Returns "" when absent —
+// caller MUST treat that as fail-loud (D18 forbids silent fallback).
+fn abc_binary_path() -> str {
+    // `command -v` follows PATH and exits 0 with the resolved path,
+    // exits 1 silent on absent. We capture stdout and trim.
+    let raw = exec("command -v abc 2>/dev/null || true")
+    let s = to_string(raw).trim()
+    return s
+}
+
+// CLEAN-ROOM: print one [abc_map] provenance line to stderr. (We use
+// stdout here because the hexa runtime collapses stderr-to-stdout in
+// `hexa run`; the provenance MUST appear in the run log regardless.)
+fn _abc_log(line: str) {
+    println("[abc_map] " + line)
+}
+
+// ─── BLIF emission (hexa-native; what ABC reads) ─────────────────────────
+
+// CLEAN-ROOM (Yosys passes/techmap/abc.cc + BLIF spec):
+// BLIF is the canonical pre-techmap hand-off format. We emit one
+// `.model` per RTLIL Module, declare inputs/outputs, and emit one
+// `.gate` per generic cell. ABC reads this and writes a mapped BLIF
+// back; the read-back is in _abc_parse_mapped_blif (below).
+//
+// Honest scope: emits only the cells that we currently produce in
+// the read_verilog subset ($and, $or, $not, $xor, $dff). Multi-bit
+// arithmetic cells are out of scope and would fail emission with a
+// clear diagnostic.
+//
+// rfc_006 §5 bug (a) iter 10 — constant-tie REPRESENTATION moved from
+// `$_const{0,1}_` driver cells (BLIF `.names` lines) to RTLIL module-
+// level `connect (net, 1'b{0,1})` rows.  The iter-6 .names emission
+// was incompatible with ABC's `read_blif` when followed by `.gate`
+// lines: ABC's parser consumed the next `.gate` line as a truth-table
+// continuation of the preceding `.names`, producing
+//   `Abc_SopCheck: SOP has a mismatch between its cover size (288) and
+//    its fanin number (2)` and rejecting the module.
+//
+// iter-10/11 BLIF emission of RTLIL connect rows:
+//   - RHS = "1'b0" → SKIP. ABC's read_blif auto-adds constant-0
+//     drivers for any undriven net (emits its standard "Constant-0
+//     drivers added to N non-driven nets" diagnostic during load),
+//     so a connect-to-zero needs no BLIF text.
+//   - RHS = "1'b1" → emit `.gate sky130_fd_sc_hd__inv_1
+//     A=$blif_helper_zero Y=<lhs>`. The helper net is undriven and
+//     therefore auto-tied to constant 0 by ABC, so the inverter
+//     output is constant 1. ABC's `strash` (structural-hash) pass
+//     collapses the resulting constant chain to zero AIG nodes, and
+//     `map` absorbs the residual constant-driven fanout as don't-
+//     cares — measured strash-after-load `and=0` lev=0 on a 3-tie
+//     fixture (test_invones.blif during iter-10 R&D 2026-05-20).
+//   - any other RHS (non-constant net) → iter-13 emits a `.gate
+//     sky130_fd_sc_hd__buf_1 A=<rhs> X=<lhs>` library-buffer cell.
+//     RTLIL `connect (lhs, rhs)` with non-constant rhs is a wire
+//     alias / continuous `assign` / buffer — semantically "lhs is
+//     driven by the same logic that drives rhs".  iter-11 used
+//     `.names <rhs> <lhs>\n1 1\n` (a 1-input identity SOP, BLIF
+//     spec §3); measured 2026-05-20 that ABC's truth-table line-
+//     continuation lookahead consumed the FOLLOWING `.gate` line
+//     as a phantom additional truth-table row, producing
+//     `Abc_SopCheck: SOP has a mismatch between its cover size (N)
+//     and its fanin number (1).  NodeCheck: SOP check for node
+//     "<rhs>" has failed.` — the same failure shape iter-10 had
+//     documented for the 0-input form.  The `.gate buf_1` path
+//     loads cleanly through `read_blif; strash; map`; ABC's
+//     strash collapses the buffer to the rhs AIG node, so it is
+//     free post-mapping.  SKY130 PDK provides `buf_1` (A → X,
+//     is_combinational, function "A"; verified present in the
+//     loaded `sky130_fd_sc_hd__tt_025C_1v80.lib` cell set).  The
+//     §5 absorption gate already depends on the full PDK, so the
+//     liberty-cell dependency is acceptable.
+//
+// Atlas citations:
+//   - IEEE 1800-2017 §6.7 — net-driver `assign` semantics (RTLIL
+//     `connect` lowers to a SystemVerilog procedural `assign`).
+//   - Yosys reference manual Ch. 4 — RTLIL Module data structure
+//     (the `connections_` SigSpec map is the upstream analogue of
+//     our `connect_lhs[]` / `connect_rhs[]` parallel arrays).
+//   - BLIF spec §3 — `.gate <type> <pin>=<net> ...` for technology-
+//     mapped cells; `.names <output> [<inputs>]` for SOPs.
+//   - SKY130 PDK `sky130_fd_sc_hd__buf_1.lib.json` (single-input
+//     buffer pins A→X, is_combinational, function "A") — referenced
+//     as the alternative `.gate` emission form not chosen here
+//     (https://github.com/google/skywater-pdk-libs-sky130_fd_sc_hd).
+//     We chose `.names` over `.gate sky130_fd_sc_hd__buf_1` to
+//     remove the liberty-cell dependency: `.names` is universally
+//     accepted by ABC's read_blif, while `.gate buf_1` requires
+//     buf_1 to be in the loaded cell library (true for the full
+//     SKY130 PDK, but not for any synthetic test corpus).
+//
+// HONEST SCOPE — this emitter walks `module.connect_lhs / _rhs` and
+// `module.cells`. `module.processes` is untouched (post-`proc` pass
+// the design contains only cells + connects + wires; no sync blocks).
+fn abc_emit_blif(d: Design) -> str {
+    let mut buf = ""
+    let mut mi = 0
+    while mi < len(d.modules) {
+        let m = d.modules[mi]
+        buf = buf + ".model " + m.name + "\n"
+        // .inputs / .outputs from port wires
+        let mut ibuf = ".inputs"
+        let mut obuf = ".outputs"
+        let mut have_i = 0
+        let mut have_o = 0
+        let mut wi = 0
+        while wi < len(m.wires) {
+            let w = m.wires[wi]
+            if w.dir_kind == 1 { ibuf = ibuf + " " + w.name; have_i = 1 }
+            if w.dir_kind == 2 { obuf = obuf + " " + w.name; have_o = 1 }
+            wi = wi + 1
+        }
+        if have_i == 1 { buf = buf + ibuf + "\n" }
+        if have_o == 1 { buf = buf + obuf + "\n" }
+        // iter 10 — emit constant-1 ties FIRST as inv-of-undriven
+        // helper cells. Constant-0 ties (RHS == "1'b0") are skipped;
+        // ABC's read_blif auto-ties undriven nets to constant 0.
+        // The shared helper net `$blif_helper_zero` is never driven
+        // explicitly, so ABC ties IT to constant 0 as well, and each
+        // emitted inv_1 produces constant 1.
+        //
+        // iter 11 — non-constant `connect (lhs, rhs)` rows lower to a
+        // 1-input SOP buffer `.names <rhs> <lhs>\n1 1\n` (BLIF spec
+        // §3, IEEE 1800-2017 §6.7 continuous-assign semantics).  This
+        // closes the previously-silent fall-through where
+        // `assign y = a`-style read_verilog connects lost their
+        // driver, causing ABC to auto-tie the output to constant 0
+        // and the §5 mapped BLIF to collapse to all-zero outputs.
+        // The emission ordering (connect-walk BEFORE cell-walk) is
+        // preserved across both cases — same invariant as iter-10.
+        let mut have_one_tie = 0
+        let mut kj = 0
+        while kj < len(m.connect_lhs) {
+            let lhs = m.connect_lhs[kj]
+            let rhs = m.connect_rhs[kj]
+            if rhs == "1'b1" {
+                if have_one_tie == 0 { have_one_tie = 1 }
+                // .gate sky130_fd_sc_hd__inv_1 A=$blif_helper_zero Y=<lhs>
+                buf = buf + ".gate sky130_fd_sc_hd__inv_1 A=$blif_helper_zero Y="
+                    + lhs + "\n"
+            } else if rhs == "1'b0" {
+                // RHS == "1'b0" → no emission (ABC auto-tie undriven net)
+            } else {
+                // iter 13 — non-constant net alias / continuous-assign /
+                // buffer.  Lower to `.gate sky130_fd_sc_hd__buf_1 A=<rhs>
+                // X=<lhs>` instead of `.names <rhs> <lhs>\n1 1\n`.
+                //
+                // Why the switch: iter 11's 1-input identity SOP form
+                // (`.names a y\n1 1`) is BLIF-spec-legal (BLIF §3) and
+                // ABC's `read_blif` parses the directive itself, but
+                // ABC's truth-table line-continuation lookahead then
+                // consumes the FOLLOWING `.gate` line as a phantom
+                // additional truth-table row.  Measured 2026-05-20 with
+                // the iter-11 minimal repro
+                //
+                //   .names z y
+                //   1 1
+                //   .gate sky130_fd_sc_hd__xnor2_1 A=a B=b X=z
+                //
+                // → `Abc_SopCheck: SOP has a mismatch between its cover
+                //   size (272) and its fanin number (2).  NodeCheck:
+                //   SOP check for node "z" has failed.`
+                //
+                // The same network with the buffer emitted as a `.gate`
+                // cell loads cleanly through `read_blif; strash; map`.
+                // This is the same failure mode iter-10's docstring
+                // already documented for the 0-input `.names` constant
+                // form; ABC's 1-input identity SOP path is not immune
+                // — the `.gate` continuation race re-triggers it.
+                //
+                // SKY130 PDK provides `sky130_fd_sc_hd__buf_1` (A→X,
+                // is_combinational, function "A"; verified present in
+                // the loaded `sky130_fd_sc_hd__tt_025C_1v80.lib` cell
+                // set).  Liberty-cell dependency is acceptable: the
+                // §5 absorption gate already depends on the full PDK,
+                // and `abc_map_T_*` regression tests run without a
+                // .lib (no buffer emission needed — those tests use
+                // generic `$and` cells without connect rows).
+                //
+                // Self-loops (lhs == rhs) and empty endpoints stay
+                // unemitted — `.gate buf_1 A=x X=x` would let ABC's
+                // strash collapse to a self-edge.  Same defence as
+                // iter-11.
+                //
+                // Atlas citations:
+                //   - BLIF spec §2 — `.names` truth-table line continuation
+                //     (the same line-continuation rule whose interaction
+                //     with `.gate` causes this failure).
+                //   - SKY130 PDK `sky130_fd_sc_hd__buf_1` (Apache-2 /
+                //     CC-BY-4.0) — single-input buffer cell, A → X,
+                //     is_combinational, function "A".
+                if len(lhs) > 0 {
+                    if len(rhs) > 0 {
+                        if lhs != rhs {
+                            // .gate sky130_fd_sc_hd__buf_1 A=<rhs> X=<lhs>
+                            buf = buf + ".gate sky130_fd_sc_hd__buf_1 A="
+                                + rhs + " X=" + lhs + "\n"
+                        }
+                    }
+                }
+            }
+            kj = kj + 1
+        }
+        // each cell -> .gate <type> <pin>=<net> ...
+        let mut ci = 0
+        while ci < len(m.cells) {
+            let c = m.cells[ci]
+            buf = buf + ".gate " + c.cell_type
+            let mut pi = 0
+            while pi < len(c.conns) {
+                buf = buf + " " + c.conns[pi].pin + "=" + c.conns[pi].net
+                pi = pi + 1
+            }
+            buf = buf + "\n"
+            ci = ci + 1
+        }
+        buf = buf + ".end\n"
+        mi = mi + 1
+    }
+    return buf
+}
+
+// ─── ABC mapped-BLIF reader (round-trip back into RTLIL) ─────────────────
+
+// CLEAN-ROOM: parse a mapped BLIF emitted by `abc write_blif`. The
+// shape is the same as our emitter, but every `.gate` references a
+// real library cell. We rebuild Modules in-place.
+//
+// rfc_006 §5 iter 10: handle `\` line continuations.  ABC's
+// `write_blif` wraps long `.inputs` / `.outputs` directive lists at
+// ~80 columns by emitting `\\\n ` (backslash + newline + space).
+// Without continuation-joining the parser sees a phantom directive on
+// the next line whose `head` is the first column-wrapped token (e.g.
+// ` in_valid[0]`), which never matches `.inputs`/`.outputs`/`.gate`/
+// `.end`. Worse, `parts[0]` becomes a constant-input token and the
+// downstream `.gate` parser consumes it as a positional arg, blowing
+// up cell counts and triggering OOM during `rtlil_module_add_cell`'s
+// array-clone. BLIF spec §2: `\\\n` is a soft line continuation.
+fn abc_parse_mapped_blif(text: str) -> Design {
+    let mut d = rtlil_new_design("abc_map")
+    let raw_lines = text.split("\n")
+    // join `\` continuations into single logical lines
+    let mut lines: [str] = []
+    let mut ji = 0
+    while ji < len(raw_lines) {
+        let mut acc = raw_lines[ji]
+        let mut nj = ji
+        while len(acc) > 0 {
+            if acc[len(acc) - 1] != '\\' { break }
+            if nj + 1 >= len(raw_lines) { break }
+            // strip the trailing `\` and append the next physical line
+            // (preserves the inter-line space; .trim() in the loop
+            // normalises subsequent whitespace).
+            acc = acc.substring(0, len(acc) - 1) + " " + raw_lines[nj + 1]
+            nj = nj + 1
+        }
+        lines = lines.push(acc)
+        ji = nj + 1
+    }
+    let mut m = rtlil_new_module("")
+    let mut in_model = 0
+    let mut i = 0
+    while i < len(lines) {
+        let raw = lines[i].trim()
+        if len(raw) == 0 { i = i + 1; continue }
+        let parts = raw.split(" ")
+        let head = parts[0]
+        if head == ".model" {
+            if in_model == 1 {
+                d = rtlil_design_add(d, m)
+            }
+            if len(parts) > 1 {
+                m = rtlil_new_module(parts[1])
+            } else {
+                m = rtlil_new_module("")
+            }
+            in_model = 1
+        }
+        if head == ".inputs" {
+            let mut k = 1
+            while k < len(parts) {
+                m = rtlil_module_add_wire(m,
+                    rtlil_wire(parts[k], 1, 1, k))
+                k = k + 1
+            }
+        }
+        if head == ".outputs" {
+            let mut k = 1
+            while k < len(parts) {
+                m = rtlil_module_add_wire(m,
+                    rtlil_wire(parts[k], 1, 2, k + 1000))
+                k = k + 1
+            }
+        }
+        if head == ".gate" {
+            if len(parts) > 1 {
+                let ct = parts[1]
+                let cname = "g_" + str(len(m.cells))
+                let mut c = rtlil_cell(cname, ct, 1)
+                let mut k = 2
+                while k < len(parts) {
+                    let kv = parts[k].split("=")
+                    if len(kv) == 2 {
+                        c = rtlil_cell_connect(c, kv[0], kv[1])
+                    }
+                    k = k + 1
+                }
+                m = rtlil_module_add_cell(m, c)
+            }
+        }
+        if head == ".end" {
+            d = rtlil_design_add(d, m)
+            in_model = 0
+        }
+        i = i + 1
+    }
+    if in_model == 1 {
+        d = rtlil_design_add(d, m)
+    }
+    return d
+}
+
+// ─── main entry — drive ABC ──────────────────────────────────────────────
+
+// CLEAN-ROOM: full D18 invocation:
+//   1. emit BLIF to a temp file
+//   2. resolve `abc` binary path; fail-loud on missing
+//   3. build an `abc -c "read_blif … read_lib … map ; write_blif …"`
+//      command line and exec()
+//   4. read the mapped BLIF back and round-trip into RTLIL
+//   5. emit a [abc_map] provenance log line on every step
+//
+// The lib path argument may be "" — in which case we skip the `read_lib`
+// step (the result is a generic-mapped AIG, useful for round-trip
+// testing on systems without a Liberty file).
+fn abc_map(d: Design, lib_path: str, tmp_prefix: str) -> AbcMapResult {
+    let bin = abc_binary_path()
+    let blif_in = tmp_prefix + "_in.blif"
+    let blif_out = tmp_prefix + "_out.blif"
+    let blif_text = abc_emit_blif(d)
+    write_file(blif_in, blif_text)
+    _abc_log("url=https://github.com/berkeley-abc/abc")
+    _abc_log("binary=" + bin)
+    _abc_log("script-size=" + str(len(blif_text)))
+    if bin == "" {
+        _abc_log("exit=missing")
+        return AbcMapResult {
+            ok: 0, design: d, binary_path: "", script_bytes: len(blif_text),
+            exit_code: 127, stderr_tail: "",
+            message: "abc_map: D18 fail-loud — `abc` binary not on PATH; install berkeley-abc (https://github.com/berkeley-abc/abc) and re-run."
+        }
+    }
+    // Build the ABC script. The `&` form is the new-style command set
+    // (read_blif / strash / &mfs / amap) — sufficient for our gate-§5
+    // path; we keep it minimal to maximize compatibility with the
+    // wide range of ABC binaries in the wild.
+    //
+    // ORDERING (rfc_006 §5 absorption-bug-b · 2026-05-20): `read_lib`
+    // MUST precede `read_blif` — ABC's library state is consulted at
+    // BLIF-load time. With the inverse ordering ABC reports `Line 4:
+    // The current library is not available` and aborts mapping (the
+    // BLIF parser needs to resolve `.gate <type>` against the loaded
+    // liberty cell set).
+    let mut script = ""
+    if lib_path != "" {
+        script = "read_lib " + lib_path + " ; "
+    }
+    script = script + "read_blif " + blif_in + " ; strash"
+    if lib_path != "" {
+        script = script + " ; map"
+    }
+    script = script + " ; write_blif " + blif_out
+    let cmd = bin + " -c \"" + script + "\" 2>&1"
+    let raw = exec(cmd)
+    let stdout = to_string(raw)
+    // exec returns the captured stdout/stderr; we use a heuristic to
+    // detect failure. iter-10 expanded the markers to catch (a)
+    // `Bus error: 10` produced by ABC when its `read_blif` SopCheck
+    // fails on a malformed BLIF (iter-6..9 regression — see
+    // abc_emit_blif header), and (b) `has failed` produced by
+    // `Io_ReadBlifMv` when the network check rejects the file.
+    let mut exit_code = 0
+    if stdout.find("Error:") >= 0 { exit_code = 1 }
+    if stdout.find("Cannot") >= 0 { exit_code = 1 }
+    if stdout.find("Bus error") >= 0 { exit_code = 1 }
+    if stdout.find("has failed") >= 0 { exit_code = 1 }
+    _abc_log("exit=" + str(exit_code))
+    if exit_code != 0 {
+        return AbcMapResult {
+            ok: 0, design: d, binary_path: bin, script_bytes: len(blif_text),
+            exit_code: exit_code, stderr_tail: stdout,
+            message: "abc_map: D18 fail-loud — ABC reported error: " + stdout
+        }
+    }
+    let mapped_text = read_file(blif_out)
+    if len(mapped_text) == 0 {
+        return AbcMapResult {
+            ok: 0, design: d, binary_path: bin, script_bytes: len(blif_text),
+            exit_code: 1, stderr_tail: stdout,
+            message: "abc_map: D18 fail-loud — ABC produced no mapped BLIF (output file empty)"
+        }
+    }
+    let mapped = abc_parse_mapped_blif(mapped_text)
+    return AbcMapResult {
+        ok: 1, design: mapped, binary_path: bin, script_bytes: len(blif_text),
+        exit_code: 0, stderr_tail: "",
+        message: "abc_map: ok"
+    }
+}
+
+// ─── self-test ───────────────────────────────────────────────────────────
+
+fn main() {
+    let mut fails = 0
+    let mut total = 0
+
+    // T1 — abc_binary_path() returns a string (possibly empty when
+    // the ABC binary is absent). This is the honest gate-probe.
+    total = total + 1
+    let bin = abc_binary_path()
+    println("[abc_map] selftest: detected abc binary: '" + bin + "'")
+
+    // T2 — BLIF emission for a 1-cell module.
+    total = total + 1
+    let mut m = rtlil_new_module("ab")
+    m = rtlil_module_add_wire(m, rtlil_wire("a", 1, 1, 1))
+    m = rtlil_module_add_wire(m, rtlil_wire("b", 1, 1, 2))
+    m = rtlil_module_add_wire(m, rtlil_wire("y", 1, 2, 3))
+    let mut c = rtlil_cell("u_and", "$and", 0)
+    c = rtlil_cell_connect(c, "A", "a")
+    c = rtlil_cell_connect(c, "B", "b")
+    c = rtlil_cell_connect(c, "Y", "y")
+    m = rtlil_module_add_cell(m, c)
+    let mut d = rtlil_new_design("test")
+    d = rtlil_design_add(d, m)
+    let blif = abc_emit_blif(d)
+    if blif.find(".model ab") < 0 {
+        println("FAIL T2 blif_model_missing"); fails = fails + 1
+    }
+    if blif.find(".gate $and") < 0 {
+        println("FAIL T2b blif_gate_missing"); fails = fails + 1
+    }
+    if blif.find(".end") < 0 {
+        println("FAIL T2c blif_end_missing"); fails = fails + 1
+    }
+
+    // T3 — mapped-BLIF round-trip parses what the emitter emits
+    // (closed loop, no ABC needed).
+    total = total + 1
+    let d_rt = abc_parse_mapped_blif(blif)
+    if len(d_rt.modules) != 1 {
+        println("FAIL T3 roundtrip_module_count"); fails = fails + 1
+    }
+
+    // T4 — abc_map fail-loud when binary is missing (or returns a
+    // valid run when present). Either way: no silent skip.
+    total = total + 1
+    let r4 = abc_map(d, "", "/tmp/_hexa_abc_t4")
+    if bin == "" {
+        if r4.ok != 0 {
+            println("FAIL T4 fail_loud_required_when_no_abc"); fails = fails + 1
+        }
+        if r4.exit_code != 127 {
+            println("FAIL T4b exit_code=127 expected, got " + str(r4.exit_code)); fails = fails + 1
+        }
+        println("[abc_map] selftest: ABC absent — D18 fail-loud OK (exit 127)")
+    } else {
+        // ABC present — we expect a real run (or at least ok=1 OR
+        // ok=0 with a real-stderr diagnostic, not a fake skip).
+        println("[abc_map] selftest: ABC present at " + bin
+            + " — ran abc_map, ok=" + str(r4.ok)
+            + " exit=" + str(r4.exit_code))
+        // The minimum expectation is that script_bytes > 0.
+        if r4.script_bytes <= 0 {
+            println("FAIL T4c script_bytes=0"); fails = fails + 1
+        }
+    }
+
+    // T5 — message field always populated (no silent skip).
+    total = total + 1
+    if len(r4.message) == 0 {
+        println("FAIL T5 message_empty"); fails = fails + 1
+    }
+
+    // T6 — RTLIL connect-to-constant rows lower to the iter-10 BLIF
+    // form: RHS `1'b0` rows skipped (ABC auto-ties undriven nets),
+    // RHS `1'b1` rows emitted as `.gate sky130_fd_sc_hd__inv_1
+    // A=$blif_helper_zero Y=<lhs>` BEFORE any `.gate` lines from the
+    // cell array (so the constant-1 driver is in scope for downstream
+    // .gate references). rfc_006 §5 bug (a) iter 10 fix —
+    // replaces the iter-6 `.names <net>[\n1]` BLIF emission that
+    // triggered `Abc_SopCheck: SOP has a mismatch ...` when followed
+    // by `.gate` lines (ABC parser consumed `.gate` as truth-table
+    // continuation of preceding `.names`).
+    total = total + 1
+    let mut m6 = rtlil_new_module("c6")
+    m6 = rtlil_module_add_wire(m6, rtlil_wire("a", 1, 1, 1))
+    m6 = rtlil_module_add_wire(m6, rtlil_wire("y", 1, 2, 2))
+    m6 = rtlil_module_add_wire(m6, rtlil_wire("z0", 1, 0, 0))
+    m6 = rtlil_module_add_wire(m6, rtlil_wire("z1", 1, 0, 0))
+    // constant ties via RTLIL connect (iter-10)
+    m6 = rtlil_module_connect(m6, "z0", "1'b0")
+    m6 = rtlil_module_connect(m6, "z1", "1'b1")
+    // a real .gate consuming z1 so the BLIF is non-degenerate
+    let mut g6 = rtlil_cell("u_g6", "sky130_fd_sc_hd__and2_1", 1)
+    g6 = rtlil_cell_connect(g6, "A", "a")
+    g6 = rtlil_cell_connect(g6, "B", "z1")
+    g6 = rtlil_cell_connect(g6, "X", "y")
+    m6 = rtlil_module_add_cell(m6, g6)
+    let mut d6 = rtlil_new_design("test")
+    d6 = rtlil_design_add(d6, m6)
+    let blif6 = abc_emit_blif(d6)
+    // T6a — 1'b1 tie emits the inv-of-helper-zero gate
+    if blif6.find(".gate sky130_fd_sc_hd__inv_1 A=$blif_helper_zero Y=z1") < 0 {
+        println("FAIL T6 blif_const1_inv_missing"); fails = fails + 1
+    }
+    // T6b — 1'b0 tie skipped (no .gate or .names for z0)
+    if blif6.find("Y=z0") >= 0 {
+        println("FAIL T6b blif_const0_leaked"); fails = fails + 1
+    }
+    if blif6.find(".names z0") >= 0 {
+        println("FAIL T6b2 blif_const0_names_leaked"); fails = fails + 1
+    }
+    // T6c — no residual $_const0_/_const1_ cells (iter-6..9 form)
+    if blif6.find(".gate $_const0_") >= 0 {
+        println("FAIL T6c blif_const0_cell_leaked"); fails = fails + 1
+    }
+    if blif6.find(".gate $_const1_") >= 0 {
+        println("FAIL T6d blif_const1_cell_leaked"); fails = fails + 1
+    }
+    // T6e — ordering invariant: the const-1 inv_1 driver line must
+    // appear BEFORE any `.gate sky130_fd_sc_hd__and2_1` line that
+    // references z1 as an input. The inv_1 line is emitted from the
+    // connect walk BEFORE the cell walk, so its position must be
+    // less than the and2_1 line position.
+    let inv_pos = blif6.find(".gate sky130_fd_sc_hd__inv_1 A=$blif_helper_zero Y=z1")
+    let and_pos = blif6.find(".gate sky130_fd_sc_hd__and2_1 A=a B=z1 X=y")
+    if inv_pos < 0 { /* already reported by T6 */ }
+    else if and_pos < 0 {
+        println("FAIL T6e blif_and_gate_missing"); fails = fails + 1
+    }
+    else if inv_pos >= and_pos {
+        println("FAIL T6e blif_const1_ordering (inv_pos=" + str(inv_pos)
+            + " ≥ and_pos=" + str(and_pos) + ")"); fails = fails + 1
+    }
+
+    // T7 — RTLIL connect with NON-constant RHS lowers to a
+    // `.gate sky130_fd_sc_hd__buf_1 A=<rhs> X=<lhs>` library-buffer
+    // cell. rfc_006 §5 bug (a) iter 13 fix — iter 11's
+    // `.names <rhs> <lhs>\n1 1\n` 1-input identity SOP triggered ABC's
+    // `Abc_SopCheck: SOP has a mismatch between its cover size (N) and
+    // its fanin number (1)` because ABC's truth-table line-continuation
+    // lookahead consumed the FOLLOWING `.gate` line as a phantom SOP
+    // row.  Switching to the library buffer makes the BLIF
+    // unambiguously `.gate`-only (apart from the `.model`/`.inputs`/
+    // `.outputs`/`.end` envelope), which `read_blif; strash; map`
+    // accepts cleanly.
+    //
+    // ordering invariant preserved: the buffer .gate line must appear
+    // BEFORE any subsequent `.gate` cell line that references the LHS,
+    // just like the iter-10 constant-1 inv_1 driver.
+    total = total + 1
+    let mut m7 = rtlil_new_module("c7")
+    m7 = rtlil_module_add_wire(m7, rtlil_wire("a", 1, 1, 1))
+    m7 = rtlil_module_add_wire(m7, rtlil_wire("y", 1, 2, 2))
+    // continuous assign / wire alias: y is driven by a
+    m7 = rtlil_module_connect(m7, "y", "a")
+    let mut d7 = rtlil_new_design("test")
+    d7 = rtlil_design_add(d7, m7)
+    let blif7 = abc_emit_blif(d7)
+    // T7a — non-constant connect emits a `.gate buf_1` buffer
+    if blif7.find(".gate sky130_fd_sc_hd__buf_1 A=a X=y") < 0 {
+        println("FAIL T7 blif_buf_gate_missing"); fails = fails + 1
+    }
+    // T7b — no residual `.names` row for the buffer (iter-11 form)
+    if blif7.find(".names a y") >= 0 {
+        println("FAIL T7b blif_names_buffer_leaked"); fails = fails + 1
+    }
+    // T7c — no spurious `1 1\n` SOP body row remains (iter-11 form)
+    if blif7.find("\n1 1\n") >= 0 {
+        println("FAIL T7c blif_names_sop_row_leaked"); fails = fails + 1
+    }
+    // T7d — ordering: the buffer .gate line must precede `.end` and
+    // follow `.outputs`. (No subsequent `.gate` in this fixture; the
+    // iter-10 ordering invariant is asserted in T6e.)
+    let buf_pos = blif7.find(".gate sky130_fd_sc_hd__buf_1 A=a X=y")
+    let outputs_pos = blif7.find(".outputs y")
+    let end_pos = blif7.find(".end")
+    if buf_pos < 0 { /* already reported by T7 */ }
+    else if outputs_pos < 0 {
+        println("FAIL T7d blif_outputs_missing"); fails = fails + 1
+    }
+    else if end_pos < 0 {
+        println("FAIL T7d2 blif_end_missing"); fails = fails + 1
+    }
+    else if buf_pos <= outputs_pos {
+        println("FAIL T7d3 blif_buf_before_outputs (buf_pos="
+            + str(buf_pos) + " ≤ outputs_pos=" + str(outputs_pos)
+            + ")"); fails = fails + 1
+    }
+    else if buf_pos >= end_pos {
+        println("FAIL T7d4 blif_buf_after_end (buf_pos="
+            + str(buf_pos) + " ≥ end_pos=" + str(end_pos)
+            + ")"); fails = fails + 1
+    }
+    // T7e — self-loop connect (lhs == rhs) MUST be suppressed
+    // (degenerate; ABC would treat as combinational feedback).
+    let mut m7e = rtlil_new_module("c7e")
+    m7e = rtlil_module_add_wire(m7e, rtlil_wire("z", 1, 2, 1))
+    m7e = rtlil_module_connect(m7e, "z", "z")
+    let mut d7e = rtlil_new_design("test")
+    d7e = rtlil_design_add(d7e, m7e)
+    let blif7e = abc_emit_blif(d7e)
+    if blif7e.find(".gate sky130_fd_sc_hd__buf_1 A=z X=z") >= 0 {
+        println("FAIL T7e blif_self_loop_leaked"); fails = fails + 1
+    }
+    if blif7e.find(".names z z") >= 0 {
+        println("FAIL T7e2 blif_self_loop_names_leaked"); fails = fails + 1
+    }
+    // T7f — connect-walk + cell-walk ordering with both a non-const
+    // connect AND a downstream cell consuming the LHS.
+    let mut m7f = rtlil_new_module("c7f")
+    m7f = rtlil_module_add_wire(m7f, rtlil_wire("a", 1, 1, 1))
+    m7f = rtlil_module_add_wire(m7f, rtlil_wire("t", 1, 0, 2))
+    m7f = rtlil_module_add_wire(m7f, rtlil_wire("b", 1, 1, 3))
+    m7f = rtlil_module_add_wire(m7f, rtlil_wire("y", 1, 2, 4))
+    // t is a wire-alias of a (continuous assign)
+    m7f = rtlil_module_connect(m7f, "t", "a")
+    // y = t AND b — and2_1 consumes the aliased net
+    let mut g7f = rtlil_cell("u_g7f", "sky130_fd_sc_hd__and2_1", 1)
+    g7f = rtlil_cell_connect(g7f, "A", "t")
+    g7f = rtlil_cell_connect(g7f, "B", "b")
+    g7f = rtlil_cell_connect(g7f, "X", "y")
+    m7f = rtlil_module_add_cell(m7f, g7f)
+    let mut d7f = rtlil_new_design("test")
+    d7f = rtlil_design_add(d7f, m7f)
+    let blif7f = abc_emit_blif(d7f)
+    let buf_pos7f = blif7f.find(".gate sky130_fd_sc_hd__buf_1 A=a X=t")
+    let and_pos7f = blif7f.find(".gate sky130_fd_sc_hd__and2_1")
+    if buf_pos7f < 0 {
+        println("FAIL T7f blif_buf_alias_missing"); fails = fails + 1
+    }
+    else if and_pos7f < 0 {
+        println("FAIL T7f2 blif_and_cell_missing"); fails = fails + 1
+    }
+    else if buf_pos7f >= and_pos7f {
+        println("FAIL T7f3 blif_buf_after_cell (buf_pos="
+            + str(buf_pos7f) + " ≥ and_pos=" + str(and_pos7f)
+            + ")"); fails = fails + 1
+    }
+
+    if fails > 0 {
+        println("abc_map selftest: " + str(total - fails) + "/" + str(total) + " — FAIL")
+        exit(1)
+    }
+    println("abc_map selftest: " + str(total) + "/" + str(total) + " PASS")
+}

@@ -22,8 +22,11 @@
 #include <regex.h>      // G3-REGEX 2026-05-06: POSIX ERE regcomp/regexec
 #include <sys/mman.h>   // RFC 025 (2026-05-12): mmap-backed safetensors load
 extern char **environ; // posix_spawnp inherits parent env explicitly
-#if defined(__APPLE__)
+// execinfo.h: HEXA_OOB_TRACE backtrace path; available on both Apple
+// libSystem and glibc. RFC 063/064 ubu pool fire (FIRMWARE.md G-R0)
+// hit clang implicit-decl error when the include was Apple-only.
 #include <execinfo.h>
+#if defined(__APPLE__)
 #include <mach/mach.h>
 #include <mach/task.h>
 #include <mach/task_info.h>
@@ -2157,6 +2160,11 @@ HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(_hexa_f(x))); }
 HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(_hexa_f(x))); }
 HexaVal hexa_math_round(HexaVal x){ return hexa_float(round(_hexa_f(x))); }
 HexaVal hexa_math_pow(HexaVal b, HexaVal e) { return hexa_float(pow(_hexa_f(b), _hexa_f(e))); }
+// 2026-05-20 (blocker-3 fmod-shim): direct libm fmod() exposed as `fmod(x, y)`
+// from hexa user code. Distinct from `%` which routes through hexa_mod
+// (int+float-aware dispatch); this is the pure float-only path used by
+// scientific kernels that want the libm semantics directly.
+HexaVal hexa_math_fmod(HexaVal a, HexaVal b) { return hexa_float(fmod(_hexa_f(a), _hexa_f(b))); }
 HexaVal hexa_math_min(HexaVal a, HexaVal b) { return hexa_float(fmin(_hexa_f(a), _hexa_f(b))); }
 // G1-FLOAT-PRIM 2026-05-06 — see .roadmap.stdlib.G1-FLOAT-PRIM. lgamma is the
 // log-gamma function used by Beta-Binomial conjugate posteriors throughout

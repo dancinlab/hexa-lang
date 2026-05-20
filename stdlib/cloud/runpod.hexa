@@ -1,0 +1,286 @@
+// stdlib/cloud/runpod.hexa — RunPod provider (cycle B-2 + B-2.1).
+//
+// Each public function tries the runpodctl CLI first (cleaner JSON output,
+// official tool — handles auth retries, edge cases) and falls back to the
+// GraphQL API on local-CLI absence or failure. Set RUNPODCTL_DISABLE=1 in
+// the environment to force the API-fallback path (useful for testing).
+//
+// CLI route — exec → runpodctl create pod / pod get / remove pod
+// API route — POST → https://api.runpod.io/graphql?api_key=… (curl via
+//   stdlib/http; JSON parse via stdlib/alloc/json_object).
+
+use "stdlib/http"
+use "stdlib/alloc/json_object"
+use "stdlib/cloud/cloud"
+
+// ── result shapes ────────────────────────────────────────────────────
+
+struct RunPodPod {
+    ok:      int,   // 1 iff pod was created
+    pod_id:  str,   // RunPod pod id (empty on failure)
+    message: str
+}
+
+struct RunPodSshPort {
+    ok:      int,   // 1 iff a public port-22 mapping is ready
+    ip:      str,   // pod public IP
+    port:    str,   // public port mapped to 22 (string form for ssh -p)
+    message: str
+}
+
+fn _runpod_fail_pod(msg: str) -> RunPodPod {
+    return RunPodPod { ok: 0, pod_id: "", message: msg }
+}
+
+fn _runpod_fail_port(msg: str) -> RunPodSshPort {
+    return RunPodSshPort { ok: 0, ip: "", port: "", message: msg }
+}
+
+// ── runpodctl detection ──────────────────────────────────────────────
+
+// _runpodctl_path — return the runpodctl binary path if available, else "".
+// `RUNPODCTL_DISABLE=1` in the env forces the API-fallback path even if
+// runpodctl is installed (useful when testing the fallback).
+fn _runpodctl_path() -> str {
+    if env_var("RUNPODCTL_DISABLE") == "1" {
+        return ""
+    }
+    let home_bin = env_var("HOME") + "/bin/runpodctl"
+    if file_exists(home_bin) {
+        return home_bin
+    }
+    let on_path = exec("command -v runpodctl 2>/dev/null").trim()
+    return on_path
+}
+
+// _shq_local — POSIX-quote a token for the local /bin/sh -c. Mirrors
+// cloud.hexa's _shq; kept local here so this module does not depend on a
+// private export. Wraps in single quotes; a literal ' becomes '\''.
+fn _shq_local(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" {
+            out = out + "'\\''"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// ── API transport (GraphQL, fallback path) ───────────────────────────
+
+fn _runpod_post(api_key: str, body: str, timeout_sec: int) -> str {
+    let url = "https://api.runpod.io/graphql?api_key=" + api_key
+    let h = #{"Content-Type": "application/json"}
+    return http_post_with_headers(url, h, body, timeout_sec)
+}
+
+// ── pod create ───────────────────────────────────────────────────────
+
+fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: str) -> RunPodPod {
+    // runpodctl 2.x: `pod create` (new form). Deprecated `create pod` emits
+    // a warning line that breaks json_parse. Flags renamed: --gpu-id /
+    // --image / --container-disk-in-gb / --cloud-type. --env now takes a
+    // JSON object, not KEY=val. Pubkeys are ASCII without ", \, or control
+    // chars, so plain concatenation produces valid JSON.
+    let env_json = "{\"PUBLIC_KEY\":\"" + pubkey + "\"}"
+    let cmd = _shq_local(rpc) + " pod create"
+        + " --gpu-id " + _shq_local(gpu_type)
+        + " --image " + _shq_local(image)
+        + " --name " + _shq_local(name)
+        + " --env " + _shq_local(env_json)
+        + " --ports 22/tcp"
+        + " --container-disk-in-gb 80"
+        + " --volume-mount-path /workspace"
+        + " --cloud-type SECURE"
+        + " -o json 2>&1"
+    let out = exec(cmd)
+    let parsed = json_parse(out)
+    let id_v = json_object_get(parsed, "id")
+    if type_of(id_v) == "string" {
+        let pid = to_string(id_v)
+        if len(pid) > 0 {
+            return RunPodPod { ok: 1, pod_id: pid, message: "created (cli) on " + gpu_type }
+        }
+    }
+    return _runpod_fail_pod("create (cli) failed: " + out.substring(0, 200))
+}
+
+fn _runpod_create_api(api_key: str, gpu_type: str, image: str, pubkey: str, name: str) -> RunPodPod {
+    let body = "{\"query\":\"mutation { podFindAndDeployOnDemand(input:{cloudType: ALL, gpuCount:1, volumeInGb:0, containerDiskInGb:80, minVcpuCount:8, minMemoryInGb:32, gpuTypeId:\\\"" + gpu_type + "\\\", name:\\\"" + name + "\\\", imageName:\\\"" + image + "\\\", dockerArgs:\\\"\\\", ports:\\\"22/tcp\\\", volumeMountPath:\\\"/workspace\\\", env:[{key:\\\"PUBLIC_KEY\\\", value:\\\"" + pubkey + "\\\"}]}) { id machineId } }\"}"
+    let resp = _runpod_post(api_key, body, 60)
+    if len(resp) == 0 {
+        return _runpod_fail_pod("create (api): empty response (HTTPS / auth failure)")
+    }
+    let parsed = json_parse(resp)
+    let id_v = json_object_get_path(parsed, "data.podFindAndDeployOnDemand.id")
+    if type_of(id_v) == "string" {
+        let pid = to_string(id_v)
+        if len(pid) > 0 {
+            return RunPodPod { ok: 1, pod_id: pid, message: "created (api) on " + gpu_type }
+        }
+    }
+    return _runpod_fail_pod("create (api): no id in response (no capacity / bad input)")
+}
+
+// runpod_create — try CLI first, fall back to GraphQL API on CLI absence
+// or failure. `api_key` is only used by the API fallback path.
+fn runpod_create(api_key: str, gpu_type: str, image: str, pubkey: str, name: str) -> RunPodPod {
+    let rpc = _runpodctl_path()
+    if len(rpc) > 0 {
+        let r = _runpod_create_cli(rpc, gpu_type, image, pubkey, name)
+        if r.ok == 1 {
+            return r
+        }
+    }
+    return _runpod_create_api(api_key, gpu_type, image, pubkey, name)
+}
+
+// runpod_create_cascade — try each GPU type in order; first that succeeds
+// wins. RunPod capacity for any single GPU is bursty.
+fn runpod_create_cascade(api_key: str, gpu_types: [str], image: str, pubkey: str, name: str) -> RunPodPod {
+    let mut i = 0
+    while i < len(gpu_types) {
+        let r = runpod_create(api_key, gpu_types[i], image, pubkey, name)
+        if r.ok == 1 {
+            return r
+        }
+        exec("sleep 4")
+        i = i + 1
+    }
+    return _runpod_fail_pod("create_cascade: no GPU type succeeded")
+}
+
+// ── ssh-port query + wait ────────────────────────────────────────────
+
+fn _runpod_get_ssh_port_cli(rpc: str, pod_id: str) -> RunPodSshPort {
+    let cmd = _shq_local(rpc) + " pod get " + _shq_local(pod_id) + " -o json 2>&1"
+    let out = exec(cmd)
+    let parsed = json_parse(out)
+    let ip_v = json_object_get_path(parsed, "ssh.ip")
+    let port_v = json_object_get_path(parsed, "ssh.port")
+    if type_of(ip_v) == "string" && type_of(port_v) == "int" {
+        let ipstr = to_string(ip_v)
+        let portstr = to_string(port_v)
+        if len(ipstr) > 0 && len(portstr) > 0 {
+            return RunPodSshPort { ok: 1, ip: ipstr, port: portstr, message: "port 22 (cli)" }
+        }
+    }
+    return _runpod_fail_port("get_ssh_port (cli): no ssh info yet")
+}
+
+fn _runpod_get_ssh_port_api(api_key: str, pod_id: str) -> RunPodSshPort {
+    let body = "{\"query\":\"query { pod(input:{podId:\\\"" + pod_id + "\\\"}) { runtime { ports { ip publicPort privatePort isIpPublic } } } }\"}"
+    let resp = _runpod_post(api_key, body, 30)
+    if len(resp) == 0 {
+        return _runpod_fail_port("get_ssh_port (api): empty response")
+    }
+    let parsed = json_parse(resp)
+    let ports_v = json_object_get_path(parsed, "data.pod.runtime.ports")
+    if type_of(ports_v) != "array" {
+        return _runpod_fail_port("get_ssh_port (api): runtime not provisioned yet")
+    }
+    let mut i = 0
+    while i < len(ports_v) {
+        let p = ports_v[i]
+        let priv_port = json_object_get_int(p, "privatePort", 0)
+        let is_pub = json_object_get(p, "isIpPublic")
+        let p_ip = json_object_get_str(p, "ip", "")
+        let p_port = json_object_get_int(p, "publicPort", 0)
+        if priv_port == 22 && is_pub == true && len(p_ip) > 0 && p_port > 0 {
+            return RunPodSshPort { ok: 1, ip: p_ip, port: to_string(p_port), message: "port 22 (api)" }
+        }
+        i = i + 1
+    }
+    return _runpod_fail_port("get_ssh_port (api): port 22 not yet mapped")
+}
+
+// runpod_get_ssh_port — try CLI first, fall back to GraphQL API.
+fn runpod_get_ssh_port(api_key: str, pod_id: str) -> RunPodSshPort {
+    let rpc = _runpodctl_path()
+    if len(rpc) > 0 {
+        let r = _runpod_get_ssh_port_cli(rpc, pod_id)
+        if r.ok == 1 {
+            return r
+        }
+    }
+    return _runpod_get_ssh_port_api(api_key, pod_id)
+}
+
+// runpod_pod_opts — canonical ssh_opts for an ephemeral RunPod pod.
+// `ServerAliveInterval=15` + `ServerAliveCountMax=3` keep an idle ssh from
+// being declared dead by transient network noise (45s of unanswered
+// keepalives → clean exit, instead of a TCP-stale timeout that took several
+// minutes and confused poll-loop strike counters in the wild).
+fn runpod_pod_opts(port: str) -> [str] {
+    return ["-p", port, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]
+}
+
+// runpod_wait_ssh — poll the port map AND a real `echo` round-trip via
+// ssh until both succeed, or the budget elapses.
+fn runpod_wait_ssh(api_key: str, pod_id: str, max_tries: int, sleep_each_sec: int) -> RunPodSshPort {
+    let mut i = 0
+    let sleep_cmd = "sleep " + to_string(sleep_each_sec)
+    while i < max_tries {
+        let p = runpod_get_ssh_port(api_key, pod_id)
+        if p.ok == 1 {
+            let probe = cloud_run_opts("root@" + p.ip, runpod_pod_opts(p.port), ["echo", "__RUNPOD_UP__"])
+            if probe.ok == 1 {
+                if probe.stdout_.index_of("__RUNPOD_UP__") >= 0 {
+                    return p
+                }
+            }
+        }
+        exec(sleep_cmd)
+        i = i + 1
+    }
+    return _runpod_fail_port("wait_ssh: never ready in " + to_string(max_tries * sleep_each_sec) + "s")
+}
+
+// ── teardown ─────────────────────────────────────────────────────────
+
+fn _runpod_terminate_cli(rpc: str, pod_id: str) -> int {
+    // runpodctl 2.x: `pod delete` (new form) — aliases: rm / remove. The
+    // top-level `runpod remove pod` is deprecated.
+    let cmd = _shq_local(rpc) + " pod delete " + _shq_local(pod_id) + " -o json 2>&1"
+    let out = exec(cmd)
+    // Best-effort: any output containing "error" is a failure; otherwise
+    // treat as success (runpodctl prints a short confirmation).
+    if out.index_of("error") >= 0 {
+        return 0
+    }
+    if out.index_of("Error") >= 0 {
+        return 0
+    }
+    return 1
+}
+
+fn _runpod_terminate_api(api_key: str, pod_id: str) -> int {
+    let body = "{\"query\":\"mutation { podTerminate(input:{podId:\\\"" + pod_id + "\\\"}) }\"}"
+    let resp = _runpod_post(api_key, body, 30)
+    if len(resp) > 0 {
+        return 1
+    }
+    return 0
+}
+
+// runpod_terminate — terminate the pod. Best-effort; tries CLI first,
+// falls back to API. Returns 1 on apparent success, 0 on failure or
+// empty pod_id.
+fn runpod_terminate(api_key: str, pod_id: str) -> int {
+    if len(pod_id) == 0 {
+        return 0
+    }
+    let rpc = _runpodctl_path()
+    if len(rpc) > 0 {
+        if _runpod_terminate_cli(rpc, pod_id) == 1 {
+            return 1
+        }
+    }
+    return _runpod_terminate_api(api_key, pod_id)
+}

@@ -425,6 +425,7 @@ HexaVal hexa_math_floor(HexaVal x);                                             
 HexaVal hexa_math_ceil(HexaVal x);                                                 /* runtime.c:2157 */
 HexaVal hexa_math_round(HexaVal x);                                                /* runtime.c:2158 */
 HexaVal hexa_math_pow(HexaVal b, HexaVal e);                                       /* runtime.c:2159 */
+HexaVal hexa_math_fmod(HexaVal a, HexaVal b);                                      /* runtime.c — blocker-3 fmod-shim */
 HexaVal hexa_math_min(HexaVal a, HexaVal b);                                       /* runtime.c:2160 */
 HexaVal hexa_math_max(HexaVal a, HexaVal b);                                       /* runtime.c:2169 */
 HexaVal hexa_str_parse_float(HexaVal s);                                           /* runtime.c:815 (proto) */

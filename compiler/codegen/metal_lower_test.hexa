@@ -1,0 +1,104 @@
+// HEXA Native Compiler — RFC 075 P0 / Metal lowering smoke (scaffold-only)
+//
+// @version 0.0.1
+// @capabilities [pure]
+//
+// RFC 075 P0 scaffold smoke. The codegen entry `codegen_emit_metal_msl`
+// is a P0 stub that honestly returns `""` (no MSL source emit yet).
+// This file asserts that P0 contract: emit returns an empty string.
+// Real lowering smokes (vec-add MSL text, kernel-signature scaffolding,
+// device-pointer address-space) come P1+ — each new MIR construct lands
+// a `_test_<construct>` case here, mirroring `nvptx_lower_test.hexa`
+// and the sibling `rocm_lower_test.hexa`.
+//
+// Run:
+//   hexa build compiler/codegen/metal_lower_test.hexa -o build/metal_lower_test
+//   ./build/metal_lower_test
+
+import "../ir/mir.hexa"
+import "../ir/lir.hexa"
+import "./metal_target.hexa"
+
+// ── MIR construction helpers (minimum needed for the empty MModule).
+//    P1+ will share the Local/Operand/Stmt helpers shape from
+//    nvptx_lower_test.hexa; P0 only needs an empty module ──
+
+fn _empty_mmodule() -> MModule {
+    return MModule { file: "metal_p0_smoke.hexa", funcs: [], globals: [] }
+}
+
+// ── Text inspection ──────────────────────────────────────────────────
+
+fn _check_empty(ok_in: bool, text: string, label: string) -> bool {
+    if text.length == 0 { return ok_in }
+    println("  FAIL: " + label + " (expected empty, got " + to_string(text.length) + " chars)")
+    return false
+}
+
+// ── Case 1 — P0 emit stub returns empty string ───────────────────────
+//
+// The P0 contract: `codegen_emit_metal_msl` is wired to the scaffold and
+// honestly returns `""` until P3 fills in real MSL source text emit.
+// This case verifies (a) the entry is callable, (b) the return type
+// compiles against `string`, (c) the return value matches the P0
+// placeholder. Falsifier F-RFC075-METAL-EMIT-VEC-ADD intentionally
+// FAILS today; that is the point of a stub assertion.
+
+fn _test_p0_empty_emit() -> bool {
+    let mut ok = true
+    let mod_empty = _empty_mmodule()
+    let msl = codegen_emit_metal_msl(mod_empty)
+
+    println("")
+    println("── emitted MSL (RFC 075 P0 empty-emit case) ──")
+    println("  [empty string, length=" + to_string(msl.length) + "]")
+
+    ok = _check_empty(ok, msl, "P0 stub returns empty string")
+    return ok
+}
+
+// ── Case 2 — target enum + MSL syntax-fragment constants verified ────
+//
+// Sanity-checks the Apple-GPU target tags and the MSL syntax fragments
+// land at their documented strings. In P1 this evolves into
+// F-RFC075-METAL-TARGET-ACCEPT.
+
+fn _test_target_constants() -> bool {
+    let mut ok = true
+    if METAL_TARGET_APPLE_GPU != "air64-apple-macos-applegpu" {
+        println("  FAIL: METAL_TARGET_APPLE_GPU mismatch (got '" + METAL_TARGET_APPLE_GPU + "')")
+        ok = false
+    }
+    if METAL_SIMD_GROUP_SIZE != 32 {
+        println("  FAIL: METAL_SIMD_GROUP_SIZE expected 32, got " + to_string(METAL_SIMD_GROUP_SIZE))
+        ok = false
+    }
+    if METAL_KW_KERNEL != "kernel" {
+        println("  FAIL: METAL_KW_KERNEL expected 'kernel', got '" + METAL_KW_KERNEL + "'")
+        ok = false
+    }
+    if METAL_SPACE_DEVICE != "device" {
+        println("  FAIL: METAL_SPACE_DEVICE expected 'device', got '" + METAL_SPACE_DEVICE + "'")
+        ok = false
+    }
+    if ok {
+        println("  ok: Apple-GPU target tag + SIMD-group=32 + kernel/device fragments verified")
+    }
+    return ok
+}
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  RFC 075 P0 — Metal scaffold smoke")
+    println("══════════════════════════════════════════════")
+
+    let ok_emit = _test_p0_empty_emit()
+    let ok_tgt  = _test_target_constants()
+
+    println("")
+    if ok_emit && ok_tgt {
+        println("  PASS: RFC 075 P0 Metal scaffold smoke")
+    } else {
+        println("  FAIL: RFC 075 P0 Metal scaffold smoke")
+    }
+}

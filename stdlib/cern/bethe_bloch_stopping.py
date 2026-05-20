@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 # bethe_bloch_stopping.py — `cern + verify` producer (D65 / κ-42).
 #
+# ①b ADAPTER (demiurge design.md D72 — STDLIB 2-layer restructure).
+# The domain-agnostic particle-physics — `particle` import recovery,
+# PDG mass lookup, the Bethe-Bloch dE/dx formula — now lives in the
+# ①a kernel `stdlib/kernels/mc_transport/transport_kernel.py`. This
+# file is the THIN cern adapter: it owns ONLY the domain inputs
+# (CERN-style shielding materials, the antiproton projectile, the
+# ELENA-scale KE grid) and the artifact emission. Mirrors the
+# kernel-extraction pattern of `stdlib/component/gmsh_skfem.py`
+# (fem kernel) and `stdlib/grid/networkx_basics.py` (graph kernel).
+#
 # SSOT placement: this script lives in ~/core/hexa-lang/stdlib/cern/
 # per AGENTS.tape @D g_demiurge_pointer_only (D61) + @D g_stdlib_ownership
 # (D15). demiurge's CernVerifyProducer.swift is a thin spawn-wrapper only —
@@ -29,8 +39,10 @@
 #     scoping but NOT an absorbed-claim replacement for Geant4 MC.
 #
 # What it does (one call):
-#   1. Read PDG masses + charges of antiproton, electron (via `particle`).
-#   2. For each (KE_MeV, material), evaluate Bethe-Bloch dE/dx:
+#   1. Read PDG masses + charges of antiproton, electron (via the
+#      ①a transport kernel, which wraps `particle`).
+#   2. For each (KE_MeV, material), evaluate Bethe-Bloch dE/dx via the
+#      kernel:
 #        -dE/dx = K · z² · (Z/A) · (1/β²) · [½·ln(2m_ec²β²γ²T_max/I²) − β²]
 #      with density-effect δ = 0 (low-/mid-energy regime).
 #   3. Write <out_dir>/cern_g4_stopping_v1.csv (table rows).
@@ -58,12 +70,27 @@
 #   python3 bethe_bloch_stopping.py <output_dir>
 
 import json
-import math
 import os
 import platform
 import sys
 import hashlib
 from datetime import datetime, timezone
+
+
+# ------------------------------------------------------------------
+# Locate the ①a mc_transport kernel. The demiurge `python3 <script>
+# <out_dir>` spawn uses an arbitrary cwd, so resolve the kernel path
+# relative to THIS file: stdlib/cern/bethe_bloch_stopping.py ->
+# stdlib/kernels/mc_transport/. Same locate-by-__file__ pattern the
+# fem ①b adapter (stdlib/component/gmsh_skfem.py) uses.
+# ------------------------------------------------------------------
+_KERNEL_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "..", "kernels", "mc_transport"))
+if _KERNEL_DIR not in sys.path:
+    sys.path.insert(0, _KERNEL_DIR)
+
+import transport_kernel  # noqa: E402  — ①a domain-agnostic MC kernel
 
 
 GEOMETRY_ID = "cern_g4_stopping_v1"
@@ -85,33 +112,19 @@ MATERIALS = [
 ]
 
 # Bethe-Bloch K factor: 4πN_A r_e² m_ec² = 0.307075 MeV·cm²/g
-# (PDG 2024, eq. 34.5 / Table 34.4).
-K_BB_MEV_CM2_PER_G = 0.307075
+# (PDG 2024, eq. 34.5 / Table 34.4). Pinned to the ①a kernel's
+# constant — domain-independent, so the kernel is the SSOT.
+K_BB_MEV_CM2_PER_G = transport_kernel.K_BB_MEV_CM2_PER_G
 
-
-def _ensure_particle():
-    """Import the scikit-hep `particle` package; recover from the macOS
-    Homebrew layout where pip --user lands at ~/Library/Python/<ver>/
-    lib/python/site-packages (not on default sys.path)."""
-    try:
-        import particle  # noqa: F401
-        return
-    except ImportError:
-        pass
-    py_xy = f"{sys.version_info.major}.{sys.version_info.minor}"
-    user_site = os.path.expanduser(
-        f"~/Library/Python/{py_xy}/lib/python/site-packages")
-    if os.path.isdir(user_site) and user_site not in sys.path:
-        sys.path.insert(0, user_site)
-    import particle  # noqa: F401 — raise if still missing
+# Projectile PDG ids — antiproton and electron. Domain inputs: the
+# cern cell stops antiprotons; the electron mass enters Bethe-Bloch.
+PDG_ANTIPROTON = -2212
+PDG_ELECTRON = 11
 
 
 def particle_version() -> str:
-    try:
-        import particle
-        return particle.__version__
-    except Exception:
-        return "unknown"
+    """Probe the scikit-hep `particle` version via the ①a kernel."""
+    return transport_kernel.particle_version()
 
 
 def uproot_version_or_none() -> str | None:
@@ -124,17 +137,13 @@ def uproot_version_or_none() -> str | None:
 
 
 def antiproton_and_electron_mev() -> tuple[float, float]:
-    """Pull PDG masses (MeV/c²) for antiproton and electron via
-    scikit-hep `particle`. Falling back to None is forbidden —
-    silent-success is a g3 violation; we let the import raise."""
-    from particle import Particle
-    # antiproton (anti pp_bar) PDG-id = -2212, electron mass identical
-    # for e+ and e-.
-    antiproton = Particle.from_pdgid(-2212)
-    electron = Particle.from_pdgid(11)
-    if antiproton.mass is None or electron.mass is None:
-        raise RuntimeError("particle returned None mass for pbar / e-")
-    return float(antiproton.mass), float(electron.mass)
+    """Pull PDG masses (MeV/c²) for antiproton and electron via the
+    ①a transport kernel (which wraps scikit-hep `particle`). Falling
+    back to None is forbidden — silent-success is a g3 violation; the
+    kernel raises on a missing library / None mass."""
+    m_pbar = transport_kernel.particle_mass_mev(PDG_ANTIPROTON)
+    m_e = transport_kernel.particle_mass_mev(PDG_ELECTRON)
+    return m_pbar, m_e
 
 
 def bethe_bloch_dedx(
@@ -147,7 +156,8 @@ def bethe_bloch_dedx(
     m_e_mev: float,
 ) -> dict:
     """Evaluate the PDG mean-stopping-power expression at one (KE,
-    material) point. Returns the row dict ready for CSV emission.
+    material) point via the ①a transport kernel. Returns the row dict
+    ready for CSV emission.
 
     Bethe-Bloch (PDG eq. 34.5, density-correction δ = 0):
         -dE/dx = K · z² · (Z/A) · (1/β²) ·
@@ -156,31 +166,15 @@ def bethe_bloch_dedx(
         γ = 1 + KE / (m_proj·c²),   β² = 1 − 1/γ²,
         T_max = 2·m_e·c²·β²·γ² / (1 + 2γm_e/m_proj + (m_e/m_proj)²)
     """
-    # Kinematics.
-    gamma = 1.0 + (ke_mev / m_proj_mev)
-    beta2 = 1.0 - 1.0 / (gamma * gamma)
-    if beta2 <= 0.0:
-        return {"beta2_invalid": True}
-    beta = math.sqrt(beta2)
-    # Max KE transferred to electron in one collision (relativistic).
-    me_over_mp = m_e_mev / m_proj_mev
-    tmax_mev = (2.0 * m_e_mev * beta2 * gamma * gamma) / (
-        1.0 + 2.0 * gamma * me_over_mp + me_over_mp * me_over_mp
+    return transport_kernel.bethe_bloch_dedx(
+        ke_mev=ke_mev,
+        projectile_mass_mev=m_proj_mev,
+        projectile_charge=z_proj,
+        target_z=z_target,
+        target_a_gpermol=a_target,
+        target_i_ev=i_ev,
+        electron_mass_mev=m_e_mev,
     )
-    # Mean excitation in MeV (table is in eV).
-    i_mev = i_ev * 1.0e-6
-    # Bethe-Bloch logarithmic mean stopping power, MeV·cm²/g.
-    log_term = 0.5 * math.log(
-        2.0 * m_e_mev * beta2 * gamma * gamma * tmax_mev / (i_mev * i_mev)
-    )
-    dedx = K_BB_MEV_CM2_PER_G * (z_proj * z_proj) * (z_target / a_target) \
-        * (log_term - beta2) / beta2
-    return {
-        "beta": beta,
-        "gamma": gamma,
-        "tmax_mev": tmax_mev,
-        "dedx_mevcm2_per_g": dedx,
-    }
 
 
 def write_root_histograms(
@@ -232,8 +226,9 @@ def main(argv: list[str]) -> int:
     os.makedirs(out_dir, exist_ok=True)
 
     # Loud-fail if particle is missing — silent success forbidden (g3).
+    # The ①a kernel's `ensure_particle` owns the import recovery.
     try:
-        _ensure_particle()
+        transport_kernel.ensure_particle()
     except Exception as exc:
         print(f"engine_tool_gap — particle missing: {exc}", file=sys.stderr)
         print("CERN_G4_RESULT {\"ok\": false, "
@@ -255,8 +250,6 @@ def main(argv: list[str]) -> int:
                 i_ev=i_ev,
                 m_e_mev=m_e,
             )
-            if r.get("beta2_invalid"):
-                continue
             rows.append({
                 "material": mat,
                 "z_target": z,

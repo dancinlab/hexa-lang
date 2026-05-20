@@ -31,10 +31,10 @@
 //
 // Source: demiurge κ-39 (D62) skeleton + κ-41 (D67) bodies.
 
-import "stdlib/sscb/wolfspeed"
-import "stdlib/sscb/devsim"
+import "stdlib/kernels/circuit/wolfspeed"
+import "stdlib/kernels/circuit/devsim"
 import "stdlib/sscb/wolfspeed_parity"
-import "stdlib/sscb/vdmos"
+import "stdlib/kernels/circuit/vdmos"
 
 let VERSION = "0.1.0"
 

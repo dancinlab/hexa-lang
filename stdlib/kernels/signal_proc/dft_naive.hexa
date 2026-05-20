@@ -1,0 +1,207 @@
+// stdlib/kernels/signal_proc/dft_naive.hexa — D80 g_hexa_only pilot
+// (demiurge AGENTS.tape @D g_hexa_only — ultimate form).
+//
+// THIRD sample of the hexa-native parity port pattern (after
+// `stdlib/kernels/solar/solar_kernel.hexa` and
+// `stdlib/kernels/mc_transport/mc_slab_demo.hexa`). Clean-room
+// hexa-native naive discrete Fourier transform (O(N²)) for small N.
+// Companion Python oracle in `dft_naive.py` uses ONLY `math` (no
+// numpy, no scipy) so the same closed-form trig drives both sides —
+// machine-epsilon parity is the test.
+//
+// Layer (ABSORPTION.md ① / demiurge design.md D72):
+//   ①a kernel — THIS FILE. Domain-agnostic. No EEG, no Welch frame
+//                averaging, no MNE band-power schema — pure
+//                "real signal in → complex spectrum out". An adapter
+//                (signal-domain ①b, future) supplies the framing /
+//                windowing / band partitioning.
+//   ①b adapter — `stdlib/aura/aura_mne.py` currently delegates to
+//                `stdlib/kernels/signal_proc/mne_psd_kernel.py` which
+//                wraps MNE's `psd_array_welch`. Re-pointing the
+//                Welch-PSD path at this kernel is a follow-on round
+//                (needs frame loop + Hann window + periodogram
+//                averaging, all pure float math built on this DFT).
+//
+// @version 0.1.0
+// @capabilities [pure]
+// @stability stage-2 substrate (clean-room re-derivation, no numpy
+//   call). Substrate parity against the Python `math`-only companion
+//   `dft_naive.py` verified by `dft_naive_test.hexa` for N ∈ {1, 2,
+//   4, 8, 16} at <1e-12 relative. Algorithmic parity against numpy's
+//   `numpy.fft.fft` is also <1e-12 since numpy uses the same
+//   exp(-2πi·k·n/N) convention — but the parity oracle here is the
+//   `math`-only companion to keep the pilot self-contained.
+// @since 2026-05-20
+//
+// CLEAN-ROOM PROVENANCE
+//   This module carries NO numpy / scipy / mne code — the DFT is the
+//   textbook closed-form sum:
+//
+//     X[k] = Σ_{n=0..N-1} x[n] · exp(-2πi·k·n/N)
+//          = Σ x[n] · [cos(-2πkn/N) + i·sin(-2πkn/N)]
+//
+//   - upstream code   : none (clean-room re-derivation)
+//   - upstream spec   : Cooley & Tukey 1965 (the FFT paper —
+//                       SECTION 2 gives the naive DFT definition
+//                       prior to the radix-2 optimization). The
+//                       naive O(N²) implementation pre-dates Cooley
+//                       & Tukey and is in every signal-processing
+//                       textbook — e.g. Oppenheim & Schafer
+//                       "Discrete-Time Signal Processing" §8.0.
+//   - parity baseline : `math`-only Python `dft_naive.py` (this
+//                       worktree). Numpy `numpy.fft.fft` parity is
+//                       implied because numpy uses the same
+//                       definition, but kept out of the test so the
+//                       test runs without numpy.
+//
+// HONESTY (g3 — non-negotiable, inherited by every caller):
+//   * The DFT IS the definition — given a real input array of length
+//     N, the output is the EXACT mathematical truncated Fourier
+//     series. There is no measurement uncertainty in the DFT
+//     itself, only in (a) the input signal's acquisition path and
+//     (b) the float roundoff inherited from sin/cos.
+//   * BUT the Welch PSD that consumes this — segmentation, Hann /
+//     Hamming window, overlap, periodogram averaging — has its own
+//     bias/variance tradeoff. None of that is in scope here. This
+//     kernel computes one DFT, not a PSD.
+//   * Naive O(N²) only — for N > ~256 a radix-2 Cooley-Tukey FFT is
+//     the standard substitute. That port is queued as the next round
+//     after this one (the inner butterfly is also pure float math;
+//     this pilot is the closed-form anchor against which the FFT can
+//     be verified bit-for-bit).
+//   * absorbed = false ALWAYS at the record layer until the demiurge
+//     HexaNativeParityRef schema lands AND a measured-signal oracle
+//     wires in.
+//
+// Surface (real input, complex output as two parallel arrays):
+//   pub fn dft_naive(x: [float]) -> [[float]]
+//       Returns [Xr, Xi] — real / imaginary parts of X[0..N-1].
+//
+//   pub fn idft_naive(xr: [float], xi: [float]) -> [[float]]
+//       Inverse DFT (also naive O(N²)). Returns [yr, yi].
+//
+//   pub fn magnitude(xr: [float], xi: [float]) -> [float]
+//       Per-bin magnitude |X[k]| = sqrt(Xr[k]² + Xi[k]²).
+//
+//   pub fn power(xr: [float], xi: [float]) -> [float]
+//       Per-bin power |X[k]|² (the periodogram intensity, before
+//       window/scale normalization).
+
+use "stdlib/core/math/float"
+
+// ── public API ───────────────────────────────────────────────────────
+
+/// Naive O(N²) discrete Fourier transform of a real input.
+///
+/// Algorithm: X[k] = Σ_{n=0..N-1} x[n] · exp(-2πi·k·n/N)
+///
+/// For each (k, n) compute the twiddle angle θ = -2π·k·n/N, then
+/// accumulate xr += x[n]·cos(θ), xi += x[n]·sin(θ). Real input means
+/// the imaginary sum is non-trivial (sin is odd) but the input never
+/// has its own imaginary part.
+///
+/// Returns a 2-element array [Xr, Xi] each of length N. Caller picks
+/// indices: Xr = result[0], Xi = result[1].
+pub fn dft_naive(x: [float]) -> [[float]] {
+    let n = len(x)
+    let two_pi = tau()
+    let n_f = to_float(n)
+
+    let mut xr: [float] = []
+    let mut xi: [float] = []
+
+    let mut k = 0
+    while k < n {
+        let k_f = to_float(k)
+        let mut acc_r = 0.0
+        let mut acc_i = 0.0
+        let mut nn = 0
+        while nn < n {
+            let n_f2 = to_float(nn)
+            // θ = -2π·k·n/N — the negative sign is the forward-DFT
+            // convention (numpy.fft.fft, MATLAB fft, MNE Welch).
+            let theta = 0.0 - two_pi * k_f * n_f2 / n_f
+            acc_r = acc_r + x[nn] * cos(theta)
+            acc_i = acc_i + x[nn] * sin(theta)
+            nn = nn + 1
+        }
+        xr = xr.push(acc_r)
+        xi = xi.push(acc_i)
+        k = k + 1
+    }
+
+    return [xr, xi]
+}
+
+/// Naive O(N²) inverse DFT. Takes a complex spectrum as two parallel
+/// arrays (Xr, Xi) and returns the time-domain signal (yr, yi).
+///
+/// Algorithm: y[n] = (1/N) · Σ_{k=0..N-1} X[k] · exp(+2πi·k·n/N)
+///
+/// For a real-input forward DFT, yi[n] is ~0 (machine epsilon). This
+/// is the round-trip parity check that pins the forward-DFT
+/// numerical fidelity.
+pub fn idft_naive(xr: [float], xi: [float]) -> [[float]] {
+    let n = len(xr)
+    if len(xi) != n {
+        print("FATAL idft_naive: xr and xi length mismatch")
+        return [[], []]
+    }
+    let two_pi = tau()
+    let n_f = to_float(n)
+
+    let mut yr: [float] = []
+    let mut yi: [float] = []
+
+    let mut nn = 0
+    while nn < n {
+        let n_f2 = to_float(nn)
+        let mut acc_r = 0.0
+        let mut acc_i = 0.0
+        let mut k = 0
+        while k < n {
+            let k_f = to_float(k)
+            // Inverse DFT: +2π·k·n/N
+            let theta = two_pi * k_f * n_f2 / n_f
+            let c = cos(theta)
+            let s = sin(theta)
+            // (Xr + i·Xi) · (cos + i·sin) =
+            //   (Xr·cos - Xi·sin) + i·(Xr·sin + Xi·cos)
+            acc_r = acc_r + xr[k] * c - xi[k] * s
+            acc_i = acc_i + xr[k] * s + xi[k] * c
+            k = k + 1
+        }
+        yr = yr.push(acc_r / n_f)
+        yi = yi.push(acc_i / n_f)
+        nn = nn + 1
+    }
+
+    return [yr, yi]
+}
+
+/// Per-bin magnitude |X[k]| = sqrt(Xr[k]² + Xi[k]²).
+pub fn magnitude(xr: [float], xi: [float]) -> [float] {
+    let n = len(xr)
+    let mut out: [float] = []
+    let mut k = 0
+    while k < n {
+        out = out.push(sqrt(xr[k] * xr[k] + xi[k] * xi[k]))
+        k = k + 1
+    }
+    return out
+}
+
+/// Per-bin power |X[k]|² (no window / no scale — raw periodogram
+/// intensity). The Welch-PSD layer (future ①b adapter) is responsible
+/// for normalisation: /sum(window²), /N², /fs to convert to
+/// power-per-Hz.
+pub fn power(xr: [float], xi: [float]) -> [float] {
+    let n = len(xr)
+    let mut out: [float] = []
+    let mut k = 0
+    while k < n {
+        out = out.push(xr[k] * xr[k] + xi[k] * xi[k])
+        k = k + 1
+    }
+    return out
+}

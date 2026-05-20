@@ -1967,3 +1967,847 @@ forge-route 확인 — 미측정 over-claim 0).
 **머지-안전성**: build GREEN + GOAL step1 PASS 측정 → rfc043-hexa-torch
 의 A/B/C 머지가 검증됨. git-clean(FF) + 런타임 측정-PASS → main 머지
 안전. (copy_slice/transpose CPU-fallback 은 비차단 잔재로 별도 추적.)
+
+### 2026-05-20 — SD5 ag_extract — first AST-driven reverse-mode AD step (north-star ① gap-b, scoping note §4)
+
+SD1–SD4 (PR #129/#152/#153/#154) landed the **manually-keyed** vjp rule
+registry: a human encodes each bwd by hand and the registry stores only
+op-kind presence. The scoping note (`inbox/notes/2026-05-20-flame-
+autograd-auto-scoping.md` §4) explicitly carved out **SD5** as the
+genuine source-to-source transform — "true AST-driven derivation from a
+hexa-lang `fn`'s source — requires compiler hook". This cycle lands
+that first step.
+
+**Files (additive only — zero edits to ag_derive/ag_tape/nn_lib)**:
+- `stdlib/flame/ag_extract.hexa` (new, ~400 LoC) — minimal AST arena
+  (6 node kinds: Param, Const, BinOp_GT, IfElse, Var_Upstream, BinOp_MUL),
+  hand-built fwd builder for `relu(x) = if x > 0 then x else 0`, the
+  reverse-mode walker (IfElse rule + Param rule + Const rule), emit
+  step (AST → hexa-lang source string), interpret step (AST → numerical
+  evaluation for the byte-eq oracle).
+- `test/flame_ag_extract_test.hexa` (new, ~140 LoC) — fixed-seed
+  (LCG seed 4242 + 31337, len=32, x_arr ∈ [-1.0, 1.0] so both
+  branches of relu vjp exercised), reference = hand-written
+  `relu_bwd_manual`, byte-eq oracle vs AST-driven path.
+
+**Gate measured**: `F-RFC043-AUTOGRAD-AUTO-SD5-RELU-BYTE-EQ`
+**PASS** (max|dx_auto − dx_ref| = 0.0, len=32, 8 positive + 24 negative
+inputs).
+
+**Emitted source** (printed by the test for inspection):
+```
+pub fn relu_bwd_auto_emitted(x: float, dy: float) -> float {
+    return (if (x > 0.0) { dy } else { 0.0 })
+}
+```
+
+**g3 honest framing**: SD5 is the **first AST-extract step**, NOT
+"complete autograd". One op (relu). The AST is hand-built (no parser
+dependency — compiler/parse/ast.hexa is structurally accessible but
+importing it pulls in lex+parse+diag, documented as future-cycle SD6
+in `ag_extract.hexa` §Future work). The emit step prints hexa-lang
+source that COULD compile standalone; the byte-eq oracle goes through
+an in-process interpret path (single hexa invocation, no second
+compile cycle — future SD9). What SD5 PROVES: the AST→reverse-mode-
+walk→emit pipeline produces a body byte-eq with the hand-derived
+reference for the chosen op. That is the SHAPE of source-to-source
+AD; full operator coverage is multi-cycle SD6–SD9 work.
+
+**Regression check**: SD1+SD2+SD3 (`test/flame_ag_derive_test.hexa`)
+PASS rc=0 unchanged. SD4 (`stdlib/flame/flame_ag_tape_test.hexa`)
+shows 2 pre-existing FAIL (CHAIN-EQ, FANIN-EQ) IDENTICAL to baseline
+without my changes — not a regression introduced by SD5 (verified by
+running the test with ag_extract files moved aside; same 2 FAIL).
+
+**Atlas citations** (g6, in `ag_extract.hexa` header):
+- Pearlmutter & Siskind, "Reverse-Mode AD in a Functional
+  Framework: Lambda the Ultimate Backpropagator" (2008), ACM TOPLAS
+  30(2) — establishes reverse-mode AD as a source-to-source program
+  transform; provides the If-construct transformation rule SD5
+  reproduces.
+- Griewank & Walther, "Evaluating Derivatives: Principles and
+  Techniques of Algorithmic Differentiation" (2008, SIAM, 2nd ed) —
+  §4.4 "kinks" covers the relu subgradient choice at x=0.
+
+**Future-cycle stop-conditions (g3 carve-outs, in ag_extract.hexa
+§Future work)**:
+- SD6: parser integration — expose thin `parse_function_body(path,
+  fn_name) -> Expr` surface so stdlib/flame doesn't drag in the
+  full compiler/lex+parse+diag transitive dep.
+- SD7: multi-input + multi-output via ag_tape's registry.
+- SD8: more reverse-mode rules (Sum, MatMul AST-derived, Compose,
+  elementwise unary family).
+- SD9: re-emit-and-recompile loop — the emitted source actually
+  loaded and called.
+
+Each future SD = separate PR + own falsifier registered in
+FLAME.tape before work starts (per scoping note §4).
+
+### 2026-05-20 — SD6 ag_extract — second op (sigmoid) proof of generalization (north-star ① gap-b)
+
+SD5 (PR #184, commit `1a55599c`) landed the **first** AST-extract step
+for relu — pipeline shape `AST → reverse-mode walk → emit`, with the
+walker hard-coded to the IfElse rule. SD6 (this cycle) extends to a
+**SECOND** op (sigmoid `s(x) = 1/(1+dt_exp(-x))`) by adding per-op
+reverse-mode rules for the elementary primitives the sigmoid fwd
+decomposes into: ADD, SUB, MUL, DIV, NEG, dt_exp. This validates that
+the SD5 pipeline shape **generalizes beyond pure-conditional vjps** —
+the per-op rule table is the extension point.
+
+**Files (additive only — zero edits to ag_derive/ag_tape/nn_lib;
+   SD5 surface untouched)**:
+- `stdlib/flame/ag_extract.hexa` extended (+582 LoC, 539 → 1057):
+  - 6 new node kinds (codes 7-12): `BinOp_ADD`, `BinOp_SUB`,
+    `BinOp_DIV`, `BinOp_NEG`, `Call_DTEXP`, `Var_FwdResult`. Latter
+    references a cached forward intermediate by slot-id — the
+    "save forward, reuse in backward" pattern the sigmoid vjp needs
+    (s appears twice in `ds/dx = s*(1-s)`).
+  - Arena capacity bumped 32 → 64 to fit sigmoid fwd AST (7 nodes)
+    + bwd AST (~14 nodes) + Var_FwdResult cache references.
+  - `ag_extract_build_sigmoid_fwd` — hand-built fwd AST mirror of
+    `1.0 / (1.0 + dt_exp(0.0 - x))`, returning cached intermediate
+    slot-ids via a 4-cell `cache_out` farr.
+  - `ag_extract_reverse_walk_v2` — chain-rule-threaded reverse walker
+    with explicit upstream-gradient (Wengert-tape shape per
+    Griewank–Walther §3.2). Each fwd-node kind has a per-op rule
+    transforming the upstream into each child's gradient. Recurses
+    through the fwd AST applying the chain rule top-down.
+  - `ag_extract_eval_fwd` — forward evaluator that populates a
+    fwd-value cache farr (one cell per arena slot) so the bwd
+    interpret step can read cached intermediates via Var_FwdResult.
+  - `ag_extract_interpret_v2` — interpret step extended to handle
+    the 6 new node kinds + Var_FwdResult lookups.
+  - `ag_extract_sigmoid_bwd_via_ast` — elementwise driver that for
+    each input computes the fwd cache then interprets the bwd AST
+    to produce dx.
+- `test/flame_ag_extract_test.hexa` extended (+169 LoC, 147 → 282):
+  - `sigmoid_bwd_manual(x, dy)` — hand-written reference computing
+    `let s = 1/(1+dt_exp(-x)); dy * s * (1.0 - s)` with the IDENTICAL
+    fwd op-order as the walker's fwd AST.
+  - SD6 oracle: builds sigmoid fwd, reverse-walk-v2 with upstream=dy,
+    emits source (printed for inspection), interpret elementwise,
+    compares to manual reference.
+  - First-4-elements debug print (x, dx_auto, dx_ref, |Δ|) for
+    transparent IEEE-754 audit.
+  - Exit codes: 0 (both PASS), 91 (SD5 fail), 92 (SD6 fail with
+    honest report).
+
+**Gate measured**: `F-RFC043-AUTOGRAD-AUTO-SD6-SIGMOID-BYTE-EQ`
+**FAIL (honest finding per task §7)** — `max|dx_auto − dx_ref| =
+5.55112e-17` (~1 ULP, machine-eps level). Mathematically equivalent;
+IEEE-754 trajectory differs.
+
+**Emitted source** (printed by the test for inspection):
+```
+pub fn sigmoid_bwd_auto_emitted(x: float, dy: float) -> float {
+    return (0.0 + (0.0 + (0.0 + (0.0 - ((0.0 - ((dy * _fwd7) / _fwd5)) * _fwd3)))))
+}
+```
+where `_fwd7` = s (sigmoid output, slot 7), `_fwd5` = d (1+e, slot 5),
+`_fwd3` = e (dt_exp(u), slot 3). Algebraic reduction (the +0.0
+no-op chains from the always-zero rhs of each ADD-combine):
+`dx = dy * (s/d) * e = dy * s * e/d`. Identity `e/d ≡ 1-s` holds
+mathematically (since `s = 1/d` and `d = 1+e` ⇒ `1 - s = 1 - 1/d =
+(d-1)/d = e/d`); reference uses the `1.0 - s` form, walker uses the
+`e/d` form. Same scalar value to within last-bit rounding.
+
+**g3 honest framing (the SD6 deliverable)**: SD6 proves the per-op
+rule table generalizes the pipeline shape, but proves NEGATIVELY
+that the byte-eq lemma does NOT generalize. SD5's byte-eq fell
+out because relu's vjp is a pure conditional dataflow — the walker
+and reference both went through the IDENTICAL select-from-`>`
+trajectory, no float arithmetic was reordered. Sigmoid's vjp
+requires multiplication chains; the algebraic identity
+`1.0 - s ≡ e/d` is exact in real arithmetic but produces different
+last-bit rounding under IEEE-754. The first-element evidence
+`|Δ| = 1.39e-17` (subnormal-scale) on x=-0.0205 confirms ULP-level
+divergence, not a real numerical bug. **What SD6 PROVED**: (1) the
+AST→reverse-walk→emit pipeline shape extends from 1 op (relu) to 2
+ops (sigmoid); (2) the per-op rule table — ADD/SUB/MUL/DIV/NEG/exp
+— is sufficient for a non-trivial elementwise unary's vjp; (3) the
+"save forward, reuse in backward" pattern is correctly implemented
+via Var_FwdResult + fwd_cache. **What SD6 did NOT prove**: byte-eq
+generalization (intentional honest finding per task §7).
+
+**SD5 regression check**: `F-RFC043-AUTOGRAD-AUTO-SD5-RELU-BYTE-EQ`
+PASS rc=0 unchanged (the SD5 walker and emit/interpret paths are
+untouched).
+
+**SD1+SD2+SD3 regression check**: `test/flame_ag_derive_test.hexa`
+PASS rc=0 unchanged (ag_derive surface is not edited).
+
+**Atlas citations** (g6, in `ag_extract.hexa` header — SD6 inherits
+SD5's anchors and the per-op rules are atlas-bound theorems):
+- Griewank & Walther §3.2 elementary primitives table —
+  the ADD/SUB/MUL/DIV/NEG/exp reverse-mode rules.
+- Pearlmutter & Siskind §3 — compositional vjp transformer.
+- Bishop, "Pattern Recognition and Machine Learning" §5.5 — the
+  sigmoid activation in neural networks and its derivative
+  `s*(1-s)` (the closed-form identity the walker's chain produces).
+- Chain rule of multivariate differentiation (Spivak, Calculus
+  on Manifolds, ch. 2) — the foundation of reverse-mode AD.
+
+**Future-cycle stop-conditions (g3 carve-outs, in ag_extract.hexa
+§Future work, renumbered after SD6 closed)**:
+- SD7: parser integration (was SD6 in the SD5 ledger).
+- SD8: multi-input / gradient accumulation via ag_tape registry.
+- SD9: more rules — Sum, MatMul AST-derived, Compose, elementwise
+  unary family (silu, gelu, tanh).
+- SD10: re-emit-and-recompile loop (was SD9).
+
+### 2026-05-20 — SD7 ag_extract — multi-use Param gradient accumulation (north-star ① autograd primitive)
+
+**SD7 = the foundational autograd primitive: a Param used in 2+
+forward usage sites must SUM gradient contributions from all sites
+(reverse-mode accumulator, Griewank & Walther §3.2 Algorithm 3.6).
+Without this, NO non-trivial expression's gradient is correct.**
+
+**Files (additive only — zero edits to ag_derive/ag_tape/nn_lib;
+SD5+SD6 surfaces untouched)**:
+- `stdlib/flame/ag_extract.hexa` +144 LoC (1057 → 1201):
+  - `ag_extract_build_multiuse_fwd(arena, cache_out) -> int` —
+    hand-built fwd AST for `f(x) = x*x + dt_exp(x)`. Param `x`
+    appears 3× as THREE independent Param(0) arena slots (tree,
+    not DAG) so each occurrence has its own fwd_cache entry.
+  - `ag_extract_multiuse_bwd_via_ast(arena, fwd_root, bwd_root,
+    x_arr, dy_arr, dx_out, len, fwd_cache)` — elementwise driver
+    mirroring the sigmoid driver shape (fwd-cache populate per i,
+    then bwd-interpret).
+  - §SD7 header documents the foundational claim: SD6's walker
+    `ag_extract_reverse_walk_v2` ALREADY accumulates correctly via
+    its BinOp-emits-ADD recursion (the Param leaf rule returns the
+    path-local upstream untouched; the ADD nodes at each binop
+    level are the per-site sum). Multi-use is the natural recursion
+    shape — no walker code changes needed. SD7 EXERCISES this
+    pattern and proves it correct under byte-eq.
+  - §Future work renumbered: SD8 parser integration, SD9
+    multi-input, SD10 more rules, SD11 re-emit-and-recompile.
+
+- `test/flame_ag_extract_test.hexa` +127 LoC (282 → 409):
+  - `multiuse_bwd_manual(x_arr, dy_arr, dx_out, len)` —
+    hand-written reference computing `(((dy*x) + (dy*x)) + (dy*ex))`
+    where `ex = dt_exp(x)`. IEEE-754 trajectory IDENTICAL to walker
+    emit (Option A reorder-match per task §6): same multiplications
+    in the same order, same additions in the same order — no
+    factoring `dy * (2*x + ex)`.
+  - SD7 oracle: builds multi-use fwd, reverse-walk-v2 with
+    upstream=dy, emits source (printed for inspection), interprets
+    elementwise, compares to manual reference.
+  - First-4-elements debug print (x, dx_auto, dx_ref, |Δ|) for
+    transparent IEEE-754 audit.
+  - Exit codes extended: 93 = SD7 fail.
+  - SD6 honest-finding made non-exiting (machine-eps tolerance gate
+    5.55e-16; observed 5.55e-17 is documented as honest, not a
+    regression) so SD7 can run in the same test invocation.
+
+**Gate measured**: `F-RFC043-AUTOGRAD-AUTO-SD7-MULTIUSE-BYTE-EQ`
+**PASS** — `max|dx_auto − dx_ref| = 0.0` on len=32 fixed-seed input
+(same x_arr/dy_arr seeds as SD5/SD6 — LCG seeds 4242 + −1 shift, 31337).
+
+**Emitted source** (printed by the test for inspection):
+```
+pub fn multiuse_bwd_auto_emitted(x: float, dy: float) -> float {
+    return (((dy * _fwd1) + (dy * _fwd0)) + (dy * _fwd4))
+}
+```
+where `_fwd1` = 2nd x slot, `_fwd0` = 1st x slot, `_fwd4` =
+dt_exp(x) slot. Both _fwd1 and _fwd0 hold the same `x` scalar (the
+fwd-AST eval_fwd writes x_val into each Param(0) slot independently);
+_fwd4 holds dt_exp(x). The expression is exactly the textbook
+accumulator form `dy*x + dy*x + dy*exp(x) = dy*(2*x + exp(x))`,
+modulo associativity choice — the walker happens to emit
+`(((dy*x)+(dy*x)) + (dy*exp(x)))` and the Option A reference
+matches that order bit-for-bit.
+
+**First 4 element-wise pairs** (audit):
+```
+i=0  x=-0.0205  dx_auto=0.342186  dx_ref=0.342186  |Δ|=0.0
+i=1  x=-1.1391  dx_auto=-0.0454941 dx_ref=-0.0454941 |Δ|=0.0
+i=2  x=0.4794   dx_auto=-1.81600  dx_ref=-1.81600  |Δ|=0.0
+i=3  x=-0.8570  dx_auto=1.00308   dx_ref=1.00308   |Δ|=0.0
+```
+
+**g3-honest framing (the SD7 deliverable)**: SD7 demonstrates that
+the SD6 walker's existing BinOp-emits-ADD recursion structure IS
+the reverse-mode accumulator. The Param leaf rule returns the path-
+local upstream `dc` unchanged when the index matches; the ADD nodes
+at each enclosing BinOp combine the per-child branches; for `x*x`
+the two child branches each evaluate to `dy * x` (one per usage
+slot, read via Var_FwdResult), summed at the inner ADD; for the
+top-level `(x*x) + dt_exp(x)` the inner ADD-sum is combined with
+the dt_exp branch's `dy * exp(x)` via the top ADD. The natural
+emit order `(((dy*x)+(dy*x)) + (dy*exp_x))` is reorder-stable
+and the hand-written reference matches it exactly, giving Option
+A byte-eq (max|Δ| = 0.0). **What SD7 PROVED**: multi-use Param
+accumulation is the natural recursion shape; no walker code changes
+needed; byte-eq is achievable when the reference matches the walker's
+emit order. **What SD7 did NOT prove**: parser integration (SD8),
+multi-input vjp (SD9), more operator coverage on multi-use paths
+(SD10 — multi-use through DIV/NEG/SUB would exercise the same
+accumulator machinery but byte-eq form depends on whether the
+emit order has algebraic-identity collapse opportunities, à la SD6
+sigmoid's `1−s ≡ e/d`).
+
+**SD5+SD6 regression check**: same `test/flame_ag_extract_test.hexa`
+invocation runs all three:
+- SD5 byte-eq: PASS max|Δ| = 0.0 (unchanged).
+- SD6 byte-eq: HONEST FINDING max|Δ| = 5.55e-17 (machine-eps-scale,
+  documented under the new 10×eps tolerance gate; this is the same
+  observation as the SD6 cycle's honest deliverable — not a
+  regression). NEW: SD6 no longer exit-92's on the ULP divergence;
+  it logs and continues so SD7 can run in the same invocation. If
+  max|Δ| exceeds 5.55e-16 (10× machine-eps) the test still exit-92's
+  — a REAL regression would be caught.
+- SD7 byte-eq: PASS max|Δ| = 0.0 (this cycle).
+- Combined rc=0.
+
+**SD1+SD2+SD3 regression check**: `test/flame_ag_derive_test.hexa`
+PASS rc=0 unchanged (ag_derive surface is not edited).
+
+**Atlas citations** (g6, in `ag_extract.hexa` SD7 header):
+- Griewank & Walther §3.2 Algorithm 3.6 — reverse-mode adjoint
+  v̄_i = Σ_j v̄_j · ∂v_j/∂v_i accumulator (the rule SD7 exercises).
+- Pearlmutter & Siskind §3 — compositional vjp via let-binding's
+  reverse-mode rule (handles multi-use via the same mechanism).
+- Same atlas anchors as SD5+SD6 (no new theorem; multi-use is a
+  property of the accumulator step, not a new rule).
+
+**Future-cycle stop-conditions (g3 carve-outs, renumbered after SD7
+closed)**:
+- SD8: parser integration (was SD7 in the SD6 ledger).
+- SD9: multi-input + multi-output via ag_tape registry — true
+  multi-INPUT (∂f/∂x, ∂f/∂y for f(x,y)) needs either one walker pass
+  per target_param_ix OR a per-Param accumulator dict in one pass.
+- SD10: more rules — Sum, MatMul AST-derived, Compose, elementwise
+  unary family (silu, gelu, tanh).
+- SD11: re-emit-and-recompile loop (was SD10).
+
+### 2026-05-20 — SD9 ag_extract — multi-input vjp (bilinear `f(x,y) = x*y`) (north-star ① autograd primitive)
+
+**SD9 = the multi-input vjp primitive: invoking the walker once per
+target Param recovers ∇f for an n-input scalar function. For `f(x,y)
+= x * y`, two walker calls (target_ix ∈ {0, 1}) produce two
+independent bwd ASTs that, interpreted under a 2-cell param-vals
+farr, compute `df/dx = dy * y` and `df/dy = dy * x`.**
+
+**Foundational claim (g3-honest)**: the `target_param_ix` parameter
+already in `ag_extract_reverse_walk_v2`'s signature (since SD6)
+suffices for n-input vjp. The Param leaf rule
+`if ix == target_param_ix { upstream_grad } else { Const(0.0) }`
+selects exactly ONE Param direction per walker invocation; no walker
+edits needed. SD9 EXERCISES that parameter on a 2-Param fwd to prove
+the pattern. Calling the walker n times (once per Param-index) is
+Griewank & Walther §3.2 Algorithm 3.6 specialized to scalar output:
+the VJP IS the gradient column. Pearlmutter & Siskind §3
+compositional vjp frames the same.
+
+**Walker extension approach**: separate per-Param backward functions
+(task brief §3 design choice). Each walker invocation returns ONE
+Param's gradient; calling it n times for ∇f. The alternative
+(per-Param accumulator dict, single walker traversal) is carved out
+as SD12 future-work — equivalent semantics, cheaper when n is large,
+not needed for the near-term flame use case.
+
+**Files (additive only — zero edits to ag_derive/ag_tape/nn_lib/
+ag_extract walker; SD5+SD6+SD7 surfaces untouched)**:
+- `stdlib/flame/ag_extract.hexa` +298 LoC (1228 → 1526):
+  - `ag_extract_build_bilinear_fwd(arena, cache_out) -> int` —
+    hand-built fwd AST for `f(x, y) = x * y`. Param(0) = x,
+    Param(1) = y; root is BinOp_MUL.
+  - `ag_extract_eval_fwd_multi(arena, node, param_vals, fwd_cache)`
+    — same shape as `eval_fwd` but Param leaves read
+    `param_vals[ix]` (param_vals is a 2-cell farr [x_i, y_i]).
+  - `ag_extract_interpret_v2_multi(arena, node, param_vals, dy_val,
+    fwd_cache)` — same shape as `interpret_v2` with param-vals
+    indirection on Param leaves.
+  - `ag_extract_bilinear_bwd_via_ast(arena, fwd_root, bwd_root,
+    x_arr, y_arr, dy_arr, d_out, len, fwd_cache, param_vals)` —
+    elementwise driver for ONE Param direction. Called twice in
+    the test (per Param index).
+  - `ag_extract_emit_fn_xy` — emit `(x: float, y: float, dy: float)
+    -> float` signature (vs the 1-input `(x, dy)` of `emit_fn`).
+    For inspection; in-process oracle goes through
+    `interpret_v2_multi`.
+  - `ag_extract_emit_expr`: extended Param ix=1 → "y" (was the
+    fallback "p1"). g3-minor — only affects the printed source.
+  - §SD9 header documents the foundational claim, walker recursion
+    proof for bilinear, honest scope, atlas anchors.
+  - §Future work updated: SD8 parser-integration · SD10 more rules ·
+    SD11 re-emit-and-recompile · NEW SD12 per-Param accumulator
+    dict (single-pass alternative).
+
+- `test/flame_ag_extract_test.hexa` +240 LoC (433 → 673):
+  - `bilinear_bwd_x_manual(x_arr, y_arr, dy_arr, dx_out, len)` —
+    hand-written reference for df/dx with IEEE-754 trajectory
+    matching the walker's emit: `t1 = dy * y; t2 = 0.0; dx = t1 + t2`.
+  - `bilinear_bwd_y_manual(x_arr, y_arr, dy_arr, dyg_out, len)` —
+    same shape for df/dy: `t1 = 0.0; t2 = dy * x; dyg = t1 + t2`.
+  - SD9 oracle: builds bilinear fwd, walks twice (target=0, target=1),
+    emits both bwd sources (printed for inspection), interprets
+    elementwise, compares each Param direction to its manual.
+  - Inputs (per task §5 separate-seed requirement):
+    - x_arr: shared with SD5/6/7 (LCG seed 4242 + −1 shift)
+    - y_arr: NEW (LCG seed 70707 + −1 shift) — span check 13 pos, 19 neg
+    - dy_arr: shared with SD5/6/7 (LCG seed 31337)
+  - First-4 element audit (x, y, dy, d_auto, d_ref, |Δ|) per
+    Param direction.
+  - Per-Param verdict prints; overall PASS requires BOTH gates green.
+  - Exit codes extended: 94 = SD9 fail (either Param direction).
+
+**Gate measured**: `F-RFC043-AUTOGRAD-AUTO-SD9-BILINEAR-BYTE-EQ`
+**PASS** — both per-Param byte-eq gates green
+(`max|dx_auto − dx_ref| = 0.0` AND `max|dyg_auto − dyg_ref| = 0.0`)
+on len=32 fixed-seed inputs.
+
+**Emitted source** (printed by the test for inspection):
+```
+pub fn f_x_bwd_auto(x: float, y: float, dy: float) -> float {
+    return ((dy * _fwd1) + 0.0)
+}
+
+pub fn f_y_bwd_auto(x: float, y: float, dy: float) -> float {
+    return (0.0 + (dy * _fwd0))
+}
+```
+where `_fwd1` = the y-Param fwd_cache slot (holds y at runtime) and
+`_fwd0` = the x-Param fwd_cache slot (holds x at runtime). The two
+emitted bodies make the per-Param vjp closed-form `dy*y` and `dy*x`
+visible in source. Const(0.0) operands come from the walker's
+Param-mismatch rule — the BinOp_MUL emits ADD over BOTH child
+contributions, and the mismatched-ix leaf contributes Const(0.0)
+exactly. The Option A reference matches that order bit-for-bit.
+
+**First 4 element-wise pairs** (audit):
+```
+df/dx:
+  i=0  x=-0.0205  y= 0.672  dy= 0.365  dx_auto= 0.244935  dx_ref= 0.244935  |Δ|=0.0
+  i=1  x=-1.139   y=-2.948  dy= 0.023  dx_auto=-0.068491  dx_ref=-0.068491  |Δ|=0.0
+  i=2  x= 0.479   y=-2.565  dy=-0.706  dx_auto= 1.80967   dx_ref= 1.80967   |Δ|=0.0
+  i=3  x=-0.857   y=-1.704  dy=-0.778  dx_auto= 1.32573   dx_ref= 1.32573   |Δ|=0.0
+df/dy:
+  i=0  x=-0.0205  y= 0.672  dy= 0.365  dyg_auto=-0.007475  dyg_ref=-0.007475  |Δ|=0.0
+  i=1  x=-1.139   y=-2.948  dy= 0.023  dyg_auto=-0.026466  dyg_ref=-0.026466  |Δ|=0.0
+  i=2  x= 0.479   y=-2.565  dy=-0.706  dyg_auto=-0.338244  dyg_ref=-0.338244  |Δ|=0.0
+  i=3  x=-0.857   y=-1.704  dy=-0.778  dyg_auto= 0.66661   dyg_ref= 0.66661   |Δ|=0.0
+```
+
+**g3-honest framing (the SD9 deliverable)**: SD9 demonstrates that
+the SD6 walker's `target_param_ix` parameter, combined with the
+Param leaf rule's index-match-or-Const(0.0) semantics, IS the
+multi-input vjp primitive. For a 2-Param fwd, two walker invocations
+(once per target ix) produce two independent bwd ASTs whose
+interpretation under a param-vals farr yields the two Jacobian
+columns. The Option A reference matches the walker's emit
+trajectory verbatim — `dy*y + 0.0` for df/dx, `0.0 + dy*x` for df/dy
+— so both per-Param byte-eq gates measure max|Δ| = 0.0.
+**What SD9 PROVED**: multi-input vjp is the natural specialization of
+the walker's existing target-ix machinery; no walker code changes
+needed; the param-vals-aware fwd-eval + bwd-interpret pair is
+additive. **What SD9 did NOT prove**: multi-output (a Jacobian
+column-stack via repeated VJP would be the next step, but the test
+uses a scalar-output fwd — sufficient for ∇f of any scalar function),
+parser integration (SD8), more rules on multi-input paths (SD10),
+single-pass per-Param accumulator dict (SD12), nor the
+re-emit-and-recompile closure (SD11).
+
+**SD1+SD2+SD3 regression check**: `test/flame_ag_derive_test.hexa`
+PASS rc=0 unchanged (ag_derive surface is not edited).
+
+**SD5+SD6+SD7 regression check**: same `test/flame_ag_extract_test.hexa`
+invocation runs SD5+SD6+SD7+SD9 sequentially:
+- SD5 byte-eq: PASS max|Δ| = 0.0 (unchanged).
+- SD6 byte-eq: HONEST FINDING max|Δ| = 5.55e-17 (unchanged
+  machine-eps-scale documented per the SD7 honest-tolerance gate).
+- SD7 byte-eq: PASS max|Δ| = 0.0 (unchanged).
+- SD9 byte-eq: PASS BOTH per-Param gates max|Δ| = 0.0 (this cycle).
+- Combined rc=0.
+
+**Atlas citations** (g6, in `ag_extract.hexa` SD9 header):
+- Griewank & Walther §3.2 Algorithm 3.6 — reverse-mode VJP
+  u^T J = grad(u^T f); SD9 specialization: scalar output ⇒
+  per-direction call yields ∂f/∂x_i.
+- Pearlmutter & Siskind §3 — compositional vjp; each Param is an
+  independent leaf of the recursion; per-Param-index leaf rule is
+  the compositional identity for multi-input vjp.
+- Same atlas anchors as SD5/6/7 (no new theorem; multi-input is a
+  specialization of the existing algorithm, not a new rule).
+
+**Future-cycle stop-conditions (g3 carve-outs, after SD9 closed)**:
+- SD8: parser integration (still future-work).
+- SD10: more rules — Sum, MatMul AST-derived, Compose, elementwise
+  unary family (silu, gelu, tanh).
+- SD11: re-emit-and-recompile loop.
+- SD12: per-Param accumulator dict (single-pass alternative to
+  SD9's per-Param-call shape).
+
+### 2026-05-20 — SD10 ag_extract — multi-input arithmetic vjp (sigmoid-div `f(x,y) = x / (1 + dt_exp(-y))`) (north-star ① autograd primitive · SD6×SD9 cross-product)
+
+**SD10 = the multi-input + arithmetic cross-product: SD6's per-op rule
+table (DIV / NEG / dt_exp / ADD / SUB) composed with SD9's target_ix
+multi-input mechanism. Test function `f(x, y) = x / (1 + dt_exp(0−y))`
+— sigmoid-weighted division — exercises (i) DIV at the root with the
+"save forward, reuse in backward" cached intermediate pattern, AND
+(ii) two distinct Params where the y-direction traverses the full
+SD6 sigmoid subtree with a custom upstream gradient. Verdict per
+Param direction reports HONESTLY: byte-eq PASS when algebraic shape
+happens to align, or HONEST 1-ULP when SD6's reorder lesson applies.
+Measured outcome: HONEST 1-ULP on both directions (df/dx max|Δ| =
+5.55e-17 = 1 ULP, df/dy max|Δ| = 1.11e-16 = 2 ULP) — SD6's
+algebraic-identity divergence is preserved edge-for-edge under
+multi-input mechanism.**
+
+**Foundational claim (g3-honest)**: SD6 + SD9 compose by design — no
+walker edits needed. SD6's per-op rule chain (DIV: `da = dc/b · db =
+NEG(dc·c/b)`; dt_exp: `da = dc·c_cached`; NEG-via-SUB ADDs the two
+contribs) produces the same multiplicative ULP-zone gradient
+trajectory as before; SD9's target_ix simply selects WHICH Param
+direction the recursion flows toward (the Param-mismatch leaf
+returns `Const(0.0)`, the match returns the accumulated upstream).
+SD10 EXERCISES the composition on a 2-Param fwd whose y-direction
+hits SD6's reorder zone. The HONEST 1-ULP outcome on both
+directions is the predicted "SD6-lesson-under-multi-input"
+confirmation; the alternative (byte-eq PASS on either direction)
+would have been a bonus algebraic alignment, not a regression.
+
+**Reverse-walker recursion shape (no walker edits — proof same as
+SD6 + SD9)**: walker emits, for target=0 (df/dx) on `DIV(x, d)`:
+```
+ADD(
+  DIV(Var_Upstream, Var_FwdResult(d)),                  // da_local
+  ADD(Const(0.0),                                       // walk(ONE_A)
+      ADD(Const(0.0),                                   // walk(ZERO_A)
+          Const(0.0))))                                 // walk(y=Param(1) ≠ 0)
+```
+Interpret: `(dy / d) + (0.0 + (0.0 + 0.0))`. Reference (SD6 exact form
+`dy * s`): `dy * (1.0 / d)`. Different IEEE-754 trajectory ⇒ HONEST
+1-ULP.
+
+For target=1 (df/dy) on the same fwd, only the sigmoid-of-y subtree
+contributes (Param(0)=x leaf returns `Const(0.0)`):
+```
+ADD(Const(0.0),
+    ADD(Const(0.0),
+        ADD(Const(0.0),
+            NEG(MUL(db_local, Var_FwdResult(e))))))
+  where db_local = NEG(DIV(MUL(Var_Upstream, Var_FwdResult(root)),
+                            Var_FwdResult(d_2)))
+```
+Interpret: `0.0 + (0.0 + (0.0 + (-(-(dy*c)/d * e))))` = `(dy*c*e)/d`
+where c = f(x,y) = x/d. Reference (SD6 exact form `dy*x*s*(1-s)`):
+`dy * x * (1/d) * (1 - 1/d)`. Algebraically `(dy*c*e)/d` ≡
+`dy*x*s*(1-s)` via the 1-s ≡ e/d identity — exactly the SD6 reorder
+zone, now under multi-input. HONEST 2-ULP measured.
+
+**Files (additive only — zero edits to ag_derive/ag_tape/nn_lib/
+ag_extract walker; SD5/6/7/9 surfaces untouched)**:
+- `stdlib/flame/ag_extract.hexa` +211 LoC (1526 → 1737):
+  - `ag_extract_build_sigmoid_div_multi_fwd(arena, cache_out) -> int`
+    — hand-built fwd AST for `f(x, y) = x / (1 + dt_exp(0 - y))`.
+    Param(0) = x (numerator), Param(1) = y (sigmoid input); root is
+    BinOp_DIV. Slot count: 8 fwd nodes (under 64-cap; ~17 bwd ×
+    2 directions also fits, total ~42 slots).
+  - `ag_extract_sigmoid_div_multi_bwd_via_ast(arena, fwd_root,
+    bwd_root, x_arr, y_arr, dy_arr, d_out, len, fwd_cache,
+    param_vals)` — elementwise driver, identical signature to SD9's
+    bilinear driver (the param-vals + fwd-cache + interpret_v2_multi
+    machinery is op-agnostic). Named wrapper makes call sites
+    self-documenting (SD9 bilinear vs SD10 sigmoid-div).
+  - §SD10 header documents the foundational claim (SD6×SD9
+    cross-product), the walker recursion shape for both Param
+    directions, honest scope, atlas anchors (Griewank-Walther §3.2
+    Algorithm 3.6 + elementary-primitives table + SD6 reorder note).
+  - §Future work updated: SD8 parser-integration · SD11
+    re-emit-and-recompile · SD12 per-Param accumulator dict · SD13
+    more rules (renumbered from the SD9-era SD10 slot — Sum/MatMul/
+    Compose/silu-gelu-tanh now SD13).
+
+- `test/flame_ag_extract_test.hexa` +201 LoC (673 → 874):
+  - `sd10_div_x_manual(x_arr, y_arr, dy_arr, dx_out, len)` —
+    hand-written reference for df/dx using SD6's exact form:
+    recompute `s = 1.0 / (1.0 + dt_exp(0.0 - y))`, then `dx = dy * s`.
+    Does NOT mirror walker trajectory — measures the reorder verdict.
+  - `sd10_div_y_manual(x_arr, y_arr, dy_arr, dyg_out, len)` —
+    hand-written reference for df/dy: same `s` reconstruction,
+    `one_minus_s = 1.0 - s`, then `dyg = dy * x * s * (1 - s)`.
+  - SD10 oracle: builds sigmoid-div fwd, walks twice (target=0,
+    target=1), emits both bwd sources (printed for inspection),
+    interprets elementwise, compares each Param direction to its
+    manual. First-4-element transparent IEEE-754 audit per
+    direction. Per-Param verdict labeled PASS/HONEST; tolerance
+    breach (>10×eps) exits 95 as a real regression.
+  - Inputs (per task §5 — fixed-seed LCG per axis):
+    - x_arr: shared with SD5/6/7/9 (LCG seed 4242 + −1 shift)
+    - y_arr: shared with SD9 (LCG seed 70707 + −1 shift)
+    - dy_arr: shared with SD5/6/7/9 (LCG seed 31337)
+  - Exit codes extended: 95 = SD10 fail (either Param direction
+    exceeds 10×eps tolerance; in-tolerance HONEST or PASS exits 0).
+
+**Gate measured**: `F-RFC043-AUTOGRAD-AUTO-SD10-DIV-MULTI-BYTE-EQ`
+**HONEST FINDING** (predicted SD6-lesson-under-multi-input
+confirmation) — both per-Param byte-eq gates within 10×eps
+tolerance, neither exactly byte-equal:
+- df/dx: max|Δ| = 5.55e-17 (= 1 × machine eps; walker `dy / d`
+  vs reference `dy * (1.0 / d)` — DIV-vs-DIV-then-MUL last-bit
+  divergence)
+- df/dy: max|Δ| = 1.11e-16 (= 2 × machine eps; walker
+  `(dy * c * e) / d` vs reference `dy * x * s * (1-s)` — the SD6
+  reorder zone, now exercised under multi-input)
+
+**Emitted source** (printed by the test for inspection):
+```
+pub fn f_x_bwd_auto(x: float, y: float, dy: float) -> float {
+    return ((dy / _fwd6) + (0.0 + (0.0 + 0.0)))
+}
+
+pub fn f_y_bwd_auto(x: float, y: float, dy: float) -> float {
+    return (0.0 + (0.0 + (0.0 + (0.0 - ((0.0 - ((dy * _fwd7) / _fwd6)) * _fwd4)))))
+}
+```
+where `_fwd6` = d_node (the denominator `1 + dt_exp(-y)`), `_fwd7`
+= root_node (the f output `x/d`), `_fwd4` = e_node (`dt_exp(-y)`).
+The y-direction body makes the SD6 reorder zone visible in the
+emitted source: walker shape is `NEG(NEG(dy*c/d) * e)` = `(dy*c*e)/d`,
+while the reference computes `dy*x*s*(1-s)` — algebraically equal,
+last-bit different.
+
+**First 4 element-wise pairs** (audit, df/dx):
+```
+i=0  x=-0.02051  y= 0.67191  dy= 0.36454  dx_auto= 0.241297  dx_ref= 0.241297  |Δ|=0.0
+i=1  x=-1.13912  y=-2.94793  dy= 0.02323  dx_auto= 0.001158  dx_ref= 0.001158  |Δ|=0.0
+i=2  x= 0.47943  y=-2.56503  dy=-0.70551  dx_auto=-0.050390  dx_ref=-0.050390  |Δ|=0.0
+i=3  x=-0.85700  y=-1.70436  dy=-0.77784  dx_auto=-0.119707  dx_ref=-0.119707  |Δ|=1.39e-17
+```
+And df/dy:
+```
+i=0  x=-0.02051  y= 0.67191  dy= 0.36454  dyg_auto=-0.001673  dyg_ref=-0.001673  |Δ|=0.0
+i=1  x=-1.13912  y=-2.94793  dy= 0.02323  dyg_auto=-0.001253  dyg_ref=-0.001253  |Δ|=2.17e-19
+i=2  x= 0.47943  y=-2.56503  dy=-0.70551  dyg_auto=-0.022433  dyg_ref=-0.022433  |Δ|=0.0
+i=3  x=-0.85700  y=-1.70436  dy=-0.77784  dyg_auto= 0.086801  dyg_ref= 0.086801  |Δ|=2.78e-17
+```
+Most elements byte-equal; the divergence is concentrated on a few
+elements where the operand-order rounding accumulates differently.
+
+**g3-honest framing (the SD10 deliverable)**: SD10 frames itself as
+"multi-input arithmetic explores SD6's ULP zone under multi-input
+mechanism". The predicted outcome was HONEST 1-ULP under either or
+both directions (SD6 reorder lesson confirmed); the alternative was
+byte-eq PASS (bonus algebraic alignment). The MEASURED outcome is
+HONEST on both directions — SD6's algebraic-identity divergence is
+preserved edge-for-edge under multi-input. **What SD10 PROVED**:
+SD6's per-op rule chain composes faithfully with SD9's target_ix
+multi-input mechanism (no walker edits); the IEEE-754 last-bit
+divergence is a property of the algebraic shape (walker emits
+`e/d`, reference computes `1-s` — they are mathematically equal but
+last-bit different), not of the multi-input mechanism itself.
+**What SD10 did NOT prove**: parser integration (SD8), single-pass
+per-Param accumulator dict (SD12), Sum/MatMul/Compose/elementwise
+unary family rules (SD13 — renumbered from the SD9-era "SD10" slot),
+re-emit-and-recompile (SD11).
+
+**SD1+SD2+SD3 regression check**: `test/flame_ag_derive_test.hexa`
+PASS rc=0 unchanged (ag_derive surface is not edited).
+
+**SD5+SD6+SD7+SD9 regression check**: same
+`test/flame_ag_extract_test.hexa` invocation runs SD5+SD6+SD7+SD9+SD10
+sequentially:
+- SD5 byte-eq: PASS max|Δ| = 0.0 (unchanged).
+- SD6 byte-eq: HONEST FINDING max|Δ| = 5.55e-17 (unchanged
+  machine-eps-scale).
+- SD7 byte-eq: PASS max|Δ| = 0.0 (unchanged).
+- SD9 byte-eq: PASS BOTH per-Param gates max|Δ| = 0.0 (unchanged).
+- SD10 byte-eq: HONEST FINDING df/dx max|Δ| = 5.55e-17, df/dy max|Δ|
+  = 1.11e-16 (this cycle, predicted SD6×SD9 confirmation).
+- Combined rc=0.
+
+**Atlas citations** (g6, in `ag_extract.hexa` SD10 header):
+- Griewank & Walther §3.2 Algorithm 3.6 — reverse-mode VJP, SD10
+  specialization: scalar output ⇒ per-direction call yields ∂f/∂x_i;
+  applied to a 2-Param fwd with DIV at the root.
+- Griewank & Walther §3.2 elementary-primitives table — DIV rule
+  `da = dc/b · db = -dc·c/b`, dt_exp rule `da = dc·c_cached`, NEG
+  rule `da = -dc`.
+- SD6 reorder note (`ag_extract.hexa` SD6 header) — algebraic-identity
+  ULP divergence persists under multi-input mechanism.
+- Pearlmutter & Siskind §3 — compositional vjp; each Param is an
+  independent leaf, target_ix selects the direction.
+
+**Future-cycle stop-conditions (g3 carve-outs, after SD10 closed)**:
+- SD8: parser integration (still future-work).
+- SD11: re-emit-and-recompile loop.
+- SD12: per-Param accumulator dict (single-pass alternative to
+  SD9/SD10's per-Param-call shape).
+- SD13 (renumbered from SD9-era "SD10"): more rules — Sum,
+  MatMul AST-derived, Compose, elementwise unary family
+  (silu, gelu, tanh).
+
+### 진행 로그 — RFC 072 P0 scaffold (d=4096 GPT-3 class benchmark) (2026-05-20)
+
+**Branch**: `rfc072-flame-d4096-scaffold`. **Shape-B per @D g_inbox_processing_loop**
+(RFC + scaffold; zero behavior change). **TaskList #37 Campaign B P0**.
+
+**Landed**:
+- `inbox/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md` —
+  Shape-B RFC; spec (d=4096 · n_layer=24 · seq_len=2048 · batch=8 —
+  GPT-3 6.7B d_model axis per Brown 2020 Table 2.1); 4 falsifiers
+  (F-RFC072-WALL-PT · F-RFC072-WALL-FLAME · F-RFC072-RATIO <1.0 ·
+  F-RFC072-VARIANCE std<5%); 5-phase plan (P0 scaffold $0 → P1 harness
+  $0 → P2 flame fire $1–3 → P3 PT baseline $1–3 → P4 variance+ratio
+  $1–5); g3 honest scope (single shape, NOT general PyTorch replacement,
+  closure flips one GPU.md §10 row only); cross-link to north-star ①,
+  GPU.md §5m measured wins ledger, RFC 067 multi-tile cp.async potential
+  sub-blocker.
+- `stdlib/flame/bench/d4096.hexa` — parse-clean stub (~80 lines). Shape
+  constants as `fn d4096_d_model() -> int { return 4096 }` etc. (avoids
+  script-body `let` ambiguity at module top-level). Stub
+  `pub fn bench_d4096_step1_wall(precision: string) -> float` returns
+  0.0 with explicit TODO P1+ markers locating future work. NO library
+  imports yet (deferred to P1 — zero behavior change contract).
+- `GPU.md` §10 row "flame d=4096 GPT-3 class beats PyTorch eager"
+  annotated with RFC 072 P0 scaffold cross-link; row stays `[ ]` until
+  F-RFC072-RATIO PASSes.
+- This PLAN entry (@D g_plan_consolidation exception clause — flame-domain
+  log stays in `stdlib/flame/PLAN.md`, not `compiler/PLAN.md`).
+
+**Parse-gate**: `/Users/ghost/.hx/bin/hexa_real parse stdlib/flame/bench/d4096.hexa`
+→ `OK: parses cleanly` rc=0.
+
+**g3-honest summary**: P0 = scaffold + spec only. No measurement performed.
+GPU.md §10 closure scoreboard stays at 6/8 ✅ (RFC 072 row remains `[ ]`).
+Multi-session campaign because variance gate needs ≥ 3 fires per arm
+(~$5–20 aggregate budget across P2+P3+P4), PyTorch baseline setup needs
+its own cycle (pinned torch + grad-checkpoint config), and flame d=4096
+may need RFC 067 multi-tile cp.async integration that has not yet landed
+in the perf kernel (GPU.md §5m note). The campaign is now pre-registered
+with explicit pass/fail gates rather than ad-hoc fire-and-measure —
+g3 over-claim 0.
+
+**Cross-link**: north-star ① (NN stack) · GPU.md §10 closure scoreboard ·
+GPU.md §5m measured wins · memory `project_flame_phase4d9_closure`
+(d=768 seed) · memory `project_flame_general_pytorch_replacement_goal`
+(north-star) · memory `reference_gpu_fire_infra` (RTX 5070 ubu-2 fire
+substrate) · @D g3 (honest scope) · @D g_inbox_processing_loop Shape-B.
+
+### 2026-05-20 — SD11 ag_extract — compile-and-run round-trip (north-star ① autograd primitive · AD pipeline END-TO-END for relu)
+
+**SD11 closes the AD loop end-to-end for the simplest case**: the SD5
+relu walker output is no longer just an inspectable string — it is
+WRITTEN to `/tmp/sd11_relu_bwd.hexa` (with an argv-driven `fn main()`
+wrapper), COMPILED via `hexa.real build` (the canonical hexa-native
+toolchain verb, n1 of AGENTS.tape), EXECUTED 32× for LCG-seeded
+(x, dy) pairs, and the parsed output is BYTE-EQ to both the in-process
+AST-interpret reference and the hand-derived `if x > 0 then dy else 0`
+closed form. The measured proof:
+
+```
+three-way max|Δ| across 32 input pairs (LCG seeds 4242 / 31337):
+  interp   vs compiled : 0.0
+  interp   vs hand     : 0.0
+  compiled vs hand     : 0.0
+```
+
+**Falsifier F-RFC043-AUTOGRAD-AUTO-SD11-COMPILE-RUN-BYTE-EQ PASS**.
+
+**Why this matters (north-star ①)**: SD5..SD10 all in-process
+interpret the walker output. The emit step prints hexa source for
+inspection but never runs through the actual compiler. SD11 is the
+END-TO-END proof — source-to-source AD really produces compilable,
+runnable hexa source. The relu vjp's emitted text
+`return (if (x > 0.0) { dy } else { 0.0 })` is no longer "looks like
+hexa source"; it IS hexa source that the toolchain accepts and runs.
+
+**Implementation (surgical · 1 helper + 1 test + this PLAN entry)**:
+- `stdlib/flame/ag_extract.hexa::ag_extract_emit_program_x_dy(arena, bwd_root, fn_name) -> string`
+  emits the bwd fn (via existing `ag_extract_emit_fn`) PLUS an
+  `fn main()` wrapper that reads `argv[1]` / `argv[2]` as floats,
+  calls the emitted fn, prints `json_stringify(dx)` (the
+  shortest-roundtrip codec; runtime_core.c::_shortest_double — loops
+  1..17 digit `%g` checking strtod round-trip on each).
+- `test/flame_ag_extract_sd11_compile_test.hexa` orchestrates the
+  loop: walker → emit → `write_file` → `exec("hexa.real build ...")`
+  with `__RC=$?` sentinel parsing → 32× compiled-binary exec → parse
+  output → three-way byte-eq (interp vs compiled vs hand).
+- Resolves `hexa.real` via 3-tier fallback ($HEXA_LANG/hexa.real →
+  $HOME/.hx/bin/hexa_real → /Users/ghost/core/hexa-lang/hexa.real)
+  so the test runs from worktrees and main repo alike.
+
+**Two non-obvious lessons (recorded so SD12 doesn't relearn)**:
+
+1. **`exec_capture` two-pipe drain hang**. The runtime's exec_capture
+   (runtime.c:6971) uses an alternating-blocking-read drain
+   (`read(stdout_pipe)` then `read(stderr_pipe)`). For a child that
+   writes ~2 KB to stdout and zero to stderr (typical `hexa.real build`
+   output), the parent blocks on `read(stderr_pipe)` until the child
+   closes stderr — which only happens at exit. If the child writes
+   more than ~64 KB to stdout, the kernel pipe buffer fills, the
+   child blocks on `write(stdout)`, and we deadlock. SD11 uses
+   `exec()` (popen-backed, single combined pipe via `2>&1`) plus
+   `; echo __RC=$?` for out-of-band exit-code surfacing. Mirrors the
+   `stdlib/xeno/scripts/akida/nexus_origin/runner.hexa::_exec_capture`
+   idiom (label: "exec → __RC=N trailer parse"). exec_capture is
+   safe for trivial commands (the SD11 sanity test of
+   `echo out; echo err 1>&2; exit 3` works) but unsafe for heavy
+   build subprocesses with one-sided output.
+
+2. **`to_string` for float is `%g` 6-digit (lossy round-trip)**.
+   `runtime_core.c:5078` uses `snprintf("%g")` with the default
+   precision = 6 significant digits. `to_string(0.479429283).to_float()`
+   re-parses as `0.479429` — round-trip loses ~1e-7 precision and
+   broke an early SD11 draft's byte-eq (measured max|Δ| = 4.62e-07).
+   The runtime DOES have a round-trip safe printer
+   (`_shortest_double`, runtime.c:7909, "shortest %g-form decimal
+   that strtod-round-trips to the same double") — it is reachable
+   through `json_stringify`. SD11 emit uses `json_stringify(dx)` for
+   the print and the harness uses `json_stringify(x)` /
+   `json_stringify(dy)` for argv construction; `.to_float()`
+   (strtod-backed) reverses it byte-for-byte. **Pattern for SD12+**:
+   when any future SD's compile-and-run loop needs lossless float
+   round-trip, use `json_stringify` not `to_string`.
+
+**Honest scope (g3, after SD11 closed)**:
+- SD11 PROVED: the walker-emit-compile-run round-trip works for the
+  simplest vjp shape (relu, single Param, pure conditional, no
+  Var_FwdResult, no Var_Upstream). Three-way byte-eq across 32
+  inputs gives a measured guarantee that the emitted source is real
+  hexa code, not just inspectable text.
+- SD11 did NOT prove: multi-input compile-and-run (needs
+  `ag_extract_emit_program_xy` shape — argv reads 3 floats x/y/dy
+  and the harness coordinates 2 binaries, one per direction); the
+  fwd-cache materialisation pattern for `Var_FwdResult`-using
+  emits (SD6 sigmoid, SD7 multi-use, SD10 sigmoid-div all reference
+  `_fwd<N>` symbols that would be unresolved if recompiled — the
+  emitted source for these would need either fwd-recomputation or a
+  shared fwd_cache farr passed through argv); parser integration
+  (SD8). All deferred to SD12+.
+
+**SD1..SD10 regression check (measured 2026-05-20)**:
+- `test/flame_ag_derive_test.hexa` PASS rc=0 (SD1 matmul, SD2 add,
+  SD3 silu_gate — all byte-eq, max|Δ| = 0.0).
+- `test/flame_ag_extract_test.hexa` rc=0 (SD5 PASS, SD6 HONEST
+  5.55e-17, SD7 PASS, SD9 PASS both, SD10 HONEST 5.55e-17 / 1.11e-16
+  — all expected per the existing oracle gates).
+- The ag_extract.hexa edit is additive only: new public function
+  `ag_extract_emit_program_x_dy`; SD5/SD6/SD7/SD9/SD10 surfaces and
+  internals untouched.
+
+**Atlas citations** (g6, in `ag_extract.hexa` SD11 header):
+- Griewank & Walther §3.2 Algorithm 3.6 — reverse-mode emit (the
+  emitted source is the literal output of the reverse walker; SD11
+  closes the loop by recompiling that source through the standard
+  toolchain).
+- Steele & White 1990 "How to print floating-point numbers
+  accurately" — 17 decimal digits suffice for binary64 round-trip;
+  the runtime's `_shortest_double` is the shortest-representation
+  variant (also Steele & White; reachable via json_stringify).
+
+**Future-cycle stop-conditions (g3 carve-outs, after SD11 closed)**:
+- SD8: parser integration (still future-work).
+- SD12: multi-input compile-and-run (`ag_extract_emit_program_xy`
+  helper · 3-arg argv reader · two-binary harness; fwd-cache
+  materialisation for `_fwd<N>` references in sigmoid/multi-use/
+  sigmoid-div compile paths).
+- SD13: per-Param accumulator dict (single-pass alternative to
+  SD9/SD10's per-Param-call shape).
+- SD14 (renumbered from SD13 / SD9-era "SD10"): more rules — Sum,
+  MatMul AST-derived, Compose, elementwise unary family
+  (silu, gelu, tanh).
+

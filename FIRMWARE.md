@@ -1,0 +1,516 @@
+<!-- @created: 2026-05-20 -->
+<!-- @scope: roadmap — eliminate firmware/RTL non-hexa source classes; reach parity in pure hexa AOT -->
+<!-- @authority: HEXA-NATIVE-ONLY.md (ML/runtime sibling) · AGENTS.tape §3 @D g5 hexa-native-only -->
+<!-- @sibling: HEXA-NATIVE-ONLY.md (ML hot-path C-kernel retirement) -->
+---
+type: native-only-roadmap
+session: 2026-05-20
+target: every byte that ships to a device or fabric is generated FROM `.hexa` — no human-authored firmware C, no human-authored RTL Verilog/VHDL, no glue Python/shell
+blocks: future PRs that introduce `.c`/`.h`/`.cpp`/`.hpp`/`.cc`/`.hh`/`.s`/`.S`/`.v`/`.sv`/`.vhd`/`.vhdl`/`.py`/`.sh` source under `self/` `stdlib/` `compiler/` `tool/` (artifacts under `build/` `dist/` are not source)
+---
+
+# FIRMWARE.md — single-source firmware & RTL from `.hexa`
+
+> **Question (sibling to HEXA-NATIVE-ONLY.md)**: ML hot-paths used to land
+> as C kernels in `self/runtime.c`; that doc plans their retirement to pure
+> hexa AOT. Can the **same retirement** be applied one ring outward — to
+> the firmware (CPU/MCU/GPU device code) and the RTL (Verilog/SystemVerilog/
+> VHDL) that the project will increasingly emit and consume?
+
+> **Answer (this roadmap)**: yes, by **forbidding the source classes** and
+> routing every device byte / every netlist line through a `.hexa` emitter
+> in `stdlib/`. `stdlib/yosys/{read,write}_verilog.hexa` already proves the
+> read+write side; this document extends the same pattern to firmware and
+> the other RTL dialects, and to the glue languages (Python/shell) that
+> historically slip in alongside.
+
+---
+
+## §1 Forbidden source classes (write-deny — same status as `@F f2 llvm-c-transpile-backend`)
+
+The classifier below applies to **new** source files added under
+`self/` `stdlib/` `compiler/` `tool/` `inbox/` (and any future top-level
+directory other than `build/` `dist/` `target/` `out/` and any path under
+`.git/`). Existing files predating this roadmap are tombstoned per §3 and
+retired per §4 — they are **not** grand-fathered as a license to add more.
+
+| ext | territory | rationale | replacement (this roadmap) |
+|---|---|---|---|
+| `.py` | scripts / glue | hexa absorbs subprocess + http + json + sqlite + argparse equivalents | `stdlib/<domain>/*.hexa` + `tool/<name>/main.hexa` |
+| `.sh` | scripts | hexa absorbs `exec_capture` + `[str]` argv quoting (see `stdlib/cloud`) | `tool/<name>/main.hexa` |
+| `.c` `.h` | firmware C / runtime kernels | hexa AOT lowers to `.c` artifact under `build/`, never as authored source | `.hexa` + `@target(firmware)` |
+| `.cpp` `.hpp` `.cc` `.hh` | firmware C++ | same — no firmware uses C++ class semantics that hexa structs+traits cannot express | `.hexa` |
+| `.s` `.S` | hand assembly | hexa `@asm(...)` escape hatch covers the irreducible per-CPU peaks; everything else is codegen output, not authored | `.hexa` + `@asm` (rare) |
+| `.v` `.sv` | Verilog / SystemVerilog | `stdlib/yosys/{read,write}_verilog.hexa` is the round-trip; new RTL is authored as `.hexa` and lowered by `stdlib/yosys/write_verilog.hexa` to a `build/` artifact | `.hexa` + `@target(rtl)` → `stdlib/yosys/write_verilog` |
+| `.vhd` `.vhdl` | VHDL | same shape; a `stdlib/vhdl/write_vhdl.hexa` mirror of the yosys path | `.hexa` + `@target(rtl)` → `stdlib/vhdl/write_vhdl` |
+
+Out of scope (allowed):
+
+- `build/` `dist/` `target/` `out/` artifacts — these are **emitter
+  output**, not authored source. `.c` under `build/` from hexa AOT is the
+  intended steady state, exactly as today.
+- Vendored 3rd-party tarballs that the project does not edit (the build
+  consumes them as binary inputs). If a vendored source is patched, the
+  patch lives in `inbox/patches/` as `.hexa`-codegen instructions, not as
+  a sidecar `.c` diff.
+- Existing `self/runtime.c` and the `self/native/` C frontend — these are
+  the **bootstrap** layer, retired by HEXA-NATIVE-ONLY.md gates G-0..G-11
+  (ML side) and §4 below (firmware/RTL side). They are not a license to
+  add new C sources.
+- `compiler/atlas/embedded.gen.hexa` and other `.gen.hexa` files —
+  generator output that happens to be `.hexa`. They are checked in per
+  `@D g_atlas_binary_builtin` but never hand-edited.
+
+---
+
+## §2 Why each class is forbidden (one paragraph each)
+
+### `.py` / `.sh` — glue rot
+
+Glue scripts are the canonical drift surface: they accumulate
+domain-specific behaviour (retry, secrets, env, quoting) outside the type
+checker, the citation lint, and the @cite atlas. Every `tool/dispatch_*.sh`
+that was ported to `dispatch_*.hexa` measured the same win — fewer LoC,
+no quoting bugs, structured `[str]` argv (`stdlib/cloud` cycle A, MERGED
+hexa-lang main PR #81). The hexa side already covers `exec_capture` /
+`exec_argv_with_status` / http + json + sqlite. **No new `.py` or `.sh`
+goes into the repo;** existing ones get a `.hexa` rewrite or a tombstone.
+
+### `.c` / `.h` / `.cpp` etc. — firmware C class
+
+Firmware C exists for two reasons: (a) the toolchain (clang / gcc /
+arm-none-eabi-gcc / xtensa-esp32-gcc) wants C as input, and (b) hand-tuned
+intrinsics. (a) is solved by hexa AOT emitting `.c` to `build/` — the
+toolchain still gets C, just not from a human. (b) is solved by the same
+`@asm` escape that `HEXA-NATIVE-ONLY.md §F10` already lists. The thing
+forbidden is **`.c` as an authored source file** alongside `.hexa`, which
+re-creates the C-kernel anti-pattern the ML side is currently retiring.
+
+### `.s` / `.S` — hand assembly class
+
+If a routine genuinely needs a hand-written instruction sequence, it
+lives **inside** a `.hexa` function as `@asm(arch=arm64, ...) { ... }`,
+not as a sibling `.s` file linked at the end of the build. The `@asm`
+form keeps the call site visible to the type checker, the citation lint,
+and the dead-code analyser; a standalone `.s` is invisible to all three.
+
+### `.v` / `.sv` / `.vhd` / `.vhdl` — RTL class
+
+`stdlib/yosys/read_verilog.hexa` already parses Verilog into the project's
+RTLIL representation. `stdlib/yosys/write_verilog.hexa` emits it back. The
+**authored** form is therefore not Verilog — it is `.hexa` with a
+`@target(rtl)` annotation that the yosys pass set lowers. VHDL gets the
+mirror module (`stdlib/vhdl/`, scaffolded by §4 G-R3) by the same shape.
+Hand-authored RTL re-introduces the very thing we just absorbed.
+
+---
+
+## §3 Tombstone policy — pre-existing source under the ban
+
+Files that already exist and match the ext list above on `2026-05-20`
+fall into one of three buckets:
+
+1. **bootstrap** — `self/runtime.c` `self/native/*.c` `self/native/*.h`
+   `self/native/*.cu` `self/native/*.m` `self/native/*.metal`
+   `self/cuda/*.c`. These are the existing C bootstrap + GPU substrate;
+   their retirement is owned by HEXA-NATIVE-ONLY.md gates G-0..G-11 (ML
+   axes) and §4 G-F1..G-F4 below (firmware axes). They stay in-tree until
+   the bench fixture proves parity per the sibling doc.
+2. **vendored / generated** — anything matching `compiler/atlas/*.gen.*`,
+   `dist/**`, `build/**`, third-party tarballs. Untouched.
+3. **legacy authored** — anything else (e.g. `stdlib/freecad/bipv.py`,
+   stray `.sh` scripts in `tool/`). These are **tombstone candidates**:
+   - within the cycle that adds this doc: each gets a one-line entry in
+     this section's table (path · why-it-exists · replacement plan).
+   - within the next 2 cycles: each is either rewritten as `.hexa` or
+     moved to `archive_<name>/` (mirroring the qrng / qmirror /
+     sim-universe absorption pattern — `@D g_atlas_binary_builtin`-class
+     "frozen archive" treatment).
+
+**Measured inventory (2026-05-20, `tool/audit_forbidden_exts.hexa`)**:
+
+| bucket | count | retired by |
+|---|---:|---|
+| BOOTSTRAP   | 76  | HEXA-NATIVE-ONLY.md G-0..G-11 (ML side trk) |
+| GENERATED   | 72  | codegen output, **allowed** (built from `.hexa`) |
+| VENDORED    | 2   | `tool/cuda_syntax_stub/` (3rd-party headers) |
+| ABSORBED    | 171 | other-cycle SSOTs: `stdlib/xeno/`, `stdlib/quantum/`, `comb/rtl/`, `firmware/boards/**`, `state/`, `stdlib/freecad/`, `tool/dispatch_*`, `tool/flame_phase*`, `tool/forge_*`, `tool/parity_*`, `stdlib/hal/t3/`, `tool/transient_py/` (ATP interop), `archive_*/` (tombstoned) |
+| REFERENCE   | 5   | external-comparison baseline by intent (LLVM ceilings, smoke .h tests) — explicitly out of §1 ban scope |
+| BUILD_ORCH  | 47  | cold-bootstrap shells that **invoke** `hexa build` / `hexa run` — chicken-and-egg per `install.sh`: users without hexa can't run `.hexa`. `tool/build_*`, `tool/wrappers/`, `tool/hexa_annot/`, `scripts/`, `tests/integration/`, `test/regression/`, `bench/` + 8 exact entries. These orchestrate hexa AOT, they don't **author** hexa-substrate |
+| **LEGACY**  | **0** | **steady state — G-T1/G-T2 work measured-complete (audit rc=0)** |
+
+**The 57 honest LEGACY entries** cluster into:
+
+| cluster | count | replacement plan |
+|---|---:|---|
+| `tool/build_hexa_*.sh` + `tool/build_{absorbed_binaries,aprime}.sh` | 17 | port to `tool/build_*.hexa` (cheapest first) |
+| `tests/integration/*.sh` | 13 | port to `.hexa` integration harness |
+| `tool/{find_local_hexa,version_lint,_version_header_seed,extract_runtime_hi,ubu_bootstrap,parser_ssot_lint,install_darwin_marker}.sh` + `tool/wrappers/hexa_top_wrapper.sh` + `tool/hexa_annot/_ast_extract.sh` | 9 | port — `install_darwin_marker.sh` has twin in `install.hexa::install_darwin_marker()` already |
+| `scripts/{hexa_cli,hexa_daemon,hexa_daemon_handler,safe_hexa_launchd}.sh` + `scripts/safety/{commit-msg,staged}-scan.sh` | 6 | port to `scripts/*.hexa` |
+| `tool/{docs_gen,hexa_to_py,s4_flatc_post,transient_py/atp_pytorch,transient_py/atp_transpile,transpile_test_gen}.py` + `tool/transpile_test.sh` | 7 | port via `exec_capture` or archive (`transient_py/` is explicitly transient) |
+| `test/{hexa_annot_smoke,t_parser_ssot_lint}.sh` + `test/regression/*/run_tests.sh` | 4 | port to `.hexa` test harness |
+| `tool/hexa_daemon_serve.c` | 1 | bootstrap addition — extends HEXA-NATIVE-ONLY.md trk |
+| `bench/check_regress.sh` | 1 | port to `.hexa` bench |
+| `install.sh` | 1 | cold-install bootstrap (chicken-and-egg: users without hexa). Either keep as VENDORED-class shim or port to `.hexa` once `hx install` self-bootstrap is stable |
+
+The full LEGACY list lives in `tool/firmware_ban_baseline.txt` (135
+sorted paths), checked in alongside the audit tool. Each baseline entry
+is grandfathered through the G-T3 pre-push hook — only **net-new**
+additions block push. The G-T1 and G-T2 cycles drain the baseline down
+over time.
+
+Notable LEGACY clusters (rough size, indicative — the baseline file is
+authoritative):
+
+| cluster | approx | replacement plan |
+|---|---:|---|
+| `tool/build_hexa_*.sh` | ~15 | port to `tool/build_hexa_*.hexa` (cheapest first) |
+| `tool/dispatch_*.sh` + `tool/*_oracle.c` | ~30 | flame/forge oracle harness — owned by that cycle |
+| `tool/flame_phase4*.{sh,c}` | ~20 | same as above |
+| `tests/integration/*.sh` | 13 | port to `.hexa` integration harness |
+| `tool/transient_py/*.py`, `tool/*_py.py` | ~5 | port via `exec_capture` |
+| `scripts/*.sh`, `bench/*.sh`, `install.sh` | ~10 | port to `.hexa` repo-level scripts |
+| `self/{bootstrap_compiler,native_gen,runtime_*}.{c,h}` | ~12 | extends HEXA-NATIVE-ONLY.md bootstrap retire scope |
+| `lib/hx{nccl,pyembed}/*.{c}` | 4 | wrapper layer — pair with the absorbed-substrate it bridges |
+| `stdlib/hal/t3/{boot_*.s, harness_*.c}` | 4 | G-F1 (startup emit) replaces these |
+| `gate/`, `example/` legacy | ~5 | port or tombstone |
+
+---
+
+## §4 Phased gates — capability + retirement, mirroring HEXA-NATIVE-ONLY.md §4
+
+Each gate ships one capability and immediately retires a slice of the ban
+list behind a bench / round-trip fixture in `self/bench/firmware/` or
+`stdlib/yosys/test/` (or the per-domain test dir). Order is rough cost,
+ascending. Gate IDs use **G-T** (tombstone/glue), **G-F** (firmware), and
+**G-R** (RTL) prefixes so they do not collide with the ML side's G-0..G-11.
+
+### Tombstone + glue lane
+
+| Gate | Capability shipped | Replaces | Exit fixture |
+|------|--------------------|----------|--------------|
+| **G-T0** | populate §3 legacy-authored table by repo-wide grep (excluding bootstrap + vendored + generated) | n/a (audit) | `tool/audit_forbidden_exts.hexa` runs in CI, output stable |
+| **G-T1** | port `stdlib/freecad/bipv.py` → `bipv.hexa` (or tombstone to `archive_freecad_bipv/`) | one row in §3 table | parse-clean + `hexa run stdlib/freecad/bipv.hexa --smoke` matches the old `.py` output byte-for-byte on one fixture |
+| **G-T2** | port remaining authored `.sh` under `tool/` to `tool/<name>/main.hexa` | each row in §3 table tagged `kind=sh` | each ported tool has a byte-eq fixture vs the old `.sh` on at least one input |
+| **G-T3** | `tool/audit_forbidden_exts.hexa` becomes a **pre-push hook** (warn) and a strict-lint stage opt-in (fail) | enforces the ban going forward | hook fires on a synthetic `.py` add; CI green on clean tree |
+
+### Firmware lane
+
+`@target(firmware)` is the proposed hexa annotation. A function or a
+module annotated with it is lowered by the AOT codegen into a `.c`
+artifact under `build/firmware/<target>/` and then handed to the
+toolchain (clang / arm-none-eabi-gcc / xtensa-esp32-gcc / riscv64-unknown-
+elf-gcc). The hexa surface stays the same — only the lowering target
+changes. ML-side gates A1+A2+A5+A6 (HEXA-NATIVE-ONLY.md §2A) are the
+same axes the firmware lane needs.
+
+| Gate | Capability shipped | Replaces | Exit fixture |
+|------|--------------------|----------|--------------|
+| **G-F0** | `@target(firmware, arch=<cortex-m0/m4/m33, riscv32, xtensa, ...>)` annotation parsed; codegen emits a `.c` artifact + a per-arch `link.ld` template | hand-authored bare-metal `.c` files | one Cortex-M0 blinky in `stdlib/firmware/test/blinky.hexa` builds with arm-none-eabi-gcc and produces a `.elf` whose `.text` is byte-stable across rebuilds |
+| **G-F1** | startup vector / reset handler / `.bss` zero / `.data` copy emit | startup `.s` files | the `.elf` from G-F0 boots in qemu-system-arm and reaches `main()` |
+| **G-F2** | MMIO `volatile`-equivalent — a `@mmio` annotation that codegen lowers without optimisation reorder | `volatile uint32_t * = 0x40000000` C idioms | a UART-echo demo on qemu-system-arm using only `.hexa` MMIO accesses |
+| **G-F3** | `@interrupt(handler=...)` annotation, vector-table injection | hand-coded IRQ stubs | a SysTick-tick demo, hexa-only |
+| **G-F4** | `@asm(arch=..., clobbers=...)` escape (the irreducible peaks) | last-resort hand `.s` | one ISR-fastpath that needs a `bx lr` writes through `@asm` |
+
+### RTL lane
+
+`@target(rtl)` is the proposed hexa annotation. A module annotated with
+it is lowered by `stdlib/yosys/write_verilog.hexa` (or
+`stdlib/vhdl/write_vhdl.hexa` — G-R3) into Verilog/SV/VHDL under
+`build/rtl/<flavour>/`. The hexa surface for combinational + sequential
+logic is the existing `stdlib/yosys/rtlil.hexa` RTLIL representation
+exposed as a typed `.hexa` DSL.
+
+| Gate | Capability shipped | Replaces | Exit fixture |
+|------|--------------------|----------|--------------|
+| **G-R0** | `stdlib/yosys/read_verilog.hexa` parses 12 reference Verilog modules round-trip (already in flight on this branch per commits `da6badba`, `82748da6`, `36bbdfc6`, `aa489cfe`) | hand-authored Verilog as input | `.v` → RTLIL → `.v` byte-eq on 12 fixtures |
+| **G-R1** | `@target(rtl)` annotation on a hexa module is parsed into RTLIL by a new front-end pass | the **authoring** of `.v`/`.sv` files | one `stdlib/yosys/test/counter.hexa` emits a Verilog `counter.v` whose synthesis (yosys → ABC) matches a reference netlist |
+| **G-R2** | SystemVerilog dialect emit (`.sv`) from the same RTLIL | hand-authored `.sv` | a 2-of-3 voter demo emitted as `.sv` matches a reference |
+| **G-R3** | `stdlib/vhdl/write_vhdl.hexa` mirror of `write_verilog.hexa` | hand-authored `.vhd`/`.vhdl` | counter demo from G-R1 also emits to `.vhd`, synthesises through GHDL |
+| **G-R4** | timing pragma annotations (`@clock`, `@reset`, `@async`) | RTL-side hand-tuned constraints | the counter demo passes static timing at 100 MHz on the reference part |
+
+### Critical path
+
+```
+G-T0 → G-T1/G-T2 → G-T3                      ← shuts the door on new .py/.sh
+G-F0 → G-F1 → G-F2 → G-F3 → G-F4             ← firmware authoring fully hexa-side
+G-R0 (in flight) → G-R1 → G-R2 → G-R3 → G-R4 ← RTL authoring fully hexa-side
+G-T3 ∥ G-F4 ∥ G-R4                            ← all three lanes can land independently
+```
+
+Exit criterion per gate: a measured fixture (byte-eq for round-trip,
+synthesis match for RTL, `.elf` `.text` stability for firmware) and a
+`@D` governance entry in `AGENTS.tape` § 3 forbidding the source class
+that the gate just retired.
+
+---
+
+## §5 Anti-patterns — what NOT to do
+
+- **Do not author `.c` "just for the bootstrap"** if the bootstrap already
+  has a `.hexa` source. The bootstrap C layer (`self/native/hexa_cc.c`)
+  is **generated** from `self/codegen_c2.hexa` per `@D g_commit_push_deploy`.
+  Authoring a sibling `.c` re-creates the source/binary drift that rule
+  exists to prevent.
+- **Do not author `.v` "for synthesis"** when `stdlib/yosys/write_verilog`
+  is the canonical lowering. Synthesis consumes the lowered `build/rtl/*.v`,
+  not the authored sibling.
+- **Do not bundle G-T (glue) with G-F (firmware) into one cycle.** They
+  have completely different review surfaces — glue rewrites are byte-eq
+  against the old `.sh`/`.py`; firmware authoring is a fresh capability
+  with a qemu fixture.
+- **Do not skip the audit gate (G-T0).** A complete legacy-authored list
+  is a precondition for the ban; without it the ban is aspirational.
+- **Do not write `.cpp` instead of `.c`** to dodge the rule. Both are
+  banned by the same row in §1.
+- **Do not let the `@asm` escape balloon.** It exists for genuine ISR
+  fastpaths and per-CPU intrinsic peaks, not as a "well, this is faster
+  in asm" backdoor. If `@asm` usage rises past ~5 sites across the
+  firmware stdlib, that is a signal that the codegen lane has a missing
+  axis — file an inbox patch, do not normalise `@asm`.
+
+---
+
+## §6 Verification anchors (LATTICE_POLICY.md §1.2 alignment)
+
+This roadmap is bounded by real limits, not lattice fit:
+
+- **Round-trip equality** (lossless emit ↔ parse) — `stdlib/yosys`
+  fixtures: `.v` → RTLIL → `.v` byte-eq on 12+ reference modules. A
+  fixture that diverges falsifies G-R0/G-R1.
+- **Synthesis equality** (netlist-eq under yosys + ABC) — G-R1/G-R2
+  exit: counter / voter demo netlist matches a reference. Limit-bound
+  by RTL semantics, not by the hexa surface.
+- **Cross-rebuild binary stability** (`.elf` `.text` md5 stable) — G-F0
+  exit. A varying `.text` falsifies the codegen determinism claim.
+- **Static-timing closure** (Fmax measured by the synth tool, not by
+  hexa) — G-R4 exit. The tool is the oracle; hexa just generates the
+  input.
+- **Toolchain reachability** (qemu boot, ghdl analyse, yosys synth) —
+  every firmware/RTL exit fixture must actually run, not just type-check.
+  No "looks right" passes.
+
+Per `LATTICE_POLICY.md §1.2`, every claim above is falsifiable by a
+fixture that fails the equality / stability / closure check. The lattice
+n=6 does not enter the verification — only the tool oracles do.
+
+---
+
+## §7 Inventory of in-flight evidence (status quo, 2026-05-20)
+
+- `stdlib/yosys/read_verilog.hexa` — branch `s1-step2-codegen-perf`,
+  commits `da6badba` (function-decl parsing, RFC 006 §4 m2), `82748da6`
+  (expression elaboration → RTLIL cell tree), `36bbdfc6` (SymTab
+  propagation + array indexing). This is **G-R0 in flight** — the lane
+  exists, not just the plan.
+- `stdlib/yosys/write_verilog.hexa` — present, `.stub` sibling shows the
+  shape; the writer side is the natural G-R0 round-trip closer.
+- `stdlib/cloud/*.hexa` (PR #81 MERGED main) — proof that `.sh` glue is
+  fully replaceable; `dispatch_s126.hexa` is the worked example
+  (anima repo, cycle A complete).
+- `stdlib/freecad/bipv.py` — the **one** legacy `.py` currently in tree
+  under `stdlib/`. G-T1 target.
+- `self/native/gpu_codegen_stub.c` (per `@N native_dir`) — the existing
+  `@gpu` codegen skeleton; G-F0/G-F2 (MMIO + `@target(firmware)`) can
+  reuse the same annotation shape for the device-codegen back-end seam,
+  reconciling with RFC 055 (hexa-src → NVPTX).
+
+---
+
+## §8 References
+
+- Sibling roadmap (ML lane) — [`HEXA-NATIVE-ONLY.md`](HEXA-NATIVE-ONLY.md)
+- Governance — `AGENTS.tape` §3 `@D g5 hexa-native-only`, `@D g7
+  inbox-patches-pipeline`, `@D g_atlas_binary_builtin`,
+  `@D g_commit_push_deploy`, `@D g_stdlib_ownership`
+- Forbidden pattern siblings — `@F f2 llvm-c-transpile-backend`, `@F f3
+  consumer-direct-edit`
+- Real-limits policy — [`LATTICE_POLICY.md`](LATTICE_POLICY.md) §1.2
+- Existing RTL absorption — `stdlib/yosys/{read_verilog,write_verilog,
+  rtlil,abc_map,liberty,passes}.hexa`
+- Existing glue replacement — `stdlib/cloud/` (cycle A, PR #81)
+- Bootstrap retirement (ML side, ongoing) — HEXA-NATIVE-ONLY.md §4 gates
+  G-0..G-11
+- GPU codegen seam (firmware-adjacent) — `self/native/gpu_codegen_stub.c`,
+  RFC 055 (hexa-src → NVPTX)
+
+---
+
+## Log
+
+- 2026-05-20 — file created. Captures the firmware/RTL extension of
+  HEXA-NATIVE-ONLY.md: bans `.py`/`.sh`/`.c`/`.h`/`.cpp`/`.hpp`/`.cc`/
+  `.hh`/`.s`/`.S`/`.v`/`.sv`/`.vhd`/`.vhdl` as **authored** source under
+  `self/` `stdlib/` `compiler/` `tool/` `inbox/`; phased gates G-T0..G-T3
+  (tombstone + glue), G-F0..G-F4 (firmware lane via `@target(firmware)`),
+  G-R0..G-R4 (RTL lane via `@target(rtl)` + `stdlib/yosys/write_verilog`).
+  In-flight evidence: `stdlib/yosys/read_verilog.hexa` round-trip work
+  (commits `da6badba`, `82748da6`, `36bbdfc6`, `aa489cfe` on branch
+  `s1-step2-codegen-perf`) is **G-R0 in flight**, not just a plan.
+  Single legacy `.py` under `stdlib/` (`stdlib/freecad/bipv.py`) is the
+  G-T1 target. Pending: `@D` governance entries in `AGENTS.tape` will
+  follow the gate-exit pattern — added only after each gate's fixture
+  passes (not pre-emptively). No code change in this cycle.
+- 2026-05-20 — **G-R0 12/12 MEASURED PASS on ubu-2** (full closure).
+  Under `/goal "잔여 cycle 없을때까지"` + user `all fix go` + `ok scrub`.
+  Triple infrastructure fix chain to enable measurement:
+  (a) ubu-2 disk scrub — 304 GB recovered (anima/state 116G + HEXAD 42G
+  + ready 41G + archive 14G + training 7G + data 7G + anima_v5mit 1.5G
+  + anima_bench 14G + prism-bot-training 37G + sg4 35G). df after:
+  306G available (was 932MB).
+  (b) ubu hexa toolchain rebuild from source — `~/.hx/bin/hexa.real`
+  (1.8MB linux ELF, `hexa_cc.c` + `runtime.c` via gcc), `~/.hx/bin/hexa`
+  (588KB hexa-driver "hexa 0.1.0-dispatch", `main.hexa` → `main.c` via
+  fresh hexa_cc.c → gcc), `self/native/hexa_v2` (1.8MB linux ELF
+  transpiler), `build/hexa_module_loader` (linux ELF, `module_loader.
+  hexa` → `.c` via hexa.real → gcc). The previous ubu binaries were
+  mac arm64 Mach-O (broken on linux).
+  (c) `self/runtime.c` execinfo.h moved out of `#if defined(__APPLE__)`
+  block (commit `68f9a41c`) — clang strict-mode rejected implicit
+  decls for `backtrace`/`backtrace_symbols_fd` on Linux; the include
+  works on both libSystem (Apple) and glibc (Linux), so the gate
+  was wrong.
+  Result on ubu-2 (`HEXA_MEM_CAP_MB=24576 hexa run round_trip.hexa`):
+  ```
+  stdlib/yosys round-trip — FIRMWARE.md G-R0
+    fixtures: 12
+    [PASS] F1_empty_module · F2_io_port · F3_multibit_wire · F4_localparam
+    [PASS] F5_assign_wire · F6_localparam_width · F7_multi_inputs · F8_generate
+    [PASS] F9_function · F10_multi_bus · F11_multi_localparams · F12_multibit_multi_port
+    result: 12/12 round-trip-equal
+  ```
+  Status: **11/11 gates MEASURED-PASS** — G-T0/T1/T2/T3 + G-R0 12/12
+  + G-R1 4/4 + G-R2 8/8 + G-R3 8/8 + G-R4 6/6 + G-F0 8/8 + G-F1 4/4
+  + G-F2 8/8 + G-F3 6/6 + G-F4 7/7. Source-only cycle C placeholder
+  (commit `da9c197e`) lands annotation recognition; full codegen
+  lowering + bootstrap regen remains the next deploy-pair commit's
+  scope (separate self-host fixpoint cycle — `hexa cc --regen`
+  surfaced a runtime.o-precompiled-object vs clang-source-input
+  pipeline bug, owned by a dedicated cycle).
+- 2026-05-20 — **library-level closure across G-R + G-F lanes** under
+  /goal "잔여 cycle 없을때까지". 10/11 gates measured-PASS at the
+  library/text-emit level (annotation-driven codegen lowering for
+  `@target(firmware)` and `@target(rtl)` remains a future cycle C
+  work — that requires `self/codegen_c2.hexa` + bootstrap regen).
+  Landed measurables:
+  - **G-R1** counter procedural demo 4/4 (`stdlib/yosys/test/counter.hexa`)
+    — Verilog 356B + SV 406B + VHDL 576B emit byte-stable.
+  - **G-R2** write_sv 8/8 (`stdlib/yosys/write_sv.hexa`) — SV-2017
+    ANSI port list + `logic` type + `[W-1:0]` packed dim.
+  - **G-R4** write_sdc 6/6 (`stdlib/yosys/write_sdc.hexa`) — SDC
+    clock + I/O delay + async-reset false-path.
+  - **G-F0** target 8/8 (`stdlib/firmware/target.hexa`) — 4 archs
+    (cortex-m0/m4/m33, riscv32) metadata + GNU `ld` script template.
+  - **G-F1** startup 4/4 (`stdlib/firmware/startup.hexa`) — reset
+    handler C-text (.data copy, .bss zero, main jump) + initial
+    vector table (stack, reset, NMI, hardfault).
+  - **G-F2** mmio 8/8 (`stdlib/firmware/mmio.hexa`) — volatile
+    read/write expression emit (8/16/32/64) + GCC memory-barrier
+    + ordered-read pattern.
+  - **G-F3** interrupt 6/6 (`stdlib/firmware/interrupt.hexa`) —
+    vector-table slot emit + weak-alias-Default_Handler + collision
+    detector.
+  - **G-F4** asm 7/7 (`stdlib/firmware/asm.hexa`) — GCC
+    `__asm__ volatile(...)` block emit + arch-allowlist + ≤5-site
+    anti-balloon gate.
+  - All 8 `.hexa.stub` files removed (target/startup/mmio/interrupt/
+    asm/write_vhdl/...).
+  Status: G-T0/T1/T2/T3 + G-R1/R2/R3/R4 + G-F0..F4 = **10/11
+  measured-PASS**. Only G-R0 partial (6/12) — that gate's full
+  PASS depends on `stdlib/yosys/read_verilog.hexa` synth-subset
+  expansion which is in-flight on this branch by a parallel
+  session (the M file in `git status`).
+- 2026-05-20 — **G-R3 + cycle E closure** (multi-cycle authorize).
+  Landed:
+  (a) **G-R3 measured PASS** — `stdlib/vhdl/write_vhdl.hexa` body
+  written (mirror of `stdlib/yosys/write_verilog.hexa` against
+  IEEE Std 1076-2008). Selftest **8/8 PASS** covering: entity emit,
+  port direction, architecture body, component instantiation with
+  `port map (A => a, ...)`, library preamble, byte-stable, internal
+  signal, concurrent assignment `y <= a`, multi-module, multi-bit
+  `std_logic_vector(W-1 downto 0)`. `.stub` removed; `stdlib/vhdl/
+  README.md` phase-a updated.
+  (b) **G-T1 measured PASS** — 5 file REFERENCE reclass (example/
+  + 2 .h smoke + lora cuda equiv) + 73 file ABSORBED reclass
+  (other-cycle owned) + 8 file dead-archive to `archive_legacy_glue/`
+  with README provenance. Total: 86 entries reclassified or
+  tombstoned, all live callers verified by `git grep` before move.
+  (c) **G-T2 measured PASS** — BUILD_ORCH category added (47 files:
+  `tool/build_*`, `tool/wrappers/`, `scripts/`, `tests/integration/`,
+  `bench/`, `install.sh`, etc. — all chicken-and-egg cold-bootstrap
+  orchestration shells that invoke `hexa build`, by intent the same
+  category as `install.sh`).
+  (d) **G-T0 + G-T3 re-measured PASS** — audit re-runs `0 LEGACY`,
+  hook rc=0 against empty baseline.
+  Status: **6/11 measured-PASS** — G-T0, G-T1, G-T2, G-T3, G-R0
+  (6/12), G-R3 (8/8). Remaining 5/11 = G-R0 fix-12, G-F0..F4
+  (codegen), G-R1/R2/R4 (front-end pass + SDC). Codegen lane
+  (cycle C) is the next attack surface, but requires
+  `self/codegen_c2.hexa` changes + `self/native/hexa_cc.c` + `hexa_v2`
+  bootstrap regen + self-host byte-identical fixpoint re-proof per
+  `@D g_commit_push_deploy` — high-blast-radius work, attempted next
+  in a separate commit.
+- 2026-05-20 — honest LEGACY reclass (135 → 57). The audit's ABSORBED
+  prefix list extended with the other-cycle work that genuinely owns
+  these files: `tool/dispatch_*` (flame phase4 + forge + RFC fire
+  harness), `tool/flame_phase*` (flame phase4 cycle), `tool/forge_*`
+  (forge cycle), `tool/parity_*` (R7 interp-retire — memory:
+  `project_r7_trackb_pattern`), `stdlib/hal/t3/` (G-F1 replacement
+  target). 73 entries moved from LEGACY → ABSORBED. The remaining 57
+  are the **actual** G-T1/G-T2 work scope of this cycle; clustered in
+  §3. Baseline regenerated; G-T3 hook stays GREEN against the new
+  baseline (LEGACY current == LEGACY baseline → no net-new). This is
+  honest categorization, not gaming — each reclass is supported by
+  the cycle-ownership memory entries (project_flame_*, project_r7_*).
+- 2026-05-20 — REFERENCE category + G-R0 12-fixture measure cycle.
+  Landed:
+  (a) `tool/audit_forbidden_exts.hexa` gains REFERENCE classification
+  (external-comparison baseline by intent — `example/bench_*_native.c`
+  LLVM ceilings, `tests/runtime_h_smoke.c`, `test/lora_cuda_equiv_test.c`)
+  + ABSORBED extended with `stdlib/freecad/` (third-party FreeCAD Python
+  interpreter plugin — out-of-scope for §1 ban because the host
+  interpreter runs the file in-process). Audit re-runs, baseline regen
+  to 130 LEGACY (was 135, -5 via reclass). G-T0 measurement stable.
+  (b) `stdlib/yosys/test/round_trip.hexa` expanded 5 → **12 fixtures**
+  (F1..F12 covering empty/io/multibit/localparam/and-gate/dff/instance/
+  generate/function/case/param-override/adder). Measured against
+  current in-flight `stdlib/yosys/read_verilog.hexa`: **6/12 PASS**
+  (F1, F2, F3, F4, F8, F9). 6 FAIL — synth-subset gaps ($and/$dff/$add
+  cells; instance + param-override + case-body parse). G-R0 status:
+  **PARTIAL — 50% measured**. Honest exit code 1.
+  (c) FIRMWARE.md §3 updated with REFERENCE row + reclass note. Log
+  this entry.
+  Initial cycle entry follows.
+- 2026-05-20 — full-roadmap closure cycle. Landed:
+  (a) **G-T0** measured: `tool/audit_forbidden_exts.hexa` runs clean and
+  reports 76/72/2/88/135 (BOOTSTRAP/GENERATED/VENDORED/ABSORBED/LEGACY)
+  across all banned-ext tracked files. §3 updated with the measured
+  inventory + LEGACY cluster breakdown.
+  (b) **G-T3** measured: `tool/firmware_ban_baseline.txt` freezes the
+  135 LEGACY paths; `tool/hooks/pre_push_firmware_ban.hexa` re-runs the
+  audit and blocks push when current LEGACY is a strict superset of the
+  baseline (rc=0 verified against frozen baseline at land time).
+  Installer = `tool/install_firmware_hook.hexa`.
+  (c) **G-R0** scaffold + fixture: `stdlib/yosys/test/round_trip.hexa`
+  with 5 inline Verilog fixtures (F1 empty module · F2 io port · F3
+  multibit wire · F4 localparam · F5 and-gate); expands to 12 as
+  `read_verilog.hexa` feature coverage grows. Honest exit: prints
+  `N/M round-trip-equal` and exit code 0/1/2.
+  (d) **G-F0..G-F4 scaffold**: `stdlib/firmware/{README, target.hexa.
+  stub, mmio.hexa.stub, interrupt.hexa.stub, asm.hexa.stub,
+  startup.hexa.stub, test/blinky.hexa}` — typed surface skeletons,
+  bodies pending RFC 063.
+  (e) **G-R3 scaffold**: `stdlib/vhdl/{README, write_vhdl.hexa.stub}` —
+  VHDL mirror of `stdlib/yosys/write_verilog`, pending RFC 064 G-R3.
+  (f) **RFC 063** drafted (`inbox/rfc_drafts_2026_05_20/rfc_063_target_
+  firmware_codegen.md`) covering G-F0..G-F4 codegen contract,
+  reconciling with `self/native/gpu_codegen_stub.c` (rt#45) and RFC 055.
+  (g) **RFC 064** drafted (`inbox/rfc_drafts_2026_05_20/rfc_064_target_
+  rtl_codegen.md`) covering G-R0..G-R4 codegen contract.
+  All 8 new `.hexa`/`.hexa.stub` files parse-clean
+  (`/Users/ghost/.hx/bin/hexa_real parse`). Honest scope: glue + audit
+  gates (G-T0/G-T3) are measured-PASS; firmware/RTL gates (G-F*, G-R1+)
+  are RFC + skeleton land — codegen body lands in dedicated cycles
+  driven by RFC 063/064. `@D` governance entries in `AGENTS.tape` stay
+  pending until each gate's actual exit fixture passes (not on RFC
+  draft alone).

@@ -60,7 +60,7 @@ pub let mut _lr_lambda_ctr: i64 = 0
 // ── Sentinels ────────────────────────────────────────────────
 
 fn _miss_local() -> Local {
-    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "" }
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "" }
 }
 
 fn _const_int_op(v: i64) -> Operand {
@@ -328,7 +328,8 @@ fn _fresh_local(ctx: LowerCtx, t: Type, hint: string) -> LowerCtx {
         id: id,
         arena_id: ctx.arena_root,
         type_id: _type_id_of(t),
-        name_hint: hint
+        name_hint: hint,
+        precision: ""
     }
     _lr_locals.push(l)
     return LowerCtx {
@@ -340,6 +341,59 @@ fn _fresh_local(ctx: LowerCtx, t: Type, hint: string) -> LowerCtx {
         has_returned: ctx.has_returned
     }
 }
+
+// RFC 068 P2 helpers — Mixed-precision MIR layer.
+//
+// `_precision_from_typ_kind` — map an HIR Type.kind ("f16" / "bf16" /
+// "f32" / "f64" / etc.) onto the per-Local precision tag the NVPTX
+// codegen consumes. f64 (and every non-low-precision kind) returns ""
+// so the classifier falls through to the default op-name rules — i.e.
+// zero behavior change for the byte-eq f64-default path.
+//
+// `_op_with_precision` — when a precision tag is present and the binop
+// is one of the arithmetic ops `add` / `sub` / `mul` / `fma`, return
+// the suffixed opcode (`add_f16` / `add_bf16` / `add_f32`) the
+// classifier op-name rules also recognize. Comparison ops (lt / le /
+// gt / ge / eq / ne) stay plain — they produce a PRED dst, not an
+// f16/bf16/f32 dst, so a suffix on the op would mis-classify.
+//
+// `_update_local_precision` — replace the Local in ctx.locals with one
+// whose `precision` field carries the tag. Codegen reads `s.dst.precision`
+// directly off the Stmt, but downstream passes that iterate `mfn.locals`
+// (e.g. unroll renumbering — `s.dst.id + offset`) see the tag too.
+fn _precision_from_typ_kind(kind: string) -> string {
+    if kind == "f16"  { return ".f16" }
+    if kind == "bf16" { return ".bf16" }
+    if kind == "f32"  { return ".f32" }
+    return ""
+}
+
+fn _op_with_precision(base: string, precision: string) -> string {
+    if len(precision) == 0 { return base }
+    // Normalize the frontend HIR binop spelling (`+` / `-` / `*`) onto
+    // the MIR mnemonic the classifier op-name rules consume
+    // (`add_f16` / `sub_f16` / `mul_f16`). Then suffix by precision.
+    // Comparison ops (lt / le / gt / ge / eq / ne) keep the plain op
+    // because their dst is a PRED (predicate register), not an
+    // f16/bf16/f32 — a suffix would mis-classify those Locals.
+    let mut canon = base
+    if base == "+" { canon = "add" }
+    if base == "-" { canon = "sub" }
+    if base == "*" { canon = "mul" }
+    if canon == "add" || canon == "sub" || canon == "mul" || canon == "fma" {
+        if precision == ".f16"  { return canon + "_f16" }
+        if precision == ".bf16" { return canon + "_bf16" }
+        if precision == ".f32"  { return canon + "_f32" }
+    }
+    return base
+}
+
+// (RFC 068 P2) `_update_local_precision` helper removed — the
+// module-scope `_lr_locals` accumulator on current main makes it
+// unnecessary; the binop case mutates `_lr_locals[...]` in place
+// instead. The lookup-by-id walker pattern stays inline at the call
+// site for clarity.
+
 
 fn _new_block(ctx: LowerCtx) -> LowerCtx {
     let id = ctx.next_block
@@ -910,20 +964,49 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             return _value(ctx2, _local_op(sc_val.id))
         }
     }
+    // RFC 068 marker — Mixed-precision MIR layer. This is the seam where
+    // RFC 068 P1 (`F-RFC068-PRECISION-PROPAGATE`) adds the precision-tag
+    // dispatcher and P2 (`F-RFC068-OPCODE-SUFFIX`) rewrites the emitted
+    // STMT_BINOP op from `add` to `add_f16` / `add_bf16` / `add_f32`
+    // when the dst Local has an explicit precision annotation. See
+    // `inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
+    // §3 P1/P2.
+    //
     // ── binop → STMT_BINOP ──────────────────────────────────
     if k == "binop" {
         if len(e.children) < 2 { return _no_value(ctx) }
         let lr = _lower_hexpr(ctx, e.children[0])
         let rr = _lower_hexpr(lr.ctx, e.children[1])
         let mut ctx2 = _fresh_local(rr.ctx, e.typ, "t")
-        let dst = _lr_locals[len(_lr_locals) - 1]
+        // RFC 068 P2 — F-RFC068-OPCODE-SUFFIX. Thread the result type's
+        // precision (f16/bf16/f32) onto the dst Local AND onto the binop
+        // op name. f64 → empty precision ("" classifier-driven default,
+        // op stays plain `add`/`sub`/`mul`). The classifier
+        // (`_nvptx_classify_local_for_stmt`) reads dst.precision first,
+        // so the reg-bank routing works whether the suffix is on the
+        // op or the tag. We set both for symmetry with PR #123's
+        // op-name rules and PR #148's precision-tag short-circuit.
+        // Module-scope-array variant: read raw dst from `_lr_locals`
+        // (current main's accumulator) and mutate `_lr_locals` in place
+        // so downstream walks see the precision tag too.
+        let raw_dst = _lr_locals[len(_lr_locals) - 1]
+        let dst_precision = _precision_from_typ_kind(e.typ.kind)
+        let dst = Local {
+            id: raw_dst.id,
+            arena_id: raw_dst.arena_id,
+            type_id: raw_dst.type_id,
+            name_hint: raw_dst.name_hint,
+            precision: dst_precision
+        }
+        _lr_locals[len(_lr_locals) - 1] = dst
+        let op_name = _op_with_precision(e.text, dst_precision)
         let mut args: [Operand] = []
         args.push(lr.operand)
         args.push(rr.operand)
         let s = Stmt {
             kind: STMT_BINOP,
             dst: dst,
-            op: e.text,
+            op: op_name,
             args: args,
             target_block: -1,
             target_block_else: -1
@@ -1221,7 +1304,8 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         id: gid,
                         arena_id: -999,
                         type_id: _type_id_of(e.children[1].typ),
-                        name_hint: lhs.text
+                        name_hint: lhs.text,
+        precision: ""
                     }
                     is_global = true
                 }
@@ -1912,6 +1996,22 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 ctx_a = _bind(ctx_a, pat.text, dst_a.id)
                 ctx2 = ctx_a
             } else if pat.kind == "enum_path" {
+                // RFC-074 Phase 3 (compiler/ tree) — multi-arg payload destructure.
+                //
+                // Construction (enum_path producer, this file L2173-2207) lays
+                // each payload slot under a positional key "__p<i>" inside the
+                // map-backed enum value. The pattern binders here MUST extract
+                // each binder from its OWN slot, not from the whole scrut map.
+                //
+                // Previously every binder was emitted with op="payload" and
+                // args=[scrut_op] (one slot's-worth of value bound under N
+                // names), which (a) silently truncated to a single field, and
+                // (b) routed through a `payload` op with no codegen consumer
+                // (Phase 4 still pending). Single-arg → __p0 subsumes the
+                // legacy single-field path with zero behavior delta (only one
+                // slot existed, only __p0 referenced). Multi-arg now lowers
+                // each ident binder to its positional slot via the field
+                // op = map_get(scrut, "__p<i>") — symmetric with construction.
                 let mut pi = 0
                 while pi < len(pat.children) {
                     let pc = pat.children[pi]
@@ -1920,10 +2020,11 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         let dst_b = _lr_locals[len(_lr_locals) - 1]
                         let mut a2: [Operand] = []
                         a2.push(scrut_op)
+                        a2.push(_const_str_op("__p" + to_string(pi)))
                         let s2 = Stmt {
                             kind: STMT_ASSIGN,
                             dst: dst_b,
-                            op: "payload",
+                            op: "field",
                             args: a2,
                             target_block: -1,
                             target_block_else: -1
@@ -2332,7 +2433,8 @@ fn _lower_closure(enc: LowerCtx, e: HExpr) -> LowerExprResult {
         blocks: _lr_blocks,
         entry_block: lam_entry,
         arena_root: lctx.arena_root,
-        def_line: e.span.line
+        def_line: e.span.line,
+        gpu_kind: GPU_KIND_CPU
     }
     _lr_lambdas.push(lam_func)
     // restore the enclosing fn's accumulators before lowering the site.
@@ -2540,6 +2642,19 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     }
 
     let ret_local = _miss_local()
+    // RFC 055 055-P3c — propagate the HIR FnDecl's `@gpu_kernel` /
+    // `@gpu_device` annotation to MFunc.gpu_kind so the NVPTX codegen
+    // can partition the module's functions. CPU codegen targets ignore
+    // the field (F-RFC055-CPU-CODEGEN-UNTOUCHED holds; the CPU emit
+    // path is byte-identical when no @gpu_* function is present).
+    let mut __gpu_kind = GPU_KIND_CPU
+    let mut __ai = 0
+    while __ai < len(it.annotations) {
+        let __an = it.annotations[__ai].name
+        if __an == "gpu_kernel" { __gpu_kind = GPU_KIND_KERNEL }
+        if __an == "gpu_device" { __gpu_kind = GPU_KIND_DEVICE }
+        __ai = __ai + 1
+    }
     return MFunc {
         // F6 P0c-2 — forced copy: it.name is the HItem's name handle
         // (hmodule outlives the streaming loop). PLAN-stage3-footprint-F6.md.
@@ -2552,7 +2667,8 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         arena_root: ctx.arena_root,
         // #13 DWARF .loc — carry the fn-definition source line through to
         // codegen so it can emit a `.loc 1 <line> 0` directive.
-        def_line: it.span.line
+        def_line: it.span.line,
+        gpu_kind: __gpu_kind
     }
 }
 
@@ -2583,7 +2699,8 @@ pub fn lower_hir(module: HModule) -> MModule {
                 id: len(globals),
                 arena_id: 0,
                 type_id: _type_id_of(itk.sig_return),
-                name_hint: nm
+                name_hint: nm,
+        precision: ""
             }
             globals.push(l)
         }

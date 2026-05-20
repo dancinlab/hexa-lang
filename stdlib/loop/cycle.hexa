@@ -1,0 +1,346 @@
+// stdlib/loop/cycle.hexa — RFC 065 8-stage cycle shell (Phase B-2)
+//
+// CLI surface (RFC 065 §5):
+//   hexa loop                                  (= --once --no-fire --dry-run)
+//   hexa loop --once [--no-fire | --fire --budget <USD>]
+//   hexa loop --status
+//   hexa loop --dry-run
+//   hexa loop --help, -h
+//   hexa loop --version, -v
+//
+// PHASE STATUS (B-2):
+//   shell only. Each cycle stage is a stub that prints its stage-id; no
+//   atlas read, no lens dispatch, no inbox write, no state-file I/O.
+//   Wiring lands incrementally:
+//     B-2.1  state-file I/O (\$HEXA_LANG/state/loop/<cwd_hash>/)
+//     B-3    self/main.hexa loop-verb dispatch + binary promote
+//     C      seed lens bodies + first inbox/atlas_candidates/ PR
+//
+// Authority: AGENTS.tape @D g_atlas_binary_builtin · g6 (cite enforced)
+//   · g7 (inbox sibling stream) · g_interp_deprecated (compiled-path
+//   only) · g_plan_consolidation (compiler/PLAN.md entry per cycle).
+
+use "compiler/lenses/types"
+use "compiler/lenses/embedded.gen"
+use "compiler/atlas/by_kind/p.gen"
+use "compiler/atlas/by_kind/l.gen"
+use "compiler/atlas/parser"
+use "compiler/atlas/hxc_loader"
+use "stdlib/loop/state"
+use "stdlib/io"
+
+let VERSION = "0.0.1"
+
+fn _bool_str(b: bool) -> string {
+    if b { return "true" }
+    return "false"
+}
+
+// RFC 065 slug sanitizer — atlas P node ids legitimately carry spaces,
+// `*`, quotes (e.g. `phi * n`, `"오일러 토션트 ..."`) that the file
+// system rejects. Replace fs-unsafe characters with `_` while keeping
+// the slug human-readable.
+fn _safe_slug(s: string) -> string {
+    let mut r = s.replace(" ", "_")
+    r = r.replace("*", "_")
+    r = r.replace("\"", "_")
+    r = r.replace("'", "_")
+    r = r.replace("/", "_")
+    return r
+}
+
+fn cmd_loop_help() {
+    println("hexa loop — self-growing atlas cycle (RFC 065)")
+    println("")
+    println("USAGE")
+    println("  hexa loop [--once|--budget N|--time D]")
+    println("            [--lenses <family,family,...|id,id,...>]")
+    println("            [--no-fire | --fire --budget <USD>]")
+    println("            [--resume] [--status] [--dry-run]")
+    println("            [--help|-h] [--version|-v]")
+    println("")
+    println("STAGES (8 per cycle)")
+    println("  1.SCAN    2.LENS    3.DEDUP   4.GATE")
+    println("  5.FIRE    6.DRAFT   7.AUDIT   8.EXHAUST?")
+    println("")
+    println("DEFAULTS")
+    println("  no flags  -> --once --no-fire --dry-run (safe B-2 default)")
+    println("  --no-fire -> analytical-only, Wilson fire-gate \"settled\" branch")
+    println("  cooldown  -> hard-block N=5 cycles (Decision 5)")
+    println("  exhaust   -> 3 consecutive 0-emit AND cooldown empty")
+    println("")
+    println("PHASE B-2 STATUS")
+    println("  shell skeleton; stages print stage-id only. Bodies populate")
+    println("  in B-2.1 (state I/O) + B-3 (self/main.hexa verb) + C.")
+}
+
+fn cmd_loop_version() {
+    println("hexa loop " + VERSION + " (RFC 065 Phase B-2 shell)")
+}
+
+fn cmd_loop_status() {
+    println("[loop] status — Phase B-3.3 (real lens dispatch)")
+    println("  state dir:        \$HEXA_LANG/state/loop/<cwd_hash>/ (B-2.1 wires)")
+    println("  baked lens count: " + to_string(LENS_COUNT))
+    println("  active families:  empty_space, paradigm_shift, cross_pollinate,")
+    println("                    counterexample_mine, invariant_stress,")
+    println("                    scale_extrapolate, constraint_flip, falsify_self")
+}
+
+// Stage stubs — print stage-id, return synthetic count (0).
+// Bodies populate in B-2.1 + B-3 + Phase C.
+
+fn cycle_scan() {
+    println("  [1/8 SCAN]    corpus snapshot (B-2.1: hash atlas + recent commits)")
+}
+
+fn cycle_lens() -> array {
+    // B-3.3 + RFC 066 B-3 (partial): AtlasView populated with P + L kinds.
+    // RFC 067 inline atlas_enrich wire: run each P node through enrich_node
+    // (compiler/atlas/parser) so its EdgeInfo (depends_on/derives/etc.) is
+    // filled from raw — unblocks unfold.cite_chain tier-3 + falsify_self
+    // .cite_unreachable tier-3 (was stuck at tier-2 with default-empty rodata).
+    let n_p = len(ATLAS_P_NODES)
+    let mut enriched_p: array = []
+    let mut ep_i = 0
+    while ep_i < n_p {
+        enriched_p.push(enrich_node(ATLAS_P_NODES[ep_i]))
+        ep_i = ep_i + 1
+    }
+    // RFC 066 B-1b: C kind via HXC sidecar runtime fetch (skip if file absent).
+    let mut c_nodes_loaded: array = []
+    let hxc_path = "dist/atlas.hxc"
+    let exists = exec("test -e " + hxc_path + " && echo Y || echo N").trim()
+    if exists == "Y" {
+        let all_atlas = load_atlas_hxc(hxc_path)
+        let an = len(all_atlas)
+        let mut ai = 0
+        while ai < an {
+            if all_atlas[ai].kind == "C" { c_nodes_loaded.push(all_atlas[ai]) }
+            ai = ai + 1
+        }
+    }
+    let view = AtlasView {
+        p_nodes: enriched_p,
+        c_nodes: c_nodes_loaded,
+        l_nodes: ATLAS_L_NODES,
+        f_nodes: [],
+        r_nodes: [], s_nodes: [], x_nodes: [], q_nodes: [],
+        atlas_hash: "", atlas_generated_at: ""
+    }
+    let n = len(LENS_NODES)
+    let mut all_cands: array = []
+    let mut i = 0
+    while i < n {
+        let id = LENS_NODES[i].id
+        let cand = lens_apply_by_id(id, view)
+        let cn = len(cand)
+        let mut j = 0
+        while j < cn {
+            all_cands.push(cand[j])
+            j = j + 1
+        }
+        i = i + 1
+    }
+    println("  [2/8 LENS]    " + to_string(n) + " lens applied (C-2 real view, " + to_string(len(all_cands)) + " candidate(s) emitted)")
+    return all_cands
+}
+
+fn cycle_dedup(cands: array, cycle_no: int) -> array {
+    let n = len(cands)
+    let mut out: array = []
+    let mut blocked = 0
+    let mut i = 0
+    while i < n {
+        let c = cands[i]
+        if loop_state_cooldown_check(c.slug, cycle_no) {
+            blocked = blocked + 1
+        } else {
+            out.push(c)
+        }
+        i = i + 1
+    }
+    println("  [3/8 DEDUP]   cooldown blocked " + to_string(blocked) + " -> " + to_string(len(out)) + " survive")
+    return out
+}
+
+fn cycle_gate(cands: array) {
+    let n = len(cands)
+    let mut fire_needed = 0
+    let mut i = 0
+    while i < n {
+        if cands[i].fire_needed { fire_needed = fire_needed + 1 }
+        i = i + 1
+    }
+    println("  [4/8 GATE]    fire-vs-resolve -> " + to_string(fire_needed) + " fire-needed, " + to_string(n - fire_needed) + " settled")
+}
+
+fn cycle_fire(cands: array, fire_enabled: bool) {
+    let n = len(cands)
+    let mut fire_count = 0
+    let mut i = 0
+    while i < n {
+        if cands[i].fire_needed { fire_count = fire_count + 1 }
+        i = i + 1
+    }
+    if fire_enabled {
+        println("  [5/8 FIRE]    --fire enabled, " + to_string(fire_count) + " fires required")
+    } else {
+        println("  [5/8 FIRE]    --no-fire (default) - " + to_string(fire_count) + " uncertain deferred")
+    }
+}
+
+fn cycle_draft(cands: array, dry_run: bool) {
+    let n = len(cands)
+    if dry_run {
+        println("  [6/8 DRAFT]   --dry-run: " + to_string(n) + " candidate(s) -> tmpdir (no inbox/* write)")
+        return
+    }
+    // C-3: real emit — write `inbox/atlas_candidates/<slug>.md` per
+    // Candidate. PR-only invariant (RFC 065 §10): we never touch
+    // compiler/atlas/embedded.gen.hexa or compiler/lenses/embedded.gen.hexa;
+    // candidates land in inbox/* for human review and `hexa atlas pr`
+    // / `hexa lens pr` to fold into the binary built-in.
+    let _ = exec("mkdir -p inbox/atlas_candidates")
+    let mut seen_slugs: array = []
+    let mut i = 0
+    let mut written = 0
+    let mut dedup_skipped = 0
+    while i < n {
+        let c = cands[i]
+        // dedup within this cycle — multi-lens emit of the same slug
+        // would otherwise overwrite each other on the file system.
+        let sn = len(seen_slugs)
+        let mut dup = false
+        let mut sk = 0
+        while sk < sn {
+            if seen_slugs[sk] == c.slug { dup = true; break }
+            sk = sk + 1
+        }
+        if dup {
+            dedup_skipped = dedup_skipped + 1
+            i = i + 1
+            continue
+        }
+        seen_slugs.push(c.slug)
+        let path_slug = _safe_slug(c.slug)
+        // build cite csv
+        let mut cite_str = ""
+        let cn = len(c.cite)
+        let mut k = 0
+        while k < cn {
+            if k > 0 { cite_str = cite_str + ", " }
+            cite_str = cite_str + c.cite[k]
+            k = k + 1
+        }
+        let mut fire_str = "false"
+        if c.fire_needed { fire_str = "true" }
+        let path = "inbox/atlas_candidates/" + path_slug + ".md"
+        let md = "# " + c.slug + "\n\n"
+               + "- family: " + c.family + "\n"
+               + "- fire_needed: " + fire_str + "\n"
+               + "- cite: [" + cite_str + "]\n"
+               + "- source: hexa loop (RFC 065)\n\n"
+               + "## proposal\n\n"
+               + c.proposed + "\n"
+        let _ = write_text(path, md)
+        written = written + 1
+        i = i + 1
+    }
+    println("  [6/8 DRAFT]   " + to_string(written) + " candidate(s) -> inbox/atlas_candidates/<slug>.md (dedup skipped " + to_string(dedup_skipped) + ")")
+}
+
+fn cycle_audit(cands: array, cycle_no: int) {
+    let n = len(cands)
+    let mut i = 0
+    while i < n {
+        let c = cands[i]
+        loop_state_chain_append(cycle_no, c.slug, c.family, c.fire_needed)
+        loop_state_cooldown_add(c.slug, cycle_no)
+        loop_state_growth_bump("self_host", 1, cycle_no)
+        i = i + 1
+    }
+    let _ = loop_state_turn_inc()
+    println("  [7/8 AUDIT]   chain += " + to_string(n) + " · cooldown += " + to_string(n) + " · growth.self_host += " + to_string(n))
+}
+
+fn cycle_exhaust(cands: array, cycle_no: int) -> bool {
+    let n = len(cands)
+    let cooldown_active = loop_state_cooldown_active_count(cycle_no)
+    let exhausted = (n == 0) && (cooldown_active == 0)
+    if exhausted {
+        loop_state_end_touch()
+        println("  [8/8 EXHAUST] 0 emit AND cooldown empty -> brainstorm exhausted, .end touched")
+    } else {
+        println("  [8/8 EXHAUST] " + to_string(n) + " emit, " + to_string(cooldown_active) + " cooldown active -> continue")
+    }
+    return exhausted
+}
+
+fn run_one_cycle(no_fire: bool, dry_run: bool) {
+    loop_state_init()
+    let cycle_no = loop_state_cycle_read() + 1
+    loop_state_cycle_write(cycle_no)
+    println("[loop] cycle " + to_string(cycle_no) + " (Phase C-2 + C-4 — atlas view + state I/O wired)")
+    cycle_scan()
+    let cands = cycle_lens()
+    let survive = cycle_dedup(cands, cycle_no)
+    cycle_gate(survive)
+    cycle_fire(survive, no_fire == false)
+    cycle_draft(survive, dry_run)
+    cycle_audit(survive, cycle_no)
+    let _ = cycle_exhaust(survive, cycle_no)
+}
+
+fn main() {
+    let argv = args()
+    let n = len(argv)
+
+    // skip [interp, script] prefix — mirrors stdlib/qrng/qrng.hexa pattern.
+    // Direct compiled-binary invocation (no .hexa in argv) falls back to
+    // skipping just argv[0] (the binary path).
+    let mut start = 2
+    let mut found_hexa = false
+    let mut i = 0
+    while i < n {
+        if argv[i].ends_with(".hexa") { start = i + 1; found_hexa = true; break }
+        i = i + 1
+    }
+    if found_hexa == false { start = 1 }
+
+    let mut once = false
+    let mut no_fire = true
+    let mut dry_run = false
+    let mut status_only = false
+    let mut show_help = false
+    let mut show_version = false
+
+    let mut k = start
+    while k < n {
+        let a = argv[k]
+        if a == "--help" || a == "-h" || a == "help" { show_help = true }
+        if a == "--version" || a == "-v" || a == "version" { show_version = true }
+        if a == "--once" { once = true }
+        if a == "--status" { status_only = true }
+        if a == "--dry-run" { dry_run = true }
+        if a == "--no-fire" { no_fire = true }
+        if a == "--fire" { no_fire = false }
+        if a == "--write" { dry_run = false; once = true }
+        k = k + 1
+    }
+
+    if show_help { cmd_loop_help(); return }
+    if show_version { cmd_loop_version(); return }
+    if status_only { cmd_loop_status(); return }
+
+    // Safe B-2 default: no flags -> --once --no-fire --dry-run
+    if once == false && dry_run == false {
+        once = true
+        dry_run = true
+    }
+
+    println("[loop] hexa loop — RFC 065 Phase B-2 shell")
+    println("  flags: once=" + _bool_str(once) + " no_fire=" + _bool_str(no_fire) + " dry_run=" + _bool_str(dry_run))
+    println("")
+    run_one_cycle(no_fire, dry_run)
+}

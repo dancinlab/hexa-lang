@@ -1,0 +1,64 @@
+// test/t_float_mod_codegen.hexa — blocker-2 acceptance.
+//
+// Regression test for the codegen fast-paths that previously emitted raw
+// C `%` between doubles (clang: "invalid operands to binary expression
+// ('double' and 'double')"). After fix, FloatLit/FloatLit and known-float
+// fast-paths route through libm fmod() preserving IEEE-754 semantics.
+//
+// Track B (solar pilot, kappa-65) hit this in scientific kernels using
+// `fmod_floor(x, y) = x - floor(x/y) * y` workarounds. Filed as
+// hexa-lang/inbox/blocker-2.
+//
+// Convention: tests run via plain hexa interpreter on compile path.
+// Pass = stdout exact match.
+
+let mut pass = 0
+let mut fail = 0
+
+fn check_str(name, got, want) {
+    if got == want {
+        pass = pass + 1
+    } else {
+        fail = fail + 1
+        println("[FAIL] " + name)
+        println("  got : " + got)
+        println("  want: " + want)
+    }
+}
+
+fn check_float_eq(name, got, want, eps) {
+    let d = if got > want { got - want } else { want - got }
+    if d <= eps {
+        pass = pass + 1
+    } else {
+        fail = fail + 1
+        println("[FAIL] " + name + " got " + to_string(got) + " want " + to_string(want))
+    }
+}
+
+println("=== t_float_mod_codegen test suite ===")
+
+// 1. FloatLit % FloatLit (constant-fold fast-path — previously broken).
+//    Post-fix: emits `hexa_float(fmod((7.5), (2.0)))` → 1.5.
+let r1 = 7.5 % 2.0
+check_float_eq("FloatLit % FloatLit  7.5 % 2.0", r1, 1.5, 1e-12)
+
+// 2. Known-float % known-float fast-path (typed-let).
+//    Previously broken; now routes through fmod via known-float branch.
+let a: float = 11.5
+let b: float = 3.0
+let r2 = a % b
+check_float_eq("known-float % known-float 11.5 % 3.0", r2, 2.5, 1e-12)
+
+// 3. Negative dividend — fmod preserves sign of dividend.
+let r3 = -7.5 % 2.0
+check_float_eq("negative -7.5 % 2.0", r3, -1.5, 1e-12)
+
+// 4. Direct fmod() builtin — blocker-3 shim.
+let r4 = fmod(10.5, 3.0)
+check_float_eq("fmod(10.5, 3.0)", r4, 1.5, 1e-12)
+
+println("===========================================================")
+println("  Results: " + to_string(pass) + " passed, " + to_string(fail) + " failed")
+println("===========================================================")
+if fail == 0 { println("ALL PASS") } else { println("SOME FAIL") }

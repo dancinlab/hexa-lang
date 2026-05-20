@@ -22,12 +22,12 @@
 //   - FAIL (a hard error blocked progress — fail-loud)
 // In ALL three states the record is filed with cited numbers.
 
-use "stdlib/yosys/rtlil"
-use "stdlib/yosys/read_verilog"
-use "stdlib/yosys/passes"
-use "stdlib/yosys/liberty"
-use "stdlib/yosys/abc_map"
-use "stdlib/yosys/write_verilog"
+use "stdlib/kernels/logic_synth/rtlil"
+use "stdlib/kernels/logic_synth/read_verilog"
+use "stdlib/kernels/logic_synth/passes"
+use "stdlib/kernels/logic_synth/liberty"
+use "stdlib/kernels/logic_synth/abc_map"
+use "stdlib/kernels/logic_synth/write_verilog"
 
 struct GateStage {
     name:    str,
@@ -35,8 +35,20 @@ struct GateStage {
     detail:  str,
 }
 
-fn _gate_run_one(label: str, v_path: str, top: str, lib_path: str) -> [GateStage] {
+// CLEAN-ROOM (rfc_006 §5 absorption-bug-c · 2026-05-20): hold both the
+// stage trace AND the mapped Design so the verdict can compute
+// lib_total_area(mapped, names, counts) — the §5 area oracle's
+// closed-form ingredient. Previously _gate_run_one returned only the
+// stages and the verdict was a placeholder string.
+struct GateRun {
+    stages: [GateStage],
+    mapped: Design,
+    abc_ok: int,
+}
+
+fn _gate_run_one(label: str, v_path: str, top: str, lib_path: str) -> GateRun {
     let mut stages: [GateStage] = []
+    let empty = rtlil_new_design("gate_run_aborted")
     // stage 1 — read_verilog
     let r1 = read_verilog_file(v_path)
     stages = stages.push(GateStage {
@@ -44,7 +56,7 @@ fn _gate_run_one(label: str, v_path: str, top: str, lib_path: str) -> [GateStage
         ok: r1.ok,
         detail: r1.message
     })
-    if r1.ok != 1 { return stages }
+    if r1.ok != 1 { return GateRun { stages: stages, mapped: empty, abc_ok: 0 } }
     // stage 2 — hierarchy
     let r2 = pass_hierarchy_top(r1.design, top)
     stages = stages.push(GateStage {
@@ -52,7 +64,7 @@ fn _gate_run_one(label: str, v_path: str, top: str, lib_path: str) -> [GateStage
         ok: r2.ok,
         detail: r2.message
     })
-    if r2.ok != 1 { return stages }
+    if r2.ok != 1 { return GateRun { stages: stages, mapped: empty, abc_ok: 0 } }
     // stage 3..6 — proc, flatten, opt, techmap, dfflibmap
     let r3 = pass_proc(r2.design)
     stages = stages.push(GateStage { name: label + ":proc",       ok: r3.ok, detail: r3.message })
@@ -60,7 +72,32 @@ fn _gate_run_one(label: str, v_path: str, top: str, lib_path: str) -> [GateStage
     stages = stages.push(GateStage { name: label + ":flatten",    ok: r4.ok, detail: r4.message })
     let r5 = pass_opt(r4.design)
     stages = stages.push(GateStage { name: label + ":opt",        ok: r5.ok, detail: r5.message })
-    let r6 = pass_techmap_sky130(r5.design)
+    // RFC 073 Phase 3c (2026-05-20) — wire `pass_proc_mux` between `opt`
+    // and `clean_multidriver`. The for-loop unroller (read_verilog.hexa
+    // `_rv_emit_for_if_stmts`, Phase 2 + 3a) emits one cond-tagged
+    // `connect_cond` row per `if (cond_expr(i)) lhs = rhs(i);` iteration
+    // (e.g. `grant_in`, `any_grant`, `grant_out` in router_d{4,6}'s
+    // arbiter). `pass_proc_mux` folds those rows into a priority-encoded
+    // `$mux` chain per LHS (IEEE 1364-2005 §10.3.5 for-loop unroll +
+    // §10.4.2 procedural assign + Yosys passes/proc/proc_mux.cc); the
+    // resulting unconditional connect drives the LHS through a single
+    // mux-tree output. Without this wire-up, `pass_clean_multidriver`
+    // (next stage) used to silently collapse the cond-tagged group via
+    // last-write-wins, losing the per-iteration guards (Δ=100% area).
+    let r5a = pass_proc_mux(r5.design)
+    stages = stages.push(GateStage { name: label + ":proc_mux",   ok: r5a.ok, detail: r5a.message })
+    // rfc_006 §5 absorption iter 12 (a): collapse remaining multi-driver
+    // `connect` rows (genuine multi-driver conflicts only — RFC 073
+    // Phase 3c teaches `pass_clean_multidriver` to defer LHS-groups that
+    // include cond-tagged rows to `pass_proc_mux` upstream). Inserted
+    // between proc_mux and techmap so techmap operates on a structurally-
+    // clean RTLIL where every LHS has exactly one driver — mirrors ABC's
+    // read_blif multi-driver rejection (`Signal X defined more than once`).
+    // See pass_clean_multidriver header for the IEEE 1800-2017 §10.4.2 +
+    // Yosys proc_mux + BLIF spec §3 citations.
+    let r5b = pass_clean_multidriver(r5a.design)
+    stages = stages.push(GateStage { name: label + ":clean_multidriver", ok: r5b.ok, detail: r5b.message })
+    let r6 = pass_techmap_sky130(r5b.design)
     stages = stages.push(GateStage { name: label + ":techmap",    ok: r6.ok, detail: r6.message })
     let r7 = pass_dfflibmap_sky130(r6.design)
     stages = stages.push(GateStage { name: label + ":dfflibmap",  ok: r7.ok, detail: r7.message })
@@ -71,7 +108,70 @@ fn _gate_run_one(label: str, v_path: str, top: str, lib_path: str) -> [GateStage
         ok: r8.ok,
         detail: r8.message
     })
-    return stages
+    return GateRun { stages: stages, mapped: r8.design, abc_ok: r8.ok }
+}
+
+// CLEAN-ROOM (rfc_006 §5 area-oracle ingredient): collect (cell_type,
+// count) histogram across all modules of a mapped Design — feeds
+// lib_total_area's `names`/`counts` argument shape.
+fn _gate_collect_cell_histogram(d: Design) -> GateHist {
+    let mut names: [str] = []
+    let mut counts: [int] = []
+    let mut mi = 0
+    while mi < len(d.modules) {
+        let m = d.modules[mi]
+        let mut ci = 0
+        while ci < len(m.cells) {
+            let ty = m.cells[ci].cell_type
+            // linear find — gate-§5 designs have O(10²) unique cell types
+            let mut found = 0 - 1
+            let mut ni = 0
+            while ni < len(names) {
+                if names[ni] == ty { found = ni; ni = len(names) }
+                ni = ni + 1
+            }
+            if found >= 0 {
+                counts[found] = counts[found] + 1
+            } else {
+                names = names.push(ty)
+                counts = counts.push(1)
+            }
+            ci = ci + 1
+        }
+        mi = mi + 1
+    }
+    return GateHist { names: names, counts: counts }
+}
+
+struct GateHist {
+    names:  [str],
+    counts: [int],
+}
+
+// CLEAN-ROOM (rfc_006 §5): compute |area_actual - area_oracle| / area_oracle
+// as a percentage. Pure float arithmetic; no Atlas binding (this is a
+// units-only divide, not a physical formula).
+fn _gate_pct_delta(actual: float, oracle: float) -> float {
+    let mut diff = actual - oracle
+    if diff < 0.0 { diff = 0.0 - diff }
+    return diff * 100.0 / oracle
+}
+
+// CLEAN-ROOM: emit the per-design area verdict line — replaces the
+// pre-2026-05-20 placeholder. Calls lib_total_area against the mapped
+// Design's cell histogram, prints the µm² result, computes Δ% vs the
+// rfc_006 §5 SKY130 oracle, and stamps PASS / FAIL against ±5 %.
+fn _gate_emit_area_verdict(label: str, mapped: Design, lib: CellLibrary, oracle: float) {
+    let hist = _gate_collect_cell_histogram(mapped)
+    let area = lib_total_area(lib, hist.names, hist.counts)
+    let pct = _gate_pct_delta(area, oracle)
+    let mut tag = "FAIL"
+    if pct <= 5.0 { tag = "PASS" }
+    println("[gate] " + label
+        + " area=" + str(area) + " µm²"
+        + " oracle=" + str(oracle) + " µm²"
+        + " Δ=" + str(pct) + "%"
+        + " " + tag + " (±5%)")
 }
 
 fn _print_stages(stages: [GateStage]) {
@@ -125,26 +225,38 @@ fn main() {
 
     // Run d4
     println("[gate] router_d4.v — pipeline trace:")
-    let s4 = _gate_run_one("d4", d4_path, "router_d4", found_lib)
-    _print_stages(s4)
+    let g4 = _gate_run_one("d4", d4_path, "router_d4", found_lib)
+    _print_stages(g4.stages)
     println("")
 
     // Run d6
     println("[gate] router_d6.v — pipeline trace:")
-    let s6 = _gate_run_one("d6", d6_path, "router_d6", found_lib)
-    _print_stages(s6)
+    let g6 = _gate_run_one("d6", d6_path, "router_d6", found_lib)
+    _print_stages(g6.stages)
     println("")
 
-    // Verdict
-    let ok4 = _all_ok(s4)
-    let ok6 = _all_ok(s6)
+    // Verdict (rfc_006 §5 absorption-bug-c · 2026-05-20): if both runs
+    // finished AND the SKY130 lib is present, parse the liberty file
+    // once and emit a real area-oracle verdict per design with PASS /
+    // FAIL ±5 % against the cited oracle values. The oracle constants
+    // (61762.99 µm² · 93608.53 µm²) are the rfc_006 §5 substrate-gate
+    // numbers measured at upstream yosys 0.65 + sky130_fd_sc_hd; see
+    // exports/chip/yosys/reproductions/2026-05-20-T1-reproduction-confirm.md.
+    let ok4 = _all_ok(g4.stages)
+    let ok6 = _all_ok(g6.stages)
     if ok4 == 1 {
         if ok6 == 1 {
             if found_lib == "" {
                 println("[gate] verdict: PARTIAL — pipeline completed both designs,"
                     + " but SKY130 lib MISSING — area-oracle (§5 cond. 3) unmeasured.")
             } else {
-                println("[gate] verdict: needs cell-area sum vs oracle (next step)")
+                let lib = parse_liberty_file(found_lib)
+                if lib.ok != 1 {
+                    println("[gate] verdict: FAIL — SKY130 lib parse failed: " + lib.message)
+                } else {
+                    _gate_emit_area_verdict("router_d4", g4.mapped, lib, 61762.99)
+                    _gate_emit_area_verdict("router_d6", g6.mapped, lib, 93608.53)
+                }
             }
         } else {
             println("[gate] verdict: PARTIAL — d4 OK · d6 FAIL")

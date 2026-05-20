@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 # gmsh_skfem.py — `component + verify` producer (D66 / κ-44).
 #
+# ①b DOMAIN ADAPTER (demiurge design.md D72 2-layer STDLIB restructure).
+# This file owns ONLY the component/electronics-package domain: the
+# die-proxy geometry, the silicon material constants, the load case,
+# and the honesty caveats. All FEM math (gmsh meshing, scikit-fem
+# assembly + solve, von Mises post) lives in the domain-AGNOSTIC ①a
+# kernel `stdlib/kernels/fem/skfem_kernel.py` — this adapter imports
+# and calls it. The day a hexa-native FEM kernel lands, `absorbed`
+# flips in the kernel, not here.
+#
 # SSOT placement: this script lives in ~/core/hexa-lang/stdlib/component/
 # per AGENTS.tape @D g_demiurge_pointer_only (D61). demiurge's
 # ComponentVerifyProducer.swift is a thin spawn-wrapper only — no compute
@@ -67,7 +76,6 @@
 # inside out_dir for reproducibility (gmsh mesh).
 
 import json
-import math
 import os
 import sys
 import hashlib
@@ -115,22 +123,27 @@ def _ensure_deps():
 
 _ensure_deps()
 
-import numpy as np  # noqa: E402
-import gmsh  # noqa: E402
-from skfem import (  # noqa: E402
-    MeshTet, Basis, ElementTetP1, ElementVector,
-    BilinearForm, LinearForm, asm, condense, solve,
-)
-from skfem.helpers import dot, grad  # noqa: E402
-from skfem.models.elasticity import (  # noqa: E402
-    linear_elasticity, lame_parameters,
-)
+
+# ------------------------------------------------------------------
+# Locate the ①a FEM kernel. The demiurge `python3 <script> <out_dir>`
+# spawn uses an arbitrary cwd, so resolve the kernel path relative to
+# THIS file: stdlib/component/gmsh_skfem.py -> stdlib/kernels/fem/.
+# Same locate-by-__file__ pattern the graph ①b adapters use.
+# ------------------------------------------------------------------
+_KERNEL_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "..", "kernels", "fem"))
+if _KERNEL_DIR not in sys.path:
+    sys.path.insert(0, _KERNEL_DIR)
+
+import skfem_kernel  # noqa: E402  — ①a domain-agnostic FEM kernel
 
 
 # ------------------------------------------------------------------
 # Canonical "die proxy" geometry + material (g3 — narrow scope, toy).
 # Picked to be: physically plausible silicon die on a heatsink, NOT a
 # measured part. Dimensions in METERS (SI throughout the script).
+# DOMAIN data — owned by this ①b adapter, not the kernel.
 # ------------------------------------------------------------------
 GEOMETRY = {
     "id": "die_proxy_box_v1",
@@ -164,226 +177,59 @@ LOAD = {
 
 
 # ------------------------------------------------------------------
-# Mesh generation via gmsh's Python API. We build a single box volume,
-# then call gmsh's Delaunay tet mesher and dump a .msh v2.2 file (the
-# meshio-compatible legacy format skfem understands directly).
+# Domain solves — thin wrappers that translate the component-specific
+# load case into the kernel's domain-agnostic API and attach the
+# domain-specific derived quantity (ΔT). The FEM math itself is the
+# kernel's; this layer only knows "silicon die, 5 W on the top slab,
+# clamped/cooled back face".
 # ------------------------------------------------------------------
-def build_mesh(out_dir):
-    """Run gmsh to produce a .msh file inside out_dir. Returns
-    (msh_path, gmsh_version_string, n_nodes, n_elements)."""
-    msh_path = os.path.join(out_dir, "die_proxy_box_v1.msh")
-
-    gmsh.initialize()
-    try:
-        gmsh.option.setNumber("General.Terminal", 0)  # silence stdout
-        gmsh.model.add("die_proxy_box_v1")
-
-        # geometry — OpenCascade box (x0,y0,z0, dx,dy,dz)
-        gmsh.model.occ.addBox(
-            0.0, 0.0, 0.0,
-            GEOMETRY["length_m"],
-            GEOMETRY["width_m"],
-            GEOMETRY["thickness_m"])
-        gmsh.model.occ.synchronize()
-
-        # uniform target size
-        gmsh.option.setNumber("Mesh.MeshSizeMin", GEOMETRY["mesh_size_m"])
-        gmsh.option.setNumber("Mesh.MeshSizeMax", GEOMETRY["mesh_size_m"])
-
-        # 3D mesh (Delaunay)
-        gmsh.option.setNumber("Mesh.Algorithm3D", 1)
-        gmsh.model.mesh.generate(3)
-
-        # write .msh v2.2 (skfem / meshio understand this directly)
-        gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
-        gmsh.write(msh_path)
-
-        # report sizes
-        node_tags, _, _ = gmsh.model.mesh.getNodes()
-        n_nodes = len(node_tags)
-        elem_types, elem_tags, _ = gmsh.model.mesh.getElements(dim=3)
-        n_elements = sum(len(t) for t in elem_tags)
-        gver = gmsh.option.getString("General.Version")
-    finally:
-        gmsh.finalize()
-
-    return msh_path, gver, n_nodes, n_elements
-
-
-# ------------------------------------------------------------------
-# Thermal FEM: steady-state heat conduction.
-#
-#     -∇·(k ∇T) = q_v   on the heating region (top 1 mm)
-#     -∇·(k ∇T) = 0     elsewhere
-#     T = T_amb          on the back face (z = 0)
-#
-# The natural (Neumann) BC on all other faces is zero flux — adiabatic
-# sides + adiabatic top. This is the standard "junction-to-back"
-# proxy for an electronics package mounted on a cold plate.
-# ------------------------------------------------------------------
-def solve_thermal(mesh):
-    """Returns dict with T_min_k, T_max_k, T_mean_k, delta_t_k, dof_count."""
-    basis = Basis(mesh, ElementTetP1())
-
-    k_si = MATERIAL["k_w_per_mk"]
+def solve_thermal_component(mesh):
+    """Steady-state heat conduction for the die proxy. The 5 W die
+    dissipation is a uniform volumetric source over the TOP heating
+    slab only (z >= thickness - heating_region_thickness); the rest of
+    the box has zero source. Back face (z = 0) is held at T_ambient.
+    Returns the kernel result plus the domain-derived delta_t_k."""
     box_z = GEOMETRY["thickness_m"]
     heat_z = LOAD["heating_region_thickness_m"]
-    # volumetric heat source (W/m^3) over the top heating slab only
     heating_volume = (
         GEOMETRY["length_m"] * GEOMETRY["width_m"] * heat_z)
     q_v_top = LOAD["die_power_w"] / heating_volume   # W/m^3
 
-    @BilinearForm
-    def conduction(u, v, w):
-        return k_si * dot(grad(u), grad(v))
-
-    @LinearForm
-    def body_source(v, w):
-        # w.x is the global coordinate array (3, nelems, nqp).
-        # Apply q_v_top only where z >= (box_z - heat_z).
-        z = w.x[2]
+    def body_source(x):
+        # x is the global coord array (3, nelems, nqp); apply q_v_top
+        # only where z >= (box_z - heat_z).
+        import numpy as np
+        z = x[2]
         in_top = (z >= (box_z - heat_z))
-        return q_v_top * in_top.astype(float) * v
+        return q_v_top * in_top.astype(float)
 
-    K = asm(conduction, basis)
-    f = asm(body_source, basis)
+    res = skfem_kernel.solve_thermal(
+        mesh,
+        conductivity_w_per_mk=MATERIAL["k_w_per_mk"],
+        body_source_w_per_m3=body_source,
+        dirichlet_select=lambda x: x[2] < 1.0e-9,
+        dirichlet_value_k=LOAD["t_ambient_k"])
 
-    # Dirichlet on z = 0 (back face). Pick DOFs whose coordinate z ≈ 0.
-    z_coords = mesh.p[2]
-    dirichlet_node_ids = np.nonzero(z_coords < 1.0e-9)[0]
-    # node ids ARE dof ids for ElementTetP1 (one scalar dof per node).
-    D = dirichlet_node_ids
-
-    x = basis.zeros()
-    x[D] = LOAD["t_ambient_k"]
-    x = solve(*condense(K, f, x=x, D=D))
-
-    return {
-        "t_min_k": float(np.min(x)),
-        "t_max_k": float(np.max(x)),
-        "t_mean_k": float(np.mean(x)),
-        "delta_t_k": float(np.max(x) - LOAD["t_ambient_k"]),
-        "dof_count": int(x.size),
-    }
+    # Domain-derived: junction-to-ambient rise.
+    res["delta_t_k"] = float(res["t_max_k"] - LOAD["t_ambient_k"])
+    return res
 
 
-# ------------------------------------------------------------------
-# Structural FEM: linear elasticity with gravity body force.
-#
-#     -∇·σ = ρ g       in volume
-#      u = 0           on the back face (z = 0)
-#     σ·n = 0          on the remaining faces (traction-free)
-#
-# σ = λ tr(ε) I + 2 μ ε,  ε = (∇u + ∇u^T)/2,
-# λ = E ν / ((1+ν)(1-2ν)),  μ = E / (2 (1+ν))
-#
-# Output: max nodal displacement magnitude and max element-wise von
-# Mises stress (a standard isotropic-yield comparison number).
-# ------------------------------------------------------------------
-def solve_structural(mesh):
-    """Returns dict with u_max_m, sigma_vm_max_pa, dof_count."""
-    E = MATERIAL["youngs_pa"]
-    nu = MATERIAL["poissons"]
+def solve_structural_component(mesh):
+    """Linear elasticity for the die proxy under self-weight. Gravity
+    body force = ρ g in -z; back face (z = 0) clamped (u = 0, all
+    three components). Returns the kernel result."""
     rho = MATERIAL["rho_kg_per_m3"]
     g = LOAD["gravity_m_per_s2"]
-    # Lamé parameters via scikit-fem's own converter — keeps the
-    # E/ν → λ/μ algebra in one audited place.
-    lam, mu = lame_parameters(E, nu)
+    # body force = ρ g in -z direction → f = (0, 0, -ρ g)
+    body_force = (0.0, 0.0, -rho * g)
 
-    basis = Basis(mesh, ElementVector(ElementTetP1()))
-
-    # Use scikit-fem's BUILT-IN linear-elasticity bilinear form
-    # (skfem.models.elasticity.linear_elasticity) rather than a hand-
-    # rolled `ddot(sigma(u), sym_grad(v))`. hexa-first: the absorbed
-    # stdlib model is audited; a hand-rolled `eye(trace(...), 3)` form
-    # was found (κ-44 debugging) to be ~44× too soft against the
-    # closed-form uniaxial check `u = T·L/E`, whereas the built-in
-    # passes that check (ratio ≈ 1.1 on this coarse P1 mesh).
-    elasticity = linear_elasticity(lam, mu)
-
-    @LinearForm
-    def gravity_load(v, w):
-        # body force = ρ g in -z direction → f · v = -ρ g v_z
-        # v has shape (3, nelems, nqp); v[2] picks z component.
-        # (verified: Σ f over z-dofs == -ρ g V, the total weight.)
-        return -rho * g * v[2]
-
-    K = asm(elasticity, basis)
-    f = asm(gravity_load, basis)
-
-    # Dirichlet on z = 0 — all three displacement components clamped.
-    # ElementVector(ElementTetP1) lays its DOFs NODE-major / interleaved:
-    # the DOF for node i, component c is at index 3*i + c (verified via
-    # basis.nodal_dofs[:, :3] == [[0,3,6],[1,4,7],[2,5,8]]). So a manual
-    # `fixed_nodes + c*n_nodes` expansion is WRONG — use the canonical
-    # `basis.get_dofs()` helper, which resolves the layout correctly.
-    D = basis.get_dofs(lambda x: x[2] < 1.0e-9)
-
-    x = solve(*condense(K, f, D=D))
-
-    # Extract the displacement as (3, n_nodes): basis.nodal_dofs is the
-    # (3, n_nodes) DOF-index table, so x[basis.nodal_dofs] gathers
-    # component c of node i straight from the interleaved solution.
-    u = x[basis.nodal_dofs]
-    u_mag = np.sqrt(u[0] ** 2 + u[1] ** 2 + u[2] ** 2)
-    u_max = float(np.max(u_mag))
-
-    # element-wise von Mises stress. skfem.Basis.interpolate +
-    # projection is a bit ceremonious — for a closed-form on linear
-    # tets we just compute σ at each element centroid using the
-    # element's average displacement gradient.
-    sigma_vm_max = _vm_max_p1(mesh, u)
-
-    return {
-        "u_max_m": u_max,
-        "sigma_vm_max_pa": float(sigma_vm_max),
-        "dof_count": int(x.size),
-    }
-
-
-def _vm_max_p1(mesh, u):
-    """Max von Mises stress over the mesh elements, computed from
-    the constant displacement gradient on each linear tet."""
-    E = MATERIAL["youngs_pa"]
-    nu = MATERIAL["poissons"]
-    lam = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
-    mu = E / (2.0 * (1.0 + nu))
-
-    p = mesh.p              # (3, n_nodes) coords
-    t = mesh.t              # (4, n_elems) tet node ids
-    n_elems = t.shape[1]
-
-    # For each tet, the linear-shape-function gradients are constant
-    # over the element. We compute them via the inverse Jacobian.
-    # x_i (i=0..3) are the 4 vertex coords (3,1) each.
-    sigma_vm = np.empty(n_elems)
-    for e in range(n_elems):
-        nodes = t[:, e]
-        x = p[:, nodes]            # (3, 4)
-        # Jacobian relative to vertex 0
-        J = np.column_stack([x[:, 1] - x[:, 0],
-                             x[:, 2] - x[:, 0],
-                             x[:, 3] - x[:, 0]])  # (3,3)
-        Jinv = np.linalg.inv(J)
-        # P1 shape gradient w.r.t. reference: N0 has grad (-1,-1,-1) in
-        # the reference simplex, N1=(1,0,0), N2=(0,1,0), N3=(0,0,1).
-        # Physical gradient = Jinv.T · grad_ref.
-        grad_ref = np.array([[-1.0, -1.0, -1.0],
-                             [1.0, 0.0, 0.0],
-                             [0.0, 1.0, 0.0],
-                             [0.0, 0.0, 1.0]])    # (4,3)
-        grad_phys = grad_ref @ Jinv               # (4,3)
-        # displacement at the 4 vertices
-        u_e = u[:, nodes]                          # (3, 4)
-        # ∇u = sum_i u_i ⊗ grad_phys_i
-        grad_u = u_e @ grad_phys                   # (3, 3)
-        eps_e = 0.5 * (grad_u + grad_u.T)
-        sigma_e = 2.0 * mu * eps_e + lam * np.trace(eps_e) * np.eye(3)
-        s = sigma_e
-        # von Mises: σ_vm = sqrt(3/2 · s' : s'),  s' = s - tr(s)/3 · I
-        s_dev = s - (np.trace(s) / 3.0) * np.eye(3)
-        sigma_vm[e] = math.sqrt(1.5 * np.tensordot(s_dev, s_dev))
-    return np.max(sigma_vm)
+    return skfem_kernel.solve_elastic(
+        mesh,
+        youngs_pa=MATERIAL["youngs_pa"],
+        poissons=MATERIAL["poissons"],
+        body_force=body_force,
+        dirichlet_select=lambda x: x[2] < 1.0e-9)
 
 
 # ------------------------------------------------------------------
@@ -404,17 +250,25 @@ def main(argv):
     out_dir = argv[1]
     os.makedirs(out_dir, exist_ok=True)
 
-    # 1. mesh
-    msh_path, gver, n_nodes, n_elems = build_mesh(out_dir)
+    # 1. mesh — domain-agnostic kernel call (box spec is domain data).
+    meshed = skfem_kernel.mesh_box(
+        out_dir,
+        length_m=GEOMETRY["length_m"],
+        width_m=GEOMETRY["width_m"],
+        thickness_m=GEOMETRY["thickness_m"],
+        mesh_size_m=GEOMETRY["mesh_size_m"],
+        name=GEOMETRY["id"])
+    mesh = meshed["mesh"]
+    msh_path = meshed["msh_path"]
+    gver = meshed["gmsh_version"]
+    n_nodes = meshed["n_nodes"]
+    n_elems = meshed["n_elements"]
 
-    # 2. load mesh into skfem
-    mesh = MeshTet.load(msh_path)
+    # 2. thermal + structural solves (domain wrappers over the kernel)
+    thermal = solve_thermal_component(mesh)
+    structural = solve_structural_component(mesh)
 
-    # 3. thermal + structural solves
-    thermal = solve_thermal(mesh)
-    structural = solve_structural(mesh)
-
-    # 4. flat row list for csv
+    # 3. flat row list for csv
     rows = [
         {"measurement_key": "n_nodes",         "value": n_nodes,                       "unit": "count"},
         {"measurement_key": "n_elements",      "value": n_elems,                       "unit": "count"},

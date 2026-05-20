@@ -1,0 +1,236 @@
+// stdlib/kernels/bio_align/needleman_wunsch_kernel_test.hexa — D80
+// g_hexa_only pilot #12 Stage 3 parity check (ABSORPTION.md
+// §"hexa 포팅 단계"). First bio-domain pilot.
+//
+// Cross-checks the clean-room hexa-native Needleman-Wunsch global
+// sequence aligner in `needleman_wunsch_kernel.hexa` against the
+// `math`-free integer transliteration `needleman_wunsch_oracle.py`
+// captured on 2026-05-20 (darwin-arm64, Python 3.x).
+//
+// Reference cases:
+//   • Case 1: HEAGAWGHEE vs PAWHEAE  (+1/-1/-2)  — Durbin §2.3 pair,
+//             simple scoring (NOT BLOSUM50 — that would need a
+//             substitution matrix; a follow-on pilot).
+//   • Case 2: GATTACA vs GCATGCU     (+1/-1/-1)  — Wikipedia NW
+//             worked example.
+//   • Case 3: ACGT vs ACGT           (+2/-1/-2)  — identity case,
+//             score = len * match.
+//   • Case 4: "" vs ACGT             (+1/-1/-2)  — empty-vs-L pure
+//             gap penalty edge case.
+//   • Case 5: AAAA vs TTTT           (+1/-1/-1)  — disjoint, drives
+//             mismatch path; tie-break diagonal > up > left chooses
+//             the all-mismatch column over all-gap.
+//   • Case 6: ACACACTA vs AGCACACA   (+5/-3/-4)  — DNA-style
+//             scoring (EDNAFULL-flavored).
+//   • Case 7: AT vs ACT              (+1/-1/-2)  — single-insertion
+//             tiny case.
+//
+// Tolerance: EXACT integer equality on the score and on every column
+// of the aligned-sequence output. Both kernel and oracle use the
+// SAME (match, mismatch, gap) integer arithmetic with the SAME
+// traceback tie-break (diagonal > up > left). The D80 1e-10
+// relative ceiling collapses to bit-identical for integer outputs.
+
+use "stdlib/kernels/bio_align/needleman_wunsch_kernel"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed = ""
+
+fn check(name: str, cond: bool) {
+    total_count = total_count + 1
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        if failed == "" { failed = name }
+    }
+}
+
+fn arrays_eq(a: [int], b: [int]) -> bool {
+    if len(a) != len(b) { return false }
+    let mut i = 0
+    while i < len(a) {
+        if a[i] != b[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn main() {
+    // ════════════════════════════════════════════════════════════
+    // Case 1 — Durbin §2.3 sequences with simple (+1/-1/-2) scoring.
+    //   a = HEAGAWGHEE (ASCII codes)
+    //   b = PAWHEAE    (ASCII codes)
+    //   Oracle: score = -6.
+    // ════════════════════════════════════════════════════════════
+    let a1: [int] = [72, 69, 65, 71, 65, 87, 71, 72, 69, 69]
+    let b1: [int] = [80, 65, 87, 72, 69, 65, 69]
+
+    check("C1 score_only(Durbin +1/-1/-2) = -6",
+          score_only(a1, b1, 1, 0 - 1, 0 - 2) == 0 - 6)
+
+    let r1 = align(a1, b1, 1, 0 - 1, 0 - 2)
+    check("C1 align score = -6", r1[0][0] == 0 - 6)
+    check("C1 align a row matches oracle",
+          arrays_eq(r1[1],
+                    [72, 69, 65, 71, 65, 87, 71, 72, 69, 0 - 1, 69]))
+    check("C1 align b row matches oracle",
+          arrays_eq(r1[2],
+                    [0 - 1, 0 - 1, 0 - 1, 80, 65, 87, 0 - 1, 72,
+                     69, 65, 69]))
+    check("C1 alignment lengths equal", len(r1[1]) == len(r1[2]))
+
+    // ════════════════════════════════════════════════════════════
+    // Case 2 — GATTACA vs GCATGCU with (+1/-1/-1).
+    //   Oracle: score = 0.
+    // ════════════════════════════════════════════════════════════
+    let a2: [int] = [71, 65, 84, 84, 65, 67, 65]
+    let b2: [int] = [71, 67, 65, 84, 71, 67, 85]
+
+    check("C2 score_only(GATTACA vs GCATGCU +1/-1/-1) = 0",
+          score_only(a2, b2, 1, 0 - 1, 0 - 1) == 0)
+
+    let r2 = align(a2, b2, 1, 0 - 1, 0 - 1)
+    check("C2 align score = 0", r2[0][0] == 0)
+    check("C2 align a row matches oracle",
+          arrays_eq(r2[1], [71, 0 - 1, 65, 84, 84, 65, 67, 65]))
+    check("C2 align b row matches oracle",
+          arrays_eq(r2[2], [71, 67, 65, 0 - 1, 84, 71, 67, 85]))
+    check("C2 alignment lengths equal", len(r2[1]) == len(r2[2]))
+
+    // ════════════════════════════════════════════════════════════
+    // Case 3 — Identity ACGT vs ACGT (+2/-1/-2).
+    //   Oracle: score = 8 = 4 * match.
+    // ════════════════════════════════════════════════════════════
+    let a3: [int] = [65, 67, 71, 84]
+    let b3: [int] = [65, 67, 71, 84]
+
+    check("C3 score_only(identity) = 8",
+          score_only(a3, b3, 2, 0 - 1, 0 - 2) == 8)
+
+    let r3 = align(a3, b3, 2, 0 - 1, 0 - 2)
+    check("C3 align score = 8", r3[0][0] == 8)
+    check("C3 align a row = identity", arrays_eq(r3[1], a3))
+    check("C3 align b row = identity", arrays_eq(r3[2], b3))
+    check("C3 no gaps inserted", len(r3[1]) == 4)
+
+    // ════════════════════════════════════════════════════════════
+    // Case 4 — Empty vs ACGT (+1/-1/-2).
+    //   Oracle: score = -8 = 4 * gap.
+    // ════════════════════════════════════════════════════════════
+    let a4: [int] = []
+    let b4: [int] = [65, 67, 71, 84]
+
+    check("C4 score_only(empty vs len4) = -8",
+          score_only(a4, b4, 1, 0 - 1, 0 - 2) == 0 - 8)
+
+    let r4 = align(a4, b4, 1, 0 - 1, 0 - 2)
+    check("C4 align score = -8", r4[0][0] == 0 - 8)
+    check("C4 align a row = all gaps",
+          arrays_eq(r4[1], [0 - 1, 0 - 1, 0 - 1, 0 - 1]))
+    check("C4 align b row = ACGT", arrays_eq(r4[2], b4))
+
+    // ════════════════════════════════════════════════════════════
+    // Case 5 — Disjoint AAAA vs TTTT (+1/-1/-1).
+    //   Oracle: score = -4 (4 mismatches, traceback prefers
+    //   diagonal over up over left, so all 4 columns are mismatches
+    //   rather than 8 gap columns).
+    // ════════════════════════════════════════════════════════════
+    let a5: [int] = [65, 65, 65, 65]
+    let b5: [int] = [84, 84, 84, 84]
+
+    check("C5 score_only(disjoint 4x4) = -4",
+          score_only(a5, b5, 1, 0 - 1, 0 - 1) == 0 - 4)
+
+    let r5 = align(a5, b5, 1, 0 - 1, 0 - 1)
+    check("C5 align score = -4", r5[0][0] == 0 - 4)
+    check("C5 align a row = AAAA (no gap)", arrays_eq(r5[1], a5))
+    check("C5 align b row = TTTT (no gap)", arrays_eq(r5[2], b5))
+
+    // ════════════════════════════════════════════════════════════
+    // Case 6 — ACACACTA vs AGCACACA with EDNAFULL-ish (+5/-3/-4).
+    //   Oracle: score = 27.
+    // ════════════════════════════════════════════════════════════
+    let a6: [int] = [65, 67, 65, 67, 65, 67, 84, 65]
+    let b6: [int] = [65, 71, 67, 65, 67, 65, 67, 65]
+
+    check("C6 score_only(DNA +5/-3/-4) = 27",
+          score_only(a6, b6, 5, 0 - 3, 0 - 4) == 27)
+
+    let r6 = align(a6, b6, 5, 0 - 3, 0 - 4)
+    check("C6 align score = 27", r6[0][0] == 27)
+    check("C6 align a row matches oracle",
+          arrays_eq(r6[1],
+                    [65, 0 - 1, 67, 65, 67, 65, 67, 84, 65]))
+    check("C6 align b row matches oracle",
+          arrays_eq(r6[2],
+                    [65, 71, 67, 65, 67, 65, 67, 0 - 1, 65]))
+
+    // ════════════════════════════════════════════════════════════
+    // Case 7 — Single insertion AT vs ACT (+1/-1/-2).
+    //   Oracle: score = 0.
+    // ════════════════════════════════════════════════════════════
+    let a7: [int] = [65, 84]
+    let b7: [int] = [65, 67, 84]
+
+    check("C7 score_only(AT vs ACT +1/-1/-2) = 0",
+          score_only(a7, b7, 1, 0 - 1, 0 - 2) == 0)
+
+    let r7 = align(a7, b7, 1, 0 - 1, 0 - 2)
+    check("C7 align score = 0", r7[0][0] == 0)
+    check("C7 align a row matches oracle",
+          arrays_eq(r7[1], [65, 0 - 1, 84]))
+    check("C7 align b row matches oracle",
+          arrays_eq(r7[2], [65, 67, 84]))
+
+    // ════════════════════════════════════════════════════════════
+    // Invariants — properties that hold for any (a, b, scoring).
+    // ════════════════════════════════════════════════════════════
+
+    // Inv 1: aligning a sequence to itself with match > 0 yields
+    //   score = len(a) * match exactly (no gaps, all matches).
+    check("Inv1 self-alignment = len * match",
+          score_only(a3, a3, 7, 0 - 5, 0 - 3) == 4 * 7)
+
+    // Inv 2: symmetry — score(a, b) == score(b, a) for symmetric
+    //   scoring (match, mismatch, gap independent of direction).
+    check("Inv2 symmetry score(a, b) == score(b, a)",
+          score_only(a2, b2, 1, 0 - 1, 0 - 1)
+            == score_only(b2, a2, 1, 0 - 1, 0 - 1))
+
+    // Inv 3: empty vs empty -> 0.
+    let empty: [int] = []
+    check("Inv3 empty vs empty = 0",
+          score_only(empty, empty, 1, 0 - 1, 0 - 2) == 0)
+
+    // Inv 4: aligned-row gap-stripped equals the input sequence.
+    //   (Filter -1 from r6[1] should recover a6.)
+    let mut a6_recovered: [int] = []
+    let mut k = 0
+    while k < len(r6[1]) {
+        if r6[1][k] != 0 - 1 { a6_recovered.push(r6[1][k]) }
+        k = k + 1
+    }
+    check("Inv4 gap-stripped a row recovers original",
+          arrays_eq(a6_recovered, a6))
+
+    let mut b6_recovered: [int] = []
+    let mut kk = 0
+    while kk < len(r6[2]) {
+        if r6[2][kk] != 0 - 1 { b6_recovered.push(r6[2][kk]) }
+        kk = kk + 1
+    }
+    check("Inv4 gap-stripped b row recovers original",
+          arrays_eq(b6_recovered, b6))
+
+    // ════════════════════════════════════════════════════════════
+    // Summary
+    // ════════════════════════════════════════════════════════════
+    if pass_count == total_count {
+        print("needleman_wunsch_kernel_test: " + str(pass_count)
+              + "/" + str(total_count) + " PASS")
+    } else {
+        print("needleman_wunsch_kernel_test: " + str(pass_count)
+              + "/" + str(total_count) + " FAIL (first: " + failed + ")")
+    }
+}
