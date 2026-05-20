@@ -437,6 +437,36 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
             }
             return out
         }
+        // RFC 055 §12 P4+ — `gpu_warp_shuffle(v, lane) -> u32` warp-lane
+        // data exchange (gpu/SPEC.md §5). Lowers to
+        //   `shfl.sync.idx.b32 %r<dst>, %r<src>, %r<lane>, 0x1f, 0xffffffff;`
+        // — the `idx` mode selects the source lane by its index; `0x1f`
+        // c-operand encodes lane-mask=31 (full warp) + clamp-mode=idx;
+        // `0xffffffff` is the membermask covering all 32 warp lanes
+        // (matches CUDA's `__shfl_sync` __FULL_MASK). 32-bit baseline
+        // (`.b32`) per the §12 P4+ first slice — FP64 / 64-bit shuffle
+        // composes from two 32-bit halves in a later sub-phase. The dst
+        // Local is U32 (matching `_nvptx_classify_local_for_stmt` rule
+        // below); the value + lane operands render via hand-typed
+        // `_nvptx_reg_u32(<arg local_id>)` references — the PTX shfl.sync
+        // 32-bit form requires `.b32`-class registers for both inputs.
+        //   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync.
+        if s.op == "gpu_warp_shuffle" {
+            if len(s.args) >= 2 {
+                let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+                let src_reg = _nvptx_reg_u32(s.args[0].local_id)
+                let lane_reg = _nvptx_reg_u32(s.args[1].local_id)
+                let mut a = []
+                a.push(_nvptx_op(dst_reg))
+                a.push(_nvptx_op(src_reg))
+                a.push(_nvptx_op(lane_reg))
+                a.push(_nvptx_op("0x1f"))
+                a.push(_nvptx_op("0xffffffff"))
+                out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_IDX_B32, a,
+                    "gpu_warp_shuffle(v, lane)"))
+            }
+            return out
+        }
         out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported call: " + s.op))
         return out
     }
@@ -623,6 +653,8 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
         if s.op == "gpu_grid_dim_x" { return NVPTX_RKIND_U32 }
         if s.op == "gpu_grid_dim_y" { return NVPTX_RKIND_U32 }
         if s.op == "gpu_grid_dim_z" { return NVPTX_RKIND_U32 }
+        // RFC 055 §12 P4+ — gpu_warp_shuffle returns a 32-bit register.
+        if s.op == "gpu_warp_shuffle" { return NVPTX_RKIND_U32 }
         return NVPTX_RKIND_F64
     }
     // STMT_ASSIGN default + everything else default — FP64. A real type
