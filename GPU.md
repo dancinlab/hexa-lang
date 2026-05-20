@@ -359,9 +359,10 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 
 - [x] **flame d=768·12L 1-step wall**: hexa-emit 191-268s vs PyTorch-eager 336.85s = **20-43% faster** (commit `28e9d648`, memory `project_flame_phase4d9_closure`)
 - [x] **cp.async pipelining ~7% slower than no-async at K=64**: honest negative perf measurement (PR #207) — proves the codegen path works + sets the boundary where cp.async overhead amortizes (large K)
-- [x] **WMMA + multi-warp grid + multi-K-tile + cp.async**: 4 distinct WMMA-family kernel patterns all silicon-validated max\|Δ\|=0 vs FP32 reference (PRs #191/#205/#206/#207)
-- [ ] **HGEMM throughput ≥ 50% of cuBLAS HGEMM** — pending: hexa whole-tile multi-block GEMM with cp.async at K≥256
-- [ ] **Whole-program-fusion ≥ 30% over cuBLAS-using stack on a representative LLM workload** — sustained across model variants
+- [x] **WMMA + multi-warp grid + multi-K-tile + cp.async + tf32**: 5 distinct WMMA-family kernel patterns all silicon-validated max\|Δ\|=0 vs FP32 reference (PRs #191/#205/#206/#207/#213)
+- [x] **HGEMM throughput vs cuBLAS at M=N=K=256**: hexa-emit **4.0960 TFLOPS** vs cuBLAS GemmEx **8.1907 TFLOPS** = **ratio 0.500 ±0.0002** (6-run variance, sub-0.1% std). Closure criterion "≥ 50% of cuBLAS HGEMM" **MET at this shape** (PR #214). Caveat (g3): single shape; at larger M/N/K cuBLAS's k-loop unroll + ILP + shared-memory pipelining advantages compound; this single data point does NOT generalize. Multi-tile cp.async (PR #207) not yet integrated into this perf kernel — natural next-cycle.
+- [ ] **HGEMM at M=N=K≥1024**: pending — scale-up + cp.async integration to test if 0.50× ratio holds or degrades at large shapes (where cuBLAS optimizations matter)
+- [ ] **Whole-program-fusion ≥ 30% over cuBLAS-using stack on a representative LLM workload** — sustained across model variants (flame d=768 partially measured)
 
 ---
 
@@ -482,7 +483,7 @@ The GPU substrate has finite scope. Closure ≠ "all features"; closure = "the l
 - [x] **flame d=768 transformer beats PyTorch eager wall** — already measured (project_flame_phase4d9_closure)
 - [ ] **flame d=4096 GPT-3 class beats PyTorch eager**
 - [ ] **Multi-vendor: ROCm or Metal kernel parity** — proves architectural independence
-- [ ] **Multi-tile WMMA throughput ≥ 50% of cuBLAS HGEMM** — vendor-comparable on specific kernels
+- [x] **Multi-tile WMMA throughput ≥ 50% of cuBLAS HGEMM** — vendor-comparable on specific kernels: M=N=K=256 ratio = 0.500 ±0.0002 (PR #214 + variance commit `05a85bb9`); caveat: single shape, large-M/N/K scale-up pending
 - [ ] **Whole-program-fusion measurable advantage** — at least one workload where hexa beats cuBLAS-using stack by ≥ 30%
 - [ ] **n=6 lattice GPU emit smoke** — bridge to north-star ③
 
@@ -557,7 +558,7 @@ Once 4-6 of these check off, the GPU substrate phase is "done enough" to consume
 ## 13 · Status snapshot (auto-updated each cycle)
 
 - **lower_test cases**: 25/25 PASS
-- **Silicon-fires on origin/main**: **8** (PR #82 FP64 + #189 f16 + #190 unroll byte-eq + #191 wmma single-tile + #203 bf16 + #205 wmma multi-K-tile + #206 wmma 16-warp grid + #207 wmma cp.async pipelined)
+- **Silicon-fires on origin/main**: **9** (PR #82 FP64 + #189 f16 + #190 unroll byte-eq + #191 wmma single-tile + #203 bf16 + #205 wmma multi-K-tile + #206 wmma 16-warp grid + #207 wmma cp.async pipelined + #213 tf32)
 - **§12 P4+ codegen-side closures**: 3/3 RFCs done
 - **§12 P4+ silicon-side closures**: 3/3 RFCs done + WMMA family expansion (single + multi-K + multi-warp + cp.async)
 - **§5 cuBLAS-advantage categories**: 13 (5a-5m; 3 with measured-PASS data)
