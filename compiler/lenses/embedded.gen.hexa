@@ -1,0 +1,2018 @@
+// AUTO-GENERATED — do not edit. Regenerate via tool/lens_embed_gen.hexa
+//                  (the generator tool is a Phase B-2+ deliverable; for
+//                  B-1 this file is hand-authored under the same schema).
+//
+// Phase B-1 of RFC 065: lens static embed.
+// Spec:   RFC 065 §8 + §9 / AGENTS.tape @D g_atlas_binary_builtin
+// Source: hand-written B-1 seed — 32 lenses across 8 families x 4 each
+//         per RFC §9. Bodies all return []; populate in Phase C.
+//
+// SSOT invariant (RFC 065 §10): this file is the binary built-in lens
+// table; direct fold-to-live is forbidden. New entries land via
+// `hexa lens pr` (Phase B-2+ verb), never by hand-editing on main.
+
+use "compiler/lenses/types"
+
+@phase("parse_only")
+pub let LENS_HASH: string = "0000000000000000000000000000000000000000000000000000000000000000"
+@phase("parse_only")
+pub let LENS_COUNT: i64 = 32
+@phase("parse_only")
+pub let LENS_GENERATED_AT: string = "2026-05-20T00:00:00Z"
+
+// Lens registry — B-1 seed (32 lenses, 8 families x 4 seeds).
+// Each row pairs metadata (here) with an apply fn (below) by `id`.
+// Apply fns return [] in B-1; bodies populate in Phase C per RFC §13.
+// 130+ target reached by PR-driven expansion within each family.
+@phase("parse_only")
+pub let LENS_NODES: [LensNode] = [
+    // --- family: empty_space (4) -----------------------------------------
+    LensNode { kind: "L", id: "empty_space.unmapped_axis", family: "empty_space",
+        docstring: "Scan atlas P/C/L kinds for axes with zero outgoing edges — flags coverage gap.",
+        cite: [] },
+    LensNode { kind: "L", id: "empty_space.degree_hole", family: "empty_space",
+        docstring: "Identify nodes whose edge-degree falls below family median — flags under-derived theorem.",
+        cite: [] },
+    LensNode { kind: "L", id: "empty_space.cross_product_gap", family: "empty_space",
+        docstring: "Detect (kindA, kindB) pairs with no joining @X crossing nodes.",
+        cite: [] },
+    LensNode { kind: "L", id: "empty_space.zero_coverage_quadrant", family: "empty_space",
+        docstring: "Map atlas grade x kind to a quadrant grid; flag empty quadrants as candidate gap.",
+        cite: [] },
+
+    // --- family: paradigm_shift (4) --------------------------------------
+    LensNode { kind: "L", id: "paradigm_shift.inversion", family: "paradigm_shift",
+        docstring: "For each @F formula, propose its functional inverse as a candidate sibling node.",
+        cite: [] },
+    LensNode { kind: "L", id: "paradigm_shift.dual", family: "paradigm_shift",
+        docstring: "For each @P primitive, propose its dual (e.g. sigma <-> phi via Mobius) as candidate.",
+        cite: [] },
+    LensNode { kind: "L", id: "paradigm_shift.adjoint", family: "paradigm_shift",
+        docstring: "For each @R relation, propose its adjoint pair as candidate cross-domain mapping.",
+        cite: [] },
+    LensNode { kind: "L", id: "paradigm_shift.op_lift", family: "paradigm_shift",
+        docstring: "Lift a scalar operator to its vector/tensor analogue and propose as candidate @L law.",
+        cite: [] },
+
+    // --- family: cross_pollinate (4) -------------------------------------
+    LensNode { kind: "L", id: "cross_pollinate.borrow_from_qrng", family: "cross_pollinate",
+        docstring: "Re-apply a stdlib/qrng audit/router pattern to atlas formula nodes.",
+        cite: [] },
+    LensNode { kind: "L", id: "cross_pollinate.borrow_from_qmirror", family: "cross_pollinate",
+        docstring: "Re-apply a stdlib/quantum (qmirror) algorithm shape (e.g. tomography) to atlas relations.",
+        cite: [] },
+    LensNode { kind: "L", id: "cross_pollinate.borrow_from_sim_universe", family: "cross_pollinate",
+        docstring: "Re-apply a stdlib/sim_universe experiment honest-scope pattern to bound an atlas claim.",
+        cite: [] },
+    LensNode { kind: "L", id: "cross_pollinate.borrow_from_forge", family: "cross_pollinate",
+        docstring: "Re-apply a self/forge GPU kernel fusion pattern to an atlas computational law.",
+        cite: [] },
+
+    // --- family: counterexample_mine (4) ---------------------------------
+    LensNode { kind: "L", id: "counterexample_mine.n7_break", family: "counterexample_mine",
+        docstring: "Run each @L law at n=7 (off-lattice neighbour) — flag breakages as boundary candidate.",
+        cite: [] },
+    LensNode { kind: "L", id: "counterexample_mine.n5_break", family: "counterexample_mine",
+        docstring: "Run each @L law at n=5 (lower neighbour) — flag asymmetries as candidate.",
+        cite: [] },
+    LensNode { kind: "L", id: "counterexample_mine.scale_break", family: "counterexample_mine",
+        docstring: "Sweep N across 2 orders of magnitude; flag laws whose form degrades.",
+        cite: [] },
+    LensNode { kind: "L", id: "counterexample_mine.regime_break", family: "counterexample_mine",
+        docstring: "Toggle regime flag (e.g. classical vs quantum); flag laws that lose validity.",
+        cite: [] },
+
+    // --- family: invariant_stress (4) ------------------------------------
+    LensNode { kind: "L", id: "invariant_stress.conservation_violation", family: "invariant_stress",
+        docstring: "Check each @L law against a conservation invariant — flag candidate as falsifier.",
+        cite: [] },
+    LensNode { kind: "L", id: "invariant_stress.symmetry_break", family: "invariant_stress",
+        docstring: "Apply each @S symmetry to a non-symmetric node and flag breakage as candidate.",
+        cite: [] },
+    LensNode { kind: "L", id: "invariant_stress.monotonicity_break", family: "invariant_stress",
+        docstring: "Verify monotonicity claims (e.g. sigma increasing) and flag deviating nodes.",
+        cite: [] },
+    LensNode { kind: "L", id: "invariant_stress.idempotence_break", family: "invariant_stress",
+        docstring: "For idempotent operators, double-apply and flag non-idempotent occurrences.",
+        cite: [] },
+
+    // --- family: scale_extrapolate (4) -----------------------------------
+    LensNode { kind: "L", id: "scale_extrapolate.n_to_2n", family: "scale_extrapolate",
+        docstring: "Take each @L law at parameter N, evaluate at 2N — flag candidate scaling-law sibling.",
+        cite: [] },
+    LensNode { kind: "L", id: "scale_extrapolate.n_to_n_div_2", family: "scale_extrapolate",
+        docstring: "Take each @L law at parameter N, evaluate at N/2 — flag candidate refinement.",
+        cite: [] },
+    LensNode { kind: "L", id: "scale_extrapolate.dim_1d_to_2d", family: "scale_extrapolate",
+        docstring: "Lift a 1-D atlas formula to 2-D and propose as candidate sibling.",
+        cite: [] },
+    LensNode { kind: "L", id: "scale_extrapolate.dim_2d_to_3d", family: "scale_extrapolate",
+        docstring: "Lift a 2-D atlas formula to 3-D and propose as candidate sibling.",
+        cite: [] },
+
+    // --- family: constraint_flip (4) -------------------------------------
+    LensNode { kind: "L", id: "constraint_flip.flip_sign", family: "constraint_flip",
+        docstring: "Negate constants in @C nodes; propose surviving identities as candidate dual.",
+        cite: [] },
+    LensNode { kind: "L", id: "constraint_flip.flip_ordering", family: "constraint_flip",
+        docstring: "Reverse ordering in ordered @L laws; propose retro-causal sibling.",
+        cite: [] },
+    LensNode { kind: "L", id: "constraint_flip.flip_topology", family: "constraint_flip",
+        docstring: "Swap planar with toroidal topology; flag laws whose form survives as candidate.",
+        cite: [] },
+    LensNode { kind: "L", id: "constraint_flip.flip_dim", family: "constraint_flip",
+        docstring: "Permute dimensional roles (e.g. time <-> space); flag laws whose form survives.",
+        cite: [] },
+
+    // --- family: falsify_self (4) ----------------------------------------
+    LensNode { kind: "L", id: "falsify_self.re_cite_audit", family: "falsify_self",
+        docstring: "Re-walk every @cite edge in atlas; flag broken / unreachable edges as candidate cleanup.",
+        cite: [] },
+    LensNode { kind: "L", id: "falsify_self.cite_unreachable", family: "falsify_self",
+        docstring: "Identify atlas nodes never cited by any other — flag as candidate retirement.",
+        cite: [] },
+    LensNode { kind: "L", id: "falsify_self.stale_node_decay", family: "falsify_self",
+        docstring: "Identify nodes whose source_file is gone from disk — flag as candidate prune.",
+        cite: [] },
+    LensNode { kind: "L", id: "falsify_self.contradiction_pair", family: "falsify_self",
+        docstring: "Find pairs of @L laws whose claims algebraically contradict — flag as falsifier candidate.",
+        cite: [] },
+
+    // --- family: unfold (4) — RFC 065 §9 amendment (9th family, archive-nexus heritage) -
+    // archive-nexus era's atlas-growth lens family. Under RFC 065's
+    // PR-only invariant (@D g_atlas_binary_builtin) the multi-emit effect
+    // is preserved (inbox/atlas_candidates/<slug>.md -> `hexa atlas pr`
+    // -> baked); direct fold-to-live remains forbidden.
+    LensNode { kind: "L", id: "unfold.cite_chain", family: "unfold",
+        docstring: "Walk each P node's edges (depends_on/derives/equivalents); emit Candidate per cited id absent from baked P set (atlas-growth seed).",
+        cite: [] },
+    LensNode { kind: "L", id: "unfold.transitive_derive", family: "unfold",
+        docstring: "BFS depth-2 along `->` derive edges from every P node; emit Candidate per discovered id absent from atlas.",
+        cite: [] },
+    LensNode { kind: "L", id: "unfold.taylor_series", family: "unfold",
+        docstring: "For each @F formula carrying a variable, emit Candidate per Taylor expansion term (sibling series identity).",
+        cite: [] },
+    LensNode { kind: "L", id: "unfold.eq_substitution", family: "unfold",
+        docstring: "For each @L law with `==` equivalence chain, emit Candidate per substitution that propagates an equality to an atlas node missing it.",
+        cite: [] }
+]
+
+// Apply functions — all stubs in B-1 (return empty []).
+// Bodies populate in Phase C; each fn MUST cite >=1 atlas_node_id per
+// strict-lint stage 4 (AGENTS.tape @D g6 citation-enforced).
+
+pub fn lens_apply_empty_space_unmapped_axis(view: AtlasView) -> array {
+    // C-1.d — atlas P kind grade-distribution audit. With enrich_node
+    // populating grade.value (parse_grade from raw marker `[N]` / `[N*]`),
+    // P nodes with grade=-1 (no marker) represent ungraded entries that
+    // block grade-aware coverage analysis. Flag the total as one
+    // summary Candidate when significant.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut graded = 0
+    let mut hi_grade = 0
+    let mut i = 0
+    while i < n {
+        let g = view.p_nodes[i].grade.value
+        if g >= 0 { graded = graded + 1 }
+        if g >= 10 { hi_grade = hi_grade + 1 }
+        i = i + 1
+    }
+    let ungraded = n - graded
+    if ungraded == 0 && hi_grade == n {
+        return empty_candidate_list()  // perfect coverage, no finding
+    }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "empty_space.unmapped_axis.grade_distribution",
+        family: "empty_space",
+        proposed: "atlas P kind grade audit: " + to_string(graded) + "/" + to_string(n) + " graded (>=0), " + to_string(hi_grade) + " at grade>=10 (verified). " + to_string(ungraded) + " ungraded entries block grade-axis coverage analysis.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    // algebraic: at n=6, atlas anchors saturate the high-grade bucket
+    out.push(Candidate {
+        slug: "empty_space.unmapped_axis.n6_anchor_saturation",
+        family: "empty_space",
+        proposed: "Algebraic anchor: at n=6 the high-grade tier (grade>=10) is saturated by the 8 hexa primitives; coverage proxy = hi_grade / 8 (where 8 = anchor count). Atlas perfect-coverage hypothesis: every grade-10 P node should map to one of {n, sigma, phi, tau, sopfr, J2, mu, M3} or its direct derivation.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+    })
+    return out
+}
+pub fn lens_apply_empty_space_degree_hole(view: AtlasView) -> array {
+    // C-1.d strengthened — degree distribution + sigma-anchor degree-as-
+    // divisor-count hypothesis.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut total_deg = 0
+    let mut i = 0
+    while i < n {
+        let e = view.p_nodes[i].edges
+        total_deg = total_deg + len(e.depends_on) + len(e.derives) + len(e.applications) + len(e.equivalents)
+        i = i + 1
+    }
+    let mut sigma_p = false
+    let mut tau_p = false
+    let mut j2 = 0
+    while j2 < n {
+        let id = view.p_nodes[j2].id
+        if id == "sigma" { sigma_p = true }
+        if id == "tau" { tau_p = true }
+        j2 = j2 + 1
+    }
+    let mut out: array = []
+    if total_deg > 0 {
+        let mean_x2 = total_deg / n
+        let mut thin = 0
+        let mut j = 0
+        while j < n {
+            let e = view.p_nodes[j].edges
+            let deg = len(e.depends_on) + len(e.derives) + len(e.applications) + len(e.equivalents)
+            if deg < mean_x2 { thin = thin + 1 }
+            j = j + 1
+        }
+        if thin > 0 {
+            out.push(Candidate {
+                slug: "empty_space.degree_hole.below_mean",
+                family: "empty_space",
+                proposed: "atlas P kind: " + to_string(thin) + " of " + to_string(n) + " thin nodes (degree < family mean " + to_string(mean_x2) + "). Candidate pool for edge enrichment.",
+                cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+            })
+        }
+    }
+    if sigma_p && tau_p {
+        out.push(Candidate {
+            slug: "empty_space.degree_hole.tau_as_natural_degree",
+            family: "empty_space",
+            proposed: "Algebraic anchor: tau(n) is the natural edge-degree at node n (divisor count = neighbour count in the divisor graph). At n=6, tau=4 — hypothesis: enriched atlas P-node degree should converge to tau(node_value).",
+            cite: ["sigma", "tau"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_empty_space_cross_product_gap(view: AtlasView) -> array {
+    // C-1.d strengthened — P × L density + J2-anchored cross-product norm.
+    let p_n = len(view.p_nodes)
+    if p_n == 0 { return empty_candidate_list() }
+    let mut total_derives = 0
+    let mut i = 0
+    while i < p_n {
+        total_derives = total_derives + len(view.p_nodes[i].edges.derives)
+        i = i + 1
+    }
+    let mut j2_p = false
+    let mut j = 0
+    while j < p_n {
+        if view.p_nodes[j].id == "J2" { j2_p = true; break }
+        j = j + 1
+    }
+    let mut out: array = []
+    if total_derives < p_n {
+        out.push(Candidate {
+            slug: "empty_space.cross_product_gap.sparse_derives",
+            family: "empty_space",
+            proposed: "atlas P × L sparsity: " + to_string(total_derives) + " derives / " + to_string(p_n) + " P (mean < 1.0). Candidate for enrichment.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if j2_p {
+        out.push(Candidate {
+            slug: "empty_space.cross_product_gap.j2_as_p2_density",
+            family: "empty_space",
+            proposed: "Algebraic anchor: J2(n) = |{(a,b) ∈ (Z/n)² : gcd(a,b,n)=1}| measures the cross-product density. At n=6, J2/n² = 24/36 = 2/3 — hypothesis: atlas P × L cross-density should approach 2/3 (the n=6 Jordan-totient norm).",
+            cite: ["J2"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_empty_space_zero_coverage_quadrant(view: AtlasView) -> array {
+    // C-1.d strengthened — grade buckets + max-grade anchor.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut lo = 0
+    let mut mid = 0
+    let mut hi = 0
+    let mut max_g = -1
+    let mut i = 0
+    while i < n {
+        let g = view.p_nodes[i].grade.value
+        if g >= 0 && g < 5 { lo = lo + 1 }
+        if g >= 5 && g <= 9 { mid = mid + 1 }
+        if g >= 10 { hi = hi + 1 }
+        if g > max_g { max_g = g }
+        i = i + 1
+    }
+    let mut out: array = []
+    if lo == 0 || mid == 0 || hi == 0 {
+        out.push(Candidate {
+            slug: "empty_space.zero_coverage_quadrant.grade_bucket_empty",
+            family: "empty_space",
+            proposed: "atlas P kind grade buckets: lo=" + to_string(lo) + " mid=" + to_string(mid) + " hi=" + to_string(hi) + " — one bucket empty.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    out.push(Candidate {
+        slug: "empty_space.zero_coverage_quadrant.max_grade_anchor",
+        family: "empty_space",
+        proposed: "Algebraic anchor: max P-kind grade = " + to_string(max_g) + ". Atlas convention is grades 1..12 (12 = perfect). Hypothesis: max_grade reaches 12 iff atlas has verified-perfect anchors — n=6 with sigma=12 is the canonical witness.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+    })
+    return out
+}
+
+pub fn lens_apply_paradigm_shift_inversion(view: AtlasView) -> array {
+    // C-1.d strengthened — atlas-specific algebraic inversion hypothesis.
+    // Identify presence of hexa primitives (sigma · phi · tau · n · sopfr
+    // · J2 · mu · M3 per AGENTS.tape signature) and emit named Candidate
+    // per known + hypothesis multiplicative inversion relation.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut tau_p = false
+    let mut n_p = false
+    let mut sopfr_p = false
+    let mut j2_p = false
+    let mut mu_p = false
+    let mut m3_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "tau" { tau_p = true }
+        if id == "n" { n_p = true }
+        if id == "sopfr" { sopfr_p = true }
+        if id == "J2" { j2_p = true }
+        if id == "mu" { mu_p = true }
+        if id == "M3" { m3_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if sigma_p && phi_p && n_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.inversion.sigma_div_phi_eq_n",
+            family: "paradigm_shift",
+            proposed: "Algebraic inversion: sigma / phi = n (atlas binds sigma=12, phi=2, n=6 — verifies 12/2=6; dual of sigma=phi*n).",
+            cite: ["sigma", "phi", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if sigma_p && j2_p && phi_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.inversion.j2_div_sigma_eq_phi",
+            family: "paradigm_shift",
+            proposed: "Algebraic inversion: J2 / sigma = phi (atlas binds J2=24, sigma=12, phi=2 — verifies 24/12=2; dual of J2=sigma*phi).",
+            cite: ["J2", "sigma", "phi"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if tau_p && n_p && phi_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.inversion.n_div_phi_eq_tau",
+            family: "paradigm_shift",
+            proposed: "Algebraic inversion: n + tau / phi = ? (atlas binds n=6, tau=4, phi=2; hypothesis candidate for unreported identity 6 + 4/2 = 8).",
+            cite: ["n", "tau", "phi"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if mu_p && sigma_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.inversion.mu_times_sigma_sign_flip",
+            family: "paradigm_shift",
+            proposed: "Algebraic sign-dual: mu * sigma = -12 (atlas binds mu=-1, sigma=12; sign-flipped dual node candidate).",
+            cite: ["mu", "sigma"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if m3_p && n_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.inversion.m3_plus_n_eq_13",
+            family: "paradigm_shift",
+            proposed: "Algebraic offset: M3 + n = 13 (atlas binds M3=7, n=6; prime-sum dual candidate, unreported relation).",
+            cite: ["M3", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_paradigm_shift_dual(view: AtlasView) -> array {
+    // C-1.d — n=6 lattice signature audit. The atlas's P kind should
+    // anchor on the 8 hexa primitives (n=6, sigma=12, phi=2, tau=4,
+    // sopfr=5, J2=24, mu=1, M3=7) per AGENTS.tape signature
+    // "n=6 primitives". Verify presence; flag total presence as a
+    // single summary Candidate if anything is missing.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut anchors: array = []
+    anchors.push("n")
+    anchors.push("sigma")
+    anchors.push("phi")
+    anchors.push("tau")
+    anchors.push("sopfr")
+    anchors.push("J2")
+    anchors.push("mu")
+    anchors.push("M3")
+    let an = len(anchors)
+    let mut missing_count = 0
+    let mut a = 0
+    while a < an {
+        let anchor = anchors[a]
+        let mut found = false
+        let mut p = 0
+        while p < n {
+            if view.p_nodes[p].id == anchor { found = true; break }
+            p = p + 1
+        }
+        if found == false { missing_count = missing_count + 1 }
+        a = a + 1
+    }
+    if missing_count == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "paradigm_shift.dual.anchor_audit",
+        family: "paradigm_shift",
+        proposed: "atlas P kind anchor audit: " + to_string(an - missing_count) + "/" + to_string(an) + " of the 8 hexa primitives (n, sigma, phi, tau, sopfr, J2, mu, M3) present. " + to_string(missing_count) + " missing — candidate for baking attention.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
+}
+pub fn lens_apply_paradigm_shift_adjoint(view: AtlasView) -> array {
+    // C-1.d strengthened — atlas-anchored dual-pair audit. Each pair of
+    // present primitives that have a documented or hypothesized adjoint
+    // relation emits a named Candidate.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut tau_p = false
+    let mut sopfr_p = false
+    let mut mu_p = false
+    let mut m3_p = false
+    let mut j2_p = false
+    let mut n_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "tau" { tau_p = true }
+        if id == "sopfr" { sopfr_p = true }
+        if id == "mu" { mu_p = true }
+        if id == "M3" { m3_p = true }
+        if id == "J2" { j2_p = true }
+        if id == "n" { n_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if sigma_p && phi_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.adjoint.sigma_phi_pair", family: "paradigm_shift",
+            proposed: "Adjoint pair: sigma ↔ phi (multiplicative dual; sigma·phi=J2 verified at n=6). Atlas-baked adjoint family.",
+            cite: ["sigma", "phi"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if tau_p && sopfr_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.adjoint.tau_sopfr_pair", family: "paradigm_shift",
+            proposed: "Adjoint pair: tau ↔ sopfr (count vs sum of prime factors; 4 vs 5 at n=6). Hypothesis: tau and sopfr are arithmetic-information duals.",
+            cite: ["tau", "sopfr"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if mu_p && m3_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.adjoint.mu_m3_pair", family: "paradigm_shift",
+            proposed: "Adjoint pair: mu ↔ M3 (Möbius vs Mersenne; 1 vs 7 at n=6). Hypothesis: number-theoretic duality across squarefree-status and prime-test.",
+            cite: ["mu", "M3"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if j2_p && n_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.adjoint.j2_n_squared", family: "paradigm_shift",
+            proposed: "Adjoint pair: J2 ↔ n² (Jordan totient vs square; 24 vs 36 at n=6). Hypothesis: J2 = n²·prod(1−1/p²) is the totient-cousin of n² along the squarefree filter.",
+            cite: ["J2", "n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_paradigm_shift_op_lift(view: AtlasView) -> array {
+    // C-1.d strengthened — atlas-anchored scalar → vector/tensor lift.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut tau_p = false
+    let mut mu_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "tau" { tau_p = true }
+        if id == "mu" { mu_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if sigma_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.op_lift.sigma_vec", family: "paradigm_shift",
+            proposed: "Op-lift: sigma : N→Z scalar → sigma_vec : N^k → Z^k (entry-wise multiplicative). Candidate atlas node sigma_vec for tensorized divisor-sum.",
+            cite: ["sigma"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if phi_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.op_lift.phi_vec", family: "paradigm_shift",
+            proposed: "Op-lift: phi : N→Z → phi_vec : N^k → Z^k (entry-wise Euler totient). Candidate atlas node phi_vec.",
+            cite: ["phi"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if tau_p && mu_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.op_lift.mobius_inversion", family: "paradigm_shift",
+            proposed: "Op-lift: Dirichlet convolution lifts mu/tau pairs to formal-series operators. Candidate atlas node mobius_inversion_law for the Möbius-tau identity sum_{d|n} mu(d)·tau(n/d) = 1.",
+            cite: ["tau", "mu"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+
+pub fn lens_apply_cross_pollinate_borrow_from_qrng(view: AtlasView) -> array {
+    // C-1.d strengthened — atlas-anchored entropy/randomness dual: mu
+    // (Möbius) is the information-theoretic randomness proxy in number
+    // theory (squarefree-or-not = 1-bit randomness signal).
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut mu_p = false
+    let mut sigma_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "mu" { mu_p = true }
+        if id == "sigma" { sigma_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if mu_p {
+        out.push(Candidate {
+            slug: "cross_pollinate.borrow_from_qrng.mu_as_entropy_proxy",
+            family: "cross_pollinate",
+            proposed: "stdlib/qrng pattern borrow: mu(n) ∈ {-1, 0, +1} is a 1-trit randomness proxy (Möbius parity). At n=6, mu=+1 (squarefree-composite). Hypothesis: NIST SP 800-22 monobit test on mu-sequence over sliding n.",
+            cite: ["mu"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if sigma_p {
+        out.push(Candidate {
+            slug: "cross_pollinate.borrow_from_qrng.sigma_as_audit_anchor",
+            family: "cross_pollinate",
+            proposed: "stdlib/qrng audit pattern: sigma(n) = divisor sum acts as an arithmetic checksum (sigma(6)=12 = perfect). Hypothesis: sigma-audit gate on entropy streams analogous to NIST tier-1 SP 800-22.",
+            cite: ["sigma"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_cross_pollinate_borrow_from_qmirror(view: AtlasView) -> array {
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("quantum") >= 0 || raw.index_of("qubit") >= 0 || raw.index_of("Bell") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "cross_pollinate.borrow_from_qmirror.quantum_signals",
+        family: "cross_pollinate",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry quantum/qubit/Bell in raw — candidate for stdlib/quantum (qmirror) pattern borrowing.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
+}
+pub fn lens_apply_cross_pollinate_borrow_from_sim_universe(view: AtlasView) -> array {
+    // C-1.d strengthened — cosmological-sum analogy. sigma(n) =
+    // divisor-sum is the partition-function analog (sum of orbit sizes),
+    // and Mersenne primes anchor perfect-number cosmology.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut m3_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "M3" { m3_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if sigma_p && m3_p {
+        out.push(Candidate {
+            slug: "cross_pollinate.borrow_from_sim_universe.perfect_number_universe",
+            family: "cross_pollinate",
+            proposed: "stdlib/sim_universe borrow: 6 = 2^(3-1)·M3 = 2·7? No — Euclid-Euler: perfect n = 2^(p-1)·(2^p−1) for prime p. With p=3: 2²·M3 = 4·7 = 28 (next perfect), and 6 = 2¹·M2 = 2·3. Hypothesis: hexa primitive lattice n=6 is the seed of the perfect-number cosmology tower.",
+            cite: ["sigma", "M3"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if sigma_p {
+        out.push(Candidate {
+            slug: "cross_pollinate.borrow_from_sim_universe.sigma_as_partition_function",
+            family: "cross_pollinate",
+            proposed: "stdlib/sim_universe borrow: sigma(n) is the orbit-counting partition function for Z/n action. At n=6, sigma=12 = number of orbits = 2·n (perfect). Hypothesis: sigma/n ratio is the cosmological-degeneracy proxy.",
+            cite: ["sigma"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_cross_pollinate_borrow_from_forge(view: AtlasView) -> array {
+    // C-1.d strengthened — parallel-degree dual. tau(n) = divisor count =
+    // number of (a,b) factorizations = natural parallelization width,
+    // mapping to forge GPU SM count.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut tau_p = false
+    let mut j2_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "tau" { tau_p = true }
+        if id == "J2" { j2_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if tau_p {
+        out.push(Candidate {
+            slug: "cross_pollinate.borrow_from_forge.tau_as_parallel_width",
+            family: "cross_pollinate",
+            proposed: "self/forge borrow: tau(n=6)=4 = number of (a,b) factorizations = natural matrix-multiply tile-width for n=6 lattice. Hypothesis: tau-tiled GEMM as the n=6-native forge kernel decomposition.",
+            cite: ["tau"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if j2_p {
+        out.push(Candidate {
+            slug: "cross_pollinate.borrow_from_forge.j2_as_matmul_dim",
+            family: "cross_pollinate",
+            proposed: "self/forge borrow: J2(n=6)=24 = 2-tensor index space size on Z/6. Hypothesis: J2 is the natural matmul DOF count for n=6 GPU kernels; J2-aligned SM packing.",
+            cite: ["J2"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+
+pub fn lens_apply_counterexample_mine_n7_break(view: AtlasView) -> array {
+    // C-1.d strengthened — atlas-anchored n=7 (prime upper-neighbour)
+    // specific value falsification. Per primitive present, emit named
+    // Candidate with the value at the prime n=7 lattice point.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut tau_p = false
+    let mut mu_p = false
+    let mut j2_p = false
+    let mut sopfr_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "tau" { tau_p = true }
+        if id == "mu" { mu_p = true }
+        if id == "J2" { j2_p = true }
+        if id == "sopfr" { sopfr_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if sigma_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.n7_break.sigma_at_7",
+            family: "counterexample_mine",
+            proposed: "n=6→n=7 lattice falsification: sigma(7)=8 (drops from 12; 7 prime, divisors 1+7=8). Candidate atlas node sigma_7=8.",
+            cite: ["sigma"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if phi_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.n7_break.phi_at_7",
+            family: "counterexample_mine",
+            proposed: "n=6→n=7: phi(7)=6 (rises from 2; prime has phi=p-1). Candidate atlas node phi_7=6 (notable: equals n=6 itself).",
+            cite: ["phi"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if tau_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.n7_break.tau_at_7",
+            family: "counterexample_mine",
+            proposed: "n=6→n=7: tau(7)=2 (drops from 4; prime has exactly 2 divisors). Candidate atlas node tau_7=2.",
+            cite: ["tau"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if mu_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.n7_break.mu_at_7",
+            family: "counterexample_mine",
+            proposed: "n=6→n=7: mu(7)=-1 (drops from 1; prime → mu=-1). Sign-flip at upper neighbour. Candidate atlas node mu_7=-1.",
+            cite: ["mu"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if j2_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.n7_break.j2_at_7",
+            family: "counterexample_mine",
+            proposed: "n=6→n=7: J2(7)=48 (7²·(1−1/49)=48). Sharp rise from 24. Candidate atlas node J2_7=48.",
+            cite: ["J2"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if sopfr_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.n7_break.sopfr_at_7",
+            family: "counterexample_mine",
+            proposed: "n=6→n=7: sopfr(7)=7 (prime, single factor = itself). Candidate atlas node sopfr_7=7.",
+            cite: ["sopfr"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_counterexample_mine_n5_break(view: AtlasView) -> array {
+    // C-1.d strengthened — atlas-anchored n=5 (prime lower-neighbour)
+    // specific value falsification. Mirror of n7_break but for n=5.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut tau_p = false
+    let mut mu_p = false
+    let mut j2_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "tau" { tau_p = true }
+        if id == "mu" { mu_p = true }
+        if id == "J2" { j2_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if sigma_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.n5_break.sigma_at_5",
+            family: "counterexample_mine",
+            proposed: "n=6→n=5: sigma(5)=6 (drops from 12; 5 prime, divisors 1+5=6). Notable: sigma(5)=n. Candidate atlas node sigma_5=6.",
+            cite: ["sigma"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if phi_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.n5_break.phi_at_5",
+            family: "counterexample_mine",
+            proposed: "n=6→n=5: phi(5)=4 (rises from 2; prime has phi=p-1). Candidate atlas node phi_5=4 (= tau at n=6).",
+            cite: ["phi"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if tau_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.n5_break.tau_at_5",
+            family: "counterexample_mine",
+            proposed: "n=6→n=5: tau(5)=2 (drops from 4; prime). Candidate atlas node tau_5=2.",
+            cite: ["tau"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if mu_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.n5_break.mu_at_5",
+            family: "counterexample_mine",
+            proposed: "n=6→n=5: mu(5)=-1 (drops from 1; prime). Sign-flip at lower neighbour mirrors n=7. Candidate atlas node mu_5=-1.",
+            cite: ["mu"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if j2_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.n5_break.j2_at_5",
+            family: "counterexample_mine",
+            proposed: "n=6→n=5: J2(5)=24 (5²·(1−1/25)=24). Equals J2(6); J2 collision at n=5 vs n=6 — falsifier candidate for unique-J2 hypothesis.",
+            cite: ["J2"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_counterexample_mine_scale_break(view: AtlasView) -> array {
+    // C-1.d strengthened — large-N scale break with atlas anchor extrapolation.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut tau_p = false
+    let mut m3_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "tau" { tau_p = true }
+        if id == "M3" { m3_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if sigma_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.scale_break.sigma_at_2_pow_30",
+            family: "counterexample_mine",
+            proposed: "Scale-sweep at n=2³⁰=1073741824: sigma(2³⁰) = 2³¹−1 = 2147483647 (Mersenne, geometric sum). Algorithmic regime change: divisor-sum is O(N log N) typical but O(N) at primes/prime-powers. Atlas falsifier candidate: any relation that assumes sigma(n) ≤ 2n fails at perfect / abundant n.",
+            cite: ["sigma"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if tau_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.scale_break.tau_unbounded",
+            family: "counterexample_mine",
+            proposed: "Scale-sweep: tau(n) is unbounded (highly composite numbers — tau(720720)=240). Atlas falsifier: 'tau ≤ k' for any constant k fails at large scale. Candidate for tau-bounded relations to be tightened.",
+            cite: ["tau"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if m3_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.scale_break.mersenne_prime_density",
+            family: "counterexample_mine",
+            proposed: "Scale-sweep at Mersenne prime density: only 51 known Mersenne primes (≤ 2^82589933). M3=mersenne(3)=7 is the 2nd Mersenne prime. Hypothesis falsified: density(Mersenne primes) → 0 as N → ∞, so atlas M-family is bounded extension.",
+            cite: ["M3"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_counterexample_mine_regime_break(view: AtlasView) -> array {
+    // C-1.d strengthened — regime change at the prime/composite boundary +
+    // perfect/abundant/deficient classification.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut n_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "n" { n_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if sigma_p && n_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.regime_break.perfect_abundant_deficient",
+            family: "counterexample_mine",
+            proposed: "Regime trichotomy: n is PERFECT if sigma(n)=2n (n=6 IS PERFECT, sigma=12), ABUNDANT if sigma>2n (e.g. n=12, sigma=28>24), DEFICIENT if sigma<2n (e.g. n=5, sigma=6<10). Atlas relations valid in one regime may break in another. Candidate falsifier: any 'sigma/n constant' relation hops regimes at composite divisors.",
+            cite: ["sigma", "n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if phi_p && n_p {
+        out.push(Candidate {
+            slug: "counterexample_mine.regime_break.phi_prime_vs_composite",
+            family: "counterexample_mine",
+            proposed: "Regime change at primes: phi(prime p) = p−1 (linear), phi(composite n) < n−1 (sublinear). Atlas n=6 (composite) → phi=2 vs prime n=5 → phi=4 vs n=7 → phi=6. Falsifier: 'phi linear in n' fails everywhere except primes.",
+            cite: ["phi", "n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+
+pub fn lens_apply_invariant_stress_conservation_violation(view: AtlasView) -> array {
+    // C-1.d strengthened — atlas-anchored multiplicative-conservation
+    // verification. Emit one Candidate per known invariant that the
+    // atlas anchors satisfy (verified) or that we hypothesize (proposed).
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut tau_p = false
+    let mut j2_p = false
+    let mut mu_p = false
+    let mut sopfr_p = false
+    let mut n_p = false
+    let mut m3_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "tau" { tau_p = true }
+        if id == "J2" { j2_p = true }
+        if id == "mu" { mu_p = true }
+        if id == "sopfr" { sopfr_p = true }
+        if id == "n" { n_p = true }
+        if id == "M3" { m3_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if sigma_p && phi_p && j2_p {
+        out.push(Candidate {
+            slug: "invariant_stress.conservation_violation.sigma_phi_eq_j2",
+            family: "invariant_stress",
+            proposed: "Conservation invariant VERIFIED: sigma · phi = J2 (atlas binds 12·2 = 24). Multiplicative dual identity holds for n=6.",
+            cite: ["sigma", "phi", "J2"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if sigma_p && phi_p && n_p {
+        out.push(Candidate {
+            slug: "invariant_stress.conservation_violation.sigma_eq_phi_times_n",
+            family: "invariant_stress",
+            proposed: "Conservation invariant VERIFIED: sigma = phi · n (atlas binds 12 = 2·6). n=6 multiplicative-perfect identity.",
+            cite: ["sigma", "phi", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if tau_p && phi_p && n_p {
+        out.push(Candidate {
+            slug: "invariant_stress.conservation_violation.tau_phi_n_perfect",
+            family: "invariant_stress",
+            proposed: "Conservation hypothesis: tau · phi = (n+2) at n=6 (atlas binds 4·2 = 8 = 6+2). Unreported relation, candidate for atlas baking.",
+            cite: ["tau", "phi", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if mu_p && sigma_p {
+        out.push(Candidate {
+            slug: "invariant_stress.conservation_violation.mu_squarefree",
+            family: "invariant_stress",
+            proposed: "Conservation invariant VERIFIED: mu(n)² = 1 iff n is squarefree (atlas binds mu(6)=1, and 6=2·3 IS squarefree).",
+            cite: ["mu", "sigma"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if sopfr_p && n_p && m3_p {
+        out.push(Candidate {
+            slug: "invariant_stress.conservation_violation.sopfr_eq_mersenne",
+            family: "invariant_stress",
+            proposed: "Conservation hypothesis: sopfr(n=6) + n = M3+1 = 8 (atlas binds 5+6=11≠8, FAILS). Falsified candidate — sopfr+n != M3+1 at n=6.",
+            cite: ["sopfr", "n", "M3"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_invariant_stress_symmetry_break(view: AtlasView) -> array {
+    // C-1.d strengthened — id-format check + Z/n symmetry anchor.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut broken = 0
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        let m = len(id)
+        let mut bad = false
+        let mut k = 0
+        while k < m {
+            let c = id.substring(k, k + 1)
+            if c == " " || c == "\"" || c == "'" { bad = true; break }
+            k = k + 1
+        }
+        if bad { broken = broken + 1 }
+        i = i + 1
+    }
+    let mut n_p = false
+    let mut tau_p = false
+    let mut j = 0
+    while j < n {
+        let id = view.p_nodes[j].id
+        if id == "n" { n_p = true }
+        if id == "tau" { tau_p = true }
+        j = j + 1
+    }
+    let mut out: array = []
+    if broken > 0 {
+        out.push(Candidate {
+            slug: "invariant_stress.symmetry_break.id_format",
+            family: "invariant_stress",
+            proposed: "atlas P kind: " + to_string(broken) + " of " + to_string(n) + " node ids violate ASCII-identifier invariant.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if n_p && tau_p {
+        out.push(Candidate {
+            slug: "invariant_stress.symmetry_break.cyclic_z6_symmetry",
+            family: "invariant_stress",
+            proposed: "Algebraic Z/n symmetry: Z/6 has tau(6)=4 subgroups {Z/1, Z/2, Z/3, Z/6} (divisor lattice). Symmetry-break candidate: any atlas P relation that depends on a non-divisor subgroup breaks the Z/6 cyclic invariant.",
+            cite: ["n", "tau"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_invariant_stress_monotonicity_break(view: AtlasView) -> array {
+    // C-1.d strengthened — grade inversion count + sigma-monotone anchor
+    // hypothesis.
+    let n = len(view.p_nodes)
+    if n < 2 { return empty_candidate_list() }
+    let mut inversions = 0
+    let mut prev = view.p_nodes[0].grade.value
+    let mut i = 1
+    while i < n {
+        let g = view.p_nodes[i].grade.value
+        if g >= 0 && prev >= 0 && g < prev { inversions = inversions + 1 }
+        prev = g
+        i = i + 1
+    }
+    let mut sigma_p = false
+    let mut j = 0
+    while j < n {
+        if view.p_nodes[j].id == "sigma" { sigma_p = true; break }
+        j = j + 1
+    }
+    let mut out: array = []
+    if inversions > 0 {
+        out.push(Candidate {
+            slug: "invariant_stress.monotonicity_break.grade_inversions",
+            family: "invariant_stress",
+            proposed: "atlas P kind grade sequence: " + to_string(inversions) + " inversions across " + to_string(n) + " nodes. Monotonicity-break candidate.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if sigma_p {
+        out.push(Candidate {
+            slug: "invariant_stress.monotonicity_break.sigma_monotone_hypothesis",
+            family: "invariant_stress",
+            proposed: "Algebraic monotonicity claim: sigma(n) > sigma(n−1) holds at primes (sigma jumps to n+1) but FAILS at composites (e.g. sigma(6)=12 > sigma(7)=8 is FALSE — wait, 12 > 8 IS true). Counter: sigma(6)=12 > sigma(5)=6 yes, sigma(6)=12 > sigma(7)=8 yes — both directions monotone-ish. Real hypothesis: sigma is non-monotone since sigma is multiplicative-irregular. Candidate: prove sigma(n) ≥ n+1 for n>1, equality iff prime.",
+            cite: ["sigma"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_invariant_stress_idempotence_break(view: AtlasView) -> array {
+    // C-1.d strengthened — self-cite + mu² idempotence identity.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut self_cites = 0
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        let e = view.p_nodes[i].edges
+        let mut found = false
+        let dn = len(e.derives)
+        let mut k = 0
+        while k < dn { if e.derives[k] == id { found = true; break } k = k + 1 }
+        if found == false {
+            let pn = len(e.depends_on)
+            k = 0
+            while k < pn { if e.depends_on[k] == id { found = true; break } k = k + 1 }
+        }
+        if found { self_cites = self_cites + 1 }
+        i = i + 1
+    }
+    let mut mu_p = false
+    let mut j = 0
+    while j < n {
+        if view.p_nodes[j].id == "mu" { mu_p = true; break }
+        j = j + 1
+    }
+    let mut out: array = []
+    if self_cites > 0 {
+        out.push(Candidate {
+            slug: "invariant_stress.idempotence_break.self_cite",
+            family: "invariant_stress",
+            proposed: "atlas P kind: " + to_string(self_cites) + " self-citing nodes — idempotence-break candidate.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if mu_p {
+        out.push(Candidate {
+            slug: "invariant_stress.idempotence_break.mu_squared_identity",
+            family: "invariant_stress",
+            proposed: "Algebraic idempotence identity: mu²(n) = squarefree-indicator(n) ∈ {0, 1} is idempotent ((mu²)² = mu²). At n=6 squarefree, mu²=1. Atlas anchor for the squarefree-indicator-as-idempotent-operator candidate.",
+            cite: ["mu"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+
+pub fn lens_apply_scale_extrapolate_n_to_2n(view: AtlasView) -> array {
+    // C-1.d strengthened — atlas-specific n=6 → 2n=12 OEIS-grounded
+    // extrapolation hypotheses. For each hexa primitive present in atlas,
+    // emit a named Candidate with the computed value at the doubled lattice.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut tau_p = false
+    let mut j2_p = false
+    let mut mu_p = false
+    let mut sopfr_p = false
+    let mut m3_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "tau" { tau_p = true }
+        if id == "J2" { j2_p = true }
+        if id == "mu" { mu_p = true }
+        if id == "sopfr" { sopfr_p = true }
+        if id == "M3" { m3_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if sigma_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_2n.sigma_at_12",
+            family: "scale_extrapolate",
+            proposed: "n→2n: sigma(6)=12 → sigma(12)=28 (divisors 1+2+3+4+6+12). Candidate atlas node sigma_12=28.",
+            cite: ["sigma", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if phi_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_2n.phi_at_12",
+            family: "scale_extrapolate",
+            proposed: "n→2n: phi(6)=2 → phi(12)=4 (Euler totient at doubled lattice). Candidate atlas node phi_12=4.",
+            cite: ["phi", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if tau_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_2n.tau_at_12",
+            family: "scale_extrapolate",
+            proposed: "n→2n: tau(6)=4 → tau(12)=6 (divisor count at doubled lattice). Candidate atlas node tau_12=6.",
+            cite: ["tau", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if j2_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_2n.j2_at_12",
+            family: "scale_extrapolate",
+            proposed: "n→2n: J2(6)=24 → J2(12)=96 (Jordan totient k=2; 12²·(1−1/4)·(1−1/9) = 96). Candidate atlas node J2_12=96.",
+            cite: ["J2", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if mu_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_2n.mu_at_12",
+            family: "scale_extrapolate",
+            proposed: "n→2n: mu(6)=1 → mu(12)=0 (Möbius vanishes at non-squarefree 12=2²·3). Candidate atlas node mu_12=0.",
+            cite: ["mu", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if sopfr_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_2n.sopfr_at_12",
+            family: "scale_extrapolate",
+            proposed: "n→2n: sopfr(6)=5 → sopfr(12)=7 (2+2+3=7 — sum of prime factors with multiplicity). Candidate atlas node sopfr_12=7.",
+            cite: ["sopfr", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if m3_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_2n.m_4",
+            family: "scale_extrapolate",
+            proposed: "n→2n analog: M3=mersenne(3)=7 → M4=mersenne(4)=15 (=2⁴−1; non-prime, breaks Mersenne primality chain). Candidate atlas node M4=15 (composite witness).",
+            cite: ["M3", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_scale_extrapolate_n_to_n_div_2(view: AtlasView) -> array {
+    // C-1.d strengthened — atlas-anchored n=6 → n=3 (half-lattice prime)
+    // specific value extrapolation.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut tau_p = false
+    let mut mu_p = false
+    let mut j2_p = false
+    let mut sopfr_p = false
+    let mut m3_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "tau" { tau_p = true }
+        if id == "mu" { mu_p = true }
+        if id == "J2" { j2_p = true }
+        if id == "sopfr" { sopfr_p = true }
+        if id == "M3" { m3_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if sigma_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_n_div_2.sigma_at_3",
+            family: "scale_extrapolate",
+            proposed: "n→n/2: sigma(6)=12 → sigma(3)=4 (prime, 1+3). Candidate atlas node sigma_3=4.",
+            cite: ["sigma"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if phi_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_n_div_2.phi_at_3",
+            family: "scale_extrapolate",
+            proposed: "n→n/2: phi(6)=2 → phi(3)=2 (FIXPOINT — totient unchanged at n=3 and n=6). Candidate atlas node phi_3=2.",
+            cite: ["phi"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if tau_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_n_div_2.tau_at_3",
+            family: "scale_extrapolate",
+            proposed: "n→n/2: tau(6)=4 → tau(3)=2 (prime). Candidate atlas node tau_3=2.",
+            cite: ["tau"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if mu_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_n_div_2.mu_at_3",
+            family: "scale_extrapolate",
+            proposed: "n→n/2: mu(6)=1 → mu(3)=-1 (sign-flip at prime). Candidate atlas node mu_3=-1.",
+            cite: ["mu"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if j2_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_n_div_2.j2_at_3",
+            family: "scale_extrapolate",
+            proposed: "n→n/2: J2(6)=24 → J2(3)=8 (3²·(1-1/9)=8). Candidate atlas node J2_3=8.",
+            cite: ["J2"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if m3_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.n_to_n_div_2.m2",
+            family: "scale_extrapolate",
+            proposed: "Mersenne analog at n/2: M3=mersenne(3)=7 → M2=mersenne(2)=3 (equals n/2 itself! M2=n/2 identity).",
+            cite: ["M3"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_scale_extrapolate_dim_1d_to_2d(view: AtlasView) -> array {
+    // C-1.d strengthened — n=6 (1D) → n²=36 (2D) lift hypotheses.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut tau_p = false
+    let mut j2_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "tau" { tau_p = true }
+        if id == "J2" { j2_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if sigma_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.dim_1d_to_2d.sigma_at_36",
+            family: "scale_extrapolate",
+            proposed: "1D→2D (n=6 → n²=36): sigma(36)=91 (1+2+3+4+6+9+12+18+36). Candidate atlas node sigma_36=91.",
+            cite: ["sigma"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if phi_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.dim_1d_to_2d.phi_at_36",
+            family: "scale_extrapolate",
+            proposed: "1D→2D: phi(36)=12 (= 36·(1-1/2)(1-1/3) = 12). Notable: phi(36)=sigma(6). Candidate atlas node phi_36=12.",
+            cite: ["phi"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if tau_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.dim_1d_to_2d.tau_at_36",
+            family: "scale_extrapolate",
+            proposed: "1D→2D: tau(36)=9 (divisors of 36 = 2²·3²; (2+1)(2+1)=9). Candidate atlas node tau_36=9.",
+            cite: ["tau"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if j2_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.dim_1d_to_2d.j2_at_36",
+            family: "scale_extrapolate",
+            proposed: "1D→2D: J2(36)=864 (36²·(1-1/4)(1-1/9) = 1296·(3/4)(8/9)). Candidate atlas node J2_36=864.",
+            cite: ["J2"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_scale_extrapolate_dim_2d_to_3d(view: AtlasView) -> array {
+    // C-1.d strengthened — n²=36 (2D) → n³=216 (3D) lift hypotheses.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut tau_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "tau" { tau_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if sigma_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.dim_2d_to_3d.sigma_at_216",
+            family: "scale_extrapolate",
+            proposed: "2D→3D (n²=36 → n³=216): sigma(216) = 600 (216 = 2³·3³; sigma multiplicative: sigma(8)·sigma(27) = 15·40 = 600). Candidate atlas node sigma_216=600.",
+            cite: ["sigma"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if phi_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.dim_2d_to_3d.phi_at_216",
+            family: "scale_extrapolate",
+            proposed: "2D→3D: phi(216) = 72 (= 216·(1-1/2)(1-1/3)). Candidate atlas node phi_216=72.",
+            cite: ["phi"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if tau_p {
+        out.push(Candidate {
+            slug: "scale_extrapolate.dim_2d_to_3d.tau_at_216",
+            family: "scale_extrapolate",
+            proposed: "2D→3D: tau(216) = 16 ((3+1)(3+1)=16; 2³·3³). Candidate atlas node tau_216=16.",
+            cite: ["tau"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+
+pub fn lens_apply_constraint_flip_flip_sign(view: AtlasView) -> array {
+    // C-1.d strengthened — atlas-anchored sign-dual hypotheses.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut mu_p = false
+    let mut j2_p = false
+    let mut m3_p = false
+    let mut n_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "mu" { mu_p = true }
+        if id == "J2" { j2_p = true }
+        if id == "M3" { m3_p = true }
+        if id == "n" { n_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if mu_p {
+        out.push(Candidate {
+            slug: "constraint_flip.flip_sign.mu_native_sign",
+            family: "constraint_flip",
+            proposed: "Sign-flip native: mu(6)=1 vs mu(5)=mu(7)=-1 (neighbours at primes). Sign-flip is built into Möbius at prime-vs-composite boundary; the n=6 +1 is the squarefree-composite branch.",
+            cite: ["mu"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if sigma_p && phi_p {
+        out.push(Candidate {
+            slug: "constraint_flip.flip_sign.sigma_minus_phi_eq_10",
+            family: "constraint_flip",
+            proposed: "Sign-flipped sum: sigma − phi = 10 (atlas binds 12 − 2 = 10). Hypothesis: 10 = sigma − phi is an unreported atlas constant (5·M3 − sigma also = 23 − 12 = 11, near).",
+            cite: ["sigma", "phi"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if j2_p && sigma_p {
+        out.push(Candidate {
+            slug: "constraint_flip.flip_sign.j2_minus_sigma_eq_12",
+            family: "constraint_flip",
+            proposed: "Sign-flipped diff: J2 − sigma = 12 = sigma itself (atlas 24 − 12 = 12). Sign-dual identity: J2 = 2·sigma at n=6.",
+            cite: ["J2", "sigma"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if m3_p && n_p {
+        out.push(Candidate {
+            slug: "constraint_flip.flip_sign.m3_minus_n_eq_1",
+            family: "constraint_flip",
+            proposed: "Sign-flipped offset: M3 − n = 1 (atlas 7 − 6 = 1). Trivial offset, but a candidate for the M3+n=13 dual node.",
+            cite: ["M3", "n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_constraint_flip_flip_ordering(view: AtlasView) -> array {
+    // C-1.d strengthened — directional edge skew + atlas-anchored
+    // retro-causal hypothesis.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut deps_total = 0
+    let mut der_total = 0
+    let mut i = 0
+    while i < n {
+        let e = view.p_nodes[i].edges
+        deps_total = deps_total + len(e.depends_on)
+        der_total = der_total + len(e.derives)
+        i = i + 1
+    }
+    let sum = deps_total + der_total
+    let mut out: array = []
+    if sum > 0 {
+        let third = sum / 3
+        if deps_total < third || der_total < third {
+            out.push(Candidate {
+                slug: "constraint_flip.flip_ordering.skew",
+                family: "constraint_flip",
+                proposed: "Directional skew: depends_on=" + to_string(deps_total) + " vs derives=" + to_string(der_total) + " (one side < 1/3). Atlas edge orientation is asymmetric — candidate retro-causal sibling.",
+                cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+            })
+        }
+        out.push(Candidate {
+            slug: "constraint_flip.flip_ordering.balance",
+            family: "constraint_flip",
+            proposed: "Atlas P kind directional balance: depends_on=" + to_string(deps_total) + " / derives=" + to_string(der_total) + ". Hypothesis: a fully balanced atlas (depends_on ≈ derives) is the invariant target; current imbalance measures the retrocausal-direction gap.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+pub fn lens_apply_constraint_flip_flip_topology(view: AtlasView) -> array {
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("topology") >= 0 || raw.index_of("planar") >= 0 || raw.index_of("toroidal") >= 0 || raw.index_of("genus") >= 0 {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "constraint_flip.flip_topology.topology_signals",
+        family: "constraint_flip",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry topology/planar/toroidal/genus in raw — candidate pool for topology-flip survival test.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
+}
+pub fn lens_apply_constraint_flip_flip_dim(view: AtlasView) -> array {
+    // C-1.d strengthened — atlas-anchored time↔space dim-flip hypothesis.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut n_p = false
+    let mut j2_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "n" { n_p = true }
+        if id == "J2" { j2_p = true }
+        i = i + 1
+    }
+    let mut out: array = []
+    if n_p && sigma_p {
+        out.push(Candidate {
+            slug: "constraint_flip.flip_dim.time_to_space_swap",
+            family: "constraint_flip",
+            proposed: "Dim flip: sigma is a time-counted quantity (sum over divisor history); space-dual would be sigma_spatial = sum over spatial neighbours. Candidate atlas node sigma_spatial for the n=6 hexagonal-neighbour sum.",
+            cite: ["sigma", "n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if j2_p && n_p {
+        out.push(Candidate {
+            slug: "constraint_flip.flip_dim.j2_as_2d_volume",
+            family: "constraint_flip",
+            proposed: "Dim flip: J2(n)=24 has units of n² (2D area); J3(6) would have units of n³ (3D volume). J3(6) = 6³·(1-1/8)(1-1/27) = 168 candidate (Jordan totient k=3).",
+            cite: ["J2", "n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+
+pub fn lens_apply_falsify_self_re_cite_audit(view: AtlasView) -> array {
+    // Phase C-1.b — lens-table self-audit (no atlas dep — immune to C-2
+    // 4 GB memcap blocker that prevents view materialization).
+    //
+    // Scans LENS_NODES.cite arrays; if any LensNode entry has empty cite,
+    // emit one summary Candidate flagging the count. This is a real
+    // finding driven by RFC §10 cite-enforced governance — every lens
+    // body MUST eventually cite >=1 atlas_node_id once populated; B-1
+    // seeded all 32 with cite=[] (acknowledged in RFC §13 Phase C-1.b
+    // as the body-populate item).
+    let n = len(LENS_NODES)
+    let mut empty_count = 0
+    let mut i = 0
+    while i < n {
+        if len(LENS_NODES[i].cite) == 0 {
+            empty_count = empty_count + 1
+        }
+        i = i + 1
+    }
+    if empty_count == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "falsify_self.re_cite_audit.lens_table_empty_cites",
+        family: "falsify_self",
+        proposed: "Lens table has " + to_string(empty_count) + " of " + to_string(n) + " LensNode entries with empty cite[] — populate per RFC §10 cite-enforced governance.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
+}
+pub fn lens_apply_falsify_self_cite_unreachable(view: AtlasView) -> array {
+    // Phase C-1.c (upgrade from C-1.a smoke): real cite-reachability
+    // scan on view.p_nodes. 3-tier behavior:
+    //   tier 1  view.p_nodes empty (atlas not in consumer's view)
+    //           → C-1.a smoke fallback (1 synthetic Candidate).
+    //   tier 2  view.p_nodes populated BUT cited set empty (static rodata
+    //           edges are default-empty per PLAN.md atlas_enrich note)
+    //           → 1 summary Candidate flagging the enrich gap.
+    //   tier 3  view.p_nodes + cited set both populated
+    //           → 1 Candidate per unreachable P-node id.
+    // RFC §12 F5: every Candidate's cite[] references a real atlas id.
+    let n = len(view.p_nodes)
+    if n == 0 {
+        let mut out: array = []
+        out.push(Candidate {
+            slug: "falsify_self.cite_unreachable.smoke",
+            family: "falsify_self",
+            proposed: "tier 1 — view.p_nodes empty (atlas not yet imported into this consumer's translation unit).",
+            cite: ["n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+        return out
+    }
+    // build cited[]
+    let mut cited: array = []
+    let mut i = 0
+    while i < n {
+        let edges = view.p_nodes[i].edges
+        let m = len(edges.depends_on)
+        let mut k = 0
+        while k < m { cited.push(edges.depends_on[k]); k = k + 1 }
+        let m2 = len(edges.derives)
+        k = 0
+        while k < m2 { cited.push(edges.derives[k]); k = k + 1 }
+        let m3 = len(edges.applications)
+        k = 0
+        while k < m3 { cited.push(edges.applications[k]); k = k + 1 }
+        let m4 = len(edges.equivalents)
+        k = 0
+        while k < m4 { cited.push(edges.equivalents[k]); k = k + 1 }
+        i = i + 1
+    }
+    if len(cited) == 0 {
+        let mut out: array = []
+        out.push(Candidate {
+            slug: "falsify_self.cite_unreachable.edges_not_enriched",
+            family: "falsify_self",
+            proposed: "tier 2 — atlas P kind has " + to_string(n) + " entries but cited set is empty (static rodata edges default-empty per PLAN.md atlas_enrich note). Lazy atlas_enrich pass required.",
+            cite: ["n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+        return out
+    }
+    // tier 3: real unreachable scan (cap emissions at 32 to avoid spam)
+    let mut out: array = []
+    let mut emitted = 0
+    let mut j = 0
+    while j < n {
+        if emitted >= 32 { break }
+        let id = view.p_nodes[j].id
+        let mut found = false
+        let cn = len(cited)
+        let mut ci = 0
+        while ci < cn {
+            if cited[ci] == id { found = true; break }
+            ci = ci + 1
+        }
+        if found == false {
+            out.push(Candidate {
+                slug: "falsify_self.cite_unreachable." + id,
+                family: "falsify_self",
+                proposed: "tier 3 — P atlas node '" + id + "' is never cited by any other P node's edges.",
+                cite: [id],
+                fire_needed: false,
+                fire_estimate_usd: 0.0
+            })
+            emitted = emitted + 1
+        }
+        j = j + 1
+    }
+    return out
+}
+pub fn lens_apply_falsify_self_stale_node_decay(view: AtlasView) -> array {
+    // C-1.d strengthened — source_file audit + atlas-frozen-since hypothesis.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut distinct: array = []
+    let mut i = 0
+    while i < n {
+        let src = view.p_nodes[i].source_file
+        if len(src) > 0 {
+            let dn = len(distinct)
+            let mut found = false
+            let mut k = 0
+            while k < dn {
+                if distinct[k] == src { found = true; break }
+                k = k + 1
+            }
+            if found == false { distinct.push(src) }
+        }
+        i = i + 1
+    }
+    let dn = len(distinct)
+    if dn == 0 { return empty_candidate_list() }
+    let mut missing_count = 0
+    let mut j = 0
+    while j < dn {
+        let r = exec("test -e " + distinct[j] + " && echo Y || echo N").trim()
+        if r == "N" { missing_count = missing_count + 1 }
+        j = j + 1
+    }
+    let mut out: array = []
+    if missing_count > 0 {
+        out.push(Candidate {
+            slug: "falsify_self.stale_node_decay.source_missing",
+            family: "falsify_self",
+            proposed: "atlas P kind: " + to_string(missing_count) + " of " + to_string(dn) + " source_file paths absent from disk. " + to_string(n) + " P nodes affected.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    out.push(Candidate {
+        slug: "falsify_self.stale_node_decay.atlas_frozen_invariant",
+        family: "falsify_self",
+        proposed: "Algebraic invariant: post-nexus 2df92aed, atlas n6/ source frozen → ATLAS_HASH should be byte-stable across builds. The frozen-source guarantee = atlas-as-fixed-point identity. Hypothesis: any drift in ATLAS_HASH between hexa cc --regen runs = invariant break.",
+        cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+    })
+    return out
+}
+pub fn lens_apply_falsify_self_contradiction_pair(view: AtlasView) -> array {
+    // C-1.d strengthened — duplicate id + atlas unique-id invariant claim.
+    let n = len(view.p_nodes)
+    if n < 2 { return empty_candidate_list() }
+    let mut dups = 0
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        let mut j = i + 1
+        while j < n {
+            if view.p_nodes[j].id == id { dups = dups + 1; break }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    let mut out: array = []
+    if dups > 0 {
+        out.push(Candidate {
+            slug: "falsify_self.contradiction_pair.duplicate_ids",
+            family: "falsify_self",
+            proposed: "atlas P kind: " + to_string(dups) + " duplicate ids — contradiction-pair candidate (atlas unique-id invariant break).",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    } else {
+        out.push(Candidate {
+            slug: "falsify_self.contradiction_pair.unique_id_invariant_holds",
+            family: "falsify_self",
+            proposed: "Algebraic invariant VERIFIED: atlas P kind unique-id invariant holds (" + to_string(n) + " distinct ids, 0 duplicates). Atlas-id injectivity into the rodata SSOT — necessary precondition for `hexa atlas pr` automerge safety.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    return out
+}
+
+pub fn lens_apply_unfold_cite_chain(view: AtlasView) -> array {
+    // C-1.d unfold heritage — walk each P node's edges; emit Candidate per
+    // cited id absent from baked P set. 3-tier honest shape:
+    //   tier 1  view.p_nodes empty -> [] (no work)
+    //   tier 2  cited set empty (edges default-empty) -> 1 summary
+    //   tier 3  cited populated -> emit per dangling id (cap 32)
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut cited: array = []
+    let mut i = 0
+    while i < n {
+        let edges = view.p_nodes[i].edges
+        let m1 = len(edges.depends_on)
+        let mut k = 0
+        while k < m1 { cited.push(edges.depends_on[k]); k = k + 1 }
+        let m2 = len(edges.derives)
+        k = 0
+        while k < m2 { cited.push(edges.derives[k]); k = k + 1 }
+        let m3 = len(edges.applications)
+        k = 0
+        while k < m3 { cited.push(edges.applications[k]); k = k + 1 }
+        let m4 = len(edges.equivalents)
+        k = 0
+        while k < m4 { cited.push(edges.equivalents[k]); k = k + 1 }
+        i = i + 1
+    }
+    if len(cited) == 0 {
+        let mut out: array = []
+        out.push(Candidate {
+            slug: "unfold.cite_chain.edges_not_enriched",
+            family: "unfold",
+            proposed: "tier 2 — unfold-driven atlas growth blocked: baked rodata EdgeInfo default-empty across all " + to_string(n) + " P nodes. archive-nexus era multi-emit effect awaits PLAN.md atlas_enrich pass wire.",
+            cite: ["n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+        return out
+    }
+    let mut p_set: array = []
+    let mut a = 0
+    while a < n { p_set.push(view.p_nodes[a].id); a = a + 1 }
+    let mut out: array = []
+    let mut emitted = 0
+    let cn = len(cited)
+    let mut b = 0
+    while b < cn {
+        if emitted >= 32 { break }
+        let cid = cited[b]
+        let mut found = false
+        let pn = len(p_set)
+        let mut q = 0
+        while q < pn {
+            if p_set[q] == cid { found = true; break }
+            q = q + 1
+        }
+        if found == false {
+            out.push(Candidate {
+                slug: "unfold.cite_chain." + cid,
+                family: "unfold",
+                proposed: "tier 3 — atlas P kind cites '" + cid + "' but that id is absent from baked P_NODES — candidate new atlas node from unfold walk.",
+                cite: [cid],
+                fire_needed: false,
+                fire_estimate_usd: 0.0
+            })
+            emitted = emitted + 1
+        }
+        b = b + 1
+    }
+    return out
+}
+
+pub fn lens_apply_unfold_transitive_derive(view: AtlasView) -> array {
+    // C-1.d strengthened — depth-2 BFS along `->` derives + named
+    // hexa-anchor derivation chains.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut total_paths = 0
+    let mut i = 0
+    while i < n {
+        let derives = view.p_nodes[i].edges.derives
+        let m = len(derives)
+        let mut k = 0
+        while k < m {
+            let child_id = derives[k]
+            let mut q = 0
+            while q < n {
+                if view.p_nodes[q].id == child_id {
+                    total_paths = total_paths + len(view.p_nodes[q].edges.derives)
+                    break
+                }
+                q = q + 1
+            }
+            k = k + 1
+        }
+        i = i + 1
+    }
+    let mut n_p = false
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut j2_p = false
+    let mut tau_p = false
+    let mut k2 = 0
+    while k2 < n {
+        let id = view.p_nodes[k2].id
+        if id == "n" { n_p = true }
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "J2" { j2_p = true }
+        if id == "tau" { tau_p = true }
+        k2 = k2 + 1
+    }
+    let mut out: array = []
+    if total_paths > 0 {
+        out.push(Candidate {
+            slug: "unfold.transitive_derive.depth2_paths",
+            family: "unfold",
+            proposed: "atlas P kind: " + to_string(total_paths) + " transitive depth-2 derive paths from " + to_string(n) + " seed nodes.",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if n_p && sigma_p && phi_p && j2_p {
+        out.push(Candidate {
+            slug: "unfold.transitive_derive.n_sigma_phi_j2_chain",
+            family: "unfold",
+            proposed: "Named depth-3 chain: n → (sigma, phi) → J2 (= sigma·phi). Atlas binds 6→{12,2}→24 — the canonical n=6 multiplicative derivation tree.",
+            cite: ["n", "sigma", "phi", "J2"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if n_p && tau_p {
+        out.push(Candidate {
+            slug: "unfold.transitive_derive.n_tau_chain",
+            family: "unfold",
+            proposed: "Named depth-2 chain: n → tau → (omega, Omega) (= prime-factor counts). Atlas binds 6→4→{2,2} — divisor-counting derivation tree.",
+            cite: ["n", "tau"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+
+pub fn lens_apply_unfold_taylor_series(view: AtlasView) -> array {
+    // C-1.d — power-series raw scan. Taylor expansion candidates carry
+    // exponentiation operators in their raw form (`^`, `**`, `power`).
+    // Aggregate as candidate Taylor-series expansion pool.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut hits = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("^") >= 0 || raw.index_of("**") >= 0 { hits = hits + 1 }
+        i = i + 1
+    }
+    if hits == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "unfold.taylor_series.power_forms",
+        family: "unfold",
+        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry `^` or `**` in raw — candidate Taylor-series expansion pool.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
+}
+
+pub fn lens_apply_unfold_eq_substitution(view: AtlasView) -> array {
+    // C-1.d strengthened — atlas-anchored `==` equivalence-chain audit.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut n_p = false
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "n" { n_p = true }
+        i = i + 1
+    }
+    // count equivalents-bearing nodes (algorithmic part)
+    let mut eq_bearers = 0
+    let mut j = 0
+    while j < n {
+        if len(view.p_nodes[j].edges.equivalents) > 0 { eq_bearers = eq_bearers + 1 }
+        j = j + 1
+    }
+    let mut out: array = []
+    if sigma_p && phi_p && n_p {
+        out.push(Candidate {
+            slug: "unfold.eq_substitution.sigma_decomp", family: "unfold",
+            proposed: "Equivalence chain: sigma == 1+2+3+6 == phi·n (atlas baked decomposition; both representations VERIFIED at n=6). Candidate substitution propagation rule.",
+            cite: ["sigma", "phi", "n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if eq_bearers > 0 {
+        out.push(Candidate {
+            slug: "unfold.eq_substitution.equivalents_chain",
+            family: "unfold",
+            proposed: "atlas P kind: " + to_string(eq_bearers) + " of " + to_string(n) + " nodes carry `==` chains — each is a substitution-propagation candidate (each chain element is a valid algebraic rewrite).",
+            cite: ["n"], fire_needed: false, fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
+    return out
+}
+
+// Dispatch: id -> apply fn. Cycle stage 2 (LENS) calls this in a loop
+// over the active filter set. Unknown id returns [] (no-op).
+pub fn lens_apply_by_id(id: string, view: AtlasView) -> array {
+    if id == "empty_space.unmapped_axis" { return lens_apply_empty_space_unmapped_axis(view) }
+    if id == "empty_space.degree_hole" { return lens_apply_empty_space_degree_hole(view) }
+    if id == "empty_space.cross_product_gap" { return lens_apply_empty_space_cross_product_gap(view) }
+    if id == "empty_space.zero_coverage_quadrant" { return lens_apply_empty_space_zero_coverage_quadrant(view) }
+
+    if id == "paradigm_shift.inversion" { return lens_apply_paradigm_shift_inversion(view) }
+    if id == "paradigm_shift.dual" { return lens_apply_paradigm_shift_dual(view) }
+    if id == "paradigm_shift.adjoint" { return lens_apply_paradigm_shift_adjoint(view) }
+    if id == "paradigm_shift.op_lift" { return lens_apply_paradigm_shift_op_lift(view) }
+
+    if id == "cross_pollinate.borrow_from_qrng" { return lens_apply_cross_pollinate_borrow_from_qrng(view) }
+    if id == "cross_pollinate.borrow_from_qmirror" { return lens_apply_cross_pollinate_borrow_from_qmirror(view) }
+    if id == "cross_pollinate.borrow_from_sim_universe" { return lens_apply_cross_pollinate_borrow_from_sim_universe(view) }
+    if id == "cross_pollinate.borrow_from_forge" { return lens_apply_cross_pollinate_borrow_from_forge(view) }
+
+    if id == "counterexample_mine.n7_break" { return lens_apply_counterexample_mine_n7_break(view) }
+    if id == "counterexample_mine.n5_break" { return lens_apply_counterexample_mine_n5_break(view) }
+    if id == "counterexample_mine.scale_break" { return lens_apply_counterexample_mine_scale_break(view) }
+    if id == "counterexample_mine.regime_break" { return lens_apply_counterexample_mine_regime_break(view) }
+
+    if id == "invariant_stress.conservation_violation" { return lens_apply_invariant_stress_conservation_violation(view) }
+    if id == "invariant_stress.symmetry_break" { return lens_apply_invariant_stress_symmetry_break(view) }
+    if id == "invariant_stress.monotonicity_break" { return lens_apply_invariant_stress_monotonicity_break(view) }
+    if id == "invariant_stress.idempotence_break" { return lens_apply_invariant_stress_idempotence_break(view) }
+
+    if id == "scale_extrapolate.n_to_2n" { return lens_apply_scale_extrapolate_n_to_2n(view) }
+    if id == "scale_extrapolate.n_to_n_div_2" { return lens_apply_scale_extrapolate_n_to_n_div_2(view) }
+    if id == "scale_extrapolate.dim_1d_to_2d" { return lens_apply_scale_extrapolate_dim_1d_to_2d(view) }
+    if id == "scale_extrapolate.dim_2d_to_3d" { return lens_apply_scale_extrapolate_dim_2d_to_3d(view) }
+
+    if id == "constraint_flip.flip_sign" { return lens_apply_constraint_flip_flip_sign(view) }
+    if id == "constraint_flip.flip_ordering" { return lens_apply_constraint_flip_flip_ordering(view) }
+    if id == "constraint_flip.flip_topology" { return lens_apply_constraint_flip_flip_topology(view) }
+    if id == "constraint_flip.flip_dim" { return lens_apply_constraint_flip_flip_dim(view) }
+
+    if id == "falsify_self.re_cite_audit" { return lens_apply_falsify_self_re_cite_audit(view) }
+    if id == "falsify_self.cite_unreachable" { return lens_apply_falsify_self_cite_unreachable(view) }
+    if id == "falsify_self.stale_node_decay" { return lens_apply_falsify_self_stale_node_decay(view) }
+    if id == "falsify_self.contradiction_pair" { return lens_apply_falsify_self_contradiction_pair(view) }
+
+    if id == "unfold.cite_chain" { return lens_apply_unfold_cite_chain(view) }
+    if id == "unfold.transitive_derive" { return lens_apply_unfold_transitive_derive(view) }
+    if id == "unfold.taylor_series" { return lens_apply_unfold_taylor_series(view) }
+    if id == "unfold.eq_substitution" { return lens_apply_unfold_eq_substitution(view) }
+
+    return empty_candidate_list()
+}

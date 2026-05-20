@@ -118,7 +118,7 @@ fn _rv_strip_comments(src: str) -> str {
 // CLEAN-ROOM: replace punctuation/symbol chars with spaces so a simple
 // whitespace split yields token stream (IEEE 1364-2005 §3.5).
 fn _rv_normalize_punct(s: str) -> str {
-    let punct = [";", ",", "(", ")", "[", "]", "{", "}", "=", "&", "|", "~", "^"]
+    let punct = [";", ",", "(", ")", "[", "]", "{", "}", "=", "&", "|", "~", "^", "<", ">", "!", "+", "-", "*", "/", "%", ":", "@"]
     let mut out = s
     let mut i = 0
     while i < len(punct) {
@@ -128,7 +128,31 @@ fn _rv_normalize_punct(s: str) -> str {
     return out
 }
 
-// CLEAN-ROOM: whitespace tokeniser.
+// CLEAN-ROOM: merge adjacent single-char tokens back into 2-char
+// Verilog operators (== != <= >= && || << >>) that _rv_normalize_punct
+// split apart (IEEE 1364-2005 §5.1 — these are single lexical tokens).
+fn _rv_merge_ops(toks: [str]) -> [str] {
+    let n = len(toks)
+    let mut out: [str] = []
+    let mut i = 0
+    while i < n {
+        if i + 1 < n {
+            let two = toks[i] + toks[i + 1]
+            if two == "==" || two == "!=" || two == "<=" || two == ">="
+               || two == "&&" || two == "||" || two == "<<" || two == ">>"
+               || two == "-:" || two == "+:" {
+                out = out.push(two)
+                i = i + 2
+                continue
+            }
+        }
+        out = out.push(toks[i])
+        i = i + 1
+    }
+    return out
+}
+
+// CLEAN-ROOM: whitespace tokeniser + 2-char operator merge.
 fn _rv_tokens(s: str) -> [str] {
     let raw = s.replace("\n", " ").replace("\t", " ").split(" ")
     let mut out: [str] = []
@@ -138,7 +162,288 @@ fn _rv_tokens(s: str) -> [str] {
         if len(t) > 0 { out = out.push(t) }
         i = i + 1
     }
-    return out
+    return _rv_merge_ops(out)
+}
+
+// ─── constant-expression evaluator (rfc_006 §4 module-2 scope, D68) ──────
+//
+// CLEAN-ROOM: Verilog-2005 §5 constant expressions — the integer-valued
+// subset needed to elaborate parameter/localparam, [hi:lo] wire ranges,
+// generate-for bounds, and replication counts. Re-derived from IEEE
+// 1364-2005 §5.1 operator precedence; no upstream code copied.
+//
+// Scope: integer arithmetic only (parameters/widths are integers). The
+// evaluator does NOT model bit-width or X/Z — those belong to RTLIL
+// elaboration, not constant folding.
+
+// Parameter/localparam symbol table — parallel name/value arrays
+// (booksim stdlib idiom; no map type in this stdlib layer).
+struct SymTab {
+    names:  [str],
+    values: [int],
+}
+
+fn symtab_new() -> SymTab {
+    return SymTab { names: [], values: [] }
+}
+
+fn symtab_put(s: SymTab, name: str, value: int) -> SymTab {
+    // update in place if `name` is already present (genvar update in
+    // generate-for unroll); otherwise append.
+    let mut i = 0
+    while i < len(s.names) {
+        if s.names[i] == name {
+            let mut newvals: [int] = []
+            let mut k = 0
+            while k < len(s.values) {
+                if k == i {
+                    newvals = newvals.push(value)
+                } else {
+                    newvals = newvals.push(s.values[k])
+                }
+                k = k + 1
+            }
+            return SymTab { names: s.names, values: newvals }
+        }
+        i = i + 1
+    }
+    return SymTab { names: s.names.push(name), values: s.values.push(value) }
+}
+
+fn symtab_has(s: SymTab, name: str) -> int {
+    let mut i = 0
+    while i < len(s.names) {
+        if s.names[i] == name { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn symtab_get(s: SymTab, name: str) -> int {
+    let mut i = 0
+    while i < len(s.names) {
+        if s.names[i] == name { return s.values[i] }
+        i = i + 1
+    }
+    return 0
+}
+
+// Result of evaluating a constant (sub)expression: the integer value,
+// the token index just past what was consumed, and an error string
+// (empty = ok). No tuples in this toolchain — struct return.
+struct ConstEval {
+    value: int,
+    pos:   int,
+    err:   str,
+}
+
+// CLEAN-ROOM: single hex/dec digit → value, or -1 if not a digit.
+fn _rv_digit(c: str, base: int) -> int {
+    let mut v = 0 - 1
+    if c == "0" { v = 0 }
+    if c == "1" { v = 1 }
+    if c == "2" { v = 2 }
+    if c == "3" { v = 3 }
+    if c == "4" { v = 4 }
+    if c == "5" { v = 5 }
+    if c == "6" { v = 6 }
+    if c == "7" { v = 7 }
+    if c == "8" { v = 8 }
+    if c == "9" { v = 9 }
+    if base == 16 {
+        if c == "a" { v = 10 }
+        if c == "b" { v = 11 }
+        if c == "c" { v = 12 }
+        if c == "d" { v = 13 }
+        if c == "e" { v = 14 }
+        if c == "f" { v = 15 }
+        if c == "A" { v = 10 }
+        if c == "B" { v = 11 }
+        if c == "C" { v = 12 }
+        if c == "D" { v = 13 }
+        if c == "E" { v = 14 }
+        if c == "F" { v = 15 }
+    }
+    if v >= base { return 0 - 1 }
+    return v
+}
+
+// CLEAN-ROOM: parse a digit run `s[from:]` in `base`, ignoring `_`
+// (Verilog 1364-2005 §3.5.1 allows underscores in numbers). Returns
+// the accumulated value; stops at the first non-digit.
+fn _rv_parse_digits(s: str, from: int, base: int) -> int {
+    let n = len(s)
+    let mut acc = 0
+    let mut i = from
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "_" { i = i + 1; continue }
+        let d = _rv_digit(c, base)
+        if d < 0 { return acc }
+        acc = acc * base + d
+        i = i + 1
+    }
+    return acc
+}
+
+// CLEAN-ROOM: integer value of a single Verilog number token.
+//   `64`        → 64           (unsized decimal)
+//   `3'd2`      → 2            (sized decimal — size ignored for folding)
+//   `8'hff`     → 255          (sized hex)
+//   `4'b1010`   → 10           (sized binary)
+//   `1'b0`      → 0
+// Returns -1 on a token that is not a number literal.
+fn _rv_literal_value(tok: str) -> int {
+    let n = len(tok)
+    if n == 0 { return 0 - 1 }
+    // find a `'` (sized literal marker)
+    let mut tick = 0 - 1
+    let mut i = 0
+    while i < n {
+        if tok.substring(i, i + 1) == "'" { tick = i }
+        i = i + 1
+    }
+    if tick < 0 {
+        // unsized decimal — must be all digits
+        if _rv_digit(tok.substring(0, 1), 10) < 0 { return 0 - 1 }
+        return _rv_parse_digits(tok, 0, 10)
+    }
+    // sized: <size>'<base><digits> ; base char follows the tick
+    if tick + 1 >= n { return 0 - 1 }
+    let basec = tok.substring(tick + 1, tick + 2)
+    let mut base = 10
+    let mut dstart = tick + 2
+    if basec == "d" { base = 10 }
+    if basec == "h" { base = 16 }
+    if basec == "b" { base = 2 }
+    if basec == "o" { base = 8 }
+    if basec == "D" { base = 10 }
+    if basec == "H" { base = 16 }
+    if basec == "B" { base = 2 }
+    if basec == "O" { base = 8 }
+    return _rv_parse_digits(tok, dstart, base)
+}
+
+// CLEAN-ROOM: binary-operator precedence (IEEE 1364-2005 §5.1.2).
+// Higher number = binds tighter. 0 = not a binary operator.
+fn _rv_binop_prec(op: str) -> int {
+    if op == "||" { return 1 }
+    if op == "&&" { return 2 }
+    if op == "|"  { return 3 }
+    if op == "^"  { return 4 }
+    if op == "&"  { return 5 }
+    if op == "==" { return 6 }
+    if op == "!=" { return 6 }
+    if op == "<"  { return 7 }
+    if op == ">"  { return 7 }
+    if op == "<=" { return 7 }
+    if op == ">=" { return 7 }
+    if op == "<<" { return 8 }
+    if op == ">>" { return 8 }
+    if op == "+"  { return 9 }
+    if op == "-"  { return 9 }
+    if op == "*"  { return 10 }
+    if op == "/"  { return 10 }
+    if op == "%"  { return 10 }
+    return 0
+}
+
+// CLEAN-ROOM: apply a binary operator to two folded integer operands.
+fn _rv_apply_binop(op: str, a: int, b: int) -> int {
+    if op == "||" { if a != 0 { return 1 } if b != 0 { return 1 } return 0 }
+    if op == "&&" { if a != 0 { if b != 0 { return 1 } } return 0 }
+    if op == "|"  { return a | b }
+    if op == "^"  { return a ^ b }
+    if op == "&"  { return a & b }
+    if op == "==" { if a == b { return 1 } return 0 }
+    if op == "!=" { if a != b { return 1 } return 0 }
+    if op == "<"  { if a < b  { return 1 } return 0 }
+    if op == ">"  { if a > b  { return 1 } return 0 }
+    if op == "<=" { if a <= b { return 1 } return 0 }
+    if op == ">=" { if a >= b { return 1 } return 0 }
+    if op == "<<" { return a << b }
+    if op == ">>" { return a >> b }
+    if op == "+"  { return a + b }
+    if op == "-"  { return a - b }
+    if op == "*"  { return a * b }
+    if op == "/"  { if b == 0 { return 0 } return a / b }
+    if op == "%"  { if b == 0 { return 0 } return a % b }
+    return 0
+}
+
+// CLEAN-ROOM: evaluate a primary — literal, identifier (looked up in
+// `tab`), parenthesised expression, or unary `-` / `~` / `!`.
+fn _rv_eval_primary(toks: [str], pos: int, tab: SymTab) -> ConstEval {
+    let n = len(toks)
+    if pos >= n {
+        return ConstEval { value: 0, pos: pos, err: "const-expr: unexpected end" }
+    }
+    let t = toks[pos]
+    // unary operators
+    if t == "-" {
+        let inner = _rv_eval_primary(toks, pos + 1, tab)
+        if len(inner.err) > 0 { return inner }
+        return ConstEval { value: 0 - inner.value, pos: inner.pos, err: "" }
+    }
+    if t == "~" {
+        let inner = _rv_eval_primary(toks, pos + 1, tab)
+        if len(inner.err) > 0 { return inner }
+        return ConstEval { value: 0 - inner.value - 1, pos: inner.pos, err: "" }
+    }
+    if t == "!" {
+        let inner = _rv_eval_primary(toks, pos + 1, tab)
+        if len(inner.err) > 0 { return inner }
+        let mut v = 1
+        if inner.value != 0 { v = 0 }
+        return ConstEval { value: v, pos: inner.pos, err: "" }
+    }
+    // parenthesised
+    if t == "(" {
+        let inner = _rv_eval_expr(toks, pos + 1, tab, 1)
+        if len(inner.err) > 0 { return inner }
+        if inner.pos >= n {
+            return ConstEval { value: 0, pos: inner.pos, err: "const-expr: missing `)`" }
+        }
+        if toks[inner.pos] != ")" {
+            return ConstEval { value: 0, pos: inner.pos,
+                err: "const-expr: expected `)` got `" + toks[inner.pos] + "`" }
+        }
+        return ConstEval { value: inner.value, pos: inner.pos + 1, err: "" }
+    }
+    // numeric literal
+    let lit = _rv_literal_value(t)
+    if lit >= 0 {
+        return ConstEval { value: lit, pos: pos + 1, err: "" }
+    }
+    // identifier — must resolve in the symbol table
+    if symtab_has(tab, t) == 1 {
+        return ConstEval { value: symtab_get(tab, t), pos: pos + 1, err: "" }
+    }
+    return ConstEval { value: 0, pos: pos,
+        err: "const-expr: unresolved `" + t + "` (not a literal or known parameter)" }
+}
+
+// CLEAN-ROOM: precedence-climbing constant-expression evaluator.
+// Evaluates from `pos` while the next binary operator's precedence is
+// >= `min_prec`; returns the folded value + the index just past the
+// last consumed token. (IEEE 1364-2005 §5.1.2 — left-associative.)
+fn _rv_eval_expr(toks: [str], pos: int, tab: SymTab, min_prec: int) -> ConstEval {
+    let lhs = _rv_eval_primary(toks, pos, tab)
+    if len(lhs.err) > 0 { return lhs }
+    let mut acc = lhs.value
+    let mut i = lhs.pos
+    let n = len(toks)
+    while i < n {
+        let op = toks[i]
+        let prec = _rv_binop_prec(op)
+        if prec == 0 { return ConstEval { value: acc, pos: i, err: "" } }
+        if prec < min_prec { return ConstEval { value: acc, pos: i, err: "" } }
+        let rhs = _rv_eval_expr(toks, i + 1, tab, prec + 1)
+        if len(rhs.err) > 0 { return rhs }
+        acc = _rv_apply_binop(op, acc, rhs.value)
+        i = rhs.pos
+    }
+    return ConstEval { value: acc, pos: i, err: "" }
 }
 
 // ─── private parsers ─────────────────────────────────────────────────────
@@ -185,6 +490,35 @@ fn read_verilog(src: str) -> ReadVerilogResult {
             }
             st = _ps_take(st)
             let mut m = rtlil_new_module(name)
+            let mut tab = symtab_new()
+            let mut funcs: [VFunc] = []
+            // optional `#( parameter NAME = EXPR , … )` header
+            if _ps_peek(st) == "#" {
+                let ph = _rv_parse_param_header(st, tab)
+                st = ph.st; tab = ph.tab
+                if len(st.err) > 0 {
+                    return ReadVerilogResult { ok: 0, design: d, message: st.err }
+                }
+            }
+            // ANSI-style port list — `(` immediately followed by a
+            // direction keyword. Parse it; non-ANSI falls through to the
+            // skip-until-`;` path (ports re-declared in the body).
+            if _ps_peek(st) == "(" {
+                let mut is_ansi = 0
+                if st.pos + 1 < len(st.toks) {
+                    let n1 = st.toks[st.pos + 1]
+                    if n1 == "input"  { is_ansi = 1 }
+                    if n1 == "output" { is_ansi = 1 }
+                    if n1 == "inout"  { is_ansi = 1 }
+                }
+                if is_ansi == 1 {
+                    let pr = _rv_parse_ansi_ports(st, m, tab)
+                    st = pr.st; m = pr.m
+                    if len(st.err) > 0 {
+                        return ReadVerilogResult { ok: 0, design: d, message: st.err }
+                    }
+                }
+            }
             // optional (port-list); skip until ; or endmodule
             // consume until ';' to finish the module header
             while st.pos < len(st.toks) {
@@ -202,23 +536,23 @@ fn read_verilog(src: str) -> ReadVerilogResult {
                 }
                 // wire / input / output / inout declarations
                 if bt == "input" {
-                    let r1 = _rv_parse_port_decl(st, m, 1)
+                    let r1 = _rv_parse_port_decl(st, m, 1, tab)
                     st = r1.st; m = r1.m
                 } else {
                     if bt == "output" {
-                        let r2 = _rv_parse_port_decl(st, m, 2)
+                        let r2 = _rv_parse_port_decl(st, m, 2, tab)
                         st = r2.st; m = r2.m
                     } else {
                         if bt == "inout" {
-                            let r3 = _rv_parse_port_decl(st, m, 3)
+                            let r3 = _rv_parse_port_decl(st, m, 3, tab)
                             st = r3.st; m = r3.m
                         } else {
-                            if bt == "wire" {
-                                let r4 = _rv_parse_port_decl(st, m, 0)
+                            if bt == "wire" || bt == "reg" || bt == "integer" {
+                                let r4 = _rv_parse_port_decl(st, m, 0, tab)
                                 st = r4.st; m = r4.m
                             } else {
                                 if bt == "assign" {
-                                    let r5 = _rv_parse_assign(st, m)
+                                    let r5 = _rv_parse_assign(st, m, tab)
                                     st = r5.st; m = r5.m
                                     if len(st.err) > 0 {
                                         return ReadVerilogResult {
@@ -226,17 +560,71 @@ fn read_verilog(src: str) -> ReadVerilogResult {
                                         }
                                     }
                                 } else {
-                                    // unsupported construct — fail-loud
-                                    return ReadVerilogResult {
-                                        ok: 0, design: d,
-                                        message: "read_verilog: unsupported construct `"
-                                            + bt + "` (synth-subset only — see rfc_006 §4 module-2 scope)"
+                                    if bt == "localparam" {
+                                        let rl = _rv_parse_localparam(st, tab)
+                                        st = rl.st; tab = rl.tab
+                                        if len(st.err) > 0 {
+                                            return ReadVerilogResult {
+                                                ok: 0, design: d, message: st.err
+                                            }
+                                        }
+                                    } else {
+                                        if bt == "function" {
+                                            let rf = _rv_parse_function(st)
+                                            st = rf.st
+                                            if len(rf.err) > 0 {
+                                                return ReadVerilogResult {
+                                                    ok: 0, design: d, message: rf.err
+                                                }
+                                            }
+                                            funcs = funcs.push(rf.func)
+                                        } else {
+                                            if bt == "generate" {
+                                                let rg = _rv_parse_generate(st, m, tab)
+                                                st = rg.st
+                                                m = rg.m
+                                                tab = rg.tab
+                                                if len(st.err) > 0 {
+                                                    return ReadVerilogResult {
+                                                        ok: 0, design: d, message: st.err
+                                                    }
+                                                }
+                                            } else {
+                                                if bt == "always" {
+                                                    let ra = _rv_parse_always(st, m, tab)
+                                                    st = ra.st
+                                                    m = ra.m
+                                                    if len(st.err) > 0 {
+                                                        return ReadVerilogResult {
+                                                            ok: 0, design: d, message: st.err
+                                                        }
+                                                    }
+                                                } else {
+                                                    if bt == "genvar" {
+                                                    // `genvar NAME ;` — declaration only, value
+                                                    // is set inside the generate-for init.
+                                                    while st.pos < len(st.toks) {
+                                                        if _ps_peek(st) == ";" {
+                                                            st = _ps_take(st); break
+                                                        }
+                                                        st = _ps_take(st)
+                                                    }
+                                                } else {
+                                                    return ReadVerilogResult {
+                                                        ok: 0, design: d,
+                                                        message: "read_verilog: unsupported construct `"
+                                                            + bt + "` (synth-subset only — see rfc_006 §4 module-2 scope)"
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+            }
             }
             d = rtlil_design_add(d, m)
         } else {
@@ -254,27 +642,52 @@ struct RvStep {
 
 // CLEAN-ROOM: parse `(input|output|inout|wire) name1, name2 … ;`
 // dir_kind: 0=internal-wire · 1=input · 2=output · 3=inout
-fn _rv_parse_port_decl(st_in: PState, m_in: Module, dir_kind: int) -> RvStep {
+fn _rv_parse_port_decl(st_in: PState, m_in: Module, dir_kind: int, tab: SymTab) -> RvStep {
     let mut st = _ps_take(st_in)            // consume the keyword
     let mut m = m_in
-    // skip an optional bit-range `[hi:lo]` (recorded as width 1 for now —
-    // honest gap; multi-bit wires will need a wider parse).
-    if _ps_peek(st) == "[" {
-        while st.pos < len(st.toks) {
-            if _ps_peek(st) == "]" { st = _ps_take(st); break }
-            st = _ps_take(st)
+    // optional net-type / signedness tail of an ANSI body declaration
+    // (`input wire`, `output reg`, `input signed [hi:lo]` …) — skip.
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == "wire" || t == "reg" || t == "logic" || t == "signed" {
+            st = _ps_take(st); continue
         }
+        break
     }
+    // optional packed bit-range `[hi:lo]` → width, folded against `tab`.
+    let mut width = 1
+    if _ps_peek(st) == "[" {
+        let rg = _rv_parse_range(st, tab)
+        if len(rg.err) > 0 { return RvStep { st: _ps_fail(st, rg.err), m: m } }
+        width = rg.width
+        st = rg.st
+    }
+    // name list — each may carry an optional 1-D unpacked range that
+    // expands to one wire per index (`q [ 0 : 3 ]` → q[0]..q[3]).
     while st.pos < len(st.toks) {
         let t = _ps_peek(st)
         if t == ";" { st = _ps_take(st); break }
         if t == "," { st = _ps_take(st); continue }
-        // identifier — port_id assigned for input/output/inout in
-        // declaration order.
-        let mut pid = 0
-        if dir_kind > 0 { pid = len(m.wires) + 1 }
-        m = rtlil_module_add_wire(m, rtlil_wire(t, 1, dir_kind, pid))
+        // identifier
+        let nm = t
         st = _ps_take(st)
+        if _ps_peek(st) == "[" {
+            let ur = _rv_parse_range(st, tab)
+            if len(ur.err) > 0 { return RvStep { st: _ps_fail(st, ur.err), m: m } }
+            st = ur.st
+            let mut k = 0
+            while k < ur.width {
+                let wn = nm + "[" + str(k) + "]"
+                let mut pid = 0
+                if dir_kind > 0 { pid = len(m.wires) + 1 }
+                m = rtlil_module_add_wire(m, rtlil_wire(wn, width, dir_kind, pid))
+                k = k + 1
+            }
+        } else {
+            let mut pid = 0
+            if dir_kind > 0 { pid = len(m.wires) + 1 }
+            m = rtlil_module_add_wire(m, rtlil_wire(nm, width, dir_kind, pid))
+        }
     }
     return RvStep { st: st, m: m }
 }
@@ -288,17 +701,222 @@ fn _rv_parse_port_decl(st_in: PState, m_in: Module, dir_kind: int) -> RvStep {
 //   `assign y = 1'b0 ;`   →  RTLIL ::connect to a constant (treated as
 //                             a tie to a special wire "$const_0"/"$const_1"
 //                             which the passes pipeline will lift)
-fn _rv_parse_assign(st_in: PState, m_in: Module) -> RvStep {
+// ─── expression elaboration → RTLIL cell tree (rfc_006 §4 m2, D68) ───────
+//
+// CLEAN-ROOM: lower a Verilog expression to a tree of RTLIL cells (IEEE
+// 1364-2005 §5 / Yosys genrtlil.cc public surface). Each binary operator
+// becomes one generic RTLIL cell ($add/$and/$eq/…) whose Y output is a
+// fresh internal wire; the wire carrying the whole expression's result
+// is returned. Wire widths are recorded as 1 here — a follow-up pass
+// elaborates real widths; the generic cells are width-tolerant.
+
+struct ElabResult {
+    wire: str,
+    m:    Module,
+    pos:  int,
+    err:  str,
+}
+
+// CLEAN-ROOM: binary operator → RTLIL generic cell type (empty = none).
+fn _rv_binop_cell(op: str) -> str {
+    if op == "+"  { return "$add" }
+    if op == "-"  { return "$sub" }
+    if op == "*"  { return "$mul" }
+    if op == "/"  { return "$div" }
+    if op == "%"  { return "$mod" }
+    if op == "&"  { return "$and" }
+    if op == "|"  { return "$or" }
+    if op == "^"  { return "$xor" }
+    if op == "==" { return "$eq" }
+    if op == "!=" { return "$ne" }
+    if op == "<"  { return "$lt" }
+    if op == ">"  { return "$gt" }
+    if op == "<=" { return "$le" }
+    if op == ">=" { return "$ge" }
+    if op == "<<" { return "$shl" }
+    if op == ">>" { return "$shr" }
+    if op == "&&" { return "$logic_and" }
+    if op == "||" { return "$logic_or" }
+    return ""
+}
+
+// CLEAN-ROOM: a fresh internal result-wire name, unique per cell count.
+fn _rv_fresh_wire(m: Module) -> str {
+    return "$rvexpr$" + str(len(m.cells))
+}
+
+// CLEAN-ROOM: elaborate a primary — wire reference, 1'b0/1'b1 constant,
+// parenthesised expression, or unary `~` / `!`.
+fn _rv_elab_primary(toks: [str], pos: int, m_in: Module, tab: SymTab) -> ElabResult {
+    let n = len(toks)
+    let mut m = m_in
+    if pos >= n {
+        return ElabResult {
+            wire: "", m: m, pos: pos, err: "read_verilog: expr: unexpected end"
+        }
+    }
+    let t = toks[pos]
+    if t == "~" || t == "!" || t == "-" {
+        let inner = _rv_elab_primary(toks, pos + 1, m, tab)
+        if len(inner.err) > 0 { return inner }
+        m = inner.m
+        let wn = _rv_fresh_wire(m)
+        m = rtlil_module_add_wire(m, rtlil_wire(wn, 1, 0, 0))
+        let mut cty = "$not"
+        if t == "!" { cty = "$logic_not" }
+        if t == "-" { cty = "$neg" }
+        let mut c = rtlil_cell(wn + "$c", cty, 0)
+        c = rtlil_cell_connect(c, "A", inner.wire)
+        c = rtlil_cell_connect(c, "Y", wn)
+        m = rtlil_module_add_cell(m, c)
+        return ElabResult { wire: wn, m: m, pos: inner.pos, err: "" }
+    }
+    if t == "(" {
+        let inner = _rv_elab_expr(toks, pos + 1, m, 1, tab)
+        if len(inner.err) > 0 { return inner }
+        m = inner.m
+        if inner.pos >= n {
+            return ElabResult {
+                wire: "", m: m, pos: inner.pos, err: "read_verilog: expr: missing `)`"
+            }
+        }
+        if toks[inner.pos] != ")" {
+            return ElabResult {
+                wire: "", m: m, pos: inner.pos,
+                err: "read_verilog: expr: expected `)` got `" + toks[inner.pos] + "`"
+            }
+        }
+        return ElabResult { wire: inner.wire, m: m, pos: inner.pos + 1, err: "" }
+    }
+    if t == "1'b0" { return ElabResult { wire: "$const_0", m: m, pos: pos + 1, err: "" } }
+    if t == "1'b1" { return ElabResult { wire: "$const_1", m: m, pos: pos + 1, err: "" } }
+    // bare token = wire reference, optionally followed by one or more
+    // `[ ... ]` index groups (unpacked-array element after generate-
+    // unrolling, packed part-select, or chained 2-D access like
+    // `mem[p][q]`). A foldable constant index appends `[<val>]` to the
+    // wire name; range / non-foldable index is an honest gap — the
+    // bracket group is consumed but the wire name is left unchanged
+    // (rest of the expression still parses).
+    let mut wn = t
+    let mut cur = pos + 1
+    while cur < n && toks[cur] == "[" {
+        let mut idxtoks: [str] = []
+        let mut np = cur + 1
+        let mut depth = 1
+        while np < n {
+            let it = toks[np]
+            if it == "[" {
+                depth = depth + 1
+                idxtoks = idxtoks.push(it)
+                np = np + 1
+                continue
+            }
+            if it == "]" {
+                depth = depth - 1
+                if depth == 0 { break }
+                idxtoks = idxtoks.push(it)
+                np = np + 1
+                continue
+            }
+            idxtoks = idxtoks.push(it)
+            np = np + 1
+        }
+        let mut isrange = 0
+        let mut k = 0
+        while k < len(idxtoks) {
+            let tk = idxtoks[k]
+            if tk == ":" || tk == "-:" || tk == "+:" { isrange = 1 }
+            k = k + 1
+        }
+        if isrange == 0 {
+            let ev = _rv_eval_expr(idxtoks, 0, tab, 1)
+            if len(ev.err) == 0 {
+                wn = wn + "[" + str(ev.value) + "]"
+            }
+        }
+        cur = np + 1                        // past `]`
+    }
+    return ElabResult { wire: wn, m: m, pos: cur, err: "" }
+}
+
+// CLEAN-ROOM: precedence-climbing expression elaborator (left-assoc,
+// IEEE 1364-2005 §5.1.2). Reuses _rv_binop_prec from the constant
+// evaluator. Emits one RTLIL cell per binary operator.
+fn _rv_elab_expr(toks: [str], pos: int, m_in: Module, min_prec: int, tab: SymTab) -> ElabResult {
+    let lhs = _rv_elab_primary(toks, pos, m_in, tab)
+    if len(lhs.err) > 0 { return lhs }
+    let mut m = lhs.m
+    let mut cur = lhs.wire
+    let mut i = lhs.pos
+    let n = len(toks)
+    while i < n {
+        let op = toks[i]
+        let prec = _rv_binop_prec(op)
+        if prec == 0 { return ElabResult { wire: cur, m: m, pos: i, err: "" } }
+        if prec < min_prec { return ElabResult { wire: cur, m: m, pos: i, err: "" } }
+        let cty = _rv_binop_cell(op)
+        if cty == "" {
+            return ElabResult {
+                wire: cur, m: m, pos: i,
+                err: "read_verilog: expr: operator `" + op + "` not in subset"
+            }
+        }
+        let rhs = _rv_elab_expr(toks, i + 1, m, prec + 1, tab)
+        if len(rhs.err) > 0 { return rhs }
+        m = rhs.m
+        let wn = _rv_fresh_wire(m)
+        m = rtlil_module_add_wire(m, rtlil_wire(wn, 1, 0, 0))
+        let mut c = rtlil_cell(wn + "$c", cty, 0)
+        c = rtlil_cell_connect(c, "A", cur)
+        c = rtlil_cell_connect(c, "B", rhs.wire)
+        c = rtlil_cell_connect(c, "Y", wn)
+        m = rtlil_module_add_cell(m, c)
+        cur = wn
+        i = rhs.pos
+    }
+    return ElabResult { wire: cur, m: m, pos: i, err: "" }
+}
+
+// CLEAN-ROOM: parse `assign LHS = EXPR ;`. EXPR is lowered to an RTLIL
+// cell tree via _rv_elab_expr and its result wire connected to LHS.
+fn _rv_parse_assign(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
     let mut st = _ps_take(st_in)            // consume "assign"
     let mut m = m_in
     if st.pos >= len(st.toks) {
-        return RvStep {
-            st: _ps_fail(st, "read_verilog: EOF after `assign`"),
-            m: m
+        return RvStep { st: _ps_fail(st, "read_verilog: EOF after `assign`"), m: m }
+    }
+    let lhs_base = _ps_peek(st)
+    st = _ps_take(st)
+    let mut lhs = lhs_base
+    // optional `[ <const> ]` index on the LHS (unpacked array element
+    // after generate-unrolling or pre-elaborated indexed wire).
+    if _ps_peek(st) == "[" {
+        st = _ps_take(st)
+        let mut idxtoks: [str] = []
+        let mut depth = 1
+        while st.pos < len(st.toks) {
+            let it = _ps_peek(st)
+            if it == "[" {
+                depth = depth + 1
+                idxtoks = idxtoks.push(it)
+                st = _ps_take(st)
+                continue
+            }
+            if it == "]" {
+                depth = depth - 1
+                if depth == 0 { st = _ps_take(st); break }
+                idxtoks = idxtoks.push(it)
+                st = _ps_take(st)
+                continue
+            }
+            idxtoks = idxtoks.push(it)
+            st = _ps_take(st)
+        }
+        let ev = _rv_eval_expr(idxtoks, 0, tab, 1)
+        if len(ev.err) == 0 {
+            lhs = lhs_base + "[" + str(ev.value) + "]"
         }
     }
-    let lhs = _ps_peek(st)
-    st = _ps_take(st)
     if _ps_peek(st) != "=" {
         return RvStep {
             st: _ps_fail(st, "read_verilog: assign missing `=` (got `" + _ps_peek(st) + "`)"),
@@ -306,71 +924,858 @@ fn _rv_parse_assign(st_in: PState, m_in: Module) -> RvStep {
         }
     }
     st = _ps_take(st)
-    let t1 = _ps_peek(st)
-    st = _ps_take(st)
-    let t2 = _ps_peek(st)
-    if t2 == ";" {
-        // wire-to-wire connect, or constant literal `1'b0` / `1'b1`
+    // collect RHS tokens up to `;`
+    let mut rhs: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ";" { st = _ps_take(st); break }
+        rhs = rhs.push(t)
         st = _ps_take(st)
-        let lit0 = "1'b0"
-        let lit1 = "1'b1"
-        if t1 == lit0 {
-            m = rtlil_module_connect(m, lhs, "$const_0")
-        } else {
-            if t1 == lit1 {
-                m = rtlil_module_connect(m, lhs, "$const_1")
-            } else {
-                m = rtlil_module_connect(m, lhs, t1)
+    }
+    let er = _rv_elab_expr(rhs, 0, m, 1, tab)
+    if len(er.err) > 0 {
+        return RvStep { st: _ps_fail(st, er.err), m: m }
+    }
+    m = er.m
+    m = rtlil_module_connect(m, lhs, er.wire)
+    return RvStep { st: st, m: m }
+}
+
+// ─── parameter / localparam declaration parsing (rfc_006 §4 m2, D68) ─────
+
+// Parse-step result carrying the cursor + the updated symbol table.
+struct RvParamStep {
+    st:  PState,
+    tab: SymTab,
+}
+
+// CLEAN-ROOM: skip optional declaration type keywords / range before a
+// parameter or localparam name — `integer`, `signed`, `[hi:lo]`
+// (IEEE 1364-2005 §4.10 — type is irrelevant to integer constant folding).
+fn _rv_skip_decl_type(st_in: PState) -> PState {
+    let mut st = st_in
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == "integer" { st = _ps_take(st); continue }
+        if t == "signed"  { st = _ps_take(st); continue }
+        if t == "[" {
+            while st.pos < len(st.toks) {
+                if _ps_peek(st) == "]" { st = _ps_take(st); break }
+                st = _ps_take(st)
+            }
+            continue
+        }
+        break
+    }
+    return st
+}
+
+// CLEAN-ROOM: parse a module-header parameter list `#( parameter NAME =
+// EXPR , … )` (ANSI-style, IEEE 1364-2005 §12.1). `st` points at `#`.
+// Each EXPR is folded against `tab` (so a later parameter can reference
+// an earlier one) and the result is added to the table.
+fn _rv_parse_param_header(st_in: PState, tab_in: SymTab) -> RvParamStep {
+    let mut st = st_in
+    let mut tab = tab_in
+    st = _ps_take(st)                       // consume "#"
+    if _ps_peek(st) != "(" {
+        return RvParamStep {
+            st: _ps_fail(st, "read_verilog: param header: expected `(` after `#`"),
+            tab: tab
+        }
+    }
+    st = _ps_take(st)                       // consume "("
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ")" { st = _ps_take(st); break }
+        if t == "," { st = _ps_take(st); continue }
+        if t == "parameter" { st = _ps_take(st); continue }
+        st = _rv_skip_decl_type(st)
+        let name = _ps_peek(st)
+        if name == "" || name == ")" {
+            return RvParamStep {
+                st: _ps_fail(st, "read_verilog: param header: expected parameter name"),
+                tab: tab
             }
         }
-        return RvStep { st: st, m: m }
-    }
-    // single-operator expression: ~ a  |  a & b  |  a | b  |  a ^ b
-    if t1 == "~" {
-        let opnd = t2
         st = _ps_take(st)
-        if _ps_peek(st) != ";" {
+        if _ps_peek(st) != "=" {
+            return RvParamStep {
+                st: _ps_fail(st, "read_verilog: param `" + name + "`: expected `=`"),
+                tab: tab
+            }
+        }
+        st = _ps_take(st)
+        // collect expression tokens until `,` or `)`
+        let mut exprtoks: [str] = []
+        while st.pos < len(st.toks) {
+            let tk = _ps_peek(st)
+            if tk == "," { break }
+            if tk == ")" { break }
+            exprtoks = exprtoks.push(tk)
+            st = _ps_take(st)
+        }
+        let ev = _rv_eval_expr(exprtoks, 0, tab, 1)
+        if len(ev.err) > 0 {
+            return RvParamStep {
+                st: _ps_fail(st, "read_verilog: param `" + name + "`: " + ev.err),
+                tab: tab
+            }
+        }
+        tab = symtab_put(tab, name, ev.value)
+    }
+    return RvParamStep { st: st, tab: tab }
+}
+
+// CLEAN-ROOM: parse a body `localparam NAME = EXPR ;` (IEEE 1364-2005
+// §4.10.1). `st` points at `localparam`. EXPR is folded against `tab`.
+fn _rv_parse_localparam(st_in: PState, tab_in: SymTab) -> RvParamStep {
+    let mut st = _ps_take(st_in)            // consume "localparam"
+    let mut tab = tab_in
+    st = _rv_skip_decl_type(st)
+    let name = _ps_peek(st)
+    if name == "" {
+        return RvParamStep {
+            st: _ps_fail(st, "read_verilog: localparam: expected name"),
+            tab: tab
+        }
+    }
+    st = _ps_take(st)
+    if _ps_peek(st) != "=" {
+        return RvParamStep {
+            st: _ps_fail(st, "read_verilog: localparam `" + name + "`: expected `=`"),
+            tab: tab
+        }
+    }
+    st = _ps_take(st)
+    let mut exprtoks: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ";" { st = _ps_take(st); break }
+        exprtoks = exprtoks.push(t)
+        st = _ps_take(st)
+    }
+    let ev = _rv_eval_expr(exprtoks, 0, tab, 1)
+    if len(ev.err) > 0 {
+        return RvParamStep {
+            st: _ps_fail(st, "read_verilog: localparam `" + name + "`: " + ev.err),
+            tab: tab
+        }
+    }
+    tab = symtab_put(tab, name, ev.value)
+    return RvParamStep { st: st, tab: tab }
+}
+
+// ─── width elaboration + ANSI-style port parsing (rfc_006 §4 m2, D68) ────
+
+// Result of parsing a `[ HI : LO ]` range — the elaborated extent plus
+// the cursor just past `]`.
+struct RangeEval {
+    width: int,         // HI - LO + 1 (always positive)
+    st:    PState,
+    err:   str,
+}
+
+// CLEAN-ROOM: parse a bracketed range `[ HI : LO ]`, folding HI and LO
+// against `tab`. Used for both packed bit-ranges (width) and unpacked
+// 1-D array ranges (element count). `[ N ]` single-index → extent 1.
+// `st` points at `[`. (IEEE 1364-2005 §3.3 / §4.8.)
+fn _rv_parse_range(st_in: PState, tab: SymTab) -> RangeEval {
+    let mut st = _ps_take(st_in)            // consume "["
+    let mut hitoks: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ":" { break }
+        if t == "]" { break }
+        hitoks = hitoks.push(t)
+        st = _ps_take(st)
+    }
+    if _ps_peek(st) == "]" {
+        // single-index `[N]` → extent 1
+        st = _ps_take(st)
+        return RangeEval { width: 1, st: st, err: "" }
+    }
+    if _ps_peek(st) != ":" {
+        return RangeEval {
+            width: 1, st: st,
+            err: "read_verilog: range: expected `:` got `" + _ps_peek(st) + "`"
+        }
+    }
+    st = _ps_take(st)                       // consume ":"
+    let mut lotoks: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == "]" { break }
+        lotoks = lotoks.push(t)
+        st = _ps_take(st)
+    }
+    if _ps_peek(st) != "]" {
+        return RangeEval { width: 1, st: st, err: "read_verilog: range: missing `]`" }
+    }
+    st = _ps_take(st)                       // consume "]"
+    let hi = _rv_eval_expr(hitoks, 0, tab, 1)
+    if len(hi.err) > 0 { return RangeEval { width: 1, st: st, err: hi.err } }
+    let lo = _rv_eval_expr(lotoks, 0, tab, 1)
+    if len(lo.err) > 0 { return RangeEval { width: 1, st: st, err: lo.err } }
+    // width is |HI - LO| + 1 — packed [msb:lsb] and unpacked [lo:hi]
+    // both yield a positive extent.
+    let mut w = hi.value - lo.value + 1
+    if w < 1 { w = lo.value - hi.value + 1 }
+    return RangeEval { width: w, st: st, err: "" }
+}
+
+// CLEAN-ROOM: parse an ANSI-style port list `( DIR NETTYPE [signed]
+// [packed-range] NAME [unpacked-range] , … )` (IEEE 1364-2005 §12.3.3).
+// `st` points at `(`. Direction is sticky — a port without an explicit
+// direction inherits the previous one. An unpacked 1-D array expands to
+// one RTLIL wire per index (`NAME[0]` … `NAME[n-1]`), each `width` bits.
+fn _rv_parse_ansi_ports(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
+    let mut st = _ps_take(st_in)            // consume "("
+    let mut m = m_in
+    let mut cur_dir = 1                     // first port defaults to input
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ")" { st = _ps_take(st); break }
+        if t == "," { st = _ps_take(st); continue }
+        // direction keyword (sticky)
+        if t == "input"  { cur_dir = 1; st = _ps_take(st); continue }
+        if t == "output" { cur_dir = 2; st = _ps_take(st); continue }
+        if t == "inout"  { cur_dir = 3; st = _ps_take(st); continue }
+        // net type / signedness — irrelevant to RTLIL wire shape
+        if t == "wire"  { st = _ps_take(st); continue }
+        if t == "reg"   { st = _ps_take(st); continue }
+        if t == "logic" { st = _ps_take(st); continue }
+        if t == "signed" { st = _ps_take(st); continue }
+        // packed bit-range → width
+        let mut width = 1
+        if t == "[" {
+            let rg = _rv_parse_range(st, tab)
+            if len(rg.err) > 0 { return RvStep { st: _ps_fail(st, rg.err), m: m } }
+            width = rg.width
+            st = rg.st
+        }
+        // port name
+        let pname = _ps_peek(st)
+        if pname == "" || pname == ")" || pname == "," {
             return RvStep {
-                st: _ps_fail(st, "read_verilog: assign `~`: expected `;` got `" + _ps_peek(st) + "`"),
+                st: _ps_fail(st, "read_verilog: ANSI port: expected name"), m: m
+            }
+        }
+        st = _ps_take(st)
+        // optional unpacked 1-D array range → one wire per index
+        if _ps_peek(st) == "[" {
+            let ur = _rv_parse_range(st, tab)
+            if len(ur.err) > 0 { return RvStep { st: _ps_fail(st, ur.err), m: m } }
+            st = ur.st
+            let mut k = 0
+            while k < ur.width {
+                let wn = pname + "[" + str(k) + "]"
+                let pid = len(m.wires) + 1
+                m = rtlil_module_add_wire(m, rtlil_wire(wn, width, cur_dir, pid))
+                k = k + 1
+            }
+        } else {
+            let pid = len(m.wires) + 1
+            m = rtlil_module_add_wire(m, rtlil_wire(pname, width, cur_dir, pid))
+        }
+    }
+    return RvStep { st: st, m: m }
+}
+
+// ─── function automatic declaration parsing (rfc_006 §4 m2, D68) ────────
+
+// CLEAN-ROOM: a parsed Verilog `function` — its name, ordered argument
+// names, and body token stream (between `;` and `endfunction`). The
+// body is kept as tokens for later inline expansion at call sites
+// (IEEE 1364-2005 §10.3 — a function call is semantically an inline
+// substitution of the body with arguments bound).
+struct VFunc {
+    name: str,
+    args: [str],
+    body: [str],
+}
+
+// Parse-step result for a function declaration.
+struct RvFuncStep {
+    st:   PState,
+    func: VFunc,
+    err:  str,
+}
+
+// CLEAN-ROOM: parse `function [automatic] [signed] [range] NAME (
+// [input [range]] ARG , … ) ; BODY endfunction` (IEEE 1364-2005
+// §10.3.1). `st` points at `function`. The return type / ranges are
+// skipped — integer-level inlining does not need them; argument names
+// and the body token stream are retained.
+fn _rv_parse_function(st_in: PState) -> RvFuncStep {
+    let mut st = _ps_take(st_in)            // consume "function"
+    // skip `automatic` / `signed` / return `[range]`
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == "automatic" { st = _ps_take(st); continue }
+        if t == "signed"    { st = _ps_take(st); continue }
+        if t == "integer"   { st = _ps_take(st); continue }
+        if t == "[" {
+            while st.pos < len(st.toks) {
+                if _ps_peek(st) == "]" { st = _ps_take(st); break }
+                st = _ps_take(st)
+            }
+            continue
+        }
+        break
+    }
+    let fname = _ps_peek(st)
+    if fname == "" {
+        return RvFuncStep {
+            st: st, func: VFunc { name: "", args: [], body: [] },
+            err: "read_verilog: function: expected name"
+        }
+    }
+    st = _ps_take(st)
+    // optional ANSI argument list `( input [range] ARG , … )`
+    let mut argnames: [str] = []
+    if _ps_peek(st) == "(" {
+        st = _ps_take(st)
+        while st.pos < len(st.toks) {
+            let t = _ps_peek(st)
+            if t == ")" { st = _ps_take(st); break }
+            if t == "," { st = _ps_take(st); continue }
+            if t == "input"  { st = _ps_take(st); continue }
+            if t == "signed" { st = _ps_take(st); continue }
+            if t == "[" {
+                while st.pos < len(st.toks) {
+                    if _ps_peek(st) == "]" { st = _ps_take(st); break }
+                    st = _ps_take(st)
+                }
+                continue
+            }
+            argnames = argnames.push(t)
+            st = _ps_take(st)
+        }
+    }
+    // header terminator `;`
+    if _ps_peek(st) == ";" { st = _ps_take(st) }
+    // body tokens until `endfunction`
+    let mut body: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == "endfunction" { st = _ps_take(st); break }
+        body = body.push(t)
+        st = _ps_take(st)
+    }
+    return RvFuncStep {
+        st: st,
+        func: VFunc { name: fname, args: argnames, body: body },
+        err: ""
+    }
+}
+
+// CLEAN-ROOM: linear lookup of a function by name; -1 if absent.
+fn _rv_find_function(funcs: [VFunc], name: str) -> int {
+    let mut i = 0
+    while i < len(funcs) {
+        if funcs[i].name == name { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// ─── generate-for static unroll (rfc_006 §4 m2, D68) ─────────────────────
+
+// Parse-step result for a `generate` block — cursor + module + tab.
+struct RvGenStep {
+    st:  PState,
+    m:   Module,
+    tab: SymTab,
+}
+
+// CLEAN-ROOM: parse and unroll a `generate for ( GV = INIT ; COND ; GV
+// = STEP ) begin [: label] BODY end endgenerate` block (IEEE 1364-2005
+// §12.4.1). On each iteration the genvar is bound in `tab` and the
+// body is re-parsed; supported body statements are `assign` and
+// `localparam` (router_d{4,6}.v synth-subset). Nested begin/end are
+// depth-balanced; an iteration cap guards runaway loops.
+fn _rv_parse_generate(st_in: PState, m_in: Module, tab_in: SymTab) -> RvGenStep {
+    let mut st = _ps_take(st_in)            // consume "generate"
+    let mut m = m_in
+    let mut tab = tab_in
+    if _ps_peek(st) != "for" {
+        return RvGenStep {
+            st: _ps_fail(st, "read_verilog: generate: expected `for`"),
+            m: m, tab: tab
+        }
+    }
+    st = _ps_take(st)
+    if _ps_peek(st) != "(" {
+        return RvGenStep {
+            st: _ps_fail(st, "read_verilog: generate for: expected `(`"),
+            m: m, tab: tab
+        }
+    }
+    st = _ps_take(st)
+
+    // init: GV = INIT ;
+    let gv = _ps_peek(st)
+    st = _ps_take(st)
+    if _ps_peek(st) != "=" {
+        return RvGenStep {
+            st: _ps_fail(st, "read_verilog: generate for init: expected `=`"),
+            m: m, tab: tab
+        }
+    }
+    st = _ps_take(st)
+    let mut initoks: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ";" { st = _ps_take(st); break }
+        initoks = initoks.push(t)
+        st = _ps_take(st)
+    }
+    let init_ev = _rv_eval_expr(initoks, 0, tab, 1)
+    if len(init_ev.err) > 0 {
+        return RvGenStep {
+            st: _ps_fail(st, "read_verilog: generate for init: " + init_ev.err),
+            m: m, tab: tab
+        }
+    }
+    tab = symtab_put(tab, gv, init_ev.value)
+
+    // cond expr until ";"
+    let mut condtoks: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ";" { st = _ps_take(st); break }
+        condtoks = condtoks.push(t)
+        st = _ps_take(st)
+    }
+
+    // step: GV = STEP ) — skip name + "=", collect step expr until ")"
+    st = _ps_take(st)                       // step gv name
+    if _ps_peek(st) != "=" {
+        return RvGenStep {
+            st: _ps_fail(st, "read_verilog: generate for step: expected `=`"),
+            m: m, tab: tab
+        }
+    }
+    st = _ps_take(st)
+    let mut steptoks: [str] = []
+    while st.pos < len(st.toks) {
+        let t = _ps_peek(st)
+        if t == ")" { st = _ps_take(st); break }
+        steptoks = steptoks.push(t)
+        st = _ps_take(st)
+    }
+
+    // expect "begin" [: label]
+    if _ps_peek(st) != "begin" {
+        return RvGenStep {
+            st: _ps_fail(st, "read_verilog: generate for: expected `begin`"),
+            m: m, tab: tab
+        }
+    }
+    st = _ps_take(st)
+    if _ps_peek(st) == ":" {
+        st = _ps_take(st)
+        st = _ps_take(st)                   // label name
+    }
+
+    // record body span [body_start, body_end), depth-balancing begin/end.
+    let body_start = st.pos
+    let mut depth = 1
+    let mut body_end = body_start
+    while body_end < len(st.toks) {
+        let t = st.toks[body_end]
+        if t == "begin" { depth = depth + 1 }
+        if t == "end" {
+            depth = depth - 1
+            if depth == 0 { break }
+        }
+        body_end = body_end + 1
+    }
+
+    // unroll: re-parse the body each iteration while COND folds to non-zero.
+    let mut iter = 0
+    while iter < 1024 {
+        let cond_ev = _rv_eval_expr(condtoks, 0, tab, 1)
+        if len(cond_ev.err) > 0 {
+            return RvGenStep {
+                st: _ps_fail(st, "read_verilog: generate for cond: " + cond_ev.err),
+                m: m, tab: tab
+            }
+        }
+        if cond_ev.value == 0 { break }
+
+        let mut bst = PState { toks: st.toks, pos: body_start, err: "" }
+        while bst.pos < body_end {
+            let bt = _ps_peek(bst)
+            if bt == "assign" {
+                let r = _rv_parse_assign(bst, m, tab)
+                bst = r.st
+                m = r.m
+                if len(bst.err) > 0 {
+                    return RvGenStep { st: bst, m: m, tab: tab }
+                }
+            } else {
+                if bt == "localparam" {
+                    let r2 = _rv_parse_localparam(bst, tab)
+                    bst = r2.st
+                    tab = r2.tab
+                    if len(bst.err) > 0 {
+                        return RvGenStep { st: bst, m: m, tab: tab }
+                    }
+                } else {
+                    bst = _ps_take(bst)
+                }
+            }
+        }
+
+        let step_ev = _rv_eval_expr(steptoks, 0, tab, 1)
+        if len(step_ev.err) > 0 {
+            return RvGenStep {
+                st: _ps_fail(st, "read_verilog: generate for step: " + step_ev.err),
+                m: m, tab: tab
+            }
+        }
+        tab = symtab_put(tab, gv, step_ev.value)
+        iter = iter + 1
+    }
+
+    // jump past body + the closing `end`
+    st = PState { toks: st.toks, pos: body_end + 1, err: "" }
+    if _ps_peek(st) != "endgenerate" {
+        return RvGenStep {
+            st: _ps_fail(st, "read_verilog: generate: expected `endgenerate`"),
+            m: m, tab: tab
+        }
+    }
+    st = _ps_take(st)
+    return RvGenStep { st: st, m: m, tab: tab }
+}
+
+// ─── always-block inference (rfc_006 §4 m2, D68) ─────────────────────────
+
+// CLEAN-ROOM: parse a Verilog `always @( SENS ) [begin] BODY [end]`
+// block and lower it to an RTLIL register/combinational cell tree.
+// SCOPE — this body landing covers the basic case yosys's `proc` pass
+// emits for routinely-written RTL:
+//   - @( posedge | negedge CLK )  →  $dff cell per nonblocking assign
+//   - @( * ) or @*               →  $-tree of muxes (single assign:
+//                                    direct connect; if/else and for
+//                                    are honest gaps for this commit)
+//   - body may be `begin ... end` or a single statement
+//   - single nonblocking `VAR <= EXPR ;` or blocking `VAR = EXPR ;`
+//
+// Honest gaps (rfc_003 idiom: fail-loud, not silent): nested if/else,
+// case, for-loops, multi-statement bodies require the full `proc` pass
+// — those land in a follow-up commit with the SigSpec/Process model.
+fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
+    let mut st = _ps_take(st_in)            // consume "always"
+    let mut m = m_in
+    if _ps_peek(st) != "@" {
+        return RvStep {
+            st: _ps_fail(st, "read_verilog: always: expected `@`"),
+            m: m
+        }
+    }
+    st = _ps_take(st)                       // consume "@"
+    // sensitivity list: @* or @( ... )
+    let mut is_clocked = 0
+    let mut clk_wire = ""
+    let mut clk_edge = 0                    // 1 = posedge, 2 = negedge
+    if _ps_peek(st) == "*" {
+        st = _ps_take(st)
+    } else {
+        if _ps_peek(st) != "(" {
+            return RvStep {
+                st: _ps_fail(st, "read_verilog: always: expected `(` or `*`"),
                 m: m
             }
         }
         st = _ps_take(st)
-        let cell_name = "_rv_not_" + str(len(m.cells))
-        let mut c = rtlil_cell(cell_name, "$not", 0)
-        c = rtlil_cell_connect(c, "A", opnd)
-        c = rtlil_cell_connect(c, "Y", lhs)
-        m = rtlil_module_add_cell(m, c)
-        return RvStep { st: st, m: m }
-    }
-    // binary: t1 op opnd2 ;
-    let op = t2
-    st = _ps_take(st)
-    let opnd2 = _ps_peek(st)
-    st = _ps_take(st)
-    if _ps_peek(st) != ";" {
-        return RvStep {
-            st: _ps_fail(st, "read_verilog: assign binary: expected `;` got `" + _ps_peek(st) + "`"),
-            m: m
+        let first = _ps_peek(st)
+        if first == "*" {
+            st = _ps_take(st)
+        } else {
+            if first == "posedge" || first == "negedge" {
+                is_clocked = 1
+                if first == "posedge" {
+                    clk_edge = 1
+                } else {
+                    clk_edge = 2
+                }
+                st = _ps_take(st)
+                clk_wire = _ps_peek(st)
+                st = _ps_take(st)
+            } else {
+                return RvStep {
+                    st: _ps_fail(st, "read_verilog: always sensitivity `"
+                        + first + "` not in subset (need `*`, `posedge`, `negedge`)"),
+                    m: m
+                }
+            }
         }
-    }
-    st = _ps_take(st)
-    let mut cty = ""
-    if op == "&" { cty = "$and" }
-    if op == "|" { cty = "$or" }
-    if op == "^" { cty = "$xor" }
-    if cty == "" {
-        return RvStep {
-            st: _ps_fail(st, "read_verilog: assign op `" + op + "` not in subset"),
-            m: m
+        if _ps_peek(st) != ")" {
+            return RvStep {
+                st: _ps_fail(st, "read_verilog: always: expected `)`"),
+                m: m
+            }
         }
+        st = _ps_take(st)
     }
-    let cname = "_rv_" + cty.substring(1, len(cty)) + "_" + str(len(m.cells))
-    let mut c = rtlil_cell(cname, cty, 0)
-    c = rtlil_cell_connect(c, "A", t1)
-    c = rtlil_cell_connect(c, "B", opnd2)
-    c = rtlil_cell_connect(c, "Y", lhs)
-    m = rtlil_module_add_cell(m, c)
+
+    // body: optional begin / end
+    let mut has_begin = 0
+    if _ps_peek(st) == "begin" {
+        has_begin = 1
+        st = _ps_take(st)
+    }
+
+    // Parse one or more statements. With `begin`, loop until `end`;
+    // otherwise a single statement. Supported per-statement shape:
+    //   VAR [ <const> ]  (`<=` | `=`)  EXPR ;
+    // If / for / case / function-call inside the body are honest gaps
+    // (those need the full yosys `proc` pass — separate commit).
+    let mut keep_going = 1
+    while keep_going == 1 {
+        if has_begin == 1 && _ps_peek(st) == "end" {
+            st = _ps_take(st)
+            break
+        }
+        // `for ( GV = INIT ; COND ; GV = STEP ) begin BODY end` inside
+        // always — static unroll while COND folds non-zero. BODY here
+        // supports the same single-statement shape (assign) — nested
+        // for / if are honest gaps for this commit.
+        if _ps_peek(st) == "for" {
+            st = _ps_take(st)
+            if _ps_peek(st) != "(" {
+                return RvStep {
+                    st: _ps_fail(st, "read_verilog: always for: expected `(`"),
+                    m: m
+                }
+            }
+            st = _ps_take(st)
+            let fgv = _ps_peek(st)
+            st = _ps_take(st)
+            if _ps_peek(st) != "=" {
+                return RvStep {
+                    st: _ps_fail(st, "read_verilog: always for init: expected `=`"),
+                    m: m
+                }
+            }
+            st = _ps_take(st)
+            let mut finit: [str] = []
+            while st.pos < len(st.toks) {
+                let t = _ps_peek(st)
+                if t == ";" { st = _ps_take(st); break }
+                finit = finit.push(t)
+                st = _ps_take(st)
+            }
+            let f_init_ev = _rv_eval_expr(finit, 0, tab, 1)
+            if len(f_init_ev.err) > 0 {
+                return RvStep {
+                    st: _ps_fail(st, "read_verilog: always for init: " + f_init_ev.err),
+                    m: m
+                }
+            }
+            tab = symtab_put(tab, fgv, f_init_ev.value)
+            let mut fcond: [str] = []
+            while st.pos < len(st.toks) {
+                let t = _ps_peek(st)
+                if t == ";" { st = _ps_take(st); break }
+                fcond = fcond.push(t)
+                st = _ps_take(st)
+            }
+            st = _ps_take(st)               // step gv name
+            if _ps_peek(st) != "=" {
+                return RvStep {
+                    st: _ps_fail(st, "read_verilog: always for step: expected `=`"),
+                    m: m
+                }
+            }
+            st = _ps_take(st)
+            let mut fstep: [str] = []
+            while st.pos < len(st.toks) {
+                let t = _ps_peek(st)
+                if t == ")" { st = _ps_take(st); break }
+                fstep = fstep.push(t)
+                st = _ps_take(st)
+            }
+            // optional begin
+            let mut f_has_begin = 0
+            if _ps_peek(st) == "begin" {
+                f_has_begin = 1
+                st = _ps_take(st)
+            }
+            // record body span and find matching `end`
+            let f_body_start = st.pos
+            let mut f_depth = 1
+            let mut f_body_end = f_body_start
+            while f_body_end < len(st.toks) {
+                let t = st.toks[f_body_end]
+                if t == "begin" { f_depth = f_depth + 1 }
+                if t == "end" {
+                    f_depth = f_depth - 1
+                    if f_depth == 0 { break }
+                }
+                f_body_end = f_body_end + 1
+            }
+            // unroll
+            let mut fiter = 0
+            while fiter < 1024 {
+                let fcv = _rv_eval_expr(fcond, 0, tab, 1)
+                if len(fcv.err) > 0 {
+                    return RvStep {
+                        st: _ps_fail(st, "read_verilog: always for cond: " + fcv.err),
+                        m: m
+                    }
+                }
+                if fcv.value == 0 { break }
+                // re-parse body assignments
+                let mut bst = PState { toks: st.toks, pos: f_body_start, err: "" }
+                while bst.pos < f_body_end {
+                    if f_has_begin == 1 && _ps_peek(bst) == "end" { break }
+                    let bqb = _ps_peek(bst)
+                    bst = _ps_take(bst)
+                    let mut bq = bqb
+                    if _ps_peek(bst) == "[" {
+                        bst = _ps_take(bst)
+                        let mut bidx: [str] = []
+                        let mut bdepth = 1
+                        while bst.pos < len(bst.toks) {
+                            let bit = _ps_peek(bst)
+                            if bit == "[" {
+                                bdepth = bdepth + 1
+                                bidx = bidx.push(bit)
+                                bst = _ps_take(bst)
+                                continue
+                            }
+                            if bit == "]" {
+                                bdepth = bdepth - 1
+                                if bdepth == 0 { bst = _ps_take(bst); break }
+                                bidx = bidx.push(bit)
+                                bst = _ps_take(bst)
+                                continue
+                            }
+                            bidx = bidx.push(bit)
+                            bst = _ps_take(bst)
+                        }
+                        let bev = _rv_eval_expr(bidx, 0, tab, 1)
+                        if len(bev.err) == 0 {
+                            bq = bqb + "[" + str(bev.value) + "]"
+                        }
+                    }
+                    let bopk = _ps_peek(bst)
+                    if bopk != "<=" && bopk != "=" {
+                        return RvStep {
+                            st: _ps_fail(bst, "read_verilog: always for body: expected `<=` or `=` got `"
+                                + bopk + "` (nested for/if/case in always is an honest gap)"),
+                            m: m
+                        }
+                    }
+                    bst = _ps_take(bst)
+                    let mut brhs: [str] = []
+                    while bst.pos < len(bst.toks) {
+                        let bt2 = _ps_peek(bst)
+                        if bt2 == ";" { bst = _ps_take(bst); break }
+                        brhs = brhs.push(bt2)
+                        bst = _ps_take(bst)
+                    }
+                    let ber = _rv_elab_expr(brhs, 0, m, 1, tab)
+                    if len(ber.err) > 0 {
+                        return RvStep { st: _ps_fail(bst, ber.err), m: m }
+                    }
+                    m = ber.m
+                    if is_clocked == 1 {
+                        let cn = "$rvff$" + str(len(m.cells))
+                        let mut c = rtlil_cell(cn, "$dff", 0)
+                        c = rtlil_cell_connect(c, "CLK", clk_wire)
+                        c = rtlil_cell_connect(c, "D", ber.wire)
+                        c = rtlil_cell_connect(c, "Q", bq)
+                        m = rtlil_module_add_cell(m, c)
+                        let _eg = clk_edge
+                    } else {
+                        m = rtlil_module_connect(m, bq, ber.wire)
+                    }
+                }
+                let f_step_ev = _rv_eval_expr(fstep, 0, tab, 1)
+                if len(f_step_ev.err) > 0 {
+                    return RvStep {
+                        st: _ps_fail(st, "read_verilog: always for step: " + f_step_ev.err),
+                        m: m
+                    }
+                }
+                tab = symtab_put(tab, fgv, f_step_ev.value)
+                fiter = fiter + 1
+            }
+            // jump past body + `end`
+            st = PState { toks: st.toks, pos: f_body_end + 1, err: "" }
+            continue
+        }
+        let q_base = _ps_peek(st)
+        st = _ps_take(st)
+        let mut q = q_base
+        // optional `[ <const> ]` on LHS
+        if _ps_peek(st) == "[" {
+            st = _ps_take(st)
+            let mut idxtoks: [str] = []
+            let mut depth = 1
+            while st.pos < len(st.toks) {
+                let it = _ps_peek(st)
+                if it == "[" {
+                    depth = depth + 1
+                    idxtoks = idxtoks.push(it)
+                    st = _ps_take(st)
+                    continue
+                }
+                if it == "]" {
+                    depth = depth - 1
+                    if depth == 0 { st = _ps_take(st); break }
+                    idxtoks = idxtoks.push(it)
+                    st = _ps_take(st)
+                    continue
+                }
+                idxtoks = idxtoks.push(it)
+                st = _ps_take(st)
+            }
+            let ev = _rv_eval_expr(idxtoks, 0, tab, 1)
+            if len(ev.err) == 0 {
+                q = q_base + "[" + str(ev.value) + "]"
+            }
+        }
+        let opk = _ps_peek(st)
+        if opk != "<=" && opk != "=" {
+            return RvStep {
+                st: _ps_fail(st, "read_verilog: always body: expected `<=` or `=` got `"
+                    + opk + "`"),
+                m: m
+            }
+        }
+        st = _ps_take(st)
+        let mut rhs: [str] = []
+        while st.pos < len(st.toks) {
+            let t = _ps_peek(st)
+            if t == ";" { st = _ps_take(st); break }
+            rhs = rhs.push(t)
+            st = _ps_take(st)
+        }
+        let er = _rv_elab_expr(rhs, 0, m, 1, tab)
+        if len(er.err) > 0 {
+            return RvStep { st: _ps_fail(st, er.err), m: m }
+        }
+        m = er.m
+        if is_clocked == 1 {
+            let cn = "$rvff$" + str(len(m.cells))
+            let mut c = rtlil_cell(cn, "$dff", 0)
+            c = rtlil_cell_connect(c, "CLK", clk_wire)
+            c = rtlil_cell_connect(c, "D", er.wire)
+            c = rtlil_cell_connect(c, "Q", q)
+            m = rtlil_module_add_cell(m, c)
+            let _eg = clk_edge
+        } else {
+            m = rtlil_module_connect(m, q, er.wire)
+        }
+        if has_begin == 0 { keep_going = 0 }
+    }
     return RvStep { st: st, m: m }
 }
 
@@ -473,9 +1878,10 @@ fn main() {
         println("FAIL T7 comments: " + r7.message); fails = fails + 1
     }
 
-    // T8 — fail-loud on unsupported construct.
+    // T8 — fail-loud on unsupported construct (`task` is still
+    // out-of-subset; `always` itself is now supported).
     total = total + 1
-    let r8 = read_verilog("module b(a); input a; always @(*) begin end endmodule")
+    let r8 = read_verilog("module b(a); input a; task t; begin end endtask endmodule")
     if r8.ok == 1 {
         println("FAIL T8 unsupported_should_fail"); fails = fails + 1
     }
@@ -491,6 +1897,352 @@ fn main() {
     total = total + 1
     if r3.design.source != "read_verilog" {
         println("FAIL T10 source_provenance"); fails = fails + 1
+    }
+
+    // T11 — numeric literal values (unsized decimal + sized dec/hex/bin).
+    total = total + 1
+    if _rv_literal_value("64") != 64 {
+        println("FAIL T11a lit_dec"); fails = fails + 1
+    }
+    if _rv_literal_value("3'd2") != 2 {
+        println("FAIL T11b lit_sized_dec"); fails = fails + 1
+    }
+    if _rv_literal_value("8'hff") != 255 {
+        println("FAIL T11c lit_hex"); fails = fails + 1
+    }
+    if _rv_literal_value("4'b1010") != 10 {
+        println("FAIL T11d lit_bin"); fails = fails + 1
+    }
+    if _rv_literal_value("1'b0") != 0 {
+        println("FAIL T11e lit_b0"); fails = fails + 1
+    }
+
+    // T12 — constant-expression folding against a symbol table.
+    total = total + 1
+    let mut _tab = symtab_new()
+    _tab = symtab_put(_tab, "W", 64)
+    _tab = symtab_put(_tab, "ADDR_W", 8)
+    _tab = symtab_put(_tab, "FIFO_LD", 2)
+    let _e1 = _rv_eval_expr(["W", "-", "1"], 0, _tab, 1)
+    if len(_e1.err) > 0 {
+        println("FAIL T12a err: " + _e1.err); fails = fails + 1
+    }
+    if _e1.value != 63 {
+        println("FAIL T12a W-1 got " + str(_e1.value)); fails = fails + 1
+    }
+    total = total + 1
+    let _e2 = _rv_eval_expr(["1", "<<", "FIFO_LD"], 0, _tab, 1)
+    if _e2.value != 4 {
+        println("FAIL T12b 1<<FIFO_LD got " + str(_e2.value)); fails = fails + 1
+    }
+    // precedence: `/` binds tighter than `-` → ADDR_W/2 - 1 = 4 - 1 = 3
+    total = total + 1
+    let _e3 = _rv_eval_expr(["ADDR_W", "/", "2", "-", "1"], 0, _tab, 1)
+    if _e3.value != 3 {
+        println("FAIL T12c ADDR_W/2-1 got " + str(_e3.value)); fails = fails + 1
+    }
+    total = total + 1
+    let _e4 = _rv_eval_expr(["(", "1", "<<", "FIFO_LD", ")"], 0, _tab, 1)
+    if _e4.value != 4 {
+        println("FAIL T12d paren got " + str(_e4.value)); fails = fails + 1
+    }
+    // unresolved identifier must fail-loud
+    total = total + 1
+    let _e5 = _rv_eval_expr(["UNKNOWN_P"], 0, _tab, 1)
+    if len(_e5.err) == 0 {
+        println("FAIL T12e unresolved_should_err"); fails = fails + 1
+    }
+
+    // T13 — module-header parameter list `#( parameter … )`.
+    total = total + 1
+    let _pht = _rv_tokens(_rv_normalize_punct("#( parameter W = 8 , parameter A = W + 4 )"))
+    let _ph = _rv_parse_param_header(PState { toks: _pht, pos: 0, err: "" }, symtab_new())
+    if len(_ph.st.err) > 0 {
+        println("FAIL T13 err: " + _ph.st.err); fails = fails + 1
+    }
+    if symtab_get(_ph.tab, "W") != 8 {
+        println("FAIL T13a W got " + str(symtab_get(_ph.tab, "W"))); fails = fails + 1
+    }
+    if symtab_get(_ph.tab, "A") != 12 {
+        println("FAIL T13b A=W+4 got " + str(symtab_get(_ph.tab, "A"))); fails = fails + 1
+    }
+
+    // T14 — body localparam, resolving against header parameters.
+    total = total + 1
+    let _lpt = _rv_tokens(_rv_normalize_punct("localparam D = W << 1 ;"))
+    let _lp = _rv_parse_localparam(PState { toks: _lpt, pos: 0, err: "" }, _ph.tab)
+    if len(_lp.st.err) > 0 {
+        println("FAIL T14 err: " + _lp.st.err); fails = fails + 1
+    }
+    if symtab_get(_lp.tab, "D") != 16 {
+        println("FAIL T14a D=W<<1 got " + str(symtab_get(_lp.tab, "D"))); fails = fails + 1
+    }
+
+    // T15 — end-to-end module with `#(parameter)` header + localparam body.
+    total = total + 1
+    let _v15 = "module pm #( parameter PW = 4 ) ( a , y ) ; localparam PD = PW * 2 ; input a ; output y ; assign y = a ; endmodule"
+    let _r15 = read_verilog(_v15)
+    if _r15.ok != 1 {
+        println("FAIL T15 param_module: " + _r15.message); fails = fails + 1
+    }
+
+    // T16 — range elaboration `[ HI : LO ]` → width.
+    total = total + 1
+    let mut _rt = symtab_new()
+    _rt = symtab_put(_rt, "BW", 8)
+    let _rr = _rv_parse_range(
+        PState { toks: _rv_tokens(_rv_normalize_punct("[ BW - 1 : 0 ]")), pos: 0, err: "" },
+        _rt)
+    if len(_rr.err) > 0 { println("FAIL T16 err: " + _rr.err); fails = fails + 1 }
+    if _rr.width != 8 {
+        println("FAIL T16a width got " + str(_rr.width)); fails = fails + 1
+    }
+
+    // T17 — ANSI-style port list with packed width + parameter folding.
+    total = total + 1
+    let _v17 = "module ap #( parameter W = 8 ) ( input wire [ W - 1 : 0 ] din , output wire dout ) ; assign dout = din ; endmodule"
+    let _r17 = read_verilog(_v17)
+    if _r17.ok != 1 {
+        println("FAIL T17 ansi: " + _r17.message); fails = fails + 1
+    } else {
+        let _m17 = _r17.design.modules[0]
+        let _di = rtlil_find_wire(_m17, "din")
+        if _di < 0 {
+            println("FAIL T17a din_missing"); fails = fails + 1
+        } else {
+            if _m17.wires[_di].width != 8 {
+                println("FAIL T17b din_width got " + str(_m17.wires[_di].width))
+                fails = fails + 1
+            }
+        }
+    }
+
+    // T18 — ANSI port with unpacked 1-D array (expands to one wire/index).
+    total = total + 1
+    let _v18 = "module aa ( input wire [ 3 : 0 ] bus [ 0 : 2 ] ) ; endmodule"
+    let _r18 = read_verilog(_v18)
+    if _r18.ok != 1 {
+        println("FAIL T18 unpacked: " + _r18.message); fails = fails + 1
+    } else {
+        let _m18 = _r18.design.modules[0]
+        if len(_m18.wires) != 3 {
+            println("FAIL T18a wire_count got " + str(len(_m18.wires)))
+            fails = fails + 1
+        }
+        let _b1 = rtlil_find_wire(_m18, "bus[1]")
+        if _b1 < 0 {
+            println("FAIL T18b bus[1]_missing"); fails = fails + 1
+        } else {
+            if _m18.wires[_b1].width != 4 {
+                println("FAIL T18c bus[1]_width"); fails = fails + 1
+            }
+        }
+    }
+
+    // T19 — function declaration parsing (function … endfunction).
+    total = total + 1
+    let _v19 = "module fm ( input a , output y ) ; function automatic f ( input x ) ; f = x ; endfunction assign y = a ; endmodule"
+    let _r19 = read_verilog(_v19)
+    if _r19.ok != 1 {
+        println("FAIL T19 function_decl: " + _r19.message); fails = fails + 1
+    }
+
+    // T20 — _rv_parse_function: name, args, body, lookup.
+    total = total + 1
+    let _ftoks = _rv_tokens(_rv_normalize_punct(
+        "function automatic signed [ 3 : 0 ] g ( input [ 7 : 0 ] d ) ; g = d ; endfunction"))
+    let _fr = _rv_parse_function(PState { toks: _ftoks, pos: 0, err: "" })
+    if len(_fr.err) > 0 {
+        println("FAIL T20 err: " + _fr.err); fails = fails + 1
+    }
+    if _fr.func.name != "g" {
+        println("FAIL T20a fname got " + _fr.func.name); fails = fails + 1
+    }
+    if len(_fr.func.args) != 1 {
+        println("FAIL T20b argcount got " + str(len(_fr.func.args))); fails = fails + 1
+    }
+    if _rv_find_function([_fr.func], "g") != 0 {
+        println("FAIL T20c find_function"); fails = fails + 1
+    }
+    if _rv_find_function([_fr.func], "missing") != (0 - 1) {
+        println("FAIL T20d find_miss"); fails = fails + 1
+    }
+
+    // T21 — compound expression → RTLIL cell tree (parens + 2 ops).
+    total = total + 1
+    let _v21 = "module ce ( input a , input b , input c , output y ) ; assign y = ( a & b ) | c ; endmodule"
+    let _r21 = read_verilog(_v21)
+    if _r21.ok != 1 {
+        println("FAIL T21 compound: " + _r21.message); fails = fails + 1
+    } else {
+        let _m21 = _r21.design.modules[0]
+        if rtlil_count_cells_of_type(_m21, "$and") != 1 {
+            println("FAIL T21a and_count"); fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m21, "$or") != 1 {
+            println("FAIL T21b or_count"); fails = fails + 1
+        }
+    }
+
+    // T22 — arithmetic + comparison operators in one expression.
+    total = total + 1
+    let _v22 = "module ar ( input a , input b , input c , output y ) ; assign y = a + b == c ; endmodule"
+    let _r22 = read_verilog(_v22)
+    if _r22.ok != 1 {
+        println("FAIL T22 arith: " + _r22.message); fails = fails + 1
+    } else {
+        let _m22 = _r22.design.modules[0]
+        if rtlil_count_cells_of_type(_m22, "$add") != 1 {
+            println("FAIL T22a add"); fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m22, "$eq") != 1 {
+            println("FAIL T22b eq"); fails = fails + 1
+        }
+    }
+
+    // T23 — array indexing in expression: `bus[1]` folds to wire name.
+    total = total + 1
+    let _v23 = "module ai ( input wire [ 3 : 0 ] bus [ 0 : 2 ] , output y ) ; assign y = bus[1] ; endmodule"
+    let _r23 = read_verilog(_v23)
+    if _r23.ok != 1 {
+        println("FAIL T23 array_index: " + _r23.message); fails = fails + 1
+    } else {
+        let _m23 = _r23.design.modules[0]
+        // expect connect lhs=y, rhs=bus[1] (the indexed wire created by T18-style expansion)
+        if len(_m23.connect_lhs) < 1 {
+            println("FAIL T23a no_connect"); fails = fails + 1
+        } else {
+            let _last = len(_m23.connect_lhs) - 1
+            if _m23.connect_rhs[_last] != "bus[1]" {
+                println("FAIL T23b rhs got `" + _m23.connect_rhs[_last] + "`"); fails = fails + 1
+            }
+        }
+    }
+
+    // T25 — generate-for static unroll: 4 iterations → 4 connects.
+    total = total + 1
+    let _v25 = "module gm #( parameter N = 4 ) ( input wire din [ 0 : 3 ] , output wire dout [ 0 : 3 ] ) ; genvar p ; generate for ( p = 0 ; p < N ; p = p + 1 ) begin : gen_assign assign dout [ p ] = din [ p ] ; end endgenerate endmodule"
+    let _r25 = read_verilog(_v25)
+    if _r25.ok != 1 {
+        println("FAIL T25 generate_for: " + _r25.message); fails = fails + 1
+    } else {
+        let _m25 = _r25.design.modules[0]
+        if len(_m25.connect_lhs) != 4 {
+            println("FAIL T25a connect_count got " + str(len(_m25.connect_lhs))); fails = fails + 1
+        } else {
+            // verify the third iteration produced `connect dout[2] din[2]`
+            let mut found = 0
+            let mut k = 0
+            while k < len(_m25.connect_lhs) {
+                if _m25.connect_lhs[k] == "dout[2]" && _m25.connect_rhs[k] == "din[2]" {
+                    found = 1
+                }
+                k = k + 1
+            }
+            if found == 0 {
+                println("FAIL T25b dout[2]=din[2] not found"); fails = fails + 1
+            }
+        }
+    }
+
+    // T24 — array indexing with parameter-folded constant.
+    total = total + 1
+    let _v24 = "module ap2 #( parameter K = 2 ) ( input wire [ 7 : 0 ] mem [ 0 : 3 ] , output y ) ; assign y = mem[K + 1] ; endmodule"
+    let _r24 = read_verilog(_v24)
+    if _r24.ok != 1 {
+        println("FAIL T24 array_param: " + _r24.message); fails = fails + 1
+    } else {
+        let _m24 = _r24.design.modules[0]
+        let _last = len(_m24.connect_lhs) - 1
+        if _last < 0 {
+            println("FAIL T24a no_connect"); fails = fails + 1
+        } else {
+            if _m24.connect_rhs[_last] != "mem[3]" {
+                println("FAIL T24a expected mem[3] got `" + _m24.connect_rhs[_last] + "`")
+                fails = fails + 1
+            }
+        }
+    }
+
+    // T26 — single-statement clocked always → $dff cell.
+    total = total + 1
+    let _v26 = "module df ( input clk , input d , output reg q ) ; always @ ( posedge clk ) q <= d ; endmodule"
+    let _r26 = read_verilog(_v26)
+    if _r26.ok != 1 {
+        println("FAIL T26 dff: " + _r26.message); fails = fails + 1
+    } else {
+        let _m26 = _r26.design.modules[0]
+        if rtlil_count_cells_of_type(_m26, "$dff") != 1 {
+            println("FAIL T26a dff_count got " + str(rtlil_count_cells_of_type(_m26, "$dff")))
+            fails = fails + 1
+        }
+    }
+
+    // T27 — single-statement combinational always → connect.
+    total = total + 1
+    let _v27 = "module cb ( input a , output reg y ) ; always @ ( * ) y = a ; endmodule"
+    let _r27 = read_verilog(_v27)
+    if _r27.ok != 1 {
+        println("FAIL T27 comb_always: " + _r27.message); fails = fails + 1
+    } else {
+        if len(_r27.design.modules[0].connect_lhs) < 1 {
+            println("FAIL T27a no_connect"); fails = fails + 1
+        }
+    }
+
+    // T28 — body wire decl with packed width + 1-D unpacked array.
+    // `wire [3:0] bus[0:2];` → bus[0]..bus[2], each 4-bit.
+    total = total + 1
+    let _v28 = "module wb ( input clk ) ; wire [ 3 : 0 ] bus [ 0 : 2 ] ; endmodule"
+    let _r28 = read_verilog(_v28)
+    if _r28.ok != 1 {
+        println("FAIL T28 body_wire: " + _r28.message); fails = fails + 1
+    } else {
+        let _m28 = _r28.design.modules[0]
+        let _b0 = rtlil_find_wire(_m28, "bus[0]")
+        if _b0 < 0 {
+            println("FAIL T28a bus[0]_missing"); fails = fails + 1
+        } else {
+            if _m28.wires[_b0].width != 4 {
+                println("FAIL T28b bus[0]_width got " + str(_m28.wires[_b0].width))
+                fails = fails + 1
+            }
+        }
+        let _b2 = rtlil_find_wire(_m28, "bus[2]")
+        if _b2 < 0 {
+            println("FAIL T28c bus[2]_missing"); fails = fails + 1
+        }
+    }
+
+    // T30 — multi-statement always: `begin q1 <= d1; q2 <= d2; end` → 2 $dff.
+    total = total + 1
+    let _v30 = "module mm ( input clk , input d1 , input d2 , output reg q1 , output reg q2 ) ; always @ ( posedge clk ) begin q1 <= d1 ; q2 <= d2 ; end endmodule"
+    let _r30 = read_verilog(_v30)
+    if _r30.ok != 1 {
+        println("FAIL T30 multi_dff: " + _r30.message); fails = fails + 1
+    } else {
+        let _m30 = _r30.design.modules[0]
+        if rtlil_count_cells_of_type(_m30, "$dff") != 2 {
+            println("FAIL T30a dff_count got " + str(rtlil_count_cells_of_type(_m30, "$dff")))
+            fails = fails + 1
+        }
+    }
+
+    // T29 — body `reg [W-1:0] q;` with parameter-folded width.
+    total = total + 1
+    let _v29 = "module rg #( parameter W = 8 ) ( input clk ) ; reg [ W - 1 : 0 ] q ; endmodule"
+    let _r29 = read_verilog(_v29)
+    if _r29.ok != 1 {
+        println("FAIL T29 body_reg: " + _r29.message); fails = fails + 1
+    } else {
+        let _qi = rtlil_find_wire(_r29.design.modules[0], "q")
+        if _qi < 0 {
+            println("FAIL T29a q_missing"); fails = fails + 1
+        } else {
+            if _r29.design.modules[0].wires[_qi].width != 8 {
+                println("FAIL T29b q_width"); fails = fails + 1
+            }
+        }
     }
 
     if fails > 0 {

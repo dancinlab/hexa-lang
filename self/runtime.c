@@ -22,8 +22,11 @@
 #include <regex.h>      // G3-REGEX 2026-05-06: POSIX ERE regcomp/regexec
 #include <sys/mman.h>   // RFC 025 (2026-05-12): mmap-backed safetensors load
 extern char **environ; // posix_spawnp inherits parent env explicitly
-#if defined(__APPLE__)
+// execinfo.h: HEXA_OOB_TRACE backtrace path; available on both Apple
+// libSystem and glibc. RFC 063/064 ubu pool fire (FIRMWARE.md G-R0)
+// hit clang implicit-decl error when the include was Apple-only.
 #include <execinfo.h>
+#if defined(__APPLE__)
 #include <mach/mach.h>
 #include <mach/task.h>
 #include <mach/task_info.h>

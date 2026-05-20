@@ -80,6 +80,11 @@ fn cmd_help() {
     println("           qdrift|cdr|wigner|qfi|shallow|gme-steer|mabk|mirror-bench]")
     println("                                          quantum mirror substrate (38 modules, RFC 045)")
     println("    e.g. hexa qmirror chsh                CHSH Bell test (Tsirelson-class S)")
+    println("  loop [--once|--budget N|--time D] [--lenses ...] [--no-fire|--fire --budget U]")
+    println("                                          self-growing atlas cycle — 8 stage (RFC 065)")
+    println("                                          binary built-in lens table + PR-only candidates")
+    println("    e.g. hexa loop                        --once --no-fire --dry-run (safe default)")
+    println("    e.g. hexa loop --status               print state-dir + LENS_COUNT + active families")
     println("")
     println("ATLAS SSOT  (zero-I/O rodata, ATLAS_HASH pinned, ~6594 P/C/L nodes)")
     println("  atlas hash | stats                      Read meta")
@@ -4054,6 +4059,28 @@ if len(av) < 3 {
             }
             cmd_run(qm_script, qm_args)
         }
+    } else if sub == "loop" {
+        // RFC 065 — stdlib/loop/cycle.hexa dispatch.
+        // 8-stage self-growing atlas cycle (SCAN · LENS · DEDUP · GATE ·
+        // FIRE · DRAFT · AUDIT · EXHAUST?) with binary built-in lens table
+        // sibling to atlas (compiler/lenses/embedded.gen.hexa). Output goes
+        // to inbox/{atlas,lens}_candidates/ — PR-only, never direct fold.
+        // Phase B-2.1: cycle/end state-file I/O wired.
+        // Phase B-3   : this verb dispatch (current commit).
+        // Phase C     : lens bodies + first inbox/atlas_candidates/ PR.
+        let __inst_lp = install_dir_from_argv0()
+        let mut lp_args = []
+        let mut lpi = 3
+        while lpi < len(av) {
+            lp_args.push(av[lpi])
+            lpi = lpi + 1
+        }
+        let mut lp_script = "stdlib/loop/cycle.hexa"
+        if len(__inst_lp) > 0 {
+            let inst_path = __inst_lp + "/stdlib/loop/cycle.hexa"
+            if file_exists(inst_path) { lp_script = inst_path }
+        }
+        cmd_run(lp_script, lp_args)
     } else if is_absorbed_verb(sub) {
         // nexus absorption surface (2026-05-13 final consolidation):
         //

@@ -1667,6 +1667,15 @@ fn gen2_fn_decl(node) {
     if gen2_has_attr(node, "hot") { fn_attr = " __attribute__((hot))" }
     if gen2_has_attr(node, "cold") { fn_attr = " __attribute__((cold))" }
     if gen2_has_attr(node, "noinline") { fn_attr = " __attribute__((noinline))" }
+    // FIRMWARE.md G-F* / G-R1 placeholder — RFC 063 (firmware) / RFC 064 (rtl)
+    // recognize @target / @mmio / @interrupt / @asm annotations but defer
+    // actual lowering to dedicated codegen cycles. For now: parse OK
+    // (annotation accepted, no error), emit warning comment, fall through
+    // to standard codegen. Bootstrap regen lands these annotations as
+    // first-class lowering in their dedicated PRs.
+    if gen2_has_attr(node, "target") || gen2_has_attr(node, "mmio") || gen2_has_attr(node, "interrupt") || gen2_has_attr(node, "asm") {
+        chunks.push("    /* FIRMWARE.md @target/@mmio/@interrupt/@asm — codegen lowering pending RFC 063/064 (treated as no-op on this lane) */\n")
+    }
     chunks.push(prefix + "HexaVal " + _fn_name + "(" + p + ")" + fn_attr + " {\n")
     // @specialize: emit type-specialized guard at entry (inside fn body)
     if gen2_has_specialize(node) {

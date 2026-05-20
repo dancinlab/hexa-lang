@@ -39,17 +39,23 @@ Blockers:
 
 ## Next pickup (suggested order)
 
-1. **Cheap & local — `read_verilog` SCOPE expansion** (no extra
-   substrate needed). For each construct, one new fn + one new
-   selftest:
-   - `localparam` / `parameter` declarations (constant-folded)
-   - `always @(*)` block → comb-process (passes.proc lifts it)
-   - `always @(posedge clk)` → sync-process → $dff (already wired)
-   - `case/casez` → mux-tree
-   - `generate for (i = …) begin … end` → loop unrolling
-   - `[W-1:0]` multi-bit wires (treat as vector)
-   - `function automatic` → inline lookup
-   This unlocks the §5 trace beyond `:read_verilog`.
+1. **~~Cheap & local — `read_verilog` SCOPE expansion~~ — LANDED** in 12+
+   subsequent commits (head 19ea268e via PR #115). 34/34 selftests PASS
+   covering all 6 features below. Status flip 2026-05-20 after a
+   dup-race precheck sub-agent (a00e698b...) confirmed against origin/main.
+   - `localparam` / `parameter` — commit `83e8953d` (declaration parse + symbol table)
+   - constant-expression evaluator — commit `d9b5d328`
+   - `[W-1:0]` ANSI-style width elaboration — commit `03028695`
+   - `function automatic` (declaration parse) — commit `59cebf47`
+   - `always @(posedge clk)` → `$dff` lift — commit `0fe6ddc9`
+   - `generate for` static unroll + LHS indexing — commit `6d96a3cc`
+   - if/else / for inside always (case/casez precursor) — commits `a93b707b` · `c320e795` · `64b4290d`
+   - multi-statement always body + 2-level index + integer body decl — commits `28554a64` · `3bbc82b8` · `847f3875`
+
+   §5 gate's real blockers (2026-05-20 §5-measurement agent finding):
+   - (a) `passes.hexa::pass_techmap_sky130` covers only 5 cell types; need `$eq/$ne/$add/$mod/$mux/$logic_*` lowering rules.
+   - (b) `abc_map.hexa` ABC script orders `read_blif` before `read_lib` → "library not available". **FIX IN FLIGHT** (PR via agent a1e5cb88...).
+   - (c) `gate_record.hexa` placeholder verdict; needs real `lib_total_area` call. **FIX IN FLIGHT** (same PR).
 
 2. **Substrate install (manual, parallel)** — `brew install
    berkeley-abc` (or build from source). Without ABC, the D18
