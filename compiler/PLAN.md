@@ -4578,4 +4578,27 @@ Sub-cycle scope (per RFC 070 §4.3 — explicitly **smallest behavior change**, 
 
 **files**: `self/main.hexa` (5 edit blocks · ≈40 net added lines including comments) · `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` (status + phase rows + §4.3) · `compiler/PLAN.md` (본 entry).
 
+### 진행 로그 — RFC 070 G7-A.native scaffold LANDED (compiler/codegen/{arm64_darwin,x86_64_linux}.hexa header markers · zero behavior change)
+
+**branch**: `s1-step2-codegen-perf` · **date**: 2026-05-20 · **shape**: B (RFC §4.4 + scaffold marker comments only)
+
+Sub-cycle scope: G7-A.flag-wire (commit `66b055c4`, C path) wired `--shared` through to `clang -fPIC -shared` but explicitly REFUSES `HEXA_BACKEND=native + --shared` at `self/main.hexa::cmd_build` L1973-1978. The native backends in `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` are the parallel sub-cycle owed before that gate can drop. RFC 070 §4 phase table already lists `G7-A.native` as a row (commit `66b055c4` / promote commits `abc50fa7`, `5c380081`). This sub-cycle splits that row into **scaffold ✅** (this commit) + **impl** (future) and documents the addressing-mode delta as comment-only markers in the two codegen file headers.
+
+Dup-race precheck (per `feedback_inbox_dup_race_precheck.md`): clean. `git log --all --oneline | grep -iE "PIC|GOT|PLT|RIP.rel|position.independent|--shared"` returned only `66b055c4` (G7-A.flag-wire), `e83dfd99` (cycle 30 `R_X86_64_PLT32` for call sites — half of G7-A.native impl already present but not for addressing), and unrelated curl-PLT bypass + binary regen commits. `git grep -nE "PIC|R_X86_64_GOTPCREL|R_AARCH64_ADR_GOT_PAGE" compiler/ self/` returned only PLAN.md cross-references + `self/main.hexa` gate-message strings — `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` were untouched. No parallel session had raced this.
+
+| change | location | one-liner |
+| --- | --- | --- |
+| RFC §4 table split | `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` L84 | `G7-A.native` row → `G7-A.native scaffold ✅` + `G7-A.native impl` rows, scaffold explicitly marked "zero behavior change" |
+| RFC §4.4 added | same file, between §4.3 and §5 | new sub-section documenting the scaffold cycle: addressing baseline, impl delta, falsifier hooks, scope marker, files list, cross-links |
+| arm64-darwin scaffold marker | `compiler/codegen/arm64_darwin.hexa` header (L36 area, before imports) | ≈45-line `// RFC 070 G7-A.native scaffold` comment block — current `adrp + @PAGE/@PAGEOFF` baseline · `@GOTPAGE/@GOTPAGEOFF` delta · `.private_extern` for hidden-by-default · F-A1 page-aligned dispatch + F-A2 single-symbol `nm` hooks · "scope marker: scaffold-only" disclaimer |
+| x86_64-linux scaffold marker | `compiler/codegen/x86_64_linux.hexa` header (L34 area, before imports) | ≈50-line parallel marker block — absolute-imm baseline (NOT PIC) · `[rip+sym@GOTPCREL]` delta + reloc kinds (`R_X86_64_GOTPCREL` extends cycle 30's PLT32) · `.hidden` directive · same F-A1/F-A2 hooks |
+
+**Parse-gate**: `/tmp/hexa-parse-rfc070 parse compiler/codegen/arm64_darwin.hexa` + `... x86_64_linux.hexa` both report `OK: ... parses cleanly` (hyphenated-basename hexa_real shim per `reference_hexa_basename_sigkill_workaround_2026_05_19.md`, `SIDECAR_NO_POOL=1` + `HEXA_LANG=/Users/ghost/core/hexa-lang` env). Comment-only edits — must not break syntax, and don't.
+
+**Out of scope (g3-honest)**: zero functional change. No addressing-mode helper, no `shared` flag plumbed into native entry points, no `.hidden`/`.private_extern` directive emission, no GOT reloc kind added to LIR, no falsifier measured. `HEXA_BACKEND=native + --shared` still raises `exit(1)` at the existing gate from G7-A.flag-wire. The two codegen file bodies (`codegen_arm64_darwin`, `codegen_x86_64_linux`) are byte-untouched. `self/native/hexa_v2` is not regenerated (per `@D g_inbox_processing_loop` step 7 — binary promote is the standard deploy step, separate from SSOT closure). `inbox/PATCHES.yaml` untouched. Cross-target PIC (`--target=<triple>` + `--shared`) remains gated. Mini (arm64 Mach-O) + ubu-1 (ELF x86_64) remote measurement deferred to G7-A.native impl sub-cycle (no measurable surface this commit).
+
+**files**: `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` (§4 table row split + §4.4 ≈30 added lines) · `compiler/codegen/arm64_darwin.hexa` (header comment block · ≈45 lines · zero code change) · `compiler/codegen/x86_64_linux.hexa` (header comment block · ≈50 lines · zero code change) · `compiler/PLAN.md` (본 entry).
+
+cross-link: RFC 070 §4.3 (G7-A.flag-wire, C path) · `@D g_inbox_processing_loop` Shape B (multi-cycle work = RFC draft + scaffold landed) · `@D g5` hexa-native-only (native codegen IS the hexa-native path · scaffold prepares it for `.so`/`.dylib` parity with the C-path fallback) · `@D g3` real-limits-first (F-A1 = OS page granularity · F-A2 = ELF/Mach-O symbol-table format spec) · `@D g_plan_consolidation` (compile-pipeline cycle → `compiler/PLAN.md` single SSOT).
+
 cross-link: `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` · `inbox/patches/g7-hexa-ld-dlopen.md` (source patch, status remains `rfc-promoted`) · `@D g_inbox_processing_loop` Shape A · `@D g5` hexa-native-only (libc dlopen is pre-existing FFI consumer per RFC §2 audit; `--shared` widens but does not add).

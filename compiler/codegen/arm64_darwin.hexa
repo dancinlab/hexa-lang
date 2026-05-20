@@ -32,6 +32,47 @@
 // Constraints (from RFC-018 §4):
 //   - struct >16B by reference (not handled v1)
 //   - hidden first arg for >16B return (not handled v1)
+//
+// ── RFC 070 G7-A.native scaffold (2026-05-20, comment-only marker) ──
+//
+// G7-A.flag-wire (C path · landed `66b055c4`) wires `hexa build --shared`
+// through to `clang -fPIC -shared`. The native backend below currently
+// REFUSES `HEXA_BACKEND=native` + `--shared` at `self/main.hexa::cmd_build`
+// L1973-1978 — this scaffold block documents the delta we owe the
+// native side before the gate can drop.
+//
+// Current arm64-darwin addressing baseline (PIE-equivalent, NOT PIC-`.dylib`):
+//   - Local symbol/cstring loads: `adrp Xn, sym@PAGE` + `add Xn, Xn, sym@PAGEOFF`
+//     (see L1042, L1057, L1067, L1099, L1117, L1377, L1441). PC-relative
+//     within ±4 GiB. Mach-O MH_PIE for the executable-shape output.
+//   - Extern fn references: today resolved at static-link time via the
+//     plt-less path; no GOT indirection emitted.
+//
+// G7-A.native impl delta (the next sub-cycle):
+//   1. Honor `bopts[4]=="1"` (the `shared` flag wired in G7-A.flag-wire)
+//      inside `codegen_arm64_darwin` entry — branch addressing-mode
+//      selection on it. Plumb `shared: string` through the codegen
+//      module-level options struct (currently absent; add one).
+//   2. Extern fn refs in shared mode go through the GOT:
+//        adrp Xn, sym@GOTPAGE
+//        ldr  Xn, [Xn, sym@GOTPAGEOFF]
+//      Reloc kinds = `ARM64_RELOC_GOT_LOAD_PAGE21` + `ARM64_RELOC_GOT_LOAD_PAGEOFF12`.
+//      Local fn refs stay on `@PAGE/@PAGEOFF` (no change).
+//   3. Hidden-visibility default: emit `.private_extern <sym>` directive
+//      for every defined fn EXCEPT `<plugin_id>_dispatch`, which alone
+//      gets `.globl`. Mach-O export trie then carries exactly 1 entry.
+//
+// Falsifier hooks for G7-A.native impl (real-limit anchored per `@D g3`):
+//   - F-A1: `<plugin_id>_dispatch` symbol address is page-aligned (real-limit
+//     = arm64 Darwin 16 KiB page granularity) AFTER `dlopen` at a
+//     non-default base — verifies PC-relative emission, not luck.
+//   - F-A2: `nm <plugin>.dylib | awk '$2 == "T" || $2 == "D"'` lists
+//     exactly 1 symbol matching `<plugin_id>_dispatch`. All others are
+//     local (`t`/`d`). Anchor = Mach-O export trie format (`<mach-o/loader.h>`).
+//
+// Scope marker: THIS commit is scaffold-only (zero behavior change). The
+// `codegen_arm64_darwin` body is untouched. See RFC 070 §4.4 for the
+// honest scope and `compiler/PLAN.md` for the cycle entry.
 
 import "../ir/mir.hexa"
 import "../ir/lir.hexa"

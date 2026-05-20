@@ -30,6 +30,52 @@
 //     0->rax, 1->rbx, 2->rcx, 3->rdx, 4->r8, 5->r9, 6->r10, 7->r11,
 //     8->r12, 9->r13, 10->r14, 11->r15, then wrap.
 //   Two-operand x86 form: emit `mov dst, lhs ; <op> dst, rhs`.
+//
+// ── RFC 070 G7-A.native scaffold (2026-05-20, comment-only marker) ──
+//
+// G7-A.flag-wire (C path · landed `66b055c4`) wires `hexa build --shared`
+// through to `clang -fPIC -shared`. The native backend below currently
+// REFUSES `HEXA_BACKEND=native` + `--shared` at `self/main.hexa::cmd_build`
+// L1973-1978 — this scaffold block documents the delta we owe the
+// native side before the gate can drop.
+//
+// Current x86_64-linux addressing baseline (NOT PIC):
+//   - Cross-fn symbol references emit absolute 64-bit immediates
+//     (`_x86_op_imm` produces literal offsets). No `[rip+disp32]` mode
+//     emitted today, except where cycle 30 (`e83dfd99`) added
+//     `R_X86_64_PLT32` for call sites (mem operands for jumps).
+//   - An `.so` produced from this path would carry non-relocatable
+//     `R_X86_64_64` fixups in `.text`, which `ld.so` REFUSES for
+//     `ET_DYN` (System V gABI §4.1, dynamic linker contract).
+//
+// G7-A.native impl delta (the next sub-cycle):
+//   1. Honor `bopts[4]=="1"` (the `shared` flag wired in G7-A.flag-wire)
+//      inside `codegen_x86_64_linux` entry — branch addressing-mode
+//      selection on it. Plumb `shared: string` through the codegen
+//      module-level options struct (currently absent; add one).
+//   2. Cross-fn symbol references in shared mode:
+//        - Extern fn/data: `lea rax, [rip+sym@GOTPCREL]` then
+//          `mov rax, [rax]` for data, or `call qword [rax]` for fn.
+//          Reloc kind = `R_X86_64_GOTPCREL` (extends cycle 30's
+//          PLT32 from call-site half to addressing half).
+//        - Local/PIE-style: `lea rax, [rip+sym]` with `R_X86_64_PC32`
+//          reloc (already used for branch targets internally; promote
+//          to data/fn-addr take-address sites too).
+//   3. Hidden-visibility default: emit `.hidden <sym>` directive for
+//      every defined fn EXCEPT `<plugin_id>_dispatch`, which alone
+//      gets `.globl`. ELF dynsym then carries exactly 1 global entry.
+//
+// Falsifier hooks for G7-A.native impl (real-limit anchored per `@D g3`):
+//   - F-A1: `<plugin_id>_dispatch` symbol address is page-aligned (real-limit
+//     = x86_64 Linux 4 KiB page granularity) AFTER `dlopen` at a
+//     non-default base — verifies PC-relative emission, not luck.
+//   - F-A2: `nm <plugin>.so | awk '$2 == "T" || $2 == "D"'` lists
+//     exactly 1 symbol matching `<plugin_id>_dispatch`. All others are
+//     local (`t`/`d`). Anchor = ELF symbol-table format (System V gABI §4).
+//
+// Scope marker: THIS commit is scaffold-only (zero behavior change). The
+// `codegen_x86_64_linux` body is untouched. See RFC 070 §4.4 for the
+// honest scope and `compiler/PLAN.md` for the cycle entry.
 
 import "../ir/mir.hexa"
 import "../ir/lir.hexa"

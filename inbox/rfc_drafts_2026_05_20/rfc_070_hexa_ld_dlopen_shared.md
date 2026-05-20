@@ -81,7 +81,8 @@ Manifest section name (proposed): ELF `.hexa.cap` / Mach-O `__HEXA,__cap` (16-by
 |-------|-------------|-----------|-----------|
 | G7-A  | `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` accepts `--shared` mode flag; PIC code paths; hidden-visibility default; only `<plugin_id>_dispatch` exported | none | F-A1, F-A2 |
 | G7-A.flag-wire ✅ | `hexa build --shared <plugin>.hexa -o <plugin>.so` parses on the C path → clang `-fPIC -shared` pass-through (LANDED 2026-05-20, `self/main.hexa::cmd_build`). HEXA_BACKEND=native + `--c-only` + `--target=<triple>` paths refuse `--shared` rather than silently producing the wrong artifact. Hidden-visibility + 1-symbol export NOT yet enforced (`-shared` alone exports every public symbol — that gap is what F-A2 measures). | none | none yet — wiring only |
-| G7-A.native | `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` PIC mode (MIR→LIR with PC-relative addressing + GOT-routed externs). Falsifiers F-A1/F-A2 run on the native-codegen output. | G7-A.flag-wire | F-A1, F-A2 (native) |
+| G7-A.native scaffold ✅ | `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` headers carry RFC 070 §4.4 scaffold-marker comments documenting current addressing-mode baseline (arm64-darwin = `adrp + @PAGE / @PAGEOFF` ≈ Mach-O PIE today; x86_64-linux = absolute 64-bit immediates, **NOT** PIC) + target PIC delta (`@GOTPAGE/@GOTPAGEOFF` for extern fns on arm64; `R_X86_64_GOTPCREL` + `[rip+disp32]` LEA for x86_64; hidden-by-default visibility; `<plugin_id>_dispatch` sole exported symbol). **Zero behavior change** this commit. | G7-A.flag-wire | none yet — scaffold only |
+| G7-A.native impl | Honor `bopts[4]=="1"` (the `shared` flag wired in G7-A.flag-wire) inside the native-codegen entry points (`codegen_arm64_darwin` / `codegen_x86_64_linux`). PIC mode emits: (a) `adrp Xn, sym@GOTPAGE` + `ldr Xn, [Xn, sym@GOTPAGEOFF]` for arm64 extern fn refs; (b) `lea rax, [rip+sym@GOTPCREL]` for x86_64 extern fn refs; (c) per-function `.hidden` directive default, `.globl` only for `<plugin_id>_dispatch`. Falsifiers F-A1/F-A2 run on the native-codegen output. | G7-A.native scaffold | F-A1, F-A2 (native) |
 | G7-A.falsify | F-A1 (PIC re-load at non-default base) + F-A2 (single-`T`/`D` `<plugin_id>_dispatch` symbol via `nm`) measured on the C-path `.so`/`.dylib` produced by G7-A.flag-wire. | G7-A.flag-wire | F-A1, F-A2 |
 | G7-B  | `compiler/link/hexa_ld.hexa --shared` emits `ET_DYN`/`MH_DYLIB` with 1-symbol dynsym/export-trie | G7-A | F-B1, F-B2, F-B3 |
 | G7-C  | `self/runtime.{c,h}` adds `hexa_dlopen/dlsym/dlclose/dlerror`; `stdlib/dynlink.hexa` ships | G7-B (or independent if consuming pre-built `.so` only) | F-C1, F-C2 |
@@ -125,6 +126,32 @@ After 4.2 (the scaffold-only RFC promote commit `abc50fa7`), the very next sub-c
 The **hidden-visibility default** + **1-symbol export** narrowing from §3.B is NOT done here. The `-shared` clang invocation today exports every public symbol, which is what F-A2 will quantify in the next sub-cycle (it MAY pass for a trivial 1-fn `.hexa` source by luck — but the SSOT does not enforce single-symbol export yet). All falsifiers (F-A1, F-A2, F-B*, F-C*, F-D*) remain unmeasured.
 
 This sub-cycle is honest **flag wiring only** per `@D g3` (no over-claim). The `OK: built` line for `--shared` builds prints the explicit caveat `(shared library, RFC 070 G7-A flag-wiring only — F-A1/F-A2 next sub-cycle)`.
+
+### 4.4 G7-A.native scaffold (2026-05-20, **Shape B — scaffold marker only**)
+
+After 4.3 (the C-path `--shared` flag wiring), the parallel `compiler/codegen/{arm64_darwin,x86_64_linux}.hexa` native backends remain on a **non-PIC baseline**. The C path (clang `-fPIC -shared`) is the only PIC producer today; `HEXA_BACKEND=native` + `--shared` is explicitly refused at `self/main.hexa::cmd_build` L1973-1978 (the gate added in 4.3).
+
+This sub-cycle is the **scaffold-only** Shape-B counterpart for the native side per `@D g_inbox_processing_loop`. Concretely:
+
+1. **`compiler/codegen/arm64_darwin.hexa`** header gets an `// RFC 070 G7-A.native scaffold` block (≈15 lines, comment-only) documenting:
+   - **Current baseline**: arm64-darwin already uses `adrp Xn, sym@PAGE` + `add Xn, Xn, sym@PAGEOFF` for local symbol/cstring loads (see L1042, L1057, L1067, L1099, L1117, L1377, L1441). This is **Mach-O PIE equivalent**: PC-relative addressing within `<±4 GiB`, no absolute fixups in `__text`. ELF terminology = PIE; macOS calls it `MH_DYLDLINK` + `MH_PIE`. **For `.dylib` we need `MH_DYLIB` + PC-relative extern resolution.**
+   - **G7-A.native delta**: extern fn references (which today resolve at link time via the static-link plt-less path) MUST go through the GOT: `adrp Xn, sym@GOTPAGE` + `ldr Xn, [Xn, sym@GOTPAGEOFF]`. Local fn refs stay on `@PAGE/@PAGEOFF`. Hidden-visibility default + `<plugin_id>_dispatch` sole `.globl`.
+   - **Falsifier hook**: `F-A1` (page-aligned dispatch symbol after `dlopen` at non-default base) + `F-A2` (`nm`-counted single `T`/`D`).
+
+2. **`compiler/codegen/x86_64_linux.hexa`** header gets a parallel `// RFC 070 G7-A.native scaffold` block documenting:
+   - **Current baseline**: x86_64-linux uses **absolute 64-bit immediates** for symbol addresses (no `[rip+disp32]` mode emitted; `_x86_op_imm` produces literal offsets). This is **NOT PIC**: an `.so` produced from this path would have non-relocatable `R_X86_64_64` fixups in `.text`, which `ld.so` refuses for `ET_DYN`.
+   - **G7-A.native delta**: every cross-function symbol reference becomes `lea Xrax, [rip+sym@GOTPCREL]` (extern) or `lea Xrax, [rip+sym]` (local/PIE-style). Reloc kinds = `R_X86_64_GOTPCREL` (extern fn/data) + `R_X86_64_PC32` (local). The existing `R_X86_64_PLT32` emit added in cycle 30 (commit `e83dfd99`) is the call-site half; the addressing half is what this row delivers. Hidden-by-default visibility via `.hidden <sym>` directive; `<plugin_id>_dispatch` is the sole `.globl`.
+   - **Falsifier hook**: identical F-A1/F-A2 contract as arm64.
+
+3. **`compiler/PLAN.md` `## 진행 로그`** gains one entry pointing to this §4.4 + listing the 3 scaffold files (the two `compiler/codegen/*.hexa` + this RFC).
+
+4. **Parse-gate**: `/Users/ghost/.hx/bin/hexa_real parse compiler/codegen/arm64_darwin.hexa` + `... x86_64_linux.hexa` MUST report `OK: ... parses cleanly` (comment-only edits — must not break the existing syntax).
+
+**Out of scope (g3-honest)**: no addressing-mode helper added, no `shared` flag plumbed into the native entry points, no `.hidden` directive emission, no GOT reloc kind added to LIR, no falsifier measured. Today's `HEXA_BACKEND=native` + `--shared` still raises `exit(1)` at the gate from 4.3. The scaffold comments are **markers for the G7-A.native impl sub-cycle**, not implementation. `self/native/hexa_v2` is not regenerated. `inbox/PATCHES.yaml` is untouched. Cross-target PIC (`--target=<triple>` + `--shared`) remains gated. `self/codegen_c2.hexa` / `self/main.hexa` are not touched this commit.
+
+**files**: `compiler/codegen/arm64_darwin.hexa` (header comment block only · ≈15 lines added) · `compiler/codegen/x86_64_linux.hexa` (header comment block only · ≈15 lines added) · `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` (§4 table G7-A.native row split into `scaffold ✅` + `impl` + this §4.4) · `compiler/PLAN.md` (single entry).
+
+cross-link: §4.2 scaffold pattern · §4.3 C-path flag wiring · `@D g_inbox_processing_loop` Shape B · `@D g5` hexa-native-only (native codegen IS the hexa-native path — this scaffold prepares it for `.so`/`.dylib` parity with the C-path fallback) · `@D g3` real-limits-first (F-A1 anchored on OS page granularity, F-A2 anchored on ELF/Mach-O symbol-table format spec).
 
 ## 5. Open questions (verbatim from source patch §7 + 2026-05-20 status)
 
