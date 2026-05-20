@@ -229,6 +229,18 @@ fn pass_opt(d: Design) -> PassResult {
 //     - sky130_fd_sc_hd__and2_1  — 2-input AND  (A,B → X)
 //   No upstream Yosys source is copied; the tree shape is the textbook
 //   reduction (Kahng/Lienig/Markov/Hu "VLSI Physical Design" §5).
+//
+// CLEAN-ROOM PROVENANCE for $ne lowering (rfc_006 §5 bug (a) iter 2):
+//   The XOR-tree + OR-reduce shape is re-derived from the Boolean
+//   identity `ne(A,B) = OR_{i} (A[i] XOR B[i])` (IEEE 1364-2005 §5.1.7
+//   equality operator semantics — `!=` is the negation of `==`, which
+//   over per-bit equality vectors becomes a per-bit XOR reduced by OR).
+//   The SKY130 cells used are documented in
+//   `sky130_fd_sc_hd__tt_025C_1v80.lib`:
+//     - sky130_fd_sc_hd__xor2_1 — 2-input XOR (A,B → X)
+//     - sky130_fd_sc_hd__or2_1  — 2-input OR  (A,B → X)
+//   No upstream Yosys source is copied; the tree shape is the dual of
+//   the $eq reduction (Kahng/Lienig/Markov/Hu "VLSI Physical Design" §5).
 
 // CLEAN-ROOM: count the per-bit input "slots" of an $eq-shaped cell.
 //
@@ -386,6 +398,102 @@ fn _passes_lower_eq_cell(c: Cell) -> EqLowerResult {
     return EqLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
 }
 
+// CLEAN-ROOM: $ne uses the same pin convention as $eq (single A/B/Y or
+// bit-indexed A[i]/B[i]/Y), so the width counter is reused verbatim via
+// _passes_eq_width — no separate per-pin parser needed.
+
+// CLEAN-ROOM: lower one $ne cell into a tree of SKY130 cells + the
+// internal wires those cells need. Returns (new_cells, new_wires).
+//
+// Shape (dual of $eq):
+//   width=1 : 1 × xor2_1                (A,B → Y)
+//   width=N : N × xor2_1 (one per bit) → linear OR chain of (N-1) ×
+//             or2_1 reducing the per-bit not-equal-bits down to Y.
+//
+// Naming convention for fresh wires/cells:
+//   <cellname>$nebit$<i>  — output of i-th xor (per-bit inequality)
+//   <cellname>$neacc$<i>  — output of i-th OR-reducer (i = 1..N-1)
+//   <cellname>$xr$<i>     — i-th xor2_1 cell instance
+//   <cellname>$or$<i>     — i-th or-reducer cell instance
+// All freshly added wires are width=1, internal (dir_kind=0, port_id=0).
+struct NeLowerResult {
+    cells: [Cell],
+    wires: [Wire],
+    ok:    int,         // 1 = lowered, 0 = unsupported shape
+}
+
+fn _passes_lower_ne_cell(c: Cell) -> NeLowerResult {
+    let w = _passes_eq_width(c)
+    if w <= 0 {
+        return NeLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let y_net = _passes_pin_net(c, "Y")
+    if y_net == "" {
+        return NeLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+
+    if w == 1 {
+        let a_net = _passes_pin_net(c, "A")
+        let b_net = _passes_pin_net(c, "B")
+        if a_net == "" { return NeLowerResult { cells: [], wires: [], ok: 0 } }
+        if b_net == "" { return NeLowerResult { cells: [], wires: [], ok: 0 } }
+        let mut xr = rtlil_cell(c.name + "$xr$0", "sky130_fd_sc_hd__xor2_1", 1)
+        xr = rtlil_cell_connect(xr, "A", a_net)
+        xr = rtlil_cell_connect(xr, "B", b_net)
+        xr = rtlil_cell_connect(xr, "X", y_net)
+        out_cells = out_cells.push(xr)
+        return NeLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
+    }
+
+    // width N > 1 — emit N xor2_1, then (N-1) or2_1 chain.
+    let mut bit_wires: [str] = []
+    let mut i = 0
+    while i < w {
+        let pa = "A[" + str(i) + "]"
+        let pb = "B[" + str(i) + "]"
+        let a_net = _passes_pin_net(c, pa)
+        let b_net = _passes_pin_net(c, pb)
+        if a_net == "" { return NeLowerResult { cells: [], wires: [], ok: 0 } }
+        if b_net == "" { return NeLowerResult { cells: [], wires: [], ok: 0 } }
+        let bw = c.name + "$nebit$" + str(i)
+        out_wires = out_wires.push(rtlil_wire(bw, 1, 0, 0))
+        let mut xr = rtlil_cell(c.name + "$xr$" + str(i),
+                                "sky130_fd_sc_hd__xor2_1", 1)
+        xr = rtlil_cell_connect(xr, "A", a_net)
+        xr = rtlil_cell_connect(xr, "B", b_net)
+        xr = rtlil_cell_connect(xr, "X", bw)
+        out_cells = out_cells.push(xr)
+        bit_wires = bit_wires.push(bw)
+        i = i + 1
+    }
+    // Linear OR chain: acc0 = bit_wires[0] OR bit_wires[1]
+    //                  acc1 = acc0       OR bit_wires[2]   ...
+    //                  final OR output → y_net.
+    let mut acc = bit_wires[0]
+    let mut j = 1
+    while j < w {
+        let next_net = bit_wires[j]
+        let mut or_out: str = ""
+        if j == w - 1 {
+            or_out = y_net           // last OR drives the cell's Y
+        } else {
+            or_out = c.name + "$neacc$" + str(j)
+            out_wires = out_wires.push(rtlil_wire(or_out, 1, 0, 0))
+        }
+        let mut o2 = rtlil_cell(c.name + "$or$" + str(j),
+                                "sky130_fd_sc_hd__or2_1", 1)
+        o2 = rtlil_cell_connect(o2, "A", acc)
+        o2 = rtlil_cell_connect(o2, "B", next_net)
+        o2 = rtlil_cell_connect(o2, "X", or_out)
+        out_cells = out_cells.push(o2)
+        acc = or_out
+        j = j + 1
+    }
+    return NeLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
+}
+
 fn pass_techmap_sky130(d: Design) -> PassResult {
     let cb = _passes_total_cells(d)
     let mut out: [Module] = []
@@ -434,6 +542,23 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                         while wi < len(lr.wires) {
                             new_wires = new_wires.push(lr.wires[wi])
                             wi = wi + 1
+                        }
+                        expanded = 1
+                    }
+                }
+                if c.cell_type == "$ne" {
+                    let nr = _passes_lower_ne_cell(c)
+                    if nr.ok == 1 {
+                        // splice expansion in place of the $ne cell
+                        let mut nei = 0
+                        while nei < len(nr.cells) {
+                            new_cells = new_cells.push(nr.cells[nei])
+                            nei = nei + 1
+                        }
+                        let mut nwi = 0
+                        while nwi < len(nr.wires) {
+                            new_wires = new_wires.push(nr.wires[nwi])
+                            nwi = nwi + 1
                         }
                         expanded = 1
                     }
@@ -774,6 +899,126 @@ fn main() {
     }
     if rtlil_check_no_dangling(r_eq4.design.modules[0]) != 0 {
         println("FAIL T12e eq4_dangling_pin"); fails = fails + 1
+    }
+
+    // T13 — $ne lowering (1-bit, plain A/B/Y conns) → 1 xor2_1, 0 or2_1.
+    // CLEAN-ROOM: rfc_006 §5 bug (a) iter 2. Build a 1-bit $ne cell and
+    // confirm pass_techmap_sky130 expands it into a single SKY130 xor2_1
+    // cell (the degenerate width=1 case of the XOR-tree + OR-reduce shape).
+    total = total + 1
+    let mut m_ne1 = rtlil_new_module("ne1")
+    m_ne1 = rtlil_module_add_wire(m_ne1, rtlil_wire("a",  1, 1, 1))
+    m_ne1 = rtlil_module_add_wire(m_ne1, rtlil_wire("b",  1, 1, 2))
+    m_ne1 = rtlil_module_add_wire(m_ne1, rtlil_wire("ne", 1, 2, 3))
+    let mut c_ne1 = rtlil_cell("u_ne1", "$ne", 0)
+    c_ne1 = rtlil_cell_connect(c_ne1, "A", "a")
+    c_ne1 = rtlil_cell_connect(c_ne1, "B", "b")
+    c_ne1 = rtlil_cell_connect(c_ne1, "Y", "ne")
+    m_ne1 = rtlil_module_add_cell(m_ne1, c_ne1)
+    let mut d_ne1 = rtlil_new_design("test")
+    d_ne1 = rtlil_design_add(d_ne1, m_ne1)
+    let r_ne1 = pass_techmap_sky130(d_ne1)
+    if r_ne1.ok != 1 {
+        println("FAIL T13 ne1: " + r_ne1.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne1.design.modules[0], "sky130_fd_sc_hd__xor2_1") != 1 {
+        println("FAIL T13b ne1_xor_count (got "
+            + str(rtlil_count_cells_of_type(r_ne1.design.modules[0], "sky130_fd_sc_hd__xor2_1"))
+            + ")"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne1.design.modules[0], "sky130_fd_sc_hd__or2_1") != 0 {
+        println("FAIL T13c ne1_no_or"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne1.design.modules[0], "$ne") != 0 {
+        println("FAIL T13d ne1_residual"); fails = fails + 1
+    }
+
+    // T14 — $ne lowering 2-bit (bit-indexed A[0]/A[1]/B[0]/B[1]/Y) →
+    //       2 xor2_1 + 1 or2_1 (linear OR chain reducing to Y).
+    total = total + 1
+    let mut m_ne2 = rtlil_new_module("ne2")
+    m_ne2 = rtlil_module_add_wire(m_ne2, rtlil_wire("a0", 1, 1, 1))
+    m_ne2 = rtlil_module_add_wire(m_ne2, rtlil_wire("a1", 1, 1, 2))
+    m_ne2 = rtlil_module_add_wire(m_ne2, rtlil_wire("b0", 1, 1, 3))
+    m_ne2 = rtlil_module_add_wire(m_ne2, rtlil_wire("b1", 1, 1, 4))
+    m_ne2 = rtlil_module_add_wire(m_ne2, rtlil_wire("ne", 1, 2, 5))
+    let mut c_ne2 = rtlil_cell("u_ne2", "$ne", 0)
+    c_ne2 = rtlil_cell_connect(c_ne2, "A[0]", "a0")
+    c_ne2 = rtlil_cell_connect(c_ne2, "A[1]", "a1")
+    c_ne2 = rtlil_cell_connect(c_ne2, "B[0]", "b0")
+    c_ne2 = rtlil_cell_connect(c_ne2, "B[1]", "b1")
+    c_ne2 = rtlil_cell_connect(c_ne2, "Y",    "ne")
+    m_ne2 = rtlil_module_add_cell(m_ne2, c_ne2)
+    let mut d_ne2 = rtlil_new_design("test")
+    d_ne2 = rtlil_design_add(d_ne2, m_ne2)
+    let r_ne2 = pass_techmap_sky130(d_ne2)
+    if r_ne2.ok != 1 {
+        println("FAIL T14 ne2: " + r_ne2.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne2.design.modules[0], "sky130_fd_sc_hd__xor2_1") != 2 {
+        println("FAIL T14b ne2_xor_count (got "
+            + str(rtlil_count_cells_of_type(r_ne2.design.modules[0], "sky130_fd_sc_hd__xor2_1"))
+            + ", want 2)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne2.design.modules[0], "sky130_fd_sc_hd__or2_1") != 1 {
+        println("FAIL T14c ne2_or_count (got "
+            + str(rtlil_count_cells_of_type(r_ne2.design.modules[0], "sky130_fd_sc_hd__or2_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne2.design.modules[0], "$ne") != 0 {
+        println("FAIL T14d ne2_residual"); fails = fails + 1
+    }
+    // no-dangling: the new internal xor outputs must be added as wires.
+    if rtlil_check_no_dangling(r_ne2.design.modules[0]) != 0 {
+        println("FAIL T14e ne2_dangling_pin"); fails = fails + 1
+    }
+
+    // T15 — $ne lowering 4-bit → 4 xor2_1 + 3 or2_1 (3-stage chain).
+    total = total + 1
+    let mut m_ne4 = rtlil_new_module("ne4")
+    let mut nwi = 0
+    while nwi < 4 {
+        m_ne4 = rtlil_module_add_wire(m_ne4,
+            rtlil_wire("a" + str(nwi), 1, 1, nwi + 1))
+        nwi = nwi + 1
+    }
+    let mut nwj = 0
+    while nwj < 4 {
+        m_ne4 = rtlil_module_add_wire(m_ne4,
+            rtlil_wire("b" + str(nwj), 1, 1, nwj + 5))
+        nwj = nwj + 1
+    }
+    m_ne4 = rtlil_module_add_wire(m_ne4, rtlil_wire("ne", 1, 2, 9))
+    let mut c_ne4 = rtlil_cell("u_ne4", "$ne", 0)
+    let mut nwk = 0
+    while nwk < 4 {
+        c_ne4 = rtlil_cell_connect(c_ne4, "A[" + str(nwk) + "]", "a" + str(nwk))
+        c_ne4 = rtlil_cell_connect(c_ne4, "B[" + str(nwk) + "]", "b" + str(nwk))
+        nwk = nwk + 1
+    }
+    c_ne4 = rtlil_cell_connect(c_ne4, "Y", "ne")
+    m_ne4 = rtlil_module_add_cell(m_ne4, c_ne4)
+    let mut d_ne4 = rtlil_new_design("test")
+    d_ne4 = rtlil_design_add(d_ne4, m_ne4)
+    let r_ne4 = pass_techmap_sky130(d_ne4)
+    if r_ne4.ok != 1 {
+        println("FAIL T15 ne4: " + r_ne4.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne4.design.modules[0], "sky130_fd_sc_hd__xor2_1") != 4 {
+        println("FAIL T15b ne4_xor_count (got "
+            + str(rtlil_count_cells_of_type(r_ne4.design.modules[0], "sky130_fd_sc_hd__xor2_1"))
+            + ", want 4)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne4.design.modules[0], "sky130_fd_sc_hd__or2_1") != 3 {
+        println("FAIL T15c ne4_or_count (got "
+            + str(rtlil_count_cells_of_type(r_ne4.design.modules[0], "sky130_fd_sc_hd__or2_1"))
+            + ", want 3)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ne4.design.modules[0], "$ne") != 0 {
+        println("FAIL T15d ne4_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_ne4.design.modules[0]) != 0 {
+        println("FAIL T15e ne4_dangling_pin"); fails = fails + 1
     }
 
     if fails > 0 {
