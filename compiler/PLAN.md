@@ -4363,3 +4363,42 @@ Patch markdown: `inbox/patches/tui-input-needs-decset-2004-bracketed-paste.md` s
 
 Inbox patch `inbox/patches/self-tui-render-wide-to-narrow-ghost.md` (wilson harness-cli 2026-05-12 보고) 흡수. `render_flush` cell-by-cell loop 에 front-cell display width (`f_w = char_width_at(_front[idx][0])`) 계산을 추가 + `f_w > w` 분기에서 orphan 컨티뉴에이션 컬럼 `[x+w .. x+f_w)` 마다 명시적 `space` (`_cols` 가드 + `last_x+1` adjacency-aware cursor 위치) emission. tcell canonical 동작 — 직전 프레임의 wide glyph (2-cell 점유) 가 narrower 컨텐츠로 교체될 때, 대부분의 터미널 (macOS Terminal.app · iTerm2) 이 자동 클리어하지 않는 우측 컬럼 X+1 의 stale 픽셀이 한국어 ↔ ASCII alternation (`한a한a` IME 토글) 에서 1-cell gap 으로 보였던 회귀를 닫는다. `67b99c13` ("track terminal cursor by display width") 의 forward direction (wide ADD) fix 와 대칭 — 본 변경은 wide REMOVE/SHRINK 경로. 비용: shrinkage edge 마다 ~5 ANSI 바이트, 프레임당 보통 희소. `last_x`/`last_y`/`changed` 카운터는 ghost-emit 루프에서도 일관 갱신하여 후속 cell 의 adjacency 최적화 보존. 검증: `/Users/ghost/.hx/bin/hexa_real parse self/tui/render.hexa` OK. Shape-A surgical (1 파일 `self/tui/render.hexa` 의 단일 region 편집 + 패치 markdown status flip + 본 PLAN entry). binary promote 는 별도 standard deploy cycle 책임 (@D g_commit_push_deploy). g3-honest: parse-gate 만 확인 — 한국어 alternation 행동 검증은 실제 wilson interactive 세션 + 부트스트랩 재빌드 + 라이브 터미널 fire 필요.
 
+
+---
+
+## 진행 로그 — inbox/patches/kick-engine-overlay-dump-mode VERIFIED-CLOSED (2026-05-20)
+
+dup-race precheck (per @D g_inbox_processing_loop) on the anima-filed
+patch `inbox/patches/kick-engine-overlay-dump-mode.md` (filed 2026-05-19
+as `192917e5 docs(inbox): file kick-engine overlay-dump-mode patch
+(anima)`) found the request FULLY landed on `origin/main` as
+`586ed29d feat(drill): --dump-overlay flag — expose Mk.IX overlay
+content to stdout/file` (2026-05-19). All four discovery-engine entry
+points — `hexa drill` · `hexa kick` · `hexa omega` · `hexa chain` —
+accept `--dump-overlay <target>` where target = `stdout` (sentinel-
+framed flush: `__OVERLAY_BEGIN__ round=<n> lines=<k>` … `__OVERLAY_END__
+round=<n>`, mirroring the existing `__BT_AI2__` /
+`HEXA_DRILL_ANTI_HUB_TRACE` underscore-bracketed-uppercase pattern) or
+a filesystem path (append-mode, multi-round runs accumulate). Code
+lives in `compiler/drill/{drill,round}.hexa` + `compiler/omega/{omega,
+omega_test}.hexa` + `compiler/chain/chain.hexa` on `origin/main` (7
+files, 294 insertions in the 586ed29d commit). Default-byte-identical
+when the flag is omitted (every changed path gated on
+`len(dump_overlay) > 0` or `target == "stdout"`).
+
+Branch `s1-step2-codegen-perf` (this worktree's parent) predates
+586ed29d and will pick it up via the next origin/main merge — no
+re-implementation here per SOP "이미 있으면 status flip + no edit".
+Only edits this cycle: (1) closure marker added to the patch markdown
+SSOT (`inbox/patches/kick-engine-overlay-dump-mode.md`) with the
+standard `> **VERIFIED-CLOSED 2026-05-20**` line + `status:
+resolved-ssot` field (matching the convention used by
+`json-parse-uXXXX-raw-passthrough.md` and the bulk-triage sweep
+`ed5203ed`); (2) this single PLAN.md entry per @D g_plan_consolidation.
+No SSOT code touched; no binary promote; `inbox/PATCHES.yaml`
+unchanged per SOP. Parse-gate skipped (markdown-only edits — no .hexa
+touched in this cycle).
+
+Cross-link: @D g_inbox_processing_loop (close-only Shape A); @D g7
+inbox-patches-pipeline (downstream anima → upstream hexa-lang); @D
+g_atlas_binary_builtin (no atlas touch).
