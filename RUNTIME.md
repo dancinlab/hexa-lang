@@ -57,25 +57,31 @@ to libc). Step-2 (later cycle) ports each `hxlcl_*` to
 `stdlib/runtime/<name>.hexa` + codegen routing; runtime.c itself
 retires once its callers move to hexa-source.
 
-- [partial] `_strcmp` — removed cycle 46 (`hxlcl_strcmp` + #define)
-- [partial] `_memcmp` — removed cycle 46 (`hxlcl_memcmp` + #define)
-- [pending] `_strlen` — `hxlcl_strlen` landed + #define; 1 residual
-      libc call remains chained from `_strcat` inline path (cycle 47
-      lands `_strcat` and closes this in the same surgery)
+- [x] `_strcmp` — removed cycle 46 (`hxlcl_strcmp` + #define)
+- [x] `_memcmp` — removed cycle 46 (`hxlcl_memcmp` + #define)
+- [x] `_strlen` — removed cycle 47 (closed with strcat surgery)
+- [x] `_strcat` — removed cycle 47 (`hxlcl_strcat` + #define)
+- [x] `_strchr` — removed cycle 47 (`hxlcl_strchr` + #define)
+- [x] `_strstr` — removed cycle 47 (`hxlcl_strstr` + #define)
+- [x] `_strndup` — removed cycle 47 (`hxlcl_strndup` + #define)
+- [pending] `_strdup` — helper + #define landed cycle 47 but clang
+      `-Oz` reverse-libcall recognition converts `malloc(n+1) + copy`
+      pattern in `__hxa_exec_argv_core` back to `_strdup`. Defer to
+      cycle that rewrites pattern (@asm block or hexa-source port).
+- [pending] `_strncmp` — same as above (reverse-libcall from
+      `hxlcl_memcmp(a, b, k)` constant-size into `_strncmp`)
+- [pending] `_strrchr` — same as above (reverse-libcall residual)
 - [ ] `_atoi` — string → i64. → `stdlib/runtime/atoi.hexa`
 - [ ] `_atof` — string → f64 (scaled accumulator + decimal exponent)
 - [ ] `_atoll` — string → i64 (alias of atoi or longer-range variant)
 - [ ] `_strtol`, `_strtod`, `_strtoul` — strtok-like with end-ptr
-- [ ] `_strcpy`, `_strncpy`, `_strcat` — byte copy
-- [ ] `_strncmp` — byte compare (n-prefixed; cycle 47)
-- [ ] `_strchr`, `_strstr` — substring search
-- [ ] `_strdup` — strlen + malloc + memcpy
+- [ ] `_strcpy`, `_strncpy` — byte copy (strcat done above)
 - [ ] `_bzero` — fill with zero
 - [ ] `_qsort` — sort-array helper (rare; review usage)
 - [ ] `_bsearch` — binary search (rare; review usage)
 
 Acceptance: 12+ libc symbols removed → 137 → ~125 externs.
-Cycle 46 partial: 137 → 135 (−2 measured).
+Cycle 46-47 cumulative: 137 → 130 (−7 measured · 7 of 12+ symbols dropped).
 
 ### Tier-A.2 — Memory allocator family
 
@@ -363,3 +369,36 @@ For each Tier-A sub-phase:
 - S3 fixpoint validation DEFERRED to Phase 1 cumulative gate —
   this step is a single sub-symbol edit; preserving gen1 ≡ gen2
   is gated when full Tier-A.1 lands
+
+### 2026-05-20 — Phase 1 Tier-A.1 step-1 (cycle 47)
+
+- ✅ cycle 47 — 5 more libc symbols removed (135 → 130 externs ·
+  cumulative 137 → 130 = −7 vs Phase 0 baseline). aprime_cc smoke
+  exit(42) PASS · binary 1,120,024 → 1,119,976 B (−48 B,
+  effectively unchanged)
+- Removed this cycle: `_strcat` · `_strlen` (residual closed
+  alongside strcat) · `_strchr` · `_strstr` · `_strndup`
+- Added helpers: `hxlcl_strcat` · `hxlcl_strchr` · `hxlcl_strrchr`
+  · `hxlcl_strstr` · `hxlcl_strncmp` · `hxlcl_strdup` ·
+  `hxlcl_strndup` (7 helpers; all in `self/runtime.c` above the
+  runtime_core.c include, all with `noinline` + volatile reads)
+- Added `#define` redirects for those names
+- Source delta: `self/runtime.c` (+9 helpers + 7 defines · ~95
+  lines net) · `self/runtime_core.c` (perl substitutions across
+  the 6 new symbols)
+- `tool/build_aprime.sh` comment updated. `-fno-builtin-{strncmp,
+  strdup,strrchr}` flag combo tested — DID NOT help (still 130
+  externs, same 3 residuals); flags removed to keep the build
+  recipe clean
+- 3 stubborn residuals: `_strdup` · `_strncmp` · `_strrchr`. All
+  1 libc call each via clang `-Oz` reverse-libcall recognition
+  converting our `hxlcl_*` patterns back to libc-shaped calls
+  (e.g. `hxlcl_memcmp(a, b, k)` with constant `k` → `_strncmp`;
+  `malloc(n+1) + byte copy` → `_strdup`). `-fno-builtin-NAME`
+  flag is insufficient on -Oz; the optimizer pass that does the
+  reverse-recognition fires before the builtin check
+- Defer cycle: rewrite the 3 helpers either (a) as `@asm` blocks
+  that the optimizer can't pattern-match, (b) with explicit
+  side-effects to escape pattern fingerprinting, or (c) port to
+  hexa-source per the canonical step-2 path
+- S3 fixpoint check still DEFERRED to Phase 1 cumulative gate

@@ -209,18 +209,18 @@ static void _hexa_init_path_augment(void) {
         int found = 0;
         const char* p = old;
         while (*p) {
-            const char* q = strchr(p, ':');
+            const char* q = hxlcl_strchr(p, ':');
             size_t seg = q ? (size_t)(q - p) : hxlcl_strlen(p);
             if (seg == clen && hxlcl_memcmp(p, c, clen) == 0) { found = 1; break; }
             if (!q) break;
             p = q + 1;
         }
         if (!found) {
-            strcat(buf, c);
-            strcat(buf, ":");
+            hxlcl_strcat(buf, c);
+            hxlcl_strcat(buf, ":");
         }
     }
-    strcat(buf, old);
+    hxlcl_strcat(buf, old);
 
     // Only call setenv if we actually added something (buf longer than old).
     if (hxlcl_strlen(buf) > hxlcl_strlen(old)) {
@@ -2217,7 +2217,7 @@ HexaVal hexa_struct_pack_map(const char* type_name, int n,
             t->order_keys[t->len] = t->slots[idx].key;
             t->order_vals[t->len] = tv;
         } else {
-            t->slots[idx].key = strdup("__type__");
+            t->slots[idx].key = hxlcl_strdup("__type__");
             t->slots[idx].hash = h;
             t->slots[idx].order_idx = t->len;  // ROI-24
             // perf-31: header-alloc replaces strdup so HX_STRLEN is O(1).
@@ -2240,7 +2240,7 @@ HexaVal hexa_struct_pack_map(const char* type_name, int n,
             memcpy(kdup, k, kl + 1);
             t->slots[idx].key = kdup;
         } else {
-            t->slots[idx].key = strdup(k);
+            t->slots[idx].key = hxlcl_strdup(k);
         }
         t->slots[idx].hash = h;
         t->slots[idx].order_idx = t->len;  // ROI-24
@@ -2295,7 +2295,7 @@ HexaVal hexa_map_set(HexaVal m, const char* key, HexaVal val) {
     uint32_t mask = (uint32_t)(t->ht_cap - 1);
     uint32_t idx = h & mask;
     while (t->slots[idx].key) idx = (idx + 1) & mask;
-    t->slots[idx].key  = strdup(key);
+    t->slots[idx].key  = hxlcl_strdup(key);
     t->slots[idx].hash = h;
     t->slots[idx].order_idx = t->len;  // ROI-24: record order position
     t->vals[idx] = val;
@@ -3385,7 +3385,7 @@ static HexaMapTable* hmap_heapify(HexaMapTable* src) {
         uint32_t h = hexa_fnv1a_str(k);
         uint32_t idx = h & mask;
         while (dst->slots[idx].key) idx = (idx + 1) & mask;
-        dst->slots[idx].key = strdup(k);
+        dst->slots[idx].key = hxlcl_strdup(k);
         dst->slots[idx].hash = h;
         dst->slots[idx].order_idx = dst->len;  // ROI-24
         HexaVal nv = hexa_val_heapify(src->order_vals[i]);
@@ -4084,7 +4084,7 @@ HexaVal hexa_str_chars(HexaVal s) {
 }
 
 int hexa_str_contains(HexaVal s, HexaVal sub) {
-    return strstr(HX_STR(s), HX_STR(sub)) != NULL;
+    return hxlcl_strstr(HX_STR(s), HX_STR(sub)) != NULL;
 }
 
 int hexa_str_eq(HexaVal a, HexaVal b) {
@@ -4099,7 +4099,7 @@ int hexa_str_eq(HexaVal a, HexaVal b) {
 int rt_str_starts_with(HexaVal s, HexaVal prefix) {
     if (!HX_IS_STR(s) || !HX_IS_STR(prefix)) return 0;
     size_t plen = HX_STRLEN(prefix);
-    return strncmp(HX_STR(s), HX_STR(prefix), plen) == 0;
+    return hxlcl_strncmp(HX_STR(s), HX_STR(prefix), plen) == 0;
 }
 
 int rt_str_ends_with(HexaVal s, HexaVal suffix) {
@@ -4126,7 +4126,7 @@ HexaVal hexa_str_substring(HexaVal s, HexaVal start, HexaVal end) {
 
 int64_t hexa_str_index_of(HexaVal s, HexaVal sub) {
     if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
-    char* p = strstr(HX_STR(s), HX_STR(sub));
+    char* p = hxlcl_strstr(HX_STR(s), HX_STR(sub));
     if (!p) return -1;
     return (int64_t)(p - HX_STR(s));
 }
@@ -4144,7 +4144,7 @@ int64_t hexa_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start) {
     if ((size_t)st > hlen) return -1;
     const char* needle = HX_STR(sub);
     if (*needle == '\0') return st;
-    const char* p = strstr(hay + st, needle);
+    const char* p = hxlcl_strstr(hay + st, needle);
     if (!p) return -1;
     return (int64_t)(p - hay);
 }
@@ -4162,7 +4162,7 @@ int64_t hexa_str_last_index_of(HexaVal s, HexaVal sub) {
     if (nlen > hlen) return -1;
     int64_t last = -1;
     const char* p = hay;
-    while ((p = strstr(p, needle)) != NULL) {
+    while ((p = hxlcl_strstr(p, needle)) != NULL) {
         last = (int64_t)(p - hay);
         p += 1;  // overlap-safe
     }
@@ -5705,7 +5705,7 @@ HexaVal hexa_to_int(HexaVal v) {
 HexaVal hexa_format(HexaVal fmt, HexaVal arg) {
     // Single arg: replace first {} with arg
     if (!HX_IS_STR(fmt)) return fmt;
-    char* pos = strstr(HX_STR(fmt), "{}");
+    char* pos = hxlcl_strstr(HX_STR(fmt), "{}");
     if (!pos) return fmt;
     HexaVal sarg = hexa_to_string(arg);
     int before = pos - HX_STR(fmt);
@@ -5713,8 +5713,8 @@ HexaVal hexa_format(HexaVal fmt, HexaVal arg) {
     char* result = malloc(before + (int)HX_STRLEN(sarg) + after_len + 1);
     strncpy(result, HX_STR(fmt), before);
     result[before] = 0;
-    strcat(result, HX_STR(sarg));
-    strcat(result, pos + 2);
+    hxlcl_strcat(result, HX_STR(sarg));
+    hxlcl_strcat(result, pos + 2);
     return hexa_str_own(result);
 }
 
@@ -5730,7 +5730,7 @@ HexaVal hexa_format_n(HexaVal fmt, HexaVal args) {
     while (*src) {
         if (src[0] == '{' && ai < HX_ARR_LEN(args)) {
             // Find closing }
-            char* close = strchr(src, '}');
+            char* close = hxlcl_strchr(src, '}');
             if (close) {
                 int speclen = (int)(close - src - 1);
                 char spec[32] = {0};
@@ -5810,12 +5810,12 @@ HexaVal hexa_format_n(HexaVal fmt, HexaVal args) {
 HexaVal hexa_str_split(HexaVal s, HexaVal delim) {
     HexaVal arr = hexa_array_new();
     if (!HX_IS_STR(s) || !HX_IS_STR(delim)) return arr;
-    char* src = strdup(HX_STR(s));
+    char* src = hxlcl_strdup(HX_STR(s));
     char* d = HX_STR(delim);
     int dlen = hxlcl_strlen(d);
     char* pos = src;
     while (1) {
-        char* found = strstr(pos, d);
+        char* found = hxlcl_strstr(pos, d);
         if (!found) { arr = hexa_array_push(arr, hexa_str(pos)); break; }
         *found = 0;
         arr = hexa_array_push(arr, hexa_str(pos));
@@ -5840,7 +5840,7 @@ HexaVal rt_str_trim(HexaVal s) {
     while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') str++;
     int len = hxlcl_strlen(str);
     while (len > 0 && (str[len-1] == ' ' || str[len-1] == '\t' || str[len-1] == '\n' || str[len-1] == '\r')) len--;
-    char* result = strndup(str, len);
+    char* result = hxlcl_strndup(str, len);
     return hexa_str_own(result);
 }
 
@@ -5854,7 +5854,7 @@ HexaVal hexa_str_replace(HexaVal s, HexaVal old, HexaVal new_s) {
     int oldlen = (int)HX_STRLEN(old);
     size_t newlen = HX_STRLEN(new_s);
     while (1) {
-        char* found = strstr(pos, HX_STR(old));
+        char* found = hxlcl_strstr(pos, HX_STR(old));
         if (!found) {
             size_t rlen = hxlcl_strlen(pos);
             while (total + rlen + 1 > cap) { cap *= 2; result = realloc(result, cap); }
@@ -5879,14 +5879,14 @@ HexaVal hexa_str_replace(HexaVal s, HexaVal old, HexaVal new_s) {
 // codegen emits rt_str_* directly; hexa_str_to_upper/lower shims retired.
 HexaVal rt_str_to_upper(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
-    char* r = strdup(HX_STR(s));
+    char* r = hxlcl_strdup(HX_STR(s));
     for (int i = 0; r[i]; i++) if (r[i] >= 'a' && r[i] <= 'z') r[i] -= 32;
     return hexa_str_own(r);
 }
 
 HexaVal rt_str_to_lower(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
-    char* r = strdup(HX_STR(s));
+    char* r = hxlcl_strdup(HX_STR(s));
     for (int i = 0; r[i]; i++) if (r[i] >= 'A' && r[i] <= 'Z') r[i] += 32;
     return hexa_str_own(r);
 }
@@ -6071,7 +6071,7 @@ HexaVal hexa_str_count_substr(HexaVal s, HexaVal sub) {
     if (plen == 0) return hexa_int(0);
     int64_t cnt = 0;
     const char* p = src;
-    while ((p = strstr(p, pat)) != NULL) {
+    while ((p = hxlcl_strstr(p, pat)) != NULL) {
         cnt++;
         p += plen; // non-overlapping
     }

@@ -80,6 +80,80 @@ static int __attribute__((noinline)) hxlcl_strcmp(const char *a, const char *b) 
         if (ca == 0) return 0;
     }
 }
+// Cycle 47: `strcat` unhook. Same loop pattern in `hxlcl_strcat` body
+// would let clang's libcall recognizer convert it back to `strcat` +
+// `strlen`; the volatile read on the dest scan defeats that, mirroring
+// the cycle-46 helpers. Returns dest per C99 strcat semantics.
+static char *__attribute__((noinline)) hxlcl_strcat(char *dest, const char *src) {
+    char *p = dest;
+    while (((const volatile char *)p)[0]) p++;
+    size_t i = 0;
+    while (((const volatile char *)src)[i]) {
+        p[i] = src[i];
+        i++;
+    }
+    p[i] = '\0';
+    return dest;
+}
+// Cycle 47 batch: strncmp, strstr, strrchr, strchr, strdup, strndup.
+static int __attribute__((noinline)) hxlcl_strncmp(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char ca = (unsigned char)a[i];
+        unsigned char cb = (unsigned char)b[i];
+        if (ca != cb) return (int)ca - (int)cb;
+        if (ca == 0) return 0;
+    }
+    return 0;
+}
+static const char *__attribute__((noinline)) hxlcl_strchr(const char *s, int c) {
+    if (!s) return NULL;
+    unsigned char target = (unsigned char)c;
+    for (size_t i = 0; ; i++) {
+        unsigned char x = (unsigned char)((const volatile char *)s)[i];
+        if (x == target) return s + i;
+        if (x == 0) return (target == 0) ? (s + i) : NULL;
+    }
+}
+static const char *__attribute__((noinline)) hxlcl_strrchr(const char *s, int c) {
+    if (!s) return NULL;
+    unsigned char target = (unsigned char)c;
+    const char *last = NULL;
+    for (size_t i = 0; ; i++) {
+        unsigned char x = (unsigned char)((const volatile char *)s)[i];
+        if (x == target) last = s + i;
+        if (x == 0) return last;
+    }
+}
+static const char *__attribute__((noinline)) hxlcl_strstr(const char *h, const char *n) {
+    if (!h || !n) return NULL;
+    if (n[0] == 0) return h;
+    for (size_t i = 0; ((const volatile char *)h)[i]; i++) {
+        size_t j = 0;
+        while (n[j] && h[i + j] == n[j]) j++;
+        if (n[j] == 0) return h + i;
+    }
+    return NULL;
+}
+static char *__attribute__((noinline)) hxlcl_strdup(const char *s) {
+    if (!s) return NULL;
+    size_t n = 0;
+    while (((const volatile char *)s)[n]) n++;
+    char *out = (char *)malloc(n + 1);
+    if (!out) return NULL;
+    for (size_t i = 0; i < n; i++) out[i] = s[i];
+    out[n] = '\0';
+    return out;
+}
+static char *__attribute__((noinline)) hxlcl_strndup(const char *s, size_t cap) {
+    if (!s) return NULL;
+    size_t n = 0;
+    while (n < cap && ((const volatile char *)s)[n]) n++;
+    char *out = (char *)malloc(n + 1);
+    if (!out) return NULL;
+    for (size_t i = 0; i < n; i++) out[i] = s[i];
+    out[n] = '\0';
+    return out;
+}
 
 // Textual override of any residual libc references in subsequent code
 // (runtime_core.c + HI tier + transpile output). The helper bodies
@@ -87,6 +161,13 @@ static int __attribute__((noinline)) hxlcl_strcmp(const char *a, const char *b) 
 #define strlen(s)      hxlcl_strlen((const char *)(s))
 #define memcmp(a,b,n)  hxlcl_memcmp((const void *)(a), (const void *)(b), (size_t)(n))
 #define strcmp(a,b)    hxlcl_strcmp((const char *)(a), (const char *)(b))
+#define strcat(d,s)    hxlcl_strcat((char *)(d), (const char *)(s))
+#define hxlcl_strncmp(a,b,n) hxlcl_strncmp((const char *)(a), (const char *)(b), (size_t)(n))
+#define hxlcl_strchr(s,c)    ((char *)hxlcl_strchr((const char *)(s), (c)))
+#define hxlcl_strrchr(s,c)   ((char *)hxlcl_strrchr((const char *)(s), (c)))
+#define hxlcl_strstr(h,n)    ((char *)hxlcl_strstr((const char *)(h), (const char *)(n)))
+#define hxlcl_strdup(s)      hxlcl_strdup((const char *)(s))
+#define hxlcl_strndup(s,n)   hxlcl_strndup((const char *)(s), (size_t)(n))
 
 #include "runtime_core.c"
 
@@ -106,10 +187,10 @@ static int __attribute__((noinline)) hxlcl_strcmp(const char *a, const char *b) 
 static int hexa_ffi_extract_libname(const char* path, char* out_name, size_t out_cap) {
     if (!path || !out_name || out_cap == 0) return 0;
     // Find the basename (after the last '/')
-    const char* base = strrchr(path, '/');
+    const char* base = hxlcl_strrchr(path, '/');
     base = base ? base + 1 : path;
     // Must start with "lib"
-    if (strncmp(base, "lib", 3) != 0) return 0;
+    if (hxlcl_strncmp(base, "lib", 3) != 0) return 0;
     base += 3;
     // Must end in .dylib or .so or .so.N
     size_t blen = hxlcl_strlen(base);
@@ -120,7 +201,7 @@ static int hexa_ffi_extract_libname(const char* path, char* out_name, size_t out
         end = base + blen - 3;
     } else {
         // .so.N case — find ".so." substring
-        const char* p = strstr(base, ".so.");
+        const char* p = hxlcl_strstr(base, ".so.");
         if (p) end = p;
     }
     if (!end) return 0;
@@ -1440,14 +1521,14 @@ HexaVal rt_str_trim_start(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
     char* p = HX_STR(s);
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
-    return hexa_str_own(strdup(p));
+    return hexa_str_own(hxlcl_strdup(p));
 }
 
 HexaVal rt_str_trim_end(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
     int len = (int)HX_STRLEN(s);
     while (len > 0 && (HX_STR(s)[len-1] == ' ' || HX_STR(s)[len-1] == '\t' || HX_STR(s)[len-1] == '\n' || HX_STR(s)[len-1] == '\r')) len--;
-    return hexa_str_own_with_len(strndup(HX_STR(s), len), (size_t)len);
+    return hexa_str_own_with_len(hxlcl_strndup(HX_STR(s), len), (size_t)len);
 }
 
 // Byte-based slice: [start, end) clamped to length
@@ -1458,7 +1539,7 @@ HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end) {
     if (a < 0) a = 0;
     if (b > len) b = len;
     if (a > b) a = b;
-    return hexa_str_own_with_len(strndup(HX_STR(s) + a, b - a), (size_t)(b - a));
+    return hexa_str_own_with_len(hxlcl_strndup(HX_STR(s) + a, b - a), (size_t)(b - a));
 }
 
 HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end) {
@@ -2258,7 +2339,7 @@ HexaVal hexa_is_error(HexaVal v) {
     // No TAG_ERROR in runtime; interpreter uses ad-hoc Val(TAG_ERROR,...)
     // convention (TAG_ERROR name not defined in runtime tags). Treat as
     // "false" here unless TAG_STR and starts with "ERR:" sentinel.
-    if (HX_IS_STR(v) && HX_STR(v) && strncmp(HX_STR(v), "ERR:", 4) == 0) return hexa_bool(1);
+    if (HX_IS_STR(v) && HX_STR(v) && hxlcl_strncmp(HX_STR(v), "ERR:", 4) == 0) return hexa_bool(1);
     return hexa_bool(0);
 }
 
@@ -2311,7 +2392,7 @@ HexaVal hexa_from_char_code(HexaVal n) {
         buf[2] = (char)(0x80 | ((code >> 6) & 0x3F));
         buf[3] = (char)(0x80 | (code & 0x3F));
     }
-    char* out = strdup(buf);
+    char* out = hxlcl_strdup(buf);
     return hexa_str_own(out);
 }
 
@@ -6899,7 +6980,7 @@ HexaVal hexa_env_var(HexaVal name) {
     // arena without needing a transpiler-level builtin. Returns "0" / "1" so
     // existing callers that ignore the result are unaffected.
     if (HX_STR(name)[0] == '_' && HX_STR(name)[1] == '_' && HX_STR(name)[2] == 'H' &&
-        strncmp(HX_STR(name), "__HEXA_ARENA_", 13) == 0) {
+        hxlcl_strncmp(HX_STR(name), "__HEXA_ARENA_", 13) == 0) {
         const char* op = HX_STR(name) + 13;
         if (hxlcl_strcmp(op, "PUSH__") == 0) {
             hexa_val_arena_scope_push();
@@ -6971,7 +7052,7 @@ HexaVal hexa_env_var(HexaVal name) {
     // marker on stderr. Encoded as a name prefix so the call site is
     // a single env(...) read. Returns the emitted line (sans newline).
     if (HX_STR(name)[0] == '_' && HX_STR(name)[1] == '_' && HX_STR(name)[2] == 'H' &&
-        strncmp(HX_STR(name), "__HEXA_PHASE_LOG__", 18) == 0) {
+        hxlcl_strncmp(HX_STR(name), "__HEXA_PHASE_LOG__", 18) == 0) {
         const char* phase = HX_STR(name) + 18;
         size_t rss = _hx_self_rss_bytes();
         size_t arena_live = (size_t)_hx_arena_live_bytes();
