@@ -2901,18 +2901,46 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                 f_has_begin = 1
                 st = _ps_take(st)
             }
-            // record body span and find matching `end`
+            // record body span — for f_has_begin==1 find the matching
+            // `end`; for f_has_begin==0 the body is a single statement
+            // (no enclosing begin/end), so the span ends at the next
+            // top-level `;` (depth 0 in parens). RFC 073 Phase 2 fix:
+            // the prior code unconditionally walked for `end`, which
+            // overshot into the enclosing `always begin ... end` when
+            // the for-body was a single statement, mis-consuming the
+            // always's terminator and breaking the outer parser's
+            // keep_going loop.
             let f_body_start = st.pos
-            let mut f_depth = 1
             let mut f_body_end = f_body_start
-            while f_body_end < len(st.toks) {
-                let t = st.toks[f_body_end]
-                if t == "begin" { f_depth = f_depth + 1 }
-                if t == "end" {
-                    f_depth = f_depth - 1
-                    if f_depth == 0 { break }
+            if f_has_begin == 1 {
+                let mut f_depth = 1
+                while f_body_end < len(st.toks) {
+                    let t = st.toks[f_body_end]
+                    if t == "begin" { f_depth = f_depth + 1 }
+                    if t == "end" {
+                        f_depth = f_depth - 1
+                        if f_depth == 0 { break }
+                    }
+                    f_body_end = f_body_end + 1
                 }
-                f_body_end = f_body_end + 1
+            } else {
+                // Single-statement body: walk until next `;` at depth 0
+                // (depth tracks `(` … `)` and `[` … `]`; the body itself
+                // contains no inner `begin`/`end` by construction).
+                let mut f_pdepth = 0
+                while f_body_end < len(st.toks) {
+                    let t = st.toks[f_body_end]
+                    if t == "(" || t == "[" { f_pdepth = f_pdepth + 1 }
+                    if t == ")" || t == "]" { f_pdepth = f_pdepth - 1 }
+                    if t == ";" && f_pdepth == 0 {
+                        // Include the terminating `;` in the body span
+                        // so the per-iteration parser sees a complete
+                        // statement.
+                        f_body_end = f_body_end + 1
+                        break
+                    }
+                    f_body_end = f_body_end + 1
+                }
             }
             // unroll
             let mut fiter = 0
@@ -2929,46 +2957,88 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                 let mut bst = PState { toks: st.toks, pos: f_body_start, err: "" }
                 while bst.pos < f_body_end {
                     if f_has_begin == 1 && _ps_peek(bst) == "end" { break }
-                    // `if (...)` inside the for body — honest gap for this
-                    // commit: skip the statement (cond + then [+ else]).
-                    // Proper conditional emission needs the yosys `proc`
-                    // pass (cond-mux + signal tracking), separate commit.
+                    // RFC 073 Phase 2 — `if ( COND ) BODY` inside the for body.
+                    // Iteration-substituted COND elaborates to a 1-bit wire
+                    // name (e.g. `grant_in[i]` with i=0 -> `grant_in[0]`);
+                    // each scalar `LHS [<=|=] RHS ;` in BODY emits a guarded
+                    // row (combinational: `rtlil_module_connect_cond` carrying
+                    // the COND wire to pass_proc_mux; clocked: `$mux(S=cond,
+                    // A=lhs[feedback], B=rhs, Y=mux_y) + $dff(D=mux_y, Q=lhs)`
+                    // — the no-else feedback-hold shape per IEEE 1364-2005
+                    // §9.2 (procedural assignment) + Yosys proc_mux behaviour
+                    // (clean-room, no source copy). `else` arm, nested `if`
+                    // inside BODY, and indexed-LHS in BODY remain honest
+                    // gaps for this phase (skip-with-no-emit fallback). See
+                    // RFC 073 §4 Phase 2 (F-RFC-RV-ARRAY-INDEX-RUNTIME).
                     if _ps_peek(bst) == "if" {
                         bst = _ps_take(bst)
+                        let mut if_cond_toks: [str] = []
                         if _ps_peek(bst) == "(" {
                             bst = _ps_take(bst)
                             let mut pdepth = 1
                             while bst.pos < len(bst.toks) {
                                 let pt = _ps_peek(bst)
-                                if pt == "(" { pdepth = pdepth + 1; bst = _ps_take(bst); continue }
+                                if pt == "(" {
+                                    pdepth = pdepth + 1
+                                    if_cond_toks = if_cond_toks.push(pt)
+                                    bst = _ps_take(bst)
+                                    continue
+                                }
                                 if pt == ")" {
                                     pdepth = pdepth - 1
                                     if pdepth == 0 { bst = _ps_take(bst); break }
-                                    bst = _ps_take(bst); continue
+                                    if_cond_toks = if_cond_toks.push(pt)
+                                    bst = _ps_take(bst)
+                                    continue
                                 }
+                                if_cond_toks = if_cond_toks.push(pt)
                                 bst = _ps_take(bst)
                             }
                         }
-                        // skip body — `begin ... end` or single statement
+                        // Collect THEN-body tokens — single statement up to
+                        // `;` OR `begin ... end` block. The collected token
+                        // stream is later split on `;` into per-statement
+                        // sub-sequences for guarded emission.
+                        let mut if_body_toks: [str] = []
+                        let mut if_body_has_begin = 0
                         if _ps_peek(bst) == "begin" {
+                            if_body_has_begin = 1
                             bst = _ps_take(bst)
                             let mut sdepth = 1
                             while bst.pos < len(bst.toks) {
                                 let st_ = _ps_peek(bst)
-                                if st_ == "begin" { sdepth = sdepth + 1 }
+                                if st_ == "begin" {
+                                    sdepth = sdepth + 1
+                                    if_body_toks = if_body_toks.push(st_)
+                                    bst = _ps_take(bst)
+                                    continue
+                                }
                                 if st_ == "end" {
                                     sdepth = sdepth - 1
                                     if sdepth == 0 { bst = _ps_take(bst); break }
+                                    if_body_toks = if_body_toks.push(st_)
+                                    bst = _ps_take(bst)
+                                    continue
                                 }
+                                if_body_toks = if_body_toks.push(st_)
                                 bst = _ps_take(bst)
                             }
                         } else {
                             while bst.pos < len(bst.toks) {
-                                if _ps_peek(bst) == ";" { bst = _ps_take(bst); break }
+                                let pt = _ps_peek(bst)
+                                if pt == ";" {
+                                    if_body_toks = if_body_toks.push(pt)
+                                    bst = _ps_take(bst)
+                                    break
+                                }
+                                if_body_toks = if_body_toks.push(pt)
                                 bst = _ps_take(bst)
                             }
                         }
-                        // optional `else`
+                        // Optional `else` — Phase 2 honest gap: skip the
+                        // else arm tokens (no emit). Phase 3 will add
+                        // explicit else-default arms; T58 uses no-else
+                        // shape per RFC 073 §4 Phase 2.
                         if _ps_peek(bst) == "else" {
                             bst = _ps_take(bst)
                             if _ps_peek(bst) == "begin" {
@@ -2990,6 +3060,120 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                                 }
                             }
                         }
+                        // ── Elaborate COND → cond-wire (@cite IEEE 1364-2005
+                        //    §9.2 procedural assignment; §9.4 control statements).
+                        //    On elab failure, fall back to skip-no-emit (legacy
+                        //    behaviour — preserves byte-eq with pre-Phase-2
+                        //    builds when COND has an unsupported operand).
+                        let _f2_cer = _rv_elab_expr(if_cond_toks, 0, m, 1, tab)
+                        if len(_f2_cer.err) == 0 {
+                            m = _f2_cer.m
+                            // Split the body into `;`-terminated statements.
+                            // Each statement must match `LHS [<=|=] RHS ;`
+                            // with simple-name LHS; nested `if`/`for`, blocking-
+                            // operator-mismatch, or indexed-LHS sub-statements
+                            // are honest gaps (drop the whole if as no-emit
+                            // to preserve g3 fail-loud-or-skip discipline).
+                            let mut _f2_stmts: [[str]] = []
+                            let mut _f2_cur: [str] = []
+                            let mut _f2_si = 0
+                            while _f2_si < len(if_body_toks) {
+                                if if_body_toks[_f2_si] == ";" {
+                                    _f2_cur = _f2_cur.push(if_body_toks[_f2_si])
+                                    _f2_stmts = _f2_stmts.push(_f2_cur)
+                                    _f2_cur = []
+                                    _f2_si = _f2_si + 1
+                                    continue
+                                }
+                                _f2_cur = _f2_cur.push(if_body_toks[_f2_si])
+                                _f2_si = _f2_si + 1
+                            }
+                            // Validate every statement matches simple-LHS shape.
+                            let mut _f2_all_ok = 1
+                            if len(_f2_stmts) < 1 { _f2_all_ok = 0 }
+                            let mut _f2_sj = 0
+                            while _f2_sj < len(_f2_stmts) && _f2_all_ok == 1 {
+                                let _s = _f2_stmts[_f2_sj]
+                                if len(_s) < 4 { _f2_all_ok = 0 }
+                                if _f2_all_ok == 1 {
+                                    let _op = _s[1]
+                                    if _op != "<=" && _op != "=" { _f2_all_ok = 0 }
+                                    if _op == "<=" && is_clocked == 0 { _f2_all_ok = 0 }
+                                    if _op == "="  && is_clocked == 1 { _f2_all_ok = 0 }
+                                    if _f2_all_ok == 1 {
+                                        if _s[len(_s) - 1] != ";" { _f2_all_ok = 0 }
+                                    }
+                                }
+                                _f2_sj = _f2_sj + 1
+                            }
+                            if _f2_all_ok == 1 {
+                                let mut _f2_sk = 0
+                                while _f2_sk < len(_f2_stmts) && _f2_all_ok == 1 {
+                                    let _s = _f2_stmts[_f2_sk]
+                                    let _slhs = _s[0]
+                                    let _sop  = _s[1]
+                                    let mut _srhs: [str] = []
+                                    let mut _ri = 2
+                                    while _ri < len(_s) - 1 {
+                                        _srhs = _srhs.push(_s[_ri])
+                                        _ri = _ri + 1
+                                    }
+                                    let _ser = _rv_elab_expr(_srhs, 0, m, 1, tab)
+                                    if len(_ser.err) > 0 {
+                                        _f2_all_ok = 0
+                                    } else {
+                                        m = _ser.m
+                                        if is_clocked == 1 {
+                                            // Clocked guarded write: $mux feedback-hold
+                                            // + $dff sink. @cite IEEE 1364-2005 §9.2
+                                            // (non-blocking assignment) + Yosys
+                                            // proc_mux $mux-feedback shape.
+                                            let _mux_y = _rv_fresh_wire(m)
+                                            m = rtlil_module_add_wire(m, rtlil_wire(_mux_y, 1, 0, 0))
+                                            let _mux_n = "$rvmux$" + str(len(m.cells))
+                                            let mut _mc = rtlil_cell(_mux_n, "$mux", 0)
+                                            _mc = rtlil_cell_connect(_mc, "A", _slhs)
+                                            _mc = rtlil_cell_connect(_mc, "B", _ser.wire)
+                                            _mc = rtlil_cell_connect(_mc, "S", _f2_cer.wire)
+                                            _mc = rtlil_cell_connect(_mc, "Y", _mux_y)
+                                            m = rtlil_module_add_cell(m, _mc)
+                                            let _dn = "$rvff$" + str(len(m.cells))
+                                            let mut _dc = rtlil_cell(_dn, "$dff", 0)
+                                            _dc = rtlil_cell_connect(_dc, "CLK", clk_wire)
+                                            _dc = rtlil_cell_connect(_dc, "D", _mux_y)
+                                            _dc = rtlil_cell_connect(_dc, "Q", _slhs)
+                                            m = rtlil_module_add_cell(m, _dc)
+                                            let _eg = clk_edge
+                                        } else {
+                                            // Combinational guarded write —
+                                            // emit a connect_cond row carrying
+                                            // the COND wire name. pass_proc_mux
+                                            // (passes.hexa) folds multiple cond-
+                                            // tagged rows on the same LHS into
+                                            // a left-deep $mux chain. @cite
+                                            // IEEE 1364-2005 §9.2 + RFC 073 §4
+                                            // Phase 2.
+                                            m = rtlil_module_connect_cond(m, _slhs, _ser.wire, _f2_cer.wire)
+                                        }
+                                    }
+                                    let _ = _sop
+                                    _f2_sk = _f2_sk + 1
+                                }
+                            }
+                            let _ = if_body_has_begin
+                        }
+                        // RFC 073 Phase 2 — single-statement for-body
+                        // (no `begin`/`end` wrapping) terminates after
+                        // one statement. Without this break the body
+                        // iteration loop reads past `;` into the
+                        // enclosing `always begin ... end`'s `end`,
+                        // mis-parsing it as a statement. The depth-
+                        // balance search above intentionally overshoots
+                        // to the outer `end` for f_has_begin==0 (no
+                        // inner `end` to find); the break here closes
+                        // the latent gap so single-statement bodies
+                        // round-trip through the unroller.
+                        if f_has_begin == 0 { break }
                         continue
                     }
                     let bqb = _ps_peek(bst)
@@ -3054,6 +3238,9 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     } else {
                         m = rtlil_module_connect(m, bq, ber.wire)
                     }
+                    // RFC 073 Phase 2 — symmetric single-statement break
+                    // for the legacy scalar path (see if-stmt mirror above).
+                    if f_has_begin == 0 { break }
                 }
                 let f_step_ev = _rv_eval_expr(fstep, 0, tab, 1)
                 if len(f_step_ev.err) > 0 {
@@ -3065,8 +3252,16 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                 tab = symtab_put(tab, fgv, f_step_ev.value)
                 fiter = fiter + 1
             }
-            // jump past body + `end`
-            st = PState { toks: st.toks, pos: f_body_end + 1, err: "" }
+            // jump past body. For f_has_begin==1 advance past the
+            // matching `end` (+1). For f_has_begin==0 the body span
+            // already includes the terminating `;` so jump to
+            // f_body_end directly (RFC 073 Phase 2 fix; see body-span
+            // search above).
+            let f_after_end = f_body_end + 1
+            let f_after_stmt = f_body_end
+            let mut f_after = f_after_end
+            if f_has_begin == 0 { f_after = f_after_stmt }
+            st = PState { toks: st.toks, pos: f_after, err: "" }
             continue
         }
         let q_base = _ps_peek(st)
@@ -4078,6 +4273,93 @@ fn main() {
         }
         if _found56 != 1 {
             println("FAIL T56c connect_to_y missing"); fails = fails + 1
+        }
+    }
+
+    // T57 — RFC 073 Phase 2 (F-RFC-RV-ARRAY-INDEX-CONST regression).
+    //   Const-K array write `mem[3] = expr;` stays a single unconditional
+    //   `connect` to `mem[3]` with no $eq/$mux selector chain — the
+    //   const-foldable index path already works pre-Phase-2 and Phase 2
+    //   must not regress it. @cite IEEE 1364-2005 §10.3.5 (array indexing,
+    //   constant-foldable index) + RFC 073 §4 Phase 2 falsifier battery.
+    total = total + 1
+    let _v57 = "module ck ( input wire [ 3 : 0 ] a , output reg [ 3 : 0 ] mem [ 0 : 3 ] ) ; always @ ( * ) mem [ 3 ] = a ; endmodule"
+    let _r57 = read_verilog(_v57)
+    if _r57.ok != 1 {
+        println("FAIL T57 const_k_array_write: " + _r57.message); fails = fails + 1
+    } else {
+        let _m57 = _r57.design.modules[0]
+        // No $eq selector cells should be emitted — const-K stays direct.
+        if rtlil_count_cells_of_type(_m57, "$eq") != 0 {
+            println("FAIL T57a eq_count got " + str(rtlil_count_cells_of_type(_m57, "$eq")))
+            fails = fails + 1
+        }
+        // No $mux selector cells should be emitted either.
+        if rtlil_count_cells_of_type(_m57, "$mux") != 0 {
+            println("FAIL T57b mux_count got " + str(rtlil_count_cells_of_type(_m57, "$mux")))
+            fails = fails + 1
+        }
+        // The connect must hit the foldable-indexed name `mem[3]`.
+        let mut _found57 = 0
+        let mut _ci57 = 0
+        while _ci57 < len(_m57.connect_lhs) {
+            if _m57.connect_lhs[_ci57] == "mem[3]" { _found57 = 1 }
+            _ci57 = _ci57 + 1
+        }
+        if _found57 != 1 {
+            println("FAIL T57c connect_to_mem[3] missing"); fails = fails + 1
+        }
+    }
+
+    // T58 — RFC 073 Phase 2 (F-RFC-RV-ARRAY-INDEX-RUNTIME).
+    //   For-loop guarded scalar assign with iteration-substituted index
+    //   on the cond:
+    //     for (i = 0; i < 3; i = i + 1) if (grant_in[i]) idx = i;
+    //   After unroll the per-iteration cond elaborates to a 1-bit wire
+    //   name (`grant_in[0]`, `grant_in[1]`, `grant_in[2]`) and each
+    //   iteration emits ONE `connect_cond` row on `idx` carrying that
+    //   wire as guard. pass_proc_mux (passes.hexa) then folds the 3
+    //   cond-tagged rows into a left-deep `$mux` chain.
+    //   @cite IEEE 1364-2005 §9.4 (procedural for) + §10.3.5 (array
+    //   indexing) + RFC 073 §4 Phase 2 falsifier battery.
+    total = total + 1
+    let _v58 = "module fg ( input wire [ 2 : 0 ] grant_in , output reg idx ) ; integer i ; always @ ( * ) begin for ( i = 0 ; i < 3 ; i = i + 1 ) if ( grant_in [ i ] ) idx = i ; end endmodule"
+    let _r58 = read_verilog(_v58)
+    if _r58.ok != 1 {
+        println("FAIL T58 for_guarded_scalar: " + _r58.message); fails = fails + 1
+    } else {
+        let _m58 = _r58.design.modules[0]
+        // Expect exactly 3 connect_cond rows on `idx`, with cond strings
+        // `grant_in[0]`, `grant_in[1]`, `grant_in[2]` (iteration-substituted).
+        let mut _row_cnt = 0
+        let mut _g0 = 0
+        let mut _g1 = 0
+        let mut _g2 = 0
+        let mut _ci58 = 0
+        while _ci58 < len(_m58.connect_lhs) {
+            if _m58.connect_lhs[_ci58] == "idx" {
+                let _cc = _m58.connect_cond[_ci58]
+                if len(_cc) > 0 {
+                    _row_cnt = _row_cnt + 1
+                    if _cc == "grant_in[0]" { _g0 = 1 }
+                    if _cc == "grant_in[1]" { _g1 = 1 }
+                    if _cc == "grant_in[2]" { _g2 = 1 }
+                }
+            }
+            _ci58 = _ci58 + 1
+        }
+        if _row_cnt != 3 {
+            println("FAIL T58a row_cnt got " + str(_row_cnt) + " (expected 3 connect_cond rows on idx)")
+            fails = fails + 1
+        }
+        if _g0 != 1 {
+            println("FAIL T58b missing cond=grant_in[0]"); fails = fails + 1
+        }
+        if _g1 != 1 {
+            println("FAIL T58c missing cond=grant_in[1]"); fails = fails + 1
+        }
+        if _g2 != 1 {
+            println("FAIL T58d missing cond=grant_in[2]"); fails = fails + 1
         }
     }
 
