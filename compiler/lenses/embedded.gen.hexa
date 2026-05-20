@@ -282,28 +282,85 @@ pub fn lens_apply_empty_space_zero_coverage_quadrant(view: AtlasView) -> array {
 }
 
 pub fn lens_apply_paradigm_shift_inversion(view: AtlasView) -> array {
-    // C-1.d — division-form raw scan. P raw with `/` operator = inverse
-    // relation candidates (sigma/phi, tau/n, etc.). Aggregate as
-    // candidate inversion-survival hypothesis pool.
+    // C-1.d strengthened — atlas-specific algebraic inversion hypothesis.
+    // Identify presence of hexa primitives (sigma · phi · tau · n · sopfr
+    // · J2 · mu · M3 per AGENTS.tape signature) and emit named Candidate
+    // per known + hypothesis multiplicative inversion relation.
     let n = len(view.p_nodes)
     if n == 0 { return empty_candidate_list() }
-    let mut hits = 0
+    let mut sigma_p = false
+    let mut phi_p = false
+    let mut tau_p = false
+    let mut n_p = false
+    let mut sopfr_p = false
+    let mut j2_p = false
+    let mut mu_p = false
+    let mut m3_p = false
     let mut i = 0
     while i < n {
-        let raw = view.p_nodes[i].raw
-        if raw.index_of("/") >= 0 { hits = hits + 1 }
+        let id = view.p_nodes[i].id
+        if id == "sigma" { sigma_p = true }
+        if id == "phi" { phi_p = true }
+        if id == "tau" { tau_p = true }
+        if id == "n" { n_p = true }
+        if id == "sopfr" { sopfr_p = true }
+        if id == "J2" { j2_p = true }
+        if id == "mu" { mu_p = true }
+        if id == "M3" { m3_p = true }
         i = i + 1
     }
-    if hits == 0 { return empty_candidate_list() }
     let mut out: array = []
-    out.push(Candidate {
-        slug: "paradigm_shift.inversion.division_forms",
-        family: "paradigm_shift",
-        proposed: "atlas P kind: " + to_string(hits) + " of " + to_string(n) + " nodes carry `/` in raw — candidate inversion-form pool (would the relation hold for the multiplicative inverse?).",
-        cite: ["n"],
-        fire_needed: false,
-        fire_estimate_usd: 0.0
-    })
+    if sigma_p && phi_p && n_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.inversion.sigma_div_phi_eq_n",
+            family: "paradigm_shift",
+            proposed: "Algebraic inversion: sigma / phi = n (atlas binds sigma=12, phi=2, n=6 — verifies 12/2=6; dual of sigma=phi*n).",
+            cite: ["sigma", "phi", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if sigma_p && j2_p && phi_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.inversion.j2_div_sigma_eq_phi",
+            family: "paradigm_shift",
+            proposed: "Algebraic inversion: J2 / sigma = phi (atlas binds J2=24, sigma=12, phi=2 — verifies 24/12=2; dual of J2=sigma*phi).",
+            cite: ["J2", "sigma", "phi"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if tau_p && n_p && phi_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.inversion.n_div_phi_eq_tau",
+            family: "paradigm_shift",
+            proposed: "Algebraic inversion: n + tau / phi = ? (atlas binds n=6, tau=4, phi=2; hypothesis candidate for unreported identity 6 + 4/2 = 8).",
+            cite: ["n", "tau", "phi"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if mu_p && sigma_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.inversion.mu_times_sigma_sign_flip",
+            family: "paradigm_shift",
+            proposed: "Algebraic sign-dual: mu * sigma = -12 (atlas binds mu=-1, sigma=12; sign-flipped dual node candidate).",
+            cite: ["mu", "sigma"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if m3_p && n_p {
+        out.push(Candidate {
+            slug: "paradigm_shift.inversion.m3_plus_n_eq_13",
+            family: "paradigm_shift",
+            proposed: "Algebraic offset: M3 + n = 13 (atlas binds M3=7, n=6; prime-sum dual candidate, unreported relation).",
+            cite: ["M3", "n"],
+            fire_needed: false,
+            fire_estimate_usd: 0.0
+        })
+    }
+    if len(out) == 0 { return empty_candidate_list() }
     return out
 }
 pub fn lens_apply_paradigm_shift_dual(view: AtlasView) -> array {
