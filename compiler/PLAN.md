@@ -6331,3 +6331,89 @@ RIP-rel ([rip + label]) / serializer doesn't yet emit `.rela.text` from
 the `compiler/main.hexa::cmd_build` driver is cycle-31+.
 
 **Resource note**: ubu-2 단독 (mini · ubu-1 ssh 도달 불가 그대로).
+
+
+### 2026-05-20 — follow-up cycle 31: three-track resource sweep (31-a/-b/-c)
+
+mini · ubu-1 회복 완료 신호 후 cycle 31 을 세 트랙으로 병렬화. ubu-2
+단독으로 cycle 22-30 을 굴린 캠페인이 처음으로 풀-자원 sweep 으로
+넘어간 첫 측정 사이클.
+
+#### Track 31-a — `serialize_elf_x86_64` `.rela.text` section emit
+
+`ElfX86Obj.relocs` 가 cycle 30 에서 채워지지만 serializer 가 `.rela.text`
+섹션을 안 emit 했다. 외부 ld 가 받지 못함. 31-a 가 그 갭을 닫음:
+
+- Conditional 6-section layout (`[0]NULL [1].text [2].rela.text
+  [3].symtab [4].strtab [5].shstrtab`) when `len(relocs) > 0`,
+  fallback 5-section layout otherwise (byte-eq with pre-cycle-31).
+- `Elf64_Rela` (24 B each) emit with `r_info = (sym_idx_1based << 32) |
+  reloc_type` per System V ABI.
+- ELF symtab `STN_UNDEF` (index 0) prepend — pre-cycle-31 the
+  serializer wrote symbol 0 as the first real fn; ld rejects that.
+  All `reloc.sym_idx` get +1 at serialize time to match.
+- 8-byte alignment for `.rela.text` start (text_pad 4→8) and section
+  header table base (extra shdr_pad).
+- shstrtab gets `.rela.text` entry (extra 11 B); e_shstrndx flips
+  4→5 when relocs present.
+
+**Falsifier — F-P2-X86-LD-LINK** (cycle 30 module → serialize_elf_x86_64
+→ ubu-2 GNU `ld` → exec):
+
+```
+[serialize_elf_x86_64] 480 B · 2 symbol(s) · 1 reloc(s)
+--- readelf -h -S ---
+  Type:    REL (Relocatable file)
+  Machine: Advanced Micro Devices X86-64
+  Number of section headers: 6
+  Section header string table index: 5
+  [ 1] .text       PROGBITS  Size 0x42  AX
+  [ 2] .rela.text  RELA      Size 0x18  Link 3  Info 1
+--- readelf -r ---
+Relocation section '.rela.text' at offset 0x88 contains 1 entry:
+  00000000000f  000200000004 R_X86_64_PLT32    0x1f compute - 4
+--- ld -static -nostdlib -e _start ---
+LD_RC=0
+--- exec ---
+REMOTE_RC=42  ✅
+```
+
+`readelf -r` 가 `compute - 4` (sym=compute, addend=-4) 를 정확히 해석.
+ld 가 PLT32 reloc 을 인식 + .text 의 imm32 패치 → 진짜 실행 exit 42.
+
+이로써 **LIR → walker → reloc → serialize → real linker → kernel exec**
+풀-스택 byte-eq 측정 완료.
+
+#### Track 31-b — cross-host parity sweep (ubu-1 + ubu-2)
+
+6 ELFs (cycle 25-30: countdown, rex64, div, setcc, walker, frame-reloc)
+× 2 Linux 호스트 (ubu-1 = 192.168.50.119, ubu-2 = Tailscale).
+**F-P2-X86-CROSS-HOST** PASS: 12 launches, byte-identical exit codes.
+처음으로 ubu-2 단독 의존을 벗어남.
+
+#### Track 31-c — arm64 Mach-O cross-Mac portability (m4mini)
+
+6 P0 corpus `.o` files (cycle 1-6 의 `macho_arm64.hexa::pack_lir +
+serialize` 출력) → m4mini (arm64 macOS 26.2) → `shasum` + `otool -h`
++ `nm` 모두 PASS. **F-P0-OBJEQ-M4MINI** FULL PASS.
+
+Honest scope: macOS 26.2 가 ad-hoc 서명된 P1 exec 을 SIGKILL 함
+(local + remote 둘 다 rc=137). 이는 OS-loader 정책 이슈로 .o
+portability 와 별개. cycle 31-c 는 **.o 아티팩트 portability** 만
+검증 — exec runtime portability 는 별도 cycle 의 일.
+
+#### Resource roster
+
+- **mini** (192.168.50.39): LAN ping 0/1 — 캠페인 직접 SSH 불가.
+  `m4mini` mDNS alias (Bonjour 192.168.x.y) 로 우회 가능 — arm64
+  macOS 26.2, clang 21.0 보유, hexa toolchain 미설치 → .o 검증용.
+- **ubu-1** (192.168.50.119): LAN 회복. Linux 6.17.0-23-generic
+  x86_64. ELF launch + ld 사용.
+- **ubu-2** (Tailscale): 캠페인 전 cycle 기본. RTX 5070 GPU 도 있음.
+
+**RFC 063 phasing**: 31 cycles · 18 falsifier (15 + 3 사이클 31) ·
+P0+P1+P2+P3 all closed + .rela.text emit + cross-host parity oracle +
+cross-Mac corpus oracle · x86_64 encoder 40 rules · LIR ops 17/17 ·
+end-to-end ld → exec PASS.
+
+**cc --regen / binary promote**: 미수행 (compiler/emit/* + test/* only).

@@ -840,13 +840,26 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
 pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
     let out: [Int] = []
     let text_size = len(obj.text)
-    let nsyms = len(obj.symbols)
+    let nrelocs = len(obj.relocs)
+
+    // ── ELF symtab convention ──
+    // Index 0 is reserved as STN_UNDEF (all zeros). Real symbols start
+    // at index 1. Pre-cycle-31 the serializer skipped this, but
+    // attaching .rela.text means real linkers (ld) will consume the
+    // table, so we conform now. Reloc.sym_idx values must therefore be
+    // incremented by 1 when written into Elf64_Rela.r_info.
+    let nsyms_real = len(obj.symbols)
+    let nsyms      = nsyms_real + 1                  // +1 for STN_UNDEF
     let symtab_size = 24 * nsyms
     let strsize = len(obj.strtab)
 
     let shstrtab: [Int] = []
     shstrtab.push(0)
     let off_text     = _ew_str(shstrtab, ".text")
+    // `.rela.text` shares the `.text` byte prefix in shstrtab, but
+    // emitting them separately is simpler than computing an overlap
+    // offset (extra 11 bytes is negligible).
+    let off_rela_text = if nrelocs > 0 { _ew_str(shstrtab, ".rela.text") } else { 0 }
     let off_symtab   = _ew_str(shstrtab, ".symtab")
     let off_strtab   = _ew_str(shstrtab, ".strtab")
     let off_shstrtab = _ew_str(shstrtab, ".shstrtab")
@@ -854,14 +867,26 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
 
     let elf_header_size = 64
     let shdr_size = 64
-    let nshdrs = 5
+    let nshdrs = if nrelocs > 0 { 6 } else { 5 }
+    let shstrndx = if nrelocs > 0 { 5 } else { 4 }
+    // When relocs exist:
+    //   sec[1]=.text  sec[2]=.rela.text  sec[3]=.symtab  sec[4]=.strtab  sec[5]=.shstrtab
+    // Otherwise:
+    //   sec[1]=.text  sec[2]=.symtab  sec[3]=.strtab  sec[4]=.shstrtab
+    let symtab_sec = if nrelocs > 0 { 3 } else { 2 }
+    let strtab_sec = if nrelocs > 0 { 4 } else { 3 }
 
     let text_off     = elf_header_size
-    let text_pad     = (4 - (text_size & 3)) & 3
-    let symtab_off   = text_off + text_size + text_pad
+    let text_pad     = (8 - (text_size & 7)) & 7    // 8-align for rela
+    let rela_size    = 24 * nrelocs
+    let rela_off     = text_off + text_size + text_pad
+    let symtab_off   = rela_off + rela_size
     let strtab_off   = symtab_off + symtab_size
     let shstrtab_off = strtab_off + strsize
-    let shdr_off     = shstrtab_off + shstrsize
+    // Section header table aligned to 8.
+    let pre_shdr     = shstrtab_off + shstrsize
+    let shdr_pad     = (8 - (pre_shdr & 7)) & 7
+    let shdr_off     = pre_shdr + shdr_pad
 
     // ── ELF64 header ──
     out.push(ELF_EI_MAG0); out.push(ELF_EI_MAG1)
@@ -883,16 +908,33 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
     _ew_u16(out, 0)                         // e_phnum
     _ew_u16(out, shdr_size)                 // e_shentsize
     _ew_u16(out, nshdrs)                    // e_shnum
-    _ew_u16(out, 4)                         // e_shstrndx
+    _ew_u16(out, shstrndx)                  // e_shstrndx
 
     // ── .text ──
     let mut ti = 0
     while ti < text_size { out.push(obj.text[ti] & 0xFF); ti = ti + 1 }
     _ew_zero(out, text_pad)
 
+    // ── .rela.text (cycle 31-a) ──
+    let mut ri = 0
+    while ri < nrelocs {
+        let r = obj.relocs[ri]
+        // Elf64_Rela = r_offset(u64) r_info(u64) r_addend(i64). The
+        // sym_idx in r_info is shifted into the high 32 bits; reloc
+        // kind goes in the low 32. We add +1 because cycle-30 stored
+        // raw indices but ELF symtab index 0 is STN_UNDEF.
+        _ew_u64(out, r.offset)
+        let sym_index_1based = r.sym_idx + 1
+        _ew_u64(out, (sym_index_1based << 32) | (r.kind & 0xFFFFFFFF))
+        _ew_u64(out, r.addend)
+        ri = ri + 1
+    }
+
     // ── .symtab ──
+    // Index 0: STN_UNDEF (all zeros, 24 B).
+    _ew_zero(out, 24)
     let mut si = 0
-    while si < nsyms {
+    while si < nsyms_real {
         let s = obj.symbols[si]
         _ew_u32(out, s.name_offset)
         let st_info = ((s.bind & 0xF) << 4) | (s.type_ & 0xF)
@@ -911,6 +953,7 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
     // ── .shstrtab ──
     let mut hi = 0
     while hi < shstrsize { out.push(shstrtab[hi] & 0xFF); hi = hi + 1 }
+    _ew_zero(out, shdr_pad)
 
     // ── Section header table ──
     // [0] SHT_NULL.
@@ -924,16 +967,29 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
     _ew_u64(out, text_size)
     _ew_u32(out, 0); _ew_u32(out, 0)
     _ew_u64(out, 4); _ew_u64(out, 0)
-    // [2] .symtab.
+    // [2] .rela.text (only when relocs exist).
+    if nrelocs > 0 {
+        _ew_u32(out, off_rela_text)
+        _ew_u32(out, ELF_SHT_RELA)
+        _ew_u64(out, 0); _ew_u64(out, 0)
+        _ew_u64(out, rela_off)
+        _ew_u64(out, rela_size)
+        _ew_u32(out, symtab_sec)             // sh_link → .symtab
+        _ew_u32(out, 1)                       // sh_info → .text section idx
+        _ew_u64(out, 8); _ew_u64(out, 24)
+    }
+    // [symtab_sec] .symtab.
     _ew_u32(out, off_symtab)
     _ew_u32(out, ELF_SHT_SYMTAB)
     _ew_u64(out, 0); _ew_u64(out, 0)
     _ew_u64(out, symtab_off)
     _ew_u64(out, symtab_size)
-    _ew_u32(out, 3)                         // sh_link → .strtab
-    _ew_u32(out, 1)                         // sh_info
+    _ew_u32(out, strtab_sec)                  // sh_link → .strtab
+    // sh_info = one past last STB_LOCAL symbol. We always start at 1
+    // since index 0 is STN_UNDEF (which is technically LOCAL).
+    _ew_u32(out, 1)
     _ew_u64(out, 8); _ew_u64(out, 24)
-    // [3] .strtab.
+    // [strtab_sec] .strtab.
     _ew_u32(out, off_strtab)
     _ew_u32(out, ELF_SHT_STRTAB)
     _ew_u64(out, 0); _ew_u64(out, 0)
@@ -941,7 +997,7 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
     _ew_u64(out, strsize)
     _ew_u32(out, 0); _ew_u32(out, 0)
     _ew_u64(out, 1); _ew_u64(out, 0)
-    // [4] .shstrtab.
+    // [shstrndx] .shstrtab.
     _ew_u32(out, off_shstrtab)
     _ew_u32(out, ELF_SHT_STRTAB)
     _ew_u64(out, 0); _ew_u64(out, 0)
