@@ -396,25 +396,33 @@ fn _w_pstr_align4(out: [Int], s: string) -> Int {
 fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_static: i64) -> Int {
     let out: [Int] = []
 
-    // Concat text from all input objects in input order. Cycle 3
-    // ships single-obj case (len(objs) == 1) — extension to multi-obj
-    // requires per-obj base tracking and relocation fix-up across
-    // boundaries (cycle 4+).
+    // Concat text from all input objects in input order + collect a
+    // global symbol → final-text-offset map so cycle 8's inter-module
+    // BL reloc fix-up can resolve cross-obj calls. Per-obj base offset
+    // is the running `len(text_bytes)` before that obj's text is
+    // appended.
     let mut text_bytes: [Int] = []
     let mut entry_off_in_text: Int = 0
     let mut entry_found = false
+    // Global defined-symbol resolution table (parallel arrays).
+    let mut def_names:    [string] = []
+    let mut def_offsets:  [Int]    = []
+    // Per-obj base offset (used during reloc pass to locate the
+    // calling instruction's final position).
+    let mut obj_bases: [Int] = []
     let mut oi = 0
     while oi < len(objs) {
         let obj = objs[oi]
-        // If this object defines the entry symbol, record its offset
-        // within the concatenated text region. (For single-obj case
-        // this is just `obj.defined[i].offset` for whichever sym
-        // matches `entry`.)
+        let base = len(text_bytes)
+        obj_bases.push(base)
+        // Register defined symbols globally.
         let mut di = 0
         while di < len(obj.defined) {
             let d = obj.defined[di]
+            def_names.push(d.name)
+            def_offsets.push(base + d.offset)
             if !entry_found && d.name == entry {
-                entry_off_in_text = len(text_bytes) + d.offset
+                entry_off_in_text = base + d.offset
                 entry_found = true
             }
             di = di + 1
@@ -426,6 +434,48 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
             ti = ti + 1
         }
         oi = oi + 1
+    }
+
+    // Cycle 8 — inter-module BL reloc fix-up. For each obj's reloc
+    // record, if the target symbol resolves to a globally-defined
+    // symbol (i.e. another obj's `defined`), patch the BL imm26 in
+    // text_bytes with the PC-rel delta. Unresolved targets stay as
+    // bare 0x94000000 — they need lazy-bind (cycle 8+ extension).
+    let mut ro = 0
+    while ro < len(objs) {
+        let obj = objs[ro]
+        let base = obj_bases[ro]
+        let mut ri = 0
+        while ri < len(obj.relocs) {
+            let r = obj.relocs[ri]
+            // ARM64_RELOC_BRANCH26 only (cycle 8 minimal).
+            if r.kind == 2 {
+                let patch_off = base + r.offset
+                // Look up target symbol in the global defined map.
+                let mut found_idx = -1
+                let mut sk = 0
+                while sk < len(def_names) {
+                    if def_names[sk] == r.sym_name { found_idx = sk; break }
+                    sk = sk + 1
+                }
+                if found_idx >= 0 {
+                    let tgt_off = def_offsets[found_idx]
+                    let delta = (tgt_off - patch_off) / 4
+                    let w0 = text_bytes[patch_off + 0]
+                    let w1 = text_bytes[patch_off + 1]
+                    let w2 = text_bytes[patch_off + 2]
+                    let w3 = text_bytes[patch_off + 3]
+                    let cur = w0 | (w1 << 8) | (w2 << 16) | (w3 << 24)
+                    let patched = (cur & 0xFC000000) | (delta & 0x03FFFFFF)
+                    text_bytes[patch_off + 0] = patched & 0xFF
+                    text_bytes[patch_off + 1] = (patched >> 8) & 0xFF
+                    text_bytes[patch_off + 2] = (patched >> 16) & 0xFF
+                    text_bytes[patch_off + 3] = (patched >> 24) & 0xFF
+                }
+            }
+            ri = ri + 1
+        }
+        ro = ro + 1
     }
     if !entry_found {
         eprintln("hexa_ld: entry symbol '" + entry + "' not defined in any input object")
