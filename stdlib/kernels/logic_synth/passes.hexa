@@ -275,6 +275,29 @@ fn pass_opt(d: Design) -> PassResult {
 //   Design" §5; de Micheli "Synthesis and Optimization of Digital
 //   Circuits" §3 — logical operators reduce-then-combine, with the
 //   "combine" stage collapsing to a single invert for unary logical-NOT).
+//
+// CLEAN-ROOM PROVENANCE for $add lowering (rfc_006 §5 bug (a) iter 5):
+//   The N-bit ripple-carry-adder (RCA) shape is re-derived from the
+//   Verilog arithmetic-plus definition `Y = A + B` (IEEE 1364-2005
+//   §5.1.3 arithmetic operators) and the classical full-adder identity
+//   (Weste/Eshraghian "Principles of CMOS VLSI Design" §11; Weste/
+//   Harris "CMOS VLSI Design" §11.2 — N full-adders chained CIN→COUT
+//   form a ripple-carry adder of N bits with one initial carry-in tie).
+//   The SKY130 cells used are documented in
+//   `sky130_fd_sc_hd__tt_025C_1v80.lib`:
+//     - sky130_fd_sc_hd__fa_1   — 1-bit full-adder
+//                                 SUM  : (A&!B&!CIN) | (!A&B&!CIN)
+//                                       | (!A&!B&CIN) | (A&B&CIN)
+//                                 COUT : (A&B) | (A&CIN) | (B&CIN)
+//                                 pins : A,B,CIN inputs; SUM,COUT outputs
+//     - sky130_fd_sc_hd__conb_1 — constant-1/0 tie (HI=1, LO=0)
+//                                 used to drive the lowest-bit CIN to 0
+//   No upstream Yosys source is copied; the shape is the textbook RCA
+//   (carry-chain length = N, no carry-look-ahead optimisation in this
+//   iter — abc_map's downstream sizing/optimisation pass owns the
+//   final cell-level rewrite). Output width is N (sum truncated); the
+//   final COUT is driven into an internal wire so the no-dangling
+//   invariant on the per-FA pins is preserved.
 
 // CLEAN-ROOM: count the per-bit input "slots" of an $eq-shaped cell.
 //
@@ -842,6 +865,163 @@ fn _passes_lower_logic_not_cell(c: Cell) -> LogicNotLowerResult {
     return LogicNotLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
 }
 
+// CLEAN-ROOM: count the per-bit input "slots" of an $add-shaped cell.
+//
+// $add is binary — both A and B operands exist with matching width. Two
+// pin conventions are accepted, in priority order (same shape as
+// _passes_eq_width but specialised to arithmetic-plus — IEEE 1364-2005
+// §5.1.3 / Weste-Eshraghian §11):
+//   (1) Bit-indexed pins  : conns include "A[0]","A[1]",… plus "B[0]",…
+//       Width = max( count("A[i]"), count("B[i]") ).
+//   (2) Single-bit fallback: only "A","B" present → width = 1.
+// A or B pin not present at all → width = 0 (lowering skipped).
+fn _passes_add_width(c: Cell) -> int {
+    let mut has_plain_a = 0
+    let mut has_plain_b = 0
+    let mut max_idx_a = 0 - 1
+    let mut max_idx_b = 0 - 1
+    let mut i = 0
+    while i < len(c.conns) {
+        let p = c.conns[i].pin
+        let lp = len(p)
+        if lp == 1 {
+            if p[0] == 'A' { has_plain_a = 1 }
+            if p[0] == 'B' { has_plain_b = 1 }
+        }
+        if lp >= 4 {
+            // shortest indexed form is "A[0]" / "B[0]" (4 chars)
+            if p[1] == '[' {
+                if p[lp - 1] == ']' {
+                    let mut k = 2
+                    let mut v = 0
+                    let mut ok = 1
+                    while k < lp - 1 {
+                        let ch = p[k]
+                        if ch >= '0' {
+                            if ch <= '9' {
+                                v = v * 10 + (ch - '0')
+                            } else { ok = 0 }
+                        } else { ok = 0 }
+                        k = k + 1
+                    }
+                    if ok == 1 {
+                        if p[0] == 'A' {
+                            if v > max_idx_a { max_idx_a = v }
+                        }
+                        if p[0] == 'B' {
+                            if v > max_idx_b { max_idx_b = v }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    let wa = max_idx_a + 1   // -1 → 0
+    let wb = max_idx_b + 1
+    let mut w = wa
+    if wb > w { w = wb }
+    if w > 0 { return w }
+    if has_plain_a == 1 {
+        if has_plain_b == 1 { return 1 }
+    }
+    return 0
+}
+
+// CLEAN-ROOM: lower one $add cell into a tree of SKY130 cells + the
+// internal wires those cells need. Returns (new_cells, new_wires).
+//
+// Shape (Weste/Eshraghian §11 — N-bit ripple-carry adder):
+//   add(A, B) = SUM_i with carry chain
+//     fa_i : (SUM[i], COUT[i]) = fa_1(A[i], B[i], CIN[i])
+//     CIN[0] = LO output of one conb_1 (constant 0 tie)
+//     CIN[i] = COUT[i-1] for i = 1..N-1
+//   Sum width = N (the lowering does NOT propagate the final COUT to a
+//   Y[N] bit; output truncation matches the typical Verilog
+//   `assign y[N-1:0] = a + b` shape produced by read_verilog before
+//   width elaboration).  COUT[N-1] is driven to a fresh internal wire
+//   so the no-dangling invariant holds.
+//
+// Naming convention for fresh wires/cells:
+//   <cellname>$cyo$<i>   — i-th FA's COUT wire (i = 0..N-1)
+//   <cellname>$cin0      — constant-0 tie wire (LO of the conb_1)
+//   <cellname>$fa$<i>    — i-th fa_1 cell instance
+//   <cellname>$tie$0     — the conb_1 cell instance providing cin0
+// All freshly added wires are width=1, internal (dir_kind=0, port_id=0).
+struct AddLowerResult {
+    cells: [Cell],
+    wires: [Wire],
+    ok:    int,         // 1 = lowered, 0 = unsupported shape
+}
+
+fn _passes_lower_add_cell(c: Cell) -> AddLowerResult {
+    let w = _passes_add_width(c)
+    if w <= 0 {
+        return AddLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+
+    // ── constant cin[0] = 0 tie (one conb_1 per $add cell) ──────────
+    let cin0_net = c.name + "$cin0"
+    out_wires = out_wires.push(rtlil_wire(cin0_net, 1, 0, 0))
+    let mut tie = rtlil_cell(c.name + "$tie$0",
+                             "sky130_fd_sc_hd__conb_1", 1)
+    tie = rtlil_cell_connect(tie, "LO", cin0_net)
+    out_cells = out_cells.push(tie)
+
+    // ── N-bit ripple-carry chain ────────────────────────────────────
+    // For each bit i in 0..w-1, instantiate one fa_1 driving SUM=Y[i]
+    // and COUT=cy[i]. CIN[0] = cin0_net; CIN[i] = cy[i-1] for i >= 1.
+    let mut cin = cin0_net
+    let mut i = 0
+    while i < w {
+        // resolve per-bit operand nets — accept either bit-indexed or
+        // (for w == 1) the plain single-bit pin convention.
+        let mut a_net: str = ""
+        let mut b_net: str = ""
+        let mut y_net: str = ""
+        if w == 1 {
+            a_net = _passes_pin_net(c, "A")
+            if a_net == "" { a_net = _passes_pin_net(c, "A[0]") }
+            b_net = _passes_pin_net(c, "B")
+            if b_net == "" { b_net = _passes_pin_net(c, "B[0]") }
+            y_net = _passes_pin_net(c, "Y")
+            if y_net == "" { y_net = _passes_pin_net(c, "Y[0]") }
+        } else {
+            let pa = "A[" + str(i) + "]"
+            let pb = "B[" + str(i) + "]"
+            let py = "Y[" + str(i) + "]"
+            a_net = _passes_pin_net(c, pa)
+            b_net = _passes_pin_net(c, pb)
+            y_net = _passes_pin_net(c, py)
+        }
+        if a_net == "" { return AddLowerResult { cells: [], wires: [], ok: 0 } }
+        if b_net == "" { return AddLowerResult { cells: [], wires: [], ok: 0 } }
+        if y_net == "" { return AddLowerResult { cells: [], wires: [], ok: 0 } }
+
+        // fresh COUT wire for this bit (always pushed so the FA's COUT
+        // pin references a wire present in the module — RTLIL's no-
+        // dangling invariant on cell pins, not on net sinks).
+        let cy_net = c.name + "$cyo$" + str(i)
+        out_wires = out_wires.push(rtlil_wire(cy_net, 1, 0, 0))
+
+        let mut fa = rtlil_cell(c.name + "$fa$" + str(i),
+                                "sky130_fd_sc_hd__fa_1", 1)
+        fa = rtlil_cell_connect(fa, "A",    a_net)
+        fa = rtlil_cell_connect(fa, "B",    b_net)
+        fa = rtlil_cell_connect(fa, "CIN",  cin)
+        fa = rtlil_cell_connect(fa, "SUM",  y_net)
+        fa = rtlil_cell_connect(fa, "COUT", cy_net)
+        out_cells = out_cells.push(fa)
+
+        cin = cy_net
+        i = i + 1
+    }
+
+    return AddLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
+}
+
 fn pass_techmap_sky130(d: Design) -> PassResult {
     let cb = _passes_total_cells(d)
     let mut out: [Module] = []
@@ -941,6 +1121,23 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                         while lnwi < len(lnr.wires) {
                             new_wires = new_wires.push(lnr.wires[lnwi])
                             lnwi = lnwi + 1
+                        }
+                        expanded = 1
+                    }
+                }
+                if c.cell_type == "$add" {
+                    let adr = _passes_lower_add_cell(c)
+                    if adr.ok == 1 {
+                        // splice expansion in place of the $add cell
+                        let mut adi = 0
+                        while adi < len(adr.cells) {
+                            new_cells = new_cells.push(adr.cells[adi])
+                            adi = adi + 1
+                        }
+                        let mut adwi = 0
+                        while adwi < len(adr.wires) {
+                            new_wires = new_wires.push(adr.wires[adwi])
+                            adwi = adwi + 1
                         }
                         expanded = 1
                     }
@@ -1636,6 +1833,130 @@ fn main() {
     }
     if rtlil_check_no_dangling(r_ln4.design.modules[0]) != 0 {
         println("FAIL T21e ln4_dangling_pin"); fails = fails + 1
+    }
+
+    // T22 — $add lowering (1-bit, plain A/B/Y conns) → 1 fa_1 + 1 conb_1
+    // (cin=0 tie). CLEAN-ROOM: rfc_006 §5 bug (a) iter 5. One full-adder
+    // computes SUM=Y and COUT into a fresh internal wire so the
+    // no-dangling invariant on the FA pins holds (Weste-Eshraghian §11).
+    total = total + 1
+    let mut m_ad1 = rtlil_new_module("ad1")
+    m_ad1 = rtlil_module_add_wire(m_ad1, rtlil_wire("a", 1, 1, 1))
+    m_ad1 = rtlil_module_add_wire(m_ad1, rtlil_wire("b", 1, 1, 2))
+    m_ad1 = rtlil_module_add_wire(m_ad1, rtlil_wire("y", 1, 2, 3))
+    let mut c_ad1 = rtlil_cell("u_ad1", "$add", 0)
+    c_ad1 = rtlil_cell_connect(c_ad1, "A", "a")
+    c_ad1 = rtlil_cell_connect(c_ad1, "B", "b")
+    c_ad1 = rtlil_cell_connect(c_ad1, "Y", "y")
+    m_ad1 = rtlil_module_add_cell(m_ad1, c_ad1)
+    let mut d_ad1 = rtlil_new_design("test")
+    d_ad1 = rtlil_design_add(d_ad1, m_ad1)
+    let r_ad1 = pass_techmap_sky130(d_ad1)
+    if r_ad1.ok != 1 {
+        println("FAIL T22 ad1: " + r_ad1.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__fa_1") != 1 {
+        println("FAIL T22b ad1_fa_count (got "
+            + str(rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__fa_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__conb_1") != 1 {
+        println("FAIL T22c ad1_conb_count (got "
+            + str(rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__conb_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad1.design.modules[0], "$add") != 0 {
+        println("FAIL T22d ad1_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_ad1.design.modules[0]) != 0 {
+        println("FAIL T22e ad1_dangling_pin"); fails = fails + 1
+    }
+
+    // T23 — $add lowering 2-bit (bit-indexed A[0..1]/B[0..1]/Y[0..1]) →
+    // 2 fa_1 (ripple chain) + 1 conb_1 (cin0 tie).
+    total = total + 1
+    let mut m_ad2 = rtlil_new_module("ad2")
+    m_ad2 = rtlil_module_add_wire(m_ad2, rtlil_wire("a0", 1, 1, 1))
+    m_ad2 = rtlil_module_add_wire(m_ad2, rtlil_wire("a1", 1, 1, 2))
+    m_ad2 = rtlil_module_add_wire(m_ad2, rtlil_wire("b0", 1, 1, 3))
+    m_ad2 = rtlil_module_add_wire(m_ad2, rtlil_wire("b1", 1, 1, 4))
+    m_ad2 = rtlil_module_add_wire(m_ad2, rtlil_wire("y0", 1, 2, 5))
+    m_ad2 = rtlil_module_add_wire(m_ad2, rtlil_wire("y1", 1, 2, 6))
+    let mut c_ad2 = rtlil_cell("u_ad2", "$add", 0)
+    c_ad2 = rtlil_cell_connect(c_ad2, "A[0]", "a0")
+    c_ad2 = rtlil_cell_connect(c_ad2, "A[1]", "a1")
+    c_ad2 = rtlil_cell_connect(c_ad2, "B[0]", "b0")
+    c_ad2 = rtlil_cell_connect(c_ad2, "B[1]", "b1")
+    c_ad2 = rtlil_cell_connect(c_ad2, "Y[0]", "y0")
+    c_ad2 = rtlil_cell_connect(c_ad2, "Y[1]", "y1")
+    m_ad2 = rtlil_module_add_cell(m_ad2, c_ad2)
+    let mut d_ad2 = rtlil_new_design("test")
+    d_ad2 = rtlil_design_add(d_ad2, m_ad2)
+    let r_ad2 = pass_techmap_sky130(d_ad2)
+    if r_ad2.ok != 1 {
+        println("FAIL T23 ad2: " + r_ad2.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__fa_1") != 2 {
+        println("FAIL T23b ad2_fa_count (got "
+            + str(rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__fa_1"))
+            + ", want 2)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__conb_1") != 1 {
+        println("FAIL T23c ad2_conb_count (got "
+            + str(rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__conb_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad2.design.modules[0], "$add") != 0 {
+        println("FAIL T23d ad2_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_ad2.design.modules[0]) != 0 {
+        println("FAIL T23e ad2_dangling_pin"); fails = fails + 1
+    }
+
+    // T24 — $add lowering 4-bit → 4 fa_1 (linear ripple chain over four
+    // bits with carry-in tied to 0 via one conb_1) + 1 conb_1.
+    total = total + 1
+    let mut m_ad4 = rtlil_new_module("ad4")
+    let mut adwi = 0
+    while adwi < 4 {
+        m_ad4 = rtlil_module_add_wire(m_ad4,
+            rtlil_wire("a" + str(adwi), 1, 1, adwi + 1))
+        m_ad4 = rtlil_module_add_wire(m_ad4,
+            rtlil_wire("b" + str(adwi), 1, 1, adwi + 5))
+        m_ad4 = rtlil_module_add_wire(m_ad4,
+            rtlil_wire("y" + str(adwi), 1, 2, adwi + 9))
+        adwi = adwi + 1
+    }
+    let mut c_ad4 = rtlil_cell("u_ad4", "$add", 0)
+    let mut adwk = 0
+    while adwk < 4 {
+        c_ad4 = rtlil_cell_connect(c_ad4, "A[" + str(adwk) + "]", "a" + str(adwk))
+        c_ad4 = rtlil_cell_connect(c_ad4, "B[" + str(adwk) + "]", "b" + str(adwk))
+        c_ad4 = rtlil_cell_connect(c_ad4, "Y[" + str(adwk) + "]", "y" + str(adwk))
+        adwk = adwk + 1
+    }
+    m_ad4 = rtlil_module_add_cell(m_ad4, c_ad4)
+    let mut d_ad4 = rtlil_new_design("test")
+    d_ad4 = rtlil_design_add(d_ad4, m_ad4)
+    let r_ad4 = pass_techmap_sky130(d_ad4)
+    if r_ad4.ok != 1 {
+        println("FAIL T24 ad4: " + r_ad4.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__fa_1") != 4 {
+        println("FAIL T24b ad4_fa_count (got "
+            + str(rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__fa_1"))
+            + ", want 4)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__conb_1") != 1 {
+        println("FAIL T24c ad4_conb_count (got "
+            + str(rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__conb_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad4.design.modules[0], "$add") != 0 {
+        println("FAIL T24d ad4_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_ad4.design.modules[0]) != 0 {
+        println("FAIL T24e ad4_dangling_pin"); fails = fails + 1
     }
 
     if fails > 0 {
