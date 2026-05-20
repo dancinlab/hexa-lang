@@ -85,6 +85,28 @@ pub fn rt_lgamma(z: float) -> float {
     return (x - 0.5) * rt_log(x) - x + LOG_SQRT_2PI + series - shift
 }
 
+// Step 3 cycle 18 — naive matrix-vector multiply (row-major).
+//   out[r] = Σ_c w[r*cols + c] * x[c]   for r ∈ [0, rows)
+// Hot path; C wrapper retains the rows/cols int extraction.
+pub fn rt_matvec(w: [float], x: [float], rows: int, cols: int) -> [float] {
+    let mut out: [float] = []
+    if rows <= 0 { return out }
+    if cols <= 0 { return out }
+    let mut r = 0
+    while r < rows {
+        let mut acc = 0.0
+        let mut c = 0
+        let base = r * cols
+        while c < cols {
+            acc = acc + w[base + c] * x[c]
+            c = c + 1
+        }
+        out = out.push(acc)
+        r = r + 1
+    }
+    return out
+}
+
 // Step 3 cycle 17 — SiLU (Swish-1) activation: x / (1 + exp(-x))
 pub fn rt_silu(a: [float]) -> [float] {
     let mut out: [float] = []

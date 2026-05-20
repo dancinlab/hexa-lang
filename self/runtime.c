@@ -3454,6 +3454,8 @@ HexaVal hexa_math_max(HexaVal a, HexaVal b) { return rt_max_float(a, b); }
 #endif
 
 // ── ML builtins: matvec, dot ─────────────────────────────────
+// Step-3 cycle 18 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_matvec(HexaVal w, HexaVal x, HexaVal rows_v, HexaVal cols_v) {
     int64_t rows = HX_IS_INT(rows_v) ? HX_INT(rows_v) : 0;
     int64_t cols = HX_IS_INT(cols_v) ? HX_INT(cols_v) : 0;
@@ -3470,6 +3472,16 @@ HexaVal hexa_matvec(HexaVal w, HexaVal x, HexaVal rows_v, HexaVal cols_v) {
     }
     return out;
 }
+#else
+extern HexaVal rt_matvec(HexaVal w, HexaVal x, HexaVal rows, HexaVal cols);
+HexaVal hexa_matvec(HexaVal w, HexaVal x, HexaVal rows_v, HexaVal cols_v) {
+    int64_t rows = HX_IS_INT(rows_v) ? HX_INT(rows_v) : 0;
+    int64_t cols = HX_IS_INT(cols_v) ? HX_INT(cols_v) : 0;
+    if (rows <= 0 || cols <= 0) return hexa_array_new();
+    if (!HX_IS_ARRAY(w) || !HX_IS_ARRAY(x)) return hexa_array_new();
+    return rt_matvec(w, x, hexa_int(rows), hexa_int(cols));
+}
+#endif
 
 HexaVal hexa_input(HexaVal prompt) {
     if (HX_IS_STR(prompt) && HX_STR(prompt) && HX_STR(prompt)[0]) {
