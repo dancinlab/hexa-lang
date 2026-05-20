@@ -778,6 +778,66 @@ pub fn ag_extract_emit_fn_xy(arena: int, bwd_root: int, fn_name: string) -> stri
          + "}\n"
 }
 
+// SD11: emit a STANDALONE-COMPILABLE program — the bwd fn + an `fn main()`
+// argv wrapper that lets the compiled binary be invoked as
+//   ./bin <x_repr> <dy_repr>
+// and emit one line on stdout: `to_string(dx)` (the runtime uses %.17g
+// which round-trips losslessly via strtod, so the SD11 harness's
+// `.to_float()` on this line recovers the IEEE-754 bit-pattern verbatim).
+//
+// Scope (SD11 honest scope, task brief §5): this helper is the SIMPLEST
+// emit shape — single-Param, signature `(x: float, dy: float) -> float`.
+// It matches SD5's relu walker output (a pure conditional, no fwd-cache,
+// no Var_Upstream complications). Multi-input + arithmetic compile is
+// SD12+ work; that requires emitting fwd-cache materialisation into the
+// argv driver, which itself needs Var_FwdResult → recomputation.
+//
+// Atlas cite: @cite Griewank-Walther §3.2 elementary-vjp emit (the
+// emitted source is the literal output of the reverse walker's emit;
+// SD11 closes the AD loop end-to-end by recompiling that source).
+//
+// Round-trip invariant for byte-eq (binary64 IEEE-754):
+//   compiled_binary(json_stringify(x), json_stringify(dy)).parse_first_line_as_float()
+//     ≡  in_process_interpret(arena, bwd_root, x, dy)
+// because (a) the emit prints `json_stringify(dx)` whose path goes
+// through runtime_core.c::_shortest_double (loops 1..17 digit `%g` and
+// strtod-checks each — see runtime.c:7909 comment block "shortest %g-form
+// decimal that strtod-round-trips to the same double"); (b) the harness
+// constructs argv args from `json_stringify(xi)` / `json_stringify(dyi)`
+// using the same shortest-roundtrip codec; (c) `.to_float()` is
+// strtod-backed (parses the shortest-roundtrip text back to the SAME
+// double bit-for-bit); (d) the emitted source produces the SAME IEEE-754
+// trajectory as the interpret walker — both go through the identical
+// `>`-then-select dataflow on a single conditional.
+//
+// IMPORTANT: do NOT replace `json_stringify` with `to_string`. The
+// hexa-native `to_string` for float (runtime_core.c:5078) uses `%g`
+// (default 6 significant digits) which truncates to ~7 decimal places
+// — round-trip loses 1e-7-scale precision and breaks byte-eq.
+// json_stringify uses `_shortest_double` (round-trip safe).
+pub fn ag_extract_emit_program_x_dy(arena: int, bwd_root: int, fn_name: string) -> string {
+    let bwd_src = ag_extract_emit_fn(arena, bwd_root, fn_name)
+    let mut main_src = ""
+    main_src = main_src + "\n"
+    main_src = main_src + "fn main() {\n"
+    main_src = main_src + "    let argv = args()\n"
+    main_src = main_src + "    // argv layout when invoked directly: [bin, x_repr, dy_repr]\n"
+    main_src = main_src + "    if len(argv) < 3 {\n"
+    main_src = main_src + "        println(\"usage: <bin> <x> <dy>\")\n"
+    main_src = main_src + "        exit(2)\n"
+    main_src = main_src + "    }\n"
+    main_src = main_src + "    let x  = argv[1].to_float()\n"
+    main_src = main_src + "    let dy = argv[2].to_float()\n"
+    main_src = main_src + "    let dx = " + fn_name + "(x, dy)\n"
+    main_src = main_src + "    // json_stringify is round-trip safe (shortest %g-form\n"
+    main_src = main_src + "    // strtod-checked; runtime_core.c::_shortest_double).\n"
+    main_src = main_src + "    // Plain to_string(dx) uses %g (6 digits) — would lose\n"
+    main_src = main_src + "    // byte-eq across the recompile boundary.\n"
+    main_src = main_src + "    println(json_stringify(dx))\n"
+    main_src = main_src + "}\n"
+    return bwd_src + main_src
+}
+
 // ─── interpret step: bwd AST → numerical evaluation ────────────────────
 // `ag_extract_interpret(arena, bwd_root, x_val, dy_val)` — tree-walks
 // the bwd AST applying each node's semantics. Produces the same scalar
