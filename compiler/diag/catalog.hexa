@@ -210,8 +210,6 @@ pub let CATALOG: [DiagSpec] = [
         explain: "The call-site expression's callee resolved to a value whose static type is not a function. Common causes: shadowing a function name with a local let binding, calling a struct field, or accessing a value of a non-fn type as if it were a function. Stage1 punch list C20 surfaces this as HX2003 instead of silently returning unit, so the cascade after Gap 1 multi-file imports stays readable.",
         fix_it_kind: FixItKind::None
     },
-<<<<<<< HEAD
-=======
     // RFC-074 Phase 2 (2026-05-20) — enum variant payload arity check.
     // Stage S2 (bind) emits this when an `E::V(...)` expression or
     // `E::V(...) -> ...` match pattern supplies a different number of payload
@@ -241,7 +239,6 @@ pub let CATALOG: [DiagSpec] = [
         explain: "An enum variant constructor supplied a payload value whose static type does not match the declared positional slot type. Under RFC-074 §2.2 each variant carries a `typs: [TypeRef]` list; the construction site's `children[i]` must be type-assignable to `typs[i]`. Common causes: argument-order swap (e.g. `E::V(\"hi\", 42)` against `enum E { V(int, string) }`), a typo in the enum declaration, or a stale call site after a variant signature change. Fix: reorder the arguments, correct the expression types, or amend the enum variant declaration.",
         fix_it_kind: FixItKind::None
     },
->>>>>>> 5792697b (feat(compiler/{check,diag}): RFC 074 Phase 2.1 — types.hexa per-slot element-type match (HX2005))
     DiagSpec {
         code: "HX3001",
         title: "type mismatch",
