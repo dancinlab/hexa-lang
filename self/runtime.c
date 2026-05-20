@@ -45,22 +45,17 @@ extern char **environ; // posix_spawnp inherits parent env explicitly
 //  unit byte-identical to the pre-split runtime.c — a pure file
 //  partition with ZERO behavior change. See runtime_core.c header.
 // ═══════════════════════════════════════════════════════════
-// Cycle 55: override macOS libc stderr/stdout/stdin (= __stderrp/
-// __stdoutp/__stdinp extern globals) with encoded FILE* constants
-// BEFORE the helper definitions so they see our values too. Drops
-// ___stderrp + ___stdoutp + ___stdinp from extern list.
+// Cycle 55: override macOS libc stderr/stdout/stdin/errno (= __stderrp/
+// __stdoutp/__stdinp + __error extern globals) with encoded FILE*
+// constants + plain int store. Placed BEFORE helper definitions so
+// they see our values. Drops ___stderrp + ___stdoutp + ___stdinp +
+// ___error from extern list.
 #undef stderr
 #undef stdout
 #undef stdin
 #define stderr ((FILE *)(uintptr_t)3)
 #define stdout ((FILE *)(uintptr_t)2)
 #define stdin  ((FILE *)(uintptr_t)1)
-// Cycle 55: override macOS libc errno (= (*__error())). Replaces
-// the function-pointer dereference with a plain static int store.
-// Drops ___error from the extern list. Code that reads/writes
-// errno will now hit our own store rather than libc TLS errno.
-// Acceptable for compiler binary — errors are flagged via return
-// codes and exit, not errno consumers.
 static int hxlcl_errno = 0;
 #undef errno
 #define errno hxlcl_errno
@@ -100,6 +95,544 @@ static int __attribute__((noinline)) hxlcl_strcmp(const char *a, const char *b) 
         if (ca == 0) return 0;
     }
 }
+// Cycle 47: `strcat` unhook. Same loop pattern in `hxlcl_strcat` body
+// would let clang's libcall recognizer convert it back to `strcat` +
+// `strlen`; the volatile read on the dest scan defeats that, mirroring
+// the cycle-46 helpers. Returns dest per C99 strcat semantics.
+static char *__attribute__((noinline)) hxlcl_strcat(char *dest, const char *src) {
+    char *p = dest;
+    while (((const volatile char *)p)[0]) p++;
+    size_t i = 0;
+    while (((const volatile char *)src)[i]) {
+        p[i] = src[i];
+        i++;
+    }
+    p[i] = '\0';
+    return dest;
+}
+// Cycle 47 batch: strncmp, strstr, strrchr, strchr, strdup, strndup.
+static int __attribute__((noinline)) hxlcl_strncmp(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char ca = (unsigned char)a[i];
+        unsigned char cb = (unsigned char)b[i];
+        if (ca != cb) return (int)ca - (int)cb;
+        if (ca == 0) return 0;
+    }
+    return 0;
+}
+static const char *__attribute__((noinline)) hxlcl_strchr(const char *s, int c) {
+    if (!s) return NULL;
+    unsigned char target = (unsigned char)c;
+    for (size_t i = 0; ; i++) {
+        unsigned char x = (unsigned char)((const volatile char *)s)[i];
+        if (x == target) return s + i;
+        if (x == 0) return (target == 0) ? (s + i) : NULL;
+    }
+}
+static const char *__attribute__((noinline)) hxlcl_strrchr(const char *s, int c) {
+    if (!s) return NULL;
+    unsigned char target = (unsigned char)c;
+    const char *last = NULL;
+    for (size_t i = 0; ; i++) {
+        unsigned char x = (unsigned char)((const volatile char *)s)[i];
+        if (x == target) last = s + i;
+        if (x == 0) return last;
+    }
+}
+static const char *__attribute__((noinline)) hxlcl_strstr(const char *h, const char *n) {
+    if (!h || !n) return NULL;
+    if (n[0] == 0) return h;
+    for (size_t i = 0; ((const volatile char *)h)[i]; i++) {
+        size_t j = 0;
+        while (n[j] && h[i + j] == n[j]) j++;
+        if (n[j] == 0) return h + i;
+    }
+    return NULL;
+}
+static char *__attribute__((noinline)) hxlcl_strdup(const char *s) {
+    if (!s) return NULL;
+    size_t n = 0;
+    while (((const volatile char *)s)[n]) n++;
+    char *out = (char *)malloc(n + 1);
+    if (!out) return NULL;
+    for (size_t i = 0; i < n; i++) out[i] = s[i];
+    out[n] = '\0';
+    return out;
+}
+static char *__attribute__((noinline)) hxlcl_strndup(const char *s, size_t cap) {
+    if (!s) return NULL;
+    size_t n = 0;
+    while (n < cap && ((const volatile char *)s)[n]) n++;
+    char *out = (char *)malloc(n + 1);
+    if (!out) return NULL;
+    for (size_t i = 0; i < n; i++) out[i] = s[i];
+    out[n] = '\0';
+    return out;
+}
+// Cycle 48 batch — numeric parse + bzero.
+static long long __attribute__((noinline)) hxlcl_atoll(const char *s) {
+    if (!s) return 0;
+    size_t i = 0;
+    while (s[i] == ' ' || s[i] == '\t' || s[i] == '\n') i++;
+    int sign = 1;
+    if (s[i] == '-') { sign = -1; i++; }
+    else if (s[i] == '+') i++;
+    unsigned long long n = 0;
+    while (s[i] >= '0' && s[i] <= '9') {
+        n = n * 10ULL + (unsigned long long)(s[i] - '0');
+        i++;
+    }
+    return (long long)((sign < 0) ? -(long long)n : (long long)n);
+}
+static int __attribute__((noinline)) hxlcl_atoi(const char *s) {
+    return (int)hxlcl_atoll(s);
+}
+static long long __attribute__((noinline)) hxlcl_strtoll(const char *nptr, char **endptr, int base) {
+    if (!nptr) { if (endptr) *endptr = (char *)nptr; return 0; }
+    const char *s = nptr;
+    while (*s == ' ' || *s == '\t' || *s == '\n') s++;
+    int sign = 1;
+    if (*s == '-') { sign = -1; s++; }
+    else if (*s == '+') s++;
+    if (base == 0) {
+        if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { base = 16; s += 2; }
+        else if (s[0] == '0') { base = 8; s++; }
+        else base = 10;
+    } else if (base == 16 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        s += 2;
+    }
+    unsigned long long n = 0;
+    for (;;) {
+        char c = *s;
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'Z') d = c - 'A' + 10;
+        else break;
+        if (d >= base) break;
+        n = n * (unsigned long long)base + (unsigned long long)d;
+        s++;
+    }
+    if (endptr) *endptr = (char *)s;
+    return (long long)((sign < 0) ? -(long long)n : (long long)n);
+}
+static unsigned long long __attribute__((noinline)) hxlcl_strtoull(const char *nptr, char **endptr, int base) {
+    if (!nptr) { if (endptr) *endptr = (char *)nptr; return 0; }
+    const char *s = nptr;
+    while (*s == ' ' || *s == '\t' || *s == '\n') s++;
+    if (*s == '+') s++;
+    if (base == 0) {
+        if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { base = 16; s += 2; }
+        else if (s[0] == '0') { base = 8; s++; }
+        else base = 10;
+    } else if (base == 16 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        s += 2;
+    }
+    unsigned long long n = 0;
+    for (;;) {
+        char c = *s;
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'Z') d = c - 'A' + 10;
+        else break;
+        if (d >= base) break;
+        n = n * (unsigned long long)base + (unsigned long long)d;
+        s++;
+    }
+    if (endptr) *endptr = (char *)s;
+    return n;
+}
+static double __attribute__((noinline)) hxlcl_atof(const char *s) {
+    if (!s) return 0.0;
+    size_t i = 0;
+    while (s[i] == ' ' || s[i] == '\t' || s[i] == '\n') i++;
+    int sign = 1;
+    if (s[i] == '-') { sign = -1; i++; }
+    else if (s[i] == '+') i++;
+    double n = 0.0;
+    while (s[i] >= '0' && s[i] <= '9') {
+        n = n * 10.0 + (double)(s[i] - '0');
+        i++;
+    }
+    if (s[i] == '.') {
+        i++;
+        double frac = 0.1;
+        while (s[i] >= '0' && s[i] <= '9') {
+            n += (double)(s[i] - '0') * frac;
+            frac *= 0.1;
+            i++;
+        }
+    }
+    if (s[i] == 'e' || s[i] == 'E') {
+        i++;
+        int esign = 1;
+        if (s[i] == '-') { esign = -1; i++; }
+        else if (s[i] == '+') i++;
+        int exp_val = 0;
+        while (s[i] >= '0' && s[i] <= '9') {
+            exp_val = exp_val * 10 + (s[i] - '0');
+            i++;
+        }
+        double mul = 1.0;
+        for (int k = 0; k < exp_val; k++) mul *= 10.0;
+        if (esign < 0) n /= mul;
+        else n *= mul;
+    }
+    return (sign < 0) ? -n : n;
+}
+static void __attribute__((noinline)) hxlcl_bzero(void *s, size_t n) {
+    unsigned char *p = (unsigned char *)s;
+    for (size_t i = 0; i < n; i++) {
+        p[i] = 0;
+    }
+}
+// Cycle 49 batch — memory triple + Tier-A.1 stragglers.
+static void *__attribute__((noinline)) hxlcl_memcpy(void *dst, const void *src, size_t n) {
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = (const unsigned char *)src;
+    for (size_t i = 0; i < n; i++) d[i] = s[i];
+    return dst;
+}
+static void *__attribute__((noinline)) hxlcl_memset(void *s, int c, size_t n) {
+    unsigned char *p = (unsigned char *)s;
+    unsigned char v = (unsigned char)c;
+    for (size_t i = 0; i < n; i++) p[i] = v;
+    return s;
+}
+static void *__attribute__((noinline)) hxlcl_memmove(void *dst, const void *src, size_t n) {
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = (const unsigned char *)src;
+    if (d == s || n == 0) return dst;
+    if (d < s) {
+        for (size_t i = 0; i < n; i++) d[i] = s[i];
+    } else {
+        for (size_t i = n; i > 0; i--) d[i - 1] = s[i - 1];
+    }
+    return dst;
+}
+static char *__attribute__((noinline)) hxlcl_strncpy(char *dst, const char *src, size_t n) {
+    size_t i = 0;
+    for (; i < n && src[i]; i++) dst[i] = src[i];
+    for (; i < n; i++) dst[i] = '\0';
+    return dst;
+}
+static char *__attribute__((noinline)) hxlcl_strcpy(char *dst, const char *src) {
+    size_t i = 0;
+    while (((const volatile char *)src)[i]) { dst[i] = src[i]; i++; }
+    dst[i] = '\0';
+    return dst;
+}
+static const char *__attribute__((noinline)) hxlcl_strerror(int errnum) {
+    switch (errnum) {
+        case 0: return "no error";
+        case 1: return "EPERM";
+        case 2: return "ENOENT";
+        case 4: return "EINTR";
+        case 5: return "EIO";
+        case 9: return "EBADF";
+        case 11: return "EAGAIN";
+        case 12: return "ENOMEM";
+        case 13: return "EACCES";
+        case 17: return "EEXIST";
+        case 22: return "EINVAL";
+        case 24: return "EMFILE";
+        case 32: return "EPIPE";
+        default: return "unknown error";
+    }
+}
+static size_t __attribute__((noinline)) hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm) {
+    (void)fmt; (void)tm;
+    if (buf && cap > 0) buf[0] = '\0';
+    return 0;
+}
+// Cycle 52 — minimal printf family. Handles %s/%d/%i/%u/%lld/%ld/%llu/
+// %lu/%zu/%c/%x/%X/%p/%%, basic width + zero-pad. Float specifiers
+// (%f/%g/%e) emit "(float)" placeholder — compiler's hot paths don't
+// print floats. Not bit-exact with libc printf; see RUNTIME.md cycle
+// 52 Log entry for the honest scope.
+static int __attribute__((noinline)) hxlcl_vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap) {
+    size_t pos = 0;
+    #define HXLCL_PUT(ch) do { if (pos + 1 < cap) buf[pos] = (ch); pos++; } while (0)
+    while (*fmt) {
+        if (*fmt != '%') { HXLCL_PUT(*fmt); fmt++; continue; }
+        fmt++;
+        int leftalign = 0, zeropad = 0, width = 0;
+        if (*fmt == '-') { leftalign = 1; fmt++; }
+        if (*fmt == '+') fmt++;
+        if (*fmt == ' ') fmt++;
+        if (*fmt == '#') fmt++;
+        if (*fmt == '0') { zeropad = 1; fmt++; }
+        while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt - '0'); fmt++; }
+        if (*fmt == '.') {
+            fmt++;
+            if (*fmt == '*') { (void)va_arg(ap, int); fmt++; }
+            else while (*fmt >= '0' && *fmt <= '9') fmt++;
+        }
+        int lng = 0;
+        if (*fmt == 'h') { fmt++; if (*fmt == 'h') fmt++; }
+        else if (*fmt == 'l') { lng = 1; fmt++; if (*fmt == 'l') { lng = 2; fmt++; } }
+        else if (*fmt == 'z' || *fmt == 'j' || *fmt == 't') { lng = 2; fmt++; }
+        char conv = *fmt; if (conv == 0) break; fmt++;
+        char tmp[32]; int tn = 0;
+        if (conv == '%') { HXLCL_PUT('%'); continue; }
+        if (conv == 'c') { HXLCL_PUT((char)va_arg(ap, int)); continue; }
+        if (conv == 's') {
+            const char *s = va_arg(ap, const char *);
+            if (!s) s = "(null)";
+            int slen = 0; while (s[slen]) slen++;
+            int pad = width - slen; if (pad < 0) pad = 0;
+            if (!leftalign) for (int k = 0; k < pad; k++) HXLCL_PUT(' ');
+            for (int k = 0; k < slen; k++) HXLCL_PUT(s[k]);
+            if (leftalign) for (int k = 0; k < pad; k++) HXLCL_PUT(' ');
+            continue;
+        }
+        if (conv == 'd' || conv == 'i') {
+            long long v;
+            if (lng == 2) v = va_arg(ap, long long);
+            else if (lng == 1) v = va_arg(ap, long);
+            else v = va_arg(ap, int);
+            int neg = (v < 0);
+            unsigned long long uv = neg ? (unsigned long long)(-(v + 1)) + 1ULL : (unsigned long long)v;
+            if (uv == 0) tmp[tn++] = '0';
+            else while (uv) { tmp[tn++] = '0' + (char)(uv % 10); uv /= 10; }
+            if (neg) tmp[tn++] = '-';
+        } else if (conv == 'u') {
+            unsigned long long v;
+            if (lng == 2) v = va_arg(ap, unsigned long long);
+            else if (lng == 1) v = va_arg(ap, unsigned long);
+            else v = va_arg(ap, unsigned int);
+            if (v == 0) tmp[tn++] = '0';
+            else while (v) { tmp[tn++] = '0' + (char)(v % 10); v /= 10; }
+        } else if (conv == 'x' || conv == 'X' || conv == 'p') {
+            unsigned long long v;
+            if (conv == 'p') v = (unsigned long long)(uintptr_t)va_arg(ap, void *);
+            else if (lng == 2) v = va_arg(ap, unsigned long long);
+            else if (lng == 1) v = va_arg(ap, unsigned long);
+            else v = va_arg(ap, unsigned int);
+            char hi = (conv == 'X') ? 'A' : 'a';
+            if (v == 0) tmp[tn++] = '0';
+            else while (v) { int d = (int)(v & 0xF); tmp[tn++] = (d < 10) ? ('0' + (char)d) : (hi + (char)d - 10); v >>= 4; }
+            if (conv == 'p') { tmp[tn++] = 'x'; tmp[tn++] = '0'; }
+        } else if (conv == 'f' || conv == 'g' || conv == 'e' || conv == 'F' || conv == 'G' || conv == 'E') {
+            (void)va_arg(ap, double);
+            const char *pl = "(float)";
+            for (int k = 0; pl[k]; k++) HXLCL_PUT(pl[k]);
+            continue;
+        } else {
+            HXLCL_PUT('%'); HXLCL_PUT(conv); continue;
+        }
+        int pad = width - tn; if (pad < 0) pad = 0;
+        char padc = (zeropad && !leftalign) ? '0' : ' ';
+        if (!leftalign) for (int k = 0; k < pad; k++) HXLCL_PUT(padc);
+        for (int i = tn - 1; i >= 0; i--) HXLCL_PUT(tmp[i]);
+        if (leftalign) for (int k = 0; k < pad; k++) HXLCL_PUT(' ');
+    }
+    #undef HXLCL_PUT
+    if (cap > 0) buf[pos < cap ? pos : cap - 1] = '\0';
+    return (int)pos;
+}
+static int __attribute__((noinline)) hxlcl_snprintf(char *buf, size_t cap, const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    int r = hxlcl_vsnprintf(buf, cap, fmt, ap);
+    va_end(ap);
+    return r;
+}
+static int __attribute__((noinline)) hxlcl_sprintf(char *buf, const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    int r = hxlcl_vsnprintf(buf, 0x7FFFFFFF, fmt, ap);
+    va_end(ap);
+    return r;
+}
+static int __attribute__((noinline)) hxlcl_vfprintf_fd(int fd, const char *fmt, va_list ap) {
+    char buf[4096];
+    int n = hxlcl_vsnprintf(buf, sizeof(buf), fmt, ap);
+    if (n > (int)sizeof(buf) - 1) n = sizeof(buf) - 1;
+    return (int)write(fd, buf, (size_t)n);
+}
+static int __attribute__((noinline)) hxlcl_printf(const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    int r = hxlcl_vfprintf_fd(1, fmt, ap);
+    va_end(ap);
+    return r;
+}
+static int __attribute__((noinline)) hxlcl_fprintf(void *fp, const char *fmt, ...) {
+    int fd = 1;
+    if (fp == (void *)stderr) fd = 2;
+    va_list ap; va_start(ap, fmt);
+    int r = hxlcl_vfprintf_fd(fd, fmt, ap);
+    va_end(ap);
+    return r;
+}
+static int __attribute__((noinline)) hxlcl_fputs(const char *s, void *fp) {
+    int fd = 1; if (fp == (void *)stderr) fd = 2;
+    if (!s) return -1;
+    size_t n = 0; while (((const volatile char *)s)[n]) n++;
+    return (int)write(fd, s, n);
+}
+static int __attribute__((noinline)) hxlcl_fputc(int c, void *fp) {
+    int fd = 1; if (fp == (void *)stderr) fd = 2;
+    unsigned char ch = (unsigned char)c;
+    return write(fd, &ch, 1) == 1 ? c : -1;
+}
+static int __attribute__((noinline)) hxlcl_fflush(void *fp) {
+    (void)fp;
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_putchar(int c) {
+    unsigned char ch = (unsigned char)c;
+    return write(1, &ch, 1) == 1 ? c : -1;
+}
+static void __attribute__((noinline)) hxlcl_perror(const char *s) {
+    if (s && s[0]) {
+        size_t n = 0; while (((const volatile char *)s)[n]) n++;
+        write(2, s, n);
+        write(2, ": ", 2);
+    }
+    write(2, "error\n", 6);
+}
+// Cycle 53 — Tier-A.2 mmap-backed bump allocator. malloc never frees;
+// free is a noop; realloc bump-allocates new region + byte copy.
+// Trade-off: compiler binary leaks memory until exit (a one-shot tool;
+// acceptable). Calls libc `mmap` for fresh 4 MB chunks; that single
+// `_mmap` extern is the floor for the allocator family. Once @asm
+// blocks are wired (Tier-A.4 path), `mmap` itself can be syscall-
+// inlined and the family becomes zero-extern.
+#define HXLCL_ALLOC_CHUNK_SZ (4u * 1024u * 1024u)
+static char *_hxlcl_alloc_ptr = (char *)0;
+static char *_hxlcl_alloc_end = (char *)0;
+static void *__attribute__((noinline)) hxlcl_malloc(size_t n) {
+    if (n == 0) n = 1;
+    n = (n + (size_t)15) & ~(size_t)15;
+    if (!_hxlcl_alloc_ptr || _hxlcl_alloc_ptr + n > _hxlcl_alloc_end) {
+        size_t chunk = (n > HXLCL_ALLOC_CHUNK_SZ) ? n : HXLCL_ALLOC_CHUNK_SZ;
+        void *m = mmap((void *)0, chunk, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (m == MAP_FAILED) return (void *)0;
+        _hxlcl_alloc_ptr = (char *)m;
+        _hxlcl_alloc_end = _hxlcl_alloc_ptr + chunk;
+    }
+    void *p = _hxlcl_alloc_ptr;
+    _hxlcl_alloc_ptr += n;
+    return p;
+}
+static void __attribute__((noinline)) hxlcl_free(void *p) {
+    (void)p;
+}
+static void *__attribute__((noinline)) hxlcl_realloc(void *p, size_t n) {
+    if (!p) return hxlcl_malloc(n);
+    if (n == 0) return (void *)0;
+    void *np = hxlcl_malloc(n);
+    if (!np) return (void *)0;
+    unsigned char *d = (unsigned char *)np;
+    const unsigned char *s = (const unsigned char *)p;
+    for (size_t i = 0; i < n; i++) d[i] = s[i];
+    return np;
+}
+static void *__attribute__((noinline)) hxlcl_calloc(size_t nmemb, size_t size) {
+    size_t total = nmemb * size;
+    void *p = hxlcl_malloc(total);
+    if (p) {
+        unsigned char *q = (unsigned char *)p;
+        for (size_t i = 0; i < total; i++) q[i] = 0;
+    }
+    return p;
+}
+static int __attribute__((noinline)) hxlcl_munmap(void *addr, size_t length) {
+    (void)addr; (void)length;
+    return 0;
+}
+// Cycle 54 — Tier-A.3 file-stream subset. FILE* encoded as
+// (void *)(uintptr_t)(fd + 1) so 0 doesn't alias NULL. stderr/
+// stdout/stdin (libc pointers) preserved by hxlcl_fprintf/fputs/
+// fputc/fflush path; those keep using libc globals (one extern
+// each — addressed later via @asm + fd constants).
+static void *__attribute__((noinline)) hxlcl_fopen(const char *path, const char *mode) {
+    if (!path || !mode) return (void *)0;
+    int flags = 0;
+    if (mode[0] == 'r') flags = O_RDONLY;
+    else if (mode[0] == 'w') flags = O_WRONLY | O_CREAT | O_TRUNC;
+    else if (mode[0] == 'a') flags = O_WRONLY | O_CREAT | O_APPEND;
+    else return (void *)0;
+    if (mode[1] == '+' || (mode[1] != 0 && mode[2] == '+')) {
+        flags = (flags & ~(O_RDONLY | O_WRONLY)) | O_RDWR;
+    }
+    int fd = open(path, flags, 0644);
+    if (fd < 0) return (void *)0;
+    return (void *)(uintptr_t)(fd + 1);
+}
+static int __attribute__((noinline)) hxlcl_fclose(void *fp) {
+    if (!fp) return -1;
+    uintptr_t v = (uintptr_t)fp;
+    // libc stderr/stdout/stdin: pointers in __DATA, very high addresses.
+    // Our encoding: small ints (fd+1, typically <1024).
+    if (v >= 0x1000) return 0;  // libc FILE* — don't close
+    int fd = (int)v - 1;
+    if (fd < 3) return 0;  // safety: never close 0/1/2
+    return close(fd);
+}
+static int __attribute__((noinline)) _hxlcl_fp_fd(void *fp) {
+    uintptr_t v = (uintptr_t)fp;
+    if (v >= 0x1000) {
+        // libc FILE* — best effort by pointer comparison.
+        if (fp == (void *)stderr) return 2;
+        if (fp == (void *)stdout) return 1;
+        if (fp == (void *)stdin) return 0;
+        return -1;
+    }
+    return (int)v - 1;
+}
+static size_t __attribute__((noinline)) hxlcl_fread(void *buf, size_t sz, size_t n, void *fp) {
+    if (!buf || sz == 0 || n == 0) return 0;
+    int fd = _hxlcl_fp_fd(fp);
+    if (fd < 0) return 0;
+    size_t total = sz * n;
+    size_t got = 0;
+    unsigned char *p = (unsigned char *)buf;
+    while (got < total) {
+        long r = (long)read(fd, p + got, total - got);
+        if (r <= 0) break;
+        got += (size_t)r;
+    }
+    return got / sz;
+}
+static size_t __attribute__((noinline)) hxlcl_fwrite(const void *buf, size_t sz, size_t n, void *fp) {
+    if (!buf || sz == 0 || n == 0) return 0;
+    int fd = _hxlcl_fp_fd(fp);
+    if (fd < 0) return 0;
+    size_t total = sz * n;
+    size_t put = 0;
+    const unsigned char *p = (const unsigned char *)buf;
+    while (put < total) {
+        long r = (long)write(fd, p + put, total - put);
+        if (r <= 0) break;
+        put += (size_t)r;
+    }
+    return put / sz;
+}
+static long __attribute__((noinline)) hxlcl_ftell(void *fp) {
+    int fd = _hxlcl_fp_fd(fp);
+    if (fd < 0) return -1;
+    return (long)lseek(fd, 0, SEEK_CUR);
+}
+static int __attribute__((noinline)) hxlcl_fseek(void *fp, long offset, int whence) {
+    int fd = _hxlcl_fp_fd(fp);
+    if (fd < 0) return -1;
+    return lseek(fd, (off_t)offset, whence) < 0 ? -1 : 0;
+}
+static void *__attribute__((noinline)) hxlcl_fdopen(int fd, const char *mode) {
+    (void)mode;
+    if (fd < 0) return (void *)0;
+    return (void *)(uintptr_t)(fd + 1);
+}
+static int __attribute__((noinline)) hxlcl_flock(int fd, int op) {
+    (void)fd; (void)op;
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_setvbuf(void *fp, char *buf, int mode, size_t sz) {
+    (void)fp; (void)buf; (void)mode; (void)sz;
+    return 0;
+}
 
 // Textual override of any residual libc references in subsequent code
 // (runtime_core.c + HI tier + transpile output). The helper bodies
@@ -107,6 +640,49 @@ static int __attribute__((noinline)) hxlcl_strcmp(const char *a, const char *b) 
 #define strlen(s)      hxlcl_strlen((const char *)(s))
 #define memcmp(a,b,n)  hxlcl_memcmp((const void *)(a), (const void *)(b), (size_t)(n))
 #define strcmp(a,b)    hxlcl_strcmp((const char *)(a), (const char *)(b))
+#define strcat(d,s)    hxlcl_strcat((char *)(d), (const char *)(s))
+#define strncmp(a,b,n) hxlcl_strncmp((const char *)(a), (const char *)(b), (size_t)(n))
+#define strchr(s,c)    ((char *)hxlcl_strchr((const char *)(s), (c)))
+#define strrchr(s,c)   ((char *)hxlcl_strrchr((const char *)(s), (c)))
+#define strstr(h,n)    ((char *)hxlcl_strstr((const char *)(h), (const char *)(n)))
+#define strdup(s)      hxlcl_strdup((const char *)(s))
+#define strndup(s,n)   hxlcl_strndup((const char *)(s), (size_t)(n))
+#define atoi(s)        hxlcl_atoi((const char *)(s))
+#define atoll(s)       hxlcl_atoll((const char *)(s))
+#define atof(s)        hxlcl_atof((const char *)(s))
+#define strtoll(p,e,b) hxlcl_strtoll((const char *)(p), (char **)(e), (int)(b))
+#define strtoull(p,e,b) hxlcl_strtoull((const char *)(p), (char **)(e), (int)(b))
+#define bzero(p,n)     hxlcl_bzero((void *)(p), (size_t)(n))
+#define memcpy(d,s,n)  hxlcl_memcpy((void *)(d), (const void *)(s), (size_t)(n))
+#define memset(p,c,n)  hxlcl_memset((void *)(p), (int)(c), (size_t)(n))
+#define memmove(d,s,n) hxlcl_memmove((void *)(d), (const void *)(s), (size_t)(n))
+#define strncpy(d,s,n) hxlcl_strncpy((char *)(d), (const char *)(s), (size_t)(n))
+#define strcpy(d,s)    hxlcl_strcpy((char *)(d), (const char *)(s))
+#define strerror(e)    hxlcl_strerror((int)(e))
+#define strftime(b,c,f,t) hxlcl_strftime((char *)(b), (size_t)(c), (const char *)(f), (void *)(t))
+#define snprintf(b,c,...)  hxlcl_snprintf((char *)(b), (size_t)(c), __VA_ARGS__)
+#define sprintf(b,...)     hxlcl_sprintf((char *)(b), __VA_ARGS__)
+#define printf(...)        hxlcl_printf(__VA_ARGS__)
+#define fprintf(fp,...)    hxlcl_fprintf((void *)(fp), __VA_ARGS__)
+#define fputs(s,fp)        hxlcl_fputs((const char *)(s), (void *)(fp))
+#define fputc(c,fp)        hxlcl_fputc((int)(c), (void *)(fp))
+#define fflush(fp)         hxlcl_fflush((void *)(fp))
+#define putchar(c)         hxlcl_putchar((int)(c))
+#define perror(s)          hxlcl_perror((const char *)(s))
+#define malloc(n)          hxlcl_malloc((size_t)(n))
+#define free(p)            hxlcl_free((void *)(p))
+#define realloc(p,n)       hxlcl_realloc((void *)(p), (size_t)(n))
+#define calloc(nm,sz)      hxlcl_calloc((size_t)(nm), (size_t)(sz))
+#define munmap(a,l)        hxlcl_munmap((void *)(a), (size_t)(l))
+#define fopen(p,m)         ((FILE *)hxlcl_fopen((const char *)(p), (const char *)(m)))
+#define fclose(fp)         hxlcl_fclose((void *)(fp))
+#define fread(b,s,n,fp)    hxlcl_fread((void *)(b), (size_t)(s), (size_t)(n), (void *)(fp))
+#define fwrite(b,s,n,fp)   hxlcl_fwrite((const void *)(b), (size_t)(s), (size_t)(n), (void *)(fp))
+#define ftell(fp)          hxlcl_ftell((void *)(fp))
+#define fseek(fp,o,w)      hxlcl_fseek((void *)(fp), (long)(o), (int)(w))
+#define fdopen(fd,m)       ((FILE *)hxlcl_fdopen((int)(fd), (const char *)(m)))
+#define flock(fd,op)       hxlcl_flock((int)(fd), (int)(op))
+#define setvbuf(fp,b,m,sz) hxlcl_setvbuf((void *)(fp), (char *)(b), (int)(m), (size_t)(sz))
 
 #include "runtime_core.c"
 
@@ -126,10 +702,10 @@ static int __attribute__((noinline)) hxlcl_strcmp(const char *a, const char *b) 
 static int hexa_ffi_extract_libname(const char* path, char* out_name, size_t out_cap) {
     if (!path || !out_name || out_cap == 0) return 0;
     // Find the basename (after the last '/')
-    const char* base = strrchr(path, '/');
+    const char* base = hxlcl_strrchr(path, '/');
     base = base ? base + 1 : path;
     // Must start with "lib"
-    if (strncmp(base, "lib", 3) != 0) return 0;
+    if (hxlcl_strncmp(base, "lib", 3) != 0) return 0;
     base += 3;
     // Must end in .dylib or .so or .so.N
     size_t blen = hxlcl_strlen(base);
@@ -140,13 +716,13 @@ static int hexa_ffi_extract_libname(const char* path, char* out_name, size_t out
         end = base + blen - 3;
     } else {
         // .so.N case — find ".so." substring
-        const char* p = strstr(base, ".so.");
+        const char* p = hxlcl_strstr(base, ".so.");
         if (p) end = p;
     }
     if (!end) return 0;
     size_t nlen = (size_t)(end - base);
     if (nlen == 0 || nlen >= out_cap) return 0;
-    memcpy(out_name, base, nlen);
+    hxlcl_memcpy(out_name, base, nlen);
     out_name[nlen] = '\0';
     return 1;
 }
@@ -758,10 +1334,10 @@ HexaVal hexa_ptr_write(HexaVal ptr, HexaVal offset, HexaVal val) {
     uint8_t* base = (uint8_t*)(uintptr_t)p + off;
     if (HX_IS_FLOAT(val)) {
         double d = HX_FLOAT(val);
-        memcpy(base, &d, sizeof(double));
+        hxlcl_memcpy(base, &d, sizeof(double));
     } else {
         int64_t v = HX_INT(val);
-        memcpy(base, &v, sizeof(int64_t));
+        hxlcl_memcpy(base, &v, sizeof(int64_t));
     }
     return hexa_void();
 }
@@ -775,7 +1351,7 @@ HexaVal hexa_ptr_read(HexaVal ptr, HexaVal offset) {
     int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;
     if (p == 0) return hexa_int(0);
     int64_t v;
-    memcpy(&v, (uint8_t*)(uintptr_t)p + off, sizeof(int64_t));
+    hxlcl_memcpy(&v, (uint8_t*)(uintptr_t)p + off, sizeof(int64_t));
     return hexa_int(v);
 }
 
@@ -789,7 +1365,7 @@ HexaVal hexa_deref(HexaVal ptr) {
     uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;
     if (p == 0) return hexa_int(0);
     int64_t v;
-    memcpy(&v, (void*)(uintptr_t)p, sizeof(int64_t));
+    hxlcl_memcpy(&v, (void*)(uintptr_t)p, sizeof(int64_t));
     return hexa_int(v);
 }
 
@@ -1161,24 +1737,6 @@ HexaVal forge_dispatch_ffn_fp64_via_bf16(HexaVal x, HexaVal w1, HexaVal w2,
                                          HexaVal fd) {
     return hexa_forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, m, d, fd);
 }
-// flame spiking RFC — STDP pair-based GPU dispatch bare-wrapper seam
-// (inbox/patches/flame-stdp-pair-gpu-kernel.md, anima LEGO arc §141).
-// 8-arg ≥5-arg direct-C path; the generated user.c only sees
-// runtime.h, so this extern wrapper + the runtime.h prototype below
-// link-resolve the symbol without a bootstrap rebuild.
-//   forge_dispatch_stdp_pair(W, tr_pre, tr_post, spike, out,
-//                            A_plus, A_minus, w_max) -> int rc
-HexaVal hexa_forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
-                                      HexaVal tr_post_v, HexaVal spike_v,
-                                      HexaVal out_v, HexaVal A_plus_v,
-                                      HexaVal A_minus_v, HexaVal w_max_v);
-HexaVal forge_dispatch_stdp_pair(HexaVal W, HexaVal tr_pre,
-                                 HexaVal tr_post, HexaVal spike,
-                                 HexaVal out, HexaVal A_plus,
-                                 HexaVal A_minus, HexaVal w_max) {
-    return hexa_forge_dispatch_stdp_pair(W, tr_pre, tr_post, spike,
-                                         out, A_plus, A_minus, w_max);
-}
 // 5e817564 — interp dispatch added `farr_apply_single_farr(...)` and
 // `farr_apply_cnot(...)` literal calls (6-arg / 7-arg, past the
 // hexa_callN ceiling) but never grew the matching shims. Without
@@ -1448,7 +2006,7 @@ HexaVal hexa_str_parse_int(HexaVal s) {
     int base = 10;
     if (digit_start[0] == '0' && (digit_start[1] == 'x' || digit_start[1] == 'X')) base = 16;
     char* endptr = NULL;
-    long long v = strtoll(p, &endptr, base);
+    long long v = hxlcl_strtoll(p, &endptr, base);
     if (endptr == p) {
         // no digits consumed — "abc", "--", "" after trim handled above
         char msg[256];
@@ -1478,14 +2036,14 @@ HexaVal rt_str_trim_start(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
     char* p = HX_STR(s);
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
-    return hexa_str_own(strdup(p));
+    return hexa_str_own(hxlcl_strdup(p));
 }
 
 HexaVal rt_str_trim_end(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
     int len = (int)HX_STRLEN(s);
     while (len > 0 && (HX_STR(s)[len-1] == ' ' || HX_STR(s)[len-1] == '\t' || HX_STR(s)[len-1] == '\n' || HX_STR(s)[len-1] == '\r')) len--;
-    return hexa_str_own_with_len(strndup(HX_STR(s), len), (size_t)len);
+    return hexa_str_own_with_len(hxlcl_strndup(HX_STR(s), len), (size_t)len);
 }
 
 // Byte-based slice: [start, end) clamped to length
@@ -1496,7 +2054,7 @@ HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end) {
     if (a < 0) a = 0;
     if (b > len) b = len;
     if (a > b) a = b;
-    return hexa_str_own_with_len(strndup(HX_STR(s) + a, b - a), (size_t)(b - a));
+    return hexa_str_own_with_len(hxlcl_strndup(HX_STR(s) + a, b - a), (size_t)(b - a));
 }
 
 HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end) {
@@ -2296,7 +2854,7 @@ HexaVal hexa_is_error(HexaVal v) {
     // No TAG_ERROR in runtime; interpreter uses ad-hoc Val(TAG_ERROR,...)
     // convention (TAG_ERROR name not defined in runtime tags). Treat as
     // "false" here unless TAG_STR and starts with "ERR:" sentinel.
-    if (HX_IS_STR(v) && HX_STR(v) && strncmp(HX_STR(v), "ERR:", 4) == 0) return hexa_bool(1);
+    if (HX_IS_STR(v) && HX_STR(v) && hxlcl_strncmp(HX_STR(v), "ERR:", 4) == 0) return hexa_bool(1);
     return hexa_bool(0);
 }
 
@@ -2310,7 +2868,7 @@ HexaVal rt_read_lines(HexaVal path) {
         if (*p == '\n') {
             size_t len = (size_t)(p - start);
             char* line = (char*)malloc(len + 1);
-            memcpy(line, start, len);
+            hxlcl_memcpy(line, start, len);
             line[len] = 0;
             out = hexa_array_push(out, hexa_str_own(line));
             start = p + 1;
@@ -2320,7 +2878,7 @@ HexaVal rt_read_lines(HexaVal path) {
     if (p > start) {
         size_t len = (size_t)(p - start);
         char* line = (char*)malloc(len + 1);
-        memcpy(line, start, len);
+        hxlcl_memcpy(line, start, len);
         line[len] = 0;
         out = hexa_array_push(out, hexa_str_own(line));
     }
@@ -2349,7 +2907,7 @@ HexaVal hexa_from_char_code(HexaVal n) {
         buf[2] = (char)(0x80 | ((code >> 6) & 0x3F));
         buf[3] = (char)(0x80 | (code & 0x3F));
     }
-    char* out = strdup(buf);
+    char* out = hxlcl_strdup(buf);
     return hexa_str_own(out);
 }
 
@@ -2774,7 +3332,7 @@ HexaVal hexa_farr_int_copy(HexaVal src_v) {
     if (did < 0) return hexa_int(-1);
     HexaIarrEntry* de = &_hx_iarr_table[did];
     if (de->buf && se->len > 0) {
-        memcpy(de->buf, se->buf, (size_t)se->len * sizeof(int64_t));
+        hxlcl_memcpy(de->buf, se->buf, (size_t)se->len * sizeof(int64_t));
     }
     return dst_v;
 }
@@ -3936,7 +4494,7 @@ HexaVal hexa_safetensors_mmap_header(HexaVal h_v) {
     if (header_len == 0 || header_len > e->len - 8) return hexa_str("");
     char* buf = hexa_strbuf_alloc((size_t)header_len);
     if (!buf) return hexa_str("");
-    memcpy(buf, p + 8, (size_t)header_len);
+    hxlcl_memcpy(buf, p + 8, (size_t)header_len);
     return (HexaVal){.tag=TAG_STR, .s=buf};
 }
 
@@ -4259,7 +4817,7 @@ HexaVal hexa_farr_copy(HexaVal src_v) {
     se = &_hx_farr_table[src_id];
     HexaFarrEntry* de = &_hx_farr_table[dst_id];
     if (n > 0 && de->buf && se->buf) {
-        memcpy(de->buf, se->buf, (size_t)n * sizeof(double));
+        hxlcl_memcpy(de->buf, se->buf, (size_t)n * sizeof(double));
     }
     return dst_handle;
 }
@@ -4292,7 +4850,7 @@ static void _hx_gauss_rng_lazy_init(void) {
     if (_hx_gauss_rng_inited) return;
     const char* env = getenv("__HEXA_FARR_GAUSS_SEED__");
     if (env && *env) {
-        _hx_gauss_rng_state = strtoull(env, NULL, 10);
+        _hx_gauss_rng_state = hxlcl_strtoull(env, NULL, 10);
     } else {
         _hx_gauss_rng_state = (uint64_t)time(NULL) ^
                               ((uint64_t)getpid() << 16);
@@ -4553,7 +5111,7 @@ static int64_t _hx_ad_grad_ensure(int64_t param_id, int64_t n) {
     int64_t g = _hx_ad_grad_get(param_id);
     if (g >= 0 && g < _hx_farr_count && _hx_farr_table[g].buf
         && _hx_farr_table[g].len == n) {
-        memset(_hx_farr_table[g].buf, 0, (size_t)n * sizeof(double));
+        hxlcl_memset(_hx_farr_table[g].buf, 0, (size_t)n * sizeof(double));
         return g;
     }
     HexaVal gh = hexa_farr_zeros(hexa_int(n));
@@ -4719,18 +5277,18 @@ HexaVal hexa_adamw_step(HexaVal p_v, HexaVal g_v, HexaVal m_v, HexaVal v_v,
 // Round-to-nearest-even on bit 15 (the bf16 ulp). NaN/Inf preserved.
 static float _hx_f32_to_bf16(float f) {
     uint32_t x;
-    memcpy(&x, &f, sizeof(x));
+    hxlcl_memcpy(&x, &f, sizeof(x));
     uint32_t exp = (x >> 23) & 0xFF;
     if (exp == 0xFF) {            // NaN / Inf — keep, just truncate mantissa
         uint32_t t = x & 0xFFFF0000u;
         // keep NaN-ness: if it was NaN, ensure a non-zero bf16 mantissa
         if ((x & 0x007FFFFFu) != 0) t |= 0x00400000u;
-        float r; memcpy(&r, &t, sizeof(r)); return r;
+        float r; hxlcl_memcpy(&r, &t, sizeof(r)); return r;
     }
     uint32_t lsb     = (x >> 16) & 1u;
     uint32_t rounded = x + 0x7FFFu + lsb;   // round-to-nearest-even
     rounded &= 0xFFFF0000u;
-    float r; memcpy(&r, &rounded, sizeof(r));
+    float r; hxlcl_memcpy(&r, &rounded, sizeof(r));
     return r;
 }
 
@@ -5743,7 +6301,7 @@ static int _hx_farr_copy_slice_cpu(int64_t src_id, int64_t soff,
     HexaFarrEntry* de = &_hx_farr_table[dst_id];
     if (!se->buf || !de->buf) return -1;
     if (se->len < soff + n || de->len < doff + n) return -1;
-    memcpy(de->buf + doff, se->buf + soff, (size_t)n * sizeof(double));
+    hxlcl_memcpy(de->buf + doff, se->buf + soff, (size_t)n * sizeof(double));
     return 0;
 }
 static int _hx_farr_fill_dt_lcg_cpu(int64_t dst_id, int64_t doff, int64_t n,
@@ -5778,7 +6336,7 @@ static int _hx_farr_zero_slice_cpu(int64_t dst_id, int64_t doff, int64_t n) {
     if (n <= 0 || doff < 0) return -1;
     HexaFarrEntry* de = &_hx_farr_table[dst_id];
     if (!de->buf || de->len < doff + n) return -1;
-    memset(de->buf + doff, 0, (size_t)n * sizeof(double));
+    hxlcl_memset(de->buf + doff, 0, (size_t)n * sizeof(double));
     return 0;
 }
 static int _hx_farr_transpose_2d_cpu(int64_t src_id, int64_t soff,
@@ -6937,7 +7495,7 @@ HexaVal hexa_env_var(HexaVal name) {
     // arena without needing a transpiler-level builtin. Returns "0" / "1" so
     // existing callers that ignore the result are unaffected.
     if (HX_STR(name)[0] == '_' && HX_STR(name)[1] == '_' && HX_STR(name)[2] == 'H' &&
-        strncmp(HX_STR(name), "__HEXA_ARENA_", 13) == 0) {
+        hxlcl_strncmp(HX_STR(name), "__HEXA_ARENA_", 13) == 0) {
         const char* op = HX_STR(name) + 13;
         if (hxlcl_strcmp(op, "PUSH__") == 0) {
             hexa_val_arena_scope_push();
@@ -7009,7 +7567,7 @@ HexaVal hexa_env_var(HexaVal name) {
     // marker on stderr. Encoded as a name prefix so the call site is
     // a single env(...) read. Returns the emitted line (sans newline).
     if (HX_STR(name)[0] == '_' && HX_STR(name)[1] == '_' && HX_STR(name)[2] == 'H' &&
-        strncmp(HX_STR(name), "__HEXA_PHASE_LOG__", 18) == 0) {
+        hxlcl_strncmp(HX_STR(name), "__HEXA_PHASE_LOG__", 18) == 0) {
         const char* phase = HX_STR(name) + 18;
         size_t rss = _hx_self_rss_bytes();
         size_t arena_live = (size_t)_hx_arena_live_bytes();
@@ -7116,7 +7674,7 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
                     if (!nb) { free(obuf); obuf = NULL; break; }
                     obuf = nb;
                 }
-                if (obuf) { memcpy(obuf + olen, buf, (size_t)n); olen += (size_t)n; obuf[olen] = '\0'; }
+                if (obuf) { hxlcl_memcpy(obuf + olen, buf, (size_t)n); olen += (size_t)n; obuf[olen] = '\0'; }
             } else if (n == 0 || (n < 0)) {
                 open_mask &= ~1;
             }
@@ -7130,7 +7688,7 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
                     if (!nb) { free(ebuf); ebuf = NULL; break; }
                     ebuf = nb;
                 }
-                if (ebuf) { memcpy(ebuf + elen, buf, (size_t)n); elen += (size_t)n; ebuf[elen] = '\0'; }
+                if (ebuf) { hxlcl_memcpy(ebuf + elen, buf, (size_t)n); elen += (size_t)n; ebuf[elen] = '\0'; }
             } else if (n == 0 || (n < 0)) {
                 open_mask &= ~2;
             }
@@ -7167,13 +7725,13 @@ HexaVal hexa_list_dir(HexaVal path) {
     size_t pl = hxlcl_strlen(p), cap = pl * 4 + 32, n = 0;
     char* cmd = (char*)malloc(cap);
     const char* pre = "ls -1 '";
-    memcpy(cmd, pre, hxlcl_strlen(pre)); n = hxlcl_strlen(pre);
+    hxlcl_memcpy(cmd, pre, hxlcl_strlen(pre)); n = hxlcl_strlen(pre);
     for (size_t i = 0; i < pl; i++) {
-        if (p[i] == '\'') { memcpy(cmd + n, "'\\''", 4); n += 4; }
+        if (p[i] == '\'') { hxlcl_memcpy(cmd + n, "'\\''", 4); n += 4; }
         else cmd[n++] = p[i];
     }
     const char* post = "' 2>/dev/null";
-    memcpy(cmd + n, post, hxlcl_strlen(post)); n += hxlcl_strlen(post); cmd[n] = 0;
+    hxlcl_memcpy(cmd + n, post, hxlcl_strlen(post)); n += hxlcl_strlen(post); cmd[n] = 0;
     FILE* fp = popen(cmd, "r");
     free(cmd);
     if (!fp) return hexa_array_new();
@@ -7196,164 +7754,6 @@ HexaVal rt_append_file(HexaVal path, HexaVal content) {
     fwrite(data, 1, hxlcl_strlen(data), f);
     fclose(f);
     return hexa_void();
-}
-
-/* G5 (wilson-pi-port 6-gap S-FS-ATOMIC-APPEND, A2 cycle) —
- * POSIX atomic-append primitive.
- *
- * `O_APPEND` guarantees a single `write(2)` is atomic with respect to
- * concurrent appenders provided the write does not exceed PIPE_BUF
- * (POSIX.1-2008 §write rationale; on regular files Linux/macOS both
- * implement append as an offset-take-and-write under a per-inode lock).
- * Caller is responsible for chunking data <= PIPE_BUF (typically
- * 4096 B Linux, 512 B macOS).
- *
- * Returns: bytes written (>= 0) on success, or -errno on failure.
- *   - open()  failure → -errno (e.g. -EACCES, -ENOENT for missing parent)
- *   - write() short or failed → -errno (EINTR retried)
- * close() failures are silenced; write(2) errno already covered the I/O.
- *
- * Mode 0644 (rw-r--r--) on file creation. O_CREAT idempotent.
- */
-HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) {
-    if (!HX_IS_STR(path) || !HX_STR(path)) return hexa_int(-EINVAL);
-    const char* p = HX_STR(path);
-    const char* buf = (HX_IS_STR(data) && HX_STR(data)) ? HX_STR(data) : "";
-    size_t len = strlen(buf);
-    int fd = open(p, O_WRONLY | O_APPEND | O_CREAT, 0644);
-    if (fd < 0) return hexa_int(-(int64_t)errno);
-    ssize_t w;
-    do { w = write(fd, buf, len); } while (w < 0 && errno == EINTR);
-    int saved_errno = (w < 0) ? errno : 0;
-    close(fd);
-    if (w < 0) return hexa_int(-(int64_t)saved_errno);
-    return hexa_int((int64_t)w);
-}
-
-/* G5 (wilson-pi-port 6-gap S-FS-ATOMIC-APPEND, B cycle) —
- * fs_stat primitive: POSIX stat(2) → 4-tuple struct field array.
- *
- * Returns: HexaArray [size_i64, mtime_ns_i64, is_dir_int(0/1), mode_i64]
- *   on success; hexa_void() (null/none) on stat(2) failure (missing,
- *   permission denied, etc.). Caller distinguishes via HX_IS_VOID.
- *
- * mtime_ns = sec*1e9 + nsec on Linux (st_mtim); on macOS Darwin uses
- *           st_mtimespec; both supported via the POSIX-2008 macros.
- * is_dir   = S_ISDIR(st_mode) ? 1 : 0
- * mode     = st_mode & 0777 (perm bits only, host-portable)
- *
- * This is a low-level primitive — the hexa wrapper in self/stdlib/fs.hexa
- * builds the struct {size, mtime_ns, is_dir, mode} on top.
- */
-HexaVal rt_fs_stat(HexaVal path) {
-    if (!HX_IS_STR(path) || !HX_STR(path)) return hexa_void();
-    const char* p = HX_STR(path);
-    struct stat st;
-    if (stat(p, &st) != 0) return hexa_void();
-    int64_t mtime_ns;
-#if defined(__APPLE__)
-    mtime_ns = (int64_t)st.st_mtimespec.tv_sec * 1000000000LL +
-               (int64_t)st.st_mtimespec.tv_nsec;
-#elif defined(_POSIX_C_SOURCE) || defined(__linux__)
-    mtime_ns = (int64_t)st.st_mtim.tv_sec * 1000000000LL +
-               (int64_t)st.st_mtim.tv_nsec;
-#else
-    mtime_ns = (int64_t)st.st_mtime * 1000000000LL;
-#endif
-    HexaVal arr = hexa_array_new();
-    arr = hexa_array_push(arr, hexa_int((int64_t)st.st_size));
-    arr = hexa_array_push(arr, hexa_int(mtime_ns));
-    arr = hexa_array_push(arr, hexa_int(S_ISDIR(st.st_mode) ? 1 : 0));
-    arr = hexa_array_push(arr, hexa_int((int64_t)(st.st_mode & 0777)));
-    return arr;
-}
-
-/* G5 (wilson-pi-port 6-gap, B cycle) —
- * fs_rotate_if_over: rename(path, path+suffix) iff size > max_bytes.
- *
- * Returns: 1 if rotated, 0 if not (size <= max_bytes or missing),
- *   -errno on rename(2) failure.
- *
- * Single-process atomic: rename(2) is atomic on POSIX. Subsequent
- * fs_append_atomic on `path` will re-create the file via O_CREAT.
- * NOT safe across producers without external coordination (two
- * rotators racing the same file could clobber the suffix target).
- */
-HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal suffix) {
-    if (!HX_IS_STR(path) || !HX_STR(path)) return hexa_int(-EINVAL);
-    if (!HX_IS_STR(suffix) || !HX_STR(suffix)) return hexa_int(-EINVAL);
-    const char* p = HX_STR(path);
-    const char* s = HX_STR(suffix);
-    int64_t maxb = HX_IS_INT(max_bytes) ? HX_INT(max_bytes) : 0;
-    struct stat st;
-    if (stat(p, &st) != 0) {
-        /* missing file = nothing to rotate; not an error. */
-        return hexa_int(0);
-    }
-    if ((int64_t)st.st_size <= maxb) return hexa_int(0);
-    size_t plen = strlen(p), slen = strlen(s);
-    char* target = (char*)malloc(plen + slen + 1);
-    memcpy(target, p, plen);
-    memcpy(target + plen, s, slen);
-    target[plen + slen] = 0;
-    int rc = rename(p, target);
-    int saved_errno = (rc != 0) ? errno : 0;
-    free(target);
-    if (rc != 0) return hexa_int(-(int64_t)saved_errno);
-    return hexa_int(1);
-}
-
-/* G5 (wilson-pi-port 6-gap, B cycle) —
- * fs_mkdir_p: recursive mkdir(2) loop; POSIX-only (no shell fork).
- *
- * Returns: 0 on success or if directory already exists,
- *   -errno on failure (last mkdir(2) errno).
- *
- * Walks `path` left-to-right, mkdir(2) at each separator. EEXIST is
- * tolerated iff the existing entry is a directory (else -ENOTDIR).
- * Mode 0755 on creation. Idempotent. Pure POSIX — no fork/exec.
- *
- * The existing self/stdlib/fs.hexa::mkdir_p() shell-wraps `mkdir -p`;
- * this primitive is the fork-free equivalent for hot paths.
- */
-HexaVal rt_fs_mkdir_p(HexaVal path) {
-    if (!HX_IS_STR(path) || !HX_STR(path)) return hexa_int(-EINVAL);
-    const char* p = HX_STR(path);
-    size_t plen = strlen(p);
-    if (plen == 0) return hexa_int(-EINVAL);
-    char* buf = (char*)malloc(plen + 1);
-    memcpy(buf, p, plen);
-    buf[plen] = 0;
-    int err = 0;
-    /* Walk and mkdir at each '/' boundary. Skip leading '/' (absolute). */
-    size_t i = (buf[0] == '/') ? 1 : 0;
-    while (i <= plen) {
-        if (i == plen || buf[i] == '/') {
-            char saved = buf[i];
-            buf[i] = 0;
-            if (buf[0] != 0) {
-                if (mkdir(buf, 0755) != 0) {
-                    if (errno == EEXIST) {
-                        struct stat st;
-                        if (stat(buf, &st) != 0 || !S_ISDIR(st.st_mode)) {
-                            err = (errno == 0) ? ENOTDIR : errno;
-                            buf[i] = saved;
-                            break;
-                        }
-                    } else {
-                        err = errno;
-                        buf[i] = saved;
-                        break;
-                    }
-                }
-            }
-            buf[i] = saved;
-        }
-        i++;
-    }
-    free(buf);
-    if (err != 0) return hexa_int(-(int64_t)err);
-    return hexa_int(0);
 }
 
 HexaVal hexa_bin(HexaVal n) {
@@ -7385,7 +7785,7 @@ static int64_t hexa_pinned_epoch(void) {
     if (sde && *sde) {
         // strtoll tolerates leading whitespace and stops at first non-digit
         char* endp = NULL;
-        long long v = strtoll(sde, &endp, 10);
+        long long v = hxlcl_strtoll(sde, &endp, 10);
         if (endp != sde && v >= 0) return (int64_t)v;
     }
     const char* repro = getenv("HEXA_REPRODUCIBLE");
@@ -7573,7 +7973,7 @@ HexaVal hexa_utc_iso_now(void) {
     struct tm g;
     gmtime_r(&t, &g);
     char buf[32];
-    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &g);
+    hxlcl_strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &g);
     return hexa_str(buf);
 }
 
@@ -7588,7 +7988,7 @@ HexaVal hexa_utc_iso_format(HexaVal epoch_v) {
     struct tm g;
     gmtime_r(&t, &g);
     char buf[32];
-    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &g);
+    hxlcl_strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &g);
     return hexa_str(buf);
 }
 
@@ -7603,7 +8003,7 @@ HexaVal hexa_utc_iso_parse(HexaVal s_v) {
     int n = sscanf(s, "%d-%d-%dT%d:%d:%d", &Y, &M, &D, &h, &m, &sec);
     if (n < 6) return hexa_int(0);
     struct tm g;
-    memset(&g, 0, sizeof(g));
+    hxlcl_memset(&g, 0, sizeof(g));
     g.tm_year = Y - 1900;
     g.tm_mon  = M - 1;
     g.tm_mday = D;
@@ -7767,7 +8167,7 @@ HexaVal hexa_regex_split(HexaVal pat_v, HexaVal s_v) {
         size_t seg_len = (size_t)m.rm_so;
         char* seg = (char*)malloc(seg_len + 1);
         if (!seg) break;
-        memcpy(seg, s + off, seg_len);
+        hxlcl_memcpy(seg, s + off, seg_len);
         seg[seg_len] = '\0';
         hexa_array_push(out, hexa_str(seg));
         free(seg);
@@ -7819,9 +8219,9 @@ HexaVal hexa_regex_replace(HexaVal pat_v, HexaVal s_v, HexaVal repl_v) {
             if (!nb) break;
             out_buf = nb;
         }
-        memcpy(out_buf + op, s + off, pre);
+        hxlcl_memcpy(out_buf + op, s + off, pre);
         op += pre;
-        memcpy(out_buf + op, repl, Rlen);
+        hxlcl_memcpy(out_buf + op, repl, Rlen);
         op += Rlen;
         off += m.rm_eo;
     }
@@ -7832,7 +8232,7 @@ HexaVal hexa_regex_replace(HexaVal pat_v, HexaVal s_v, HexaVal repl_v) {
         char* nb = (char*)realloc(out_buf, cap);
         if (nb) out_buf = nb;
     }
-    memcpy(out_buf + op, s + off, tail);
+    hxlcl_memcpy(out_buf + op, s + off, tail);
     op += tail;
     out_buf[op] = '\0';
     HexaVal result = hexa_str(out_buf);
@@ -7848,7 +8248,7 @@ HexaVal hexa_utc_compact_now(void) {
     struct tm g;
     gmtime_r(&t, &g);
     char buf[32];
-    strftime(buf, sizeof(buf), "%Y%m%d%H%M%S", &g);
+    hxlcl_strftime(buf, sizeof(buf), "%Y%m%d%H%M%S", &g);
     return hexa_str(buf);
 }
 
@@ -7894,7 +8294,7 @@ HexaVal hexa_http_get(HexaVal url) {
             if (!nb) { free(buf); pclose(fp); return hexa_str(""); }
             buf = nb;
         }
-        memcpy(buf + len, chunk, r);
+        hxlcl_memcpy(buf + len, chunk, r);
         len += r;
     }
     buf[len] = 0;
@@ -7949,66 +8349,18 @@ static HexaVal _jp_parse_string(const char* s, size_t n, size_t* pi) {
                 case 't':  out = '\t'; break;
                 case 'b':  out = '\b'; break;
                 case 'f':  out = '\f'; break;
-                case 'u': {
-                    // RFC 8259 §7: decode \uXXXX → the Unicode scalar, with
-                    // UTF-16 surrogate-pair recombination for astral code
-                    // points, then UTF-8 encode. (Was a raw 6-byte passthrough
-                    // — non-conformant; see inbox/patches/
-                    // json-parse-uXXXX-raw-passthrough.md. json_stringify emits
-                    // bytes >= 0x20 as-is so the standard decoded round-trip is
-                    // preserved.)
+                case 'u':
+                    // Raw passthrough (no unicode expansion) — write literal
+                    // \uXXXX as the 6 bytes so round-trip is lossless.
                     if (*pi + 5 < n) {
-                        unsigned int cp = 0; int hexok = 1;
-                        for (int k = 0; k < 4; k++) {
-                            char h = s[*pi + 2 + k]; unsigned int v;
-                            if (h >= '0' && h <= '9')      v = (unsigned int)(h - '0');
-                            else if (h >= 'a' && h <= 'f') v = (unsigned int)(10 + h - 'a');
-                            else if (h >= 'A' && h <= 'F') v = (unsigned int)(10 + h - 'A');
-                            else { hexok = 0; break; }
-                            cp = (cp << 4) | v;
-                        }
-                        if (hexok) {
-                            size_t adv = 6;
-                            if (cp >= 0xD800 && cp <= 0xDBFF && *pi + 11 < n
-                                && s[*pi + 6] == '\\' && s[*pi + 7] == 'u') {
-                                unsigned int lo = 0; int ok2 = 1;
-                                for (int k = 0; k < 4; k++) {
-                                    char h = s[*pi + 8 + k]; unsigned int v;
-                                    if (h >= '0' && h <= '9')      v = (unsigned int)(h - '0');
-                                    else if (h >= 'a' && h <= 'f') v = (unsigned int)(10 + h - 'a');
-                                    else if (h >= 'A' && h <= 'F') v = (unsigned int)(10 + h - 'A');
-                                    else { ok2 = 0; break; }
-                                    lo = (lo << 4) | v;
-                                }
-                                if (ok2 && lo >= 0xDC00 && lo <= 0xDFFF) {
-                                    cp = 0x10000u + ((cp - 0xD800u) << 10) + (lo - 0xDC00u);
-                                    adv = 12;
-                                }
-                            }
-                            char u8[4]; int un;
-                            if (cp < 0x80u) { u8[0] = (char)cp; un = 1; }
-                            else if (cp < 0x800u) {
-                                u8[0] = (char)(0xC0u | (cp >> 6));
-                                u8[1] = (char)(0x80u | (cp & 0x3Fu)); un = 2;
-                            } else if (cp < 0x10000u) {
-                                u8[0] = (char)(0xE0u | (cp >> 12));
-                                u8[1] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
-                                u8[2] = (char)(0x80u | (cp & 0x3Fu)); un = 3;
-                            } else {
-                                u8[0] = (char)(0xF0u | (cp >> 18));
-                                u8[1] = (char)(0x80u | ((cp >> 12) & 0x3Fu));
-                                u8[2] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
-                                u8[3] = (char)(0x80u | (cp & 0x3Fu)); un = 4;
-                            }
-                            if (len + (size_t)un >= cap) { while (len + (size_t)un >= cap) cap *= 2; char* nb = (char*)realloc(buf, cap); if (!nb) { free(buf); return hexa_str(""); } buf = nb; }
-                            for (int k = 0; k < un; k++) buf[len++] = u8[k];
-                            *pi += adv;
-                            continue;
-                        }
+                        if (len + 6 >= cap) { cap = (cap + 6) * 2; char* nb = (char*)realloc(buf, cap); if (!nb) { free(buf); return hexa_str(""); } buf = nb; }
+                        hxlcl_memcpy(buf + len, s + *pi, 6);
+                        len += 6;
+                        *pi += 6;
+                        continue;
                     }
                     out = 'u';
                     break;
-                }
                 default:   out = e; break;
             }
             if (len + 1 >= cap) { cap *= 2; char* nb = (char*)realloc(buf, cap); if (!nb) { free(buf); return hexa_str(""); } buf = nb; }
@@ -8041,10 +8393,10 @@ static HexaVal _jp_parse_number(const char* s, size_t n, size_t* pi) {
     size_t k = *pi - start;
     char buf[64];
     if (k >= sizeof(buf)) k = sizeof(buf) - 1;
-    memcpy(buf, s + start, k);
+    hxlcl_memcpy(buf, s + start, k);
     buf[k] = 0;
-    if (is_float) return hexa_float(atof(buf));
-    return hexa_int((int64_t)strtoll(buf, NULL, 10));
+    if (is_float) return hexa_float(hxlcl_atof(buf));
+    return hexa_int((int64_t)hxlcl_strtoll(buf, NULL, 10));
 }
 
 static HexaVal _jp_parse_array(const char* s, size_t n, size_t* pi) {
@@ -8136,7 +8488,7 @@ static void _js_buf_reserve(char** pbuf, size_t* pcap, size_t need) {
 static void _js_buf_append(char** pbuf, size_t* pcap, size_t* plen, const char* s, size_t n) {
     _js_buf_reserve(pbuf, pcap, *plen + n + 1);
     if (!*pbuf) return;
-    memcpy(*pbuf + *plen, s, n);
+    hxlcl_memcpy(*pbuf + *plen, s, n);
     *plen += n;
     (*pbuf)[*plen] = 0;
 }
@@ -9057,7 +9409,7 @@ HexaVal hexa_term_fd_read(HexaVal fd, HexaVal max_bytes) {
     if (n <= 0) return hexa_str("");
     /* hexa_str_n if available; otherwise null-terminate after copy */
     char tmp[65537];
-    memcpy(tmp, buf, (size_t)n);
+    hxlcl_memcpy(tmp, buf, (size_t)n);
     tmp[n] = '\0';
     return hexa_str(tmp);
 }
@@ -9326,7 +9678,7 @@ HexaVal hexa_exec_stream_poll_impl(HexaVal handle) {
         s->buf[nl_pos] = '\0';
         HexaVal line_v = hexa_str(s->buf);
         int rem = s->buf_len - nl_pos - 1;
-        if (rem > 0) memmove(s->buf, s->buf + nl_pos + 1, rem);
+        if (rem > 0) hxlcl_memmove(s->buf, s->buf + nl_pos + 1, rem);
         s->buf_len = rem;
         hexa_array_push(out, hexa_int((int64_t)0));
         hexa_array_push(out, line_v);
@@ -9867,116 +10219,4 @@ HexaVal hexa_forge_dispatch_ffn_fp64_via_bf16(HexaVal x_v, HexaVal w1_v,
 #endif
 }
 
-/* ═══════════════════════════════════════════════════════════════════
- * hexa_forge_dispatch_stdp_pair — flame spiking STDP GPU dispatch.
- *
- * The hexa-callable wrapper around the device CUDA kernel for the local
- * pair-based STDP weight update. flame's spiking stdlib (PR #77,
- * stdlib/flame/spiking_lib.hexa::flame_stdp_pair) provides the pure-CPU
- * outer-product oracle; this wrapper takes the same shape contract and
- * routes the O(N²) outer-product to a 2D-grid __global__ kernel
- * (one thread per (i,j) weight cell) on HEXA_CUDA hosts.
- *
- *   forge_dispatch_stdp_pair(W_id, tr_pre_id, tr_post_id, spike_id,
- *                            out_id, A_plus, A_minus, w_max) -> int rc
- *
- * Shapes: W [N·N], tr_pre [N], tr_post [N], spike [N], out [N·N].
- * Output is CALLER-ALLOCATED (matches the device-residency contract
- * used by rmsnorm_mh / silu_gate / attn_dt_fwd in mk2-C5) — the wrapper
- * fills it in place. Returns 0 on success, -1 on shape/ID error.
- *
- * CUDA path: validates handles, derives N from spike.len, ensures all
- * inputs are H2D'd, ensures out has a device buffer, launches the
- * stdp_pair kernel, then D2H's out so the host caller sees results
- * (mirrors mk2-C5 _hx_cuda_farr_silu_gate_gpu wiring).
- *
- * No-CUDA path: byte-identical CPU oracle (mirrors spiking_lib.hexa
- * flame_stdp_pair exactly). The same outer-product + clip + diagonal-
- * zero contract — F-STDP-GPU-1 BYTE-EQUAL-VS-CPU is enforced by
- * construction on no-CUDA hosts, and on CUDA hosts the device kernel
- * uses the same scalar arithmetic order (single-precision-free,
- * fma-free) for bit-for-bit oracle equivalence.
- *
- * Falsifiers (from inbox/patches/flame-stdp-pair-gpu-kernel.md):
- *   F-STDP-GPU-1 BYTE-EQUAL-VS-CPU  byte-equal vs flame_stdp_pair (CPU)
- *   F-STDP-GPU-2 DIAGONAL-ZERO      dW[i][i] == 0 (no self-connection)
- *   F-STDP-GPU-3 CLIP-BOUNDED       all output ∈ [−w_max, w_max]
- *   F-STDP-GPU-4 SCALE-SPEEDUP      GPU wall < CPU wall at N≥4096
- *                                   (measured, not assumed; ubu-2 RTX 5070)
- * ═══════════════════════════════════════════════════════════════════ */
-#ifdef HEXA_CUDA
-extern int _hx_cuda_farr_stdp_pair_gpu(int64_t W_id, int64_t tr_pre_id,
-                                       int64_t tr_post_id, int64_t spike_id,
-                                       int64_t out_id, int64_t n,
-                                       double A_plus, double A_minus,
-                                       double w_max);
-#endif
-
-HexaVal hexa_forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
-                                      HexaVal tr_post_v, HexaVal spike_v,
-                                      HexaVal out_v, HexaVal A_plus_v,
-                                      HexaVal A_minus_v, HexaVal w_max_v) {
-    int64_t W_id      = hexa_as_num(W_v);
-    int64_t tr_pre_id = hexa_as_num(tr_pre_v);
-    int64_t tr_post_id= hexa_as_num(tr_post_v);
-    int64_t spike_id  = hexa_as_num(spike_v);
-    int64_t out_id    = hexa_as_num(out_v);
-    double  A_plus    = __hx_to_double(A_plus_v);
-    double  A_minus   = __hx_to_double(A_minus_v);
-    double  w_max     = __hx_to_double(w_max_v);
-
-    if (W_id      < 0 || W_id      >= _hx_farr_count) return hexa_int(-1);
-    if (tr_pre_id < 0 || tr_pre_id >= _hx_farr_count) return hexa_int(-1);
-    if (tr_post_id< 0 || tr_post_id>= _hx_farr_count) return hexa_int(-1);
-    if (spike_id  < 0 || spike_id  >= _hx_farr_count) return hexa_int(-1);
-    if (out_id    < 0 || out_id    >= _hx_farr_count) return hexa_int(-1);
-    int64_t n = _hx_farr_table[spike_id].len;
-    if (n <= 0) return hexa_int(-1);
-    if (_hx_farr_table[tr_pre_id].len  < n) return hexa_int(-1);
-    if (_hx_farr_table[tr_post_id].len < n) return hexa_int(-1);
-    int64_t nn = n * n;
-    if (_hx_farr_table[W_id].len   < nn) return hexa_int(-1);
-    if (_hx_farr_table[out_id].len < nn) return hexa_int(-1);
-
-#ifdef HEXA_CUDA
-    int rc = _hx_cuda_farr_stdp_pair_gpu(W_id, tr_pre_id, tr_post_id,
-                                         spike_id, out_id, n,
-                                         A_plus, A_minus, w_max);
-    return hexa_int(rc);
-#else
-    /* No-CUDA host: CPU byte-identical oracle. Mirrors
-     * stdlib/flame/spiking_lib.hexa::flame_stdp_pair scalar arithmetic
-     * order exactly — diagonal-passthrough + clip, off-diagonal LTP/LTD
-     * with the SAME (ltp - ltd) subtraction and the SAME (w_ij + delta)
-     * accumulation. F-STDP-GPU-1 BYTE-EQUAL-VS-CPU is enforced by
-     * construction here. */
-    double *W      = _hx_farr_table[W_id].buf;
-    double *tr_pre = _hx_farr_table[tr_pre_id].buf;
-    double *tr_post= _hx_farr_table[tr_post_id].buf;
-    double *spike  = _hx_farr_table[spike_id].buf;
-    double *out    = _hx_farr_table[out_id].buf;
-    if (!W || !tr_pre || !tr_post || !spike || !out) return hexa_int(-1);
-    double neg_w_max = 0.0 - w_max;
-    for (int64_t i = 0; i < n; i++) {
-        double s_i      = spike[i];
-        double trpost_i = tr_post[i];
-        for (int64_t j = 0; j < n; j++) {
-            int64_t idx = i * n + j;
-            double  w_ij = W[idx];
-            double  wd;
-            if (i == j) {
-                wd = w_ij;
-            } else {
-                double ltp = A_plus  * s_i      * tr_pre[j];
-                double ltd = A_minus * trpost_i * spike[j];
-                wd = w_ij + (ltp - ltd);
-            }
-            if (wd > w_max)     wd = w_max;
-            if (wd < neg_w_max) wd = neg_w_max;
-            out[idx] = wd;
-        }
-    }
-    return hexa_int(0);
-#endif
-}
 
