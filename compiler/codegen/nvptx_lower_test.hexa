@@ -359,6 +359,16 @@ fn _stmt_call(dst: Local, callee: string) -> Stmt {
     }
 }
 
+// _stmt_call_with_args — STMT_CALL with operand arguments. Used by the
+// 055-P4+ `gpu_atomic_add(addr, v)` case (mirrors _stmt_load / _stmt_store
+// shape — explicit operand carrier for an intrinsic that consumes args).
+fn _stmt_call_with_args(dst: Local, callee: string, args: [Operand]) -> Stmt {
+    return Stmt {
+        kind: STMT_CALL, dst: dst, op: callee, args: args,
+        target_block: -1, target_block_else: -1
+    }
+}
+
 fn _build_case_call_intrinsic() -> MModule {
     let ctaid_x = _local(0, "ctaid_x")
     let ntid_x  = _local(1, "ntid_x")
@@ -655,6 +665,96 @@ fn _test_barrier() -> bool {
     return ok
 }
 
+// ── Case 8 — 055-P4+ gpu_atomic_add(addr, v) intrinsic ───────────────
+//
+// RFC 055 §12 P4+ — device-DRAM FP64 atomic add. STMT_CALL with
+// op="gpu_atomic_add", args[0]=address (Local in u64 bank), args[1]=value
+// (f64) lowers to `atom.add.f64 %fd<dst>, [%rd<addr>], %fd<v>;`. The
+// destination Local holds the OLD value at the address (PTX atom-instruction
+// semantics) and is classified F64 by the default classifier path. The
+// address operand's source Local is propagated to the U64 bank by
+// `_nvptx_classify_locals` Pass 2 (extended to recognise this STMT_CALL).
+//
+// Fixture: a one-block MFunc with a single `r = gpu_atomic_add(p, v)`
+// call followed by return. Verifies:
+//   - `.reg .u64 %rd0` declared (Pass 2 propagation of the address Local)
+//   - `.reg .f64 %fd2` declared (the OLD-value dst — default F64)
+//   - `atom.add.f64 %fd2, [%rd0], %fd1;` for the atomic add body
+
+fn _build_case_atomic_add() -> MModule {
+    let p = _local(0, "p")           // address Local (param) — propagated to U64 by Pass 2
+    let a = _local(1, "a")           // value source (param) — used by binop below
+    let v = _local(2, "v")           // value operand — F64 via binop dst (Pass 1)
+    let r = _local(3, "r")           // dst (old value) — F64 via default classifier
+
+    // block 0:
+    //   v = a + a                   (STMT_BINOP — gets v into the F64 bank)
+    //   r = gpu_atomic_add(p, v)    (STMT_CALL — args[0]=addr, args[1]=val)
+    //   return
+    //
+    // The binop intermediate is the same pattern as _test_load_store's v2;
+    // it keeps the test focused on the new STMT_CALL lowering + Pass 2
+    // address-operand propagation, without depending on whether param
+    // Locals get a `.reg` decl (they don't, by design — params render
+    // directly via their `%fd<id>` / `%rd<id>` name).
+    let mut atom_args = []
+    atom_args.push(_op_local(p.id))
+    atom_args.push(_op_local(v.id))
+
+    let mut s0 = []
+    s0.push(_stmt_binop(v, "add", _op_local(a.id), _op_local(a.id)))
+    s0.push(_stmt_call_with_args(r, "gpu_atomic_add", atom_args))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(p)
+    params.push(a)
+    let mut locals = []
+    locals.push(p)
+    locals.push(a)
+    locals.push(v)
+    locals.push(r)
+
+    let mf = MFunc {
+        name: "atomic_add_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_atomic_add.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_atomic_add() -> bool {
+    let mut ok = true
+    let mod_aa = _build_case_atomic_add()
+    let ptx = codegen_emit_ptx_sm80(mod_aa)
+
+    println("")
+    println("-- emitted PTX (055-P4+ gpu_atomic_add case, sm_80) --")
+    println(ptx)
+
+    // Pass 2 retroactive U64 classification of the address Local (param)
+    ok = _check(ok, ptx, ".reg .u64 %rd0",                    "u64 bank for address (Pass 2)")
+    // F64 banks — binop intermediate v + atomic-add dst (old value)
+    ok = _check(ok, ptx, ".reg .f64 %fd2",                    "f64 bank for value operand (binop dst)")
+    ok = _check(ok, ptx, ".reg .f64 %fd3",                    "f64 bank for atomic-add dst (old value)")
+    // STMT_CALL gpu_atomic_add lowering — dst=%fd3, addr=[%rd0], val=%fd2
+    ok = _check(ok, ptx, "atom.add.f64 %fd3, [%rd0], %fd2",   "atom.add.f64 dst, [addr], val")
+    // ret after the atomic add
+    ok = _check(ok, ptx, "ret;",                              "ret terminator after atomic add")
+    return ok
+}
+
 // ── Driver ───────────────────────────────────────────────────────────
 
 fn main() {
@@ -669,11 +769,12 @@ fn main() {
     let ok_ls    = _test_load_store()
     let ok_part  = _test_partition()
     let ok_barr  = _test_barrier()
+    let ok_atom  = _test_atomic_add()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr {
-        println("PASS: RFC 055 P3b/c/P4 — 7/7 cases (incl. partition + gpu_barrier)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom {
+        println("PASS: RFC 055 P3b/c/P4 — 8/8 cases (incl. partition + gpu_barrier + gpu_atomic_add)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -683,7 +784,8 @@ fn main() {
         if !ok_ls   { println("      STMT_LOAD / STMT_STORE FAILED") }
         if !ok_part { println("      055-P3c gpu_kind partition FAILED") }
         if !ok_barr { println("      055-P4 gpu_barrier() FAILED") }
+        if !ok_atom { println("      055-P4+ gpu_atomic_add() FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom) { exit(1) }
 }

@@ -417,6 +417,26 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
             out.push(_nvptx_instr(PTX_OP_BAR_SYNC, a, "gpu_barrier()"))
             return out
         }
+        // RFC 055 §12 P4+ — `gpu_atomic_add(addr, v) -> f64` device-DRAM
+        // atomic add (gpu/SPEC.md §5). Lowers to `atom.add.f64 %fd<dst>,
+        // [%rd<addr>], %fd<v>;`. The dst Local holds the OLD value (PTX
+        // atom-instruction semantics) — classifier default F64 covers it.
+        // The address operand's source Local is propagated to U64 by
+        // `_nvptx_classify_locals` Pass 2 (mirrors STMT_LOAD/STORE).
+        // args[0] = address (Local in u64 bank); args[1] = value (f64).
+        if s.op == "gpu_atomic_add" {
+            if len(s.args) >= 2 {
+                let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+                let addr_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+                let val_reg = _nvptx_operand_text_kinds(s.args[1], kinds)
+                let mut a = []
+                a.push(_nvptx_op(dst_reg))
+                a.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
+                a.push(_nvptx_op(val_reg))
+                out.push(_nvptx_instr(PTX_OP_ATOM_ADD_F64, a, "gpu_atomic_add()"))
+            }
+            return out
+        }
         out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported call: " + s.op))
         return out
     }
@@ -688,6 +708,27 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
         while sj < len(blk.stmts) {
             let s = blk.stmts[sj]
             if s.kind == STMT_LOAD || s.kind == STMT_STORE {
+                if len(s.args) >= 1 {
+                    let addr = s.args[0]
+                    if addr.kind == "local" {
+                        let mut dup = false
+                        let mut k = 0
+                        while k < len(seen_ids) {
+                            if seen_ids[k] == addr.local_id { dup = true }
+                            k = k + 1
+                        }
+                        if !dup {
+                            regs.push(PReg { name: _nvptx_reg_u64(addr.local_id), kind: NVPTX_RKIND_U64 })
+                            seen_ids.push(addr.local_id)
+                        }
+                    }
+                }
+            }
+            // RFC 055 §12 P4+ — STMT_CALL `gpu_atomic_add(addr, v)` also
+            // takes args[0] as an address operand (mirrors STMT_LOAD/STORE).
+            // Propagate its source Local into the U64 bank so the emitted
+            // PTX renders `[%rd<id>]` for the address.
+            if s.kind == STMT_CALL && s.op == "gpu_atomic_add" {
                 if len(s.args) >= 1 {
                     let addr = s.args[0]
                     if addr.kind == "local" {
