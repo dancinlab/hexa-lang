@@ -72,19 +72,30 @@ fn _gate_run_one(label: str, v_path: str, top: str, lib_path: str) -> GateRun {
     stages = stages.push(GateStage { name: label + ":flatten",    ok: r4.ok, detail: r4.message })
     let r5 = pass_opt(r4.design)
     stages = stages.push(GateStage { name: label + ":opt",        ok: r5.ok, detail: r5.message })
-    // rfc_006 §5 absorption iter 12 (a): collapse multi-driver `connect`
-    // rows (e.g. router_d4 `idx` 5-way unroll). Inserted between opt and
-    // techmap so techmap operates on a structurally-clean RTLIL where
-    // every LHS has exactly one driver — mirrors ABC's read_blif
-    // multi-driver rejection (`Signal X defined more than once`). See
-    // pass_clean_multidriver header for the IEEE 1800-2017 §10.4.2 +
+    // RFC 073 Phase 3c (2026-05-20) — wire `pass_proc_mux` between `opt`
+    // and `clean_multidriver`. The for-loop unroller (read_verilog.hexa
+    // `_rv_emit_for_if_stmts`, Phase 2 + 3a) emits one cond-tagged
+    // `connect_cond` row per `if (cond_expr(i)) lhs = rhs(i);` iteration
+    // (e.g. `grant_in`, `any_grant`, `grant_out` in router_d{4,6}'s
+    // arbiter). `pass_proc_mux` folds those rows into a priority-encoded
+    // `$mux` chain per LHS (IEEE 1364-2005 §10.3.5 for-loop unroll +
+    // §10.4.2 procedural assign + Yosys passes/proc/proc_mux.cc); the
+    // resulting unconditional connect drives the LHS through a single
+    // mux-tree output. Without this wire-up, `pass_clean_multidriver`
+    // (next stage) used to silently collapse the cond-tagged group via
+    // last-write-wins, losing the per-iteration guards (Δ=100% area).
+    let r5a = pass_proc_mux(r5.design)
+    stages = stages.push(GateStage { name: label + ":proc_mux",   ok: r5a.ok, detail: r5a.message })
+    // rfc_006 §5 absorption iter 12 (a): collapse remaining multi-driver
+    // `connect` rows (genuine multi-driver conflicts only — RFC 073
+    // Phase 3c teaches `pass_clean_multidriver` to defer LHS-groups that
+    // include cond-tagged rows to `pass_proc_mux` upstream). Inserted
+    // between proc_mux and techmap so techmap operates on a structurally-
+    // clean RTLIL where every LHS has exactly one driver — mirrors ABC's
+    // read_blif multi-driver rejection (`Signal X defined more than once`).
+    // See pass_clean_multidriver header for the IEEE 1800-2017 §10.4.2 +
     // Yosys proc_mux + BLIF spec §3 citations.
-    // RFC 073 Phase 1 note: `pass_proc_mux` is the structural primitive
-    // (defined in stdlib/kernels/logic_synth/passes.hexa); wiring it into
-    // this gate pipeline ahead of `pass_clean_multidriver` is a separate
-    // cycle once Phase 2/3 routes condition-guarded patterns through the
-    // `connect_cond` IR field instead of the inline emitter.
-    let r5b = pass_clean_multidriver(r5.design)
+    let r5b = pass_clean_multidriver(r5a.design)
     stages = stages.push(GateStage { name: label + ":clean_multidriver", ok: r5b.ok, detail: r5b.message })
     let r6 = pass_techmap_sky130(r5b.design)
     stages = stages.push(GateStage { name: label + ":techmap",    ok: r6.ok, detail: r6.message })

@@ -5046,3 +5046,128 @@ reference (no source copy).
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md
 (Phase 2 LANDED 2026-05-20 · Phase 3a LANDED 2026-05-20 · Phases 1.5 /
 3b / 3c still "not yet landed").
+
+---
+
+## 2026-05-20 — RFC 073 Phase 3c — for-loop iteration-guard end-to-end gate (F-RFC-RV-LOOP-GUARD PASS)
+
+**Cycle.** Phase 3c. Phase 2 (PR #198) + Phase 3a (PR #201) had already
+made `_rv_emit_for_if_stmts` attach iteration-substituted guards as
+`connect_cond` rows on every `if (cond_expr(i)) lhs = rhs(i);` body
+(measured: 5 cond-tagged rows on `grant_in` / `any_grant` / `grant_out`
+in router_d4, 7 in router_d6). The blocker exposed by the §5 oracle
+was downstream: `pass_clean_multidriver` collapsed the WHOLE LHS-group
+via last-write-wins regardless of `connect_cond` presence, AND
+`gate_record.hexa` never wired `pass_proc_mux` between `pass_opt` and
+`pass_clean_multidriver`. Phase 3c is the surgical wire-up + pass-aware
+collapse-skip + `$mux` techmap that closes the pipeline.
+
+**Surface area (3 SSOT edits + selftest fixtures, all hexa-native).**
+
+1. `stdlib/kernels/logic_synth/passes.hexa::pass_clean_multidriver` —
+   condition-aware skip. Before this cycle the pass took the *last*
+   row of each multi-driver LHS-group via Verilog §10.4.2 last-write-
+   wins, with a "(conditions not recoverable)" honest-gap message
+   printed at every collapse. After Phase 3c: for every row, count
+   later/earlier occurrences AND check `connect_cond[j] != ""` across
+   the whole group. If ANY row in the group is cond-tagged, every row
+   of that group is passed through verbatim — deferring to
+   `pass_proc_mux` for the actual mux-chain fold. Unconditional groups
+   still collapse via the legacy last-write-wins path with the same
+   honest diagnostic.
+
+2. `stdlib/kernels/logic_synth/passes.hexa::pass_techmap_sky130` —
+   `$mux` → SKY130 `mux2_1` direct techmap. RTLIL `$mux` carries pins
+   A/B/S/Y (Y = A when S==0, Y = B when S==1). SKY130 `mux2_1` carries
+   pins A0/A1/S/X with function `(A0 & !S) | (A1 & S)` — semantically
+   identical, one-to-one rename: A→A0, B→A1, S→S, Y→X. Width is 1 bit
+   (`pass_proc_mux` only emits 1-bit mux cells). Without this lowering
+   ABC's `read_blif` rejected the BLIF at `Line 88: Cannot find gate
+   "$mux" in the library.`
+
+3. `stdlib/yosys/gate_record.hexa::_gate_run_one` — wire
+   `pass_proc_mux` between `pass_opt` and `pass_clean_multidriver` in
+   both `d4` and `d6` pipelines (this was the long-deferred Phase 1
+   "scaffold comment" gap — the pass existed, just wasn't called).
+
+4. `stdlib/kernels/logic_synth/read_verilog.hexa` — selftest fixtures
+   T64 (`for(i=0;i<3;i++) if(sel[i]) y = i;` emits 3 cond-tagged rows
+   with iteration-substituted guards `sel[0]/sel[1]/sel[2]`), T65
+   (clean_multidriver leaves the cond-tagged group untouched — 3 rows
+   survive verbatim), T66 (proc_mux folds the 3 cond-tagged rows into
+   3 `$mux` cells + 1 unconditional connect; 0 cond-tagged rows
+   survive). Added `use "stdlib/kernels/logic_synth/passes"` to give
+   the selftest access to the two passes.
+
+**Falsifier verdicts (measured).**
+
+- F-RFC-RV-LOOP-GUARD       PASS (T58 unchanged, T64/T65/T66 PASS,
+  router_d4 + router_d6 §5 pipelines reach `[OK] abc_map: ok`).
+- F-RFC-RV-NO-REGRESSION    PASS (read_verilog 64/64 → 67/67 ·
+  passes 35/35 unchanged · rtlil/abc_map/write_verilog/liberty
+  selftests untouched).
+
+**Numerical measurement.**
+
+- `proc_mux` lowered 3 cond-tagged LHS-groups on each of d4 and d6.
+- `clean_multidriver` now collapses only 1 group per run (the
+  unconditional `idx` 5/7-way blocking-assign — that one stays
+  last-write-wins because no row is cond-tagged).
+- ABC pipeline runs end-to-end: 99 input `.gate` rows (d4) → ABC
+  `read_blif ; strash ; map ; write_blif` chain succeeds.
+
+**§5 oracle outcome — DIAGNOSTIC ADVANCED, AREA STILL 0.0.**
+
+After Phase 3c the per-stage trace reads:
+```
+  [OK] d4:read_verilog       —
+  [OK] d4:hierarchy          — hierarchy_top=router_d4
+  [OK] d4:proc               — proc
+  [OK] d4:flatten            — flatten (no-op in current subset)
+  [OK] d4:opt                — opt
+  [OK] d4:proc_mux           — proc_mux (lowered 3 cond-tagged LHS-group(s))
+  [OK] d4:clean_multidriver  — clean_multidriver (collapsed 1 LHS-group(s))
+  [OK] d4:techmap            — techmap_sky130
+  [OK] d4:dfflibmap          — dfflibmap_sky130
+  [OK] d4:abc_map            — abc_map: ok
+```
+
+But `[gate] router_d4 area=0.0 µm² oracle=61763 µm² Δ=100.0% FAIL`.
+Inspecting `/tmp/_hexa_yosys_gate_d4_out.blif` the cells reduce to
+constant ties (`_const0_` on `out_data[0..4]/out_valid[0..4]`,
+`_const1_` on `in_ready[0..4]`). The combinational logic feeding
+`grant_in` / `grant_out` / `any_grant` IS present in the mapped BLIF;
+ABC just has no path from those internal nets to the module's
+declared outputs.
+
+**§5 verdict — OPEN. Next blocker named (g3 honest):** dynamic-LHS
+clocked-write absorption. router_d{4,6} sequential output drive lives
+in a second `always @(posedge clk)` block whose body shape is
+`out_data[grant_out] <= fifo_peek[grant_in]; out_valid[grant_out]
+<= 1'b1;` — array-LHS with a runtime-K (`grant_out`) index. The
+combinational guard wire `grant_out` is now correctly synthesised
+(Phase 3c closure proves this), but read_verilog's clocked-LHS path
+doesn't yet recognise array-LHS with a non-foldable index, so the
+sequential block's writes are dropped silently. This is the
+second-order blocker once the combinational frontend was unblocked;
+spec it as Phase 3d (clocked-`$dff` dynamic-LHS sequential write,
+distinct from Phase 3c's combinational `connect_cond` path).
+
+**LoC delta:**
+
+```
+ stdlib/kernels/logic_synth/passes.hexa       |  +82 -3   (clean_multidriver cond-skip + $mux techmap)
+ stdlib/kernels/logic_synth/read_verilog.hexa | +158 -1   (T64/T65/T66 + passes import)
+ stdlib/yosys/gate_record.hexa                |  +35 -18  (pass_proc_mux wired in)
+ compiler/PLAN.md                             |  +<this>  (this entry)
+```
+
+Clean-room provenance preserved: IEEE 1364-2005 §10.3.5 (for-loop
+unroll) + §10.4.2 (procedural assignment — last-write-wins reduces to
+one-hot mux when guards mutually exclusive) + Yosys
+passes/proc/proc_mux.cc behavioural reference (no source copy). SKY130
+PDK `sky130_fd_sc_hd__mux2_1` cell footprint (Apache-2 / CC-BY-4.0).
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md
+(Phase 2 LANDED 2026-05-20 · Phase 3a LANDED 2026-05-20 · Phase 3c
+LANDED 2026-05-20 · Phase 3d clocked-dynamic-LHS NOT YET LANDED).
