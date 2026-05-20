@@ -4402,3 +4402,26 @@ touched in this cycle).
 Cross-link: @D g_inbox_processing_loop (close-only Shape A); @D g7
 inbox-patches-pipeline (downstream anima → upstream hexa-lang); @D
 g_atlas_binary_builtin (no atlas touch).
+
+### 진행 로그 — inbox/patches/wilson-needs-streaming-http-sse → resolved-ssot (dup-race; SSOT predated filing)
+
+Date: 2026-05-20 · Branch: `s1-step2-codegen-perf` worktree `agent-ac4265c4ee95f81a5` · Shape A (status flip only, zero code change)
+
+Inbox `wilson-needs-streaming-http-sse.md` (filed 2026-05-10 `pending_external`) asked for `stdlib/http_sse.hexa` exposing callback (`http_sse_get`) + handle (`http_sse_open/next/close`) + buffered fallback, with POST-with-body support, over `exec_stream_async/poll/close`. Dup-race precheck (per `feedback_inbox_dup_race_precheck.md`) found the module already landed across **4 commits**:
+
+| commit       | date       | content                                                      |
+| ------------ | ---------- | ------------------------------------------------------------ |
+| `4761f048`   | 2026-05-08 | `stdlib/http_sse.hexa` v1.0.0 — GET callback + handle API    |
+| `faca4134`   | 2026-05-11 | v1.1 — `http_sse_post` + `http_sse_open_post` (POST + body)  |
+| `d8b44ccf`   | —          | v1.1 follow-up — `http_sse_post_buffered` (interp fallback)  |
+| `6fdd9847`   | —          | `docs/SPEC.yaml` HX1042 + honest-C3 #6 refresh               |
+
+Current SSOT: `stdlib/http_sse.hexa` (646 LoC, @capabilities = `[http_sse_get, http_sse_get_lines, http_sse_get_buffered, http_sse_post, http_sse_post_buffered, http_sse_open, http_sse_open_post, http_sse_open_method, http_sse_next, http_sse_close, http_sse_parse_event, http_sse_feed, http_sse_available, http_sse_build_curl_cmd, http_sse_build_curl_method_cmd, http_sse_empty_event]`) + `stdlib/test/test_http_sse.hexa` (246 LoC).
+
+Scope decision the filing punted (a `stdlib/http_sse.hexa` vs b `runtime.c` primitive): both were taken simultaneously — `self/runtime.c::hexa_exec_stream_async/poll/close` is the substrate (b), and `stdlib/http_sse.hexa` is the thin hexa wrapper (a) composing it with the SSE-frame parser. Honest-C3 #1 documents AOT-vs-interp parity via the `_buffered` fallback path that uses `exec(curl --max-time N)`.
+
+Wilson-side gap (re-enable `use "stdlib/http_sse"` in `plugins/provider-anthropic/plugin.hexa`, swap `stream_open`'s `anthropic_send`+parse for `http_sse_open_post` + incremental `http_sse_next`-driven `anthropic_parse_sse_lines`) is a downstream wilson task — out of upstream scope.
+
+Action: status flipped `pending_external → resolved-ssot` in inbox markdown with full resolution table. No SSOT edit, no parse-gate run (zero code change). No binary promote. compiler/PLAN.md updated (this entry). PATCHES.yaml untouched per SOP.
+
+g3 verdict: Filing's "It does not exist" diagnostic was a wilson-side grep miss (canonical `stdlib/http_sse.hexa` had been live 2 days before filing). Closed `resolved-ssot` with zero hexa-lang code change; the four prior commits constitute the actual implementation.
