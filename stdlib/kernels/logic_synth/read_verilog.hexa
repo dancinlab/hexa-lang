@@ -2237,6 +2237,196 @@ fn _rv_v2_dwire(lhs: str) -> str {
     return lhs + "__d"
 }
 
+// RFC 006 §5 ABC combinational-loop SSA fix —
+// `_rv_signal_is_read_in_body` returns 1 iff `name` appears as a RHS
+// (read) reference somewhere in `toks` (any position that is NOT a
+// blocking-LHS-base immediately preceding a `=`). Used to filter the
+// SSA-renaming target set down to signals that need it: only signals
+// that are BOTH written-then-read in the loop body create the inter-
+// iter anti-dependency that ABC mistakes for a combinational loop.
+// Write-only signals (e.g. T58 `idx = i;` in a for-body where `idx`
+// is not read) keep the legacy `pass_proc_mux` path — no SSA renaming.
+fn _rv_signal_is_read_in_body(toks: [str], name: str) -> int {
+    let n = len(toks)
+    let mut k = 0
+    while k < n {
+        if toks[k] == name {
+            // Walk past optional `[...]` indexing groups.
+            let mut p = k + 1
+            while p < n && toks[p] == "[" {
+                let mut bd = 1
+                p = p + 1
+                while p < n && bd > 0 {
+                    if toks[p] == "[" { bd = bd + 1 }
+                    if toks[p] == "]" { bd = bd - 1 }
+                    p = p + 1
+                }
+            }
+            // If immediately followed by `=` (and NOT `==`), it's an LHS.
+            let mut is_lhs = 0
+            if p < n && toks[p] == "=" {
+                let mut is_assign = 1
+                if p + 1 < n && toks[p + 1] == "=" { is_assign = 0 }
+                if is_assign == 1 { is_lhs = 1 }
+            }
+            if is_lhs == 0 { return 1 }
+        }
+        k = k + 1
+    }
+    return 0
+}
+
+// RFC 006 §5 ABC combinational-loop SSA fix —
+// `_rv_collect_blocking_lhs` walks a for-body token sequence and
+// returns the set of LHS-base names that are *blocking-assigned* (`=`,
+// NOT `<=`) somewhere inside. These are the signals whose `read in
+// iter k` should see `write in iter k-1` — i.e. they need per-iter
+// SSA versioning.
+//
+// Detection rule: a `=` token at paren-depth 0 marks an assignment.
+// The LHS-base is the most-recent identifier before that `=`, skipping
+// balanced `[...]` indexing groups (which may be packed-part-select
+// `[hi:lo]`, integer-fold `[const]`, or runtime `[wire]`).
+//
+// Skipped: `<=` (sequential), `==` / `!=` / `<=` (comparison — although
+// `<=` is itself ambiguous in Verilog; here `=` immediately preceded by
+// `<` is treated as non-blocking and skipped via the `out[k-1] == "<"`
+// guard). The tokenizer is presumed to emit `<=`, `==`, `!=`, `<=`,
+// `>=` as either single tokens or as adjacent `<`+`=`/`=`+`=` pairs;
+// both cases are handled.
+fn _rv_collect_blocking_lhs(toks: [str]) -> [str] {
+    let mut result: [str] = []
+    let n = len(toks)
+    let mut paren_depth = 0
+    let mut k = 0
+    while k < n {
+        let t = toks[k]
+        if t == "(" { paren_depth = paren_depth + 1; k = k + 1; continue }
+        if t == ")" { paren_depth = paren_depth - 1; k = k + 1; continue }
+        if t == "=" && paren_depth == 0 {
+            let mut is_blocking = 1
+            if k > 0 && toks[k - 1] == "<" { is_blocking = 0 }
+            if k > 0 && toks[k - 1] == ">" { is_blocking = 0 }
+            if k > 0 && toks[k - 1] == "!" { is_blocking = 0 }
+            if k > 0 && toks[k - 1] == "=" { is_blocking = 0 }
+            if k + 1 < n && toks[k + 1] == "=" { is_blocking = 0 }
+            if is_blocking == 1 {
+                let mut j = k - 1
+                while j >= 0 && toks[j] == "]" {
+                    let mut bd = 1
+                    j = j - 1
+                    while j >= 0 && bd > 0 {
+                        if toks[j] == "]" { bd = bd + 1 }
+                        if toks[j] == "[" { bd = bd - 1 }
+                        j = j - 1
+                    }
+                }
+                if j >= 0 {
+                    let lhs = toks[j]
+                    let mut found = 0
+                    let mut i = 0
+                    while i < len(result) {
+                        if result[i] == lhs { found = 1 }
+                        i = i + 1
+                    }
+                    if found == 0 { result = result.push(lhs) }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return result
+}
+
+// RFC 006 §5 ABC combinational-loop SSA fix —
+// `_rv_ssa_rename_toks` produces a per-iter rewritten token sequence:
+//   - All occurrences of any name in `tracked` are substituted with
+//     `<name>__ssa<k_read>` (read version).
+//   - Then every LHS-base position (detected on the ORIGINAL token
+//     stream, same algorithm as `_rv_collect_blocking_lhs`) whose base
+//     is in `tracked` is re-substituted to `<name>__ssa<k_write>` —
+//     the write version that the conditional connect_cond emit will
+//     target.
+// The caller is responsible for pre-loop alias (`connect(s__ssa0, s)`),
+// per-iter default-hold (`connect(s__ssa<k+1>, s__ssa<k>)` unconditional),
+// and post-loop publish (`connect(s, s__ssa<P>)`).
+fn _rv_ssa_rename_toks(toks: [str], tracked: [str], k_read: int, k_write: int) -> [str] {
+    let n = len(toks)
+    // Pass 1: blanket read-substitution.
+    let mut out: [str] = []
+    let mut i = 0
+    while i < n {
+        let t = toks[i]
+        let mut found = 0
+        let mut j = 0
+        while j < len(tracked) {
+            if tracked[j] == t { found = 1 }
+            j = j + 1
+        }
+        if found == 1 {
+            out = out.push(t + "__ssa" + str(k_read))
+        } else {
+            out = out.push(t)
+        }
+        i = i + 1
+    }
+    // Pass 2: LHS-position write-redirect (LHS detection on ORIGINAL
+    // toks so positions align 1:1 with `out`).
+    let mut paren_depth = 0
+    let mut k = 0
+    while k < n {
+        let t = toks[k]
+        if t == "(" { paren_depth = paren_depth + 1; k = k + 1; continue }
+        if t == ")" { paren_depth = paren_depth - 1; k = k + 1; continue }
+        if t == "=" && paren_depth == 0 {
+            let mut is_blocking = 1
+            if k > 0 && toks[k - 1] == "<" { is_blocking = 0 }
+            if k > 0 && toks[k - 1] == ">" { is_blocking = 0 }
+            if k > 0 && toks[k - 1] == "!" { is_blocking = 0 }
+            if k > 0 && toks[k - 1] == "=" { is_blocking = 0 }
+            if k + 1 < n && toks[k + 1] == "=" { is_blocking = 0 }
+            if is_blocking == 1 {
+                let mut jp = k - 1
+                while jp >= 0 && toks[jp] == "]" {
+                    let mut bd = 1
+                    jp = jp - 1
+                    while jp >= 0 && bd > 0 {
+                        if toks[jp] == "]" { bd = bd + 1 }
+                        if toks[jp] == "[" { bd = bd - 1 }
+                        jp = jp - 1
+                    }
+                }
+                if jp >= 0 {
+                    let lhs_orig = toks[jp]
+                    let mut is_tracked = 0
+                    let mut ti = 0
+                    while ti < len(tracked) {
+                        if tracked[ti] == lhs_orig { is_tracked = 1 }
+                        ti = ti + 1
+                    }
+                    if is_tracked == 1 {
+                        let new_tok = lhs_orig + "__ssa" + str(k_write)
+                        let mut rebuilt: [str] = []
+                        let mut z = 0
+                        let nm = len(out)
+                        while z < nm {
+                            if z == jp {
+                                rebuilt = rebuilt.push(new_tok)
+                            } else {
+                                rebuilt = rebuilt.push(out[z])
+                            }
+                            z = z + 1
+                        }
+                        out = rebuilt
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return out
+}
+
 fn _rv_emit_body_v2(
     body_toks: [str],
     cond_wire: str,
@@ -2487,7 +2677,11 @@ fn _rv_emit_body_v2(
                     for_body = for_body.push(tt); bp = bp + 1
                 }
             }
-            // unroll
+            // unroll. (RFC 006 §5 SSA fix does NOT fire here: v2 helper
+            // is invoked only from the sequential with-else fallback
+            // path (L4094) — the combinational fire site is in the
+            // top-level `_rv_parse_always` for-handler at L4124, where
+            // the per-iter SSA rename + pre/post alias emit lives.)
             let mut fiter = 0
             while fiter < 1024 {
                 let fcv = _rv_eval_expr(fcond, 0, tab, 1)
@@ -4056,6 +4250,127 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                         break
                     }
                     f_body_end = f_body_end + 1
+                }
+            }
+            // RFC 006 §5 ABC combinational-loop SSA fix —
+            // Combinational `always @*` for-loop with blocking-assigned
+            // reg(s) that are also READ in the same body (router_d4
+            // priority arbiter pattern at comb/rtl/router_d4.v L80-94).
+            // Pre-fix: every iter's read of `s` references the same net
+            // as every iter's write → flat netlist self-loop → ABC
+            // "Network contains combinational loop" → 0 cells emitted.
+            // Post-fix: per-iter SSA versioning (`s__ssa<k>`) + pre-loop
+            // alias + default-hold + post-loop publish. Inter-iter
+            // anti-dependency becomes explicit in the netlist DAG.
+            //
+            // Sequential always (`is_clocked == 1`) is unchanged —
+            // the per-LHS `__d` D-wire + `$dff` stitching already exposes
+            // inter-cycle anti-dependency.
+            //
+            // Honest gap: triggers only when (a) is_clocked==0 AND
+            // (b) `_rv_collect_blocking_lhs` finds ≥1 target AND
+            // (c) `_rv_emit_for_if_stmts` accepts the renamed body.
+            // Otherwise falls through to the legacy PState-walk unroll
+            // below.
+            if is_clocked == 0 {
+                let mut _ssa_body_toks: [str] = []
+                let mut _ssa_bi = f_body_start
+                while _ssa_bi < f_body_end {
+                    _ssa_body_toks = _ssa_body_toks.push(st.toks[_ssa_bi])
+                    _ssa_bi = _ssa_bi + 1
+                }
+                let _ssa_tracked_full = _rv_collect_blocking_lhs(_ssa_body_toks)
+                // Filter: only signals that are also READ somewhere in
+                // the body need SSA versioning. Write-only signals fall
+                // through to the legacy path (pass_proc_mux handles
+                // their cond-tagged rows directly).
+                let mut _ssa_tracked: [str] = []
+                let mut _ssa_filter_i = 0
+                while _ssa_filter_i < len(_ssa_tracked_full) {
+                    let _sft = _ssa_tracked_full[_ssa_filter_i]
+                    if _rv_signal_is_read_in_body(_ssa_body_toks, _sft) == 1 {
+                        _ssa_tracked = _ssa_tracked.push(_sft)
+                    }
+                    _ssa_filter_i = _ssa_filter_i + 1
+                }
+                if len(_ssa_tracked) > 0 {
+                    // Pre-flight: ensure `_rv_emit_for_if_stmts` accepts
+                    // a renamed first iter. If not, bail to legacy path
+                    // (no SSA emit yet — module unchanged).
+                    let _ssa_first_body = _rv_ssa_rename_toks(_ssa_body_toks, _ssa_tracked, 0, 1)
+                    let _ssa_probe = _rv_emit_for_if_stmts(_ssa_first_body, "", m, tab, 0, "")
+                    if _ssa_probe.ok == 1 {
+                        // Pre-loop alias.
+                        let mut _ssa_si = 0
+                        while _ssa_si < len(_ssa_tracked) {
+                            let s = _ssa_tracked[_ssa_si]
+                            let s0 = s + "__ssa0"
+                            if rtlil_find_wire(m, s0) < 0 {
+                                m = rtlil_module_add_wire(m, rtlil_wire(s0, 1, 0, 0))
+                            }
+                            m = rtlil_module_connect(m, s0, s)
+                            _ssa_si = _ssa_si + 1
+                        }
+                        let mut _ssa_fi = 0
+                        while _ssa_fi < 1024 {
+                            let _ssa_fcv = _rv_eval_expr(fcond, 0, tab, 1)
+                            if len(_ssa_fcv.err) > 0 {
+                                return RvStep {
+                                    st: _ps_fail(st, "read_verilog: always for SSA cond: " + _ssa_fcv.err),
+                                    m: m
+                                }
+                            }
+                            if _ssa_fcv.value == 0 { break }
+                            // Per-iter default-hold: `<s>__ssa<k+1>` wire
+                            // + unconditional alias to `<s>__ssa<k>`.
+                            let mut _ssa_si2 = 0
+                            while _ssa_si2 < len(_ssa_tracked) {
+                                let s = _ssa_tracked[_ssa_si2]
+                                let sk = s + "__ssa" + str(_ssa_fi)
+                                let sk1 = s + "__ssa" + str(_ssa_fi + 1)
+                                if rtlil_find_wire(m, sk1) < 0 {
+                                    m = rtlil_module_add_wire(m, rtlil_wire(sk1, 1, 0, 0))
+                                }
+                                m = rtlil_module_connect(m, sk1, sk)
+                                _ssa_si2 = _ssa_si2 + 1
+                            }
+                            let _ssa_iter_body = _rv_ssa_rename_toks(_ssa_body_toks, _ssa_tracked, _ssa_fi, _ssa_fi + 1)
+                            let _ssa_emit = _rv_emit_for_if_stmts(_ssa_iter_body, "", m, tab, 0, "")
+                            if _ssa_emit.ok == 0 {
+                                return RvStep {
+                                    st: _ps_fail(st, "read_verilog: always for SSA body emit returned ok=0 at iter " + str(_ssa_fi)),
+                                    m: m
+                                }
+                            }
+                            m = _ssa_emit.m
+                            let _ssa_step = _rv_eval_expr(fstep, 0, tab, 1)
+                            if len(_ssa_step.err) > 0 {
+                                return RvStep {
+                                    st: _ps_fail(st, "read_verilog: always for SSA step: " + _ssa_step.err),
+                                    m: m
+                                }
+                            }
+                            tab = symtab_put(tab, fgv, _ssa_step.value)
+                            _ssa_fi = _ssa_fi + 1
+                        }
+                        // Post-loop publish: `connect(<s>, <s>__ssa<P>)`.
+                        let mut _ssa_si3 = 0
+                        while _ssa_si3 < len(_ssa_tracked) {
+                            let s = _ssa_tracked[_ssa_si3]
+                            let sP = s + "__ssa" + str(_ssa_fi)
+                            m = rtlil_module_connect(m, s, sP)
+                            _ssa_si3 = _ssa_si3 + 1
+                        }
+                        // PState advance + outer keep_going gate
+                        // (same advance/gate as the legacy path below).
+                        let _ssa_after_end = f_body_end + 1
+                        let _ssa_after_stmt = f_body_end
+                        let mut _ssa_after = _ssa_after_end
+                        if f_has_begin == 0 { _ssa_after = _ssa_after_stmt }
+                        st = PState { toks: st.toks, pos: _ssa_after, err: "" }
+                        if has_begin == 0 { keep_going = 0 }
+                        continue
+                    }
                 }
             }
             // unroll
@@ -6204,6 +6519,83 @@ fn main() {
             _t72_ci = _t72_ci + 1
         }
         if _t72_qy != 1 { println("FAIL T72c missing $dff Q=y"); fails = fails + 1 }
+    }
+
+    // T73 — RFC 006 §5 ABC combinational-loop SSA fix
+    //   (F-RFC-RV-COMB-LOOP-SSA-ARBITER).
+    //
+    //   Pattern: combinational `always @*` with a `for` loop whose body
+    //   reads-then-writes the same `reg` (priority-arbiter pattern from
+    //   router_d4 `always @*` block at lines 80-94 of
+    //   comb/rtl/router_d4.v):
+    //
+    //     always @* begin
+    //       pick = 1'b0;
+    //       for (i = 0; i < P; i = i + 1) begin
+    //         if (!pick && r[i]) pick = 1'b1;        // read-then-write
+    //       end
+    //     end
+    //
+    //   Pre-fix: every iter's read of `pick` references the same single
+    //   net as every iter's write. After flat unroll the net depends on
+    //   itself → ABC reports "Network contains combinational loop" and
+    //   emits 0 sequential cells (rfc_006 §5 area=0.0 µm²).
+    //
+    //   Post-fix: per-iteration SSA renaming. Each tracked blocking-
+    //   assigned reg `s` is versioned `s__ssa0` (loop entry value),
+    //   `s__ssa1` (after iter 0), …, `s__ssaP` (after iter P-1, the
+    //   final loop-exit value). Reads inside iter k substitute
+    //   `s` → `s__ssa<k>`; writes go to `s__ssa<k+1>` (cond-tagged) with
+    //   an unconditional `s__ssa<k+1> <= s__ssa<k>` hold-default. After
+    //   the loop, `connect(s, s__ssa<P>)` publishes the final value to
+    //   outer scope. Inter-iter anti-dependency is now explicit in the
+    //   netlist DAG; ABC sees no cycle.
+    //
+    //   Falsifier: P=4 priority arbiter over 4-bit `r`. Expect:
+    //     - wires `pick__ssa0` .. `pick__ssa4` all present (5 versions)
+    //     - wire `pick__ssa4` drives outer `pick` (final publish)
+    //     - same versioning for `g` (the indexed grant register)
+    //
+    //   @cite IEEE 1364-2005 §10.4.2 (procedural assign within
+    //   sequential block — blocking assignment ordering) + Yosys
+    //   passes/proc/proc_arst.cc (SigChunk inter-statement chain).
+    total = total + 1
+    let _v73 = "module sm73 ( input [ 3 : 0 ] r , output reg [ 1 : 0 ] g ) ; reg pick ; integer i ; always @ ( * ) begin pick = 1'b0 ; g = 2'd0 ; for ( i = 0 ; i < 4 ; i = i + 1 ) begin if ( ! pick && r [ i ] ) begin g = i [ 1 : 0 ] ; pick = 1'b1 ; end end end endmodule"
+    let _r73 = read_verilog(_v73)
+    if _r73.ok != 1 {
+        println("FAIL T73 comb_loop_ssa: " + _r73.message); fails = fails + 1
+    } else {
+        let _m73 = _r73.design.modules[0]
+        // SSA versioned wires for `pick` — pre-fix these don't exist.
+        let mut _t73_ssa_missing = 0
+        let mut _t73_k = 0
+        while _t73_k <= 4 {
+            if rtlil_find_wire(_m73, "pick__ssa" + str(_t73_k)) < 0 {
+                _t73_ssa_missing = _t73_ssa_missing + 1
+            }
+            _t73_k = _t73_k + 1
+        }
+        if _t73_ssa_missing > 0 {
+            println("FAIL T73a pick__ssa<k> missing count = "
+                + str(_t73_ssa_missing) + " (expected 0 — 5 versions ssa0..ssa4)")
+            fails = fails + 1
+        }
+        // Final publish: connect(pick, pick__ssa4) — Module uses
+        // parallel arrays connect_lhs/connect_rhs/connect_cond.
+        let mut _t73_publish = 0
+        let mut _t73_ci = 0
+        while _t73_ci < len(_m73.connect_lhs) {
+            if _m73.connect_lhs[_t73_ci] == "pick"
+                && _m73.connect_rhs[_t73_ci] == "pick__ssa4"
+                && len(_m73.connect_cond[_t73_ci]) == 0 {
+                _t73_publish = 1
+            }
+            _t73_ci = _t73_ci + 1
+        }
+        if _t73_publish != 1 {
+            println("FAIL T73b missing final publish connect(pick, pick__ssa4)")
+            fails = fails + 1
+        }
     }
 
     if fails > 0 {
