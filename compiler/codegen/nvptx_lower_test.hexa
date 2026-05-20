@@ -773,11 +773,12 @@ fn main() {
     let ok_shuf  = _test_warp_shuffle()
     let ok_unr   = _test_unroll_pass()
     let ok_unrn  = _test_unroll_no_match_passthrough()
+    let ok_wmma  = _test_wmma_scaffold()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn {
-        println("PASS: RFC 055 P3b/c/P4 — 11/11 cases (incl. _nvptx_unroll_pass + passthrough)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma {
+        println("PASS: RFC 055 P3b/c/P4/P4+ — 12/12 cases (incl. _nvptx_unroll_pass + WMMA scaffold)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -791,9 +792,10 @@ fn main() {
         if !ok_shuf { println("      055-P4+ gpu_warp_shuffle() FAILED") }
         if !ok_unr  { println("      055-P4+ _nvptx_unroll_pass FAILED") }
         if !ok_unrn { println("      055-P4+ unroll passthrough FAILED") }
+        if !ok_wmma { println("      RFC 055 §12 P4+ WMMA scaffold FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -1043,3 +1045,93 @@ fn _test_unroll_no_match_passthrough() -> bool {
     }
     return ok
 }
+// ── Case 12 — RFC 055 §12 P4+ Tensor Core MMA scaffold ─────────────────
+//
+// SCAFFOLD ONLY — this case proves the new `gpu_wmma_mma` STMT_CALL op
+// name is RECOGNIZED by the lowering and that the WMMA mnemonic table
+// (`_nvptx_wmma_mnemonic`) is reachable from `_nvptx_lower_stmt`'s
+// STMT_CALL branch. It does NOT verify a working WMMA emit; the
+// emitted PTX is an honest stub comment line carrying the resolved
+// mnemonic. A real WMMA emit needs (see `_nvptx_wmma_mnemonic`'s
+// docstring): fragment register-bank allocation (PReg.kind="frag" →
+// tile, not scalar), `.shared` staging-area declaration, per-fragment
+// data-type tags (.f16 vs .f32 vs .bf16), row/col orientation, and
+// tile-loop integration around the 16×16 MMA tile. None of those are
+// implemented in this scaffold.
+//
+// Fixture: a one-block MFunc whose body is a single STMT_CALL with
+// op="gpu_wmma_mma" (dst = void via `_miss_local`, args = []). The
+// scaffold lowering emits a `// RFC 055 §12 P4+ WMMA (scaffold, not
+// yet wired) — gpu_wmma_mma -> wmma.mma.sync...` comment line. The
+// surrounding `add.f64` (before) and `ret;` (after) verify the
+// scaffold doesn't disturb existing 055-P0 lowering.
+
+fn _build_case_wmma_scaffold() -> MModule {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let r = _local(2, "r")
+
+    // block 0: r = a + b ; gpu_wmma_mma() ; return
+    let mut s0 = []
+    s0.push(_stmt_binop(r, "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_call(_miss_local(), "gpu_wmma_mma"))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(r)
+
+    let mf = MFunc {
+        name: "wmma_scaffold_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_wmma_scaffold.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_wmma_scaffold() -> bool {
+    let mut ok = true
+    let mod_w = _build_case_wmma_scaffold()
+    let ptx = codegen_emit_ptx_sm80(mod_w)
+
+    println("")
+    println("── emitted PTX (RFC 055 §12 P4+ WMMA scaffold case, sm_80) ──")
+    println(ptx)
+
+    // Scaffold marker line — substring assertion on the emitted PTX.
+    ok = _check(ok, ptx, "WMMA (scaffold",
+        "WMMA scaffold marker line emitted")
+    // Resolved mnemonic carried by the marker (proves
+    // `_nvptx_wmma_mnemonic` is reachable from the STMT_CALL branch).
+    ok = _check(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32",
+        "wmma.mma mnemonic resolved into marker")
+    // The op name `gpu_wmma_mma` appears in the marker, NOT as the
+    // legacy "unsupported call:" stub (which would mean the scaffold
+    // didn't intercept the op).
+    ok = _check(ok, ptx, "gpu_wmma_mma",
+        "gpu_wmma_mma op name preserved in marker")
+    if _contains(ptx, "RFC 055 055-P0 - unsupported call: gpu_wmma_mma") {
+        println("  FAIL: gpu_wmma_mma must be intercepted by the WMMA scaffold, not fall through to unsupported-call stub")
+        ok = false
+    }
+    // Surrounding 055-P0 instructions still emit (scaffold is non-disturbing).
+    ok = _check(ok, ptx, "add.f64",          "preceding f64 add still emitted")
+    ok = _check(ok, ptx, "ret;",             "ret terminator after scaffold")
+    return ok
+}
+
