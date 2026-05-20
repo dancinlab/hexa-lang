@@ -74,6 +74,17 @@ fn _fmt_imm(target: string, imm: i64) -> string {
 }
 
 fn _fmt_mem(target: string, op: LOperand) -> string {
+    // RFC 070 G7-A.native impl emit (2026-05-20): label-as-offset
+    // memory operand (e.g. `[Xn, sym@GOTPAGEOFF]` for arm64 GOT load
+    // in `--shared` mode). Honored on every target so the same
+    // helper covers both arm64-darwin (`@GOTPAGEOFF`) and a future
+    // x86_64 RIP-relative emission. Carve-out is benign for the
+    // baseline path — every existing `_arm64_op_mem` / `_x86_op_mem`
+    // call passes `label=""`, so the integer-offset branch below
+    // continues to render identically.
+    if len(op.label) > 0 {
+        return "[" + op.mem_base.name + ", " + op.label + "]"
+    }
     if _is_darwin(target) {
         // Apple ARM64 memory: `[base, #offset]` — always emit the
         // explicit `#offset`, even at offset 0, so the C7 spill stores

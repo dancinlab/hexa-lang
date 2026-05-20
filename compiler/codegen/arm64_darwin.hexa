@@ -104,6 +104,25 @@ fn _arm64_op_mem(base: string, offset: i64) -> LOperand {
     }
 }
 
+// RFC 070 G7-A.native impl emit (2026-05-20): label-as-offset memory
+// operand for GOT loads on Mach-O / ELF arm64 — `[Xn, sym@GOTPAGEOFF]`.
+// Uses the existing LOperand mem shape with the `label` field carrying
+// the relocation-prefixed symbol; `_fmt_mem` (compiler/emit/asm.hexa)
+// dispatches on `op.label != ""` and renders `[base, label]` for darwin
+// / thumb. mem_offset=0 (unused — label substitutes for the integer
+// offset). Sole caller today: the `if opts.shared` global branch in
+// `_arm64_op_rm` below; locally-loaded shared-mode globals route GOT.
+fn _arm64_op_mem_label(base: string, label: string) -> LOperand {
+    return LOperand {
+        kind: "mem",
+        reg: _arm64_empty_preg(),
+        imm: 0,
+        mem_base: _arm64_preg_gpr(base),
+        mem_offset: 0,
+        label: label
+    }
+}
+
 fn _arm64_instr0(op: string, comment: string) -> LInstr {
     return LInstr { op: op, args: [], comment: comment }
 }
@@ -853,7 +872,7 @@ fn _arm64_emit_imm_to_reg(buf: [LInstr], reg: string, value: i64) -> [LInstr] {
 }
 
 fn _arm64_op_rm(buf: [LInstr], o: Operand, st: ArmStrTab, rm: RegMap,
-                scratch: string) -> [LInstr] {
+                scratch: string, opts: CodegenOptions) -> [LInstr] {
     let mut out = buf
     if o.kind == "local" {
         if _arm_is_spilled(rm, o.local_id) {
@@ -887,11 +906,33 @@ fn _arm64_op_rm(buf: [LInstr], o: Operand, st: ArmStrTab, rm: RegMap,
     }
     if o.kind == "global" {
         let gl = "g" + to_string(o.global_id)
-        out.push(_arm64_instr2("adrp", _arm64_op_reg(scratch),
-                         _arm64_op_label(gl + "@PAGE"), "addr page: " + gl))
-        out.push(_arm64_instr3("add", _arm64_op_reg(scratch),
-                         _arm64_op_reg(scratch),
-                         _arm64_op_label(gl + "@PAGEOFF"), "addr off: " + gl))
+        // RFC 070 G7-A.native impl emit (2026-05-20): in `--shared`
+        // mode globals are extern-resolved through the GOT so that
+        // `.dylib` text stays PIC and ld.so does not refuse it. The
+        // baseline `adrp+@PAGE/add+@PAGEOFF` (PIE) sequence is kept
+        // for `opts.shared == 0` so executable corpus output stays
+        // byte-identical. The reloc-kind tag goes in `LInstr.comment`
+        // suffix `[reloc=…]` so the asm-text emitter (next sub-cycle)
+        // can dispatch on it without re-deriving the kind. Authority:
+        //   - Mach-O: <mach-o/arm64/reloc.h> (ARM64_RELOC_GOT_LOAD_PAGE21
+        //     / ARM64_RELOC_GOT_LOAD_PAGEOFF12).
+        //   - ELF:    System V gABI §4 (R_AARCH64_ADR_GOT_PAGE /
+        //     R_AARCH64_LD64_GOT_LO12_NC). Asm-text identical on both
+        //     toolchains: `adrp Xn, sym@GOTPAGE` + `ldr Xn, [Xn, sym@GOTPAGEOFF]`.
+        if opts.shared == 1 {
+            out.push(_arm64_instr2("adrp", _arm64_op_reg(scratch),
+                             _arm64_op_label(gl + "@GOTPAGE"),
+                             "addr GOT page: " + gl + " [reloc=" + RELOC_AARCH64_ADR_GOT_PAGE + "]"))
+            out.push(_arm64_instr2("ldr", _arm64_op_reg(scratch),
+                             _arm64_op_mem_label(scratch, gl + "@GOTPAGEOFF"),
+                             "addr GOT off: " + gl + " [reloc=" + RELOC_AARCH64_LD64_GOT_LO12_NC + "]"))
+        } else {
+            out.push(_arm64_instr2("adrp", _arm64_op_reg(scratch),
+                             _arm64_op_label(gl + "@PAGE"), "addr page: " + gl))
+            out.push(_arm64_instr3("add", _arm64_op_reg(scratch),
+                             _arm64_op_reg(scratch),
+                             _arm64_op_label(gl + "@PAGEOFF"), "addr off: " + gl))
+        }
     }
     return out
 }
@@ -1297,7 +1338,8 @@ fn _builtin_ret_box(name: string) -> string {
 // other kinds ignore it.
 fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                     st: ArmStrTab, rm: RegMap, spill_frame: i64,
-                    try_buf_bytes: i64, try_slot_idx: i64) -> [LInstr] {
+                    try_buf_bytes: i64, try_slot_idx: i64,
+                    opts: CodegenOptions) -> [LInstr] {
     let mut buf = out
     if s.kind == _STMT_ASSIGN {
         // array_lit constructor (mirror of x86_64_linux.hexa 269bb61d;
@@ -1896,7 +1938,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     }
     if s.kind == "load" {
         if len(s.args) >= 1 {
-            buf = _arm64_op_rm(buf, s.args[0], st, rm, "x10")
+            buf = _arm64_op_rm(buf, s.args[0], st, rm, "x10", opts)
             let base_op = _arm64_op_resolve(s.args[0], st, rm, "x10")
             let mut off = 0
             if len(s.args) >= 2 && s.args[1].kind == "const_int" {
