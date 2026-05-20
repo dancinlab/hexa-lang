@@ -1,0 +1,12 @@
+// F-P0-OBJEQ corpus / trivial — minimal exit-status program.
+//
+// Exercises the smallest LIR encoding subset: a single function with
+// one immediate-load instruction and an exit syscall path.
+//
+// Expected LIR ops after `aprime_cc --emit=asm`: MOV imm (42 -> x0),
+// BL `exit` (relocation), function prologue/epilogue (STP/LDP, ADD/SUB
+// on SP).
+
+fn main() {
+    exit(42)
+}

@@ -1,0 +1,61 @@
+// F-P1-EXEC-TEXT — P1 cycle 3 falsifier.
+//
+// End-to-end:
+//   1. parse_macho_obj("/tmp/corpus_trivial.ours.o")  → ParsedObj
+//   2. link_macho_arm64([p], "/tmp/p1_c3_text.exec", "_main", 0)
+//   3. otool -tv on the output exec should disassemble back to the
+//      same instructions trivial.hexa's `_main` produced.
+//
+// HONEST: still not runnable — lazy-bind stubs + codesign land
+// cycle 4. cycle 3 contract = exec's `__text` section disassembles
+// correctly via `otool -tv`.
+
+import "../../../tool/hexa_ld.hexa"
+
+fn main() {
+    let p = parse_macho_obj("/tmp/corpus_trivial.ours.o")
+    println("parsed trivial.ours.o: text=" + to_string(len(p.text)) +
+            " defined=" + to_string(len(p.defined)) +
+            " extern=" + to_string(len(p.extern_refs)))
+
+    let out_path = "/tmp/p1_c3_text.exec"
+    let objs: [ParsedObj] = [p]
+    let rc = link_macho_arm64(objs, out_path, "_main", 0)
+    if rc != 0 {
+        println("FAIL: link_macho_arm64 returned " + to_string(rc))
+        exit(1)
+    }
+
+    let dis = exec_capture("xcrun otool -tv " + out_path + " 2>&1")
+    let dis_out = to_string(dis[0])
+    println("=== otool -tv ===")
+    println(dis_out)
+
+    // Expected first 2 instructions in trivial's _main:
+    //   stp x29, x30, [sp, #-0x10]!
+    //   mov x29, sp
+    let mut ok = true
+    if dis_out.find("stp\tx29, x30, [sp, #-0x10]!") < 0 {
+        println("FAIL: expected `stp x29, x30, [sp, #-0x10]!` in disasm")
+        ok = false
+    }
+    if dis_out.find("mov\tx29, sp") < 0 {
+        println("FAIL: expected `mov x29, sp` in disasm")
+        ok = false
+    }
+    if dis_out.find("ret") < 0 {
+        println("FAIL: expected `ret` in disasm")
+        ok = false
+    }
+
+    let lc = exec_capture("xcrun otool -l " + out_path + " 2>&1 | grep -E '(entryoff|size|filesize|section.*size)'")
+    println("=== LC_MAIN + __TEXT extents ===")
+    println(to_string(lc[0]))
+
+    if !ok { exit(2) }
+
+    let sz = exec_capture("wc -c < " + out_path + " | tr -d ' '")
+    println("F-P1-EXEC-TEXT PASS — __text disassembles from exec, LC_MAIN entryoff resolved")
+    println("  " + out_path + ": " + to_string(sz[0]).trim() + " bytes")
+    exit(0)
+}

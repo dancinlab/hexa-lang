@@ -1,0 +1,19 @@
+// F-P0-OBJEQ corpus / fib — recursion + arithmetic.
+//
+// Exercises: recursive BL to the same function (BRANCH26 relocation
+// with self-reference), ADD/SUB on register-allocated locals, the
+// full prologue/epilogue including STP/LDP of x29/x30 to set up a
+// recursion-safe call frame.
+//
+// fib(8) = 21 -> exits 21.
+
+fn fib(n) {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main() {
+    exit(fib(8))
+}

@@ -1,0 +1,210 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_spiking_test.hexa — flame spiking_lib selftest
+//
+// 4 pre-registered falsifiers (inbox/patches/flame-spiking-substrate-
+// primitives.md F-SPIKE-1..4):
+//   F-SPIKE-1  THRESHOLD-BOOLEAN     mask ∈ {0,1}; monotone in v; v=v_th → 1.0
+//   F-SPIKE-2  REFRACTORY-CLAMP      floor held; spiked→refrac; decrement by 1
+//   F-SPIKE-3  STDP-LOCALITY         diagonal 0; result clipped; no-spike→ΔW=0
+//   F-SPIKE-4  COMPOSE-DETERMINISM   3 primitives compose into a LIF micro-
+//                                    step; hand-verified; byte-identical 2×
+//
+// F-SPIKE-4's full byte-equal-vs-numpy check is anima-side post-port
+// (anima HEXAD/LEGO/lego_engine.py is the reference oracle); the hexa
+// side verifies composition correctness + determinism.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/spiking_lib"
+
+fn _s_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// ── F-SPIKE-1: THRESHOLD-BOOLEAN ────────────────────────────────────────
+// Returns 0 if all checks pass, else a nonzero failure code.
+fn check_threshold() -> int {
+    let v = t_zeros(5)
+    t_set(v, 0, 0.0 - 0.5); t_set(v, 1, 0.0); t_set(v, 2, 0.99)
+    t_set(v, 3, 1.0);       t_set(v, 4, 1.5)
+    let mask = flame_event_threshold(v, 1.0)
+    // expected: [0, 0, 0, 1, 1]  (v=v_th → 1.0, >= semantics)
+    let mut fail = 0
+    // all values strictly in {0.0, 1.0}
+    let mut i = 0
+    while i < 5 {
+        let m = t_get(mask, i)
+        if m != 0.0 {
+            if m != 1.0 { fail = 1 }
+        }
+        i = i + 1
+    }
+    // exact expected pattern
+    if t_get(mask, 0) != 0.0 { fail = 2 }
+    if t_get(mask, 1) != 0.0 { fail = 3 }
+    if t_get(mask, 2) != 0.0 { fail = 4 }
+    if t_get(mask, 3) != 1.0 { fail = 5 }   // v == v_th boundary fires
+    if t_get(mask, 4) != 1.0 { fail = 6 }
+    // monotone non-decreasing in v (v sorted ascending → mask non-decreasing)
+    let mut j = 1
+    while j < 5 {
+        if t_get(mask, j) < t_get(mask, j - 1) { fail = 7 }
+        j = j + 1
+    }
+    let _ = t_free(v); let _ = t_free(mask)
+    return fail
+}
+
+// ── F-SPIKE-2: REFRACTORY-CLAMP ─────────────────────────────────────────
+fn check_refractory() -> int {
+    let refr = t_zeros(4)
+    t_set(refr, 0, 2.0); t_set(refr, 1, 0.0); t_set(refr, 2, 0.0 - 1.0)
+    t_set(refr, 3, 1.0)
+    let spiked = t_zeros(4)
+    t_set(spiked, 0, 0.0); t_set(spiked, 1, 1.0); t_set(spiked, 2, 0.0)
+    t_set(spiked, 3, 0.0)
+    // refrac=2, floor=-1
+    let out = flame_refractory_step(refr, spiked, 2, 0 - 1)
+    // expected: [2-1=1, spiked→2, max(-1-1,-1)=-1, 1-1=0]
+    let mut fail = 0
+    if t_get(out, 0) != 1.0 { fail = 1 }              // decrement by exactly 1
+    if t_get(out, 1) != 2.0 { fail = 2 }              // spiked → refrac
+    if t_get(out, 2) != (0.0 - 1.0) { fail = 3 }      // floor clamp held
+    if t_get(out, 3) != 0.0 { fail = 4 }              // decrement by exactly 1
+    let _ = t_free(refr); let _ = t_free(spiked); let _ = t_free(out)
+    return fail
+}
+
+// ── F-SPIKE-3: STDP-LOCALITY ────────────────────────────────────────────
+fn check_stdp() -> int {
+    // N=3.  W = zeros(9).  tr_pre/tr_post/spike fixed.
+    let n = 3
+    let W = t_zeros(n * n)
+    let tr_pre = t_zeros(n)
+    t_set(tr_pre, 0, 0.5); t_set(tr_pre, 1, 0.3); t_set(tr_pre, 2, 0.0)
+    let tr_post = t_zeros(n)
+    t_set(tr_post, 0, 0.1); t_set(tr_post, 1, 0.0); t_set(tr_post, 2, 0.2)
+    let spike = t_zeros(n)
+    t_set(spike, 0, 1.0); t_set(spike, 1, 0.0); t_set(spike, 2, 1.0)
+    let A_plus = 0.012
+    let A_minus = 0.0126
+    let w_max = 0.5
+    let out = flame_stdp_pair(W, tr_pre, tr_post, spike, A_plus, A_minus, w_max)
+    let mut fail = 0
+    // diagonal must be 0 (W init 0, dW diag 0, clip keeps 0)
+    if t_get(out, 0) != 0.0 { fail = 1 }       // [0][0]
+    if t_get(out, 4) != 0.0 { fail = 2 }       // [1][1]
+    if t_get(out, 8) != 0.0 { fail = 3 }       // [2][2]
+    // hand-computed cells:
+    //   dW[0][1] = 0.012·1·0.3 − 0.0126·0.1·0 = 0.0036
+    let e01 = 0.012 * 1.0 * 0.3 - 0.0126 * 0.1 * 0.0
+    if _s_abs(t_get(out, 1) - e01) > 1e-12 { fail = 4 }
+    //   dW[0][2] = 0.012·1·0.0 − 0.0126·0.1·1 = −0.00126
+    let e02 = 0.012 * 1.0 * 0.0 - 0.0126 * 0.1 * 1.0
+    if _s_abs(t_get(out, 2) - e02) > 1e-12 { fail = 5 }
+    //   dW[2][0] = 0.012·1·0.5 − 0.0126·0.2·1 = 0.00348
+    let e20 = 0.012 * 1.0 * 0.5 - 0.0126 * 0.2 * 1.0
+    if _s_abs(t_get(out, 6) - e20) > 1e-12 { fail = 6 }
+    // all values within [−w_max, w_max]
+    let mut k = 0
+    while k < n * n {
+        let wv = t_get(out, k)
+        if wv > w_max { fail = 7 }
+        if wv < (0.0 - w_max) { fail = 8 }
+        k = k + 1
+    }
+    let _ = t_free(out)
+    // LOCALITY: spike all-zero ⇒ ΔW = 0 ⇒ W' == W (depends only on traces+spike)
+    let spike0 = t_zeros(n)
+    let out0 = flame_stdp_pair(W, tr_pre, tr_post, spike0, A_plus, A_minus, w_max)
+    let mut z = 0
+    while z < n * n {
+        if t_get(out0, z) != t_get(W, z) { fail = 9 }
+        z = z + 1
+    }
+    let _ = t_free(W); let _ = t_free(tr_pre); let _ = t_free(tr_post)
+    let _ = t_free(spike); let _ = t_free(spike0); let _ = t_free(out0)
+    return fail
+}
+
+// ── F-SPIKE-4: COMPOSE-DETERMINISM ──────────────────────────────────────
+// Compose the 3 primitives into one LIF micro-step on a fixed 4-unit
+// input; hand-verify the spike vector + refractory result; run twice and
+// confirm byte-identical (determinism).
+fn lif_microstep_spikesum(v_seed: float) -> float {
+    // v = [v_seed, 1.2, 0.3, 1.0]  — threshold v_th=1.0
+    let v = t_zeros(4)
+    t_set(v, 0, v_seed); t_set(v, 1, 1.2); t_set(v, 2, 0.3); t_set(v, 3, 1.0)
+    let spike = flame_event_threshold(v, 1.0)
+    // refractory: refr starts [0,0,0,0]; spiked units → refrac=2
+    let refr = t_zeros(4)
+    let refr2 = flame_refractory_step(refr, spike, 2, 0 - 1)
+    // sum spike + sum refr2 as a single deterministic scalar fingerprint
+    let s = t_sum(spike, 4) + t_sum(refr2, 4)
+    let _ = t_free(v); let _ = t_free(spike)
+    let _ = t_free(refr); let _ = t_free(refr2)
+    return s
+}
+
+fn check_compose() -> int {
+    let mut fail = 0
+    // v_seed=1.5 → v=[1.5,1.2,0.3,1.0]; spike=[1,1,0,1]; sum spike=3
+    //   refr2: spiked units→2, non-spiked→max(0-1,-1)=-1
+    //   refr2=[2,2,-1,2]; sum refr2 = 5;  total = 3 + 5 = 8.0
+    let a = lif_microstep_spikesum(1.5)
+    if _s_abs(a - 8.0) > 1e-12 { fail = 1 }
+    // determinism: same input twice → byte-identical
+    let b = lif_microstep_spikesum(1.5)
+    if a != b { fail = 2 }
+    // sub-threshold seed: v_seed=0.0 → spike=[0,1,0,1]; sum spike=2
+    //   refr2=[-1,2,-1,2]; sum refr2 = 2;  total = 2 + 2 = 4.0
+    let c = lif_microstep_spikesum(0.0)
+    if _s_abs(c - 4.0) > 1e-12 { fail = 3 }
+    return fail
+}
+
+// ── entrypoint ─────────────────────────────────────────────────────────
+println("=== flame spiking_lib selftest (F-SPIKE-1..4) ===")
+
+let mut pass = 0
+let total = 4
+
+let f1 = check_threshold()
+if f1 == 0 {
+    println("PASS  F-SPIKE-1  THRESHOLD-BOOLEAN     mask in {0,1}; v=v_th fires; monotone in v")
+    pass = pass + 1
+} else {
+    print("FAIL  F-SPIKE-1  THRESHOLD-BOOLEAN     code="); print(f1); println("")
+}
+
+let f2 = check_refractory()
+if f2 == 0 {
+    println("PASS  F-SPIKE-2  REFRACTORY-CLAMP      floor held; spiked->refrac; decrement by 1")
+    pass = pass + 1
+} else {
+    print("FAIL  F-SPIKE-2  REFRACTORY-CLAMP      code="); print(f2); println("")
+}
+
+let f3 = check_stdp()
+if f3 == 0 {
+    println("PASS  F-SPIKE-3  STDP-LOCALITY        diagonal 0; clipped; no-spike=>dW=0; hand-verified cells")
+    pass = pass + 1
+} else {
+    print("FAIL  F-SPIKE-3  STDP-LOCALITY        code="); print(f3); println("")
+}
+
+let f4 = check_compose()
+if f4 == 0 {
+    println("PASS  F-SPIKE-4  COMPOSE-DETERMINISM  3 primitives compose into LIF micro-step; hand-verified; byte-identical 2x")
+    pass = pass + 1
+} else {
+    print("FAIL  F-SPIKE-4  COMPOSE-DETERMINISM  code="); print(f4); println("")
+}
+
+print("=== flame spiking_lib selftest: ")
+print(pass)
+print(" / ")
+print(total)
+println(" PASS ===")

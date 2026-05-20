@@ -1,0 +1,27 @@
+// F-P0-OBJEQ-HEADER falsifier driver — cycle 1
+//
+// RFC 063 § P0 cycle 1 — header + load-command serialization.
+// Builds an empty `MachoArm64Obj` (no text, no symbols, no
+// relocations), calls `serialize()`, writes the 288-byte stream
+// to `/tmp/macho_p0_cycle1.ours.o`.
+//
+// The companion shell wrapper `run_header_falsifier.sh` compares
+// the structural shape of this object against `clang -c -arch
+// arm64 -x assembler /dev/null` via `otool -lhV`.
+
+import "../../emit/macho_arm64.hexa"
+
+fn main() {
+    let obj = MachoArm64Obj {
+        text:       [],
+        relocs:     [],
+        symbols:    [],
+        strtab:     [],
+        dwarf_line: [],
+    }
+    let bytes = serialize(obj)
+    let n = len(bytes)
+    println("macho_p0_cycle1: serialized " + to_string(n) + " bytes")
+    write_bytes("/tmp/macho_p0_cycle1.ours.o", bytes)
+    println("macho_p0_cycle1: wrote /tmp/macho_p0_cycle1.ours.o")
+}
