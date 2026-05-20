@@ -5643,6 +5643,7 @@ HexaVal hexa_sqrt(HexaVal v) {
     return hexa_float(sqrt(__hx_to_double(v)));
 }
 
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_pow(HexaVal base, HexaVal exp) {
     // Integer fast-path: int^int with non-negative exponent stays int
     if (HX_IS_INT(base) && HX_IS_INT(exp) && HX_INT(exp) >= 0) {
@@ -5652,6 +5653,15 @@ HexaVal hexa_pow(HexaVal base, HexaVal exp) {
     }
     return hexa_float(pow(__hx_to_double(base), __hx_to_double(exp)));
 }
+#else
+extern HexaVal rt_pow_int(HexaVal b, HexaVal e);
+HexaVal hexa_pow(HexaVal base, HexaVal exp) {
+    if (HX_IS_INT(base) && HX_IS_INT(exp) && HX_INT(exp) >= 0) {
+        return rt_pow_int(base, exp);
+    }
+    return hexa_float(pow(__hx_to_double(base), __hx_to_double(exp)));
+}
+#endif
 
 // Step 3 cycle 2 — hexa_floor/ceil/u_floor delegate to hexa-source.
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
