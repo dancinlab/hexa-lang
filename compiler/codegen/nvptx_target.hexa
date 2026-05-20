@@ -271,6 +271,9 @@ fn _nvptx_lookup_reg_for_local(kinds: [PReg], id: i64) -> string {
     let n_u32 = _nvptx_reg_u32(id)
     let n_u64 = _nvptx_reg_u64(id)
     let n_pred = _nvptx_reg_pred(id)
+    let n_f16 = _nvptx_reg_f16(id)
+    let n_bf16 = _nvptx_reg_bf16(id)
+    let n_f32 = _nvptx_reg_f32(id)
     let mut i = 0
     while i < len(kinds) {
         let n = kinds[i].name
@@ -278,9 +281,64 @@ fn _nvptx_lookup_reg_for_local(kinds: [PReg], id: i64) -> string {
         if n == n_u32 { return n_u32 }
         if n == n_u64 { return n_u64 }
         if n == n_pred { return n_pred }
+        if n == n_f16 { return n_f16 }
+        if n == n_bf16 { return n_bf16 }
+        if n == n_f32 { return n_f32 }
         i = i + 1
     }
     return n_f64
+}
+
+// _nvptx_lookup_kind_for_local — find the PReg whose name matches Local
+// `id` under any RKIND, return its kind. Default F64. RFC 068 P4
+// `F-RFC068-NUMERIC-EQ` load/store dispatch reads this to pick the
+// matching `ld.global.<ty>` / `st.global.<ty>` mnemonic.
+fn _nvptx_lookup_kind_for_local(kinds: [PReg], id: i64) -> string {
+    let n_f64 = _nvptx_reg_f64(id)
+    let n_u32 = _nvptx_reg_u32(id)
+    let n_u64 = _nvptx_reg_u64(id)
+    let n_pred = _nvptx_reg_pred(id)
+    let n_f16 = _nvptx_reg_f16(id)
+    let n_bf16 = _nvptx_reg_bf16(id)
+    let n_f32 = _nvptx_reg_f32(id)
+    let mut i = 0
+    while i < len(kinds) {
+        let r = kinds[i]
+        if r.name == n_f64 { return NVPTX_RKIND_F64 }
+        if r.name == n_u32 { return NVPTX_RKIND_U32 }
+        if r.name == n_u64 { return NVPTX_RKIND_U64 }
+        if r.name == n_pred { return NVPTX_RKIND_PRED }
+        if r.name == n_f16 { return NVPTX_RKIND_F16 }
+        if r.name == n_bf16 { return NVPTX_RKIND_BF16 }
+        if r.name == n_f32 { return NVPTX_RKIND_F32 }
+        i = i + 1
+    }
+    return NVPTX_RKIND_F64
+}
+
+// _nvptx_ld_mnem_for_kind — global load mnemonic per RKIND.
+// (RFC 068 P4 `F-RFC068-NUMERIC-EQ` codegen seam.)
+fn _nvptx_ld_mnem_for_kind(kind: string) -> string {
+    if kind == NVPTX_RKIND_F16 { return PTX_OP_LD_GLOBAL_F16 }
+    if kind == NVPTX_RKIND_BF16 { return PTX_OP_LD_GLOBAL_BF16 }
+    if kind == NVPTX_RKIND_F32 { return PTX_OP_LD_GLOBAL_F32 }
+    return PTX_OP_LD_GLOBAL_F64
+}
+
+// _nvptx_st_mnem_for_kind — global store mnemonic per RKIND.
+fn _nvptx_st_mnem_for_kind(kind: string) -> string {
+    if kind == NVPTX_RKIND_F16 { return PTX_OP_ST_GLOBAL_F16 }
+    if kind == NVPTX_RKIND_BF16 { return PTX_OP_ST_GLOBAL_BF16 }
+    if kind == NVPTX_RKIND_F32 { return PTX_OP_ST_GLOBAL_F32 }
+    return PTX_OP_ST_GLOBAL_F64
+}
+
+// _nvptx_kind_short_label — for instruction-comment readability.
+fn _nvptx_kind_short_label(kind: string) -> string {
+    if kind == NVPTX_RKIND_F16 { return "f16" }
+    if kind == NVPTX_RKIND_BF16 { return "bf16" }
+    if kind == NVPTX_RKIND_F32 { return "f32" }
+    return "f64"
 }
 
 // _nvptx_binop_mnemonic — map a MIR binop opcode to its PTX mnemonic.
@@ -628,12 +686,13 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
         }
         return out
     }
-    // 055-P3b STMT_LOAD — `ld.global.f64 %fd<dst>, [%rd<addr>];`. The
-    // 055-P3b first slice for memory ops keeps the value type FP64
-    // (§8 FP64-first scope) and the address state-space `.global` (the
-    // farr arg is device-resident). The classifier's Pass 2 has already
-    // ensured the address operand's source Local is in the `.u64` bank.
-    // Address = args[0] (a Local operand); dst = the loaded value.
+    // RFC 068 P4 LANDED — kind-aware global load/store. STMT_LOAD /
+    // STMT_STORE dispatch on the dst (LOAD) or source-value (STORE)
+    // Local's kind so f16 / bf16 / f32 / f64 emit the correct
+    // `ld.global.<ty>` / `st.global.<ty>` mnemonic. Default f64
+    // preserved for the 055-P0 / 055-P3b paths.
+    //
+    // STMT_LOAD — `ld.global.<ty> %r<dst>, [%rd<addr>];`.
     if s.kind == STMT_LOAD {
         if len(s.args) >= 1 {
             let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
@@ -641,12 +700,14 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
             let mut a = []
             a.push(_nvptx_op(dst_reg))
             a.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
-            out.push(_nvptx_instr(PTX_OP_LD_GLOBAL_F64, a, "load f64"))
+            let dst_kind = _nvptx_lookup_kind_for_local(kinds, s.dst.id)
+            let mnem = _nvptx_ld_mnem_for_kind(dst_kind)
+            out.push(_nvptx_instr(mnem, a, "load " + _nvptx_kind_short_label(dst_kind)))
         }
         return out
     }
-    // 055-P3b STMT_STORE — `st.global.f64 [%rd<addr>], %fd<value>;`.
-    // Symmetric to STMT_LOAD. Address = args[0]; value = args[1].
+    // STMT_STORE — `st.global.<ty> [%rd<addr>], %r<value>;`. Source-
+    // value precision dispatched on `args[1].local_id`'s classified kind.
     if s.kind == STMT_STORE {
         if len(s.args) >= 2 {
             let addr_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
@@ -654,7 +715,12 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
             let mut a = []
             a.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
             a.push(_nvptx_op(val_reg))
-            out.push(_nvptx_instr(PTX_OP_ST_GLOBAL_F64, a, "store f64"))
+            let mut val_kind = NVPTX_RKIND_F64
+            if s.args[1].kind == "local" {
+                val_kind = _nvptx_lookup_kind_for_local(kinds, s.args[1].local_id)
+            }
+            let mnem = _nvptx_st_mnem_for_kind(val_kind)
+            out.push(_nvptx_instr(mnem, a, "store " + _nvptx_kind_short_label(val_kind)))
         }
         return out
     }
@@ -1099,7 +1165,19 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                     k = k + 1
                 }
                 if !dup {
-                    regs.push(PReg { name: _nvptx_reg_f64(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    // RFC 068 P4 LANDED — honor the dst Local's precision
+                    // tag (set by HIR→MIR threading per PR #170 P2 or by
+                    // a synthetic test fixture). When precision == ".f16"
+                    // / ".bf16" / ".f32" route to the matching reg bank;
+                    // empty default stays f64 (055-P3b backward-compat).
+                    let load_kind = _nvptx_classify_local_for_stmt(s)
+                    regs.push(PReg {
+                        name: _nvptx_reg_name_for(load_kind, s.dst.id),
+                        kind: load_kind,
+                        frag_role: "",
+                        frag_dtype: "",
+                        frag_layout: ""
+                    })
                     seen_ids.push(s.dst.id)
                 }
             }
