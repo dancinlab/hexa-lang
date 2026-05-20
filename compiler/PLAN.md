@@ -5197,3 +5197,89 @@ PDK `sky130_fd_sc_hd__mux2_1` cell footprint (Apache-2 / CC-BY-4.0).
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md
 (Phase 2 LANDED 2026-05-20 · Phase 3a LANDED 2026-05-20 · Phase 3c
 LANDED 2026-05-20 · Phase 3d clocked-dynamic-LHS NOT YET LANDED).
+
+## 진행 로그 — RFC 073 Phase 3d RE-LAND (2026-05-20)
+
+**branch** : `rfc-073-phase-3d-relanded` (rebase of closed PR #229 `7f13cedb`
+on current `main` `8dd2ae7d`)
+
+**Why a re-land was needed.** PR #229 closed unmerged on 2026-05-20.
+Parallel-session commits — `7575a79d` (#4h-b multi-LHS body dyn-idx LHS
++ T52) and `7f97aaab` (#4h-a multi-LHS body static-idx LHS + T51) —
+landed an equivalent inline implementation of Phase 3d's **PIECE 2**
+(multi-LHS no-else cond-mux with dyn-idx LHS) using `ri_start = -1`
+skip-marker style. PR #229's deferred-flag (`dyn_emit` /
+`dyn_idx_toks` / `dyn_bound2`) style would have re-introduced
+duplicate-but-styled-different code if cherry-picked. Resolution:
+take main's PIECE 2 verbatim; carry only **PIECE 1** (the bare
+clocked dyn-LHS demux at `_rv_parse_always` top-level fall-through)
+plus the falsifier triplet T67/T68/T69.
+
+**What this commit lands.** `stdlib/kernels/logic_synth/read_verilog.hexa`:
+(1) bare clocked dyn-LHS demux block at `_rv_parse_always` (post-RHS
+elaboration, pre-legacy emit). Tracks `had_brack` / `idx_folded` /
+`idx_toks_saved` through the optional LHS bracket parser. When the
+index didn't const-fold AND `_rv_array_bound(m, q_base) > 0`, emits a
+per-element `$eq + $mux + $dff` chain × P and `continue`s. Falls
+through to the legacy single-cell emit on unknown bound. (2) T67
+(P=3 scalar, no outer if), T68 (P=4 begin/end wrap), T69 (multi-LHS
+with `if (en)` + 2 stmts × P=3 → 6/6/6/6) — falsifier-anchored
+counts per IEEE 1364-2005 §9.5 + §10.4.2.
+
+**selftest.** `hexa-parse stdlib/kernels/logic_synth/read_verilog.hexa`
+runs the embedded `main()` → **72/72 PASS** on current main
+(was 69/69 PASS). No regression in T1..T66.
+
+**§5 oracle re-measure (g3 honest).**
+
+```
+[gate] router_d4 area=0.0 µm² oracle=61763 µm²   Δ=100.0%  FAIL (±5%)
+[gate] router_d6 area=0.0 µm² oracle=93608.5 µm² Δ=100.0%  FAIL (±5%)
+```
+
+Identical to pre-Phase-3d baseline. Phase 3d alone does NOT close
+§5. The §5 router_d{4,6} RTL never reaches either Phase 3d path
+because the critical writes are buried two structural levels
+deeper than what Phase 3d covers — inside an outer `if (rst) ...
+else <for>; <for>; if (any_grant) ...` whose with-else handler
+bails on mismatched arm shapes. **§5 verdict — OPEN.**
+
+**The NEW (post-Phase-3d) §5 blocker layer (Phase 3e candidates).**
+
+1. **F-RFC-RV-CLOCKED-FOR-INDEXED-LHS** — `for (i=0; i<P; i=i+1)
+   name[i] <= rhs(i);` inside posedge-always. `_rv_emit_for_if_stmts`
+   rejects indexed-LHS statements. Fix: extend per-stmt classifier to
+   detect `name [ … ]` LHS, unroll the loop, emit one
+   `$dff(Q=name[k])` per iteration with `k = init + step*i`.
+
+2. **F-RFC-RV-WITH-ELSE-NONMATCHING-BODIES** — `if (rst) <reset shape>
+   else <run shape>` with structurally-different arms. Current handler
+   matches LHS sequences positionally; on mismatch drops BOTH arms.
+   Fix: decompose into single-arm cond-muxes — `if (cond) <reset>` +
+   `if (!cond) <run>` — and recurse via a shared single-arm helper.
+
+3. **F-RFC-RV-NESTED-IF-INSIDE-ELSE-BODY** — `if (rst) ... else begin
+   <for>; <for>; if (any_grant) begin <dyn-LHS> end end`. Phase-3d-T69-
+   shaped but must be REACHED via #2 first.
+
+4. **F-RFC-RV-2D-DYN-LHS** — `fifo_mem[pp][k] <= data;`. NOT on §5 area
+   critical path (fifo_mem is internal). Defer.
+
+§5 closure path = land #1 + #2 + #3 together (shared single-arm
+cond-mux helper). Est. ~150 LoC in `_rv_parse_always` +
+`_rv_emit_for_if_stmts`.
+
+**LoC delta:**
+
+```
+ stdlib/kernels/logic_synth/read_verilog.hexa            | +131 -1
+ inbox/notes/2026-05-20-rfc006-§5-phase-3d-relanded.md   | + (new)
+ compiler/PLAN.md                                        | + (this entry)
+```
+
+@cite IEEE 1364-2005 §9.5 sequential block + §10.4.2 procedural
+assign + Yosys `passes/proc/proc_mux.cc` demux.
+
+cross-link: inbox/notes/2026-05-20-rfc006-§5-phase-3d-relanded.md
+(this branch's status note · contains the full RTL drop-site map
+and Phase 3e opener plan).
