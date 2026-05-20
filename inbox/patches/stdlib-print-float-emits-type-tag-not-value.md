@@ -13,7 +13,18 @@
   2026-05-21). Per anima downstream-consumer invariant — filing patch
   rather than editing hexa-lang.
 
-**Status**: not_started (filed 2026-05-21)
+**Status**: `CLOSED 2026-05-21 — root cause was hxlcl_vsnprintf's
+%f/%g/%e branch (libc-unhook cycle 52 placeholder). Fixed in
+self/runtime.c cycle 56: real double-to-string formatter (default 6
+sig digits, %g chooses scientific vs decimal via exponent, %g strips
+trailing zeros, nan/inf handled, precision/width pad supported,
+~352-byte fbuf for worst-case 1e308 %f). Mac smoke verified: a .hexa
+source printing 'lambda_psi=0.30' now emits 'lambda_psi=0.3' (was
+'lambda_psi=(float)'). Output byte-compared against libc snprintf
+across 15 representative cases (0, sub-normal, normal, large, inf,
+nan, sign): all match. Carve-out: 1e100 %f truncates to 18 sig
+digits (libc has full IEEE-754 precision) — adequate for training
+observability, not a JSON round-trip codec.`
 
 ## Reproduction
 
