@@ -654,14 +654,17 @@ pub let NVPTX_RKIND_U32: string = "gpr32"   // %r<id>    .reg .u32
 pub let NVPTX_RKIND_U64: string = "gpr64"   // %rd<id>   .reg .u64
 pub let NVPTX_RKIND_PRED: string = "pred"   // %p<id>    .reg .pred
 
-// RFC 067 P1 LANDED — Fragment-as-tile-vector. `NVPTX_RKIND_FRAG` now
-// emits 8 PTX registers (`.reg .b32 %fra<id>_e0` .. `_e7`) via the
-// `_emit_ptx_func` reg-decl loop, matching the NVIDIA canonical sm_80
-// m16n16k16 layout (256 elements × 32-thread warp = 8 32-bit-packed
-// regs per thread). Width controlled by `_nvptx_frag_width`. Per-
-// fragment role tags (A/B vs C/D, dtype f16 vs f32 vs bf16) are P3.
-// See `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md` §3 P1
-// and §4 F1 (`F-RFC067-FRAG-WIDTH`).
+// RFC 067 P1 + P2 LANDED — Fragment-as-tile-vector + `.shared` staging.
+// P1 (`F-RFC067-FRAG-WIDTH`): `NVPTX_RKIND_FRAG` emits 8 PTX registers
+// (`.reg .b32 %fra<id>_e0` .. `_e7`) per the canonical sm_80 m16n16k16
+// layout (256 elements ÷ 32-thread warp = 8 32-bit-packed regs/thread).
+// P2 (`F-RFC067-SHARED-DECL`): `_emit_ptx_func` emits one
+// `.shared .align 16 .b8 _hexa_wmma_stage_<fn>[2048];` declaration in
+// the function header when any callee_saved entry has kind=FRAG.
+// 2048 B = one 16×16 f16 tile (512 B) × 4 staging slots (A, B,
+// ping-pong double-buffer). Per-fragment role + dtype tags (A/B vs
+// C/D, f16 vs f32 vs bf16) are P3. See
+// `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md` §3 P1/P2.
 //
 // RFC 055 §12 P4+ — Tensor Core MMA (Warp Matrix Multiply Accumulate)
 // SCAFFOLD ONLY. The "frag" kind marks a Local whose value is a WMMA
@@ -1229,6 +1232,30 @@ fn _emit_ptx_func(f: LFunc) -> string {
         parts.push(PTX_DIRECTIVE_FUNC + " " + f.name + "\n")
     }
     parts.push("{\n")
+    // RFC 067 P2 LANDED — `.shared` WMMA staging-area declaration.
+    // When any callee_saved entry has kind=FRAG (i.e., this function
+    // uses WMMA fragments), emit one `.shared .align 16 .b8 …[2048];`
+    // declaration in the function header. 2048 bytes = one 16×16 f16
+    // tile (16×16×2 = 512 B) × 4 staging slots (A, B, ping-pong double-
+    // buffer). The slot name carries the function name as a suffix so
+    // multiple WMMA kernels in the same PTX module don't collide.
+    // Per RFC 067 §3 P2 / §4 F2 (`F-RFC067-SHARED-DECL`).
+    let mut has_frag = false
+    let mut fi_scan = 0
+    while fi_scan < len(f.callee_saved) {
+        if f.callee_saved[fi_scan].kind == NVPTX_RKIND_FRAG { has_frag = true }
+        fi_scan = fi_scan + 1
+    }
+    if has_frag {
+        // Slot-name uses the LFunc.name (kernel-prefix stripped if present)
+        // to give per-kernel uniqueness without a module-global counter.
+        let mut slot_base = f.name
+        let kp_len2 = len(NVPTX_KERNEL_PREFIX)
+        if len(slot_base) > kp_len2 && slot_base.substring(0, kp_len2) == NVPTX_KERNEL_PREFIX {
+            slot_base = slot_base.substring(kp_len2, len(slot_base))
+        }
+        parts.push("    .shared .align 16 .b8 _hexa_wmma_stage_" + slot_base + "[2048];\n")
+    }
     // `.reg .<ty>` declarations, one per Local — PTX requires every
     // virtual register be declared before use. The `<ty>` comes from
     // the PReg.kind set by 055-P3b classification (`.f64` is the default

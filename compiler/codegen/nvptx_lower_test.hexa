@@ -778,11 +778,12 @@ fn main() {
     let ok_fctN  = _test_unroll_factor_n()
     let ok_pp    = _test_precision_propagate()
     let ok_fw    = _test_frag_width()
+    let ok_sd    = _test_shared_decl()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw {
-        println("PASS: RFC 055 + RFC 067 P1 + RFC 068 P1 + RFC 069 P1 — 16/16 cases (incl. F-RFC067-FRAG-WIDTH)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd {
+        println("PASS: RFC 055 + RFC 067 P1/P2 + RFC 068 P1 + RFC 069 P1 — 17/17 cases (incl. F-RFC067-SHARED-DECL)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -801,9 +802,10 @@ fn main() {
         if !ok_fctN { println("      RFC 069 P1 F-RFC069-FACTOR-N FAILED") }
         if !ok_pp   { println("      RFC 068 P1 F-RFC068-PRECISION-PROPAGATE FAILED") }
         if !ok_fw   { println("      RFC 067 P1 F-RFC067-FRAG-WIDTH FAILED") }
+        if !ok_sd   { println("      RFC 067 P2 F-RFC067-SHARED-DECL FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -1517,6 +1519,55 @@ fn _test_frag_width() -> bool {
         ok = false
     } else {
         println("  ok: FRAG dst routed to vector emit (no scalar .reg fallback)")
+    }
+    return ok
+}
+
+// ── Case 17 — RFC 067 P2 `F-RFC067-SHARED-DECL` ───────────────────────
+//
+// Verifies that an MFunc containing a WMMA fragment (a callee_saved
+// entry with kind=FRAG, produced when STMT_CALL gpu_wmma_load_a/_b/_mma
+// runs through the classifier) emits a `.shared .align 16 .b8` staging
+// declaration in the PTX function header. The slot-name carries the
+// kernel name so multiple WMMA kernels in one module don't collide.
+//
+// Honest scope: P2 lands the staging-area decl. P3 will introduce
+// per-fragment role + dtype tags so the staging-slot SIZE adapts to
+// the fragment family (today: hard-coded 2048 B for the canonical
+// f16×f16→f32 family).
+
+fn _test_shared_decl() -> bool {
+    let mut ok = true
+    let mod_sd = _build_case_frag_width()      // re-uses the P1 fixture
+    let ptx = codegen_emit_ptx_sm80(mod_sd)
+
+    println("")
+    println("── emitted PTX (RFC 067 P2 .shared staging, sm_80) ──")
+    println(ptx)
+
+    // The MFunc is named "frag_width_smoke" (from _build_case_frag_width).
+    // The .shared decl uses the kernel basename (NVPTX_KERNEL_PREFIX
+    // stripped if present; for non-kernel device fns the name is used
+    // verbatim).
+    ok = _check(ok, ptx, ".shared .align 16 .b8 _hexa_wmma_stage_frag_width_smoke[2048]",
+        "`.shared` staging decl emitted with stable per-fn name")
+    // Sanity: only ONE staging decl in this single-fn module.
+    let n_shared = _count_substr(ptx, ".shared .align 16 .b8 _hexa_wmma_stage_")
+    if n_shared != 1 {
+        println("  FAIL: expected 1 staging decl, got " + to_string(n_shared))
+        ok = false
+    } else {
+        println("  ok: single staging decl per WMMA-containing kernel")
+    }
+    // Negative guard: a non-WMMA MFunc must NOT emit a staging decl
+    // (re-use the unroll fixture from PR #117 / RFC 069 P1 — no FRAG).
+    let mod_no_wmma = _wrap_single_mfn(_build_case_unroll_loop())
+    let ptx_no_wmma = codegen_emit_ptx_sm80(mod_no_wmma)
+    if _contains(ptx_no_wmma, ".shared .align 16 .b8 _hexa_wmma_stage_") {
+        println("  FAIL: non-WMMA kernel emitted spurious staging decl")
+        ok = false
+    } else {
+        println("  ok: non-WMMA kernel emits zero staging decls (no false-positive)")
     }
     return ok
 }
