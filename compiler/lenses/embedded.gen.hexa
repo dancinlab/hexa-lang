@@ -162,7 +162,36 @@ pub let LENS_NODES: [LensNode] = [
 // strict-lint stage 4 (AGENTS.tape @D g6 citation-enforced).
 
 pub fn lens_apply_empty_space_unmapped_axis(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — atlas P kind grade-distribution audit. With enrich_node
+    // populating grade.value (parse_grade from raw marker `[N]` / `[N*]`),
+    // P nodes with grade=-1 (no marker) represent ungraded entries that
+    // block grade-aware coverage analysis. Flag the total as one
+    // summary Candidate when significant.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut graded = 0
+    let mut hi_grade = 0
+    let mut i = 0
+    while i < n {
+        let g = view.p_nodes[i].grade.value
+        if g >= 0 { graded = graded + 1 }
+        if g >= 10 { hi_grade = hi_grade + 1 }
+        i = i + 1
+    }
+    let ungraded = n - graded
+    if ungraded == 0 && hi_grade == n {
+        return empty_candidate_list()  // perfect coverage, no finding
+    }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "empty_space.unmapped_axis.grade_distribution",
+        family: "empty_space",
+        proposed: "atlas P kind grade audit: " + to_string(graded) + "/" + to_string(n) + " graded (>=0), " + to_string(hi_grade) + " at grade>=10 (verified). " + to_string(ungraded) + " ungraded entries block grade-axis coverage analysis.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_empty_space_degree_hole(view: AtlasView) -> array {
     return empty_candidate_list()
