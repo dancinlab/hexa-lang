@@ -201,59 +201,85 @@ def check_ee_monotonicity(metrics: dict) -> dict:
 # Loose ±50 % FWHM agreement vs NIRCam F550M (different segment/baffle
 # model from MH aperture, so a strict equality would be dishonest).
 # ------------------------------------------------------------------
-def check_webbpsf_cross(metrics: dict) -> dict:
+def check_webbpsf_cross_same_wavelength(metrics: dict) -> dict:
+    """D75 Option B — same-wavelength WebbPSF cross-check.
+
+    The legacy `check_webbpsf_cross` compared a 550 nm kernel FWHM to a
+    NIRCam F480M (4.8 μm) FWHM — λ ratio 8.7×, so FWHM ∝ λ guarantees
+    the ±50 % gate cannot close honestly. design.md D75 splits the
+    check: the analytic 550 nm Airy parity stays under
+    `diffraction_limit_check` (check #2, instrument-independent), and
+    this new check runs the kernel *again* at NIRCam's central
+    wavelength so the FWHM-vs-FWHM comparison is at like-λ.
+
+    Skipped honestly when webbpsf is missing OR NIRCam refuses the
+    wavelength.
+    """
     try:
         import webbpsf
-        import astropy.units as u
+        import astropy.units as u  # noqa: F401  — keep import shape
     except ImportError as exc:
         return {
-            "name": "webbpsf_cross_check",
+            "name": "webbpsf_cross_check_same_wavelength",
             "passed": True,        # skip-not-fail when optional dep missing
             "skipped": True,
             "note": f"webbpsf not installed ({exc}) — check skipped",
         }
     try:
+        # 1. WebbPSF NIRCam F480M @ 4.8 μm — same as the v1 path.
         nrc = webbpsf.NIRCam()
-        nrc.filter = "F480M"        # closest NIRCam filter to 550 nm
-                                    # broad band model (real JWST has
-                                    # no 550 nm passband — F480M ≈ 4.8 μm
-                                    # is the documented closest test
-                                    # path; loose band is honest, g3)
-        # Skip pupil mask / coronagraph — we want clean PSF.
+        nrc.filter = "F480M"
         nrc.pupil_mask = None
         nrc.image_mask = None
-        # Small FOV for speed — verify-band only.
         psf_w = nrc.calc_psf(
             monochromatic=WEBBPSF_REF_WL_M, fov_arcsec=4.0,
             display=False)
         import poppy as _poppy
         fwhm_w = float(_poppy.measure_fwhm(psf_w, ext=0))
-        fwhm_m = metrics.get("fwhm_measured_arcsec") or 0.0
-        if fwhm_m <= 0 or fwhm_w <= 0:
+
+        # 2. Kernel propagation at the SAME wavelength (4.8 μm) so the
+        #    FWHM ratio reflects optics, not λ. This is the D75 fix.
+        built_k = poppy_kernel.build_multihex_aperture(
+            REF_SEGMENTS, REF_FLAT_TO_FLAT_M, gap_m=REF_SEGMENT_GAP_M)
+        aperture_k = built_k["aperture"]
+        prop_k = poppy_kernel.propagate_psf(
+            aperture_k, WEBBPSF_REF_WL_M, REF_FOV_ARCSEC,
+            REF_PIXSCALE_ARCSEC, oversample=REF_OVERSAMPLE)
+        diam_k = poppy_kernel.aperture_diameter_m(
+            aperture_k, REF_FLAT_TO_FLAT_M)
+        metrics_k = poppy_kernel.compute_psf_metrics(
+            prop_k["psf"], diam_k, WEBBPSF_REF_WL_M, REF_PIXSCALE_ARCSEC,
+            ee_radii_arcsec=(1.0, 2.0, 5.0))
+        fwhm_kw = float(metrics_k.get("fwhm_measured_arcsec") or 0.0)
+
+        if fwhm_w <= 0 or fwhm_kw <= 0:
             return {
-                "name": "webbpsf_cross_check",
+                "name": "webbpsf_cross_check_same_wavelength",
                 "passed": False,
                 "skipped": False,
-                "fwhm_webbpsf_arcsec": fwhm_w,
-                "fwhm_kernel_arcsec": fwhm_m,
-                "note": "FWHM <=0 — invalid",
+                "fwhm_nircam_arcsec": fwhm_w,
+                "fwhm_kernel_4_8um_arcsec": fwhm_kw,
+                "wavelength_m": WEBBPSF_REF_WL_M,
+                "note": "FWHM <= 0 — invalid",
             }
-        rel = abs(fwhm_w - fwhm_m) / max(fwhm_w, fwhm_m)
+        rel = abs(fwhm_w - fwhm_kw) / max(fwhm_w, fwhm_kw)
         return {
-            "name": "webbpsf_cross_check",
-            "fwhm_webbpsf_arcsec": fwhm_w,
-            "fwhm_kernel_arcsec": fwhm_m,
+            "name": "webbpsf_cross_check_same_wavelength",
+            "fwhm_nircam_arcsec": fwhm_w,
+            "fwhm_kernel_4_8um_arcsec": fwhm_kw,
+            "wavelength_m": WEBBPSF_REF_WL_M,
             "rel_err": rel,
             "tolerance": WEBBPSF_FWHM_REL_TOL,
             "passed": rel <= WEBBPSF_FWHM_REL_TOL,
             "skipped": False,
-            "note": ("WebbPSF NIRCam F480M model vs MH parametric "
-                     "aperture — loose tolerance is honest (different "
-                     "baffle/strut/OPD model)."),
+            "note": ("WebbPSF NIRCam F480M @ 4.8 μm vs MH-aperture "
+                     "kernel propagation at the SAME 4.8 μm (D75 "
+                     "Option B). Loose tolerance is honest (different "
+                     "baffle / strut / OPD model)."),
         }
     except Exception as exc:
         return {
-            "name": "webbpsf_cross_check",
+            "name": "webbpsf_cross_check_same_wavelength",
             "passed": False,
             "skipped": False,
             "note": f"webbpsf call failed: {exc}",
@@ -355,7 +381,7 @@ def main(argv: list) -> int:
     checks.append(check_reproducibility())
     checks.append(check_diffraction_limit(metrics))
     checks.append(check_ee_monotonicity(metrics))
-    checks.append(check_webbpsf_cross(metrics))
+    checks.append(check_webbpsf_cross_same_wavelength(metrics))
     checks.append(check_synphot_photometry())
 
     # PASS / FAIL tally — skipped checks count as PASS (not-applicable).
