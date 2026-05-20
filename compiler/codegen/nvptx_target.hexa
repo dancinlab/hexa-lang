@@ -654,11 +654,14 @@ pub let NVPTX_RKIND_U32: string = "gpr32"   // %r<id>    .reg .u32
 pub let NVPTX_RKIND_U64: string = "gpr64"   // %rd<id>   .reg .u64
 pub let NVPTX_RKIND_PRED: string = "pred"   // %p<id>    .reg .pred
 
-// RFC 067 marker — Real WMMA emit. `NVPTX_RKIND_FRAG` below is the
-// scalar-placeholder kind; RFC 067 P1 (`F-RFC067-FRAG-WIDTH`) extends
-// it to a vector of N PTX regs (8× `.f16x2` per A/B-frag, 8× `.f32`
-// per C/D-frag — NVIDIA canonical sm_80 m16n16k16 layout). See
-// `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md` §3 P1.
+// RFC 067 P1 LANDED — Fragment-as-tile-vector. `NVPTX_RKIND_FRAG` now
+// emits 8 PTX registers (`.reg .b32 %fra<id>_e0` .. `_e7`) via the
+// `_emit_ptx_func` reg-decl loop, matching the NVIDIA canonical sm_80
+// m16n16k16 layout (256 elements × 32-thread warp = 8 32-bit-packed
+// regs per thread). Width controlled by `_nvptx_frag_width`. Per-
+// fragment role tags (A/B vs C/D, dtype f16 vs f32 vs bf16) are P3.
+// See `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md` §3 P1
+// and §4 F1 (`F-RFC067-FRAG-WIDTH`).
 //
 // RFC 055 §12 P4+ — Tensor Core MMA (Warp Matrix Multiply Accumulate)
 // SCAFFOLD ONLY. The "frag" kind marks a Local whose value is a WMMA
@@ -684,10 +687,32 @@ pub let NVPTX_RKIND_F16: string = "fpr16"     // %fh<id>   .reg .f16
 pub let NVPTX_RKIND_BF16: string = "fpr16bf"  // %fb<id>   .reg .bf16
 pub let NVPTX_RKIND_F32: string = "fpr32"     // %fs<id>   .reg .f32
 
+// RFC 067 P1 LANDED — Fragment-as-tile-vector. WMMA fragments distribute
+// 256 elements across a 32-thread warp as 8 32-bit-packed values per
+// thread (m16n16k16 canonical layout). Both f16 A/B fragments (8×
+// .f16x2 i.e. 16-bit pairs packed into .b32) and f32 C/D fragments (8×
+// .f32) carry the same fragment-width of 8 PTX regs per thread.
+// SCAFFOLD-PHASE: the width is hard-coded for the f16×f16→f32 family;
+// P3 introduces per-fragment dtype tags + role (A/B/C/D) so the width
+// can vary. See `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md`
+// §3 P1 / §4 F1 (`F-RFC067-FRAG-WIDTH`).
+pub let _nvptx_frag_width: i64 = 8
+
+// _nvptx_reg_f16x2 — PTX virtual register name for one element of an
+// f16-packed WMMA fragment. The `_e<n>` suffix distinguishes the
+// fragment elements (e.g., `%fra3_e0` .. `%fra3_e7` for Local id=3).
+fn _nvptx_reg_frag(id: i64) -> string {
+    return "%fra" + to_string(id)
+}
+
 // _nvptx_reg_name_for — the PTX virtual-register name for (kind, id).
 // Dispatches to the 055-P0/P1 helpers (`_nvptx_reg_{f64,u32,u64,pred}`)
 // plus the §12 P4+ mixed-precision SCAFFOLD helpers
-// (`_nvptx_reg_{f16,bf16,f32}`).
+// (`_nvptx_reg_{f16,bf16,f32}`) and the §12 P4+ WMMA fragment helper
+// (`_nvptx_reg_frag` — base name only; the `_emit_ptx_func` decl loop
+// appends `_e<i>` per fragment element). Per RFC 067 P1
+// (`F-RFC067-FRAG-WIDTH`), a FRAG kind reg is a vector of
+// `_nvptx_frag_width` PTX regs, not a single scalar.
 fn _nvptx_reg_name_for(kind: string, id: i64) -> string {
     if kind == NVPTX_RKIND_U32 { return _nvptx_reg_u32(id) }
     if kind == NVPTX_RKIND_U64 { return _nvptx_reg_u64(id) }
@@ -696,6 +721,9 @@ fn _nvptx_reg_name_for(kind: string, id: i64) -> string {
     if kind == NVPTX_RKIND_F16 { return _nvptx_reg_f16(id) }
     if kind == NVPTX_RKIND_BF16 { return _nvptx_reg_bf16(id) }
     if kind == NVPTX_RKIND_F32 { return _nvptx_reg_f32(id) }
+    // RFC 067 P1 — WMMA fragment base name. Elements are
+    // `<base>_e<i>` for i in 0.._nvptx_frag_width.
+    if kind == NVPTX_RKIND_FRAG { return _nvptx_reg_frag(id) }
     return _nvptx_reg_f64(id)   // F64 default
 }
 
@@ -781,6 +809,18 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
         if s.op == "gpu_grid_dim_z" { return NVPTX_RKIND_U32 }
         // RFC 055 §12 P4+ — gpu_warp_shuffle returns a 32-bit register.
         if s.op == "gpu_warp_shuffle" { return NVPTX_RKIND_U32 }
+        // RFC 067 P1 — WMMA fragment-producing intrinsics. `gpu_wmma_load_a`,
+        // `gpu_wmma_load_b`, and `gpu_wmma_mma` all RETURN a WMMA fragment
+        // (16×16 tile distributed across the warp); the dst Local for
+        // each is classified as FRAG so the reg-decl loop emits the
+        // 8-element `.reg .b32 %fra<id>_e<n>` vector form. `gpu_wmma_store_c`
+        // is store-only (void dst) so it doesn't appear in this classifier
+        // path. Body lowering for these calls (the actual `wmma.load.*`
+        // PTX instructions) lands in a follow-on P-phase per RFC 067 §3 —
+        // P1 only wires the reg-bank side.
+        if s.op == "gpu_wmma_load_a" { return NVPTX_RKIND_FRAG }
+        if s.op == "gpu_wmma_load_b" { return NVPTX_RKIND_FRAG }
+        if s.op == "gpu_wmma_mma"    { return NVPTX_RKIND_FRAG }
         return NVPTX_RKIND_F64
     }
     // STMT_ASSIGN default + everything else default — FP64. A real type
@@ -1197,7 +1237,24 @@ fn _emit_ptx_func(f: LFunc) -> string {
     let mut ri = 0
     while ri < len(f.callee_saved) {
         let r = f.callee_saved[ri]
-        if r.kind != "param" {
+        if r.kind == NVPTX_RKIND_FRAG {
+            // RFC 067 P1 — Fragment-as-tile-vector. Each WMMA fragment
+            // distributes 256 elements over a 32-thread warp as 8 32-bit-
+            // packed values per thread (canonical sm_80 m16n16k16 layout
+            // for f16×f16→f32). We emit `.reg .b32` storage with an
+            // `_e<i>` suffix per element so each fragment's elements have
+            // unique PTX register names. P3 introduces per-fragment role
+            // tags so f16 A/B fragments emit `.b32` (packed f16x2) and
+            // f32 C/D fragments emit `.f32` directly — for now everything
+            // uses `.b32` as the storage container (raw 32-bit bits, with
+            // packing semantics implied by the wmma instruction's dtype
+            // qualifier rather than the .reg declaration).
+            let mut fei = 0
+            while fei < _nvptx_frag_width {
+                parts.push("    .reg .b32 " + r.name + "_e" + to_string(fei) + ";\n")
+                fei = fei + 1
+            }
+        } else if r.kind != "param" {
             parts.push("    .reg " + _nvptx_kind_to_ptx_ty(r.kind) + " " + r.name + ";\n")
         }
         ri = ri + 1
