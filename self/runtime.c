@@ -9410,7 +9410,8 @@ HexaVal hexa_clamp(HexaVal xv, HexaVal lov, HexaVal hiv) {
 #endif
 
 // one_hot(idx, n): n-length binary vector, 1.0 at idx, 0.0 elsewhere.
-// Matches interpreter hexa_full.hexa:10512.
+// Matches interpreter hexa_full.hexa:10512. Step-3 cycle 12 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_one_hot(HexaVal idxv, HexaVal nv) {
     int64_t idx = HX_IS_INT(idxv) ? HX_INT(idxv) : (int64_t)__hx_to_double(idxv);
     int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
@@ -9420,6 +9421,14 @@ HexaVal hexa_one_hot(HexaVal idxv, HexaVal nv) {
     }
     return out;
 }
+#else
+extern HexaVal rt_one_hot(HexaVal idx, HexaVal n);
+HexaVal hexa_one_hot(HexaVal idxv, HexaVal nv) {
+    int64_t idx = HX_IS_INT(idxv) ? HX_INT(idxv) : (int64_t)__hx_to_double(idxv);
+    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
+    return rt_one_hot(hexa_int(idx), hexa_int(n));
+}
+#endif
 
 // rms_norm(x, gamma, eps): gamma[i] * x[i] / sqrt(mean(x^2) + eps).
 // gamma may be array (per-element scale) or scalar (uniform scale).

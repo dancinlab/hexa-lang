@@ -104,6 +104,20 @@ pub fn rt_max_float(a: float, b: float) -> float {
     return b
 }
 
+// Step 3 cycle 12 — one-hot vector. n-length [0.0, ...] with 1.0 at idx.
+// Matches interpreter hexa_full.hexa:10512 and C body in self/runtime.c::
+// hexa_one_hot. C wrapper handles HexaVal int/float→int coercion of inputs
+// before delegating here.
+pub fn rt_one_hot(idx: int, n: int) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        if i == idx { out.push(1.0) } else { out.push(0.0) }
+        i = i + 1
+    }
+    return out
+}
+
 // Step 3 cycle 10 — IEEE 754 classifiers. NaN is the unique value with
 // (x != x). Infinity is detected by exceeding DBL_MAX (1.79…e308) in
 // absolute value — DBL_MAX itself is finite; +inf and -inf compare
