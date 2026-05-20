@@ -9364,8 +9364,8 @@ HexaVal hexa_sum(HexaVal a) {
     return hexa_int(int_total);
 }
 
-// clamp(x, lo, hi): scalar clamp, float result.
-// Matches interpreter hexa_full.hexa:13468.
+// clamp(x, lo, hi): scalar clamp, float result. Step-3 cycle 3 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_clamp(HexaVal xv, HexaVal lov, HexaVal hiv) {
     double x = __hx_to_double(xv);
     double lo = __hx_to_double(lov);
@@ -9374,6 +9374,14 @@ HexaVal hexa_clamp(HexaVal xv, HexaVal lov, HexaVal hiv) {
     if (x > hi) return hexa_float(hi);
     return hexa_float(x);
 }
+#else
+extern HexaVal rt_clamp(HexaVal x, HexaVal lo, HexaVal hi);
+HexaVal hexa_clamp(HexaVal xv, HexaVal lov, HexaVal hiv) {
+    return rt_clamp(hexa_float(__hx_to_double(xv)),
+                    hexa_float(__hx_to_double(lov)),
+                    hexa_float(__hx_to_double(hiv)));
+}
+#endif
 
 // one_hot(idx, n): n-length binary vector, 1.0 at idx, 0.0 elsewhere.
 // Matches interpreter hexa_full.hexa:10512.

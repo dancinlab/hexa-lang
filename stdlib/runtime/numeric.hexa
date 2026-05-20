@@ -53,3 +53,29 @@ pub fn rt_u_floor(a: int, b: int) -> int {
     }
     return q
 }
+
+// Step 3 cycle 3 — clamp (float). C wrapper extracts doubles via
+// __hx_to_double and rebuilds HexaVal floats around our call.
+pub fn rt_clamp(x: float, lo: float, hi: float) -> float {
+    if x < lo { return lo }
+    if x > hi { return hi }
+    return x
+}
+
+// Step 3 cycle 3 — integer min/max (used by codegen + lowering passes).
+pub fn rt_imin(a: int, b: int) -> int {
+    if a < b { return a }
+    return b
+}
+
+pub fn rt_imax(a: int, b: int) -> int {
+    if a > b { return a }
+    return b
+}
+
+// Step 3 cycle 3 — sign function (returns -1, 0, or 1 for float input).
+pub fn rt_sign(v: float) -> int {
+    if v < 0.0 { return -1 }
+    if v > 0.0 { return 1 }
+    return 0
+}

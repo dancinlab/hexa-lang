@@ -946,3 +946,14 @@ For each Tier-A sub-phase:
 - aprime_cc smoke exit(42) PASS · 5 externs preserved
 - step-3 cumulative: **4 HI-tier fns ported** (hexa_abs + hexa_floor +
   hexa_ceil + hexa_u_floor)
+
+### 2026-05-21 — step 3 cycle 3: hexa_clamp + imin/imax/sign primitives
+
+- ✅ hexa_clamp ported. `stdlib/runtime/numeric.hexa` extended with
+  `rt_clamp` (float clamp) + `rt_imin` / `rt_imax` / `rt_sign`
+  primitives (latter 3 ready for next wiring cycles)
+- aprime_cc smoke exit(42) PASS · 5 externs preserved
+- step-3 cumulative: **5 HI-tier C bodies ported** (hexa_abs +
+  hexa_floor + hexa_ceil + hexa_u_floor + hexa_clamp) · **8 hexa
+  primitives** (rt_abs_int/_float, rt_floor, rt_ceil, rt_u_floor,
+  rt_clamp, rt_imin, rt_imax, rt_sign)
