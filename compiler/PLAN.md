@@ -7108,3 +7108,65 @@ pure measurement cycles) provides the first end-to-end verification
 and decomposes the gap into 2 surgical bugs.
 
 cc --regen / binary promote: 미수행. cycle 39 = pure measurement.
+
+
+### 2026-05-20 — follow-up cycle 39 (continued): UTF-8 Bug A FIXED (em dash byte-eq in headers)
+
+cycle 39 의 byte-diff bisect 가 식별한 Bug A (UTF-8 multi-byte string
+truncation) 수정.
+
+**Fix — compiler/codegen/arm64_darwin.hexa**:
+
+`_str_to_hex_bytes(s)` 에서 `s.chars()` → `s.bytes()` 로 교체.
+chars() 는 2026-05-19 parity-gate t45b 부터 codepoint iterator (1
+entry per UTF-8 codepoint). bytes() 는 byte iterator (1 entry per
+0..255). rodata pool 은 byte-true emit 필요 → bytes() 가 정답.
+
+Plus runtime mapping `bytes → hexa_str_bytes` + bind list `"bytes"`.
+
+**측정 — falsifier 첫 16 바이트**:
+
+```
+gen1 (aprime_cc):  ... 70 61 73 73 20 e2 80 94 20 74 ...
+                                       ^^^^^^^^^^^^ proper em dash
+gen2 (hexac pre):  ... 70 61 73 73 20 e2 20 74 ...
+                                       ^^^^^ truncated (Bug A)
+gen2b (hexac post): ... 70 61 73 73 20 e2 80 94 20 74 ...
+                                       ^^^^^^^^^^^^ FIXED ✅
+```
+
+**측정 — full md5**:
+
+```
+gen1.s     md5 cddb043bd58414429c4fe104fa805b1f (aprime)
+gen2.s     md5 e6462f358ccf091a05d5dccaa9c010a3 (hexac pre fix)
+gen2b.s    md5 3df8a4083de38218b84d04023e70ce17 (hexac post UTF-8 fix)
+
+Bug A status: ✅ FIXED — em dash in header bytes-equal to gen1
+Bug B status: ❌ open — per-fn instr bloat 2× still present
+              gen2b.s size 1,698,216 ≈ same as gen2.s 1,697,700
+              (header fix accounts for the small +516 bytes diff)
+```
+
+**S3 fixpoint full closure status (1 of 2 bugs closed)**:
+
+- gen1.s (aprime): 824,800 B
+- gen2b.s (hexac after UTF-8 fix): 1,698,216 B — still 2× larger
+- Remaining diff: per-fn instruction bloat (Bug B) — Compiler emits
+  ~2× as many runtime housekeeping calls in asm path
+
+Bug B requires deep codegen analysis: which lowering decision
+diverges between hexa_v2→C→clang-O1 and aprime_cc emit-asm. Likely
+candidates: scope_push/pop emission cadence, fn_arena_return
+wrapper density, redundant temp local pushes.
+
+**RFC 063 phasing**: 39 cycles · 18 falsifier + 9 measure · SIGBUS
+CLOSED · S3 PROOF falsified at medium scale · **Bug A (UTF-8) FIXED ·
+Bug B (per-fn bloat) open with scoped next steps**.
+
+**cc --regen / binary promote**: 미수행. compiler/* changes only.
+
+**Files modified this slice (2)**:
+- compiler/codegen/arm64_darwin.hexa: _str_to_hex_bytes chars→bytes,
+  + bytes runtime mapping (+15 lines)
+- compiler/check/bind.hexa: + "bytes" builtin (1 word)
