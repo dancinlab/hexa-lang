@@ -9437,6 +9437,8 @@ HexaVal hexa_one_hot(HexaVal idxv, HexaVal nv) {
 
 // rms_norm(x, gamma, eps): gamma[i] * x[i] / sqrt(mean(x^2) + eps).
 // gamma may be array (per-element scale) or scalar (uniform scale).
+// Step-3 cycle 16 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_rms_norm(HexaVal x, HexaVal gamma, HexaVal epsv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(x)) return out;
@@ -9461,6 +9463,16 @@ HexaVal hexa_rms_norm(HexaVal x, HexaVal gamma, HexaVal epsv) {
     }
     return out;
 }
+#else
+extern HexaVal rt_rms_norm_scalar(HexaVal x, HexaVal gamma, HexaVal eps);
+extern HexaVal rt_rms_norm_array(HexaVal x, HexaVal gamma, HexaVal eps);
+HexaVal hexa_rms_norm(HexaVal x, HexaVal gamma, HexaVal epsv) {
+    if (!HX_IS_ARRAY(x)) return hexa_array_new();
+    HexaVal eps = hexa_float(__hx_to_double(epsv));
+    if (HX_IS_ARRAY(gamma)) return rt_rms_norm_array(x, gamma, eps);
+    return rt_rms_norm_scalar(x, hexa_float(__hx_to_double(gamma)), eps);
+}
+#endif
 
 // softmax(a): stable softmax — subtract max, exp, normalize by sum.
 // Step-3 cycle 15 port.

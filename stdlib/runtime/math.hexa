@@ -85,6 +85,53 @@ pub fn rt_lgamma(z: float) -> float {
     return (x - 0.5) * rt_log(x) - x + LOG_SQRT_2PI + series - shift
 }
 
+// Step 3 cycle 16 — RMS normalization. Two-arity polymorphism (scalar vs
+// array gamma) split into separate hexa fns; C wrapper dispatches.
+//   out[i] = gamma[i?] * x[i] / sqrt(mean(x²) + eps)
+// Mean-square + reciprocal sqrt reuse rt_sqrt from this file.
+fn _rms_norm_inv(x: [float], eps: float) -> float {
+    let n = len(x)
+    if n == 0 { return 0.0 }
+    let mut ss = 0.0
+    let mut i = 0
+    while i < n {
+        ss = ss + x[i] * x[i]
+        i = i + 1
+    }
+    let mean = ss / (n as float)
+    let s = rt_sqrt(mean + eps)
+    if s == 0.0 { return 0.0 }
+    return 1.0 / s
+}
+
+pub fn rt_rms_norm_scalar(x: [float], gamma: float, eps: float) -> [float] {
+    let mut out: [float] = []
+    let n = len(x)
+    if n == 0 { return out }
+    let inv = _rms_norm_inv(x, eps)
+    let mut j = 0
+    while j < n {
+        out = out.push(gamma * x[j] * inv)
+        j = j + 1
+    }
+    return out
+}
+
+pub fn rt_rms_norm_array(x: [float], gamma: [float], eps: float) -> [float] {
+    let mut out: [float] = []
+    let n = len(x)
+    if n == 0 { return out }
+    let gn = len(gamma)
+    let inv = _rms_norm_inv(x, eps)
+    let mut j = 0
+    while j < n {
+        let gi = if j < gn { j } else { 0 }
+        out = out.push(gamma[gi] * x[j] * inv)
+        j = j + 1
+    }
+    return out
+}
+
 // Step 3 cycle 15 — stable softmax. Subtract max for numerical stability,
 // then exp + normalize. Composition: rt_exp from this file. Empty input
 // returns empty; degenerate sum=0 (all -inf or empty after exp underflow)
