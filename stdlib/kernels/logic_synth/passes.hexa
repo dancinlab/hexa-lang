@@ -101,6 +101,7 @@ fn pass_proc(d: Design) -> PassResult {
             name: m.name, wires: m.wires, cells: m.cells,
             processes: [], connect_lhs: m.connect_lhs,
             connect_rhs: m.connect_rhs,
+            connect_cond: m.connect_cond,
         }
         let mut pi = 0
         while pi < len(m.processes) {
@@ -188,14 +189,20 @@ fn pass_opt(d: Design) -> PassResult {
             }
             ci = ci + 1
         }
-        // step 2: filter self-connects
+        // step 2: filter self-connects (keep connect_cond parallel)
         let mut clhs: [str] = []
         let mut crhs: [str] = []
+        let mut ccond: [str] = []
         let mut k = 0
         while k < len(m.connect_lhs) {
             if m.connect_lhs[k] != m.connect_rhs[k] {
                 clhs = clhs.push(m.connect_lhs[k])
                 crhs = crhs.push(m.connect_rhs[k])
+                if k < len(m.connect_cond) {
+                    ccond = ccond.push(m.connect_cond[k])
+                } else {
+                    ccond = ccond.push("")
+                }
             }
             k = k + 1
         }
@@ -203,6 +210,7 @@ fn pass_opt(d: Design) -> PassResult {
             name: m.name, wires: m.wires, cells: kept,
             processes: m.processes,
             connect_lhs: clhs, connect_rhs: crhs,
+            connect_cond: ccond,
         }
         out = out.push(m2)
         i = i + 1
@@ -1697,6 +1705,7 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
         // and wires. Preserves any pre-existing module-level connects.
         let mut new_clhs:  [str] = m.connect_lhs
         let mut new_crhs:  [str] = m.connect_rhs
+        let mut new_ccond: [str] = m.connect_cond
         let mut ci = 0
         while ci < len(m.cells) {
             let c = m.cells[ci]
@@ -1811,6 +1820,7 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                         while adkj < len(adr.connect_lhs) {
                             new_clhs = new_clhs.push(adr.connect_lhs[adkj])
                             new_crhs = new_crhs.push(adr.connect_rhs[adkj])
+                            new_ccond = new_ccond.push("")
                             adkj = adkj + 1
                         }
                         expanded = 1
@@ -1835,6 +1845,7 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                         while mdkj < len(mdr.connect_lhs) {
                             new_clhs = new_clhs.push(mdr.connect_lhs[mdkj])
                             new_crhs = new_crhs.push(mdr.connect_rhs[mdkj])
+                            new_ccond = new_ccond.push("")
                             mdkj = mdkj + 1
                         }
                         expanded = 1
@@ -1859,6 +1870,7 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
             processes: m.processes,
             connect_lhs: new_clhs,
             connect_rhs: new_crhs,
+            connect_cond: new_ccond,
         })
         mi = mi + 1
     }
@@ -1903,6 +1915,7 @@ fn pass_dfflibmap_sky130(d: Design) -> PassResult {
             processes: m.processes,
             connect_lhs: m.connect_lhs,
             connect_rhs: m.connect_rhs,
+            connect_cond: m.connect_cond,
         })
         mi = mi + 1
     }
@@ -2007,8 +2020,9 @@ fn pass_clean_multidriver(d: Design) -> PassResult {
         let m = d.modules[mi]
         // Build per-LHS occurrence count (linear; gate-§5 designs have
         // O(10²) distinct LHS strings → quadratic worst-case is fine).
-        let mut new_lhs: [str] = []
-        let mut new_rhs: [str] = []
+        let mut new_lhs:  [str] = []
+        let mut new_rhs:  [str] = []
+        let mut new_cond: [str] = []
         let mut k = 0
         while k < len(m.connect_lhs) {
             let cur_lhs = m.connect_lhs[k]
@@ -2029,6 +2043,11 @@ fn pass_clean_multidriver(d: Design) -> PassResult {
                 // This is the LAST connect for cur_lhs — keep it.
                 new_lhs = new_lhs.push(cur_lhs)
                 new_rhs = new_rhs.push(m.connect_rhs[k])
+                if k < len(m.connect_cond) {
+                    new_cond = new_cond.push(m.connect_cond[k])
+                } else {
+                    new_cond = new_cond.push("")
+                }
                 if earlier > 0 {
                     // Emit fail-loud diagnostic at the kept row (so the
                     // dropped-RHS list is logged once per LHS-group).
@@ -2060,6 +2079,7 @@ fn pass_clean_multidriver(d: Design) -> PassResult {
             name: m.name, wires: m.wires, cells: m.cells,
             processes: m.processes,
             connect_lhs: new_lhs, connect_rhs: new_rhs,
+            connect_cond: new_cond,
         }
         out = out.push(m2)
         mi = mi + 1
@@ -2069,6 +2089,206 @@ fn pass_clean_multidriver(d: Design) -> PassResult {
         ok: 1, design: d2,
         cells_before: cb, cells_after: _passes_total_cells(d2),
         message: "clean_multidriver (collapsed " + str(warn_count) + " LHS-group(s))"
+    }
+}
+
+// ─── RFC 073 Phase 1 — pass_proc_mux ─────────────────────────────────────
+//
+// CLEAN-ROOM (passes/proc/proc_mux.cc behaviour, IEEE 1364-2005 §9.2 +
+// §9.4, IEEE 1800-2017 §10.4.2): the `proc_mux` pass converts the
+// procedural if/else semantics retained as condition-guarded connect
+// rows in the RTLIL IR into explicit `$mux` cell trees. After this
+// pass, condition-guarded multi-driver writes for the same LHS are
+// replaced by ONE unconditional connect to the mux-tree's Y output;
+// `pass_clean_multidriver` (which must run AFTER `pass_proc_mux`) then
+// sees only genuine multi-driver conflicts and can correctly apply
+// last-write-wins.
+//
+// Phase-1 scope:
+//   - Walks every Module; groups `connect_lhs[k]/_rhs[k]/_cond[k]` rows
+//     where `connect_cond[k] != ""` by their `connect_lhs[k]` value.
+//   - For each LHS-group with ≥1 condition-tagged row, builds a
+//     left-deep `$mux` chain:
+//        inner_0 = LHS itself (feedback / hold)
+//                  OR the last untagged row's RHS (if present)
+//        for k = N-1 down to 0:
+//            mux_k = $mux(S = cond_k, A = inner_k, B = rhs_k, Y = fresh)
+//            inner_{k+1} = mux_k
+//     Final inner becomes a SINGLE unconditional connect to LHS.
+//   - For LHS-groups where ALL rows are unconditional (legacy path),
+//     this pass is a structural no-op — those rows pass through
+//     unchanged for `pass_clean_multidriver` to handle.
+//
+// Cell name: `$procmux$<lhs>$<k>` for the mux at depth k of LHS's chain
+// (deterministic, single-shot insertion). Mux output wire:
+// `$procmux_y$<lhs>$<k>`. Both are unique by construction (LHS is
+// already-unique within a module's connect roster).
+//
+// @cite IEEE Std 1364-2005 §9.2 (procedural assignment); §9.4 (control
+// statements; cascaded if/else); Yosys passes/proc/proc_mux.cc
+// (behavioural reference only, clean-room translation).
+//
+// Honest scope: this pass operates on `connect_cond` rows ONLY.
+// Conditions that read_verilog already lowered inline to `$mux` cells
+// in `_rv_parse_always` (the 5 emission paths + the RFC 073 Phase 1
+// nested-chain path) DO NOT flow through here — they arrived as cells,
+// not as condition-tagged connects, and stay untouched. Phase 2/3 will
+// route array-indexed and structural patterns through `connect_cond`
+// instead of inline, at which point this pass carries the lowering.
+
+fn _passes_proc_mux_emit_chain(m_in: Module,
+                                lhs: str,
+                                conds: [str],
+                                rhss:  [str],
+                                base_rhs: str) -> Module {
+    let mut m = m_in
+    let mut inner_w = base_rhs
+    let mut k = len(conds) - 1
+    while k >= 0 {
+        let mux_y = "$procmux_y$" + lhs + "$" + str(k)
+        m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+        let mux_n = "$procmux$" + lhs + "$" + str(k)
+        let mut mc = rtlil_cell(mux_n, "$mux", 0)
+        mc = rtlil_cell_connect(mc, "A", inner_w)
+        mc = rtlil_cell_connect(mc, "B", rhss[k])
+        mc = rtlil_cell_connect(mc, "S", conds[k])
+        mc = rtlil_cell_connect(mc, "Y", mux_y)
+        m = rtlil_module_add_cell(m, mc)
+        inner_w = mux_y
+        k = k - 1
+    }
+    // Final connect — `lhs <= inner_w` (unconditional). Records cond="" so
+    // pass_clean_multidriver sees a single-driver row.
+    m = rtlil_module_connect(m, lhs, inner_w)
+    return m
+}
+
+fn pass_proc_mux(d: Design) -> PassResult {
+    let cb = _passes_total_cells(d)
+    let mut out: [Module] = []
+    let mut groups_lowered = 0
+    let mut mi = 0
+    while mi < len(d.modules) {
+        let m = d.modules[mi]
+        // Collect unique LHS strings that have at least one cond-tagged
+        // connect row. O(N²) — gate-§5 designs have O(10²) LHS, fine.
+        let mut seen: [str] = []
+        let mut k = 0
+        while k < len(m.connect_lhs) {
+            let cur_cond = ""
+            let mut cc = ""
+            if k < len(m.connect_cond) { cc = m.connect_cond[k] }
+            if len(cc) > 0 {
+                let lhs = m.connect_lhs[k]
+                let mut dup = 0
+                let mut si = 0
+                while si < len(seen) {
+                    if seen[si] == lhs { dup = 1 }
+                    si = si + 1
+                }
+                if dup == 0 {
+                    seen = seen.push(lhs)
+                }
+                let _ = cur_cond
+            }
+            k = k + 1
+        }
+        // For each cond-tagged-LHS, harvest its (cond, rhs) chain in row
+        // order, plus the LAST untagged row's RHS (if any) as the default.
+        // Then emit the mux chain on a working copy of the module and
+        // DROP the original cond-tagged rows from the connect arrays.
+        let mut m_work = m
+        let mut keep_lhs: [str] = []
+        let mut keep_rhs: [str] = []
+        let mut keep_cond: [str] = []
+        // Build keep_* = ALL untagged rows (they pass through unchanged).
+        // Tagged rows for cond-tagged LHS are consumed by the mux emission.
+        let mut k2 = 0
+        while k2 < len(m.connect_lhs) {
+            let mut cc2 = ""
+            if k2 < len(m.connect_cond) { cc2 = m.connect_cond[k2] }
+            // Determine if this LHS has any cond-tagged row.
+            let mut in_seen = 0
+            let mut si2 = 0
+            while si2 < len(seen) {
+                if seen[si2] == m.connect_lhs[k2] { in_seen = 1 }
+                si2 = si2 + 1
+            }
+            if in_seen == 0 {
+                // LHS is unconditional throughout — pass through.
+                keep_lhs = keep_lhs.push(m.connect_lhs[k2])
+                keep_rhs = keep_rhs.push(m.connect_rhs[k2])
+                keep_cond = keep_cond.push(cc2)
+            }
+            k2 = k2 + 1
+        }
+        // For each cond-tagged LHS, gather its chain and emit mux.
+        let mut gi = 0
+        while gi < len(seen) {
+            let lhs_g = seen[gi]
+            let mut g_conds: [str] = []
+            let mut g_rhss:  [str] = []
+            let mut last_untagged_rhs = ""
+            let mut have_untagged = 0
+            let mut k3 = 0
+            while k3 < len(m.connect_lhs) {
+                if m.connect_lhs[k3] == lhs_g {
+                    let mut cc3 = ""
+                    if k3 < len(m.connect_cond) { cc3 = m.connect_cond[k3] }
+                    if len(cc3) > 0 {
+                        g_conds = g_conds.push(cc3)
+                        g_rhss  = g_rhss.push(m.connect_rhs[k3])
+                    } else {
+                        last_untagged_rhs = m.connect_rhs[k3]
+                        have_untagged = 1
+                    }
+                }
+                k3 = k3 + 1
+            }
+            // Default = last unguarded RHS if present, else feedback (LHS).
+            let mut default_w = lhs_g
+            if have_untagged == 1 { default_w = last_untagged_rhs }
+            // Strip the now-consumed rows from m_work's connects (they
+            // were collected via the original m which still has them);
+            // we rebuild m_work's connect arrays via keep_* + the new
+            // unconditional connect emitted by the chain helper.
+            let _ = default_w
+            m_work = _passes_proc_mux_emit_chain(m_work, lhs_g, g_conds, g_rhss, default_w)
+            groups_lowered = groups_lowered + 1
+            gi = gi + 1
+        }
+        // Replace m_work's connect arrays with keep_* + the chain-emitted
+        // tail. The chain helper appended a single (lhs_g, inner_w, "")
+        // row PER lhs_g group via rtlil_module_connect — those rows are
+        // now in m_work.connect_lhs at indices [len(m.connect_lhs)..].
+        // We rebuild the final connect arrays by concatenating keep_* with
+        // those new tail rows.
+        let mut final_lhs: [str] = keep_lhs
+        let mut final_rhs: [str] = keep_rhs
+        let mut final_cond: [str] = keep_cond
+        let mut ti = len(m.connect_lhs)
+        while ti < len(m_work.connect_lhs) {
+            final_lhs = final_lhs.push(m_work.connect_lhs[ti])
+            final_rhs = final_rhs.push(m_work.connect_rhs[ti])
+            let mut ccc = ""
+            if ti < len(m_work.connect_cond) { ccc = m_work.connect_cond[ti] }
+            final_cond = final_cond.push(ccc)
+            ti = ti + 1
+        }
+        let m2 = Module {
+            name: m_work.name, wires: m_work.wires, cells: m_work.cells,
+            processes: m_work.processes,
+            connect_lhs: final_lhs, connect_rhs: final_rhs,
+            connect_cond: final_cond,
+        }
+        out = out.push(m2)
+        mi = mi + 1
+    }
+    let d2 = Design { modules: out, source: d.source }
+    return PassResult {
+        ok: 1, design: d2,
+        cells_before: cb, cells_after: _passes_total_cells(d2),
+        message: "proc_mux (lowered " + str(groups_lowered) + " cond-tagged LHS-group(s))"
     }
 }
 
@@ -3187,6 +3407,132 @@ fn main() {
     if r_t32.message.find("collapsed 0") < 0 {
         println("FAIL T32g single_no_collapse_msg (got "
             + r_t32.message + ")"); fails = fails + 1
+    }
+
+    // T33 — RFC 073 Phase 1 (F-RFC-RV-PROC-MUX-IF-ELSE).
+    //   Two condition-tagged connect rows targeting the same LHS with
+    //   complementary conditions (cond vs not_cond) must lower to ONE
+    //   `$mux` cell (S=cond_arm0, A=rhs_arm1, B=rhs_arm0, Y=fresh) and
+    //   ONE unconditional connect (lhs ← mux Y). The original tagged
+    //   rows are consumed. @cite IEEE 1364-2005 §9.2 + Yosys
+    //   passes/proc/proc_mux.cc (clean-room).
+    total = total + 1
+    let mut m_t33 = rtlil_new_module("pm_t33")
+    m_t33 = rtlil_module_add_wire(m_t33, rtlil_wire("y", 1, 0, 0))
+    m_t33 = rtlil_module_add_wire(m_t33, rtlil_wire("a", 1, 1, 0))
+    m_t33 = rtlil_module_add_wire(m_t33, rtlil_wire("b", 1, 1, 0))
+    m_t33 = rtlil_module_add_wire(m_t33, rtlil_wire("c", 1, 1, 0))
+    m_t33 = rtlil_module_add_wire(m_t33, rtlil_wire("nc", 1, 0, 0))
+    m_t33 = rtlil_module_connect_cond(m_t33, "y", "a", "c")
+    m_t33 = rtlil_module_connect_cond(m_t33, "y", "b", "nc")
+    let mut d_t33 = rtlil_new_design("test")
+    d_t33 = rtlil_design_add(d_t33, m_t33)
+    let r_t33 = pass_proc_mux(d_t33)
+    if r_t33.ok != 1 {
+        println("FAIL T33 proc_mux: " + r_t33.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t33.design.modules[0], "$mux") != 2 {
+        println("FAIL T33a mux_count got "
+            + str(rtlil_count_cells_of_type(r_t33.design.modules[0], "$mux"))
+            + " (want 2: one per cond-tagged arm)")
+        fails = fails + 1
+    }
+    // After lowering, exactly ONE connect row remains for "y", and it's
+    // unconditional (connect_cond[i] == "").
+    if len(r_t33.design.modules[0].connect_lhs) != 1 {
+        println("FAIL T33b connect_count got "
+            + str(len(r_t33.design.modules[0].connect_lhs))
+            + " (want 1 after mux-tree consumption)")
+        fails = fails + 1
+    }
+    if r_t33.design.modules[0].connect_lhs[0] != "y" {
+        println("FAIL T33c surviving_connect_lhs got "
+            + r_t33.design.modules[0].connect_lhs[0]); fails = fails + 1
+    }
+    if r_t33.design.modules[0].connect_cond[0] != "" {
+        println("FAIL T33d surviving_connect_cond not empty: `"
+            + r_t33.design.modules[0].connect_cond[0] + "`")
+        fails = fails + 1
+    }
+
+    // T34 — RFC 073 Phase 1 (F-RFC-RV-PROC-MUX-NESTED).
+    //   Three condition-tagged arms for the same LHS — `c1, c2, c3` —
+    //   must lower to a left-deep `$mux` chain of 3 cells (one per arm)
+    //   with the default-feedback (lhs itself) as the deepest A pin.
+    //   @cite IEEE 1364-2005 §9.4 (cascaded if/else) + Yosys proc_mux
+    //   left-deep tree (clean-room).
+    total = total + 1
+    let mut m_t34 = rtlil_new_module("pm_t34")
+    m_t34 = rtlil_module_add_wire(m_t34, rtlil_wire("q", 1, 0, 0))
+    m_t34 = rtlil_module_add_wire(m_t34, rtlil_wire("a", 1, 1, 0))
+    m_t34 = rtlil_module_add_wire(m_t34, rtlil_wire("b", 1, 1, 0))
+    m_t34 = rtlil_module_add_wire(m_t34, rtlil_wire("d", 1, 1, 0))
+    m_t34 = rtlil_module_add_wire(m_t34, rtlil_wire("c1", 1, 0, 0))
+    m_t34 = rtlil_module_add_wire(m_t34, rtlil_wire("c2", 1, 0, 0))
+    m_t34 = rtlil_module_add_wire(m_t34, rtlil_wire("c3", 1, 0, 0))
+    m_t34 = rtlil_module_connect_cond(m_t34, "q", "a", "c1")
+    m_t34 = rtlil_module_connect_cond(m_t34, "q", "b", "c2")
+    m_t34 = rtlil_module_connect_cond(m_t34, "q", "d", "c3")
+    let mut d_t34 = rtlil_new_design("test")
+    d_t34 = rtlil_design_add(d_t34, m_t34)
+    let r_t34 = pass_proc_mux(d_t34)
+    if r_t34.ok != 1 {
+        println("FAIL T34 proc_mux_nested: " + r_t34.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t34.design.modules[0], "$mux") != 3 {
+        println("FAIL T34a mux_count got "
+            + str(rtlil_count_cells_of_type(r_t34.design.modules[0], "$mux"))
+            + " (want 3 for 3-arm left-deep tree)")
+        fails = fails + 1
+    }
+    if len(r_t34.design.modules[0].connect_lhs) != 1 {
+        println("FAIL T34b connect_count got "
+            + str(len(r_t34.design.modules[0].connect_lhs))
+            + " (want 1)")
+        fails = fails + 1
+    }
+
+    // T35 — RFC 073 Phase 1 (F-RFC-RV-NO-REGRESSION).
+    //   Pre-existing legacy 2-driver multi-driver shape (NO connect_cond
+    //   tags) must continue to pass straight through `pass_proc_mux`
+    //   unchanged. `pass_clean_multidriver` is the layer that still
+    //   handles it (last-write-wins). This guards against accidentally
+    //   absorbing untagged rows into the mux-emission path.
+    total = total + 1
+    let mut m_t35 = rtlil_new_module("pm_t35")
+    m_t35 = rtlil_module_add_wire(m_t35, rtlil_wire("z", 1, 0, 0))
+    m_t35 = rtlil_module_add_wire(m_t35, rtlil_wire("p", 1, 1, 0))
+    m_t35 = rtlil_module_add_wire(m_t35, rtlil_wire("r", 1, 1, 0))
+    m_t35 = rtlil_module_connect(m_t35, "z", "p")
+    m_t35 = rtlil_module_connect(m_t35, "z", "r")
+    let mut d_t35 = rtlil_new_design("test")
+    d_t35 = rtlil_design_add(d_t35, m_t35)
+    let r_t35 = pass_proc_mux(d_t35)
+    if r_t35.ok != 1 {
+        println("FAIL T35 proc_mux_no_regression: " + r_t35.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t35.design.modules[0], "$mux") != 0 {
+        println("FAIL T35a unexpected_mux_inserted got "
+            + str(rtlil_count_cells_of_type(r_t35.design.modules[0], "$mux")))
+        fails = fails + 1
+    }
+    if len(r_t35.design.modules[0].connect_lhs) != 2 {
+        println("FAIL T35b connect_count got "
+            + str(len(r_t35.design.modules[0].connect_lhs))
+            + " (want 2 — both untagged rows pass through)")
+        fails = fails + 1
+    }
+    // Hand off to pass_clean_multidriver: it should now collapse the
+    // untagged pair to last-wins (RHS=r).
+    let r_t35b = pass_clean_multidriver(r_t35.design)
+    if len(r_t35b.design.modules[0].connect_lhs) != 1 {
+        println("FAIL T35c handoff_count got "
+            + str(len(r_t35b.design.modules[0].connect_lhs))); fails = fails + 1
+    }
+    if r_t35b.design.modules[0].connect_rhs[0] != "r" {
+        println("FAIL T35d handoff_lastwins got "
+            + r_t35b.design.modules[0].connect_rhs[0]
+            + " (want r)"); fails = fails + 1
     }
 
     if fails > 0 {

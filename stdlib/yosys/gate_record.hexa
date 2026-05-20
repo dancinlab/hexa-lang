@@ -79,6 +79,11 @@ fn _gate_run_one(label: str, v_path: str, top: str, lib_path: str) -> GateRun {
     // multi-driver rejection (`Signal X defined more than once`). See
     // pass_clean_multidriver header for the IEEE 1800-2017 §10.4.2 +
     // Yosys proc_mux + BLIF spec §3 citations.
+    // RFC 073 Phase 1 note: `pass_proc_mux` is the structural primitive
+    // (defined in stdlib/kernels/logic_synth/passes.hexa); wiring it into
+    // this gate pipeline ahead of `pass_clean_multidriver` is a separate
+    // cycle once Phase 2/3 routes condition-guarded patterns through the
+    // `connect_cond` IR field instead of the inline emitter.
     let r5b = pass_clean_multidriver(r5.design)
     stages = stages.push(GateStage { name: label + ":clean_multidriver", ok: r5b.ok, detail: r5b.message })
     let r6 = pass_techmap_sky130(r5b.design)

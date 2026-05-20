@@ -259,12 +259,26 @@ stdout is preserved (no new test rows added by the opener).
 ## §8 Sign-off
 
 - **OPENER LANDED** 2026-05-20 — RFC + scaffold + phasing + falsifier
-  battery filed. Branch: `rfc-read-verilog-proc-mux-shape-b`. PR to
-  be opened by sub-agent dispatch then admin-squash merged per the
-  Shape-B opener convention.
-- **PHASE 1**: not yet landed.
+  battery filed. Branch: `rfc-read-verilog-proc-mux-shape-b`. PR #188
+  squash `c1f078f3`.
+- **PHASE 1 LANDED** 2026-05-20 — branch `rfc-073-phase-1-proc-mux`.
+  `pass_proc_mux` real implementation in
+  `stdlib/kernels/logic_synth/passes.hexa` (was no-op stub in
+  read_verilog.hexa); `Module` gains parallel `connect_cond` array
+  (`stdlib/kernels/logic_synth/rtlil.hexa`); nested else-if chain
+  inline handler in `_rv_parse_always`. Falsifiers
+  `F-RFC-RV-PROC-MUX-IF-ELSE`, `F-RFC-RV-PROC-MUX-NESTED`,
+  `F-RFC-RV-NO-REGRESSION` all PASS (passes.hexa T33/T34/T35 +
+  read_verilog.hexa T55/T56 + rtlil.hexa T11). Self-tests:
+  rtlil 10/10→11/11, passes 32/32→35/35, read_verilog 54/54→56/56.
 - **PHASE 1.5**: not yet landed.
 - **PHASE 2**: not yet landed.
 - **PHASE 3**: not yet landed.
-- **§5 absorption-gate**: **STILL OPEN** (iter-13 verdict stands; this
-  RFC opens the structural closure path, does not close it).
+- **§5 absorption-gate**: **STILL OPEN** — Phase 1 did NOT close §5.
+  Post-Phase-1 oracle re-run shows router_d4 area=0.0 µm² (Δ=100%)
+  and router_d6 area=0.0 µm² (Δ=100%). Next blocker surfaced (per
+  g3-honest report in compiler/PLAN.md): runtime-K array-indexed
+  assignment in the router's `idx` grant generation (Phase 2 target,
+  `F-RFC-RV-ARRAY-INDEX-RUNTIME`). Phase 1 ships the proc-mux
+  primitive ($mux emission for condition-guarded writes + nested
+  if-else-if-else chains), not the §5 closure.

@@ -2011,15 +2011,107 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                         st = _ps_take(st)
                     }
                 } else {
-                    while st.pos < len(st.toks) {
-                        let et = _ps_peek(st)
-                        if et == ";" {
+                    // RFC 073 Phase 1 — nested else-if chain: the else-body
+                    // may itself be a complete `if ( cond ) body [else REST]`
+                    // statement (or chain thereof). Walk forward absorbing
+                    // each `if` + cond-parens + body-stmt (or begin/end) +
+                    // optional `else`-tail, repeating while the `else` tail
+                    // is another `if`. The legacy collector below the
+                    // `if`-special-case keeps the bare-else terminator
+                    // semantics (single `;`).
+                    if _ps_peek(st) == "if" {
+                        let mut chain_more = 1
+                        while chain_more == 1 && st.pos < len(st.toks) {
+                            chain_more = 0
+                            // consume "if"
+                            else_toks = else_toks.push(_ps_peek(st))
+                            st = _ps_take(st)
+                            // consume `( … )`
+                            if _ps_peek(st) == "(" {
+                                else_toks = else_toks.push(_ps_peek(st))
+                                st = _ps_take(st)
+                                let mut pdepth = 1
+                                while st.pos < len(st.toks) && pdepth > 0 {
+                                    let pt = _ps_peek(st)
+                                    if pt == "(" { pdepth = pdepth + 1 }
+                                    if pt == ")" { pdepth = pdepth - 1 }
+                                    else_toks = else_toks.push(pt)
+                                    st = _ps_take(st)
+                                }
+                            }
+                            // body — single statement (`LHS [op] RHS ;`) OR
+                            // `begin … end` block (track begin/end depth).
+                            if _ps_peek(st) == "begin" {
+                                else_toks = else_toks.push(_ps_peek(st))
+                                st = _ps_take(st)
+                                let mut bd = 1
+                                while st.pos < len(st.toks) && bd > 0 {
+                                    let bt = _ps_peek(st)
+                                    if bt == "begin" { bd = bd + 1 }
+                                    if bt == "end" { bd = bd - 1 }
+                                    else_toks = else_toks.push(bt)
+                                    st = _ps_take(st)
+                                }
+                            } else {
+                                while st.pos < len(st.toks) {
+                                    let bt = _ps_peek(st)
+                                    if bt == ";" {
+                                        else_toks = else_toks.push(bt)
+                                        st = _ps_take(st)
+                                        break
+                                    }
+                                    else_toks = else_toks.push(bt)
+                                    st = _ps_take(st)
+                                }
+                            }
+                            // optional `else` tail: if another `if` follows,
+                            // keep looping to absorb the chain; otherwise
+                            // absorb the bare-else statement (single ; or
+                            // begin/end) and stop.
+                            if _ps_peek(st) == "else" {
+                                else_toks = else_toks.push(_ps_peek(st))
+                                st = _ps_take(st)
+                                if _ps_peek(st) == "if" {
+                                    chain_more = 1
+                                } else {
+                                    // bare-else default
+                                    if _ps_peek(st) == "begin" {
+                                        else_toks = else_toks.push(_ps_peek(st))
+                                        st = _ps_take(st)
+                                        let mut bd2 = 1
+                                        while st.pos < len(st.toks) && bd2 > 0 {
+                                            let bt2 = _ps_peek(st)
+                                            if bt2 == "begin" { bd2 = bd2 + 1 }
+                                            if bt2 == "end" { bd2 = bd2 - 1 }
+                                            else_toks = else_toks.push(bt2)
+                                            st = _ps_take(st)
+                                        }
+                                    } else {
+                                        while st.pos < len(st.toks) {
+                                            let bt2 = _ps_peek(st)
+                                            if bt2 == ";" {
+                                                else_toks = else_toks.push(bt2)
+                                                st = _ps_take(st)
+                                                break
+                                            }
+                                            else_toks = else_toks.push(bt2)
+                                            st = _ps_take(st)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        while st.pos < len(st.toks) {
+                            let et = _ps_peek(st)
+                            if et == ";" {
+                                else_toks = else_toks.push(et)
+                                st = _ps_take(st)
+                                break
+                            }
                             else_toks = else_toks.push(et)
                             st = _ps_take(st)
-                            break
                         }
-                        else_toks = else_toks.push(et)
-                        st = _ps_take(st)
                     }
                 }
             }
@@ -2200,6 +2292,221 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     }
                 }
             }
+            // RFC 073 Phase 1 — NESTED else-if chain detection
+            //   `if (c1) lhs <= a ; else if (c2) lhs <= b ; … else lhs <= d ;`
+            // lowers to a left-deep `$mux` tree: the deepest else binds first,
+            // then each outer cond wraps the previous result. We iteratively
+            // peel `else if` levels off `else_toks`, building parallel arrays
+            // of (cond_expr, rhs_expr) pairs for the cascade arms plus a
+            // final default `rhs`. The leftmost `if` (already in `cond_toks`
+            // + `then_toks`) is arm-0, and is parsed identically to the 2-arm
+            // base case by the existing single-arm shape detector (t_ok above).
+            // @cite IEEE 1364-2005 §9.4 (control statements) + Yosys
+            // passes/proc/proc_mux.cc behaviour (left-deep cascade); clean-room.
+            let mut nested_chain_ok = 0
+            let mut nested_chain_lhs = ""
+            let mut nested_chain_op  = ""
+            let mut nested_conds: [[str]]  = []
+            let mut nested_rhss:  [[str]]  = []
+            let mut nested_default: [str]  = []
+            if t_ok == 1 && has_else == 1 && len(else_toks) >= 1 && else_toks[0] == "if" {
+                // arm-0 = the original (cond_toks, t_rhs); seed the chain.
+                nested_chain_lhs = t_lhs
+                nested_chain_op  = t_op_str
+                nested_conds = nested_conds.push(cond_toks)
+                nested_rhss  = nested_rhss.push(t_rhs)
+                // Iterate over the `else_toks` list, peeling `if ( c ) body
+                // [ else REST ]` levels. `body` here is the same narrow
+                // shape `LHS [op] RHS ;` used by t_ok above; LHS must match
+                // nested_chain_lhs, op must match nested_chain_op.
+                let mut work: [str] = else_toks
+                let mut walk_ok = 1
+                let mut have_default = 0
+                while len(work) > 0 && walk_ok == 1 && have_default == 0 {
+                    if work[0] != "if" {
+                        // bare-else default arm: body shape `LHS [op] RHS ;`.
+                        if len(work) < 4 {
+                            walk_ok = 0
+                        } else {
+                            if work[0] == nested_chain_lhs
+                               && work[1] == nested_chain_op {
+                                // last token must be `;`, exactly one `;`.
+                                let mut last_s = 0 - 1
+                                let mut sc = 0
+                                let mut ti = 0
+                                while ti < len(work) {
+                                    if work[ti] == ";" {
+                                        last_s = ti
+                                        sc = sc + 1
+                                    }
+                                    ti = ti + 1
+                                }
+                                if sc == 1 && last_s == len(work) - 1 {
+                                    let mut def_rhs: [str] = []
+                                    let mut ti2 = 2
+                                    while ti2 < len(work) - 1 {
+                                        def_rhs = def_rhs.push(work[ti2])
+                                        ti2 = ti2 + 1
+                                    }
+                                    nested_default = def_rhs
+                                    have_default = 1
+                                } else {
+                                    walk_ok = 0
+                                }
+                            } else {
+                                walk_ok = 0
+                            }
+                        }
+                    } else {
+                        // peel `if ( c ) body [ else REST ]`
+                        // consume "if"
+                        let mut p = 1
+                        if p >= len(work) || work[p] != "(" { walk_ok = 0 }
+                        let mut arm_cond: [str] = []
+                        if walk_ok == 1 {
+                            p = p + 1   // past "("
+                            let mut pdepth = 1
+                            while p < len(work) && pdepth > 0 {
+                                let tt = work[p]
+                                if tt == "(" {
+                                    pdepth = pdepth + 1
+                                    arm_cond = arm_cond.push(tt)
+                                    p = p + 1
+                                    continue
+                                }
+                                if tt == ")" {
+                                    pdepth = pdepth - 1
+                                    if pdepth == 0 {
+                                        p = p + 1
+                                        break
+                                    }
+                                    arm_cond = arm_cond.push(tt)
+                                    p = p + 1
+                                    continue
+                                }
+                                arm_cond = arm_cond.push(tt)
+                                p = p + 1
+                            }
+                            if pdepth != 0 { walk_ok = 0 }
+                        }
+                        // body = `LHS [op] RHS ;` — collect through next ";".
+                        let mut arm_body: [str] = []
+                        if walk_ok == 1 {
+                            while p < len(work) {
+                                let tt = work[p]
+                                if tt == ";" {
+                                    arm_body = arm_body.push(tt)
+                                    p = p + 1
+                                    break
+                                }
+                                arm_body = arm_body.push(tt)
+                                p = p + 1
+                            }
+                            if len(arm_body) < 4 {
+                                walk_ok = 0
+                            } else {
+                                if arm_body[0] != nested_chain_lhs
+                                   || arm_body[1] != nested_chain_op {
+                                    walk_ok = 0
+                                }
+                            }
+                        }
+                        if walk_ok == 1 {
+                            let mut arm_rhs: [str] = []
+                            let mut bi = 2
+                            while bi < len(arm_body) - 1 {
+                                arm_rhs = arm_rhs.push(arm_body[bi])
+                                bi = bi + 1
+                            }
+                            nested_conds = nested_conds.push(arm_cond)
+                            nested_rhss  = nested_rhss.push(arm_rhs)
+                            // optional `else REST` — REST is the next work[]
+                            if p < len(work) && work[p] == "else" {
+                                let mut rest: [str] = []
+                                p = p + 1
+                                while p < len(work) {
+                                    rest = rest.push(work[p])
+                                    p = p + 1
+                                }
+                                work = rest
+                            } else {
+                                // chain terminated without explicit default;
+                                // for combinational that's a latch (no-emit);
+                                // for clocked the implicit default is the
+                                // feedback `lhs` itself (hold).
+                                work = []
+                                if is_clocked == 1 {
+                                    nested_default = [nested_chain_lhs]
+                                    have_default = 1
+                                } else {
+                                    walk_ok = 0
+                                }
+                            }
+                        }
+                    }
+                }
+                if walk_ok == 1 && have_default == 1
+                   && len(nested_conds) == len(nested_rhss)
+                   && len(nested_conds) >= 2 {
+                    // operator gating per is_clocked, same as 2-arm case
+                    let mut op_ok = 0
+                    if nested_chain_op == "<=" && is_clocked == 1 { op_ok = 1 }
+                    if nested_chain_op == "="  && is_clocked == 0 { op_ok = 1 }
+                    if op_ok == 1 { nested_chain_ok = 1 }
+                }
+            }
+            if nested_chain_ok == 1 {
+                // Emit left-deep mux tree. Build from the deepest arm:
+                //   inner_0 = default
+                //   for k = (N-1) down to 0:
+                //     mux_k = $mux(S=cond_k, A=inner_{k}, B=rhs_k, Y=fresh)
+                //     inner_{k+1} = mux_k
+                // Final inner = sink (Q of $dff for clocked, direct connect
+                // for comb). N = len(nested_conds).
+                let der = _rv_elab_expr(nested_default, 0, m, 1, tab)
+                if len(der.err) == 0 {
+                    m = der.m
+                    let mut inner_w = der.wire
+                    let mut emit_ok = 1
+                    let mut idx_k = len(nested_conds) - 1
+                    while idx_k >= 0 && emit_ok == 1 {
+                        let cer = _rv_elab_expr(nested_conds[idx_k], 0, m, 1, tab)
+                        if len(cer.err) > 0 { emit_ok = 0 }
+                        if emit_ok == 1 {
+                            m = cer.m
+                            let rer = _rv_elab_expr(nested_rhss[idx_k], 0, m, 1, tab)
+                            if len(rer.err) > 0 { emit_ok = 0 }
+                            if emit_ok == 1 {
+                                m = rer.m
+                                let mux_y = _rv_fresh_wire(m)
+                                m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+                                let mux_n = "$rvmux$" + str(len(m.cells))
+                                let mut mc = rtlil_cell(mux_n, "$mux", 0)
+                                mc = rtlil_cell_connect(mc, "A", inner_w)
+                                mc = rtlil_cell_connect(mc, "B", rer.wire)
+                                mc = rtlil_cell_connect(mc, "S", cer.wire)
+                                mc = rtlil_cell_connect(mc, "Y", mux_y)
+                                m = rtlil_module_add_cell(m, mc)
+                                inner_w = mux_y
+                            }
+                        }
+                        idx_k = idx_k - 1
+                    }
+                    if emit_ok == 1 {
+                        if is_clocked == 1 {
+                            let dn = "$rvff$" + str(len(m.cells))
+                            let mut dc = rtlil_cell(dn, "$dff", 0)
+                            dc = rtlil_cell_connect(dc, "CLK", clk_wire)
+                            dc = rtlil_cell_connect(dc, "D", inner_w)
+                            dc = rtlil_cell_connect(dc, "Q", nested_chain_lhs)
+                            m = rtlil_module_add_cell(m, dc)
+                            let _eg = clk_edge
+                        } else {
+                            m = rtlil_module_connect(m, nested_chain_lhs, inner_w)
+                        }
+                    }
+                }
+            }
             // Operator must match across both branches; non-blocking
             // `<=` belongs to posedge-clocked always (→ $dff sink),
             // blocking `=` belongs to combinational always (→ direct
@@ -2212,7 +2519,7 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     if topr == "=" && is_clocked == 0 { op_match = 1 }
                 }
             }
-            if t_ok == 1 && e_ok == 1 && t_lhs == e_lhs && op_match == 1 {
+            if nested_chain_ok == 0 && t_ok == 1 && e_ok == 1 && t_lhs == e_lhs && op_match == 1 {
                 let cer = _rv_elab_expr(cond_toks, 0, m, 1, tab)
                 if len(cer.err) == 0 {
                     m = cer.m
@@ -2845,20 +3152,9 @@ fn read_verilog_file(path: str) -> ReadVerilogResult {
     return read_verilog(src)
 }
 
-// ─── RFC 073 SCAFFOLD: pass_proc_mux no-op stub ──────────────────────────
-//
-// Phase-1 placeholder per inbox/rfc_drafts_2026_05_20/
-// rfc_073_read_verilog_proc_mux.md §6. Phase-1 will walk
-// `d.modules[*]` and convert condition-guarded multi-driver writes
-// into RTLIL `$mux` cells BEFORE pass_clean_multidriver collapses
-// them. This stub is the typed insertion point — returns input
-// unchanged, parses cleanly, and satisfies F-RFC-RV-NO-REGRESSION
-// (no observable behaviour change). @cite IEEE 1364-2005 §9.2 / §9.5;
-// Yosys passes/proc/proc_mux.cc (behavioural reference only,
-// clean-room translation).
-fn pass_proc_mux(d: Design) -> Design {
-    return d
-}
+// RFC 073 Phase 1 — `pass_proc_mux` LIVES IN passes.hexa now (the
+// SCAFFOLD no-op stub previously here has been replaced by the real
+// implementation in `stdlib/kernels/logic_synth/passes.hexa`).
 
 // ─── self-test (rfc_003 idiom) ───────────────────────────────────────────
 
@@ -3725,6 +4021,63 @@ fn main() {
         }
         if _foundFC != 1 {
             println("FAIL T-fold-C add_B_not_const7"); fails = fails + 1
+        }
+    }
+
+    // T55 — RFC 073 Phase 1 (F-RFC-RV-PROC-MUX-NESTED, clocked variant).
+    //   Body `if (c1) q <= a ; else if (c2) q <= b ; else q <= d ;` posedge
+    //   always must lower to a left-deep `$mux` tree: 2 mux cells (inner
+    //   for the c2 arm against default d, outer for c1 against the inner
+    //   mux's Y) feeding 1 `$dff`. @cite IEEE 1364-2005 §9.4 + Yosys
+    //   proc_mux behaviour (clean-room).
+    total = total + 1
+    let _v55 = "module nm ( input clk , input c1 , input c2 , input a , input b , input d , output reg q ) ; always @ ( posedge clk ) if ( c1 ) q <= a ; else if ( c2 ) q <= b ; else q <= d ; endmodule"
+    let _r55 = read_verilog(_v55)
+    if _r55.ok != 1 {
+        println("FAIL T55 nested_chain_clocked: " + _r55.message); fails = fails + 1
+    } else {
+        let _m55 = _r55.design.modules[0]
+        if rtlil_count_cells_of_type(_m55, "$mux") != 2 {
+            println("FAIL T55a mux_count got " + str(rtlil_count_cells_of_type(_m55, "$mux")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m55, "$dff") != 1 {
+            println("FAIL T55b dff_count got " + str(rtlil_count_cells_of_type(_m55, "$dff")))
+            fails = fails + 1
+        }
+    }
+
+    // T56 — RFC 073 Phase 1 (F-RFC-RV-PROC-MUX-NESTED, combinational variant).
+    //   Body `if (c1) y = a ; else if (c2) y = b ; else y = d ;` with
+    //   `always @(*)` must lower to a left-deep `$mux` tree of 2 cells
+    //   feeding a direct module-level `connect` (no $dff). The terminal
+    //   default arm is the explicit `else y = d ;` — this satisfies the
+    //   combinational no-latch requirement (IEEE 1800-2017 §10.4.2).
+    total = total + 1
+    let _v56 = "module nmc ( input c1 , input c2 , input a , input b , input d , output y ) ; reg y ; always @ ( * ) if ( c1 ) y = a ; else if ( c2 ) y = b ; else y = d ; endmodule"
+    let _r56 = read_verilog(_v56)
+    if _r56.ok != 1 {
+        println("FAIL T56 nested_chain_comb: " + _r56.message); fails = fails + 1
+    } else {
+        let _m56 = _r56.design.modules[0]
+        if rtlil_count_cells_of_type(_m56, "$mux") != 2 {
+            println("FAIL T56a mux_count got " + str(rtlil_count_cells_of_type(_m56, "$mux")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m56, "$dff") != 0 {
+            println("FAIL T56b dff_count got " + str(rtlil_count_cells_of_type(_m56, "$dff")))
+            fails = fails + 1
+        }
+        // Final mux Y connects to `y` via a top-level `connect` (since
+        // combinational): assert connect_lhs contains "y".
+        let mut _found56 = 0
+        let mut _ci56 = 0
+        while _ci56 < len(_m56.connect_lhs) {
+            if _m56.connect_lhs[_ci56] == "y" { _found56 = 1 }
+            _ci56 = _ci56 + 1
+        }
+        if _found56 != 1 {
+            println("FAIL T56c connect_to_y missing"); fails = fails + 1
         }
     }
 

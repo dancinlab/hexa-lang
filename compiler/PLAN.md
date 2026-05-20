@@ -4486,6 +4486,142 @@ Next cycles (one PR per falsifier-gated phase):
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md
 (opener landed; phases 1 / 1.5 / 2 / 3 all marked "not yet landed").
 
+## 진행 로그 — RFC 073 Phase 1 `pass_proc_mux` if/else + nested chain (2026-05-20)
+
+Phase 1 of RFC 073 (read_verilog procedural-mux scope expansion) — replaces
+the no-op stub landed by the opener (PR #188 squash `c1f078f3`) with the
+real primitive: a structural `$mux` lowering pass for condition-guarded
+multi-driver writes, plus inline nested-else-if handling in the
+`_rv_parse_always` parser.
+
+**Phase 1 deliverable (3 SSOT edits + 1 cross-link comment in gate_record):**
+
+1. `stdlib/kernels/logic_synth/rtlil.hexa`
+   - `Module` struct gains parallel `connect_cond: [str]` array (empty
+     string = unconditional, the legacy IR shape).
+   - New constructor `rtlil_module_connect_cond(m, lhs, rhs, cond)` records
+     the guarding-condition wire-name; `rtlil_module_connect` now records
+     `""` for cond.
+   - All 6 helper functions (`rtlil_new_module`, `_add_wire`, `_add_cell`,
+     `_add_process`, `_connect`, `_connect_cond`) preserve the parallel
+     array invariant.
+   - Self-test T11 (parallel-array length + cond preservation) added →
+     rtlil selftest 10/10 → 11/11 PASS.
+
+2. `stdlib/kernels/logic_synth/passes.hexa`
+   - All 5 Module struct literals (`pass_proc`, `pass_opt`,
+     `pass_techmap_sky130`, `pass_dfflibmap_sky130`, `pass_clean_multidriver`)
+     extended to thread `connect_cond` through; `pass_opt` filter and
+     `pass_clean_multidriver` collapse keep the cond-array parallel by
+     construction.
+   - `pass_proc_mux(d: Design) -> PassResult` implemented as a real pass
+     (was no-op stub in read_verilog.hexa). Walks each Module; groups
+     `connect_cond`-tagged rows by LHS; emits a left-deep `$mux` chain
+     (`$procmux$<lhs>$<k>` cells + `$procmux_y$<lhs>$<k>` wires); replaces
+     the consumed tagged rows with a single unconditional connect to the
+     mux-tree Y. Untagged rows pass through unchanged. Helper
+     `_passes_proc_mux_emit_chain` builds the chain.
+   - Tests T33 (`F-RFC-RV-PROC-MUX-IF-ELSE` — 2-arm cond/¬cond → 2 mux
+     cells + 1 connect), T34 (`F-RFC-RV-PROC-MUX-NESTED` — 3-arm left-deep
+     → 3 mux cells), T35 (`F-RFC-RV-NO-REGRESSION` — untagged rows pass
+     straight through; `pass_clean_multidriver` handoff still applies
+     last-wins) added → passes selftest 32/32 → 35/35 PASS.
+
+3. `stdlib/kernels/logic_synth/read_verilog.hexa`
+   - `_rv_parse_always` else-toks collector extended: when the else body
+     begins with `if`, peel a chain of `if ( cond ) body [ else REST ]`
+     levels (incl. begin/end blocks at each level), only stopping when
+     REST is no longer another `if`. Fixes the parser bug where a nested
+     `else if` chain emitted only the `if (c1) … ; else if (c2) … ;`
+     prefix and left `else q <= d ;` as an unmatched top-level `else`
+     token (which the module parser rejected as "unsupported construct").
+   - New emission path (~200 LoC) inserted BEFORE the existing 2-arm
+     with-else path: detects `t_ok == 1 && has_else == 1 && else_toks[0]
+     == "if"`, iteratively peels the chain into parallel `nested_conds`
+     / `nested_rhss` / `nested_default` arrays (same simple-name LHS +
+     same op-string `<=` or `=` invariant; default arm = explicit final
+     `else` body OR clocked-feedback hold). Emits a left-deep `$mux` tree
+     from deepest arm outward, sinks via `$dff` for clocked or direct
+     `connect` for combinational.
+   - Existing 2-arm path gated by `nested_chain_ok == 0` to prevent
+     double-emit.
+   - No-op `pass_proc_mux` stub removed (replaced by docs cross-link
+     pointing to `passes.hexa`).
+   - Tests T55 (nested clocked → 2 `$mux` + 1 `$dff`), T56 (nested
+     combinational → 2 `$mux` + 0 `$dff` + connect to `y`) added →
+     read_verilog selftest 54/54 → 56/56 PASS.
+
+4. `stdlib/yosys/gate_record.hexa` — 5-line docs cross-link comment in
+   `_gate_run_one` noting that `pass_proc_mux` is the structural
+   primitive defined in `stdlib/kernels/logic_synth/passes.hexa`; wiring
+   it into the gate pipeline ahead of `pass_clean_multidriver` is a
+   separate cycle once Phase 2/3 routes condition-guarded patterns
+   through the `connect_cond` IR field instead of the inline emitter.
+
+**Falsifier verdict (g3 honest):**
+
+| ID                              | Phase | Status                                                                  |
+| ------------------------------- | ----- | ----------------------------------------------------------------------- |
+| `F-RFC-RV-PROC-MUX-IF-ELSE`     | 1     | **PASS** — T33 (passes): 2-arm cond/¬cond → 2 `$mux` + 1 connect       |
+| `F-RFC-RV-PROC-MUX-NESTED`      | 1     | **PASS** — T34 (passes) 3-arm + T55 (read_verilog clocked) + T56 (comb) |
+| `F-RFC-RV-NO-REGRESSION`        | all   | **PASS** — T35 (passes) + 51/51 prior read_verilog tests unchanged      |
+| `F-RFC-RV-PROC-MUX-CASE`        | 1.5   | NOT yet fired — Phase 1.5 follow-on                                     |
+| `F-RFC-RV-ARRAY-INDEX-CONST`    | 2     | NOT yet fired — Phase 2 follow-on                                       |
+| `F-RFC-RV-ARRAY-INDEX-RUNTIME`  | 2     | NOT yet fired — Phase 2 follow-on                                       |
+| `F-RFC-RV-§5-CLOSURE`           | 3     | OPEN (honest mismatch) — see §5 oracle re-run below                     |
+
+**§5 oracle outcome (honest report per @D g3):**
+
+Ran `stdlib/yosys/gate_record.hexa` post Phase 1:
+
+```
+[gate] router_d4 area=0.0 µm² oracle=61763 µm²   Δ=100.0% FAIL (±5%)
+[gate] router_d6 area=0.0 µm² oracle=93608.5 µm² Δ=100.0% FAIL (±5%)
+```
+
+Phase 1 did NOT close §5. The trace surfaces the next blocker:
+`clean_multidriver` reports d4 collapsed 5 drivers of `idx` to last-wins
+(d6 collapses 7→1) — the `idx` LHS is the router's grant index, written
+inside a `for (i=0; i<P; i=i+1) idx = … ;` runtime-K array-assign loop.
+These are not condition-guarded writes (which `pass_proc_mux` would
+absorb); they are **runtime-K array-indexed assignments**, the
+Phase 2 falsifier surface (`F-RFC-RV-ARRAY-INDEX-RUNTIME`). Until Phase 2
+lowers `mem[K] = expr` with runtime K to a per-index `$eq + $mux` chain,
+the design outputs continue to be `_const0_`/`_const1_`-tied by ABC and
+the area oracle stays at 0.0 µm².
+
+g3-honest framing: Phase 1 lands the **proc-mux primitive** (mux emission
+for condition-guarded multi-driver writes + nested if-else-if-else
+chains, both via inline parser + structural pass on `connect_cond`
+rows). It does **NOT** close the §5 area-oracle gate. The §5 gate
+remains OPEN; the next blocker is array-indexed runtime-K assignment
+(Phase 2 per RFC 073 §4). Clean-room provenance preserved
+(IEEE 1364-2005 §9.2 / §9.4 + Yosys `proc_mux.cc` behavioural reference,
+no source copy).
+
+**Self-test counts:**
+
+- `rtlil.hexa`         : 10/10 → **11/11** (+T11 connect_cond parallel-array)
+- `passes.hexa`        : 32/32 → **35/35** (+T33, T34, T35)
+- `read_verilog.hexa`  : 54/54 → **56/56** (+T55, T56)
+- `abc_map.hexa`       : 7/7 unchanged
+- `liberty.hexa`       : 8/8 unchanged
+- `write_verilog.hexa` : 7/7 unchanged
+- gate_record.hexa     : pipeline runs end-to-end on d4/d6, area-oracle
+  remains FAIL (honest mismatch — Phase 2 needed).
+
+**LoC delta:**
+
+```
+ stdlib/kernels/logic_synth/passes.hexa       | +213 -3
+ stdlib/kernels/logic_synth/read_verilog.hexa | +293 -18
+ stdlib/kernels/logic_synth/rtlil.hexa        | + 81 -8
+ stdlib/yosys/gate_record.hexa                | +  5 -0
+```
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md
+(Phase 1 LANDED 2026-05-20; phases 1.5 / 2 / 3 still "not yet landed").
+
 ### 2026-05-20 — P4 GPU-fire status (post-batch-6) — 3 RFCs deferred per @D g3 honest scope
 
 After today's 6-batch arc closed all codegen-side cycles for RFC 067/068/069
