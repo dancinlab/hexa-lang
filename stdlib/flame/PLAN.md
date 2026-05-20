@@ -2281,3 +2281,161 @@ closed)**:
 - SD10: more rules — Sum, MatMul AST-derived, Compose, elementwise
   unary family (silu, gelu, tanh).
 - SD11: re-emit-and-recompile loop (was SD10).
+
+### 2026-05-20 — SD9 ag_extract — multi-input vjp (bilinear `f(x,y) = x*y`) (north-star ① autograd primitive)
+
+**SD9 = the multi-input vjp primitive: invoking the walker once per
+target Param recovers ∇f for an n-input scalar function. For `f(x,y)
+= x * y`, two walker calls (target_ix ∈ {0, 1}) produce two
+independent bwd ASTs that, interpreted under a 2-cell param-vals
+farr, compute `df/dx = dy * y` and `df/dy = dy * x`.**
+
+**Foundational claim (g3-honest)**: the `target_param_ix` parameter
+already in `ag_extract_reverse_walk_v2`'s signature (since SD6)
+suffices for n-input vjp. The Param leaf rule
+`if ix == target_param_ix { upstream_grad } else { Const(0.0) }`
+selects exactly ONE Param direction per walker invocation; no walker
+edits needed. SD9 EXERCISES that parameter on a 2-Param fwd to prove
+the pattern. Calling the walker n times (once per Param-index) is
+Griewank & Walther §3.2 Algorithm 3.6 specialized to scalar output:
+the VJP IS the gradient column. Pearlmutter & Siskind §3
+compositional vjp frames the same.
+
+**Walker extension approach**: separate per-Param backward functions
+(task brief §3 design choice). Each walker invocation returns ONE
+Param's gradient; calling it n times for ∇f. The alternative
+(per-Param accumulator dict, single walker traversal) is carved out
+as SD12 future-work — equivalent semantics, cheaper when n is large,
+not needed for the near-term flame use case.
+
+**Files (additive only — zero edits to ag_derive/ag_tape/nn_lib/
+ag_extract walker; SD5+SD6+SD7 surfaces untouched)**:
+- `stdlib/flame/ag_extract.hexa` +298 LoC (1228 → 1526):
+  - `ag_extract_build_bilinear_fwd(arena, cache_out) -> int` —
+    hand-built fwd AST for `f(x, y) = x * y`. Param(0) = x,
+    Param(1) = y; root is BinOp_MUL.
+  - `ag_extract_eval_fwd_multi(arena, node, param_vals, fwd_cache)`
+    — same shape as `eval_fwd` but Param leaves read
+    `param_vals[ix]` (param_vals is a 2-cell farr [x_i, y_i]).
+  - `ag_extract_interpret_v2_multi(arena, node, param_vals, dy_val,
+    fwd_cache)` — same shape as `interpret_v2` with param-vals
+    indirection on Param leaves.
+  - `ag_extract_bilinear_bwd_via_ast(arena, fwd_root, bwd_root,
+    x_arr, y_arr, dy_arr, d_out, len, fwd_cache, param_vals)` —
+    elementwise driver for ONE Param direction. Called twice in
+    the test (per Param index).
+  - `ag_extract_emit_fn_xy` — emit `(x: float, y: float, dy: float)
+    -> float` signature (vs the 1-input `(x, dy)` of `emit_fn`).
+    For inspection; in-process oracle goes through
+    `interpret_v2_multi`.
+  - `ag_extract_emit_expr`: extended Param ix=1 → "y" (was the
+    fallback "p1"). g3-minor — only affects the printed source.
+  - §SD9 header documents the foundational claim, walker recursion
+    proof for bilinear, honest scope, atlas anchors.
+  - §Future work updated: SD8 parser-integration · SD10 more rules ·
+    SD11 re-emit-and-recompile · NEW SD12 per-Param accumulator
+    dict (single-pass alternative).
+
+- `test/flame_ag_extract_test.hexa` +240 LoC (433 → 673):
+  - `bilinear_bwd_x_manual(x_arr, y_arr, dy_arr, dx_out, len)` —
+    hand-written reference for df/dx with IEEE-754 trajectory
+    matching the walker's emit: `t1 = dy * y; t2 = 0.0; dx = t1 + t2`.
+  - `bilinear_bwd_y_manual(x_arr, y_arr, dy_arr, dyg_out, len)` —
+    same shape for df/dy: `t1 = 0.0; t2 = dy * x; dyg = t1 + t2`.
+  - SD9 oracle: builds bilinear fwd, walks twice (target=0, target=1),
+    emits both bwd sources (printed for inspection), interprets
+    elementwise, compares each Param direction to its manual.
+  - Inputs (per task §5 separate-seed requirement):
+    - x_arr: shared with SD5/6/7 (LCG seed 4242 + −1 shift)
+    - y_arr: NEW (LCG seed 70707 + −1 shift) — span check 13 pos, 19 neg
+    - dy_arr: shared with SD5/6/7 (LCG seed 31337)
+  - First-4 element audit (x, y, dy, d_auto, d_ref, |Δ|) per
+    Param direction.
+  - Per-Param verdict prints; overall PASS requires BOTH gates green.
+  - Exit codes extended: 94 = SD9 fail (either Param direction).
+
+**Gate measured**: `F-RFC043-AUTOGRAD-AUTO-SD9-BILINEAR-BYTE-EQ`
+**PASS** — both per-Param byte-eq gates green
+(`max|dx_auto − dx_ref| = 0.0` AND `max|dyg_auto − dyg_ref| = 0.0`)
+on len=32 fixed-seed inputs.
+
+**Emitted source** (printed by the test for inspection):
+```
+pub fn f_x_bwd_auto(x: float, y: float, dy: float) -> float {
+    return ((dy * _fwd1) + 0.0)
+}
+
+pub fn f_y_bwd_auto(x: float, y: float, dy: float) -> float {
+    return (0.0 + (dy * _fwd0))
+}
+```
+where `_fwd1` = the y-Param fwd_cache slot (holds y at runtime) and
+`_fwd0` = the x-Param fwd_cache slot (holds x at runtime). The two
+emitted bodies make the per-Param vjp closed-form `dy*y` and `dy*x`
+visible in source. Const(0.0) operands come from the walker's
+Param-mismatch rule — the BinOp_MUL emits ADD over BOTH child
+contributions, and the mismatched-ix leaf contributes Const(0.0)
+exactly. The Option A reference matches that order bit-for-bit.
+
+**First 4 element-wise pairs** (audit):
+```
+df/dx:
+  i=0  x=-0.0205  y= 0.672  dy= 0.365  dx_auto= 0.244935  dx_ref= 0.244935  |Δ|=0.0
+  i=1  x=-1.139   y=-2.948  dy= 0.023  dx_auto=-0.068491  dx_ref=-0.068491  |Δ|=0.0
+  i=2  x= 0.479   y=-2.565  dy=-0.706  dx_auto= 1.80967   dx_ref= 1.80967   |Δ|=0.0
+  i=3  x=-0.857   y=-1.704  dy=-0.778  dx_auto= 1.32573   dx_ref= 1.32573   |Δ|=0.0
+df/dy:
+  i=0  x=-0.0205  y= 0.672  dy= 0.365  dyg_auto=-0.007475  dyg_ref=-0.007475  |Δ|=0.0
+  i=1  x=-1.139   y=-2.948  dy= 0.023  dyg_auto=-0.026466  dyg_ref=-0.026466  |Δ|=0.0
+  i=2  x= 0.479   y=-2.565  dy=-0.706  dyg_auto=-0.338244  dyg_ref=-0.338244  |Δ|=0.0
+  i=3  x=-0.857   y=-1.704  dy=-0.778  dyg_auto= 0.66661   dyg_ref= 0.66661   |Δ|=0.0
+```
+
+**g3-honest framing (the SD9 deliverable)**: SD9 demonstrates that
+the SD6 walker's `target_param_ix` parameter, combined with the
+Param leaf rule's index-match-or-Const(0.0) semantics, IS the
+multi-input vjp primitive. For a 2-Param fwd, two walker invocations
+(once per target ix) produce two independent bwd ASTs whose
+interpretation under a param-vals farr yields the two Jacobian
+columns. The Option A reference matches the walker's emit
+trajectory verbatim — `dy*y + 0.0` for df/dx, `0.0 + dy*x` for df/dy
+— so both per-Param byte-eq gates measure max|Δ| = 0.0.
+**What SD9 PROVED**: multi-input vjp is the natural specialization of
+the walker's existing target-ix machinery; no walker code changes
+needed; the param-vals-aware fwd-eval + bwd-interpret pair is
+additive. **What SD9 did NOT prove**: multi-output (a Jacobian
+column-stack via repeated VJP would be the next step, but the test
+uses a scalar-output fwd — sufficient for ∇f of any scalar function),
+parser integration (SD8), more rules on multi-input paths (SD10),
+single-pass per-Param accumulator dict (SD12), nor the
+re-emit-and-recompile closure (SD11).
+
+**SD1+SD2+SD3 regression check**: `test/flame_ag_derive_test.hexa`
+PASS rc=0 unchanged (ag_derive surface is not edited).
+
+**SD5+SD6+SD7 regression check**: same `test/flame_ag_extract_test.hexa`
+invocation runs SD5+SD6+SD7+SD9 sequentially:
+- SD5 byte-eq: PASS max|Δ| = 0.0 (unchanged).
+- SD6 byte-eq: HONEST FINDING max|Δ| = 5.55e-17 (unchanged
+  machine-eps-scale documented per the SD7 honest-tolerance gate).
+- SD7 byte-eq: PASS max|Δ| = 0.0 (unchanged).
+- SD9 byte-eq: PASS BOTH per-Param gates max|Δ| = 0.0 (this cycle).
+- Combined rc=0.
+
+**Atlas citations** (g6, in `ag_extract.hexa` SD9 header):
+- Griewank & Walther §3.2 Algorithm 3.6 — reverse-mode VJP
+  u^T J = grad(u^T f); SD9 specialization: scalar output ⇒
+  per-direction call yields ∂f/∂x_i.
+- Pearlmutter & Siskind §3 — compositional vjp; each Param is an
+  independent leaf of the recursion; per-Param-index leaf rule is
+  the compositional identity for multi-input vjp.
+- Same atlas anchors as SD5/6/7 (no new theorem; multi-input is a
+  specialization of the existing algorithm, not a new rule).
+
+**Future-cycle stop-conditions (g3 carve-outs, after SD9 closed)**:
+- SD8: parser integration (still future-work).
+- SD10: more rules — Sum, MatMul AST-derived, Compose, elementwise
+  unary family (silu, gelu, tanh).
+- SD11: re-emit-and-recompile loop.
+- SD12: per-Param accumulator dict (single-pass alternative to
+  SD9's per-Param-call shape).
