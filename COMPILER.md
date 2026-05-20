@@ -23,7 +23,11 @@ At-a-glance
   interim  : W1/W2/F speed the C path; relief only while the C fallback lives
   naming   : drop bootstrap vestiges (_v2 _c2 aprime s4) — separate cycle
   measured : clang = 80% of build wall; runtime.c recompile = 53% alone
-  status   : S1-S5 done · S7 RFC 063 + scaffolds + P0 encoding table (~20 rules)
+  status   : S1-S5 done · S7 RFC 063 phasing measured:
+              P0 🛸 CLOSED (corpus 4/4 byte-eq vs clang)
+              P1 🛸 CLOSED (F-P1-RUNEQ trivial.hexa exec→exit 42 via static-link)
+              P2 cycles 1-3 ✅ (ELF scaffold + x86_64 encode + Linux exec→exit 42 ubu-2)
+              P3 pending (flip default + F-P3-ZERO-EXTERN)
 ```
 
 ---
@@ -476,3 +480,47 @@ ultimately removes.
   Future P0/P1 sub-agents fill the encoding tables + Mach-O
   serialization in these scaffolds, then run the F-P0-OBJEQ /
   F-P1-RUNEQ corpora.
+
+- 2026-05-20 — **🛸 S7 P0 CLOSED · corpus 4/4 byte-eq vs clang.**
+  `compiler/emit/macho_arm64.hexa` 의 7 cycles (header serialize → LIR
+  walker + code byte emit → nlist_64 + strtab → relocation_info → mem
+  ops + N_UNDF → STP/LDP pre/post-index + MOV-with-SP alias fix →
+  `compiler/main.hexa --backend=native` 와이어링 + F-P0-OBJEQ FULL
+  CORPUS PASS). 실제 `aprime_cc --emit=obj --backend=native` 가
+  trivial/if/while/fib.hexa 의 `__text` 를 `clang -c -arch arm64` 의
+  `__text` 와 byte-for-byte 동일하게 emit. otool · nm · otool -rV
+  모두 oracle 통과. F-P0-OBJEQ closure gate 의 정의 충족.
+
+- 2026-05-20 — **🛸 S7 P1 CLOSED · F-P1-RUNEQ static-link PASS.**
+  `tool/hexa_ld.hexa` 의 8 cycles (parser .o → ParsedObj round-trip →
+  MH_EXECUTE skeleton → __text payload + LC_MAIN entryoff → LC_SYMTAB
+  + __LINKEDIT → codesign post-link → MH_NOUNDEFS + LC_BUILD_VERSION +
+  cycle 5 false-positive fix → LC_DYLD_CHAINED_FIXUPS + EXPORTS_TRIE
+  + UUID + SOURCE_VERSION + MH_DYLDLINK → first runnable exec → F-P1-
+  RUNEQ static-link with synthetic runtime stub). real corpus
+  `trivial.hexa` (=`fn main(){exit(42)}`) 가 OUR hexa-native pipeline
+  (aprime_cc + hexa_ld) 끝까지 가서 만든 Mach-O exec 가 macOS Sonoma
+  에서 launch + exit(42).
+
+- 2026-05-20 — **🛸 S7 P2 cycles 1-3 (Linux ELF x86_64).** `compiler/
+  emit/elf_x86_64.hexa` 신규. 3 cycles: ELF64 header + 5 section
+  headers scaffold → x86_64 instruction encoding minimum subset (MOV
+  r32 imm32 / SYSCALL / RET, 4 rules) → ELF executable (PT_LOAD) +
+  ubu-2 원격 launch test (REMOTE_RC=42). cross-platform cross-arch
+  proof: 단일 hexa-lang 코드베이스가 macOS arm64 (P0+P1) + Linux
+  x86_64 (P2) 둘 다의 실행 가능 binary 를 외부 toolchain 0건
+  (codesign macOS-only) 으로 생산.
+
+  RFC 063 phasing matrix (2026-05-20 measured):
+
+  | Phase | 상태 | Falsifier |
+  |-------|------|-----------|
+  | P0 Mach-O arm64 obj emitter   | 🛸 CLOSED | F-P0-OBJEQ corpus 4/4 byte-eq |
+  | P1 hexa_ld Mach-O static-link | 🛸 CLOSED | F-P1-RUNEQ trivial.hexa exit 42 |
+  | P2 ELF x86_64 cycles 1-3      | ✅ 진행 중 | F-P2-LINUX-EXIT exit 42 on ubu-2 |
+  | P2 cycle 4+ (walker + corpus) | pending   | F-P2-RUNEQ corpus |
+  | P3 flip default               | pending   | F-P3-ZERO-EXTERN dtruss |
+
+  잔여 작업 (cycles 19-N): P2 cycle 4 (x86_64 LIR walker + multi-obj
+  static-link + corpus RUNEQ on ubu-2) + P3 (HEXA_BACKEND=native
+  default flip + dtruss verification).
