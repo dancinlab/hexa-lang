@@ -106,23 +106,8 @@
 //   The DEFERRAL is G8-C: hexa_ld.hexa does not yet CALL these
 //   functions. That wire is the next sub-cycle.
 //   — g3-honest: "G8-B substrate landed; G8-C caller wire deferred."
-//
-// STUB UNWIRE 2026-05-20 (punted-2 closure)
-//   The G6 cycle (RFC 070 G7-B F-B-LOADABLE) brought this file in but
-//   stubbed `_save_meta_tsv` to `return true` because `stdlib/io` was
-//   not imported and `write_text` was unwired in the caller. The G6
-//   commit body honestly flagged it: "punted (2) — stdlib/io.hexa
-//   import + write_text codegen extern wiring".
-//   This cycle re-imports stdlib/io (the only required wiring — no
-//   codegen extern change needed, since write_text is a hexa-level
-//   stdlib pub fn that itself routes through the already-wired
-//   write_file + exec("mv") + file_exists primitives, verified at
-//   self/codegen_c2.hexa:4570-4577 + stdlib/io.hexa:54-84) and
-//   restores the substrate body verbatim from 55d007e5. Round-trip
-//   covered by compiler/link/incr_cache_test.hexa T1..T7.
 
 use "self/stdlib/hxc_v2_lib"
-use "stdlib/io"                                  // write_text / read_text — punted-2 wiring (2026-05-20)
 import "../../stdlib/portable_fs.hexa"
 
 // ── module constants (RFC 071 §3.B) ─────────────────────────────────

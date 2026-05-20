@@ -804,10 +804,20 @@ if stream_mode && target == "arm64-apple-darwin" {
     // untouched (F-RFC055-CPU-CODEGEN-UNTOUCHED). The NVPTX branch is
     // added BEFORE the unsupported-target fallthrough so an explicit
     // --target=nvptx64-* lands here, not in the error message.
+    // RFC 070 G7-A.native impl — entry signature lifted to accept
+    // `CodegenOptions`. Today the compiler driver passes the default
+    // (opts.shared == 0, target_triple == ""); the `--shared` flag
+    // wiring (G7-A.flag-wire, origin `66b055c4`) is NOT yet on this
+    // branch, so there is no per-invocation override surface here. The
+    // NEXT cycle that adds the flag through to `cmd_build` will fill
+    // in `target_triple` from `target` and forward `bopts[4]` as
+    // `shared`. Default-construct keeps emit byte-identical (verified
+    // by F-RFC055-CPU-CODEGEN-UNTOUCHED on `--target=nvptx64-*`).
+    let __cg_opts = codegen_options_default()
     let lmodule = if target == "arm64-apple-darwin" {
-        codegen_arm64_darwin(mmodule)
+        codegen_arm64_darwin(mmodule, __cg_opts)
     } else if target == "x86_64-linux-gnu" {
-        codegen_x86_64_linux(mmodule)
+        codegen_x86_64_linux(mmodule, __cg_opts)
     } else if target == "thumbv7em-none-eabihf" {
         // F3 — bare-metal Cortex-M4F target (hexa-rtsc, hexa-chip,
         // hexa-cern firmware boards). Soft-float fallback variant

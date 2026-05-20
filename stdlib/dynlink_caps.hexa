@@ -278,14 +278,6 @@ pub fn dynlink_encode_cap_manifest(m: CapManifest) -> string {
 // dynlink_decode_cap_manifest — parse HXC v2 records back into a typed
 // CapManifest. On parse error / missing header row, returns an empty
 // manifest (all fields zero-equivalent).
-//
-// NOTE: returns empty manifest on malformed input for backward-compat
-// with read-only callers. Security-critical callers (host-side dlopen
-// gate) MUST use dynlink_parse_cap_manifest_strict() instead — it
-// surfaces parse failures as kind="parse_error" so a malformed payload
-// cannot masquerade as a "harmless empty plugin" (E3 audit 10e87cd1).
-//
-// @cite RFC 070 §3.C HXC v2 decode hook
 pub fn dynlink_decode_cap_manifest(payload: string) -> CapManifest {
     let rows = hxc_v2_decode_records(payload)
     if len(rows) == 0 {
@@ -312,91 +304,6 @@ pub fn dynlink_decode_cap_manifest(payload: string) -> CapManifest {
         capabilities: caps,
         rfc_version: rfc_v,
         compiler_id: compiler_id,
-    }
-}
-
-// ParseCapManifestResult — strict-decode result. On parse error, gate
-// carries kind="parse_error" with a precise reason; on success, gate
-// carries kind="ok" and manifest holds the decoded CapManifest.
-//
-// @cite RFC 070 §G7-D fail-closed gate
-struct ParseCapManifestResult {
-    gate: GateResult,
-    manifest: CapManifest,
-}
-
-// dynlink_parse_cap_manifest_strict — security-critical decoder.
-// Validates the HXC v2 records structure end-to-end. Any malformed
-// payload (empty wire body / missing header row / non-'H' first cell /
-// header arity < 4) is surfaced as kind="parse_error" so the host
-// dlopen gate can fail-closed instead of admitting a "harmless empty
-// plugin" forgery.
-//
-// On PASS: gate.ok=1 kind="ok"; manifest is fully populated.
-// On FAIL: gate.ok=0 kind="parse_error" reason="CAP: <specific cause>";
-//   manifest is the empty/zero sentinel (must not be trusted).
-//
-// E3 audit (10e87cd1) found dynlink_decode_cap_manifest silently
-// returned an empty manifest on malformed input, which dynlink_full_gate
-// then trivially passed (zero capabilities ⇒ zero grant checks ⇒ ok=1).
-// This strict variant closes the bypass.
-//
-// @cite RFC 070 §4.6.4 fail-closed contract + E3 audit 10e87cd1
-pub fn dynlink_parse_cap_manifest_strict(payload: string) -> ParseCapManifestResult {
-    let empty = CapManifest{ plugin_id: "", capabilities: [], rfc_version: 0, compiler_id: "" }
-    if len(payload) == 0 {
-        return ParseCapManifestResult{
-            gate: GateResult{ ok: 0, kind: "parse_error", reason: "CAP: empty manifest payload" },
-            manifest: empty,
-        }
-    }
-    let rows = hxc_v2_decode_records(payload)
-    if len(rows) == 0 {
-        return ParseCapManifestResult{
-            gate: GateResult{ ok: 0, kind: "parse_error", reason: "CAP: malformed cap manifest (no records decoded)" },
-            manifest: empty,
-        }
-    }
-    let hdr = rows[0]
-    if len(hdr) < 1 {
-        return ParseCapManifestResult{
-            gate: GateResult{ ok: 0, kind: "parse_error", reason: "CAP: malformed cap manifest (empty header row)" },
-            manifest: empty,
-        }
-    }
-    if hdr[0] != "H" {
-        return ParseCapManifestResult{
-            gate: GateResult{ ok: 0, kind: "parse_error", reason: "CAP: malformed cap manifest (header row sentinel != 'H')" },
-            manifest: empty,
-        }
-    }
-    if len(hdr) < 4 {
-        return ParseCapManifestResult{
-            gate: GateResult{ ok: 0, kind: "parse_error", reason: "CAP: malformed cap manifest (header row arity < 4)" },
-            manifest: empty,
-        }
-    }
-    let plugin_id = hdr[1]
-    let rfc_v = _dynlink_parse_int(hdr[2])
-    let compiler_id = hdr[3]
-    let mut caps = []
-    let mut i: int = 1
-    while i < len(rows) {
-        let r = rows[i]
-        if len(r) >= 2 && r[0] == "C" {
-            caps.push(r[1])
-        }
-        i = i + 1
-    }
-    let m = CapManifest{
-        plugin_id: plugin_id,
-        capabilities: caps,
-        rfc_version: rfc_v,
-        compiler_id: compiler_id,
-    }
-    return ParseCapManifestResult{
-        gate: GateResult{ ok: 1, kind: "ok", reason: "" },
-        manifest: m,
     }
 }
 
@@ -518,19 +425,12 @@ fn _dynlink_table_contains(tbl: [string], needle: string) -> bool {
 // Caller passes the bytes of both sections (and an empty string if a
 // section is missing — which is treated as fail-closed).
 //
-// Order: (1) ABI stamp compat (F-D1), (2) STRICT cap manifest decode
-// (parse_error fails closed — closes E3 silent-empty-manifest bypass),
-// (3) cap grant check (F-D2). Each stage short-circuits on first fail.
-//
-// @cite RFC 070 §4.6.4 combined gate · E3 audit 10e87cd1 (parse_error gate)
+// @cite RFC 070 §4.6.4 combined gate (F-D1 first, F-D2 only if F-D1 passes)
 pub fn dynlink_full_gate(abi_bytes: string, cap_bytes: string, grant_table: [string]) -> GateResult {
     let abi_res = dynlink_check_abi_compat(abi_bytes)
     if abi_res.ok == 0 {
         return abi_res
     }
-    let parsed = dynlink_parse_cap_manifest_strict(cap_bytes)
-    if parsed.gate.ok == 0 {
-        return parsed.gate
-    }
-    return dynlink_check_cap_grant(parsed.manifest, grant_table)
+    let m = dynlink_decode_cap_manifest(cap_bytes)
+    return dynlink_check_cap_grant(m, grant_table)
 }

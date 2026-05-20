@@ -1,7 +1,9 @@
 # RFC 072 — atlas_enrich cache (RFC 067 inline-enrich follow-on)
 
-- status: PHASE 1 LANDED (Option A in-memory scaffold; B/C pending)
-- **Phase 1 (Option A) landed 2026-05-20** — `compiler/atlas/parser.hexa::enrich_node` now wraps the parse path with an `_g_enrich_cache: any = {}` id-keyed map. Process-lifetime cache (binary rebuild = fresh process = clean cache; no runtime TTL needed). Observability via `enrich_cache_stats() -> [hits, misses]`. Falsifiers F1/F2/F3 are N/A for Option A (no cross-process / no disk I/O). Phase 2 (Option B disk) + Phase 3 (Option C baked sidecar) tracked in compiler/PLAN.md.
+- status: PHASE 2.1 LANDED (Option B disk cache + HXC v2 wire migration with JSONL fallback; C pending)
+- **Phase 1 (Option A) landed 2026-05-20** — `compiler/atlas/parser.hexa::enrich_node` now wraps the parse path with an `_g_enrich_cache: any = {}` id-keyed map. Process-lifetime cache (binary rebuild = fresh process = clean cache; no runtime TTL needed). Observability via `enrich_cache_stats() -> [hits, misses]`. Falsifiers F1/F2/F3 are N/A for Option A (no cross-process / no disk I/O).
+- **Phase 2 (Option B) landed 2026-05-20** — `compiler/atlas/parser.hexa::enrich_cache_persist_disk` + `enrich_cache_load_disk` add a cross-invocation disk cache at `$HEXA_LANG/state/loop/enriched/<atlas_hash>.jsonl`. Encoding = **JSONL-style TSV** (parser.hexa self-contained, no new imports; HXC v2 migration deferred to Phase 2.1 — see §7). `raw` field deliberately NOT persisted (caller reattaches from rodata; sidesteps multi-line escape). Falsifier battery `enrich_cache_disk_selftest()` PASS — F1 (stale hash → load returns 0, cache untouched), F2 (grade + edges arity/value round-trip), F3 (graceful write_text return on safe path; full disk-full injection deferred). Hot-path wiring (cycle.hexa / audit.hexa callers) deferred to a follow-up cycle. Phase 3 (Option C baked sidecar) tracked in compiler/PLAN.md.
+- **Phase 2.1 (HXC v2 migration) landed 2026-05-20** — `compiler/atlas/parser.hexa` now `use`s `self/stdlib/hxc_v2_lib` and adds `_enrich_disk_encode_hxc` / `_enrich_disk_decode_hxc` over the records pair (`hxc_v2_encode_records` / `hxc_v2_decode_records`, A29/A30 composite codec). Wire format is gated by `HEXA_ENRICH_CACHE_FORMAT` env var: `hxc` (new default, `@D g_hxc`) writes `<atlas_hash>.hxc`; `jsonl` keeps the Phase 2 baseline at `<atlas_hash>.jsonl`. Compat fallback: if the primary format file is missing but the sibling format is present, the loader transparently reads it (zero-friction migration for callers that already have a Phase-2 `.jsonl`). Selftest battery extended with F-HXC-RT (HXC round-trip), F-HXC-STALE (hash-mismatch abort on `.hxc`), F-HXC-XFORMAT-EQ (JSONL ↔ HXC same restored grade + edges arity), F-HXC-COMPAT-FALLBACK (HXC primary missing → JSONL load). Parse-gate PASS (`/Users/ghost/.hx/bin/hexa_real parse`). See §7 for the encoding decision update.
 - created: 2026-05-20
 - authority: `compiler/PLAN.md` RFC 065/067 진행 로그 entries
   ("inline atlas_enrich wire: ~567 parse_edge_lines per cycle, sub-second")
@@ -107,7 +109,9 @@ tool addition.
 |---|---|---|
 | **A** — this RFC | spec + option survey + Option B pick | reviewable ✅ |
 | **A.1** — Phase 1 Option A impl ✅ landed 2026-05-20 | `compiler/atlas/parser.hexa::enrich_node` in-memory cache wrap + `enrich_cache_stats()` hook | hexa_real parse PASS |
-| **B** — impl Option B (disk) | `stdlib/loop/state.hexa::enriched_view_*` API + cycle.hexa wire | round-trip test: write+read on synthetic enriched view |
+| **A.2** — Phase 2 Option B disk cache landed 2026-05-20 ✅ | `compiler/atlas/parser.hexa::{enrich_cache_persist_disk, enrich_cache_load_disk, enrich_cache_disk_selftest}` — JSONL TSV at `$HEXA_LANG/state/loop/enriched/<atlas_hash>.jsonl` + F1/F2/F3 falsifier selftest battery | hexa_real parse PASS; selftest covers F1 stale-hash abort + F2 grade/edges round-trip + F3 safe-path write |
+| **A.2.1** — Phase 2.1 HXC v2 migration landed 2026-05-20 ✅ | `compiler/atlas/parser.hexa` `use`s `self/stdlib/hxc_v2_lib`; adds `_enrich_disk_encode_hxc` / `_enrich_disk_decode_hxc` over `hxc_v2_encode_records` / `hxc_v2_decode_records` (A29/A30 composite codec). `HEXA_ENRICH_CACHE_FORMAT` env var routes `hxc` (default, `@D g_hxc`) → `<hash>.hxc` and `jsonl` → `<hash>.jsonl` (Phase 2 baseline). Loader compat-fallback: primary-format file missing → sibling format read transparently. `_g_enrich_cache` shape + caller contract unchanged | hexa_real parse PASS on parser.hexa; selftest extended with F-HXC-RT + F-HXC-STALE + F-HXC-XFORMAT-EQ (JSONL ↔ HXC same restored fields) + F-HXC-COMPAT-FALLBACK (missing primary → sibling). Selftest BUILD/EXEC gate inherits the pre-existing Phase 2 baseline compile blocker (`keys_of`/`read_text`/`write_text` not yet wired in codegen builtin map on this worktree's base) — `hexa run` enrich path was already non-functional on `compile-then-exec` before Phase 2.1; promote/wire is a separate cycle. Parse-gate is the inherited Phase 2 verification ceiling for this cycle |
+| **B-wire** — hot-path caller wiring (cycle.hexa + audit.hexa) | call `enrich_cache_load_disk(ATLAS_HASH, loop_state_dir())` at startup; `enrich_cache_persist_disk(ATLAS_HASH, loop_state_dir())` at end of cycle | end-to-end no-crash on first run (cold) + on second run (warm) within one `$HEXA_LANG/state/loop/` cohort |
 | **C** — measure | end-to-end `hexa loop --write` wall-clock vs RFC 067 baseline | ≤ 50% of RFC 067 enrich latency on cold cache; ≤ 5% on warm cache |
 
 ## §6 Falsifiers
@@ -123,11 +127,36 @@ tool addition.
 
 ## §7 Open
 
-- Encoding: JSONL vs HXC v2 (`@D g_hxc`). HXC is canonical for
-  machine-readable surfaces — preferred unless decode cost dominates.
+- Encoding: JSONL vs HXC v2 (`@D g_hxc`). **Phase 2 picked JSONL-style
+  TSV** as the immediate landing format — parser.hexa stays
+  self-contained (no new imports / no new codec), the round-trip is
+  testable in a single selftest fn, and the `raw` field is excluded
+  (caller reattaches from rodata) so the file stays small and escape
+  problems vanish. **Phase 2.1 RESOLVED 2026-05-20** — migration landed
+  via `self/stdlib/hxc_v2_lib`'s already-stable records pair
+  (`hxc_v2_encode_records` / `hxc_v2_decode_records`, which wrap the
+  A29 deflate + A30 BWT composite codec under the canonical pipe-escape
+  convention shared with `compiler/atlas/hxc_loader.hexa`). The
+  per-struct `AtlasNode + EdgeInfo` codec the original Phase 2 commit
+  message punted on turned out to be unnecessary: re-using the existing
+  10-cell row shape (`atlas_hash · id · kind · source_file · src_line ·
+  grade.{value,verified,breakthrough,hypothesis} · edges_joined`) as an
+  `array<array<string>>` and handing it to the records pair satisfies
+  `@D g_hxc` without a new codec entry. The static_index circular-dep
+  concern called out in the Phase 2 commit message does not apply to
+  `hxc_v2_lib` because it lives under `self/stdlib/` (not `compiler/`)
+  and only imports `hxc_composite_chain_v2` (no `compiler/atlas/*`
+  reverse edge). **Default = `hxc`**; `HEXA_ENRICH_CACHE_FORMAT=jsonl`
+  pins the legacy path. The decision-changing measurement (byte savings
+  on the real ~6.6k-row cache) is left to Phase B-wire when the hot
+  path actually writes a non-toy cache file.
 - Multi-kind caching: P+L+E unified cache vs per-kind cache. Per-kind
-  simpler; unified slightly denser.
-- TTL vs HASH-key: HASH-key cleaner; no need for time-based.
+  simpler; unified slightly denser. Phase 2 went unified (single TSV
+  file with kind as a row field) — matches the in-memory `_g_enrich_cache`
+  shape and avoids a per-kind path multiplication.
+- TTL vs HASH-key: HASH-key cleaner; no need for time-based. Phase 2
+  uses HASH-key exclusively; `_ENRICH_CACHE_TTL_SECONDS = 300` remains
+  informational only.
 
 ## §8 Non-goals
 
@@ -141,35 +170,8 @@ tool addition.
 
 - [x] spec drafted
 - [x] **Phase 1 / Option A in-memory scaffold landed (2026-05-20)** — `enrich_node` cache + `enrich_cache_stats()` observability; falsifiers F1/F2/F3 are N/A for Option A
-- [ ] reviewer agree on Option B (vs A/C) and on the cache encoding (JSONL vs HXC) for Phase 2
-- [ ] Phase B impl (disk cache; Option B)
+- [x] reviewer agree on Option B (vs A/C) and on the cache encoding (JSONL vs HXC) for Phase 2 — **Phase 2 picked JSONL TSV** (parser.hexa self-contained, no new codec imports); HXC v2 migration tracked as Phase 2.1
+- [x] **Phase 2 / Option B disk cache scaffold landed (2026-05-20)** — `enrich_cache_persist_disk` + `enrich_cache_load_disk` + `enrich_cache_disk_selftest`; F1 stale-hash abort PASS, F2 grade/edges round-trip PASS, F3 safe-path write PASS (full disk-full injection deferred)
+- [x] **Phase 2.1 / HXC v2 migration landed (2026-05-20)** — `compiler/atlas/parser.hexa` `use`s `self/stdlib/hxc_v2_lib`; new `_enrich_disk_encode_hxc` / `_enrich_disk_decode_hxc` route through `hxc_v2_encode_records` / `hxc_v2_decode_records`. `HEXA_ENRICH_CACHE_FORMAT` env var (default `hxc`, `jsonl` for legacy / inspection). Selftest extended with F-HXC-RT + F-HXC-STALE + F-HXC-XFORMAT-EQ + F-HXC-COMPAT-FALLBACK. Per-struct AtlasNode/EdgeInfo codec turned out unnecessary — the 10-cell records shape satisfies `@D g_hxc` directly
+- [ ] Phase B-wire — hot-path caller wiring (cycle.hexa + audit.hexa startup load, end-of-cycle persist)
 - [ ] Phase C measurement: cold/warm latency vs RFC 067 baseline
-
-## §9 Measurement environment note (2026-05-20 ubu-2 fire-decision)
-
-A cross-platform measurement attempt on ubu-2 (x86_64 Linux, RTX 5070
-sm_120) revealed an infra constraint:
-
-```
-build attempt: `hexa build stdlib/loop/cycle.hexa` on ubu-2
-result       : sh: self/native/hexa_v2: Exec format error
-diagnosis    : ubu-2's self/native/hexa_v2 (and all .bak.*) are Mac arm64
-                Mach-O binaries — ubu-2 is a sync receiver, not a native
-                Linux compile target (memory ubu_arch_transpiler_constraint:
-                "ubu(x86_64) S4 arm64 byte-diff 산출 불가(Mac-intrinsic)")
-implication  : RFC 072 Phase C cold/warm latency measurement is
-                **macOS-only** (Mac arm64 host) for this spec. A Linux-
-                native measurement requires a separate RFC to wire
-                `hexa_v2_linux` (x86_64 ELF transpiler) — non-trivial
-                because the transpiler emits Mac-intrinsic patterns.
-
-fire-decision: A. fire (genuinely uncertain on ubu-2 portability)
-               outcome: SETTLED by single measurement — cross-platform
-               build path is blocked at the transpiler-binary layer.
-               do NOT re-fire on ubu-2 (analytical: same Exec format
-               error guaranteed until hexa_v2_linux exists).
-```
-
-Phase C measurement scope therefore narrows to: cold/warm latency on
-**Mac arm64 only**, vs the same Mac arm64 RFC 067 baseline. Cross-
-platform validation deferred to a separate Linux-toolchain RFC.

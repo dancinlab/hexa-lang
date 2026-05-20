@@ -5033,6 +5033,12 @@ fn gen2_expr(node) {
                 if name == "env_var"        { return "hexa_env_var(" + a0 + ")" }
                 if name == "env"            { return "hexa_env_var(" + a0 + ")" }
                 if name == "delete_file"    { return "rt_delete_file(" + a0 + ")" }
+                // G5 (wilson-pi-port-6-gap S-FS-ATOMIC-APPEND) — 1-arg primitives.
+                // fs_stat returns 4-tuple array [size, mtime_ns, is_dir, mode]
+                // or hexa_void on stat(2) failure. fs_mkdir_p is fork-free
+                // POSIX mkdir(2) loop; returns 0 on success or -errno.
+                if name == "fs_stat"        { return "rt_fs_stat(" + a0 + ")" }
+                if name == "fs_mkdir_p"     { return "rt_fs_mkdir_p(" + a0 + ")" }
                 // R7 track B: `list_dir(path)` — compiled parity with
                 // interp (hexa_full.hexa:14347). runtime.c hexa_list_dir
                 // does the `ls -1` shellout + split. Needed by
@@ -5123,6 +5129,11 @@ fn gen2_expr(node) {
                 if name == "term_fd_write"  { return "hexa_term_fd_write(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "term_fd_poll"   { return "hexa_term_fd_poll(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "append_file"    { return "rt_append_file(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
+                // G5 (wilson-pi-port-6-gap S-FS-ATOMIC-APPEND) — POSIX O_APPEND
+                // single-write(2) atomic append. Returns bytes_written or -errno.
+                // Caller chunks data <= PIPE_BUF for guaranteed concurrent-writer
+                // atomicity (4096 B Linux / 512 B macOS).
+                if name == "fs_append_atomic" { return "rt_fs_append_atomic(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "setenv"         { return "hexa_setenv(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "atan2"          { return cg_math_sym("atan2") + "(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "str_char_at"    { return cg_string_sym("str_char_at") + "(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
@@ -5179,6 +5190,12 @@ fn gen2_expr(node) {
                 if name == "clamp"          { return "hexa_clamp(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 if name == "fma"            { return "hexa_fma(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 if name == "read_bytes_at" { return "rt_read_bytes_at(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
+                // G5 (wilson-pi-port-6-gap S-FS-ATOMIC-APPEND) — 3-arg rotate.
+                // rename(path, path+suffix) iff size > max_bytes. Returns 1 if
+                // rotated, 0 if not (size <= max or missing), -errno on rename(2)
+                // failure. Single-process atomic only (rename(2) is POSIX-atomic;
+                // concurrent rotators racing the same file may clobber suffix).
+                if name == "fs_rotate_if_over" { return "rt_fs_rotate_if_over(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 if name == "str_slice"     { return cg_string_sym("str_slice") + "(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 if name == "substring"     { return cg_string_sym("str_substring") + "(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 // F10 retire (2026-04-28): bare-call 3-arg map_set.

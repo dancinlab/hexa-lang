@@ -50,7 +50,13 @@
 //   fs_readlink(path) -> string     // "" on non-link / missing
 //   fs_symlink(target, link_path) -> bool
 //   fs_unlink(path) -> bool         // file or symlink; idempotent
-//   mkdir_p(path) -> bool           // recursive parents
+//   mkdir_p(path) -> bool           // recursive parents (shell wrap)
+//   fs_append_atomic(path, data) -> int    // G5 A2: POSIX O_APPEND, bytes or -errno
+//   fs_stat(path) -> [size, mtime_ns, is_dir, mode] | void  // G5 B: POSIX stat(2)
+//   fs_stat_size(path) -> int               // G5 B: convenience -1 on missing
+//   fs_stat_mtime_ns(path) -> int           // G5 B: convenience -1 on missing
+//   fs_rotate_if_over(p, max, suf) -> int   // G5 B: 1=rotated, 0=no, -errno
+//   fs_mkdir_p_native(path) -> int          // G5 B: fork-free, 0|-errno
 
 use "self/stdlib/shell_escape"
 
@@ -193,10 +199,87 @@ fn fs_unlink(path) {
 // ── mkdir_p ─────────────────────────────────────────────────
 // Recursive mkdir (Node mkdirSync(p, {recursive:true})).
 // Idempotent. Returns true if dir exists after the call.
+// Legacy shell-wrap path (`mkdir -p`). For fork-free hot paths
+// prefer fs_mkdir_p_native() — the rt_fs_mkdir_p primitive walks
+// the path with mkdir(2) directly.
 fn mkdir_p(path) {
     let p = shell_escape(to_string(path))
     let _ = exec("mkdir -p " + p + " 2>/dev/null")
     return lstat_is_dir(path)
+}
+
+// ── fs_append_atomic ────────────────────────────────────────
+// G5 (wilson-pi-port-6-gap S-FS-ATOMIC-APPEND, A2 cycle) primitive.
+//
+// Concurrent-writer-safe append via POSIX O_APPEND + single write(2).
+// The single write() under O_APPEND is atomic with respect to other
+// O_APPEND writers iff the byte count is <= PIPE_BUF (4096 B Linux,
+// 512 B macOS — POSIX.1-2008 minimum). The caller is responsible for
+// chunking; this primitive does NOT split or buffer.
+//
+// Returns: bytes_written (>= 0) on success, or -errno (< 0) on
+// open/write failure. EINTR on write() is retried automatically.
+//
+// `fs_append_atomic` is wired as a runtime builtin (codegen →
+// rt_fs_append_atomic). This wrapper exists for self-documentation
+// and so to_string() coercion is centralized.
+fn fs_append_atomic_wrap(path, data) {
+    return fs_append_atomic(to_string(path), to_string(data))
+}
+
+// ── fs_stat ─────────────────────────────────────────────────
+// G5 (wilson-pi-port-6-gap, B cycle) — POSIX stat(2) parity.
+//
+// Returns a 4-element array [size_i64, mtime_ns_i64, is_dir(0/1),
+// mode_i64] on success, or hexa_void (none) on stat(2) failure.
+// Mode is masked to 0777 perm bits. mtime_ns is high-resolution
+// (st_mtim on Linux, st_mtimespec on macOS).
+//
+// Convenience helpers below: fs_stat_size / fs_stat_mtime_ns
+// flatten to -1 on missing for callers that don't care about the
+// exists/error distinction.
+fn fs_stat_size(path) {
+    let st = fs_stat(to_string(path))
+    if st == nil { return -1 }
+    return st[0]
+}
+
+fn fs_stat_mtime_ns(path) {
+    let st = fs_stat(to_string(path))
+    if st == nil { return -1 }
+    return st[1]
+}
+
+// ── fs_rotate_if_over ───────────────────────────────────────
+// G5 (wilson-pi-port-6-gap, B cycle) — log-rotation primitive.
+//
+// If fs_stat(path).size > max_bytes, rename(path, path+suffix).
+// Returns 1 if rotated, 0 if not (size <= max_bytes or path missing),
+// -errno on rename(2) failure.
+//
+// Single-process atomic: rename(2) is POSIX-atomic. Subsequent
+// fs_append_atomic on `path` re-creates the file via O_CREAT.
+// NOT safe across rotator processes without external coordination
+// (two rotators racing the same file could clobber the suffix
+// target). Typical use: log writer rotates from inside its own
+// `if size > N { rotate; }` check after each append.
+fn fs_rotate_if_over_wrap(path, max_bytes, suffix) {
+    return fs_rotate_if_over(to_string(path), max_bytes, to_string(suffix))
+}
+
+// ── fs_mkdir_p_native ───────────────────────────────────────
+// G5 (wilson-pi-port-6-gap, B cycle) — fork-free recursive mkdir.
+//
+// POSIX mkdir(2) loop, no shell fork. EEXIST is tolerated iff
+// the existing entry is a directory (else -ENOTDIR). Mode 0755
+// on creation. Idempotent.
+//
+// Returns: 0 on success, -errno on failure. Use when shell
+// fork-exec cost matters (hot paths, restricted environments).
+// The legacy mkdir_p() above remains available for callers that
+// want the bool-returning Node-compat signature.
+fn fs_mkdir_p_native(path) {
+    return fs_mkdir_p(to_string(path))
 }
 
 // ── --selftest ──────────────────────────────────────────────
@@ -356,6 +439,187 @@ fn _fs_selftest() {
     n = n + 1
     if !fs_unlink(scratch + "/never_existed") {
         eprintln("FAIL 20 unlink(missing) should be idempotent true")
+        fail = fail + 1
+    }
+
+    // 17. fs_append_atomic — single-write O_APPEND primitive (G5 A2).
+    // Round-trip: write "hello\n" + "world\n" sequentially, expect
+    // 6+6 bytes returned, file content "hello\nworld\n", lstat_size==12.
+    n = n + 1
+    let log_path = scratch + "/atomic.log"
+    let w1 = fs_append_atomic(log_path, "hello\n")
+    if w1 != 6 {
+        eprintln("FAIL 21 fs_append_atomic write1 expected 6 got " + to_string(w1))
+        fail = fail + 1
+    }
+    n = n + 1
+    let w2 = fs_append_atomic(log_path, "world\n")
+    if w2 != 6 {
+        eprintln("FAIL 22 fs_append_atomic write2 expected 6 got " + to_string(w2))
+        fail = fail + 1
+    }
+    n = n + 1
+    let log_content = read_file_safe(log_path)
+    if log_content != "hello\nworld\n" {
+        eprintln("FAIL 23 fs_append_atomic content mismatch: " + log_content)
+        fail = fail + 1
+    }
+    n = n + 1
+    if lstat_size(log_path) != 12 {
+        eprintln("FAIL 24 fs_append_atomic size expected 12 got " + to_string(lstat_size(log_path)))
+        fail = fail + 1
+    }
+
+    // 18. fs_append_atomic — open-failure path returns negative errno.
+    // Writing into a non-existent parent dir → -ENOENT (Linux: -2, macOS: -2).
+    n = n + 1
+    let err_rc = fs_append_atomic(scratch + "/no_such_subdir/x.log", "x")
+    if err_rc >= 0 {
+        eprintln("FAIL 25 fs_append_atomic(missing-parent) expected negative errno got " + to_string(err_rc))
+        fail = fail + 1
+    }
+
+    // 19. fs_stat — round-trip on the atomic.log file (12 bytes,
+    //     not a dir, mode bits set). G5 B.
+    n = n + 1
+    let st = fs_stat(log_path)
+    if st == nil {
+        eprintln("FAIL 26 fs_stat(atomic.log) returned nil")
+        fail = fail + 1
+    } else {
+        n = n + 1
+        if st[0] != 12 {
+            eprintln("FAIL 27 fs_stat size expected 12 got " + to_string(st[0]))
+            fail = fail + 1
+        }
+        n = n + 1
+        if st[1] <= 0 {
+            eprintln("FAIL 28 fs_stat mtime_ns should be > 0 got " + to_string(st[1]))
+            fail = fail + 1
+        }
+        n = n + 1
+        if st[2] != 0 {
+            eprintln("FAIL 29 fs_stat is_dir on file expected 0 got " + to_string(st[2]))
+            fail = fail + 1
+        }
+        n = n + 1
+        if st[3] <= 0 {
+            eprintln("FAIL 30 fs_stat mode should be > 0 got " + to_string(st[3]))
+            fail = fail + 1
+        }
+    }
+
+    // 20. fs_stat — directory case (is_dir == 1).
+    n = n + 1
+    let dst = fs_stat(scratch + "/a/b/c")
+    if dst == nil {
+        eprintln("FAIL 31 fs_stat(dir) returned nil")
+        fail = fail + 1
+    } else {
+        n = n + 1
+        if dst[2] != 1 {
+            eprintln("FAIL 32 fs_stat is_dir on dir expected 1 got " + to_string(dst[2]))
+            fail = fail + 1
+        }
+    }
+
+    // 21. fs_stat — missing path returns void (nil).
+    n = n + 1
+    let mst = fs_stat(scratch + "/no_such_path_xyz")
+    if mst != nil {
+        eprintln("FAIL 33 fs_stat(missing) expected nil")
+        fail = fail + 1
+    }
+
+    // 22. fs_stat_size / fs_stat_mtime_ns helpers — -1 on missing.
+    n = n + 1
+    if fs_stat_size(scratch + "/no_such_path_xyz") != -1 {
+        eprintln("FAIL 34 fs_stat_size(missing) expected -1")
+        fail = fail + 1
+    }
+    n = n + 1
+    if fs_stat_mtime_ns(scratch + "/no_such_path_xyz") != -1 {
+        eprintln("FAIL 35 fs_stat_mtime_ns(missing) expected -1")
+        fail = fail + 1
+    }
+    n = n + 1
+    if fs_stat_size(log_path) != 12 {
+        eprintln("FAIL 36 fs_stat_size(log_path) expected 12 got " + to_string(fs_stat_size(log_path)))
+        fail = fail + 1
+    }
+
+    // 23. fs_rotate_if_over — size=12 bytes, max=100 → no rotation (rc=0).
+    n = n + 1
+    let r_no = fs_rotate_if_over(log_path, 100, ".1")
+    if r_no != 0 {
+        eprintln("FAIL 37 fs_rotate(size<=max) expected 0 got " + to_string(r_no))
+        fail = fail + 1
+    }
+    n = n + 1
+    if !fs_exists(log_path) {
+        eprintln("FAIL 38 fs_rotate(no-op) should leave file alone")
+        fail = fail + 1
+    }
+
+    // 24. fs_rotate_if_over — size=12 bytes, max=5 → rotate (rc=1).
+    //     log_path should be missing; log_path+".1" should hold the content.
+    n = n + 1
+    let r_yes = fs_rotate_if_over(log_path, 5, ".1")
+    if r_yes != 1 {
+        eprintln("FAIL 39 fs_rotate(size>max) expected 1 got " + to_string(r_yes))
+        fail = fail + 1
+    }
+    n = n + 1
+    if fs_exists(log_path) {
+        eprintln("FAIL 40 fs_rotate should have moved log_path away")
+        fail = fail + 1
+    }
+    n = n + 1
+    if !fs_exists(log_path + ".1") {
+        eprintln("FAIL 41 fs_rotate should have created log_path+.1")
+        fail = fail + 1
+    }
+    n = n + 1
+    if read_file_safe(log_path + ".1") != "hello\nworld\n" {
+        eprintln("FAIL 42 rotated content mismatch")
+        fail = fail + 1
+    }
+
+    // 25. fs_rotate_if_over — missing source → rc=0 (no-op, not error).
+    n = n + 1
+    let r_mis = fs_rotate_if_over(scratch + "/no_such_log", 100, ".1")
+    if r_mis != 0 {
+        eprintln("FAIL 43 fs_rotate(missing) expected 0 got " + to_string(r_mis))
+        fail = fail + 1
+    }
+
+    // 26. fs_mkdir_p (rt builtin) — fresh nested dir, rc=0, dir exists.
+    n = n + 1
+    let nest = scratch + "/n1/n2/n3"
+    if fs_mkdir_p(nest) != 0 {
+        eprintln("FAIL 44 fs_mkdir_p(nest) expected 0")
+        fail = fail + 1
+    }
+    n = n + 1
+    if !lstat_is_dir(nest) {
+        eprintln("FAIL 45 fs_mkdir_p target should be a dir")
+        fail = fail + 1
+    }
+
+    // 27. fs_mkdir_p — idempotent: second call on existing dir = rc=0.
+    n = n + 1
+    if fs_mkdir_p(nest) != 0 {
+        eprintln("FAIL 46 fs_mkdir_p(idempotent) expected 0")
+        fail = fail + 1
+    }
+
+    // 28. fs_mkdir_p — over a regular file → -ENOTDIR (negative).
+    n = n + 1
+    let regf = scratch + "/n1/regular_file"
+    write_file_safe(regf, "")
+    let bad_rc = fs_mkdir_p(regf + "/subdir")
+    if bad_rc >= 0 {
+        eprintln("FAIL 47 fs_mkdir_p(over-file) expected -errno got " + to_string(bad_rc))
         fail = fail + 1
     }
 

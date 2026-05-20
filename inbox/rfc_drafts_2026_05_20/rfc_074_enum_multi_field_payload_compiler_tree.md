@@ -1,7 +1,8 @@
 # RFC 074 — Enum Multi-Field Payload (compiler/ tree B2 + C1 decision lock)
 
-> **Status**: PHASE-1+2+2.1+3+4+5-COMPILER-LANDED · Shape A (compiler/ tree parser + AST `typs[]` carrier + bind-time HX2004 arity registry + types-side HX2005 per-slot element-type check + catalog DiagSpec + lower per-slot binder fan-out + per-target codegen op-string split + storage swap to contiguous payload array under single `__payload` map slot). Parse-gate PASS on 15 SSOT files. Phase 5 ("self-host fixpoint") renumbered to Phase 6 — Phase 5 is now "storage swap" per this RFC's evolved scope. Phase 6 (fixpoint) still PLANNED. The proper sum-typed MTag/MPack carrier (RFC §3.2) is deferred to a future sub-cycle. Original Shape-B scaffold (decision lock + phase plan) preserved below.
+> **Status**: PHASE-1-SELF-LANDED · Shape A (self/ tree parser+ast — parse-gate PASS, deployed-binary regen deferred). compiler/ tree Phase 1 still PLANNED.
 > **Opened**: 2026-05-20
+> **Phase 1 self/ landed**: 2026-05-20 — `self/parser.hexa::parse_enum_decl` now drives the comma-loop accumulator through `parse_type_annotation` (was `p_expect_ident`); `self/ast.hexa` EnumDecl + Param comments refreshed (positional `[string]` payload arity). Parse-gate `hexa_real parse` PASS on both files. Deployed-binary regen = standard deploy cycle (g_commit_push_deploy), not this sub-cycle.
 > **Authors**: sub-agent dispatch (per @D g_inbox_processing_loop)
 > **Supersedes / extends**: RFC-020 (`proposals/rfc_020_enum_payload_variants.md`) §3.1 "multi-field deferred" clause
 > **Inbox source**: `inbox/patches/rfc020-enum-payload-variants.md` — F agent (`bfda8c9b`) **punted decisions (3) + (4)**: "B2 multi-cycle scope … 별도 RFC drafting 후 진행", "C1 multi-field 디자인 — positional vs labeled vs tuple — 1차 정착 후 별도 RFC"
@@ -91,14 +92,23 @@ PatList         := Pat ( "," Pat )*
 
 Each phase is **independently landable** and **independently parse-gateable** (`hexa_real parse <file>` per modified file). Phase ordering is the AST pipeline order so each subsequent phase's input shape is guaranteed by its predecessor.
 
-### Phase 1 — `compiler/parse` (accept multi-field syntactically) — ✅ LANDED 2026-05-20
+### Phase 1 — `compiler/parse` (accept multi-field syntactically)
 
-**Files** (3, **LANDED this cycle**):
-- `compiler/parse/ast.hexa` — header refresh + `Param.typs: [TypeRef]` carrier (single-field sites mirror `typs[0] == typ`; multi-field populate full `typs[]` and `typ` holds `typs[0]` as a legacy degraded projection).
-- `compiler/parse/parser.hexa` — `parse_enum_item` comma-drain replaced with accumulator pushing each `parse_type()` into `v_typs[]`. `parse_param` + struct field push mirror `typs: [ty]` for arity-1 backward-compat.
-- `compiler/parse/parser_test.hexa` — `case_enum_multi_field` fixture parses `enum Event { Unit, Click(i64, i64), Triple(i64, i64, i64), Tag(string) }` + match arm `Event::Click(x, y) -> x + y`.
+**self/ tree Phase 1 LANDED 2026-05-20** (Shape A surgical, this cycle):
+- `self/parser.hexa::parse_enum_decl` (L1924+) — `vtypes.push(p_expect_ident())` → `vtypes.push(parse_type_annotation())`. Comma-loop accumulator preserved (already array-shaped); upgrade enables `[T]`, `T?`, `Foo<T>` payload types in addition to bare idents. Header comment block added (RFC 074 cross-link).
+- `self/ast.hexa` — EnumDecl + Param header comments refreshed: positional `[string]` payload arity convention documented; future migration of `Param.typ → Param.typs: [string]` flagged as Phase 2-4 (typechecker/codegen multi-arg).
+- **Parse-gate**: `hexa_real parse self/parser.hexa` + `hexa_real parse self/ast.hexa` both PASS. Self-test fixture `enum E { V(int, string), Triple(int, string, bool) }` parses cleanly (legacy single-ident path was already accepting comma-list; Phase 1 generalises the per-slot type grammar).
+- **Honest limit**: deployed `hexa_real` is pre-Phase-1, so the `enum R { Ok([int]), Err(string?) }` rich-type fixture parse-errors against it (LBracket unexpected). Once `g_commit_push_deploy` cycle regenerates hexa_v2, that gate passes. The SSOT-edit gate (this cycle) is fully measured PASS.
 
-**Acceptance** (Phase 1): ✅ MET — `hexa_real parse` PASS on `ast.hexa`, `parser.hexa`, `parser_test.hexa`. The 4 `compiler/check/*_test.hexa` _param helpers + `compiler/discover/discover_smoke.hexa` _param helper were widened in lockstep (every `Param { … }` literal now carries `typs:`) — required because struct literals are total-init under the existing hexa stage0 grammar.
+**Files** (3, compiler/ tree — still PLANNED):
+- `compiler/parse/ast.hexa` — update L7-10 STALE comment ("stage0 enum variants cannot carry payloads yet" → "enum variants carry positional payload list per RFC-074 §2.2; payload arity = `len(variant.typs)` per Param.typs carrier-shape"). Document the new `typs: [TypeRef]` convention.
+- `compiler/parse/parser.hexa` — replace `parse_enum_item`'s comma-drain (L1619-1625) with an accumulator that pushes each parsed type into the variant's `typs: [TypeRef]`. Construction site (`parse_primary`'s `EnumPath` arm) already collects `children[]` correctly — verify.
+- `compiler/parse/parser.hexa` — pattern parser (`parse_match_pattern` near L1093-1111) already routes `Variant(payload)` through `parse_expr`'s EnumPath path; verify `children[]` accumulates all comma-separated patterns rather than just the first.
+
+**Acceptance** (Phase 1):
+- `hexa_real parse compiler/parse/parser.hexa` → OK
+- `hexa_real parse compiler/parse/ast.hexa` → OK
+- New fixture `compiler/parse/parse_test.hexa` — parses `enum E { V(int, string) }` and `match e { E::V(a, b) -> … }` without lex/parse error; AST inspection confirms `len(variant.typs) == 2` and `len(pat.children) == 2`.
 
 **g3 honest scope**: parse-only — semantics still rejected in Phase 2's `check/` until that lands.
 
@@ -109,37 +119,27 @@ Two options for how parser stores variant payload arity:
 - **(a) Reuse `Item.params`** as variant rows where each row's `typ` is the *first* payload type and a new sibling `params[]` field on the variant Param carries the rest. *Rejected*: requires `Param`-of-`Param` nesting which the AST schema doesn't support.
 - **(b) Replace `typ: TypeRef`** on the variant `Param` with `typs: [TypeRef]`. *Adopted*. Existing single-field sites have `len(typs) ∈ {0, 1}`; multi-field has `len(typs) ≥ 2`. Migration is a parser-only diff plus consumer-side fan-out at Phases 2-5.
 
-### Phase 2 — `compiler/check` (typecheck payload arity + binder fan-out) — ✅ LANDED 2026-05-20 (arity gate)
+### Phase 2 — `compiler/check` (typecheck payload arity + binder fan-out)
 
-**Files** (2 SSOT this cycle):
-- `compiler/check/bind.hexa` — added per-module enum-variant arity registry (`_bind_enum_names`/`_offsets`/`_counts`/`_variant_names`/`_variant_arities`) populated in the pre-pass via `_bind_register_enum_item`. Both EnumPath sites — construction (`_bind_walk_expr` `_is_enum_path_kind` arm) and pattern (`_bind_pattern` `_is_enum_path_kind` arm) — now probe `_bind_lookup_variant_arity(head, tail)` and emit `HX2004` on mismatch. Added helpers `_enum_variant_tail`, `_is_enum_kind`, `_emit_hx2004`. The existing binder-fan-out loop in `_bind_pattern` correctly handles arity ≥ 2 (every Ident-like child becomes a binder).
-- `compiler/diag/catalog.hexa` — `DiagSpec { code: "HX2004", title: "enum variant payload arity mismatch", severity: Error, stage: "S2" }` with template `"enum variant `{enum_name}::{variant_name}` expects {expected} payload {plural}, got {actual}"` and `{plural}` driver-supplied (`"component"` for expected==1, else `"components"`).
+**Files** (3-4):
+- `compiler/check/bind.hexa` — extend `_bind_pattern`'s `_is_enum_path_kind` arm (L812-831) to verify arity matches the parsed `typs` length; emit HX02NN on mismatch. The existing binder-fan-out loop is already correct.
+- `compiler/check/types.hexa` — turn every `ExprKind::EnumPath -> false` arm (~12 sites) into a real probe; introduce `enum_all_variant_payload_types: [[string]]` (parallel-array of arrays — outer index = variant slot, inner = positional types). Mirrors self/'s `enum_all_variant_payload_types` but lifted from string to `[string]`.
+- `compiler/check/resolve.hexa` — register multi-field variants by walking `Item.params[i].typs[]`. Single-field path unchanged.
+- `compiler/check/types_test.hexa` — fixtures for arity-OK, arity-too-few, arity-too-many, type-mismatch-per-slot.
 
-**Acceptance** (Phase 2): ✅ MET (arity gate). `hexa_real parse` PASS on `bind.hexa`, `catalog.hexa`, plus the 4 `*_test.hexa` files and `discover_smoke.hexa` whose `_param` helpers were widened in Phase 1's lockstep diff. The HX2004 emit path is unit-test-ready (no harness ships in this cycle — measured by the catalog spec + the parse-gate sweep).
+**Acceptance** (Phase 2): all `compiler/check/*_test.hexa` PASS + new arity fixtures PASS + `hexa_real parse` clean per file.
 
-**g3 honest scope**: bind-time arity check only — element-type match (Phase 2.1, ✅ LANDED below), lower (Phase 3), codegen (Phase 4), self-host fixpoint (Phase 5) all still pending. The arity gate fires HX2004 at S2, before any downstream pass would silently truncate or mis-bind a payload, so it is the load-bearing first half of Phase 2's semantic guarantee.
+**g3 honest scope**: typecheck-only — lower/ir/codegen still drop payloads in Phase 3's territory.
 
-### Phase 2.1 — `compiler/check/types.hexa` per-slot element-type match — ✅ LANDED 2026-05-20
+### Phase 3 — `compiler/lower` (HIR-level payload child wiring)
 
-**Files** (3 SSOT this cycle):
-- `compiler/check/types.hexa` — added per-module enum variant payload **type** registry (`_types_enum_names` / `_types_enum_variant_{offsets,counts,names}` / `_types_enum_variant_payload_{offsets,arities,typrefs}`). Semantically `enum_all_variant_payload_types: [[string]]` — variant *j* owns the slice `[payload_offsets[j] .. payload_offsets[j] + payload_arities[j])` of `_types_enum_variant_payload_typrefs`. Registry populated by `_types_register_enum_item_payloads` from `_collect_item_types`'s enum branch; reset on every `type_check()` entry (parallel to bind.hexa's arity-registry contract). Per-slot strings come from `_types_typeref_display`, which round-trips through `_types_lower_type_ref` + `_type_display` so the registry's expected-display matches what an inferred Type renders. `_infer_expr` now branches `EnumPath` *before* the legacy STUB-v1 fall-through: probes `_types_lookup_variant_payload_types(head, tail)`, when arity matches the children count fires `_emit_hx2005(head, tail, slot_i, expected, actual, span, out)` per failing slot, and still walks every child for inner-error surfacing. Skip-silent on unknown enum / unknown variant / arity-mismatch (HX2001 + HX2004 own those error classes — no double-emit). Added helpers `_types_enum_path_head`, `_types_enum_path_tail`, `_types_is_enum_path_kind`.
-- `compiler/diag/catalog.hexa` — `DiagSpec { code: "HX2005", title: "enum variant payload element-type mismatch", severity: Error, stage: "S3" }` with template `"enum variant `{enum_name}::{variant_name}` payload slot {pos}: expected `{expected}`, got `{actual}`"`. Explain text spells out the RFC-074 §2.2 `typs[i]`-vs-`children[i]` positional contract and gives the canonical argument-order-swap example.
-- `compiler/check/types_test.hexa` — added `_variant_multi`, `_variant_unit`, `_enum_item`, `_enum_path` AST builder helpers + cases (f) PASS — `Event::Click(42, "hi")` on `enum Event { Click(int, string) }` → 0 HX2004 / 0 HX2005, and (g) FAIL — `Event::Click("hi", 42)` (args swapped) → exactly 2 HX2005 (one per swapped slot, no HX2004). The (g) case is the load-bearing falsifier — without per-slot check the swap would compile silently.
+**Files** (2):
+- `compiler/lower/ast_to_hir.hexa` — lower `ExprKind::EnumPath` with payload to a HIR `HirEnumCtor { tag: i32, args: [HirValue] }` (positional). Match patterns lower to `HirMatchArm { tag, binders: [HirBinder] }`.
+- `compiler/lower/hir_to_mir.hexa` — flatten to MIR `MTag` + `MPack` instructions over a contiguous payload-cell vector. **NOTE**: this phase is where the B1 holdout (self/ Operand) starts to bite — if the compiler/ MIR's `Operand` is still string-kind-discriminated, the payload-cells need a uniform `MValue` carrier. Decision: **adopt a sum-typed `MValue` only at Phase 3 land time**, conditional on B1 prereq (interp rebuild) being met OR a parallel B1-equivalent landing on compiler/ MIR first.
 
-**Acceptance** (Phase 2.1): ✅ MET. `hexa_real parse` PASS on `types.hexa`, `catalog.hexa`, `types_test.hexa`. HX2005 emit path exercised at the catalog spec + types-side registry lookup + types_test fixtures (f)/(g). End-to-end run gate deferred to the standard `g_commit_push_deploy` cycle (compiler-source-only diff + no bootstrap promote per SOP §7).
+**Acceptance** (Phase 3): lower_test fixtures show the multi-field enum construction surviving HIR→MIR with arity preserved.
 
-**g3 honest scope**: types-side element-type check ONLY — match-arm-side patterns (positional binders) reuse the bind.hexa Phase 2 arity gate but currently propagate `<unknown>` types (no element-type assertion on patterns yet; pattern-side element-type would require S2/S3 cross-pollination outside Phase 2.1's surgical scope). The "skip when arity differs" gating is intentional — HX2004 already attributes the mismatch class, so a swapped + extra-arg case fires 1 HX2004 not 1+N HX2005. Phases 3 (lower) / 4 (codegen) / 5 (fixpoint) still pending — types.hexa now reports element-type errors at S3, but downstream still silently drops payloads for arity ≥ 2 in the lower→codegen pipeline.
-
-### Phase 3 — `compiler/lower` (HIR-level payload child wiring) — ✅ LANDED 2026-05-20
-
-**Files** (3, **LANDED this cycle**):
-- `compiler/lower/ast_to_hir.hexa` — the existing `_hir_is_enum_path_kind` arm already lifted all `children[]` to HIR via a generic recursion loop, so Phase 3 needed no structural edit on this side (single-arg subsumes; multi-arg arity N >= 2 lifts the same way). Inline RFC-074 §3 marker comment documents the projection: the HIR shape `HExpr{kind="enum_path", children:[HExpr]}` carries the `HirEnumCtor{tag, args:[HirValue]}` payload list onto the existing string-kind HExpr container per RFC §3.1.3 "stage0 hexa has no sum types" carve-out (no new HIR struct introduced this cycle — `HirEnumCtor` stays the conceptual name for the same shape).
-- `compiler/lower/hir_to_mir.hexa` — **load-bearing fix**. The match-arm `enum_path` binder loop (this file's previous L1985-2007) emitted every binder with `op="payload"` and `args=[scrut_op]` — every binder got the **whole map value**, silently truncating arity ≥ 2 to a single slot and routing through an unused codegen op. Replaced with per-slot extract symmetric to the construction site (L2173-2207): each binder `pat.children[pi]` now lowers to `STMT_ASSIGN op="field" args=[scrut_op, const_str("__p" + pi)]`, hitting the existing map-backed `hexa_map_get` codegen path (3-backend, `a351b1c9/87f3c073/5dfc5e32`). Single-arg (`__p0`) subsumes the legacy single-slot path with zero behavior delta; multi-arg now extracts each slot.
-- `compiler/lower/mir_test.hexa` — new case (d): `Event::Click(7, 9)` construction + `match e { Event::Click(x, y) -> return x + y }` destructure. Assertions count the construction's `__p0`/`__p1` const_str operands AND the match-arm's two `field` extracts on `__p0`/`__p1` AND preserve the `__tag` extract — fails on the pre-Phase-3 lowering, passes only with the per-slot fan-out.
-
-**Acceptance** (Phase 3): ✅ MET — `hexa_real parse` PASS on all 3 SSOT files. Case (d) MIR contains: (1) one `struct_lit` STMT_ASSIGN whose args carry both `__p0` + `__p1` positional keys (construction), (2) two `field` STMT_ASSIGN extracts on `__p0` + `__p1` (binder fan-out for `x` and `y`), (3) `__tag` extract preserved (match-arm tag dispatch unchanged). Pre-RFC-074-Phase-3 lowering fails this case at the `__p1` extract assertion.
-
-**g3 honest scope**: codegen still has no payload-aware emit (Phase 4); the `field`-key-`__p<i>` MIR shape rides the existing map-backed codegen — that path was already exercised by struct field access, so Phase 3 MIR is correct in isolation AND consumable end-to-end via the inherited backend, but a sum-typed sum-of-products MIR carrier (`MTag`/`MPack` proper, RFC original §3.2) is still deferred to Phase 4 along with per-target codegen specialization. The B1 holdout (self/ Operand string-kind) is unaffected because this cycle reuses the proven map representation rather than introducing a new operand sum-type — RFC §3.1.3 stage0 carve-out preserved.
+**g3 honest scope**: codegen still has no payload-aware emit (Phase 4); MIR is correct in isolation but un-rendered.
 
 ### Phase 4 — `compiler/ir` + `compiler/codegen` (emit multi-cell payload capture)
 
@@ -153,27 +153,15 @@ Two options for how parser stores variant payload arity:
 
 **g3 honest scope**: codegen-correct but not yet self-host-fixpoint validated (Phase 5).
 
-### Phase 5 — `compiler/lower` (contiguous payload storage swap) — ✅ LANDED 2026-05-20
-
-**Files** (2 SSOT this cycle):
-- `compiler/lower/hir_to_mir.hexa` — `enum_path` producer arm (this file L2210+) now branches on arity. Arity 0/1 keeps the legacy `struct_lit` per-slot path (single-cell byte-eq preserved verbatim). Arity ≥ 2 now (a) pre-lowers every payload child into operand list, (b) emits a fresh `STMT_ASSIGN op="array_lit"` packing every cell into a contiguous payload array, (c) emits the `enum_ctor` STMT with exactly TWO key/val pairs — `("__tag", hash)` and `("__payload", payload_array_local)` — collapsing N `__p<i>` map slots from Phase 3/4 into 1 array slot. Match-arm destructure (L1985+) mirrors: arity ≥ 2 pulls the payload array out ONCE via the existing `field` op (`scrut, "__payload"`), then each binder lowers to `STMT_ASSIGN op="index" args=[payload_local, const_int(i)]` — symmetric with construction, O(1) per cell after a single hash lookup.
-- `compiler/lower/mir_test.hexa` — case (d) assertions updated to the new MIR shape: (1) ONE `array_lit` STMT with ≥ 2 elem operands, (2) ONE `enum_ctor` STMT containing const_str `__tag` AND `__payload` keys (not `__p0`/`__p1`), (3) ONE `field` extract on `__payload`, (4) TWO `index` extracts on `const_int 0` and `const_int 1` (one per binder). The legacy assertion (per-slot `__p<i>` field-get) is replaced — pre-Phase-5 lowering fails the new ordinal assertion, passes only with the storage-swap shape.
-
-**Backend impact**: zero. The 3-backend `enum_ctor` per-pair walk (133f4a0a) consumes the new 2-pair arg list under the same `hexa_map_new + hexa_map_set` ABI. The `array_lit` STMT routes through the proven 3-backend `hexa_array_new + hexa_array_push` loop (a351b1c9). The `index` STMT routes through the proven 3-backend `hexa_index_get` dispatch (a351b1c9, runtime array/map dispatch via `hexa_index_get`). No new runtime symbol; no new codegen branch.
-
-**Acceptance** (Phase 5): ✅ MET — `hexa_real parse` PASS on `hir_to_mir.hexa` + `mir_test.hexa`. The mir_test case (d) ordinal-extract assertion is the load-bearing falsifier (F-074-P5-CONTIGUOUS-STORAGE): the pre-Phase-5 per-slot `__p<i>` field-get fails the new `index 0`/`index 1` ordinal assertion, and the storage-swap producer passes both ctor-side (payload array_lit + `__payload` key) and destructure-side (single field-get + per-ordinal index-get).
-
-**g3 honest scope**: storage swap ONLY. The MIR value carrier is STILL a string-discriminated map ({__tag, __payload}) — the proper sum-typed MTag/MPack carrier (RFC §3.2) is deferred to a future sub-cycle. Cell access is now O(1) ordinal after one hash lookup (was N hash lookups per arm), but the outer container is still map-backed, so `__tag` dispatch is unchanged and there is no breakage of the tag-compare pre-existing path. Byte-eq for arity-1 sites is preserved (legacy struct_lit path untouched). Codegen/runtime symbols are unchanged — Phase 5 is a producer + destructure lowering refactor; the back-end emit and the runtime ABI are byte-eq across both arms.
-
-### Phase 6 — self-host fixpoint + parity gate
+### Phase 5 — self-host fixpoint + parity gate
 
 **Files**: drive `compiler/` through itself (per `project_compiler_native_self_host_fixpoint` memory's gen1≡gen2 byte-identical methodology), with the new multi-field enum sites exercised across the bootstrap.
 
-**Acceptance** (Phase 6):
+**Acceptance** (Phase 5):
 - gen2.s ≡ gen3.s byte-identical for any compiler/ source containing a multi-field enum (synthetic fixture in `compiler/parse/parser.hexa` or wherever lands first).
 - All five F-P0…F-P3 falsifiers (per `project_compiler_rfc063_p0p1_closed_p2_started` memory) re-run green.
 
-**g3 honest scope**: this is the *only* phase that "ships" multi-field for production-class consumers (wilson, demiurge). Phases 1-5 are landable but each is a closed surgical scope.
+**g3 honest scope**: this is the *only* phase that "ships" multi-field for production-class consumers (wilson, demiurge). Phases 1-4 are landable but each is a closed surgical scope.
 
 ---
 
@@ -197,8 +185,7 @@ Phase 3 has the **only** cross-RFC dependency (B1). Phases 1, 2, 4, 5 are linear
 - **F-074-P2-CHECK**: `match e { E::V(a) -> … }` against `enum E { V(int, string) }` produces HX02NN with byte-eq message on both arm64-darwin and x86_64-linux builds.
 - **F-074-P3-LOWER**: HIR dump of `E::V(1, "x")` shows arity-2 ctor; MIR dump shows 2 distinct payload-cell stores; no payload truncation.
 - **F-074-P4-CODEGEN**: 5 multi-field cases byte-eq across arm64-darwin + x86_64-linux + thumbv7em + interp parity (where interp survives; interp is RETIRED per `@D g_interp_deprecated`, so this falsifier uses compiled-vs-compiled cross-target equivalence rather than compiled-vs-interp).
-- **F-074-P5-CONTIGUOUS-STORAGE**: HIR `Event::Click(7, 9)` with `match e { Event::Click(x, y) -> x + y }` lowers to MIR containing (a) ONE `array_lit` STMT with 2 elem operands, (b) ONE `enum_ctor` STMT carrying const_str `__tag` AND `__payload` keys (no `__p0`/`__p1` const_str keys present), (c) ONE `field` extract on `__payload`, (d) TWO `index` extracts on `const_int 0` and `const_int 1`. Pre-Phase-5 lowering fails (b) + (d) — it would emit `__p0`/`__p1` map keys + per-slot field-get on string keys. The mir_test case (d) assertion battery codifies this falsifier in code.
-- **F-074-P6-FIXPOINT**: gen2 → gen3 byte-identical when the bootstrap path includes a synthetic multi-field enum in `compiler/parse/parser.hexa` (e.g. a refactor where `TokenKind` or `ExprKind` consumes payload data; this is a *natural* refactor of the existing string-discriminated arms in `compiler/ir/*.hexa`).
+- **F-074-P5-FIXPOINT**: gen2 → gen3 byte-identical when the bootstrap path includes a synthetic multi-field enum in `compiler/parse/parser.hexa` (e.g. a refactor where `TokenKind` or `ExprKind` consumes payload data; this is a *natural* refactor of the existing string-discriminated arms in `compiler/ir/*.hexa`).
 
 ---
 

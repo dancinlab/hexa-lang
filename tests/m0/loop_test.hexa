@@ -233,8 +233,10 @@ fn _run_target(label: string, target: string,
     println("── " + label + " (" + target + ") ──")
 
     let mm = _build_sum10()
-    let mut lm = codegen_arm64_darwin(mm)
-    if target == "x86_64-linux-gnu" { lm = codegen_x86_64_linux(mm) }
+    // RFC 070 G7-A.native impl — default CodegenOptions (shared=0).
+    let __cg_opts = codegen_options_default()
+    let mut lm = codegen_arm64_darwin(mm, __cg_opts)
+    if target == "x86_64-linux-gnu" { lm = codegen_x86_64_linux(mm, __cg_opts) }
     let asm = emit_asm(lm)
 
     println("  emit_asm output (" + to_string(len(asm.chars())) + " bytes):")

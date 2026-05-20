@@ -616,18 +616,44 @@ fn _x86_store_spill(buf: [LInstr], rm: X86RegMap, id: i64, src_reg: string) -> [
 }
 
 fn _x86_op_rm(buf: [LInstr], o: Operand, st: X86StrTab, rm: X86RegMap,
-              scratch: string) -> [LInstr] {
+              scratch: string, opts: CodegenOptions) -> [LInstr] {
     let mut out = buf
     if o.kind == "local" {
         if _x86_is_spilled(rm, o.local_id) {
             out = _x86_load_spill(out, rm, o.local_id, scratch)
         }
     }
+    // RFC 070 G7-A.native impl emit (2026-05-20, D2 — x86_64 parity
+    // with arm64 D1 commit 8fdb29e2). In `--shared` mode globals are
+    // extern-resolved through the GOT so `.so` text stays PIC and the
+    // dynamic linker accepts the load. The baseline path (`opts.shared
+    // == 0`) leaves x86_64 emit byte-identical: `_x86_op_resolve` keeps
+    // returning the bare `g<id>` label, and the linker fixes that as an
+    // absolute / PC32 reloc as today. PIC path materializes the GOT
+    // entry into `scratch` via a single `mov scratch, [rip+sym@GOTPCREL]`
+    // — one instruction rather than the arm64 adrp+ldr pair because
+    // x86_64 RIP-relative addressing already carries a 32-bit displacement.
+    // The reloc-kind tag goes in `LInstr.comment` suffix `[reloc=…]` so
+    // the asm-text emitter (future cycle) can dispatch on it without
+    // re-deriving the kind. Authority:
+    //   - System V AMD64 ABI §B.2 (relocation types): R_X86_64_GOTPCREL
+    //     (uses 32-bit RIP-relative offset to entry in the GOT).
+    //   - The Linux kernel `ld.so` rejects text segments containing
+    //     R_X86_64_64 absolute relocs on a position-independent object;
+    //     R_X86_64_GOTPCREL is the canonical replacement.
+    if o.kind == "global" {
+        if opts.shared == 1 {
+            let gl = "g" + to_string(o.global_id)
+            out.push(_x86_instr2("mov", _x86_op_reg(scratch),
+                             _x86_op_label("[rip+" + gl + "@GOTPCREL]"),
+                             "addr GOT load: " + gl + " [reloc=" + RELOC_X86_64_GOTPCREL + "]"))
+        }
+    }
     return out
 }
 
 fn _x86_op_resolve(o: Operand, st: X86StrTab, rm: X86RegMap,
-                   scratch: string) -> LOperand {
+                   scratch: string, opts: CodegenOptions) -> LOperand {
     if o.kind == "local" {
         if _x86_is_spilled(rm, o.local_id) {
             return _x86_op_reg(scratch)
@@ -635,7 +661,16 @@ fn _x86_op_resolve(o: Operand, st: X86StrTab, rm: X86RegMap,
         return _x86_op_reg(_x86_reg_lookup(rm, o.local_id))
     }
     if o.kind == "const_int" { return _x86_op_imm(o.int_val) }
-    if o.kind == "global"    { return _x86_op_label("g" + to_string(o.global_id)) }
+    if o.kind == "global"    {
+        // RFC 070 G7-A.native impl emit (2026-05-20, D2): in `--shared`
+        // mode the GOT entry was loaded into `scratch` by `_x86_op_rm`,
+        // so resolve must return that register — emitting the bare label
+        // here would defeat the PIC indirection and re-introduce the
+        // text-section absolute reloc the GOT path exists to avoid. The
+        // baseline path returns the label as before for byte-eq emit.
+        if opts.shared == 1 { return _x86_op_reg(scratch) }
+        return _x86_op_label("g" + to_string(o.global_id))
+    }
     if o.kind == "const_str" {
         let lbl = _x86_strtab_lookup(st, o.str_val)
         if len(lbl) > 0 { return _x86_op_label(lbl) }
@@ -658,7 +693,8 @@ fn _x86_dst_reg(rm: X86RegMap, id: i64) -> string {
 }
 
 fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
-                    st: X86StrTab, rm: X86RegMap, spill_frame: i64) -> [LInstr] {
+                    st: X86StrTab, rm: X86RegMap, spill_frame: i64,
+                    opts: CodegenOptions) -> [LInstr] {
     let mut buf = out
     if s.kind == _STMT_ASSIGN {
         // array_lit constructor: dst = hexa_array_new(); then
@@ -680,8 +716,8 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              "array_lit: capture new array"))
             let mut i = 0
             while i < len(s.args) {
-                buf = _x86_op_rm(buf, s.args[i], st, rm, "r10")
-                let v = _x86_op_resolve(s.args[i], st, rm, "r10")
+                buf = _x86_op_rm(buf, s.args[i], st, rm, "r10", opts)
+                let v = _x86_op_resolve(s.args[i], st, rm, "r10", opts)
                 buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), v,
                                  "array_lit: elem " + to_string(i)))
                 buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), dst,
@@ -712,10 +748,10 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              "struct_lit: capture new map"))
             let mut i = 1
             while i + 1 < len(s.args) {
-                buf = _x86_op_rm(buf, s.args[i], st, rm, "r10")
-                let key = _x86_op_resolve(s.args[i], st, rm, "r10")
-                buf = _x86_op_rm(buf, s.args[i + 1], st, rm, "r11")
-                let val = _x86_op_resolve(s.args[i + 1], st, rm, "r11")
+                buf = _x86_op_rm(buf, s.args[i], st, rm, "r10", opts)
+                let key = _x86_op_resolve(s.args[i], st, rm, "r10", opts)
+                buf = _x86_op_rm(buf, s.args[i + 1], st, rm, "r11", opts)
+                let val = _x86_op_resolve(s.args[i + 1], st, rm, "r11", opts)
                 buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), key,
                                  "struct_lit: field key"))
                 buf.push(_x86_instr2("mov", _x86_op_reg("rdx"), val,
@@ -771,10 +807,10 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // verification deferred (Track-A clang wall).
         if s.op == "field" && len(s.args) >= 2 {
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
-            buf = _x86_op_rm(buf, s.args[0], st, rm, "r10")
-            let base = _x86_op_resolve(s.args[0], st, rm, "r10")
-            buf = _x86_op_rm(buf, s.args[1], st, rm, "r11")
-            let key = _x86_op_resolve(s.args[1], st, rm, "r11")
+            buf = _x86_op_rm(buf, s.args[0], st, rm, "r10", opts)
+            let base = _x86_op_resolve(s.args[0], st, rm, "r10", opts)
+            buf = _x86_op_rm(buf, s.args[1], st, rm, "r11", opts)
+            let key = _x86_op_resolve(s.args[1], st, rm, "r11", opts)
             buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), base,
                              "field: map base"))
             buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), key,
@@ -789,8 +825,8 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         if len(s.args) >= 1 {
             let mut src_scratch = "r10"
             if _x86_is_spilled(rm, s.dst.id) { src_scratch = "r11" }
-            buf = _x86_op_rm(buf, s.args[0], st, rm, src_scratch)
-            let src = _x86_op_resolve(s.args[0], st, rm, src_scratch)
+            buf = _x86_op_rm(buf, s.args[0], st, rm, src_scratch, opts)
+            let src = _x86_op_resolve(s.args[0], st, rm, src_scratch, opts)
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
             buf.push(_x86_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
@@ -801,10 +837,10 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         if len(s.args) >= 2 {
             let a_scratch = "r10"
             let b_scratch = "r11"
-            buf = _x86_op_rm(buf, s.args[0], st, rm, a_scratch)
-            buf = _x86_op_rm(buf, s.args[1], st, rm, b_scratch)
-            let a = _x86_op_resolve(s.args[0], st, rm, a_scratch)
-            let b = _x86_op_resolve(s.args[1], st, rm, b_scratch)
+            buf = _x86_op_rm(buf, s.args[0], st, rm, a_scratch, opts)
+            buf = _x86_op_rm(buf, s.args[1], st, rm, b_scratch, opts)
+            let a = _x86_op_resolve(s.args[0], st, rm, a_scratch, opts)
+            let b = _x86_op_resolve(s.args[1], st, rm, b_scratch, opts)
             let dst_name = _x86_dst_reg(rm, s.dst.id)
             let dst = _x86_op_reg(dst_name)
 
@@ -895,8 +931,8 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // Push overflow args right-to-left so arg 7 ends up at [rsp+0].
         let mut k = arg_n - 1
         while k >= 6 {
-            buf = _x86_op_rm(buf, s.args[k], st, rm, "r10")
-            let src = _x86_op_resolve(s.args[k], st, rm, "r10")
+            buf = _x86_op_rm(buf, s.args[k], st, rm, "r10", opts)
+            let src = _x86_op_resolve(s.args[k], st, rm, "r10", opts)
             buf.push(_x86_instr1("push", src,
                 "C7: spill arg " + to_string(k) + " (right-to-left)"))
             k = k - 1
@@ -906,8 +942,8 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         while i < arg_n {
             if i < 6 {
                 let scratch = _x86_64_arg_reg_seq(i)
-                buf = _x86_op_rm(buf, s.args[i], st, rm, scratch)
-                let src = _x86_op_resolve(s.args[i], st, rm, scratch)
+                buf = _x86_op_rm(buf, s.args[i], st, rm, scratch, opts)
+                let src = _x86_op_resolve(s.args[i], st, rm, scratch, opts)
                 let dst_reg = _x86_op_reg(scratch)
                 buf.push(_x86_instr2("mov", dst_reg, src, "arg " + to_string(i)))
             }
@@ -932,8 +968,8 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     }
     if s.kind == _STMT_RETURN {
         if len(s.args) >= 1 {
-            buf = _x86_op_rm(buf, s.args[0], st, rm, "r10")
-            let src = _x86_op_resolve(s.args[0], st, rm, "r10")
+            buf = _x86_op_rm(buf, s.args[0], st, rm, "r10", opts)
+            let src = _x86_op_resolve(s.args[0], st, rm, "r10", opts)
             buf.push(_x86_instr2("mov", _x86_op_reg("rax"), src, "set return value"))
         }
         if spill_frame > 0 {
@@ -951,8 +987,8 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     }
     if s.kind == _STMT_BR_COND {
         if len(s.args) > 0 {
-            buf = _x86_op_rm(buf, s.args[0], st, rm, "r10")
-            let cond = _x86_op_resolve(s.args[0], st, rm, "r10")
+            buf = _x86_op_rm(buf, s.args[0], st, rm, "r10", opts)
+            let cond = _x86_op_resolve(s.args[0], st, rm, "r10", opts)
             // x86 `test` first operand must be reg/mem, not imm. A const_int
             // condition would emit `test 0, 0` (rejected by GNU as).
             // Materialize into r10 first. Mirrors the cmp fix above.
@@ -972,8 +1008,8 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     }
     if s.kind == "load" {
         if len(s.args) >= 1 {
-            buf = _x86_op_rm(buf, s.args[0], st, rm, "r11")
-            let base_op = _x86_op_resolve(s.args[0], st, rm, "r11")
+            buf = _x86_op_rm(buf, s.args[0], st, rm, "r11", opts)
+            let base_op = _x86_op_resolve(s.args[0], st, rm, "r11", opts)
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
             buf.push(_x86_instr2("mov", dst, base_op, "load"))
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
@@ -982,10 +1018,10 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     }
     if s.kind == "store" {
         if len(s.args) >= 2 {
-            buf = _x86_op_rm(buf, s.args[0], st, rm, "r10")
-            buf = _x86_op_rm(buf, s.args[1], st, rm, "r11")
-            let base_op = _x86_op_resolve(s.args[0], st, rm, "r10")
-            let src = _x86_op_resolve(s.args[1], st, rm, "r11")
+            buf = _x86_op_rm(buf, s.args[0], st, rm, "r10", opts)
+            buf = _x86_op_rm(buf, s.args[1], st, rm, "r11", opts)
+            let base_op = _x86_op_resolve(s.args[0], st, rm, "r10", opts)
+            let src = _x86_op_resolve(s.args[1], st, rm, "r11", opts)
             buf.push(_x86_instr2("mov", base_op, src, "store"))
         }
         return buf
@@ -996,7 +1032,8 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
 
 // ── Function lowering ────────────────────────────────────────
 
-fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string) -> LFunc {
+fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
+                      opts: CodegenOptions) -> LFunc {
     let mut instrs = []
 
     // C6 — run linear-scan regalloc up front.
@@ -1040,7 +1077,7 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string) -> LFunc {
         let mut si = 0
         while si < len(blk.stmts) {
             instrs = _emit_x86_64_stmt(instrs, modhash, mf.name,
-                                       blk.stmts[si], st, rm, spill_frame)
+                                       blk.stmts[si], st, rm, spill_frame, opts)
             si = si + 1
         }
         bi = bi + 1
@@ -1279,7 +1316,18 @@ fn _x86_strtab_to_rodata(st: X86StrTab) -> [LSection] {
 
 // ── Module entry point ───────────────────────────────────────
 
-pub fn codegen_x86_64_linux(module: MModule) -> LModule {
+// RFC 070 G7-A.native impl — Shape B sub-cycle 2026-05-20:
+// entry signature now carries `opts: CodegenOptions` (lifted to
+// compiler/ir/lir.hexa by the B1 iface commit). All callers updated to
+// pass `codegen_options_default()` in this cycle — they all behave
+// exactly as before (opts.shared == 0, opts.target_triple == ""), so
+// the emit body is byte-identical to the pre-iface output. The actual
+// `if opts.shared` GOT-load + `.hidden` emit-body branches are the
+// NEXT sub-cycle (G7-A.native impl emit). This commit is the signature
+// lift only — measurable falsifier: corpus byte-eq with the default
+// `opts` argument (any diff would mean an accidental capture of
+// `opts.shared` somewhere in the body).
+pub fn codegen_x86_64_linux(module: MModule, opts: CodegenOptions) -> LModule {
     let st = _build_x86_strtab(module)
     // Stage1 C8 — modhash from MModule.file disambiguates spliced
     // modules so block labels never collide across re-imported libs.
@@ -1287,7 +1335,7 @@ pub fn codegen_x86_64_linux(module: MModule) -> LModule {
     let mut funcs = []
     let mut i = 0
     while i < len(module.funcs) {
-        funcs.push(_x86_64_lower_func(module.funcs[i], st, modhash))
+        funcs.push(_x86_64_lower_func(module.funcs[i], st, modhash, opts))
         i = i + 1
     }
     return LModule {

@@ -7178,6 +7178,164 @@ HexaVal rt_append_file(HexaVal path, HexaVal content) {
     return hexa_void();
 }
 
+/* G5 (wilson-pi-port 6-gap S-FS-ATOMIC-APPEND, A2 cycle) —
+ * POSIX atomic-append primitive.
+ *
+ * `O_APPEND` guarantees a single `write(2)` is atomic with respect to
+ * concurrent appenders provided the write does not exceed PIPE_BUF
+ * (POSIX.1-2008 §write rationale; on regular files Linux/macOS both
+ * implement append as an offset-take-and-write under a per-inode lock).
+ * Caller is responsible for chunking data <= PIPE_BUF (typically
+ * 4096 B Linux, 512 B macOS).
+ *
+ * Returns: bytes written (>= 0) on success, or -errno on failure.
+ *   - open()  failure → -errno (e.g. -EACCES, -ENOENT for missing parent)
+ *   - write() short or failed → -errno (EINTR retried)
+ * close() failures are silenced; write(2) errno already covered the I/O.
+ *
+ * Mode 0644 (rw-r--r--) on file creation. O_CREAT idempotent.
+ */
+HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) {
+    if (!HX_IS_STR(path) || !HX_STR(path)) return hexa_int(-EINVAL);
+    const char* p = HX_STR(path);
+    const char* buf = (HX_IS_STR(data) && HX_STR(data)) ? HX_STR(data) : "";
+    size_t len = strlen(buf);
+    int fd = open(p, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    if (fd < 0) return hexa_int(-(int64_t)errno);
+    ssize_t w;
+    do { w = write(fd, buf, len); } while (w < 0 && errno == EINTR);
+    int saved_errno = (w < 0) ? errno : 0;
+    close(fd);
+    if (w < 0) return hexa_int(-(int64_t)saved_errno);
+    return hexa_int((int64_t)w);
+}
+
+/* G5 (wilson-pi-port 6-gap S-FS-ATOMIC-APPEND, B cycle) —
+ * fs_stat primitive: POSIX stat(2) → 4-tuple struct field array.
+ *
+ * Returns: HexaArray [size_i64, mtime_ns_i64, is_dir_int(0/1), mode_i64]
+ *   on success; hexa_void() (null/none) on stat(2) failure (missing,
+ *   permission denied, etc.). Caller distinguishes via HX_IS_VOID.
+ *
+ * mtime_ns = sec*1e9 + nsec on Linux (st_mtim); on macOS Darwin uses
+ *           st_mtimespec; both supported via the POSIX-2008 macros.
+ * is_dir   = S_ISDIR(st_mode) ? 1 : 0
+ * mode     = st_mode & 0777 (perm bits only, host-portable)
+ *
+ * This is a low-level primitive — the hexa wrapper in self/stdlib/fs.hexa
+ * builds the struct {size, mtime_ns, is_dir, mode} on top.
+ */
+HexaVal rt_fs_stat(HexaVal path) {
+    if (!HX_IS_STR(path) || !HX_STR(path)) return hexa_void();
+    const char* p = HX_STR(path);
+    struct stat st;
+    if (stat(p, &st) != 0) return hexa_void();
+    int64_t mtime_ns;
+#if defined(__APPLE__)
+    mtime_ns = (int64_t)st.st_mtimespec.tv_sec * 1000000000LL +
+               (int64_t)st.st_mtimespec.tv_nsec;
+#elif defined(_POSIX_C_SOURCE) || defined(__linux__)
+    mtime_ns = (int64_t)st.st_mtim.tv_sec * 1000000000LL +
+               (int64_t)st.st_mtim.tv_nsec;
+#else
+    mtime_ns = (int64_t)st.st_mtime * 1000000000LL;
+#endif
+    HexaVal arr = hexa_array_new();
+    arr = hexa_array_push(arr, hexa_int((int64_t)st.st_size));
+    arr = hexa_array_push(arr, hexa_int(mtime_ns));
+    arr = hexa_array_push(arr, hexa_int(S_ISDIR(st.st_mode) ? 1 : 0));
+    arr = hexa_array_push(arr, hexa_int((int64_t)(st.st_mode & 0777)));
+    return arr;
+}
+
+/* G5 (wilson-pi-port 6-gap, B cycle) —
+ * fs_rotate_if_over: rename(path, path+suffix) iff size > max_bytes.
+ *
+ * Returns: 1 if rotated, 0 if not (size <= max_bytes or missing),
+ *   -errno on rename(2) failure.
+ *
+ * Single-process atomic: rename(2) is atomic on POSIX. Subsequent
+ * fs_append_atomic on `path` will re-create the file via O_CREAT.
+ * NOT safe across producers without external coordination (two
+ * rotators racing the same file could clobber the suffix target).
+ */
+HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal suffix) {
+    if (!HX_IS_STR(path) || !HX_STR(path)) return hexa_int(-EINVAL);
+    if (!HX_IS_STR(suffix) || !HX_STR(suffix)) return hexa_int(-EINVAL);
+    const char* p = HX_STR(path);
+    const char* s = HX_STR(suffix);
+    int64_t maxb = HX_IS_INT(max_bytes) ? HX_INT(max_bytes) : 0;
+    struct stat st;
+    if (stat(p, &st) != 0) {
+        /* missing file = nothing to rotate; not an error. */
+        return hexa_int(0);
+    }
+    if ((int64_t)st.st_size <= maxb) return hexa_int(0);
+    size_t plen = strlen(p), slen = strlen(s);
+    char* target = (char*)malloc(plen + slen + 1);
+    memcpy(target, p, plen);
+    memcpy(target + plen, s, slen);
+    target[plen + slen] = 0;
+    int rc = rename(p, target);
+    int saved_errno = (rc != 0) ? errno : 0;
+    free(target);
+    if (rc != 0) return hexa_int(-(int64_t)saved_errno);
+    return hexa_int(1);
+}
+
+/* G5 (wilson-pi-port 6-gap, B cycle) —
+ * fs_mkdir_p: recursive mkdir(2) loop; POSIX-only (no shell fork).
+ *
+ * Returns: 0 on success or if directory already exists,
+ *   -errno on failure (last mkdir(2) errno).
+ *
+ * Walks `path` left-to-right, mkdir(2) at each separator. EEXIST is
+ * tolerated iff the existing entry is a directory (else -ENOTDIR).
+ * Mode 0755 on creation. Idempotent. Pure POSIX — no fork/exec.
+ *
+ * The existing self/stdlib/fs.hexa::mkdir_p() shell-wraps `mkdir -p`;
+ * this primitive is the fork-free equivalent for hot paths.
+ */
+HexaVal rt_fs_mkdir_p(HexaVal path) {
+    if (!HX_IS_STR(path) || !HX_STR(path)) return hexa_int(-EINVAL);
+    const char* p = HX_STR(path);
+    size_t plen = strlen(p);
+    if (plen == 0) return hexa_int(-EINVAL);
+    char* buf = (char*)malloc(plen + 1);
+    memcpy(buf, p, plen);
+    buf[plen] = 0;
+    int err = 0;
+    /* Walk and mkdir at each '/' boundary. Skip leading '/' (absolute). */
+    size_t i = (buf[0] == '/') ? 1 : 0;
+    while (i <= plen) {
+        if (i == plen || buf[i] == '/') {
+            char saved = buf[i];
+            buf[i] = 0;
+            if (buf[0] != 0) {
+                if (mkdir(buf, 0755) != 0) {
+                    if (errno == EEXIST) {
+                        struct stat st;
+                        if (stat(buf, &st) != 0 || !S_ISDIR(st.st_mode)) {
+                            err = (errno == 0) ? ENOTDIR : errno;
+                            buf[i] = saved;
+                            break;
+                        }
+                    } else {
+                        err = errno;
+                        buf[i] = saved;
+                        break;
+                    }
+                }
+            }
+            buf[i] = saved;
+        }
+        i++;
+    }
+    free(buf);
+    if (err != 0) return hexa_int(-(int64_t)err);
+    return hexa_int(0);
+}
+
 HexaVal hexa_bin(HexaVal n) {
     uint64_t v = HX_IS_INT(n) ? (uint64_t)HX_INT(n) : (uint64_t)_hexa_f(n);
     char buf[65]; int pos = 0;

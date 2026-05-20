@@ -202,9 +202,15 @@ struct FnDecl {
     annotations: string     // serialized @cli/@flag/@doc/@schema/@gate/@memo (kind|raw;...)
 }
 
+// Param: fn-parameter shape (also reused as enum-variant payload row in
+// the legacy single-field path). RFC 074 Phase 1 (2026-05-20): multi-field
+// enum variant payloads are stored on the EnumVariant node's `items: [string]`
+// accumulator (see parse_enum_decl) — Param.typ remains single-string for
+// fn-param backward-compat. Migration of Param.typ → Param.typs: [string] is
+// RFC 074 Phase 2-4 (typechecker/codegen multi-arg) work.
 struct Param {
     name: string,
-    typ: string     // "" for untyped
+    typ: string     // "" for untyped; arity-1 (single-field enum variant subsumes)
 }
 
 struct TypeParam {
@@ -228,10 +234,16 @@ struct StructDecl {
 }
 
 // ── Enum Declaration ────────────────────────────────────
+// RFC 074 Phase 1 (2026-05-20): variants now allow multi-field payload
+// — `optional_types` is `[string]` (per-variant accumulator) where
+// len(optional_types) ∈ {0} = unit, {1} = single-field (existing),
+// {≥2} = multi-field (new this phase). parser.hexa::parse_enum_decl
+// emits each variant as a dict with `items: [type_string]`; downstream
+// typechecker/codegen multi-arg destructure = Phase 2-4 (future).
 
 struct EnumDecl {
     name: string,
-    variants: string,   // serialized [(name, optional_types)]
+    variants: string,   // serialized [(name, optional_types)] — optional_types ∈ [string]
     visibility: string
 }
 

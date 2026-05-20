@@ -811,6 +811,58 @@ fn parse_stmt() {
             } else {
                 p_pending_link = attr_arg
             }
+        } else if attr_name == "plugin" && p_peek_kind() == "LParen" {
+            // ── @plugin(capabilities=["x", "y", ...]) ─────────────
+            // RFC 070 G7-D.impl Part A: capability authoring surface
+            // (RFC 070 §4.6.1 trade-off A — declared 2026-05-20 c54b76f3).
+            //
+            // Storage: serialized into p_pending_annotations as
+            //   "plugin|capabilities=\"x\",\"y\",..."
+            // matching the @cli/@flag/@doc raw-tokens channel. Codegen-side
+            // (compiler/codegen __HEXA,__cap section emit) is G7-D.impl Part B
+            // — out of scope for this sub-cycle (parse + AST only).
+            //
+            // Tolerant grammar: caller may write `capabilities = [..]`,
+            // `capabilities=[..]`, or just a bare string-array (positional).
+            // Unknown kwargs are accepted into the raw stream so future
+            // capability fields (e.g. plugin_id) are forward-compat.
+            p_advance() // consume (
+            let mut raw_parts = []
+            let mut depth = 1
+            while depth > 0 && p_peek_kind() != "Eof" {
+                let pk_p = p_peek_kind()
+                if pk_p == "LParen" || pk_p == "LBracket" {
+                    depth = depth + 1
+                    let t = p_advance()
+                    raw_parts.push(t.value)
+                } else if pk_p == "RParen" {
+                    depth = depth - 1
+                    if depth == 0 {
+                        p_advance() // consume closing )
+                    } else {
+                        let t = p_advance()
+                        raw_parts.push(t.value)
+                    }
+                } else if pk_p == "RBracket" {
+                    depth = depth - 1
+                    let t = p_advance()
+                    raw_parts.push(t.value)
+                } else {
+                    let t = p_advance()
+                    if pk_p == "StringLit" {
+                        raw_parts.push("\"" + t.value + "\"")
+                    } else {
+                        raw_parts.push(t.value)
+                    }
+                }
+            }
+            let raw_p = raw_parts.join(" ")
+            p_pending_annotations.push("plugin|" + raw_p)
+            if p_pending_attrs == "" {
+                p_pending_attrs = "plugin"
+            } else {
+                p_pending_attrs = p_pending_attrs + ",plugin"
+            }
         } else if attr_name == "select" && p_peek_kind() == "LParen" {
             // S-2c: @select meta-DSL (parse-only, no codegen yet)
             //   @select("family", cond -> algo, ..., else -> algo)
@@ -1919,7 +1971,13 @@ fn parse_struct_decl() {
     }
 }
 
-// ── enum Name { Variant1, Variant2(type), ... } ─────────────
+// ── enum Name { Variant1, Variant2(type), Variant3(t1, t2, ...) } ─────────────
+// RFC 074 Phase 1 (2026-05-20): multi-field payload — `vtypes` is the per-variant
+// `[TypeRef]` accumulator. Single-field path (arity-1) subsumes naturally;
+// multi-field (arity ≥ 2) appends each comma-separated type. `parse_type_annotation`
+// replaces `p_expect_ident` so generic / optional / array types are admitted.
+// Downstream typechecker/codegen multi-arg handling = RFC 074 Phase 2-4 (out of
+// scope for this sub-cycle — parse + AST shape only).
 
 fn parse_enum_decl() {
     p_advance() // consume 'enum'
@@ -1933,7 +1991,9 @@ fn parse_enum_decl() {
         if p_peek_kind() == "LParen" {
             p_advance()
             while p_peek_kind() != "RParen" && p_peek_kind() != "Eof" {
-                vtypes.push(p_expect_ident())
+                // RFC 074 Phase 1: parse_type_annotation (was p_expect_ident)
+                // — admits `int`, `string`, `[int]`, `int?`, `Foo<T>`, etc.
+                vtypes.push(parse_type_annotation())
                 if p_peek_kind() == "Comma" {
                     p_advance()
                 }
