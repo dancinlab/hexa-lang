@@ -3159,7 +3159,8 @@ HexaVal hexa_array_zip(HexaVal a, HexaVal b) {
 #endif
 
 // chunk(n): split into non-overlapping chunks of size n (last may be shorter).
-// Matches interpreter at hexa_full.hexa:15363-15378.
+// Matches interpreter at hexa_full.hexa:15363-15378. Step-3 cycle 26.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_chunk(HexaVal arr, HexaVal nv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3177,6 +3178,27 @@ HexaVal hexa_array_chunk(HexaVal arr, HexaVal nv) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_chunk_float(HexaVal arr, HexaVal n);
+HexaVal hexa_array_chunk(HexaVal arr, HexaVal nv) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
+    if (_arr_all_float(arr)) return rt_array_chunk_float(arr, hexa_int(n));
+    if (n <= 0) return out;
+    int64_t len = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < len; i += n) {
+        HexaVal chunk = hexa_array_new();
+        int64_t stop = i + n;
+        if (stop > len) stop = len;
+        for (int64_t j = i; j < stop; j++) {
+            chunk = hexa_array_push(chunk, HX_ARR_ITEMS(arr)[j]);
+        }
+        out = hexa_array_push(out, chunk);
+    }
+    return out;
+}
+#endif
 
 // window(n): sliding windows of size n (step 1). Empty if n > len or n ≤ 0.
 // Matches interpreter at hexa_full.hexa:15380-15395.
