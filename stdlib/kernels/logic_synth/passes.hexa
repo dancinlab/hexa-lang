@@ -290,8 +290,13 @@ fn pass_opt(d: Design) -> PassResult {
 //                                       | (!A&!B&CIN) | (A&B&CIN)
 //                                 COUT : (A&B) | (A&CIN) | (B&CIN)
 //                                 pins : A,B,CIN inputs; SUM,COUT outputs
-//     - sky130_fd_sc_hd__conb_1 — constant-1/0 tie (HI=1, LO=0)
-//                                 used to drive the lowest-bit CIN to 0
+//   The lowest-bit CIN is tied to constant 0 via the RTLIL sigspec
+//   constant convention — a `$_const0_` driver cell (kernel/rtlil.h
+//   ::Const sentinel; matches Yosys' `$_const0_`/`$_const1_` driver
+//   types). The BLIF emitter in abc_map.hexa translates this sentinel
+//   to a constant-0 `.names <net>` line (BLIF spec §3 — a `.names`
+//   table with zero rows is the canonical constant-0 truth function),
+//   so ABC parses the tie natively without needing a Liberty cell.
 //   No upstream Yosys source is copied; the shape is the textbook RCA
 //   (carry-chain length = N, no carry-look-ahead optimisation in this
 //   iter — abc_map's downstream sizing/optimisation pass owns the
@@ -934,7 +939,7 @@ fn _passes_add_width(c: Cell) -> int {
 // Shape (Weste/Eshraghian §11 — N-bit ripple-carry adder):
 //   add(A, B) = SUM_i with carry chain
 //     fa_i : (SUM[i], COUT[i]) = fa_1(A[i], B[i], CIN[i])
-//     CIN[0] = LO output of one conb_1 (constant 0 tie)
+//     CIN[0] = Y output of one `$_const0_` driver (constant-0 sigspec)
 //     CIN[i] = COUT[i-1] for i = 1..N-1
 //   Sum width = N (the lowering does NOT propagate the final COUT to a
 //   Y[N] bit; output truncation matches the typical Verilog
@@ -942,11 +947,21 @@ fn _passes_add_width(c: Cell) -> int {
 //   width elaboration).  COUT[N-1] is driven to a fresh internal wire
 //   so the no-dangling invariant holds.
 //
+// rfc_006 §5 bug (a) iter 6 — the constant-0 driver is a `$_const0_`
+// sentinel cell, NOT a Liberty `sky130_fd_sc_hd__conb_1` instance.
+// ABC's BLIF parser rejects `.gate sky130_fd_sc_hd__conb_1` because
+// that Liberty cell has only constant outputs (no boolean function);
+// the canonical BLIF form for a constant-0 net is `.names <net>` with
+// zero rows (BLIF spec §3), which abc_map.hexa emits when it sees the
+// `$_const0_` sentinel. The post-ABC mapped design absorbs the tie
+// into the adjacent fa_1 (ABC's `map` pass treats constant inputs as
+// don't-cares), so no `$_const0_` survives downstream.
+//
 // Naming convention for fresh wires/cells:
 //   <cellname>$cyo$<i>   — i-th FA's COUT wire (i = 0..N-1)
-//   <cellname>$cin0      — constant-0 tie wire (LO of the conb_1)
+//   <cellname>$cin0      — constant-0 tie wire (Y of the $_const0_)
 //   <cellname>$fa$<i>    — i-th fa_1 cell instance
-//   <cellname>$tie$0     — the conb_1 cell instance providing cin0
+//   <cellname>$tie$0     — the $_const0_ driver instance for cin0
 // All freshly added wires are width=1, internal (dir_kind=0, port_id=0).
 struct AddLowerResult {
     cells: [Cell],
@@ -962,12 +977,17 @@ fn _passes_lower_add_cell(c: Cell) -> AddLowerResult {
     let mut out_cells: [Cell] = []
     let mut out_wires: [Wire] = []
 
-    // ── constant cin[0] = 0 tie (one conb_1 per $add cell) ──────────
+    // ── constant cin[0] = 0 tie (one $_const0_ sentinel per $add cell) ─
+    // rfc_006 §5 bug (a) iter 6: emit a `$_const0_` driver instead of a
+    // Liberty `sky130_fd_sc_hd__conb_1` cell. abc_map.hexa translates
+    // this sentinel to a `.names <cin0_net>` BLIF line (constant 0, zero
+    // truth-table rows), which ABC parses directly without needing the
+    // Liberty cell's constant function to be mappable.
     let cin0_net = c.name + "$cin0"
     out_wires = out_wires.push(rtlil_wire(cin0_net, 1, 0, 0))
     let mut tie = rtlil_cell(c.name + "$tie$0",
-                             "sky130_fd_sc_hd__conb_1", 1)
-    tie = rtlil_cell_connect(tie, "LO", cin0_net)
+                             "$_const0_", 0)
+    tie = rtlil_cell_connect(tie, "Y", cin0_net)
     out_cells = out_cells.push(tie)
 
     // ── N-bit ripple-carry chain ────────────────────────────────────
@@ -1835,8 +1855,11 @@ fn main() {
         println("FAIL T21e ln4_dangling_pin"); fails = fails + 1
     }
 
-    // T22 — $add lowering (1-bit, plain A/B/Y conns) → 1 fa_1 + 1 conb_1
-    // (cin=0 tie). CLEAN-ROOM: rfc_006 §5 bug (a) iter 5. One full-adder
+    // T22 — $add lowering (1-bit, plain A/B/Y conns) → 1 fa_1 + 1
+    // $_const0_ (cin=0 tie). CLEAN-ROOM: rfc_006 §5 bug (a) iter 6 —
+    // the cin=0 tie is a `$_const0_` sigspec-constant driver (not a
+    // Liberty `conb_1`), so the BLIF emitter turns it into a `.names`
+    // constant-0 line that ABC accepts directly. One full-adder
     // computes SUM=Y and COUT into a fresh internal wire so the
     // no-dangling invariant on the FA pins holds (Weste-Eshraghian §11).
     total = total + 1
@@ -1860,10 +1883,17 @@ fn main() {
             + str(rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__fa_1"))
             + ", want 1)"); fails = fails + 1
     }
-    if rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__conb_1") != 1 {
-        println("FAIL T22c ad1_conb_count (got "
-            + str(rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__conb_1"))
+    // iter 6: cin=0 tie is now a `$_const0_` sentinel (BLIF `.names`
+    // constant-0), NOT a Liberty `sky130_fd_sc_hd__conb_1` cell.
+    if rtlil_count_cells_of_type(r_ad1.design.modules[0], "$_const0_") != 1 {
+        println("FAIL T22c ad1_const0_count (got "
+            + str(rtlil_count_cells_of_type(r_ad1.design.modules[0], "$_const0_"))
             + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__conb_1") != 0 {
+        println("FAIL T22c2 ad1_no_conb (got "
+            + str(rtlil_count_cells_of_type(r_ad1.design.modules[0], "sky130_fd_sc_hd__conb_1"))
+            + ", want 0)"); fails = fails + 1
     }
     if rtlil_count_cells_of_type(r_ad1.design.modules[0], "$add") != 0 {
         println("FAIL T22d ad1_residual"); fails = fails + 1
@@ -1873,7 +1903,8 @@ fn main() {
     }
 
     // T23 — $add lowering 2-bit (bit-indexed A[0..1]/B[0..1]/Y[0..1]) →
-    // 2 fa_1 (ripple chain) + 1 conb_1 (cin0 tie).
+    // 2 fa_1 (ripple chain) + 1 $_const0_ (cin0 tie). iter 6: cin0 tie
+    // is a `$_const0_` sentinel (BLIF `.names`-constant), not a conb_1.
     total = total + 1
     let mut m_ad2 = rtlil_new_module("ad2")
     m_ad2 = rtlil_module_add_wire(m_ad2, rtlil_wire("a0", 1, 1, 1))
@@ -1901,10 +1932,15 @@ fn main() {
             + str(rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__fa_1"))
             + ", want 2)"); fails = fails + 1
     }
-    if rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__conb_1") != 1 {
-        println("FAIL T23c ad2_conb_count (got "
-            + str(rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__conb_1"))
+    if rtlil_count_cells_of_type(r_ad2.design.modules[0], "$_const0_") != 1 {
+        println("FAIL T23c ad2_const0_count (got "
+            + str(rtlil_count_cells_of_type(r_ad2.design.modules[0], "$_const0_"))
             + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__conb_1") != 0 {
+        println("FAIL T23c2 ad2_no_conb (got "
+            + str(rtlil_count_cells_of_type(r_ad2.design.modules[0], "sky130_fd_sc_hd__conb_1"))
+            + ", want 0)"); fails = fails + 1
     }
     if rtlil_count_cells_of_type(r_ad2.design.modules[0], "$add") != 0 {
         println("FAIL T23d ad2_residual"); fails = fails + 1
@@ -1914,7 +1950,9 @@ fn main() {
     }
 
     // T24 — $add lowering 4-bit → 4 fa_1 (linear ripple chain over four
-    // bits with carry-in tied to 0 via one conb_1) + 1 conb_1.
+    // bits with carry-in tied to 0 via one $_const0_) + 1 $_const0_.
+    // iter 6: cin0 tie is a `$_const0_` sentinel (BLIF `.names`-constant),
+    // not a Liberty conb_1.
     total = total + 1
     let mut m_ad4 = rtlil_new_module("ad4")
     let mut adwi = 0
@@ -1947,10 +1985,15 @@ fn main() {
             + str(rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__fa_1"))
             + ", want 4)"); fails = fails + 1
     }
-    if rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__conb_1") != 1 {
-        println("FAIL T24c ad4_conb_count (got "
-            + str(rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__conb_1"))
+    if rtlil_count_cells_of_type(r_ad4.design.modules[0], "$_const0_") != 1 {
+        println("FAIL T24c ad4_const0_count (got "
+            + str(rtlil_count_cells_of_type(r_ad4.design.modules[0], "$_const0_"))
             + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__conb_1") != 0 {
+        println("FAIL T24c2 ad4_no_conb (got "
+            + str(rtlil_count_cells_of_type(r_ad4.design.modules[0], "sky130_fd_sc_hd__conb_1"))
+            + ", want 0)"); fails = fails + 1
     }
     if rtlil_count_cells_of_type(r_ad4.design.modules[0], "$add") != 0 {
         println("FAIL T24d ad4_residual"); fails = fails + 1
