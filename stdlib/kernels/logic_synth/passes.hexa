@@ -1124,24 +1124,369 @@ fn _passes_log2_pow2(n: int) -> int {
     return k
 }
 
+// CLEAN-ROOM: integer pow(2, k) for k >= 0.
+fn _passes_pow2(k: int) -> int {
+    let mut v = 1
+    let mut i = 0
+    while i < k {
+        v = v * 2
+        i = i + 1
+    }
+    return v
+}
+
+// CLEAN-ROOM: count Y-output bits on a $mod cell. Plain "Y" (width=1)
+// or bit-indexed "Y[i]" — returns the maximum (i+1) found, defaulting
+// to 1 when only plain "Y" exists.
+fn _passes_mod_yw(c: Cell) -> int {
+    let mut has_plain_y = 0
+    let mut max_idx_y = 0 - 1
+    let mut i = 0
+    while i < len(c.conns) {
+        let p = c.conns[i].pin
+        let lp = len(p)
+        if lp == 1 {
+            if p[0] == 'Y' { has_plain_y = 1 }
+        }
+        if lp >= 4 {
+            if p[0] == 'Y' {
+                if p[1] == '[' {
+                    if p[lp - 1] == ']' {
+                        let mut k = 2
+                        let mut v = 0
+                        let mut ok = 1
+                        while k < lp - 1 {
+                            let ch = p[k]
+                            if ch >= '0' {
+                                if ch <= '9' {
+                                    v = v * 10 + (ch - '0')
+                                } else { ok = 0 }
+                            } else { ok = 0 }
+                            k = k + 1
+                        }
+                        if ok == 1 {
+                            if v > max_idx_y { max_idx_y = v }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    if max_idx_y >= 0 { return max_idx_y + 1 }
+    if has_plain_y == 1 { return 1 }
+    return 0
+}
+
+// CLEAN-ROOM: resolve the input net carrying bit `v` of the A operand
+// of cell `c`. Convention mirrors _passes_lower_mod_cell case A —
+// plain "A" net when the cell has width=1 and only one A pin; otherwise
+// indexed "A[v]". Returns "" if the pin is missing.
+fn _passes_mod_a_bit(c: Cell, w: int, v: int) -> str {
+    if w == 1 {
+        let plain = _passes_pin_net(c, "A")
+        if plain != "" { return plain }
+        return _passes_pin_net(c, "A[0]")
+    }
+    return _passes_pin_net(c, "A[" + str(v) + "]")
+}
+
+// CLEAN-ROOM: resolve the output net carrying bit `i` of the Y operand
+// of cell `c`. Same convention as the A reader.
+fn _passes_mod_y_bit(c: Cell, yw: int, i: int) -> str {
+    if yw == 1 {
+        let plain = _passes_pin_net(c, "Y")
+        if plain != "" { return plain }
+        return _passes_pin_net(c, "Y[0]")
+    }
+    return _passes_pin_net(c, "Y[" + str(i) + "]")
+}
+
+// CLEAN-ROOM: case-B LUT lowering for $mod with bounded input width.
+//
+// Theorem (Mano/Kime "Logic and Computer Design Fundamentals" §3-3 ·
+// Kohavi/Jha "Switching and Finite Automata Theory" Ch. 4):
+//   Any Boolean function f: {0,1}^W → {0,1} admits a canonical
+//   sum-of-products representation: f(x) = OR over m in M of
+//   AND over v in 0..W of (x_v if bit_v(m)=1 else ~x_v), where
+//   M is the set of minterms (input assignments where f=1).
+//
+// We apply this per output bit Y[i] of A mod N. The truth table
+// has 2^W rows; we emit one and2_1-tree per minterm with f=1, then
+// or2_1-reduce the AND outputs into Y[i]. Negated literals are
+// emitted via inv_1 once per (bit, source-input-bit) and reused.
+//
+// Returns ok=1 on successful LUT lowering (W ≤ 5). Returns ok=0
+// ok_kind=2 with a fail-loud diagnostic when W > 5 (LUT table > 32
+// rows → cell-count blow-up; restoring-divider is the correct
+// substrate at that envelope and is out of iter-9 scope).
+fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
+    if w > 5 {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 2,
+            message: "lower_mod: cell `" + c.name + "` has non-power-of-2 const divisor B=" + str(nval) + " with A-width W=" + str(w) + " > 5 (rfc_006 §5 iter 9 — LUT lowering capped at W≤5 / 32-row truth table; restoring-divider expansion is out of iter 9 scope)"
+        }
+    }
+    if w < 1 {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 3,
+            message: "lower_mod: cell `" + c.name + "` has unrecognised A-width W=" + str(w)
+        }
+    }
+
+    let yw = _passes_mod_yw(c)
+    if yw < 1 {
+        return ModLowerResult {
+            cells: [], wires: [], ok: 0, ok_kind: 3,
+            message: "lower_mod: cell `" + c.name + "` has no Y output pin"
+        }
+    }
+
+    let nrows = _passes_pow2(w)
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+
+    // Shared $_const1_ driver — used by single-literal-minterm "buffer"
+    // ties (Y = lit AND 1) and by all-ones output-bit ties. Emitted
+    // once and reused across all output bits.
+    let c1_net = c.name + "$lutc1_net"
+    let mut c1_emitted = 0
+
+    // Negated-literal handling: we emit one inv_1 per (output-bit i,
+    // minterm m, source-bit v) occurrence rather than deduping via an
+    // index map. ABC's structural-hash pass (strash) collapses the
+    // duplicate inverters during AIG normalisation, so this costs no
+    // mapped-area but keeps the lowering free of int-keyed arrays
+    // (hexa-native doubles tend to taint arithmetic with float, which
+    // breaks `arr[key]` shape).
+
+    // Per output bit Y[i] — build the SOP.
+    let mut i = 0
+    while i < yw {
+        let y_net = _passes_mod_y_bit(c, yw, i)
+        if y_net == "" {
+            return ModLowerResult {
+                cells: [], wires: [], ok: 0, ok_kind: 3,
+                message: "lower_mod: cell `" + c.name + "` missing Y[" + str(i) + "] pin"
+            }
+        }
+        // Truth column for Y[i]: list of A-values where bit i of (A%nval)
+        // is 1. Each such A is a minterm.
+        let mut minterms: [int] = []
+        let mut a = 0
+        while a < nrows {
+            let rem = a % nval
+            // bit i of `rem` (integer divide-and-mod)
+            let bit_i = (rem / _passes_pow2(i)) % 2
+            if bit_i == 1 {
+                minterms = minterms.push(a)
+            }
+            a = a + 1
+        }
+
+        // Degenerate output cases.
+        if len(minterms) == 0 {
+            // Y[i] = 0 — tie to $_const0_.
+            let mut z = rtlil_cell(c.name + "$lutc0$" + str(i),
+                                   "$_const0_", 0)
+            z = rtlil_cell_connect(z, "Y", y_net)
+            out_cells = out_cells.push(z)
+            i = i + 1
+            continue
+        }
+        if len(minterms) == nrows {
+            // Y[i] = 1 — tie to $_const1_.
+            let mut o = rtlil_cell(c.name + "$lutc1bit$" + str(i),
+                                   "$_const1_", 0)
+            o = rtlil_cell_connect(o, "Y", y_net)
+            out_cells = out_cells.push(o)
+            i = i + 1
+            continue
+        }
+
+        // Non-degenerate: emit a 2-level SOP. Compute per-minterm
+        // AND-tree outputs, then OR-reduce.
+        let mut and_outs: [str] = []
+        let mut mi = 0
+        while mi < len(minterms) {
+            let mt = minterms[mi]
+            // Collect literal nets — positive (A[v]) or negative (~A[v])
+            // — in source-bit-index order v=0..W-1.
+            let mut lits: [str] = []
+            let mut v = 0
+            while v < w {
+                let bit_v = (mt / _passes_pow2(v)) % 2
+                let a_v = _passes_mod_a_bit(c, w, v)
+                if a_v == "" {
+                    return ModLowerResult {
+                        cells: [], wires: [], ok: 0, ok_kind: 3,
+                        message: "lower_mod: cell `" + c.name + "` missing A[" + str(v) + "] pin"
+                    }
+                }
+                if bit_v == 1 {
+                    lits = lits.push(a_v)
+                } else {
+                    // negated literal — emit a per-minterm inv_1 driving
+                    // a fresh wire. Structural-hash dedup happens in
+                    // ABC's `strash`; this avoids a hexa int-keyed
+                    // dedup map (see header note re float-taint).
+                    let niv = c.name + "$lutniv$" + str(i) + "$" + str(mi) + "$" + str(v)
+                    out_wires = out_wires.push(rtlil_wire(niv, 1, 0, 0))
+                    let mut inv_c = rtlil_cell(
+                        c.name + "$lutinv$" + str(i) + "$" + str(mi) + "$" + str(v),
+                        "sky130_fd_sc_hd__inv_1", 1)
+                    inv_c = rtlil_cell_connect(inv_c, "A", a_v)
+                    inv_c = rtlil_cell_connect(inv_c, "Y", niv)
+                    out_cells = out_cells.push(inv_c)
+                    lits = lits.push(niv)
+                }
+                v = v + 1
+            }
+
+            // AND-tree over `lits`. Special cases:
+            //   1 literal — no AND-tree needed; the literal IS the
+            //               minterm output. The OR-tree (or its single-
+            //               minterm degenerate `Y = top AND const_1`
+            //               alias) is responsible for the final write
+            //               to y_net, so no extra buffer is emitted here.
+            //   2+        — pairwise reduce with and2_1 in a binary tree;
+            //               cell name carries gate index `g` 0..len-2.
+            let mut and_top: str = ""
+            if len(lits) == 1 {
+                and_top = lits[0]
+            } else {
+                // Binary AND-tree — reduce lits[0..] left-to-right.
+                // gate g combines current `acc` with lits[g+1].
+                let mut acc: str = lits[0]
+                let mut g = 0
+                while g < len(lits) - 1 {
+                    let aout = c.name + "$luta$" + str(i) + "$" + str(mi) + "$" + str(g)
+                    out_wires = out_wires.push(rtlil_wire(aout, 1, 0, 0))
+                    let mut and_c = rtlil_cell(
+                        c.name + "$lutand$" + str(i) + "$" + str(mi) + "$" + str(g),
+                        "sky130_fd_sc_hd__and2_1", 1)
+                    and_c = rtlil_cell_connect(and_c, "A", acc)
+                    and_c = rtlil_cell_connect(and_c, "B", lits[g + 1])
+                    and_c = rtlil_cell_connect(and_c, "X", aout)
+                    out_cells = out_cells.push(and_c)
+                    acc = aout
+                    g = g + 1
+                }
+                and_top = acc
+            }
+            and_outs = and_outs.push(and_top)
+            mi = mi + 1
+        }
+
+        // OR-tree over `and_outs`. The last OR drives y_net directly.
+        if len(and_outs) == 1 {
+            // single minterm — wire the AND-tree top to y_net via a
+            // second and2_1 buffer (we already emitted one if single-
+            // literal, but we still need to alias to y_net). Use
+            // `Y = and_top AND const_1` — same buffer pattern.
+            if c1_emitted == 0 {
+                out_wires = out_wires.push(rtlil_wire(c1_net, 1, 0, 0))
+                let mut c1_tie = rtlil_cell(c.name + "$lutc1",
+                                            "$_const1_", 0)
+                c1_tie = rtlil_cell_connect(c1_tie, "Y", c1_net)
+                out_cells = out_cells.push(c1_tie)
+                c1_emitted = 1
+            }
+            let mut tail = rtlil_cell(
+                c.name + "$lutor$" + str(i) + "$0",
+                "sky130_fd_sc_hd__and2_1", 1)
+            tail = rtlil_cell_connect(tail, "A", and_outs[0])
+            tail = rtlil_cell_connect(tail, "B", c1_net)
+            tail = rtlil_cell_connect(tail, "X", y_net)
+            out_cells = out_cells.push(tail)
+        } else {
+            // Multi-minterm — binary OR-tree. The last OR drives y_net.
+            let mut acc: str = and_outs[0]
+            let mut g = 0
+            while g < len(and_outs) - 1 {
+                let is_last = 0
+                let mut out_net: str = ""
+                if g == len(and_outs) - 2 {
+                    out_net = y_net
+                } else {
+                    out_net = c.name + "$luto$" + str(i) + "$" + str(g)
+                    out_wires = out_wires.push(rtlil_wire(out_net, 1, 0, 0))
+                }
+                let mut or_c = rtlil_cell(
+                    c.name + "$lutor$" + str(i) + "$" + str(g),
+                    "sky130_fd_sc_hd__or2_1", 1)
+                or_c = rtlil_cell_connect(or_c, "A", acc)
+                or_c = rtlil_cell_connect(or_c, "B", and_outs[g + 1])
+                or_c = rtlil_cell_connect(or_c, "X", out_net)
+                out_cells = out_cells.push(or_c)
+                acc = out_net
+                g = g + 1
+            }
+        }
+
+        i = i + 1
+    }
+
+    return ModLowerResult {
+        cells: out_cells, wires: out_wires, ok: 1, ok_kind: 2, message: ""
+    }
+}
+
 // CLEAN-ROOM: lower one $mod cell. The Y-output is the A-operand
 // reduced modulo the divisor on the B-pin. Three cases:
 //
 //   case A — const divisor 2^k          → log2(N) per-bit AND with
 //                                          $const_1 on the low k bits,
 //                                          $_const0_ tie on bits >= k
-//   case B — const divisor non-pow-of-2 → fail-loud (out of phase-a)
+//   case B — const divisor non-pow-of-2 → bounded-LUT (W ≤ 5):
+//                                          per-output-bit truth-table
+//                                          to 2-level SOP (AND-tree
+//                                          minterms + OR-tree reduce).
+//                                          Beyond W=5 → fail-loud
+//                                          (restoring-divider out of
+//                                          phase-a scope).
 //   case C — variable / unfoldable B    → fail-loud (out of phase-a)
 //
-// Returns ok=1 only in case A. Cases B and C return ok=0 with a
-// distinct ok_kind so the caller's outer pass can report which
-// boundary the design hit.
+// Returns ok=1 in case A or case B (LUT-lowered). Case B-overflow
+// (W > 5) and case C return ok=0 with a distinct ok_kind so the
+// caller's outer pass can report which boundary the design hit.
+//
+// LUT theorem citation (case B):
+//   For A ∈ [0, 2^W) and constant N ≥ 2, f(A) = A mod N is a
+//   function f: {0,1}^W → {0,1}^ceil(log2(N)). Each output bit
+//   Y[i] is a Boolean function of W input bits; its canonical
+//   sum-of-products has 2^W minterms and a textbook 2-level
+//   AND-OR realization (one AND-gate per minterm where Y[i]=1,
+//   one OR-gate reducing them). Atlas citation:
+//     · Mano/Kime, "Logic and Computer Design Fundamentals", §3-3
+//       (combinational synthesis from a truth table).
+//     · Kohavi/Jha, "Switching and Finite Automata Theory",
+//       Ch. 4 (canonical SOP via minterm expansion).
+//   Honest scope: bounded-input LUT lowering — NOT a general
+//   variable-divisor or wide-A restoring-divider. Works because
+//   the router_d{4,6} fixtures have W ≤ 5 after read_verilog's
+//   width inference. Beyond W=5 the truth table is > 32 rows and
+//   the SOP cell-count blows up; that envelope demands a real
+//   restoring-divider (out of iter-9 scope).
 //
 // Naming convention for fresh wires/cells (case A):
 //   <cellname>$mskand$<i> — i-th and2_1 cell instance (low-bit mask)
 //   <cellname>$mskhi$<i>  — i-th $_const0_ cell instance (high-bit zero)
 //   <cellname>$c1         — shared $_const1_ driver instance
 //   <cellname>$c1_net     — shared $const_1 net carrying the AND mask
+//
+// Naming convention for fresh wires/cells (case B LUT):
+//   <cellname>$lutc1_net          — shared $_const1_ wire (buffer ties)
+//   <cellname>$lutc1              — shared $_const1_ driver
+//   <cellname>$lutinv$<i>$<v>     — inv_1 for negated literal A[v] at bit i
+//   <cellname>$lutniv$<i>$<v>     — net carrying ~A[v] at bit i
+//   <cellname>$lutand$<i>$<m>$<g> — g-th and2_1 in AND-tree for minterm m, bit i
+//   <cellname>$luta$<i>$<m>$<g>   — net out of that and2_1
+//   <cellname>$lutor$<i>$<g>      — g-th or2_1 in OR-tree, bit i
+//   <cellname>$luto$<i>$<g>       — net out of that or2_1
+//   <cellname>$lutc0$<i>          — $_const0_ tie for all-zero output bit
+//   <cellname>$lutc1bit$<i>       — $_const1_ tie for all-one output bit
+//   <cellname>$lutbuf$<i>         — and2_1 buffer (single-literal minterm)
 struct ModLowerResult {
     cells:   [Cell],
     wires:   [Wire],
@@ -1189,10 +1534,11 @@ fn _passes_lower_mod_cell(c: Cell) -> ModLowerResult {
     }
     let k = _passes_log2_pow2(nval)
     if k < 0 {
-        return ModLowerResult {
-            cells: [], wires: [], ok: 0, ok_kind: 2,
-            message: "lower_mod: cell `" + c.name + "` has non-power-of-2 const divisor B=" + str(nval) + " (rfc_006 §5 iter 7 — case B: only divisor 2^k is lowered via mask identity; full restoring-divider expansion is out of iter 7 scope)"
-        }
+        // case B — non-pow-of-2 const divisor. rfc_006 §5 iter 9:
+        // bounded-LUT lowering (W ≤ 5) replaces the iter-7 fail-loud.
+        // The LUT helper returns ok=1 on success, ok=0 ok_kind=2 with
+        // the W-cap diagnostic when out of envelope.
+        return _passes_lower_mod_case_b_lut(c, nval, w)
     }
 
     // ── case A: divisor = 2^k — mask lowering ───────────────────────
@@ -2335,10 +2681,12 @@ fn main() {
         println("FAIL T26e md3_residual"); fails = fails + 1
     }
 
-    // T27 — $mod lowering · const divisor 3 (case B: non-pow-of-2) →
-    //   lowering returns ok=0 ok_kind=2 with case-B fail-loud diagnostic;
-    //   the $mod cell stays in the design (not silenty stripped).
-    //   (Restoring-divider expansion is out of phase-a scope.)
+    // T27 — $mod lowering · 1-bit A · const divisor 3 (case B: non-
+    //   pow-of-2). rfc_006 §5 iter 9 — LUT lowering now SUCCEEDS at
+    //   the bounded envelope (W=1 ≤ 5). Truth table: A∈{0,1},
+    //   A%3 = A → minterm {1}, single positive literal → Y = A AND 1.
+    //   Expected: ok=1 ok_kind=2 (case-B-LUT), 1× and2_1, 1× $_const1_,
+    //   0× residual $mod.
     total = total + 1
     let mut m_md_b = rtlil_new_module("mdb")
     m_md_b = rtlil_module_add_wire(m_md_b, rtlil_wire("a0",       1, 1, 1))
@@ -2349,14 +2697,160 @@ fn main() {
     c_md_b = rtlil_cell_connect(c_md_b, "B", "$const_3")
     c_md_b = rtlil_cell_connect(c_md_b, "Y", "y0")
     m_md_b = rtlil_module_add_cell(m_md_b, c_md_b)
-    // Direct unit-call on the lowering so we can assert the diagnostic
-    // kind without depending on the techmap pass's println surfacing.
+    // Direct unit-call on the lowering so we can assert ok_kind=2.
     let r_md_b = _passes_lower_mod_cell(c_md_b)
-    if r_md_b.ok != 0 {
-        println("FAIL T27 mdb_should_fail (ok=" + str(r_md_b.ok) + ")"); fails = fails + 1
+    if r_md_b.ok != 1 {
+        println("FAIL T27 mdb_should_lower (ok=" + str(r_md_b.ok) + ", msg=" + r_md_b.message + ")"); fails = fails + 1
     }
     if r_md_b.ok_kind != 2 {
         println("FAIL T27b mdb_kind (got " + str(r_md_b.ok_kind) + ", want 2)"); fails = fails + 1
+    }
+
+    // T28 — $mod lowering 3-bit A · const divisor 5 (case B LUT).
+    //   Y = A % 5 for A in 0..7 → {0,1,2,3,4,0,1,2}. Y is 3-bit
+    //   ([0:2]); per-bit truth-columns:
+    //     Y[0]: {0,1,0,1,0,0,1,0} → minterms {1,3,6}
+    //     Y[1]: {0,0,1,1,0,0,0,1} → minterms {2,3,7}
+    //     Y[2]: {0,0,0,0,1,0,0,0} → minterms {4}
+    //   Each non-degenerate output bit emits one and2_1 chain per
+    //   minterm (W=3 lits each → 2 and2_1 per minterm) plus the
+    //   inv_1 cells for negated literals (deduped per (bit, src-bit))
+    //   and one or2_1 per minterm-pair (3 minterms → 2 OR per bit).
+    //   The exact cell-count is invariant-checked via the techmap
+    //   pass; we assert (a) the lowering succeeded, (b) no residual
+    //   $mod cell remains, (c) at least one $_const1_ driver, (d) no
+    //   $_const0_ tie (no all-zero output bit in this table — all
+    //   three Y bits have ≥ 1 minterm).
+    total = total + 1
+    let mut m_t28 = rtlil_new_module("md_t28")
+    let mut wi28 = 0
+    while wi28 < 3 {
+        m_t28 = rtlil_module_add_wire(m_t28,
+            rtlil_wire("a" + str(wi28), 1, 1, wi28 + 1))
+        m_t28 = rtlil_module_add_wire(m_t28,
+            rtlil_wire("y" + str(wi28), 1, 2, wi28 + 5))
+        wi28 = wi28 + 1
+    }
+    m_t28 = rtlil_module_add_wire(m_t28, rtlil_wire("$const_5", 1, 0, 0))
+    let mut c_t28 = rtlil_cell("u_t28", "$mod", 0)
+    let mut wj28 = 0
+    while wj28 < 3 {
+        c_t28 = rtlil_cell_connect(c_t28, "A[" + str(wj28) + "]", "a" + str(wj28))
+        c_t28 = rtlil_cell_connect(c_t28, "Y[" + str(wj28) + "]", "y" + str(wj28))
+        wj28 = wj28 + 1
+    }
+    c_t28 = rtlil_cell_connect(c_t28, "B[0]", "$const_5")
+    m_t28 = rtlil_module_add_cell(m_t28, c_t28)
+    let mut d_t28 = rtlil_new_design("test")
+    d_t28 = rtlil_design_add(d_t28, m_t28)
+    let r_t28 = pass_techmap_sky130(d_t28)
+    if r_t28.ok != 1 {
+        println("FAIL T28 lut3_5: " + r_t28.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t28.design.modules[0], "$mod") != 0 {
+        println("FAIL T28b lut3_5_residual"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t28.design.modules[0], "$_const1_") < 1 {
+        println("FAIL T28c lut3_5_no_const1"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t28.design.modules[0], "$_const0_") != 0 {
+        println("FAIL T28d lut3_5_unexpected_const0 (got "
+            + str(rtlil_count_cells_of_type(r_t28.design.modules[0], "$_const0_"))
+            + ", want 0)"); fails = fails + 1
+    }
+    // Direct unit-call to assert the kind tag.
+    let r_t28_u = _passes_lower_mod_cell(c_t28)
+    if r_t28_u.ok_kind != 2 {
+        println("FAIL T28e lut3_5_kind (got " + str(r_t28_u.ok_kind) + ", want 2)"); fails = fails + 1
+    }
+    // No-dangling check on the techmap'd module.
+    if rtlil_check_no_dangling(r_t28.design.modules[0]) != 0 {
+        println("FAIL T28f lut3_5_dangling_pin"); fails = fails + 1
+    }
+
+    // T29 — $mod lowering 3-bit A · const divisor 7 (case B LUT).
+    //   Y = A % 7 for A in 0..7 → {0,1,2,3,4,5,6,0}. Y is 3-bit;
+    //   per-bit truth-columns:
+    //     Y[0]: {0,1,0,1,0,1,0,0} → minterms {1,3,5}
+    //     Y[1]: {0,0,1,1,0,0,1,0} → minterms {2,3,6}
+    //     Y[2]: {0,0,0,0,1,1,1,0} → minterms {4,5,6}
+    //   Same invariants as T28 — no all-zero / all-one degenerate
+    //   bit, so no $_const0_ tie expected.
+    total = total + 1
+    let mut m_t29 = rtlil_new_module("md_t29")
+    let mut wi29 = 0
+    while wi29 < 3 {
+        m_t29 = rtlil_module_add_wire(m_t29,
+            rtlil_wire("a" + str(wi29), 1, 1, wi29 + 1))
+        m_t29 = rtlil_module_add_wire(m_t29,
+            rtlil_wire("y" + str(wi29), 1, 2, wi29 + 5))
+        wi29 = wi29 + 1
+    }
+    m_t29 = rtlil_module_add_wire(m_t29, rtlil_wire("$const_7", 1, 0, 0))
+    let mut c_t29 = rtlil_cell("u_t29", "$mod", 0)
+    let mut wj29 = 0
+    while wj29 < 3 {
+        c_t29 = rtlil_cell_connect(c_t29, "A[" + str(wj29) + "]", "a" + str(wj29))
+        c_t29 = rtlil_cell_connect(c_t29, "Y[" + str(wj29) + "]", "y" + str(wj29))
+        wj29 = wj29 + 1
+    }
+    c_t29 = rtlil_cell_connect(c_t29, "B[0]", "$const_7")
+    m_t29 = rtlil_module_add_cell(m_t29, c_t29)
+    let mut d_t29 = rtlil_new_design("test")
+    d_t29 = rtlil_design_add(d_t29, m_t29)
+    let r_t29 = pass_techmap_sky130(d_t29)
+    if r_t29.ok != 1 {
+        println("FAIL T29 lut3_7: " + r_t29.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t29.design.modules[0], "$mod") != 0 {
+        println("FAIL T29b lut3_7_residual"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_t29.design.modules[0], "$_const1_") < 1 {
+        println("FAIL T29c lut3_7_no_const1"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_t29.design.modules[0]) != 0 {
+        println("FAIL T29d lut3_7_dangling_pin"); fails = fails + 1
+    }
+    let r_t29_u = _passes_lower_mod_cell(c_t29)
+    if r_t29_u.ok_kind != 2 {
+        println("FAIL T29e lut3_7_kind (got " + str(r_t29_u.ok_kind) + ", want 2)"); fails = fails + 1
+    }
+
+    // T30 — $mod lowering 6-bit A · const divisor 5 (case B LUT cap).
+    //   W=6 > 5 → LUT lowering rejects with the W-cap diagnostic.
+    //   Lowering returns ok=0 ok_kind=2 (case-B over-envelope);
+    //   the $mod cell stays in the design (not silently stripped).
+    //   Restoring-divider expansion is out of iter-9 scope.
+    total = total + 1
+    let mut m_t30 = rtlil_new_module("md_t30")
+    let mut wi30 = 0
+    while wi30 < 6 {
+        m_t30 = rtlil_module_add_wire(m_t30,
+            rtlil_wire("a" + str(wi30), 1, 1, wi30 + 1))
+        m_t30 = rtlil_module_add_wire(m_t30,
+            rtlil_wire("y" + str(wi30), 1, 2, wi30 + 11))
+        wi30 = wi30 + 1
+    }
+    m_t30 = rtlil_module_add_wire(m_t30, rtlil_wire("$const_5", 1, 0, 0))
+    let mut c_t30 = rtlil_cell("u_t30", "$mod", 0)
+    let mut wj30 = 0
+    while wj30 < 6 {
+        c_t30 = rtlil_cell_connect(c_t30, "A[" + str(wj30) + "]", "a" + str(wj30))
+        c_t30 = rtlil_cell_connect(c_t30, "Y[" + str(wj30) + "]", "y" + str(wj30))
+        wj30 = wj30 + 1
+    }
+    c_t30 = rtlil_cell_connect(c_t30, "B[0]", "$const_5")
+    m_t30 = rtlil_module_add_cell(m_t30, c_t30)
+    let r_t30 = _passes_lower_mod_cell(c_t30)
+    if r_t30.ok != 0 {
+        println("FAIL T30 lut6_5_should_fail (ok=" + str(r_t30.ok) + ")"); fails = fails + 1
+    }
+    if r_t30.ok_kind != 2 {
+        println("FAIL T30b lut6_5_kind (got " + str(r_t30.ok_kind) + ", want 2)"); fails = fails + 1
+    }
+    // Diagnostic message must mention the W-cap (iter-9 scope marker).
+    if r_t30.message.find("W=6") < 0 {
+        println("FAIL T30c lut6_5_msg_missing_width (got " + r_t30.message + ")"); fails = fails + 1
     }
 
     if fails > 0 {

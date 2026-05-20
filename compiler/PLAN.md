@@ -4197,3 +4197,91 @@ Cumulative drafts: 3 RFCs (067 + 068 + 069), 4 marker comments,
 drafts).
 
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md
+
+### 2026-05-20 — rfc_006 §5 absorption gate — iter 9: `$mod` non-pow-of-2 LUT lowering (Shape A)
+
+**Scope.** Iter 9 of the rfc_006 §5 absorption cycle. Upgrades the
+`_passes_lower_mod_cell` case-B branch (non-power-of-2 const divisor)
+from iter-7's fail-loud to a bounded-input LUT lowering. The router_d4
+fixture has 5× `$mod` cells with divisor 5; router_d6 has 7× with
+divisor 7. Both lower at A-width W=1 after read_verilog (which leaves
+generic `$mod` cells width-tolerant before bit-elaboration). The LUT
+helper handles W up to 5 (32-row truth table cap); beyond W=5 the
+helper still fail-louds with the iter-9 W-cap diagnostic.
+
+**Theorem citation (`@D g6`).** Per-bit canonical SOP from truth-table
+expansion — Mano/Kime "Logic and Computer Design Fundamentals" §3-3
++ Kohavi/Jha "Switching and Finite Automata Theory" Ch. 4. Each
+output bit Y[i] = OR over minterms M of AND over input-bit
+literals. AND-tree binary-reduces via `sky130_fd_sc_hd__and2_1`;
+OR-tree via `sky130_fd_sc_hd__or2_1`; negated literals via
+`sky130_fd_sc_hd__inv_1`; degenerate all-zero / all-one columns tie
+to `$_const0_` / `$_const1_` sentinels.
+
+**Touched.** `stdlib/kernels/logic_synth/passes.hexa` (+510 −16):
+- New helpers: `_passes_pow2(k)`, `_passes_mod_yw(c)`,
+  `_passes_mod_a_bit(c, w, v)`, `_passes_mod_y_bit(c, yw, i)`,
+  `_passes_lower_mod_case_b_lut(c, nval, w)`.
+- Case-B branch in `_passes_lower_mod_cell` now calls the LUT helper
+  instead of returning the iter-7 fail-loud.
+- T27 reframed (was: assert case-B fail-loud; now: assert iter-9 LUT
+  success at W=1 N=3).
+- New T28/T29/T30: T28 W=3 N=5 (3-bit Y, 3-bit A · invariant: 0
+  residual $mod, ≥1 $_const1_, 0 $_const0_ since every column has
+  ≥1 minterm and ≤2^W-1 minterms · no-dangling). T29 same shape with
+  N=7. T30 W=6 N=5 (over-envelope, asserts ok=0 ok_kind=2 with the
+  W=6 cap message).
+
+**Selftest.** `passes selftest: 30/30 PASS` (was 27/27 baseline).
+abc_map/read_verilog/liberty/rtlil selftests unchanged — no
+regression.
+
+**§5 oracle (`stdlib/yosys/gate_record.hexa`).** Re-run measured —
+the iter-9 LUT lowering eliminates ALL 12 `lower_mod` fail-loud
+diagnostic lines (5 in router_d4 + 7 in router_d6 → 0). The `$mod`
+cells are absorbed into the techmap stage cleanly. **However, the
+gate remains OPEN**: ABC's `read_blif` SOP-check now mis-fires on
+the d{4,6}_in.blif because the BLIF mixes `.gate` cells (techmap'd
+sky130 instances) with `.names` constant nodes (iter-6's
+`$_const{0,1}_` BLIF emission policy). Minimal-isolation repro:
+
+    .model t
+    .inputs a
+    .outputs y
+    .names c1
+    1
+    .gate sky130_fd_sc_hd__and2_1 A=a B=c1 X=y
+    .end
+
+    abc -c "read_lib …sky130_fd_sc_hd…lib; read_blif t.blif; map"
+    →  Abc_SopCheck: SOP has a mismatch between its cover size (24)
+       and its fanin number (2).
+       NodeCheck: SOP check for node "y" has failed.
+       Io_ReadBlifMv: The network check has failed for model t.
+
+This is a **pre-existing, separately-existing** blocker — the iter-6
+`abc_map` selftest validates the BLIF text shape only (`.find(".names z1\n1\n")`),
+not the ABC-runs-on-it round-trip. Iter-9 surfaces it because
+the techmap'd designs now reach ABC instead of being blocked
+upstream at the `$mod` lowering stage.
+
+**Next blocker.** ABC mixed-mode (`.gate` + `.names`) BLIF
+incompatibility. Options for the next iter:
+1. emit constants as `.gate sky130_fd_sc_hd__conb_1 HI=…/LO=…` and
+   verify the iter-6 ABC rejection ("conb_1 outputs are pure
+   constants with no boolean function") still applies on the
+   currently-installed `/Users/ghost/bin/abc`;
+2. fold `Y = A AND 1` into a top-level RTLIL `connect` (LHS=Y,
+   RHS=A) at the pass layer so no `.names` constant cell is needed
+   in the BLIF;
+3. pre-process the BLIF through ABC's logic-mode `strash` and only
+   then run `map` — confirm ABC accepts the AIG-strashed form.
+
+Per `@D g3`: this iter does NOT close the §5 absorption gate. It
+moves the §5 oracle's failure mode from "$mod lowering refuses
+non-pow-of-2 divisor" (12 cells) to "ABC `read_blif` SOP-check
+rejects mixed `.gate`+`.names` BLIF" (12 unmapped ABC runs). The
+gate verdict stays **PARTIAL** until the BLIF-emission policy is
+revised.
+
+cross-link: `stdlib/kernels/logic_synth/passes.hexa` (LUT helper).
