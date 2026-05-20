@@ -4198,104 +4198,178 @@ drafts).
 
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md
 
-### 2026-05-20 — RFC 067 + 068 + 069 — 3 P1 implementations LANDED (next layer = P2/P3)
+### 2026-05-20 — rfc_006 §5 absorption gate — iter 9: `$mod` non-pow-of-2 LUT lowering (Shape A)
 
-Three Shape-B P1 implementation cycles for the RFC drafts landed
-earlier today (#138/#140/#141). Each P1 closes its first falsifier
-on the 14/15/16 test ratchet, advancing the lower_test smoke from
-13/13 → 16/16 cases. None claim RFC closure — that requires the
-respective P4 numeric-falsifier real-silicon fire.
+**Scope.** Iter 9 of the rfc_006 §5 absorption cycle. Upgrades the
+`_passes_lower_mod_cell` case-B branch (non-power-of-2 const divisor)
+from iter-7's fail-loud to a bounded-input LUT lowering. The router_d4
+fixture has 5× `$mod` cells with divisor 5; router_d6 has 7× with
+divisor 7. Both lower at A-width W=1 after read_verilog (which leaves
+generic `$mod` cells width-tolerant before bit-elaboration). The LUT
+helper handles W up to 5 (32-row truth table cap); beyond W=5 the
+helper still fail-louds with the iter-9 W-cap diagnostic.
 
-PRs landed (admin-squash, branch deleted):
-- #147 — RFC 069 P1 `_nvptx_unroll_pass` factor=N (F-RFC069-FACTOR-N
-  PASS)
-  • compiler/codegen/nvptx_target.hexa (+118/-64 lines) — generalized
-    loop iterates 1..(factor-1) producing (N-1) clones with disjoint
-    offsets, forward-link chain `body → clone_1 → ... → clone_{N-1}
-    → header`. Out-of-range factor (>32) returns mfn unchanged.
-  • compiler/codegen/nvptx_lower_test.hexa (+102 lines) — Case 14
-    `_test_unroll_factor_n` with 4 sub-cases: factor=2 byte-eq
-    regression guard (PR #117 preserved), factor=3/4 N-iteration
-    verify, factor=100 clamp passthrough.
-  • lower_test 13/13 → 14/14 PASS. F7 PASSTHROUGH-PRESERVED preserved
-    via Case 11 byte-identical.
-- #148 — RFC 068 P1 Local.precision tag thread
-  (F-RFC068-PRECISION-PROPAGATE PASS)
-  • compiler/ir/mir.hexa (+11 lines) — `Local` struct gains
-    `precision: string` field.
-  • compiler/codegen/nvptx_target.hexa (+15 lines) — classifier
-    short-circuits on dst Local's precision tag BEFORE op-name
-    rules (.f16/.bf16/.f32 → matching RKIND).
-  • compiler/codegen/nvptx_lower_test.hexa (+99 lines) — Case 15
-    `_test_precision_propagate` with critical guard: op="add"
-    (NOT "add_f16") with precision-tagged dsts must produce
-    .f16/.bf16/.f32 banks, NOT F64 default.
-  • Local-constructor sweep across 8 files (30 sites total) added
-    `precision: ""` per the new field.
-  • lower_test 14/14 → 15/15 PASS.
-- #150 — RFC 067 P1 fragment-as-tile-vector (F-RFC067-FRAG-WIDTH
-  PASS)
-  • compiler/codegen/nvptx_target.hexa (+71/-10 lines) —
-    `_nvptx_frag_width: i64 = 8` constant, `_nvptx_reg_frag(id)`
-    base-name helper, `_emit_ptx_func` reg-decl loop intercepts
-    FRAG kind to emit 8× `.reg .b32 %fra<id>_e<i>` (canonical
-    sm_80 m16n16k16 layout), classifier routes
-    gpu_wmma_load_a/_b/_mma dst → FRAG.
-  • compiler/codegen/nvptx_lower_test.hexa (+83 lines) — Case 16
-    `_test_frag_width` asserts 8 element decls + scalar-fallback
-    guard.
-  • lower_test 15/15 → 16/16 PASS.
+**Theorem citation (`@D g6`).** Per-bit canonical SOP from truth-table
+expansion — Mano/Kime "Logic and Computer Design Fundamentals" §3-3
++ Kohavi/Jha "Switching and Finite Automata Theory" Ch. 4. Each
+output bit Y[i] = OR over minterms M of AND over input-bit
+literals. AND-tree binary-reduces via `sky130_fd_sc_hd__and2_1`;
+OR-tree via `sky130_fd_sc_hd__or2_1`; negated literals via
+`sky130_fd_sc_hd__inv_1`; degenerate all-zero / all-one columns tie
+to `$_const0_` / `$_const1_` sentinels.
 
-Quality gates (all 3 PRs):
-- All modified files parse-clean (`hexa_real parse`).
-- CPU codegen targets byte-identical (x86_64_linux / arm64_darwin /
-  thumbv7em_eabihf).
-- mir.hexa modification (RFC 068 P1) is a struct-field addition;
-  `F-RFC055-CPU-CODEGEN-UNTOUCHED` preserved because the field
-  defaults to "" and CPU codegen never reads it.
-- `@D g_commit_push_deploy` — `self/codegen_c2.hexa` untouched
-  across all 3 PRs; no bootstrap regen required.
-- Regression: `nvptx_emit_test` + `nvptx_vec_add_test` +
-  `nvptx_gemm_test` + `codegen_test` + `optimize_test` +
-  `meter_test` all PASS after each landing.
+**Touched.** `stdlib/kernels/logic_synth/passes.hexa` (+510 −16):
+- New helpers: `_passes_pow2(k)`, `_passes_mod_yw(c)`,
+  `_passes_mod_a_bit(c, w, v)`, `_passes_mod_y_bit(c, yw, i)`,
+  `_passes_lower_mod_case_b_lut(c, nval, w)`.
+- Case-B branch in `_passes_lower_mod_cell` now calls the LUT helper
+  instead of returning the iter-7 fail-loud.
+- T27 reframed (was: assert case-B fail-loud; now: assert iter-9 LUT
+  success at W=1 N=3).
+- New T28/T29/T30: T28 W=3 N=5 (3-bit Y, 3-bit A · invariant: 0
+  residual $mod, ≥1 $_const1_, 0 $_const0_ since every column has
+  ≥1 minterm and ≤2^W-1 minterms · no-dangling). T29 same shape with
+  N=7. T30 W=6 N=5 (over-envelope, asserts ok=0 ok_kind=2 with the
+  W=6 cap message).
 
-Falsifier closure (3 of 21 = 14% of RFC 067/068/069's full battery):
-- F1 each of 067/068/069: PASS
-- F5 NO-LLVM-NO-CTRANS: continuous gate, all 3 PASS
-- F6 CPU-CODEGEN-UNTOUCHED: continuous gate, all 3 PASS
-- F7 RFC-069-PASSTHROUGH-PRESERVED: continuous gate, PASS
+**Selftest.** `passes selftest: 30/30 PASS` (was 27/27 baseline).
+abc_map/read_verilog/liberty/rtlil selftests unchanged — no
+regression.
 
-Honest scope (`@D g3`) — each PR distinguishes "P1 closure" from
-"RFC closure":
-- RFC 067 closure = P4 GPU-fire numeric falsifier (≤ 1e-2 rel
-  error vs FP64 baseline on 64×64 GEMM). P1 lands only the
-  REGISTER-DECLARATION side of the WMMA seam; the instruction-
-  emit side (real `wmma.load.a.sync...` PTX) is P3 — the WMMA
-  STMT_CALL handler still emits an honest stub comment marker.
-- RFC 068 closure = P4 GPU-fire numeric falsifier (≤ 2× f16-ULP
-  on f16 vec-add). P1 lands only the codegen-side tag read;
-  HIR-side `@f16` annotation grammar is P2.
-- RFC 069 closure = P4 GPU-fire byte-eq output across factor=N,
-  multi-exit, nested loops. P1 lands only factor=N generalization;
-  multi-exit (P2) + nested (P3) recognition deferred.
+**§5 oracle (`stdlib/yosys/gate_record.hexa`).** Re-run measured —
+the iter-9 LUT lowering eliminates ALL 12 `lower_mod` fail-loud
+diagnostic lines (5 in router_d4 + 7 in router_d6 → 0). The `$mod`
+cells are absorbed into the techmap stage cleanly. **However, the
+gate remains OPEN**: ABC's `read_blif` SOP-check now mis-fires on
+the d{4,6}_in.blif because the BLIF mixes `.gate` cells (techmap'd
+sky130 instances) with `.names` constant nodes (iter-6's
+`$_const{0,1}_` BLIF emission policy). Minimal-isolation repro:
 
-Pending P2/P3/P4 per cycle (next layer):
-- RFC 067 P2 SHARED-DECL, P3 DTYPE-FAMILY (re-key mnemonic table),
-  P4 TILE-LOOP-NUMERIC (first GPU fire)
-- RFC 068 P2 OPCODE-SUFFIX (needs HIR `@f16` annotation grammar +
-  TYPE_F16/BF16 in types.hexa), P3 BODY-MNEMONIC, P4 NUMERIC-EQ
-- RFC 069 P2 MULTI-EXIT-MATCH, P3 NESTED-PRESERVE, P4 NUMERIC-EQ
+    .model t
+    .inputs a
+    .outputs y
+    .names c1
+    1
+    .gate sky130_fd_sc_hd__and2_1 A=a B=c1 X=y
+    .end
 
-Cumulative today (full §12 P4+ arc 2026-05-20):
-- 1st batch — Shape-A surgical-port v2: #117 + #121 + #123 + #127
-  closure. lower_test 9/9 → 13/13.
-- 2nd batch — Shape-B P0 RFC drafts: #138 + #140 + #141 + #143
-  closure. RFC text only, lower_test unchanged.
-- 3rd batch — P1 implementations: #147 + #148 + #150 (this
-  closure). lower_test 13/13 → 16/16.
+    abc -c "read_lib …sky130_fd_sc_hd…lib; read_blif t.blif; map"
+    →  Abc_SopCheck: SOP has a mismatch between its cover size (24)
+       and its fanin number (2).
+       NodeCheck: SOP check for node "y" has failed.
+       Io_ReadBlifMv: The network check has failed for model t.
 
-Total today: 10 PRs (5 implementation + 5 docs/closure). Per-batch
-average 3.3 PRs. Each P1 cycle ~30-45 min, focused implementation
-pass per RFC closure §7 commitment.
+This is a **pre-existing, separately-existing** blocker — the iter-6
+`abc_map` selftest validates the BLIF text shape only (`.find(".names z1\n1\n")`),
+not the ABC-runs-on-it round-trip. Iter-9 surfaces it because
+the techmap'd designs now reach ABC instead of being blocked
+upstream at the `$mod` lowering stage.
 
-cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md
+**Next blocker.** ABC mixed-mode (`.gate` + `.names`) BLIF
+incompatibility. Options for the next iter:
+1. emit constants as `.gate sky130_fd_sc_hd__conb_1 HI=…/LO=…` and
+   verify the iter-6 ABC rejection ("conb_1 outputs are pure
+   constants with no boolean function") still applies on the
+   currently-installed `/Users/ghost/bin/abc`;
+2. fold `Y = A AND 1` into a top-level RTLIL `connect` (LHS=Y,
+   RHS=A) at the pass layer so no `.names` constant cell is needed
+   in the BLIF;
+3. pre-process the BLIF through ABC's logic-mode `strash` and only
+   then run `map` — confirm ABC accepts the AIG-strashed form.
+
+Per `@D g3`: this iter does NOT close the §5 absorption gate. It
+moves the §5 oracle's failure mode from "$mod lowering refuses
+non-pow-of-2 divisor" (12 cells) to "ABC `read_blif` SOP-check
+rejects mixed `.gate`+`.names` BLIF" (12 unmapped ABC runs). The
+gate verdict stays **PARTIAL** until the BLIF-emission policy is
+revised.
+
+cross-link: `stdlib/kernels/logic_synth/passes.hexa` (LUT helper).
+
+### 2026-05-20 — rfc_006 §5 absorption gate — iter 9: `$mod` non-pow-of-2 LUT lowering (Shape A)
+
+**Scope.** Iter 9 of the rfc_006 §5 absorption cycle. Upgrades the
+`_passes_lower_mod_cell` case-B branch (non-power-of-2 const divisor)
+from iter-7's fail-loud to a bounded-input LUT lowering. The router_d4
+fixture has 5× `$mod` cells with divisor 5; router_d6 has 7× with
+divisor 7. Both lower at A-width W=1 after read_verilog (which leaves
+generic `$mod` cells width-tolerant before bit-elaboration). The LUT
+helper handles W up to 5 (32-row truth table cap); beyond W=5 the
+helper still fail-louds with the iter-9 W-cap diagnostic.
+
+**Theorem citation (`@D g6`).** Per-bit canonical SOP from truth-table
+expansion — Mano/Kime "Logic and Computer Design Fundamentals" §3-3
++ Kohavi/Jha "Switching and Finite Automata Theory" Ch. 4. Each
+output bit Y[i] = OR over minterms M of AND over input-bit
+literals. AND-tree binary-reduces via `sky130_fd_sc_hd__and2_1`;
+OR-tree via `sky130_fd_sc_hd__or2_1`; negated literals via
+`sky130_fd_sc_hd__inv_1`; degenerate all-zero / all-one columns tie
+to `$_const0_` / `$_const1_` sentinels.
+
+**Touched.** `stdlib/kernels/logic_synth/passes.hexa` (+510 −16):
+- New helpers: `_passes_pow2(k)`, `_passes_mod_yw(c)`,
+  `_passes_mod_a_bit(c, w, v)`, `_passes_mod_y_bit(c, yw, i)`,
+  `_passes_lower_mod_case_b_lut(c, nval, w)`.
+- Case-B branch in `_passes_lower_mod_cell` now calls the LUT helper
+  instead of returning the iter-7 fail-loud.
+- T27 reframed (was: assert case-B fail-loud; now: assert iter-9 LUT
+  success at W=1 N=3).
+- New T28/T29/T30: T28 W=3 N=5 (3-bit Y, 3-bit A · invariant: 0
+  residual $mod, ≥1 $_const1_, 0 $_const0_ since every column has
+  ≥1 minterm and ≤2^W-1 minterms · no-dangling). T29 same shape with
+  N=7. T30 W=6 N=5 (over-envelope, asserts ok=0 ok_kind=2 with the
+  W=6 cap message).
+
+**Selftest.** `passes selftest: 30/30 PASS` (was 27/27 baseline).
+abc_map/read_verilog/liberty/rtlil selftests unchanged — no
+regression.
+
+**§5 oracle (`stdlib/yosys/gate_record.hexa`).** Re-run measured —
+the iter-9 LUT lowering eliminates ALL 12 `lower_mod` fail-loud
+diagnostic lines (5 in router_d4 + 7 in router_d6 → 0). The `$mod`
+cells are absorbed into the techmap stage cleanly. **However, the
+gate remains OPEN**: ABC's `read_blif` SOP-check now mis-fires on
+the d{4,6}_in.blif because the BLIF mixes `.gate` cells (techmap'd
+sky130 instances) with `.names` constant nodes (iter-6's
+`$_const{0,1}_` BLIF emission policy). Minimal-isolation repro:
+
+    .model t
+    .inputs a
+    .outputs y
+    .names c1
+    1
+    .gate sky130_fd_sc_hd__and2_1 A=a B=c1 X=y
+    .end
+
+    abc -c "read_lib …sky130_fd_sc_hd…lib; read_blif t.blif; map"
+    →  Abc_SopCheck: SOP has a mismatch between its cover size (24)
+       and its fanin number (2).
+       NodeCheck: SOP check for node "y" has failed.
+       Io_ReadBlifMv: The network check has failed for model t.
+
+This is a **pre-existing, separately-existing** blocker — the iter-6
+`abc_map` selftest validates the BLIF text shape only (`.find(".names z1\n1\n")`),
+not the ABC-runs-on-it round-trip. Iter-9 surfaces it because
+the techmap'd designs now reach ABC instead of being blocked
+upstream at the `$mod` lowering stage.
+
+**Next blocker.** ABC mixed-mode (`.gate` + `.names`) BLIF
+incompatibility. Options for the next iter:
+1. emit constants as `.gate sky130_fd_sc_hd__conb_1 HI=…/LO=…` and
+   verify the iter-6 ABC rejection ("conb_1 outputs are pure
+   constants with no boolean function") still applies on the
+   currently-installed `/Users/ghost/bin/abc`;
+2. fold `Y = A AND 1` into a top-level RTLIL `connect` (LHS=Y,
+   RHS=A) at the pass layer so no `.names` constant cell is needed
+   in the BLIF;
+3. pre-process the BLIF through ABC's logic-mode `strash` and only
+   then run `map` — confirm ABC accepts the AIG-strashed form.
+
+Per `@D g3`: this iter does NOT close the §5 absorption gate. It
+moves the §5 oracle's failure mode from "$mod lowering refuses
+non-pow-of-2 divisor" (12 cells) to "ABC `read_blif` SOP-check
+rejects mixed `.gate`+`.names` BLIF" (12 unmapped ABC runs). The
+gate verdict stays **PARTIAL** until the BLIF-emission policy is
+revised.
+
+cross-link: `stdlib/kernels/logic_synth/passes.hexa` (LUT helper).
