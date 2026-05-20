@@ -29,7 +29,16 @@ pub struct Local {
     id: i64,
     arena_id: i64,       // 0 = global/static, >0 = function-local arena
     type_id: i64,        // index into type interning table
-    name_hint: string    // optional, for debug
+    name_hint: string,   // optional, for debug
+    // RFC 068 P1 — Mixed-precision MIR layer. Per-Local precision tag.
+    // "" (default) = classifier-driven (op-name rules / F64 fallback);
+    // ".f16" / ".bf16" / ".f32" = explicit precision annotation that
+    // `_nvptx_classify_local_for_stmt` honors BEFORE the op-name rules.
+    // HIR-side propagation (e.g. `@f16 a + b` source annotation) is a
+    // follow-on cycle — currently no source-grammar feeds this field,
+    // so it stays "" in every codegen run today. Synthetic test
+    // fixtures verify the lowering side independently of HIR.
+    precision: string
 }
 
 // ── Operands ──────────────────────────────────────────────────

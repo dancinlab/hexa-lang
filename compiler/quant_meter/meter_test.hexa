@@ -137,7 +137,7 @@ fn _build_hir() -> HModule {
 
 // ── MIR builders ─────────────────────────────────────────────
 
-fn _local0() -> Local { return Local { id: 0, arena_id: 1, type_id: 0, name_hint: "" } }
+fn _local0() -> Local { return Local { id: 0, arena_id: 1, type_id: 0, name_hint: "", precision: "" } }
 
 fn _stmt0() -> Stmt {
     return Stmt {
