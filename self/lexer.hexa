@@ -67,6 +67,14 @@ fn is_keyword(word) {
     if word == "typeof" { return true }
     if word == "with" { return true }
     if word == "as" { return true }
+    // 2026-05-21 anima-physics consciousness-loop port: restore `or` / `and`
+    // as soft alias for `||` / `&&`. Older landed sources (consciousness-loop
+    // v2 c. 2026-04) use Python-style boolean keywords; current parser rejects
+    // them as bare idents. is_keyword admits the tokens; the token-construction
+    // site (line ~200) remaps value to "||"/"&&" so codegen unaffected.
+    // See: inbox/notes/2026-05-21-anima-physics-consciousness-loop-address-of-drift.md
+    if word == "or" { return true }
+    if word == "and" { return true }
     // Termination policy modifiers were reserved 2026-05-06 but pulled
     // 2026-05-07 — `partial fn` / `total fn` bare-keyword syntax has zero
     // in-tree users and the reservation broke 30+ files using `let total =`
@@ -198,7 +206,14 @@ pub fn tokenize(source) {
             }
             let word = join(word_parts, "")
             let kind = keyword_kind(word)
-            tokens.push(Token { kind: kind, value: word, line: line, col: start_col })
+            // 2026-05-21: remap `or`/`and` keyword tokens to the symbol value
+            // codegen recognizes — kind is already "Or"/"And" (matches the
+            // ||/&& token kinds parser expects) but op_tok.value flows through
+            // to BinOp.op and codegen checks op == "||" / "&&".
+            let mut tok_value = word
+            if word == "or" { tok_value = "||" }
+            if word == "and" { tok_value = "&&" }
+            tokens.push(Token { kind: kind, value: tok_value, line: line, col: start_col })
         } else if is_digit(ch) {
             // Number literal — integer, float, or hex (0x)
             // Underscore separators: 1_000_000 -> 1000000, 0xFF_FF -> 0xFFFF
