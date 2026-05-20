@@ -99,14 +99,43 @@ fn _abc_log(line: str) {
 // arithmetic cells are out of scope and would fail emission with a
 // clear diagnostic.
 //
-// rfc_006 §5 bug (a) iter 6 — constant-tie cells (`$_const0_` /
-// `$_const1_`) emit as BLIF `.names` constants rather than `.gate`
-// lines (BLIF spec §3 — `.names <net>` with zero rows = constant 0;
-// with a single `1` row = constant 1). This avoids instantiating a
-// Liberty `sky130_fd_sc_hd__conb_1` cell, which ABC's `read_blif`
-// rejects because its outputs are pure constants with no boolean
-// function. The driving pin convention is `Y=<net>` (matching the
-// RTLIL `$_const{0,1}_` sigspec-constant cell shape).
+// rfc_006 §5 bug (a) iter 10 — constant-tie REPRESENTATION moved from
+// `$_const{0,1}_` driver cells (BLIF `.names` lines) to RTLIL module-
+// level `connect (net, 1'b{0,1})` rows.  The iter-6 .names emission
+// was incompatible with ABC's `read_blif` when followed by `.gate`
+// lines: ABC's parser consumed the next `.gate` line as a truth-table
+// continuation of the preceding `.names`, producing
+//   `Abc_SopCheck: SOP has a mismatch between its cover size (288) and
+//    its fanin number (2)` and rejecting the module.
+//
+// iter-10 BLIF emission of RTLIL connect rows:
+//   - RHS = "1'b0" → SKIP. ABC's read_blif auto-adds constant-0
+//     drivers for any undriven net (emits its standard "Constant-0
+//     drivers added to N non-driven nets" diagnostic during load),
+//     so a connect-to-zero needs no BLIF text.
+//   - RHS = "1'b1" → emit `.gate sky130_fd_sc_hd__inv_1
+//     A=$blif_helper_zero Y=<lhs>`. The helper net is undriven and
+//     therefore auto-tied to constant 0 by ABC, so the inverter
+//     output is constant 1. ABC's `strash` (structural-hash) pass
+//     collapses the resulting constant chain to zero AIG nodes, and
+//     `map` absorbs the residual constant-driven fanout as don't-
+//     cares — measured strash-after-load `and=0` lev=0 on a 3-tie
+//     fixture (test_invones.blif during iter-10 R&D 2026-05-20).
+//   - any other RHS → fall through (non-constant connect; out of
+//     iter-10 scope, would need a buffer cell).
+//
+// Atlas citations:
+//   - IEEE 1800-2017 §6.7 — net-driver `assign` semantics (RTLIL
+//     `connect` lowers to a SystemVerilog procedural `assign`).
+//   - Yosys reference manual Ch. 4 — RTLIL Module data structure
+//     (the `connections_` SigSpec map is the upstream analogue of
+//     our `connect_lhs[]` / `connect_rhs[]` parallel arrays).
+//   - BLIF spec §3 — `.gate <type> <pin>=<net> ...` for technology-
+//     mapped cells; `.names <output> [<inputs>]` for SOPs.
+//
+// HONEST SCOPE — this emitter walks `module.connect_lhs / _rhs` and
+// `module.cells`. `module.processes` is untouched (post-`proc` pass
+// the design contains only cells + connects + wires; no sync blocks).
 fn abc_emit_blif(d: Design) -> str {
     let mut buf = ""
     let mut mi = 0
@@ -127,39 +156,37 @@ fn abc_emit_blif(d: Design) -> str {
         }
         if have_i == 1 { buf = buf + ibuf + "\n" }
         if have_o == 1 { buf = buf + obuf + "\n" }
+        // iter 10 — emit constant-1 ties FIRST as inv-of-undriven
+        // helper cells. Constant-0 ties (RHS == "1'b0") are skipped;
+        // ABC's read_blif auto-ties undriven nets to constant 0.
+        // The shared helper net `$blif_helper_zero` is never driven
+        // explicitly, so ABC ties IT to constant 0 as well, and each
+        // emitted inv_1 produces constant 1.
+        let mut have_one_tie = 0
+        let mut kj = 0
+        while kj < len(m.connect_lhs) {
+            let lhs = m.connect_lhs[kj]
+            let rhs = m.connect_rhs[kj]
+            if rhs == "1'b1" {
+                if have_one_tie == 0 { have_one_tie = 1 }
+                // .gate sky130_fd_sc_hd__inv_1 A=$blif_helper_zero Y=<lhs>
+                buf = buf + ".gate sky130_fd_sc_hd__inv_1 A=$blif_helper_zero Y="
+                    + lhs + "\n"
+            }
+            // RHS == "1'b0" → no emission (ABC auto-tie)
+            kj = kj + 1
+        }
         // each cell -> .gate <type> <pin>=<net> ...
-        // …except `$_const{0,1}_` driver sentinels, which become
-        // BLIF `.names` constant-truth-table lines (see header).
         let mut ci = 0
         while ci < len(m.cells) {
             let c = m.cells[ci]
-            if c.cell_type == "$_const0_" {
-                // emit constant 0: `.names <Y-net>` with zero rows
-                let mut yi = 0
-                while yi < len(c.conns) {
-                    if c.conns[yi].pin == "Y" {
-                        buf = buf + ".names " + c.conns[yi].net + "\n"
-                    }
-                    yi = yi + 1
-                }
-            } else if c.cell_type == "$_const1_" {
-                // emit constant 1: `.names <Y-net>` with single `1` row
-                let mut yi = 0
-                while yi < len(c.conns) {
-                    if c.conns[yi].pin == "Y" {
-                        buf = buf + ".names " + c.conns[yi].net + "\n1\n"
-                    }
-                    yi = yi + 1
-                }
-            } else {
-                buf = buf + ".gate " + c.cell_type
-                let mut pi = 0
-                while pi < len(c.conns) {
-                    buf = buf + " " + c.conns[pi].pin + "=" + c.conns[pi].net
-                    pi = pi + 1
-                }
-                buf = buf + "\n"
+            buf = buf + ".gate " + c.cell_type
+            let mut pi = 0
+            while pi < len(c.conns) {
+                buf = buf + " " + c.conns[pi].pin + "=" + c.conns[pi].net
+                pi = pi + 1
             }
+            buf = buf + "\n"
             ci = ci + 1
         }
         buf = buf + ".end\n"
@@ -173,9 +200,38 @@ fn abc_emit_blif(d: Design) -> str {
 // CLEAN-ROOM: parse a mapped BLIF emitted by `abc write_blif`. The
 // shape is the same as our emitter, but every `.gate` references a
 // real library cell. We rebuild Modules in-place.
+//
+// rfc_006 §5 iter 10: handle `\` line continuations.  ABC's
+// `write_blif` wraps long `.inputs` / `.outputs` directive lists at
+// ~80 columns by emitting `\\\n ` (backslash + newline + space).
+// Without continuation-joining the parser sees a phantom directive on
+// the next line whose `head` is the first column-wrapped token (e.g.
+// ` in_valid[0]`), which never matches `.inputs`/`.outputs`/`.gate`/
+// `.end`. Worse, `parts[0]` becomes a constant-input token and the
+// downstream `.gate` parser consumes it as a positional arg, blowing
+// up cell counts and triggering OOM during `rtlil_module_add_cell`'s
+// array-clone. BLIF spec §2: `\\\n` is a soft line continuation.
 fn abc_parse_mapped_blif(text: str) -> Design {
     let mut d = rtlil_new_design("abc_map")
-    let lines = text.split("\n")
+    let raw_lines = text.split("\n")
+    // join `\` continuations into single logical lines
+    let mut lines: [str] = []
+    let mut ji = 0
+    while ji < len(raw_lines) {
+        let mut acc = raw_lines[ji]
+        let mut nj = ji
+        while len(acc) > 0 {
+            if acc[len(acc) - 1] != '\\' { break }
+            if nj + 1 >= len(raw_lines) { break }
+            // strip the trailing `\` and append the next physical line
+            // (preserves the inter-line space; .trim() in the loop
+            // normalises subsequent whitespace).
+            acc = acc.substring(0, len(acc) - 1) + " " + raw_lines[nj + 1]
+            nj = nj + 1
+        }
+        lines = lines.push(acc)
+        ji = nj + 1
+    }
     let mut m = rtlil_new_module("")
     let mut in_model = 0
     let mut i = 0
@@ -293,10 +349,16 @@ fn abc_map(d: Design, lib_path: str, tmp_prefix: str) -> AbcMapResult {
     let raw = exec(cmd)
     let stdout = to_string(raw)
     // exec returns the captured stdout/stderr; we use a heuristic to
-    // detect failure (any line starting with "Error:" or "Cannot").
+    // detect failure. iter-10 expanded the markers to catch (a)
+    // `Bus error: 10` produced by ABC when its `read_blif` SopCheck
+    // fails on a malformed BLIF (iter-6..9 regression — see
+    // abc_emit_blif header), and (b) `has failed` produced by
+    // `Io_ReadBlifMv` when the network check rejects the file.
     let mut exit_code = 0
     if stdout.find("Error:") >= 0 { exit_code = 1 }
     if stdout.find("Cannot") >= 0 { exit_code = 1 }
+    if stdout.find("Bus error") >= 0 { exit_code = 1 }
+    if stdout.find("has failed") >= 0 { exit_code = 1 }
     _abc_log("exit=" + str(exit_code))
     if exit_code != 0 {
         return AbcMapResult {
@@ -395,36 +457,66 @@ fn main() {
         println("FAIL T5 message_empty"); fails = fails + 1
     }
 
-    // T6 — `$_const{0,1}_` driver sentinels become BLIF `.names`
-    // constant lines, NOT `.gate` lines. rfc_006 §5 bug (a) iter 6
-    // fix — ABC's read_blif accepts `.names <net>` with zero rows
-    // (constant 0) and with a single `1` row (constant 1), but
-    // rejects a `.gate sky130_fd_sc_hd__conb_1 LO=...` because the
-    // Liberty conb_1 outputs are pure constants (no boolean function).
+    // T6 — RTLIL connect-to-constant rows lower to the iter-10 BLIF
+    // form: RHS `1'b0` rows skipped (ABC auto-ties undriven nets),
+    // RHS `1'b1` rows emitted as `.gate sky130_fd_sc_hd__inv_1
+    // A=$blif_helper_zero Y=<lhs>` BEFORE any `.gate` lines from the
+    // cell array (so the constant-1 driver is in scope for downstream
+    // .gate references). rfc_006 §5 bug (a) iter 10 fix —
+    // replaces the iter-6 `.names <net>[\n1]` BLIF emission that
+    // triggered `Abc_SopCheck: SOP has a mismatch ...` when followed
+    // by `.gate` lines (ABC parser consumed `.gate` as truth-table
+    // continuation of preceding `.names`).
     total = total + 1
     let mut m6 = rtlil_new_module("c6")
+    m6 = rtlil_module_add_wire(m6, rtlil_wire("a", 1, 1, 1))
+    m6 = rtlil_module_add_wire(m6, rtlil_wire("y", 1, 2, 2))
     m6 = rtlil_module_add_wire(m6, rtlil_wire("z0", 1, 0, 0))
     m6 = rtlil_module_add_wire(m6, rtlil_wire("z1", 1, 0, 0))
-    let mut c0 = rtlil_cell("u_c0", "$_const0_", 0)
-    c0 = rtlil_cell_connect(c0, "Y", "z0")
-    m6 = rtlil_module_add_cell(m6, c0)
-    let mut c1 = rtlil_cell("u_c1", "$_const1_", 0)
-    c1 = rtlil_cell_connect(c1, "Y", "z1")
-    m6 = rtlil_module_add_cell(m6, c1)
+    // constant ties via RTLIL connect (iter-10)
+    m6 = rtlil_module_connect(m6, "z0", "1'b0")
+    m6 = rtlil_module_connect(m6, "z1", "1'b1")
+    // a real .gate consuming z1 so the BLIF is non-degenerate
+    let mut g6 = rtlil_cell("u_g6", "sky130_fd_sc_hd__and2_1", 1)
+    g6 = rtlil_cell_connect(g6, "A", "a")
+    g6 = rtlil_cell_connect(g6, "B", "z1")
+    g6 = rtlil_cell_connect(g6, "X", "y")
+    m6 = rtlil_module_add_cell(m6, g6)
     let mut d6 = rtlil_new_design("test")
     d6 = rtlil_design_add(d6, m6)
     let blif6 = abc_emit_blif(d6)
-    if blif6.find(".names z0\n") < 0 {
-        println("FAIL T6 blif_const0_names_missing"); fails = fails + 1
+    // T6a — 1'b1 tie emits the inv-of-helper-zero gate
+    if blif6.find(".gate sky130_fd_sc_hd__inv_1 A=$blif_helper_zero Y=z1") < 0 {
+        println("FAIL T6 blif_const1_inv_missing"); fails = fails + 1
     }
-    if blif6.find(".names z1\n1\n") < 0 {
-        println("FAIL T6b blif_const1_names_missing"); fails = fails + 1
+    // T6b — 1'b0 tie skipped (no .gate or .names for z0)
+    if blif6.find("Y=z0") >= 0 {
+        println("FAIL T6b blif_const0_leaked"); fails = fails + 1
     }
+    if blif6.find(".names z0") >= 0 {
+        println("FAIL T6b2 blif_const0_names_leaked"); fails = fails + 1
+    }
+    // T6c — no residual $_const0_/_const1_ cells (iter-6..9 form)
     if blif6.find(".gate $_const0_") >= 0 {
-        println("FAIL T6c blif_const0_leaked_as_gate"); fails = fails + 1
+        println("FAIL T6c blif_const0_cell_leaked"); fails = fails + 1
     }
     if blif6.find(".gate $_const1_") >= 0 {
-        println("FAIL T6d blif_const1_leaked_as_gate"); fails = fails + 1
+        println("FAIL T6d blif_const1_cell_leaked"); fails = fails + 1
+    }
+    // T6e — ordering invariant: the const-1 inv_1 driver line must
+    // appear BEFORE any `.gate sky130_fd_sc_hd__and2_1` line that
+    // references z1 as an input. The inv_1 line is emitted from the
+    // connect walk BEFORE the cell walk, so its position must be
+    // less than the and2_1 line position.
+    let inv_pos = blif6.find(".gate sky130_fd_sc_hd__inv_1 A=$blif_helper_zero Y=z1")
+    let and_pos = blif6.find(".gate sky130_fd_sc_hd__and2_1 A=a B=z1 X=y")
+    if inv_pos < 0 { /* already reported by T6 */ }
+    else if and_pos < 0 {
+        println("FAIL T6e blif_and_gate_missing"); fails = fails + 1
+    }
+    else if inv_pos >= and_pos {
+        println("FAIL T6e blif_const1_ordering (inv_pos=" + str(inv_pos)
+            + " ≥ and_pos=" + str(and_pos) + ")"); fails = fails + 1
     }
 
     if fails > 0 {
