@@ -6493,3 +6493,91 @@ compat cleanup (deferred to deploy cycle).
 **Resource note**: 현재 Mac (campaign 호스트, arm64 macOS) 단독. mini
 LAN unreachable, m4mini 는 hexa toolchain 미설치 — 32-c 같은 fixpoint
 측정은 campaign 호스트에서만 가능.
+
+
+### 2026-05-20 — follow-up cycle 33: 142-diagnostic fix + aprime_cc accepts campaign source
+
+cycle 32-c 의 142 diagnostics 가 단순 "cycle 22-31 source regression" 이
+아니라 **native compiler 가 처음부터 hex literal 을 인식 못 했다** 는
+root cause. surgical fix 로 142 → 0 type errors + hexac binary build.
+
+**Root cause #1 — compiler/lex/lexer.hexa**: 정수 / float literal lexing 만
+있고 `0x` hex prefix branch 가 아예 없었음. self/lexer.hexa 에는 hex 지원
+(line 211-231) 있는데 compiler/ 의 자기 lexer 에는 누락. self/lexer.hexa 의
+hex branch 를 옮겨오고 `is_hex_digit_ch` helper 추가.
+
+**Root cause #2 — compiler/parse/parser.hexa**: Number token 의 float-marker
+검사 (`.`, `e`, `E`) 가 hex literal context 에서 동작. `0xeb00001f` 같은
+hex 의 `e` 글자를 float exponent marker 로 오인 → `ExprKind::LiteralFloat`
+→ HX3004 type mismatch chain (i64 returns f64). `0x` prefix 일 때 float-scan
+short-circuit.
+
+**Root cause #3 — compiler/codegen/arm64_darwin.hexa::_builtin_runtime_sym**:
+`chr` / `from_char_code` / `write_bytes` runtime symbol mapping 미등록 →
+link 단계 undefined symbol. self/codegen_c2.hexa 의 mapping 을 옮겨와서
+`chr → hexa_chr_byte`, `from_char_code → hexa_from_char_code`,
+`write_bytes → rt_write_bytes`.
+
+**Cosmetic — compiler/emit/* + tool/hexa_ld.hexa**: 451 hex literals
+lowercase (208 elf + 125 macho + 118 hexa_ld) — cycle 22-31 가 uppercase
+hex literals 쓴 것을 정리. functional 영향 없음 (root cause 가 lexer
+level 에서 닫혔으므로) 이지만 일관성 위해 유지.
+
+**Tool — tool/build_hexac.hexa**: shim 의 `sha256_hex` 라인 삭제. cycle
+33 의 hex fix 이후 aprime_cc 가 stdlib/core/hash/sha256.hexa 를 처음으로
+컴파일 → `_sha256_hex` 심볼이 flat.s 에 emit → shim 과 duplicate symbol
+충돌. shim 은 `list_dir` + `mono_ns` 만 유지.
+
+**측정 결과**:
+
+```
+[before cycle 33]
+  aprime_cc on full flatten of compiler/main.hexa:
+    142 diagnostics; aborting before codegen
+  S4 native path: BLOCKED
+
+[after cycle 33]
+  aprime_cc on full flatten:
+    0 type errors · 0 codegen errors · clean .s emit
+    (HX4001 integer-division warnings remain, non-blocking)
+  build_hexac.hexa: 4/4 stages PASS
+  hexac binary: 2,108,312 B Mach-O arm64 — built ✅
+  smoke (hex literal `0x2a` → exit 42): hexac emits .s OK
+```
+
+**Honest finding — gen2.s silent fail** (g3):
+
+hexac (the newly-built S4 native compiler) CAN compile small hex
+literal hexa source (smoke 773 B .s) — but on the FULL compiler flatten
+(`/tmp/flat_c33.hexa` 10.6 MB) it exits cleanly with no error message
+yet does not write gen2.s. So:
+
+- ✅ gen1.s (aprime_cc on flat) emitted, md5 64b1085e940a9f55fe012b583e03b25d
+- ❌ gen2.s (hexac on flat) silent fail — likely a codegen edge case
+  triggered by the full closure (which now includes stdlib/core/hash
+  + intrinsics + lex/parse modules that older versions didn't reach
+  before the hex fix)
+
+This is **next cycle's work**: root cause the silent emit-asm fail in
+hexac (no error message but no output) — likely a regression triggered
+by code paths the hex fix unlocked. cycle 33 closes the lexer / parser /
+codegen-mapping side; cycle 34 closes the full-fixpoint chain.
+
+**Files modified (7)**:
+- compiler/lex/lexer.hexa — +29 lines (hex branch + is_hex_digit_ch)
+- compiler/parse/parser.hexa — +11 lines (hex detection + float-scan skip)
+- compiler/codegen/arm64_darwin.hexa — +5 lines (3 runtime mappings)
+- compiler/emit/elf_x86_64.hexa — 208 hex literals lowercased + chr→from_char_code
+- compiler/emit/macho_arm64.hexa — 125 hex literals lowercased + chr→from_char_code
+- tool/hexa_ld.hexa — 118 hex literals lowercased
+- tool/build_hexac.hexa — shim trim (sha256_hex removed, list_dir+mono_ns kept)
+
+**RFC 063 phasing**: 33 cycles · 18 falsifier + S3-prep + cycle 33
+measure · P0+P1+P2+P3 all closed + .rela.text + cross-host + cross-Mac ·
+**hexac binary builds from campaign branch** (S4 native path first-time
+green) · gen2.s silent-fail follow-up identified.
+
+**cc --regen / binary promote**: 미수행. compiler/* 변경은 self/*
+SSOT 와 무관 (g_commit_push_deploy 룰은 self/{lexer,parser,...} 와
+self/main.hexa 변경에만 적용). compiler/* + tool/* 변경은 aprime_cc /
+hexac 사용자가 직접 빌드.

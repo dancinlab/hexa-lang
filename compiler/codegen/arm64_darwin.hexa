@@ -1198,6 +1198,14 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "to_float"      { return "hexa_to_float" }
     if name == "to_bool"       { return "hexa_to_bool" }
     if name == "to_string"     { return "hexa_to_string" }
+    // `chr(N)` byte-level alias — same as `from_char_code` but with
+    // raw byte semantics (codegen ABI: name & N & 0xff). The runtime
+    // exports both `hexa_chr_byte` (this) and `hexa_from_char_code`
+    // (round-trip UTF-8 of codepoint N). For aprime_cc's native path
+    // we keep `chr` consistent with the self/* convention. Cycle 33.
+    if name == "chr"           { return "hexa_chr_byte" }
+    if name == "from_char_code" { return "hexa_from_char_code" }
+    if name == "write_bytes"   { return "rt_write_bytes" }
     // Interp aliases (bind.hexa accepts them as known names; without
     // a runtime symbol map the link fails on `_str`/`_int`/etc.).
     // `str(x)` is interp's shorthand for `to_string(x)` (see

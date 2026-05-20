@@ -13,9 +13,9 @@
 // ELF64 constants — `ELF_` prefix to avoid macro collision with any
 // `<elf.h>` headers a future runtime.c might pull in.
 
-let ELF_EI_MAG0           = 0x7F
+let ELF_EI_MAG0           = 0x7f
 let ELF_EI_MAG1           = 0x45    // 'E'
-let ELF_EI_MAG2           = 0x4C    // 'L'
+let ELF_EI_MAG2           = 0x4c    // 'L'
 let ELF_EI_MAG3           = 0x46    // 'F'
 let ELF_ELFCLASS64        = 2
 let ELF_ELFDATA2LSB       = 1       // little-endian
@@ -26,8 +26,8 @@ let ELF_ET_REL            = 1       // relocatable object
 let ELF_ET_EXEC           = 2
 let ELF_ET_DYN            = 3
 
-let ELF_EM_X86_64         = 0x3E
-let ELF_EM_AARCH64        = 0xB7
+let ELF_EM_X86_64         = 0x3e
+let ELF_EM_AARCH64        = 0xb7
 
 let ELF_SHT_NULL          = 0
 let ELF_SHT_PROGBITS      = 1
@@ -74,17 +74,17 @@ struct ElfSym {
 }
 
 fn _ew_u16(out: [Int], v: Int) {
-    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
+    out.push(v & 0xff); out.push((v >> 8) & 0xff)
 }
 fn _ew_u32(out: [Int], v: Int) {
-    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
-    out.push((v >> 16) & 0xFF); out.push((v >> 24) & 0xFF)
+    out.push(v & 0xff); out.push((v >> 8) & 0xff)
+    out.push((v >> 16) & 0xff); out.push((v >> 24) & 0xff)
 }
 fn _ew_u64(out: [Int], v: Int) {
-    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
-    out.push((v >> 16) & 0xFF); out.push((v >> 24) & 0xFF)
-    out.push((v >> 32) & 0xFF); out.push((v >> 40) & 0xFF)
-    out.push((v >> 48) & 0xFF); out.push((v >> 56) & 0xFF)
+    out.push(v & 0xff); out.push((v >> 8) & 0xff)
+    out.push((v >> 16) & 0xff); out.push((v >> 24) & 0xff)
+    out.push((v >> 32) & 0xff); out.push((v >> 40) & 0xff)
+    out.push((v >> 48) & 0xff); out.push((v >> 56) & 0xff)
 }
 fn _ew_zero(out: [Int], n: Int) {
     let mut i = 0
@@ -94,7 +94,7 @@ fn _ew_str(out: [Int], s: string) -> Int {
     let off = len(out)
     let n = len(s)
     let mut i = 0
-    while i < n { out.push(char_code(s, i) & 0xFF); i = i + 1 }
+    while i < n { out.push(char_code(s, i) & 0xff); i = i + 1 }
     out.push(0)
     return off
 }
@@ -296,13 +296,13 @@ fn _ex86_modrm_mem(reg_field: Int, base_idx: Int, disp: Int) -> [Int] {
         bytes.push(0x24)        // scale=0, index=4 (NO_INDEX), base=RSP/R12
     }
     if emit_disp_n == 1 {
-        bytes.push(disp & 0xFF)
+        bytes.push(disp & 0xff)
     } else {
         if emit_disp_n == 4 {
-            bytes.push( disp        & 0xFF)
-            bytes.push((disp >> 8)  & 0xFF)
-            bytes.push((disp >> 16) & 0xFF)
-            bytes.push((disp >> 24) & 0xFF)
+            bytes.push( disp        & 0xff)
+            bytes.push((disp >> 8)  & 0xff)
+            bytes.push((disp >> 16) & 0xff)
+            bytes.push((disp >> 24) & 0xff)
         }
     }
     return bytes
@@ -311,11 +311,11 @@ fn _ex86_modrm_mem(reg_field: Int, base_idx: Int, disp: Int) -> [Int] {
 // Emit `MOV r32, imm32`. Encoding: `B8+r` opcode, then imm32 LE.
 fn _ex86_mov_r32_imm32(reg_idx: Int, imm: Int) -> [Int] {
     let out: [Int] = []
-    out.push(0xB8 | (reg_idx & 0x7))
-    out.push(imm & 0xFF)
-    out.push((imm >> 8) & 0xFF)
-    out.push((imm >> 16) & 0xFF)
-    out.push((imm >> 24) & 0xFF)
+    out.push(0xb8 | (reg_idx & 0x7))
+    out.push(imm & 0xff)
+    out.push((imm >> 8) & 0xff)
+    out.push((imm >> 16) & 0xff)
+    out.push((imm >> 24) & 0xff)
     return out
 }
 
@@ -325,11 +325,11 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
         let imm = _ex86_imm(ops[1])
         if rd >= 0 { return _ex86_mov_r32_imm32(rd, imm) }
     }
-    if op == "SYSCALL" { return [0x0F, 0x05] }
-    if op == "RET"     { return [0xC3] }
+    if op == "SYSCALL" { return [0x0f, 0x05] }
+    if op == "RET"     { return [0xc3] }
     // CALL rel32 — 5 bytes: E8 + 4-byte signed PC-relative offset.
     if op == "CALL" && len(ops) == 1 {
-        return [0xE8, 0x00, 0x00, 0x00, 0x00]
+        return [0xe8, 0x00, 0x00, 0x00, 0x00]
     }
 
     // ── x86_64 arithmetic — P2 walker prep ──
@@ -339,35 +339,35 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     // 81 /5 id: SUB r/m32, imm32 — same shape, opcode-ext 5: 81 e8+r
     // 81 /7 id: CMP r/m32, imm32 — opcode-ext 7: 81 f8+r
     // The /N field selects via ModR/M.reg; we use mod=11 (reg-direct)
-    // so ModR/M = 0b11_<ext>_<rm> = 0xC0 | (ext<<3) | r.
+    // so ModR/M = 0b11_<ext>_<rm> = 0xc0 | (ext<<3) | r.
     if op == "ADD" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg32(ops[0])
         let imm = _ex86_imm(ops[1])
         if rd >= 0 {
-            let modrm = 0xC0 | (0 << 3) | rd     // /0
+            let modrm = 0xc0 | (0 << 3) | rd     // /0
             return [0x81, modrm,
-                    imm & 0xFF, (imm >> 8) & 0xFF,
-                    (imm >> 16) & 0xFF, (imm >> 24) & 0xFF]
+                    imm & 0xff, (imm >> 8) & 0xff,
+                    (imm >> 16) & 0xff, (imm >> 24) & 0xff]
         }
     }
     if op == "SUB" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg32(ops[0])
         let imm = _ex86_imm(ops[1])
         if rd >= 0 {
-            let modrm = 0xC0 | (5 << 3) | rd     // /5 = ModR/M reg=5
+            let modrm = 0xc0 | (5 << 3) | rd     // /5 = ModR/M reg=5
             return [0x81, modrm,
-                    imm & 0xFF, (imm >> 8) & 0xFF,
-                    (imm >> 16) & 0xFF, (imm >> 24) & 0xFF]
+                    imm & 0xff, (imm >> 8) & 0xff,
+                    (imm >> 16) & 0xff, (imm >> 24) & 0xff]
         }
     }
     if op == "CMP" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = _ex86_reg32(ops[0])
         let imm = _ex86_imm(ops[1])
         if rd >= 0 {
-            let modrm = 0xC0 | (7 << 3) | rd     // /7
+            let modrm = 0xc0 | (7 << 3) | rd     // /7
             return [0x81, modrm,
-                    imm & 0xFF, (imm >> 8) & 0xFF,
-                    (imm >> 16) & 0xFF, (imm >> 24) & 0xFF]
+                    imm & 0xff, (imm >> 8) & 0xff,
+                    (imm >> 16) & 0xff, (imm >> 24) & 0xff]
         }
     }
     // ADD/SUB/CMP r32, r32 — reg-reg form (2 bytes opcode + ModR/M).
@@ -379,30 +379,30 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
         let rd = _ex86_reg32(ops[0])
         let rs = _ex86_reg32(ops[1])
         if rd >= 0 && rs >= 0 {
-            return [0x01, 0xC0 | (rs << 3) | rd]
+            return [0x01, 0xc0 | (rs << 3) | rd]
         }
     }
     if op == "SUB" && len(ops) == 2 {
         let rd = _ex86_reg32(ops[0])
         let rs = _ex86_reg32(ops[1])
         if rd >= 0 && rs >= 0 {
-            return [0x29, 0xC0 | (rs << 3) | rd]
+            return [0x29, 0xc0 | (rs << 3) | rd]
         }
     }
     if op == "CMP" && len(ops) == 2 {
         let rd = _ex86_reg32(ops[0])
         let rs = _ex86_reg32(ops[1])
         if rd >= 0 && rs >= 0 {
-            return [0x39, 0xC0 | (rs << 3) | rd]
+            return [0x39, 0xc0 | (rs << 3) | rd]
         }
     }
     // MOV r32, r32 — 89 /r ModR/M (dst as r/m, src as reg).
-    //   e.g. MOV EDI, EAX → 89 c7  (src=eax=0, dst=edi=7 → 0xC0|(0<<3)|7 = 0xC7)
+    //   e.g. MOV EDI, EAX → 89 c7  (src=eax=0, dst=edi=7 → 0xc0|(0<<3)|7 = 0xc7)
     if op == "MOV" && len(ops) == 2 {
         let rd = _ex86_reg32(ops[0])
         let rs = _ex86_reg32(ops[1])
         if rd >= 0 && rs >= 0 {
-            return [0x89, 0xC0 | (rs << 3) | rd]
+            return [0x89, 0xc0 | (rs << 3) | rd]
         }
     }
     // PUSH r32 — 50+r (1 byte, x86_64 implicit pushes 64-bit value).
@@ -419,11 +419,11 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     // imm8 = target - (jmp_end_addr).  Stored at offset 1.
     // Cycle 25 emits placeholder 0; linker / caller patches.
     if op == "JMP_REL8" && len(ops) == 1 {
-        return [0xEB, 0x00]
+        return [0xeb, 0x00]
     }
     // JMP rel32 — E9 cd (5 bytes).
     if op == "JMP_REL32" && len(ops) == 1 {
-        return [0xE9, 0x00, 0x00, 0x00, 0x00]
+        return [0xe9, 0x00, 0x00, 0x00, 0x00]
     }
     // Conditional jumps rel8 — 7c+cc (2 bytes).
     //   JE rel8  74 cb
@@ -434,10 +434,10 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     //   JG       7F
     if op == "JE_REL8"  && len(ops) == 1 { return [0x74, 0x00] }
     if op == "JNE_REL8" && len(ops) == 1 { return [0x75, 0x00] }
-    if op == "JL_REL8"  && len(ops) == 1 { return [0x7C, 0x00] }
-    if op == "JGE_REL8" && len(ops) == 1 { return [0x7D, 0x00] }
-    if op == "JLE_REL8" && len(ops) == 1 { return [0x7E, 0x00] }
-    if op == "JG_REL8"  && len(ops) == 1 { return [0x7F, 0x00] }
+    if op == "JL_REL8"  && len(ops) == 1 { return [0x7c, 0x00] }
+    if op == "JGE_REL8" && len(ops) == 1 { return [0x7d, 0x00] }
+    if op == "JLE_REL8" && len(ops) == 1 { return [0x7e, 0x00] }
+    if op == "JG_REL8"  && len(ops) == 1 { return [0x7f, 0x00] }
 
     // ── x86_64 r64 ops (REX.W) ──────────────────────────────────
     //
@@ -448,10 +448,10 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
         let imm = _ex86_imm(ops[1])
         if rd >= 0 {
             let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
-            let modrm = 0xC0 | (0 << 3) | (rd & 0x7)
-            return [rex, 0xC7, modrm,
-                    imm & 0xFF, (imm >> 8) & 0xFF,
-                    (imm >> 16) & 0xFF, (imm >> 24) & 0xFF]
+            let modrm = 0xc0 | (0 << 3) | (rd & 0x7)
+            return [rex, 0xc7, modrm,
+                    imm & 0xff, (imm >> 8) & 0xff,
+                    (imm >> 16) & 0xff, (imm >> 24) & 0xff]
         }
     }
     // MOV r64, r64 — REX.W + 89 /r ModR/M (3 B).
@@ -462,7 +462,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
         if rd >= 0 && rs >= 0 {
             let rex = _ex86_rex(1, if rs >= 8 { 1 } else { 0 }, 0,
                                     if rd >= 8 { 1 } else { 0 })
-            return [rex, 0x89, 0xC0 | ((rs & 0x7) << 3) | (rd & 0x7)]
+            return [rex, 0x89, 0xc0 | ((rs & 0x7) << 3) | (rd & 0x7)]
         }
     }
     // ADD r64, #imm32 — REX.W + 81 /0 id (7 B).
@@ -471,10 +471,10 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
         let imm = _ex86_imm(ops[1])
         if rd >= 0 {
             let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
-            let modrm = 0xC0 | (0 << 3) | (rd & 0x7)
+            let modrm = 0xc0 | (0 << 3) | (rd & 0x7)
             return [rex, 0x81, modrm,
-                    imm & 0xFF, (imm >> 8) & 0xFF,
-                    (imm >> 16) & 0xFF, (imm >> 24) & 0xFF]
+                    imm & 0xff, (imm >> 8) & 0xff,
+                    (imm >> 16) & 0xff, (imm >> 24) & 0xff]
         }
     }
     // SUB r64, #imm32 — REX.W + 81 /5 id (7 B).
@@ -483,10 +483,10 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
         let imm = _ex86_imm(ops[1])
         if rd >= 0 {
             let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
-            let modrm = 0xC0 | (5 << 3) | (rd & 0x7)
+            let modrm = 0xc0 | (5 << 3) | (rd & 0x7)
             return [rex, 0x81, modrm,
-                    imm & 0xFF, (imm >> 8) & 0xFF,
-                    (imm >> 16) & 0xFF, (imm >> 24) & 0xFF]
+                    imm & 0xff, (imm >> 8) & 0xff,
+                    (imm >> 16) & 0xff, (imm >> 24) & 0xff]
         }
     }
     // ADD r64, r64 — REX.W + 01 /r (3 B).
@@ -496,7 +496,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
         if rd >= 0 && rs >= 0 {
             let rex = _ex86_rex(1, if rs >= 8 { 1 } else { 0 }, 0,
                                     if rd >= 8 { 1 } else { 0 })
-            return [rex, 0x01, 0xC0 | ((rs & 0x7) << 3) | (rd & 0x7)]
+            return [rex, 0x01, 0xc0 | ((rs & 0x7) << 3) | (rd & 0x7)]
         }
     }
     // SUB r64, r64 — REX.W + 29 /r (3 B).
@@ -506,7 +506,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
         if rd >= 0 && rs >= 0 {
             let rex = _ex86_rex(1, if rs >= 8 { 1 } else { 0 }, 0,
                                     if rd >= 8 { 1 } else { 0 })
-            return [rex, 0x29, 0xC0 | ((rs & 0x7) << 3) | (rd & 0x7)]
+            return [rex, 0x29, 0xc0 | ((rs & 0x7) << 3) | (rd & 0x7)]
         }
     }
     // ── Cycle 27 additions — division / sign-extend / NOP / TEST ──
@@ -524,7 +524,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
         if rd >= 0 && rs >= 0 {
             let rex = _ex86_rex(1, if rs >= 8 { 1 } else { 0 }, 0,
                                     if rd >= 8 { 1 } else { 0 })
-            return [rex, 0x85, 0xC0 | ((rs & 0x7) << 3) | (rd & 0x7)]
+            return [rex, 0x85, 0xc0 | ((rs & 0x7) << 3) | (rd & 0x7)]
         }
     }
     // IDIV r64 — REX.W + F7 /7 (3 B). Signed division of RDX:RAX by
@@ -533,7 +533,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
         let rd = _ex86_reg64(ops[0])
         if rd >= 0 {
             let rex = _ex86_rex(1, 0, 0, if rd >= 8 { 1 } else { 0 })
-            return [rex, 0xF7, 0xC0 | (7 << 3) | (rd & 0x7)]
+            return [rex, 0xf7, 0xc0 | (7 << 3) | (rd & 0x7)]
         }
     }
     // ── Cycle 30 additions — mem operands + r64 PUSH/POP / LEA ──
@@ -553,7 +553,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
                                     if base >= 8 { 1 } else { 0 })
             let mr = _ex86_modrm_mem(rd, base, disp)
             let out: [Int] = []
-            out.push(rex); out.push(0x8B)
+            out.push(rex); out.push(0x8b)
             let mut i = 0
             while i < len(mr) { out.push(mr[i]); i = i + 1 }
             return out
@@ -586,7 +586,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
             if base >= 8 {
                 out.push(_ex86_rex(0, 0, 0, 1))
             }
-            out.push(0x8B)
+            out.push(0x8b)
             let mr = _ex86_modrm_mem(rd, base, disp)
             let mut i = 0
             while i < len(mr) { out.push(mr[i]); i = i + 1 }
@@ -620,7 +620,7 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
                                     if base >= 8 { 1 } else { 0 })
             let mr = _ex86_modrm_mem(rd, base, disp)
             let out: [Int] = []
-            out.push(rex); out.push(0x8D)
+            out.push(rex); out.push(0x8d)
             let mut i = 0
             while i < len(mr) { out.push(mr[i]); i = i + 1 }
             return out
@@ -662,13 +662,13 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
         if rd >= 0 && rs >= 0 {
             // No REX for AL/CL/DL/BL → 0F B6 /r (3 B).
             if rs <= 3 && rd <= 7 {
-                return [0x0F, 0xB6, 0xC0 | ((rd & 0x7) << 3) | (rs & 0x7)]
+                return [0x0f, 0xb6, 0xc0 | ((rd & 0x7) << 3) | (rs & 0x7)]
             }
             // REX path for high-byte regs (SPL..DIL or r8b..r15b).
             let rex = _ex86_rex(0, if rd >= 8 { 1 } else { 0 }, 0,
                                     if rs >= 8 { 1 } else { 0 })
-            return [rex, 0x0F, 0xB6,
-                    0xC0 | ((rd & 0x7) << 3) | (rs & 0x7)]
+            return [rex, 0x0f, 0xb6,
+                    0xc0 | ((rd & 0x7) << 3) | (rs & 0x7)]
         }
     }
     // SETcc r8 — 0F 9x /r (set 1 byte on condition).
@@ -687,16 +687,16 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
             let mut opcode = 0
             if op == "SETE"  { opcode = 0x94 }
             if op == "SETNE" { opcode = 0x95 }
-            if op == "SETL"  { opcode = 0x9C }
-            if op == "SETGE" { opcode = 0x9D }
-            if op == "SETLE" { opcode = 0x9E }
-            if op == "SETG"  { opcode = 0x9F }
+            if op == "SETL"  { opcode = 0x9c }
+            if op == "SETGE" { opcode = 0x9d }
+            if op == "SETLE" { opcode = 0x9e }
+            if op == "SETG"  { opcode = 0x9f }
             if rd <= 3 {
-                return [0x0F, opcode, 0xC0 | (rd & 0x7)]
+                return [0x0f, opcode, 0xc0 | (rd & 0x7)]
             }
             // REX path for SPL..DIL (rd=4..7 force REX) or r8..r15.
             let rex = _ex86_rex(0, 0, 0, if rd >= 8 { 1 } else { 0 })
-            return [rex, 0x0F, opcode, 0xC0 | (rd & 0x7)]
+            return [rex, 0x0f, opcode, 0xc0 | (rd & 0x7)]
         }
     }
     return []
@@ -740,9 +740,9 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
             let mut name = ""
             let mut k = 0
             while true {
-                let b = obj.strtab[s.name_offset + k] & 0xFF
+                let b = obj.strtab[s.name_offset + k] & 0xff
                 if b == 0 { break }
-                name = name + chr(b)
+                name = name + from_char_code(b)
                 k = k + 1
             }
             // Defined (section != 0) → global map.
@@ -759,7 +759,7 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
         // Append text.
         let mut ti = 0
         while ti < len(obj.text) {
-            text_bytes.push(obj.text[ti] & 0xFF)
+            text_bytes.push(obj.text[ti] & 0xff)
             ti = ti + 1
         }
         oi = oi + 1
@@ -782,9 +782,9 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
             let mut name = ""
             let mut k = 0
             while true {
-                let b = obj.strtab[sym.name_offset + k] & 0xFF
+                let b = obj.strtab[sym.name_offset + k] & 0xff
                 if b == 0 { break }
-                name = name + chr(b)
+                name = name + from_char_code(b)
                 k = k + 1
             }
             // Find target in global defined map.
@@ -807,10 +807,10 @@ pub fn link_elf_x86_64(objs: [ElfX86Obj], out_path: string, entry: string) -> In
                 // patch_off - 1, so imm32 = target - patch_off - 4).
                 let patch_off = base + r.offset
                 let delta = tgt_off + r.addend - patch_off
-                text_bytes[patch_off + 0] = delta & 0xFF
-                text_bytes[patch_off + 1] = (delta >> 8) & 0xFF
-                text_bytes[patch_off + 2] = (delta >> 16) & 0xFF
-                text_bytes[patch_off + 3] = (delta >> 24) & 0xFF
+                text_bytes[patch_off + 0] = delta & 0xff
+                text_bytes[patch_off + 1] = (delta >> 8) & 0xff
+                text_bytes[patch_off + 2] = (delta >> 16) & 0xff
+                text_bytes[patch_off + 3] = (delta >> 24) & 0xff
             }
             ri = ri + 1
         }
@@ -912,7 +912,7 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
 
     // ── .text ──
     let mut ti = 0
-    while ti < text_size { out.push(obj.text[ti] & 0xFF); ti = ti + 1 }
+    while ti < text_size { out.push(obj.text[ti] & 0xff); ti = ti + 1 }
     _ew_zero(out, text_pad)
 
     // ── .rela.text (cycle 31-a) ──
@@ -925,7 +925,7 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
         // raw indices but ELF symtab index 0 is STN_UNDEF.
         _ew_u64(out, r.offset)
         let sym_index_1based = r.sym_idx + 1
-        _ew_u64(out, (sym_index_1based << 32) | (r.kind & 0xFFFFFFFF))
+        _ew_u64(out, (sym_index_1based << 32) | (r.kind & 0xffffffff))
         _ew_u64(out, r.addend)
         ri = ri + 1
     }
@@ -937,8 +937,8 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
     while si < nsyms_real {
         let s = obj.symbols[si]
         _ew_u32(out, s.name_offset)
-        let st_info = ((s.bind & 0xF) << 4) | (s.type_ & 0xF)
-        out.push(st_info & 0xFF)
+        let st_info = ((s.bind & 0xf) << 4) | (s.type_ & 0xf)
+        out.push(st_info & 0xff)
         out.push(0)                          // st_other
         _ew_u16(out, s.section)
         _ew_u64(out, s.value)
@@ -948,11 +948,11 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
 
     // ── .strtab ──
     let mut ki = 0
-    while ki < strsize { out.push(obj.strtab[ki] & 0xFF); ki = ki + 1 }
+    while ki < strsize { out.push(obj.strtab[ki] & 0xff); ki = ki + 1 }
 
     // ── .shstrtab ──
     let mut hi = 0
-    while hi < shstrsize { out.push(shstrtab[hi] & 0xFF); hi = hi + 1 }
+    while hi < shstrsize { out.push(shstrtab[hi] & 0xff); hi = hi + 1 }
     _ew_zero(out, shdr_pad)
 
     // ── Section header table ──
@@ -1065,7 +1065,7 @@ pub fn serialize_elf_exec_x86_64(text: [Int]) -> [Int] {
     _ew_u64(out, 0x1000)                    // p_align
 
     let mut i = 0
-    while i < text_size { out.push(text[i] & 0xFF); i = i + 1 }
+    while i < text_size { out.push(text[i] & 0xff); i = i + 1 }
 
     return out
 }
@@ -1214,7 +1214,7 @@ fn _pack_fn_x86(out_text: [Int],
         // CALL with a label arg — emit placeholder, bubble to pending.
         if ins.op == "call" && len(ins.args) == 1 && ins.args[0].kind == "label" {
             let cur_off = len(out_text)
-            out_text.push(0xE8)
+            out_text.push(0xe8)
             out_text.push(0); out_text.push(0); out_text.push(0); out_text.push(0)
             unresolved_brs.push(cur_off)
             unresolved_to.push(ins.args[0].label)
@@ -1285,13 +1285,13 @@ fn _pack_fn_x86(out_text: [Int],
         }
         if kind == 0 {
             let delta = toff - (off + 2)
-            out_text[off + 1] = delta & 0xFF
+            out_text[off + 1] = delta & 0xff
         } else {
             let delta = toff - (off + 5)
-            out_text[off + 1] =  delta        & 0xFF
-            out_text[off + 2] = (delta >> 8)  & 0xFF
-            out_text[off + 3] = (delta >> 16) & 0xFF
-            out_text[off + 4] = (delta >> 24) & 0xFF
+            out_text[off + 1] =  delta        & 0xff
+            out_text[off + 2] = (delta >> 8)  & 0xff
+            out_text[off + 3] = (delta >> 16) & 0xff
+            out_text[off + 4] = (delta >> 24) & 0xff
         }
         bi = bi + 1
     }
@@ -1387,10 +1387,10 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
         let sym = obj.symbols[idx]
         if sym.section != 0 {
             let delta = sym.value - (call_off + 5)
-            obj.text[call_off + 1] =  delta        & 0xFF
-            obj.text[call_off + 2] = (delta >> 8)  & 0xFF
-            obj.text[call_off + 3] = (delta >> 16) & 0xFF
-            obj.text[call_off + 4] = (delta >> 24) & 0xFF
+            obj.text[call_off + 1] =  delta        & 0xff
+            obj.text[call_off + 2] = (delta >> 8)  & 0xff
+            obj.text[call_off + 3] = (delta >> 16) & 0xff
+            obj.text[call_off + 4] = (delta >> 24) & 0xff
         }
         pi = pi + 1
     }
@@ -1408,12 +1408,12 @@ fn _find_elf_sym_by_name(symbols: [ElfSym], strtab: [Int], name: string) -> Int 
         let mut k = 0
         let mut ok = true
         while k < nl {
-            if (strtab[off + k] & 0xFF) != char_code(name, k) { ok = false; break }
+            if (strtab[off + k] & 0xff) != char_code(name, k) { ok = false; break }
             k = k + 1
         }
         // Require terminating NUL at the right slot — guards against
         // "compute" matching the prefix of "compute_helper".
-        if ok && (strtab[off + nl] & 0xFF) == 0 { return i }
+        if ok && (strtab[off + nl] & 0xff) == 0 { return i }
         i = i + 1
     }
     return -1

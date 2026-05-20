@@ -678,10 +678,20 @@ fn parse_primary() -> Expr {
         advance()
         let chars = t.text.chars()
         let mut is_float = false
-        let mut i = 0
-        while i < len(chars) {
-            if chars[i] == '.' || chars[i] == 'e' || chars[i] == 'E' { is_float = true }
-            i = i + 1
+        // Hex literals (`0x...`) carry hex digits including `e`/`E`/`f`
+        // which would be misread as a float exponent marker. Short-
+        // circuit the float-scan so hex literals always parse as int.
+        // Closes HX3004 i64-vs-f64 chain on encode_arm64_insn (cycle 33).
+        let mut is_hex = false
+        if len(chars) > 1 && chars[0] == '0' && (chars[1] == 'x' || chars[1] == 'X') {
+            is_hex = true
+        }
+        if !is_hex {
+            let mut i = 0
+            while i < len(chars) {
+                if chars[i] == '.' || chars[i] == 'e' || chars[i] == 'E' { is_float = true }
+                i = i + 1
+            }
         }
         let mut k = ExprKind::LiteralInt
         if is_float { k = ExprKind::LiteralFloat }
