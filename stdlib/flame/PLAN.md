@@ -2686,3 +2686,128 @@ GPU.md §5m measured wins · memory `project_flame_phase4d9_closure`
 (d=768 seed) · memory `project_flame_general_pytorch_replacement_goal`
 (north-star) · memory `reference_gpu_fire_infra` (RTX 5070 ubu-2 fire
 substrate) · @D g3 (honest scope) · @D g_inbox_processing_loop Shape-B.
+
+### 2026-05-20 — SD11 ag_extract — compile-and-run round-trip (north-star ① autograd primitive · AD pipeline END-TO-END for relu)
+
+**SD11 closes the AD loop end-to-end for the simplest case**: the SD5
+relu walker output is no longer just an inspectable string — it is
+WRITTEN to `/tmp/sd11_relu_bwd.hexa` (with an argv-driven `fn main()`
+wrapper), COMPILED via `hexa.real build` (the canonical hexa-native
+toolchain verb, n1 of AGENTS.tape), EXECUTED 32× for LCG-seeded
+(x, dy) pairs, and the parsed output is BYTE-EQ to both the in-process
+AST-interpret reference and the hand-derived `if x > 0 then dy else 0`
+closed form. The measured proof:
+
+```
+three-way max|Δ| across 32 input pairs (LCG seeds 4242 / 31337):
+  interp   vs compiled : 0.0
+  interp   vs hand     : 0.0
+  compiled vs hand     : 0.0
+```
+
+**Falsifier F-RFC043-AUTOGRAD-AUTO-SD11-COMPILE-RUN-BYTE-EQ PASS**.
+
+**Why this matters (north-star ①)**: SD5..SD10 all in-process
+interpret the walker output. The emit step prints hexa source for
+inspection but never runs through the actual compiler. SD11 is the
+END-TO-END proof — source-to-source AD really produces compilable,
+runnable hexa source. The relu vjp's emitted text
+`return (if (x > 0.0) { dy } else { 0.0 })` is no longer "looks like
+hexa source"; it IS hexa source that the toolchain accepts and runs.
+
+**Implementation (surgical · 1 helper + 1 test + this PLAN entry)**:
+- `stdlib/flame/ag_extract.hexa::ag_extract_emit_program_x_dy(arena, bwd_root, fn_name) -> string`
+  emits the bwd fn (via existing `ag_extract_emit_fn`) PLUS an
+  `fn main()` wrapper that reads `argv[1]` / `argv[2]` as floats,
+  calls the emitted fn, prints `json_stringify(dx)` (the
+  shortest-roundtrip codec; runtime_core.c::_shortest_double — loops
+  1..17 digit `%g` checking strtod round-trip on each).
+- `test/flame_ag_extract_sd11_compile_test.hexa` orchestrates the
+  loop: walker → emit → `write_file` → `exec("hexa.real build ...")`
+  with `__RC=$?` sentinel parsing → 32× compiled-binary exec → parse
+  output → three-way byte-eq (interp vs compiled vs hand).
+- Resolves `hexa.real` via 3-tier fallback ($HEXA_LANG/hexa.real →
+  $HOME/.hx/bin/hexa_real → /Users/ghost/core/hexa-lang/hexa.real)
+  so the test runs from worktrees and main repo alike.
+
+**Two non-obvious lessons (recorded so SD12 doesn't relearn)**:
+
+1. **`exec_capture` two-pipe drain hang**. The runtime's exec_capture
+   (runtime.c:6971) uses an alternating-blocking-read drain
+   (`read(stdout_pipe)` then `read(stderr_pipe)`). For a child that
+   writes ~2 KB to stdout and zero to stderr (typical `hexa.real build`
+   output), the parent blocks on `read(stderr_pipe)` until the child
+   closes stderr — which only happens at exit. If the child writes
+   more than ~64 KB to stdout, the kernel pipe buffer fills, the
+   child blocks on `write(stdout)`, and we deadlock. SD11 uses
+   `exec()` (popen-backed, single combined pipe via `2>&1`) plus
+   `; echo __RC=$?` for out-of-band exit-code surfacing. Mirrors the
+   `stdlib/xeno/scripts/akida/nexus_origin/runner.hexa::_exec_capture`
+   idiom (label: "exec → __RC=N trailer parse"). exec_capture is
+   safe for trivial commands (the SD11 sanity test of
+   `echo out; echo err 1>&2; exit 3` works) but unsafe for heavy
+   build subprocesses with one-sided output.
+
+2. **`to_string` for float is `%g` 6-digit (lossy round-trip)**.
+   `runtime_core.c:5078` uses `snprintf("%g")` with the default
+   precision = 6 significant digits. `to_string(0.479429283).to_float()`
+   re-parses as `0.479429` — round-trip loses ~1e-7 precision and
+   broke an early SD11 draft's byte-eq (measured max|Δ| = 4.62e-07).
+   The runtime DOES have a round-trip safe printer
+   (`_shortest_double`, runtime.c:7909, "shortest %g-form decimal
+   that strtod-round-trips to the same double") — it is reachable
+   through `json_stringify`. SD11 emit uses `json_stringify(dx)` for
+   the print and the harness uses `json_stringify(x)` /
+   `json_stringify(dy)` for argv construction; `.to_float()`
+   (strtod-backed) reverses it byte-for-byte. **Pattern for SD12+**:
+   when any future SD's compile-and-run loop needs lossless float
+   round-trip, use `json_stringify` not `to_string`.
+
+**Honest scope (g3, after SD11 closed)**:
+- SD11 PROVED: the walker-emit-compile-run round-trip works for the
+  simplest vjp shape (relu, single Param, pure conditional, no
+  Var_FwdResult, no Var_Upstream). Three-way byte-eq across 32
+  inputs gives a measured guarantee that the emitted source is real
+  hexa code, not just inspectable text.
+- SD11 did NOT prove: multi-input compile-and-run (needs
+  `ag_extract_emit_program_xy` shape — argv reads 3 floats x/y/dy
+  and the harness coordinates 2 binaries, one per direction); the
+  fwd-cache materialisation pattern for `Var_FwdResult`-using
+  emits (SD6 sigmoid, SD7 multi-use, SD10 sigmoid-div all reference
+  `_fwd<N>` symbols that would be unresolved if recompiled — the
+  emitted source for these would need either fwd-recomputation or a
+  shared fwd_cache farr passed through argv); parser integration
+  (SD8). All deferred to SD12+.
+
+**SD1..SD10 regression check (measured 2026-05-20)**:
+- `test/flame_ag_derive_test.hexa` PASS rc=0 (SD1 matmul, SD2 add,
+  SD3 silu_gate — all byte-eq, max|Δ| = 0.0).
+- `test/flame_ag_extract_test.hexa` rc=0 (SD5 PASS, SD6 HONEST
+  5.55e-17, SD7 PASS, SD9 PASS both, SD10 HONEST 5.55e-17 / 1.11e-16
+  — all expected per the existing oracle gates).
+- The ag_extract.hexa edit is additive only: new public function
+  `ag_extract_emit_program_x_dy`; SD5/SD6/SD7/SD9/SD10 surfaces and
+  internals untouched.
+
+**Atlas citations** (g6, in `ag_extract.hexa` SD11 header):
+- Griewank & Walther §3.2 Algorithm 3.6 — reverse-mode emit (the
+  emitted source is the literal output of the reverse walker; SD11
+  closes the loop by recompiling that source through the standard
+  toolchain).
+- Steele & White 1990 "How to print floating-point numbers
+  accurately" — 17 decimal digits suffice for binary64 round-trip;
+  the runtime's `_shortest_double` is the shortest-representation
+  variant (also Steele & White; reachable via json_stringify).
+
+**Future-cycle stop-conditions (g3 carve-outs, after SD11 closed)**:
+- SD8: parser integration (still future-work).
+- SD12: multi-input compile-and-run (`ag_extract_emit_program_xy`
+  helper · 3-arg argv reader · two-binary harness; fwd-cache
+  materialisation for `_fwd<N>` references in sigmoid/multi-use/
+  sigmoid-div compile paths).
+- SD13: per-Param accumulator dict (single-pass alternative to
+  SD9/SD10's per-Param-call shape).
+- SD14 (renumbered from SD13 / SD9-era "SD10"): more rules — Sum,
+  MatMul AST-derived, Compose, elementwise unary family
+  (silu, gelu, tanh).
+

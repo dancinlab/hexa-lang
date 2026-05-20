@@ -1,0 +1,335 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// test/flame_ag_extract_sd11_compile_test.hexa — flame autograd-auto SD11
+//
+// Falsifier:
+//   F-RFC043-AUTOGRAD-AUTO-SD11-COMPILE-RUN-BYTE-EQ
+//     The reverse walker's emit step produces hexa source that is
+//     ACTUALLY COMPILABLE and ACTUALLY RUNNABLE through the standard
+//     hexa-build toolchain — not just an inspectable string. Concretely
+//     the SD5 relu walker output (`relu_bwd_auto_emitted`), augmented
+//     with an argv-driven `fn main()` wrapper, builds via
+//     `hexa build /tmp/sd11_relu_bwd.hexa -o /tmp/sd11_relu_bwd` and
+//     the resulting binary, invoked as
+//     `/tmp/sd11_relu_bwd <x_repr> <dy_repr>` for each LCG-seeded
+//     (x, dy) pair (len=32), prints a `to_string(dx)` line whose
+//     `.to_float()` round-trip recovers a bit-identical `dx_compiled`
+//     to the in-process AST-interpret value `dx_interp` and to the
+//     hand-derived reference `dx_hand = (if x > 0 then dy else 0)`.
+//     All three columns byte-eq across all 32 pairs:
+//       dx_compiled ≡ dx_interp ≡ dx_hand   (max|Δ| = 0.0)
+//
+// Why this matters (task brief north-star ①):
+//   SD5..SD10 all in-process interpret the walker output. The emit step
+//   prints hexa source for inspection but never runs through the actual
+//   compiler. SD11 closes the loop end-to-end: walker-emit → write file →
+//   hexa-build → compiled binary → exec → parse output → compare. This
+//   is the measured proof that source-to-source AD really produces
+//   compilable, runnable hexa source.
+//
+// Honest scope (task brief §5, g3):
+//   SD11 closes the loop for the SIMPLEST case — relu, single Param,
+//   pure conditional. No Var_FwdResult cache, no Var_Upstream
+//   recomputation, no multi-input argv plumbing. Multi-input +
+//   arithmetic in compiled form is SD12+ work; that requires emitting
+//   fwd-cache materialisation into the argv driver, which itself needs
+//   Var_FwdResult → recomputation paths. SD11's measured proof is
+//   precisely: "the walker-emit-compile-run round-trip works for the
+//   simplest vjp shape."
+//
+// Round-trip invariant for byte-eq:
+//   compiled_binary(json_stringify(x), json_stringify(dy)).first_line_as_float()
+//     ≡  ag_extract_interpret(arena, bwd_root, x, dy)
+//     ≡  (if x > 0 then dy else 0)
+//   because (a) hexa runtime's json_stringify(f) routes through
+//   _shortest_double (runtime.c:7909) — the shortest %g-form decimal
+//   that strtod-round-trips to the SAME binary64 (loops 1..17 digits,
+//   checking each via strtod); (b) .to_float() / argv[i].to_float()
+//   routes to strtod, parsing the shortest-roundtrip text back to the
+//   identical bit pattern; (c) the emitted IfElse compiles to the same
+//   `>`-then-select dataflow the in-process walker interprets.
+//
+// NOTE on the to_string trap (discovered SD11 dev 2026-05-20):
+//   hexa-native `to_string(f)` for float (runtime_core.c:5078) uses
+//   `%g` with default 6-digit precision — round-trip via strtod loses
+//   ~1e-7-scale precision (we measured max|Δ| = 4.62e-07 in an early
+//   draft). Using `json_stringify` instead is the dropin fix because
+//   its codec is round-trip safe by construction.
+//
+// Atlas cite:
+//   Griewank & Walther §3.2 Algorithm 3.6 (reverse-mode AD emit) +
+//   IEEE-754 binary64 round-trip lemma (Steele & White 1990, "How to
+//   print floating-point numbers accurately" — 17 decimal digits
+//   suffice for double-precision round-trip).
+//
+// Exit codes:
+//   0  PASS — F-RFC043-AUTOGRAD-AUTO-SD11-COMPILE-RUN-BYTE-EQ green.
+//   91 FAIL — hexa-build of the emitted source failed (compile error;
+//             walker likely emits source missing imports or syntax).
+//   92 FAIL — compiled-binary invocation failed (binary missing or
+//             non-zero rc).
+//   93 FAIL — three-way byte-eq broke on at least one input pair
+//             (interp vs compiled vs hand-derived).
+//
+// CPU-only, $0. Surgical — only stdlib/flame/ag_extract.hexa helper
+// (`ag_extract_emit_program_x_dy`) + this test + stdlib/flame/PLAN.md.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/ag_extract"
+
+fn sd11_dt_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// Hand-derived reference: relu_bwd_hand(x, dy) = if x > 0 then dy else 0
+// Identical IEEE-754 trajectory to the AST-interpret path (single `>`
+// then select; no float arithmetic). Used as a third oracle column to
+// make the byte-eq verdict three-way, defeating any shared bug between
+// the walker-interpret and walker-emit paths.
+fn relu_bwd_hand(x: float, dy: float) -> float {
+    if x > 0.0 { return dy }
+    return 0.0
+}
+
+println("=== flame autograd-auto SD11 selftest (ag_extract · walker-emit → hexa-build → compiled-binary round-trip byte-eq) ===")
+
+// ─── step 1: walker emit the bwd source + main wrapper ─────────────────
+let arena = ag_extract_arena_new()
+let fwd_root = ag_extract_build_relu_fwd(arena)
+println("fwd AST built — root node id = " + to_string(fwd_root))
+
+let bwd_root = ag_extract_reverse_walk(arena, fwd_root, 0)
+println("reverse-mode walk complete — bwd AST root node id = " + to_string(bwd_root))
+
+let emitted_source = ag_extract_emit_program_x_dy(arena, bwd_root, "relu_bwd_auto_emitted")
+println("emitted hexa-lang program (bwd fn + argv main):")
+println("--- BEGIN /tmp/sd11_relu_bwd.hexa ---")
+println(emitted_source)
+println("--- END /tmp/sd11_relu_bwd.hexa ---")
+
+// ─── step 2: write to /tmp/sd11_relu_bwd.hexa ──────────────────────────
+let src_path = "/tmp/sd11_relu_bwd.hexa"
+let bin_path = "/tmp/sd11_relu_bwd"
+write_file(src_path, emitted_source)
+println("wrote emitted source to " + src_path)
+
+// ─── step 3: hexa.real build /tmp/sd11_relu_bwd.hexa -o /tmp/sd11_relu_bwd ──
+// Resolve the toolchain binary path via $HEXA_LANG/hexa.real with
+// 3-tier fallback. The bare `hexa` name is shimmed by wilson-pool
+// routing (per `~/.claude/.../memory/reference_hexa_basename_sigkill_workaround*`)
+// and stalls when invoked recursively from a compiled binary; the
+// underlying hexa.real does not.
+//
+// IMPORTANT (build subprocess hang lesson, 2026-05-20): exec_capture's
+// two-pipe drain (runtime.c:6971) uses ALTERNATING BLOCKING reads —
+// read(stdout_pipe) then read(stderr_pipe). When the child writes
+// heavy stdout (clang/hexa-build emits ~2 KB) and zero stderr, the
+// parent blocks on read(stderr_pipe) forever because the child won't
+// close its stderr until it exits. If the stdout pipe buffer (~64 KB
+// kernel default) fills, the child blocks on write(stdout) and we
+// deadlock. exec() (runtime.c:4153, popen-backed, single combined
+// pipe, fread-drain) does not have this hazard. We use exec() + the
+// `; echo __RC=$?` idiom to surface the rc out-of-band — matches the
+// stdlib/xeno/scripts/akida/nexus_origin/runner.hexa _exec_capture
+// pattern (label: "exec → __RC=N trailer parse").
+// Resolve hexa.real via 3-tier fallback: (a) $HEXA_LANG/hexa.real (main
+// repo layout — worktrees inherit nothing); (b) ~/.hx/bin/hexa_real
+// symlink (the installed toolchain link); (c) /Users/ghost/core/hexa-lang/hexa.real
+// (canonical absolute fallback). The first that exists wins.
+let hexa_lang_dir = env("HEXA_LANG")
+let mut hexa_real_bin = ""
+if len(hexa_lang_dir) > 0 {
+    let cand_a = hexa_lang_dir + "/hexa.real"
+    if file_exists(cand_a) { hexa_real_bin = cand_a }
+}
+if len(hexa_real_bin) == 0 {
+    let home = env("HOME")
+    if len(home) > 0 {
+        let cand_b = home + "/.hx/bin/hexa_real"
+        if file_exists(cand_b) { hexa_real_bin = cand_b }
+    }
+}
+if len(hexa_real_bin) == 0 {
+    let cand_c = "/Users/ghost/core/hexa-lang/hexa.real"
+    if file_exists(cand_c) { hexa_real_bin = cand_c }
+}
+if len(hexa_real_bin) == 0 {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD11-COMPILE-RUN-BYTE-EQ  cannot locate hexa.real toolchain binary — tried $HEXA_LANG/hexa.real, $HOME/.hx/bin/hexa_real, /Users/ghost/core/hexa-lang/hexa.real. Install hexa-lang or set HEXA_LANG to the repo root.")
+    exit(91)
+}
+println("resolved hexa.real -> " + hexa_real_bin)
+let _ = exec("rm -f " + bin_path + " 2>/dev/null")
+// `2>&1` merges stderr into stdout; `; echo __RC=$?` appends a sentinel
+// the parent parses to get the actual exit code (exec()'s popen path
+// only surfaces stdout, not rc).
+let build_cmd = hexa_real_bin + " build " + src_path + " -o " + bin_path
+              + " 2>&1; echo __RC=$?"
+println("running: " + build_cmd)
+let build_combined = to_string(exec(build_cmd))
+let rc_marker_at = build_combined.index_of("__RC=")
+let mut build_rc = 1
+let mut build_stdout = build_combined
+if rc_marker_at >= 0 {
+    let rc_tail = build_combined.substring(rc_marker_at + 5, len(build_combined)).trim()
+    try { build_rc = to_int(rc_tail) } catch e { build_rc = 1 }
+    build_stdout = build_combined.substring(0, rc_marker_at)
+}
+println("build rc = " + to_string(build_rc))
+if build_rc != 0 {
+    println("build combined output (merged stdout+stderr):")
+    println(build_stdout)
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD11-COMPILE-RUN-BYTE-EQ  hexa-build failed (rc=" + to_string(build_rc) + ") on emitted source — walker emit may be missing imports / syntax. See diagnostic above.")
+    exit(91)
+}
+println("build OK — binary at " + bin_path)
+
+// Quick sanity: binary exists and is executable. file_exists() is a
+// stat probe (S_ISREG) — cheap, sufficient.
+if file_exists(bin_path) == false {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD11-COMPILE-RUN-BYTE-EQ  build rc=0 but binary " + bin_path + " is missing (toolchain misroute?).")
+    exit(91)
+}
+
+// ─── step 4: fixed-seed inputs (len=32) ───────────────────────────────
+// Same LCG seeds as SD5 (4242 for x in [-1, 1], 31337 for dy in [0, 1])
+// so the input domain matches the proven SD5 byte-eq corpus. Both
+// branches of the relu vjp must be exercised by the test (positives +
+// negatives).
+let LEN = 32
+let x_arr = t_zeros(LEN)
+t_fill_lcg(x_arr, LEN, 4242, 2.0)
+let mut i_shift = 0
+while i_shift < LEN {
+    t_set(x_arr, i_shift, t_get(x_arr, i_shift) - 1.0)
+    i_shift = i_shift + 1
+}
+
+let dy_arr = t_zeros(LEN)
+t_fill_lcg(dy_arr, LEN, 31337, 1.0)
+
+let mut n_pos = 0
+let mut n_neg = 0
+let mut i_check = 0
+while i_check < LEN {
+    let v = t_get(x_arr, i_check)
+    if v > 0.0 { n_pos = n_pos + 1 }
+    if v < 0.0 { n_neg = n_neg + 1 }
+    i_check = i_check + 1
+}
+println("input span: " + to_string(n_pos) + " positives, " + to_string(n_neg) + " negatives (both branches of relu vjp exercised by the compiled binary)")
+
+// ─── step 5: three-way evaluation loop ─────────────────────────────────
+// For each i ∈ [0, LEN):
+//   dx_interp[i]   = in-process ag_extract_interpret(...)          (oracle A)
+//   dx_hand[i]     = hand-derived `if x>0 then dy else 0`           (oracle B)
+//   dx_compiled[i] = parse_stdout(exec(bin_path + " " + x + " " + dy))  (oracle C)
+// PASS condition: max|A-B| = max|A-C| = max|B-C| = 0.0 (three-way byte-eq).
+let dx_interp_arr   = t_zeros(LEN)
+let dx_hand_arr     = t_zeros(LEN)
+let dx_compiled_arr = t_zeros(LEN)
+
+let mut i = 0
+let mut compiled_rc_worst = 0
+while i < LEN {
+    let xi  = t_get(x_arr, i)
+    let dyi = t_get(dy_arr, i)
+
+    // oracle A: in-process AST interpret
+    let dx_a = ag_extract_interpret(arena, bwd_root, xi, dyi)
+    t_set(dx_interp_arr, i, dx_a)
+
+    // oracle B: hand-derived closed form
+    let dx_b = relu_bwd_hand(xi, dyi)
+    t_set(dx_hand_arr, i, dx_b)
+
+    // oracle C: invoke compiled binary. json_stringify uses the
+    // shortest-roundtrip codec (runtime_core.c::_shortest_double) and
+    // .to_float() routes to strtod — together this round-trips a
+    // binary64 IEEE-754 bit pattern byte-identically. Plain to_string
+    // for float uses %g (6 digits, runtime_core.c:5078) and loses
+    // precision at ~1e-7, breaking byte-eq. Use exec() (popen-backed,
+    // single combined pipe — same hang avoidance as the build call) +
+    // `__RC=$?` sentinel.
+    let cmd = bin_path + " " + json_stringify(xi) + " " + json_stringify(dyi) + " 2>&1; echo __RC=$?"
+    let combined = to_string(exec(cmd))
+    let rc_at = combined.index_of("__RC=")
+    let mut r_rc = 1
+    let mut r_stdout = combined
+    if rc_at >= 0 {
+        let rc_tail = combined.substring(rc_at + 5, len(combined)).trim()
+        try { r_rc = to_int(rc_tail) } catch e { r_rc = 1 }
+        r_stdout = combined.substring(0, rc_at)
+    }
+    if r_rc != 0 {
+        if r_rc > compiled_rc_worst { compiled_rc_worst = r_rc }
+        println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD11-COMPILE-RUN-BYTE-EQ  compiled binary returned rc=" + to_string(r_rc) + " at i=" + to_string(i) + " for (x=" + to_string(xi) + ", dy=" + to_string(dyi) + "). combined output: " + r_stdout)
+        exit(92)
+    }
+    let dx_c = r_stdout.trim().to_float()
+    t_set(dx_compiled_arr, i, dx_c)
+
+    i = i + 1
+}
+println("evaluated 32 input pairs across three oracles (interp / hand / compiled)")
+
+// ─── step 6: byte-eq gates ─────────────────────────────────────────────
+// max|Δ| across all 32 pairs for each pair of oracle columns.
+let mut max_ic = 0.0  // interp vs compiled
+let mut max_ih = 0.0  // interp vs hand
+let mut max_ch = 0.0  // compiled vs hand
+let mut j = 0
+while j < LEN {
+    let a = t_get(dx_interp_arr, j)
+    let b = t_get(dx_hand_arr, j)
+    let c = t_get(dx_compiled_arr, j)
+    let dac = sd11_dt_abs(a - c)
+    let dab = sd11_dt_abs(a - b)
+    let dbc = sd11_dt_abs(b - c)
+    if dac > max_ic { max_ic = dac }
+    if dab > max_ih { max_ih = dab }
+    if dbc > max_ch { max_ch = dbc }
+    j = j + 1
+}
+
+println("three-way max|Δ|:")
+println("  interp   vs compiled : " + to_string(max_ic))
+println("  interp   vs hand     : " + to_string(max_ih))
+println("  compiled vs hand     : " + to_string(max_ch))
+
+// First 4-element transparent audit (mirrors SD5/6/7/9/10 idiom).
+println("first 4 rows (i, x, dy, dx_interp, dx_compiled, dx_hand):")
+let mut dbg = 0
+while dbg < 4 {
+    let xi = t_get(x_arr, dbg)
+    let dyi = t_get(dy_arr, dbg)
+    let a = t_get(dx_interp_arr,   dbg)
+    let c = t_get(dx_compiled_arr, dbg)
+    let b = t_get(dx_hand_arr,     dbg)
+    println("  i=" + to_string(dbg)
+          + "  x=" + to_string(xi)
+          + "  dy=" + to_string(dyi)
+          + "  dx_interp=" + to_string(a)
+          + "  dx_compiled=" + to_string(c)
+          + "  dx_hand=" + to_string(b))
+    dbg = dbg + 1
+}
+
+if max_ic != 0.0 {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD11-COMPILE-RUN-BYTE-EQ  interp vs compiled max|Δ| = " + to_string(max_ic) + " ≠ 0.0 — emitted source compiles & runs but produces a different IEEE-754 trajectory than the in-process interpret walker.")
+    exit(93)
+}
+if max_ih != 0.0 {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD11-COMPILE-RUN-BYTE-EQ  interp vs hand max|Δ| = " + to_string(max_ih) + " ≠ 0.0 — in-process interpret already diverges from hand-derived reference; SD5 regression?")
+    exit(93)
+}
+if max_ch != 0.0 {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD11-COMPILE-RUN-BYTE-EQ  compiled vs hand max|Δ| = " + to_string(max_ch) + " ≠ 0.0 — compiled binary produces output diverging from hand reference.")
+    exit(93)
+}
+
+println("PASS  F-RFC043-AUTOGRAD-AUTO-SD11-COMPILE-RUN-BYTE-EQ  three-way byte-eq across 32 input pairs:")
+println("       interp ≡ compiled ≡ hand   (max|Δ| = 0.0 on all three pairs)")
+println("=== SD11 PASS — AD pipeline END-TO-END for relu (walker-emit → hexa-build → exec → parse → byte-eq) ===")
+exit(0)
