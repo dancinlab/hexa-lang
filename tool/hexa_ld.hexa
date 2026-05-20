@@ -311,7 +311,11 @@ let MACHO_LD_LC_LOAD_DYLINKER   = 0x0e
 let MACHO_LD_LC_LOAD_DYLIB      = 0x0c
 let MACHO_LD_LC_MAIN            = 0x80000028         // 0x28 | LC_REQ_DYLD
 let MACHO_LD_LC_BUILD_VERSION   = 0x32
-let MACHO_LD_LC_CODE_SIGNATURE  = 0x1d
+let MACHO_LD_LC_CODE_SIGNATURE      = 0x1d
+let MACHO_LD_LC_UUID                = 0x1b
+let MACHO_LD_LC_SOURCE_VERSION      = 0x2a
+let MACHO_LD_LC_DYLD_EXPORTS_TRIE   = 0x80000033   // LC_REQ_DYLD | 0x33
+let MACHO_LD_LC_DYLD_CHAINED_FIXUPS = 0x80000034   // LC_REQ_DYLD | 0x34
 
 let MACHO_LD_VM_PROT_RX         = 5                  // VM_PROT_READ|EXECUTE
 let MACHO_LD_VM_PROT_RW         = 3                  // VM_PROT_READ|WRITE
@@ -568,26 +572,40 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     // where __text WAS before codesign's in-place insertion).
     let lc_codesig_size = 16
 
-    // LC_BUILD_VERSION — required by macOS Big Sur+ loader. Without
-    // it the loader reports "Bad executable" even on signed binaries.
+    // LC_BUILD_VERSION — required by macOS Big Sur+ loader.
     // Layout: cmd u32 + cmdsize u32 + platform u32 + minos u32 +
     // sdk u32 + ntools u32 = 24 bytes (no tool entries).
     let lc_buildver_size = 24
 
-    // LC count = 10 (PAGEZERO + __TEXT + __LINKEDIT + DYLINKER + DYLIB
-    // + MAIN + SYMTAB + DYSYMTAB + BUILD_VERSION + CODE_SIGNATURE).
-    let ncmds = 10
+    // ── macOS Sonoma loader requires 4 additional LCs (cycle 7) ──
+    // All are linkedit_data_command or fixed-size: 16 bytes each
+    // except UUID (24) and SOURCE_VERSION (16).
+    let lc_chained_fixups_size = 16          // linkedit_data_command
+    let lc_exports_trie_size   = 16          // linkedit_data_command
+    let lc_uuid_size           = 24          // cmd+cmdsize+16-byte UUID
+    let lc_source_version_size = 16          // cmd+cmdsize+8-byte version
+
+    // LC count = 14
+    //   PAGEZERO + __TEXT + __LINKEDIT
+    //   + DYLD_CHAINED_FIXUPS + DYLD_EXPORTS_TRIE
+    //   + DYLINKER + DYLIB
+    //   + UUID + BUILD_VERSION + SOURCE_VERSION
+    //   + MAIN + SYMTAB + DYSYMTAB
+    //   + CODE_SIGNATURE
+    let ncmds = 14
     let sizeofcmds = lc_pagezero_size + lc_text_size + lc_linkedit_size
-                   + lc_dyld_size + lc_lib_size + lc_main_size
-                   + lc_symtab_size + lc_dysymtab_size
-                   + lc_buildver_size + lc_codesig_size
+                   + lc_chained_fixups_size + lc_exports_trie_size
+                   + lc_dyld_size + lc_lib_size
+                   + lc_uuid_size + lc_buildver_size + lc_source_version_size
+                   + lc_main_size + lc_symtab_size + lc_dysymtab_size
+                   + lc_codesig_size
 
     // ── mach_header_64 ──
-    // MH_NOUNDEFS (0x1) — set when there are no undefined externs.
-    // Tells dyld it can skip symbol resolution and transfer to
-    // LC_MAIN directly. Critical for extern-free static-ish execs
-    // that use direct SVC syscalls (cycle 6 test path).
-    let mut mh_flags = MACHO_LD_MH_PIE | MACHO_LD_MH_TWOLEVEL
+    // MH_NOUNDEFS (0x1) — set when no undefined externs.
+    // MH_DYLDLINK (0x4) — built to use dyld. Required by macOS Sonoma
+    // loader; clang emits unconditionally. Without it, dyld kills the
+    // process at very-early load stage (rc=137).
+    let mut mh_flags = MACHO_LD_MH_PIE | MACHO_LD_MH_TWOLEVEL | 0x4
     if nsyms - nextdefsym == 0 { mh_flags = mh_flags | 0x1 }
     _w_u32(out, MACHO_LD_MAGIC_64)
     _w_u32(out, MACHO_LD_CPU_TYPE_ARM64)
@@ -644,23 +662,36 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u32(out, MACHO_LD_S_REG)
     _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)   // reserved1/2/3
 
-    // ── LC_SEGMENT_64 __LINKEDIT (read-only segment for symtab/strtab + codesig) ──
+    // ── LC_SEGMENT_64 __LINKEDIT (read-only segment) ──
     //
-    // __LINKEDIT sits AFTER __TEXT in the file. fileoff = text_filesize
-    // (immediately after __TEXT's page-aligned end). filesize covers
-    // the symtab (16 * nsyms) + strtab (strsize + strpad) + reserved
-    // code-signature blob space (cycle 6 reserves CODESIG_RESERVE bytes
-    // so `codesign -s -` fills the existing slot in-place without
-    // having to push subsequent content). vmsize is page-aligned upward.
+    // __LINKEDIT sits AFTER __TEXT in the file. fileoff = text_filesize.
+    // Cycle 7 layout (extends cycle 4-6 with chained_fixups + exports_trie):
+    //
+    //   chained_fixups   48 B    (28 header + 16 starts_in_image + 4 pad)
+    //   exports_trie      8 B    (2 actual + 6 pad)
+    //   symtab          16*nsyms
+    //   strtab          strsize + strpad
+    //   codesig_blob   1024 B reserved (1 KB for ad-hoc CMS)
+    //
+    // ld64 ordering convention; macOS Sonoma loader rejects out-of-order.
     let linkedit_fileoff = text_filesize
+    // chained_fixups data:
+    //   28 B header + 4 B pad (8-aligning starts_in_image) +
+    //   16 B starts_in_image (seg_count=3 + 3 zero offsets) + 8 B trailing
+    //   pad to 8-byte align → 56 B (matches clang's empty fixups layout).
+    let chained_fixups_size = 56
+    let exports_trie_size   = 8
+    let chained_fixups_off  = linkedit_fileoff
+    let exports_trie_off    = chained_fixups_off + chained_fixups_size
+    let symoff_pre          = exports_trie_off   + exports_trie_size
     let symtab_size  = 16 * nsyms
     let strtab_total = strsize + strpad
     // CMS ad-hoc signature for a small Mach-O is ~250-300 bytes; reserve
-    // 1024 (1 KB) to cover any realistic growth. 16-byte aligned per
-    // codesign requirements.
+    // 1024 (1 KB) to cover any realistic growth.
     let codesig_reserve = 1024
-    let codesig_fileoff = linkedit_fileoff + symtab_size + strtab_total
-    let mut linkedit_filesize = symtab_size + strtab_total + codesig_reserve
+    let codesig_fileoff = symoff_pre + symtab_size + strtab_total
+    let mut linkedit_filesize = chained_fixups_size + exports_trie_size
+                              + symtab_size + strtab_total + codesig_reserve
     let lrem = linkedit_filesize & (page - 1)
     let mut linkedit_vmsize = linkedit_filesize
     if lrem != 0 { linkedit_vmsize = linkedit_filesize + (page - lrem) }
@@ -677,34 +708,27 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u32(out, 0)                                    // nsects
     _w_u32(out, 0)                                    // flags
 
-    // ── LC_LOAD_DYLINKER /usr/lib/dyld ──
-    _w_u32(out, MACHO_LD_LC_LOAD_DYLINKER)
-    _w_u32(out, lc_dyld_size)
-    _w_u32(out, 12)                                  // name_off (in this LC)
-    _w_name_fixed(out, dyld_path, dyld_path_padded)
+    // Cycle 7: emit LCs in CLANG's order — macOS Sonoma's loader cares
+    // about LC ordering. Clang's ld64 places them as:
+    //   CHAINED_FIXUPS, EXPORTS_TRIE, SYMTAB, DYSYMTAB,
+    //   LOAD_DYLINKER, UUID, BUILD_VERSION, SOURCE_VERSION,
+    //   MAIN, LOAD_DYLIB, CODE_SIGNATURE
 
-    // ── LC_LOAD_DYLIB /usr/lib/libSystem.B.dylib ──
-    _w_u32(out, MACHO_LD_LC_LOAD_DYLIB)
-    _w_u32(out, lc_lib_size)
-    _w_u32(out, 24)                                  // name_off
-    _w_u32(out, 2)                                   // timestamp (1970-ish placeholder)
-    _w_u32(out, 0x051f3c01)                          // current_version (1311.100.3)
-    _w_u32(out, 0x00010000)                          // compatibility_version (1.0)
-    _w_name_fixed(out, lib_path, lib_path_padded)
+    // ── LC_DYLD_CHAINED_FIXUPS — empty fixups for Sonoma loader ──
+    _w_u32(out, MACHO_LD_LC_DYLD_CHAINED_FIXUPS)
+    _w_u32(out, lc_chained_fixups_size)
+    _w_u32(out, chained_fixups_off)
+    _w_u32(out, chained_fixups_size)
 
-    // ── LC_MAIN ──
-    // entryoff (u64) = file offset of the entry instruction (NOT a
-    // VM address — dyld adds the load-bias). For `entry` symbol at
-    // section-relative `entry_off_in_text`, the file offset is
-    // text_fileoff + entry_off_in_text.
-    _w_u32(out, MACHO_LD_LC_MAIN)
-    _w_u32(out, lc_main_size)
-    _w_u64(out, text_fileoff + entry_off_in_text)    // entryoff
-    _w_u64(out, 0)                                   // stacksize (0 = default)
+    // ── LC_DYLD_EXPORTS_TRIE — empty exports trie ──
+    _w_u32(out, MACHO_LD_LC_DYLD_EXPORTS_TRIE)
+    _w_u32(out, lc_exports_trie_size)
+    _w_u32(out, exports_trie_off)
+    _w_u32(out, exports_trie_size)
 
     // ── LC_SYMTAB — populated (cycle 4) ──
-    let symoff = linkedit_fileoff
-    let stroff = linkedit_fileoff + symtab_size
+    let symoff = symoff_pre
+    let stroff = symoff + symtab_size
     _w_u32(out, MACHO_LD_LC_SYMTAB)
     _w_u32(out, lc_symtab_size)
     _w_u32(out, symoff)
@@ -713,9 +737,6 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u32(out, strsize)
 
     // ── LC_DYSYMTAB — populated (cycle 4) ──
-    // Defined externs (Pass A above) come first → iextdefsym=0,
-    // nextdefsym=count(defined). Undefs (Pass B) follow →
-    // iundefsym=nextdefsym, nundefsym=nsyms - nextdefsym.
     _w_u32(out, MACHO_LD_LC_DYSYMTAB)
     _w_u32(out, lc_dysymtab_size)
     _w_u32(out, 0)                                   // ilocalsym
@@ -724,25 +745,55 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u32(out, nextdefsym)                          // nextdefsym
     _w_u32(out, nextdefsym)                          // iundefsym
     _w_u32(out, nsyms - nextdefsym)                  // nundefsym
-    // Remaining 12 u32 fields all zero (no TOC, modtab, indirect,
-    // ext/loc reloc tables).
     let mut di = 0
     while di < 12 { _w_u32(out, 0); di = di + 1 }
 
-    // ── LC_BUILD_VERSION — macOS platform tag (Big Sur+ requires) ──
-    // build_version_command: cmd + cmdsize + platform + minos + sdk + ntools.
-    // platform = 1 (PLATFORM_MACOS). minos = 0x000B0000 (11.0). sdk = same.
+    // ── LC_LOAD_DYLINKER /usr/lib/dyld ──
+    _w_u32(out, MACHO_LD_LC_LOAD_DYLINKER)
+    _w_u32(out, lc_dyld_size)
+    _w_u32(out, 12)                                  // name_off
+    _w_name_fixed(out, dyld_path, dyld_path_padded)
+
+    // ── LC_UUID ──
+    _w_u32(out, MACHO_LD_LC_UUID)
+    _w_u32(out, lc_uuid_size)
+    out.push(0x01); out.push(0x23); out.push(0x45); out.push(0x67)
+    out.push(0x89); out.push(0xab); out.push(0x4d); out.push(0xef)
+    out.push(0x80); out.push(0x00); out.push(0x12); out.push(0x34)
+    out.push(0x56); out.push(0x78); out.push(0x9a); out.push(0xbc)
+
+    // ── LC_BUILD_VERSION ──
+    // Bump minos to 14.0 (Sonoma); ancient 11.0 sometimes triggers
+    // stricter loader paths. clang on this host emits 26.x but 14.0
+    // is the conservative widely-accepted value.
     _w_u32(out, MACHO_LD_LC_BUILD_VERSION)
     _w_u32(out, lc_buildver_size)
     _w_u32(out, 1)                                   // PLATFORM_MACOS
-    _w_u32(out, 0x000B0000)                          // minos 11.0.0
-    _w_u32(out, 0x000B0000)                          // sdk   11.0.0
+    _w_u32(out, 0x000E0000)                          // minos 14.0.0 (Sonoma)
+    _w_u32(out, 0x000E0000)                          // sdk   14.0.0
     _w_u32(out, 0)                                   // ntools
 
+    // ── LC_SOURCE_VERSION ──
+    _w_u32(out, MACHO_LD_LC_SOURCE_VERSION)
+    _w_u32(out, lc_source_version_size)
+    _w_u64(out, 0)
+
+    // ── LC_MAIN ──
+    _w_u32(out, MACHO_LD_LC_MAIN)
+    _w_u32(out, lc_main_size)
+    _w_u64(out, text_fileoff + entry_off_in_text)    // entryoff
+    _w_u64(out, 0)                                   // stacksize (0 = default)
+
+    // ── LC_LOAD_DYLIB /usr/lib/libSystem.B.dylib ──
+    _w_u32(out, MACHO_LD_LC_LOAD_DYLIB)
+    _w_u32(out, lc_lib_size)
+    _w_u32(out, 24)                                  // name_off
+    _w_u32(out, 2)                                   // timestamp
+    _w_u32(out, 0x051f3c01)                          // current_version
+    _w_u32(out, 0x00010000)                          // compatibility_version
+    _w_name_fixed(out, lib_path, lib_path_padded)
+
     // ── LC_CODE_SIGNATURE — reserve slot for codesign blob ──
-    // linkedit_data_command: cmd + cmdsize + dataoff + datasize.
-    // codesign -s - fills this slot in __LINKEDIT instead of
-    // in-place inserting a new LC over __text (cycle 5 bug).
     _w_u32(out, MACHO_LD_LC_CODE_SIGNATURE)
     _w_u32(out, lc_codesig_size)
     _w_u32(out, codesig_fileoff)
@@ -760,6 +811,31 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     if text_filesize > cur_end {
         _w_zero_n(out, text_filesize - cur_end)
     }
+
+    // ── __LINKEDIT payload — cycle 7 prefix: chained_fixups + exports_trie ──
+    //
+    // dyld_chained_fixups_header (28 bytes) + 4-byte pad to 8-align
+    // starts_in_image. Matches clang's empty-fixups layout exactly.
+    _w_u32(out, 0)                                 // fixups_version
+    _w_u32(out, 32)                                // starts_offset (8-aligned after header+pad)
+    _w_u32(out, 48)                                // imports_offset
+    _w_u32(out, 48)                                // symbols_offset (no imports/symbols)
+    _w_u32(out, 0)                                 // imports_count
+    _w_u32(out, 1)                                 // imports_format = DYLD_CHAINED_IMPORT
+    _w_u32(out, 0)                                 // symbols_format = uncompressed
+    _w_zero_n(out, 4)                              // 4-byte pad to 8-align (offset 28 → 32)
+    // dyld_chained_starts_in_image @ offset 32:
+    _w_u32(out, 3)                                 // seg_count = PAGEZERO + TEXT + LINKEDIT
+    _w_u32(out, 0)                                 // seg_info_offset[0] = 0 (no fixups)
+    _w_u32(out, 0)                                 // seg_info_offset[1]
+    _w_u32(out, 0)                                 // seg_info_offset[2]
+    _w_zero_n(out, 8)                              // 8-byte trailing pad to 56 total
+
+    // dyld_exports_trie (2 bytes minimum: terminal=0, child_count=0)
+    // + 6 bytes pad → 8 bytes total.
+    out.push(0)                                    // terminal_size
+    out.push(0)                                    // child_count
+    _w_zero_n(out, 6)                              // pad to 8 bytes
 
     // ── __LINKEDIT payload — nlist_64 records, then strtab ──
     //

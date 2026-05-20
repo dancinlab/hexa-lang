@@ -5013,3 +5013,138 @@ BUILD_VERSION 후 cycle 3 (EXEC-TEXT), cycle 4 (EXEC-SYMTAB), cycle 5
 (4 LCs for Sonoma loader) + cycle 8 (lazy-bind, real corpus) + P2 + P3.
 
 **cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa.
+
+
+### 2026-05-20 — S7-P1 cycle 7: 🛸 첫 실행 가능 hexa-ld Mach-O exec (F-P1-SVC-EXIT FULL PASS, rc=42)
+
+🛸🛸🛸 **HISTORIC TRANSCEND** — RFC 063 § P1 의 첫 실행 가능 binary
+측정 증명. 외부 toolchain (`ld`, `clang`) 0건으로 hexa_ld 가 만든
+12-byte SVC syscall Mach-O exec 가 macOS Sonoma 에서 정상 launch +
+exit(42). hexa-lang 의 native linker path 가 **실제로 작동**하는
+첫 단계.
+
+**한 줄**: 합성 ParsedObj (12-byte direct SVC exit syscall code,
+extern-free) → hexa_ld → 26 KB Mach-O exec → `./exec` → exit code 42.
+외부 ld/clang fork 0건.
+
+**변경 파일** (`tool/hexa_ld.hexa`):
+
+cycle 7 = **macOS Sonoma loader 가 요구하는 6 가지 추가 사항**:
+
+1. **LC_DYLD_CHAINED_FIXUPS** (16-byte LC + 56-byte data) — empty
+   chained-fixups (header + starts_in_image with 3 zero segments).
+   Sonoma loader 가 unconditionally 요구. 인코딩:
+   ```
+   header (28B):
+     version=0 starts_offset=32 imports_offset=48 symbols_offset=48
+     imports_count=0 imports_format=DYLD_CHAINED_IMPORT symbols_format=0
+   + 4B pad (8-align starts_in_image)
+   starts_in_image (16B):
+     seg_count=3 seg_info_offset[0,1,2]=0,0,0
+   + 8B trailing pad → 56 total
+   ```
+
+2. **LC_DYLD_EXPORTS_TRIE** (16-byte LC + 8-byte data) — empty
+   exports trie (terminal=0, child_count=0 + 6 byte pad).
+
+3. **LC_UUID** (24-byte LC) — 16-byte UUID. Deterministic placeholder
+   (`01 23 45 67 89 ab 4d ef 80 00 12 34 56 78 9a bc`); cycle 8+ 가
+   SHA256(__text) 등 의미 있는 값으로 교체.
+
+4. **LC_SOURCE_VERSION** (16-byte LC) — 8-byte version (0.0.0.0.0
+   placeholder).
+
+5. **MH_DYLDLINK flag (0x4)** — header flags 에 추가. macOS Sonoma
+   loader 가 이 flag 없으면 매우 일찍 (정확한 진단 없이) 프로세스 kill.
+   clang 이 unconditionally emit.
+
+6. **LC_BUILD_VERSION minos 11.0 → 14.0 (Sonoma)** — 낮은 platform
+   version 이 stricter loader path 트리거 가능. 14.0 = 0x000E0000.
+
+**LC 순서 reorder** (clang 의 ld64 convention 매칭):
+
+```
+0  LC_SEGMENT_64 __PAGEZERO
+1  LC_SEGMENT_64 __TEXT
+2  LC_SEGMENT_64 __LINKEDIT
+3  LC_DYLD_CHAINED_FIXUPS    ← 신규
+4  LC_DYLD_EXPORTS_TRIE      ← 신규
+5  LC_SYMTAB                 ← 위치 이동 (cycle 4 의 8 → 5)
+6  LC_DYSYMTAB
+7  LC_LOAD_DYLINKER
+8  LC_UUID                   ← 신규
+9  LC_BUILD_VERSION
+10 LC_SOURCE_VERSION         ← 신규
+11 LC_MAIN
+12 LC_LOAD_DYLIB
+13 LC_CODE_SIGNATURE
+```
+
+ncmds 10 → 14, sizeofcmds 552 → 624.
+
+**__LINKEDIT layout** (cycle 6 의 symtab/strtab/codesig 앞에 chained_
+fixups + exports_trie 추가):
+
+```
+__LINKEDIT @ linkedit_fileoff:
+  chained_fixups  56 B
+  exports_trie     8 B
+  symtab          16*nsyms
+  strtab          strsize + strpad
+  codesig_blob   1024 B reserved
+```
+
+**측정 (arm64-Mac local)**:
+
+```
+$ /tmp/run_F_P1_SVC_EXIT
+=== otool -hV (post-cycle 7) ===
+MH_MAGIC_64 ARM64 EXECUTE 14 624 NOUNDEFS DYLDLINK TWOLEVEL PIE
+
+=== otool -tv ===
+_main:
+0000000100000290  mov  x16, #0x1
+0000000100000294  mov  x0,  #0x2a
+0000000100000298  svc  #0x80
+
+=== launch ===
+  rc=42 (expected 42 once cycle 7 lands)
+🛸 F-P1-SVC-EXIT FULL PASS — exec runs and exits 42 via direct SVC
+```
+
+**Sonoma loader 의 6-piece puzzle**:
+
+마지막 piece 는 **MH_DYLDLINK flag** 였음. clang 의 `_dyld_info -fixups
+-platform` 출력 비교로 발견:
+- clang: `flags = NOUNDEFS DYLDLINK TWOLEVEL PIE` ✓
+- 본 cycle 5-6: `flags = NOUNDEFS         TWOLEVEL PIE` ← DYLDLINK 누락
+- → dyld 가 "이 binary 는 dyld 를 안 쓴다" 로 해석, 그러나 다른 LC 가
+   dyld 의존 (LC_LOAD_DYLINKER, LC_LOAD_DYLIB) → 불일치 → kill.
+
+**HONEST SCOPE (g3, over-claim 0)**:
+
+- 실행 가능 binary 의 첫 측정은 **extern-free SVC syscall** 한정.
+  실제 corpus (trivial/fib/while/if 이 `_hexa_set_args` / `_hexa_exit`
+  호출) 는 cycle 8 의 lazy-bind path 필요.
+- LC_UUID 가 deterministic placeholder. 다중 빌드 시 동일 UUID — 큰
+  실제 시스템에선 SHA256(__text) 같은 hash 로 교체 필요.
+- LC_BUILD_VERSION minos 14.0 hardcoded. 사용자가 다른 SDK 로 쓰려면
+  파라미터화 필요 (P2 ELF 에선 무관).
+
+**다음 cycle (P1 cycle 8) baton — F-P1-RUNEQ corpus PASS**:
+
+- `LC_DYLD_CHAINED_FIXUPS` 의 real imports — extern symbol (libSystem
+  의 `_exit`, `_printf` 등) 을 chained-fixups 의 dyld_chained_import
+  entries 로 등록.
+- `__DATA_CONST` 또는 `__DATA` segment 추가 — chained-fixups 의
+  binding 이 거기서 일어남. `__got` section 으로 extern 의 final
+  addr 가 dyld 에 의해 patched.
+- text 의 BL extern → __got 의 PC-rel ADRP/LDR 으로 indirect call
+  (또는 stub 으로). cycle 7 의 hand-built ParsedObj 가 아니라 진짜
+  corpus_trivial.ours.o 가 이 path 로 runnable 되는 것이 RUNEQ 의
+  contract.
+
+**RFC 063 phasing 진척**: P0 ✅ · P1 cycles 1-7 ✅. 잔여 P1 cycle 8
+(real lazy-bind + corpus PASS) + P2 + P3.
+
+**cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa.
