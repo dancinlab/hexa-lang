@@ -1,7 +1,58 @@
 # `.push()` on a top-level `let mut <array>` mis-mutates when called from inside a fn
 
+**Status:** RESOLVED-SSOT (no isolation repro; symptom class already addressed)
 **Layer:** language semantics / codegen (array intrinsic)
 **Related:** existing workaround at `self/tui/input.hexa:113-116`
+
+---
+
+## 2026-05-20 closure note (cycle audit)
+
+Re-checked on `s1-step2-codegen-perf` worktree (commit base `99edb8d3`,
+runtime SSOT `self/runtime_core.c:1817-1901`):
+
+* fn-arena escape fix (`wilson-fn-arena-escapes-on-push`, commit `7ced8229`
+  2026-05-13) is still in place — `hexa_array_push` heapifies the pushed
+  item when `HX_ARR_CAP(arr) >= 0 && __hexa_val_mark_top > 0`
+  (runtime_core.c:1895-1897). No regression since.
+* Re-ran 4 measured reproducers via `/Users/ghost/.hx/bin/hexa_real build`
+  on macOS arm64 (Mach-O, current bootstrap `self/native/hexa_v2`):
+  1. **Patch md targeted repro** — `g = ["a","b"]` then `dopush("c")`,
+     `dopush("d")` → `len(g) == 4`, slots `["a","b","c","d"]`. PASS
+  2. **Wilson-production-shape** — module-level `let mut Q: [string] = []`
+     mutated through indirect `pump(-1, "test3")` chain twice + interleaved
+     other values → 4 distinct rows incl. duplicate "test3" preserved
+     separately (no `test3test3` concat). PASS
+  3. **Capacity-doubling sweep** — 20 pushes through a 1→2→4→8→16→32 thresholds
+     via fn-call indirection, label-compared per index → `bad=0`. PASS
+  4. **Read-after-write inside the same fn** — `LIST.push(s); return
+     LIST[len(LIST)-1]` returning the just-pushed slot → all 3 returns match
+     the just-pushed value AND `LIST` reads cleanly back at top-level. PASS
+
+All four PASS. The 5 reproducer variants already enumerated under "Could
+not reproduce in isolation" continue to PASS, and the targeted variants
+added by this cycle's audit also PASS.
+
+**Conclusion**: the symptom class observed in wilson production
+(`test3test3` single-row corruption) is not reachable via the
+`hexa_array_push` path on the current main. Either the visible symptom
+shares a different root cause with the now-fixed fn-arena escape (the
+rebuild-and-reassign workaround masked both), or it depends on
+state-machine context the isolation reproducers do not replicate.
+
+**Recommended next-cycle action**: if the symptom returns, capture the
+exact failing wilson harness-cli snapshot and rerun under
+`HEXA_RT_TRACE=1` (runtime trace) — that should distinguish push-path
+corruption from upstream string-concatenation in
+`handle_pump_ev` (wilson's `harness_cli_PENDING` reassignment block) or
+in the queue-renderer's row-formatter. Until a deterministic isolation
+repro lands, no upstream code change is justified.
+
+**Defense-in-depth**: keep the `self/tui/input.hexa:113-116` rebuild-form
+workaround. It is `O(N+M)` per push, safe across toolchain versions, and
+documents the bug class for downstream consumers in the same situation.
+
+---
 
 ## Symptom
 

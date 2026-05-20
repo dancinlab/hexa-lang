@@ -4439,3 +4439,19 @@ Single-cycle 3-patch cleanup (region-disjoint, single agent serial-safe) — lan
 Files: `tool/atlas_cli.hexa` (5 hunks — header doc retitled to PR-only + verb list; `_slice_args` allow-list; `cmd_promote` body→retirement comment; `cmd_help` block; dispatcher arm). `self/main.hexa` (3 hunks — `cmd_help` L94 atlas promote→register/pr block; `cmd_help` HW probes row + verb count; `_absorbed_script` Phase-4 HW-probe block — `qmirror`/`qrng` retire + cite comment; new INTRINSIC SURFACE block).
 Parse-gate: `hexa_real parse` PASS on both files.
 g3 verdict: 3 inbox patches CLOSED at the SSOT layer. promote is unreachable from the contributor CLI (dispatcher arm gone); `qmirror`/`qrng` legacy-stub shadowing is impossible (registry entries gone); cmd_help advertises the absorbed intrinsic surface for the first time. No behavior regression on the supported flows (`hexa atlas pr`, `hexa atlas register --from-verify`, `hexa atlas append-witness`, `hexa qrng …`, `hexa qmirror …`, `hexa sim-universe …`, `hexa --help`) — all measured via `hexa_real parse` clean and dispatcher inspection. PROMOTE DEFERRED per @D g_inbox_processing_loop step 7 (separate standard deploy cycle).
+
+### 2026-05-20 — inbox audit: `toplevel-mut-array-push-mismutation-from-fn.md` RESOLVED-SSOT (no isolation repro)
+
+`inbox/patches/toplevel-mut-array-push-mismutation-from-fn.md` (filed 2026-05-15 commit `5cb8d606`) re-audited under the g_inbox_processing_loop SOP. Patch md was already self-classified "Could not reproduce in isolation" + "ALREADY FIXED on the current main" by the filer, citing the 2026-05-13 fn-arena escape fix (`wilson-fn-arena-escapes-on-push`, commit `7ced8229` — `self/runtime_core.c:1895-1897` heapify-on-push when `HX_ARR_CAP(arr) >= 0 && __hexa_val_mark_top > 0`).
+
+This cycle's audit re-confirmed the self-conclusion with 4 fresh measured reproducers built via `/Users/ghost/.hx/bin/hexa_real build` on macOS arm64 (current bootstrap `self/native/hexa_v2`, runtime SSOT `self/runtime_core.c`):
+1. Patch md's targeted repro (`g = ["a","b"]; dopush("c"); dopush("d")`) → `len(g)==4`, all 4 slots distinct. PASS
+2. Wilson-production-shape (module-level `let mut Q`, indirect `pump(-1, "test3")` chain twice + interleaved values) → 4 distinct rows incl. duplicate "test3" preserved (no `test3test3` concat). PASS
+3. Capacity-doubling sweep (20 pushes through 1→2→4→8→16→32 thresholds via fn-call indirection, per-index label compare) → `bad=0`. PASS
+4. Read-after-write inside same fn (`LIST.push(s); return LIST[len(LIST)-1]`) → all 3 returns + top-level read-back match. PASS
+
+g3-honest scope: the symptom class (wilson production `▸ test3test3` single-row corruption) is not reachable through the current `hexa_array_push` path on `s1-step2-codegen-perf` (base `99edb8d3`). Either the visible symptom shared a different root cause with the now-fixed fn-arena escape (the rebuild-and-reassign workaround at `self/tui/input.hexa:113-130` masked both classes), or it depends on state-machine context the isolation reproducers do not replicate. No targeted upstream code fix is justified without a deterministic isolation repro.
+
+Next-cycle action if symptom returns: capture the failing wilson harness-cli snapshot under `HEXA_RT_TRACE=1` to distinguish push-path corruption from upstream string-concatenation in `handle_pump_ev` or the queue-row formatter.
+
+Files touched: `inbox/patches/toplevel-mut-array-push-mismutation-from-fn.md` (closure note + Status header added; original prose preserved verbatim). No SSOT code change; defense-in-depth workaround at `self/tui/input.hexa:113-130` retained.
