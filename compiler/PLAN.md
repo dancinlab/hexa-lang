@@ -6238,3 +6238,96 @@ cycle 29 는 ubu-2 단독 (사용자 선택 1).
 x86_64 encoder 33 rules · LIR ops 17/17 · **pack_lir_x86_64 walker 도입**.
 
 **cc --regen / binary promote**: 미수행 (compiler/emit/* + test/* only).
+
+
+### 2026-05-20 — follow-up cycle 30: pack_lir_x86_64 mem operands + R_X86_64_PLT32 reloc emit (F-P2-X86-FRAME-RELOC PASS)
+
+Cycle 30 closes the two structural gaps blocking real x86_64 codegen
+wiring: memory-operand encoding + inter-fn reloc records.
+
+**Mem operand path** (compiler/emit/elf_x86_64.hexa):
+
+- `_ex86_parse_mem(s)` — parses `[base]` / `[base + N]` / `[base - N]`
+  returning `[base_r64_idx, disp_i64]`.
+- `_ex86_modrm_mem(reg_field, base_idx, disp)` — emits ModR/M (+SIB
+  for RSP/R12) (+disp8/disp32) per Intel SDM Vol 2 effective-addr rules.
+  Handles RBP/R13 lo3=5 special-case (force mod=01 disp8=0 even for 0
+  disp; otherwise mod=00 means RIP-relative in long mode).
+- 6 new encoder rules:
+  - `MOV64 r64, [base + disp]`     REX.W + 8B /r
+  - `MOV64 [base + disp], r64`     REX.W + 89 /r
+  - `MOV   r32, [base + disp]`     8B /r (REX.B only if base ≥ 8)
+  - `MOV   [base + disp], r32`     89 /r
+  - `LEA64 r64, [base + disp]`     REX.W + 8D /r
+  - `PUSH64 r64`                   50+rd (REX.B for r8..r15)
+  - `POP64  r64`                   58+rd (REX.B for r8..r15)
+- `_lir_op_uppercase_x86` width dispatch now scans ALL operands —
+  any reg starting with `r`/`R` OR any `mem` operand forces `MOV64`
+  (was `MOV`). Removed the early `push`/`pop` early-returns that
+  bypassed the width dispatch.
+- `_lir_operand_str_x86` mem form: explicit sign — `[rbp - 8]` instead
+  of `[rbp + -8]` (parser anchors on ` + ` / ` - ` triplet).
+
+**Reloc emit path** (post-walk in `pack_lir_x86_64`):
+
+- Each bubbled CALL target → 1 `R_X86_64_PLT32` reloc record with
+  `addend=-4`, `r_offset = call_off + 1` (the imm32 byte).
+- Intra-module pre-patch: if the target is defined in this `.o`
+  (`sym.section != 0`), pack_lir writes the PC-rel delta into the
+  imm32 immediately (linker validates against the reloc). Mirrors
+  arm64 BL pre-patch.
+- Undef extern targets append an `ElfSym` with `section=SHN_UNDEF`,
+  `bind=STB_GLOBAL`, `type=STT_NOTYPE`.
+- `_find_elf_sym_by_name(symbols, strtab, name)` walks the symbol
+  table comparing names against strtab — NUL-anchored to avoid
+  prefix-match false positives.
+
+**Falsifier — synthetic `compute(a,b) = a+b` + `_start` driver**:
+
+```c
+// compute (33 B):
+push rbp                    55
+mov rbp, rsp                48 89 e5
+sub rsp, 16                 48 81 ec 10 00 00 00
+mov [rbp - 8], rdi          48 89 7d f8        ← cycle-30 mem store
+mov [rbp - 16], rsi         48 89 75 f0
+mov rax, [rbp - 8]          48 8b 45 f8        ← cycle-30 mem load
+mov rcx, [rbp - 16]         48 8b 4d f0
+add rax, rcx                48 01 c8
+mov rsp, rbp                48 89 ec
+pop rbp                     5d                  ← cycle-30 POP64
+ret                         c3
+
+// _start (31 B):
+mov rdi, 20                 48 c7 c7 14 00 00 00
+mov rsi, 22                 48 c7 c6 16 00 00 00
+call compute                e8 0c 00 00 00     ← walker pre-patched delta
+mov rdi, rax                48 89 c7
+mov rax, 60                 48 c7 c0 3c 00 00 00
+syscall                     0f 05
+
+ubu-2: REMOTE_RC=42  ✅
+```
+
+**Measured contract**:
+
+- ✅ 1 reloc record emitted (R_X86_64_PLT32, addend=-4, offset=15)
+- ✅ `call compute` imm32 pre-patched to delta=0x0c (compute at 31,
+  call_off=14, next_pc=19 → delta = 31 - 19 = 12)
+- ✅ `mov [rbp - 8], rdi` encodes as `48 89 7d f8` (REX.W=1, opcode 89,
+  ModR/M mod=01 reg=7=RDI rm=5=RBP, disp8=-8=0xF8)
+- ✅ `push rbp` / `pop rbp` emit single bytes 0x55 / 0x5d
+- ✅ Final 66-byte ELF runs on ubu-2 → exit 42
+
+**RFC 063 phasing**: 30 cycles · 15 falsifier · P0+P1+P2+P3 all closed ·
+x86_64 encoder **40 rules** (33 + 7 cycle-30 mem/r64) · LIR ops 17/17 ·
+walker handles intra-fn + intra-module + extern targets · ELF reloc emit.
+
+**Honest scope** (g3): cycle 30 covers stack-frame setup + intra-module
+fn call. ❌ NOT YET: 32-bit `cmp` widened to r64 / r64-mem ADD/SUB
+(only mem MOV/LEA at this point) / SIB scaled-index (only base+disp) /
+RIP-rel ([rip + label]) / serializer doesn't yet emit `.rela.text` from
+`obj.relocs` (cycle 31 work). Real wiring of `pack_lir_x86_64()` into
+the `compiler/main.hexa::cmd_build` driver is cycle-31+.
+
+**Resource note**: ubu-2 단독 (mini · ubu-1 ssh 도달 불가 그대로).

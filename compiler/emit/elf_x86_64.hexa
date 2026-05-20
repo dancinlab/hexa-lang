@@ -201,6 +201,113 @@ fn _ex86_imm(s: string) -> Int {
     return s.substring(1, n).to_int()
 }
 
+// ─── Cycle 30 — mem-operand parser + ModR/M+SIB+disp helper ──────
+//
+// String form (per `_lir_operand_str_x86`): `[base]`, `[base + N]`,
+// `[base - N]`. The walker keeps things narrow — no scale-index nor
+// RIP-relative forms (those land in later cycles when the codegen
+// needs them).
+//
+// Returns `[base_r64_idx, disp_i64]`, or `[-1, 0]` on unparseable.
+// Caller treats `[-1, ...]` as "no mem operand"; subsequent encoder
+// rules fall through to non-mem forms.
+
+fn _ex86_trim(s: string) -> string {
+    let n = len(s)
+    let mut a = 0
+    while a < n && s.substring(a, a + 1) == " " { a = a + 1 }
+    let mut b = n
+    while b > a && s.substring(b - 1, b) == " " { b = b - 1 }
+    return s.substring(a, b)
+}
+
+fn _ex86_parse_mem(s: string) -> [Int] {
+    let n = len(s)
+    if n < 3 { return [-1, 0] }
+    if s.substring(0, 1) != "[" { return [-1, 0] }
+    if s.substring(n - 1, n) != "]" { return [-1, 0] }
+    let inner = s.substring(1, n - 1)
+    // Scan for the separator (' + ' or ' - '). Single-char `+`/`-`
+    // without leading space wouldn't be ambiguous either, but the LIR
+    // formatter always emits the spaced form so we anchor on it.
+    let il = len(inner)
+    let mut sep = -1
+    let mut sign = 1
+    let mut k = 0
+    while k + 2 < il {
+        let trip = inner.substring(k, k + 3)
+        if trip == " + " { sep = k; sign = 1;  break }
+        if trip == " - " { sep = k; sign = -1; break }
+        k = k + 1
+    }
+    if sep < 0 {
+        // Pure `[reg]` form — disp 0.
+        let base_idx = _ex86_reg64(_ex86_trim(inner))
+        return [base_idx, 0]
+    }
+    let base_name = _ex86_trim(inner.substring(0, sep))
+    let off_str   = _ex86_trim(inner.substring(sep + 3, il))
+    let base_idx  = _ex86_reg64(base_name)
+    let disp      = sign * off_str.to_int()
+    return [base_idx, disp]
+}
+
+// Emit ModR/M (+ SIB if base==RSP/R12) (+ disp8/disp32) for a memory
+// operand referencing `[base + disp]`, with the ModR/M.reg field set
+// to `reg_field` (0..7 — the caller's register or opcode-extension).
+// Caller is responsible for any REX byte (REX.B if base >= 8, REX.R
+// if reg_field source register >= 8). reg_field passed in here is
+// the 3 low bits; high bit goes to REX.R via the caller.
+//
+// disp encoding rules (Intel SDM Vol 2, "Effective Addresses"):
+//   - mod=00 + r/m=base_lo3  : `[base]` with no disp,
+//     EXCEPT if base_lo3 == 5 (RBP/R13) which would mean RIP-relative
+//     (in long mode), so for `[RBP]` we must use mod=01 disp8=0.
+//   - mod=01 + disp8 : `[base + disp8]` for -128..127.
+//   - mod=10 + disp32: `[base + disp32]` for larger displacements.
+//   - SIB byte required when r/m field == 4 (RSP/R12 in lo3 bits)
+//     because RSP encoded as r/m means "use SIB". SIB = (scale=0
+//     << 6) | (index=4=NO_INDEX << 3) | (base=RSP)
+//     = 0x24 for [rsp + ...].
+
+fn _ex86_modrm_mem(reg_field: Int, base_idx: Int, disp: Int) -> [Int] {
+    let base_lo3 = base_idx & 0x7
+    let r_lo3    = reg_field & 0x7
+    // Pick mod by disp range — but force mod=01 disp8=0 for RBP/R13 lo3=5.
+    let mut modbits = 0
+    let mut emit_disp_n = 0     // 0 / 1 / 4
+    if disp == 0 && base_lo3 != 5 {
+        modbits = 0
+        emit_disp_n = 0
+    } else {
+        if disp >= -128 && disp <= 127 {
+            modbits = 1
+            emit_disp_n = 1
+        } else {
+            modbits = 2
+            emit_disp_n = 4
+        }
+    }
+    let modrm = (modbits << 6) | (r_lo3 << 3) | base_lo3
+    let bytes: [Int] = []
+    bytes.push(modrm)
+    // SIB byte required when r/m lo3 == 4 (RSP/R12).
+    if base_lo3 == 4 {
+        bytes.push(0x24)        // scale=0, index=4 (NO_INDEX), base=RSP/R12
+    }
+    if emit_disp_n == 1 {
+        bytes.push(disp & 0xFF)
+    } else {
+        if emit_disp_n == 4 {
+            bytes.push( disp        & 0xFF)
+            bytes.push((disp >> 8)  & 0xFF)
+            bytes.push((disp >> 16) & 0xFF)
+            bytes.push((disp >> 24) & 0xFF)
+        }
+    }
+    return bytes
+}
+
 // Emit `MOV r32, imm32`. Encoding: `B8+r` opcode, then imm32 LE.
 fn _ex86_mov_r32_imm32(reg_idx: Int, imm: Int) -> [Int] {
     let out: [Int] = []
@@ -429,6 +536,119 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
             return [rex, 0xF7, 0xC0 | (7 << 3) | (rd & 0x7)]
         }
     }
+    // ── Cycle 30 additions — mem operands + r64 PUSH/POP / LEA ──
+    //
+    // Convention: a memory operand is the string `[base + disp]` (or
+    // `[base - disp]`); a register operand starts with `r`/`R`/`e`/`E`.
+    // We always check the mem path first when the candidate token
+    // begins with `[`.
+
+    // MOV64 r64, [base + disp] — REX.W + 8B /r
+    if op == "MOV64" && len(ops) == 2 && ops[1].substring(0, 1) == "[" {
+        let rd = _ex86_reg64(ops[0])
+        let mem = _ex86_parse_mem(ops[1])
+        if rd >= 0 && mem[0] >= 0 {
+            let base = mem[0]; let disp = mem[1]
+            let rex = _ex86_rex(1, if rd   >= 8 { 1 } else { 0 }, 0,
+                                    if base >= 8 { 1 } else { 0 })
+            let mr = _ex86_modrm_mem(rd, base, disp)
+            let out: [Int] = []
+            out.push(rex); out.push(0x8B)
+            let mut i = 0
+            while i < len(mr) { out.push(mr[i]); i = i + 1 }
+            return out
+        }
+    }
+    // MOV64 [base + disp], r64 — REX.W + 89 /r
+    if op == "MOV64" && len(ops) == 2 && ops[0].substring(0, 1) == "[" {
+        let mem = _ex86_parse_mem(ops[0])
+        let rs = _ex86_reg64(ops[1])
+        if rs >= 0 && mem[0] >= 0 {
+            let base = mem[0]; let disp = mem[1]
+            let rex = _ex86_rex(1, if rs   >= 8 { 1 } else { 0 }, 0,
+                                    if base >= 8 { 1 } else { 0 })
+            let mr = _ex86_modrm_mem(rs, base, disp)
+            let out: [Int] = []
+            out.push(rex); out.push(0x89)
+            let mut i = 0
+            while i < len(mr) { out.push(mr[i]); i = i + 1 }
+            return out
+        }
+    }
+    // MOV r32, [base + disp] — 8B /r (no REX.W)
+    if op == "MOV" && len(ops) == 2 && ops[1].substring(0, 1) == "[" {
+        let rd = _ex86_reg32(ops[0])
+        let mem = _ex86_parse_mem(ops[1])
+        if rd >= 0 && mem[0] >= 0 {
+            let base = mem[0]; let disp = mem[1]
+            // REX needed only if base >= 8 (REX.B). Skip REX for low regs.
+            let out: [Int] = []
+            if base >= 8 {
+                out.push(_ex86_rex(0, 0, 0, 1))
+            }
+            out.push(0x8B)
+            let mr = _ex86_modrm_mem(rd, base, disp)
+            let mut i = 0
+            while i < len(mr) { out.push(mr[i]); i = i + 1 }
+            return out
+        }
+    }
+    // MOV [base + disp], r32 — 89 /r (no REX.W)
+    if op == "MOV" && len(ops) == 2 && ops[0].substring(0, 1) == "[" {
+        let mem = _ex86_parse_mem(ops[0])
+        let rs = _ex86_reg32(ops[1])
+        if rs >= 0 && mem[0] >= 0 {
+            let base = mem[0]; let disp = mem[1]
+            let out: [Int] = []
+            if base >= 8 {
+                out.push(_ex86_rex(0, 0, 0, 1))
+            }
+            out.push(0x89)
+            let mr = _ex86_modrm_mem(rs, base, disp)
+            let mut i = 0
+            while i < len(mr) { out.push(mr[i]); i = i + 1 }
+            return out
+        }
+    }
+    // LEA64 r64, [base + disp] — REX.W + 8D /r
+    if op == "LEA64" && len(ops) == 2 && ops[1].substring(0, 1) == "[" {
+        let rd = _ex86_reg64(ops[0])
+        let mem = _ex86_parse_mem(ops[1])
+        if rd >= 0 && mem[0] >= 0 {
+            let base = mem[0]; let disp = mem[1]
+            let rex = _ex86_rex(1, if rd   >= 8 { 1 } else { 0 }, 0,
+                                    if base >= 8 { 1 } else { 0 })
+            let mr = _ex86_modrm_mem(rd, base, disp)
+            let out: [Int] = []
+            out.push(rex); out.push(0x8D)
+            let mut i = 0
+            while i < len(mr) { out.push(mr[i]); i = i + 1 }
+            return out
+        }
+    }
+    // PUSH64 r64 — 50+rd ; REX.B (41) for r8..r15. Same opcode byte as
+    // PUSH r32 in 32-bit mode; in long mode default-64 operand size,
+    // so this also covers `push rax` etc. distinct from cycle 25's
+    // 32-bit `push eax` rule via the r64 reg-name match.
+    if op == "PUSH64" && len(ops) == 1 {
+        let rd = _ex86_reg64(ops[0])
+        if rd >= 0 {
+            if rd < 8 { return [0x50 + rd] }
+            return [0x41, 0x50 + (rd & 0x7)]
+        }
+    }
+    // POP64 r64 — 58+rd ; REX.B (41) for r8..r15.
+    if op == "POP64" && len(ops) == 1 {
+        let rd = _ex86_reg64(ops[0])
+        if rd >= 0 {
+            if rd < 8 { return [0x58 + rd] }
+            return [0x41, 0x58 + (rd & 0x7)]
+        }
+    }
+    // MOV64 r64, r64 — REX.W + 89 /r (reg-reg form, no mem). This was
+    // already in cycle 26 but earlier in the function; keep that path
+    // authoritative and skip a second definition here.
+
     // ── Cycle 28 additions — zero-extend / set-byte-on-condition ──
     //
     // MOVZX r32, r8 — 0F B6 /r (low-byte zero-extend to 32-bit).
@@ -834,8 +1054,9 @@ fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     if op == "syscall" { return "SYSCALL" }
     if op == "nop"     { return "NOP" }
     if op == "cqo"     { return "CQO" }
-    if op == "push"    { return "PUSH" }
-    if op == "pop"     { return "POP" }
+    // `push` / `pop` are intentionally NOT here — they're width-
+    // dispatched below by reg operand so `push rbp` → PUSH64 (cycle 30)
+    // and `push eax` → PUSH (cycle 25).
     if op == "call"    { return "CALL" }
     if op == "jmp"     { return "JMP_REL32" }
     // Conditional branches (lower-case LIR → encoder's REL8 forms).
@@ -856,19 +1077,31 @@ fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     if op == "idiv"  { return "IDIV64" }    // 64-bit-only in encoder
     if op == "test"  { return "TEST64" }    // 64-bit-only in encoder
 
-    // Width-dispatched ops — detect 64-bit operand by reg name prefix.
+    // Width-dispatched ops — detect 64-bit operand by reg name prefix
+    // OR by mem operand (memory accesses through 64-bit base regs are
+    // 64-bit by convention even if the source/dest is r32; cycle 30
+    // routes `mov rax, [rbp - 8]` and `mov [rbp - 8], rax` to MOV64).
     let mut is64 = false
-    if len(ops) > 0 && ops[0].kind == "reg" {
-        let rn = ops[0].reg.name
-        if len(rn) > 0 {
-            let c = rn.substring(0, 1)
-            if c == "r" || c == "R" { is64 = true }
+    let mut k = 0
+    while k < len(ops) {
+        if ops[k].kind == "reg" {
+            let rn = ops[k].reg.name
+            if len(rn) > 0 {
+                let c = rn.substring(0, 1)
+                if c == "r" || c == "R" { is64 = true }
+            }
         }
+        if ops[k].kind == "mem" { is64 = true }
+        k = k + 1
     }
     if op == "mov" { if is64 { return "MOV64" }; return "MOV" }
     if op == "add" { if is64 { return "ADD64" }; return "ADD" }
     if op == "sub" { if is64 { return "SUB64" }; return "SUB" }
     if op == "cmp" { return "CMP" }    // r32 only for now (cycle-30 widens)
+    // Cycle 30 mem / r64 push family.
+    if op == "lea"  { return "LEA64" }
+    if op == "push" { if is64 { return "PUSH64" }; return "PUSH" }
+    if op == "pop"  { if is64 { return "POP64" };  return "POP" }
     return op
 }
 
@@ -877,7 +1110,13 @@ fn _lir_operand_str_x86(op: LOperand) -> string {
     if op.kind == "imm"   { return "#" + to_string(op.imm) }
     if op.kind == "label" { return op.label }
     if op.kind == "mem" {
-        return "[" + op.mem_base.name + " + " + to_string(op.mem_offset) + "]"
+        // Cycle 30: explicit sign form so `_ex86_parse_mem` doesn't
+        // see ambiguous tokens like " + -8" (which would otherwise
+        // try to consume both ` + ` and `-`).
+        let off = op.mem_offset
+        if off == 0  { return "[" + op.mem_base.name + "]" }
+        if off > 0   { return "[" + op.mem_base.name + " + " + to_string(off) + "]" }
+        return "[" + op.mem_base.name + " - " + to_string(0 - off) + "]"
     }
     return "<?" + op.kind + "?>"
 }
@@ -1038,6 +1277,88 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
         })
         i = i + 1
     }
-    // pending_offsets / pending_names → cycle-30 reloc records.
+    // ── Cycle 30: bubbled CALL targets → reloc records ──────────
+    //
+    // Each entry in pending_* is the .text offset of a 5-byte
+    // CALL placeholder (`E8 00 00 00 00`) whose target name wasn't
+    // resolvable inside the LFunc it came from. For each:
+    //
+    //   1. Look up the target in `obj.symbols` (defined-fn match).
+    //      If found AND section != 0, pre-patch imm32 with the PC-rel
+    //      delta (linker re-validates against the reloc).
+    //   2. If not found, append an undef extern symbol entry
+    //      (section=0=SHN_UNDEF, bind=STB_GLOBAL, type=NOTYPE).
+    //   3. Emit one `R_X86_64_PLT32` reloc against that symbol with
+    //      addend=-4 (CALL imm32 reads `target - (next_insn_pc)`
+    //      and the linker formula `S + A - P` gives that when
+    //      S=symbol_value, A=-4, P=imm32_offset).
+    let np = len(pending_offsets)
+    let mut pi = 0
+    while pi < np {
+        let call_off = pending_offsets[pi]
+        let name     = pending_names[pi]
+        // Find an already-defined symbol with this name.
+        let mut idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
+        if idx < 0 {
+            // Push an undef extern entry. Index 0 of ELF symtab is
+            // reserved (STN_UNDEF); the serializer prepends it, so
+            // we just append our undef here and the serializer's
+            // count is `1 + len(obj.symbols)` for the .symtab section.
+            let strx = _ew_str(obj.strtab, name)
+            obj.symbols.push(ElfSym {
+                name_offset: strx,
+                section:     0,    // SHN_UNDEF
+                value:       0,
+                size:        0,
+                bind:        1,    // STB_GLOBAL
+                type_:       0,    // STT_NOTYPE
+            })
+            idx = len(obj.symbols) - 1
+        }
+        // The reloc's `r_offset` points at the imm32 field of the
+        // CALL placeholder, i.e. call_off + 1.
+        let r_off = call_off + 1
+        obj.relocs.push(ElfRel {
+            offset:  r_off,
+            sym_idx: idx,
+            kind:    ELF_R_X86_64_PLT32,
+            addend:  -4,
+        })
+        // Intra-module pre-patch — when the target is defined here
+        // (section != 0), compute the delta the linker would write
+        // and put it in the imm32 so the .o is runnable even without
+        // `ld -r`. Mirrors macho_arm64 pack_lir's BL pre-patch.
+        let sym = obj.symbols[idx]
+        if sym.section != 0 {
+            let delta = sym.value - (call_off + 5)
+            obj.text[call_off + 1] =  delta        & 0xFF
+            obj.text[call_off + 2] = (delta >> 8)  & 0xFF
+            obj.text[call_off + 3] = (delta >> 16) & 0xFF
+            obj.text[call_off + 4] = (delta >> 24) & 0xFF
+        }
+        pi = pi + 1
+    }
     return obj
+}
+
+// Walk `obj.symbols`, compare each name (read out of strtab via
+// `name_offset`) to `name`. Returns -1 if no match.
+fn _find_elf_sym_by_name(symbols: [ElfSym], strtab: [Int], name: string) -> Int {
+    let nl = len(name)
+    let ns = len(symbols)
+    let mut i = 0
+    while i < ns {
+        let off = symbols[i].name_offset
+        let mut k = 0
+        let mut ok = true
+        while k < nl {
+            if (strtab[off + k] & 0xFF) != char_code(name, k) { ok = false; break }
+            k = k + 1
+        }
+        // Require terminating NUL at the right slot — guards against
+        // "compute" matching the prefix of "compute_helper".
+        if ok && (strtab[off + nl] & 0xFF) == 0 { return i }
+        i = i + 1
+    }
+    return -1
 }
