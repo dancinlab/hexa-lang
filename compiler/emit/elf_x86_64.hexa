@@ -161,10 +161,73 @@ pub fn encode_x86_64_insn(op: string, ops: [string]) -> [Int] {
     if op == "SYSCALL" { return [0x0F, 0x05] }
     if op == "RET"     { return [0xC3] }
     // CALL rel32 — 5 bytes: E8 + 4-byte signed PC-relative offset.
-    // The imm32 placeholder is emitted as 0; linker patches via
-    // R_X86_64_PLT32 (or R_X86_64_PC32) at link time.
     if op == "CALL" && len(ops) == 1 {
         return [0xE8, 0x00, 0x00, 0x00, 0x00]
+    }
+
+    // ── x86_64 arithmetic — P2 walker prep ──
+    //
+    // 81 /0 id: ADD r/m32, imm32 — 6 bytes (with mod=11 reg-direct).
+    //   Layout: 81 c0+r imm32   (e.g. ADD EAX, imm32 → 81 c0 imm32)
+    // 81 /5 id: SUB r/m32, imm32 — same shape, opcode-ext 5: 81 e8+r
+    // 81 /7 id: CMP r/m32, imm32 — opcode-ext 7: 81 f8+r
+    // The /N field selects via ModR/M.reg; we use mod=11 (reg-direct)
+    // so ModR/M = 0b11_<ext>_<rm> = 0xC0 | (ext<<3) | r.
+    if op == "ADD" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
+        let rd = _ex86_reg32(ops[0])
+        let imm = _ex86_imm(ops[1])
+        if rd >= 0 {
+            let modrm = 0xC0 | (0 << 3) | rd     // /0
+            return [0x81, modrm,
+                    imm & 0xFF, (imm >> 8) & 0xFF,
+                    (imm >> 16) & 0xFF, (imm >> 24) & 0xFF]
+        }
+    }
+    if op == "SUB" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
+        let rd = _ex86_reg32(ops[0])
+        let imm = _ex86_imm(ops[1])
+        if rd >= 0 {
+            let modrm = 0xC0 | (5 << 3) | rd     // /5 = ModR/M reg=5
+            return [0x81, modrm,
+                    imm & 0xFF, (imm >> 8) & 0xFF,
+                    (imm >> 16) & 0xFF, (imm >> 24) & 0xFF]
+        }
+    }
+    if op == "CMP" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
+        let rd = _ex86_reg32(ops[0])
+        let imm = _ex86_imm(ops[1])
+        if rd >= 0 {
+            let modrm = 0xC0 | (7 << 3) | rd     // /7
+            return [0x81, modrm,
+                    imm & 0xFF, (imm >> 8) & 0xFF,
+                    (imm >> 16) & 0xFF, (imm >> 24) & 0xFF]
+        }
+    }
+    // ADD/SUB/CMP r32, r32 — reg-reg form (2 bytes opcode + ModR/M).
+    //   01 /r:  ADD r/m32, r32   (e.g. ADD EAX, EBX → 01 d8)
+    //   29 /r:  SUB r/m32, r32
+    //   39 /r:  CMP r/m32, r32
+    // ModR/M = 0b11_<src>_<dst> for reg-reg with dst as destination.
+    if op == "ADD" && len(ops) == 2 {
+        let rd = _ex86_reg32(ops[0])
+        let rs = _ex86_reg32(ops[1])
+        if rd >= 0 && rs >= 0 {
+            return [0x01, 0xC0 | (rs << 3) | rd]
+        }
+    }
+    if op == "SUB" && len(ops) == 2 {
+        let rd = _ex86_reg32(ops[0])
+        let rs = _ex86_reg32(ops[1])
+        if rd >= 0 && rs >= 0 {
+            return [0x29, 0xC0 | (rs << 3) | rd]
+        }
+    }
+    if op == "CMP" && len(ops) == 2 {
+        let rd = _ex86_reg32(ops[0])
+        let rs = _ex86_reg32(ops[1])
+        if rd >= 0 && rs >= 0 {
+            return [0x39, 0xC0 | (rs << 3) | rd]
+        }
     }
     return []
 }

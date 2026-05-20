@@ -5805,3 +5805,90 @@ flip + L1→L3 markers + F-P3 falsifiers PASS). **23 cycles** on
 **cc --regen / binary promote**: compiler/main.hexa 변경 → @D
 g_commit_push_deploy 발동. 본 commit 은 source-only on campaign
 branch; main 머지 시 cc --regen + hexa_v2 promote 동반 필수.
+
+
+### 2026-05-20 — follow-up cycle 24: HEXA_BACKEND env + x86_64 ADD/SUB/CMP (F-P2-X86-ARITH PASS, F-P3-HEXA-BACKEND-ENV PASS)
+
+RFC 063 follow-up closure 추가 2건:
+
+1. **HEXA_BACKEND env var** (compiler/main.hexa) — RFC 063 § P3 의
+   "cmd_build flips the default to native for HEXA_BACKEND unset" 의
+   env-var aspect 구현. backend resolution chain:
+   - `--backend=<v>` CLI 명시 (최우선)
+   - `HEXA_BACKEND` env var (wrapper / CI override)
+   - 자동 flip (arm64-darwin + emit=obj → native)
+   - fallback "system"
+
+2. **x86_64 ADD/SUB/CMP encoding** (compiler/emit/elf_x86_64.hexa) —
+   P2 walker prep, 6 new rules:
+   - ADD/SUB/CMP r32, #imm32 (6 bytes: 81 ModR/M imm32, opcode-ext
+     0/5/7)
+   - ADD/SUB/CMP r32, r32 (2 bytes: opcode + ModR/M reg-direct)
+
+**Falsifier**:
+
+`compiler/test/macho_p0_corpus/run_F_P2_X86_ARITH.hexa`:
+- 6 instruction byte-eq vs hand-computed Intel-manual encoding.
+- 동적 산술 프로그램 `exit(20+22)` (5+6+2+5+2=20 byte) → ELF →
+  ubu-2 launch → `REMOTE_RC=42`.
+
+```
+ADD EAX,#1  → 81 c0 01 00 00 00
+SUB EAX,#1  → 81 e8 01 00 00 00
+CMP EAX,#1  → 81 f8 01 00 00 00
+ADD EAX,EBX → 01 d8
+SUB EAX,EBX → 29 d8
+CMP EAX,EBX → 39 d8
+
+[program] mov eax,20; add eax,22; mov edi,eax; mov eax,60; syscall
+  → ubu-2 → REMOTE_RC=42
+🎉 F-P2-X86-ARITH FULL PASS
+```
+
+`compiler/test/macho_p0_corpus/run_F_P3_HEXA_BACKEND_ENV.hexa`:
+- `env -i HEXA_BACKEND=native PATH=/usr/bin:/bin aprime_cc ...` (no
+  `--backend=` flag, stripped PATH) → rc=0 + 433 B Mach-O .o.
+
+```
+=== HEXA_BACKEND=native, no --backend flag, stripped PATH ===
+rc=0
+/tmp/p3_env_native.o: Mach-O 64-bit object arm64
+✅ F-P3-HEXA-BACKEND-ENV PASS — env var honored
+```
+
+**측정 — 8 falsifier total (campaign 누적)**:
+
+| Falsifier | Phase | 상태 |
+|-----------|-------|------|
+| F-P0-OBJEQ corpus 4/4 | P0 | 🛸 |
+| F-P1-RUNEQ | P1 | 🛸 |
+| F-P2-LINUX-EXIT | P2 | 🛸 |
+| F-P2-MULTIOBJ-RUNEQ | P2 | 🛸 |
+| F-P3-ZERO-EXTERN-OBJ | P3 | 🛸 |
+| F-P3-FULL-RUNEQ | P3 | 🛸 |
+| F-P3-DEFAULT-NATIVE | P3 follow-up | ✅ |
+| **F-P2-X86-ARITH** (new) | **P2 follow-up** | **🎉** |
+| **F-P3-HEXA-BACKEND-ENV** (new) | **P3 follow-up** | **✅** |
+
+**Follow-up cycle closure status 업데이트**:
+
+| Follow-up | 상태 |
+|-----------|------|
+| compiler/main.hexa default flip + L1→L3 marker | ✅ cycle 23 |
+| ✨ HEXA_BACKEND env var support | ✅ cycle 24 (this) |
+| ✨ x86_64 ADD/SUB/CMP encoding (6 rules) | ✅ cycle 24 (this) |
+| 추가 LIR ops ~190 more | follow-up (multi-week) |
+| self/runtime.c hexa port | 별도 RFC |
+| self/main.hexa::cmd_build flip + driver rebuild | 별도 deploy cycle |
+| P1 dynamic lazy-bind | follow-up cycle |
+| P2 cycle 5+ x86_64 full LIR walker | follow-up cycle |
+| L3 source-level "retire" | gated on full driver flip |
+
+**RFC 063 phasing 누적 (post-cycle 24)**: P0 ✅ + P1 ✅ + P2 (4 cycles
++ arith follow-up) ✅ + P3 (1 base + 3 follow-ups) ✅. 총 24 cycles
+on `s7-p0-cycle1`.
+
+**cc --regen / binary promote**: compiler/main.hexa 변경. main 머지
+이미 `c0bbeedb` 에서 land 됐고 self-host fixpoint 검증 완료 (hexa_cc.c
+byte-identical). 본 cycle 의 compiler/main.hexa env-var 추가는 자체
+self-host 와 무관 (driver flag) — main 머지 시 자동 적용.
