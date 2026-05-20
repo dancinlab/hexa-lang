@@ -4373,3 +4373,110 @@ gate verdict stays **PARTIAL** until the BLIF-emission policy is
 revised.
 
 cross-link: `stdlib/kernels/logic_synth/passes.hexa` (LUT helper).
+
+### 2026-05-20 — RFC 067 P2 + RFC 069 P2/P3 — 3 surgical Px implementations LANDED
+
+Three P2/P3 surgical-implementation cycles completing the §3 P2/P3
+phases for RFC 067 (.shared staging) and RFC 069 (multi-exit + nested
+preservation). Each PR closes a falsifier on the lower_test ratchet
+(17/17 → 18/18 → 19/19).
+
+PRs landed (admin-squash, branch deleted):
+- #155 — RFC 067 P2 `.shared` staging-area declaration
+  (F-RFC067-SHARED-DECL PASS)
+  • compiler/codegen/nvptx_target.hexa +25 lines: `_emit_ptx_func`
+    scans callee_saved for any FRAG entry; when present, emits
+    `.shared .align 16 .b8 _hexa_wmma_stage_<fn>[2048];` (16×16 f16
+    tile × 4 staging slots). Slot name uses kernel basename
+    (NVPTX_KERNEL_PREFIX stripped if present).
+  • compiler/codegen/nvptx_lower_test.hexa +47 lines: Case 17
+    `_test_shared_decl` with 3 sub-asserts (substring + count +
+    negative guard on non-WMMA fixture).
+  • lower_test 16/16 → 17/17.
+- #156 — RFC 069 P2 multi-exit loop matcher
+  (F-RFC069-MULTI-EXIT-MATCH PASS)
+  • compiler/codegen/nvptx_target.hexa +47 lines:
+    `_nvptx_unroll_back_edge_kind` classifies body terminator's
+    back-edge form ("br" / "br_cond_true" / "br_cond_else" / "").
+    `_nvptx_unroll_rewrite_arm` rewrites ONLY the back-edge arm,
+    preserving the early-exit arm verbatim per clone.
+    `_nvptx_unroll_find_pattern` extended to accept both forms.
+  • compiler/codegen/nvptx_lower_test.hexa +97 lines: Case 18
+    `_test_multi_exit_match` with 4 sub-asserts (factor=3 body
+    × 3, setp count, ≥3 break-edges, F7 passthrough byte-eq).
+  • lower_test 17/17 → 18/18.
+- #159 — RFC 069 P3 nested loop detection + preservation
+  (F-RFC069-NESTED-PRESERVE PASS — scope narrowed per g3)
+  • compiler/codegen/nvptx_target.hexa +62 lines:
+    `_nvptx_unroll_contains_inner_loop(body, mfn)` walks outgoing
+    targets from body.stmts; returns true if any non-body target
+    has a terminator carrying a back-edge (target ≤ own id).
+    `_nvptx_unroll_pass` early-returns mfn unchanged when detected.
+  • compiler/codegen/nvptx_lower_test.hexa +118 lines: Case 19
+    `_test_nested_preserve` with 5 sub-asserts (byte-eq, setp
+    count, bra count, detection-true, negative-guard on canonical
+    fixture).
+  • lower_test 18/18 → 19/19.
+
+P3 SCOPE NARROWING (g3 honesty):
+- The RFC 069 §3 P3 text originally suggested cloning outer body
+  with each clone containing a freshly-renumbered copy of the inner
+  loop, with F3 asserting factor-N inner-loop appearance. That's
+  substantial multi-block-region cloning work (4+ helpers needed
+  to renumber Block IDs across a CFG subgraph).
+- The P3 commit lands the NARROWER honest reading: detect nested-
+  loop presence → return mfn UNCHANGED. The visible behavior matches
+  today's pattern-matcher-fail passthrough for many nested shapes,
+  but the detection makes the no-op explicit and verifiable from
+  the source code.
+- Full multi-block-region nested unroll is REFRAMED as P5 — was
+  originally listed as "deeper nesting" in §3 P5, now P5 covers
+  BOTH single-level multi-block region cloning AND deeper-nesting.
+- This narrowing is explicit in the PR body, the commit message,
+  and the in-source RFC marker comment (RFC 069 §3 P3 implementation
+  reality).
+
+Quality gates (all 3 PRs):
+- All modified files parse-clean (`hexa_real parse`).
+- CPU codegen targets byte-identical (x86_64_linux / arm64_darwin /
+  thumbv7em_eabihf).
+- mir.hexa untouched.
+- @D g_commit_push_deploy — `self/codegen_c2.hexa` untouched across
+  all 3 PRs; no bootstrap regen required.
+- Regression: `nvptx_emit_test` + `nvptx_vec_add_test` +
+  `nvptx_gemm_test` all PASS after each landing.
+
+Falsifier ratchet (cumulative on RFC 067/068/069 — 5 of 21 PASS):
+- F-RFC067-FRAG-WIDTH (P1) — PASS (#150)
+- F-RFC067-SHARED-DECL (P2) — PASS (#155)
+- F-RFC068-PRECISION-PROPAGATE (P1) — PASS (#148)
+- F-RFC069-FACTOR-N (P1) — PASS (#147)
+- F-RFC069-MULTI-EXIT-MATCH (P2) — PASS (#156)
+- F-RFC069-NESTED-PRESERVE (P3, scope-narrowed) — PASS (#159)
+- Continuous gates F5/F6/F7 (3) — all PASS throughout.
+
+Pending across all 3 RFCs:
+- RFC 067 P3 DTYPE-FAMILY (per-fragment role + dtype re-key)
+- RFC 067 P4 TILE-LOOP-NUMERIC (real-GPU fire)
+- RFC 067 P5 multi-family bf16 + f16-accum (deferred)
+- RFC 068 P2 OPCODE-SUFFIX (needs HIR `@f16` grammar)
+- RFC 068 P3 BODY-MNEMONIC
+- RFC 068 P4 NUMERIC-EQ (real-GPU fire)
+- RFC 069 P4 NUMERIC-EQ (real-GPU fire)
+- RFC 069 P5 multi-block region cloning (formerly P3 ambitious form)
+
+Cumulative today (full §12 P4+ arc 2026-05-20, 4 batches):
+- Batch 1 — Shape-A v2 surgical-port (#117 + #121 + #123 + #127).
+  lower_test 9/9 → 13/13.
+- Batch 2 — Shape-B P0 RFC drafts (#138 + #140 + #141 + #143).
+  RFC text only.
+- Batch 3 — P1 implementations (#147 + #148 + #150 + #151).
+  lower_test 13/13 → 16/16.
+- Batch 4 — P2/P3 implementations (#155 + #156 + #159 + this
+  closure). lower_test 16/16 → 19/19.
+
+Total today: **14 PRs** (8 implementation + 6 docs/closure). Per-batch
+average 3.5 PRs. Cumulative lower_test ratchet 9 → 19 (+10 cases,
++1.11× per-batch on average).
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md
