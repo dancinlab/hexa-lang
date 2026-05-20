@@ -7761,4 +7761,35 @@ PR #233 closed PIECE 1).
 
 **cross-link**: RUNTIME.md ## Log "2026-05-20 — Phase 1 Tier-A.1 step-1 (cycle 46)" entry · RUNTIME.md ### Tier-A.1 의 `_strcmp/_memcmp` [partial] flip + `_strlen` [pending] 메모. Phase 1 cumulative gate (`≤ 5 external syscalls + 16 libm`) 는 ~10 cycle 후 측정.
 
-@cite RFC 061 §4.1 (runtime split) · `inbox/rfc_drafts_2026_05_20/rfc_runtime_hexa_native_rewrite.md` (cycle 42 draft) · `inbox/rfc_drafts_2026_05_20/aprime_c41_externs_catalog.txt` (173-symbol raw).
+### 2026-05-20 — RFC 070 G7-D.scaffold — capability-manifest authoring **LOCKED = `@plugin(capabilities=[...])` 인-소스 attribute** + ABI stamp 12 B 레이아웃 + 2 skeleton 파일 (zero behavior change)
+
+**작업 = Shape B scaffold + design-decision lock** — G7-D 의 §6 punted decision 1 (capability authoring 형식) 을 측정-기반 trade-off matrix 로 확정. RFC 070 §6 의 두 옵션 — (A) `@plugin(capabilities=[...])` 인-소스 attribute vs (B) sidecar `.hexa.cap.tape` — 중 (A) 채택.
+
+**근거 (RFC 070 §4.6.1 trade-off matrix)**:
+1. `@D g3` 정직 anchor — (A) source = truth (capability claim 이 dispatch fn 본체와 같은 SSOT, drift 0); (B) source ≠ manifest 가 silent 가능.
+2. `@D g6` precedent — `@cite`/`@stability`/`@effect` 모두 in-source attribute. (A) 가 균질 패턴, (B) 는 hexa-lang 유일의 "declarative sibling" 도입.
+3. audit-friendliness — `git grep '@plugin' stdlib/` 한 번이면 끝.
+4. bypass risk — (A) source-line 미작성으로 capability 못 만듦; (B) 별도 PR-file edit 누락 가능.
+5. parser cost — 유일한 (A) 비용; 기존 `@cite`(one string)/`@stability` 패턴을 `string[]` 까지 확장. 일회성, 한정적.
+6. dynamic capability — 양쪽 모두 불가 (HXC payload 는 정적). 동률.
+
+**ABI stamp 레이아웃 LOCK (§4.6.2)**: `__HEXA,__abi` (Mach-O) / `.hexa.abi` (ELF) = **fixed 12 B LE 레코드** = `(runtime_version: u32, nanbox_layout_hash: u64)`. HXC 미사용 — 이유: HXC parser 자체가 stable HexaVal ABI 에 의존하므로 ABI mismatch 는 HXC parse 前 검출되어야 함. dependency-free 12 B read + 2 int compare 로 `dlerror`-loud refuse.
+
+**Capability manifest 레이아웃 LOCK (§4.6.2)**: `__HEXA,__cap` (Mach-O) / `.hexa.cap` (ELF) = HXC v2 payload (`@D g_hxc` 준수) encoding `CapManifest{ plugin_id, capabilities[] (sorted asc), rfc_version=1, compiler_id }`.
+
+**Landed scaffold 파일 2개 (zero behavior change)**:
+- `stdlib/dynlink_caps.hexa` (≈140 줄, 신규) — 호스트-사이드 gate 의 fn 시그너처 + struct shape lock. 3 main fn (`dynlink_check_abi_compat` F-D1 hook · `dynlink_parse_cap_manifest` HXC decode hook · `dynlink_check_cap_grant` F-D2 hook) + combined `dynlink_full_gate`. 본체 = `return 0` (fails-closed STUB). G7-D.impl 이 본체 채움. section-name 헬퍼 4개 (Mach-O 16 B segname 한도 준수). parse-gate PASS.
+- `compiler/codegen/plugin_attr_scaffold.hexa` (≈100 줄, header-comment-only) — G7-D.impl 의 3개 통합 hook (parser attribute 확장 · codegen section emit · runtime gate wire) 위치 + 형식을 사전 lock. zero declaration · 빈 translation unit. parse-gate PASS.
+
+**RFC 070 update**:
+- status header `g7-a-falsify-measured` → `g7-d-scaffold`.
+- §4 phase table G7-D row split = `G7-D.scaffold ✅` (이 commit) + `G7-D.impl` (별도 사이클).
+- §4.6 신규 (≈120 줄) = 4.6.1 design choice + 4.6.2 두 레코드 layout + 4.6.3 scope/out-of-scope + 4.6.4 F-D1/F-D2 reaffirmation + 4.6.5 files.
+- §6 punted decision 1 → RESOLVED, §4.6.1 로 cross-link.
+
+**Out of scope (`@D g3` honest)**: parser 변경 0건 — `@plugin(...)` 는 오늘 여전히 parse error. codegen 변경 0건 — `.so` artifacts 는 여전히 `__cap`/`__abi` 미보유. runtime 변경 0건 — `hexa_dlopen` (G7-C scope, 미존재) 은 gate 미호출. `stdlib/dynlink.hexa` (G7-C) 생성 X. host grant-table 정의 X. F-D1/F-D2 measured 0건. `hexa_v2` regen 0 (`@D g_commit_push_deploy` 는 G7-D.impl 대기). `inbox/PATCHES.yaml` untouched.
+
+**Files**: `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` (status+§4 table+§4.6 추가+§6 1 항목 RESOLVED) · `stdlib/dynlink_caps.hexa` (신규 skeleton) · `compiler/codegen/plugin_attr_scaffold.hexa` (신규 scaffold marker) · `compiler/PLAN.md` (이 entry).
+
+**Cross-link**: RFC 070 §4.6 · §3.C capability gate · §3.D ABI stamp · §4.4 G7-A.native scaffold (동일 Shape-B "marker before impl" 패턴) · `@D g_inbox_processing_loop` Shape B · `@D g3`/`g5`/`g6`/`g_hxc`.
+

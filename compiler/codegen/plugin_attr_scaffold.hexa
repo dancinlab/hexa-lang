@@ -1,256 +1,110 @@
-// compiler/codegen/plugin_attr_scaffold.hexa — RFC 070 G7-D.impl.codegen
+// compiler/codegen/plugin_attr_scaffold.hexa — RFC 070 G7-D.scaffold marker
 //
 // @cite RFC 070 §3.B fat-.so single-symbol convention
 // @cite RFC 070 §3.C capability gate
 // @cite RFC 070 §3.D ABI version stamp
 // @cite RFC 070 §4.6.1 design decision LOCKED: (A) @plugin(capabilities=[...]) in-source
 // @cite RFC 070 §4.6.2 fixed 12-byte ABI stamp record layout
-// @cite RFC 070 §4.6.4 F-D1/F-D2 falsifier contracts
+// @cite RFC 070 §4.6.3 zero behavior change this commit
 //
-// STATUS: G7-D.impl.codegen — PAYLOAD BUILDERS LANDED 2026-05-20 (Part A
-//   of the G7-D codegen sub-cycle, paired with Part B's
-//   ABI-stamp encoder in stdlib/dynlink_caps.hexa and Part C's
-//   host-gate body).
+// STATUS: SCAFFOLD MARKER ONLY (G7-D.scaffold sub-cycle).
+//   Header-comment-only file documenting where G7-D.impl will hook into the
+//   existing codegen pipeline. Zero code, zero behavior change.
 //
-//   This file provides two payload builders + a parser-annotation
-//   extractor that the per-target codegen entry points
-//   (compiler/codegen/arm64_darwin.hexa + .../x86_64_linux.hexa) will
-//   call when they grow .so/.dylib emit (still scaffold per §4.4 /
-//   §4.5). Today's production .so/.dylib still flows via the C path
-//   (`hexa_v2 → C → clang -shared`) per §4.5 honest scoping; that path
-//   does NOT receive these sections until a follow-up cycle lands a
-//   `--cap-manifest=<bytes>` invocation on the C toolchain.
-//
-//   The builders THEMSELVES are pure-hexa, byte-deterministic, and
-//   round-trip with stdlib/dynlink_caps.hexa decoders — they are the
-//   producer side of the same wire format the host gate consumes.
-//
-// SCOPE THIS COMMIT (g3-honest):
-//   - plugin_attr_extract_from_annot(annot_str) -> ExtractedPluginAttr
-//   - plugin_attr_build_cap_section(plugin_id, capabilities) -> bytes
-//   - plugin_attr_build_abi_section() -> bytes (12 B fixed)
-//   - plugin_attr_section_names_for_target(target) -> (cap_name, abi_name)
-//   - call-site hooks in arm64_darwin.hexa + x86_64_linux.hexa are
-//     SEPARATE follow-up (§4.4 / §4.5 native scaffolds first).
-
-use "stdlib/dynlink_caps"
+// This file exists to lock the integration shape so that G7-D.impl's PR is
+// small + reviewable + obviously bounded.
 
 // ──────────────────────────────────────────────────────────────────────
-// Parser-channel extraction
-// ──────────────────────────────────────────────────────────────────────
-
-// ExtractedPluginAttr — decoded form of the `"plugin|<raw-tokens>"`
-// annotation string that self/parser.hexa::parse_stmt pushes onto
-// p_pending_annotations for any fn carrying @plugin(capabilities=[...]).
-//
-// has_attr = 1 iff the input string is a recognised `plugin|...` channel
-// payload. capabilities[] is the parsed string-array (sort-preserved
-// from source — sort is done at section-build time by dynlink_caps).
-struct ExtractedPluginAttr {
-    has_attr: int,
-    capabilities: [string],
-    raw_remainder: string,   // for future forward-compat kwargs (plugin_id, etc.)
-}
-
-// plugin_attr_extract_from_annot — invert the serialization rule from
-// self/parser.hexa L860 (`p_pending_annotations.push("plugin|" + raw_p)`).
-//
-// Tolerant grammar accepted (per parser comment §RFC 070 G7-D.impl.parser):
-//   - `capabilities = [ "a" , "b" ]`
-//   - `capabilities=["a","b"]`
-//   - bare positional: `["a","b"]`
-//
-// Returns ExtractedPluginAttr with has_attr=0 if the input does not start
-// with "plugin|". The string-list scan is bracket-balanced (admits nested
-// arrays, though the schema currently does not use them — forward-compat
-// for nested kwargs).
-//
-// @cite RFC 070 §4.6.1 in-source attribute decision
-// @cite self/parser.hexa L814-865 paren-balanced raw accumulator
-pub fn plugin_attr_extract_from_annot(annot_str: string) -> ExtractedPluginAttr {
-    if !annot_str.startsWith("plugin|") {
-        return ExtractedPluginAttr{ has_attr: 0, capabilities: [], raw_remainder: "" }
-    }
-    let raw = annot_str.substring(7, len(annot_str))
-    let caps = _plugin_attr_scan_string_list(raw)
-    return ExtractedPluginAttr{
-        has_attr: 1,
-        capabilities: caps,
-        raw_remainder: raw,
-    }
-}
-
-// _plugin_attr_scan_string_list — find the first `[ "..." , "..." ]`
-// bracketed string-array in `raw` and return the unquoted cells. Skips
-// whitespace + commas. Bracket counting is single-level (nested arrays
-// would parse as a single inner cell currently — out of scope for RFC 070).
-fn _plugin_attr_scan_string_list(raw: string) -> [string] {
-    let mut out = []
-    let n = len(raw)
-    // Locate opening '['.
-    let mut i: int = 0
-    while i < n && raw.byte_at(i) != 91 {  // '[' == 91
-        i = i + 1
-    }
-    if i >= n { return out }
-    i = i + 1  // step past '['
-    // Scan strings + commas until matching ']'.
-    let mut cur = ""
-    let mut in_str: int = 0
-    while i < n {
-        let b = raw.byte_at(i)
-        if in_str == 0 {
-            if b == 93 {  // ']'
-                return out
-            }
-            if b == 34 {  // '"'
-                in_str = 1
-                cur = ""
-            }
-            // whitespace + ',' silently skipped
-        } else {
-            if b == 34 {  // '"' closes string
-                out.push(cur)
-                in_str = 0
-            } else if b == 92 {  // '\\' escape; admit next char verbatim
-                i = i + 1
-                if i < n {
-                    cur = cur + chr(raw.byte_at(i))
-                }
-            } else {
-                cur = cur + chr(b)
-            }
-        }
-        i = i + 1
-    }
-    return out
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// Section payload builders
-// ──────────────────────────────────────────────────────────────────────
-
-// plugin_attr_build_cap_section — wire-format payload for the __HEXA,__cap
-// (Mach-O) / .hexa.cap (ELF) section. Sorts capabilities ascending for
-// F-D2 byte-determinism contract, then HXC v2-encodes via dynlink_caps.
-//
-// plugin_id: derived from the @plugin-annotated fn name minus the
-//            "_dispatch" suffix (per RFC 070 §3.B; the caller does this
-//            extraction since this builder does not have parser context).
-// capabilities: verbatim from @plugin(capabilities=[...]); sort is
-//            performed inside dynlink_encode_cap_manifest, so the input
-//            order does not affect output bytes.
-//
-// @cite RFC 070 §3.B fat-single-symbol
-// @cite RFC 070 §3.C capability gate
-// @cite @D g_hxc HXC v2 wire format
-pub fn plugin_attr_build_cap_section(plugin_id: string, capabilities: [string]) -> string {
-    let manifest = CapManifest{
-        plugin_id: plugin_id,
-        capabilities: capabilities,
-        rfc_version: 1,           // RFC 070 = revision 1
-        compiler_id: "hexa-lang", // audit trail; not gated on
-    }
-    return dynlink_encode_cap_manifest(manifest)
-}
-
-// plugin_attr_build_abi_section — wire-format payload for __HEXA,__abi /
-// .hexa.abi (fixed 12 B LE). Reads host's compiled-in HEXA_RUNTIME_VERSION
-// + computes nanbox_layout_hash from the canonical NanBox fingerprint
-// (deterministic re-derivation from self/runtime.h enum + union layout).
-//
-// @cite RFC 070 §4.6.2 12-byte LE layout
-// @cite RFC 070 §3.D ABI version stamp
-pub fn plugin_attr_build_abi_section() -> string {
-    let stamp = AbiStamp{
-        runtime_version: dynlink_host_runtime_version(),
-        nanbox_layout_hash: dynlink_host_nanbox_layout_hash(),
-    }
-    return dynlink_encode_abi_stamp(stamp)
-}
-
-// plugin_attr_section_names_for_target — picks the right section-name
-// pair per target triple. `target` is the codegen's target identifier
-// matching the convention in compiler/codegen/{arm64_darwin,x86_64_linux}.hexa
-// (i.e. "arm64-apple-darwin" or "x86_64-unknown-linux-gnu").
-//
-// Returns a 2-element array [cap_name, abi_name] for caller convenience
-// (hexa-lang structs do not yet ship a tuple primitive; an array of two
-// strings is the conventional Lite-tuple pattern).
-//
-// @cite RFC 070 §3.C Mach-O 16 B segname respected
-pub fn plugin_attr_section_names_for_target(target: string) -> [string] {
-    if target.contains("darwin") || target.contains("macos") {
-        return [dynlink_caps_section_name_machO(), dynlink_abi_section_name_machO()]
-    }
-    // Default to ELF section names (linux, freebsd, etc.).
-    return [dynlink_caps_section_name_elf(), dynlink_abi_section_name_elf()]
-}
-
-// plugin_attr_default_plugin_id_from_fn — apply the §3.B fat-single-symbol
-// convention: plugin_id = <dispatch_fn_name>.replace("_dispatch", "").
-// If the fn name does not end in `_dispatch`, returns the fn name verbatim
-// (forward-compat for plugins that ship a custom plugin_id via a future
-// kwarg `plugin_id="..."` in @plugin attribute).
-//
-// @cite RFC 070 §3.B fat-.so single-symbol convention
-pub fn plugin_attr_default_plugin_id_from_fn(fn_name: string) -> string {
-    let suffix = "_dispatch"
-    let n = len(fn_name)
-    let m = len(suffix)
-    if n < m {
-        return fn_name
-    }
-    let tail = fn_name.substring(n - m, n)
-    if tail == suffix {
-        return fn_name.substring(0, n - m)
-    }
-    return fn_name
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// Integration plan (call-site hooks — separate follow-up sub-cycle)
+// G7-D.impl integration plan — three hooks
 // ──────────────────────────────────────────────────────────────────────
 //
-// The producer surface above is COMPLETE. What remains for end-to-end
-// G7-D.impl.codegen is the per-target call-site wiring:
+// 1) compiler/parser — attribute parser extension
+//    File: self/codegen_c2.hexa (or wherever @cite/@stability are recognised
+//          in the deployed driver; verify at G7-D.impl start)
+//    Change: extend the attribute-arglist parser to accept `string[]` for the
+//            `capabilities` named arg of `@plugin(...)`.
+//    Today: @cite("...") and @stability("phase-a") accept ONE string. The
+//           grammar `@<name>(<key> = <expr>)` needs `<expr>` to admit a
+//           string-array literal.
+//    Backward compat: zero — `@plugin` is currently unrecognised, so any
+//           today-legal source remains today-legal.
+//    Test: parse `@plugin(capabilities = ["a", "b"])` -> AST node with
+//          name="plugin", args=[("capabilities", StringArrayLit(["a","b"]))].
 //
-//   1) compiler/codegen/arm64_darwin.hexa — when emitting a Mach-O .dylib
-//      (G7-A.native path; still scaffold per §4.4), append:
-//        - LC_SEGMENT_64 for "__HEXA" with two SHT_PROGBITS-equivalent
-//          sections (__cap + __abi).
-//        - section_64 header for each (80 B per Apple <mach-o/loader.h>).
-//        - payload bytes from plugin_attr_build_cap_section /
-//          plugin_attr_build_abi_section.
-//        - segcount in MH_DYLIB load command updated.
+// 2) compiler/codegen — section emit
+//    Files: compiler/codegen/arm64_darwin.hexa  (Mach-O)
+//           compiler/codegen/x86_64_linux.hexa  (ELF)
+//    Change: when emitting an `.so`/.dylib (G7-A/B path, i.e. `bopts[4]=="1"`
+//            per RFC 070 §4.3) for a translation unit that contains a fn
+//            with `@plugin(capabilities=[...])`, emit TWO custom sections:
 //
-//   2) compiler/codegen/x86_64_linux.hexa — when emitting an ELF .so
-//      (G7-A.native path; still scaffold per §4.5), append:
-//        - two SHF_ALLOC sections of sh_type SHT_PROGBITS named .hexa.cap
-//          + .hexa.abi (names interned in the section-name string table).
-//        - payload bytes from this file's builders.
-//        - e_shnum bumped accordingly.
+//      (a) __HEXA,__abi  (Mach-O) / .hexa.abi  (ELF) — fixed 12 B LE record
+//          (u32 runtime_version, u64 nanbox_layout_hash) per §4.6.2.
+//          - runtime_version source = self/runtime.c::HEXA_RUNTIME_VERSION
+//            (read by compiler at build time; baked into rodata).
+//          - nanbox_layout_hash source = compiler-computed SHA-256[0..8] over
+//            canonical NanBox tag literal + payload sizeof list.
 //
-//   3) C-path bridge (§4.5 honest-scoped "ABI-noisy" path): if a future
-//      cycle wants to lift this to the C path, the codegen_c2.hexa
-//      emitter would write the bytes to a temp file and invoke
-//      `clang -Wl,--section-start=.hexa.cap=... ` or, for Mach-O,
-//      `ld -sectcreate __HEXA __cap <tempfile>` — neither is in scope
-//      for this G7-D.codegen sub-cycle (§4.5 declared C path stays
-//      "F-D1/F-D2 EXPECTED-FAIL until follow-up").
+//      (b) __HEXA,__cap  (Mach-O) / .hexa.cap  (ELF) — HXC v2 payload encoding
+//          CapManifest{ plugin_id, capabilities[] (sorted), rfc_version=1,
+//          compiler_id } per §3.C + §4.6.2 schema.
+//          - plugin_id derived from the `@plugin`-annotated fn name minus the
+//            "_dispatch" suffix.
+//          - capabilities[] verbatim from the attribute arglist, sorted asc
+//            for byte-determinism per F-D2 contract.
+//          - HXC v2 encoder source = stdlib/hxc/ (already exists per @D g_hxc).
 //
-// All three wires are CONSUMERS of the builders in this file; they do
-// not require the builders to change. The builders are stable wire-
-// format producers callable independently for tooling / testing.
+//    Mach-O details: extend the existing `__TEXT`/`__DATA` section emit path
+//      to add custom `__HEXA` segment with two sections. Section header bytes
+//      = 80 B per section (Apple `<mach-o/loader.h>` `struct section_64`).
+//      Update `MH_DYLIB` load command count (LC_SEGMENT_64 segcount).
+//    ELF details: extend the existing `.text`/`.rodata` section emit path to
+//      add two SHF_ALLOC sections at sh_type = SHT_PROGBITS with names from
+//      the section-name string table.
 //
-// Cross-references:
-//   - §4.4 G7-A.native scaffold (arm64-darwin)
-//   - §4.5 G7-A.native scaffold (x86_64-linux)
-//   - stdlib/dynlink_caps.hexa (decoder + host gate; round-trips with
-//     this file's encoders).
+// 3) self/runtime.{c,h} — host-side gate wire
+//    File: self/runtime.c (the dlopen FFI consumer; today calls libc dlopen
+//          directly per RFC 070 §2 audit list)
+//    Change: when `hexa_dlopen` (G7-C entry) lands, prepend a call to
+//            `stdlib/dynlink_caps.hexa::dynlink_full_gate` BEFORE the libc
+//            `dlopen`. On gate-fail: do NOT call libc dlopen; surface the
+//            gate's dlerror string verbatim to `hexa_dlerror`.
+//    Backward compat: today there is no `hexa_dlopen` wrapper, so this is a
+//            net-new code path; existing raw-FFI dlopen consumers (per §2
+//            audit) are NOT redirected through the gate — they remain raw
+//            consumers of libc dlopen unless/until they migrate to
+//            `hexa_dlopen` (G7-C decision, not G7-D scope).
+//
+// ──────────────────────────────────────────────────────────────────────
+// What this scaffold file is NOT
+// ──────────────────────────────────────────────────────────────────────
+//
+//   - NOT a codegen entry point. compiler/main.hexa does not import this.
+//   - NOT parsed as Hexa code beyond the file header (zero declarations).
+//     A pure comment-only `.hexa` file is currently parsed as an empty
+//     translation unit; this is intentional (zero behavior change).
+//   - NOT a substitute for the real impl in arm64_darwin.hexa /
+//     x86_64_linux.hexa — those files are where the actual section-emit
+//     logic will live at G7-D.impl. This file is a planning marker that
+//     G7-D.impl will reference + then delete (or fold into a per-target
+//     header comment, mirroring RFC 070 §4.4 G7-A.native scaffold pattern).
+//
+// ──────────────────────────────────────────────────────────────────────
+// Cross-references
+// ──────────────────────────────────────────────────────────────────────
+//
+//   - §4.4 G7-A.native scaffold — same Shape-B "comment-only marker before
+//     impl" pattern; this file mirrors that approach for the G7-D side.
+//   - stdlib/dynlink_caps.hexa — companion skeleton (host-side gate fn
+//     shells); together these two files lock the G7-D shape end-to-end.
 //   - @D g3 real-limits-first — F-D1 anchored on nanbox ABI invariant;
 //     F-D2 anchored on least-privilege contract. See RFC 070 §4.6.4.
-//   - @D g5 hexa-native-only — section payload is pure-hexa; no LLVM /
-//     clang dependency in the builders.
+//   - @D g5 hexa-native-only — section emit lives in compiler/codegen
+//     hexa-side (not in clang flags). The C-path fallback (clang -shared)
+//     will NOT receive these sections in G7-D.impl phase 1 — that path
+//     stays "F-A1 PASS, F-A2/F-D1/F-D2 EXPECTED-FAIL" until / unless a
+//     follow-up cycle adds a `--cap-manifest=<.tape>` clang invocation.
+//     (This is consistent with §4.5's honest scoping of the C path as
+//     "functionally correct, ABI-noisy".)
 //   - @D g_hxc — CapManifest payload uses HXC v2; ABI stamp does NOT
 //     (fixed 12 B for dependency-free verification per §4.6.2).
