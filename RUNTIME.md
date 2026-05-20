@@ -739,3 +739,21 @@ For each Tier-A sub-phase:
   connections or spawns child processes during compile-then-exit;
   callers (self/native/net.c · exec_pipe.c · pty.c · etc) are
   reachable code in flame/runtime but not exercised by compile flow
+
+### 2026-05-21 — time/terminal/mach + ctype closure (cycle 62)
+
+- ✅ cycle 62 — 8 fns CLOSED. aprime_cc nm undefined externs
+  34 → **26** (−8 · cumulative **137 → 26 = −111 = 81%**) · smoke
+  exit(42) PASS · binary 1,140,752 B
+- Closed: `_isalnum` + `_isalpha` (ctype.h `__istype(...)` macro
+  unhooked via `#undef` + `#define isalnum hxlcl_isalnum`) ·
+  `_time` · `_nanosleep` · `_tcgetattr` · `_tcsetattr` ·
+  `_task_info` (stubs) · `_mach_task_self_` (auto dead-strip after
+  task_info unhooked)
+- Remaining 26 externs are mostly kernel syscalls (read/write/open/
+  close/fstat/stat/fork/wait/pipe/poll/select/dup2/fcntl/ioctl/
+  kill/mmap/lseek/getpid) + 3 misc (malloc/memcpy/longjmp residuals)
+  + 4 darwin/clang internals (__chkstk_darwin/__darwin_check_fd_set_
+  overflow/__exit/_exit/_clock_gettime). Syscalls require `@asm`
+  blocks (svc 0x80 on darwin) to fully eliminate — that's the next
+  Tier-A.6 cycle (RUNTIME.md acceptance `≤ 5 syscall stubs`)

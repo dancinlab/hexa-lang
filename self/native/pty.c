@@ -99,7 +99,7 @@ HexaVal hexa_pty_set_winsize(HexaVal fd_v, HexaVal r_v, HexaVal c_v, HexaVal xp_
 HexaVal hexa_tcgetattr(HexaVal fd_v) {
     if (!HX_IS_INT(fd_v)) return _hexa_pty_err(EINVAL, "tcgetattr");
     struct termios t;
-    if (tcgetattr((int)HX_INT(fd_v), &t) < 0) return _hexa_pty_err(errno, "tcgetattr");
+    if (hxlcl_tcgetattr((int)HX_INT(fd_v), &t) < 0) return _hexa_pty_err(errno, "tcgetattr");
     HexaVal m = hexa_map_new();
     hexa_map_set(m, "iflag", hexa_int((int64_t)t.c_iflag));
     hexa_map_set(m, "oflag", hexa_int((int64_t)t.c_oflag));
@@ -120,7 +120,7 @@ HexaVal hexa_tcsetattr(HexaVal fd_v, HexaVal when_v, HexaVal attrs_v) {
     int when = (int)HX_INT(when_v);
     /* Read current settings as the base -- caller's map may not carry every field. */
     struct termios t;
-    if (tcgetattr(fd, &t) < 0) return hexa_int((int64_t)-errno);
+    if (hxlcl_tcgetattr(fd, &t) < 0) return hexa_int((int64_t)-errno);
     if (HX_IS_MAP(attrs_v)) {
         HexaVal v;
         v = hexa_map_get(attrs_v, "iflag"); if (HX_IS_INT(v)) t.c_iflag = (tcflag_t)HX_INT(v);
@@ -137,7 +137,7 @@ HexaVal hexa_tcsetattr(HexaVal fd_v, HexaVal when_v, HexaVal attrs_v) {
             }
         }
     }
-    if (tcsetattr(fd, when, &t) < 0) return hexa_int((int64_t)-errno);
+    if (hxlcl_tcsetattr(fd, when, &t) < 0) return hexa_int((int64_t)-errno);
     return hexa_int(0);
 }
 

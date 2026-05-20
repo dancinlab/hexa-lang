@@ -67,7 +67,7 @@ static int       g_pipe_atexit_installed = 0;
 
 static long _hxp_now_ms(void) {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    hxlcl_clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long)ts.tv_sec * 1000L + (long)(ts.tv_nsec / 1000000L);
 }
 
@@ -75,7 +75,7 @@ static void _hxp_sleep_ms(int ms) {
     struct timespec ts;
     ts.tv_sec  = ms / 1000;
     ts.tv_nsec = (long)(ms % 1000) * 1000000L;
-    nanosleep(&ts, NULL);
+    hxlcl_nanosleep(&ts, NULL);
 }
 
 static void _hxp_atexit_cleanup(void) {

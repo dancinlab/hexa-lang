@@ -8319,3 +8319,16 @@ stat/fork/...) + darwin internals (__chkstk_darwin, mach_task_self) +
 ctype residuals (isalnum/isalpha — transpile-output call sites).
 
 @cite cycle 60 entry.
+
+### 2026-05-21 — RUNTIME.md cycle 62 — ctype + time/term/mach (137→26, 81%)
+
+cycle 62 closure: isalnum/isalpha (ctype.h #undef + #define
+hxlcl_isalnum trick) + time/nanosleep/tcgetattr/tcsetattr/task_info
+stubs + mach_task_self_ auto-drop. Cumulative aprime_cc 137→26
+externs = 81% libc-unhook complete.
+
+Remaining 26 are mostly kernel syscalls (need `@asm` svc blocks for
+full elimination) + 3 stubborn libcall residuals (malloc/memcpy/
+longjmp) + 4 darwin internals.
+
+@cite cycle 61 entry.

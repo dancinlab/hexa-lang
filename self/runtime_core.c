@@ -302,7 +302,7 @@ static size_t _hx_self_rss_bytes(void) {
 #if defined(__APPLE__)
     mach_task_basic_info_data_t info;
     mach_msg_type_number_t cnt = MACH_TASK_BASIC_INFO_COUNT;
-    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
+    if (hxlcl_task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
                   (task_info_t)&info, &cnt) != KERN_SUCCESS) return 0;
     return (size_t)info.resident_size;
 #elif defined(__linux__)
@@ -413,7 +413,7 @@ void _hx_emit_fuel_abort(const char* kind,
 
     // ISO-8601 UTC timestamp (no exec; format inline).
     char ts[32];
-    time_t now = time(NULL);
+    time_t now = hxlcl_time(NULL);
     struct tm tmv;
 #if defined(_WIN32)
     gmtime_s(&tmv, &now);

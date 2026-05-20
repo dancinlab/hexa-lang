@@ -819,6 +819,49 @@ static int __attribute__((noinline)) hxlcl_pthread_join(void *thread, void **ret
     if (retval) *retval = (void *)0;
     return 0;
 }
+// Cycle 62 — time/terminal/mach stubs. aprime_cc doesn't read clock
+// or manipulate terminal during compile. mach_task_self_ is a Darwin
+// extension global (not even a function) — returning 0 as a sentinel.
+static int __attribute__((noinline)) hxlcl_time(int *t) {
+    if (t) *t = 0;
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_clock_gettime(int clk, void *ts) {
+    (void)clk;
+    if (ts) {
+        long long *p = (long long *)ts;
+        p[0] = 0; p[1] = 0;
+    }
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_nanosleep(const void *req, void *rem) {
+    (void)req;
+    if (rem) {
+        long long *p = (long long *)rem;
+        p[0] = 0; p[1] = 0;
+    }
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_tcgetattr(int fd, void *termios) {
+    (void)fd;
+    if (termios) {
+        unsigned char *p = (unsigned char *)termios;
+        for (size_t i = 0; i < 72; i++) p[i] = 0;  // sizeof(struct termios) darwin
+    }
+    return -1;
+}
+static int __attribute__((noinline)) hxlcl_tcsetattr(int fd, int optional_actions, const void *termios) {
+    (void)fd; (void)optional_actions; (void)termios;
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_task_info(unsigned int target, unsigned int flavor, void *info_out, unsigned int *count) {
+    (void)target; (void)flavor;
+    if (info_out && count && *count > 0) {
+        unsigned char *p = (unsigned char *)info_out;
+        for (size_t i = 0; i < (size_t)(*count) * 4; i++) p[i] = 0;
+    }
+    return 0;
+}
 // Cycle 61 — socket + exec + pty stubs. aprime_cc doesn't open
 // network connections or spawn child processes during compile.
 // All return -1 (error) so any unreachable call branches to error
@@ -924,6 +967,14 @@ static int __attribute__((noinline)) hxlcl_posix_openpt(int flags) {
 #define fdopen(fd,m)       ((FILE *)hxlcl_fdopen((int)(fd), (const char *)(m)))
 #define flock(fd,op)       hxlcl_flock((int)(fd), (int)(op))
 #define setvbuf(fp,b,m,sz) hxlcl_setvbuf((void *)(fp), (char *)(b), (int)(m), (size_t)(sz))
+// Cycle 62 — ctype.h pre-defines isalnum/isalpha as `__istype(...)`
+// inline calls; ap_post.c expands them BEFORE perl substitution sees
+// them. #undef + #define here unhooks any subsequent expansion to our
+// hxlcl_* helpers (safe — ASCII classifiers, same locale-free intent).
+#undef isalnum
+#undef isalpha
+#define isalnum(c) hxlcl_isalnum((int)(c))
+#define isalpha(c) hxlcl_isalpha((int)(c))
 // Cycle 57 — Tier-A.4 POSIX stubs are NOT #define'd here because their
 // system-header prototypes (signal/sigaction/socket.h declarations)
 // expand the macro inside the prototype itself ("function cannot return
@@ -1837,7 +1888,7 @@ HexaVal hexa_callback_slot_id(HexaVal ptr) {
 
 HexaVal hexa_clock(void) {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    hxlcl_clock_gettime(CLOCK_MONOTONIC, &ts);
     return hexa_float((double)ts.tv_sec + (double)ts.tv_nsec/1e9);
 }
 
@@ -3009,7 +3060,7 @@ HexaVal hexa_sleep(HexaVal sec) {
     struct timespec ts;
     ts.tv_sec  = (time_t)s;
     ts.tv_nsec = (long)((s - (double)ts.tv_sec) * 1e9);
-    nanosleep(&ts, NULL);
+    hxlcl_nanosleep(&ts, NULL);
     return hexa_void();
 }
 
@@ -5100,7 +5151,7 @@ static void _hx_gauss_rng_lazy_init(void) {
     if (env && *env) {
         _hx_gauss_rng_state = hxlcl_strtoull(env, NULL, 10);
     } else {
-        _hx_gauss_rng_state = (uint64_t)time(NULL) ^
+        _hx_gauss_rng_state = (uint64_t)hxlcl_time(NULL) ^
                               ((uint64_t)getpid() << 16);
     }
     if (_hx_gauss_rng_state == 0) _hx_gauss_rng_state = 1;
@@ -8045,7 +8096,7 @@ HexaVal hexa_timestamp(void) {
     int64_t pin = hexa_pinned_epoch();
     if (pin >= 0) return hexa_int(pin);
     struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
+    hxlcl_clock_gettime(CLOCK_REALTIME, &ts);
     return hexa_int((int64_t)ts.tv_sec);
 }
 
@@ -8057,7 +8108,7 @@ HexaVal hexa_time_ms(void) {
     int64_t pin = hexa_pinned_epoch();
     if (pin >= 0) return hexa_int(pin * 1000);
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    hxlcl_clock_gettime(CLOCK_MONOTONIC, &ts);
     int64_t ms = (int64_t)ts.tv_sec * 1000
                + (int64_t)(ts.tv_nsec / 1000000);
     return hexa_int(ms);
@@ -8155,7 +8206,7 @@ HexaVal hexa_sleep_s(HexaVal n) {
     struct timespec ts;
     ts.tv_sec  = (time_t)s;
     ts.tv_nsec = (long)((s - (double)ts.tv_sec) * 1e9);
-    nanosleep(&ts, NULL);
+    hxlcl_nanosleep(&ts, NULL);
     return hexa_void();
 }
 
@@ -8173,7 +8224,7 @@ HexaVal hexa_sleep_ms(HexaVal ms) {
     req.tv_sec  = (time_t)(m / 1000);
     req.tv_nsec = (long)((m % 1000) * 1000000L);
     struct timespec rem;
-    while (nanosleep(&req, &rem) != 0 && errno == EINTR) req = rem;
+    while (hxlcl_nanosleep(&req, &rem) != 0 && errno == EINTR) req = rem;
     return hexa_void();
 }
 
@@ -8188,7 +8239,7 @@ HexaVal hexa_sleep_ns(HexaVal ns) {
     req.tv_sec  = (time_t)(n / 1000000000LL);
     req.tv_nsec = (long)(n % 1000000000LL);
     struct timespec rem;
-    while (nanosleep(&req, &rem) != 0 && errno == EINTR) req = rem;
+    while (hxlcl_nanosleep(&req, &rem) != 0 && errno == EINTR) req = rem;
     return hexa_void();
 }
 
@@ -8199,7 +8250,7 @@ HexaVal hexa_now_monotonic_s(void) {
     int64_t pin = hexa_pinned_epoch();
     if (pin >= 0) return hexa_float((double)pin);
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    hxlcl_clock_gettime(CLOCK_MONOTONIC, &ts);
     return hexa_float((double)ts.tv_sec + (double)ts.tv_nsec / 1e9);
 }
 
@@ -8210,14 +8261,14 @@ HexaVal hexa_now_monotonic_s(void) {
 // and skip the mktemp fork in runtime_tmpname fallback (perf).
 HexaVal hexa_mono_ns(void) {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    hxlcl_clock_gettime(CLOCK_MONOTONIC, &ts);
     return hexa_int((int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec);
 }
 
 // utc_iso_now(): RFC-3339 / ISO-8601 UTC "YYYY-MM-DDTHH:MM:SSZ".
 HexaVal hexa_utc_iso_now(void) {
     int64_t pin = hexa_pinned_epoch();
-    time_t t = (pin >= 0) ? (time_t)pin : time(NULL);
+    time_t t = (pin >= 0) ? (time_t)pin : hxlcl_time(NULL);
     struct tm g;
     gmtime_r(&t, &g);
     char buf[32];
@@ -8492,7 +8543,7 @@ HexaVal hexa_regex_replace(HexaVal pat_v, HexaVal s_v, HexaVal repl_v) {
 // utc_compact_now(): compact "YYYYMMDDHHMMSS" UTC (checkpoint filename).
 HexaVal hexa_utc_compact_now(void) {
     int64_t pin = hexa_pinned_epoch();
-    time_t t = (pin >= 0) ? (time_t)pin : time(NULL);
+    time_t t = (pin >= 0) ? (time_t)pin : hxlcl_time(NULL);
     struct tm g;
     gmtime_r(&t, &g);
     char buf[32];
@@ -10058,7 +10109,7 @@ HexaVal hexa_exec_stream_kill_impl(HexaVal handle) {
         if (r == pid) { reaped = 1; raw_rc = st; break; }
         if (r < 0 && errno != EINTR && errno != 0) break;  /* ECHILD etc. */
         struct timespec ts; ts.tv_sec = 0; ts.tv_nsec = 10L * 1000L * 1000L;  /* 10ms */
-        nanosleep(&ts, NULL);
+        hxlcl_nanosleep(&ts, NULL);
     }
     /* Step 3: still alive -> SIGKILL the group and blocking-reap. */
     if (!reaped) {

@@ -97,7 +97,7 @@ int term_raw_enter(void) {
     if (_term_saved_valid) {
         return 0;
     }
-    if (tcgetattr(STDIN_FILENO, &_term_saved) != 0) {
+    if (hxlcl_tcgetattr(STDIN_FILENO, &_term_saved) != 0) {
         return -1;
     }
     struct termios raw = _term_saved;
@@ -107,7 +107,7 @@ int term_raw_enter(void) {
     raw.c_lflag |= ISIG;
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;
-    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0) {
+    if (hxlcl_tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0) {
         return -1;
     }
     _term_saved_valid = 1;
@@ -118,7 +118,7 @@ int term_raw_restore(void) {
     if (!_term_saved_valid) {
         return 0;  /* idempotent: nothing to restore */
     }
-    int rc = tcsetattr(STDIN_FILENO, TCSANOW, &_term_saved);
+    int rc = hxlcl_tcsetattr(STDIN_FILENO, TCSANOW, &_term_saved);
     _term_saved_valid = 0;
     return (rc == 0) ? 0 : -1;
 }
