@@ -87,19 +87,55 @@ fn _wv_emit_port_list(m: Module) -> str {
     let mut j = 0
     while j < len(sorted) {
         if j > 0 { out = out + ", " }
-        out = out + m.wires[sorted[j]].name
+        out = out + _wv_emit_name(m.wires[sorted[j]].name)
         j = j + 1
     }
     return out
 }
 
 // CLEAN-ROOM: emit one `wire` / `input` / `output` declaration.
+// CLEAN-ROOM: check if a wire name is a plain Verilog identifier
+// (letter/_ start + letter/digit/_ tail). RTLIL allows arbitrary
+// names (e.g. `name[idx]`, `$rvexpr$N$c`) that require IEEE 1364
+// §3.7.1 escaped-identifier syntax (`\name<whitespace>`) for
+// substrate yosys round-trip. Returns 1 if plain, 0 if escape needed.
+fn _wv_is_plain_ident(n: str) -> int {
+    if len(n) == 0 { return 0 }
+    let first = n.substring(0, 1)
+    let mut ok_first = 0
+    if first >= "a" && first <= "z" { ok_first = 1 }
+    if first >= "A" && first <= "Z" { ok_first = 1 }
+    if first == "_" { ok_first = 1 }
+    if ok_first == 0 { return 0 }
+    let mut i = 1
+    while i < len(n) {
+        let ch = n.substring(i, i + 1)
+        let mut ok = 0
+        if ch >= "a" && ch <= "z" { ok = 1 }
+        if ch >= "A" && ch <= "Z" { ok = 1 }
+        if ch >= "0" && ch <= "9" { ok = 1 }
+        if ch == "_" { ok = 1 }
+        if ok == 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// CLEAN-ROOM: emit a wire name. Plain identifiers verbatim; non-plain
+// names use Verilog escaped-identifier syntax (`\<name><space>`).
+fn _wv_emit_name(n: str) -> str {
+    if _wv_is_plain_ident(n) == 1 { return n }
+    return "\\" + n + " "
+}
+
 fn _wv_emit_decl(w: Wire) -> str {
     let mut kind = "wire"
     if w.dir_kind == 1 { kind = "input" }
     if w.dir_kind == 2 { kind = "output" }
     if w.dir_kind == 3 { kind = "inout" }
-    return "  " + kind + " " + w.name + ";\n"
+    let mut width_prefix = ""
+    if w.width > 1 { width_prefix = "[" + str(w.width - 1) + ":0] " }
+    return "  " + kind + " " + width_prefix + _wv_emit_name(w.name) + ";\n"
 }
 
 // CLEAN-ROOM: emit a cell instance: `<type> <name> (.A(a), .Y(y));`.
@@ -108,7 +144,7 @@ fn _wv_emit_cell(c: Cell, idx: int) -> str {
     let mut i = 0
     while i < len(c.conns) {
         if i > 0 { out = out + ", " }
-        out = out + "." + c.conns[i].pin + "(" + c.conns[i].net + ")"
+        out = out + "." + c.conns[i].pin + "(" + _wv_emit_name(c.conns[i].net) + ")"
         i = i + 1
     }
     out = out + ");\n"
@@ -117,7 +153,7 @@ fn _wv_emit_cell(c: Cell, idx: int) -> str {
 
 // CLEAN-ROOM: emit a top-level `assign` (RTLIL ::connect).
 fn _wv_emit_connect(lhs: str, rhs: str) -> str {
-    return "  assign " + lhs + " = " + rhs + ";\n"
+    return "  assign " + _wv_emit_name(lhs) + " = " + _wv_emit_name(rhs) + ";\n"
 }
 
 // ─── module → text ───────────────────────────────────────────────────────
@@ -283,6 +319,32 @@ fn main() {
     }
     if r7.text.find("module m_b(") < 0 {
         println("FAIL T7b multi_b"); fails = fails + 1
+    }
+
+    // T8 — multi-bit wire emits with `[W-1:0]` width-prefix
+    //   (rfc_006 §5 substrate handoff: yosys requires explicit
+    //    width on multi-bit declarations).
+    total = total + 1
+    let mut m8 = rtlil_new_module("mW")
+    m8 = rtlil_module_add_wire(m8, rtlil_wire("aW", 8, 0, 0))
+    let mut d8 = rtlil_new_design("test")
+    d8 = rtlil_design_add(d8, m8)
+    let r8 = write_verilog(d8)
+    if r8.text.find("[7:0] aW") < 0 {
+        println("FAIL T8 width_prefix"); fails = fails + 1
+    }
+
+    // T9 — escaped-identifier emit for names with non-ident chars
+    //   (RTLIL allows `name[idx]` / `$internal$N` — yosys requires
+    //    `\name[idx] ` IEEE 1364-2005 §3.7.1 escaped form on read).
+    total = total + 1
+    let mut m9 = rtlil_new_module("mE")
+    m9 = rtlil_module_add_wire(m9, rtlil_wire("name[3]", 1, 0, 0))
+    let mut d9 = rtlil_new_design("test")
+    d9 = rtlil_design_add(d9, m9)
+    let r9 = write_verilog(d9)
+    if r9.text.find("\\name[3] ;") < 0 {
+        println("FAIL T9 escaped_ident"); fails = fails + 1
     }
 
     if fails > 0 {
