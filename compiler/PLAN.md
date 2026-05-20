@@ -4931,3 +4931,118 @@ Yosys passes/proc/proc_mux.cc behavioural reference (no source copy).
 
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md
 (Phase 2 LANDED 2026-05-20; phases 1.5 / 3 still "not yet landed").
+
+## 진행 로그 — RFC 073 Phase 3a: nested-if inside outer guarded body (2026-05-20)
+
+Phase 2 (PR #198 squash `4097537f`) landed the for-body `if`-guarded
+scalar-assign primitive — `for (...) if (cond) lhs = rhs ;` → one
+`connect_cond` row per iteration carrying the iteration-substituted
+COND wire as the guard. The validator `_f2_all_ok` accepted **only**
+simple `LHS [<=|=] RHS ;` statements; any nested `if` (the body's
+first token = `if`, second token = `(`) failed the `_op != "<=" && _op
+!= "="` check and the WHOLE outer if dropped (g3 fail-loud-or-skip).
+
+Phase 3a closes that nested-`if` gap. The for-body if-handler's flat
+validate-then-emit loop is replaced with a recursive helper
+`_rv_emit_for_if_stmts(body_toks, cond_wire, m, tab, is_clocked,
+clk_wire) -> RvEmitRes` that walks statements one at a time and
+dispatches:
+
+  - `if (innercond) thenbody [else elsebody]` — elaborate innercond
+    to `inner_wire`; emit `$and(cond_wire, inner_wire)` →
+    `then_guard`; recurse on thenbody. If `else` present, emit
+    `$logic_not(inner_wire)` + `$and(cond_wire, not_wire)` →
+    `else_guard`; recurse on elsebody.
+  - `LHS [<=|=] RHS ;` — elaborate RHS; emit `connect_cond`
+    (combinational) or `$mux + $dff` (clocked) carrying `cond_wire`.
+  - any other shape (for/case/function-call/indexed-LHS) — return
+    ok=0, helper caller drops the outer if (matches Phase 2 honest
+    gap behaviour).
+
+@cite IEEE 1364-2005 §9.4 (nested conditional statement) + Yosys
+passes/proc/proc_mux.cc (clean-room).
+
+Companion fix: the for-body span computation for `f_has_begin==0`
+single-statement bodies now tracks BOTH `(`/`[`-paren depth AND
+`begin`/`end` depth, AND ends the span at the structural terminator
+(`;` at depth 0 OR `end` closing a compound `begin`/`end` not
+followed by `else`). Without this, T60's `for (...) if (c1) begin
+... end` shape leaks the post-`end` tokens back into the always-body
+parser as malformed statements (the `end` is not a `;`). Phase 2's
+existing depth=parens-only walker assumed for-bodies are simple
+single statements, which Phase 3a's new test fixtures violate by
+design.
+
+**Falsifier verdict:**
+
+| Falsifier                              | Verdict   |
+|----------------------------------------|-----------|
+| `F-RFC-RV-NESTED-IF` (T59 2-lvl)       | **PASS**  |
+| `F-RFC-RV-NESTED-IF` (T60 2-lvl else)  | **PASS**  |
+| `F-RFC-RV-NESTED-IF` (T61 3-lvl)       | **PASS**  |
+| `F-RFC-RV-NO-REGRESSION`               | **PASS**  |
+
+Measured (worktree `rfc-073-phase-3a-nested-if`, off origin/main
+`43e1dcc0`):
+
+  - `hexa-build stdlib/kernels/logic_synth/read_verilog.hexa` →
+    **63/63 PASS** (60→63 — added T59 + T60 + T61)
+  - `hexa-build stdlib/kernels/logic_synth/passes.hexa`        →
+    **35/35 PASS** (no regression)
+  - sibling modules: rtlil 11/11 · abc_map 7/7 · write_verilog 7/7 ·
+    liberty 8/8 — all PASS (no regression)
+
+**§5 oracle re-run (router_d4 / router_d6 area):**
+
+```
+[gate] router_d4 area=0.0 µm² oracle=61763 µm² Δ=100.0% FAIL (±5%)
+[gate] router_d6 area=0.0 µm² oracle=93608.5 µm² Δ=100.0% FAIL (±5%)
+```
+
+Phase 3a alone does NOT close §5. The clean_multidriver trace shows
+Phase 3a IS emitting extra connect_cond rows on `idx` / `grant_out`
+/ `any_grant` / `grant_in` (one per for-iteration of the outer if-
+body) — but two downstream blockers remain:
+
+1. **Phase 3b — function-call inlining** (the IMMEDIATE next
+   blocker): router_d4 line 87 `grant_out = route_xy(fifo_peek[idx])`
+   uses the user-defined function `route_xy`. `_rv_emit_for_if_stmts`
+   tries to elaborate `route_xy(fifo_peek[idx])` as an RHS expression
+   via `_rv_elab_expr`, which has no path for Verilog function calls
+   in the for-body context. The helper returns ok=0, and the WHOLE
+   outer if drops (matches Phase 2 honest gap). So the inner-if body
+   (lines 86-92) never emits, and the router's body shape collapses
+   back to last-write-wins multi-driver.
+2. **Phase 3c — non-foldable array-index READ lowering**: router_d4
+   line 88 `if (out_ready[grant_out])` — array `out_ready` indexed
+   by `grant_out` (runtime-K). The existing dynamic-index READ path
+   handles only foldable indices; non-foldable READ needs the
+   N-way `$eq + $mux` mirror of the WRITE path at line 2592-2642.
+3. (Independent downstream wiring) — gate_record.hexa's pipeline does
+   NOT call `pass_proc_mux` between `opt` and `clean_multidriver`,
+   so even hypothetically-surviving connect_cond rows get collapsed
+   last-wins before reaching ABC mapping. This is the Phase 1 SCAFFOLD
+   comment in gate_record.hexa L80-86, intentionally deferred. Phase
+   3b/3c won't close §5 alone without this wiring change.
+
+**Next blocker named (g3-honest):** Phase 3b function-call inlining.
+Even with Phase 3a's nested-if absorption working, router_d{4,6}'s
+outer-if body's first RHS is a function call (`route_xy(...)`) that
+trips `_rv_elab_expr` before any inner-if guard composition runs.
+Phase 3c is the second-order blocker but blocked behind 3b.
+
+**LoC delta:**
+
+```
+ stdlib/kernels/logic_synth/read_verilog.hexa | +445 -105
+ inbox/rfc_drafts_2026_05_20/rfc_073_…md      | + 51 -16  (Phase 3a status flip)
+ compiler/PLAN.md                             | +114 (this entry)
+```
+
+Clean-room provenance preserved: IEEE 1364-2005 §9.4 (cascaded if/else,
+nested conditional) + Yosys passes/proc/proc_mux.cc behavioural
+reference (no source copy).
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md
+(Phase 2 LANDED 2026-05-20 · Phase 3a LANDED 2026-05-20 · Phases 1.5 /
+3b / 3c still "not yet landed").

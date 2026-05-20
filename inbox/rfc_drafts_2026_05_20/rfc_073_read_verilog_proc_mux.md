@@ -290,18 +290,39 @@ stdout is preserved (no new test rows added by the opener).
   scope: nested `if` inside the outer guarded body, function-call
   inlining (`route_xy`), and non-foldable-array-index READ lowering.
   Each is a separate Phase 3 (or beyond) work item.
-- **PHASE 3**: not yet landed.
-- **§5 absorption-gate**: **STILL OPEN** — Phase 2 did NOT close §5.
-  Post-Phase-2 oracle re-run shows router_d4 area=0.0 µm² (Δ=100%)
-  and router_d6 area=0.0 µm² (Δ=100%) — same numbers as Phase 1 since
-  the router's actual body shape (nested if + function call + non-foldable
-  array-index read) does NOT trigger Phase 2's surgical simple-LHS
-  shape; Phase 2 falls back to skip-no-emit on the router's outer if.
-  Phase 2 ships the iteration-substituted `connect_cond` emission
-  primitive (T57+T58 PASS in isolation), not the §5 closure. Next
-  Phase 3 targets (named in g3-honest report in compiler/PLAN.md):
-  (1) nested-`if`-inside-if-body absorption + guard composition,
-  (2) function-call inlining inside guarded body (or honest gap with
-  a substrate flag), (3) non-foldable-array-index READ lowering to
-  N-way mux (mirrors the dynamic-index WRITE path at line 2592-2642
-  but for read-position).
+- **PHASE 3a — LANDED 2026-05-20**: nested-`if`-inside-outer-guarded-
+  body absorption + guard composition. The for-body if-handler's flat
+  `_f2_all_ok` validator (Phase 2) is replaced by a recursive helper
+  `_rv_emit_for_if_stmts(body_toks, cond_wire, …)` that walks each
+  statement and dispatches: nested `if (innercond) thenbody [else
+  elsebody]` → elaborate `innercond` to `inner_wire`, emit
+  `$and(cond_wire, inner_wire)` → `then_guard`, recurse on thenbody.
+  If `else` present, emit `$logic_not(inner_wire)` +
+  `$and(cond_wire, not_wire)` → `else_guard`, recurse on elsebody.
+  Companion fix: for-body span tracking now follows `begin`/`end`
+  depth + structural terminator (`;` at depth 0 OR closing `end` not
+  followed by `else`) so compound bodies like `if (c1) begin … end`
+  round-trip through the iteration unroller. Falsifiers
+  `F-RFC-RV-NESTED-IF` (T59 2-lvl, T60 2-lvl-with-else, T61 3-lvl) +
+  `F-RFC-RV-NO-REGRESSION` all PASS. Self-tests: read_verilog
+  60/60→63/63, passes 35/35 unchanged, rtlil/abc_map/write_verilog/
+  liberty all unchanged. **§5 area-oracle did NOT close** — router_d4
+  / router_d6 area still 0.0 µm² because the router's outer-if body
+  uses `route_xy(fifo_peek[idx])` (function-call RHS), which trips
+  `_rv_elab_expr` before any inner-if guard composition runs. Helper
+  returns ok=0 and the outer if drops (matches Phase 2 honest gap).
+- **PHASE 3b / 3c**: not yet landed. **§5 next blocker (g3-honest) =
+  Phase 3b function-call inlining** (`route_xy`). Phase 3c (non-
+  foldable array-index READ) is the second-order blocker behind 3b.
+  Additionally, gate_record.hexa's pipeline does NOT wire
+  `pass_proc_mux` between `opt` and `clean_multidriver` (Phase 1
+  SCAFFOLD comment, deferred); even with 3b/3c the §5 closure also
+  needs that wiring.
+- **§5 absorption-gate**: **STILL OPEN** — Phase 3a did NOT close §5.
+  Post-Phase-3a oracle re-run shows router_d4 area=0.0 µm² (Δ=100%)
+  and router_d6 area=0.0 µm² (Δ=100%) — same numbers as Phase 2 (no
+  movement; Phase 3a is a strict superset of Phase 2 in primitive
+  scope, but the router's first construct outside scope is now
+  `route_xy(...)` not `if (c2) …`). Phase 3a ships the nested-if
+  guard-composition primitive (T59+T60+T61 PASS in isolation), not
+  the §5 closure.
