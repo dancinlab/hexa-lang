@@ -1541,64 +1541,203 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
             st = _ps_take(st)
             break
         }
-        // `if (...) [begin] body [end] [else [begin] body [end]]`
-        // inside always — honest gap (cond-mux + signal tracking is the
-        // yosys `proc` pass core, separate commit). Skip the statement.
+        // `if (...) [begin] body [end] [else [begin] body [end]]` inside
+        // always — proc-pass core sub-step #1: cond-mux emission for the
+        // narrow shape `if (COND) LHS <= TRHS ; else LHS <= ERHS ;` with
+        // the same simple-name LHS in a posedge-clocked always. Tokens of
+        // cond / then-body / else-body are collected first; on a shape
+        // match the cond-mux is emitted as `$mux(A=else_rhs, B=then_rhs,
+        // S=cond, Y=mux_y)` wired to `$dff(CLK, D=mux_y, Q=lhs)`. Any
+        // other shape (multi-statement body, mixed-LHS, blocking, no-else,
+        // combinational always, nested if, indexed LHS) falls back to
+        // skip-with-no-emit — same effective behaviour as the prior
+        // if-skip commit, so router_d4 still parses end-to-end while
+        // scope grows incrementally.
         if _ps_peek(st) == "if" {
             st = _ps_take(st)
+            let mut cond_toks: [str] = []
             if _ps_peek(st) == "(" {
                 st = _ps_take(st)
                 let mut pdepth = 1
                 while st.pos < len(st.toks) {
                     let pt = _ps_peek(st)
-                    if pt == "(" { pdepth = pdepth + 1; st = _ps_take(st); continue }
+                    if pt == "(" {
+                        pdepth = pdepth + 1
+                        cond_toks = cond_toks.push(pt)
+                        st = _ps_take(st)
+                        continue
+                    }
                     if pt == ")" {
                         pdepth = pdepth - 1
                         if pdepth == 0 { st = _ps_take(st); break }
-                        st = _ps_take(st); continue
+                        cond_toks = cond_toks.push(pt)
+                        st = _ps_take(st)
+                        continue
                     }
+                    cond_toks = cond_toks.push(pt)
                     st = _ps_take(st)
                 }
             }
+            let mut then_toks: [str] = []
             if _ps_peek(st) == "begin" {
                 st = _ps_take(st)
                 let mut sdepth = 1
                 while st.pos < len(st.toks) {
                     let st_ = _ps_peek(st)
-                    if st_ == "begin" { sdepth = sdepth + 1 }
+                    if st_ == "begin" {
+                        sdepth = sdepth + 1
+                        then_toks = then_toks.push(st_)
+                        st = _ps_take(st)
+                        continue
+                    }
                     if st_ == "end" {
                         sdepth = sdepth - 1
                         if sdepth == 0 { st = _ps_take(st); break }
+                        then_toks = then_toks.push(st_)
+                        st = _ps_take(st)
+                        continue
                     }
+                    then_toks = then_toks.push(st_)
                     st = _ps_take(st)
                 }
             } else {
                 while st.pos < len(st.toks) {
-                    if _ps_peek(st) == ";" { st = _ps_take(st); break }
+                    let pt = _ps_peek(st)
+                    if pt == ";" {
+                        then_toks = then_toks.push(pt)
+                        st = _ps_take(st)
+                        break
+                    }
+                    then_toks = then_toks.push(pt)
                     st = _ps_take(st)
                 }
             }
+            let mut has_else = 0
+            let mut else_toks: [str] = []
             if _ps_peek(st) == "else" {
+                has_else = 1
                 st = _ps_take(st)
                 if _ps_peek(st) == "begin" {
                     st = _ps_take(st)
                     let mut sd2 = 1
                     while st.pos < len(st.toks) {
                         let et = _ps_peek(st)
-                        if et == "begin" { sd2 = sd2 + 1 }
+                        if et == "begin" {
+                            sd2 = sd2 + 1
+                            else_toks = else_toks.push(et)
+                            st = _ps_take(st)
+                            continue
+                        }
                         if et == "end" {
                             sd2 = sd2 - 1
                             if sd2 == 0 { st = _ps_take(st); break }
+                            else_toks = else_toks.push(et)
+                            st = _ps_take(st)
+                            continue
                         }
+                        else_toks = else_toks.push(et)
                         st = _ps_take(st)
                     }
                 } else {
                     while st.pos < len(st.toks) {
-                        if _ps_peek(st) == ";" { st = _ps_take(st); break }
+                        let et = _ps_peek(st)
+                        if et == ";" {
+                            else_toks = else_toks.push(et)
+                            st = _ps_take(st)
+                            break
+                        }
+                        else_toks = else_toks.push(et)
                         st = _ps_take(st)
                     }
                 }
             }
+            // ── cond-mux shape detection: both bodies = single
+            //    `LHS <= RHS ;` with same simple-name LHS ──
+            let mut t_ok = 0
+            let mut t_lhs = ""
+            let mut t_rhs: [str] = []
+            if len(then_toks) >= 4 {
+                if then_toks[1] == "<=" {
+                    let mut last_semi = 0 - 1
+                    let mut semi_count = 0
+                    let mut ti = 0
+                    while ti < len(then_toks) {
+                        if then_toks[ti] == ";" {
+                            last_semi = ti
+                            semi_count = semi_count + 1
+                        }
+                        ti = ti + 1
+                    }
+                    if semi_count == 1 && last_semi == len(then_toks) - 1 {
+                        t_ok = 1
+                        t_lhs = then_toks[0]
+                        let mut ti2 = 2
+                        while ti2 < len(then_toks) - 1 {
+                            t_rhs = t_rhs.push(then_toks[ti2])
+                            ti2 = ti2 + 1
+                        }
+                    }
+                }
+            }
+            let mut e_ok = 0
+            let mut e_lhs = ""
+            let mut e_rhs: [str] = []
+            if has_else == 1 {
+                if len(else_toks) >= 4 {
+                    if else_toks[1] == "<=" {
+                        let mut last_s2 = 0 - 1
+                        let mut sc2 = 0
+                        let mut ei = 0
+                        while ei < len(else_toks) {
+                            if else_toks[ei] == ";" {
+                                last_s2 = ei
+                                sc2 = sc2 + 1
+                            }
+                            ei = ei + 1
+                        }
+                        if sc2 == 1 && last_s2 == len(else_toks) - 1 {
+                            e_ok = 1
+                            e_lhs = else_toks[0]
+                            let mut ei2 = 2
+                            while ei2 < len(else_toks) - 1 {
+                                e_rhs = e_rhs.push(else_toks[ei2])
+                                ei2 = ei2 + 1
+                            }
+                        }
+                    }
+                }
+            }
+            if t_ok == 1 && e_ok == 1 && t_lhs == e_lhs && is_clocked == 1 {
+                let cer = _rv_elab_expr(cond_toks, 0, m, 1, tab)
+                if len(cer.err) == 0 {
+                    m = cer.m
+                    let ter = _rv_elab_expr(t_rhs, 0, m, 1, tab)
+                    if len(ter.err) == 0 {
+                        m = ter.m
+                        let eer = _rv_elab_expr(e_rhs, 0, m, 1, tab)
+                        if len(eer.err) == 0 {
+                            m = eer.m
+                            let mux_y = _rv_fresh_wire(m)
+                            m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+                            let mux_n = "$rvmux$" + str(len(m.cells))
+                            let mut mc = rtlil_cell(mux_n, "$mux", 0)
+                            mc = rtlil_cell_connect(mc, "A", eer.wire)
+                            mc = rtlil_cell_connect(mc, "B", ter.wire)
+                            mc = rtlil_cell_connect(mc, "S", cer.wire)
+                            mc = rtlil_cell_connect(mc, "Y", mux_y)
+                            m = rtlil_module_add_cell(m, mc)
+                            let dn = "$rvff$" + str(len(m.cells))
+                            let mut dc = rtlil_cell(dn, "$dff", 0)
+                            dc = rtlil_cell_connect(dc, "CLK", clk_wire)
+                            dc = rtlil_cell_connect(dc, "D", mux_y)
+                            dc = rtlil_cell_connect(dc, "Q", t_lhs)
+                            m = rtlil_module_add_cell(m, dc)
+                            let _eg = clk_edge
+                        }
+                    }
+                }
+            }
+            if has_begin == 0 { keep_going = 0 }
             continue
         }
         // `for ( GV = INIT ; COND ; GV = STEP ) begin BODY end` inside
@@ -2347,6 +2486,25 @@ fn main() {
         let _m30 = _r30.design.modules[0]
         if rtlil_count_cells_of_type(_m30, "$dff") != 2 {
             println("FAIL T30a dff_count got " + str(rtlil_count_cells_of_type(_m30, "$dff")))
+            fails = fails + 1
+        }
+    }
+
+    // T31 — cond-mux: `if (sel) q <= a ; else q <= b ;` posedge always →
+    //       1 $mux + 1 $dff (proc-pass core sub-step #1).
+    total = total + 1
+    let _v31 = "module mx ( input clk , input sel , input a , input b , output reg q ) ; always @ ( posedge clk ) if ( sel ) q <= a ; else q <= b ; endmodule"
+    let _r31 = read_verilog(_v31)
+    if _r31.ok != 1 {
+        println("FAIL T31 cond_mux: " + _r31.message); fails = fails + 1
+    } else {
+        let _m31 = _r31.design.modules[0]
+        if rtlil_count_cells_of_type(_m31, "$mux") != 1 {
+            println("FAIL T31a mux_count got " + str(rtlil_count_cells_of_type(_m31, "$mux")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m31, "$dff") != 1 {
+            println("FAIL T31b dff_count got " + str(rtlil_count_cells_of_type(_m31, "$dff")))
             fails = fails + 1
         }
     }
