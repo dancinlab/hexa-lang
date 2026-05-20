@@ -2042,3 +2042,115 @@ running the test with ag_extract files moved aside; same 2 FAIL).
 
 Each future SD = separate PR + own falsifier registered in
 FLAME.tape before work starts (per scoping note §4).
+
+### 2026-05-20 — SD6 ag_extract — second op (sigmoid) proof of generalization (north-star ① gap-b)
+
+SD5 (PR #184, commit `1a55599c`) landed the **first** AST-extract step
+for relu — pipeline shape `AST → reverse-mode walk → emit`, with the
+walker hard-coded to the IfElse rule. SD6 (this cycle) extends to a
+**SECOND** op (sigmoid `s(x) = 1/(1+dt_exp(-x))`) by adding per-op
+reverse-mode rules for the elementary primitives the sigmoid fwd
+decomposes into: ADD, SUB, MUL, DIV, NEG, dt_exp. This validates that
+the SD5 pipeline shape **generalizes beyond pure-conditional vjps** —
+the per-op rule table is the extension point.
+
+**Files (additive only — zero edits to ag_derive/ag_tape/nn_lib;
+   SD5 surface untouched)**:
+- `stdlib/flame/ag_extract.hexa` extended (+582 LoC, 539 → 1057):
+  - 6 new node kinds (codes 7-12): `BinOp_ADD`, `BinOp_SUB`,
+    `BinOp_DIV`, `BinOp_NEG`, `Call_DTEXP`, `Var_FwdResult`. Latter
+    references a cached forward intermediate by slot-id — the
+    "save forward, reuse in backward" pattern the sigmoid vjp needs
+    (s appears twice in `ds/dx = s*(1-s)`).
+  - Arena capacity bumped 32 → 64 to fit sigmoid fwd AST (7 nodes)
+    + bwd AST (~14 nodes) + Var_FwdResult cache references.
+  - `ag_extract_build_sigmoid_fwd` — hand-built fwd AST mirror of
+    `1.0 / (1.0 + dt_exp(0.0 - x))`, returning cached intermediate
+    slot-ids via a 4-cell `cache_out` farr.
+  - `ag_extract_reverse_walk_v2` — chain-rule-threaded reverse walker
+    with explicit upstream-gradient (Wengert-tape shape per
+    Griewank–Walther §3.2). Each fwd-node kind has a per-op rule
+    transforming the upstream into each child's gradient. Recurses
+    through the fwd AST applying the chain rule top-down.
+  - `ag_extract_eval_fwd` — forward evaluator that populates a
+    fwd-value cache farr (one cell per arena slot) so the bwd
+    interpret step can read cached intermediates via Var_FwdResult.
+  - `ag_extract_interpret_v2` — interpret step extended to handle
+    the 6 new node kinds + Var_FwdResult lookups.
+  - `ag_extract_sigmoid_bwd_via_ast` — elementwise driver that for
+    each input computes the fwd cache then interprets the bwd AST
+    to produce dx.
+- `test/flame_ag_extract_test.hexa` extended (+169 LoC, 147 → 282):
+  - `sigmoid_bwd_manual(x, dy)` — hand-written reference computing
+    `let s = 1/(1+dt_exp(-x)); dy * s * (1.0 - s)` with the IDENTICAL
+    fwd op-order as the walker's fwd AST.
+  - SD6 oracle: builds sigmoid fwd, reverse-walk-v2 with upstream=dy,
+    emits source (printed for inspection), interpret elementwise,
+    compares to manual reference.
+  - First-4-elements debug print (x, dx_auto, dx_ref, |Δ|) for
+    transparent IEEE-754 audit.
+  - Exit codes: 0 (both PASS), 91 (SD5 fail), 92 (SD6 fail with
+    honest report).
+
+**Gate measured**: `F-RFC043-AUTOGRAD-AUTO-SD6-SIGMOID-BYTE-EQ`
+**FAIL (honest finding per task §7)** — `max|dx_auto − dx_ref| =
+5.55112e-17` (~1 ULP, machine-eps level). Mathematically equivalent;
+IEEE-754 trajectory differs.
+
+**Emitted source** (printed by the test for inspection):
+```
+pub fn sigmoid_bwd_auto_emitted(x: float, dy: float) -> float {
+    return (0.0 + (0.0 + (0.0 + (0.0 - ((0.0 - ((dy * _fwd7) / _fwd5)) * _fwd3)))))
+}
+```
+where `_fwd7` = s (sigmoid output, slot 7), `_fwd5` = d (1+e, slot 5),
+`_fwd3` = e (dt_exp(u), slot 3). Algebraic reduction (the +0.0
+no-op chains from the always-zero rhs of each ADD-combine):
+`dx = dy * (s/d) * e = dy * s * e/d`. Identity `e/d ≡ 1-s` holds
+mathematically (since `s = 1/d` and `d = 1+e` ⇒ `1 - s = 1 - 1/d =
+(d-1)/d = e/d`); reference uses the `1.0 - s` form, walker uses the
+`e/d` form. Same scalar value to within last-bit rounding.
+
+**g3 honest framing (the SD6 deliverable)**: SD6 proves the per-op
+rule table generalizes the pipeline shape, but proves NEGATIVELY
+that the byte-eq lemma does NOT generalize. SD5's byte-eq fell
+out because relu's vjp is a pure conditional dataflow — the walker
+and reference both went through the IDENTICAL select-from-`>`
+trajectory, no float arithmetic was reordered. Sigmoid's vjp
+requires multiplication chains; the algebraic identity
+`1.0 - s ≡ e/d` is exact in real arithmetic but produces different
+last-bit rounding under IEEE-754. The first-element evidence
+`|Δ| = 1.39e-17` (subnormal-scale) on x=-0.0205 confirms ULP-level
+divergence, not a real numerical bug. **What SD6 PROVED**: (1) the
+AST→reverse-walk→emit pipeline shape extends from 1 op (relu) to 2
+ops (sigmoid); (2) the per-op rule table — ADD/SUB/MUL/DIV/NEG/exp
+— is sufficient for a non-trivial elementwise unary's vjp; (3) the
+"save forward, reuse in backward" pattern is correctly implemented
+via Var_FwdResult + fwd_cache. **What SD6 did NOT prove**: byte-eq
+generalization (intentional honest finding per task §7).
+
+**SD5 regression check**: `F-RFC043-AUTOGRAD-AUTO-SD5-RELU-BYTE-EQ`
+PASS rc=0 unchanged (the SD5 walker and emit/interpret paths are
+untouched).
+
+**SD1+SD2+SD3 regression check**: `test/flame_ag_derive_test.hexa`
+PASS rc=0 unchanged (ag_derive surface is not edited).
+
+**Atlas citations** (g6, in `ag_extract.hexa` header — SD6 inherits
+SD5's anchors and the per-op rules are atlas-bound theorems):
+- Griewank & Walther §3.2 elementary primitives table —
+  the ADD/SUB/MUL/DIV/NEG/exp reverse-mode rules.
+- Pearlmutter & Siskind §3 — compositional vjp transformer.
+- Bishop, "Pattern Recognition and Machine Learning" §5.5 — the
+  sigmoid activation in neural networks and its derivative
+  `s*(1-s)` (the closed-form identity the walker's chain produces).
+- Chain rule of multivariate differentiation (Spivak, Calculus
+  on Manifolds, ch. 2) — the foundation of reverse-mode AD.
+
+**Future-cycle stop-conditions (g3 carve-outs, in ag_extract.hexa
+§Future work, renumbered after SD6 closed)**:
+- SD7: parser integration (was SD6 in the SD5 ledger).
+- SD8: multi-input / gradient accumulation via ag_tape registry.
+- SD9: more rules — Sum, MatMul AST-derived, Compose, elementwise
+  unary family (silu, gelu, tanh).
+- SD10: re-emit-and-recompile loop (was SD9).

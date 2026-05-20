@@ -84,6 +84,7 @@
 // ════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/tensor_lib"
+use "stdlib/flame/flame_math"  // dt_exp — primitive Taylor-based exp used by the sigmoid fwd
 
 // ─── AST node kinds (encoded as small integers, farr-backed) ───────────
 // The minimum kinds SD5 needs for the relu pattern. Kinds are encoded as
@@ -123,15 +124,45 @@ use "stdlib/flame/tensor_lib"
 //                    future SDs.
 //                    metadata farr: [kind=6, 0, 0, 0]
 //                    children: [lhs, rhs]
-// Reserved (future SDs): 7 = BinOp_ADD, 8 = BinOp_SUB, 9 = UnaryNeg,
-// 10 = MatMul, 11 = Sum, …
+// SD6 (this cycle) adds:
+//   7  = BinOp_ADD   — binary +
+//                      metadata farr: [kind=7, 0, 0, 0]
+//                      children: [lhs, rhs]
+//   8  = BinOp_SUB   — binary −
+//                      metadata farr: [kind=8, 0, 0, 0]
+//                      children: [lhs, rhs]
+//   9  = BinOp_DIV   — binary /
+//                      metadata farr: [kind=9, 0, 0, 0]
+//                      children: [lhs, rhs]
+//   10 = BinOp_NEG   — unary −  (child[0] = operand)
+//                      metadata farr: [kind=10, 0, 0, 0]
+//                      children: [operand, -1, -1, -1]
+//   11 = Call_DTEXP  — primitive call dt_exp(operand)
+//                      metadata farr: [kind=11, 0, 0, 0]
+//                      children: [operand, -1, -1, -1]
+//   12 = Var_FwdResult — references a cached forward intermediate by
+//                        slot-id. Used by the reverse-mode walker so
+//                        the bwd AST can reuse forward results
+//                        ("save forward, reuse in backward" — the
+//                        sigmoid vjp pattern: `s = 1/(1+exp(-x))`
+//                        appears in the bwd as `dx = dy * s * (1-s)`).
+//                        metadata farr: [kind=12, fwd_node_id, 0, 0]
+//                        children: none
+//
+// Reserved (future SDs): 13 = MatMul, 14 = Sum, …
 
-pub fn ag_extract_k_param()        -> int { return 1 }
-pub fn ag_extract_k_const()        -> int { return 2 }
-pub fn ag_extract_k_binop_gt()     -> int { return 3 }
-pub fn ag_extract_k_ifelse()       -> int { return 4 }
-pub fn ag_extract_k_var_upstream() -> int { return 5 }
-pub fn ag_extract_k_binop_mul()    -> int { return 6 }
+pub fn ag_extract_k_param()         -> int { return 1 }
+pub fn ag_extract_k_const()         -> int { return 2 }
+pub fn ag_extract_k_binop_gt()      -> int { return 3 }
+pub fn ag_extract_k_ifelse()        -> int { return 4 }
+pub fn ag_extract_k_var_upstream()  -> int { return 5 }
+pub fn ag_extract_k_binop_mul()     -> int { return 6 }
+pub fn ag_extract_k_binop_add()     -> int { return 7 }
+pub fn ag_extract_k_binop_sub()     -> int { return 8 }
+pub fn ag_extract_k_binop_div()     -> int { return 9 }
+pub fn ag_extract_k_binop_neg()     -> int { return 10 }
+pub fn ag_extract_k_call_dtexp()    -> int { return 11 }
+pub fn ag_extract_k_var_fwdresult() -> int { return 12 }
 
 // ─── AST arena (single-pool design) ────────────────────────────────────
 // Each AST node is identified by a small integer id (slot index in the
@@ -146,7 +177,12 @@ pub fn ag_extract_k_binop_mul()    -> int { return 6 }
 // scalars; struct-of-arrays mirrors the ag_tape idiom (kind farr, ids
 // farr, dims farr).
 
-fn _ag_extract_capacity() -> int { return 32 }
+// Capacity bumped from 32 (SD5) to 64 to fit the sigmoid fwd AST
+// (5 nodes: const_neg1, x, u=−x, e=exp(u), const_1, d=1+e, s=1/d → 7
+// nodes) PLUS the per-intermediate Var_FwdResult cache nodes (+4)
+// PLUS the bwd AST emitted by the reverse walker (~10–14 nodes).
+// 64 leaves comfortable headroom for SD7+ extensions.
+fn _ag_extract_capacity() -> int { return 64 }
 
 // Arena holds 3 farr_ids + a bump pointer in a 4-cell handle farr:
 //   [meta_id, value_id, child_id, next_slot]
@@ -227,6 +263,84 @@ pub fn ag_extract_mk_var_upstream(arena: int) -> int {
     return s
 }
 
+// SD6: binary-op MUL constructor (already had the kind code; needed
+// for the reverse walker's emit path — sigmoid bwd uses MUL heavily).
+pub fn ag_extract_mk_binop_mul(arena: int, lhs: int, rhs: int) -> int {
+    let s = _arena_alloc(arena)
+    let m = _arena_meta(arena)
+    t_set(m, s * 4 + 0, to_float(ag_extract_k_binop_mul()))
+    let c = _arena_child(arena)
+    t_set(c, s * 4 + 0, to_float(lhs))
+    t_set(c, s * 4 + 1, to_float(rhs))
+    return s
+}
+
+pub fn ag_extract_mk_binop_add(arena: int, lhs: int, rhs: int) -> int {
+    let s = _arena_alloc(arena)
+    let m = _arena_meta(arena)
+    t_set(m, s * 4 + 0, to_float(ag_extract_k_binop_add()))
+    let c = _arena_child(arena)
+    t_set(c, s * 4 + 0, to_float(lhs))
+    t_set(c, s * 4 + 1, to_float(rhs))
+    return s
+}
+
+pub fn ag_extract_mk_binop_sub(arena: int, lhs: int, rhs: int) -> int {
+    let s = _arena_alloc(arena)
+    let m = _arena_meta(arena)
+    t_set(m, s * 4 + 0, to_float(ag_extract_k_binop_sub()))
+    let c = _arena_child(arena)
+    t_set(c, s * 4 + 0, to_float(lhs))
+    t_set(c, s * 4 + 1, to_float(rhs))
+    return s
+}
+
+pub fn ag_extract_mk_binop_div(arena: int, lhs: int, rhs: int) -> int {
+    let s = _arena_alloc(arena)
+    let m = _arena_meta(arena)
+    t_set(m, s * 4 + 0, to_float(ag_extract_k_binop_div()))
+    let c = _arena_child(arena)
+    t_set(c, s * 4 + 0, to_float(lhs))
+    t_set(c, s * 4 + 1, to_float(rhs))
+    return s
+}
+
+pub fn ag_extract_mk_binop_neg(arena: int, operand: int) -> int {
+    let s = _arena_alloc(arena)
+    let m = _arena_meta(arena)
+    t_set(m, s * 4 + 0, to_float(ag_extract_k_binop_neg()))
+    let c = _arena_child(arena)
+    t_set(c, s * 4 + 0, to_float(operand))
+    return s
+}
+
+pub fn ag_extract_mk_call_dtexp(arena: int, operand: int) -> int {
+    let s = _arena_alloc(arena)
+    let m = _arena_meta(arena)
+    t_set(m, s * 4 + 0, to_float(ag_extract_k_call_dtexp()))
+    let c = _arena_child(arena)
+    t_set(c, s * 4 + 0, to_float(operand))
+    return s
+}
+
+// Var_FwdResult — refers to a cached forward intermediate by its
+// fwd-arena slot id. The reverse-mode walker constructs these so
+// the bwd AST can reuse forward results (the "save forward, reuse
+// in backward" pattern). For sigmoid: `s = 1/(1+exp(-x))` is cached;
+// the bwd reads it as `Var_FwdResult(s_node_id)`.
+pub fn ag_extract_mk_var_fwdresult(arena: int, fwd_node_id: int) -> int {
+    let s = _arena_alloc(arena)
+    let m = _arena_meta(arena)
+    t_set(m, s * 4 + 0, to_float(ag_extract_k_var_fwdresult()))
+    t_set(m, s * 4 + 1, to_float(fwd_node_id))
+    return s
+}
+
+pub fn ag_extract_fwdresult_id(arena: int, node: int) -> int {
+    let m = _arena_meta(arena)
+    return to_int(t_get(m, node * 4 + 1))
+}
+
 // Node-introspection helpers.
 pub fn ag_extract_kind(arena: int, node: int) -> int {
     let m = _arena_meta(arena)
@@ -275,6 +389,53 @@ pub fn ag_extract_build_relu_fwd(arena: int) -> int {
     let else_node = ag_extract_mk_const(arena, 0.0)
     let root      = ag_extract_mk_ifelse(arena, cond_node, x_node, else_node)
     return root
+}
+
+// ─── SD6 forward AST builder: sigmoid(x) = 1.0/(1.0+dt_exp(-x)) ────────
+// Hand-builds the sigmoid fwd AST. Same hand-build convention as SD5 —
+// stands in for what the parser would produce for
+//   `pub fn sigmoid(x: float) -> float { return 1.0 / (1.0 + dt_exp(0.0 - x)) }`
+// (we use `0.0 − x` rather than the unary `-x` so the AST shape mirrors
+// what an honest parser would emit; the BinOp_NEG kind is reserved for
+// any future unary-prefix syntax).
+//
+// To support the "save forward result, reuse in backward" pattern, the
+// builder writes the root slot-id into the caller-supplied 4-cell
+// `cache_out` farr at index 0; the per-intermediate caches go at:
+//   cache_out[0] = s_node (root, the sigmoid output)
+//   cache_out[1] = d_node (1 + e)
+//   cache_out[2] = e_node (dt_exp(u))
+//   cache_out[3] = u_node (0 − x, the negated input)
+// The reverse-mode walker reads these to construct Var_FwdResult nodes
+// for each cached intermediate. (Future SDs replace this convention
+// with a parser-emitted let-binding chain + ag_tape registry — SD7.)
+//
+// Returned: the s_node slot-id (sigmoid output).
+pub fn ag_extract_build_sigmoid_fwd(arena: int, cache_out: int) -> int {
+    // x (param index 0)
+    let x_node      = ag_extract_mk_param(arena, 0)
+    // 0.0 (literal)
+    let zero_node_a = ag_extract_mk_const(arena, 0.0)
+    // u = 0.0 − x  (the input negation)
+    let u_node      = ag_extract_mk_binop_sub(arena, zero_node_a, x_node)
+    // e = dt_exp(u)
+    let e_node      = ag_extract_mk_call_dtexp(arena, u_node)
+    // 1.0 (literal — used in two places, two separate const nodes
+    // so the AST stays structurally a tree)
+    let one_node_a  = ag_extract_mk_const(arena, 1.0)
+    // d = 1.0 + e
+    let d_node      = ag_extract_mk_binop_add(arena, one_node_a, e_node)
+    // 1.0 (literal, numerator)
+    let one_node_b  = ag_extract_mk_const(arena, 1.0)
+    // s = 1.0 / d
+    let s_node      = ag_extract_mk_binop_div(arena, one_node_b, d_node)
+    // Publish the cache slots so the reverse walker can wire
+    // Var_FwdResult nodes to each intermediate.
+    t_set(cache_out, 0, to_float(s_node))
+    t_set(cache_out, 1, to_float(d_node))
+    t_set(cache_out, 2, to_float(e_node))
+    t_set(cache_out, 3, to_float(u_node))
+    return s_node
 }
 
 // ─── reverse-mode walker ───────────────────────────────────────────────
@@ -355,6 +516,155 @@ pub fn ag_extract_reverse_walk(arena: int, fwd_node: int, target_param_ix: int) 
     return ag_extract_mk_const(arena, 0.0)
 }
 
+// ─── SD6: reverse-mode walker v2 with explicit upstream-gradient ───────
+// `ag_extract_reverse_walk_v2(arena, fwd_node, upstream_grad_node,
+//  target_param_ix)` — the chain-rule-threaded reverse walker. Unlike
+// the SD5 walker (which folds the upstream into the recursion implicitly
+// via Var_Upstream leaves), v2 takes an EXPLICIT upstream-grad AST node
+// and propagates the chain rule top-down through each fwd-node's
+// per-op rule. This is the Wengert-tape shape (Griewank–Walther §3.2
+// elementary primitives table; Pearlmutter & Siskind §3 lambda-the-
+// ultimate compositional vjp transformer).
+//
+// Per-op rules (each is an atlas-bound theorem; @cite via header):
+//   c = a + b   → da_contrib = dc           , db_contrib = dc
+//   c = a − b   → da_contrib = dc           , db_contrib = NEG(dc)
+//   c = a × b   → da_contrib = dc × b_cached, db_contrib = dc × a_cached
+//   c = a / b   → da_contrib = dc / b       ,
+//                 db_contrib = NEG(dc × c_cached / b)
+//                 (the "/b² → c/b" reuse: c = a/b ⇒ a/(b²) = c/b)
+//   c = NEG(a)  → da_contrib = NEG(dc)
+//   c = dt_exp(a) → da_contrib = dc × c_cached
+//                   (d/da exp(a) = exp(a); reuse cached forward result)
+//
+// Where "cached" means: a Var_FwdResult node pointing at the
+// corresponding fwd-AST slot. The interpret step (below) maintains
+// a fwd-value cache keyed by fwd-slot-id so each cached intermediate
+// is computed at most once.
+//
+// For sigmoid `s = 1/(1+exp(0−x))` walked from upstream = Var_Upstream
+// (= dy), v2 produces a bwd AST that — when interpreted — computes
+//   dx = NEG(dy × s_cached × e_cached / d_cached)
+// (with extra NEG cancellation; the rule chain yields a literal tree
+// the interpret step evaluates). Mathematically this equals
+//   dx = dy × s × (1 − s)
+// (algebraic identity: 1 − s = e/d, so s × e/d = s × (1−s)). Whether
+// IEEE-754 byte-eq holds against the `dy × s × (1.0 − s)` hand-written
+// reference is an empirical question — different float trajectories
+// can differ in the last bit. SD6's byte-eq oracle measures this and
+// reports the verdict honestly.
+//
+// Recursion design: each call returns ONE bwd-AST node representing
+// the gradient contribution flowing into the fwd-node's output. For
+// fwd-nodes with multiple children (binops), the rules above describe
+// how to combine the parent's `dc` with each child's local derivative
+// to form THAT child's `dc` — then the walker recurses on the child
+// with that derived `dc`. The Param/Const leaves stop the recursion:
+// Param-match returns the accumulated upstream; non-match returns 0.
+//
+// Multi-use of the same fwd-node (gradient accumulation across multiple
+// paths) is NOT supported in v2 — SD6 limits itself to fwd graphs
+// where each intermediate has exactly one use (sigmoid satisfies this).
+// True accumulation requires a Wengert registry, which is the SD7
+// scope (per scoping note §4).
+pub fn ag_extract_reverse_walk_v2(arena: int, fwd_node: int,
+                                   upstream_grad: int,
+                                   target_param_ix: int) -> int {
+    let k = ag_extract_kind(arena, fwd_node)
+
+    if k == ag_extract_k_param() {
+        let ix = ag_extract_param_ix(arena, fwd_node)
+        if ix == target_param_ix {
+            return upstream_grad
+        }
+        return ag_extract_mk_const(arena, 0.0)
+    }
+
+    if k == ag_extract_k_const() {
+        return ag_extract_mk_const(arena, 0.0)
+    }
+
+    if k == ag_extract_k_binop_add() {
+        // c = a + b ⇒ da_contrib = dc, db_contrib = dc
+        let a = ag_extract_child(arena, fwd_node, 0)
+        let b = ag_extract_child(arena, fwd_node, 1)
+        let ga = ag_extract_reverse_walk_v2(arena, a, upstream_grad, target_param_ix)
+        let gb = ag_extract_reverse_walk_v2(arena, b, upstream_grad, target_param_ix)
+        // Combine via ADD. (For sigmoid's structure only one of {ga, gb}
+        // is a non-zero contribution along the path to x; the other
+        // reduces to Const(0.0). We keep the ADD for generality.)
+        return ag_extract_mk_binop_add(arena, ga, gb)
+    }
+
+    if k == ag_extract_k_binop_sub() {
+        // c = a − b ⇒ da_contrib = dc, db_contrib = NEG(dc)
+        let a = ag_extract_child(arena, fwd_node, 0)
+        let b = ag_extract_child(arena, fwd_node, 1)
+        let ga = ag_extract_reverse_walk_v2(arena, a, upstream_grad, target_param_ix)
+        let neg_up = ag_extract_mk_binop_neg(arena, upstream_grad)
+        let gb = ag_extract_reverse_walk_v2(arena, b, neg_up, target_param_ix)
+        return ag_extract_mk_binop_add(arena, ga, gb)
+    }
+
+    if k == ag_extract_k_binop_mul() {
+        // c = a × b ⇒ da_contrib = dc × b, db_contrib = dc × a
+        // (we use the fwd-cached values via Var_FwdResult so the bwd
+        //  reuses forward intermediates rather than re-traversing the
+        //  fwd sub-AST in the interpret step)
+        let a = ag_extract_child(arena, fwd_node, 0)
+        let b = ag_extract_child(arena, fwd_node, 1)
+        let b_cached = ag_extract_mk_var_fwdresult(arena, b)
+        let a_cached = ag_extract_mk_var_fwdresult(arena, a)
+        let dc_b = ag_extract_mk_binop_mul(arena, upstream_grad, b_cached)
+        let dc_a = ag_extract_mk_binop_mul(arena, upstream_grad, a_cached)
+        let ga = ag_extract_reverse_walk_v2(arena, a, dc_b, target_param_ix)
+        let gb = ag_extract_reverse_walk_v2(arena, b, dc_a, target_param_ix)
+        return ag_extract_mk_binop_add(arena, ga, gb)
+    }
+
+    if k == ag_extract_k_binop_div() {
+        // c = a / b ⇒
+        //   da_contrib = dc / b
+        //   db_contrib = NEG(dc × c / b)
+        //   (uses cached `c` = fwd-result of this very node; the
+        //    standard "save forward, reuse in backward" pattern.)
+        let a = ag_extract_child(arena, fwd_node, 0)
+        let b = ag_extract_child(arena, fwd_node, 1)
+        let b_cached = ag_extract_mk_var_fwdresult(arena, b)
+        let c_cached = ag_extract_mk_var_fwdresult(arena, fwd_node)
+        // da_contrib = upstream / b
+        let da_local = ag_extract_mk_binop_div(arena, upstream_grad, b_cached)
+        // db_contrib = NEG(upstream × c / b)
+        let b_cached_2 = ag_extract_mk_var_fwdresult(arena, b)
+        let up_c       = ag_extract_mk_binop_mul(arena, upstream_grad, c_cached)
+        let up_c_over_b = ag_extract_mk_binop_div(arena, up_c, b_cached_2)
+        let db_local   = ag_extract_mk_binop_neg(arena, up_c_over_b)
+        let ga = ag_extract_reverse_walk_v2(arena, a, da_local, target_param_ix)
+        let gb = ag_extract_reverse_walk_v2(arena, b, db_local, target_param_ix)
+        return ag_extract_mk_binop_add(arena, ga, gb)
+    }
+
+    if k == ag_extract_k_binop_neg() {
+        // c = NEG(a) ⇒ da_contrib = NEG(dc)
+        let a = ag_extract_child(arena, fwd_node, 0)
+        let neg_up = ag_extract_mk_binop_neg(arena, upstream_grad)
+        return ag_extract_reverse_walk_v2(arena, a, neg_up, target_param_ix)
+    }
+
+    if k == ag_extract_k_call_dtexp() {
+        // c = dt_exp(a) ⇒ da_contrib = dc × c (reuse cached fwd result)
+        let a = ag_extract_child(arena, fwd_node, 0)
+        let c_cached = ag_extract_mk_var_fwdresult(arena, fwd_node)
+        let dc_c = ag_extract_mk_binop_mul(arena, upstream_grad, c_cached)
+        return ag_extract_reverse_walk_v2(arena, a, dc_c, target_param_ix)
+    }
+
+    // Unsupported kind for SD6. v2 keeps SD5's surface (IfElse, GT)
+    // out-of-scope — those are SD5-walker territory; future SDs will
+    // unify the two walkers.
+    return ag_extract_mk_const(arena, 0.0)
+}
+
 // ─── emit step: bwd AST → hexa-lang source string ──────────────────────
 // `ag_extract_emit(arena, bwd_root, fn_name)` — pretty-prints the bwd
 // AST as a hexa-lang function definition. The output is HUMAN-READABLE
@@ -401,6 +711,37 @@ pub fn ag_extract_emit_expr(arena: int, node: int) -> string {
         let l = ag_extract_child(arena, node, 0)
         let r = ag_extract_child(arena, node, 1)
         return "(" + ag_extract_emit_expr(arena, l) + " * " + ag_extract_emit_expr(arena, r) + ")"
+    }
+    // SD6 emit cases — mirror the new node kinds.
+    if k == ag_extract_k_binop_add() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return "(" + ag_extract_emit_expr(arena, l) + " + " + ag_extract_emit_expr(arena, r) + ")"
+    }
+    if k == ag_extract_k_binop_sub() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return "(" + ag_extract_emit_expr(arena, l) + " - " + ag_extract_emit_expr(arena, r) + ")"
+    }
+    if k == ag_extract_k_binop_div() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return "(" + ag_extract_emit_expr(arena, l) + " / " + ag_extract_emit_expr(arena, r) + ")"
+    }
+    if k == ag_extract_k_binop_neg() {
+        let l = ag_extract_child(arena, node, 0)
+        return "(0.0 - " + ag_extract_emit_expr(arena, l) + ")"
+    }
+    if k == ag_extract_k_call_dtexp() {
+        let l = ag_extract_child(arena, node, 0)
+        return "dt_exp(" + ag_extract_emit_expr(arena, l) + ")"
+    }
+    if k == ag_extract_k_var_fwdresult() {
+        let fid = ag_extract_fwdresult_id(arena, node)
+        // The emit step prints fwd-result references symbolically; the
+        // emitted source would compile against a precomputed fwd-cache.
+        // Convention: name the cached forward value `_fwd<id>`.
+        return "_fwd" + to_string(fid)
     }
     return "/* unsupported kind " + to_string(k) + " */"
 }
@@ -497,40 +838,217 @@ pub fn ag_extract_relu_bwd_via_ast(arena: int, bwd_root: int,
     }
 }
 
+// ─── SD6: forward evaluation with cache + interpret v2 ─────────────────
+// SD6's interpret path threads a fwd-value cache farr — one cell per
+// arena slot. When the walker emits a Var_FwdResult(fid) node, the
+// interpret step looks up the cached fwd value at index `fid` rather
+// than recomputing the sub-AST. This implements the "save forward,
+// reuse in backward" pattern that pure-functional reverse-mode AD
+// requires for ops whose vjp uses the output (Call_DTEXP, BinOp_DIV
+// in the sigmoid case).
+//
+// `ag_extract_eval_fwd(arena, node, x_val, fwd_cache)` — recursively
+// evaluates a fwd-AST node at scalar `x_val`, populating fwd_cache[slot]
+// with the result of each visited slot. After a single root-to-leaf
+// traversal, the cache contains the fwd value of every fwd-AST node
+// reachable from `node`.
+pub fn ag_extract_eval_fwd(arena: int, node: int, x_val: float, fwd_cache: int) -> float {
+    let k = ag_extract_kind(arena, node)
+
+    if k == ag_extract_k_param() {
+        let ix = ag_extract_param_ix(arena, node)
+        let v = if ix == 0 { x_val } else { 0.0 }
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    if k == ag_extract_k_const() {
+        let v = ag_extract_const_value(arena, node)
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    if k == ag_extract_k_binop_add() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        let va = ag_extract_eval_fwd(arena, a, x_val, fwd_cache)
+        let vb = ag_extract_eval_fwd(arena, b, x_val, fwd_cache)
+        let v = va + vb
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    if k == ag_extract_k_binop_sub() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        let va = ag_extract_eval_fwd(arena, a, x_val, fwd_cache)
+        let vb = ag_extract_eval_fwd(arena, b, x_val, fwd_cache)
+        let v = va - vb
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    if k == ag_extract_k_binop_mul() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        let va = ag_extract_eval_fwd(arena, a, x_val, fwd_cache)
+        let vb = ag_extract_eval_fwd(arena, b, x_val, fwd_cache)
+        let v = va * vb
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    if k == ag_extract_k_binop_div() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        let va = ag_extract_eval_fwd(arena, a, x_val, fwd_cache)
+        let vb = ag_extract_eval_fwd(arena, b, x_val, fwd_cache)
+        let v = va / vb
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    if k == ag_extract_k_binop_neg() {
+        let a = ag_extract_child(arena, node, 0)
+        let va = ag_extract_eval_fwd(arena, a, x_val, fwd_cache)
+        let v = 0.0 - va
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    if k == ag_extract_k_call_dtexp() {
+        let a = ag_extract_child(arena, node, 0)
+        let va = ag_extract_eval_fwd(arena, a, x_val, fwd_cache)
+        let v = dt_exp(va)
+        t_set(fwd_cache, node, v)
+        return v
+    }
+    // Unknown kind in fwd: leave cache untouched, return 0.0.
+    return 0.0
+}
+
+// `ag_extract_interpret_v2(arena, bwd_node, x_val, dy_val, fwd_cache)` —
+// interprets the bwd AST with access to the fwd-value cache. Handles
+// the SD6 node-kind extensions (Var_FwdResult, BinOp_ADD/SUB/DIV/NEG,
+// Call_DTEXP) in addition to the SD5 kinds.
+pub fn ag_extract_interpret_v2(arena: int, node: int,
+                                x_val: float, dy_val: float,
+                                fwd_cache: int) -> float {
+    let k = ag_extract_kind(arena, node)
+    if k == ag_extract_k_const() {
+        return ag_extract_const_value(arena, node)
+    }
+    if k == ag_extract_k_var_upstream() {
+        return dy_val
+    }
+    if k == ag_extract_k_param() {
+        let ix = ag_extract_param_ix(arena, node)
+        if ix == 0 { return x_val }
+        return 0.0
+    }
+    if k == ag_extract_k_var_fwdresult() {
+        let fid = ag_extract_fwdresult_id(arena, node)
+        return t_get(fwd_cache, fid)
+    }
+    if k == ag_extract_k_binop_add() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return ag_extract_interpret_v2(arena, l, x_val, dy_val, fwd_cache)
+             + ag_extract_interpret_v2(arena, r, x_val, dy_val, fwd_cache)
+    }
+    if k == ag_extract_k_binop_sub() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return ag_extract_interpret_v2(arena, l, x_val, dy_val, fwd_cache)
+             - ag_extract_interpret_v2(arena, r, x_val, dy_val, fwd_cache)
+    }
+    if k == ag_extract_k_binop_mul() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return ag_extract_interpret_v2(arena, l, x_val, dy_val, fwd_cache)
+             * ag_extract_interpret_v2(arena, r, x_val, dy_val, fwd_cache)
+    }
+    if k == ag_extract_k_binop_div() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return ag_extract_interpret_v2(arena, l, x_val, dy_val, fwd_cache)
+             / ag_extract_interpret_v2(arena, r, x_val, dy_val, fwd_cache)
+    }
+    if k == ag_extract_k_binop_neg() {
+        let l = ag_extract_child(arena, node, 0)
+        return 0.0 - ag_extract_interpret_v2(arena, l, x_val, dy_val, fwd_cache)
+    }
+    if k == ag_extract_k_call_dtexp() {
+        let l = ag_extract_child(arena, node, 0)
+        let av = ag_extract_interpret_v2(arena, l, x_val, dy_val, fwd_cache)
+        return dt_exp(av)
+    }
+    return 0.0
+}
+
+// ─── SD6 elementwise driver: sigmoid bwd via AST ───────────────────────
+// `ag_extract_sigmoid_bwd_via_ast(arena, fwd_root, bwd_root, x_arr,
+//  dy_arr, dx_out, len, fwd_cache)` — for each i ∈ [0, len), evaluates
+// the sigmoid fwd at x_arr[i] (populating fwd_cache), then interprets
+// the walker-emitted bwd AST against (x, dy, fwd_cache) to produce
+// dx_out[i]. This is the surface the SD6 byte-eq oracle compares
+// against the hand-written `sigmoid_bwd_manual` reference.
+//
+// The fwd_cache farr must be sized to the arena capacity (one cell per
+// possible slot). It is REUSED across the loop (overwritten each i).
+pub fn ag_extract_sigmoid_bwd_via_ast(arena: int, fwd_root: int, bwd_root: int,
+                                       x_arr: int, dy_arr: int, dx_out: int,
+                                       len: int, fwd_cache: int) {
+    let mut i = 0
+    while i < len {
+        let xi = t_get(x_arr, i)
+        let dyi = t_get(dy_arr, i)
+        // Populate fwd cache for this x value.
+        let _ = ag_extract_eval_fwd(arena, fwd_root, xi, fwd_cache)
+        // Interpret bwd AST against (xi, dyi, fwd_cache).
+        let dxi = ag_extract_interpret_v2(arena, bwd_root, xi, dyi, fwd_cache)
+        t_set(dx_out, i, dxi)
+        i = i + 1
+    }
+}
+
 // ─── Future work (g3 carve-outs) ───────────────────────────────────────
 //
-// SD5 establishes the AST→walk→emit pipeline shape for ONE op (relu).
-// To extend to true source-to-source AD over arbitrary hexa-lang
-// functions, the following structural blockers must be addressed in
-// SEPARATE cycles (each its own SD):
+// SD5 established the AST→walk→emit pipeline shape for ONE op (relu).
+// SD6 (this cycle) demonstrated GENERALIZATION to a SECOND op (sigmoid)
+// by adding per-op reverse-mode rules for the elementary primitives
+// (ADD, SUB, MUL, DIV, NEG, dt_exp) and a "save forward, reuse in
+// backward" fwd-result cache (Var_FwdResult). What SD6 PROVED: the
+// AST→reverse-walk→emit pipeline scales beyond the IfElse-specific
+// shape — the per-op rule table is the extension point.
 //
-//   SD6 — parser integration. The compiler/parse/ast.hexa Module/
+// To extend to true source-to-source AD over arbitrary hexa-lang
+// functions, the following structural blockers remain (each its own SD):
+//
+//   SD7 — parser integration. The compiler/parse/ast.hexa Module/
 //         Item/Expr types are available, but importing them into a
 //         stdlib file pulls in compiler/lex + compiler/parse + diag,
 //         which would expand stdlib/flame's transitive dep
 //         significantly. The right cycle is to expose a thin
 //         `parse_function_body(path, fn_name) -> Expr` surface that
-//         strips the parser-internal state.
+//         strips the parser-internal state. (Was numbered SD6 in the
+//         SD5 ledger — renumbered after SD6 closed the second-op
+//         generalization gap first; parser integration moves to SD7.)
 //
-//   SD7 — multi-input + multi-output. SD5's interpret step hardcodes
-//         (x_val, dy_val) scalars. The general shape is a param
-//         vector + an output gradient vector + a gradient registry.
-//         ag_tape already encodes registries — the SD7 cycle wires
-//         ag_extract into ag_tape's `_ag_reg_acc` accumulator.
+//   SD8 — multi-input + multi-output + gradient accumulation. SD6's
+//         walker v2 limits itself to fwd graphs where each
+//         intermediate has exactly one use (sigmoid satisfies this).
+//         True Wengert-tape accumulation across multi-use variables
+//         requires wiring the walker into ag_tape's `_ag_reg_acc`
+//         accumulator. SD8 also generalizes the single (x_val, dy_val)
+//         scalar pair to a param vector + an output-grad vector.
 //
-//   SD8 — more reverse-mode rules. SD5 implements the IfElse rule.
-//         Generic vjp coverage needs Sum (reduce-axis), MatMul
-//         (transpose × upstream — SD1's body, AST-derived this
-//         time), Compose (let-binding chain rule), and the
-//         elementwise unary family (silu, gelu, tanh — each adds
-//         one rule, all citation-anchored in Griewank–Walther
+//   SD9 — more reverse-mode rules. SD6 covers ADD/SUB/MUL/DIV/NEG +
+//         dt_exp; SD5 covers IfElse. Generic vjp coverage needs Sum
+//         (reduce-axis), MatMul (transpose × upstream — SD1's body,
+//         AST-derived this time), Compose (let-binding chain rule),
+//         and the elementwise unary family (silu, gelu, tanh — each
+//         adds one rule, all citation-anchored in Griewank–Walther
 //         Tables 4.1–4.3).
 //
-//   SD9 — re-emit-and-recompile loop. SD5's emit step produces a
-//         hexa source string that ALSO compiles standalone (proven
-//         by hand). A future cycle wires this back into the
-//         compiler so the emitted bwd source is actually loaded
-//         and called (closing the loop).
+//   SD10 — re-emit-and-recompile loop. The SD6 emit step produces a
+//          hexa source string referencing _fwd<id> cached values.
+//          A future cycle wires the emitted source through the
+//          compiler so it is actually loaded and called (closing
+//          the source-to-source loop).
 //
 // Each future SD has its own falsifier registered before work
 // starts (per the scoping note §4 "each SD has its own falsifier

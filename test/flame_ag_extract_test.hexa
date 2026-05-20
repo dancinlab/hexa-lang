@@ -1,37 +1,52 @@
 // @raw117_exempt
 // ════════════════════════════════════════════════════════════════════════
-// test/flame_ag_extract_test.hexa — flame autograd-auto SD5 byte-eq oracle
+// test/flame_ag_extract_test.hexa — flame autograd-auto SD5 + SD6 oracles
 //
-// Falsifier:
+// Falsifiers:
 //   F-RFC043-AUTOGRAD-AUTO-SD5-RELU-BYTE-EQ
 //     AST-driven reverse-mode derivation of relu's vjp produces a bwd
 //     whose output dx is byte-identical (max|Δ| = 0.0) to the
 //     hand-written reference `relu_bwd_manual(x, dy) = if x > 0 then
 //     dy else 0` on a fixed-seed input (len=32).
+//   F-RFC043-AUTOGRAD-AUTO-SD6-SIGMOID-BYTE-EQ
+//     AST-driven reverse-mode derivation of sigmoid's vjp via the
+//     per-op rule table (ADD/SUB/MUL/DIV/NEG/dt_exp) + fwd-result
+//     cache produces a bwd whose output dx is byte-identical
+//     (max|Δ| = 0.0) to the hand-written reference
+//     `sigmoid_bwd_manual(x, dy) = let s = 1/(1+dt_exp(-x));
+//                                    dy * s * (1 - s)`
+//     on a fixed-seed input (len=32). Per task §7, if byte-eq fails
+//     by machine-eps amount, this is reported as a HONEST finding
+//     (the walker's per-op rule chain produces a different IEEE-754
+//     trajectory than the hand-derived closed form; SD5's byte-eq
+//     lemma was specific to pure-conditional vjp shapes and does
+//     NOT generalize without arithmetic reorder).
 //
-// Scope (matches task brief §3 — Option Light + §6 fallback):
-//   - One op (relu). The simplest elementwise unary with a non-trivial
-//     subgradient (kink at x=0). Pipeline shape, not full operator
-//     coverage.
-//   - Compiler/parse/ast.hexa is NOT imported. Reason: importing it
-//     drags in compiler/lex + compiler/parse + diag (a heavyweight
-//     dep-tree for a single stdlib file). The structural blocker is
-//     documented as future-cycle SD6 in ag_extract.hexa §Future work.
-//     SD5 hand-builds the fwd AST with the same shape the parser would
-//     produce.
+// Scope (matches task brief §3 + §7):
+//   - SD5 retained verbatim — relu's vjp walker is the SD5 walker
+//     (single-rule IfElse). SD6 extends with a SECOND op (sigmoid)
+//     via a new per-op walker `ag_extract_reverse_walk_v2`.
+//   - SD6 is the "second op proof of generalization" step. NOT yet
+//     a true autograd library — that's SD7+ (parser integration,
+//     gradient accumulation across multi-use vars, more rules).
+//   - Compiler/parse/ast.hexa is NOT imported. ag_extract.hexa
+//     hand-builds the sigmoid fwd AST with the same shape an honest
+//     parser would emit. Parser integration is SD7's blocker.
 //   - The emitted bwd source is printed (for inspection / future
-//     SD9 compile-and-load) but the byte-eq oracle goes through the
-//     in-process AST interpret path — single hexa invocation, no
-//     second compile cycle.
+//     SD10 compile-and-load) but the byte-eq oracle goes through
+//     the in-process AST interpret path — single hexa invocation,
+//     no second compile cycle.
 //
 // Exit codes (rfc_003 idiom):
-//   0  PASS — F-RFC043-AUTOGRAD-AUTO-SD5-RELU-BYTE-EQ passes.
-//   91 FAIL — any AST-extract / interpret / byte-eq fail.
+//   0  PASS — both SD5 and SD6 falsifiers pass.
+//   91 FAIL — SD5 byte-eq fails.
+//   92 FAIL — SD6 byte-eq fails (with honest machine-eps report).
 //
 // CPU-only, $0. Builds on stdlib/flame/ag_extract.hexa.
 // ════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/tensor_lib"
+use "stdlib/flame/flame_math"  // dt_exp for the hand-written sigmoid reference
 use "stdlib/flame/ag_extract"
 
 fn ag_dt_abs(x: float) -> float {
@@ -144,4 +159,124 @@ if dx_delta != 0.0 {
 
 println("PASS  F-RFC043-AUTOGRAD-AUTO-SD5-RELU-BYTE-EQ  max|dx_auto − dx_ref| = 0.0 (byte-eq · AST→reverse-walk→interpret pipeline ≡ hand-written relu_bwd reference)")
 println("=== SD5 PASS ===")
+
+// ════════════════════════════════════════════════════════════════════════
+// SD6 — sigmoid byte-eq oracle (second op proof of generalization)
+// ════════════════════════════════════════════════════════════════════════
+println("")
+println("=== flame autograd-auto SD6 selftest (ag_extract · sigmoid vjp AST byte-eq) ===")
+
+// ─── hand-written reference: sigmoid_bwd_manual ────────────────────────
+// Closed-form vjp of `sigmoid(x) = 1/(1+exp(-x))`:
+//   ds/dx = s * (1 - s)
+//   ⇒ dx = dy * s * (1 - s)
+// where s is the FORWARD sigmoid output. The reference computes the
+// forward exactly as the walker's fwd AST would (same op order:
+// u = 0 − x, e = dt_exp(u), d = 1 + e, s = 1/d) so the fwd value
+// itself is byte-identical to the walker-cached forward; the byte-eq
+// question reduces to whether the bwd combinator `dy * s * (1 - s)`
+// is the same IEEE-754 trajectory as the walker's emitted combinator.
+fn sigmoid_bwd_manual(x_arr: int, dy_arr: int, dx_out: int, len: int) {
+    let mut i = 0
+    while i < len {
+        let xi  = t_get(x_arr, i)
+        let dyi = t_get(dy_arr, i)
+        // forward (matches the fwd AST builder's op order exactly)
+        let u   = 0.0 - xi
+        let e   = dt_exp(u)
+        let d   = 1.0 + e
+        let s   = 1.0 / d
+        // closed-form vjp
+        let dxi = dyi * s * (1.0 - s)
+        t_set(dx_out, i, dxi)
+        i = i + 1
+    }
+}
+
+// ─── inputs for SD6 (reuse SD5's seeded x_arr/dy_arr) ──────────────────
+// Same len=32 + same x_arr (positive + negative span) + same dy_arr as
+// SD5. This is intentional — using a different seed would mask any
+// shared-input regressions.
+
+// ─── reference: hand-written sigmoid_bwd_manual ────────────────────────
+let sd6_dx_ref = t_zeros(LEN)
+sigmoid_bwd_manual(x_arr, dy_arr, sd6_dx_ref, LEN)
+
+// ─── SD6 path: per-op AST-driven derivation ────────────────────────────
+// Step 1: build the sigmoid fwd AST in a fresh arena. Use a fresh
+// arena (rather than the SD5 arena) to keep the two demonstrations
+// independent and the cache_out slot-ids clean.
+let sd6_arena = ag_extract_arena_new()
+let sd6_cache_meta = t_zeros(4)
+let sd6_fwd_root = ag_extract_build_sigmoid_fwd(sd6_arena, sd6_cache_meta)
+println("sigmoid fwd AST built — root (s) node id = " + to_string(sd6_fwd_root))
+println("  cached intermediates: s=" + to_string(to_int(t_get(sd6_cache_meta, 0)))
+      + ", d=" + to_string(to_int(t_get(sd6_cache_meta, 1)))
+      + ", e=" + to_string(to_int(t_get(sd6_cache_meta, 2)))
+      + ", u=" + to_string(to_int(t_get(sd6_cache_meta, 3))))
+
+// Step 2: reverse-mode walk v2 with upstream = Var_Upstream (= dy).
+let sd6_upstream = ag_extract_mk_var_upstream(sd6_arena)
+let sd6_bwd_root = ag_extract_reverse_walk_v2(sd6_arena, sd6_fwd_root, sd6_upstream, 0)
+println("reverse-mode walk v2 complete — bwd AST root node id = " + to_string(sd6_bwd_root))
+
+// Step 3: emit the bwd source (for inspection — future SD10
+// compile-and-load closure).
+let sd6_bwd_src = ag_extract_emit_fn(sd6_arena, sd6_bwd_root, "sigmoid_bwd_auto_emitted")
+println("emitted bwd hexa-lang source (sigmoid):")
+println(sd6_bwd_src)
+
+// Step 4: interpret the bwd AST elementwise with fwd-cache populated.
+// Cache farr must be sized to the arena capacity (64 slots).
+let sd6_fwd_cache = t_zeros(64)
+let sd6_dx_auto = t_zeros(LEN)
+ag_extract_sigmoid_bwd_via_ast(sd6_arena, sd6_fwd_root, sd6_bwd_root,
+                                x_arr, dy_arr, sd6_dx_auto, LEN, sd6_fwd_cache)
+
+// ─── byte-eq gate: F-RFC043-AUTOGRAD-AUTO-SD6-SIGMOID-BYTE-EQ ──────────
+let sd6_dx_delta = ag_dt_maxdev(sd6_dx_auto, sd6_dx_ref, LEN)
+println("sigmoid dx max|Δ| = " + to_string(sd6_dx_delta))
+
+// Honest reporting: even when byte-eq holds at machine-eps, log the
+// first few (x, dx_auto, dx_ref, delta) tuples so the floating-point
+// trajectory is auditable.
+println("first 4 element-wise comparison (x_i, dx_auto_i, dx_ref_i, |Δ|):")
+let mut sd6_dbg_i = 0
+while sd6_dbg_i < 4 {
+    let xi  = t_get(x_arr, sd6_dbg_i)
+    let dai = t_get(sd6_dx_auto, sd6_dbg_i)
+    let dri = t_get(sd6_dx_ref, sd6_dbg_i)
+    let dlt = ag_dt_abs(dai - dri)
+    println("  i=" + to_string(sd6_dbg_i)
+          + "  x=" + to_string(xi)
+          + "  dx_auto=" + to_string(dai)
+          + "  dx_ref=" + to_string(dri)
+          + "  |Δ|=" + to_string(dlt))
+    sd6_dbg_i = sd6_dbg_i + 1
+}
+
+if sd6_dx_delta != 0.0 {
+    // Honest finding: the walker's per-op rule chain produces an
+    // IEEE-754 trajectory different from the hand-derived closed
+    // form `dy * s * (1 - s)`. SD5's byte-eq lemma was specific
+    // to pure-conditional vjp shapes (no float arithmetic was
+    // reordered — both paths went through the same `>`-then-select
+    // dataflow). For sigmoid, the walker emits a multiplicative
+    // chain involving cached _fwd values, while the reference
+    // uses the algebraic identity `e/d ≡ 1-s` — these are equal
+    // mathematically but differ in last-bit rounding.
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD6-SIGMOID-BYTE-EQ  max|dx_auto − dx_ref| = "
+          + to_string(sd6_dx_delta) + " ≠ 0.0")
+    println("HONEST FINDING (g3): walker's per-op rule chain produces a different IEEE-754 trajectory than `dy * s * (1.0 - s)`.")
+    println("  Walker chain (after NEG cancellation at the interpret step): dy × _fwds × _fwde / _fwdd")
+    println("  Reference: dy * s * (1.0 - s) with the algebraic identity 1.0 - s ≡ e/d holding mathematically but not byte-eq.")
+    println("  SD5's byte-eq lemma (pure conditional dataflow) does NOT generalize to arithmetic-reorder forms.")
+    println("  This is the EXPECTED honest deliverable per task §7. The walker IS correct (mathematically equivalent to the reference); the gate measures last-bit IEEE-754 equality, which is reorder-sensitive.")
+    exit(92)
+}
+
+println("PASS  F-RFC043-AUTOGRAD-AUTO-SD6-SIGMOID-BYTE-EQ  max|dx_auto − dx_ref| = 0.0 (byte-eq · AST→reverse-walk-v2→interpret pipeline ≡ hand-written sigmoid_bwd reference)")
+println("=== SD6 PASS ===")
+println("")
+println("=== SD5 + SD6 PASS ===")
 exit(0)
