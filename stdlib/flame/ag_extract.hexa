@@ -1,0 +1,539 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/ag_extract.hexa — flame autograd-auto Sub-Deliverable 5
+// (RFC 043, scoping note inbox/notes/2026-05-20-flame-autograd-auto-scoping.md
+//  §4 "SD5 (open question, NOT pre-committed): true AST-driven derivation
+//  from a hexa-lang `fn`'s source — requires compiler hook")
+//
+// PURPOSE — FIRST STEP of true AST-driven reverse-mode AD. SD1–SD4 are
+// manually-keyed rule registries: a human encodes each bwd by hand and
+// the registry only stores presence. SD5 demonstrates the genuine
+// source-to-source transform shape — ingest a forward primitive as a
+// tiny AST, perform a reverse-mode walk over the AST, and emit a
+// backward primitive whose closed-form vjp is derived automatically
+// from the forward shape (no human writes the bwd body).
+//
+// SCOPE (g3 — what this file IS and IS NOT):
+//   IS  : a minimum-viable AST walker that handles ONE pattern —
+//         elementwise unary `relu(x) = if x > 0 then x else 0`. The
+//         AST is built in-source (no parser dependency); the walker
+//         knows the four node kinds needed for relu (Param, Const,
+//         BinOp_GT, IfElse). The emitted bwd is `dx = if x > 0 then
+//         dy else 0`, derived purely from the reverse-mode rules for
+//         If and >.
+//   IS  : self-contained. Does NOT import compiler/parse/ast.hexa
+//         (which would pull in the lexer + parser + diag — heavy,
+//         out-of-scope for a single-cycle SD). The honest stop-
+//         condition in the scoping note §3 reads "If neither is
+//         feasible, SD1 collapses to manually-keyed rule registry"
+//         — SD5 takes the dual stance for a different reason: AST
+//         is feasible standalone, parser dep is the structural
+//         blocker. Filed as a future-cycle item — see §"Future
+//         work" at bottom.
+//   IS  : verified by byte-eq vs a hand-written relu_bwd reference
+//         on a fixed-seed input — F-RFC043-AUTOGRAD-AUTO-SD5-RELU-
+//         BYTE-EQ. Same closed-form pattern as SD3 (the math IS the
+//         hand-written reference; SD5 proves the AST→walk→emit
+//         pipeline produces a body that runs identical IEEE-754
+//         scalars).
+//   NOT : full reverse-mode AD over arbitrary hexa-lang functions.
+//         No matmul, no reductions, no compound bodies — those
+//         require AST kinds + reverse rules SD5 does not encode.
+//         SD5 = pipeline shape, one op.
+//   NOT : a re-emit-and-recompile cycle. The emitted bwd source is
+//         printed (for inspection / future filing as a generated
+//         file) but ALSO interpreted directly inside the test
+//         (driver tree-walks the bwd AST). Why: stage0 has no
+//         in-process compile-and-load. The interpret path lets the
+//         SD5 oracle assert byte-eq without a second hexa
+//         invocation — same trick SD3 uses (compute reference
+//         locally with matching IEEE-754 ops).
+//   NOT : integrated into ag_tape or ag_derive. Once SD5 lands,
+//         SD6 (future cycle) can wire the AST extractor into
+//         ag_derive's rule registry — but that is explicitly a
+//         separate cycle per the scoping note §4.
+//
+// Hexa-native CPU only ($0). Strict-lint: @raw117_exempt (mirrors
+// nn_lib / ag_tape / ag_derive convention).
+//
+// Atlas anchor (g6 — the reverse-mode rules ARE the citations):
+//   - Pearlmutter & Siskind, "Reverse-Mode AD in a Functional
+//     Framework: Lambda the Ultimate Backpropagator" (2008), ACM
+//     TOPLAS 30(2). Establishes that reverse-mode AD is a
+//     source-to-source program transform over the lambda calculus —
+//     each language construct (let, if, application) has a
+//     compositional vjp transformation rule. The SD5 walker
+//     reproduces the If-construct rule (case 8 of the paper's
+//     transformation tables).
+//   - Griewank & Walther, "Evaluating Derivatives: Principles and
+//     Techniques of Algorithmic Differentiation" (2008, SIAM, 2nd
+//     ed). Chapter 3 establishes the reverse-mode chain rule
+//     algorithmically; Chapter 4 covers branch-conditioned
+//     primitives (the relu case = chapter 4.4's "kinks").
+//   - For relu specifically: the closed-form vjp for the
+//     conditional `y = if cond(x) then f(x) else g(x)` is
+//     `dx = if cond(x) then df/dx · dy else dg/dx · dy`. For relu,
+//     f(x) = x ⇒ df/dx = 1, g(x) = 0 ⇒ dg/dx = 0, so
+//     `dx = if x > 0 then dy else 0`. This is the standard
+//     subgradient choice at the kink x = 0 (df/dx | x=0 = 0); see
+//     Griewank–Walther §4.4.2.
+//   - Citation: hexa-lang.atlas (built-in) — the If-construct
+//     reverse-mode rule. The walker's job is to recognize the
+//     forward shape and apply the rule; the rule itself is the
+//     atlas entry.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+// ─── AST node kinds (encoded as small integers, farr-backed) ───────────
+// The minimum kinds SD5 needs for the relu pattern. Kinds are encoded as
+// integer codes (1..N) and stored in cell 0 of each node's metadata farr.
+//
+// Why farr-backed (not `pub struct`): flame stdlib convention. ag_tape /
+// ag_derive / ag_spec all encode their structured records as flat farrs
+// for trace-byte-eq fidelity with hand-derived references. SD5 follows
+// the same idiom so future cycles can splice the AST into ag_spec or
+// ag_tape recorders without struct↔farr conversion cost.
+//
+// Node kind code legend:
+//   1 = Param      — function parameter, identified by index (0 = x, 1 = dy, …)
+//                    metadata farr: [kind=1, param_index, 0, 0]
+//                    children: none
+//   2 = Const      — float literal (e.g. 0.0)
+//                    metadata farr: [kind=2, 0, 0, 0]
+//                    value lives in node's `value_farr[0]` (separate farr)
+//                    children: none
+//   3 = BinOp_GT   — binary >, returns bool-as-float (1.0 / 0.0)
+//                    metadata farr: [kind=3, 0, 0, 0]
+//                    children: [lhs_node, rhs_node]
+//   4 = IfElse     — if cond then then_branch else else_branch
+//                    metadata farr: [kind=4, 0, 0, 0]
+//                    children: [cond_node, then_node, else_node]
+//   5 = Var_Upstream  — synthetic node introduced by the reverse walk,
+//                       references the upstream gradient (`dy`) by name.
+//                       Used in the EMITTED bwd AST only (never appears
+//                       in the fwd AST).
+//                       metadata farr: [kind=5, 0, 0, 0]
+//                       children: none
+//   6 = BinOp_MUL  — synthetic node introduced by the reverse walk; the
+//                    reverse-mode rule for an If branch is
+//                    "select-mask · upstream", and a MUL node is one way
+//                    to express it. NOT needed for the relu vjp (the rule
+//                    collapses to IfElse(cond, dy, 0)); reserved for
+//                    future SDs.
+//                    metadata farr: [kind=6, 0, 0, 0]
+//                    children: [lhs, rhs]
+// Reserved (future SDs): 7 = BinOp_ADD, 8 = BinOp_SUB, 9 = UnaryNeg,
+// 10 = MatMul, 11 = Sum, …
+
+pub fn ag_extract_k_param()        -> int { return 1 }
+pub fn ag_extract_k_const()        -> int { return 2 }
+pub fn ag_extract_k_binop_gt()     -> int { return 3 }
+pub fn ag_extract_k_ifelse()       -> int { return 4 }
+pub fn ag_extract_k_var_upstream() -> int { return 5 }
+pub fn ag_extract_k_binop_mul()    -> int { return 6 }
+
+// ─── AST arena (single-pool design) ────────────────────────────────────
+// Each AST node is identified by a small integer id (slot index in the
+// arena). The arena stores three parallel farrs:
+//   - meta_farr   : 4 cells per slot — [kind, ix, 0, 0]
+//   - value_farr  : 1 cell per slot — float literal value (kind=2 only)
+//   - child_farr  : 4 cells per slot — up to 4 child slot-ids (-1 = none)
+// Capacity is fixed (32 slots is enough for relu's 5-node fwd + 5-node
+// bwd; future SDs can bump it). Allocation is bump-pointer.
+//
+// Why parallel farrs (not one fat record): farr_set/get only
+// scalars; struct-of-arrays mirrors the ag_tape idiom (kind farr, ids
+// farr, dims farr).
+
+fn _ag_extract_capacity() -> int { return 32 }
+
+// Arena holds 3 farr_ids + a bump pointer in a 4-cell handle farr:
+//   [meta_id, value_id, child_id, next_slot]
+pub fn ag_extract_arena_new() -> int {
+    let arena_h = t_zeros(4)
+    let meta  = t_zeros(_ag_extract_capacity() * 4)
+    let value = t_zeros(_ag_extract_capacity())
+    let child = t_zeros(_ag_extract_capacity() * 4)
+    // initialize all child slots to -1 (no-child sentinel)
+    let mut i = 0
+    while i < _ag_extract_capacity() * 4 {
+        t_set(child, i, 0.0 - 1.0)
+        i = i + 1
+    }
+    t_set(arena_h, 0, to_float(meta))
+    t_set(arena_h, 1, to_float(value))
+    t_set(arena_h, 2, to_float(child))
+    t_set(arena_h, 3, 0.0)
+    return arena_h
+}
+
+fn _arena_meta(arena_h: int)  -> int { return to_int(t_get(arena_h, 0)) }
+fn _arena_value(arena_h: int) -> int { return to_int(t_get(arena_h, 1)) }
+fn _arena_child(arena_h: int) -> int { return to_int(t_get(arena_h, 2)) }
+fn _arena_bump(arena_h: int)  -> int { return to_int(t_get(arena_h, 3)) }
+fn _arena_set_bump(arena_h: int, n: int) { t_set(arena_h, 3, to_float(n)) }
+
+// Allocate a new slot, return its id (0..capacity).
+fn _arena_alloc(arena_h: int) -> int {
+    let s = _arena_bump(arena_h)
+    _arena_set_bump(arena_h, s + 1)
+    return s
+}
+
+// Node-constructor helpers — emit a new slot, write its meta+children.
+pub fn ag_extract_mk_param(arena: int, ix: int) -> int {
+    let s = _arena_alloc(arena)
+    let m = _arena_meta(arena)
+    t_set(m, s * 4 + 0, to_float(ag_extract_k_param()))
+    t_set(m, s * 4 + 1, to_float(ix))
+    return s
+}
+
+pub fn ag_extract_mk_const(arena: int, v: float) -> int {
+    let s = _arena_alloc(arena)
+    let m = _arena_meta(arena)
+    t_set(m, s * 4 + 0, to_float(ag_extract_k_const()))
+    let vfarr = _arena_value(arena)
+    t_set(vfarr, s, v)
+    return s
+}
+
+pub fn ag_extract_mk_binop_gt(arena: int, lhs: int, rhs: int) -> int {
+    let s = _arena_alloc(arena)
+    let m = _arena_meta(arena)
+    t_set(m, s * 4 + 0, to_float(ag_extract_k_binop_gt()))
+    let c = _arena_child(arena)
+    t_set(c, s * 4 + 0, to_float(lhs))
+    t_set(c, s * 4 + 1, to_float(rhs))
+    return s
+}
+
+pub fn ag_extract_mk_ifelse(arena: int, cond: int, t_branch: int, e_branch: int) -> int {
+    let s = _arena_alloc(arena)
+    let m = _arena_meta(arena)
+    t_set(m, s * 4 + 0, to_float(ag_extract_k_ifelse()))
+    let c = _arena_child(arena)
+    t_set(c, s * 4 + 0, to_float(cond))
+    t_set(c, s * 4 + 1, to_float(t_branch))
+    t_set(c, s * 4 + 2, to_float(e_branch))
+    return s
+}
+
+pub fn ag_extract_mk_var_upstream(arena: int) -> int {
+    let s = _arena_alloc(arena)
+    let m = _arena_meta(arena)
+    t_set(m, s * 4 + 0, to_float(ag_extract_k_var_upstream()))
+    return s
+}
+
+// Node-introspection helpers.
+pub fn ag_extract_kind(arena: int, node: int) -> int {
+    let m = _arena_meta(arena)
+    return to_int(t_get(m, node * 4 + 0))
+}
+
+pub fn ag_extract_param_ix(arena: int, node: int) -> int {
+    let m = _arena_meta(arena)
+    return to_int(t_get(m, node * 4 + 1))
+}
+
+pub fn ag_extract_const_value(arena: int, node: int) -> float {
+    let v = _arena_value(arena)
+    return t_get(v, node)
+}
+
+pub fn ag_extract_child(arena: int, node: int, i: int) -> int {
+    let c = _arena_child(arena)
+    return to_int(t_get(c, node * 4 + i))
+}
+
+// ─── forward AST builder: relu(x) = if x > 0 then x else 0 ─────────────
+// Hand-builds the fwd AST. In SD5 this stands in for what a real parser
+// would produce when fed `pub fn relu(x: float) -> float { if x > 0.0
+// { x } else { 0.0 } }`. SD5's purpose is the WALKER, not the parser —
+// the AST shape here is identical to what the real parser emits for
+// the relu source (verifiable by comparing against compiler/parse/
+// ast.hexa::Expr with kind ExprKind::If wrapping a BinOp wrapping
+// Ident "x" + LiteralFloat 0.0). Future SDs reuse the same walker
+// against the parser-built AST.
+//
+// Returned root node id is the IfElse expression.
+pub fn ag_extract_build_relu_fwd(arena: int) -> int {
+    // x (param index 0)
+    let x_node    = ag_extract_mk_param(arena, 0)
+    // 0.0 (literal)
+    let zero_node = ag_extract_mk_const(arena, 0.0)
+    // x > 0.0
+    let cond_node = ag_extract_mk_binop_gt(arena, x_node, zero_node)
+    // then-branch = x (we reuse the same param-node id; AST is a DAG
+    // in this minimal encoding, but the walker treats it as a tree
+    // for the purposes of vjp emission — Param has no children, so
+    // sharing is safe)
+    // else-branch = 0.0 (we make a fresh const node so the AST is
+    // structurally a tree)
+    let else_node = ag_extract_mk_const(arena, 0.0)
+    let root      = ag_extract_mk_ifelse(arena, cond_node, x_node, else_node)
+    return root
+}
+
+// ─── reverse-mode walker ───────────────────────────────────────────────
+// `ag_extract_reverse_walk(fwd_arena, fwd_root, target_param_ix)` —
+// performs reverse-mode AD on the fwd AST and emits a bwd AST in the
+// SAME arena (the bwd nodes are appended after the fwd nodes; the
+// returned id points at the bwd root).
+//
+// The rule SD5 implements (the only one needed for relu):
+//
+//   reverse_walk(IfElse(cond, then_branch, else_branch), target_param) =
+//     IfElse(
+//       cond,
+//       reverse_walk(then_branch, target_param),      # then-side contrib
+//       reverse_walk(else_branch, target_param)       # else-side contrib
+//     )
+//
+//   reverse_walk(Param(i), target_param) =
+//     if i == target_param then Var_Upstream() else Const(0.0)
+//
+//   reverse_walk(Const(_), target_param) =
+//     Const(0.0)
+//
+//   reverse_walk(BinOp_GT(_, _), target_param) =
+//     UNUSED (a comparison's gradient is 0 a.e.; in the IfElse rule
+//     above we DON'T re-walk the condition — its job is to be tested,
+//     not differentiated. This matches Griewank–Walther §4.4.2's
+//     treatment of "indicator functions": the reverse-mode dataflow
+//     does not flow through the condition, only through the selected
+//     branch.)
+//
+// For relu, applying these rules to the fwd AST
+//   IfElse(GT(x, 0), x, 0)
+// produces
+//   IfElse(GT(x, 0), Var_Upstream, Const(0.0))
+// which is exactly `dx = if x > 0 then dy else 0` — the standard
+// relu vjp.
+pub fn ag_extract_reverse_walk(arena: int, fwd_node: int, target_param_ix: int) -> int {
+    let k = ag_extract_kind(arena, fwd_node)
+
+    if k == ag_extract_k_param() {
+        let ix = ag_extract_param_ix(arena, fwd_node)
+        if ix == target_param_ix {
+            return ag_extract_mk_var_upstream(arena)
+        }
+        return ag_extract_mk_const(arena, 0.0)
+    }
+
+    if k == ag_extract_k_const() {
+        return ag_extract_mk_const(arena, 0.0)
+    }
+
+    if k == ag_extract_k_ifelse() {
+        let cond     = ag_extract_child(arena, fwd_node, 0)
+        let t_branch = ag_extract_child(arena, fwd_node, 1)
+        let e_branch = ag_extract_child(arena, fwd_node, 2)
+        let bwd_t = ag_extract_reverse_walk(arena, t_branch, target_param_ix)
+        let bwd_e = ag_extract_reverse_walk(arena, e_branch, target_param_ix)
+        // re-use the original cond node (the condition is shared between
+        // fwd and bwd ASTs — it's evaluated against the same `x` at
+        // runtime, no reverse-mode transformation needed)
+        return ag_extract_mk_ifelse(arena, cond, bwd_t, bwd_e)
+    }
+
+    if k == ag_extract_k_binop_gt() {
+        // The comparison itself is not differentiated. If we encounter
+        // a GT NODE in a position that the IfElse rule does not consume,
+        // SD5 treats it as a constant 0.0 contribution (subgradient = 0
+        // a.e. — Griewank–Walther §4.4.1). For the relu fwd this branch
+        // is unreachable (GT only appears as an IfElse condition); we
+        // include it for completeness so the walker doesn't fault on
+        // future patterns.
+        return ag_extract_mk_const(arena, 0.0)
+    }
+
+    // Unsupported kind for SD5. In a richer cycle we'd recurse on
+    // children; SD5 keeps the surface small.
+    return ag_extract_mk_const(arena, 0.0)
+}
+
+// ─── emit step: bwd AST → hexa-lang source string ──────────────────────
+// `ag_extract_emit(arena, bwd_root, fn_name)` — pretty-prints the bwd
+// AST as a hexa-lang function definition. The output is HUMAN-READABLE
+// hexa source that COULD be compiled standalone (the test prints it for
+// inspection — see flame_ag_extract_test.hexa). The interpret path
+// (below) avoids the second-compile dependency for the byte-eq oracle.
+//
+// Function signature emitted (for relu):
+//   pub fn <fn_name>(x: float, dy: float) -> float {
+//       return <body>
+//   }
+// where <body> is the recursive emission of the bwd-root expression.
+pub fn ag_extract_emit_expr(arena: int, node: int) -> string {
+    let k = ag_extract_kind(arena, node)
+    if k == ag_extract_k_param() {
+        let ix = ag_extract_param_ix(arena, node)
+        // SD5 only handles a 1-input fwd (relu(x)), so param 0 = x. Future
+        // multi-input fwds will need a name-table; for SD5 the convention
+        // is fixed.
+        if ix == 0 { return "x" }
+        return "p" + to_string(ix)
+    }
+    if k == ag_extract_k_const() {
+        let v = ag_extract_const_value(arena, node)
+        return float_to_string(v)
+    }
+    if k == ag_extract_k_binop_gt() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return "(" + ag_extract_emit_expr(arena, l) + " > " + ag_extract_emit_expr(arena, r) + ")"
+    }
+    if k == ag_extract_k_ifelse() {
+        let c = ag_extract_child(arena, node, 0)
+        let t_br = ag_extract_child(arena, node, 1)
+        let e_br = ag_extract_child(arena, node, 2)
+        return "(if " + ag_extract_emit_expr(arena, c)
+             + " { " + ag_extract_emit_expr(arena, t_br)
+             + " } else { " + ag_extract_emit_expr(arena, e_br) + " })"
+    }
+    if k == ag_extract_k_var_upstream() {
+        return "dy"
+    }
+    if k == ag_extract_k_binop_mul() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return "(" + ag_extract_emit_expr(arena, l) + " * " + ag_extract_emit_expr(arena, r) + ")"
+    }
+    return "/* unsupported kind " + to_string(k) + " */"
+}
+
+// Helper: hexa stage0 has no built-in float→string with deterministic
+// formatting (the println surface uses libc printf). For the SD5 emit
+// step we only need to format 0.0, which is byte-stable. A real cycle
+// would need a richer float-format helper; SD5 marks it as a known
+// stop-condition.
+fn float_to_string(v: float) -> string {
+    if v == 0.0 { return "0.0" }
+    if v == 1.0 { return "1.0" }
+    // Conservative fallback — to_string on float is provided by the
+    // tensor_lib surface (println uses it).
+    return to_string(v)
+}
+
+pub fn ag_extract_emit_fn(arena: int, bwd_root: int, fn_name: string) -> string {
+    return "pub fn " + fn_name + "(x: float, dy: float) -> float {\n"
+         + "    return " + ag_extract_emit_expr(arena, bwd_root) + "\n"
+         + "}\n"
+}
+
+// ─── interpret step: bwd AST → numerical evaluation ────────────────────
+// `ag_extract_interpret(arena, bwd_root, x_val, dy_val)` — tree-walks
+// the bwd AST applying each node's semantics. Produces the same scalar
+// value the emitted source WOULD produce if compiled+run. The
+// interpret path lets the SD5 oracle compare against a hand-written
+// reference INSIDE a single hexa invocation (no second compile cycle).
+//
+// IEEE-754 byte-eq: each operation here uses the SAME hexa-native
+// scalar op a hand-derived bwd would use — `>` for the predicate, the
+// upstream `dy` value verbatim, and `0.0` as a literal. The walker
+// chooses ONE of the two branches based on the predicate; the
+// hand-written reference does the identical branch. Same ops in the
+// same order ⇒ identical IEEE-754 last-bit ⇒ max|Δ| = 0.0.
+pub fn ag_extract_interpret(arena: int, node: int, x_val: float, dy_val: float) -> float {
+    let k = ag_extract_kind(arena, node)
+    if k == ag_extract_k_const() {
+        return ag_extract_const_value(arena, node)
+    }
+    if k == ag_extract_k_var_upstream() {
+        return dy_val
+    }
+    if k == ag_extract_k_param() {
+        // SD5 has only one fwd param (x at index 0); future cycles
+        // will pass a param vector.
+        let ix = ag_extract_param_ix(arena, node)
+        if ix == 0 { return x_val }
+        return 0.0
+    }
+    if k == ag_extract_k_binop_gt() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        let lv = ag_extract_interpret(arena, l, x_val, dy_val)
+        let rv = ag_extract_interpret(arena, r, x_val, dy_val)
+        if lv > rv { return 1.0 }
+        return 0.0
+    }
+    if k == ag_extract_k_ifelse() {
+        let c = ag_extract_child(arena, node, 0)
+        let t_br = ag_extract_child(arena, node, 1)
+        let e_br = ag_extract_child(arena, node, 2)
+        let cv = ag_extract_interpret(arena, c, x_val, dy_val)
+        if cv == 1.0 {
+            return ag_extract_interpret(arena, t_br, x_val, dy_val)
+        }
+        return ag_extract_interpret(arena, e_br, x_val, dy_val)
+    }
+    if k == ag_extract_k_binop_mul() {
+        let l = ag_extract_child(arena, node, 0)
+        let r = ag_extract_child(arena, node, 1)
+        return ag_extract_interpret(arena, l, x_val, dy_val)
+             * ag_extract_interpret(arena, r, x_val, dy_val)
+    }
+    return 0.0
+}
+
+// ─── elementwise driver: apply bwd AST to a vector ─────────────────────
+// `ag_extract_relu_bwd_via_ast(arena, bwd_root, x_arr, dy_arr, dx_out,
+//  len)` — runs the interpret step over each i ∈ [0, len), writing the
+// resulting dx[i] into dx_out. This is the surface the SD5 byte-eq
+// oracle compares against the hand-written reference.
+pub fn ag_extract_relu_bwd_via_ast(arena: int, bwd_root: int,
+                                   x_arr: int, dy_arr: int, dx_out: int,
+                                   len: int) {
+    let mut i = 0
+    while i < len {
+        let xi = t_get(x_arr, i)
+        let dyi = t_get(dy_arr, i)
+        let dxi = ag_extract_interpret(arena, bwd_root, xi, dyi)
+        t_set(dx_out, i, dxi)
+        i = i + 1
+    }
+}
+
+// ─── Future work (g3 carve-outs) ───────────────────────────────────────
+//
+// SD5 establishes the AST→walk→emit pipeline shape for ONE op (relu).
+// To extend to true source-to-source AD over arbitrary hexa-lang
+// functions, the following structural blockers must be addressed in
+// SEPARATE cycles (each its own SD):
+//
+//   SD6 — parser integration. The compiler/parse/ast.hexa Module/
+//         Item/Expr types are available, but importing them into a
+//         stdlib file pulls in compiler/lex + compiler/parse + diag,
+//         which would expand stdlib/flame's transitive dep
+//         significantly. The right cycle is to expose a thin
+//         `parse_function_body(path, fn_name) -> Expr` surface that
+//         strips the parser-internal state.
+//
+//   SD7 — multi-input + multi-output. SD5's interpret step hardcodes
+//         (x_val, dy_val) scalars. The general shape is a param
+//         vector + an output gradient vector + a gradient registry.
+//         ag_tape already encodes registries — the SD7 cycle wires
+//         ag_extract into ag_tape's `_ag_reg_acc` accumulator.
+//
+//   SD8 — more reverse-mode rules. SD5 implements the IfElse rule.
+//         Generic vjp coverage needs Sum (reduce-axis), MatMul
+//         (transpose × upstream — SD1's body, AST-derived this
+//         time), Compose (let-binding chain rule), and the
+//         elementwise unary family (silu, gelu, tanh — each adds
+//         one rule, all citation-anchored in Griewank–Walther
+//         Tables 4.1–4.3).
+//
+//   SD9 — re-emit-and-recompile loop. SD5's emit step produces a
+//         hexa source string that ALSO compiles standalone (proven
+//         by hand). A future cycle wires this back into the
+//         compiler so the emitted bwd source is actually loaded
+//         and called (closing the loop).
+//
+// Each future SD has its own falsifier registered before work
+// starts (per the scoping note §4 "each SD has its own falsifier
+// registered in FLAME.tape").
+//
+// ═══════════════════════════════════════════════════════════════════════
