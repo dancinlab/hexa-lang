@@ -2166,7 +2166,12 @@ fn cmd_build(src, out, c_only, target, shared) {
     if len(r1) > 0 { println("    " + r1) }
     // 파싱 실패는 hexa_v2 가 stdout 에 "Parse error" 로 찍고도 exit 0 인
     // 특성이 있어(cmd_parse 주석 참고), 출력 grep + .c 파일 존재로 2중 판정.
-    let has_perr = exec("printf '%s' \"" + r1 + "\" | grep -q 'Parse error' && printf yes || printf no")
+    // SAFETY 2026-05-21 (inbox/notes/2026-05-21-anima-physics-parser-diag-shell-interp.md):
+    //   do NOT shell-interpolate r1 — parser diagnostics contain backticks
+    //   (e.g. `fn main()`, `@manual_main`) which would re-trigger shell command
+    //   substitution and mask the real diagnostic with "sh: ... not found"
+    //   garbage. Use pure-hexa contains() instead.
+    let has_perr = if r1.contains("Parse error") { "yes" } else { "no" }
     if has_perr == "yes" {
         println("error: transpile failed (parse error) — " + src)
         exit(1)
