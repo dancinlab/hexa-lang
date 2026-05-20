@@ -1,0 +1,456 @@
+# domains/DEPENDENCIES.demi — external-dependency audit SSOT for
+# `stdlib/<domain>/*.py` + `stdlib/kernels/<kernel>/*` (D80 g_hexa_only
+# scaffolding, demiurge AGENTS.tape).
+#
+# Authority (per D80 + D86):
+#   * This file is the declarative SSOT for "what does each substrate
+#     kernel / domain producer actually depend on, and how reachable
+#     is a hexa-native port of it?"
+#   * No hardcoded Python-dict / Swift-dict mirror is allowed (D86
+#     g_no_hardcoded_data). Every external-dep classification that a
+#     planner / dispatcher consumes MUST read FROM here.
+#   * Adding a new kernel / domain producer = append one section. No
+#     code change.
+#
+# Schema (single section per file/kernel under audit):
+#
+#   [<id>]
+#   path             = "<repo-relative path>"
+#   kind             = "kernel" | "domain_producer"
+#   domain           = "<domain id>" (kernels: the kernel folder name)
+#   external_imports = ["lib1", "lib2", ...]   # third-party only —
+#                      stdlib (os/sys/json/math/time/hashlib/...) and
+#                      first-party kernel imports are NOT listed.
+#   weight           = "trivial" | "small" | "medium" | "heavy" |
+#                      "nonportable"
+#                      # trivial    — math/stdlib only, no numpy
+#                      # small      — numpy / pandas only
+#                      # medium     — scipy / matplotlib / domain libs
+#                      # heavy      — multi-year ports (openmc / drake /
+#                      #              pinocchio / xsuite / poppy /
+#                      #              skfem / pvlib / mne / brian2 / ...)
+#                      # nonportable— CARLA / Drake / Geant4 / GMAT /
+#                      #              Basilisk / proprietary CAD APIs;
+#                      #              full hexa-native re-implementation
+#                      #              not in scope for D80 (multi-year)
+#   portable_status  = "already-ported" | "in-flight" | "portable-next" |
+#                      "heavy-port" | "nonportable"
+#                      # already-ported  — a `.hexa` substrate exists
+#                      #                   and parity-tests against the
+#                      #                   `.py` substrate
+#                      # in-flight       — sub-agent landed branch with
+#                      #                   .hexa port; not on origin/main
+#                      #                   yet (κ-65 Track parity-attempt)
+#                      # portable-next   — small primitive, candidate for
+#                      #                   the next pilot round
+#                      # heavy-port      — large numeric stack (FEM / MGXS
+#                      #                   / CFD); pattern-proof useful
+#                      #                   but a full port is a project
+#                      # nonportable     — depends on a closed-source or
+#                      #                   GPU-tied substrate; permanent
+#                      #                   `gate_type=hexa-native-absent`
+#   notes            = "<one-line justification or blocker>"
+#
+# Sections are grouped by `## ── <bucket> ──` markdown header for
+# readability; tooling reads only the [section] lines and `key = value`
+# fields per the demiurge AGENTS.tape `@D` declarative-loader contract.
+
+## ── kernels (stdlib/kernels/<id>/) — ①a substrate layer (D72) ─────────
+
+[kernel-solar]
+path             = "stdlib/kernels/solar/pvlib_kernel.py"
+kind             = "kernel"
+domain           = "solar"
+external_imports = ["pvlib", "pandas"]
+weight           = "heavy"
+portable_status  = "already-ported"
+notes            = "D80 pilot #1 landed 2026-05-20 — solar_kernel.hexa (Hughes 1985 ephemeris + Haurwitz 1945) parity vs pvlib 0.13.0 at <1e-13 rel for 6 Phoenix-AZ samples. CEC-SAPM ModelChain still on .py — needs linear-algebra solver port."
+
+[kernel-mc_transport]
+path             = "stdlib/kernels/mc_transport/transport_kernel.py"
+kind             = "kernel"
+domain           = "mc_transport"
+external_imports = ["particle"]
+weight           = "medium"
+portable_status  = "already-ported"
+notes            = "D80 pilot #2 landed 2026-05-20 — mc_slab_demo.hexa 1-D slab MC (Beer-Lambert oracle) bit-identical hexa↔python at same LCG seed; ~1e-3 vs analytic at N=1e6. transport_kernel.py (Bethe-Bloch / PDG) is orthogonal — separate port queued."
+
+[kernel-plasma]
+path             = "stdlib/kernels/plasma/plasma_metrics.hexa"
+kind             = "kernel"
+domain           = "plasma"
+external_imports = []
+weight           = "trivial"
+portable_status  = "already-ported"
+notes            = "Born hexa-native — clean-room re-derivation of Debye / plasma-frequency / Lorentz / Alfvén / gyroradius from CODATA 2022 constants. No .py substrate needed."
+
+[kernel-circuit]
+path             = "stdlib/kernels/circuit/"
+kind             = "kernel"
+domain           = "circuit"
+external_imports = []
+weight           = "trivial"
+portable_status  = "already-ported"
+notes            = "Born hexa-native — devsim / vdmos / wolfspeed `.hexa` derivations. No .py substrate."
+
+[kernel-logic_synth]
+path             = "stdlib/kernels/logic_synth/"
+kind             = "kernel"
+domain           = "logic_synth"
+external_imports = []
+weight           = "medium"
+portable_status  = "already-ported"
+notes            = "Born hexa-native — rfc_006 Yosys absorption iter 11+. read_verilog / rtlil / passes / abc_map / liberty / write_verilog all in `.hexa`. Calls external Yosys / ABC CLIs via subprocess from ①b adapter (firmware/), substrate stays inside hexa."
+
+[kernel-noc_sim]
+path             = "stdlib/kernels/noc_sim/"
+kind             = "kernel"
+domain           = "noc_sim"
+external_imports = []
+weight           = "small"
+portable_status  = "already-ported"
+notes            = "Born hexa-native — anynet / iq_router / traffic / wire_delay / sweep / leighton clean-room re-derived from BookSim2 by inspection (rfc_003). New event_queue.hexa pilot 2026-05-20 adds heap-based discrete-event scheduler primitive."
+
+[kernel-graph]
+path             = "stdlib/kernels/graph/networkx_kernel.py"
+kind             = "kernel"
+domain           = "graph"
+external_imports = ["networkx"]
+weight           = "small"
+portable_status  = "in-flight"
+notes            = "κ-65 sub-agent (graph BFS+topo port) landed on branch d80-bfs-topo-port; substrate parity tests pass. Not on origin/main yet."
+
+[kernel-orbital]
+path             = "stdlib/kernels/orbital/sgp4_kernel.py"
+kind             = "kernel"
+domain           = "orbital"
+external_imports = ["sgp4", "skyfield"]
+weight           = "heavy"
+portable_status  = "in-flight"
+notes            = "κ-65 sub-agent (orbital Kepler 2-body port) landed on branch d80-kepler-2body-port. Full SGP4 = perturbed orbital propagator, multi-month port; Kepler 2-body is the pilot slice."
+
+[kernel-neural]
+path             = "stdlib/kernels/neural/lif_kernel.py"
+kind             = "kernel"
+domain           = "neural"
+external_imports = ["brian2"]
+weight           = "heavy"
+portable_status  = "in-flight"
+notes            = "κ-65 sub-agent (LIF analytic per-timestep port) in-flight. Brian2 covers more than LIF (Hodgkin-Huxley, plasticity, NEURON parity) — pilot is the LIF closed-form exact integrator only."
+
+[kernel-urdf]
+path             = "stdlib/kernels/urdf/urdf_kernel.py"
+kind             = "kernel"
+domain           = "urdf"
+external_imports = ["yourdfpy"]
+weight           = "medium"
+portable_status  = "in-flight"
+notes            = "κ-65 sub-agent (2-link FK port) on branch d80-fk-2link-port. Forward kinematics for a 2-link planar manipulator — small slice of a multi-month Pinocchio port."
+
+[kernel-signal_proc]
+path             = "stdlib/kernels/signal_proc/mne_psd_kernel.py"
+kind             = "kernel"
+domain           = "signal_proc"
+external_imports = ["mne", "numpy"]
+weight           = "heavy"
+portable_status  = "portable-next"
+notes            = "Welch PSD = framed periodograms averaged. The DFT inner loop is O(N²) closed-form for tiny N; port lands 2026-05-20 as dft_naive.hexa (this round). Full FFT (radix-2 Cooley-Tukey) + MNE band power = subsequent rounds."
+
+[kernel-wave_optics]
+path             = "stdlib/kernels/wave_optics/poppy_kernel.py"
+kind             = "kernel"
+domain           = "wave_optics"
+external_imports = ["poppy", "astropy", "numpy"]
+weight           = "heavy"
+portable_status  = "heavy-port"
+notes            = "Fraunhofer diffraction = 2-D FFT + aperture mask. Needs the radix-2 FFT port (signal_proc follow-on) + a 2-D complex array primitive. Multi-round."
+
+[kernel-fem]
+path             = "stdlib/kernels/fem/skfem_kernel.py"
+kind             = "kernel"
+domain           = "fem"
+external_imports = ["skfem", "numpy", "gmsh"]
+weight           = "heavy"
+portable_status  = "heavy-port"
+notes            = "Sparse linear-algebra solver + meshing — a full FEM port is multi-month. A 1-D bar / 2-D triangle stiffness-matrix demo is a feasible pilot slice for the next round."
+
+## ── domain producers (stdlib/<domain>/*.py) — ①b adapter layer ────────
+
+[domain-aura_mne]
+path             = "stdlib/aura/aura_mne.py"
+kind             = "domain_producer"
+domain           = "aura"
+external_imports = ["mne", "numpy"]
+weight           = "heavy"
+portable_status  = "portable-next"
+notes            = "Calls kernels/signal_proc/mne_psd_kernel.py. Once dft_naive + FFT lands, the aura producer's PSD path can swap to the hexa kernel."
+
+[domain-energy_pvlib_clearsky]
+path             = "stdlib/energy/pvlib_clearsky.py"
+kind             = "domain_producer"
+domain           = "energy"
+external_imports = ["pvlib", "pandas"]
+weight           = "heavy"
+portable_status  = "portable-next"
+notes            = "Calls kernels/solar/pvlib_kernel.py. Re-pointing the Haurwitz-only path at solar_kernel.hexa is unblocked today; the Ineichen + CEC SAPM ModelChain path still needs the SAPM port."
+
+[domain-energy_openmc_keff]
+path             = "stdlib/energy/openmc_keff.py"
+kind             = "domain_producer"
+domain           = "energy"
+external_imports = ["openmc"]
+weight           = "heavy"
+portable_status  = "heavy-port"
+notes            = "k-eff = Monte-Carlo + ENDF nuclear data + criticality fission. mc_slab_demo.hexa is the substrate pattern; a multi-region MGXS port is the next round. Full k-eff parity needs ENDF — blocked until OpenMC installs."
+
+[domain-energy_pypsa_capacity]
+path             = "stdlib/energy/pypsa_capacity.py"
+kind             = "domain_producer"
+domain           = "energy"
+external_imports = ["pypsa", "highspy", "pandas"]
+weight           = "heavy"
+portable_status  = "heavy-port"
+notes            = "Linear-program capacity expansion via HiGHS. Needs an LP solver port; not in D80 scope this round."
+
+[domain-fusion_openmc_tbr]
+path             = "stdlib/fusion/openmc_tbr.py"
+kind             = "domain_producer"
+domain           = "fusion"
+external_imports = ["openmc"]
+weight           = "heavy"
+portable_status  = "heavy-port"
+notes            = "Tritium breeding ratio = neutronic MC + Li-blanket cross sections. Same OpenMC family as energy_openmc_keff; same heavy-port horizon."
+
+[domain-fusion_plasma_metrics]
+path             = "stdlib/fusion/plasma_metrics.py"
+kind             = "domain_producer"
+domain           = "fusion"
+external_imports = ["plasmapy", "astropy"]
+weight           = "medium"
+portable_status  = "portable-next"
+notes            = "ITER core reference scenario aggregator over kernels/plasma/. The kernel is already hexa-native — once we port the astropy.units conversion + the scenario-record schema, the ①b adapter is fully hexa-native."
+
+[domain-bot_drake_verify]
+path             = "stdlib/bot/drake_verify.py"
+kind             = "domain_producer"
+domain           = "bot"
+external_imports = ["pydrake"]
+weight           = "nonportable"
+portable_status  = "nonportable"
+notes            = "Drake = C++ multibody dynamics + MIT proprietary numerical ecosystem. Pinocchio is the open-source equivalent (also nonportable). Multi-year port — track as gate_type=hexa-native-absent on every record."
+
+[domain-bot_pinocchio_rbd]
+path             = "stdlib/bot/pinocchio_rbd.py"
+kind             = "domain_producer"
+domain           = "bot"
+external_imports = ["pinocchio", "numpy"]
+weight           = "heavy"
+portable_status  = "heavy-port"
+notes            = "Rigid-body dynamics (forward / inverse / Jacobian). 2-link FK pilot in-flight; full RBD is a multi-year port — Featherstone CRBA + RNEA + Jacobian transposes."
+
+[domain-bot_urdfpy_basics]
+path             = "stdlib/bot/urdfpy_basics.py"
+kind             = "domain_producer"
+domain           = "bot"
+external_imports = ["yourdfpy"]
+weight           = "medium"
+portable_status  = "in-flight"
+notes            = "URDF parsing + tree walk. Hexa-native XML parser already in `stdlib/core/parse`; URDF-specific tree assembly is the missing piece. urdf-FK pilot in-flight."
+
+[domain-brain_lif_brian2]
+path             = "stdlib/brain/lif_brian2.py"
+kind             = "domain_producer"
+domain           = "brain"
+external_imports = ["brian2"]
+weight           = "heavy"
+portable_status  = "in-flight"
+notes            = "Brian2 LIF ODE integrator. LIF closed-form pilot in-flight; full Brian2 (HH / plasticity / multi-compartment) is multi-year."
+
+[domain-cern_bethe_bloch_stopping]
+path             = "stdlib/cern/bethe_bloch_stopping.py"
+kind             = "domain_producer"
+domain           = "cern"
+external_imports = []
+weight           = "trivial"
+portable_status  = "portable-next"
+notes            = "Closed-form Bethe-Bloch + PDG-table lookup. Pure float math + table interp — porting is straightforward; queued as a small follow-on round."
+
+[domain-cern_elegant_tracking]
+path             = "stdlib/cern/elegant_tracking.py"
+kind             = "domain_producer"
+domain           = "cern"
+external_imports = ["xsuite", "xtrack"]
+weight           = "nonportable"
+portable_status  = "nonportable"
+notes            = "ELEGANT / xsuite tracking — symplectic 6-D phase-space tracking for accelerator lattices. Multi-year port — track as gate_type=hexa-native-absent."
+
+[domain-cern_xsuite_optics]
+path             = "stdlib/cern/xsuite_optics.py"
+kind             = "domain_producer"
+domain           = "cern"
+external_imports = ["xsuite", "xtrack"]
+weight           = "nonportable"
+portable_status  = "nonportable"
+notes            = "Twiss / closed orbit / chromaticity via xsuite/xtrack. Same xsuite family as elegant_tracking — nonportable."
+
+[domain-component_calculix]
+path             = "stdlib/component/calculix.py"
+kind             = "domain_producer"
+domain           = "component"
+external_imports = []
+weight           = "nonportable"
+portable_status  = "nonportable"
+notes            = "CalculiX = open-source ABAQUS-format nonlinear FEM solver. Subprocess-only adapter; substrate is the Fortran binary. Heavy-port FEM substrate would have to replace CalculiX — multi-year."
+
+[domain-component_gmsh_skfem]
+path             = "stdlib/component/gmsh_skfem.py"
+kind             = "domain_producer"
+domain           = "component"
+external_imports = ["gmsh", "skfem", "numpy"]
+weight           = "heavy"
+portable_status  = "heavy-port"
+notes            = "Gmsh meshing + scikit-fem linear elasticity. Pilot slice (1-D bar stiffness) is feasible next round; full 3-D tet/hex elements is multi-month."
+
+[domain-firmware_yosys_pipeline]
+path             = "stdlib/firmware/{specify,structure,design,analyze,synthesize,verify,handoff}.py"
+kind             = "domain_producer"
+domain           = "firmware"
+external_imports = []
+weight           = "trivial"
+portable_status  = "portable-next"
+notes            = "Subprocess-only wrappers around Yosys / ABC CLIs. Substrate (read_verilog / passes / abc_map) is already hexa-native in stdlib/kernels/logic_synth/. The 7 firmware .py files are thin orchestration — porting them to hexa is straightforward; queued."
+
+[domain-grid_networkx_basics]
+path             = "stdlib/grid/networkx_basics.py"
+kind             = "domain_producer"
+domain           = "grid"
+external_imports = ["networkx"]
+weight           = "small"
+portable_status  = "in-flight"
+notes            = "Power-grid topology metrics. Same family as graph BFS pilot — unblocked once that lands on origin/main."
+
+[domain-mobility_carla_scenario]
+path             = "stdlib/mobility/carla_scenario.py"
+kind             = "domain_producer"
+domain           = "mobility"
+external_imports = ["carla"]
+weight           = "nonportable"
+portable_status  = "nonportable"
+notes            = "CARLA = autonomous-driving simulator built on Unreal Engine. GPU-tied, closed-source rendering. Multi-year port — gate_type=hexa-native-absent permanent."
+
+[domain-mobility_road_network]
+path             = "stdlib/mobility/road_network.py"
+kind             = "domain_producer"
+domain           = "mobility"
+external_imports = ["osmnx", "networkx"]
+weight           = "medium"
+portable_status  = "heavy-port"
+notes            = "OpenStreetMap road-network analysis. Networkx core unblocks via graph kernel; osmnx PBF/XAPI parsing is a separate piece (1-2 round port)."
+
+[domain-rtsc_getdp_hts]
+path             = "stdlib/rtsc/getdp_hts.py"
+kind             = "domain_producer"
+domain           = "rtsc"
+external_imports = []
+weight           = "nonportable"
+portable_status  = "nonportable"
+notes            = "GetDP = mixed-element FEM CLI. Subprocess-only; substrate is the C++ binary. Gate_type=hexa-native-absent."
+
+[domain-rtsc_pyfemm_magnetics]
+path             = "stdlib/rtsc/pyfemm_magnetics.py"
+kind             = "domain_producer"
+domain           = "rtsc"
+external_imports = ["femm"]
+weight           = "nonportable"
+portable_status  = "nonportable"
+notes            = "FEMM = Windows-only proprietary 2-D magnetostatics. PyFEMM is a thin RPC wrapper; running needs Wine/xvfb. Substrate replacement = full skfem-style FEM port. Nonportable in this generation."
+
+[domain-scope_openmdao_sizing]
+path             = "stdlib/scope/openmdao_sizing.py"
+kind             = "domain_producer"
+domain           = "scope"
+external_imports = ["openmdao", "astropy", "numpy", "poppy"]
+weight           = "heavy"
+portable_status  = "heavy-port"
+notes            = "MDAO + wave-optics sizing. Needs poppy port + an autodiff/gradient framework — multi-round."
+
+[domain-scope_poppy_psf_verify]
+path             = "stdlib/scope/poppy_psf_verify.py"
+kind             = "domain_producer"
+domain           = "scope"
+external_imports = ["poppy", "astropy", "synphot", "webbpsf"]
+weight           = "heavy"
+portable_status  = "heavy-port"
+notes            = "PSF verification = Fraunhofer + spectrum convolution. Same FFT family as wave_optics kernel."
+
+[domain-scope_scope_poppy]
+path             = "stdlib/scope/scope_poppy.py"
+kind             = "domain_producer"
+domain           = "scope"
+external_imports = ["poppy", "astropy", "numpy"]
+weight           = "heavy"
+portable_status  = "heavy-port"
+notes            = "Same family as poppy_psf_verify."
+
+[domain-space_gmat_basilisk]
+path             = "stdlib/space/gmat_basilisk.py"
+kind             = "domain_producer"
+domain           = "space"
+external_imports = ["Basilisk"]
+weight           = "nonportable"
+portable_status  = "nonportable"
+notes            = "Basilisk + GMAT = full spacecraft simulation stacks (AOCS, GNC, propulsion). Multi-year ports — gate_type=hexa-native-absent."
+
+[domain-space_openmdao_mission]
+path             = "stdlib/space/openmdao_mission.py"
+kind             = "domain_producer"
+domain           = "space"
+external_imports = ["openmdao", "scipy", "numpy"]
+weight           = "heavy"
+portable_status  = "heavy-port"
+notes            = "Mission-design MDAO. Needs scipy.optimize + autodiff — multi-round."
+
+[domain-space_skyfield_sgp4]
+path             = "stdlib/space/skyfield_sgp4.py"
+kind             = "domain_producer"
+domain           = "space"
+external_imports = ["skyfield"]
+weight           = "heavy"
+portable_status  = "in-flight"
+notes            = "TLE + SGP4 propagator. Kepler-2-body pilot in-flight; full SGP4 perturbations is multi-month."
+
+[domain-sscb_femmt_sweep]
+path             = "stdlib/sscb/femmt_sweep.py"
+kind             = "domain_producer"
+domain           = "sscb"
+external_imports = ["femmt"]
+weight           = "nonportable"
+portable_status  = "nonportable"
+notes            = "FEMMT = magnetic-component FEM (transformer / inductor). Wraps ONELAB / GetDP — same nonportable bucket as rtsc_getdp_hts."
+
+[domain-sscb_ngspice_breaking]
+path             = "stdlib/sscb/ngspice_breaking.py"
+kind             = "domain_producer"
+domain           = "sscb"
+external_imports = []
+weight           = "trivial"
+portable_status  = "portable-next"
+notes            = "Subprocess-only ngspice driver + log parser. Hexa-native re-implementation = parse ngspice text output → metrics. Straightforward small port; queued."
+
+[domain-antimatter_geant4_verify]
+path             = "stdlib/antimatter/geant4_verify.py"
+kind             = "domain_producer"
+domain           = "antimatter"
+external_imports = ["geant4_pybind"]
+weight           = "nonportable"
+portable_status  = "nonportable"
+notes            = "Geant4 = CERN's full particle-transport stack (C++ / EM / hadronic / nuclear physics models). H-2 measured 2026-05-19 (geant4 install progressed). Multi-year port — gate_type=hexa-native-absent permanent."
+
+[domain-antimatter_pdg_lookup]
+path             = "stdlib/antimatter/pdg_lookup.py"
+kind             = "domain_producer"
+domain           = "antimatter"
+external_imports = []
+weight           = "trivial"
+portable_status  = "portable-next"
+notes            = "Calls transport_kernel.py (Bethe-Bloch / PDG) — pure table + closed-form. Same port-pattern as cern_bethe_bloch_stopping."

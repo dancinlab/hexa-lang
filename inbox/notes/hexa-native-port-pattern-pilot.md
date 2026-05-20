@@ -393,3 +393,142 @@ The pattern is now confirmed on three orthogonal substrates — closed-
 form trig (solar), Monte Carlo (mc_transport), closed-form algebra
 (plasma). The next port can apply this template without further
 pattern-discovery work.
+## Pilot sample table (rolling — append as pilots land)
+
+| pilot # | kernel                                                  | algorithm                              | parity tier(s)                                                  | result                | landed     |
+|--------:|---------------------------------------------------------|----------------------------------------|-----------------------------------------------------------------|-----------------------|-----------:|
+| #1      | `stdlib/kernels/solar/solar_kernel.hexa`                | Hughes 1985 ephemeris + Haurwitz 1945  | pvlib 0.13.0 substrate parity (6 Phoenix-AZ timestamps)         | 21/21 ≤1e-13 rel      | 2026-05-20 |
+| #2      | `stdlib/kernels/mc_transport/mc_slab_demo.hexa`         | 1-D slab MC, Beer-Lambert oracle       | python-companion (same LCG) bit-identical + analytic √N envelope | 8/8 ~1e-3 rel @ N=1e5 | 2026-05-20 |
+| #3      | `stdlib/kernels/neural/lif_kernel.hexa`                 | LIF analytic per-timestep exact        | numpy 2.x substrate reference                                   | 23/23 ≤2e-15 rel      | 2026-05-20 |
+| #3b     | `stdlib/kernels/graph/` (BFS+Kahn port)                 | BFS + topological sort                 | networkx companion parity                                       | (concurrent branch)   | 2026-05-20 |
+| #4      | `stdlib/kernels/urdf/` (2-link FK port)                 | Forward kinematics, 2-link planar      | yourdfpy companion parity                                       | (concurrent branch)   | 2026-05-20 |
+| #5      | `stdlib/kernels/plasma/plasma_metrics_kernel.hexa`      | NRL Formulary 4 primary + lnΛ          | hand-mirrored Python math closed-form (8 samples)               | 41/41 rel_err=0       | 2026-05-20 |
+| #6      | `stdlib/kernels/signal_proc/dft_naive.hexa`             | O(N²) naive DFT + IDFT                 | analytic spectra (impulse / DC / cosine) + Parseval + round-trip | 17/17 ≤1e-12 rel      | 2026-05-20 |
+| #7      | `stdlib/kernels/noc_sim/event_queue.hexa`               | Binary min-heap discrete-event sched.  | python-companion `heapq` parity + FIFO-at-equal-times           | 36/36 exact           | 2026-05-20 |
+
+### Pilot #6 — DFT (signal_proc / 2026-05-20)
+
+**Scope**: 4th pilot, 1st targeting the `signal_proc` kernel family.
+Naive O(N²) discrete Fourier transform + inverse + magnitude +
+power. Mirrors numpy.fft convention (`exp(-2πi·k·n/N)` for forward,
+`+` for inverse with `1/N` normalisation). Companion oracle
+`dft_naive.py` uses ONLY `math` (no numpy) so the parity test runs
+without any third-party Python install.
+
+**Algorithm choice**: The MNE `psd_array_welch` substrate is a 5-
+layer stack — frame splitter + Hann window + DFT + magnitude² +
+inter-frame averaging. The DFT inner loop is the obvious smallest
+slice. For N ≤ 16, naive O(N²) is bit-identical to the radix-2 FFT
+(within float roundoff; the FFT just structures the same arithmetic
+to factor out repeated twiddles). Landing the naive DFT first gives
+us the closed-form anchor against which a future Cooley-Tukey FFT
+can be parity-tested.
+
+**Parity results**: 17/17 PASS at <1e-12 relative on every
+assertion. Off-bin "leakage" in cosine-at-bin-k0 spectra ≤ 3e-15
+(machine epsilon × N), and Parseval (energy conservation) closes to
+~1e-15 absolute. Round-trip (`idft(dft(x))`) reproduces the input
+within 4e-15 absolute for N=16.
+
+**Hexa-lang gotchas** (carried over + new):
+
+1. `tau()` is available in `stdlib/core/math/float` (≡ 2π) — the
+   forward-DFT angle uses `0.0 - tau() * k * n / N`.
+2. Returning two arrays as a `[[float]]` and destructuring at the
+   call site (`let X = dft_naive(x); let xr = X[0]; let xi = X[1]`)
+   works cleanly.
+3. `cos` / `sin` deliver the same bit pattern as Python's
+   `math.cos` / `math.sin` (both delegate to libm). Off-record
+   numpy.fft cross-check confirmed identity to ~1e-15 for N ≤ 16,
+   but the test stays numpy-free per the pilot-self-containment
+   discipline.
+
+**What this does NOT prove**:
+
+- `absorbed=true` is NOT flipped on the demiurge cell for any
+  aura / scope / signal-processing producer. Same `HexaNativeParityRef`
+  schema gate as pilots #1 / #2.
+- Welch PSD (windowed + averaged periodograms) is NOT ported yet —
+  the DFT is one floor below. The Welch port is queued.
+- O(N²) is fine for N ≤ ~256; for the 512 / 1024 / 2048 frames MNE
+  actually uses, a radix-2 FFT port is the next round. This pilot
+  is the closed-form anchor for that FFT.
+
+### Pilot #7 — Event-queue scheduler (noc_sim / 2026-05-20)
+
+**Scope**: 4th pilot, 1st truly data-structure-only (no float
+math). A binary min-heap on `(time, seq)` ordering — the standard
+discrete-event scheduler primitive. The `seq` tiebreaker guarantees
+deterministic FIFO at exactly-equal times, matching cpython's
+`heapq` semantics on lexicographic tuple ordering.
+
+**Algorithm choice**: NoC simulation in `kernels/noc_sim/` is
+currently 6 hexa-native analytic-or-graph modules — anynet topology
+parser, iq_router pipeline timing, leighton lower-bound, etc. None
+of them is event-driven. The discrete-event scheduler is the
+missing primitive that would let a future event-driven flit
+simulator (the BookSim2 absorption end-state) be assembled on top.
+Heap-based scheduling is also the universal abstraction for any
+DES (queueing networks, packet-level network sim, actor system),
+so the kernel doesn't bake in any NoC vocabulary.
+
+**Parity results**: 36/36 PASS — empty-queue sentinels, monotone-
+nondecreasing pop times across 8-event + 32-event stress, FIFO-at-
+equal-times via `seq`, and a recorded 5-event insert sequence that
+matches the Python companion's pop sequence event-for-event.
+
+**Hexa-lang gotchas found** (new, beyond #1 / #2):
+
+1. **Multi-line function signatures with `->` on the continuation
+   line break the parser.** Same family as the `- continuation`
+   bug from pilot #1. Worked around by keeping signatures on a
+   single line. Filed for hexa-lang follow-up.
+2. **`[Event]` (array of struct) does not support in-place index
+   assignment (`h[idx] = ev` for struct-typed arrays)** — at
+   runtime it errors `array[1]: container is not an array (tag=6)`.
+   Workaround: push-only rebuild helpers (`_swap_events`,
+   `_set_head`, `_drop_last_event`) that recreate the array with
+   the swap baked in. O(N) per swap, so O(N log N) per push/pop
+   instead of O(log N) — fine for the small heaps (N ≤ 1024) we
+   target, but inefficient for million-event traces. The
+   in-place struct-array element assignment is the right
+   long-term fix; documented as a hexa-lang follow-up.
+3. **Heterogeneous-element arrays `[any]` cannot be indexed back
+   into typed slots** — `let r = eq_pop(q); r[0]` errors at
+   runtime even though `eq_pop` returns `[EventQueue, Event]`.
+   Solved by returning a typed wrapper struct (`EqPopResult { q,
+   ev, ok }`) — the right shape for a multi-return anyway.
+4. **`while true { ... if cond { return ... } }` works**, but a
+   slightly cleaner pattern is `while keep_going { ... }` with a
+   mutable `keep_going: bool` toggle, since the parser sometimes
+   warns on the `true` literal in a loop condition in older
+   builds. (Cosmetic; both forms run.)
+
+**What this does NOT prove**:
+
+- `absorbed=true` is NOT flipped on any demiurge cell. The
+  scheduler is a building block, not a measurement; it gates only
+  when a consumer DES is parity-verified against an external
+  oracle (BookSim2 event trace, ns-3 packet trace) — that's
+  multi-round future work.
+- An actual event-driven NoC sim is NOT included — composing the
+  scheduler with `iq_router.hexa` pipeline timing + flit-level
+  packet tracking is the next sample in this pilot family.
+- Heap performance is O(N log N) per push/pop instead of O(log N)
+  due to the struct-array workaround above; revisit when hexa-lang
+  lands in-place struct-array element assignment.
+
+### Cumulative status across pilots (2026-05-20)
+
+- 7 pilots landed/in-flight (#1-#5 on origin/main, #6+#7 landing this
+  cycle; #3b + #4 are concurrent branch ports), ≥146 assertions PASS
+  across them (21+8+23+41+17+36 = 146 on the landed pilots alone)
+- 4 hexa-lang followups filed in this audit round:
+  - parser `-`/`->` continuation footgun (#1, #7)
+  - `fmod` libm shim missing (#1)
+  - `str_full(float)` for full-precision dump (#1)
+  - struct-array in-place element assignment (`h[i] = ev` for
+    `[StructName]`) — runtime errors, push-only rebuild required (#7)
+- 0 demiurge cells flipped to `absorbed=true` — by design (pattern
+  proof only; the parity-flip gate lives behind the
+  `HexaNativeParityRef` schema, not yet landed)
