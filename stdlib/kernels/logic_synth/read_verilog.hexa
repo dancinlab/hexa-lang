@@ -2104,6 +2104,97 @@ fn _rv_emit_for_if_stmts(
             }
             continue
         }
+        if t0 == "for" {
+            // #4i (RFC 006 §5) — for-loop unroll inside guarded body.
+            // Parses `for ( gv = init ; cond ; gv = step )` header + body
+            // (begin/end OR single stmt); unrolls while cond const-folds
+            // non-zero; recurses on body with loop var bound and the
+            // SAME outer guard. @cite IEEE 1364-2005 §9.4 (procedural for).
+            bp = bp + 1
+            if bp >= n || body_toks[bp] != "(" { return RvEmitRes { m: m_in, ok: 0 } }
+            bp = bp + 1
+            let fgv = body_toks[bp]
+            bp = bp + 1
+            if bp >= n || body_toks[bp] != "=" { return RvEmitRes { m: m_in, ok: 0 } }
+            bp = bp + 1
+            let mut finit: [str] = []
+            while bp < n {
+                let t = body_toks[bp]
+                if t == ";" { bp = bp + 1; break }
+                finit = finit.push(t)
+                bp = bp + 1
+            }
+            let f_init_ev = _rv_eval_expr(finit, 0, tab, 1)
+            if len(f_init_ev.err) > 0 { return RvEmitRes { m: m_in, ok: 0 } }
+            let mut ltab = symtab_put(tab, fgv, f_init_ev.value)
+            let mut fcond: [str] = []
+            while bp < n {
+                let t = body_toks[bp]
+                if t == ";" { bp = bp + 1; break }
+                fcond = fcond.push(t)
+                bp = bp + 1
+            }
+            if bp >= n { return RvEmitRes { m: m_in, ok: 0 } }
+            bp = bp + 1  // step gv name (skip)
+            if bp >= n || body_toks[bp] != "=" { return RvEmitRes { m: m_in, ok: 0 } }
+            bp = bp + 1
+            let mut fstep: [str] = []
+            while bp < n {
+                let t = body_toks[bp]
+                if t == ")" { bp = bp + 1; break }
+                fstep = fstep.push(t)
+                bp = bp + 1
+            }
+            let mut f_has_begin = 0
+            if bp < n && body_toks[bp] == "begin" {
+                f_has_begin = 1
+                bp = bp + 1
+            }
+            let f_body_start = bp
+            let mut f_body_end = bp
+            if f_has_begin == 1 {
+                let mut fd = 1
+                while f_body_end < n {
+                    let t = body_toks[f_body_end]
+                    if t == "begin" { fd = fd + 1 }
+                    if t == "end" {
+                        fd = fd - 1
+                        if fd == 0 { break }
+                    }
+                    f_body_end = f_body_end + 1
+                }
+            } else {
+                while f_body_end < n {
+                    let t = body_toks[f_body_end]
+                    if t == ";" { f_body_end = f_body_end + 1; break }
+                    f_body_end = f_body_end + 1
+                }
+            }
+            let mut fiter = 0
+            while fiter < 1024 {
+                let fcv = _rv_eval_expr(fcond, 0, ltab, 1)
+                if len(fcv.err) > 0 { return RvEmitRes { m: m_in, ok: 0 } }
+                if fcv.value == 0 { break }
+                let mut iter_body: [str] = []
+                let mut bi = f_body_start
+                while bi < f_body_end {
+                    iter_body = iter_body.push(body_toks[bi])
+                    bi = bi + 1
+                }
+                let sub = _rv_emit_for_if_stmts(iter_body, cond_wire, m, ltab, is_clocked, clk_wire)
+                if sub.ok == 0 { return RvEmitRes { m: m_in, ok: 0 } }
+                m = sub.m
+                let fsv = _rv_eval_expr(fstep, 0, ltab, 1)
+                if len(fsv.err) > 0 { return RvEmitRes { m: m_in, ok: 0 } }
+                ltab = symtab_put(ltab, fgv, fsv.value)
+                fiter = fiter + 1
+            }
+            bp = f_body_end
+            if f_has_begin == 1 && bp < n && body_toks[bp] == "end" {
+                bp = bp + 1
+            }
+            continue
+        }
         // Otherwise: must be a regular `LHS op RHS ;` statement.
         // Collect until next `;` (matching the original splitter).
         let mut stmt: [str] = []
@@ -2115,13 +2206,39 @@ fn _rv_emit_for_if_stmts(
         }
         if len(stmt) < 4 { return RvEmitRes { m: m_in, ok: 0 } }
         if stmt[len(stmt) - 1] != ";" { return RvEmitRes { m: m_in, ok: 0 } }
-        let op = stmt[1]
+        // #4i (RFC 006 §5) — indexed-LHS const-fold extension.
+        //   `name [ <const_expr> ] (<=|=) RHS ;` → lhs string = `name[N]`.
+        //   Dyn-index (non-const-foldable) in this plain-stmt path is an
+        //   honest gap (returns ok=0); the multi-LHS dyn-idx handler at
+        //   the outer if-level is the primary path for that shape.
+        let mut lhs = stmt[0]
+        let mut op_idx = 1
+        if len(stmt) > 2 && stmt[1] == "[" {
+            let mut idx_bd = 1
+            let mut idx_p = 2
+            let mut idx_toks: [str] = []
+            while idx_p < len(stmt) {
+                if stmt[idx_p] == "[" { idx_bd = idx_bd + 1 }
+                if stmt[idx_p] == "]" {
+                    idx_bd = idx_bd - 1
+                    if idx_bd == 0 { break }
+                }
+                idx_toks = idx_toks.push(stmt[idx_p])
+                idx_p = idx_p + 1
+            }
+            if idx_p >= len(stmt) || stmt[idx_p] != "]" { return RvEmitRes { m: m_in, ok: 0 } }
+            let idx_ev = _rv_eval_expr(idx_toks, 0, tab, 1)
+            if len(idx_ev.err) > 0 { return RvEmitRes { m: m_in, ok: 0 } }
+            lhs = stmt[0] + "[" + str(idx_ev.value) + "]"
+            op_idx = idx_p + 1
+        }
+        if op_idx >= len(stmt) { return RvEmitRes { m: m_in, ok: 0 } }
+        let op = stmt[op_idx]
         if op != "<=" && op != "=" { return RvEmitRes { m: m_in, ok: 0 } }
         if op == "<=" && is_clocked == 0 { return RvEmitRes { m: m_in, ok: 0 } }
         if op == "="  && is_clocked == 1 { return RvEmitRes { m: m_in, ok: 0 } }
-        let lhs = stmt[0]
         let mut rhs: [str] = []
-        let mut ri = 2
+        let mut ri = op_idx + 1
         while ri < len(stmt) - 1 {
             rhs = rhs.push(stmt[ri])
             ri = ri + 1
@@ -2267,6 +2384,13 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
         // if-skip commit, so router_d4 still parses end-to-end while
         // scope grows incrementally.
         if _ps_peek(st) == "if" {
+            // #4i (RFC 006 §5) — track cells-count entry baseline. After
+            // all prior shape-detections (single-stmt cond-mux, multi-LHS
+            // no-else, multi-LHS with-else) run, if cells stayed unchanged
+            // we fall back to a statement-by-statement walk on then/else
+            // begin-blocks via `_rv_emit_for_if_stmts`. See fallback block
+            // at the end of this if-handler.
+            let _f3_cells_before = len(m.cells)
             st = _ps_take(st)
             let mut cond_toks: [str] = []
             if _ps_peek(st) == "(" {
@@ -3293,6 +3417,47 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                                 }
                             }
                             sk = sk + 1
+                        }
+                    }
+                }
+            }
+            // #4i (RFC 006 §5) — mixed-statement begin-block both-branches
+            // fallback. Fires only when ALL prior shape-detections above
+            // left m unchanged (cells-count guard). Invokes the shared
+            // `_rv_emit_for_if_stmts` helper on then_toks with the outer
+            // cond as guard, and on else_toks with NOT(outer cond) as
+            // guard. The helper handles for-loop unroll + nested-if +
+            // scalar/indexed assigns; on honest-gap (ok=0) preserves the
+            // legacy skip-no-emit semantics (m_in returned untouched).
+            //
+            //   `if (rst) begin scalar; for(...) ...; end else begin ...
+            //    if (any_grant) begin ...; end; end`  ← router_d4 shape
+            //
+            // @cite IEEE 1364-2005 §9.2 (procedural assignment) + §9.4
+            // (control statements / nested conditional) + RFC 006 §5 area
+            // oracle parity (rfc_006/§5 measurement_gate).
+            if len(m.cells) == _f3_cells_before {
+                let _f3_cer = _rv_elab_expr(cond_toks, 0, m, 1, tab)
+                if len(_f3_cer.err) == 0 {
+                    let mut _f3_m = _f3_cer.m
+                    let _f3_then = _rv_emit_for_if_stmts(
+                        then_toks, _f3_cer.wire, _f3_m, tab, is_clocked, clk_wire)
+                    if _f3_then.ok == 1 {
+                        _f3_m = _f3_then.m
+                        if has_else == 1 {
+                            let _f3_notw = _rv_fresh_wire(_f3_m)
+                            _f3_m = rtlil_module_add_wire(_f3_m, rtlil_wire(_f3_notw, 1, 0, 0))
+                            let mut _f3_notc = rtlil_cell(_f3_notw + "$c", "$logic_not", 0)
+                            _f3_notc = rtlil_cell_connect(_f3_notc, "A", _f3_cer.wire)
+                            _f3_notc = rtlil_cell_connect(_f3_notc, "Y", _f3_notw)
+                            _f3_m = rtlil_module_add_cell(_f3_m, _f3_notc)
+                            let _f3_else = _rv_emit_for_if_stmts(
+                                else_toks, _f3_notw, _f3_m, tab, is_clocked, clk_wire)
+                            if _f3_else.ok == 1 {
+                                m = _f3_else.m
+                            }
+                        } else {
+                            m = _f3_m
                         }
                     }
                 }
@@ -5414,6 +5579,46 @@ fn main() {
         if rtlil_count_cells_of_type(_m69, "$dff") != 6 {
             println("FAIL T69d dff_count got "
                 + str(rtlil_count_cells_of_type(_m69, "$dff")) + " (expected 6)")
+            fails = fails + 1
+        }
+    }
+
+    // T70 — #4i (RFC 006 §5) — outer with-else mixed-statement begin-block
+    //   in BOTH branches. router_d4-shape minimum: clocked always with
+    //   `if (rst) begin scalar; for(...) indexed; end
+    //    else begin scalar; for(...) indexed; end`.
+    //   Exercises:
+    //     (a) outer if-handler fallback fires (cells-count guard);
+    //     (b) `_rv_emit_for_if_stmts` for-loop unroll inside guarded body;
+    //     (c) `_rv_emit_for_if_stmts` indexed-LHS plain-stmt extension;
+    //     (d) cond_wire / NOT(cond_wire) guard composition for then/else.
+    //   Expected (each LHS-write emits independent $mux+$dff feedback-hold
+    //   pair; multi-driver collapse is downstream `pass_clean_multidriver`
+    //   work — out of scope for this commit):
+    //     - THEN guard=rst: q ($mux+$dff) + mem[0] + mem[1] = 6 cells
+    //     - ELSE guard=NOT(rst): $logic_not + q + mem[0] + mem[1] = 7 cells
+    //     - Identity: $mux=6, $dff=6, $logic_not=1.
+    //   @cite IEEE 1364-2005 §9.2 + §9.4 + RFC 006 §5 area oracle parity.
+    total = total + 1
+    let _v70 = "module t70 ( input wire clk , input wire rst , input wire d , output reg q , output reg mem [ 0 : 1 ] ) ; integer i ; always @ ( posedge clk ) begin if ( rst ) begin q <= 0 ; for ( i = 0 ; i < 2 ; i = i + 1 ) mem [ i ] <= 0 ; end else begin q <= d ; for ( i = 0 ; i < 2 ; i = i + 1 ) mem [ i ] <= d ; end end endmodule"
+    let _r70 = read_verilog(_v70)
+    if _r70.ok != 1 {
+        println("FAIL T70 mixed_block_with_else: " + _r70.message); fails = fails + 1
+    } else {
+        let _m70 = _r70.design.modules[0]
+        if rtlil_count_cells_of_type(_m70, "$mux") != 6 {
+            println("FAIL T70a mux_count got "
+                + str(rtlil_count_cells_of_type(_m70, "$mux")) + " (expected 6)")
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m70, "$dff") != 6 {
+            println("FAIL T70b dff_count got "
+                + str(rtlil_count_cells_of_type(_m70, "$dff")) + " (expected 6)")
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m70, "$logic_not") != 1 {
+            println("FAIL T70c logic_not_count got "
+                + str(rtlil_count_cells_of_type(_m70, "$logic_not")) + " (expected 1)")
             fails = fails + 1
         }
     }
