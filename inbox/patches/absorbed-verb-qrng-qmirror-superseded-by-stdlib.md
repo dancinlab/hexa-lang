@@ -1,5 +1,11 @@
 # patch: retire `qrng` / `qmirror` from the nexus-absorbed verb registry — superseded by stdlib
 
+- **status**: resolved-ssot (2026-05-20) — `self/main.hexa::_absorbed_script` Phase-4
+  HW-probe block now contains only `akida`; the `qmirror` / `qrng` registry entries
+  have been replaced with a comment block citing RFC 044 / RFC 045 + this patch.
+  Verb count `(19)` → `(17)`. Latent-shadowing risk on partial-merge branches closed.
+- **resolved-by**: 3-in-1 inbox cleanup cycle (this commit) — see compiler/PLAN.md.
+
 - **filed**: 2026-05-17
 - **area**: `self/main.hexa` — `_absorbed_script()` / `is_absorbed_verb()` dispatch
 - **kind**: stale-registry cleanup (latent shadowing bug)

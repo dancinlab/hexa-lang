@@ -1,5 +1,12 @@
 # `hexa atlas` — PR-only policy (drop the `promote` arm)
 
+- **status**: resolved-ssot (2026-05-20) — `cmd_promote` body + dispatcher arm
+  + `_slice_args` allow-list entry deleted from `tool/atlas_cli.hexa`; help text
+  no longer advertises `promote`; `self/main.hexa::cmd_help` L94 replaced with
+  `register | pr` rows that cite `@D g_atlas_binary_builtin` PR-only policy.
+  `promote_to_atlas()` primitive retained (still used internally by `cmd_pr`).
+- **resolved-by**: 3-in-1 inbox cleanup cycle (this commit) — see compiler/PLAN.md.
+
 **From:** wilson (downstream) — 2026-05-17. Follow-up to
 `hexa-cli-atlas-register-update-or-pr.md` (the 3-verb `register | promote | pr` proposal).
 

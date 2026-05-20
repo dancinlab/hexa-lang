@@ -91,7 +91,10 @@ fn cmd_help() {
     println("  atlas lookup <P|C|L|E> <id>             Read single node")
     println("  atlas dump <P|C|L|E> [--json]           Read full kind")
     println("  atlas append-witness <stage>...         Write staging shard")
-    println("  atlas promote --staging <f.n6>          Write to live (* register/pr = stub)")
+    println("  atlas register --from-verify <fn> <n> <v> [--auto-pr]    in-memory node-gen → embed (PR-only)")
+    println("  atlas register --from-drill --seed \"<text>\" [--auto-pr]  drill verdict → embed (PR-only)")
+    println("  atlas pr --staging <f.n6>               PR-only landing verb (@D g_atlas_binary_builtin)")
+    println("                                          register → pr — direct fold-to-live forbidden")
     println("  atlas-verify [--domain D] [--tier N]     Verdict ledger — 86 entries Stage 1+2+3 hexa-native")
     println("  calc <engine> [args]                    TECS-L calculators (nstate/vortex/n6/perfect/congruence/gamma0)")
     println("  verify <id> | --expr <fn> <n> <v>       Verify claim: atlas+calc → tier (🔵/🟡/🟠/⚪)")
@@ -148,8 +151,8 @@ fn cmd_help() {
     println("    debate      L3 N-variant adversarial debate")
     println("    revive      engine+map v2 resurrect dead rounds (cap enforced)")
     println("")
-    println("EXTERNAL RESOURCES  (19, δ pattern — try-CLI-or-fallback)")
-    println("  HW probes:        qmirror   akida   qrng")
+    println("EXTERNAL RESOURCES  (17, δ pattern — try-CLI-or-fallback)")
+    println("  HW probes:        akida           (qmirror/qrng → STDLIB CLI via RFC 044/045)")
     println("  Data bridges (16): codata  oeis  arxiv  gw  horizons  cmb  nanograv  simbad")
     println("                     icecube  nist-atomic  wikipedia  openalex  gaia  lhc  pubchem  uniprot")
     println("    Live path: HTTP API (~15 s timeout)  ·  Fallback: frozen cache (HEXA_FORCE_FALLBACK=1)")
@@ -166,6 +169,17 @@ fn cmd_help() {
     println("")
     println("  Sister-project tools (rsc / bayes / n6 discover/mine / hexa-principle annotator etc.)")
     println("  분리됨 — 각 sister repo 의 자체 도구로 위치. invoke via `hexa run <sister>/path/main.hexa <verb>`.")
+    println("")
+    println("INTRINSIC SURFACE  (SPEC §16 — absorbed shell-equivalents, 638→752 sites)")
+    println("  Use these IN-PROCESS intrinsics from `compiler/intrinsics/intrinsics.hexa` —")
+    println("  do NOT shell out (HX9xxx fork-storm lint planned). Each ⇆ its shell-equivalent:")
+    println("    cwd()            ⇆ pwd                getenv(k)         ⇆ $VAR")
+    println("    list_dir(path)   ⇆ ls <path>          path_exists(p)    ⇆ test -e <p>")
+    println("    mkdir_p(path)    ⇆ mkdir -p <p>       path_is_dir(p)    ⇆ test -d <p>")
+    println("    rm_file(path)    ⇆ rm <p>             host_target()     ⇆ uname -sm")
+    println("    rm_rf(path)      ⇆ rm -rf <p>         now_ns()          ⇆ date +%s%N")
+    println("  Plus SPEC §18 firmware: stdlib/{core,alloc,hal,embedded,mcu} + firmware/boards/*")
+    println("  (5 absorbed repos; see `hexa hash` / `hexa stats` for the embedded inventory).")
     println("")
     println("STDLIB n=6  (compiler-internal, available as `use \"self/std_n6\"`)")
     println("  n6_lenses · n6_verify · n6_check · n6_consensus · n6_scan · n6_omega")
@@ -1039,10 +1053,15 @@ fn _absorbed_script(verb) {
     if verb == "debate"           { return "compiler/debate/debate.hexa" }
     if verb == "revive"           { return "compiler/revive/revive.hexa" }
 
-    // Phase 4 external (19) — HW probes + kick + 16 bridges.
-    if verb == "qmirror"          { return "compiler/hw_probes/qmirror.hexa" }
+    // Phase 4 external (17) — HW probes + kick + 16 bridges.
+    // RFC 044 (qrng → stdlib/qrng/) + RFC 045 (qmirror → stdlib/quantum/) absorbed
+    // the prior HW-probe stubs into stdlib; the dispatch lives in main() above as
+    // explicit `else if sub == "qrng"/"qmirror"` branches (the stdlib path). The
+    // legacy hw_probes/qrng + hw_probes/qmirror registry entries were RETIRED
+    // 2026-05-20 per inbox/patches/absorbed-verb-qrng-qmirror-superseded-by-stdlib.md
+    // — they silently shadow-claimed the verb names on partial-merge branches and
+    // routed `hexa qmirror` to a misleading 8/8 deterministic-stub.
     if verb == "akida"            { return "compiler/hw_probes/akida.hexa" }
-    if verb == "qrng"             { return "compiler/hw_probes/qrng.hexa" }
     if verb == "kick"             { return "compiler/drill/drill.hexa" }   // alias: kick → drill (ω-cycle ≡ drill apex)
     if verb == "codata"           { return "compiler/bridges/codata.hexa" }
     if verb == "oeis"             { return "compiler/bridges/oeis.hexa" }
