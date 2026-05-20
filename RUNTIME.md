@@ -500,3 +500,23 @@ For each Tier-A sub-phase:
   probe-size=0` or `-fno-stack-clash-protection`)
 - No source changes this cycle — `self/runtime.c` unchanged from
   cycle 49 state. Pure build-script update.
+
+### 2026-05-20 — cycle 51 (small maintenance, no extern delta)
+
+- ⚠ cycle 51 — no extern reduction (115 → 115). 3 attempts:
+  - `-fno-builtin-sincos` flag: INEFFECTIVE for `___sincos_stret`
+    (macOS stret pack-pair fires after builtin check) · removed
+  - `-mllvm -disable-loop-idiom-memcpy=true`: INEFFECTIVE for the
+    2 constant-size 160-byte aggregate memcpy calls · removed
+  - `__attribute__((no_builtin("memcpy")))` on hexa_val_heapify
+    + hexa_valstruct_set_by_key (the 2 caller fns identified by
+    disasm): INEFFECTIVE · KEPT (valid attribute, harmless,
+    documents the attempt)
+- aprime_cc smoke exit(42) PASS · binary 1,119,784 B unchanged
+  (no codegen change net)
+- Conclusion: `_memcpy` residual closure requires source-level
+  rewrite of the 160-byte `*dst = *src` aggregate-assign in those
+  two fns (via explicit byte-loop or `__builtin_memcpy_inline`).
+  Deferred to a cycle that touches the source pattern directly
+- Phase 1 Tier-A.1 acceptance maintained (137 → 115 = -22, 8
+  better than `~125` target)

@@ -2881,6 +2881,7 @@ HexaVal hexa_valstruct_get_by_key(HexaVal v, const char* key) {
 // 2026-04-17: COW — __VAL_INT_CACHE/float/bool singletons share ValStruct
 // pointers. In-place mutation corrupts ALL users of that cache slot.
 // Always shallow-copy before writing; old ValStruct leaked (no refcounting).
+__attribute__((no_builtin("memcpy")))
 HexaVal hexa_valstruct_set_by_key(HexaVal v, const char* key, HexaVal val) {
     if (!HX_IS_VALSTRUCT(v) || !HX_VS(v)) {
         fprintf(stderr, "valstruct_set: not a TAG_VALSTRUCT\n");
@@ -3412,6 +3413,15 @@ static HexaMapTable* hmap_heapify(HexaMapTable* src) {
 // fault mode (sub-page deref) is easy to guard here.
 #define HX_PTR_OK(p) ((uintptr_t)(p) >= 0x1000)
 
+// Cycle 51: `__attribute__((no_builtin("memcpy")))` attempted on this
+// fn (and hexa_valstruct_set_by_key below) to defeat clang's 160-byte
+// HexaValStruct aggregate-assign lowering into libc _memcpy — kept
+// because the attribute IS valid and harmless, but the aggregate-copy
+// pass fires below the attribute scope. Real closure needs source-
+// level rewrite of `*dst = *src` to explicit byte-loop or
+// `__builtin_memcpy_inline`. Defer to a cycle that touches the source
+// pattern directly.
+__attribute__((no_builtin("memcpy")))
 HexaVal hexa_val_heapify(HexaVal v) {
     switch (HX_TAG(v)) {
         case TAG_MAP:

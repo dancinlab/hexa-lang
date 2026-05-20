@@ -7905,3 +7905,22 @@ Phase 1 cumulative gate (S3 fixpoint + Tier-A.{2,3,4,5,6} 까지) 는 후속 cyc
 ```
 
 **cross-link**: RUNTIME.md ## Log cycle 50 · cycles 46-49 entries · `8186bcfc` cycle 49 commit / `0121f98a` cycle 49 rebased on main.
+
+### 2026-05-20 — RUNTIME.md cycle 51 — no extern delta, maintenance + #46-50 documented
+
+**작업 = cycle 50/51 maintenance**. 3 attempts (`-fno-builtin-sincos` · `-mllvm -disable-loop-idiom-memcpy=true` · `__attribute__((no_builtin("memcpy")))`) 모두 무효 — 115 externs 그대로. honest log + attribute keeps (valid, harmless, documents the attempt).
+
+**measured delta**: 0 (115 → 115) · smoke PASS · 바이너리 1,119,784 B 무변.
+
+**takeaway**: `_memcpy` 잔류 + `___sincos_stret` + `___chkstk_darwin` 등 darwin/codegen 레벨 lowering 은 flag/attribute 으로 안 닫힘. source-level rewrite 필요. 다음 진전은 (a) Tier-A.3 stdio batch (16 symbols · printf family 작성), (b) Tier-A.4 trivial POSIX wrappers (exit/getpid 등), (c) source-level struct-assign 명시화 셋 중 하나.
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +18 (cycle 51 entry)
+ compiler/PLAN.md     | + (this entry)
+ self/runtime_core.c  | +2 (no_builtin attributes + docstring)
+ tool/build_aprime.sh | -1 (revert -fno-builtin-sincos)
+```
+
+**cross-link**: RUNTIME.md cycle 51 entry · cycles 46-50 entries · `53bb27d6` cycle 50 commit.
