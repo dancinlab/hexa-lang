@@ -59,16 +59,19 @@ use "stdlib/flame/tensor_lib"
 
 // ─── op-kind IDs (registry keys) ───────────────────────────────────────
 // Match ag_tape's ag_k_* ID space ONLY for the ops where a rule exists.
-// SD1: only `ag_derive_k_matmul` (1) is meaningful. Future SDs (2-13)
-// claim additional kinds in lockstep with ag_tape's ag_k_*. We do NOT
-// reuse ag_tape's literals because ag_derive is a self-contained
-// registry — adding a rule for op_kind X here MUST be a deliberate edit,
-// not "whatever ag_tape happens to use".
+// SD1 claimed `ag_derive_k_matmul` (1); SD2 claims `ag_derive_k_add` (2)
+// for the broadcast bias-add primitive (the `+ b` half of nn_linear_fwd,
+// surfaced as the `farr_add`-bias vjp). Future SDs (3-13) claim
+// additional kinds in lockstep with ag_tape's ag_k_*. We do NOT reuse
+// ag_tape's literals because ag_derive is a self-contained registry —
+// adding a rule for op_kind X here MUST be a deliberate edit, not
+// "whatever ag_tape happens to use".
 pub fn ag_derive_k_matmul() -> int { return 1 }
+pub fn ag_derive_k_add()    -> int { return 2 }
 // Reserved for future SDs (do not invoke yet — registry rejects unknown):
-//   2 = add, 3 = rmsnorm, 4 = rope, 5 = lmhead, 6 = swiglu, 7 = embed,
+//   3 = rmsnorm, 4 = rope, 5 = lmhead, 6 = swiglu, 7 = embed,
 //   8 = attn, 9 = silu_gate, 10 = slice, 11 = rope_mh, 12 = rmsnorm_mh,
-//   13 = attn_dt — SD2/SD3 will register these.
+//   13 = attn_dt — SD3 will register these.
 
 // ─── registry: flat farr-backed table ──────────────────────────────────
 // Layout: a single farr where each "slot" is 4 cells:
@@ -180,5 +183,89 @@ pub fn matmul_bwd_auto(reg: int, x: int, W: int, dy: int,
         return 0
     }
     ag_derive_matmul_bwd_body(x, W, dy, dW_out, dx_out, B, D, C)
+    return 1
+}
+
+// ─── rule body: broadcast bias-add vjp (op_kind = 2) ───────────────────
+// SD2 — the bias half of `nn_linear_fwd` (y = x · W + b), surfaced
+// here as the `farr_add` broadcast-bias vjp. The fwd primitive is the
+// per-row bias broadcast that nn_linear_fwd applies AFTER the matmul:
+//   y[i, j] = x_plus_W[i, j] + b[j]    for i ∈ [0,B), j ∈ [0,C)
+// where b is a length-C vector broadcast across all B rows.
+//
+// Closed-form vjp (chain-rule + broadcast adjoint = reduce-sum):
+//   · dx[i, j] = ∂L/∂x[i, j] = dy[i, j]                  (identity)
+//   · db[j]    = ∂L/∂b[j]    = Σ_i dy[i, j]              (reduce-sum
+//                                                          along axis=0,
+//                                                          the broadcast
+//                                                          axis)
+// The reduce-sum is the adjoint of broadcast — a standard result
+// (Tapenade/Zygote/JAX `unbroadcast`; equivalently the `db` block in
+// `nn_lib::nn_linear_bwd` lines 129–140 of the reference). The dx
+// portion is purely the upstream gradient (x and b enter the fwd
+// strictly additively, so ∂y/∂x ≡ identity), which is why SD2 only
+// returns `db` as the derived output — the dx for this primitive IS
+// the upstream `dy`, no new tensor needed.
+//
+// Reduction order chosen to match `nn_linear_bwd`'s db loop byte-for-
+// byte:
+//   · db[j] = Σ_i dy[i,j]    (outer dimension j ∈ [0,C),
+//                              innermost reduction i ∈ [0,B))
+// Same loop nesting + same scalar-add associativity ⇒ identical IEEE-754
+// last-bit accumulator trajectory ⇒ max|Δ| = 0.0 vs the hand-written
+// reference (the SD2 byte-eq gate).
+//
+// Caller-allocated output (db_out, length C). Writes in place; the
+// surface mirrors the `db_out` slot of `nn_linear_bwd` so the byte-eq
+// oracle compares like-for-like.
+//
+// Note on the `x` and `b` arguments: the closed-form vjp does NOT read
+// `x` or `b` themselves (only their shape via B, C). They are kept in
+// the signature for parallelism with `ag_derive_matmul_bwd_body` and
+// to lock the surface SD4 will integrate against; the body discards
+// them via the `let _ = ` idiom isn't needed (parameters that aren't
+// read incur no cost in hexa).
+pub fn ag_derive_add_bwd_body(x: int, b: int, dy: int,
+                              db_out: int,
+                              B: int, C: int) {
+    // db[j] = Σ_i dy[i,j]  — outer j ∈ [0,C), inner reduction i ∈ [0,B).
+    // Identical loop nest to nn_lib::nn_linear_bwd lines 129–140.
+    let mut j = 0
+    while j < C {
+        let mut acc = 0.0
+        let mut i = 0
+        while i < B {
+            acc = acc + t_get(dy, i * C + j)
+            i = i + 1
+        }
+        t_set(db_out, j, acc)
+        j = j + 1
+    }
+}
+
+// ─── public entry: add_bwd_auto ────────────────────────────────────────
+// Consume the rule registry. Lookup the broadcast bias-add rule; if
+// registered, invoke its body. If NOT registered, return 0 (deliberate
+// fault — surfaces SD4 integration bugs).
+//
+// SD2 returns ONLY `db` (the broadcast-axis reduce-sum). The
+// `dx`-equivalent for a pure-add primitive is the upstream gradient
+// `dy` verbatim (identity adjoint) — callers consuming this rule in
+// SD4's tape integration will route `dy` through to whatever consumed
+// `x` upstream without copying. Keeping the surface minimal (no
+// `dx_out`) avoids an O(B·C) byte-eq-irrelevant memcpy and matches
+// the `ag_k_add`-residual recorder shape in `ag_tape`.
+//
+// Signature mirrors `ag_derive_add_bwd_body` (x, b, dy, db_out, B, C).
+// The fwd-input ids (x, b) are not read by the closed-form vjp but
+// stay in the surface so SD4 can pivot to a future AST-extracted rule
+// that DOES inspect them (Decision 12 + SD5 expansion).
+pub fn add_bwd_auto(reg: int, x: int, b: int, dy: int,
+                    db_out: int,
+                    B: int, C: int) -> int {
+    if ag_derive_is_registered(reg, ag_derive_k_add()) == 0 {
+        return 0
+    }
+    ag_derive_add_bwd_body(x, b, dy, db_out, B, C)
     return 1
 }
