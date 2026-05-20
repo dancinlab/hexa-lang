@@ -655,11 +655,200 @@ fn _test_barrier() -> bool {
     return ok
 }
 
+// ── Case 8 — 055-P4+ _nvptx_unroll_pass (canonical 3-block back-edge) ─
+//
+// RFC 055 §12 P4+ MVP: the loop-unroll pass clones the body of a
+// canonical 3-block back-edge loop `factor` times so the lowered PTX
+// has the unrolled instruction stream. Closes the GEMM perf gap noted
+// in PR #105 (nvcc unrolls the k-loop ~5×; hexa-emit produces straight
+// scalar bodies).
+//
+// Fixture (3-block back-edge loop):
+//   block 0 (header): t = a + b ; p = t < b ; br_cond p -> body, else exit
+//   block 1 (body)  : q = a * b               ; br -> header   (back-edge)
+//   block 2 (exit)  : return
+//
+// Apply `_nvptx_unroll_pass(mfn, 2)` BEFORE codegen. Expected effect:
+//   - body's STMT_BR target rewritten from header → clone block id
+//   - a new clone block inserted with `q' = a * b ; br -> header`,
+//     where `q'` is a renumbered Local id (offset = max-local-id + 1)
+//   - header (and its setp / br_cond) stays unchanged — only the body
+//     is cloned in the §12 P4+ MVP slice
+//
+// Honest-scope note (g3 over-claim 0): the generic MIR-walk lowering
+// only emits FP64 arithmetic mnemonics for STMT_BINOP today (add/sub/mul
+// — `_nvptx_binop_mnemonic`); `fma.rn.f64` + `add.s32` are produced
+// only by the hand-emit P2 GEMM path (`_nvptx_p2_*` helpers), not by
+// the generic lowering. So this MVP test asserts on what the generic
+// path actually emits — duplicate counts of `mul.f64` and a single
+// preserved `setp.lt.f64` (header NOT cloned). The unroll pass itself
+// is opcode-agnostic: when a future cycle teaches the generic lowering
+// to emit `fma.rn.f64` for a MIR (mul + add) fusion, the same unroll
+// pass will duplicate that fma — the duplication is structural, not
+// mnemonic-specific.
+
+// _count_occurrences — count non-overlapping occurrences of `needle`
+// in `hay`. Used to assert that the unroll pass produced N copies of
+// a given mnemonic in the emitted PTX.
+fn _count_occurrences(hay: string, needle: string) -> i64 {
+    if len(needle) == 0 { return 0 }
+    let mut n = 0
+    let mut from = 0
+    while from <= len(hay) - len(needle) {
+        // `find` has no start-offset overload; slice the suffix.
+        let suffix = hay.substring(from, len(hay))
+        let pos = suffix.find(needle)
+        if pos < 0 { return n }
+        n = n + 1
+        from = from + pos + len(needle)
+    }
+    return n
+}
+
+fn _check_count(ok_in: bool, hay: string, needle: string, want: i64, label: string) -> bool {
+    let got = _count_occurrences(hay, needle)
+    if got == want { return ok_in }
+    println("  FAIL: " + label + " (want " + to_string(want) + " occurrences of `" + needle + "`, got " + to_string(got) + ")")
+    return false
+}
+
+fn _build_case_unroll_loop() -> MFunc {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let t = _local(2, "t")     // header: t = a + b   (.f64)
+    let p = _local(3, "p")     // header: p = t < b   (.pred)
+    let q = _local(4, "q")     // body  : q = a * b   (.f64)
+
+    // block 0 (header): t = a + b ; p = t < b ; br_cond p -> 1, else 2
+    let mut s0 = []
+    s0.push(_stmt_binop(t, "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_binop(p, "lt",  _op_local(t.id), _op_local(b.id)))
+    s0.push(_stmt_br_cond(_op_local(p.id), 1, 2))
+
+    // block 1 (body): q = a * b ; br -> 0 (back-edge)
+    let mut s1 = []
+    s1.push(_stmt_binop(q, "mul", _op_local(a.id), _op_local(b.id)))
+    s1.push(_stmt_br(0))
+
+    // block 2 (exit): return
+    let mut s2 = []
+    s2.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    blocks.push(_block(1, s1))
+    blocks.push(_block(2, s2))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a); locals.push(b)
+    locals.push(t); locals.push(p); locals.push(q)
+
+    return MFunc {
+        name: "unroll_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+}
+
+fn _test_unroll_pass() -> bool {
+    let mut ok = true
+
+    // Build the same MFunc twice — once for the un-unrolled baseline
+    // (sanity assert: one `mul.f64`), once for the unrolled output
+    // (the §12 P4+ assertion: two `mul.f64`).
+    let mfn_baseline = _build_case_unroll_loop()
+    let mfn_unrolled = _nvptx_unroll_pass(_build_case_unroll_loop(), 2)
+
+    // Baseline: 1 `mul.f64`, 1 `setp.lt.f64`, 1 `add.f64`.
+    let mut funcs_b = []
+    funcs_b.push(mfn_baseline)
+    let mod_b = MModule { file: "unroll_baseline.hexa", funcs: funcs_b, globals: [] }
+    let ptx_b = codegen_emit_ptx_sm80(mod_b)
+    println("")
+    println("── emitted PTX (baseline, no unroll, sm_80) ──")
+    println(ptx_b)
+    ok = _check_count(ok, ptx_b, "mul.f64",     1, "baseline body has 1 mul.f64")
+    ok = _check_count(ok, ptx_b, "setp.lt.f64", 1, "baseline header has 1 setp.lt.f64")
+
+    // Unrolled: the §12 P4+ assertion. Body cloned once → 2× mul.f64.
+    // Header NOT cloned → still 1× setp.lt.f64 and 1× add.f64. Two
+    // STMT_BR back-edges (orig body → clone, clone → header) → 2× `bra`
+    // emitted from the body chain (in addition to whatever the header
+    // / exit emit).
+    let mut funcs_u = []
+    funcs_u.push(mfn_unrolled)
+    let mod_u = MModule { file: "unroll_factor2.hexa", funcs: funcs_u, globals: [] }
+    let ptx_u = codegen_emit_ptx_sm80(mod_u)
+    println("")
+    println("── emitted PTX (unrolled, factor=2, sm_80) ──")
+    println(ptx_u)
+
+    // The load-bearing assertion: body's mul appears TWICE post-unroll.
+    ok = _check_count(ok, ptx_u, "mul.f64",     2, "unrolled body has 2x mul.f64 (clone inserted)")
+    // Header is untouched — exactly one setp.lt and one add.f64.
+    ok = _check_count(ok, ptx_u, "setp.lt.f64", 1, "header setp.lt.f64 preserved (header NOT cloned)")
+    ok = _check_count(ok, ptx_u, "add.f64",     1, "header add.f64 preserved (header NOT cloned)")
+    // The clone's dst is a renumbered Local — distinct from the orig.
+    // Original body emits %fd4, clone emits %fd9 (offset = max_local+1
+    // = 4+1 = 5; 4+5 = 9). The exact id is implementation detail of
+    // the offset arithmetic; the structural property we assert is that
+    // both register names appear so the two mul.f64 don't write the
+    // same dst (which would be SSA-illegal).
+    ok = _check(ok, ptx_u, "%fd4", "original body's mul dst (%fd4) present")
+    ok = _check(ok, ptx_u, "%fd9", "cloned body's mul dst (%fd9 = 4+offset) present")
+
+    return ok
+}
+
+// ── Case 9 — _nvptx_unroll_pass honest-fallback (no-match CFG) ────────
+//
+// The unroll pass MUST return MFunc unchanged when the CFG doesn't
+// match the canonical 3-block back-edge shape. Builds a single-block
+// straight-line MFunc (no STMT_BR_COND, no back-edge) and asserts the
+// emitted PTX is byte-identical before/after the pass.
+
+fn _test_unroll_no_match_passthrough() -> bool {
+    let mut ok = true
+    // Reuse the BR fixture (2-block: a+b then bra then ret). No header
+    // → no STMT_BR_COND → no match.
+    let mod_pre  = _build_case_br()
+    let ptx_pre  = codegen_emit_ptx_sm80(mod_pre)
+
+    // Apply unroll pass to each func and rebuild the module.
+    let mut funcs_post = []
+    let mut i = 0
+    while i < len(mod_pre.funcs) {
+        funcs_post.push(_nvptx_unroll_pass(mod_pre.funcs[i], 2))
+        i = i + 1
+    }
+    let mod_post = MModule { file: mod_pre.file, funcs: funcs_post, globals: mod_pre.globals }
+    let ptx_post = codegen_emit_ptx_sm80(mod_post)
+
+    if ptx_pre != ptx_post {
+        println("  FAIL: unroll pass perturbed non-matching CFG")
+        println("    pre  = " + ptx_pre)
+        println("    post = " + ptx_post)
+        ok = false
+    } else {
+        println("  ok: non-matching CFG → PTX byte-identical (honest passthrough)")
+    }
+    return ok
+}
+
 // ── Driver ───────────────────────────────────────────────────────────
 
 fn main() {
     println("══════════════════════════════════════════════")
-    println("  RFC 055 055-P3b + P3c + P4 — generic NVPTX lowering smoke")
+    println("  RFC 055 055-P3b + P3c + P4 + P4+ — generic NVPTX lowering smoke")
     println("══════════════════════════════════════════════")
 
     let ok_br    = _test_stmt_br()
@@ -669,11 +858,13 @@ fn main() {
     let ok_ls    = _test_load_store()
     let ok_part  = _test_partition()
     let ok_barr  = _test_barrier()
+    let ok_unr   = _test_unroll_pass()
+    let ok_unr2  = _test_unroll_no_match_passthrough()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr {
-        println("PASS: RFC 055 P3b/c/P4 — 7/7 cases (incl. partition + gpu_barrier)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_unr && ok_unr2 {
+        println("PASS: RFC 055 P3b/c/P4/P4+ — 9/9 cases (incl. unroll + passthrough)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -683,7 +874,9 @@ fn main() {
         if !ok_ls   { println("      STMT_LOAD / STMT_STORE FAILED") }
         if !ok_part { println("      055-P3c gpu_kind partition FAILED") }
         if !ok_barr { println("      055-P4 gpu_barrier() FAILED") }
+        if !ok_unr  { println("      055-P4+ _nvptx_unroll_pass FAILED") }
+        if !ok_unr2 { println("      055-P4+ unroll passthrough FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_unr && ok_unr2) { exit(1) }
 }
