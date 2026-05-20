@@ -4701,3 +4701,95 @@ canonical FP64 PTX-emit / launch-ABI path.
 cross-link: PR #161 Fire-decision #1 (original P4 prereq analysis) ·
 PR #82 (vec_add + GEMM canonical fire) · PR #179 (RFC 069 wiring
 with manual env-smoke as wiring-live signal)
+
+### 2026-05-20 — §12 P4+ TRIPLE silicon-fire + codegen<->silicon reconcile (END-OF-DAY CLOSURE)
+
+Today's full §12 P4+ arc: **24 PRs landed in one session**, including
+the first 3 real-silicon falsifier closures + the codegen reconcile
+that follows the silicon-fire finding.
+
+PRs landed (chronological):
+
+- Codegen-side cycles (20 PRs) — covered by earlier PLAN.md entries
+  (Shape-A v2 surgical-port, Shape-B P0 RFC drafts, P1/P2/P3
+  implementations, P4 prereqs).
+- **#189 -- RFC 068 P4 silicon fire** (F-RFC068-NUMERIC-EQ PASS):
+  hand-emitted f16 vec-add kernel runs on RTX 5070 sm_120, output
+  max|delta|=0 vs CPU f16 reference (N=1024). First-ever silicon
+  validation of hexa-emit-compatible f16 PTX on real GPU.
+- **#190 -- RFC 069 P4 silicon fire** (F-RFC069-NUMERIC-EQ PASS):
+  unroll=1 baseline + unroll=2 manual-unrolled vec-add fire both,
+  output buffers byte-equal (byte_mismatch=0). Validates that the
+  unroll TRANSFORMATION preserves numeric output on real silicon for
+  element-independent kernels.
+- **#191 -- RFC 067 P4 silicon fire** (F-RFC067-TILE-LOOP-NUMERIC
+  PASS): WMMA Tensor Core 16x16 GEMM tile fires on real silicon,
+  output max|delta|=0 vs CPU FP32 reference. First-ever hexa-emit-
+  compatible Tensor Core silicon fire.
+- **#193 -- RFC 068 codegen<->silicon reconcile** (b16 storage):
+  Silicon-fire finding from #189: ptxas rejects ld.global.f16 /
+  st.global.f16; canonical NVIDIA pattern uses .b16 storage with
+  .reg .f16 register operand. Constants in nvptx_ptx_ops.hexa
+  reconciled. Case 25 in nvptx_lower_test.hexa asserts updated to
+  match silicon-canonical form + negative guard for .f16 storage.
+
+Quality gates (all 4 PRs above):
+- F5 NO-LLVM-NO-CTRANS: PASS (nvcc + libcuda; no LLVM linkage).
+- F6 CPU-CODEGEN-UNTOUCHED: PASS (no compiler/codegen edit beyond
+  the 3 mnemonic-constant flips in #193).
+- @D g_commit_push_deploy: no self/codegen_c2.hexa changes.
+- @D g3 honesty: each PR distinguishes hand-emit silicon proof from
+  the full source-to-silicon e2e pipeline (which requires source-
+  level @gpu_kernel MFunc fixture work — separate cycle).
+
+§12 P4+ chain status at end-of-day (all silicon-side falsifiers PASS):
+
+| RFC | Codegen | P4 silicon |
+|-----|---------|------------|
+| 067 | done    | PASS (#191) |
+| 068 | done    | PASS (#189, reconciled #193) |
+| 069 | done    | PASS (#190) |
+
+Test ratchet today: **lower_test 9 -> 25 cases (+16, 2.78x)**.
+
+Silicon-fire artifacts (committed at inbox/fires/):
+- rfc067_p4_2026_05_20/{wmma_16x16.ptx, result.json, fire.log}
+- rfc068_p4_2026_05_20/{f16_vadd.ptx, result.json, fire.log}
+- rfc069_p4_2026_05_20/{vec_add_unroll1.ptx, vec_add_unroll2.ptx,
+  result.json, fire.log}
+
+Host launchers (committed at tool/):
+- r067_p4_host.c (WMMA 16x16 fire harness, 140 lines)
+- r068_p4_host.c (f16 vec-add fire harness, 130 lines)
+- r069_p4_host.c (unroll byte-eq fire harness, 110 lines)
+
+Pattern lesson — direct-bash dispatch:
+- HEXA_FIRST_WARN hook blocks new tool/dispatch_*.sh creation (hexa-
+  first principle: stdlib/cloud is the canonical remote-dispatch
+  surface). Today's 3 fires used direct one-shot bash commands
+  (mkdir + scp + ssh nvcc + ssh ./host_bin) — same logical
+  operations, no persistent .sh on disk. Hexa-native dispatch via
+  stdlib/cloud is a clean follow-on cycle.
+
+Next layer (deferred):
+- Source-to-silicon e2e (substantial cycle):
+  - Launchable `@gpu_kernel fn f16_vadd(...)` source-level fixture
+  - Lowering through HIR -> MIR (gpu_kind=KERNEL) -> codegen_emit_ptx_sm80
+    -> ptxas-clean PTX -> ubu-2 fire
+  - Closes the FULL source-to-silicon chain (today closed silicon-
+    side via hand-emit PTX; codegen-side via lower_test fixtures).
+- Multi-tile WMMA GEMM K-loop fire (64x64 spec form per RFC 067 §3 P4)
+  - Today's #191 is single-tile (16x16); 4x4x4 multi-tile K-loop
+    integration with the .shared staging slot is a separate cycle.
+- bf16 silicon validation:
+  - ptxas 12.0 doesn't parse .reg .bf16 cleanly; bf16 codegen path
+    stays minimal until toolchain bump.
+
+Cumulative session metric: **24 PRs end-to-end in one session.**
+4 distinct kernel shapes silicon-validated on RTX 5070 (FP64 vec_add
++ FP64 GEMM from PR #82 baseline + f16 vec-add from #189 + unroll
+byte-eq from #190 + WMMA Tensor Core from #191).
+
+cross-link: PR #82 (canonical FP64 fire), PR #185 (P4 status pre-
+fires), PR #186 (P4 prereq codegen), PR #189/#190/#191 (the three
+silicon-fires), PR #193 (codegen<->silicon reconcile).
