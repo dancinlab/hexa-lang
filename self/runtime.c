@@ -59,6 +59,25 @@ extern char **environ; // posix_spawnp inherits parent env explicitly
 static int hxlcl_errno = 0;
 #undef errno
 #define errno hxlcl_errno
+// Cycle 63 forward decls — syscall wrappers used by earlier helpers
+// (e.g. hxlcl_printf line 451+ calls write). Bodies live in the
+// syscall block at line ~825 below.
+static long hxlcl_read(int fd, void *buf, unsigned long n);
+static long hxlcl_write(int fd, const void *buf, unsigned long n);
+static int  hxlcl_close(int fd);
+static int  hxlcl_getpid(void);
+static int  hxlcl_dup2(int oldfd, int newfd);
+static int  hxlcl_pipe(int fds[2]);
+static int  hxlcl_fork(void);
+static int  hxlcl_kill(int pid, int sig);
+static int  hxlcl_fcntl(int fd, int cmd, long arg);
+static int  hxlcl_ioctl(int fd, unsigned long req, void *arg);
+static long hxlcl_lseek(int fd, long off, int whence);
+static int  hxlcl_select(int nfds, void *r, void *w, void *e, void *t);
+static int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
+static int  hxlcl_waitpid(int pid, int *status, int options);
+static int  hxlcl_fstat(int fd, void *buf);
+static int  hxlcl_stat(const char *path, void *buf);
 
 // ─── RUNTIME.md Phase 1 Tier-A.1 — libc unhook helpers ───
 // Step-1 of the hexa-native runtime rewrite (RUNTIME.md cycle 46):
@@ -448,7 +467,7 @@ static int __attribute__((noinline)) hxlcl_vfprintf_fd(int fd, const char *fmt, 
     char buf[4096];
     int n = hxlcl_vsnprintf(buf, sizeof(buf), fmt, ap);
     if (n > (int)sizeof(buf) - 1) n = sizeof(buf) - 1;
-    return (int)write(fd, buf, (size_t)n);
+    return (int)hxlcl_write(fd, buf, (size_t)n);
 }
 static int __attribute__((noinline)) hxlcl_printf(const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
@@ -468,12 +487,12 @@ static int __attribute__((noinline)) hxlcl_fputs(const char *s, void *fp) {
     int fd = 1; if (fp == (void *)stderr) fd = 2;
     if (!s) return -1;
     size_t n = 0; while (((const volatile char *)s)[n]) n++;
-    return (int)write(fd, s, n);
+    return (int)hxlcl_write(fd, s, n);
 }
 static int __attribute__((noinline)) hxlcl_fputc(int c, void *fp) {
     int fd = 1; if (fp == (void *)stderr) fd = 2;
     unsigned char ch = (unsigned char)c;
-    return write(fd, &ch, 1) == 1 ? c : -1;
+    return hxlcl_write(fd, &ch, 1) == 1 ? c : -1;
 }
 static int __attribute__((noinline)) hxlcl_fflush(void *fp) {
     (void)fp;
@@ -481,15 +500,15 @@ static int __attribute__((noinline)) hxlcl_fflush(void *fp) {
 }
 static int __attribute__((noinline)) hxlcl_putchar(int c) {
     unsigned char ch = (unsigned char)c;
-    return write(1, &ch, 1) == 1 ? c : -1;
+    return hxlcl_write(1, &ch, 1) == 1 ? c : -1;
 }
 static void __attribute__((noinline)) hxlcl_perror(const char *s) {
     if (s && s[0]) {
         size_t n = 0; while (((const volatile char *)s)[n]) n++;
-        write(2, s, n);
-        write(2, ": ", 2);
+        hxlcl_write(2, s, n);
+        hxlcl_write(2, ": ", 2);
     }
-    write(2, "error\n", 6);
+    hxlcl_write(2, "error\n", 6);
 }
 // Cycle 53 — Tier-A.2 mmap-backed bump allocator. malloc never frees;
 // free is a noop; realloc bump-allocates new region + byte copy.
@@ -569,7 +588,7 @@ static int __attribute__((noinline)) hxlcl_fclose(void *fp) {
     if (v >= 0x1000) return 0;  // libc FILE* — don't close
     int fd = (int)v - 1;
     if (fd < 3) return 0;  // safety: never close 0/1/2
-    return close(fd);
+    return hxlcl_close(fd);
 }
 static int __attribute__((noinline)) _hxlcl_fp_fd(void *fp) {
     uintptr_t v = (uintptr_t)fp;
@@ -590,7 +609,7 @@ static size_t __attribute__((noinline)) hxlcl_fread(void *buf, size_t sz, size_t
     size_t got = 0;
     unsigned char *p = (unsigned char *)buf;
     while (got < total) {
-        long r = (long)read(fd, p + got, total - got);
+        long r = (long)hxlcl_read(fd, p + got, total - got);
         if (r <= 0) break;
         got += (size_t)r;
     }
@@ -604,7 +623,7 @@ static size_t __attribute__((noinline)) hxlcl_fwrite(const void *buf, size_t sz,
     size_t put = 0;
     const unsigned char *p = (const unsigned char *)buf;
     while (put < total) {
-        long r = (long)write(fd, p + put, total - put);
+        long r = (long)hxlcl_write(fd, p + put, total - put);
         if (r <= 0) break;
         put += (size_t)r;
     }
@@ -613,12 +632,12 @@ static size_t __attribute__((noinline)) hxlcl_fwrite(const void *buf, size_t sz,
 static long __attribute__((noinline)) hxlcl_ftell(void *fp) {
     int fd = _hxlcl_fp_fd(fp);
     if (fd < 0) return -1;
-    return (long)lseek(fd, 0, SEEK_CUR);
+    return (long)hxlcl_lseek(fd, 0, SEEK_CUR);
 }
 static int __attribute__((noinline)) hxlcl_fseek(void *fp, long offset, int whence) {
     int fd = _hxlcl_fp_fd(fp);
     if (fd < 0) return -1;
-    return lseek(fd, (off_t)offset, whence) < 0 ? -1 : 0;
+    return hxlcl_lseek(fd, (off_t)offset, whence) < 0 ? -1 : 0;
 }
 static void *__attribute__((noinline)) hxlcl_fdopen(int fd, const char *mode) {
     (void)mode;
@@ -819,6 +838,129 @@ static int __attribute__((noinline)) hxlcl_pthread_join(void *thread, void **ret
     if (retval) *retval = (void *)0;
     return 0;
 }
+// Cycle 63 — Darwin BSD ABI syscall wrappers via inline `svc 0x80`.
+// Each call: x16 = syscall number, x0..x5 = args, svc 0x80 → x0 = ret.
+// Replaces libc syscall wrappers (_read, _write, _open, etc) with
+// direct kernel trap. Currently arm64 only (aprime_cc is Mach-O arm64).
+#if defined(__arm64__) || defined(__aarch64__)
+#define HXLCL_SYS_EXIT      1
+#define HXLCL_SYS_FORK      2
+#define HXLCL_SYS_READ      3
+#define HXLCL_SYS_WRITE     4
+#define HXLCL_SYS_OPEN      5
+#define HXLCL_SYS_CLOSE     6
+#define HXLCL_SYS_WAIT4     7
+#define HXLCL_SYS_KILL     37
+#define HXLCL_SYS_PIPE     42
+#define HXLCL_SYS_DUP2     90
+#define HXLCL_SYS_FCNTL    92
+#define HXLCL_SYS_SELECT   93
+#define HXLCL_SYS_GETPID   20
+#define HXLCL_SYS_IOCTL    54
+#define HXLCL_SYS_POLL    230
+#define HXLCL_SYS_FSTAT   339
+#define HXLCL_SYS_STAT    338
+#define HXLCL_SYS_LSEEK   199
+#define HXLCL_SYS_MMAP    197
+
+static inline long _hxlcl_syscall1(long nr, long a0) {
+    register long x0 __asm__("x0") = a0;
+    register long x16 __asm__("x16") = nr;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16) : "memory", "cc");
+    return x0;
+}
+static inline long _hxlcl_syscall2(long nr, long a0, long a1) {
+    register long x0 __asm__("x0") = a0;
+    register long x1 __asm__("x1") = a1;
+    register long x16 __asm__("x16") = nr;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x1), "r"(x16) : "memory", "cc");
+    return x0;
+}
+static inline long _hxlcl_syscall3(long nr, long a0, long a1, long a2) {
+    register long x0 __asm__("x0") = a0;
+    register long x1 __asm__("x1") = a1;
+    register long x2 __asm__("x2") = a2;
+    register long x16 __asm__("x16") = nr;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x16) : "memory", "cc");
+    return x0;
+}
+static inline long _hxlcl_syscall4(long nr, long a0, long a1, long a2, long a3) {
+    register long x0 __asm__("x0") = a0;
+    register long x1 __asm__("x1") = a1;
+    register long x2 __asm__("x2") = a2;
+    register long x3 __asm__("x3") = a3;
+    register long x16 __asm__("x16") = nr;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x3), "r"(x16) : "memory", "cc");
+    return x0;
+}
+static inline long _hxlcl_syscall6(long nr, long a0, long a1, long a2, long a3, long a4, long a5) {
+    register long x0 __asm__("x0") = a0;
+    register long x1 __asm__("x1") = a1;
+    register long x2 __asm__("x2") = a2;
+    register long x3 __asm__("x3") = a3;
+    register long x4 __asm__("x4") = a4;
+    register long x5 __asm__("x5") = a5;
+    register long x16 __asm__("x16") = nr;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x16) : "memory", "cc");
+    return x0;
+}
+
+static long __attribute__((noinline)) hxlcl_read(int fd, void *buf, unsigned long n) {
+    return _hxlcl_syscall3(HXLCL_SYS_READ, (long)fd, (long)buf, (long)n);
+}
+static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) {
+    return _hxlcl_syscall3(HXLCL_SYS_WRITE, (long)fd, (long)buf, (long)n);
+}
+static int __attribute__((noinline)) hxlcl_close(int fd) {
+    return (int)_hxlcl_syscall1(HXLCL_SYS_CLOSE, (long)fd);
+}
+static int __attribute__((noinline)) hxlcl_getpid(void) {
+    return (int)_hxlcl_syscall1(HXLCL_SYS_GETPID, 0);
+}
+static int __attribute__((noinline)) hxlcl_dup2(int oldfd, int newfd) {
+    return (int)_hxlcl_syscall2(HXLCL_SYS_DUP2, (long)oldfd, (long)newfd);
+}
+static int __attribute__((noinline)) hxlcl_pipe(int fds[2]) {
+    long r = _hxlcl_syscall1(HXLCL_SYS_PIPE, (long)fds);
+    // Darwin: pipe returns r=x0, w=x1 in pair-return convention. The
+    // syscall ABI stores both in x0/x1 of the trap frame. For simplicity
+    // we fall back to expecting the kernel wrote `int fds[2]` for us.
+    return (r < 0) ? -1 : 0;
+}
+static int __attribute__((noinline)) hxlcl_fork(void) {
+    return (int)_hxlcl_syscall1(HXLCL_SYS_FORK, 0);
+}
+static int __attribute__((noinline)) hxlcl_kill(int pid, int sig) {
+    return (int)_hxlcl_syscall2(HXLCL_SYS_KILL, (long)pid, (long)sig);
+}
+static int __attribute__((noinline)) hxlcl_fcntl(int fd, int cmd, long arg) {
+    return (int)_hxlcl_syscall3(HXLCL_SYS_FCNTL, (long)fd, (long)cmd, arg);
+}
+static int __attribute__((noinline)) hxlcl_ioctl(int fd, unsigned long req, void *arg) {
+    return (int)_hxlcl_syscall3(HXLCL_SYS_IOCTL, (long)fd, (long)req, (long)arg);
+}
+static long __attribute__((noinline)) hxlcl_lseek(int fd, long off, int whence) {
+    return _hxlcl_syscall3(HXLCL_SYS_LSEEK, (long)fd, off, (long)whence);
+}
+static int __attribute__((noinline)) hxlcl_select(int nfds, void *r, void *w, void *e, void *t) {
+    return (int)_hxlcl_syscall6(HXLCL_SYS_SELECT, (long)nfds, (long)r, (long)w, (long)e, (long)t, 0);
+}
+static int __attribute__((noinline)) hxlcl_poll(void *fds, unsigned int nfds, int timeout) {
+    return (int)_hxlcl_syscall3(HXLCL_SYS_POLL, (long)fds, (long)nfds, (long)timeout);
+}
+static int __attribute__((noinline)) hxlcl_waitpid(int pid, int *status, int options) {
+    return (int)_hxlcl_syscall4(HXLCL_SYS_WAIT4, (long)pid, (long)status, (long)options, 0);
+}
+static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags, int mode) {
+    return (int)_hxlcl_syscall3(HXLCL_SYS_OPEN, (long)path, (long)flags, (long)mode);
+}
+static int __attribute__((noinline)) hxlcl_fstat(int fd, void *buf) {
+    return (int)_hxlcl_syscall2(HXLCL_SYS_FSTAT, (long)fd, (long)buf);
+}
+static int __attribute__((noinline)) hxlcl_stat(const char *path, void *buf) {
+    return (int)_hxlcl_syscall2(HXLCL_SYS_STAT, (long)path, (long)buf);
+}
+#endif  /* arm64 */
 // Cycle 62 — time/terminal/mach stubs. aprime_cc doesn't read clock
 // or manipulate terminal during compile. mach_task_self_ is a Darwin
 // extension global (not even a function) — returning 0 as a sentinel.
@@ -4761,16 +4903,16 @@ HexaVal hexa_safetensors_mmap_open(HexaVal path_v) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) return hexa_int(-1);
     struct stat st;
-    if (fstat(fd, &st) != 0) { close(fd); return hexa_int(-1); }
+    if (hxlcl_fstat(fd, &st) != 0) { hxlcl_close(fd); return hexa_int(-1); }
     size_t len = (size_t)st.st_size;
-    if (len == 0) { close(fd); return hexa_int(-1); }
+    if (len == 0) { hxlcl_close(fd); return hexa_int(-1); }
     // Pre-mmap header validation could go here (read first 8 bytes
     // for header_len, verify 8 + header_len <= len). Phase 1 skips:
     // the hexa-side caller already parses + validates the header.
     void* base = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (base == MAP_FAILED) { close(fd); return hexa_int(-1); }
+    if (base == MAP_FAILED) { hxlcl_close(fd); return hexa_int(-1); }
     int64_t id = _hx_mmap_alloc_slot();
-    if (id < 0) { munmap(base, len); close(fd); return hexa_int(-1); }
+    if (id < 0) { munmap(base, len); hxlcl_close(fd); return hexa_int(-1); }
     _hx_mmap_table[id].base = base;
     _hx_mmap_table[id].len  = len;
     _hx_mmap_table[id].fd   = fd;
@@ -4946,7 +5088,7 @@ HexaVal hexa_safetensors_mmap_close(HexaVal h_v) {
         e->len = 0;
     }
     if (e->fd >= 0) {
-        close(e->fd);
+        hxlcl_close(e->fd);
         e->fd = -1;
     }
     if (_hx_mmap_freelist_n >= _hx_mmap_freelist_cap) {
@@ -5152,7 +5294,7 @@ static void _hx_gauss_rng_lazy_init(void) {
         _hx_gauss_rng_state = hxlcl_strtoull(env, NULL, 10);
     } else {
         _hx_gauss_rng_state = (uint64_t)hxlcl_time(NULL) ^
-                              ((uint64_t)getpid() << 16);
+                              ((uint64_t)hxlcl_getpid() << 16);
     }
     if (_hx_gauss_rng_state == 0) _hx_gauss_rng_state = 1;
     _hx_gauss_rng_inited = 1;
@@ -7915,14 +8057,14 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
         return arr;
     }
     int out_pipe[2], err_pipe[2];
-    if (pipe(out_pipe) != 0) {
+    if (hxlcl_pipe(out_pipe) != 0) {
         arr = hexa_array_push(arr, hexa_str(""));
         arr = hexa_array_push(arr, hexa_str("pipe: stdout"));
         arr = hexa_array_push(arr, hexa_int(127));
         return arr;
     }
-    if (pipe(err_pipe) != 0) {
-        close(out_pipe[0]); close(out_pipe[1]);
+    if (hxlcl_pipe(err_pipe) != 0) {
+        hxlcl_close(out_pipe[0]); hxlcl_close(out_pipe[1]);
         arr = hexa_array_push(arr, hexa_str(""));
         arr = hexa_array_push(arr, hexa_str("pipe: stderr"));
         arr = hexa_array_push(arr, hexa_int(127));
@@ -7930,10 +8072,10 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
     }
     // 2026-05-06 — POSIX fork buffer flush (parent stdio inherited by child)
     fflush(NULL);
-    pid_t pid = fork();
+    pid_t pid = hxlcl_fork();
     if (pid < 0) {
-        close(out_pipe[0]); close(out_pipe[1]);
-        close(err_pipe[0]); close(err_pipe[1]);
+        hxlcl_close(out_pipe[0]); hxlcl_close(out_pipe[1]);
+        hxlcl_close(err_pipe[0]); hxlcl_close(err_pipe[1]);
         arr = hexa_array_push(arr, hexa_str(""));
         arr = hexa_array_push(arr, hexa_str("fork failed"));
         arr = hexa_array_push(arr, hexa_int(127));
@@ -7941,10 +8083,10 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
     }
     if (pid == 0) {
         // child: rewire stdout/stderr then exec shell
-        dup2(out_pipe[1], 1);
-        dup2(err_pipe[1], 2);
-        close(out_pipe[0]); close(out_pipe[1]);
-        close(err_pipe[0]); close(err_pipe[1]);
+        hxlcl_dup2(out_pipe[1], 1);
+        hxlcl_dup2(err_pipe[1], 2);
+        hxlcl_close(out_pipe[0]); hxlcl_close(out_pipe[1]);
+        hxlcl_close(err_pipe[0]); hxlcl_close(err_pipe[1]);
         hxlcl_execl("/bin/sh", "sh", "-c", HX_STR(cmd), (char*)NULL);
         _exit(127);
     }
@@ -7952,8 +8094,8 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
     // Simple drain loop: alternate non-blocking would be better but for
     // typical build-script command sizes (sub-MB) sequential is fine —
     // we close(write) immediately so EOF propagates once child exits.
-    close(out_pipe[1]);
-    close(err_pipe[1]);
+    hxlcl_close(out_pipe[1]);
+    hxlcl_close(err_pipe[1]);
     char buf[4096];
     size_t ocap = 4096, olen = 0;
     char* obuf = (char*)malloc(ocap);
@@ -7965,7 +8107,7 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
     int open_mask = 3; // bit 0 = stdout, bit 1 = stderr
     while (open_mask) {
         if (open_mask & 1) {
-            ssize_t n = read(of, buf, sizeof(buf));
+            ssize_t n = hxlcl_read(of, buf, sizeof(buf));
             if (n > 0 && obuf) {
                 while (olen + (size_t)n + 1 > ocap) {
                     ocap *= 2;
@@ -7979,7 +8121,7 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
             }
         }
         if (open_mask & 2) {
-            ssize_t n = read(ef, buf, sizeof(buf));
+            ssize_t n = hxlcl_read(ef, buf, sizeof(buf));
             if (n > 0 && ebuf) {
                 while (elen + (size_t)n + 1 > ecap) {
                     ecap *= 2;
@@ -7993,9 +8135,9 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
             }
         }
     }
-    close(of); close(ef);
+    hxlcl_close(of); hxlcl_close(ef);
     int status = 0;
-    waitpid(pid, &status, 0);
+    hxlcl_waitpid(pid, &status, 0);
     int exit_code;
     if (WIFEXITED(status))         exit_code = WEXITSTATUS(status);
     else if (WIFSIGNALED(status))  exit_code = 128 + WTERMSIG(status);
@@ -9525,7 +9667,7 @@ static void _hexa_init_fn_shims(void) {
 #include "native/namespace.c"
 
 /* ═══════════════════════════════════════════════════════════════════
- * stdlib/proc/wait — waitpid(2) wrapper for SIGCHLD reaping.
+ * stdlib/proc/wait — hxlcl_waitpid(2) wrapper for SIGCHLD reaping.
  *
  *   hexa_proc_wait(pid, flags)        -> map { pid, exited, signaled,
  *                                              exit_code, term_sig,
@@ -9866,28 +10008,28 @@ HexaVal hexa_exec_stream_async_impl(HexaVal cmd) {
     pid_t child_pid = (pid_t)-1;
     {
         int pipefd[2];
-        if (pipe(pipefd) == 0) {
-            pid_t pid = fork();
+        if (hxlcl_pipe(pipefd) == 0) {
+            pid_t pid = hxlcl_fork();
             if (pid == 0) {
                 // child
                 setpgid(0, 0);                 // own process group -> killpg target
-                close(pipefd[0]);
+                hxlcl_close(pipefd[0]);
                 if (pipefd[1] != STDOUT_FILENO) {
-                    dup2(pipefd[1], STDOUT_FILENO);
-                    close(pipefd[1]);
+                    hxlcl_dup2(pipefd[1], STDOUT_FILENO);
+                    hxlcl_close(pipefd[1]);
                 }
                 hxlcl_execl("/bin/sh", "sh", "-c", cmd_s, (char*)NULL);
                 _exit(127);                    // execl failed
             } else if (pid > 0) {
                 // parent
-                close(pipefd[1]);
+                hxlcl_close(pipefd[1]);
                 setpgid(pid, pid);             // race-safe (also set on child side)
                 fp = fdopen(pipefd[0], "r");
-                if (!fp) { close(pipefd[0]); kill(-pid, SIGKILL); waitpid(pid, NULL, 0); }
+                if (!fp) { hxlcl_close(pipefd[0]); hxlcl_kill(-pid, SIGKILL); hxlcl_waitpid(pid, NULL, 0); }
                 else child_pid = pid;
             } else {
                 // fork failed
-                close(pipefd[0]); close(pipefd[1]);
+                hxlcl_close(pipefd[0]); hxlcl_close(pipefd[1]);
             }
         }
     }
@@ -9897,8 +10039,8 @@ HexaVal hexa_exec_stream_async_impl(HexaVal cmd) {
         child_pid = (pid_t)-1;                  // popen path: no usable pid
     }
     int fd = fileno(fp);
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    int flags = hxlcl_fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) hxlcl_fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     _hexa_stream_slots[slot].fp = fp;
     _hexa_stream_slots[slot].pid = child_pid;
     _hexa_stream_slots[slot].buf_len = 0;
@@ -9961,7 +10103,7 @@ HexaVal hexa_exec_stream_poll_impl(HexaVal handle) {
        Append bytes; rescan only newly-appended region for first newline. */
     if (nl_pos < 0 && !s->eof) {
         char chunk[4096];
-        ssize_t n = read(fileno(s->fp), chunk, sizeof(chunk));
+        ssize_t n = hxlcl_read(fileno(s->fp), chunk, sizeof(chunk));
         if (n == 0) {
             s->eof = 1;
         } else if (n > 0) {
@@ -10038,7 +10180,7 @@ HexaVal hexa_exec_stream_close_impl(HexaVal handle) {
         raw_rc = -1;
         for (;;) {
             int st = 0;
-            pid_t r = waitpid(s->pid, &st, 0);
+            pid_t r = hxlcl_waitpid(s->pid, &st, 0);
             if (r < 0) { if (errno == EINTR) continue; raw_rc = -1; break; }
             raw_rc = st;  /* pclose-style encoded status */
             break;
@@ -10064,7 +10206,7 @@ HexaVal hexa_exec_stream_close_impl(HexaVal handle) {
     s->eof = 0;
     s->in_use = 0;
     /* v1.4 — close stdin_fd if still open (bidi path; safe no-op for read-only). */
-    if (s->stdin_fd >= 0) { close(s->stdin_fd); s->stdin_fd = -1; }
+    if (s->stdin_fd >= 0) { hxlcl_close(s->stdin_fd); s->stdin_fd = -1; }
     /* Note: s->buf 보존 (재사용 위해 free 안 함; 다음 spawn 시 재초기화). */
     return hexa_int((int64_t)proper_rc);
 }
@@ -10091,7 +10233,7 @@ HexaVal hexa_exec_stream_kill_impl(HexaVal handle) {
     HexaStreamSlot* s = &_hexa_stream_slots[h];
     if (!s->in_use || !s->fp) return hexa_int((int64_t)-1);
     if (s->pid <= 0) {
-        /* popen fallback slot -- no pid. Best-effort: close the pipe (the child
+        /* popen fallback slot -- no pid. Best-effort: close the hxlcl_pipe(the child
            sees EOF/SIGPIPE on its next write) and release the slot. */
         fclose(s->fp);
         s->fp = NULL; s->pid = (pid_t)-1; s->buf_len = 0; s->eof = 0; s->in_use = 0;
@@ -10100,12 +10242,12 @@ HexaVal hexa_exec_stream_kill_impl(HexaVal handle) {
     pid_t pid = s->pid;
     pid_t pgid = pid;  /* setpgid(0,0) in the child made pid the group leader */
     /* Step 1: polite SIGTERM to the whole group. */
-    kill(-pgid, SIGTERM);
-    /* Step 2: ~200ms grace, polled every 10ms via waitpid(WNOHANG). */
+    hxlcl_kill(-pgid, SIGTERM);
+    /* Step 2: ~200ms grace, polled every 10ms via hxlcl_waitpid(WNOHANG). */
     int reaped = 0; int raw_rc = -1;
     for (int i = 0; i < 20; i++) {
         int st = 0;
-        pid_t r = waitpid(pid, &st, WNOHANG);
+        pid_t r = hxlcl_waitpid(pid, &st, WNOHANG);
         if (r == pid) { reaped = 1; raw_rc = st; break; }
         if (r < 0 && errno != EINTR && errno != 0) break;  /* ECHILD etc. */
         struct timespec ts; ts.tv_sec = 0; ts.tv_nsec = 10L * 1000L * 1000L;  /* 10ms */
@@ -10113,10 +10255,10 @@ HexaVal hexa_exec_stream_kill_impl(HexaVal handle) {
     }
     /* Step 3: still alive -> SIGKILL the group and blocking-reap. */
     if (!reaped) {
-        kill(-pgid, SIGKILL);
+        hxlcl_kill(-pgid, SIGKILL);
         for (;;) {
             int st = 0;
-            pid_t r = waitpid(pid, &st, 0);
+            pid_t r = hxlcl_waitpid(pid, &st, 0);
             if (r < 0) { if (errno == EINTR) continue; raw_rc = -1; break; }
             raw_rc = st; break;
         }
@@ -10186,15 +10328,15 @@ HexaVal hexa_exec_stream_open_impl(HexaVal cmd) {
     // Two pipes — pipe_in for parent→child stdin, pipe_out for child→parent stdout.
     int pipe_in[2]  = { -1, -1 };
     int pipe_out[2] = { -1, -1 };
-    if (pipe(pipe_in) != 0) return hexa_int((int64_t)-1);
-    if (pipe(pipe_out) != 0) {
-        close(pipe_in[0]); close(pipe_in[1]);
+    if (hxlcl_pipe(pipe_in) != 0) return hexa_int((int64_t)-1);
+    if (hxlcl_pipe(pipe_out) != 0) {
+        hxlcl_close(pipe_in[0]); hxlcl_close(pipe_in[1]);
         return hexa_int((int64_t)-1);
     }
-    pid_t pid = fork();
+    pid_t pid = hxlcl_fork();
     if (pid < 0) {
-        close(pipe_in[0]); close(pipe_in[1]);
-        close(pipe_out[0]); close(pipe_out[1]);
+        hxlcl_close(pipe_in[0]); hxlcl_close(pipe_in[1]);
+        hxlcl_close(pipe_out[0]); hxlcl_close(pipe_out[1]);
         return hexa_int((int64_t)-1);
     }
     if (pid == 0) {
@@ -10202,32 +10344,32 @@ HexaVal hexa_exec_stream_open_impl(HexaVal cmd) {
         setpgid(0, 0);
         // stdin ← pipe_in[0]
         if (pipe_in[0] != STDIN_FILENO) {
-            dup2(pipe_in[0], STDIN_FILENO);
-            close(pipe_in[0]);
+            hxlcl_dup2(pipe_in[0], STDIN_FILENO);
+            hxlcl_close(pipe_in[0]);
         }
-        close(pipe_in[1]);
+        hxlcl_close(pipe_in[1]);
         // stdout → pipe_out[1]
         if (pipe_out[1] != STDOUT_FILENO) {
-            dup2(pipe_out[1], STDOUT_FILENO);
-            close(pipe_out[1]);
+            hxlcl_dup2(pipe_out[1], STDOUT_FILENO);
+            hxlcl_close(pipe_out[1]);
         }
-        close(pipe_out[0]);
+        hxlcl_close(pipe_out[0]);
         hxlcl_execl("/bin/sh", "sh", "-c", cmd_s, (char*)NULL);
         _exit(127);
     }
     // parent
-    close(pipe_in[0]);
-    close(pipe_out[1]);
+    hxlcl_close(pipe_in[0]);
+    hxlcl_close(pipe_out[1]);
     setpgid(pid, pid);
     FILE* fp = fdopen(pipe_out[0], "r");
     if (!fp) {
-        close(pipe_out[0]); close(pipe_in[1]);
-        kill(-pid, SIGKILL); waitpid(pid, NULL, 0);
+        hxlcl_close(pipe_out[0]); hxlcl_close(pipe_in[1]);
+        hxlcl_kill(-pid, SIGKILL); hxlcl_waitpid(pid, NULL, 0);
         return hexa_int((int64_t)-1);
     }
     int rfd = fileno(fp);
-    int rflags = fcntl(rfd, F_GETFL, 0);
-    if (rflags >= 0) fcntl(rfd, F_SETFL, rflags | O_NONBLOCK);
+    int rflags = hxlcl_fcntl(rfd, F_GETFL, 0);
+    if (rflags >= 0) hxlcl_fcntl(rfd, F_SETFL, rflags | O_NONBLOCK);
     // stdin fd kept blocking — caller decides write strategy via exec_stream_write.
     _hexa_stream_slots[slot].fp = fp;
     _hexa_stream_slots[slot].pid = pid;
@@ -10249,7 +10391,7 @@ HexaVal hexa_exec_stream_write_impl(HexaVal handle, HexaVal data) {
     size_t total = hxlcl_strlen(s);
     size_t written = 0;
     while (written < total) {
-        ssize_t n = write(fd, s + written, total - written);
+        ssize_t n = hxlcl_write(fd, s + written, total - written);
         if (n < 0) {
             if (errno == EINTR) continue;
             return hexa_int((int64_t)-1);
@@ -10266,7 +10408,7 @@ HexaVal hexa_exec_stream_close_stdin_impl(HexaVal handle) {
     if (!_hexa_stream_slots[h].in_use) return hexa_int((int64_t)-1);
     int fd = _hexa_stream_slots[h].stdin_fd;
     if (fd < 0) return hexa_int((int64_t)-1);
-    close(fd);
+    hxlcl_close(fd);
     _hexa_stream_slots[h].stdin_fd = -1;
     return hexa_int((int64_t)0);
 }

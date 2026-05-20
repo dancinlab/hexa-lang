@@ -131,7 +131,7 @@ int term_get_winsize(int *rows, int *cols) {
         return -1;
     }
     struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0) {
+    if (hxlcl_ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0) {
         return -1;
     }
     *rows = (int)ws.ws_row;
@@ -148,7 +148,7 @@ int term_poll_stdin(int timeout_ms) {
     pfd.revents = 0;
     int rc;
     do {
-        rc = poll(&pfd, 1, timeout_ms);
+        rc = hxlcl_poll(&pfd, 1, timeout_ms);
     } while (rc < 0 && errno == EINTR);
     if (rc < 0) return -1;
     if (rc == 0) return 0;
@@ -157,7 +157,7 @@ int term_poll_stdin(int timeout_ms) {
      * (parent/terminal hangup, orphan case). Distinct from -1 (poll
      * syscall error) and 0 (timeout) so callers can route to clean EOF.
      * Root-cause for the 2026-05-05 hive-hexa-bin runaway (PPID=1 orphan
-     * tight-looped poll() → hexa_array_push allocations for 5h, RSS 36GB):
+     * tight-looped hxlcl_poll() → hexa_array_push allocations for 5h, RSS 36GB):
      * the prior `(POLLIN ? 1 : 0)` collapse made callers treat hangup as
      * timeout and re-poll forever, never reaching an exit branch. */
     if (pfd.revents & (POLLHUP | POLLERR | POLLNVAL)) return -2;
@@ -177,7 +177,7 @@ int term_read_byte(void) {
     unsigned char b;
     ssize_t n;
     do {
-        n = read(STDIN_FILENO, &b, 1);
+        n = hxlcl_read(STDIN_FILENO, &b, 1);
     } while (n < 0 && errno == EINTR);
     if (n != 1) return -1;
     return (int)b;
@@ -190,7 +190,7 @@ int term_read_bytes(unsigned char *buf, int max_n) {
     }
     ssize_t n;
     do {
-        n = read(STDIN_FILENO, buf, (size_t)max_n);
+        n = hxlcl_read(STDIN_FILENO, buf, (size_t)max_n);
     } while (n < 0 && errno == EINTR);
     if (n < 0) return -1;
     return (int)n;
@@ -203,7 +203,7 @@ int term_write(const char *buf, int n) {
     }
     int total = 0;
     while (total < n) {
-        ssize_t w = write(STDOUT_FILENO, buf + total, (size_t)(n - total));
+        ssize_t w = hxlcl_write(STDOUT_FILENO, buf + total, (size_t)(n - total));
         if (w < 0) {
             if (errno == EINTR) continue;
             return -1;
@@ -276,8 +276,8 @@ int term_isatty_stdout(void) {
  *   int pid = 0;
  *   int mfd = term_pty_spawn(["/bin/sh", "-c", "echo hi", NULL], 24, 80, &pid);
  *   // write to mfd to drive child stdin; read mfd to consume stdout/err
- *   waitpid(pid, &status, 0);
- *   close(mfd);
+ *   hxlcl_waitpid(pid, &status, 0);
+ *   hxlcl_close(mfd);
  *
  * Caller is responsible for closing mfd + reaping the child.
  */
@@ -312,7 +312,7 @@ int term_pty_spawn(const char *const argv[], int rows, int cols, int *out_pid) {
  * on error. Non-blocking when fd is set O_NONBLOCK. */
 int term_fd_read(int fd, unsigned char *buf, int max_bytes) {
     if (fd < 0 || !buf || max_bytes <= 0) return -1;
-    ssize_t n = read(fd, buf, (size_t)max_bytes);
+    ssize_t n = hxlcl_read(fd, buf, (size_t)max_bytes);
     if (n < 0) return -1;
     return (int)n;
 }
@@ -320,20 +320,20 @@ int term_fd_read(int fd, unsigned char *buf, int max_bytes) {
 /* Write n bytes to fd. Returns count written, -1 on error. */
 int term_fd_write(int fd, const unsigned char *buf, int n) {
     if (fd < 0 || !buf || n < 0) return -1;
-    ssize_t w = write(fd, buf, (size_t)n);
+    ssize_t w = hxlcl_write(fd, buf, (size_t)n);
     if (w < 0) return -1;
     return (int)w;
 }
 
 int term_fd_close(int fd) {
-    return close(fd);
+    return hxlcl_close(fd);
 }
 
 /* Non-blocking poll on fd — returns 1 if readable, 0 on timeout, -1 on error. */
 int term_fd_poll(int fd, int timeout_ms) {
     if (fd < 0) return -1;
     struct pollfd pfd = { .fd = fd, .events = POLLIN, .revents = 0 };
-    int rc = poll(&pfd, 1, timeout_ms);
+    int rc = hxlcl_poll(&pfd, 1, timeout_ms);
     if (rc < 0) return -1;
     if (rc == 0) return 0;
     if (pfd.revents & (POLLIN | POLLHUP)) return 1;
@@ -348,7 +348,7 @@ int term_fd_poll(int fd, int timeout_ms) {
 int term_pty_reap(int pid, int *out_status) {
 #if defined(__APPLE__) || defined(__linux__)
     int st = 0;
-    pid_t r = waitpid((pid_t)pid, &st, WNOHANG);
+    pid_t r = hxlcl_waitpid((pid_t)pid, &st, WNOHANG);
     if (r < 0) return -1;
     if (r == 0) return 0;
     if (out_status) *out_status = st;

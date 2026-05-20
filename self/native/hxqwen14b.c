@@ -495,22 +495,22 @@ static int read_file_to_buf(const char* path, char** out_buf, size_t* out_len) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) return -1;
     struct stat st;
-    if (fstat(fd, &st) < 0) { close(fd); return -2; }
+    if (hxlcl_fstat(fd, &st) < 0) { hxlcl_close(fd); return -2; }
     if (st.st_size <= 0 || st.st_size > (off_t)(1 << 28)) { // 256MB cap
-        close(fd);
+        hxlcl_close(fd);
         return -3;
     }
     char* buf = (char*)malloc((size_t)st.st_size + 1);
-    if (!buf) { close(fd); return -4; }
+    if (!buf) { hxlcl_close(fd); return -4; }
     ssize_t got = 0;
     size_t need = (size_t)st.st_size;
     while (got < (ssize_t)need) {
-        ssize_t n = read(fd, buf + got, need - (size_t)got);
-        if (n <= 0) { free(buf); close(fd); return -5; }
+        ssize_t n = hxlcl_read(fd, buf + got, need - (size_t)got);
+        if (n <= 0) { free(buf); hxlcl_close(fd); return -5; }
         got += n;
     }
     buf[need] = '\0';
-    close(fd);
+    hxlcl_close(fd);
     *out_buf = buf;
     *out_len = need;
     return 0;
@@ -591,7 +591,7 @@ int hxqwen14b_safetensors_probe(int64_t path_p, void* out_dims) {
         // Fallback: check for single-file safetensors.
         snprintf(path, sizeof(path), "%s/model.safetensors", dir);
         struct stat st;
-        if (stat(path, &st) == 0 && st.st_size > 0) {
+        if (hxlcl_stat(path, &st) == 0 && st.st_size > 0) {
             out->n_tensors = -1;  // unknown without parsing
             out->total_bytes = (int64_t)st.st_size;
             // single-file layout typical for ≤7B; for 14B this is unexpected.
@@ -2790,20 +2790,20 @@ static int v53_read_shard_header(const char* path, char** out_hdr,
     int fd = open(path, O_RDONLY);
     if (fd < 0) return -1;
     uint64_t hdr_bytes = 0;
-    if (read(fd, &hdr_bytes, 8) != 8) { close(fd); return -2; }
+    if (hxlcl_read(fd, &hdr_bytes, 8) != 8) { hxlcl_close(fd); return -2; }
     if (hdr_bytes == 0 || hdr_bytes > (uint64_t)(1 << 26)) {
-        close(fd); return -3;
+        hxlcl_close(fd); return -3;
     }
     char* hdr = (char*)malloc((size_t)hdr_bytes + 1);
-    if (!hdr) { close(fd); return -4; }
+    if (!hdr) { hxlcl_close(fd); return -4; }
     ssize_t got = 0;
     while (got < (ssize_t)hdr_bytes) {
-        ssize_t n = read(fd, hdr + got, (size_t)hdr_bytes - (size_t)got);
-        if (n <= 0) { free(hdr); close(fd); return -5; }
+        ssize_t n = hxlcl_read(fd, hdr + got, (size_t)hdr_bytes - (size_t)got);
+        if (n <= 0) { free(hdr); hxlcl_close(fd); return -5; }
         got += n;
     }
     hdr[hdr_bytes] = '\0';
-    close(fd);
+    hxlcl_close(fd);
     *out_hdr = hdr;
     *out_hdr_len = (size_t)hdr_bytes;
     *out_data_off = (int64_t)(8 + hdr_bytes);
@@ -2891,7 +2891,7 @@ int hxqwen14b_load_tensor_bf16(int64_t shard_path_p, int64_t name_p,
     if (fd < 0) return RC_ERR_IO;
     size_t map_len = (size_t)(info.byte_start + info.byte_count);
     void* mapped = mmap(NULL, map_len, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
+    hxlcl_close(fd);
     if (mapped == MAP_FAILED) return RC_ERR_IO;
 
     int64_t dev = hxqwen14b_cu_malloc_bytes(info.byte_count);

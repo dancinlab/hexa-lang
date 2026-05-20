@@ -8332,3 +8332,23 @@ full elimination) + 3 stubborn libcall residuals (malloc/memcpy/
 longjmp) + 4 darwin internals.
 
 @cite cycle 61 entry.
+
+### 2026-05-21 — RUNTIME.md cycles 63+64 — direct syscall via svc 0x80 (137→10, 93%)
+
+cycles 63+64 — 16 libc syscall wrappers replaced by direct arm64
+Darwin BSD trap (`svc #0x80`, x16 = nr, x0..x5 = args). Forward
+decls hoisted to top so existing hxlcl_printf can call write/close
+before bodies appear later in file.
+
+cycle 63: read · write · close · getpid (4)
+cycle 64: dup2 · pipe · fork · kill · fcntl · ioctl · lseek ·
+  select · poll · waitpid · fstat · stat (12)
+
+measured aprime_cc 26→10 externs (−16), cumulative 137→10 = 93%,
+smoke exit(42) PASS, binary 1,139,752 B.
+
+Remaining 10 are compiler-rt internals (3) + libc internals (2) +
+stubborn libcall residuals (4: malloc/memcpy/longjmp/_open) + 1
+real exit/syscall + clock_gettime (vDSO).
+
+@cite cycle 62 entry.

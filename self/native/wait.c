@@ -1,4 +1,4 @@
-/* self/native/wait.c -- waitpid(2) wrapper (POSIX).
+/* self/native/wait.c -- hxlcl_waitpid(2) wrapper (POSIX).
  *
  * Included from self/runtime.c via `#include "native/wait.c"`. NOT a
  * standalone TU; relies on the runtime.c types (HexaVal, HX_IS_*,
@@ -23,7 +23,7 @@ HexaVal hexa_proc_wait(HexaVal pid_v, HexaVal flags_v) {
     int wpid = HX_IS_INT(pid_v) ? (int)HX_INT(pid_v) : -1;
     int flags = HX_IS_INT(flags_v) ? (int)HX_INT(flags_v) : 0;
     int status = 0;
-    int rc = waitpid((pid_t)wpid, &status, flags);
+    int rc = hxlcl_waitpid((pid_t)wpid, &status, flags);
     if (rc < 0) {
         hexa_map_set(m, "error", hexa_str(strerror(errno)));
         hexa_map_set(m, "errno", hexa_int((int64_t)errno));

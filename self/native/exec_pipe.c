@@ -53,19 +53,19 @@ HexaVal hexa_exec_pipe_open(HexaVal argv_v, HexaVal env_v) {
     }
 
     int p_stdin[2], p_stdout[2], p_stderr[2];
-    if (pipe(p_stdin)  != 0) { /* fall through to cleanup */ goto fail_pipe; }
-    if (pipe(p_stdout) != 0) { close(p_stdin[0]); close(p_stdin[1]); goto fail_pipe; }
-    if (pipe(p_stderr) != 0) {
-        close(p_stdin[0]); close(p_stdin[1]);
-        close(p_stdout[0]); close(p_stdout[1]);
+    if (hxlcl_pipe(p_stdin)  != 0) { /* fall through to cleanup */ goto fail_pipe; }
+    if (hxlcl_pipe(p_stdout) != 0) { hxlcl_close(p_stdin[0]); hxlcl_close(p_stdin[1]); goto fail_pipe; }
+    if (hxlcl_pipe(p_stderr) != 0) {
+        hxlcl_close(p_stdin[0]); hxlcl_close(p_stdin[1]);
+        hxlcl_close(p_stdout[0]); hxlcl_close(p_stdout[1]);
         goto fail_pipe;
     }
 
-    pid_t pid = fork();
+    pid_t pid = hxlcl_fork();
     if (pid < 0) {
-        close(p_stdin[0]); close(p_stdin[1]);
-        close(p_stdout[0]); close(p_stdout[1]);
-        close(p_stderr[0]); close(p_stderr[1]);
+        hxlcl_close(p_stdin[0]); hxlcl_close(p_stdin[1]);
+        hxlcl_close(p_stdout[0]); hxlcl_close(p_stdout[1]);
+        hxlcl_close(p_stderr[0]); hxlcl_close(p_stderr[1]);
         for (int i = 0; i < argc; i++) free(argv[i]);
         free(argv);
         if (envp) { for (int i = 0; i < envc; i++) free(envp[i]); free(envp); }
@@ -73,12 +73,12 @@ HexaVal hexa_exec_pipe_open(HexaVal argv_v, HexaVal env_v) {
     }
     if (pid == 0) {
         /* child */
-        dup2(p_stdin[0],  STDIN_FILENO);
-        dup2(p_stdout[1], STDOUT_FILENO);
-        dup2(p_stderr[1], STDERR_FILENO);
-        close(p_stdin[0]);  close(p_stdin[1]);
-        close(p_stdout[0]); close(p_stdout[1]);
-        close(p_stderr[0]); close(p_stderr[1]);
+        hxlcl_dup2(p_stdin[0],  STDIN_FILENO);
+        hxlcl_dup2(p_stdout[1], STDOUT_FILENO);
+        hxlcl_dup2(p_stderr[1], STDERR_FILENO);
+        hxlcl_close(p_stdin[0]);  hxlcl_close(p_stdin[1]);
+        hxlcl_close(p_stdout[0]); hxlcl_close(p_stdout[1]);
+        hxlcl_close(p_stderr[0]); hxlcl_close(p_stderr[1]);
         /* execvp does PATH lookup, which we need for short names like
          * "sh". When an envp[] is supplied, switch `environ` over so
          * the child inherits exactly those vars but execvp still
@@ -92,9 +92,9 @@ HexaVal hexa_exec_pipe_open(HexaVal argv_v, HexaVal env_v) {
         _exit(127);
     }
     /* parent */
-    close(p_stdin[0]);
-    close(p_stdout[1]);
-    close(p_stderr[1]);
+    hxlcl_close(p_stdin[0]);
+    hxlcl_close(p_stdout[1]);
+    hxlcl_close(p_stderr[1]);
     for (int i = 0; i < argc; i++) free(argv[i]);
     free(argv);
     if (envp) { for (int i = 0; i < envc; i++) free(envp[i]); free(envp); }
@@ -110,5 +110,5 @@ fail_pipe:
     for (int i = 0; i < argc; i++) free(argv[i]);
     free(argv);
     if (envp) { for (int i = 0; i < envc; i++) free(envp[i]); free(envp); }
-    return _crypto_error("exec_pipe_open: pipe() failed");
+    return _crypto_error("exec_pipe_open: hxlcl_pipe() failed");
 }

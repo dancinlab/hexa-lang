@@ -96,7 +96,7 @@ static inline void hexa_pipe_buf_enlarge_kernel(FILE* fp) {
 #ifdef F_SETPIPE_SZ
     int fd = fileno(fp);
     if (fd >= 0) {
-        (void)fcntl(fd, F_SETPIPE_SZ, 1 << 20);
+        (void)hxlcl_fcntl(fd, F_SETPIPE_SZ, 1 << 20);
         // Ignore errno (EPERM/EINVAL) — kernel may reject; default size
         // still works correctly, only throughput differs.
     }
@@ -4533,11 +4533,11 @@ static pid_t hexa_spawn_no_shell(const char* cmd, FILE** out_fp) {
     if (!argv || argc == 0) { if (argv) { free(argv[0]); free(argv); } return 0; }
 
     int pipefd[2];
-    if (pipe(pipefd) != 0) { free(argv[0]); free(argv); return 0; }
+    if (hxlcl_pipe(pipefd) != 0) { free(argv[0]); free(argv); return 0; }
 
     posix_spawn_file_actions_t fa;
     if (posix_spawn_file_actions_init(&fa) != 0) {
-        close(pipefd[0]); close(pipefd[1]);
+        hxlcl_close(pipefd[0]); hxlcl_close(pipefd[1]);
         free(argv[0]); free(argv); return 0;
     }
     posix_spawn_file_actions_addclose(&fa, pipefd[0]);
@@ -4550,12 +4550,12 @@ static pid_t hexa_spawn_no_shell(const char* cmd, FILE** out_fp) {
     free(argv[0]); free(argv);
 
     if (rc != 0) {
-        close(pipefd[0]); close(pipefd[1]);
+        hxlcl_close(pipefd[0]); hxlcl_close(pipefd[1]);
         return 0;
     }
-    close(pipefd[1]);
+    hxlcl_close(pipefd[1]);
     FILE* fp = fdopen(pipefd[0], "r");
-    if (!fp) { close(pipefd[0]); return 0; }
+    if (!fp) { hxlcl_close(pipefd[0]); return 0; }
     *out_fp = fp;
     return pid;
 }
@@ -4565,7 +4565,7 @@ static pid_t hexa_spawn_no_shell(const char* cmd, FILE** out_fp) {
 static int hexa_spawn_reap(pid_t pid) {
     if (pid <= 0) return -1;
     int status = 0;
-    while (waitpid(pid, &status, 0) < 0) {
+    while (hxlcl_waitpid(pid, &status, 0) < 0) {
         if (errno == EINTR) continue;
         return -1;
     }
@@ -5377,7 +5377,7 @@ HexaVal rt_file_exists(HexaVal path) {
     const char* p = HX_STR(path);
     if (!p) return hexa_bool(0);
     struct stat st;
-    if (stat(p, &st) != 0) return hexa_bool(0);
+    if (hxlcl_stat(p, &st) != 0) return hexa_bool(0);
     return hexa_bool(S_ISREG(st.st_mode) ? 1 : 0);
 }
 
@@ -5577,7 +5577,7 @@ HexaVal rt_file_size(HexaVal path) {
     const char* p = HX_STR(path);
     if (!p) return hexa_int(0);
     struct stat st;
-    if (stat(p, &st) != 0) return hexa_int(0);
+    if (hxlcl_stat(p, &st) != 0) return hexa_int(0);
     if (!S_ISREG(st.st_mode)) return hexa_int(0);
     return hexa_int((int64_t)st.st_size);
 }

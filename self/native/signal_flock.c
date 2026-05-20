@@ -9,8 +9,8 @@
  *                                         trampoline; stash handler name
  *   hexa_os_sig_uninstall(sig)          : restore SIG_DFL
  *   hexa_os_sig_current(sig)            : installed name ("" if none)
- *   hexa_os_sig_raise(sig)              : kill(getpid, sig)
- *   hexa_os_sig_kill(pid, sig)          : kill(pid, sig)
+ *   hexa_os_sig_raise(sig)              : hxlcl_kill(getpid, sig)
+ *   hexa_os_sig_kill(pid, sig)          : hxlcl_kill(pid, sig)
  *   hexa_os_sig_pipe_fd()               : read-end of self-pipe
  *   hexa_os_sig_drain()                 : array<int> pending signals,
  *                                         drained from pipe
@@ -30,7 +30,7 @@
  *
  * Error model: negative TAG_INT (raw -errno) — matches net.c.
  *
- * Async-signal-safety: __hexa_sig_trampoline uses only write(2), which
+ * Async-signal-safety: __hexa_sig_trampoline uses only hxlcl_write(2), which
  * POSIX lists as async-signal-safe (signal-safety(7)). No malloc, no
  * printf, no lock. The trampoline writes 1 byte == signal number to the
  * self-pipe; the scheduler (pure hexa code) drains via hexa_os_sig_drain.
@@ -58,24 +58,24 @@ static char     g_handler_names[NSIG][64];
 static int      g_handler_set[NSIG];
 static int      g_sig_pipe[2] = {-1, -1};
 
-/* Async-signal-safe: only calls write(2). */
+/* Async-signal-safe: only calls hxlcl_write(2). */
 static void __hexa_sig_trampoline(int sig) {
     if (g_sig_pipe[1] >= 0 && sig > 0 && sig < NSIG) {
         unsigned char b = (unsigned char)sig;
         int saved = errno;
-        (void)write(g_sig_pipe[1], &b, 1);
+        (void)hxlcl_write(g_sig_pipe[1], &b, 1);
         errno = saved;
     }
 }
 
 /* Set O_NONBLOCK + FD_CLOEXEC on fd. Returns 0 / -errno. */
 static int _hexa_fd_nonblock_cloexec(int fd) {
-    int fl = fcntl(fd, F_GETFL, 0);
+    int fl = hxlcl_fcntl(fd, F_GETFL, 0);
     if (fl < 0) return -errno;
-    if (fcntl(fd, F_SETFL, fl | O_NONBLOCK) < 0) return -errno;
-    int cf = fcntl(fd, F_GETFD, 0);
+    if (hxlcl_fcntl(fd, F_SETFL, fl | O_NONBLOCK) < 0) return -errno;
+    int cf = hxlcl_fcntl(fd, F_GETFD, 0);
     if (cf < 0) return -errno;
-    if (fcntl(fd, F_SETFD, cf | FD_CLOEXEC) < 0) return -errno;
+    if (hxlcl_fcntl(fd, F_SETFD, cf | FD_CLOEXEC) < 0) return -errno;
     return 0;
 }
 
@@ -84,11 +84,11 @@ static int _hexa_fd_nonblock_cloexec(int fd) {
 static int _hexa_sig_pipe_init(void) {
     if (g_sig_pipe[0] >= 0) return 0;
     int p[2];
-    if (pipe(p) < 0) return -errno;
+    if (hxlcl_pipe(p) < 0) return -errno;
     int rc = _hexa_fd_nonblock_cloexec(p[0]);
-    if (rc < 0) { close(p[0]); close(p[1]); return rc; }
+    if (rc < 0) { hxlcl_close(p[0]); hxlcl_close(p[1]); return rc; }
     rc = _hexa_fd_nonblock_cloexec(p[1]);
-    if (rc < 0) { close(p[0]); close(p[1]); return rc; }
+    if (rc < 0) { hxlcl_close(p[0]); hxlcl_close(p[1]); return rc; }
     g_sig_pipe[0] = p[0];
     g_sig_pipe[1] = p[1];
     return 0;
@@ -146,7 +146,7 @@ HexaVal hexa_os_sig_current(HexaVal sig_val) {
 HexaVal hexa_os_sig_raise(HexaVal sig_val) {
     if (!HX_IS_INT(sig_val)) return hexa_int(-EINVAL);
     int sig = (int)HX_INT(sig_val);
-    if (kill(getpid(), sig) < 0) return hexa_int(-errno);
+    if (hxlcl_kill(hxlcl_getpid(), sig) < 0) return hexa_int(-errno);
     return hexa_int(0);
 }
 
@@ -154,7 +154,7 @@ HexaVal hexa_os_sig_kill(HexaVal pid_val, HexaVal sig_val) {
     if (!HX_IS_INT(pid_val) || !HX_IS_INT(sig_val)) return hexa_int(-EINVAL);
     int pid = (int)HX_INT(pid_val);
     int sig = (int)HX_INT(sig_val);
-    if (kill(pid, sig) < 0) return hexa_int(-errno);
+    if (hxlcl_kill(pid, sig) < 0) return hexa_int(-errno);
     return hexa_int(0);
 }
 
@@ -166,7 +166,7 @@ HexaVal hexa_os_sig_drain(void) {
     if (rc < 0) return arr;
     unsigned char buf[64];
     for (;;) {
-        ssize_t n = read(g_sig_pipe[0], buf, sizeof(buf));
+        ssize_t n = hxlcl_read(g_sig_pipe[0], buf, sizeof(buf));
         if (n <= 0) break;
         for (ssize_t i = 0; i < n; i++) {
             arr = hexa_array_push(arr, hexa_int((int)buf[i]));
@@ -232,7 +232,7 @@ HexaVal hexa_os_flock_open(HexaVal path_val, HexaVal mode_val) {
 
     if (flock(fd, op) < 0) {
         int e = errno;
-        close(fd);
+        hxlcl_close(fd);
         return hexa_int(-e);
     }
     return hexa_int(fd);
@@ -244,13 +244,13 @@ HexaVal hexa_os_flock_close(HexaVal fd_val) {
     if (fd < 0) return hexa_int(-EINVAL);
     /* Best-effort unlock; close always runs. */
     (void)flock(fd, LOCK_UN);
-    if (close(fd) < 0) return hexa_int(-errno);
+    if (hxlcl_close(fd) < 0) return hexa_int(-errno);
     return hexa_int(0);
 }
 
 /* getpid helper (used by .hexa wrappers for raise_signal fallback). */
 HexaVal hexa_os_getpid(void) {
-    return hexa_int((int64_t)getpid());
+    return hexa_int((int64_t)hxlcl_getpid());
 }
 
 /* ── TAG_FN shim globals (bootstrap bridge) ──────────────────────

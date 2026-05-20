@@ -757,3 +757,27 @@ For each Tier-A sub-phase:
   overflow/__exit/_exit/_clock_gettime). Syscalls require `@asm`
   blocks (svc 0x80 on darwin) to fully eliminate — that's the next
   Tier-A.6 cycle (RUNTIME.md acceptance `≤ 5 syscall stubs`)
+
+### 2026-05-21 — Darwin syscall wrappers (cycles 63+64)
+
+- ✅✅ cycles 63+64 — 16 kernel syscalls direct via `svc #0x80` arm64
+  trap. aprime_cc nm undefined externs 26 → **10** (−16 across two
+  back-to-back cycles · cumulative **137 → 10 = −127 = 93%**) · smoke
+  exit(42) PASS · binary 1,139,752 B
+- Cycle 63 (4): `_read · _write · _close · _getpid`
+- Cycle 64 (12): `_dup2 · _pipe · _fork · _kill · _fcntl · _ioctl ·
+  _lseek · _select · _poll · _waitpid · _fstat · _stat`
+- Method: `static inline _hxlcl_syscall{1,2,3,4,6}` use arm64 register
+  asm constraints (`__asm__("x0")` etc) + `svc #0x80` Darwin BSD ABI
+  trap. Syscall numbers from `<sys/syscall.h>` (READ=3, WRITE=4, ...).
+  forward decls placed near top of runtime.c so earlier hxlcl_printf
+  etc helpers can call write/close before the bodies appear ~825 LoC
+  later
+- Remaining 10 externs: `___chkstk_darwin` (clang stack-probe runtime)
+  · `___darwin_check_fd_set_overflow` (libc inline helper) · `__exit`
+  (libc internal abort path) · `_exit` (process termination) ·
+  `_clock_gettime` (vDSO; needs `mach_absolute_time` direct alt) ·
+  `_longjmp` (setjmp/longjmp paired with libc) · `_malloc` · `_memcpy`
+  (clang reverse-libcall residuals from cycle 50 analysis) · `_mmap`
+  (allocator floor) · `_open` (collision with cycle-54 hxlcl_fopen
+  helper of same name — needs rename)

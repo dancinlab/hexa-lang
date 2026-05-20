@@ -3100,9 +3100,9 @@ int main() {
     /* AssertStmt */
     hexa_println(hexa_str("  PASS"));
     hexa_println(hexa_str(""));
-    HexaVal t21 = tokenize(hexa_str("extern fn getpid() -> Int"));
+    HexaVal t21 = tokenize(hexa_str("extern fn hxlcl_getpid() -> Int"));
     HexaVal ast21 = parse(t21);
-    hexa_println(hexa_str("Test 21: extern fn getpid() -> Int"));
+    hexa_println(hexa_str("Test 21: extern fn hxlcl_getpid() -> Int"));
     print_ast(ast21);
     /* AssertStmt */
     /* AssertStmt */

@@ -149,10 +149,10 @@ HexaVal hexa_net_listen(HexaVal addr_val) {
         if (un->sun_path[0] != '\0') (void)unlink(un->sun_path);
     }
     if (hxlcl_bind(fd, (struct sockaddr*)&sa, salen) < 0) {
-        int e = errno; close(fd); return hexa_int(-e);
+        int e = errno; hxlcl_close(fd); return hexa_int(-e);
     }
     if (hxlcl_listen(fd, 64) < 0) {
-        int e = errno; close(fd); return hexa_int(-e);
+        int e = errno; hxlcl_close(fd); return hexa_int(-e);
     }
     return hexa_int(fd);
 }
@@ -168,7 +168,7 @@ HexaVal hexa_net_accept(HexaVal listen_val) {
 HexaVal hexa_net_close(HexaVal fd_val) {
     int64_t fd = hexa_as_num(fd_val);
     if (fd < 0) return hexa_int(-EINVAL);
-    if (close((int)fd) < 0) return hexa_int(-errno);
+    if (hxlcl_close((int)fd) < 0) return hexa_int(-errno);
     return hexa_int(0);
 }
 
@@ -183,16 +183,16 @@ HexaVal hexa_net_close(HexaVal fd_val) {
 HexaVal hexa_net_set_nonblock(HexaVal fd_val) {
     if (!HX_IS_INT(fd_val)) return hexa_int((int64_t)-EINVAL);
     int fd = (int)HX_INT(fd_val);
-    int flags = fcntl(fd, F_GETFL, 0);
+    int flags = hxlcl_fcntl(fd, F_GETFL, 0);
     if (flags < 0) return hexa_int((int64_t)-errno);
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) return hexa_int((int64_t)-errno);
+    if (hxlcl_fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) return hexa_int((int64_t)-errno);
     return hexa_int(0);
 }
 
 /* net_select(fds, timeout_ms) -> [ready_fds] (RFC net-nonblock-multiplex.md)
  *
  *   timeout_ms < 0  : block indefinitely
- *   timeout_ms == 0 : poll (return immediately)
+ *   timeout_ms == 0 : hxlcl_poll(return immediately)
  *   timeout_ms > 0  : block up to that long
  *
  * Returns: array of fds that are READ-ready. Empty on timeout.
@@ -232,11 +232,11 @@ HexaVal hexa_net_select(HexaVal fds_val, HexaVal timeout_ms_val) {
         tv.tv_usec = (suseconds_t)((ms % 1000) * 1000);
         tvp = &tv;
     }
-    /* select() can be interrupted by signals — caller-handles by reading
+    /* hxlcl_select() can be interrupted by signals — caller-handles by reading
      * a single -EINTR back. We don't auto-retry here; downstream code
      * (anima frame loop) needs to interleave signal handling with the
-     * select() return path. */
-    int rc = select(maxfd + 1, &readfds, NULL, NULL, tvp);
+     * hxlcl_select() return path. */
+    int rc = hxlcl_select(maxfd + 1, &readfds, NULL, NULL, tvp);
     if (rc < 0) {
         return hexa_array_push(hexa_array_new(), hexa_int((int64_t)-errno));
     }
@@ -374,7 +374,7 @@ HexaVal hexa_net_connect(HexaVal addr_val) {
     int fd = hxlcl_socket(family, SOCK_STREAM, 0);
     if (fd < 0) return hexa_int(-errno);
     if (hxlcl_connect(fd, (struct sockaddr*)&sa, salen) < 0) {
-        int e = errno; close(fd); return hexa_int(-e);
+        int e = errno; hxlcl_close(fd); return hexa_int(-e);
     }
     return hexa_int(fd);
 }
@@ -382,7 +382,7 @@ HexaVal hexa_net_connect(HexaVal addr_val) {
 /* Single-shot read up to 4096 bytes. The caller is expected to loop
  * until they've got what they want (HTTP parsing in .hexa happens on
  * the accumulated string). Mirrors the Rust variant which also did a
- * single read (TcpStream::read with a 4KiB buffer). */
+ * single hxlcl_read(TcpStream::read with a 4KiB buffer). */
 HexaVal hexa_net_read(HexaVal fd_val) {
     int64_t fd = hexa_as_num(fd_val);
     if (fd < 0) return hexa_str("");
@@ -505,7 +505,7 @@ HexaVal hexa_net_write_bytes(HexaVal fd_val, HexaVal arr_val) {
     while (sent < total) {
         ssize_t s;
         if (use_write) {
-            s = write((int)fd, (const void*)(buf + sent), total - sent);
+            s = hxlcl_write((int)fd, (const void*)(buf + sent), total - sent);
         } else {
             s = hxlcl_send((int)fd, (const char*)(buf + sent), total - sent, 0);
             if (s < 0 && errno == ENOTSOCK) {
@@ -535,11 +535,11 @@ HexaVal hexa_net_read_bytes(HexaVal fd_val, HexaVal max_val) {
     if (max > 65536) max = 65536;
     unsigned char* buf = (unsigned char*)malloc((size_t)max);
     if (!buf) return hexa_array_new();
-    /* Try hxlcl_recv() first (socket fast path); fall back to read() if the
+    /* Try hxlcl_recv() first (socket fast path); fall back to hxlcl_read() if the
      * fd isn't a socket — needed for pty/pipe fds. */
     ssize_t n = hxlcl_recv((int)fd, (char*)buf, (size_t)max, 0);
     if (n < 0 && errno == ENOTSOCK) {
-        n = read((int)fd, buf, (size_t)max);
+        n = hxlcl_read((int)fd, buf, (size_t)max);
     }
     if (n <= 0) { free(buf); return hexa_array_new(); }
     HexaVal out = hexa_array_new();

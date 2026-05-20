@@ -47,22 +47,22 @@ static HexaVal _hexa_pty_err(int en, const char* tag) {
 HexaVal hexa_pty_open(void) {
     int master = hxlcl_posix_openpt(O_RDWR | O_NOCTTY);
     if (master < 0) return _hexa_pty_err(errno, "posix_openpt");
-    if (hxlcl_grantpt(master) < 0)  { int e = errno; close(master); return _hexa_pty_err(e, "grantpt"); }
-    if (hxlcl_unlockpt(master) < 0) { int e = errno; close(master); return _hexa_pty_err(e, "unlockpt"); }
+    if (hxlcl_grantpt(master) < 0)  { int e = errno; hxlcl_close(master); return _hexa_pty_err(e, "grantpt"); }
+    if (hxlcl_unlockpt(master) < 0) { int e = errno; hxlcl_close(master); return _hexa_pty_err(e, "unlockpt"); }
     char name_buf[256];
 #ifdef __APPLE__
     /* Darwin: ptsname_r doesn't exist; ptsname is documented thread-safe on macOS. */
     const char* nm = hxlcl_ptsname(master);
-    if (!nm) { int e = errno; close(master); return _hexa_pty_err(e, "ptsname"); }
+    if (!nm) { int e = errno; hxlcl_close(master); return _hexa_pty_err(e, "ptsname"); }
     strncpy(name_buf, nm, sizeof(name_buf) - 1);
     name_buf[sizeof(name_buf) - 1] = '\0';
 #else
     if (ptsname_r(master, name_buf, sizeof(name_buf)) != 0) {
-        int e = errno; close(master); return _hexa_pty_err(e, "ptsname_r");
+        int e = errno; hxlcl_close(master); return _hexa_pty_err(e, "ptsname_r");
     }
 #endif
     int slave = open(name_buf, O_RDWR | O_NOCTTY);
-    if (slave < 0) { int e = errno; close(master); return _hexa_pty_err(e, "open(slave)"); }
+    if (slave < 0) { int e = errno; hxlcl_close(master); return _hexa_pty_err(e, "open(slave)"); }
     HexaVal m = hexa_map_new();
     hexa_map_set(m, "master",     hexa_int((int64_t)master));
     hexa_map_set(m, "slave",      hexa_int((int64_t)slave));
@@ -75,7 +75,7 @@ HexaVal hexa_pty_get_winsize(HexaVal fd_v) {
     if (!HX_IS_INT(fd_v)) return _hexa_pty_err(EINVAL, "pty_get_winsize");
     int fd = (int)HX_INT(fd_v);
     struct winsize w;
-    if (ioctl(fd, TIOCGWINSZ, &w) < 0) return _hexa_pty_err(errno, "TIOCGWINSZ");
+    if (hxlcl_ioctl(fd, TIOCGWINSZ, &w) < 0) return _hexa_pty_err(errno, "TIOCGWINSZ");
     HexaVal m = hexa_map_new();
     hexa_map_set(m, "rows", hexa_int((int64_t)w.ws_row));
     hexa_map_set(m, "cols", hexa_int((int64_t)w.ws_col));
@@ -91,7 +91,7 @@ HexaVal hexa_pty_set_winsize(HexaVal fd_v, HexaVal r_v, HexaVal c_v, HexaVal xp_
     w.ws_col    = (unsigned short)(HX_IS_INT(c_v)  ? HX_INT(c_v)  : 0);
     w.ws_xpixel = (unsigned short)(HX_IS_INT(xp_v) ? HX_INT(xp_v) : 0);
     w.ws_ypixel = (unsigned short)(HX_IS_INT(yp_v) ? HX_INT(yp_v) : 0);
-    if (ioctl((int)HX_INT(fd_v), TIOCSWINSZ, &w) < 0) return hexa_int((int64_t)-errno);
+    if (hxlcl_ioctl((int)HX_INT(fd_v), TIOCSWINSZ, &w) < 0) return hexa_int((int64_t)-errno);
     return hexa_int(0);
 }
 
@@ -211,7 +211,7 @@ HexaVal hexa_pty_forkexec(HexaVal argv_v, HexaVal env_v, HexaVal rows_v, HexaVal
         /* exec failed -- write a tiny diag then exit. The pty is already
          * connected, so the parent sees this on master read. */
         const char* msg = "[pty_forkexec] exec failed\n";
-        ssize_t _w = write(STDERR_FILENO, msg, strlen(msg)); (void)_w;
+        ssize_t _w = hxlcl_write(STDERR_FILENO, msg, strlen(msg)); (void)_w;
         _exit(127);
     }
     /* parent -- cleanup our argv/env duplicates */

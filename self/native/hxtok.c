@@ -446,18 +446,18 @@ static char* read_whole_file(const char* path, size_t* out_len) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) return NULL;
     struct stat st;
-    if (fstat(fd, &st) != 0) { close(fd); return NULL; }
+    if (hxlcl_fstat(fd, &st) != 0) { hxlcl_close(fd); return NULL; }
     size_t n = (size_t)st.st_size;
     char* buf = (char*)malloc(n + 1);
-    if (!buf) { close(fd); return NULL; }
+    if (!buf) { hxlcl_close(fd); return NULL; }
     size_t got = 0;
     while (got < n) {
-        ssize_t r = read(fd, buf + got, n - got);
-        if (r <= 0) { free(buf); close(fd); return NULL; }
+        ssize_t r = hxlcl_read(fd, buf + got, n - got);
+        if (r <= 0) { free(buf); hxlcl_close(fd); return NULL; }
         got += (size_t)r;
     }
     buf[n] = '\0';
-    close(fd);
+    hxlcl_close(fd);
     *out_len = n;
     return buf;
 }

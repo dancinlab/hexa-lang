@@ -12,7 +12,7 @@
  *
  * Maps onto the existing hexa_exec_capture (pipe+fork+execvp+dup2)
  * pattern from runtime.c:6010 — about 60% reusable. Difference: keeps
- * pipes open after fork() instead of draining-then-closing them, and
+ * pipes open after hxlcl_fork() instead of draining-then-closing them, and
  * exposes the parent ends through a static handle table.
  *
  * Design doc: /Users/ghost/core/anima/state/omega_runtime_1_persistent_pipe_design.json
@@ -20,8 +20,8 @@
  * Lifecycle:
  *   - Soft cap: min(RLIMIT_NOFILE/4, 64) concurrent live handles.
  *     Each handle eats 2 fds (stdin pipe write-end, stdout pipe read-end).
- *   - close(h): SIGTERM → 100ms grace → SIGKILL → waitpid → free slot.
- *   - atexit handler: SIGTERM all live, sleep 50ms, SIGKILL, waitpid(WNOHANG).
+ *   - hxlcl_close(h): SIGTERM → 100ms grace → SIGKILL → waitpid → free slot.
+ *   - atexit handler: SIGTERM all live, sleep 50ms, SIGKILL, hxlcl_waitpid(WNOHANG).
  *
  * v1 limitations (per design):
  *   - line-protocol-only on recv: response >PIPE_BUF (4KB darwin) risks deadlock
@@ -82,8 +82,8 @@ static void _hxp_atexit_cleanup(void) {
     for (int i = 0; i < HXP_MAX_HANDLES; i++) {
         HexaChild* c = &g_pipe_table[i];
         if (c->state == 1 && c->pid > 0) {
-            if (c->stdin_fd  >= 0) { close(c->stdin_fd);  c->stdin_fd  = -1; }
-            kill(c->pid, SIGTERM);
+            if (c->stdin_fd  >= 0) { hxlcl_close(c->stdin_fd);  c->stdin_fd  = -1; }
+            hxlcl_kill(c->pid, SIGTERM);
         }
     }
     /* short grace period for SIGTERM */
@@ -91,9 +91,9 @@ static void _hxp_atexit_cleanup(void) {
     for (int i = 0; i < HXP_MAX_HANDLES; i++) {
         HexaChild* c = &g_pipe_table[i];
         if (c->state == 1 && c->pid > 0) {
-            kill(c->pid, SIGKILL);
-            waitpid(c->pid, NULL, WNOHANG);
-            if (c->stdout_fd >= 0) { close(c->stdout_fd); c->stdout_fd = -1; }
+            hxlcl_kill(c->pid, SIGKILL);
+            hxlcl_waitpid(c->pid, NULL, WNOHANG);
+            if (c->stdout_fd >= 0) { hxlcl_close(c->stdout_fd); c->stdout_fd = -1; }
             c->state = 0;
         }
     }
@@ -158,33 +158,33 @@ HexaVal hexa_pipe_spawn(HexaVal cmd_val) {
     if (slot < 0) return hexa_int(-1);
 
     int in_pipe[2], out_pipe[2];
-    if (pipe(in_pipe) != 0) return hexa_int(-1);
-    if (pipe(out_pipe) != 0) {
-        close(in_pipe[0]); close(in_pipe[1]);
+    if (hxlcl_pipe(in_pipe) != 0) return hexa_int(-1);
+    if (hxlcl_pipe(out_pipe) != 0) {
+        hxlcl_close(in_pipe[0]); hxlcl_close(in_pipe[1]);
         return hexa_int(-1);
     }
 
     // 2026-05-06 — POSIX fork buffer flush (parent stdio inherited by child)
     fflush(NULL);
-    pid_t pid = fork();
+    pid_t pid = hxlcl_fork();
     if (pid < 0) {
-        close(in_pipe[0]);  close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
+        hxlcl_close(in_pipe[0]);  hxlcl_close(in_pipe[1]);
+        hxlcl_close(out_pipe[0]); hxlcl_close(out_pipe[1]);
         return hexa_int(-1);
     }
     if (pid == 0) {
         /* child */
-        dup2(in_pipe[0],  0);
-        dup2(out_pipe[1], 1);
-        close(in_pipe[0]);  close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
+        hxlcl_dup2(in_pipe[0],  0);
+        hxlcl_dup2(out_pipe[1], 1);
+        hxlcl_close(in_pipe[0]);  hxlcl_close(in_pipe[1]);
+        hxlcl_close(out_pipe[0]); hxlcl_close(out_pipe[1]);
         hxlcl_execl("/bin/sh", "sh", "-c", cmd, (char*)NULL);
         _exit(127);
     }
 
     /* parent */
-    close(in_pipe[0]);   /* parent doesn't read from stdin pipe */
-    close(out_pipe[1]);  /* parent doesn't write to stdout pipe */
+    hxlcl_close(in_pipe[0]);   /* parent doesn't read from stdin pipe */
+    hxlcl_close(out_pipe[1]);  /* parent doesn't write to stdout pipe */
 
     /* Probe for early-exec failure: poll stdout pipe for EOF / waitpid
      * the child up to ~60ms total. If child died with non-zero exit
@@ -195,7 +195,7 @@ HexaVal hexa_pipe_spawn(HexaVal cmd_val) {
     pid_t r = 0;
     for (int probe = 0; probe < 6; probe++) {
         _hxp_sleep_ms(10);
-        r = waitpid(pid, &status, WNOHANG);
+        r = hxlcl_waitpid(pid, &status, WNOHANG);
         if (r == pid) break;
     }
     if (r == pid) {
@@ -205,8 +205,8 @@ HexaVal hexa_pipe_spawn(HexaVal cmd_val) {
         if (ec != 0) {
             /* non-zero exit during spawn-probe window → treat as failure.
              * Most commonly /bin/sh -c 'nonexistent_cmd' exits 127. */
-            close(in_pipe[1]);
-            close(out_pipe[0]);
+            hxlcl_close(in_pipe[1]);
+            hxlcl_close(out_pipe[0]);
             return hexa_int(-1);
         }
         /* child exited cleanly — keep the slot so caller can recv any
@@ -243,7 +243,7 @@ HexaVal hexa_pipe_send_line(HexaVal h_val, HexaVal payload_val) {
     /* write payload then trailing '\n'. Tolerate short writes via loop. */
     size_t off = 0;
     while (off < n) {
-        ssize_t w = write(c->stdin_fd, p + off, n - off);
+        ssize_t w = hxlcl_write(c->stdin_fd, p + off, n - off);
         if (w < 0) {
             if (errno == EINTR) continue;
             c->state = 2;
@@ -254,7 +254,7 @@ HexaVal hexa_pipe_send_line(HexaVal h_val, HexaVal payload_val) {
     }
     const char nl = '\n';
     while (1) {
-        ssize_t w = write(c->stdin_fd, &nl, 1);
+        ssize_t w = hxlcl_write(c->stdin_fd, &nl, 1);
         if (w == 1) break;
         if (w < 0) {
             if (errno == EINTR) continue;
@@ -293,7 +293,7 @@ HexaVal hexa_pipe_recv_line(HexaVal h_val, HexaVal timeout_val) {
         pfd.fd = c->stdout_fd;
         pfd.events = POLLIN;
         pfd.revents = 0;
-        int pr = poll(&pfd, 1, (int)remain);
+        int pr = hxlcl_poll(&pfd, 1, (int)remain);
         if (pr == 0) {
             /* timeout — return whatever we accumulated (may be partial) */
             if (len == 0) { free(buf); return hexa_str(""); }
@@ -307,11 +307,11 @@ HexaVal hexa_pipe_recv_line(HexaVal h_val, HexaVal timeout_val) {
         }
         /* data ready (or EOF on hangup) — read 1 byte to avoid over-read past '\n' */
         char ch;
-        ssize_t rd = read(c->stdout_fd, &ch, 1);
+        ssize_t rd = hxlcl_read(c->stdout_fd, &ch, 1);
         if (rd == 0) {
             /* EOF — child closed stdout, likely exited */
             int status = 0;
-            pid_t wr = waitpid(c->pid, &status, WNOHANG);
+            pid_t wr = hxlcl_waitpid(c->pid, &status, WNOHANG);
             if (wr == c->pid) {
                 c->last_exit = WIFEXITED(status) ? WEXITSTATUS(status)
                               : (WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1);
@@ -350,13 +350,13 @@ HexaVal hexa_pipe_close(HexaVal h_val) {
     if (!c) return hexa_int(0);
     if (c->state == 0) return hexa_int(0);
 
-    if (c->stdin_fd  >= 0) { close(c->stdin_fd);  c->stdin_fd  = -1; }
+    if (c->stdin_fd  >= 0) { hxlcl_close(c->stdin_fd);  c->stdin_fd  = -1; }
     if (c->state == 1 && c->pid > 0) {
-        kill(c->pid, SIGTERM);
+        hxlcl_kill(c->pid, SIGTERM);
         int reaped = 0;
         for (int i = 0; i < 10; i++) {
             int status = 0;
-            pid_t r = waitpid(c->pid, &status, WNOHANG);
+            pid_t r = hxlcl_waitpid(c->pid, &status, WNOHANG);
             if (r == c->pid) {
                 c->last_exit = WIFEXITED(status) ? WEXITSTATUS(status)
                               : (WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1);
@@ -366,18 +366,18 @@ HexaVal hexa_pipe_close(HexaVal h_val) {
             _hxp_sleep_ms(10);
         }
         if (!reaped) {
-            kill(c->pid, SIGKILL);
+            hxlcl_kill(c->pid, SIGKILL);
             int status = 0;
-            waitpid(c->pid, &status, 0);
+            hxlcl_waitpid(c->pid, &status, 0);
             c->last_exit = WIFEXITED(status) ? WEXITSTATUS(status)
                           : (WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1);
         }
     } else if (c->state == 2 && c->pid > 0) {
         /* child already dead, just reap if we haven't yet */
         int status = 0;
-        waitpid(c->pid, &status, WNOHANG);
+        hxlcl_waitpid(c->pid, &status, WNOHANG);
     }
-    if (c->stdout_fd >= 0) { close(c->stdout_fd); c->stdout_fd = -1; }
+    if (c->stdout_fd >= 0) { hxlcl_close(c->stdout_fd); c->stdout_fd = -1; }
     c->state = 0;
     c->pid = 0;
     return hexa_int(1);
@@ -395,15 +395,15 @@ HexaVal hexa_pipe_alive(HexaVal h_val) {
     if (c->pid <= 0) return hexa_int(0);
     /* Reap if child has exited (non-blocking). */
     int status = 0;
-    pid_t r = waitpid(c->pid, &status, WNOHANG);
+    pid_t r = hxlcl_waitpid(c->pid, &status, WNOHANG);
     if (r == c->pid) {
         c->last_exit = WIFEXITED(status) ? WEXITSTATUS(status)
                       : (WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1);
         c->state = 2;
         return hexa_int(0);
     }
-    /* Probe with kill(pid, 0) — distinguishes alive vs unreachable. */
-    if (kill(c->pid, 0) != 0) {
+    /* Probe with hxlcl_kill(pid, 0) — distinguishes alive vs unreachable. */
+    if (hxlcl_kill(c->pid, 0) != 0) {
         c->state = 2;
         return hexa_int(0);
     }

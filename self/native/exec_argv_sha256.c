@@ -92,7 +92,7 @@ static HexaVal _hxa_exec_argv_core(HexaVal argv_val, int want_status) {
     }
 
     int pipefd[2];
-    if (pipe(pipefd) < 0) {
+    if (hxlcl_pipe(pipefd) < 0) {
         _hxa_free_argv(argv, argc);
         if (want_status) {
             HexaVal arr = hexa_array_new();
@@ -105,9 +105,9 @@ static HexaVal _hxa_exec_argv_core(HexaVal argv_val, int want_status) {
 
     // 2026-05-06 — POSIX fork buffer flush (parent stdio inherited by child)
     fflush(NULL);
-    pid_t pid = fork();
+    pid_t pid = hxlcl_fork();
     if (pid < 0) {
-        close(pipefd[0]); close(pipefd[1]);
+        hxlcl_close(pipefd[0]); hxlcl_close(pipefd[1]);
         _hxa_free_argv(argv, argc);
         if (want_status) {
             HexaVal arr = hexa_array_new();
@@ -122,17 +122,17 @@ static HexaVal _hxa_exec_argv_core(HexaVal argv_val, int want_status) {
          * `exec(cmd)` behavior (popen merges stderr by default when
          * the caller appends `2>&1`; we default-merge here so the
          * migration from exec→exec_argv is stdout-compatible). */
-        dup2(pipefd[1], 1);
-        dup2(pipefd[1], 2);
-        close(pipefd[0]);
-        close(pipefd[1]);
+        hxlcl_dup2(pipefd[1], 1);
+        hxlcl_dup2(pipefd[1], 2);
+        hxlcl_close(pipefd[0]);
+        hxlcl_close(pipefd[1]);
         hxlcl_execvp(argv[0], argv);
         /* execvp failed */
         fprintf(stderr, "exec_argv: execvp %s: %s\n", argv[0], strerror(errno));
         _exit(127);
     }
     /* parent */
-    close(pipefd[1]);
+    hxlcl_close(pipefd[1]);
     _hxa_free_argv(argv, argc);
 
     size_t cap = 4096, total = 0;
@@ -140,7 +140,7 @@ static HexaVal _hxa_exec_argv_core(HexaVal argv_val, int want_status) {
     if (buf) buf[0] = '\0';
     char tmp[4096];
     for (;;) {
-        ssize_t n = read(pipefd[0], tmp, sizeof(tmp));
+        ssize_t n = hxlcl_read(pipefd[0], tmp, sizeof(tmp));
         if (n < 0) { if (errno == EINTR) continue; break; }
         if (n == 0) break;
         if (buf) {
@@ -153,10 +153,10 @@ static HexaVal _hxa_exec_argv_core(HexaVal argv_val, int want_status) {
             if (buf) { memcpy(buf + total, tmp, (size_t)n); total += (size_t)n; buf[total] = '\0'; }
         }
     }
-    close(pipefd[0]);
+    hxlcl_close(pipefd[0]);
 
     int status = 0;
-    (void)waitpid(pid, &status, 0);
+    (void)hxlcl_waitpid(pid, &status, 0);
     int exit_code;
     if (WIFEXITED(status))        exit_code = WEXITSTATUS(status);
     else if (WIFSIGNALED(status)) exit_code = 128 + WTERMSIG(status);
@@ -310,12 +310,12 @@ HexaVal hexa_sha256_file(HexaVal path_val) {
     _hxa_sha256_init(&ctx);
     uint8_t buf[8192];
     for (;;) {
-        ssize_t n = read(fd, buf, sizeof(buf));
-        if (n < 0) { if (errno == EINTR) continue; close(fd); return hexa_str(""); }
+        ssize_t n = hxlcl_read(fd, buf, sizeof(buf));
+        if (n < 0) { if (errno == EINTR) continue; hxlcl_close(fd); return hexa_str(""); }
         if (n == 0) break;
         _hxa_sha256_update(&ctx, buf, (size_t)n);
     }
-    close(fd);
+    hxlcl_close(fd);
     uint8_t digest[32];
     _hxa_sha256_final(&ctx, digest);
     char* hex = _hxa_hex_encode(digest, 32);

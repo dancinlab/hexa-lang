@@ -1,4 +1,4 @@
-/* self/native/proc_fork.c -- fork() + setsid() + sigchld reap helpers.
+/* self/native/proc_fork.c -- hxlcl_fork() + setsid() + sigchld reap helpers.
  *
  * Included from self/runtime.c (NOT a standalone TU).
  *
@@ -14,7 +14,7 @@
 #include <errno.h>
 
 HexaVal hexa_proc_fork(void) {
-    pid_t pid = fork();
+    pid_t pid = hxlcl_fork();
     if (pid < 0) return hexa_int((int64_t)-errno);
     return hexa_int((int64_t)pid);
 }
@@ -29,7 +29,7 @@ HexaVal hexa_proc_reap_zombies(void) {
     int count = 0;
     while (1) {
         int status = 0;
-        pid_t r = waitpid(-1, &status, WNOHANG);
+        pid_t r = hxlcl_waitpid(-1, &status, WNOHANG);
         if (r <= 0) break;
         count++;
     }
