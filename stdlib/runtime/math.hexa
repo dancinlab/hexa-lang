@@ -44,6 +44,22 @@ pub fn rt_log2(x: float) -> float {
     return rt_log(x) / LN2
 }
 
+// Step 3 cycle 9 — log base 10 via natural log / ln(10).
+pub fn rt_log10(x: float) -> float {
+    let LN10 = 2.302585092994046
+    return rt_log(x) / LN10
+}
+
+// Step 3 cycle 9 — hyperbolic tangent via exp.
+//   tanh(x) = (e^(2x) - 1) / (e^(2x) + 1)
+// Saturates explicitly for |x| > ~22 (e^44 overflows double easily).
+pub fn rt_tanh(x: float) -> float {
+    if x > 22.0  { return 1.0 }
+    if x < -22.0 { return -1.0 }
+    let e2 = rt_exp(2.0 * x)
+    return (e2 - 1.0) / (e2 + 1.0)
+}
+
 pub fn rt_fmod(x: float, y: float) -> float {
     if y == 0.0 { return 0.0 }
     let q = x / y
