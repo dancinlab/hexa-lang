@@ -481,6 +481,7 @@ invariants round out the suite — ν = E at e=0, and the conic identity
 | #5b     | `stdlib/kernels/orbital/kepler_2body_kernel.hexa`       | Vallado §2.2 / Curtis §3.6 closed-form 2-body propagator, NR-5 on M = E − e·sin(E) | Python `math` libm closed-form (5 (e, t/T) picks × 4 ecc + 2 invariants; e ∈ {0.0, 0.1, 0.3, 0.7} × t/T ∈ {0.10, 0.25, 0.50, 0.85}) | 27/27 rel_err=0       | 2026-05-20 |
 | #6      | `stdlib/kernels/signal_proc/dft_naive.hexa`             | O(N²) naive DFT + IDFT                 | analytic spectra (impulse / DC / cosine) + Parseval + round-trip | 17/17 ≤1e-12 rel      | 2026-05-20 |
 | #7      | `stdlib/kernels/noc_sim/event_queue.hexa`               | Binary min-heap discrete-event sched.  | python-companion `heapq` parity + FIFO-at-equal-times           | 36/36 exact           | 2026-05-20 |
+| #8      | `stdlib/kernels/mc_transport/transport_kinematics_kernel.hexa` | Special-relativity kinematics + PDG eq. 34.4 T_max + eq. 34.5 Bethe-Bloch dE/dx (δ=0) + 256-step trapezoidal CSDA range | Python `math` libm closed-form (4 KE samples × 4 materials × 4-6 outputs + 7 CSDA ranges + 2 invariants) | 41/41 rel_err=0       | 2026-05-20 |
 
 ### Pilot #6 — DFT (signal_proc / 2026-05-20)
 
@@ -594,12 +595,79 @@ matches the Python companion's pop sequence event-for-event.
   due to the struct-array workaround above; revisit when hexa-lang
   lands in-place struct-array element assignment.
 
+### Pilot #8 — Transport-kinematics + Bethe-Bloch + CSDA range (mc_transport / 2026-05-20)
+
+**Scope**: 9th pilot, 2nd in the `mc_transport` kernel family after
+#2 (mc_slab_demo). Ports the domain-agnostic numeric primitives of
+`transport_kernel.py` (the ①a kernel under D72) — special-relativity
+kinematics, PDG eq. 34.4 max-energy-transfer T_max, PDG eq. 34.5
+Bethe-Bloch dE/dx (density-correction δ = 0), and a 256-step
+trapezoidal CSDA stopping range ∫dE/(dE/dx). The `particle`-library
+PDG-data lookup half is NOT in scope — that is a table fetch over
+the PDG aggregator, not a closed-form math kernel.
+
+**Algorithm choice**: `transport_kernel.py` is the ①a domain-agnostic
+kernel that `stdlib/cern/bethe_bloch_stopping.py` and
+`stdlib/antimatter/pdg_lookup.py` both call. `stdlib/cern/
+bethe_bloch_stopping.hexa` already embeds an inline Bethe-Bloch
+evaluator (CERN materials × antiproton × ELENA KE grid baked in), but
+the upstream ①a kernel's domain-agnostic surface — kinematics +
+T_max + dE/dx + CSDA range, no CERN baggage — was still .py-only.
+This pilot lands the missing ①a slice. The day a new
+`stdlib/<domain>/` adapter needs T_max or stopping range, it imports
+this kernel rather than re-embedding the formulas.
+
+**Algorithm provenance**: PDG 2024 (Workman et al., Phys. Rev. D 110
+(2024) 030001) §34 — eq. 34.4 (T_max relativistic), eq. 34.5
+(Bethe-Bloch mean stopping power, density-effect δ = 0). K_BB =
+0.307075 MeV·cm²/g (PDG eq. 34.5 / Table 34.4). No Geant4 source-code
+inspection, no scikit-hep `particle` library code reading — closed-
+form public textbook formulas only.
+
+**Parity results**: 41/41 PASS at `rel_err = 0.0` (literal IEEE-754
+bit-exact) on every assertion, including the 7 CSDA ranges (256-step
+trapezoidal sums) — the kernel and Python reference accumulate in
+the same i=1..n-1 order with half-weighted endpoints, so the running
+total is bit-stable. Test envelope: 4 KE samples (1 / 10 / 100 / 1000
+MeV — low-β to mildly-relativistic) × 4 materials (Al / Cu / W / Pb —
+PDG Table 34.1, Z spanning 13 to 82) covering 25 kinematics +
+T_max + dE/dx assertions, plus 7 CSDA range checks, plus 2 invariants
+(E_tot − KE == m, p == β·γ·m). D80 ceiling 1e-10 relative; observed
+gap < 1e-15 (i.e. zero — every assertion is bit-exact).
+
+**Hexa-lang gotchas found**: none new. The pilot used `to_float(int)`
+on `n_steps` to bridge `int → float` for the trapezoidal step, used
+fixed-length `[float]` return arrays (idiom from #5b kepler), and
+mirrored the kepler test pattern's `check_close` helper. The
+parameter-shadowing fix landed earlier today (#5b follow-up,
+self/codegen_c2.hexa) means parameter names can match stdlib
+function names freely; this pilot used `m_e_mev` / `m_p` for clarity
+rather than dodging anything.
+
+**What this does NOT prove**:
+
+- `absorbed=true` is NOT flipped on any demiurge cell. Same
+  `HexaNativeParityRef` schema gate as pilots #1 / #2 / #5 / #5b.
+  Bethe-Bloch omits the same four pieces (shell corrections, density
+  effect δ, straggling distribution, nuclear stopping) the .py
+  substrate omits — Stage 4 needs a Geant4-MC parity round, which is
+  multi-month.
+- The `particle`-library PDG-data lookup is NOT ported. That is a
+  table fetch over the scikit-hep aggregator and lives on the .py
+  side until either (a) a hexa-native PDG-table embedding lands or
+  (b) the lookup is gated to "load PDG JSON from disk + walk a
+  hash map" — both are separate rounds.
+- CSDA range is the CONTINUOUS-slowing-down approximation; real
+  particle ranges have straggling (~5-10 % spread on the projected
+  range at LEO scales) and a nuclear-stop tail. The kernel returns
+  the CSDA mean — the caller owns the variance caveat.
+
 ### Cumulative status across pilots (2026-05-20)
 
-- 8 pilots landed/in-flight (#1-#5, #5b on origin/main, #6+#7 landing
-  this cycle; #3b + #4 are concurrent branch ports), ≥173 assertions
-  PASS across them (21+8+23+41+27+17+36 = 173 on the landed pilots
-  alone)
+- 9 pilots landed/in-flight (#1-#5, #5b on origin/main, #6+#7+#8
+  landing this cycle; #3b + #4 are concurrent branch ports), ≥214
+  assertions PASS across them (21+8+23+41+27+17+36+41 = 214 on the
+  landed pilots alone — #8 adds 41 from transport_kinematics_kernel)
 - 6 hexa-lang followups filed in this audit round:
   - parser `-`/`->` continuation footgun (#1, #7)
   - `fmod` libm shim missing (#1)

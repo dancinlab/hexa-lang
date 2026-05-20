@@ -73,7 +73,7 @@ domain           = "mc_transport"
 external_imports = ["particle"]
 weight           = "medium"
 portable_status  = "already-ported"
-notes            = "D80 pilot #2 landed 2026-05-20 — mc_slab_demo.hexa 1-D slab MC (Beer-Lambert oracle) bit-identical hexa↔python at same LCG seed; ~1e-3 vs analytic at N=1e6. transport_kernel.py (Bethe-Bloch / PDG) is orthogonal — separate port queued."
+notes            = "D80 pilot #2 landed 2026-05-20 — mc_slab_demo.hexa 1-D slab MC (Beer-Lambert oracle) bit-identical hexa↔python at same LCG seed; ~1e-3 vs analytic at N=1e6. D80 pilot #8 landed 2026-05-20 — transport_kinematics_kernel.hexa ports the ①a numeric primitives (relativistic kinematics + PDG eq. 34.4 T_max + eq. 34.5 Bethe-Bloch + 256-step trapezoidal CSDA range) bit-exact vs Python `math` libm (41/41 PASS, rel_err = 0.0). Only the `particle`-library PDG-data lookup half of transport_kernel.py remains on the .py side."
 
 [kernel-plasma]
 path             = "stdlib/kernels/plasma/plasma_metrics.hexa"
@@ -273,7 +273,7 @@ domain           = "cern"
 external_imports = []
 weight           = "trivial"
 portable_status  = "portable-next"
-notes            = "Closed-form Bethe-Bloch + PDG-table lookup. Pure float math + table interp — porting is straightforward; queued as a small follow-on round."
+notes            = "Closed-form Bethe-Bloch + PDG-table lookup. `stdlib/cern/bethe_bloch_stopping.hexa` already embeds an inline Bethe-Bloch evaluator with CERN materials baked in; D80 pilot #8 (transport_kinematics_kernel.hexa) lands the ①a kernel slice, so re-pointing this CERN adapter to consume the ①a kernel + drop the inline math is a small follow-on round."
 
 [domain-cern_elegant_tracking]
 path             = "stdlib/cern/elegant_tracking.py"
@@ -453,4 +453,4 @@ domain           = "antimatter"
 external_imports = []
 weight           = "trivial"
 portable_status  = "portable-next"
-notes            = "Calls transport_kernel.py (Bethe-Bloch / PDG) — pure table + closed-form. Same port-pattern as cern_bethe_bloch_stopping."
+notes            = "Calls transport_kernel.py (Bethe-Bloch / PDG) — pure table + closed-form. D80 pilot #8 (transport_kinematics_kernel.hexa) ported the kinematics + Bethe-Bloch + CSDA range ①a slice (rel_err=0.0 vs Python `math`); only the `particle`-library PDG-data lookup half remains on the .py side. Same port-pattern as cern_bethe_bloch_stopping."
