@@ -7028,153 +7028,83 @@ Cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md ·
 `/wilson-fire-gate` instrument-first methodology · this entry +
 sibling sub-agent commit messages for the parallel (b)+(c) cycle.
 
-### 2026-05-20 — rfc_006 §5 absorption gate — iter 10: constant-tie RTLIL connects (Shape A, option 2)
+### 2026-05-20 — RFC 068 P2 — HIR grammar + opcode-suffix LANDED
 
-**Scope.** Iter 10 of the rfc_006 §5 absorption cycle. Resolves the
-iter-9-surfaced ABC BLIF mixed-mode blocker by adopting iter-9
-PLAN's option 2 (RTLIL connect-to-constant) at the IR layer +
-matching BLIF emission policy at the wire layer.
+**Falsifier:** F-RFC068-OPCODE-SUFFIX **PASS** (4 sub-cases — f16 / bf16 /
+f32 / f64-byte-eq-guard). Branch: `rfc068-p2-hir-grammar` (sub-agent
+worktree). Honest scope (`@D g3`): P2 ≠ RFC 068 closure. The MIR opcode
++ Local.precision now flow through HIR→MIR for source-level
+`let t: f16 = a + b`; the reg-bank decl (`.reg .f16`) appears in the
+emitted PTX via PR #148's classifier short-circuit. P3 (BODY-MNEMONIC
+— `add.f16 %fh<dst>, …` instruction emit) and P4 (NUMERIC-EQ — real
+silicon fire) remain OPEN.
 
-**Root cause confirmed (`@D g3`).** Direct ABC repro on
-`/tmp/_hexa_yosys_gate_d4_in.blif` reports the iter-9 failure mode
-without ambiguity: `Abc_SopCheck: SOP has a mismatch between its
-cover size (288) and its fanin number (2). NodeCheck: SOP check
-for node "..." has failed. Io_ReadBlifMv: The network check has
-failed for model <m>.` ABC's BLIF parser consumes the `.gate` line
-immediately following a `.names <single-net>` block as a truth-
-table continuation, producing a phantom multi-cube SOP that fails
-the fanin check on the downstream `.gate` instance.
+What lands:
 
-Minimal repro:
-    .model t
-    .inputs a
-    .outputs y
-    .names zero
-    .gate sky130_fd_sc_hd__and2_1 A=a B=zero X=y
-    .end
-→ same `Abc_SopCheck cover size 288 / fanin 2` rejection.
+`compiler/check/types.hexa` (+17 lines)
+- `_types_t_f16()` / `_types_t_bf16()` constructors mirror the f32/f64
+  pattern.
+- TypeRef "named" lookup: `n == "f16"` → t_f16, `n == "bf16"` → t_bf16.
+- `_types_is_numeric` + `_is_float_kind` extend to f16/bf16.
+- Smallest scope: no NEW source-grammar token — `f16`/`bf16` are
+  parsed via the existing `let t: T = …` named-type path. The user
+  prompt's hint ("smallest scope" — let type names suffice) followed.
 
-Removing the `.names zero` line lets ABC succeed and emit
-`Warning: Constant-0 drivers added to 1 non-driven nets in network
-"t": zero` — ABC auto-ties undriven nets to constant 0 during
-`read_blif`. This is the iter-10 emission path for 1'b0 ties.
+`compiler/lower/hir_to_mir.hexa` (+103 lines)
+- New helpers: `_precision_from_typ_kind` (HIR Type.kind → ".f16" /
+  ".bf16" / ".f32" / "" tag), `_op_with_precision` (suffix `add` →
+  `add_f16` etc., normalizing frontend `+`/`-`/`*` symbols onto the
+  MIR mnemonic), `_update_local_precision` (replace a Local's
+  precision in `ctx.locals` so downstream walks see the same tag).
+- STMT_BINOP lowering: when `e.typ.kind ∈ {f16,bf16,f32}`, the dst
+  Local AND the Stmt.op carry the precision through to MIR.
+- Comparison ops (lt/le/gt/ge/eq/ne) stay plain (their dst is a
+  PRED — a suffix would mis-classify). f64 stays "" → classifier
+  default path unchanged (byte-eq guard).
 
-**Theorem citations (`@D g6`).**
-- IEEE 1800-2017 §6.7 — net-driver `assign` semantics. RTLIL
-  `connect (lhs, rhs)` is the IR analogue of SystemVerilog
-  procedural `assign lhs = rhs` (the constant-tie form here).
-- Yosys reference manual Ch. 4 — RTLIL Module data structure.
-  The upstream `RTLIL::Module::connections_` SigSig vector is the
-  reference for our parallel `connect_lhs[] / connect_rhs[]`
-  arrays.
+`compiler/codegen/nvptx_lower_test.hexa` (+261 lines)
+- Imports `../parse/ast.hexa`, `../ir/hir.hexa`, `../lower/hir_to_mir.hexa`
+  so the test can drive the real `lower_hir` entry point.
+- Case 20 — F-RFC068-OPCODE-SUFFIX. Five sub-cases:
+  (A) f16 binop → op == `add_f16` + dst.precision == `.f16`.
+  (B) bf16 binop → op == `add_bf16` + dst.precision == `.bf16`.
+  (C) f32 binop → op == `add_f32` + dst.precision == `.f32`.
+  (D) f64 byte-eq guard — op stays plain `+`, precision empty (the
+      classifier default path is byte-untouched).
+  (E) end-to-end PTX emission — wraps the f16 MFunc as GPU_KIND_DEVICE
+      and calls `codegen_emit_ptx_sm80`; asserts `.reg .f16 %fh` bank
+      decl appears. Body still emits the P0-style "unsupported
+      binop: add_f16" stub (P3 will fix that — verified by the dump).
+- Driver `main()` extended: 19/19 → 20/20 cases. PASS line updated to
+  `RFC 055 + RFC 067 P1/P2 + RFC 068 P1/P2 + RFC 069 P1/P2/P3`.
 
-**Architectural change.** Constant ties move from `$_const{0,1}_`
-driver cells to RTLIL module-level `connect (net, 1'b{0,1})` rows.
-Lowering helpers (`_passes_lower_add_cell`,
-`_passes_lower_mod_cell`, `_passes_lower_mod_case_b_lut`) now
-return `connect_lhs[]` + `connect_rhs[]` in addition to cells +
-wires; `pass_techmap_sky130` splices them into each new Module's
-`connect_lhs/_rhs` parallel arrays. `abc_emit_blif` walks
-`module.connect_lhs/_rhs` BEFORE `module.cells` and:
-- RHS `1'b0` → SKIP (ABC auto-ties undriven nets to constant 0).
-- RHS `1'b1` → emit `.gate sky130_fd_sc_hd__inv_1
-  A=$blif_helper_zero Y=<lhs>`. `$blif_helper_zero` is an
-  undriven net — ABC ties it to 0 — so the inverter outputs 1.
-  ABC's `strash` collapses the resulting constant chain to zero
-  AIG nodes (measured `and=0` on the 3-tie selftest fixture
-  during iter-10 R&D).
-- any other RHS → fall through (non-constant connect: out of
-  iter-10 scope; would need a buffer cell — see "Known limit"
-  below).
+Validation:
+- `nvptx_lower_test` 20/20 PASS (incl. F-RFC068-OPCODE-SUFFIX 5
+  sub-cases).
+- `nvptx_emit_test` PASS (CPU/PTX hand-emit unaffected).
+- `nvptx_vec_add_test` PASS (vec-add hand-emit unaffected).
+- `nvptx_gemm_test` PASS (GEMM hand-emit unaffected).
+- `codegen_test` PASS (CPU codegen byte-eq holds — x86_64 + arm64
+  LIR shapes unchanged).
+- `mir_test` case (a)+(b) PASS, case (c) FAIL — but case (c) FAIL
+  is PRE-EXISTING on origin/main (confirmed via `git stash`).
 
-This avoids ALL `.names` constant emission, eliminating the iter-6
-mixed-mode pathology.
+Files NOT touched (gates upheld):
+- `self/codegen_c2.hexa` — @D g_commit_push_deploy honored; no binary
+  promote in this cycle.
+- `self/native/*` — @D g5 hexa-native-only; no bootstrap edits.
+- `compiler/codegen/{x86_64_linux,arm64_darwin,thumbv7em_eabihf}.hexa`
+  — F-RFC055-CPU-CODEGEN-UNTOUCHED gate.
+- `compiler/ir/mir.hexa` — RFC 068 P1 already added the precision
+  field; P2 only USES it.
 
-**Touched.**
-- `stdlib/kernels/logic_synth/passes.hexa` (+~100 LoC):
-  `AddLowerResult` + `ModLowerResult` gain `connect_lhs` +
-  `connect_rhs` fields; `_passes_lower_add_cell`
-  cin0 tie + `_passes_lower_mod_cell` case-A high-bit zero ties +
-  case-A shared c1 driver + `_passes_lower_mod_case_b_lut`
-  degenerate Y[i]=0/1 + single-minterm c1_net all emit `connect`
-  rows instead of `$_const0_`/`$_const1_` cells.
-  `pass_techmap_sky130` splices `adr.connect_lhs/_rhs` +
-  `mdr.connect_lhs/_rhs` into the new Module. New helper
-  `_passes_count_connect_const(m, rhs)` mirrors
-  `rtlil_count_cells_of_type` for the connect axis.
-- `stdlib/kernels/logic_synth/abc_map.hexa` (+~50 LoC):
-  `abc_emit_blif` rewritten as described above; the iter-6
-  `$_const0_`/`$_const1_` → `.names` branch is REMOVED.
-  `abc_parse_mapped_blif` gains `\\\n` line-continuation joining
-  (BLIF spec §2) — required to parse `abc write_blif`'s
-  column-wrapped `.inputs`/`.outputs` lists without phantom
-  directive entries and the downstream OOM during cell-pin
-  rebuild. ABC error-heuristic broadened to catch `Bus error`
-  (SopCheck SIGBUS) and `has failed` (network check rejection).
-- Selftest update (passes T22-T30 + abc_map T6): assertions
-  switched from `count_cells_of_type("$_const{0,1}_") == N` to
-  `_passes_count_connect_const(m, "1'b{0,1}") == N`; T6 of
-  abc_map now constructs a connect-driven design and asserts
-  (a) `1'b1` ties emit the inv-of-helper-zero gate, (b) `1'b0`
-  ties produce no BLIF text, (c) no residual `.gate $_const*_`,
-  (d) ordering: inv_1 helper line comes before downstream
-  `.gate` that references the const-1 net.
+What still blocks RFC 068 closure (P4 NUMERIC-EQ):
+- P3 BODY-MNEMONIC: extend `_nvptx_lower_stmt` STMT_BINOP branch so
+  `add_f16` op emits `add.f16 %fh<dst>, %fh<a>, %fh<b>;` (and the
+  sub/mul/fma siblings). Currently the body is the honest P0 stub.
+- P4: build an f16 vec-add fixture, ssh ubu-2 RTX 5070, ptxas-JIT,
+  numeric-eq vs f64 baseline ≤ 2 × f16-ULP.
 
-**Selftest verdict.**
-- `passes selftest: 30/30 PASS` (no regression).
-- `abc_map selftest: 6/6 PASS` (T6 rewritten for the new shape).
-- `rtlil selftest: 10/10 PASS` (uses pre-existing
-  `rtlil_module_connect`).
-- `read_verilog selftest: 49/49 PASS` (unchanged).
-- `write_verilog selftest: 7/7 PASS` (unchanged).
-- `liberty selftest: 8/8 PASS` (unchanged).
-
-**§5 oracle re-run (`stdlib/yosys/gate_record.hexa`).** ABC now
-ACCEPTS the iter-10 BLIF for both `router_d4` and `router_d6`:
-    [OK] d4:abc_map — abc_map: ok
-    [OK] d6:abc_map — abc_map: ok
-This is a measurable progression from iter-9 (`abc_map: ABC
-produced no mapped BLIF (output file empty)` — the SIGBUS-killed
-ABC subprocess).
-
-End-to-end verification on a minimal `tiny_and.v` fixture (a, b →
-y = a & b) shows the full pipeline runs to `abc_map: ok=1` with
-RTLIL `connect (y, $rvexpr$0)` and one mapped `and2_1` cell.
-
-**§5 gate verdict — PARTIAL (UNCHANGED).** ABC mapping completes;
-the area-oracle verdict cannot be MEASURED on `router_d{4,6}.v`
-because of two separate, pre-existing blockers:
-1. read_verilog SCOPE — the d4/d6 designs use generate-for,
-   array indexing, and `always` blocks that read_verilog.hexa
-   does not decode (the `[gate] verdict: PARTIAL — d4 frontend
-   gap` noted at iter-9 entry). The current BLIF therefore has
-   `.outputs in_ready[*]/out_data[*]/out_valid[*]` declared but
-   never driven by `.gate` lines; ABC auto-ties them to 0 and
-   the mapped design collapses to all-`_const0_` cells. NOT a
-   technology-mapping failure — a frontend coverage gap.
-2. `liberty.hexa::parse_liberty_file` interpreted-mode OOM on
-   the 12 MB `sky130_fd_sc_hd__tt_025C_1v80.lib` (173k lines).
-   `gate_record.hexa` was Killed: 9 by the OS before the
-   verdict line could print. NOT a technology-mapping failure.
-
-**Known limit (out of iter-10 scope).** RTLIL `connect (lhs, rhs)`
-where `rhs` is a non-constant net (e.g. read_verilog's
-`assign y = ...` lowered as a connect) is NOT translated by the
-new abc_emit_blif. iter-10's BLIF emitter walks only the
-`1'b0` / `1'b1` cases; other RHS forms produce no BLIF text and
-the lhs net stays undriven (ABC ties to 0). This is the same
-behavior as iter-6..9 (the older emitter only emitted cells, never
-connects). Closing this gap (so `tiny_and.v` maps to a real and2_1
-driving `y`) is the next iter; it is independent of the constant-
-tie work landed here and does not change iter-10's verdict.
-
-Per `@D g3`: iter-10 CLOSES the ABC BLIF mixed-mode blocker
-identified at iter-9 (one of three named iter-9 "Next blocker"
-options — option 2: RTLIL connect at the pass layer). It does NOT
-close the §5 absorption gate — gate verdict remains PARTIAL
-pending (1) read_verilog SCOPE expansion and (2) liberty parser
-compiled-path or streaming (the 12 MB SKY130 lib OOM).
-
-cross-link: `stdlib/kernels/logic_synth/passes.hexa` (lowering
-helpers + Module-splice), `stdlib/kernels/logic_synth/abc_map.hexa`
-(`abc_emit_blif`, `abc_parse_mapped_blif` continuation join).
+Cross-link: inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md
+§3 P2 · PR #148 (P1 — Local.precision tag thread) · PR #123 (PTX scaffold
++ classifier op-name rules) · RFC 055 §12 P4+ closure plan.

@@ -29,8 +29,11 @@
 //   hexa build compiler/codegen/nvptx_lower_test.hexa -o build/nvptx_lower_test
 //   ./build/nvptx_lower_test
 
+import "../parse/ast.hexa"
+import "../ir/hir.hexa"
 import "../ir/mir.hexa"
 import "../ir/lir.hexa"
+import "../lower/hir_to_mir.hexa"
 import "./nvptx_target.hexa"
 import "./nvptx_ptx_ops.hexa"
 
@@ -781,11 +784,12 @@ fn main() {
     let ok_sd    = _test_shared_decl()
     let ok_me    = _test_multi_exit_match()
     let ok_np    = _test_nested_preserve()
+    let ok_os    = _test_opcode_suffix()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np {
-        println("PASS: RFC 055 + RFC 067 P1/P2 + RFC 068 P1 + RFC 069 P1/P2/P3 — 19/19 cases (incl. F-RFC069-NESTED-PRESERVE)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os {
+        println("PASS: RFC 055 + RFC 067 P1/P2 + RFC 068 P1/P2 + RFC 069 P1/P2/P3 — 20/20 cases (incl. F-RFC068-OPCODE-SUFFIX)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -807,9 +811,10 @@ fn main() {
         if !ok_sd   { println("      RFC 067 P2 F-RFC067-SHARED-DECL FAILED") }
         if !ok_me   { println("      RFC 069 P2 F-RFC069-MULTI-EXIT-MATCH FAILED") }
         if !ok_np   { println("      RFC 069 P3 F-RFC069-NESTED-PRESERVE FAILED") }
+        if !ok_os   { println("      RFC 068 P2 F-RFC068-OPCODE-SUFFIX FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -1858,6 +1863,256 @@ fn _test_nested_preserve() -> bool {
             println("  ok: _nvptx_unroll_contains_inner_loop(canonical.body) = false (no false-positive)")
         }
     }
+
+    return ok
+}
+
+// ── Case 20 — RFC 068 P2 `F-RFC068-OPCODE-SUFFIX` ─────────────────────
+//
+// Verifies that an f16/bf16/f32-typed HIR binop propagates its precision
+// onto the resulting MIR STMT_BINOP — both as the dst Local's
+// `precision` tag (P1, already landed via PR #148) AND as the op-name
+// suffix (P2, this commit). The classifier's existing op-name rules
+// (`add_f16` → NVPTX_RKIND_F16, PR #123) and precision-tag short-
+// circuit (PR #148) BOTH route the dst to the matching reg bank, so
+// the emitted PTX shows the `.reg .f16 / .bf16 / .f32` declaration.
+//
+// Honest scope (`@D g3`): P2 closure does NOT enable body lowering
+// (`add.f16 %fh<dst>, %fh<a>, %fh<b>` instruction emit) — that's P3.
+// P2 ONLY threads source-level type → MIR opcode + precision tag.
+// The body still emits the 055-P0-style "unsupported binop" stub.
+
+// HIR builders local to Case 20 (distinct from Case 15's MIR `_block`).
+fn _hir_span() -> Span {
+    return Span { file: "", line: 0, col: 0, len: 0 }
+}
+
+fn _hir_def() -> DefId { return DefId { module: "", index: -1 } }
+
+fn _hir_atlas_binding() -> AtlasBinding {
+    return AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" }
+}
+
+fn _hir_t(kind: string) -> Type {
+    return Type {
+        kind: kind, def: _hir_def(),
+        args: [], ret: [],
+        domain: "", unit: ""
+    }
+}
+
+fn _hir_node(kind: string, typ: Type, text: string, kids: [HExpr]) -> HExpr {
+    return HExpr {
+        kind: kind,
+        span: _hir_span(),
+        typ: typ,
+        text: text,
+        children: kids,
+        atlas: _hir_atlas_binding(),
+        def: _hir_def()
+    }
+}
+
+fn _hir_ident(name: string, typ: Type) -> HExpr {
+    return _hir_node("ident", typ, name, [])
+}
+
+fn _hir_binop(op: string, lhs: HExpr, rhs: HExpr, typ: Type) -> HExpr {
+    let mut k = []
+    k.push(lhs)
+    k.push(rhs)
+    return _hir_node("binop", typ, op, k)
+}
+
+fn _hir_ret(value: HExpr) -> HExpr {
+    let mut k = []
+    k.push(value)
+    return _hir_node("return", _hir_t("unit"), "", k)
+}
+
+fn _hir_blk(kids: [HExpr]) -> HExpr {
+    return _hir_node("block", _hir_t("unit"), "", kids)
+}
+
+fn _hir_fn(name: string, pnames: [string], ptypes: [Type], ret: Type, body: HExpr) -> HItem {
+    let mut anns: [Annotation] = []
+    let mut name_args: [Expr] = []
+    let mut p = 0
+    while p < len(pnames) {
+        name_args.push(Expr {
+            kind: ExprKind::Ident,
+            span: _hir_span(),
+            text: pnames[p],
+            children: [],
+            atlas_ref: AtlasRef { kind: "", id: "", span: _hir_span() }
+        })
+        p = p + 1
+    }
+    anns.push(Annotation { name: "param_names", args: name_args, span: _hir_span() })
+    return HItem {
+        kind: "ITEM_FN",
+        def: _hir_def(),
+        name: name,
+        span: _hir_span(),
+        annotations: anns,
+        sig_params: ptypes,
+        sig_return: ret,
+        body: body,
+        is_pub: false,
+        discoverable: false,
+        proof_hash: "",
+        verifier_version: ""
+    }
+}
+
+// Build a single-fn HModule: fn f(a: <dtype>, b: <dtype>) -> <dtype> { return a + b }
+fn _build_case_opcode_suffix_one(dtype_kind: string) -> HModule {
+    let t = _hir_t(dtype_kind)
+    let a = _hir_ident("a", t)
+    let b = _hir_ident("b", t)
+    let plus = _hir_binop("+", a, b, t)
+    let body = _hir_blk([_hir_ret(plus)])
+    let mut pn: [string] = []
+    pn.push("a")
+    pn.push("b")
+    let mut pt: [Type] = []
+    pt.push(t)
+    pt.push(t)
+    let it = _hir_fn("op_suffix_" + dtype_kind, pn, pt, t, body)
+    let mut items: [HItem] = []
+    items.push(it)
+    return HModule { file: "case_op_suffix_" + dtype_kind + ".hexa", items: items }
+}
+
+// Walk the MModule and find the first STMT_BINOP — return its op string +
+// dst.precision tag. Empty string means "not found".
+fn _find_first_binop_op(m: MModule) -> string {
+    let mut fi = 0
+    while fi < len(m.funcs) {
+        let mf = m.funcs[fi]
+        let mut bi = 0
+        while bi < len(mf.blocks) {
+            let b = mf.blocks[bi]
+            let mut si = 0
+            while si < len(b.stmts) {
+                let s = b.stmts[si]
+                if s.kind == STMT_BINOP { return s.op }
+                si = si + 1
+            }
+            bi = bi + 1
+        }
+        fi = fi + 1
+    }
+    return ""
+}
+
+fn _find_first_binop_precision(m: MModule) -> string {
+    let mut fi = 0
+    while fi < len(m.funcs) {
+        let mf = m.funcs[fi]
+        let mut bi = 0
+        while bi < len(mf.blocks) {
+            let b = mf.blocks[bi]
+            let mut si = 0
+            while si < len(b.stmts) {
+                let s = b.stmts[si]
+                if s.kind == STMT_BINOP { return s.dst.precision }
+                si = si + 1
+            }
+            bi = bi + 1
+        }
+        fi = fi + 1
+    }
+    return ""
+}
+
+fn _check_eq_str(ok_in: bool, got: string, want: string, label: string) -> bool {
+    if got == want { return ok_in }
+    println("  FAIL: " + label + " — got `" + got + "`, want `" + want + "`")
+    return false
+}
+
+fn _test_opcode_suffix() -> bool {
+    let mut ok = true
+
+    // Sub-case A — f16 typed binop → op "add_f16" + precision ".f16".
+    let m_f16 = lower_hir(_build_case_opcode_suffix_one("f16"))
+    let op_f16 = _find_first_binop_op(m_f16)
+    let pr_f16 = _find_first_binop_precision(m_f16)
+    println("")
+    println("── RFC 068 P2 F-RFC068-OPCODE-SUFFIX (f16) ──")
+    println("  lowered first-binop op       = `" + op_f16 + "`")
+    println("  lowered first-binop dst.prec = `" + pr_f16 + "`")
+    ok = _check_eq_str(ok, op_f16, "add_f16", "f16 binop op suffix")
+    ok = _check_eq_str(ok, pr_f16, ".f16",   "f16 binop dst.precision tag")
+
+    // Sub-case B — bf16 typed binop → op "add_bf16" + precision ".bf16".
+    let m_bf16 = lower_hir(_build_case_opcode_suffix_one("bf16"))
+    let op_bf16 = _find_first_binop_op(m_bf16)
+    let pr_bf16 = _find_first_binop_precision(m_bf16)
+    println("── RFC 068 P2 F-RFC068-OPCODE-SUFFIX (bf16) ──")
+    println("  lowered first-binop op       = `" + op_bf16 + "`")
+    println("  lowered first-binop dst.prec = `" + pr_bf16 + "`")
+    ok = _check_eq_str(ok, op_bf16, "add_bf16", "bf16 binop op suffix")
+    ok = _check_eq_str(ok, pr_bf16, ".bf16",    "bf16 binop dst.precision tag")
+
+    // Sub-case C — f32 typed binop → op "add_f32" + precision ".f32".
+    let m_f32 = lower_hir(_build_case_opcode_suffix_one("f32"))
+    let op_f32 = _find_first_binop_op(m_f32)
+    let pr_f32 = _find_first_binop_precision(m_f32)
+    println("── RFC 068 P2 F-RFC068-OPCODE-SUFFIX (f32) ──")
+    println("  lowered first-binop op       = `" + op_f32 + "`")
+    println("  lowered first-binop dst.prec = `" + pr_f32 + "`")
+    ok = _check_eq_str(ok, op_f32, "add_f32", "f32 binop op suffix")
+    ok = _check_eq_str(ok, pr_f32, ".f32",    "f32 binop dst.precision tag")
+
+    // Sub-case D — f64 byte-eq guard: plain `add`, empty precision.
+    // The classifier-driven default path stays unchanged (precision-tag
+    // short-circuit is "" → falls through to op-name rules → falls
+    // through to F64 default). This protects the F-RFC068-OPCODE-
+    // SUFFIX honest scope: P2 ONLY perturbs f16/bf16/f32 binops.
+    let m_f64 = lower_hir(_build_case_opcode_suffix_one("f64"))
+    let op_f64 = _find_first_binop_op(m_f64)
+    let pr_f64 = _find_first_binop_precision(m_f64)
+    println("── RFC 068 P2 F-RFC068-OPCODE-SUFFIX (f64 byte-eq guard) ──")
+    println("  lowered first-binop op       = `" + op_f64 + "`")
+    println("  lowered first-binop dst.prec = `" + pr_f64 + "`")
+    ok = _check_eq_str(ok, op_f64, "+", "f64 binop op stays plain `+` (frontend symbol, byte-eq)")
+    ok = _check_eq_str(ok, pr_f64, "", "f64 binop dst.precision empty (classifier-default fallback)")
+
+    // Sub-case E — end-to-end: f16 lowering → PTX → .reg .f16 bank.
+    // Wires P1 + P2 + the codegen reg-bank routing together. The body
+    // text is still the P0-stub (P3 will emit `add.f16`), but the bank
+    // decl proves the precision tag flows all the way through.
+    //
+    // We have to convert the f16 lowered module to a GPU-eligible
+    // MFunc (gpu_kind = GPU_KIND_DEVICE) so `_nvptx_codegen` includes
+    // it. The synthetic HIR doesn't carry an @gpu_device annotation,
+    // so the resulting MFunc has gpu_kind = 0. Re-wrap the first MFunc
+    // with gpu_kind = GPU_KIND_DEVICE for the PTX emission only.
+    let mfn_f16 = m_f16.funcs[0]
+    let mfn_f16_gpu = MFunc {
+        name: mfn_f16.name,
+        params: mfn_f16.params,
+        return_local: mfn_f16.return_local,
+        locals: mfn_f16.locals,
+        blocks: mfn_f16.blocks,
+        entry_block: mfn_f16.entry_block,
+        arena_root: mfn_f16.arena_root,
+        def_line: mfn_f16.def_line,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut gpu_funcs = []
+    gpu_funcs.push(mfn_f16_gpu)
+    let mod_gpu = MModule { file: mfn_f16.name + ".gpu", funcs: gpu_funcs, globals: [] }
+    let ptx_f16 = codegen_emit_ptx_sm80(mod_gpu)
+    println("── emitted PTX (RFC 068 P2 f16 end-to-end, sm_80) ──")
+    println(ptx_f16)
+    // The dst Local of the f16 binop carries precision=".f16" — the
+    // classifier short-circuits to NVPTX_RKIND_F16 → `%fh<id>` reg name
+    // + `.reg .f16` bank decl. Specific id depends on local-numbering;
+    // assert the bank-decl prefix appears.
+    ok = _check(ok, ptx_f16, ".reg .f16 %fh", "f16 reg bank declared (end-to-end P1+P2)")
 
     return ok
 }

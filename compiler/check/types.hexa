@@ -181,6 +181,14 @@ fn _types_t_i8()     -> Type { return _prim("i8",     "integer") }
 fn _types_t_i16()    -> Type { return _prim("i16",    "integer") }
 fn _types_t_i32()    -> Type { return _prim("i32",    "integer") }
 fn _types_t_i64()    -> Type { return _prim("i64",    "integer") }
+// RFC 068 P2 — Mixed-precision MIR layer. Adds f16/bf16 primitives so
+// source-level `let t: f16 = a + b` parses and the HIR carries an f16
+// Type through to the binop case in `compiler/lower/hir_to_mir.hexa`,
+// which then sets the dst Local's precision tag. Codegen-side bank
+// routing landed in PR #148 (RFC 068 P1); body-instruction emit is
+// deferred to P3. See `inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md` §3 P2.
+fn _types_t_f16()    -> Type { return _prim("f16",    "real") }
+fn _types_t_bf16()   -> Type { return _prim("bf16",   "real") }
 fn _types_t_f32()    -> Type { return _prim("f32",    "real") }
 fn _types_t_f64()    -> Type { return _prim("f64",    "real") }
 fn _types_t_bool()   -> Type { return _prim("bool",   "") }
@@ -893,6 +901,9 @@ fn _types_lower_type_ref(tr: TypeRef) -> Type {
         if n == "i16" { return _types_t_i16() }
         if n == "i32" { return _types_t_i32() }
         if n == "i64" || n == "Int" || n == "int" { return _types_t_i64() }
+        // RFC 068 P2 — f16/bf16 named types. `let t: f16 = ...` parses.
+        if n == "f16" { return _types_t_f16() }
+        if n == "bf16" { return _types_t_bf16() }
         if n == "f32" { return _types_t_f32() }
         if n == "f64" || n == "Float" || n == "float" || n == "Real" { return _types_t_f64() }
         if n == "bool" || n == "Bool" { return _types_t_bool() }
@@ -1193,6 +1204,9 @@ fn _types_is_numeric(t: Type) -> bool {
     if t.kind == "i16" { return true }
     if t.kind == "i32" { return true }
     if t.kind == "i64" { return true }
+    // RFC 068 P2 — f16/bf16 are numeric (real domain).
+    if t.kind == "f16"  { return true }
+    if t.kind == "bf16" { return true }
     if t.kind == "f32" { return true }
     if t.kind == "f64" { return true }
     return false
@@ -1207,6 +1221,9 @@ fn _is_integer_kind(t: Type) -> bool {
 }
 
 fn _is_float_kind(t: Type) -> bool {
+    // RFC 068 P2 — f16/bf16 are float kinds (allow float-literal coercion).
+    if t.kind == "f16"  { return true }
+    if t.kind == "bf16" { return true }
     if t.kind == "f32" { return true }
     if t.kind == "f64" { return true }
     return false
