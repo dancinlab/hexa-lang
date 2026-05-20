@@ -4434,3 +4434,105 @@ exit=0
 
 **RFC 063 phasing 진척**: P0 ✅ CLOSED. P1 cycle 1 (parser) ✅. 잔여
 P1 cycles 2-N (linker body) + P2 + P3.
+
+
+### 2026-05-20 — S7-P1 cycle 2: link_macho_arm64 skeleton MH_EXECUTE (F-P1-EXEC-SKELETON PASS, otool 8/8 LC 인식)
+
+RFC 063 § P1 두 번째 substep — `link_macho_arm64` stub → 실제 MH_EXECUTE
+Mach-O 헤더 + 8 load commands 직렬화. 464 byte well-formed skeleton 이
+`otool -hV/-l` 에서 8 LC 모두 정상 인식. `__text` payload 와 codesign 은
+cycle 3-4 가 채울 자리.
+
+**한 줄**: stub `link_macho_arm64` → 실제 emit 본체. mach_header_64 +
+LC_SEGMENT_64 __PAGEZERO (4 GB) + LC_SEGMENT_64 __TEXT + section_64 __text
++ LC_LOAD_DYLINKER /usr/lib/dyld + LC_LOAD_DYLIB libSystem.B.dylib +
+LC_MAIN + LC_SYMTAB + LC_DYSYMTAB. otool 가 PIE flag · two-level
+namespace · dyld path · libSystem path 모두 reproduce.
+
+**변경 파일** (`tool/hexa_ld.hexa`):
+
+- 새 상수: MACHO_LD_* prefix (cycle 7 의 P0 MACHO_ 패턴 재사용). MH_EXECUTE
+  + MH_PIE + MH_TWOLEVEL + LC_LOAD_DYLINKER (0x0e) + LC_LOAD_DYLIB (0x0c) +
+  LC_MAIN (0x80000028 = LC_REQ_DYLD bit set) + LC_CODE_SIGNATURE (0x1d) +
+  VM_PROT_RX (5) / RW (3) / NONE (0) + S_REGULAR | PURE+SOME_INSTRS.
+- 새 helper: `_w_u32` · `_w_u64` · `_w_zero_n` · `_w_name_fixed` (16-byte
+  fixed-name + NUL-pad) · `_w_pstr_align4` (path payload + NUL + 4-byte
+  align pad, for LC_LOAD_DYLINKER 등).
+- `link_macho_arm64` 실제 본문 — 8 LC + 헤더 emit:
+  1. mach_header_64 (32 B) — flags=PIE|TWOLEVEL.
+  2. LC_SEGMENT_64 __PAGEZERO (72 B) — vmaddr=0, vmsize=4 GB, no prot,
+     no sections, no file backing.
+  3. LC_SEGMENT_64 __TEXT (152 B) — vmaddr=0x100000000 (after PAGEZERO),
+     vmsize=0x4000 (page), filesize=0x4000, RX prot, 1 section.
+     section_64 __text — addr=__TEXT+header+cmds, align=log2(4), flags=
+     S_ATTR_PURE_INSTRUCTIONS|SOME_INSTRUCTIONS|S_REGULAR, size=0 (cycle 3).
+  4. LC_LOAD_DYLINKER (28 B) — `/usr/lib/dyld`, name_off=12, NUL+pad
+     to 16-byte.
+  5. LC_LOAD_DYLIB (52 B) — `/usr/lib/libSystem.B.dylib`, name_off=24,
+     timestamp=2, current_version=0x051F3C01, compat=0x00010000, path
+     padded to 28-byte.
+  6. LC_MAIN (24 B) — entryoff=text_fileoff (placeholder), stacksize=0.
+  7. LC_SYMTAB (24 B) — all zeros placeholder.
+  8. LC_DYSYMTAB (80 B) — 18 u32 zeros.
+
+**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P1_EXEC_SKELETON.hexa`):
+
+- `link_macho_arm64(0, "/tmp/p1_cycle2_skeleton.exec", "_main", 0)`
+- `exec_capture("xcrun otool -hV ...")` + check magic / cputype / EXECUTE
+  / PIE strings.
+- `exec_capture("xcrun otool -l ...")` + check 8 strings: LC_SEGMENT_64,
+  __PAGEZERO, __TEXT, __text, LC_LOAD_DYLINKER, /usr/lib/dyld,
+  LC_LOAD_DYLIB, libSystem.B.dylib, LC_MAIN, LC_SYMTAB, LC_DYSYMTAB.
+
+**측정 (arm64-Mac local)**:
+
+```
+$ /tmp/run_F_P1_EXEC_SKELETON
+=== otool -hV ===
+Mach header
+      magic  cputype cpusubtype  caps    filetype ncmds sizeofcmds      flags
+MH_MAGIC_64    ARM64        ALL  0x00     EXECUTE     8        432 TWOLEVEL PIE
+
+=== otool -l (head) ===
+Load command 0  LC_SEGMENT_64 __PAGEZERO  vmaddr 0x0  vmsize 4GB  no prot
+Load command 1  LC_SEGMENT_64 __TEXT     vmaddr 0x100000000  16KB RX
+                section __text  addr 0x1000001d0  size 0  align 2^2
+Load command 2  LC_LOAD_DYLINKER  /usr/lib/dyld
+Load command 3  LC_LOAD_DYLIB     /usr/lib/libSystem.B.dylib (cur 1311.60.1)
+Load command 4  LC_MAIN           entryoff 464 stacksize 0
+Load command 5  LC_SYMTAB         (placeholder all 0)
+Load command 6  LC_DYSYMTAB       (placeholder all 0)
+
+F-P1-EXEC-SKELETON PASS — well-formed MH_EXECUTE
+  /tmp/p1_cycle2_skeleton.exec: 464 bytes
+exit=0
+```
+
+**HONEST SCOPE (g3, over-claim 0)**:
+
+- Skeleton 만 — `__text` payload 0 bytes, runnable executable 아님.
+  cycle 3 가 __text 채우고, cycle 4 가 lazy-bind stubs + codesign,
+  cycle 5 가 F-P1-RUNEQ corpus PASS.
+- `filesize=16384 (past end of file)` warning — otool 출력에 명시. cycle 3
+  가 __text bytes 추가 + filesize 정확화 시 해소.
+- LC_SYMTAB / LC_DYSYMTAB 의 indices 모두 0. 외부 심볼은 cycle 4 의
+  lazy-bind / __DATA__la_symbol_ptr / __TEXT__stubs / indirect symbol
+  table 추가 필요.
+- LC_CODE_SIGNATURE 미emit. macOS Sonoma+ 가 unsigned exec 거부. cycle 4
+  의 ad-hoc codesign post-link (`codesign -s -`) + LC_CODE_SIGNATURE
+  공간 reservation 필요.
+
+**다음 cycle (P1 cycle 3) baton**:
+
+- `link_macho_arm64` 시그니처: `_objs: i64` → `objs: [ParsedObj]`.
+- ParsedObj.text bytes → `__text` payload concat + section_64.size +
+  filesize 정확화.
+- ParsedObj.defined symbols → LC_SYMTAB 의 nlist_64 emit + strtab.
+- intra-module relocs → text address fix-up.
+- LC_MAIN.entryoff = `_main` symbol 의 final address - text_fileoff.
+
+**cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa 는 tool, NOT
+compiler/main.hexa. @D g_commit_push_deploy 미발동.
+
+**RFC 063 phasing 진척**: P0 ✅ + P1 cycle 1 (parser) ✅ + cycle 2
+(exec skeleton) ✅. 잔여 P1 cycles 3-5 + P2 + P3.

@@ -294,11 +294,216 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
 //      requirement — documented in RFC 063 as the ONE remaining
 //      fork on macOS, not a toolchain dependency).
 //
-// Returns 0 on success, non-zero on link failure.
-fn link_macho_arm64(_objs: i64, _out_path: string, _entry: string, _is_static: i64) -> i64 {
-    // RFC 063 § P1 — implementation pending.
-    println("hexa_ld: SCAFFOLD — not yet implemented (RFC 063 P1)")
-    return 1
+// Mach-O 64 + arm64 constants for the EXECUTABLE side (P1 only).
+// Names mirror `<mach-o/loader.h>` with the `MACHO_LD_` prefix to
+// avoid the `#define` collisions that bit P0 (CPU_TYPE_ARM64 etc.).
+let MACHO_LD_MAGIC_64           = 0xfeedfacf
+let MACHO_LD_CPU_TYPE_ARM64     = 0x0100000c
+let MACHO_LD_CPU_SUBTYPE_ALL    = 0
+let MACHO_LD_MH_EXECUTE         = 2
+let MACHO_LD_MH_PIE             = 0x200000           // position-independent exec
+let MACHO_LD_MH_TWOLEVEL        = 0x80               // two-level namespace
+let MACHO_LD_MH_NOUNDEFS        = 0                  // not set — we have externs
+let MACHO_LD_LC_SEGMENT_64      = 0x19
+let MACHO_LD_LC_SYMTAB          = 0x02
+let MACHO_LD_LC_DYSYMTAB        = 0x0b
+let MACHO_LD_LC_LOAD_DYLINKER   = 0x0e
+let MACHO_LD_LC_LOAD_DYLIB      = 0x0c
+let MACHO_LD_LC_MAIN            = 0x80000028         // 0x28 | LC_REQ_DYLD
+let MACHO_LD_LC_BUILD_VERSION   = 0x32
+let MACHO_LD_LC_CODE_SIGNATURE  = 0x1d
+
+let MACHO_LD_VM_PROT_RX         = 5                  // VM_PROT_READ|EXECUTE
+let MACHO_LD_VM_PROT_RW         = 3                  // VM_PROT_READ|WRITE
+let MACHO_LD_VM_PROT_NONE       = 0                  // __PAGEZERO
+
+let MACHO_LD_S_REG              = 0x80000400         // S_REGULAR | PURE+SOME_INSTRS
+
+// LE byte writers — local to the linker; mirror macho_arm64.hexa's
+// emit-side helpers. (We can't `import` macho_arm64.hexa here because
+// tool/ lives outside compiler/'s import graph and circular `use`
+// is fragile in hexa.)
+fn _w_u32(out: [Int], v: Int) {
+    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
+    out.push((v >> 16) & 0xFF); out.push((v >> 24) & 0xFF)
+}
+fn _w_u64(out: [Int], v: Int) {
+    out.push(v & 0xFF); out.push((v >> 8) & 0xFF)
+    out.push((v >> 16) & 0xFF); out.push((v >> 24) & 0xFF)
+    out.push((v >> 32) & 0xFF); out.push((v >> 40) & 0xFF)
+    out.push((v >> 48) & 0xFF); out.push((v >> 56) & 0xFF)
+}
+fn _w_zero_n(out: [Int], n: Int) {
+    let mut i = 0
+    while i < n { out.push(0); i = i + 1 }
+}
+// Push ASCII bytes of `s`, NUL-pad to total length `n`.
+fn _w_name_fixed(out: [Int], s: string, n: Int) {
+    let sn = len(s)
+    let mut i = 0
+    while i < n {
+        if i < sn { out.push(char_code(s, i) & 0xFF) }
+        else { out.push(0) }
+        i = i + 1
+    }
+}
+// Push ASCII bytes of `s` followed by NUL and 4-byte aligned pad.
+// Used for LC_LOAD_DYLINKER / LC_LOAD_DYLIB path payloads.
+fn _w_pstr_align4(out: [Int], s: string) -> Int {
+    let sn = len(s)
+    let mut i = 0
+    while i < sn { out.push(char_code(s, i) & 0xFF); i = i + 1 }
+    out.push(0)                                      // NUL
+    let written = sn + 1
+    let rem = written & 3
+    let mut pad = 0
+    if rem != 0 { pad = 4 - rem }
+    _w_zero_n(out, pad)
+    return written + pad
+}
+
+// link_macho_arm64 — cycle 2: emit a *skeleton* MH_EXECUTE Mach-O
+// header + load commands that `otool -hV / -l` recognise as
+// well-formed. The actual code bytes + relocation fix-ups + lazy-
+// bind stubs + codesign land in cycles 3-5. This commit lays the
+// load-command shape so subsequent cycles can fill in payload.
+//
+// Layout (cycle 2 skeleton — input ignored except for `out_path`):
+//
+//   mach_header_64                                  32 B
+//   LC_SEGMENT_64 __PAGEZERO  (no sections)         72 B
+//   LC_SEGMENT_64 __TEXT (1 section: __text)       152 B (72 + 80)
+//   LC_LOAD_DYLINKER /usr/lib/dyld                  ~32 B
+//   LC_LOAD_DYLIB   /usr/lib/libSystem.B.dylib      ~56 B
+//   LC_MAIN                                          24 B
+//   LC_SYMTAB                                        24 B
+//   LC_DYSYMTAB                                      80 B
+//   __text (placeholder 0 bytes — cycle 3 fills)     0 B
+//
+// Returns 0 on success.
+fn link_macho_arm64(_objs: i64, out_path: string, _entry: string, _is_static: i64) -> Int {
+    let out: [Int] = []
+
+    // Load-command sizes pre-computed so the header can record
+    // ncmds + sizeofcmds correctly.
+    let lc_pagezero_size = 72
+    let lc_text_size     = 72 + 80                   // segment + 1 section
+    let lc_main_size     = 24
+    let lc_symtab_size   = 24
+    let lc_dysymtab_size = 80
+
+    // dyld path is `/usr/lib/dyld` (13 + NUL = 14, pad to 16).
+    let dyld_path        = "/usr/lib/dyld"
+    let dyld_path_padded = 16                        // 13 + 1 NUL + 2 pad → 16
+    let lc_dyld_size     = 12 + dyld_path_padded     // cmd+cmdsize+name_off + payload
+
+    // libSystem path: `/usr/lib/libSystem.B.dylib` (26 + NUL = 27 → pad to 28)
+    let lib_path         = "/usr/lib/libSystem.B.dylib"
+    let lib_path_padded  = 28
+    // dylib_command struct = cmd u32 + cmdsize u32 + name_off u32 +
+    // timestamp u32 + current_version u32 + compatibility_version u32 +
+    // payload (path NUL-padded).  = 24 + 28 = 52.
+    let lc_lib_size      = 24 + lib_path_padded
+
+    let ncmds = 8
+    let sizeofcmds = lc_pagezero_size + lc_text_size + lc_dyld_size
+                   + lc_lib_size + lc_main_size + lc_symtab_size
+                   + lc_dysymtab_size
+
+    // ── mach_header_64 ──
+    _w_u32(out, MACHO_LD_MAGIC_64)
+    _w_u32(out, MACHO_LD_CPU_TYPE_ARM64)
+    _w_u32(out, MACHO_LD_CPU_SUBTYPE_ALL)
+    _w_u32(out, MACHO_LD_MH_EXECUTE)
+    _w_u32(out, ncmds)
+    _w_u32(out, sizeofcmds)
+    _w_u32(out, MACHO_LD_MH_PIE | MACHO_LD_MH_TWOLEVEL)
+    _w_u32(out, 0)                                   // reserved
+
+    // ── LC_SEGMENT_64 __PAGEZERO ──
+    // 4 GB null page at vmaddr=0. No sections, no file backing.
+    _w_u32(out, MACHO_LD_LC_SEGMENT_64)
+    _w_u32(out, lc_pagezero_size)
+    _w_name_fixed(out, "__PAGEZERO", 16)
+    _w_u64(out, 0)                                   // vmaddr
+    _w_u64(out, 0x100000000)                         // vmsize 4 GB
+    _w_u64(out, 0)                                   // fileoff
+    _w_u64(out, 0)                                   // filesize
+    _w_u32(out, MACHO_LD_VM_PROT_NONE)               // maxprot
+    _w_u32(out, MACHO_LD_VM_PROT_NONE)               // initprot
+    _w_u32(out, 0)                                   // nsects
+    _w_u32(out, 0)                                   // flags
+
+    // ── LC_SEGMENT_64 __TEXT (1 section: __text) ──
+    let header_size = 32
+    let text_fileoff = header_size + sizeofcmds      // start of __text bytes
+    let text_size = 0                                // cycle 3 will fill
+    _w_u32(out, MACHO_LD_LC_SEGMENT_64)
+    _w_u32(out, lc_text_size)
+    _w_name_fixed(out, "__TEXT", 16)
+    _w_u64(out, 0x100000000)                         // vmaddr (after __PAGEZERO)
+    _w_u64(out, 0x4000)                              // vmsize (rounded to page)
+    _w_u64(out, 0)                                   // fileoff (segment starts at 0)
+    _w_u64(out, 0x4000)                              // filesize
+    _w_u32(out, MACHO_LD_VM_PROT_RX)
+    _w_u32(out, MACHO_LD_VM_PROT_RX)
+    _w_u32(out, 1)                                   // nsects (just __text)
+    _w_u32(out, 0)                                   // flags
+    // section_64 __text
+    _w_name_fixed(out, "__text", 16)
+    _w_name_fixed(out, "__TEXT", 16)
+    _w_u64(out, 0x100000000 + text_fileoff)          // addr
+    _w_u64(out, text_size)
+    _w_u32(out, text_fileoff)
+    _w_u32(out, 2)                                   // align log2(4) for arm64
+    _w_u32(out, 0)                                   // reloff
+    _w_u32(out, 0)                                   // nreloc
+    _w_u32(out, MACHO_LD_S_REG)
+    _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)   // reserved1/2/3
+
+    // ── LC_LOAD_DYLINKER /usr/lib/dyld ──
+    _w_u32(out, MACHO_LD_LC_LOAD_DYLINKER)
+    _w_u32(out, lc_dyld_size)
+    _w_u32(out, 12)                                  // name_off (in this LC)
+    _w_name_fixed(out, dyld_path, dyld_path_padded)
+
+    // ── LC_LOAD_DYLIB /usr/lib/libSystem.B.dylib ──
+    _w_u32(out, MACHO_LD_LC_LOAD_DYLIB)
+    _w_u32(out, lc_lib_size)
+    _w_u32(out, 24)                                  // name_off
+    _w_u32(out, 2)                                   // timestamp (1970-ish placeholder)
+    _w_u32(out, 0x051f3c01)                          // current_version (1311.100.3)
+    _w_u32(out, 0x00010000)                          // compatibility_version (1.0)
+    _w_name_fixed(out, lib_path, lib_path_padded)
+
+    // ── LC_MAIN ──
+    // entryoff (u64) = offset within __TEXT segment to the entry
+    // function. cycle 3 will set this to the resolved `_main`
+    // address; for now stub to text_fileoff (start of __text).
+    _w_u32(out, MACHO_LD_LC_MAIN)
+    _w_u32(out, lc_main_size)
+    _w_u64(out, text_fileoff)                        // entryoff
+    _w_u64(out, 0)                                   // stacksize (0 = default)
+
+    // ── LC_SYMTAB (placeholder, nsyms=0 / strsize=0) ──
+    _w_u32(out, MACHO_LD_LC_SYMTAB)
+    _w_u32(out, lc_symtab_size)
+    _w_u32(out, 0)                                   // symoff
+    _w_u32(out, 0)                                   // nsyms
+    _w_u32(out, 0)                                   // stroff
+    _w_u32(out, 0)                                   // strsize
+
+    // ── LC_DYSYMTAB (all zeros — cycle 3 will populate) ──
+    _w_u32(out, MACHO_LD_LC_DYSYMTAB)
+    _w_u32(out, lc_dysymtab_size)
+    let mut di = 0
+    while di < 18 { _w_u32(out, 0); di = di + 1 }
+
+    // ── __text payload (empty placeholder — cycle 3 fills) ──
+    // No bytes; the section_64.size = 0 above.
+
+    write_bytes(out_path, out)
+    return 0
 }
 
 // ─────────────────────────────────────────────────────────────────
