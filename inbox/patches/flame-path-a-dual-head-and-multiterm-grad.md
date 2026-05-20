@@ -5,9 +5,16 @@
 `g_train_flame_not_pytorch upstream_downstream_invariant`; this is a
 patch-request only.
 
-**Status**: `rfc-drafted 2026-05-19 — RFC 059 drafted (3-cycle phasing:
-dual-logits → multi-term grad → PureFieldFFN); first-cycle scaffold
-landed; full implementation = multi-cycle, tracked by RFC 059`.
+**Status**: `resolved-ssot 2026-05-20 — inbox routing CLOSED. RFC 059
+draft + cycle-1 scaffold are on main (commits f69ae5bf · 344fee3a,
+2026-05-19); PLAN entry registered (stdlib/flame/PLAN.md L595–646);
+5 RFC-comment anchor-markers landed at stdlib/flame/decoder_lib.hexa
+L44/L62/L214 + nn_lib.hexa + decoder_block_lib.hexa with zero
+behavior change. Full implementation (cycle 1/2/3 source emit) is
+NOT done — it remains multi-cycle, tracked by RFC 059 §10 open
+design decisions, each cycle separately user-gated. Previous status
+"rfc-drafted 2026-05-19 — RFC 059 drafted ... first-cycle scaffold
+landed" preserved in spirit by §Resolution-plan below.`
 
 ## Problem
 
