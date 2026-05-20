@@ -45,6 +45,49 @@ extern char **environ; // posix_spawnp inherits parent env explicitly
 //  unit byte-identical to the pre-split runtime.c — a pure file
 //  partition with ZERO behavior change. See runtime_core.c header.
 // ═══════════════════════════════════════════════════════════
+// ─── RUNTIME.md Phase 1 Tier-A.1 — libc unhook helpers ───
+// Step-1 of the hexa-native runtime rewrite (RUNTIME.md cycle 46):
+// local C-source replacements for the most-called libc string fns
+// so the linker no longer pulls in _strlen / _strcmp / _memcmp.
+// Defined BEFORE `#include "runtime_core.c"` so CORE-tier call sites
+// resolve to these too (runtime_core.c is textually concatenated).
+// Step-2 (later cycle) ports each helper to stdlib/runtime/<name>.hexa
+// + codegen routing. `noinline` + volatile read defeat clang's
+// libcall recognition under -Oz. The trailing `#define strlen ...`
+// textually overrides any residual libc strlen / memcmp / strcmp
+// references in macro expansions / inline header bodies that the
+// perl substitution couldn't reach.
+static size_t __attribute__((noinline)) hxlcl_strlen(const char *s) {
+    if (!s) return 0;
+    size_t n = 0;
+    while (((const volatile char *)s)[n]) n++;
+    return n;
+}
+static int __attribute__((noinline)) hxlcl_memcmp(const void *a, const void *b, size_t n) {
+    const unsigned char *pa = (const unsigned char *)a;
+    const unsigned char *pb = (const unsigned char *)b;
+    for (size_t i = 0; i < n; i++) {
+        int d = (int)pa[i] - (int)pb[i];
+        if (d != 0) return d;
+    }
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_strcmp(const char *a, const char *b) {
+    for (size_t i = 0; ; i++) {
+        unsigned char ca = (unsigned char)a[i];
+        unsigned char cb = (unsigned char)b[i];
+        if (ca != cb) return (int)ca - (int)cb;
+        if (ca == 0) return 0;
+    }
+}
+
+// Textual override of any residual libc references in subsequent code
+// (runtime_core.c + HI tier + transpile output). The helper bodies
+// above are NOT affected because they spell `hxlcl_*` directly.
+#define strlen(s)      hxlcl_strlen((const char *)(s))
+#define memcmp(a,b,n)  hxlcl_memcmp((const void *)(a), (const void *)(b), (size_t)(n))
+#define strcmp(a,b)    hxlcl_strcmp((const char *)(a), (const char *)(b))
+
 #include "runtime_core.c"
 
 // ── Extern FFI: dlopen / dlsym / dispatch ───────────────
@@ -69,11 +112,11 @@ static int hexa_ffi_extract_libname(const char* path, char* out_name, size_t out
     if (strncmp(base, "lib", 3) != 0) return 0;
     base += 3;
     // Must end in .dylib or .so or .so.N
-    size_t blen = strlen(base);
+    size_t blen = hxlcl_strlen(base);
     const char* end = NULL;
-    if (blen > 6 && strcmp(base + blen - 6, ".dylib") == 0) {
+    if (blen > 6 && hxlcl_strcmp(base + blen - 6, ".dylib") == 0) {
         end = base + blen - 6;
-    } else if (blen > 3 && strcmp(base + blen - 3, ".so") == 0) {
+    } else if (blen > 3 && hxlcl_strcmp(base + blen - 3, ".so") == 0) {
         end = base + blen - 3;
     } else {
         // .so.N case — find ".so." substring
@@ -6858,19 +6901,19 @@ HexaVal hexa_env_var(HexaVal name) {
     if (HX_STR(name)[0] == '_' && HX_STR(name)[1] == '_' && HX_STR(name)[2] == 'H' &&
         strncmp(HX_STR(name), "__HEXA_ARENA_", 13) == 0) {
         const char* op = HX_STR(name) + 13;
-        if (strcmp(op, "PUSH__") == 0) {
+        if (hxlcl_strcmp(op, "PUSH__") == 0) {
             hexa_val_arena_scope_push();
             return hexa_str("1");
         }
-        if (strcmp(op, "POP__") == 0) {
+        if (hxlcl_strcmp(op, "POP__") == 0) {
             hexa_val_arena_scope_pop();
             return hexa_str("1");
         }
-        if (strcmp(op, "HEAPIFY_RETURN__") == 0) {
+        if (hxlcl_strcmp(op, "HEAPIFY_RETURN__") == 0) {
             hexa_val_arena_heapify_return();
             return hexa_str("1");
         }
-        if (strcmp(op, "ENABLED__") == 0) {
+        if (hxlcl_strcmp(op, "ENABLED__") == 0) {
             return hexa_str(hexa_val_arena_on() ? "1" : "0");
         }
         // F6 option A — A3 (PLAN-stage3-footprint-F6-optA.md). Toggle
@@ -6878,45 +6921,45 @@ HexaVal hexa_env_var(HexaVal name) {
         // __hexa_fn_arena_return through hexa_val_arena_heapify_to_parent
         // (callee region → parent arena). OFF restores the default
         // heapify-to-malloc behaviour. Default OFF on process start.
-        if (strcmp(op, "RETURN_REGION_ON__") == 0) {
+        if (hxlcl_strcmp(op, "RETURN_REGION_ON__") == 0) {
             __hexa_val_region_returns_enabled = 1;
             return hexa_str("1");
         }
-        if (strcmp(op, "RETURN_REGION_OFF__") == 0) {
+        if (hxlcl_strcmp(op, "RETURN_REGION_OFF__") == 0) {
             __hexa_val_region_returns_enabled = 0;
             return hexa_str("0");
         }
-        if (strcmp(op, "RETURN_REGION__") == 0) {
+        if (hxlcl_strcmp(op, "RETURN_REGION__") == 0) {
             // Query current state.
             return hexa_str(__hexa_val_region_returns_enabled ? "1" : "0");
         }
-        if (strcmp(op, "STATS__") == 0) {
+        if (hxlcl_strcmp(op, "STATS__") == 0) {
             char buf[64];
             snprintf(buf, sizeof(buf), "marks=%d", __hexa_val_mark_top);
             return hexa_str(buf);
         }
         // A1 (2026-05-10): per-phase arena reset hooks — see comment above.
-        if (strcmp(op, "PHASE_RESET__") == 0) {
+        if (hxlcl_strcmp(op, "PHASE_RESET__") == 0) {
             // Drop all bump-arena allocations. Live blocks stay linked
             // (ready for reuse on the next phase's allocations) but every
             // block.used = 0. O(blocks) — typically a handful.
             hexa_arena_reset();
             return hexa_str("1");
         }
-        if (strcmp(op, "RSS_MB__") == 0) {
+        if (hxlcl_strcmp(op, "RSS_MB__") == 0) {
             char buf[32];
             size_t rss = _hx_self_rss_bytes();
             snprintf(buf, sizeof(buf), "%zu",
                      (size_t)(rss / (1024ull * 1024ull)));
             return hexa_str(buf);
         }
-        if (strcmp(op, "ARENA_BYTES__") == 0) {
+        if (hxlcl_strcmp(op, "ARENA_BYTES__") == 0) {
             char buf[32];
             snprintf(buf, sizeof(buf), "%lld",
                      (long long)_hx_arena_total_bytes());
             return hexa_str(buf);
         }
-        if (strcmp(op, "ARENA_LIVE__") == 0) {
+        if (hxlcl_strcmp(op, "ARENA_LIVE__") == 0) {
             char buf[32];
             snprintf(buf, sizeof(buf), "%lld",
                      (long long)_hx_arena_live_bytes());
@@ -7083,16 +7126,16 @@ HexaVal rt_delete_file(HexaVal path) {
 HexaVal hexa_list_dir(HexaVal path) {
     if (!HX_IS_STR(path) || !HX_STR(path) || !HX_STR(path)[0]) return hexa_array_new();
     const char* p = HX_STR(path);
-    size_t pl = strlen(p), cap = pl * 4 + 32, n = 0;
+    size_t pl = hxlcl_strlen(p), cap = pl * 4 + 32, n = 0;
     char* cmd = (char*)malloc(cap);
     const char* pre = "ls -1 '";
-    memcpy(cmd, pre, strlen(pre)); n = strlen(pre);
+    memcpy(cmd, pre, hxlcl_strlen(pre)); n = hxlcl_strlen(pre);
     for (size_t i = 0; i < pl; i++) {
         if (p[i] == '\'') { memcpy(cmd + n, "'\\''", 4); n += 4; }
         else cmd[n++] = p[i];
     }
     const char* post = "' 2>/dev/null";
-    memcpy(cmd + n, post, strlen(post)); n += strlen(post); cmd[n] = 0;
+    memcpy(cmd + n, post, hxlcl_strlen(post)); n += hxlcl_strlen(post); cmd[n] = 0;
     FILE* fp = popen(cmd, "r");
     free(cmd);
     if (!fp) return hexa_array_new();
@@ -7112,7 +7155,7 @@ HexaVal rt_append_file(HexaVal path, HexaVal content) {
     const char* data = (HX_IS_STR(content) && HX_STR(content)) ? HX_STR(content) : "";
     FILE* f = fopen(HX_STR(path), "ab");
     if (!f) return hexa_void();
-    fwrite(data, 1, strlen(data), f);
+    fwrite(data, 1, hxlcl_strlen(data), f);
     fclose(f);
     return hexa_void();
 }
@@ -7373,7 +7416,7 @@ HexaVal hexa_utc_iso_parse(HexaVal s_v) {
     g.tm_sec  = sec;
     int64_t epoch = (int64_t)timegm(&g);
     // Optional tz offset suffix: scan from end of string for [+-]HH:MM or [+-]HHMM.
-    size_t L = strlen(s);
+    size_t L = hxlcl_strlen(s);
     if (L >= 5) {
         for (ssize_t i = (ssize_t)L - 1; i > 0; i--) {
             char c = s[i];
@@ -7452,7 +7495,7 @@ HexaVal hexa_regex_match_full(HexaVal pat_v, HexaVal s_v) {
     if (_hexa_re_compile(pat, &re, icase) != 0) return hexa_bool(0);
     regmatch_t m;
     int ok = regexec(&re, s, 1, &m, 0);
-    int full = (ok == 0 && m.rm_so == 0 && (size_t)m.rm_eo == strlen(s)) ? 1 : 0;
+    int full = (ok == 0 && m.rm_so == 0 && (size_t)m.rm_eo == hxlcl_strlen(s)) ? 1 : 0;
     regfree(&re);
     return hexa_bool(full);
 }
@@ -7488,7 +7531,7 @@ HexaVal hexa_regex_findall(HexaVal pat_v, HexaVal s_v) {
     if (_hexa_re_compile(pat, &re, icase) != 0) return out;
     regmatch_t m;
     size_t off = 0;
-    size_t L = strlen(s);
+    size_t L = hxlcl_strlen(s);
     while (off <= L) {
         if (regexec(&re, s + off, 1, &m, off > 0 ? REG_NOTBOL : 0) != 0) break;
         if (m.rm_eo == m.rm_so) {
@@ -7521,7 +7564,7 @@ HexaVal hexa_regex_split(HexaVal pat_v, HexaVal s_v) {
     }
     regmatch_t m;
     size_t off = 0;
-    size_t L = strlen(s);
+    size_t L = hxlcl_strlen(s);
     while (off <= L) {
         if (regexec(&re, s + off, 1, &m, off > 0 ? REG_NOTBOL : 0) != 0) break;
         if (m.rm_eo == m.rm_so) { off += 1; continue; }
@@ -7555,8 +7598,8 @@ HexaVal hexa_regex_replace(HexaVal pat_v, HexaVal s_v, HexaVal repl_v) {
     if (_hexa_re_compile(pat, &re, icase) != 0) return s_v;
     regmatch_t m;
     size_t off = 0;
-    size_t L = strlen(s);
-    size_t Rlen = strlen(repl);
+    size_t L = hxlcl_strlen(s);
+    size_t Rlen = hxlcl_strlen(repl);
     // Worst-case sizing: every position is a zero-width match → impossible
     // with our zero-width skip. Estimate cap = 4 * (L + 1) * (Rlen + 1).
     size_t cap = (L + 1) * (Rlen + 1) * 4 + 64;
@@ -7807,9 +7850,9 @@ static HexaVal _jp_parse_value(const char* s, size_t n, size_t* pi) {
     if (c == '"') return _jp_parse_string(s, n, pi);
     if (c == '{') return _jp_parse_object(s, n, pi);
     if (c == '[') return _jp_parse_array(s, n, pi);
-    if (c == 't' && *pi + 3 < n && memcmp(s + *pi, "true", 4) == 0) { *pi += 4; return hexa_bool(1); }
-    if (c == 'f' && *pi + 4 < n && memcmp(s + *pi, "false", 5) == 0) { *pi += 5; return hexa_bool(0); }
-    if (c == 'n' && *pi + 3 < n && memcmp(s + *pi, "null", 4) == 0) { *pi += 4; return hexa_void(); }
+    if (c == 't' && *pi + 3 < n && hxlcl_memcmp(s + *pi, "true", 4) == 0) { *pi += 4; return hexa_bool(1); }
+    if (c == 'f' && *pi + 4 < n && hxlcl_memcmp(s + *pi, "false", 5) == 0) { *pi += 5; return hexa_bool(0); }
+    if (c == 'n' && *pi + 3 < n && hxlcl_memcmp(s + *pi, "null", 4) == 0) { *pi += 4; return hexa_void(); }
     // CPython json.loads accepts the non-finite literals Infinity / -Infinity
     // / NaN (json.dumps emits them for non-finite floats). Standard JSON
     // forbids them, but the hexa-bio registry contains `-Infinity` rows, so
@@ -7817,9 +7860,9 @@ static HexaVal _jp_parse_value(const char* s, size_t n, size_t* pi) {
     // precede the '-'/digit number branch so "-Infinity" is not mis-lexed
     // as the number "-" (which left "Infinity" in the stream and desynced
     // the enclosing object parse, dropping every subsequent key).
-    if (c == 'I' && *pi + 8 <= n && memcmp(s + *pi, "Infinity", 8) == 0) { *pi += 8; return hexa_float(INFINITY); }
-    if (c == '-' && *pi + 9 <= n && memcmp(s + *pi, "-Infinity", 9) == 0) { *pi += 9; return hexa_float(-INFINITY); }
-    if (c == 'N' && *pi + 3 <= n && memcmp(s + *pi, "NaN", 3) == 0) { *pi += 3; return hexa_float(NAN); }
+    if (c == 'I' && *pi + 8 <= n && hxlcl_memcmp(s + *pi, "Infinity", 8) == 0) { *pi += 8; return hexa_float(INFINITY); }
+    if (c == '-' && *pi + 9 <= n && hxlcl_memcmp(s + *pi, "-Infinity", 9) == 0) { *pi += 9; return hexa_float(-INFINITY); }
+    if (c == 'N' && *pi + 3 <= n && hxlcl_memcmp(s + *pi, "NaN", 3) == 0) { *pi += 3; return hexa_float(NAN); }
     if (c == '-' || (c >= '0' && c <= '9')) return _jp_parse_number(s, n, pi);
     (*pi)++;  // skip unknown
     return hexa_void();
@@ -7828,7 +7871,7 @@ static HexaVal _jp_parse_value(const char* s, size_t n, size_t* pi) {
 HexaVal hexa_json_parse(HexaVal s) {
     if (!HX_IS_STR(s) || !HX_STR(s)) return hexa_void();
     const char* cs = HX_STR(s);
-    size_t n = strlen(cs);
+    size_t n = hxlcl_strlen(cs);
     size_t i = 0;
     return _jp_parse_value(cs, n, &i);
 }
@@ -7926,7 +7969,7 @@ static void _js_emit_value(char** pbuf, size_t* pcap, size_t* plen, HexaVal v) {
         int k;
         if (f != f) k = snprintf(nb, sizeof(nb), "null");
         else if (fabs(f) < 1e16 && f == (double)(int64_t)f) k = snprintf(nb, sizeof(nb), "%lld.0", (long long)f);
-        else { _shortest_double(nb, sizeof(nb), f); k = (int)strlen(nb); }
+        else { _shortest_double(nb, sizeof(nb), f); k = (int)hxlcl_strlen(nb); }
         if (k > 0) _js_buf_append(pbuf, pcap, plen, nb, (size_t)k);
         return;
     }
@@ -8718,7 +8761,7 @@ HexaVal hexa_term_write_str(HexaVal s) {
         return hexa_int(-1);
     }
     const char *buf = HX_STR(s);
-    int n = (int)strlen(buf);
+    int n = (int)hxlcl_strlen(buf);
     return hexa_int((int64_t)term_write(buf, n));
 }
 
@@ -8779,7 +8822,7 @@ HexaVal hexa_term_fd_write(HexaVal fd, HexaVal data) {
     int f = (int)__hx_to_double(fd);
     if (!HX_IS_STR(data) || HX_STR(data) == NULL) return hexa_int(-1);
     const char *s = HX_STR(data);
-    int n = (int)strlen(s);
+    int n = (int)hxlcl_strlen(s);
     int w = term_fd_write(f, (const unsigned char *)s, n);
     return hexa_int((int64_t)w);
 }
@@ -9291,7 +9334,7 @@ HexaVal hexa_exec_stream_write_impl(HexaVal handle, HexaVal data) {
     if (fd < 0) return hexa_int((int64_t)-1);   // read-only slot
     const char* s = HX_IS_STR(data) ? HX_STR(data) : NULL;
     if (!s) return hexa_int((int64_t)-1);
-    size_t total = strlen(s);
+    size_t total = hxlcl_strlen(s);
     size_t written = 0;
     while (written < total) {
         ssize_t n = write(fd, s + written, total - written);
