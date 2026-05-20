@@ -2439,3 +2439,203 @@ invocation runs SD5+SD6+SD7+SD9 sequentially:
 - SD11: re-emit-and-recompile loop.
 - SD12: per-Param accumulator dict (single-pass alternative to
   SD9's per-Param-call shape).
+
+### 2026-05-20 — SD10 ag_extract — multi-input arithmetic vjp (sigmoid-div `f(x,y) = x / (1 + dt_exp(-y))`) (north-star ① autograd primitive · SD6×SD9 cross-product)
+
+**SD10 = the multi-input + arithmetic cross-product: SD6's per-op rule
+table (DIV / NEG / dt_exp / ADD / SUB) composed with SD9's target_ix
+multi-input mechanism. Test function `f(x, y) = x / (1 + dt_exp(0−y))`
+— sigmoid-weighted division — exercises (i) DIV at the root with the
+"save forward, reuse in backward" cached intermediate pattern, AND
+(ii) two distinct Params where the y-direction traverses the full
+SD6 sigmoid subtree with a custom upstream gradient. Verdict per
+Param direction reports HONESTLY: byte-eq PASS when algebraic shape
+happens to align, or HONEST 1-ULP when SD6's reorder lesson applies.
+Measured outcome: HONEST 1-ULP on both directions (df/dx max|Δ| =
+5.55e-17 = 1 ULP, df/dy max|Δ| = 1.11e-16 = 2 ULP) — SD6's
+algebraic-identity divergence is preserved edge-for-edge under
+multi-input mechanism.**
+
+**Foundational claim (g3-honest)**: SD6 + SD9 compose by design — no
+walker edits needed. SD6's per-op rule chain (DIV: `da = dc/b · db =
+NEG(dc·c/b)`; dt_exp: `da = dc·c_cached`; NEG-via-SUB ADDs the two
+contribs) produces the same multiplicative ULP-zone gradient
+trajectory as before; SD9's target_ix simply selects WHICH Param
+direction the recursion flows toward (the Param-mismatch leaf
+returns `Const(0.0)`, the match returns the accumulated upstream).
+SD10 EXERCISES the composition on a 2-Param fwd whose y-direction
+hits SD6's reorder zone. The HONEST 1-ULP outcome on both
+directions is the predicted "SD6-lesson-under-multi-input"
+confirmation; the alternative (byte-eq PASS on either direction)
+would have been a bonus algebraic alignment, not a regression.
+
+**Reverse-walker recursion shape (no walker edits — proof same as
+SD6 + SD9)**: walker emits, for target=0 (df/dx) on `DIV(x, d)`:
+```
+ADD(
+  DIV(Var_Upstream, Var_FwdResult(d)),                  // da_local
+  ADD(Const(0.0),                                       // walk(ONE_A)
+      ADD(Const(0.0),                                   // walk(ZERO_A)
+          Const(0.0))))                                 // walk(y=Param(1) ≠ 0)
+```
+Interpret: `(dy / d) + (0.0 + (0.0 + 0.0))`. Reference (SD6 exact form
+`dy * s`): `dy * (1.0 / d)`. Different IEEE-754 trajectory ⇒ HONEST
+1-ULP.
+
+For target=1 (df/dy) on the same fwd, only the sigmoid-of-y subtree
+contributes (Param(0)=x leaf returns `Const(0.0)`):
+```
+ADD(Const(0.0),
+    ADD(Const(0.0),
+        ADD(Const(0.0),
+            NEG(MUL(db_local, Var_FwdResult(e))))))
+  where db_local = NEG(DIV(MUL(Var_Upstream, Var_FwdResult(root)),
+                            Var_FwdResult(d_2)))
+```
+Interpret: `0.0 + (0.0 + (0.0 + (-(-(dy*c)/d * e))))` = `(dy*c*e)/d`
+where c = f(x,y) = x/d. Reference (SD6 exact form `dy*x*s*(1-s)`):
+`dy * x * (1/d) * (1 - 1/d)`. Algebraically `(dy*c*e)/d` ≡
+`dy*x*s*(1-s)` via the 1-s ≡ e/d identity — exactly the SD6 reorder
+zone, now under multi-input. HONEST 2-ULP measured.
+
+**Files (additive only — zero edits to ag_derive/ag_tape/nn_lib/
+ag_extract walker; SD5/6/7/9 surfaces untouched)**:
+- `stdlib/flame/ag_extract.hexa` +211 LoC (1526 → 1737):
+  - `ag_extract_build_sigmoid_div_multi_fwd(arena, cache_out) -> int`
+    — hand-built fwd AST for `f(x, y) = x / (1 + dt_exp(0 - y))`.
+    Param(0) = x (numerator), Param(1) = y (sigmoid input); root is
+    BinOp_DIV. Slot count: 8 fwd nodes (under 64-cap; ~17 bwd ×
+    2 directions also fits, total ~42 slots).
+  - `ag_extract_sigmoid_div_multi_bwd_via_ast(arena, fwd_root,
+    bwd_root, x_arr, y_arr, dy_arr, d_out, len, fwd_cache,
+    param_vals)` — elementwise driver, identical signature to SD9's
+    bilinear driver (the param-vals + fwd-cache + interpret_v2_multi
+    machinery is op-agnostic). Named wrapper makes call sites
+    self-documenting (SD9 bilinear vs SD10 sigmoid-div).
+  - §SD10 header documents the foundational claim (SD6×SD9
+    cross-product), the walker recursion shape for both Param
+    directions, honest scope, atlas anchors (Griewank-Walther §3.2
+    Algorithm 3.6 + elementary-primitives table + SD6 reorder note).
+  - §Future work updated: SD8 parser-integration · SD11
+    re-emit-and-recompile · SD12 per-Param accumulator dict · SD13
+    more rules (renumbered from the SD9-era SD10 slot — Sum/MatMul/
+    Compose/silu-gelu-tanh now SD13).
+
+- `test/flame_ag_extract_test.hexa` +201 LoC (673 → 874):
+  - `sd10_div_x_manual(x_arr, y_arr, dy_arr, dx_out, len)` —
+    hand-written reference for df/dx using SD6's exact form:
+    recompute `s = 1.0 / (1.0 + dt_exp(0.0 - y))`, then `dx = dy * s`.
+    Does NOT mirror walker trajectory — measures the reorder verdict.
+  - `sd10_div_y_manual(x_arr, y_arr, dy_arr, dyg_out, len)` —
+    hand-written reference for df/dy: same `s` reconstruction,
+    `one_minus_s = 1.0 - s`, then `dyg = dy * x * s * (1 - s)`.
+  - SD10 oracle: builds sigmoid-div fwd, walks twice (target=0,
+    target=1), emits both bwd sources (printed for inspection),
+    interprets elementwise, compares each Param direction to its
+    manual. First-4-element transparent IEEE-754 audit per
+    direction. Per-Param verdict labeled PASS/HONEST; tolerance
+    breach (>10×eps) exits 95 as a real regression.
+  - Inputs (per task §5 — fixed-seed LCG per axis):
+    - x_arr: shared with SD5/6/7/9 (LCG seed 4242 + −1 shift)
+    - y_arr: shared with SD9 (LCG seed 70707 + −1 shift)
+    - dy_arr: shared with SD5/6/7/9 (LCG seed 31337)
+  - Exit codes extended: 95 = SD10 fail (either Param direction
+    exceeds 10×eps tolerance; in-tolerance HONEST or PASS exits 0).
+
+**Gate measured**: `F-RFC043-AUTOGRAD-AUTO-SD10-DIV-MULTI-BYTE-EQ`
+**HONEST FINDING** (predicted SD6-lesson-under-multi-input
+confirmation) — both per-Param byte-eq gates within 10×eps
+tolerance, neither exactly byte-equal:
+- df/dx: max|Δ| = 5.55e-17 (= 1 × machine eps; walker `dy / d`
+  vs reference `dy * (1.0 / d)` — DIV-vs-DIV-then-MUL last-bit
+  divergence)
+- df/dy: max|Δ| = 1.11e-16 (= 2 × machine eps; walker
+  `(dy * c * e) / d` vs reference `dy * x * s * (1-s)` — the SD6
+  reorder zone, now exercised under multi-input)
+
+**Emitted source** (printed by the test for inspection):
+```
+pub fn f_x_bwd_auto(x: float, y: float, dy: float) -> float {
+    return ((dy / _fwd6) + (0.0 + (0.0 + 0.0)))
+}
+
+pub fn f_y_bwd_auto(x: float, y: float, dy: float) -> float {
+    return (0.0 + (0.0 + (0.0 + (0.0 - ((0.0 - ((dy * _fwd7) / _fwd6)) * _fwd4)))))
+}
+```
+where `_fwd6` = d_node (the denominator `1 + dt_exp(-y)`), `_fwd7`
+= root_node (the f output `x/d`), `_fwd4` = e_node (`dt_exp(-y)`).
+The y-direction body makes the SD6 reorder zone visible in the
+emitted source: walker shape is `NEG(NEG(dy*c/d) * e)` = `(dy*c*e)/d`,
+while the reference computes `dy*x*s*(1-s)` — algebraically equal,
+last-bit different.
+
+**First 4 element-wise pairs** (audit, df/dx):
+```
+i=0  x=-0.02051  y= 0.67191  dy= 0.36454  dx_auto= 0.241297  dx_ref= 0.241297  |Δ|=0.0
+i=1  x=-1.13912  y=-2.94793  dy= 0.02323  dx_auto= 0.001158  dx_ref= 0.001158  |Δ|=0.0
+i=2  x= 0.47943  y=-2.56503  dy=-0.70551  dx_auto=-0.050390  dx_ref=-0.050390  |Δ|=0.0
+i=3  x=-0.85700  y=-1.70436  dy=-0.77784  dx_auto=-0.119707  dx_ref=-0.119707  |Δ|=1.39e-17
+```
+And df/dy:
+```
+i=0  x=-0.02051  y= 0.67191  dy= 0.36454  dyg_auto=-0.001673  dyg_ref=-0.001673  |Δ|=0.0
+i=1  x=-1.13912  y=-2.94793  dy= 0.02323  dyg_auto=-0.001253  dyg_ref=-0.001253  |Δ|=2.17e-19
+i=2  x= 0.47943  y=-2.56503  dy=-0.70551  dyg_auto=-0.022433  dyg_ref=-0.022433  |Δ|=0.0
+i=3  x=-0.85700  y=-1.70436  dy=-0.77784  dyg_auto= 0.086801  dyg_ref= 0.086801  |Δ|=2.78e-17
+```
+Most elements byte-equal; the divergence is concentrated on a few
+elements where the operand-order rounding accumulates differently.
+
+**g3-honest framing (the SD10 deliverable)**: SD10 frames itself as
+"multi-input arithmetic explores SD6's ULP zone under multi-input
+mechanism". The predicted outcome was HONEST 1-ULP under either or
+both directions (SD6 reorder lesson confirmed); the alternative was
+byte-eq PASS (bonus algebraic alignment). The MEASURED outcome is
+HONEST on both directions — SD6's algebraic-identity divergence is
+preserved edge-for-edge under multi-input. **What SD10 PROVED**:
+SD6's per-op rule chain composes faithfully with SD9's target_ix
+multi-input mechanism (no walker edits); the IEEE-754 last-bit
+divergence is a property of the algebraic shape (walker emits
+`e/d`, reference computes `1-s` — they are mathematically equal but
+last-bit different), not of the multi-input mechanism itself.
+**What SD10 did NOT prove**: parser integration (SD8), single-pass
+per-Param accumulator dict (SD12), Sum/MatMul/Compose/elementwise
+unary family rules (SD13 — renumbered from the SD9-era "SD10" slot),
+re-emit-and-recompile (SD11).
+
+**SD1+SD2+SD3 regression check**: `test/flame_ag_derive_test.hexa`
+PASS rc=0 unchanged (ag_derive surface is not edited).
+
+**SD5+SD6+SD7+SD9 regression check**: same
+`test/flame_ag_extract_test.hexa` invocation runs SD5+SD6+SD7+SD9+SD10
+sequentially:
+- SD5 byte-eq: PASS max|Δ| = 0.0 (unchanged).
+- SD6 byte-eq: HONEST FINDING max|Δ| = 5.55e-17 (unchanged
+  machine-eps-scale).
+- SD7 byte-eq: PASS max|Δ| = 0.0 (unchanged).
+- SD9 byte-eq: PASS BOTH per-Param gates max|Δ| = 0.0 (unchanged).
+- SD10 byte-eq: HONEST FINDING df/dx max|Δ| = 5.55e-17, df/dy max|Δ|
+  = 1.11e-16 (this cycle, predicted SD6×SD9 confirmation).
+- Combined rc=0.
+
+**Atlas citations** (g6, in `ag_extract.hexa` SD10 header):
+- Griewank & Walther §3.2 Algorithm 3.6 — reverse-mode VJP, SD10
+  specialization: scalar output ⇒ per-direction call yields ∂f/∂x_i;
+  applied to a 2-Param fwd with DIV at the root.
+- Griewank & Walther §3.2 elementary-primitives table — DIV rule
+  `da = dc/b · db = -dc·c/b`, dt_exp rule `da = dc·c_cached`, NEG
+  rule `da = -dc`.
+- SD6 reorder note (`ag_extract.hexa` SD6 header) — algebraic-identity
+  ULP divergence persists under multi-input mechanism.
+- Pearlmutter & Siskind §3 — compositional vjp; each Param is an
+  independent leaf, target_ix selects the direction.
+
+**Future-cycle stop-conditions (g3 carve-outs, after SD10 closed)**:
+- SD8: parser integration (still future-work).
+- SD11: re-emit-and-recompile loop.
+- SD12: per-Param accumulator dict (single-pass alternative to
+  SD9/SD10's per-Param-call shape).
+- SD13 (renumbered from SD9-era "SD10"): more rules — Sum,
+  MatMul AST-derived, Compose, elementwise unary family
+  (silu, gelu, tanh).

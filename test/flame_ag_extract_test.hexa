@@ -1,7 +1,7 @@
 // @raw117_exempt
 // ════════════════════════════════════════════════════════════════════════
 // test/flame_ag_extract_test.hexa — flame autograd-auto SD5 + SD6 + SD7
-//                                    + SD9 oracles
+//                                    + SD9 + SD10 oracles
 //
 // Falsifiers:
 //   F-RFC043-AUTOGRAD-AUTO-SD5-RELU-BYTE-EQ
@@ -44,6 +44,25 @@
 //     Multi-input vjp is the literal Algorithm 3.6 specialization to
 //     a scalar output (Griewank & Walther §3.2; Pearlmutter & Siskind
 //     §3 compositional vjp).
+//   F-RFC043-AUTOGRAD-AUTO-SD10-DIV-MULTI-BYTE-EQ
+//     AST-driven reverse-mode derivation handles a MULTI-INPUT
+//     ARITHMETIC scalar function `f(x, y) = x / (1 + dt_exp(0 − y))`
+//     (sigmoid-weighted division — SD6's algebraic-identity ULP zone
+//     meets SD9's multi-input mechanism). Two walker invocations
+//     (target_ix ∈ {0, 1}) produce two per-Param bwd ASTs whose
+//     interpretation under a 2-cell param-vals farr yields
+//     `df/dx = dy / d` (walker emit; algebraically dy * s(y)) and
+//     `df/dy = dy * x * s * (1-s)` (algebraically; walker emits a
+//     longer NEG/DIV/MUL chain). Reference uses SD6's exact form
+//     (`s = 1/(1+exp(-y))`, then `dy*s` for x-dir and
+//     `dy*x*s*(1-s)` for y-dir). Each per-Param byte-eq gate is
+//     reported HONESTLY (PASS if max|Δ| = 0.0 — algebraic shape
+//     happens to byte-align; HONEST if max|Δ| is machine-eps-scale,
+//     ≤ 10×eps, confirming SD6's reorder lesson under multi-input;
+//     FAIL if max|Δ| exceeds tolerance — real regression). Atlas:
+//     Griewank-Walther §3.2 Algorithm 3.6 (multi-input VJP) +
+//     §3.2 elementary-primitives table (DIV/dt_exp rules) + SD6
+//     reorder note (this file's SD6 header).
 //
 // Scope (matches task brief §3 + §7):
 //   - SD5 retained verbatim — relu's vjp walker is the SD5 walker
@@ -61,12 +80,17 @@
 //     no second compile cycle.
 //
 // Exit codes (rfc_003 idiom):
-//   0  PASS — SD5 + SD6 + SD7 + SD9 falsifiers all pass.
+//   0  PASS — SD5 + SD6 + SD7 + SD9 + SD10 falsifiers all pass (with
+//             HONEST-finding allowed for the SD6/SD10-y-dir
+//             algebraic-identity ULP zone, ≤ 10×eps tolerance).
 //   91 FAIL — SD5 byte-eq fails.
 //   92 FAIL — SD6 byte-eq fails (with honest machine-eps report).
 //   93 FAIL — SD7 multi-use accumulation byte-eq fails.
 //   94 FAIL — SD9 bilinear multi-input vjp byte-eq fails (either
 //             per-Param direction or both).
+//   95 FAIL — SD10 sigmoid-div multi-input vjp byte-eq exceeds
+//             10×machine-eps tolerance on either per-Param direction
+//             (real regression vs honest 1-ULP finding).
 //
 // CPU-only, $0. Builds on stdlib/flame/ag_extract.hexa.
 // ════════════════════════════════════════════════════════════════════════
@@ -668,6 +692,262 @@ if sd9_y_pass == 0 {
 
 println("PASS  F-RFC043-AUTOGRAD-AUTO-SD9-BILINEAR-BYTE-EQ  BOTH per-Param gates green (df/dx · df/dy)")
 println("=== SD9 PASS ===")
+
+// ════════════════════════════════════════════════════════════════════════
+// SD10 — multi-input arithmetic vjp byte-eq oracle
+//
+// Test function: f(x, y) = x / (1 + dt_exp(0 − y))
+//   df/dx = 1 / (1 + exp(-y)) = s(y)
+//   df/dy = x * s(y) * (1 - s(y))         (sigmoid derivative reappears)
+//
+// SD10 = SD6 algebraic-identity ULP zone × SD9 multi-input mechanism.
+//
+// Walker emits (target=0, df/dx) — DIV at root, all sigmoid-subtree
+// contributions reduce to Const(0.0) since their Param leaves are
+// ix=1 ≠ 0:
+//   ADD( DIV(dy, _fwd_d),
+//        ADD( Const(0.0),
+//             ADD( MUL(dy, _fwd_e) · 0   chain reducing to 0.0 ) ) )
+//   ⇒ interprets to `(dy / d) + (0.0 + (0.0 + (0.0 + 0.0)))`
+//     = `dy / d` (with three Const(0.0) ADDs as trailing pad).
+// Reference (SD6 exact form, dy * s):
+//   s = 1.0 / (1.0 + dt_exp(0.0 - y));  dx_ref = dy * s
+//   ⇒ trajectory: `dy * (1.0 / d)`  (DIV + MUL, vs walker's single DIV
+//     + ADD-chain-of-zeros). Different IEEE-754 trajectory ⇒
+//     HONEST 1-ULP zone expected, or PASS byte-eq if rounding aligns.
+//
+// Walker emits (target=1, df/dy) — DIV at root, only sigmoid-subtree
+// path is non-zero (Param(0)=x leaf returns Const(0.0)):
+//   ADD( Const(0.0),                                  (x-leaf when target=1)
+//        ADD( Const(0.0),                              (ONE_A const)
+//             ADD( Const(0.0),                         (ZERO_A const inside SUB)
+//                  NEG( MUL(db_local, _fwd_e) ) ) ) )
+//   where  db_local = NEG( DIV( MUL(dy, _fwd_root), _fwd_d_2 ) )
+//   ⇒ Interprets to:
+//       neg_inner  = (dy * c) / d         (with c = f(x,y) = x/d)
+//       db_local   = NEG(neg_inner)       = -(dy * c / d)
+//       dc_c       = db_local * e         = -(dy * c / d) * e
+//       neg_total  = NEG(dc_c)            = (dy * c / d) * e
+//       tail_add   = 0.0 + neg_total
+//                  = 0.0 + ((dy * c / d) * e)
+//       y_dir      = 0.0 + (0.0 + (0.0 + tail_add))
+//                  = 0.0 + (0.0 + (0.0 + ((dy * c / d) * e)))
+// Reference (SD6 exact form, dy * x * s * (1-s)):
+//   s = 1.0 / d;  one_minus_s = 1.0 - s;  dy_ref = dy * x * s * one_minus_s
+//   ⇒ trajectory: `dy * x * s * (1 - s)`. Algebraically identical:
+//       (dy * c / d) * e  =  (dy * (x/d) / d) * e  =  dy * x * (e/d) / d
+//       =  dy * x * (e/d) * (1/d)  =  dy * x * (1-s) * s
+//   But IEEE-754 last-bit differs (the SD6 reorder lesson) ⇒
+//     HONEST 1-ULP zone expected.
+//
+// Both per-Param gates report verdict honestly:
+//   PASS    : max|Δ| = 0.0   (algebraic shape happens to byte-align)
+//   HONEST  : 0 < max|Δ| ≤ 10×eps  (SD6 reorder lesson confirmed)
+//   FAIL(95): max|Δ| > 10×eps  (real regression — investigate)
+// ════════════════════════════════════════════════════════════════════════
 println("")
-println("=== SD5 + SD6 + SD7 + SD9 closure (SD9 PASS · multi-input vjp primitive validated) ===")
+println("=== flame autograd-auto SD10 selftest (ag_extract · sigmoid-div multi-input vjp · SD6×SD9 cross-product) ===")
+
+// ─── hand-written references: sd10_div_x_manual / _y_manual ───────────
+// Both references use SD6's EXACT form per task brief — recompute
+// `s` from scratch as `1.0 / (1.0 + dt_exp(0.0 - y))`, then use
+// `s` (for df/dx) and `s * (1.0 - s)` (for df/dy). This deliberately
+// does NOT mirror the walker's emit trajectory — that's the point of
+// SD10: measure whether SD6's algebraic-identity reorder lesson
+// generalizes under multi-input mechanism. The reference's
+// `1 - s` and the walker's `e/d` are mathematically equal; this
+// gate measures the IEEE-754 last-bit verdict.
+fn sd10_div_x_manual(x_arr: int, y_arr: int, dy_arr: int, dx_out: int, len: int) {
+    let mut i = 0
+    while i < len {
+        let yi  = t_get(y_arr, i)
+        let dyi = t_get(dy_arr, i)
+        // forward (matches the fwd AST builder's op order for d only —
+        // the manual recomputes s independently of the AST cache,
+        // using the SD6 closed form).
+        let u   = 0.0 - yi
+        let e   = dt_exp(u)
+        let d   = 1.0 + e
+        let s   = 1.0 / d
+        // closed-form vjp: df/dx = s ⇒ dx = dy * s
+        let dxi = dyi * s
+        t_set(dx_out, i, dxi)
+        i = i + 1
+    }
+}
+
+fn sd10_div_y_manual(x_arr: int, y_arr: int, dy_arr: int, dyg_out: int, len: int) {
+    let mut i = 0
+    while i < len {
+        let xi  = t_get(x_arr, i)
+        let yi  = t_get(y_arr, i)
+        let dyi = t_get(dy_arr, i)
+        // forward (sigmoid recomputed manually per SD6 form)
+        let u   = 0.0 - yi
+        let e   = dt_exp(u)
+        let d   = 1.0 + e
+        let s   = 1.0 / d
+        let one_minus_s = 1.0 - s
+        // closed-form vjp: df/dy = x * s * (1 - s)
+        //                ⇒ dyg = dy * x * s * (1 - s)
+        let dyg_i = dyi * xi * s * one_minus_s
+        t_set(dyg_out, i, dyg_i)
+        i = i + 1
+    }
+}
+
+// ─── inputs for SD10 (reuse SD5/6/7/9 seeded arrays) ──────────────────
+// Per task §5 — len=32 fixed-seed LCG per axis. We REUSE the
+// existing arrays (x_arr seed 4242 + −1 shift, y_arr seed 70707 +
+// −1 shift, dy_arr seed 31337). This keeps SD10 in the same input
+// domain as SD5/6/7/9, ensuring shared-input regressions can't hide
+// behind a fresh seed.
+
+let sd10_dx_ref  = t_zeros(LEN)
+let sd10_dyg_ref = t_zeros(LEN)
+sd10_div_x_manual(x_arr, y_arr, dy_arr, sd10_dx_ref, LEN)
+sd10_div_y_manual(x_arr, y_arr, dy_arr, sd10_dyg_ref, LEN)
+
+// ─── SD10 path: AST-driven derivation with 2 Params + arithmetic ──────
+// Step 1: build the SD10 fwd AST `x / (1 + dt_exp(0 - y))` in a fresh
+// arena (slot count: 8 fwd + ~17 bwd × 2 dirs ≈ 42, under 64-cap).
+let sd10_arena = ag_extract_arena_new()
+let sd10_cache_meta = t_zeros(4)
+let sd10_fwd_root = ag_extract_build_sigmoid_div_multi_fwd(sd10_arena, sd10_cache_meta)
+println("sigmoid-div multi fwd AST built — root (DIV) node id = " + to_string(sd10_fwd_root))
+println("  param slots: x=" + to_string(to_int(t_get(sd10_cache_meta, 1)))
+      + ", y=" + to_string(to_int(t_get(sd10_cache_meta, 2)))
+      + ", d=" + to_string(to_int(t_get(sd10_cache_meta, 3))))
+
+// Step 2: reverse-mode walk v2 TWICE, once per target Param index.
+let sd10_upstream_x = ag_extract_mk_var_upstream(sd10_arena)
+let sd10_bwd_x_root = ag_extract_reverse_walk_v2(sd10_arena, sd10_fwd_root, sd10_upstream_x, 0)
+println("reverse-mode walk v2 (target=x · Param(0)) complete — bwd_x AST root id = " + to_string(sd10_bwd_x_root))
+
+let sd10_upstream_y = ag_extract_mk_var_upstream(sd10_arena)
+let sd10_bwd_y_root = ag_extract_reverse_walk_v2(sd10_arena, sd10_fwd_root, sd10_upstream_y, 1)
+println("reverse-mode walk v2 (target=y · Param(1)) complete — bwd_y AST root id = " + to_string(sd10_bwd_y_root))
+
+// Step 3: emit BOTH bwd sources for inspection — the (x, y, dy) signature.
+let sd10_bwd_x_src = ag_extract_emit_fn_xy(sd10_arena, sd10_bwd_x_root, "f_x_bwd_auto")
+let sd10_bwd_y_src = ag_extract_emit_fn_xy(sd10_arena, sd10_bwd_y_root, "f_y_bwd_auto")
+println("emitted bwd hexa-lang source (sigmoid-div, df/dx):")
+println(sd10_bwd_x_src)
+println("emitted bwd hexa-lang source (sigmoid-div, df/dy):")
+println(sd10_bwd_y_src)
+
+// Step 4: elementwise drivers with fwd-cache + 2-cell param_vals.
+let sd10_fwd_cache  = t_zeros(64)
+let sd10_param_vals = t_zeros(2)
+let sd10_dx_auto    = t_zeros(LEN)
+let sd10_dyg_auto   = t_zeros(LEN)
+ag_extract_sigmoid_div_multi_bwd_via_ast(sd10_arena, sd10_fwd_root, sd10_bwd_x_root,
+                                          x_arr, y_arr, dy_arr, sd10_dx_auto, LEN,
+                                          sd10_fwd_cache, sd10_param_vals)
+ag_extract_sigmoid_div_multi_bwd_via_ast(sd10_arena, sd10_fwd_root, sd10_bwd_y_root,
+                                          x_arr, y_arr, dy_arr, sd10_dyg_auto, LEN,
+                                          sd10_fwd_cache, sd10_param_vals)
+
+// ─── byte-eq gate (per Param): F-RFC043-AUTOGRAD-AUTO-SD10-DIV-MULTI-BYTE-EQ ─
+let sd10_dx_delta  = ag_dt_maxdev(sd10_dx_auto,  sd10_dx_ref,  LEN)
+let sd10_dyg_delta = ag_dt_maxdev(sd10_dyg_auto, sd10_dyg_ref, LEN)
+println("df/dx max|Δ| = " + to_string(sd10_dx_delta))
+println("df/dy max|Δ| = " + to_string(sd10_dyg_delta))
+
+// First-4-elements transparent IEEE-754 audit (one block per Param dir).
+println("first 4 element-wise comparison (df/dx — x_i, y_i, dy_i, dx_auto, dx_ref, |Δ|):")
+let mut sd10_dbg_x_i = 0
+while sd10_dbg_x_i < 4 {
+    let xi   = t_get(x_arr, sd10_dbg_x_i)
+    let yi   = t_get(y_arr, sd10_dbg_x_i)
+    let dyi  = t_get(dy_arr, sd10_dbg_x_i)
+    let dai  = t_get(sd10_dx_auto, sd10_dbg_x_i)
+    let dri  = t_get(sd10_dx_ref, sd10_dbg_x_i)
+    let dlt  = ag_dt_abs(dai - dri)
+    println("  i=" + to_string(sd10_dbg_x_i)
+          + "  x=" + to_string(xi)
+          + "  y=" + to_string(yi)
+          + "  dy=" + to_string(dyi)
+          + "  dx_auto=" + to_string(dai)
+          + "  dx_ref=" + to_string(dri)
+          + "  |Δ|=" + to_string(dlt))
+    sd10_dbg_x_i = sd10_dbg_x_i + 1
+}
+println("first 4 element-wise comparison (df/dy — x_i, y_i, dy_i, dyg_auto, dyg_ref, |Δ|):")
+let mut sd10_dbg_y_i = 0
+while sd10_dbg_y_i < 4 {
+    let xi   = t_get(x_arr, sd10_dbg_y_i)
+    let yi   = t_get(y_arr, sd10_dbg_y_i)
+    let dyi  = t_get(dy_arr, sd10_dbg_y_i)
+    let dai  = t_get(sd10_dyg_auto, sd10_dbg_y_i)
+    let dri  = t_get(sd10_dyg_ref,  sd10_dbg_y_i)
+    let dlt  = ag_dt_abs(dai - dri)
+    println("  i=" + to_string(sd10_dbg_y_i)
+          + "  x=" + to_string(xi)
+          + "  y=" + to_string(yi)
+          + "  dy=" + to_string(dyi)
+          + "  dyg_auto=" + to_string(dai)
+          + "  dyg_ref=" + to_string(dri)
+          + "  |Δ|=" + to_string(dlt))
+    sd10_dbg_y_i = sd10_dbg_y_i + 1
+}
+
+// Per-Param verdicts. SD10 follows SD6's HONEST-finding pattern:
+// machine-eps-scale divergence (≤ 10×eps) is a documented honest
+// finding (algebraic-identity reorder lesson under multi-input);
+// exceeding the tolerance is a real regression and exits 95.
+//
+// Tolerance: 10× the SD6 baseline 5.55e-17 ≈ 5.55e-16. The y-direction
+// has a LONGER algebraic chain (dy × x × s × (1-s) vs walker's
+// (dy × c × e) / d via three NEG/DIV/MUL ops) so its 1-ULP zone may
+// be slightly larger — we use the same SD6 tolerance to keep the
+// verdict crisp; the audit prints the actual max|Δ| regardless.
+let sd10_honest_tolerance = 5.55e-16
+
+if sd10_dx_delta > sd10_honest_tolerance {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD10-DIV-MULTI-BYTE-EQ (df/dx)  max|dx_auto − dx_ref| = "
+          + to_string(sd10_dx_delta) + " > " + to_string(sd10_honest_tolerance)
+          + " (10× machine-eps tolerance breached — real regression)")
+    println("Walker emit order (df/dx): ADD( DIV(dy, _fwd_d), Const-zero-chain )")
+    println("Reference order  (df/dx): dy * (1.0 / (1.0 + dt_exp(0.0 - y)))")
+    exit(95)
+}
+if sd10_dyg_delta > sd10_honest_tolerance {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD10-DIV-MULTI-BYTE-EQ (df/dy)  max|dyg_auto − dyg_ref| = "
+          + to_string(sd10_dyg_delta) + " > " + to_string(sd10_honest_tolerance)
+          + " (10× machine-eps tolerance breached — real regression)")
+    println("Walker emit order (df/dy): Const-zero-chain + NEG(MUL(NEG(DIV(MUL(dy,c),d)), e))")
+    println("Reference order  (df/dy): dy * x * s * (1 - s)  where s = 1.0/d")
+    exit(95)
+}
+
+// Both gates within tolerance — emit per-direction verdict.
+let mut sd10_x_label = "HONEST"
+if sd10_dx_delta == 0.0 { sd10_x_label = "PASS" }
+let mut sd10_y_label = "HONEST"
+if sd10_dyg_delta == 0.0 { sd10_y_label = "PASS" }
+
+println(sd10_x_label + "  F-RFC043-AUTOGRAD-AUTO-SD10-DIV-MULTI-BYTE-EQ (df/dx)  max|dx_auto − dx_ref| = "
+      + to_string(sd10_dx_delta)
+      + "   (walker: dy/d · reference: dy*(1/d))")
+println(sd10_y_label + "  F-RFC043-AUTOGRAD-AUTO-SD10-DIV-MULTI-BYTE-EQ (df/dy)  max|dyg_auto − dyg_ref| = "
+      + to_string(sd10_dyg_delta)
+      + "   (walker: (dy*c*e)/d · reference: dy*x*s*(1-s) — SD6 reorder zone)")
+
+if sd10_x_label == "PASS" {
+    if sd10_y_label == "PASS" {
+        println("=== SD10 PASS (BOTH per-Param gates byte-eq — algebraic shape happens to align even under arithmetic + multi-input) ===")
+    } else {
+        println("=== SD10 PASS-with-HONEST (df/dx byte-eq · df/dy honest 1-ULP — SD6 reorder lesson confirmed under multi-input on the y-dir's algebraic-identity chain) ===")
+    }
+} else {
+    if sd10_y_label == "PASS" {
+        println("=== SD10 PASS-with-HONEST (df/dx honest 1-ULP · df/dy byte-eq — predicted SD6 reorder under multi-input on x-dir's DIV-vs-MUL-(1/d) split) ===")
+    } else {
+        println("=== SD10 HONEST FINDING (both per-Param dirs ≤ 10×eps — SD6 algebraic-identity reorder lesson fully confirmed under multi-input arithmetic) ===")
+    }
+}
+
+println("")
+println("=== SD5 + SD6 + SD7 + SD9 + SD10 closure (SD10 multi-input arithmetic vjp validated · SD6 ULP zone × SD9 multi-input mechanism) ===")
 exit(0)
