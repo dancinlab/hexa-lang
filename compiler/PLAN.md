@@ -4034,3 +4034,95 @@ Remaining (autonomy queue):
   step 4 — RFC 066 B-1b C-kind HXC sidecar (heavy 1-2 sprint)
 
 RFC 065+066 commits cumulative : 28
+### 2026-05-20 — RFC 068 P2 — HIR grammar + opcode-suffix LANDED
+
+**Falsifier:** F-RFC068-OPCODE-SUFFIX **PASS** (4 sub-cases — f16 / bf16 /
+f32 / f64-byte-eq-guard). Branch: `rfc068-p2-hir-grammar` (sub-agent
+worktree). Honest scope (`@D g3`): P2 ≠ RFC 068 closure. The MIR opcode
++ Local.precision now flow through HIR→MIR for source-level
+`let t: f16 = a + b`; the reg-bank decl (`.reg .f16`) appears in the
+emitted PTX via PR #148's classifier short-circuit. P3 (BODY-MNEMONIC
+— `add.f16 %fh<dst>, …` instruction emit) and P4 (NUMERIC-EQ — real
+silicon fire) remain OPEN.
+
+What lands:
+
+`compiler/check/types.hexa` (+17 lines)
+- `_types_t_f16()` / `_types_t_bf16()` constructors mirror the f32/f64
+  pattern.
+- TypeRef "named" lookup: `n == "f16"` → t_f16, `n == "bf16"` → t_bf16.
+- `_types_is_numeric` + `_is_float_kind` extend to f16/bf16.
+- Smallest scope: no NEW source-grammar token — `f16`/`bf16` are
+  parsed via the existing `let t: T = …` named-type path. The user
+  prompt's hint ("smallest scope" — let type names suffice) followed.
+
+`compiler/lower/hir_to_mir.hexa` (+103 lines)
+- New helpers: `_precision_from_typ_kind` (HIR Type.kind → ".f16" /
+  ".bf16" / ".f32" / "" tag), `_op_with_precision` (suffix `add` →
+  `add_f16` etc., normalizing frontend `+`/`-`/`*` symbols onto the
+  MIR mnemonic), `_update_local_precision` (replace a Local's
+  precision in `ctx.locals` so downstream walks see the same tag).
+- STMT_BINOP lowering: when `e.typ.kind ∈ {f16,bf16,f32}`, the dst
+  Local AND the Stmt.op carry the precision through to MIR.
+- Comparison ops (lt/le/gt/ge/eq/ne) stay plain (their dst is a
+  PRED — a suffix would mis-classify). f64 stays "" → classifier
+  default path unchanged (byte-eq guard).
+
+`compiler/codegen/nvptx_lower_test.hexa` (+261 lines)
+- Imports `../parse/ast.hexa`, `../ir/hir.hexa`, `../lower/hir_to_mir.hexa`
+  so the test can drive the real `lower_hir` entry point.
+- Case 20 — F-RFC068-OPCODE-SUFFIX. Five sub-cases:
+  (A) f16 binop → op == `add_f16` + dst.precision == `.f16`.
+  (B) bf16 binop → op == `add_bf16` + dst.precision == `.bf16`.
+  (C) f32 binop → op == `add_f32` + dst.precision == `.f32`.
+  (D) f64 byte-eq guard — op stays plain `+`, precision empty (the
+      classifier default path is byte-untouched).
+  (E) end-to-end PTX emission — wraps the f16 MFunc as GPU_KIND_DEVICE
+      and calls `codegen_emit_ptx_sm80`; asserts `.reg .f16 %fh` bank
+      decl appears. Body still emits the P0-style "unsupported
+      binop: add_f16" stub (P3 will fix that — verified by the dump).
+- Driver `main()` extended: 19/19 → 20/20 cases. PASS line updated to
+  `RFC 055 + RFC 067 P1/P2 + RFC 068 P1/P2 + RFC 069 P1/P2/P3`.
+
+Validation:
+- `nvptx_lower_test` 20/20 PASS (incl. F-RFC068-OPCODE-SUFFIX 5
+  sub-cases).
+- `nvptx_emit_test` PASS (CPU/PTX hand-emit unaffected).
+- `nvptx_vec_add_test` PASS (vec-add hand-emit unaffected).
+- `nvptx_gemm_test` PASS (GEMM hand-emit unaffected).
+- `codegen_test` PASS (CPU codegen byte-eq holds — x86_64 + arm64
+  LIR shapes unchanged).
+- `mir_test` case (a)+(b) PASS, case (c) FAIL — but case (c) FAIL
+  is PRE-EXISTING on origin/main (confirmed via `git stash`).
+
+Files NOT touched (gates upheld):
+- `self/codegen_c2.hexa` — @D g_commit_push_deploy honored; no binary
+  promote in this cycle.
+- `self/native/*` — @D g5 hexa-native-only; no bootstrap edits.
+- `compiler/codegen/{x86_64_linux,arm64_darwin,thumbv7em_eabihf}.hexa`
+  — F-RFC055-CPU-CODEGEN-UNTOUCHED gate.
+- `compiler/ir/mir.hexa` — RFC 068 P1 already added the precision
+  field; P2 only USES it.
+
+What still blocks RFC 068 closure (P4 NUMERIC-EQ):
+- P3 BODY-MNEMONIC: extend `_nvptx_lower_stmt` STMT_BINOP branch so
+  `add_f16` op emits `add.f16 %fh<dst>, %fh<a>, %fh<b>;` (and the
+  sub/mul/fma siblings). Currently the body is the honest P0 stub.
+- P4: build an f16 vec-add fixture, ssh ubu-2 RTX 5070, ptxas-JIT,
+  numeric-eq vs f64 baseline ≤ 2 × f16-ULP.
+
+Cross-link: inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md
+§3 P2 · PR #148 (P1 — Local.precision tag thread) · PR #123 (PTX scaffold
++ classifier op-name rules) · RFC 055 §12 P4+ closure plan.
+### 2026-05-20 — RFC 067 P3 LANDED — `F-RFC067-DTYPE-FAMILY` PASS (PReg fragment metadata extension)
+
+RFC 067 P3 — `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md` §3 P3. Extends `PReg` (`compiler/ir/lir.hexa`) with three NEW fields — `frag_role` (a/b/c/d/""), `frag_dtype` (.f16/.bf16/.f32/""), `frag_layout` (.row/.col/"") — defaulting empty everywhere so the canonical PR #150 f16×f16→f32 family continues to flow through unchanged. `_nvptx_classify_locals` Pass 1 now stamps role/dtype/layout on FRAG-classified PRegs by calling three new helpers (`_nvptx_frag_role_for_op` / `_dtype_for_op` / `_layout_for_op`) that pattern-match the STMT_CALL op name. A new `_nvptx_wmma_mnemonic_family(op, role, dtype, layout)` accepts the metadata tuple and re-keys the mnemonic table to reach three families per PTX ISA §9.7.13.4: canonical f16×f16→f32, bf16×bf16→f32, f16×f16→f16. All 11 existing PReg constructors across `nvptx_target.hexa` + `arm64_darwin.hexa` + `x86_64_linux.hexa` + `thumbv7em_eabihf.hexa` + `emit/asm_test.hexa` updated with `frag_role: "", frag_dtype: "", frag_layout: ""` defaults (backward-compat).
+
+**Falsifier — `F-RFC067-DTYPE-FAMILY`**: new Case 20 in `nvptx_lower_test.hexa` (`_test_dtype_family`). Sub-case A asserts the three family mnemonics against the PTX ISA §9.7.13.4 table (3× substring). Sub-case B verifies the PReg roster round-trip — a fixture with `gpu_wmma_load_a/_b/_mma` calls produces three FRAG PRegs whose `frag_role`/`frag_dtype`/`frag_layout` match the expected stamps; a non-FRAG (F64 binop) PReg in a sibling MFunc keeps all three fields `""` (default-empty invariant). nvptx_lower_test.hexa: **20/20 PASS** (was 19/19).
+
+**Honest scope (`@D g3`)**: P3 metadata extension ≠ RFC 067 closure (P4 GPU-fire still required) ≠ real wmma instruction-emit (separate cycle). The metadata-attaching seam + the mnemonic re-keying table are wired and tested, but the lowering site in `_nvptx_lower_stmt` still emits the SCAFFOLD comment marker, NOT a real `wmma.mma.sync...` instruction. The follow-on cycle (real wmma instruction-emit) will reference the FRAG vector regs + `.shared` slot via the family-aware mnemonic resolved by `_nvptx_wmma_mnemonic_family`. NO GPU fire in this cycle.
+
+**Verification — standalone (compiled path)**: `compiler/codegen/nvptx_lower_test.hexa` 20/20 PASS (incl. F-RFC067-DTYPE-FAMILY new Case 20), 3 regression tests PASS (`nvptx_emit_test` 055-P0 emit, `nvptx_vec_add_test` 055-P1 vec-add, `nvptx_gemm_test` 055-P2 naive GEMM). Pre-existing `compiler/emit/asm_test.hexa` clang error (`HexaVal asm = ...` — `asm` is a C keyword) is NOT caused by this change (verified via `git stash` baseline; same error pre-edit).
+
+**Files** — extended only: `compiler/ir/lir.hexa` (+15 lines — 3 new struct fields with RFC 067 P3 docstring); `compiler/codegen/nvptx_target.hexa` (+~95 lines — 4 new helpers `_nvptx_frag_{role,dtype,layout}_for_op` + `_nvptx_wmma_mnemonic_family`, classifier Pass 1 metadata stamping, 8 existing PReg constructor sites updated); `compiler/codegen/arm64_darwin.hexa` · `x86_64_linux.hexa` · `thumbv7em_eabihf.hexa` · `emit/asm_test.hexa` (+2 lines each — `_*_preg_gpr` / `_*_empty_preg` helpers carry the 3 default-empty fields); `compiler/codegen/nvptx_lower_test.hexa` (+~180 lines — Case 20 `_test_dtype_family` + main() registration + PASS line). No binary promote; F-RFC055-CPU-CODEGEN-UNTOUCHED gate preserved (arm64/x86_64 backends only added default-empty fields to their PReg helpers — no behavior change). No edits to `self/codegen_c2.hexa` or `self/native/*`.
+
