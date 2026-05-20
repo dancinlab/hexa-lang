@@ -85,6 +85,53 @@ pub fn rt_lgamma(z: float) -> float {
     return (x - 0.5) * rt_log(x) - x + LOG_SQRT_2PI + series - shift
 }
 
+// Step 3 cycle 17 — SiLU (Swish-1) activation: x / (1 + exp(-x))
+pub fn rt_silu(a: [float]) -> [float] {
+    let mut out: [float] = []
+    let n = len(a)
+    let mut i = 0
+    while i < n {
+        let x = a[i]
+        out = out.push(x / (1.0 + rt_exp(0.0 - x)))
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 17 — GELU (tanh approximation):
+//   0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x³)))
+pub fn rt_gelu(a: [float]) -> [float] {
+    let mut out: [float] = []
+    let n = len(a)
+    let K = 0.7978845608028654   // sqrt(2/π)
+    let mut i = 0
+    while i < n {
+        let x = a[i]
+        let inner = K * (x + 0.044715 * x * x * x)
+        out = out.push(0.5 * x * (1.0 + rt_tanh(inner)))
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 17 — argmax (returns int index, -1 for empty/non-array).
+// Ties → lowest index.
+pub fn rt_argmax(a: [float]) -> int {
+    let n = len(a)
+    if n == 0 { return -1 }
+    let mut best_i = 0
+    let mut best_v = a[0]
+    let mut i = 1
+    while i < n {
+        if a[i] > best_v {
+            best_v = a[i]
+            best_i = i
+        }
+        i = i + 1
+    }
+    return best_i
+}
+
 // Step 3 cycle 16 — RMS normalization. Two-arity polymorphism (scalar vs
 // array gamma) split into separate hexa fns; C wrapper dispatches.
 //   out[i] = gamma[i?] * x[i] / sqrt(mean(x²) + eps)

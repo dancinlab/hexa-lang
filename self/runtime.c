@@ -9335,8 +9335,8 @@ HexaVal hexa_hadamard(HexaVal a, HexaVal b) {
     return out;
 }
 
-// silu(a): elementwise SiLU (Swish-1) activation: x / (1 + exp(-x)).
-// Matches interpreter silu path (standalone — used by SwiGLU decomposition).
+// silu/gelu/argmax: Step-3 cycle 17 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_silu(HexaVal a) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(a)) return out;
@@ -9347,9 +9347,6 @@ HexaVal hexa_silu(HexaVal a) {
     }
     return out;
 }
-
-// gelu(a): elementwise Gaussian Error Linear Unit (tanh approximation).
-// Matches interpreter hexa_full.hexa:10108 — 0.5*x*(1+tanh(sqrt(2/pi)*(x+0.044715*x^3))).
 HexaVal hexa_gelu(HexaVal a) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(a)) return out;
@@ -9362,9 +9359,6 @@ HexaVal hexa_gelu(HexaVal a) {
     }
     return out;
 }
-
-// argmax(a): return index of largest element (ties → lowest index).
-// Matches interpreter hexa_full.hexa:9616 — int result.
 HexaVal hexa_argmax(HexaVal a) {
     if (!HX_IS_ARRAY(a)) return hexa_int(-1);
     int64_t n = (int64_t)HX_ARR_LEN(a);
@@ -9377,6 +9371,23 @@ HexaVal hexa_argmax(HexaVal a) {
     }
     return hexa_int(best_i);
 }
+#else
+extern HexaVal rt_silu(HexaVal a);
+extern HexaVal rt_gelu(HexaVal a);
+extern HexaVal rt_argmax(HexaVal a);
+HexaVal hexa_silu(HexaVal a) {
+    if (!HX_IS_ARRAY(a)) return hexa_array_new();
+    return rt_silu(a);
+}
+HexaVal hexa_gelu(HexaVal a) {
+    if (!HX_IS_ARRAY(a)) return hexa_array_new();
+    return rt_gelu(a);
+}
+HexaVal hexa_argmax(HexaVal a) {
+    if (!HX_IS_ARRAY(a)) return hexa_int(-1);
+    return rt_argmax(a);
+}
+#endif
 
 // sum(a): reduce-sum; returns int if all elements int, float otherwise.
 // Matches interpreter hexa_full.hexa:13232.
