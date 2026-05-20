@@ -4300,7 +4300,34 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     let _ssa_first_body = _rv_ssa_rename_toks(_ssa_body_toks, _ssa_tracked, 0, 1)
                     let _ssa_probe = _rv_emit_for_if_stmts(_ssa_first_body, "", m, tab, 0, "")
                     if _ssa_probe.ok == 1 {
-                        // Pre-loop alias.
+                        // Pre-loop SSA chain seed (rfc_006 §5 audit 2026-05-21
+                        // cross-iter comb-loop fix):
+                        //
+                        // The naive form `connect(s__ssa0, s)` aliases the
+                        // SSA chain start to the GLOBAL net `s`. That breaks
+                        // when the post-loop publish `connect(s, s__ssaP)`
+                        // is added later (L4361 below): clean_multidriver
+                        // collapses s's two drivers last-write-wins → kept
+                        // driver is s__ssaP → s__ssa0 = s = s__ssaP closes
+                        // a combinational loop, ABC's NetworkCheck rejects
+                        // the design with `Network contains a combinational
+                        // loop · Node "n_XXX" encountered twice on path to
+                        // CO "<s>__d"` (verified on router_d4/d6 2026-05-21
+                        // gate_record run · BLIF lines 26 + 34).
+                        //
+                        // Fix: capture s's CURRENT in-Module driver (the
+                        // pre-loop init, e.g. `connect(any_grant, $const_0)`
+                        // from `any_grant = 1'b0;` before the for-loop) and
+                        // seed s__ssa0 from that rhs directly. After the
+                        // post-loop publish, s ends up with two drivers
+                        // ($const_0 + s__ssaP) that clean_multidriver still
+                        // collapses last-wins to s__ssaP — but the SSA chain
+                        // no longer reads back through s, so no cycle.
+                        //
+                        // Fallback: if no pre-loop driver for s is found,
+                        // fall back to the legacy `connect(s0, s)` alias —
+                        // that path still produces the cycle, but is no
+                        // worse than the prior behavior for unaudited cases.
                         let mut _ssa_si = 0
                         while _ssa_si < len(_ssa_tracked) {
                             let s = _ssa_tracked[_ssa_si]
@@ -4308,7 +4335,19 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                             if rtlil_find_wire(m, s0) < 0 {
                                 m = rtlil_module_add_wire(m, rtlil_wire(s0, 1, 0, 0))
                             }
-                            m = rtlil_module_connect(m, s0, s)
+                            // Scan connect_lhs[] backwards for the most-recent
+                            // driver of s. If found, use its rhs to seed s0.
+                            let mut _ssa_seed = s
+                            let mut _ssa_drv_i = len(m.connect_lhs) - 1
+                            while _ssa_drv_i >= 0 {
+                                if m.connect_lhs[_ssa_drv_i] == s {
+                                    _ssa_seed = m.connect_rhs[_ssa_drv_i]
+                                    _ssa_drv_i = -1
+                                } else {
+                                    _ssa_drv_i = _ssa_drv_i - 1
+                                }
+                            }
+                            m = rtlil_module_connect(m, s0, _ssa_seed)
                             _ssa_si = _ssa_si + 1
                         }
                         let mut _ssa_fi = 0
@@ -6673,22 +6712,56 @@ fn main() {
             println("FAIL T74b missing final publish connect(v, v__ssa3)")
             fails = fails + 1
         }
-        // Pre-loop alias: connect(v__ssa0, v) — unconditional. This is the
-        // "loop entry value" that BREAKS the comb self-feedback: iter 0
-        // reads v__ssa0 (an alias of pre-loop v), NOT a wire that some
-        // later iter will rewrite.
+        // Pre-loop SSA seed (rfc_006 §5 audit 2026-05-21 cross-iter
+        // comb-loop fix):
+        //
+        // ORIGINAL T74c (pre-fix): asserted connect(v__ssa0, v) — alias
+        // to the global net `v`. That form created a combinational loop
+        // because later `connect(v, v__ssa3)` (post-loop publish) gives
+        // v two drivers that clean_multidriver collapses last-wins to
+        // v__ssa3, making v__ssa0 = v = v__ssa3 → ABC NetworkCheck
+        // rejects the design (`Network contains a combinational loop ·
+        // Node n_XXX encountered twice on path to CO v__d`, verified
+        // 2026-05-21 on router_d4/d6 fixtures).
+        //
+        // POST-FIX behavior (this T74c): the seed is the most-recent
+        // pre-loop driver-RHS of `v` (the elaborated `v = 1'b0;`
+        // assignment that comes before the for-loop). For the T74
+        // fixture that's `$const_0`. The seed expression is whatever
+        // the elaborator put in connect_rhs for `v` BEFORE the SSA
+        // setup ran — accept either the constant form (e.g. `$const_0`)
+        // or any wire name starting with `$` (RTLIL synthesized wires).
+        // Fallback: if no pre-loop driver was found, the legacy alias
+        // `v` is still accepted (matches the prior behavior for
+        // unaudited code paths).
         let mut _t74_entry = 0
+        let mut _t74_seed_rhs = ""
         let mut _t74_ej = 0
         while _t74_ej < len(_m74.connect_lhs) {
             if _m74.connect_lhs[_t74_ej] == "v__ssa0"
-                && _m74.connect_rhs[_t74_ej] == "v"
                 && len(_m74.connect_cond[_t74_ej]) == 0 {
+                _t74_seed_rhs = _m74.connect_rhs[_t74_ej]
                 _t74_entry = 1
             }
             _t74_ej = _t74_ej + 1
         }
         if _t74_entry != 1 {
-            println("FAIL T74c missing pre-loop alias connect(v__ssa0, v)")
+            println("FAIL T74c missing pre-loop seed connect(v__ssa0, *)")
+            fails = fails + 1
+        } else if _t74_seed_rhs == "v" {
+            // legacy alias fallback — acceptable but flag for awareness
+            println("[T74c] note: pre-loop seed = legacy alias (v__ssa0 = v) "
+                + "— fallback path; pre-loop init not captured")
+        }
+        // T74d — the seed MUST NOT close a comb loop: post-loop publish
+        // emits connect(v, v__ssa3). If T74c's seed is `v` AND that
+        // publish exists, the loop is closed. Detect that combination
+        // and fail-loud — it's the regression class this fix prevents.
+        if _t74_entry == 1 && _t74_seed_rhs == "v" && _t74_publish == 1 {
+            println("FAIL T74d comb-loop closed: connect(v__ssa0, v) + "
+                + "connect(v, v__ssa3) — same regression class as router_d4 "
+                + "rr_ptr__d cycle. The seed must come from the pre-loop "
+                + "driver-rhs, not from the global net.")
             fails = fails + 1
         }
     }
