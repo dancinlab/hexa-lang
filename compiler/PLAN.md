@@ -7945,6 +7945,42 @@ K2 SSOT (`1e82ef95`) 후 deploy 시도 — 결과 ABORT.
 **`@D g_commit_push_deploy` posture** (honest): per the rule, "compiler-source change whose binary is not promoted is INCOMPLETE — not landed." K2 SSOT is on a worktree branch (not `origin/s1-step2-codegen-perf` or `origin/main`); the rule's enforcement triggers at the branch-land + push event, not at the worktree-commit event. The deploy step remains the next cycle's responsibility before K2 can land on the source branch.
 
 **Cross-link**: K2 SSOT entry above · `@D g_commit_push_deploy` · K1 deferred #2 (this attempt) · K1 deferred #3 (gated on this).
+
+### 진행 로그 — RFC 070 G7-A.native K2 ABORT root-cause CORRECTION + transitive blocker 2026-05-21
+
+**branch**: `main-fa-measure` (worktree `/private/tmp/wt-main-fa-measure` on `origin/main`) · **date**: 2026-05-21 · **gate**: `@D g_commit_push_deploy` deploy step (re-attempt).
+
+K2 ABORT (`1287cf6e`) 의 root-cause 진단 정정 + 다음 transitive blocker 확정.
+
+**(a) root cause correction (`self/main.hexa` parse-EOF)** — ABORT note 는 "pre-existing parse-EOF-off-by-one" 으로 진단했으나, 실제 원인은 merge commit `441a53a8` 의 conflict-resolution residue. L1841-1842 가 **두 줄 unresolved**:
+  - L1841: `fn cmd_build(src, out, c_only, target) {` (구 4-param signature)
+  - L1842: `// ━━━ end HEAD / begin rfc070-g7-native-scaffold ━━━` (literal merge marker text)
+
+  L1843 의 K2 5-param `fn cmd_build(src, out, c_only, target, shared) {` 가 진짜 정의이지만, L1841 의 `{` 가 unclosed 인 채로 EOF 까지 brace stack 에 남음. string-aware brace count 가 `final depth=1` → parser EOF 위치에서 `expected RBrace got Eof`.
+
+  **Surgical fix landed** (`a8ec5db4` this commit): delete L1841-1842. Parse-gate `hexa_real parse self/main.hexa` PASS (이전 4882:1, 이제 clean). Line count 4881 → 4879. K2 SSOT delta 무관 — `git blame` 확인: L1841=`7c5926d3b` (2026-05-07 구 정의) · L1842=`441a53a8c` (2026-05-20 23:21 merge commit) · L1843=`66b055c41` (2026-05-20 18:21 K2 source brunch). Merge resolution 에서 ours/theirs 양쪽을 다 남겼고 marker 만 cleanup 됐어야 했는데 marker 자체가 literal 으로 commit 됨.
+
+**(b) new transitive blocker (`fs_append_atomic` / `fs_stat` / `fs_mkdir_p` lowering chain stale)** — parse-EOF 해소 후 `tool/build_aprime.sh` 재시도 → clang stage 4 fail. 13477-line `ap_post.c` 에 3 builtin call (`fs_append_atomic` · `fs_stat`) 이 lowering 되지 않은 채 emit. trace:
+  - `self/codegen_c2.hexa:5040,5132` (commit `0e930a905`, 2026-05-20 20:22, G5 wilson-pi-port-6-gap S-FS-ATOMIC-APPEND) 가 `fs_*` → `rt_fs_*` lowering 을 추가했음
+  - 그러나 `self/native/hexa_v2` binary 는 그 추가 이전 빌드 → lowering 인식 X (`strings hexa_v2 | grep fs_append_atomic` = 0 hits)
+  - 그러나 `self/native/hexa_cc.c` regen 도 stale → 새 lowering 미반영
+  - `compiler/main.hexa` → `compiler/atlas/hxc_loader.hexa` → `self/stdlib/fs.hexa::fs_append_atomic_wrap` 가 path-3 단계에서 `fs_append_atomic` 을 호출하며 build_aprime.sh stage 2 transpile 시 unlowered string emission.
+
+**(c) `hexa cc --regen` driver-self-build attempt** — `hexa_real run self/main.hexa cc --regen` 시도 → `resolve_hexa_v2()` chain 의 `exec("test -x ...")` 가 (interp builtin 의 exec semantics 미묘함) yes 를 반환 못하고 `error: hexa_v2 not found — run \`hexa cc\` first` 로 abort. main repo + worktree 모두에 정상 `self/native/hexa_v2` (1.5MB executable) 존재 확인 + direct `test -x` shell 호출은 yes 반환 — interp 의 exec capture 분기 문제.
+
+**posture**: K2 SSOT (`c99596dc`) + parse-EOF fix (`a8ec5db4` this cycle) 둘 다 source-side land. binary promote chain 의 두 번째 transitive blocker (regen self-build) 는 별도 cycle 의 책임:
+  - `self/codegen_c2.hexa:5040,5132` 의 G5 lowering 을 인식하는 새 `hexa_v2` 가 빌드되어야 함
+  - 정상 chain: 기존 hexa_v2 → 4 SSOT module transpile (이미 PASS, 6 hits) → awk merge → 새 hexa_cc.c → clang → 새 hexa_v2 → aprime_cc rebuild
+  - 본 cycle 에서 manual reconstruction 시도했지만 awk script 들이 self/main.hexa 안 heredoc 으로 inline 정의되어 추출 분량 큼 — cycle-divergent 판단으로 deferred
+
+**F-A1/F-A2 falsifier**: 본 cycle 비측정. 측정 prerequisite chain (regen `hexa_v2` → `aprime_cc` rebuild → `--shared HEXA_BACKEND=native` smoke → mini arm64 dlopen + nm) 의 첫 단계 (regen) 가 transitive blocker. K2 SSOT 의 `--shared` flag wiring 자체는 source-side 측정 가능 (codegen `if opts.shared == 1` 분기 emit byte-eq, K2 cherry-pick `cc5568d1` SSOT delta).
+
+**measured delta this cycle**: `self/main.hexa` -2 lines (4881 → 4879) · parse-gate FAIL → PASS · build_aprime.sh stage 1-2 PASS · stage 4 FAIL (transitive blocker (b) 측정 노출).
+
+**Cross-link**: `1287cf6e` K2 binary promote ABORT (this entry 가 그 정정 + corrigendum) · `a8ec5db4` parse-EOF surgical fix · `0e930a905` G5 lowering 추가 (transitive blocker 의 SSOT 위치) · `feedback_hexa_lang_shared_worktree_branch_hazard.md` (merge-residue artifact 패턴) · `feedback_runtime_c_deploy_regen_wipe.md` (deploy-regen wipe 패턴, 본 cycle 의 다른 세션 active) · `@D g_commit_push_deploy` (deploy step posture) · `@D g_inbox_processing_loop` step 4 (parse-gate before flip).
+
+---
+
 **작업 = cycle 50/51 maintenance**. 3 attempts (`-fno-builtin-sincos` · `-mllvm -disable-loop-idiom-memcpy=true` · `__attribute__((no_builtin("memcpy")))`) 모두 무효 — 115 externs 그대로. honest log + attribute keeps (valid, harmless, documents the attempt).
 
 **measured delta**: 0 (115 → 115) · smoke PASS · 바이너리 1,119,784 B 무변.
