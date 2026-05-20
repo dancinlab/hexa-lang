@@ -4242,3 +4242,63 @@ pilots `122620de` (solar) + `dd3dad19` (mc_transport) ·
 (pilot pattern catalog) · @D g7 inbox-patches-pipeline ·
 @D g_inbox_processing_loop ·
 @D g_stdlib_ownership.
+
+---
+
+### 2026-05-20 · inbox import-alias-runtime-resolve · verified-closed (dup-race)
+
+Patch `inbox/patches/import-alias-runtime-resolve.md` (filed 2026-05-14 PM
+by anima VOICE Phase 1; status `proposed`) checked against current SSOT.
+
+**Result: dup-race PASS — already-closed by RFC-016 (commit `ec6f6a56`,
+"feat(lang): RFC-016 namespaced & Python-style imports — P1~P4 land",
+2026-05-07).** Filing post-dates the fix by 7 days; reporter had not
+caught up with the upstream P1 land.
+
+Measurement (`/Users/ghost/.hx/bin/hexa_real run` on /tmp/alias_test/):
+
+```
+$ cat m.hexa            → pub fn add(a:int, b:int) { return a+b }
+$ cat caller.hexa       → import "./m.hexa" as m; fn main(){println(m.add(2,3))}
+$ hexa run caller.hexa  → 5  (rc=0)
+```
+
+Spec decision adopted: §3.2 **Option B** (explicit `pub fn` export) —
+NOT patch-recommended Option A (default-export-all). Provider-side
+fns without `pub` are intentionally not alias-exposed (namespace
+pollution Pro). Reproducer §1.1's `fn add` (no `pub`) silently failing
+is the documented spec, not a bug.
+
+Implementation surface (already landed, RFC-016 P1):
+- `self/parser.hexa::parse_stmt` 1034-1063 — `import "path" as <ident>` token consumer
+- `self/module_loader.hexa::ml_apply_alias_prefix` 298-369 — provider rewrite
+- `self/module_loader.hexa::ml_rewrite_alias_refs` 377+ — caller rewrite
+- `self/module_loader.hexa::ml_collect_imports_with_alias` 787-822 — collector
+- `bench/import_alias_e2e.hexa` — e2e production smoke
+
+Action taken:
+1. Status flip in `inbox/patches/import-alias-runtime-resolve.md` → `resolved-ssot` with full RESOLUTION block (measurement + spec decision + impl table + residual).
+2. This PLAN entry (single-source SSOT per @D g_plan_consolidation).
+3. No SSOT compiler-source edit needed — mechanism live since 2026-05-07.
+
+Residual (NOT this cycle, deploy lag): `self/native/parser_v2.c`
+generated frontend rejects `As` token in standalone `hexa parse`. Zero
+build/run impact (module_loader line-strips `import...as` before flat
+source reaches parser; measurement rc=0). `parser.hexa` SSOT correct;
+`parser_v2.c` resyncs at next standard deploy (@D g_commit_push_deploy)
+— per @D g_inbox_processing_loop step 7, deploy outside this cycle.
+
+Downstream (anima) follow-up: add `pub` to `intent_proj.hexa` +
+`voice_bridge.hexa` exported fns; retire `tool/anima_voice_smoke.hexa`
+combined-single-file workaround (`fcdc3cae5`) back to 3-file modular
+split. One-keyword-per-fn anima-side edit.
+
+g3-honest scope: This entry closes the SSOT side of the inbox patch.
+Anima-side modular-restore is downstream's call. Deploy regen of
+`parser_v2.c` (clearing the `hexa parse` cosmetic warning) is a
+separate standard deploy cycle, not this one.
+
+cross-ref: commit `ec6f6a56` (RFC-016 P1-P4) · `f3474de6`
+(runtime symbol register) · `c85636a4` (lex/parse use→import alias) ·
+@D g_inbox_processing_loop · @D g_atlas_binary_builtin · feedback
+memory `inbox dup-race precheck`
