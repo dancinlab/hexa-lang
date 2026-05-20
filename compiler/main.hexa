@@ -326,11 +326,20 @@ let mut linker_kind = "system"
 // the default flips to `native` for arm64-apple-darwin obj emit;
 // `--backend=system` retains the legacy path as opt-out.
 //
-// The flip is applied AFTER arg parsing (so `--backend=system` user
-// override wins) and is conditional on (target == arm64-apple-darwin
-// && emit_kind == "obj"). Other targets / emit modes keep `system`.
+// Resolution order (highest precedence first):
+//   1. `--backend=<value>` CLI flag (explicit user override)
+//   2. `HEXA_BACKEND` env var (wrapper / CI override)
+//   3. Auto-flip per P3: native default when target=arm64-darwin obj
+//   4. Fallback: "system" (legacy clang path)
 let mut backend_kind = "system"
 let mut backend_kind_user_set = false
+// HEXA_BACKEND env var pre-seeds the choice. Empty env value is
+// treated as unset (passes through to auto-flip + fallback).
+let _backend_env = env("HEXA_BACKEND")
+if len(_backend_env) > 0 {
+    backend_kind = _backend_env
+    backend_kind_user_set = true
+}
 let mut source_path = ""
 let mut keep_temp = false
 let mut verbose = false

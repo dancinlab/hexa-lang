@@ -159,7 +159,7 @@ fn xreg_idx(s: string) -> i64 {
     return v
 }
 
-// Parse "#42" or "#0x2A" (immediate operand) to i64.
+// Parse "#42" or "#0x2a" (immediate operand) to i64.
 fn imm_val(s: string) -> i64 {
     let n = len(s)
     if n < 2 { return 0 }
@@ -175,7 +175,7 @@ fn imm_val(s: string) -> i64 {
 // by `compiler/codegen/arm64_darwin.hexa` is uniformly 64-bit.
 //
 // On unknown op, returns 0 (caller should treat 0 = NOP-like as an
-// encoding-failure marker, since real NOP is encoded as 0xD503201F).
+// encoding-failure marker, since real NOP is encoded as 0xd503201f).
 //
 // RFC 063 § P0 step 1 — first 16 rules landed (the LIR subset that
 // `compiler/emit/asm.hexa` emits today as `.s` text). Symbol-
@@ -191,17 +191,17 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
     // MOVK Xd, #imm16 (keep — OR the immediate, preserves others).
     if (op == "MOVZ" || op == "MOVK") && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = xreg_idx(ops[0])
-        let imm = imm_val(ops[1]) & 0xFFFF
-        let mut base = 0xD2800000      // MOVZ
-        if op == "MOVK" { base = 0xF2800000 }   // MOVK
+        let imm = imm_val(ops[1]) & 0xffff
+        let mut base = 0xd2800000      // MOVZ
+        if op == "MOVK" { base = 0xf2800000 }   // MOVK
         return base | (imm << 5) | rd
     }
     // MOV Xd, #imm16  (legacy alias — `MOV Xd, #imm` is a MOVZ alias
     // when the immediate fits 16 bits with no shift).
     if op == "MOV" && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = xreg_idx(ops[0])
-        let imm = imm_val(ops[1]) & 0xFFFF
-        return 0xD2800000 | (imm << 5) | rd
+        let imm = imm_val(ops[1]) & 0xffff
+        return 0xd2800000 | (imm << 5) | rd
     }
     // MOV Xd, Xn. Two sub-cases per ARM ARM (C6.2.187):
     //   - `MOV Xd, SP` or `MOV SP, Xn` → alias for `ADD Xd, Xn, #0`
@@ -218,7 +218,7 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
             // ADD Xd, Xn, #0  (Rn=31 here means SP, not XZR)
             return 0x91000000 | (rn << 5) | rd
         }
-        return 0xAA0003E0 | (rn << 16) | rd
+        return 0xaa0003e0 | (rn << 16) | rd
     }
 
     // ── Arithmetic, register form ──
@@ -227,13 +227,13 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         let rd = xreg_idx(ops[0])
         let rn = xreg_idx(ops[1])
         let rm = xreg_idx(ops[2])
-        return 0x8B000000 | (rm << 16) | (rn << 5) | rd
+        return 0x8b000000 | (rm << 16) | (rn << 5) | rd
     }
     // ADD Xd, Xn, #imm12
     if op == "ADD" && len(ops) == 3 {
         let rd = xreg_idx(ops[0])
         let rn = xreg_idx(ops[1])
-        let imm = imm_val(ops[2]) & 0xFFF
+        let imm = imm_val(ops[2]) & 0xfff
         return 0x91000000 | (imm << 10) | (rn << 5) | rd
     }
     // SUB Xd, Xn, Xm
@@ -241,21 +241,21 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         let rd = xreg_idx(ops[0])
         let rn = xreg_idx(ops[1])
         let rm = xreg_idx(ops[2])
-        return 0xCB000000 | (rm << 16) | (rn << 5) | rd
+        return 0xcb000000 | (rm << 16) | (rn << 5) | rd
     }
     // SUB Xd, Xn, #imm12
     if op == "SUB" && len(ops) == 3 {
         let rd = xreg_idx(ops[0])
         let rn = xreg_idx(ops[1])
-        let imm = imm_val(ops[2]) & 0xFFF
-        return 0xD1000000 | (imm << 10) | (rn << 5) | rd
+        let imm = imm_val(ops[2]) & 0xfff
+        return 0xd1000000 | (imm << 10) | (rn << 5) | rd
     }
     // MUL Xd, Xn, Xm  (alias for MADD Xd, Xn, Xm, XZR)
     if op == "MUL" && len(ops) == 3 {
         let rd = xreg_idx(ops[0])
         let rn = xreg_idx(ops[1])
         let rm = xreg_idx(ops[2])
-        return 0x9B007C00 | (rm << 16) | (rn << 5) | rd
+        return 0x9b007c00 | (rm << 16) | (rn << 5) | rd
     }
 
     // ── Compare (SUBS XZR, ...) ──
@@ -263,13 +263,13 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
     if op == "CMP" && len(ops) == 2 && ops[1].substring(0, 1) != "#" {
         let rn = xreg_idx(ops[0])
         let rm = xreg_idx(ops[1])
-        return 0xEB00001F | (rm << 16) | (rn << 5)
+        return 0xeb00001f | (rm << 16) | (rn << 5)
     }
     // CMP Xn, #imm12
     if op == "CMP" && len(ops) == 2 {
         let rn = xreg_idx(ops[0])
-        let imm = imm_val(ops[1]) & 0xFFF
-        return 0xF100001F | (imm << 10) | (rn << 5)
+        let imm = imm_val(ops[1]) & 0xfff
+        return 0xf100001f | (imm << 10) | (rn << 5)
     }
 
     // ── Memory (LDR/STR with `[Xn]` or `[Xn, #imm12]` mem operand) ──
@@ -285,11 +285,11 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
             // Treat as `[Xn]` bare (no `[`) — fall back to the original
             // path so legacy 2-string callers (no parens) still work.
             let rn = xreg_idx(ops[1])
-            return 0xF9400000 | (rn << 5) | rt
+            return 0xf9400000 | (rn << 5) | rt
         }
         let rn = mp[0]
-        let imm = (mp[1] >> 3) & 0xFFF       // scaled imm12, 64-bit form
-        return 0xF9400000 | (imm << 10) | (rn << 5) | rt
+        let imm = (mp[1] >> 3) & 0xfff       // scaled imm12, 64-bit form
+        return 0xf9400000 | (imm << 10) | (rn << 5) | rt
     }
     // STR Xt, [Xn{, #imm}]
     if op == "STR" && len(ops) == 2 {
@@ -297,21 +297,21 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         let mp = _parse_mem_op(ops[1])
         if mp[0] < 0 {
             let rn = xreg_idx(ops[1])
-            return 0xF9000000 | (rn << 5) | rt
+            return 0xf9000000 | (rn << 5) | rt
         }
         let rn = mp[0]
-        let imm = (mp[1] >> 3) & 0xFFF
-        return 0xF9000000 | (imm << 10) | (rn << 5) | rt
+        let imm = (mp[1] >> 3) & 0xfff
+        return 0xf9000000 | (imm << 10) | (rn << 5) | rt
     }
     // ── Stack-pair (STP/LDP) — 3 mem modes (offset / pre-index /
     //    post-index) for 64-bit GPRs. Per ARM ARM C6.2.273-:
     //
-    //    STP offset:     0xA9000000   `stp Xt, Xt2, [Xn, #imm]`
-    //    STP pre-index:  0xA9800000   `stp Xt, Xt2, [Xn, #imm]!`
-    //    STP post-index: 0xA8800000   `stp Xt, Xt2, [Xn], #imm`
-    //    LDP offset:     0xA9400000
-    //    LDP pre-index:  0xA9C00000
-    //    LDP post-index: 0xA8C00000
+    //    STP offset:     0xa9000000   `stp Xt, Xt2, [Xn, #imm]`
+    //    STP pre-index:  0xa9800000   `stp Xt, Xt2, [Xn, #imm]!`
+    //    STP post-index: 0xa8800000   `stp Xt, Xt2, [Xn], #imm`
+    //    LDP offset:     0xa9400000
+    //    LDP pre-index:  0xa9c00000
+    //    LDP post-index: 0xa8c00000
     //
     // Signed imm7 in 8-byte steps (range -512..504). mode comes from
     // `_parse_mem_op` (0=offset, 1=pre, 2=post).
@@ -321,11 +321,11 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         let mp  = _parse_mem_op(ops[2])
         if mp[0] < 0 { return 0 }
         let rn   = mp[0]
-        let imm  = (mp[1] >> 3) & 0x7F
+        let imm  = (mp[1] >> 3) & 0x7f
         let mode = mp[2]
-        let mut base = 0xA9000000           // offset
-        if mode == 1 { base = 0xA9800000 }   // pre-index
-        if mode == 2 { base = 0xA8800000 }   // post-index
+        let mut base = 0xa9000000           // offset
+        if mode == 1 { base = 0xa9800000 }   // pre-index
+        if mode == 2 { base = 0xa8800000 }   // post-index
         return base | (imm << 15) | (rt2 << 10) | (rn << 5) | rt
     }
     if op == "LDP" && len(ops) == 3 {
@@ -334,11 +334,11 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         let mp  = _parse_mem_op(ops[2])
         if mp[0] < 0 { return 0 }
         let rn   = mp[0]
-        let imm  = (mp[1] >> 3) & 0x7F
+        let imm  = (mp[1] >> 3) & 0x7f
         let mode = mp[2]
-        let mut base = 0xA9400000           // offset
-        if mode == 1 { base = 0xA9C00000 }   // pre-index
-        if mode == 2 { base = 0xA8C00000 }   // post-index
+        let mut base = 0xa9400000           // offset
+        if mode == 1 { base = 0xa9c00000 }   // pre-index
+        if mode == 2 { base = 0xa8c00000 }   // post-index
         return base | (imm << 15) | (rt2 << 10) | (rn << 5) | rt
     }
 
@@ -348,7 +348,7 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
     // BL label
     if op == "BL" && len(ops) == 1 { return 0x94000000 }
     // RET (= RET X30)
-    if op == "RET" && len(ops) == 0 { return 0xD65F03C0 }
+    if op == "RET" && len(ops) == 0 { return 0xd65f03c0 }
 
     // ── Conditional branch (B.cond label) ──
     // op is "B.EQ" / "B.NE" / "B.LT" / "B.GE" / "B.GT" / "B.LE" etc.
@@ -368,7 +368,7 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
 
     // ── Bitfield / extension aliases (UBFM-family) ──
     // UBFM Xd, Xn, #immr, #imms   (64-bit, sf=1, opc=10, N=1)
-    //   0xD3400000 | (immr<<16) | (imms<<10) | (rn<<5) | rd
+    //   0xd3400000 | (immr<<16) | (imms<<10) | (rn<<5) | rd
     // UXTW Xd, Wn  is an alias for UBFM Xd, Xn, #0, #31  (zero-extend
     // the low 32 bits, clear the upper). codegen uses it to widen
     // 32-bit values to the 64-bit ABI slot.
@@ -387,7 +387,7 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
             rn = xreg_idx(nm)
         }
         if rd >= 0 && rn >= 0 {
-            return 0xD3400000 | (0 << 16) | (31 << 10) | (rn << 5) | rd
+            return 0xd3400000 | (0 << 16) | (31 << 10) | (rn << 5) | rd
         }
     }
     // UXTB Xd, Wn  →  UBFM Xd, Xn, #0, #7
@@ -401,7 +401,7 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
             if rest >= 0 && rest <= 30 { rn = rest }
         } else { rn = xreg_idx(nm) }
         if rd >= 0 && rn >= 0 {
-            return 0xD3400000 | (0 << 16) | (7 << 10) | (rn << 5) | rd
+            return 0xd3400000 | (0 << 16) | (7 << 10) | (rn << 5) | rd
         }
     }
     // UXTH Xd, Wn  →  UBFM Xd, Xn, #0, #15
@@ -415,7 +415,7 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
             if rest >= 0 && rest <= 30 { rn = rest }
         } else { rn = xreg_idx(nm) }
         if rd >= 0 && rn >= 0 {
-            return 0xD3400000 | (0 << 16) | (15 << 10) | (rn << 5) | rd
+            return 0xd3400000 | (0 << 16) | (15 << 10) | (rn << 5) | rd
         }
     }
     // SXTW Xd, Wn  →  SBFM Xd, Xn, #0, #31   (opc=00 base 0x93400000)
@@ -437,12 +437,12 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
     // CBZ Xt, label  — imm19 patched by reloc
     if op == "CBZ" && len(ops) == 2 {
         let rt = xreg_idx(ops[0])
-        return 0xB4000000 | rt
+        return 0xb4000000 | rt
     }
     // CBNZ Xt, label
     if op == "CBNZ" && len(ops) == 2 {
         let rt = xreg_idx(ops[0])
-        return 0xB5000000 | rt
+        return 0xb5000000 | rt
     }
 
     // Unknown op — caller checks for 0 as failure marker.
@@ -473,31 +473,31 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
 // Append little-endian u16 to `out`. Used for `nlist_64.n_desc` and
 // other 2-byte Mach-O fields.
 fn _u16_le(out: [Int], v: Int) {
-    out.push(v & 0xFF)
-    out.push((v >> 8) & 0xFF)
+    out.push(v & 0xff)
+    out.push((v >> 8) & 0xff)
 }
 
 // Append little-endian u32 to `out` (low byte first). Caller passes
-// already-masked value; we mask defensively (& 0xFF per byte) so an
+// already-masked value; we mask defensively (& 0xff per byte) so an
 // `i64` with the upper 32 bits non-zero does not corrupt the stream.
 fn _u32_le(out: [Int], v: Int) {
-    out.push(v & 0xFF)
-    out.push((v >> 8) & 0xFF)
-    out.push((v >> 16) & 0xFF)
-    out.push((v >> 24) & 0xFF)
+    out.push(v & 0xff)
+    out.push((v >> 8) & 0xff)
+    out.push((v >> 16) & 0xff)
+    out.push((v >> 24) & 0xff)
 }
 
 // Append little-endian u64 to `out`. `v` is `Int` (i64 in hexa-lang);
 // negative values are written as their two's-complement bit pattern.
 fn _u64_le(out: [Int], v: Int) {
-    out.push(v & 0xFF)
-    out.push((v >> 8) & 0xFF)
-    out.push((v >> 16) & 0xFF)
-    out.push((v >> 24) & 0xFF)
-    out.push((v >> 32) & 0xFF)
-    out.push((v >> 40) & 0xFF)
-    out.push((v >> 48) & 0xFF)
-    out.push((v >> 56) & 0xFF)
+    out.push(v & 0xff)
+    out.push((v >> 8) & 0xff)
+    out.push((v >> 16) & 0xff)
+    out.push((v >> 24) & 0xff)
+    out.push((v >> 32) & 0xff)
+    out.push((v >> 40) & 0xff)
+    out.push((v >> 48) & 0xff)
+    out.push((v >> 56) & 0xff)
 }
 
 // Append `n` zero bytes (used for fixed-size name fields, alignment
@@ -520,7 +520,7 @@ fn _str_fixed(out: [Int], s: String, n: Int) {
     let mut i = 0
     while i < n {
         if i < slen {
-            out.push(char_code(s, i) & 0xFF)
+            out.push(char_code(s, i) & 0xff)
         } else {
             out.push(0)
         }
@@ -697,8 +697,8 @@ fn _emit_dysymtab_cmd(out: [Int], nextdefsym: Int) {
 //     };
 fn _emit_nlist64(out: [Int], strx: Int, n_type: Int, n_sect: Int, n_value: Int) {
     _u32_le(out, strx)            // n_strx — 4 bytes
-    out.push(n_type & 0xFF)       // n_type — 1 byte
-    out.push(n_sect & 0xFF)       // n_sect — 1 byte
+    out.push(n_type & 0xff)       // n_type — 1 byte
+    out.push(n_sect & 0xff)       // n_sect — 1 byte
     _u16_le(out, 0)               // n_desc — 2 bytes (REFERENCE_FLAG_*, 0 here)
     _u64_le(out, n_value)         // n_value — 8 bytes
 }
@@ -719,11 +719,11 @@ fn _emit_nlist64(out: [Int], strx: Int, n_type: Int, n_sect: Int, n_value: Int) 
 fn _emit_reloc_info(out: [Int], r_address: Int, r_symbolnum: Int,
                     r_pcrel: Int, r_length: Int, r_extern: Int, r_type: Int) {
     _u32_le(out, r_address)
-    let bits = (r_symbolnum & 0xFFFFFF)
+    let bits = (r_symbolnum & 0xffffff)
              | ((r_pcrel & 1) << 24)
              | ((r_length & 3) << 25)
              | ((r_extern & 1) << 27)
-             | ((r_type & 0xF) << 28)
+             | ((r_type & 0xf) << 28)
     _u32_le(out, bits)
 }
 
@@ -818,7 +818,7 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
 
     // __text bytes + 4-byte alignment pad
     let mut i = 0
-    while i < text_len { out.push(obj.text[i] & 0xFF); i = i + 1 }
+    while i < text_len { out.push(obj.text[i] & 0xff); i = i + 1 }
     _zero_n(out, text_pad)
 
     // Relocations: emit one `relocation_info` per Arm64Reloc.
@@ -845,7 +845,7 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
 
     // String table bytes (verbatim).
     let mut ki = 0
-    while ki < strsize { out.push(obj.strtab[ki] & 0xFF); ki = ki + 1 }
+    while ki < strsize { out.push(obj.strtab[ki] & 0xff); ki = ki + 1 }
 
     return out
 }
@@ -931,7 +931,7 @@ fn _lir_op_uppercase(op: string) -> string {
         let mut i = 0
         while i < len(cc) {
             let c = char_code(cc, i)
-            if c >= 97 && c <= 122 { up = up + chr(c - 32) } else { up = up + cc.substring(i, i + 1) }
+            if c >= 97 && c <= 122 { up = up + from_char_code(c - 32) } else { up = up + cc.substring(i, i + 1) }
             i = i + 1
         }
         return "B." + up
@@ -1054,10 +1054,10 @@ fn _lookup_label(state: PackFnState, name: string) -> Int {
 // Append a 4-byte little-endian instruction word to the running text
 // buffer. Used by every encoded instruction path in `_pack_fn`.
 fn _push_word_le(out: [Int], word: Int) {
-    out.push(word & 0xFF)
-    out.push((word >> 8) & 0xFF)
-    out.push((word >> 16) & 0xFF)
-    out.push((word >> 24) & 0xFF)
+    out.push(word & 0xff)
+    out.push((word >> 8) & 0xff)
+    out.push((word >> 16) & 0xff)
+    out.push((word >> 24) & 0xff)
 }
 
 // Patch a 32-bit word in the text buffer at byte offset `off`. Reads
@@ -1065,10 +1065,10 @@ fn _push_word_le(out: [Int], word: Int) {
 // Used after the full function is walked to resolve intra-fn branches
 // once every label offset is known.
 fn _patch_word_le(out: [Int], off: Int, word: Int) {
-    out[off + 0] = word & 0xFF
-    out[off + 1] = (word >> 8) & 0xFF
-    out[off + 2] = (word >> 16) & 0xFF
-    out[off + 3] = (word >> 24) & 0xFF
+    out[off + 0] = word & 0xff
+    out[off + 1] = (word >> 8) & 0xff
+    out[off + 2] = (word >> 16) & 0xff
+    out[off + 3] = (word >> 24) & 0xff
 }
 
 // Append the ASCII bytes of `s` plus a trailing NUL to `out`. Returns
@@ -1079,7 +1079,7 @@ fn _push_cstr(out: [Int], s: string) -> Int {
     let n = len(s)
     let mut i = 0
     while i < n {
-        out.push(char_code(s, i) & 0xFF)
+        out.push(char_code(s, i) & 0xff)
         i = i + 1
     }
     out.push(0)
@@ -1199,15 +1199,15 @@ fn _pack_fn(out_text: [Int],
         // Distinguish B/BL (high 6 bits = 0b000101 or 0b100101) from
         // CBZ/CBNZ/B.cond (imm19). The encoder gave the upper bits;
         // we OR the imm into the right field.
-        let top = (cur >> 26) & 0x3F
+        let top = (cur >> 26) & 0x3f
         if top == 0x05 || top == 0x25 {
-            // B / BL → imm26 = delta & 0x03FFFFFF
-            let patched = (cur & 0xFC000000) | (delta & 0x03FFFFFF)
+            // B / BL → imm26 = delta & 0x03ffffff
+            let patched = (cur & 0xfc000000) | (delta & 0x03ffffff)
             _patch_word_le(out_text, off, patched)
         } else {
             // CBZ / CBNZ / B.cond → imm19 at bits [23:5]
-            let imm19 = delta & 0x7FFFF
-            let patched = (cur & 0xFF00001F) | (imm19 << 5)
+            let imm19 = delta & 0x7ffff
+            let patched = (cur & 0xff00001f) | (imm19 << 5)
             _patch_word_le(out_text, off, patched)
         }
         bi = bi + 1
@@ -1226,12 +1226,12 @@ fn _find_sym_by_name(symbols: [MachoSymbol], strtab: [Int], mangled: string) -> 
         let mut k = 0
         let mut ok = true
         while k < ml {
-            if (strtab[off + k] & 0xFF) != char_code(mangled, k) { ok = false; break }
+            if (strtab[off + k] & 0xff) != char_code(mangled, k) { ok = false; break }
             k = k + 1
         }
         // Match also requires the terminating NUL at the right spot —
         // guards against "_foo" matching the prefix of "_foobar".
-        if ok && (strtab[off + ml] & 0xFF) == 0 { return i }
+        if ok && (strtab[off + ml] & 0xff) == 0 { return i }
         i = i + 1
     }
     return -1
@@ -1370,7 +1370,7 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
             let w2 = obj.text[off + 2]
             let w3 = obj.text[off + 3]
             let cur = w0 | (w1 << 8) | (w2 << 16) | (w3 << 24)
-            let patched = (cur & 0xFC000000) | (delta & 0x03FFFFFF)
+            let patched = (cur & 0xfc000000) | (delta & 0x03ffffff)
             _patch_word_le(obj.text, off, patched)
         }
         pi = pi + 1
