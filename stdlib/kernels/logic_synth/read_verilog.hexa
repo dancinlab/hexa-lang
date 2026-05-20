@@ -5379,6 +5379,45 @@ fn main() {
         }
     }
 
+    // T69 — RFC 073 Phase 3d (F-RFC-RV-DYN-LHS-MULTI-LHS-IF).
+    //   Multi-LHS no-else cond-mux body with dyn-idx LHS — matches the
+    //   router_d4 `if (any_grant) begin out_data[grant_out] <= …;
+    //   out_valid[grant_out] <= … end` shape. Per IEEE 1364-2005 §9.5 +
+    //   §10.4.2 the lowering is per-element ($eq + $and + $mux + $dff)
+    //   chain × P per statement: with two statements at P=3 we expect
+    //   $eq=6, $and=6, $mux=6, $dff=6. Without the multi-LHS dyn-idx
+    //   extension (which landed inline in `7575a79d`) the handler bailed
+    //   out silently on every dyn-idx LHS statement, dropping the writes
+    //   entirely. T52 already verifies P=4; T69 cross-verifies P=3.
+    total = total + 1
+    let _v69 = "module sm69 ( input clk , input en , input k , input a , input b , output reg y [ 0 : 2 ] , output reg z [ 0 : 2 ] ) ; always @ ( posedge clk ) if ( en ) begin y [ k ] <= a ; z [ k ] <= b ; end endmodule"
+    let _r69 = read_verilog(_v69)
+    if _r69.ok != 1 {
+        println("FAIL T69 multi_lhs_dyn_idx: " + _r69.message); fails = fails + 1
+    } else {
+        let _m69 = _r69.design.modules[0]
+        if rtlil_count_cells_of_type(_m69, "$eq") != 6 {
+            println("FAIL T69a eq_count got "
+                + str(rtlil_count_cells_of_type(_m69, "$eq")) + " (expected 6)")
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m69, "$and") != 6 {
+            println("FAIL T69b and_count got "
+                + str(rtlil_count_cells_of_type(_m69, "$and")) + " (expected 6)")
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m69, "$mux") != 6 {
+            println("FAIL T69c mux_count got "
+                + str(rtlil_count_cells_of_type(_m69, "$mux")) + " (expected 6)")
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m69, "$dff") != 6 {
+            println("FAIL T69d dff_count got "
+                + str(rtlil_count_cells_of_type(_m69, "$dff")) + " (expected 6)")
+            fails = fails + 1
+        }
+    }
+
     if fails > 0 {
         println("read_verilog selftest: " + str(total - fails) + "/" + str(total) + " — FAIL")
         exit(1)
