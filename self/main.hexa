@@ -89,6 +89,8 @@ fn cmd_help() {
     println("                                          scp + nvcc + run + pull result.json")
     println("                                          default target = ubu-2 (RTX 5070 sm_120)")
     println("    e.g. hexa gpu fire wmma_16x16.ptx host.c   (HEXA_GPU_DRY=1 plans only)")
+    println("  gpu disasm <kernel.ptx>                 PTX opcode-family histogram (pure hexa)")
+    println("  gpu lint   <kernel.ptx>                 PTX static checks (non-ASCII / sm_target / .reg)")
     println("")
     println("ATLAS SSOT  (zero-I/O rodata, ATLAS_HASH pinned, ~6594 P/C/L nodes)")
     println("  atlas hash | stats                      Read meta")
@@ -3021,16 +3023,373 @@ fn _gpu_run_step(label, cmd) {
     }
 }
 
+// ─── `hexa gpu disasm <ptx>` ──────────────────────────────────────────
+// Pure hexa PTX opcode-family histogram. No subprocess, no ptxas — read
+// the text, line-split, extract leading opcode token per instruction
+// line, bin by first dotted segment (ld.param.u64 → "ld"; wmma.load.a.* →
+// "wmma"), print sorted-descending counts.
+//
+// Why pure hexa: g_commit_push_deploy + hexa-native-only (g5) + the
+// 'compiled-path 사용' policy. ptxas as subprocess would fail offline.
+// This is a structural read — it does NOT decode SASS, it bins PTX
+// opcodes by family. Use case: confirm a PTX file contains the wmma
+// instructions you expected to emit.
+fn _gpu_ptx_strip_pred(tok) {
+    // PTX predicate prefix: '@p' or '@!p' — strip if present so the
+    // family bucketing reflects the real opcode.
+    if len(tok) == 0 { return tok }
+    if tok.substring(0, 1) != "@" { return tok }
+    return ""  // predicated lines: we treat the @predicate token as
+              // non-instruction; the real opcode is on a subsequent
+              // whitespace-separated token. Caller advances.
+}
+
+fn _gpu_ptx_family(opcode) {
+    // First dotted segment, or the whole token if there's no dot.
+    let n = len(opcode)
+    let mut i = 0
+    while i < n {
+        if opcode.substring(i, i + 1) == "." {
+            return opcode.substring(0, i)
+        }
+        i = i + 1
+    }
+    return opcode
+}
+
+fn _gpu_ptx_extract_opcode(line) {
+    // Trim left whitespace; if first non-space char is '@' (predicate),
+    // skip the predicate token. Then return the leading word until the
+    // next whitespace / ';' / '{' / '['. Return "" if line is empty,
+    // directive ('.'), label (ends with ':' on first token), or comment.
+    let trimmed = line.trim()
+    if len(trimmed) == 0 { return "" }
+    let first = trimmed.substring(0, 1)
+    if first == "/" { return "" }       // '//' comment
+    if first == "." { return "" }       // PTX directive (.version, .reg, …)
+    if first == "{" { return "" }
+    if first == "}" { return "" }
+    if first == "(" { return "" }
+    if first == ")" { return "" }
+    if first == ";" { return "" }
+    // Skip leading '@predicate' token (e.g. '@p1', '@!p2').
+    let mut body = trimmed
+    if first == "@" {
+        let bn = len(body)
+        let mut j = 0
+        while j < bn {
+            let c = body.substring(j, j + 1)
+            if c == " " || c == "\t" {
+                // Advance past the predicate token to the real opcode.
+                body = body.substring(j + 1, bn).trim()
+                j = bn  // break
+            } else {
+                j = j + 1
+            }
+        }
+        if len(body) == 0 { return "" }
+        let bf = body.substring(0, 1)
+        if bf == "." || bf == "/" { return "" }
+    }
+    // Now `body` starts with the opcode. Scan until whitespace / ; / { / [
+    let bn2 = len(body)
+    let mut k = 0
+    while k < bn2 {
+        let c2 = body.substring(k, k + 1)
+        if c2 == " " || c2 == "\t" || c2 == ";" || c2 == "{" || c2 == "[" || c2 == "," {
+            return body.substring(0, k)
+        }
+        k = k + 1
+    }
+    return body
+}
+
+fn _gpu_hist_add(names, counts, family) {
+    // Linear lookup-or-append. PTX has ~30 op families; O(N²) here is
+    // a few thousand cmp ops at worst — well under any cost-bearing
+    // floor.
+    let n = len(names)
+    let mut i = 0
+    while i < n {
+        if names[i] == family {
+            counts[i] = counts[i] + 1
+            return
+        }
+        i = i + 1
+    }
+    names.push(family)
+    counts.push(1)
+}
+
+fn _gpu_hist_sort_desc(names, counts) {
+    // In-place insertion sort by count descending. Tiny n.
+    let n = len(names)
+    let mut i = 1
+    while i < n {
+        let mut j = i
+        while j > 0 && counts[j] > counts[j - 1] {
+            let tc = counts[j]
+            counts[j] = counts[j - 1]
+            counts[j - 1] = tc
+            let tn = names[j]
+            names[j] = names[j - 1]
+            names[j - 1] = tn
+            j = j - 1
+        }
+        i = i + 1
+    }
+}
+
+fn cmd_gpu_disasm(args) {
+    if len(args) == 0 {
+        eprintln("usage: hexa gpu disasm <kernel.ptx>")
+        exit(2)
+    }
+    let path = args[0]
+    if !file_exists(path) {
+        eprintln("error: ptx file not found: " + path)
+        exit(1)
+    }
+    let text = read_file(path)
+    let lines = text.split("\n")
+    let total_lines = len(lines)
+    let mut instr_count = 0
+    let mut names = []
+    let mut counts = []
+    let mut li = 0
+    while li < total_lines {
+        let opcode = _gpu_ptx_extract_opcode(lines[li])
+        if len(opcode) > 0 {
+            let family = _gpu_ptx_family(opcode)
+            // Skip lone fragment-register continuation lines like
+            // '{%ra0, %ra1, ...}' which extract_opcode already returns "".
+            if len(family) > 0 && family.substring(0, 1) != "%" {
+                _gpu_hist_add(names, counts, family)
+                instr_count = instr_count + 1
+            }
+        }
+        li = li + 1
+    }
+    _gpu_hist_sort_desc(names, counts)
+    println("[gpu disasm] " + path)
+    println("[gpu disasm] " + to_string(total_lines) + " lines, " + to_string(instr_count) + " instructions, " + to_string(len(names)) + " families")
+    println("")
+    println("FAMILY            COUNT")
+    let nf = len(names)
+    let mut fi = 0
+    while fi < nf {
+        // Pad family name to width 16 (visual alignment; we don't have
+        // printf-style formatting builtin so concat-pad).
+        let nm = names[fi]
+        let mut padded = nm
+        let mut pi = len(nm)
+        while pi < 16 {
+            padded = padded + " "
+            pi = pi + 1
+        }
+        println("  " + padded + to_string(counts[fi]))
+        fi = fi + 1
+    }
+}
+
+// ─── `hexa gpu lint <ptx>` ────────────────────────────────────────────
+// Static checks on a PTX file:
+//   (1) non-ASCII byte detection — driver JIT (cuModuleLoadDataEx)
+//       rejects PTX with non-ASCII bytes in comments. Standalone ptxas
+//       is lenient. See `reference_gpu_fire_infra` memory.
+//   (2) sm-target presence — every PTX must carry '.target sm_NN'.
+//   (3) .reg decl count — rough register-pressure indicator (PTX is
+//       virtual-register, but per-thread .reg decl count correlates
+//       with cubin register footprint after ptxas).
+// Exit 0 = clean, 1 = at least one finding.
+fn cmd_gpu_lint(args) {
+    if len(args) == 0 {
+        eprintln("usage: hexa gpu lint <kernel.ptx>")
+        exit(2)
+    }
+    let path = args[0]
+    if !file_exists(path) {
+        eprintln("error: ptx file not found: " + path)
+        exit(1)
+    }
+    let text = read_file(path)
+    let mut findings = 0
+    println("[gpu lint] " + path)
+
+    // Check 1 — non-ASCII byte scan. hexa_str_bytes returns int per
+    // byte; flag any > 127.
+    let bytes = hexa_str_bytes(text)
+    let nb = len(bytes)
+    let mut bi = 0
+    let mut lineno = 1
+    let mut col = 1
+    let mut nonascii_hits = 0
+    let mut first_nonascii_line = 0
+    let mut first_nonascii_col = 0
+    let mut first_nonascii_byte = 0
+    while bi < nb {
+        let b = bytes[bi]
+        if b > 127 {
+            nonascii_hits = nonascii_hits + 1
+            if first_nonascii_line == 0 {
+                first_nonascii_line = lineno
+                first_nonascii_col = col
+                first_nonascii_byte = b
+            }
+        }
+        if b == 10 {
+            lineno = lineno + 1
+            col = 1
+        } else {
+            col = col + 1
+        }
+        bi = bi + 1
+    }
+    if nonascii_hits > 0 {
+        findings = findings + 1
+        println("  [WARN] non-ASCII bytes: " + to_string(nonascii_hits)
+            + " (first at L" + to_string(first_nonascii_line)
+            + ":C" + to_string(first_nonascii_col)
+            + " byte=0x" + hex(first_nonascii_byte) + ")")
+        println("         driver JIT (cuModuleLoadDataEx) rejects non-ASCII PTX.")
+    } else {
+        println("  [OK]   ASCII-clean (" + to_string(nb) + " bytes)")
+    }
+
+    // Check 2 — '.target sm_NN' presence + extract NN.
+    let lines = text.split("\n")
+    let nl = len(lines)
+    let mut sm_target = ""
+    let mut sm_lineno = 0
+    let mut li = 0
+    while li < nl {
+        let trimmed = lines[li].trim()
+        if len(trimmed) >= 11 && trimmed.substring(0, 11) == ".target sm_" {
+            // Strip trailing comma + features after sm_NN (e.g. ',texmode_independent').
+            let rest = trimmed.substring(11, len(trimmed))
+            let rn = len(rest)
+            let mut ri = 0
+            let mut sm_digits = ""
+            while ri < rn {
+                let c = rest.substring(ri, ri + 1)
+                if c == "," || c == " " || c == "\t" {
+                    ri = rn
+                } else {
+                    sm_digits = sm_digits + c
+                    ri = ri + 1
+                }
+            }
+            sm_target = sm_digits
+            sm_lineno = li + 1
+            li = nl
+        } else {
+            li = li + 1
+        }
+    }
+    if len(sm_target) == 0 {
+        findings = findings + 1
+        println("  [WARN] missing '.target sm_NN' directive")
+    } else {
+        println("  [OK]   .target sm_" + sm_target + " (L" + to_string(sm_lineno) + ")")
+    }
+
+    // Check 3 — .reg decl count + opcode-vs-sm consistency.
+    let mut reg_decls = 0
+    let mut has_wmma_mma = false
+    let mut has_wgmma = false
+    let mut has_tcgen05 = false
+    let mut has_bf16 = false
+    let mut li2 = 0
+    while li2 < nl {
+        let ln = lines[li2].trim()
+        if len(ln) >= 4 && ln.substring(0, 4) == ".reg" {
+            reg_decls = reg_decls + 1
+        }
+        // Substring search: '.bf16' anywhere; 'wmma.mma' / 'wgmma' /
+        // 'tcgen05' at start of opcode (after trim).
+        let lnn = len(ln)
+        if lnn >= 8 {
+            let op = _gpu_ptx_extract_opcode(lines[li2])
+            if len(op) >= 8 && op.substring(0, 8) == "wmma.mma" { has_wmma_mma = true }
+            if len(op) >= 5 && op.substring(0, 5) == "wgmma" { has_wgmma = true }
+            if len(op) >= 7 && op.substring(0, 7) == "tcgen05" { has_tcgen05 = true }
+        }
+        // .bf16 scan — anywhere on the line (PTX type suffix).
+        let mut ci2 = 0
+        while ci2 + 4 < lnn {
+            if ln.substring(ci2, ci2 + 5) == ".bf16" {
+                has_bf16 = true
+                ci2 = lnn
+            } else {
+                ci2 = ci2 + 1
+            }
+        }
+        li2 = li2 + 1
+    }
+    println("  [OK]   .reg decl lines: " + to_string(reg_decls))
+
+    // sm-vs-opcode consistency.
+    if len(sm_target) > 0 {
+        let sm_n = parse_int_str(sm_target)
+        if has_wmma_mma && sm_n < 70 {
+            findings = findings + 1
+            println("  [WARN] wmma.mma found but .target sm_" + sm_target + " < sm_70")
+        }
+        if has_bf16 && sm_n < 80 {
+            findings = findings + 1
+            println("  [WARN] .bf16 type found but .target sm_" + sm_target + " < sm_80")
+        }
+        if has_wgmma && sm_n < 90 {
+            findings = findings + 1
+            println("  [WARN] wgmma found but .target sm_" + sm_target + " < sm_90")
+        }
+        if has_tcgen05 && sm_n < 100 {
+            findings = findings + 1
+            println("  [WARN] tcgen05 found but .target sm_" + sm_target + " < sm_100")
+        }
+    }
+
+    println("")
+    if findings == 0 {
+        println("[gpu lint] clean (0 findings)")
+    } else {
+        println("[gpu lint] " + to_string(findings) + " finding(s)")
+        exit(1)
+    }
+}
+
 fn cmd_gpu(args) {
     // args = av[3..]  (i.e. starts with the gpu sub-verb)
     if len(args) == 0 {
-        println("usage: hexa gpu fire <kernel.ptx> <host.c> [target-host]")
+        println("usage: hexa gpu <fire|disasm|lint> ...")
         println("  GPU CLI dispatcher (GPU.md §7c)")
-        println("  fire   scp PTX + host C → remote → nvcc + run → pull result.json")
-        println("  env    HEXA_GPU_DRY=1  print the planned commands, do not execute")
+        println("  fire    scp PTX + host C → remote → nvcc + run → pull result.json")
+        println("  disasm  PTX opcode-family histogram (pure hexa scan, no ptxas)")
+        println("  lint    static checks: non-ASCII / sm-target / .reg count")
+        println("  env     HEXA_GPU_DRY=1  print the planned commands, do not execute")
         exit(1)
     }
     let sub = args[0]
+    if sub == "disasm" {
+        let mut rest = []
+        let mut ri = 1
+        while ri < len(args) {
+            rest.push(args[ri])
+            ri = ri + 1
+        }
+        cmd_gpu_disasm(rest)
+        return 0
+    }
+    if sub == "lint" {
+        let mut rest2 = []
+        let mut rj = 1
+        while rj < len(args) {
+            rest2.push(args[rj])
+            rj = rj + 1
+        }
+        cmd_gpu_lint(rest2)
+        return 0
+    }
     if sub == "fire" {
         if len(args) < 3 {
             eprintln("usage: hexa gpu fire <kernel.ptx> <host.c> [target-host]")
@@ -3108,17 +3467,22 @@ fn cmd_gpu(args) {
         println("hexa gpu — GPU CLI dispatcher (GPU.md §7c)")
         println("")
         println("USAGE")
-        println("  hexa gpu fire <kernel.ptx> <host.c> [target-host]")
+        println("  hexa gpu fire   <kernel.ptx> <host.c> [target-host]")
+        println("  hexa gpu disasm <kernel.ptx>")
+        println("  hexa gpu lint   <kernel.ptx>")
         println("")
-        println("  target-host defaults to 'ubu-2' (RTX 5070, sm_120).")
-        println("  Remote workdir = /tmp/hexa_gpu_fire_<basename_noext>")
-        println("  Pipeline: ssh-mkdir → scp → nvcc -O2 -arch=sm_90 + run → pull result.json")
+        println("  fire    target-host defaults to 'ubu-2' (RTX 5070, sm_120).")
+        println("          Remote workdir = /tmp/hexa_gpu_fire_<basename_noext>")
+        println("          Pipeline: ssh-mkdir → scp → nvcc -O2 -arch=sm_90 + run → pull result.json")
+        println("  disasm  PTX opcode-family histogram (pure hexa, no ptxas).")
+        println("  lint    Static checks: non-ASCII bytes / .target sm_NN / .reg count /")
+        println("          opcode-vs-sm consistency (wmma.mma ≥ sm_70, .bf16 ≥ sm_80, wgmma ≥ sm_90).")
         println("")
         println("ENV")
-        println("  HEXA_GPU_DRY=1   print planned commands, do not execute")
+        println("  HEXA_GPU_DRY=1   print planned commands, do not execute (fire only)")
     } else {
         eprintln("error: unknown gpu sub-verb '" + sub + "'")
-        eprintln("usage: hexa gpu fire <kernel.ptx> <host.c> [target-host]")
+        eprintln("usage: hexa gpu <fire|disasm|lint> ...")
         exit(2)
     }
 }
