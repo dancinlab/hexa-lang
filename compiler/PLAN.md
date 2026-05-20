@@ -5171,3 +5171,100 @@ PDK `sky130_fd_sc_hd__mux2_1` cell footprint (Apache-2 / CC-BY-4.0).
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md
 (Phase 2 LANDED 2026-05-20 · Phase 3a LANDED 2026-05-20 · Phase 3c
 LANDED 2026-05-20 · Phase 3d clocked-dynamic-LHS NOT YET LANDED).
+
+## 2026-05-20 — RFC 073 Phase 3d — dynamic-LHS clocked-write absorption (PARTIAL · §5 STILL OPEN)
+
+**Branch**  : `rfc-073-phase-3d-clocked-array`
+**Commit**  : <pending PR + admin-squash>
+**Scope**   : `stdlib/kernels/logic_synth/read_verilog.hexa` (surgical;
+              `passes.hexa` / `abc_map.hexa` / `gate_record.hexa` untouched)
+**Falsifier**: `F-RFC-RV-DYN-LHS-CLOCKED` (T67, T68) ·
+              `F-RFC-RV-DYN-LHS-MULTI-LHS-IF` (T69)
+
+**Verdict** : PASS for the two clocked-LHS demux drop-sites Phase 3d
+              names; **§5 oracle areas remain 0.0 µm²** because the
+              §5 router RTL fires neither path (drop is two structural
+              levels deeper than Phase 3d's scope).
+
+### What landed
+
+1. **Bare clocked dyn-LHS demux** at `_rv_parse_always` body fall-through
+   (lines ~3667-3730 of read_verilog.hexa). Pre-fix code set
+   `q = q_base` when `_rv_eval_expr(idxtoks)` failed, then emitted a
+   single `$dff(Q=name)` — losing every per-cycle write to the array.
+   Post-fix code emits per-element `$eq + $mux + $dff` chain × P with
+   `_rv_array_bound(m, base)` providing P. T67 (P=3 bare) / T68 (P=4
+   begin/end) PASS.
+
+2. **Multi-LHS no-else cond-mux dyn-idx LHS** at
+   `read_verilog.hexa:3001+` (#4h-b — sibling to the #4h-a static-idx
+   path that landed in PR #216). Pre-fix code set `emit_ok=0` on
+   any statement whose LHS idx didn't const-fold, dropping the entire
+   statement. Post-fix code emits per-element `$eq + $and(EN = cond
+   AND eq_y) + $mux + $dff` chain × P per statement. T69 (2 stmts × P=3
+   = 6/6/6/6 cells) PASS. This is the demux complement of the
+   single-statement #4d path at `read_verilog.hexa:2933`.
+
+read_verilog selftest count: **68/68 → 71/71 PASS** · no regression.
+
+### What did NOT close — §5 oracle still 0.0 µm²
+
+```
+[gate] router_d4 area=0.0 µm² oracle=61763 µm² Δ=100.0% FAIL (±5%)
+[gate] router_d6 area=0.0 µm² oracle=93608.5 µm² Δ=100.0% FAIL (±5%)
+```
+
+g3 honest: identical to pre-Phase-3d baseline. The §5 mapped BLIF
+still contains 0 `$dff` cells; ABC ties every `out_data[i]` /
+`out_valid[i]` to `_const0_`.
+
+Phase 3d's demux paths don't fire for router_d{4,6} because the
+critical dyn-LHS write `out_data[grant_out] <= …` lives inside
+`if (rst) ... else begin <for-loop>; <for-loop>; if (any_grant) begin
+<dyn-LHS> end end` — an outer **with-else** whose two arms have
+mismatched body shapes. The handler at `read_verilog.hexa:3131` bails
+silently on shape-mismatch (requires parallel simple-name-LHS
+sequences in both arms), so the inner `if (any_grant)` body never
+reaches Phase 3d's T69 multi-LHS extension.
+
+### Remaining §5 blockers (named, falsifier-anchored)
+
+Documented at `inbox/notes/2026-05-20-rfc006-§5-phase-3d-status.md`.
+The four critical-path items:
+
+1. **F-RFC-RV-CLOCKED-FOR-INDEXED-LHS** — `for (i=…; …) name[i] <= rhs;`
+   inside a posedge-always. `_rv_emit_for_if_stmts:2118-2122` rejects
+   all indexed-LHS statements.
+2. **F-RFC-RV-WITH-ELSE-NONMATCHING-BODIES** — `if (rst) … else …`
+   with structurally different arms (for-loop vs nested-if). Handler
+   at line 3131 silently drops BOTH arms.
+3. **F-RFC-RV-NESTED-IF-INSIDE-ELSE-BODY** — the `if (any_grant)
+   begin <dyn-LHS> end` that Phase 3d's T69 covers, but it must be
+   REACHED first.
+4. **F-RFC-RV-2D-DYN-LHS** — `fifo_mem[pp][k] <= data;` two-level
+   array LHS. Not on §5 area critical path but required for
+   functional completeness.
+
+Items #1, #2, #3 are the §5 critical path. Estimated SSOT delta to
+close: ~150 LoC in `_rv_parse_always` + `_rv_emit_for_if_stmts`.
+No changes to `passes.hexa`, `abc_map.hexa`, or `gate_record.hexa`
+needed for §5 to close.
+
+### LoC delta
+
+```
+ stdlib/kernels/logic_synth/read_verilog.hexa | +216 -28
+ inbox/notes/2026-05-20-rfc006-§5-phase-3d-status.md | + (new)
+ compiler/PLAN.md                              | + (this entry)
+```
+
+### Citations (g6 strict-lint)
+
+- IEEE Standard 1364-2005 (Verilog HDL) §9.5 — Sequential block
+- IEEE Standard 1364-2005 (Verilog HDL) §10.4.2 — Procedural assign
+- Yosys `passes/proc/proc_mux.cc` — `$mux` feedback-hold demux shape
+  (also @cite'd at read_verilog.hexa:2935 for the array-READ chain)
+
+cross-link: `inbox/rfc_drafts_2026_05_20/rfc_073_read_verilog_proc_mux.md`
+(Phase 3d clocked-dynamic-LHS PARTIAL LANDED 2026-05-20 · Phase 3e
+for-loop indexed-LHS + with-else non-matching-bodies NOT YET LANDED).
