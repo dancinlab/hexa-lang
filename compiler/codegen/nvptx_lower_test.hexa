@@ -780,11 +780,12 @@ fn main() {
     let ok_fw    = _test_frag_width()
     let ok_sd    = _test_shared_decl()
     let ok_me    = _test_multi_exit_match()
+    let ok_np    = _test_nested_preserve()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me {
-        println("PASS: RFC 055 + RFC 067 P1/P2 + RFC 068 P1 + RFC 069 P1/P2 — 18/18 cases (incl. F-RFC069-MULTI-EXIT-MATCH)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np {
+        println("PASS: RFC 055 + RFC 067 P1/P2 + RFC 068 P1 + RFC 069 P1/P2/P3 — 19/19 cases (incl. F-RFC069-NESTED-PRESERVE)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -805,9 +806,10 @@ fn main() {
         if !ok_fw   { println("      RFC 067 P1 F-RFC067-FRAG-WIDTH FAILED") }
         if !ok_sd   { println("      RFC 067 P2 F-RFC067-SHARED-DECL FAILED") }
         if !ok_me   { println("      RFC 069 P2 F-RFC069-MULTI-EXIT-MATCH FAILED") }
+        if !ok_np   { println("      RFC 069 P3 F-RFC069-NESTED-PRESERVE FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -1703,6 +1705,158 @@ fn _test_multi_exit_match() -> bool {
         ok = false
     } else {
         println("  ok: F7 PASSTHROUGH-PRESERVED — non-loop MFunc byte-identical")
+    }
+
+    return ok
+}
+
+// ── Case 19 — RFC 069 P3 `F-RFC069-NESTED-PRESERVE` ───────────────────
+//
+// Verifies that an MFunc carrying a nested-loop CFG triggers the
+// unroll pass's early-return (P3 honest-preservation) — the MFunc
+// is returned UNCHANGED so the inner loop is semantically intact.
+//
+// CFG shape (nested loop, canonical 5-block layout):
+//   block 0 (outer header):  cond, BR_COND(body=1, exit=4)
+//   block 1 (outer body):    setup, BR(inner_header=2)   ← BRANCHES INTO INNER
+//   block 2 (inner header):  cond, BR_COND(inner_body=3, outer_header=0)
+//   block 3 (inner body):    stmt, BR(inner_header=2)    ← inner back-edge
+//   block 4 (exit):          return
+//
+// The pattern matcher finds (outer_header=0, body=1) as the outer
+// loop seed. Block 1's terminator is BR(2) — that target (block 2,
+// inner header) has a terminator BR_COND with target_block_else=0,
+// pointing to a block with id (0) < its own id (2). This is the
+// back-edge marker, so `_nvptx_unroll_contains_inner_loop` returns
+// true and the unroll pass returns the MFunc unchanged.
+//
+// Honest scope: P3 lands DETECTION + EARLY-RETURN. Full nested
+// unroll (multi-block-region cloning with renumbered inner-loop
+// blocks per outer clone) is P5.
+
+fn _build_case_nested_loop() -> MFunc {
+    let a = _local(0, "a")
+    let b = _local(1, "b")
+    let oc = _local(2, "oc")    // outer cond
+    let ic = _local(3, "ic")    // inner cond
+    let t = _local(4, "t")
+
+    // block 0 (outer header)
+    let mut s0 = []
+    s0.push(_stmt_binop(oc, "lt", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_br_cond(_op_local(oc.id), 1, 4))
+
+    // block 1 (outer body): just enter the inner loop
+    let mut s1 = []
+    s1.push(_stmt_br(2))
+
+    // block 2 (inner header): BR_COND(inner_body=3, outer_header=0)
+    let mut s2 = []
+    s2.push(_stmt_binop(ic, "lt", _op_local(a.id), _op_local(b.id)))
+    s2.push(_stmt_br_cond(_op_local(ic.id), 3, 0))
+
+    // block 3 (inner body): stmt, BR(inner_header=2) → back-edge
+    let mut s3 = []
+    s3.push(_stmt_binop(t, "add", _op_local(a.id), _op_local(b.id)))
+    s3.push(_stmt_br(2))
+
+    // block 4 (exit)
+    let mut s4 = []
+    s4.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    blocks.push(_block(1, s1))
+    blocks.push(_block(2, s2))
+    blocks.push(_block(3, s3))
+    blocks.push(_block(4, s4))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(oc)
+    locals.push(ic)
+    locals.push(t)
+
+    return MFunc {
+        name: "nested_loop_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+}
+
+fn _test_nested_preserve() -> bool {
+    let mut ok = true
+
+    let baseline = _build_case_nested_loop()
+    let after = _nvptx_unroll_pass(_build_case_nested_loop(), 4)
+
+    let ptx_before = codegen_emit_ptx_sm80(_wrap_single_mfn(baseline))
+    let ptx_after  = codegen_emit_ptx_sm80(_wrap_single_mfn(after))
+
+    println("")
+    println("── emitted PTX (RFC 069 P3 nested-preserve, baseline) ──")
+    println(ptx_before)
+
+    // Sub-case A — byte-eq guarantee: nested-loop MFunc is unchanged by
+    // the unroll pass (factor=4 attempted; detection short-circuits).
+    if ptx_before != ptx_after {
+        println("  FAIL: nested-loop MFunc was perturbed by unroll pass (P3 detection broken)")
+        ok = false
+    } else {
+        println("  ok: P3 nested-preserve — unroll(nested, 4) byte-identical to baseline")
+    }
+
+    // Sub-case B — inner loop's PTX SIGNATURE present (setp.lt.f64 +
+    // bra) confirming the inner loop survived the pass.
+    let setp_count = _count_substr(ptx_after, "setp.lt.f64")
+    if setp_count < 2 {
+        println("  FAIL: expected ≥2 setp.lt.f64 (outer + inner header), got " + to_string(setp_count))
+        ok = false
+    } else {
+        println("  ok: inner+outer loop conditions intact (" + to_string(setp_count) + "× setp.lt.f64)")
+    }
+    let bra_count = _count_substr(ptx_after, "bra ")
+    if bra_count < 3 {
+        println("  FAIL: expected ≥3 bra instructions (inner back-edge + others), got " + to_string(bra_count))
+        ok = false
+    } else {
+        println("  ok: inner back-edge + branches preserved (" + to_string(bra_count) + "× bra)")
+    }
+
+    // Sub-case C — direct helper assertion: `_nvptx_unroll_contains_inner_loop`
+    // returns true for the body block of this MFunc, false for the
+    // non-nested fixture from PR #117 Case 10.
+    let nested = _build_case_nested_loop()
+    let body_nested = nested.blocks[1]   // block 1 = outer body
+    if !_nvptx_unroll_contains_inner_loop(body_nested, nested) {
+        println("  FAIL: detection helper missed nested-loop body")
+        ok = false
+    } else {
+        println("  ok: _nvptx_unroll_contains_inner_loop(nested.body) = true")
+    }
+    // Negative guard: PR #117 fixture (canonical single-loop) has no
+    // inner loop in its body.
+    let canonical = _build_case_unroll_loop()
+    // Locate the body block in canonical fixture via the pattern matcher.
+    let pat = _nvptx_unroll_find_pattern(canonical)
+    if pat[1] >= 0 {
+        let body_canonical = canonical.blocks[pat[1]]
+        if _nvptx_unroll_contains_inner_loop(body_canonical, canonical) {
+            println("  FAIL: detection helper false-positive on PR #117 canonical fixture")
+            ok = false
+        } else {
+            println("  ok: _nvptx_unroll_contains_inner_loop(canonical.body) = false (no false-positive)")
+        }
     }
 
     return ok

@@ -2405,6 +2405,68 @@ fn _nvptx_unroll_back_edge_kind(term: Stmt, header_id: i64) -> string {
     return ""
 }
 
+// _nvptx_unroll_contains_inner_loop — detect whether the body block
+// branches into an inner loop (RFC 069 P3 `F-RFC069-NESTED-PRESERVE`).
+//
+// Inner loop = any Block reachable from `body` via STMT_BR or
+// STMT_BR_COND whose own terminator carries a back-edge (a target
+// pointing to itself OR to a Block with id < target's own id).
+//
+// Honest scope (`@D g3` — NARROWER than the original RFC F3 draft text):
+// the P3 implementation here detects nested-loop PRESENCE and returns
+// the MFunc UNCHANGED when detected — the inner loop is preserved by
+// not touching the outer at all. Full multi-block-region nested unroll
+// (cloning the inner loop's blocks per outer iteration with renumbered
+// block IDs) is genuinely substantial work — reframed as P5 by the
+// 2026-05-20 PLAN entry. The "preserve" semantics still hold: today,
+// the canonical 3-block matcher wouldn't match a nested-loop MFunc
+// anyway (body's BR doesn't go to outer header in that shape), so
+// the visible behavior is identical (passthrough). The detection
+// helper makes the no-op contract OBSERVABLE — a downstream
+// callsite can `if (contains_inner_loop) skip_unroll_advice = true`.
+fn _nvptx_unroll_contains_inner_loop(body: Block, mfn: MFunc) -> bool {
+    let mut si = 0
+    while si < len(body.stmts) {
+        let s = body.stmts[si]
+        let mut targets = []
+        if s.kind == STMT_BR && s.target_block >= 0 {
+            targets.push(s.target_block)
+        }
+        if s.kind == STMT_BR_COND {
+            if s.target_block >= 0       { targets.push(s.target_block) }
+            if s.target_block_else >= 0  { targets.push(s.target_block_else) }
+        }
+        let mut ti = 0
+        while ti < len(targets) {
+            let tid = targets[ti]
+            if tid != body.id {
+                let mut bj = 0
+                while bj < len(mfn.blocks) {
+                    let candidate = mfn.blocks[bj]
+                    if candidate.id == tid && len(candidate.stmts) > 0 {
+                        let cterm = candidate.stmts[len(candidate.stmts) - 1]
+                        // Self-loop or back-edge: target ≤ own id.
+                        if cterm.kind == STMT_BR {
+                            if cterm.target_block == candidate.id { return true }
+                            if cterm.target_block >= 0 && cterm.target_block < candidate.id { return true }
+                        }
+                        if cterm.kind == STMT_BR_COND {
+                            if cterm.target_block == candidate.id { return true }
+                            if cterm.target_block_else == candidate.id { return true }
+                            if cterm.target_block >= 0 && cterm.target_block < candidate.id { return true }
+                            if cterm.target_block_else >= 0 && cterm.target_block_else < candidate.id { return true }
+                        }
+                    }
+                    bj = bj + 1
+                }
+            }
+            ti = ti + 1
+        }
+        si = si + 1
+    }
+    return false
+}
+
 // _nvptx_unroll_rewrite_arm — rewrite the BACK-EDGE arm of a body/clone
 // terminator (RFC 069 P2 `F-RFC069-MULTI-EXIT-MATCH`). The other arm
 // (early-exit destination for BR_COND) is preserved verbatim, so
@@ -2557,17 +2619,18 @@ fn _nvptx_unroll_clone_stmt(s: Stmt, dsts: [i64], offset: i64) -> Stmt {
     }
 }
 
-// RFC 069 P1 + P2 LANDED — Advanced loop unroll. P1 (`F-RFC069-FACTOR-N`):
-// factor=N for 2 ≤ N ≤ 32, factor outside range → passthrough.
-// P2 (`F-RFC069-MULTI-EXIT-MATCH`): the matcher now accepts a body
-// whose terminator is either STMT_BR (canonical) OR STMT_BR_COND
-// with one arm to header (multi-exit / break-bearing). The cloner
-// rewrites ONLY the back-edge arm per clone; the early-exit arm
-// stays verbatim so each unrolled instance preserves its break path.
+// RFC 069 P1 + P2 + P3 LANDED — Advanced loop unroll.
+//   P1 (`F-RFC069-FACTOR-N`)         — factor=N for 2 ≤ N ≤ 32.
+//   P2 (`F-RFC069-MULTI-EXIT-MATCH`) — body terminator can be STMT_BR
+//      (canonical) OR STMT_BR_COND with one arm to header. Cloner
+//      rewrites ONLY the back-edge arm; early-exit arm stays verbatim.
+//   P3 (`F-RFC069-NESTED-PRESERVE`)  — detects nested-loop presence
+//      via `_nvptx_unroll_contains_inner_loop` and returns mfn
+//      unchanged (preserves inner loop semantically; full multi-block-
+//      region cloning is P5).
 // Factor=2 single-exit byte-identical to PR #117 output.
 //
-// Still pending (P3/P4 — see RFC 069 §3):
-//   P3 (`F-RFC069-NESTED-PRESERVE`) — inner-loop preservation
+// Still pending (P4 — see RFC 069 §3):
 //   P4 (`F-RFC069-NUMERIC-EQ`) — real-silicon byte-eq numeric falsifier
 //
 // The PR #117 passthrough guarantee (Case 11) is a STRICT regression
@@ -2610,6 +2673,15 @@ pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
 
     let hdr = mfn.blocks[hdr_idx]
     let body = mfn.blocks[body_idx]
+    // RFC 069 P3 `F-RFC069-NESTED-PRESERVE` — if the matched outer body
+    // contains an inner loop (one of its outgoing branches lands in a
+    // Block carrying a back-edge), DO NOT unroll. Returning mfn unchanged
+    // preserves the inner loop semantically — outer unroll would, in
+    // general, require multi-block-region cloning (each clone of outer
+    // body's branch to inner_header would need a freshly-renumbered
+    // inner loop) which is deferred to P5 (deeper-nesting + irregular
+    // back-edge cycle). This early-return makes the no-op observable.
+    if _nvptx_unroll_contains_inner_loop(body, mfn) { return mfn }
     let dsts = _nvptx_unroll_collect_body_dsts(body)
     let base_offset = _nvptx_unroll_max_local_id_in_mfn(mfn) + 1
     let max_block_id_base = _nvptx_unroll_max_block_id(mfn)
