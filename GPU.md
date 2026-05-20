@@ -86,6 +86,49 @@ Today's silicon fires used hand-emit PTX (codegen verification via `nvptx_lower_
 - [ ] **`F-RFC068-E2E-NUMERIC-EQ`** PASS — full source-to-silicon chain byte-eq closure
 - [ ] **commit** — same `inbox/fires/` pattern as PR #189
 
+### 2a finding (2026-05-20): build pipeline gap analysis
+
+The blocker is NOT in `self/main.hexa::cmd_build` `--target=` validation
+(adding a `nvptx64-*` branch there is one-line edit). The substantive
+gap is the BUILD PIPELINE itself:
+
+```
+Current `hexa build` (CPU targets):
+  src.hexa → module_loader (flatten) → hexa_v2 transpiler (.c)
+           → clang/zig cc → native binary
+
+Required for NVPTX:
+  src.hexa → module_loader (flatten) → in-hexa compiler self-host
+           → MIR → codegen_emit_ptx_sm80 → PTX text
+```
+
+`hexa_v2` is the **bootstrap transpiler** that emits C — it doesn't
+know about NVPTX. The NVPTX codegen lives in `compiler/codegen/
+nvptx_target.hexa` and is invoked only from within the in-hexa
+self-host pipeline (which today produces CPU artifacts via the
+existing `compiler/*` tree, not via `hexa_v2`).
+
+To wire `hexa build --target=nvptx64-*` properly, options are:
+- (A) **Internal emit-driver pattern** — `cmd_build` synthesizes a
+  small driver `import src.hexa + compiler/codegen/nvptx_target.hexa`
+  and prints `codegen_emit_ptx_sm80(...)`. Substantial: requires
+  exposing the full compiler pipeline as a callable.
+- (B) **Compiler self-host on NVPTX** — the in-hexa compiler IS
+  the build path for `--target=nvptx64`. Aligned with north-star ②
+  (self-host already PROVEN for CPU at fixpoint per memory
+  `project_compiler_native_self_host_fixpoint`); extending to
+  NVPTX is the natural next step.
+- (C) **Out-of-band emit driver** — keep using the external script
+  pattern from PR #82 (`tool/dispatch_*.sh`). Today's 8 fires
+  successfully demonstrate this works. **No `hexa build` wiring
+  required** for the actual silicon-validation path.
+
+Choice for this session: **(C)** — defer (A)/(B) as multi-session
+campaigns. The §1 ledger shows all silicon-fires landed via the
+out-of-band pattern; full source-to-silicon `hexa build --target=
+nvptx64-*` is a strategic infrastructure cycle for a separate
+session.
+
 ### 2b — Multi-tile WMMA GEMM K-loop (RFC 067 §3 P4 spec form)
 
 PR #191 closed the *single-tile* WMMA fire. The RFC 067 §3 P4 spec asks for 64×64 GEMM = 4×4 output tiles × 4 K-tiles = 64 `wmma.mma` calls with `.shared` staging.
@@ -513,12 +556,13 @@ Once 4-6 of these check off, the GPU substrate phase is "done enough" to consume
 
 ## 13 · Status snapshot (auto-updated each cycle)
 
-- **lower_test cases**: 25/25 PASS (was 9/9 at session start 2026-05-20)
-- **Silicon-fires on origin/main**: 4 (PR #82 FP64 baseline + #189/#190/#191 today)
+- **lower_test cases**: 25/25 PASS
+- **Silicon-fires on origin/main**: **8** (PR #82 FP64 + #189 f16 + #190 unroll byte-eq + #191 wmma single-tile + #203 bf16 + #205 wmma multi-K-tile + #206 wmma 16-warp grid + #207 wmma cp.async pipelined)
 - **§12 P4+ codegen-side closures**: 3/3 RFCs done
-- **§12 P4+ silicon-side closures**: 3/3 RFCs done (single-tile / single-form)
+- **§12 P4+ silicon-side closures**: 3/3 RFCs done + WMMA family expansion (single + multi-K + multi-warp + cp.async)
+- **§5 cuBLAS-advantage categories**: 13 (5a-5m; 3 with measured-PASS data)
 - **Continuous gates**: F5 / F6 / F7 all PASS through every commit
-- **Next layer recommended**: §2a source-to-silicon e2e (closes the last gap on RFC 068 chain) or §2b multi-tile WMMA (closes full RFC 067 §3 P4 spec)
+- **Next layer recommended**: §2a source-to-silicon e2e (multi-session, requires in-hexa compiler self-host on NVPTX path; see §2a finding) — or §3 mid-term (dtypes / opt passes / source-level ergonomics)
 
 ---
 
@@ -564,3 +608,28 @@ dtypes / autograd-aware / non-NVIDIA hardware) retained verbatim.
 Section 5 is now the canonical "where hexa beats cuBLAS structurally"
 reference — split into 13 categories total with measured + projected
 items distinguished by [x] vs [ ].
+
+### 2026-05-20 (evening cont.) — sec 2a finding + status snapshot post-8-fires
+
+After today's 8 silicon-fires + sec 5 cuBLAS-advantage expansion
+(PR #209), attempted to wire `hexa build --target=nvptx64-*` in
+`self/main.hexa::cmd_build`. Finding: the wiring is NOT a one-line
+target-string add. The substantive gap is the build pipeline itself
+(see sec 2a finding above) — `hexa_v2` (bootstrap transpiler) emits
+C, not PTX; the in-hexa compiler has the NVPTX codegen but is not
+the build path for `hexa build` today.
+
+Session conclusion: option (C) — the out-of-band emit-driver pattern
+from PR #82 successfully delivered all 8 silicon-fires today; the
+`hexa build` wiring (options A/B) is a multi-session campaign tied
+to north-star ② (compiler self-host on NVPTX, currently CPU only).
+
+sec 13 status snapshot updated:
+- Silicon-fires: 4 -> 8 (added bf16 #203, wmma multi-K #205,
+  wmma 16-warp grid #206, wmma cp.async #207)
+- sec 5 cuBLAS-advantage categories: 5 -> 13 (added 5f-5m)
+- Next-layer recommendation: defer sec 2a; pick from sec 3 mid-term
+  or new lane (dtypes / opt passes / source-level ergonomics)
+
+Total session metric: 32 PRs landed end-to-end + 8 silicon-fires +
+GPU.md domain SSOT created and expanded. lower_test smoke 9 -> 25.
