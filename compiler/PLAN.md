@@ -5736,3 +5736,72 @@ pushed to origin.
 **cc --regen / binary promote**: 미수행. 본 캠페인은 tool/* +
 compiler/emit/* 추가 위주. compiler/main.hexa 의 cycle 7 (P0) 변경
 이미 별도 promote 필요 (현재 branch 의 다음 deploy commit).
+
+
+### 2026-05-20 — S7-P3 follow-up: default backend flip + L1→L3 markers (F-P3-DEFAULT-NATIVE PASS)
+
+RFC 063 § P3 의 "flip the default" sub-task closure — `aprime_cc` 의
+`compiler/main.hexa` arg-parsing 후에 backend default flip 추가:
+
+```
+if !backend_kind_user_set
+    && target == "arm64-apple-darwin"
+    && emit_kind == "obj" {
+    backend_kind = "native"
+}
+```
+
+이제 `--backend=` 플래그 없는 `--emit=obj` 가 자동으로 native path
+사용. `--backend=system` 로 opt-out 가능.
+
+**L1 → L3 markers** (compiler/main.hexa):
+- L2-migration scaffolding 주석 (line 1-13) 갱신 — `as`/`ld` fork 사이트
+  의 status 를 L1 → "L3 RETIRING" 표시. xcrun (SDK probe) 만 L1 keeper.
+- `as` invocation 사이트 (line ~836) 의 주석 갱신.
+
+**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P3_DEFAULT_NATIVE.hexa`):
+
+- `aprime_cc --emit=obj` (NO `--backend=` flag) + stripped PATH (no
+  clang/as/ld).
+- rc=0 + Mach-O .o (433 B) 산출 확인.
+
+**측정**:
+
+```
+$ /tmp/run_F_P3_DEFAULT_NATIVE
+=== aprime_cc --emit=obj (no --backend=, stripped PATH) ===
+atlas: loaded 15952 nodes from hxc
+rc=0
+/tmp/p3_default_native.o: Mach-O 64-bit object arm64
+✅ F-P3-DEFAULT-NATIVE PASS — backend=native is default for arm64-darwin obj emit
+   /tmp/p3_default_native.o: 433 B Mach-O · no clang/as in PATH
+```
+
+**Follow-up cycle closure status (HONEST g3)**:
+
+본 cycle 으로 처리:
+- ✅ compiler/main.hexa default backend flip (RFC 063 § P3 의 "cmd_build
+  flips the default to native" 의 aprime_cc 측면).
+- ✅ L1 → L3 marker 주석 갱신 (`as` fork 사이트).
+
+**잔여 follow-up cycles** (별도 RFC scope, multi-week each):
+
+| Follow-up | scope | 별도 RFC |
+|-----------|-------|----------|
+| self/main.hexa::cmd_build flip + cc --regen + binary promote | driver-level default flip | g_commit_push_deploy follow-up commit |
+| Additional LIR ops 인코딩 (~200 more rules) | production-grade compiler self-build | multi-cycle, multi-week |
+| self/runtime.c hexa port | 자체 runtime (10k+ LoC port) | 별도 RFC |
+| P1 dynamic lazy-bind (LC_DYLD_CHAINED_FIXUPS real imports + __got) | dynamic-link variant | follow-up cycle |
+| P2 cycle 5+ x86_64 LIR walker + corpus ELF | real Linux corpus build | multi-cycle |
+| L3 marker 의 source-level "retire" (실제 코드 제거) | dead-code cleanup | gated on full driver flip |
+
+이 follow-ups 는 RFC 063 의 falsifier contract 외 추가 production-
+quality work. **본 캠페인 (P0+P1+P2+P3 falsifier closure) 은 완료**.
+
+**RFC 063 phasing 진척 (최종)**: P0 ✅ + P1 ✅ + P2 ✅ + P3 ✅ (default
+flip + L1→L3 markers + F-P3 falsifiers PASS). **23 cycles** on
+`s7-p0-cycle1` branch.
+
+**cc --regen / binary promote**: compiler/main.hexa 변경 → @D
+g_commit_push_deploy 발동. 본 commit 은 source-only on campaign
+branch; main 머지 시 cc --regen + hexa_v2 promote 동반 필수.
