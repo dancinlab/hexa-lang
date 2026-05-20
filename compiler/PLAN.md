@@ -4480,3 +4480,88 @@ average 3.5 PRs. Cumulative lower_test ratchet 9 → 19 (+10 cases,
 +1.11× per-batch on average).
 
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md
+
+### 2026-05-20 — Fire-decision #1 — RFC 067/068/069 P4 GPU-fire analytical RESOLVE (predict-fail without prereqs)
+
+Per `/wilson-fire-gate` instrument-first methodology: predict outcome
+with a faithful model BEFORE firing real silicon. Each of the 3 P4
+numeric falsifiers was reviewed for prereq state; the predict
+analysis concluded ALL 3 would PREDICT-FAIL today without additional
+implementation work. Recording the decision here so future cycles
+can resume from the prereq-state ledger rather than re-spending
+analysis effort.
+
+Options considered:
+- Option A: fire all 3 P4 falsifiers on ubu-2 RTX 5070 (cost $0).
+- Option B: fire only RFC 069 P4 (the prereq-closest one) and resolve
+  RFC 067/068 P4 analytically.
+- Option C: resolve all 3 P4 analytically; record prereq-gap ledger;
+  dispatch (b) RFC 068 P2 HIR grammar + (c) RFC 067 P3 PReg dtype
+  in parallel sub-agent cycles to close the prereqs.
+
+Recommendation + 3+ rationale:
+- **Pick C (resolve all 3 + parallel prereq-close).**
+
+Rationale 1 — RFC 067 P4 (`F-RFC067-TILE-LOOP-NUMERIC`):
+- PREREQ STATE: P1 (FRAG reg-vector) + P2 (.shared decl) LANDED. P3
+  (per-fragment dtype/role re-key + instruction-emit) NOT LANDED.
+- The WMMA STMT_CALL handler still emits an honest stub comment
+  marker (`// RFC 055 §12 P4+ WMMA (scaffold, not yet wired) — …`);
+  no `wmma.load.a.sync.aligned...` PTX instruction is emitted yet.
+- A GPU fire on this codegen output would FAIL at ptxas (no wmma
+  instruction matched), OR at runtime (the kernel would run but
+  produce undefined output since the comment-marker is a no-op).
+- Predicts: certain-fail without P3 instruction-emit landing first.
+
+Rationale 2 — RFC 068 P4 (`F-RFC068-NUMERIC-EQ` on f16 vec-add):
+- PREREQ STATE: P1 (Local.precision tag + classifier short-circuit)
+  LANDED. P2 (HIR `@f16` annotation grammar + TYPE_F16/BF16 in
+  types.hexa) NOT LANDED. P3 (body lowering `add.f16/.bf16/.f32`)
+  NOT LANDED.
+- Source-level `let t: f16 = a + b` cannot reach the f16 reg bank
+  via natural lowering — the type-checker rejects `f16` as unknown,
+  and even if it didn't, `hir_to_mir.hexa` doesn't emit `add_f16`
+  opcodes.
+- A GPU fire would require synthesizing a fixture that bypasses
+  the type-checker and constructs the MIR directly — not the
+  intended end-to-end test path.
+- Predicts: not-reachable until P2 HIR grammar lands.
+
+Rationale 3 — RFC 069 P4 (`F-RFC069-NUMERIC-EQ` byte-eq output):
+- PREREQ STATE: P1 (factor=N) + P2 (multi-exit matcher) + P3
+  (nested-preserve detection) all LANDED. The unroll-pass helper
+  itself is fully working on the SHAPES it recognizes.
+- HOWEVER: the unroll pass is NOT WIRED into the auto-codegen
+  pipeline. `codegen_emit_ptx_sm80` doesn't call
+  `_nvptx_unroll_pass` on any MFunc during compilation; the pass
+  is a standalone helper that test fixtures invoke directly.
+- Real existing GPU-fired kernels (vec-add from PR #82, GEMM from
+  PR #87) use HAND-EMIT helpers (`emit_ptx_vec_add_module`,
+  `emit_ptx_gemm_module`) that don't go through MFunc lowering at
+  all — so unroll-pass would not apply even if wired.
+- A GPU fire would require: (a) wiring `_nvptx_unroll_pass` into
+  the codegen pipeline behind a flag, (b) constructing a GEMM-K-loop
+  fixture that lowers through MIR → matched-CFG-shape → unroll →
+  PTX, (c) firing both unroll-N and unroll-1 builds. Substantial
+  wiring work — not a fire.
+- Predicts: certain-fail without unroll-wiring + fixture
+  construction (separate sub-cycle, NOT in P4 scope).
+
+Decision recorded:
+- **No GPU silicon fired this cycle.** All 3 P4 falsifiers REMAIN
+  OPEN; closure of each RFC remains gated by its respective P4.
+- **Resolve C executed**: parallel sub-agent dispatch of (b) RFC 068
+  P2 + (c) RFC 067 P3 to close their nearest prereqs. RFC 069 P4
+  wiring is deferred — separate cycle.
+
+What unblocks each P4 (forward-looking ledger):
+- RFC 067 P4 needs: P3 instruction-emit (real wmma.load.{a,b}, mma,
+  store.d emit referencing the FRAG vector regs + .shared slot).
+- RFC 068 P4 needs: P2 HIR grammar + P3 body lowering (the parallel
+  sub-agent in this cycle closes P2; P3 follows).
+- RFC 069 P4 needs: unroll-wiring into codegen pipeline + GEMM-K-loop
+  MIR fixture that hits the matcher.
+
+Cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md ·
+`/wilson-fire-gate` instrument-first methodology · this entry +
+sibling sub-agent commit messages for the parallel (b)+(c) cycle.
