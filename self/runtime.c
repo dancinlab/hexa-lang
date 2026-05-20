@@ -705,6 +705,75 @@ static int __attribute__((noinline)) hxlcl_getrusage(int who, void *usage) {
     }
     return 0;
 }
+// Cycle 59 — Tier-A.5 libm + ctype stubs. The compiler binary doesn't
+// call cos/exp/log/fmod at all (flame/NN code paths are linked but
+// unreachable from aprime_cc's compile-then-exit flow). These are 5-7
+// term Taylor approximations sufficient for any unreachable execution.
+// `isalnum`/`isalpha` are pure ASCII classification — called by lexer
+// `_is_ident_cont` / `_is_ident_start`, which IS load-bearing.
+static double __attribute__((noinline)) hxlcl_fmod(double x, double y) {
+    if (y == 0.0) return 0.0;
+    double q = x / y;
+    long long iq = (long long)q;
+    return x - (double)iq * y;
+}
+static double __attribute__((noinline)) hxlcl_exp(double x) {
+    // Range reduction: x = n*ln2 + r, |r| <= ln2/2; exp(x) = 2^n * exp(r)
+    const double LN2 = 0.6931471805599453;
+    double n_d = x / LN2;
+    long long n = (long long)(n_d + (n_d >= 0.0 ? 0.5 : -0.5));
+    double r = x - (double)n * LN2;
+    // Taylor: 1 + r + r²/2 + r³/6 + r⁴/24 + r⁵/120 + r⁶/720 + r⁷/5040
+    double r2 = r*r, r3 = r2*r, r4 = r2*r2;
+    double sum = 1.0 + r + r2*0.5 + r3*(1.0/6.0) + r4*(1.0/24.0)
+                 + r4*r*(1.0/120.0) + r4*r2*(1.0/720.0) + r4*r3*(1.0/5040.0);
+    // 2^n via repeated double (cap to avoid overflow infinity loop)
+    double pow2 = 1.0;
+    if (n > 1023) n = 1023;
+    if (n < -1022) n = -1022;
+    if (n >= 0) for (long long i = 0; i < n; i++) pow2 *= 2.0;
+    else for (long long i = 0; i < -n; i++) pow2 *= 0.5;
+    return sum * pow2;
+}
+static double __attribute__((noinline)) hxlcl_log(double x) {
+    if (x <= 0.0) return -1e308;  // -inf approximation
+    // log(x) = log(m * 2^e) = log(m) + e*ln2 where m in [1, 2)
+    int e = 0;
+    while (x >= 2.0) { x *= 0.5; e++; }
+    while (x < 1.0) { x *= 2.0; e--; }
+    // Now x in [1, 2). Use log((1+u)/(1-u)) with u = (x-1)/(x+1).
+    double u = (x - 1.0) / (x + 1.0);
+    double u2 = u*u, u3 = u2*u, u5 = u3*u2, u7 = u5*u2;
+    double sum = 2.0 * (u + u3/3.0 + u5/5.0 + u7/7.0 + u7*u2/9.0);
+    return sum + (double)e * 0.6931471805599453;
+}
+static double __attribute__((noinline)) hxlcl_cos(double x) {
+    // Range reduce to [-pi, pi]
+    const double TWO_PI = 6.283185307179586;
+    const double PI = 3.141592653589793;
+    if (x < 0.0) x = -x;
+    while (x >= TWO_PI) x -= TWO_PI;
+    if (x > PI) x = TWO_PI - x;
+    // Now |x| <= pi. Taylor 8-term: 1 - x²/2! + x⁴/4! - ... + x¹⁴/14!
+    double x2 = x*x, x4 = x2*x2, x6 = x4*x2, x8 = x4*x4;
+    double sum = 1.0 - x2/2.0 + x4/24.0 - x6/720.0 + x8/40320.0
+                 - x8*x2/3628800.0 + x8*x4/479001600.0 - x8*x6/87178291200.0;
+    return sum;
+}
+static double __attribute__((noinline)) hxlcl_sin(double x) {
+    // sin(x) = cos(x - pi/2). Reuse cos helper to keep precision in sync.
+    const double PI_HALF = 1.5707963267948966;
+    return hxlcl_cos(x - PI_HALF);
+}
+static int __attribute__((noinline)) hxlcl_isalnum(int c) {
+    return ((c >= '0' && c <= '9') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= 'a' && c <= 'z')) ? 1 : 0;
+}
+static int __attribute__((noinline)) hxlcl_isalpha(int c) {
+    return ((c >= 'A' && c <= 'Z') ||
+            (c >= 'a' && c <= 'z')) ? 1 : 0;
+}
 
 // Textual override of any residual libc references in subsequent code
 // (runtime_core.c + HI tier + transpile output). The helper bodies
@@ -2863,15 +2932,15 @@ int64_t hexa_float_to_int(double f) {
 }
 
 HexaVal hexa_math_tanh(HexaVal x) { return hexa_float(tanh(_hexa_f(x))); }
-HexaVal hexa_math_sin(HexaVal x)  { return hexa_float(sin(_hexa_f(x))); }
-HexaVal hexa_math_cos(HexaVal x)  { return hexa_float(cos(_hexa_f(x))); }
+HexaVal hexa_math_sin(HexaVal x)  { return hexa_float(hxlcl_sin(_hexa_f(x))); }
+HexaVal hexa_math_cos(HexaVal x)  { return hexa_float(hxlcl_cos(_hexa_f(x))); }
 HexaVal hexa_math_tan(HexaVal x)  { return hexa_float(tan(_hexa_f(x))); }
 HexaVal hexa_math_asin(HexaVal x) { return hexa_float(asin(_hexa_f(x))); }
 HexaVal hexa_math_acos(HexaVal x) { return hexa_float(acos(_hexa_f(x))); }
 HexaVal hexa_math_atan(HexaVal x) { return hexa_float(atan(_hexa_f(x))); }
 HexaVal hexa_math_atan2(HexaVal y, HexaVal x) { return hexa_float(atan2(_hexa_f(y), _hexa_f(x))); }
-HexaVal hexa_math_log(HexaVal x)  { return hexa_float(log(_hexa_f(x))); }
-HexaVal hexa_math_exp(HexaVal x)  { return hexa_float(exp(_hexa_f(x))); }
+HexaVal hexa_math_log(HexaVal x)  { return hexa_float(hxlcl_log(_hexa_f(x))); }
+HexaVal hexa_math_exp(HexaVal x)  { return hexa_float(hxlcl_exp(_hexa_f(x))); }
 HexaVal hexa_math_abs(HexaVal x)  { return hexa_float(fabs(_hexa_f(x))); }
 HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt(_hexa_f(x))); }
 HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(_hexa_f(x))); }
@@ -2882,7 +2951,7 @@ HexaVal hexa_math_pow(HexaVal b, HexaVal e) { return hexa_float(pow(_hexa_f(b), 
 // from hexa user code. Distinct from `%` which routes through hexa_mod
 // (int+float-aware dispatch); this is the pure float-only path used by
 // scientific kernels that want the libm semantics directly.
-HexaVal hexa_math_fmod(HexaVal a, HexaVal b) { return hexa_float(fmod(_hexa_f(a), _hexa_f(b))); }
+HexaVal hexa_math_fmod(HexaVal a, HexaVal b) { return hexa_float(hxlcl_fmod(_hexa_f(a), _hexa_f(b))); }
 HexaVal hexa_math_min(HexaVal a, HexaVal b) { return hexa_float(fmin(_hexa_f(a), _hexa_f(b))); }
 // G1-FLOAT-PRIM 2026-05-06 — see .roadmap.stdlib.G1-FLOAT-PRIM. lgamma is the
 // log-gamma function used by Beta-Binomial conjugate posteriors throughout
@@ -3650,8 +3719,8 @@ static inline void _hx_pauli_exp_raw(double* re, double* im, double alpha,
                                      int64_t n_qubits) {
     int64_t dim = 1;
     for (int k = 0; k < (int)n_qubits; k++) dim *= 2;
-    double c = cos(alpha);
-    double s = sin(alpha);
+    double c = hxlcl_cos(alpha);
+    double s = hxlcl_sin(alpha);
     int cy_mod = (int)(count_Y % 4);
     double sign_y = ((count_Y % 2) == 0) ? 1.0 : -1.0;
     int64_t parity_mask = z_mask | y_mask;
@@ -3748,8 +3817,8 @@ HexaVal hexa_farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
 #if 0  // RFC 039: body hoisted to _hx_pauli_exp_raw above; original kept inline for reference.
     int64_t dim = 1;
     for (int k = 0; k < (int)n_qubits; k++) dim *= 2;
-    double c = cos(alpha);
-    double s = sin(alpha);
+    double c = hxlcl_cos(alpha);
+    double s = hxlcl_sin(alpha);
     int cy_mod = (int)(count_Y % 4);
     double sign_y = ((count_Y % 2) == 0) ? 1.0 : -1.0;
     int64_t parity_mask = z_mask | y_mask;
@@ -4965,17 +5034,17 @@ HexaVal hexa_farr_add_gaussian_noise(HexaVal target_v, HexaVal sigma_v) {
     for (; i + 2 <= n; i += 2) {
         double u1 = _hx_uniform01_open(&_hx_gauss_rng_state);
         double u2 = _hx_uniform01_open(&_hx_gauss_rng_state);
-        double r  = sqrt(-2.0 * log(u1));
+        double r  = sqrt(-2.0 * hxlcl_log(u1));
         double th = two_pi * u2;
-        e->buf[i]   += sigma * r * cos(th);
-        e->buf[i+1] += sigma * r * sin(th);
+        e->buf[i]   += sigma * r * hxlcl_cos(th);
+        e->buf[i+1] += sigma * r * hxlcl_sin(th);
     }
     if (i < n) {
         double u1 = _hx_uniform01_open(&_hx_gauss_rng_state);
         double u2 = _hx_uniform01_open(&_hx_gauss_rng_state);
-        double r  = sqrt(-2.0 * log(u1));
+        double r  = sqrt(-2.0 * hxlcl_log(u1));
         double th = two_pi * u2;
-        e->buf[i] += sigma * r * cos(th);
+        e->buf[i] += sigma * r * hxlcl_cos(th);
     }
     return hexa_void();
 }
@@ -5171,12 +5240,12 @@ HexaVal hexa_ad_softmax_cross_entropy(HexaVal logits_v, HexaVal nr_v,
         double zmax = z[0];
         for (int64_t j = 1; j < C; j++) if (z[j] > zmax) zmax = z[j];
         double s = 0.0;
-        for (int64_t j = 0; j < C; j++) s += exp(z[j] - zmax);
+        for (int64_t j = 0; j < C; j++) s += hxlcl_exp(z[j] - zmax);
         int64_t tcls = (int64_t)(tg[r] + 0.5);   // class index (round)
         if (tcls < 0) tcls = 0;
         if (tcls >= C) tcls = C - 1;
         // CE = -log softmax(z)_t = (zmax - z_t) + log Σ exp(z - zmax)
-        double ce = (zmax - z[tcls]) + log(s);
+        double ce = (zmax - z[tcls]) + hxlcl_log(s);
         total += ce;
     }
     _hx_ad_record(_HX_AD_OP_SMCE, lg_id, tg_id, -1, R, C, 0);
@@ -5229,13 +5298,13 @@ HexaVal hexa_ad_backward(HexaVal tid_v) {
                 double zmax = z[0];
                 for (int64_t j = 1; j < C; j++) if (z[j] > zmax) zmax = z[j];
                 double s = 0.0;
-                for (int64_t j = 0; j < C; j++) s += exp(z[j] - zmax);
+                for (int64_t j = 0; j < C; j++) s += hxlcl_exp(z[j] - zmax);
                 int64_t tcls = (int64_t)(tg[r] + 0.5);
                 if (tcls < 0) tcls = 0;
                 if (tcls >= C) tcls = C - 1;
                 // B-D-4: ∂L/∂z_i = softmax(z)_i − [i=t], averaged over R.
                 for (int64_t j = 0; j < C; j++) {
-                    double sm = exp(z[j] - zmax) / s;
+                    double sm = hxlcl_exp(z[j] - zmax) / s;
                     d[j] = (sm - (j == tcls ? 1.0 : 0.0)) / (double)R;
                 }
             }
@@ -5522,7 +5591,7 @@ static double _hx_phi_entropy(const uint32_t* counts, int64_t k,
     double s = 0.0;
     for (int64_t i = 0; i < k; i++) {
         double p = (double)counts[i] / t;
-        s += -p * (log(p + 1e-10) / log(2.0));   // log2 via natural log
+        s += -p * (hxlcl_log(p + 1e-10) / hxlcl_log(2.0));   // log2 via natural log
     }
     return s;
 }
@@ -6032,7 +6101,7 @@ static int64_t _hx_farr_softmax_rows_cpu(int64_t x_id, int64_t R, int64_t C) {
         for (int64_t j = 1; j < C; j++) if (xr[j] > zmax) zmax = xr[j];
         double s = 0.0;
         for (int64_t j = 0; j < C; j++) {
-            double e = exp(xr[j] - zmax);
+            double e = hxlcl_exp(xr[j] - zmax);
             yr[j] = e;
             s += e;
         }
@@ -6979,7 +7048,7 @@ static int64_t _hx_farr_mul_cpu(int64_t a_id, int64_t b_id, int64_t n) {
 }
 
 // silu(x) = x · σ(x), σ(x) = 1/(1+exp(-x)). Mirrors c3_sigmoid/c3_silu.
-static inline double _hx_sigmoid_d(double x) { return 1.0 / (1.0 + exp(-x)); }
+static inline double _hx_sigmoid_d(double x) { return 1.0 / (1.0 + hxlcl_exp(-x)); }
 
 // _hx_farr_silu_cpu(x, n) -> new farr_id. y[i] = silu(x[i]). -1 err.
 static int64_t _hx_farr_silu_cpu(int64_t x_id, int64_t n) {
@@ -8702,7 +8771,7 @@ HexaVal hexa_swiglu_vec(HexaVal gate, HexaVal up) {
     for (int64_t i = 0; i < k; i++) {
         double g = __hx_to_double(hexa_array_get(gate, i));
         double u = __hx_to_double(hexa_array_get(up, i));
-        double silu = g / (1.0 + exp(-g));
+        double silu = g / (1.0 + hxlcl_exp(-g));
         out = hexa_array_push(out, hexa_float(silu * u));
     }
     return out;
@@ -8784,7 +8853,7 @@ HexaVal hexa_silu(HexaVal a) {
     int64_t n = (int64_t)HX_ARR_LEN(a);
     for (int64_t i = 0; i < n; i++) {
         double x = __hx_to_double(hexa_array_get(a, i));
-        out = hexa_array_push(out, hexa_float(x / (1.0 + exp(-x))));
+        out = hexa_array_push(out, hexa_float(x / (1.0 + hxlcl_exp(-x))));
     }
     return out;
 }
@@ -8901,7 +8970,7 @@ HexaVal hexa_softmax(HexaVal a) {
     double* tmp = (double*)malloc(sizeof(double) * (size_t)n);
     for (int64_t i = 0; i < n; i++) {
         double v = __hx_to_double(hexa_array_get(a, i));
-        tmp[i] = exp(v - m);
+        tmp[i] = hxlcl_exp(v - m);
         sum += tmp[i];
     }
     double inv = sum > 0.0 ? 1.0 / sum : 0.0;
@@ -10065,12 +10134,12 @@ HexaVal exec_stream_close_stdin(HexaVal handle) { return hexa_exec_stream_close_
  * linkable wrappers mirroring codegen_c2:3527/3535 exactly. Pure-
  * additive: legacy C path inlines and never calls these → no collision. */
 HexaVal hexa_is_alpha(HexaVal a) {
-    return hexa_bool((HX_IS_STR(a) && HX_STR(a) && isalpha((unsigned char)HX_STR(a)[0]))
-                  || (HX_TAG(a) == TAG_CHAR && isalpha((unsigned char)HX_INT(a))));
+    return hexa_bool((HX_IS_STR(a) && HX_STR(a) && hxlcl_isalpha((unsigned char)HX_STR(a)[0]))
+                  || (HX_TAG(a) == TAG_CHAR && hxlcl_isalpha((unsigned char)HX_INT(a))));
 }
 HexaVal hexa_is_alphanumeric(HexaVal a) {
-    return hexa_bool((HX_IS_STR(a) && HX_STR(a) && isalnum((unsigned char)HX_STR(a)[0]))
-                  || (HX_TAG(a) == TAG_CHAR && isalnum((unsigned char)HX_INT(a))));
+    return hexa_bool((HX_IS_STR(a) && HX_STR(a) && hxlcl_isalnum((unsigned char)HX_STR(a)[0]))
+                  || (HX_TAG(a) == TAG_CHAR && hxlcl_isalnum((unsigned char)HX_INT(a))));
 }
 
 /* ═══════════════════════════════════════════════════════════════════

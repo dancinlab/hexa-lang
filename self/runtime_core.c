@@ -5685,11 +5685,11 @@ HexaVal hexa_abs(HexaVal v) {
 // used by training/inference codegen. All route through __hx_to_double to
 // unwrap TAG_VALSTRUCT wrappers (same pattern as hexa_sqrt).
 
-HexaVal hexa_sin(HexaVal v)   { return hexa_float(sin(__hx_to_double(v))); }
-HexaVal hexa_cos(HexaVal v)   { return hexa_float(cos(__hx_to_double(v))); }
+HexaVal hexa_sin(HexaVal v)   { return hexa_float(hxlcl_sin(__hx_to_double(v))); }
+HexaVal hexa_cos(HexaVal v)   { return hexa_float(hxlcl_cos(__hx_to_double(v))); }
 HexaVal hexa_tan(HexaVal v)   { return hexa_float(tan(__hx_to_double(v))); }
-HexaVal hexa_exp(HexaVal v)   { return hexa_float(exp(__hx_to_double(v))); }
-HexaVal hexa_log(HexaVal v)   { return hexa_float(log(__hx_to_double(v))); }
+HexaVal hexa_exp(HexaVal v)   { return hexa_float(hxlcl_exp(__hx_to_double(v))); }
+HexaVal hexa_log(HexaVal v)   { return hexa_float(hxlcl_log(__hx_to_double(v))); }
 HexaVal hexa_log10(HexaVal v) { return hexa_float(log10(__hx_to_double(v))); }
 HexaVal hexa_round(HexaVal v) { return hexa_int((int64_t)llround(__hx_to_double(v))); }
 HexaVal hexa_tanh(HexaVal v)  { return hexa_float(tanh(__hx_to_double(v))); }
@@ -6020,7 +6020,7 @@ HexaVal hexa_mod(HexaVal a, HexaVal b) {
     }
     double fb = __hx_to_double(b);
     if (fb == 0.0) { hexa_throw(hexa_str("modulo by zero")); return hexa_float(0.0); }
-    return hexa_float(fmod(__hx_to_double(a), fb));
+    return hexa_float(hxlcl_fmod(__hx_to_double(a), fb));
 }
 
 // ROI-44: comparison runtime helpers — replace inline GCC stmt-expr in codegen.

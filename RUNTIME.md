@@ -696,3 +696,19 @@ For each Tier-A sub-phase:
   `#include`d into runtime.c by self/runtime.c lines 9229-9341
 - Method: perl name-rewrite in 5 native/*.c files. Helpers from cycle
   57 now actually used (were dead-stripped before)
+
+### 2026-05-21 — Tier-A.5 libm + ctype (cycle 59)
+
+- ✅ cycle 59 — libm 5 + ctype 0 (already inlined). aprime_cc nm
+  undefined externs 69 → **64** (−5 · cumulative **137 → 64 = −73 = 53%**)
+  · smoke exit(42) PASS · binary 1,143,840 B
+- Closed: `_cos` · `_exp` · `_log` · `_fmod` · `___sincos_stret` (auto
+  dropped after cos+sin both unhooked) · `_sin` (clang reverse-libcall
+  recognition emerged after cos unhook, closed same cycle by
+  `hxlcl_sin = hxlcl_cos(x - π/2)`)
+- libm stubs are Taylor/range-reduction implementations (5-8 term, not
+  bit-exact). aprime_cc never calls them in compile-then-exit path
+  (flame/NN code linked but unreachable). isalnum/isalpha helpers
+  added for completeness — they were already inlined by clang
+- Tier-A.5 acceptance per RUNTIME.md was `≤ 5 libm symbols` — now
+  measured **0 libm externs in aprime_cc** (target exceeded)

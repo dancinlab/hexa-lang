@@ -8282,3 +8282,17 @@ measured: aprime_cc 79→69 externs (−10), smoke exit(42) PASS, binary
 cumulative: 137→69 = −68 = **50% of libc externs removed**.
 
 @cite cycle 57 entry · 14 hxlcl_* Tier-A.4 helpers.
+
+### 2026-05-21 — RUNTIME.md Phase 1 Tier-A.5 cycle 59 — libm closure (137→64, 53%)
+
+cycle 59 = Tier-A.5 libm CLOSED. cos/exp/log/fmod helpers (5-8 term
+Taylor + range reduction) + sin (closed same cycle via cos reuse).
+___sincos_stret auto-dropped after both unhooked.
+
+measured: aprime_cc 69→64 externs (−5), cumulative 137→64 = 53%,
+smoke exit(42) PASS, binary 1,143,840 B.
+
+Tier-A.5 acceptance ("≤ 5 libm externs") now reads ZERO — target
+exceeded. Stubs are not bit-exact; compiler binary never reaches them.
+
+@cite cycle 58 entry · libm 5-term Taylor approximations.
