@@ -3994,6 +3994,66 @@ doesn't need it.
 `compiler/codegen/nvptx_target.hexa` (+10 lines, `_nvptx_lower_stmt`
 gains the STMT_BR case + the honest-stub comment is rewritten).
 
+### 2026-05-20 — rfc_006 §5 absorption gate — bug (a) `$eq` cell lowering CLOSED
+
+**Scope.** rfc_006 §5 absorption-gate cell-coverage cycle (techmap_sky130).
+PR #125 (squash `39ae7c4c`) closed bugs (b) abc_map script order + (c)
+gate_record lib_total_area; the next blocker measured immediately after
+that merge was ABC reporting `Cannot find gate "$eq" in the library`
+— i.e. the SKY130 library doesn't contain a 1-bit equality primitive
+under that name, and `pass_techmap_sky130` was leaving the generic
+`$eq` cell unmapped. This sub-cycle closes bug (a) ONLY.
+
+**Change.** `stdlib/kernels/logic_synth/passes.hexa` — `pass_techmap_sky130`
+extended from 1-to-1 cell rename to a mixed shape: existing five
+rules (`$and`/`$or`/`$xor`/`$not`/`$dff`) stay 1-to-1; the new `$eq`
+rule is a 1-to-many tree expansion `eq(A,B) = AND_i (A[i] XNOR B[i])`
+re-derived clean-room from IEEE 1364-2005 §5.1.7 (no Yosys source
+copied). SKY130 cells used (from `sky130_fd_sc_hd__tt_025C_1v80.lib`):
+`sky130_fd_sc_hd__xnor2_1` and `sky130_fd_sc_hd__and2_1`. Pin
+convention: width=1 input shape `A`/`B`/`Y` collapses to a single
+xnor2_1 (the degenerate tree); width=N>1 uses bit-indexed input pins
+`A[i]`/`B[i]` plus a single `Y`, emits N xnor2_1 + a linear (N-1)-stage
+and2_1 reduction chain. Helper trio added — `_passes_eq_width`,
+`_passes_pin_net`, `_passes_lower_eq_cell` (returns `EqLowerResult`
+of cells + internal wires).
+
+**Selftest.** Three new cases T10/T11/T12 in the `passes.hexa` selftest
+harness — 1-bit (1 xnor, 0 and), 2-bit (2 xnor, 1 and), 4-bit (4 xnor,
+3 and). Each case also checks (i) the `$eq` cell is fully consumed
+(zero residual), and (ii) `rtlil_check_no_dangling` returns 0 on the
+expanded design (the freshly minted `$eqbit$<i>` and `$eqacc$<j>`
+wires are added to the module's wire list so no cell pin references a
+non-existent net). Pre-edit baseline: 9/9 PASS. Post-edit: **12/12 PASS**
+under `hexa parse` shim (which auto-runs the selftest on this file).
+
+**Gate progression — measured.** Re-running the §5 gate
+(`hexa run stdlib/yosys/gate_record.hexa --lib …__tt_025C_1v80.lib`)
+after the fix:
+- d4 pipeline: `read_verilog → hierarchy → proc → flatten → opt →
+  techmap → dfflibmap` all `[OK]`; `abc_map` now fails with
+  `Line 6: Cannot find gate "$ne" in the library.` — the `$eq` error
+  went away, the next missing cell is `$ne`.
+- d6 pipeline: same — next blocker `$ne`.
+
+**Next sub-cycle (bug (a) iteration 2).** `$ne` lowering — same XNOR
+algebra inverted: `ne(A,B) = OR_i (A[i] XOR B[i])` (or equivalently
+`NOT eq(A,B)` reusing the existing chain). SKY130 cells available:
+`sky130_fd_sc_hd__xor2_1` and `sky130_fd_sc_hd__or2_1` (already in
+the `__or2_1`/`__xor2_1` family the current 1-to-1 rules use).
+
+**g3 honesty.** The §5 absorption gate is still **OPEN** — closing
+`$eq` only moved the failure-frontier one cell forward (the gate's
+own verdict still prints `PARTIAL` and `rfc_006 §5 is OPEN — no
+"Yosys absorbed" claim`). Bug (a) is a multi-iteration cell-coverage
+cycle; this PR is iteration 1 of (likely) several. No claim of
+end-to-end absorption is made here.
+
+**Files** — extended only: `stdlib/kernels/logic_synth/passes.hexa`
+(+200 lines, technical comment + 3 helpers + 3 selftest cases).
+No source/binary drift to manage — pass library is hexa source under
+the existing module loader path; no compiler frontend change.
+
 ### 2026-05-20 — RFC 055 §12 P4+ scaffold batch — 3 follow-on v2 PRs LANDED
 
 Three §12 P4+ scaffolds (predecessors closed because additive auto-merges

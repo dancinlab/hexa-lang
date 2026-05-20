@@ -205,17 +205,187 @@ fn pass_opt(d: Design) -> PassResult {
 // ─── techmap: generic-cell → library-cell renaming ───────────────────────
 
 // CLEAN-ROOM (passes/techmap/techmap.cc): techmap rewrites every
-// generic Yosys cell ($and / $or / $not / $xor / $dff) to a target
-// library equivalent using a rule file. Scope-a body: a hard-coded
-// mapping table tuned for the SKY130 sky130_fd_sc_hd cell naming
-// convention (the gate-§5 target). The is_mapped flag flips to 1 on
-// every cell rewritten.
+// generic Yosys cell ($and / $or / $not / $xor / $dff / $eq) to a
+// target library equivalent using a rule file. Scope-a body: a
+// hard-coded mapping table tuned for the SKY130 sky130_fd_sc_hd cell
+// naming convention (the gate-§5 target). The is_mapped flag flips to 1
+// on every cell rewritten.
 //
 // NOT done here: the full Yosys techmap.v rule-file engine (it accepts
-// a Verilog-defined map; we don't have multi-cell rewrite, only
-// 1-to-1 renaming). Real area-accurate mapping happens in abc_map.hexa
-// (the D18 ABC subprocess); this pass is the *naming bridge* that
-// makes the design ABC-acceptable.
+// a Verilog-defined map). We support two rule shapes here:
+//   • 1-to-1 rename — $and/$or/$xor/$not/$dff → 2-input library cell
+//   • 1-to-many tree expansion — $eq → XNOR-tree + AND-reduce (rfc_006
+//     §5 absorption bug (a); see _passes_lower_eq_cell below). Real
+//     area-accurate mapping (incl. drive-strength selection) happens in
+//     abc_map.hexa (the D18 ABC subprocess); this pass is the *naming
+//     bridge* that makes the design ABC-acceptable.
+//
+// CLEAN-ROOM PROVENANCE for $eq lowering (rfc_006 §5 bug (a)):
+//   The XNOR-tree + AND-reduce shape is re-derived from the Boolean
+//   identity `eq(A,B) = AND_{i} (A[i] XNOR B[i])` (IEEE 1364-2005 §5.1.7
+//   equality operator semantics). The SKY130 cells used are documented
+//   in `sky130_fd_sc_hd__tt_025C_1v80.lib` (the §5 gate's `--lib` arg):
+//     - sky130_fd_sc_hd__xnor2_1 — 2-input XNOR (A,B → X)
+//     - sky130_fd_sc_hd__and2_1  — 2-input AND  (A,B → X)
+//   No upstream Yosys source is copied; the tree shape is the textbook
+//   reduction (Kahng/Lienig/Markov/Hu "VLSI Physical Design" §5).
+
+// CLEAN-ROOM: count the per-bit input "slots" of an $eq-shaped cell.
+//
+// Two pin conventions are accepted, in priority order:
+//   (1) Bit-indexed pins  : conns include "A[0]","A[1]",… plus "B[0]",…
+//       The width is the count of distinct "A[i]" pins (0-based dense).
+//   (2) Single-bit fallback: only "A","B","Y" pins present → width = 1.
+// Cells that match neither shape return width = 0 (lowering skipped).
+fn _passes_eq_width(c: Cell) -> int {
+    let mut has_plain_a = 0
+    let mut has_plain_b = 0
+    let mut max_idx = 0 - 1
+    let mut i = 0
+    while i < len(c.conns) {
+        let p = c.conns[i].pin
+        if p == "A" { has_plain_a = 1 }
+        if p == "B" { has_plain_b = 1 }
+        // bit-indexed form "A[N]" — accept only "A[…]" here, ignore "B[…]"
+        // for the width count (B is checked separately at lowering time).
+        let lp = len(p)
+        if lp >= 4 {
+            // shortest indexed form is "A[0]" (4 chars)
+            if p[0] == 'A' {
+                if p[1] == '[' {
+                    if p[lp - 1] == ']' {
+                        // parse decimal between [ and ]
+                        let mut k = 2
+                        let mut v = 0
+                        let mut ok = 1
+                        while k < lp - 1 {
+                            let ch = p[k]
+                            if ch >= '0' {
+                                if ch <= '9' {
+                                    v = v * 10 + (ch - '0')
+                                } else { ok = 0 }
+                            } else { ok = 0 }
+                            k = k + 1
+                        }
+                        if ok == 1 {
+                            if v > max_idx { max_idx = v }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    if max_idx >= 0 { return max_idx + 1 }
+    if has_plain_a == 1 {
+        if has_plain_b == 1 { return 1 }
+    }
+    return 0
+}
+
+// CLEAN-ROOM: lookup helper — return the wire name connected to a given
+// pin on a cell (first match), or "" if the pin is absent.
+fn _passes_pin_net(c: Cell, pin: str) -> str {
+    let mut i = 0
+    while i < len(c.conns) {
+        if c.conns[i].pin == pin { return c.conns[i].net }
+        i = i + 1
+    }
+    return ""
+}
+
+// CLEAN-ROOM: lower one $eq cell into a tree of SKY130 cells + the
+// internal wires those cells need. Returns (new_cells, new_wires).
+//
+// Shape:
+//   width=1 : 1 × xnor2_1               (A,B → Y)
+//   width=N : N × xnor2_1 (one per bit) → linear AND chain of (N-1) ×
+//             and2_1 reducing the per-bit equal-bits down to Y.
+//
+// Naming convention for fresh wires/cells:
+//   <cellname>$eqbit$<i>  — output of i-th xnor (per-bit equality)
+//   <cellname>$eqacc$<i>  — output of i-th AND-reducer (i = 1..N-1)
+//   <cellname>$xn$<i>     — i-th xnor2_1 cell instance
+//   <cellname>$ar$<i>     — i-th and-reducer cell instance
+// All freshly added wires are width=1, internal (dir_kind=0, port_id=0).
+struct EqLowerResult {
+    cells: [Cell],
+    wires: [Wire],
+    ok:    int,         // 1 = lowered, 0 = unsupported shape
+}
+
+fn _passes_lower_eq_cell(c: Cell) -> EqLowerResult {
+    let w = _passes_eq_width(c)
+    if w <= 0 {
+        return EqLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let y_net = _passes_pin_net(c, "Y")
+    if y_net == "" {
+        return EqLowerResult { cells: [], wires: [], ok: 0 }
+    }
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+
+    if w == 1 {
+        let a_net = _passes_pin_net(c, "A")
+        let b_net = _passes_pin_net(c, "B")
+        if a_net == "" { return EqLowerResult { cells: [], wires: [], ok: 0 } }
+        if b_net == "" { return EqLowerResult { cells: [], wires: [], ok: 0 } }
+        let mut xn = rtlil_cell(c.name + "$xn$0", "sky130_fd_sc_hd__xnor2_1", 1)
+        xn = rtlil_cell_connect(xn, "A", a_net)
+        xn = rtlil_cell_connect(xn, "B", b_net)
+        xn = rtlil_cell_connect(xn, "X", y_net)
+        out_cells = out_cells.push(xn)
+        return EqLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
+    }
+
+    // width N > 1 — emit N xnor2_1, then (N-1) and2_1 chain.
+    let mut bit_wires: [str] = []
+    let mut i = 0
+    while i < w {
+        let pa = "A[" + str(i) + "]"
+        let pb = "B[" + str(i) + "]"
+        let a_net = _passes_pin_net(c, pa)
+        let b_net = _passes_pin_net(c, pb)
+        if a_net == "" { return EqLowerResult { cells: [], wires: [], ok: 0 } }
+        if b_net == "" { return EqLowerResult { cells: [], wires: [], ok: 0 } }
+        let bw = c.name + "$eqbit$" + str(i)
+        out_wires = out_wires.push(rtlil_wire(bw, 1, 0, 0))
+        let mut xn = rtlil_cell(c.name + "$xn$" + str(i),
+                                "sky130_fd_sc_hd__xnor2_1", 1)
+        xn = rtlil_cell_connect(xn, "A", a_net)
+        xn = rtlil_cell_connect(xn, "B", b_net)
+        xn = rtlil_cell_connect(xn, "X", bw)
+        out_cells = out_cells.push(xn)
+        bit_wires = bit_wires.push(bw)
+        i = i + 1
+    }
+    // Linear AND chain: acc0 = bit_wires[0] AND bit_wires[1]
+    //                   acc1 = acc0       AND bit_wires[2]   ...
+    //                   final AND output → y_net.
+    let mut acc = bit_wires[0]
+    let mut j = 1
+    while j < w {
+        let next_net = bit_wires[j]
+        let mut and_out: str = ""
+        if j == w - 1 {
+            and_out = y_net           // last AND drives the cell's Y
+        } else {
+            and_out = c.name + "$eqacc$" + str(j)
+            out_wires = out_wires.push(rtlil_wire(and_out, 1, 0, 0))
+        }
+        let mut a2 = rtlil_cell(c.name + "$ar$" + str(j),
+                                "sky130_fd_sc_hd__and2_1", 1)
+        a2 = rtlil_cell_connect(a2, "A", acc)
+        a2 = rtlil_cell_connect(a2, "B", next_net)
+        a2 = rtlil_cell_connect(a2, "X", and_out)
+        out_cells = out_cells.push(a2)
+        acc = and_out
+        j = j + 1
+    }
+    return EqLowerResult { cells: out_cells, wires: out_wires, ok: 1 }
+}
+
 fn pass_techmap_sky130(d: Design) -> PassResult {
     let cb = _passes_total_cells(d)
     let mut out: [Module] = []
@@ -223,11 +393,13 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
     while mi < len(d.modules) {
         let m = d.modules[mi]
         let mut new_cells: [Cell] = []
+        let mut new_wires: [Wire] = m.wires
         let mut ci = 0
         while ci < len(m.cells) {
             let c = m.cells[ci]
             let mut mapped_type = c.cell_type
             let mut mapped = c.is_mapped
+            let mut expanded = 0
             if c.is_mapped == 0 {
                 if c.cell_type == "$and" {
                     mapped_type = "sky130_fd_sc_hd__and2_1"
@@ -249,15 +421,34 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                     mapped_type = "sky130_fd_sc_hd__dfxtp_1"
                     mapped = 1
                 }
+                if c.cell_type == "$eq" {
+                    let lr = _passes_lower_eq_cell(c)
+                    if lr.ok == 1 {
+                        // splice expansion in place of the $eq cell
+                        let mut ei = 0
+                        while ei < len(lr.cells) {
+                            new_cells = new_cells.push(lr.cells[ei])
+                            ei = ei + 1
+                        }
+                        let mut wi = 0
+                        while wi < len(lr.wires) {
+                            new_wires = new_wires.push(lr.wires[wi])
+                            wi = wi + 1
+                        }
+                        expanded = 1
+                    }
+                }
             }
-            new_cells = new_cells.push(Cell {
-                name: c.name, cell_type: mapped_type,
-                conns: c.conns, is_mapped: mapped,
-            })
+            if expanded == 0 {
+                new_cells = new_cells.push(Cell {
+                    name: c.name, cell_type: mapped_type,
+                    conns: c.conns, is_mapped: mapped,
+                })
+            }
             ci = ci + 1
         }
         out = out.push(Module {
-            name: m.name, wires: m.wires, cells: new_cells,
+            name: m.name, wires: new_wires, cells: new_cells,
             processes: m.processes,
             connect_lhs: m.connect_lhs,
             connect_rhs: m.connect_rhs,
@@ -463,6 +654,126 @@ fn main() {
     let all_ok = p1.ok * p2.ok * p3.ok * p4.ok * p5.ok * p6.ok
     if all_ok != 1 {
         println("FAIL T9 pipeline"); fails = fails + 1
+    }
+
+    // T10 — $eq lowering (1-bit, plain A/B/Y conns) → 1 xnor2_1, 0 and2_1.
+    // CLEAN-ROOM: rfc_006 §5 bug (a). Build a 1-bit $eq cell and confirm
+    // pass_techmap_sky130 expands it into a single SKY130 xnor2_1 cell
+    // (the degenerate width=1 case of the XNOR-tree + AND-reduce design).
+    total = total + 1
+    let mut m_eq1 = rtlil_new_module("eq1")
+    m_eq1 = rtlil_module_add_wire(m_eq1, rtlil_wire("a",  1, 1, 1))
+    m_eq1 = rtlil_module_add_wire(m_eq1, rtlil_wire("b",  1, 1, 2))
+    m_eq1 = rtlil_module_add_wire(m_eq1, rtlil_wire("eq", 1, 2, 3))
+    let mut c_eq1 = rtlil_cell("u_eq1", "$eq", 0)
+    c_eq1 = rtlil_cell_connect(c_eq1, "A", "a")
+    c_eq1 = rtlil_cell_connect(c_eq1, "B", "b")
+    c_eq1 = rtlil_cell_connect(c_eq1, "Y", "eq")
+    m_eq1 = rtlil_module_add_cell(m_eq1, c_eq1)
+    let mut d_eq1 = rtlil_new_design("test")
+    d_eq1 = rtlil_design_add(d_eq1, m_eq1)
+    let r_eq1 = pass_techmap_sky130(d_eq1)
+    if r_eq1.ok != 1 {
+        println("FAIL T10 eq1: " + r_eq1.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq1.design.modules[0], "sky130_fd_sc_hd__xnor2_1") != 1 {
+        println("FAIL T10b eq1_xnor_count (got "
+            + str(rtlil_count_cells_of_type(r_eq1.design.modules[0], "sky130_fd_sc_hd__xnor2_1"))
+            + ")"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq1.design.modules[0], "sky130_fd_sc_hd__and2_1") != 0 {
+        println("FAIL T10c eq1_no_and"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq1.design.modules[0], "$eq") != 0 {
+        println("FAIL T10d eq1_residual"); fails = fails + 1
+    }
+
+    // T11 — $eq lowering 2-bit (bit-indexed A[0]/A[1]/B[0]/B[1]/Y) →
+    //       2 xnor2_1 + 1 and2_1 (linear AND chain reducing to Y).
+    total = total + 1
+    let mut m_eq2 = rtlil_new_module("eq2")
+    m_eq2 = rtlil_module_add_wire(m_eq2, rtlil_wire("a0", 1, 1, 1))
+    m_eq2 = rtlil_module_add_wire(m_eq2, rtlil_wire("a1", 1, 1, 2))
+    m_eq2 = rtlil_module_add_wire(m_eq2, rtlil_wire("b0", 1, 1, 3))
+    m_eq2 = rtlil_module_add_wire(m_eq2, rtlil_wire("b1", 1, 1, 4))
+    m_eq2 = rtlil_module_add_wire(m_eq2, rtlil_wire("eq", 1, 2, 5))
+    let mut c_eq2 = rtlil_cell("u_eq2", "$eq", 0)
+    c_eq2 = rtlil_cell_connect(c_eq2, "A[0]", "a0")
+    c_eq2 = rtlil_cell_connect(c_eq2, "A[1]", "a1")
+    c_eq2 = rtlil_cell_connect(c_eq2, "B[0]", "b0")
+    c_eq2 = rtlil_cell_connect(c_eq2, "B[1]", "b1")
+    c_eq2 = rtlil_cell_connect(c_eq2, "Y",    "eq")
+    m_eq2 = rtlil_module_add_cell(m_eq2, c_eq2)
+    let mut d_eq2 = rtlil_new_design("test")
+    d_eq2 = rtlil_design_add(d_eq2, m_eq2)
+    let r_eq2 = pass_techmap_sky130(d_eq2)
+    if r_eq2.ok != 1 {
+        println("FAIL T11 eq2: " + r_eq2.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq2.design.modules[0], "sky130_fd_sc_hd__xnor2_1") != 2 {
+        println("FAIL T11b eq2_xnor_count (got "
+            + str(rtlil_count_cells_of_type(r_eq2.design.modules[0], "sky130_fd_sc_hd__xnor2_1"))
+            + ", want 2)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq2.design.modules[0], "sky130_fd_sc_hd__and2_1") != 1 {
+        println("FAIL T11c eq2_and_count (got "
+            + str(rtlil_count_cells_of_type(r_eq2.design.modules[0], "sky130_fd_sc_hd__and2_1"))
+            + ", want 1)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq2.design.modules[0], "$eq") != 0 {
+        println("FAIL T11d eq2_residual"); fails = fails + 1
+    }
+    // no-dangling: the new internal xnor outputs must be added as wires.
+    if rtlil_check_no_dangling(r_eq2.design.modules[0]) != 0 {
+        println("FAIL T11e eq2_dangling_pin"); fails = fails + 1
+    }
+
+    // T12 — $eq lowering 4-bit → 4 xnor2_1 + 3 and2_1 (3-stage chain).
+    total = total + 1
+    let mut m_eq4 = rtlil_new_module("eq4")
+    let mut wi = 0
+    while wi < 4 {
+        m_eq4 = rtlil_module_add_wire(m_eq4,
+            rtlil_wire("a" + str(wi), 1, 1, wi + 1))
+        wi = wi + 1
+    }
+    let mut wj = 0
+    while wj < 4 {
+        m_eq4 = rtlil_module_add_wire(m_eq4,
+            rtlil_wire("b" + str(wj), 1, 1, wj + 5))
+        wj = wj + 1
+    }
+    m_eq4 = rtlil_module_add_wire(m_eq4, rtlil_wire("eq", 1, 2, 9))
+    let mut c_eq4 = rtlil_cell("u_eq4", "$eq", 0)
+    let mut wk = 0
+    while wk < 4 {
+        c_eq4 = rtlil_cell_connect(c_eq4, "A[" + str(wk) + "]", "a" + str(wk))
+        c_eq4 = rtlil_cell_connect(c_eq4, "B[" + str(wk) + "]", "b" + str(wk))
+        wk = wk + 1
+    }
+    c_eq4 = rtlil_cell_connect(c_eq4, "Y", "eq")
+    m_eq4 = rtlil_module_add_cell(m_eq4, c_eq4)
+    let mut d_eq4 = rtlil_new_design("test")
+    d_eq4 = rtlil_design_add(d_eq4, m_eq4)
+    let r_eq4 = pass_techmap_sky130(d_eq4)
+    if r_eq4.ok != 1 {
+        println("FAIL T12 eq4: " + r_eq4.message); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq4.design.modules[0], "sky130_fd_sc_hd__xnor2_1") != 4 {
+        println("FAIL T12b eq4_xnor_count (got "
+            + str(rtlil_count_cells_of_type(r_eq4.design.modules[0], "sky130_fd_sc_hd__xnor2_1"))
+            + ", want 4)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq4.design.modules[0], "sky130_fd_sc_hd__and2_1") != 3 {
+        println("FAIL T12c eq4_and_count (got "
+            + str(rtlil_count_cells_of_type(r_eq4.design.modules[0], "sky130_fd_sc_hd__and2_1"))
+            + ", want 3)"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_eq4.design.modules[0], "$eq") != 0 {
+        println("FAIL T12d eq4_residual"); fails = fails + 1
+    }
+    if rtlil_check_no_dangling(r_eq4.design.modules[0]) != 0 {
+        println("FAIL T12e eq4_dangling_pin"); fails = fails + 1
     }
 
     if fails > 0 {
