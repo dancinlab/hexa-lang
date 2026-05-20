@@ -51,6 +51,16 @@ pub let PTX_WARP_SIZE: i64 = 32
 // ── PTX FP64 arithmetic mnemonics (first slice — RFC 055 §6.6) ──
 pub let PTX_OP_LD_GLOBAL_F64: string  = "ld.global.f64"
 pub let PTX_OP_ST_GLOBAL_F64: string  = "st.global.f64"
+// RFC 068 P4 — mixed-precision global load/store mnemonics.
+// `.f16` / `.bf16` are 16-bit; `.f32` is 32-bit. PTX uses the same
+// `ld.global.<ty>` / `st.global.<ty>` syntax across all FP types
+// (NVIDIA PTX ISA §8.7).
+pub let PTX_OP_LD_GLOBAL_F16: string  = "ld.global.f16"
+pub let PTX_OP_ST_GLOBAL_F16: string  = "st.global.f16"
+pub let PTX_OP_LD_GLOBAL_BF16: string = "ld.global.bf16"
+pub let PTX_OP_ST_GLOBAL_BF16: string = "st.global.bf16"
+pub let PTX_OP_LD_GLOBAL_F32: string  = "ld.global.f32"
+pub let PTX_OP_ST_GLOBAL_F32: string  = "st.global.f32"
 pub let PTX_OP_LD_SHARED_F64: string  = "ld.shared.f64"
 pub let PTX_OP_ST_SHARED_F64: string  = "st.shared.f64"
 pub let PTX_OP_LD_PARAM_U64: string   = "ld.param.u64"

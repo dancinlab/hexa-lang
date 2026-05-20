@@ -393,6 +393,81 @@ The pattern is now confirmed on three orthogonal substrates — closed-
 form trig (solar), Monte Carlo (mc_transport), closed-form algebra
 (plasma). The next port can apply this template without further
 pattern-discovery work.
+
+---
+
+## Fifth-b sample — `kepler_2body_kernel.hexa` (D80 pilot #5b)
+
+**Date**: 2026-05-20
+**Numbering rationale**: orbital landed on origin/main at `2ffe3620`
+*before* plasma at `c668702b` and both commit messages claimed "pilot
+#5" (parallel collision). Plasma already owns the "Fifth sample"
+prose section above; renaming it would touch every cross-link and the
+README. Slotting orbital as `#5b` mirrors the existing `#3 / #3b`
+parallel-pair pattern and keeps the table edit to a single row insert
+with no downstream renumbers.
+
+**Pilot scope**: clean-room hexa-native port of the textbook Kepler
+two-body closed form (Vallado §2.2 / Curtis §3.6) — Newton-Raphson
+5-step on `M = E − e·sin(E)`, half-angle ν reduction,
+`r = a(1 − e·cos E)`, perifocal (P-Q) cartesian. Domain-agnostic ①a
+kernel; the existing `sgp4_kernel.py` remains the ①a kernel for full
+satellite propagation (J2 / drag / lunar / SRP) — this 2-body kernel
+is the unperturbed inner solve and the seed for a future hexa-native
+SGP4 port.
+
+### What landed (commit `2ffe3620`)
+
+| file | role |
+|---|---|
+| `stdlib/kernels/orbital/kepler_2body_kernel.hexa` | hexa-native — `propagate(mu, a, ecc, t) -> [E, ν, r, x, y]` · `kepler_solve_E(M, ecc, n_iters)` · `mean_anomaly` · `true_anomaly` · `radius` |
+| `stdlib/kernels/orbital/kepler_2body_kernel_test.hexa` | parity test — 27 assertions on a LEO grid (a=7000 km, μ=GM_earth) at 5 (e, t/T) picks covering e ∈ {0.0, 0.1, 0.3, 0.7} × t/T ∈ {0.10, 0.25, 0.50, 0.85} vs Python `math` libm closed-form (same NR-5, same libm) |
+
+### Parity numbers
+
+```
+kepler_2body_kernel_test: 27/27 PASS
+```
+
+All 27 assertions at `rel_err = 0.0` (literal IEEE-754 bit-exact) —
+the Python reference is a line-by-line transliteration using the same
+NR iteration count and the same libm, so there is no operation-order
+residual. Assertion ceiling was set at 1e-10; actual gap is ~12
+orders below that.
+
+Test grid covers: circular (e=0), near-circular (e=0.1), moderate
+(e=0.3), high (e=0.7) eccentricity × periapsis-side, quarter-orbit,
+apoapsis (M=π boundary), post-π wrap (negative-M NR seed). Two
+invariants round out the suite — ν = E at e=0, and the conic identity
+`r(ν) = a(1−e²)/(1+e·cos ν)`.
+
+### Hexa-lang gotchas found (new)
+
+1. **`e` parameter shadows the stdlib `e()` Euler-constant function**
+   — naming the eccentricity argument `e` causes the codegen to emit
+   `hexa_fn_new((void*)e, 0)` (the function pointer) instead of the
+   parameter binding, producing wrong numerics with no compile error.
+   Workaround: rename every eccentricity parameter to `ecc`. Filed
+   as a hexa-lang follow-up — the symbol-resolution should prefer the
+   local binding over the stdlib function when shadowed.
+2. **`wrap_pi` boundary at exactly +π flips sign under the natural
+   form** — `((x + π) mod 2π) − π` maps `+π → −π`, which breaks the
+   apoapsis test (M=π should stay at +π, not jump to −π and seed NR
+   on the wrong side). Fix that landed: fmod-flavored two-step that
+   reduces to `[0, 2π)` first and only shifts when strictly `> π`, so
+   `+π` stays at `+π`.
+
+### Honesty (g3) — what this does NOT prove
+
+- `absorbed=true` NOT flipped on any demiurge cell. Same
+  `HexaNativeParityRef` schema gate as pilots #1 / #2 / #5.
+- Elliptical only (0 ≤ e < 1). Parabolic / hyperbolic Kepler is the
+  separate `M = e·sinh F − F` solve — out of scope.
+- Two-body point-mass — no J2, no drag, no third-body, no SRP. SGP4
+  (`sgp4_kernel.py`) remains the ①a kernel for real satellite work;
+  this kernel is the unperturbed baseline and a future inner-solver
+  for a hexa-native SGP4 port.
+
 ## Pilot sample table (rolling — append as pilots land)
 
 | pilot # | kernel                                                  | algorithm                              | parity tier(s)                                                  | result                | landed     |
@@ -403,6 +478,7 @@ pattern-discovery work.
 | #3b     | `stdlib/kernels/graph/` (BFS+Kahn port)                 | BFS + topological sort                 | networkx companion parity                                       | (concurrent branch)   | 2026-05-20 |
 | #4      | `stdlib/kernels/urdf/` (2-link FK port)                 | Forward kinematics, 2-link planar      | yourdfpy companion parity                                       | (concurrent branch)   | 2026-05-20 |
 | #5      | `stdlib/kernels/plasma/plasma_metrics_kernel.hexa`      | NRL Formulary 4 primary + lnΛ          | hand-mirrored Python math closed-form (8 samples)               | 41/41 rel_err=0       | 2026-05-20 |
+| #5b     | `stdlib/kernels/orbital/kepler_2body_kernel.hexa`       | Vallado §2.2 / Curtis §3.6 closed-form 2-body propagator, NR-5 on M = E − e·sin(E) | Python `math` libm closed-form (5 (e, t/T) picks × 4 ecc + 2 invariants; e ∈ {0.0, 0.1, 0.3, 0.7} × t/T ∈ {0.10, 0.25, 0.50, 0.85}) | 27/27 rel_err=0       | 2026-05-20 |
 | #6      | `stdlib/kernels/signal_proc/dft_naive.hexa`             | O(N²) naive DFT + IDFT                 | analytic spectra (impulse / DC / cosine) + Parseval + round-trip | 17/17 ≤1e-12 rel      | 2026-05-20 |
 | #7      | `stdlib/kernels/noc_sim/event_queue.hexa`               | Binary min-heap discrete-event sched.  | python-companion `heapq` parity + FIFO-at-equal-times           | 36/36 exact           | 2026-05-20 |
 
@@ -520,15 +596,23 @@ matches the Python companion's pop sequence event-for-event.
 
 ### Cumulative status across pilots (2026-05-20)
 
-- 7 pilots landed/in-flight (#1-#5 on origin/main, #6+#7 landing this
-  cycle; #3b + #4 are concurrent branch ports), ≥146 assertions PASS
-  across them (21+8+23+41+17+36 = 146 on the landed pilots alone)
-- 4 hexa-lang followups filed in this audit round:
+- 8 pilots landed/in-flight (#1-#5, #5b on origin/main, #6+#7 landing
+  this cycle; #3b + #4 are concurrent branch ports), ≥173 assertions
+  PASS across them (21+8+23+41+27+17+36 = 173 on the landed pilots
+  alone)
+- 6 hexa-lang followups filed in this audit round:
   - parser `-`/`->` continuation footgun (#1, #7)
   - `fmod` libm shim missing (#1)
   - `str_full(float)` for full-precision dump (#1)
   - struct-array in-place element assignment (`h[i] = ev` for
     `[StructName]`) — runtime errors, push-only rebuild required (#7)
+  - parameter-shadowing of stdlib functions (`e` argument shadowed
+    by stdlib `e()` Euler-constant; codegen picks the function not
+    the binding) — symbol-resolution should prefer the local binding
+    (#5b)
+  - `wrap_pi` boundary at exactly +π flips sign under the natural
+    `((x + π) mod 2π) − π` form; fmod-flavored two-step keeps +π at
+    +π and is what landed (#5b)
 - 0 demiurge cells flipped to `absorbed=true` — by design (pattern
   proof only; the parity-flip gate lives behind the
   `HexaNativeParityRef` schema, not yet landed)
