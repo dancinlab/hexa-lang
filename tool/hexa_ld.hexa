@@ -743,6 +743,35 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_zero_n(out, strpad)
 
     write_bytes(out_path, out)
+
+    // ── Cycle 5: ad-hoc codesign post-link ─────────────────────────
+    //
+    // macOS Sonoma+ rejects unsigned executables on launch. `codesign
+    // -s -` adds an ad-hoc CMS signature (no identity) — the binary
+    // becomes loadable to the dyld stage. This is the ONE remaining
+    // external fork on macOS (RFC 063 § P1 documents it as an OS
+    // Gatekeeper requirement, not a toolchain dependency).
+    //
+    // `codesign` runs `chmod +x` implicitly is NOT true — we set
+    // execute permission separately. The OS infers it from the
+    // Mach-O filetype (MH_EXECUTE) for `posix_spawn`, but for
+    // shell invocation the permission bit is required.
+    let cs_cmd = "codesign -s - " + out_path + " 2>&1"
+    let cs_res = exec_capture(cs_cmd)
+    let cs_rc  = to_int(cs_res[2])
+    if cs_rc != 0 {
+        eprintln("hexa_ld: codesign failed (rc=" + to_string(cs_rc) + ")")
+        eprintln(to_string(cs_res[1]))
+        return 5
+    }
+    // Set the +x bit so the loader / shell will posix_spawn it.
+    let chmod_res = exec_capture("chmod +x " + out_path + " 2>&1")
+    let chmod_rc  = to_int(chmod_res[2])
+    if chmod_rc != 0 {
+        eprintln("hexa_ld: chmod +x failed (rc=" + to_string(chmod_rc) + ")")
+        return 6
+    }
+
     return 0
 }
 
