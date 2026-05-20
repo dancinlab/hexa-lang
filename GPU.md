@@ -411,10 +411,10 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 ### 7c — Toolchain ergonomics
 
 - [ ] **`hexa gpu build`** — single-command path: source `.hexa` → PTX → cubin
-- [ ] **`hexa gpu fire <kernel> <host>`** — single-command remote fire
+- [x] **`hexa gpu fire <kernel> <host>`** — single-command remote fire  (PR #215, 2026-05-20)
 - [ ] **`hexa gpu profile`** — wraps Nsight Compute
-- [ ] **`hexa gpu lint`** — static check for `@gpu_kernel` correctness
-- [ ] **`hexa gpu disasm`** — SASS-level disassembly via `cuobjdump`
+- [x] **`hexa gpu lint <ptx>`** — static check on a PTX file (non-ASCII / `.target sm_NN` / `.reg` count / opcode-vs-sm consistency)  (this PR, 2026-05-20)
+- [x] **`hexa gpu disasm <ptx>`** — PTX opcode-family histogram via pure-hexa scan (no ptxas/cuobjdump dependency)  (this PR, 2026-05-20)
 
 ---
 
