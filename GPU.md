@@ -481,7 +481,7 @@ The GPU substrate has finite scope. Closure ≠ "all features"; closure = "the l
 - [x] **§12 P4+ codegen end-to-end** — hand-emit path works on silicon (today's session)
 - [ ] **§12 P4+ source-to-silicon e2e** — full `.hexa` source → silicon (next layer 2a)
 - [x] **flame d=768 transformer beats PyTorch eager wall** — already measured (project_flame_phase4d9_closure)
-- [ ] **flame d=4096 GPT-3 class beats PyTorch eager**
+- [ ] **flame d=4096 GPT-3 class beats PyTorch eager** — gate pre-registered as **RFC 072** (`inbox/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md`, P0 scaffold landed branch `rfc072-flame-d4096-scaffold`). Harness stub: `stdlib/flame/bench/d4096.hexa`. Spec: d=4096 · n_layer=24 · seq_len=2048 · batch=8 (GPT-3 6.7B d_model axis per Brown 2020 Table 2.1). Falsifiers: F-RFC072-WALL-PT · F-RFC072-WALL-FLAME · F-RFC072-RATIO < 1.0 · F-RFC072-VARIANCE std < 5 %. Multi-session (P2 flame fire + P3 PT baseline + P4 variance, ~$5–20). Stays `[ ]` until F-RFC072-RATIO PASSes.
 - [ ] **Multi-vendor: ROCm or Metal kernel parity** — proves architectural independence
 - [x] **Multi-tile WMMA throughput ≥ 50% of cuBLAS HGEMM** — vendor-comparable on specific kernels: M=N=K=256 ratio = 0.500 ±0.0002 (PR #214 + variance commit `05a85bb9`); caveat: single shape, large-M/N/K scale-up pending
 - [ ] **Whole-program-fusion measurable advantage** — at least one workload where hexa beats cuBLAS-using stack by ≥ 30%
