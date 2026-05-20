@@ -2639,3 +2639,50 @@ sequentially:
 - SD13 (renumbered from SD9-era "SD10"): more rules — Sum,
   MatMul AST-derived, Compose, elementwise unary family
   (silu, gelu, tanh).
+
+### 진행 로그 — RFC 072 P0 scaffold (d=4096 GPT-3 class benchmark) (2026-05-20)
+
+**Branch**: `rfc072-flame-d4096-scaffold`. **Shape-B per @D g_inbox_processing_loop**
+(RFC + scaffold; zero behavior change). **TaskList #37 Campaign B P0**.
+
+**Landed**:
+- `inbox/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md` —
+  Shape-B RFC; spec (d=4096 · n_layer=24 · seq_len=2048 · batch=8 —
+  GPT-3 6.7B d_model axis per Brown 2020 Table 2.1); 4 falsifiers
+  (F-RFC072-WALL-PT · F-RFC072-WALL-FLAME · F-RFC072-RATIO <1.0 ·
+  F-RFC072-VARIANCE std<5%); 5-phase plan (P0 scaffold $0 → P1 harness
+  $0 → P2 flame fire $1–3 → P3 PT baseline $1–3 → P4 variance+ratio
+  $1–5); g3 honest scope (single shape, NOT general PyTorch replacement,
+  closure flips one GPU.md §10 row only); cross-link to north-star ①,
+  GPU.md §5m measured wins ledger, RFC 067 multi-tile cp.async potential
+  sub-blocker.
+- `stdlib/flame/bench/d4096.hexa` — parse-clean stub (~80 lines). Shape
+  constants as `fn d4096_d_model() -> int { return 4096 }` etc. (avoids
+  script-body `let` ambiguity at module top-level). Stub
+  `pub fn bench_d4096_step1_wall(precision: string) -> float` returns
+  0.0 with explicit TODO P1+ markers locating future work. NO library
+  imports yet (deferred to P1 — zero behavior change contract).
+- `GPU.md` §10 row "flame d=4096 GPT-3 class beats PyTorch eager"
+  annotated with RFC 072 P0 scaffold cross-link; row stays `[ ]` until
+  F-RFC072-RATIO PASSes.
+- This PLAN entry (@D g_plan_consolidation exception clause — flame-domain
+  log stays in `stdlib/flame/PLAN.md`, not `compiler/PLAN.md`).
+
+**Parse-gate**: `/Users/ghost/.hx/bin/hexa_real parse stdlib/flame/bench/d4096.hexa`
+→ `OK: parses cleanly` rc=0.
+
+**g3-honest summary**: P0 = scaffold + spec only. No measurement performed.
+GPU.md §10 closure scoreboard stays at 6/8 ✅ (RFC 072 row remains `[ ]`).
+Multi-session campaign because variance gate needs ≥ 3 fires per arm
+(~$5–20 aggregate budget across P2+P3+P4), PyTorch baseline setup needs
+its own cycle (pinned torch + grad-checkpoint config), and flame d=4096
+may need RFC 067 multi-tile cp.async integration that has not yet landed
+in the perf kernel (GPU.md §5m note). The campaign is now pre-registered
+with explicit pass/fail gates rather than ad-hoc fire-and-measure —
+g3 over-claim 0.
+
+**Cross-link**: north-star ① (NN stack) · GPU.md §10 closure scoreboard ·
+GPU.md §5m measured wins · memory `project_flame_phase4d9_closure`
+(d=768 seed) · memory `project_flame_general_pytorch_replacement_goal`
+(north-star) · memory `reference_gpu_fire_infra` (RTX 5070 ubu-2 fire
+substrate) · @D g3 (honest scope) · @D g_inbox_processing_loop Shape-B.
