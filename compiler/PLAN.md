@@ -4536,3 +4536,131 @@ compiler/main.hexa. @D g_commit_push_deploy 미발동.
 
 **RFC 063 phasing 진척**: P0 ✅ + P1 cycle 1 (parser) ✅ + cycle 2
 (exec skeleton) ✅. 잔여 P1 cycles 3-5 + P2 + P3.
+
+
+### 2026-05-20 — S7-P1 cycle 3: link_macho_arm64 fills __text + LC_MAIN entryoff (F-P1-EXEC-TEXT PASS)
+
+RFC 063 § P1 cycle 3 — `link_macho_arm64` 시그니처 `_objs:i64` →
+`objs:[ParsedObj]`. ParsedObj.text 를 `__text` section payload 로 concat,
+`section_64.__text.size` + `__TEXT.filesize` 정확화, `LC_MAIN.entryoff`
+를 entry 심볼의 file offset 으로. cycle 7 corpus 의 `trivial.ours.o` 를
+parse → link → exec 의 `otool -tv` 가 원본 12 instructions disassemble.
+
+**한 줄**: real ParsedObj input 의 `__text` (48 bytes) 가 exec 의 `__text`
+section 으로 concat, otool 가 `stp/mov/bl/sub/movz/bl/stp/ldp/add/ldp/ret`
+모두 reproduce. entry 심볼 `_main` (@ offset 0) 의 file offset 464 가
+`LC_MAIN.entryoff` 에 정확히 emit.
+
+**변경 파일** (`tool/hexa_ld.hexa`):
+
+1. `link_macho_arm64` 시그니처 — `_objs:i64` (stub) → `objs:[ParsedObj]`.
+   호출 사이트 (cycle 2 falsifier) 가 `[ParsedObj]` 패스하도록 업데이트.
+
+2. text 누적 + entry 찾기 loop:
+   ```
+   let mut text_bytes: [Int] = []
+   let mut entry_off_in_text = 0
+   let mut entry_found = false
+   for obj in objs:
+     for sym in obj.defined:
+       if !entry_found && sym.name == entry:
+         entry_off_in_text = len(text_bytes) + sym.offset
+         entry_found = true
+     text_bytes ++= obj.text
+   if !entry_found: return 3 (entry 미정의 error)
+   ```
+
+3. __TEXT 세그먼트 layout 정확화:
+   - section_64.__text.size = len(text_bytes) (cycle 2 는 0)
+   - text_filesize = page-align(text_fileoff + text_size) (cycle 2 는 0x4000 고정)
+   - __TEXT.vmsize/filesize 둘 다 text_filesize 로 일치
+   - file padding — text_fileoff + text_size 부터 text_filesize 까지 0 byte fill
+
+4. LC_MAIN.entryoff — cycle 2 의 text_fileoff (placeholder) → text_fileoff
+   + entry_off_in_text (resolved).
+
+5. **ncmds fix** — cycle 2 가 `ncmds = 8` 인데 실제로 7 LC emit (off-by-one).
+   otool 가 8번째 LC 를 __text payload 에서 garbage cmdsize 로 읽음
+   ("load command 7 size not multiple of 4"). 본 cycle 에서 `ncmds = 7`
+   로 수정. cycle 2 의 잠재 결함 → cycle 3 발견 + fix.
+
+**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P1_EXEC_TEXT.hexa`):
+
+- `parse_macho_obj("/tmp/corpus_trivial.ours.o")` (P1 cycle 1)
+- `link_macho_arm64([p], "/tmp/p1_c3_text.exec", "_main", 0)` (cycle 3)
+- `xcrun otool -tv` output 에 expected strings:
+  - `stp\tx29, x30, [sp, #-0x10]!`
+  - `mov\tx29, sp`
+  - `ret`
+
+**측정 (arm64-Mac local)**:
+
+```
+$ /tmp/run_F_P1_EXEC_TEXT
+parsed trivial.ours.o: text=48 defined=1 extern=2
+
+=== otool -tv ===
+/tmp/p1_c3_text.exec:
+(__TEXT,__text) section
+00000001000001d0  stp  x29, x30, [sp, #-0x10]!
+00000001000001d4  mov  x29, sp
+00000001000001d8  bl   0x1000001d8
+00000001000001dc  sub  sp, sp, #0x10
+00000001000001e0  mov  x0, #0x0
+00000001000001e4  mov  x1, #0x2a
+00000001000001e8  bl   0x1000001e8
+00000001000001ec  stp  x0, x1, [sp]
+00000001000001f0  ldp  x0, x1, [sp]
+00000001000001f4  add  sp, sp, #0x10
+00000001000001f8  ldp  x29, x30, [sp], #0x10
+00000001000001fc  ret
+
+=== LC_MAIN + __TEXT extents ===
+LC_SEGMENT_64 __TEXT vmsize 0x4000 filesize 16384
+section __text size 0x30 (= 48 bytes)
+LC_MAIN entryoff 464 stacksize 0
+
+F-P1-EXEC-TEXT PASS — __text disassembles from exec, LC_MAIN entryoff resolved
+  /tmp/p1_c3_text.exec: 16384 bytes
+```
+
+**Mach-O header (post-ncmds fix)**:
+
+```
+Mach header
+      magic  cputype cpusubtype  caps    filetype ncmds sizeofcmds      flags
+MH_MAGIC_64    ARM64        ALL  0x00     EXECUTE     7        432 TWOLEVEL PIE
+```
+
+`ncmds 8 → 7` · `sizeofcmds 432` 정확 · otool 의 "size not multiple of 4"
+warning 사라짐.
+
+**HONEST SCOPE (g3)**:
+
+- exec 는 여전히 **runnable 아님** — extern symbols (_hexa_set_args,
+  _hexa_exit) 에 대한 lazy-bind stubs 없음. dyld 가 unresolved symbol
+  로 reject. cycle 4 baton.
+- macOS Sonoma+ 의 codesign 거부도 잔존 — LC_CODE_SIGNATURE + ad-hoc
+  codesign post-link 는 cycle 4.
+- LC_SYMTAB 의 nsyms/strsize 여전히 0 — 본 cycle 은 __text payload 만.
+  symtab populate (defined symbols → nlist_64 + strtab) 는 cycle 4.
+- 단일 .o 만 처리 (multi-obj concat 자체는 코드에 있지만, 실용 corpus
+  는 cycle 4 가 multi-obj 도 테스트).
+
+**다음 cycle (P1 cycle 4) baton**:
+
+- LC_SYMTAB 의 nsyms/symoff/strsize/stroff populate — `obj.defined` +
+  `obj.extern_refs` → nlist_64 records + strtab (cycle 7 의 P0 nlist
+  writer 패턴 재사용).
+- Lazy-bind path — `__DATA` segment + `__la_symbol_ptr` (lazy pointer
+  table) + `__TEXT.__stubs` (stub instructions: ADRP/LDR/BR) +
+  `__TEXT.__stub_helper` (dyld 의 binder thunk).
+- LC_CODE_SIGNATURE — placeholder LC + post-link `codesign -s -`
+  ad-hoc signature (이건 외부 fork — RFC 063 § P1 의 OS Gatekeeper
+  exception, 한 외부 dependency).
+
+**RFC 063 phasing 진척**: P0 ✅ · P1 cycles 1-3 ✅. 잔여 P1 cycles 4-5
+(lazy-bind + codesign + corpus PASS) + P2 + P3.
+
+**cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa 는 tool, NOT
+compiler/main.hexa. @D g_commit_push_deploy 미발동.

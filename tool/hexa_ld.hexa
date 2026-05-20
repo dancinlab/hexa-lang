@@ -381,8 +381,51 @@ fn _w_pstr_align4(out: [Int], s: string) -> Int {
 //   __text (placeholder 0 bytes — cycle 3 fills)     0 B
 //
 // Returns 0 on success.
-fn link_macho_arm64(_objs: i64, out_path: string, _entry: string, _is_static: i64) -> Int {
+//
+// Cycle 3 — first ParsedObj's `text` becomes the executable's __text
+// payload; LC_MAIN.entryoff points to the resolved `entry` symbol's
+// final file offset. Multi-obj concat + symtab populate + lazy-bind
+// land in cycles 4-5.
+fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_static: i64) -> Int {
     let out: [Int] = []
+
+    // Concat text from all input objects in input order. Cycle 3
+    // ships single-obj case (len(objs) == 1) — extension to multi-obj
+    // requires per-obj base tracking and relocation fix-up across
+    // boundaries (cycle 4+).
+    let mut text_bytes: [Int] = []
+    let mut entry_off_in_text: Int = 0
+    let mut entry_found = false
+    let mut oi = 0
+    while oi < len(objs) {
+        let obj = objs[oi]
+        // If this object defines the entry symbol, record its offset
+        // within the concatenated text region. (For single-obj case
+        // this is just `obj.defined[i].offset` for whichever sym
+        // matches `entry`.)
+        let mut di = 0
+        while di < len(obj.defined) {
+            let d = obj.defined[di]
+            if !entry_found && d.name == entry {
+                entry_off_in_text = len(text_bytes) + d.offset
+                entry_found = true
+            }
+            di = di + 1
+        }
+        // Append this obj's text bytes.
+        let mut ti = 0
+        while ti < len(obj.text) {
+            text_bytes.push(obj.text[ti] & 0xFF)
+            ti = ti + 1
+        }
+        oi = oi + 1
+    }
+    if !entry_found {
+        eprintln("hexa_ld: entry symbol '" + entry + "' not defined in any input object")
+        return 3
+    }
+
+    let text_size = len(text_bytes)
 
     // Load-command sizes pre-computed so the header can record
     // ncmds + sizeofcmds correctly.
@@ -405,7 +448,11 @@ fn link_macho_arm64(_objs: i64, out_path: string, _entry: string, _is_static: i6
     // payload (path NUL-padded).  = 24 + 28 = 52.
     let lc_lib_size      = 24 + lib_path_padded
 
-    let ncmds = 8
+    // LC count = 7 (PAGEZERO + __TEXT + DYLINKER + DYLIB + MAIN + SYMTAB + DYSYMTAB).
+    // Cycle 2 had `ncmds=8` off-by-one — otool emitted "load command 7
+    // size not multiple of 4" because it tried to read an 8th LC from
+    // __text payload (garbage cmdsize).
+    let ncmds = 7
     let sizeofcmds = lc_pagezero_size + lc_text_size + lc_dyld_size
                    + lc_lib_size + lc_main_size + lc_symtab_size
                    + lc_dysymtab_size
@@ -437,14 +484,19 @@ fn link_macho_arm64(_objs: i64, out_path: string, _entry: string, _is_static: i6
     // ── LC_SEGMENT_64 __TEXT (1 section: __text) ──
     let header_size = 32
     let text_fileoff = header_size + sizeofcmds      // start of __text bytes
-    let text_size = 0                                // cycle 3 will fill
+    // __TEXT segment file extent — page-align upward so dyld is happy.
+    let text_seg_end_unrounded = text_fileoff + text_size
+    let mut text_filesize = text_seg_end_unrounded
+    let page = 0x4000
+    let rem = text_filesize & (page - 1)
+    if rem != 0 { text_filesize = text_filesize + (page - rem) }
     _w_u32(out, MACHO_LD_LC_SEGMENT_64)
     _w_u32(out, lc_text_size)
     _w_name_fixed(out, "__TEXT", 16)
     _w_u64(out, 0x100000000)                         // vmaddr (after __PAGEZERO)
-    _w_u64(out, 0x4000)                              // vmsize (rounded to page)
+    _w_u64(out, text_filesize)                       // vmsize = filesize (page-aligned)
     _w_u64(out, 0)                                   // fileoff (segment starts at 0)
-    _w_u64(out, 0x4000)                              // filesize
+    _w_u64(out, text_filesize)                       // filesize
     _w_u32(out, MACHO_LD_VM_PROT_RX)
     _w_u32(out, MACHO_LD_VM_PROT_RX)
     _w_u32(out, 1)                                   // nsects (just __text)
@@ -453,7 +505,7 @@ fn link_macho_arm64(_objs: i64, out_path: string, _entry: string, _is_static: i6
     _w_name_fixed(out, "__text", 16)
     _w_name_fixed(out, "__TEXT", 16)
     _w_u64(out, 0x100000000 + text_fileoff)          // addr
-    _w_u64(out, text_size)
+    _w_u64(out, text_size)                           // actual code byte count
     _w_u32(out, text_fileoff)
     _w_u32(out, 2)                                   // align log2(4) for arm64
     _w_u32(out, 0)                                   // reloff
@@ -477,12 +529,13 @@ fn link_macho_arm64(_objs: i64, out_path: string, _entry: string, _is_static: i6
     _w_name_fixed(out, lib_path, lib_path_padded)
 
     // ── LC_MAIN ──
-    // entryoff (u64) = offset within __TEXT segment to the entry
-    // function. cycle 3 will set this to the resolved `_main`
-    // address; for now stub to text_fileoff (start of __text).
+    // entryoff (u64) = file offset of the entry instruction (NOT a
+    // VM address — dyld adds the load-bias). For `entry` symbol at
+    // section-relative `entry_off_in_text`, the file offset is
+    // text_fileoff + entry_off_in_text.
     _w_u32(out, MACHO_LD_LC_MAIN)
     _w_u32(out, lc_main_size)
-    _w_u64(out, text_fileoff)                        // entryoff
+    _w_u64(out, text_fileoff + entry_off_in_text)    // entryoff
     _w_u64(out, 0)                                   // stacksize (0 = default)
 
     // ── LC_SYMTAB (placeholder, nsyms=0 / strsize=0) ──
@@ -499,8 +552,18 @@ fn link_macho_arm64(_objs: i64, out_path: string, _entry: string, _is_static: i6
     let mut di = 0
     while di < 18 { _w_u32(out, 0); di = di + 1 }
 
-    // ── __text payload (empty placeholder — cycle 3 fills) ──
-    // No bytes; the section_64.size = 0 above.
+    // ── __text payload (cycle 3 fills from concatenated text bytes) ──
+    let mut bi = 0
+    while bi < text_size { out.push(text_bytes[bi] & 0xFF); bi = bi + 1 }
+
+    // Pad the __TEXT segment file region up to its page-aligned end
+    // so `filesize` matches actual bytes. dyld's load-from-file logic
+    // requires this — short files trigger "past end of file" loader
+    // errors at runtime.
+    let cur_end = text_fileoff + text_size
+    if text_filesize > cur_end {
+        _w_zero_n(out, text_filesize - cur_end)
+    }
 
     write_bytes(out_path, out)
     return 0
