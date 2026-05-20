@@ -515,20 +515,81 @@ pub fn parse_atlas_file(path: string, source_file: string) -> array {
     return out
 }
 
+// --- RFC 072 Phase 1 (Option A) — in-memory enrich cache -------------------
+//
+// Cache key = node.id. The enriched view is a pure function of the node's
+// `raw` text; since `compiler/atlas/embedded.gen.hexa` is frozen (binary
+// built-in atlas — @D g_atlas_binary_builtin), every AtlasNode that
+// reaches enrich_node within one process lifetime is bound to the same
+// ATLAS_HASH cohort. Recomputing parse_grade + parse_edge_lines (~567 P
+// nodes per `hexa loop` cycle, see RFC 067 inline wire) is wasted work
+// when the second/third invocation hits the same id.
+//
+// Invalidation: binary rebuild = new ATLAS_HASH = fresh process = empty
+// cache. No runtime TTL needed (process exit IS the TTL). The
+// _ENRICH_CACHE_TTL_SECONDS constant below is informational only —
+// surfaced for downstream Option B (disk) / Option C (baked sidecar)
+// follow-ons that DO need a TTL semantic; Option A treats it as
+// "process-lifetime" effectively.
+//
+// Footprint: cache holds enriched AtlasNode (kind / id / raw / grade /
+// edges). raw is the largest field but is borrowed from the input node,
+// not copied. Worst case = (P+L+E+...) ~6.6 k entries * struct overhead;
+// well under RFC 072 §2 G-C2's 10 MB budget.
+//
+// Falsifier coverage: F1 (stale hash) → N/A (no cross-process). F2
+// (round-trip field loss) → N/A (no serialization). F3 (write failure)
+// → N/A (no disk I/O).
+pub let _ENRICH_CACHE_TTL_SECONDS: i64 = 300  // informational; A=process-lifetime
+let mut _g_enrich_cache: any = {}
+let mut _g_enrich_cache_hits: i64 = 0
+let mut _g_enrich_cache_misses: i64 = 0
+
+// enrich_cache_stats — observability hook for the RFC 072 Phase C
+// measurement gate (cold/warm latency ratio). Returns (hits, misses).
+// Callers in `stdlib/loop/cycle.hexa` may emit these to compiler/PLAN.md
+// during the Phase C measure cycle.
+pub fn enrich_cache_stats() -> [i64] {
+    return [_g_enrich_cache_hits, _g_enrich_cache_misses]
+}
+
+// enrich_cache_reset — test-only escape hatch. Production code never
+// resets within a process; binary rebuild handles invalidation.
+pub fn enrich_cache_reset() {
+    _g_enrich_cache = {}
+    _g_enrich_cache_hits = 0
+    _g_enrich_cache_misses = 0
+}
+
 // enrich_node — recompute grade + edges from a node's raw text. Used by
 // the static-index lazy-enrichment path: rodata nodes loaded from the
 // frozen embedded.gen.hexa have default-empty grade/edges, so callers that
 // need those fields can call this to backfill from `raw`. Returns a new
 // AtlasNode (does not mutate the input) so const arrays stay clean.
+//
+// RFC 072 Phase 1 (Option A): in-memory cache keyed on node.id. First
+// call for a given id pays the parse cost; subsequent calls within the
+// same process return the cached enriched view in O(1). Nodes with
+// empty raw or empty id bypass the cache (no parse work to save).
 pub fn enrich_node(node: AtlasNode) -> AtlasNode {
     if len(node.raw) == 0 {
         return node
+    }
+    // RFC 072: cache lookup. Empty id falls through to compute path
+    // (defensive — id should always be set for rodata nodes, but a
+    // synthesized AtlasNode {} sentinel could in principle reach here).
+    if len(node.id) > 0 {
+        if has_key(_g_enrich_cache, node.id) {
+            _g_enrich_cache_hits = _g_enrich_cache_hits + 1
+            return _g_enrich_cache[node.id]
+        }
+        _g_enrich_cache_misses = _g_enrich_cache_misses + 1
     }
     let lines = node.raw.split("\n")
     let header = if len(lines) > 0 { to_string(lines[0]) } else { "" }
     let g = parse_grade(_extract_grade_marker(header))
     let e = parse_edge_lines(node.raw)
-    return AtlasNode {
+    let enriched = AtlasNode {
         kind: node.kind,
         id: node.id,
         raw: node.raw,
@@ -537,4 +598,8 @@ pub fn enrich_node(node: AtlasNode) -> AtlasNode {
         grade: g,
         edges: e
     }
+    if len(node.id) > 0 {
+        _g_enrich_cache[node.id] = enriched
+    }
+    return enriched
 }

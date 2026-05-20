@@ -4302,3 +4302,51 @@ cross-ref: commit `ec6f6a56` (RFC-016 P1-P4) · `f3474de6`
 (runtime symbol register) · `c85636a4` (lex/parse use→import alias) ·
 @D g_inbox_processing_loop · @D g_atlas_binary_builtin · feedback
 memory `inbox dup-race precheck`
+
+### 2026-05-20 — RFC 072 Phase 1 (Option A) atlas_enrich in-memory cache landed
+
+Wrapped `compiler/atlas/parser.hexa::enrich_node` with an id-keyed
+in-memory cache (`_g_enrich_cache: any = {}` module-mutable, same
+pattern as `_g_overlay_cache` / `_g_prefix_index`). Process-lifetime
+cohort: ATLAS_HASH is baked into `compiler/atlas/embedded.gen.hexa`
+(@D g_atlas_binary_builtin), so any binary rebuild = fresh process =
+clean cache; no runtime TTL needed. `_ENRICH_CACHE_TTL_SECONDS = 300`
+is informational only (Option B/C consumers).
+
+Cache lookup: `has_key(_g_enrich_cache, node.id)` short-circuits the
+`parse_grade + parse_edge_lines` recompute. Observability surfaced via
+`enrich_cache_stats() -> [hits, misses]` for Phase C measurement.
+Empty `node.id` / empty `node.raw` bypass the cache (defensive).
+
+Estimated perf gain (theory, NOT measured this cycle):
+- RFC 067 inline-enrich baseline: 567 P-node parse_edge_lines calls
+  per `hexa loop` invocation; sub-second total.
+- After cache: first call within a process = baseline cost; subsequent
+  calls = O(1) dict lookup. For repeated atlas_lookup_enriched / audit
+  passes within one process, expect ≥ 90% hit rate after the first
+  pass over the P+L+E+F+R+S+X+Q node set (~6.6 k entries).
+- For one-shot CLI (`hexa loop` exits after a cycle), gain is small
+  because each invocation = fresh process. The real win surfaces when
+  audit.hexa runs alongside loop enrich within the SAME process (both
+  call enrich_node on the same node set), or when downstream stdlib
+  consumers (cycle.hexa, audit, static_index.atlas_lookup_enriched)
+  share a process and enrich overlapping id sets.
+
+Honest scope (g3):
+- Option A is the trivial scaffold; the RFC itself recommends Option B
+  (disk cache, cross-invocation persistence). Phase 2 (disk) + Phase 3
+  (baked sidecar) tracked for future cycles.
+- No falsifier fires for Option A (F1 hash drift / F2 round-trip /
+  F3 disk-write are all N/A; no cross-process state, no I/O).
+- No measurement landed this cycle. Phase C measurement (cold/warm
+  wall-clock vs RFC 067 baseline) deferred to a separate cycle and
+  will require a multi-call harness within one process to surface the
+  cache hit benefit.
+- Three call sites confirmed unchanged: `audit.hexa:193` /
+  `audit.hexa:240` / `static_index.hexa:339` all call enrich_node
+  directly; the cache wrap is transparent (same signature, same
+  output for any given input).
+- `hexa_real parse compiler/atlas/parser.hexa` PASS.
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_072_atlas_enrich_cache.md
+(header + §5 phase table + sign-off all marked Phase 1 landed).
