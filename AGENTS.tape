@@ -106,169 +106,120 @@
 # ─── §3 Governance rules ─────────────────────────────────────────────
 
 @D g1 := "real-limits-first" :: governance [required]
-  rule = "The project's ceiling is set by REAL math/physics/engineering/compiler limits, NEVER by the n=6 invariant lattice."
-  why = "dancinlab-wide real-limits-first verification policy"
-  authority = "[@x_lattice_policy]"
+  do   = "ceiling = real math/physics/engineering/compiler limit (Shannon · c · ℏ · type-soundness · register-allocator NP)"
+  dont = "n=6 lattice 를 ceiling 으로 · lattice-fit assertion"
   @> AGENTS.md
 
-@D g2 := "lattice-is-tool-not-constraint" :: governance [required]
-  rule = "n=6 lattice is a TOOL (used in native lattice spec files), not a CONSTRAINT on what the compiler can express."
-  apply = "lattice fits internal architecture (e.g. perfect-number primitives); banned on external systems"
+@D g2 := "lattice = tool not constraint" :: governance [required]
+  do   = "lattice 는 internal architecture (perfect-number primitive 등) 에서 사용"
+  dont = "external system 에 lattice fit 강제"
   <: g1
   @> AGENTS.md
 
-@D g3 := "verification-anchor-real-limit" :: governance [required]
-  rule = "Verification anchors must include at least one REAL limit from LATTICE_POLICY.md §1.2."
-  real-limits = [Shannon, Kolmogorov, Bekenstein, c, ℏ, k, "Stefan-Boltzmann", Carnot, "compiler invariant (e.g. type-soundness theorem · termination · register-allocator NP-completeness)"]
-  insufficient = "lattice-tautology checks alone (e.g. σ·φ = 24)"
+@D g3 := "verification anchor = real limit" :: governance [required]
+  do   = "verification anchor 에 LATTICE_POLICY.md §1.2 real-limit 1개 이상 (Shannon/Kolmogorov/Bekenstein/c/ℏ/k/Stefan-Boltzmann/Carnot · compiler invariant)"
+  dont = "lattice-tautology check (σ·φ=24 류) 단독으로 verification 주장"
   <: g1
   @> AGENTS.md
 
-@D g4 := "honesty-obligation-external" :: governance [required deny:write]
-  rule = "Claims about external compilers / language ecosystems (Rust · Swift · Zig · OCaml · GHC · LLVM · MSVC · gcc · clang) must NOT include lattice-fit assertions."
-  remedy = "Use that ecosystem's OWN invariants (Rust's borrow-checker · GHC's type-class lookup · LLVM's SSA · etc.)"
+@D g4 := "honesty obligation — external" :: governance [required deny:write]
+  do   = "external compiler/language ecosystem 주장 시 그 ecosystem own invariant 사용 (Rust borrow-checker · GHC type-class lookup · LLVM SSA)"
+  dont = "Rust/Swift/Zig/OCaml/GHC/LLVM/MSVC/gcc/clang 에 lattice-fit assertion"
   @> AGENTS.md
 
 @D g5 := "hexa-native-only" :: governance [required deny:write]
-  rule = "hexa-lang is self-hosted. No LLVM, no C-transpile, no third-party codegen backend."
-  apply = "compiler emits its own machine code (or its own C as a portable artifact, but the C path is fallback, not the architecture)"
-  authority = "[@x_hexa_native_only]"
+  do   = "self-hosted compiler · own machine code 또는 own C (fallback artifact)"
+  dont = "LLVM IR backend · C-transpile architecture · 3rd-party codegen 을 default path 로"
   @> AGENTS.md
 
-@D g6 := "citation-enforced-strict-lint" :: governance [required]
-  rule = "Every formula-bearing code line must @cite an atlas theorem, or strict-lint stage 4 rejects the build."
-  stages = "8 strict-lint stages — atlas integrity check, citation match, formula well-formedness, etc."
-  authority = "[@x_spec]"
+@D g6 := "citation-enforced strict-lint" :: governance [required]
+  do   = "formula-bearing code 라인마다 @cite atlas theorem · 8-stage strict-lint 통과 (atlas integrity · citation match · formula well-formedness 등)"
+  dont = "@cite 누락 commit (strict-lint stage 4 에서 reject)"
   @> AGENTS.md
 
-@D g_atlas_binary_builtin := "atlas is unconditionally binary built-in" :: governance [required d=2026-05-19 active]
-  rule = "The hexa-lang atlas is unconditionally binary built-in — compile-time embedded. The SSOT is compiler/atlas/embedded.gen.hexa, merged into the compiler at build time. There is no runtime-loaded live overlay."
-  why = ".n6 files (atlas.n6 · atlas.overlay.n6 · atlas.append.*.n6) are now ONLY a `hexa atlas export` OUTPUT artifact — produced on demand for interop / inspection / external tooling. The old runtime path (~/.hx/data/atlas.overlay.n6 · discovery → atlas overlay → 3+ hits → promote into rodata regen) is RETIRED. Equations do NOT go through .n6 to reach the live atlas."
-  apply = "New equations discovered via `hexa kick` / `hexa verify` are absorbed via GitHub PR directly into the binary built-in atlas — the PR regenerates + commits the embedded atlas source (compiler/atlas/embedded.gen.hexa). Direct fold-to-live is forbidden; every equation lands via reviewable PR."
-  authority = "user directive 2026-05-19 'atlas 는 무조건 바이너리 빌트인 · .n6 는 export 출력물 전용 · 신규 식은 GitHub PR 로 빌트인 흡수'; reinforces SPEC.md §2.2 'atlas embedding — static, baked into compiler'."
-  cross-ref = "@D g6 citation-enforced-strict-lint (every formula-bearing line @cites the embedded atlas) · upstream principle 'every equation via PR; direct fold-to-live forbidden'"
+@D g_atlas_binary_builtin := "atlas binary built-in" :: governance [required d=2026-05-19 active]
+  do   = "atlas SSOT = compiler/atlas/embedded.gen.hexa (compile-time embedded) · 신규 식 = GitHub PR 로 흡수 (regen + commit embedded source) · .n6 = `hexa atlas export` 출력물만"
+  dont = "runtime-loaded live overlay · ~/.hx/data/atlas.overlay.n6 promote path · direct fold-to-live (PR 우회)"
   @> AGENTS.md
 
-@D g_commit_push_deploy := "commit-push carries the deployed binary — no source/binary drift" :: governance [required d=2026-05-19 active]
-  rule = "Any commit/push that changes compiler source (self/{lexer,parser,type_checker,codegen_c2}.hexa · self/main.hexa · tool/* the driver runs) MUST — in the same change-set or an immediately-paired deploy commit — regenerate + promote the bootstrap binary (self/native/hexa_cc.c + self/native/hexa_v2) and rebuild the driver. Source and the deployed binary never land out of sync."
-  why = "Commit 70c7ab9d landed the enum-variant fix SOURCE-ONLY; self/native/hexa_cc.c + hexa_v2 were not regenerated, so `hexa run`/`build` kept executing the stale transpiler and the demiurge consumer stayed blocked (RegionShape/TrafficKind undeclared) until a separate deploy commit (8ff19d2a) promoted the binary. 'fix the source, defer the binary' silently ships a no-op to every consumer."
-  apply = "Before push: `hexa cc --regen` → rebuild hexa_v2 from the regenerated hexa_cc.c → rebuild the driver → confirm the self-host fixpoint is BYTE-IDENTICAL (a regen of the promoted hexa_cc.c reproduces itself). The commit includes the regenerated self/native/hexa_cc.c + hexa_v2. A compiler-source change whose binary is not promoted is INCOMPLETE — not landed."
-  authority = "user directive 2026-05-19 '매 commit push 시에 deployed 필수 진행'; incident: 70c7ab9d source-only enum-fix → demiurge stale-binary block → 8ff19d2a remedial promote."
-  cross-ref = "@D g_plan_consolidation (compile-cycle PLAN SSOT) · @D g8 commit-trailer-co-author · self-host fixpoint byte-identical gate"
+@D g_commit_push_deploy := "commit-push = source + binary 동시" :: governance [required d=2026-05-19 active]
+  do   = "compiler source (self/{lexer,parser,type_checker,codegen_c2}.hexa · main.hexa · driver tool) 변경 시 same change-set 에 `hexa cc --regen` + hexa_v2 rebuild + driver rebuild + fixpoint byte-identical 확인 (regen 한 hexa_cc.c 가 자기 재현)"
+  dont = "source-only commit (binary 미promote = downstream consumer stale 차단, 70c7ab9d→8ff19d2a 사고 패턴)"
   @> AGENTS.md
 
-@D g7 := "inbox-patches-pipeline" :: governance [required]
-  rule = "External patches arrive at inbox/patches/<descriptive-name>.md — one concept per file."
-  flow = "[downstream consumer] → file at inbox/patches/ → upstream review → integration to self/ + RFC log"
-  forbidden = "downstream consumers (wilson, echoes) editing hexa-lang directly without going through inbox/patches/"
+@D g7 := "inbox-patches pipeline" :: governance [required]
+  do   = "downstream patches → inbox/patches/<descriptive>.md (one concept = one file) · upstream review → integration self/ + RFC log"
+  dont = "downstream consumer (wilson/echoes/anima/demiurge) 가 hexa-lang 직접 편집 (inbox/patches 우회)"
   @> AGENTS.md
 
-@D g8 := "commit-trailer-co-author" :: governance [recommended]
-  rule = "AI-assisted commits include trailer: Co-Authored-By: <model> <noreply@anthropic.com>"
+@D g8 := "commit-trailer co-author" :: governance [recommended]
+  do   = "AI-assisted commit 에 `Co-Authored-By: <model> <noreply@anthropic.com>` trailer"
+  dont = "AI commit trailer 누락"
   @> AGENTS.md
 
-@D g_arch_vs_log_split := "v1.2 architecture-vs-history split" :: governance [required d=2026-05-14 active]
-  rule = "UPPERCASE.tape files are EDITABLE architecture (latest-wins per id). Append-only event history lives in UPPERCASE.log.tape siblings."
-  why = "hexa-lang is the substrate · spec changes evolve continuously; locking them as append-only created noisy histories. v1.2 splits architecture (.tape) from history (.log.tape)."
-  applies-to = "AGENTS.tape · all UPPERCASE.tape root files (notably the existing TAPE-AUDIT.md ledger which may have a .tape sibling)"
-  authority = "[@x_tape_spec] §Domain-tape sibling §Architecture-vs-history split"
+@D g_arch_vs_log_split := "v1.2 arch-vs-history split" :: governance [required d=2026-05-14 active]
+  do   = "UPPERCASE.tape = editable architecture (latest-wins per id) · 새 event history = UPPERCASE.log.tape sibling"
+  dont = "단일 .tape 에 declarative state + event history 혼재 (noisy append-only)"
   @> AGENTS.md
 
-@D g_hxc := "hxc-wire-storage-format" :: governance [recommended d=2026-05-15 active]
-  rule = "Machine-readable surfaces (JSON / JSONL / config-blob streams) emit / consume via HXC v2 byte-canonical wire format."
-  scope = "atlas rodata sidecar · audit ledger streams · dispatch envelopes · witness rows · cycle-JSON artifacts · any structured stream previously encoded as JSON / JSONL"
-  out-of-scope = "human-edit SSOT (markdown · RFC · prose) and governance rules (this file's @D entries) stay in markdown / tape v1.2. HXC absorbs the machine side, NOT the human-author side."
-  why = "JSON/JSONL surfaces deliver measured 27-96% byte savings on schema-rich streams via HXC's A1-A35 deterministic codec chain. Atlas Layer 4 sidecar (compiler/atlas/hxc_loader.hexa + dist/atlas.hxc) is the canonical in-repo example."
-  authority = "[@x_hxc_spec]"
+@D g_hxc := "hxc wire/storage format" :: governance [recommended d=2026-05-15 active]
+  do   = "machine-readable surface (JSON/JSONL/config-blob stream) = HXC v2 byte-canonical wire (atlas rodata sidecar · audit ledger · dispatch envelope · witness row · cycle-JSON)"
+  dont = "human-edit SSOT (markdown/RFC/prose/governance @D) 를 HXC 로 (그건 tape/markdown 유지)"
   @> AGENTS.md
 
-@D g_qrng_audit_required := "qrng audit on T1/T3 paths" :: governance [required d=2026-05-16 active]
-  rule = "Any code path in stdlib/qrng/ returning live quantum entropy (tier >= T1) MUST be exercisable through qrng_audited_bytes() with NIST SP 800-22 tier-1+ audit."
-  apply = "Skipping audit on T1/T3 backends is a release blocker."
-  authority = "NIST SP 800-22 Rev. 1a · https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-22r1a.pdf"
-  source = "qrng AGENTS.tape g1 (migrated 2026-05-16 RFC 044)"
+@D g_qrng_audit_required := "qrng audit on T1/T3" :: governance [required d=2026-05-16 active]
+  do   = "stdlib/qrng/ T1/T3 live quantum entropy = qrng_audited_bytes() NIST SP 800-22 tier-1+ audit 통과 후 release"
+  dont = "T1/T3 backend audit skip (release blocker)"
   @> AGENTS.md
 
-@D g_qrng_honest_vendor := "qrng vendor classification honesty" :: governance [required d=2026-05-16 active]
-  rule = "QrngSourceMeta.is_quantum follows vendor self-classification; honest-caveat ships in module docstring + meta.message."
-  examples = "nist_beacon.is_quantum=0 (mixed entropy HSM + RNGs); hardware_qrng.is_quantum=1 (IDQ/ESP32 vendor assertion, independent NIST validation NOT performed)."
-  source = "qrng AGENTS.tape g2 (migrated 2026-05-16 RFC 044)"
+@D g_qrng_honest_vendor := "qrng vendor honesty" :: governance [required d=2026-05-16 active]
+  do   = "QrngSourceMeta.is_quantum = vendor self-classification · honest-caveat 는 module docstring + meta.message (예: nist_beacon=0 mixed HSM, hardware_qrng=1 IDQ vendor assertion)"
+  dont = "독립 NIST validation 없이 vendor 주장 super-claim · is_quantum 누락"
   @> AGENTS.md
 
-@D g_qrng_provider_only := "qrng = provider-side only" :: governance [required deny:write d=2026-05-16 active]
-  rule = "stdlib/qrng/ returns raw bytes + provenance only. No HMAC-DRBG / NIST SP 800-90A construction belongs here."
-  why = "Amplification is consumer concern (qmirror amplifier · hexa-bio). Provider/consumer boundary deliberate; zero code overlap, struct-shape compat by convention."
-  source = "qrng AGENTS.tape g3 (migrated 2026-05-16 RFC 044)"
+@D g_qrng_provider_only := "qrng = provider only" :: governance [required deny:write d=2026-05-16 active]
+  do   = "stdlib/qrng/ = raw bytes + provenance only · amplification = consumer (qmirror amplifier / hexa-bio)"
+  dont = "stdlib/qrng/ 안에 HMAC-DRBG / NIST SP 800-90A construction"
   @> AGENTS.md
 
 @D g_sim_universe_honest_scope := "sim-universe honest scope" :: governance [required d=2026-05-16 active]
-  rule = "Each stdlib/sim_universe/experiments/<name>/ module MUST declare its 'honest scope' in module docstring + README — what it IS (exact ED, closed-form, etc.) and what it is NOT (decoherent, lab device, L→∞ limit, lattice QCD, full SM)."
-  examples = "fvd: EXACT 2ᴺ unitary N≤24, NOT lab; supremacy: calibrates XEB ruler at n≲24, NOT a sim-vs-reality claim; surface-code: Gottesman-Knill polynomial tableau, NOT 2ᴺ state vector."
-  source = "sim-universe AGENTS.tape g1/g7 (migrated 2026-05-16 RFC 046)"
+  do   = "stdlib/sim_universe/experiments/<name>/ 마다 'honest scope' = module docstring + README 명시 (IS = exact ED/closed-form/Gottesman-Knill 등 · IS NOT = decoherent/lab/L→∞/lattice QCD/full SM)"
+  dont = "lattice QCD · Einstein N-body · full SM · 'reality simulable' 주장 (Bostrom toy-substrate framing 만)"
   @> AGENTS.md
 
-@D g_sim_universe_qrng_consumer := "sim-universe → stdlib/qrng dependency" :: governance [required d=2026-05-16 active]
-  rule = "stdlib/sim_universe/ouroboros_qrng/ consumes stdlib/qrng/ (RFC 044) — no own provider implementation. 4-tier ANU fallback (paid → keyed → legacy → urandom) is qrng's responsibility."
-  why = "Provider/consumer boundary preserved across the absorption series. ouroboros_qrng is an entropy-consumer (perturbation pipeline), not a provider."
-  source = "RFC 044 + RFC 046 cross-link 2026-05-16"
+@D g_sim_universe_qrng_consumer := "sim-universe consumes qrng" :: governance [required d=2026-05-16 active]
+  do   = "stdlib/sim_universe/ouroboros_qrng/ = stdlib/qrng/ (RFC 044) 소비 (4-tier ANU fallback = qrng 책임)"
+  dont = "own provider implementation · qrng 우회 entropy source"
   @> AGENTS.md
 
 @D g_qmirror_envelope := "qmirror ≤30-qubit envelope" :: governance [required d=2026-05-16 active]
-  rule = "stdlib/quantum/ is a statistical-equivalence substrate for the ≤30-qubit low-noise envelope ONLY — NOT a universal QPU replacement."
-  apply = "Honest analogy: Casio vs Rolex — both tell time, qmirror is the Casio. Claims of QPU-equivalence MUST be scoped to ≤30-qubit low-noise."
-  source = "qmirror AGENTS.tape (migrated 2026-05-16 RFC 045)"
+  do   = "stdlib/quantum/ = statistical-equivalence substrate (≤30-qubit low-noise envelope 만) · Casio-vs-Rolex framing"
+  dont = "universal QPU replacement 주장 · ≤30-qubit 환경 밖 equivalence claim"
   @> AGENTS.md
 
-@D g_qmirror_consumer_qrng := "qmirror.qrng = consumer-side amplifier" :: governance [required d=2026-05-16 active]
-  rule = "stdlib/quantum/qrng/ is the CONSUMER-side HMAC-DRBG amplifier; stdlib/qrng/ (RFC 044) is the PROVIDER registry. Zero code overlap; struct-shape compat by convention."
-  why = "Dual-home boundary preserved across the absorption series — qmirror amplifies, qrng provides."
-  source = "RFC 044 + RFC 045 cross-link 2026-05-16"
+@D g_qmirror_consumer_qrng := "qmirror amplifies, qrng provides" :: governance [required d=2026-05-16 active]
+  do   = "stdlib/quantum/qrng/ = consumer-side HMAC-DRBG amplifier · stdlib/qrng/ = provider registry (zero code overlap, struct-shape compat by convention)"
+  dont = "amplifier/provider 경계 흐림 · code overlap"
   @> AGENTS.md
 
-@D g_plan_consolidation := "single-source compile PLAN tracking — compiler/PLAN.md" :: governance [required d=2026-05-17 active]
-  rule = "Compile 관련 (compiler/ · self/ · 부트스트랩 · test sweep · interp-retirement · aprime_cc · hexa-build 등) cycle 진행 로그 는 `compiler/PLAN.md` 의 `## 진행 로그` 섹션에 append. 신규 `PLAN-*.md` 파일 작성 금지 — 기존 `PLAN-interp-retirement.md` · `PLAN-stage3-*.md` 는 closure 까지 유지, 신규 entry 만 `compiler/PLAN.md` 로 redirect."
-  why = "문서분산 방지. cycle 단위 일목요연 파악 = `compiler/PLAN.md` 한 파일. parser/codegen/lower/runtime 부분 수정 + 부트스트랩 재빌드 + smoke sweep 측정 + interp-retirement cleanup 모두 동일한 진행 로그 stream."
-  applies-to = "전체 compile pipeline deliverable. `compiler/`, `self/`, test/ smoke 측정, 부트스트랩 (`self/native/hexa_v2`), 3-tier wrapper (`bin/hexa-run-native`), aprime_cc-direct path."
-  exception = "별도 도메인 SSOT 자체는 자체 위치 유지: `stdlib/flame/PLAN.md` (NN training stdlib) · `self/forge/PLAN.md` (GPU compute substrate) · `tape/PLAN.md` 등. RFC drafts (`inbox/rfc_drafts_*`) 는 자체 파일."
-  authority = "user directive 2026-05-17 'PLAN 은 compile 관련 폴더/PLAN.md 파일을 업데이트해나가면되' + 'AGENTS.tape 에도 기록해놔줘 문서분산 방지'. 사전 forge/PLAN.md 위치 시도 (commit d6ef09ab) 는 본 cycle 이 forge 아닌 compile 작업임을 정정한 04fd46b2 에서 revert."
+@D g_plan_consolidation := "compile PLAN = compiler/PLAN.md" :: governance [required d=2026-05-17 active]
+  do   = "compile cycle 진행 로그 = `compiler/PLAN.md` `## 진행 로그` append · 도메인 예외 = stdlib/flame/PLAN.md · self/forge/PLAN.md · tape/PLAN.md · RFC drafts (inbox/rfc_drafts_*)"
+  dont = "신규 `PLAN-*.md` 작성 (compile 관련) · 분산 doc 으로 cycle 일목요연 깨기"
   @> AGENTS.md
 
-@D g_interp_deprecated := "interpreter RETIRED — R7 CLOSED (Cycle C step-1+2 complete)" :: governance [required d=2026-05-19 active]
-  rule = "인터프리터는 RETIRED. (1) 소스 삭제 완료 — `self/hexa_full.hexa` · `self/interpreter.hexa` · `test_interp*.hexa` · `tool/{rebuild,build}_interp*.hexa` (16 파일 · 25,548 줄). (2) `self/main.hexa::cmd_run` 은 compile-then-exec 으로 재배선 완료 — 더 이상 interp 바이너리에 위임 안 함. 모든 `.hexa` 실행 경로 (`hexa run` · `hexa batch` · 23 absorbed-verb dispatch) 가 compiled. 신규 코드 · 도구 · 테스트 harness 가 interp 에 의존하는 것 금지. 검증은 `hexa build`, syntactic 은 `hexa parse`."
-  why = "interp 는 (1) compiled 대비 corpus 커버리지 미달, (2) macOS 4GB memcap 초과로 대형 입력에 죽음, (3) latent 버그 보유. R7 measured-cutover 캠페인이 interp↔compiled byte-eq parity gate 를 PASS (13→0 gate-relevant · 75 MATCH · 0 DIVERGE/RC_DIFF/COMPILED_REGRESS) — compiled 가 interp 를 회귀 0 으로 대체함을 삭제 前 측정으로 입증."
-  cycle_c_status = "Cycle C COMPLETE. step-1 (origin/main ab7015fa) — interp 소스 16 파일 · 25,548 줄 삭제. step-2 (origin/main 25a9031d) — cmd_run 본체를 197→80 줄 compile-then-exec 으로 재작성 (cmd_run_last_rc · auto_marker_write · cmd_run_no_exit_mode contract 보존; 23 호출처 무변경). 검증: HEXA_FORCE_INTERP=1 run / plain run / build / parse 4/4 rc-eq, mini build_aprime fixpoint PASS, atlas 118/118."
-  parity_proof = "tool/parity_interp_vs_compiled.sh — 삭제 前 100 test/*.hexa PARITY GATE PASS 2026-05-19 (13→0). 삭제 後 harness 의 'interp arm' 도 compiled (interp 은퇴) — corpus regression smoke 로 전환. compiler/PLAN.md SSOT."
-  residual = "build/hexa_interp 바이너리 + resolve_interp() dead-code 는 무해 잔재 — 다음 tidy cycle 에서 물리 제거 (런타임 무참조). R7 의 실질 종결은 본 commit (cmd_run interp-free)."
-  authority = "user directive 2026-05-17 '인터프리터 폐기예정' → 2026-05-18 'measured cutover' → 2026-05-19 '(a) Cycle C 실행' + '/goal step all closure'. measured proof: parity gate PASS + 4/4 cmd_run path rc-eq."
+@D g_interp_deprecated := "interpreter RETIRED" :: governance [required d=2026-05-19 active]
+  do   = "모든 `.hexa` 실행 = compiled (`hexa run`/`build`/`batch`/23 absorbed-verb dispatch all compile-then-exec) · 검증 = `hexa build` · syntactic = `hexa parse`"
+  dont = "신규 code/tool/test 가 interp 에 의존 · self/hexa_full.hexa / interpreter.hexa 재도입"
   @> AGENTS.md
 
-@D g_inbox_processing_loop := "inbox 처리 SOP — filing → worktree sub-agent → cherry-pick" :: governance [recommended d=2026-05-19 active]
-  rule = "다운스트림이 file 한 inbox/{patches,notes}/<slug>.md 는 7단계 loop 로 처리한다 — (1) git status 로 untracked filing 식별, (2) explicit-path commit 으로 main 에 filing land, (3) general-purpose sub-agent 를 isolation=worktree + run_in_background=true 로 dispatch, (4) agent 는 SSOT 수정 + local parse-gate + 패치 markdown status reported→resolved-ssot + compiler/PLAN.md 단일 entry + worktree branch commit, (5) 완료 알림 받으면 main 으로 cherry-pick -x, (6) 표준 충돌패턴 해결, (7) binary promote 는 별도 standard deploy step (commit 22c27a05 / e5c4c0ef 패턴) — 본 cycle 에 포함 금지."
-  why = "이 SOP 가 2026-05-19 session 에서 7건 inbox (print_err parity + phanes×3 + wisp/anima 패치 + flame RFC 059 + kick-engine + stdlib/net) 을 race-condition 0 으로 land 시킨 측정-증명 절차. ad-hoc 동시-편집은 e5c4c0ef-style deploy regen 으로 SSOT 가 wipe 될 수 있음 (`3abf9f8e` print_err 가 한 번 lost → `1a133068` 재적용 회복). worktree 격리 + cherry-pick 패턴은 그 회귀를 방지한다."
-  steps <<~EOF
-    1. CHECK   : `git status --short` · `git ls-files --others --exclude-standard inbox/` — 새 untracked 식별.
-    2. FILE    : `git add <explicit-path>` + commit (`docs(inbox): file <slug> ...`). 다른 세션 WIP 절대 미포함; 메시지는 source/severity/요약 + Co-Authored-By trailer.
-    3. DISPATCH: Agent tool — `subagent_type=general-purpose` · `isolation=worktree` · `run_in_background=true`. 프롬프트에 (a) 패치 markdown 전체 읽기, (b) @D g5/g6/g7/g_plan_consolidation/g_interp_deprecated 컨텍스트, (c) Shape-A(surgical) vs Shape-B(RFC+scaffold) 자율 결정 권한, (d) 절대경로는 worktree 내부만, (e) /Users/ghost/.hx/bin/hexa_real parse 후 edit-gate, (f) binary promote 금지, (g) inbox/PATCHES.yaml 미터치 명시.
-    4. AGENT   : SSOT 수정 → parse-gate → markdown status flip → compiler/PLAN.md (또는 도메인-예외 PLAN.md) 단일 entry → commit on worktree branch · 보고 (branch + hash + files + 1-paragraph g3-honest summary + 결정 punted).
-    5. PICK    : `git -C /Users/ghost/core/hexa-lang cherry-pick -x <hash>` (절대경로 권장 — cwd 가 sub-worktree 로 shift 될 수 있음).
-    6. RESOLVE : 표준 conflict 두 가지 — (i) `AA inbox/{patches,notes}/<slug>.md` add/add → `git checkout --theirs <path>` (agent 의 resolved-ssot 버전 우선), (ii) `UU compiler/PLAN.md` 또는 `stdlib/<domain>/PLAN.md` drift → `git checkout --ours` + `git show <hash> -- <plan> | grep ^+ | sed s/^+//` 로 agent 의 실제 추가 텍스트만 추출해서 끝에 append. drill.hexa 등 같은 .hexa 파일 다중 변경은 git auto-merge 가 region 다르면 통과.
-    7. PROMOTE : 별도 deploy step. 본 loop 미포함. SSOT 갭 closed, 바이너리는 standard cycle 에서 자연 promote.
-  EOF
-  conflict_pattern = "AA inbox markdown → --theirs · UU PLAN.md → --ours + append actual-diff · same-file region-disjoint .hexa → auto-merge"
-  hazard_guards = "(a) commit 전 `git -C <main> branch --show-current` 필수 (shared-worktree-branch-hazard 메모리). (b) cherry-pick 중 cwd jump 감지 시 `git -C /Users/ghost/core/hexa-lang ...` 절대경로 fallback (wilson-pool 또는 외부 hook 이 cwd 변경 가능). (c) `self/codegen_c2.hexa` 가 deploy commit (22c27a05·e5c4c0ef 류) 에서 regen 되면 SSOT 편집 wipe 되므로 재적용 commit 준비. (d) 다른 세션 WIP 파일 (예: tool/parity_*.sh · self/native/hexa_v2) 은 status 에 보이더라도 절대 미터치."
-  scope_split = "Shape A (minimum surgical) — SSOT 1~3 file edit, byte-eq preserved, single commit. Shape B (RFC + scaffold) — multi-cycle 작업은 inbox/rfc_drafts_*/rfc_<next>_*.md draft + RFC-comment-marker 만 (zero behavior change) + 3+ cycle phasing + falsifier battery. g3 over-claim 0 — Shape B 는 'implementation 완료' 아니라 'RFC drafted + scaffold landed' 로 정직 보고."
-  task_tracking = "각 inbox item 당 TaskCreate · in_progress → completed. 동시 dispatch 가능 (병렬 fan-out)."
-  applies-to = "inbox/patches/ · inbox/notes/ 양쪽. patches = bug/feature 요청, notes = 에스컬레이션/observation. 동일 SOP."
-  authority = "user directive 2026-05-19 'inbox 처리해달라고 하면 이런식으로 처리하면되 AGENTS.tape 기록' + session 2026-05-19 측정 패턴 (7 inbox: print_err·HX_DATA_DIR·verifier-hook·HXC v2 lib·RFC 059·kick --dump-overlay·stdlib/net surgical — 모두 본 loop 으로 land 성공). cross-link: @D g7 inbox-patches-pipeline (filing 의무), @D g_plan_consolidation (PLAN.md 단일 SSOT), @D g_interp_deprecated (compiled-path-only 검증), @D g8 commit-trailer-co-author."
-  cross-ref = "[@x_handoff] downstream→upstream 흐름 spec · feedback memory `shared worktree branch hazard`"
+@D g_inbox_processing_loop := "inbox 처리 SOP" :: governance [recommended d=2026-05-19 active]
+  do   = "7-step loop: (1) git status untracked, (2) explicit-path file commit, (3) general-purpose sub-agent isolation=worktree run_in_background, (4) agent SSOT edit + parse-gate + status flip + PLAN.md single entry, (5) cherry-pick -x, (6) AA inbox→theirs / UU PLAN→ours+append, (7) binary promote 는 별도 deploy step"
+  dont = "ad-hoc 동시 편집 (3abf9f8e print_err lost case) · 본 loop 에 binary promote 포함 · 다른 세션 WIP file (parity_*.sh / hexa_v2) touch"
   @> AGENTS.md
 
-@D g_stdlib_ownership := "hexa-lang owns ALL stdlib — downstream repos point, never copy" :: governance [required deny:write d=2026-05-19 active]
-  rule = "모든 stdlib/ 모듈은 hexa-lang 소유이며 hexa-lang 에만 존재한다 — hexa-lang 이 stdlib 의 단일 SSOT. 다운스트림 repo (demiurge, wilson, echoes, anima, phanes, 모든 hexa-*) 는 stdlib 모듈을 POINTER (cross-link · import 경로) 로만 참조한다. 복사·vendoring·fork 금지."
-  why = "stdlib 모듈당 SSOT 1개 = drift 0. 다운스트림 복사본은 조용히 발산하지만 pointer 는 발산할 수 없다. 특히 demiurge 는 pointer — hexa-lang stdlib 를 참조할 뿐 vendoring 하지 않는다 (demiurge = pointer, hexa-lang = SSOT)."
-  apply = "다운스트림이 stdlib 변경이 필요하면 inbox/patches/ 로 file (g7) — 자기 트리에 stdlib/<mod>.hexa 복사 금지. 흡수된 외부 라이브러리 (qrng · qmirror · sim-universe) 는 흡수에 의해 hexa-lang stdlib 가 된 것 — 이제 hexa-lang 소유이며 dual-home 아님."
-  authority = "user directive 2026-05-19 'hexa-lang=SSOT, demiurge=pointer · 모든 stdlib 는 hexa-lang 소유'"
-  cross-ref = "@I id002 upstream-position · @D g7 inbox-patches-pipeline · @F f3 consumer-direct-edit"
+@D g_stdlib_ownership := "stdlib ⊂ hexa-lang only" :: governance [required deny:write d=2026-05-19 active]
+  do   = "모든 stdlib/ 모듈 = hexa-lang 단독 SSOT · 다운스트림 = pointer/cross-link/import 만 · 변경 필요 시 inbox/patches/ (g7)"
+  dont = "다운스트림 (demiurge/wilson/echoes/anima/phanes/hexa-*) 가 stdlib 복사·vendoring·fork · 흡수된 외부 lib (qrng/qmirror/sim-universe) 를 dual-home 취급"
   @> AGENTS.md
 
 # ─── §4 Forbidden patterns ───────────────────────────────────────────
