@@ -194,7 +194,39 @@ pub fn lens_apply_empty_space_unmapped_axis(view: AtlasView) -> array {
     return out
 }
 pub fn lens_apply_empty_space_degree_hole(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — degree (total edge count) distribution audit. P nodes with
+    // degree below half the family mean = "thin" nodes, candidate for
+    // edge-population attention.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut total_deg = 0
+    let mut i = 0
+    while i < n {
+        let e = view.p_nodes[i].edges
+        total_deg = total_deg + len(e.depends_on) + len(e.derives) + len(e.applications) + len(e.equivalents)
+        i = i + 1
+    }
+    if total_deg == 0 { return empty_candidate_list() }
+    let mean_x2 = total_deg / n  // half-mean threshold via integer truncation
+    let mut thin = 0
+    let mut j = 0
+    while j < n {
+        let e = view.p_nodes[j].edges
+        let deg = len(e.depends_on) + len(e.derives) + len(e.applications) + len(e.equivalents)
+        if deg < mean_x2 { thin = thin + 1 }
+        j = j + 1
+    }
+    if thin == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "empty_space.degree_hole.below_mean",
+        family: "empty_space",
+        proposed: "atlas P kind: " + to_string(thin) + " of " + to_string(n) + " nodes have edge-degree below the family mean (" + to_string(mean_x2) + "). Candidate pool for edge enrichment.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_empty_space_cross_product_gap(view: AtlasView) -> array {
     return empty_candidate_list()
@@ -310,7 +342,38 @@ pub fn lens_apply_invariant_stress_conservation_violation(view: AtlasView) -> ar
     return empty_candidate_list()
 }
 pub fn lens_apply_invariant_stress_symmetry_break(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — identifier-ASCII invariant audit. P node ids should be
+    // ASCII identifiers (per atlas grammar convention); non-ASCII or
+    // space-bearing ids = symmetry-break candidates (e.g. ids that
+    // sneaked in via parse_edge_lines false-positive from description text).
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut broken = 0
+    let mut i = 0
+    while i < n {
+        let id = view.p_nodes[i].id
+        let m = len(id)
+        let mut bad = false
+        let mut k = 0
+        while k < m {
+            let c = id.substring(k, k + 1)
+            if c == " " || c == "\"" || c == "'" { bad = true; break }
+            k = k + 1
+        }
+        if bad { broken = broken + 1 }
+        i = i + 1
+    }
+    if broken == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "invariant_stress.symmetry_break.id_format",
+        family: "invariant_stress",
+        proposed: "atlas P kind: " + to_string(broken) + " of " + to_string(n) + " node ids contain spaces or quotes — identifier-format invariant break, candidate for atlas hygiene.",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_invariant_stress_monotonicity_break(view: AtlasView) -> array {
     return empty_candidate_list()
@@ -320,7 +383,32 @@ pub fn lens_apply_invariant_stress_idempotence_break(view: AtlasView) -> array {
 }
 
 pub fn lens_apply_scale_extrapolate_n_to_2n(view: AtlasView) -> array {
-    return empty_candidate_list()
+    // C-1.d — n-doubling raw-text scan. P raw contents that carry
+    // "n=6" hard-coded are candidates for n=12 (2n) extrapolation
+    // hypothesis: would the same relation hold at the doubled lattice?
+    // Aggregate count; specific extrapolations are Phase D body work.
+    let n = len(view.p_nodes)
+    if n == 0 { return empty_candidate_list() }
+    let mut doubling_targets = 0
+    let mut i = 0
+    while i < n {
+        let raw = view.p_nodes[i].raw
+        if raw.index_of("n=6") >= 0 || raw.index_of("n = 6") >= 0 {
+            doubling_targets = doubling_targets + 1
+        }
+        i = i + 1
+    }
+    if doubling_targets == 0 { return empty_candidate_list() }
+    let mut out: array = []
+    out.push(Candidate {
+        slug: "scale_extrapolate.n_to_2n.candidates",
+        family: "scale_extrapolate",
+        proposed: "atlas P kind: " + to_string(doubling_targets) + " of " + to_string(n) + " nodes contain 'n=6' raw — candidate pool for n=12 doubling extrapolation (would the same identity hold at the doubled lattice?).",
+        cite: ["n"],
+        fire_needed: false,
+        fire_estimate_usd: 0.0
+    })
+    return out
 }
 pub fn lens_apply_scale_extrapolate_n_to_n_div_2(view: AtlasView) -> array {
     return empty_candidate_list()
