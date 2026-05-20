@@ -193,9 +193,9 @@ pub fn nvptx_intrinsic_map() -> [NvptxIntrinsic] {
 fn _nvptx_op(text: string) -> LOperand {
     return LOperand {
         kind: "label",
-        reg: PReg { name: "", kind: "" },
+        reg: PReg { name: "", kind: "", frag_role: "", frag_dtype: "", frag_layout: "" },
         imm: 0,
-        mem_base: PReg { name: "", kind: "" },
+        mem_base: PReg { name: "", kind: "", frag_role: "", frag_dtype: "", frag_layout: "" },
         mem_offset: 0,
         label: text
     }
@@ -832,6 +832,100 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
     return NVPTX_RKIND_F64
 }
 
+// _nvptx_frag_role_for_op — derive the WMMA fragment role letter from a
+// STMT_CALL op name. Returns "" for non-WMMA ops. Per the canonical PTX
+// ISA §9.7.13.4 nomenclature: `gpu_wmma_load_a` produces fragment A,
+// `_load_b` fragment B, `_mma` produces the D (= C accumulator) output.
+// RFC 067 P3 metadata seam — used by `_nvptx_classify_locals` Pass 1 to
+// stamp role on FRAG-classified PRegs. The mnemonic table re-key by
+// (op, role, dtype, layout) is a follow-on cycle.
+fn _nvptx_frag_role_for_op(op: string) -> string {
+    if op == "gpu_wmma_load_a" { return "a" }
+    if op == "gpu_wmma_load_b" { return "b" }
+    if op == "gpu_wmma_mma"    { return "d" }
+    return ""
+}
+
+// _nvptx_frag_dtype_for_op — derive the WMMA fragment element dtype
+// from a STMT_CALL op name. Returns the canonical PR #150 default
+// family today: A/B fragments are `.f16`, accumulator (D) is `.f32`.
+// P3 metadata-only — a future cycle layers per-call dtype overrides
+// (synthesized into the Local-side precision tag, then forwarded
+// here) so bf16×bf16→f32 and f16×f16→f16 families become reachable.
+fn _nvptx_frag_dtype_for_op(op: string) -> string {
+    if op == "gpu_wmma_load_a" { return ".f16" }
+    if op == "gpu_wmma_load_b" { return ".f16" }
+    if op == "gpu_wmma_mma"    { return ".f32" }
+    return ""
+}
+
+// _nvptx_frag_layout_for_op — derive the WMMA fragment major-axis
+// layout from a STMT_CALL op name. The canonical sm_80 m16n16k16
+// f16×f16→f32 family lays A row-major, B col-major, accumulator
+// row-major (PTX ISA §9.7.13.4). Returns "" for non-WMMA ops.
+fn _nvptx_frag_layout_for_op(op: string) -> string {
+    if op == "gpu_wmma_load_a" { return ".row" }
+    if op == "gpu_wmma_load_b" { return ".col" }
+    if op == "gpu_wmma_mma"    { return ".row" }
+    return ""
+}
+
+// _nvptx_wmma_mnemonic_family — re-keyed mnemonic table that accepts
+// (op, role, dtype, layout) and resolves to the PTX wmma mnemonic for
+// the requested family. RFC 067 P3 §3 — the new variant the future
+// "real wmma instruction emit" cycle will call.
+//
+// Today this routine recognizes three families per the PTX ISA
+// §9.7.13.4 table:
+//   (load_a/_b/_mma, *, .f16, .row/.col/.row)   — canonical f16×f16→f32
+//   (load_a/_b/_mma, *, .bf16, .row/.col/.row)  — bf16×bf16→f32
+//   (load_a/_b/_mma, *, .f16, .row/.col/.row) f16-acc — f16×f16→f16
+//
+// The op argument disambiguates `_mma` (which the dtype alone can't —
+// f16-acc and bf16→f32 both come through the same op). Caller is
+// expected to pass the role/dtype/layout from the FRAG PReg's metadata.
+// For the canonical (default-empty) inputs this routine returns the
+// same strings as `_nvptx_wmma_mnemonic(op)` — backward-compat.
+//
+// Returns "" when no recognized family matches.
+fn _nvptx_wmma_mnemonic_family(op: string, role: string, dtype: string, layout: string) -> string {
+    // Canonical PR #150 default: empty dtype/layout → fall through to
+    // the original f16×f16→f32 table (backward compatibility).
+    if dtype == "" && layout == "" { return _nvptx_wmma_mnemonic(op) }
+
+    // bf16×bf16→f32 family. The mma instruction's accumulator stays
+    // .f32; A/B carry .bf16 dtype. The .row × .col layout combo is
+    // the canonical sm_80 m16n16k16 shape.
+    if dtype == ".bf16" {
+        if op == "gpu_wmma_load_a"  { return "wmma.load.a.sync.aligned.row.m16n16k16.bf16.shared" }
+        if op == "gpu_wmma_load_b"  { return "wmma.load.b.sync.aligned.col.m16n16k16.bf16.shared" }
+        if op == "gpu_wmma_mma"     { return "wmma.mma.sync.aligned.row.col.m16n16k16.f32.bf16.bf16.f32" }
+        if op == "gpu_wmma_store_c" { return "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared" }
+        return ""
+    }
+
+    // f16×f16→f16 family. A/B/D all .f16 (the accumulator is half-
+    // precision instead of single-precision). This is the f16-acc
+    // variant; load/store mnemonics share the .f16 element tag.
+    if dtype == ".f16" && role == "d" {
+        // The .mma instruction emits .f16.f16.f16.f16 (D.A.B.C all half).
+        if op == "gpu_wmma_mma" { return "wmma.mma.sync.aligned.row.col.m16n16k16.f16.f16.f16.f16" }
+    }
+    if dtype == ".f16" {
+        // f16 A/B loads and f16 store_c reuse the canonical table's
+        // .f16 element tag — only the mma instruction discriminates
+        // f16-acc vs f32-acc by dtype/role.
+        if op == "gpu_wmma_load_a"  { return "wmma.load.a.sync.aligned.row.m16n16k16.f16.shared" }
+        if op == "gpu_wmma_load_b"  { return "wmma.load.b.sync.aligned.col.m16n16k16.f16.shared" }
+        if op == "gpu_wmma_store_c" { return "wmma.store.d.sync.aligned.row.m16n16k16.f16.shared" }
+        // .f16 with role != "d" on _mma falls through to the canonical
+        // f32-accumulator path (PR #150 default).
+        if op == "gpu_wmma_mma" { return "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32" }
+    }
+
+    return ""
+}
+
 // _nvptx_classify_locals — produce the per-function PReg roster the
 // emit pass needs to declare. Two passes:
 //   Pass 1 — walk every assignment-target Local; infer kind via
@@ -849,6 +943,15 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
 // older collector returns [i64] (just ids — every reg becomes .f64);
 // this returns [PReg] (kind + name preserved). _nvptx_collect_f64_regs
 // stays in place for callers that genuinely want the FP64-only roster.
+//
+// RFC 067 P3 LANDED — for FRAG-classified PRegs, Pass 1 ALSO stamps
+// the frag_role / frag_dtype / frag_layout metadata via
+// `_nvptx_frag_{role,dtype,layout}_for_op(s.op)`. The mnemonic table
+// is now re-keyable by these fields through `_nvptx_wmma_mnemonic_family`;
+// the call-site that actually uses the re-keyed mnemonic (real
+// `wmma.mma.sync` instruction emit) is a follow-on cycle. The metadata
+// is "" everywhere for non-FRAG PRegs (default = the canonical
+// f16×f16→f32 family the scaffold hardcodes).
 fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
     let mut regs = []
     let mut seen_ids = []
@@ -872,7 +975,25 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                     }
                     if !dup {
                         let kind = _nvptx_classify_local_for_stmt(s)
-                        regs.push(PReg { name: _nvptx_reg_name_for(kind, s.dst.id), kind: kind })
+                        // RFC 067 P3 — for FRAG PRegs, stamp the role /
+                        // dtype / layout from the STMT_CALL op name; for
+                        // every other kind the metadata stays "" (the
+                        // canonical PR #150 backward-compat default).
+                        let mut role = ""
+                        let mut dtype = ""
+                        let mut layout = ""
+                        if kind == NVPTX_RKIND_FRAG && s.kind == STMT_CALL {
+                            role = _nvptx_frag_role_for_op(s.op)
+                            dtype = _nvptx_frag_dtype_for_op(s.op)
+                            layout = _nvptx_frag_layout_for_op(s.op)
+                        }
+                        regs.push(PReg {
+                            name: _nvptx_reg_name_for(kind, s.dst.id),
+                            kind: kind,
+                            frag_role: role,
+                            frag_dtype: dtype,
+                            frag_layout: layout
+                        })
                         seen_ids.push(s.dst.id)
                     }
                 }
@@ -889,7 +1010,7 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                     k = k + 1
                 }
                 if !dup {
-                    regs.push(PReg { name: _nvptx_reg_f64(s.dst.id), kind: NVPTX_RKIND_F64 })
+                    regs.push(PReg { name: _nvptx_reg_f64(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
                     seen_ids.push(s.dst.id)
                 }
             }
@@ -919,7 +1040,7 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                             k = k + 1
                         }
                         if !dup {
-                            regs.push(PReg { name: _nvptx_reg_u64(addr.local_id), kind: NVPTX_RKIND_U64 })
+                            regs.push(PReg { name: _nvptx_reg_u64(addr.local_id), kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
                             seen_ids.push(addr.local_id)
                         }
                     }
@@ -940,7 +1061,7 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                             k = k + 1
                         }
                         if !dup {
-                            regs.push(PReg { name: _nvptx_reg_u64(addr.local_id), kind: NVPTX_RKIND_U64 })
+                            regs.push(PReg { name: _nvptx_reg_u64(addr.local_id), kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
                             seen_ids.push(addr.local_id)
                         }
                     }
@@ -1017,7 +1138,10 @@ fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
         while pi < len(mfn.params) {
             full_regs.push(PReg {
                 name: mfn.name + "_param_" + to_string(pi),
-                kind: "param"
+                kind: "param",
+                frag_role: "",
+                frag_dtype: "",
+                frag_layout: ""
             })
             pi = pi + 1
         }
@@ -1762,9 +1886,9 @@ fn _nvptx_build_vec_add_kernel(target: string) -> NvptxKernelFn {
     // The FP64 register bank (`.reg .f64 %fd0..2`) is carried in
     // callee_saved per the 055-P0 contract.
     let mut fp64_regs = []
-    fp64_regs.push(PReg { name: _nvptx_reg_f64(0), kind: "fpr" })
-    fp64_regs.push(PReg { name: _nvptx_reg_f64(1), kind: "fpr" })
-    fp64_regs.push(PReg { name: _nvptx_reg_f64(2), kind: "fpr" })
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(0), kind: "fpr", frag_role: "", frag_dtype: "", frag_layout: "" })
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(1), kind: "fpr", frag_role: "", frag_dtype: "", frag_layout: "" })
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(2), kind: "fpr", frag_role: "", frag_dtype: "", frag_layout: "" })
 
     let f = LFunc {
         name: "vadd",
@@ -2049,9 +2173,9 @@ fn _nvptx_build_gemm_kernel(target: string) -> NvptxKernelFn {
     // FP64 register bank (`.reg .f64 %fd0..2`) — carried in callee_saved
     // per the 055-P0 contract.
     let mut fp64_regs = []
-    fp64_regs.push(PReg { name: _nvptx_reg_f64(0), kind: "fpr" })
-    fp64_regs.push(PReg { name: _nvptx_reg_f64(1), kind: "fpr" })
-    fp64_regs.push(PReg { name: _nvptx_reg_f64(2), kind: "fpr" })
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(0), kind: "fpr", frag_role: "", frag_dtype: "", frag_layout: "" })
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(1), kind: "fpr", frag_role: "", frag_dtype: "", frag_layout: "" })
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(2), kind: "fpr", frag_role: "", frag_dtype: "", frag_layout: "" })
 
     let f = LFunc {
         name: "gemm",

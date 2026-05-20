@@ -14,7 +14,20 @@
 
 pub struct PReg {
     name: string,        // "x0", "rax", etc.
-    kind: string         // "gpr" | "fpr" | "vec"
+    kind: string,        // "gpr" | "fpr" | "vec"
+    // RFC 067 P3 LANDED — WMMA fragment metadata. These three fields
+    // re-key the WMMA mnemonic table by (op, role, dtype, layout) so a
+    // future cycle can reach non-canonical fragment families (bf16×bf16
+    // → f32, f16×f16 → f16 accumulator, etc.) without touching the
+    // classifier or the .reg-decl loop. Default "" everywhere = the
+    // canonical PR #150 f16×f16→f32 family the scaffold hardcodes.
+    // SCAFFOLD-ONLY: only the metadata-attaching side is wired; the
+    // call site that re-keys the mnemonic table by these fields is
+    // a follow-on cycle (real wmma instruction emit). See
+    // `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md` §3 P3.
+    frag_role: string,   // "a" / "b" / "c" / "d" — fragment letter, "" non-FRAG
+    frag_dtype: string,  // ".f16" / ".bf16" / ".f32" — element dtype, "" default
+    frag_layout: string  // ".row" / ".col" — major axis, "" default
 }
 
 // ── Operand ───────────────────────────────────────────────────

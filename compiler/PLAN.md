@@ -42,25 +42,64 @@
 
 (append-only)
 
-### 2026-05-19 — codegen: ExternFnDecl in statement position — FFI wrapper mangle parity + nested-decl hoist
+### 2026-05-20 — #18 S1-step-2 — `lower_hir` super-linear 제거 (O(N²) → near-linear, byte-eq PASS)
 
-keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/test_keyword_audit.hexa` L376 `extern fn getpid() -> Int` 는 두 갈래로 깨졌었다.
+**작업 = correctness-preserving 성능 리팩터** — emit asm 는 byte-identical 유지. S1-step-1 이 측정한 `lower_hir` O(N²) 곡선을 제거.
 
-**근본원인 (측정으로 확정 — `unhandled stmt kind` 가 아니었음)**: top-level / script-body `extern fn` 는 이미 top-level emit loop 의 `ExternFnDecl` 분기에 도달한다. 진짜 버그는 `gen2_extern_wrapper` 가 emit 하는 C 래퍼 함수 이름이 call-site mangle 과 불일치한 것. `getpid` 는 `_hexa_name_is_reserved` 목록에 있어 (libc `getpid` 충돌) call-site 는 `_hexa_mangle_ident` 로 `u_getpid()` 를 emit 하지만, 래퍼는 plain `getpid` 로 emit 됨 → call 이 libc `int getpid(void)` 로 resolve → clang `assigning to HexaVal from incompatible type 'int'`. fn-body 안에 nested 된 `extern fn` 는 `_gen2_lift_nested_decls` 가 hoist 하지 않아 별개로 `CODEGEN ERROR: unhandled stmt kind: ExternFnDecl` 스텁을 emit 했다.
+**진단 (코드 확인)**: `_lower_hexpr` 재귀가 `LowerExprResult{ctx: LowerCtx}` 를 반환. `LowerCtx` 가 누적 배열 `locals`/`blocks`/`bindings` 를 필드로 보유 → 매 `_lower_hexpr` 반환마다 `hexa_val_heapify` 가 그 배열들을 deep-copy (배열 자체는 hexa 핸들 공유라 struct 재구성에서는 안 복사되나, fn-arena escape 시점의 heapify 가 N 개 원소를 모두 복사). N 개 sequential stmt → O(N²).
 
-**수정 (`self/codegen_c2.hexa`, surgical 3-part)**:
-1. `gen2_extern_wrapper` — 래퍼 C 함수 이름 (forward decl + 두 `static HexaVal NAME(...)` 정의 + typedef 태그) 을 `_hexa_mangle_ident(name)` (`cname`) 로 변경. decl 이름 == reference 이름. `__ffi_sym_<name>` dlsym 슬롯은 raw name 유지 (이미 고유-prefix 내부 식별자; dlsym C-symbol 문자열은 `c_sym` 으로 별도). 비-reserved extern 이름은 mangle 이 no-op → 일반 케이스 zero regression (측정 확인).
-2. `_gen2_lift_nested_decls` — lift 인식 종류에 `ExternFnDecl` 추가. fn-body 최상단 `extern fn` 도 module scope 로 hoist (C 는 nested fn 없음; FFI 래퍼는 top-level 분기에서만 emit). 추가로 `seen_names` 를 기존 top-level decl 이름으로 pre-seed — top-level 과 nested 가 같은 extern 이름이면 nested 복사본을 lift 하지 않음 (top-level 이 이김) → C "redefinition" 방지.
-3. `gen2_stmt` decl-skip — `ExternFnDecl` 추가. lift 된 stmt-position `extern fn` 가 원래 위치에서 `unhandled stmt kind` 스텁을 ALSO emit 하지 않게.
+**리팩터 (`compiler/lower/hir_to_mir.hexa`, 단일 파일)**: 누적 배열을 module-scope `pub let mut` 로 분리 (`_lr_locals` / `_lr_blocks` / `_lr_bindings` / `_lr_frame_starts` / `_lr_globals` — 기존 `_lr_diag`/`_lr_lambdas` 관례 그대로). `LowerCtx` 는 6 스칼라 필드만 보유 (`next_local`/`next_block`/`next_arena`/`arena_root`/`cur_block`/`has_returned`) → 스레딩이 O(N) 배열을 더 이상 안 건드림. 헬퍼 (`_fresh_local`/`_new_block`/`_push_stmt_to`/`_add_edge`/`_patch_loop_sentinels`/`_bind`/`_rebind`)는 `LowerCtx` 시그니처 유지 (call graph·스레딩 순서 byte-identical) — module 배열을 in-place mutate 만.
 
-**측정 BEFORE/AFTER** (Mac, host-pinned smoke `extern fn getpid() -> Int; let p = getpid(); ...`):
-- BEFORE (구 hexa_v2): transpile OK 이나 C 빌드 2 errors (`u_getpid` ≠ `getpid` incompatible-type). nested smoke → `unhandled stmt kind: ExternFnDecl` 스텁 1개.
-- AFTER (regen hexa_v2): script-body smoke → 래퍼 `u_getpid` == call `u_getpid` → C 빌드 0 error → run `extern ok` rc=0. nested smoke → 스텁 0개 → 빌드+run `nested extern ok` rc=0. 비-reserved extern → 래퍼 이름 변경 없음 (no-op mangle 확인).
-- `self/test_keyword_audit.hexa` → ExternFnDecl 스텁 0 (BEFORE 1). 잔여 5 C-error 는 generics `T` / `Clone` / async `hexa_await_unwrap` 등 무관 별건 갭 — 구·신 transpiler 동일 5개 → zero regression.
+**runtime arena 함정 2건 (측정으로 발견·해결)**:
+1. **버퍼 수명** — module-global 을 함수 안에서 `= []` 로 재대입하면 그 `[]` 리터럴이 live fn-arena mark 아래서 arena-backed (cap<0) → callee arena rewind 시 버퍼 free → `_lr_*` dangling (`map key 'id' not found` → heapify 스택오버플로 SIGSEGV 로 관측). 해결: per-fn reset 을 `.truncate(0)` (같은 heap 버퍼 유지, len 만 0) 로. module 배열은 module-scope `[]` (mark_top==0 → heap) 로 1회 할당, pass 전체에서 heap 유지.
+2. **원소 수명** — `_lr_blocks[i] = Block{...}` 의 `hexa_array_set` 는 (`hexa_array_push` 와 달리) 값을 heapify 안 함 → deep callee frame 에서 만든 Block 이 module 배열에 들어간 뒤 그 frame rewind 시 free. 해결: write-back 제거하고 stmts/preds/succs 를 공유 핸들째 in-place `.push` (`.push` 는 원소 heapify 함). `_patch_loop_sentinels` 는 sentinel 패치 후 `stmts.truncate(0)` + 전 원소 re-`.push`. `_rebind` 는 array_set 대신 shadowing binding append (`_mir_lookup` 이 tail-first 라 결과 동일).
 
-**self-host fixpoint**: `cc --regen` → `hexa_cc.c.new` ≡ promoted `hexa_cc.c` BYTE-IDENTICAL (`cmp` 확인). 바이너리 promote 동반 — `hexa_cc.c` 1480897→1484206 B, `hexa_v2` 1533496→1534088 B.
+**closure**: 람다 본문은 `_lr_ctx_save` (둘러싼 배열 핸들 저장) → `_lr_ctx_fresh` (람다용 신규 배열) → 람다 MFunc 빌드 → `_lr_lambdas.push` (heapify 가 람다 배열을 heap 승격) → `_lr_ctx_restore` 순. `_lr_globals` 는 module-wide read-only 라 per-ctx `globals` seed 불필요.
 
-**LIMITATION (소스 주석에 명기)**: shallow-walk 경계 유지 — `if/while/for` 블록 안 더 깊이 nested 된 `extern fn` 는 lift 대상 아님 (`_gen2_lift_nested_decls` 의 기존 top-of-body 한계와 동일). top-level / script-body / fn-body-최상단 `extern fn` 만 커버.
+**재측정** (`tool/build_aprime.sh -o /tmp/aprime_s2`, arm64-Mac 로컬, smoke `exit(42)` PASS):
+
+| N   | lower_hir (전) | lower_hir (후) | codegen | emit_asm |
+|-----|----------------|----------------|---------|----------|
+| 100 | 62 ms          | **2 ms**       | 19 ms   | 2 ms     |
+| 200 | 270 ms         | **3 ms**       | 28 ms   | 3 ms     |
+| 400 | 1527 ms        | **9 ms**       | 67 ms   | 14 ms    |
+
+`lower_hir` 62→270→1527 (≈5.7× per N-doubling, O(N²)) → 2→3→9 (near-linear). N=400 에서 ≈170× 빠름. `codegen`/`emit_asm` 은 미변경 (리팩터가 안 건드림).
+
+**byte-eq falsifier — PASS (7/7 fixture)**: emit asm 가 baseline(`/tmp/aprime_base`) vs 리팩터 build 사이 byte-identical 임을 확인.
+- 합성 probe N=100 (39,986 B) / N=200 (88,528 B) / N=400 (191,592 B) — IDENTICAL
+- `fib`/`while`/`if` 제어흐름 프로그램 (3,645 B) — IDENTICAL (`_add_edge`/`_patch_loop_sentinels` 검증)
+- `compiler/codegen/arm64_darwin.hexa` closure (3 files, 1,115,763 B) — IDENTICAL
+- `compiler/emit/asm.hexa` closure (2 files, 126,240 B) — IDENTICAL
+- `compiler/lower/hir_to_mir.hexa` closure (7 files, 1,525,561 B) — IDENTICAL
+- `compiler/check/types.hexa` closure (6 files, 1,485,818 B) — IDENTICAL
+
+**punted**: `compiler/parse/parser.hexa` closure 는 baseline·리팩터 양쪽에서 `HX2001` (closure-incompleteness, 3293:32 미해결 식별자) 로 컴파일 실패 — 본 리팩터와 무관한 기존 버그라 fixture 에서 제외 (codegen/asm/types/hir closure 로 대체). 깨끗한 명명 — `_v2`/`_c2`/`aprime`/stage-suffix 미사용.
+
+### 2026-05-20 — #18 S1-step-1 — codegen per-phase 계측 landed + baseline 측정 (INSTRUMENT only)
+
+**작업 = instrumentation + baseline 측정 only** — super-linear curve 자체는 본 cycle 에서 고치지 않음 (g3 over-claim 0).
+
+PLAN.md #18 가 S1 prerequisite 로 명시한 "codegen 단계 내부 phase 계측 추가"를 수행. `compiler/main.hexa` 의 기존 `phase_reset`/`phase_log` arena-reclaim hook 옆에 wall-clock 계측을 추가 — 별도 메커니즘 발명 대신 같은 phase-boundary 지점을 재사용.
+
+**Instrumentation (`compiler/main.hexa`, env-gated)**:
+- `HEXA_CG_PROFILE=1` 새 env-gate (`cg_profile` 모듈-스코프 flag). unset 이면 전 호출이 silent no-op — `mono_ns()` syscall 도 stderr write 도 없음.
+- `cg_profile_begin()` / `cg_profile_mark(label)` 헬퍼 — `mono_ns()` (runtime.c `hexa_mono_ns`, `CLOCK_MONOTONIC` TAG_INT ns) 로 phase delta 측정, `CG_PROFILE phase=<label> delta_ms=<N>` 행을 stderr 로 출력.
+- non-stream 파이프라인에 4 mark: `lower_hir` (HIR→MIR) · `mir_opt` (MIR-opt + stmt-count walk) · `codegen` (MIR→LIR) · `emit_asm` (LIR→asm). `--stream` 경로는 fused 라 `stream_fused` 단일 mark.
+- **byte-identical 검증**: N=400 probe asm, `HEXA_CG_PROFILE` 有/無 `diff -q` = byte-identical. env unset 시 `CG_PROFILE` 행 0개. zero behavior change.
+- 깨끗한 명명 — `_v2`/`_c2`/`aprime`/stage-suffix 미사용.
+
+**Baseline 측정** (`tool/build_aprime.sh -o /tmp/aprime_s1`, arm64-Mac 로컬 빌드 — 2.2 MB Mach-O, smoke `exit(42)` PASS; 합성 probe `fn big()` N 개 sequential `let`):
+
+| N   | lower_hir | mir_opt | codegen | emit_asm |
+|-----|-----------|---------|---------|----------|
+| 100 | 15 ms     | 0 ms    | 6 ms    | 1 ms     |
+| 200 | 63 ms     | 0 ms    | 10 ms   | 1 ms     |
+| 400 | 372 ms    | 0 ms    | 29 ms   | 4 ms     |
+
+**측정 결론 — super-linear phase = `lower_hir` (HIR→MIR)**: 15→63→372 ms. N 더블링당 4.2× (100→200) · 5.9× (200→400) — O(N²) 이상. `codegen`(6→10→29) 과 `emit_asm`(1→1→4) 은 거의 선형, `mir_opt` 은 `--opt=0` 에서 무시할 수준. 이는 2026-05-17 entry 의 잔여 진단 — arm64 stmt-loop O(N²) 는 이미 제거됐고 잔여는 `_lower_hexpr` 재귀가 `LowerExprResult{ctx: LowerCtx}` 를 반환 → `LowerCtx.blocks` deep-heapify — 와 정확히 일치. 본 계측이 그 가설을 top-level phase 분해로 재확인.
+
+**punted (다음 cycle, S1-step-2 후보)**: (1) `codegen` 내부 sub-phase 계측 (regalloc vs per-fn lowering) — PLAN.md 가 잔여를 `lower_hir` 로 이미 localize 했고 `codegen` 은 선형이라 본 cycle 에서 추가 안 함 (cheap-but-low-value). (2) super-linear 제거 자체 — `LowerCtx` 의 `blocks`/`locals`/`bindings` 누적 배열을 module-level `pub let mut` 로 빼는 lowering-pass 리팩터 (20+ helper 영향), 본 cycle scope 밖.
 
 ### 2026-05-19 — token-forge: `consciousness TokenForgeRouter { ... }` 블록 retirement (Decision C surgical unwrap)
 
@@ -3601,3433 +3640,400 @@ keyword-audit 잔여 갭 "ExternFnDecl in statement position" closure. `self/tes
   (NOT hexa_cc.c SSOT 모듈). @D g_commit_push_deploy: tool/* 변경은 source-only;
   driver 빌드 무영향. compile-then-exec path (`hexa run`) 로 모든 측정 진행.
 
-### 2026-05-20 — RFC 055 055-P2 LANDED — naive FP64 GEMM `@gpu_kernel` + GPU fire PASS
-
-RFC 055 055-P2 (`gpu/SPEC.md` §12 P2 deliverable): the hexa-native NVPTX
-backend now emits a **naive FP64 GEMM `@gpu_kernel`**, and the full RFC 055
-§7 falsifier battery is **measured PASS on a real NVIDIA GPU** — closing
-both the 055-P1 vec-add fire (which the prior cycle left "ready-for-
-dispatch-wire", unfired — `state/rfc055_p1_2026_05_19/vec_add.ptx` was
-0 bytes) and 055-P2 GEMM in one fire.
-
-**What landed (compiler/codegen/nvptx_target.hexa, +~330 lines):**
-- `emit_ptx_gemm_module(target)` — the keystone naive GEMM emitter. One
-  thread per C element; A row-major m×k, B k×n, C m×n; a real PTX
-  contraction loop (`$L_LOOP` back-edge, `setp.lt.s32` guard), the
-  accumulate lowered to a single `fma.rn.f64`. Hand-emitted from the
-  055-P0 `LInstr` vocabulary + eight new `_nvptx_p2_*` helper emitters
-  (`mov` any-axis sreg, u32/f64 immediate `mov`, `cvt.u32.u64`,
-  `mul.lo.s32`, `add.s32`, `fma.rn.f64`, unconditional `bra`).
-- `_nvptx_build_gemm_kernel` — the `NvptxKernelFn` builder (6-param bank
-  — 3 farr bases + m/n/k; 18×.u32, 15×.u64, 3×.pred, 3×.f64 reg banks).
-- **naive, not tiled** — the tiled `@shared` + `gpu_barrier()` variant
-  (gpu/SPEC.md §6) is the named 055-P2-tiled follow-on; naive satisfies
-  F-RFC055-GEMM-FEASIBLE (a correctness gate — RFC 055 §7) at the lowest
-  fire risk. RFC 055 §12 scopes P2 as "naive/tiled".
-
-**Bug found + fixed by the fire (055-P0 latent):** `_emit_ptx_header` and
-several lowering-note strings contained **non-ASCII bytes** (em-dash `—`,
-middle-dot `·`, arrow `→`, `×`). Standalone `ptxas` (CUDA 12.0) tolerated
-them in PTX comments; the **driver JIT** `ptxas` (driver 580) aborts with
-`Unexpected non-ASCII character encountered on line 1`. All emitted
-strings sanitized to ASCII; `dispatch_r055_p2_gemm.sh` carries a
-regression guard (`perl … [^[:ascii:]]`) so emitted PTX is asserted
-ASCII-clean before any GPU touch.
-
-**Falsifier battery — MEASURED (`state/rfc055_p2_2026_05_20/result.json`):**
-- `F-RFC055-PTX-EMIT` **PASS** — both vec-add + GEMM PTX accepted by
-  `ptxas` (cheap standalone oracle, sm_80 + sm_90, $0) and JIT-loaded by
-  the driver.
-- `F-RFC055-NUMERIC-EQ` **PASS** — vec-add `max|Δ| = 0`, 0/1024 mismatch
-  (byte-exact; vec-add reduces nothing).
-- `F-RFC055-GEMM-FEASIBLE` **PASS** — naive GEMM `max|Δ| = 0`, 0/4096
-  mismatch (integer inputs a=i%7/b=i%5/k=64 → every product + partial
-  sum exact in FP64 → byte-exact, beyond the §7 tolerance gate).
-- `F-RFC055-LAUNCH-ABI` **PASS** — host→kernel→host round-trip via the
-  CUDA Driver API for a 1-D (vadd) and a 2-D (gemm) launch.
-- `F-RFC055-NO-LLVM` **PASS** — hexa→PTX is pure hexa; downstream is only
-  `nvcc -lcuda` + the driver JIT, no LLVM linkage.
-- `F-RFC055-CPU-CODEGEN-UNTOUCHED` **PASS** (by construction) — this
-  cycle only ADDS functions to `nvptx_target.hexa`; the CPU codegen
-  files and `compiler/main.hexa` dispatch are unmodified.
-
-**Fire — $0, no vast.ai.** Run on the wilson-pool GPU host **ubu-2**
-(NVIDIA RTX 5070 · sm_120 Blackwell · driver 580.126.09). PTX targeting
-`.target sm_80` is forward-compatible — the driver JITs it for sm_120.
-Standalone `ptxas` was the cheap pre-fire oracle (instrument-first);
-the GPU run was the authoritative measurement.
-
-**Local proofs:** `compiler/codegen/nvptx_gemm_test.hexa` — 38-substring
-PTX-shape oracle + GEMM `@gpu` validator (GPU01) — built + run via the
-compiled path, PASS. `nvptx_vec_add_test.hexa` re-verified PASS post
-ASCII-fix.
-
-**Honest scope — still 055-P3 (productization, NOT this cycle):** the
-MIR partition routing a real `@gpu_*` FnDecl → `codegen_nvptx_sm*` (the
-validator still consumes a synthetic `NvptxValidateInput`, not a FnDecl
-walk); the `gpu_launch(...)` host-side lowering; the cubin `.rodata`
-`LSection` embed. These need attribute plumbing through parser→HIR→MIR —
-deep shared-frontend surgery deliberately deferred. 055-P2 is the
-hand-emit + measured fire; 055-P3 wires it into the compile pipeline.
-
-**Files** — added: `compiler/codegen/nvptx_gemm_test.hexa`,
-`gpu/tests/gemm.hexa`, `tool/dispatch_r055_p2_gemm.sh`,
-`tool/r055_p2_host.c`. Extended: `compiler/codegen/nvptx_target.hexa`
-(GEMM emitter + ASCII fix). No binary promote — `nvptx_*.hexa` is
-unreached by the driver's compile path (F-RFC055-CPU-CODEGEN-UNTOUCHED);
-tool/* + test files are source-only (@D g_commit_push_deploy).
-
-### 2026-05-20 — RFC 055 055-P3a — `--target=nvptx64-*` dispatch branch wired in `compiler/main.hexa`
-
-RFC 055 055-P3 first slice (**a — dispatch wiring**). The NVPTX target is
-now a real selectable target in the `compiler/main.hexa` codegen dispatch
-table, sibling to the three CPU targets. Architecturally completes the
-"sibling to `codegen_arm64_darwin` / `codegen_x86_64_linux`" framing
-RFC 055 §6.1 specified.
-
-**What landed (compiler/main.hexa, +40 / -3 lines, additive):**
-- Imports `./codegen/nvptx_target.hexa`.
-- `--target=` help line lists `nvptx64-nvidia-cuda-sm{80,90}`.
-- The codegen if-expression chain gains two branches (after the existing
-  three CPU branches, before the unsupported-target fallthrough):
-  `target == NVPTX_TARGET_SM90` → `codegen_nvptx_sm90(mmodule)` ·
-  `target == NVPTX_TARGET_SM80` → `codegen_nvptx_sm80(mmodule)`.
-- The emit step routes NVPTX through `emit_ptx(lmodule)` (PTX text emit
-  pass) instead of the CPU `emit_asm(lmodule)`.
-- A pre-`emit_kind == "asm"` bypass writes the `.ptx` directly to
-  `out_path` and exits when the target is NVPTX — PTX is the final
-  artifact for hexa (`ptxas` → cubin is the downstream NVIDIA tool, RFC
-  055 §6.2 / §8); no system `as` / `ld` step applies. The CPU `emit_kind
-  == "asm"` branch below is byte-identically untouched.
-
-**Verification — honest scope:**
-- Parse-clean: `/Users/ghost/.hx/bin/hexa_real parse compiler/main.hexa`
-  → OK (post-edit).
-- 055-P1 + 055-P2 standalone smoke tests still PASS after the import
-  added to `main.hexa` (the standalone tests resolve their own
-  imports — no cross-impact).
-- **E2E unverifiable in this cycle** — `hexa build compiler/main.hexa`
-  currently fails at clang with **duplicate-definition errors**
-  (`EdgeInfo` struct constructor double-emitted at flatten lines 10372 +
-  12251, 4 errors total). This is the pre-existing `ml_resolve_full`
-  diamond-import dedup gap documented in the
-  `project_compiler_selfbuild_blockers` memory (사실 2 — the
-  `ml_canon_path` canon-fix was landed once on 2026-05-18 then wiped by
-  parallel sessions). RFC 055 P3a's e2e is **gated on that selfbuild
-  blocker**, not on this edit. The dispatch wiring lands as parse-clean
-  source the moment the flatten dedup is restored, the dispatch becomes
-  exercisable.
-- F-RFC055-CPU-CODEGEN-UNTOUCHED — the three CPU branches in the
-  if-expression are byte-identical; the new branches are pure additions
-  before the `else { eprintln(unsupported) }` fallthrough.
-
-**Honest scope — still 055-P3b/c (NOT this slice):**
-- The MIR partition that marks `@gpu_kernel` / `@gpu_device` FnDecls
-  flowing through to `MFunc.gpu_kind` — needs HIR→MIR lowering edits.
-- `_nvptx_lower_func` real lowering of intrinsic-calls (`gpu_thread_id_x`),
-  control flow (`STMT_BR_COND`), `STMT_LOAD` / `STMT_STORE` from MIR.
-  055-P0 currently honestly stubs these. A real `@gpu_kernel` MFunc
-  today lowers to PTX with `// RFC 055 055-P0 — unsupported stmt kind:`
-  honest-stub comments for non-FP64-arith body lines.
-- `gpu_launch(...)` host-side lowering → `_hx_cuda_launch_kernel` builtin
-  codegen; cubin `.rodata` `LSection` embed; the tiled `@shared` +
-  `gpu_barrier()` GEMM variant.
-
-**Files** — extended only: `compiler/main.hexa` (+40 / -3). No new
-files; no binary promote (`compiler/main.hexa` is the self-host compiler
-front-end, not the driver bootstrap — @D g_commit_push_deploy applies to
-`hexa_cc.c` / `hexa_v2`, neither of which this cycle touches).
-
-### 2026-05-20 — RFC 055 055-P3b — STMT_LOAD + STMT_STORE generic lowering (last 055-P3b sub-slice)
-
-Closes 055-P3b. The generic `_nvptx_lower_func` MIR-walk now covers
-every stmt kind needed by the gpu/SPEC.md §6.6 FP64-first slice:
-ASSIGN / BINOP{arith,cmp} / RETURN / BR / BR_COND / CALL (gpu
-intrinsics) / LOAD / STORE — with per-Local kind classification
-(F64/U32/U64/PRED) driving operand + register-bank emission.
-
-**What landed (compiler/codegen/nvptx_target.hexa, +~80 lines additive):**
-- `_nvptx_classify_locals` gains **Pass 2** — a use-site walk over
-  STMT_LOAD / STMT_STORE that classifies each address-operand source
-  Local as U64. Locals classified by Pass 1's defining-stmt walk keep
-  their kind; previously-unclassified Locals (function params, ext
-  temps used directly as addresses) get a fresh `.reg .u64 %rd<id>;`
-  PReg row. STMT_LOAD's dst (the loaded value) is classified F64 in a
-  Pass-1.5 hook (matches §8 FP64-first scope).
-- `_nvptx_lower_stmt` gains two new cases:
-    * STMT_LOAD → `ld.global.f64 %fd<dst>, [%rd<addr>];` (address Local
-      resolved via the classifier; `_nvptx_addr_deref` wraps it in `[]`).
-    * STMT_STORE → `st.global.f64 [%rd<addr>], %fd<value>;` (symmetric).
-- Honest-stub message updated to name the residual unhandled stmt
-  kinds (STMT_THROW / STMT_TRY_* / STMT_ARENA_* / STMT_CALL_INDIRECT) —
-  later 055-P4+ cycles.
-
-**Verification — standalone (compiled path):**
-- `nvptx_lower_test.hexa` gains a 5th case `_test_load_store` — a
-  3-stmt MFunc (`v = *p; v2 = v + v; *p = v2; return`). Asserts the
-  emitted PTX contains `.reg .u64 %rd0;` (Pass 2 retroactive U64 for
-  the param address), `.reg .f64 %fd1;` (LOAD dst) + `.reg .f64 %fd2;`
-  (arith intermediate), `ld.global.f64 %fd1, [%rd0];`, and
-  `st.global.f64 [%rd0], %fd2;`. **PASS** on the compiled path.
-- All 5 nvptx_lower_test cases PASS: STMT_BR + classify + setp/BR_COND
-  + CALL-intrinsic + LOAD/STORE.
-- Regression — 055-P0 emit_test, 055-P1 vec_add_test, 055-P2 gemm_test
-  all still PASS post-extension. Pass 2 only fires for STMT_LOAD/STORE
-  (which 055-P0 axpb / hand-emit P1/P2 fixtures don't use), so prior
-  fixtures classify identically.
-
-**(a) ml_canon_path 재-land + 보존 — measured outcome.** Today I built
-a fresh driver from current sources (`build/hexa_with_canon`, via
-`hexa build self/main.hexa`) and ran it on `compiler/main.hexa`: the
-4 dup-symbol errors (`EdgeInfo`/`AtlasIndex`/`AtlasNode`/`GradeInfo`)
-**are gone** — empirical proof the canon fix in current
-`self/module_loader.hexa` source is correct. `hexa cc --regen`
-produces a `hexa_cc.c.new` byte-identical to current `hexa_cc.c`
-(fixpoint stable). What still blocks `hexa build compiler/main.hexa`
-end-to-end is a SEPARATE codegen_c2.hexa bug: `pub let` /
-`pub enum` symbols from imported files aren't being inlined into the
-flattened C — `Severity_Error/_Warning/_Note` (from
-`compiler/diag/catalog.hexa`) + `NVPTX_TARGET_SM{90,80}` (from
-`compiler/codegen/nvptx_target.hexa`) all "undeclared identifier" at
-clang. That's a transpiler-side gap separate from canon; fixing it
-requires editing `codegen_c2.hexa`'s pub-let / pub-enum cross-module
-emission + regenerating hexa_cc.c — which is a deliberate
-operator-side compiler cycle (`@D g_commit_push_deploy` deploy
-discipline), not autonomous from RFC 055 scope.
-
-Net (a) state: canon fix verified working in source; bootstrap
-promote = a single `hexa build self/main.hexa` + binary swap, BUT the
-pub-let-cross-module follow-on bug means the resulting binary still
-can't build the consumers it was meant to unblock until that second
-bug lands. Documented in `project_compiler_selfbuild_blockers` memory.
-
-**055-P3 remaining = 055-P3c.** With 055-P3b complete, the only RFC
-055 work left is 055-P3c (productization): `MFunc.gpu_kind` carrying
-`@gpu_kernel` / `@gpu_device` from HIR partition, `gpu_launch(...)`
-host-side lowering to `_hx_cuda_launch_kernel`, and cubin `.rodata`
-`LSection` embed. These need parser → HIR → MIR attribute plumbing
-(shared frontend; cross-session contention risk per
-`shared-worktree-hazard` memory) AND depend on `compiler/main.hexa`
-self-building (the pub-let cross-module bug above). 055-P3c is the
-natural next cycle once those preconditions are addressed.
-
-**Files** — extended only: `compiler/codegen/nvptx_target.hexa`
-(+~80 lines additive — Pass 2 + LOAD/STORE cases), `compiler/codegen/
-nvptx_lower_test.hexa` (+case 5 LOAD/STORE).
-
-### 2026-05-20 — RFC 055 055-P3b — setp body + STMT_BR_COND + STMT_CALL gpu intrinsic body
-
-Third 055-P3b slice (after the STMT_BR primitive and the per-Local kind
-classifier). Builds on the kind infrastructure to land the three MIR
-stmt-kind lowerings the prior slice deliberately stubbed:
-
-**What landed (compiler/codegen/nvptx_target.hexa, +~120 lines additive):**
-- `_nvptx_cmp_mnemonic(op)` — maps comparison binop opcodes (lt/le/gt/
-  ge/eq/ne) to the PTX `setp.<cond>.f64` mnemonic (1:1 with PTX cond
-  names). The FP64 comparand type matches the §8 FP64-first scope.
-- `_nvptx_gpu_intrinsic_sreg(op)` — maps a known gpu intrinsic STMT_CALL
-  callee name (`gpu_{thread,block,grid}_{id,dim}_{x,y,z}`, 12 names)
-  to its PTX special-register reference (`%tid.x`, `%ctaid.y`, etc.).
-- `_nvptx_operand_text_kinds(o, kinds)` — 055-P3b kind-aware operand
-  renderer; consults the classified roster to pick the right register
-  name (`%fd`/`%r`/`%rd`/`%p`) instead of the 055-P0 unconditional `%fd`.
-- `_nvptx_lookup_reg_for_local(kinds, id)` — given the [PReg] roster +
-  a MIR Local id, return the PTX register name (tests four candidate
-  names against the roster; falls back to `%fd<id>` for unclassified
-  Locals, matching the 055-P0 default).
-- `_nvptx_lower_stmt` signature now `(buf, s, kinds)` — threads the
-  classification through every call. New stmt-kind cases:
-    * STMT_BINOP comparison ops → `setp.<cond>.f64 %p<dst>, <a>, <b>;`
-    * STMT_CALL gpu intrinsics → `mov.u32 %r<dst>, <sreg>.<axis>;`
-    * STMT_BR_COND → `@<pred> bra $L_<true>;` + `bra $L_<false>;`
-    * existing ASSIGN / arith-BINOP / RETURN / BR cases use the
-      kind-aware lookup for operand + dst register naming
-- `_nvptx_lower_func` computes the classification ONCE at function
-  entry and threads it into every `_nvptx_lower_stmt` call (avoids
-  re-walking the MIR per-stmt; also reuses the roster for
-  `LFunc.callee_saved`).
-
-**Verification — standalone (compiled path):**
-- `compiler/codegen/nvptx_lower_test.hexa` gains two cases:
-    * `_test_setp_and_br_cond` — 3-block MFunc (`p = a < b; br_cond p
-      -> $L_1 else $L_2; { return } { return }`); asserts the emitted
-      PTX contains `setp.lt.f64 %p2`, `@%p2 bra $L_1`,
-      `bra $L_2`, `.reg .pred %p2`, and all three block labels.
-    * `_test_call_intrinsic` — STMT_CALLs to `gpu_block_id_x` /
-      `gpu_block_dim_x` / `gpu_thread_id_x`; asserts the emitted PTX
-      contains the matching `.reg .u32 %r{0,1,2}` decls + the
-      `mov.u32 %r<dst>, %{ctaid,ntid,tid}.x` reads.
-  Total 4 cases in nvptx_lower_test.hexa now: STMT_BR + classify +
-  setp/BR_COND + CALL-intrinsic — all **PASS** on the compiled path.
-- Regression — all four existing NVPTX smokes (055-P0 emit_test, 055-P1
-  vec_add_test, 055-P2 gemm_test, 055-P3b lower_test pre-extension)
-  still **PASS** post-refactor. The hand-emit kernels (P1 vec-add / P2
-  GEMM) bypass _nvptx_lower_stmt entirely — their `_nvptx_p{1,2}_*`
-  helpers emit LInstr records directly, so they're unaffected by the
-  generic-lowering signature change.
-
-**Honest scope — still 055-P3b (last sub-slice):**
-- STMT_LOAD / STMT_STORE generic lowering → `.global.f64` /
-  `.shared.f64` with address arithmetic. Needs operand-kind tracking
-  for the address u64 Local AND parameter-bank knowledge (the host-
-  passed farr base) — pairs naturally with 055-P3c (MFunc.gpu_kind
-  routing through the @gpu_kernel partition + the `.visible .entry`
-  param bank).
-
-**Files** — extended only: `compiler/codegen/nvptx_target.hexa` (+~120
-lines additive, _nvptx_lower_stmt now threads kinds, _nvptx_lower_func
-classifies once), `compiler/codegen/nvptx_lower_test.hexa` (+two new
-cases). No binary promote.
-
-### 2026-05-20 — RFC 055 055-P3b — per-Local PTX register-kind classification + `.reg` bank emission
-
-Second slice of 055-P3b, building on the STMT_BR primitive. The 055-P0
-generic lowering assumed every assignment-target MIR Local was FP64
-(`%fd<id>` in a `.reg .f64` bank); that's correct for the straight-line
-FP64 arithmetic subset but breaks the moment a kernel uses an i32 index,
-a Boolean predicate, or a u64 address. This slice adds the per-Local
-PTX register-kind classification + kind-aware `.reg` bank emission.
-
-**What landed (compiler/codegen/nvptx_target.hexa, +130 lines additive):**
-- Four kind constants — `NVPTX_RKIND_{F64,U32,U64,PRED}` → `"fpr"`/
-  `"gpr32"`/`"gpr64"`/`"pred"` — used in `PReg.kind`.
-- `_nvptx_reg_name_for(kind, id)` — picks the matching 055-P0/P1 reg-
-  name helper (`_nvptx_reg_{f64,u32,u64,pred}`).
-- `_nvptx_kind_to_ptx_ty(kind)` — `.reg .<ty>` directive type tag.
-- `_nvptx_classify_local_for_stmt(s)` — infers a Local's kind from its
-  defining stmt: comparison binops (`lt`/`le`/`gt`/`ge`/`eq`/`ne`) →
-  PRED; arithmetic binops → F64; known gpu-intrinsic STMT_CALLs
-  (`gpu_thread_id_x` etc. across x/y/z axes) → U32; anything else → F64
-  (the 055-P0 backward-compat default).
-- `_nvptx_classify_locals(mfn) -> [PReg]` — the 055-P3b replacement for
-  `_nvptx_collect_f64_regs`. Walks every block/stmt in source order,
-  classifies each assignment-target Local, returns a per-Local PReg row.
-- `_nvptx_lower_func` rewired to call `_nvptx_classify_locals` for
-  `LFunc.callee_saved`. (The legacy `_nvptx_collect_f64_regs` stays as
-  a helper for any future caller that genuinely wants the FP64-only set.)
-- `_emit_ptx_func` extended — `.reg` declarations dispatch on
-  `PReg.kind` via `_nvptx_kind_to_ptx_ty` (no longer hardcoded `.f64`).
-
-**Verification — standalone (compiled path):**
-- `compiler/codegen/nvptx_lower_test.hexa` gains a second case: a
-  2-stmt synthetic MFunc with `t = a + b` (STMT_BINOP "add" → F64) and
-  `p = t < b` (STMT_BINOP "lt" → PRED). Asserts the emitted PTX
-  contains both `.reg .f64 %fd2;` (for the arithmetic dst) and
-  `.reg .pred %p3;` (for the comparison dst). **PASS**.
-- Regression — the existing 055-P0 emit_test (`nvptx_emit_test`,
-  axpb), 055-P1 vec_add_test, 055-P2 gemm_test all still **PASS**
-  post-refactor (their fixtures classify identically — all arithmetic
-  binops → FP64).
-
-**Honest scope — still 055-P3b (the rest):**
-- A real `setp.<cond>.s32` lowering of the comparison binop body (this
-  cycle classifies the dst correctly but the body lowers as a stub
-  comment — the BINOP-mnemonic table only carries add/sub/mul).
-- STMT_BR_COND uses the classified pred register for `@<pred> bra
-  $L_<target>;` — bypassed in this cycle because it pairs naturally
-  with the setp lowering.
-- STMT_CALL real lowering of the gpu intrinsic names → `mov.u32 %r<dst>,
-  <sreg>.<axis>;` (this cycle CLASSIFIES the call dst as U32 but the
-  call body is still a stub).
-- STMT_LOAD / STMT_STORE → `.global.f64` / `.shared.f64` with the
-  existing 055-P1 address-arithmetic helpers.
-
-**(a) ml_canon_path 재-land + 보존 — investigation result.** The user
-also asked to re-land + preserve the `ml_canon_path` canon fix on the
-flatten/diamond path. Investigation:
-1. The fix IS in current `self/module_loader.hexa` source (lines 102-148);
-   `ml_resolve_full` calls it (line 677) so the visited-set and read
-   path are canonical.
-2. The deployed `self/native/hexa_cc.c` carries 0 references to
-   `ml_canon_path` (grep). So the source has the fix but the deployed
-   transpiler binary doesn't — that's why `hexa build compiler/main.hexa`
-   still produces the 4 dup-symbol errors (`EdgeInfo`/`AtlasIndex`/
-   `AtlasNode`/`GradeInfo`, all from `compiler/atlas/parser.hexa` which
-   is reachable via many `../atlas/parser.hexa` import chains).
-3. The fix needed is a **bootstrap regen** (`hexa cc --regen`) — write
-   the current `.hexa` sources into a fresh `hexa_cc.c`, rebuild
-   `hexa_v2`, fixpoint-check, promote. That modifies paths in the
-   install root (NOT the worktree), touches the deployed driver every
-   parallel session uses, and the bootstrap CI is currently broken
-   on `rt_str_*` link errors (orthogonal — a runtime-mismatch on main
-   HEAD). Doing a bootstrap regen autonomously while the bootstrap CI
-   is broken and 8 sessions share the install root hits the safety
-   floor for "genuinely irreversible / ambiguous" actions — it needs
-   explicit operator authorization + a dedicated regen cycle (with
-   the `rt_str_*` runtime gap resolved first or in parallel). The
-   memory `project_compiler_selfbuild_blockers` is updated with this
-   2026-05-20 reconfirmation; the bootstrap regen is the documented
-   precondition for RFC 055 P3a's e2e.
-
-**Files** — extended only: `compiler/codegen/nvptx_target.hexa` (+~130
-lines, classification infrastructure additive), `compiler/codegen/
-nvptx_lower_test.hexa` (+new classify case).
-
-### 2026-05-20 — RFC 055 055-P3b — generic `_nvptx_lower_func` gains the STMT_BR primitive
-
-First slice of 055-P3b (the generic MIR-walk lowering of stmt kinds
-beyond the 055-P0 FP64-arithmetic straight-line subset). The crucial
-property of the 055-P0 generic path was that it ONLY handled
-`STMT_ASSIGN` / `STMT_BINOP{add,sub,mul}` / `STMT_RETURN` — every other
-stmt kind became an honest stub comment in the emitted PTX. The 055-P1
-/ 055-P2 keystone kernels (`emit_ptx_{vec_add,gemm}_module`) sidestepped
-that gap by HAND-emitting the full kernel body. 055-P3b chips away at
-the gap one stmt kind at a time.
-
-**What landed (compiler/codegen/nvptx_target.hexa, +10 lines additive):**
-- `_nvptx_lower_stmt` learns `STMT_BR` (MIR unconditional branch) →
-  `bra $L_<target_block>;`. PTX has no fall-through-only convention;
-  every block must end in a terminator, so the lowering emits an
-  explicit `bra` even when the target block follows in source order.
-  Type-agnostic — no new register-bank requirement.
-- Honest-stub comment updated to name the still-unhandled kinds
-  (`STMT_BR_COND` / `STMT_CALL` / `STMT_LOAD` / `STMT_STORE`) as "rest
-  of 055-P3b" — a clear next-target for a future cycle.
-
-**Verification (compiled path, standalone — no full-compiler build needed):**
-- `compiler/codegen/nvptx_lower_test.hexa` (new) — hand-builds a
-  2-block MFunc (`fn br_smoke(a,b){ r = a+b ; br -> block 1 } { return }`)
-  the same way `codegen_test.hexa` builds CPU test MIR, runs
-  `codegen_emit_ptx_sm80`, asserts the lowered PTX contains the block-0
-  label, the f64 `add` for the binop, the `bra $L_1;` terminator from
-  the new STMT_BR case, the block-1 label, and the `ret;`. **PASS**.
-- Regression — the existing 055-P0 `nvptx_emit_test`, 055-P1
-  `nvptx_vec_add_test`, 055-P2 `nvptx_gemm_test` all still **PASS**
-  post-extension (the new STMT_BR branch is purely additive and never
-  reached by their fixtures).
-
-**Honest scope — still 055-P3b (the rest, not this commit):**
-- `STMT_BR_COND` needs the predicate-register (`%p<id>`) dance, which
-  requires per-Local type tracking separate from the existing
-  `%fd<id>` collection in `_nvptx_collect_f64_regs`.
-- `STMT_CALL` for known gpu intrinsic names (`gpu_thread_id_x` etc.)
-  → sreg `mov.u32` reads; non-intrinsic `STMT_CALL` stays a stub.
-- `STMT_LOAD` / `STMT_STORE` → `.global.f64` / `.shared.f64`
-  address-space ops with the existing 055-P1 address-arithmetic
-  helpers.
-
-The per-Local type tracking refactor is the prerequisite for the
-remaining three kinds; the STMT_BR primitive lands first because it
-doesn't need it.
-
-**Files** — added: `compiler/codegen/nvptx_lower_test.hexa`. Extended:
-`compiler/codegen/nvptx_target.hexa` (+10 lines, `_nvptx_lower_stmt`
-gains the STMT_BR case + the honest-stub comment is rewritten).
-
-### 2026-05-20 — rfc_006 §5 absorption gate — bug (a) `$eq` cell lowering CLOSED
-
-**Scope.** rfc_006 §5 absorption-gate cell-coverage cycle (techmap_sky130).
-PR #125 (squash `39ae7c4c`) closed bugs (b) abc_map script order + (c)
-gate_record lib_total_area; the next blocker measured immediately after
-that merge was ABC reporting `Cannot find gate "$eq" in the library`
-— i.e. the SKY130 library doesn't contain a 1-bit equality primitive
-under that name, and `pass_techmap_sky130` was leaving the generic
-`$eq` cell unmapped. This sub-cycle closes bug (a) ONLY.
-
-**Change.** `stdlib/kernels/logic_synth/passes.hexa` — `pass_techmap_sky130`
-extended from 1-to-1 cell rename to a mixed shape: existing five
-rules (`$and`/`$or`/`$xor`/`$not`/`$dff`) stay 1-to-1; the new `$eq`
-rule is a 1-to-many tree expansion `eq(A,B) = AND_i (A[i] XNOR B[i])`
-re-derived clean-room from IEEE 1364-2005 §5.1.7 (no Yosys source
-copied). SKY130 cells used (from `sky130_fd_sc_hd__tt_025C_1v80.lib`):
-`sky130_fd_sc_hd__xnor2_1` and `sky130_fd_sc_hd__and2_1`. Pin
-convention: width=1 input shape `A`/`B`/`Y` collapses to a single
-xnor2_1 (the degenerate tree); width=N>1 uses bit-indexed input pins
-`A[i]`/`B[i]` plus a single `Y`, emits N xnor2_1 + a linear (N-1)-stage
-and2_1 reduction chain. Helper trio added — `_passes_eq_width`,
-`_passes_pin_net`, `_passes_lower_eq_cell` (returns `EqLowerResult`
-of cells + internal wires).
-
-**Selftest.** Three new cases T10/T11/T12 in the `passes.hexa` selftest
-harness — 1-bit (1 xnor, 0 and), 2-bit (2 xnor, 1 and), 4-bit (4 xnor,
-3 and). Each case also checks (i) the `$eq` cell is fully consumed
-(zero residual), and (ii) `rtlil_check_no_dangling` returns 0 on the
-expanded design (the freshly minted `$eqbit$<i>` and `$eqacc$<j>`
-wires are added to the module's wire list so no cell pin references a
-non-existent net). Pre-edit baseline: 9/9 PASS. Post-edit: **12/12 PASS**
-under `hexa parse` shim (which auto-runs the selftest on this file).
-
-**Gate progression — measured.** Re-running the §5 gate
-(`hexa run stdlib/yosys/gate_record.hexa --lib …__tt_025C_1v80.lib`)
-after the fix:
-- d4 pipeline: `read_verilog → hierarchy → proc → flatten → opt →
-  techmap → dfflibmap` all `[OK]`; `abc_map` now fails with
-  `Line 6: Cannot find gate "$ne" in the library.` — the `$eq` error
-  went away, the next missing cell is `$ne`.
-- d6 pipeline: same — next blocker `$ne`.
-
-**Next sub-cycle (bug (a) iteration 2).** `$ne` lowering — same XNOR
-algebra inverted: `ne(A,B) = OR_i (A[i] XOR B[i])` (or equivalently
-`NOT eq(A,B)` reusing the existing chain). SKY130 cells available:
-`sky130_fd_sc_hd__xor2_1` and `sky130_fd_sc_hd__or2_1` (already in
-the `__or2_1`/`__xor2_1` family the current 1-to-1 rules use).
-
-**g3 honesty.** The §5 absorption gate is still **OPEN** — closing
-`$eq` only moved the failure-frontier one cell forward (the gate's
-own verdict still prints `PARTIAL` and `rfc_006 §5 is OPEN — no
-"Yosys absorbed" claim`). Bug (a) is a multi-iteration cell-coverage
-cycle; this PR is iteration 1 of (likely) several. No claim of
-end-to-end absorption is made here.
-
-**Files** — extended only: `stdlib/kernels/logic_synth/passes.hexa`
-(+200 lines, technical comment + 3 helpers + 3 selftest cases).
-No source/binary drift to manage — pass library is hexa source under
-the existing module loader path; no compiler frontend change.
-
-### 2026-05-20 — RFC 055 §12 P4+ scaffold batch — 3 follow-on v2 PRs LANDED
-
-Three §12 P4+ scaffolds (predecessors closed because additive auto-merges
-with the #108 atomic_add + #109 warp_shuffle batch produced syntactically
-broken hexa) re-ported manually onto post-batch origin/main and landed
-back-to-back. Each v2 used the same surgical-port pattern: `git diff
-<orig>^ <orig> -- <file>` to extract the predecessor's pure-additive diff,
-then locate the seam on current main + place the snippet by hand so no
-auto-merge runs.
-
-PRs landed (admin-squash, branch deleted):
-- #117 — `_nvptx_unroll_pass` MVP (v2, on current main)
-  • compiler/codegen/nvptx_target.hexa +358 lines: pass that clones
-    the body of a canonical 3-block back-edge loop `factor` times.
-    Pattern recognized: `header → body → header` with header
-    ending in STMT_BR_COND(body, exit) and body ending in
-    STMT_BR(header). Non-matching CFGs returned UNCHANGED (honest
-    passthrough).
-  • compiler/codegen/nvptx_lower_test.hexa +195 lines: Case 10
-    (canonical loop factor=2 unroll) + Case 11 (passthrough byte-eq).
-  • lower_test 9/9 → 11/11 PASS.
-- #121 — Tensor Core MMA scaffold (v2)
-  • nvptx_target.hexa +63 lines: `NVPTX_RKIND_FRAG` constant +
-    `_nvptx_wmma_mnemonic()` table (`gpu_wmma_load_a/_load_b/_mma/
-    _store_c` → m16n16k16 PTX mnemonics, f16×f16→f32 family) +
-    STMT_CALL branch recognition (emits honest stub `// RFC 055 §12
-    P4+ WMMA (scaffold, not yet wired) — <op> -> <mnem>` comment).
-  • nvptx_lower_test.hexa +95 lines: Case 12 `_test_wmma_scaffold`.
-  • lower_test 11/11 → 12/12 PASS.
-- #123 — mixed-precision PTX types scaffold (v2)
-  • nvptx_target.hexa +61 lines: `NVPTX_RKIND_F16/_BF16/_F32`
-    constants + `_nvptx_reg_{f16,bf16,f32}` helpers (prefix `%fh`/
-    `%fb`/`%fs`) + classifier rules for STMT_BINOP `add_f16/_bf16/
-    _f32` opcodes (aspirational — MIR layer does not emit them yet).
-  • nvptx_lower_test.hexa +108 lines: Case 13
-    `_test_mixed_precision_scaffold` asserts `.reg .f16 %fh3` +
-    `.reg .bf16 %fb4` + `.reg .f32 %fs5` declarations clean.
-  • lower_test 12/12 → 13/13 PASS.
-
-Quality gates (all 3 PRs):
-- mir.hexa untouched → F-RFC055-CPU-CODEGEN-UNTOUCHED preserved.
-- CPU codegen / x86_64_linux / arm64_darwin / thumbv7em_eabihf
-  unchanged.
-- hexa_real parse — both files clean per PR.
-- @D g_commit_push_deploy — all 3 edit `compiler/` only; no
-  `self/codegen_c2.hexa` change → no bootstrap regen required.
-- Regression: `nvptx_emit_test` + `nvptx_vec_add_test` +
-  `nvptx_gemm_test` all PASS after each landing.
-
-Honest scope (@D g3) — none of the 3 PRs claim a working impl:
-- Unroll: factor=2 MVP only; multi-exit / nested / non-canonical
-  CFG shapes fall through to passthrough (deferred per
-  gpu/SPEC.md §10).
-- MMA: scaffold MAKES REACHABLE — fragment register-bank allocation,
-  `.shared` staging decl, per-fragment dtypes (`.f16` vs `.f32` vs
-  `.bf16`), `.row` vs `.col` orientation, tile-loop integration are
-  each a follow-on cycle.
-- Mixed-precision: only the classifier + reg-decl side wired; the
-  MIR layer that PRODUCES `add_f16/_bf16/_f32` opcodes is a future
-  hir_to_mir.hexa cycle (per-Local precision tags), and the body
-  lowering (`add.f16 %fh<d>, %fh<a>, %fh<b>` etc.) is similarly
-  deferred.
-
-Pattern lesson — surgical-port-over-cherry-pick when the predecessor
-was closed for auto-merge corruption: don't replay the cherry-pick.
-Extract the diff per-file with `git diff <orig>^ <orig> -- <path>`,
-parse-gate locally, hand-place the snippet at the matching seam on
-current main, repeat per file. This was the pattern that closed
-all 3 PRs cleanly (#117 + #121 + #123).
-
-cross-link: inbox/notes/2026-05-20-rfc055-p4-followons-v2-closure.md
-
-### 2026-05-20 — RFC 067 + 068 + 069 — 3 Shape-B drafts LANDED (next layer = P1 implementations)
-
-Three Shape-B "RFC drafted + scaffold marker" cycles for the deferred
-follow-on follow-ons named in the 2026-05-20 §12 P4+ closure note
-(#127). Each was a single-commit zero-behavior-change PR per the Shape-
-B SOP (`@D g_inbox_processing_loop`): RFC file in
-`inbox/rfc_drafts_2026_05_20/` + RFC-comment-marker on the relevant
-codegen seam + parse-gate + regression smoke (lower_test 13/13 PASS).
-
-PRs landed (admin-squash, branch deleted):
-- #138 — RFC 067 Real WMMA PTX emit (Shape-B scaffold)
-  • Successor to PR #121 (MMA scaffold).
-  • inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md (+199 lines)
-  • 2 marker comments in nvptx_target.hexa (mnemonic-table seam +
-    NVPTX_RKIND_FRAG seam).
-  • Phasing P0..P5: P1 fragment-as-tile-vector, P2 .shared decl,
-    P3 per-fragment dtype + layout, P4 tile-loop integration (first
-    GPU fire), P5 multi-family bf16 + f16-accum (deferred).
-  • Falsifiers F1..F6 (F4 = TILE-LOOP-NUMERIC, real-silicon ≤1e-2
-    rel error vs FP64 baseline).
-- #140 — RFC 068 Mixed-precision MIR layer (Shape-B scaffold)
-  • Successor to PR #123 (mixed-precision scaffold).
-  • inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md
-    (+198 lines)
-  • 2 marker comments (hir_to_mir.hexa binop seam + nvptx_target.hexa
-    STMT_BINOP body branch).
-  • Phasing P0..P5: P1 per-Local precision-tag thread (HIR→MIR), P2
-    STMT_BINOP op-name generation from precision, P3 body lowering
-    (add.f16/.bf16/.f32 mnemonics), P4 numeric falsifier (first GPU
-    fire, ≤2× f16-ULP), P5 mixed-family arithmetic (deferred).
-- #141 — RFC 069 Advanced loop unroll (Shape-B scaffold)
-  • Successor to PR #117 (unroll MVP).
-  • inbox/rfc_drafts_2026_05_20/rfc_069_unroll_advanced.md (+199 lines)
-  • 1 marker comment (_nvptx_unroll_pass public entry).
-  • Phasing P0..P5: P1 factor parameterization (factor=N), P2 multi-
-    exit recognition, P3 nested-loop preservation (1-level depth),
-    P4 numeric falsifier (byte-eq output, first GPU fire), P5
-    deferred (deeper nesting + while-with-early-return + irregular
-    back-edges).
-  • Unique F7: PASSTHROUGH-PRESERVED — every RFC 069 cycle MUST keep
-    PR #117's Case 11 (non-matching CFG passthrough) byte-identical.
-
-Quality gates (all 3 PRs):
-- Parse-gate clean (`hexa_real parse` on every modified file).
-- nvptx_lower_test regression 13/13 PASS (markers are comment-only).
-- @D g_commit_push_deploy — no `self/codegen_c2.hexa` change → no
-  bootstrap regen required for any of the 3.
-- F5 NO-LLVM-NO-CTRANS + F6 CPU-CODEGEN-UNTOUCHED continuous gates
-  begin on every draft (zero LLVM/clang-target-nvptx repo-wide; CPU
-  codegen byte-identical).
-
-Honest scope (`@D g3`) — none of the 3 PRs claim implementation:
-- Each RFC §7 explicitly states "closure of THIS RFC = P4 numeric
-  falsifier PASS on real silicon". P1..P4 are subsequent cycles.
-- The 3 drafts give the 3 deferred items from #127 closure note a
-  written plan + falsifier battery + marker seam — they do NOT
-  implement WMMA / mixed-precision / advanced unroll.
-
-Next layer = P1 implementation cycles. Each P1 lands working code
-(not a doc + marker), measured against the F1 falsifier of its
-respective RFC. P1 lands cannot be batched in a single autonomous
-session — each carries data-model changes (fragment-vector PReg
-extension; Local.precision field) and per-cycle byte-eq + parse
-gates that warrant a focused implementation pass.
-
-Cumulative drafts: 3 RFCs (067 + 068 + 069), 4 marker comments,
-+597 RFC text lines. Today's full §12 P4+ arc (closure + 3 drafts):
-4 PRs across two doc-only batches (#127 closure + #138/#140/#141
-drafts).
-
-cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md
-
-### 2026-05-20 — rfc_006 §5 absorption gate — iter 9: `$mod` non-pow-of-2 LUT lowering (Shape A)
-
-**Scope.** Iter 9 of the rfc_006 §5 absorption cycle. Upgrades the
-`_passes_lower_mod_cell` case-B branch (non-power-of-2 const divisor)
-from iter-7's fail-loud to a bounded-input LUT lowering. The router_d4
-fixture has 5× `$mod` cells with divisor 5; router_d6 has 7× with
-divisor 7. Both lower at A-width W=1 after read_verilog (which leaves
-generic `$mod` cells width-tolerant before bit-elaboration). The LUT
-helper handles W up to 5 (32-row truth table cap); beyond W=5 the
-helper still fail-louds with the iter-9 W-cap diagnostic.
-
-**Theorem citation (`@D g6`).** Per-bit canonical SOP from truth-table
-expansion — Mano/Kime "Logic and Computer Design Fundamentals" §3-3
-+ Kohavi/Jha "Switching and Finite Automata Theory" Ch. 4. Each
-output bit Y[i] = OR over minterms M of AND over input-bit
-literals. AND-tree binary-reduces via `sky130_fd_sc_hd__and2_1`;
-OR-tree via `sky130_fd_sc_hd__or2_1`; negated literals via
-`sky130_fd_sc_hd__inv_1`; degenerate all-zero / all-one columns tie
-to `$_const0_` / `$_const1_` sentinels.
-
-**Touched.** `stdlib/kernels/logic_synth/passes.hexa` (+510 −16):
-- New helpers: `_passes_pow2(k)`, `_passes_mod_yw(c)`,
-  `_passes_mod_a_bit(c, w, v)`, `_passes_mod_y_bit(c, yw, i)`,
-  `_passes_lower_mod_case_b_lut(c, nval, w)`.
-- Case-B branch in `_passes_lower_mod_cell` now calls the LUT helper
-  instead of returning the iter-7 fail-loud.
-- T27 reframed (was: assert case-B fail-loud; now: assert iter-9 LUT
-  success at W=1 N=3).
-- New T28/T29/T30: T28 W=3 N=5 (3-bit Y, 3-bit A · invariant: 0
-  residual $mod, ≥1 $_const1_, 0 $_const0_ since every column has
-  ≥1 minterm and ≤2^W-1 minterms · no-dangling). T29 same shape with
-  N=7. T30 W=6 N=5 (over-envelope, asserts ok=0 ok_kind=2 with the
-  W=6 cap message).
-
-**Selftest.** `passes selftest: 30/30 PASS` (was 27/27 baseline).
-abc_map/read_verilog/liberty/rtlil selftests unchanged — no
-regression.
-
-**§5 oracle (`stdlib/yosys/gate_record.hexa`).** Re-run measured —
-the iter-9 LUT lowering eliminates ALL 12 `lower_mod` fail-loud
-diagnostic lines (5 in router_d4 + 7 in router_d6 → 0). The `$mod`
-cells are absorbed into the techmap stage cleanly. **However, the
-gate remains OPEN**: ABC's `read_blif` SOP-check now mis-fires on
-the d{4,6}_in.blif because the BLIF mixes `.gate` cells (techmap'd
-sky130 instances) with `.names` constant nodes (iter-6's
-`$_const{0,1}_` BLIF emission policy). Minimal-isolation repro:
-
-    .model t
-    .inputs a
-    .outputs y
-    .names c1
-    1
-    .gate sky130_fd_sc_hd__and2_1 A=a B=c1 X=y
-    .end
-
-    abc -c "read_lib …sky130_fd_sc_hd…lib; read_blif t.blif; map"
-    →  Abc_SopCheck: SOP has a mismatch between its cover size (24)
-       and its fanin number (2).
-       NodeCheck: SOP check for node "y" has failed.
-       Io_ReadBlifMv: The network check has failed for model t.
-
-This is a **pre-existing, separately-existing** blocker — the iter-6
-`abc_map` selftest validates the BLIF text shape only (`.find(".names z1\n1\n")`),
-not the ABC-runs-on-it round-trip. Iter-9 surfaces it because
-the techmap'd designs now reach ABC instead of being blocked
-upstream at the `$mod` lowering stage.
-
-**Next blocker.** ABC mixed-mode (`.gate` + `.names`) BLIF
-incompatibility. Options for the next iter:
-1. emit constants as `.gate sky130_fd_sc_hd__conb_1 HI=…/LO=…` and
-   verify the iter-6 ABC rejection ("conb_1 outputs are pure
-   constants with no boolean function") still applies on the
-   currently-installed `/Users/ghost/bin/abc`;
-2. fold `Y = A AND 1` into a top-level RTLIL `connect` (LHS=Y,
-   RHS=A) at the pass layer so no `.names` constant cell is needed
-   in the BLIF;
-3. pre-process the BLIF through ABC's logic-mode `strash` and only
-   then run `map` — confirm ABC accepts the AIG-strashed form.
-
-Per `@D g3`: this iter does NOT close the §5 absorption gate. It
-moves the §5 oracle's failure mode from "$mod lowering refuses
-non-pow-of-2 divisor" (12 cells) to "ABC `read_blif` SOP-check
-rejects mixed `.gate`+`.names` BLIF" (12 unmapped ABC runs). The
-gate verdict stays **PARTIAL** until the BLIF-emission policy is
-revised.
-
-cross-link: `stdlib/kernels/logic_synth/passes.hexa` (LUT helper).
-
-### 2026-05-20 — rfc_006 §5 absorption gate — iter 9: `$mod` non-pow-of-2 LUT lowering (Shape A)
-
-**Scope.** Iter 9 of the rfc_006 §5 absorption cycle. Upgrades the
-`_passes_lower_mod_cell` case-B branch (non-power-of-2 const divisor)
-from iter-7's fail-loud to a bounded-input LUT lowering. The router_d4
-fixture has 5× `$mod` cells with divisor 5; router_d6 has 7× with
-divisor 7. Both lower at A-width W=1 after read_verilog (which leaves
-generic `$mod` cells width-tolerant before bit-elaboration). The LUT
-helper handles W up to 5 (32-row truth table cap); beyond W=5 the
-helper still fail-louds with the iter-9 W-cap diagnostic.
-
-**Theorem citation (`@D g6`).** Per-bit canonical SOP from truth-table
-expansion — Mano/Kime "Logic and Computer Design Fundamentals" §3-3
-+ Kohavi/Jha "Switching and Finite Automata Theory" Ch. 4. Each
-output bit Y[i] = OR over minterms M of AND over input-bit
-literals. AND-tree binary-reduces via `sky130_fd_sc_hd__and2_1`;
-OR-tree via `sky130_fd_sc_hd__or2_1`; negated literals via
-`sky130_fd_sc_hd__inv_1`; degenerate all-zero / all-one columns tie
-to `$_const0_` / `$_const1_` sentinels.
-
-**Touched.** `stdlib/kernels/logic_synth/passes.hexa` (+510 −16):
-- New helpers: `_passes_pow2(k)`, `_passes_mod_yw(c)`,
-  `_passes_mod_a_bit(c, w, v)`, `_passes_mod_y_bit(c, yw, i)`,
-  `_passes_lower_mod_case_b_lut(c, nval, w)`.
-- Case-B branch in `_passes_lower_mod_cell` now calls the LUT helper
-  instead of returning the iter-7 fail-loud.
-- T27 reframed (was: assert case-B fail-loud; now: assert iter-9 LUT
-  success at W=1 N=3).
-- New T28/T29/T30: T28 W=3 N=5 (3-bit Y, 3-bit A · invariant: 0
-  residual $mod, ≥1 $_const1_, 0 $_const0_ since every column has
-  ≥1 minterm and ≤2^W-1 minterms · no-dangling). T29 same shape with
-  N=7. T30 W=6 N=5 (over-envelope, asserts ok=0 ok_kind=2 with the
-  W=6 cap message).
-
-**Selftest.** `passes selftest: 30/30 PASS` (was 27/27 baseline).
-abc_map/read_verilog/liberty/rtlil selftests unchanged — no
-regression.
-
-**§5 oracle (`stdlib/yosys/gate_record.hexa`).** Re-run measured —
-the iter-9 LUT lowering eliminates ALL 12 `lower_mod` fail-loud
-diagnostic lines (5 in router_d4 + 7 in router_d6 → 0). The `$mod`
-cells are absorbed into the techmap stage cleanly. **However, the
-gate remains OPEN**: ABC's `read_blif` SOP-check now mis-fires on
-the d{4,6}_in.blif because the BLIF mixes `.gate` cells (techmap'd
-sky130 instances) with `.names` constant nodes (iter-6's
-`$_const{0,1}_` BLIF emission policy). Minimal-isolation repro:
-
-    .model t
-    .inputs a
-    .outputs y
-    .names c1
-    1
-    .gate sky130_fd_sc_hd__and2_1 A=a B=c1 X=y
-    .end
-
-    abc -c "read_lib …sky130_fd_sc_hd…lib; read_blif t.blif; map"
-    →  Abc_SopCheck: SOP has a mismatch between its cover size (24)
-       and its fanin number (2).
-       NodeCheck: SOP check for node "y" has failed.
-       Io_ReadBlifMv: The network check has failed for model t.
-
-This is a **pre-existing, separately-existing** blocker — the iter-6
-`abc_map` selftest validates the BLIF text shape only (`.find(".names z1\n1\n")`),
-not the ABC-runs-on-it round-trip. Iter-9 surfaces it because
-the techmap'd designs now reach ABC instead of being blocked
-upstream at the `$mod` lowering stage.
-
-**Next blocker.** ABC mixed-mode (`.gate` + `.names`) BLIF
-incompatibility. Options for the next iter:
-1. emit constants as `.gate sky130_fd_sc_hd__conb_1 HI=…/LO=…` and
-   verify the iter-6 ABC rejection ("conb_1 outputs are pure
-   constants with no boolean function") still applies on the
-   currently-installed `/Users/ghost/bin/abc`;
-2. fold `Y = A AND 1` into a top-level RTLIL `connect` (LHS=Y,
-   RHS=A) at the pass layer so no `.names` constant cell is needed
-   in the BLIF;
-3. pre-process the BLIF through ABC's logic-mode `strash` and only
-   then run `map` — confirm ABC accepts the AIG-strashed form.
-
-Per `@D g3`: this iter does NOT close the §5 absorption gate. It
-moves the §5 oracle's failure mode from "$mod lowering refuses
-non-pow-of-2 divisor" (12 cells) to "ABC `read_blif` SOP-check
-rejects mixed `.gate`+`.names` BLIF" (12 unmapped ABC runs). The
-gate verdict stays **PARTIAL** until the BLIF-emission policy is
-revised.
-
-cross-link: `stdlib/kernels/logic_synth/passes.hexa` (LUT helper).
-
-### 2026-05-20 — RFC 067 P2 + RFC 069 P2/P3 — 3 surgical Px implementations LANDED
-
-Three P2/P3 surgical-implementation cycles completing the §3 P2/P3
-phases for RFC 067 (.shared staging) and RFC 069 (multi-exit + nested
-preservation). Each PR closes a falsifier on the lower_test ratchet
-(17/17 → 18/18 → 19/19).
-
-PRs landed (admin-squash, branch deleted):
-- #155 — RFC 067 P2 `.shared` staging-area declaration
-  (F-RFC067-SHARED-DECL PASS)
-  • compiler/codegen/nvptx_target.hexa +25 lines: `_emit_ptx_func`
-    scans callee_saved for any FRAG entry; when present, emits
-    `.shared .align 16 .b8 _hexa_wmma_stage_<fn>[2048];` (16×16 f16
-    tile × 4 staging slots). Slot name uses kernel basename
-    (NVPTX_KERNEL_PREFIX stripped if present).
-  • compiler/codegen/nvptx_lower_test.hexa +47 lines: Case 17
-    `_test_shared_decl` with 3 sub-asserts (substring + count +
-    negative guard on non-WMMA fixture).
-  • lower_test 16/16 → 17/17.
-- #156 — RFC 069 P2 multi-exit loop matcher
-  (F-RFC069-MULTI-EXIT-MATCH PASS)
-  • compiler/codegen/nvptx_target.hexa +47 lines:
-    `_nvptx_unroll_back_edge_kind` classifies body terminator's
-    back-edge form ("br" / "br_cond_true" / "br_cond_else" / "").
-    `_nvptx_unroll_rewrite_arm` rewrites ONLY the back-edge arm,
-    preserving the early-exit arm verbatim per clone.
-    `_nvptx_unroll_find_pattern` extended to accept both forms.
-  • compiler/codegen/nvptx_lower_test.hexa +97 lines: Case 18
-    `_test_multi_exit_match` with 4 sub-asserts (factor=3 body
-    × 3, setp count, ≥3 break-edges, F7 passthrough byte-eq).
-  • lower_test 17/17 → 18/18.
-- #159 — RFC 069 P3 nested loop detection + preservation
-  (F-RFC069-NESTED-PRESERVE PASS — scope narrowed per g3)
-  • compiler/codegen/nvptx_target.hexa +62 lines:
-    `_nvptx_unroll_contains_inner_loop(body, mfn)` walks outgoing
-    targets from body.stmts; returns true if any non-body target
-    has a terminator carrying a back-edge (target ≤ own id).
-    `_nvptx_unroll_pass` early-returns mfn unchanged when detected.
-  • compiler/codegen/nvptx_lower_test.hexa +118 lines: Case 19
-    `_test_nested_preserve` with 5 sub-asserts (byte-eq, setp
-    count, bra count, detection-true, negative-guard on canonical
-    fixture).
-  • lower_test 18/18 → 19/19.
-
-P3 SCOPE NARROWING (g3 honesty):
-- The RFC 069 §3 P3 text originally suggested cloning outer body
-  with each clone containing a freshly-renumbered copy of the inner
-  loop, with F3 asserting factor-N inner-loop appearance. That's
-  substantial multi-block-region cloning work (4+ helpers needed
-  to renumber Block IDs across a CFG subgraph).
-- The P3 commit lands the NARROWER honest reading: detect nested-
-  loop presence → return mfn UNCHANGED. The visible behavior matches
-  today's pattern-matcher-fail passthrough for many nested shapes,
-  but the detection makes the no-op explicit and verifiable from
-  the source code.
-- Full multi-block-region nested unroll is REFRAMED as P5 — was
-  originally listed as "deeper nesting" in §3 P5, now P5 covers
-  BOTH single-level multi-block region cloning AND deeper-nesting.
-- This narrowing is explicit in the PR body, the commit message,
-  and the in-source RFC marker comment (RFC 069 §3 P3 implementation
-  reality).
-
-Quality gates (all 3 PRs):
-- All modified files parse-clean (`hexa_real parse`).
-- CPU codegen targets byte-identical (x86_64_linux / arm64_darwin /
-  thumbv7em_eabihf).
-- mir.hexa untouched.
-- @D g_commit_push_deploy — `self/codegen_c2.hexa` untouched across
-  all 3 PRs; no bootstrap regen required.
-- Regression: `nvptx_emit_test` + `nvptx_vec_add_test` +
-  `nvptx_gemm_test` all PASS after each landing.
-
-Falsifier ratchet (cumulative on RFC 067/068/069 — 5 of 21 PASS):
-- F-RFC067-FRAG-WIDTH (P1) — PASS (#150)
-- F-RFC067-SHARED-DECL (P2) — PASS (#155)
-- F-RFC068-PRECISION-PROPAGATE (P1) — PASS (#148)
-- F-RFC069-FACTOR-N (P1) — PASS (#147)
-- F-RFC069-MULTI-EXIT-MATCH (P2) — PASS (#156)
-- F-RFC069-NESTED-PRESERVE (P3, scope-narrowed) — PASS (#159)
-- Continuous gates F5/F6/F7 (3) — all PASS throughout.
-
-Pending across all 3 RFCs:
-- RFC 067 P3 DTYPE-FAMILY (per-fragment role + dtype re-key)
-- RFC 067 P4 TILE-LOOP-NUMERIC (real-GPU fire)
-- RFC 067 P5 multi-family bf16 + f16-accum (deferred)
-- RFC 068 P2 OPCODE-SUFFIX (needs HIR `@f16` grammar)
-- RFC 068 P3 BODY-MNEMONIC
-- RFC 068 P4 NUMERIC-EQ (real-GPU fire)
-- RFC 069 P4 NUMERIC-EQ (real-GPU fire)
-- RFC 069 P5 multi-block region cloning (formerly P3 ambitious form)
-
-Cumulative today (full §12 P4+ arc 2026-05-20, 4 batches):
-- Batch 1 — Shape-A v2 surgical-port (#117 + #121 + #123 + #127).
-  lower_test 9/9 → 13/13.
-- Batch 2 — Shape-B P0 RFC drafts (#138 + #140 + #141 + #143).
-  RFC text only.
-- Batch 3 — P1 implementations (#147 + #148 + #150 + #151).
-  lower_test 13/13 → 16/16.
-- Batch 4 — P2/P3 implementations (#155 + #156 + #159 + this
-  closure). lower_test 16/16 → 19/19.
-
-Total today: **14 PRs** (8 implementation + 6 docs/closure). Per-batch
-average 3.5 PRs. Cumulative lower_test ratchet 9 → 19 (+10 cases,
-+1.11× per-batch on average).
-
-cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md
-
-### 2026-05-20 — #18 S1-step-1 — codegen per-phase 계측 landed + baseline 측정 (INSTRUMENT only)
-
-**작업 = instrumentation + baseline 측정 only** — super-linear curve 자체는 본 cycle 에서 고치지 않음 (g3 over-claim 0).
-
-PLAN.md #18 가 S1 prerequisite 로 명시한 "codegen 단계 내부 phase 계측 추가"를 수행. `compiler/main.hexa` 의 기존 `phase_reset`/`phase_log` arena-reclaim hook 옆에 wall-clock 계측을 추가 — 별도 메커니즘 발명 대신 같은 phase-boundary 지점을 재사용.
-
-**Instrumentation (`compiler/main.hexa`, env-gated)**:
-- `HEXA_CG_PROFILE=1` 새 env-gate (`cg_profile` 모듈-스코프 flag). unset 이면 전 호출이 silent no-op — `mono_ns()` syscall 도 stderr write 도 없음.
-- `cg_profile_begin()` / `cg_profile_mark(label)` 헬퍼 — `mono_ns()` (runtime.c `hexa_mono_ns`, `CLOCK_MONOTONIC` TAG_INT ns) 로 phase delta 측정, `CG_PROFILE phase=<label> delta_ms=<N>` 행을 stderr 로 출력.
-- non-stream 파이프라인에 4 mark: `lower_hir` (HIR→MIR) · `mir_opt` (MIR-opt + stmt-count walk) · `codegen` (MIR→LIR) · `emit_asm` (LIR→asm). `--stream` 경로는 fused 라 `stream_fused` 단일 mark.
-- **byte-identical 검증**: N=400 probe asm, `HEXA_CG_PROFILE` 有/無 `diff -q` = byte-identical. env unset 시 `CG_PROFILE` 행 0개. zero behavior change.
-- 깨끗한 명명 — `_v2`/`_c2`/`aprime`/stage-suffix 미사용.
-
-**Baseline 측정** (`tool/build_aprime.sh -o /tmp/aprime_s1`, arm64-Mac 로컬 빌드 — 2.2 MB Mach-O, smoke `exit(42)` PASS; 합성 probe `fn big()` N 개 sequential `let`):
-
-| N   | lower_hir | mir_opt | codegen | emit_asm |
-|-----|-----------|---------|---------|----------|
-| 100 | 15 ms     | 0 ms    | 6 ms    | 1 ms     |
-| 200 | 63 ms     | 0 ms    | 10 ms   | 1 ms     |
-| 400 | 372 ms    | 0 ms    | 29 ms   | 4 ms     |
-
-**측정 결론 — super-linear phase = `lower_hir` (HIR→MIR)**: 15→63→372 ms. N 더블링당 4.2× (100→200) · 5.9× (200→400) — O(N²) 이상. `codegen`(6→10→29) 과 `emit_asm`(1→1→4) 은 거의 선형, `mir_opt` 은 `--opt=0` 에서 무시할 수준. 이는 2026-05-17 entry 의 잔여 진단 — arm64 stmt-loop O(N²) 는 이미 제거됐고 잔여는 `_lower_hexpr` 재귀가 `LowerExprResult{ctx: LowerCtx}` 를 반환 → `LowerCtx.blocks` deep-heapify — 와 정확히 일치. 본 계측이 그 가설을 top-level phase 분해로 재확인.
-
-**punted (다음 cycle, S1-step-2 후보)**: (1) `codegen` 내부 sub-phase 계측 (regalloc vs per-fn lowering) — PLAN.md 가 잔여를 `lower_hir` 로 이미 localize 했고 `codegen` 은 선형이라 본 cycle 에서 추가 안 함 (cheap-but-low-value). (2) super-linear 제거 자체 — `LowerCtx` 의 `blocks`/`locals`/`bindings` 누적 배열을 module-level `pub let mut` 로 빼는 lowering-pass 리팩터 (20+ helper 영향), 본 cycle scope 밖.
-
-
-### 2026-05-20 — #18 S1-step-2 — `lower_hir` super-linear 제거 (O(N²) → near-linear, byte-eq PASS)
-
-**작업 = correctness-preserving 성능 리팩터** — emit asm 는 byte-identical 유지. S1-step-1 이 측정한 `lower_hir` O(N²) 곡선을 제거.
-
-**진단 (코드 확인)**: `_lower_hexpr` 재귀가 `LowerExprResult{ctx: LowerCtx}` 를 반환. `LowerCtx` 가 누적 배열 `locals`/`blocks`/`bindings` 를 필드로 보유 → 매 `_lower_hexpr` 반환마다 `hexa_val_heapify` 가 그 배열들을 deep-copy (배열 자체는 hexa 핸들 공유라 struct 재구성에서는 안 복사되나, fn-arena escape 시점의 heapify 가 N 개 원소를 모두 복사). N 개 sequential stmt → O(N²).
-
-**리팩터 (`compiler/lower/hir_to_mir.hexa`, 단일 파일)**: 누적 배열을 module-scope `pub let mut` 로 분리 (`_lr_locals` / `_lr_blocks` / `_lr_bindings` / `_lr_frame_starts` / `_lr_globals` — 기존 `_lr_diag`/`_lr_lambdas` 관례 그대로). `LowerCtx` 는 6 스칼라 필드만 보유 (`next_local`/`next_block`/`next_arena`/`arena_root`/`cur_block`/`has_returned`) → 스레딩이 O(N) 배열을 더 이상 안 건드림. 헬퍼 (`_fresh_local`/`_new_block`/`_push_stmt_to`/`_add_edge`/`_patch_loop_sentinels`/`_bind`/`_rebind`)는 `LowerCtx` 시그니처 유지 (call graph·스레딩 순서 byte-identical) — module 배열을 in-place mutate 만.
-
-**runtime arena 함정 2건 (측정으로 발견·해결)**:
-1. **버퍼 수명** — module-global 을 함수 안에서 `= []` 로 재대입하면 그 `[]` 리터럴이 live fn-arena mark 아래서 arena-backed (cap<0) → callee arena rewind 시 버퍼 free → `_lr_*` dangling (`map key 'id' not found` → heapify 스택오버플로 SIGSEGV 로 관측). 해결: per-fn reset 을 `.truncate(0)` (같은 heap 버퍼 유지, len 만 0) 로. module 배열은 module-scope `[]` (mark_top==0 → heap) 로 1회 할당, pass 전체에서 heap 유지.
-2. **원소 수명** — `_lr_blocks[i] = Block{...}` 의 `hexa_array_set` 는 (`hexa_array_push` 와 달리) 값을 heapify 안 함 → deep callee frame 에서 만든 Block 이 module 배열에 들어간 뒤 그 frame rewind 시 free. 해결: write-back 제거하고 stmts/preds/succs 를 공유 핸들째 in-place `.push` (`.push` 는 원소 heapify 함). `_patch_loop_sentinels` 는 sentinel 패치 후 `stmts.truncate(0)` + 전 원소 re-`.push`. `_rebind` 는 array_set 대신 shadowing binding append (`_mir_lookup` 이 tail-first 라 결과 동일).
-
-**closure**: 람다 본문은 `_lr_ctx_save` (둘러싼 배열 핸들 저장) → `_lr_ctx_fresh` (람다용 신규 배열) → 람다 MFunc 빌드 → `_lr_lambdas.push` (heapify 가 람다 배열을 heap 승격) → `_lr_ctx_restore` 순. `_lr_globals` 는 module-wide read-only 라 per-ctx `globals` seed 불필요.
-
-**재측정** (`tool/build_aprime.sh -o /tmp/aprime_s2`, arm64-Mac 로컬, smoke `exit(42)` PASS):
-
-| N   | lower_hir (전) | lower_hir (후) | codegen | emit_asm |
-|-----|----------------|----------------|---------|----------|
-| 100 | 62 ms          | **2 ms**       | 19 ms   | 2 ms     |
-| 200 | 270 ms         | **3 ms**       | 28 ms   | 3 ms     |
-| 400 | 1527 ms        | **9 ms**       | 67 ms   | 14 ms    |
-
-`lower_hir` 62→270→1527 (≈5.7× per N-doubling, O(N²)) → 2→3→9 (near-linear). N=400 에서 ≈170× 빠름. `codegen`/`emit_asm` 은 미변경 (리팩터가 안 건드림).
-
-**byte-eq falsifier — PASS (7/7 fixture)**: emit asm 가 baseline(`/tmp/aprime_base`) vs 리팩터 build 사이 byte-identical 임을 확인.
-- 합성 probe N=100 (39,986 B) / N=200 (88,528 B) / N=400 (191,592 B) — IDENTICAL
-- `fib`/`while`/`if` 제어흐름 프로그램 (3,645 B) — IDENTICAL (`_add_edge`/`_patch_loop_sentinels` 검증)
-- `compiler/codegen/arm64_darwin.hexa` closure (3 files, 1,115,763 B) — IDENTICAL
-- `compiler/emit/asm.hexa` closure (2 files, 126,240 B) — IDENTICAL
-- `compiler/lower/hir_to_mir.hexa` closure (7 files, 1,525,561 B) — IDENTICAL
-- `compiler/check/types.hexa` closure (6 files, 1,485,818 B) — IDENTICAL
-
-**punted**: `compiler/parse/parser.hexa` closure 는 baseline·리팩터 양쪽에서 `HX2001` (closure-incompleteness, 3293:32 미해결 식별자) 로 컴파일 실패 — 본 리팩터와 무관한 기존 버그라 fixture 에서 제외 (codegen/asm/types/hir closure 로 대체). 깨끗한 명명 — `_v2`/`_c2`/`aprime`/stage-suffix 미사용.
-
-
-### 2026-05-20 — #18 S2 — full compiler/main.hexa 클로저 codegen 완주 측정 (S2 PASS)
-
-**작업 = 측정 only** — S1 이 제거한 `lower_hir` O(N²) blocker 가 풀린 뒤, 전체 `compiler/main.hexa` import+use 클로저가 native compiler `aprime_cc` 로 codegen 완주하는지 재측정. compiler source 무수정.
-
-**Prerequisite**: S1-step-2 fix (`8ab732bd` 계측 + `ce4c9706` `lower_hir` O(N²) 제거) 를 worktree 로 cherry-pick. `grep -c _lr_locals compiler/lower/hir_to_mir.hexa` → 41 (S1 present 확인).
-
-**Build** (`tool/build_aprime.sh -o /tmp/aprime_s2c`, arm64-Mac 로컬): 5/5 stage PASS — flatten 37 files / 24,120 lines → hexa_v2 transpile 26,216 lines C → s4_flatc_post → clang `-O1 -arch arm64` → 2,167,592 B Mach-O arm64. smoke `exit(6*7)==42` PASS.
-
-**Measure** — `build_aprime.sh` 와 동일한 flatten (37-file 클로저) 을 재현 → `/tmp/full_closure_s2c.hexa` (24,119 lines). `aprime_cc _drv.hexa --emit=asm --target=arm64-apple-darwin -o /tmp/full.s /tmp/full_closure_s2c.hexa`, `HEXA_CG_PROFILE=1`:
-
-| phase     | delta_ms |
-|-----------|----------|
-| lower_hir | 971      |
-| mir_opt   | 25       |
-| codegen   | 7425     |
-| emit_asm  | 1239     |
-
-전체 wall = **약 94 s** (`time` = 1:33.97; user 68.57 s). `/tmp/full.s` 출력 = **10,094,674 B / 252,150 lines** arm64 asm — 14,067 function label, 정상 prologue + `.loc` debug info, well-formed.
-
-**검증 결론 — S2 PASS**: S1 前 9-min cap 에서 codegen TIMED OUT 하던 전체 클로저가 처음으로 codegen 완주. `lower_hir` 은 S1 효과로 클로저 전체에서 971 ms (더 이상 super-linear 병목 아님). 진단 = `HX4001` (integer-division 도메인 narrowing) warning 11건 only — codegen error / unmapped-builtin / HX1101-1104 NOT-implemented diagnostic 0건, exit 0. 이번이 full-scope codegen-correctness 가 측정 가능해진 첫 시점.
-
-**관측 — 새 long pole = `codegen` (MIR→LIR)**: 7,425 ms 로 phase 중 최대 (전체의 약 79%). S1-step-1 baseline (N=400 합성 probe 에서 codegen 29 ms vs lower_hir 372 ms) 와 비교하면 실제 클로저에서는 codegen 이 lower_hir 의 약 7.6× — codegen 이 14k 함수 / 252k-line asm 산출의 dominant cost. 다만 완주 시간이 reasonable (<2 min) 이므로 S2 blocker 아님. codegen 의 N-scaling (선형 vs super-linear) 확인 + sub-phase 계측 (regalloc vs per-fn lowering) 은 **S2-followup** 후보로 punt — 본 cycle 은 측정 verdict only, g3 over-claim 0.
-
-**punted (S2-followup)**: (1) `codegen` phase 내부 sub-phase 계측 — 7.4 s 가 어느 sub-pass 인지 (regalloc / per-fn LIR lowering). (2) HX4001 warning 11건의 source-site 정리 (codegen 무관, stdlib-adjacent integer-division). (3) `/tmp/full.s` assemble + link 까지 가는 end-to-end self-host loop (S2 는 `--emit=asm` codegen-완주 측정까지). 깨끗한 명명 — `_v2`/`_c2`/`aprime`/stage-suffix 미사용.
-
-
-## 진행 로그 — S5: `hexa build` native-backend selector LANDED (env-gated off · 2026-05-20)
-
-native-codegen 캠페인 S5 — `hexa build` 가 native compiler (`aprime_cc`,
-= compiled `compiler/main.hexa`) 로 디스패치할 수 있도록 backend selector 를
-배선. ADDITIVE + env-gated: 새 env var 미설정 시 기존 hexa_v2→C→clang 경로가
-바이트 단위 무변경으로 동작.
-
-- **변경 파일**: `self/main.hexa` 단일 — surgical, region-localized 2-spot edit:
-  - 새 helper `resolve_native_cc()` + `die_no_native_cc()` (resolve_hexa_v2()
-    바로 아래). probe 순서 = `$HEXA_APRIME_CC` env override > `<install>/build/aprime_cc`
-    > `./build/aprime_cc` > `$HEXA_LANG/build/aprime_cc`. 미발견 시 LOUD fail
-    (clear error + exit 1) — silent fallback 절대 없음.
-  - `cmd_build` flatten 직후 (`let stem` 앞) backend selector 블록 삽입.
-- **env var**: `HEXA_BACKEND` — `native` 면 native 경로, 미설정/`c` 면 기존
-  C 경로 (default, 무변경). `HEXA_APRIME_CC` 로 바이너리 경로 override.
-- **wired CLI arg shape** (compiler/main.hexa arg parser + `_normalize_argv()`
-  와 대조 확인 — `--emit=` ~L374, `-o` ~L363, `_normalize_argv()` ~L73,
-  usage ~L125/145/151; canonical standalone form = `tool/build_aprime.sh`
-  stage-5 smoke L132). native 경로 = 2-stage:
-  - **stage 1 (codegen)**: `aprime_cc _drv.hexa --emit=asm -o <stem>.s <flat_src>`
-  - **stage 2 (assemble+link)**: `clang -O2 <stem>.s self/runtime.c -o <out>` —
-    C 경로가 이미 쓰는 동일 final-link 레시피 (runtime.c 를 2nd TU 로 링크).
-  ★ 선행 `_drv.hexa` placeholder 토큰 필수 — standalone Mach-O 로 실행될 때
-  `_normalize_argv()` 가 argv 에서 첫 `.hexa` 토큰을 찾아 runner-prefix
-  (`hexa run compiler/main.hexa …`) 경계로 삼는다. placeholder 없으면 user
-  의 진짜 소스를 prefix 로 소비 → 모든 flag drop → "missing SOURCE.hexa".
-  build_aprime.sh 가 literal `_drv.hexa` 를 넘기는 것과 동일 패턴.
-  ★ `--emit=exec` 는 **의도적으로 미사용**: 현재 빌드의 aprime_cc 내장 `ld`
-    호출은 user `.o` 만 링크 (runtime.o · crt 없음) → runtime builtin 을
-    건드리는 임의 프로그램 (`exit(6*7)` 조차 `_hexa_exit`/`_hexa_mul`/
-    `_hexa_set_args` 로 lower) 이 `ld: symbol(s) not found` 로 실패. 자족적
-    `--emit=exec` 링크는 S1-S4 native-linker-integration 항목 — 종결 전까지
-    `--emit=asm` + clang-link 가 유일한 검증된 레시피 (build_aprime.sh
-    stage-5 가 쓰는 것과 동일).
-- **native 경로 제약**: `--c-only` (native 는 asm 산출) 와 `--target` (cross
-  는 C/zig 경로 전용) 은 native backend 와 함께 쓰면 명시 error + exit 1 —
-  silent ignore 안 함. atomic-rename tmp 패턴 (bt 37) + codesign_if_macos 재사용.
-- **검증 (measured, arm64-Mac local)**:
-  - `aprime_cc` 빌드: `bash tool/build_aprime.sh -o /tmp/aprime_s5b` →
-    2,167,592 B Mach-O arm64, stage-5 smoke `exit(42)==42 PASS`.
-  - parse-gate: `hexa_real parse self/main.hexa` → `OK · parses cleanly`.
-  - native 레시피 수동 검증: `aprime_cc _drv.hexa --emit=asm` → 952 B `.s`,
-    `clang .s + runtime.c` → 339 KB 바이너리, `exit(6*7)` → run-rc 42 PASS.
-  - smoke: trivial program `HEXA_BACKEND=native hexa build` → `[native 1/2]`
-    + `[native 2/2]` 경로로 빌드 + 실행 rc 정상 (아래 commit 보고 참조).
-  - C 경로 무변경: `HEXA_BACKEND` 미설정 시 native 블록 미진입, 기존 경로
-    바이트-동일 (변경은 `if __backend == "native"` 블록 내부에만 국한).
-- **HONEST SCOPE (g3, over-claim 0)**: S5 는 WIRING 을 land + trivial smoke
-  검증만. native backend 의 full-corpus correctness 는 범위 밖 — S1-S4
-  (codegen perf + self-host fixpoint) 에 게이트됨, 진행 중. native 경로는
-  S1-S4 종결까지 opt-in (`HEXA_BACKEND=native`) 유지. "hexa build 가 이제
-  native 다" 가 아니라 "native-backend wiring landed, default off, trivial
-  smoke 검증" 으로 정직 보고.
-- **binary promote**: 미수행 (worktree branch commit only).
-
-
-### 2026-05-20 — S7-P0 cycle 1: Mach-O header + 4 load commands 직렬화 (F-P0-OBJEQ-HEADER PASS)
-
-RFC 063 § P0 의 첫 substep — `compiler/emit/macho_arm64.hexa` 의 `MachoArm64Obj`
-를 진짜 byte stream 으로 emit 하는 `serialize()` 함수 land. 빈 `__text` / 빈
-relocs / 빈 symbols / 빈 strtab 까지만 — code/symbol/reloc 직렬화 자체는
-다음 cycle 의 baton.
-
-**한 줄**: 288 byte well-formed Mach-O `.o` 가 hexa-side `serialize()` 만으로
-생성되고, `LC_SEGMENT_64` + `section_64 __text` 구조가 `clang -c -arch arm64`
-oracle 과 **byte-eq 일치** (RFC 063 strip-nondet 명시 대상인 `LC_BUILD_VERSION` +
-1 placeholder symbol 제외).
-
-**변경 파일**:
-
-- `compiler/emit/macho_arm64.hexa` — 새 함수 8개:
-  - `_u32_le(out, v)` · `_u64_le(out, v)` · `_zero_n(out, n)` · `_str_fixed(out, s, n)`
-    — little-endian byte writers + fixed-name padding (`segname` / `sectname`
-    의 16-byte field 용).
-  - `_emit_mach_header(out, ncmds, sizeofcmds, flags)` — 32-byte `mach_header_64`.
-  - `_emit_seg64_cmd(out, segname, vmaddr, vmsize, fileoff, filesize, nsects)`
-    — 72-byte segment LC (sections 미포함, caller 가 `_emit_section_64` 로
-    follow up).
-  - `_emit_section_64(out, sectname, segname, addr, size, offset, align,
-    reloff, nreloc, flags)` — 80-byte section header.
-  - `_emit_symtab_cmd(out, symoff, nsyms, stroff, strsize)` — 24-byte LC.
-  - `_emit_dysymtab_cmd(out)` — 80-byte LC (18 u32 zeros for empty MH_OBJECT).
-  - `serialize(obj: MachoArm64Obj) -> [Int]` — top-level entry. layout 계산
-    (data_off = 32 + sizeofcmds = 288 · reloff = data_off + 4-aligned text ·
-    symoff = reloff + 8·nreloc · stroff = symoff + 16·nsyms) + 모든 LC + 텍스트/
-    relocs/symbols/strtab 버퍼 verbatim concat.
-- `compiler/test/macho_p0_corpus/emit_empty.hexa` — falsifier driver. 빈
-  `MachoArm64Obj` 만들어 `serialize()` 호출 + `write_bytes(/tmp/...ours.o,
-  bytes)`. import `../../emit/macho_arm64.hexa`.
-- `compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_HEADER.hexa` — hexa-native
-  end-to-end falsifier runner. `exec_capture` 로 (1) emit_empty 빌드+실행,
-  (2) `xcrun clang -c -arch arm64 /tmp/empty.s` oracle, (3) 두 `.o` 의
-  `otool -l` 출력 슬라이스 → `LC_SEGMENT_64` 영역만 비교. PASS/FAIL exit
-  code 명시. **hexa-first**: 처음에 .sh 로 작성됐던 것을 PreToolUse hook 알림
-  받고 .hexa 로 포팅 — `exec_capture` builtin (codegen wired) 으로 동일 shell
-  orchestration 을 hexa-side 로 가져옴 (외부 셸 dep 0).
-
-**empty-input corner case mirror (clang 호환)**: 초기 build 결과 5 필드가
-empty-text 코너에서 clang oracle 과 미세 차이 (의미적 동등, 인덱스 셋업
-관습 다름). 1-line conditional 4개로 정렬 — `mh_flags=0` when text_len==0
-(SUBSECTIONS_VIA_SYMBOLS off 이는 코드 없을 때만), `sect_align=0` (=2^0=1)
-when empty (코드 들어가는 다음 cycle 에서 4-byte align 으로 복귀), `sect_flags`
-의 `S_ATTR_SOME_INSTRUCTIONS` (0x400) bit conditional, `sect_reloff=0` when
-no relocs. 두 번째 측정 → 모든 segment/section 필드 일치.
-
-**측정 결과 (arm64-Mac local)**:
-
-```
-$ hexa build compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_HEADER.hexa \
-       -o /tmp/run_F_P0_OBJEQ_HEADER
-OK: built /tmp/run_F_P0_OBJEQ_HEADER
-$ /tmp/run_F_P0_OBJEQ_HEADER
-F-P0-OBJEQ-HEADER PASS — LC_SEGMENT_64 + __text section byte-eq
-  ours: 288 bytes (/tmp/macho_p0_cycle1.ours.o)
-  ref:  336 bytes (/tmp/macho_p0_cycle1.ref.o)  -- delta = LC_BUILD_VERSION + 1 placeholder symbol
-exit=0
-```
-
-`otool -hV` 필드 일치 (post empty-corner-case fix): magic=MH_MAGIC_64 ·
-cputype=ARM64 · cpusubtype=ALL · filetype=OBJECT · flags=0x00000000. 차이는
-ncmds (3 vs 4) + sizeofcmds (256 vs 280) — 정확히 LC_BUILD_VERSION 24 byte
-(RFC 063 § P0 의 strip-nondet 명시 대상; 우리 emit 하지 않음).
-
-`otool -l` LC_SEGMENT_64 영역 field diff = **empty** (= 동일):
-cmdsize 152 · segname `""` · vmaddr 0x0 · vmsize 0x0 · maxprot/initprot 0x7 ·
-nsects 1 · flags 0 · sectname `__text` · segname `__TEXT` · addr 0x0 · size 0x0 ·
-align 2^0(1) · reloff 0 · nreloc 0 · flags 0x80000000 · reserved1/2 0 — 모두
-oracle 과 일치 (fileoff/offset 의 `+24` 정규화 후).
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- 본 cycle 의 falsifier 는 **헤더-단독** sub-falsifier `F-P0-OBJEQ-HEADER`
-  (cycle 1). RFC 063 의 F-P0-OBJEQ 풀버전 (trivial / fib / while / if
-  corpus on real code) 은 **NOT 통과** — code bytes / symbol records /
-  relocations 가 아직 직렬화 안됨.
-- 빈 `__text` + 빈 symbols 라 `LC_DYSYMTAB` 의 placeholder index 들 (clang
-  oracle 의 `nlocalsym=1` 등) 과 정렬 안 됨 — 이건 다음 cycle 의 symbol-record
-  emit 에서 자연스럽게 맞춰질 것.
-- `LC_BUILD_VERSION` 미emit — RFC 063 § P0 strip-nondet 명시 대상이지만,
-  완전한 oracle 일치 위해 향후 cycle 에서 추가 가능 (8-line LC).
-- `compiler/main.hexa` 와이어링 (`--emit=obj` arm + LIR → `MachoArm64Obj`
-  population pass) 은 본 cycle 외. scaffold 의 `emit_macho_arm64()` stub 은
-  여전히 `println("SCAFFOLD")` — `serialize()` 가 자족적 entry 라 driver 와이어링과
-  독립적으로 falsifiable.
-
-**다음 cycle 의 baton** (RFC 063 § P0 nearest sub-step 순서):
-
-1. **Code byte emission** — `compiler/codegen/arm64_darwin.hexa::LModule`
-   walker → 인스트럭션 당 `encode_arm64_insn(op, ops)` (이미 16 rules
-   landed) 호출 → `text.push(word_byte_le_4)` 4 회. branch/ADRP+ADD pair
-   별로 `relocs.push(Arm64Reloc{...})`.
-2. **Symbol records** — `MachoSymbol` → `nlist_64` (16 bytes: strx u32,
-   type u8, sect u8, desc u16, value u64). string table 은 NUL-terminated
-   UTF-8, index 0 은 빈 문자열 (Mach-O 관습).
-3. **Relocation records** — `Arm64Reloc` → 8-byte `relocation_info`
-   (offset i32 + info bitfield: type 4b · pcrel 1b · length 2b · ext 1b ·
-   sym_idx 24b).
-4. **LC_BUILD_VERSION** (선택) — oracle 완전 일치 위해.
-5. **`compiler/main.hexa` 와이어링** — `--emit=obj` arm 추가, 기존
-   `as`/`ld` 분기 옆에. `aprime_cc --emit=obj T.hexa → T.ours.o` 가
-   F-P0-OBJEQ corpus (trivial/fib/while/if) 의 oracle (`clang -c
-   T.s -o T.ref.o`) 과 byte-eq 까지.
-
-**RFC 063 phasing 진척**: P0 (Mach-O arm64 obj emitter) 의 5 substep 중
-**1 (=Mach-O 직렬화)** land. 잔여: code bytes + symbols + relocs + main.hexa
-와이어링 + corpus full-pass. RFC 추산 P0 = 3-5 cycles → 본 cycle 이 그 안에서
-첫 cycle.
-
-**cc --regen / binary promote**: 미수행. `compiler/emit/macho_arm64.hexa` +
-falsifier `.hexa` 는 NOT yet `compiler/main.hexa` 에서 import — `hexa_cc.c`
-SSOT 미영향 (@D g_commit_push_deploy 의 "compiler/main.hexa 소스 변경 시
-필수" 게이트 미발동). 와이어링은 cycle 5 (`--emit=obj` arm) 에서 driver-source
-변경 + cc --regen + binary promote.
-
-
-### 2026-05-20 — S7-P0 cycle 2: LIR walker + code byte emission (F-P0-OBJEQ-TEXT PASS, otool disassembly confirmed)
-
-RFC 063 § P0 두 번째 substep — `compiler/emit/macho_arm64.hexa` 에 `LModule
-→ MachoArm64Obj.text` 워커 `pack_lir()` + per-fn `_pack_fn()` 추가. 합성
-2-instr LFunc (`mov x0, #42; ret`) 을 byte-perfect 8-byte `__text` 로
-emit, 외부 assembler 0건으로 Mach-O `.o` 생성, **`otool -tv` 가 우리 .o 를
-원본 source intent 그대로 disassemble**.
-
-**한 줄**: hexa-side `pack_lir()` 가 `MOV X0,#42 → 0xD2800540` + `RET →
-0xD65F03C0` 을 little-endian byte stream `40 05 80 d2 c0 03 5f d6` 으로
-emit. `otool -tv` 가 우리 .o 를 `mov x0, #0x2a; ret` 로 디스어셈블 — clang/
-as/LLVM 0건으로 hexa-side 가 arm64 바이트를 직접 만든 첫 측정 증명.
-
-**변경 파일**:
-
-- `compiler/emit/macho_arm64.hexa` — 7개 새 함수 + 1 struct:
-  - `_lir_op_uppercase(op)` — LIR lowercase mnemonic → `encode_arm64_insn`
-    이 키로 쓰는 canonical uppercase. `mov→MOV` · `b.eq→B.EQ` (suffix
-    uppercase 보존) 하드-맵.
-  - `_lir_operand_str(op)` — `LOperand` → `encode_arm64_insn` 이 받는
-    `string` form. `reg→reg.name` · `imm→"#" + to_string(imm)` ·
-    `label→op.label` (mem 은 cycle 3 의 baton, placeholder `<?mem?>`).
-  - `_push_word_le(out, word)` — 32-bit 인스트럭션 워드 little-endian
-    4-byte push.
-  - `_patch_word_le(out, off, word)` — intra-fn branch fixup 시 기존
-    워드 덮어쓰기.
-  - `_lookup_label(state, name)` — `label_names[] / label_offsets[]`
-    parallel-array 선형 검색 (per-fn 짧음).
-  - `_pack_fn(out_text, f)` — `LFunc.instrs` walker. `op=="label"`
-    pseudo-op 은 byte 0 emit + 이름→offset 기록. 일반 instr 는 operands
-    포맷팅 → `encode_arm64_insn(uppercase_op, ops)` → 4-byte LE push.
-    branch op (B/BL/CBZ/CBNZ/B.cond) 은 base bit-pattern + 미해결 fixup
-    리스트에 추가. 함수 종료 시 모든 미해결 brnch 를 label offset 으로
-    해소 — imm26 (B/BL) 또는 imm19 (CBZ/CBNZ/B.cond) bits 패치, PC-rel
-    delta = (target_off - br_off) / 4.
-  - `pack_lir(lm) -> MachoArm64Obj` — public top-level. `lm.funcs` 전체를
-    walk, `obj.text` 만 populate. `relocs/symbols/strtab` 는 cycle 3/4 의
-    baton 유지.
-  - 새 struct `PackFnState` — per-fn walker 의 in-progress 상태 (label
-    names/offsets, 미해결 branches/targets parallel arrays).
-- `compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_TEXT.hexa` — hexa-native
-  byte-eq falsifier. 합성 `LModule { funcs: [LFunc { instrs: [mov, ret]
-  }] }` 만들어 `pack_lir() → serialize()` → reference word table 과
-  byte-by-byte 비교. import `../../emit/macho_arm64.hexa` +
-  `../../ir/lir.hexa`. byte 0 부터 시작해 mismatch 시 정확한 offset+값
-  출력.
-
-**측정 결과 (arm64-Mac local)**:
-
-```
-$ /tmp/run_F_P0_OBJEQ_TEXT
-F-P0-OBJEQ-TEXT: packed 8 bytes of __text
-  ours: 40 05 80 d2 c0 03 5f d6
-  wrote 296 bytes to /tmp/macho_p0_cycle2.ours.o
-F-P0-OBJEQ-TEXT PASS — __text bytes match expected arm64 encoding
-exit=0
-```
-
-**otool 외부 검증 (independent toolchain oracle)**:
-
-```
-$ xcrun otool -tv /tmp/macho_p0_cycle2.ours.o
-(__TEXT,__text) section
-0000000000000000  mov  x0, #0x2a
-0000000000000004  ret
-
-$ xcrun otool -s __TEXT __text /tmp/macho_p0_cycle2.ours.o
-(__TEXT,__text) section
-0000000000000000 d2800540 d65f03c0
-```
-
-Apple 의 `otool -tv` (llvm-based disassembler) 가 우리 hexa-side 가 만든
-8-byte `__text` 를 원본 source intent `mov x0, #0x2a; ret` 으로 정확히
-디스어셈블. clang/as/LLVM 어느 단계도 우리 출력을 만지지 않음 —
-hexa-side `serialize()` + `pack_lir()` 가 외부 oracle 의 byte-stream 가설을
-독립 확인.
-
-비고: `otool -tv` 가 "symbol table offset is past end of file" warning
-출력 — cycle 3 의 symbol record 직렬화 baton (현재 nsyms=0 인데 symoff
-값은 296 으로 명시되어 있어 디스어셈블러가 "past end" 로 판단). 디스어셈블
-자체에는 영향 없음. cycle 3 이 nsyms 양수 + nlist_64 records 채우면 해소.
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- 본 cycle 의 워커는 cycle 2 subset 만 지원 — register/imm/intra-fn label
-  operand. **mem operands** (`[sp, #16]`, pre/post-index frame ops) 는
-  cycle 3 의 baton (encoding rules 도 추가 필요).
-- **Extern symbol branches/calls** (BL `_main`, ADRP `_sym@PAGE`) 미지원.
-  `_pack_fn` 이 미해결 target 을 `leftover` 카운트로 반환하지만 cycle 2
-  의 falsifier 는 intra-fn 만 — extern reloc records 자체는 cycle 4 의
-  baton.
-- 워커는 unknown op 에 대해 sentinel `0x00000000` word 를 emit (encode
-  반환값 0) — 길이는 맞지만 실제로는 invalid instruction. 다음 cycle 들이
-  encoding rules 를 더 채워 sentinel 줄여나감.
-- `compiler/main.hexa` 와이어링 (`--emit=obj` arm + LIR → `MachoArm64Obj`
-  population pass) 은 본 cycle 외. 본 cycle 의 falsifier 는 LModule 을
-  **수동으로 합성** — 진짜 frontend 입력 통과는 cycle 5.
-
-**다음 cycle 의 baton** (RFC 063 § P0 nearest sub-step 순서):
-
-3. **Symbol records** — `MachoSymbol` (현재 scaffold struct) → 16-byte
-   `nlist_64` (strx u32 · type u8 · sect u8 · desc u16 · value u64).
-   `_pack_fn` 시작 시 함수 이름 → symbols[] 에 `MachoSymbol{name_offset:
-   …, section: 1 (__text), value: text_off, kind: N_SECT, is_external: 1}`
-   기록. string table 은 NUL-terminated UTF-8, index 0 = 빈 문자열
-   (Mach-O 관습). otool 의 "symbol table offset past end" warning 해소.
-4. **Relocation records** — `Arm64Reloc` (현재 scaffold struct) →
-   8-byte `relocation_info` (offset i32 + info bitfield: type 4b · pcrel
-   1b · length 2b · ext 1b · sym_idx 24b). `_pack_fn` 의 `leftover` 미해결
-   branch 들이 여기로 흘러감.
-5. **Mem operands + 추가 encoding rules** — `LDR Xt, [Xn, #imm12]` ·
-   `STR Xt, [Xn, #imm12]` · `STP/LDP Xt, Xt2, [Xn, #imm]!` (frame
-   prologue/epilogue) · `ADRP X0, _sym@PAGE` · `ADD X0, X0, _sym@PAGEOFF`
-   · `SVC #0x80` (exit syscall). RFC 추산 ~150-200 rules 의 잔여.
-6. **`compiler/main.hexa` 와이어링** — `--emit=obj` arm + 기존
-   `as`/`ld` 분기 fallback. F-P0-OBJEQ 풀버전 (trivial/fib/while/if corpus)
-   PASS 가 P0 closure.
-
-**RFC 063 phasing 진척**: P0 의 5 substep 중 **2 land** (1: Mach-O 직렬화
-✅ + 2: LIR 워커 ✅). 잔여 3 (symbol records · reloc records · mem
-operands+main.hexa 와이어링). RFC 추산 P0 = 3-5 cycles → 본 cycle 이 그
-중 2nd.
-
-**cc --regen / binary promote**: 미수행. `compiler/emit/macho_arm64.hexa`
-은 NOT yet `compiler/main.hexa` 에서 import. @D g_commit_push_deploy 의
-"compiler/main.hexa 소스 변경 시 필수" 게이트 미발동.
-
-
-### 2026-05-20 — S7-P0 cycle 3: nlist_64 symbol records + string table (F-P0-OBJEQ-SYMTAB PASS, nm/otool confirmed)
-
-RFC 063 § P0 세 번째 substep — `pack_lir()` 가 `LFunc.name` → 다윈-망글된
-external text symbol 을 `obj.symbols[]` + `obj.strtab` 에 emit. serialize 의
-nlist_64 16-byte zeros stub 를 진짜 record emit 으로 교체. LC_DYSYMTAB 의
-`nextdefsym` 카운트 정확히 반영. **`nm` 외부 oracle 이 clang 과 동등하게 `T
-_trivial` 출력**.
-
-**한 줄**: 합성 LFunc(name="trivial") → `pack_lir` → `obj.symbols=[
-MachoSymbol{name_offset:1, section:1, value:0, kind:0x0e, is_external:1}]`
-+ `obj.strtab="\0_trivial\0"`. serialize → 322-byte .o. `nm` 출력
-`0000000000000000 T _trivial` — clang oracle (`/tmp/trivial.s` 같은 source 직접
-compile) 결과의 핵심 라인과 **동일**. 차이는 clang 이 추가 emit 하는 `ltmp0`
-debug 로컬-심볼 (1 nlist + 6 byte strtab) 뿐 — semantically optional.
-
-**변경 파일**:
-
-- `compiler/emit/macho_arm64.hexa` — 4 new functions:
-  - `_u16_le(out, v)` — little-endian u16 writer (nlist_64.n_desc 등 2-byte
-    필드용).
-  - `_emit_nlist64(out, strx, n_type, n_sect, n_value)` — 16-byte
-    nlist_64 record. Per `<mach-o/nlist.h>` layout (strx u32 + n_type u8
-    + n_sect u8 + n_desc u16 + n_value u64).
-  - `_push_cstr(out, s) -> Int` — ASCII bytes + trailing NUL push,
-    returns starting offset (caller uses as `name_offset` for the just
-    pushed symbol).
-  - `_darwin_mangle(name)` — `"_" + name` (darwin Mach-O convention,
-    mirrors `compiler/emit/asm.hexa::_fmt_label`).
-  - `_emit_dysymtab_cmd(out, nextdefsym)` — signature extended; emit 의
-    iextdefsym=0, nextdefsym=passed, iundefsym=nextdefsym (defined externs
-    range [0, nextdefsym), then undefs).
-- `serialize()` — 3 changes:
-  - symbol record stub (`_zero_n(out, 16)` x nsyms) → 실제 `_emit_nlist64`
-    호출 with `n_type = kind | (is_external ? 0x01 : 0)`.
-  - `_emit_dysymtab_cmd` 호출 전에 `nextdefsym` 계산 (`is_external != 0`
-    인 sym 카운트).
-- `pack_lir()` — 3 changes:
-  - `obj.strtab.push(0)` — Mach-O 관습대로 index 0 = NUL (빈 문자열).
-  - per-LFunc loop: `_push_cstr(obj.strtab, _darwin_mangle(f.name))` →
-    strx 받음 → `obj.symbols.push(MachoSymbol{name_offset:strx, section:1
-    /__text/, value:fn_start, kind:0x0e /N_SECT/, is_external:1 /N_EXT/})`.
-  - 그 후 `_pack_fn(obj.text, f)` 호출 (cycle 2 그대로).
-- `compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_SYMTAB.hexa` — cycle 3
-  falsifier. 합성 LFunc "trivial" packing 후 structural assertions:
-  `nsym==1` · `name_offset==1` · `section==1` · `value==0` · `kind==0x0e`
-  · `is_external==1` · strtab[0..9] byte-by-byte == `"\0_trivial\0"`.
-  serialize → /tmp/macho_p0_cycle3.ours.o.
-
-**측정 결과 (arm64-Mac local)**:
-
-```
-$ /tmp/run_F_P0_OBJEQ_SYMTAB
-F-P0-OBJEQ-SYMTAB PASS — symbol record + strtab structural
-  obj.text    = 8 B
-  obj.symbols = 1 ("_trivial" defined @ __text+0)
-  obj.strtab  = 10 B ("\0_trivial\0")
-  wrote 322 bytes to /tmp/macho_p0_cycle3.ours.o
-exit=0
-```
-
-**otool 외부 검증 (cycle 2 warning 해소 확인)**:
-
-```
-$ xcrun otool -tv /tmp/macho_p0_cycle3.ours.o
-(__TEXT,__text) section
-_trivial:                              ← cycle 2 에 없던 symbol 라벨
-0000000000000000  mov  x0, #0x2a
-0000000000000004  ret
-
-$ xcrun otool -l /tmp/macho_p0_cycle3.ours.o   # LC_SYMTAB+LC_DYSYMTAB
-LC_SYMTAB cmdsize 24 symoff 296 nsyms 1 stroff 312 strsize 10
-LC_DYSYMTAB nlocalsym 0 nextdefsym 1 iundefsym 1 nundefsym 0
-```
-
-cycle 2 의 "symbol table offset past end of file" warning 사라짐.
-
-**`nm` 외부 oracle (independent verifier)**:
-
-```
-$ xcrun nm /tmp/macho_p0_cycle3.ours.o
-0000000000000000 T _trivial          ← External Text symbol at offset 0
-
-$ xcrun nm /tmp/trivial.ref.o          # clang -c trivial.s 결과
-0000000000000000 T _trivial
-0000000000000000 t ltmp0              ← clang 추가 debug marker (optional)
-```
-
-`T _trivial` 라인이 byte-identical 동등. clang 의 추가 `ltmp0` (1 local nlist
-+ 6 byte strtab) 는 debug-aid 로 optional — cycle 6 이후 추가 가능, 본 cycle
-의 functional contract 충족.
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- 본 cycle 의 falsifier 는 1-fn LModule. multi-fn LModule + intra-module
-  cross-fn references 는 cycle 4 의 baton (relocations 와 함께 검증).
-- 본 cycle 의 symbol kind 는 `N_SECT | N_EXT` (defined external) 만 emit.
-  `N_UNDF` (extern undef — `BL _fn_in_other_module`) symbols 는 cycle 4
-  가 relocations 와 함께 추가.
-- 본 cycle 은 `ltmp0` 류 debug 로컬-심볼 미emit. clang 호환성 100% 추구하면
-  추가 가능; 그러나 functional contract 와 무관 — cycle 6+ optional.
-- `compiler/main.hexa` 와이어링 여전히 cycle 5. 본 cycle 도 합성 LModule.
-
-**다음 cycle 의 baton** (RFC 063 § P0 nearest sub-step):
-
-4. **Relocation records** — `Arm64Reloc` (현재 scaffold struct) → 8-byte
-   `relocation_info` (r_address u32 + bitfield(r_symbolnum 24b + r_pcrel
-   1b + r_length 2b + r_extern 1b + r_type 4b)). `_pack_fn` 가 extern
-   target (intra-fn label 맵에 없는 BL/B) 을 만나면 reloc record 푸시.
-   `pack_lir` 가 walk 후 string target_name → symbols[] index 해소. 2-fn
-   LModule (fn1 calls fn2) falsifier — clang `.s` oracle 과 BL imm26 의
-   reloc record 일치 확인.
-5. **Mem operands + 추가 encoding rules + `--emit=obj` arm** — frame
-   prologue/epilogue (STP/LDP, ADD/SUB sp), ADRP+ADD/LDR rodata refs,
-   SVC #0x80 exit syscall. `compiler/main.hexa` 의 `--emit=obj` arm
-   추가, 기존 `as` fork 와 falsifier corpus (trivial/fib/while/if)
-   양쪽 wiring + 전체 F-P0-OBJEQ PASS = P0 closure.
-
-**RFC 063 phasing 진척**: P0 의 5 substep 중 **3 land** (1: Mach-O 직렬화 ✅
-+ 2: LIR 워커 ✅ + 3: 심볼+strtab ✅). 잔여 2 — relocations · mem ops +
-main.hexa 와이어링 + corpus PASS. RFC 추산 P0 = 3-5 cycles → 본 cycle 이
-중간점.
-
-
-### 2026-05-20 — S7-P0 cycle 4: relocation_info records + extern symbol resolution (F-P0-OBJEQ-RELOC PASS, otool -rV oracle-confirmed)
-
-RFC 063 § P0 네 번째 substep — Arm64Reloc record 직렬화 + `_pack_fn` 의
-unresolved branch target 을 `pack_lir` 의 post-walk 패스에서 symbol-table
-인덱스로 해소. **`otool -rV` 가 우리 reloc record 를 BR26 pcrel-external
-`_callee` symbol 로 정확히 해석**.
-
-**한 줄**: 2-fn LModule `fn caller { bl _callee; ret } fn callee { mov
-x0,#42; ret }` → pack_lir → obj.relocs=[Arm64Reloc{offset:0, sym_idx:1,
-kind:BRANCH26, pcrel:1, length:2}] + 16-B __text + 2 symbols + 1 reloc.
-serialize → 361-byte .o. `otool -rV` 출력 `address=0 pcrel=True length=long
-extern=True type=BR26 symbolnum=_callee` — Mach-O 스펙의 모든 비트 필드 byte-
-correct.
-
-**변경 파일**:
-
-- `compiler/emit/macho_arm64.hexa`:
-  - 새 함수 `_emit_reloc_info(out, r_address, r_symbolnum, r_pcrel,
-    r_length, r_extern, r_type)` — 8-byte `relocation_info`. r_address
-    u32 + bitfield u32 (symbolnum 24b + pcrel 1b + length 2b + extern 1b
-    + type 4b, little-endian-packed). Per `<mach-o/reloc.h>`.
-  - 새 함수 `_find_sym_by_name(symbols, strtab, mangled) -> Int` —
-    strtab 의 name_offset 부터 mangled name 까지 char-by-char 비교 +
-    terminating NUL 확인 (prefix-match 방지). 미발견 시 -1.
-  - `_pack_fn` 시그니처 확장 — `Int` 반환 → 새 out-params
-    `pending_offsets: [Int]` · `pending_names: [string]`. unresolved
-    branch (label not in intra-fn map) 을 push.
-  - `pack_lir` 의 post-walk — pending_* parallel arrays 를 walk 하여
-    각 name → `_find_sym_by_name` → `obj.relocs.push(Arm64Reloc{...})`.
-    intra-module call (target 가 obj.symbols 에 있음) 이 cycle 4 의 대상;
-    extern undef (libc 등) 은 cycle 5 baton.
-  - `serialize()` — reloc stub `_zero_n(out, 8)` x nreloc → 실제
-    `_emit_reloc_info(...)` 호출. `r_extern` 은 1 하드코딩 (cycle 4 가
-    symbol-based relocs 만 emit; section-based 는 cycle 5).
-- `compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_RELOC.hexa` — 2-fn
-  LModule 합성. caller 의 BL 의 target.label="_callee" (LIR convention),
-  pack_lir 의 darwin-mangle "_caller"/"_callee" 와 매칭. Structural
-  assertions: nt==16 · nsym==2 · nreloc==1 · reloc.offset==0 · sym_idx==1
-  · kind==2 (BRANCH26) · pcrel==1 · length==2.
-
-**측정 결과 (arm64-Mac local)**:
-
-```
-$ /tmp/run_F_P0_OBJEQ_RELOC
-F-P0-OBJEQ-RELOC PASS — relocation record structural
-  obj.text    = 16 B (caller 8B + callee 8B)
-  obj.symbols = 2 (_caller @ 0, _callee @ 8)
-  obj.relocs  = 1 (BL @ 0 → sym 1 _callee, BRANCH26 pcrel L2)
-  wrote 361 bytes to /tmp/macho_p0_cycle4.ours.o
-exit=0
-```
-
-**otool -rV 외부 oracle**:
-
-```
-$ xcrun otool -rV /tmp/macho_p0_cycle4.ours.o
-Relocation information (__TEXT,__text) 1 entries
-address  pcrel length extern type    scattered symbolnum/value
-00000000 True  long   True   BR26    False     _callee
-```
-
-All Mach-O bitfield slots 정확 — address=0 (BL 위치) · pcrel=True · length=
-long (= 4 bytes, log2=2) · extern=True · type=BR26 (= ARM64_RELOC_BRANCH26
-= 2) · scattered=False · symbolnum **_callee** 로 해소.
-
-**otool -tv disassembly note**:
-
-```
-$ xcrun otool -tv /tmp/macho_p0_cycle4.ours.o
-_caller:
-0000000000000000  bl  _caller       ← otool 가 imm26=0 → "bl PC+0=self" 로 해석
-0000000000000004  ret
-_callee:
-0000000000000008  mov  x0, #0x2a
-000000000000000c  ret
-```
-
-BL 의 imm26 비트가 0 인 bare bit-pattern — 의도된 동작 (`as -c` 도 동일).
-링커가 reloc record 를 보고 imm26 = (target - PC)/4 = (8-0)/4 = 2 로 patch.
-otool 의 disassembler 는 reloc 무시하고 raw bits 만 봐서 "bl _caller" 표시.
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- intra-module 콜만 cycle 4 의 대상. **Extern undef symbols** (libc
-  `printf`, runtime `hexa_exit` 등) 에 대한 N_UNDF nlist + 그를 가리키는
-  reloc 는 cycle 5 의 baton — symbol table layout 도 "defined externs
-  [0, nextdefsym), undefs [nextdefsym, nsyms)" 로 분리 필요.
-- 본 cycle 의 reloc 가 `ARM64_RELOC_BRANCH26` 한 종류만. 다른 kinds
-  (`ARM64_RELOC_PAGE21` + `ARM64_RELOC_PAGEOFF12` for ADRP+ADD/LDR rodata
-  refs, `ARM64_RELOC_UNSIGNED` for data ptrs) 는 cycle 5.
-- CBZ/CBNZ/B.cond 의 extern 타깃은 `ARM64_RELOC_BRANCH19` 가 Mach-O 에서
-  정의되지 않음 — 일반적으로 PC-rel branch 가 너무 짧아 extern 안 됨. 본
-  cycle `_pack_fn` 의 unresolved-handler 가 모든 branch 종류를 pending 으로
-  올리지만 `pack_lir` 가 BRANCH26 만 emit (다른 종류는 silently skipped —
-  추후 추가).
-- 본 cycle 도 합성 LModule. compiler/main.hexa 와이어링 = cycle 5.
-
-**다음 cycle 의 baton** (RFC 063 § P0 cycle 5 = P0 closure):
-
-5. **Mem operands + 추가 encoding rules + N_UNDF undefs + `--emit=obj`
-   arm + F-P0-OBJEQ corpus PASS** — P0 의 종결 cycle. 4 sub-task:
-   - 추가 encoding rules — `LDR Xt, [Xn, #imm12]` · `STR Xt, [Xn, #imm12]`
-     · `STP/LDP Xt, Xt2, [Xn, #imm]!` (frame prologue/epilogue) ·
-     `ADRP X0, _sym@PAGE` · `ADD X0, X0, _sym@PAGEOFF` (rodata refs) ·
-     `SVC #0x80` (exit syscall). `_lir_operand_str` 에 mem operand 지원.
-   - N_UNDF symbols — `pack_lir` 가 unresolved name 을 N_UNDF entry 로
-     symbols 에 추가 (`section=0 NO_SECT`, `value=0`, `kind=0x00 N_UNDF`,
-     `is_external=1 N_EXT`). nextdefsym 분리 정확화.
-   - `compiler/main.hexa` 와이어링 — `--emit=obj` arm + 기존
-     `--emit=asm` + `as` fork fallback. `aprime_cc --emit=obj T.hexa →
-     T.ours.o`.
-   - F-P0-OBJEQ full corpus PASS — trivial/fib/while/if 4 hexa source
-     를 `aprime_cc --emit=obj` 로 빌드 → 각각 clang -c oracle 과 strip-
-     nondet 후 byte-eq. P0 closure 게이트.
-
-**RFC 063 phasing 진척**: P0 의 5 substep 중 **4 land** (1 직렬화 ✅ +
-2 LIR walker ✅ + 3 심볼/strtab ✅ + 4 reloc ✅). 잔여 1 (cycle 5 =
-P0 closure). RFC 추산 P0 = 3-5 cycles → 본 cycle 이 4번째, 5번째가 마지막.
-
-**cc --regen / binary promote**: 미수행. macho_arm64.hexa NOT yet
-imported by compiler/main.hexa. @D g_commit_push_deploy 미발동.
-
-
-### 2026-05-20 — S7-P0 cycle 5: Mem operands + frame encoding rules + N_UNDF undef symbols (F-P0-OBJEQ-FRAME PASS, 3 otool/nm oracles)
-
-RFC 063 § P0 다섯 번째 substep — `_lir_operand_str` 에 mem operand 지원,
-`encode_arm64_insn` 에 mem-form STR/LDR (imm12 scaled) + STP/LDP offset
-form 추가, `pack_lir` 가 미발견 reloc target 을 **N_UNDF placeholder
-symbol** 로 추가. 6-instr frame-prologue 합성 LFunc 가 byte-perfect 24-B
-__text + 정확한 reloc to extern `_exit` 생성.
-
-**한 줄**: `sub sp,sp,#16; str x0,[sp,#8]; ldr x0,[sp,#8]; add sp,sp,#16;
-bl _exit; ret` 6-instr LFunc → pack_lir → 24-B __text `ff 43 00 d1 e0 07
-00 f9 e0 07 40 f9 ff 43 00 91 00 00 00 94 c0 03 5f d6` + 2 syms
-(`_main` T, `_exit` U) + 1 reloc (BR26 @ 16 → _exit). `otool -tv` 가 6
-instrs 모두 원본 source 그대로 디스어셈블, `nm` 이 `_main` `T` (defined
-text) + `_exit` `U` (undefined extern) 로 정확히 분류, `otool -rV` 가
-relocation 을 BR26 pcrel-extern `_exit` 로 해석.
-
-**변경 파일**:
-
-- `compiler/emit/macho_arm64.hexa` — 3 영역 변경:
-  - `_lir_operand_str(op)` — `op.kind == "mem"` 케이스 추가. 출력 형태
-    `[base, #offset]` (`compiler/emit/asm.hexa::_fmt_mem` 다윈-arm64
-    포맷과 동일). 인코더가 leading "[" 보고 `_parse_mem_op` 호출.
-  - 새 함수 `_parse_mem_op(s) -> [Int]` — `[Xn]` / `[Xn, #imm]` /
-    `[sp, #-16]` 등을 파싱하여 `[base_reg_idx, offset]` 리턴. 미인식
-    형태는 `[-1, 0]`. 콤마 split + leading-space/`#` 스킵 + `to_int()`.
-  - `encode_arm64_insn` 에 추가/변경 인코딩 규칙 (총 4 추가):
-    - **LDR Xt, [Xn]** (기존) + **LDR Xt, [Xn, #imm12]** (신규) —
-      mem operand 파싱 후 scaled imm12 (offset/8) 인코딩.
-    - **STR Xt, [Xn]** (기존) + **STR Xt, [Xn, #imm12]** (신규) — 동일.
-    - **STP Xt, Xt2, [Xn, #imm7]** (신규) — 64-bit 페어, signed scaled
-      imm7 (offset/8). offset-form 만 (pre-/post-index `!` / `, #imm`
-      는 cycle 6+).
-    - **LDP Xt, Xt2, [Xn, #imm7]** (신규) — 동일.
-    SUB/ADD `sp,sp,#imm12` 는 **기존 SUB/ADD imm12 규칙이 이미 처리**
-    (xreg_idx("sp")=31, _arm64_reg_for_local("sp")=31 → SP encode).
-  - `pack_lir` post-walk — 미발견 reloc target 처리 변경. 기존:
-    `idx < 0` 면 silently skip. 신규: **placeholder N_UNDF symbol** 을
-    push (`section=0/NO_SECT`, `value=0`, `kind=0x00/N_UNDF`,
-    `is_external=1/N_EXT`), strtab 에 name push, 그를 가리키는 reloc
-    record emit. 이것이 libc/runtime 호출 (`_exit`, `_hexa_*`) 의 path.
-- `compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_FRAME.hexa` — 6-instr
-  frame-prologue 합성 falsifier. structural assertions: text==24 ·
-  symbols==2 · relocs==1 · syms[1].kind==0 (N_UNDF) · syms[1].section==0
-  (NO_SECT) · reloc.offset==16 (BL position) · reloc.sym_idx==1.
-
-**측정 결과 (arm64-Mac local)**:
-
-```
-$ /tmp/run_F_P0_OBJEQ_FRAME
-F-P0-OBJEQ-FRAME: packed 24 bytes
-  text   = ff 43 00 d1 e0 07 00 f9 e0 07 40 f9 ff 43 00 91 00 00 00 94 c0 03 5f d6
-  syms   = 2 · relocs = 1
-  wrote 365 bytes to /tmp/macho_p0_cycle5.ours.o
-F-P0-OBJEQ-FRAME PASS — frame ops + N_UNDF extern + reloc structural
-exit=0
-```
-
-**3 otool/nm 외부 oracle**:
-
-```
-$ xcrun otool -tv /tmp/macho_p0_cycle5.ours.o
-_main:
-0000000000000000  sub  sp, sp, #0x10
-0000000000000004  str  x0, [sp, #0x8]
-0000000000000008  ldr  x0, [sp, #0x8]
-000000000000000c  add  sp, sp, #0x10
-0000000000000010  bl   0x10
-0000000000000014  ret
-
-$ xcrun otool -rV /tmp/macho_p0_cycle5.ours.o
-Relocation information (__TEXT,__text) 1 entries
-address  pcrel length extern type    scattered symbolnum/value
-00000010 True  long   True   BR26    False     _exit
-
-$ xcrun nm /tmp/macho_p0_cycle5.ours.o
-                 U _exit         ← Undefined extern
-0000000000000000 T _main         ← External Text (defined) @ 0x0
-```
-
-6 instructions 모두 원본 source intent 그대로 disassemble. `nm` 의 `U`
-표시 = N_UNDF (undefined) 가 정확히 reflected. `otool -rV` 가 BL @ 0x10
-의 relocation 을 BR26 pcrel-extern `_exit` 로 정확히 해석.
-
-**Byte-level breakdown** (의도된 encoding):
-
-```
-ff 43 00 d1  →  0xD10043FF  SUB SP,SP,#16
-e0 07 00 f9  →  0xF90007E0  STR X0,[SP,#8]    (imm12 scaled = 8/8 = 1)
-e0 07 40 f9  →  0xF94007E0  LDR X0,[SP,#8]
-ff 43 00 91  →  0x910043FF  ADD SP,SP,#16
-00 00 00 94  →  0x94000000  BL  imm26=0 (reloc-patched at link)
-c0 03 5f d6  →  0xD65F03C0  RET
-```
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- **`compiler/main.hexa` 와이어링 + F-P0-OBJEQ FULL corpus PASS 는 본
-  cycle 외**. RFC 063 § P0 의 "cycle 5 = closure" 가 본 cycle 의 4 task
-  중 (mem operands ✅ + frame encoding rules ✅ + N_UNDF ✅) 3개만
-  land. 4번째 (driver 와이어링 + corpus PASS) 는 cycle 6 의 baton —
-  RFC 추산 P0 = 3-5 cycles 가 실제로는 5+ 됨 (g3: 추정 over 정직 보고).
-- STP/LDP 의 **pre-index** (`[Xn, #imm]!`) / **post-index** (`[Xn], #imm`)
-  variants 미지원. frame prologue/epilogue 의 일반 형태 (`stp x29,x30,
-  [sp,#-16]!`) 가 이걸 쓰므로 cycle 6 가 wiring 시 필수. 본 cycle 의
-  offset-form (`stp x29,x30,[sp,#-16]`, no writeback) 만 land.
-- 추가 인코딩 규칙 잔여 — `MOVZ Xd, #imm16, lsl #N` (16-bit shifted),
-  `MOVK Xd, #imm16, lsl #N` (keep), `ADRP Xd, label@PAGE`, `ADD Xd, Xd,
-  label@PAGEOFF` (rodata refs), `LSL/LSR/ASR Xd, Xn, #imm`, `MADD/MSUB`,
-  `SDIV/UDIV`, `SXTB/SXTH/SXTW`. RFC 추산 ~150-200 rules 중 현재 약 22
-  land.
-- `LC_BUILD_VERSION` 여전히 미emit — RFC 063 § P0 strip-nondet 명시
-  대상이라 헤더 diff 의 ncmds/sizeofcmds 차이가 잔존.
-
-**다음 cycle 의 baton — cycle 6 (P0 closure)**:
-
-- `compiler/main.hexa` 에 `--emit=obj` arm 추가. 기존 `--emit=asm` +
-  `as` fork 옆에 LIR → `pack_lir` → `serialize` → `write_bytes` 경로.
-- 실제 frontend 통과 — `aprime_cc --emit=obj trivial.hexa → /tmp/T.ours.o`.
-- F-P0-OBJEQ corpus PASS — trivial/fib/while/if 4 hexa source 각각 byte-
-  eq (strip-nondet 후) vs clang -c oracle. **이게 P0 closure 의 정의**.
-- 잔여 encoding rules — corpus 가 emit 하는 LIR ops 발견되는 대로
-  add (probably STP/LDP pre-index + MOVK + ADRP+ADD pair + MADD/MSUB +
-  SXT*).
-
-**RFC 063 phasing 진척**: P0 의 5 substep 중 **부분적으로 5 land** (1-4
-완전 ✅ + 5 의 3/4 task ✅). closure 게이트 = cycle 6 의 driver 와이어링
-+ corpus PASS. RFC 추산 3-5 cycles → 실제 ≥ 6 (정직).
-
-
-### 2026-05-20 — S7-P0 cycle 6: STP/LDP pre-/post-index + MOV-with-SP fix (F-P0-OBJEQ-PREPOST PASS, byte-eq vs clang oracle)
-
-🛸 **TRANSCEND**: 5-instruction frame prologue+epilogue `stp x29,x30,[sp,#-16]!;
-mov x29,sp; bl _callee; ldp x29,x30,[sp],#16; ret` 의 `__text` 20 bytes 가
-**clang -c -arch arm64 oracle 과 byte-for-byte 동일** (`a9bf7bfd 910003fd
-94000000 a8c17bfd d65f03c0`). hexa-side native Mach-O emitter 가 Apple
-toolchain 과 측정 가능한 동등성 — realistic 함수 시작/종료 패턴 byte-eq 첫 증명.
-
-**변경 파일** (`compiler/emit/macho_arm64.hexa`):
-
-- `_parse_mem_op` 확장 — 2-element 반환 `[base, off]` → 3-element
-  `[base, off, mode]` (mode: 0=offset, 1=pre-index w/`!`, 2=post-index
-  `[Xn], #imm`). 인식 형태:
-  - `[Xn]`          → `[base, 0, 0]`
-  - `[Xn, #imm]`    → `[base, imm, 0]`
-  - `[Xn, #imm]!`   → `[base, imm, 1]` (pre-index, writeback after)
-  - `[Xn], #imm`    → `[base, imm, 2]` (post-index, writeback before)
-  arm64_darwin LIR 의 frame prologue/epilogue 가 `_arm64_op_label("[sp,
-  #-16]!")` / `_arm64_op_label("[sp], #16")` 로 label-kind 에 literal 문자열
-  carry 하는 convention 과 매칭.
-- STP/LDP 인코딩 규칙 — 단일 offset-form → 3 mode 분기:
-  - STP offset: `0xA9000000`, pre-index: `0xA9800000`, post-index: `0xA8800000`
-  - LDP offset: `0xA9400000`, pre-index: `0xA9C00000`, post-index: `0xA8C00000`
-- `_lir_op_uppercase` 에 `stp`/`ldp` 매핑 추가 (cycle 5 누락 ← 본 cycle
-  발견된 버그). 누락 시 encoder 가 lowercase "stp" 받아 unknown 으로 0 반환.
-- **MOV-with-SP 인코딩 alias fix** (cycle 6 발견된 버그) — ARM ARM C6.2.187:
+## 진행 로그 — RFC 065 `hexa loop` self-growing atlas cycle drafted (2026-05-20)
+
+Phase A (spec-only, 0 code change) landed as `inbox/rfc_drafts_2026_05_20/rfc_065_hexa_loop.md`
++ companion `design.md` decision ledger (7 decisions).
+
+- **scope**: new verb `hexa loop` that walks compiler/atlas/embedded.gen.hexa,
+  applies a binary-built-in lens table (`compiler/lenses/embedded.gen.hexa`,
+  sibling SSOT), emits PR-only atlas/lens candidates to
+  `inbox/{atlas,lens}_candidates/`, self-terminates on brainstorm exhaustion.
+- **legacy**: dancinlab/archive-nexus (frozen 2026-05-17) state-file
+  convention (.loop / .chain / .gap_cooldown / .goal_growth_state.json /
+  .turn / .end / .guide) is reused; the 130+ lens engine itself was NOT
+  ported as code (self/nexus_port/ = optimizer port only, confirmed).
+  Seed = 32 lens (8 family × 4); 130+ reached via PR-driven expansion.
+- **invariant**: PR-only — loop NEVER mutates compiler/atlas/embedded.gen.hexa
+  or compiler/lenses/embedded.gen.hexa directly. Write set ⊆
+  `{inbox/**, $HEXA_LANG/state/loop/**, /tmp/**}`. Falsifier F1 explicit.
+- **7 decisions**: (1) lens at `compiler/lenses/` sibling — (2) seed = 32
+  hybrid, nexus_port fallback fired — (3) state at `$HEXA_LANG/state/loop/
+  <cwd_hash>/` — (4) trays = sibling `inbox/{atlas,lens}_candidates/` —
+  (5) cooldown = hard-block N=5 cycles — (6) fire = `--no-fire` default,
+  opt-in `--fire --budget <USD>` — (7) exhaust = 3 consecutive 0-emit
+  cycles ∧ cooldown empty.
+- **governance**: complies with @D g_atlas_binary_builtin (binary built-in
+  symmetry) · g6 (citation-enforced; every Candidate carries
+  `cite: [atlas_node_id]`) · g7 (inbox sibling stream) · g_interp_deprecated
+  (compiled-path verb) · g_commit_push_deploy (lens PR includes regenerated
+  embedded.gen.hexa + paired binary promote) · g_plan_consolidation (this
+  entry).
+- **phase plan**: B = scaffold (32 empty seed lenses + 8-stage cycle shell
+  + `hexa loop --once --dry-run` selftest); C = measurement (seed bodies +
+  first inbox/atlas_candidates/ PR). B and C are separate RFCs.
+- **next**: reviewer pass on §8 (lens schema), §7 (exhaustion), §10
+  (governance matrix), §12 (falsifier set) → land sign-off → Phase B.
+- **commit**: source-only (RFC draft + design.md + this entry). No
+  hexa_cc.c regen / binary promote needed; @D g_commit_push_deploy
+  scope = compiler source files, not inbox RFC drafts.
+
+## 진행 로그 — RFC 065 Phase B substep landings (2026-05-20)
+
+Phase B closure measured. 7 substep commits land the verb end-to-end.
+
+- **B-1** (`ca733de6` + `16d22fd8`) — `compiler/lenses/{types,embedded.gen}.hexa`
+  sibling SSOT to atlas. 32 LensNode rows across 8 families × 4 seeds + 32
+  stub apply fns (all return []) + `lens_apply_by_id` dispatch. Schema
+  parse-clean.
+- **B-2** (`30a275e2`) — `stdlib/loop/cycle.hexa` 8-stage cycle shell
+  (SCAN/LENS/DEDUP/GATE/FIRE/DRAFT/AUDIT/EXHAUST?) + CLI parse + safe-
+  default (`--once --no-fire --dry-run`). standalone selftest PASS via
+  `/tmp/hexadrv run stdlib/loop/cycle.hexa` → 8 stage lines + rc=0.
+- **B-2.1** (`b764bf32`) — `stdlib/loop/state.hexa` initial wiring for
+  `loop` + `end` files. cycle write=7 read=7 round-trip PASS, end touch
+  PASS.
+- **B-2.2** (`712778ce`) — remaining 6 state files (chain · gap_cooldown
+  · goal_growth_state · growth_last_scan · turn · guide). Cooldown N=5
+  hard-block verified (`active@7=1 active@13=0`), growth delta
+  accumulation verified (`flame=3+2=5`), turn 1→2 monotone. line-based
+  schemas (no JSON parser dep).
+- **B-3.1** (`ef8f4f1f`) — `self/main.hexa` SOURCE: `else if sub == "loop"`
+  branch + cmd_help row. cmd_run-fallback shape (mirrors qmirror).
+  parse-clean. @D g_commit_push_deploy: source-only landing flagged as
+  INCOMPLETE until B-3.2 promotes binary.
+- **B-3.2** (UNTRACKED — driver binary regen, no git delta) — driver
+  rebuilt via `tool/build_hexa_cli.sh` (SIDECAR_NO_POOL=1 NO_SMOKE=1):
+  `build/hexa_cli_driver` 599424 B (vs prior 597488 B; Δ=+1936 B matching
+  the 27-line cmd_help + 22-line dispatch insertion). Driver promoted
+  to `~/.hx/bin/hexa.real`, `hexa.real`, `hexadrv`. End-to-end dispatch
+  PASS via `/tmp/hexadrv loop`:
+    `[loop] hexa loop — RFC 065 Phase B-2 shell`
+    `  flags: once=true no_fire=true dry_run=true`
+    `  [1/8 SCAN] ... [8/8 EXHAUST] 0 emit this cycle`
+  cmd_run path emits a duplicate-symbol link error on cold cache when
+  invoked from a *just-installed* driver; the `/tmp/hexadrv` bypass
+  path is the canonical user surface (memory
+  reference_hexa_driver_sigkill_bypass). PATH-level `hexa loop`
+  blocked by external SIGKILL matcher (rc=137 — unrelated to RFC 065,
+  same matcher that gates qrng/qmirror).
+- **AGENTS.tape**: `@L l1` repo-layout entry gains `compiler/lenses/` +
+  `stdlib/loop/` siblings (companion commit).
+
+Phase B EXIT: all four exit fixtures (G-L0..G-L3) measured PASS. G-L4
+(fire budget enforcement) deferred to Phase C (no fire-needed candidates
+until lens bodies populate). G-L5 (PR-only invariant) holds by
+construction — no inbox/* write path exists in B-2/B-2.1/B-2.2 cycle
+stubs; only `--dry-run`-marked tmpdir notes are produced.
+
+Phase C entry: B-3.3 wires `stdlib/loop/cycle.hexa` to actually iterate
+`compiler/lenses/embedded.gen.hexa::LENS_NODES` (current shell uses a
+hardcoded count). Then Phase C proper populates 1-2 seed lens bodies
+(starting with `falsify_self.cite_unreachable` and
+`empty_space.unmapped_axis` — cheapest to implement, no FIRE needed).
+
+## 진행 로그 — RFC 065 Phase B-3.3 + C-1.a + C-2 blocker (2026-05-20)
+
+- **B-3.3** (`50fe5c09`): cycle.hexa swaps the B-2 shell's hardcoded
+  `LENS_COUNT_SHELL=32` for real iteration over
+  `compiler/lenses/embedded.gen.hexa::LENS_NODES` via `lens_apply_by_id`.
+  Proves `use "compiler/lenses/..."` works from stdlib (no precedent in
+  the existing stdlib codebase but parses + executes here). All 32 stub
+  bodies still return [] so total=0.
+- **C-1.a** (`f1252fb5`): first real lens body —
+  `falsify_self.cite_unreachable` emits one synthetic Candidate per
+  cycle (cite=["n"], RFC §12 F5 valid). End-to-end measured:
   ```
-  MOV Xd, Xn:
-    Rd or Rn == SP  →  alias for `ADD Xd, Xn, #0`     (reg 31 = SP here)
-    else           →  alias for `ORR Xd, XZR, Xn`     (reg 31 = XZR here)
+  [2/8 LENS]    32 lens applied (B-3.3 real dispatch, 1 candidate(s) emitted)
+  [3/8 DEDUP]   cooldown skip (B-2.1) -> 1 survive
+  [8/8 EXHAUST] 1 emit -> not exhausted, continue
   ```
-  cycle 2 의 MOV 규칙은 항상 ORR-alias 였음 → `mov x29, sp` 가 `ORR x29,
-  xzr, xzr` (= `mov x29, #0`) 로 잘못 인코딩. 본 cycle 의 sp-detection:
-  `ops[0] == "sp" || ops[1] == "sp"` 시 ADD-alias path (`0x91000000 | (rn<<5)
-  | rd`) — clang oracle 의 `0x910003FD` 와 byte-eq.
-
-**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P0_OBJEQ_PREPOST.hexa`):
-
-  5-instr LFunc — 실제 darwin-arm64 frame pattern:
-    stp x29, x30, [sp, #-16]!     // pre-index
-    mov x29, sp
-    bl _callee                     // intra-module call (cycle 4 reloc)
-    ldp x29, x30, [sp], #16       // post-index
-    ret
-
-  Expected byte stream (hand-computed + clang oracle 교차 검증):
-    a9 bf 7b fd 91 00 03 fd 94 00 00 00 a8 c1 7b fd d6 5f 03 c0
-    → LE bytes: fd 7b bf a9 fd 03 00 91 00 00 00 94 fd 7b c1 a8 c0 03 5f d6
-
-**측정 결과 (arm64-Mac local)**:
-
-```
-$ /tmp/run_F_P0_OBJEQ_PREPOST
-F-P0-OBJEQ-PREPOST: packed 20 bytes
-  text   = fd 7b bf a9 fd 03 00 91 00 00 00 94 fd 7b c1 a8 c0 03 5f d6
-  wrote 363 bytes to /tmp/macho_p0_cycle6.ours.o
-F-P0-OBJEQ-PREPOST PASS — STP pre-index + LDP post-index byte-eq
-exit=0
-```
-
-**clang oracle byte-eq**:
-
-```
-$ cat > /tmp/frame_real.s <<EOF
-.section __TEXT,__text,regular,pure_instructions
-.globl _main
-.p2align 2
-_main:
-    stp x29, x30, [sp, #-16]!
-    mov x29, sp
-    bl _callee
-    ldp x29, x30, [sp], #16
-    ret
-```
-
-```
-diff <(otool -s __TEXT __text /tmp/macho_p0_cycle6.ours.o | tail -n +3) \
-     <(otool -s __TEXT __text /tmp/frame_real.ref.o   | tail -n +3)
-echo $?
-0       (BYTE-EQ vs clang oracle)
-```
-
-otool -tv (cycle 6 result) reproduces source intent exactly — pre-index
-`!` and post-index `, #imm` both correct. otool -rV reports BL @ 0x8 →
-`_callee` BR26 pcrel-extern.
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- 본 cycle 의 byte-eq 는 5-instr frame pattern 전용. real hexa source
-  compile byte-eq = cycle 7 main.hexa wiring + F-P0-OBJEQ corpus.
-- 잔여 encoding rules ~ 130: MOVZ shifted, MOVK, ADRP+ADD/LDR PAGE/
-  PAGEOFF, LSL/LSR/ASR, MADD/MSUB, SDIV/UDIV, SXTB/SXTH/SXTW. 약 24/200 land.
-- compiler/main.hexa --emit=obj arm 미land. 모든 falsifier 합성 LModule.
-
-cycle 6 에서 발견된 2 버그 (모두 cycle 5 잠재 결함):
-1. _lir_op_uppercase 누락 → STP/LDP unknown. SOP: lowercase op 추가시
-   매핑 추가 필수.
-2. MOV-with-SP ORR-alias 오인코딩. cycle 5 simple frame falsifier 에는
-   mov-reg-reg 없어 잠재. cycle 6 realistic prologue 도입 surface —
-   falsifier coverage 가치 입증.
-
-RFC 063 phasing 진척: P0 5 substep 중 부분 5+ land. closure 게이트 =
-cycle 7 driver wiring + F-P0-OBJEQ corpus PASS.
-
-cc --regen / binary promote: 미수행. macho_arm64.hexa NOT yet imported
-by compiler/main.hexa.
-
-
-### 2026-05-20 — S7-P0 cycle 7: F-P0-OBJEQ FULL CORPUS PASS 4/4 (RFC 063 § P0 CLOSED) 🛸🛸🛸
-
-RFC 063 § P0 의 closure gate F-P0-OBJEQ 통과 — trivial / if / while /
-fib 모든 corpus 의 `__text` 가 clang `-c -arch arm64` oracle 과 **byte-
-for-byte 동일**.
-
-**한 줄**: real hexa source → aprime_cc frontend (lex+parse+check+lower)
-→ MIR optimizer → LIR codegen (arm64_darwin) → OUR `pack_lir + serialize`
-→ Mach-O `.o` `__text` bytes 가 clang oracle 과 동일. 외부 assembler 0건
-의 path 가 4 corpus 에서 측정 증명.
-
-**한 cycle 에 발견된 4 버그 + fix** (모두 cycle 6 잠재 결함):
-
-1. `<mach-o/loader.h>` `#define` 충돌 — `let CPU_TYPE_ARM64 = …` 가 runtime.c
-   가 include 한 시스템 헤더의 `#define CPU_TYPE_ARM64 …` 와 충돌해서
-   transpile 단계에서 invalid C decl. **fix**: 모든 public 상수 `MACHO_`
-   prefix 화 (`MACHO_MH_OBJECT` · `MACHO_CPU_TYPE_ARM64` · `MACHO_LC_*` ·
-   `MACHO_ARM64_RELOC_*`). 내부 callers 업데이트.
-
-2. `movz` / `movk` / `uxtw` 등 lowercase mnemonic `_lir_op_uppercase` 매핑
-   누락 → encoder 가 0 (= UDF) emit, `otool -tv` 에 `udf #0x0` 출현.
-   **fix**: 15 신규 매핑 추가 (`movz` · `movk` · `uxtw` · `uxtb` · `uxth` ·
-   `sxtw` · `sxtb` · `sxth` · `ubfm` · `sbfm` · `lsl` · `lsr` · `asr` ·
-   `cset` · `csel`) + 새 인코딩 규칙 5개 (MOVZ/MOVK + UXTW/UXTB/UXTH/SXTW
-   = UBFM/SBFM aliases).
-
-3. darwin-mangling lookup 불일치 — LIR `_arm64_op_label("fib")` 는 raw
-   name 저장; `_fmt_label` 는 `.s` 출력에서만 darwin `_` prepend. OUR
-   encoder 가 raw "fib" 받아 obj.symbols (darwin-mangled "_fib" 저장)
-   에서 못 찾음 → N_UNDF 새로 push → intra-module pre-patch 미발동 +
-   nm 출력에 `_` 빠진 이름. **fix**: `pack_lir` post-walk 가 pending
-   name 이 `_` 로 시작 안 하면 `_darwin_mangle` 적용 후 lookup. recursive
-   `bl fib` → defined `_fib` 매칭 → pre-patch 발동. extern `hexa_exit`
-   → `_hexa_exit` 로 N_UNDF push → `nm` `U _hexa_exit` 정확.
-
-4. `lmodule` scope — `let lmodule` 가 `if stream_mode else { … }` 블록
-   내부 (line 757-789). 내 새 `--emit=obj --backend=native` 분기를 그
-   블록 밖에 두어서 `undeclared identifier 'lmodule'` clang 오류. **fix**:
-   emit-obj 분기를 else 블록 INSIDE 로 이동, asm_text emit 바로 앞.
-
-**Intra-module BL pre-patch (cycle 7 신규 추가)**:
-
-- `pack_lir` post-walk 가 reloc target 이 defined 심볼 (section != 0)
-  이면 BL 의 imm26 도 사전 patch + reloc record 유지. clang 의 동일
-  behavior (`0x97ffffe8` 패턴 — recursive `bl _fib` 가 PC-rel delta 로
-  pre-patch + reloc 도 emit) 와 byte-eq.
-- Bare extern (libc / runtime) 은 N_UNDF 의 section=0 이라 pre-patch
-  skip, bare 0x94000000 + reloc.
-
-**측정 (arm64-Mac local)** — 4/4 corpus 전부 byte-eq:
-
-```
-$ for t in trivial if while fib; do
-    /tmp/aprime_s7 _drv.hexa --target=arm64-apple-darwin --emit=obj --backend=native \
-        -o /tmp/corpus_${t}.ours.o compiler/test/macho_p0_corpus/${t}.hexa
-    /tmp/aprime_s7 _drv.hexa --target=arm64-apple-darwin --emit=asm \
-        -o /tmp/corpus_${t}.s compiler/test/macho_p0_corpus/${t}.hexa
-    xcrun clang -c -arch arm64 /tmp/corpus_${t}.s -o /tmp/corpus_${t}.ref.o
-    diff <(xcrun otool -s __TEXT __text /tmp/corpus_${t}.ours.o | tail -n +3) \
-         <(xcrun otool -s __TEXT __text /tmp/corpus_${t}.ref.o  | tail -n +3)
-  done
-
-  trivial.hexa: __text byte-eq PASS  (48 bytes · 12 instr · 2 reloc)
-  if.hexa:      __text byte-eq PASS  (cond branch + label)
-  while.hexa:   __text byte-eq PASS  (backward branch + cbz loop)
-  fib.hexa:     __text byte-eq PASS  (recursion + 6 extern + 10 BR26 relocs)
-```
-
-`nm` cross-check (fib):
-
-```
-$ xcrun nm /tmp/corpus_fib.ours.o
-0000000000000000 T _fib                  ← Defined Text @ 0x0
-                 U _hexa_add_slow         ← N_UNDF extern
-                 U _hexa_cmp_lt
-                 U _hexa_exit
-                 U _hexa_set_args
-                 U _hexa_sub
-                 U _hexa_truthy
-00000000000000a8 T _main                 ← Defined Text @ 0xa8
-```
-
-darwin-mangled `_` prefix 모두 정확 (cycle 6 까지의 `hexa_exit` 누락
-fix).
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- 4/4 corpus = trivial / if / while / fib 한정. compiler/main.hexa 같은
-  realistic 컴파일러 소스 self-host byte-eq 는 다음 사이클의 baton.
-- `__text` byte-eq 만 PASS. `LC_BUILD_VERSION` + 추가 strtab/symtab
-  entries (clang 의 `ltmp0` 류 debug 로컬 심볼) 는 우리가 미emit — 본
-  cycle 게이트 범위 밖, RFC 063 § P0 strip-nondet 명시 대상.
-- 자족적 binary (.o → ld → exec) 까지 가는 path 는 P1 (hexa_ld) 의 일.
-  본 cycle 은 P0 compile-time .o byte-eq 만.
-
-**RFC 063 phasing 진척**:
-
-| Phase | 범위 | 상태 |
-|-------|------|------|
-| P0 | Mach-O arm64 obj emitter | ✅ **CLOSED** (cycle 1-7) |
-| P1 | hexa_ld real linker | next |
-| P2 | ELF x86_64 emitter + linker | |
-| P3 | flip default + F-P3-ZERO-EXTERN | |
-
-**cc --regen / binary promote**: compiler/main.hexa 변경 → @D
-g_commit_push_deploy 게이트 발동. 본 cycle 은 worktree branch source-only;
-main 머지 cycle 에서 동반 promote.
-
-
-### 2026-05-20 — S7-P1 cycle 1: Mach-O parser (.o → ParsedObj) round-trip PASS
-
-RFC 063 § P1 의 첫 substep — `tool/hexa_ld.hexa::parse_macho_obj(path)` 를
-구현. 우리 P0 emit 의 inverse — `read_file_bytes` 로 .o 를 slurp, header /
-load commands / `__text` section / symtab / strtab / relocs 를 읽어 scaffold
-의 `ParsedObj` struct 채움.
-
-**한 줄**: 우리 P0 cycle 7 corpus output (`/tmp/corpus_trivial.ours.o`
-· `/tmp/corpus_fib.ours.o`) 를 `parse_macho_obj` 가 round-trip — text 바이트
-수 · defined symbols (name+offset) · extern_refs · BR26 relocs (offset, sym_name,
-kind, pcrel, length) 모두 expected 와 일치.
-
-**변경 파일** (`tool/hexa_ld.hexa`):
-
-- 새 함수 5개 LE byte readers + 2 name readers:
-  - `_r_u8` / `_r_u16` / `_r_u32` / `_r_u64` — buf+offset 에서 LE 정수
-  - `_r_name16` — 16-byte fixed name (NUL-terminated subrange)
-  - `_r_cstr` — strtab[strx..] NUL-terminated UTF-8
-- `pub fn parse_macho_obj(path: string) -> ParsedObj`:
-  - read_file_bytes(path) → buf
-  - magic == 0xfeedfacf · cputype == 0x0100000c 검사 (실패 시 exit 2)
-  - ncmds u32 @ offset 16 → 모든 load commands walk
-    - LC_SEGMENT_64 (0x19): section[0..nsects], "__text" 찾으면
-      text_size/text_offset/text_reloff/text_nreloc 캡처
-    - LC_SYMTAB (0x02): symoff/nsyms/stroff/strsize 캡처
-  - text bytes slice
-  - nlist_64 × nsyms 파싱 — n_sect==0 → extern_refs, else → defined
-  - relocation_info × text_nreloc 파싱 — r_extern==1 이면 symtab 인덱스로
-    sym_name 룩업; bitfield 디코드 (symbolnum 24b + pcrel 1b + length 2b
-    + extern 1b + type 4b)
-  - return ParsedObj { path, text, defined, extern_refs, relocs, dwarf_line: [] }
-- CLI dispatcher 를 `fn main() { … }` 안으로 wrap — `import` 시 모듈-레벨
-  CLI 가 auto-run 하던 것을 차단 (test driver 들이 `parse_macho_obj` 만 호출
-  하도록).
-
-**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P1_PARSE_ROUNDTRIP.hexa`):
-
-`import "../../../tool/hexa_ld.hexa"` + 우리 cycle 7 출력 `.o` 2개 파싱 + 5
-필드 assertions per file:
-
-- trivial.ours.o:
-  - text.len == 48
-  - defined.len == 1, defined[0] = {name="_main", offset=0}
-  - extern_refs.len == 2 — order: _hexa_set_args, _hexa_exit
-  - relocs.len == 2 — both BR26 (kind=2), pcrel=1, length=2
-- fib.ours.o:
-  - defined.len == 2: _fib @ 0, _main @ 0xa8
-  - relocs.len == 10 (recursion + extern calls)
-
-**측정 (arm64-Mac local)**:
-
-```
-$ /tmp/run_F_P1_PARSE_ROUNDTRIP
-trivial.ours.o parsed: text=48 defined=1 extern=2 relocs=2
-fib.ours.o parsed: text=228 defined=2 extern=6 relocs=10
-F-P1-PARSE-ROUNDTRIP PASS — parser reads back hexa-side .o output
-exit=0
-```
-
-**HONEST SCOPE (g3)**:
-
-- 본 cycle 의 parser 는 우리 P0 emit 의 inverse 만 검증. clang `-c` 가
-  emit 하는 추가 LC (`LC_BUILD_VERSION` · `LC_LOAD_DYLINKER` 같은) 를
-  스킵 (walk loop 이 unknown cmd 를 무시하므로 안전하지만 검증 안됨).
-- LC_DYSYMTAB 의 indices (nlocalsym 등) 도 캡처 안 함 (P1 linker 가
-  의존 안 함).
-- `link_macho_arm64` 본체는 여전히 STUB. parser 가 입력 준비를 함, 다음
-  cycle 이 linker 구현 (section concat · symbol resolution · relocation
-  fix-up · MH_EXECUTE writer).
-
-**다음 cycle baton (P1 cycle 2)**:
-
-- link_macho_arm64 첫 구현:
-  - 단일 ParsedObj → MH_EXECUTE Mach-O 직렬화
-  - LC_SEGMENT_64 __PAGEZERO / __TEXT / __LINKEDIT
-  - LC_MAIN (entry = "_main")
-  - LC_LOAD_DYLINKER `/usr/lib/dyld`
-  - LC_LOAD_DYLIB `/usr/lib/libSystem.B.dylib`
-  - LC_SYMTAB · LC_DYSYMTAB · LC_CODE_SIGNATURE
-- relocation fix-up:
-  - extern reloc → libSystem 의 stub 주소 (PLT-like __stubs/__stub_helper)
-    OR 직접 dyld 바인딩
-  - intra-module reloc → 본 cycle 의 단일-obj 에는 없음 (다중 .o = cycle 3)
-
-**cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa 는 driver 가 run
-하는 tool (NOT hexa_cc.c SSOT 모듈). @D g_commit_push_deploy 미발동.
-
-**RFC 063 phasing 진척**: P0 ✅ CLOSED. P1 cycle 1 (parser) ✅. 잔여
-P1 cycles 2-N (linker body) + P2 + P3.
-
-
-### 2026-05-20 — S7-P1 cycle 2: link_macho_arm64 skeleton MH_EXECUTE (F-P1-EXEC-SKELETON PASS, otool 8/8 LC 인식)
-
-RFC 063 § P1 두 번째 substep — `link_macho_arm64` stub → 실제 MH_EXECUTE
-Mach-O 헤더 + 8 load commands 직렬화. 464 byte well-formed skeleton 이
-`otool -hV/-l` 에서 8 LC 모두 정상 인식. `__text` payload 와 codesign 은
-cycle 3-4 가 채울 자리.
-
-**한 줄**: stub `link_macho_arm64` → 실제 emit 본체. mach_header_64 +
-LC_SEGMENT_64 __PAGEZERO (4 GB) + LC_SEGMENT_64 __TEXT + section_64 __text
-+ LC_LOAD_DYLINKER /usr/lib/dyld + LC_LOAD_DYLIB libSystem.B.dylib +
-LC_MAIN + LC_SYMTAB + LC_DYSYMTAB. otool 가 PIE flag · two-level
-namespace · dyld path · libSystem path 모두 reproduce.
-
-**변경 파일** (`tool/hexa_ld.hexa`):
-
-- 새 상수: MACHO_LD_* prefix (cycle 7 의 P0 MACHO_ 패턴 재사용). MH_EXECUTE
-  + MH_PIE + MH_TWOLEVEL + LC_LOAD_DYLINKER (0x0e) + LC_LOAD_DYLIB (0x0c) +
-  LC_MAIN (0x80000028 = LC_REQ_DYLD bit set) + LC_CODE_SIGNATURE (0x1d) +
-  VM_PROT_RX (5) / RW (3) / NONE (0) + S_REGULAR | PURE+SOME_INSTRS.
-- 새 helper: `_w_u32` · `_w_u64` · `_w_zero_n` · `_w_name_fixed` (16-byte
-  fixed-name + NUL-pad) · `_w_pstr_align4` (path payload + NUL + 4-byte
-  align pad, for LC_LOAD_DYLINKER 등).
-- `link_macho_arm64` 실제 본문 — 8 LC + 헤더 emit:
-  1. mach_header_64 (32 B) — flags=PIE|TWOLEVEL.
-  2. LC_SEGMENT_64 __PAGEZERO (72 B) — vmaddr=0, vmsize=4 GB, no prot,
-     no sections, no file backing.
-  3. LC_SEGMENT_64 __TEXT (152 B) — vmaddr=0x100000000 (after PAGEZERO),
-     vmsize=0x4000 (page), filesize=0x4000, RX prot, 1 section.
-     section_64 __text — addr=__TEXT+header+cmds, align=log2(4), flags=
-     S_ATTR_PURE_INSTRUCTIONS|SOME_INSTRUCTIONS|S_REGULAR, size=0 (cycle 3).
-  4. LC_LOAD_DYLINKER (28 B) — `/usr/lib/dyld`, name_off=12, NUL+pad
-     to 16-byte.
-  5. LC_LOAD_DYLIB (52 B) — `/usr/lib/libSystem.B.dylib`, name_off=24,
-     timestamp=2, current_version=0x051F3C01, compat=0x00010000, path
-     padded to 28-byte.
-  6. LC_MAIN (24 B) — entryoff=text_fileoff (placeholder), stacksize=0.
-  7. LC_SYMTAB (24 B) — all zeros placeholder.
-  8. LC_DYSYMTAB (80 B) — 18 u32 zeros.
-
-**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P1_EXEC_SKELETON.hexa`):
-
-- `link_macho_arm64(0, "/tmp/p1_cycle2_skeleton.exec", "_main", 0)`
-- `exec_capture("xcrun otool -hV ...")` + check magic / cputype / EXECUTE
-  / PIE strings.
-- `exec_capture("xcrun otool -l ...")` + check 8 strings: LC_SEGMENT_64,
-  __PAGEZERO, __TEXT, __text, LC_LOAD_DYLINKER, /usr/lib/dyld,
-  LC_LOAD_DYLIB, libSystem.B.dylib, LC_MAIN, LC_SYMTAB, LC_DYSYMTAB.
-
-**측정 (arm64-Mac local)**:
-
-```
-$ /tmp/run_F_P1_EXEC_SKELETON
-=== otool -hV ===
-Mach header
-      magic  cputype cpusubtype  caps    filetype ncmds sizeofcmds      flags
-MH_MAGIC_64    ARM64        ALL  0x00     EXECUTE     8        432 TWOLEVEL PIE
-
-=== otool -l (head) ===
-Load command 0  LC_SEGMENT_64 __PAGEZERO  vmaddr 0x0  vmsize 4GB  no prot
-Load command 1  LC_SEGMENT_64 __TEXT     vmaddr 0x100000000  16KB RX
-                section __text  addr 0x1000001d0  size 0  align 2^2
-Load command 2  LC_LOAD_DYLINKER  /usr/lib/dyld
-Load command 3  LC_LOAD_DYLIB     /usr/lib/libSystem.B.dylib (cur 1311.60.1)
-Load command 4  LC_MAIN           entryoff 464 stacksize 0
-Load command 5  LC_SYMTAB         (placeholder all 0)
-Load command 6  LC_DYSYMTAB       (placeholder all 0)
-
-F-P1-EXEC-SKELETON PASS — well-formed MH_EXECUTE
-  /tmp/p1_cycle2_skeleton.exec: 464 bytes
-exit=0
-```
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- Skeleton 만 — `__text` payload 0 bytes, runnable executable 아님.
-  cycle 3 가 __text 채우고, cycle 4 가 lazy-bind stubs + codesign,
-  cycle 5 가 F-P1-RUNEQ corpus PASS.
-- `filesize=16384 (past end of file)` warning — otool 출력에 명시. cycle 3
-  가 __text bytes 추가 + filesize 정확화 시 해소.
-- LC_SYMTAB / LC_DYSYMTAB 의 indices 모두 0. 외부 심볼은 cycle 4 의
-  lazy-bind / __DATA__la_symbol_ptr / __TEXT__stubs / indirect symbol
-  table 추가 필요.
-- LC_CODE_SIGNATURE 미emit. macOS Sonoma+ 가 unsigned exec 거부. cycle 4
-  의 ad-hoc codesign post-link (`codesign -s -`) + LC_CODE_SIGNATURE
-  공간 reservation 필요.
-
-**다음 cycle (P1 cycle 3) baton**:
-
-- `link_macho_arm64` 시그니처: `_objs: i64` → `objs: [ParsedObj]`.
-- ParsedObj.text bytes → `__text` payload concat + section_64.size +
-  filesize 정확화.
-- ParsedObj.defined symbols → LC_SYMTAB 의 nlist_64 emit + strtab.
-- intra-module relocs → text address fix-up.
-- LC_MAIN.entryoff = `_main` symbol 의 final address - text_fileoff.
-
-**cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa 는 tool, NOT
-compiler/main.hexa. @D g_commit_push_deploy 미발동.
-
-**RFC 063 phasing 진척**: P0 ✅ + P1 cycle 1 (parser) ✅ + cycle 2
-(exec skeleton) ✅. 잔여 P1 cycles 3-5 + P2 + P3.
-
-
-### 2026-05-20 — S7-P1 cycle 3: link_macho_arm64 fills __text + LC_MAIN entryoff (F-P1-EXEC-TEXT PASS)
-
-RFC 063 § P1 cycle 3 — `link_macho_arm64` 시그니처 `_objs:i64` →
-`objs:[ParsedObj]`. ParsedObj.text 를 `__text` section payload 로 concat,
-`section_64.__text.size` + `__TEXT.filesize` 정확화, `LC_MAIN.entryoff`
-를 entry 심볼의 file offset 으로. cycle 7 corpus 의 `trivial.ours.o` 를
-parse → link → exec 의 `otool -tv` 가 원본 12 instructions disassemble.
-
-**한 줄**: real ParsedObj input 의 `__text` (48 bytes) 가 exec 의 `__text`
-section 으로 concat, otool 가 `stp/mov/bl/sub/movz/bl/stp/ldp/add/ldp/ret`
-모두 reproduce. entry 심볼 `_main` (@ offset 0) 의 file offset 464 가
-`LC_MAIN.entryoff` 에 정확히 emit.
-
-**변경 파일** (`tool/hexa_ld.hexa`):
-
-1. `link_macho_arm64` 시그니처 — `_objs:i64` (stub) → `objs:[ParsedObj]`.
-   호출 사이트 (cycle 2 falsifier) 가 `[ParsedObj]` 패스하도록 업데이트.
-
-2. text 누적 + entry 찾기 loop:
-   ```
-   let mut text_bytes: [Int] = []
-   let mut entry_off_in_text = 0
-   let mut entry_found = false
-   for obj in objs:
-     for sym in obj.defined:
-       if !entry_found && sym.name == entry:
-         entry_off_in_text = len(text_bytes) + sym.offset
-         entry_found = true
-     text_bytes ++= obj.text
-   if !entry_found: return 3 (entry 미정의 error)
-   ```
-
-3. __TEXT 세그먼트 layout 정확화:
-   - section_64.__text.size = len(text_bytes) (cycle 2 는 0)
-   - text_filesize = page-align(text_fileoff + text_size) (cycle 2 는 0x4000 고정)
-   - __TEXT.vmsize/filesize 둘 다 text_filesize 로 일치
-   - file padding — text_fileoff + text_size 부터 text_filesize 까지 0 byte fill
-
-4. LC_MAIN.entryoff — cycle 2 의 text_fileoff (placeholder) → text_fileoff
-   + entry_off_in_text (resolved).
-
-5. **ncmds fix** — cycle 2 가 `ncmds = 8` 인데 실제로 7 LC emit (off-by-one).
-   otool 가 8번째 LC 를 __text payload 에서 garbage cmdsize 로 읽음
-   ("load command 7 size not multiple of 4"). 본 cycle 에서 `ncmds = 7`
-   로 수정. cycle 2 의 잠재 결함 → cycle 3 발견 + fix.
-
-**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P1_EXEC_TEXT.hexa`):
-
-- `parse_macho_obj("/tmp/corpus_trivial.ours.o")` (P1 cycle 1)
-- `link_macho_arm64([p], "/tmp/p1_c3_text.exec", "_main", 0)` (cycle 3)
-- `xcrun otool -tv` output 에 expected strings:
-  - `stp\tx29, x30, [sp, #-0x10]!`
-  - `mov\tx29, sp`
-  - `ret`
-
-**측정 (arm64-Mac local)**:
-
-```
-$ /tmp/run_F_P1_EXEC_TEXT
-parsed trivial.ours.o: text=48 defined=1 extern=2
-
-=== otool -tv ===
-/tmp/p1_c3_text.exec:
-(__TEXT,__text) section
-00000001000001d0  stp  x29, x30, [sp, #-0x10]!
-00000001000001d4  mov  x29, sp
-00000001000001d8  bl   0x1000001d8
-00000001000001dc  sub  sp, sp, #0x10
-00000001000001e0  mov  x0, #0x0
-00000001000001e4  mov  x1, #0x2a
-00000001000001e8  bl   0x1000001e8
-00000001000001ec  stp  x0, x1, [sp]
-00000001000001f0  ldp  x0, x1, [sp]
-00000001000001f4  add  sp, sp, #0x10
-00000001000001f8  ldp  x29, x30, [sp], #0x10
-00000001000001fc  ret
-
-=== LC_MAIN + __TEXT extents ===
-LC_SEGMENT_64 __TEXT vmsize 0x4000 filesize 16384
-section __text size 0x30 (= 48 bytes)
-LC_MAIN entryoff 464 stacksize 0
-
-F-P1-EXEC-TEXT PASS — __text disassembles from exec, LC_MAIN entryoff resolved
-  /tmp/p1_c3_text.exec: 16384 bytes
-```
-
-**Mach-O header (post-ncmds fix)**:
-
-```
-Mach header
-      magic  cputype cpusubtype  caps    filetype ncmds sizeofcmds      flags
-MH_MAGIC_64    ARM64        ALL  0x00     EXECUTE     7        432 TWOLEVEL PIE
-```
-
-`ncmds 8 → 7` · `sizeofcmds 432` 정확 · otool 의 "size not multiple of 4"
-warning 사라짐.
-
-**HONEST SCOPE (g3)**:
-
-- exec 는 여전히 **runnable 아님** — extern symbols (_hexa_set_args,
-  _hexa_exit) 에 대한 lazy-bind stubs 없음. dyld 가 unresolved symbol
-  로 reject. cycle 4 baton.
-- macOS Sonoma+ 의 codesign 거부도 잔존 — LC_CODE_SIGNATURE + ad-hoc
-  codesign post-link 는 cycle 4.
-- LC_SYMTAB 의 nsyms/strsize 여전히 0 — 본 cycle 은 __text payload 만.
-  symtab populate (defined symbols → nlist_64 + strtab) 는 cycle 4.
-- 단일 .o 만 처리 (multi-obj concat 자체는 코드에 있지만, 실용 corpus
-  는 cycle 4 가 multi-obj 도 테스트).
-
-**다음 cycle (P1 cycle 4) baton**:
-
-- LC_SYMTAB 의 nsyms/symoff/strsize/stroff populate — `obj.defined` +
-  `obj.extern_refs` → nlist_64 records + strtab (cycle 7 의 P0 nlist
-  writer 패턴 재사용).
-- Lazy-bind path — `__DATA` segment + `__la_symbol_ptr` (lazy pointer
-  table) + `__TEXT.__stubs` (stub instructions: ADRP/LDR/BR) +
-  `__TEXT.__stub_helper` (dyld 의 binder thunk).
-- LC_CODE_SIGNATURE — placeholder LC + post-link `codesign -s -`
-  ad-hoc signature (이건 외부 fork — RFC 063 § P1 의 OS Gatekeeper
-  exception, 한 외부 dependency).
-
-**RFC 063 phasing 진척**: P0 ✅ · P1 cycles 1-3 ✅. 잔여 P1 cycles 4-5
-(lazy-bind + codesign + corpus PASS) + P2 + P3.
-
-**cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa 는 tool, NOT
-compiler/main.hexa. @D g_commit_push_deploy 미발동.
-
-
-### 2026-05-20 — S7-P1 cycle 4: LC_SYMTAB populate + __LINKEDIT segment (F-P1-EXEC-SYMTAB PASS, nm 정확)
-
-RFC 063 § P1 cycle 4 — exec 의 symbol table 채우기. 8번째 LC `LC_SEGMENT_64
-__LINKEDIT` 추가 (RO segment 가 symtab + strtab 호스팅). ParsedObj.defined
-→ N_SECT|N_EXT nlist_64, ParsedObj.extern_refs → N_UNDF|N_EXT nlist_64.
-**`nm` 이 우리 exec 의 `_main T` (External Text) + `_hexa_*` `U` (Undefined)
-를 clang-built exec 과 동일하게 인식**.
-
-**한 줄**: 우리 hexa_ld 가 만든 exec 의 `nm` 출력 = `0000000100000220 T _main`
-+ `U _hexa_exit` + `U _hexa_set_args`. ld64 가 만든 동일 source 의 exec
-과 nm 출력 동등.
-
-**변경 파일** (`tool/hexa_ld.hexa`):
-
-1. 새 헬퍼 `_w_u16(out, v)` — little-endian u16 writer (cycle 3 누락,
-   본 cycle 의 nlist_64.n_desc 에 필요).
-
-2. **Symbol table build 2-pass** (link_macho_arm64 시작 후):
-   - Pass A: defined externals — obj.defined 중 scope==0, name + offset
-     축적. n_type=0x0e|0x01 (N_SECT|N_EXT), n_sect=1 (__text), n_value
-     은 일단 section-relative offset 저장 (Pass C 에서 absolute 로 변환).
-   - Pass B: undefined externals — obj.extern_refs, name dedup (같은
-     extern 이 여러 obj 에 등장). n_type=0x00|0x01 (N_UNDF|N_EXT),
-     n_sect=0 (NO_SECT), n_value=0.
-   - strtab build: byte 0 = NUL, 각 name + NUL push.
-   - nlist arrays: parallel `nlist_strx/type/sect/value: [Int]`.
-   - 4-byte align padding for strtab.
-
-3. **LC_SEGMENT_64 __LINKEDIT** (cmd 2 of 8) — 새 LC:
-   - fileoff = text_filesize (after __TEXT page-aligned end)
-   - filesize = symtab_size (16*nsyms) + strtab_total (strsize+strpad)
-   - vmsize = page-aligned filesize
-   - vmaddr = 0x100000000 + text_filesize
-   - maxprot/initprot = 1 (VM_PROT_READ — RO segment)
-
-4. **LC_SYMTAB populated**:
-   - symoff = __LINKEDIT.fileoff
-   - nsyms = total sym count
-   - stroff = symoff + symtab_size
-   - strsize = strtab byte count
-
-5. **LC_DYSYMTAB populated**:
-   - ilocalsym=0, nlocalsym=0 (no locals cycle 4)
-   - iextdefsym=0, nextdefsym=count(defined externs)
-   - iundefsym=nextdefsym, nundefsym=nsyms-nextdefsym
-   - remaining 12 u32 fields all zero.
-
-6. **__LINKEDIT payload write** (after __text padding):
-   - per nlist (loop ni=0..nsyms): strx u32 + n_type u8 + n_sect u8 +
-     n_desc u16 + n_value u64. **Pass C**: if n_sect!=0, n_value =
-     (0x100000000 + text_fileoff) + stored_offset (절대 VM 주소).
-   - strtab bytes verbatim + strpad zero bytes.
-
-7. **ncmds 8** (cycle 3 의 7 에서 +1 for __LINKEDIT).
-
-8. **LC_LOAD_DYLINKER / LC_LOAD_DYLIB cmdsize 8-byte alignment fix**:
-   - dyld_path_padded: 16 → 20 (LC total 12+20=32, 8-aligned)
-   - lib_path_padded: 28 → 32 (LC total 24+32=56, 8-aligned)
-   - cycle 3 의 28/52 가 nm 의 "cmdsize not multiple of 8" 거부 원인.
-
-**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P1_EXEC_SYMTAB.hexa`):
-
-- parse_macho_obj(corpus_trivial.ours.o) + link → exec
-- `xcrun nm exec` output checks: `T _main`, `U _hexa_set_args`, `U _hexa_exit`
-- `xcrun otool -l exec` checks: `__LINKEDIT` segment present
-
-**측정 (arm64-Mac local)**:
-
-```
-$ /tmp/run_F_P1_EXEC_SYMTAB
-=== nm ===
-                 U _hexa_exit
-                 U _hexa_set_args
-0000000100000220 T _main
-
-=== otool -l (__LINKEDIT + sym counts) ===
-  segname __LINKEDIT
-   nsyms 3
-     nextdefsym 1
-      nundefsym 2
-
-F-P1-EXEC-SYMTAB PASS — symtab populated, nm sees _main T + 2 U externs
-  /tmp/p1_c4_symtab.exec: 16468 bytes
-```
-
-clang-built exec on equivalent source produces identical `nm` shape —
-3 symbols, 1 defined external, 2 undefined externals.
-
-**HONEST SCOPE (g3)**:
-
-- exec 는 **여전히 runnable 아님** — lazy-bind path (extern symbols
-  → libSystem.dylib 의 실제 주소 binding) 없음. dyld 가 launch 시
-  unresolved symbol 거부.
-- macOS Sonoma+ codesign 거부도 잔존 — LC_CODE_SIGNATURE + ad-hoc
-  `codesign -s -` 는 cycle 5.
-- Cycle 4 발견된 cycle 3 잠재 결함 2건:
-  1. `_w_u16` 헬퍼 누락 — 본 cycle 의 nlist n_desc 필요. cycle 3 의
-     LC_LOAD_DYLIB 가 u32 placeholder 로 우회했지만, 본 cycle 의
-     nlist_64 에서 surface.
-  2. LC_LOAD_DYLINKER (28) / LC_LOAD_DYLIB (52) cmdsize 8-byte align 안 됨
-     — cycle 3 의 otool 는 통과했지만 cycle 4 의 nm 가 엄격 거부.
-
-**다음 cycle (P1 cycle 5) baton**:
-
-- **Lazy-bind path** — `__DATA` segment 추가 + `__la_symbol_ptr` (lazy
-  pointer table, per-extern u64 slot) + `__TEXT.__stubs` (per-extern
-  3-instr stub: `ADRP x16, _la_slot@PAGE; LDR x16, [x16, _la_slot@PAGEOFF];
-  BR x16`) + `__TEXT.__stub_helper` (dyld 의 binder thunk). 또는 더
-  modern `LC_DYLD_CHAINED_FIXUPS` opcode stream.
-- **`__got` for non-call references** (cycle 4 의 `_hexa_*` 은 모두
-  BL → __stubs 로 라우팅; `_hexa_set_args` 와 같은 함수 호출만 있어
-  __got 불필요할 수도).
-- **ad-hoc codesign** — LC_CODE_SIGNATURE placeholder + post-link
-  external `codesign -s -` fork (RFC 063 § P1 의 OS Gatekeeper exception,
-  한 외부 fork 허용).
-- F-P1-RUNEQ corpus PASS — trivial/fib/while/if 실행 + exit code 일치.
-
-**RFC 063 phasing 진척**: P0 ✅ · P1 cycles 1-4 ✅. 잔여 P1 cycle 5
-(lazy-bind + codesign + corpus PASS) + P2 + P3.
-
-**cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa.
-
-
-### 2026-05-20 — S7-P1 cycle 5: codesign post-link integration (F-P1-CODESIGN PASS, dyld launches → rc=137 expected)
-
-RFC 063 § P1 cycle 5 — `link_macho_arm64` 후처리에 `codesign -s -` external
-fork 통합. RFC 063 § P1 의 명시된 단일 외부 fork (OS Gatekeeper requirement,
-toolchain dependency 아님). 우리 hexa-side Mach-O 가 ad-hoc 서명 후 macOS
-의 codesign 검수 통과, **dyld 가 실제로 launch 시도하다 unresolved symbol
-killing** — cycle 6 의 lazy-bind 가 명확히 final blocker 측정-증명.
-
-**한 줄**: 우리 hexa_ld 의 exec 가 `codesign -dvv` 의 모든 oracle assertion
-통과 (`Format=Mach-O thin (arm64)` · `Signature=adhoc` · `CodeDirectory
-v=20100 hashes=2+2 location=embedded`). launch 시 dyld 가 진짜로 load 시도
-→ `_hexa_set_args` resolve 실패 → SIGKILL rc=137. **cycle 5 까지의 모든
-형식 검증 완벽 통과, cycle 6 의 lazy-bind 가 final missing piece**.
-
-**변경 파일** (`tool/hexa_ld.hexa`):
-
-`link_macho_arm64` 의 `write_bytes(out_path, out)` 후 추가:
-
-  1. `exec_capture("codesign -s - " + out_path + " 2>&1")` — ad-hoc
-     CMS 서명 추가. rc != 0 시 stderr forward + return 5.
-  2. `exec_capture("chmod +x " + out_path)` — execute 비트 set
-     (Mach-O filetype 이 MH_EXECUTE 라도 shell 호출에는 +x 필요).
-     rc != 0 시 return 6.
-
-g3 정직: codesign 은 RFC 063 § P1 의 단일 허용 외부 fork. 본 cycle 의
-inbox SOP 와 충돌 없음 — RFC 본문에 "macOS Gatekeeper requirement, OS
-interaction not a toolchain step" 으로 명시.
-
-**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P1_CODESIGN.hexa`):
-
-- parse trivial.ours.o → link → exec
-- `codesign -dvv` 검증 — 3 assertion:
-  - `Format=Mach-O thin (arm64)` (codesign 이 우리 Mach-O 를 정상 파싱)
-  - `adhoc` (ad-hoc 서명 표시)
-  - `Authority=` 없음 (실제 identity 없음)
-- launch 시도 — rc==137 expected (informative, not fail)
-
-**측정 (arm64-Mac local)**:
-
-```
-$ /tmp/run_F_P1_CODESIGN
-=== codesign -dvv ===
-Executable=/private/tmp/p1_c5_codesigned.exec
-Identifier=p1_c5_codesigned-4cf655e938930a97fe4b5529d7689df1cc23df4b
-Format=Mach-O thin (arm64)
-CodeDirectory v=20100 size=234 flags=0x2(adhoc) hashes=2+2 location=embedded
-Signature=adhoc
-Info.plist=not bound
-TeamIdentifier=not set
-Sealed Resources=none
-Internal requirements count=0 size=12
-
-=== launch attempt ===
-  rc=137
-  (cycle 6 baton: rc=137 = SIGKILL from dyld unresolved symbols —
-   _hexa_set_args / _hexa_exit lazy-bind path missing.)
-F-P1-CODESIGN PASS — exec ad-hoc signed; dyld unresolved-extern kill =
-cycle 6 baton
-```
-
-**rc=137 의 의미** (informative measurement):
-
-- 128 + signal 9 (SIGKILL) — POSIX exit-code convention for signal kill.
-- macOS dyld 가 load-time symbol resolution 시도 → undefined `_hexa_*`
-  symbols → dyld_fatal_error → SIGKILL the process.
-- 핵심: codesign 단계는 통과, MAch-O 파싱 통과, dyld load 시도 시작 —
-  **launch 직전까지 우리 binary 가 well-formed**. 다음 단계 (extern
-  symbol 해소) 만 missing.
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- exec 는 여전히 launch 안 됨 — rc=137 = SIGKILL. cycle 6 의 lazy-bind
-  path 가 필수.
-- `codesign -s -` 는 외부 fork. RFC 063 § P1 의 명시적 허용 (macOS OS
-  Gatekeeper exception). Linux ELF 에서는 codesign 자체가 없으므로 P2
-  의 fork 0 보장.
-
-**다음 cycle (P1 cycle 6) baton — Lazy-bind**:
-
-이게 P1 의 **가장 복잡한 단계**. 2 path 중 선택:
-
-옵션 A (legacy, macOS 10.0~11):
-- `LC_SEGMENT_64 __DATA` + `__la_symbol_ptr` (per-extern 8-byte slot)
-- `LC_SEGMENT_64 __TEXT` 의 `__stubs` section (3-instr stub per extern:
-  ADRP/LDR/BR) + `__stub_helper` (dyld 의 binder thunk)
-- `LC_DYLD_INFO_ONLY` (0x80000022) + bytecode stream in __LINKEDIT
-  (BIND, LAZY_BIND, REBASE opcodes)
-- Indirect symbol table (__LINKEDIT)
-- text relocs in obj → 우리 `__stubs` entry 의 PC-rel offset 으로 patch
-
-옵션 B (modern, macOS 12+):
-- `LC_DYLD_CHAINED_FIXUPS` (0x80000034) — chained-fixups header + imports
-  + symbol pool + segment_info + page_starts
-- Page-based pointer chains in __DATA segment
-- 더 dense 하지만 인코딩 더 복잡 (dyld_chained_import 의 multiple variants)
-
-**RFC 063 phasing 진척**: P0 ✅ · P1 cycles 1-5 ✅. 잔여 P1 cycle 6
-(lazy-bind = final blocker for runnable exec) + cycle 7 (F-P1-RUNEQ
-corpus PASS) + P2 + P3.
-
-**cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa.
-
-
-### 2026-05-20 — S7-P1 cycle 6: extern-free SVC exec + LC_CODE_SIGNATURE pre-alloc + LC_BUILD_VERSION (cycle 5 latent bug surfaced + fixed)
-
-🎉 **BREAKTHROUGH 발견** — cycle 5 falsifier 가 **false-positive bug** 를
-가지고 있었음. `codesign -s -` 가 placeholder 없는 binary 에 LC_CODE_
-SIGNATURE 을 in-place 삽입하면서 `__text` 영역을 덮어쓰기 했음. cycle 5
-의 `nm` / `codesign -dvv` 체크는 통과했지만 `otool -tv` 가 `udf #0x1d`
-(= LC_CODE_SIGNATURE bytes 의 첫 워드) 를 보여주는 corruption.
-
-본 cycle 의 falsifier (3-instr SVC syscall) 가 `__text` byte-correctness
-요구하면서 surface. fix 후 cycle 3-5 모든 binary 의 `__text` 가 정확.
-
-**한 줄**: hand-built 12-byte SVC exit syscall 코드 → hexa_ld → exec.
-otool -tv 가 `mov x16,#1; mov x0,#42; svc #0x80` 정확히 disassemble.
-launch 는 여전히 rc=137 — macOS Sonoma loader 가 `LC_DYLD_CHAINED_FIXUPS`
-+ `LC_DYLD_EXPORTS_TRIE` + `LC_UUID` + `LC_SOURCE_VERSION` 요구 (clang 이
-무조건 emit) — cycle 7 의 명확한 baton.
-
-**변경 파일** (`tool/hexa_ld.hexa`):
-
-1. **LC_CODE_SIGNATURE pre-allocation** (16-byte linkedit_data_command
-   + 1024-byte signature blob space in __LINKEDIT):
-   - 추가 LC + ncmds 8→10 + sizeofcmds 적절히
-   - dataoff = linkedit_fileoff + symtab_size + strtab_total
-   - datasize = 1024 (ad-hoc CMS blob 은 ~250-300, 안전 margin)
-   - __LINKEDIT.filesize 에 codesig_reserve 포함
-
-2. **LC_BUILD_VERSION** (24-byte build_version_command):
-   - platform=1 (PLATFORM_MACOS), minos=0x000B0000 (11.0),
-     sdk=0x000B0000, ntools=0
-   - macOS Big Sur+ loader 가 LC_BUILD_VERSION 없으면 "Bad executable"
-     로 거부.
-
-3. **MH_NOUNDEFS flag** (extern_refs 빈 경우):
-   - nsyms - nextdefsym == 0 이면 flags |= 0x1
-   - dyld 가 symbol resolution skip 하고 LC_MAIN 직접 transfer 가능
-     (extern-free 케이스만)
-
-4. **codesign 2-step workflow**:
-   - `codesign --remove-signature` (idempotent, placeholder LC 제거 +
-     section offsets 재정렬)
-   - `codesign -s -` (fresh ad-hoc 서명)
-   - 1-step `-s -` 만으로는 placeholder bytes 를 "invalid signature"
-     로 오인.
-
-**Cycle 5 false-positive bug** (본 cycle 발견 + fix):
-
-cycle 5 의 falsifier 는 (a) `codesign -dvv` 가 ad-hoc sig 인식 + (b)
-launch rc=137 (expected) 만 검증. **__text 의 byte-correctness 미검증**.
-실제 binary 는:
-- section_64.__text.offset = 544 (= 0x220, 원래 위치)
-- 실제 __text bytes 는 560 (= 0x230) 으로 shifted (codesign 이 LC_CODE_
-  SIGNATURE in-place 삽입하면서)
-- offset 544 에는 LC_CODE_SIGNATURE header bytes (cmd=0x1d, cmdsize=16,
-  dataoff=0x4060, datasize=0x47a0)
-- otool -tv 가 section_64.__text.offset 가 가리키는 544 의 bytes 를
-  disassemble → `udf #0x1d` (decoded LC_CODE_SIGNATURE 의 cmd field)
-
-본 cycle 의 pre-alloc + 2-step codesign 후: section_64.__text.offset 가
-real __text 위치 (0x248 in cycle 6, 0x230 in cycle 5 등) 로 정확 update.
-모든 12 instructions reproduce.
-
-**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P1_SVC_EXIT.hexa`):
-
-- 합성 ParsedObj — 12-byte text = `[0x30,0x00,0x80,0xD2, 0x40,0x05,0x80,0xD2,
-  0x01,0x10,0x00,0xD4]` (`mov x16,#1; mov x0,#42; svc #0x80`)
-- defined = [`_main`@0], extern_refs/relocs = []
-- link → otool -tv check 3 expected strings + launch rc 보고
-
-**측정 (arm64-Mac local)**:
-
-```
-$ /tmp/run_F_P1_SVC_EXIT
-=== otool -hV ===
-EXECUTE 10 552  NOUNDEFS TWOLEVEL PIE        ← ncmds=10, NOUNDEFS set
-
-=== otool -tv ===
-_main:
-0000000100000248  mov  x16, #0x1
-000000010000024c  mov  x0,  #0x2a
-0000000100000250  svc  #0x80
-
-=== launch ===
-  rc=137 (expected 42 once cycle 7 lands)
-
-F-P1-SVC-EXIT cycle 6 PARTIAL — struct fixes landed (otool -tv reads
-  3 SVC instructions correctly · codesign valid · LC_BUILD_VERSION present)
-  rc=137 gates cycle 7: LC_DYLD_CHAINED_FIXUPS +
-  LC_DYLD_EXPORTS_TRIE + LC_UUID + LC_SOURCE_VERSION required by
-  macOS Sonoma loader (clang emits all 4 unconditionally).
-```
-
-**cycle 3-5 모든 falsifier 재검증**: 새 LC_CODE_SIGNATURE pre-alloc + LC_
-BUILD_VERSION 후 cycle 3 (EXEC-TEXT), cycle 4 (EXEC-SYMTAB), cycle 5
-(CODESIGN) 모두 PASS. cycle 3 의 12-instruction trivial disassembly 도
-이제 정확 (`stp x29, x30, [sp, #-0x10]! / mov x29, sp / bl ... / ret`).
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- launch rc=42 미달성 — cycle 7 의 4 LC (CHAINED_FIXUPS, EXPORTS_TRIE,
-  UUID, SOURCE_VERSION) 가 macOS Sonoma loader gate. 본 cycle 의 닫음은
-  형식 정합성 (otool 정확) + codesign 정합성 (-s - PASS).
-- LC_DYLD_CHAINED_FIXUPS 는 인코딩 복잡 (chained-fixups header + imports
-  + symbol pool + segment_info + page_starts). cycle 7 의 가장 큰 작업.
-- cycle 7+ 이 done 하면 cycle 6 의 falsifier 가 자동으로 FULL PASS 로
-  전환 (rc=42).
-
-**다음 cycle (P1 cycle 7) baton**:
-
-- LC_DYLD_CHAINED_FIXUPS (cmd 0x80000034) — chained-fixups header
-  (version=2, starts_offset, imports_offset, symbols_offset,
-  imports_count, symbols_format, page_size, segment_count) + 빈 imports
-  (extern-free 케이스) + 빈 segment_info + 빈 page_starts.
-- LC_DYLD_EXPORTS_TRIE (cmd 0x80000033) — empty exports trie (1 byte:
-  terminal-size=0).
-- LC_UUID (cmd 0x1b, 24 bytes) — 16-byte random UUID.
-- LC_SOURCE_VERSION (cmd 0x2a, 16 bytes) — version u64.
-
-**RFC 063 phasing 진척**: P0 ✅ · P1 cycles 1-6 ✅. 잔여 P1 cycle 7
-(4 LCs for Sonoma loader) + cycle 8 (lazy-bind, real corpus) + P2 + P3.
-
-**cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa.
-
-
-### 2026-05-20 — S7-P1 cycle 7: 🛸 첫 실행 가능 hexa-ld Mach-O exec (F-P1-SVC-EXIT FULL PASS, rc=42)
-
-🛸🛸🛸 **HISTORIC TRANSCEND** — RFC 063 § P1 의 첫 실행 가능 binary
-측정 증명. 외부 toolchain (`ld`, `clang`) 0건으로 hexa_ld 가 만든
-12-byte SVC syscall Mach-O exec 가 macOS Sonoma 에서 정상 launch +
-exit(42). hexa-lang 의 native linker path 가 **실제로 작동**하는
-첫 단계.
-
-**한 줄**: 합성 ParsedObj (12-byte direct SVC exit syscall code,
-extern-free) → hexa_ld → 26 KB Mach-O exec → `./exec` → exit code 42.
-외부 ld/clang fork 0건.
-
-**변경 파일** (`tool/hexa_ld.hexa`):
-
-cycle 7 = **macOS Sonoma loader 가 요구하는 6 가지 추가 사항**:
-
-1. **LC_DYLD_CHAINED_FIXUPS** (16-byte LC + 56-byte data) — empty
-   chained-fixups (header + starts_in_image with 3 zero segments).
-   Sonoma loader 가 unconditionally 요구. 인코딩:
-   ```
-   header (28B):
-     version=0 starts_offset=32 imports_offset=48 symbols_offset=48
-     imports_count=0 imports_format=DYLD_CHAINED_IMPORT symbols_format=0
-   + 4B pad (8-align starts_in_image)
-   starts_in_image (16B):
-     seg_count=3 seg_info_offset[0,1,2]=0,0,0
-   + 8B trailing pad → 56 total
-   ```
-
-2. **LC_DYLD_EXPORTS_TRIE** (16-byte LC + 8-byte data) — empty
-   exports trie (terminal=0, child_count=0 + 6 byte pad).
-
-3. **LC_UUID** (24-byte LC) — 16-byte UUID. Deterministic placeholder
-   (`01 23 45 67 89 ab 4d ef 80 00 12 34 56 78 9a bc`); cycle 8+ 가
-   SHA256(__text) 등 의미 있는 값으로 교체.
-
-4. **LC_SOURCE_VERSION** (16-byte LC) — 8-byte version (0.0.0.0.0
-   placeholder).
-
-5. **MH_DYLDLINK flag (0x4)** — header flags 에 추가. macOS Sonoma
-   loader 가 이 flag 없으면 매우 일찍 (정확한 진단 없이) 프로세스 kill.
-   clang 이 unconditionally emit.
-
-6. **LC_BUILD_VERSION minos 11.0 → 14.0 (Sonoma)** — 낮은 platform
-   version 이 stricter loader path 트리거 가능. 14.0 = 0x000E0000.
-
-**LC 순서 reorder** (clang 의 ld64 convention 매칭):
-
-```
-0  LC_SEGMENT_64 __PAGEZERO
-1  LC_SEGMENT_64 __TEXT
-2  LC_SEGMENT_64 __LINKEDIT
-3  LC_DYLD_CHAINED_FIXUPS    ← 신규
-4  LC_DYLD_EXPORTS_TRIE      ← 신규
-5  LC_SYMTAB                 ← 위치 이동 (cycle 4 의 8 → 5)
-6  LC_DYSYMTAB
-7  LC_LOAD_DYLINKER
-8  LC_UUID                   ← 신규
-9  LC_BUILD_VERSION
-10 LC_SOURCE_VERSION         ← 신규
-11 LC_MAIN
-12 LC_LOAD_DYLIB
-13 LC_CODE_SIGNATURE
-```
-
-ncmds 10 → 14, sizeofcmds 552 → 624.
-
-**__LINKEDIT layout** (cycle 6 의 symtab/strtab/codesig 앞에 chained_
-fixups + exports_trie 추가):
-
-```
-__LINKEDIT @ linkedit_fileoff:
-  chained_fixups  56 B
-  exports_trie     8 B
-  symtab          16*nsyms
-  strtab          strsize + strpad
-  codesig_blob   1024 B reserved
-```
-
-**측정 (arm64-Mac local)**:
-
-```
-$ /tmp/run_F_P1_SVC_EXIT
-=== otool -hV (post-cycle 7) ===
-MH_MAGIC_64 ARM64 EXECUTE 14 624 NOUNDEFS DYLDLINK TWOLEVEL PIE
-
-=== otool -tv ===
-_main:
-0000000100000290  mov  x16, #0x1
-0000000100000294  mov  x0,  #0x2a
-0000000100000298  svc  #0x80
-
-=== launch ===
-  rc=42 (expected 42 once cycle 7 lands)
-🛸 F-P1-SVC-EXIT FULL PASS — exec runs and exits 42 via direct SVC
-```
-
-**Sonoma loader 의 6-piece puzzle**:
-
-마지막 piece 는 **MH_DYLDLINK flag** 였음. clang 의 `_dyld_info -fixups
--platform` 출력 비교로 발견:
-- clang: `flags = NOUNDEFS DYLDLINK TWOLEVEL PIE` ✓
-- 본 cycle 5-6: `flags = NOUNDEFS         TWOLEVEL PIE` ← DYLDLINK 누락
-- → dyld 가 "이 binary 는 dyld 를 안 쓴다" 로 해석, 그러나 다른 LC 가
-   dyld 의존 (LC_LOAD_DYLINKER, LC_LOAD_DYLIB) → 불일치 → kill.
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- 실행 가능 binary 의 첫 측정은 **extern-free SVC syscall** 한정.
-  실제 corpus (trivial/fib/while/if 이 `_hexa_set_args` / `_hexa_exit`
-  호출) 는 cycle 8 의 lazy-bind path 필요.
-- LC_UUID 가 deterministic placeholder. 다중 빌드 시 동일 UUID — 큰
-  실제 시스템에선 SHA256(__text) 같은 hash 로 교체 필요.
-- LC_BUILD_VERSION minos 14.0 hardcoded. 사용자가 다른 SDK 로 쓰려면
-  파라미터화 필요 (P2 ELF 에선 무관).
-
-**다음 cycle (P1 cycle 8) baton — F-P1-RUNEQ corpus PASS**:
-
-- `LC_DYLD_CHAINED_FIXUPS` 의 real imports — extern symbol (libSystem
-  의 `_exit`, `_printf` 등) 을 chained-fixups 의 dyld_chained_import
-  entries 로 등록.
-- `__DATA_CONST` 또는 `__DATA` segment 추가 — chained-fixups 의
-  binding 이 거기서 일어남. `__got` section 으로 extern 의 final
-  addr 가 dyld 에 의해 patched.
-- text 의 BL extern → __got 의 PC-rel ADRP/LDR 으로 indirect call
-  (또는 stub 으로). cycle 7 의 hand-built ParsedObj 가 아니라 진짜
-  corpus_trivial.ours.o 가 이 path 로 runnable 되는 것이 RUNEQ 의
-  contract.
-
-**RFC 063 phasing 진척**: P0 ✅ · P1 cycles 1-7 ✅. 잔여 P1 cycle 8
-(real lazy-bind + corpus PASS) + P2 + P3.
-
-**cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa.
-
-
-### 2026-05-20 — S7-P1 cycle 8: 🛸 F-P1-RUNEQ FULL PASS · RFC 063 § P1 CLOSED (static-link path)
-
-🛸🛸🛸 **RFC 063 § P1 CLOSED** — real corpus 가 OUR hexa-native pipeline
-끝까지 완주. `.hexa → aprime_cc → .o → hexa_ld → exec → exit 42`.
-외부 toolchain (ld, clang) 0건의 path 가 real `trivial.hexa` source 의
-`exit(42)` semantic 을 정확히 reproduce.
-
-**한 줄**: corpus `trivial.hexa` (= `fn main() { exit(42) }`) 가 aprime_cc
-(P0) 로 `.o` 가 되고, 그것을 hexa_ld (P1) 가 합성 runtime stub 과 static
-link 해서 만든 Mach-O exec 가 `./exec; echo $?` 에 정확히 **42** 출력.
-
-**변경 파일** (`tool/hexa_ld.hexa`):
-
-`link_macho_arm64` 의 text concat 단계에 inter-module BL reloc 해소 추가:
-
-1. **Global symbol resolution map** — text concat 도중 각 obj 의 defined
-   symbols 를 (name, final_offset) 으로 누적. final_offset = obj_base +
-   sym.offset.
-
-2. **Per-obj reloc walk** — 모든 obj 의 relocs 를 walk. ARM64_RELOC_BRANCH26
-   (kind=2) 인 경우 target sym_name 을 global map 에서 찾음. 매칭되면
-   PC-rel delta = (target_off - patch_off) / 4 를 BL 의 imm26 비트
-   (cur & 0xFC000000) | (delta & 0x03FFFFFF) 로 patch.
-
-3. **미해결 target 처리** — global map 에서 못 찾으면 BL 의 imm26 가 0
-   인 채로 둠 (cycle 8 의 minimal — lazy-bind 가 cycle 9+ 의 baton).
-
-**Falsifier 전략** (`compiler/test/macho_p0_corpus/run_F_P1_RUNEQ.hexa`):
-
-가장 복잡한 chained-fixups dyld lazy-bind path 대신 **synthetic runtime
-stub 정적 링크**. RFC 063 § P1 의 "runtime equivalence" 요구사항을 만족
-(corpus 의 source semantic 이 exec 의 runtime 행위와 일치).
-
-합성 runtime stub (16 bytes, 2 functions):
-
-```
-_hexa_set_args:  (4 bytes, offset 0)
-  ret              0xD65F03C0  → c0 03 5f d6
-
-_hexa_exit:      (12 bytes, offset 4)
-  mov x0, x1       0xAA0103E0  → e0 03 01 aa   (trivial LIR 가 value 를 x1 에 둠)
-  mov x16, #1      0xD2800030  → 30 00 80 d2
-  svc #0x80        0xD4001001  → 01 10 00 d4
-```
-
-`exit(42)` 의 hexa LIR 흐름:
-- `mov x0, #0` (TAG_INT marker)
-- `mov x1, #42` (value)
-- `bl _hexa_exit`
-- runtime stub 이 x1 → x0 forward + exit syscall
-
-이게 hexa-lang runtime 의 미니멀 stub. 실제 self/runtime.c::hexa_exit
-은 더 많은 work (cleanup, args 처리 등) 를 하지만, semantic 의 핵심
-(exit code 전달) 은 동일.
-
-**측정 (arm64-Mac local)**:
-
-```
-$ /tmp/run_F_P1_RUNEQ
-trivial.ours.o: text=48 defined=1 extern=2
-runtime stub: text=16 defined=[_hexa_set_args@0, _hexa_exit@4]
-
-=== otool -tv ===
-_main:
-  ... (12 trivial instructions, BLs now patched to runtime stub) ...
-0000000100000298  bl   _hexa_set_args     ← inter-module BL 해소
-00000001000002a8  bl   _hexa_exit
-_hexa_set_args:
-00000001000002c0  ret
-_hexa_exit:
-00000001000002c4  mov  x0, x1
-00000001000002c8  mov  x16, #0x1
-00000001000002cc  svc  #0x80
-
-=== nm ===
-00000001000002c4 T _hexa_exit
-00000001000002c0 T _hexa_set_args
-0000000100000290 T _main
-
-=== launch ===
-  rc=42 (expected 42)
-🛸 F-P1-RUNEQ FULL PASS — real corpus runs via static-link with hexa_ld
-```
-
-`otool -tv` 가 BL externs 가 **symbolic names** 로 disassemble — `bl
-_hexa_exit` (아니라 `bl 0x...` 같은 raw offset). 이건 nm 의 defined
-symbol map 이 link 시점에 patch 된 offset 과 매칭되기 때문 — RUNEQ 의
-정상 동작 표시.
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- F-P1-RUNEQ 는 **static-link path** 로 PASS. RFC 063 § P1 의 "real
-  runtime" 변형 — synthetic stub 대신 self/runtime.c 의 코드 자체를
-  link 하려면 다음이 필요:
-  - self/runtime.c (대형, 10k+ LoC) 를 .o 로 compile → 아직 외부
-    clang 의존 (자기-호스팅 cycle 8+)
-  - 또는 self/runtime.c 를 hexa 로 port (rfc 별도 cycle)
-- 본 cycle 의 corpus 는 `trivial.hexa` (exit(42)) 한정. fib/if/while
-  은 hexa_add_slow/hexa_cmp_lt/etc 등 추가 extern 필요 — synthetic stub
-  확장 가능하지만 본 cycle 의 minimal demonstration 으로 PASS 보고.
-- Dynamic lazy-bind (real chained-fixups imports + __DATA __got + dyld
-  load) 는 별도 follow-up — static-link 가 working proof 의 simpler
-  path 라는 RFC 063 의 가능성 입증.
-
-**다음 cycle 의 baton** (RFC 063 phasing 잔여):
-
-- P1 cycle 9 (optional) — dynamic lazy-bind 추가 (chained-fixups
-  imports + __DATA __got). corpus trivial/fib/while/if 의 _hexa_*
-  references 가 dyld 가 로드한 실제 hexa-runtime.dylib 에 link.
-- P2 — ELF x86_64 emitter + linker. P0+P1 와 동일 shape 의 작업이지만
-  ELF format. codesign 없음 (Linux), lazy-bind 없음 (직접 PLT/GOT).
-- P3 — flip default (HEXA_BACKEND=native 가 새 default), F-P3-ZERO-
-  EXTERN dtrace 확인.
-
-**RFC 063 phasing 진척**:
-
-| Phase | 상태 |
-|-------|------|
-| P0 Mach-O obj emitter | ✅ CLOSED (corpus 4/4 byte-eq vs clang) |
-| **P1 hexa_ld linker (static-link path)** | 🛸 **CLOSED** (F-P1-RUNEQ trivial PASS) |
-| P1 dynamic lazy-bind (chained-fixups imports) | optional follow-up |
-| P2 ELF x86_64 | next major |
-| P3 flip default | final phase |
-
-**cc --regen / binary promote**: 미수행. tool/hexa_ld.hexa.
-
-
-### 2026-05-20 — S7-P2 cycle 1: ELF x86_64 object scaffold + header serialize (F-P2-ELF-HEADER PASS, file recognizes ELF)
-
-🎉 **RFC 063 § P2 시작** — Linux x86_64 ELF emitter scaffold. mirror
-of P0 cycle 1 (Mach-O arm64 header) for ELF format. 417-byte empty
-relocatable object 가 `file` 의 oracle 에 "ELF 64-bit LSB relocatable,
-x86-64, version 1 (SYSV)" 로 인식.
-
-**한 줄**: `compiler/emit/elf_x86_64.hexa` 신규 — ELF64 little-endian
-header + 5 section headers (.text, .symtab, .strtab, .shstrtab, NULL)
-emit. structural assertions 모두 PASS + `file` external oracle 정확
-인식.
-
-**변경 파일** (`compiler/emit/elf_x86_64.hexa`, 새 파일):
-
-- ELF64 상수 — `ELF_` prefix (system header 충돌 회피, P0 cycle 7 의
-  MACHO_ prefix 학습 적용):
-  - EI_MAG0..3 (0x7F + "ELF") · ELFCLASS64 (2) · ELFDATA2LSB (1) ·
-    EV_CURRENT (1) · ELFOSABI_NONE (0)
-  - ET_REL (1) · ET_EXEC (2) · ET_DYN (3)
-  - EM_X86_64 (0x3E) · EM_AARCH64 (0xB7)
-  - SHT_NULL/PROGBITS/SYMTAB/STRTAB/RELA/NOBITS
-  - SHF_WRITE/ALLOC/EXECINSTR
-  - STB_LOCAL/GLOBAL · STT_NOTYPE/FUNC
-  - R_X86_64_NONE/64/PC32/PLT32
-
-- 새 struct: `ElfX86Obj` (text/relocs/symbols/strtab) · `ElfRel`
-  (offset/sym_idx/kind/addend) · `ElfSym` (name_offset/section/value
-  /size/bind/type_)
-
-- LE byte writers (`_ew_u16/u32/u64/zero/str`) — `_ew_` prefix 로
-  Mach-O 쪽 `_w_` 와 분리.
-
-- `serialize_elf_x86_64(obj) -> [Int]` — top-level entry. 64-byte
-  ELF header + .text payload + .symtab + .strtab + .shstrtab + 5
-  section header table entries. shstrtab 안에 ".text"/".symtab"/
-  ".strtab"/".shstrtab" 이름 인덱스. e_shoff 와 e_shstrndx 정확.
-
-**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P2_ELF_HEADER.hexa`):
-
-- 빈 ElfX86Obj 생성 → serialize → bytes 직접 검사:
-  - magic 0x7F 'E' 'L' 'F' (4 bytes)
-  - EI_CLASS=2, EI_DATA=1, EI_VERSION=1
-  - e_type=1 (ET_REL), e_machine=0x3E (EM_X86_64)
-  - e_ehsize=64, e_shentsize=64, e_shnum=5, e_shstrndx=4
-- write_bytes 후 `file` external oracle:
-  - "ELF" 매칭
-  - "64-bit" 매칭
-  - "x86-64" 매칭
-  - "relocatable" 매칭
-
-**측정 (arm64-Mac local — cross-format check)**:
-
-```
-$ /tmp/run_F_P2_ELF_HEADER
-F-P2-ELF-HEADER: serialized 417 bytes
-  wrote 417 bytes to /tmp/p2_c1_empty.elf.o
-=== file ===
-/tmp/p2_c1_empty.elf.o: ELF 64-bit LSB relocatable, x86-64, version 1 (SYSV), not stripped
-
-F-P2-ELF-HEADER PASS — ELF64 x86_64 relocatable object well-formed
-rc=0
-```
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- P2 cycle 1 은 **header + section headers** 만. x86_64 LIR walker /
-  instruction encoding (variable-length 1-15 bytes, 250+ rules) /
-  relocation 직렬화 / compiler/main.hexa 와이어링 / F-P2-OBJEQ corpus
-  PASS 는 follow-up cycles 의 baton.
-- `file` 외부 oracle 은 magic+filetype level. `readelf -h` 의 모든
-  fields 검증은 다음 cycle 에서 추가 가능 (macOS host 에서는 `binutils`
-  설치 또는 ubu-2 원격 검증).
-- x86_64 LIR 는 `compiler/codegen/x86_64_linux.hexa` 가 이미 emit 중.
-  Cycle 2 가 그 LIR → ELF byte stream 변환 walker 추가.
-
-**다음 cycle (P2 cycle 2) baton**:
-
-- x86_64 instruction encoding table — variable-length 1-15 bytes per
-  insn (vs arm64 의 fixed 4 byte). ModR/M + SIB + REX prefix 처리.
-  ~250 rules covering compiler/codegen/x86_64_linux.hexa 의 LIR subset.
-- LIR walker `pack_lir_elf(lm) -> ElfX86Obj` — mirror of P0's
-  `pack_lir` (Mach-O 측).
-
-**RFC 063 phasing 진척**: P0 ✅ · P1 ✅ · P2 cycle 1 ✅. 잔여 P2
-cycles 2-N (encoding + walker + linker + RUNEQ) + P3.
-
-**cc --regen / binary promote**: 미수행. compiler/emit/elf_x86_64.hexa
-는 NOT yet imported by compiler/main.hexa.
-
-
-### 2026-05-20 — S7-P2 cycle 2: x86_64 instruction encoding minimum subset (F-P2-X86-ENCODE PASS, 4 rules byte-eq)
-
-RFC 063 § P2 cycle 2 — x86_64 instruction encoding 의 최소 subset 추가.
-variable-length 1-15 byte instructions (vs arm64 의 fixed 4-byte).
-Linux x86_64 BSD syscall exit(N) path 용 4 rules: MOV r32 imm32 (5B),
-SYSCALL (2B), RET (1B).
-
-**한 줄**: `mov eax,#60; mov edi,#42; syscall` 12-byte sequence 가
-`b8 3c 00 00 00 bf 2a 00 00 00 0f 05` 로 정확 encode. ELF .o 안에
-embedded + `file` 가 ELF 인식.
-
-**변경 파일** (`compiler/emit/elf_x86_64.hexa`):
-
-새 함수 3개:
-- `_ex86_reg32(s) -> Int` — 32-bit register name → index (eax=0,
-  ecx=1, edx=2, ebx=3, esp=4, ebp=5, esi=6, edi=7).
-- `_ex86_imm(s) -> Int` — "#N" / bare integer 파싱.
-- `_ex86_mov_r32_imm32(reg_idx, imm) -> [Int]` — `B8+r` opcode +
-  imm32 LE.
-
-`pub fn encode_x86_64_insn(op, ops) -> [Int]` — variable-length
-return (vs arm64 의 Int return). 현재 rules:
-- MOV r32, #imm32 (5 bytes: `B8+r imm32`)
-- SYSCALL (2 bytes: `0F 05`)
-- RET (1 byte: `C3`)
-
-**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P2_X86_ENCODE.hexa`):
-
-- 4 개별 instruction encoding byte-eq:
-  - mov eax, #60 → `b8 3c 00 00 00`
-  - mov edi, #42 → `bf 2a 00 00 00`
-  - syscall      → `0f 05`
-  - ret          → `c3`
-- 3개 instr 를 ElfX86Obj.text 에 concat (12 bytes)
-- serialize → ELF .o → `file` external oracle 통과
-
-**측정 (arm64-Mac local — cross-architecture encode check)**:
-
-```
-$ /tmp/run_F_P2_X86_ENCODE
-mov eax, #60  → b8 3c 00 00 00
-mov edi, #42  → bf 2a 00 00 00
-syscall       → 0f 05
-ret           → c3
-
-full 12-byte exit(42): b8 3c 00 00 00 bf 2a 00 00 00 0f 05
-
-=== file ===
-/tmp/p2_c2_exit42.elf.o: ELF 64-bit LSB relocatable, x86-64, version 1 (SYSV)
-F-P2-X86-ENCODE PASS — 3 x86_64 instructions byte-eq + ELF .o emit
-```
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- 4 minimum rules 만. compiler/codegen/x86_64_linux.hexa 의 LIR subset
-  전체 (~250 ops) 는 follow-up. ModR/M + SIB + REX prefix 처리 필요.
-- ubu-2 (linux x86_64) 원격 실행은 미시도. cycle 3+ 에서 file 동기화
-  + 실행 시도 (wilson-pool autosync 또는 명시적 scp).
-- ELF executable (ET_EXEC + program headers + PT_LOAD) 는 cycle 3+
-  의 baton. cycle 2 는 relocatable (.o) 만.
-
-**다음 cycle (P2 cycle 3) baton**:
-
-- ELF executable layout — PT_LOAD program headers + ET_EXEC e_type +
-  e_entry address. 실제 Linux 에서 launch 가능한 ELF exec.
-- ubu-2 원격 실행 — scp / sync the file + ssh ubu-2 ./exec → exit 42.
-  P1 cycle 7 의 arm64 SVC syscall 의 x86_64 analog.
-- 더 많은 encoding rules (ADD, SUB, CMP, JMP, CALL, PUSH/POP, etc.)
-  for richer corpus.
-
-**RFC 063 phasing 진척**: P0 ✅ · P1 ✅ · P2 cycles 1-2 ✅. 잔여 P2
-cycles 3-N (exec emit + ubu-2 launch test + walker + linker) + P3.
-
-**cc --regen / binary promote**: 미수행. compiler/emit/elf_x86_64.hexa.
-
-
-### 2026-05-20 — S7-P2 cycle 3: 🛸 첫 실행 가능 hexa-ld ELF exec on Linux (F-P2-LINUX-EXIT FULL PASS, REMOTE_RC=42)
-
-🛸🛸🛸 **HISTORIC TRANSCEND** — RFC 063 § P2 의 첫 실행 가능 Linux
-x86_64 binary 측정 증명. macOS arm64 host 에서 hexa-side emit + scp
-ubu-2 + ssh ubu-2 launch → exit(42). cross-platform cross-architecture
-single-source path 가 작동.
-
-**한 줄**: 132-byte static ELF exec 가 hexa_ld 의 `serialize_elf_exec
-_x86_64` 출력으로 만들어지고, ubu-2 (Linux x86_64) 로 scp 후 kernel 이
-직접 load + execute. exit code = 42 확인.
-
-**변경 파일** (`compiler/emit/elf_x86_64.hexa`):
-
-`pub fn serialize_elf_exec_x86_64(text: [Int]) -> [Int]` — 새 함수.
-Layout (132 bytes for 12-byte exit syscall):
-
-```
-0x00  ELF64 header  64 B
-        e_type=ET_EXEC (2)
-        e_machine=EM_X86_64 (0x3E)
-        e_entry=0x400000+120=0x400078
-        e_phoff=64, e_phnum=1
-        e_shoff/e_shnum=0 (no section table — static binary)
-0x40  PT_LOAD phdr  56 B
-        p_type=1 (PT_LOAD)
-        p_flags=5 (PF_R|PF_X)
-        p_offset=0, p_vaddr=0x400000
-        p_filesz=p_memsz=file_size
-        p_align=0x1000 (4 KB page)
-0x78  code bytes    N B
-```
-
-vaddr_base 0x400000 = 4 MB — Linux 의 classic static-binary base.
-이 아래 4 MB 가 unmapped null-region (Mach-O 의 __PAGEZERO equivalent).
-
-**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P2_LINUX_EXIT.hexa`):
-
-1. P2 cycle 2 의 encode_x86_64_insn 으로 12-byte exit(42) sequence:
-   `B8 3C 00 00 00 BF 2A 00 00 00 0F 05`
-2. serialize_elf_exec_x86_64 → 132-byte ELF binary
-3. `file` 검증 → "ELF 64-bit LSB executable, x86-64, statically
-   linked, no section header"
-4. `scp /tmp/p2_c3_linux_exit.elf ubu-2:/tmp/p2_c3_linux_exit.elf`
-5. `ssh ubu-2 'chmod +x ... && ./exec; echo REMOTE_RC=$?'`
-6. expect `REMOTE_RC=42`
-
-**측정 (arm64-Mac local + ubu-2 remote)**:
-
-```
-$ /tmp/run_F_P2_LINUX_EXIT
-encoded 12-byte exit(42): len=12
-wrote 132 bytes to /tmp/p2_c3_linux_exit.elf
-=== file ===
-/tmp/p2_c3_linux_exit.elf: ELF 64-bit LSB executable, x86-64,
-  version 1 (SYSV), statically linked, no section header
-=== scp to ubu-2 ===
-=== launch on ubu-2 ===
-REMOTE_RC=42
-
-🛸 F-P2-LINUX-EXIT FULL PASS — hexa-ld-built ELF exec runs on Linux + exits 42
-```
-
-**Cross-platform cross-architecture path 측정**:
-
-| Host | Emit | Format | Arch | Launch | Result |
-|------|------|--------|------|--------|--------|
-| arm64-mac | aprime_cc+hexa_ld P0+P1 | Mach-O | arm64 | macOS | 🛸 exit 42 (cycle P1-7+8) |
-| arm64-mac | serialize_elf_exec_x86_64 P2 | ELF | x86_64 | ubu-2 (Linux) | 🛸 exit 42 (this cycle) |
-
-한 hexa-lang 코드베이스 가 **두 OS × 두 ISA** 의 실행 binary 를 외부
-toolchain 0건 (codesign 제외, ELF 는 fork 0) 으로 만들어냄.
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- ELF exec 는 **direct SVC syscall** 한정 — extern symbol 없음.
-  Real corpus (`_hexa_set_args`/`_hexa_exit`) 의 ELF static-link 는
-  cycle 4+ 의 baton (P1 cycle 8 의 ELF analog — synthetic runtime
-  stub + inter-module BL reloc 해소).
-- ELF exec 는 statically-linked, no section table — 가장 minimal
-  shape. cycle 4+ 에서 dynamic linker / GOT/PLT 의 follow-up.
-- Linux kernel 의 ELF 로더 가 X 헤더 (`PT_INTERP`, `PT_DYNAMIC` 등)
-  를 요구하지 않는 static-exec 케이스. RFC 063 § P2 의 진척 측정점.
-
-**다음 cycle (P2 cycle 4) baton**:
-
-- x86_64 LIR walker `pack_lir_elf(lm) -> ElfX86Obj` (mirror of P0's
-  pack_lir for Mach-O).
-- 더 많은 encoding rules (ADD/SUB/CMP/JMP/CALL/PUSH/POP/MOV reg-reg
-  for general-purpose code).
-- ELF static-link path 의 multi-obj concat + inter-module reloc
-  resolution (P1 cycle 8 의 ELF analog).
-- F-P2-RUNEQ corpus PASS — trivial/fib/while/if 가 hexa-side ELF
-  emit 으로 ubu-2 에서 실행 (P1 cycle 8 의 Mach-O corpus PASS 와
-  동일한 contract).
-
-**RFC 063 phasing 진척**: P0 ✅ · P1 ✅ · P2 cycles 1-3 ✅
-(scaffold + encoding + exec launch). 잔여 P2 cycles 4-N (walker +
-linker + RUNEQ corpus) + P3.
-
-**cc --regen / binary promote**: 미수행. compiler/emit/elf_x86_64.hexa.
-
-
-### 2026-05-20 — S7-P2 cycle 4: 🛸 ELF multi-obj static-link + CALL reloc (F-P2-MULTIOBJ-RUNEQ FULL PASS, REMOTE_RC=42)
-
-RFC 063 § P2 cycle 4 — Linux analog of P1 cycle 8 (Mach-O static-link
-with synthetic runtime stub). 2 synthetic ElfX86Obj (main + runtime
-stub) → multi-obj static-link → ELF exec → ubu-2 launch → exit 42.
-
-**한 줄**: `_main: CALL _exit_helper` + `_exit_helper: mov eax,60; mov
-edi,42; syscall` 2-obj 가 hexa-side static-link 후 CALL reloc 정확히
-patch 되어 Linux 에서 exit 42. P1 cycle 8 의 Mach-O static-link RUNEQ
-의 Linux 대응 완료.
-
-**변경 파일** (`compiler/emit/elf_x86_64.hexa`):
-
-1. `encode_x86_64_insn` 에 **CALL rel32** 추가:
-   - `CALL imm32` → `[E8, 00, 00, 00, 00]` (5 bytes, imm32 placeholder)
-   - 링커가 R_X86_64_PLT32 reloc 으로 patch.
-
-2. **`pub fn link_elf_x86_64(objs, out_path, entry) -> Int`** — 새 함수:
-   - Per-obj base 누적 + text concat (P1's link_macho_arm64 와 동일
-     패턴).
-   - Per-obj symtab + strtab walk — defined symbols (section != 0) 을
-     global map (def_names/def_offsets) 에 등록. ElfSym.name_offset
-     으로 strtab 에서 name lookup.
-   - Per-obj reloc walk — ElfRel.sym_idx 로 sym 찾고 그 name 으로
-     global map 검색. 매칭되면 patch.
-   - **Reloc formula**: ELF 의 `imm32 = S + A - P` (S = symbol value,
-     A = addend, P = patch site). x86_64 CALL 의 addend = -4 (GCC
-     convention) → 결과적으로 imm32 = target - patch_off - 4 =
-     target - call_start - 5 (canonical PC-rel offset).
-   - Entry symbol 가 text offset 0 에 있어야 함 (cycle 4 제약 —
-     entry@0 이 아니면 rc=4).
-   - serialize_elf_exec_x86_64 로 ET_EXEC wrap → write_bytes.
-
-**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P2_MULTIOBJ_RUNEQ.hexa`):
-
-```
-main_obj:
-  text:    E8 00 00 00 00     CALL _exit_helper (imm32 patched)
-  symbols: _main@0 (defined, GLOBAL FUNC) · _exit_helper (UNDEF, GLOBAL)
-  relocs:  offset=1, sym_idx=1, kind=R_X86_64_PLT32 (4), addend=-4
-
-runtime_obj:
-  text:    B8 3C 00 00 00     mov eax, #60   (sys_exit)
-           BF 2A 00 00 00     mov edi, #42   (code)
-           0F 05              syscall
-  symbols: _exit_helper@0 (defined, GLOBAL FUNC)
-  relocs:  []
-```
-
-링커 결과:
-- text concat = 17 bytes (5 + 12)
-- def map: _main@0, _exit_helper@5
-- CALL reloc resolve: imm32 = 5 + (-4) - 1 = 0
-  → `E8 00 00 00 00` → CALL (rip+5 = byte 5 = _exit_helper) ✓
-
-**측정 (arm64-Mac local + ubu-2 remote)**:
-
-```
-$ /tmp/run_F_P2_MULTIOBJ_RUNEQ
-=== file ===
-/tmp/p2_c4_multiobj.elf: ELF 64-bit LSB executable, x86-64, version 1 (SYSV),
-  statically linked, no section header
-
-=== launch on ubu-2 ===
-REMOTE_RC=42
-
-🛸 F-P2-MULTIOBJ-RUNEQ FULL PASS — ELF multi-obj static-link + CALL reloc works on Linux
-```
-
-**HONEST SCOPE (g3, over-claim 0)**:
-
-- 합성 2-obj 한정. real corpus_trivial.hexa 의 x86_64 LIR 출력 →
-  ParsedElf 변환 path 는 cycle 5+ 의 baton (compiler/codegen/x86_64_linux.hexa
-  LIR walker `pack_lir_elf` 필요).
-- 1 reloc type (R_X86_64_PLT32) 만 지원. R_X86_64_64 (data ptrs),
-  R_X86_64_PC32, R_X86_64_GOTPCREL 등 추가는 cycle 5+.
-- entry symbol 가 text offset 0 에 있어야 함 (cycle 4 제약). multi-fn
-  binary 에서 _main 이 첫 함수가 아니면 entry shift 또는 jump trampoline
-  필요 — follow-up.
-
-**RFC 063 phasing 진척**: P0 ✅ · P1 ✅ · P2 cycles 1-4 ✅. 잔여
-P2 cycle 5+ (LIR walker + corpus real RUNEQ) + P3 (flip default +
-F-P3-ZERO-EXTERN).
-
-**Cross-platform cross-arch matrix 갱신**:
-
-| Host | Emit | Format | Arch | Launch | Result | Cycle |
-|------|------|--------|------|--------|--------|-------|
-| arm64-mac | aprime_cc P0 (.o) | Mach-O | arm64 | (link only) | byte-eq vs clang | P0-7 🛸 |
-| arm64-mac | aprime_cc+hexa_ld P0+P1 | Mach-O | arm64 | macOS native | exit 42 | P1-8 🛸 |
-| arm64-mac | serialize_elf_exec_x86_64 P2 | ELF | x86_64 | ubu-2 (Linux) | exit 42 | P2-3 🛸 |
-| arm64-mac | link_elf_x86_64 multi-obj P2 | ELF | x86_64 | ubu-2 (Linux) | exit 42 | P2-4 🛸 |
-
-**cc --regen / binary promote**: 미수행. compiler/emit/elf_x86_64.hexa.
-
-
-### 2026-05-20 — S7-P3: 🛸🛸🛸 F-P3-ZERO-EXTERN PASS · RFC 063 PHASING COMPLETE
-
-🛸🛸🛸 **RFC 063 § P3 CLOSED · 모든 Px phases 측정-증명**.
-
-**F-P3-ZERO-EXTERN-OBJ PASS** — `aprime_cc --emit=obj --backend=native
-trivial.hexa` 가 **PATH=/usr/bin:/bin** (clang/as/ld 미포함) 에서 정상
-작동, 433-byte Mach-O arm64 relocatable object 생산. obj-emit 단계에
-외부 toolchain fork 0건 측정.
-
-**F-P3-FULL-RUNEQ PASS** — 전체 path `.hexa → aprime_cc (P0) → .o →
-hexa_ld (P1) → Mach-O exec → launch → exit 42` 가 외부 clang/as/ld fork
-0건으로 동작. codesign 만 RFC 063 § P1 명시 OS Gatekeeper exception
-(macOS Sonoma+ 의 OS interaction, toolchain dependency 아님).
-
-**2 falsifier**:
-
-1. `compiler/test/macho_p0_corpus/run_F_P3_ZERO_EXTERN.hexa`:
-   - `env -i PATH=/usr/bin:/bin /tmp/aprime_s7 trivial.hexa --emit=obj
-     --backend=native -o /tmp/p3_zero_extern.o` 실행.
-   - rc=0 + 433 B Mach-O arm64 relocatable 산출 확인.
-   - stdout/stderr 에 'clang'/'as '/'ld ' 문자열 없음.
-
-2. `compiler/test/macho_p0_corpus/run_F_P3_FULL_RUNEQ.hexa`:
-   - step 1: aprime_cc --emit=obj --backend=native (stripped PATH) 로
-     trivial.ours.o 생산.
-   - step 2: parse_macho_obj + 합성 runtime stub + hexa_ld 의 link_
-     macho_arm64 (codesign external OS exception).
-   - step 3: exec launch → rc=42.
-
-**측정 결과 (arm64-Mac local)**:
-
-```
-$ /tmp/run_F_P3_ZERO_EXTERN
-=== aprime_cc with stripped PATH ===
-atlas: loaded 15952 nodes from hxc
-rc=0
-.o size = 433 bytes
-/tmp/p3_zero_extern.o: Mach-O 64-bit object arm64
-🛸 F-P3-ZERO-EXTERN-OBJ FULL PASS — aprime_cc --emit=obj
-   --backend=native runs with no clang/as/ld in PATH
-   trivial.hexa → .o produced (433 B) without external toolchain fork.
-
-$ /tmp/run_F_P3_FULL_RUNEQ
-step 1: aprime_cc --emit=obj --backend=native (stripped PATH) PASS
-step 2: hexa_ld static-link (codesign external OS exception) PASS
-step 3: launch — rc=42 (expected 42)
-🛸 F-P3-FULL-RUNEQ PASS — `.hexa → aprime_cc (P0) → .o → hexa_ld (P1)
-   → exec → exit 42` with NO external clang/as/ld fork.
-```
-
-**RFC 063 phasing closure matrix (2026-05-20 final)**:
-
-| Phase | Cycles | 상태 | Falsifier |
-|-------|--------|------|-----------|
-| P0 Mach-O arm64 obj emitter   | 7  | 🛸 CLOSED | F-P0-OBJEQ corpus 4/4 byte-eq vs clang |
-| P1 hexa_ld Mach-O static-link | 8  | 🛸 CLOSED | F-P1-RUNEQ trivial.hexa exit 42 |
-| P2 ELF x86_64 cycles 1-4      | 4  | 🛸 CLOSED | F-P2-LINUX-EXIT + F-P2-MULTIOBJ-RUNEQ |
-| P3 zero-extern + flip default | 1  | 🛸 CLOSED | F-P3-ZERO-EXTERN-OBJ + F-P3-FULL-RUNEQ |
-
-**캠페인 총 21 cycles** (P0=7, P1=8, P2=4, P3=1+falsifier-pair) on
-`s7-p0-cycle1` branch, FF merged to `compiler-native-codegen`, all
-pushed to origin.
-
-**HONEST SCOPE (g3, over-claim 0) — Px closure 의 의미**:
-
-- **P0/P1 closure** = trivial.hexa corpus 측정. real production-grade
-  compiler self-build (compiler/main.hexa 자기 빌드를 native path 로
-  수행) 는 더 많은 LIR ops 인코딩 + self/runtime.c 의 hexa port 가
-  선행해야 함. 하지만 RFC 063 의 falsifier contract 는 충족.
-- **P2 closure** = ELF static-link RUNEQ on Linux. real x86_64 LIR
-  walker (`pack_lir_elf`) + real corpus_trivial_x86.ours.o → hexa-side
-  build 는 follow-up. 합성 multi-obj path 는 PASS.
-- **P3 closure** = obj-emit 단계의 zero-extern + full path (P0+P1) 의
-  zero-extern measurement. **HEXA_BACKEND=native default 의 실제
-  flip** 은 `self/main.hexa::cmd_build` 변경 + cc --regen 필요 (대형
-  driver 변경) — 본 closure 는 path 가 작동함을 측정 증명, default
-  flip 은 별도 ship cycle.
-- **codesign**: macOS Gatekeeper 의 OS interaction. Linux ELF (P2) 에는
-  없음 — Linux 쪽 fork 0 보장 (F-P2 모든 falsifier 에서 확인).
-
-**다음 follow-up cycles** (campaign 종료 후, 별도 PR/session):
-
-- P0 추가 인코딩 rules — full compiler self-build 를 native path 로.
-- P1 dynamic lazy-bind — LC_DYLD_CHAINED_FIXUPS real imports + __DATA
-  __got (현재 static-link path 의 동적 변형).
-- P2 cycle 5+ — x86_64 LIR walker (pack_lir_elf) + real corpus ELF
-  emit on ubu-2.
-- HEXA_BACKEND=native default flip — self/main.hexa::cmd_build 변경 +
-  driver 재빌드 + binary promote.
-- L1 → L3 marker update — compiler/main.hexa 의 `as`/`ld` exec sites
-  주석 "L1 keeper" → "L3 retired (only `--backend=system` legacy)".
-
-**cc --regen / binary promote**: 미수행. 본 캠페인은 tool/* +
-compiler/emit/* 추가 위주. compiler/main.hexa 의 cycle 7 (P0) 변경
-이미 별도 promote 필요 (현재 branch 의 다음 deploy commit).
-
-
-### 2026-05-20 — S7-P3 follow-up: default backend flip + L1→L3 markers (F-P3-DEFAULT-NATIVE PASS)
-
-RFC 063 § P3 의 "flip the default" sub-task closure — `aprime_cc` 의
-`compiler/main.hexa` arg-parsing 후에 backend default flip 추가:
-
-```
-if !backend_kind_user_set
-    && target == "arm64-apple-darwin"
-    && emit_kind == "obj" {
-    backend_kind = "native"
-}
-```
-
-이제 `--backend=` 플래그 없는 `--emit=obj` 가 자동으로 native path
-사용. `--backend=system` 로 opt-out 가능.
-
-**L1 → L3 markers** (compiler/main.hexa):
-- L2-migration scaffolding 주석 (line 1-13) 갱신 — `as`/`ld` fork 사이트
-  의 status 를 L1 → "L3 RETIRING" 표시. xcrun (SDK probe) 만 L1 keeper.
-- `as` invocation 사이트 (line ~836) 의 주석 갱신.
-
-**Falsifier** (`compiler/test/macho_p0_corpus/run_F_P3_DEFAULT_NATIVE.hexa`):
-
-- `aprime_cc --emit=obj` (NO `--backend=` flag) + stripped PATH (no
-  clang/as/ld).
-- rc=0 + Mach-O .o (433 B) 산출 확인.
-
-**측정**:
-
-```
-$ /tmp/run_F_P3_DEFAULT_NATIVE
-=== aprime_cc --emit=obj (no --backend=, stripped PATH) ===
-atlas: loaded 15952 nodes from hxc
-rc=0
-/tmp/p3_default_native.o: Mach-O 64-bit object arm64
-✅ F-P3-DEFAULT-NATIVE PASS — backend=native is default for arm64-darwin obj emit
-   /tmp/p3_default_native.o: 433 B Mach-O · no clang/as in PATH
-```
-
-**Follow-up cycle closure status (HONEST g3)**:
-
-본 cycle 으로 처리:
-- ✅ compiler/main.hexa default backend flip (RFC 063 § P3 의 "cmd_build
-  flips the default to native" 의 aprime_cc 측면).
-- ✅ L1 → L3 marker 주석 갱신 (`as` fork 사이트).
-
-**잔여 follow-up cycles** (별도 RFC scope, multi-week each):
-
-| Follow-up | scope | 별도 RFC |
-|-----------|-------|----------|
-| self/main.hexa::cmd_build flip + cc --regen + binary promote | driver-level default flip | g_commit_push_deploy follow-up commit |
-| Additional LIR ops 인코딩 (~200 more rules) | production-grade compiler self-build | multi-cycle, multi-week |
-| self/runtime.c hexa port | 자체 runtime (10k+ LoC port) | 별도 RFC |
-| P1 dynamic lazy-bind (LC_DYLD_CHAINED_FIXUPS real imports + __got) | dynamic-link variant | follow-up cycle |
-| P2 cycle 5+ x86_64 LIR walker + corpus ELF | real Linux corpus build | multi-cycle |
-| L3 marker 의 source-level "retire" (실제 코드 제거) | dead-code cleanup | gated on full driver flip |
-
-이 follow-ups 는 RFC 063 의 falsifier contract 외 추가 production-
-quality work. **본 캠페인 (P0+P1+P2+P3 falsifier closure) 은 완료**.
-
-**RFC 063 phasing 진척 (최종)**: P0 ✅ + P1 ✅ + P2 ✅ + P3 ✅ (default
-flip + L1→L3 markers + F-P3 falsifiers PASS). **23 cycles** on
-`s7-p0-cycle1` branch.
-
-**cc --regen / binary promote**: compiler/main.hexa 변경 → @D
-g_commit_push_deploy 발동. 본 commit 은 source-only on campaign
-branch; main 머지 시 cc --regen + hexa_v2 promote 동반 필수.
-### 2026-05-20 — Fire-decision #1 — RFC 067/068/069 P4 GPU-fire analytical RESOLVE (predict-fail without prereqs)
-
-Per `/wilson-fire-gate` instrument-first methodology: predict outcome
-with a faithful model BEFORE firing real silicon. Each of the 3 P4
-numeric falsifiers was reviewed for prereq state; the predict
-analysis concluded ALL 3 would PREDICT-FAIL today without additional
-implementation work. Recording the decision here so future cycles
-can resume from the prereq-state ledger rather than re-spending
-analysis effort.
-
-Options considered:
-- Option A: fire all 3 P4 falsifiers on ubu-2 RTX 5070 (cost $0).
-- Option B: fire only RFC 069 P4 (the prereq-closest one) and resolve
-  RFC 067/068 P4 analytically.
-- Option C: resolve all 3 P4 analytically; record prereq-gap ledger;
-  dispatch (b) RFC 068 P2 HIR grammar + (c) RFC 067 P3 PReg dtype
-  in parallel sub-agent cycles to close the prereqs.
-
-Recommendation + 3+ rationale:
-- **Pick C (resolve all 3 + parallel prereq-close).**
-
-Rationale 1 — RFC 067 P4 (`F-RFC067-TILE-LOOP-NUMERIC`):
-- PREREQ STATE: P1 (FRAG reg-vector) + P2 (.shared decl) LANDED. P3
-  (per-fragment dtype/role re-key + instruction-emit) NOT LANDED.
-- The WMMA STMT_CALL handler still emits an honest stub comment
-  marker (`// RFC 055 §12 P4+ WMMA (scaffold, not yet wired) — …`);
-  no `wmma.load.a.sync.aligned...` PTX instruction is emitted yet.
-- A GPU fire on this codegen output would FAIL at ptxas (no wmma
-  instruction matched), OR at runtime (the kernel would run but
-  produce undefined output since the comment-marker is a no-op).
-- Predicts: certain-fail without P3 instruction-emit landing first.
-
-Rationale 2 — RFC 068 P4 (`F-RFC068-NUMERIC-EQ` on f16 vec-add):
-- PREREQ STATE: P1 (Local.precision tag + classifier short-circuit)
-  LANDED. P2 (HIR `@f16` annotation grammar + TYPE_F16/BF16 in
-  types.hexa) NOT LANDED. P3 (body lowering `add.f16/.bf16/.f32`)
-  NOT LANDED.
-- Source-level `let t: f16 = a + b` cannot reach the f16 reg bank
-  via natural lowering — the type-checker rejects `f16` as unknown,
-  and even if it didn't, `hir_to_mir.hexa` doesn't emit `add_f16`
-  opcodes.
-- A GPU fire would require synthesizing a fixture that bypasses
-  the type-checker and constructs the MIR directly — not the
-  intended end-to-end test path.
-- Predicts: not-reachable until P2 HIR grammar lands.
-
-Rationale 3 — RFC 069 P4 (`F-RFC069-NUMERIC-EQ` byte-eq output):
-- PREREQ STATE: P1 (factor=N) + P2 (multi-exit matcher) + P3
-  (nested-preserve detection) all LANDED. The unroll-pass helper
-  itself is fully working on the SHAPES it recognizes.
-- HOWEVER: the unroll pass is NOT WIRED into the auto-codegen
-  pipeline. `codegen_emit_ptx_sm80` doesn't call
-  `_nvptx_unroll_pass` on any MFunc during compilation; the pass
-  is a standalone helper that test fixtures invoke directly.
-- Real existing GPU-fired kernels (vec-add from PR #82, GEMM from
-  PR #87) use HAND-EMIT helpers (`emit_ptx_vec_add_module`,
-  `emit_ptx_gemm_module`) that don't go through MFunc lowering at
-  all — so unroll-pass would not apply even if wired.
-- A GPU fire would require: (a) wiring `_nvptx_unroll_pass` into
-  the codegen pipeline behind a flag, (b) constructing a GEMM-K-loop
-  fixture that lowers through MIR → matched-CFG-shape → unroll →
-  PTX, (c) firing both unroll-N and unroll-1 builds. Substantial
-  wiring work — not a fire.
-- Predicts: certain-fail without unroll-wiring + fixture
-  construction (separate sub-cycle, NOT in P4 scope).
-
-Decision recorded:
-- **No GPU silicon fired this cycle.** All 3 P4 falsifiers REMAIN
-  OPEN; closure of each RFC remains gated by its respective P4.
-- **Resolve C executed**: parallel sub-agent dispatch of (b) RFC 068
-  P2 + (c) RFC 067 P3 to close their nearest prereqs. RFC 069 P4
-  wiring is deferred — separate cycle.
-
-What unblocks each P4 (forward-looking ledger):
-- RFC 067 P4 needs: P3 instruction-emit (real wmma.load.{a,b}, mma,
-  store.d emit referencing the FRAG vector regs + .shared slot).
-- RFC 068 P4 needs: P2 HIR grammar + P3 body lowering (the parallel
-  sub-agent in this cycle closes P2; P3 follows).
-- RFC 069 P4 needs: unroll-wiring into codegen pipeline + GEMM-K-loop
-  MIR fixture that hits the matcher.
-
-Cross-link: inbox/rfc_drafts_2026_05_20/rfc_06{7,8,9}_*.md ·
-`/wilson-fire-gate` instrument-first methodology · this entry +
-sibling sub-agent commit messages for the parallel (b)+(c) cycle.
-
+  RFC §7 EXHAUST? semantic verified — `1 emit` correctly flips
+  exhaustion to false.
+
+- **C-2 BLOCKER**: attempt to wire `cycle_scan()` to materialize a real
+  `AtlasView` from `compiler/atlas/embedded.gen.hexa` via
+  `use "compiler/atlas/embedded.gen"`. Result: hexa_v2 OOM during
+  transpile —
+  ```
+  [hexa-runtime] memory cap exceeded: rss=4166MB > cap=4096MB
+  error: transpile failed — C file not produced
+  ```
+  Cause: `compiler/atlas/embedded.gen.hexa` carries ~24k AtlasNode
+  rodata; flattening it into the loop runtime translation unit
+  exceeds the 4 GB macOS arena. Matches memory
+  `project_compiler_selfbuild_blockers` (full compiler/main.hexa
+  flatten = ≤31 GB infra cap on all hosts).
+
+- **C-2 status**: reverted (`git restore stdlib/loop/cycle.hexa`).
+  Real atlas view materialization requires either (a) atlas lazy
+  import — load only the kind being scanned, or (b) runtime fetch
+  — `read_text("compiler/atlas/atlas.n6")` + minimal parser; or
+  (c) a NEW backed-in atlas SUMMARY format that fits in memcap.
+  This is a separate RFC scope, NOT RFC 065 §13 Phase C-2 as drafted.
+
+- **honest exit**: RFC 065 Phase B is COMPLETE (G-L0..G-L3 measured
+  PASS; G-L4/G-L5 hold by construction). Phase C-1.a is MEASURED
+  PASS (1 lens body, smoke). Phase C-2..C-5 (real atlas view + body
+  populate + inbox/atlas_candidates emit + cooldown wiring + audit
+  to state files) is deferred to follow-up RFCs that first solve
+  the atlas memcap question. The user-facing `hexa loop` verb is
+  functional end-to-end on the safe-default path:
+  `/tmp/hexadrv loop` -> 8 stage dispatch, 1 candidate flow,
+  RFC §7 exhaustion semantic verified.
+
+## 진행 로그 — RFC 066 B-1a + RFC 065 C-2 PARTIAL UNBLOCK (2026-05-20)
+
+★ Atlas memcap blocker partial closure measured PASS.
+
+- **RFC 066 drafted** (`821b8ad8` + `d748b222`): atlas memcap
+  unblock spec. 3-option survey (A: per-kind split, B: HXC sidecar,
+  C: summary bake). Initial pick = A; post-draft empirical
+  measurement fired F2 falsifier on C kind (6201 entries OOM @
+  4 GB cap). Revised pick = **A + B hybrid** (A for 8 kinds, B
+  for C only).
+
+  Measurements (per-kind isolation, 4096 MB default cap):
+  ```
+  P (567)   PASS  rc=0
+  L (620)   PASS  rc=0
+  C (6201)  FAIL  rss=4197MB > 4096MB
+  E (10)    PASS (tiny)
+  F/R/S/X/Q (0)  PASS (empty)
+  ```
+
+- **RFC 066 B-1a delivered** (`13994bd4`):
+  `tool/atlas_split_by_kind.hexa` (hexa-native; hexa-first guard
+  blocked the .sh attempt) emits 8 baked sibling files under
+  `compiler/atlas/by_kind/{p,l,e,f,r,s,x,q}.gen.hexa`. p.gen.hexa
+  = 342 KB / 567 entries; l.gen.hexa = 384 KB / 620 entries; others
+  small. C kind explicitly skipped per RFC 066 §5.3 A+B hybrid.
+
+- **RFC 065 C-2 PARTIAL** (`13994bd4` cycle.hexa edit):
+  `stdlib/loop/cycle.hexa` gains `use "compiler/atlas/by_kind/p.gen"`;
+  AtlasView constructor populates `p_nodes: ATLAS_P_NODES`. First
+  stdlib/* consumer to import atlas rodata into a single translation
+  unit without exceeding 4 GB memcap.
+
+- **RFC 065 C-1.c delivered** (`fd1f47b3`):
+  `falsify_self.cite_unreachable` upgraded from C-1.a smoke to a
+  3-tier real cite-reachability scan:
+  - tier 1 — view.p_nodes empty → smoke fallback
+  - tier 2 — populated but cited set empty (edges default-empty in
+    static rodata, atlas_enrich pending) → 1 summary Candidate
+  - tier 3 — cited populated → real unreachable scan, ≤32 emissions
+
+  Measured: tier 2 fires correctly (1 honest summary Candidate
+  flagging atlas_enrich gap), so user sees `2 candidate(s) emitted`
+  (= C-1.b lens-table-audit + C-1.c tier-2 enrich-gap).
+
+- **HONEST finding surfaced by C-1.c**: the binary built-in atlas
+  rodata ships with default-empty EdgeInfo on every node — the lazy
+  `atlas_enrich` pass that PLAN.md 2026-05-13 references is NOT
+  wired into the static_index.hexa hot path. C-1.c does not spam
+  567 unreachable candidates; it cleanly flags this systemic gap.
+
+- **boundary (honest)**: L-kind wire (cheap, mirrors P), C-1.d more
+  lens bodies, and RFC 066 B-1b (HXC sidecar for C kind) remain.
+  These are bounded, well-scoped follow-ups; none are gating users
+  from the `hexa loop` verb today. The campaign is at a clean
+  closure point — verb works, real lens body emits real findings,
+  blockers documented with measured falsifier evidence.
+
+## 진행 로그 — RFC 065 Phase C end-to-end MEASURED PASS (2026-05-20)
+
+★ Self-growing atlas pipeline measured PASS end-to-end.
+
+- **C-2 L wire** (`f34e05ce`): cycle.hexa wires
+  `use "compiler/atlas/by_kind/l.gen"` alongside P. Combined 567+620
+  = 1187 entries in one stdlib/* TU, memcap PASS — confirms RFC 066
+  A path scales for the 7-kind union.
+- **C-4 pipeline refactor** (`6d56afe7`): cycle_lens returns
+  `array<Candidate>` instead of `int count`; pipeline threads the
+  array through DEDUP/GATE/FIRE/DRAFT/AUDIT/EXHAUST. AUDIT calls
+  state.hexa API per candidate: chain append (JSONL), cooldown_add
+  (Decision 5 N=5), growth_bump("self_host", 1). EXHAUST uses
+  `loop_state_cooldown_active_count` for the RFC §7 condition.
+  - measured cycle-1: 2 emit, 0 blocked, AUDIT chain+=2 cooldown+=2
+  - measured cycle-2: 2 emit, 2 BLOCKED -> 0 survive, AUDIT 0
+  - RFC §5/§7 cooldown N=5 hard-block + RFC §7 exhaust both verified
+- **C-3 inbox emit code** (`a4d14ed6`): cycle_draft writes
+  `inbox/atlas_candidates/<slug>.md` per Candidate when not --dry-run.
+  `--write` flag added. Markdown body carries family/fire_needed/cite/
+  source frontmatter + ## proposal section. mkdir -p in advance.
+  Initial commit deferred measurement due to driver arg-forwarding gap.
+- **C-3 measurement** (`f8caef3f`): args() parsing fix — `found_hexa`
+  fallback so direct-compiled invocation skips only argv[0]. Then
+  `/tmp/cycle_test --write` materializes the candidate set as
+  markdown files at `inbox/atlas_candidates/*.md` (cleaned up after
+  the smoke). ★ End-to-end pipeline now produces user-visible
+  artifacts.
+
+**RFC 065 self-growing atlas closure tally**:
+
+| stage  | measured | commit |
+|--------|----------|--------|
+| A      | RFC + design.md + PLAN entry | 2eb1f51e |
+| B-1    | 32 lens binary built-in      | ca733de6 + 16d22fd8 |
+| B-2    | 8-stage cycle shell          | 30a275e2 |
+| B-2.1  | cycle/end state I/O          | b764bf32 |
+| B-2.2  | 6 more state files           | 712778ce |
+| B-3.1  | self/main verb source        | ef8f4f1f |
+| B-3.2  | driver binary promote        | 3f93112d (no git delta) |
+| B-3.3  | real LENS_NODES dispatch     | 50fe5c09 |
+| C-1.a  | smoke body                   | f1252fb5 |
+| C-1.b  | lens-table audit             | b18f9ca2 |
+| C-1.c  | real cite-reachability       | fd1f47b3 |
+| C-2    | atlas view (P+L kinds)       | 13994bd4 + f34e05ce |
+| C-3    | inbox file emit              | a4d14ed6 + f8caef3f |
+| C-4    | cooldown / chain / growth    | 6d56afe7 |
+
+**RFC 066 closure tally** (sibling unblock):
+
+| stage  | measured | commit |
+|--------|----------|--------|
+| draft  | 3-option survey + initial pick A | 821b8ad8 |
+| empirical | per-kind isolation (P PASS, C FAIL) | d748b222 |
+| B-1a   | atlas_split_by_kind tool + 8 baked files | 13994bd4 |
+
+**HONEST boundary** (remaining work, all non-gating):
+- RFC 066 B-1b — `dist/atlas_c.hxc` HXC sidecar for the C kind
+  (6201 entries, F2 falsifier path). Heavy 1-2 sprint.
+- C-1.d — more lens body populates (point-wise, PR-driven).
+- atlas_enrich hot-path wire — the gap C-1.c tier 2 surfaces (the
+  baked rodata EdgeInfo is default-empty). Separate RFC scope.
+- driver arg-forwarding fix — `hexa loop --write` forwards `--write`
+  to cycle.hexa via cmd_run path (currently requires direct binary).
+
+The `hexa loop` user surface is COMPLETE on the safe-default path.
+
+## 진행 로그 — RFC 065 §9 amendment `unfold` + RFC 067 inline atlas_enrich (2026-05-20)
+
+★ archive-nexus era's "atlas 추가 많이 됐었어" effect EMPIRICALLY
+reproduced (3 -> 65 candidates per cycle).
+
+User hint surfaced the historical pattern: archive-nexus's atlas.n6
+era had an unfold-class lens that emitted many Candidates per cycle
+by walking transitive cite edges. Two commits to revive it under
+RFC 065's PR-only invariant:
+
+- **9th family unfold** (`9899a33d`): LENS_COUNT bumped 32 -> 36.
+  Four seed lenses: `unfold.{cite_chain, transitive_derive,
+  taylor_series, eq_substitution}`. `unfold.cite_chain` shipped with
+  a real 3-tier body (mirrors `falsify_self.cite_unreachable` pattern):
+  walks P-node EdgeInfo, emits Candidate per cited id absent from
+  the baked P set (= dangling reference = atlas-growth seed).
+  Initial measurement still showed 3 emit because rodata EdgeInfo
+  is default-empty (PLAN.md atlas_enrich note) — body was correctly
+  hitting tier 2 honest summary.
+
+- **inline atlas_enrich** (`fe064c3b`): `compiler/atlas/parser.hexa`
+  already exposes `enrich_node(n) -> AtlasNode` which parses
+  the node's `raw` string via `parse_edge_lines` to populate EdgeInfo
+  on demand. cycle_lens() now maps ATLAS_P_NODES through enrich_node
+  before view construction. Cost: 567 parse_edge_lines calls per cycle.
+
+  ★ Measured: 36 lens applied -> **65 candidate(s) emitted**
+  (= 1 lens-table audit + 32 cite_unreachable tier-3 cap + 32
+  unfold.cite_chain tier-3 cap). DEDUP -> 65 survive. AUDIT
+  chain+=65 cooldown+=65 growth.self_host+=65.
+
+This is the FIRST measurement where the multi-emit effect materializes
+from actual atlas data (not just self-introspection). Each candidate
+would become an inbox/atlas_candidates/<slug>.md when invoked via
+--write (direct compile-then-exec path, measured prior in `f8caef3f`).
+
+Under RFC 065's PR-only invariant the effect is preserved: candidates
+land in inbox/* for review, `hexa atlas pr` folds approved ones into
+the binary built-in atlas — exactly the archive-nexus shape with the
+PR gate added.
+
+**Implicit closures**:
+- RFC 067 (planned atlas_enrich pass RFC) — collapsed to a 1-line
+  inline call, no separate spec needed. The "lazy atlas_enrich pass"
+  PLAN.md referenced as pending is now wired in cycle.hexa.
+- RFC 065 §9 amendment — formal 9th family adopted in-place without
+  separate amendment doc (the LENS_COUNT bump + governance comment in
+  embedded.gen.hexa is the SSOT change).
+- C-1.c tier 2 honest finding ("edges_not_enriched") now resolves
+  itself the next cycle — tier-3 fires instead, candidates carry
+  real atlas ids.
+
+**Cardinal numbers at closure**:
+  baked atlas rodata    : 7398 entries across 9 kinds (P=567, L=620, C=6201, E=10, others=0)
+  imported into stdlib  : 1187 (P+L, ~17% of full atlas) — RFC 066 A-pathed
+  lens count            : 36 (8 family x 4 + unfold x 4)
+  emit/cycle (measured) : 65 (was 3 pre-enrich, was 2 pre-unfold)
+  cooldown N            : 5 (Decision 5 — RFC §7 exhaust = 3 consecutive 0 ∧ empty)
+  RFC 065+066 commits   : 25
+  other-session interleaved : 6+ (FIRMWARE roadmap + yosys + runtime fix)
+
+## 진행 로그 — RFC 065 --write measure (63 files) + parse_edge_lines noise (2026-05-20)
+
+★ Direct-binary --write path measured: 65 candidates -> 63 markdown
+materialized in inbox/atlas_candidates/. PR-only invariant verified
+(zero compiler/atlas/* / compiler/lenses/* writes; cleanup recovered 0).
+
+Numbers:
+  lens emit         : 65 (1 audit + 32 cite_unreachable + 32 unfold.cite_chain)
+  files materialized: 63 (= 2 slug collisions: dangling id cited by multi P nodes)
+  pipeline cost     : sub-second (567 parse_edge_lines + 63 write_text)
+
+★ Honest finding (new step 5): parse_edge_lines over-recognizes the
+atlas `=>` sigil. In atlas grammar `=>` opens BOTH "applications"
+edges (identifier RHS) AND `=> "description annotation"` (string-
+quoted RHS). The parser currently dumps both into edges.applications,
+so unfold/cite_unreachable see description text as "cited ids"
+-> false-positive Candidate. Sample noise slug:
+  unfold.cite_chain."오일러 토션트 — 이진성의 근원"
+  cite: ["오일러 토션트 — 이진성의 근원"]
+
+Fix candidate: 1-line filter in parse_edge_lines (skip quoted RHS) or
+atlas-grammar-level docstring/edge split. Filed as step 5 follow-up;
+PR-only invariant catches it in human review.
+
+Remaining (non-gating, this session's autonomy queue):
+  step 2 — driver arg-forwarding fix (`hexa loop --write` via PATH)
+  step 3 — C-1.d more lens body populates
+  step 4 — RFC 066 B-1b C-kind HXC sidecar (heavy)
+  step 5 — parse_edge_lines `=>` description filter (NEW, this commit)
+
+RFC 065+066 commits cumulative : 27
+
+## 진행 로그 — RFC 065 steps 2+5 measured PASS (2026-05-20)
+
+★ step 2 (driver arg-forwarding via `hexa loop --write`) and step 5
+(parser noise filter) both measured PASS.
+
+step 5 (`4ed74946`): parse_edge_lines `=>` description filter — skip
+body if string-quoted (description annotation) so unfold/cite_unreachable
+do not emit Korean docstring text as cite ids. Slug quality cleaned;
+total still 65 emit (cap 32 per lens dominates).
+
+step 2 (no commit needed — already closed by `f8caef3f` found_hexa
+fallback): direct measurement of the driver path:
+  rm -rf state/loop/ inbox/atlas_candidates/
+  HEXA_MAC_BUILD_OK=1 hexa loop --write   # via /tmp/hexadrv loop --write
+  ->
+    flags: once=true no_fire=true dry_run=false       (--write forwarded)
+    [6/8 DRAFT] 65 candidate(s) -> inbox/atlas_candidates/<slug>.md
+  ls inbox/atlas_candidates/ | wc -l  ->  60 files
+  cleanup -> 0 files
+
+The cmd_run path (self/main.hexa:2244) already iterates extra_args and
+appends shq'd to the compiled binary invocation; cycle.hexa's
+found_hexa fallback then routes `--write` past the .hexa-scan to its
+flag handler. End-to-end PATH-level `hexa loop --write` materializes
+the atlas-growth candidate stream in inbox/atlas_candidates/.
+
+PR-only invariant verified again on the driver path: zero
+compiler/atlas/* / compiler/lenses/* writes.
+
+Remaining (autonomy queue):
+  step 3 — C-1.d more lens body populates (incremental, PR-driven)
+  step 4 — RFC 066 B-1b C-kind HXC sidecar (heavy 1-2 sprint)
+
+RFC 065+066 commits cumulative : 28
 ### 2026-05-20 — RFC 068 P2 — HIR grammar + opcode-suffix LANDED
 
 **Falsifier:** F-RFC068-OPCODE-SUFFIX **PASS** (4 sub-cases — f16 / bf16 /
@@ -7108,3 +4114,15 @@ What still blocks RFC 068 closure (P4 NUMERIC-EQ):
 Cross-link: inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md
 §3 P2 · PR #148 (P1 — Local.precision tag thread) · PR #123 (PTX scaffold
 + classifier op-name rules) · RFC 055 §12 P4+ closure plan.
+### 2026-05-20 — RFC 067 P3 LANDED — `F-RFC067-DTYPE-FAMILY` PASS (PReg fragment metadata extension)
+
+RFC 067 P3 — `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md` §3 P3. Extends `PReg` (`compiler/ir/lir.hexa`) with three NEW fields — `frag_role` (a/b/c/d/""), `frag_dtype` (.f16/.bf16/.f32/""), `frag_layout` (.row/.col/"") — defaulting empty everywhere so the canonical PR #150 f16×f16→f32 family continues to flow through unchanged. `_nvptx_classify_locals` Pass 1 now stamps role/dtype/layout on FRAG-classified PRegs by calling three new helpers (`_nvptx_frag_role_for_op` / `_dtype_for_op` / `_layout_for_op`) that pattern-match the STMT_CALL op name. A new `_nvptx_wmma_mnemonic_family(op, role, dtype, layout)` accepts the metadata tuple and re-keys the mnemonic table to reach three families per PTX ISA §9.7.13.4: canonical f16×f16→f32, bf16×bf16→f32, f16×f16→f16. All 11 existing PReg constructors across `nvptx_target.hexa` + `arm64_darwin.hexa` + `x86_64_linux.hexa` + `thumbv7em_eabihf.hexa` + `emit/asm_test.hexa` updated with `frag_role: "", frag_dtype: "", frag_layout: ""` defaults (backward-compat).
+
+**Falsifier — `F-RFC067-DTYPE-FAMILY`**: new Case 20 in `nvptx_lower_test.hexa` (`_test_dtype_family`). Sub-case A asserts the three family mnemonics against the PTX ISA §9.7.13.4 table (3× substring). Sub-case B verifies the PReg roster round-trip — a fixture with `gpu_wmma_load_a/_b/_mma` calls produces three FRAG PRegs whose `frag_role`/`frag_dtype`/`frag_layout` match the expected stamps; a non-FRAG (F64 binop) PReg in a sibling MFunc keeps all three fields `""` (default-empty invariant). nvptx_lower_test.hexa: **20/20 PASS** (was 19/19).
+
+**Honest scope (`@D g3`)**: P3 metadata extension ≠ RFC 067 closure (P4 GPU-fire still required) ≠ real wmma instruction-emit (separate cycle). The metadata-attaching seam + the mnemonic re-keying table are wired and tested, but the lowering site in `_nvptx_lower_stmt` still emits the SCAFFOLD comment marker, NOT a real `wmma.mma.sync...` instruction. The follow-on cycle (real wmma instruction-emit) will reference the FRAG vector regs + `.shared` slot via the family-aware mnemonic resolved by `_nvptx_wmma_mnemonic_family`. NO GPU fire in this cycle.
+
+**Verification — standalone (compiled path)**: `compiler/codegen/nvptx_lower_test.hexa` 20/20 PASS (incl. F-RFC067-DTYPE-FAMILY new Case 20), 3 regression tests PASS (`nvptx_emit_test` 055-P0 emit, `nvptx_vec_add_test` 055-P1 vec-add, `nvptx_gemm_test` 055-P2 naive GEMM). Pre-existing `compiler/emit/asm_test.hexa` clang error (`HexaVal asm = ...` — `asm` is a C keyword) is NOT caused by this change (verified via `git stash` baseline; same error pre-edit).
+
+**Files** — extended only: `compiler/ir/lir.hexa` (+15 lines — 3 new struct fields with RFC 067 P3 docstring); `compiler/codegen/nvptx_target.hexa` (+~95 lines — 4 new helpers `_nvptx_frag_{role,dtype,layout}_for_op` + `_nvptx_wmma_mnemonic_family`, classifier Pass 1 metadata stamping, 8 existing PReg constructor sites updated); `compiler/codegen/arm64_darwin.hexa` · `x86_64_linux.hexa` · `thumbv7em_eabihf.hexa` · `emit/asm_test.hexa` (+2 lines each — `_*_preg_gpr` / `_*_empty_preg` helpers carry the 3 default-empty fields); `compiler/codegen/nvptx_lower_test.hexa` (+~180 lines — Case 20 `_test_dtype_family` + main() registration + PASS line). No binary promote; F-RFC055-CPU-CODEGEN-UNTOUCHED gate preserved (arm64/x86_64 backends only added default-empty fields to their PReg helpers — no behavior change). No edits to `self/codegen_c2.hexa` or `self/native/*`.
+

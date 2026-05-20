@@ -90,11 +90,11 @@ fn _print_first_n_lines(s: string, n: i64) {
 // ── LIR construction helpers ────────────────────────────────
 
 fn _reg(name: string) -> PReg {
-    return PReg { name: name, kind: "gpr" }
+    return PReg { name: name, kind: "gpr", frag_role: "", frag_dtype: "", frag_layout: "" }
 }
 
 fn _empty_reg() -> PReg {
-    return PReg { name: "", kind: "" }
+    return PReg { name: "", kind: "", frag_role: "", frag_dtype: "", frag_layout: "" }
 }
 
 fn _op_reg(name: string) -> LOperand {

@@ -53,11 +53,11 @@ let _STMT_BR_COND  = "br_cond"
 // ── PReg / LOperand helpers ──────────────────────────────────
 
 fn _arm64_preg_gpr(name: string) -> PReg {
-    return PReg { name: name, kind: "gpr" }
+    return PReg { name: name, kind: "gpr", frag_role: "", frag_dtype: "", frag_layout: "" }
 }
 
 fn _arm64_empty_preg() -> PReg {
-    return PReg { name: "", kind: "" }
+    return PReg { name: "", kind: "", frag_role: "", frag_dtype: "", frag_layout: "" }
 }
 
 fn _arm64_op_reg(name: string) -> LOperand {
