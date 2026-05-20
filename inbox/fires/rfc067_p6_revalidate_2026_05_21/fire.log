@@ -1,0 +1,56 @@
+RFC 067 P6 cookbook PTX re-validation + nvcc PTX-diff perf oracle
+======================================================================
+date    : 2026-05-21
+host    : ubu-2 (Tailscale)
+budget  : $0 (codegen-side oracle, no GPU silicon fire)
+falsifier: F-GPU-COOKBOOK-PTX-REVALIDATE
+
+Step 1 — ptxas re-validation of 6 cookbook PTX artifacts:
+  step1_wmma_16x16.ptx        sm_80  rc=0  SASS=40   bytes=2193
+  step2_wmma_multitile.ptx    sm_90  rc=0  SASS=160  bytes=2439
+  step3_wmma_64x64_grid.ptx   sm_90  rc=0  SASS=168  bytes=4088
+  step4_wmma_cp_async.ptx     sm_90  rc=0  SASS=128  bytes=6902
+  step5_tf32_gemm.ptx         sm_90  rc=0  SASS=56   bytes=2413
+  composite_wmma_256x256.ptx  sm_90  rc=0  SASS=176  bytes=5153
+
+  All 6/6 PTX accept by ptxas 12.0; cuobjdump --dump-sass returns
+  non-empty for each. Cookbook §7b artifacts reproducible.
+
+Step 2 — nvcc PTX-diff perf oracle (step 1 vs CUDA C wmma::fragment ref):
+  Source CUDA C:
+    __global__ void wmma_16x16_ref(const __half *a, const __half *b, float *c) {
+        fragment<matrix_a, 16, 16, 16, __half, row_major> A;
+        fragment<matrix_b, 16, 16, 16, __half, col_major> B;
+        fragment<accumulator, 16, 16, 16, float> C;
+        fill_fragment(C, 0.0f);
+        load_matrix_sync(A, a, 16);
+        load_matrix_sync(B, b, 16);
+        mma_sync(C, A, B, C);
+        store_matrix_sync(c, C, 16, mem_row_major);
+    }
+
+  Build: nvcc -arch=sm_80 -ptx /tmp/wmma_ref.cu
+
+  Comparison:
+    hexa step1 PTX  : 9 opcode-histogram entries, 13 total instr
+    nvcc wmma_ref   : 5 opcode-histogram entries, 7 total instr
+    hexa step1 SASS : 40 instr
+    nvcc wmma_ref   : 87 SASS instr
+    delta_sass      : -47 (hexa 53.9% of nvcc reference)
+
+  Observation:
+    nvcc emits fill_fragment(C, 0.0f) initialization SASS (~47 instr)
+    that hexa-emit skips. The 4 redundant non-.global wmma stubs in
+    hexa PTX get optimized away by ptxas at SASS lowering.
+
+  Cleanup opportunity (cosmetic):
+    Future codegen cycle could elide the redundant non-.global
+    wmma.{load,store,mma} variants from the PTX emit pass. No perf
+    impact (SASS is byte-eq pre/post this cleanup), but PTX text
+    becomes shorter and easier to inspect via hexa gpu disasm.
+
+Step 3 — honest-scope check:
+  ✓ No silicon fire. No new perf claim. No §10 closure flip.
+  ✓ Adds 1 quantitative data point to §7b cookbook step 1
+  ✓ All previous claims unchanged: PR #214 HGEMM 0.5x cuBLAS ratio
+    at M=N=K=256 still the headline perf number.

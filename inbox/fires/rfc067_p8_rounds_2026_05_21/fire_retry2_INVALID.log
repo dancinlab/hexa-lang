@@ -1,0 +1,7 @@
+=== Retry 2: HGEMM 10-run with CORRECT grid + cuBLAS warmup ===
+grid=4x4 tpb=512 (CORRECT)
+hexa  10-run mean_ms=2.046461 std_ms=0.004720 (0.2306%) tflops=16.3963
+cublas 10-run mean_ms=4.100650 std_ms=0.005879 (0.1434%) tflops=8.1827
+ratio_hexa_over_cublas = 2.003776
+trial times (hexa ms): 2.053 2.039 2.043 2.048 2.055 2.051 2.046 2.044 2.044 2.042 
+trial times (cublas ms): 4.097 4.100 4.105 4.116 4.096 4.096 4.096 4.099 4.104 4.097 

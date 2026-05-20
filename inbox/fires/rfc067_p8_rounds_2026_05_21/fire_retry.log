@@ -1,0 +1,13 @@
+=== Retry: CUDA Graph + HGEMM 10-run + extras ===
+=== §7a CUDA Graph API (CUDA 12 signature) ===
+/usr/include/cuda_runtime_api.h:9495:207: note: expected ‘const struct cudaKernelNodeParams *’ but argument is of type ‘int *’
+ 9495 | extern __host__ cudaError_t CUDARTAPI cudaGraphAddKernelNode(cudaGraphNode_t *pGraphNode, cudaGraph_t graph, const cudaGraphNode_t *pDependencies, size_t numDependencies, const struct cudaKernelNodeParams *pNodeParams);
+      |                                                                                                                                                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~
+/tmp/gpu_v2_retry.sh: 줄 57: /tmp/cugraph2: 그런 파일이나 디렉터리가 없습니다
+
+=== §5m HGEMM 10-run variance at M=N=K=256 ===
+hexa  10-run mean_ms=4.097434 std_ms=0.002485 (0.0607%) tflops=8.1891
+cublas 10-run mean_ms=6.923187 std_ms=8.475066 (122.4157%) tflops=4.8467
+ratio_hexa_over_cublas = 1.689640
+
+=== END retry ===

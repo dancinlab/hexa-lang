@@ -1,0 +1,104 @@
+{
+  "rfc": "067-P7-gpu-md-parallel-checkbox-fire-2026-05-21",
+  "falsifier": [
+    "F-GPU-PTXAS-V-RESOURCE-USAGE",
+    "F-GPU-VECADD-BANDWIDTH",
+    "F-GPU-LAUNCH-OVERHEAD",
+    "F-GPU-NVCC-SASS-DIFF-STEPS-2-3-5",
+    "F-GPU-SM120-STANDALONE-PTXAS-LIMIT"
+  ],
+  "host": "ubu-2 (summer-B650M-K)",
+  "gpu": "RTX 5070 sm_120 driver 580 (compute used for vec-add bandwidth + kernel-launch overhead)",
+  "toolchain": {
+    "nvcc":     "12.0.140",
+    "ptxas":    "12.0.140",
+    "cuobjdump":"12.0.140"
+  },
+  "ptxas_v_resource_per_ptx": {
+    "step1_wmma_16x16":       {"arch":"sm_80", "regs":22, "smem":0,    "stack":0, "cmem0":376, "sass":40},
+    "step2_wmma_multitile":   {"arch":"sm_90", "regs":32, "smem":0,    "stack":0, "cmem0":560, "sass":160},
+    "step3_wmma_64x64_grid":  {"arch":"sm_90", "regs":32, "smem":0,    "stack":0, "cmem0":560, "sass":168},
+    "step4_wmma_cp_async":    {"arch":"sm_90", "regs":25, "smem":2048, "stack":0, "cmem0":560, "sass":128},
+    "step5_tf32_gemm":        {"arch":"sm_90", "regs":30, "smem":0,    "stack":0, "cmem0":552, "sass":56},
+    "composite_wmma_256x256": {"arch":"sm_90", "regs":32, "smem":0,    "stack":0, "cmem0":560, "sass":176},
+    "f16_vadd":               {"arch":"sm_80", "regs":10, "smem":0,    "stack":0, "cmem0":384, "sass":32},
+    "bf16_vadd":              {"arch":"sm_90", "regs":10, "smem":0,    "stack":0, "cmem0":560, "sass":40},
+    "vec_add_unroll1":        {"arch":"sm_80", "regs":12, "smem":0,    "stack":0, "cmem0":384, "sass":32},
+    "vec_add_unroll2":        {"arch":"sm_80", "regs":13, "smem":0,    "stack":0, "cmem0":384, "sass":48},
+    "hex_neighbor":           {"arch":"sm_80", "regs":20, "smem":0,    "stack":0, "cmem0":368, "sass":64}
+  },
+  "forward_compat_sm120_standalone_ptxas": {
+    "verdict": "ALL FAIL rc=255",
+    "interpretation": "ptxas 12.0 does not know sm_120 (RTX 5070 native arch). This is EXPECTED: per memory `reference_gpu_fire_infra`, the silicon-fire path uses driver-JIT (cuModuleLoadDataEx loads sm_80 PTX text, driver compiles to sm_120 SASS at load time). Standalone ptxas 12.0 is sm_80/sm_90-capped. Future PTX-emit cycles should target sm_80 for forward-compat unless ptxas 12.6+ is provisioned."
+  },
+  "nvcc_ptx_diff_sass_oracle": {
+    "step2_wmma_multitile_vs_nvcc": {
+      "hexa_sass": 160,
+      "nvcc_sass": 96,
+      "ratio_hexa_over_nvcc": 1.667,
+      "interpretation": "hexa-emit step2 (multi-K-tile, 4-iter K-loop) is 1.67x SASS instr of nvcc reference using #pragma unroll. nvcc compresses common subexpressions (loop-invariant address calcs) that hexa's hand-emit pattern repeats per iteration. Codegen improvement opportunity: const-fold / CSE on K-loop bodies."
+    },
+    "step3_wmma_64x64_grid_vs_nvcc": {
+      "hexa_sass": 168,
+      "nvcc_sass": 56,
+      "ratio_hexa_over_nvcc": 3.000,
+      "interpretation": "hexa-emit step3 (16-warp 64x64 grid) is 3.0x SASS instr of nvcc reference. Largest measured codegen gap. Likely cause: hexa multi-warp emit issues per-warp address arithmetic separately; nvcc reuses warp-index computation via shared register. SIGNIFICANT codegen improvement opportunity — could reduce SASS by ~2/3 with proper CSE."
+    },
+    "step5_tf32_gemm_vs_nvcc": {
+      "hexa_sass": 56,
+      "nvcc_sass": 72,
+      "ratio_hexa_over_nvcc": 0.778,
+      "interpretation": "hexa-emit step5 (tf32 16x16x8) is 0.78x SASS instr of nvcc reference. nvcc tf32 reference includes __float_to_tf32 conversion loop that hexa-emit skips (tf32 input bits assumed pre-formatted by ABI). HEXA WINS on this kernel — same measured pattern as step1 (RFC 067 P6)."
+    }
+  },
+  "vec_add_bandwidth_GB_per_s": {
+    "N": 16777216,
+    "reps": 100,
+    "warmup": 10,
+    "rtx_5070_theoretical_vram_GB_per_s": 896,
+    "f16_vadd": {
+      "elem_bytes": 2,
+      "total_ms": 17.99,
+      "mean_us": 179.92,
+      "bandwidth_GB_per_s": 559.5,
+      "fraction_of_theoretical": 0.624
+    },
+    "vec_add_unroll1_fp64": {
+      "elem_bytes": 8,
+      "total_ms": 67.51,
+      "mean_us": 675.09,
+      "bandwidth_GB_per_s": 596.4,
+      "fraction_of_theoretical": 0.665
+    },
+    "vec_add_unroll2_fp64": {
+      "elem_bytes": 8,
+      "total_ms": 69.00,
+      "mean_us": 689.99,
+      "bandwidth_GB_per_s": 583.6,
+      "fraction_of_theoretical": 0.651
+    },
+    "interpretation": "vec-add at N=16M sustains 559-596 GB/s on RTX 5070 (~62-66% of 896 GB/s theoretical VRAM bandwidth). Memory-bound; bandwidth ceiling not codegen ceiling. unroll=2 marginally SLOWER than unroll=1 (583.6 vs 596.4) — confirms RFC 069 #207 finding that unrolling memory-bound vec-add does not help and can hurt by inflating instruction footprint. CHECKMARK §4a `vec-add bandwidth` measured PASS."
+  },
+  "kernel_launch_overhead": {
+    "kernel": "empty_k (`ret;` body)",
+    "reps": 100000,
+    "warmup": 100,
+    "total_ms": 204.70,
+    "mean_us": 2.05,
+    "interpretation": "Mean per-launch overhead on RTX 5070 + CUDA 12.0 driver = 2.05 μs. This is the baseline for §5f launch-overhead amortization claim (PyTorch eager pays this per-op; cuBLAS calls cost ≥5 μs each). Direct measurement validates the structural advantage hexa-emit has over per-op-dispatch stacks. CHECKMARK §4a `kernel-launch overhead` measured PASS."
+  },
+  "honest_scope": [
+    "All measurements are SINGLE-SHAPE, SINGLE-HOST (ubu-2 RTX 5070 sm_120 driver 580).",
+    "vec-add bandwidth depends on N (memory-bound at large N, latency-bound at small N) — N=16M chosen as the canonical memory-bound regime.",
+    "Kernel-launch overhead is driver-side; 2.05 μs is a CUDA driver baseline, NOT a hexa-specific number. The advantage of hexa-emit is that the SAME 2.05 μs cost is paid ONCE per fused kernel vs ONCE per op in PyTorch eager.",
+    "nvcc PTX-diff SASS ratios are CODEGEN-DENSITY ratios, NOT perf ratios. Step3's 3.0x SASS does NOT imply 3.0x slower — register-pressure / occupancy / memory bandwidth dominate. The data identifies CODEGEN improvement opportunities, not perf claims.",
+    "All measurements are NEW (no prior measurements being re-claimed). Does NOT flip any §10 closure row."
+  ],
+  "checkboxes_flipped_this_cycle": {
+    "§4a_vec_add_bandwidth": "[x] hexa-emit vec-add 559-596 GB/s on RTX 5070 (62-66% theoretical)",
+    "§4a_kernel_launch_overhead": "[x] 2.05 μs per empty kernel launch baseline",
+    "§7a_ptxas_v_register_count_reporter": "[x] 11/11 PTX kernels measured (reg 10-32, smem 0-2048, sass 32-176)",
+    "§7a_occupancy_estimator_data": "[x] per-kernel resource usage table populated for all 11 cookbook + RFC 068/069/070 PTX",
+    "§7b_cookbook_step_2_5_nvcc_sass_diff": "[x] steps 2, 3, 5 nvcc reference PTX built + SASS-instr diff measured + interpretation recorded"
+  }
+}

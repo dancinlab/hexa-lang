@@ -1,0 +1,42 @@
+=== GPU.md Round 3 — extended checkbox sweep ===
+host: summer-B650M-K  date: 2026-05-20T17:59:34Z
+
+=== §5m HGEMM 10-trial via ORIGINAL PR #214 host launcher ===
+trial 1: 
+trial 2: 
+trial 3: 
+trial 4: 
+trial 5: 
+
+=== §6a f16 ULP-bounded checker ===
+f16_vadd ULP N=1024 max_ulp=1 zero=781 nonzero=243
+
+=== §6a NaN/Inf propagation: bf16 + FP64 ===
+  bf16 qNaN+1.0 -> 0x7fff [PASS]
+  bf16 +Inf+1.0 -> 0x7f80 [PASS]
+  bf16 -Inf++Inf -> 0x7fff [PASS]
+  bf16 1.0+0.0 -> 0x3f80 [PASS]
+bf16 nan_inf: 4/4 PASS
+--
+  fp64 NaN+1.0 -> nan [PASS]
+  fp64 +Inf+1.0 -> inf [PASS]
+  fp64 -Inf++Inf -> -nan [PASS]
+  fp64 1.0+0.0 -> 1 [PASS]
+fp64 nan_inf: 4/4 PASS
+
+=== §7a Driver (cu*) vs Runtime (cuda*) launch overhead ===
+driver cuLaunchKernel    reps=100000 total_ms=204.705 per_launch_us=2.0470
+runtime cudaMemsetAsync  reps=100000 total_ms=0.000 per_launch_us=0.0000 (proxy for runtime overhead)
+
+=== §7a Nsight Compute (ncu) availability + smoke ===
+NVIDIA (R) Nsight Compute Command Line Profiler
+Copyright (c) 2018-2023 NVIDIA Corporation
+ncu installed — would profile f16_vadd; skipping actual run for budget
+
+=== §6b/§6c PTX-text safety audit ===
+step3_wmma_64x64_grid.ptx: bar.sync/cp.async-barrier=0  setp+@bra(bounds)=1  ld.param=4
+step4_wmma_cp_async.ptx: bar.sync/cp.async-barrier=4  setp+@bra(bounds)=2  ld.param=4
+f16_vadd.ptx: bar.sync/cp.async-barrier=0  setp+@bra(bounds)=2  ld.param=4
+vec_add_unroll1.ptx: bar.sync/cp.async-barrier=0  setp+@bra(bounds)=2  ld.param=4
+
+=== END Round 3 ===

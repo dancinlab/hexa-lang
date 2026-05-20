@@ -1,0 +1,52 @@
+=== GPU.md Round 6 — final cheap-fire sweep ===
+host: summer-B650M-K date: 2026-05-20T18:12:31Z
+
+=== §11 gpu_print builtin (vprintf from device) ===
+ptxas_rc=0
+
+=== §3c mbarrier (sm_90+) feature presence in any landed PTX ===
+(no mbarrier in any landed PTX — sm_80/90 baseline; sm_90+ feature unused so far)
+
+=== §11 MPS daemon check ===
+MPS daemon NOT running (default — required for multi-process GPU sharing)
+
+=== §11 CUPTI library availability ===
+lrwxrwxrwx 1 root root 14  5월 13  2025 /usr/local/cuda/lib64/libcupti.so -> libcupti.so.12
+ls: '/usr/local/cuda-12.0/extras/CUPTI/lib64/libcupti.so'에 접근할 수 없음: 그런 파일이나 디렉터리가 없습니다
+lrwxrwxrwx 1 root root 14  4월  2  2024 /usr/lib/x86_64-linux-gnu/libcupti.so -> libcupti.so.12
+
+=== §11 GPU memory allocator (cuMemAlloc latency) ===
+cuMemAlloc         4096 bytes: 0.0646 ms  cuMemFree: 0.0593 ms
+cuMemAlloc        65536 bytes: 0.0232 ms  cuMemFree: 0.0205 ms
+cuMemAlloc      1048576 bytes: 0.0194 ms  cuMemFree: 0.0191 ms
+cuMemAlloc     16777216 bytes: 0.0340 ms  cuMemFree: 0.0308 ms
+cuMemAlloc    268435456 bytes: 0.0393 ms  cuMemFree: 0.0954 ms
+
+=== §11 Concurrent kernel scheduling (verifies async_engine_count=2) ===
+4 streams × 1000 launches each: total 6.058 ms (1.51 us/launch)
+(serial-equivalent would be 4000 launches × 5 us = 20 ms; speedup = 3.30x)
+
+=== §11 Mixed-arch fat binary: each existing cubin scan for multiple sm targets ===
+step1_wmma_16x16.cubin: targets=[]
+step2_wmma_multitile.cubin: targets=[]
+step3_wmma_64x64_grid.cubin: targets=[]
+step4_wmma_cp_async.cubin: targets=[]
+step5_tf32_gemm.cubin: targets=[]
+composite_wmma_256x256.cubin: targets=[]
+f16_vadd.cubin: targets=[]
+hex_neighbor.cubin: targets=[]
+(consumer-cubin single-target only; fat binary would embed sm_70/sm_80/sm_90 — feature unused)
+
+=== §11 cooperative groups + cooperative_launch ===
+cooperative_launch supported: 1
+cooperative_multi_device_launch supported: 1
+
+=== §11 CUDA Toolkit + driver version detection ===
+nvcc: Build cuda_12.0.r12.0/compiler.32267302_0
+driver: 580.126.09
+ptxas: V12.0.140
+
+=== §11 persistent kernel cache (~/.nv/ComputeCache) ===
+~/.nv/ComputeCache: 29 files, 17M total
+
+=== END Round 6 ===

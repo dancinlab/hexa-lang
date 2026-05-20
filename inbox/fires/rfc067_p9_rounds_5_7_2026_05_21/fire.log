@@ -1,0 +1,90 @@
+=== GPU.md Round 5 — telemetry + scale-up + JIT timing ===
+host: summer-B650M-K  date: 2026-05-20T18:10:36Z
+
+=== §11 GPU power management + thermal awareness ===
+name, driver_version, clocks.current.graphics [MHz], clocks.current.sm [MHz], clocks.current.memory [MHz], temperature.gpu, power.draw [W], memory.used [MiB], memory.total [MiB], utilization.gpu [%]
+NVIDIA GeForce RTX 5070, 580.126.09, 210 MHz, 210 MHz, 405 MHz, 35, 6.18 W, 2 MiB, 12227 MiB, 0 %
+
+=== §11 Driver capability query (cuDeviceGetAttribute) ===
+device: NVIDIA GeForce RTX 5070
+compute_capability: 12.0 (sm_120)
+multiprocessor_count: 48
+max_threads_per_block: 1024
+max_registers_per_block: 65536
+max_shared_per_block: 49152 bytes
+max_shared_per_sm: 102400 bytes
+max_registers_per_sm: 65536
+warp_size: 32
+clock_khz: 2542000 (2.54 GHz)
+memory_clock_khz: 14001000
+memory_bus_width_bits: 192
+l2_cache_bytes: 50331648
+concurrent_kernels: 1
+integrated: 0
+tcc_driver: 0
+unified_addressing: 1
+compute_preemption: 1
+cooperative_launch_supported: 1
+async_engine_count: 2
+
+=== §11 NVLink topology + MIG awareness ===
+--- nvidia-smi topo -m ---
+	[4mGPU0	CPU Affinity	NUMA Affinity	GPU NUMA ID[0m
+GPU0	 X 	0-11	0		N/A
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+--- nvidia-smi mig -lgi (list GPU instances) ---
+No MIG-supported devices found.
+
+=== §5m HGEMM scale-up at M=N=K=512 (extends §10 row caveat) ===
+M=N=K=256 grid=4x4 k_tiles=16: hexa_tflops=4.0834 cublas_tflops=8.1658 ratio=0.500058
+M=N=K=384 grid=6x6 k_tiles=24: hexa_tflops=11.0502 cublas_tflops=18.4354 ratio=0.599404
+M=N=K=512 grid=8x8 k_tiles=32: hexa_tflops=10.9152 cublas_tflops=32.7156 ratio=0.333639
+M=N=K=768 grid=12x12 k_tiles=48: hexa_tflops=17.0188 cublas_tflops=55.1640 ratio=0.308513
+M=N=K=1024 grid=16x16 k_tiles=64: hexa_tflops=15.6573 cublas_tflops=55.8359 ratio=0.280417
+
+=== §11 JIT first-launch vs Nth-launch timing ===
+module_load + getFunction (JIT): 0.062 ms
+first launch + sync (warm JIT): 0.021 ms (21 us)
+second launch + sync: 0.005 ms (5 us)
+
+=== §6a Determinism mode audit (atomic ops scan) ===
+step1_wmma_16x16.ptx: atomic_ops=0 red_ops=0 DETERMINISTIC
+step2_wmma_multitile.ptx: atomic_ops=0 red_ops=0 DETERMINISTIC
+step3_wmma_64x64_grid.ptx: atomic_ops=0 red_ops=0 DETERMINISTIC
+step5_tf32_gemm.ptx: atomic_ops=0 red_ops=0 DETERMINISTIC
+f16_vadd.ptx: atomic_ops=0 red_ops=0 DETERMINISTIC
+bf16_vadd.ptx: atomic_ops=0 red_ops=0 DETERMINISTIC
+vec_add_unroll1.ptx: atomic_ops=0 red_ops=0 DETERMINISTIC
+hex_neighbor.ptx: atomic_ops=0 red_ops=0 DETERMINISTIC
+
+=== §11 ldmatrix.sync.aligned scan ===
+step1_wmma_16x16.ptx: ldmatrix.sync = 0
+step2_wmma_multitile.ptx: ldmatrix.sync = 0
+step3_wmma_64x64_grid.ptx: ldmatrix.sync = 0
+step4_wmma_cp_async.ptx: ldmatrix.sync = 0
+step5_tf32_gemm.ptx: ldmatrix.sync = 0
+composite_wmma_256x256.ptx: ldmatrix.sync = 0
+
+=== §3c memory hierarchy usage scan ===
+step1_wmma_16x16.ptx: .shared=0 .local=0 .const=0
+step2_wmma_multitile.ptx: .shared=0 .local=0 .const=0
+step3_wmma_64x64_grid.ptx: .shared=0 .local=0 .const=0
+step4_wmma_cp_async.ptx: .shared=13 .local=0 .const=0
+step5_tf32_gemm.ptx: .shared=0 .local=0 .const=0
+composite_wmma_256x256.ptx: .shared=0 .local=0 .const=0
+f16_vadd.ptx: .shared=0 .local=0 .const=0
+bf16_vadd.ptx: .shared=0 .local=0 .const=0
+hex_neighbor.ptx: .shared=0 .local=0 .const=0
+
+=== §11 CUDA streams + events smoke ===
+single-stream 1000 launches: 2.056 ms (2.06 us/launch)
+dual-stream 1000×2 launches: 3.296 ms (3.30 us/launch-pair)
+
+=== END Round 5 ===

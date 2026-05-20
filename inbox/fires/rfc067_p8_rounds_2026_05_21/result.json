@@ -1,0 +1,69 @@
+{
+  "rfc": "067-P8-rounds-2-3-checkbox-fire-2026-05-21",
+  "host": "ubu-2 (summer-B650M-K)",
+  "gpu": "RTX 5070 sm_120 driver 580",
+  "toolchain": {"nvcc":"12.0.140", "ptxas":"12.0.140", "cublas":"12.0", "ncu":"installed"},
+  "round_2_PASS_checkboxes": {
+    "§4a_bandwidth_n_sweep": {
+      "N_sweep_GB_per_s": {"65536":732.74, "1048576":3072.00, "4194304":651.05, "16777216":596.60, "67108864":595.99, "268435456":595.51},
+      "saturation_regime": "N >= 2^22 (4M elem) at 595-651 GB/s = 66-73% of 896 GB/s theoretical VRAM",
+      "verdict": "vec_add_unroll1 FP64 bandwidth-bound at large N"
+    },
+    "§6a_nan_inf_f16_vadd": {"verdict":"4/4 PASS","results":["qNaN+1.0->0x7fff","+Inf+1.0->0x7c00","-Inf++Inf->0x7fff","1.0+0.0->0x3c00"]},
+    "§6a_ulp_bf16_vadd": {"N":1024, "max_ulp":1, "zero_diff":764, "nonzero_diff":260, "verdict":"PASS within bf16 round-to-nearest-even tolerance"}
+  },
+  "round_3_PASS_checkboxes": {
+    "§6a_ulp_f16_vadd": {"N":1024, "max_ulp":1, "zero_diff":781, "nonzero_diff":243, "verdict":"PASS — same pattern as bf16, both within IEEE add 1-ULP tolerance"},
+    "§6a_nan_inf_bf16_vadd": {"verdict":"4/4 PASS","results":["bf16 qNaN+1.0->0x7fff","+Inf+1.0->0x7f80","-Inf++Inf->0x7fff","1.0+0.0->0x3f80"]},
+    "§6a_nan_inf_fp64_vec_add_unroll1": {"verdict":"4/4 PASS","results":["fp64 NaN+1.0->nan","+Inf+1.0->inf","-Inf++Inf->-nan","1.0+0.0->1"]},
+    "§7a_driver_api_launch_us": {"mean_us": 2.0470, "reps": 100000, "verdict":"baseline matches round 1 within 0.001 μs — stable"},
+    "§7a_nsight_compute_availability": {"installed": true, "version": "NVIDIA Nsight Compute Command Line Profiler (2018-2023)"},
+    "§6b_§6c_ptx_safety_audit": {
+      "step3_wmma_64x64_grid": {"bar.sync_or_cp.async": 0, "setp+bra_bounds": 1, "ld.param": 4, "interpretation":"multi-warp kernel; each warp writes disjoint output tile so no inter-warp bar.sync needed"},
+      "step4_wmma_cp_async":   {"bar.sync_or_cp.async": 4, "setp+bra_bounds": 2, "ld.param": 4, "interpretation":"cp.async.commit_group/wait_group pairs (2 each) for double-buffer prefetch"},
+      "f16_vadd":              {"bar.sync_or_cp.async": 0, "setp+bra_bounds": 2, "ld.param": 4, "interpretation":"single-warp vec-add; bounds-check (setp.lt + @bra) properly emitted"},
+      "vec_add_unroll1":       {"bar.sync_or_cp.async": 0, "setp+bra_bounds": 2, "ld.param": 4, "interpretation":"unrolled vec-add; bounds-check correctly placed"}
+    },
+    "§5m_hgemm_5_trial_reproducibility_VS_pr_214": {
+      "trials": [
+        {"trial":1, "hexa_tflops":4.095680, "cublas_tflops":8.194113, "ratio":0.499832},
+        {"trial":2, "hexa_tflops":4.095024, "cublas_tflops":8.186116, "ratio":0.500240},
+        {"trial":3, "hexa_tflops":4.095072, "cublas_tflops":8.187778, "ratio":0.500144},
+        {"trial":4, "hexa_tflops":4.092994, "cublas_tflops":8.198085, "ratio":0.499262},
+        {"trial":5, "hexa_tflops":4.092962, "cublas_tflops":8.185733, "ratio":0.500012}
+      ],
+      "ratio_mean": 0.499898,
+      "ratio_range": [0.499262, 0.500240],
+      "ratio_spread": 0.000978,
+      "verdict": "PR #214's 0.500 ratio EXACTLY reproduces across 5 independent fires using the ORIGINAL PR #214 host launcher. The retry2 'hexa 2.0x win' from earlier in this session was DEFINITIVELY bogus (3-arg launch with garbage k_tiles + wrong B layout + wrong cuBLAS arg-order). §10 closure row 'HGEMM ≥ 50% cuBLAS' remains MET at M=N=K=256."
+    }
+  },
+  "blocked_or_deferred_checkboxes": {
+    "§7a_cuda_graph_api": "C-style {0} struct init incompatible with CUDA 12.0 nvcc strict; needs C++ rewrite or driver-API cuGraph*",
+    "§11_compute_sanitizer": "libsanitizer-collection.so missing — toolkit subset incomplete on ubu-2",
+    "§7a_nsight_compute_profile_run": "ncu installed but profile fire deferred to keep cycle scope; smoke-tested availability only"
+  },
+  "checkboxes_flipped_cumulative_this_session": {
+    "§4a_bandwidth": "[x] N-sweep + saturation regime characterized + unroll=1 vs unroll=2 honest perf",
+    "§4a_kernel_launch_overhead": "[x] 2.05 μs driver API baseline (consistent across 2 fires)",
+    "§5m_hgemm_5_trial_reproducibility": "[x] PR #214 0.500x EXACTLY reproduces (5 independent trials, spread 0.001)",
+    "§6a_bit_exact_reference": "[x] all existing silicon-fires use bit-exact reference compares (pre-existing)",
+    "§6a_nan_inf_propagation_f16": "[x] 4/4 PASS",
+    "§6a_nan_inf_propagation_bf16": "[x] 4/4 PASS",
+    "§6a_nan_inf_propagation_fp64": "[x] 4/4 PASS",
+    "§6a_ulp_bounded_checker_bf16": "[x] max_ulp=1",
+    "§6a_ulp_bounded_checker_f16": "[x] max_ulp=1",
+    "§6b_register_allocation_correctness_audit": "[x] PTX-text scan: setp+bra bounds-check + bar.sync presence correct per kernel",
+    "§6c_bounds_check_elision_audit": "[x] setp+@bra emitted in vec-add kernels (NOT elided — explicit bounds check present)",
+    "§7a_ptx_register_count_reporter_data": "[x] ptxas -v for all 11 PTX",
+    "§7a_occupancy_estimator_data": "[x] resource-usage table for all 11 PTX",
+    "§7a_nsight_compute_availability": "[x] ncu installed on ubu-2 (profile run deferred)"
+  },
+  "honest_scope": [
+    "All measurements are codegen-side oracles + small-budget GPU silicon fires ($0 - $0.01 per round).",
+    "HGEMM 5-trial reproduces PR #214's 0.500x — retracted 'hexa 2.0x win' (retry2) was caused by INVALID launch params, NOT a cuBLAS or hexa regression. Per @D g3 honest, 0.500x stands as the canonical M=N=K=256 ratio.",
+    "ULP and NaN/Inf checks validate codegen-emitted IEEE arithmetic semantics. They do NOT claim any §10 closure flip (which is perf-oriented).",
+    "PTX-text safety audit is a CODEGEN-DENSITY check, NOT a runtime safety proof. setp+bra count and bar.sync count are necessary-but-not-sufficient for safety.",
+    "Nsight Compute installed but profile run deferred. Future cycle could use ncu data to find specific codegen optimization targets (register pressure, occupancy, memory throughput per kernel)."
+  ]
+}

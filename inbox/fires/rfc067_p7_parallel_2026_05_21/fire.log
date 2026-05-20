@@ -1,0 +1,66 @@
+=== BEGIN GPU.md parallel checkbox measurement ===
+host: summer-B650M-K  date: 2026-05-20T17:30:50Z
+ptxas: ptxas: NVIDIA (R) Ptx optimizing assembler
+nvcc:  Build cuda_12.0.r12.0/compiler.32267302_0
+
+=== §7a ptxas -v resource usage per PTX ===
+step1_wmma_16x16.ptx arch=sm_80 ptxas_rc=0 regs=22 smem=0 stack=0 cmem0=376 sass=40
+step2_wmma_multitile.ptx arch=sm_90 ptxas_rc=0 regs=32 smem=0 stack=0 cmem0=? sass=160
+step3_wmma_64x64_grid.ptx arch=sm_90 ptxas_rc=0 regs=32 smem=0 stack=0 cmem0=? sass=168
+step4_wmma_cp_async.ptx arch=sm_90 ptxas_rc=0 regs=25 smem=2048 stack=0 cmem0=? sass=128
+step5_tf32_gemm.ptx arch=sm_90 ptxas_rc=0 regs=30 smem=0 stack=0 cmem0=? sass=56
+composite_wmma_256x256.ptx arch=sm_90 ptxas_rc=0 regs=32 smem=0 stack=0 cmem0=? sass=176
+f16_vadd.ptx arch=sm_80 ptxas_rc=0 regs=10 smem=0 stack=0 cmem0=384 sass=32
+bf16_vadd.ptx arch=sm_90 ptxas_rc=0 regs=10 smem=0 stack=0 cmem0=? sass=40
+vec_add_unroll1.ptx arch=sm_80 ptxas_rc=0 regs=12 smem=0 stack=0 cmem0=384 sass=32
+vec_add_unroll2.ptx arch=sm_80 ptxas_rc=0 regs=13 smem=0 stack=0 cmem0=384 sass=48
+hex_neighbor.ptx arch=sm_80 ptxas_rc=0 regs=20 smem=0 stack=0 cmem0=368 sass=64
+
+=== forward-compat: ptxas -arch=sm_120 (RTX 5070 native) ===
+step1_wmma_16x16.ptx sm_120_rc=255
+step2_wmma_multitile.ptx sm_120_rc=255
+step3_wmma_64x64_grid.ptx sm_120_rc=255
+step4_wmma_cp_async.ptx sm_120_rc=255
+step5_tf32_gemm.ptx sm_120_rc=255
+composite_wmma_256x256.ptx sm_120_rc=255
+f16_vadd.ptx sm_120_rc=255
+bf16_vadd.ptx sm_120_rc=255
+vec_add_unroll1.ptx sm_120_rc=255
+vec_add_unroll2.ptx sm_120_rc=255
+hex_neighbor.ptx sm_120_rc=255
+
+=== §7b.1 nvcc PTX-diff oracle for cookbook steps 2-5 ===
+step2_wmma_multitile.ptx vs wmma_multitile_ref: hexa_sass=160 ref_sass=96 ratio=1.666
+step3_wmma_64x64_grid.ptx vs wmma_64x64_ref: hexa_sass=168 ref_sass=56 ratio=3.000
+step5_tf32_gemm.ptx vs tf32_ref: hexa_sass=56 ref_sass=72 ratio=.777
+
+=== §4a vec-add bandwidth measurement (FP64 PR #82 + f16 PR #189) ===
+/tmp/vadd_bw_host.c:17:33: warning: ignoring return value of ‘fread’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+   17 |     char *ptx = malloc(sz + 1); fread(ptx, 1, sz, fp); ptx[sz] = 0; fclose(fp);
+      |                                 ^~~~~~~~~~~~~~~~~~~~~
+f16_vadd.ptx kernel=f16_vadd:
+N=16777216 elem_bytes=2 reps=100 total_ms=17.9916 mean_us=179.9162 bandwidth_GB_per_s=559.5012
+vec_add_unroll1.ptx kernel=vec_add_unroll1:
+N=16777216 elem_bytes=8 reps=100 total_ms=67.5091 mean_us=675.0912 bandwidth_GB_per_s=596.4427
+vec_add_unroll2.ptx kernel=vec_add_unroll2:
+N=16777216 elem_bytes=8 reps=100 total_ms=68.9990 mean_us=689.9904 bandwidth_GB_per_s=583.5635
+
+=== §4a kernel-launch overhead (empty kernel) ===
+    9 |     char *ptx = malloc(sz + 1); fread(ptx, 1, sz, fp); ptx[sz] = 0; fclose(fp);
+      |                                 ^~~~~~~~~~~~~~~~~~~~~
+empty_kernel reps=100000 total_ms=204.7027 mean_us=2.0470
+
+=== §7a per-kernel resource usage from cubin ===
+step1_wmma_16x16.ptx: Resource usage: Common: GLOBAL:0 Function wmma_16x16: REG:22 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:376 TEXTURE:0 SURFACE:0 SAMPLER:0
+step2_wmma_multitile.ptx: Resource usage: Common: GLOBAL:0 Function wmma_multitile: REG:32 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:560 TEXTURE:0 SURFACE:0 SAMPLER:0
+step3_wmma_64x64_grid.ptx: Resource usage: Common: GLOBAL:0 Function wmma_64x64_grid: REG:32 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:560 TEXTURE:0 SURFACE:0 SAMPLER:0
+step4_wmma_cp_async.ptx: Resource usage: Common: GLOBAL:0 Function wmma_cp_async: REG:25 STACK:0 SHARED:3072 LOCAL:0 CONSTANT[0]:560 TEXTURE:0 SURFACE:0 SAMPLER:0
+step5_tf32_gemm.ptx: Resource usage: Common: GLOBAL:0 Function tf32_gemm: REG:30 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:552 TEXTURE:0 SURFACE:0 SAMPLER:0
+composite_wmma_256x256.ptx: Resource usage: Common: GLOBAL:0 Function wmma_256x256_grid: REG:32 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:560 TEXTURE:0 SURFACE:0 SAMPLER:0
+f16_vadd.ptx: Resource usage: Common: GLOBAL:0 Function f16_vadd: REG:10 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:384 TEXTURE:0 SURFACE:0 SAMPLER:0
+bf16_vadd.ptx: Resource usage: Common: GLOBAL:0 Function bf16_vadd: REG:10 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:560 TEXTURE:0 SURFACE:0 SAMPLER:0
+vec_add_unroll1.ptx: Resource usage: Common: GLOBAL:0 Function vec_add_unroll1: REG:12 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:384 TEXTURE:0 SURFACE:0 SAMPLER:0
+vec_add_unroll2.ptx: Resource usage: Common: GLOBAL:0 Function vec_add_unroll2: REG:13 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:384 TEXTURE:0 SURFACE:0 SAMPLER:0
+hex_neighbor.ptx: Resource usage: Common: GLOBAL:0 Function hex_neighbor: REG:20 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:368 TEXTURE:0 SURFACE:0 SAMPLER:0
+
+=== END GPU.md parallel checkbox measurement ===

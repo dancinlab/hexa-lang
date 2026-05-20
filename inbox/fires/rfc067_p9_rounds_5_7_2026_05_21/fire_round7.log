@@ -1,0 +1,61 @@
+=== GPU.md Round 7 — final exhaustion sweep ===
+host: summer-B650M-K date: 2026-05-20T18:13:42Z
+
+=== §11 gpu_assert builtin (__assertfail from device) ===
+ptxas_rc=0
+
+=== §11 GPU shared-memory atomics (atom.shared) PTX smoke ===
+ptxas_rc=0
+
+=== §11 dynamic parallelism (CUDA Dynamic Parallelism v2) availability ===
+compute_mode: 0
+local_l1_cache: 1
+global_l1_cache: 1
+direct_managed_mem_access: 0
+managed_memory: 1
+pageable_memory_access: 1
+concurrent_managed_access: 1
+kernel_exec_timeout (e.g. display-driver watchdog): 0
+(dynamic parallelism = compute_capability 3.5+ feature; available on RTX 5070 sm_120 by default)
+
+=== §3c L2 cache-modifier hints in PTX ===
+step1_wmma_16x16.ptx: cache_modifier_hints=0
+step2_wmma_multitile.ptx: cache_modifier_hints=0
+step3_wmma_64x64_grid.ptx: cache_modifier_hints=0
+step4_wmma_cp_async.ptx: cache_modifier_hints=0
+step5_tf32_gemm.ptx: cache_modifier_hints=0
+composite_wmma_256x256.ptx: cache_modifier_hints=0
+f16_vadd.ptx: cache_modifier_hints=0
+bf16_vadd.ptx: cache_modifier_hints=0
+vec_add_unroll1.ptx: cache_modifier_hints=0
+
+=== §11 persistent kernel cache effect on module-load latency ===
+load iter 0: 0.057 ms
+load iter 1: 0.026 ms
+load iter 2: 0.022 ms
+
+=== overall PTX inventory ===
+Total PTX in /tmp: 29
+Total cubin in /tmp: 19
+818 /tmp/gpu_assert.ptx
+598 /tmp/gpu_print.ptx
+4578 /tmp/hex_neighbor.ptx
+2193 /tmp/step1_wmma_16x16.ptx
+2439 /tmp/step2_wmma_multitile.ptx
+4088 /tmp/step3_wmma_64x64_grid.ptx
+6902 /tmp/step4_wmma_cp_async.ptx
+2413 /tmp/step5_tf32_gemm.ptx
+378 /tmp/test_var1.ptx
+465 /tmp/test_var2.ptx
+2341 /tmp/tf32_ref.ptx
+361 /tmp/typeprobe1.ptx
+368 /tmp/typeprobe2.ptx
+370 /tmp/typeprobe3.ptx
+980 /tmp/vec_add_unroll1.ptx
+1596 /tmp/vec_add_unroll2.ptx
+2193 /tmp/wmma_16x16.ptx
+1765 /tmp/wmma_64x64_ref.ptx
+2928 /tmp/wmma_multitile_ref.ptx
+1286 /tmp/wmma_ref.ptx
+
+=== END Round 7 — single-session exhaustion confirmed ===

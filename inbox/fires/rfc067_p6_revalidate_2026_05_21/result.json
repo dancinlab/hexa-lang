@@ -1,0 +1,52 @@
+{
+  "rfc": "067-P6-cookbook-revalidate-2026-05-21",
+  "falsifier": "F-GPU-COOKBOOK-PTX-REVALIDATE",
+  "kind": "$0 cheap-first oracle (ptxas + cuobjdump SASS count + PTX opcode histogram)",
+  "host": "ubu-2",
+  "toolchain": {
+    "nvcc": "12.0.140",
+    "ptxas": "12.0.140",
+    "cuobjdump": "12.0.140",
+    "gpu": "RTX 5070 sm_120 driver 580 (not used for fire — codegen-side oracle only)"
+  },
+  "ptxas_revalidation": {
+    "step1_wmma_16x16":        {"declared_arch": "sm_80", "ptxas_rc": 0, "sass_instr": 40,  "bytes": 2193},
+    "step2_wmma_multitile":    {"declared_arch": "sm_90", "ptxas_rc": 0, "sass_instr": 160, "bytes": 2439},
+    "step3_wmma_64x64_grid":   {"declared_arch": "sm_90", "ptxas_rc": 0, "sass_instr": 168, "bytes": 4088},
+    "step4_wmma_cp_async":     {"declared_arch": "sm_90", "ptxas_rc": 0, "sass_instr": 128, "bytes": 6902},
+    "step5_tf32_gemm":         {"declared_arch": "sm_90", "ptxas_rc": 0, "sass_instr": 56,  "bytes": 2413},
+    "composite_wmma_256x256":  {"declared_arch": "sm_90", "ptxas_rc": 0, "sass_instr": 176, "bytes": 5153}
+  },
+  "ptx_diff_perf_oracle_step1_vs_nvcc": {
+    "hexa_step1_sass_instr": 40,
+    "nvcc_wmma_16x16_ref_sass_instr": 87,
+    "delta_sass": -47,
+    "interpretation": "hexa-emit is 53.9% the instruction count of nvcc's wmma::fragment reference for the same logical 16x16x16 GEMM tile. The nvcc reference performs fill_fragment(C, 0.0f) initialization that the hexa-emit skips (the accumulator is treated as fresh-zero by ABI). Cheap-first $0 oracle (no fire); confirms hexa-emit step1 is structurally tighter than nvcc on the smallest WMMA pattern, consistent with the §10 closure 'flame d=768·12L 20-43% faster than PyTorch eager' wall-clock win at consumer scale.",
+    "opcode_histogram_hexa_step1": {
+      "ld.param.u64": 3,
+      "wmma.store.d.sync.aligned.row.m16n16k16.global.f32": 1,
+      "wmma.store.d.sync.aligned.row.m16n16k16.f32": 1,
+      "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32": 1,
+      "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32": 1,
+      "wmma.load.b.sync.aligned.col.m16n16k16.global.f16": 1,
+      "wmma.load.b.sync.aligned.col.m16n16k16.f16": 1,
+      "wmma.load.a.sync.aligned.row.m16n16k16.global.f16": 1,
+      "wmma.load.a.sync.aligned.row.m16n16k16.f16": 1
+    },
+    "opcode_histogram_nvcc_ref": {
+      "ld.param.u64": 3,
+      "wmma.store.d.sync.aligned.row.m16n16k16.global.f32": 1,
+      "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32": 1,
+      "wmma.load.b.sync.aligned.col.m16n16k16.global.f16": 1,
+      "wmma.load.a.sync.aligned.row.m16n16k16.global.f16": 1
+    },
+    "hexa_emit_codegen_cleanup_opportunity": "step1 hexa PTX emits 4 redundant non-.global wmma stub variants (.f16 / .f32 without global qualifier) alongside the canonical .global forms. ptxas optimizes these away in SASS lowering (verified: SASS=40 ignores them), so the emit is correct-but-noisy at the PTX text layer. Future codegen cycle could elide the non-.global emit pass for register-resident fragment ld/st (cosmetic; no perf impact)."
+  },
+  "honest_scope": [
+    "$0 cheap-first oracle — no silicon fire, no perf measurement, no numeric-eq.",
+    "Validates that all 6 cookbook PTX artifacts still ptxas-accept on CUDA 12.0 / sm_80-sm_90 declared archs (forward-compat to sm_120 RTX 5070 via driver-JIT, NOT measured here).",
+    "PTX-diff perf oracle is a STRUCTURAL comparison (instruction count), NOT a wall-clock measurement. Wall-clock perf depends on register-pressure, occupancy, memory bandwidth, and ILP scheduling — none of which a SASS-count diff captures.",
+    "The 53.9% SASS count ratio is NOT a 1.86x perf win claim; it is a structural-density observation. cuBLAS at M=N=K=256 still wins 2x (PR #214 measured), proving that structural density does not directly predict perf at this scale."
+  ],
+  "g3_no_overclaim": "No new perf claim is added to §5m, §10, or §13. This artifact ADDS a single quantitative data point to §7b cookbook step 1: hexa-emit step1 PTX → 40 SASS instructions vs nvcc reference 87 SASS instructions for the same logical 16x16x16 WMMA GEMM."
+}

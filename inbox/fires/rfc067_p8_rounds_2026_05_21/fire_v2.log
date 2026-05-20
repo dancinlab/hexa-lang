@@ -1,0 +1,37 @@
+=== BEGIN GPU.md parallel checkbox measurement v2 ===
+host: summer-B650M-K  date: 2026-05-20T17:51:56Z
+gpu: NVIDIA GeForce RTX 5070
+
+=== §4a / §11 vec-add bandwidth N-sweep (FP64 unroll1) ===
+N=65536        bytes/elem=8 mean_us=    2.147 bandwidth_GB_per_s= 732.74
+N=1048576      bytes/elem=8 mean_us=    8.192 bandwidth_GB_per_s=3072.00
+N=4194304      bytes/elem=8 mean_us=  154.616 bandwidth_GB_per_s= 651.05
+N=16777216     bytes/elem=8 mean_us=  674.917 bandwidth_GB_per_s= 596.60
+N=67108864     bytes/elem=8 mean_us= 2702.415 bandwidth_GB_per_s= 595.99
+N=268435456    bytes/elem=8 mean_us=10818.433 bandwidth_GB_per_s= 595.51
+
+=== §6a NaN/Inf propagation through f16_vadd ===
+  qNaN+1.0     -> 0x7fff (NaN, expected qNaN (~0x7e..)) [PASS]
+  +Inf+1.0     -> 0x7c00 (+Inf, expected +Inf (0x7c00)) [PASS]
+  -Inf++Inf    -> 0x7fff (NaN, expected qNaN (~0x7e..)) [PASS]
+  1.0+0.0      -> 0x3c00 (1.0, expected 1.0 (0x3c00)) [PASS]
+nan_inf_propagation: 4/4 PASS
+
+=== §7a CUDA Graph API launch-overhead vs raw cuLaunchKernel ===
+11441 | extern __host__ cudaError_t CUDARTAPI cudaGraphInstantiate(cudaGraphExec_t *pGraphExec, cudaGraph_t graph, unsigned long long flags __dv(0));
+      |                                       ^~~~~~~~~~~~~~~~~~~~
+/tmp/gpu_parallel_measure_v2.sh: 줄 169: /tmp/cugraph_host: 그런 파일이나 디렉터리가 없습니다
+
+=== §6a ULP-bounded checker for bf16 vec-add (vs FP32 reference) ===
+bf16_vadd ULP check N=1024: max_ulp=1 zero_diff=764 total_nonzero=260
+
+=== §5m HGEMM 10-run variance at M=N=K=256 (extends PR #214/#217 6-run) ===
+(not found, build skip)
+(skipping for budget — 6-run variance from PR #217 already <0.1% std)
+
+=== §11 Compute-Sanitizer integration smoke (f16_vadd memcheck) ===
+========= COMPUTE-SANITIZER
+========= Unable to find injection library libsanitizer-collection.so
+compute-sanitizer rc=0 (0=clean)
+
+=== END GPU.md parallel checkbox measurement v2 ===

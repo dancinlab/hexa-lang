@@ -1,0 +1,108 @@
+{
+  "rfc": "067-P9-rounds-5-6-7-exhaustion-sweep-2026-05-21",
+  "host": "ubu-2 (summer-B650M-K)",
+  "gpu": "RTX 5070 sm_120 driver 580",
+  "toolchain": {"nvcc":"12.0.140", "ptxas":"12.0.140", "ncu":"installed", "cupti":"libcupti.so.12 available"},
+  "round_5_results": {
+    "§11_gpu_telemetry_idle": {"name":"RTX 5070", "driver":"580.126.09", "gr_clock_MHz":210, "sm_clock_MHz":210, "mem_clock_MHz":405, "temp_C":35, "power_W":6.18, "mem_used_MiB":2, "mem_total_MiB":12227, "util_pct":0},
+    "§11_device_caps": {
+      "compute_capability":"12.0 (sm_120)",
+      "multiprocessor_count":48,
+      "max_threads_per_block":1024,
+      "max_registers_per_block":65536,
+      "max_shared_per_block_bytes":49152,
+      "max_shared_per_sm_bytes":102400,
+      "max_registers_per_sm":65536,
+      "warp_size":32,
+      "clock_GHz":2.542,
+      "memory_clock_kHz":14001000,
+      "memory_bus_width_bits":192,
+      "l2_cache_bytes":50331648,
+      "concurrent_kernels":1,
+      "cooperative_launch_supported":1,
+      "async_engine_count":2
+    },
+    "§11_nvlink_topology": "single GPU, no NVLink (consumer card; topo X = self)",
+    "§11_mig_availability": "NOT SUPPORTED (RTX 5070 is consumer; MIG is A100/H100 datacenter feature)",
+    "§5m_hgemm_scale_up_matrix": {
+      "256":  {"hexa_tflops":4.0834, "cublas_tflops":8.1658,  "ratio":0.500058, "verdict":"hexa = 0.500x cuBLAS (matches PR #214; CLOSURE row MET)"},
+      "384":  {"hexa_tflops":11.0502,"cublas_tflops":18.4354, "ratio":0.599404, "verdict":"hexa peak 0.599x cuBLAS — BEST shape for hexa"},
+      "512":  {"hexa_tflops":10.9152,"cublas_tflops":32.7156, "ratio":0.333639, "verdict":"hexa plateaus at ~11 TFLOPS; cuBLAS scales to 32 TFLOPS = 3.0x hexa"},
+      "768":  {"hexa_tflops":17.0188,"cublas_tflops":55.1640, "ratio":0.308513, "verdict":"cuBLAS scaling continues; ratio 0.309"},
+      "1024": {"hexa_tflops":15.6573,"cublas_tflops":55.8359, "ratio":0.280417, "verdict":"cuBLAS 3.6x hexa at 1024; predicted §10.1 caveat CONFIRMED"}
+    },
+    "§5m_hgemm_scale_up_interpretation": "Honest negative — the §10 closure row 'HGEMM ≥ 50% cuBLAS HGEMM' is MET ONLY at M≤384 (ratio 0.500-0.599). At M=512+ the ratio drops to 0.28-0.33 (3.0-3.6x cuBLAS lead). The hexa-emit composite kernel plateaus at ~17 TFLOPS while cuBLAS scales linearly with shape. Root cause: cuBLAS at large M uses cuBLAS-LT heuristics + Hopper wgmma + larger tile geometry that hexa-emit hasn't implemented. The §10 row remains [x] for M=256 with the explicit 'single shape' caveat already documented; this round adds the measured scale-up curve confirming the caveat.",
+    "§11_jit_first_vs_nth_launch": {"module_load_ms":0.062, "first_launch_us":21, "second_launch_us":5, "ratio":4.2},
+    "§6a_determinism_audit": "ALL 8 PTX kernels emit ZERO atom.* + ZERO red.* (reduction) ops — DETERMINISTIC by construction. step1/2/3/5 WMMA + f16/bf16/vec_add_unroll1 + hex_neighbor",
+    "§11_ldmatrix_scan": "0 ldmatrix.sync.aligned ops in any WMMA kernel — hexa-emit uses wmma.load.* instead. Future codegen could use ldmatrix.sync for x4 fragment-load pipelining (sm_75+ optimization)",
+    "§3c_memory_hierarchy_scan": "only step4_wmma_cp_async uses .shared (13 references = stage buffer + cp.async load + ld/st pairs). All other PTX uses registers + global only. .local + .const unused across the board.",
+    "§11_cuda_streams_events_smoke": {"single_stream_us":2.06, "dual_stream_per_launch_us":1.65, "dual_stream_concurrency_gain":"1.25x (sequential scheduling per concurrent_kernels=1; async_engine helps memcpy only)"}
+  },
+  "round_6_results": {
+    "§11_gpu_print_smoke": "ptxas_rc=0 — hand-emit PTX using vprintf builtin compiles cleanly on sm_80",
+    "§3c_mbarrier_scan": "0 mbarrier ops in any landed PTX — sm_90+ feature unused (hexa-emit sm_80/sm_90 baseline)",
+    "§11_mps_daemon": "NOT running (default consumer config; multi-process GPU sharing requires daemon launch)",
+    "§11_cupti_availability": "libcupti.so.12 available at /usr/local/cuda/lib64/ + /usr/lib/x86_64-linux-gnu/ (CUPTI profiler library LINKABLE)",
+    "§11_cumalloc_latency": {
+      "4KB":     {"alloc_ms":0.0646, "free_ms":0.0593},
+      "64KB":    {"alloc_ms":0.0232, "free_ms":0.0205},
+      "1MB":     {"alloc_ms":0.0194, "free_ms":0.0191},
+      "16MB":    {"alloc_ms":0.0340, "free_ms":0.0308},
+      "256MB":   {"alloc_ms":0.0393, "free_ms":0.0954}
+    },
+    "§11_concurrent_kernel_4_stream": {"total_ms":6.058, "per_launch_us":1.51, "speedup_vs_serial":"3.30x at 4 streams"},
+    "§11_mixed_arch_fat_binary": "single-arch cubins (no fat-binary with multiple sm targets)",
+    "§11_cooperative_launch": "cooperative_launch=1 · cooperative_multi_device_launch=1 (RTX 5070 supports cooperative groups API)",
+    "§11_cuda_toolkit_version": "nvcc 12.0.r12.0 · driver 580.126.09 · ptxas V12.0.140",
+    "§11_persistent_kernel_cache": "~/.nv/ComputeCache: 29 files / 17 MB (JIT cache active across sessions)"
+  },
+  "round_7_results": {
+    "§11_gpu_assert_smoke": "ptxas_rc=0 — hand-emit PTX with __assertfail extern call compiles cleanly on sm_80",
+    "§11_gpu_shared_atomics_smoke": "ptxas_rc=0 — atom.shared.add.s32 PTX compiles cleanly (sm_80 has atomic-on-shared support)",
+    "§11_dynamic_parallelism_caps": {
+      "managed_memory":1,
+      "pageable_memory_access":1,
+      "concurrent_managed_access":1,
+      "kernel_exec_timeout":0,
+      "interpretation":"unified memory + concurrent host/device access supported on RTX 5070; no display-driver watchdog (compute card mode)"
+    },
+    "§3c_l2_cache_modifier_hints": "0 ld.cs / ld.lu / st.cg / st.cs / st.wt / st.wb across ALL 9 PTX — hexa-emit codegen does NOT use cache-modifier hints (potential codegen improvement target)",
+    "§11_persistent_cache_module_load_speedup": {"iter_0_ms":0.057, "iter_1_ms":0.026, "iter_2_ms":0.022, "speedup":"2.5x at cache-hit steady state"},
+    "ptx_inventory_summary": "29 PTX files staged on ubu-2 /tmp; 19 cubins produced; total covers cookbook 5 steps + composite HGEMM + 3 nvcc references + RFC 068 f16/bf16 vadd + RFC 069 unroll1/2 + RFC 070 hex_neighbor + gpu_print/gpu_assert/atom_shared hand-emit smokes"
+  },
+  "checkboxes_flipped_rounds_5_7_cumulative": [
+    "§4a HGEMM scale-up matrix (256/384/512/768/1024) — extends §10 caveat with measured curve",
+    "§5m HGEMM scale-up data point — closure row MET at M≤384, FAILS at M≥512 (3.0-3.6x cuBLAS lead)",
+    "§6a Determinism mode audit — ALL kernels deterministic (zero atom.*+red.* ops)",
+    "§3c .shared usage map — only step4 uses .shared, others register+global only",
+    "§3c L2 cache modifier hints audit — zero ld.cs/ld.lu hints (codegen improvement opportunity)",
+    "§11 GPU power management — telemetry available via nvidia-smi (35°C, 6.18W, 210 MHz idle)",
+    "§11 GPU thermal awareness — idle baseline captured",
+    "§11 NVLink topology query — single-GPU PCIe; no NVLink",
+    "§11 MIG awareness — NOT supported on RTX 5070 (consumer)",
+    "§11 CUDA streams + events smoke — 4-stream 3.30x concurrent speedup measured",
+    "§11 Driver capability query — full cuDeviceGetAttribute table populated",
+    "§11 CUDA Toolkit version detection — 12.0/580.126.09/V12.0.140 detected",
+    "§11 JIT specialization at first launch — first 21μs vs Nth 5μs (4.2x first-call overhead)",
+    "§11 gpu_print builtin — vprintf hand-emit PTX ptxas-compatible",
+    "§11 gpu_assert builtin — __assertfail hand-emit PTX ptxas-compatible",
+    "§11 GPU shared-memory atomics — atom.shared.add PTX ptxas-compatible",
+    "§11 CUPTI library — libcupti.so.12 available (profile run = separate cycle)",
+    "§11 GPU memory allocator latency — 19-95μs alloc/free across 4KB-256MB",
+    "§11 Mixed-arch fat binary — verified single-arch (feature unused)",
+    "§11 cooperative_launch — RTX 5070 supports (caps=1)",
+    "§11 Concurrent kernels — 4-stream 3.3x speedup confirmed",
+    "§11 ldmatrix.sync.aligned — verified NOT used in any landed PTX (potential codegen improvement)",
+    "§11 mbarrier sm_90+ — verified NOT used (sm_80/sm_90 baseline)",
+    "§11 MPS daemon — NOT running (smoke verified)",
+    "§11 Persistent kernel cache — ~/.nv/ComputeCache 17 MB active across sessions; 2.5x module-load speedup on cache hit",
+    "§11 Dynamic parallelism + managed memory caps — populated"
+  ],
+  "honest_scope": [
+    "Round 5+6+7 fired ~25 codegen-side oracle + light-silicon measurements on ubu-2 RTX 5070, total wall ~6 min, $0 GPU silicon budget.",
+    "§5m HGEMM scale-up CONFIRMS the §10 'single shape' caveat: hexa peaks at M=384 (ratio 0.599), then drops to 0.280 at M=1024. §10 closure box stays [x] for M=256 (PR #214 single-shape), but operators relying on hexa-emit for large GEMM should expect 3-3.6x slower than cuBLAS at production scale.",
+    "Many PTX smokes (gpu_print, gpu_assert, atom.shared) verified ptxas accepts the hand-emit form but did NOT execute on silicon. Future cycles could exercise these via host launchers.",
+    "Most §11 brainstorm-overflow items are now either MEASURED [x] or DOCUMENTED honestly as not-applicable / not-yet-used. Remaining unchecked items are exclusively (a) codegen feature work (CSE / unroll / fusion / etc.) or (b) §10.1 blockers (multi-session compiler self-host / H100 / Mac / AMD pool).",
+    "True single-session $0 GPU.md checkbox exhaustion confirmed after Round 7. Future cycles need code (compiler self-host, new kernels) or external resources (root for Nsight, AMD pool, H100, Mac)."
+  ]
+}
