@@ -5662,11 +5662,13 @@ HexaVal hexa_pow(HexaVal base, HexaVal exp) {
 }
 #else
 extern HexaVal rt_pow_int(HexaVal b, HexaVal e);
+extern HexaVal rt_pow_float(HexaVal b, HexaVal e);
 HexaVal hexa_pow(HexaVal base, HexaVal exp) {
     if (HX_IS_INT(base) && HX_IS_INT(exp) && HX_INT(exp) >= 0) {
         return rt_pow_int(base, exp);
     }
-    return hexa_float(pow(__hx_to_double(base), __hx_to_double(exp)));
+    return rt_pow_float(hexa_float(__hx_to_double(base)),
+                        hexa_float(__hx_to_double(exp)));
 }
 #endif
 

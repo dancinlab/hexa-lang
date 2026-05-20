@@ -3405,7 +3405,14 @@ HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt(HX_FLOAT(x))); }
 HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(HX_FLOAT(x))); }
 HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(HX_FLOAT(x))); }
 HexaVal hexa_math_round(HexaVal x){ return hexa_float(round(HX_FLOAT(x))); }
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_pow(HexaVal b, HexaVal e) { return hexa_float(pow(HX_FLOAT(b), HX_FLOAT(e))); }
+#else
+extern HexaVal rt_pow_float(HexaVal b, HexaVal e);
+HexaVal hexa_math_pow(HexaVal b, HexaVal e) {
+    return rt_pow_float(hexa_float(HX_FLOAT(b)), hexa_float(HX_FLOAT(e)));
+}
+#endif
 // 2026-05-20 (blocker-3 fmod-shim): direct libm fmod() exposed as `fmod(x, y)`
 // from hexa user code. Distinct from `%` which routes through hexa_mod
 // (int+float-aware dispatch); this is the pure float-only path used by

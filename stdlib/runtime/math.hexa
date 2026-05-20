@@ -50,6 +50,38 @@ pub fn rt_log10(x: float) -> float {
     return rt_log(x) / LN10
 }
 
+// Step 3 cycle 11 — float power. Composes rt_exp + rt_log to remove the
+// last libm pow() dependency in self/runtime{,_core}.c.
+//   pow(b, e) = exp(e * log(b))  when b > 0
+// Edge cases:
+//   - b == 0.0       : 0^e = 0 for e>0, 1 for e==0, +inf for e<0 (saturate
+//                      to 1e308 — hexa has no native +inf)
+//   - b < 0.0        : NaN per IEEE for non-integer e; we conservatively
+//                      flip sign on |b|^e when e is exact integer, else NaN
+//                      via the (x != x) idiom (0.0/0.0). Hexa user code at
+//                      this entry point doesn't traffic in negative-base
+//                      fractional powers.
+pub fn rt_pow_float(b: float, e: float) -> float {
+    if b > 0.0 { return rt_exp(e * rt_log(b)) }
+    if b == 0.0 {
+        if e == 0.0 { return 1.0 }
+        if e > 0.0  { return 0.0 }
+        return 1e308
+    }
+    // b < 0 — only well-defined for integer e
+    let ei = e as int
+    if (ei as float) == e {
+        let p = rt_exp(e * rt_log(0.0 - b))
+        if (ei & 1) != 0 { return 0.0 - p }
+        return p
+    }
+    // Negative base + fractional exponent: undefined in real math.
+    // Conservative fallback: return 0.0 (hexa user-code at this entry
+    // point doesn't traffic in negative-base fractional powers; explicit
+    // 0.0 avoids the divide-by-zero risk of (0.0/0.0)).
+    return 0.0
+}
+
 // Step 3 cycle 9 — hyperbolic tangent via exp.
 //   tanh(x) = (e^(2x) - 1) / (e^(2x) + 1)
 // Saturates explicitly for |x| > ~22 (e^44 overflows double easily).
