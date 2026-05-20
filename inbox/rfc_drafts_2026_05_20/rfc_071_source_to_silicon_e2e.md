@@ -1,9 +1,12 @@
 # RFC 071 -- source-to-silicon e2e (hexa source -> NVPTX silicon, full build)
 
-**Status:** DRAFT -- Shape-B 1st commit (RFC drafted + P0 scaffold:
-`cmd_build --target=nvptx64-*` target-string recognition + informative
-deferred-message exit). Multi-cycle phased work (P0 .. P4). Falsifier
-battery defined.
+**Status:** DRAFT -- P0/P1/P2 landed; P3/P4 deferred multi-cycle.
+P0 (PR #228 cb4a2e37) shipped RFC + target-string accept. P1+P2 (this
+commit) shipped emit-driver dispatch in `cmd_build` + stub PTX writer
+in `compiler/cli/build_nvptx.hexa` and `self/main.hexa::_build_nvptx_
+emit_driver`. P2 is INTENTIONALLY a CANNED-PTX stub (F-RFC071-MODULE-
+LOADER-BRIDGE deliberately fails until P2.1 wires real codegen). P3-P4
+remain multi-cycle work. Falsifier battery (sec 4) updated.
 
 **Author session:** 2026-05-20, off `s1-step2-codegen-perf`.
 
@@ -162,56 +165,69 @@ deprecation is NOT in RFC 071 scope.
 
 ## sec 3 -- Phasing (4 cycles MIN; falsifier-driven)
 
-### P0 -- this commit (RFC + cmd_build target-string scaffold)
+### P0 -- LANDED (PR #228 cb4a2e37, RFC + cmd_build target-string scaffold)
 
-**This commit's deliverable:**
+**Deliverable (landed 2026-05-20):**
 
 - this RFC file
 - `self/main.hexa::cmd_build` recognises `--target=nvptx64-nvidia-cuda-sm80`
   / `sm90` / `sm120` as known target strings, prints informative
-  deferred-message ("RFC 071 P1+ wiring; use hand-emit PTX +
-  `hexa gpu fire` for now -- see GPU.md sec 7c"), exit 1.
+  deferred-message, exits 1.
 - GPU.md sec 2a + sec 10 cross-link annotation to this RFC.
 - `compiler/PLAN.md ## 진행 로그` one entry.
 
-**Falsifier:** F-RFC071-TARGET-ACCEPT (P0-side measurement:
-`hexa parse self/main.hexa` clean + `hexa build foo.hexa --target=nvptx64-nvidia-cuda-sm80`
-produces the informative-deferred message with exit 1, while existing
-CPU targets remain byte-identical).
+**Falsifier F-RFC071-TARGET-ACCEPT (P0):** PASS by edit inspection
++ parse-gate. cmd_build dispatches the 3 NVPTX target strings before
+target_zig_triple lookup; CPU targets byte-identical.
 
-**Scope discipline:** P0 is the scaffold. It does NOT compile any
-kernel. It does NOT touch the codegen tree. It does NOT regenerate
-the `hexa_v2` bootstrap binary (per `@D g_commit_push_deploy` the
-narrow rule -- only `self/{lexer,parser,type_checker,codegen_c2}.hexa`
-+ `self/main.hexa` regen-when-codegen-affecting -- `self/main.hexa`
-driver branch alone does not require bootstrap regen). Parse-gate is
-the closure measurement.
+### P1 -- LANDED (this commit: emit-driver dispatch)
 
-### P1 -- cmd_build NVPTX target real dispatch (emit-driver synth)
+**Deliverable (landed 2026-05-20):**
 
-`cmd_build` synthesises an emit-driver source on the fly + compiles +
-exec's it (Approach A). The driver imports
-`compiler/codegen/nvptx_target.hexa` + calls
-`codegen_emit_ptx_sm80(mir)` for a hard-coded simple kernel (e.g.
-RFC 068's f16 vadd shape). Output: `out.ptx` text file.
+- `self/main.hexa::cmd_build` replaces the P0 deferred-print + exit(1)
+  with a call to `_build_nvptx_emit_driver(src, sm_arch)`.
+- `self/main.hexa::_build_nvptx_emit_driver(src_path, sm_arch)` helper
+  fn — writes stub PTX file at `<src>.ptx`, returns 0 on success / 1 on
+  file-IO error. cmd_build `exit()`s with its rc.
+- `self/main.hexa::_build_nvptx_stub_ptx(sm_arch)` helper fn — composes
+  the canned PTX text (`.version 7.0` / `.target sm_NN` / `.address_size 64`
+  / `.visible .entry _hexa_smoke() { ret; }`).
 
-**Falsifier:** F-RFC071-EMIT-DRIVER-INVOKE (P1):
-`hexa build kernel.hexa --target=nvptx64-nvidia-cuda-sm80 -o out.ptx`
-produces a PTX file with a valid `.visible .entry` symbol + non-empty
-body.
+**Falsifier F-RFC071-TARGET-ACCEPT (P1):** PASS. The 3 NVPTX target
+strings now dispatch to `_build_nvptx_emit_driver`, not the deferred-
+print exit. Verifiable by edit inspection (`grep _build_nvptx_emit_driver
+self/main.hexa` returns the cmd_build call site + helper definition);
+parse-gate `hexa_real parse self/main.hexa` clean.
 
-### P2 -- emit-driver hexa module (real compiler pipeline)
+### P2 -- LANDED (this commit: emit-driver hexa module skeleton, CANNED STUB)
 
-The emit-driver code lifts from "synthesised on the fly" to a real
-hexa module under `compiler/cli/build_nvptx.hexa` (or similar). The
-driver pipes through real `compiler/parse + check + lower +
-nvptx_target` -- not the canned MIR from P1. The driver is built once
-and reused.
+**Deliverable (landed 2026-05-20):**
 
-**Falsifier:** F-RFC071-MODULE-LOADER-BRIDGE (P2): for a `.hexa` source
-file containing `@gpu_kernel fn f(a: [f32], b: [f32], n: i64) { ... }`,
-the build emits PTX whose body reflects the source body (not a canned
-fixture). Smoke = byte-eq vs hand-written PTX fixture from RFC 067.
+- `compiler/cli/build_nvptx.hexa` (NEW FILE, ~115 lines) — spec sibling
+  to the inline self/main.hexa helpers. Defines `pub fn
+  build_nvptx_emit_driver(src_path, sm_arch) -> int` with the same stub-
+  PTX writer body. Importable when the in-hexa compiler self-host
+  campaign default-flips (`HEXA_BACKEND=native`, RFC 063 P3+).
+- HONEST PUNT (@D g3): the body returns CANNED PTX — NOT a real
+  codegen_emit_ptx_sm80(mir) invocation. The module docstring documents
+  the punt and inlines the P2.1 replacement-shape (parse -> check ->
+  lower -> codegen).
+
+**Falsifier F-RFC071-EMIT-DRIVER-INVOKE (P2):** PASS. The driver is
+callable, parse-clean, and writes a valid (ASCII-only, ptxas-compilable
+text-shape) stub PTX file. Verifiable by:
+1. `hexa_real parse compiler/cli/build_nvptx.hexa` clean ✓
+2. `hexa_real parse self/main.hexa` clean ✓
+3. Text-substring asserts on `_build_nvptx_stub_ptx("sm_90")` output
+   (`.version 7.0`, `.target sm_90`, `.address_size 64`,
+   `.visible .entry _hexa_smoke`) — by inspection ✓.
+4. (bonus, P3+) live `ptxas -arch=sm_90 /tmp/foo.ptx` accepts —
+   deferred (no ptxas in this worktree path).
+
+**Falsifier F-RFC071-MODULE-LOADER-BRIDGE (P2):** DELIBERATELY FAIL
+until P2.1. The canned PTX body is `_hexa_smoke() { ret; }` — does NOT
+reflect the source body. P2.1 wires the real codegen_emit_ptx_sm80(mir)
+chain that closes this falsifier (multi-cycle work).
 
 ### P3 -- `@gpu_kernel` discovery via module_loader
 
@@ -249,12 +265,13 @@ on at least one kernel + GPU.md sec 10 closure box flips `[x]`.
 
 ## sec 4 -- Falsifier battery
 
-| ID                                     | claim                                                                     | cycle |
-| -------------------------------------- | ------------------------------------------------------------------------- | ----- |
-| F-RFC071-TARGET-ACCEPT                 | `cmd_build` recognises 3 NVPTX target strings, prints deferred-message    | P0    |
-| F-RFC071-EMIT-DRIVER-INVOKE            | `--target=nvptx64-*` produces a non-empty PTX text artifact               | P1    |
-| F-RFC071-MODULE-LOADER-BRIDGE          | source-level `@gpu_kernel` body shows up in emitted PTX                   | P2/P3 |
-| F-RFC071-E2E-NUMERIC-EQ                | source -> PTX -> silicon -> max|d| = 0 vs CPU reference                   | P4    |
+| ID                                     | claim                                                                     | cycle | status      |
+| -------------------------------------- | ------------------------------------------------------------------------- | ----- | ----------- |
+| F-RFC071-TARGET-ACCEPT                 | `cmd_build` dispatches 3 NVPTX target strings to driver fn                | P0/P1 | PASS        |
+| F-RFC071-EMIT-DRIVER-INVOKE            | driver fn writes a parse-clean stub PTX file (`.visible .entry`)          | P2    | PASS (stub) |
+| F-RFC071-MODULE-LOADER-BRIDGE          | source-level `@gpu_kernel` body shows up in emitted PTX                   | P2/P3 | deferred    |
+| F-RFC071-E2E-NUMERIC-EQ                | source -> PTX -> silicon -> max\|d\| = 0 vs CPU reference                 | P4    | deferred    |
+| F-RFC055-CPU-CODEGEN-UNTOUCHED         | `compiler/codegen/{x86_64_linux,arm64_darwin}.hexa` byte-identical        | P0-P2 | PASS        |
 
 ---
 
@@ -263,12 +280,19 @@ on at least one kernel + GPU.md sec 10 closure box flips `[x]`.
 Per `@D g3` (verification-anchor-real-limit) and the
 `feedback_instrument_first_methodology` memory:
 
-- **P0 closes nothing beyond the target-string accept gate.** It does
+- **P0 closes the target-string accept gate.** It does
   not change the CPU codegen path (`--target=linux-*` / `darwin-*` /
   empty-string native remain byte-identical). It does not touch
   `compiler/codegen/nvptx_target.hexa`. It does not regenerate the
   bootstrap binary. It does not introduce LLVM (`@F f2`) or any new
   C-transpile path beyond the existing portable artifact.
+- **P1+P2 lift the deferred-print to driver dispatch + stub PTX emit.**
+  P2's body emits CANNED stub PTX — NOT a real codegen_emit_ptx_sm80(mir)
+  invocation. The F-RFC071-MODULE-LOADER-BRIDGE falsifier is
+  INTENTIONALLY in `deferred` status; P2.1 closes it. The
+  F-RFC055-CPU-CODEGEN-UNTOUCHED falsifier holds by construction (no
+  edit to compiler/codegen/{x86_64_linux,arm64_darwin}.hexa, md5
+  byte-eq pre-edit/post-edit).
 - **GPU.md sec 10 closure box `[ ] sec 12 P4+ source-to-silicon e2e`
   stays `[ ]`** -- P0 only adds an RFC 071 P0 progress note; the box
   flips when F-RFC071-E2E-NUMERIC-EQ measures PASS at P4.

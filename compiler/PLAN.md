@@ -148,8 +148,9 @@ md5 (pre-edit = post-edit, byte-identical):
 
 **punted (RFC 071 P2.1 → P4)**:
 - P2.1: compiler/cli/build_nvptx.hexa 의 stub body 를 real codegen 으로 교체 — parse → check → lower → `codegen_emit_ptx_sm80(mir)`. self-host import 체인 + hexa_v2 가 compiler/parse/parser, compiler/check/*, compiler/lower/*, compiler/codegen/nvptx_target.hexa 를 single-entry-point 로 expose 해야 함.
-- P3: `module_loader.hexa` `@gpu_kernel` annotation discovery + CPU/GPU 함수 분리 dispatch. 한 .hexa 파일 안의 CPU+GPU 함수가 두 다른 codegen path 로 라우팅.
+- P3: `module_loader.hexa` `@gpu_kernel` annotation discovery + CPU/GPU 함수 분리 dispatch.
 - P4: 진짜 `.hexa` source → PTX → ubu-2 silicon fire → max|d|=0 vs CPU reference (F-RFC071-E2E-NUMERIC-EQ); GPU.md §10 closure box flip 조건.
+
 
 ### 2026-05-19 — codegen: ExternFnDecl in statement position — FFI wrapper mangle parity + nested-decl hoist
 
@@ -7657,3 +7658,73 @@ comment). aprime + hexac build chains 모두 lean.
 **Next**: cycle 45+ 은 137 externs 의 actual source-level replacement —
 Phase 1 Tier-A runtime hexa-native rewrite. 가장 작은 externs 부터
 교체 (e.g., `_atoi`, `_atof` → hexa source).
+
+## 진행 로그 — RFC 073 Phase 3d RE-LAND tail: T69 cross-verifier (2026-05-20)
+
+**branch** : `rfc-073-phase-3d-relanded` (rebase of closed PR #229 `7f13cedb`
+on current `main` `694914cc` after PR #233 `5a0327bb` already landed PIECE 1)
+
+**Context.** PR #229 closed unmerged on 2026-05-20. PIECE 1 (bare clocked
+dyn-LHS demux at `_rv_parse_always` top-level fall-through) was already
+landed by parallel-session PR #233 (`5a0327bb`). PIECE 2 (multi-LHS no-else
+cond-mux with dyn-idx LHS) was already landed by `7575a79d`. The only
+orphan from PR #229's deliverables = **T69**, the multi-LHS dyn-idx LHS
+P=3 falsifier.
+
+**What this commit adds.** `stdlib/kernels/logic_synth/read_verilog.hexa`:
+T69 selftest only — `always @(posedge clk) if (en) begin y[k] <= a; z[k]
+<= b; end` with bound-3 arrays + runtime index `k`. Expected per IEEE
+1364-2005 §9.5 + §10.4.2: $eq=6, $and=6, $mux=6, $dff=6. T52 already on
+main verifies P=4; T69 cross-verifies P=3.
+
+**selftest.** `hexa-parse stdlib/kernels/logic_synth/read_verilog.hexa`
+→ **72/72 PASS** (was 71/71). Zero regression in T1..T68.
+
+**§5 oracle re-measure (g3 honest).**
+
+```
+[gate] router_d4 area=0.0 µm² oracle=61763 µm²   Δ=100.0%  FAIL (±5%)
+[gate] router_d6 area=0.0 µm² oracle=93608.5 µm² Δ=100.0%  FAIL (±5%)
+```
+
+Identical to pre-Phase-3d baseline. Phase 3d alone (PIECE 1 + PIECE 2)
+does NOT close §5. **§5 verdict — OPEN.**
+
+**The NEW (post-Phase-3d) §5 blocker layer (Phase 3e opener candidates).**
+
+1. **F-RFC-RV-CLOCKED-FOR-INDEXED-LHS** — `for (i=0; i<P; i=i+1)
+   name[i] <= rhs(i);` inside posedge-always. `_rv_emit_for_if_stmts`
+   rejects indexed-LHS statements; needs per-stmt classifier extension
+   + loop unroll + per-iteration `$dff` emit.
+
+2. **F-RFC-RV-WITH-ELSE-NONMATCHING-BODIES** — `if (rst) <reset> else
+   <run>` with structurally-different arms. Current handler matches
+   LHS sequences positionally; drops BOTH on mismatch. Needs single-
+   arm cond-mux decomposition + shared recursion helper.
+
+3. **F-RFC-RV-NESTED-IF-INSIDE-ELSE-BODY** — `if (rst) ... else begin
+   <for>; <for>; if (any_grant) <dyn-LHS> end`. Phase-3d-T69-shaped
+   but must be REACHED via #2 first.
+
+4. **F-RFC-RV-2D-DYN-LHS** — `fifo_mem[pp][k] <= data;`. NOT on §5 area
+   critical path. Defer.
+
+§5 closure path = land #1 + #2 + #3 together (shared single-arm
+cond-mux helper). Est. ~150 LoC in `_rv_parse_always` +
+`_rv_emit_for_if_stmts`. No changes needed to `passes.hexa` /
+`abc_map.hexa` / `gate_record.hexa` for §5 closure.
+
+**LoC delta:**
+
+```
+ stdlib/kernels/logic_synth/read_verilog.hexa               | +40 -1
+ inbox/notes/2026-05-20-rfc006-§5-phase-3d-relanded-t69.md  | + (new)
+ compiler/PLAN.md                                           | + (this entry)
+```
+
+@cite IEEE 1364-2005 §9.5 sequential block + §10.4.2 procedural
+assign + Yosys `passes/proc/proc_mux.cc` demux.
+
+cross-link: inbox/notes/2026-05-20-rfc006-§5-phase-3d-relanded-t69.md
+(this branch's status note · re-confirms Phase 3e opener plan after
+PR #233 closed PIECE 1).

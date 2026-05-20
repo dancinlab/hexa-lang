@@ -1765,6 +1765,57 @@ fn target_supported_list() {
     return "linux-x86_64-musl, linux-x86_64-glibc, linux-aarch64-musl, linux-aarch64-glibc, darwin-arm64, darwin-x86_64"
 }
 
+// ─── RFC 071 P2 — NVPTX stub-PTX builder ──────────────────────────────
+// Live driver-side mirror of compiler/cli/build_nvptx.hexa::
+// _build_nvptx_stub_ptx + build_nvptx_emit_driver. cmd_build cannot yet
+// `use compiler/cli/build_nvptx.hexa` because self/main.hexa is the
+// dispatcher itself (no import chain); the spec module exists separately
+// for the P3+ self-host default-flip (`HEXA_BACKEND=native`). Both files
+// emit byte-identical stub PTX for the same sm_arch input (text-substring
+// asserts can verify) — when P2.1 wires the real codegen, both bodies
+// shift to the same `codegen_emit_ptx_sm80(mir)` call.
+fn _build_nvptx_stub_ptx(sm_arch) {
+    let mut out = ""
+    out = out + "// [P2 stub PTX -- RFC 071 P2.1+ will replace with real codegen_emit_ptx_sm80]\n"
+    out = out + "// @rfc 071 phase P2 status STUB sm=" + sm_arch + "\n"
+    out = out + ".version 7.0\n"
+    out = out + ".target " + sm_arch + "\n"
+    out = out + ".address_size 64\n"
+    out = out + "\n"
+    out = out + ".visible .entry _hexa_smoke()\n"
+    out = out + "{\n"
+    out = out + "    ret;\n"
+    out = out + "}\n"
+    return out
+}
+
+// _build_nvptx_emit_driver(src_path, sm_arch) -> int
+//
+// Live cmd_build entry. Replaces the RFC 071 P0 deferred-print exit(1)
+// branch. Today returns CANNED PTX (stub); P2.1+ wires the real
+// codegen_emit_ptx_sm80(mir) chain (parse -> check -> lower -> codegen).
+//
+// Returns: 0 on PTX write success, 1 on file-IO error.
+// Side effect: writes `<src_path>.ptx` with the stub PTX content.
+fn _build_nvptx_emit_driver(src_path, sm_arch) {
+    if len(src_path) == 0 { return 1 }
+    if len(sm_arch)  == 0 { return 1 }
+    // Pre-check source exists (cmd_build already ran the same check
+    // above; duplicate for direct-callers in future tests).
+    let src_check = exec("test -f '" + src_path + "' && printf yes || printf no")
+    if src_check != "yes" { return 1 }
+    let ptx_text = _build_nvptx_stub_ptx(sm_arch)
+    let out_path = src_path + ".ptx"
+    // Write via the POSIX-fwrite builtin (no exec, no ARG_MAX limit).
+    write_file(out_path, ptx_text)
+    // Verify destination materialised.
+    let out_check = exec("test -f '" + out_path + "' && printf yes || printf no")
+    if out_check != "yes" { return 1 }
+    println("[nvptx] target=" + sm_arch + " src=" + src_path + " out=" + out_path + " stub=P2")
+    println("[nvptx] P2 stub PTX emitted; P2.1 (real codegen_emit_ptx_sm80) + P3 module_loader bridge + P4 silicon fire deferred (RFC 071 §3)")
+    return 0
+}
+
 fn cmd_build(src, out, c_only, target) {
     // bt 37: AOT 캐시 atomic rename.
     // 문제: 두 `hexa build` 가 동일 `out` 을 쓰면 clang 이 같은 파일을 동시에
@@ -1783,30 +1834,29 @@ fn cmd_build(src, out, c_only, target) {
         println("error: source file not found: " + src)
         exit(1)
     }
-    // ─── RFC 071 P0 scaffold — NVPTX target string recognition ───────────
-    // RFC 071 (inbox/rfc_drafts_2026_05_20/rfc_071_source_to_silicon_e2e.md)
-    // formalises the source-to-silicon e2e gap GPU.md §2a identified: the
-    // existing `--target=` table (target_zig_triple) routes through
-    // hexa_v2 → C → clang/zig cc, which emits host CPU binaries. The
-    // NVPTX path needs a categorically different pipeline (in-hexa compiler
-    // self-host → MIR → codegen_emit_ptx_sm80 → PTX text), tracked as
-    // RFC 071 P1-P4. This P0 branch ONLY recognises the canonical NVPTX
-    // target strings so P1+ wiring can plug in real dispatch without
-    // re-touching the arg parser. Per @D g3 (honest scope) we exit 1 with
-    // an informative deferred-message — we do NOT silently fall through
-    // to the zig-cc table (which would print "unknown --target value:" +
-    // confuse the caller about whether NVPTX is a supported target name).
+    // ─── RFC 071 P1+P2 — NVPTX emit-driver dispatch ──────────────────────
+    // RFC 071 P0 (PR #228 cb4a2e37) recognised the 3 NVPTX target strings
+    // and printed an informative deferred-message + exit(1). P1+P2 lift
+    // that to a real driver dispatch: detect target -> call
+    // _build_nvptx_emit_driver(src, sm_arch) -> exit with its rc. The
+    // driver today emits CANNED stub PTX (`_hexa_smoke` no-op kernel);
+    // P2.1 wires the real codegen_emit_ptx_sm80(mir) invocation, and P3
+    // wires module_loader `@gpu_kernel` discovery. CPU codegen path
+    // (`--target=` empty/`linux-*`/`darwin-*`) is BYTE-IDENTICAL — the
+    // dispatch branch catches before target_zig_triple lookup.
+    //
+    // F-RFC071-TARGET-ACCEPT (P1): the 3 nvptx target strings reach the
+    //   driver, not the zig-cc table.
+    // F-RFC071-EMIT-DRIVER-INVOKE (P2): driver writes a valid stub PTX
+    //   file at <src>.ptx and returns 0; P2.1+ replaces with real codegen.
     if len(target) > 0 {
-        let mut _is_nvptx = 0
-        if target == "nvptx64-nvidia-cuda-sm80"  { _is_nvptx = 1 }
-        if target == "nvptx64-nvidia-cuda-sm90"  { _is_nvptx = 1 }
-        if target == "nvptx64-nvidia-cuda-sm120" { _is_nvptx = 1 }
-        if _is_nvptx == 1 {
-            println("error: --target=" + target + " recognized but not yet wired")
-            println("       NVPTX target: deferred to RFC 071 P1+ wiring;")
-            println("       use hand-emit PTX + `hexa gpu fire` for now (see GPU.md §7c)")
-            println("       RFC: inbox/rfc_drafts_2026_05_20/rfc_071_source_to_silicon_e2e.md")
-            exit(1)
+        let mut _nvptx_sm = ""
+        if target == "nvptx64-nvidia-cuda-sm80"  { _nvptx_sm = "sm_80"  }
+        if target == "nvptx64-nvidia-cuda-sm90"  { _nvptx_sm = "sm_90"  }
+        if target == "nvptx64-nvidia-cuda-sm120" { _nvptx_sm = "sm_120" }
+        if len(_nvptx_sm) > 0 {
+            let _nv_rc = _build_nvptx_emit_driver(src, _nvptx_sm)
+            exit(_nv_rc)
         }
     }
     // ─── Darwin build refusal (2026-04-20 kernel panic prevention) ──────
