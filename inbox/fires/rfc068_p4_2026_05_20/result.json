@@ -1,0 +1,11 @@
+{
+  "rfc": "068-P4",
+  "kernel": "f16_vadd",
+  "falsifier": "F-RFC068-NUMERIC-EQ",
+  "verdict": "PASS",
+  "n": 1024,
+  "max_delta": 0,
+  "tolerance": 0.0390625,
+  "mismatches": 0,
+  "max_abs_cref": 20
+}
