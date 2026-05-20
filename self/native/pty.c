@@ -61,8 +61,8 @@ HexaVal hexa_pty_open(void) {
         int e = errno; hxlcl_close(master); return _hexa_pty_err(e, "ptsname_r");
     }
 #endif
-    int slave = open(name_buf, O_RDWR | O_NOCTTY);
-    if (slave < 0) { int e = errno; hxlcl_close(master); return _hexa_pty_err(e, "open(slave)"); }
+    int slave = hxlcl_open_sys(name_buf, O_RDWR | O_NOCTTY);
+    if (slave < 0) { int e = errno; hxlcl_close(master); return _hexa_pty_err(e, "hxlcl_open_sys(slave)"); }
     HexaVal m = hexa_map_new();
     hexa_map_set(m, "master",     hexa_int((int64_t)master));
     hexa_map_set(m, "slave",      hexa_int((int64_t)slave));

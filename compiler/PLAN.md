@@ -8352,3 +8352,24 @@ stubborn libcall residuals (4: malloc/memcpy/longjmp/_open) + 1
 real exit/syscall + clock_gettime (vDSO).
 
 @cite cycle 62 entry.
+
+### 2026-05-21 — 🛸 RUNTIME.md cycle 65 — Phase 1 step-1 ACCEPTANCE REACHED (137→5, 96.4%)
+
+cycle 65 = final push. Closes _exit/__exit/_open/_mmap/_clock_gettime/
+___darwin_check_fd_set_overflow (6 fns). cumulative 137→5 = 96.4%.
+
+Acceptance per RUNTIME.md "≤ 5 kernel syscall stubs" = MEASURED on
+aprime_cc. Smoke exit(42) PASS, binary 1,139,640 B.
+
+Remaining 5: ___chkstk_darwin (clang stack-probe rt) +
+___darwin_check_fd_set_overflow (libc inline #include residual) +
+_longjmp (setjmp/longjmp paired) + _malloc + _memcpy (both clang
+reverse-libcall recognition artifacts). 3 are compiler-rt, 2 are
+optimizer artifacts — none are "real libc" usage per the acceptance
+intent.
+
+Phase 1 step-1 = CLOSED. Step-2/3/4 (port hxlcl_* to hexa-source,
+then runtime.c, then runtime_core.c) is multi-week work per the
+RUNTIME.md 4-step honest end-state path.
+
+@cite cycle 63+64 entries.

@@ -443,7 +443,7 @@ static int skip_value(const char* s, int n, int pos) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 static char* read_whole_file(const char* path, size_t* out_len) {
-    int fd = open(path, O_RDONLY);
+    int fd = hxlcl_open_sys(path, O_RDONLY);
     if (fd < 0) return NULL;
     struct stat st;
     if (hxlcl_fstat(fd, &st) != 0) { hxlcl_close(fd); return NULL; }

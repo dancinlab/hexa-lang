@@ -192,7 +192,7 @@ HexaVal hexa_channel_recv(HexaVal ch_val, HexaVal timeout_ms_val) {
         }
     } else if (ms > 0) {
         struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
+        hxlcl_clock_gettime(CLOCK_REALTIME, &ts);
         ts.tv_sec  += ms / 1000;
         ts.tv_nsec += (ms % 1000) * 1000000;
         if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
@@ -235,7 +235,7 @@ HexaVal hexa_channel_close(HexaVal ch_val) {
  */
 HexaVal hexa_now_ms(void) {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    hxlcl_clock_gettime(CLOCK_MONOTONIC, &ts);
     long long ms = (long long)ts.tv_sec * 1000LL + (long long)(ts.tv_nsec / 1000000LL);
     return hexa_int((int64_t)ms);
 }

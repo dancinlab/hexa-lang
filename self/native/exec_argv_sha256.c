@@ -304,7 +304,7 @@ HexaVal hexa_sha256_file(HexaVal path_val) {
     if (!HX_IS_STR(path_val)) return hexa_str("");
     const char* path = HX_STR(path_val);
     if (!path) return hexa_str("");
-    int fd = open(path, O_RDONLY);
+    int fd = hxlcl_open_sys(path, O_RDONLY);
     if (fd < 0) return hexa_str("");
     _hxa_sha256_ctx ctx;
     _hxa_sha256_init(&ctx);

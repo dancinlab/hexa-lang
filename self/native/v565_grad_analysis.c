@@ -203,7 +203,7 @@ int main(int argc, char** argv) {
 
     double lr_step = 1e-4;
     struct timespec t0, t1;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
+    hxlcl_clock_gettime(CLOCK_MONOTONIC, &t0);
 
     for (int step = 1; step <= N_STEP; step++) {
         // Forward (with LoRA + cache).
@@ -284,7 +284,7 @@ int main(int argc, char** argv) {
         hxqwen14b_cu_device_sync();
     }
 
-    clock_gettime(CLOCK_MONOTONIC, &t1);
+    hxlcl_clock_gettime(CLOCK_MONOTONIC, &t1);
     double wallclock = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
     printf("[grad] 4-step grad-walk wallclock = %.2fs\n", wallclock);
 

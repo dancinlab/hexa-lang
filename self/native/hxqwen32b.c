@@ -350,7 +350,7 @@ int64_t hxqwen32b_version(void) {
 // ─────────────────────────────────────────────────────────────
 
 static int read_file_to_buf(const char* path, char** out_buf, size_t* out_len) {
-    int fd = open(path, O_RDONLY);
+    int fd = hxlcl_open_sys(path, O_RDONLY);
     if (fd < 0) return -1;
     struct stat st;
     if (hxlcl_fstat(fd, &st) < 0) { hxlcl_close(fd); return -2; }

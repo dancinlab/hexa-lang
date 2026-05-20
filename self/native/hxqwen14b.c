@@ -492,7 +492,7 @@ int64_t hxqwen14b_version(void) {
 // ─────────────────────────────────────────────────────────────
 
 static int read_file_to_buf(const char* path, char** out_buf, size_t* out_len) {
-    int fd = open(path, O_RDONLY);
+    int fd = hxlcl_open_sys(path, O_RDONLY);
     if (fd < 0) return -1;
     struct stat st;
     if (hxlcl_fstat(fd, &st) < 0) { hxlcl_close(fd); return -2; }
@@ -2787,7 +2787,7 @@ static int v53_extract_int_array(const char* s, size_t n, const char* key,
 static int v53_read_shard_header(const char* path, char** out_hdr,
                                  size_t* out_hdr_len, int64_t* out_data_off)
 {
-    int fd = open(path, O_RDONLY);
+    int fd = hxlcl_open_sys(path, O_RDONLY);
     if (fd < 0) return -1;
     uint64_t hdr_bytes = 0;
     if (hxlcl_read(fd, &hdr_bytes, 8) != 8) { hxlcl_close(fd); return -2; }
@@ -2887,10 +2887,10 @@ int hxqwen14b_load_tensor_bf16(int64_t shard_path_p, int64_t name_p,
     for (int i = 0; i < info.rank; i++) n_elems *= info.shape[i];
     if (n_elems * 2 != info.byte_count) return RC_ERR_SHAPE_MISMATCH;
 
-    int fd = open(path, O_RDONLY);
+    int fd = hxlcl_open_sys(path, O_RDONLY);
     if (fd < 0) return RC_ERR_IO;
     size_t map_len = (size_t)(info.byte_start + info.byte_count);
-    void* mapped = mmap(NULL, map_len, PROT_READ, MAP_PRIVATE, fd, 0);
+    void* mapped = hxlcl_mmap(NULL, map_len, PROT_READ, MAP_PRIVATE, fd, 0);
     hxlcl_close(fd);
     if (mapped == MAP_FAILED) return RC_ERR_IO;
 

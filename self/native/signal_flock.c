@@ -227,7 +227,7 @@ HexaVal hexa_os_flock_open(HexaVal path_val, HexaVal mode_val) {
      * POSIX flock(2) semantics: lock is held per open-file-description; if
      * fd leaks via exec, the child would own the lock, surprising the
      * parent's unlock expectations. */
-    int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    int fd = hxlcl_open_sys(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
     if (fd < 0) return hexa_int(-errno);
 
     if (flock(fd, op) < 0) {

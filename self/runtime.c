@@ -78,6 +78,11 @@ static int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
 static int  hxlcl_waitpid(int pid, int *status, int options);
 static int  hxlcl_fstat(int fd, void *buf);
 static int  hxlcl_stat(const char *path, void *buf);
+static int  hxlcl_open_sys(const char *path, int flags, ...);
+static void hxlcl_exit(int code) __attribute__((noreturn));
+static void *hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off);
+static int  hxlcl_clock_gettime(int clk, void *ts);  /* re-decl: cycle 65 syscall body overrides cycle 62 stub */
+static int  hxlcl_darwin_check_fd_set_overflow(int fd, const void *p, int n);
 
 // ─── RUNTIME.md Phase 1 Tier-A.1 — libc unhook helpers ───
 // Step-1 of the hexa-native runtime rewrite (RUNTIME.md cycle 46):
@@ -525,7 +530,7 @@ static void *__attribute__((noinline)) hxlcl_malloc(size_t n) {
     n = (n + (size_t)15) & ~(size_t)15;
     if (!_hxlcl_alloc_ptr || _hxlcl_alloc_ptr + n > _hxlcl_alloc_end) {
         size_t chunk = (n > HXLCL_ALLOC_CHUNK_SZ) ? n : HXLCL_ALLOC_CHUNK_SZ;
-        void *m = mmap((void *)0, chunk, PROT_READ | PROT_WRITE,
+        void *m = hxlcl_mmap((void *)0, chunk, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANON, -1, 0);
         if (m == MAP_FAILED) return (void *)0;
         _hxlcl_alloc_ptr = (char *)m;
@@ -576,7 +581,7 @@ static void *__attribute__((noinline)) hxlcl_fopen(const char *path, const char 
     if (mode[1] == '+' || (mode[1] != 0 && mode[2] == '+')) {
         flags = (flags & ~(O_RDONLY | O_WRONLY)) | O_RDWR;
     }
-    int fd = open(path, flags, 0644);
+    int fd = hxlcl_open_sys(path, flags, 0644);
     if (fd < 0) return (void *)0;
     return (void *)(uintptr_t)(fd + 1);
 }
@@ -951,7 +956,13 @@ static int __attribute__((noinline)) hxlcl_poll(void *fds, unsigned int nfds, in
 static int __attribute__((noinline)) hxlcl_waitpid(int pid, int *status, int options) {
     return (int)_hxlcl_syscall4(HXLCL_SYS_WAIT4, (long)pid, (long)status, (long)options, 0);
 }
-static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags, int mode) {
+/* Cycle 65: variadic to handle both 2-arg and 3-arg open() callers. */
+static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags, ...) {
+    int mode = 0;
+    __builtin_va_list ap;
+    __builtin_va_start(ap, flags);
+    mode = __builtin_va_arg(ap, int);
+    __builtin_va_end(ap);
     return (int)_hxlcl_syscall3(HXLCL_SYS_OPEN, (long)path, (long)flags, (long)mode);
 }
 static int __attribute__((noinline)) hxlcl_fstat(int fd, void *buf) {
@@ -959,6 +970,33 @@ static int __attribute__((noinline)) hxlcl_fstat(int fd, void *buf) {
 }
 static int __attribute__((noinline)) hxlcl_stat(const char *path, void *buf) {
     return (int)_hxlcl_syscall2(HXLCL_SYS_STAT, (long)path, (long)buf);
+}
+// Cycle 65 — close out remaining real syscalls.
+#define HXLCL_SYS_GETTIMEOFDAY 116
+static void __attribute__((noinline, noreturn)) hxlcl_exit(int code) {
+    (void)_hxlcl_syscall1(HXLCL_SYS_EXIT, (long)code);
+    __builtin_trap();  // unreachable; ensure noreturn satisfaction
+}
+static void *__attribute__((noinline)) hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) {
+    return (void *)_hxlcl_syscall6(HXLCL_SYS_MMAP, (long)addr, (long)len, (long)prot, (long)flags, (long)fd, off);
+}
+static int __attribute__((noinline)) hxlcl_clock_gettime(int clk, void *ts) {
+    // Use gettimeofday(2) (syscall 116) since clock_gettime is a vDSO
+    // function on Darwin with no direct syscall number. timespec[0..1]
+    // is sec/nsec; we fill from sec/microsec*1000.
+    (void)clk;
+    long tv[2] = {0, 0};
+    (void)_hxlcl_syscall2(HXLCL_SYS_GETTIMEOFDAY, (long)tv, 0);
+    if (ts) {
+        long long *p = (long long *)ts;
+        p[0] = tv[0];
+        p[1] = tv[1] * 1000;
+    }
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, const void *p, int n) {
+    (void)fd; (void)p; (void)n;
+    return 0;  // never overflowing
 }
 #endif  /* arm64 */
 // Cycle 62 — time/terminal/mach stubs. aprime_cc doesn't read clock
@@ -968,14 +1006,8 @@ static int __attribute__((noinline)) hxlcl_time(int *t) {
     if (t) *t = 0;
     return 0;
 }
-static int __attribute__((noinline)) hxlcl_clock_gettime(int clk, void *ts) {
-    (void)clk;
-    if (ts) {
-        long long *p = (long long *)ts;
-        p[0] = 0; p[1] = 0;
-    }
-    return 0;
-}
+/* cycle 65: clock_gettime body moved into syscall block at line ~976
+   above (real gettimeofday(2) impl). Old cycle-62 stub deleted. */
 static int __attribute__((noinline)) hxlcl_nanosleep(const void *req, void *rem) {
     (void)req;
     if (rem) {
@@ -1117,6 +1149,13 @@ static int __attribute__((noinline)) hxlcl_posix_openpt(int flags) {
 #undef isalpha
 #define isalnum(c) hxlcl_isalnum((int)(c))
 #define isalpha(c) hxlcl_isalpha((int)(c))
+// Cycle 65: exit() in <stdlib.h> as inline that calls _exit/__exit
+// after libc cleanup. Override to call our exit syscall (SYS_EXIT=1)
+// directly. Drops _exit + __exit externs.
+#undef exit
+#undef _exit
+#define exit(c)  hxlcl_exit((int)(c))
+#define _exit(c) hxlcl_exit((int)(c))
 // Cycle 57 — Tier-A.4 POSIX stubs are NOT #define'd here because their
 // system-header prototypes (signal/sigaction/socket.h declarations)
 // expand the macro inside the prototype itself ("function cannot return
@@ -4865,7 +4904,7 @@ HexaVal hexa_farr_uccsd_apply(HexaVal re_v, HexaVal im_v,
 // ═══════════════════════════════════════════════════════════
 
 typedef struct {
-    void*  base;       // mmap() base ptr; NULL = closed slot
+    void*  base;       // hxlcl_mmap() base ptr; NULL = closed slot
     size_t len;        // mapped length (full file size for safetensors)
     int    fd;         // backing file descriptor (kept for diagnostics)
 } HexaMmapEntry;
@@ -4900,7 +4939,7 @@ static int64_t _hx_mmap_alloc_slot(void) {
 HexaVal hexa_safetensors_mmap_open(HexaVal path_v) {
     const char* path = hexa_to_cstring(path_v);
     if (!path || !*path) return hexa_int(-1);
-    int fd = open(path, O_RDONLY);
+    int fd = hxlcl_open_sys(path, O_RDONLY);
     if (fd < 0) return hexa_int(-1);
     struct stat st;
     if (hxlcl_fstat(fd, &st) != 0) { hxlcl_close(fd); return hexa_int(-1); }
@@ -4909,7 +4948,7 @@ HexaVal hexa_safetensors_mmap_open(HexaVal path_v) {
     // Pre-mmap header validation could go here (read first 8 bytes
     // for header_len, verify 8 + header_len <= len). Phase 1 skips:
     // the hexa-side caller already parses + validates the header.
-    void* base = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
+    void* base = hxlcl_mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
     if (base == MAP_FAILED) { hxlcl_close(fd); return hexa_int(-1); }
     int64_t id = _hx_mmap_alloc_slot();
     if (id < 0) { munmap(base, len); hxlcl_close(fd); return hexa_int(-1); }
@@ -10205,7 +10244,7 @@ HexaVal hexa_exec_stream_close_impl(HexaVal handle) {
     s->buf_len = 0;
     s->eof = 0;
     s->in_use = 0;
-    /* v1.4 — close stdin_fd if still open (bidi path; safe no-op for read-only). */
+    /* v1.4 — close stdin_fd if still hxlcl_open_sys(bidi path; safe no-op for read-only). */
     if (s->stdin_fd >= 0) { hxlcl_close(s->stdin_fd); s->stdin_fd = -1; }
     /* Note: s->buf 보존 (재사용 위해 free 안 함; 다음 spawn 시 재초기화). */
     return hexa_int((int64_t)proper_rc);
