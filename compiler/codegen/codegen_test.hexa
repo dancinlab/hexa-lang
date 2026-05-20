@@ -59,6 +59,40 @@ fn _stmt_assign(dst: Local, src: Operand) -> Stmt {
     }
 }
 
+// RFC 074 Phase 4 — multi-cell enum payload constructor helpers.
+fn _op_const_int(v: i64) -> Operand {
+    return Operand {
+        kind: "const_int",
+        local_id: -1,
+        int_val: v,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _op_const_str(s: string) -> Operand {
+    return Operand {
+        kind: "const_str",
+        local_id: -1,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: s,
+        global_id: -1
+    }
+}
+
+fn _stmt_enum_ctor(dst: Local, args: [Operand]) -> Stmt {
+    return Stmt {
+        kind: STMT_ASSIGN,
+        dst: dst,
+        op: "enum_ctor",
+        args: args,
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
 fn _stmt_binop(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
     let mut xs = []
     xs.push(a)
@@ -125,6 +159,69 @@ fn _build_case_id() -> MModule {
     return MModule { file: "case_id.hexa", funcs: fns, globals: [] }
 }
 
+// (c) RFC 074 Phase 4 — multi-cell enum payload constructor.
+//
+// Synthetic MIR for `fn mk_rgb(r, g, b) -> Color { return Color::RGB(r,g,b) }`,
+// matching the shape `compiler/lower/hir_to_mir.hexa::enum_path` emits for
+// `len(e.children) >= 2`: STMT_ASSIGN op="enum_ctor" with args =
+//   [ "enum_Color::RGB", "__tag", <hash>, "__p0", r, "__p1", g, "__p2", b ].
+//
+// The fixture is hand-built (no parser/lower in the loop) so the codegen
+// contract for the new `enum_ctor` op is exercised in isolation — the
+// per-backend assertions below verify the per-cell store loop runs N=3
+// times (3 hexa_map_set calls) on top of the single hexa_map_new init.
+fn _build_case_enum_ctor3() -> MModule {
+    let r = _local(0, "r")
+    let g = _local(1, "g")
+    let b = _local(2, "b")
+    let v = _local(3, "v")
+    let ret_local = _local(4, "ret")
+
+    let mut args: [Operand] = []
+    args.push(_op_const_str("enum_Color::RGB"))
+    args.push(_op_const_str("__tag"))
+    args.push(_op_const_int(12345))     // synthetic path-hash
+    args.push(_op_const_str("__p0"))
+    args.push(_op_local(r.id))
+    args.push(_op_const_str("__p1"))
+    args.push(_op_local(g.id))
+    args.push(_op_const_str("__p2"))
+    args.push(_op_local(b.id))
+
+    let mut stmts = []
+    stmts.push(_stmt_enum_ctor(v, args))
+    stmts.push(_stmt_return(_op_local(v.id)))
+
+    let mut blocks = []
+    blocks.push(_block(0, stmts))
+
+    let mut params = []
+    params.push(r)
+    params.push(g)
+    params.push(b)
+    let mut locals = []
+    locals.push(r)
+    locals.push(g)
+    locals.push(b)
+    locals.push(v)
+    locals.push(ret_local)
+
+    let mf = MFunc {
+        name: "mk_rgb",
+        params: params,
+        return_local: ret_local,
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_CPU
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_enum_ctor3.hexa", funcs: fns, globals: [] }
+}
+
 // (b) fn add(x: Int, y: Int) -> Int { return x + y }
 fn _build_case_add() -> MModule {
     let x = _local(0, "x")
@@ -178,6 +275,22 @@ fn _count_op(lf: LFunc, mnemonic: string) -> i64 {
 
 fn _has_op(lf: LFunc, mnemonic: string) -> bool {
     return _count_op(lf, mnemonic) > 0
+}
+
+// RFC 074 Phase 4 — count `<mnemonic> <label>` occurrences (i.e. calls
+// to a given runtime symbol). Used by the multi-cell payload assertions
+// to verify the per-cell store loop runs N times.
+fn _count_call(lf: LFunc, mnemonic: string, callee: string) -> i64 {
+    let mut n = 0
+    let mut i = 0
+    while i < len(lf.instrs) {
+        let ins = lf.instrs[i]
+        if ins.op == mnemonic && len(ins.args) >= 1 {
+            if ins.args[0].label == callee { n = n + 1 }
+        }
+        i = i + 1
+    }
+    return n
 }
 
 fn _has_prologue_arm64(lf: LFunc) -> bool {
@@ -325,6 +438,55 @@ fn main() {
     // ── x86_64-linux-gnu ─────────────────────────────────────
     println("")
     println("── target: x86_64-linux-gnu ──")
+
+    // RFC 074 Phase 4 — multi-cell enum payload constructor fixtures.
+    //
+    // Synthetic 3-cell payload (`Color::RGB(r,g,b)`) exercises the new
+    // `enum_ctor` op on both CPU backends. The per-cell store loop must
+    // run exactly N=3 times (3 `hexa_map_set` calls on top of a single
+    // `hexa_map_new` init), no matter the target ABI. This is the
+    // F-RFC074-PHASE4-MULTI-CELL-EMIT falsifier in code form. Thumb
+    // backend coverage is the same op + same per-cell loop and lands
+    // in a follow-up cycle (codegen_test.hexa does not import the
+    // thumb backend today; mirroring its assertion here would need a
+    // new import path).
+    let mod_enum3 = _build_case_enum_ctor3()
+
+    let l_enum3_arm = codegen_arm64_darwin(mod_enum3)
+    if len(l_enum3_arm.funcs) != 1 {
+        println("  FAIL: arm64 mk_rgb expected 1 func")
+        ok = false
+    }
+    let lf_enum3_arm = l_enum3_arm.funcs[0]
+    _print_summary("arm64", "mk_rgb (RFC074 P4)", lf_enum3_arm)
+    let arm_new = _count_call(lf_enum3_arm, "bl", "hexa_map_new")
+    let arm_set = _count_call(lf_enum3_arm, "bl", "hexa_map_set")
+    if arm_new != 1 {
+        println("  FAIL: arm64 enum_ctor expected 1 hexa_map_new, got " + to_string(arm_new))
+        ok = false
+    }
+    if arm_set != 3 {
+        println("  FAIL: arm64 enum_ctor expected 3 hexa_map_set (one per __pN cell), got " + to_string(arm_set))
+        ok = false
+    }
+
+    let l_enum3_x86 = codegen_x86_64_linux(mod_enum3)
+    if len(l_enum3_x86.funcs) != 1 {
+        println("  FAIL: x86 mk_rgb expected 1 func")
+        ok = false
+    }
+    let lf_enum3_x86 = l_enum3_x86.funcs[0]
+    _print_summary("x86_64", "mk_rgb (RFC074 P4)", lf_enum3_x86)
+    let x86_new = _count_call(lf_enum3_x86, "call", "hexa_map_new")
+    let x86_set = _count_call(lf_enum3_x86, "call", "hexa_map_set")
+    if x86_new != 1 {
+        println("  FAIL: x86 enum_ctor expected 1 hexa_map_new, got " + to_string(x86_new))
+        ok = false
+    }
+    if x86_set != 3 {
+        println("  FAIL: x86 enum_ctor expected 3 hexa_map_set (one per __pN cell), got " + to_string(x86_set))
+        ok = false
+    }
 
     let l_id_x86  = codegen_x86_64_linux(mod_id)
     let l_add_x86 = codegen_x86_64_linux(mod_add)

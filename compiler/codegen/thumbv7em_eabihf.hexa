@@ -290,6 +290,35 @@ fn _emit_thumb_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt, st: 
             }
             return buf
         }
+        // RFC 074 Phase 4 — multi-cell enum payload constructor.
+        // Producer = compiler/lower/hir_to_mir.hexa enum_path arm (>=2 args).
+        // Mirror of arm64 / x86_64 enum_ctor in Thumb EABI: r0=map,
+        // r1=key const char*, r2=val HexaVal, bl, r0 return. Body is
+        // byte-equivalent to struct_lit; op-string split marks the
+        // multi-cell payload semantic for a future contiguous-layout swap.
+        if s.op == "enum_ctor" && len(s.args) >= 1 {
+            buf.push(_thumb_instr1("bl", _thumb_op_label("hexa_map_new"),
+                             "enum_ctor: new map (multi-cell payload)"))
+            buf.push(_thumb_instr2("mov", dst, _thumb_op_reg("r0"),
+                             "enum_ctor: capture new map"))
+            let mut i = 1
+            while i + 1 < len(s.args) {
+                let key = _thumb_op_for_operand_st(s.args[i], st)
+                let val = _thumb_op_for_operand_st(s.args[i + 1], st)
+                buf.push(_thumb_instr2("mov", _thumb_op_reg("r1"), key,
+                                 "enum_ctor: cell key"))
+                buf.push(_thumb_instr2("mov", _thumb_op_reg("r2"), val,
+                                 "enum_ctor: cell val"))
+                buf.push(_thumb_instr2("mov", _thumb_op_reg("r0"), dst,
+                                 "enum_ctor: map arg"))
+                buf.push(_thumb_instr1("bl", _thumb_op_label("hexa_map_set"),
+                                 "enum_ctor: set cell"))
+                buf.push(_thumb_instr2("mov", dst, _thumb_op_reg("r0"),
+                                 "enum_ctor: recapture map"))
+                i = i + 2
+            }
+            return buf
+        }
         // field access (map-backed; mirror of x86_64 0fe030dd / arm64
         // f0a087ab in Thumb EABI: r0=base, r1=key const char*, bl
         // hexa_map_get, r0→dst). args = [base, "<name>"_str]. field-

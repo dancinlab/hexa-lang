@@ -1346,6 +1346,30 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             }
             return buf
         }
+        // RFC 074 Phase 4 — multi-cell enum payload constructor.
+        // Producer = compiler/lower/hir_to_mir.hexa enum_path arm (>=2 args).
+        // Body is byte-equivalent to struct_lit (same key/val pair walk,
+        // same hexa_map_new + hexa_map_set ABI) — the op-string split is
+        // the semantic marker. A future cycle can swap the storage for a
+        // contiguous N-cell layout by replacing the per-cell call loop
+        // below WITHOUT touching struct_lit. First arg is the "enum_<path>"
+        // type string; pairs [k1,v1] onward are __tag + __p0..__pN-1 slots.
+        if s.op == "enum_ctor" && len(s.args) >= 1 {
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_map_new"),
+                             "enum_ctor: new map (multi-cell payload)"))
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            let mut i = 1
+            while i + 1 < len(s.args) {
+                buf = _hv_ldslot(buf, rm, s.dst.id, "x0", "x1")
+                buf = _hv_cstr(buf, s.args[i], st, "x2")
+                buf = _hv_load(buf, s.args[i + 1], st, rm, "x3", "x4")
+                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_map_set"),
+                                 "enum_ctor: set cell"))
+                buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+                i = i + 2
+            }
+            return buf
+        }
         // field access (map-backed; mirror of x86_64 0fe030dd in
         // AAPCS64: x0=base, x1=key const char*, bl hexa_map_get, x0).
         // args = [base, "<name>"_str]; const_str key → .rodata label.

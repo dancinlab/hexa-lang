@@ -2187,15 +2187,27 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // Stage1 Gap 14 (idiom 1 producer side): variant construction.
     // Tag is a deterministic hash of the path text (matches the match
     // arm comparison in the same pass).
+    //
+    // RFC 074 Phase 4 (compiler/ tree) — multi-cell payload op split.
+    //
+    // Single-cell payload (arity 0 or 1) keeps the proven 3-backend
+    // `struct_lit` op (a351b1c9/87f3c073/5dfc5e32) so the byte-eq
+    // legacy path is preserved verbatim — single-arg enum values still
+    // lower to the same MIR shape as before this cycle.
+    //
+    // Multi-cell payload (arity >= 2) now lifts to a distinct
+    // `enum_ctor` op. The body it walks is identical to struct_lit
+    // (the `[type_str, k0, v0, k1, v1, ...]` shape) so the proven
+    // 3-backend per-cell loop applies unchanged, but the op string is
+    // now a semantic marker for "multi-cell payload capture" — a
+    // future cycle can swap the storage for a contiguous N-cell layout
+    // by adding a single `enum_ctor` branch to each backend without
+    // touching struct_lit or re-discriminating on `args.length`.
+    //
+    // Match-arm destructure side (L1985-2024 above) is op-agnostic —
+    // it reads `__p<i>` slots out of the value irrespective of the
+    // producer op string, so this split is one-way (producer-only).
     if k == "enum_path" {
-        // Lowered as a map-backed value REUSING the proven 3-backend
-        // struct_lit codegen (a351b1c9/87f3c073/5dfc5e32): emit
-        // op="struct_lit" with args = [ "enum_"+name, "__tag", <hash>,
-        // "__p0", p0, "__p1", p1, ... ]. The enum value is the map
-        // { "__tag": path_hash, "__pN": payloadN }; the match consumer
-        // reads the tag via the symmetric hexa_map_get(v,"__tag")
-        // (match-tag track). Zero new codegen — single repr (map) for
-        // struct + enum keeps construct/access symmetric.
         let mut ctx2 = ctx
         let mut args: [Operand] = []
         args.push(_const_str_op("enum_" + e.text))
@@ -2211,10 +2223,13 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         }
         ctx2 = _fresh_local(ctx2, e.typ, "enum_" + e.text)
         let dst = _lr_locals[len(_lr_locals) - 1]
+        // RFC 074 Phase 4 — multi-cell payload op selector.
+        let mut ctor_op = "struct_lit"
+        if len(e.children) >= 2 { ctor_op = "enum_ctor" }
         let s = Stmt {
             kind: STMT_ASSIGN,
             dst: dst,
-            op: "struct_lit",
+            op: ctor_op,
             args: args,
             target_block: -1,
             target_block_else: -1

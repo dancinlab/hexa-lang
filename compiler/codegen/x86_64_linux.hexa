@@ -685,6 +685,39 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
             return buf
         }
+        // RFC 074 Phase 4 — multi-cell enum payload constructor.
+        // Producer = compiler/lower/hir_to_mir.hexa enum_path arm (>=2 args).
+        // Mirror of arm64 enum_ctor — same hexa_map_new + per-cell
+        // hexa_map_set walk as struct_lit; the op-string split marks the
+        // multi-cell payload semantic so a future cycle can swap to a
+        // contiguous N-cell layout without disturbing struct_lit.
+        if s.op == "enum_ctor" && len(s.args) >= 1 {
+            let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            buf.push(_x86_instr1("call", _x86_op_label("hexa_map_new"),
+                             "enum_ctor: new map (multi-cell payload)"))
+            buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
+                             "enum_ctor: capture new map"))
+            let mut i = 1
+            while i + 1 < len(s.args) {
+                buf = _x86_op_rm(buf, s.args[i], st, rm, "r10")
+                let key = _x86_op_resolve(s.args[i], st, rm, "r10")
+                buf = _x86_op_rm(buf, s.args[i + 1], st, rm, "r11")
+                let val = _x86_op_resolve(s.args[i + 1], st, rm, "r11")
+                buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), key,
+                                 "enum_ctor: cell key"))
+                buf.push(_x86_instr2("mov", _x86_op_reg("rdx"), val,
+                                 "enum_ctor: cell val"))
+                buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), dst,
+                                 "enum_ctor: map arg"))
+                buf.push(_x86_instr1("call", _x86_op_label("hexa_map_set"),
+                                 "enum_ctor: set cell"))
+                buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
+                                 "enum_ctor: recapture map"))
+                i = i + 2
+            }
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            return buf
+        }
         // field access (map-backed, symmetric to struct_lit/enum_path):
         //   args = [base, "<name>"_str] → dst = hexa_map_get(base, key).
         // key const_str → .rodata label = const char* (map_get ABI).

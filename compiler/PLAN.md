@@ -5483,3 +5483,84 @@ g_inbox_processing_loop` hazard guard (d).
 
 cross-link: inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md
 §4.5 (G7-A.falsify — measured re-run, 2026-05-20).
+
+## 진행 로그 — RFC 074 Phase 4: per-target multi-cell enum payload codegen (2026-05-20)
+
+**Phase 4 lift** of RFC 074 (per-slot extraction · multi-arg enum
+payload). Phase 2.1 / Phase 3 (lower) landed on a sister branch as
+`b6aae978` (types.hexa per-slot element-match + HX2005) and
+`feafe1db` (hir_to_mir per-slot extraction · `__p<i>` positional
+key). This cycle adds the codegen-side opcode split so the three CPU
+backends recognise multi-cell payload capture as its own contract.
+
+**Surgical shape (Shape A)** — five files, all parse-clean:
+- `compiler/lower/hir_to_mir.hexa` : `enum_path` producer now selects
+  `op = "enum_ctor"` when `len(children) >= 2`, keeping `struct_lit`
+  for the single-cell (arity 0/1) path. Byte-eq legacy preserved.
+- `compiler/codegen/arm64_darwin.hexa` : `s.op == "enum_ctor"` branch
+  added next to `struct_lit`, AAPCS64 ABI, identical per-cell
+  `hexa_map_new` + `hexa_map_set` walk (the body is intentionally a
+  mirror — a future cycle swaps the storage for a contiguous N-cell
+  layout by replacing the loop in this single branch).
+- `compiler/codegen/x86_64_linux.hexa` : same branch, System V ABI.
+- `compiler/codegen/thumbv7em_eabihf.hexa` : same branch, AAPCS-EABI-HF.
+- `compiler/codegen/codegen_test.hexa` : new fixture
+  `_build_case_enum_ctor3()` (synthetic `Color::RGB(r,g,b)` 3-cell
+  payload) with per-backend assertions `_count_call(lf, "bl"/"call",
+  "hexa_map_new") == 1` and `_count_call(... "hexa_map_set") == 3`.
+  arm64 + x86_64 wired into the driver; thumb covered by the same
+  emit path (its branch is identical) but the harness does not import
+  the thumb backend today — symmetric assertion is a follow-on
+  cycle's one-line driver addition.
+
+**Falsifier (F-RFC074-PHASE4-MULTI-CELL-EMIT)**: a synthetic 3-arg
+`enum_ctor` STMT_ASSIGN must produce, on every backend, exactly 1
+`hexa_map_new` call + N `hexa_map_set` calls (N = number of `__p<i>`
+cells = 3 here). Codified inline as the per-backend assertions in
+`codegen_test.hexa`.
+
+**Honest scope (g3)**:
+- This cycle is producer-only — the match-arm destructure side (the
+  `__p<i>` field reader at `hir_to_mir.hexa` L1985-2024) is already
+  op-agnostic and unchanged. No new MIR struct fields (`Stmt` was
+  not extended — 135 literal sites untouched). No new MIR op
+  registered in the `STMT_*` constants; `enum_ctor` lives in the
+  existing `op: string` discriminator alongside `struct_lit`.
+- The emit body is byte-equivalent to `struct_lit` today — the value
+  of this cycle is the op-string handle that lets the next cycle
+  replace the map-backed N-cell storage with a contiguous layout
+  without re-discriminating on `args.length` or perturbing
+  `struct_lit`. The "multi-cell capture" semantic is now expressible
+  end-to-end (HIR -> MIR -> LIR per target) but the physical storage
+  is still the map-backed v1.
+- Thumb backend assertion deferred: codegen_test.hexa does not import
+  the thumb backend today. The thumb enum_ctor branch is added and
+  parse-clean; its assertion in the driver is a one-line follow-up
+  once the harness imports the third backend.
+- F4/F5 commits referenced in the brief (`b6aae978` types.hexa per-
+  slot match, `feafe1db` hir_to_mir per-slot extraction) live on a
+  sister branch; the worktree branch this cycle commits to already
+  carried both via prior merges (verified via `git grep` of
+  `__p<i>` + the L1985-2024 destructure block before editing).
+
+**Binary promote**: NOT in this cycle (per SOP §g_inbox_processing_loop
+step 7). codegen_test.hexa parse-clean; full `hexa run` of the test
+driver requires compiled-path build infrastructure (PATH·HEXA_LANG·
+HEXA_MAC_BUILD_OK·HEXA_MODULE_LOADER) and is a separate deploy
+cycle.
+
+**LoC delta:**
+
+```
+ compiler/lower/hir_to_mir.hexa             | +33 -10  (RFC074-P4 op selector + comment refresh)
+ compiler/codegen/arm64_darwin.hexa         | +25      (enum_ctor branch)
+ compiler/codegen/x86_64_linux.hexa         | +33      (enum_ctor branch)
+ compiler/codegen/thumbv7em_eabihf.hexa     | +28      (enum_ctor branch)
+ compiler/codegen/codegen_test.hexa         | +131     (fixture + helpers + per-backend assertions)
+ compiler/PLAN.md                           | +<this>
+```
+
+cross-link: B7 RFC 074 Phase 4 plan ("ir+codegen — hir/mir/lir.hexa
+arrays; arm64_darwin/x86_64_linux/thumbv7em payload-cell capture") +
+heritage `b6aae978` (Phase 2.1 types) + `feafe1db` (Phase 3 lower).
+Physical contiguous-cell storage = Phase 5 follow-on.
