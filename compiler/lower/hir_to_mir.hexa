@@ -1983,6 +1983,22 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 ctx_a = _bind(ctx_a, pat.text, dst_a.id)
                 ctx2 = ctx_a
             } else if pat.kind == "enum_path" {
+                // RFC-074 Phase 3 (compiler/ tree) — multi-arg payload destructure.
+                //
+                // Construction (enum_path producer, this file L2173-2207) lays
+                // each payload slot under a positional key "__p<i>" inside the
+                // map-backed enum value. The pattern binders here MUST extract
+                // each binder from its OWN slot, not from the whole scrut map.
+                //
+                // Previously every binder was emitted with op="payload" and
+                // args=[scrut_op] (one slot's-worth of value bound under N
+                // names), which (a) silently truncated to a single field, and
+                // (b) routed through a `payload` op with no codegen consumer
+                // (Phase 4 still pending). Single-arg → __p0 subsumes the
+                // legacy single-field path with zero behavior delta (only one
+                // slot existed, only __p0 referenced). Multi-arg now lowers
+                // each ident binder to its positional slot via the field
+                // op = map_get(scrut, "__p<i>") — symmetric with construction.
                 let mut pi = 0
                 while pi < len(pat.children) {
                     let pc = pat.children[pi]
@@ -1991,10 +2007,11 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         let dst_b = _lr_locals[len(_lr_locals) - 1]
                         let mut a2: [Operand] = []
                         a2.push(scrut_op)
+                        a2.push(_const_str_op("__p" + to_string(pi)))
                         let s2 = Stmt {
                             kind: STMT_ASSIGN,
                             dst: dst_b,
-                            op: "payload",
+                            op: "field",
                             args: a2,
                             target_block: -1,
                             target_block_else: -1
