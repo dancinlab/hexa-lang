@@ -1967,3 +1967,78 @@ forge-route 확인 — 미측정 over-claim 0).
 **머지-안전성**: build GREEN + GOAL step1 PASS 측정 → rfc043-hexa-torch
 의 A/B/C 머지가 검증됨. git-clean(FF) + 런타임 측정-PASS → main 머지
 안전. (copy_slice/transpose CPU-fallback 은 비차단 잔재로 별도 추적.)
+
+### 2026-05-20 — SD5 ag_extract — first AST-driven reverse-mode AD step (north-star ① gap-b, scoping note §4)
+
+SD1–SD4 (PR #129/#152/#153/#154) landed the **manually-keyed** vjp rule
+registry: a human encodes each bwd by hand and the registry stores only
+op-kind presence. The scoping note (`inbox/notes/2026-05-20-flame-
+autograd-auto-scoping.md` §4) explicitly carved out **SD5** as the
+genuine source-to-source transform — "true AST-driven derivation from a
+hexa-lang `fn`'s source — requires compiler hook". This cycle lands
+that first step.
+
+**Files (additive only — zero edits to ag_derive/ag_tape/nn_lib)**:
+- `stdlib/flame/ag_extract.hexa` (new, ~400 LoC) — minimal AST arena
+  (6 node kinds: Param, Const, BinOp_GT, IfElse, Var_Upstream, BinOp_MUL),
+  hand-built fwd builder for `relu(x) = if x > 0 then x else 0`, the
+  reverse-mode walker (IfElse rule + Param rule + Const rule), emit
+  step (AST → hexa-lang source string), interpret step (AST → numerical
+  evaluation for the byte-eq oracle).
+- `test/flame_ag_extract_test.hexa` (new, ~140 LoC) — fixed-seed
+  (LCG seed 4242 + 31337, len=32, x_arr ∈ [-1.0, 1.0] so both
+  branches of relu vjp exercised), reference = hand-written
+  `relu_bwd_manual`, byte-eq oracle vs AST-driven path.
+
+**Gate measured**: `F-RFC043-AUTOGRAD-AUTO-SD5-RELU-BYTE-EQ`
+**PASS** (max|dx_auto − dx_ref| = 0.0, len=32, 8 positive + 24 negative
+inputs).
+
+**Emitted source** (printed by the test for inspection):
+```
+pub fn relu_bwd_auto_emitted(x: float, dy: float) -> float {
+    return (if (x > 0.0) { dy } else { 0.0 })
+}
+```
+
+**g3 honest framing**: SD5 is the **first AST-extract step**, NOT
+"complete autograd". One op (relu). The AST is hand-built (no parser
+dependency — compiler/parse/ast.hexa is structurally accessible but
+importing it pulls in lex+parse+diag, documented as future-cycle SD6
+in `ag_extract.hexa` §Future work). The emit step prints hexa-lang
+source that COULD compile standalone; the byte-eq oracle goes through
+an in-process interpret path (single hexa invocation, no second
+compile cycle — future SD9). What SD5 PROVES: the AST→reverse-mode-
+walk→emit pipeline produces a body byte-eq with the hand-derived
+reference for the chosen op. That is the SHAPE of source-to-source
+AD; full operator coverage is multi-cycle SD6–SD9 work.
+
+**Regression check**: SD1+SD2+SD3 (`test/flame_ag_derive_test.hexa`)
+PASS rc=0 unchanged. SD4 (`stdlib/flame/flame_ag_tape_test.hexa`)
+shows 2 pre-existing FAIL (CHAIN-EQ, FANIN-EQ) IDENTICAL to baseline
+without my changes — not a regression introduced by SD5 (verified by
+running the test with ag_extract files moved aside; same 2 FAIL).
+
+**Atlas citations** (g6, in `ag_extract.hexa` header):
+- Pearlmutter & Siskind, "Reverse-Mode AD in a Functional
+  Framework: Lambda the Ultimate Backpropagator" (2008), ACM TOPLAS
+  30(2) — establishes reverse-mode AD as a source-to-source program
+  transform; provides the If-construct transformation rule SD5
+  reproduces.
+- Griewank & Walther, "Evaluating Derivatives: Principles and
+  Techniques of Algorithmic Differentiation" (2008, SIAM, 2nd ed) —
+  §4.4 "kinks" covers the relu subgradient choice at x=0.
+
+**Future-cycle stop-conditions (g3 carve-outs, in ag_extract.hexa
+§Future work)**:
+- SD6: parser integration — expose thin `parse_function_body(path,
+  fn_name) -> Expr` surface so stdlib/flame doesn't drag in the
+  full compiler/lex+parse+diag transitive dep.
+- SD7: multi-input + multi-output via ag_tape's registry.
+- SD8: more reverse-mode rules (Sum, MatMul AST-derived, Compose,
+  elementwise unary family).
+- SD9: re-emit-and-recompile loop — the emitted source actually
+  loaded and called.
+
+Each future SD = separate PR + own falsifier registered in
+FLAME.tape before work starts (per scoping note §4).
