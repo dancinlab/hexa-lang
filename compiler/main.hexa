@@ -62,6 +62,7 @@ import "./check/target_gate.hexa"
 // C shims in runtime.c now delegate to `rt_isalnum`/`rt_isalpha`
 // via the standard HexaVal calling convention.
 import "../stdlib/runtime/ctype.hexa"
+import "../stdlib/runtime/math.hexa"
 import "./emit/asm.hexa"
 import "./emit/macho_arm64.hexa"
 import "./diag/catalog.hexa"

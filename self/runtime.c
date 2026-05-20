@@ -735,60 +735,15 @@ static int __attribute__((noinline)) hxlcl_getrusage(int who, void *usage) {
 // term Taylor approximations sufficient for any unreachable execution.
 // `isalnum`/`isalpha` are pure ASCII classification — called by lexer
 // `_is_ident_cont` / `_is_ident_start`, which IS load-bearing.
-static double __attribute__((noinline)) hxlcl_fmod(double x, double y) {
-    if (y == 0.0) return 0.0;
-    double q = x / y;
-    long long iq = (long long)q;
-    return x - (double)iq * y;
-}
-static double __attribute__((noinline)) hxlcl_exp(double x) {
-    // Range reduction: x = n*ln2 + r, |r| <= ln2/2; exp(x) = 2^n * exp(r)
-    const double LN2 = 0.6931471805599453;
-    double n_d = x / LN2;
-    long long n = (long long)(n_d + (n_d >= 0.0 ? 0.5 : -0.5));
-    double r = x - (double)n * LN2;
-    // Taylor: 1 + r + r²/2 + r³/6 + r⁴/24 + r⁵/120 + r⁶/720 + r⁷/5040
-    double r2 = r*r, r3 = r2*r, r4 = r2*r2;
-    double sum = 1.0 + r + r2*0.5 + r3*(1.0/6.0) + r4*(1.0/24.0)
-                 + r4*r*(1.0/120.0) + r4*r2*(1.0/720.0) + r4*r3*(1.0/5040.0);
-    // 2^n via repeated double (cap to avoid overflow infinity loop)
-    double pow2 = 1.0;
-    if (n > 1023) n = 1023;
-    if (n < -1022) n = -1022;
-    if (n >= 0) for (long long i = 0; i < n; i++) pow2 *= 2.0;
-    else for (long long i = 0; i < -n; i++) pow2 *= 0.5;
-    return sum * pow2;
-}
-static double __attribute__((noinline)) hxlcl_log(double x) {
-    if (x <= 0.0) return -1e308;  // -inf approximation
-    // log(x) = log(m * 2^e) = log(m) + e*ln2 where m in [1, 2)
-    int e = 0;
-    while (x >= 2.0) { x *= 0.5; e++; }
-    while (x < 1.0) { x *= 2.0; e--; }
-    // Now x in [1, 2). Use log((1+u)/(1-u)) with u = (x-1)/(x+1).
-    double u = (x - 1.0) / (x + 1.0);
-    double u2 = u*u, u3 = u2*u, u5 = u3*u2, u7 = u5*u2;
-    double sum = 2.0 * (u + u3/3.0 + u5/5.0 + u7/7.0 + u7*u2/9.0);
-    return sum + (double)e * 0.6931471805599453;
-}
-static double __attribute__((noinline)) hxlcl_cos(double x) {
-    // Range reduce to [-pi, pi]
-    const double TWO_PI = 6.283185307179586;
-    const double PI = 3.141592653589793;
-    if (x < 0.0) x = -x;
-    while (x >= TWO_PI) x -= TWO_PI;
-    if (x > PI) x = TWO_PI - x;
-    // Now |x| <= pi. Taylor 8-term: 1 - x²/2! + x⁴/4! - ... + x¹⁴/14!
-    double x2 = x*x, x4 = x2*x2, x6 = x4*x2, x8 = x4*x4;
-    double sum = 1.0 - x2/2.0 + x4/24.0 - x6/720.0 + x8/40320.0
-                 - x8*x2/3628800.0 + x8*x4/479001600.0 - x8*x6/87178291200.0;
-    return sum;
-}
-static double __attribute__((noinline)) hxlcl_sin(double x) {
-    // sin(x) = cos(x - pi/2). Reuse cos helper to keep precision in sync.
-    const double PI_HALF = 1.5707963267948966;
-    return hxlcl_cos(x - PI_HALF);
-}
+// RUNTIME.md step-2 cycle 2 — math helper bodies MOVED to stdlib/
+// runtime/math.hexa. Thin C shims defined below `#include
+// "runtime_core.c"` use HexaVal wrap/unwrap. Forward decls only here
+// so cycle-46 callers earlier in the file can still link.
+static double hxlcl_fmod(double x, double y);
+static double hxlcl_exp(double x);
+static double hxlcl_log(double x);
+static double hxlcl_cos(double x);
+static double hxlcl_sin(double x);
 // RUNTIME.md step-2 cycle 1 — bodies MOVED below `#include
 // "runtime_core.c"` so they can use HexaVal / hexa_int / hexa_truthy
 // to delegate to the hexa-source `rt_isalnum`/_isalpha (defined in
@@ -1203,6 +1158,76 @@ static int hxlcl_isalnum(int c) {
 static int hxlcl_isalpha(int c) {
     return hexa_truthy(rt_isalpha(hexa_int((int64_t)c))) ? 1 : 0;
 }
+
+// RUNTIME.md step-2 cycle 2 — math helper hexa-source delegation.
+// Source of truth: stdlib/runtime/math.hexa. Same #ifndef pattern
+// as cycle 1: ap_post.c gets the macro, fallback C body skipped.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
+HexaVal rt_fmod(HexaVal x, HexaVal y) {
+    double dx = HX_FLOAT(x), dy = HX_FLOAT(y);
+    if (dy == 0.0) return hexa_float(0.0);
+    double q = dx / dy;
+    long long iq = (long long)q;
+    return hexa_float(dx - (double)iq * dy);
+}
+HexaVal rt_exp(HexaVal x) {
+    double dx = HX_FLOAT(x);
+    const double LN2 = 0.6931471805599453;
+    double n_d = dx / LN2;
+    long long n = (long long)(n_d + (n_d >= 0.0 ? 0.5 : -0.5));
+    double r = dx - (double)n * LN2;
+    double r2 = r*r, r3 = r2*r, r4 = r2*r2;
+    double sum = 1.0 + r + r2*0.5 + r3*(1.0/6.0) + r4*(1.0/24.0)
+                 + r4*r*(1.0/120.0) + r4*r2*(1.0/720.0) + r4*r3*(1.0/5040.0);
+    double pow2 = 1.0;
+    if (n > 1023) n = 1023;
+    if (n < -1022) n = -1022;
+    if (n >= 0) for (long long i = 0; i < n; i++) pow2 *= 2.0;
+    else for (long long i = 0; i < -n; i++) pow2 *= 0.5;
+    return hexa_float(sum * pow2);
+}
+HexaVal rt_log(HexaVal x) {
+    double dx = HX_FLOAT(x);
+    if (dx <= 0.0) return hexa_float(-1e308);
+    int e = 0;
+    while (dx >= 2.0) { dx *= 0.5; e++; }
+    while (dx < 1.0) { dx *= 2.0; e--; }
+    double u = (dx - 1.0) / (dx + 1.0);
+    double u2 = u*u, u3 = u2*u, u5 = u3*u2, u7 = u5*u2;
+    double sum = 2.0 * (u + u3/3.0 + u5/5.0 + u7/7.0 + u7*u2/9.0);
+    return hexa_float(sum + (double)e * 0.6931471805599453);
+}
+HexaVal rt_cos(HexaVal x) {
+    double dx = HX_FLOAT(x);
+    const double TWO_PI = 6.283185307179586;
+    const double PI = 3.141592653589793;
+    if (dx < 0.0) dx = -dx;
+    while (dx >= TWO_PI) dx -= TWO_PI;
+    if (dx > PI) dx = TWO_PI - dx;
+    double x2 = dx*dx, x4 = x2*x2, x6 = x4*x2, x8 = x4*x4;
+    double sum = 1.0 - x2/2.0 + x4/24.0 - x6/720.0 + x8/40320.0
+                 - x8*x2/3628800.0 + x8*x4/479001600.0 - x8*x6/87178291200.0;
+    return hexa_float(sum);
+}
+HexaVal rt_sin(HexaVal x) {
+    const double PI_HALF = 1.5707963267948966;
+    HexaVal shifted = hexa_float(HX_FLOAT(x) - PI_HALF);
+    return rt_cos(shifted);
+}
+#else
+extern HexaVal rt_fmod(HexaVal x, HexaVal y);
+extern HexaVal rt_exp(HexaVal x);
+extern HexaVal rt_log(HexaVal x);
+extern HexaVal rt_cos(HexaVal x);
+extern HexaVal rt_sin(HexaVal x);
+#endif
+static double hxlcl_fmod(double x, double y) {
+    return HX_FLOAT(rt_fmod(hexa_float(x), hexa_float(y)));
+}
+static double hxlcl_exp(double x) { return HX_FLOAT(rt_exp(hexa_float(x))); }
+static double hxlcl_log(double x) { return HX_FLOAT(rt_log(hexa_float(x))); }
+static double hxlcl_cos(double x) { return HX_FLOAT(rt_cos(hexa_float(x))); }
+static double hxlcl_sin(double x) { return HX_FLOAT(rt_sin(hexa_float(x))); }
 
 // ── Extern FFI: dlopen / dlsym / dispatch ───────────────
 
@@ -3301,37 +3326,37 @@ int64_t hexa_float_to_int(double f) {
     return (int64_t)f;
 }
 
-HexaVal hexa_math_tanh(HexaVal x) { return hexa_float(tanh(_hexa_f(x))); }
-HexaVal hexa_math_sin(HexaVal x)  { return hexa_float(hxlcl_sin(_hexa_f(x))); }
-HexaVal hexa_math_cos(HexaVal x)  { return hexa_float(hxlcl_cos(_hexa_f(x))); }
-HexaVal hexa_math_tan(HexaVal x)  { return hexa_float(tan(_hexa_f(x))); }
-HexaVal hexa_math_asin(HexaVal x) { return hexa_float(asin(_hexa_f(x))); }
-HexaVal hexa_math_acos(HexaVal x) { return hexa_float(acos(_hexa_f(x))); }
-HexaVal hexa_math_atan(HexaVal x) { return hexa_float(atan(_hexa_f(x))); }
-HexaVal hexa_math_atan2(HexaVal y, HexaVal x) { return hexa_float(atan2(_hexa_f(y), _hexa_f(x))); }
-HexaVal hexa_math_log(HexaVal x)  { return hexa_float(hxlcl_log(_hexa_f(x))); }
-HexaVal hexa_math_exp(HexaVal x)  { return hexa_float(hxlcl_exp(_hexa_f(x))); }
-HexaVal hexa_math_abs(HexaVal x)  { return hexa_float(fabs(_hexa_f(x))); }
-HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt(_hexa_f(x))); }
-HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(_hexa_f(x))); }
-HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(_hexa_f(x))); }
-HexaVal hexa_math_round(HexaVal x){ return hexa_float(round(_hexa_f(x))); }
-HexaVal hexa_math_pow(HexaVal b, HexaVal e) { return hexa_float(pow(_hexa_f(b), _hexa_f(e))); }
+HexaVal hexa_math_tanh(HexaVal x) { return hexa_float(tanh(HX_FLOAT(x))); }
+HexaVal hexa_math_sin(HexaVal x)  { return hexa_float(hxlcl_sin(HX_FLOAT(x))); }
+HexaVal hexa_math_cos(HexaVal x)  { return hexa_float(hxlcl_cos(HX_FLOAT(x))); }
+HexaVal hexa_math_tan(HexaVal x)  { return hexa_float(tan(HX_FLOAT(x))); }
+HexaVal hexa_math_asin(HexaVal x) { return hexa_float(asin(HX_FLOAT(x))); }
+HexaVal hexa_math_acos(HexaVal x) { return hexa_float(acos(HX_FLOAT(x))); }
+HexaVal hexa_math_atan(HexaVal x) { return hexa_float(atan(HX_FLOAT(x))); }
+HexaVal hexa_math_atan2(HexaVal y, HexaVal x) { return hexa_float(atan2(HX_FLOAT(y), HX_FLOAT(x))); }
+HexaVal hexa_math_log(HexaVal x)  { return hexa_float(hxlcl_log(HX_FLOAT(x))); }
+HexaVal hexa_math_exp(HexaVal x)  { return hexa_float(hxlcl_exp(HX_FLOAT(x))); }
+HexaVal hexa_math_abs(HexaVal x)  { return hexa_float(fabs(HX_FLOAT(x))); }
+HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt(HX_FLOAT(x))); }
+HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(HX_FLOAT(x))); }
+HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(HX_FLOAT(x))); }
+HexaVal hexa_math_round(HexaVal x){ return hexa_float(round(HX_FLOAT(x))); }
+HexaVal hexa_math_pow(HexaVal b, HexaVal e) { return hexa_float(pow(HX_FLOAT(b), HX_FLOAT(e))); }
 // 2026-05-20 (blocker-3 fmod-shim): direct libm fmod() exposed as `fmod(x, y)`
 // from hexa user code. Distinct from `%` which routes through hexa_mod
 // (int+float-aware dispatch); this is the pure float-only path used by
 // scientific kernels that want the libm semantics directly.
-HexaVal hexa_math_fmod(HexaVal a, HexaVal b) { return hexa_float(hxlcl_fmod(_hexa_f(a), _hexa_f(b))); }
-HexaVal hexa_math_min(HexaVal a, HexaVal b) { return hexa_float(fmin(_hexa_f(a), _hexa_f(b))); }
+HexaVal hexa_math_fmod(HexaVal a, HexaVal b) { return hexa_float(hxlcl_fmod(HX_FLOAT(a), HX_FLOAT(b))); }
+HexaVal hexa_math_min(HexaVal a, HexaVal b) { return hexa_float(fmin(HX_FLOAT(a), HX_FLOAT(b))); }
 // G1-FLOAT-PRIM 2026-05-06 — see .roadmap.stdlib.G1-FLOAT-PRIM. lgamma is the
 // log-gamma function used by Beta-Binomial conjugate posteriors throughout
 // the hexa-bio Bayesian audit suite (14 callsites in _python_bridge/module).
 // isnan/isinf/isfinite mirror C99 classifiers; emit hexa boolean.
-HexaVal hexa_math_lgamma(HexaVal x)   { return hexa_float(lgamma(_hexa_f(x))); }
-HexaVal hexa_math_isnan(HexaVal x)    { return hexa_bool(isnan(_hexa_f(x)) ? 1 : 0); }
-HexaVal hexa_math_isinf(HexaVal x)    { return hexa_bool(isinf(_hexa_f(x)) ? 1 : 0); }
-HexaVal hexa_math_isfinite(HexaVal x) { return hexa_bool(isfinite(_hexa_f(x)) ? 1 : 0); }
-HexaVal hexa_math_max(HexaVal a, HexaVal b) { return hexa_float(fmax(_hexa_f(a), _hexa_f(b))); }
+HexaVal hexa_math_lgamma(HexaVal x)   { return hexa_float(lgamma(HX_FLOAT(x))); }
+HexaVal hexa_math_isnan(HexaVal x)    { return hexa_bool(isnan(HX_FLOAT(x)) ? 1 : 0); }
+HexaVal hexa_math_isinf(HexaVal x)    { return hexa_bool(isinf(HX_FLOAT(x)) ? 1 : 0); }
+HexaVal hexa_math_isfinite(HexaVal x) { return hexa_bool(isfinite(HX_FLOAT(x)) ? 1 : 0); }
+HexaVal hexa_math_max(HexaVal a, HexaVal b) { return hexa_float(fmax(HX_FLOAT(a), HX_FLOAT(b))); }
 
 // ── ML builtins: matvec, dot ─────────────────────────────────
 HexaVal hexa_matvec(HexaVal w, HexaVal x, HexaVal rows_v, HexaVal cols_v) {
@@ -3344,7 +3369,7 @@ HexaVal hexa_matvec(HexaVal w, HexaVal x, HexaVal rows_v, HexaVal cols_v) {
         for (int64_t c = 0; c < cols; c++) {
             HexaVal wv = hexa_index_get(w, hexa_int(r * cols + c));
             HexaVal xv = hexa_index_get(x, hexa_int(c));
-            acc += _hexa_f(wv) * _hexa_f(xv);
+            acc += HX_FLOAT(wv) * HX_FLOAT(xv);
         }
         out = hexa_array_push(out, hexa_float(acc));
     }
@@ -3404,7 +3429,7 @@ HexaVal rt_read_lines(HexaVal path) {
 }
 
 HexaVal hexa_from_char_code(HexaVal n) {
-    int64_t code = HX_IS_INT(n) ? HX_INT(n) : (int64_t)_hexa_f(n);
+    int64_t code = HX_IS_INT(n) ? HX_INT(n) : (int64_t)HX_FLOAT(n);
     if (code < 0) code = 0;
     if (code < 0x80) {
         char* s = (char*)malloc(2); s[0] = (char)code; s[1] = 0;
@@ -3436,7 +3461,7 @@ HexaVal hexa_from_char_code(HexaVal n) {
 // has existed without a runtime impl — the new tier-2 transpiler emits
 // it from self/main.hexa::cmd_url_decode, exposing the gap).
 HexaVal hexa_chr_byte(HexaVal n) {
-    int64_t code = HX_IS_INT(n) ? HX_INT(n) : (int64_t)_hexa_f(n);
+    int64_t code = HX_IS_INT(n) ? HX_INT(n) : (int64_t)HX_FLOAT(n);
     char* s = (char*)malloc(2);
     s[0] = (char)(code & 0xFF);
     s[1] = 0;
@@ -3476,7 +3501,7 @@ HexaVal hexa_bytes_to_str_raw(HexaVal arr) {
     HexaVal* items = HX_ARR_ITEMS(arr);
     for (int64_t i = 0; i < n; i++) {
         HexaVal v = items[i];
-        int64_t b = HX_IS_INT(v) ? HX_INT(v) : (int64_t)_hexa_f(v);
+        int64_t b = HX_IS_INT(v) ? HX_INT(v) : (int64_t)HX_FLOAT(v);
         if (b < 0 || b > 255) {
             // Out-of-range → return empty per Phase 1 policy.
             return hexa_str("");
@@ -8275,7 +8300,7 @@ HexaVal rt_append_file(HexaVal path, HexaVal content) {
 }
 
 HexaVal hexa_bin(HexaVal n) {
-    uint64_t v = HX_IS_INT(n) ? (uint64_t)HX_INT(n) : (uint64_t)_hexa_f(n);
+    uint64_t v = HX_IS_INT(n) ? (uint64_t)HX_INT(n) : (uint64_t)HX_FLOAT(n);
     char buf[65]; int pos = 0;
     if (v == 0) { buf[pos++] = '0'; }
     while (v > 0 && pos < 64) { buf[pos++] = (char)('0' + (v & 1)); v >>= 1; }
@@ -8286,7 +8311,7 @@ HexaVal hexa_bin(HexaVal n) {
 }
 
 HexaVal hexa_hex(HexaVal n) {
-    uint64_t v = HX_IS_INT(n) ? (uint64_t)HX_INT(n) : (uint64_t)_hexa_f(n);
+    uint64_t v = HX_IS_INT(n) ? (uint64_t)HX_INT(n) : (uint64_t)HX_FLOAT(n);
     char* out = (char*)malloc(20);
     snprintf(out, 20, "%llx", (unsigned long long)v);
     return hexa_str_own(out);
@@ -8501,7 +8526,7 @@ HexaVal hexa_utc_iso_now(void) {
 
 // utc_iso_format(epoch_sec): epoch sec → "YYYY-MM-DDTHH:MM:SSZ".
 HexaVal hexa_utc_iso_format(HexaVal epoch_v) {
-    int64_t e = HX_IS_INT(epoch_v) ? HX_INT(epoch_v) : (int64_t)_hexa_f(epoch_v);
+    int64_t e = HX_IS_INT(epoch_v) ? HX_INT(epoch_v) : (int64_t)HX_FLOAT(epoch_v);
     time_t t = (time_t)e;
     struct tm g;
     gmtime_r(&t, &g);

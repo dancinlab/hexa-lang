@@ -1,0 +1,104 @@
+// stdlib/runtime/math.hexa — RUNTIME.md step-2 cycle 2.
+//
+// Hexa-source replacements for `hxlcl_cos`/_sin/_exp/_log/_fmod
+// (self/runtime.c cycle 59). Taylor / range-reduction approximations.
+// NOT bit-exact with libm. aprime_cc never calls them in compile-
+// then-exit (flame/NN code paths linked but unreachable from the
+// compiler hot loop).
+//
+// Cost model: HexaVal wrap is `hexa_float` (8-byte allocation in
+// TAG_FLOAT slot) + return unwrap is `HX_FLOAT`. Two ~5ns each
+// surrounding a ~100ns Taylor body. Acceptable for any caller.
+
+pub fn rt_fmod(x: float, y: float) -> float {
+    if y == 0.0 { return 0.0 }
+    let q = x / y
+    let iq = q as int  // truncation
+    return x - (iq as float) * y
+}
+
+pub fn rt_exp(x: float) -> float {
+    // Range reduction: x = n*ln2 + r, |r| <= ln2/2. exp(x) = 2^n * exp(r)
+    let LN2 = 0.6931471805599453
+    let n_d = x / LN2
+    let mut n_i: int = 0
+    if n_d >= 0.0 {
+        n_i = (n_d + 0.5) as int
+    } else {
+        n_i = (n_d - 0.5) as int
+    }
+    let r = x - (n_i as float) * LN2
+    // Taylor: 1 + r + r²/2 + r³/6 + ... up to r^7/5040
+    let r2 = r * r
+    let r3 = r2 * r
+    let r4 = r2 * r2
+    let sum = 1.0 + r + r2 * 0.5 + r3 * (1.0 / 6.0) + r4 * (1.0 / 24.0)
+            + r4 * r * (1.0 / 120.0) + r4 * r2 * (1.0 / 720.0)
+            + r4 * r3 * (1.0 / 5040.0)
+    // 2^n via repeated double (cap for safety)
+    let mut nc = n_i
+    if nc > 1023 { nc = 1023 }
+    if nc < -1022 { nc = -1022 }
+    let mut pow2 = 1.0
+    if nc >= 0 {
+        let mut i = 0
+        while i < nc {
+            pow2 = pow2 * 2.0
+            i = i + 1
+        }
+    } else {
+        let mut i = 0
+        let limit = -nc
+        while i < limit {
+            pow2 = pow2 * 0.5
+            i = i + 1
+        }
+    }
+    return sum * pow2
+}
+
+pub fn rt_log(x: float) -> float {
+    if x <= 0.0 { return -1e308 }  // -inf approximation
+    // log(x) = log(m * 2^e) = log(m) + e*ln2 where m in [1, 2)
+    let mut m = x
+    let mut e: int = 0
+    while m >= 2.0 {
+        m = m * 0.5
+        e = e + 1
+    }
+    while m < 1.0 {
+        m = m * 2.0
+        e = e - 1
+    }
+    // log((1+u)/(1-u)) with u = (m-1)/(m+1). Series 2(u + u^3/3 + u^5/5 + ...).
+    let u = (m - 1.0) / (m + 1.0)
+    let u2 = u * u
+    let u3 = u2 * u
+    let u5 = u3 * u2
+    let u7 = u5 * u2
+    let sum = 2.0 * (u + u3 / 3.0 + u5 / 5.0 + u7 / 7.0 + u7 * u2 / 9.0)
+    return sum + (e as float) * 0.6931471805599453
+}
+
+pub fn rt_cos(x: float) -> float {
+    let TWO_PI = 6.283185307179586
+    let PI = 3.141592653589793
+    let mut a = x
+    if a < 0.0 { a = -a }
+    while a >= TWO_PI { a = a - TWO_PI }
+    if a > PI { a = TWO_PI - a }
+    // |a| <= pi. Taylor 8-term: 1 - a²/2! + a⁴/4! - ... + a¹⁴/14!
+    let a2 = a * a
+    let a4 = a2 * a2
+    let a6 = a4 * a2
+    let a8 = a4 * a4
+    return 1.0 - a2 / 2.0 + a4 / 24.0 - a6 / 720.0 + a8 / 40320.0
+         - a8 * a2 / 3628800.0 + a8 * a4 / 479001600.0
+         - a8 * a6 / 87178291200.0
+}
+
+pub fn rt_sin(x: float) -> float {
+    // sin(x) = cos(x - pi/2). Same precision as rt_cos.
+    let PI_HALF = 1.5707963267948966
+    return rt_cos(x - PI_HALF)
+}

@@ -8397,3 +8397,16 @@ helpers from step 1 to hexa source. Cost ~5ns per call (HexaVal
 wrap+unwrap); acceptable for aprime_cc compile-then-exit flow.
 
 @cite cycle 65 entry (step 1 acceptance).
+
+### 2026-05-21 — RUNTIME.md step 2 cycle 2 — math helpers (5 fns)
+
+cycle 2 = port cos/sin/exp/log/fmod from self/runtime.c to
+stdlib/runtime/math.hexa. Same #ifndef HEXA_HAS_HEXA_RT_STDLIB
+two-mode pattern as cycle 1.
+
+aprime_cc build PASS, smoke exit(42) PASS, 5 externs unchanged,
+binary 1,140,376 B (+736 B for extra transpile of hexa fns).
+
+step-2 cumulative: 7 / ~47 hxlcl_* helpers ported = 15% of step 2.
+
+@cite step 2 cycle 1 entry.

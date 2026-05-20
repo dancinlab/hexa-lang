@@ -833,3 +833,18 @@ For each Tier-A sub-phase:
   (~5 ns each). Acceptable for compile-then-exit aprime_cc; if
   flame/NN hot loops were affected, would need direct extern int
   ABI (deferred Phase 3 issue)
+
+### 2026-05-21 — step 2 cycle 2: hxlcl_cos/sin/exp/log/fmod → stdlib/runtime/math.hexa
+
+- ✅ 5 math helpers ported to hexa. `stdlib/runtime/math.hexa` adds
+  `pub fn rt_cos/sin/exp/log/fmod(x: float) -> float`. Same `#ifndef
+  HEXA_HAS_HEXA_RT_STDLIB` two-mode pattern as cycle 1
+- aprime_cc smoke exit(42) PASS · 5 externs preserved · binary
+  1,140,376 B (+736 B from cycle 1 due to extra hexa fns transpiled
+  into ap_post.c)
+- Math hexa fns use `float` typing (HexaVal TAG_FLOAT) so wrap cost
+  is just bit-tag flip — no allocation. The 5-8 term Taylor bodies
+  are same logic as cycle 59 C stubs
+- step-2 cumulative: **7 / ~47 hxlcl_* helpers ported** (~15%)
+- Next batch candidates: pthread stubs (12 fns · all noop return 0
+  · trivial port), then libm-adjacent (atexit/exit/etc)
