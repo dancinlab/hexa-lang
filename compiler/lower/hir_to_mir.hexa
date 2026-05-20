@@ -1983,44 +1983,92 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 ctx_a = _bind(ctx_a, pat.text, dst_a.id)
                 ctx2 = ctx_a
             } else if pat.kind == "enum_path" {
-                // RFC-074 Phase 3 (compiler/ tree) — multi-arg payload destructure.
+                // RFC-074 Phase 3 + Phase 5 (compiler/ tree) — multi-arg payload destructure.
                 //
-                // Construction (enum_path producer, this file L2173-2207) lays
-                // each payload slot under a positional key "__p<i>" inside the
-                // map-backed enum value. The pattern binders here MUST extract
-                // each binder from its OWN slot, not from the whole scrut map.
+                // Phase 5 storage-swap (this cycle): the producer (enum_path
+                // arm, this file L2210-2255) now stores the payload as a
+                // single contiguous array under one positional key
+                // "__payload" when arity >= 2 — the per-cell "__p<i>" map
+                // slot layout from Phase 3 was a transitional shape. The
+                // pattern destructure must extract symmetrically: arity >= 2
+                // walks `__payload` once (single field-get) then index-gets
+                // each cell by integer ordinal (array_get).
                 //
-                // Previously every binder was emitted with op="payload" and
-                // args=[scrut_op] (one slot's-worth of value bound under N
-                // names), which (a) silently truncated to a single field, and
-                // (b) routed through a `payload` op with no codegen consumer
-                // (Phase 4 still pending). Single-arg → __p0 subsumes the
-                // legacy single-field path with zero behavior delta (only one
-                // slot existed, only __p0 referenced). Multi-arg now lowers
-                // each ident binder to its positional slot via the field
-                // op = map_get(scrut, "__p<i>") — symmetric with construction.
-                let mut pi = 0
-                while pi < len(pat.children) {
-                    let pc = pat.children[pi]
-                    if pc.kind == "ident" && len(pc.text) > 0 && pc.text != "_" {
-                        let mut ctx_b = _fresh_local(ctx2, pc.typ, pc.text)
-                        let dst_b = _lr_locals[len(_lr_locals) - 1]
-                        let mut a2: [Operand] = []
-                        a2.push(scrut_op)
-                        a2.push(_const_str_op("__p" + to_string(pi)))
-                        let s2 = Stmt {
-                            kind: STMT_ASSIGN,
-                            dst: dst_b,
-                            op: "field",
-                            args: a2,
-                            target_block: -1,
-                            target_block_else: -1
-                        }
-                        ctx_b = _push_stmt(ctx_b, s2)
-                        ctx_b = _bind(ctx_b, pc.text, dst_b.id)
-                        ctx2 = ctx_b
+                // Arity 0 / 1 is unchanged — those keep the legacy per-slot
+                // "__p0" field-get (which is the construction shape for
+                // arity 1, op="struct_lit"); zero behavior delta on the
+                // single-field path that A1-A5 already byte-eq-validated.
+                if len(pat.children) >= 2 {
+                    // Multi-cell: pull the contiguous payload array out
+                    // ONCE via the existing map-backed `field` op, then
+                    // index_get each binder slot by integer ordinal. This
+                    // collapses N "__p<i>" map lookups + N hash compares
+                    // into 1 map lookup + N O(1) array_get's per match-arm
+                    // (same per-arm complexity, fewer string-key hashes).
+                    let mut ctx_p = _fresh_local(ctx2, pat.typ, "payload")
+                    let pdst = _lr_locals[len(_lr_locals) - 1]
+                    let mut pa: [Operand] = []
+                    pa.push(scrut_op)
+                    pa.push(_const_str_op("__payload"))
+                    let ps = Stmt {
+                        kind: STMT_ASSIGN,
+                        dst: pdst,
+                        op: "field",
+                        args: pa,
+                        target_block: -1,
+                        target_block_else: -1
                     }
-                    pi = pi + 1
+                    ctx_p = _push_stmt(ctx_p, ps)
+                    ctx2 = ctx_p
+                    let payload_op = _local_op(pdst.id)
+                    let mut pi = 0
+                    while pi < len(pat.children) {
+                        let pc = pat.children[pi]
+                        if pc.kind == "ident" && len(pc.text) > 0 && pc.text != "_" {
+                            let mut ctx_b = _fresh_local(ctx2, pc.typ, pc.text)
+                            let dst_b = _lr_locals[len(_lr_locals) - 1]
+                            let mut a2: [Operand] = []
+                            a2.push(payload_op)
+                            a2.push(_const_int_op(pi))
+                            let s2 = Stmt {
+                                kind: STMT_ASSIGN,
+                                dst: dst_b,
+                                op: "index",
+                                args: a2,
+                                target_block: -1,
+                                target_block_else: -1
+                            }
+                            ctx_b = _push_stmt(ctx_b, s2)
+                            ctx_b = _bind(ctx_b, pc.text, dst_b.id)
+                            ctx2 = ctx_b
+                        }
+                        pi = pi + 1
+                    }
+                } else {
+                    // Arity 0 / 1 — legacy per-slot extract preserved.
+                    let mut pi = 0
+                    while pi < len(pat.children) {
+                        let pc = pat.children[pi]
+                        if pc.kind == "ident" && len(pc.text) > 0 && pc.text != "_" {
+                            let mut ctx_b = _fresh_local(ctx2, pc.typ, pc.text)
+                            let dst_b = _lr_locals[len(_lr_locals) - 1]
+                            let mut a2: [Operand] = []
+                            a2.push(scrut_op)
+                            a2.push(_const_str_op("__p" + to_string(pi)))
+                            let s2 = Stmt {
+                                kind: STMT_ASSIGN,
+                                dst: dst_b,
+                                op: "field",
+                                args: a2,
+                                target_block: -1,
+                                target_block_else: -1
+                            }
+                            ctx_b = _push_stmt(ctx_b, s2)
+                            ctx_b = _bind(ctx_b, pc.text, dst_b.id)
+                            ctx2 = ctx_b
+                        }
+                        pi = pi + 1
+                    }
                 }
             } else if pat.kind == "struct_pattern" {
                 // Stage1 punch list C10 — bind each named struct-field
@@ -2189,26 +2237,78 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // arm comparison in the same pass).
     //
     // RFC 074 Phase 4 (compiler/ tree) — multi-cell payload op split.
+    // RFC 074 Phase 5 (compiler/ tree) — contiguous payload storage.
     //
     // Single-cell payload (arity 0 or 1) keeps the proven 3-backend
     // `struct_lit` op (a351b1c9/87f3c073/5dfc5e32) so the byte-eq
     // legacy path is preserved verbatim — single-arg enum values still
     // lower to the same MIR shape as before this cycle.
     //
-    // Multi-cell payload (arity >= 2) now lifts to a distinct
-    // `enum_ctor` op. The body it walks is identical to struct_lit
-    // (the `[type_str, k0, v0, k1, v1, ...]` shape) so the proven
-    // 3-backend per-cell loop applies unchanged, but the op string is
-    // now a semantic marker for "multi-cell payload capture" — a
-    // future cycle can swap the storage for a contiguous N-cell layout
-    // by adding a single `enum_ctor` branch to each backend without
-    // touching struct_lit or re-discriminating on `args.length`.
+    // Multi-cell payload (arity >= 2) lifts to a distinct `enum_ctor`
+    // op AND now packs every payload cell into a SINGLE contiguous
+    // array stored under the positional key "__payload" — Phase 5
+    // storage swap. The per-cell "__p<i>" map slot layout from
+    // Phase 3/4 was a transitional shape; Phase 5 collapses N map slots
+    // into 1 array slot, replacing N string-keyed hash inserts with
+    // 1 string-keyed hash + N O(1) `hexa_array_push` calls.
     //
-    // Match-arm destructure side (L1985-2024 above) is op-agnostic —
-    // it reads `__p<i>` slots out of the value irrespective of the
-    // producer op string, so this split is one-way (producer-only).
+    // Backend impact is zero: enum_ctor still walks a pairwise
+    // [type_str, k_i, v_i, ...] arg list with the proven map_new +
+    // per-pair map_set loop (133f4a0a). The producer now emits only
+    // TWO pairs (("__tag", hash) and ("__payload", payload_array_op))
+    // and pre-lowers the payload children to a single array_lit STMT.
+    // The proper sum-typed MTag/MPack carrier (RFC §3.2) is a future
+    // sub-cycle; Phase 5 is storage swap only.
+    //
+    // Match-arm destructure side (L1985-2078 above) is symmetric:
+    // arity >= 2 now extracts the payload array once via the existing
+    // field op ("__payload"), then index-gets each binder ordinal.
     if k == "enum_path" {
         let mut ctx2 = ctx
+        if len(e.children) >= 2 {
+            // RFC 074 Phase 5 — multi-cell contiguous payload.
+            // (1) pre-lower every payload child, collect operands.
+            let mut elem_ops: [Operand] = []
+            let mut ic = 0
+            while ic < len(e.children) {
+                let r = _lower_hexpr(ctx2, e.children[ic])
+                ctx2 = r.ctx
+                elem_ops.push(r.operand)
+                ic = ic + 1
+            }
+            // (2) emit a fresh array_lit STMT containing all payload cells.
+            ctx2 = _fresh_local(ctx2, e.typ, "payload")
+            let pdst = _lr_locals[len(_lr_locals) - 1]
+            let ps = Stmt {
+                kind: STMT_ASSIGN,
+                dst: pdst,
+                op: "array_lit",
+                args: elem_ops,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt(ctx2, ps)
+            // (3) emit the enum_ctor with two pairs: __tag + __payload.
+            let mut args: [Operand] = []
+            args.push(_const_str_op("enum_" + e.text))
+            args.push(_const_str_op("__tag"))
+            args.push(_const_int_op(_path_hash(e.text)))
+            args.push(_const_str_op("__payload"))
+            args.push(_local_op(pdst.id))
+            ctx2 = _fresh_local(ctx2, e.typ, "enum_" + e.text)
+            let dst = _lr_locals[len(_lr_locals) - 1]
+            let s = Stmt {
+                kind: STMT_ASSIGN,
+                dst: dst,
+                op: "enum_ctor",
+                args: args,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ctx2 = _push_stmt(ctx2, s)
+            return _value(ctx2, _local_op(dst.id))
+        }
+        // Arity 0 / 1 — legacy struct_lit / per-slot path preserved.
         let mut args: [Operand] = []
         args.push(_const_str_op("enum_" + e.text))
         args.push(_const_str_op("__tag"))
@@ -2223,13 +2323,10 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         }
         ctx2 = _fresh_local(ctx2, e.typ, "enum_" + e.text)
         let dst = _lr_locals[len(_lr_locals) - 1]
-        // RFC 074 Phase 4 — multi-cell payload op selector.
-        let mut ctor_op = "struct_lit"
-        if len(e.children) >= 2 { ctor_op = "enum_ctor" }
         let s = Stmt {
             kind: STMT_ASSIGN,
             dst: dst,
-            op: ctor_op,
+            op: "struct_lit",
             args: args,
             target_block: -1,
             target_block_else: -1

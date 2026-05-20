@@ -5639,3 +5639,119 @@ cross-link: inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md
 gABI §4.18 + Apple Mach-O spec anchors) · `@D g5` hexa-native-only
 (hexa_ld is the hexa-native dynamic linker — no LLVM lld, no system ld) ·
 `@D g_inbox_processing_loop` Shape A.
+
+---
+
+## 2026-05-20 — RFC 074 Phase 5 (compiler/lower contiguous payload storage swap)
+
+**Status:** ✅ LANDED · Shape A · 2 SSOT files (`compiler/lower/hir_to_mir.hexa` +
+`compiler/lower/mir_test.hexa`) + 1 RFC update + 1 PLAN entry. Parse-gate
+PASS on both SSOT files. No `inbox/PATCHES.yaml` touch. No binary promote
+(`@D g_commit_push_deploy` deferred — compiler-source-only diff per SOP §7).
+
+**What landed:**
+
+Heritage: E1 (`a0cd5c57`) Phase 1+2 — parser + AST `typs[]` carrier + bind-
+time HX2004 arity registry. F4 (`b6aae978`) Phase 2.1 — types.hexa per-slot
+HX2005 element-type check. F5 (`feafe1db`) Phase 3 — hir_to_mir per-slot
+binder fan-out + mir_test case (d) HIR→MIR fixture. G1 (`133f4a0a`) Phase 4
+— per-target multi-cell `enum_ctor` codegen op-string split, body byte-eq
+with struct_lit (semantic marker for "multi-cell payload capture", awaiting
+storage swap). G1 report explicitly punted (2): "Physical contiguous-cell
+payload storage (Phase 5)". This cycle = that storage swap.
+
+**Producer side (`hir_to_mir.hexa` `enum_path` arm, L2210+):** arity-branched
+lowering. Arity 0/1 keeps the byte-eq legacy `struct_lit` per-`__p<i>` path
+verbatim. Arity ≥ 2 now (a) pre-lowers every payload child into operand
+list, (b) emits a fresh `STMT_ASSIGN op="array_lit"` packing every cell
+into a contiguous payload array under a fresh local `payload`, (c) emits
+the `enum_ctor` STMT with exactly TWO key/val pairs — `("__tag", hash)` +
+`("__payload", payload_array_local)` — collapsing N `__p<i>` map slots from
+Phase 3/4 into 1 array slot.
+
+**Destructure side (`hir_to_mir.hexa` `enum_path` pattern arm, L1985+):**
+symmetric arity branch. Arity 0/1 keeps the legacy per-slot `__p<i>` field-
+get unchanged (single-binder byte-eq). Arity ≥ 2 now (a) extracts the
+payload array ONCE via the existing `field` op (`scrut, "__payload"`),
+(b) per binder lowers to `STMT_ASSIGN op="index" args=[payload_local,
+const_int(i)]` — symmetric with construction, O(1) per cell after a single
+hash lookup. Was: N hash lookups per arm. Is: 1 hash lookup + N O(1)
+ordinal indices.
+
+**Test (`mir_test.hexa` case (d)):** assertion battery rewritten to the
+Phase 5 MIR shape — (1) ONE `array_lit` STMT with ≥ 2 elem operands, (2)
+ONE `enum_ctor` STMT with const_str `__tag` AND `__payload` keys (no more
+`__p0`/`__p1` const_str keys), (3) ONE `field` extract on `__payload`,
+(4) TWO `index` extracts on `const_int 0` AND `const_int 1`. The
+pre-Phase-5 lowering fails assertion (4) — the ordinal-extract requirement
+is the load-bearing falsifier F-074-P5-CONTIGUOUS-STORAGE.
+
+**Backend impact: zero.** The proven 3-backend `enum_ctor` per-pair walk
+(133f4a0a) consumes the new 2-pair arg list under the same
+`hexa_map_new + hexa_map_set` ABI (now N=2 set calls instead of N+1).
+The `array_lit` STMT routes through the proven 3-backend
+`hexa_array_new + hexa_array_push` loop (a351b1c9). The `index` STMT
+routes through the proven 3-backend `hexa_index_get` dispatch (a351b1c9,
+runtime array/map dispatch via `hexa_index_get`). No new runtime symbol;
+no new codegen branch; no perturbation of `struct_lit` / `field` / `index`
+codegen.
+
+**Falsifier (F-074-P5-CONTIGUOUS-STORAGE):** codified in `mir_test.hexa`
+case (d). HIR `Event::Click(7, 9)` + `match e { Event::Click(x, y) -> x + y }`
+must lower to MIR containing (a) ONE `array_lit` STMT with 2 elem operands,
+(b) ONE `enum_ctor` STMT carrying const_str `__tag` AND `__payload` keys
+(no `__p0`/`__p1` present), (c) ONE `field` extract on `__payload`,
+(d) TWO `index` extracts on `const_int 0` AND `const_int 1`. The
+Phase-3/Phase-4 per-slot `__p<i>` lowering fails (b) + (d); only the
+Phase-5 storage-swap producer + destructure passes.
+
+**Honest scope (`@D g3`):**
+- **Storage swap ONLY.** The MIR value carrier is STILL a string-
+  discriminated map (`{__tag, __payload}`) — the proper sum-typed
+  `MTag`/`MPack` carrier (RFC §3.2) is deferred to a future sub-cycle.
+  Cell access complexity drops from N hash lookups to 1 hash lookup +
+  N O(1) ordinal indices per match arm, but the outer container is
+  unchanged.
+- **Arity-1 byte-eq preserved verbatim.** The struct_lit path for arity
+  0/1 enum variants is untouched; existing single-field consumers (A1-A5
+  on self/ tree, plus all compiler/ tree arity-1 enums today) lower to
+  the identical MIR shape they did pre-cycle.
+- **Backend / runtime ABI unchanged.** No new runtime symbol, no new
+  codegen branch. The 3-backend `enum_ctor` handler consumes the new
+  2-pair arg list with no diff; the `array_lit` + `index` STMTs reuse
+  the shipped 3-backend dispatch.
+- **No `inbox/PATCHES.yaml` touch.**
+- **No binary promote** (`@D g_commit_push_deploy` deferred — compiler-
+  source-only diff per `@D g_inbox_processing_loop` SOP §7).
+- **conflict-marker cleanup**: RFC 074 markdown had two leftover
+  `<<<<<<< HEAD … >>>>>>>` Phase-2.1 status marker blocks from a
+  prior cherry-pick; cleaned up to the unified Phase-1+2+2.1+3+4+5 status
+  line in the same edit. No semantic drift.
+
+**Falsifier matrix:** F-074-P5-CONTIGUOUS-STORAGE PASS in code (mir_test
+case (d) ordinal-extract assertion). Parse-gate PASS on both SSOT files.
+codegen_test `_build_case_enum_ctor3` (3-cell synthetic fixture, hand-
+built) is unchanged and continues to PASS — it tests the backend
+`enum_ctor` handler in isolation under a 4-pair arg list (`__tag`/
+`__p0`/`__p1`/`__p2`), which still exercises the same per-pair loop the
+new 2-pair Phase-5 producer rides on. The fixture-vs-producer split is
+intentional: backend invariance is the load-bearing fact.
+
+**Files:**
+```
+ compiler/lower/hir_to_mir.hexa                                       |  +~95 -~25  (producer arity branch + destructure arity branch)
+ compiler/lower/mir_test.hexa                                         |  +~45 -~32  (case (d) Phase 5 assertion battery)
+ inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md | +~40 -3   (Phase 5 status + Phase 5 row + F-P5 falsifier + Phase 6 renumber + conflict-marker cleanup)
+ compiler/PLAN.md                                                     | +<this>     (this entry)
+```
+
+cross-link: inbox/rfc_drafts_2026_05_20/rfc_074_enum_multi_field_payload_compiler_tree.md
+§3 Phase 5 (new row) + §5 F-074-P5-CONTIGUOUS-STORAGE (new falsifier) ·
+G1 commit `133f4a0a` (Phase 4 op-string split heritage) · F5 commit
+`feafe1db` (Phase 3 binder fan-out heritage) · `@D g3` real-limits-first
+(O(1) ordinal-index access vs N hash lookups per arm — concrete
+complexity drop, not a lattice tautology) · `@D g5` hexa-native-only
+(no new runtime symbol; reuses shipped `hexa_array_new` /
+`hexa_array_push` / `hexa_index_get` / `hexa_map_new` / `hexa_map_set` /
+`hexa_map_get` ABI) · `@D g_inbox_processing_loop` Shape A (surgical;
+producer + destructure mirror).

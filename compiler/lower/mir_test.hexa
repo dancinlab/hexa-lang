@@ -307,22 +307,26 @@ fn _build_case_c() -> HModule {
     return HModule { file: "case_c.hexa", items: items }
 }
 
-// (d) RFC-074 Phase 3 — multi-arg enum payload survives HIR→MIR.
+// (d) RFC-074 Phase 3 + Phase 5 — multi-arg enum payload survives HIR→MIR.
 //
 //     fn _ev_d() {
 //         let e = Event::Click(7, 9)
 //         match e { Event::Click(x, y) -> { return x + y } }
 //     }
 //
-// MIR shape assertions:
-//   1. construction site emits ONE struct_lit STMT_ASSIGN whose args contain
-//      both "__p0" + value=7 and "__p1" + value=9 (positional payload slots
-//      symmetric with the producer side, hir_to_mir.hexa L2173-2207).
-//   2. match-arm binder destructure emits TWO `field` extracts — one per
-//      binder — whose key-operands are "__p0" and "__p1" respectively.
-//      Pre-RFC-074-Phase-3 the binders were single-slot (op="payload"
-//      with no key) so arity≥2 silently collapsed; this case fails on the
-//      legacy lowering and passes only with the per-slot field extract.
+// MIR shape assertions (Phase 5 storage swap — arity >= 2 packs payload
+// cells into a single contiguous array under one "__payload" map slot):
+//   1. construction site emits ONE array_lit STMT_ASSIGN with the 2
+//      payload elem operands (the contiguous payload array), AND ONE
+//      enum_ctor STMT_ASSIGN whose args contain the const_str "__tag"
+//      AND const_str "__payload" keys (no longer "__p0"/"__p1").
+//   2. match-arm binder destructure emits ONE `field` extract on
+//      const_str "__payload" (single map lookup), AND TWO `index`
+//      extracts on const_int 0 and const_int 1 — one binder per
+//      ordinal. Pre-Phase-3 the binders were single-slot (op="payload"
+//      with no key) so arity≥2 silently collapsed; Phase-3 fan-out was
+//      per-slot "__p<i>"; Phase 5 collapses N map keys into 1 + N array
+//      indices.
 fn _build_case_d() -> HModule {
     // RHS: Event::Click(7, 9) — enum_path with 2 payload arg children
     let mut click_args: [HExpr] = []
@@ -502,15 +506,26 @@ fn main() {
     } else {
         let mf = m_d.funcs[0]
         _print_mfunc_summary("(d)", mf)
-        // (d-1) construction site: one STMT_ASSIGN op="struct_lit" whose
-        //       args include const_str "__p0" AND "__p1" (positional slots).
-        let mut saw_p0_ctor = false
-        let mut saw_p1_ctor = false
-        let mut saw_ctor_struct_lit = false
-        // (d-2) match-arm destructure: two STMT_ASSIGN op="field" whose
-        //       args include const_str "__p0" AND "__p1" (one binder each).
-        let mut saw_p0_extract = false
-        let mut saw_p1_extract = false
+        // (d-1) construction site (RFC 074 Phase 5):
+        //       - ONE STMT_ASSIGN op="array_lit" with >= 2 elem operands
+        //         (the contiguous payload array, one slot per cell).
+        //       - ONE STMT_ASSIGN op="enum_ctor" whose args include
+        //         const_str "__tag" AND const_str "__payload"
+        //         (single map slot for the whole payload array).
+        let mut saw_payload_array_lit = false
+        let mut saw_ctor_enum_ctor = false
+        let mut saw_tag_key_ctor = false
+        let mut saw_payload_key_ctor = false
+        // (d-2) match-arm destructure (RFC 074 Phase 5):
+        //       - ONE STMT_ASSIGN op="field" whose args include const_str
+        //         "__payload" (the single map lookup that lifts the
+        //         payload array out of the scrut value).
+        //       - TWO STMT_ASSIGN op="index" whose args include
+        //         const_int 0 AND const_int 1 respectively (one binder
+        //         per array ordinal — the per-cell positional read).
+        let mut saw_payload_extract = false
+        let mut saw_idx0_extract = false
+        let mut saw_idx1_extract = false
         let mut bi = 0
         while bi < len(mf.blocks) {
             let b = mf.blocks[bi]
@@ -518,21 +533,30 @@ fn main() {
             while si < len(b.stmts) {
                 let st = b.stmts[si]
                 if st.kind == STMT_ASSIGN {
-                    if st.op == "struct_lit" {
-                        saw_ctor_struct_lit = true
+                    if st.op == "enum_ctor" {
+                        saw_ctor_enum_ctor = true
                         let mut ai = 0
                         while ai < len(st.args) {
                             let a = st.args[ai]
-                            if a.kind == "const_str" && a.str_val == "__p0" { saw_p0_ctor = true }
-                            if a.kind == "const_str" && a.str_val == "__p1" { saw_p1_ctor = true }
+                            if a.kind == "const_str" && a.str_val == "__tag" { saw_tag_key_ctor = true }
+                            if a.kind == "const_str" && a.str_val == "__payload" { saw_payload_key_ctor = true }
                             ai = ai + 1
                         }
+                    } else if st.op == "array_lit" && len(st.args) >= 2 {
+                        saw_payload_array_lit = true
                     } else if st.op == "field" {
                         let mut ai = 0
                         while ai < len(st.args) {
                             let a = st.args[ai]
-                            if a.kind == "const_str" && a.str_val == "__p0" { saw_p0_extract = true }
-                            if a.kind == "const_str" && a.str_val == "__p1" { saw_p1_extract = true }
+                            if a.kind == "const_str" && a.str_val == "__payload" { saw_payload_extract = true }
+                            ai = ai + 1
+                        }
+                    } else if st.op == "index" {
+                        let mut ai = 0
+                        while ai < len(st.args) {
+                            let a = st.args[ai]
+                            if a.kind == "const_int" && a.int_val == 0 { saw_idx0_extract = true }
+                            if a.kind == "const_int" && a.int_val == 1 { saw_idx1_extract = true }
                             ai = ai + 1
                         }
                     }
@@ -541,24 +565,32 @@ fn main() {
             }
             bi = bi + 1
         }
-        if !saw_ctor_struct_lit {
-            println("  FAIL: case (d) construction missing STMT_ASSIGN op=struct_lit")
+        if !saw_ctor_enum_ctor {
+            println("  FAIL: case (d) construction missing STMT_ASSIGN op=enum_ctor (RFC-074 P5)")
             ok = false
         }
-        if !saw_p0_ctor {
-            println("  FAIL: case (d) construction missing __p0 positional slot key")
+        if !saw_payload_array_lit {
+            println("  FAIL: case (d) construction missing payload array_lit (RFC-074 P5 storage swap)")
             ok = false
         }
-        if !saw_p1_ctor {
-            println("  FAIL: case (d) construction missing __p1 positional slot key (multi-arg arity)")
+        if !saw_tag_key_ctor {
+            println("  FAIL: case (d) construction missing __tag key in enum_ctor args")
             ok = false
         }
-        if !saw_p0_extract {
-            println("  FAIL: case (d) match binder x missing field extract on __p0")
+        if !saw_payload_key_ctor {
+            println("  FAIL: case (d) construction missing __payload key in enum_ctor args (Phase 5 storage swap regressed)")
             ok = false
         }
-        if !saw_p1_extract {
-            println("  FAIL: case (d) match binder y missing field extract on __p1 — Phase-3 binder fan-out regressed to single-slot")
+        if !saw_payload_extract {
+            println("  FAIL: case (d) match destructure missing field extract on __payload (Phase 5)")
+            ok = false
+        }
+        if !saw_idx0_extract {
+            println("  FAIL: case (d) match binder x missing index extract on const_int 0 (Phase 5 payload fan-out)")
+            ok = false
+        }
+        if !saw_idx1_extract {
+            println("  FAIL: case (d) match binder y missing index extract on const_int 1 (Phase 5 payload fan-out)")
             ok = false
         }
         // The tag-compare path still uses op="field" with key "__tag" —

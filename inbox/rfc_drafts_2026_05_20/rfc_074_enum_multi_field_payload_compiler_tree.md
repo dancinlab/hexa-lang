@@ -1,10 +1,6 @@
 # RFC 074 — Enum Multi-Field Payload (compiler/ tree B2 + C1 decision lock)
 
-<<<<<<< HEAD
-> **Status**: PHASE-1+2+3-COMPILER-LANDED · Shape A (compiler/ tree parser + AST `typs[]` carrier + bind-time HX2004 arity registry + catalog DiagSpec + lower per-slot binder fan-out + mir_test case (d) HIR→MIR fixture). Parse-gate PASS on 13 SSOT files. Phases 4-5 (codegen → fixpoint) still PLANNED. Original Shape-B scaffold (decision lock + phase plan) preserved below.
-=======
-> **Status**: PHASE-1+2+2.1-COMPILER-LANDED · Shape A (compiler/ tree parser + AST `typs[]` carrier + bind-time HX2004 arity registry + types-side HX2005 per-slot element-type check + catalog DiagSpec). Parse-gate PASS on 13 SSOT files. Phases 3-5 (lower → ir+codegen → fixpoint) still PLANNED. Original Shape-B scaffold (decision lock + phase plan) preserved below.
->>>>>>> 5792697b (feat(compiler/{check,diag}): RFC 074 Phase 2.1 — types.hexa per-slot element-type match (HX2005))
+> **Status**: PHASE-1+2+2.1+3+4+5-COMPILER-LANDED · Shape A (compiler/ tree parser + AST `typs[]` carrier + bind-time HX2004 arity registry + types-side HX2005 per-slot element-type check + catalog DiagSpec + lower per-slot binder fan-out + per-target codegen op-string split + storage swap to contiguous payload array under single `__payload` map slot). Parse-gate PASS on 15 SSOT files. Phase 5 ("self-host fixpoint") renumbered to Phase 6 — Phase 5 is now "storage swap" per this RFC's evolved scope. Phase 6 (fixpoint) still PLANNED. The proper sum-typed MTag/MPack carrier (RFC §3.2) is deferred to a future sub-cycle. Original Shape-B scaffold (decision lock + phase plan) preserved below.
 > **Opened**: 2026-05-20
 > **Authors**: sub-agent dispatch (per @D g_inbox_processing_loop)
 > **Supersedes / extends**: RFC-020 (`proposals/rfc_020_enum_payload_variants.md`) §3.1 "multi-field deferred" clause
@@ -157,15 +153,27 @@ Two options for how parser stores variant payload arity:
 
 **g3 honest scope**: codegen-correct but not yet self-host-fixpoint validated (Phase 5).
 
-### Phase 5 — self-host fixpoint + parity gate
+### Phase 5 — `compiler/lower` (contiguous payload storage swap) — ✅ LANDED 2026-05-20
+
+**Files** (2 SSOT this cycle):
+- `compiler/lower/hir_to_mir.hexa` — `enum_path` producer arm (this file L2210+) now branches on arity. Arity 0/1 keeps the legacy `struct_lit` per-slot path (single-cell byte-eq preserved verbatim). Arity ≥ 2 now (a) pre-lowers every payload child into operand list, (b) emits a fresh `STMT_ASSIGN op="array_lit"` packing every cell into a contiguous payload array, (c) emits the `enum_ctor` STMT with exactly TWO key/val pairs — `("__tag", hash)` and `("__payload", payload_array_local)` — collapsing N `__p<i>` map slots from Phase 3/4 into 1 array slot. Match-arm destructure (L1985+) mirrors: arity ≥ 2 pulls the payload array out ONCE via the existing `field` op (`scrut, "__payload"`), then each binder lowers to `STMT_ASSIGN op="index" args=[payload_local, const_int(i)]` — symmetric with construction, O(1) per cell after a single hash lookup.
+- `compiler/lower/mir_test.hexa` — case (d) assertions updated to the new MIR shape: (1) ONE `array_lit` STMT with ≥ 2 elem operands, (2) ONE `enum_ctor` STMT containing const_str `__tag` AND `__payload` keys (not `__p0`/`__p1`), (3) ONE `field` extract on `__payload`, (4) TWO `index` extracts on `const_int 0` and `const_int 1` (one per binder). The legacy assertion (per-slot `__p<i>` field-get) is replaced — pre-Phase-5 lowering fails the new ordinal assertion, passes only with the storage-swap shape.
+
+**Backend impact**: zero. The 3-backend `enum_ctor` per-pair walk (133f4a0a) consumes the new 2-pair arg list under the same `hexa_map_new + hexa_map_set` ABI. The `array_lit` STMT routes through the proven 3-backend `hexa_array_new + hexa_array_push` loop (a351b1c9). The `index` STMT routes through the proven 3-backend `hexa_index_get` dispatch (a351b1c9, runtime array/map dispatch via `hexa_index_get`). No new runtime symbol; no new codegen branch.
+
+**Acceptance** (Phase 5): ✅ MET — `hexa_real parse` PASS on `hir_to_mir.hexa` + `mir_test.hexa`. The mir_test case (d) ordinal-extract assertion is the load-bearing falsifier (F-074-P5-CONTIGUOUS-STORAGE): the pre-Phase-5 per-slot `__p<i>` field-get fails the new `index 0`/`index 1` ordinal assertion, and the storage-swap producer passes both ctor-side (payload array_lit + `__payload` key) and destructure-side (single field-get + per-ordinal index-get).
+
+**g3 honest scope**: storage swap ONLY. The MIR value carrier is STILL a string-discriminated map ({__tag, __payload}) — the proper sum-typed MTag/MPack carrier (RFC §3.2) is deferred to a future sub-cycle. Cell access is now O(1) ordinal after one hash lookup (was N hash lookups per arm), but the outer container is still map-backed, so `__tag` dispatch is unchanged and there is no breakage of the tag-compare pre-existing path. Byte-eq for arity-1 sites is preserved (legacy struct_lit path untouched). Codegen/runtime symbols are unchanged — Phase 5 is a producer + destructure lowering refactor; the back-end emit and the runtime ABI are byte-eq across both arms.
+
+### Phase 6 — self-host fixpoint + parity gate
 
 **Files**: drive `compiler/` through itself (per `project_compiler_native_self_host_fixpoint` memory's gen1≡gen2 byte-identical methodology), with the new multi-field enum sites exercised across the bootstrap.
 
-**Acceptance** (Phase 5):
+**Acceptance** (Phase 6):
 - gen2.s ≡ gen3.s byte-identical for any compiler/ source containing a multi-field enum (synthetic fixture in `compiler/parse/parser.hexa` or wherever lands first).
 - All five F-P0…F-P3 falsifiers (per `project_compiler_rfc063_p0p1_closed_p2_started` memory) re-run green.
 
-**g3 honest scope**: this is the *only* phase that "ships" multi-field for production-class consumers (wilson, demiurge). Phases 1-4 are landable but each is a closed surgical scope.
+**g3 honest scope**: this is the *only* phase that "ships" multi-field for production-class consumers (wilson, demiurge). Phases 1-5 are landable but each is a closed surgical scope.
 
 ---
 
@@ -189,7 +197,8 @@ Phase 3 has the **only** cross-RFC dependency (B1). Phases 1, 2, 4, 5 are linear
 - **F-074-P2-CHECK**: `match e { E::V(a) -> … }` against `enum E { V(int, string) }` produces HX02NN with byte-eq message on both arm64-darwin and x86_64-linux builds.
 - **F-074-P3-LOWER**: HIR dump of `E::V(1, "x")` shows arity-2 ctor; MIR dump shows 2 distinct payload-cell stores; no payload truncation.
 - **F-074-P4-CODEGEN**: 5 multi-field cases byte-eq across arm64-darwin + x86_64-linux + thumbv7em + interp parity (where interp survives; interp is RETIRED per `@D g_interp_deprecated`, so this falsifier uses compiled-vs-compiled cross-target equivalence rather than compiled-vs-interp).
-- **F-074-P5-FIXPOINT**: gen2 → gen3 byte-identical when the bootstrap path includes a synthetic multi-field enum in `compiler/parse/parser.hexa` (e.g. a refactor where `TokenKind` or `ExprKind` consumes payload data; this is a *natural* refactor of the existing string-discriminated arms in `compiler/ir/*.hexa`).
+- **F-074-P5-CONTIGUOUS-STORAGE**: HIR `Event::Click(7, 9)` with `match e { Event::Click(x, y) -> x + y }` lowers to MIR containing (a) ONE `array_lit` STMT with 2 elem operands, (b) ONE `enum_ctor` STMT carrying const_str `__tag` AND `__payload` keys (no `__p0`/`__p1` const_str keys present), (c) ONE `field` extract on `__payload`, (d) TWO `index` extracts on `const_int 0` and `const_int 1`. Pre-Phase-5 lowering fails (b) + (d) — it would emit `__p0`/`__p1` map keys + per-slot field-get on string keys. The mir_test case (d) assertion battery codifies this falsifier in code.
+- **F-074-P6-FIXPOINT**: gen2 → gen3 byte-identical when the bootstrap path includes a synthetic multi-field enum in `compiler/parse/parser.hexa` (e.g. a refactor where `TokenKind` or `ExprKind` consumes payload data; this is a *natural* refactor of the existing string-discriminated arms in `compiler/ir/*.hexa`).
 
 ---
 
