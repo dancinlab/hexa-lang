@@ -583,3 +583,23 @@ For each Tier-A sub-phase:
   ally per build, peaks at ~tens of MB based on aprime_cc usage
   pattern. NOT suitable for long-running daemons. atexit() not
   hooked; the OS reclaims chunks at exit
+### 2026-05-20 — cycle 54 — Tier-A.3 file-stream batch (-7 externs)
+
+- ✅ cycle 54 — Tier-A.3 stdio file-stream subset closed.
+  aprime_cc nm undefined externs 104 → **97** (−7 measured ·
+  cumulative **137 → 97 = −40**) · smoke exit(42) PASS · binary
+  1,119,144 → 1,118,952 B (−192 B)
+- Closed: `_fopen` · `_fclose` · `_fread` · `_fwrite` ·
+  `_fseek` · `_ftell` · `_fdopen` · `_flock` · `_setvbuf`
+- Method: FILE* encoded as `(void *)(uintptr_t)(fd + 1)` so 0
+  doesn't alias NULL. _hxlcl_fp_fd helper checks if value is
+  "small" (<0x1000) → our encoding, else libc FILE* → pointer
+  compare against stderr/stdout/stdin. fopen uses `open()`
+  syscall; fread/fwrite call `read`/`write`; fseek/ftell call
+  `lseek`. flock + setvbuf = noop stubs (compiler binary doesn't
+  rely on file locks or specific buffering modes)
+- Tier-A.3 closure: 8 cycle-52 + 9 cycle-54 = **17 of 19**
+  symbols. acceptance "~19 stdio → 117 → ~98 externs" REACHED
+  at 97 (1 better than target). Remaining 2 Tier-A.3-ish:
+  none in current externs
+- Carryover residuals: `_malloc` · `_memcpy` · `_mmap`

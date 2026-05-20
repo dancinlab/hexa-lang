@@ -527,6 +527,97 @@ static int __attribute__((noinline)) hxlcl_munmap(void *addr, size_t length) {
     (void)addr; (void)length;
     return 0;
 }
+// Cycle 54 — Tier-A.3 file-stream subset. FILE* encoded as
+// (void *)(uintptr_t)(fd + 1) so 0 doesn't alias NULL. stderr/
+// stdout/stdin (libc pointers) preserved by hxlcl_fprintf/fputs/
+// fputc/fflush path; those keep using libc globals (one extern
+// each — addressed later via @asm + fd constants).
+static void *__attribute__((noinline)) hxlcl_fopen(const char *path, const char *mode) {
+    if (!path || !mode) return (void *)0;
+    int flags = 0;
+    if (mode[0] == 'r') flags = O_RDONLY;
+    else if (mode[0] == 'w') flags = O_WRONLY | O_CREAT | O_TRUNC;
+    else if (mode[0] == 'a') flags = O_WRONLY | O_CREAT | O_APPEND;
+    else return (void *)0;
+    if (mode[1] == '+' || (mode[1] != 0 && mode[2] == '+')) {
+        flags = (flags & ~(O_RDONLY | O_WRONLY)) | O_RDWR;
+    }
+    int fd = open(path, flags, 0644);
+    if (fd < 0) return (void *)0;
+    return (void *)(uintptr_t)(fd + 1);
+}
+static int __attribute__((noinline)) hxlcl_fclose(void *fp) {
+    if (!fp) return -1;
+    uintptr_t v = (uintptr_t)fp;
+    // libc stderr/stdout/stdin: pointers in __DATA, very high addresses.
+    // Our encoding: small ints (fd+1, typically <1024).
+    if (v >= 0x1000) return 0;  // libc FILE* — don't close
+    int fd = (int)v - 1;
+    if (fd < 3) return 0;  // safety: never close 0/1/2
+    return close(fd);
+}
+static int __attribute__((noinline)) _hxlcl_fp_fd(void *fp) {
+    uintptr_t v = (uintptr_t)fp;
+    if (v >= 0x1000) {
+        // libc FILE* — best effort by pointer comparison.
+        if (fp == (void *)stderr) return 2;
+        if (fp == (void *)stdout) return 1;
+        if (fp == (void *)stdin) return 0;
+        return -1;
+    }
+    return (int)v - 1;
+}
+static size_t __attribute__((noinline)) hxlcl_fread(void *buf, size_t sz, size_t n, void *fp) {
+    if (!buf || sz == 0 || n == 0) return 0;
+    int fd = _hxlcl_fp_fd(fp);
+    if (fd < 0) return 0;
+    size_t total = sz * n;
+    size_t got = 0;
+    unsigned char *p = (unsigned char *)buf;
+    while (got < total) {
+        long r = (long)read(fd, p + got, total - got);
+        if (r <= 0) break;
+        got += (size_t)r;
+    }
+    return got / sz;
+}
+static size_t __attribute__((noinline)) hxlcl_fwrite(const void *buf, size_t sz, size_t n, void *fp) {
+    if (!buf || sz == 0 || n == 0) return 0;
+    int fd = _hxlcl_fp_fd(fp);
+    if (fd < 0) return 0;
+    size_t total = sz * n;
+    size_t put = 0;
+    const unsigned char *p = (const unsigned char *)buf;
+    while (put < total) {
+        long r = (long)write(fd, p + put, total - put);
+        if (r <= 0) break;
+        put += (size_t)r;
+    }
+    return put / sz;
+}
+static long __attribute__((noinline)) hxlcl_ftell(void *fp) {
+    int fd = _hxlcl_fp_fd(fp);
+    if (fd < 0) return -1;
+    return (long)lseek(fd, 0, SEEK_CUR);
+}
+static int __attribute__((noinline)) hxlcl_fseek(void *fp, long offset, int whence) {
+    int fd = _hxlcl_fp_fd(fp);
+    if (fd < 0) return -1;
+    return lseek(fd, (off_t)offset, whence) < 0 ? -1 : 0;
+}
+static void *__attribute__((noinline)) hxlcl_fdopen(int fd, const char *mode) {
+    (void)mode;
+    if (fd < 0) return (void *)0;
+    return (void *)(uintptr_t)(fd + 1);
+}
+static int __attribute__((noinline)) hxlcl_flock(int fd, int op) {
+    (void)fd; (void)op;
+    return 0;
+}
+static int __attribute__((noinline)) hxlcl_setvbuf(void *fp, char *buf, int mode, size_t sz) {
+    (void)fp; (void)buf; (void)mode; (void)sz;
+    return 0;
+}
 
 // Textual override of any residual libc references in subsequent code
 // (runtime_core.c + HI tier + transpile output). The helper bodies
@@ -568,6 +659,15 @@ static int __attribute__((noinline)) hxlcl_munmap(void *addr, size_t length) {
 #define realloc(p,n)       hxlcl_realloc((void *)(p), (size_t)(n))
 #define calloc(nm,sz)      hxlcl_calloc((size_t)(nm), (size_t)(sz))
 #define munmap(a,l)        hxlcl_munmap((void *)(a), (size_t)(l))
+#define fopen(p,m)         ((FILE *)hxlcl_fopen((const char *)(p), (const char *)(m)))
+#define fclose(fp)         hxlcl_fclose((void *)(fp))
+#define fread(b,s,n,fp)    hxlcl_fread((void *)(b), (size_t)(s), (size_t)(n), (void *)(fp))
+#define fwrite(b,s,n,fp)   hxlcl_fwrite((const void *)(b), (size_t)(s), (size_t)(n), (void *)(fp))
+#define ftell(fp)          hxlcl_ftell((void *)(fp))
+#define fseek(fp,o,w)      hxlcl_fseek((void *)(fp), (long)(o), (int)(w))
+#define fdopen(fd,m)       ((FILE *)hxlcl_fdopen((int)(fd), (const char *)(m)))
+#define flock(fd,op)       hxlcl_flock((int)(fd), (int)(op))
+#define setvbuf(fp,b,m,sz) hxlcl_setvbuf((void *)(fp), (char *)(b), (int)(m), (size_t)(sz))
 
 #include "runtime_core.c"
 

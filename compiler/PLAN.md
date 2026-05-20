@@ -8117,3 +8117,31 @@ g3-honest writeup with the exact ABC trace + Phase 3f fix scope).
 ```
 
 **cross-link**: RUNTIME.md cycle 53 entry · cycles 46-52 entries · `eac4d2ff` cycle 52 commit.
+
+### 2026-05-20 — RUNTIME.md cycle 54 — Tier-A.3 file-stream batch (137→97, -40 cumulative)
+
+**작업 = Tier-A.3 file-stream subset port**. fopen/fclose/fread/fwrite/fseek/ftell/fdopen/flock/setvbuf 9 helpers + #defines. FILE* = `(void *)(uintptr_t)(fd + 1)` 인코딩 (0 ≠ NULL). _hxlcl_fp_fd 가 작은 값 (<0x1000) 은 our encoding · 큰 값은 libc FILE* (stderr/stdout/stdin) 와 pointer compare.
+
+**measured delta**: aprime_cc nm undefined externs **104 → 97 (−7)** · 누적 cycles 46-54 = **137 → 97 = −40** · smoke `exit(6*7)==42` PASS · 바이너리 1,119,144 → 1,118,952 B (−192 B).
+
+**closed this cycle (9)**: `_fopen` · `_fclose` · `_fread` · `_fwrite` · `_fseek` · `_ftell` · `_fdopen` · `_flock` · `_setvbuf`.
+
+**Tier-A.3 acceptance "117 → ~98 externs" REACHED at 97 (1 better than target)**. 17 of 19 plan symbols closed (printf family cycle 52 + file-stream cycle 54).
+
+**Phase 1 progress**:
+- Tier-A.1 (libc trivial): **CLOSED** (15+ symbols)
+- Tier-A.2 (memory): **6 of 8** (free/realloc/calloc/munmap cycle 53 + memset/memmove/___memcpy_chk cycle 49)
+- Tier-A.3 (stdio): **CLOSED** (17 of 19 · acceptance reached)
+- Tier-A.6 (compiler-rt): 2 of ~12 · stderr/stdout/sincos_stret 남음
+- Tier-A.4 POSIX: OPEN
+- Tier-A.5 libm: OPEN (path-b decision pending)
+
+**LoC delta**:
+
+```
+ RUNTIME.md           | +20 (cycle 54 entry)
+ compiler/PLAN.md     | + (this entry)
+ self/runtime.c       | +95 (9 helpers + 9 #defines)
+```
+
+**cross-link**: RUNTIME.md cycle 54 entry · cycle 53 commit `54508092`.
