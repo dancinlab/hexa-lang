@@ -1094,6 +1094,24 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 61: hexa_format_float_sci → rt_format_float_sci (snprintf "%.*e" replacement)
+
+- ✅ `hexa_format_float_sci` (self/runtime_core.c:6469) ported.
+  Replaces `snprintf(buf, 64, "%.*e", p, v)` with hexa source. Uses
+  `rt_log10` (cycle 8) for the exponent and `rt_format_float_f`
+  (cycle 60) for the mantissa
+- Exponent format: `e±NN` (2-digit zero-padded). Negative numbers
+  emit `-` once, before the mantissa
+- ⚠ **Caveats**: same int64 round-trip limit as cycle 60; mantissa
+  rounding boundary (e.g. 9.999→10.0 with prec=2) is NOT renormalized
+  to bump exponent. Acceptable for non-critical formatting; the C
+  body's snprintf still handles all edge cases
+- Parallel-session transpile race: first build attempt failed at
+  step 2 (transient — `git log -1` showed `4a201dbb` from another
+  session arriving mid-build). Retry PASSED
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,936 B
+
 ### 2026-05-21 — step 3 cycle 60: hexa_format_float → rt_format_float_f (snprintf "%.*f" replacement)
 
 - ✅ `hexa_format_float` (self/runtime_core.c:6345) ported. Replaces

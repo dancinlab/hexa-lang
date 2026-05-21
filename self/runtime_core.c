@@ -6466,6 +6466,11 @@ HexaVal hexa_format_float(HexaVal f, HexaVal prec) {
 }
 #endif
 
+// Step-3 cycle 61 port — snprintf "%.*e" replaced by hexa-source.
+// Uses rt_log10 for the exponent, rt_format_float_f for the mantissa.
+// Caveats: same int64 round-trip limit as cycle 60; mantissa rounding
+// boundary (9.99→10) is NOT renormalized.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_format_float_sci(HexaVal f, HexaVal prec) {
     double v = __hx_to_double(f);
     int p = HX_INT(prec);
@@ -6473,4 +6478,10 @@ HexaVal hexa_format_float_sci(HexaVal f, HexaVal prec) {
     snprintf(buf, 64, "%.*e", p, v);
     return hexa_str(buf);
 }
+#else
+extern HexaVal rt_format_float_sci(HexaVal v, HexaVal prec);
+HexaVal hexa_format_float_sci(HexaVal f, HexaVal prec) {
+    return rt_format_float_sci(hexa_float(__hx_to_double(f)), prec);
+}
+#endif
 

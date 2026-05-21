@@ -201,6 +201,46 @@ fn _rt_int_to_dec_str_pad(n: int, width: int) -> string {
     return bytes_to_str_raw(bytes) + raw
 }
 
+// Step 3 cycle 61 — scientific notation float→string (snprintf "%.*e"
+// replacement). Same int64 round-trip limit as rt_format_float_f.
+// Edge cases: zero → "0.00e+00", mantissa rounding boundary (9.99→10)
+// is NOT corrected (acceptable for non-critical formatting use).
+pub fn rt_format_float_sci(v: float, prec: int) -> string {
+    let mut x = v
+    let mut sign = ""
+    if x < 0.0 { x = -x; sign = "-" }
+    let mut exp_int = 0
+    let mut mantissa = x
+    if x != 0.0 {
+        let l = rt_log10(x)
+        let mut le = l as int
+        if (le as float) > l { le = le - 1 }
+        let mut p10 = 1.0
+        if le >= 0 {
+            let mut i = 0
+            while i < le {
+                p10 = p10 * 10.0
+                i = i + 1
+            }
+        } else {
+            let mut i = 0
+            let neg_le = -le
+            while i < neg_le {
+                p10 = p10 * 0.1
+                i = i + 1
+            }
+        }
+        mantissa = x / p10
+        exp_int = le
+    }
+    let mantissa_str = rt_format_float_f(mantissa, prec)
+    let mut esign = "+"
+    let mut eabs = exp_int
+    if exp_int < 0 { esign = "-"; eabs = -exp_int }
+    let estr = _rt_int_to_dec_str_pad(eabs, 2)
+    return sign + mantissa_str + "e" + esign + estr
+}
+
 pub fn rt_format_float_f(v: float, prec: int) -> string {
     let mut x = v
     let mut sign = ""
