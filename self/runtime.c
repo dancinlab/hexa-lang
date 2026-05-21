@@ -2537,12 +2537,21 @@ HexaVal hexa_char_code(HexaVal s, HexaVal idx);
 // `char_code(s, i)` free-fn idiom which old hexa_v2 emits as
 // `hexa_call2(char_code, ...)`. Shim binds the bare identifier to TAG_FN.
 static HexaVal char_code;
+// Step-3 cycle 72 port — hexa_char_code dispatch.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_char_code(HexaVal s, HexaVal idx) {
     if (!HX_IS_STR(s)) return hexa_int(0);
     int i = HX_INT(idx);
     if (i < 0 || i >= (int)HX_STRLEN(s)) return hexa_int(0);
     return hexa_int((unsigned char)HX_STR(s)[i]);
 }
+#else
+extern HexaVal rt_char_code(HexaVal s, HexaVal idx);
+HexaVal hexa_char_code(HexaVal s, HexaVal idx) {
+    if (!HX_IS_STR(s)) return hexa_int(0);
+    return rt_char_code(s, idx);
+}
+#endif
 
 // `chr(n)` — Python/Ruby-style inverse of char_code: int byte → 1-char str.
 // Used by void's sys_pty accumulator (chr(b) reassembles bytes from

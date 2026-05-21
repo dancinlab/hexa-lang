@@ -1094,6 +1094,17 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 72: hexa_char_code (byte at idx, 0 on OOB)
+
+- ✅ `hexa_char_code` (self/runtime.c:2540) ported. Distinct from
+  `hexa_str_char_code_at` (which returns -1 on OOB + wraps negative
+  idx); `hexa_char_code` returns 0 on OOB with no neg-idx wrap
+- No recursion trap: `s.byte_at(idx)` → `hexa_str_byte_at` →
+  `hexa_str_char_code_at` (still C-body per cycle 52). The chain
+  terminates at C, no infinite loop
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,165,048 B
+
 ### 2026-05-21 — step 3 cycle 71: hexa_array_flatten (all-array fast path, mixed-type stays C)
 
 - ✅ `hexa_array_flatten` (self/runtime.c:3447) gains an all-array
