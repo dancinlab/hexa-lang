@@ -1094,6 +1094,23 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 55: hexa_str_index_of_from + hexa_str_last_index_of (int64_t batch)
+
+- ✅ `hexa_str_index_of_from` (self/runtime_core.c:4172) and
+  `hexa_str_last_index_of` (4189) both ported using the cycle-54
+  int64_t-return bridge pattern (`HX_INT(rt_str_*(...))`)
+- index_of_from: empty needle → `start`; st<0 clamps to 0; st>hlen
+  returns -1. Matches the C body exactly
+- last_index_of: empty needle → `hlen`; nlen>hlen returns -1; overlap-
+  safe scan advances by 1 byte per match (matches C body)
+- ⚠ Race recovered: first cycle-55 staging got wiped by a parallel-
+  session cherry-pick (`063cc728` RFC 075 Metal reduce) that hit
+  conflicts in `compiler/codegen/metal_*.hexa`. Aborted the cherry-
+  pick, re-applied cycle 55, smoke re-PASSED with byte-identical
+  binary size (1,164,376 B) — verifies re-application was correct
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,376 B
+
 ### 2026-05-21 — step 3 cycle 54: hexa_str_index_of → rt_str_index_of (int64_t-return bridge POC)
 
 - ✅ `hexa_str_index_of` (self/runtime_core.c:4149) ported. Returns

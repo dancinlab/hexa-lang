@@ -49,6 +49,61 @@ pub fn rt_str_char_count(s: string) -> int {
     return rt_utf8_cpcount(s)
 }
 
+// Step 3 cycle 55 — first occurrence at-or-after byte offset `start`.
+// st < 0 clamps to 0; st > hlen returns -1; empty needle returns st
+// (matches C body's `if (*needle == '\0') return st;`).
+pub fn rt_str_index_of_from(s: string, sub: string, start: int) -> int {
+    let hlen = byte_len(s)
+    let nlen = byte_len(sub)
+    let mut st = start
+    if st < 0 { st = 0 }
+    if st > hlen { return -1 }
+    if nlen == 0 { return st }
+    let mut i = st
+    while i + nlen <= hlen {
+        let mut k = 0
+        let mut matched = true
+        while k < nlen {
+            if s.byte_at(i + k) != sub.byte_at(k) {
+                matched = false
+                k = nlen
+            } else {
+                k = k + 1
+            }
+        }
+        if matched { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Step 3 cycle 55 — LAST occurrence of `sub` in `s`. Empty needle
+// returns hlen (matches C body). Overlapping matches handled by
+// p += 1 advance (same as the C body's overlap-safe scan).
+pub fn rt_str_last_index_of(s: string, sub: string) -> int {
+    let hlen = byte_len(s)
+    let nlen = byte_len(sub)
+    if nlen == 0 { return hlen }
+    if nlen > hlen { return -1 }
+    let mut last = -1
+    let mut i = 0
+    while i + nlen <= hlen {
+        let mut k = 0
+        let mut matched = true
+        while k < nlen {
+            if s.byte_at(i + k) != sub.byte_at(k) {
+                matched = false
+                k = nlen
+            } else {
+                k = k + 1
+            }
+        }
+        if matched { last = i }
+        i = i + 1
+    }
+    return last
+}
+
 // Step 3 cycle 54 — byte-indexed first occurrence of `sub` in `s`.
 // Returns -1 when absent. Empty needle returns 0 (matches the C body's
 // `hxlcl_strstr(hay, "")` → `hay` semantic). Used by `s.index_of(sub)`.

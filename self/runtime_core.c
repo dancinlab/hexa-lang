@@ -4169,6 +4169,8 @@ int64_t hexa_str_index_of(HexaVal s, HexaVal sub) {
 // hxa-20260423-012: the 2-arg form was silently dropping `start`, forcing
 // anima to emit fields in a hack order (rank BEFORE weights) to dodge the
 // miscompare. Semantics: clamp start to [0,len]; empty needle → start.
+// Step-3 cycle 55 port — int64_t-return bridge.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int64_t hexa_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start) {
     if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
     const char* hay = HX_STR(s);
@@ -4182,10 +4184,19 @@ int64_t hexa_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start) {
     if (!p) return -1;
     return (int64_t)(p - hay);
 }
+#else
+extern HexaVal rt_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start);
+int64_t hexa_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
+    return HX_INT(rt_str_index_of_from(s, sub, start));
+}
+#endif
 
 // Returns byte offset of LAST occurrence of `sub` within `s`, or -1.
 // Mirrors interpreter `.rfind`/`.last_index_of` at self/hexa_full.hexa:15741.
 // Added 2026-04-23 (hxa-20260422-002 lang_gap prio=95, rfind blocker).
+// Step-3 cycle 55 port — int64_t-return bridge.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int64_t hexa_str_last_index_of(HexaVal s, HexaVal sub) {
     if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
     const char* hay = HX_STR(s);
@@ -4202,6 +4213,13 @@ int64_t hexa_str_last_index_of(HexaVal s, HexaVal sub) {
     }
     return last;
 }
+#else
+extern HexaVal rt_str_last_index_of(HexaVal s, HexaVal sub);
+int64_t hexa_str_last_index_of(HexaVal s, HexaVal sub) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
+    return HX_INT(rt_str_last_index_of(s, sub));
+}
+#endif
 
 // Byte-indexed single-char extraction. `.char_at(i)` → 1-byte string at
 // offset i, empty string if out-of-range. Matches the byte-orientation
