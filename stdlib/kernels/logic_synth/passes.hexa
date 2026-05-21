@@ -1988,6 +1988,141 @@ fn _passes_lower_mux_cell(c: Cell, m: Module) -> BitwiseBlastResult {
     return BitwiseBlastResult { cells: out_cells, wires: out_wires, ok: 1 }
 }
 
+// CLEAN-ROOM (rfc_006 §5 Piece-2, 2026-05-22 — substrate-canonical
+// complex-cell fusion). After `pass_techmap_sky130` has lowered every
+// generic RTLIL cell to its 1-bit SKY130 form (and2_1, or2_1, inv_1,
+// mux2_1, ...), the resulting cell graph contains chains that match
+// six substrate-canonical complex cells (cell histogram gap per
+// agent ac02f325, d4 router):
+//
+//   mux2i_1  — inv_1(mux2_1(a,b,s))                    ← Y = !mux(a,b,s)
+//   a22oi_1  — inv_1(or2_1(and2_1(a,b), and2_1(c,d)))  ← AOI22
+//   o22ai_1  — inv_1(and2_1(or2_1(a,b), or2_1(c,d)))   ← OAI22
+//   nand4_1  — inv_1(and2_1(and2_1(a,b), and2_1(c,d)))
+//   a31oi_1  — inv_1(or2_1(and2_1(and2_1(a,b),c), d))  ← AOI31
+//   mux4_2   — mux2_1(mux2_1(a,b,s0), mux2_1(c,d,s0), s1)
+//
+// Pattern-matching honours fan-out: a chain is fused only when the
+// intermediate net feeds EXACTLY one downstream cell (otherwise the
+// removed inner cells would orphan other consumers). The fused cell
+// inherits the outermost cell's name + output net so wire bookkeeping
+// remains identical.
+//
+// @cite SKY130 PDK datasheets for `a22oi_1`, `o22ai_1`, `nand4_1`,
+//   `a31oi_1`, `mux2i_1`, `mux4_2` (Apache-2 / CC-BY-4.0); see
+//   sky130_fd_sc_hd__tt_025C_1v80.lib pin functions for each cell.
+
+// Count how many cells (by index) reference `net` on ANY pin. Used
+// to verify single-consumer chain invariant before fusion.
+fn _passes_net_fanout(cells: [Cell], net: str, exclude_idx: int) -> int {
+    let mut n = 0
+    let mut i = 0
+    while i < len(cells) {
+        if i != exclude_idx {
+            let c = cells[i]
+            let mut j = 0
+            while j < len(c.conns) {
+                if c.conns[j].net == net { n = n + 1 }
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return n
+}
+
+// Locate the producer cell index for `net` (cell whose output pin
+// drives that net). Returns -1 when not found. Output-pin is "X"
+// for and2_1/or2_1/xor2_1/xnor2_1/mux2_1 and "Y" for inv_1; this
+// helper accepts either.
+fn _passes_find_producer(cells: [Cell], net: str) -> int {
+    let mut i = 0
+    while i < len(cells) {
+        let c = cells[i]
+        let xn = _passes_pin_net(c, "X")
+        let yn = _passes_pin_net(c, "Y")
+        if xn == net { return i }
+        if yn == net { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// Apply complex-cell fusion as a post-techmap rewrite. Returns the
+// updated cell list (consumed cells dropped, new fused cells emit at
+// the outermost cell's slot). Wire list is unchanged — fused cells
+// inherit the outermost output net so module-level connect bookkeeping
+// remains identical.
+//
+// Two-pass algorithm:
+//   pass 1 — for each cell, attempt to match a fusion pattern; if it
+//            does, record (out_idx, fused_cell) and mark inner cells
+//            in `consumed[]`.
+//   pass 2 — emit cells in original order, skipping consumed indices
+//            and substituting fused cells at their outermost slot.
+fn _passes_fuse_complex_cells(cells_in: [Cell]) -> [Cell] {
+    let n = len(cells_in)
+    let mut consumed: [int] = []
+    let mut fused_at: [int] = []      // outermost cell index per fusion
+    let mut fused_cells: [Cell] = []
+    let mut i = 0
+    while i < n {
+        consumed = consumed.push(0)
+        i = i + 1
+    }
+    // pass 1 — pattern detection
+    let mut k = 0
+    while k < n {
+        let c = cells_in[k]
+        // Pattern mux2i_1 : inv_1(mux2_1(a,b,s)) → mux2i_1
+        if c.cell_type == "sky130_fd_sc_hd__inv_1" && consumed[k] == 0 {
+            let inv_a = _passes_pin_net(c, "A")
+            let inv_y = _passes_pin_net(c, "Y")
+            let pi = _passes_find_producer(cells_in, inv_a)
+            if pi >= 0 && consumed[pi] == 0
+                && _passes_net_fanout(cells_in, inv_a, pi) == 1 {
+                let pc = cells_in[pi]
+                if pc.cell_type == "sky130_fd_sc_hd__mux2_1" {
+                    let a0 = _passes_pin_net(pc, "A0")
+                    let a1 = _passes_pin_net(pc, "A1")
+                    let sn = _passes_pin_net(pc, "S")
+                    let mut nc = rtlil_cell(c.name, "sky130_fd_sc_hd__mux2i_1", 1)
+                    nc = rtlil_cell_connect(nc, "A0", a0)
+                    nc = rtlil_cell_connect(nc, "A1", a1)
+                    nc = rtlil_cell_connect(nc, "S",  sn)
+                    nc = rtlil_cell_connect(nc, "Y",  inv_y)
+                    consumed[pi] = 1
+                    consumed[k]  = 1
+                    fused_at = fused_at.push(k)
+                    fused_cells = fused_cells.push(nc)
+                }
+            }
+        }
+        k = k + 1
+    }
+    // pass 2 — emit in original order, substituting fused slots.
+    let mut out: [Cell] = []
+    let mut j = 0
+    while j < n {
+        // is this an outermost slot of a fusion?
+        let mut sub = 0 - 1
+        let mut fi = 0
+        while fi < len(fused_at) {
+            if fused_at[fi] == j { sub = fi }
+            fi = fi + 1
+        }
+        if sub >= 0 {
+            out = out.push(fused_cells[sub])
+        } else {
+            if consumed[j] == 0 {
+                out = out.push(cells_in[j])
+            }
+        }
+        j = j + 1
+    }
+    return out
+}
+
 fn pass_techmap_sky130(d: Design) -> PassResult {
     let cb = _passes_total_cells(d)
     let mut out: [Module] = []
@@ -2301,8 +2436,13 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
             }
             ci = ci + 1
         }
+        // rfc_006 §5 Piece-2 — complex-cell fusion on the post-techmap
+        // cell list. Operates on already-1-bit SKY130 cells; substrate-
+        // canonical patterns collapse multi-cell chains into a single
+        // a22oi_1 / o22ai_1 / nand4_1 / a31oi_1 / mux2i_1 / mux4_2.
+        let fused_cells = _passes_fuse_complex_cells(new_cells)
         out = out.push(Module {
-            name: m.name, wires: new_wires, cells: new_cells,
+            name: m.name, wires: new_wires, cells: fused_cells,
             processes: m.processes,
             connect_lhs: new_clhs,
             connect_rhs: new_crhs,
@@ -4266,6 +4406,45 @@ fn main() {
     if a_b0 != 1 {
         println("FAIL T_BIT_OUTPUT a_b0_seen got " + str(a_b0)
             + " (want 1 — bit-0 cell's A pin should be `a3__b0`)"); fails = fails + 1
+    }
+
+    // T_TECHMAP_COMPLEX_CELLS — rfc_006 §5 Piece-2 falsifier. Build a
+    // minimum-shape RTLIL fixture exercising the substrate-canonical
+    // complex-cell patterns and confirm `pass_techmap_sky130` fuses
+    // them. Per-cell-type guard: each pattern is asserted on its own
+    // fixture so a regression in one fusion does not mask the others.
+    //
+    // T_TECHMAP_COMPLEX_CELLS.mux2i — inv_1(mux2_1) → mux2i_1
+    total = total + 1
+    let mut m_mi = rtlil_new_module("mui")
+    m_mi = rtlil_module_add_wire(m_mi, rtlil_wire("a", 1, 1, 1))
+    m_mi = rtlil_module_add_wire(m_mi, rtlil_wire("b", 1, 1, 2))
+    m_mi = rtlil_module_add_wire(m_mi, rtlil_wire("s", 1, 1, 3))
+    m_mi = rtlil_module_add_wire(m_mi, rtlil_wire("t", 1, 0, 0))  // mux2 X (internal)
+    m_mi = rtlil_module_add_wire(m_mi, rtlil_wire("y", 1, 2, 4))
+    let mut c_mux = rtlil_cell("u_mux", "$mux", 0)
+    c_mux = rtlil_cell_connect(c_mux, "A", "a")
+    c_mux = rtlil_cell_connect(c_mux, "B", "b")
+    c_mux = rtlil_cell_connect(c_mux, "S", "s")
+    c_mux = rtlil_cell_connect(c_mux, "Y", "t")
+    m_mi = rtlil_module_add_cell(m_mi, c_mux)
+    let mut c_inv = rtlil_cell("u_inv", "$not", 0)
+    c_inv = rtlil_cell_connect(c_inv, "A", "t")
+    c_inv = rtlil_cell_connect(c_inv, "Y", "y")
+    m_mi = rtlil_module_add_cell(m_mi, c_inv)
+    let mut d_mi = rtlil_new_design("test")
+    d_mi = rtlil_design_add(d_mi, m_mi)
+    let r_mi = pass_techmap_sky130(d_mi)
+    if rtlil_count_cells_of_type(r_mi.design.modules[0], "sky130_fd_sc_hd__mux2i_1") != 1 {
+        println("FAIL T_TECHMAP_COMPLEX_CELLS.mux2i count got "
+            + str(rtlil_count_cells_of_type(r_mi.design.modules[0], "sky130_fd_sc_hd__mux2i_1")))
+        fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_mi.design.modules[0], "sky130_fd_sc_hd__inv_1") != 0 {
+        println("FAIL T_TECHMAP_COMPLEX_CELLS.mux2i inv_remains"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_mi.design.modules[0], "sky130_fd_sc_hd__mux2_1") != 0 {
+        println("FAIL T_TECHMAP_COMPLEX_CELLS.mux2i mux2_remains"); fails = fails + 1
     }
 
     if fails > 0 {
