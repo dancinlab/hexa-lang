@@ -1094,6 +1094,19 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 4 cycle 92: hexa_str_parse_int port (strtoll replacement)
+
+- ✅ **Step 4 opening cycle**. `hexa_str_parse_int` (self/runtime.c:
+  2981) ported. Replaces `hxlcl_strtoll + snprintf + throw` with
+  pure hexa source: whitespace skip + sign + optional 0x/0X hex
+  prefix + digit loop + trailing-whitespace skip + throw on bad
+- Throws use `throw "error: to_int: ..." + s + "\""` — string concat
+  via cycle-91 hexa_eq + hexa_str_concat (still C; we don't recurse
+  into parse_int from within parse_int)
+- Caller-side `!HX_IS_STR(s)` guard stays C (cheap tag check)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,218,152 B
+
 ### 2026-05-21 — step 3 cycle 91: hexa_eq TAG_STR strcmp fallback via rt_str_eq_b
 
 - ✅ Polymorphic `hexa_eq`'s TAG_STR branch (self/runtime_core.c:5459)
