@@ -1,0 +1,19 @@
+--- RFC 071 P8 N63 fire attempt — 2026-05-21 ---
+
+[probe] ubu-2 connectivity check (3 routes):
+  ubu-2     (Wireguard 10.142.0.2)   : ssh: connect to host 10.142.0.2 port 22:    Operation timed out
+  ubu-2-ts  (Tailscale 100.72.76.118): ssh: connect to host 100.72.76.118 port 22: Operation timed out
+  ubu2-d    (LAN       192.168.50.60): ssh: connect to host 192.168.50.60 port 2222: Operation timed out
+
+[probe] internet sanity:
+  curl https://api.github.com -> 200 OK
+  nslookup github.com         -> resolves
+  -> internet IS UP; ubu-2 itself or its VPN tunnel is DOWN.
+
+[status] BLOCKED — cannot fire on RTX 5070.
+
+[next] When ubu-2 returns, run:
+  cd /Users/ghost/core/hexa-lang/inbox/fires/rfc071_p8_vec_add_scale_2026_05_21
+  ./fire.sh
+  # writes fresh result.json + fire.log; the BLOCKED placeholder is
+  # overwritten with the real 6-shape bandwidth table.
