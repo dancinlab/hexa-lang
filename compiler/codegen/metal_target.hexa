@@ -172,21 +172,6 @@ pub let METAL_OP_PREAMBLE_USING: string      = "using namespace metal;"         
 pub let METAL_OP_LOAD_F32_TEMPLATE: string   = "[i]"   // a[i] tail — emitted as <buf>[i]
 pub let METAL_OP_STORE_F32_TEMPLATE: string  = "[i]"   // c[i] tail — emitted as <buf>[i]
 
-// RFC 075 P3+ reduce-sum fragments (FIRST NON-ELEMENT-WISE SHAPE).
-// Apple-canonical per-SIMD-group reduction intrinsic + warp-leader gate.
-//   ref: Metal Shading Language Specification §6.9.2 SIMD-group functions
-// `simd_sum(x)` reduces across the 32-wide SIMD group (every lane gets
-// the same broadcast result). `simd_is_first()` returns true on lane 0
-// of the SIMD group — used to gate the single output write per group.
-// The output buffer is per-SIMD-group sized (N / 32 floats for N
-// threads); a full single-scalar reduction would require a second
-// kernel pass or a single-threadgroup launch — explicitly out of scope
-// for this codegen cycle (the per-SIMD-group output is still a real
-// reduction, just not a fully collapsed one).
-pub let METAL_OP_SIMD_SUM: string         = "simd_sum"        // per-SIMD-group reduce-add intrinsic
-pub let METAL_OP_SIMD_IS_FIRST: string    = "simd_is_first"   // lane-0 predicate
-pub let METAL_OP_SIMD_GROUP_DIV: string   = " / 32u"          // i / 32 → group id (literal kept ASCII)
-
 // ── MSL address spaces (lookup pair) ──────────────────────────
 //
 // RFC 075 P2 alias constants — short-form aliases the classifier
@@ -520,83 +505,6 @@ fn _metal_mfunc_is_vec_scale_shape(mfn: MFunc) -> bool {
     return true
 }
 
-// _metal_emit_reduce_kernel_signature — emit the 2-buffer kernel signature
-// for reduce-sum (per-SIMD-group reduction). Different from the vec-* tier
-// signature in two ways:
-//   - only 2 device buffers (input `a`, output `c`) instead of 3
-//   - output buffer is per-SIMD-group sized (N/32) — the host allocates
-//     it that way; the kernel just writes group_id = i/32
-// This is the first NON-element-wise signature in the codegen — proves
-// the helper architecture generalises beyond `(a, b, c, i)`.
-fn _metal_emit_reduce_kernel_signature(name: string) -> string {
-    let mut out = METAL_OP_KERNEL_DECL + " " + name + "(\n"
-    out = out + "    " + METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR + "a "
-    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "0" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
-    out = out + "    " + METAL_OP_PARAM_DEVICE_FLOAT_PTR + "c "
-    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "1" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
-    out = out + "    " + METAL_TYPE_UINT + " i " + METAL_OP_THREAD_POS_GRID + ")\n"
-    return out
-}
-
-// _metal_emit_reduce_sum_body — emit the MSL kernel body for reduce-sum.
-// Per-SIMD-group output pattern (Apple-canonical):
-//   {
-//       float v = a[i];
-//       v = simd_sum(v);
-//       if (simd_is_first()) {
-//           uint group_id = i / 32u;
-//           c[group_id] = v;
-//       }
-//   }
-// Every lane loads its own `a[i]`, `simd_sum` broadcasts the SIMD-group
-// sum to all 32 lanes, and lane 0 (`simd_is_first()`) commits the single
-// per-group output to `c[group_id]`. Fully-collapsed scalar reduction is
-// follow-on work (needs second-pass launch or single-threadgroup variant).
-fn _metal_emit_reduce_sum_body() -> string {
-    let mut out = "{\n"
-    out = out + "    " + METAL_TYPE_FLOAT + " v" + METAL_OP_ASSIGN
-    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
-    out = out + METAL_OP_STMT_TERM + "\n"
-    out = out + "    v" + METAL_OP_ASSIGN + METAL_OP_SIMD_SUM + "(v)"
-    out = out + METAL_OP_STMT_TERM + "\n"
-    out = out + "    if (" + METAL_OP_SIMD_IS_FIRST + "()) {\n"
-    out = out + "        " + METAL_TYPE_UINT + " group_id" + METAL_OP_ASSIGN
-    out = out + "i" + METAL_OP_SIMD_GROUP_DIV + METAL_OP_STMT_TERM + "\n"
-    out = out + "        c" + METAL_OP_INDEX_OPEN + "group_id" + METAL_OP_INDEX_CLOSE
-    out = out + METAL_OP_ASSIGN + "v" + METAL_OP_STMT_TERM + "\n"
-    out = out + "    }\n"
-    out = out + "}\n"
-    return out
-}
-
-// _metal_mfunc_is_reduce_sum_shape — recognise the reduce-sum MIR shape.
-//
-// SYNTHETIC MIR SHAPE (honest scaffold note): the existing codebase has
-// no `sum(array)` MIR lowering — every prior GPU MIR shape is element-
-// wise (LOAD + LOAD/BINOP + STORE). To extend the codegen architecture
-// beyond element-wise patterns without a parser/lowering change (which
-// is multi-session), this recogniser detects a SYNTHETIC reduce-sum
-// shape: STMT_LOAD a→va, STMT_UNOP("reduce_sum", va)→vc, STMT_STORE
-// vc→c (plus optional STMT_RETURN tail). When a real `sum(array)`
-// lowering lands, the recogniser will switch over to the real MIR
-// pattern produced by `parser → lower_func`.
-//
-// The STMT_UNOP carrying op="reduce_sum" mirrors the per-target
-// custom-op convention in `arm64_darwin.hexa` (`_STMT_UNOP` branch).
-// The shape uses STMT_UNOP rather than STMT_BINOP because reduction is
-// fundamentally a unary op (one array in, one scalar out).
-fn _metal_mfunc_is_reduce_sum_shape(mfn: MFunc) -> bool {
-    if len(mfn.blocks) == 0 { return false }
-    let entry = mfn.blocks[0]
-    let stmts = entry.stmts
-    if len(stmts) < 3 { return false }
-    if stmts[0].kind != STMT_LOAD { return false }
-    if stmts[1].kind != STMT_UNOP { return false }
-    if stmts[1].op != "reduce_sum" { return false }
-    if stmts[2].kind != STMT_STORE { return false }
-    return true
-}
-
 // _metal_format_scalar — format a MIR const operand as MSL literal text.
 // const_float → uses the `float_val` field (e.g. "2.5"); const_int →
 // uses the `int_val` field with `.0` appended so it stays FP32 in MSL.
@@ -615,37 +523,29 @@ fn _metal_format_scalar(op: Operand) -> string {
 // module, unrecognised shape) returns `""` honestly, preserving the
 // P0 contract the lower_test Case 1 still asserts.
 //
-// HONEST SCOPE — six shapes recognised today (vec-add, vec-mul,
-// vec-sub, vec-div, vec-scale, reduce-sum). All other MIR patterns
-// return "". General MFunc → MSL lowering is multi-session work
-// mirroring the NVPTX P3 timeline.
+// HONEST SCOPE — five shapes recognised today (vec-add, vec-mul,
+// vec-sub, vec-div, vec-scale). All other MIR patterns return "".
+// General MFunc → MSL lowering is multi-session work mirroring the
+// NVPTX P3 timeline.
 //
 //   Shape coverage matrix (RFC 075 P3+):
-//     vec-add    `c[i] = a[i] + b[i]`        STMT_LOAD+LOAD+BINOP(add)+STORE
-//     vec-mul    `c[i] = a[i] * b[i]`        STMT_LOAD+LOAD+BINOP(mul)+STORE
-//     vec-sub    `c[i] = a[i] - b[i]`        STMT_LOAD+LOAD+BINOP(sub)+STORE
-//     vec-div    `c[i] = a[i] / b[i]`        STMT_LOAD+LOAD+BINOP(div)+STORE
-//     vec-scale  `c[i] = a[i] * <const>`     STMT_LOAD+BINOP(mul, const)+STORE
-//     reduce-sum `c[g] = simd_sum(a[i])`     STMT_LOAD+UNOP(reduce_sum)+STORE
+//     vec-add   `c[i] = a[i] + b[i]`     STMT_LOAD+LOAD+BINOP(add)+STORE
+//     vec-mul   `c[i] = a[i] * b[i]`     STMT_LOAD+LOAD+BINOP(mul)+STORE
+//     vec-sub   `c[i] = a[i] - b[i]`     STMT_LOAD+LOAD+BINOP(sub)+STORE
+//     vec-div   `c[i] = a[i] / b[i]`     STMT_LOAD+LOAD+BINOP(div)+STORE
+//     vec-scale `c[i] = a[i] * <const>`  STMT_LOAD+BINOP(mul, const)+STORE
 //
-// reduce-sum is the FIRST non-element-wise shape (N input → N/32 per-
-// SIMD-group output) — it exercises Apple's `simd_sum` intrinsic and the
-// 2-buffer kernel signature path. The MIR shape is currently SYNTHETIC
-// (no real parser/lowering produces it today); see
-// `_metal_mfunc_is_reduce_sum_shape` docstring for the scaffold note.
-//
-// Dispatch order: vec-add → vec-mul → vec-sub → vec-div → vec-scale → reduce-sum → "".
-// vec-scale is tried before reduce-sum because both are 3-stmt shapes
-// (LOAD + UNOP/BINOP + STORE); vec-scale's binop-with-const check is
-// the most discerning of the binop family. reduce-sum's UNOP check is
-// mutually exclusive with all the binop shapes.
+// Dispatch order: vec-add → vec-mul → vec-sub → vec-div → vec-scale → "".
+// vec-scale is tried last because its recogniser is the most discerning
+// (checks operand kinds), so a two-buffer binop shape that happens to
+// share the short-stmt prefix never accidentally lands in vec-scale.
 //
 // P4+ insertion points:
 //   - TODO RFC 075 P4 — silicon fire via `xcrun -sdk macosx metal`
 //     + Metal Performance Shaders runtime + M-series GPU (vec-add
 //     landed on Apple M3 commit 4415ec91; vec-mul / vec-sub / vec-div /
-//     vec-scale / reduce-sum silicon fires queued for the same cycle
-//     once a Mac is available).
+//     vec-scale silicon fires queued for the same cycle once a Mac is
+//     available).
 //   - TODO RFC 075 follow-on cycle — general MFunc → MSL emission
 //     (replicate `_nvptx_lower_func` shape against MSL statements).
 pub fn codegen_emit_metal_msl(module: MModule) -> string {
@@ -691,17 +591,6 @@ pub fn codegen_emit_metal_msl(module: MModule) -> string {
         let mut out = _metal_emit_preamble()
         out = out + _metal_emit_kernel_signature(kname)
         out = out + _metal_emit_vec_scale_body(scalar)
-        return out
-    }
-    // reduce-sum — STMT_LOAD + STMT_UNOP(reduce_sum) + STMT_STORE.
-    // First non-element-wise shape (N input → N/32 per-SIMD-group
-    // output). Uses the 2-buffer signature emitter (input + output) and
-    // emits `simd_sum` + `simd_is_first` Apple SIMD-group intrinsics.
-    // Synthetic MIR shape — see recogniser docstring for scaffold note.
-    if _metal_mfunc_is_reduce_sum_shape(mfn) {
-        let mut out = _metal_emit_preamble()
-        out = out + _metal_emit_reduce_kernel_signature(kname)
-        out = out + _metal_emit_reduce_sum_body()
         return out
     }
     // No recognised shape — honest empty string.

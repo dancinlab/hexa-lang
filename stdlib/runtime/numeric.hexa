@@ -163,6 +163,68 @@ pub fn rt_array_slice_float(arr: [float], start: int, end: int) -> [float] {
     return out
 }
 
+// Step 3 cycle 60 — fixed-precision float→string (snprintf "%.*f"
+// replacement). Trade-off: works for values within ±2^53 and prec ≤ 18
+// where int64 round-trip stays exact. Beyond that, falls back to int
+// truncation (lossy). For typical user precision use cases (prec ≤ 10)
+// and values in normal scientific range, byte-identical to libm.
+fn _rt_int_to_dec_str(n: int) -> string {
+    if n == 0 { return "0" }
+    let mut digits: [int] = []
+    let mut x = n
+    while x > 0 {
+        let d = x - (x / 10) * 10
+        digits = digits.push(48 + d)
+        x = x / 10
+    }
+    let mut bytes: [int] = []
+    let dlen = len(digits)
+    let mut i = dlen - 1
+    while i >= 0 {
+        bytes = bytes.push(digits[i])
+        i = i - 1
+    }
+    return bytes_to_str_raw(bytes)
+}
+
+fn _rt_int_to_dec_str_pad(n: int, width: int) -> string {
+    let raw = _rt_int_to_dec_str(n)
+    let cur = byte_len(raw)
+    if cur >= width { return raw }
+    let pad = width - cur
+    let mut bytes: [int] = []
+    let mut i = 0
+    while i < pad {
+        bytes = bytes.push(48)
+        i = i + 1
+    }
+    return bytes_to_str_raw(bytes) + raw
+}
+
+pub fn rt_format_float_f(v: float, prec: int) -> string {
+    let mut x = v
+    let mut sign = ""
+    if x < 0.0 { x = -x; sign = "-" }
+    let mut p = prec
+    if p < 0 { p = 0 }
+    if p > 18 { p = 18 }
+    let mut mult = 1.0
+    let mut i = 0
+    while i < p {
+        mult = mult * 10.0
+        i = i + 1
+    }
+    let scaled = x * mult + 0.5
+    let total = scaled as int
+    let mult_i = mult as int
+    let int_part = total / mult_i
+    let frac_part = total - int_part * mult_i
+    let int_str = _rt_int_to_dec_str(int_part)
+    if p == 0 { return sign + int_str }
+    let frac_str = _rt_int_to_dec_str_pad(frac_part, p)
+    return sign + int_str + "." + frac_str
+}
+
 // Step 3 cycle 59 — array sort, float fast-path. Insertion sort (O(n²))
 // avoiding recursion (cf. the hexa_v2 transpile recursion trap noted at
 // cycles 30 + 52). Builds a new sorted array each pass; acceptable

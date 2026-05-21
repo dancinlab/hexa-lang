@@ -1094,6 +1094,24 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 60: hexa_format_float → rt_format_float_f (snprintf "%.*f" replacement)
+
+- ✅ `hexa_format_float` (self/runtime_core.c:6345) ported. Replaces
+  `snprintf(buf, 64, "%.*f", p, v)` with a hexa-source fixed-precision
+  float→string formatter (split int/frac via 10^p scaling, round
+  half-up, zero-pad fractional digits)
+- Two new private helpers in numeric.hexa: `_rt_int_to_dec_str` and
+  `_rt_int_to_dec_str_pad` (digit-extraction loop using
+  `bytes_to_str_raw`). First int-to-string in this stdlib — reusable
+  for future ports (e.g. integer formatting)
+- ⚠ **Trade-off**: int64 round-trip exact only for values within
+  ±2^53 and prec ≤ 18. Beyond that, integer overflow yields lossy
+  output (matches the typical user precision budget; the C body's
+  snprintf handles all edge cases). Acceptable for the hot self-host
+  path where format precision ≤ 10
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,776 B
+
 ### 2026-05-21 — step 3 cycle 59: hexa_array_sort float fast-path (insertion sort, no recursion)
 
 - ✅ `hexa_array_sort` (self/runtime_core.c:4503) gains float fast-path

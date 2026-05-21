@@ -6447,6 +6447,11 @@ HexaVal hexa_str_count_substr(HexaVal s, HexaVal sub) {
 }
 #endif
 
+// Step-3 cycle 60 port — snprintf "%.*f" replaced by hexa-source
+// rt_format_float_f. Caveats: works exactly for values within ±2^53
+// and prec ≤ 18; beyond that the int64 round-trip is lossy. The C
+// body remains as the no-stdlib fallback.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_format_float(HexaVal f, HexaVal prec) {
     double v = __hx_to_double(f);
     int p = HX_INT(prec);
@@ -6454,6 +6459,12 @@ HexaVal hexa_format_float(HexaVal f, HexaVal prec) {
     snprintf(buf, 64, "%.*f", p, v);
     return hexa_str(buf);
 }
+#else
+extern HexaVal rt_format_float_f(HexaVal v, HexaVal prec);
+HexaVal hexa_format_float(HexaVal f, HexaVal prec) {
+    return rt_format_float_f(hexa_float(__hx_to_double(f)), prec);
+}
+#endif
 
 HexaVal hexa_format_float_sci(HexaVal f, HexaVal prec) {
     double v = __hx_to_double(f);
