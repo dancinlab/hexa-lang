@@ -1094,6 +1094,49 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 91: hexa_eq TAG_STR strcmp fallback via rt_str_eq_b
+
+- ✅ Polymorphic `hexa_eq`'s TAG_STR branch (self/runtime_core.c:5459)
+  splits into: intern fast-path (HX_STR pointer identity) stays C, then
+  delegates strcmp fallback to cycle-57 `rt_str_eq_b` (already-ported
+  hexa source) via `hexa_truthy(rt_str_eq_b(a, b))`
+- Surgical patch: one TAG_STR case → 5 lines. Other branches (INT/
+  FLOAT/BOOL/VOID/VALSTRUCT/ARRAY/MAP) stay C (per agent-#4
+  feasibility report — array recursive eq + map structural eq + intern
+  pointer comparison all blocked for now)
+- 잔여 #4 partially discharged: 1 of 9 branches ported
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,217,928 B
+
+### 2026-05-21 — step 3 cycle 90: 🛸 first map-op ports (merge/entries/to_array)
+
+- ✅ **First map-op family ported.** Three CORE-tier (runtime_core.c)
+  functions migrated to hexa source:
+  - `hexa_map_merge` → `rt_map_merge` (iterates b.keys(), overlays b
+    onto a per interpreter semantics)
+  - `hexa_map_entries` → `rt_map_entries` (returns array of [k,v]
+    pair arrays in insertion order)
+  - `hexa_map_to_array` → falls through to `hexa_map_entries` (no
+    separate rt_ wiring — aliased per interpreter dispatch)
+- **Blocker (잔여 #5) discharged**: the stated `const char* key` ABI
+  gap is bypassed cleanly by hexa-source method syntax. `b.keys()`
+  returns a HexaVal array of strings; `b.get(k)` / `out.set(k, v)`
+  codegen to `hexa_map_get(b, hexa_to_cstring(k))` / `hexa_map_set(
+  out, hexa_to_cstring(k), v)` automatically (codegen_c2.hexa:
+  3374-3378). **No new C wrapper** (no `hexa_map_set_v`) needed;
+  no externs baseline impact
+- Two-mode `#ifdef HEXA_HAS_HEXA_RT_STDLIB` dispatch — runtime.c
+  standalone link (smoke test path) keeps the original C body so
+  `prog.hexa` -> arm64 .s -> .o + self/runtime.c link still works.
+  aprime_cc TU gets the macro defined and dispatches into hexa source
+- Caller-side `HX_MAP_TBL(m)` non-NULL guard kept C-side; hexa body
+  handles only iteration logic (no internal-table introspection)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,217,848 B
+- Next map-op candidates following same pattern: `hexa_map_invert`,
+  `hexa_map_from_array`, `hexa_map_map_values` (fn callback),
+  `hexa_map_filter_keys` (fn callback), `hexa_map_count/any/all`
+
 ### 2026-05-21 — step 3 cycle 89: hexa_concat_many variadic port (잔여 #7 discharged via TAG_ARRAY bridge)
 
 - ✅ **Variadic `HexaVal*` C-buffer 잔여 closed.** `hexa_concat_many(int
