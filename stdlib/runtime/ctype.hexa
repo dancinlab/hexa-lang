@@ -49,6 +49,31 @@ pub fn rt_str_char_count(s: string) -> int {
     return rt_utf8_cpcount(s)
 }
 
+// Step 3 cycle 54 — byte-indexed first occurrence of `sub` in `s`.
+// Returns -1 when absent. Empty needle returns 0 (matches the C body's
+// `hxlcl_strstr(hay, "")` → `hay` semantic). Used by `s.index_of(sub)`.
+pub fn rt_str_index_of(s: string, sub: string) -> int {
+    let n = byte_len(s)
+    let m = byte_len(sub)
+    if m == 0 { return 0 }
+    let mut i = 0
+    while i + m <= n {
+        let mut k = 0
+        let mut matched = true
+        while k < m {
+            if s.byte_at(i + k) != sub.byte_at(k) {
+                matched = false
+                k = m
+            } else {
+                k = k + 1
+            }
+        }
+        if matched { return i }
+        i = i + 1
+    }
+    return -1
+}
+
 // Step 3 cycle 53 — codepoint-indexed nth char (1-codepoint string,
 // 1..4 bytes). Negative target or OOB returns "". Inlines the same
 // UTF-8 bit-pattern table as rt_utf8_cpcount (cycle 51).

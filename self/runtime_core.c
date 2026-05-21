@@ -4146,12 +4146,24 @@ HexaVal hexa_str_substring(HexaVal s, HexaVal start, HexaVal end) {
     return (HexaVal){.tag=TAG_STR, .s=buf};
 }
 
+// Step-3 cycle 54 port — int64_t-returning fn bridged through hexa-source
+// `rt_str_index_of` (returns int → HexaVal at C ABI). The C wrapper
+// preserves the int64_t signature so codegen wrapping
+// `hexa_int(hexa_str_index_of(...))` keeps working.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int64_t hexa_str_index_of(HexaVal s, HexaVal sub) {
     if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
     char* p = hxlcl_strstr(HX_STR(s), HX_STR(sub));
     if (!p) return -1;
     return (int64_t)(p - HX_STR(s));
 }
+#else
+extern HexaVal rt_str_index_of(HexaVal s, HexaVal sub);
+int64_t hexa_str_index_of(HexaVal s, HexaVal sub) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
+    return HX_INT(rt_str_index_of(s, sub));
+}
+#endif
 
 // `.index_of(sub, start)` — first occurrence at-or-after byte offset `start`.
 // hxa-20260423-012: the 2-arg form was silently dropping `start`, forcing

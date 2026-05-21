@@ -1094,6 +1094,21 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 54: hexa_str_index_of → rt_str_index_of (int64_t-return bridge POC)
+
+- ✅ `hexa_str_index_of` (self/runtime_core.c:4149) ported. Returns
+  `int64_t` (not HexaVal) at the C ABI — the codegen wraps results
+  in `hexa_int(...)` per codegen_c2.hexa:3341
+- **New pattern**: int64_t-returning fn bridged through hexa-source
+  `rt_str_index_of(s, sub) -> int` (which is HexaVal at C ABI) via
+  `HX_INT(rt_str_index_of(...))`. Preserves the original C signature
+  so call sites are unchanged. Unlocks porting of `index_of_from`,
+  `last_index_of`, and others with `int64_t` returns
+- Empty needle returns 0 (matches `hxlcl_strstr(hay, "")` → `hay`
+  semantic from the C body)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,184 B
+
 ### 2026-05-21 — step 3 cycle 53: hexa_str_nth_char + hexa_str_char_substring (UTF-8 codepoint ops)
 
 - ✅ `hexa_str_nth_char` (self/runtime_core.c:4278) and
