@@ -17,7 +17,7 @@
   builds + parses cleanly, but fails to JIT-link any user .hexa
   with duplicate symbols against the linked-in runtime.
 
-**Status**: not_started (filed 2026-05-21)
+**Status**: resolved-ssot (2026-05-21) — actual root cause was a stale `build/self/` shadow tree, NOT the proposed "strip C versions from `runtime.c`". The driver at `build/hexa_cli_driver` resolves the transpiler via `resolve_hexa_v2() → install_dir_from_argv0()/self/native/hexa_v2`, which for in-repo use lands at `build/self/native/hexa_v2` — and that copy was a 2026-04-25 binary emitting the legacy `#include "runtime.c"` directive (newer codegen at `codegen_c2.hexa:931` defaults to `runtime.h`). Old binary + dual TU compile (`#include "runtime.c"` inside the user TU AND `runtime.c` appended as a separate clang TU) = every `_hexa_*` symbol declared twice. Additionally `build/self/runtime.h` was absent, masking the issue: even after picking up the newer hexa_v2 manually, clang failed at `runtime.h: file not found`. Fix landed in `tool/build_hexa_cli.sh` (step 4b — shadow install-layout: sync `native/hexa_v2`, `runtime.{h,c,_core.c,_hi_gen.c}`, `native/*.{c,h}`, `forge/forge_tier_v1.{c,h}` from canonical `self/` into `build/self/`). Verified: `unset HEXA_LANG; hexa build /tmp/dup_smoke.hexa -o /tmp/x.bin && /tmp/x.bin` → `hi`. Proposed runtime.c strip (option 1) was the WRONG fix — the `#ifndef HEXA_HAS_HEXA_RT_STDLIB` two-mode guards are intentional fallbacks (aprime_cc smoke standalone-consumer path).
 
 ## Symptom
 
