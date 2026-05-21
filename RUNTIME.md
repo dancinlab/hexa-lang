@@ -957,3 +957,64 @@ For each Tier-A sub-phase:
   hexa_floor + hexa_ceil + hexa_u_floor + hexa_clamp) · **8 hexa
   primitives** (rt_abs_int/_float, rt_floor, rt_ceil, rt_u_floor,
   rt_clamp, rt_imin, rt_imax, rt_sign)
+
+### 2026-05-21 — step 3 cycles 4-30 condensed catchup (15 commits)
+
+Per-cycle commit messages carry full deltas; this entry consolidates so
+the RUNTIME.md log doesn't lag behind code. All 15 cycles preserved
+aprime_cc smoke exit(42) and the externs baseline; no S3 regressions.
+
+- cycle 4 (`c588b13c`): `hexa_round` → `rt_round` (half-away-from-zero)
+- cycle 5 (`0dec61a5`): `hexa_math_min/max` → `rt_min_float/rt_max_float`
+- cycle 6 (`b24d4f80`): `hexa_pow` int branch → `rt_pow_int` (binary expo)
+- cycle 7-9 (math.hexa): `rt_sqrt` (Newton-Raphson), `rt_tan`, `rt_log2`,
+  `rt_log10`, `rt_tanh` (libm-free transcendentals)
+- cycle 10 (`4601fdaf`): `isnan/isinf/isfinite` → IEEE-754 classifiers
+  via `(x != x)` + DBL_MAX comparison
+- cycle 11 (math.hexa): `rt_pow_float` composes rt_exp + rt_log
+- cycle 12 (`088a48c1`): `hexa_one_hot` → `rt_one_hot`
+- cycle 13 (`c010fc9e`): `hexa_to_float` → `rt_to_float` pass-through
+- cycle 14 (math.hexa): `rt_lgamma` (Stirling series w/ shift)
+- cycle 15-17 (math.hexa): `rt_softmax` (stable max-shift), `rt_rms_norm_*`
+  (scalar/array gamma), `rt_silu`, `rt_gelu` (tanh approx), `rt_argmax`
+- cycle 18-19 (math.hexa): `rt_matvec`, `rt_matmul` (row-major naive)
+- cycle 20 (`c9f226e4`): `hexa_array_mean` → `rt_array_mean`
+- cycle 22 (`0abb164d`): `array_min/max float` → `rt_array_min_float/max_float`
+- cycle 23 (`485bb915`): `array_sum/product float` → `rt_array_sum_float/product_float`
+- cycle 24 (`a6dab6b1`): `array_take/drop float` → `rt_array_take_float/drop_float`
+- cycle 25 (`a9311eb4`): `reverse/swap/zip float` → `rt_array_reverse/swap/zip_float`
+- cycle 26 (`6f54b924`): `array_chunk float` → `rt_array_chunk_float`
+- cycle 30 (`ef4b04bb`): `array_rotate float` → `rt_array_rotate_float`
+
+Pattern across all 15 cycles:
+- `#ifndef HEXA_HAS_HEXA_RT_STDLIB` keeps the pure-C body for the
+  smoke-test path (prog.hexa links runtime.c standalone w/o the define)
+- `#else` branch declares `extern HexaVal rt_<name>(...)` and dispatches
+  via `_arr_all_float(arr)` for array-typed entry points (float-typed
+  arrays take the hexa-source path; mixed arrays stay on the C body
+  to avoid HexaVal-tag introspection from the hexa side)
+- step 4 cycle 21 (`52d1a2f5`) was the lone non-HI port (`hexa_fma` is
+  CORE-tier in runtime_core.c) — landed mid-stream to validate the
+  same two-mode pattern works against runtime_core.c too; accepted
+  the 1-vs-2 rounding precision trade-off
+
+Blocker noted mid-stream: hot-path `cmp/add/sub/mul/div` ports cause
+hexa_v2 transpile lowering infinite recursion (`rt_cmp_lt_int` call
+chain). Workaround: the C bodies `hexa_cmp_lt` etc. stay; hexa source
+only uses `<` directly. `_arr_all_float` dispatch remains safe because
+it operates on HexaVal tags from C.
+
+- step-3 cumulative: **42 HI-tier fns ported** across numeric.hexa +
+  math.hexa (per memory snapshot). aprime_cc smoke exit(42) PASS at
+  each cycle. Externs baseline 24 (post PR #251 exec stubs restored
+  for runtime cycle 66 fix — not a regression in this campaign)
+
+### 2026-05-21 — step 3 cycle 31: hexa_array_window → rt_array_window_float
+
+- ✅ `hexa_array_window` (self/runtime.c:3533) ported. Sliding window
+  of size n, step 1. `rt_array_window_float` in numeric.hexa follows
+  the cycle-26 chunk pattern (n ≤ 0 or n > len → empty)
+- `#ifndef HEXA_HAS_HEXA_RT_STDLIB` two-mode wiring + `_arr_all_float`
+  dispatch identical to chunk/rotate
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,536 B

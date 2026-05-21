@@ -3530,6 +3530,9 @@ HexaVal hexa_array_chunk(HexaVal arr, HexaVal nv) {
 
 // window(n): sliding windows of size n (step 1). Empty if n > len or n ≤ 0.
 // Matches interpreter at hexa_full.hexa:15380-15395.
+// Step-3 cycle 31 port — float-typed arrays dispatch to rt_array_window_float
+// in stdlib/runtime/numeric.hexa; mixed-typed arrays stay on the C path.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_window(HexaVal arr, HexaVal nv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3545,6 +3548,25 @@ HexaVal hexa_array_window(HexaVal arr, HexaVal nv) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_window_float(HexaVal arr, HexaVal n);
+HexaVal hexa_array_window(HexaVal arr, HexaVal nv) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
+    if (_arr_all_float(arr)) return rt_array_window_float(arr, hexa_int(n));
+    int64_t len = HX_ARR_LEN(arr);
+    if (n <= 0 || n > len) return out;
+    for (int64_t i = 0; i + n <= len; i++) {
+        HexaVal win = hexa_array_new();
+        for (int64_t j = 0; j < n; j++) {
+            win = hexa_array_push(win, HX_ARR_ITEMS(arr)[i + j]);
+        }
+        out = hexa_array_push(out, win);
+    }
+    return out;
+}
+#endif
 
 // unique: dedupe by hexa_eq. O(n²) — matches interpreter's equality
 // check (hexa_full.hexa:15263-15277). Step-3 cycle 29 port.
