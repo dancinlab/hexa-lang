@@ -2328,6 +2328,18 @@ fn _rv_v2_dwire(lhs: str) -> str {
     return lhs + "__d"
 }
 
+// CLEAN-ROOM (rfc_006 §5 Tier-1 (e) follow-up): look up the width of
+// wire `name` in `m`. Returns 1 when the wire is absent (current
+// emit-paths assume 1-bit D-wires when no Q-wire exists yet). For
+// multi-bit array slots created by `_rv_parse_port_decl`'s 2-D path,
+// the D-wire should match the slot's declared packed width so the
+// downstream $dff cell isn't a width-1 → width-W mismatch.
+fn _rv_v2_wire_width(m: Module, name: str) -> int {
+    let idx = rtlil_find_wire(m, name)
+    if idx < 0 { return 1 }
+    return m.wires[idx].width
+}
+
 // RFC 006 §5 ABC combinational-loop SSA fix —
 // `_rv_signal_is_read_in_body` returns 1 iff `name` appears as a RHS
 // (read) reference somewhere in `toks` (any position that is NOT a
@@ -2964,7 +2976,8 @@ fn _rv_emit_body_v2(
                 if is_clocked == 1 {
                     let dw = _rv_v2_dwire(slot)
                     if rtlil_find_wire(m, dw) < 0 {
-                        m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                        let _slot_w = _rv_v2_wire_width(m, slot)
+                        m = rtlil_module_add_wire(m, rtlil_wire(dw, _slot_w, 0, 0))
                     }
                     m = rtlil_module_connect_cond(m, dw, rer.wire, cond_wire)
                     tracked = _rv_v2_track(tracked, slot)
@@ -3061,7 +3074,8 @@ fn _rv_emit_body_v2(
                     if is_clocked == 1 {
                         let dw = _rv_v2_dwire(slot)
                         if rtlil_find_wire(m, dw) < 0 {
-                            m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                            let _slot_w = _rv_v2_wire_width(m, slot)
+                            m = rtlil_module_add_wire(m, rtlil_wire(dw, _slot_w, 0, 0))
                         }
                         m = rtlil_module_connect_cond(m, dw, rer.wire, sel_w)
                         tracked = _rv_v2_track(tracked, slot)
