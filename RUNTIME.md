@@ -1094,6 +1094,18 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 57: hexa_str_contains + hexa_str_eq (int-return bridge)
+
+- ✅ `hexa_str_contains` (self/runtime_core.c:4108) and `hexa_str_eq`
+  (4112) gain dispatch via the cycle-56 `_b`-suffix bridge pattern.
+  Both keep int return; hexa-source helpers return bool
+- contains: thin wrapper over cycle-54's `rt_str_index_of` (≥0 ⇒ true)
+- eq: byte-by-byte compare after length check. The pointer-equality
+  fast-path for interned strings stays C-side (hexa source can't
+  observe HX_STR identity — that's a runtime intern-table invariant)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,664 B
+
 ### 2026-05-21 — step 3 cycle 56: rt_str_starts_with + rt_str_ends_with (int-return bridge via _b suffix)
 
 - ✅ Both `rt_str_starts_with` and `rt_str_ends_with`

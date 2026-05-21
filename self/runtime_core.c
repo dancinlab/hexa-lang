@@ -4105,16 +4105,37 @@ HexaVal hexa_str_chars(HexaVal s) {
 }
 #endif
 
+// Step-3 cycle 57 port — int-return bridge through rt_str_contains_b.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int hexa_str_contains(HexaVal s, HexaVal sub) {
     return hxlcl_strstr(HX_STR(s), HX_STR(sub)) != NULL;
 }
+#else
+extern HexaVal rt_str_contains_b(HexaVal s, HexaVal sub);
+int hexa_str_contains(HexaVal s, HexaVal sub) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return 0;
+    return hexa_truthy(rt_str_contains_b(s, sub)) ? 1 : 0;
+}
+#endif
 
+// Step-3 cycle 57 port — int-return bridge through rt_str_eq_b. The
+// pointer-equality fast-path for interned strings stays C-side (hexa
+// source can't observe HX_STR identity).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int hexa_str_eq(HexaVal a, HexaVal b) {
     if (!HX_IS_STR(a) || !HX_IS_STR(b)) return 0;
     // Optimization #11: interned strings share pointers
     if (HX_STR(a) == HX_STR(b)) return 1;
     return hxlcl_strcmp(HX_STR(a), HX_STR(b)) == 0;
 }
+#else
+extern HexaVal rt_str_eq_b(HexaVal a, HexaVal b);
+int hexa_str_eq(HexaVal a, HexaVal b) {
+    if (!HX_IS_STR(a) || !HX_IS_STR(b)) return 0;
+    if (HX_STR(a) == HX_STR(b)) return 1;  // intern fast-path stays C
+    return hexa_truthy(rt_str_eq_b(a, b)) ? 1 : 0;
+}
+#endif
 
 // M1 full · str_ext Step 5 (hxa-20260423-003): rt_str_starts_with/ends_with —
 // codegen emits rt_str_* directly; hexa_str_starts_with/ends_with shims retired.

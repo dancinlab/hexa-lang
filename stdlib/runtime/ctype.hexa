@@ -49,6 +49,30 @@ pub fn rt_str_char_count(s: string) -> int {
     return rt_utf8_cpcount(s)
 }
 
+// Step 3 cycle 57 — string contains (substring search). True when `sub`
+// appears anywhere in `s`. Reuses cycle-54's rt_str_index_of for the
+// scan logic — `index_of != -1` is the canonical predicate.
+pub fn rt_str_contains_b(s: string, sub: string) -> bool {
+    if rt_str_index_of(s, sub) >= 0 { return true }
+    return false
+}
+
+// Step 3 cycle 57 — string byte-equality. C body uses pointer-equality
+// fast-path for interned strings then strcmp — we replicate the byte-
+// by-byte compare here (interning fast-path stays in the C wrapper
+// since hexa source can't observe HX_STR identity).
+pub fn rt_str_eq_b(a: string, b: string) -> bool {
+    let na = byte_len(a)
+    let nb = byte_len(b)
+    if na != nb { return false }
+    let mut i = 0
+    while i < na {
+        if a.byte_at(i) != b.byte_at(i) { return false }
+        i = i + 1
+    }
+    return true
+}
+
 // Step 3 cycle 56 — prefix / suffix predicates. Hexa fns return bool;
 // the C wrappers keep their `int` return signature (codegen wraps in
 // `hexa_bool(rt_str_starts_with(...))`) so we use `_b` suffix names
