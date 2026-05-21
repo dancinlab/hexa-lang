@@ -376,6 +376,18 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
     if op == "add" || op == "+" { return PTX_OP_ADD_F64 }
     if op == "sub" || op == "-" { return PTX_OP_SUB_F64 }
     if op == "mul" || op == "*" { return PTX_OP_MUL_F64 }
+    // RFC 071 P4+ — FP64 division (N56 vec_div gap). PTX ISA §9.7.1.4
+    // requires an EXPLICIT rounding suffix on `div.<ty>` — bare `div.f64`
+    // is not a legal mnemonic. For FP64 the ONLY native ISA mode is
+    // `div.rn.f64` (IEEE round-to-nearest, ~52-bit accurate). There is
+    // no `div.approx.f64` / `div.full.f64` (those exist only for `.f32`),
+    // so this is the unique sensible default — no precision-policy
+    // branching needed at the FP64 mnemonic table. Matches the
+    // round-to-nearest default of `add.f64` / `sub.f64` / `mul.f64` (which
+    // omit the `.rn` suffix because round-to-nearest is the implicit
+    // default for those ops; div is the exception that requires the
+    // explicit suffix).
+    if op == "div" || op == "/" { return PTX_OP_DIV_RN_F64 }
     // RFC 068 P3 `F-RFC068-BODY-MNEMONIC` — mixed-precision arithmetic
     // mnemonics. The opcode-suffix comes from `hir_to_mir.hexa`'s
     // `_op_with_precision` (PR #170) when the dst Local carries an
