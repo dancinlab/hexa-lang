@@ -1,52 +1,81 @@
-// HEXA Native Compiler — Codegen / ROCm (hexa-src → HIP-IL)  [RFC 075 P0 scaffold]
+// HEXA Native Compiler — Codegen / ROCm (hexa-src → HIP source)  [RFC 075 P1 codegen-only]
 //
-// @version 0.0.1
+// @version 0.0.2
 // @capabilities [pure]
 //
 // ─────────────────────────────────────────────────────────────────────
-// SCAFFOLD ONLY — RFC 075 P0 (multi-vendor codegen). Zero behavior
-// change.
+// RFC 075 P1 — ROCm/HIP codegen text-emit, codegen-only (no silicon
+// fire this cycle — AMD GPU pool is empty per N10/N14/N22). NVPTX path
+// byte-identically untouched. Metal path byte-identically untouched.
+// Zero edits to `self/codegen_c2.hexa` per @D g_commit_push_deploy.
 //
-// This file is a STRUCTURAL SKELETON for the hexa-native AMD GPU codegen
-// target. It PARSES CLEAN but is NOT wired into the compiler's target
-// dispatch — nothing routes MIR here. The `codegen_emit_rocm_il` entry
-// is an honest stub returning `""`. Real instruction emit + classifier
-// + silicon fire are P1..P4 (multi-session per RFC 075 §4).
+// This file is the hexa-native AMD GPU codegen target. It PARSES CLEAN.
+// P1 adds the full vec-add HIP source-text fragment table (kernel
+// declaration, FP32 pointer parameter typing, thread-index expression,
+// FP32 binop fragments, load/store templates) PLUS the vec-add shape
+// recogniser + emit fn. P1 implements `codegen_emit_rocm_hipir` to
+// produce a real HIP kernel source for the vec-add MIR pattern
+// (STMT_LOAD + STMT_LOAD + STMT_BINOP("add") + STMT_STORE). Other
+// kernel shapes still honestly return `""` — see honest scope below.
 //
-// Mirror of `compiler/codegen/nvptx_target.hexa` (RFC 055 Stage 1)
-// at the same scaffold-only state. The two siblings will diverge
-// only in their target enum constants and opcode tables; the lowering
-// shape (MIR → text via virtual-register-named operands) is reused.
+// P2 (silicon fire via `hipcc` + AMD GPU pool host) remains a follow-on
+// MULTI-SESSION cycle requiring AMD GPU stock; this cycle is codegen-
+// only and the emitted HIP source is verified by substring asserts in
+// `rocm_lower_test.hexa`, not by AMD-silicon execution.
+//
+// Mirror of `compiler/codegen/metal_target.hexa` (RFC 075 P1+P2+P3+) at
+// the same FIRST-SHAPE step. The ROCm target is structurally analogous
+// to Metal: HIP's vendor-input is SOURCE TEXT (.hip / .cpp files with
+// CUDA-like `__global__` annotations) rather than a virtual-ISA text
+// like PTX. The opcodes below are therefore HIP/CUDA source-text
+// fragments, not virtual-ISA mnemonics. The emit pass produces HIP
+// source code, which `hipcc` ingests the same way `metal` ingests MSL.
 //
 //   pub fn codegen_emit_rocm_il(module: MModule) -> string
 //
-// Mirrors `codegen_emit_ptx_sm80` signature: MIR module in, HIP-IL
-// text out. P0 stub returns `""` (P0 placeholder asserted by
-// `rocm_lower_test.hexa`).
+// Mirrors `codegen_emit_metal_msl` signature: MIR module in, HIP source
+// text out. Dispatcher checks the first MFunc shape: if it matches the
+// vec-add pattern (STMT_LOAD + STMT_LOAD + STMT_BINOP("add") +
+// STMT_STORE) the emitter produces a full HIP kernel source. Empty
+// module / non-vec-add shape → returns `""` honestly (the P0 contract
+// is preserved for the empty-module case).
 //
 // ─────────────────────────────────────────────────────────────────────
 // HONEST SCOPE (RFC 075 §6 / @D g3)
 //
-//   IS  — target enum constants (gfx-rev), opcode/mnemonic table stubs
-//         for the HIP-IL vec-add tier, empty emit entry point.
-//   NOT — a working backend. No HIP-IL is emitted. No `@gpu_kernel`
-//         is routed here. `hipcc` is never invoked. AMD silicon never
-//         fires. Nothing in the compiler dispatches to these stubs.
+//   IS  — target enum constants (gfx-rev), full vec-add HIP syntax-
+//         fragment table, vec-add MIR shape recogniser, real HIP source
+//         emit for the vec-add pattern.
+//   NOT — General MIR-walk HIP emission. The vec-add emitter is shape-
+//         hardcoded; other MIR shapes return `""`. Reduce-sum / matmul
+//         / matmul_NT_a / matmul_NT_b / bf16 land on the AMD lane in
+//         multi-session cycles (mirrors RFC 075 plan on the Apple Metal
+//         lane). No `@gpu_kernel` target dispatch wiring this cycle
+//         (codegen-only). No `hipcc` invocation (P2 silicon fire =
+//         follow-on cycle once AMD GPU pool stock returns). AMD silicon
+//         does not fire this cycle — pool empty (N10/N14/N22 BLOCKED).
 //
-// `hipcc` (HIP-IL → AMD GCN code object) is an external AMD assembler —
-// the same g5 logic as NVPTX's `ptxas` and the CPU-fallback `clang`/`as`
-// path (RFC 055 §8 mirrored to RFC 075). This file does not claim a
-// closed-loop AMD GPU toolchain.
+// `hipcc` (HIP source -> AMD GCN code object) is an external AMD
+// compiler — the same g5 logic as NVPTX's `ptxas`, Apple's `xcrun
+// metal`, and the CPU-fallback `clang`/`as` path (RFC 055 §8 mirrored
+// to RFC 075). This file does not claim a closed-loop AMD GPU toolchain.
+//
+// Choosing HIP source over LLVM bitcode keeps @D f2 ("no LLVM linkage")
+// intact: HIP bitcode is an LLVM-bitcode container produced by AMD's
+// `clang-offload-bundler`. Emitting bitcode directly would re-introduce
+// LLVM coupling. Emitting HIP source text mirrors the PTX-text and
+// MSL-text patterns.
 //
 // ─────────────────────────────────────────────────────────────────────
 // CITATIONS (not lattice-derived, per @D f1)
 //
 // gfx-rev names are AMD hardware facts cited from the ROCm LLVM/Clang
-// target documentation. HIP-IL mnemonics (`v_add_f64`, `s_load_dword`,
-// `s_endpgm` etc.) are AMD GCN vector/scalar instruction set fact.
+// target documentation. HIP kernel keywords (`__global__`, `blockIdx`,
+// `blockDim`, `threadIdx`) are AMD/HIP source-language facts.
 //   ref: AMD GCN3 ISA — https://developer.amd.com/wordpress/media/2013/12/AMD_GCN3_Instruction_Set_Architecture_rev1.1.pdf
 //   ref: AMD RDNA3 ISA — https://www.amd.com/system/files/TechDocs/rdna3-shader-instruction-set-architecture.pdf
 //   ref: ROCm HIP — https://rocm.docs.amd.com/projects/HIP/
+//   ref: HIP Programming Guide — https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/programming_manual.html
 // ─────────────────────────────────────────────────────────────────────
 
 import "../ir/mir.hexa"
@@ -112,6 +141,86 @@ pub let ROCM_OP_S_ENDPGM: string       = "s_endpgm"          // end-of-program
 pub let ROCM_DIRECTIVE_KERNEL: string = ".amdhsa_kernel"
 pub let ROCM_DIRECTIVE_TEXT: string   = ".text"
 
+// ── RFC 075 P1 — HIP source-text fragments (vec-add tier) ─────
+//
+// HIP is C++-flavored CUDA-like source text, so the "opcodes" below
+// are language fragments the emit pass concatenates rather than
+// virtual-ISA mnemonics. RFC 075 P1 lands the vec-add subset (kernel
+// declaration, FP32 pointer parameter typing, thread-index expression,
+// FP32 binop fragments, load/store templates); later phases (FMA,
+// FP16, threadgroup, atomics) add their own constants.
+//
+//   ref: HIP Programming Guide — kernel launch + index built-ins
+pub let ROCM_KW_EXTERN_C: string    = "extern \"C\""          // C linkage for kernel name (avoids C++ name mangling)
+pub let ROCM_KW_GLOBAL: string      = "__global__"            // HIP/CUDA device-entry-point qualifier
+pub let ROCM_KW_VOID: string        = "void"                  // kernel return type (always void)
+pub let ROCM_KW_CONST: string       = "const"                 // immutable qualifier
+pub let ROCM_TYPE_FLOAT: string     = "float"                 // FP32 scalar
+pub let ROCM_TYPE_FLOAT_PTR: string = "float* "               // FP32 pointer (writable kernel arg)
+pub let ROCM_TYPE_CONST_FLOAT_PTR: string = "const float* "   // FP32 read-only pointer
+pub let ROCM_TYPE_DOUBLE: string    = "double"                // FP64 scalar
+pub let ROCM_TYPE_UINT: string      = "uint"                  // 32-bit unsigned scalar
+pub let ROCM_TYPE_INT: string       = "int"                   // 32-bit signed scalar
+
+// RFC 075 P1 — vec-add binop / load / store / kernel-decl fragment
+// constants. These are the exact source-text fragments the emit pass
+// concatenates. "Opcode" name kept aligned with the cross-vendor
+// scaffold pattern even though HIP is source text.
+pub let ROCM_OP_ADD: string         = "+"               // binop add (source-text fragment)
+pub let ROCM_OP_SUB: string         = "-"               // binop sub
+pub let ROCM_OP_MUL: string         = "*"               // binop mul
+pub let ROCM_OP_DIV: string         = "/"               // binop div
+pub let ROCM_OP_INDEX_OPEN: string  = "["               // array indexing open
+pub let ROCM_OP_INDEX_CLOSE: string = "]"               // array indexing close
+pub let ROCM_OP_ASSIGN: string      = " = "             // assignment (with spaces)
+pub let ROCM_OP_STMT_TERM: string   = ";"               // statement terminator
+pub let ROCM_OP_CALL_OPEN: string   = "("               // function call open paren
+pub let ROCM_OP_CALL_CLOSE: string  = ")"               // function call close paren
+
+// RFC 075 P1 — kernel-declaration fragment templates. Kept as separate
+// string constants so the emit pass concatenates them in a single
+// well-defined order. Mirrors `metal_target.hexa`'s METAL_OP_KERNEL_DECL
+// pattern.
+//
+// HIP/CUDA kernel signature for vec-add:
+//   extern "C" __global__ void vec_add(const float* a, const float* b, float* c, int n)
+//
+// `extern "C"` is added to suppress C++ name mangling — the symbol the
+// HIP runtime / `hipModuleGetFunction` lookup expects is the literal
+// kernel name. `__global__` declares the function as a device-entry
+// kernel callable from host code via `<<<grid, block>>>` launch syntax.
+pub let ROCM_OP_KERNEL_DECL: string         = "extern \"C\" __global__ void"  // kernel signature lead
+pub let ROCM_OP_PARAM_CONST_FLOAT_PTR: string = "const float* "                // read-only FP32 buffer
+pub let ROCM_OP_PARAM_FLOAT_PTR: string     = "float* "                        // writable FP32 buffer
+pub let ROCM_OP_PARAM_INT: string           = "int "                           // integer scalar (e.g. element count)
+
+// RFC 075 P1 — HIP thread-index expression. The canonical 1-D thread
+// index in a CUDA/HIP kernel is the product of grid + block dimensions:
+//   blockIdx.x * blockDim.x + threadIdx.x
+// AMD's HIP runtime exposes these built-in variables identically to
+// NVIDIA's CUDA (HIP is intentionally source-compatible with a subset
+// of CUDA — `hipify-perl` translates 1:1 for these built-ins).
+//   ref: HIP Programming Guide §3 — kernel built-ins
+pub let ROCM_OP_THREAD_IDX: string  = "blockIdx.x * blockDim.x + threadIdx.x"
+
+// Preamble — `#include <hip/hip_runtime.h>` makes the HIP built-in
+// variables (`threadIdx`, `blockIdx`, `blockDim`, `gridDim`) and the
+// kernel-launch syntax available. The header is the HIP-equivalent of
+// `#include <metal_stdlib>` for Apple Metal or `#include <cuda_runtime.h>`
+// for NVIDIA CUDA.
+pub let ROCM_OP_PREAMBLE_INCLUDE: string = "#include <hip/hip_runtime.h>"
+
+// RFC 075 P1 — per-Local precision tags (HIP type keywords). Stringly-
+// typed precision tags the classifier emits. Vec-add today is FP32
+// only (AMD GPU FP32 hardware-canonical); future phases add FP16 / I32 /
+// PRED for cmp results.
+pub let ROCM_PRECISION_F32: string  = "float"
+pub let ROCM_PRECISION_F16: string  = "_Float16"   // HIP / clang FP16 type
+pub let ROCM_PRECISION_F64: string  = "double"
+pub let ROCM_PRECISION_I32: string  = "int"
+pub let ROCM_PRECISION_U32: string  = "unsigned int"
+pub let ROCM_PRECISION_BOOL: string = "bool"
+
 // RocmOpEntry — one row of the informational HIP-IL opcode table.
 // Mirrors the per-target opcode-table pattern (RFC 055 §3 / lir.hexa).
 pub struct RocmOpEntry {
@@ -136,29 +245,150 @@ fn _rocm_op_entry(mnemonic: string, arity: i64, space: string, note: string) -> 
 // the full subset matching `ptx_fp64_slice_ops`.
 pub fn rocm_fp64_slice_ops() -> [RocmOpEntry] {
     let mut t = []
-    // TODO RFC 075 P1 — fill out matching ptx_fp64_slice_ops (load/store
+    // TODO RFC 075 P1+ — fill out matching ptx_fp64_slice_ops (load/store
     // global+shared, add/sub/mul/fma, bar.sync analog `s_barrier`).
     t.push(_rocm_op_entry(ROCM_OP_V_ADD_F64, 3, "", "FP64 vector add (P0 stub)"))
     t.push(_rocm_op_entry(ROCM_OP_S_ENDPGM, 0, "", "end-of-program (P0 stub)"))
     return t
 }
 
-// codegen_emit_rocm_il — MIR module -> HIP-IL text.
+// rocm_fp32_slice_ops — the FP32 vec-add source-text fragment table for
+// the RFC 075 P1 first implementable slice. Mirrors
+// `metal_fp32_slice_ops` row layout. The fragments are HIP-source text
+// (not virtual-ISA mnemonics) because HIP's vendor input is C++-flavored
+// source code rather than a PTX-style text-ISA.
+pub fn rocm_fp32_slice_ops() -> [RocmOpEntry] {
+    let mut t = []
+    // Kernel declaration row — `extern "C" __global__ void <name>(...)`.
+    t.push(_rocm_op_entry(ROCM_OP_KERNEL_DECL, 0, "", "kernel declaration lead"))
+    // Pointer parameter rows — read-only inputs + writable output.
+    t.push(_rocm_op_entry(ROCM_OP_PARAM_CONST_FLOAT_PTR, 1, ROCM_SPACE_GLOBAL, "const float* (read-only buffer arg)"))
+    t.push(_rocm_op_entry(ROCM_OP_PARAM_FLOAT_PTR, 1, ROCM_SPACE_GLOBAL, "float* (writable buffer arg)"))
+    // Thread-index expression row — the canonical 1-D `i` binding.
+    t.push(_rocm_op_entry(ROCM_OP_THREAD_IDX, 0, "", "blockIdx.x * blockDim.x + threadIdx.x"))
+    // FP32 binop fragments — vec-add only needs add today; sub/mul/div
+    // ride in for the next-shape cycle.
+    t.push(_rocm_op_entry(ROCM_OP_ADD, 2, "", "FP32 add fragment"))
+    t.push(_rocm_op_entry(ROCM_OP_SUB, 2, "", "FP32 sub fragment"))
+    t.push(_rocm_op_entry(ROCM_OP_MUL, 2, "", "FP32 mul fragment"))
+    t.push(_rocm_op_entry(ROCM_OP_DIV, 2, "", "FP32 div fragment"))
+    return t
+}
+
+// ── RFC 075 P1 — vec-add HIP emit helpers ───────────────────────────
 //
-// RFC 075 P0 — scaffold stub. Returns `""` honestly: no HIP-IL is
-// emitted. The smoke test (`rocm_lower_test.hexa`) asserts this empty
-// return so the scaffold's structural shape is verified without claiming
-// any real emit.
+// Helper builders for the HIP kernel source text. The emit pass
+// concatenates them in a fixed sequence. The vec-add shape is hardcoded
+// (a single STMT_LOAD + STMT_LOAD + STMT_BINOP("add") + STMT_STORE
+// pattern that matches the canonical `c[i] = a[i] + b[i]` kernel).
+
+// _rocm_emit_preamble — emit the HIP preamble (runtime header include).
+fn _rocm_emit_preamble() -> string {
+    return ROCM_OP_PREAMBLE_INCLUDE + "\n\n"
+}
+
+// _rocm_emit_kernel_signature — emit
+//   extern "C" __global__ void <name>(const float* a, const float* b,
+//                                     float* c, int n)
+// with the three vec-add device buffer params + integer element count.
+// Hardcoded for the vec-add MIR shape (two const inputs + one writable
+// output + an `int n` element-count guard).
+fn _rocm_emit_kernel_signature(name: string) -> string {
+    let mut out = ROCM_OP_KERNEL_DECL + " " + name + "("
+    out = out + ROCM_OP_PARAM_CONST_FLOAT_PTR + "a, "
+    out = out + ROCM_OP_PARAM_CONST_FLOAT_PTR + "b, "
+    out = out + ROCM_OP_PARAM_FLOAT_PTR + "c, "
+    out = out + ROCM_OP_PARAM_INT + "n)\n"
+    return out
+}
+
+// _rocm_emit_vec_add_body — emit the HIP kernel body for vec-add.
+// Hardcoded:
+//   {
+//       uint i = blockIdx.x * blockDim.x + threadIdx.x;
+//       if (i < n) c[i] = a[i] + b[i];
+//   }
+// The `if (i < n)` guard is canonical HIP kernel pattern — the kernel
+// is launched with a thread count rounded up to the next block-size
+// multiple, so threads beyond `n` must early-out to avoid out-of-bounds
+// stores.
+fn _rocm_emit_vec_add_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + ROCM_TYPE_UINT + " i" + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_THREAD_IDX + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    if (i < n) "
+    out = out + "c" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_ASSIGN
+    out = out + "a" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + " " + ROCM_OP_ADD + " "
+    out = out + "b" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _rocm_mfunc_is_vec_add_shape — recognise the vec-add MIR shape.
+// Hardcoded shape check: entry block has exactly STMT_LOAD + STMT_LOAD
+// + STMT_BINOP("add") + STMT_STORE (in that order), plus an optional
+// STMT_RETURN at the end. Anything else returns false and the emitter
+// falls through to the honest empty-string path. Same shape signature
+// as `_metal_mfunc_is_vec_add_shape` in the Metal codegen — both
+// vendors decode the same canonical vec-add MIR pattern.
+fn _rocm_mfunc_is_vec_add_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "add" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// codegen_emit_rocm_il — MIR module -> HIP source text.
 //
-// P1+ insertion points:
-//   - TODO RFC 075 P1 — classify locals by HIP-IL register kind (vector
-//     `v[]` vs scalar `s[]`), produce reg-bank declarations.
-//   - TODO RFC 075 P2 — address-space lowering for kernel args via
-//     `s_load_dwordx2` from kernarg + `global_load_b64`.
-//   - TODO RFC 075 P3 — emit real `v_add_f64` for STMT_BINOP("add"),
-//     real `global_store_b64` for STMT_STORE.
-//   - TODO RFC 075 P4 — silicon fire via `hipcc` + AMD GPU pool host.
+// RFC 075 P1 LANDED (codegen-only) — emits a full HIP kernel source
+// when the first MFunc matches the vec-add shape. Otherwise (empty
+// module, unrecognised shape) returns `""` honestly, preserving the
+// P0 contract the lower_test Case 1 still asserts.
+//
+// HONEST SCOPE — ONE shape recognised today (vec-add). All other MIR
+// patterns return `""`. Vec-mul / vec-sub / vec-div / vec-scale /
+// vec-neg / vec-abs / vec-sqrt / vec-exp / vec-log / vec-sin / vec-cos /
+// reduce-sum / matmul / matmul_NT_a / matmul_NT_b / bf16 land in
+// multi-session follow-on cycles on the AMD lane (mirrors the RFC 075
+// plan that staged the Apple Metal lane shape-by-shape across many
+// cycles). AMD GPU pool currently empty (N10/N14/N22 BLOCKED) — silicon
+// fire deferred until pool stock returns.
+//
+//   Shape coverage matrix (RFC 075 P1):
+//     vec-add   `c[i] = a[i] + b[i]`   STMT_LOAD+LOAD+BINOP(add)+STORE
+//
+// P2+ insertion points:
+//   - TODO RFC 075 P2 — vec-mul / vec-sub / vec-div / vec-scale shapes
+//     (mirror metal_target.hexa P3+ buildout).
+//   - TODO RFC 075 P3 — silicon fire via `hipcc` + AMD GPU pool host
+//     (queued behind AMD pool stock return per N10/N14/N22).
+//   - TODO RFC 075 follow-on cycle — general MFunc → HIP emission
+//     (replicate `_metal_emit_*` shape against general MIR).
+//
+// The compiled-path entry name (`codegen_emit_rocm_il`) keeps the
+// existing P0 stub signature so `rocm_lower_test.hexa` Case 1
+// (empty-module → "") continues to work byte-identically.
 pub fn codegen_emit_rocm_il(module: MModule) -> string {
-    // RFC 075 P0 — honest empty return; no HIP-IL emit yet.
+    // P0 contract: empty module → empty string.
+    if len(module.funcs) == 0 { return "" }
+    let mfn = module.funcs[0]
+    let kname = mfn.name
+    // vec-add — STMT_LOAD + STMT_LOAD + STMT_BINOP(add) + STMT_STORE.
+    if _rocm_mfunc_is_vec_add_shape(mfn) {
+        let mut out = _rocm_emit_preamble()
+        out = out + _rocm_emit_kernel_signature(kname)
+        out = out + _rocm_emit_vec_add_body()
+        return out
+    }
+    // No recognised shape — honest empty string.
     return ""
 }

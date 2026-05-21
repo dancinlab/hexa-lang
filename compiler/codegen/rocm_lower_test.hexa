@@ -1,14 +1,23 @@
-// HEXA Native Compiler — RFC 075 P0 / ROCm lowering smoke (scaffold-only)
+// HEXA Native Compiler — RFC 075 P1 / ROCm lowering smoke (codegen-only)
 //
-// @version 0.0.1
+// @version 0.0.2
 // @capabilities [pure]
 //
-// RFC 075 P0 scaffold smoke. The codegen entry `codegen_emit_rocm_il` is
-// a P0 stub that honestly returns `""` (no HIP-IL emit yet). This file
-// asserts that P0 contract: emit returns an empty string. Real lowering
-// smokes (vec-add text, opcode coverage, address-space classifier) come
-// P1+ — each new MIR construct lands a `_test_<construct>` case here,
-// mirroring `nvptx_lower_test.hexa`'s shape.
+// RFC 075 P1 codegen-only smoke. The codegen entry `codegen_emit_rocm_il`
+// now recognises ONE MIR shape (vec-add) and emits real HIP kernel
+// source for it. Empty / unrecognised modules continue to return `""`
+// honestly (P0 contract preserved — Case 1 still PASS).
+//
+// Case roster:
+//   Case 1 — P0 empty-module emit returns `""` (P0 contract preserved)
+//   Case 2 — target enum + HIP syntax-fragment constants verified
+//            (gfx-rev tags, wave size, kernel-decl / pointer-param /
+//             thread-index fragments)
+//   Case 3 — F-RFC075-ROCM-EMIT-VEC-ADD: synthesize vec-add MIR,
+//            invoke `codegen_emit_rocm_il`, assert emitted string
+//            contains `__global__`, `blockIdx.x * blockDim.x + threadIdx.x`,
+//            `const float*`, `c[i] = a[i] + b[i]`, etc. (15-substring
+//            battery mirroring metal_lower_test.hexa Case 3).
 //
 // Run:
 //   hexa build compiler/codegen/rocm_lower_test.hexa -o build/rocm_lower_test
@@ -18,9 +27,7 @@ import "../ir/mir.hexa"
 import "../ir/lir.hexa"
 import "./rocm_target.hexa"
 
-// ── MIR construction helpers (minimum needed for the empty MModule)
-//    P1+ will pull in the richer Local/Operand/Stmt helpers shape that
-//    nvptx_lower_test.hexa uses; P0 only needs an empty module ──
+// ── MIR construction helpers ────────────────────────────────────────
 
 fn _empty_mmodule() -> MModule {
     return MModule { file: "rocm_p0_smoke.hexa", funcs: [], globals: [] }
@@ -29,19 +36,33 @@ fn _empty_mmodule() -> MModule {
 // ── Text inspection ──────────────────────────────────────────────────
 
 fn _check_empty(ok_in: bool, text: string, label: string) -> bool {
-    if text.length == 0 { return ok_in }
-    println("  FAIL: " + label + " (expected empty, got " + to_string(text.length) + " chars)")
+    if len(text) == 0 { return ok_in }
+    println("  FAIL: " + label + " (expected empty, got " + to_string(len(text)) + " chars)")
+    return false
+}
+
+fn _contains(hay: string, needle: string) -> bool {
+    return hay.find(needle) >= 0
+}
+
+fn _check_contains(ok_in: bool, hay: string, needle: string, label: string) -> bool {
+    if _contains(hay, needle) { return ok_in }
+    println("  FAIL: " + label + " (missing: `" + needle + "`)")
+    return false
+}
+
+fn _check_not_contains(ok_in: bool, hay: string, needle: string, label: string) -> bool {
+    if !_contains(hay, needle) { return ok_in }
+    println("  FAIL: " + label + " (unexpected: `" + needle + "`)")
     return false
 }
 
 // ── Case 1 — P0 emit stub returns empty string ───────────────────────
 //
 // The P0 contract: `codegen_emit_rocm_il` is wired to the scaffold and
-// honestly returns `""` until P3 fills in real HIP-IL text emit. This
-// case verifies (a) the entry is callable, (b) the return type compiles
-// against `string`, (c) the return value matches the P0 placeholder.
-// Falsifier F-RFC075-ROCM-EMIT-VEC-ADD intentionally FAILS today; that
-// is the point of a stub assertion.
+// honestly returns `""` for an empty module. This case verifies (a) the
+// entry is callable, (b) the return type compiles against `string`,
+// (c) the return value matches the P0 placeholder for an empty module.
 
 fn _test_p0_empty_emit() -> bool {
     let mut ok = true
@@ -49,19 +70,18 @@ fn _test_p0_empty_emit() -> bool {
     let il = codegen_emit_rocm_il(mod_empty)
 
     println("")
-    println("── emitted HIP-IL (RFC 075 P0 empty-emit case) ──")
-    println("  [empty string, length=" + to_string(il.length) + "]")
+    println("── emitted HIP source (RFC 075 P0 empty-emit case) ──")
+    println("  [empty string, length=" + to_string(len(il)) + "]")
 
     ok = _check_empty(ok, il, "P0 stub returns empty string")
     return ok
 }
 
-// ── Case 2 — target enum constants resolve to expected arch tags ─────
+// ── Case 2 — target enum constants + HIP syntax-fragment constants ───
 //
-// Sanity-checks the gfx-rev constants land at their documented strings.
-// This is a compile-time-ish smoke; in real P1 this becomes
-// F-RFC075-ROCM-TARGET-ACCEPT (driven by a hypothetical `--target=`
-// dispatch lookup).
+// Sanity-checks the gfx-rev constants land at their documented strings
+// AND the RFC 075 P1 HIP syntax-fragment constants land at their
+// expected source-text fragments.
 
 fn _test_target_constants() -> bool {
     let mut ok = true
@@ -77,24 +97,210 @@ fn _test_target_constants() -> bool {
         println("  FAIL: ROCM_WAVE_SIZE_RDNA expected 32, got " + to_string(ROCM_WAVE_SIZE_RDNA))
         ok = false
     }
-    if ok {
-        println("  ok: gfx1100 arch tag + RDNA wave32 constant verified")
+    // RFC 075 P1 — HIP source-text fragment constants.
+    if ROCM_OP_KERNEL_DECL != "extern \"C\" __global__ void" {
+        println("  FAIL: ROCM_OP_KERNEL_DECL mismatch (got '" + ROCM_OP_KERNEL_DECL + "')")
+        ok = false
     }
+    if ROCM_OP_PARAM_CONST_FLOAT_PTR != "const float* " {
+        println("  FAIL: ROCM_OP_PARAM_CONST_FLOAT_PTR mismatch")
+        ok = false
+    }
+    if ROCM_OP_PARAM_FLOAT_PTR != "float* " {
+        println("  FAIL: ROCM_OP_PARAM_FLOAT_PTR mismatch")
+        ok = false
+    }
+    if ROCM_OP_THREAD_IDX != "blockIdx.x * blockDim.x + threadIdx.x" {
+        println("  FAIL: ROCM_OP_THREAD_IDX mismatch")
+        ok = false
+    }
+    if ROCM_OP_ADD != "+" {
+        println("  FAIL: ROCM_OP_ADD expected '+', got '" + ROCM_OP_ADD + "'")
+        ok = false
+    }
+    if ROCM_OP_PREAMBLE_INCLUDE != "#include <hip/hip_runtime.h>" {
+        println("  FAIL: ROCM_OP_PREAMBLE_INCLUDE mismatch (got '" + ROCM_OP_PREAMBLE_INCLUDE + "')")
+        ok = false
+    }
+    if ok {
+        println("  ok: gfx1100 arch tag + RDNA wave32 + P1 HIP kernel-decl + pointer-param + thread-idx + preamble verified")
+    }
+    return ok
+}
+
+// ── MIR construction helpers for the vec-add MIR fixture ─────────────
+
+fn _miss_local() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "" }
+}
+
+fn _kern_local(id: i64, name: string) -> Local {
+    // arena_id 0 = kernel buffer (mirrors the device-memory branch).
+    return Local { id: id, arena_id: 0, type_id: 0, name_hint: name, precision: ".f32" }
+}
+
+fn _priv_local(id: i64, name: string) -> Local {
+    // arena_id > 0 = function-local thread-private.
+    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name, precision: ".f32" }
+}
+
+fn _op_local(local_id: i64) -> Operand {
+    return Operand {
+        kind: "local", local_id: local_id,
+        int_val: 0, float_val: 0.0, str_val: "", global_id: -1
+    }
+}
+
+fn _stmt_load(dst: Local, src_local: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(src_local))
+    return Stmt {
+        kind: STMT_LOAD, dst: dst, op: "load", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_store(src: Local, dst_local: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(src.id))
+    xs.push(_op_local(dst_local))
+    return Stmt {
+        kind: STMT_STORE, dst: _miss_local(), op: "store", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_binop_add(dst: Local, lhs: i64, rhs: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(lhs))
+    xs.push(_op_local(rhs))
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: "add", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_return() -> Stmt {
+    return Stmt {
+        kind: STMT_RETURN, dst: _miss_local(), op: "", args: [],
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _block(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+fn _build_vec_add_module() -> MModule {
+    // Three kernel-buffer params (a, b, c) + three load/binop/store
+    // Locals (va, vb, vc). The exact stmt sequence the P1 emitter
+    // recognises: STMT_LOAD a→va, STMT_LOAD b→vb, STMT_BINOP_ADD
+    // (va, vb)→vc, STMT_STORE vc→c.
+    let a  = _kern_local(0, "a")
+    let b  = _kern_local(1, "b")
+    let c  = _kern_local(2, "c")
+    let va = _priv_local(3, "va")
+    let vb = _priv_local(4, "vb")
+    let vc = _priv_local(5, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_load(vb, b.id))
+    s.push(_stmt_binop_add(vc, va.id, vb.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vb)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "vec_add",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "rocm_vec_add.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 3 — F-RFC075-ROCM-EMIT-VEC-ADD ──────────────────────────────
+//
+// Synthesise a vec-add MIR module, invoke `codegen_emit_rocm_il`, and
+// assert the emitted HIP kernel source contains the load-bearing
+// source-text fragments:
+//   - HIP preamble include (#include <hip/hip_runtime.h>)
+//   - extern "C" __global__ void declaration
+//   - kernel name `vec_add`
+//   - const float* / float* pointer parameter typing
+//   - blockIdx.x * blockDim.x + threadIdx.x thread-index expression
+//   - c[i] / a[i] / b[i] index expressions
+//   - addition operator (` + `)
+//   - if (i < n) bounds guard
+// This is the RFC 075 §5 falsifier F-RFC075-ROCM-EMIT-VEC-ADD — the AMD
+// counterpart of the NVPTX/Metal vec-add emit smoke. P1 (codegen-only)
+// closes this falsifier; P2+ silicon-fire stays on `[ ]` until AMD GPU
+// pool stock returns (N10/N14/N22 BLOCKED today).
+
+fn _test_vec_add_emit() -> bool {
+    let mut ok = true
+    let mod_va = _build_vec_add_module()
+    let il = codegen_emit_rocm_il(mod_va)
+
+    println("")
+    println("── emitted HIP source (RFC 075 P1 vec-add case) ──")
+    println(il)
+
+    // F-RFC075-ROCM-EMIT-VEC-ADD substring battery — 15 positive.
+    ok = _check_contains(ok, il, "#include <hip/hip_runtime.h>", "HIP runtime header include")
+    ok = _check_contains(ok, il, "__global__",                    "kernel qualifier `__global__`")
+    ok = _check_contains(ok, il, "extern \"C\"",                  "C linkage `extern \"C\"`")
+    ok = _check_contains(ok, il, "void vec_add",                  "kernel name `vec_add` after void return")
+    ok = _check_contains(ok, il, "const float*",                  "read-only pointer parameter typing")
+    ok = _check_contains(ok, il, "float*",                        "writable pointer parameter typing")
+    ok = _check_contains(ok, il, "int n",                         "element-count `int n` parameter")
+    ok = _check_contains(ok, il, "blockIdx.x",                    "HIP built-in `blockIdx.x`")
+    ok = _check_contains(ok, il, "blockDim.x",                    "HIP built-in `blockDim.x`")
+    ok = _check_contains(ok, il, "threadIdx.x",                   "HIP built-in `threadIdx.x`")
+    ok = _check_contains(ok, il, "if (i < n)",                    "out-of-bounds guard")
+    ok = _check_contains(ok, il, "c[i]",                          "writable buffer index `c[i]`")
+    ok = _check_contains(ok, il, "a[i]",                          "read buffer index `a[i]`")
+    ok = _check_contains(ok, il, "b[i]",                          "read buffer index `b[i]`")
+    ok = _check_contains(ok, il, " + ",                           "addition operator between loaded values")
+    ok = _check_contains(ok, il, ";",                             "statement terminator")
     return ok
 }
 
 fn main() {
     println("══════════════════════════════════════════════")
-    println("  RFC 075 P0 — ROCm scaffold smoke")
+    println("  RFC 075 P1 — ROCm vec-add codegen smoke")
     println("══════════════════════════════════════════════")
 
     let ok_emit = _test_p0_empty_emit()
     let ok_tgt  = _test_target_constants()
+    let ok_va   = _test_vec_add_emit()
 
     println("")
-    if ok_emit && ok_tgt {
-        println("  PASS: RFC 075 P0 ROCm scaffold smoke")
+    if ok_emit && ok_tgt && ok_va {
+        println("  PASS: RFC 075 P1 ROCm vec-add codegen smoke")
     } else {
-        println("  FAIL: RFC 075 P0 ROCm scaffold smoke")
+        println("  FAIL: RFC 075 P1 ROCm vec-add codegen smoke")
     }
 }
