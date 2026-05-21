@@ -65,10 +65,20 @@ fn _gate_run_one(label: str, v_path: str, top: str, lib_path: str) -> GateRun {
         detail: r2.message
     })
     if r2.ok != 1 { return GateRun { stages: stages, mapped: empty, abc_ok: 0 } }
-    // stage 3..6 — proc, flatten, opt, techmap, dfflibmap
+    // stage 3..6 — proc, memory, flatten, opt, techmap, dfflibmap
     let r3 = pass_proc(r2.design)
     stages = stages.push(GateStage { name: label + ":proc",       ok: r3.ok, detail: r3.message })
-    let r4 = pass_flatten(r3.design)
+    // rfc_006 §5 Source 3b — `memory` pass between `proc` and
+    // `flatten`. Matches the substrate yosys 0.33 pipeline shape
+    // (proc → memory → flatten → opt → techmap → dfflibmap → abc)
+    // that produces the cited oracle 61847 µm² on router_d4.
+    // `pass_memory` is currently a structural no-op stub; the
+    // pipeline wiring lands so a future memory-consolidation pass
+    // can plug in without re-touching this dispatcher. See
+    // passes.hexa::pass_memory header for the @cite + scope note.
+    let r3m = pass_memory(r3.design)
+    stages = stages.push(GateStage { name: label + ":memory",     ok: r3m.ok, detail: r3m.message })
+    let r4 = pass_flatten(r3m.design)
     stages = stages.push(GateStage { name: label + ":flatten",    ok: r4.ok, detail: r4.message })
     let r5 = pass_opt(r4.design)
     stages = stages.push(GateStage { name: label + ":opt",        ok: r5.ok, detail: r5.message })
