@@ -349,6 +349,37 @@ fn _metal_emit_vec_add_body() -> string {
     return out
 }
 
+// _metal_emit_vec_mul_body — emit the MSL kernel body for vec-mul.
+// Hardcoded: `c[i] = a[i] * b[i];` with surrounding braces. Mirror of
+// `_metal_emit_vec_add_body` with the binop fragment swapped to `*`.
+fn _metal_emit_vec_mul_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + " " + METAL_OP_MUL + " "
+    out = out + "b" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_scale_body — emit the MSL kernel body for vec-scale.
+// Hardcoded: `c[i] = a[i] * <scalar>;` with surrounding braces. The
+// scalar literal text is supplied by the caller (formatted from the
+// MIR const operand) so the emitter stays string-pure.
+fn _metal_emit_vec_scale_body(scalar_text: string) -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + " " + METAL_OP_MUL + " "
+    out = out + scalar_text
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
 // _metal_mfunc_is_vec_add_shape — recognise the vec-add MIR shape.
 // Hardcoded shape check: entry block has exactly STMT_LOAD + STMT_LOAD
 // + STMT_BINOP("add") + STMT_STORE (in that order), plus an optional
@@ -367,35 +398,119 @@ fn _metal_mfunc_is_vec_add_shape(mfn: MFunc) -> bool {
     return true
 }
 
+// _metal_mfunc_is_vec_mul_shape — recognise the vec-mul MIR shape.
+// Mirror of `_metal_mfunc_is_vec_add_shape` with the BINOP op string
+// switched to "mul". Same STMT_LOAD + STMT_LOAD + STMT_BINOP("mul") +
+// STMT_STORE skeleton (with optional STMT_RETURN tail).
+fn _metal_mfunc_is_vec_mul_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "mul" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_vec_scale_shape — recognise the vec-scale MIR shape.
+// Skeleton: STMT_LOAD a→va, STMT_BINOP("mul") with operands
+// (Operand{kind="local"}, Operand{kind="const_float"|"const_int"}),
+// STMT_STORE vc→c (optional STMT_RETURN tail). The const operand
+// position is fixed at args[1] (lhs local · rhs const) — the canonical
+// `a[i] * <scalar>` lowering order. Anything else falls through.
+fn _metal_mfunc_is_vec_scale_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 3 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_BINOP { return false }
+    if stmts[1].op != "mul" { return false }
+    if stmts[2].kind != STMT_STORE { return false }
+    // BINOP args[0] = lhs local, args[1] = rhs const literal.
+    let binop_args = stmts[1].args
+    if len(binop_args) < 2 { return false }
+    if binop_args[0].kind != "local" { return false }
+    let rhs_kind = binop_args[1].kind
+    if rhs_kind != "const_float" {
+        if rhs_kind != "const_int" { return false }
+    }
+    return true
+}
+
+// _metal_format_scalar — format a MIR const operand as MSL literal text.
+// const_float → uses the `float_val` field (e.g. "2.5"); const_int →
+// uses the `int_val` field with `.0` appended so it stays FP32 in MSL.
+// Anything else returns "0.0" as the safe fallback (callers should have
+// already gated by the shape recogniser).
+fn _metal_format_scalar(op: Operand) -> string {
+    if op.kind == "const_float" { return to_string(op.float_val) }
+    if op.kind == "const_int" { return to_string(op.int_val) + ".0" }
+    return "0.0"
+}
+
 // codegen_emit_metal_msl — MIR module -> MSL source text.
 //
-// RFC 075 P3 LANDED (codegen-only) — emits a full MSL kernel source
-// when the first MFunc matches the vec-add shape. Otherwise (empty
-// module, non-vec-add shape) returns `""` honestly, preserving the
+// RFC 075 P3+ LANDED (codegen-only) — emits a full MSL kernel source
+// when the first MFunc matches a recognised shape. Otherwise (empty
+// module, unrecognised shape) returns `""` honestly, preserving the
 // P0 contract the lower_test Case 1 still asserts.
 //
-// HONEST SCOPE — vec-add is the ONLY MIR pattern this emitter
-// recognises today. STMT_LOAD + STMT_LOAD + STMT_BINOP_ADD + STMT_STORE
-// matches → emit hardcoded `c[i] = a[i] + b[i]` kernel. General
-// MFunc → MSL lowering is multi-session work mirroring the NVPTX P3
-// timeline.
+// HONEST SCOPE — three shapes recognised today (vec-add, vec-mul,
+// vec-scale). All other MIR patterns return "". General MFunc → MSL
+// lowering is multi-session work mirroring the NVPTX P3 timeline.
+//
+//   Shape coverage matrix (RFC 075 P3+):
+//     vec-add   `c[i] = a[i] + b[i]`     STMT_LOAD+LOAD+BINOP(add)+STORE
+//     vec-mul   `c[i] = a[i] * b[i]`     STMT_LOAD+LOAD+BINOP(mul)+STORE
+//     vec-scale `c[i] = a[i] * <const>`  STMT_LOAD+BINOP(mul, const)+STORE
+//
+// Dispatch order: vec-add → vec-mul → vec-scale → "". vec-scale is
+// tried last because its recogniser is the most discerning (checks
+// operand kinds), so a vec-mul shape that happens to share the
+// short-stmt prefix never accidentally lands in vec-scale.
 //
 // P4+ insertion points:
 //   - TODO RFC 075 P4 — silicon fire via `xcrun -sdk macosx metal`
-//     + Metal Performance Shaders runtime + M-series GPU.
+//     + Metal Performance Shaders runtime + M-series GPU (vec-add
+//     landed on Apple M3 commit 4415ec91; vec-mul / vec-scale silicon
+//     fires queued for the same cycle once a Mac is available).
 //   - TODO RFC 075 follow-on cycle — general MFunc → MSL emission
 //     (replicate `_nvptx_lower_func` shape against MSL statements).
 pub fn codegen_emit_metal_msl(module: MModule) -> string {
     // P0 contract: empty module → empty string.
     if len(module.funcs) == 0 { return "" }
     let mfn = module.funcs[0]
-    // P3 vec-add shape recognition. Anything else stays at "" so the
-    // emitter never over-claims.
-    if !_metal_mfunc_is_vec_add_shape(mfn) { return "" }
-    // Compose preamble + signature + body.
-    let mut out = _metal_emit_preamble()
+    // Shared preamble + signature for any recognised vec-* shape.
     let kname = mfn.name
-    out = out + _metal_emit_kernel_signature(kname)
-    out = out + _metal_emit_vec_add_body()
-    return out
+    // vec-add — STMT_LOAD + STMT_LOAD + STMT_BINOP(add) + STMT_STORE.
+    if _metal_mfunc_is_vec_add_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_add_body()
+        return out
+    }
+    // vec-mul — STMT_LOAD + STMT_LOAD + STMT_BINOP(mul) + STMT_STORE.
+    if _metal_mfunc_is_vec_mul_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_mul_body()
+        return out
+    }
+    // vec-scale — STMT_LOAD + STMT_BINOP(mul, const) + STMT_STORE.
+    // The scalar literal text is pulled from the BINOP's args[1] const
+    // operand and formatted to an MSL FP32 literal.
+    if _metal_mfunc_is_vec_scale_shape(mfn) {
+        let entry = mfn.blocks[0]
+        let scalar = _metal_format_scalar(entry.stmts[1].args[1])
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_scale_body(scalar)
+        return out
+    }
+    // No recognised shape — honest empty string.
+    return ""
 }
