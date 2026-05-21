@@ -1,0 +1,64 @@
+// stdlib/energy/_solar_position_cli.hexa — G31 G29-β hexa-native
+// sun-position CLI wrapper for the nrel_midc_pyranometer producer.
+//
+// Reads 5 CLI args + 2 optional, prints apparent_zenith_deg to
+// stdout. Internal call site is the clean-room hexa-native
+// `solar_kernel::apparent_zenith` (κ-65 D80 g_hexa_only pilot,
+// pvlib substrate parity <1e-9 verified).
+//
+// Usage:
+//   hexa run stdlib/energy/_solar_position_cli.hexa \
+//     <year> <doy> <utc_hour> <lat_deg> <lon_deg> \
+//     [<pressure_pa>] [<temp_c>]
+//
+// Defaults: pressure_pa = 101325.0, temp_c = 12.0 (pvlib defaults).
+//
+// Output: single line — apparent_zenith_deg (decimal float).
+//
+// Exit: 0 on success, 2 on usage error.
+//
+// G31 G29-β scope (RFC 013 §6.11 reserved · ARCH §11.4 R8):
+//   This CLI is the runtime call-site bridge that lets the Python
+//   `nrel_midc_pyranometer.py` producer compute apparent_zenith via
+//   the hexa-native kernel instead of pvlib's `solarposition`. The
+//   producer integration (subprocess call + Ineichen clearsky with
+//   externally-supplied apparent_zenith) is the follow-on.
+//
+// Implementation note: avoids `use "stdlib/sys"` because that module
+// transitively references the `read_line` runtime symbol which is
+// currently broken on the mac substrate (separate axis, tracked
+// elsewhere). Uses global builtins `args()`, `exit()`, `println()`,
+// `len()`, `str()` directly — no stdin needed.
+
+use "stdlib/kernels/solar/solar_kernel"
+
+fn main() {
+    let argv = args()
+    // argv shape: [binary_path, year, doy, utc_hour, lat_deg, lon_deg,
+    //              [pressure_pa], [temp_c]]
+    // (hexa run mode: argv[0] is the cached compiled binary path;
+    //  user args begin at argv[1]. No script_path slot.)
+    let n = len(argv)
+    if n < 6 {
+        println(
+            "usage: hexa run _solar_position_cli.hexa "
+            + "<year> <doy> <utc_hour> <lat_deg> <lon_deg> "
+            + "[<pressure_pa>] [<temp_c>]")
+        exit(2)
+    }
+
+    let year     = argv[1].to_int()
+    let doy      = argv[2].to_int()
+    let utc_hour = argv[3].to_float()
+    let lat_deg  = argv[4].to_float()
+    let lon_deg  = argv[5].to_float()
+
+    let mut pressure_pa = 101325.0
+    let mut temp_c = 12.0
+    if n >= 7 { pressure_pa = argv[6].to_float() }
+    if n >= 8 { temp_c = argv[7].to_float() }
+
+    let z = apparent_zenith(year, doy, utc_hour, lat_deg, lon_deg,
+                            pressure_pa, temp_c)
+    println(str(z))
+}
