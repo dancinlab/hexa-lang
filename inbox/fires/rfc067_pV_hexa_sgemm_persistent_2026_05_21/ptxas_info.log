@@ -1,0 +1,42 @@
+=== shape 256 ===
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_persistent_256x256_grid' for 'sm_90'
+ptxas info    : Function properties for sgemm_persistent_256x256_grid
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, used 1 barriers, 8192 bytes smem
+ptxas info    : Compile time = 27.632 ms
+=== shape 384 ===
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_persistent_384x384_grid' for 'sm_90'
+ptxas info    : Function properties for sgemm_persistent_384x384_grid
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, used 1 barriers, 8192 bytes smem
+ptxas info    : Compile time = 5.704 ms
+=== shape 512 ===
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_persistent_512x512_grid' for 'sm_90'
+ptxas info    : Function properties for sgemm_persistent_512x512_grid
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, used 1 barriers, 8192 bytes smem
+ptxas info    : Compile time = 5.753 ms
+=== shape 768 ===
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_persistent_768x768_grid' for 'sm_90'
+ptxas info    : Function properties for sgemm_persistent_768x768_grid
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, used 1 barriers, 8192 bytes smem
+ptxas info    : Compile time = 5.655 ms
+=== shape 1024 ===
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_persistent_1024x1024_grid' for 'sm_90'
+ptxas info    : Function properties for sgemm_persistent_1024x1024_grid
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, used 1 barriers, 8192 bytes smem
+ptxas info    : Compile time = 5.601 ms
+=== shape 1536 ===
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_persistent_1536x1536_grid' for 'sm_90'
+ptxas info    : Function properties for sgemm_persistent_1536x1536_grid
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, used 1 barriers, 8192 bytes smem
+ptxas info    : Compile time = 5.603 ms
