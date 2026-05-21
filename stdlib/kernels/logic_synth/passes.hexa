@@ -2008,6 +2008,28 @@ fn _passes_lower_mux_cell(c: Cell, m: Module) -> BitwiseBlastResult {
 // inherits the outermost cell's name + output net so wire bookkeeping
 // remains identical.
 //
+// G3-HONEST FINDING (2026-05-22 mini-measured, router_d4 Piece-2c):
+//   `cells_in=457 fused=0` — none of the six patterns fire on the
+//   post-techmap router_d4 graph. router_d4's `inv_1` cells invert
+//   primary inputs / constants (no producer cell), and the `mux2_1`
+//   cells form cascaded priority chains (one mux's X feeds next
+//   mux's A0, NOT two muxes sharing S0). The substrate's `mux4_2 /
+//   a22oi_1 / o22ai_1 / nand4_1 / a31oi_1 / mux2i_1` cells in the
+//   ac02f325 histogram are emitted by ABC's internal mapper after
+//   *its* cut-and-remap optimization — they are not surface-visible
+//   in either our techmap output or router_d4's RTL. The fusion
+//   infrastructure remains pattern-correct (T_TECHMAP_COMPLEX_CELLS.*
+//   selftest 6/6 PASS on synthetic minimum-shape RTL) and will fire
+//   on any future RTL or front-end output that exposes these shapes;
+//   d4 area is unchanged at 49092.1 µm² Δ=20.52% (identical to
+//   Piece-1 baseline). Closing the d4 ±5% gap requires either (i)
+//   a hexa-native ABC-style optimization pass that lifts the
+//   substrate cells out of the gate graph, or (ii) coordinated
+//   pattern injection at higher synthesis levels (proc_mux / read
+//   _verilog) where the priority-encoder + arbiter shapes can be
+//   rewritten into substrate-canonical form before techmap. Both
+//   options are out of scope for Piece-2.
+//
 // @cite SKY130 PDK datasheets for `a22oi_1`, `o22ai_1`, `nand4_1`,
 //   `a31oi_1`, `mux2i_1`, `mux4_2` (Apache-2 / CC-BY-4.0); see
 //   sky130_fd_sc_hd__tt_025C_1v80.lib pin functions for each cell.
