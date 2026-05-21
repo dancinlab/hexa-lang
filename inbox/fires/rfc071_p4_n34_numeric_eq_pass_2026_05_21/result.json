@@ -1,0 +1,67 @@
+{
+  "fire_id": "rfc071_p4_n34_numeric_eq_pass_2026_05_21",
+  "falsifier_pass": [
+    "F-RFC071-NVPTX-E2E-PTXAS-CLEAN",
+    "F-RFC071-NVPTX-E2E-LAUNCH",
+    "F-RFC071-E2E-NUMERIC-EQ"
+  ],
+  "falsifier_fail": [],
+  "status_jit_load": "PASS",
+  "status_launch": "PASS",
+  "status_numeric": "PASS",
+  "headline": "RFC 071 P4 source-to-silicon numeric closure — first real PASS",
+  "N": 1024,
+  "max_abs_diff": 0,
+  "byte_mismatch": 0,
+  "first_mis": -1,
+  "c_0": 2.9647833402501771,
+  "ref_0": 2.9647833402501771,
+  "predecessor": "rfc071_p4_jit_load_pass_2026_05_21 (N29 — JIT-load PASS, numeric FAIL byte_mismatch=1024)",
+
+  "context": {
+    "ptx_size_bytes": 2428,
+    "target_sm": "sm_80",
+    "device": "NVIDIA GeForce RTX 5070 (sm_120)",
+    "driver_version": "580.126.09",
+    "host": "ubu-2 (summer-B650M-K)",
+    "registers_used": 16,
+    "stack_bytes": 0,
+    "barriers_used": 0,
+    "block_dim": "1x1024x1",
+    "grid_dim": "1x1x1"
+  },
+
+  "n29_to_n34_diff": {
+    "byte_mismatch_before": 1024,
+    "byte_mismatch_after": 0,
+    "max_abs_diff_before": 2.289989454992704e+226,
+    "max_abs_diff_after": 0,
+    "closed_gaps": [
+      "STMT_ASSIGN op='index' (IndexGet) now emits mul.lo.s64 + add.s64 + ld.global.f64 (was: mov.u64 dropping idx)",
+      "STMT_ASSIGN op='index_set' (IndexSet) now emits mul.lo.s64 + add.s64 + st.global.f64 (was: dropped via _miss_local sentinel guard)",
+      "Classifier exclusion: op='index' / op='index_set' dst no longer inherits U64 base-pointer kind, stays F64 so loaded value goes into .reg .f64",
+      "Scratch addr-reg Pass 3: %rd_idxa_<dst.id> per IndexGet + shared %rd_idxs_addr per fn, U64 bank",
+      "ld.param prologue: each KERNEL param now loaded via ld.param.<ty> %<reg>, [<kernel>_param_<i>] at entry block (was: param registers declared but uninitialised)",
+      "_nvptx_elem_size_for_kind helper: byte-width per RKIND (F64=8, F32=4, F16/BF16=2, U64=8, U32=4)"
+    ]
+  },
+
+  "ptx_evidence": {
+    "ld_param_lines": "ld.param.u64 %rd0..%rd3, [my_test_kernel_param_0..3]",
+    "indexget_lines": "mul.lo.s64 %rd_idxa_15, %rd14, 8 + add.s64 %rd_idxa_15, %rd_idxa_15, %rd0 + ld.global.f64 %fd15, [%rd_idxa_15]",
+    "indexset_lines": "mul.lo.s64 %rd_idxs_addr, %rd13, 8 + add.s64 %rd_idxs_addr, %rd_idxs_addr, %rd2 + st.global.f64 [%rd_idxs_addr], %fd18",
+    "compute_line": "add.f64 %fd18, %fd15, %fd17 (vec-add: exact FP64, no reduction)"
+  },
+
+  "lower_test_regression": {
+    "cases_before": "27/27 PASS",
+    "cases_after": "27/27 PASS",
+    "note": "All RFC 055 + RFC 067 + RFC 068 + RFC 069 lower_test cases retained byte-eq"
+  },
+
+  "artifacts": {
+    "ptx": "my_test_kernel.sm_80.ptx",
+    "fire_log": "fire.log",
+    "result_json": "result.json"
+  }
+}
