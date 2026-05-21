@@ -366,6 +366,53 @@ fn _nvptx_kind_short_label(kind: string) -> string {
     return "f64"
 }
 
+// _nvptx_elem_size_for_kind — RFC 071 P4+ (N59 G2/G3) — byte width of
+// an array element of the given PTX register kind. Used by the
+// IndexGet / IndexSet lowering to compute the byte offset
+// `idx * sizeof(elem)`. f8 dtypes stay 1 B; pred is non-stored (8 B
+// fall-through is benign — pred values don't land in [pred] arrays).
+fn _nvptx_elem_size_for_kind(kind: string) -> i64 {
+    if kind == NVPTX_RKIND_F16 { return 2 }
+    if kind == NVPTX_RKIND_BF16 { return 2 }
+    if kind == NVPTX_RKIND_F32 { return 4 }
+    if kind == NVPTX_RKIND_F8_E4M3 { return 1 }
+    if kind == NVPTX_RKIND_F8_E5M2 { return 1 }
+    if kind == NVPTX_RKIND_U32 { return 4 }
+    if kind == NVPTX_RKIND_U64 { return 8 }
+    return 8   // F64 default
+}
+
+// _nvptx_ld_param_mnem_for_kind — RFC 071 P4+ (N59 G2/G4) — kind-aware
+// `ld.param.<ty>` mnemonic for the KERNEL param prologue. Each `.param`
+// slot is loaded into its assigned register bank with the matching
+// element type (i64/i32 params land in U64/U32 regs; f64/f32 land in
+// FP regs; arrays / unknown-type land in U64 as device pointers).
+fn _nvptx_ld_param_mnem_for_kind(kind: string) -> string {
+    if kind == NVPTX_RKIND_U32 { return "ld.param.u32" }
+    if kind == NVPTX_RKIND_U64 { return "ld.param.u64" }
+    if kind == NVPTX_RKIND_F32 { return "ld.param.f32" }
+    if kind == NVPTX_RKIND_F16 { return "ld.param.f16" }
+    if kind == NVPTX_RKIND_BF16 { return "ld.param.bf16" }
+    return "ld.param.f64"
+}
+
+// _nvptx_mov_mnem_for_kind — RFC 071 P4+ (N59 G4) — kind-aware
+// `mov.<ty>` mnemonic for STMT_ASSIGN lowering. A U32-classified dst
+// must emit `mov.u32 ...` (not `mov.f64`) so ptxas accepts the
+// instruction without bank-mismatch errors. Maps each RKIND to its
+// canonical PTX mov form per PTX ISA §9.7.1.1.
+fn _nvptx_mov_mnem_for_kind(kind: string) -> string {
+    if kind == NVPTX_RKIND_U32 { return "mov.u32" }
+    if kind == NVPTX_RKIND_U64 { return "mov.u64" }
+    if kind == NVPTX_RKIND_PRED { return "mov.pred" }
+    if kind == NVPTX_RKIND_F16 { return "mov.b16" }
+    if kind == NVPTX_RKIND_BF16 { return "mov.b16" }
+    if kind == NVPTX_RKIND_F32 { return "mov.f32" }
+    if kind == NVPTX_RKIND_F8_E4M3 { return "mov.b8" }
+    if kind == NVPTX_RKIND_F8_E5M2 { return "mov.b8" }
+    return "mov.f64"
+}
+
 // _nvptx_binop_mnemonic — map a MIR binop opcode to its PTX mnemonic.
 // Covers the FP64 arithmetic subset (RFC 055 §6.6) PLUS the RFC 068 P3
 // mixed-precision subset (`add_f16/_bf16/_f32`, sub/mul siblings) so
@@ -408,6 +455,28 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
     return ""
 }
 
+// _nvptx_binop_mnemonic_for_kind — RFC 071 P4+ (N59 G4 sibling) —
+// kind-aware ARITHMETIC binop mnemonic resolver. Integer-typed dst
+// banks emit signed-integer PTX (add.s32 / mul.lo.s32 / add.s64 /
+// mul.lo.s64); FP banks fall through to the FP64-default
+// `_nvptx_binop_mnemonic`. PTX integer multiplies need a .lo / .hi /
+// .wide qualifier (PTX ISA 9.7.1.3 mul); .lo selects the low half of
+// the product, matching C-style int multiplication. Returns "" when
+// no recognized mnemonic exists (caller emits an honest stub).
+fn _nvptx_binop_mnemonic_for_kind(op: string, kind: string) -> string {
+    if kind == NVPTX_RKIND_U32 {
+        if op == "add" || op == "+" { return "add.s32" }
+        if op == "sub" || op == "-" { return "sub.s32" }
+        if op == "mul" || op == "*" { return "mul.lo.s32" }
+    }
+    if kind == NVPTX_RKIND_U64 {
+        if op == "add" || op == "+" { return "add.s64" }
+        if op == "sub" || op == "-" { return "sub.s64" }
+        if op == "mul" || op == "*" { return "mul.lo.s64" }
+    }
+    return _nvptx_binop_mnemonic(op)
+}
+
 // _nvptx_cmp_mnemonic — map a MIR comparison binop opcode to the PTX
 // `setp.<cond>.f64` mnemonic. PTX condition names match the MIR opcodes
 // 1:1 (`lt` / `le` / `gt` / `ge` / `eq` / `ne`); 055-P3b uses `.f64` as
@@ -418,12 +487,16 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
 // existing 055-P3b smoke tests (`_test_setp_and_br_cond` etc.) stay
 // byte-identical.
 fn _nvptx_cmp_mnemonic(op: string) -> string {
-    if op == "lt" { return "setp.lt.f64" }
-    if op == "le" { return "setp.le.f64" }
-    if op == "gt" { return "setp.gt.f64" }
-    if op == "ge" { return "setp.ge.f64" }
-    if op == "eq" { return "setp.eq.f64" }
-    if op == "ne" { return "setp.ne.f64" }
+    // RFC 071 P4+ (N59 G1) — accept symbol-form spellings alongside
+    // the word forms so HIR->MIR-emitted `<` / `<=` / `>` / `>=` / `==`
+    // / `!=` get a valid setp mnemonic instead of falling through to
+    // the unsupported-binop stub.
+    if op == "lt" || op == "<"  { return "setp.lt.f64" }
+    if op == "le" || op == "<=" { return "setp.le.f64" }
+    if op == "gt" || op == ">"  { return "setp.gt.f64" }
+    if op == "ge" || op == ">=" { return "setp.ge.f64" }
+    if op == "eq" || op == "==" { return "setp.eq.f64" }
+    if op == "ne" || op == "!=" { return "setp.ne.f64" }
     return ""
 }
 
@@ -458,12 +531,12 @@ fn _nvptx_cmp_mnemonic_for_type(op: string, ty_suffix: string) -> string {
     if ty_suffix == "" || ty_suffix == ".f64" {
         return _nvptx_cmp_mnemonic(op)
     }
-    if op == "lt" { return "setp.lt" + ty_suffix }
-    if op == "le" { return "setp.le" + ty_suffix }
-    if op == "gt" { return "setp.gt" + ty_suffix }
-    if op == "ge" { return "setp.ge" + ty_suffix }
-    if op == "eq" { return "setp.eq" + ty_suffix }
-    if op == "ne" { return "setp.ne" + ty_suffix }
+    if op == "lt" || op == "<"  { return "setp.lt" + ty_suffix }
+    if op == "le" || op == "<=" { return "setp.le" + ty_suffix }
+    if op == "gt" || op == ">"  { return "setp.gt" + ty_suffix }
+    if op == "ge" || op == ">=" { return "setp.ge" + ty_suffix }
+    if op == "eq" || op == "==" { return "setp.eq" + ty_suffix }
+    if op == "ne" || op == "!=" { return "setp.ne" + ty_suffix }
     return ""
 }
 
@@ -567,14 +640,95 @@ fn _nvptx_wmma_mnemonic(op: string) -> string {
 fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
     let mut out = buf
     if s.kind == STMT_ASSIGN {
+        // RFC 071 P4+ (N59 G2) — `op == "index"` (IndexGet, `dst = base[idx]`).
+        // Emit address compute + ld.global.<ty>. The scratch addr register
+        // `%rd_idxa_<dst.id>` is pre-declared by `_nvptx_classify_locals`.
+        //   mul.lo.s64  %rd_idxa_<id>, <idx_reg>, sizeof(elem);
+        //   add.s64     %rd_idxa_<id>, %rd_idxa_<id>, <base_reg>;
+        //   ld.global.<ty>  %<dst_reg>, [%rd_idxa_<id>];
+        if s.op == "index" && s.dst.id >= 0 && len(s.args) >= 2 {
+            let dst_kind = _nvptx_lookup_kind_for_local(kinds, s.dst.id)
+            let elem_size = _nvptx_elem_size_for_kind(dst_kind)
+            let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+            let base_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+            let idx_reg = _nvptx_operand_text_kinds(s.args[1], kinds)
+            let addr_reg = "%rd_idxa_" + to_string(s.dst.id)
+            let mut a1 = []
+            a1.push(_nvptx_op(addr_reg))
+            a1.push(_nvptx_op(idx_reg))
+            a1.push(_nvptx_op(to_string(elem_size)))
+            out.push(_nvptx_instr("mul.lo.s64", a1, "index byte off = idx * " + to_string(elem_size)))
+            let mut a2 = []
+            a2.push(_nvptx_op(addr_reg))
+            a2.push(_nvptx_op(addr_reg))
+            a2.push(_nvptx_op(base_reg))
+            out.push(_nvptx_instr("add.s64", a2, "index addr = base + off"))
+            let mut a3 = []
+            a3.push(_nvptx_op(dst_reg))
+            a3.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
+            let mnem = _nvptx_ld_mnem_for_kind(dst_kind)
+            out.push(_nvptx_instr(mnem, a3, "ld base[idx] (" + _nvptx_kind_short_label(dst_kind) + ")"))
+            return out
+        }
+        // RFC 071 P4+ (N59 G3) — `op == "index_set"` (IndexSet,
+        // `base[key] = val`). Emit address compute + st.global.<ty>.
+        // Single shared scratch %rd_idxs_addr (declared in Pass 3).
+        if s.op == "index_set" && len(s.args) >= 3 {
+            let val_op = s.args[2]
+            let mut val_kind = NVPTX_RKIND_F64
+            if val_op.kind == "local" {
+                val_kind = _nvptx_lookup_kind_for_local(kinds, val_op.local_id)
+            }
+            let elem_size = _nvptx_elem_size_for_kind(val_kind)
+            let base_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+            let idx_reg = _nvptx_operand_text_kinds(s.args[1], kinds)
+            let val_reg = _nvptx_operand_text_kinds(val_op, kinds)
+            let addr_reg = "%rd_idxs_addr"
+            let mut a1 = []
+            a1.push(_nvptx_op(addr_reg))
+            a1.push(_nvptx_op(idx_reg))
+            a1.push(_nvptx_op(to_string(elem_size)))
+            out.push(_nvptx_instr("mul.lo.s64", a1, "index_set byte off = idx * " + to_string(elem_size)))
+            let mut a2 = []
+            a2.push(_nvptx_op(addr_reg))
+            a2.push(_nvptx_op(addr_reg))
+            a2.push(_nvptx_op(base_reg))
+            out.push(_nvptx_instr("add.s64", a2, "index_set addr = base + off"))
+            let mut a3 = []
+            a3.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
+            a3.push(_nvptx_op(val_reg))
+            let mnem = _nvptx_st_mnem_for_kind(val_kind)
+            out.push(_nvptx_instr(mnem, a3, "st base[idx] = val (" + _nvptx_kind_short_label(val_kind) + ")"))
+            return out
+        }
+        // RFC 071 P4+ (N59 G5) — `_miss_local()` sentinel guard. A
+        // STMT_ASSIGN whose dst.id < 0 carries no observable value (the
+        // MIR layer emits it when a source-level expression's value is
+        // discarded, or for op-shapes already handled above whose dst is
+        // void). Without this guard `_nvptx_lookup_reg_for_local`
+        // resolves to `%fd-1` — ptxas rejects the negative reg-id
+        // syntax. The safe lowering is to drop the mov entirely +
+        // record an honest stub so the surface stays self-describing.
+        if s.dst.id < 0 {
+            out.push(_nvptx_instr("//", [], "RFC 071 P4+ - skipped STMT_ASSIGN with miss-local dst (op=" + s.op + ")"))
+            return out
+        }
         if len(s.args) >= 1 {
             // 055-P3b kind-aware — destination reg picks .f64 / .u32 /
             // .u64 / .pred from the classifier; operand text likewise
             // resolves via `_nvptx_operand_text_kinds`.
+            //
+            // RFC 071 P4+ (N59 G4) — kind-aware mov mnemonic. The
+            // classifier now routes integer-typed Locals (i64 / i32) to
+            // U64 / U32 banks per `_nvptx_classify_local_for_stmt`'s
+            // type_id rule; the mov mnemonic must match (mov.u64 /
+            // mov.u32) so ptxas accepts mixed-bank-free PTX.
+            let dst_kind = _nvptx_lookup_kind_for_local(kinds, s.dst.id)
+            let mov_mnem = _nvptx_mov_mnem_for_kind(dst_kind)
             let mut a = []
             a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
             a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[0], kinds)))
-            out.push(_nvptx_instr("mov.f64", a, "assign"))
+            out.push(_nvptx_instr(mov_mnem, a, "assign"))
         }
         return out
     }
@@ -618,7 +772,13 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
                 return out
             }
             // 055-P0 arithmetic binop fallthrough.
-            let mnem = _nvptx_binop_mnemonic(s.op)
+            // RFC 071 P4+ (N59 G4 sibling) — kind-aware mnemonic. When
+            // the dst classifies as an integer bank (U32/U64 via the
+            // type_id rule), emit `add.s32`/`mul.lo.s64` etc. rather
+            // than the F64 default. FP banks fall through to the
+            // existing `_nvptx_binop_mnemonic` (byte-identical for f64).
+            let dst_kind = _nvptx_lookup_kind_for_local(kinds, s.dst.id)
+            let mnem = _nvptx_binop_mnemonic_for_kind(s.op, dst_kind)
             if len(mnem) > 0 {
                 let mut a = []
                 a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
@@ -1154,12 +1314,17 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
         // produce a Boolean predicate; PTX represents these as a `.pred`
         // register written by `setp.<cond>.<ty>`. Every comparison binop
         // the MIR layer emits maps to a predicate dst here.
-        if s.op == "lt" { return NVPTX_RKIND_PRED }
-        if s.op == "le" { return NVPTX_RKIND_PRED }
-        if s.op == "gt" { return NVPTX_RKIND_PRED }
-        if s.op == "ge" { return NVPTX_RKIND_PRED }
-        if s.op == "eq" { return NVPTX_RKIND_PRED }
-        if s.op == "ne" { return NVPTX_RKIND_PRED }
+        //
+        // RFC 071 P4+ (N59 G1) — also accept symbol-form ops. The
+        // HIR->MIR layer threads the raw text spelling (`<` / `<=` etc.)
+        // into `s.op` rather than the word form (`lt` / `le`); both
+        // shapes must classify as predicate.
+        if s.op == "lt" || s.op == "<"  { return NVPTX_RKIND_PRED }
+        if s.op == "le" || s.op == "<=" { return NVPTX_RKIND_PRED }
+        if s.op == "gt" || s.op == ">"  { return NVPTX_RKIND_PRED }
+        if s.op == "ge" || s.op == ">=" { return NVPTX_RKIND_PRED }
+        if s.op == "eq" || s.op == "==" { return NVPTX_RKIND_PRED }
+        if s.op == "ne" || s.op == "!=" { return NVPTX_RKIND_PRED }
         // RFC 055 §12 P4+ — mixed-precision binop opcodes (SCAFFOLD).
         // These opcodes are ASPIRATIONAL: the lowering layer that
         // produces them (hir_to_mir.hexa with per-Local precision tags)
@@ -1216,6 +1381,18 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
         if s.op == "gpu_wmma_load_b" { return NVPTX_RKIND_FRAG }
         if s.op == "gpu_wmma_mma"    { return NVPTX_RKIND_FRAG }
         return NVPTX_RKIND_F64
+    }
+    // RFC 071 P4+ (N59 G4) — STMT_ASSIGN: honor the dst Local's
+    // `type_id` (set by HIR->MIR `_type_id_of` per the literal/typed
+    // declaration). Closes the `var idx: i64 = 0` gap where the literal
+    // RHS would otherwise default the dst to F64. Mapping mirrors
+    // `compiler/lower/hir_to_mir.hexa::_type_id_of`: 1=i64, 2=i32, 3=f64,
+    // 4=f32. (5/6/7/8 = bool/string/char/unit — not arithmetic Locals.)
+    if s.kind == STMT_ASSIGN {
+        if s.dst.type_id == 1 { return NVPTX_RKIND_U64 }
+        if s.dst.type_id == 2 { return NVPTX_RKIND_U32 }
+        if s.dst.type_id == 4 { return NVPTX_RKIND_F32 }
+        // type_id 3 (f64) and 0 (unknown) fall through to the F64 default.
     }
     // STMT_ASSIGN default + everything else default — FP64. A real type
     // propagation pass would forward the source operand's kind; the
@@ -1346,6 +1523,37 @@ fn _nvptx_wmma_mnemonic_family(op: string, role: string, dtype: string, layout: 
 fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
     let mut regs = []
     let mut seen_ids = []
+    // RFC 071 P4+ (N59 G2/G4) — Pass 0: KERNEL param-Local kind via
+    // type_id. Loaded into the regs roster BEFORE Pass 1 so the
+    // operand-kind inference rule for STMT_BINOP can see param banks.
+    // type_id mapping mirrors hir_to_mir.hexa::_type_id_of:
+    //   1 -> i64 -> U64,  2 -> i32 -> U32,
+    //   3 -> f64 -> F64,  4 -> f32 -> F32.
+    // type_id 0 (unknown — synthetic test fixtures + array types) is
+    // not classified here — Pass 2/3 will pick up array params used
+    // as addresses. Preserves byte-eq for _test_partition.
+    if mfn.gpu_kind == GPU_KIND_KERNEL {
+        let mut pp = 0
+        while pp < len(mfn.params) {
+            let p = mfn.params[pp]
+            let mut pk = ""
+            if p.type_id == 1 { pk = NVPTX_RKIND_U64 }
+            else if p.type_id == 2 { pk = NVPTX_RKIND_U32 }
+            else if p.type_id == 3 { pk = NVPTX_RKIND_F64 }
+            else if p.type_id == 4 { pk = NVPTX_RKIND_F32 }
+            if len(pk) > 0 {
+                regs.push(PReg {
+                    name: _nvptx_reg_name_for(pk, p.id),
+                    kind: pk,
+                    frag_role: "",
+                    frag_dtype: "",
+                    frag_layout: ""
+                })
+                seen_ids.push(p.id)
+            }
+            pp = pp + 1
+        }
+    }
     // Pass 1 — defining-stmt classification.
     let mut bi = 0
     while bi < len(mfn.blocks) {
@@ -1365,7 +1573,40 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                         k = k + 1
                     }
                     if !dup {
-                        let kind = _nvptx_classify_local_for_stmt(s)
+                        let mut kind = _nvptx_classify_local_for_stmt(s)
+                        // RFC 071 P4+ (N59 G4 sibling) — operand-kind
+                        // inference for arithmetic STMT_BINOP. When the
+                        // classifier-by-op default is F64 (no precision
+                        // tag, no predicate op) but at least one operand
+                        // already classifies as an integer bank (i.e. an
+                        // i64/i32 Local from `to_i64` or a kernel param
+                        // with type_id=1), inherit the operand bank so
+                        // `idx + 1` emits `add.s64 %rd<d>, %rd<idx>, 1`
+                        // not the mixed-bank `add.f64 %fd<d>, %rd<idx>, 1`
+                        // that ptxas rejects.
+                        if s.kind == STMT_BINOP && kind == NVPTX_RKIND_F64 && len(s.dst.precision) == 0 {
+                            if len(s.args) >= 1 && s.args[0].kind == "local" {
+                                let ka = _nvptx_lookup_kind_for_local(regs, s.args[0].local_id)
+                                if ka == NVPTX_RKIND_U64 || ka == NVPTX_RKIND_U32 { kind = ka }
+                            }
+                            if kind == NVPTX_RKIND_F64 && len(s.args) >= 2 && s.args[1].kind == "local" {
+                                let kb = _nvptx_lookup_kind_for_local(regs, s.args[1].local_id)
+                                if kb == NVPTX_RKIND_U64 || kb == NVPTX_RKIND_U32 { kind = kb }
+                            }
+                        }
+                        // RFC 071 P4+ (N59 G4 sibling 2) — operand-kind
+                        // inference for STMT_ASSIGN (let/assign/etc.) —
+                        // 1-arg single-source mov. Inherit the source
+                        // operand's bank so `let gid = <i32 expr>` lands
+                        // in U32 (matches the source's bank) instead of
+                        // F64 default. Skip for index/index_set (those
+                        // ops have their own dst-kind contract above).
+                        if s.kind == STMT_ASSIGN && kind == NVPTX_RKIND_F64 && len(s.dst.precision) == 0 && s.op != "index" && s.op != "index_set" {
+                            if len(s.args) >= 1 && s.args[0].kind == "local" {
+                                let ks = _nvptx_lookup_kind_for_local(regs, s.args[0].local_id)
+                                if ks == NVPTX_RKIND_U64 || ks == NVPTX_RKIND_U32 { kind = ks }
+                            }
+                        }
                         // RFC 067 P3 — for FRAG PRegs, stamp the role /
                         // dtype / layout from the STMT_CALL op name; for
                         // every other kind the metadata stays "" (the
@@ -1470,9 +1711,69 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                     }
                 }
             }
+            // RFC 071 P4+ (N59 G2/G3) — STMT_ASSIGN op="index" / "index_set"
+            // address-operand U64 propagation. The base operand (args[0]
+            // of either op) is an array pointer that must classify as
+            // U64 so the synth-pass emit renders `%rd<id>` for it.
+            if s.kind == STMT_ASSIGN && (s.op == "index" || s.op == "index_set") {
+                if len(s.args) >= 1 {
+                    let base = s.args[0]
+                    if base.kind == "local" {
+                        let mut dup = false
+                        let mut k = 0
+                        while k < len(seen_ids) {
+                            if seen_ids[k] == base.local_id { dup = true }
+                            k = k + 1
+                        }
+                        if !dup {
+                            regs.push(PReg { name: _nvptx_reg_u64(base.local_id), kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                            seen_ids.push(base.local_id)
+                        }
+                    }
+                }
+            }
             sj = sj + 1
         }
         bj = bj + 1
+    }
+    // RFC 071 P4+ (N59 G2/G3 — Pass 3) — scratch addr-reg declaration
+    // for the IndexGet/IndexSet synth. Each `op="index"` statement
+    // needs a private `%rd_idxa_<dst.id>` (so multiple index reads in
+    // the same block don't clobber each other across the
+    // mul.lo.s64+add.s64+ld.global trio). All `op="index_set"`
+    // statements share a single `%rd_idxs_addr` (each store completes
+    // inline before the next, no cross-statement aliasing).
+    let mut bk = 0
+    let mut needs_idxs_addr = false
+    while bk < len(mfn.blocks) {
+        let blk = mfn.blocks[bk]
+        let mut sk = 0
+        while sk < len(blk.stmts) {
+            let s = blk.stmts[sk]
+            if s.kind == STMT_ASSIGN && s.op == "index" && s.dst.id >= 0 {
+                regs.push(PReg {
+                    name: "%rd_idxa_" + to_string(s.dst.id),
+                    kind: NVPTX_RKIND_U64,
+                    frag_role: "",
+                    frag_dtype: "",
+                    frag_layout: ""
+                })
+            }
+            if s.kind == STMT_ASSIGN && s.op == "index_set" {
+                needs_idxs_addr = true
+            }
+            sk = sk + 1
+        }
+        bk = bk + 1
+    }
+    if needs_idxs_addr {
+        regs.push(PReg {
+            name: "%rd_idxs_addr",
+            kind: NVPTX_RKIND_U64,
+            frag_role: "",
+            frag_dtype: "",
+            frag_layout: ""
+        })
     }
     return regs
 }
@@ -1501,9 +1802,64 @@ fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
     // so the emit pass declares each register with the matching
     // `.reg .<ty>` directive. Computing it once avoids re-walking the
     // MIR per-stmt.
-    let regs = _nvptx_classify_locals(mfn)
+    let regs0 = _nvptx_classify_locals(mfn)
+    // RFC 071 P4+ (N59 G2) — KERNEL param-Local U64 fallback. For a
+    // GPU kernel, ensure params referenced as `op="index"` /
+    // `op="index_set"` base OR as a STMT_LOAD/STORE address are
+    // declared in the U64 bank (Pass 2/3 already does this when the
+    // param IS used as such — this block only fills in params that
+    // were missed because they get USED in an op="index_set" trio
+    // whose base isn't yet processed by Pass 2/3 paths). When a
+    // kernel param isn't classified anywhere, it stays unclassified
+    // — `_nvptx_lookup_reg_for_local` falls back to `%fd<id>` per the
+    // 055-P0 behavior the existing _test_partition asserts.
+    let regs = regs0
     let mut instrs = []
-    let mut bi = 0
+    // RFC 071 P4+ (N59 G2/G4) — KERNEL param ld.param prologue. Emit
+    // `ld.param.<ty> %<reg>, [<kernel>_param_<i>];` for each param
+    // whose Local id is classified in the regs roster (Pass 0 type_id
+    // classification + Pass 2/3 address-use propagation). Unclassified
+    // params (type_id=0 + not used as address) get no prologue line —
+    // preserves byte-eq for fixtures like _test_partition whose
+    // synthetic Locals don't carry types.
+    if mfn.gpu_kind == GPU_KIND_KERNEL && len(mfn.blocks) > 0 {
+        let entry_blk = mfn.blocks[0]
+        instrs.push(_nvptx_instr("label", [_nvptx_op("$L_" + to_string(entry_blk.id))], ""))
+        let mut pi3 = 0
+        while pi3 < len(mfn.params) {
+            let p = mfn.params[pi3]
+            let pkind = _nvptx_lookup_kind_for_local(regs, p.id)
+            // _nvptx_lookup_kind_for_local returns NVPTX_RKIND_F64 as
+            // a default when the Local isn't in regs; we want to skip
+            // those, so probe with the explicit reg-name match.
+            let reg_name = _nvptx_lookup_reg_for_local(regs, p.id)
+            let default_name = _nvptx_reg_f64(p.id)
+            // If the lookup returned the default %fd<id> AND no PReg
+            // in regs has that name, the param is unclassified — skip
+            // the prologue line for it.
+            let mut found = false
+            let mut ck = 0
+            while ck < len(regs) {
+                if regs[ck].name == reg_name { found = true }
+                ck = ck + 1
+            }
+            if found {
+                let load_mnem = _nvptx_ld_param_mnem_for_kind(pkind)
+                let mut a = []
+                a.push(_nvptx_op(reg_name))
+                a.push(_nvptx_op(_nvptx_param_ref(mfn.name, pi3)))
+                instrs.push(_nvptx_instr(load_mnem, a, "load kernel param " + to_string(pi3) + " into reg"))
+            }
+            pi3 = pi3 + 1
+        }
+        let mut si0 = 0
+        while si0 < len(entry_blk.stmts) {
+            instrs = _nvptx_lower_stmt(instrs, entry_blk.stmts[si0], regs)
+            si0 = si0 + 1
+        }
+    }
+    let bi_start = if mfn.gpu_kind == GPU_KIND_KERNEL && len(mfn.blocks) > 0 { 1 } else { 0 }
+    let mut bi = bi_start
     while bi < len(mfn.blocks) {
         let blk = mfn.blocks[bi]
         // Block label — PTX block labels are `$L_<id>:`. The emit pass
