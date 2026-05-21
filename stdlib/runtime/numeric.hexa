@@ -303,6 +303,23 @@ pub fn rt_array_sort_float(arr: [float]) -> [float] {
     return sorted
 }
 
+// Step 3 cycle 68 — enumerate: array of [idx, item] pairs. No
+// callback, no polymorphic guard, just pair-building. Type annotations
+// are runtime-relaxed (push accepts any HexaVal).
+pub fn rt_array_enumerate(arr: HexaVal) -> HexaVal {
+    let mut out: [float] = []
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        let mut pair: [float] = []
+        pair = pair.push(i)
+        pair = pair.push(arr[i])
+        out = out.push(pair)
+        i = i + 1
+    }
+    return out
+}
+
 // Step 3 cycle 67 — scan (intermediate accumulators) + partition
 // (split by predicate into [matching, rest]). Type annotations on
 // `out` are hints — push accepts any HexaVal at runtime, so pushing

@@ -1094,6 +1094,18 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 68: hexa_array_enumerate (pair-output, no-callback)
+
+- ✅ `hexa_array_enumerate` (3347) ported. Builds an array of
+  `[idx, item]` pair-arrays. Hexa source pushes `i` (auto-coerced to
+  HexaVal int) + `arr[i]` (HexaVal) into a fresh `pair` array, then
+  pushes the pair into `out`
+- No predicate / no polymorphic tag check — pure data fn (closes one
+  of the long-standing "pair output awkward" candidates from earlier
+  cycle planning)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,904 B
+
 ### 2026-05-21 — step 3 cycle 67: hexa_array_scan + hexa_array_partition (callback returning arrays)
 
 - ✅ `hexa_array_scan` (3881) ported. Builds intermediate-accumulator

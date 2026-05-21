@@ -3344,6 +3344,14 @@ HexaVal hexa_array_flat_map(HexaVal arr, HexaVal fn) {
 }
 
 // enumerate: [[idx, item], ...] — matches hexa_full.hexa:15220-15228.
+// Step-3 cycle 68 port — enumerate dispatch.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_array_enumerate(HexaVal arr);
+HexaVal hexa_array_enumerate(HexaVal arr) {
+    if (!HX_IS_ARRAY(arr)) return hexa_array_new();
+    return rt_array_enumerate(arr);
+}
+#else
 HexaVal hexa_array_enumerate(HexaVal arr) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3355,6 +3363,7 @@ HexaVal hexa_array_enumerate(HexaVal arr) {
     }
     return out;
 }
+#endif
 
 // is_empty: true if array/string has zero items/bytes. Map also uses
 // map_len — handled in hexa_is_empty below (polymorphic).
