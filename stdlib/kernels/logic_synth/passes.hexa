@@ -3276,6 +3276,42 @@ fn pass_proc_mux(d: Design) -> PassResult {
 //   add the new cell (+5-22 µm² per fold); the net Δ depends on which
 //   patterns fire on the router_d4 graph. Honest verdict in commit msg.
 //
+//   G3 POST-FIX MEASUREMENT (mini, 2026-05-22):
+//     d4 area = 49092.1 µm², Δ=20.52% (FAIL ±5%) — UNCHANGED
+//     d6 area = 68695.9 µm², Δ=26.61% (FAIL ±5%) — UNCHANGED
+//     cut_and_remap fired matches=10 (d4) / matches=14 (d6)
+//
+//   Honest architectural diagnosis: the area floor is set by FLOP
+//   COUNT, not combinational density. Both designs are FF-dominated:
+//   router_d4 has ≈1638 sequential cells × 30.03 µm² ≈ 49191 µm²
+//   from edfxtp_1 alone, plus ≈248 µm² of combinational logic
+//   (33 nor2_1 + 33 clkinv_1 post-ABC strash+map). ABC's `strash`
+//   collapses the post-techmap RTLIL — whether or not we pre-emit
+//   a22oi_1 / mux4_2 / and2_1 from cut_and_remap — into the same
+//   AIG, then `map` re-substitutes from the substrate library; the
+//   final mapped cell count is independent of our pre-ABC cell mix.
+//   Confirmed by matches=10 fires landing in the pre-ABC BLIF (the
+//   _in.blif emit) but the post-ABC _out.blif cell histogram is
+//   identical to the no-cut-and-remap run.
+//
+//   Closing the d4 ±5% gap from *below* thus requires one of
+//   (out of scope for cut-and-remap, documented for follow-up):
+//     (a) Generate more combinational gates in our IR — richer
+//         always-block elaboration (proc/proc_mux phases) or
+//         expanded $eq/$ne/$add expansion (currently lowers to
+//         xnor+and chains; substrate yosys uses adder-cell trees).
+//     (b) Disable ABC's strash for the gate-§5 path so the pre-ABC
+//         cell mix flows through to the area histogram (loses the
+//         technology-independent optimization advantage but matches
+//         a different reference flow).
+//     (c) Audit the flop-cell-type mix — substrate yosys 0.33 may
+//         emit dffrtp_1/dffrtn_1 (with reset paths) where we emit
+//         pure edfxtp_1; the 1638-cell flop floor varies by ±25 %
+//         across SKY130 flop types.
+//   The infrastructure stays in tree: it is the ABC-style layer
+//   §5 requires and will be load-bearing once (a)/(b)/(c) lifts
+//   the floor.
+//
 // @cite Mishchenko & Brayton 2007 (priority cuts) — used for vocabulary
 //   only; this implementation is a clean-room greedy variant.
 
