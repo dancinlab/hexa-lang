@@ -1094,6 +1094,32 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 52: hexa_str_char_at + hexa_str_char_count → rt_str_*
+
+- ✅ `hexa_str_char_at` (self/runtime_core.c:4199) and
+  `hexa_str_char_count` (4238) gain two-mode dispatch. char_at uses
+  `s.substring(i, i+1)` builtin; char_count thin-wraps the cycle-51
+  `rt_utf8_cpcount` helper
+- 🛸 **Recursion trap discovered**: an initial attempt to also port
+  `hexa_str_char_code_at` SIGSEGV'd (139) at smoke. Root cause:
+  `hexa_str_byte_at(s, idx)` (line 4327) is literally `return
+  hexa_str_char_code_at(s, idx);`. A hexa-source `rt_str_char_code_at`
+  body using `s.byte_at(i)` would loop: byte_at → hexa_str_byte_at →
+  hexa_str_char_code_at (dispatched) → rt_str_char_code_at →
+  s.byte_at → … char_code_at stays C-only; the 4-line body has no
+  porting value anyway
+- Lesson for future port candidates: check whether the C function we
+  want to port is **called** by any builtin that the hexa-source body
+  would use. Same trap kind as the cycle-30 catchup blocker
+  ("hot-path cmp/add/sub/mul/div ports cause hexa_v2 transpile
+  lowering infinite recursion via rt_cmp_lt_int call chain")
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,848 B
+- 🛸 **Cross-parity validation** (ubu-2, Linux x86_64): fresh-clone
+  of origin/main HEAD + `dist/linux-x86_64/hexa_v2 transpile` on
+  `stdlib/runtime/{ctype,math,numeric}.hexa` → all 3 files OK. Ports
+  are platform-portable (Mac arm64 + Linux x86_64 transpile parity)
+
 ### 2026-05-21 — step 3 cycle 51: hexa_pad_left + hexa_pad_right → rt_pad_left/right (UTF-8 width)
 
 - ✅ `hexa_pad_left` + `hexa_pad_right` (self/runtime_core.c:6116,

@@ -43,6 +43,26 @@ pub fn rt_str_bytes(s: string) -> [int] {
     return out
 }
 
+// Step 3 cycle 52 — UTF-8 codepoint count. Thin wrapper over the
+// rt_utf8_cpcount helper introduced in cycle 51.
+pub fn rt_str_char_count(s: string) -> int {
+    return rt_utf8_cpcount(s)
+}
+
+// Step 3 cycle 52 — byte-indexed `.char_at(i)` with Python-style
+// negative-index wraparound. Returns "" on OOB.
+// (Note: hexa_str_char_code_at is intentionally NOT ported — see the
+// `s.byte_at(i)` → `hexa_str_byte_at` → `hexa_str_char_code_at`
+// recursion trap. Porting it would infinite-loop through the byte_at
+// builtin.)
+pub fn rt_str_char_at(s: string, idx: int) -> string {
+    let n = byte_len(s)
+    let mut i = idx
+    if i < 0 { i = i + n }
+    if i < 0 || i >= n { return "" }
+    return s.substring(i, i + 1)
+}
+
 // Step 3 cycle 51 — UTF-8 codepoint counter (helper for pad_left/right).
 // Same bit-pattern table as rt_str_chars but just counts (no substring
 // allocations).

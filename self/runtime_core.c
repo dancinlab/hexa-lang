@@ -4196,6 +4196,9 @@ int64_t hexa_str_last_index_of(HexaVal s, HexaVal sub) {
 // of every other hexa_str_* helper (runtime has no UTF-8 codepoint iter
 // — strings are treated as uninterpreted byte sequences, with the
 // exception of UTF-8-safe display in hexa_println).
+// Step-3 cycle 52 — char_at dispatches to rt_str_char_at (uses
+// substring builtin, no recursion trap).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_char_at(HexaVal s, HexaVal idx) {
     if (!HX_IS_STR(s)) return hexa_str("");
     int64_t i = HX_INT(idx);
@@ -4206,11 +4209,23 @@ HexaVal hexa_str_char_at(HexaVal s, HexaVal idx) {
     char buf[2] = { HX_STR(s)[i], '\0' };
     return hexa_str(buf);
 }
+#else
+extern HexaVal rt_str_char_at(HexaVal s, HexaVal idx);
+HexaVal hexa_str_char_at(HexaVal s, HexaVal idx) {
+    if (!HX_IS_STR(s)) return hexa_str("");
+    return rt_str_char_at(s, idx);
+}
+#endif
 
 // Byte value at offset i (0..255), or -1 if out-of-range. JS-analog
 // `.char_code_at` expects UTF-16 code units; we expose raw byte
 // values since hexa strings are byte-sequenced. A later UTF-8
 // codepoint API (`.code_point_at`) can layer on if needed.
+// Step-3 cycle 52 NOTE — hexa_str_char_code_at is intentionally NOT
+// ported. The chain `s.byte_at(i)` → hexa_str_byte_at(s, idx) →
+// hexa_str_char_code_at(s, idx) (see line 4327) means any hexa-source
+// rt_str_char_code_at body would infinite-recurse through the byte_at
+// builtin. Stays C-only; the 4-line body has no real porting value.
 HexaVal hexa_str_char_code_at(HexaVal s, HexaVal idx) {
     if (!HX_IS_STR(s)) return hexa_int(-1);
     int64_t i = HX_INT(idx);
@@ -4235,6 +4250,9 @@ static int _hx_utf8_cp_len(unsigned char b) {
 }
 
 // Count UTF-8 codepoints. `"한글hi".char_count() == 4` etc.
+// Step-3 cycle 52 — dispatches to rt_str_char_count (reuses
+// rt_utf8_cpcount helper from cycle 51).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_char_count(HexaVal s) {
     if (!HX_IS_STR(s)) return hexa_int(0);
     const char* p = HX_STR(s);
@@ -4247,6 +4265,13 @@ HexaVal hexa_str_char_count(HexaVal s) {
     }
     return hexa_int(count);
 }
+#else
+extern HexaVal rt_str_char_count(HexaVal s);
+HexaVal hexa_str_char_count(HexaVal s) {
+    if (!HX_IS_STR(s)) return hexa_int(0);
+    return rt_str_char_count(s);
+}
+#endif
 
 // Codepoint-indexed nth char as a 1-codepoint string (1..4 bytes).
 // Returns "" for negative or out-of-range n.
