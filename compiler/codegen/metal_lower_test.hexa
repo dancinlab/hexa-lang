@@ -1,6 +1,6 @@
 // HEXA Native Compiler — RFC 075 P1+P2+P3+ / Metal lowering smoke (codegen-only)
 //
-// @version 0.0.4
+// @version 0.0.5
 // @capabilities [pure]
 //
 // RFC 075 P1+P2+P3+ codegen-only smoke. The codegen entry
@@ -42,6 +42,19 @@
 //            battery as vec-add but with ` / ` replacing ` + `. Also
 //            asserts ` + ` and ` * ` are ABSENT — vec-div must not
 //            accidentally inherit vec-add's `+` or vec-mul's `*`.
+//   Case 9 — F-RFC075-METAL-EMIT-VEC-NEG: synthesize vec-neg MIR
+//            (STMT_LOAD + STMT_UNOP("neg") + STMT_STORE — 2-buffer
+//            element-wise unary), invoke `codegen_emit_metal_msl`,
+//            assert the 2-buffer signature emerges (a + c only, NO `b`,
+//            NO `[[buffer(2)]]`) and the body emits `c[i] = -a[i];`.
+//   Case 10 — F-RFC075-METAL-EMIT-VEC-ABS: synthesize vec-abs MIR
+//            (STMT_UNOP("abs")), invoke `codegen_emit_metal_msl`,
+//            assert the 2-buffer signature + `abs(a[i])` MSL builtin
+//            call (cite Metal Shading Language Specification §5.10).
+//   Case 11 — F-RFC075-METAL-EMIT-VEC-SQRT: synthesize vec-sqrt MIR
+//            (STMT_UNOP("sqrt")), invoke `codegen_emit_metal_msl`,
+//            assert the 2-buffer signature + `sqrt(a[i])` MSL builtin
+//            call (cite Metal Shading Language Specification §5.10).
 //
 // Run:
 //   hexa build compiler/codegen/metal_lower_test.hexa -o build/metal_lower_test
@@ -238,6 +251,20 @@ fn _stmt_binop_div(dst: Local, lhs: i64, rhs: i64) -> Stmt {
     xs.push(_op_local(rhs))
     return Stmt {
         kind: STMT_BINOP, dst: dst, op: "div", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+// _stmt_unop — emit a STMT_UNOP statement with op string
+// ("neg" / "abs" / "sqrt"). UNOP carries a SINGLE local operand
+// (no rhs) — matches `_metal_mfunc_is_unary_shape_with_op`'s arity
+// guard. Used by the Case 9-11 vec-neg / vec-abs / vec-sqrt
+// fixtures (2-buffer element-wise unary kernels).
+fn _stmt_unop(dst: Local, src_local: i64, op_name: string) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(src_local))
+    return Stmt {
+        kind: STMT_UNOP, dst: dst, op: op_name, args: xs,
         target_block: -1, target_block_else: -1
     }
 }
@@ -756,6 +783,195 @@ fn _test_vec_div_emit() -> bool {
     return ok
 }
 
+// ── vec-neg / vec-abs / vec-sqrt MIR fixtures (Cases 9-11) ──────────
+//
+// Element-wise unary kernels: 2-buffer signature (a + c only, NO `b`).
+// Stmt sequence: STMT_LOAD a→va, STMT_UNOP(op_name) va→vc, STMT_STORE
+// vc→c (optional STMT_RETURN tail). The op_name discriminates which
+// shape recogniser fires ("neg" / "abs" / "sqrt"). All three share the
+// same fixture skeleton; the lone difference is the UNOP op string.
+
+fn _build_vec_unary_module(op_name: string, kname: string, file: string) -> MModule {
+    // Two kernel-buffer params (a, c) + two private Locals (va, vc).
+    // Stmt sequence: STMT_LOAD a→va, STMT_UNOP(op_name) (va)→vc,
+    // STMT_STORE vc→c. Matches `_metal_mfunc_is_unary_shape_with_op`.
+    let a  = _kern_local(0, "a")
+    let c  = _kern_local(1, "c")
+    let va = _priv_local(2, "va")
+    let vc = _priv_local(3, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_unop(vc, va.id, op_name))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: kname,
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: file, funcs: fns, globals: [] }
+}
+
+fn _build_vec_neg_module() -> MModule {
+    return _build_vec_unary_module("neg", "vec_neg", "metal_vec_neg.hexa")
+}
+
+fn _build_vec_abs_module() -> MModule {
+    return _build_vec_unary_module("abs", "vec_abs", "metal_vec_abs.hexa")
+}
+
+fn _build_vec_sqrt_module() -> MModule {
+    return _build_vec_unary_module("sqrt", "vec_sqrt", "metal_vec_sqrt.hexa")
+}
+
+// ── Case 9 — F-RFC075-METAL-EMIT-VEC-NEG ─────────────────────────────
+//
+// Synthesise a vec-neg MIR module (`c[i] = -a[i]`), invoke
+// `codegen_emit_metal_msl`, and assert the emitted MSL kernel source
+// uses the 2-buffer signature (a + c only) and the prefix unary `-`
+// operator. Asserts the second input `b` and its [[buffer(2)]] binding
+// are ABSENT — vec-neg is single-input. Asserts ` + ` and ` * ` are
+// also absent so a future binop shape never accidentally falls into
+// the unary branch.
+
+fn _test_vec_neg_emit() -> bool {
+    let mut ok = true
+    let mod_vn = _build_vec_neg_module()
+    let msl = codegen_emit_metal_msl(mod_vn)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ vec-neg case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-VEC-NEG substring battery — 15 positive.
+    ok = _check_contains(ok, msl, "#include <metal_stdlib>",     "MSL preamble include")
+    ok = _check_contains(ok, msl, "using namespace metal;",      "MSL namespace using-directive")
+    ok = _check_contains(ok, msl, "kernel void",                 "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "vec_neg",                     "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "device const float*",         "read-only device pointer parameter")
+    ok = _check_contains(ok, msl, "device float*",               "writable device pointer parameter")
+    ok = _check_contains(ok, msl, "[[buffer(0)]]",               "buffer(0) binding attribute (a)")
+    ok = _check_contains(ok, msl, "[[buffer(1)]]",               "buffer(1) binding attribute (c)")
+    ok = _check_contains(ok, msl, "[[thread_position_in_grid]]", "thread-position attribute")
+    ok = _check_contains(ok, msl, "c[i]",                        "writable buffer index `c[i]`")
+    ok = _check_contains(ok, msl, "a[i]",                        "read buffer index `a[i]`")
+    ok = _check_contains(ok, msl, "-a[i]",                       "prefix unary minus on `a[i]`")
+    ok = _check_contains(ok, msl, "=",                           "assignment operator")
+    ok = _check_contains(ok, msl, ";",                           "statement terminator")
+    ok = _check_contains(ok, msl, "uint i",                      "thread-index parameter declaration")
+    // Negative — vec-neg is 2-buffer, must NOT name `b[i]` or bind buffer(2),
+    // and must not emit binop add/mul fragments.
+    ok = _check_not_contains(ok, msl, "b[i]",                    "vec-neg should not name `b[i]` (2-buffer guard)")
+    ok = _check_not_contains(ok, msl, "[[buffer(2)]]",           "vec-neg should not bind `[[buffer(2)]]` (2-buffer guard)")
+    ok = _check_not_contains(ok, msl, " + ",                     "vec-neg should not emit ` + ` (binop guard)")
+    ok = _check_not_contains(ok, msl, " * ",                     "vec-neg should not emit ` * ` (binop guard)")
+    return ok
+}
+
+// ── Case 10 — F-RFC075-METAL-EMIT-VEC-ABS ────────────────────────────
+//
+// Synthesise a vec-abs MIR module (`c[i] = abs(a[i])`), invoke
+// `codegen_emit_metal_msl`, and assert the emitted MSL kernel source
+// uses the 2-buffer signature and the MSL builtin `abs(float)` call
+// (cite `Metal Shading Language Specification §5.10`).
+
+fn _test_vec_abs_emit() -> bool {
+    let mut ok = true
+    let mod_va = _build_vec_abs_module()
+    let msl = codegen_emit_metal_msl(mod_va)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ vec-abs case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-VEC-ABS substring battery — 15 positive.
+    ok = _check_contains(ok, msl, "#include <metal_stdlib>",     "MSL preamble include")
+    ok = _check_contains(ok, msl, "using namespace metal;",      "MSL namespace using-directive")
+    ok = _check_contains(ok, msl, "kernel void",                 "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "vec_abs",                     "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "device const float*",         "read-only device pointer parameter")
+    ok = _check_contains(ok, msl, "device float*",               "writable device pointer parameter")
+    ok = _check_contains(ok, msl, "[[buffer(0)]]",               "buffer(0) binding attribute (a)")
+    ok = _check_contains(ok, msl, "[[buffer(1)]]",               "buffer(1) binding attribute (c)")
+    ok = _check_contains(ok, msl, "[[thread_position_in_grid]]", "thread-position attribute")
+    ok = _check_contains(ok, msl, "c[i]",                        "writable buffer index `c[i]`")
+    ok = _check_contains(ok, msl, "a[i]",                        "read buffer index `a[i]`")
+    ok = _check_contains(ok, msl, "abs(",                        "MSL builtin call `abs(`")
+    ok = _check_contains(ok, msl, "abs(a[i])",                   "full MSL call form `abs(a[i])`")
+    ok = _check_contains(ok, msl, ";",                           "statement terminator")
+    ok = _check_contains(ok, msl, "uint i",                      "thread-index parameter declaration")
+    // Negative — vec-abs is 2-buffer, must NOT name `b[i]` or bind buffer(2),
+    // and must not emit binop add/mul fragments.
+    ok = _check_not_contains(ok, msl, "b[i]",                    "vec-abs should not name `b[i]` (2-buffer guard)")
+    ok = _check_not_contains(ok, msl, "[[buffer(2)]]",           "vec-abs should not bind `[[buffer(2)]]` (2-buffer guard)")
+    ok = _check_not_contains(ok, msl, " + ",                     "vec-abs should not emit ` + ` (binop guard)")
+    ok = _check_not_contains(ok, msl, " * ",                     "vec-abs should not emit ` * ` (binop guard)")
+    return ok
+}
+
+// ── Case 11 — F-RFC075-METAL-EMIT-VEC-SQRT ───────────────────────────
+//
+// Synthesise a vec-sqrt MIR module (`c[i] = sqrt(a[i])`), invoke
+// `codegen_emit_metal_msl`, and assert the emitted MSL kernel source
+// uses the 2-buffer signature and the MSL builtin `sqrt(float)` call
+// (cite `Metal Shading Language Specification §5.10`).
+
+fn _test_vec_sqrt_emit() -> bool {
+    let mut ok = true
+    let mod_vq = _build_vec_sqrt_module()
+    let msl = codegen_emit_metal_msl(mod_vq)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ vec-sqrt case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-VEC-SQRT substring battery — 15 positive.
+    ok = _check_contains(ok, msl, "#include <metal_stdlib>",     "MSL preamble include")
+    ok = _check_contains(ok, msl, "using namespace metal;",      "MSL namespace using-directive")
+    ok = _check_contains(ok, msl, "kernel void",                 "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "vec_sqrt",                    "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "device const float*",         "read-only device pointer parameter")
+    ok = _check_contains(ok, msl, "device float*",               "writable device pointer parameter")
+    ok = _check_contains(ok, msl, "[[buffer(0)]]",               "buffer(0) binding attribute (a)")
+    ok = _check_contains(ok, msl, "[[buffer(1)]]",               "buffer(1) binding attribute (c)")
+    ok = _check_contains(ok, msl, "[[thread_position_in_grid]]", "thread-position attribute")
+    ok = _check_contains(ok, msl, "c[i]",                        "writable buffer index `c[i]`")
+    ok = _check_contains(ok, msl, "a[i]",                        "read buffer index `a[i]`")
+    ok = _check_contains(ok, msl, "sqrt(",                       "MSL builtin call `sqrt(`")
+    ok = _check_contains(ok, msl, "sqrt(a[i])",                  "full MSL call form `sqrt(a[i])`")
+    ok = _check_contains(ok, msl, ";",                           "statement terminator")
+    ok = _check_contains(ok, msl, "uint i",                      "thread-index parameter declaration")
+    // Negative — vec-sqrt is 2-buffer, must NOT name `b[i]` or bind buffer(2),
+    // and must not emit binop add/mul fragments.
+    ok = _check_not_contains(ok, msl, "b[i]",                    "vec-sqrt should not name `b[i]` (2-buffer guard)")
+    ok = _check_not_contains(ok, msl, "[[buffer(2)]]",           "vec-sqrt should not bind `[[buffer(2)]]` (2-buffer guard)")
+    ok = _check_not_contains(ok, msl, " + ",                     "vec-sqrt should not emit ` + ` (binop guard)")
+    ok = _check_not_contains(ok, msl, " * ",                     "vec-sqrt should not emit ` * ` (binop guard)")
+    return ok
+}
+
 fn main() {
     println("══════════════════════════════════════════════")
     println("  RFC 075 P1+P2+P3+ — Metal codegen smoke")
@@ -769,10 +985,13 @@ fn main() {
     let ok_vscale = _test_vec_scale_emit()
     let ok_vsub   = _test_vec_sub_emit()
     let ok_vdiv   = _test_vec_div_emit()
+    let ok_vneg   = _test_vec_neg_emit()
+    let ok_vabs   = _test_vec_abs_emit()
+    let ok_vsqrt  = _test_vec_sqrt_emit()
 
     println("")
-    if ok_emit && ok_tgt && ok_vec && ok_class && ok_vmul && ok_vscale && ok_vsub && ok_vdiv {
-        println("  PASS: RFC 075 P1+P2+P3+ Metal codegen smoke (vec-add + vec-mul + vec-sub + vec-div + vec-scale)")
+    if ok_emit && ok_tgt && ok_vec && ok_class && ok_vmul && ok_vscale && ok_vsub && ok_vdiv && ok_vneg && ok_vabs && ok_vsqrt {
+        println("  PASS: RFC 075 P1+P2+P3+ Metal codegen smoke (vec-add + vec-mul + vec-sub + vec-div + vec-scale + vec-neg + vec-abs + vec-sqrt)")
     } else {
         println("  FAIL: RFC 075 P1+P2+P3+ Metal codegen smoke")
     }
