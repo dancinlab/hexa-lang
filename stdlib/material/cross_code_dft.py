@@ -22,6 +22,12 @@
 #                  (key-free, may return "DB Fail!null" — gracefully skip)
 #   C. OQMD      — REST GET https://oqmd.org/oqmdapi/formationenergy?
 #                  composition=<...> (key-free, JSON; band_gap + delta_e)
+#   C'. JARVIS   — REST GET https://jarvis.nist.gov/optimade/jarvisdft/v1/
+#                  structures/?filter=chemical_formula_reduced="<HillFormula>"
+#                  (anonymous OPTIMADE; sentinel -99999 for missing values;
+#                  OptB88vdW functional → see s5 caveat). RTSC §9.9.1 Phase 2
+#                  ext follow-on (2026-05-22) — patches multi-corpus AFLOW+OQMD
+#                  dropout on YBCO + H₃S.
 #   D. hexa-rtsc — subprocess `hexa run calc_*.hexa` (n=6 algebraic ceiling;
 #                  only if ~/.hx/bin/hexa exists). DEVIATION-only — NOT
 #                  comparable to DFT numerics (per s4 caveat).
@@ -354,6 +360,131 @@ def _poll_oqmd(composition: str, prop: str
     }
 
 
+# ─── Source C′: JARVIS-OPTIMADE REST (NIST) ─────────────────────────────
+
+
+_JARVIS_OPTIMADE_BASE = (
+    "https://jarvis.nist.gov/optimade/jarvisdft/v1/structures/"
+)
+
+
+def _hill_formula(composition: str) -> str:
+    """Reorder composition to Hill-like reduced formula. JARVIS-OPTIMADE's
+    `chemical_formula_reduced` field is alphabetized by element symbol
+    (Hill-like w/o C/H special-casing in their indexing — e.g. YBa2Cu3O7 →
+    Ba2Cu3O7Y, MgB2 → BMg2, H3S → H3S). Best-effort regex parse: strip
+    parens, tokenize element+count, alphabetize by element symbol.
+
+    Examples:
+      YBa2Cu3O7         → Ba2Cu3O7Y
+      MgB2              → BMg2
+      H3S               → H3S
+      Ca10(PO4)6F2      → Ca10F2O24P6
+      Nb                → Nb
+    """
+    flat = composition.replace("(", "").replace(")", "")
+    # Split into (element, count) pairs. Default count=1.
+    tokens = re.findall(r"([A-Z][a-z]?)(\d*)", flat)
+    counts: dict[str, int] = {}
+    for elem, cnt in tokens:
+        if not elem:
+            continue
+        c = int(cnt) if cnt else 1
+        counts[elem] = counts.get(elem, 0) + c
+    # Alphabetize by element symbol (JARVIS-OPTIMADE convention)
+    parts = []
+    for elem in sorted(counts.keys()):
+        c = counts[elem]
+        parts.append(f"{elem}{c}" if c > 1 else elem)
+    return "".join(parts) or composition
+
+
+def _poll_jarvis(composition: str, prop: str
+                 ) -> dict[str, Any] | None:
+    """Query JARVIS-OPTIMADE (NIST). Anonymous GET, no API key. Returns one
+    aggregated dict (min for formation_energy, mean for band_gap) or None
+    when zero rows satisfy the filter.
+
+    Fields:
+      formation_energy → _jarvis_formation_energy_peratom (eV / atom)
+      band_gap         → _jarvis_optb88vdw_bandgap (eV)
+      tc               → JARVIS doesn't index Tc as doc-quantity → None.
+
+    Sentinel filter: JARVIS uses -99999 to flag "not computed" — we drop
+    those rows.
+
+    Scope caveat: JARVIS-DFT uses OptB88vdW functional (NOT PBE) → same s2
+    systematic-error correlation. See scope_caveats (s5).
+
+    RTSC §9.9.1 Phase 2 ext follow-on (2026-05-22). Mirrors _poll_aflow /
+    _poll_oqmd shape (~50 LOC).
+    """
+    if prop == "tc":
+        return None
+    if prop == "formation_energy":
+        attr = "_jarvis_formation_energy_peratom"
+    elif prop == "band_gap":
+        attr = "_jarvis_optb88vdw_bandgap"
+    else:
+        return None
+
+    flat = _hill_formula(composition)
+    filt = f'chemical_formula_reduced="{flat}"'
+    fields = (
+        "chemical_formula_reduced,chemical_formula_hill,"
+        "_jarvis_formation_energy_peratom,_jarvis_optb88vdw_bandgap,"
+        "_jarvis_jid"
+    )
+    url = (
+        f"{_JARVIS_OPTIMADE_BASE}?filter={urllib.parse.quote(filt)}"
+        f"&page_limit=10&response_fields={fields}"
+    )
+    data, err = _http_get_json(url, timeout=12.0)
+    if err is not None or not isinstance(data, dict):
+        return None
+    entries = data.get("data") or []
+    if not entries:
+        return None
+
+    vals: list[float] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        attrs = entry.get("attributes") or {}
+        v = attrs.get(attr)
+        if v is None or v == -99999:
+            continue
+        try:
+            vals.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    if not vals:
+        return None
+    if prop == "formation_energy":
+        value = float(min(vals))
+    else:
+        value = float(sum(vals) / len(vals))
+    if len(vals) >= 2:
+        mean = sum(vals) / len(vals)
+        var = sum((v - mean) ** 2 for v in vals) / (len(vals) - 1)
+        sigma = max(math.sqrt(var), _DEFAULT_SIGMA[prop])
+    else:
+        sigma = _DEFAULT_SIGMA[prop]
+    return {
+        "name": "jarvis",
+        "value": value,
+        "sigma": float(sigma),
+        "citation": (
+            "Choudhary et al., npj Comput. Mater. 6, 173 (2020) — "
+            "JARVIS-DFT: an integrated infrastructure for data-driven "
+            "materials design (US-government public domain, NIST)"
+        ),
+        "raw_record_path_or_url": url,
+        "n_rows": len(vals),
+        "hill_formula_queried": flat,
+    }
+
+
 # ─── Source D: hexa-rtsc n=6 algebraic ceiling ──────────────────────────
 
 
@@ -537,6 +668,7 @@ def main(out_dir: str, composition: str, prop: str) -> int:
         "Curtarolo et al., Comput Mater Sci 58, 218 (2012) — AFLOW.",
         "Saal et al., JOM 65(11), 1501 (2013) — OQMD.",
         "Jain et al., APL Materials 1, 011002 (2013) — Materials Project.",
+        "Choudhary et al., npj Comput. Mater. 6, 173 (2020) — JARVIS-DFT.",
     ]
 
     scope_caveats = [
@@ -551,10 +683,16 @@ def main(out_dir: str, composition: str, prop: str) -> int:
         "never absorbed=true via simulation alone.",
         "(s4) hexa-rtsc n=6 closed-form is algebraic ceiling, NOT "
         "comparable to DFT numerics — informative DEVIATION only.",
+        "(s5) JARVIS-DFT uses OptB88vdW functional (NOT PBE) — not "
+        "orthogonal functional family vs MP/AFLOW/OQMD (all PBE-dominated); "
+        "same s2 systematic-error correlation. JARVIS values may "
+        "systematically differ from PBE for some compositions (e.g., "
+        "metal-hydride binding energies). Do NOT conflate JARVIS into "
+        "'PBE consensus'.",
     ]
 
     sources_polled = [
-        "mp_cache", "aflow", "oqmd", "hexa_rtsc",
+        "mp_cache", "aflow", "oqmd", "jarvis", "hexa_rtsc",
         "qe_pool", "abinit_pool",
     ]
 
@@ -566,6 +704,7 @@ def main(out_dir: str, composition: str, prop: str) -> int:
         ("mp_cache", lambda: _poll_mp_cache(composition, prop, cache_dir)),
         ("aflow", lambda: _poll_aflow(composition, prop)),
         ("oqmd", lambda: _poll_oqmd(composition, prop)),
+        ("jarvis", lambda: _poll_jarvis(composition, prop)),
         ("hexa_rtsc", lambda: _poll_hexa_rtsc(composition, prop)),
     ):
         try:
@@ -626,7 +765,7 @@ def main(out_dir: str, composition: str, prop: str) -> int:
         # All polls raised — endpoints truly unreachable / install-broken.
         gate_type = "install-gated"
         skipped_reason = (
-            f"none of the light sources (mp_cache / aflow / oqmd / "
+            f"none of the light sources (mp_cache / aflow / oqmd / jarvis / "
             f"hexa_rtsc) were reachable for {composition!r} property="
             f"{prop!r}. Poll errors: {poll_errors!r}. To enable heavy "
             f"QE/ABINIT path: set DEMIURGE_DFT_HEAVY_RUN=1 (pool CLI "
@@ -739,8 +878,8 @@ if __name__ == "__main__":
         description=(
             "Cross-code DFT consensus adapter (RTSC.md §9.4 simulation "
             "analog for (d) independent-lab replication). Polls MP cache "
-            "+ AFLOW + OQMD + hexa-rtsc; computes inverse-variance "
-            "consensus when >= 2 sources return a value."
+            "+ AFLOW + OQMD + JARVIS-OPTIMADE + hexa-rtsc; computes "
+            "inverse-variance consensus when >= 2 sources return a value."
         )
     )
     parser.add_argument("out_dir", help="output directory for JSON record")
