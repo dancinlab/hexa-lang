@@ -4421,25 +4421,38 @@ pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
 // operand storage matches the rocWMMA `fragment<..., float>` shape used
 // on the AMD lane (numeric equivalence across vendors).
 //
-// Tile layout — one warp computes one 16×16 output tile:
+// Tile layout — one warp computes one 16×16 output tile. Per N122 4-bug
+// catalog + RFC 071 P5++ remediation: canonical matmul uses row-major A
+// + row-major B in memory (the nn.Linear weight convention used by the
+// host test fixture). The `.row.row` mma layout consumes both fragments
+// as row-major and is semantically equivalent to `c = a · b`.
 //   row_tile = ctaid.y * 16
 //   col_tile = ctaid.x * 16
 //   for (k = 0; k < K; k += 16) {
 //       wmma.load.a a_frag, &a[row_tile*K + k]   stride K (row-major)
-//       wmma.load.b b_frag, &b[k*N + col_tile]   stride N (col-major)
-//       wmma.mma c_frag, a_frag, b_frag, c_frag
+//       wmma.load.b b_frag, &b[k*N + col_tile]   stride N (row-major)
+//       wmma.mma c_frag, a_frag, b_frag, c_frag  (.row.row layout)
 //   }
 //   wmma.store.d &c[row_tile*N + col_tile], c_frag, stride N (row-major)
 //
 // matmul_NT_a — A is column-major (`c = a^T · b`):
 //   wmma.load.a uses `.col` layout
 //   address arithmetic: `&a[k*M + row_tile]` (stride M, not K)
-//   B stays `.col`, C stays `.row`
+//   B stays row-major (.row), C stays `.row`
 //
-// matmul_NT_b — B is row-major (`c = a · b^T`):
-//   wmma.load.b uses `.row` layout
+// matmul_NT_b — B is column-major (`c = a · b^T`):
+//   wmma.load.b uses `.col` layout
 //   address arithmetic: `&b[col_tile*K + k]` (stride K, not N)
 //   A stays `.row`, C stays `.row`
+//
+// PTX 7.0 grammar — `wmma.{load.a|load.b|store.d}.sync.aligned.<layout>.
+// <shape>.<state-space>.<elem-type>`. The state-space modifier
+// (`.global` here — the kernel pointers come from `.param.u64` →
+// generic addressing) must precede the element-type token. For
+// `wmma.mma`, the 8-b32 A/B + 8-f32 D/C layout uses the SHORT type spec
+// `.f32.f32` (the long-form `.f32.f16.f16.f32` is reserved for the
+// 4-reg fragment layout per PTX 7.0 spec). Operand order for
+// `wmma.store.d` is `[addr], {regs}, stride`.
 
 // _nvptx_mfunc_is_matmul_shape — recognise the matmul MIR shape.
 // STMT_LOAD + STMT_LOAD + STMT_BINOP("matmul") + STMT_STORE skeleton
@@ -4637,14 +4650,17 @@ fn _nvptx_emit_matmul_kernel_epilogue() -> string {
     s = s + "    cvt.u64.u32 %rd12, %r1;  // widen C tile index -> u64\n"
     s = s + "    mul.lo.u64 %rd13, %rd12, 4;  // byte offset = idx * 4\n"
     s = s + "    add.u64 %rd14, %rd2, %rd13;  // &c[row_tile*N + col_tile]\n"
-    s = s + "    wmma.store.d.sync.aligned.row.m16n16k16.f32.shared "
-        + _nvptx_emit_matmul_frag_tuple("frc0") + ", [%rd14], %r5;  // C tile store row-major stride N\n"
+    // Per N122 bug 3: operand order is [addr], {regs}, stride;
+    // state-space `.global` precedes element-type per PTX 7.0 grammar.
+    s = s + "    wmma.store.d.sync.aligned.row.m16n16k16.global.f32 "
+        + "[%rd14], " + _nvptx_emit_matmul_frag_tuple("frc0")
+        + ", %r5;  // C tile store row-major stride N\n"
     s = s + "    ret;  // return from kernel\n"
     return s
 }
 
 // _nvptx_emit_matmul_body — emit the WMMA kernel body for the
-// canonical matmul `c = a · b` (A row-major MxK, B col-major KxN, C
+// canonical matmul `c = a · b` (A row-major MxK, B row-major KxN, C
 // row-major MxN). The K-loop steps by 16 (the WMMA tile-K dimension);
 // each iteration loads one 16×16 A tile + one 16×16 B tile, then
 // accumulates via `wmma.mma`. After the loop, the accumulator is
@@ -4665,18 +4681,27 @@ fn _nvptx_emit_matmul_body(name: string) -> string {
     s = s + "    cvt.u64.u32 %rd6, %r1;  // widen A tile index -> u64\n"
     s = s + "    mul.lo.u64 %rd7, %rd6, 2;  // A byte offset = idx * 2 (f16)\n"
     s = s + "    add.u64 %rd8, %rd0, %rd7;  // &a[row_tile*K + kk]\n"
-    s = s + "    wmma.load.a.sync.aligned.row.m16n16k16.f16.shared "
+    // Per N122 bug 1: state-space `.global` precedes element-type;
+    // pointer is from `.param.u64` → generic addressing, .global is the
+    // correct ASS modifier (NOT `.shared`).
+    s = s + "    wmma.load.a.sync.aligned.row.m16n16k16.global.f16 "
         + _nvptx_emit_matmul_frag_tuple("fra0") + ", [%rd8], %r6;  // A tile load stride K row-major\n"
-    // B tile address — &b[kk*N + col_tile], stride N (col-major).
+    // B tile address — &b[kk*N + col_tile], stride N (row-major).
+    // Per N122 bug 4: canonical matmul takes row-major B (matches the
+    // host test fixture + nn.Linear convention).
     s = s + "    mul.lo.s32 %r0, %r7, %r5;  // kk * N\n"
     s = s + "    add.s32 %r1, %r0, %r3;  // kk*N + col_tile\n"
     s = s + "    cvt.u64.u32 %rd9, %r1;  // widen B tile index -> u64\n"
     s = s + "    mul.lo.u64 %rd10, %rd9, 2;  // B byte offset = idx * 2 (f16)\n"
     s = s + "    add.u64 %rd11, %rd1, %rd10;  // &b[kk*N + col_tile]\n"
-    s = s + "    wmma.load.b.sync.aligned.col.m16n16k16.f16.shared "
-        + _nvptx_emit_matmul_frag_tuple("frb0") + ", [%rd11], %r5;  // B tile load stride N col-major\n"
+    s = s + "    wmma.load.b.sync.aligned.row.m16n16k16.global.f16 "
+        + _nvptx_emit_matmul_frag_tuple("frb0") + ", [%rd11], %r5;  // B tile load stride N row-major\n"
     // Accumulate — c_frag = a_frag * b_frag + c_frag (in-register fma).
-    s = s + "    wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32 "
+    // Per N122 bug 2: SHORT type spec `.f32.f32` (the long-form
+    // `.f32.f16.f16.f32` is reserved for the 4-reg fragment layout in
+    // PTX 7.0; here we have 8 .b32 A/B + 8 .f32 D/C). Per bug 4 the
+    // layout pair is `.row.row` (both A and B row-major in memory).
+    s = s + "    wmma.mma.sync.aligned.row.row.m16n16k16.f32.f32 "
         + _nvptx_emit_matmul_frag_tuple("frc0") + ", "
         + _nvptx_emit_matmul_frag_tuple("fra0") + ", "
         + _nvptx_emit_matmul_frag_tuple("frb0") + ", "
@@ -4691,10 +4716,14 @@ fn _nvptx_emit_matmul_body(name: string) -> string {
 
 // _nvptx_emit_matmul_NT_a_body — emit the WMMA kernel body for
 // `c = a^T · b`. A is column-major (transposed-A interpretation), B
-// stays column-major. Mirror of `_nvptx_emit_matmul_body` with the
-// A fragment layout swapped from `.row` to `.col` AND the A-load
+// stays row-major (canonical). Mirror of `_nvptx_emit_matmul_body` with
+// the A fragment layout swapped from `.row` to `.col` AND the A-load
 // address arithmetic swapped to column-major indexing (`&a[kk*M +
-// row_tile]`, stride M instead of K). B stays `.col` + stride N.
+// row_tile]`, stride M instead of K). B stays `.row` + stride N.
+//
+// Per N122 4-bug remediation: same grammar fixes (state-space `.global`
+// leading, store operand order [addr]/{regs}/stride, short mma type
+// spec `.f32.f32`) apply to NT_a as canonical.
 fn _nvptx_emit_matmul_NT_a_body(name: string) -> string {
     let mut s = "{\n"
     s = s + _nvptx_emit_matmul_reg_decls()
@@ -4709,19 +4738,20 @@ fn _nvptx_emit_matmul_NT_a_body(name: string) -> string {
     s = s + "    cvt.u64.u32 %rd6, %r1;  // widen A tile index -> u64\n"
     s = s + "    mul.lo.u64 %rd7, %rd6, 2;  // A byte offset = idx * 2 (f16)\n"
     s = s + "    add.u64 %rd8, %rd0, %rd7;  // &a[kk*M + row_tile]\n"
-    s = s + "    wmma.load.a.sync.aligned.col.m16n16k16.f16.shared "
+    s = s + "    wmma.load.a.sync.aligned.col.m16n16k16.global.f16 "
         + _nvptx_emit_matmul_frag_tuple("fra0") + ", [%rd8], %r4;  // A tile load stride M col-major (transposed-A)\n"
-    // B tile address — &b[kk*N + col_tile], stride N (col-major, same as canonical).
+    // B tile address — &b[kk*N + col_tile], stride N (row-major,
+    // canonical).
     s = s + "    mul.lo.s32 %r0, %r7, %r5;  // kk * N\n"
     s = s + "    add.s32 %r1, %r0, %r3;  // kk*N + col_tile\n"
     s = s + "    cvt.u64.u32 %rd9, %r1;  // widen B tile index -> u64\n"
     s = s + "    mul.lo.u64 %rd10, %rd9, 2;  // B byte offset = idx * 2 (f16)\n"
     s = s + "    add.u64 %rd11, %rd1, %rd10;  // &b[kk*N + col_tile]\n"
-    s = s + "    wmma.load.b.sync.aligned.col.m16n16k16.f16.shared "
-        + _nvptx_emit_matmul_frag_tuple("frb0") + ", [%rd11], %r5;  // B tile load stride N col-major\n"
-    // mma — A^T variant uses the `.col.col` source layouts; the result
+    s = s + "    wmma.load.b.sync.aligned.row.m16n16k16.global.f16 "
+        + _nvptx_emit_matmul_frag_tuple("frb0") + ", [%rd11], %r5;  // B tile load stride N row-major\n"
+    // mma — A^T variant uses the `.col.row` source layouts; the result
     // is still accumulated row-major into C.
-    s = s + "    wmma.mma.sync.aligned.col.col.m16n16k16.f32.f16.f16.f32 "
+    s = s + "    wmma.mma.sync.aligned.col.row.m16n16k16.f32.f32 "
         + _nvptx_emit_matmul_frag_tuple("frc0") + ", "
         + _nvptx_emit_matmul_frag_tuple("fra0") + ", "
         + _nvptx_emit_matmul_frag_tuple("frb0") + ", "
@@ -4734,12 +4764,17 @@ fn _nvptx_emit_matmul_NT_a_body(name: string) -> string {
 }
 
 // _nvptx_emit_matmul_NT_b_body — emit the WMMA kernel body for
-// `c = a · b^T`. A is row-major (canonical), B is row-major
-// (transposed-B interpretation flips the canonical col_major default
-// to row_major). Mirror of `_nvptx_emit_matmul_body` with the B
-// fragment layout swapped from `.col` to `.row` AND the B-load
-// address arithmetic swapped to row-major indexing (`&b[col_tile*K +
-// kk]`, stride K instead of N). A stays `.row` + stride K.
+// `c = a · b^T`. A is row-major (canonical), B is col-major
+// (transposed-B interpretation flips the canonical row_major default
+// to col_major). Mirror of `_nvptx_emit_matmul_body` with the B
+// fragment layout swapped from `.row` to `.col` AND the B-load
+// address arithmetic swapped to col-major-friendly indexing
+// (`&b[col_tile*K + kk]`, stride K instead of N). A stays `.row` +
+// stride K.
+//
+// Per N122 4-bug remediation: same grammar fixes (state-space `.global`
+// leading, store operand order [addr]/{regs}/stride, short mma type
+// spec `.f32.f32`) apply to NT_b as canonical.
 fn _nvptx_emit_matmul_NT_b_body(name: string) -> string {
     let mut s = "{\n"
     s = s + _nvptx_emit_matmul_reg_decls()
@@ -4753,19 +4788,19 @@ fn _nvptx_emit_matmul_NT_b_body(name: string) -> string {
     s = s + "    cvt.u64.u32 %rd6, %r1;  // widen A tile index -> u64\n"
     s = s + "    mul.lo.u64 %rd7, %rd6, 2;  // A byte offset = idx * 2 (f16)\n"
     s = s + "    add.u64 %rd8, %rd0, %rd7;  // &a[row_tile*K + kk]\n"
-    s = s + "    wmma.load.a.sync.aligned.row.m16n16k16.f16.shared "
+    s = s + "    wmma.load.a.sync.aligned.row.m16n16k16.global.f16 "
         + _nvptx_emit_matmul_frag_tuple("fra0") + ", [%rd8], %r6;  // A tile load stride K row-major\n"
-    // B tile address — &b[col_tile*K + kk], stride K (row-major; B is
+    // B tile address — &b[col_tile*K + kk], stride K (col-major; B is
     // transposed so its logical column stride = K not N).
     s = s + "    mul.lo.s32 %r0, %r3, %r6;  // col_tile * K\n"
     s = s + "    add.s32 %r1, %r0, %r7;  // col_tile*K + kk\n"
     s = s + "    cvt.u64.u32 %rd9, %r1;  // widen B tile index -> u64\n"
     s = s + "    mul.lo.u64 %rd10, %rd9, 2;  // B byte offset = idx * 2 (f16)\n"
     s = s + "    add.u64 %rd11, %rd1, %rd10;  // &b[col_tile*K + kk]\n"
-    s = s + "    wmma.load.b.sync.aligned.row.m16n16k16.f16.shared "
-        + _nvptx_emit_matmul_frag_tuple("frb0") + ", [%rd11], %r6;  // B tile load stride K row-major (transposed-B)\n"
-    // mma — B^T variant uses the `.row.row` source layouts.
-    s = s + "    wmma.mma.sync.aligned.row.row.m16n16k16.f32.f16.f16.f32 "
+    s = s + "    wmma.load.b.sync.aligned.col.m16n16k16.global.f16 "
+        + _nvptx_emit_matmul_frag_tuple("frb0") + ", [%rd11], %r6;  // B tile load stride K col-major (transposed-B)\n"
+    // mma — B^T variant uses the `.row.col` source layouts.
+    s = s + "    wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32 "
         + _nvptx_emit_matmul_frag_tuple("frc0") + ", "
         + _nvptx_emit_matmul_frag_tuple("fra0") + ", "
         + _nvptx_emit_matmul_frag_tuple("frb0") + ", "

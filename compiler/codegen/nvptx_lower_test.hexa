@@ -3074,13 +3074,19 @@ fn _build_matmul_module_for(kname: string, binop: string) -> MModule {
 
 // ── Case 29 — F-RFC071-NVPTX-MATMUL-CODEGEN-EMIT (canonical matmul) ──
 //
-// Canonical matmul `c = a · b`:
+// Canonical matmul `c = a · b` (per N122 4-bug remediation):
 //   * A fragment uses `.row` (row-major MxK), stride K
-//   * B fragment uses `.col` (col-major KxN), stride N
+//   * B fragment uses `.row` (row-major KxN — nn.Linear convention),
+//     stride N (bug 4 fix)
 //   * C accumulator is f32 row-major, stride N
-//   * `wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32`
+//   * `wmma.mma.sync.aligned.row.row.m16n16k16.f32.f32` (bug 2 + bug 4
+//     fix: short type spec + row.row layout)
+//   * state-space `.global` leading, NOT trailing `.shared` (bug 1 fix)
+//   * `wmma.store.d` operand order `[addr], {regs}, stride` (bug 3 fix)
 // Negative guards: must NOT emit the transposed-A `.col` A-load, the
-// transposed-B `.row` B-load, or any vec-add / gemm-FP64-fma residue.
+// transposed-B `.col` B-load (NT_b emit), or any vec-add / gemm-FP64-fma
+// residue. Must NOT emit the old `.shared` trailing form (the 4-bug
+// catalog before N86 fix).
 fn _test_matmul_emit() -> bool {
     let mut ok = true
     let mod_mm = _build_matmul_module_for("matmul", "matmul")
@@ -3109,30 +3115,36 @@ fn _test_matmul_emit() -> bool {
     ok = _check(ok, ptx, "setp.lt.s32 %p0, %r7, %r6",               "loop guard kk < K")
     ok = _check(ok, ptx, "add.s32 %r7, %r7, 16",                    "loop step kk += 16 (WMMA tile-K)")
     ok = _check(ok, ptx, "bra $L_LOOP",                             "loop back-edge")
-    // WMMA load + mma + store — canonical row.col m16n16k16 family.
-    ok = _check(ok, ptx, "wmma.load.a.sync.aligned.row.m16n16k16.f16.shared", "wmma.load.a row-major A (canonical)")
-    ok = _check(ok, ptx, "wmma.load.b.sync.aligned.col.m16n16k16.f16.shared", "wmma.load.b col-major B (canonical)")
-    ok = _check(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32", "wmma.mma row.col f32.f16.f16.f32 (canonical)")
-    ok = _check(ok, ptx, "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared", "wmma.store.d row-major C")
-    // Negative guards — canonical matmul must NOT carry transposed-A/B
-    // layouts, must NOT inherit any earlier-shape body fragment.
+    // WMMA load + mma + store — canonical row.row m16n16k16 family.
+    ok = _check(ok, ptx, "wmma.load.a.sync.aligned.row.m16n16k16.global.f16", "wmma.load.a row-major A .global (canonical, N122 bug 1 fix)")
+    ok = _check(ok, ptx, "wmma.load.b.sync.aligned.row.m16n16k16.global.f16", "wmma.load.b row-major B .global (canonical, N122 bug 1+4 fix)")
+    ok = _check(ok, ptx, "wmma.mma.sync.aligned.row.row.m16n16k16.f32.f32", "wmma.mma row.row f32.f32 short form (canonical, N122 bug 2+4 fix)")
+    ok = _check(ok, ptx, "wmma.store.d.sync.aligned.row.m16n16k16.global.f32", "wmma.store.d row-major C .global (N122 bug 3 fix)")
+    // Negative guards — canonical matmul must NOT carry transposed-A
+    // layouts, NOT inherit any earlier-shape body fragment, NOT emit
+    // the pre-N86-fix `.shared` trailing form or `.f32.f16.f16.f32` long form.
     ok = _check_not(ok, ptx, "wmma.load.a.sync.aligned.col.m16n16k16", "canonical matmul should not emit transposed-A `.col` A-load")
-    ok = _check_not(ok, ptx, "wmma.load.b.sync.aligned.row.m16n16k16", "canonical matmul should not emit transposed-B `.row` B-load")
+    ok = _check_not(ok, ptx, "wmma.load.b.sync.aligned.col.m16n16k16", "canonical matmul should not emit transposed-B `.col` B-load")
     ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.col.col.m16n16k16", "canonical matmul should not emit `.col.col` mma")
-    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.row.row.m16n16k16", "canonical matmul should not emit `.row.row` mma")
+    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16", "canonical matmul should not emit `.row.col` mma (NT_b shape)")
+    ok = _check_not(ok, ptx, ".f16.shared",                            "canonical matmul should not emit pre-N86 `.shared` trailing form (N122 bug 1)")
+    ok = _check_not(ok, ptx, ".f32.shared",                            "canonical matmul should not emit pre-N86 `.f32.shared` store form (N122 bug 3)")
+    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.row.row.m16n16k16.f32.f16.f16.f32", "canonical matmul should not emit invalid long-form mma (N122 bug 2)")
     ok = _check_not(ok, ptx, "fma.rn.f64",                             "canonical matmul should not emit FP64 fma (HGEMM-only residue)")
     return ok
 }
 
 // ── Case 30 — F-RFC071-NVPTX-MATMUL-NT-A-CODEGEN-EMIT ────────────────
 //
-// matmul_NT_a `c = a^T · b`:
+// matmul_NT_a `c = a^T · b` (per N122 4-bug remediation):
 //   * A fragment uses `.col` (column-major, transposed-A interpretation)
 //   * A-load address stride switches from K to M
-//   * B stays `.col` + stride N
-//   * mma source layouts become `.col.col`
+//   * B stays row-major (`.row`) + stride N (canonical, N122 bug 4)
+//   * mma source layouts become `.col.row`
+//   * state-space `.global` leading, short type spec `.f32.f32`, store
+//     operand order `[addr], {regs}, stride` (N122 bug 1+2+3 fixes)
 // Negative guards: must NOT emit canonical `.row` A-load, transposed-B
-// `.row` B-load, or canonical `.row.col` mma.
+// `.col` B-load, canonical `.row.row` mma, or pre-N86 `.shared` form.
 fn _test_matmul_NT_a_emit() -> bool {
     let mut ok = true
     let mod_mt = _build_matmul_module_for("matmul_NT_a", "matmul_NT_a")
@@ -3154,34 +3166,41 @@ fn _test_matmul_NT_a_emit() -> bool {
     ok = _check(ok, ptx, "setp.lt.s32 %p0, %r7, %r6",               "loop guard kk < K")
     ok = _check(ok, ptx, "add.s32 %r7, %r7, 16",                    "loop step kk += 16")
     ok = _check(ok, ptx, "bra $L_LOOP",                             "loop back-edge")
-    // WMMA — A `.col`, B stays `.col`, mma `.col.col`.
-    ok = _check(ok, ptx, "wmma.load.a.sync.aligned.col.m16n16k16.f16.shared", "wmma.load.a col-major A (transposed-A)")
-    ok = _check(ok, ptx, "wmma.load.b.sync.aligned.col.m16n16k16.f16.shared", "wmma.load.b col-major B (matmul_NT_a stays canonical B)")
-    ok = _check(ok, ptx, "wmma.mma.sync.aligned.col.col.m16n16k16.f32.f16.f16.f32", "wmma.mma col.col f32.f16.f16.f32 (transposed-A)")
-    ok = _check(ok, ptx, "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared", "wmma.store.d row-major C")
+    // WMMA — A `.col`, B stays `.row` (row-major canonical), mma `.col.row`.
+    ok = _check(ok, ptx, "wmma.load.a.sync.aligned.col.m16n16k16.global.f16", "wmma.load.a col-major A .global (transposed-A, N122 bug 1 fix)")
+    ok = _check(ok, ptx, "wmma.load.b.sync.aligned.row.m16n16k16.global.f16", "wmma.load.b row-major B .global (canonical, N122 bug 1+4 fix)")
+    ok = _check(ok, ptx, "wmma.mma.sync.aligned.col.row.m16n16k16.f32.f32", "wmma.mma col.row f32.f32 short form (transposed-A, N122 bug 2+4 fix)")
+    ok = _check(ok, ptx, "wmma.store.d.sync.aligned.row.m16n16k16.global.f32", "wmma.store.d row-major C .global (N122 bug 3 fix)")
     // A-load address arithmetic — stride M (not K). The address compose
     // emits `mul.lo.s32 ... %r4` (M) instead of `... %r6` (K) in the
     // A-tile compose. We verify via the comment marker the emit pass
     // attaches to the instruction.
     ok = _check(ok, ptx, "kk * M",                                  "A-tile address arithmetic uses stride M (transposed-A)")
     // Negative guards — matmul_NT_a must NOT emit canonical A `.row`
-    // or transposed-B `.row` B-load or canonical `.row.col` mma.
+    // or transposed-B `.col` B-load or canonical `.row.row` mma or
+    // pre-N86 `.shared` form.
     ok = _check_not(ok, ptx, "wmma.load.a.sync.aligned.row.m16n16k16", "matmul_NT_a should not emit canonical `.row` A-load")
-    ok = _check_not(ok, ptx, "wmma.load.b.sync.aligned.row.m16n16k16", "matmul_NT_a should not emit transposed-B `.row` B-load")
-    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16", "matmul_NT_a should not emit canonical `.row.col` mma")
-    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.row.row.m16n16k16", "matmul_NT_a should not emit `.row.row` mma")
+    ok = _check_not(ok, ptx, "wmma.load.b.sync.aligned.col.m16n16k16", "matmul_NT_a should not emit transposed-B `.col` B-load")
+    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16", "matmul_NT_a should not emit pre-fix `.row.col` mma")
+    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.row.row.m16n16k16", "matmul_NT_a should not emit `.row.row` mma (canonical shape)")
+    ok = _check_not(ok, ptx, ".f16.shared",                            "matmul_NT_a should not emit pre-N86 `.shared` trailing form")
+    ok = _check_not(ok, ptx, ".f32.shared",                            "matmul_NT_a should not emit pre-N86 `.f32.shared` store form")
     return ok
 }
 
 // ── Case 31 — F-RFC071-NVPTX-MATMUL-NT-B-CODEGEN-EMIT ────────────────
 //
-// matmul_NT_b `c = a · b^T`:
+// matmul_NT_b `c = a · b^T` (per N122 4-bug remediation):
 //   * A stays `.row` (canonical row-major MxK, stride K)
-//   * B fragment uses `.row` (row-major, transposed-B interpretation)
+//   * B fragment uses `.col` (col-major; transposed-B interpretation
+//     flips the canonical row-major default to col-major)
 //   * B-load address stride switches from N to K
-//   * mma source layouts become `.row.row`
-// Negative guards: must NOT emit canonical `.col` B-load, transposed-A
-// `.col` A-load, or canonical `.row.col` mma.
+//   * mma source layouts become `.row.col`
+//   * state-space `.global` leading, short type spec `.f32.f32`, store
+//     operand order `[addr], {regs}, stride` (N122 bug 1+2+3 fixes)
+// Negative guards: must NOT emit canonical `.row` B-load (canonical
+// shape after bug 4 fix), transposed-A `.col` A-load, canonical
+// `.row.row` mma, or pre-N86 `.shared` form.
 fn _test_matmul_NT_b_emit() -> bool {
     let mut ok = true
     let mod_mt = _build_matmul_module_for("matmul_NT_b", "matmul_NT_b")
@@ -3201,18 +3220,21 @@ fn _test_matmul_NT_b_emit() -> bool {
     ok = _check(ok, ptx, "setp.lt.s32 %p0, %r7, %r6",               "loop guard kk < K")
     ok = _check(ok, ptx, "add.s32 %r7, %r7, 16",                    "loop step kk += 16")
     ok = _check(ok, ptx, "bra $L_LOOP",                             "loop back-edge")
-    // WMMA — A stays `.row`, B switches to `.row`, mma `.row.row`.
-    ok = _check(ok, ptx, "wmma.load.a.sync.aligned.row.m16n16k16.f16.shared", "wmma.load.a row-major A (matmul_NT_b stays canonical A)")
-    ok = _check(ok, ptx, "wmma.load.b.sync.aligned.row.m16n16k16.f16.shared", "wmma.load.b row-major B (transposed-B)")
-    ok = _check(ok, ptx, "wmma.mma.sync.aligned.row.row.m16n16k16.f32.f16.f16.f32", "wmma.mma row.row f32.f16.f16.f32 (transposed-B)")
-    ok = _check(ok, ptx, "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared", "wmma.store.d row-major C")
+    // WMMA — A stays `.row`, B switches to `.col`, mma `.row.col`.
+    ok = _check(ok, ptx, "wmma.load.a.sync.aligned.row.m16n16k16.global.f16", "wmma.load.a row-major A .global (matmul_NT_b stays canonical A, N122 bug 1 fix)")
+    ok = _check(ok, ptx, "wmma.load.b.sync.aligned.col.m16n16k16.global.f16", "wmma.load.b col-major B .global (transposed-B, N122 bug 1+4 fix)")
+    ok = _check(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32", "wmma.mma row.col f32.f32 short form (transposed-B, N122 bug 2+4 fix)")
+    ok = _check(ok, ptx, "wmma.store.d.sync.aligned.row.m16n16k16.global.f32", "wmma.store.d row-major C .global (N122 bug 3 fix)")
     // B-load address arithmetic — stride K (not N).
     ok = _check(ok, ptx, "col_tile * K",                            "B-tile address arithmetic uses stride K (transposed-B)")
-    // Negative guards — matmul_NT_b must NOT emit canonical B `.col`
-    // or transposed-A `.col` A-load or canonical `.row.col` mma.
-    ok = _check_not(ok, ptx, "wmma.load.b.sync.aligned.col.m16n16k16", "matmul_NT_b should not emit canonical `.col` B-load")
+    // Negative guards — matmul_NT_b must NOT emit canonical B `.row`
+    // (canonical shape post-bug-4) or transposed-A `.col` A-load or
+    // canonical `.row.row` mma or pre-N86 `.shared` form.
+    ok = _check_not(ok, ptx, "wmma.load.b.sync.aligned.row.m16n16k16", "matmul_NT_b should not emit canonical `.row` B-load")
     ok = _check_not(ok, ptx, "wmma.load.a.sync.aligned.col.m16n16k16", "matmul_NT_b should not emit transposed-A `.col` A-load")
-    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16", "matmul_NT_b should not emit canonical `.row.col` mma")
+    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.row.row.m16n16k16", "matmul_NT_b should not emit canonical `.row.row` mma")
     ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.col.col.m16n16k16", "matmul_NT_b should not emit `.col.col` mma")
+    ok = _check_not(ok, ptx, ".f16.shared",                            "matmul_NT_b should not emit pre-N86 `.shared` trailing form")
+    ok = _check_not(ok, ptx, ".f32.shared",                            "matmul_NT_b should not emit pre-N86 `.f32.shared` store form")
     return ok
 }
