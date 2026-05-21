@@ -368,10 +368,13 @@ static const char *__attribute__((noinline)) hxlcl_strerror(int errnum) {
 // cycle 6: strftime forward decl — body after #include
 static size_t hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm);
 // Cycle 52 — minimal printf family. Handles %s/%d/%i/%u/%lld/%ld/%llu/
-// %lu/%zu/%c/%x/%X/%p/%%, basic width + zero-pad. Float specifiers
-// (%f/%g/%e) emit "(float)" placeholder — compiler's hot paths don't
-// print floats. Not bit-exact with libc printf; see RUNTIME.md cycle
-// 52 Log entry for the honest scope.
+// %lu/%zu/%c/%x/%X/%p/%%, basic width + zero-pad.
+// Cycle 56 (2026-05-21) — real %f/%g/%e/%F/%G/%E formatting added
+// (default 6 sig digits / 6 fractional digits; rounding via peek-next).
+// Resolves inbox/patches/stdlib-print-float-emits-type-tag-not-value.md
+// (anima trainer per-step loss/grad-norm monitoring blocker). Not
+// bit-exact with libc's Grisu/Ryu — last few ULPs may differ — but
+// adequate for training observability and diagnostic output.
 static int __attribute__((noinline)) hxlcl_vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap) {
     size_t pos = 0;
     #define HXLCL_PUT(ch) do { if (pos + 1 < cap) buf[pos] = (ch); pos++; } while (0)
@@ -379,6 +382,7 @@ static int __attribute__((noinline)) hxlcl_vsnprintf(char *buf, size_t cap, cons
         if (*fmt != '%') { HXLCL_PUT(*fmt); fmt++; continue; }
         fmt++;
         int leftalign = 0, zeropad = 0, width = 0;
+        int prec = -1;  /* -1 = unset (defaults applied per-conv) */
         if (*fmt == '-') { leftalign = 1; fmt++; }
         if (*fmt == '+') fmt++;
         if (*fmt == ' ') fmt++;
@@ -387,8 +391,9 @@ static int __attribute__((noinline)) hxlcl_vsnprintf(char *buf, size_t cap, cons
         while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt - '0'); fmt++; }
         if (*fmt == '.') {
             fmt++;
-            if (*fmt == '*') { (void)va_arg(ap, int); fmt++; }
-            else while (*fmt >= '0' && *fmt <= '9') fmt++;
+            prec = 0;
+            if (*fmt == '*') { prec = va_arg(ap, int); fmt++; if (prec < 0) prec = 0; }
+            else while (*fmt >= '0' && *fmt <= '9') { prec = prec * 10 + (*fmt - '0'); fmt++; }
         }
         int lng = 0;
         if (*fmt == 'h') { fmt++; if (*fmt == 'h') fmt++; }
@@ -436,9 +441,188 @@ static int __attribute__((noinline)) hxlcl_vsnprintf(char *buf, size_t cap, cons
             else while (v) { int d = (int)(v & 0xF); tmp[tn++] = (d < 10) ? ('0' + (char)d) : (hi + (char)d - 10); v >>= 4; }
             if (conv == 'p') { tmp[tn++] = 'x'; tmp[tn++] = '0'; }
         } else if (conv == 'f' || conv == 'g' || conv == 'e' || conv == 'F' || conv == 'G' || conv == 'E') {
-            (void)va_arg(ap, double);
-            const char *pl = "(float)";
-            for (int k = 0; pl[k]; k++) HXLCL_PUT(pl[k]);
+            /* Cycle 56 — real double-to-string for %f/%g/%e (default 6 sig
+             * digits / 6 fractional digits). Not bit-exact with libc's
+             * Grisu/Ryu but adequate for training observability + diagnostic
+             * use (println(float), step loss/grad-norm logs). Resolves
+             * inbox/patches/stdlib-print-float-emits-type-tag-not-value.md. */
+            double dv = va_arg(ap, double);
+            /* nan/inf via bit pattern (no libc isnan/isinf available). */
+            union { double d; unsigned long long u; } __pun;
+            __pun.d = dv;
+            unsigned long long bits = __pun.u;
+            int signbit = (int)(bits >> 63);
+            unsigned long long exp_bits = (bits >> 52) & 0x7FFULL;
+            unsigned long long mant_bits = bits & 0xFFFFFFFFFFFFFULL;
+            /* fbuf sized for worst case %f of ~1e308 (sign + ~310 digits +
+             * '.' + 6 frac + null). */
+            char fbuf[352]; int fn = 0;
+            int is_upper = (conv == 'F' || conv == 'G' || conv == 'E');
+            if (exp_bits == 0x7FF) {
+                if (mant_bits) {
+                    const char *s = is_upper ? "NAN" : "nan";
+                    for (int k = 0; s[k]; k++) fbuf[fn++] = s[k];
+                } else {
+                    if (signbit) fbuf[fn++] = '-';
+                    const char *s = is_upper ? "INF" : "inf";
+                    for (int k = 0; s[k]; k++) fbuf[fn++] = s[k];
+                }
+            } else {
+                if (signbit) { fbuf[fn++] = '-'; dv = -dv; }
+                /* %f default prec = 6 (fractional digits); %g default = 6
+                 * (significant digits); %e default = 6 (digits after
+                 * decimal in scientific). */
+                int prec_eff = (prec < 0) ? 6 : prec;
+                if ((conv == 'g' || conv == 'G') && prec_eff == 0) prec_eff = 1;
+                if (dv == 0.0) {
+                    fbuf[fn++] = '0';
+                    if (conv == 'f' || conv == 'F') {
+                        if (prec_eff > 0) {
+                            fbuf[fn++] = '.';
+                            for (int k = 0; k < prec_eff; k++) fbuf[fn++] = '0';
+                        }
+                    } else if (conv == 'e' || conv == 'E') {
+                        if (prec_eff > 0) {
+                            fbuf[fn++] = '.';
+                            for (int k = 0; k < prec_eff; k++) fbuf[fn++] = '0';
+                        }
+                        fbuf[fn++] = is_upper ? 'E' : 'e';
+                        fbuf[fn++] = '+'; fbuf[fn++] = '0'; fbuf[fn++] = '0';
+                    }
+                    /* %g of 0.0 → just "0" */
+                } else {
+                    /* Normalize: 1.0 <= dv < 10.0, track decimal exponent. */
+                    int e10 = 0;
+                    while (dv >= 1e16) { dv *= 1e-16; e10 += 16; }
+                    while (dv >= 1e4)  { dv *= 1e-4;  e10 += 4;  }
+                    while (dv >= 10.0) { dv *= 0.1;   e10 += 1;  }
+                    while (dv < 1e-15) { dv *= 1e16;  e10 -= 16; }
+                    while (dv < 1e-3)  { dv *= 1e4;   e10 -= 4;  }
+                    while (dv < 1.0)   { dv *= 10.0;  e10 -= 1;  }
+                    /* digits_needed: for %g, prec_eff sig digits; for %f,
+                     * need e10+1+prec_eff digits if e10>=0 else prec_eff
+                     * (with leading zeros); for %e, prec_eff+1 sig digits. */
+                    int sig_digits;
+                    if (conv == 'g' || conv == 'G') sig_digits = prec_eff;
+                    else if (conv == 'e' || conv == 'E') sig_digits = prec_eff + 1;
+                    else { /* %f */
+                        sig_digits = (e10 >= 0 ? e10 + 1 : 0) + prec_eff;
+                        if (sig_digits < 1) sig_digits = 1;
+                    }
+                    if (sig_digits > 18) sig_digits = 18;
+                    if (sig_digits < 1) sig_digits = 1;
+                    char digits[24]; int n_dig = 0;
+                    for (int k = 0; k < sig_digits; k++) {
+                        int d = (int)dv;
+                        if (d > 9) d = 9; if (d < 0) d = 0;
+                        digits[n_dig++] = (char)('0' + d);
+                        dv = (dv - d) * 10.0;
+                    }
+                    /* round half-up: peek next digit. */
+                    int round_d = (int)dv;
+                    if (round_d >= 5) {
+                        int j = n_dig - 1;
+                        while (j >= 0) {
+                            if (digits[j] < '9') { digits[j]++; break; }
+                            digits[j] = '0';
+                            j--;
+                        }
+                        if (j < 0) {
+                            /* carry overflow: 0.999.. → 1.000.. ; insert '1'
+                             * at front, bump exponent. */
+                            for (int k = n_dig; k > 0; k--) digits[k] = digits[k - 1];
+                            digits[0] = '1';
+                            n_dig++;
+                            e10++;
+                        }
+                    }
+                    /* %g chooses %e vs %f based on exponent. */
+                    char eff_conv = conv;
+                    int g_strip_zeros = 0;
+                    if (conv == 'g' || conv == 'G') {
+                        g_strip_zeros = 1;
+                        if (e10 < -4 || e10 >= prec_eff) {
+                            eff_conv = (conv == 'G') ? 'E' : 'e';
+                        } else {
+                            eff_conv = (conv == 'G') ? 'F' : 'f';
+                            /* For %g→%f: prec after decimal = sig - (e10+1). */
+                            int frac = prec_eff - (e10 + 1);
+                            if (frac < 0) frac = 0;
+                            prec_eff = frac;
+                        }
+                    }
+                    if (eff_conv == 'e' || eff_conv == 'E') {
+                        /* For %g→%e: prec after decimal = sig - 1. */
+                        int e_prec;
+                        if (conv == 'g' || conv == 'G') e_prec = (sig_digits - 1 < 0) ? 0 : sig_digits - 1;
+                        else e_prec = prec_eff;
+                        fbuf[fn++] = digits[0];
+                        int emit_dot = (e_prec > 0);
+                        if (emit_dot) {
+                            fbuf[fn++] = '.';
+                            for (int k = 1; k <= e_prec; k++) {
+                                fbuf[fn++] = (k < n_dig) ? digits[k] : '0';
+                            }
+                        }
+                        if (g_strip_zeros && emit_dot) {
+                            while (fn > 0 && fbuf[fn - 1] == '0') fn--;
+                            if (fn > 0 && fbuf[fn - 1] == '.') fn--;
+                        }
+                        fbuf[fn++] = (eff_conv == 'E') ? 'E' : 'e';
+                        int ev = e10;
+                        if (ev < 0) { fbuf[fn++] = '-'; ev = -ev; } else fbuf[fn++] = '+';
+                        if (ev >= 100) {
+                            fbuf[fn++] = (char)('0' + (ev / 100));
+                            fbuf[fn++] = (char)('0' + ((ev / 10) % 10));
+                            fbuf[fn++] = (char)('0' + (ev % 10));
+                        } else {
+                            fbuf[fn++] = (char)('0' + (ev / 10));
+                            fbuf[fn++] = (char)('0' + (ev % 10));
+                        }
+                    } else {
+                        /* %f or %g→%f. */
+                        int di = 0;
+                        if (e10 >= 0) {
+                            for (int k = 0; k <= e10; k++) {
+                                fbuf[fn++] = (di < n_dig) ? digits[di] : '0';
+                                di++;
+                            }
+                            if (prec_eff > 0) {
+                                fbuf[fn++] = '.';
+                                for (int k = 0; k < prec_eff; k++) {
+                                    fbuf[fn++] = (di < n_dig) ? digits[di] : '0';
+                                    di++;
+                                }
+                            }
+                        } else {
+                            fbuf[fn++] = '0';
+                            if (prec_eff > 0) {
+                                fbuf[fn++] = '.';
+                                int leading_z = (-e10) - 1;
+                                for (int k = 0; k < leading_z && k < prec_eff; k++) fbuf[fn++] = '0';
+                                int remaining = prec_eff - leading_z;
+                                for (int k = 0; k < remaining; k++) {
+                                    fbuf[fn++] = (di < n_dig) ? digits[di] : '0';
+                                    di++;
+                                }
+                            }
+                        }
+                        if (g_strip_zeros) {
+                            int has_dot = 0;
+                            for (int k = 0; k < fn; k++) if (fbuf[k] == '.') { has_dot = 1; break; }
+                            if (has_dot) {
+                                while (fn > 0 && fbuf[fn - 1] == '0') fn--;
+                                if (fn > 0 && fbuf[fn - 1] == '.') fn--;
+                            }
+                        }
+                    }
+                }
+            }
+            int fpad = width - fn; if (fpad < 0) fpad = 0;
+            char fpadc = (zeropad && !leftalign) ? '0' : ' ';
+            if (!leftalign) for (int k = 0; k < fpad; k++) HXLCL_PUT(fpadc);
+            for (int k = 0; k < fn; k++) HXLCL_PUT(fbuf[k]);
+            if (leftalign) for (int k = 0; k < fpad; k++) HXLCL_PUT(' ');
             continue;
         } else {
             HXLCL_PUT('%'); HXLCL_PUT(conv); continue;
@@ -675,9 +859,27 @@ static int hxlcl_isatty(int fd);
 static void *hxlcl_signal(int signum, void *handler);
 static int hxlcl_sigaction(int signum, const void *act, void *oldact);
 static int hxlcl_sigprocmask(int how, const void *set, void *oldset);
-// getenv stays C — init-time blocker
+// getenv: cycle 66 — restore real environ-walk (cycle 61's noop stub
+// silently disabled every env-flag in the runtime, including
+// HEXA_EXEC_NO_SHELL → posix_spawnp fast path → exec() returned "").
+// Resolves inbox/patches/yosys-exec-runtime-regression-cycles-61-64.md
+// + inbox/patches/runtime-env-and-exec-capture-stubs-block-cli-tools.md.
+// Walks the `environ` global directly; matches libc getenv semantics
+// (case-sensitive, returns first match, NULL on miss).
+extern char **environ;
 static char *__attribute__((noinline)) hxlcl_getenv(const char *name) {
-    (void)name; return (char *)0;
+    if (!name) return (char *)0;
+    char **e = environ;
+    if (!e) return (char *)0;
+    size_t nlen = hxlcl_strlen(name);
+    while (*e) {
+        const char *entry = *e;
+        size_t i = 0;
+        while (i < nlen && entry[i] && entry[i] == name[i]) i++;
+        if (i == nlen && entry[i] == '=') return (char *)(entry + nlen + 1);
+        e++;
+    }
+    return (char *)0;
 }
 static int hxlcl_setenv(const char *name, const char *val, int overwrite);
 static int hxlcl_setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen);
@@ -794,30 +996,48 @@ static inline long _hxlcl_syscall6(long nr, long a0, long a1, long a2, long a3, 
     return x0;
 }
 
+// cycle 66 — libc read/write (carry-flag issue + EINTR handling).
+extern long read(int fd, void *buf, unsigned long n);
+extern long write(int fd, const void *buf, unsigned long n);
 static long __attribute__((noinline)) hxlcl_read(int fd, void *buf, unsigned long n) {
-    return _hxlcl_syscall3(HXLCL_SYS_READ, (long)fd, (long)buf, (long)n);
+    return read(fd, buf, n);
 }
 static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) {
-    return _hxlcl_syscall3(HXLCL_SYS_WRITE, (long)fd, (long)buf, (long)n);
+    return write(fd, buf, n);
 }
+// cycle 66 — restore libc close. The svc 0x80 path returned errno on
+// failure without distinguishing from success-fd convention (no carry
+// flag access in inline asm), breaking pipe-close-then-read patterns.
+extern int close(int fd);
 static int __attribute__((noinline)) hxlcl_close(int fd) {
-    return (int)_hxlcl_syscall1(HXLCL_SYS_CLOSE, (long)fd);
+    return close(fd);
 }
 static int __attribute__((noinline)) hxlcl_getpid(void) {
     return (int)_hxlcl_syscall1(HXLCL_SYS_GETPID, 0);
 }
+// cycle 66 — libc dup2 (same carry-flag issue as close).
+extern int dup2(int oldfd, int newfd);
 static int __attribute__((noinline)) hxlcl_dup2(int oldfd, int newfd) {
-    return (int)_hxlcl_syscall2(HXLCL_SYS_DUP2, (long)oldfd, (long)newfd);
+    return dup2(oldfd, newfd);
 }
+// cycle 66 — restore libc pipe() backing. The cycle 63+64 svc-0x80
+// path mis-handled the Darwin pipe(2) pair-return: the kernel
+// returns the two fds in x0/x1 registers, NOT in the user-provided
+// int[2] memory. The svc wrapper only captures x0, so fds[1] stayed
+// uninitialized → child's dup2(pipe[1], 1) wrote to a garbage fd →
+// parent's read(pipe[0], …) saw EOF immediately → exec() emitted
+// "". Resolves inbox/patches/yosys-exec-runtime-regression-cycles-
+// 61-64.md Secondary suspect (cycles 63+64 pipe machinery).
+extern int pipe(int fds[2]);
 static int __attribute__((noinline)) hxlcl_pipe(int fds[2]) {
-    long r = _hxlcl_syscall1(HXLCL_SYS_PIPE, (long)fds);
-    // Darwin: pipe returns r=x0, w=x1 in pair-return convention. The
-    // syscall ABI stores both in x0/x1 of the trap frame. For simplicity
-    // we fall back to expecting the kernel wrote `int fds[2]` for us.
-    return (r < 0) ? -1 : 0;
+    return pipe(fds);
 }
+// cycle 66 — libc fork (BSD pair-return convention; svc 0x80 path
+// captured only x0, missing the carry-flag-disambiguates-parent-vs-
+// child convention).
+extern int fork(void);
 static int __attribute__((noinline)) hxlcl_fork(void) {
-    return (int)_hxlcl_syscall1(HXLCL_SYS_FORK, 0);
+    return fork();
 }
 static int __attribute__((noinline)) hxlcl_kill(int pid, int sig) {
     return (int)_hxlcl_syscall2(HXLCL_SYS_KILL, (long)pid, (long)sig);
@@ -837,8 +1057,11 @@ static int __attribute__((noinline)) hxlcl_select(int nfds, void *r, void *w, vo
 static int __attribute__((noinline)) hxlcl_poll(void *fds, unsigned int nfds, int timeout) {
     return (int)_hxlcl_syscall3(HXLCL_SYS_POLL, (long)fds, (long)nfds, (long)timeout);
 }
+// cycle 66 — libc waitpid (wait4 syscall has 4 args + needs proper
+// errno/EINTR handling that the raw syscall path drops).
+extern int waitpid(int pid, int *status, int options);
 static int __attribute__((noinline)) hxlcl_waitpid(int pid, int *status, int options) {
-    return (int)_hxlcl_syscall4(HXLCL_SYS_WAIT4, (long)pid, (long)status, (long)options, 0);
+    return waitpid(pid, status, options);
 }
 /* Cycle 65: variadic to handle both 2-arg and 3-arg open() callers. */
 static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags, ...) {
@@ -1271,20 +1494,125 @@ static long hxlcl_sendmsg(int s, const void *m, int f) {
 static int hxlcl_inet_pton(int af, const char *src, void *dst) {
     (void)af; (void)src; (void)dst; return (int)HX_INT(rt_net_zero());
 }
-static int hxlcl_execl(const char *path, const char *arg, ...) {
-    (void)path; (void)arg; return (int)HX_INT(rt_net_fail());
-}
+// cycle 66 — restore real exec/popen bodies. Cycle 61 dropped these as
+// noop stubs with rationale "aprime_cc never spawns children". But the
+// runtime that backs `hexa run` and stdlib's exec() / exec_capture() /
+// gate_record DOES spawn children — and the stubs silently broke every
+// subprocess-dependent stdlib (yosys/ABC, anima trainers, pool CLI).
+// posix_spawnp + posix_spawn_file_actions_* are already linked in via
+// runtime_core.c's hexa_spawn_no_shell, so the libc symbols for
+// execve/execvp/execl/popen/pclose are also reachable — just pass
+// through. Resolves inbox/patches/yosys-exec-runtime-regression-cycles-
+// 61-64.md (Part 1, exec path).
+extern int execve(const char *path, char *const argv[], char *const envp[]);
+extern int execvp(const char *file, char *const argv[]);
 static int hxlcl_execve(const char *path, char *const argv[], char *const envp[]) {
-    (void)path; (void)argv; (void)envp; return (int)HX_INT(rt_net_fail());
+    return execve(path, argv, envp);
 }
 static int hxlcl_execvp(const char *file, char *const argv[]) {
-    (void)file; (void)argv; return (int)HX_INT(rt_net_fail());
+    return execvp(file, argv);
+}
+// execl is variadic; gather varargs into a char* argv[] then call execvp.
+// Mirrors libc semantics — last arg must be (char*)NULL.
+static int hxlcl_execl(const char *path, const char *arg, ...) {
+    enum { HXLCL_EXECL_MAX = 256 };
+    char *argv[HXLCL_EXECL_MAX];
+    int n = 0;
+    argv[n++] = (char *)arg;
+    va_list ap;
+    va_start(ap, arg);
+    while (n < HXLCL_EXECL_MAX - 1) {
+        char *next = va_arg(ap, char *);
+        argv[n++] = next;
+        if (!next) break;
+    }
+    argv[HXLCL_EXECL_MAX - 1] = (char *)0;
+    va_end(ap);
+    return execve(path, argv, environ);
+}
+// hxlcl_popen — manual pipe+fork+execve replacement for libc popen.
+// Returns a "fake FILE*" compatible with hxlcl_fdopen's `(void*)(fd+1)`
+// convention so hxlcl_fread can read from it. The libc popen path
+// (extern FILE* popen) returns a real heap FILE* which the hxlcl_fread
+// macro mis-interprets (it expects fd-encoded "FILE*"s from
+// hxlcl_fdopen, not heap pointers) — so we replicate popen here using
+// the syscall primitives that now work post cycles 63/64 + the cycle
+// 66 fix to libc pipe/execve. To track the child pid for pclose we
+// stash it in a small linear table keyed by the read-fd. Mode "r"
+// only — the only mode hexa_exec uses.
+#define HXLCL_POPEN_MAX 64
+static int  _hxlcl_popen_fds[HXLCL_POPEN_MAX];
+static int  _hxlcl_popen_pids[HXLCL_POPEN_MAX];
+static int  _hxlcl_popen_init_done = 0;
+static void _hxlcl_popen_init(void) {
+    if (_hxlcl_popen_init_done) return;
+    for (int i = 0; i < HXLCL_POPEN_MAX; i++) {
+        _hxlcl_popen_fds[i] = -1;
+        _hxlcl_popen_pids[i] = -1;
+    }
+    _hxlcl_popen_init_done = 1;
+}
+static void _hxlcl_popen_remember(int fd, int pid) {
+    _hxlcl_popen_init();
+    for (int i = 0; i < HXLCL_POPEN_MAX; i++) {
+        if (_hxlcl_popen_fds[i] < 0) {
+            _hxlcl_popen_fds[i] = fd;
+            _hxlcl_popen_pids[i] = pid;
+            return;
+        }
+    }
+}
+static int _hxlcl_popen_forget(int fd) {
+    _hxlcl_popen_init();
+    for (int i = 0; i < HXLCL_POPEN_MAX; i++) {
+        if (_hxlcl_popen_fds[i] == fd) {
+            int pid = _hxlcl_popen_pids[i];
+            _hxlcl_popen_fds[i] = -1;
+            _hxlcl_popen_pids[i] = -1;
+            return pid;
+        }
+    }
+    return -1;
 }
 static void *hxlcl_popen(const char *cmd, const char *mode) {
-    (void)cmd; (void)mode; (void)rt_net_fail(); return (void *)0;
+    if (!cmd) return (void *)0;
+    /* Only "r" supported — hexa_exec only reads child stdout. */
+    if (!mode || mode[0] != 'r') return (void *)0;
+    int pfd[2];
+    if (hxlcl_pipe(pfd) != 0) return (void *)0;
+    fflush(NULL);
+    pid_t pid = hxlcl_fork();
+    if (pid < 0) {
+        hxlcl_close(pfd[0]); hxlcl_close(pfd[1]);
+        return (void *)0;
+    }
+    if (pid == 0) {
+        /* child */
+        hxlcl_dup2(pfd[1], 1);
+        hxlcl_close(pfd[0]);
+        hxlcl_close(pfd[1]);
+        hxlcl_execl("/bin/sh", "sh", "-c", cmd, (char *)0);
+        _exit(127);
+    }
+    /* parent */
+    hxlcl_close(pfd[1]);
+    _hxlcl_popen_remember(pfd[0], pid);
+    /* hxlcl_fdopen returns (void*)(fd+1); hxlcl_fread expects this
+     * encoding via _hxlcl_fp_fd. */
+    return hxlcl_fdopen(pfd[0], "r");
 }
 static int hxlcl_pclose(void *stream) {
-    (void)stream; return (int)HX_INT(rt_net_fail());
+    if (!stream) return -1;
+    /* Decode the fd from the fake FILE* via the same offset
+     * hxlcl_fdopen uses. */
+    int fd = (int)((uintptr_t)stream) - 1;
+    if (fd < 0) return -1;
+    int pid = _hxlcl_popen_forget(fd);
+    hxlcl_close(fd);
+    if (pid <= 0) return -1;
+    int status = 0;
+    (void)hxlcl_waitpid(pid, &status, 0);
+    return status;
 }
 static int hxlcl_forkpty(int *amaster, char *name, void *termp, void *winp) {
     (void)amaster; (void)name; (void)termp; (void)winp; return (int)HX_INT(rt_net_fail());
@@ -2209,12 +2537,21 @@ HexaVal hexa_char_code(HexaVal s, HexaVal idx);
 // `char_code(s, i)` free-fn idiom which old hexa_v2 emits as
 // `hexa_call2(char_code, ...)`. Shim binds the bare identifier to TAG_FN.
 static HexaVal char_code;
+// Step-3 cycle 72 port — hexa_char_code dispatch.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_char_code(HexaVal s, HexaVal idx) {
     if (!HX_IS_STR(s)) return hexa_int(0);
     int i = HX_INT(idx);
     if (i < 0 || i >= (int)HX_STRLEN(s)) return hexa_int(0);
     return hexa_int((unsigned char)HX_STR(s)[i]);
 }
+#else
+extern HexaVal rt_char_code(HexaVal s, HexaVal idx);
+HexaVal hexa_char_code(HexaVal s, HexaVal idx) {
+    if (!HX_IS_STR(s)) return hexa_int(0);
+    return rt_char_code(s, idx);
+}
+#endif
 
 // `chr(n)` — Python/Ruby-style inverse of char_code: int byte → 1-char str.
 // Used by void's sys_pty accumulator (chr(b) reassembles bytes from
@@ -2639,21 +2976,34 @@ HexaVal hexa_str_parse_float(HexaVal s) {
 
 // M1 full · str_ext Step 5 (hxa-20260423-003): rt_str_trim_start/end —
 // codegen emits rt_str_* directly; hexa_str_trim_start/end shims retired.
+// Step-3 cycle 48 — rt_str_trim_start moves to hexa source under
+// HEXA_HAS_HEXA_RT_STDLIB. The C body stays for the no-stdlib path.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal rt_str_trim_start(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
     char* p = HX_STR(s);
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
     return hexa_str_own(hxlcl_strdup(p));
 }
+#endif
 
+// Step-3 cycle 49 — rt_str_trim_end moves to hexa source. C body stays
+// for the no-stdlib path.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal rt_str_trim_end(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
     int len = (int)HX_STRLEN(s);
     while (len > 0 && (HX_STR(s)[len-1] == ' ' || HX_STR(s)[len-1] == '\t' || HX_STR(s)[len-1] == '\n' || HX_STR(s)[len-1] == '\r')) len--;
     return hexa_str_own_with_len(hxlcl_strndup(HX_STR(s), len), (size_t)len);
 }
+#endif
 
 // Byte-based slice: [start, end) clamped to length
+// Step-3 cycle 46 port — byte slice dispatches to rt_str_slice
+// (ctype.hexa). Hexa side uses byte_len + substring builtin so the
+// allocation path is the perf-31 hexa_strbuf_alloc + memcpy single-
+// shot (vs strndup + hexa_str_own_with_len which double-allocates).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end) {
     if (!HX_IS_STR(s)) return hexa_str("");
     int len = (int)HX_STRLEN(s);
@@ -2663,7 +3013,19 @@ HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end) {
     if (a > b) a = b;
     return hexa_str_own_with_len(hxlcl_strndup(HX_STR(s) + a, b - a), (size_t)(b - a));
 }
+#else
+extern HexaVal rt_str_slice(HexaVal s, HexaVal start, HexaVal end);
+HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end) {
+    if (!HX_IS_STR(s)) return hexa_str("");
+    return rt_str_slice(s, start, end);
+}
+#endif
 
+// Step-3 cycle 35 port — float fast-path for the array branch. The str
+// branch is polymorphic (byte-indexed substring) and stays in C; the
+// array branch dispatches to rt_array_slice_float when the array is
+// all-float. Mixed-type arrays stay on the C body.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end) {
     // 2026-05-19 parity-gate t45b — polymorphic slice + 1-arg form.
     // (1) HX_IS_VOID(end) ⇒ 1-arg `.slice(start)` form — default end to
@@ -2698,7 +3060,47 @@ HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end) {
     for (int i = a; i < b; i++) out = hexa_array_push(out, HX_ARR_ITEMS(arr)[i]);
     return out;
 }
+#else
+static int _arr_all_float(HexaVal arr);  /* forward decl — defined later */
+extern HexaVal rt_array_slice_float(HexaVal arr, HexaVal start, HexaVal end);
+HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end) {
+    if (HX_IS_STR(arr)) {
+        int n = (int)HX_STRLEN(arr);
+        int a = (int)HX_INT(start);
+        int b = HX_IS_VOID(end) ? n : (int)HX_INT(end);
+        if (a < 0) a += n;
+        if (b < 0) b += n;
+        if (a < 0) a = 0;
+        if (b > n) b = n;
+        if (a > b) return hexa_str("");
+        int len = b - a;
+        char* buf = (char*)malloc(len + 1);
+        if (!buf) return hexa_str("");
+        int j = 0;
+        while (j < len) { buf[j] = HX_STR(arr)[a + j]; j++; }
+        buf[len] = 0;
+        return hexa_str_own(buf);
+    }
+    if (!HX_IS_ARRAY(arr)) return hexa_array_new();
+    int n = HX_ARR_LEN(arr);
+    int64_t a = HX_INT(start);
+    int64_t b = HX_IS_VOID(end) ? n : HX_INT(end);
+    if (_arr_all_float(arr)) {
+        return rt_array_slice_float(arr, hexa_int(a), hexa_int(b));
+    }
+    if (a < 0) a = 0;
+    if (b > n) b = n;
+    if (a > b) a = b;
+    HexaVal out = hexa_array_new();
+    for (int64_t i = a; i < b; i++) out = hexa_array_push(out, HX_ARR_ITEMS(arr)[i]);
+    return out;
+}
+#endif
 
+// Step-3 cycle 36 port — int range. The `int inclusive` switch is
+// plain C (not HexaVal), so two hexa entry points handle the cases
+// rather than threading a hexa-bool through the ABI.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal __hexa_range_array(HexaVal start, HexaVal end, int inclusive) {
     HexaVal out = hexa_array_new();
     int64_t s = HX_INT(start), e = HX_INT(end);
@@ -2709,7 +3111,19 @@ HexaVal __hexa_range_array(HexaVal start, HexaVal end, int inclusive) {
     }
     return out;
 }
+#else
+extern HexaVal rt_range_int_excl(HexaVal start, HexaVal end);
+extern HexaVal rt_range_int_incl(HexaVal start, HexaVal end);
+HexaVal __hexa_range_array(HexaVal start, HexaVal end, int inclusive) {
+    if (inclusive) return rt_range_int_incl(start, end);
+    return rt_range_int_excl(start, end);
+}
+#endif
 
+// Step-3 cycle 63 port — callback dispatch POC. Unlocks the callback
+// family by leveraging HexaVal-typed hexa-source params (codegen lowers
+// `fn(item)` to hexa_call1 when fn is HexaVal — verified on ubu-2).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_map(HexaVal arr, HexaVal fn) {
     if (!HX_IS_ARRAY(arr)) return hexa_array_new();
     HexaVal out = hexa_array_new();
@@ -2718,7 +3132,16 @@ HexaVal hexa_array_map(HexaVal arr, HexaVal fn) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_map(HexaVal arr, HexaVal fn_v);
+HexaVal hexa_array_map(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) return hexa_array_new();
+    return rt_array_map(arr, fn);
+}
+#endif
 
+// Step-3 cycle 64 port — filter + fold callback dispatch.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_filter(HexaVal arr, HexaVal fn) {
     if (!HX_IS_ARRAY(arr)) return hexa_array_new();
     HexaVal out = hexa_array_new();
@@ -2737,7 +3160,23 @@ HexaVal hexa_array_fold(HexaVal arr, HexaVal init, HexaVal fn) {
     }
     return acc;
 }
+#else
+extern HexaVal rt_array_filter(HexaVal arr, HexaVal fn_v);
+extern HexaVal rt_array_fold(HexaVal arr, HexaVal init, HexaVal fn_v);
+HexaVal hexa_array_filter(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) return hexa_array_new();
+    return rt_array_filter(arr, fn);
+}
+HexaVal hexa_array_fold(HexaVal arr, HexaVal init, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) return init;
+    return rt_array_fold(arr, init, fn);
+}
+#endif
 
+// Step-3 cycle 33 port — float fast-path dispatches to rt_array_index_of_float
+// when both the array is all-float and the item is float; otherwise the
+// polymorphic hexa_eq path stays.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_index_of(HexaVal arr, HexaVal item) {
     if (!HX_IS_ARRAY(arr)) return hexa_int(-1);
     for (int i = 0; i < HX_ARR_LEN(arr); i++) {
@@ -2745,6 +3184,20 @@ HexaVal hexa_array_index_of(HexaVal arr, HexaVal item) {
     }
     return hexa_int(-1);
 }
+#else
+static int _arr_all_float(HexaVal arr);  /* forward decl — defined below */
+extern HexaVal rt_array_index_of_float(HexaVal arr, HexaVal item);
+HexaVal hexa_array_index_of(HexaVal arr, HexaVal item) {
+    if (!HX_IS_ARRAY(arr)) return hexa_int(-1);
+    if (HX_IS_FLOAT(item) && _arr_all_float(arr)) {
+        return rt_array_index_of_float(arr, item);
+    }
+    for (int i = 0; i < HX_ARR_LEN(arr); i++) {
+        if (hexa_truthy(hexa_eq(HX_ARR_ITEMS(arr)[i], item))) return hexa_int(i);
+    }
+    return hexa_int(-1);
+}
+#endif
 
 // Higher-order array predicates + scans. Mirror interpreter semantics
 // at self/hexa_full.hexa:15189+ using hexa_call1 for callback dispatch
@@ -2753,9 +3206,11 @@ HexaVal hexa_array_index_of(HexaVal arr, HexaVal item) {
 HexaVal hexa_map_any(HexaVal m, HexaVal pred);
 HexaVal hexa_map_all(HexaVal m, HexaVal pred);
 
+// Step-3 cycle 65 port — any/all/count callback predicates. Map-
+// receiver branch stays C-side (delegates to hexa_map_any/all/count);
+// the array branch dispatches to rt_array_*_pred in numeric.hexa.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_any(HexaVal arr, HexaVal fn) {
-    // Map receiver: delegate to hexa_map_any (2-arg predicate over k,v).
-    // Matches interpreter dispatch at self/hexa_full.hexa:15705-15718.
     if (HX_IS_MAP(arr)) return hexa_map_any(arr, fn);
     if (!HX_IS_ARRAY(arr)) return hexa_bool(0);
     for (int i = 0; i < HX_ARR_LEN(arr); i++) {
@@ -2765,8 +3220,6 @@ HexaVal hexa_array_any(HexaVal arr, HexaVal fn) {
 }
 
 HexaVal hexa_array_all(HexaVal arr, HexaVal fn) {
-    // Map receiver: delegate to hexa_map_all. Empty map → true (vacuous).
-    // Matches interpreter dispatch at self/hexa_full.hexa:15719-15732.
     if (HX_IS_MAP(arr)) return hexa_map_all(arr, fn);
     if (!HX_IS_ARRAY(arr)) return hexa_bool(1);
     for (int i = 0; i < HX_ARR_LEN(arr); i++) {
@@ -2783,6 +3236,25 @@ HexaVal hexa_array_count(HexaVal arr, HexaVal fn) {
     }
     return hexa_int(c);
 }
+#else
+extern HexaVal rt_array_any_pred(HexaVal arr, HexaVal fn_v);
+extern HexaVal rt_array_all_pred(HexaVal arr, HexaVal fn_v);
+extern HexaVal rt_array_count_pred(HexaVal arr, HexaVal fn_v);
+HexaVal hexa_array_any(HexaVal arr, HexaVal fn) {
+    if (HX_IS_MAP(arr)) return hexa_map_any(arr, fn);
+    if (!HX_IS_ARRAY(arr)) return hexa_bool(0);
+    return rt_array_any_pred(arr, fn);
+}
+HexaVal hexa_array_all(HexaVal arr, HexaVal fn) {
+    if (HX_IS_MAP(arr)) return hexa_map_all(arr, fn);
+    if (!HX_IS_ARRAY(arr)) return hexa_bool(1);
+    return rt_array_all_pred(arr, fn);
+}
+HexaVal hexa_array_count(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) return hexa_int(0);
+    return rt_array_count_pred(arr, fn);
+}
+#endif
 
 HexaVal hexa_map_count(HexaVal m, HexaVal pred);
 
@@ -2813,6 +3285,9 @@ HexaVal hexa_contains_poly(HexaVal obj, HexaVal arg) {
 }
 
 // find: first element matching predicate; void if none.
+// Step-3 cycle 66 port — index-based dispatch (hexa side returns int
+// index, C wrapper resolves to item or hexa_void()).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_find(HexaVal arr, HexaVal fn) {
     if (!HX_IS_ARRAY(arr)) return hexa_void();
     for (int i = 0; i < HX_ARR_LEN(arr); i++) {
@@ -2821,6 +3296,15 @@ HexaVal hexa_array_find(HexaVal arr, HexaVal fn) {
     }
     return hexa_void();
 }
+#else
+extern HexaVal rt_array_find_index(HexaVal arr, HexaVal fn_v);
+HexaVal hexa_array_find(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) return hexa_void();
+    int64_t idx = HX_INT(rt_array_find_index(arr, fn));
+    if (idx < 0) return hexa_void();
+    return HX_ARR_ITEMS(arr)[idx];
+}
+#endif
 
 // Polymorphic `.find()` dispatch — .find() 이 string `.find(needle)` 과
 // array `.find(pred)` 에서 의미/반환 타입이 달라 codegen 단일 사이트에서
@@ -2869,6 +3353,14 @@ HexaVal hexa_array_flat_map(HexaVal arr, HexaVal fn) {
 }
 
 // enumerate: [[idx, item], ...] — matches hexa_full.hexa:15220-15228.
+// Step-3 cycle 68 port — enumerate dispatch.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_array_enumerate(HexaVal arr);
+HexaVal hexa_array_enumerate(HexaVal arr) {
+    if (!HX_IS_ARRAY(arr)) return hexa_array_new();
+    return rt_array_enumerate(arr);
+}
+#else
 HexaVal hexa_array_enumerate(HexaVal arr) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -2880,6 +3372,7 @@ HexaVal hexa_array_enumerate(HexaVal arr) {
     }
     return out;
 }
+#endif
 
 // is_empty: true if array/string has zero items/bytes. Map also uses
 // map_len — handled in hexa_is_empty below (polymorphic).
@@ -2960,6 +3453,11 @@ HexaVal hexa_array_max(HexaVal arr) {
 
 // flatten: one-level; non-array elements passed through.
 // Matches interpreter semantics at hexa_full.hexa:15316-15327.
+// Step-3 cycle 71 port — all-array fast path. C wrapper pre-checks
+// every element is an array; dispatches to rt_array_flatten_aoa. Mixed
+// (some-array, some-scalar) stays on the polymorphic C body since
+// hexa source can't observe HX_IS_ARRAY runtime tag.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_flatten(HexaVal arr) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -2975,8 +3473,34 @@ HexaVal hexa_array_flatten(HexaVal arr) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_flatten_aoa(HexaVal arr);
+HexaVal hexa_array_flatten(HexaVal arr) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t n = HX_ARR_LEN(arr);
+    int all_array = 1;
+    for (int64_t i = 0; i < n; i++) {
+        if (!HX_IS_ARRAY(HX_ARR_ITEMS(arr)[i])) { all_array = 0; break; }
+    }
+    if (all_array) return rt_array_flatten_aoa(arr);
+    for (int64_t i = 0; i < n; i++) {
+        HexaVal it = HX_ARR_ITEMS(arr)[i];
+        if (HX_IS_ARRAY(it)) {
+            for (int64_t j = 0; j < HX_ARR_LEN(it); j++) {
+                out = hexa_array_push(out, HX_ARR_ITEMS(it)[j]);
+            }
+        } else {
+            out = hexa_array_push(out, it);
+        }
+    }
+    return out;
+}
+#endif
 
 // for_each: side-effect iteration. Returns void (hexa_full.hexa:15187).
+// Step-3 cycle 66 port — for_each dispatch (void-return hexa fn).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_for_each(HexaVal arr, HexaVal fn) {
     if (!HX_IS_ARRAY(arr)) return hexa_void();
     for (int64_t i = 0; i < HX_ARR_LEN(arr); i++) {
@@ -2984,10 +3508,21 @@ HexaVal hexa_array_for_each(HexaVal arr, HexaVal fn) {
     }
     return hexa_void();
 }
+#else
+extern HexaVal rt_array_for_each(HexaVal arr, HexaVal fn_v);
+HexaVal hexa_array_for_each(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) return hexa_void();
+    return rt_array_for_each(arr, fn);
+}
+#endif
 
 // fill: new array of same length, every slot set to v.
 // Matches interpreter: returns a NEW array rather than mutating in place
 // (hexa_full.hexa:15486-15494).
+// Step-3 cycle 34 port — float fast-path dispatches to rt_array_fill_float
+// when both the array is all-float and the fill value is float; mixed-type
+// arrays stay on the polymorphic C body.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_fill(HexaVal arr, HexaVal v) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -2997,6 +3532,21 @@ HexaVal hexa_array_fill(HexaVal arr, HexaVal v) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_fill_float(HexaVal arr, HexaVal v);
+HexaVal hexa_array_fill(HexaVal arr, HexaVal v) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    if (HX_IS_FLOAT(v) && _arr_all_float(arr)) {
+        return rt_array_fill_float(arr, v);
+    }
+    int64_t n = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < n; i++) {
+        out = hexa_array_push(out, v);
+    }
+    return out;
+}
+#endif
 
 // rt#32-O (r5-a10.5-A, 2026-04-20): leak-fix primitives for CLM training.
 //
@@ -3125,8 +3675,8 @@ HexaVal hexa_array_drop(HexaVal arr, HexaVal nv) {
 }
 #endif
 
-// zip(other): pairs [a_i, b_i] up to min(len(a), len(b)).
-// Matches interpreter at hexa_full.hexa:15258-15270.
+// zip(other): pairs [a_i, b_i] up to min(len(a), len(b)). Step-3 cycle 25.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_zip(HexaVal a, HexaVal b) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(a) || !HX_IS_ARRAY(b)) return out;
@@ -3140,9 +3690,27 @@ HexaVal hexa_array_zip(HexaVal a, HexaVal b) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_zip_float(HexaVal a, HexaVal b);
+HexaVal hexa_array_zip(HexaVal a, HexaVal b) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(a) || !HX_IS_ARRAY(b)) return out;
+    if (_arr_all_float(a) && _arr_all_float(b)) return rt_array_zip_float(a, b);
+    int64_t na = HX_ARR_LEN(a), nb = HX_ARR_LEN(b);
+    int64_t k = na < nb ? na : nb;
+    for (int64_t i = 0; i < k; i++) {
+        HexaVal pair = hexa_array_new();
+        pair = hexa_array_push(pair, HX_ARR_ITEMS(a)[i]);
+        pair = hexa_array_push(pair, HX_ARR_ITEMS(b)[i]);
+        out = hexa_array_push(out, pair);
+    }
+    return out;
+}
+#endif
 
 // chunk(n): split into non-overlapping chunks of size n (last may be shorter).
-// Matches interpreter at hexa_full.hexa:15363-15378.
+// Matches interpreter at hexa_full.hexa:15363-15378. Step-3 cycle 26.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_chunk(HexaVal arr, HexaVal nv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3160,9 +3728,33 @@ HexaVal hexa_array_chunk(HexaVal arr, HexaVal nv) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_chunk_float(HexaVal arr, HexaVal n);
+HexaVal hexa_array_chunk(HexaVal arr, HexaVal nv) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
+    if (_arr_all_float(arr)) return rt_array_chunk_float(arr, hexa_int(n));
+    if (n <= 0) return out;
+    int64_t len = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < len; i += n) {
+        HexaVal chunk = hexa_array_new();
+        int64_t stop = i + n;
+        if (stop > len) stop = len;
+        for (int64_t j = i; j < stop; j++) {
+            chunk = hexa_array_push(chunk, HX_ARR_ITEMS(arr)[j]);
+        }
+        out = hexa_array_push(out, chunk);
+    }
+    return out;
+}
+#endif
 
 // window(n): sliding windows of size n (step 1). Empty if n > len or n ≤ 0.
 // Matches interpreter at hexa_full.hexa:15380-15395.
+// Step-3 cycle 31 port — float-typed arrays dispatch to rt_array_window_float
+// in stdlib/runtime/numeric.hexa; mixed-typed arrays stay on the C path.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_window(HexaVal arr, HexaVal nv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3178,9 +3770,29 @@ HexaVal hexa_array_window(HexaVal arr, HexaVal nv) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_window_float(HexaVal arr, HexaVal n);
+HexaVal hexa_array_window(HexaVal arr, HexaVal nv) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
+    if (_arr_all_float(arr)) return rt_array_window_float(arr, hexa_int(n));
+    int64_t len = HX_ARR_LEN(arr);
+    if (n <= 0 || n > len) return out;
+    for (int64_t i = 0; i + n <= len; i++) {
+        HexaVal win = hexa_array_new();
+        for (int64_t j = 0; j < n; j++) {
+            win = hexa_array_push(win, HX_ARR_ITEMS(arr)[i + j]);
+        }
+        out = hexa_array_push(out, win);
+    }
+    return out;
+}
+#endif
 
 // unique: dedupe by hexa_eq. O(n²) — matches interpreter's equality
-// check (hexa_full.hexa:15263-15277). Scaling to hash-set is a follow-up.
+// check (hexa_full.hexa:15263-15277). Step-3 cycle 29 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_unique(HexaVal arr) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3195,9 +3807,28 @@ HexaVal hexa_array_unique(HexaVal arr) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_unique_float(HexaVal arr);
+HexaVal hexa_array_unique(HexaVal arr) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    if (_arr_all_float(arr)) return rt_array_unique_float(arr);
+    int64_t len = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < len; i++) {
+        HexaVal it = HX_ARR_ITEMS(arr)[i];
+        int seen = 0;
+        for (int64_t j = 0; j < HX_ARR_LEN(out); j++) {
+            if (hexa_truthy(hexa_eq(HX_ARR_ITEMS(out)[j], it))) { seen = 1; break; }
+        }
+        if (!seen) out = hexa_array_push(out, it);
+    }
+    return out;
+}
+#endif
 
 // rotate(k): k>0 shifts left (items[k] becomes new head); k<0 shifts right.
-// k is normalized mod len — matches interpreter at hexa_full.hexa:15486-15499.
+// k normalized mod len. Step-3 cycle 30 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_rotate(HexaVal arr, HexaVal kv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3211,9 +3842,28 @@ HexaVal hexa_array_rotate(HexaVal arr, HexaVal kv) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_rotate_float(HexaVal arr, HexaVal k);
+HexaVal hexa_array_rotate(HexaVal arr, HexaVal kv) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t n = HX_ARR_LEN(arr);
+    if (n == 0) return out;
+    int64_t k = HX_IS_INT(kv) ? HX_INT(kv) : (int64_t)__hx_to_double(kv);
+    if (_arr_all_float(arr)) return rt_array_rotate_float(arr, hexa_int(k));
+    k = k % n;
+    if (k < 0) k += n;
+    for (int64_t i = 0; i < n; i++) {
+        out = hexa_array_push(out, HX_ARR_ITEMS(arr)[(i + k) % n]);
+    }
+    return out;
+}
+#endif
 
 // partition(pred): returns [matching, non_matching] as a 2-element array.
 // Matches interpreter at hexa_full.hexa:15437-15449.
+// Step-3 cycle 67 port — partition dispatch.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_partition(HexaVal arr, HexaVal fn) {
     HexaVal matching = hexa_array_new();
     HexaVal rest = hexa_array_new();
@@ -3232,10 +3882,25 @@ HexaVal hexa_array_partition(HexaVal arr, HexaVal fn) {
     out = hexa_array_push(out, rest);
     return out;
 }
+#else
+extern HexaVal rt_array_partition(HexaVal arr, HexaVal fn_v);
+HexaVal hexa_array_partition(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) {
+        HexaVal out = hexa_array_new();
+        out = hexa_array_push(out, hexa_array_new());
+        out = hexa_array_push(out, hexa_array_new());
+        return out;
+    }
+    return rt_array_partition(arr, fn);
+}
+#endif
 
 // interleave(other): alternates items from both arrays up to max length.
 // When one array runs out, the other's remaining items still alternate in.
 // Matches interpreter at hexa_full.hexa:15451-15464.
+// Step-3 cycle 37 port — float fast-path dispatches when both arrays
+// are all-float; mixed-type stays on the polymorphic C body.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_interleave(HexaVal a, HexaVal b) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(a)) {
@@ -3250,10 +3915,32 @@ HexaVal hexa_array_interleave(HexaVal a, HexaVal b) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_interleave_float(HexaVal a, HexaVal b);
+HexaVal hexa_array_interleave(HexaVal a, HexaVal b) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(a)) {
+        return HX_IS_ARRAY(b) ? b : out;
+    }
+    if (!HX_IS_ARRAY(b)) return a;
+    if (_arr_all_float(a) && _arr_all_float(b)) {
+        return rt_array_interleave_float(a, b);
+    }
+    int64_t na = HX_ARR_LEN(a), nb = HX_ARR_LEN(b);
+    int64_t m = na > nb ? na : nb;
+    for (int64_t i = 0; i < m; i++) {
+        if (i < na) out = hexa_array_push(out, HX_ARR_ITEMS(a)[i]);
+        if (i < nb) out = hexa_array_push(out, HX_ARR_ITEMS(b)[i]);
+    }
+    return out;
+}
+#endif
 
 // scan(init, fn): like fold but returns all intermediate accumulators.
 // Result length is len(arr) + 1 (includes init as first element).
 // Matches interpreter at hexa_full.hexa:15426-15435.
+// Step-3 cycle 67 port — scan dispatch.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_scan(HexaVal arr, HexaVal init, HexaVal fn) {
     HexaVal out = hexa_array_new();
     out = hexa_array_push(out, init);
@@ -3265,6 +3952,16 @@ HexaVal hexa_array_scan(HexaVal arr, HexaVal init, HexaVal fn) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_scan(HexaVal arr, HexaVal init, HexaVal fn_v);
+HexaVal hexa_array_scan(HexaVal arr, HexaVal init, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) {
+        HexaVal out = hexa_array_new();
+        return hexa_array_push(out, init);
+    }
+    return rt_array_scan(arr, init, fn);
+}
+#endif
 
 // product(a): multiplicative reduce. Mirrors hexa_sum but with mult.
 // Empty array returns int 1 (multiplicative identity). Step-3 cycle 23
@@ -3327,7 +4024,8 @@ HexaVal hexa_array_mean(HexaVal arr) {
 
 // swap(i, j): returns new array with items at i and j swapped.
 // Out-of-range indices return original array copy.
-// Matches interpreter at hexa_full.hexa:15497-15512.
+// Matches interpreter at hexa_full.hexa:15497-15512. Step-3 cycle 25 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_swap(HexaVal arr, HexaVal iv, HexaVal jv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3345,6 +4043,27 @@ HexaVal hexa_array_swap(HexaVal arr, HexaVal iv, HexaVal jv) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_swap_float(HexaVal arr, HexaVal i, HexaVal j);
+HexaVal hexa_array_swap(HexaVal arr, HexaVal iv, HexaVal jv) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t i = HX_IS_INT(iv) ? HX_INT(iv) : (int64_t)__hx_to_double(iv);
+    int64_t j = HX_IS_INT(jv) ? HX_INT(jv) : (int64_t)__hx_to_double(jv);
+    if (_arr_all_float(arr)) return rt_array_swap_float(arr, hexa_int(i), hexa_int(j));
+    int64_t n = HX_ARR_LEN(arr);
+    if (i < 0 || j < 0 || i >= n || j >= n) {
+        for (int64_t k = 0; k < n; k++) out = hexa_array_push(out, HX_ARR_ITEMS(arr)[k]);
+        return out;
+    }
+    for (int64_t k = 0; k < n; k++) {
+        if (k == i) out = hexa_array_push(out, HX_ARR_ITEMS(arr)[j]);
+        else if (k == j) out = hexa_array_push(out, HX_ARR_ITEMS(arr)[i]);
+        else out = hexa_array_push(out, HX_ARR_ITEMS(arr)[k]);
+    }
+    return out;
+}
+#endif
 
 // group_by: apply fn(item) → key, bucket items into map[str(key)] = [items].
 // Interpreter (self/hexa_full.hexa:15323-15344) compares keys via
@@ -3393,6 +4112,9 @@ HexaVal hexa_array_frequencies(HexaVal arr) {
 // from arr. Empty array or n<=0 returns empty array. Uses rand()/RAND_MAX
 // like hexa_random() so the RNG stream is shared. Matches interpreter at
 // self/hexa_full.hexa:15544-15556.
+// Step-3 cycle 70 port — sample dispatch (uses `random()` builtin in
+// hexa source). C wrapper handles the int coercion from HexaVal nv.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_sample(HexaVal arr, HexaVal nv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3406,11 +4128,24 @@ HexaVal hexa_array_sample(HexaVal arr, HexaVal nv) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_sample(HexaVal arr, HexaVal n);
+HexaVal hexa_array_sample(HexaVal arr, HexaVal nv) {
+    if (!HX_IS_ARRAY(arr)) return hexa_array_new();
+    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
+    return rt_array_sample(arr, hexa_int(n));
+}
+#endif
 
 // substr: JS-style substring(start, length). length defaults to "rest of
 // string" when not supplied. Negative start clamps to 0, negative length
 // to 0, end clamps to strlen. Matches interpreter at
 // self/hexa_full.hexa:14959-14972.
+// Step-3 cycle 42 port — void-len normalization (which depends on the
+// HX_TAG runtime check, not expressible in hexa source today) stays in
+// C; the substring clamps + builtin call go to rt_str_substr in
+// stdlib/runtime/ctype.hexa.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_substr(HexaVal s, HexaVal start_v, HexaVal len_v) {
     if (!HX_IS_STR(s)) return hexa_str("");
     int64_t slen = (int64_t)HX_STRLEN(s);
@@ -3428,7 +4163,25 @@ HexaVal hexa_str_substr(HexaVal s, HexaVal start_v, HexaVal len_v) {
     if (end_idx > slen) end_idx = slen;
     return hexa_str_substring(s, hexa_int(start), hexa_int(end_idx));
 }
+#else
+extern HexaVal rt_str_substr(HexaVal s, HexaVal start, HexaVal count);
+HexaVal hexa_str_substr(HexaVal s, HexaVal start_v, HexaVal len_v) {
+    if (!HX_IS_STR(s)) return hexa_str("");
+    int64_t slen = (int64_t)HX_STRLEN(s);
+    int64_t start = HX_IS_INT(start_v) ? HX_INT(start_v) : (int64_t)__hx_to_double(start_v);
+    int64_t count;
+    if (HX_TAG(len_v) == TAG_VOID) {
+        /* Default count = slen - start (clamped non-negative in hexa) */
+        count = slen - start;
+    } else {
+        count = HX_IS_INT(len_v) ? HX_INT(len_v) : (int64_t)__hx_to_double(len_v);
+    }
+    return rt_str_substr(s, hexa_int(start), hexa_int(count));
+}
+#endif
 
+// Step-3 cycle 28 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_bytes(HexaVal s) {
     if (!HX_IS_STR(s)) return hexa_array_new();
     HexaVal out = hexa_array_new();
@@ -3437,6 +4190,13 @@ HexaVal hexa_str_bytes(HexaVal s) {
     }
     return out;
 }
+#else
+extern HexaVal rt_str_bytes(HexaVal s);
+HexaVal hexa_str_bytes(HexaVal s) {
+    if (!HX_IS_STR(s)) return hexa_array_new();
+    return rt_str_bytes(s);
+}
+#endif
 
 // ── bt-71: libc / builtin family wrappers ────────────────────────────
 // interpreter.hexa references bare idents like `exit(code)`, `tanh(x)`,
@@ -3487,21 +4247,73 @@ int64_t hexa_float_to_int(double f) {
     return (int64_t)f;
 }
 
+// Step-3 cycle 38 batch — hexa_math_* wrappers that have direct rt_*
+// counterparts gain the two-mode dispatch. The hexa-source path stays
+// libm-free; the libm-flavoured names (asin/acos/atan/atan2) have no
+// rt_ equivalent yet and remain on the C path. sin/cos/exp/log already
+// route through hxlcl_* which itself calls rt_* (runtime.c:1317-1320),
+// so no additional wrapping is needed for them.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_tanh(HexaVal x) { return hexa_float(tanh(HX_FLOAT(x))); }
+HexaVal hexa_math_tan(HexaVal x)  { return hexa_float(tan(HX_FLOAT(x))); }
+HexaVal hexa_math_abs(HexaVal x)  { return hexa_float(fabs(HX_FLOAT(x))); }
+HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt(HX_FLOAT(x))); }
+#else
+extern HexaVal rt_tanh(HexaVal x);
+extern HexaVal rt_tan(HexaVal x);
+extern HexaVal rt_abs_float(HexaVal v);
+extern HexaVal rt_sqrt(HexaVal v);
+HexaVal hexa_math_tanh(HexaVal x) { return rt_tanh(hexa_float(HX_FLOAT(x))); }
+HexaVal hexa_math_tan(HexaVal x)  { return rt_tan(hexa_float(HX_FLOAT(x))); }
+HexaVal hexa_math_abs(HexaVal x)  { return rt_abs_float(hexa_float(HX_FLOAT(x))); }
+HexaVal hexa_math_sqrt(HexaVal x) { return rt_sqrt(hexa_float(HX_FLOAT(x))); }
+#endif
 HexaVal hexa_math_sin(HexaVal x)  { return hexa_float(hxlcl_sin(HX_FLOAT(x))); }
 HexaVal hexa_math_cos(HexaVal x)  { return hexa_float(hxlcl_cos(HX_FLOAT(x))); }
-HexaVal hexa_math_tan(HexaVal x)  { return hexa_float(tan(HX_FLOAT(x))); }
+// Step-3 cycle 40 — inverse trig dispatch to rt_atan/asin/acos. atan2
+// has no rt_ counterpart yet (two-arg quadrant resolution); it stays
+// on libm.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_asin(HexaVal x) { return hexa_float(asin(HX_FLOAT(x))); }
 HexaVal hexa_math_acos(HexaVal x) { return hexa_float(acos(HX_FLOAT(x))); }
 HexaVal hexa_math_atan(HexaVal x) { return hexa_float(atan(HX_FLOAT(x))); }
+#else
+extern HexaVal rt_asin(HexaVal x);
+extern HexaVal rt_acos(HexaVal x);
+extern HexaVal rt_atan(HexaVal x);
+HexaVal hexa_math_asin(HexaVal x) { return rt_asin(hexa_float(HX_FLOAT(x))); }
+HexaVal hexa_math_acos(HexaVal x) { return rt_acos(hexa_float(HX_FLOAT(x))); }
+HexaVal hexa_math_atan(HexaVal x) { return rt_atan(hexa_float(HX_FLOAT(x))); }
+#endif
+// Step-3 cycle 41 — atan2 dispatch to rt_atan2 (math.hexa quadrant
+// resolution + 4 edge cases). Closes the inverse-trig family.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_atan2(HexaVal y, HexaVal x) { return hexa_float(atan2(HX_FLOAT(y), HX_FLOAT(x))); }
+#else
+extern HexaVal rt_atan2(HexaVal y, HexaVal x);
+HexaVal hexa_math_atan2(HexaVal y, HexaVal x) {
+    return rt_atan2(hexa_float(HX_FLOAT(y)), hexa_float(HX_FLOAT(x)));
+}
+#endif
 HexaVal hexa_math_log(HexaVal x)  { return hexa_float(hxlcl_log(HX_FLOAT(x))); }
 HexaVal hexa_math_exp(HexaVal x)  { return hexa_float(hxlcl_exp(HX_FLOAT(x))); }
-HexaVal hexa_math_abs(HexaVal x)  { return hexa_float(fabs(HX_FLOAT(x))); }
-HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt(HX_FLOAT(x))); }
+// Step-3 cycle 39 — math floor/ceil/round wrapper contract is float-out,
+// but the rt_floor/ceil/round fns in numeric.hexa return int (per their
+// cycle 2/4 ports). Bridge with an explicit int→float cast at the
+// boundary so the libm surface goes away while the wrapper signature
+// stays unchanged.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(HX_FLOAT(x))); }
 HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(HX_FLOAT(x))); }
 HexaVal hexa_math_round(HexaVal x){ return hexa_float(round(HX_FLOAT(x))); }
+#else
+extern HexaVal rt_floor(HexaVal v);
+extern HexaVal rt_ceil(HexaVal v);
+extern HexaVal rt_round(HexaVal v);
+HexaVal hexa_math_floor(HexaVal x){ return hexa_float((double)HX_INT(rt_floor(hexa_float(HX_FLOAT(x))))); }
+HexaVal hexa_math_ceil(HexaVal x) { return hexa_float((double)HX_INT(rt_ceil(hexa_float(HX_FLOAT(x))))); }
+HexaVal hexa_math_round(HexaVal x){ return hexa_float((double)HX_INT(rt_round(hexa_float(HX_FLOAT(x))))); }
+#endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_pow(HexaVal b, HexaVal e) { return hexa_float(pow(HX_FLOAT(b), HX_FLOAT(e))); }
 #else
@@ -3514,7 +4326,18 @@ HexaVal hexa_math_pow(HexaVal b, HexaVal e) {
 // from hexa user code. Distinct from `%` which routes through hexa_mod
 // (int+float-aware dispatch); this is the pure float-only path used by
 // scientific kernels that want the libm semantics directly.
+// Step-3 cycle 38 batch — dispatch through rt_fmod (math.hexa cycle 7-9
+// Newton/series-based) when hexa-rt-stdlib is active. hxlcl_fmod itself
+// routes through rt_fmod via runtime.c shim too, so this wrapper is
+// behaviour-identical; lifting it surfaces the dispatch explicitly.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_fmod(HexaVal a, HexaVal b) { return hexa_float(hxlcl_fmod(HX_FLOAT(a), HX_FLOAT(b))); }
+#else
+extern HexaVal rt_fmod(HexaVal x, HexaVal y);
+HexaVal hexa_math_fmod(HexaVal a, HexaVal b) {
+    return rt_fmod(hexa_float(HX_FLOAT(a)), hexa_float(HX_FLOAT(b)));
+}
+#endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_min(HexaVal a, HexaVal b) { return hexa_float(fmin(HX_FLOAT(a), HX_FLOAT(b))); }
 #else

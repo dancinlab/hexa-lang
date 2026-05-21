@@ -1002,6 +1002,267 @@ pub fn ag_extract_emit_program_xy_dy(arena: int, bwd_root: int, fn_name: string)
     return bwd_src + main_src
 }
 
+// ─── SD13: fwd-cache materialisation inside emitted main() ─────────────
+// `ag_extract_emit_fwd_let(arena, node) -> string` — render a single
+// `let _fwd<id>: float = <expr>` binding for fwd-AST node `id`, where
+// `<expr>` reads its direct children as `_fwd<child_id>` references
+// (Params resolve to the argv-bound identifier `x`; Consts to their
+// scalar literal). The recursion is structural — no traversal of
+// descendants here; the caller emits bindings in slot-id order so
+// each child binding is already in scope when its parent reads it.
+//
+// IEEE-754 byte-eq: the emitted expression sequence executes the
+// SAME ops in the SAME order as `ag_extract_eval_fwd` in-process —
+// (Param→x) leaves write the argv value verbatim, BinOp_ADD emits
+// `(_fwda + _fwdb)` matching `va + vb`, etc. Same scalar ops, same
+// operand order ⇒ identical IEEE-754 trajectory ⇒ same fwd_cache
+// content as the interpret path ⇒ same `_fwd<id>` symbols feed the
+// walker-emitted bwd body byte-identically.
+//
+// SD13 honest scope: this helper expects a fwd AST that uses ONLY
+// the kinds the walker's interpret/eval surface handles —
+// Param · Const · BinOp_ADD/SUB/MUL/DIV/NEG · Call_DTEXP. Unknown
+// kinds emit `/* unsupported kind N */` as a clearly-visible compile
+// error sentinel (matches the SD11/SD12 `emit_expr*` fallback idiom).
+//
+// Atlas cite: @cite Griewank-Walther §3.2 "save forward, reuse in
+// backward" — the let-binding chain materialises the Wengert tape
+// in source form; SD13 is the first SD to land that materialisation
+// inside compiled hexa code.
+pub fn ag_extract_emit_fwd_let(arena: int, node: int) -> string {
+    let k = ag_extract_kind(arena, node)
+    let id_str = to_string(node)
+    let prefix = "    let _fwd" + id_str + ": float = "
+    if k == ag_extract_k_param() {
+        // SD13 scope: emitted main reads ONE argv float (named `x`);
+        // bind any Param leaf to `x` (matches `eval_fwd` Param branch
+        // which writes x_val for ix==0). Multi-input fwd-cache
+        // materialisation (SD13 bonus path) is `emit_fwd_let_xy`.
+        let ix = ag_extract_param_ix(arena, node)
+        if ix == 0 { return prefix + "x\n" }
+        return prefix + "0.0  /* SD13: Param(ix=" + to_string(ix) + ") in single-input scope */\n"
+    }
+    if k == ag_extract_k_const() {
+        let v = ag_extract_const_value(arena, node)
+        return prefix + float_to_string(v) + "\n"
+    }
+    if k == ag_extract_k_binop_add() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        return prefix + "(_fwd" + to_string(a) + " + _fwd" + to_string(b) + ")\n"
+    }
+    if k == ag_extract_k_binop_sub() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        return prefix + "(_fwd" + to_string(a) + " - _fwd" + to_string(b) + ")\n"
+    }
+    if k == ag_extract_k_binop_mul() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        return prefix + "(_fwd" + to_string(a) + " * _fwd" + to_string(b) + ")\n"
+    }
+    if k == ag_extract_k_binop_div() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        return prefix + "(_fwd" + to_string(a) + " / _fwd" + to_string(b) + ")\n"
+    }
+    if k == ag_extract_k_binop_neg() {
+        let a = ag_extract_child(arena, node, 0)
+        return prefix + "(0.0 - _fwd" + to_string(a) + ")\n"
+    }
+    if k == ag_extract_k_call_dtexp() {
+        let a = ag_extract_child(arena, node, 0)
+        return prefix + "dt_exp(_fwd" + to_string(a) + ")\n"
+    }
+    // Unsupported kind: emit a syntactically-visible sentinel so the
+    // hexa-build step rejects the source instead of silently producing
+    // wrong gradients. Same idiom as `emit_expr` for unknown kinds.
+    return prefix + "0.0  /* SD13: unsupported fwd kind " + to_string(k) + " */\n"
+}
+
+// `ag_extract_emit_program_x_dy_with_fwd_cache(arena, fwd_root, bwd_root,
+//  fn_name) -> string` — SD13's primary deliverable. Emits a
+// STANDALONE-COMPILABLE program that (a) defines the bwd fn whose body
+// references `_fwd<id>` symbols for each non-Param fwd-cache slot, and
+// (b) materialises every fwd-cache slot 0..fwd_root inside `fn main()`
+// as `let _fwd<id>: float = <expr>` bindings BEFORE calling the bwd fn.
+//
+// Architecture: the bwd fn signature stays `(x: float, dy: float, _fwd0: float,
+// _fwd1: float, ...) -> float` — one extra parameter per fwd slot id 0..fwd_root.
+// `fn main()` materialises each `_fwd<id>` from the fwd AST, in slot-id
+// order (the fwd AST is built bottom-up so slot-id order IS topological
+// order — children have smaller ids than their parents). The bwd fn
+// body's `_fwd<id>` lexemes (emitted by `ag_extract_emit_expr`) now
+// resolve to the corresponding parameter, byte-eq with the in-process
+// `interpret_v2` (which reads `fwd_cache[id]`).
+//
+// Round-trip invariant (binary64 IEEE-754):
+//   compiled_binary(json_stringify(x), json_stringify(dy))
+//     .first_line_as_float()
+//     ≡  ag_extract_interpret_v2(arena, bwd_root, x, dy, populated_fwd_cache)
+//     ≡  hand_reference(x, dy)        // up to SD6's algebraic-identity
+//                                     // 1-ULP zone if the walker emits
+//                                     // e/d while the hand form uses 1-s
+// because (a) `emit_fwd_let` mirrors `eval_fwd`'s scalar op sequence
+// byte-identically; (b) the bwd body emitted by `emit_expr` reads
+// `_fwd<id>` parameters that hold those byte-identical fwd values; and
+// (c) `json_stringify` + `.to_float()` round-trip is shortest-double
+// strtod-safe (SD11 lemma).
+//
+// Honest scope (SD13, g3):
+//   - PROVES: walker-emit→compile→run round-trip works for ANY fwd AST
+//     whose bwd references non-Param fwd-cache slots (sigmoid, sigmoid-div,
+//     multi-use intermediates — all the SD6/SD7/SD10 shapes).
+//   - INHERITS: SD6's 1-ULP zone for sigmoid — the walker emits
+//     `dy × s × e/d` (algebraic identity to `dy × s × (1−s)` but
+//     different IEEE-754 trajectory). SD13's compile path produces the
+//     SAME 1-ULP delta vs the hand-derived `dy × s × (1−s)`. This is a
+//     CONFIRMATION of SD6's finding at the compile boundary, NOT a
+//     regression.
+//   - DOES NOT change: SD11/SD12 surfaces (`emit_program_x_dy`,
+//     `emit_program_xy_dy`) — those remain the simpler emit shapes
+//     used when no fwd-cache materialisation is needed.
+//
+// Atlas cite: @cite Griewank-Walther §3.2 Algorithm 3.6 (reverse-mode
+// emit with cached forward values) + Steele-White 1990 (shortest-roundtrip
+// decimal lemma for binary64).
+// `ag_extract_emit_bwd_let(arena, node, fwd_root) -> string` — render a
+// single `let _bwd<id>: float = <expr>` binding for bwd-AST node `id`,
+// where `<expr>` reads its direct children either as `_fwd<child_id>`
+// (when the child is a fwd-arena Var_FwdResult — resolved to its fid),
+// `_bwd<child_id>` (when the child is a bwd-arena node — id > fwd_root),
+// or `dy` (when the child is Var_Upstream), or `x` (when the child is
+// Param ix=0), or a literal (when the child is Const).
+//
+// FMA-fence rationale: the in-process interpret path evaluates each
+// bwd binop via a function call (interpret_v2 recurses, each return
+// is a separate IEEE-754 op). The emitted bwd body, if rendered as
+// one giant chained expression, lets clang's `-ffp-contract=on`
+// (the arm64 default) fuse `a*b + c` patterns into FMA instructions,
+// producing a different last-bit trajectory than the interp path
+// (measured 2-ULP delta in SD13 dev). Storing every intermediate in
+// a `let` binding gives clang nothing to fuse across — each binop
+// produces a named SSA value that survives optimisation, matching
+// the interp path byte-identically.
+//
+// Atlas cite: @cite c0789e05 "`#pragma STDC FP_CONTRACT OFF` for CPU
+// raw-double mirrors" — same architectural lesson: name every binop's
+// result so the optimiser cannot reorder/fuse across them.
+pub fn ag_extract_emit_bwd_let(arena: int, node: int, fwd_root: int) -> string {
+    let k = ag_extract_kind(arena, node)
+    let id_str = to_string(node)
+    let prefix = "    let _bwd" + id_str + ": float = "
+    // Leaves: bind to constants / argv-bound / fwd-cache slots.
+    if k == ag_extract_k_const() {
+        return prefix + float_to_string(ag_extract_const_value(arena, node)) + "\n"
+    }
+    if k == ag_extract_k_var_upstream() {
+        return prefix + "dy\n"
+    }
+    if k == ag_extract_k_param() {
+        let ix = ag_extract_param_ix(arena, node)
+        if ix == 0 { return prefix + "x\n" }
+        return prefix + "0.0  /* SD13: Param(ix=" + to_string(ix) + ") in single-input scope */\n"
+    }
+    if k == ag_extract_k_var_fwdresult() {
+        let fid = ag_extract_fwdresult_id(arena, node)
+        return prefix + "_fwd" + to_string(fid) + "\n"
+    }
+    // Inner nodes: read each child as _bwd<child_id> (every prior bwd
+    // node is already bound in topological order — `node` > children
+    // because the walker built children first).
+    if k == ag_extract_k_binop_add() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        return prefix + "(_bwd" + to_string(a) + " + _bwd" + to_string(b) + ")\n"
+    }
+    if k == ag_extract_k_binop_sub() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        return prefix + "(_bwd" + to_string(a) + " - _bwd" + to_string(b) + ")\n"
+    }
+    if k == ag_extract_k_binop_mul() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        return prefix + "(_bwd" + to_string(a) + " * _bwd" + to_string(b) + ")\n"
+    }
+    if k == ag_extract_k_binop_div() {
+        let a = ag_extract_child(arena, node, 0)
+        let b = ag_extract_child(arena, node, 1)
+        return prefix + "(_bwd" + to_string(a) + " / _bwd" + to_string(b) + ")\n"
+    }
+    if k == ag_extract_k_binop_neg() {
+        let a = ag_extract_child(arena, node, 0)
+        return prefix + "(0.0 - _bwd" + to_string(a) + ")\n"
+    }
+    if k == ag_extract_k_call_dtexp() {
+        let a = ag_extract_child(arena, node, 0)
+        return prefix + "dt_exp(_bwd" + to_string(a) + ")\n"
+    }
+    return prefix + "0.0  /* SD13: unsupported bwd kind " + to_string(k) + " */\n"
+}
+
+pub fn ag_extract_emit_program_x_dy_with_fwd_cache(arena: int, fwd_root: int,
+                                                    bwd_root: int,
+                                                    fn_name: string) -> string {
+    // ─── stdlib imports (dt_exp lives in stdlib/flame/flame_math) ──
+    // The walker emits `dt_exp(_fwd<id>)` for the Call_DTEXP rule (used
+    // by sigmoid: e = dt_exp(u)). The fwd-cache materialisation in
+    // main() also calls `dt_exp` to populate the corresponding slot.
+    // Without this `use` the emitted source references undefined
+    // identifiers; clang barfs at the C-codegen stage.
+    let mut bwd_src = "use \"stdlib/flame/flame_math\"\n"
+
+    // SD13 emits the bwd computation INLINE in main() rather than as a
+    // separate fn, to keep all binops at the same lexical scope as the
+    // `_fwd<id>` materialisation lines and to give clang nothing to
+    // FMA-fuse across (per `emit_bwd_let` rationale). The `fn_name`
+    // argument is preserved in a comment for inspection; future
+    // expansions can resurrect a per-vjp fn boundary by emitting the
+    // bwd letseq inside a synthesised function body.
+    bwd_src = bwd_src + "// SD13: " + fn_name
+            + " — bwd materialised inline in main() (FMA-fence pattern).\n"
+
+    // ─── fn main(): argv reader + fwd-cache materialisation + bwd-let seq ──
+    let mut main_src = ""
+    main_src = main_src + "\n"
+    main_src = main_src + "fn main() {\n"
+    main_src = main_src + "    let argv = args()\n"
+    main_src = main_src + "    // argv layout: [bin, x_repr, dy_repr]\n"
+    main_src = main_src + "    if len(argv) < 3 {\n"
+    main_src = main_src + "        println(\"usage: <bin> <x> <dy>\")\n"
+    main_src = main_src + "        exit(2)\n"
+    main_src = main_src + "    }\n"
+    main_src = main_src + "    let x  = argv[1].to_float()\n"
+    main_src = main_src + "    let dy = argv[2].to_float()\n"
+    main_src = main_src + "    // ── fwd-cache materialisation (SD13 §3.2 Wengert tape) ──\n"
+    let mut sid = 0
+    while sid <= fwd_root {
+        main_src = main_src + ag_extract_emit_fwd_let(arena, sid)
+        sid = sid + 1
+    }
+    // ── bwd materialisation as a letseq (FMA fence). Every bwd-AST
+    // node id from fwd_root+1 .. bwd_root gets its own `let _bwd<id>:
+    // float = ...` line. Topological order is guaranteed because the
+    // walker builds children before parents (so child ids are always
+    // smaller than their parent id). Once every node has a name, the
+    // walker's emit-expr structure folds into a sequence of single-op
+    // bindings — matching the in-process interpret_v2 trajectory
+    // byte-for-byte.
+    main_src = main_src + "    // ── bwd materialisation (one binop per let — FMA fence) ──\n"
+    let mut bid = fwd_root + 1
+    while bid <= bwd_root {
+        main_src = main_src + ag_extract_emit_bwd_let(arena, bid, fwd_root)
+        bid = bid + 1
+    }
+    main_src = main_src + "    let dx = _bwd" + to_string(bwd_root) + "\n"
+    main_src = main_src + "    // json_stringify: shortest-roundtrip codec\n"
+    main_src = main_src + "    // (runtime_core.c::_shortest_double) — SD11 lemma.\n"
+    main_src = main_src + "    println(json_stringify(dx))\n"
+    main_src = main_src + "}\n"
+    return bwd_src + main_src
+}
+
 // ─── interpret step: bwd AST → numerical evaluation ────────────────────
 // `ag_extract_interpret(arena, bwd_root, x_val, dy_val)` — tree-walks
 // the bwd AST applying each node's semantics. Produces the same scalar

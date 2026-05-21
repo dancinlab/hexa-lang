@@ -104,6 +104,610 @@ pub fn rt_max_float(a: float, b: float) -> float {
     return b
 }
 
+// Step 3 cycle 37 — array interleave. Alternates items from both arrays
+// up to max length; when one runs out, the other's remaining items
+// continue to alternate in (interpreter contract).
+pub fn rt_array_interleave_float(a: [float], b: [float]) -> [float] {
+    let mut out: [float] = []
+    let na = len(a)
+    let nb = len(b)
+    let mut m = na
+    if nb > m { m = nb }
+    let mut i = 0
+    while i < m {
+        if i < na { out = out.push(a[i]) }
+        if i < nb { out = out.push(b[i]) }
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 36 — integer range. Two entry points mirror the C body
+// `__hexa_range_array`'s plain-C `int inclusive` switch.
+pub fn rt_range_int_excl(start: int, end: int) -> [int] {
+    let mut out: [int] = []
+    let mut i = start
+    while i < end {
+        out = out.push(i)
+        i = i + 1
+    }
+    return out
+}
+
+pub fn rt_range_int_incl(start: int, end: int) -> [int] {
+    let mut out: [int] = []
+    let mut i = start
+    while i <= end {
+        out = out.push(i)
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 35 — array slice (array branch only; the polymorphic str
+// branch stays in the C body). Clamps a/b to [0, len] and a ≤ b matches
+// the C body contract.
+pub fn rt_array_slice_float(arr: [float], start: int, end: int) -> [float] {
+    let mut out: [float] = []
+    let n = len(arr)
+    let mut a = start
+    let mut b = end
+    if a < 0 { a = 0 }
+    if b > n { b = n }
+    if a > b { a = b }
+    let mut i = a
+    while i < b {
+        out = out.push(arr[i])
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 60 — fixed-precision float→string (snprintf "%.*f"
+// replacement). Trade-off: works for values within ±2^53 and prec ≤ 18
+// where int64 round-trip stays exact. Beyond that, falls back to int
+// truncation (lossy). For typical user precision use cases (prec ≤ 10)
+// and values in normal scientific range, byte-identical to libm.
+fn _rt_int_to_dec_str(n: int) -> string {
+    if n == 0 { return "0" }
+    let mut digits: [int] = []
+    let mut x = n
+    while x > 0 {
+        let d = x - (x / 10) * 10
+        digits = digits.push(48 + d)
+        x = x / 10
+    }
+    let mut bytes: [int] = []
+    let dlen = len(digits)
+    let mut i = dlen - 1
+    while i >= 0 {
+        bytes = bytes.push(digits[i])
+        i = i - 1
+    }
+    return bytes_to_str_raw(bytes)
+}
+
+fn _rt_int_to_dec_str_pad(n: int, width: int) -> string {
+    let raw = _rt_int_to_dec_str(n)
+    let cur = byte_len(raw)
+    if cur >= width { return raw }
+    let pad = width - cur
+    let mut bytes: [int] = []
+    let mut i = 0
+    while i < pad {
+        bytes = bytes.push(48)
+        i = i + 1
+    }
+    return bytes_to_str_raw(bytes) + raw
+}
+
+// Step 3 cycle 61 — scientific notation float→string (snprintf "%.*e"
+// replacement). Same int64 round-trip limit as rt_format_float_f.
+// Edge cases: zero → "0.00e+00", mantissa rounding boundary (9.99→10)
+// is NOT corrected (acceptable for non-critical formatting use).
+pub fn rt_format_float_sci(v: float, prec: int) -> string {
+    let mut x = v
+    let mut sign = ""
+    if x < 0.0 { x = -x; sign = "-" }
+    let mut exp_int = 0
+    let mut mantissa = x
+    if x != 0.0 {
+        let l = rt_log10(x)
+        let mut le = l as int
+        if (le as float) > l { le = le - 1 }
+        let mut p10 = 1.0
+        if le >= 0 {
+            let mut i = 0
+            while i < le {
+                p10 = p10 * 10.0
+                i = i + 1
+            }
+        } else {
+            let mut i = 0
+            let neg_le = -le
+            while i < neg_le {
+                p10 = p10 * 0.1
+                i = i + 1
+            }
+        }
+        mantissa = x / p10
+        exp_int = le
+    }
+    let mantissa_str = rt_format_float_f(mantissa, prec)
+    let mut esign = "+"
+    let mut eabs = exp_int
+    if exp_int < 0 { esign = "-"; eabs = -exp_int }
+    let estr = _rt_int_to_dec_str_pad(eabs, 2)
+    return sign + mantissa_str + "e" + esign + estr
+}
+
+pub fn rt_format_float_f(v: float, prec: int) -> string {
+    let mut x = v
+    let mut sign = ""
+    if x < 0.0 { x = -x; sign = "-" }
+    let mut p = prec
+    if p < 0 { p = 0 }
+    if p > 18 { p = 18 }
+    let mut mult = 1.0
+    let mut i = 0
+    while i < p {
+        mult = mult * 10.0
+        i = i + 1
+    }
+    let scaled = x * mult + 0.5
+    let total = scaled as int
+    let mult_i = mult as int
+    let int_part = total / mult_i
+    let frac_part = total - int_part * mult_i
+    let int_str = _rt_int_to_dec_str(int_part)
+    if p == 0 { return sign + int_str }
+    let frac_str = _rt_int_to_dec_str_pad(frac_part, p)
+    return sign + int_str + "." + frac_str
+}
+
+// Step 3 cycle 59 — array sort, float fast-path. Insertion sort (O(n²))
+// avoiding recursion (cf. the hexa_v2 transpile recursion trap noted at
+// cycles 30 + 52). Builds a new sorted array each pass; acceptable
+// trade-off for arrays expected to be small in the hot self-host path.
+// Stable: equal keys preserve original order via `sorted[k] <= v` test.
+pub fn rt_array_sort_float(arr: [float]) -> [float] {
+    let n = len(arr)
+    if n <= 1 { return arr }
+    let mut sorted: [float] = []
+    let mut i = 0
+    while i < n {
+        let v = arr[i]
+        let m = len(sorted)
+        let mut k = 0
+        while k < m {
+            if sorted[k] <= v {
+                k = k + 1
+            } else {
+                break
+            }
+        }
+        let mut next: [float] = []
+        let mut j = 0
+        while j < k {
+            next = next.push(sorted[j])
+            j = j + 1
+        }
+        next = next.push(v)
+        while j < m {
+            next = next.push(sorted[j])
+            j = j + 1
+        }
+        sorted = next
+        i = i + 1
+    }
+    return sorted
+}
+
+// Step 3 cycle 71 — flatten one-level, assumes all items are arrays.
+// The C wrapper (hexa_array_flatten) pre-checks all-array via tag, and
+// only dispatches here when every element is array. Mixed-type (some
+// items array, some scalar) stays on the polymorphic C body.
+pub fn rt_array_flatten_aoa(arr: HexaVal) -> HexaVal {
+    let mut out: [float] = []
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        let sub = arr[i]
+        let m = len(sub)
+        let mut j = 0
+        while j < m {
+            out = out.push(sub[j])
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 70 — sample: draw n items uniformly at random (with
+// replacement) from arr. Uses the `random()` builtin which returns
+// float in [0, 1). Empty arr or n ≤ 0 returns empty.
+pub fn rt_array_sample(arr: HexaVal, n: int) -> HexaVal {
+    let mut out: [float] = []
+    let n_items = len(arr)
+    if n_items == 0 { return out }
+    if n <= 0 { return out }
+    let mut i = 0
+    while i < n {
+        let r = random()
+        let n_items_f = n_items as float
+        let mut idx = (r * n_items_f) as int
+        if idx >= n_items { idx = n_items - 1 }
+        out = out.push(arr[idx])
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 69 — sort_by: stable insertion sort using a callback
+// key-extractor. Each element's sort key is computed once (`key_fn
+// (item)`) and stored in a parallel array; comparisons go through
+// hexa_cmp_le (handles int/float/string). Stable via `sorted_keys[j]
+// <= k` test (equal keys preserve original order).
+pub fn rt_array_sort_by(arr: HexaVal, key_fn: HexaVal) -> HexaVal {
+    let n = len(arr)
+    if n <= 1 { return arr }
+    let mut sorted_keys: [float] = []
+    let mut sorted_items: [float] = []
+    let mut idx = 0
+    while idx < n {
+        let item = arr[idx]
+        let k = key_fn(item)
+        let m = len(sorted_keys)
+        let mut j = 0
+        while j < m {
+            if sorted_keys[j] <= k {
+                j = j + 1
+            } else {
+                break
+            }
+        }
+        let mut nsk: [float] = []
+        let mut nsi: [float] = []
+        let mut p = 0
+        while p < j {
+            nsk = nsk.push(sorted_keys[p])
+            nsi = nsi.push(sorted_items[p])
+            p = p + 1
+        }
+        nsk = nsk.push(k)
+        nsi = nsi.push(item)
+        while p < m {
+            nsk = nsk.push(sorted_keys[p])
+            nsi = nsi.push(sorted_items[p])
+            p = p + 1
+        }
+        sorted_keys = nsk
+        sorted_items = nsi
+        idx = idx + 1
+    }
+    return sorted_items
+}
+
+// Step 3 cycle 68 — enumerate: array of [idx, item] pairs. No
+// callback, no polymorphic guard, just pair-building. Type annotations
+// are runtime-relaxed (push accepts any HexaVal).
+pub fn rt_array_enumerate(arr: HexaVal) -> HexaVal {
+    let mut out: [float] = []
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        let mut pair: [float] = []
+        pair = pair.push(i)
+        pair = pair.push(arr[i])
+        out = out.push(pair)
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 67 — scan (intermediate accumulators) + partition
+// (split by predicate into [matching, rest]). Type annotations on
+// `out` are hints — push accepts any HexaVal at runtime, so pushing
+// arrays into [float]-typed output works (dynamic-typed at runtime).
+pub fn rt_array_scan(arr: HexaVal, init: HexaVal, fn_v: HexaVal) -> HexaVal {
+    let mut out: [float] = []
+    out = out.push(init)
+    let mut acc = init
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        acc = fn_v(acc, arr[i])
+        out = out.push(acc)
+        i = i + 1
+    }
+    return out
+}
+
+pub fn rt_array_partition(arr: HexaVal, fn_v: HexaVal) -> HexaVal {
+    let mut matching: [float] = []
+    let mut rest: [float] = []
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        let item = arr[i]
+        if fn_v(item) {
+            matching = matching.push(item)
+        } else {
+            rest = rest.push(item)
+        }
+        i = i + 1
+    }
+    let mut out: [float] = []
+    out = out.push(matching)
+    out = out.push(rest)
+    return out
+}
+
+// Step 3 cycle 66 — find via _index helper + for_each (side-effect).
+// hexa-source can't express `hexa_void()` cleanly (bare name → call0
+// trap, cycle 63 lesson). For find, return an int index instead and
+// let the C wrapper extract the item or hexa_void() on -1.
+// for_each uses no-return-type hexa fn → codegen auto-emits
+// `return hexa_void()` (verified via ubu-2 transpile).
+pub fn rt_array_find_index(arr: HexaVal, fn_v: HexaVal) -> int {
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        if fn_v(arr[i]) { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+pub fn rt_array_for_each(arr: HexaVal, fn_v: HexaVal) {
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        fn_v(arr[i])
+        i = i + 1
+    }
+}
+
+// Step 3 cycle 65 — array any/all/count (predicate-based, return bool/int).
+// Map-receiver dispatch (hexa_array_any/all checks HX_IS_MAP) stays
+// C-side; the array branch dispatches to these hexa fns. Bool returns
+// → HexaVal at C ABI matches the existing `hexa_bool(...)` wrap.
+pub fn rt_array_any_pred(arr: HexaVal, fn_v: HexaVal) -> bool {
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        if fn_v(arr[i]) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn rt_array_all_pred(arr: HexaVal, fn_v: HexaVal) -> bool {
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        let r = fn_v(arr[i])
+        if r {
+            i = i + 1
+        } else {
+            return false
+        }
+    }
+    return true
+}
+
+pub fn rt_array_count_pred(arr: HexaVal, fn_v: HexaVal) -> int {
+    let n = len(arr)
+    let mut c = 0
+    let mut i = 0
+    while i < n {
+        if fn_v(arr[i]) { c = c + 1 }
+        i = i + 1
+    }
+    return c
+}
+
+// Step 3 cycle 64 — array filter + fold (extends callback POC).
+// `if keep { ... }` on a HexaVal lowers to `if (hexa_truthy(keep))`.
+// `fn_v(a, b)` (2-arg) lowers to `hexa_call2(fn_v, a, b)`.
+pub fn rt_array_filter(arr: HexaVal, fn_v: HexaVal) -> HexaVal {
+    let mut out: [float] = []
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        let item = arr[i]
+        let keep = fn_v(item)
+        if keep {
+            out = out.push(item)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+pub fn rt_array_fold(arr: HexaVal, init: HexaVal, fn_v: HexaVal) -> HexaVal {
+    let mut acc = init
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        acc = fn_v(acc, arr[i])
+        i = i + 1
+    }
+    return acc
+}
+
+// Step 3 cycle 63 — array map (callback POC). Unlocks the callback
+// family by using `HexaVal` as the hexa-source param type for the fn —
+// codegen lowers `fn_v(item)` to `hexa_call1(fn_v, item)` (verified
+// via ubu-2 transpile test). Use idiomatic hexa for array ops (`[]` /
+// `len()` / `arr[i]` / `.push()`) — calling C primitives directly by
+// name (`hexa_array_new` etc.) causes codegen to treat them as HexaVal
+// function pointers and emit `hexa_call0(...)` wrappers that mismatch
+// the C signatures.
+pub fn rt_array_map(arr: HexaVal, fn_v: HexaVal) -> HexaVal {
+    let mut out: [float] = []
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        out = out.push(fn_v(arr[i]))
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 58 — array contains, float fast-path. Returns true if
+// any element of `arr` equals `item`. C wrapper does the all-float
+// guard before dispatch (mixed arrays stay on the polymorphic hexa_eq
+// path). Bool return → int via hexa_truthy bridge in the C wrapper.
+pub fn rt_array_contains_float_b(arr: [float], item: float) -> bool {
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        if arr[i] == item { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Step 3 cycle 34 — array fill. Returns a NEW array of the same length
+// with every slot set to `v` (interpreter contract: non-mutating).
+pub fn rt_array_fill_float(arr: [float], v: float) -> [float] {
+    let mut out: [float] = []
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        out = out.push(v)
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 33 — array index_of. Linear scan, returns -1 if absent.
+// Float fast-path: both array and item are typed float, `==` is value-eq.
+pub fn rt_array_index_of_float(arr: [float], item: float) -> int {
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        if arr[i] == item { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Step 3 cycle 32 — array unique (dedupe by `==`). O(n²) float fast-path.
+// C-side extern was wired in cycle 29 but the hexa body was never landed —
+// latent link-failure if any compiled hexa code calls `.unique()` on a
+// float array. This cycle closes that gap.
+pub fn rt_array_unique_float(arr: [float]) -> [float] {
+    let mut out: [float] = []
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        let v = arr[i]
+        let mut seen = false
+        let m = len(out)
+        let mut j = 0
+        while j < m {
+            if out[j] == v { seen = true; break }
+            j = j + 1
+        }
+        if !seen { out = out.push(v) }
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 31 — array sliding window (step 1, size n).
+//   window([1,2,3,4], 2) → [[1,2], [2,3], [3,4]]
+// n <= 0 or n > len → empty (C body contract). Float-only path.
+pub fn rt_array_window_float(arr: [float], n: int) -> [[float]] {
+    let mut out: [[float]] = []
+    let arr_len = len(arr)
+    if n <= 0 { return out }
+    if n > arr_len { return out }
+    let mut i = 0
+    while i + n <= arr_len {
+        let mut win: [float] = []
+        let mut j = 0
+        while j < n {
+            win = win.push(arr[i + j])
+            j = j + 1
+        }
+        out = out.push(win)
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 26 — array chunk (n-sized window slicing).
+//   chunk([1,2,3,4,5], 2) → [[1,2], [3,4], [5]]
+// n <= 0 → empty (C body contract). Float-only path.
+pub fn rt_array_chunk_float(arr: [float], n: int) -> [[float]] {
+    let mut out: [[float]] = []
+    if n <= 0 { return out }
+    let arr_len = len(arr)
+    let mut i = 0
+    while i < arr_len {
+        let mut chunk: [float] = []
+        let mut stop = i + n
+        if stop > arr_len { stop = arr_len }
+        let mut j = i
+        while j < stop {
+            chunk = chunk.push(arr[j])
+            j = j + 1
+        }
+        out = out.push(chunk)
+        i = i + n
+    }
+    return out
+}
+
+// Step 3 cycle 25 — array reverse + swap + zip (float ops). All three
+// share the cycle 22-24 dispatch pattern via _arr_all_float at the C
+// wrapper.
+pub fn rt_array_reverse_float(arr: [float]) -> [float] {
+    let mut out: [float] = []
+    let n = len(arr)
+    let mut i = n - 1
+    while i >= 0 {
+        out = out.push(arr[i])
+        i = i - 1
+    }
+    return out
+}
+
+pub fn rt_array_swap_float(arr: [float], i: int, j: int) -> [float] {
+    let mut out: [float] = []
+    let n = len(arr)
+    let oob = i < 0 || j < 0 || i >= n || j >= n
+    let mut k = 0
+    while k < n {
+        if !oob && k == i { out = out.push(arr[j]) }
+        else if !oob && k == j { out = out.push(arr[i]) }
+        else { out = out.push(arr[k]) }
+        k = k + 1
+    }
+    return out
+}
+
+pub fn rt_array_zip_float(a: [float], b: [float]) -> [[float]] {
+    let mut out: [[float]] = []
+    let na = len(a)
+    let nb = len(b)
+    let mut k = na
+    if nb < k { k = nb }
+    let mut i = 0
+    while i < k {
+        let mut pair: [float] = []
+        pair = pair.push(a[i])
+        pair = pair.push(b[i])
+        out = out.push(pair)
+        i = i + 1
+    }
+    return out
+}
+
 // Step 3 cycle 24 — array take/drop (float copy slices). Same dispatch
 // pattern as cycle 22-23 (C wrapper does _arr_all_float scan, falls back
 // to polymorphic path for mixed arrays).
@@ -130,6 +734,22 @@ pub fn rt_array_drop_float(arr: [float], n: int) -> [float] {
     let mut i = start
     while i < arr_len {
         out = out.push(arr[i])
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 30 — array rotate(k). k>0 shifts left, k<0 right.
+// k normalized mod n. Matches interpreter at hexa_full.hexa:15486-15499.
+pub fn rt_array_rotate_float(arr: [float], k: int) -> [float] {
+    let mut out: [float] = []
+    let n = len(arr)
+    if n == 0 { return out }
+    let mut kk = k % n
+    if kk < 0 { kk = kk + n }
+    let mut i = 0
+    while i < n {
+        out = out.push(arr[(i + kk) % n])
         i = i + 1
     }
     return out

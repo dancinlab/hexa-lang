@@ -1,0 +1,328 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// test/flame_ag_extract_sd13_compile_test.hexa — flame autograd-auto SD13
+//
+// Falsifier:
+//   F-RFC043-AUTOGRAD-AUTO-SD13-SIGMOID-COMPILE-RUN
+//     The reverse walker's emit step produces hexa source that is
+//     ACTUALLY COMPILABLE and ACTUALLY RUNNABLE for a fwd whose bwd
+//     references NON-PARAM fwd-cache slots — closing the SD12 carve-out
+//     for sigmoid / sigmoid-div / multi-use shapes. Concretely the SD6
+//     reverse_walk_v2 on the sigmoid fwd produces a bwd AST whose
+//     `_fwd<id>` references point at intermediate (non-Param) nodes
+//     (`_fwd3 = exp(u)`, `_fwd5 = d = 1+exp`, `_fwd7 = s = 1/d`).
+//     SD13's `ag_extract_emit_program_x_dy_with_fwd_cache` materialises
+//     EVERY fwd-cache slot 0..fwd_root inside the emitted `fn main()`
+//     as `let _fwd<id>: float = <fwd_expr>` bindings (in slot-id order
+//     = topological order), then calls the bwd fn passing every slot
+//     as a positional argument. The emitted source is written to
+//     `/tmp/sd13_sigmoid_bwd.hexa`, built via `hexa.real build`, and
+//     invoked as `/tmp/sd13_sigmoid_bwd <x_repr> <dy_repr>` for each
+//     LCG-seeded (x, dy) pair (len=32). The `.to_float()`-parsed
+//     `dx_compiled[i]` is compared three-way against:
+//       (A) the in-process AST-interpret value
+//           `ag_extract_interpret_v2(arena, bwd_root, x, dy, fwd_cache)`,
+//       (B) the hand-derived reference `dx = dy × s × (1−s)` where
+//           `s = 1/(1+exp(-x))` (sigmoid_bwd_manual from
+//           test/flame_ag_extract_test.hexa).
+//
+// SD13 honest scope (task brief §6, g3 — SD6 1-ULP zone surfaces):
+//   The walker emits `dy × s × e/d` (algebraic identity 1−s ≡ e/d but
+//   DIFFERENT IEEE-754 trajectory than the textbook `dy × s × (1−s)`).
+//   The SD6 selftest measured max|Δ| = 5.55e-17 (1 ULP) between
+//   in-process interpret and the hand-derived reference. SD13 inherits
+//   this byte-identically at the compile boundary:
+//     - interp ≡ compiled        (max|Δ| = 0.0 — both paths execute
+//                                 the same _fwd cache materialisation
+//                                 + same combinator sequence)
+//     - interp vs hand           (max|Δ| ≈ 5.55e-17 — SD6's ULP zone)
+//     - compiled vs hand         (max|Δ| ≈ 5.55e-17 — same ULP zone)
+//   This is a CONFIRMATION of SD6's finding at compile time, NOT a
+//   regression. The SD13 PASS gate requires interp ≡ compiled exactly
+//   (the SD13 deliverable) and the interp-vs-hand and compiled-vs-hand
+//   deltas to be within the SD6 honest tolerance (10× the 5.55e-17 =
+//   5.55e-16). Anything beyond that is a real regression.
+//
+// Why this matters (north-star ① — fwd-cache materialisation primitive):
+//   SD11/SD12 closed the loop for fwds whose bwd references ONLY Params.
+//   SD13 generalises to fwds whose bwd needs PRECOMPUTED INTERMEDIATES
+//   (the "save forward, reuse in backward" pattern — Griewank-Walther
+//   §3.2). The new `emit_program_x_dy_with_fwd_cache` helper is the
+//   architectural lift: every fwd-AST slot gets a `let _fwd<id>: float`
+//   binding in the emitted main(), in slot-id (topological) order. The
+//   bwd fn signature gains one extra `_fwd<id>: float` parameter per
+//   slot, and the walker-emitted body's `_fwd<id>` lexemes resolve
+//   against those parameters. Same SD11 round-trip lemma carries over
+//   (json_stringify → strtod → IEEE-754 byte-eq).
+//
+// Round-trip invariant for byte-eq (interp ≡ compiled):
+//   compiled_binary(json_stringify(x), json_stringify(dy)).first_line_as_float()
+//     ≡  ag_extract_interpret_v2(arena, bwd_root, x, dy, fwd_cache)
+//   because:
+//     (a) `emit_fwd_let` mirrors `eval_fwd`'s scalar op sequence
+//         byte-identically — Param leaf binds `x` verbatim, BinOp_ADD
+//         emits `(_fwda + _fwdb)` matching `va + vb`, etc.;
+//     (b) the bwd fn body emitted by `emit_expr` references `_fwd<id>`
+//         lexemes that resolve to the corresponding extra parameters,
+//         which carry the byte-identical fwd values;
+//     (c) `json_stringify` + `.to_float()` is the SD11 shortest-roundtrip
+//         strtod-safe codec.
+//
+// Atlas cite:
+//   Griewank & Walther §3.2 Algorithm 3.6 (reverse-mode AD emit with
+//   cached fwd values) + Steele-White 1990 (binary64 shortest-roundtrip
+//   decimal lemma).
+//
+// Exit codes:
+//   0  PASS — F-RFC043-AUTOGRAD-AUTO-SD13-SIGMOID-COMPILE-RUN green
+//             (interp ≡ compiled; interp-vs-hand and compiled-vs-hand
+//             within SD6's 1-ULP honest zone).
+//   91 FAIL — hexa-build of the emitted source failed.
+//   92 FAIL — compiled-binary invocation failed (rc ≠ 0).
+//   93 FAIL — interp ≢ compiled (SD13 PRIMARY: walker-compile boundary
+//             broken).
+//   94 FAIL — interp-vs-hand OR compiled-vs-hand exceeded SD6's honest
+//             tolerance (5.55e-16, 10× the observed 1-ULP zone).
+//
+// CPU-only, $0. Surgical — only new helper in stdlib/flame/ag_extract.hexa,
+// plus this test file + stdlib/flame/PLAN.md entry.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/ag_extract"
+
+fn sd13_dt_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// Hand-derived reference: sigmoid_bwd via closed-form `dy × s × (1−s)`.
+// Computes the fwd in the SAME op order as the fwd AST builder so the
+// fwd value itself is byte-identical to the walker-cached forward (this
+// matches the SD6 hand-written sigmoid_bwd_manual). The byte-eq question
+// reduces to whether the bwd combinator differs — algebraic identity
+// `1−s ≡ e/d` but a different IEEE-754 trajectory by ≤ 1 ULP.
+fn sigmoid_bwd_hand(x: float, dy: float) -> float {
+    let u = 0.0 - x
+    let e = dt_exp(u)
+    let d = 1.0 + e
+    let s = 1.0 / d
+    return dy * s * (1.0 - s)
+}
+
+println("=== flame autograd-auto SD13 selftest (ag_extract · sigmoid walker-emit → fwd-cache materialisation → hexa-build → compiled-binary round-trip) ===")
+
+// ─── step 1: build sigmoid fwd + reverse-walk v2 ────────────────────────
+let arena = ag_extract_arena_new()
+let cache_meta = t_zeros(4)
+let fwd_root = ag_extract_build_sigmoid_fwd(arena, cache_meta)
+println("sigmoid fwd AST built — root (s) node id = " + to_string(fwd_root))
+println("  cached intermediates: s=" + to_string(to_int(t_get(cache_meta, 0)))
+      + ", d=" + to_string(to_int(t_get(cache_meta, 1)))
+      + ", e=" + to_string(to_int(t_get(cache_meta, 2)))
+      + ", u=" + to_string(to_int(t_get(cache_meta, 3))))
+
+let upstream = ag_extract_mk_var_upstream(arena)
+let bwd_root = ag_extract_reverse_walk_v2(arena, fwd_root, upstream, 0)
+println("reverse-mode walk v2 complete — bwd AST root id = " + to_string(bwd_root))
+
+// ─── step 2: SD13 emit — fwd-cache materialised in main() ──────────────
+let emitted_source = ag_extract_emit_program_x_dy_with_fwd_cache(
+    arena, fwd_root, bwd_root, "sigmoid_bwd_auto_emitted")
+println("emitted hexa-lang program (sigmoid bwd + main with fwd-cache materialisation):")
+println("--- BEGIN /tmp/sd13_sigmoid_bwd.hexa ---")
+println(emitted_source)
+println("--- END /tmp/sd13_sigmoid_bwd.hexa ---")
+
+// ─── step 3: write source + locate hexa.real ────────────────────────────
+let src_path = "/tmp/sd13_sigmoid_bwd.hexa"
+let bin_path = "/tmp/sd13_sigmoid_bwd"
+write_file(src_path, emitted_source)
+println("wrote emitted source to " + src_path)
+
+// SD11 3-tier fallback for hexa.real binary discovery.
+let hexa_lang_dir = env("HEXA_LANG")
+let mut hexa_real_bin = ""
+if len(hexa_lang_dir) > 0 {
+    let cand_a = hexa_lang_dir + "/hexa.real"
+    if file_exists(cand_a) { hexa_real_bin = cand_a }
+}
+if len(hexa_real_bin) == 0 {
+    let home = env("HOME")
+    if len(home) > 0 {
+        let cand_b = home + "/.hx/bin/hexa_real"
+        if file_exists(cand_b) { hexa_real_bin = cand_b }
+    }
+}
+if len(hexa_real_bin) == 0 {
+    let cand_c = "/Users/ghost/core/hexa-lang/hexa.real"
+    if file_exists(cand_c) { hexa_real_bin = cand_c }
+}
+if len(hexa_real_bin) == 0 {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD13-SIGMOID-COMPILE-RUN  cannot locate hexa.real toolchain binary.")
+    exit(91)
+}
+println("resolved hexa.real -> " + hexa_real_bin)
+
+// ─── step 4: hexa.real build (SD11 deadlock-safe exec pattern) ─────────
+let _ = exec("rm -f " + bin_path + " 2>/dev/null")
+let build_cmd = hexa_real_bin + " build " + src_path + " -o " + bin_path
+              + " 2>&1; echo __RC=$?"
+println("running: " + build_cmd)
+let build_combined = to_string(exec(build_cmd))
+let rc_marker_at = build_combined.index_of("__RC=")
+let mut build_rc = 1
+let mut build_stdout = build_combined
+if rc_marker_at >= 0 {
+    let rc_tail = build_combined.substring(rc_marker_at + 5, len(build_combined)).trim()
+    try { build_rc = to_int(rc_tail) } catch e { build_rc = 1 }
+    build_stdout = build_combined.substring(0, rc_marker_at)
+}
+println("build rc = " + to_string(build_rc))
+if build_rc != 0 {
+    println("build combined output (merged stdout+stderr):")
+    println(build_stdout)
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD13-SIGMOID-COMPILE-RUN  hexa-build failed (rc=" + to_string(build_rc) + ") on emitted source.")
+    exit(91)
+}
+if file_exists(bin_path) == false {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD13-SIGMOID-COMPILE-RUN  build rc=0 but binary missing.")
+    exit(91)
+}
+println("build OK — binary at " + bin_path)
+
+// ─── step 5: LCG-seeded inputs (len=32) ────────────────────────────────
+// Same seeds as SD5/SD6/SD11 (4242 for x∈[-1,1], 31337 for dy∈[0,1)) so
+// the input corpus mirrors the proven byte-eq lineage.
+let LEN = 32
+let x_arr = t_zeros(LEN)
+t_fill_lcg(x_arr, LEN, 4242, 2.0)
+let mut i_shift = 0
+while i_shift < LEN {
+    t_set(x_arr, i_shift, t_get(x_arr, i_shift) - 1.0)
+    i_shift = i_shift + 1
+}
+let dy_arr = t_zeros(LEN)
+t_fill_lcg(dy_arr, LEN, 31337, 1.0)
+
+let mut n_pos = 0
+let mut n_neg = 0
+let mut i_check = 0
+while i_check < LEN {
+    let v = t_get(x_arr, i_check)
+    if v > 0.0 { n_pos = n_pos + 1 }
+    if v < 0.0 { n_neg = n_neg + 1 }
+    i_check = i_check + 1
+}
+println("input span: " + to_string(n_pos) + " positives, " + to_string(n_neg) + " negatives (both sigmoid branches exercised)")
+
+// ─── step 6: three-way evaluation loop ──────────────────────────────────
+let dx_interp_arr   = t_zeros(LEN)
+let dx_hand_arr     = t_zeros(LEN)
+let dx_compiled_arr = t_zeros(LEN)
+let fwd_cache = t_zeros(64)
+
+let mut i = 0
+while i < LEN {
+    let xi  = t_get(x_arr, i)
+    let dyi = t_get(dy_arr, i)
+
+    // oracle A: in-process AST interpret v2 (with fwd-cache populated)
+    let _ = ag_extract_eval_fwd(arena, fwd_root, xi, fwd_cache)
+    let dx_a = ag_extract_interpret_v2(arena, bwd_root, xi, dyi, fwd_cache)
+    t_set(dx_interp_arr, i, dx_a)
+
+    // oracle B: hand-derived `dy × s × (1−s)` (sigmoid_bwd_manual idiom)
+    let dx_b = sigmoid_bwd_hand(xi, dyi)
+    t_set(dx_hand_arr, i, dx_b)
+
+    // oracle C: invoke compiled binary
+    let cmd = bin_path + " " + json_stringify(xi) + " " + json_stringify(dyi)
+            + " 2>&1; echo __RC=$?"
+    let combined = to_string(exec(cmd))
+    let rc_at = combined.index_of("__RC=")
+    let mut r_rc = 1
+    let mut r_stdout = combined
+    if rc_at >= 0 {
+        let rc_tail = combined.substring(rc_at + 5, len(combined)).trim()
+        try { r_rc = to_int(rc_tail) } catch e { r_rc = 1 }
+        r_stdout = combined.substring(0, rc_at)
+    }
+    if r_rc != 0 {
+        println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD13-SIGMOID-COMPILE-RUN  compiled binary returned rc=" + to_string(r_rc) + " at i=" + to_string(i) + " (x=" + to_string(xi) + ", dy=" + to_string(dyi) + "). combined: " + r_stdout)
+        exit(92)
+    }
+    let dx_c = r_stdout.trim().to_float()
+    t_set(dx_compiled_arr, i, dx_c)
+
+    i = i + 1
+}
+println("evaluated 32 input pairs across three oracles (interp / hand / compiled)")
+
+// ─── step 7: pairwise max|Δ| ────────────────────────────────────────────
+let mut max_ic = 0.0  // interp vs compiled  (SD13 primary: MUST be 0.0)
+let mut max_ih = 0.0  // interp vs hand      (SD6 1-ULP zone expected)
+let mut max_ch = 0.0  // compiled vs hand    (SD6 1-ULP zone expected)
+let mut j = 0
+while j < LEN {
+    let a = t_get(dx_interp_arr, j)
+    let b = t_get(dx_hand_arr, j)
+    let c = t_get(dx_compiled_arr, j)
+    let dac = sd13_dt_abs(a - c)
+    let dab = sd13_dt_abs(a - b)
+    let dbc = sd13_dt_abs(b - c)
+    if dac > max_ic { max_ic = dac }
+    if dab > max_ih { max_ih = dab }
+    if dbc > max_ch { max_ch = dbc }
+    j = j + 1
+}
+
+println("three-way max|Δ|:")
+println("  interp   vs compiled : " + to_string(max_ic) + "    (SD13 primary — must be 0.0)")
+println("  interp   vs hand     : " + to_string(max_ih) + "    (SD6 1-ULP zone — expected ≈ 5.55e-17)")
+println("  compiled vs hand     : " + to_string(max_ch) + "    (SD6 1-ULP zone — expected ≈ 5.55e-17)")
+
+// First 4 rows transparent audit
+println("first 4 rows (i, x, dy, dx_interp, dx_compiled, dx_hand):")
+let mut dbg = 0
+while dbg < 4 {
+    let xi = t_get(x_arr, dbg)
+    let dyi = t_get(dy_arr, dbg)
+    let a = t_get(dx_interp_arr,   dbg)
+    let c = t_get(dx_compiled_arr, dbg)
+    let b = t_get(dx_hand_arr,     dbg)
+    println("  i=" + to_string(dbg)
+          + "  x=" + to_string(xi)
+          + "  dy=" + to_string(dyi)
+          + "  dx_interp=" + to_string(a)
+          + "  dx_compiled=" + to_string(c)
+          + "  dx_hand=" + to_string(b))
+    dbg = dbg + 1
+}
+
+// SD13 PRIMARY gate: interp ≡ compiled byte-identically. The walker
+// emits the same `_fwd<id>` references that interpret_v2 reads from
+// the fwd cache; emit_fwd_let mirrors eval_fwd's scalar trajectory;
+// json_stringify+strtod is round-trip safe — so byte-eq must hold.
+if max_ic != 0.0 {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD13-SIGMOID-COMPILE-RUN  interp vs compiled max|Δ| = " + to_string(max_ic) + " ≠ 0.0 — fwd-cache materialisation diverges from interpret_v2's fwd_cache read. SD13 PRIMARY broken.")
+    exit(93)
+}
+
+// SD13 HONEST gate: SD6 1-ULP zone is the SAME at compile time. If
+// either interp-vs-hand or compiled-vs-hand exceeds 10× the observed
+// 5.55e-17 (= 5.55e-16), that's a real regression beyond the 1-ULP
+// algebraic-identity envelope.
+let sd13_honest_tolerance = 5.55e-16
+if max_ih > sd13_honest_tolerance {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD13-SIGMOID-COMPILE-RUN  interp vs hand max|Δ| = " + to_string(max_ih) + " exceeds SD6 honest tolerance (" + to_string(sd13_honest_tolerance) + ") — SD6 regression?")
+    exit(94)
+}
+if max_ch > sd13_honest_tolerance {
+    println("FAIL  F-RFC043-AUTOGRAD-AUTO-SD13-SIGMOID-COMPILE-RUN  compiled vs hand max|Δ| = " + to_string(max_ch) + " exceeds SD6 honest tolerance (" + to_string(sd13_honest_tolerance) + ") — fwd-cache materialisation introduced ULP drift?")
+    exit(94)
+}
+
+println("PASS  F-RFC043-AUTOGRAD-AUTO-SD13-SIGMOID-COMPILE-RUN  primary gate (interp ≡ compiled, max|Δ| = 0.0); SD6 1-ULP zone confirmed at compile boundary (interp/compiled vs hand within " + to_string(sd13_honest_tolerance) + ").")
+println("=== SD13 PASS — fwd-cache materialisation primitive WORKS for sigmoid; 1-ULP zone is HONEST INHERITANCE from SD6 (algebraic identity 1−s ≡ e/d, different IEEE-754 trajectory) ===")
+exit(0)

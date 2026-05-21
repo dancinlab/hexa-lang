@@ -957,3 +957,669 @@ For each Tier-A sub-phase:
   hexa_floor + hexa_ceil + hexa_u_floor + hexa_clamp) · **8 hexa
   primitives** (rt_abs_int/_float, rt_floor, rt_ceil, rt_u_floor,
   rt_clamp, rt_imin, rt_imax, rt_sign)
+
+### 2026-05-21 — step 3 cycles 4-30 condensed catchup (15 commits)
+
+Per-cycle commit messages carry full deltas; this entry consolidates so
+the RUNTIME.md log doesn't lag behind code. All 15 cycles preserved
+aprime_cc smoke exit(42) and the externs baseline; no S3 regressions.
+
+- cycle 4 (`c588b13c`): `hexa_round` → `rt_round` (half-away-from-zero)
+- cycle 5 (`0dec61a5`): `hexa_math_min/max` → `rt_min_float/rt_max_float`
+- cycle 6 (`b24d4f80`): `hexa_pow` int branch → `rt_pow_int` (binary expo)
+- cycle 7-9 (math.hexa): `rt_sqrt` (Newton-Raphson), `rt_tan`, `rt_log2`,
+  `rt_log10`, `rt_tanh` (libm-free transcendentals)
+- cycle 10 (`4601fdaf`): `isnan/isinf/isfinite` → IEEE-754 classifiers
+  via `(x != x)` + DBL_MAX comparison
+- cycle 11 (math.hexa): `rt_pow_float` composes rt_exp + rt_log
+- cycle 12 (`088a48c1`): `hexa_one_hot` → `rt_one_hot`
+- cycle 13 (`c010fc9e`): `hexa_to_float` → `rt_to_float` pass-through
+- cycle 14 (math.hexa): `rt_lgamma` (Stirling series w/ shift)
+- cycle 15-17 (math.hexa): `rt_softmax` (stable max-shift), `rt_rms_norm_*`
+  (scalar/array gamma), `rt_silu`, `rt_gelu` (tanh approx), `rt_argmax`
+- cycle 18-19 (math.hexa): `rt_matvec`, `rt_matmul` (row-major naive)
+- cycle 20 (`c9f226e4`): `hexa_array_mean` → `rt_array_mean`
+- cycle 22 (`0abb164d`): `array_min/max float` → `rt_array_min_float/max_float`
+- cycle 23 (`485bb915`): `array_sum/product float` → `rt_array_sum_float/product_float`
+- cycle 24 (`a6dab6b1`): `array_take/drop float` → `rt_array_take_float/drop_float`
+- cycle 25 (`a9311eb4`): `reverse/swap/zip float` → `rt_array_reverse/swap/zip_float`
+- cycle 26 (`6f54b924`): `array_chunk float` → `rt_array_chunk_float`
+- cycle 30 (`ef4b04bb`): `array_rotate float` → `rt_array_rotate_float`
+
+Pattern across all 15 cycles:
+- `#ifndef HEXA_HAS_HEXA_RT_STDLIB` keeps the pure-C body for the
+  smoke-test path (prog.hexa links runtime.c standalone w/o the define)
+- `#else` branch declares `extern HexaVal rt_<name>(...)` and dispatches
+  via `_arr_all_float(arr)` for array-typed entry points (float-typed
+  arrays take the hexa-source path; mixed arrays stay on the C body
+  to avoid HexaVal-tag introspection from the hexa side)
+- step 4 cycle 21 (`52d1a2f5`) was the lone non-HI port (`hexa_fma` is
+  CORE-tier in runtime_core.c) — landed mid-stream to validate the
+  same two-mode pattern works against runtime_core.c too; accepted
+  the 1-vs-2 rounding precision trade-off
+
+Blocker noted mid-stream: hot-path `cmp/add/sub/mul/div` ports cause
+hexa_v2 transpile lowering infinite recursion (`rt_cmp_lt_int` call
+chain). Workaround: the C bodies `hexa_cmp_lt` etc. stay; hexa source
+only uses `<` directly. `_arr_all_float` dispatch remains safe because
+it operates on HexaVal tags from C.
+
+- step-3 cumulative: **42 HI-tier fns ported** across numeric.hexa +
+  math.hexa (per memory snapshot). aprime_cc smoke exit(42) PASS at
+  each cycle. Externs baseline 24 (post PR #251 exec stubs restored
+  for runtime cycle 66 fix — not a regression in this campaign)
+
+### 2026-05-21 — step 3 cycle 31: hexa_array_window → rt_array_window_float
+
+- ✅ `hexa_array_window` (self/runtime.c:3533) ported. Sliding window
+  of size n, step 1. `rt_array_window_float` in numeric.hexa follows
+  the cycle-26 chunk pattern (n ≤ 0 or n > len → empty)
+- `#ifndef HEXA_HAS_HEXA_RT_STDLIB` two-mode wiring + `_arr_all_float`
+  dispatch identical to chunk/rotate
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,536 B
+
+### 2026-05-21 — step 3 cycle 32: rt_array_unique_float (close latent cycle-29 gap)
+
+- ✅ Latent link-failure closed. `self/runtime.c:3589` had declared
+  `extern HexaVal rt_array_unique_float` since cycle 29, but the
+  hexa-side implementation was never landed — a `.unique()` call on a
+  float array would have failed at clang link. This cycle lands the
+  O(n²) dedupe body in `stdlib/runtime/numeric.hexa` (same algorithm
+  as the C path, hexa `==` substitutes for `hexa_eq`)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved)
+- commit `408d38a7`
+
+### 2026-05-21 — step 3 cycle 33: hexa_array_index_of → rt_array_index_of_float
+
+- ✅ `hexa_array_index_of` (self/runtime.c:3069) ported. Dispatches to
+  `rt_array_index_of_float` only when both the array is all-float and
+  the search item is float; mixed-type / non-float searches stay on
+  the polymorphic C body. Typed `==` substitutes for `hexa_eq`
+- Added a `static int _arr_all_float(HexaVal arr);` forward
+  declaration inside the `#else` branch — index_of (line 3073) sits
+  ~200 lines above `_arr_all_float` (line 3273) and would otherwise
+  fail to compile
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,504 B
+- commit `5d2f9420`
+
+### 2026-05-21 — step 3 cycle 34: hexa_array_fill → rt_array_fill_float
+
+- ✅ `hexa_array_fill` (self/runtime.c:3337) ported. Returns a NEW
+  array of the same length with every slot set to `v`. Float
+  fast-path dispatches to `rt_array_fill_float` only when both the
+  source array is all-float and the fill value is float; mixed-type
+  arrays stay on the polymorphic C body
+- Two-mode `#ifndef HEXA_HAS_HEXA_RT_STDLIB` wiring + `_arr_all_float`
+  dispatch identical to cycle 33 (index_of) — `_arr_all_float`
+  forward decl already in scope from the earlier cycle-33 edit
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,664 B
+
+### 2026-05-21 — step 3 cycle 35: hexa_array_slice → rt_array_slice_float
+
+- ✅ `hexa_array_slice` (self/runtime.c:2995) array branch ported.
+  Float fast-path dispatches to `rt_array_slice_float` when the array
+  is all-float. Mixed-type arrays stay on the polymorphic C body
+- Polymorphic str branch (1-arg form + negative-index normalization)
+  stays in C unchanged — `rt_array_slice_float` only owns the array
+  case
+- Added an in-branch `static int _arr_all_float(HexaVal arr);` forward
+  decl — slice (L2995) sits ~80 lines above the cycle-33 forward decl
+  (L3081), so its `#else` branch needs its own
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,712 B
+
+### 2026-05-21 — step 3 cycle 36: __hexa_range_array → rt_range_int_excl/incl
+
+- ✅ `__hexa_range_array` (self/runtime.c:3030) ported. Two hexa entry
+  points (`rt_range_int_excl` + `rt_range_int_incl`) match the C
+  body's plain-C `int inclusive` switch — threading a hexa-bool
+  through the ABI would have been heavier than the split
+- Unconditional dispatch (no array-type predicate) — range output is
+  always pure int, no float fast-path needed
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,664 B
+
+### 2026-05-21 — step 3 cycle 37: hexa_array_interleave → rt_array_interleave_float
+
+- ✅ `hexa_array_interleave` (self/runtime.c:3755) ported. Alternates
+  items from both arrays up to max length; when one runs out, the
+  other's remaining items continue (interpreter contract). Float
+  fast-path dispatches when **both** arrays are all-float
+- Mixed-type or one-non-float arrays stay on the polymorphic C body.
+  Non-array a/b short-circuits (degenerate cases) stay C-side before
+  any dispatch
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,792 B
+
+### 2026-05-21 — step 3 cycle 72: hexa_char_code (byte at idx, 0 on OOB)
+
+- ✅ `hexa_char_code` (self/runtime.c:2540) ported. Distinct from
+  `hexa_str_char_code_at` (which returns -1 on OOB + wraps negative
+  idx); `hexa_char_code` returns 0 on OOB with no neg-idx wrap
+- No recursion trap: `s.byte_at(idx)` → `hexa_str_byte_at` →
+  `hexa_str_char_code_at` (still C-body per cycle 52). The chain
+  terminates at C, no infinite loop
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,165,048 B
+
+### 2026-05-21 — step 3 cycle 71: hexa_array_flatten (all-array fast path, mixed-type stays C)
+
+- ✅ `hexa_array_flatten` (self/runtime.c:3447) gains an all-array
+  fast path. C wrapper pre-checks every element via `HX_IS_ARRAY` and
+  dispatches to `rt_array_flatten_aoa` only when every item is an
+  array. Mixed-type input (some items array, some scalar) stays on
+  the polymorphic C body since hexa source can't observe runtime tags
+- Hexa source iterates `arr[i]` (an array), then nested loop pushes
+  `sub[j]` items into output. Pure data — no callback
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,936 B
+
+### 2026-05-21 — step 3 cycle 70: hexa_array_sample (random pick with replacement)
+
+- ✅ `hexa_array_sample` (self/runtime.c:4077) ported. Uses the
+  `random()` builtin (returns float in [0, 1)). The C wrapper handles
+  the HexaVal→int coercion for `n`; the hexa fn receives int directly
+- Empty arr or n ≤ 0 short-circuit C-side (avoid the hexa fn entry)
+- Closes one of the "uses rand()" candidates previously skipped
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,904 B
+
+### 2026-05-21 — step 3 cycle 69: hexa_array_sort_by (callback key-extractor, insertion sort)
+
+- ✅ `hexa_array_sort_by` (self/runtime_core.c:4540) ported. Uses
+  stable insertion sort with parallel `sorted_keys`/`sorted_items`
+  arrays. Keys computed once per element via `key_fn(item)` callback.
+  Comparison goes through `hexa_cmp_le` (handles int/float/string)
+- Stable via `sorted_keys[j] <= k` test (equal keys preserve original
+  order — matches the C body's "ties → left first" merge sort
+  semantic)
+- O(n²) vs the C body's O(n log n) bottom-up merge sort. Acceptable
+  for small arrays on the hot self-host path
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,984 B
+
+### 2026-05-21 — step 3 cycle 68: hexa_array_enumerate (pair-output, no-callback)
+
+- ✅ `hexa_array_enumerate` (3347) ported. Builds an array of
+  `[idx, item]` pair-arrays. Hexa source pushes `i` (auto-coerced to
+  HexaVal int) + `arr[i]` (HexaVal) into a fresh `pair` array, then
+  pushes the pair into `out`
+- No predicate / no polymorphic tag check — pure data fn (closes one
+  of the long-standing "pair output awkward" candidates from earlier
+  cycle planning)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,904 B
+
+### 2026-05-21 — step 3 cycle 67: hexa_array_scan + hexa_array_partition (callback returning arrays)
+
+- ✅ `hexa_array_scan` (3881) ported. Builds intermediate-accumulator
+  array starting with init; each iteration `acc = fn(acc, item)`
+  + push acc. Hexa source uses 2-arg callback `fn_v(acc, item)` →
+  `hexa_call2(fn_v, acc, item)`
+- ✅ `hexa_array_partition` (3818) ported. Splits into [matching,
+  rest] 2-element outer array. Hexa source builds two inner `[float]`
+  arrays then pushes both into an outer array — `out.push(yes)`
+  works at runtime because push accepts any HexaVal (the `[float]`
+  type annotation is only a codegen hint for `[]` lowering)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,904 B
+
+### 2026-05-21 — step 3 cycle 66: hexa_array_find + hexa_array_for_each (find via _index helper)
+
+- ✅ `hexa_array_for_each` (3443) ported via no-return-type hexa fn —
+  codegen auto-emits `return hexa_void()` at the end (verified
+  cb_voidret POC)
+- ✅ `hexa_array_find` (3279) ported via the `_index` helper pattern:
+  hexa-source `rt_array_find_index` returns `int` (offset or -1), C
+  wrapper resolves to `HX_ARR_ITEMS(arr)[idx]` or `hexa_void()`.
+  Avoids the cycle-63 trap (calling `hexa_void()` from hexa source
+  produces `hexa_call0(hexa_void)` C wrapper — wrong)
+- `flat_map` NOT in this batch — needs runtime-tag check
+  `HX_IS_ARRAY(sub)` to decide flatten-vs-push, which hexa source
+  can't observe
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,165,064 B
+
+### 2026-05-21 — step 3 cycle 65: hexa_array_any + hexa_array_all + hexa_array_count (predicate batch)
+
+- ✅ All three predicate-callback fns (3200/3211/3222) ported. The
+  map-receiver branch (HX_IS_MAP delegates to hexa_map_any/all/count)
+  stays C-side because hexa source can't observe runtime tags. The
+  array branch dispatches to `rt_array_*_pred` (`_pred` suffix to
+  avoid collision since `hexa_array_count` is also called by
+  `hexa_count_poly`)
+- any: first-truthy short-circuit. all: first-falsy short-circuit
+  (uses `if r { } else { return false }` since `!HexaVal` codegen is
+  uncertain). count: full pass with counter
+- Returns: any/all → bool → HexaVal at C ABI matches `hexa_bool(0/1)`.
+  count → int → HexaVal matches `hexa_int(c)`
+- Parallel-session race: first build attempt failed at step 2 (transient
+  hexa_v2 contention). Retry PASSED
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,165,064 B
+
+### 2026-05-21 — step 3 cycle 64: hexa_array_filter + hexa_array_fold (callback family expansion)
+
+- ✅ `hexa_array_filter` (3134) and `hexa_array_fold` (3144) ported.
+  Uses cycle-63 callback POC pattern. New idioms confirmed:
+  - `if keep { ... }` on HexaVal lowers to `if (hexa_truthy(keep))`
+  - `fn_v(a, b)` 2-arg lowers to `hexa_call2(fn_v, a, b)`
+- Both verified via ubu-2 transpile inspection (`cb_filter.c`,
+  `cb_fold.c`)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,165,032 B
+
+### 2026-05-21 — step 3 cycle 63: 🛸 hexa_array_map (callback POC, unlocks fn-dispatch family)
+
+- ✅ `hexa_array_map` (self/runtime.c:3114) ported. **First successful
+  callback dispatch from hexa source** — `fn_v: HexaVal` param lets
+  the codegen lower `fn_v(item)` to `hexa_call1(fn_v, item)`. Verified
+  by transpile inspection on ubu-2 (`cb_poc2.c` generated correct
+  `hexa_call1(fn_v, hexa_index_get(arr, i))`)
+- Polymorphic: `arr: HexaVal` accepts any array kind; the result's
+  element type matches whatever fn_v returns. Output array type
+  annotation `[float]` is purely for codegen lowering of `[]` →
+  `hexa_array_new()` (the actual items can be any HexaVal)
+- **Trap found + fix**: Calling C primitives by bare name in hexa
+  source (`hexa_array_new()` / `hexa_len(arr)` / `hexa_array_push(...)`
+  / `hexa_index_get(arr, i)`) makes codegen treat them as HexaVal
+  function pointers and emit `hexa_call0/1/2(...)` wrappers. The
+  call0 wrapper passes a C-function-pointer of incompatible signature
+  to hexa_call0's HexaVal param → clang errors. **Fix**: use
+  idiomatic hexa (`[]` / `len(arr)` / `arr[i]` / `out.push(v)`)
+- Unlocks the callback family for future cycles: filter, fold, find,
+  any, all, count, for_each, flat_map, scan, group_by, partition
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,936 B
+
+### 2026-05-21 — step 3 cycle 62: hexa_format → rt_format (single-arg `{}` substitution)
+
+- ✅ `hexa_format` (self/runtime_core.c:5933) ported. Replaces the
+  first `{}` placeholder in `fmt` with the stringified `arg`. The
+  polymorphic `hexa_to_string(arg)` coercion stays C-side; the hexa
+  fn receives both args as strings
+- Hexa source reuses `rt_str_index_of` (cycle 54) for the `{}` lookup,
+  then `s.substring + s.substring + "+"` concat to assemble
+- Returns `fmt` unchanged when no `{}` is present (matches C body's
+  early-return on strstr-NULL)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,904 B
+- Worktree note: edits made in `.claude/worktrees/agent-aeea256c37dd61c79`
+  (main is checked out there; the primary repo dir is on a parallel
+  session's feature branch). [[shared-worktree-branch-hazard]]
+
+### 2026-05-21 — step 3 cycle 61: hexa_format_float_sci → rt_format_float_sci (snprintf "%.*e" replacement)
+
+- ✅ `hexa_format_float_sci` (self/runtime_core.c:6469) ported.
+  Replaces `snprintf(buf, 64, "%.*e", p, v)` with hexa source. Uses
+  `rt_log10` (cycle 8) for the exponent and `rt_format_float_f`
+  (cycle 60) for the mantissa
+- Exponent format: `e±NN` (2-digit zero-padded). Negative numbers
+  emit `-` once, before the mantissa
+- ⚠ **Caveats**: same int64 round-trip limit as cycle 60; mantissa
+  rounding boundary (e.g. 9.999→10.0 with prec=2) is NOT renormalized
+  to bump exponent. Acceptable for non-critical formatting; the C
+  body's snprintf still handles all edge cases
+- Parallel-session transpile race: first build attempt failed at
+  step 2 (transient — `git log -1` showed `4a201dbb` from another
+  session arriving mid-build). Retry PASSED
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,936 B
+
+### 2026-05-21 — step 3 cycle 60: hexa_format_float → rt_format_float_f (snprintf "%.*f" replacement)
+
+- ✅ `hexa_format_float` (self/runtime_core.c:6345) ported. Replaces
+  `snprintf(buf, 64, "%.*f", p, v)` with a hexa-source fixed-precision
+  float→string formatter (split int/frac via 10^p scaling, round
+  half-up, zero-pad fractional digits)
+- Two new private helpers in numeric.hexa: `_rt_int_to_dec_str` and
+  `_rt_int_to_dec_str_pad` (digit-extraction loop using
+  `bytes_to_str_raw`). First int-to-string in this stdlib — reusable
+  for future ports (e.g. integer formatting)
+- ⚠ **Trade-off**: int64 round-trip exact only for values within
+  ±2^53 and prec ≤ 18. Beyond that, integer overflow yields lossy
+  output (matches the typical user precision budget; the C body's
+  snprintf handles all edge cases). Acceptable for the hot self-host
+  path where format precision ≤ 10
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,776 B
+
+### 2026-05-21 — step 3 cycle 59: hexa_array_sort float fast-path (insertion sort, no recursion)
+
+- ✅ `hexa_array_sort` (self/runtime_core.c:4503) gains float fast-path
+  dispatch. When every element is float, `rt_array_sort_float`
+  insertion-sorts in hexa source; mixed-type arrays stay on the
+  polymorphic `qsort + hexa_sort_cmp` path
+- Insertion sort O(n²) chosen over merge-sort to avoid the hexa_v2
+  transpile recursion trap noted at cycles 30 + 52 ([[rt-port-recursion-trap]]).
+  Builds a new sorted array each pass; acceptable for the hot
+  self-host path where most sorted arrays are small. Stable via
+  `sorted[k] <= v` test
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,856 B
+
+### 2026-05-21 — step 3 cycle 58: hexa_array_contains (float fast-path + int-return bridge)
+
+- ✅ `hexa_array_contains` (self/runtime_core.c:6378) gains the
+  float-array fast-path. When `item` is float AND every element of
+  `arr` is float, dispatches to hexa-source `rt_array_contains_float_b`;
+  mixed-type arrays stay on the polymorphic `hexa_eq` path
+- Int return preserved (codegen wraps in `hexa_bool(...)`). Bool
+  return from hexa → int via `hexa_truthy(...) ? 1 : 0` (cycle-56
+  pattern)
+- `_arr_all_float` helper is `static` in runtime.c; inlined here
+  the same way `hexa_array_reverse` (line 4467-4471) does — small
+  cross-TU duplication is the project precedent
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,776 B
+
+### 2026-05-21 — step 3 cycle 57: hexa_str_contains + hexa_str_eq (int-return bridge)
+
+- ✅ `hexa_str_contains` (self/runtime_core.c:4108) and `hexa_str_eq`
+  (4112) gain dispatch via the cycle-56 `_b`-suffix bridge pattern.
+  Both keep int return; hexa-source helpers return bool
+- contains: thin wrapper over cycle-54's `rt_str_index_of` (≥0 ⇒ true)
+- eq: byte-by-byte compare after length check. The pointer-equality
+  fast-path for interned strings stays C-side (hexa source can't
+  observe HX_STR identity — that's a runtime intern-table invariant)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,664 B
+
+### 2026-05-21 — step 3 cycle 56: rt_str_starts_with + rt_str_ends_with (int-return bridge via _b suffix)
+
+- ✅ Both `rt_str_starts_with` and `rt_str_ends_with`
+  (self/runtime_core.c:4121, 4127) gain dispatch. C signatures return
+  plain `int` (codegen wraps in `hexa_bool(rt_str_starts_with(...))`)
+  — so we use new hexa-source names with `_b` suffix
+  (`rt_str_starts_with_b`/`_ends_with_b`) returning bool and bridge
+  via `hexa_truthy(...) ? 1 : 0` in the C wrapper
+- starts_with: byte-by-byte compare first plen bytes
+- ends_with: byte-by-byte compare last sfxlen bytes (offset = slen - sfxlen)
+- New variant of the int-return bridge pattern: when the existing C
+  symbol must keep its int signature (called by codegen directly),
+  the hexa-source helper takes a separate name with `_b` suffix
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,552 B
+
+### 2026-05-21 — step 3 cycle 55: hexa_str_index_of_from + hexa_str_last_index_of (int64_t batch)
+
+- ✅ `hexa_str_index_of_from` (self/runtime_core.c:4172) and
+  `hexa_str_last_index_of` (4189) both ported using the cycle-54
+  int64_t-return bridge pattern (`HX_INT(rt_str_*(...))`)
+- index_of_from: empty needle → `start`; st<0 clamps to 0; st>hlen
+  returns -1. Matches the C body exactly
+- last_index_of: empty needle → `hlen`; nlen>hlen returns -1; overlap-
+  safe scan advances by 1 byte per match (matches C body)
+- ⚠ Race recovered: first cycle-55 staging got wiped by a parallel-
+  session cherry-pick (`063cc728` RFC 075 Metal reduce) that hit
+  conflicts in `compiler/codegen/metal_*.hexa`. Aborted the cherry-
+  pick, re-applied cycle 55, smoke re-PASSED with byte-identical
+  binary size (1,164,376 B) — verifies re-application was correct
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,376 B
+
+### 2026-05-21 — step 3 cycle 54: hexa_str_index_of → rt_str_index_of (int64_t-return bridge POC)
+
+- ✅ `hexa_str_index_of` (self/runtime_core.c:4149) ported. Returns
+  `int64_t` (not HexaVal) at the C ABI — the codegen wraps results
+  in `hexa_int(...)` per codegen_c2.hexa:3341
+- **New pattern**: int64_t-returning fn bridged through hexa-source
+  `rt_str_index_of(s, sub) -> int` (which is HexaVal at C ABI) via
+  `HX_INT(rt_str_index_of(...))`. Preserves the original C signature
+  so call sites are unchanged. Unlocks porting of `index_of_from`,
+  `last_index_of`, and others with `int64_t` returns
+- Empty needle returns 0 (matches `hxlcl_strstr(hay, "")` → `hay`
+  semantic from the C body)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,184 B
+
+### 2026-05-21 — step 3 cycle 53: hexa_str_nth_char + hexa_str_char_substring (UTF-8 codepoint ops)
+
+- ✅ `hexa_str_nth_char` (self/runtime_core.c:4278) and
+  `hexa_str_char_substring` (4301) gain two-mode dispatch. Both are
+  codepoint-indexed (not byte-indexed); the C body's `_hx_utf8_cp_len`
+  table is inlined in hexa as the same if/else-if bit-pattern checks
+  used in cycles 47/51
+- nth_char negative-target / OOB → "" matches the C body. char_substring
+  cs<0 clamp + ce≤cs → "" matches; the byte-boundary walk finds bs/be
+  via codepoint counting then a single `s.substring(bs, be)`
+- No recursion trap (cycle-52 lesson applied): the C body callers don't
+  alias into byte_at / nth_char chains
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,944 B
+
+### 2026-05-21 — step 3 cycle 52: hexa_str_char_at + hexa_str_char_count → rt_str_*
+
+- ✅ `hexa_str_char_at` (self/runtime_core.c:4199) and
+  `hexa_str_char_count` (4238) gain two-mode dispatch. char_at uses
+  `s.substring(i, i+1)` builtin; char_count thin-wraps the cycle-51
+  `rt_utf8_cpcount` helper
+- 🛸 **Recursion trap discovered**: an initial attempt to also port
+  `hexa_str_char_code_at` SIGSEGV'd (139) at smoke. Root cause:
+  `hexa_str_byte_at(s, idx)` (line 4327) is literally `return
+  hexa_str_char_code_at(s, idx);`. A hexa-source `rt_str_char_code_at`
+  body using `s.byte_at(i)` would loop: byte_at → hexa_str_byte_at →
+  hexa_str_char_code_at (dispatched) → rt_str_char_code_at →
+  s.byte_at → … char_code_at stays C-only; the 4-line body has no
+  porting value anyway
+- Lesson for future port candidates: check whether the C function we
+  want to port is **called** by any builtin that the hexa-source body
+  would use. Same trap kind as the cycle-30 catchup blocker
+  ("hot-path cmp/add/sub/mul/div ports cause hexa_v2 transpile
+  lowering infinite recursion via rt_cmp_lt_int call chain")
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,848 B
+- 🛸 **Cross-parity validation** (ubu-2, Linux x86_64): fresh-clone
+  of origin/main HEAD + `dist/linux-x86_64/hexa_v2 transpile` on
+  `stdlib/runtime/{ctype,math,numeric}.hexa` → all 3 files OK. Ports
+  are platform-portable (Mac arm64 + Linux x86_64 transpile parity)
+
+### 2026-05-21 — step 3 cycle 51: hexa_pad_left + hexa_pad_right → rt_pad_left/right (UTF-8 width)
+
+- ✅ `hexa_pad_left` + `hexa_pad_right` (self/runtime_core.c:6116,
+  6136) gain two-mode dispatch. Hexa-source `rt_pad_left/right` use a
+  new `rt_utf8_cpcount` helper (same bit-pattern table as cycle 47's
+  `rt_str_chars`, but count-only without substring allocations)
+- The polymorphic `hexa_to_string(s)` coercion stays C-side (hexa fn
+  params are string-typed); the actual padding work moves to hexa
+- Padding alphabet is fixed at space (byte 32) — matches the C body.
+  `bytes_to_str_raw([32, 32, ...])` one-shot builds the pad prefix/
+  suffix, then `+` concat with `s`
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,848 B
+
+### 2026-05-21 — step 3 cycle 50: rt_str_to_upper + rt_str_to_lower move to hexa source
+
+- ✅ `rt_str_to_upper` + `rt_str_to_lower` (self/runtime_core.c:6010,
+  6017) move to hexa source. ASCII case conversion only; non-ASCII
+  bytes (UTF-8 continuation bytes, high bit set) pass through
+  unchanged (won't match 'a'-'z' / 'A'-'Z' byte ranges)
+- Hexa side collects bytes into `[int]` then `bytes_to_str_raw(...)`
+  one-shot to avoid O(n²) string `+` concat
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,800 B
+
+### 2026-05-21 — step 3 cycle 49: rt_str_trim_end + rt_str_trim move to hexa source
+
+- ✅ `rt_str_trim_end` (self/runtime.c:2977) and `rt_str_trim`
+  (self/runtime_core.c:5953) both move to hexa source. C bodies
+  wrapped in `#ifndef HEXA_HAS_HEXA_RT_STDLIB`; ctype.hexa provides
+  the symbols in the stdlib build
+- `rt_str_trim` is inlined (head-skip + tail-skip + single substring)
+  rather than composed as `trim_end(trim_start(s))` — halves the
+  string allocations vs the compose form
+- Closes the trim family on the hexa-source path (start/end/both)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,592 B
+
+### 2026-05-21 — step 3 cycle 48: rt_str_trim_start moves to hexa source
+
+- ✅ `rt_str_trim_start` was previously C-only in self/runtime.c:2970
+  (codegen emits it directly; no `hexa_str_*` shim exists per the
+  M1-lite Step-5 retirement). The C body is now wrapped in
+  `#ifndef HEXA_HAS_HEXA_RT_STDLIB`; a hexa-source equivalent in
+  `stdlib/runtime/ctype.hexa` provides the symbol in the stdlib build
+- Whitespace alphabet: space / tab / LF / CR (bytes 32/9/10/13).
+  Hexa-side uses `byte_len + byte_at` + `s.substring(a, n)` so the
+  allocation is the perf-31 single-shot path (vs C body's strdup)
+- First instance in this campaign of "an existing rt_* C body becomes
+  hexa-source under the dispatch switch" — pattern reusable for
+  `rt_str_trim`, `rt_str_trim_end`, `rt_str_to_upper`, `rt_str_to_lower`
+  in subsequent cycles
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,416 B
+
+### 2026-05-21 — step 3 cycle 47: hexa_str_chars → rt_str_chars (UTF-8 codepoint walker)
+
+- ✅ `hexa_str_chars` (self/runtime_core.c:4072) ported. Returns an
+  array of 1-codepoint strings ("한글hi".chars().len() == 4, not 8).
+  ASCII identical to byte-walk
+- The `_hx_utf8_cp_len` C table is inlined as if/else-if bit-pattern
+  checks on the leading byte (0xxx / 110xx / 1110x / 11110x; anything
+  else treated as 1-byte defensive fallback). Continuation bytes are
+  collected via `s.substring(i, i+cp)`
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,384 B
+
+### 2026-05-21 — step 3 cycle 46: hexa_str_slice → rt_str_slice
+
+- ✅ `hexa_str_slice` (self/runtime.c:2985) ported. Byte-based slice
+  with [start, end) clamped to [0, len]. Hexa-side uses `byte_len(s)`
+  + `s.substring(a, b)` builtin
+- Perf side note: the substring builtin (`hexa_str_substring`) uses
+  `hexa_strbuf_alloc + memcpy` single-shot (perf-31), strictly better
+  than the C body's `hxlcl_strndup + hexa_str_own_with_len` which
+  double-allocates. So the hexa-rt-stdlib path is also a perf win
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,288 B
+
+### 2026-05-21 — step 3 cycle 45: hexa_str_split → rt_str_split (existing M1-lite, wire-up only)
+
+- ✅ `hexa_str_split` (self/runtime_core.c:5903) wired to the existing
+  `rt_str_split` defined in `self/runtime_hi_gen.c:46` (M1-lite layer
+  generated from `self/runtime_hi.hexa` SSOT — already hexa-source
+  equivalent). The new wrapper-style dispatch retires the strdup +
+  strstr path from the hexa-rt-stdlib build
+- First instance in this campaign of "rt_ already lives in the M1-lite
+  generated layer; no new hexa-source body needed, only the dispatch"
+  — confirms the M1-lite work from 2026-04-23 is reusable here. First
+  attempt at a fresh `rt_str_split` in `stdlib/runtime/ctype.hexa`
+  hit a redefinition collision at clang link; reverted in favour of
+  the existing one
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,240 B
+
+### 2026-05-21 — step 3 cycle 44: hexa_str_replace → rt_str_replace
+
+- ✅ `hexa_str_replace` (self/runtime_core.c:5940) ported. Walks `s`
+  byte-by-byte; at each position, either matches `old` and emits
+  `new_s` (advancing by `olen`) or copies 1 byte (advancing by 1)
+- Empty `old` short-circuits to `s` (matches C body's `oldlen == 0`
+  semantics — no infinite loop)
+- `old` / `new_s` non-str guard stays C-side (hexa `[string]` typing
+  doesn't carry runtime-tag info); only the all-string success path
+  reaches `rt_str_replace`
+- Hexa path is O(n·m) (byte-by-byte match, no strstr) and uses `+`
+  concat (no preallocated buffer). Acceptable trade-off for the
+  hexa-native landing — matches the cycle-2/4 precision/perf budget
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,160 B
+
+### 2026-05-21 — step 3 cycle 43: hexa_str_join → rt_str_join_str (all-string fast path)
+
+- ✅ `hexa_str_join` (self/runtime_core.c:5987) gains two-mode dispatch.
+  All-string arrays (`HX_IS_STR(sep)` + every element a string) take
+  the new `rt_str_join_str` path in `stdlib/runtime/ctype.hexa`;
+  mixed-type arrays still need per-element `hexa_to_string` coercion
+  and stay on the C body
+- Hexa side uses string `+` concat — codegen lowers to
+  `hexa_str_concat`. Less optimal than the C body's
+  preallocate-then-`memcpy`, but correctness-preserving and matches
+  the cycle-2/4 precision/perf budget
+- New `_arr_all_str_join` static helper (renamed to avoid colliding
+  with any future array-domain helper) inside the `#else` branch
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,016 B
+
+### 2026-05-21 — step 3 cycle 42: hexa_str_substr → rt_str_substr
+
+- ✅ `hexa_str_substr` (self/runtime.c:3975) JS-style substring(start,
+  length) ported. The void-len normalization (which depends on the
+  `HX_TAG(len_v) == TAG_VOID` runtime check — not expressible in hexa
+  source today) stays in the C wrapper; the substring clamps + builtin
+  call go to `rt_str_substr` in `stdlib/runtime/ctype.hexa`
+- Hexa side uses `byte_len(s)` + `s.substring(a, b)` builtins, both
+  already recognized by the codegen (compiler/codegen/codegen_c2.hexa)
+- First string fn to gain the two-mode pattern (cycle 27/28 ported
+  pure-hexa helpers `rt_str_count_substr` / `rt_str_bytes`; this is
+  the first wrapper-style dispatch over a string method)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,968 B
+
+### 2026-05-21 — step 3 cycle 41: rt_atan2 (close inverse-trig family)
+
+- ✅ `rt_atan2(y, x)` lands in `stdlib/runtime/math.hexa` — quadrant
+  resolution + 4 edge cases (x=0 axes), returning radians ∈ (−π, π].
+  Reuses `rt_atan` for the magnitude
+- C-side `hexa_math_atan2` (self/runtime.c) gains two-mode dispatch.
+  This closes the inverse-trig family (atan/asin/acos/atan2 all on
+  the hexa-source path under `HEXA_HAS_HEXA_RT_STDLIB`)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,920 B
+
+### 2026-05-21 — step 3 cycle 40: rt_atan + rt_asin + rt_acos (inverse trig batch)
+
+- ✅ Three new hexa-source fns in `stdlib/runtime/math.hexa`:
+  - `rt_atan(x)`: two-stage range reduction — (1) |x|>1 → atan(x) =
+    sign·π/2 − atan(1/x); (2) |x|>tan(π/8)≈0.4142 → atan(a) = π/4 +
+    atan((a−1)/(a+1)). Then 6-term Maclaurin on |a|≤tan(π/8)
+    (~1e-9 precision on the reduced domain)
+  - `rt_asin(x)`: standard identity asin(x) = atan(x / sqrt(1 − x²)).
+    Clamps |x|>1 to ±π/2 (NaN-free fallback). Precision degrades near
+    |x|=1 by design (matches the cycle-2/4 precision budget)
+  - `rt_acos(x)`: identity acos(x) = π/2 − asin(x)
+- C-side dispatch in `self/runtime.c:4061-4068`: `hexa_math_asin/acos/atan`
+  gain two-mode wiring to the new rt_ fns. `hexa_math_atan2` stays on
+  libm — it has no rt_ counterpart yet (two-arg quadrant resolution)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,920 B
+
+### 2026-05-21 — step 3 cycle 39: hexa_math_floor/ceil/round int→float bridge
+
+- ✅ `hexa_math_floor/ceil/round` (self/runtime.c:4072-4074) gain
+  two-mode dispatch. The wrappers' contract is float-out, but the
+  cycle-2/4 ports of `rt_floor/ceil/round` return int (truncation +
+  sign-aware adjustment for floor/ceil; half-away-from-zero for
+  round). Bridge with an explicit `hexa_float((double)HX_INT(...))`
+  cast at the boundary so the libm surface (`floor/ceil/round`) goes
+  away while the wrapper signature stays unchanged
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,760 B
+
+### 2026-05-21 — step 3 cycle 38: hexa_math_* batch (sqrt/tan/tanh/abs/fmod)
+
+- ✅ 5 `hexa_math_*` wrappers gain two-mode dispatch to their existing
+  `rt_*` counterparts: `hexa_math_sqrt → rt_sqrt`, `hexa_math_tan →
+  rt_tan`, `hexa_math_tanh → rt_tanh`, `hexa_math_abs → rt_abs_float`,
+  `hexa_math_fmod → rt_fmod`. Each rt_ fn was already landed in cycles
+  7-9 (math.hexa Newton-Raphson / series)
+- The wrappers in self/runtime.c:4060-4087 previously called libm
+  (`sqrt/tan/tanh/fabs`) or `hxlcl_fmod` directly with no #ifndef
+  branch. This cycle adds the branch so the hexa-rt-stdlib build
+  routes through the hexa-source path explicitly (behaviour-
+  identical to the hxlcl_* chain for fmod; libm-direct surfaces now
+  go away for sqrt/tan/tanh/abs)
+- `hexa_math_sin/cos/exp/log` are intentionally NOT in this batch —
+  they already route through `hxlcl_*` which itself calls `rt_*` via
+  runtime.c:1317-1320, so wrapping again would be cosmetic
+- `hexa_math_asin/acos/atan/atan2` stay on libm — no `rt_*` equivalent
+  has landed yet
+- `hexa_math_floor/ceil/round` stay on libm this cycle — the existing
+  rt_floor/ceil/round return `int` but the wrapper contract is
+  `float`-out; an int→float cast at the boundary works but adds noise
+  and is deferred to its own cycle
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,760 B

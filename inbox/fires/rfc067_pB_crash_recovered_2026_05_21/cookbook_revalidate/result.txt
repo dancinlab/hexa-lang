@@ -1,0 +1,6 @@
+step1_single_tile: arch=sm_80 ptxas_rc=0 sass_instr=80 src=/tmp/step1_wmma_16x16.ptx
+step2_multitile: arch=sm_90 ptxas_rc=0 sass_instr=320 src=/tmp/r067p4_mt/wmma_multitile.ptx
+step3_multiwarp: arch=sm_90 ptxas_rc=0 sass_instr=336 src=/tmp/step3_wmma_64x64_grid.ptx
+step4_cp_async: arch=sm_90 ptxas_rc=0 sass_instr=256 src=/tmp/step4_wmma_cp_async.ptx
+step5_tf32: arch=sm_80 ptxas_rc=0 sass_instr=144 src=/tmp/tf32_ref.ptx
+composite_perf: arch=sm_90 ptxas_rc=0 sass_instr=352 src=/tmp/r067p5_hgemm/wmma_256x256_grid.ptx

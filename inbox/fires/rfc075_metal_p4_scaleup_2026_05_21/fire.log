@@ -1,0 +1,17 @@
+device=Apple M3 registry=4294968442
+max_threads_per_threadgroup_width=1024
+threadExecutionWidth=32
+maxTotalThreadsPerThreadgroup=1024
+
+ shape    median_ms     min_ms     max_ms    GB/s    max|d|   byte_mm
+-------- ----------- ---------- ---------- -------- -------- ----------
+    1024     0.2611     0.1240     0.8180     0.05   0.0000     0/1024   
+    4096     0.1980     0.1220     2.7330     0.25   0.0000     0/4096   
+   16384     0.1820     0.1529     0.7499     1.08   0.0000     0/16384  
+   65536     0.2110     0.1930     1.6689     3.73   0.0000     0/65536  
+  262144     0.2581     0.2340     1.9300    12.19   0.0000     0/262144 
+ 1048576     0.5441     0.3960     2.1300    23.13   0.0000     0/1048576
+ 4194304     0.9960     0.8370     1.8829    50.53   0.0000     0/4194304
+
+F-RFC075-METAL-SCALEUP-NUMERIC-EQ: PASS (byte_eq across all 7 shapes)
+wrote result.json (2572 bytes)

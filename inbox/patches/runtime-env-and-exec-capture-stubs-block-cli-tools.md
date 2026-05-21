@@ -2,7 +2,16 @@
 
 **Source**: dancinlab/pool
 **Kind**: patches
-**Status**: filed
+**Status**: `resolved-ssot 2026-05-21 — RUNTIME.md cycle 66 fixes both
+env(name) and exec_capture(). hxlcl_getenv now walks the environ
+global directly (was noop stub returning NULL). hxlcl_execve / execvp
+/ execl / pipe / close / dup2 / read / write / fork / waitpid all
+restored to libc backings (cycle 63/64 svc 0x80 wrappers lost the
+Darwin BSD carry-flag-disambiguates-success-vs-errno convention).
+hxlcl_popen rewritten as manual pipe+fork+execve+fdopen-shim so it
+returns a fake FILE* compatible with hxlcl_fread. Mac arm64 verified:
+env("HOME") → "/Users/<user>" (was ""); exec_capture("printf hello")
+→ ["hello", "", 0] tuple (was SIGSEGV). See §Resolution at bottom.`
 
 ## What's broken
 
@@ -102,3 +111,41 @@ compiles and runs without segfault, prints the correct branch.
 
 - https://github.com/dancinlab/pool — Phase 1 port draft (`bin/pool.hexa`, ~210 LoC) carried in repo but not wired until this patch lands.
 - `inbox/patches/port-pool-cli-to-hexa.md` (RESOLVED 2026-05-21) — closes the JSON surface side; this patch closes the runtime side.
+
+---
+
+## Resolution 2026-05-21 — RUNTIME.md cycle 66
+
+Closed by the same commit that resolves
+inbox/patches/yosys-exec-runtime-regression-cycles-61-64.md —
+both patches reported the same family of bugs (env stub +
+exec/popen stubs + carry-flag-broken syscall wrappers).
+
+### Verification — Mac arm64 (this patch's reproducers)
+
+```
+$ cat > /tmp/env-probe.hexa <<EOF
+fn main() {
+    let h = env("HOME")
+    println("type: " + type_of(h))
+    println("len: " + to_string(len(h)))
+}
+EOF
+$ /tmp/env-probe
+type: string
+len: 16           ← was 0 before cycle 66
+```
+
+```
+$ cat > /tmp/exec-probe.hexa <<EOF
+fn main() {
+    let r = exec_capture("printf hello")
+    println("stdout: " + r[0])
+}
+EOF
+$ /tmp/exec-probe
+stdout: hello     ← was SIGSEGV before cycle 66
+```
+
+Full primitives map + cycle 66 fix detail: see
+yosys-exec-runtime-regression-cycles-61-64.md §Resolution.

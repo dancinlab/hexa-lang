@@ -287,6 +287,22 @@ fn abc_emit_blif(d: Design) -> str {
         // mapper refuses the cell — `Cannot find gate "dfxtp_1"`).
         // @cite BLIF spec §3.4 (sequential logic, `.latch`) + Yosys
         // passes/techmap/dfflibmap.cc shape.
+        //
+        // rfc_006 §5 Tier-1 (e) follow-on — Option I (2026-05-21):
+        // BLIF format's `.latch` is INHERENTLY 1-bit (BLIF spec §3.4
+        // restricts the in/out signals to 1-bit nets). A naive 1-line-
+        // per-$dff-cell emit collapses a 64-bit register to a single
+        // latch — this is the Source 1 width-truncation documented in
+        // `inbox/notes/2026-05-21-rfc006-§5-multibit-width-truncation.md`.
+        //
+        // Fix: when the Q-wire's recorded width W is > 1, emit W
+        // parallel `.latch` lines with per-bit names `<base>__b<k>`.
+        // The mapped-BLIF reader (`abc_parse_mapped_blif`) honours the
+        // shape by emitting one `sky130_fd_sc_hd__dfxtp_1` cell per
+        // `.latch` line — N cells share the same CLK so the area
+        // histogram correctly counts N FFs. If the Q-wire is absent
+        // from `m.wires` (1-bit synthesized helper net), fall back to
+        // a single 1-bit `.latch` — same emit as before.
         let mut ci = 0
         while ci < len(m.cells) {
             let c = m.cells[ci]
@@ -301,7 +317,33 @@ fn abc_emit_blif(d: Design) -> str {
                     if c.conns[pi].pin == "CLK" { clk_net = c.conns[pi].net }
                     pi = pi + 1
                 }
-                buf = buf + ".latch " + d_net + " " + q_net + " re " + clk_net + " 2\n"
+                // Lookup the Q-wire's declared width. (Q is the
+                // canonical width source because the read_verilog
+                // 2-D LHS emit registers the slot wire with the
+                // packed-array width — the D-wire is a synthesized
+                // `<slot>__d` mirror that may or may not be in
+                // m.wires.) Fall back to D-wire if Q absent.
+                let mut wbits = 1
+                let qi = rtlil_find_wire(m, q_net)
+                if qi >= 0 {
+                    wbits = m.wires[qi].width
+                } else {
+                    let di = rtlil_find_wire(m, d_net)
+                    if di >= 0 { wbits = m.wires[di].width }
+                }
+                if wbits < 1 { wbits = 1 }
+                if wbits == 1 {
+                    buf = buf + ".latch " + d_net + " " + q_net + " re " + clk_net + " 2\n"
+                } else {
+                    let mut bi = 0
+                    while bi < wbits {
+                        let bstr = str(bi)
+                        buf = buf + ".latch " + d_net + "__b" + bstr
+                            + " " + q_net + "__b" + bstr
+                            + " re " + clk_net + " 2\n"
+                        bi = bi + 1
+                    }
+                }
                 ci = ci + 1
                 continue
             }
@@ -412,6 +454,19 @@ fn abc_parse_mapped_blif(text: str) -> Design {
         // back into a `sky130_fd_sc_hd__dfxtp_1` cell so the area
         // oracle's histogram includes the FF count. Mirrors the
         // emitter above. @cite BLIF spec §3.4.
+        //
+        // rfc_006 §5 Tier-1 (e) follow-on — Option I (2026-05-21):
+        // The emitter expands multi-bit Q-wires into W per-bit
+        // `.latch` lines (`<base>__b<k>`). The reader does NOT
+        // coalesce them: it produces one `sky130_fd_sc_hd__dfxtp_1`
+        // cell per `.latch` line. This is intentional — the area
+        // oracle counts cells by cell_type, so N per-bit FFs
+        // contribute N × area(dfxtp_1) to the histogram, which is
+        // exactly what we want. (Alternative: coalesce N cells back
+        // into a single width-N $dff; rejected here because (a) the
+        // area histogram would still need to know the per-cell
+        // multiplier and (b) it adds round-trip complexity for no
+        // measurement gain.)
         if head == ".latch" {
             if len(parts) >= 5 {
                 let cname = "ff_" + str(len(m.cells))
@@ -777,7 +832,90 @@ fn main() {
             + ")"); fails = fails + 1
     }
 
-    // T8 — STALE-OUTPUT GUARD (rfc_006 §5 audit 2026-05-21):
+    // T8 — rfc_006 §5 Tier-1 (e) follow-on: multi-bit `.latch` expansion.
+    // A `sky130_fd_sc_hd__dfxtp_1` cell whose Q-wire is registered with
+    // width > 1 must emit W per-bit `.latch` lines (BLIF spec §3.4 says
+    // `.latch` is 1-bit so the only honest encoding is parallel lines).
+    // The round-trip reader must produce W separate dfxtp_1 cells, so
+    // the area oracle's histogram counts N FFs, not 1.
+    total = total + 1
+    let mut m8 = rtlil_new_module("c8")
+    m8 = rtlil_module_add_wire(m8, rtlil_wire("clk", 1, 1, 1))
+    // 4-bit register slot — same shape as router_d?.v's `out_data[i]`
+    m8 = rtlil_module_add_wire(m8, rtlil_wire("q4", 4, 2, 2))
+    m8 = rtlil_module_add_wire(m8, rtlil_wire("d4", 4, 0, 0))
+    let mut ff8 = rtlil_cell("u_ff8", "sky130_fd_sc_hd__dfxtp_1", 1)
+    ff8 = rtlil_cell_connect(ff8, "D", "d4")
+    ff8 = rtlil_cell_connect(ff8, "Q", "q4")
+    ff8 = rtlil_cell_connect(ff8, "CLK", "clk")
+    m8 = rtlil_module_add_cell(m8, ff8)
+    let mut d8 = rtlil_new_design("test")
+    d8 = rtlil_design_add(d8, m8)
+    let blif8 = abc_emit_blif(d8)
+    // T8a — exactly 4 `.latch` lines emitted (one per bit)
+    let mut nlatch = 0
+    let lines8 = blif8.split("\n")
+    let mut li8 = 0
+    while li8 < len(lines8) {
+        let ln = lines8[li8]
+        if len(ln) >= 7 {
+            if ln.substring(0, 7) == ".latch " { nlatch = nlatch + 1 }
+        }
+        li8 = li8 + 1
+    }
+    if nlatch != 4 {
+        println("FAIL T8 multibit_latch_count expected 4 got " + str(nlatch)); fails = fails + 1
+    }
+    // T8b — per-bit naming convention `<base>__b<k>`
+    if blif8.find(".latch d4__b0 q4__b0 re clk 2") < 0 {
+        println("FAIL T8b multibit_latch_b0_missing"); fails = fails + 1
+    }
+    if blif8.find(".latch d4__b3 q4__b3 re clk 2") < 0 {
+        println("FAIL T8c multibit_latch_b3_missing"); fails = fails + 1
+    }
+    // T8d — original 1-bit form NOT emitted (collapsed-width regression)
+    if blif8.find(".latch d4 q4 re clk 2") >= 0 {
+        println("FAIL T8d multibit_latch_collapsed_emit_leaked"); fails = fails + 1
+    }
+    // T8e — round-trip: parsed BLIF yields N dfxtp_1 cells
+    let d8_rt = abc_parse_mapped_blif(blif8)
+    if len(d8_rt.modules) != 1 {
+        println("FAIL T8e roundtrip_module_count"); fails = fails + 1
+    } else {
+        let mut nff = 0
+        let mut ck = 0
+        while ck < len(d8_rt.modules[0].cells) {
+            if d8_rt.modules[0].cells[ck].cell_type == "sky130_fd_sc_hd__dfxtp_1" {
+                nff = nff + 1
+            }
+            ck = ck + 1
+        }
+        if nff != 4 {
+            println("FAIL T8e2 roundtrip_ff_count expected 4 got " + str(nff)); fails = fails + 1
+        }
+    }
+    // T8f — 1-bit fallback still works: a cell with a 1-bit Q-wire emits
+    // a single `.latch` line in the legacy shape (no `__b0` suffix).
+    let mut m8f = rtlil_new_module("c8f")
+    m8f = rtlil_module_add_wire(m8f, rtlil_wire("clk", 1, 1, 1))
+    m8f = rtlil_module_add_wire(m8f, rtlil_wire("q1", 1, 2, 2))
+    m8f = rtlil_module_add_wire(m8f, rtlil_wire("d1", 1, 0, 0))
+    let mut ff8f = rtlil_cell("u_ff8f", "sky130_fd_sc_hd__dfxtp_1", 1)
+    ff8f = rtlil_cell_connect(ff8f, "D", "d1")
+    ff8f = rtlil_cell_connect(ff8f, "Q", "q1")
+    ff8f = rtlil_cell_connect(ff8f, "CLK", "clk")
+    m8f = rtlil_module_add_cell(m8f, ff8f)
+    let mut d8f = rtlil_new_design("test")
+    d8f = rtlil_design_add(d8f, m8f)
+    let blif8f = abc_emit_blif(d8f)
+    if blif8f.find(".latch d1 q1 re clk 2") < 0 {
+        println("FAIL T8f single_bit_fallback_missing"); fails = fails + 1
+    }
+    if blif8f.find("d1__b0") >= 0 {
+        println("FAIL T8f2 single_bit_unexpected_bit_suffix"); fails = fails + 1
+    }
+
+    // T9 — STALE-OUTPUT GUARD (rfc_006 §5 audit 2026-05-21):
     // pre-populate `_out.blif` with garbage from a prior run, then
     // call abc_map. The truncate-before-exec write at L455 must zero
     // the file BEFORE the exec, so even when ABC is absent (the case
@@ -786,33 +924,33 @@ fn main() {
     // false-positive readback. This is the audit-discovered guard
     // that closes the 24h-undetected chain regression.
     total = total + 1
-    let stale_prefix = "/tmp/_hexa_abc_t8_stale"
+    let stale_prefix = "/tmp/_hexa_abc_t9_stale"
     let stale_blif_out = stale_prefix + "_out.blif"
     write_file(stale_blif_out, ".model GARBAGE\n.gate fake\n.end\n")
     let pre = read_file(stale_blif_out)
     if len(pre) == 0 {
-        println("FAIL T8 pre_write_unexpectedly_empty (filesystem broken?)")
+        println("FAIL T9 pre_write_unexpectedly_empty (filesystem broken?)")
         fails = fails + 1
     }
-    let r8 = abc_map(d, "", stale_prefix)
+    let r9 = abc_map(d, "", stale_prefix)
     let post = read_file(stale_blif_out)
     if len(post) != 0 {
-        println("FAIL T8b stale_blif_out_not_truncated (post-bytes="
+        println("FAIL T9b stale_blif_out_not_truncated (post-bytes="
             + str(len(post)) + ", expected 0)"); fails = fails + 1
     }
     // When ABC is absent the return must be the no-binary fail-loud,
     // not the no-mapped-BLIF fail-loud — and certainly not ok=1.
     if bin == "" {
-        if r8.ok != 0 {
-            println("FAIL T8c stale_run_ok_when_no_abc"); fails = fails + 1
+        if r9.ok != 0 {
+            println("FAIL T9c stale_run_ok_when_no_abc"); fails = fails + 1
         }
-        if r8.exit_code != 127 {
-            println("FAIL T8d stale_run_exit_not_127 (got "
-                + str(r8.exit_code) + ")"); fails = fails + 1
+        if r9.exit_code != 127 {
+            println("FAIL T9d stale_run_exit_not_127 (got "
+                + str(r9.exit_code) + ")"); fails = fails + 1
         }
     }
 
-    // T9 — STDOUT ERROR PATTERNS (rfc_006 §5 audit 2026-05-21):
+    // T10 — STDOUT ERROR PATTERNS (rfc_006 §5 audit 2026-05-21):
     // verify the `combinational loop` substring search is present in
     // the abc_map error-pattern set. We can't easily synthesize an
     // ABC run that emits this without a real ABC binary + a known-

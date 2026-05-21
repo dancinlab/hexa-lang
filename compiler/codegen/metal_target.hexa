@@ -1,6 +1,6 @@
 // HEXA Native Compiler — Codegen / Metal (hexa-src → MSL source)  [RFC 075 P1+P2+P3 codegen-only]
 //
-// @version 0.0.2
+// @version 0.0.3
 // @capabilities [pure]
 //
 // ─────────────────────────────────────────────────────────────────────
@@ -152,11 +152,28 @@ pub let METAL_OP_ADD: string         = "+"              // binop add (source-tex
 pub let METAL_OP_SUB: string         = "-"              // binop sub
 pub let METAL_OP_MUL: string         = "*"              // binop mul
 pub let METAL_OP_DIV: string         = "/"              // binop div
+// RFC 075 P3+ unary family — unary-op MSL source-text fragments.
+// `-` is the prefix unary minus operator (overloaded with binop SUB by
+// position — emit pass disambiguates via the unary-body helper). `abs`
+// and `sqrt` are Apple MSL builtins exposed by `<metal_stdlib>`.
+// Transcendentals `exp` / `log` / `sin` / `cos` are also Apple MSL
+// builtins from `<metal_stdlib>` (Metal Shading Language Specification
+// §5.10 — common / math functions), the FP32 single-argument overloads.
+//   ref: Metal Shading Language Specification §5.10 (math functions)
+pub let METAL_OP_NEG: string         = "-"              // unary minus (prefix)
+pub let METAL_OP_ABS: string         = "abs"            // MSL builtin: abs(float)
+pub let METAL_OP_SQRT: string        = "sqrt"           // MSL builtin: sqrt(float)
+pub let METAL_OP_EXP: string         = "exp"            // MSL builtin: exp(float)
+pub let METAL_OP_LOG: string         = "log"            // MSL builtin: log(float)
+pub let METAL_OP_SIN: string         = "sin"            // MSL builtin: sin(float)
+pub let METAL_OP_COS: string         = "cos"            // MSL builtin: cos(float)
 pub let METAL_OP_INDEX_OPEN: string  = "["              // array indexing open
 pub let METAL_OP_INDEX_CLOSE: string = "]"              // array indexing close
 pub let METAL_OP_ASSIGN: string      = " = "            // assignment (with spaces)
 pub let METAL_OP_RETURN_NONE: string = ""               // MSL kernel returns void — empty op
 pub let METAL_OP_STMT_TERM: string   = ";"              // statement terminator
+pub let METAL_OP_CALL_OPEN: string   = "("              // function call open paren
+pub let METAL_OP_CALL_CLOSE: string  = ")"              // function call close paren
 
 // RFC 075 P1 — kernel-declaration fragment templates. Kept as separate
 // string constants so the P3 emit pass concatenates them in a single
@@ -349,6 +366,195 @@ fn _metal_emit_vec_add_body() -> string {
     return out
 }
 
+// _metal_emit_vec_mul_body — emit the MSL kernel body for vec-mul.
+// Hardcoded: `c[i] = a[i] * b[i];` with surrounding braces. Mirror of
+// `_metal_emit_vec_add_body` with the binop fragment swapped to `*`.
+fn _metal_emit_vec_mul_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + " " + METAL_OP_MUL + " "
+    out = out + "b" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_sub_body — emit the MSL kernel body for vec-sub.
+// Hardcoded: `c[i] = a[i] - b[i];` with surrounding braces. Mirror of
+// `_metal_emit_vec_add_body` with the binop fragment swapped to `-`.
+fn _metal_emit_vec_sub_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + " " + METAL_OP_SUB + " "
+    out = out + "b" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_div_body — emit the MSL kernel body for vec-div.
+// Hardcoded: `c[i] = a[i] / b[i];` with surrounding braces. Mirror of
+// `_metal_emit_vec_add_body` with the binop fragment swapped to `/`.
+fn _metal_emit_vec_div_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + " " + METAL_OP_DIV + " "
+    out = out + "b" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_scale_body — emit the MSL kernel body for vec-scale.
+// Hardcoded: `c[i] = a[i] * <scalar>;` with surrounding braces. The
+// scalar literal text is supplied by the caller (formatted from the
+// MIR const operand) so the emitter stays string-pure.
+fn _metal_emit_vec_scale_body(scalar_text: string) -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + " " + METAL_OP_MUL + " "
+    out = out + scalar_text
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// ── RFC 075 P3+ unary family — 2-buffer signature + body helpers ────
+//
+// Unary element-wise kernels (vec-neg, vec-abs, vec-sqrt) have a
+// 2-buffer signature: one read-only input `a` + one writable output `c`
+// (NO second input `b`). The thread index binding is identical to the
+// 3-buffer vec-add signature (uint i [[thread_position_in_grid]]).
+// This emitter mirrors `_metal_emit_kernel_signature` but drops the
+// `b` parameter row and shifts `c`'s buffer binding from [[buffer(2)]]
+// to [[buffer(1)]].
+
+// _metal_emit_unary_kernel_signature — emit `kernel void <name>(...)`
+// with the 2-buffer params (a, c) + thread-index binding. Hardcoded
+// for the unary MIR shape (one const input + one writable output +
+// uint i [[thread_position_in_grid]]).
+fn _metal_emit_unary_kernel_signature(name: string) -> string {
+    let mut out = METAL_OP_KERNEL_DECL + " " + name + "(\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR + "a "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "0" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_FLOAT_PTR + "c "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "1" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_TYPE_UINT + " i " + METAL_OP_THREAD_POS_GRID + ")\n"
+    return out
+}
+
+// _metal_emit_vec_neg_body — emit the MSL kernel body for vec-neg.
+// Hardcoded: `c[i] = -a[i];` with surrounding braces. Element-wise
+// unary minus (prefix `-` operator); no second buffer load.
+fn _metal_emit_vec_neg_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_NEG
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_abs_body — emit the MSL kernel body for vec-abs.
+// Hardcoded: `c[i] = abs(a[i]);` with surrounding braces. Calls the
+// MSL builtin `abs(float)` exposed by `<metal_stdlib>` (§5.10).
+fn _metal_emit_vec_abs_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_ABS + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_sqrt_body — emit the MSL kernel body for vec-sqrt.
+// Hardcoded: `c[i] = sqrt(a[i]);` with surrounding braces. Calls the
+// MSL builtin `sqrt(float)` exposed by `<metal_stdlib>` (§5.10).
+fn _metal_emit_vec_sqrt_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_SQRT + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_exp_body — emit the MSL kernel body for vec-exp.
+// Hardcoded: `c[i] = exp(a[i]);` with surrounding braces. Calls the
+// MSL builtin `exp(float)` exposed by `<metal_stdlib>` (§5.10).
+fn _metal_emit_vec_exp_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_EXP + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_log_body — emit the MSL kernel body for vec-log.
+// Hardcoded: `c[i] = log(a[i]);` with surrounding braces. Calls the
+// MSL builtin `log(float)` exposed by `<metal_stdlib>` (§5.10).
+fn _metal_emit_vec_log_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_LOG + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_sin_body — emit the MSL kernel body for vec-sin.
+// Hardcoded: `c[i] = sin(a[i]);` with surrounding braces. Calls the
+// MSL builtin `sin(float)` exposed by `<metal_stdlib>` (§5.10).
+fn _metal_emit_vec_sin_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_SIN + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_cos_body — emit the MSL kernel body for vec-cos.
+// Hardcoded: `c[i] = cos(a[i]);` with surrounding braces. Calls the
+// MSL builtin `cos(float)` exposed by `<metal_stdlib>` (§5.10).
+fn _metal_emit_vec_cos_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_COS + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
 // _metal_mfunc_is_vec_add_shape — recognise the vec-add MIR shape.
 // Hardcoded shape check: entry block has exactly STMT_LOAD + STMT_LOAD
 // + STMT_BINOP("add") + STMT_STORE (in that order), plus an optional
@@ -367,35 +573,307 @@ fn _metal_mfunc_is_vec_add_shape(mfn: MFunc) -> bool {
     return true
 }
 
+// _metal_mfunc_is_vec_mul_shape — recognise the vec-mul MIR shape.
+// Mirror of `_metal_mfunc_is_vec_add_shape` with the BINOP op string
+// switched to "mul". Same STMT_LOAD + STMT_LOAD + STMT_BINOP("mul") +
+// STMT_STORE skeleton (with optional STMT_RETURN tail).
+fn _metal_mfunc_is_vec_mul_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "mul" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_vec_sub_shape — recognise the vec-sub MIR shape.
+// Mirror of `_metal_mfunc_is_vec_add_shape` with the BINOP op string
+// switched to "sub". Same STMT_LOAD + STMT_LOAD + STMT_BINOP("sub") +
+// STMT_STORE skeleton (with optional STMT_RETURN tail).
+fn _metal_mfunc_is_vec_sub_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "sub" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_vec_div_shape — recognise the vec-div MIR shape.
+// Mirror of `_metal_mfunc_is_vec_add_shape` with the BINOP op string
+// switched to "div". Same STMT_LOAD + STMT_LOAD + STMT_BINOP("div") +
+// STMT_STORE skeleton (with optional STMT_RETURN tail).
+fn _metal_mfunc_is_vec_div_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "div" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_vec_scale_shape — recognise the vec-scale MIR shape.
+// Skeleton: STMT_LOAD a→va, STMT_BINOP("mul") with operands
+// (Operand{kind="local"}, Operand{kind="const_float"|"const_int"}),
+// STMT_STORE vc→c (optional STMT_RETURN tail). The const operand
+// position is fixed at args[1] (lhs local · rhs const) — the canonical
+// `a[i] * <scalar>` lowering order. Anything else falls through.
+fn _metal_mfunc_is_vec_scale_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 3 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_BINOP { return false }
+    if stmts[1].op != "mul" { return false }
+    if stmts[2].kind != STMT_STORE { return false }
+    // BINOP args[0] = lhs local, args[1] = rhs const literal.
+    let binop_args = stmts[1].args
+    if len(binop_args) < 2 { return false }
+    if binop_args[0].kind != "local" { return false }
+    let rhs_kind = binop_args[1].kind
+    if rhs_kind != "const_float" {
+        if rhs_kind != "const_int" { return false }
+    }
+    return true
+}
+
+// _metal_mfunc_is_unary_shape_with_op — shared recogniser for the
+// 2-buffer unary element-wise MIR shape. Skeleton: STMT_LOAD a→va,
+// STMT_UNOP(op_name) (va)→vc, STMT_STORE vc→c (optional STMT_RETURN
+// tail). The unary op string ("neg" / "abs" / "sqrt") is the only
+// per-shape discriminator; the load-unop-store skeleton is identical
+// across the three variants. Element-wise unary; not invoked when the
+// MIR has a second STMT_LOAD (binop/scale dispatch wins first).
+fn _metal_mfunc_is_unary_shape_with_op(mfn: MFunc, op_name: string) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 3 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_UNOP { return false }
+    if stmts[1].op != op_name { return false }
+    if stmts[2].kind != STMT_STORE { return false }
+    // UNOP carries a single local operand (no rhs).
+    let unop_args = stmts[1].args
+    if len(unop_args) < 1 { return false }
+    if unop_args[0].kind != "local" { return false }
+    return true
+}
+
+// _metal_mfunc_is_vec_neg_shape — recognise vec-neg MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("neg") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_neg_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "neg")
+}
+
+// _metal_mfunc_is_vec_abs_shape — recognise vec-abs MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("abs") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_abs_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "abs")
+}
+
+// _metal_mfunc_is_vec_sqrt_shape — recognise vec-sqrt MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("sqrt") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_sqrt_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "sqrt")
+}
+
+// _metal_mfunc_is_vec_exp_shape — recognise vec-exp MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("exp") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_exp_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "exp")
+}
+
+// _metal_mfunc_is_vec_log_shape — recognise vec-log MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("log") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_log_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "log")
+}
+
+// _metal_mfunc_is_vec_sin_shape — recognise vec-sin MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("sin") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_sin_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "sin")
+}
+
+// _metal_mfunc_is_vec_cos_shape — recognise vec-cos MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("cos") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_cos_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "cos")
+}
+
+// _metal_format_scalar — format a MIR const operand as MSL literal text.
+// const_float → uses the `float_val` field (e.g. "2.5"); const_int →
+// uses the `int_val` field with `.0` appended so it stays FP32 in MSL.
+// Anything else returns "0.0" as the safe fallback (callers should have
+// already gated by the shape recogniser).
+fn _metal_format_scalar(op: Operand) -> string {
+    if op.kind == "const_float" { return to_string(op.float_val) }
+    if op.kind == "const_int" { return to_string(op.int_val) + ".0" }
+    return "0.0"
+}
+
 // codegen_emit_metal_msl — MIR module -> MSL source text.
 //
-// RFC 075 P3 LANDED (codegen-only) — emits a full MSL kernel source
-// when the first MFunc matches the vec-add shape. Otherwise (empty
-// module, non-vec-add shape) returns `""` honestly, preserving the
+// RFC 075 P3+ LANDED (codegen-only) — emits a full MSL kernel source
+// when the first MFunc matches a recognised shape. Otherwise (empty
+// module, unrecognised shape) returns `""` honestly, preserving the
 // P0 contract the lower_test Case 1 still asserts.
 //
-// HONEST SCOPE — vec-add is the ONLY MIR pattern this emitter
-// recognises today. STMT_LOAD + STMT_LOAD + STMT_BINOP_ADD + STMT_STORE
-// matches → emit hardcoded `c[i] = a[i] + b[i]` kernel. General
+// HONEST SCOPE — thirteen shapes recognised today (vec-add, vec-mul,
+// vec-sub, vec-div, vec-scale, vec-neg, vec-abs, vec-sqrt, vec-exp,
+// vec-log, vec-sin, vec-cos). All other MIR patterns return "". General
 // MFunc → MSL lowering is multi-session work mirroring the NVPTX P3
 // timeline.
 //
+//   Shape coverage matrix (RFC 075 P3+):
+//     vec-add   `c[i] = a[i] + b[i]`     STMT_LOAD+LOAD+BINOP(add)+STORE
+//     vec-mul   `c[i] = a[i] * b[i]`     STMT_LOAD+LOAD+BINOP(mul)+STORE
+//     vec-sub   `c[i] = a[i] - b[i]`     STMT_LOAD+LOAD+BINOP(sub)+STORE
+//     vec-div   `c[i] = a[i] / b[i]`     STMT_LOAD+LOAD+BINOP(div)+STORE
+//     vec-scale `c[i] = a[i] * <const>`  STMT_LOAD+BINOP(mul, const)+STORE
+//     vec-neg   `c[i] = -a[i]`           STMT_LOAD+UNOP(neg)+STORE   (2-buf)
+//     vec-abs   `c[i] = abs(a[i])`       STMT_LOAD+UNOP(abs)+STORE   (2-buf)
+//     vec-sqrt  `c[i] = sqrt(a[i])`      STMT_LOAD+UNOP(sqrt)+STORE  (2-buf)
+//     vec-exp   `c[i] = exp(a[i])`       STMT_LOAD+UNOP(exp)+STORE   (2-buf)
+//     vec-log   `c[i] = log(a[i])`       STMT_LOAD+UNOP(log)+STORE   (2-buf)
+//     vec-sin   `c[i] = sin(a[i])`       STMT_LOAD+UNOP(sin)+STORE   (2-buf)
+//     vec-cos   `c[i] = cos(a[i])`       STMT_LOAD+UNOP(cos)+STORE   (2-buf)
+//
+// Dispatch order: vec-add → vec-mul → vec-sub → vec-div → vec-scale →
+// vec-neg → vec-abs → vec-sqrt → vec-exp → vec-log → vec-sin → vec-cos
+// → "". Element-wise unary kernels are dispatched AFTER all binop /
+// scale shapes so the existing recognisers short-circuit on a second
+// STMT_LOAD first; the unary recognisers only see MIR with the 2-stmt
+// prefix STMT_LOAD + STMT_UNOP. vec-scale is tried before vec-* unary
+// because its recogniser is the most discerning (checks operand kinds)
+// on the 3-stmt prefix it shares with the unary family. Within the
+// unary family, dispatch order does not matter — all unary recognisers
+// are mutually exclusive on the STMT_UNOP op string.
+//
+// The unary family is the codegen's first 2-buffer kernel shape: input
+// `a` + output `c` (NO second input `b`). The signature is emitted by
+// `_metal_emit_unary_kernel_signature` and shifts `c`'s buffer binding
+// from [[buffer(2)]] (3-buf binops) to [[buffer(1)]].
+//
 // P4+ insertion points:
 //   - TODO RFC 075 P4 — silicon fire via `xcrun -sdk macosx metal`
-//     + Metal Performance Shaders runtime + M-series GPU.
+//     + Metal Performance Shaders runtime + M-series GPU (vec-add
+//     landed on Apple M3 commit 4415ec91; vec-mul / vec-sub / vec-div /
+//     vec-scale / vec-neg / vec-abs / vec-sqrt / vec-exp / vec-log /
+//     vec-sin / vec-cos silicon fires queued for the same cycle once
+//     a Mac is available — transcendentals need ULP-tolerance compare
+//     against the CPU reference because Apple M-series transcendentals
+//     may differ from IEEE by several ULP).
 //   - TODO RFC 075 follow-on cycle — general MFunc → MSL emission
 //     (replicate `_nvptx_lower_func` shape against MSL statements).
 pub fn codegen_emit_metal_msl(module: MModule) -> string {
     // P0 contract: empty module → empty string.
     if len(module.funcs) == 0 { return "" }
     let mfn = module.funcs[0]
-    // P3 vec-add shape recognition. Anything else stays at "" so the
-    // emitter never over-claims.
-    if !_metal_mfunc_is_vec_add_shape(mfn) { return "" }
-    // Compose preamble + signature + body.
-    let mut out = _metal_emit_preamble()
+    // Shared preamble + signature for any recognised vec-* shape.
     let kname = mfn.name
-    out = out + _metal_emit_kernel_signature(kname)
-    out = out + _metal_emit_vec_add_body()
-    return out
+    // vec-add — STMT_LOAD + STMT_LOAD + STMT_BINOP(add) + STMT_STORE.
+    if _metal_mfunc_is_vec_add_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_add_body()
+        return out
+    }
+    // vec-mul — STMT_LOAD + STMT_LOAD + STMT_BINOP(mul) + STMT_STORE.
+    if _metal_mfunc_is_vec_mul_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_mul_body()
+        return out
+    }
+    // vec-sub — STMT_LOAD + STMT_LOAD + STMT_BINOP(sub) + STMT_STORE.
+    if _metal_mfunc_is_vec_sub_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_sub_body()
+        return out
+    }
+    // vec-div — STMT_LOAD + STMT_LOAD + STMT_BINOP(div) + STMT_STORE.
+    if _metal_mfunc_is_vec_div_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_div_body()
+        return out
+    }
+    // vec-scale — STMT_LOAD + STMT_BINOP(mul, const) + STMT_STORE.
+    // The scalar literal text is pulled from the BINOP's args[1] const
+    // operand and formatted to an MSL FP32 literal.
+    if _metal_mfunc_is_vec_scale_shape(mfn) {
+        let entry = mfn.blocks[0]
+        let scalar = _metal_format_scalar(entry.stmts[1].args[1])
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_scale_body(scalar)
+        return out
+    }
+    // vec-neg — STMT_LOAD + STMT_UNOP(neg) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_neg_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_neg_body()
+        return out
+    }
+    // vec-abs — STMT_LOAD + STMT_UNOP(abs) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_abs_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_abs_body()
+        return out
+    }
+    // vec-sqrt — STMT_LOAD + STMT_UNOP(sqrt) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_sqrt_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_sqrt_body()
+        return out
+    }
+    // vec-exp — STMT_LOAD + STMT_UNOP(exp) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_exp_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_exp_body()
+        return out
+    }
+    // vec-log — STMT_LOAD + STMT_UNOP(log) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_log_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_log_body()
+        return out
+    }
+    // vec-sin — STMT_LOAD + STMT_UNOP(sin) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_sin_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_sin_body()
+        return out
+    }
+    // vec-cos — STMT_LOAD + STMT_UNOP(cos) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_cos_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_cos_body()
+        return out
+    }
+    // No recognised shape — honest empty string.
+    return ""
 }

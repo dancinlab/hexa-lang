@@ -14,7 +14,10 @@
   the multi-objective overlay (Ψ-physics: CE + L_psi + L_route + L_phi) is
   required for the anima Living Consciousness emergence goal at 3B scale.
 
-**Status**: not_started (filed 2026-05-21)
+**Status**: `partially-resolved 2026-05-21 — Ask 2 LANDED (Mac smoke
+tier), Ask 1 measured (Mac CPU only — GPU dispatch deferred), Ask 3
+preliminary RECOMMENDATION = Path B sufficient. See §Resolution
+2026-05-21 at bottom.`
 
 **Asks** (3): (1) **benchmark** PyTorch reference impl
   `conscious_decoder.py` against the available hexa-native paths (A: hand-fused;
@@ -271,3 +274,104 @@ multi-head primitives (`nn_decoder_init_dual` / `nn_decoder_fwd_dual` /
 cost envelope: anima will fund all 3B fires ($60-240 budget at no-cost-cap
 per `@D g_no_cost_scope_limit`). flame upstream lands the template; anima
 clones-and-fires; both repos co-evolve.
+
+---
+
+## Resolution 2026-05-21
+
+### Closed
+
+- **Ask 2 — canonical stdlib template LANDED** at
+  `stdlib/flame/flame_anima_multi_objective_test.hexa` (Path B
+  ag_tape implementation; Mac smoke tier d=192 L=2 T=1 V=256).
+  3 falsifiers measured PASS:
+  - `F-MULTIOBJ-MAC-SMOKE-BUILDS`: built clean (`hexa_v2` + clang),
+    program runs to teardown.
+  - `F-MULTIOBJ-BACKWARD-ALL-PARAMS-NONZERO`: ||grad||₁ > 0 measured
+    on all 8 params `{zT_a, zT_g, W1, W2, g1, g2, gF, tok_emb}` at
+    step 0. Both heads' loss paths verified contributing to shared
+    params via `ag_seed_grad(logits_g, dy_g) + ag_backward_reg(logits_a, dy_a)`.
+  - `F-MULTIOBJ-COMBINED-LOSS-DESCENDS`: L_total 4.929 → 0.075 over
+    5 SGD steps (65.7× descent). Split: L_ce 4.86 → 2.3e-9 (full
+    memorize), L_psi 8.7e-4 → 2.1e-5, L_phi 0.241 → 0.25.
+- **Ask 1 — benchmark MEASURED at Mac smoke tier only**: wall =
+  ~14 ms/step (Apple M-arm64 single-thread CPU, d=192 L=2 T=1).
+  PyTorch eager reference + Path A 2-head not measurable locally
+  (PyTorch dispatch not in stdlib/flame; Path A multi-head primitive
+  doesn't exist — that's exactly Path A's gap). d=768 L=12 + d=3072
+  L=28 measurements require cost-bearing GPU dispatch — explicitly
+  deferred to anima downstream dispatch fires.
+- **`println(float)` observability blocker CLOSED**: see
+  inbox/patches/stdlib-print-float-emits-type-tag-not-value.md
+  resolution. Now emits actual values (training observability
+  unblocked).
+
+### Recommendation (Ask 3 — Path A vs Path B)
+
+**Path B (ag_tape) is sufficient. Deprioritize Path A multi-head primitives.**
+
+Reasoning:
+- Path B was implemented end-to-end with **ONE small upstream
+  addition**: `ag_seed_grad(tape, tid, seed)` (4 LoC public wrapper
+  in `stdlib/flame/ag_tape.hexa`). All multi-objective math
+  (composite loss + dy seeds for L_ce + L_psi + L_phi) lives in
+  user-space hexa with zero new ag_tape op kinds.
+- Path A as proposed (`nn_decoder_init_dual` / `nn_decoder_fwd_dual`
+  / `nn_decoder_loss_multi` + matching `_bwd_dual` / `_grad_dual`)
+  would require **3 new bulky primitives** in `decoder_lib.hexa`
+  with backward/grad partners — invasive, larger surface for new
+  bugs, harder to extend (any new loss term means new primitive).
+- Path B's tape-memory estimate at d=3072 L=28 (sketched in §7
+  point 6 of original patch) fits H100 80GB even with full tape
+  retention. The dy-seed mechanism scales O(V) per head regardless
+  of d, L, or tape op count.
+- The API contract proven on Mac smoke (`ag_lmhead` × 2 heads
+  sharing `temb` → `ag_seed_grad(logits_g, dy_g)` + `ag_backward_reg(logits_a, dy_a)`)
+  is invariant across scale tiers. anima can substitute the
+  simplified body (`_mo_mini_block_fwd`) for the full GQA-attention
+  + RoPE + SwiGLU block at d=768/d=3072.
+
+If a future cost-bearing fire at d=3072 reveals Path B tape memory
+or perf actually fails at H100 — file a follow-up patch with
+measured numbers. Until then `flame-anima-dual-head-multiobjective.md`
+should be marked deprioritized.
+
+### Upstream changes landed (2026-05-21)
+
+1. `self/runtime.c` — `hxlcl_vsnprintf` cycle 56 `%f / %g / %e / %F / %G / %E`
+   real double-to-string implementation (default 6 sig digits, %g
+   chooses %e vs %f via exponent, %g strips trailing zeros, nan/inf
+   handled, precision width pad supported). Resolves
+   `stdlib-print-float-emits-type-tag-not-value.md`.
+2. `stdlib/flame/ag_tape.hexa` — new public function
+   `ag_seed_grad(tape, tid, seed)` that accumulates a seed into the
+   per-tensor registry without walking the tape (lets the caller
+   pre-populate multiple outputs' upstream-grads before invoking
+   `ag_backward_reg`, which itself only takes one (tid, seed) pair).
+3. `stdlib/flame/flame_anima_multi_objective_test.hexa` — canonical
+   template (430 LoC; 3 measured falsifiers PASS at Mac smoke tier).
+
+### API hazard noted
+
+`nn_lm_head_fwd(temb, zT, …)` parameter names are flipped from
+conventional usage: the `temb` parameter is the [V·d] weight TABLE
+and `zT` is the [d] embedding VECTOR. The template includes an
+inline comment at the call site to surface this. **No upstream rename**
+landed in this session (would touch many call sites). If anima
+downstream finds this confusing, file a follow-up
+`flame-lmhead-arg-rename.md`.
+
+### Carve-outs preserved
+
+- **§C2 L_route** still deferred (per-layer tension readout not
+  exposed inside ag_tape). If 3B Ψ-grid finds Path B fully
+  sufficient without L_route, this can stay deferred. Otherwise,
+  follow-up `flame-per-layer-tension-readout.md`.
+- **§C3 PyTorch numerical parity** deferred to anima downstream
+  dispatch (requires conscious_decoder.py byte-LM mode mirror).
+- **§C4 3B-fits-H100-80GB** deferred to anima dispatch fire.
+- **§C1 Body simplification** preserved as honest scope. anima is
+  expected to substitute `_mo_mini_block_fwd` with full
+  decoder_block_lib calls when scaling the template into
+  HEXAD/FLAME/state-dirs.
+

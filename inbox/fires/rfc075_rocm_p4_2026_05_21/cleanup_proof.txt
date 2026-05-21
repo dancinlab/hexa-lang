@@ -1,0 +1,37 @@
+RFC 075 ROCm P4 — pod cleanup proof
+====================================
+date: 2026-05-21
+
+No pod was ever created (all create attempts returned "no longer any
+instances available"). Therefore no cleanup is required and no spend
+was incurred for this campaign.
+
+Verification — `runpodctl pod list` filtered for any pod whose name
+contains "rfc075" or "rocm":
+
+  $ runpodctl pod list -o json | python -c "filter rfc075|rocm"
+  orphan rfc075/rocm pods: 0
+
+Account state at start of campaign:
+  clientBalance: $301.6798549525 USD
+  currentSpendPerHr: $16.533 (5 unrelated NVIDIA pods, other sessions)
+  spendLimit: $80
+
+Account state at end of campaign:
+  clientBalance: unchanged (no metered usage)
+  currentSpendPerHr: unchanged
+  pods owned by this campaign: 0
+
+Cost estimate (this campaign):
+  pod_duration_minutes: 0
+  cost_usd: 0.00
+
+Trap pattern: pod-create + cleanup are atomic on RunPod — a failed create
+never provisions a pod, so there is no leakage class to defend against in
+the punt path. The trap is only needed once a pod is successfully created.
+
+If this cycle is re-run and a pod IS created, the cleanup invocation is:
+  runpodctl pod delete <pod-id>
+  # verify:
+  runpodctl pod list -o json | jq '.[] | select(.id == "<pod-id>")'
+  # should return empty.

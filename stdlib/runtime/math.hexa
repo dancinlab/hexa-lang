@@ -402,3 +402,87 @@ pub fn rt_sin(x: float) -> float {
     let PI_HALF = 1.5707963267948966
     return rt_cos(x - PI_HALF)
 }
+
+// Step 3 cycle 40 — inverse trig (atan + asin + acos).
+//
+// rt_atan uses two-stage range reduction:
+//   (1) |x| > 1 → atan(x) = sign(x)*pi/2 - atan(1/x), so |1/x| <= 1
+//   (2) |x| > tan(pi/8) ≈ 0.4142 → atan(a) = pi/4 + atan((a-1)/(a+1)),
+//       so the inner |y| <= tan(pi/8) for fast Maclaurin convergence
+// Then 6-term Maclaurin: atan(a) ≈ a - a³/3 + a⁵/5 - a⁷/7 + a⁹/9 - a¹¹/11
+// gives ~1e-9 precision on the reduced domain.
+pub fn rt_atan(x: float) -> float {
+    let PI_HALF = 1.5707963267948966
+    let PI_QUARTER = 0.7853981633974483
+    let TAN_PI8 = 0.4142135623730951
+    let mut sign = 1.0
+    let mut a = x
+    if a < 0.0 { a = -a; sign = -1.0 }
+    let mut reduced_inv = false
+    if a > 1.0 {
+        a = 1.0 / a
+        reduced_inv = true
+    }
+    let mut reduced_quarter = false
+    if a > TAN_PI8 {
+        a = (a - 1.0) / (a + 1.0)
+        reduced_quarter = true
+    }
+    let a2 = a * a
+    let a3 = a2 * a
+    let a5 = a3 * a2
+    let a7 = a5 * a2
+    let a9 = a7 * a2
+    let a11 = a9 * a2
+    let mut result = a - a3 / 3.0 + a5 / 5.0 - a7 / 7.0 + a9 / 9.0 - a11 / 11.0
+    if reduced_quarter { result = PI_QUARTER + result }
+    if reduced_inv { result = PI_HALF - result }
+    return sign * result
+}
+
+// rt_asin via the standard identity asin(x) = atan(x / sqrt(1 - x²)).
+// Clamps |x| > 1 to +/-pi/2 (NaN-free fallback). Precision degrades near
+// |x| = 1 because sqrt(1-x²) → 0 amplifies floor-noise; that is the
+// expected trade-off for a naive port and matches libm's behaviour at
+// the cycle-2/4 precision budget.
+pub fn rt_asin(x: float) -> float {
+    let PI_HALF = 1.5707963267948966
+    if x >= 1.0 { return PI_HALF }
+    if x <= -1.0 { return -PI_HALF }
+    let s = rt_sqrt(1.0 - x * x)
+    if s == 0.0 {
+        if x > 0.0 { return PI_HALF }
+        return -PI_HALF
+    }
+    return rt_atan(x / s)
+}
+
+// rt_acos via the standard identity acos(x) = pi/2 - asin(x).
+pub fn rt_acos(x: float) -> float {
+    let PI_HALF = 1.5707963267948966
+    return PI_HALF - rt_asin(x)
+}
+
+// Step 3 cycle 41 — atan2 with quadrant resolution. Returns the angle
+// of (x, y) in radians ∈ (-π, π].
+//   x > 0           → atan(y/x)
+//   x < 0, y ≥ 0    → atan(y/x) + π
+//   x < 0, y < 0    → atan(y/x) − π
+//   x = 0, y > 0    → π/2
+//   x = 0, y < 0    → −π/2
+//   x = 0, y = 0    → 0  (libm returns 0; some impls return NaN)
+pub fn rt_atan2(y: float, x: float) -> float {
+    let PI = 3.141592653589793
+    let PI_HALF = 1.5707963267948966
+    if x > 0.0 {
+        return rt_atan(y / x)
+    }
+    if x < 0.0 {
+        if y >= 0.0 { return rt_atan(y / x) + PI }
+        return rt_atan(y / x) - PI
+    }
+    // x == 0
+    if y > 0.0 { return PI_HALF }
+    if y < 0.0 { return -PI_HALF }
+    return 0.0
+}

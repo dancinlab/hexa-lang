@@ -4069,6 +4069,11 @@ static void _hexa_init_byte_str_cache(void) {
 // (immediately below) uses it to walk UTF-8 codepoints.
 static int _hx_utf8_cp_len(unsigned char b);
 
+// Step-3 cycle 47 port — UTF-8 codepoint walker dispatches to
+// rt_str_chars (ctype.hexa). The hexa body inlines the
+// `_hx_utf8_cp_len` bit-pattern table as if/else-if checks; the
+// returned array contains 1-codepoint strings (not bytes).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_chars(HexaVal s) {
     HexaVal arr = hexa_array_new();
     if (!HX_IS_STR(s)) return arr;
@@ -4092,20 +4097,52 @@ HexaVal hexa_str_chars(HexaVal s) {
     }
     return arr;
 }
+#else
+extern HexaVal rt_str_chars(HexaVal s);
+HexaVal hexa_str_chars(HexaVal s) {
+    if (!HX_IS_STR(s)) return hexa_array_new();
+    return rt_str_chars(s);
+}
+#endif
 
+// Step-3 cycle 57 port — int-return bridge through rt_str_contains_b.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int hexa_str_contains(HexaVal s, HexaVal sub) {
     return hxlcl_strstr(HX_STR(s), HX_STR(sub)) != NULL;
 }
+#else
+extern HexaVal rt_str_contains_b(HexaVal s, HexaVal sub);
+int hexa_str_contains(HexaVal s, HexaVal sub) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return 0;
+    return hexa_truthy(rt_str_contains_b(s, sub)) ? 1 : 0;
+}
+#endif
 
+// Step-3 cycle 57 port — int-return bridge through rt_str_eq_b. The
+// pointer-equality fast-path for interned strings stays C-side (hexa
+// source can't observe HX_STR identity).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int hexa_str_eq(HexaVal a, HexaVal b) {
     if (!HX_IS_STR(a) || !HX_IS_STR(b)) return 0;
     // Optimization #11: interned strings share pointers
     if (HX_STR(a) == HX_STR(b)) return 1;
     return hxlcl_strcmp(HX_STR(a), HX_STR(b)) == 0;
 }
+#else
+extern HexaVal rt_str_eq_b(HexaVal a, HexaVal b);
+int hexa_str_eq(HexaVal a, HexaVal b) {
+    if (!HX_IS_STR(a) || !HX_IS_STR(b)) return 0;
+    if (HX_STR(a) == HX_STR(b)) return 1;  // intern fast-path stays C
+    return hexa_truthy(rt_str_eq_b(a, b)) ? 1 : 0;
+}
+#endif
 
 // M1 full · str_ext Step 5 (hxa-20260423-003): rt_str_starts_with/ends_with —
 // codegen emits rt_str_* directly; hexa_str_starts_with/ends_with shims retired.
+// Step-3 cycle 56 port — int-return bridge through rt_str_*_b (hexa
+// source returns bool; the `_b` suffix avoids name collision with the
+// C int-return symbol that codegen wraps via `hexa_bool(...)`).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int rt_str_starts_with(HexaVal s, HexaVal prefix) {
     if (!HX_IS_STR(s) || !HX_IS_STR(prefix)) return 0;
     size_t plen = HX_STRLEN(prefix);
@@ -4119,6 +4156,18 @@ int rt_str_ends_with(HexaVal s, HexaVal suffix) {
     if (sfxlen > slen) return 0;
     return hxlcl_strcmp(HX_STR(s) + slen - sfxlen, HX_STR(suffix)) == 0;
 }
+#else
+extern HexaVal rt_str_starts_with_b(HexaVal s, HexaVal prefix);
+extern HexaVal rt_str_ends_with_b(HexaVal s, HexaVal suffix);
+int rt_str_starts_with(HexaVal s, HexaVal prefix) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(prefix)) return 0;
+    return hexa_truthy(rt_str_starts_with_b(s, prefix)) ? 1 : 0;
+}
+int rt_str_ends_with(HexaVal s, HexaVal suffix) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(suffix)) return 0;
+    return hexa_truthy(rt_str_ends_with_b(s, suffix)) ? 1 : 0;
+}
+#endif
 
 HexaVal hexa_str_substring(HexaVal s, HexaVal start, HexaVal end) {
     if (!HX_IS_STR(s)) return hexa_str("");
@@ -4134,17 +4183,31 @@ HexaVal hexa_str_substring(HexaVal s, HexaVal start, HexaVal end) {
     return (HexaVal){.tag=TAG_STR, .s=buf};
 }
 
+// Step-3 cycle 54 port — int64_t-returning fn bridged through hexa-source
+// `rt_str_index_of` (returns int → HexaVal at C ABI). The C wrapper
+// preserves the int64_t signature so codegen wrapping
+// `hexa_int(hexa_str_index_of(...))` keeps working.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int64_t hexa_str_index_of(HexaVal s, HexaVal sub) {
     if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
     char* p = hxlcl_strstr(HX_STR(s), HX_STR(sub));
     if (!p) return -1;
     return (int64_t)(p - HX_STR(s));
 }
+#else
+extern HexaVal rt_str_index_of(HexaVal s, HexaVal sub);
+int64_t hexa_str_index_of(HexaVal s, HexaVal sub) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
+    return HX_INT(rt_str_index_of(s, sub));
+}
+#endif
 
 // `.index_of(sub, start)` — first occurrence at-or-after byte offset `start`.
 // hxa-20260423-012: the 2-arg form was silently dropping `start`, forcing
 // anima to emit fields in a hack order (rank BEFORE weights) to dodge the
 // miscompare. Semantics: clamp start to [0,len]; empty needle → start.
+// Step-3 cycle 55 port — int64_t-return bridge.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int64_t hexa_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start) {
     if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
     const char* hay = HX_STR(s);
@@ -4158,10 +4221,19 @@ int64_t hexa_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start) {
     if (!p) return -1;
     return (int64_t)(p - hay);
 }
+#else
+extern HexaVal rt_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start);
+int64_t hexa_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
+    return HX_INT(rt_str_index_of_from(s, sub, start));
+}
+#endif
 
 // Returns byte offset of LAST occurrence of `sub` within `s`, or -1.
 // Mirrors interpreter `.rfind`/`.last_index_of` at self/hexa_full.hexa:15741.
 // Added 2026-04-23 (hxa-20260422-002 lang_gap prio=95, rfind blocker).
+// Step-3 cycle 55 port — int64_t-return bridge.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int64_t hexa_str_last_index_of(HexaVal s, HexaVal sub) {
     if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
     const char* hay = HX_STR(s);
@@ -4178,12 +4250,22 @@ int64_t hexa_str_last_index_of(HexaVal s, HexaVal sub) {
     }
     return last;
 }
+#else
+extern HexaVal rt_str_last_index_of(HexaVal s, HexaVal sub);
+int64_t hexa_str_last_index_of(HexaVal s, HexaVal sub) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return -1;
+    return HX_INT(rt_str_last_index_of(s, sub));
+}
+#endif
 
 // Byte-indexed single-char extraction. `.char_at(i)` → 1-byte string at
 // offset i, empty string if out-of-range. Matches the byte-orientation
 // of every other hexa_str_* helper (runtime has no UTF-8 codepoint iter
 // — strings are treated as uninterpreted byte sequences, with the
 // exception of UTF-8-safe display in hexa_println).
+// Step-3 cycle 52 — char_at dispatches to rt_str_char_at (uses
+// substring builtin, no recursion trap).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_char_at(HexaVal s, HexaVal idx) {
     if (!HX_IS_STR(s)) return hexa_str("");
     int64_t i = HX_INT(idx);
@@ -4194,11 +4276,23 @@ HexaVal hexa_str_char_at(HexaVal s, HexaVal idx) {
     char buf[2] = { HX_STR(s)[i], '\0' };
     return hexa_str(buf);
 }
+#else
+extern HexaVal rt_str_char_at(HexaVal s, HexaVal idx);
+HexaVal hexa_str_char_at(HexaVal s, HexaVal idx) {
+    if (!HX_IS_STR(s)) return hexa_str("");
+    return rt_str_char_at(s, idx);
+}
+#endif
 
 // Byte value at offset i (0..255), or -1 if out-of-range. JS-analog
 // `.char_code_at` expects UTF-16 code units; we expose raw byte
 // values since hexa strings are byte-sequenced. A later UTF-8
 // codepoint API (`.code_point_at`) can layer on if needed.
+// Step-3 cycle 52 NOTE — hexa_str_char_code_at is intentionally NOT
+// ported. The chain `s.byte_at(i)` → hexa_str_byte_at(s, idx) →
+// hexa_str_char_code_at(s, idx) (see line 4327) means any hexa-source
+// rt_str_char_code_at body would infinite-recurse through the byte_at
+// builtin. Stays C-only; the 4-line body has no real porting value.
 HexaVal hexa_str_char_code_at(HexaVal s, HexaVal idx) {
     if (!HX_IS_STR(s)) return hexa_int(-1);
     int64_t i = HX_INT(idx);
@@ -4223,6 +4317,9 @@ static int _hx_utf8_cp_len(unsigned char b) {
 }
 
 // Count UTF-8 codepoints. `"한글hi".char_count() == 4` etc.
+// Step-3 cycle 52 — dispatches to rt_str_char_count (reuses
+// rt_utf8_cpcount helper from cycle 51).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_char_count(HexaVal s) {
     if (!HX_IS_STR(s)) return hexa_int(0);
     const char* p = HX_STR(s);
@@ -4235,9 +4332,18 @@ HexaVal hexa_str_char_count(HexaVal s) {
     }
     return hexa_int(count);
 }
+#else
+extern HexaVal rt_str_char_count(HexaVal s);
+HexaVal hexa_str_char_count(HexaVal s) {
+    if (!HX_IS_STR(s)) return hexa_int(0);
+    return rt_str_char_count(s);
+}
+#endif
 
 // Codepoint-indexed nth char as a 1-codepoint string (1..4 bytes).
 // Returns "" for negative or out-of-range n.
+// Step-3 cycle 53 — dispatches to rt_str_nth_char (UTF-8 walker).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_nth_char(HexaVal s, HexaVal nv) {
     if (!HX_IS_STR(s)) return hexa_str("");
     int64_t target = HX_INT(nv);
@@ -4259,8 +4365,18 @@ HexaVal hexa_str_nth_char(HexaVal s, HexaVal nv) {
     }
     return hexa_str("");  // OOB
 }
+#else
+extern HexaVal rt_str_nth_char(HexaVal s, HexaVal target);
+HexaVal hexa_str_nth_char(HexaVal s, HexaVal nv) {
+    if (!HX_IS_STR(s)) return hexa_str("");
+    return rt_str_nth_char(s, nv);
+}
+#endif
 
 // Codepoint-indexed substring [start..end). `"한글hi".char_substring(0, 2) == "한글"`.
+// Step-3 cycle 53 — dispatches to rt_str_char_substring (UTF-8 walker
+// finds byte boundaries that correspond to the codepoint indices).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_char_substring(HexaVal s, HexaVal startv, HexaVal endv) {
     if (!HX_IS_STR(s)) return hexa_str("");
     int64_t cs = HX_INT(startv);
@@ -4288,6 +4404,13 @@ HexaVal hexa_str_char_substring(HexaVal s, HexaVal startv, HexaVal endv) {
     buf[len] = 0;
     return hexa_str_own(buf);
 }
+#else
+extern HexaVal rt_str_char_substring(HexaVal s, HexaVal cs, HexaVal ce);
+HexaVal hexa_str_char_substring(HexaVal s, HexaVal startv, HexaVal endv) {
+    if (!HX_IS_STR(s)) return hexa_str("");
+    return rt_str_char_substring(s, startv, endv);
+}
+#endif
 
 // Byte at offset i (0..255), -1 if out-of-range. Alias of char_code_at
 // (same byte-indexed semantics) — separate name because `.byte_at` is
@@ -4327,11 +4450,8 @@ HexaVal hexa_array_shift(HexaVal arr) {
     return first;
 }
 
+// Step-3 cycle 25 port (float array fast-path).
 HexaVal hexa_array_reverse(HexaVal arr) {
-    // Polymorphic — string.reverse() / array.reverse() share codegen emit.
-    // Previously fell through for strings ("abc".reverse() → "abc" no-op)
-    // because the `!HX_IS_ARRAY` guard returned early. Interp handled it
-    // via Val-level byte reverse; AOT was silently wrong.
     if (HX_IS_STR(arr)) {
         const char* s = HX_STR(arr);
         size_t n = hxlcl_strlen(s);
@@ -4341,6 +4461,16 @@ HexaVal hexa_array_reverse(HexaVal arr) {
         return hexa_str_own(buf);
     }
     if (!HX_IS_ARRAY(arr)) return arr;
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+    extern HexaVal rt_array_reverse_float(HexaVal arr);
+    // Inline _arr_all_float (helper lives in runtime.c — declared static there)
+    int all_float = 1;
+    int64_t arr_n = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < arr_n; i++) {
+        if (!HX_IS_FLOAT(HX_ARR_ITEMS(arr)[i])) { all_float = 0; break; }
+    }
+    if (all_float) return rt_array_reverse_float(arr);
+#endif
     HexaVal result = hexa_array_new();
     for (int i = HX_ARR_LEN(arr) - 1; i >= 0; i--)
         result = hexa_array_push(result, HX_ARR_ITEMS(arr)[i]);
@@ -4370,6 +4500,9 @@ static int hexa_sort_cmp(const void* a, const void* b) {
     return 0;
 }
 
+// Step-3 cycle 59 port — float fast-path dispatches to insertion-sort
+// hexa source. Mixed-type arrays still need hexa_sort_cmp polymorphism
+// and stay on the qsort path.
 HexaVal hexa_array_sort(HexaVal arr) {
     // Previously `result = arr` copied the HexaVal struct — but both still
     // alias array_store[arr.int_val]. `HX_SET_ARR_ITEMS(result, malloc(...))`
@@ -4380,6 +4513,15 @@ HexaVal hexa_array_sort(HexaVal arr) {
     // Fix: build a fresh result via hexa_array_new + push (mirrors
     // hexa_array_reverse), then qsort the fresh buffer.
     if (!HX_IS_ARRAY(arr)) return arr;
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+    extern HexaVal rt_array_sort_float(HexaVal arr);
+    int all_float = 1;
+    int64_t arr_n = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < arr_n; i++) {
+        if (!HX_IS_FLOAT(HX_ARR_ITEMS(arr)[i])) { all_float = 0; break; }
+    }
+    if (all_float) return rt_array_sort_float(arr);
+#endif
     HexaVal result = hexa_array_new();
     int n = HX_ARR_LEN(arr);
     for (int i = 0; i < n; i++) {
@@ -5788,6 +5930,10 @@ HexaVal hexa_to_int(HexaVal v) {
 // ── String format ────────────────────────────────────
 
 // Multi-arg format: hexa_format_n(fmt, args_array)
+// Step-3 cycle 62 port — single-arg `{}` substitution dispatches to
+// rt_format. The polymorphic `hexa_to_string(arg)` coercion stays
+// C-side; the hexa fn receives both args as string.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_format(HexaVal fmt, HexaVal arg) {
     // Single arg: replace first {} with arg
     if (!HX_IS_STR(fmt)) return fmt;
@@ -5803,6 +5949,14 @@ HexaVal hexa_format(HexaVal fmt, HexaVal arg) {
     hxlcl_strcat(result, pos + 2);
     return hexa_str_own(result);
 }
+#else
+extern HexaVal rt_format(HexaVal fmt, HexaVal sarg);
+HexaVal hexa_format(HexaVal fmt, HexaVal arg) {
+    if (!HX_IS_STR(fmt)) return fmt;
+    HexaVal sarg = hexa_to_string(arg);
+    return rt_format(fmt, sarg);
+}
+#endif
 
 HexaVal hexa_format_n(HexaVal fmt, HexaVal args) {
     // Multi-arg: replace {} and {:.N} with successive args
@@ -5893,6 +6047,10 @@ HexaVal hexa_format_n(HexaVal fmt, HexaVal args) {
 
 // ── String split ─────────────────────────────────────
 
+// Step-3 cycle 45 port — string split dispatches to rt_str_split. The
+// hexa path scans byte-by-byte (no strstr) and avoids the strdup/free
+// pair the C body uses for the in-place NUL terminator trick.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_split(HexaVal s, HexaVal delim) {
     HexaVal arr = hexa_array_new();
     if (!HX_IS_STR(s) || !HX_IS_STR(delim)) return arr;
@@ -5910,6 +6068,13 @@ HexaVal hexa_str_split(HexaVal s, HexaVal delim) {
     free(src);
     return arr;
 }
+#else
+extern HexaVal rt_str_split(HexaVal s, HexaVal delim);
+HexaVal hexa_str_split(HexaVal s, HexaVal delim) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(delim)) return hexa_array_new();
+    return rt_str_split(s, delim);
+}
+#endif
 
 // ─────────────────────────────────────────────────────────────────────
 // M1-lite (hxa-20260423-003 Step 4): rt_str_* layer — GENERATED from
@@ -5920,6 +6085,9 @@ HexaVal hexa_str_split(HexaVal s, HexaVal delim) {
 
 // M1 full · str_ext Step 5 (hxa-20260423-003): rt_str_trim — codegen
 // emits rt_str_* directly; hexa_str_trim shim retired.
+// Step-3 cycle 49 — rt_str_trim moves to hexa source. C body stays
+// for the no-stdlib path.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal rt_str_trim(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
     char* str = HX_STR(s);
@@ -5929,7 +6097,14 @@ HexaVal rt_str_trim(HexaVal s) {
     char* result = hxlcl_strndup(str, len);
     return hexa_str_own(result);
 }
+#endif
 
+// Step-3 cycle 44 port — string replace-all dispatches to rt_str_replace
+// in stdlib/runtime/ctype.hexa. The hexa path is O(n*m) (no strstr;
+// byte-by-byte match) and uses `+` concat (no preallocated buffer);
+// acceptable trade-off for hexa-native landing, matches the cycle-
+// 2/4 precision/perf budget.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_replace(HexaVal s, HexaVal old, HexaVal new_s) {
     if (!HX_IS_STR(s)) return s;
     size_t cap = HX_STRLEN(s) * 2 + 1;
@@ -5960,9 +6135,20 @@ HexaVal hexa_str_replace(HexaVal s, HexaVal old, HexaVal new_s) {
     }
     return hexa_str_own(result);
 }
+#else
+extern HexaVal rt_str_replace(HexaVal s, HexaVal old, HexaVal new_s);
+HexaVal hexa_str_replace(HexaVal s, HexaVal old, HexaVal new_s) {
+    if (!HX_IS_STR(s)) return s;
+    if (!HX_IS_STR(old) || !HX_IS_STR(new_s)) return s;
+    return rt_str_replace(s, old, new_s);
+}
+#endif
 
 // M1 full · str_ext Step 5 (hxa-20260423-003): rt_str_to_upper/lower —
 // codegen emits rt_str_* directly; hexa_str_to_upper/lower shims retired.
+// Step-3 cycle 50 — both move to hexa source. C bodies stay for the
+// no-stdlib path.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal rt_str_to_upper(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
     char* r = hxlcl_strdup(HX_STR(s));
@@ -5976,7 +6162,12 @@ HexaVal rt_str_to_lower(HexaVal s) {
     for (int i = 0; r[i]; i++) if (r[i] >= 'A' && r[i] <= 'Z') r[i] += 32;
     return hexa_str_own(r);
 }
+#endif
 
+// Step-3 cycle 43 port — float-style fast-path for all-string arrays
+// dispatches to rt_str_join_str (ctype.hexa). Mixed-type arrays still
+// need hexa_to_string() coercion per element — that path stays C-side.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_join(HexaVal arr, HexaVal sep) {
     if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_str("");
     size_t total_size = 0;
@@ -6001,6 +6192,43 @@ HexaVal hexa_str_join(HexaVal arr, HexaVal sep) {
     result[total] = 0;
     return hexa_str_own(result);
 }
+#else
+extern HexaVal rt_str_join_str(HexaVal arr, HexaVal sep);
+static int _arr_all_str_join(HexaVal arr) {
+    int64_t n = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < n; i++) {
+        if (!HX_IS_STR(HX_ARR_ITEMS(arr)[i])) return 0;
+    }
+    return 1;
+}
+HexaVal hexa_str_join(HexaVal arr, HexaVal sep) {
+    if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_str("");
+    if (HX_IS_STR(sep) && _arr_all_str_join(arr)) {
+        return rt_str_join_str(arr, sep);
+    }
+    size_t total_size = 0;
+    for (int i = 0; i < HX_ARR_LEN(arr); i++) {
+        HexaVal s = hexa_to_string(HX_ARR_ITEMS(arr)[i]);
+        total_size += HX_STRLEN(s);
+    }
+    size_t seplen = HX_STRLEN(sep);
+    total_size += (HX_ARR_LEN(arr) - 1) * seplen;
+    char* result = malloc(total_size + 1);
+    size_t total = 0;
+    for (int i = 0; i < HX_ARR_LEN(arr); i++) {
+        if (i > 0) {
+            hxlcl_memcpy(result + total, HX_STR(sep), seplen);
+            total += seplen;
+        }
+        HexaVal s = hexa_to_string(HX_ARR_ITEMS(arr)[i]);
+        size_t slen = HX_STRLEN(s);
+        hxlcl_memcpy(result + total, HX_STR(s), slen);
+        total += slen;
+    }
+    result[total] = 0;
+    return hexa_str_own(result);
+}
+#endif
 
 // ─────────────────────────────────────────────────────────────────────
 // M1-lite (hxa-20260423-003 Step 4): rt_str_* layer from runtime_hi.hexa
@@ -6020,6 +6248,10 @@ static int utf8_cpcount(const char* s) {
     for (int i = 0; s[i]; i++) if ((s[i] & 0xC0) != 0x80) n++;
     return n;
 }
+// Step-3 cycle 51 port — pad_left dispatches to rt_pad_left. The
+// hexa_to_string polymorphic coercion stays C-side (hexa-source
+// param is string-typed); the actual padding work is hexa-source.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_pad_left(HexaVal s, HexaVal width) {
     HexaVal str = hexa_to_string(s);
     int w = HX_INT(width);
@@ -6032,6 +6264,13 @@ HexaVal hexa_pad_left(HexaVal s, HexaVal width) {
     hxlcl_strcpy(result + pad, HX_STR(str));
     return hexa_str_own(result);
 }
+#else
+extern HexaVal rt_pad_left(HexaVal s, HexaVal width);
+HexaVal hexa_pad_left(HexaVal s, HexaVal width) {
+    HexaVal str = hexa_to_string(s);
+    return rt_pad_left(str, width);
+}
+#endif
 
 
 // Bootstrap shim: hexa-level `join(arr, sep)` free-fn idiom in SSOT modules
@@ -6040,6 +6279,8 @@ HexaVal hexa_pad_left(HexaVal s, HexaVal width) {
 // (`split` was retired 2026-04-21 — codegen now emits hexa_str_split directly.)
 static HexaVal join;
 
+// Step-3 cycle 51 port — pad_right symmetric to pad_left.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_pad_right(HexaVal s, HexaVal width) {
     HexaVal str = hexa_to_string(s);
     int w = HX_INT(width);
@@ -6053,6 +6294,13 @@ HexaVal hexa_pad_right(HexaVal s, HexaVal width) {
     result[bytelen + pad] = 0;
     return hexa_str_own(result);
 }
+#else
+extern HexaVal rt_pad_right(HexaVal s, HexaVal width);
+HexaVal hexa_pad_right(HexaVal s, HexaVal width) {
+    HexaVal str = hexa_to_string(s);
+    return rt_pad_right(str, width);
+}
+#endif
 
 // B-19: Polymorphic arithmetic — T39 routes through __hx_to_double.
 // ROI-47: explicit float+float fast path avoids 2x __hx_to_double tag dispatch.
@@ -6151,6 +6399,12 @@ HexaVal hexa_cmp_ge(HexaVal a, HexaVal b) {
     return hexa_bool(HX_INT(a) >= HX_INT(b));
 }
 
+// Step-3 cycle 58 port — float fast-path bridge. Mixed-type arrays
+// stay on the polymorphic hexa_eq path. Int return preserved (codegen
+// wraps in `hexa_bool(...)` like starts_with). _arr_all_float helper
+// is inlined here (lives static in runtime.c — copy-pattern from
+// hexa_array_reverse above).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int hexa_array_contains(HexaVal arr, HexaVal item) {
     if (!HX_IS_ARRAY(arr)) return 0;
     for (int i = 0; i < HX_ARR_LEN(arr); i++) {
@@ -6158,9 +6412,31 @@ int hexa_array_contains(HexaVal arr, HexaVal item) {
     }
     return 0;
 }
+#else
+extern HexaVal rt_array_contains_float_b(HexaVal arr, HexaVal item);
+int hexa_array_contains(HexaVal arr, HexaVal item) {
+    if (!HX_IS_ARRAY(arr)) return 0;
+    if (HX_IS_FLOAT(item)) {
+        int all_float = 1;
+        int64_t n = HX_ARR_LEN(arr);
+        for (int64_t i = 0; i < n; i++) {
+            if (!HX_IS_FLOAT(HX_ARR_ITEMS(arr)[i])) { all_float = 0; break; }
+        }
+        if (all_float) {
+            return hexa_truthy(rt_array_contains_float_b(arr, item)) ? 1 : 0;
+        }
+    }
+    for (int i = 0; i < HX_ARR_LEN(arr); i++) {
+        if (hexa_truthy(hexa_eq(HX_ARR_ITEMS(arr)[i], item))) return 1;
+    }
+    return 0;
+}
+#endif
 
 // count_substr(s, substr): number of non-overlapping occurrences.
 // Matches interpreter's greedy advance (hexa_full.hexa:14954-14973).
+// Step-3 cycle 27 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_count_substr(HexaVal s, HexaVal sub) {
     if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return hexa_int(0);
     const char* src = HX_STR(s);
@@ -6175,7 +6451,19 @@ HexaVal hexa_str_count_substr(HexaVal s, HexaVal sub) {
     }
     return hexa_int(cnt);
 }
+#else
+extern HexaVal rt_str_count_substr(HexaVal s, HexaVal sub);
+HexaVal hexa_str_count_substr(HexaVal s, HexaVal sub) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(sub)) return hexa_int(0);
+    return rt_str_count_substr(s, sub);
+}
+#endif
 
+// Step-3 cycle 60 port — snprintf "%.*f" replaced by hexa-source
+// rt_format_float_f. Caveats: works exactly for values within ±2^53
+// and prec ≤ 18; beyond that the int64 round-trip is lossy. The C
+// body remains as the no-stdlib fallback.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_format_float(HexaVal f, HexaVal prec) {
     double v = __hx_to_double(f);
     int p = HX_INT(prec);
@@ -6183,7 +6471,18 @@ HexaVal hexa_format_float(HexaVal f, HexaVal prec) {
     snprintf(buf, 64, "%.*f", p, v);
     return hexa_str(buf);
 }
+#else
+extern HexaVal rt_format_float_f(HexaVal v, HexaVal prec);
+HexaVal hexa_format_float(HexaVal f, HexaVal prec) {
+    return rt_format_float_f(hexa_float(__hx_to_double(f)), prec);
+}
+#endif
 
+// Step-3 cycle 61 port — snprintf "%.*e" replaced by hexa-source.
+// Uses rt_log10 for the exponent, rt_format_float_f for the mantissa.
+// Caveats: same int64 round-trip limit as cycle 60; mantissa rounding
+// boundary (9.99→10) is NOT renormalized.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_format_float_sci(HexaVal f, HexaVal prec) {
     double v = __hx_to_double(f);
     int p = HX_INT(prec);
@@ -6191,4 +6490,10 @@ HexaVal hexa_format_float_sci(HexaVal f, HexaVal prec) {
     snprintf(buf, 64, "%.*e", p, v);
     return hexa_str(buf);
 }
+#else
+extern HexaVal rt_format_float_sci(HexaVal v, HexaVal prec);
+HexaVal hexa_format_float_sci(HexaVal f, HexaVal prec) {
+    return rt_format_float_sci(hexa_float(__hx_to_double(f)), prec);
+}
+#endif
 

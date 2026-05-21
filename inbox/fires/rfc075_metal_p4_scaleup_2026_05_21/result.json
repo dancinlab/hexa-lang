@@ -1,0 +1,90 @@
+{
+  "all_pass_byte_eq" : true,
+  "campaign" : "rfc075_metal_p4_scaleup_2026_05_21",
+  "device" : "Apple M3",
+  "falsifier_F_RFC075_METAL_SCALEUP_NUMERIC_EQ" : "PASS",
+  "max_total_threads_per_threadgroup" : 1024,
+  "registry_id" : 4294968442,
+  "shapes" : [
+    {
+      "byte_mismatch" : 0,
+      "bytes_total" : 12288,
+      "gb_per_s_effective" : 0.047068134750684928,
+      "max_abs_diff" : 0,
+      "max_ms" : 0.81801414489746094,
+      "median_ms" : 0.26106834411621094,
+      "min_ms" : 0.1239776611328125,
+      "N" : 1024,
+      "std_ms" : 0.17472136224154969
+    },
+    {
+      "byte_mismatch" : 0,
+      "bytes_total" : 49152,
+      "gb_per_s_effective" : 0.24823411223118602,
+      "max_abs_diff" : 0,
+      "max_ms" : 2.7329921722412109,
+      "median_ms" : 0.19800662994384766,
+      "min_ms" : 0.12195110321044922,
+      "N" : 4096,
+      "std_ms" : 0.36856085823432888
+    },
+    {
+      "byte_mismatch" : 0,
+      "bytes_total" : 196608,
+      "gb_per_s_effective" : 1.0800703612730844,
+      "max_abs_diff" : 0,
+      "max_ms" : 0.74994564056396484,
+      "median_ms" : 0.18203258514404297,
+      "min_ms" : 0.15294551849365234,
+      "N" : 16384,
+      "std_ms" : 0.110144666678099
+    },
+    {
+      "byte_mismatch" : 0,
+      "bytes_total" : 786432,
+      "gb_per_s_effective" : 3.7271580602576271,
+      "max_abs_diff" : 0,
+      "max_ms" : 1.6689300537109375,
+      "median_ms" : 0.21100044250488281,
+      "min_ms" : 0.19299983978271484,
+      "N" : 65536,
+      "std_ms" : 0.20900751731092637
+    },
+    {
+      "byte_mismatch" : 0,
+      "bytes_total" : 3145728,
+      "gb_per_s_effective" : 12.188581555022633,
+      "max_abs_diff" : 0,
+      "max_ms" : 1.9299983978271484,
+      "median_ms" : 0.25808811187744141,
+      "min_ms" : 0.23400783538818359,
+      "N" : 262144,
+      "std_ms" : 0.30483259317712608
+    },
+    {
+      "byte_mismatch" : 0,
+      "bytes_total" : 12582912,
+      "gb_per_s_effective" : 23.127326088189307,
+      "max_abs_diff" : 0,
+      "max_ms" : 2.1300315856933594,
+      "median_ms" : 0.54407119750976562,
+      "min_ms" : 0.39601325988769531,
+      "N" : 1048576,
+      "std_ms" : 0.26560493363353699
+    },
+    {
+      "byte_mismatch" : 0,
+      "bytes_total" : 50331648,
+      "gb_per_s_effective" : 50.534107129381688,
+      "max_abs_diff" : 0,
+      "max_ms" : 1.8829107284545898,
+      "median_ms" : 0.99599361419677734,
+      "min_ms" : 0.83696842193603516,
+      "N" : 4194304,
+      "std_ms" : 0.18088118462157715
+    }
+  ],
+  "thread_execution_width" : 32,
+  "timed_launches" : 50,
+  "warmup_launches" : 5
+}

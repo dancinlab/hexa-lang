@@ -77,6 +77,11 @@
 //                          pressure_pa, temp_c) -> deg
 //   pub fn refraction_correction(elev_deg, pressure_pa, temp_c) -> deg
 //   pub fn haurwitz_ghi(apparent_zenith_deg) -> W·m⁻²
+//   pub fn kasten_airmass_relative(apparent_zenith_deg) -> unitless
+//   pub fn kasten_airmass_absolute(apparent_zenith_deg, pressure_pa) -> unitless
+//   pub fn alt2pres(altitude_m) -> Pa
+//   pub fn ineichen_ghi(apparent_zenith_deg, airmass_absolute,
+//                       linke_turbidity, altitude_m, dni_extra) -> W·m⁻²
 
 use "stdlib/core/math/float"
 
@@ -291,6 +296,118 @@ pub fn haurwitz_ghi(apparent_zenith_deg: float) -> float {
     let cos_z = cos(radians(apparent_zenith_deg))
     if cos_z <= 0.0 { return 0.0 }
     return 1098.0 * cos_z * exp(-0.059 / cos_z)
+}
+
+// G31β — Kasten-Young 1989 airmass + Ineichen-Perez 2002 clearsky.
+//
+// Second clean-room hexa-native port closing the pvlib runtime
+// dependency on the modeled side of the Energy/solar measured-oracle
+// producer. The Kasten-Young 1989 relative airmass and the
+// Ineichen-Perez 2002 clearsky GHI are both closed-form mathematical
+// expressions with empirical constants from the cited publications;
+// no proprietary upstream code is reused.
+//
+// References:
+//   F. Kasten and A. T. Young, "Revised optical air mass tables and
+//     approximation formula", Applied Optics 28(22) 1989 pp.4735-4738.
+//   P. Ineichen and R. Perez, "A new airmass independent formulation
+//     for the Linke turbidity coefficient", Solar Energy 73(3) 2002
+//     pp.151-157.
+//
+// Parity baseline: pvlib 0.13.x
+//   `atmosphere.get_relative_airmass(z, model='kastenyoung1989')`
+//   `atmosphere.get_absolute_airmass(am_r, pressure)`
+//   `atmosphere.alt2pres(altitude)`
+//   `clearsky.ineichen(..., perez_enhancement=False)` (default)
+//
+// HONESTY:
+//   * `ineichen_ghi` here ports the DEFAULT pvlib path
+//     (perez_enhancement=False — see pvlib/issues/435 for why the
+//     enhancement is off by default; producer also does not enable
+//     it). The optional Perez airmass-enhancement factor
+//     `exp(0.01 * am^1.8)` is NOT applied.
+//   * Linke turbidity climatology (the monthly 5-min lat/lon lookup
+//     grid bundled with pvlib as `LinkeTurbidities.h5`) is OUT OF
+//     SCOPE for this kernel. Callers must supply `linke_turbidity`
+//     directly; the demiurge producer continues to obtain it from
+//     `pvlib.clearsky.lookup_linke_turbidity`. That's a NetCDF
+//     climatology axis separate from the closed-form math here.
+//   * Returns 0 for zenith ≥ 90° (sun below horizon) — matches the
+//     `np.maximum(cosd(zen), 0)` clamp in the pvlib implementation.
+
+/// Standard sea-level barometric pressure (Pa). Matches pvlib's
+/// `P0 = 101325.` reference for absolute-airmass scaling.
+pub fn sea_level_pressure_pa() -> float { return 101325.0 }
+
+/// Site pressure (Pa) from altitude (m), per pvlib `alt2pres`:
+///   P = 100 · ((44331.514 − altitude) / 11880.516) ^ (1/0.1902632)
+///
+/// Assumes ISA-like atmosphere (base 101325 Pa, T₀=288.15 K, lapse
+/// −6.5e-3 K/m, g=9.80665 m/s², R=287.053 J/(kg·K), RH=0).
+pub fn alt2pres(altitude_m: float) -> float {
+    return 100.0 * pow((44331.514 - altitude_m) / 11880.516,
+                       1.0 / 0.1902632)
+}
+
+/// Kasten-Young 1989 relative airmass (sea-level, apparent-zenith).
+///   am_r = 1 / ( cos(z) + 0.50572 · (6.07995 + (90 − z))^(−1.6364) )
+/// Returns +∞-equivalent (a very large finite value) when the sun is
+/// at or below the horizon (z ≥ 90°); callers should gate on the
+/// daylight-zenith threshold (e.g. < 85°) before consuming.
+pub fn kasten_airmass_relative(apparent_zenith_deg: float) -> float {
+    let z = apparent_zenith_deg
+    let z_r = radians(z)
+    let denom = cos(z_r) + 0.50572 * pow(6.07995 + (90.0 - z), -1.6364)
+    return 1.0 / denom
+}
+
+/// Pressure-adjusted absolute airmass:
+///   am_a = am_r · P / 101325
+/// Matches pvlib `atmosphere.get_absolute_airmass`.
+pub fn kasten_airmass_absolute(apparent_zenith_deg: float,
+                               pressure_pa: float) -> float {
+    let am_r = kasten_airmass_relative(apparent_zenith_deg)
+    return am_r * pressure_pa / 101325.0
+}
+
+/// Ineichen-Perez 2002 clear-sky global horizontal irradiance (W·m⁻²).
+///
+///   fh1 = exp(−altitude / 8000)
+///   fh2 = exp(−altitude / 1250)
+///   cg1 = 5.09e-5 · altitude + 0.868
+///   cg2 = 3.92e-5 · altitude + 0.0387
+///   GHI = cg1 · dni_extra · cos(z) ·
+///         exp(−cg2 · am_abs · (fh1 + fh2 · (TL − 1)))
+///
+/// Inputs:
+///   apparent_zenith_deg — refraction-corrected zenith (deg)
+///   airmass_absolute    — pressure-corrected airmass (unitless)
+///   linke_turbidity     — Linke turbidity (typ. 2-6, climatology)
+///   altitude_m          — site altitude above sea level (m)
+///   dni_extra           — extraterrestrial DNI (W·m⁻², typ. ~1325-1410)
+///
+/// Returns 0 when sun ≥ horizon (z ≥ 90° or cos(z) ≤ 0) — mirrors the
+/// `np.maximum(cosd(zen), 0)` clamp in pvlib. The optional Perez
+/// airmass-enhancement factor is NOT applied (matches pvlib default
+/// `perez_enhancement=False`, which is what the producer uses).
+pub fn ineichen_ghi(apparent_zenith_deg: float, airmass_absolute: float,
+                    linke_turbidity: float, altitude_m: float,
+                    dni_extra: float) -> float {
+    if apparent_zenith_deg >= 90.0 { return 0.0 }
+    let cos_z = cos(radians(apparent_zenith_deg))
+    if cos_z <= 0.0 { return 0.0 }
+
+    let fh1 = exp(-altitude_m / 8000.0)
+    let fh2 = exp(-altitude_m / 1250.0)
+    let cg1 = 5.09e-05 * altitude_m + 0.868
+    let cg2 = 3.92e-05 * altitude_m + 0.0387
+
+    let exponent = -cg2 * airmass_absolute
+        * (fh1 + fh2 * (linke_turbidity - 1.0))
+    let mut ghi_core = exp(exponent)
+    if ghi_core < 0.0 { ghi_core = 0.0 }
+
+    return cg1 * dni_extra * cos_z * ghi_core
 }
 
 // ── ①b adapter note ──────────────────────────────────────────────────

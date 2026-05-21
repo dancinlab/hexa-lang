@@ -1,4 +1,19 @@
 #!hexa lax
+// RFC 071 P3 runtime activation Path B probe.
+// Project-root `use "..."` style matches the convention in test/*_smoke.hexa
+// and the `use` chain inside compiler/atlas/static_index.hexa (project-root
+// resolution + dedupe across multiple importers). The earlier
+// `import "../compiler/..."` form trip-wired the module_loader to load
+// compiler/atlas/parser.hexa TWICE (once via absolute path expansion,
+// once via project-root expansion from static_index's own `use` chain) —
+// causing duplicate `struct AtlasNode` typedefs in the generated C.
+use "compiler/lex/lexer"
+use "compiler/parse/parser"
+use "compiler/lower/ast_to_hir"
+use "compiler/lower/hir_to_mir"
+use "compiler/atlas/static_index"
+use "compiler/ir/mir"
+use "compiler/codegen/nvptx_target"
 // ═══════════════════════════════════════════════════════════
 //  self/main.hexa — HEXA CLI 엔트리 (go/cargo 스타일)
 //
@@ -1786,55 +1801,69 @@ fn target_supported_list() {
     return "linux-x86_64-musl, linux-x86_64-glibc, linux-aarch64-musl, linux-aarch64-glibc, darwin-arm64, darwin-x86_64"
 }
 
-// ─── MERGE: HEAD (RFC 071 P2) below, rfc070-g7-native-scaffold below the ━━━ ───
-// ─── RFC 071 P2 — NVPTX stub-PTX builder ──────────────────────────────
-// Live driver-side mirror of compiler/cli/build_nvptx.hexa::
-// _build_nvptx_stub_ptx + build_nvptx_emit_driver. cmd_build cannot yet
-// `use compiler/cli/build_nvptx.hexa` because self/main.hexa is the
-// dispatcher itself (no import chain); the spec module exists separately
-// for the P3+ self-host default-flip (`HEXA_BACKEND=native`). Both files
-// emit byte-identical stub PTX for the same sm_arch input (text-substring
-// asserts can verify) — when P2.1 wires the real codegen, both bodies
-// shift to the same `codegen_emit_ptx_sm80(mir)` call.
-fn _build_nvptx_stub_ptx(sm_arch) {
-    let mut out = ""
-    out = out + "// [P2 stub PTX -- RFC 071 P2.1+ will replace with real codegen_emit_ptx_sm80]\n"
-    out = out + "// @rfc 071 phase P2 status STUB sm=" + sm_arch + "\n"
-    out = out + ".version 7.0\n"
-    out = out + ".target " + sm_arch + "\n"
-    out = out + ".address_size 64\n"
-    out = out + "\n"
-    out = out + ".visible .entry _hexa_smoke()\n"
-    out = out + "{\n"
-    out = out + "    ret;\n"
-    out = out + "}\n"
-    return out
-}
+// ─── MERGE: HEAD (RFC 071 P3 PATH-B) below, rfc070-g7-native-scaffold below the ━━━ ───
+// ─── RFC 071 P3 — NVPTX source-derived PTX builder (PATH-B) ─────────
+// Live driver-side mirror of compiler/cli/build_nvptx.hexa. Per the
+// 2026-05-21 Path B probe, the 5 compiler pipeline modules (lex /
+// parse / lower-to-HIR / lower-to-MIR / static_atlas) + the codegen
+// entry (nvptx_target.codegen_emit_ptx_for_sm) + the MIR shapes
+// (compiler/ir/mir.hexa) are all parse-clean importable from
+// self/main.hexa (the dispatcher root). The `use compiler/cli/
+// build_nvptx.hexa` indirection that the spec sibling described is
+// NOT NEEDED — we can compose the pipeline inline here.
+//
+// PATH-B HONEST SCOPE (@D g3):
+//   - This rewrite passes the in-hexa parse gate (`hexa parse self/
+//     main.hexa` clean). Whether `hexa build self/main.hexa` survives
+//     on macOS is gated by `project_compiler_selfbuild_blockers`
+//     (Mac OOM on full flatten). The compiled driver is regenerated
+//     by `hexa cc` on Linux pool hosts; runtime activation of the
+//     PTX bridge requires that build to succeed.
+//   - When the host can flatten + clang-compile self/main.hexa, the
+//     emitted PTX reflects the SOURCE BODY (kernel-name marker
+//     `my_test_kernel` from nvptx_p3_source_to_silicon_test.hexa)
+//     instead of the P2.1 hand-MIR `vadd` fallback.
+//   - Hand-MIR vec-add fallback is NOT replicated here — that path
+//     lives in the spec sibling for callers that pass src_path="".
+//     The live driver dispatch from cmd_build always passes a non-
+//     empty src_path (the user's `hexa build foo.hexa --target=…`
+//     argument), so the fallback never triggers in production.
+//   - No LLVM (@F f1). No C-transpile changes (@F f2). N5/metal_*
+//     untouched.
 
 // _build_nvptx_emit_driver(src_path, sm_arch) -> int
 //
-// Live cmd_build entry. Replaces the RFC 071 P0 deferred-print exit(1)
-// branch. Today returns CANNED PTX (stub); P2.1+ wires the real
-// codegen_emit_ptx_sm80(mir) chain (parse -> check -> lower -> codegen).
+// P3 live entry. Reads src_path, runs lex → parse → lower(ast_to_hir)
+// → lower_hir(hir_to_mir), then calls codegen_emit_ptx_for_sm(mmod,
+// sm_arch) and writes the resulting PTX to `<src_path>.ptx`.
 //
 // Returns: 0 on PTX write success, 1 on file-IO error.
-// Side effect: writes `<src_path>.ptx` with the stub PTX content.
+// Side effect: writes `<src_path>.ptx` with the source-derived PTX.
 fn _build_nvptx_emit_driver(src_path, sm_arch) {
     if len(src_path) == 0 { return 1 }
     if len(sm_arch)  == 0 { return 1 }
     // Pre-check source exists (cmd_build already ran the same check
     // above; duplicate for direct-callers in future tests).
-    let src_check = exec("test -f '" + src_path + "' && printf yes || printf no")
-    if src_check != "yes" { return 1 }
-    let ptx_text = _build_nvptx_stub_ptx(sm_arch)
+    if !file_exists(src_path) { return 1 }
+    // ── P3 source-derived MIR pipeline (mirror of compiler/cli/
+    //    build_nvptx.hexa::_build_nvptx_source_module body) ──
+    let source     = to_string(read_file(src_path))
+    let tokens     = lex(source, src_path)
+    let module_ast = parse(tokens, src_path)
+    let atlas      = static_atlas()
+    let hmodule    = lower(module_ast, atlas)
+    let mmodule    = lower_hir(hmodule)
+    // codegen_emit_ptx_for_sm filters MFuncs by gpu_kind != GPU_KIND_CPU
+    // internally (see compiler/codegen/nvptx_target.hexa:1399-1437);
+    // CPU-only files emit an empty kernel section but still produce a
+    // parse-clean PTX shell. Source-with-@gpu_kernel emits the
+    // .visible .entry <kernel_name> header that the F-RFC071-MODULE-
+    // LOADER-BRIDGE-RUNTIME falsifier substring-checks.
+    let ptx_text = codegen_emit_ptx_for_sm(mmodule, sm_arch)
     let out_path = src_path + ".ptx"
-    // Write via the POSIX-fwrite builtin (no exec, no ARG_MAX limit).
     write_file(out_path, ptx_text)
-    // Verify destination materialised.
-    let out_check = exec("test -f '" + out_path + "' && printf yes || printf no")
-    if out_check != "yes" { return 1 }
-    println("[nvptx] target=" + sm_arch + " src=" + src_path + " out=" + out_path + " stub=P2")
-    println("[nvptx] P2 stub PTX emitted; P2.1 (real codegen_emit_ptx_sm80) + P3 module_loader bridge + P4 silicon fire deferred (RFC 071 §3)")
+    if !file_exists(out_path) { return 1 }
+    println("[nvptx] target=" + sm_arch + " src=" + src_path + " out=" + out_path + " phase=P3-PATH-B")
     return 0
 }
 
@@ -4608,12 +4637,43 @@ if len(av) < 3 {
         // Preferred path = standalone compiled bin/hexa-cloud binary built
         // by `hexa build stdlib/cloud/cloud_cli.hexa`. Falls back to
         // cmd_run() (compile-then-exec after R7) when the binary is absent.
+        //
+        // Help-scoping invariant (resolves inbox/patches/subcommand-
+        // help-scoping-and-cloud-binary-promote.md Part B): catch
+        // `hexa cloud` / `hexa cloud --help` / `-h` / `help` BEFORE any
+        // spawn, so the cloud manual prints even when both bin/hexa-cloud
+        // and stdlib/cloud/cloud_cli.hexa are unreachable. Text below is
+        // byte-equivalent to stdlib/cloud/cloud_cli.hexa::_cloud_help.
         let __inst_c = install_dir_from_argv0()
         let mut cloud_args = []
         let mut ci = 3
         while ci < len(av) {
             cloud_args.push(av[ci])
             ci = ci + 1
+        }
+        let cloud_is_help = len(cloud_args) == 0 ||
+            (len(cloud_args) == 1 && (cloud_args[0] == "--help" ||
+                                       cloud_args[0] == "-h" ||
+                                       cloud_args[0] == "help"))
+        if cloud_is_help {
+            println("hexa cloud — structured-argv remote dispatch (cycle A)")
+            println("")
+            println("usage:")
+            println("  cloud run       <host> [conn] -- <argv...>             run argv, wait, exit with its code")
+            println("  cloud nohup     <host> <logfile> [conn] -- <argv...>   background argv, print remote pid")
+            println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
+            println("  cloud copy-to   <host> <local> <remote> [conn]         upload local file to host:remote (scp)")
+            println("  cloud copy-from <host> <remote> <local> [conn]         download host:remote file to local (scp)")
+            println("  cloud help | version")
+            println("")
+            println("connection flags [conn] (before `--`):")
+            println("  --port <n>   ssh to a non-22 port (RunPod / vast.ai)")
+            println("  --insecure   accept a changing/unknown host key (ephemeral pods)")
+            println("")
+            println("every argv element after `--` is POSIX-quoted before ssh — no remote")
+            println("shell parsing, no glob expansion, no /* */ comment mis-parse.")
+            println("`host` is an ssh destination or ~/.ssh/config alias.")
+            exit(0)
         }
         let mut cloud_bin = ""
         if len(__inst_c) > 0 {
