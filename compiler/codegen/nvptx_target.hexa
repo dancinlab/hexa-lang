@@ -400,11 +400,8 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
 // `setp.<cond>.f64` mnemonic. PTX condition names match the MIR opcodes
 // 1:1 (`lt` / `le` / `gt` / `ge` / `eq` / `ne`); 055-P3b uses `.f64` as
 // the comparand type to match the FP64-first scope (gpu/SPEC.md §8) —
-// integer comparisons (`.s32` / `.s64`) come through the kind-aware
-// `_nvptx_cmp_mnemonic_for_type` wrapper below. Returns "" for
-// non-comparison ops. RETAINED as the FP64-default callee so the
-// existing 055-P3b smoke tests (`_test_setp_and_br_cond` etc.) stay
-// byte-identical.
+// integer comparisons (`.s32`) come with the STMT_LOAD index-arithmetic
+// follow-on cycle. Returns "" for non-comparison ops.
 fn _nvptx_cmp_mnemonic(op: string) -> string {
     if op == "lt" { return "setp.lt.f64" }
     if op == "le" { return "setp.le.f64" }
@@ -413,71 +410,6 @@ fn _nvptx_cmp_mnemonic(op: string) -> string {
     if op == "eq" { return "setp.eq.f64" }
     if op == "ne" { return "setp.ne.f64" }
     return ""
-}
-
-// _nvptx_cmp_type_suffix_for_kind — pick the `.<ty>` suffix appended to
-// a `setp.<cond>` mnemonic based on the register-bank kind of the
-// comparison's source operand. RFC 071 P3+ — opens integer compares
-// (`setp.lt.s64` for the i64-vs-i64 bounds check that arises from
-// `to_i64(gid) < n`; `setp.lt.s32` for the i32-vs-i32 sibling). FP banks
-// keep their existing `.f64` / `.f32` / `.f16` / `.bf16` defaults. The
-// PTX integer-compare conditions (`eq`/`ne`/`lt`/`le`/`gt`/`ge`) are
-// SIGNED (`.s*`) — gpu/SPEC.md §4 treats the source-level `<` on `i*`
-// types as signed-int compare (UNSIGNED variants would key off `u*` MIR
-// opcodes which the HIR→MIR layer doesn't synthesize yet).
-//   ref: PTX ISA 8.7 §9.7.1.6 — setp predicates by type.
-fn _nvptx_cmp_type_suffix_for_kind(kind: string) -> string {
-    if kind == NVPTX_RKIND_U64 { return ".s64" }
-    if kind == NVPTX_RKIND_U32 { return ".s32" }
-    if kind == NVPTX_RKIND_F32 { return ".f32" }
-    if kind == NVPTX_RKIND_F16 { return ".f16" }
-    if kind == NVPTX_RKIND_BF16 { return ".bf16" }
-    return ".f64"
-}
-
-// _nvptx_cmp_mnemonic_for_type — RFC 071 P3+ kind-aware setp mnemonic
-// resolver. Identical to `_nvptx_cmp_mnemonic` for FP64 (the empty /
-// default case) so callers that pass `.f64` get byte-identical output;
-// callers that thread a non-default suffix (`.s32` / `.s64` for the
-// integer bounds-check path) get the matching `setp.<cond><suffix>`.
-// Returns "" for non-comparison ops (mirrors the F64 variant).
-fn _nvptx_cmp_mnemonic_for_type(op: string, ty_suffix: string) -> string {
-    // FP64 default short-circuit — preserves the 055-P3b byte-output.
-    if ty_suffix == "" || ty_suffix == ".f64" {
-        return _nvptx_cmp_mnemonic(op)
-    }
-    if op == "lt" { return "setp.lt" + ty_suffix }
-    if op == "le" { return "setp.le" + ty_suffix }
-    if op == "gt" { return "setp.gt" + ty_suffix }
-    if op == "ge" { return "setp.ge" + ty_suffix }
-    if op == "eq" { return "setp.eq" + ty_suffix }
-    if op == "ne" { return "setp.ne" + ty_suffix }
-    return ""
-}
-
-// _nvptx_cmp_operand_type_suffix — RFC 071 P3+ — pick the `.<ty>`
-// suffix for a `setp.<cond>` from a comparison binop's two source
-// operands. Inspects the classified kind of each `local` operand and
-// returns the first non-F64-default suffix encountered; falls back to
-// F64 (the 055-P3b default) when both operands are unclassified or
-// const literals. This is the "first non-default wins" policy — the
-// HIR→MIR layer never synthesizes mixed-bank compares for the current
-// scope (gpu/SPEC.md §4 — `<`, `<=` etc. take same-typed operands),
-// so the first-match strategy is sound. const-only operands keep the
-// F64 default since the MIR layer doesn't propagate a literal's type
-// into a per-Operand kind tag yet.
-fn _nvptx_cmp_operand_type_suffix(a: Operand, b: Operand, kinds: [PReg]) -> string {
-    if a.kind == "local" {
-        let ka = _nvptx_lookup_kind_for_local(kinds, a.local_id)
-        let sa = _nvptx_cmp_type_suffix_for_kind(ka)
-        if sa != ".f64" { return sa }
-    }
-    if b.kind == "local" {
-        let kb = _nvptx_lookup_kind_for_local(kinds, b.local_id)
-        let sb = _nvptx_cmp_type_suffix_for_kind(kb)
-        if sb != ".f64" { return sb }
-    }
-    return ".f64"
 }
 
 // _nvptx_gpu_intrinsic_sreg — map a known gpu intrinsic STMT_CALL op
@@ -578,25 +510,11 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
     // Still pending: P4 (`F-RFC068-NUMERIC-EQ`) — real-silicon fire.
     if s.kind == STMT_BINOP {
         if len(s.args) >= 2 {
-            // 055-P3b comparison-binop lowering — `setp.<cond>.<ty> %p<dst>,
+            // 055-P3b comparison-binop lowering — `setp.<cond>.f64 %p<dst>,
             // <a>, <b>;` for lt/le/gt/ge/eq/ne. The destination is a
             // predicate (.pred bank) per the classifier; PTX `setp.<cond>`
             // takes the SAME mnemonic as the MIR opcode (1:1 mapping).
-            //
-            // RFC 071 P3+ kind-aware variant. The setp `.<ty>` suffix is
-            // selected by the source-operand kind: U64 → `.s64`, U32 →
-            // `.s32`, FP banks keep their existing `.f64` / `.f32` /
-            // `.f16` / `.bf16` suffixes. The 055-P3b default (`.f64`) is
-            // preserved when neither operand classifies into a non-FP64
-            // bank — guarantees `_test_setp_and_br_cond` (unclassified
-            // params default F64) stays byte-identical.
-            //
-            // Suffix resolution: if EITHER operand classifies into an
-            // explicit (non-F64-default) bank, take that bank's suffix;
-            // operands of mixed bank are not produced by the current
-            // HIR→MIR layer, so a first-match strategy is sound.
-            let cmp_ty = _nvptx_cmp_operand_type_suffix(s.args[0], s.args[1], kinds)
-            let cmp = _nvptx_cmp_mnemonic_for_type(s.op, cmp_ty)
+            let cmp = _nvptx_cmp_mnemonic(s.op)
             if len(cmp) > 0 {
                 let mut a = []
                 a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
@@ -633,77 +551,6 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
             a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
             a.push(_nvptx_op(sreg))
             out.push(_nvptx_instr(PTX_OP_MOV_U32, a, s.op + "()"))
-            return out
-        }
-        // RFC 071 P3+ — integer-cast intrinsics. `to_i64(x)` and
-        // `to_i32(x)` (synthesized by HIR→MIR for source-level
-        // `a[to_i64(gid)]` and `to_i64(gid) < n` shapes) lower to
-        // a single PTX `cvt.<dst_ty>.<src_ty>` instruction. The dst
-        // Local is already classified into the matching int bank
-        // (U64 for `to_i64`, U32 for `to_i32`) by the rule added in
-        // `_nvptx_classify_local_for_stmt`; the source operand kind
-        // selects the `<src_ty>` half of the mnemonic:
-        //   to_i64 ←  U32 / I32  →  `cvt.s64.s32  %rd<d>, %r<s>;`
-        //   to_i64 ←  U64        →  `mov.b64      %rd<d>, %rd<s>;`  (no-op widen)
-        //   to_i32 ←  U64        →  `cvt.s32.s64  %r<d>, %rd<s>;`
-        //   to_i32 ←  U32        →  `mov.b32      %r<d>, %r<s>;`    (no-op narrow)
-        //   const_int operand    →  `mov.<dst>    <dst>, <imm>;`    (immediate copy)
-        // F64 source operands aren't a valid `to_iN` input under
-        // gpu/SPEC.md §3 (no implicit FP→INT cast); we still emit an
-        // honest-stub line so a future cycle catches mis-routed MIR.
-        //   ref: PTX ISA 8.7 §9.7.1.5 — cvt: data-type conversion.
-        if s.op == "to_i64" || s.op == "to_i32" {
-            if len(s.args) >= 1 {
-                let dst_kind = if s.op == "to_i64" { NVPTX_RKIND_U64 } else { NVPTX_RKIND_U32 }
-                let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
-                let arg = s.args[0]
-                if arg.kind == "const_int" {
-                    // Immediate folds to a `mov.b<width>` against the
-                    // dst integer bank. PTX accepts decimal literals.
-                    let mut a = []
-                    a.push(_nvptx_op(dst_reg))
-                    a.push(_nvptx_op(to_string(arg.int_val)))
-                    let mnem = if dst_kind == NVPTX_RKIND_U64 { "mov.b64" } else { "mov.b32" }
-                    out.push(_nvptx_instr(mnem, a, s.op + "(imm)"))
-                    return out
-                }
-                if arg.kind == "local" {
-                    let src_kind = _nvptx_lookup_kind_for_local(kinds, arg.local_id)
-                    let src_reg = _nvptx_lookup_reg_for_local(kinds, arg.local_id)
-                    let mut a = []
-                    a.push(_nvptx_op(dst_reg))
-                    a.push(_nvptx_op(src_reg))
-                    if dst_kind == NVPTX_RKIND_U64 {
-                        if src_kind == NVPTX_RKIND_U64 {
-                            // Already 64-bit — fold to a register move.
-                            // ASCII-only comment text (per memory
-                            // reference_gpu_fire_infra.md: ptxas driver
-                            // JIT rejects non-ASCII in PTX comments).
-                            out.push(_nvptx_instr("mov.b64", a, s.op + " (widen no-op)"))
-                        } else {
-                            // Default: treat 32-bit source as s32 to s64.
-                            // (Unsigned variant would require a `_u32` MIR
-                            // opcode signal that the HIR to MIR layer
-                            // doesn't yet emit; signed-extend is the
-                            // gpu/SPEC.md section 3 default for the
-                            // i64-source shape.)
-                            out.push(_nvptx_instr("cvt.s64.s32", a, s.op + " (s32 to s64)"))
-                        }
-                    } else {
-                        // to_i32 target
-                        if src_kind == NVPTX_RKIND_U32 {
-                            out.push(_nvptx_instr("mov.b32", a, s.op + " (narrow no-op)"))
-                        } else {
-                            out.push(_nvptx_instr("cvt.s32.s64", a, s.op + " (s64 to s32)"))
-                        }
-                    }
-                    return out
-                }
-            }
-            // Honest stub — operand outside the recognised shapes (no
-            // args, or const_float / const_str / global). The mis-route
-            // surfaces here rather than emitting a silent bogus mnemonic.
-            out.push(_nvptx_instr("//", [], "RFC 071 P3+ - unsupported " + s.op + " operand kind"))
             return out
         }
         // RFC 055 §12 P4+ — `gpu_barrier()` block-wide synchronization
@@ -1181,16 +1028,6 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
         if s.op == "gpu_grid_dim_z" { return NVPTX_RKIND_U32 }
         // RFC 055 §12 P4+ — gpu_warp_shuffle returns a 32-bit register.
         if s.op == "gpu_warp_shuffle" { return NVPTX_RKIND_U32 }
-        // RFC 071 P3+ — int-cast intrinsics. `to_i64(x)` / `to_i32(x)`
-        // are the primary widening / narrowing casts the HIR→MIR layer
-        // synthesizes when an integer operand needs to match an array
-        // index slot (`a[to_i64(gid)]`) or a comparand of a different
-        // integer width (`to_i64(gid) < n` where `n: i64`). The result
-        // bank is the destination integer width; the body lowering site
-        // emits the matching PTX `cvt.<dst_ty>.<src_ty>` instruction.
-        //   ref: PTX ISA 8.7 §9.7.1.5 — cvt: data-type conversion.
-        if s.op == "to_i64" { return NVPTX_RKIND_U64 }
-        if s.op == "to_i32" { return NVPTX_RKIND_U32 }
         // RFC 067 P1 — WMMA fragment-producing intrinsics. `gpu_wmma_load_a`,
         // `gpu_wmma_load_b`, and `gpu_wmma_mma` all RETURN a WMMA fragment
         // (16×16 tile distributed across the warp); the dst Local for

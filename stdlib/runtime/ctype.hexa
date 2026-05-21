@@ -157,17 +157,6 @@ pub fn rt_str_last_index_of(s: string, sub: string) -> int {
     return last
 }
 
-// Step 3 cycle 72 — char_code(s, i): byte value at idx, or 0 on OOB.
-// Distinct from char_code_at (which returns -1 on OOB and wraps neg
-// idx). No recursion trap because hexa_str_char_code_at stays C-only
-// (cycle 52); byte_at → hexa_str_byte_at → hexa_str_char_code_at(C).
-pub fn rt_char_code(s: string, idx: int) -> int {
-    if idx < 0 { return 0 }
-    let n = byte_len(s)
-    if idx >= n { return 0 }
-    return s.byte_at(idx)
-}
-
 // Step 3 cycle 62 — single-arg format: replace first `{}` with the
 // stringified arg. C wrapper handles the `hexa_to_string(arg)`
 // polymorphic coercion before dispatch; the hexa fn always sees a

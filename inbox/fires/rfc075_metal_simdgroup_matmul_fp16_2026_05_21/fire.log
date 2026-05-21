@@ -1,0 +1,25 @@
+device_name=Apple M3
+registry_id=4294968442
+max_threads_per_threadgroup=MTLSize(width: 1024, height: 1024, depth: 1024)
+max_threadgroup_memory_length=32768
+pipe8     tew=32 max=1024
+pipe16    tew=32 max=1024
+pipe32tg  tew=32 max=1024
+simdgroup_matmul_8x8_fp16         M=128 N=128 K=128  median=0.0451ms  GFLOPS=92.95  max|d|=5.961e-02  rel=3.729e-03  rel16=1.953e-03  PASS
+simdgroup_matmul_16x16_fp16       M=128 N=128 K=128  median=0.0468ms  GFLOPS=89.56  max|d|=5.961e-02  rel=3.729e-03  rel16=1.953e-03  PASS
+simdgroup_matmul_32x32_tg_fp16    M=128 N=128 K=128  median=0.0398ms  GFLOPS=105.41  max|d|=5.961e-02  rel=3.729e-03  rel16=1.953e-03  PASS
+simdgroup_matmul_8x8_fp16         M=256 N=256 K=256  median=0.2827ms  GFLOPS=118.67  max|d|=9.718e-02  rel=4.342e-03  rel16=2.098e-03  PASS
+simdgroup_matmul_16x16_fp16       M=256 N=256 K=256  median=0.2806ms  GFLOPS=119.59  max|d|=9.718e-02  rel=4.342e-03  rel16=2.098e-03  PASS
+simdgroup_matmul_32x32_tg_fp16    M=256 N=256 K=256  median=0.1713ms  GFLOPS=195.94  max|d|=9.718e-02  rel=4.342e-03  rel16=2.098e-03  PASS
+simdgroup_matmul_8x8_fp16         M=512 N=512 K=512  median=0.8885ms  GFLOPS=302.12  max|d|=2.996e-01  rel=8.600e-03  rel16=2.691e-03  PASS
+simdgroup_matmul_16x16_fp16       M=512 N=512 K=512  median=0.8980ms  GFLOPS=298.93  max|d|=2.996e-01  rel=8.600e-03  rel16=2.691e-03  PASS
+simdgroup_matmul_32x32_tg_fp16    M=512 N=512 K=512  median=0.4620ms  GFLOPS=581.03  max|d|=2.996e-01  rel=8.600e-03  rel16=2.691e-03  PASS
+simdgroup_matmul_8x8_fp16         M=768 N=768 K=768  median=1.8619ms  GFLOPS=486.58  max|d|=4.350e-01  rel=1.036e-02  rel16=3.348e-03  FAIL
+simdgroup_matmul_16x16_fp16       M=768 N=768 K=768  median=3.0110ms  GFLOPS=300.89  max|d|=4.350e-01  rel=1.036e-02  rel16=3.348e-03  FAIL
+simdgroup_matmul_32x32_tg_fp16    M=768 N=768 K=768  median=2.6863ms  GFLOPS=337.25  max|d|=4.350e-01  rel=1.036e-02  rel16=3.348e-03  FAIL
+simdgroup_matmul_8x8_fp16         M=1024 N=1024 K=1024  median=6.2847ms  GFLOPS=341.70  max|d|=5.613e-01  rel=1.009e-02  rel16=4.497e-03  FAIL
+simdgroup_matmul_16x16_fp16       M=1024 N=1024 K=1024  median=7.7401ms  GFLOPS=277.45  max|d|=5.613e-01  rel=1.009e-02  rel16=4.497e-03  FAIL
+simdgroup_matmul_32x32_tg_fp16    M=1024 N=1024 K=1024  median=2.7205ms  GFLOPS=789.38  max|d|=5.613e-01  rel=1.009e-02  rel16=4.497e-03  FAIL
+F-RFC075-METAL-SIMDGROUP-MATMUL-FP16-NUMERIC-EQ: PARTIAL
+PEAK_SIMDGROUP_FP16_GFLOPS=789.38 (best of 8x8/16x16/32x32_tg across 128/256/512/768/1024)
+FP16_OVER_FP32_PEAK_RATIO=0.866x (FP32 peak = 911.55 GFLOPS @ commit 31d729a4)

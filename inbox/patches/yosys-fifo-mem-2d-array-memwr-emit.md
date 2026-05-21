@@ -13,40 +13,29 @@
   Discovered while manually invoking substrate `abc -c` after the
   PR #247 SSA fix + abc_map script reorder landed.
 
-**Status**: Option A + Option I landed (2026-05-21) — see follow-on
-  note `inbox/notes/2026-05-21-rfc006-§5-multibit-width-truncation.md`
-  for the bisection that motivated Option I.
-  - **Option A** (commit `c4b35b13`): `_rv_parse_port_decl` extended
-    for the second unpacked range (P*D wires named `base[i][j]` of
-    width W), `_rv_array_bound2` added, body-parser
-    `_rv_emit_body_v2` and bare-path `_rv_parse_always` both emit
-    per-slot demux for 2-D LHS writes. Four sub-cases handled
-    (const-const · const-dyn · dyn-const · dyn-dyn) with $eq + $and +
-    $mux + $dff per slot. T76 falsifier landed.
-  - **Option I** (commit `df4ff3f7`): `abc_map.hexa::abc_emit_blif`
-    now expands multi-bit `sky130_fd_sc_hd__dfxtp_1` cells into W
-    parallel per-bit `.latch` lines (`<wire>__b<k>` naming).
-    `abc_parse_mapped_blif` coalesces back via the same convention.
-    Q-wire width lookup is canonical (slot wires registered with
-    packed-array width by Option A's decl parser).
-  Measured `router_d{4,6}` after Option I:
-    d4 area = 1207.41 → **32829 µm²** (27.2× post-A → 58.7× total
-              vs 559 baseline, **53.2 %** of 61763 µm² oracle)
-    d6 area = 1677.86 → **45937 µm²** (27.4× post-A → 59.5× total
-              vs 772 baseline, **49.1 %** of 93609 µm² oracle)
-    BLIF latches: 41 → **1638** (~99.6 % of projected 1645 bits)
-  Selftest: read_verilog **79/79** + abc_map **8/8** (T8 added 4
-  sub-assertions for the per-bit expansion). NO regressions.
-  §5 area-oracle ±5 % gate REMAINS OPEN at ~47-51 % under oracle.
-  Source 1 (BLIF `.latch` width collapse) of the multi-bit
-  truncation note is CLOSED. Source 2 (read_verilog `_rv_elab_expr`
-  emits combinational `$xor`/`$and`/`$mux` with implicit 1-bit
-  operands per the L739 docstring) remains the next-layer blocker.
-  Closure to ±5 % needs Option II (full per-bit elaboration,
-  ~300-500 LOC) or Option III (RTLIL `$mem` substrate cells with
-  `synth_memory_dff` consolidation, ~400-700 LOC).
-  Pre-Option-A scope option (Option B — RTLIL $memrd/$memwr +
-  module-level $mem cells with synth_memory_dff consolidation) is
+**Status**: Option A landed (2026-05-21) — `_rv_parse_port_decl`
+  extended for the second unpacked range (P*D wires named
+  `base[i][j]` of width W), `_rv_array_bound2` added, body-parser
+  `_rv_emit_body_v2` (L2828 honest-skip removed) and bare-path
+  `_rv_parse_always` (L5040 expected-`<=`-or-`=` site) both now
+  emit per-slot demux for 2-D LHS writes. Four sub-cases handled
+  (const-const · const-dyn · dyn-const · dyn-dyn) with $eq + $and +
+  $mux + $dff per slot (bare path) / cond-tagged rows + tracked
+  $dff downstream (v2 helper). T76 falsifier landed
+  (2-D `m[i][j] <= d` round-trip · 4 slots · 8 $eq · 4 $and · 4
+  $mux · 4 $dff · bound2=(2,2)) — read_verilog selftest 79/79 PASS.
+  Measured router_d{4,6} after this fix:
+    d4 area = 1207.41 µm² (was 559.286 µm², 2.16× vs cited oracle
+              still ~98% under 61762.99 µm²)
+    d6 area = 1677.86 µm² (was 771.99 µm², 2.17× vs cited oracle
+              still ~98% under 93608.53 µm²)
+  ABC `abc_map: ok` for both designs — no NetworkCheck failure,
+  no honest-skip warning. §5 area-oracle ±5% gate REMAINS OPEN —
+  Option A delivered on its own scoped claim (area > 0 +
+  measurable + no skip), but the absolute area is far below
+  substrate (expected per the patch's body: "~1,340 cells per
+  router · 10× above oracle"). Closure to ±5% needs the deeper
+  substrate match (Option B — RTLIL $memrd/$memwr + module-level
   $mem cells with synth_memory_dff consolidation) OR the crossbar
   output array writes (Tier-1 (f) territory).
 
