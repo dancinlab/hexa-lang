@@ -303,6 +303,44 @@ pub fn rt_array_sort_float(arr: [float]) -> [float] {
     return sorted
 }
 
+// Step 3 cycle 67 — scan (intermediate accumulators) + partition
+// (split by predicate into [matching, rest]). Type annotations on
+// `out` are hints — push accepts any HexaVal at runtime, so pushing
+// arrays into [float]-typed output works (dynamic-typed at runtime).
+pub fn rt_array_scan(arr: HexaVal, init: HexaVal, fn_v: HexaVal) -> HexaVal {
+    let mut out: [float] = []
+    out = out.push(init)
+    let mut acc = init
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        acc = fn_v(acc, arr[i])
+        out = out.push(acc)
+        i = i + 1
+    }
+    return out
+}
+
+pub fn rt_array_partition(arr: HexaVal, fn_v: HexaVal) -> HexaVal {
+    let mut matching: [float] = []
+    let mut rest: [float] = []
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        let item = arr[i]
+        if fn_v(item) {
+            matching = matching.push(item)
+        } else {
+            rest = rest.push(item)
+        }
+        i = i + 1
+    }
+    let mut out: [float] = []
+    out = out.push(matching)
+    out = out.push(rest)
+    return out
+}
+
 // Step 3 cycle 66 — find via _index helper + for_each (side-effect).
 // hexa-source can't express `hexa_void()` cleanly (bare name → call0
 // trap, cycle 63 lesson). For find, return an int index instead and

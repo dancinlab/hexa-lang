@@ -1094,6 +1094,20 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 67: hexa_array_scan + hexa_array_partition (callback returning arrays)
+
+- ✅ `hexa_array_scan` (3881) ported. Builds intermediate-accumulator
+  array starting with init; each iteration `acc = fn(acc, item)`
+  + push acc. Hexa source uses 2-arg callback `fn_v(acc, item)` →
+  `hexa_call2(fn_v, acc, item)`
+- ✅ `hexa_array_partition` (3818) ported. Splits into [matching,
+  rest] 2-element outer array. Hexa source builds two inner `[float]`
+  arrays then pushes both into an outer array — `out.push(yes)`
+  works at runtime because push accepts any HexaVal (the `[float]`
+  type annotation is only a codegen hint for `[]` lowering)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,904 B
+
 ### 2026-05-21 — step 3 cycle 66: hexa_array_find + hexa_array_for_each (find via _index helper)
 
 - ✅ `hexa_array_for_each` (3443) ported via no-return-type hexa fn —

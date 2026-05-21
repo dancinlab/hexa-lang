@@ -3815,6 +3815,8 @@ HexaVal hexa_array_rotate(HexaVal arr, HexaVal kv) {
 
 // partition(pred): returns [matching, non_matching] as a 2-element array.
 // Matches interpreter at hexa_full.hexa:15437-15449.
+// Step-3 cycle 67 port — partition dispatch.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_partition(HexaVal arr, HexaVal fn) {
     HexaVal matching = hexa_array_new();
     HexaVal rest = hexa_array_new();
@@ -3833,6 +3835,18 @@ HexaVal hexa_array_partition(HexaVal arr, HexaVal fn) {
     out = hexa_array_push(out, rest);
     return out;
 }
+#else
+extern HexaVal rt_array_partition(HexaVal arr, HexaVal fn_v);
+HexaVal hexa_array_partition(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) {
+        HexaVal out = hexa_array_new();
+        out = hexa_array_push(out, hexa_array_new());
+        out = hexa_array_push(out, hexa_array_new());
+        return out;
+    }
+    return rt_array_partition(arr, fn);
+}
+#endif
 
 // interleave(other): alternates items from both arrays up to max length.
 // When one array runs out, the other's remaining items still alternate in.
@@ -3878,6 +3892,8 @@ HexaVal hexa_array_interleave(HexaVal a, HexaVal b) {
 // scan(init, fn): like fold but returns all intermediate accumulators.
 // Result length is len(arr) + 1 (includes init as first element).
 // Matches interpreter at hexa_full.hexa:15426-15435.
+// Step-3 cycle 67 port — scan dispatch.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_scan(HexaVal arr, HexaVal init, HexaVal fn) {
     HexaVal out = hexa_array_new();
     out = hexa_array_push(out, init);
@@ -3889,6 +3905,16 @@ HexaVal hexa_array_scan(HexaVal arr, HexaVal init, HexaVal fn) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_scan(HexaVal arr, HexaVal init, HexaVal fn_v);
+HexaVal hexa_array_scan(HexaVal arr, HexaVal init, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) {
+        HexaVal out = hexa_array_new();
+        return hexa_array_push(out, init);
+    }
+    return rt_array_scan(arr, init, fn);
+}
+#endif
 
 // product(a): multiplicative reduce. Mirrors hexa_sum but with mult.
 // Empty array returns int 1 (multiplicative identity). Step-3 cycle 23
