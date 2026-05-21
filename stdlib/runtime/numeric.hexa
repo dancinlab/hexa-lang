@@ -1118,6 +1118,32 @@ pub fn rt_eq_array_deep(a: HexaVal, b: HexaVal) -> bool {
     return true
 }
 
+// Step 3 cycle 100 — hexa_eq TAG_VALSTRUCT pointer-eq branch (잔여 #4).
+// C body (runtime_core.c:5580) is `hexa_bool(HX_VS(a) == HX_VS(b))` — Val
+// identity is pointer-equality of the heap struct (matches TAG_MAP
+// semantics: two separately-constructed Vals never compare equal by
+// value). Hexa port uses the new `__vs_ptr_eq(a, b)` inline builtin
+// (codegen_c2.hexa) which lowers to that exact `HX_VS(a) == HX_VS(b)`
+// compare. No new C symbol, no recursion (`__vs_ptr_eq` doesn't reroute
+// through hexa_eq). Caller (runtime_core.c TAG_VALSTRUCT case) has
+// already gated on `HX_TAG(a) == HX_TAG(b) == TAG_VALSTRUCT`.
+pub fn rt_eq_valstruct(a: HexaVal, b: HexaVal) -> bool {
+    return __vs_ptr_eq(a, b)
+}
+
+// Step 3 cycle 100 — hexa_eq TAG_MAP pointer-eq fast-path (잔여 #4).
+// C body (runtime_core.c:5608) opens with `if (HX_MAP_TBL(a) ==
+// HX_MAP_TBL(b)) return hexa_bool(1)`. The `__tag` enum-variant deep-
+// compare path stays C-side (separate logic). This port covers ONLY
+// the pointer-eq fast-path so the C dispatch can read:
+//   if (hexa_truthy(rt_eq_map_ptr(a, b))) return hexa_bool(1);
+//   ... __tag enum-variant deep compare ...
+// `__map_ptr_eq` builtin lowers to the same `HX_MAP_TBL(a) ==
+// HX_MAP_TBL(b)` compare. No new C symbol, no recursion.
+pub fn rt_eq_map_ptr(a: HexaVal, b: HexaVal) -> bool {
+    return __map_ptr_eq(a, b)
+}
+
 // Step 4 cycle 98 — ValStruct minimal-repr port (잔여 #8 discharge).
 // `.get("tag")` routes TAG_VALSTRUCT through `hexa_valstruct_get_by_key`
 // → `hexa_int(HX_VSF(v, tag_i))` (runtime_core.c:2334+2874). C wrapper

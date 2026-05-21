@@ -128,6 +128,37 @@ typedef struct HexaIC {
 #define HX_IS_FN(v)      ((v).tag == TAG_FN)
 #define HX_IS_CLOSURE(v) ((v).tag == TAG_CLOSURE)
 #define HX_MAP_TBL(v)    (HX_IS_MAP(v) ? (v).map_ptr->tbl : (HexaMapTable*)0)
+/* Step 3 cycle 98 — pointer-eq accessors for hexa_eq TAG_VALSTRUCT / TAG_MAP
+ * branches (RUNTIME.md 잔여 #4). Raw struct-pointer access is required to
+ * port the C `hexa_eq` cases that compare `HX_VS(a) == HX_VS(b)` and
+ * `HX_MAP_TBL(a) == HX_MAP_TBL(b)` from hexa source via the new
+ * `__vs_ptr_eq` / `__map_ptr_eq` codegen-inline builtins. The macros
+ * remain header-only — no new C symbols. */
+#ifndef HX_VS
+#define HX_VS(v)         ((v).vs)
+#endif
+
+/* Step 3 cycle 100 — pointer-eq inline builtins for hexa_eq TAG_VALSTRUCT
+ * + TAG_MAP branches (RUNTIME.md 잔여 #4, 4 of 9 branches ported). The
+ * aprime_cc codegen inlines these to `hexa_bool(HX_VS(a)==HX_VS(b))` etc
+ * directly at the call site (self/codegen_c2.hexa near pow). The hexa_v2
+ * bootstrap transpiler is unaware of the inline lowering and emits
+ * `hexa_call2(__vs_ptr_eq, a, b)`; the static-inline defs below satisfy
+ * that indirect-call path (resolved via the `hexa_call2` _Generic
+ * dispatch on `HexaVal (*)(HexaVal, HexaVal)`). Either way the lowered
+ * compare is byte-identical to the legacy C body. */
+#ifndef __vs_ptr_eq_DEFINED
+#define __vs_ptr_eq_DEFINED
+static inline HexaVal __vs_ptr_eq(HexaVal a, HexaVal b) {
+    return hexa_bool((HX_VS(a)) == (HX_VS(b)));
+}
+#endif
+#ifndef __map_ptr_eq_DEFINED
+#define __map_ptr_eq_DEFINED
+static inline HexaVal __map_ptr_eq(HexaVal a, HexaVal b) {
+    return hexa_bool((HX_MAP_TBL(a)) == (HX_MAP_TBL(b)));
+}
+#endif
 
 /* HexaFn / HexaClo descriptor field accessors (read + write) */
 #define HX_FN_PTR(v)         ((v).fn_ptr_d->fn_ptr)

@@ -4318,6 +4318,19 @@ fn gen2_expr(node) {
             if name == "pow" {
                 return "hexa_pow(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
             }
+            // RUNTIME.md step-3 잔여 #4 (2 of 9 hexa_eq branches → 4) — pointer-
+            // equality inline builtins for TAG_VALSTRUCT + TAG_MAP branches of
+            // hexa_eq. Required so stdlib/runtime/numeric.hexa::rt_eq_valstruct
+            // and rt_eq_map_ptr can express `HX_VS(a) == HX_VS(b)` and
+            // `HX_MAP_TBL(a) == HX_MAP_TBL(b)` from hexa source. No new C
+            // runtime symbol — pure inline emit. Macros live in self/runtime.h
+            // (HX_VS is also defined in runtime_core.c:1027 with #ifndef guard).
+            if name == "__vs_ptr_eq" {
+                return "hexa_bool((HX_VS(" + gen2_expr(node.args[0]) + ") == HX_VS(" + gen2_expr(node.args[1]) + ")))"
+            }
+            if name == "__map_ptr_eq" {
+                return "hexa_bool((HX_MAP_TBL(" + gen2_expr(node.args[0]) + ") == HX_MAP_TBL(" + gen2_expr(node.args[1]) + ")))"
+            }
             if name == "to_float" {
                 // T32: route through __hx_to_double (runtime.c:415) which
                 // unwraps TAG_VALSTRUCT (interpreter Vals) — the prior inline
@@ -7409,6 +7422,9 @@ fn _is_builtin_name(name) {
     if name == "is_alpha" { return true }
     if name == "is_digit" { return true }
     if name == "is_alphanumeric" { return true }
+    // RUNTIME.md step-3 잔여 #4 pointer-eq inline builtins (cycle 100).
+    if name == "__vs_ptr_eq" { return true }
+    if name == "__map_ptr_eq" { return true }
     // FIX-A (Anima serving unblock, 2026-04-18)
     if name == "time_ms" { return true }
     if name == "byte_len" { return true }

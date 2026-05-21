@@ -1098,6 +1098,13 @@ fn _bind_builtin_names() -> [string] {
         "write_f32", "write_i32", "write_i64", "deref_f32", "deref_i32",
         "ptr_write_f32", "ptr_write_i32", "ptr_read_f32", "ptr_read_f64", "ptr_read_i32",
         "ord",
+        // RUNTIME.md step-3 잔여 #4 pointer-eq inline builtins (cycle 100,
+        // 2026-05-22). `__vs_ptr_eq(a, b)` / `__map_ptr_eq(a, b)` lower to
+        // a single inline `hexa_bool((HX_VS(a) == HX_VS(b)))` etc in
+        // codegen_c2.hexa near pow site. Required so
+        // stdlib/runtime/numeric.hexa::rt_eq_valstruct + rt_eq_map_ptr can
+        // express raw struct-pointer compare from hexa source.
+        "__vs_ptr_eq", "__map_ptr_eq",
         // RFC 071 P5++ — GPU matmul builtins. Source-level entry points
         // that the HIR→MIR lowering pattern-synthesises into the
         // STMT_LOAD + STMT_LOAD + STMT_BINOP("matmul"/_NT_a/_NT_b) +

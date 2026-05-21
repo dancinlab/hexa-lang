@@ -5550,6 +5550,29 @@ HexaVal hexa_concat_many(int n, HexaVal* parts) {
 
 // ── Polymorphic equality ─────────────────────────────────
 
+/* Step 3 cycle 100 — pointer-eq inline builtins for hexa_eq TAG_VALSTRUCT
+ * + TAG_MAP branches (RUNTIME.md 잔여 #4, 4 of 9 branches ported). The
+ * aprime_cc codegen inlines `__vs_ptr_eq(a,b)` / `__map_ptr_eq(a,b)` to
+ * `hexa_bool(HX_VS(a)==HX_VS(b))` etc. The hexa_v2 bootstrap transpiler
+ * is unaware of the inline lowering and emits
+ * `hexa_call2(__vs_ptr_eq, a, b)`; the static-inline defs below satisfy
+ * that indirect-call path via the `hexa_call2` _Generic dispatch on
+ * `HexaVal (*)(HexaVal, HexaVal)`. Either way the lowered compare is
+ * byte-identical to the legacy C body. Mirror lives in self/runtime.h
+ * for non-aprime build paths. */
+#ifndef __vs_ptr_eq_DEFINED
+#define __vs_ptr_eq_DEFINED
+static inline HexaVal __vs_ptr_eq(HexaVal a, HexaVal b) {
+    return hexa_bool((HX_VS(a)) == (HX_VS(b)));
+}
+#endif
+#ifndef __map_ptr_eq_DEFINED
+#define __map_ptr_eq_DEFINED
+static inline HexaVal __map_ptr_eq(HexaVal a, HexaVal b) {
+    return hexa_bool((HX_MAP_TBL(a)) == (HX_MAP_TBL(b)));
+}
+#endif
+
 HexaVal hexa_eq(HexaVal a, HexaVal b) {
     // Cross-type numeric equality (int ↔ float) — matches interp
     // eval_binop float-coerce path (hexa_full.hexa:7867). 이전엔
@@ -5577,7 +5600,19 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
         // rt 32-G: Val identity is pointer-equality of heap struct (matches
         // TAG_MAP semantics — two separately constructed maps never compare
         // equal by value).
-        case TAG_VALSTRUCT: return hexa_bool(HX_VS(a) == HX_VS(b));
+        case TAG_VALSTRUCT: {
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+            /* Step-3 cycle 100 — hexa-source port via __vs_ptr_eq inline
+               builtin. The hexa body is a single `return __vs_ptr_eq(a, b)`,
+               so the lowered C is a single `HX_VS(a) == HX_VS(b)` compare —
+               byte-equivalent to the legacy path. RUNTIME.md 잔여 #4
+               (3 of 9 branches now ported). */
+            extern HexaVal rt_eq_valstruct(HexaVal a, HexaVal b);
+            return hexa_bool(hexa_truthy(rt_eq_valstruct(a, b)));
+#else
+            return hexa_bool(HX_VS(a) == HX_VS(b));
+#endif
+        }
         // Array deep equality — interp eval_binop (hexa_full.hexa:7939) 가
         // 요소별 vals_equal 로 비교하므로 AOT 도 요소 재귀 비교로 정렬.
         // 이전 comment 는 interp 가 ref eq 이라고 기록했지만 실제 코드는
@@ -5605,7 +5640,18 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
 #endif
         }
         case TAG_MAP: {
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+            /* Step-3 cycle 100 — hexa-source pointer-eq fast-path via
+               __map_ptr_eq inline builtin (RUNTIME.md 잔여 #4, 4 of 9
+               branches now ported). Hexa body is `return __map_ptr_eq(a, b)`
+               which lowers to the same `HX_MAP_TBL(a) == HX_MAP_TBL(b)`
+               compare. The `__tag` enum-variant deep-compare below stays
+               C-side (separate logic, future cycle). */
+            extern HexaVal rt_eq_map_ptr(HexaVal a, HexaVal b);
+            if (hexa_truthy(rt_eq_map_ptr(a, b))) return hexa_bool(1);
+#else
             if (HX_MAP_TBL(a) == HX_MAP_TBL(b)) return hexa_bool(1);
+#endif
             // #28 — enum value equality. The native (aprime_cc) lowering
             // represents an enum variant as a map { "__tag": hash, "__pN": … }
             // (compiler/lower/hir_to_mir.hexa enum_path → struct_lit). Two
