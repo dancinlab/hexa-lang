@@ -21,8 +21,16 @@
 // adding the rocWMMA matmul tier: matmul (binop "matmul"), matmul_NT_a
 // (A transposed), matmul_NT_b (B transposed) — each emits a HIP source
 // that includes `<rocwmma/rocwmma.hpp>` and uses the 16x16x16 FP32
-// `rocwmma::fragment<>` API. All other kernel shapes still honestly
-// return `""` — see honest scope below.
+// `rocwmma::fragment<>` API. P1++ unary family extends the dispatch to
+// SIXTEEN shapes by adding the 2-buffer element-wise unary tier:
+// vec-neg (UNOP "neg", prefix `-`), vec-abs (UNOP "abs" → HIP `fabsf`),
+// vec-sqrt (`sqrtf`), vec-exp (`expf`), vec-log (`logf`), vec-sin
+// (`sinf`), vec-cos (`cosf`) — mirrors Metal's MSL §5.10 unary family
+// on the AMD lane. P1+++ extends the dispatch to NINETEEN shapes by
+// adding the rounding-style unary tier: vec-floor (UNOP "floor" → HIP
+// `floorf`), vec-ceil (`ceilf`), vec-round (`roundf`) — mirrors the
+// Metal lane's N52 round/floor/ceil additions. All other kernel shapes
+// still honestly return `""` — see honest scope below.
 //
 // P2 (silicon fire via `hipcc` + AMD GPU pool host) remains a follow-on
 // MULTI-SESSION cycle requiring AMD GPU stock; this cycle is codegen-
@@ -52,13 +60,14 @@
 //   IS  — target enum constants (gfx-rev), full vec-add HIP syntax-
 //         fragment table, rocWMMA fragment-type fragment table, vec-add /
 //         vec-mul / vec-sub / vec-div / vec-scale / reduce-sum / matmul /
-//         matmul_NT_a / matmul_NT_b MIR shape recognisers, real HIP
-//         source emit for these nine patterns.
+//         matmul_NT_a / matmul_NT_b / vec-neg / vec-abs / vec-sqrt /
+//         vec-exp / vec-log / vec-sin / vec-cos / vec-floor / vec-ceil /
+//         vec-round MIR shape recognisers, real HIP source emit for
+//         these nineteen patterns.
 //   NOT — General MIR-walk HIP emission. The emitters are shape-
-//         hardcoded; other MIR shapes return `""`. Unary family (neg /
-//         abs / sqrt / exp / log / sin / cos / floor / ceil / round) /
-//         bf16 matmul land on the AMD lane in multi-session cycles
-//         (mirrors RFC 075 plan on the Apple Metal lane). No `@gpu_kernel`
+//         hardcoded; other MIR shapes return `""`. bf16 matmul lands
+//         on the AMD lane in multi-session cycles (mirrors RFC 075 plan
+//         on the Apple Metal lane). No `@gpu_kernel`
 //         target dispatch wiring this cycle (codegen-only). No `hipcc`
 //         invocation (P2 silicon fire = follow-on cycle once AMD GPU
 //         pool stock returns). AMD silicon does not fire this cycle —
@@ -189,6 +198,34 @@ pub let ROCM_OP_ASSIGN: string      = " = "             // assignment (with spac
 pub let ROCM_OP_STMT_TERM: string   = ";"               // statement terminator
 pub let ROCM_OP_CALL_OPEN: string   = "("               // function call open paren
 pub let ROCM_OP_CALL_CLOSE: string  = ")"               // function call close paren
+
+// RFC 075 P1++ unary — HIP scalar builtin function names. The `f`
+// suffix is the HIP/C++ FP32 single-precision variant (host-callable
+// + device-callable via `<hip/hip_runtime.h>` + `<math.h>`). NEG is
+// the unary minus operator, emitted as a prefix `-` infix fragment
+// (no function call). The remaining six map 1:1 to MSL §5.10
+// builtins on the Apple lane (abs/sqrt/exp/log/sin/cos) and to libm /
+// CUDA scalar math on the NVPTX lane.
+//   ref: HIP Programming Guide — device math functions (single-precision)
+//   ref: AMD ROCm clang built-ins (math.h fp32 variants)
+pub let ROCM_OP_NEG: string         = "-"               // unary minus (prefix form)
+pub let ROCM_OP_ABS: string         = "fabsf"           // HIP FP32 abs (host+device)
+pub let ROCM_OP_SQRT: string        = "sqrtf"           // HIP FP32 sqrt
+pub let ROCM_OP_EXP: string         = "expf"            // HIP FP32 exp
+pub let ROCM_OP_LOG: string         = "logf"            // HIP FP32 natural log
+pub let ROCM_OP_SIN: string         = "sinf"            // HIP FP32 sin
+pub let ROCM_OP_COS: string         = "cosf"            // HIP FP32 cos
+
+// RFC 075 P1+++ rounding — HIP scalar builtin function names. The `f`
+// suffix is the HIP/C++ FP32 single-precision variant (host-callable +
+// device-callable via `<hip/hip_runtime.h>` + `<math.h>`). All three
+// are 1:1 with libm + CUDA scalar math + MSL §5.10 rounding builtins
+// on the Apple and NVIDIA lanes.
+//   ref: HIP Programming Guide — device math functions (single-precision)
+//   ref: ISO C99 §7.12.9 — floor / ceil / round
+pub let ROCM_OP_FLOOR: string       = "floorf"          // HIP FP32 floor (round toward -inf)
+pub let ROCM_OP_CEIL: string        = "ceilf"           // HIP FP32 ceil  (round toward +inf)
+pub let ROCM_OP_ROUND: string       = "roundf"          // HIP FP32 round (round half-away-from-zero)
 
 // RFC 075 P1 — kernel-declaration fragment templates. Kept as separate
 // string constants so the emit pass concatenates them in a single
@@ -580,6 +617,210 @@ fn _rocm_emit_reduce_sum_body() -> string {
     return out
 }
 
+// ── RFC 075 P1++ unary — vec-neg/abs/sqrt/exp/log/sin/cos body helpers ──
+//
+// 2-buffer element-wise unary kernel bodies. Shares the
+// `_rocm_emit_unary_kernel_signature` 2-buffer signature with the
+// vec-scale + reduce-sum shapes (`(const float* a, float* c, int n)`).
+// All seven bodies emit the canonical `if (i < n)` bounds guard + a
+// single store of the unary expression `<op>(a[i])` (or `-a[i]` for
+// vec-neg) into `c[i]`. Mirrors the Apple Metal lane MSL §5.10 unary
+// family (commit 4415ec91 + sibling cycles); the AMD lane uses HIP's
+// f-suffix scalar math functions (`fabsf`/`sqrtf`/`expf`/`logf`/
+// `sinf`/`cosf`) instead of MSL's non-suffixed builtin names.
+
+// _rocm_emit_vec_neg_body — emit the HIP kernel body for vec-neg.
+// Hardcoded `c[i] = -a[i];` with surrounding braces. Prefix unary
+// minus (HIP/C++ scalar negation operator); no function call form.
+fn _rocm_emit_vec_neg_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + ROCM_TYPE_UINT + " i" + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_THREAD_IDX + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    if (i < n) "
+    out = out + "c" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_NEG
+    out = out + "a" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _rocm_emit_vec_abs_body — emit the HIP kernel body for vec-abs.
+// Hardcoded `c[i] = fabsf(a[i]);` with surrounding braces. Calls
+// the HIP FP32 absolute-value scalar builtin from `<math.h>`.
+fn _rocm_emit_vec_abs_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + ROCM_TYPE_UINT + " i" + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_THREAD_IDX + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    if (i < n) "
+    out = out + "c" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_ABS + ROCM_OP_CALL_OPEN
+    out = out + "a" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_CALL_CLOSE
+    out = out + ROCM_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _rocm_emit_vec_sqrt_body — emit the HIP kernel body for vec-sqrt.
+// Hardcoded `c[i] = sqrtf(a[i]);` with surrounding braces. Calls
+// the HIP FP32 square-root scalar builtin from `<math.h>`.
+fn _rocm_emit_vec_sqrt_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + ROCM_TYPE_UINT + " i" + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_THREAD_IDX + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    if (i < n) "
+    out = out + "c" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_SQRT + ROCM_OP_CALL_OPEN
+    out = out + "a" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_CALL_CLOSE
+    out = out + ROCM_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _rocm_emit_vec_exp_body — emit the HIP kernel body for vec-exp.
+// Hardcoded `c[i] = expf(a[i]);` with surrounding braces. Calls
+// the HIP FP32 natural-exponential scalar builtin from `<math.h>`.
+fn _rocm_emit_vec_exp_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + ROCM_TYPE_UINT + " i" + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_THREAD_IDX + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    if (i < n) "
+    out = out + "c" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_EXP + ROCM_OP_CALL_OPEN
+    out = out + "a" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_CALL_CLOSE
+    out = out + ROCM_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _rocm_emit_vec_log_body — emit the HIP kernel body for vec-log.
+// Hardcoded `c[i] = logf(a[i]);` with surrounding braces. Calls
+// the HIP FP32 natural-log scalar builtin from `<math.h>`.
+fn _rocm_emit_vec_log_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + ROCM_TYPE_UINT + " i" + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_THREAD_IDX + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    if (i < n) "
+    out = out + "c" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_LOG + ROCM_OP_CALL_OPEN
+    out = out + "a" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_CALL_CLOSE
+    out = out + ROCM_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _rocm_emit_vec_sin_body — emit the HIP kernel body for vec-sin.
+// Hardcoded `c[i] = sinf(a[i]);` with surrounding braces. Calls
+// the HIP FP32 sine scalar builtin from `<math.h>`.
+fn _rocm_emit_vec_sin_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + ROCM_TYPE_UINT + " i" + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_THREAD_IDX + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    if (i < n) "
+    out = out + "c" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_SIN + ROCM_OP_CALL_OPEN
+    out = out + "a" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_CALL_CLOSE
+    out = out + ROCM_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _rocm_emit_vec_cos_body — emit the HIP kernel body for vec-cos.
+// Hardcoded `c[i] = cosf(a[i]);` with surrounding braces. Calls
+// the HIP FP32 cosine scalar builtin from `<math.h>`.
+fn _rocm_emit_vec_cos_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + ROCM_TYPE_UINT + " i" + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_THREAD_IDX + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    if (i < n) "
+    out = out + "c" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_COS + ROCM_OP_CALL_OPEN
+    out = out + "a" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_CALL_CLOSE
+    out = out + ROCM_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// ── RFC 075 P1+++ rounding — vec-floor/ceil/round body helpers ──────
+//
+// 2-buffer element-wise rounding kernel bodies. Shares the
+// `_rocm_emit_unary_kernel_signature` 2-buffer signature with the
+// vec-scale + reduce-sum + element-wise unary shapes (`(const float* a,
+// float* c, int n)`). All three bodies emit the canonical `if (i < n)`
+// bounds guard + a single store of the unary expression `<op>(a[i])`
+// into `c[i]`. Mirrors the Apple Metal lane MSL §5.10 rounding family
+// (N52 commit); the AMD lane uses HIP's f-suffix scalar math functions
+// (`floorf`/`ceilf`/`roundf`).
+
+// _rocm_emit_vec_floor_body — emit the HIP kernel body for vec-floor.
+// Hardcoded `c[i] = floorf(a[i]);` with surrounding braces. Calls
+// the HIP FP32 floor scalar builtin from `<math.h>` (round toward -inf).
+fn _rocm_emit_vec_floor_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + ROCM_TYPE_UINT + " i" + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_THREAD_IDX + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    if (i < n) "
+    out = out + "c" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_FLOOR + ROCM_OP_CALL_OPEN
+    out = out + "a" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_CALL_CLOSE
+    out = out + ROCM_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _rocm_emit_vec_ceil_body — emit the HIP kernel body for vec-ceil.
+// Hardcoded `c[i] = ceilf(a[i]);` with surrounding braces. Calls
+// the HIP FP32 ceil scalar builtin from `<math.h>` (round toward +inf).
+fn _rocm_emit_vec_ceil_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + ROCM_TYPE_UINT + " i" + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_THREAD_IDX + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    if (i < n) "
+    out = out + "c" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_CEIL + ROCM_OP_CALL_OPEN
+    out = out + "a" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_CALL_CLOSE
+    out = out + ROCM_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _rocm_emit_vec_round_body — emit the HIP kernel body for vec-round.
+// Hardcoded `c[i] = roundf(a[i]);` with surrounding braces. Calls the
+// HIP FP32 round scalar builtin from `<math.h>` (round half-away-from-
+// zero, ISO C99 §7.12.9.6 semantics — distinct from `rintf`/`nearbyintf`
+// which use the current rounding mode).
+fn _rocm_emit_vec_round_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + ROCM_TYPE_UINT + " i" + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_THREAD_IDX + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    if (i < n) "
+    out = out + "c" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_ASSIGN
+    out = out + ROCM_OP_ROUND + ROCM_OP_CALL_OPEN
+    out = out + "a" + ROCM_OP_INDEX_OPEN + "i" + ROCM_OP_INDEX_CLOSE
+    out = out + ROCM_OP_CALL_CLOSE
+    out = out + ROCM_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
 // ── RFC 075 P1++ — matmul kernel signature + body helpers ───────────
 //
 // AMD lane WMMA matmul. The kernel signature for the matmul shape is
@@ -889,6 +1130,107 @@ fn _rocm_mfunc_is_matmul_NT_b_shape(mfn: MFunc) -> bool {
     return true
 }
 
+// ── RFC 075 P1++ unary — vec-neg/abs/sqrt/exp/log/sin/cos shape recognisers ──
+//
+// 2-buffer element-wise unary MIR shape: STMT_LOAD a→va, STMT_UNOP(op)
+// (va)→vc, STMT_STORE vc→c (optional STMT_RETURN tail). The unary op
+// string ("neg" / "abs" / "sqrt" / "exp" / "log" / "sin" / "cos") is
+// the per-shape discriminator; the load-unop-store skeleton is
+// identical across the seven variants. Element-wise unary; not invoked
+// when the MIR has a second STMT_LOAD (binop / scale / matmul dispatch
+// wins first). The reduce-sum recogniser ALSO keys on STMT_UNOP but
+// uses op string "reduce_sum" — mutually exclusive on the op string.
+// Mirrors `_metal_mfunc_is_unary_shape_with_op` row-for-row.
+
+// _rocm_mfunc_is_unary_shape_with_op — shared recogniser for the
+// 2-buffer unary element-wise MIR shape. STMT_LOAD + STMT_UNOP(op_name)
+// + STMT_STORE skeleton with a single local UNOP operand at args[0].
+fn _rocm_mfunc_is_unary_shape_with_op(mfn: MFunc, op_name: string) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 3 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_UNOP { return false }
+    if stmts[1].op != op_name { return false }
+    if stmts[2].kind != STMT_STORE { return false }
+    // UNOP carries a single local operand (no rhs).
+    let unop_args = stmts[1].args
+    if len(unop_args) < 1 { return false }
+    if unop_args[0].kind != "local" { return false }
+    return true
+}
+
+// _rocm_mfunc_is_vec_neg_shape — recognise vec-neg MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("neg") va→vc + STMT_STORE vc→c.
+fn _rocm_mfunc_is_vec_neg_shape(mfn: MFunc) -> bool {
+    return _rocm_mfunc_is_unary_shape_with_op(mfn, "neg")
+}
+
+// _rocm_mfunc_is_vec_abs_shape — recognise vec-abs MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("abs") va→vc + STMT_STORE vc→c.
+fn _rocm_mfunc_is_vec_abs_shape(mfn: MFunc) -> bool {
+    return _rocm_mfunc_is_unary_shape_with_op(mfn, "abs")
+}
+
+// _rocm_mfunc_is_vec_sqrt_shape — recognise vec-sqrt MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("sqrt") va→vc + STMT_STORE vc→c.
+fn _rocm_mfunc_is_vec_sqrt_shape(mfn: MFunc) -> bool {
+    return _rocm_mfunc_is_unary_shape_with_op(mfn, "sqrt")
+}
+
+// _rocm_mfunc_is_vec_exp_shape — recognise vec-exp MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("exp") va→vc + STMT_STORE vc→c.
+fn _rocm_mfunc_is_vec_exp_shape(mfn: MFunc) -> bool {
+    return _rocm_mfunc_is_unary_shape_with_op(mfn, "exp")
+}
+
+// _rocm_mfunc_is_vec_log_shape — recognise vec-log MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("log") va→vc + STMT_STORE vc→c.
+fn _rocm_mfunc_is_vec_log_shape(mfn: MFunc) -> bool {
+    return _rocm_mfunc_is_unary_shape_with_op(mfn, "log")
+}
+
+// _rocm_mfunc_is_vec_sin_shape — recognise vec-sin MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("sin") va→vc + STMT_STORE vc→c.
+fn _rocm_mfunc_is_vec_sin_shape(mfn: MFunc) -> bool {
+    return _rocm_mfunc_is_unary_shape_with_op(mfn, "sin")
+}
+
+// _rocm_mfunc_is_vec_cos_shape — recognise vec-cos MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("cos") va→vc + STMT_STORE vc→c.
+fn _rocm_mfunc_is_vec_cos_shape(mfn: MFunc) -> bool {
+    return _rocm_mfunc_is_unary_shape_with_op(mfn, "cos")
+}
+
+// ── RFC 075 P1+++ rounding — vec-floor/ceil/round shape recognisers ─
+//
+// 2-buffer element-wise rounding MIR shapes: STMT_LOAD a→va,
+// STMT_UNOP(op)(va)→vc, STMT_STORE vc→c (optional STMT_RETURN tail).
+// The unary op string ("floor" / "ceil" / "round") is the per-shape
+// discriminator; the load-unop-store skeleton is identical across the
+// three variants and shared with the seven N92 unary variants
+// (neg/abs/sqrt/exp/log/sin/cos). Mirrors `_metal_mfunc_is_unary_shape_with_op`
+// row-for-row on the AMD lane.
+
+// _rocm_mfunc_is_vec_floor_shape — recognise vec-floor MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("floor") va→vc + STMT_STORE vc→c.
+fn _rocm_mfunc_is_vec_floor_shape(mfn: MFunc) -> bool {
+    return _rocm_mfunc_is_unary_shape_with_op(mfn, "floor")
+}
+
+// _rocm_mfunc_is_vec_ceil_shape — recognise vec-ceil MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("ceil") va→vc + STMT_STORE vc→c.
+fn _rocm_mfunc_is_vec_ceil_shape(mfn: MFunc) -> bool {
+    return _rocm_mfunc_is_unary_shape_with_op(mfn, "ceil")
+}
+
+// _rocm_mfunc_is_vec_round_shape — recognise vec-round MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("round") va→vc + STMT_STORE vc→c.
+fn _rocm_mfunc_is_vec_round_shape(mfn: MFunc) -> bool {
+    return _rocm_mfunc_is_unary_shape_with_op(mfn, "round")
+}
+
 // _rocm_format_scalar — format a MIR const operand as HIP FP32 literal.
 // const_float → uses the `float_val` field (e.g. "2.5"); const_int →
 // uses the `int_val` field with `.0f` appended so it stays FP32 in
@@ -912,13 +1254,13 @@ fn _rocm_format_scalar(op: Operand) -> string {
 // module, unrecognised shape) returns `""` honestly, preserving the
 // P0 contract the lower_test Case 1 still asserts.
 //
-// HONEST SCOPE — NINE shapes recognised today (vec-add, vec-mul,
+// HONEST SCOPE — NINETEEN shapes recognised today (vec-add, vec-mul,
 // vec-sub, vec-div, vec-scale, reduce-sum, matmul, matmul_NT_a,
-// matmul_NT_b). All other MIR patterns return `""`. Unary family
-// (vec-neg / vec-abs / vec-sqrt / vec-exp / vec-log / vec-sin /
-// vec-cos / vec-floor / vec-ceil / vec-round) + bf16 matmul land in
-// multi-session follow-on cycles on the AMD lane (mirrors the RFC 075
-// plan that staged the Apple Metal lane shape-by-shape across many
+// matmul_NT_b, vec-neg, vec-abs, vec-sqrt, vec-exp, vec-log, vec-sin,
+// vec-cos, vec-floor, vec-ceil, vec-round). All other MIR patterns
+// return `""`. Remaining work (bf16 matmul + general MIR walk) lands
+// in multi-session follow-on cycles on the AMD lane (mirrors the RFC
+// 075 plan that staged the Apple Metal lane shape-by-shape across many
 // cycles). AMD GPU pool currently empty (N10/N14/N22 BLOCKED) —
 // silicon fire deferred until pool stock returns.
 //
@@ -932,20 +1274,36 @@ fn _rocm_format_scalar(op: Operand) -> string {
 //     matmul        `c = a · b`              STMT_LOAD+LOAD+BINOP(matmul)+STORE       (rocWMMA 16x16x16 FP32)
 //     matmul_NT_a   `c = a^T · b`            STMT_LOAD+LOAD+BINOP(matmul_NT_a)+STORE  (A col_major)
 //     matmul_NT_b   `c = a · b^T`            STMT_LOAD+LOAD+BINOP(matmul_NT_b)+STORE  (B row_major)
+//     vec-neg       `c[i] = -a[i]`           STMT_LOAD+UNOP(neg)+STORE   (2-buf, prefix `-`)
+//     vec-abs       `c[i] = fabsf(a[i])`     STMT_LOAD+UNOP(abs)+STORE   (2-buf)
+//     vec-sqrt      `c[i] = sqrtf(a[i])`     STMT_LOAD+UNOP(sqrt)+STORE  (2-buf)
+//     vec-exp       `c[i] = expf(a[i])`      STMT_LOAD+UNOP(exp)+STORE   (2-buf)
+//     vec-log       `c[i] = logf(a[i])`      STMT_LOAD+UNOP(log)+STORE   (2-buf)
+//     vec-sin       `c[i] = sinf(a[i])`      STMT_LOAD+UNOP(sin)+STORE   (2-buf)
+//     vec-cos       `c[i] = cosf(a[i])`      STMT_LOAD+UNOP(cos)+STORE   (2-buf)
+//     vec-floor     `c[i] = floorf(a[i])`    STMT_LOAD+UNOP(floor)+STORE (2-buf)
+//     vec-ceil      `c[i] = ceilf(a[i])`     STMT_LOAD+UNOP(ceil)+STORE  (2-buf)
+//     vec-round     `c[i] = roundf(a[i])`    STMT_LOAD+UNOP(round)+STORE (2-buf)
 //
 // Dispatch order: vec-add → vec-mul → vec-sub → vec-div → vec-scale →
-// reduce-sum → matmul → matmul_NT_a → matmul_NT_b → "". The matmul
-// recognisers fire AFTER the binop quartet because all four 4-stmt
-// LOAD+LOAD+BINOP+STORE recognisers key on the BINOP op string —
-// "add"/"mul"/"sub"/"div" vs "matmul"/"matmul_NT_a"/"matmul_NT_b" are
-// mutually exclusive, so ordering inside the BINOP family is for
-// readability only. vec-scale is tried before any unary family (future)
-// because its recogniser is the most discerning (checks operand kinds)
-// on the 3-stmt prefix it shares with the unary family.
+// reduce-sum → matmul → matmul_NT_a → matmul_NT_b → vec-neg → vec-abs
+// → vec-sqrt → vec-exp → vec-log → vec-sin → vec-cos → vec-floor →
+// vec-ceil → vec-round → "". The matmul recognisers fire AFTER the
+// binop quartet because all four 4-stmt LOAD+LOAD+BINOP+STORE
+// recognisers key on the BINOP op string — "add"/"mul"/"sub"/"div" vs
+// "matmul"/"matmul_NT_a"/"matmul_NT_b" are mutually exclusive, so
+// ordering inside the BINOP family is for readability only. vec-scale
+// is tried before the unary family because its recogniser is the most
+// discerning (checks operand kinds) on the 3-stmt prefix it shares
+// with the unary family. The element-wise unary family is dispatched
+// last (most-discerning last because each keys on a distinct STMT_UNOP
+// op string; reduce-sum's "reduce_sum" op string keeps it mutually
+// exclusive with the ten unary shapes — including the P1+++ rounding
+// trio).
 //
 // P2+ insertion points:
-//   - TODO RFC 075 P2 — unary family (mirror metal_target.hexa P3+
-//     buildout for the AMD lane) + bf16 matmul variants.
+//   - TODO RFC 075 P2 — bf16 matmul variants (mirror metal_target.hexa
+//     next-cycle buildout).
 //   - TODO RFC 075 P3 — silicon fire via `hipcc` + AMD GPU pool host
 //     (queued behind AMD pool stock return per N10/N14/N22).
 //   - TODO RFC 075 follow-on cycle — general MFunc → HIP emission
@@ -1033,6 +1391,76 @@ pub fn codegen_emit_rocm_il(module: MModule) -> string {
         let mut out = _rocm_emit_matmul_preamble()
         out = out + _rocm_emit_matmul_kernel_signature(kname)
         out = out + _rocm_emit_matmul_NT_b_body()
+        return out
+    }
+    // vec-neg — STMT_LOAD + STMT_UNOP(neg) + STMT_STORE (2-buffer sig).
+    if _rocm_mfunc_is_vec_neg_shape(mfn) {
+        let mut out = _rocm_emit_preamble()
+        out = out + _rocm_emit_unary_kernel_signature(kname)
+        out = out + _rocm_emit_vec_neg_body()
+        return out
+    }
+    // vec-abs — STMT_LOAD + STMT_UNOP(abs) + STMT_STORE (2-buffer sig).
+    if _rocm_mfunc_is_vec_abs_shape(mfn) {
+        let mut out = _rocm_emit_preamble()
+        out = out + _rocm_emit_unary_kernel_signature(kname)
+        out = out + _rocm_emit_vec_abs_body()
+        return out
+    }
+    // vec-sqrt — STMT_LOAD + STMT_UNOP(sqrt) + STMT_STORE (2-buffer sig).
+    if _rocm_mfunc_is_vec_sqrt_shape(mfn) {
+        let mut out = _rocm_emit_preamble()
+        out = out + _rocm_emit_unary_kernel_signature(kname)
+        out = out + _rocm_emit_vec_sqrt_body()
+        return out
+    }
+    // vec-exp — STMT_LOAD + STMT_UNOP(exp) + STMT_STORE (2-buffer sig).
+    if _rocm_mfunc_is_vec_exp_shape(mfn) {
+        let mut out = _rocm_emit_preamble()
+        out = out + _rocm_emit_unary_kernel_signature(kname)
+        out = out + _rocm_emit_vec_exp_body()
+        return out
+    }
+    // vec-log — STMT_LOAD + STMT_UNOP(log) + STMT_STORE (2-buffer sig).
+    if _rocm_mfunc_is_vec_log_shape(mfn) {
+        let mut out = _rocm_emit_preamble()
+        out = out + _rocm_emit_unary_kernel_signature(kname)
+        out = out + _rocm_emit_vec_log_body()
+        return out
+    }
+    // vec-sin — STMT_LOAD + STMT_UNOP(sin) + STMT_STORE (2-buffer sig).
+    if _rocm_mfunc_is_vec_sin_shape(mfn) {
+        let mut out = _rocm_emit_preamble()
+        out = out + _rocm_emit_unary_kernel_signature(kname)
+        out = out + _rocm_emit_vec_sin_body()
+        return out
+    }
+    // vec-cos — STMT_LOAD + STMT_UNOP(cos) + STMT_STORE (2-buffer sig).
+    if _rocm_mfunc_is_vec_cos_shape(mfn) {
+        let mut out = _rocm_emit_preamble()
+        out = out + _rocm_emit_unary_kernel_signature(kname)
+        out = out + _rocm_emit_vec_cos_body()
+        return out
+    }
+    // vec-floor — STMT_LOAD + STMT_UNOP(floor) + STMT_STORE (2-buffer sig).
+    if _rocm_mfunc_is_vec_floor_shape(mfn) {
+        let mut out = _rocm_emit_preamble()
+        out = out + _rocm_emit_unary_kernel_signature(kname)
+        out = out + _rocm_emit_vec_floor_body()
+        return out
+    }
+    // vec-ceil — STMT_LOAD + STMT_UNOP(ceil) + STMT_STORE (2-buffer sig).
+    if _rocm_mfunc_is_vec_ceil_shape(mfn) {
+        let mut out = _rocm_emit_preamble()
+        out = out + _rocm_emit_unary_kernel_signature(kname)
+        out = out + _rocm_emit_vec_ceil_body()
+        return out
+    }
+    // vec-round — STMT_LOAD + STMT_UNOP(round) + STMT_STORE (2-buffer sig).
+    if _rocm_mfunc_is_vec_round_shape(mfn) {
+        let mut out = _rocm_emit_preamble()
+        out = out + _rocm_emit_unary_kernel_signature(kname)
+        out = out + _rocm_emit_vec_round_body()
         return out
     }
     // No recognised shape — honest empty string.
