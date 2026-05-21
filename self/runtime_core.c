@@ -5300,6 +5300,12 @@ static HexaVal _hexa_to_string_rec(HexaVal v, int depth) {
 
 // ── Truthy check ─────────────────────────────────────────
 
+// Step-3 cycle 88 port — hexa_truthy via cycle-87 if-cond known-bool
+// fast path + cycle-85 typed-let. The hexa-source rt_truthy_b uses
+// `if t == "void"` etc. which now lowers to `if (HX_BOOL(...))` direct
+// — no hexa_truthy recursion. VALSTRUCT branch stays C (pointer
+// comparison, no hexa-source way to observe HX_VS).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int hexa_truthy(HexaVal v) {
     switch (HX_TAG(v)) {
         case TAG_BOOL: return HX_BOOL(v);
@@ -5315,6 +5321,17 @@ int hexa_truthy(HexaVal v) {
         default: return 1;
     }
 }
+#else
+extern HexaVal rt_truthy_b(HexaVal v);
+int hexa_truthy(HexaVal v) {
+    /* VALSTRUCT branch stays C — hexa source can't observe HX_VS pointer. */
+    if (HX_IS_VALSTRUCT(v)) return HX_VS(v) != NULL;
+    /* rt_truthy_b returns hexa_bool — extract bit directly with HX_BOOL,
+     * NOT hexa_truthy (would recurse infinitely). */
+    HexaVal r = rt_truthy_b(v);
+    return HX_BOOL(r);
+}
+#endif
 
 // ── Type checking ────────────────────────────────────────
 

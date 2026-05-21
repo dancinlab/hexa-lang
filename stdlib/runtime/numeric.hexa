@@ -353,6 +353,31 @@ pub fn rt_hex(n: int) -> string {
     return bytes_to_str_raw(out)
 }
 
+// Step 3 cycle 88 — polymorphic hexa_truthy port. Enabled by cycle-87
+// if-cond known-bool fast path: `if t == "void" {}` lowers to
+// `if (HX_BOOL(hexa_eq(t, "void")))` — NO hexa_truthy recursion.
+// Critical: bool branch returns v DIRECTLY (already TAG_BOOL HexaVal),
+// avoiding `v as bool` which would lower to hexa_bool(hexa_truthy(v))
+// → infinite recursion. C wrapper extracts via HX_BOOL.
+pub fn rt_truthy_b(v: HexaVal) -> HexaVal {
+    let t = type_of(v)
+    if t == "void" { return false }
+    if t == "bool" { return v }
+    if t == "int" {
+        let i: int = v as int
+        return i != 0
+    }
+    if t == "float" {
+        let f: float = v as float
+        return f != 0.0
+    }
+    if t == "string" {
+        if byte_len(v) == 0 { return false }
+        return true
+    }
+    return true
+}
+
 // Step 3 cycle 86 — polymorphic to_int. Uses cycle-85 typed-let
 // propagation: `let f: float = v as float` causes `f as int` to direct
 // emit `hexa_int((int64_t)HX_FLOAT(f))` instead of recursing into

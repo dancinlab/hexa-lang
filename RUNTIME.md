@@ -1094,6 +1094,37 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 87 ACTIVATED: if-cond known-bool direct HX_BOOL emit 🛸🛸🛸
+
+- ✅ **4th codegen unblocking** (closes the last "real blocker" chain).
+  if-cond AST nodes that always yield TAG_BOOL (BinOp `==`/`!=`/`<`/
+  `>`/`<=`/`>=`/`&&`/`||`, UnaryOp `!`, BoolLit) now emit
+  `if (HX_BOOL(...))` instead of `if (hexa_truthy(...))`
+- hexa_cc.c patches at the 2 if-emit sites (line ~16385 + 17471).
+  Detects cond.kind == BinOp and op in comparison/logical set, OR
+  cond.kind == UnaryOp with op `!`, OR BoolLit
+- Unlocks hexa_truthy port (formerly trapped because every `if cond`
+  inside ported hexa_truthy recursed)
+- Build: same clang flags as cycle 85 (`clang -O2 -std=c11 -arch arm64
+  -I self -D_GNU_SOURCE -fbracket-depth=4096 self/native/hexa_cc.c
+  self/runtime.c -o self/native/hexa_v2 -lm`)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary **1,142,728 B** (-18KB vs cycle 86 — removed redundant
+  hexa_truthy wrappers across all if-conds in the compiler itself)
+
+### 2026-05-21 — step 3 cycle 88: hexa_truthy polymorphic port (via cycle 87)
+
+- ✅ `hexa_truthy` ported. `rt_truthy_b(v)` uses type_of dispatch:
+  void → false; bool → return v directly (avoids `as bool` →
+  hexa_truthy recursion); int → `i != 0` typed direct; float → `f !=
+  0.0`; string → byte_len check
+- C wrapper: VALSTRUCT branch stays C (HX_VS pointer check). Other
+  branches dispatch to rt_truthy_b; result extracted via HX_BOOL (not
+  hexa_truthy — would recurse)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,159,336 B (rt_truthy_b body adds back some but still well
+  below cycle 86)
+
 ### 2026-05-21 — step 3 cycle 86: rt_to_int polymorphic port (via cycle 85)
 
 - ✅ `hexa_to_int` polymorphic port via cycle-85 typed-let propagation.
