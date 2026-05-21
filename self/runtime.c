@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdarg.h>     // 2026-05-22 iter-2a: va_list/va_arg explicit (Linux GCC); macOS clang gets it transitively from <stdio.h>
 #include <math.h>
 #include <ctype.h>
 #include <dlfcn.h>
