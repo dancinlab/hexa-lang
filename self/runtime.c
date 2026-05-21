@@ -9359,12 +9359,21 @@ HexaVal hexa_bin(HexaVal n) {
     return hexa_str_own(out);
 }
 
+// Step-3 cycle 84 port — int → hex string via hexa source.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_hex(HexaVal n) {
     uint64_t v = HX_IS_INT(n) ? (uint64_t)HX_INT(n) : (uint64_t)HX_FLOAT(n);
     char* out = (char*)malloc(20);
     snprintf(out, 20, "%llx", (unsigned long long)v);
     return hexa_str_own(out);
 }
+#else
+extern HexaVal rt_hex(HexaVal n);
+HexaVal hexa_hex(HexaVal n) {
+    int64_t v = HX_IS_INT(n) ? HX_INT(n) : (int64_t)HX_FLOAT(n);
+    return rt_hex(hexa_int(v));
+}
+#endif
 
 // Reproducible-emit pin. When SOURCE_DATE_EPOCH is set (GNU/Debian
 // convention, unix-seconds int) or HEXA_REPRODUCIBLE=1, wall-clock

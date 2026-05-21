@@ -328,6 +328,31 @@ pub fn rt_array_flat_map(arr: HexaVal, fn_v: HexaVal) -> HexaVal {
     return out
 }
 
+// Step 3 cycle 84 — int → hex string (lowercase, no "0x" prefix).
+// Matches C body's snprintf("%llx") for typed-int input. Negative
+// values are int64-cast through (the C body uses uint64_t cast which
+// makes negatives huge unsigned hex — replicating with `x >> 4` on
+// signed int64 sign-extends; users with int64 negatives should use
+// explicit uint64 framing).
+pub fn rt_hex(n: int) -> string {
+    if n == 0 { return "0" }
+    let alphabet = "0123456789abcdef"
+    let mut digits: [int] = []
+    let mut x = n
+    while x > 0 {
+        digits = digits.push(alphabet.byte_at(x & 0xF))
+        x = x >> 4
+    }
+    let mut out: [int] = []
+    let dlen = len(digits)
+    let mut i = dlen - 1
+    while i >= 0 {
+        out = out.push(digits[i])
+        i = i - 1
+    }
+    return bytes_to_str_raw(out)
+}
+
 // Step 3 cycle 80 — array+array concat (hexa_add_slow's third branch).
 // Mirrors C body at self/runtime_core.c:5363-5368 — deep iteration via
 // `len()` + indexed read + push. C wrapper handles all non-array cases.

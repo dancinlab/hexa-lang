@@ -1094,6 +1094,15 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 84: hexa_hex (int → hex string)
+
+- ✅ `rt_hex(n)` ported. Loop builds digit-bytes via `x & 0xF` indexed
+  into "0123456789abcdef", then reverse. C body's uint64_t cast of
+  negative ints becomes int64 sign-extending `>> 4` — caveat noted in
+  hexa source comment
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,792 B
+
 ### 2026-05-21 — step 3 cycle 83: hexa_base64_encode + hexa_base64_decode
 
 - ✅ Base64 encode + decode ported. Hexa-source bit manipulation via
