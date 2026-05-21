@@ -723,6 +723,19 @@ fn _rv_parse_port_decl(st_in: PState, m_in: Module, dir_kind: int, tab: SymTab) 
                         let mut pid = 0
                         if dir_kind > 0 { pid = len(m.wires) + 1 }
                         m = rtlil_module_add_wire(m, rtlil_wire(wn, width, dir_kind, pid))
+                        // rfc_006 §5 d4 closure (2026-05-22) — per-bit
+                        // shadow outputs for 2-D unpacked-array OUTPUT
+                        // elements (see _rv_parse_ansi_ports for full
+                        // rationale). 2-D shape `<base>[i][j]__b<k>`.
+                        if (dir_kind == 1 || dir_kind == 2) && width > 1 {
+                            let mut bj = 0
+                            while bj < width {
+                                let bn = wn + "__b" + str(bj)
+                                let bpid = len(m.wires) + 1
+                                m = rtlil_module_add_wire(m, rtlil_wire(bn, 1, dir_kind, bpid))
+                                bj = bj + 1
+                            }
+                        }
                         k2 = k2 + 1
                     }
                     k = k + 1
@@ -734,6 +747,18 @@ fn _rv_parse_port_decl(st_in: PState, m_in: Module, dir_kind: int, tab: SymTab) 
                     let mut pid = 0
                     if dir_kind > 0 { pid = len(m.wires) + 1 }
                     m = rtlil_module_add_wire(m, rtlil_wire(wn, width, dir_kind, pid))
+                    // rfc_006 §5 d4 closure (2026-05-22) — per-bit
+                    // shadow ports for 1-D unpacked-array INPUT/OUTPUT
+                    // elements (see _rv_parse_ansi_ports for rationale).
+                    if (dir_kind == 1 || dir_kind == 2) && width > 1 {
+                        let mut bj = 0
+                        while bj < width {
+                            let bn = wn + "__b" + str(bj)
+                            let bpid = len(m.wires) + 1
+                            m = rtlil_module_add_wire(m, rtlil_wire(bn, 1, dir_kind, bpid))
+                            bj = bj + 1
+                        }
+                    }
                     k = k + 1
                 }
             }
@@ -741,6 +766,18 @@ fn _rv_parse_port_decl(st_in: PState, m_in: Module, dir_kind: int, tab: SymTab) 
             let mut pid = 0
             if dir_kind > 0 { pid = len(m.wires) + 1 }
             m = rtlil_module_add_wire(m, rtlil_wire(nm, width, dir_kind, pid))
+            // rfc_006 §5 d4 closure (2026-05-22) — per-bit shadow
+            // outputs for scalar (non-array) multi-bit OUTPUT
+            // declarations (see _rv_parse_ansi_ports for rationale).
+            if (dir_kind == 1 || dir_kind == 2) && width > 1 {
+                let mut bj = 0
+                while bj < width {
+                    let bn = nm + "__b" + str(bj)
+                    let bpid = len(m.wires) + 1
+                    m = rtlil_module_add_wire(m, rtlil_wire(bn, 1, dir_kind, bpid))
+                    bj = bj + 1
+                }
+            }
         }
     }
     return RvStep { st: st, m: m }
@@ -1516,11 +1553,61 @@ fn _rv_parse_ansi_ports(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                 let wn = pname + "[" + str(k) + "]"
                 let pid = len(m.wires) + 1
                 m = rtlil_module_add_wire(m, rtlil_wire(wn, width, cur_dir, pid))
+                // rfc_006 §5 d4 closure (2026-05-22) — when an unpacked-
+                // array PORT element has multi-bit packed width, ALSO
+                // register per-bit shadow wires `<wn>__b<j>` as 1-bit
+                // PORTS (inheriting `cur_dir` — both INPUT and OUTPUT
+                // need this). The downstream bit-blast pipeline (in
+                // `_passes_lower_mux_cell`, `_passes_lower_add_cell`,
+                // and `abc_emit_blif`'s `.latch` per-bit emit) names
+                // the per-bit driver / consumer nets `<wn>__b<j>`, but
+                // BLIF `.inputs` / `.outputs` is INHERENTLY 1-bit
+                // (BLIF spec §3) — listing only the un-blasted W-bit
+                // name leaves the per-bit nets dangling from ABC's
+                // view. For OUTPUT, ABC auto-ties the un-blasted port
+                // to const-0 AND collapses the entire fan-in cone
+                // (latch + mux tree) as dead logic. For INPUT, ABC
+                // auto-ties the `__b<j>` consumers to const-0, which
+                // collapses the FIFO write cone (1610 → 1290 of d4's
+                // `_const0_` come from `in_data[k]__b<j>` references
+                // that aren't in `.inputs`). Adding the per-bit shadow
+                // wires as port-kind makes them appear in the BLIF
+                // `.inputs`/`.outputs` directive so ABC observes the
+                // drivers / sees the consumers as legitimate primary
+                // signals.
+                // @cite BLIF spec §3 (`.inputs` / `.outputs` 1-bit
+                // constraint) + ABC `read_blif` "Constant-0 drivers
+                // added to N non-driven nets" diagnostic (auto-tie
+                // + dead-cone opt).
+                if (cur_dir == 1 || cur_dir == 2) && width > 1 {
+                    let mut bj = 0
+                    while bj < width {
+                        let bn = wn + "__b" + str(bj)
+                        let bpid = len(m.wires) + 1
+                        m = rtlil_module_add_wire(m, rtlil_wire(bn, 1, cur_dir, bpid))
+                        bj = bj + 1
+                    }
+                }
                 k = k + 1
             }
         } else {
             let pid = len(m.wires) + 1
             m = rtlil_module_add_wire(m, rtlil_wire(pname, width, cur_dir, pid))
+            // rfc_006 §5 d4 closure (2026-05-22) — same multi-bit shadow
+            // per-bit wire registration as the unpacked-array branch
+            // above, applied to scalar-name ANSI ports declared as e.g.
+            // `input [W-1:0] d;` or `output reg [W-1:0] q;` (single
+            // port, no [0:N] unpacked range). See comment block above
+            // for rationale.
+            if (cur_dir == 1 || cur_dir == 2) && width > 1 {
+                let mut bj = 0
+                while bj < width {
+                    let bn = pname + "__b" + str(bj)
+                    let bpid = len(m.wires) + 1
+                    m = rtlil_module_add_wire(m, rtlil_wire(bn, 1, cur_dir, bpid))
+                    bj = bj + 1
+                }
+            }
         }
     }
     return RvStep { st: st, m: m }
@@ -5814,6 +5901,12 @@ fn main() {
     }
 
     // T18 — ANSI port with unpacked 1-D array (expands to one wire/index).
+    // rfc_006 §5 d4 closure (2026-05-22) — multi-bit port wires also
+    // get per-bit shadow wires (`<name>__b<j>`) registered so BLIF
+    // `.inputs` / `.outputs` lists them as 1-bit names (BLIF spec §3
+    // restricts those directives to 1-bit nets). For this 4-bit ×
+    // 3-slot input port: 3 unblasted slot wires + 3 × 4 = 12 per-bit
+    // shadows = 15 total.
     total = total + 1
     let _v18 = "module aa ( input wire [ 3 : 0 ] bus [ 0 : 2 ] ) ; endmodule"
     let _r18 = read_verilog(_v18)
@@ -5821,7 +5914,7 @@ fn main() {
         println("FAIL T18 unpacked: " + _r18.message); fails = fails + 1
     } else {
         let _m18 = _r18.design.modules[0]
-        if len(_m18.wires) != 3 {
+        if len(_m18.wires) != 15 {
             println("FAIL T18a wire_count got " + str(len(_m18.wires)))
             fails = fails + 1
         }
@@ -5831,6 +5924,18 @@ fn main() {
         } else {
             if _m18.wires[_b1].width != 4 {
                 println("FAIL T18c bus[1]_width"); fails = fails + 1
+            }
+        }
+        // T18d — shadow per-bit wires registered & 1-bit, dir_kind==1.
+        let _bs = rtlil_find_wire(_m18, "bus[1]__b2")
+        if _bs < 0 {
+            println("FAIL T18d bus[1]__b2_missing"); fails = fails + 1
+        } else {
+            if _m18.wires[_bs].width != 1 {
+                println("FAIL T18e bus[1]__b2_width"); fails = fails + 1
+            }
+            if _m18.wires[_bs].dir_kind != 1 {
+                println("FAIL T18f bus[1]__b2_dir"); fails = fails + 1
             }
         }
     }
