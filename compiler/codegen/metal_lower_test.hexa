@@ -1,13 +1,13 @@
 // HEXA Native Compiler — RFC 075 P1+P2+P3+ / Metal lowering smoke (codegen-only)
 //
-// @version 0.0.3
+// @version 0.0.4
 // @capabilities [pure]
 //
 // RFC 075 P1+P2+P3+ codegen-only smoke. The codegen entry
-// `codegen_emit_metal_msl` now recognises THREE MIR shapes (vec-add,
-// vec-mul, vec-scale) and emits real MSL kernel source for each.
-// Empty / unrecognised modules continue to return `""` honestly (P0
-// contract preserved — Case 1 still PASS).
+// `codegen_emit_metal_msl` now recognises FIVE MIR shapes (vec-add,
+// vec-mul, vec-sub, vec-div, vec-scale) and emits real MSL kernel
+// source for each. Empty / unrecognised modules continue to return
+// `""` honestly (P0 contract preserved — Case 1 still PASS).
 //
 // Case roster:
 //   Case 1 — P0 empty-module emit returns `""`
@@ -30,6 +30,18 @@
 //            invoke `codegen_emit_metal_msl`, assert emitted string
 //            contains the scalar literal and ` * `, NOT ` + ` and NOT
 //            `b[i]` (vec-scale has no second device buffer load).
+//   Case 7 — F-RFC075-METAL-EMIT-VEC-SUB: synthesize vec-sub MIR
+//            (STMT_BINOP("sub") sibling of vec-add), invoke
+//            `codegen_emit_metal_msl`, assert the same 15-substring
+//            battery as vec-add but with ` - ` replacing ` + `. Also
+//            asserts ` + ` and ` * ` are ABSENT — vec-sub must not
+//            accidentally inherit vec-add's `+` or vec-mul's `*`.
+//   Case 8 — F-RFC075-METAL-EMIT-VEC-DIV: synthesize vec-div MIR
+//            (STMT_BINOP("div") sibling of vec-add), invoke
+//            `codegen_emit_metal_msl`, assert the same 15-substring
+//            battery as vec-add but with ` / ` replacing ` + `. Also
+//            asserts ` + ` and ` * ` are ABSENT — vec-div must not
+//            accidentally inherit vec-add's `+` or vec-mul's `*`.
 //
 // Run:
 //   hexa build compiler/codegen/metal_lower_test.hexa -o build/metal_lower_test
@@ -206,6 +218,26 @@ fn _stmt_binop_mul(dst: Local, lhs: i64, rhs: i64) -> Stmt {
     xs.push(_op_local(rhs))
     return Stmt {
         kind: STMT_BINOP, dst: dst, op: "mul", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_binop_sub(dst: Local, lhs: i64, rhs: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(lhs))
+    xs.push(_op_local(rhs))
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: "sub", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_binop_div(dst: Local, lhs: i64, rhs: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(lhs))
+    xs.push(_op_local(rhs))
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: "div", args: xs,
         target_block: -1, target_block_else: -1
     }
 }
@@ -538,6 +570,192 @@ fn _test_vec_scale_emit() -> bool {
     return ok
 }
 
+// ── vec-sub MIR fixture (Case 7) ─────────────────────────────────────
+
+fn _build_vec_sub_module() -> MModule {
+    // Mirror of `_build_vec_add_module` with the BINOP op switched to
+    // "sub". Three kernel-buffer params (a, b, c) + three load/binop/
+    // store Locals (va, vb, vc). Stmt sequence: STMT_LOAD a→va,
+    // STMT_LOAD b→vb, STMT_BINOP_SUB (va, vb)→vc, STMT_STORE vc→c.
+    let a  = _kern_local(0, "a")
+    let b  = _kern_local(1, "b")
+    let c  = _kern_local(2, "c")
+    let va = _priv_local(3, "va")
+    let vb = _priv_local(4, "vb")
+    let vc = _priv_local(5, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_load(vb, b.id))
+    s.push(_stmt_binop_sub(vc, va.id, vb.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vb)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "vec_sub",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "metal_vec_sub.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 7 — F-RFC075-METAL-EMIT-VEC-SUB ─────────────────────────────
+//
+// Synthesise a vec-sub MIR module, invoke `codegen_emit_metal_msl`, and
+// assert the emitted MSL kernel source contains the same load-bearing
+// source-text fragments as vec-add (kernel decl, device pointer typing,
+// thread-position attribute, c[i] / a[i] / b[i] index expressions),
+// PLUS the subtraction operator. Also asserts the addition and
+// multiplication operators are ABSENT — vec-sub must not accidentally
+// inherit vec-add's `+` or vec-mul's `*`.
+
+fn _test_vec_sub_emit() -> bool {
+    let mut ok = true
+    let mod_vs = _build_vec_sub_module()
+    let msl = codegen_emit_metal_msl(mod_vs)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ vec-sub case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-VEC-SUB substring battery —
+    ok = _check_contains(ok, msl, "#include <metal_stdlib>",     "MSL preamble include")
+    ok = _check_contains(ok, msl, "using namespace metal;",      "MSL namespace using-directive")
+    ok = _check_contains(ok, msl, "kernel void",                 "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "vec_sub",                     "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "device const float*",         "read-only device pointer parameter")
+    ok = _check_contains(ok, msl, "device float*",               "writable device pointer parameter")
+    ok = _check_contains(ok, msl, "[[buffer(0)]]",               "buffer(0) binding attribute")
+    ok = _check_contains(ok, msl, "[[buffer(1)]]",               "buffer(1) binding attribute")
+    ok = _check_contains(ok, msl, "[[buffer(2)]]",               "buffer(2) binding attribute")
+    ok = _check_contains(ok, msl, "[[thread_position_in_grid]]", "thread-position attribute")
+    ok = _check_contains(ok, msl, "c[i]",                        "writable buffer index `c[i]`")
+    ok = _check_contains(ok, msl, "a[i]",                        "read buffer index `a[i]`")
+    ok = _check_contains(ok, msl, "b[i]",                        "read buffer index `b[i]`")
+    ok = _check_contains(ok, msl, " - ",                         "subtraction operator between loaded values")
+    ok = _check_contains(ok, msl, ";",                           "statement terminator")
+    // Negative — vec-sub must NOT carry vec-add's plus or vec-mul's star.
+    ok = _check_not_contains(ok, msl, " + ",                     "vec-sub should not emit ` + ` (vec-add inheritance check)")
+    ok = _check_not_contains(ok, msl, " * ",                     "vec-sub should not emit ` * ` (vec-mul inheritance check)")
+    return ok
+}
+
+// ── vec-div MIR fixture (Case 8) ─────────────────────────────────────
+
+fn _build_vec_div_module() -> MModule {
+    // Mirror of `_build_vec_add_module` with the BINOP op switched to
+    // "div". Three kernel-buffer params (a, b, c) + three load/binop/
+    // store Locals (va, vb, vc). Stmt sequence: STMT_LOAD a→va,
+    // STMT_LOAD b→vb, STMT_BINOP_DIV (va, vb)→vc, STMT_STORE vc→c.
+    let a  = _kern_local(0, "a")
+    let b  = _kern_local(1, "b")
+    let c  = _kern_local(2, "c")
+    let va = _priv_local(3, "va")
+    let vb = _priv_local(4, "vb")
+    let vc = _priv_local(5, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_load(vb, b.id))
+    s.push(_stmt_binop_div(vc, va.id, vb.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vb)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "vec_div",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "metal_vec_div.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 8 — F-RFC075-METAL-EMIT-VEC-DIV ─────────────────────────────
+//
+// Synthesise a vec-div MIR module, invoke `codegen_emit_metal_msl`, and
+// assert the emitted MSL kernel source contains the same load-bearing
+// source-text fragments as vec-add (kernel decl, device pointer typing,
+// thread-position attribute, c[i] / a[i] / b[i] index expressions),
+// PLUS the division operator. Also asserts the addition and
+// multiplication operators are ABSENT — vec-div must not accidentally
+// inherit vec-add's `+` or vec-mul's `*`.
+
+fn _test_vec_div_emit() -> bool {
+    let mut ok = true
+    let mod_vd = _build_vec_div_module()
+    let msl = codegen_emit_metal_msl(mod_vd)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ vec-div case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-VEC-DIV substring battery —
+    ok = _check_contains(ok, msl, "#include <metal_stdlib>",     "MSL preamble include")
+    ok = _check_contains(ok, msl, "using namespace metal;",      "MSL namespace using-directive")
+    ok = _check_contains(ok, msl, "kernel void",                 "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "vec_div",                     "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "device const float*",         "read-only device pointer parameter")
+    ok = _check_contains(ok, msl, "device float*",               "writable device pointer parameter")
+    ok = _check_contains(ok, msl, "[[buffer(0)]]",               "buffer(0) binding attribute")
+    ok = _check_contains(ok, msl, "[[buffer(1)]]",               "buffer(1) binding attribute")
+    ok = _check_contains(ok, msl, "[[buffer(2)]]",               "buffer(2) binding attribute")
+    ok = _check_contains(ok, msl, "[[thread_position_in_grid]]", "thread-position attribute")
+    ok = _check_contains(ok, msl, "c[i]",                        "writable buffer index `c[i]`")
+    ok = _check_contains(ok, msl, "a[i]",                        "read buffer index `a[i]`")
+    ok = _check_contains(ok, msl, "b[i]",                        "read buffer index `b[i]`")
+    ok = _check_contains(ok, msl, " / ",                         "division operator between loaded values")
+    ok = _check_contains(ok, msl, ";",                           "statement terminator")
+    // Negative — vec-div must NOT carry vec-add's plus or vec-mul's star.
+    ok = _check_not_contains(ok, msl, " + ",                     "vec-div should not emit ` + ` (vec-add inheritance check)")
+    ok = _check_not_contains(ok, msl, " * ",                     "vec-div should not emit ` * ` (vec-mul inheritance check)")
+    return ok
+}
+
 fn main() {
     println("══════════════════════════════════════════════")
     println("  RFC 075 P1+P2+P3+ — Metal codegen smoke")
@@ -549,10 +767,12 @@ fn main() {
     let ok_class  = _test_classifier_helpers()
     let ok_vmul   = _test_vec_mul_emit()
     let ok_vscale = _test_vec_scale_emit()
+    let ok_vsub   = _test_vec_sub_emit()
+    let ok_vdiv   = _test_vec_div_emit()
 
     println("")
-    if ok_emit && ok_tgt && ok_vec && ok_class && ok_vmul && ok_vscale {
-        println("  PASS: RFC 075 P1+P2+P3+ Metal codegen smoke (vec-add + vec-mul + vec-scale)")
+    if ok_emit && ok_tgt && ok_vec && ok_class && ok_vmul && ok_vscale && ok_vsub && ok_vdiv {
+        println("  PASS: RFC 075 P1+P2+P3+ Metal codegen smoke (vec-add + vec-mul + vec-sub + vec-div + vec-scale)")
     } else {
         println("  FAIL: RFC 075 P1+P2+P3+ Metal codegen smoke")
     }
