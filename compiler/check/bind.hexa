@@ -1095,17 +1095,7 @@ fn _bind_builtin_names() -> [string] {
         "alloc_raw", "free_raw", "ptr_from_int",
         "write_f32", "write_i32", "write_i64", "deref_f32", "deref_i32",
         "ptr_write_f32", "ptr_write_i32", "ptr_read_f32", "ptr_read_f64", "ptr_read_i32",
-        "ord",
-        // RFC 071 P5++ — GPU matmul builtins. Source-level entry points
-        // that the HIR→MIR lowering pattern-synthesises into the
-        // STMT_LOAD + STMT_LOAD + STMT_BINOP("matmul"/_NT_a/_NT_b) +
-        // STMT_STORE MIR shape recognised by the NVPTX / ROCm / Metal
-        // matmul codegen lanes. See compiler/lower/hir_to_mir.hexa
-        // `gpu_matmul` call-branch synthesis and compiler/codegen/
-        // nvptx_target.hexa `_nvptx_mfunc_is_matmul_shape` (N86) /
-        // rocm_target.hexa `_rocm_mfunc_is_matmul_shape` /
-        // metal_target.hexa `_metal_mfunc_is_matmul_shape`.
-        "gpu_matmul", "gpu_matmul_NT_a", "gpu_matmul_NT_b"
+        "ord"
     ]
 }
 

@@ -452,14 +452,6 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
     if op == "add_f32"  { return "add.f32" }
     if op == "sub_f32"  { return "sub.f32" }
     if op == "mul_f32"  { return "mul.f32" }
-    // RFC 071 P4+ (N71-C sibling FP32 div) — F32 has THREE legal rounding
-    // modes in PTX ISA §9.7.1.4 (`div.approx.f32`, `div.full.f32`,
-    // `div.rn.f32`). We default to `div.rn.f32` (IEEE round-to-nearest,
-    // full-precision) to match the FP64 sibling at L437 and stay
-    // numerically conservative; `approx`/`full` can be a precision-policy
-    // opt-in later. Restored after silent-wipe by 7671d7db (see N81 BFLY
-    // restore commit 842d6565 — same wipe class).
-    if op == "div_f32"  { return "div.rn.f32" }
     return ""
 }
 
@@ -476,22 +468,11 @@ fn _nvptx_binop_mnemonic_for_kind(op: string, kind: string) -> string {
         if op == "add" || op == "+" { return "add.s32" }
         if op == "sub" || op == "-" { return "sub.s32" }
         if op == "mul" || op == "*" { return "mul.lo.s32" }
-        // RFC 071 P4+ (N71-C, closes N70 GAP-B) — integer division.
-        // PTX ISA §9.7.1.4 requires an EXPLICIT type-class on `div.<ty>`:
-        // `div.s32 %r_dst, %r_a, %r_b`. Signed by default — HIR does not
-        // track an unsigned-int signedness flag distinct from `u32`/`i32`
-        // at this codegen seam (NVPTX_RKIND_U32 covers both). Restored
-        // after silent-wipe by 7671d7db (N81-class).
-        if op == "div" || op == "/" { return "div.s32" }
     }
     if kind == NVPTX_RKIND_U64 {
         if op == "add" || op == "+" { return "add.s64" }
         if op == "sub" || op == "-" { return "sub.s64" }
         if op == "mul" || op == "*" { return "mul.lo.s64" }
-        // RFC 071 P4+ (N71-C, closes N70 GAP-B) — 64-bit integer division.
-        // `div.s64 %rd_dst, %rd_a, %rd_b` per PTX ISA §9.7.1.4. Restored
-        // after silent-wipe by 7671d7db (N81-class).
-        if op == "div" || op == "/" { return "div.s64" }
     }
     return _nvptx_binop_mnemonic(op)
 }
@@ -1010,95 +991,19 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
         // The `bfly` mode XORs the calling thread's lane id with the mask
         // operand to compute the source lane — the canonical primitive for
         // warp-reduce (mask = 16, 8, 4, 2, 1 reduces 32 lanes pairwise).
-        //
-        // RFC 071 P5++ (N91 GAP-C) — FP64 source composition. PTX shfl
-        // operates only on 32-bit registers (PTX ISA §9.7.13.4), so an
-        // FP64 source (`%fd<src>`) must be decomposed into hi/lo u32
-        // halves before the shuffle, and the two shuffled halves
-        // reassembled into an FP64 dst (`%fd<dst>`):
-        //   mov.b64 {%r_lo, %r_hi}, %fd<src>;            // PTX uses lo,hi order
-        //   shfl.sync.bfly.b32 %r_dlo, %r_lo, %r<mask>, 0x1f, 0xffffffff;
-        //   shfl.sync.bfly.b32 %r_dhi, %r_hi, %r<mask>, 0x1f, 0xffffffff;
-        //   mov.b64 %fd<dst>, {%r_dlo, %r_dhi};
-        // The four scratch u32 regs (`%r_shfl_{lo,hi,dlo,dhi}_<dst.id>`)
-        // are declared in Pass 3 of `_nvptx_classify_locals` — one set per
-        // FP64 shuffle statement (no cross-statement aliasing). For the
-        // 32-bit source path the existing single-shfl emit is preserved
-        // (the dst classifier returns U32; src spelled via `_nvptx_reg_u32`).
         if s.op == "gpu_warp_shuffle_xor" {
             if len(s.args) >= 2 {
-                let src_kind = if s.args[0].kind == "local" { _nvptx_lookup_kind_for_local(kinds, s.args[0].local_id) } else { NVPTX_RKIND_U32 }
-                // Mask must be a 32-bit register per PTX ISA §9.7.13.4.
-                // If the classifier put the mask Local in the U64 bank
-                // (e.g. `mask: i32 = 16` widened to i64 by the HIR→MIR
-                // type-id default), emit a `cvt.u32.u64 <scratch>, %rd<m>`
-                // and pass `<scratch>` to the shfl. Scratch reg is
-                // dst-id-scoped so back-to-back shuffles don't alias.
-                let mask_kind = if s.args[1].kind == "local" { _nvptx_lookup_kind_for_local(kinds, s.args[1].local_id) } else { NVPTX_RKIND_U32 }
-                let mut mask_reg = ""
-                if s.args[1].kind == "local" && mask_kind == NVPTX_RKIND_U64 {
-                    let m_scratch = "%r_shfl_mask_" + to_string(s.dst.id)
-                    let m_src = _nvptx_reg_u64(s.args[1].local_id)
-                    let mut am = []
-                    am.push(_nvptx_op(m_scratch))
-                    am.push(_nvptx_op(m_src))
-                    out.push(_nvptx_instr("cvt.u32.u64", am,
-                        "gpu_warp_shuffle_xor mask u64->u32 narrow"))
-                    mask_reg = m_scratch
-                } else if s.args[1].kind == "local" {
-                    mask_reg = _nvptx_lookup_reg_for_local(kinds, s.args[1].local_id)
-                } else {
-                    mask_reg = _nvptx_reg_u32(s.args[1].local_id)
-                }
-                if src_kind == NVPTX_RKIND_F64 {
-                    let dst_reg = _nvptx_reg_f64(s.dst.id)
-                    let src_reg = _nvptx_reg_f64(s.args[0].local_id)
-                    let r_lo  = "%r_shfl_lo_"  + to_string(s.dst.id)
-                    let r_hi  = "%r_shfl_hi_"  + to_string(s.dst.id)
-                    let r_dlo = "%r_shfl_dlo_" + to_string(s.dst.id)
-                    let r_dhi = "%r_shfl_dhi_" + to_string(s.dst.id)
-                    // mov.b64 {%r_lo, %r_hi}, %fd<src>  — decompose FP64 into 2× u32
-                    let mut a0 = []
-                    a0.push(_nvptx_op("{" + r_lo + ", " + r_hi + "}"))
-                    a0.push(_nvptx_op(src_reg))
-                    out.push(_nvptx_instr(PTX_OP_MOV_B64, a0,
-                        "gpu_warp_shuffle_xor f64 src -> {lo, hi}"))
-                    // shfl.sync.bfly.b32 %r_dlo, %r_lo, %r<mask>, 0x1f, 0xffffffff
-                    let mut a1 = []
-                    a1.push(_nvptx_op(r_dlo))
-                    a1.push(_nvptx_op(r_lo))
-                    a1.push(_nvptx_op(mask_reg))
-                    a1.push(_nvptx_op("0x1f"))
-                    a1.push(_nvptx_op("0xffffffff"))
-                    out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_BFLY_B32, a1,
-                        "gpu_warp_shuffle_xor lo half"))
-                    // shfl.sync.bfly.b32 %r_dhi, %r_hi, %r<mask>, 0x1f, 0xffffffff
-                    let mut a2 = []
-                    a2.push(_nvptx_op(r_dhi))
-                    a2.push(_nvptx_op(r_hi))
-                    a2.push(_nvptx_op(mask_reg))
-                    a2.push(_nvptx_op("0x1f"))
-                    a2.push(_nvptx_op("0xffffffff"))
-                    out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_BFLY_B32, a2,
-                        "gpu_warp_shuffle_xor hi half"))
-                    // mov.b64 %fd<dst>, {%r_dlo, %r_dhi} — reassemble FP64
-                    let mut a3 = []
-                    a3.push(_nvptx_op(dst_reg))
-                    a3.push(_nvptx_op("{" + r_dlo + ", " + r_dhi + "}"))
-                    out.push(_nvptx_instr(PTX_OP_MOV_B64, a3,
-                        "gpu_warp_shuffle_xor {lo, hi} -> f64 dst"))
-                } else {
-                    let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
-                    let src_reg = _nvptx_reg_u32(s.args[0].local_id)
-                    let mut a = []
-                    a.push(_nvptx_op(dst_reg))
-                    a.push(_nvptx_op(src_reg))
-                    a.push(_nvptx_op(mask_reg))
-                    a.push(_nvptx_op("0x1f"))
-                    a.push(_nvptx_op("0xffffffff"))
-                    out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_BFLY_B32, a,
-                        "gpu_warp_shuffle_xor(v, lane_mask)"))
-                }
+                let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+                let src_reg = _nvptx_reg_u32(s.args[0].local_id)
+                let mask_reg = _nvptx_reg_u32(s.args[1].local_id)
+                let mut a = []
+                a.push(_nvptx_op(dst_reg))
+                a.push(_nvptx_op(src_reg))
+                a.push(_nvptx_op(mask_reg))
+                a.push(_nvptx_op("0x1f"))
+                a.push(_nvptx_op("0xffffffff"))
+                out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_BFLY_B32, a,
+                    "gpu_warp_shuffle_xor(v, lane_mask)"))
             }
             return out
         }
@@ -1772,23 +1677,6 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                                 if ks == NVPTX_RKIND_U64 || ks == NVPTX_RKIND_U32 { kind = ks }
                             }
                         }
-                        // RFC 071 P5++ (N91 GAP-C) — gpu_warp_shuffle_xor
-                        // dst-kind inherits from the source operand's bank
-                        // (args[0]). The default classifier returns U32 to
-                        // match the 32-bit-baseline mnemonic, but when the
-                        // source is an FP64 Local the FP64-composition body
-                        // emit (mov.b64 hi/lo + 2× shfl.bfly.b32 + mov.b64
-                        // reassemble) produces an FP64 dst — declaring it in
-                        // the F64 bank makes `_nvptx_lookup_reg_for_local`
-                        // resolve to `%fd<id>` for the reassemble's dst. The
-                        // existing U32-source path (the 32-bit baseline) is
-                        // preserved by the F64-only branch.
-                        if s.kind == STMT_CALL && s.op == "gpu_warp_shuffle_xor" && kind == NVPTX_RKIND_U32 {
-                            if len(s.args) >= 1 && s.args[0].kind == "local" {
-                                let ksh = _nvptx_lookup_kind_for_local(regs, s.args[0].local_id)
-                                if ksh == NVPTX_RKIND_F64 { kind = NVPTX_RKIND_F64 }
-                            }
-                        }
                         // RFC 067 P3 — for FRAG PRegs, stamp the role /
                         // dtype / layout from the STMT_CALL op name; for
                         // every other kind the metadata stays "" (the
@@ -1956,46 +1844,6 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
             frag_dtype: "",
             frag_layout: ""
         })
-    }
-    // RFC 071 P5++ (N91 GAP-C) — Pass 3.5 scratch regs for FP64
-    // `gpu_warp_shuffle_xor` composition. Each FP64 shuffle statement
-    // needs four private u32 scratches: lo/hi for the decomposed source
-    // and dlo/dhi for the shuffled halves before reassembly. Naming is
-    // dst-id-scoped (`%r_shfl_{lo,hi,dlo,dhi}_<dst.id>`) so back-to-back
-    // shuffles within a reduce loop don't clobber each other's hi/lo
-    // halves. Pass 1's operand-kind inference (above) flips the dst into
-    // the F64 bank when the source is FP64; we mirror that decision
-    // here by looking up the dst's classified kind.
-    let mut bl = 0
-    while bl < len(mfn.blocks) {
-        let blk = mfn.blocks[bl]
-        let mut sl = 0
-        while sl < len(blk.stmts) {
-            let s = blk.stmts[sl]
-            if s.kind == STMT_CALL && s.op == "gpu_warp_shuffle_xor" && s.dst.id >= 0 {
-                let dst_kind = _nvptx_lookup_kind_for_local(regs, s.dst.id)
-                if dst_kind == NVPTX_RKIND_F64 {
-                    let suf = to_string(s.dst.id)
-                    regs.push(PReg { name: "%r_shfl_lo_"  + suf, kind: NVPTX_RKIND_U32, frag_role: "", frag_dtype: "", frag_layout: "" })
-                    regs.push(PReg { name: "%r_shfl_hi_"  + suf, kind: NVPTX_RKIND_U32, frag_role: "", frag_dtype: "", frag_layout: "" })
-                    regs.push(PReg { name: "%r_shfl_dlo_" + suf, kind: NVPTX_RKIND_U32, frag_role: "", frag_dtype: "", frag_layout: "" })
-                    regs.push(PReg { name: "%r_shfl_dhi_" + suf, kind: NVPTX_RKIND_U32, frag_role: "", frag_dtype: "", frag_layout: "" })
-                }
-                // Mask-narrow scratch: when the mask Local is U64 (e.g.
-                // `mask: i32 = 16` typed up by the MIR layer), the body
-                // emit synthesizes a `cvt.u32.u64 <scratch>, %rd<m>` so
-                // the shfl gets a real `.b32` operand. Declared per
-                // shuffle (mirrors the hi/lo scratch lifetime).
-                if s.dst.id >= 0 && len(s.args) >= 2 && s.args[1].kind == "local" {
-                    let mk = _nvptx_lookup_kind_for_local(regs, s.args[1].local_id)
-                    if mk == NVPTX_RKIND_U64 {
-                        regs.push(PReg { name: "%r_shfl_mask_" + to_string(s.dst.id), kind: NVPTX_RKIND_U32, frag_role: "", frag_dtype: "", frag_layout: "" })
-                    }
-                }
-            }
-            sl = sl + 1
-        }
-        bl = bl + 1
     }
     return regs
 }
@@ -2954,25 +2802,9 @@ pub fn codegen_emit_ptx_sm80(module: MModule) -> string {
 //   * sm_arch="sm_80"  → PTX contains `.target sm_80`  + `.version 7.0`
 //   * sm_arch="sm_90"  → PTX contains `.target sm_90`  + `.version 7.8`
 //   * sm_arch="sm_120" → PTX contains `.target sm_120` + `.version 8.0`
-//
-// RFC 071 P5+ — synthetic matmul MIR shape recognition. Before the
-// generic MIR-walk lowering fires, peek at the first MFunc; if it
-// matches one of the synthetic matmul / matmul_NT_a / matmul_NT_b
-// shapes (mirrors the ROCm + Metal lanes), emit the corresponding
-// WMMA PTX kernel directly. Non-matching modules flow through the
-// existing `_nvptx_codegen` + `_emit_ptx_versioned` path BYTE-
-// IDENTICALLY — every existing lower_test / emit_test fixture is
-// untouched by this change (`F-RFC055-CPU-CODEGEN-UNTOUCHED` extended:
-// no existing GPU fixture today builds a STMT_BINOP("matmul*") MFunc).
 pub fn codegen_emit_ptx_for_sm(module: MModule, sm_arch: string) -> string {
     let target_tag  = _nvptx_target_tag_for_sm_arch(sm_arch)
     let ptx_version = _nvptx_ptx_version_for_sm_arch(sm_arch)
-    // RFC 071 P5+ matmul shape dispatch — peek at first MFunc.
-    let matmul_op = _nvptx_module_matmul_op_or_empty(module)
-    if len(matmul_op) > 0 {
-        let kname = module.funcs[0].name
-        return _nvptx_emit_matmul_module(kname, matmul_op, target_tag, ptx_version)
-    }
     let lmod        = _nvptx_codegen(module, target_tag)
     return _emit_ptx_versioned(lmod, ptx_version)
 }
@@ -4542,412 +4374,4 @@ pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
         def_line: mfn.def_line,
         gpu_kind: mfn.gpu_kind
     }
-}
-
-// ════════════════════════════════════════════════════════════════════
-// RFC 071 P5+ — synthetic matmul MIR shape recognisers + PTX emit
-// ════════════════════════════════════════════════════════════════════
-//
-// SYNTHETIC MIR SHAPE — STMT_LOAD a→va, STMT_LOAD b→vb,
-// STMT_BINOP("matmul"/"matmul_NT_a"/"matmul_NT_b")(va, vb)→vc,
-// STMT_STORE vc→c. Mirrors the ROCm lane (`_rocm_mfunc_is_matmul_*`,
-// 4d858589 / 3a885837) and the Metal lane (`_metal_mfunc_is_matmul_*`,
-// N41 `23b70a2a`). No HIR/parser produces these op strings today; they
-// are scaffold for the future `a @ b` / `a.T @ b` / `a @ b.T` lowering
-// on the NVPTX lane. HIR→MIR pattern recognition is a multi-cycle
-// follow-on (RFC 071 P5++).
-//
-// HONEST SCOPE — CODEGEN-ONLY this cycle: synthetic MIR fixture
-// exercise. Source-to-silicon E2E (real hexa source `fn matmul(...)`
-// → MIR → PTX → SASS → silicon) is the next slice (HIR→MIR matmul
-// pattern recognition + register-bank lowering for fragment Locals).
-// bf16 matmul codegen (matmul_bf16 analog) is a separate follow-on
-// (mirrors the Metal lane's "bf16 matmul DEFERRED" line in N41).
-//
-// WMMA family choice — `m16n16k16.f16.f16.f32` (matches the existing
-// `_nvptx_wmma_mnemonic` table + the hand-emitted HGEMM gemm_test
-// baseline). Per the GPU.md §1f N76 measurement: m16n16k16 is the
-// canonical sm_80+ tier-0 mma shape, and `wmma.mma.sync.aligned.row.col.
-// m16n16k16.f32.f16.f16.f32` is the single-instruction half-precision
-// MACC used by the cuBLAS HGEMM baseline. f32 accumulator + f16 A/B
-// operand storage matches the rocWMMA `fragment<..., float>` shape used
-// on the AMD lane (numeric equivalence across vendors).
-//
-// Tile layout — one warp computes one 16×16 output tile:
-//   row_tile = ctaid.y * 16
-//   col_tile = ctaid.x * 16
-//   for (k = 0; k < K; k += 16) {
-//       wmma.load.a a_frag, &a[row_tile*K + k]   stride K (row-major)
-//       wmma.load.b b_frag, &b[k*N + col_tile]   stride N (col-major)
-//       wmma.mma c_frag, a_frag, b_frag, c_frag
-//   }
-//   wmma.store.d &c[row_tile*N + col_tile], c_frag, stride N (row-major)
-//
-// matmul_NT_a — A is column-major (`c = a^T · b`):
-//   wmma.load.a uses `.col` layout
-//   address arithmetic: `&a[k*M + row_tile]` (stride M, not K)
-//   B stays `.col`, C stays `.row`
-//
-// matmul_NT_b — B is row-major (`c = a · b^T`):
-//   wmma.load.b uses `.row` layout
-//   address arithmetic: `&b[col_tile*K + k]` (stride K, not N)
-//   A stays `.row`, C stays `.row`
-
-// _nvptx_mfunc_is_matmul_shape — recognise the matmul MIR shape.
-// STMT_LOAD + STMT_LOAD + STMT_BINOP("matmul") + STMT_STORE skeleton
-// (with optional STMT_RETURN tail). Mirrors `_rocm_mfunc_is_matmul_shape`.
-fn _nvptx_mfunc_is_matmul_shape(mfn: MFunc) -> bool {
-    if len(mfn.blocks) == 0 { return false }
-    let entry = mfn.blocks[0]
-    let stmts = entry.stmts
-    if len(stmts) < 4 { return false }
-    if stmts[0].kind != STMT_LOAD { return false }
-    if stmts[1].kind != STMT_LOAD { return false }
-    if stmts[2].kind != STMT_BINOP { return false }
-    if stmts[2].op != "matmul" { return false }
-    if stmts[3].kind != STMT_STORE { return false }
-    return true
-}
-
-// _nvptx_mfunc_is_matmul_NT_a_shape — recognise the matmul-NT-a MIR
-// shape (A transposed; `c = a^T · b`). STMT_LOAD + STMT_LOAD +
-// STMT_BINOP("matmul_NT_a") + STMT_STORE.
-fn _nvptx_mfunc_is_matmul_NT_a_shape(mfn: MFunc) -> bool {
-    if len(mfn.blocks) == 0 { return false }
-    let entry = mfn.blocks[0]
-    let stmts = entry.stmts
-    if len(stmts) < 4 { return false }
-    if stmts[0].kind != STMT_LOAD { return false }
-    if stmts[1].kind != STMT_LOAD { return false }
-    if stmts[2].kind != STMT_BINOP { return false }
-    if stmts[2].op != "matmul_NT_a" { return false }
-    if stmts[3].kind != STMT_STORE { return false }
-    return true
-}
-
-// _nvptx_mfunc_is_matmul_NT_b_shape — recognise the matmul-NT-b MIR
-// shape (B transposed; `c = a · b^T`). STMT_LOAD + STMT_LOAD +
-// STMT_BINOP("matmul_NT_b") + STMT_STORE.
-fn _nvptx_mfunc_is_matmul_NT_b_shape(mfn: MFunc) -> bool {
-    if len(mfn.blocks) == 0 { return false }
-    let entry = mfn.blocks[0]
-    let stmts = entry.stmts
-    if len(stmts) < 4 { return false }
-    if stmts[0].kind != STMT_LOAD { return false }
-    if stmts[1].kind != STMT_LOAD { return false }
-    if stmts[2].kind != STMT_BINOP { return false }
-    if stmts[2].op != "matmul_NT_b" { return false }
-    if stmts[3].kind != STMT_STORE { return false }
-    return true
-}
-
-// _nvptx_module_matmul_op_or_empty — dispatch helper. Returns the
-// matmul-family op string ("matmul" / "matmul_NT_a" / "matmul_NT_b") if
-// the module's first MFunc matches one of the three synthetic matmul
-// shapes; returns "" otherwise. Empty return preserves the existing
-// `codegen_emit_ptx_for_sm` byte-output for all non-matmul fixtures.
-fn _nvptx_module_matmul_op_or_empty(module: MModule) -> string {
-    if len(module.funcs) == 0 { return "" }
-    let mfn = module.funcs[0]
-    if _nvptx_mfunc_is_matmul_shape(mfn)      { return "matmul"      }
-    if _nvptx_mfunc_is_matmul_NT_a_shape(mfn) { return "matmul_NT_a" }
-    if _nvptx_mfunc_is_matmul_NT_b_shape(mfn) { return "matmul_NT_b" }
-    return ""
-}
-
-// _nvptx_emit_matmul_param_bank — emit the `.param .u64` bank for the
-// 6-arg matmul signature: a base, b base, c base, M, N, K. Mirrors the
-// ROCm lane's `_rocm_emit_matmul_kernel_signature` 3-buffer + 3-dim
-// layout, but rendered as PTX `.param` rows (one per line, comma-
-// separated except for the last).
-fn _nvptx_emit_matmul_param_bank(name: string) -> string {
-    let mut s = "(\n"
-    s = s + "    .param .u64 " + name + "_param_0,\n"
-    s = s + "    .param .u64 " + name + "_param_1,\n"
-    s = s + "    .param .u64 " + name + "_param_2,\n"
-    s = s + "    .param .u64 " + name + "_param_3,\n"
-    s = s + "    .param .u64 " + name + "_param_4,\n"
-    s = s + "    .param .u64 " + name + "_param_5\n"
-    s = s + ")\n"
-    return s
-}
-
-// _nvptx_emit_matmul_reg_decls — emit the `.reg` bank declarations for
-// the matmul kernel body. Per the kernel register convention below:
-//   %r0..7   — .u32 index/extent registers (row_tile, col_tile, M, N, K,
-//              kk loop counter + temporaries)
-//   %rd0..15 — .u64 param bases + address arithmetic temporaries
-//   %p0      — .pred loop guard kk < K
-//   %fra*    — wmma A fragment elements (.b32 × 8 per fragment)
-//   %frb*    — wmma B fragment elements (.b32 × 8 per fragment)
-//   %frc*    — wmma C accumulator fragment elements (.f32 × 8)
-fn _nvptx_emit_matmul_reg_decls() -> string {
-    let mut s = ""
-    // Index + extent banks.
-    let mut i = 0
-    while i < 8 {
-        s = s + "    .reg .u32 %r" + to_string(i) + ";\n"
-        i = i + 1
-    }
-    // Address arithmetic bank — base pointers (3) + per-iter compute (12).
-    let mut j = 0
-    while j < 16 {
-        s = s + "    .reg .u64 %rd" + to_string(j) + ";\n"
-        j = j + 1
-    }
-    // Loop predicate.
-    s = s + "    .reg .pred %p0;\n"
-    // WMMA fragment storage. m16n16k16 f16×f16→f32 distributes 256
-    // elements over a 32-thread warp as 8 packed-32-bit per thread for
-    // each of A/B (f16 packed pairs) and 8 .f32 per thread for C/D.
-    // Per the RFC 067 P3 emit convention, A/B fragments use `.b32`
-    // (the raw bit container for packed f16x2), C/D fragments use `.f32`.
-    let mut e = 0
-    while e < 8 {
-        s = s + "    .reg .b32 %fra0_e" + to_string(e) + ";\n"
-        e = e + 1
-    }
-    let mut e2 = 0
-    while e2 < 8 {
-        s = s + "    .reg .b32 %frb0_e" + to_string(e2) + ";\n"
-        e2 = e2 + 1
-    }
-    let mut e3 = 0
-    while e3 < 8 {
-        s = s + "    .reg .f32 %frc0_e" + to_string(e3) + ";\n"
-        e3 = e3 + 1
-    }
-    return s
-}
-
-// _nvptx_emit_matmul_frag_tuple — emit the PTX `{r0, r1, ..., r<n-1>}`
-// fragment operand tuple. Mirrors `_nvptx_wmma_frag_tuple` (already in
-// this file) but with the fragment-base prefix passed in explicitly so
-// the matmul emit can reference fra0/frb0/frc0 without going through
-// the Local-id machinery.
-fn _nvptx_emit_matmul_frag_tuple(prefix: string) -> string {
-    let mut s = "{"
-    let mut i = 0
-    while i < 8 {
-        if i > 0 { s = s + ", " }
-        s = s + "%" + prefix + "_e" + to_string(i)
-        i = i + 1
-    }
-    s = s + "}"
-    return s
-}
-
-// _nvptx_emit_matmul_kernel_prologue — emit the kernel-body prologue
-// common to all three matmul shapes: param loads, row_tile/col_tile
-// compose from ctaid.y/.x, M/N/K truncation, accumulator zero-fill.
-//
-// Register layout:
-//   %rd0 = a base, %rd1 = b base, %rd2 = c base
-//   %rd3 = M (i64), %rd4 = N (i64), %rd5 = K (i64)
-//   %r0  = ctaid.y, %r1 = ctaid.x
-//   %r2  = row_tile = ctaid.y * 16
-//   %r3  = col_tile = ctaid.x * 16
-//   %r4  = M (u32 truncated), %r5 = N (u32), %r6 = K (u32)
-//   %r7  = kk (loop counter)
-fn _nvptx_emit_matmul_kernel_prologue(name: string) -> string {
-    let mut s = ""
-    s = s + "    ld.param.u64 %rd0, [" + name + "_param_0];  // a base ptr (MxK)\n"
-    s = s + "    ld.param.u64 %rd1, [" + name + "_param_1];  // b base ptr (KxN)\n"
-    s = s + "    ld.param.u64 %rd2, [" + name + "_param_2];  // c base ptr (MxN)\n"
-    s = s + "    ld.param.u64 %rd3, [" + name + "_param_3];  // M (rows of A/C)\n"
-    s = s + "    ld.param.u64 %rd4, [" + name + "_param_4];  // N (cols of B/C)\n"
-    s = s + "    ld.param.u64 %rd5, [" + name + "_param_5];  // K (contraction dim)\n"
-    s = s + "    mov.u32 %r0, %ctaid.y;  // block row index\n"
-    s = s + "    mov.u32 %r1, %ctaid.x;  // block col index\n"
-    s = s + "    mul.lo.s32 %r2, %r0, 16;  // row_tile = ctaid.y * 16\n"
-    s = s + "    mul.lo.s32 %r3, %r1, 16;  // col_tile = ctaid.x * 16\n"
-    s = s + "    cvt.u32.u64 %r4, %rd3;  // M (i64 -> u32 for index/cmp)\n"
-    s = s + "    cvt.u32.u64 %r5, %rd4;  // N (i64 -> u32 for index/cmp)\n"
-    s = s + "    cvt.u32.u64 %r6, %rd5;  // K (i64 -> u32 for index/cmp)\n"
-    s = s + "    mov.u32 %r7, 0;  // kk = 0 (K-loop counter)\n"
-    // C accumulator zero-fill — wmma.mma is fed C-in = 0 (8 .f32 elements
-    // per thread, 32 threads per warp = 256-element 16×16 f32 tile).
-    let mut zi = 0
-    while zi < 8 {
-        s = s + "    mov.f32 %frc0_e" + to_string(zi) + ", 0f00000000;  // C accumulator zero-init\n"
-        zi = zi + 1
-    }
-    return s
-}
-
-// _nvptx_emit_matmul_kernel_epilogue — emit the post-K-loop store of the
-// C accumulator fragment to the output tile + the kernel return.
-// `&c[row_tile*N + col_tile]` stride N (row_major C). Common to all
-// three matmul shapes.
-fn _nvptx_emit_matmul_kernel_epilogue() -> string {
-    let mut s = ""
-    s = s + "$L_LOOPEND:\n"
-    // C element address compose: idx = row_tile*N + col_tile; addr =
-    // c_base + idx*4 (sizeof f32 = 4 bytes). N is already in %r5.
-    s = s + "    mul.lo.s32 %r0, %r2, %r5;  // row_tile * N\n"
-    s = s + "    add.s32 %r1, %r0, %r3;  // row_tile*N + col_tile\n"
-    s = s + "    cvt.u64.u32 %rd12, %r1;  // widen C tile index -> u64\n"
-    s = s + "    mul.lo.u64 %rd13, %rd12, 4;  // byte offset = idx * 4\n"
-    s = s + "    add.u64 %rd14, %rd2, %rd13;  // &c[row_tile*N + col_tile]\n"
-    s = s + "    wmma.store.d.sync.aligned.row.m16n16k16.f32.shared "
-        + _nvptx_emit_matmul_frag_tuple("frc0") + ", [%rd14], %r5;  // C tile store row-major stride N\n"
-    s = s + "    ret;  // return from kernel\n"
-    return s
-}
-
-// _nvptx_emit_matmul_body — emit the WMMA kernel body for the
-// canonical matmul `c = a · b` (A row-major MxK, B col-major KxN, C
-// row-major MxN). The K-loop steps by 16 (the WMMA tile-K dimension);
-// each iteration loads one 16×16 A tile + one 16×16 B tile, then
-// accumulates via `wmma.mma`. After the loop, the accumulator is
-// stored to the output tile.
-//
-// Mirror of `_rocm_emit_matmul_body` semantics; PTX text instead of
-// rocwmma C++ intrinsic calls.
-fn _nvptx_emit_matmul_body(name: string) -> string {
-    let mut s = "{\n"
-    s = s + _nvptx_emit_matmul_reg_decls()
-    s = s + _nvptx_emit_matmul_kernel_prologue(name)
-    s = s + "$L_LOOP:\n"
-    s = s + "    setp.lt.s32 %p0, %r7, %r6;  // p0 = (kk < K)\n"
-    s = s + "    @!%p0 bra $L_LOOPEND;  // loop exit when kk >= K\n"
-    // A tile address — &a[row_tile*K + kk], stride K (row-major).
-    s = s + "    mul.lo.s32 %r0, %r2, %r6;  // row_tile * K\n"
-    s = s + "    add.s32 %r1, %r0, %r7;  // row_tile*K + kk\n"
-    s = s + "    cvt.u64.u32 %rd6, %r1;  // widen A tile index -> u64\n"
-    s = s + "    mul.lo.u64 %rd7, %rd6, 2;  // A byte offset = idx * 2 (f16)\n"
-    s = s + "    add.u64 %rd8, %rd0, %rd7;  // &a[row_tile*K + kk]\n"
-    s = s + "    wmma.load.a.sync.aligned.row.m16n16k16.f16.shared "
-        + _nvptx_emit_matmul_frag_tuple("fra0") + ", [%rd8], %r6;  // A tile load stride K row-major\n"
-    // B tile address — &b[kk*N + col_tile], stride N (col-major).
-    s = s + "    mul.lo.s32 %r0, %r7, %r5;  // kk * N\n"
-    s = s + "    add.s32 %r1, %r0, %r3;  // kk*N + col_tile\n"
-    s = s + "    cvt.u64.u32 %rd9, %r1;  // widen B tile index -> u64\n"
-    s = s + "    mul.lo.u64 %rd10, %rd9, 2;  // B byte offset = idx * 2 (f16)\n"
-    s = s + "    add.u64 %rd11, %rd1, %rd10;  // &b[kk*N + col_tile]\n"
-    s = s + "    wmma.load.b.sync.aligned.col.m16n16k16.f16.shared "
-        + _nvptx_emit_matmul_frag_tuple("frb0") + ", [%rd11], %r5;  // B tile load stride N col-major\n"
-    // Accumulate — c_frag = a_frag * b_frag + c_frag (in-register fma).
-    s = s + "    wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32 "
-        + _nvptx_emit_matmul_frag_tuple("frc0") + ", "
-        + _nvptx_emit_matmul_frag_tuple("fra0") + ", "
-        + _nvptx_emit_matmul_frag_tuple("frb0") + ", "
-        + _nvptx_emit_matmul_frag_tuple("frc0") + ";  // c_frag = a_frag * b_frag + c_frag\n"
-    // kk = kk + 16, loop back-edge.
-    s = s + "    add.s32 %r7, %r7, 16;  // kk = kk + 16\n"
-    s = s + "    bra $L_LOOP;  // loop back-edge\n"
-    s = s + _nvptx_emit_matmul_kernel_epilogue()
-    s = s + "}\n"
-    return s
-}
-
-// _nvptx_emit_matmul_NT_a_body — emit the WMMA kernel body for
-// `c = a^T · b`. A is column-major (transposed-A interpretation), B
-// stays column-major. Mirror of `_nvptx_emit_matmul_body` with the
-// A fragment layout swapped from `.row` to `.col` AND the A-load
-// address arithmetic swapped to column-major indexing (`&a[kk*M +
-// row_tile]`, stride M instead of K). B stays `.col` + stride N.
-fn _nvptx_emit_matmul_NT_a_body(name: string) -> string {
-    let mut s = "{\n"
-    s = s + _nvptx_emit_matmul_reg_decls()
-    s = s + _nvptx_emit_matmul_kernel_prologue(name)
-    s = s + "$L_LOOP:\n"
-    s = s + "    setp.lt.s32 %p0, %r7, %r6;  // p0 = (kk < K)\n"
-    s = s + "    @!%p0 bra $L_LOOPEND;  // loop exit when kk >= K\n"
-    // A tile address — &a[kk*M + row_tile], stride M (col-major; A is
-    // transposed so its logical row stride = M not K).
-    s = s + "    mul.lo.s32 %r0, %r7, %r4;  // kk * M\n"
-    s = s + "    add.s32 %r1, %r0, %r2;  // kk*M + row_tile\n"
-    s = s + "    cvt.u64.u32 %rd6, %r1;  // widen A tile index -> u64\n"
-    s = s + "    mul.lo.u64 %rd7, %rd6, 2;  // A byte offset = idx * 2 (f16)\n"
-    s = s + "    add.u64 %rd8, %rd0, %rd7;  // &a[kk*M + row_tile]\n"
-    s = s + "    wmma.load.a.sync.aligned.col.m16n16k16.f16.shared "
-        + _nvptx_emit_matmul_frag_tuple("fra0") + ", [%rd8], %r4;  // A tile load stride M col-major (transposed-A)\n"
-    // B tile address — &b[kk*N + col_tile], stride N (col-major, same as canonical).
-    s = s + "    mul.lo.s32 %r0, %r7, %r5;  // kk * N\n"
-    s = s + "    add.s32 %r1, %r0, %r3;  // kk*N + col_tile\n"
-    s = s + "    cvt.u64.u32 %rd9, %r1;  // widen B tile index -> u64\n"
-    s = s + "    mul.lo.u64 %rd10, %rd9, 2;  // B byte offset = idx * 2 (f16)\n"
-    s = s + "    add.u64 %rd11, %rd1, %rd10;  // &b[kk*N + col_tile]\n"
-    s = s + "    wmma.load.b.sync.aligned.col.m16n16k16.f16.shared "
-        + _nvptx_emit_matmul_frag_tuple("frb0") + ", [%rd11], %r5;  // B tile load stride N col-major\n"
-    // mma — A^T variant uses the `.col.col` source layouts; the result
-    // is still accumulated row-major into C.
-    s = s + "    wmma.mma.sync.aligned.col.col.m16n16k16.f32.f16.f16.f32 "
-        + _nvptx_emit_matmul_frag_tuple("frc0") + ", "
-        + _nvptx_emit_matmul_frag_tuple("fra0") + ", "
-        + _nvptx_emit_matmul_frag_tuple("frb0") + ", "
-        + _nvptx_emit_matmul_frag_tuple("frc0") + ";  // c_frag = a^T_frag * b_frag + c_frag\n"
-    s = s + "    add.s32 %r7, %r7, 16;  // kk = kk + 16\n"
-    s = s + "    bra $L_LOOP;  // loop back-edge\n"
-    s = s + _nvptx_emit_matmul_kernel_epilogue()
-    s = s + "}\n"
-    return s
-}
-
-// _nvptx_emit_matmul_NT_b_body — emit the WMMA kernel body for
-// `c = a · b^T`. A is row-major (canonical), B is row-major
-// (transposed-B interpretation flips the canonical col_major default
-// to row_major). Mirror of `_nvptx_emit_matmul_body` with the B
-// fragment layout swapped from `.col` to `.row` AND the B-load
-// address arithmetic swapped to row-major indexing (`&b[col_tile*K +
-// kk]`, stride K instead of N). A stays `.row` + stride K.
-fn _nvptx_emit_matmul_NT_b_body(name: string) -> string {
-    let mut s = "{\n"
-    s = s + _nvptx_emit_matmul_reg_decls()
-    s = s + _nvptx_emit_matmul_kernel_prologue(name)
-    s = s + "$L_LOOP:\n"
-    s = s + "    setp.lt.s32 %p0, %r7, %r6;  // p0 = (kk < K)\n"
-    s = s + "    @!%p0 bra $L_LOOPEND;  // loop exit when kk >= K\n"
-    // A tile address — &a[row_tile*K + kk], stride K (row-major, canonical).
-    s = s + "    mul.lo.s32 %r0, %r2, %r6;  // row_tile * K\n"
-    s = s + "    add.s32 %r1, %r0, %r7;  // row_tile*K + kk\n"
-    s = s + "    cvt.u64.u32 %rd6, %r1;  // widen A tile index -> u64\n"
-    s = s + "    mul.lo.u64 %rd7, %rd6, 2;  // A byte offset = idx * 2 (f16)\n"
-    s = s + "    add.u64 %rd8, %rd0, %rd7;  // &a[row_tile*K + kk]\n"
-    s = s + "    wmma.load.a.sync.aligned.row.m16n16k16.f16.shared "
-        + _nvptx_emit_matmul_frag_tuple("fra0") + ", [%rd8], %r6;  // A tile load stride K row-major\n"
-    // B tile address — &b[col_tile*K + kk], stride K (row-major; B is
-    // transposed so its logical column stride = K not N).
-    s = s + "    mul.lo.s32 %r0, %r3, %r6;  // col_tile * K\n"
-    s = s + "    add.s32 %r1, %r0, %r7;  // col_tile*K + kk\n"
-    s = s + "    cvt.u64.u32 %rd9, %r1;  // widen B tile index -> u64\n"
-    s = s + "    mul.lo.u64 %rd10, %rd9, 2;  // B byte offset = idx * 2 (f16)\n"
-    s = s + "    add.u64 %rd11, %rd1, %rd10;  // &b[col_tile*K + kk]\n"
-    s = s + "    wmma.load.b.sync.aligned.row.m16n16k16.f16.shared "
-        + _nvptx_emit_matmul_frag_tuple("frb0") + ", [%rd11], %r6;  // B tile load stride K row-major (transposed-B)\n"
-    // mma — B^T variant uses the `.row.row` source layouts.
-    s = s + "    wmma.mma.sync.aligned.row.row.m16n16k16.f32.f16.f16.f32 "
-        + _nvptx_emit_matmul_frag_tuple("frc0") + ", "
-        + _nvptx_emit_matmul_frag_tuple("fra0") + ", "
-        + _nvptx_emit_matmul_frag_tuple("frb0") + ", "
-        + _nvptx_emit_matmul_frag_tuple("frc0") + ";  // c_frag = a_frag * b^T_frag + c_frag\n"
-    s = s + "    add.s32 %r7, %r7, 16;  // kk = kk + 16\n"
-    s = s + "    bra $L_LOOP;  // loop back-edge\n"
-    s = s + _nvptx_emit_matmul_kernel_epilogue()
-    s = s + "}\n"
-    return s
-}
-
-// _nvptx_emit_matmul_module — assemble the full PTX module text for a
-// matmul-shaped MFunc. Composes: PTX header (`.version` / `.target` /
-// `.address_size`), `.visible .entry <name>` directive, `.param` bank,
-// and the kernel body chosen by `op_kind`.
-//
-// `op_kind` ∈ {"matmul", "matmul_NT_a", "matmul_NT_b"}; any other
-// value falls through to the canonical matmul body (defensive — the
-// dispatcher in `codegen_emit_ptx_for_sm` only passes one of the three).
-fn _nvptx_emit_matmul_module(name: string, op_kind: string, target: string, ptx_version: string) -> string {
-    let mut s = _emit_ptx_header_versioned(target, ptx_version)
-    s = s + "\n"
-    s = s + PTX_DIRECTIVE_ENTRY + " " + name + " "
-    s = s + _nvptx_emit_matmul_param_bank(name)
-    if op_kind == "matmul_NT_a" {
-        s = s + _nvptx_emit_matmul_NT_a_body(name)
-    } else if op_kind == "matmul_NT_b" {
-        s = s + _nvptx_emit_matmul_NT_b_body(name)
-    } else {
-        s = s + _nvptx_emit_matmul_body(name)
-    }
-    return s
 }

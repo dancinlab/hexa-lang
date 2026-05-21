@@ -2978,14 +2978,6 @@ HexaVal _hx_bit_or(HexaVal a, HexaVal b) {
 HexaVal bit_or;
 
 // ── Added: method-dispatch helpers (bt 34) ────────────────────
-// Step-4 cycle 92 port — strtoll replacement in hexa source.
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-extern HexaVal rt_str_parse_int(HexaVal s);
-HexaVal hexa_str_parse_int(HexaVal s) {
-    if (!HX_IS_STR(s)) return hexa_int(0);
-    return rt_str_parse_int(s);
-}
-#else
 HexaVal hexa_str_parse_int(HexaVal s) {
     if (!HX_IS_STR(s)) return hexa_int(0);
     const char* cs = HX_STR(s);
@@ -3022,7 +3014,6 @@ HexaVal hexa_str_parse_int(HexaVal s) {
     }
     return hexa_int((int64_t)v);
 }
-#endif
 
 // Step-3 cycle 73 port — strtod replacement. Hexa source parses
 // whitespace + sign + integer + optional fractional + optional
