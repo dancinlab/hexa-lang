@@ -1,3 +1,54 @@
-{"status":"FAIL","max_abs_diff":2.289989454992704e+226,"byte_mismatch":1024,"N":1024,"first_mis":0,"c[0]":-2.289989454992704e+226,"ref[0]":2.9647833402501771}
+=== RFC 071 P4 silicon fire — ubu-2 RTX 5070 sm_120, driver 580.126.09 ===
+=== 2026-05-21, source-derived PTX from compiler/codegen/nvptx_p3_source_to_silicon_test.hexa ===
+
+STDERR:
 loaded PTX 1461 bytes
-JIT info: 
+JIT info: ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'my_test_kernel' for 'sm_120a'
+ptxas info    : Function properties for my_test_kernel
+ptxas         .     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 4 registers, used 0 barriers
+ptxas info    : Compile time = 0.955 ms
+
+STDOUT (JSON):
+{"status":"FAIL","max_abs_diff":2.289989454992704e+226,"byte_mismatch":1024,"N":1024,"first_mis":0,"c[0]":-2.289989454992704e+226,"ref[0]":2.9647833402501771}
+
+EVENTS:
+  cuInit:                      SUCCESS
+  cuDeviceGet:                 SUCCESS
+  cuCtxCreate:                 SUCCESS
+  cuModuleLoadDataEx:          SUCCESS  (10 ptxas errors -> 0)
+  cuModuleGetFunction:         SUCCESS  (my_test_kernel found)
+  cuMemAlloc x3:               SUCCESS
+  cuMemcpyHtoD x2:             SUCCESS
+  cuMemsetD8 (0xee sentinel):  SUCCESS
+  cuLaunchKernel 1x1024:       SUCCESS  (4 regs, 0 stack, 0 barriers)
+  cuCtxSynchronize:            SUCCESS  (kernel completed)
+  cuMemcpyDtoH:                SUCCESS
+  Numeric compare:             FAIL     (1024/1024 bytes differ — c[] retains 0xee sentinel)
+
+FALSIFIER STATUS:
+  F-RFC071-NVPTX-E2E-PTXAS-CLEAN: PASS
+  F-RFC071-NVPTX-E2E-LAUNCH:      PASS
+  F-RFC071-E2E-NUMERIC-EQ:        FAIL (kernel body has no LOAD/STORE wiring)
+
+DIAGNOSIS:
+  -2.289989454992704e+226 = 0xEEEEEEEEEEEEEEEE = cuMemsetD8 0xee sentinel fill.
+  The kernel ran successfully (sync OK, 0 errors) but its body has no
+  ld.global.f64 / st.global.f64 to materialize the vec-add. The source
+  `c[to_i64(gid)] = a[to_i64(gid)] + b[to_i64(gid)]` should produce
+  STMT_LOAD x2 + STMT_ADD + STMT_STORE in MIR, but the codegen-side
+  STMT_LOAD/STORE emission for source-derived MIR is not wired (this
+  fixture works only with the synthetic lower_test MIR shape).
+
+REMAINING GAPS:
+  - ld.param.u64 at function entry (param Locals are stamped U64 but
+    body never emits the load — the Locals reference param slots that
+    only become meaningful values via ld.param.<ty>)
+  - STMT_LOAD lowering for the source-to-silicon driver path
+  - STMT_STORE lowering for the source-to-silicon driver path
+
+NEXT CYCLE: ld.param emission + STMT_LOAD/STORE wiring for HIR->MIR
+            generated MIR (the synthetic lower_test fixtures use direct
+            STMT_LOAD/STORE Stmt records; the source-driver doesn't yet
+            synthesize these from `a[i]` source).
