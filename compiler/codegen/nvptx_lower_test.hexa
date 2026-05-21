@@ -793,11 +793,14 @@ fn main() {
     let ok_fp8a  = _test_f8_e4m3_load_store()
     let ok_fp8b  = _test_f8_e5m2_load_store()
     let ok_i64c  = _test_to_i64_and_int_cmp()
+    let ok_mm    = _test_matmul_emit()
+    let ok_mta   = _test_matmul_NT_a_emit()
+    let ok_mtb   = _test_matmul_NT_b_emit()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c {
-        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+ — 28/28 cases (incl. fp8 e4m3 + e5m2 ld/st + to_i64 + int cmp)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb {
+        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ — 31/31 cases (incl. matmul + matmul_NT_a + matmul_NT_b)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -828,9 +831,12 @@ fn main() {
         if !ok_fp8a { println("      RFC 068 §3 fp8 e4m3 scaffold FAILED") }
         if !ok_fp8b { println("      RFC 068 §3 fp8 e5m2 scaffold FAILED") }
         if !ok_i64c { println("      RFC 071 P3+ to_i64 + int cmp + br_cond FAILED") }
+        if !ok_mm   { println("      RFC 071 P5+ matmul codegen FAILED") }
+        if !ok_mta  { println("      RFC 071 P5+ matmul_NT_a codegen FAILED") }
+        if !ok_mtb  { println("      RFC 071 P5+ matmul_NT_b codegen FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -2965,5 +2971,248 @@ fn _test_to_i64_and_int_cmp() -> bool {
     } else {
         println("  ok: no `unsupported binop: lt|<` marker (gap 2 closed)")
     }
+    return ok
+}
+
+// ════════════════════════════════════════════════════════════════════
+// RFC 071 P5+ — matmul + matmul_NT_a + matmul_NT_b codegen cases
+// ════════════════════════════════════════════════════════════════════
+//
+// Mirrors the ROCm lane's Cases 9/10/11 (`_test_matmul_emit` /
+// `_test_matmul_NT_a_emit` / `_test_matmul_NT_b_emit`) in
+// rocm_lower_test.hexa (4d858589 / 3a885837) and the Metal lane's
+// equivalent N41 codegen cases (23b70a2a). Each test builds a synthetic
+// STMT_LOAD + STMT_LOAD + STMT_BINOP(<matmul-family-op>) + STMT_STORE
+// MIR fixture, drives it through `codegen_emit_ptx_for_sm`, and
+// substring-checks the emitted PTX text for the WMMA kernel skeleton.
+//
+// HONEST SCOPE — codegen-only. Source-to-silicon E2E (real `fn matmul`
+// source → PTX → SASS → silicon) is multi-cycle follow-on. WMMA family
+// chosen: `m16n16k16.f16.f16.f32` (matches the existing
+// `_nvptx_wmma_mnemonic` table + the hand-emitted HGEMM gemm_test
+// baseline; see RFC 071 P5+ comment block in `nvptx_target.hexa`).
+
+// _check_not — sibling of `_check` for negative-guard substring asserts.
+fn _check_not(ok_in: bool, hay: string, needle: string, label: string) -> bool {
+    if !_contains(hay, needle) { return ok_in }
+    println("  FAIL: " + label + " (unexpected: `" + needle + "`)")
+    return false
+}
+
+// _stmt_load_local — matmul-shape STMT_LOAD on a Local operand source.
+// Mirror of `_stmt_load` (which already takes an Operand) — kept as a
+// thin convenience wrapper here so the matmul fixture call sites read
+// like the ROCm lane's `_stmt_load(va, a.id)` style.
+fn _stmt_load_local(dst: Local, src_local: i64) -> Stmt {
+    return _stmt_load(dst, _op_local(src_local))
+}
+
+// _stmt_store_local — matmul-shape STMT_STORE writing a Local value to
+// a Local address. The shape recogniser only inspects `kind` /
+// `op` / position, not operand semantics, so this minimal helper
+// suffices for the synthetic fixture.
+fn _stmt_store_local(value_local: i64, addr_local: i64) -> Stmt {
+    return _stmt_store(_op_local(addr_local), _op_local(value_local))
+}
+
+// _stmt_binop_op — STMT_BINOP with explicit op string + two Local args.
+// Used by all three matmul fixtures to carry "matmul" / "matmul_NT_a" /
+// "matmul_NT_b" — the strings the recognisers key on.
+fn _stmt_binop_op(dst: Local, op: string, lhs: i64, rhs: i64) -> Stmt {
+    return _stmt_binop(dst, op, _op_local(lhs), _op_local(rhs))
+}
+
+// _build_matmul_module_for — synthesise a 4-stmt STMT_LOAD + STMT_LOAD +
+// STMT_BINOP(op) + STMT_STORE MIR fixture for the given matmul-family
+// op string + kernel name. Parameter shape (a, b, c) + private locals
+// (va, vb, vc) mirrors the ROCm lane's `_build_matmul*_module`.
+fn _build_matmul_module_for(kname: string, binop: string) -> MModule {
+    let a  = _local(0, "a")
+    let b  = _local(1, "b")
+    let c  = _local(2, "c")
+    let va = _local(3, "va")
+    let vb = _local(4, "vb")
+    let vc = _local(5, "vc")
+
+    let mut s = []
+    s.push(_stmt_load_local(va, a.id))
+    s.push(_stmt_load_local(vb, b.id))
+    s.push(_stmt_binop_op(vc, binop, va.id, vb.id))
+    s.push(_stmt_store_local(vc.id, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vb)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: kname,
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "nvptx_" + kname + ".hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 29 — F-RFC071-NVPTX-MATMUL-CODEGEN-EMIT (canonical matmul) ──
+//
+// Canonical matmul `c = a · b`:
+//   * A fragment uses `.row` (row-major MxK), stride K
+//   * B fragment uses `.col` (col-major KxN), stride N
+//   * C accumulator is f32 row-major, stride N
+//   * `wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32`
+// Negative guards: must NOT emit the transposed-A `.col` A-load, the
+// transposed-B `.row` B-load, or any vec-add / gemm-FP64-fma residue.
+fn _test_matmul_emit() -> bool {
+    let mut ok = true
+    let mod_mm = _build_matmul_module_for("matmul", "matmul")
+    let ptx = codegen_emit_ptx_for_sm(mod_mm, "sm_90")
+
+    println("")
+    println("── emitted PTX (RFC 071 P5+ matmul case, sm_90) ──")
+    println(ptx)
+
+    // PTX header — .version / .target / .address_size + the entry directive.
+    ok = _check(ok, ptx, ".version 7.8",                            "PTX version 7.8 (sm_90)")
+    ok = _check(ok, ptx, ".target sm_90",                           "PTX target sm_90")
+    ok = _check(ok, ptx, ".address_size 64",                        "PTX address_size 64")
+    ok = _check(ok, ptx, ".visible .entry matmul",                  "kernel entry directive `.visible .entry matmul`")
+    // Param bank — 6 .u64 (a, b, c, M, N, K).
+    ok = _check(ok, ptx, ".param .u64 matmul_param_0",              "param 0 (a base ptr)")
+    ok = _check(ok, ptx, ".param .u64 matmul_param_5",              "param 5 (K extent)")
+    ok = _check(ok, ptx, "ld.param.u64 %rd0, [matmul_param_0]",     "ld.param a base")
+    ok = _check(ok, ptx, "ld.param.u64 %rd5, [matmul_param_5]",     "ld.param K extent")
+    // Tile compose — row_tile/col_tile from ctaid.y / ctaid.x.
+    ok = _check(ok, ptx, "mov.u32 %r0, %ctaid.y",                   "block row index from ctaid.y")
+    ok = _check(ok, ptx, "mov.u32 %r1, %ctaid.x",                   "block col index from ctaid.x")
+    ok = _check(ok, ptx, "mul.lo.s32 %r2, %r0, 16",                 "row_tile = ctaid.y * 16")
+    ok = _check(ok, ptx, "mul.lo.s32 %r3, %r1, 16",                 "col_tile = ctaid.x * 16")
+    // K-loop guard + back-edge.
+    ok = _check(ok, ptx, "setp.lt.s32 %p0, %r7, %r6",               "loop guard kk < K")
+    ok = _check(ok, ptx, "add.s32 %r7, %r7, 16",                    "loop step kk += 16 (WMMA tile-K)")
+    ok = _check(ok, ptx, "bra $L_LOOP",                             "loop back-edge")
+    // WMMA load + mma + store — canonical row.col m16n16k16 family.
+    ok = _check(ok, ptx, "wmma.load.a.sync.aligned.row.m16n16k16.f16.shared", "wmma.load.a row-major A (canonical)")
+    ok = _check(ok, ptx, "wmma.load.b.sync.aligned.col.m16n16k16.f16.shared", "wmma.load.b col-major B (canonical)")
+    ok = _check(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32", "wmma.mma row.col f32.f16.f16.f32 (canonical)")
+    ok = _check(ok, ptx, "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared", "wmma.store.d row-major C")
+    // Negative guards — canonical matmul must NOT carry transposed-A/B
+    // layouts, must NOT inherit any earlier-shape body fragment.
+    ok = _check_not(ok, ptx, "wmma.load.a.sync.aligned.col.m16n16k16", "canonical matmul should not emit transposed-A `.col` A-load")
+    ok = _check_not(ok, ptx, "wmma.load.b.sync.aligned.row.m16n16k16", "canonical matmul should not emit transposed-B `.row` B-load")
+    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.col.col.m16n16k16", "canonical matmul should not emit `.col.col` mma")
+    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.row.row.m16n16k16", "canonical matmul should not emit `.row.row` mma")
+    ok = _check_not(ok, ptx, "fma.rn.f64",                             "canonical matmul should not emit FP64 fma (HGEMM-only residue)")
+    return ok
+}
+
+// ── Case 30 — F-RFC071-NVPTX-MATMUL-NT-A-CODEGEN-EMIT ────────────────
+//
+// matmul_NT_a `c = a^T · b`:
+//   * A fragment uses `.col` (column-major, transposed-A interpretation)
+//   * A-load address stride switches from K to M
+//   * B stays `.col` + stride N
+//   * mma source layouts become `.col.col`
+// Negative guards: must NOT emit canonical `.row` A-load, transposed-B
+// `.row` B-load, or canonical `.row.col` mma.
+fn _test_matmul_NT_a_emit() -> bool {
+    let mut ok = true
+    let mod_mt = _build_matmul_module_for("matmul_NT_a", "matmul_NT_a")
+    let ptx = codegen_emit_ptx_for_sm(mod_mt, "sm_90")
+
+    println("")
+    println("── emitted PTX (RFC 071 P5+ matmul_NT_a case, sm_90) ──")
+    println(ptx)
+
+    ok = _check(ok, ptx, ".version 7.8",                            "PTX version 7.8 (sm_90)")
+    ok = _check(ok, ptx, ".target sm_90",                           "PTX target sm_90")
+    ok = _check(ok, ptx, ".visible .entry matmul_NT_a",             "kernel entry directive `.visible .entry matmul_NT_a`")
+    ok = _check(ok, ptx, ".param .u64 matmul_NT_a_param_0",         "param 0 (a base ptr)")
+    ok = _check(ok, ptx, ".param .u64 matmul_NT_a_param_5",         "param 5 (K extent)")
+    // Tile compose — same prologue as canonical.
+    ok = _check(ok, ptx, "mov.u32 %r0, %ctaid.y",                   "block row index from ctaid.y")
+    ok = _check(ok, ptx, "mul.lo.s32 %r2, %r0, 16",                 "row_tile = ctaid.y * 16")
+    // K-loop.
+    ok = _check(ok, ptx, "setp.lt.s32 %p0, %r7, %r6",               "loop guard kk < K")
+    ok = _check(ok, ptx, "add.s32 %r7, %r7, 16",                    "loop step kk += 16")
+    ok = _check(ok, ptx, "bra $L_LOOP",                             "loop back-edge")
+    // WMMA — A `.col`, B stays `.col`, mma `.col.col`.
+    ok = _check(ok, ptx, "wmma.load.a.sync.aligned.col.m16n16k16.f16.shared", "wmma.load.a col-major A (transposed-A)")
+    ok = _check(ok, ptx, "wmma.load.b.sync.aligned.col.m16n16k16.f16.shared", "wmma.load.b col-major B (matmul_NT_a stays canonical B)")
+    ok = _check(ok, ptx, "wmma.mma.sync.aligned.col.col.m16n16k16.f32.f16.f16.f32", "wmma.mma col.col f32.f16.f16.f32 (transposed-A)")
+    ok = _check(ok, ptx, "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared", "wmma.store.d row-major C")
+    // A-load address arithmetic — stride M (not K). The address compose
+    // emits `mul.lo.s32 ... %r4` (M) instead of `... %r6` (K) in the
+    // A-tile compose. We verify via the comment marker the emit pass
+    // attaches to the instruction.
+    ok = _check(ok, ptx, "kk * M",                                  "A-tile address arithmetic uses stride M (transposed-A)")
+    // Negative guards — matmul_NT_a must NOT emit canonical A `.row`
+    // or transposed-B `.row` B-load or canonical `.row.col` mma.
+    ok = _check_not(ok, ptx, "wmma.load.a.sync.aligned.row.m16n16k16", "matmul_NT_a should not emit canonical `.row` A-load")
+    ok = _check_not(ok, ptx, "wmma.load.b.sync.aligned.row.m16n16k16", "matmul_NT_a should not emit transposed-B `.row` B-load")
+    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16", "matmul_NT_a should not emit canonical `.row.col` mma")
+    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.row.row.m16n16k16", "matmul_NT_a should not emit `.row.row` mma")
+    return ok
+}
+
+// ── Case 31 — F-RFC071-NVPTX-MATMUL-NT-B-CODEGEN-EMIT ────────────────
+//
+// matmul_NT_b `c = a · b^T`:
+//   * A stays `.row` (canonical row-major MxK, stride K)
+//   * B fragment uses `.row` (row-major, transposed-B interpretation)
+//   * B-load address stride switches from N to K
+//   * mma source layouts become `.row.row`
+// Negative guards: must NOT emit canonical `.col` B-load, transposed-A
+// `.col` A-load, or canonical `.row.col` mma.
+fn _test_matmul_NT_b_emit() -> bool {
+    let mut ok = true
+    let mod_mt = _build_matmul_module_for("matmul_NT_b", "matmul_NT_b")
+    let ptx = codegen_emit_ptx_for_sm(mod_mt, "sm_90")
+
+    println("")
+    println("── emitted PTX (RFC 071 P5+ matmul_NT_b case, sm_90) ──")
+    println(ptx)
+
+    ok = _check(ok, ptx, ".version 7.8",                            "PTX version 7.8 (sm_90)")
+    ok = _check(ok, ptx, ".target sm_90",                           "PTX target sm_90")
+    ok = _check(ok, ptx, ".visible .entry matmul_NT_b",             "kernel entry directive `.visible .entry matmul_NT_b`")
+    ok = _check(ok, ptx, ".param .u64 matmul_NT_b_param_0",         "param 0 (a base ptr)")
+    ok = _check(ok, ptx, ".param .u64 matmul_NT_b_param_5",         "param 5 (K extent)")
+    ok = _check(ok, ptx, "mov.u32 %r0, %ctaid.y",                   "block row index from ctaid.y")
+    ok = _check(ok, ptx, "mul.lo.s32 %r2, %r0, 16",                 "row_tile = ctaid.y * 16")
+    ok = _check(ok, ptx, "setp.lt.s32 %p0, %r7, %r6",               "loop guard kk < K")
+    ok = _check(ok, ptx, "add.s32 %r7, %r7, 16",                    "loop step kk += 16")
+    ok = _check(ok, ptx, "bra $L_LOOP",                             "loop back-edge")
+    // WMMA — A stays `.row`, B switches to `.row`, mma `.row.row`.
+    ok = _check(ok, ptx, "wmma.load.a.sync.aligned.row.m16n16k16.f16.shared", "wmma.load.a row-major A (matmul_NT_b stays canonical A)")
+    ok = _check(ok, ptx, "wmma.load.b.sync.aligned.row.m16n16k16.f16.shared", "wmma.load.b row-major B (transposed-B)")
+    ok = _check(ok, ptx, "wmma.mma.sync.aligned.row.row.m16n16k16.f32.f16.f16.f32", "wmma.mma row.row f32.f16.f16.f32 (transposed-B)")
+    ok = _check(ok, ptx, "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared", "wmma.store.d row-major C")
+    // B-load address arithmetic — stride K (not N).
+    ok = _check(ok, ptx, "col_tile * K",                            "B-tile address arithmetic uses stride K (transposed-B)")
+    // Negative guards — matmul_NT_b must NOT emit canonical B `.col`
+    // or transposed-A `.col` A-load or canonical `.row.col` mma.
+    ok = _check_not(ok, ptx, "wmma.load.b.sync.aligned.col.m16n16k16", "matmul_NT_b should not emit canonical `.col` B-load")
+    ok = _check_not(ok, ptx, "wmma.load.a.sync.aligned.col.m16n16k16", "matmul_NT_b should not emit transposed-A `.col` A-load")
+    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16", "matmul_NT_b should not emit canonical `.row.col` mma")
+    ok = _check_not(ok, ptx, "wmma.mma.sync.aligned.col.col.m16n16k16", "matmul_NT_b should not emit `.col.col` mma")
     return ok
 }
