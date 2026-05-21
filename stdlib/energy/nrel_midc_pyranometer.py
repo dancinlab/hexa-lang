@@ -5,10 +5,11 @@
 #
 # Fetches a single day of NREL MIDC pyranometer GHI from the BMS
 # (Baseline Measurement System) at the Solar Radiation Research
-# Laboratory (SRRL) in Golden CO, computes a pvlib Ineichen clearsky
-# modeled GHI, applies a clear-sky filter, and emits an Energy/verify
-# record with the `measured_oracle` block populated by the real
-# measured-vs-modeled comparison.
+# Laboratory (SRRL) in Golden CO, computes an Ineichen clearsky
+# modeled GHI using HEXA-NATIVE sun position + pvlib's Ineichen
+# atmospheric model, applies a clear-sky filter, and emits an
+# Energy/verify record with the `measured_oracle` block populated
+# by the real measured-vs-modeled comparison.
 #
 # When `mean_rel_err <= 0.05` (the D109 PASS criterion) over the
 # clear-sky daylight window, the emitted record carries
@@ -16,24 +17,35 @@
 # legitimate flip, driven by an EXTERNAL measured oracle (not a D95
 # computed projection from substrate-parity).
 #
+# G31 G29-β — hexa-native sun-position swap (this revision):
+#   The sun-position computation no longer goes through pvlib's
+#   `solarposition` (Sandia 1985 ephemeris). Instead a single
+#   subprocess call to `_solar_position_batch.hexa` returns one
+#   `apparent_zenith_deg` per minute via the clean-room hexa-native
+#   `solar_kernel::apparent_zenith` (κ-65 D80 pilot, pvlib substrate
+#   parity <1e-9). The Ineichen clearsky stack stays in pvlib:
+#   linke-turbidity climatology lookup, Kasten-Young airmass, and
+#   `clearsky.ineichen()` are called directly with the hexa-supplied
+#   apparent_zenith. This closes RFC 013 §6.11 reserved slot — the
+#   bridge stack is now `hexa_native_solar_position + pvlib Ineichen`.
+#
 # HONESTY (g3 — non-negotiable):
 #   - The measured side is REAL NREL MIDC pyranometer data (Global
 #     CMP22 (vent/cor) channel — research-grade, vented + thermally
 #     corrected). No synthetic numbers.
-#   - The modeled side is pvlib's Ineichen clearsky model, which
-#     depends on Linke-turbidity climatology and is itself an
-#     atmospheric idealization. Substrate-parity for the bridge stack
-#     (pvlib clearsky + transposition) is already proven on
-#     `stdlib/kernels/solar/pvlib_kernel.py` (κ-65 D80 pilot — solar
-#     21/21 PASS at rel_err <= 1e-13). This producer treats that
-#     bridge as TRUSTED per design.md D109.
+#   - The modeled side now combines hexa-native sun position with
+#     pvlib's Ineichen clearsky atmospheric model. Ineichen depends
+#     on Linke-turbidity climatology and is itself an atmospheric
+#     idealization. Substrate-parity for the pvlib clearsky stack
+#     is already proven on `stdlib/kernels/solar/pvlib_kernel.py`
+#     (κ-65 D80 pilot — solar 21/21 PASS at rel_err <= 1e-13). The
+#     hexa-native sun-position kernel substrate-parity vs pvlib's
+#     SPA is <1e-9 on `solar_kernel_test.hexa`.
 #   - The hexa-native scope per D109 is `solar_position_kernel` (sun
-#     position only). This producer does NOT yet call the hexa
-#     interpreter — sun position is computed by pvlib internally and
-#     the D80 g_hexa_only port to the hexa-native sun-position kernel
-#     is a separate G29-β follow-on (the parity-of-implementation
-#     between pvlib's solar position and `solar_kernel.hexa` was
-#     already established at κ-65; this producer reuses that result).
+#     position only). This producer calls the hexa-native kernel via
+#     `_solar_position_batch.hexa` subprocess (G31 G29-β); the rest
+#     of the Ineichen pipeline remains pvlib (Linke turbidity +
+#     airmass + ineichen GHI).
 #   - Clear-sky filter (`CLEARSKY_RATIO_LO / HI`) is honestly
 #     documented; samples outside the window are DROPPED from the
 #     parity statistic. This is the only way to compute a meaningful
@@ -56,6 +68,7 @@ import io
 import json
 import os
 import platform
+import subprocess
 import sys
 import urllib.request
 
@@ -90,6 +103,13 @@ CLEARSKY_RATIO_HI = 1.30
 # and the nighttime baseline.
 DAYLIGHT_ZENITH_DEG = 85.0
 
+# G31 G29-β — hexa-native sun-position batch CLI wrapper. One
+# subprocess call returns N apparent_zenith values (newline-separated)
+# for a minute-cadence sweep of the day. Located in the same directory
+# as this producer.
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+HEXA_SOLAR_BATCH = os.path.join(_THIS_DIR, "_solar_position_batch.hexa")
+
 
 def _fetch_midc(site, date):
     """Fetch a single day of NREL MIDC 1-min data."""
@@ -119,19 +139,93 @@ def _parse_midc(csv_text):
     return pd.DataFrame(rows)
 
 
+def _hexa_apparent_zenith_batch(date, n_minutes):
+    """G31 G29-β — hexa-native sun-position batch call.
+
+    One subprocess invocation of `_solar_position_batch.hexa` returns
+    `n_minutes` `apparent_zenith_deg` values for a minute-cadence sweep
+    over the day starting at `date` 00:00 in the producer's local
+    timezone (TZ, MST = UTC-7). Replaces pvlib's
+    `solarposition.get_solarposition()` path. Substrate parity vs
+    pvlib SPA <1e-9 (κ-65 D80 pilot).
+    """
+    # Convert the local-tz start to UTC for the hexa kernel (which
+    # takes year/doy/utc_hour). TZ is "Etc/GMT+7" (MST, UTC-7).
+    local_start = pd.Timestamp(f"{date} 00:00:00", tz=TZ)
+    utc_start = local_start.tz_convert("UTC")
+    year = utc_start.year
+    doy = int(utc_start.dayofyear)
+    utc_hour_start = (
+        utc_start.hour + utc_start.minute / 60.0
+        + utc_start.second / 3600.0
+    )
+    # The kernel's internal time math tolerates utc_hour > 24 across
+    # the UTC day boundary (linear epoch_date + gmst fmod_floor).
+    cmd = [
+        "hexa", "run", HEXA_SOLAR_BATCH,
+        str(year), str(doy),
+        f"{utc_hour_start:.6f}", "1.0", str(int(n_minutes)),
+        f"{LATITUDE:.6f}", f"{LONGITUDE:.6f}",
+    ]
+    proc = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=120)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"hexa solar-position batch failed (rc={proc.returncode}): "
+            f"{proc.stderr.strip()[:400]}")
+    lines = [ln for ln in proc.stdout.strip().split("\n") if ln.strip()]
+    if len(lines) != n_minutes:
+        raise RuntimeError(
+            f"hexa solar-position batch returned {len(lines)} lines, "
+            f"expected {n_minutes}")
+    return np.array([float(ln) for ln in lines], dtype=float)
+
+
 def _compute_modeled(date, n_minutes):
-    """pvlib Ineichen clearsky → modeled GHI for the day."""
-    loc = pvlib.location.Location(
-        latitude=LATITUDE, longitude=LONGITUDE,
-        altitude=ALTITUDE_M, tz=TZ)
+    """Hexa-native apparent_zenith + pvlib Ineichen clearsky → modeled GHI.
+
+    G31 G29-β bridge stack: sun position from the clean-room
+    `solar_kernel::apparent_zenith` via `_solar_position_batch.hexa`;
+    Linke turbidity, Kasten-Young airmass, and the Ineichen clearsky
+    model from pvlib (κ-65 D80 substrate-parity proven).
+    """
     times = pd.date_range(
         start=f"{date} 00:00:00", periods=n_minutes,
         freq="1min", tz=TZ)
-    solpos = loc.get_solarposition(times)
-    clearsky = loc.get_clearsky(times, model="ineichen")
+
+    # 1. Hexa-native apparent_zenith (replaces pvlib solarposition).
+    apparent_zenith = _hexa_apparent_zenith_batch(date, n_minutes)
+
+    # 2. pvlib Ineichen pipeline, fed with hexa-supplied zenith.
+    #    Linke turbidity climatology lookup by (time, lat, lon).
+    linke_turbidity = pvlib.clearsky.lookup_linke_turbidity(
+        times, LATITUDE, LONGITUDE)
+    # Kasten-Young 1989 relative airmass (apparent-zenith model).
+    airmass_rel = pvlib.atmosphere.get_relative_airmass(
+        apparent_zenith, model="kastenyoung1989")
+    # Pressure-adjusted absolute airmass (uses altitude-derived
+    # pressure to mirror Location.get_clearsky's default path).
+    pressure = pvlib.atmosphere.alt2pres(ALTITUDE_M)
+    airmass_abs = pvlib.atmosphere.get_absolute_airmass(
+        airmass_rel, pressure=pressure)
+    # Extraterrestrial DNI (Spencer 1972 — same as get_clearsky).
+    dni_extra = pvlib.irradiance.get_extra_radiation(times)
+    # ineichen returns a DataFrame with ghi/dni/dhi columns.
+    cs = pvlib.clearsky.ineichen(
+        apparent_zenith=apparent_zenith,
+        airmass_absolute=airmass_abs,
+        linke_turbidity=linke_turbidity,
+        altitude=ALTITUDE_M,
+        dni_extra=dni_extra,
+    )
+    modeled_ghi = np.asarray(cs["ghi"].values, dtype=float)
+
     return pd.DataFrame({
-        "pvlib_zenith": solpos["zenith"].values,
-        "modeled_ghi": clearsky["ghi"].values,
+        # Column kept as `pvlib_zenith` for back-compat with the rest
+        # of the pipeline (daylight filter etc); semantically it now
+        # carries the HEXA-NATIVE apparent zenith.
+        "pvlib_zenith": apparent_zenith,
+        "modeled_ghi": modeled_ghi,
     })
 
 
@@ -186,10 +280,13 @@ def _build_measured_oracle(date):
             f"{daylight_count}; clear-sky kept (ratio in "
             f"[{CLEARSKY_RATIO_LO},{CLEARSKY_RATIO_HI})): "
             f"{clear_count}; dropped cloudy/cloud-enhanced: {dropped}. "
-            f"modeled = pvlib {pvlib_version} Ineichen clearsky "
-            "(Linke-turbidity climatology · D80 substrate-parity "
-            "PASS at κ-65). measured side = research-grade vented + "
-            "thermally corrected CMP22 pyranometer."
+            "modeled = hexa-native solar_kernel apparent_zenith "
+            "(clean-room Sandia 1985 ephemeris, <1e-9 substrate "
+            "parity vs pvlib SPA at κ-65) fed into pvlib "
+            f"{pvlib_version} Ineichen clearsky (Linke-turbidity "
+            "climatology + Kasten-Young airmass · D80 substrate-"
+            "parity PASS at κ-65). measured side = research-grade "
+            "vented + thermally corrected CMP22 pyranometer."
         ),
         "dataset_citation": (
             "https://midcdmz.nrel.gov/apps/sitehome.pl?site=" + SITE
@@ -246,14 +343,17 @@ def main(argv):
         "scope_caveats": [
             f"single clear-sky day ({date}); mean rel_err over "
             f"{stats['clear_count']} clear-sky-filtered samples "
-            "vs pvlib Ineichen clearsky modeled GHI.",
+            "vs Ineichen clearsky modeled GHI (hexa-native sun "
+            "position + pvlib atmospheric model).",
             (
-                "modeled stack uses pvlib clearsky (Ineichen) + sun "
-                "position; the latter has D80 substrate-parity vs "
-                "hexa-native `solar_position_kernel` (κ-65 21/21 "
-                "PASS at rel_err <= 1e-13) — the hexa-native call "
-                "site is a G29-β follow-on (substrate-parity already "
-                "proven, runtime port is the next axis)."
+                "modeled stack uses hexa-native "
+                "`solar_kernel::apparent_zenith` (clean-room Sandia "
+                "1985 ephemeris; κ-65 D80 pilot, substrate parity "
+                "vs pvlib SPA <1e-9) for sun position, and pvlib's "
+                "Ineichen clearsky (Linke-turbidity climatology + "
+                "Kasten-Young airmass) for the atmospheric model. "
+                "This closes RFC 013 §6.11 reserved slot — G31 "
+                "G29-β producer integration."
             ),
             "Linke-turbidity climatology assumption inherent in "
             "Ineichen — not site-specific aerosol retrieval.",
@@ -268,8 +368,11 @@ def main(argv):
         ],
         "skipped_reason": None,
         "kernel_reuse": (
-            "pvlib clearsky/transposition trusted bridge (substrate-"
-            "parity proven on stdlib/kernels/solar/pvlib_kernel.py)"
+            "hexa_native_solar_position (solar_kernel::apparent_zenith "
+            "via _solar_position_batch.hexa) + pvlib Ineichen "
+            "clearsky (Linke-turbidity + Kasten-Young airmass) "
+            "trusted bridge (substrate-parity proven on "
+            "stdlib/kernels/solar/pvlib_kernel.py · κ-65 D80)"
         ),
         # D103 dimension-separation — substrate parity axis left null
         # here; substrate-parity is carried separately by PILOTS.demi
