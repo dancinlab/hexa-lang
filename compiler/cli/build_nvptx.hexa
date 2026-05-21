@@ -1,10 +1,11 @@
 // compiler/cli/build_nvptx.hexa — RFC 071 P2 emit-driver hexa module
 //
 // @rfc 071
-// @phase P2
-// @status STUB (canned PTX) — P2.1+ wires real codegen invocation
+// @phase P2.2
+// @status P2.2 — sm_arch threaded through codegen (sm_80 / sm_90 / sm_120)
 // @cite RFC 071 §3 P2 "emit-driver hexa module skeleton" +
-//       RFC 055 §6.2 (codegen_emit_ptx_sm80 sibling)
+//       RFC 055 §6.2 (codegen_emit_ptx_sm80 sibling) +
+//       RFC 071 P2.2 `codegen_emit_ptx_for_sm(module, sm_arch)` dispatch
 // @sister self/main.hexa::cmd_build NVPTX branch
 //        + self/main.hexa::_build_nvptx_emit_driver
 //
@@ -129,6 +130,31 @@
 //   2. text substring asserts on the emitted PTX content (`.version`,
 //      `.target sm_NN`, `.address_size 64`, `.visible .entry`).
 //   3. (bonus, P3+) live `ptxas -arch=sm_90 /tmp/foo.ptx` accepts.
+//
+// ──────────────────────────────────────────────────────────────────────
+// FALSIFIER F-RFC071-SM-ARCH-THREADED (P2.2 — NEW)
+// ──────────────────────────────────────────────────────────────────────
+// `_build_nvptx_stub_ptx(sm_arch)` threads sm_arch through into the
+// emitted PTX's `.target` AND `.version` directives. Verified by static
+// cross-reference of `codegen_emit_ptx_for_sm` in
+// `compiler/codegen/nvptx_target.hexa`:
+//   * sm_arch="sm_80"  →  `.target sm_80`   +  `.version 7.0`
+//   * sm_arch="sm_90"  →  `.target sm_90`   +  `.version 7.8`
+//   * sm_arch="sm_120" →  `.target sm_120`  +  `.version 8.0`
+//
+// The threading path:
+//   `_build_nvptx_stub_ptx(sm_arch)`
+//     -> `codegen_emit_ptx_for_sm(mir, sm_arch)`
+//        -> `_nvptx_target_tag_for_sm_arch(sm_arch)` -> LModule.target
+//        -> `_nvptx_ptx_version_for_sm_arch(sm_arch)` -> `.version`
+//        -> `_nvptx_codegen(mir, target_tag)` -> LModule
+//        -> `_emit_ptx_versioned(lmod, ptx_version)` -> PTX text
+//
+// `_emit_ptx_header_versioned` is the only header emitter that varies
+// the `.version` directive; the legacy `_emit_ptx_header` keeps the
+// hardcoded 7.8 constant so all 40+ existing lower_test/emit_test
+// callers byte-identically see ZERO diff (F-RFC055-CPU-CODEGEN-
+// UNTOUCHED applies to the GPU corpus as well).
 
 // ── P2.1 wiring imports ─────────────────────────────────────────────
 //
@@ -322,25 +348,29 @@ fn _build_hand_mir_vec_add() -> MModule {
     }
 }
 
-// ── PTX builder (P2.1 — real codegen invocation) ────────────────────
+// ── PTX builder (P2.2 — sm_arch threaded through codegen) ───────────
 
 // Compose the PTX text for the given sm_arch identifier.
 //
-// P2.1 (current): delegates to `codegen_emit_ptx_sm80` on a hand-built
-// vec-add `MModule` (`_build_hand_mir_vec_add()`). The emitted PTX is
-// the canonical vec-add body and is NOT derived from sm_arch — sm_arch
-// remains in the signature for the P2 `cmd_build` call-site contract
-// (today only sm_80 is the wired codegen entry; sm_90/sm_120 routing is
-// a follow-on P-phase that flips to `codegen_emit_ptx_sm90` or a new
-// sm_120 entry once those land).
+// P2.2 (current): delegates to `codegen_emit_ptx_for_sm` on a hand-
+// built vec-add `MModule` (`_build_hand_mir_vec_add()`). The dispatch
+// entry threads `sm_arch` through to BOTH the LModule.target tag
+// (`.target sm_NN`) AND the PTX ISA `.version` directive — per-arch
+// minimum: sm_80→7.0, sm_90→7.8, sm_120→8.0.
+//
+// The kernel body bytes are unchanged across sm-tags (only the header
+// directives differ); the existing `codegen_emit_ptx_sm80` and
+// `codegen_emit_ptx_sm90` one-shot entry points are preserved
+// byte-identically so the 40+ existing lower_test / emit_test callers
+// continue to see zero diff (F-RFC055-CPU-CODEGEN-UNTOUCHED applies
+// to the GPU corpus too).
 //
 // ASCII-only output (driver-JIT ptxas refuses non-ASCII PTX comments —
 // see `reference_gpu_fire_infra.md`); the codegen pipeline produces
 // pure-ASCII text by construction.
 fn _build_nvptx_stub_ptx(sm_arch: string) -> string {
-    // sm_arch is accepted but not threaded through — see fn docstring.
-    // The hand-MIR fixture drives the canonical sm_80 codegen path.
-    return codegen_emit_ptx_sm80(_build_hand_mir_vec_add())
+    // P2.2 — sm_arch threaded through to both `.target` + `.version`.
+    return codegen_emit_ptx_for_sm(_build_hand_mir_vec_add(), sm_arch)
 }
 
 // ── primary surface ────────────────────────────────────────────────

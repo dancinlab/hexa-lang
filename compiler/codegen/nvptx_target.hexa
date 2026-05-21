@@ -84,6 +84,11 @@ import "./nvptx_ptx_ops.hexa"
 // Hopper features (wgmma, larger shared memory) additively (RFC 055 §6.1).
 pub let NVPTX_TARGET_SM90: string = "nvptx64-nvidia-cuda-sm90"
 pub let NVPTX_TARGET_SM80: string = "nvptx64-nvidia-cuda-sm80"
+// RFC 071 P2.2 — sm_120 (Blackwell-class consumer / RTX 5070 driver-JIT
+// forward-compat). Per `reference_gpu_fire_infra.md`: standalone ptxas
+// (CUDA 12.0) does not recognise sm_120, but driver-JIT does — we emit
+// the textual `.target sm_120` and let the driver JIT it forward.
+pub let NVPTX_TARGET_SM120: string = "nvptx64-nvidia-cuda-sm120"
 
 // RFC 055 055-P3c — kernel-marker prefix on LFunc.name. The 055-P3c
 // codegen partition routes `@gpu_kernel` MFuncs through
@@ -97,6 +102,8 @@ pub let NVPTX_KERNEL_PREFIX: string = "__nvptx_kernel__"
 // PTX `.target` directive arch string per variant.
 pub let NVPTX_ARCH_SM90: string = "sm_90"
 pub let NVPTX_ARCH_SM80: string = "sm_80"
+// RFC 071 P2.2 — sm_120 arch string (Blackwell consumer, RTX 5070).
+pub let NVPTX_ARCH_SM120: string = "sm_120"
 
 // ── GPU function kind (RFC 055 §6.3 / §6.4) ───────────────────
 //
@@ -1500,8 +1507,71 @@ let _NVPTX_PTX_VERSION: string = "7.8"
 // _nvptx_arch_for_target — the PTX `.target` arch string for an LModule
 // target tag. Defaults to the sm_90 arch for an unrecognized tag.
 fn _nvptx_arch_for_target(target: string) -> string {
-    if target == NVPTX_TARGET_SM80 { return NVPTX_ARCH_SM80 }
+    if target == NVPTX_TARGET_SM80  { return NVPTX_ARCH_SM80  }
+    if target == NVPTX_TARGET_SM120 { return NVPTX_ARCH_SM120 }
     return NVPTX_ARCH_SM90
+}
+
+// _nvptx_target_tag_for_sm_arch — RFC 071 P2.2 reverse map. Converts the
+// emit-driver's bare sm-tag ("sm_80" / "sm_90" / "sm_120") into the
+// LModule.target tag (`nvptx64-nvidia-cuda-sm{80,90,120}`). Unknown
+// tags fall through to SM90 — same conservative default as
+// `_nvptx_arch_for_target`. Pure data; no side effects on CPU codegen.
+fn _nvptx_target_tag_for_sm_arch(sm_arch: string) -> string {
+    if sm_arch == NVPTX_ARCH_SM80  { return NVPTX_TARGET_SM80  }
+    if sm_arch == NVPTX_ARCH_SM120 { return NVPTX_TARGET_SM120 }
+    return NVPTX_TARGET_SM90
+}
+
+// _nvptx_ptx_version_for_sm_arch — RFC 071 P2.2. Per-arch PTX ISA
+// version string for the `.version` header directive. sm_80 (Ampere)
+// requires PTX 7.0+, sm_90 (Hopper) requires PTX 7.8+, sm_120
+// (Blackwell consumer) requires PTX 8.0+ (driver-JIT only — standalone
+// ptxas in CUDA 12.0 does not yet recognise sm_120; see
+// `reference_gpu_fire_infra.md`). Unknown arch defaults to "7.8" —
+// matches the legacy `_NVPTX_PTX_VERSION` constant so the existing
+// `_emit_ptx_header` byte-output is preserved for any caller that does
+// not route through the per-arch path.
+fn _nvptx_ptx_version_for_sm_arch(sm_arch: string) -> string {
+    if sm_arch == NVPTX_ARCH_SM80  { return "7.0" }
+    if sm_arch == NVPTX_ARCH_SM120 { return "8.0" }
+    return "7.8"
+}
+
+// _emit_ptx_header_versioned — RFC 071 P2.2 version-overridable header
+// emit. Sibling of `_emit_ptx_header` (which keeps the legacy 7.8
+// constant for back-compat with the 40+ test callers via the
+// `codegen_emit_ptx_sm80` / `codegen_emit_ptx_sm90` entry points).
+//
+// `_emit_ptx_header` is preserved byte-identical so every existing
+// caller (nvptx_lower_test ×40+, nvptx_emit_test ×2) sees zero diff
+// — F-RFC055-CPU-CODEGEN-UNTOUCHED applies to the GPU corpus too.
+fn _emit_ptx_header_versioned(target: string, ptx_version: string) -> string {
+    let arch = _nvptx_arch_for_target(target)
+    let mut s = ""
+    s = s + "// RFC 055 055-P0 - hexa-native NVPTX emit | target=" + target + "\n"
+    s = s + PTX_VERSION_DIRECTIVE + " " + ptx_version + "\n"
+    s = s + PTX_TARGET_DIRECTIVE + " " + arch + "\n"
+    s = s + PTX_ADDRSIZE_DIRECTIVE + " 64\n"
+    return s
+}
+
+// _emit_ptx_versioned — RFC 071 P2.2 version-overridable emit. Sibling
+// of `emit_ptx` that takes an explicit PTX ISA version string so the
+// emit-driver can thread sm_arch through to a per-arch `.version`.
+// Composes `_emit_ptx_header_versioned` with the standard per-LFunc
+// body emitter, so the body bytes remain identical to `emit_ptx` for
+// any given LModule.
+fn _emit_ptx_versioned(module: LModule, ptx_version: string) -> string {
+    let mut parts: [string] = []
+    parts.push(_emit_ptx_header_versioned(module.target, ptx_version))
+    let mut i = 0
+    while i < len(module.funcs) {
+        parts.push("\n")
+        parts.push(_emit_ptx_func(module.funcs[i]))
+        i = i + 1
+    }
+    return parts.join("")
 }
 
 // _emit_ptx_header — the PTX module header directives (RFC 055 §6.2).
@@ -1693,6 +1763,33 @@ pub fn codegen_emit_ptx_sm90(module: MModule) -> string {
 // codegen_emit_ptx_sm80 — sm_80 variant of `codegen_emit_ptx_sm90`.
 pub fn codegen_emit_ptx_sm80(module: MModule) -> string {
     return emit_ptx(codegen_nvptx_sm80(module))
+}
+
+// codegen_emit_ptx_for_sm — RFC 071 P2.2 dispatch entry.
+//
+// One-shot MIR→PTX text for the given sm-tag ("sm_80" / "sm_90" /
+// "sm_120"). Threads `sm_arch` through to BOTH the LModule.target tag
+// (`.target sm_NN` directive) AND the `.version` directive (per-arch
+// PTX ISA minimum: sm_80→7.0, sm_90→7.8, sm_120→8.0). Unknown tags
+// fall through to sm_90 + version 7.8 — same conservative default as
+// the sibling helpers, so a misrouted call still produces compilable
+// PTX rather than a malformed header.
+//
+// This is the dispatch surface RFC 071 P2.2's `_build_nvptx_stub_ptx`
+// uses to honour the cmd_build `--target=nvptx64-nvidia-cuda-sm{NN}`
+// flag. The existing `codegen_emit_ptx_sm80` / `codegen_emit_ptx_sm90`
+// entry points are preserved byte-identically so the 40+ existing
+// lower_test / emit_test callers see ZERO change.
+//
+// Falsifier `F-RFC071-SM-ARCH-THREADED`:
+//   * sm_arch="sm_80"  → PTX contains `.target sm_80`  + `.version 7.0`
+//   * sm_arch="sm_90"  → PTX contains `.target sm_90`  + `.version 7.8`
+//   * sm_arch="sm_120" → PTX contains `.target sm_120` + `.version 8.0`
+pub fn codegen_emit_ptx_for_sm(module: MModule, sm_arch: string) -> string {
+    let target_tag  = _nvptx_target_tag_for_sm_arch(sm_arch)
+    let ptx_version = _nvptx_ptx_version_for_sm_arch(sm_arch)
+    let lmod        = _nvptx_codegen(module, target_tag)
+    return _emit_ptx_versioned(lmod, ptx_version)
 }
 
 // ════════════════════════════════════════════════════════════════════
