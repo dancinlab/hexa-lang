@@ -328,6 +328,26 @@ pub fn rt_array_flat_map(arr: HexaVal, fn_v: HexaVal) -> HexaVal {
     return out
 }
 
+// Step 3 cycle 80 — array+array concat (hexa_add_slow's third branch).
+// Mirrors C body at self/runtime_core.c:5363-5368 — deep iteration via
+// `len()` + indexed read + push. C wrapper handles all non-array cases.
+pub fn rt_add_arrays(a: HexaVal, b: HexaVal) -> HexaVal {
+    let mut out: [float] = []
+    let na = len(a)
+    let mut i = 0
+    while i < na {
+        out = out.push(a[i])
+        i = i + 1
+    }
+    let nb = len(b)
+    i = 0
+    while i < nb {
+        out = out.push(b[i])
+        i = i + 1
+    }
+    return out
+}
+
 // Step 3 cycle 79 — float div + mod with divide-by-zero throw.
 // Only the FLOAT path is portable: typed-float `/` is in cycle 76 fast
 // path (codegen L3957). Typed-int `/` and `%` are intentionally

@@ -5347,6 +5347,23 @@ HexaVal hexa_type_of(HexaVal v) {
 // fast path without function-call ABI overhead.
 /* PHASE 1.2.B (2026-05-15): de-staticized. Slow-path fallback for the
  * hexa_add macro emitted into runtime.h — user.c TUs link against this. */
+/* Step-3 cycle 80 port — array+array concat dispatches to rt_add_arrays.
+ * Int/float/string paths stay C-side (already minimal). */
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_add_arrays(HexaVal a, HexaVal b);
+HexaVal hexa_add_slow(HexaVal a, HexaVal b) {
+    if (HX_IS_INT(a) && HX_IS_INT(b)) return hexa_int(HX_INT(a) + HX_INT(b));
+    if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b)) {
+        double fa = __hx_to_double(a);
+        double fb = __hx_to_double(b);
+        return hexa_float(fa + fb);
+    }
+    if (HX_IS_ARRAY(a) && HX_IS_ARRAY(b)) return rt_add_arrays(a, b);
+    HexaVal sa = hexa_to_string(a);
+    HexaVal sb = hexa_to_string(b);
+    return hexa_str_concat(sa, sb);
+}
+#else
 HexaVal hexa_add_slow(HexaVal a, HexaVal b) {
     if (HX_IS_INT(a) && HX_IS_INT(b)) return hexa_int(HX_INT(a) + HX_INT(b));
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b)) {
@@ -5370,6 +5387,7 @@ HexaVal hexa_add_slow(HexaVal a, HexaVal b) {
     HexaVal sb = hexa_to_string(b);
     return hexa_str_concat(sa, sb);
 }
+#endif
 
 // ROI-37: inline macro — int+int hot path avoids 32-byte HexaVal call ABI.
 // Evaluates each operand exactly once via temporaries.

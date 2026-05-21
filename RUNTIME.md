@@ -1094,6 +1094,20 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 80: hexa_add_slow array+array concat port
+
+- ✅ Array+array branch of `hexa_add_slow` (self/runtime_core.c:5363-
+  5368) ported to `rt_add_arrays`. Deep iteration via `len(a)` /
+  `a[i]` / `out.push()` — same algorithm as the C body
+- Other branches (int+int / float+float / string fallback via
+  to_string + str_concat) stay C — they're already minimal and
+  to_string+str_concat are CORE-tier
+- `hexa_add` macro (runtime.h:147) still in C — the inline int
+  fast-path is the macro's whole point; replacing it would lose
+  zero-overhead int+int
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,376 B
+
 ### 2026-05-21 — step 3 cycle 79: hexa_div_float + hexa_mod_float (typed-float div/mod with throw)
 
 - ✅ Float-only path for `hexa_div` + `hexa_mod` ported via cycle-76
