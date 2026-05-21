@@ -2096,6 +2096,55 @@ fn _passes_fuse_complex_cells(cells_in: [Cell]) -> [Cell] {
                     fused_at = fused_at.push(k)
                     fused_cells = fused_cells.push(nc)
                 }
+                // Pattern a22oi_1 (AOI22) : inv_1(or2_1(and2_1, and2_1))
+                //   Y = !((A1&A2) | (B1&B2))
+                // Pattern o22ai_1 (OAI22) : inv_1(and2_1(or2_1, or2_1))
+                //   Y = !((A1|A2) & (B1|B2))
+                // Both share the inv_1(L1(L0_a, L0_b)) shape with L1
+                // being or2/and2 (the middle node) and L0_a / L0_b
+                // being the OPPOSITE gate type (the leaf nodes).
+                if pc.cell_type == "sky130_fd_sc_hd__or2_1"
+                    || pc.cell_type == "sky130_fd_sc_hd__and2_1" {
+                    let mid_a = _passes_pin_net(pc, "A")
+                    let mid_b = _passes_pin_net(pc, "B")
+                    let la_i = _passes_find_producer(cells_in, mid_a)
+                    let lb_i = _passes_find_producer(cells_in, mid_b)
+                    if la_i >= 0 && lb_i >= 0 && la_i != lb_i
+                        && consumed[la_i] == 0 && consumed[lb_i] == 0
+                        && _passes_net_fanout(cells_in, mid_a, la_i) == 1
+                        && _passes_net_fanout(cells_in, mid_b, lb_i) == 1 {
+                        let la = cells_in[la_i]
+                        let lb = cells_in[lb_i]
+                        // leaf type must be opposite of mid
+                        let mut leaf_want = ""
+                        let mut fused_ty = ""
+                        if pc.cell_type == "sky130_fd_sc_hd__or2_1" {
+                            leaf_want = "sky130_fd_sc_hd__and2_1"
+                            fused_ty  = "sky130_fd_sc_hd__a22oi_1"
+                        } else {
+                            leaf_want = "sky130_fd_sc_hd__or2_1"
+                            fused_ty  = "sky130_fd_sc_hd__o22ai_1"
+                        }
+                        if la.cell_type == leaf_want && lb.cell_type == leaf_want {
+                            let a1n = _passes_pin_net(la, "A")
+                            let a2n = _passes_pin_net(la, "B")
+                            let b1n = _passes_pin_net(lb, "A")
+                            let b2n = _passes_pin_net(lb, "B")
+                            let mut nc = rtlil_cell(c.name, fused_ty, 1)
+                            nc = rtlil_cell_connect(nc, "A1", a1n)
+                            nc = rtlil_cell_connect(nc, "A2", a2n)
+                            nc = rtlil_cell_connect(nc, "B1", b1n)
+                            nc = rtlil_cell_connect(nc, "B2", b2n)
+                            nc = rtlil_cell_connect(nc, "Y",  inv_y)
+                            consumed[la_i] = 1
+                            consumed[lb_i] = 1
+                            consumed[pi]   = 1
+                            consumed[k]    = 1
+                            fused_at = fused_at.push(k)
+                            fused_cells = fused_cells.push(nc)
+                        }
+                    }
+                }
             }
         }
         k = k + 1
@@ -4445,6 +4494,93 @@ fn main() {
     }
     if rtlil_count_cells_of_type(r_mi.design.modules[0], "sky130_fd_sc_hd__mux2_1") != 0 {
         println("FAIL T_TECHMAP_COMPLEX_CELLS.mux2i mux2_remains"); fails = fails + 1
+    }
+
+    // T_TECHMAP_COMPLEX_CELLS.aoi22 — inv_1(or2_1(and2_1,and2_1)) → a22oi_1
+    total = total + 1
+    let mut m_ao = rtlil_new_module("aoi22")
+    m_ao = rtlil_module_add_wire(m_ao, rtlil_wire("a", 1, 1, 1))
+    m_ao = rtlil_module_add_wire(m_ao, rtlil_wire("b", 1, 1, 2))
+    m_ao = rtlil_module_add_wire(m_ao, rtlil_wire("c", 1, 1, 3))
+    m_ao = rtlil_module_add_wire(m_ao, rtlil_wire("e", 1, 1, 4))
+    m_ao = rtlil_module_add_wire(m_ao, rtlil_wire("ab", 1, 0, 0))
+    m_ao = rtlil_module_add_wire(m_ao, rtlil_wire("cd", 1, 0, 0))
+    m_ao = rtlil_module_add_wire(m_ao, rtlil_wire("or_o", 1, 0, 0))
+    m_ao = rtlil_module_add_wire(m_ao, rtlil_wire("y", 1, 2, 5))
+    let mut c_a1 = rtlil_cell("u_and1", "$and", 0)
+    c_a1 = rtlil_cell_connect(c_a1, "A", "a")
+    c_a1 = rtlil_cell_connect(c_a1, "B", "b")
+    c_a1 = rtlil_cell_connect(c_a1, "Y", "ab")
+    m_ao = rtlil_module_add_cell(m_ao, c_a1)
+    let mut c_a2 = rtlil_cell("u_and2", "$and", 0)
+    c_a2 = rtlil_cell_connect(c_a2, "A", "c")
+    c_a2 = rtlil_cell_connect(c_a2, "B", "e")
+    c_a2 = rtlil_cell_connect(c_a2, "Y", "cd")
+    m_ao = rtlil_module_add_cell(m_ao, c_a2)
+    let mut c_or = rtlil_cell("u_or", "$or", 0)
+    c_or = rtlil_cell_connect(c_or, "A", "ab")
+    c_or = rtlil_cell_connect(c_or, "B", "cd")
+    c_or = rtlil_cell_connect(c_or, "Y", "or_o")
+    m_ao = rtlil_module_add_cell(m_ao, c_or)
+    let mut c_inv2 = rtlil_cell("u_inv", "$not", 0)
+    c_inv2 = rtlil_cell_connect(c_inv2, "A", "or_o")
+    c_inv2 = rtlil_cell_connect(c_inv2, "Y", "y")
+    m_ao = rtlil_module_add_cell(m_ao, c_inv2)
+    let mut d_ao = rtlil_new_design("test")
+    d_ao = rtlil_design_add(d_ao, m_ao)
+    let r_ao = pass_techmap_sky130(d_ao)
+    if rtlil_count_cells_of_type(r_ao.design.modules[0], "sky130_fd_sc_hd__a22oi_1") != 1 {
+        println("FAIL T_TECHMAP_COMPLEX_CELLS.aoi22 count got "
+            + str(rtlil_count_cells_of_type(r_ao.design.modules[0], "sky130_fd_sc_hd__a22oi_1")))
+        fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ao.design.modules[0], "sky130_fd_sc_hd__and2_1") != 0 {
+        println("FAIL T_TECHMAP_COMPLEX_CELLS.aoi22 and_remains"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ao.design.modules[0], "sky130_fd_sc_hd__or2_1") != 0 {
+        println("FAIL T_TECHMAP_COMPLEX_CELLS.aoi22 or_remains"); fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_ao.design.modules[0], "sky130_fd_sc_hd__inv_1") != 0 {
+        println("FAIL T_TECHMAP_COMPLEX_CELLS.aoi22 inv_remains"); fails = fails + 1
+    }
+
+    // T_TECHMAP_COMPLEX_CELLS.oai22 — inv_1(and2_1(or2_1,or2_1)) → o22ai_1
+    total = total + 1
+    let mut m_oa = rtlil_new_module("oai22")
+    m_oa = rtlil_module_add_wire(m_oa, rtlil_wire("a", 1, 1, 1))
+    m_oa = rtlil_module_add_wire(m_oa, rtlil_wire("b", 1, 1, 2))
+    m_oa = rtlil_module_add_wire(m_oa, rtlil_wire("c", 1, 1, 3))
+    m_oa = rtlil_module_add_wire(m_oa, rtlil_wire("e", 1, 1, 4))
+    m_oa = rtlil_module_add_wire(m_oa, rtlil_wire("ab", 1, 0, 0))
+    m_oa = rtlil_module_add_wire(m_oa, rtlil_wire("cd", 1, 0, 0))
+    m_oa = rtlil_module_add_wire(m_oa, rtlil_wire("and_o", 1, 0, 0))
+    m_oa = rtlil_module_add_wire(m_oa, rtlil_wire("y", 1, 2, 5))
+    let mut c_o1 = rtlil_cell("u_or1", "$or", 0)
+    c_o1 = rtlil_cell_connect(c_o1, "A", "a")
+    c_o1 = rtlil_cell_connect(c_o1, "B", "b")
+    c_o1 = rtlil_cell_connect(c_o1, "Y", "ab")
+    m_oa = rtlil_module_add_cell(m_oa, c_o1)
+    let mut c_o2 = rtlil_cell("u_or2", "$or", 0)
+    c_o2 = rtlil_cell_connect(c_o2, "A", "c")
+    c_o2 = rtlil_cell_connect(c_o2, "B", "e")
+    c_o2 = rtlil_cell_connect(c_o2, "Y", "cd")
+    m_oa = rtlil_module_add_cell(m_oa, c_o2)
+    let mut c_and3 = rtlil_cell("u_and", "$and", 0)
+    c_and3 = rtlil_cell_connect(c_and3, "A", "ab")
+    c_and3 = rtlil_cell_connect(c_and3, "B", "cd")
+    c_and3 = rtlil_cell_connect(c_and3, "Y", "and_o")
+    m_oa = rtlil_module_add_cell(m_oa, c_and3)
+    let mut c_inv3 = rtlil_cell("u_inv", "$not", 0)
+    c_inv3 = rtlil_cell_connect(c_inv3, "A", "and_o")
+    c_inv3 = rtlil_cell_connect(c_inv3, "Y", "y")
+    m_oa = rtlil_module_add_cell(m_oa, c_inv3)
+    let mut d_oa = rtlil_new_design("test")
+    d_oa = rtlil_design_add(d_oa, m_oa)
+    let r_oa = pass_techmap_sky130(d_oa)
+    if rtlil_count_cells_of_type(r_oa.design.modules[0], "sky130_fd_sc_hd__o22ai_1") != 1 {
+        println("FAIL T_TECHMAP_COMPLEX_CELLS.oai22 count got "
+            + str(rtlil_count_cells_of_type(r_oa.design.modules[0], "sky130_fd_sc_hd__o22ai_1")))
+        fails = fails + 1
     }
 
     if fails > 0 {
