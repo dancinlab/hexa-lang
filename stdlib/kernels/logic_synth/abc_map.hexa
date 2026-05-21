@@ -364,7 +364,19 @@ fn abc_emit_blif(d: Design) -> str {
         let mut ci = 0
         while ci < len(m.cells) {
             let c = m.cells[ci]
-            if c.cell_type == "sky130_fd_sc_hd__dfxtp_1" {
+            // rfc_006 §5 Piece-1 — treat `edfxtp_1` (DFF-with-data-
+            // enable) the same as `dfxtp_1` here: emit `.latch` lines
+            // so ABC's combinational mapper accepts the BLIF (ABC's
+            // `read_blif` skips ALL sequential `.gate` lines — yosys
+            // standard flow keeps sequential cells OUT of the BLIF
+            // passed to ABC entirely). The EN/DE pin is dropped from
+            // BLIF — `abc_map` re-binds it post-mapping by replaying
+            // the original cell's EN→DE connection against the new
+            // `dfxtp_1`-typed parsed cell at matching Q-net. @cite
+            // BLIF spec §3.4 + Yosys passes/sat/ + dfflibmap notes.
+            let mut _is_dffe = 0
+            if c.cell_type == "sky130_fd_sc_hd__edfxtp_1" { _is_dffe = 1 }
+            if c.cell_type == "sky130_fd_sc_hd__dfxtp_1" || _is_dffe == 1 {
                 let mut d_net = ""
                 let mut q_net = ""
                 let mut clk_net = ""
@@ -526,12 +538,29 @@ fn abc_parse_mapped_blif(text: str) -> Design {
         // multiplier and (b) it adds round-trip complexity for no
         // measurement gain.)
         if head == ".latch" {
-            if len(parts) >= 5 {
+            // rfc_006 §5 Piece-1 — ABC's output `.latch` rows have
+            // variable whitespace (e.g. `.latch        n70 rr_ptr__b0
+            //   2`) and may DROP `re <clk>` between D/Q and the
+            // init code (only init is required by BLIF §3.4). Our
+            // `split(" ")` returns empty strings between consecutive
+            // spaces, so filter to non-empty tokens before pulling
+            // D/Q/CLK. CLK falls back to "clk" when ABC omitted it.
+            let mut words: [str] = []
+            let mut wi = 0
+            while wi < len(parts) {
+                if len(parts[wi]) > 0 { words = words.push(parts[wi]) }
+                wi = wi + 1
+            }
+            if len(words) >= 3 {
                 let cname = "ff_" + str(len(m.cells))
                 let mut c = rtlil_cell(cname, "sky130_fd_sc_hd__dfxtp_1", 1)
-                c = rtlil_cell_connect(c, "D", parts[1])
-                c = rtlil_cell_connect(c, "Q", parts[2])
-                c = rtlil_cell_connect(c, "CLK", parts[4])
+                c = rtlil_cell_connect(c, "D", words[1])
+                c = rtlil_cell_connect(c, "Q", words[2])
+                // BLIF §3.4 latch shape: `.latch <D> <Q> [<type> <ctrl>] [<init>]`.
+                // When emitter wrote `re clk`, those land at words[3]/[4].
+                let mut clk_w = "clk"
+                if len(words) >= 5 { clk_w = words[4] }
+                c = rtlil_cell_connect(c, "CLK", clk_w)
                 m = rtlil_module_add_cell(m, c)
             }
         }
@@ -641,7 +670,94 @@ fn abc_map(d: Design, lib_path: str, tmp_prefix: str) -> AbcMapResult {
             message: "abc_map: D18 fail-loud — ABC produced no mapped BLIF (output file empty)"
         }
     }
-    let mapped = abc_parse_mapped_blif(mapped_text)
+    let mut mapped = abc_parse_mapped_blif(mapped_text)
+    // rfc_006 §5 Piece-1 — re-bind `$dffe` enable connections. The
+    // round-trip through ABC's `.latch` (BLIF spec §3.4) is 1-bit D/Q/
+    // CLK only — it has no provision for the DE pin. We pre-staged the
+    // EN connection by leaving the `edfxtp_1` cell in the input design;
+    // here we walk the original `d.modules[*].cells` for any
+    // `sky130_fd_sc_hd__edfxtp_1`, find the round-tripped cell (parsed
+    // back as `dfxtp_1` because ABC has no concept of latch-with-
+    // enable) by matching its Q-net, and rewrite the cell_type +
+    // restore the DE pin. The area histogram then sees `edfxtp_1`
+    // cells at their canonical 30.03 µm² each — closing the substrate-
+    // yosys parity gap that the prior $mux+$dff feedback cascade
+    // (a21oi_1 + clkinv_1 chains) left behind.
+    let mut mi2 = 0
+    while mi2 < len(d.modules) {
+        let pre_m = d.modules[mi2]
+        let mut ce_i = 0
+        while ce_i < len(pre_m.cells) {
+            let pre_c = pre_m.cells[ce_i]
+            if pre_c.cell_type == "sky130_fd_sc_hd__edfxtp_1" {
+                let mut pre_q = ""
+                let mut pre_de = ""
+                let mut pp = 0
+                while pp < len(pre_c.conns) {
+                    if pre_c.conns[pp].pin == "Q"  { pre_q  = pre_c.conns[pp].net }
+                    if pre_c.conns[pp].pin == "DE" { pre_de = pre_c.conns[pp].net }
+                    pp = pp + 1
+                }
+                if len(pre_q) > 0 {
+                    // walk the parsed mapped design's modules
+                    let mut new_modules: [Module] = []
+                    let mut mm = 0
+                    while mm < len(mapped.modules) {
+                        let mod_m = mapped.modules[mm]
+                        let mut new_cells: [Cell] = []
+                        let mut cc = 0
+                        while cc < len(mod_m.cells) {
+                            let mc = mod_m.cells[cc]
+                            let mut matched = 0
+                            if mc.cell_type == "sky130_fd_sc_hd__dfxtp_1" {
+                                let mut q2 = ""
+                                let mut p2 = 0
+                                while p2 < len(mc.conns) {
+                                    if mc.conns[p2].pin == "Q" { q2 = mc.conns[p2].net }
+                                    p2 = p2 + 1
+                                }
+                                // Exact match for 1-bit regs, OR
+                                // `<pre_q>__b<k>` prefix match for the
+                                // W-way per-bit split that
+                                // `abc_emit_blif` performs on multi-bit
+                                // $dffe Q-wires (see L394-403).
+                                if q2 == pre_q { matched = 1 }
+                                if matched == 0 && len(q2) > len(pre_q) + 3 {
+                                    let pfx = q2.substring(0, len(pre_q))
+                                    let sep = q2.substring(len(pre_q), len(pre_q) + 3)
+                                    if pfx == pre_q && sep == "__b" { matched = 1 }
+                                }
+                            }
+                            if matched == 1 {
+                                let mut nc = rtlil_cell(mc.name, "sky130_fd_sc_hd__edfxtp_1", 1)
+                                let mut p3 = 0
+                                while p3 < len(mc.conns) {
+                                    nc = rtlil_cell_connect(nc, mc.conns[p3].pin, mc.conns[p3].net)
+                                    p3 = p3 + 1
+                                }
+                                nc = rtlil_cell_connect(nc, "DE", pre_de)
+                                new_cells = new_cells.push(nc)
+                            } else {
+                                new_cells = new_cells.push(mc)
+                            }
+                            cc = cc + 1
+                        }
+                        new_modules = new_modules.push(Module {
+                            name: mod_m.name, wires: mod_m.wires, cells: new_cells,
+                            processes: mod_m.processes,
+                            connect_lhs: mod_m.connect_lhs,
+                            connect_rhs: mod_m.connect_rhs,
+                            connect_cond: mod_m.connect_cond,
+                        })
+                        mm = mm + 1
+                    }
+                    mapped = Design { modules: new_modules, source: mapped.source }
+                }
+            }
+            ce_i = ce_i + 1
+        }
+        mi2 = mi2 + 1
+    }
     return AbcMapResult {
         ok: 1, design: mapped, binary_path: bin, script_bytes: len(blif_text),
         exit_code: 0, stderr_tail: "",

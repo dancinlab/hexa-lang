@@ -2347,31 +2347,39 @@ fn _rv_emit_for_if_stmts(
         if len(rer.err) > 0 { return RvEmitRes { m: m_in, ok: 0 } }
         m = rer.m
         if is_clocked == 1 {
-            // Clocked guarded write: $mux feedback-hold + $dff sink.
+            // rfc_006 §5 Piece-1 — clocked guarded write inside
+            // nested if/else: emit `$dffe` directly with EN=cond_wire
+            // when cond_wire is non-empty (the common case in router
+            // designs where `if (any_grant) reg <= rhs;` lives inside
+            // the else-branch of a clocked rst-shape). Previously
+            // emitted `$mux(A=lhs[feedback], B=rhs, S=cond_wire) +
+            // $dff(D=mux_y, Q=lhs)` — semantically identical, but
+            // produces feedback-MUX+DFF cascades that ABC re-maps as
+            // `a21oi_1 + clkinv_1` chains instead of dense
+            // `sky130_fd_sc_hd__edfxtp_1` (DFF-with-data-enable).
+            // When cond_wire is empty (top-level unconditional write)
+            // fall back to bare $dff (the proc_mux pipeline handles
+            // it as a non-enable register).
             // @cite IEEE 1364-2005 §9.2 (non-blocking) + §9.4 (nested
-            // conditional) + Yosys proc_mux $mux-feedback shape.
-            // rfc_006 §5 Tier-1 (e) Option II — clocked-write mux_y
-            // width MUST match the LHS Q-wire width (the $mux drives
-            // $dff.D, $dff.Q = LHS multi-bit register). Width-1 mux_y
-            // here was the leaf-truncation that prevented bit-blast
-            // downstream (`abc_emit_blif` Option I `.latch` per-bit
-            // reads Q-width, but $mux→tech-map sees D-width).
-            let mux_y = _rv_fresh_wire(m)
-            let mux_w = _rv_v2_wire_width(m, lhs)
-            m = rtlil_module_add_wire(m, rtlil_wire(mux_y, mux_w, 0, 0))
-            let mux_n = "$rvmux$" + str(len(m.cells))
-            let mut mc = rtlil_cell(mux_n, "$mux", 0)
-            mc = rtlil_cell_connect(mc, "A", lhs)
-            mc = rtlil_cell_connect(mc, "B", rer.wire)
-            mc = rtlil_cell_connect(mc, "S", cond_wire)
-            mc = rtlil_cell_connect(mc, "Y", mux_y)
-            m = rtlil_module_add_cell(m, mc)
-            let dn = "$rvff$" + str(len(m.cells))
-            let mut dc = rtlil_cell(dn, "$dff", 0)
-            dc = rtlil_cell_connect(dc, "CLK", clk_wire)
-            dc = rtlil_cell_connect(dc, "D", mux_y)
-            dc = rtlil_cell_connect(dc, "Q", lhs)
-            m = rtlil_module_add_cell(m, dc)
+            // conditional) + Yosys passes/proc/proc_dff.cc behaviour
+            // (no-else single-stmt guarded write → $dffe) + SKY130
+            // `edfxtp_1` datasheet (Apache-2 / CC-BY-4.0).
+            if len(cond_wire) > 0 {
+                let dn = "$rvffe$" + str(len(m.cells))
+                let mut dc = rtlil_cell(dn, "$dffe", 0)
+                dc = rtlil_cell_connect(dc, "CLK", clk_wire)
+                dc = rtlil_cell_connect(dc, "EN", cond_wire)
+                dc = rtlil_cell_connect(dc, "D", rer.wire)
+                dc = rtlil_cell_connect(dc, "Q", lhs)
+                m = rtlil_module_add_cell(m, dc)
+            } else {
+                let dn = "$rvff$" + str(len(m.cells))
+                let mut dc = rtlil_cell(dn, "$dff", 0)
+                dc = rtlil_cell_connect(dc, "CLK", clk_wire)
+                dc = rtlil_cell_connect(dc, "D", rer.wire)
+                dc = rtlil_cell_connect(dc, "Q", lhs)
+                m = rtlil_module_add_cell(m, dc)
+            }
         } else {
             // Combinational guarded write — emit a connect_cond row.
             // pass_proc_mux folds multiple cond-tagged rows on the same
@@ -4075,8 +4083,21 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                 }
             }
             // ── no-else sequential cond-mux (proc-pass sub-step #2b) ──
-            //   `if (en) lhs <= d ;` posedge always → $mux(S=en,
-            //   A=lhs[feedback], B=d, Y=mux_y) + $dff(D=mux_y, Q=lhs).
+            //   `if (en) lhs <= d ;` posedge always → emit `$dffe`
+            //   cell directly (CLK + EN=cond + D=rhs + Q=lhs). The
+            //   prior implementation emitted `$mux(A=lhs[feedback],
+            //   B=d, S=en) + $dff(D=mux_y, Q=lhs)` — semantically
+            //   identical but produces a feedback-MUX+DFF cascade that
+            //   ABC re-maps as `a21oi_1 + clkinv_1` chains instead of
+            //   the dense `sky130_fd_sc_hd__edfxtp_1` (DFF-with-data-
+            //   enable). For rfc_006 §5 router_d4 substrate parity
+            //   each `edfxtp_1` is 30.03 µm² vs `a21oi_1` 5.00 µm² +
+            //   `clkinv_1` 3.75 µm² + feedback cascade overhead.
+            //   @cite IEEE 1364-2005 §9.3 (procedural-assign semantics
+            //   of single-arm `if` in clocked always) + Yosys
+            //   passes/proc/proc_arst.cc + proc_dff.cc behaviour
+            //   (no-else single-stmt → $dffe with enable). SKY130
+            //   PDK `edfxtp_1` pins: CLK, DE (data enable), D, Q.
             //   Combinational no-else is intentionally NOT covered
             //   (would infer a latch — emit nothing → fallback skip).
             if t_ok == 1 && has_else == 0 && is_clocked == 1 && t_op_str == "<=" {
@@ -4086,23 +4107,11 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     let ter = _rv_elab_expr(t_rhs, 0, m, 1, tab)
                     if len(ter.err) == 0 {
                         m = ter.m
-                        let mux_y = _rv_fresh_wire(m)
-                        // rfc_006 §5 Tier-1 (e) Option II — no-else
-                        // single-arm clocked cond-mux: mux_y feeds
-                        // $dff.D with Q=t_lhs (multi-bit register).
-                        let mux_w = _rv_v2_wire_width(m, t_lhs)
-                        m = rtlil_module_add_wire(m, rtlil_wire(mux_y, mux_w, 0, 0))
-                        let mux_n = "$rvmux$" + str(len(m.cells))
-                        let mut mc = rtlil_cell(mux_n, "$mux", 0)
-                        mc = rtlil_cell_connect(mc, "A", t_lhs)
-                        mc = rtlil_cell_connect(mc, "B", ter.wire)
-                        mc = rtlil_cell_connect(mc, "S", cer.wire)
-                        mc = rtlil_cell_connect(mc, "Y", mux_y)
-                        m = rtlil_module_add_cell(m, mc)
-                        let dn = "$rvff$" + str(len(m.cells))
-                        let mut dc = rtlil_cell(dn, "$dff", 0)
+                        let dn = "$rvffe$" + str(len(m.cells))
+                        let mut dc = rtlil_cell(dn, "$dffe", 0)
                         dc = rtlil_cell_connect(dc, "CLK", clk_wire)
-                        dc = rtlil_cell_connect(dc, "D", mux_y)
+                        dc = rtlil_cell_connect(dc, "EN", cer.wire)
+                        dc = rtlil_cell_connect(dc, "D", ter.wire)
                         dc = rtlil_cell_connect(dc, "Q", t_lhs)
                         m = rtlil_module_add_cell(m, dc)
                         let _eg = clk_edge
@@ -4351,22 +4360,19 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                                     emit_ok = 0
                                 } else {
                                     m = ser.m
-                                    let mux_y = _rv_fresh_wire(m)
-                                    // rfc_006 §5 Tier-1 (e) Option II —
-                                    // multi-LHS static-idx clocked write.
-                                    let mux_w = _rv_v2_wire_width(m, slhs)
-                                    m = rtlil_module_add_wire(m, rtlil_wire(mux_y, mux_w, 0, 0))
-                                    let mux_n = "$rvmux$" + str(len(m.cells))
-                                    let mut mc = rtlil_cell(mux_n, "$mux", 0)
-                                    mc = rtlil_cell_connect(mc, "A", slhs)
-                                    mc = rtlil_cell_connect(mc, "B", ser.wire)
-                                    mc = rtlil_cell_connect(mc, "S", cer.wire)
-                                    mc = rtlil_cell_connect(mc, "Y", mux_y)
-                                    m = rtlil_module_add_cell(m, mc)
-                                    let dn = "$rvff$" + str(len(m.cells))
-                                    let mut dc = rtlil_cell(dn, "$dff", 0)
+                                    // rfc_006 §5 Piece-1 — multi-LHS
+                                    // no-else simple/static-idx clocked
+                                    // write: emit `$dffe` directly with
+                                    // EN=cond (cer.wire). Same atlas
+                                    // citation as the single-stmt case
+                                    // above; same area-impact (each
+                                    // statement saves a feedback $mux
+                                    // and binds to `edfxtp_1`).
+                                    let dn = "$rvffe$" + str(len(m.cells))
+                                    let mut dc = rtlil_cell(dn, "$dffe", 0)
                                     dc = rtlil_cell_connect(dc, "CLK", clk_wire)
-                                    dc = rtlil_cell_connect(dc, "D", mux_y)
+                                    dc = rtlil_cell_connect(dc, "EN", cer.wire)
+                                    dc = rtlil_cell_connect(dc, "D", ser.wire)
                                     dc = rtlil_cell_connect(dc, "Q", slhs)
                                     m = rtlil_module_add_cell(m, dc)
                                     let _eg = clk_edge
@@ -5959,21 +5965,55 @@ fn main() {
         }
     }
 
-    // T33 — no-else cond-mux (enable): `always @(posedge clk) if (en) q <= d ;`
-    //       → 1 $mux + 1 $dff (proc-pass core sub-step #2b).
+    // T33 / T_DFFE_INFER — rfc_006 §5 Piece-1: no-else cond-mux (enable):
+    //       `always @(posedge clk) if (en) q <= d ;` → 0 $mux + 0 $dff
+    //       + 1 $dffe with conns CLK=clk, EN=en, D=d, Q=q (DFF-with-
+    //       enable inference). Falsifier for piece-1 read_verilog
+    //       behaviour change (prior emit: 1 $mux + 1 $dff).
     total = total + 1
     let _v33 = "module dffe ( input clk , input en , input d , output reg q ) ; always @ ( posedge clk ) if ( en ) q <= d ; endmodule"
     let _r33 = read_verilog(_v33)
     if _r33.ok != 1 {
-        println("FAIL T33 cond_mux_noelse: " + _r33.message); fails = fails + 1
+        println("FAIL T33 dffe_infer: " + _r33.message); fails = fails + 1
     } else {
         let _m33 = _r33.design.modules[0]
-        if rtlil_count_cells_of_type(_m33, "$mux") != 1 {
-            println("FAIL T33a mux_count got " + str(rtlil_count_cells_of_type(_m33, "$mux")))
+        if rtlil_count_cells_of_type(_m33, "$dffe") != 1 {
+            println("FAIL T33a dffe_count got " + str(rtlil_count_cells_of_type(_m33, "$dffe")))
             fails = fails + 1
         }
-        if rtlil_count_cells_of_type(_m33, "$dff") != 1 {
-            println("FAIL T33b dff_count got " + str(rtlil_count_cells_of_type(_m33, "$dff")))
+        if rtlil_count_cells_of_type(_m33, "$mux") != 0 {
+            println("FAIL T33b mux_count got " + str(rtlil_count_cells_of_type(_m33, "$mux")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(_m33, "$dff") != 0 {
+            println("FAIL T33c dff_count got " + str(rtlil_count_cells_of_type(_m33, "$dff")))
+            fails = fails + 1
+        }
+        // T_DFFE_INFER pin-binding falsifier: confirm CLK/EN/D/Q conns.
+        let mut _t33_ok = 0
+        let mut _t33_ci = 0
+        while _t33_ci < len(_m33.cells) {
+            let _cc = _m33.cells[_t33_ci]
+            if _cc.cell_type == "$dffe" {
+                let mut _sawc = 0
+                let mut _sawe = 0
+                let mut _sawd = 0
+                let mut _sawq = 0
+                let mut _ck = 0
+                while _ck < len(_cc.conns) {
+                    let _cn = _cc.conns[_ck]
+                    if _cn.pin == "CLK" && _cn.net == "clk" { _sawc = 1 }
+                    if _cn.pin == "EN"  && _cn.net == "en"  { _sawe = 1 }
+                    if _cn.pin == "D"   && _cn.net == "d"   { _sawd = 1 }
+                    if _cn.pin == "Q"   && _cn.net == "q"   { _sawq = 1 }
+                    _ck = _ck + 1
+                }
+                _t33_ok = _sawc * _sawe * _sawd * _sawq
+            }
+            _t33_ci = _t33_ci + 1
+        }
+        if _t33_ok != 1 {
+            println("FAIL T33d dffe_conns CLK/EN/D/Q mis-bound (got " + str(_t33_ok) + ")")
             fails = fails + 1
         }
     }
@@ -5999,9 +6039,9 @@ fn main() {
         }
     }
 
-    // T35 — no-else cond-mux inside multi-statement begin/end body.
-    //       Closest router-d4 shape this far: `begin if (en) q <= d ; end`.
-    //       → 1 $mux + 1 $dff.
+    // T35 — rfc_006 §5 Piece-1: no-else cond-mux inside multi-statement
+    //       begin/end body: `begin if (en) q <= d ; end` → 1 $dffe
+    //       (was 1 $mux + 1 $dff pre-piece-1).
     total = total + 1
     let _v35 = "module mbn ( input clk , input en , input d , output reg q ) ; always @ ( posedge clk ) begin if ( en ) q <= d ; end endmodule"
     let _r35 = read_verilog(_v35)
@@ -6009,19 +6049,19 @@ fn main() {
         println("FAIL T35 cond_mux_noelse_in_begin: " + _r35.message); fails = fails + 1
     } else {
         let _m35 = _r35.design.modules[0]
-        if rtlil_count_cells_of_type(_m35, "$mux") != 1 {
-            println("FAIL T35a mux_count got " + str(rtlil_count_cells_of_type(_m35, "$mux")))
+        if rtlil_count_cells_of_type(_m35, "$dffe") != 1 {
+            println("FAIL T35a dffe_count got " + str(rtlil_count_cells_of_type(_m35, "$dffe")))
             fails = fails + 1
         }
-        if rtlil_count_cells_of_type(_m35, "$dff") != 1 {
+        if rtlil_count_cells_of_type(_m35, "$dff") != 0 {
             println("FAIL T35b dff_count got " + str(rtlil_count_cells_of_type(_m35, "$dff")))
             fails = fails + 1
         }
     }
 
-    // T36 — multi-LHS no-else cond-mux (proc-pass sub-step #2c):
+    // T36 — rfc_006 §5 Piece-1: multi-LHS no-else cond-mux:
     //       `if (en) begin x <= a ; y <= b ; end` posedge always →
-    //       per-statement $mux + $dff (2 $mux + 2 $dff).
+    //       per-statement $dffe (2 $dffe). Was 2 $mux + 2 $dff pre-piece-1.
     total = total + 1
     let _v36 = "module mml ( input clk , input en , input a , input b , output reg x , output reg y ) ; always @ ( posedge clk ) if ( en ) begin x <= a ; y <= b ; end endmodule"
     let _r36 = read_verilog(_v36)
@@ -6029,20 +6069,19 @@ fn main() {
         println("FAIL T36 cond_mux_multi_lhs: " + _r36.message); fails = fails + 1
     } else {
         let _m36 = _r36.design.modules[0]
-        if rtlil_count_cells_of_type(_m36, "$mux") != 2 {
-            println("FAIL T36a mux_count got " + str(rtlil_count_cells_of_type(_m36, "$mux")))
+        if rtlil_count_cells_of_type(_m36, "$dffe") != 2 {
+            println("FAIL T36a dffe_count got " + str(rtlil_count_cells_of_type(_m36, "$dffe")))
             fails = fails + 1
         }
-        if rtlil_count_cells_of_type(_m36, "$dff") != 2 {
+        if rtlil_count_cells_of_type(_m36, "$dff") != 0 {
             println("FAIL T36b dff_count got " + str(rtlil_count_cells_of_type(_m36, "$dff")))
             fails = fails + 1
         }
     }
 
-    // T37 — single-stmt indexed-LHS no-else cond-mux (proc-pass sub-step
-    //       #3a, static const index only):
+    // T37 — rfc_006 §5 Piece-1: single-stmt indexed-LHS no-else cond-mux:
     //       `reg q [0:3]; always @(posedge clk) if (en) q[2] <= d ;`
-    //       → 1 $mux + 1 $dff with Q wire = "q[2]".
+    //       → 1 $dffe with Q wire = "q[2]". Was 1 $mux + 1 $dff pre-piece-1.
     total = total + 1
     let _v37 = "module mi ( input clk , input en , input d ) ; reg q [ 0 : 3 ] ; always @ ( posedge clk ) if ( en ) q [ 2 ] <= d ; endmodule"
     let _r37 = read_verilog(_v37)
@@ -6050,11 +6089,11 @@ fn main() {
         println("FAIL T37 cond_mux_indexed_noelse: " + _r37.message); fails = fails + 1
     } else {
         let _m37 = _r37.design.modules[0]
-        if rtlil_count_cells_of_type(_m37, "$mux") != 1 {
-            println("FAIL T37a mux_count got " + str(rtlil_count_cells_of_type(_m37, "$mux")))
+        if rtlil_count_cells_of_type(_m37, "$dffe") != 1 {
+            println("FAIL T37a dffe_count got " + str(rtlil_count_cells_of_type(_m37, "$dffe")))
             fails = fails + 1
         }
-        if rtlil_count_cells_of_type(_m37, "$dff") != 1 {
+        if rtlil_count_cells_of_type(_m37, "$dff") != 0 {
             println("FAIL T37b dff_count got " + str(rtlil_count_cells_of_type(_m37, "$dff")))
             fails = fails + 1
         }
@@ -6655,11 +6694,11 @@ fn main() {
     }
 
     // T51 — sub-step #4h-a: multi-LHS no-else cond-mux with static-idx
-    //       LHS sequence:
+    //       LHS sequence (rfc_006 §5 Piece-1 update):
     //       `reg q [0:1]; always @(posedge clk) if (en) begin
     //          q[0] <= 1; q[1] <= 0; end`
-    //       → 2 $mux + 2 $dff (one $mux/$dff per indexed LHS, each
-    //       feedback-A from q[0]/q[1] respectively).
+    //       → 2 $dffe (one $dffe per indexed LHS, EN=en).
+    //       Was 2 $mux + 2 $dff pre-piece-1.
     total = total + 1
     let _v51 = "module mIH ( input clk , input en , input d ) ; reg q [ 0 : 1 ] ; always @ ( posedge clk ) if ( en ) begin q [ 0 ] <= 1 ; q [ 1 ] <= 0 ; end endmodule"
     let _r51 = read_verilog(_v51)
@@ -6667,13 +6706,13 @@ fn main() {
         println("FAIL T51 multi_lhs_indexed_noelse: " + _r51.message); fails = fails + 1
     } else {
         let _m51 = _r51.design.modules[0]
-        let _mc51 = rtlil_count_cells_of_type(_m51, "$mux")
-        if _mc51 != 2 {
-            println("FAIL T51a mux_count got " + str(_mc51) + " (expected 2)"); fails = fails + 1
+        let _ec51 = rtlil_count_cells_of_type(_m51, "$dffe")
+        if _ec51 != 2 {
+            println("FAIL T51a dffe_count got " + str(_ec51) + " (expected 2)"); fails = fails + 1
         }
         let _dc51 = rtlil_count_cells_of_type(_m51, "$dff")
-        if _dc51 != 2 {
-            println("FAIL T51b dff_count got " + str(_dc51) + " (expected 2)"); fails = fails + 1
+        if _dc51 != 0 {
+            println("FAIL T51b dff_count got " + str(_dc51) + " (expected 0)"); fails = fails + 1
         }
     }
 
@@ -7676,14 +7715,13 @@ fn main() {
     }
 
     // T78 — RFC 006 §5 Tier-1 (e) Option II follow-on: FSM clocked-write
-    // mux_y width-aware. Falsifier:
+    // T78 — rfc_006 §5 Piece-1: post-$dffe inference. Falsifier:
     //   reg [7:0] q;
     //   always @(posedge clk) if (en) q <= d ;  // q, d both width-8
-    // must produce a `$mux` whose Y-wire width = 8 (the LHS register
-    // width) AND a `$dff` whose D pin is connected to that 8-bit mux_y.
-    // Pre-Option-II.5 the FSM mux_y was hardcoded width=1 — the
-    // downstream Option I `.latch` bit-blast would see Q-width=8 but
-    // upstream $mux→tech-map at width=1, creating dangling per-bit nets.
+    // must produce exactly one $dffe whose D pin sources from an 8-bit
+    // wire and whose Q drives the 8-bit register. Pre-piece-1 emitted
+    // 1 $mux + 1 $dff with mux_y width=8; piece-1 collapses the
+    // feedback-MUX into the data-enable on the flop directly.
     total = total + 1
     let _v78 = "module sm78 ( input clk , input en , input [ 7 : 0 ] d , output reg [ 7 : 0 ] q ) ; always @ ( posedge clk ) if ( en ) q <= d ; endmodule"
     let _r78 = read_verilog(_v78)
@@ -7691,20 +7729,20 @@ fn main() {
         println("FAIL T78 fsm_mux_compile: " + _r78.message); fails = fails + 1
     } else {
         let _m78 = _r78.design.modules[0]
-        // T78a — exactly one $mux cell
-        let _xc78 = rtlil_count_cells_of_type(_m78, "$mux")
+        // T78a — exactly one $dffe cell
+        let _xc78 = rtlil_count_cells_of_type(_m78, "$dffe")
         if _xc78 != 1 {
-            println("FAIL T78a mux_count got " + str(_xc78) + " (expected 1)")
+            println("FAIL T78a dffe_count got " + str(_xc78) + " (expected 1)")
             fails = fails + 1
         }
-        // T78b — the $mux's Y-wire width is 8 (matches LHS reg width)
+        // T78b — $dffe's D-wire width is 8 (matches LHS reg width).
         let mut _yw78 = 0
         let mut _ci78 = 0
         while _ci78 < len(_m78.cells) {
-            if _m78.cells[_ci78].cell_type == "$mux" {
+            if _m78.cells[_ci78].cell_type == "$dffe" {
                 let mut _pi78 = 0
                 while _pi78 < len(_m78.cells[_ci78].conns) {
-                    if _m78.cells[_ci78].conns[_pi78].pin == "Y" {
+                    if _m78.cells[_ci78].conns[_pi78].pin == "D" {
                         _yw78 = _rv_v2_wire_width(_m78, _m78.cells[_ci78].conns[_pi78].net)
                     }
                     _pi78 = _pi78 + 1
@@ -7713,7 +7751,7 @@ fn main() {
             _ci78 = _ci78 + 1
         }
         if _yw78 != 8 {
-            println("FAIL T78b fsm_mux_y_width got " + str(_yw78) + " (expected 8)")
+            println("FAIL T78b dffe_d_width got " + str(_yw78) + " (expected 8)")
             fails = fails + 1
         }
     }

@@ -2089,6 +2089,31 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                     mapped_type = "sky130_fd_sc_hd__dfxtp_1"
                     mapped = 1
                 }
+                // rfc_006 §5 Piece-1 — $dffe (DFF with data enable)
+                // → SKY130 `sky130_fd_sc_hd__edfxtp_1`. Pin rename:
+                // EN→DE; CLK/D/Q identical. @cite SKY130 PDK
+                // `edfxtp_1` datasheet (Apache-2 / CC-BY-4.0).
+                // Direct cell push (pin rename mandatory) +
+                // expanded=1 skips the default fall-through at the
+                // bottom of the dispatch loop.
+                if c.cell_type == "$dffe" {
+                    let mut e_conns: [CellConn] = []
+                    let mut epi = 0
+                    while epi < len(c.conns) {
+                        let ecn = c.conns[epi]
+                        let mut epin_out = ecn.pin
+                        if ecn.pin == "EN" { epin_out = "DE" }
+                        e_conns = e_conns.push(CellConn { pin: epin_out, net: ecn.net })
+                        epi = epi + 1
+                    }
+                    new_cells = new_cells.push(Cell {
+                        name: c.name,
+                        cell_type: "sky130_fd_sc_hd__edfxtp_1",
+                        conns: e_conns,
+                        is_mapped: 1,
+                    })
+                    expanded = 1
+                }
                 // RFC 073 Phase 3c — $mux → SKY130 mux2_1 direct
                 // techmap. RTLIL `$mux` has pins A/B/S/Y (Y = A when
                 // S==0, Y = B when S==1). SKY130 `mux2_1` has pins
@@ -2311,13 +2336,36 @@ fn pass_dfflibmap_sky130(d: Design) -> PassResult {
             let c = m.cells[ci]
             let mut mapped_type = c.cell_type
             let mut mapped = c.is_mapped
+            let mut new_conns: [CellConn] = c.conns
             if c.cell_type == "$dff" {
                 mapped_type = "sky130_fd_sc_hd__dfxtp_1"
                 mapped = 1
             }
+            // rfc_006 §5 Piece-1 — $dffe lowering. RTLIL `$dffe`
+            // (DFF-with-data-enable) maps to SKY130
+            // `sky130_fd_sc_hd__edfxtp_1` with pin rename
+            // `$dffe.EN → edfxtp_1.DE`. The other three pins
+            // (CLK/D/Q) match by name. @cite SKY130 PDK datasheet
+            // `sky130_fd_sc_hd__edfxtp_1` (Apache-2 / CC-BY-4.0):
+            // function `D' = (D & DE) | (Q & !DE)`; same semantics
+            // as RTLIL `$dffe`.
+            if c.cell_type == "$dffe" {
+                mapped_type = "sky130_fd_sc_hd__edfxtp_1"
+                mapped = 1
+                let mut renamed: [CellConn] = []
+                let mut pi = 0
+                while pi < len(c.conns) {
+                    let cn = c.conns[pi]
+                    let mut pin_out = cn.pin
+                    if cn.pin == "EN" { pin_out = "DE" }
+                    renamed = renamed.push(CellConn { pin: pin_out, net: cn.net })
+                    pi = pi + 1
+                }
+                new_conns = renamed
+            }
             new_cells = new_cells.push(Cell {
                 name: c.name, cell_type: mapped_type,
-                conns: c.conns, is_mapped: mapped,
+                conns: new_conns, is_mapped: mapped,
             })
             ci = ci + 1
         }
@@ -2588,6 +2636,93 @@ fn _passes_proc_mux_emit_chain(m_in: Module,
                                 rhss:  [str],
                                 base_rhs: str) -> Module {
     let mut m = m_in
+    // rfc_006 §5 Piece-1 — `$dffe` fusion fast-path. When this LHS
+    // has exactly ONE cond-tagged write AND the default arm is the
+    // feedback (base_rhs == lhs), the $mux chain is the single
+    // `$mux(A=lhs, B=rhs_0, S=cond_0) → <lhs>__d` cell which feeds
+    // the pre-existing `$dff(D=<lhs>__d, Q=lhs)` emitted by
+    // `_rv_emit_dff_for_tracked`. That fully matches an enable
+    // register, so we REWRITE the existing $dff in-place to
+    // `$dffe(CLK, EN=cond_0, D=rhs_0, Q=lhs)` and skip both the mux
+    // chain and the unconditional `lhs <= inner_w` connect — saving
+    // a feedback-MUX cell per dffe site and (downstream) binding
+    // those flops to `sky130_fd_sc_hd__edfxtp_1` instead of the
+    // a21oi_1+clkinv_1 cascade ABC otherwise re-derives.
+    // @cite IEEE 1364-2005 §9.2 (non-blocking) + §9.4 (single-arm
+    // if guarded write) + Yosys passes/proc/proc_dff.cc behaviour +
+    // SKY130 `edfxtp_1` datasheet (Apache-2 / CC-BY-4.0).
+    // `read_verilog._rv_emit_dff_for_tracked` lowered each tracked
+    // LHS to a `$dff(D=<lhs>__d, Q=<lhs>)` cell + unconditional
+    // feedback row `connect(<lhs>__d, <lhs>)`. So in this pass the
+    // `lhs` param is `<lhs>__d` and `base_rhs` is the un-suffix'd
+    // `<lhs>`. Detect that structural pair via the `__d` suffix on
+    // `lhs` and `base_rhs + "__d" == lhs`.
+    let mut suffix_ok = 0
+    let mut lhs_q = ""
+    if len(lhs) >= 3 {
+        let tail = lhs.substring(len(lhs) - 3, len(lhs))
+        if tail == "__d" {
+            lhs_q = lhs.substring(0, len(lhs) - 3)
+            if lhs_q == base_rhs { suffix_ok = 1 }
+        }
+    }
+    if len(conds) == 1 && suffix_ok == 1 {
+        let mut found = 0 - 1
+        let mut ci = 0
+        while ci < len(m.cells) {
+            let c = m.cells[ci]
+            if c.cell_type == "$dff" && found < 0 {
+                // match $dff(D=<lhs>__d, Q=<lhs>) by examining conns
+                let mut hd = 0
+                let mut hq = 0
+                let mut pj = 0
+                while pj < len(c.conns) {
+                    if c.conns[pj].pin == "D" && c.conns[pj].net == lhs { hd = 1 }
+                    if c.conns[pj].pin == "Q" && c.conns[pj].net == lhs_q { hq = 1 }
+                    pj = pj + 1
+                }
+                if hd == 1 && hq == 1 { found = ci }
+            }
+            ci = ci + 1
+        }
+        if found >= 0 {
+            // Rebuild the cell list, swapping the matched $dff for a
+            // $dffe (CLK inherits from the original; EN=conds[0];
+            // D=rhss[0]; Q=lhs_q). Skip the mux chain + the
+            // unconditional `lhs <= base_rhs` connect for this LHS —
+            // the dffe is now the sole driver of `lhs_q`.
+            let mut new_cells: [Cell] = []
+            let mut ci2 = 0
+            while ci2 < len(m.cells) {
+                if ci2 == found {
+                    let oc = m.cells[ci2]
+                    let mut clk_net = ""
+                    let mut pk = 0
+                    while pk < len(oc.conns) {
+                        if oc.conns[pk].pin == "CLK" { clk_net = oc.conns[pk].net }
+                        pk = pk + 1
+                    }
+                    let mut nc = rtlil_cell(oc.name, "$dffe", 0)
+                    nc = rtlil_cell_connect(nc, "CLK", clk_net)
+                    nc = rtlil_cell_connect(nc, "EN",  conds[0])
+                    nc = rtlil_cell_connect(nc, "D",   rhss[0])
+                    nc = rtlil_cell_connect(nc, "Q",   lhs_q)
+                    new_cells = new_cells.push(nc)
+                } else {
+                    new_cells = new_cells.push(m.cells[ci2])
+                }
+                ci2 = ci2 + 1
+            }
+            m = Module {
+                name: m.name, wires: m.wires, cells: new_cells,
+                processes: m.processes,
+                connect_lhs: m.connect_lhs,
+                connect_rhs: m.connect_rhs,
+                connect_cond: m.connect_cond,
+            }
+            return m
+        }
+    }
     let mut inner_w = base_rhs
     // rfc_006 §5 closure (2026-05-21): look up the LHS register width
     // so the per-condition mux_y wires inherit the same multi-bit shape.
@@ -2841,6 +2976,64 @@ fn main() {
     }
     if rtlil_count_cells_of_type(r7.design.modules[0], "sky130_fd_sc_hd__dfxtp_1") != 1 {
         println("FAIL T7b dfflibmap_dfxtp"); fails = fails + 1
+    }
+
+    // T_DFFE_LIBMAP — rfc_006 §5 Piece-1 falsifier. Build a module
+    // with a single `$dffe` cell (CLK/EN/D/Q conns), feed through
+    // `pass_dfflibmap_sky130`, confirm the output module contains
+    // exactly 1 `sky130_fd_sc_hd__edfxtp_1` cell and that the `EN`
+    // pin was renamed to `DE`.
+    total = total + 1
+    let mut m_dffe = rtlil_new_module("dffe1")
+    m_dffe = rtlil_module_add_wire(m_dffe, rtlil_wire("clk", 1, 1, 1))
+    m_dffe = rtlil_module_add_wire(m_dffe, rtlil_wire("en",  1, 1, 2))
+    m_dffe = rtlil_module_add_wire(m_dffe, rtlil_wire("d",   1, 1, 3))
+    m_dffe = rtlil_module_add_wire(m_dffe, rtlil_wire("q",   1, 2, 4))
+    let mut c_dffe = rtlil_cell("u_dffe", "$dffe", 0)
+    c_dffe = rtlil_cell_connect(c_dffe, "CLK", "clk")
+    c_dffe = rtlil_cell_connect(c_dffe, "EN",  "en")
+    c_dffe = rtlil_cell_connect(c_dffe, "D",   "d")
+    c_dffe = rtlil_cell_connect(c_dffe, "Q",   "q")
+    m_dffe = rtlil_module_add_cell(m_dffe, c_dffe)
+    let mut d_dffe = rtlil_new_design("T_DFFE_LIBMAP")
+    d_dffe = rtlil_design_add(d_dffe, m_dffe)
+    let r_dffe = pass_dfflibmap_sky130(d_dffe)
+    if r_dffe.ok != 1 {
+        println("FAIL T_DFFE_LIBMAP dfflibmap: " + r_dffe.message); fails = fails + 1
+    } else {
+        let m_dffe_out = r_dffe.design.modules[0]
+        if rtlil_count_cells_of_type(m_dffe_out, "sky130_fd_sc_hd__edfxtp_1") != 1 {
+            println("FAIL T_DFFE_LIBMAP edfxtp_count got "
+                + str(rtlil_count_cells_of_type(m_dffe_out, "sky130_fd_sc_hd__edfxtp_1")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(m_dffe_out, "$dffe") != 0 {
+            println("FAIL T_DFFE_LIBMAP dffe_remains got "
+                + str(rtlil_count_cells_of_type(m_dffe_out, "$dffe")))
+            fails = fails + 1
+        }
+        // Pin-rename check: EN must have become DE.
+        let mut _de_seen = 0
+        let mut _en_seen = 0
+        let mut _di = 0
+        while _di < len(m_dffe_out.cells) {
+            let _dc = m_dffe_out.cells[_di]
+            if _dc.cell_type == "sky130_fd_sc_hd__edfxtp_1" {
+                let mut _dk = 0
+                while _dk < len(_dc.conns) {
+                    if _dc.conns[_dk].pin == "DE" && _dc.conns[_dk].net == "en" { _de_seen = 1 }
+                    if _dc.conns[_dk].pin == "EN" { _en_seen = 1 }
+                    _dk = _dk + 1
+                }
+            }
+            _di = _di + 1
+        }
+        if _de_seen != 1 {
+            println("FAIL T_DFFE_LIBMAP DE_pin_missing (got " + str(_de_seen) + ")"); fails = fails + 1
+        }
+        if _en_seen != 0 {
+            println("FAIL T_DFFE_LIBMAP EN_pin_not_renamed"); fails = fails + 1
+        }
     }
 
     // T8 — opt_clean is opt-equivalent.
