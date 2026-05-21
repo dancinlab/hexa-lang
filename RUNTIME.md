@@ -1094,6 +1094,14 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 82: hexa_tensor_mul_scalar + hexa_hadamard
+
+- ✅ `rt_tensor_mul_scalar(a, s)` and `rt_hadamard(a, b)` ported.
+  Both are pure elementwise float ops — typed-float `*` direct emit
+  via cycle-76
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,296 B
+
 ### 2026-05-21 — step 3 cycle 81: tensor family port (6 fns)
 
 - ✅ Six tensor fns ported in batch via cycle-76 typed-float fast-paths:

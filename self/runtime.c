@@ -10293,6 +10293,14 @@ HexaVal hexa_tensor_dot(HexaVal a, HexaVal b) {
 #endif
 
 // tensor_mul_scalar(a, s): elementwise a[i] * s.
+// Step-3 cycle 82 port — typed-float fast path.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_tensor_mul_scalar(HexaVal a, HexaVal s);
+HexaVal hexa_tensor_mul_scalar(HexaVal a, HexaVal sv) {
+    if (!HX_IS_ARRAY(a)) return hexa_array_new();
+    return rt_tensor_mul_scalar(a, hexa_float(__hx_to_double(sv)));
+}
+#else
 HexaVal hexa_tensor_mul_scalar(HexaVal a, HexaVal sv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(a)) return out;
@@ -10304,9 +10312,12 @@ HexaVal hexa_tensor_mul_scalar(HexaVal a, HexaVal sv) {
     }
     return out;
 }
+#endif
 
 // hadamard(a, b): elementwise product (same semantics as tensor_add but *).
 // Matches interpreter hexa_full.hexa:10496 behavior.
+// Step-3 cycle 82 port.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_hadamard(HexaVal a, HexaVal b) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(a) || !HX_IS_ARRAY(b)) return out;
@@ -10319,6 +10330,13 @@ HexaVal hexa_hadamard(HexaVal a, HexaVal b) {
     }
     return out;
 }
+#else
+extern HexaVal rt_hadamard(HexaVal a, HexaVal b);
+HexaVal hexa_hadamard(HexaVal a, HexaVal b) {
+    if (!HX_IS_ARRAY(a) || !HX_IS_ARRAY(b)) return hexa_array_new();
+    return rt_hadamard(a, b);
+}
+#endif
 
 // silu/gelu/argmax: Step-3 cycle 17 port.
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
