@@ -128,6 +128,44 @@ fn pass_proc(d: Design) -> PassResult {
     }
 }
 
+// ─── memory: consolidate $dff arrays into RTLIL memory cells (stub) ──────
+
+// CLEAN-ROOM (passes/memory/memory.cc, memory_dff.cc, memory_collect.cc):
+// The yosys `memory` super-pass collects `$dff`-array storage and
+// rewrites it into `$mem` cells, then `memory_dff` / `memory_collect`
+// re-expand them shaped for the downstream techmap target. The full
+// pipeline shape is:
+//
+//   proc → memory → opt → memory_collect → opt → techmap → …
+//
+// rfc_006 §5 Source 3b — the substrate yosys pipeline runs `memory`
+// between `proc` and `flatten`; omitting it routes 2-D reg arrays
+// (`fifo_mem[p][d]`) through `flatten` as a flat list of `$dff` cells
+// rather than as a consolidated `$mem`. Substrate yosys 0.33 produces
+// 61847 µm² for router_d4 with this pipeline (matches the cited
+// oracle ±0.14%); our flat-DFF emit produces ~32829 µm² (~47% Δ).
+//
+// Scope-a body: the full memory-consolidation pipeline is out of
+// scope for this iteration (would require $mem cell support in
+// rtlil.hexa, $memrd / $memwr emission in read_verilog, and a
+// memory_dff lowering pass — multi-cycle work). This stub is a
+// structural NO-OP — the design passes through unchanged — but the
+// pipeline `proc → memory → flatten → ...` is now wired so a real
+// memory pass can land in a future cycle without re-touching
+// gate_record.hexa.
+//
+// HONEST g3 note: this stub does NOT close Source 3b on its own; it
+// is the LAYERING wiring that admits the future fix. The area
+// improvement on this iteration comes from Source 3a alone.
+fn pass_memory(d: Design) -> PassResult {
+    let cb = _passes_total_cells(d)
+    return PassResult {
+        ok: 1, design: d,
+        cells_before: cb, cells_after: cb,
+        message: "memory (stub — pipeline wired; consolidation deferred)"
+    }
+}
+
 // ─── flatten: inline submodule instances (no-op in current subset) ───────
 
 // CLEAN-ROOM (passes/cmds/flatten.cc): flatten resolves cell `cell_type`
@@ -1692,6 +1730,135 @@ fn _passes_lower_mod_cell(c: Cell) -> ModLowerResult {
     }
 }
 
+// CLEAN-ROOM (rfc_006 §5 Source 3a — multi-bit bitwise per-bit expansion):
+//   Look up the wire width referenced by the cell's plain Y pin (and
+//   plain A/B pins) — when greater than 1, the cell represents a
+//   parallel W-bit bitwise op. The existing 1-to-1 rename path emits a
+//   single SKY130 cell whose pin-net text references the multi-bit
+//   wire; ABC's `read_blif` then sees N gates driving the same multi-
+//   bit output and folds them to constant-0 (BLIF `.gate` semantics —
+//   one driver per single-bit net; multi-driver collapse is an
+//   undefined-net heuristic). Per-bit expansion eliminates the
+//   ambiguity:  for k ∈ [0..W), emit one SKY130 cell with inputs and
+//   output suffixed `__b<k>`. Matches the `.latch` per-bit emit shape
+//   already established in `abc_emit_blif` for $dff (abc_map.hexa
+//   L335-345). Width is read from the Y wire (output canonical).
+//   Single-bit cells skip the expansion (the existing rename path
+//   handles them).
+//
+// Returns:
+//   ok=1 — expansion succeeded; caller should splice `cells` + `wires`.
+//   ok=0 — cell is single-bit (or width-unknown); caller falls back to
+//          the 1-to-1 rename path.
+struct BitwiseBlastResult {
+    cells: [Cell],
+    wires: [Wire],
+    ok:    int,
+}
+
+fn _passes_lower_bitwise_cell(c: Cell, m: Module, mapped_type: str, unary: int) -> BitwiseBlastResult {
+    // Y is the canonical width source — plain "Y" pin only (we don't
+    // bit-blast already-bit-indexed Y pins; those flow through
+    // _passes_lower_eq_cell / _passes_lower_ne_cell which already emit
+    // unique per-bit outputs).
+    let y_net = _passes_pin_net(c, "Y")
+    if y_net == "" { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+    let yi = rtlil_find_wire(m, y_net)
+    if yi < 0 { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+    let w = m.wires[yi].width
+    if w <= 1 { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+
+    let a_net = _passes_pin_net(c, "A")
+    let b_net = _passes_pin_net(c, "B")
+    if a_net == "" { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+    if unary == 0 {
+        if b_net == "" { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+    }
+
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+    let mut k = 0
+    while k < w {
+        let bs = str(k)
+        let y_bit = y_net + "__b" + bs
+        let a_bit = a_net + "__b" + bs
+        // Add per-bit Y wire (input bit wires resolve via the existing
+        // module wire — read_verilog 2-D LHS path declares them
+        // implicitly; if absent the no-dangling invariant still holds
+        // because ABC's read_blif tolerates flat-bit net names that
+        // aren't pre-declared as `.inputs`).
+        out_wires = out_wires.push(rtlil_wire(y_bit, 1, 0, 0))
+        let mut cc = rtlil_cell(c.name + "$b" + bs, mapped_type, 1)
+        cc = rtlil_cell_connect(cc, "A", a_bit)
+        if unary == 0 {
+            let b_bit = b_net + "__b" + bs
+            cc = rtlil_cell_connect(cc, "B", b_bit)
+        }
+        // SKY130 output pin is X for and2_1 / or2_1 / xor2_1, Y for inv_1.
+        let mut out_pin = "X"
+        if mapped_type == "sky130_fd_sc_hd__inv_1" { out_pin = "Y" }
+        cc = rtlil_cell_connect(cc, out_pin, y_bit)
+        out_cells = out_cells.push(cc)
+        k = k + 1
+    }
+    return BitwiseBlastResult { cells: out_cells, wires: out_wires, ok: 1 }
+}
+
+// CLEAN-ROOM (rfc_006 §5 Source 3a follow-on, 2026-05-21): per-bit
+// expansion for multi-bit `$mux` cells lowered to SKY130 `mux2_1`.
+//
+// `$mux` has pins A/B/S/Y where S is INVARIANTLY 1-bit (the selector)
+// and A/B/Y share the data-port width. SKY130 `mux2_1` has pins
+// A0/A1/S/X (function `(A0 & !S) | (A1 & S)`). For an N-bit mux we
+// emit N parallel `mux2_1` cells, all sharing the SAME 1-bit S net,
+// with per-bit data: A0=A__b<k> / A1=B__b<k> / X=Y__b<k>.
+//
+// This complements `_passes_lower_bitwise_cell` for the FSM data-mux
+// path (`$mux` driving `$dff.D` where the LHS reg is multi-bit). The
+// RFC 006 §5 Option II follow-on (commit `fe76656d`) annotated the
+// mux_y wires with the correct multi-bit width via _rv_v2_wire_width;
+// this helper consumes that annotation to emit per-bit cells whose
+// X output nets match the per-bit `.latch` Q-pin names emitted by
+// `abc_emit_blif` Option I (`<base>__b<k>`).
+//
+// Returns:
+//   ok=1 — expansion succeeded (w > 1); splice cells + wires.
+//   ok=0 — single-bit mux; caller falls back to the 1-to-1 rename path.
+fn _passes_lower_mux_cell(c: Cell, m: Module) -> BitwiseBlastResult {
+    let y_net = _passes_pin_net(c, "Y")
+    if y_net == "" { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+    let yi = rtlil_find_wire(m, y_net)
+    if yi < 0 { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+    let w = m.wires[yi].width
+    if w <= 1 { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+
+    let a_net = _passes_pin_net(c, "A")
+    let b_net = _passes_pin_net(c, "B")
+    let s_net = _passes_pin_net(c, "S")
+    if a_net == "" { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+    if b_net == "" { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+    if s_net == "" { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+    let mut k = 0
+    while k < w {
+        let bs = str(k)
+        let y_bit = y_net + "__b" + bs
+        let a_bit = a_net + "__b" + bs
+        let b_bit = b_net + "__b" + bs
+        out_wires = out_wires.push(rtlil_wire(y_bit, 1, 0, 0))
+        let mut cc = rtlil_cell(c.name + "$b" + bs, "sky130_fd_sc_hd__mux2_1", 1)
+        cc = rtlil_cell_connect(cc, "A0", a_bit)
+        cc = rtlil_cell_connect(cc, "A1", b_bit)
+        cc = rtlil_cell_connect(cc, "S", s_net)  // shared 1-bit selector
+        cc = rtlil_cell_connect(cc, "X", y_bit)
+        out_cells = out_cells.push(cc)
+        k = k + 1
+    }
+    return BitwiseBlastResult { cells: out_cells, wires: out_wires, ok: 1 }
+}
+
 fn pass_techmap_sky130(d: Design) -> PassResult {
     let cb = _passes_total_cells(d)
     let mut out: [Module] = []
@@ -1716,18 +1883,78 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                 if c.cell_type == "$and" {
                     mapped_type = "sky130_fd_sc_hd__and2_1"
                     mapped = 1
+                    // rfc_006 §5 Source 3a — per-bit expansion when
+                    // operands are multi-bit. The 1-to-1 rename path
+                    // below still fires for single-bit cells (the
+                    // helper returns ok=0).
+                    let br = _passes_lower_bitwise_cell(c, m, mapped_type, 0)
+                    if br.ok == 1 {
+                        let mut bi = 0
+                        while bi < len(br.cells) {
+                            new_cells = new_cells.push(br.cells[bi])
+                            bi = bi + 1
+                        }
+                        let mut bwi = 0
+                        while bwi < len(br.wires) {
+                            new_wires = new_wires.push(br.wires[bwi])
+                            bwi = bwi + 1
+                        }
+                        expanded = 1
+                    }
                 }
                 if c.cell_type == "$or" {
                     mapped_type = "sky130_fd_sc_hd__or2_1"
                     mapped = 1
+                    let br = _passes_lower_bitwise_cell(c, m, mapped_type, 0)
+                    if br.ok == 1 {
+                        let mut bi = 0
+                        while bi < len(br.cells) {
+                            new_cells = new_cells.push(br.cells[bi])
+                            bi = bi + 1
+                        }
+                        let mut bwi = 0
+                        while bwi < len(br.wires) {
+                            new_wires = new_wires.push(br.wires[bwi])
+                            bwi = bwi + 1
+                        }
+                        expanded = 1
+                    }
                 }
                 if c.cell_type == "$xor" {
                     mapped_type = "sky130_fd_sc_hd__xor2_1"
                     mapped = 1
+                    let br = _passes_lower_bitwise_cell(c, m, mapped_type, 0)
+                    if br.ok == 1 {
+                        let mut bi = 0
+                        while bi < len(br.cells) {
+                            new_cells = new_cells.push(br.cells[bi])
+                            bi = bi + 1
+                        }
+                        let mut bwi = 0
+                        while bwi < len(br.wires) {
+                            new_wires = new_wires.push(br.wires[bwi])
+                            bwi = bwi + 1
+                        }
+                        expanded = 1
+                    }
                 }
                 if c.cell_type == "$not" {
                     mapped_type = "sky130_fd_sc_hd__inv_1"
                     mapped = 1
+                    let br = _passes_lower_bitwise_cell(c, m, mapped_type, 1)
+                    if br.ok == 1 {
+                        let mut bi = 0
+                        while bi < len(br.cells) {
+                            new_cells = new_cells.push(br.cells[bi])
+                            bi = bi + 1
+                        }
+                        let mut bwi = 0
+                        while bwi < len(br.wires) {
+                            new_wires = new_wires.push(br.wires[bwi])
+                            bwi = bwi + 1
+                        }
+                        expanded = 1
+                    }
                 }
                 if c.cell_type == "$dff" {
                     mapped_type = "sky130_fd_sc_hd__dfxtp_1"
@@ -1747,26 +1974,46 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                 // cell footprint (Apache-2 / CC-BY-4.0) + Yosys
                 // techlibs/sky130/sky130_fd_sc_hd.lib mapping.
                 if c.cell_type == "$mux" {
-                    let mut new_conns: [CellConn] = []
-                    let mut mi2 = 0
-                    while mi2 < len(c.conns) {
-                        let cn = c.conns[mi2]
-                        let mut pin_out = cn.pin
-                        if cn.pin == "A" { pin_out = "A0" }
-                        if cn.pin == "B" { pin_out = "A1" }
-                        if cn.pin == "Y" { pin_out = "X" }
-                        // S stays as S; any other pin (e.g. bit-indexed
-                        // for future multi-bit mux) passes through.
-                        new_conns = new_conns.push(CellConn { pin: pin_out, net: cn.net })
-                        mi2 = mi2 + 1
+                    // rfc_006 §5 Source 3a follow-on — per-bit blast for
+                    // multi-bit $mux (matches Option II + FSM mux_y width
+                    // annotation, commit fe76656d). The 1-to-1 rename path
+                    // below still fires for single-bit mux cells (the
+                    // helper returns ok=0 on w=1 / unknown wire).
+                    let mr = _passes_lower_mux_cell(c, m)
+                    if mr.ok == 1 {
+                        let mut mxi = 0
+                        while mxi < len(mr.cells) {
+                            new_cells = new_cells.push(mr.cells[mxi])
+                            mxi = mxi + 1
+                        }
+                        let mut mxwi = 0
+                        while mxwi < len(mr.wires) {
+                            new_wires = new_wires.push(mr.wires[mxwi])
+                            mxwi = mxwi + 1
+                        }
+                        expanded = 1
+                    } else {
+                        let mut new_conns: [CellConn] = []
+                        let mut mi2 = 0
+                        while mi2 < len(c.conns) {
+                            let cn = c.conns[mi2]
+                            let mut pin_out = cn.pin
+                            if cn.pin == "A" { pin_out = "A0" }
+                            if cn.pin == "B" { pin_out = "A1" }
+                            if cn.pin == "Y" { pin_out = "X" }
+                            // S stays as S; any other pin (e.g. bit-indexed
+                            // for future multi-bit mux) passes through.
+                            new_conns = new_conns.push(CellConn { pin: pin_out, net: cn.net })
+                            mi2 = mi2 + 1
+                        }
+                        new_cells = new_cells.push(Cell {
+                            name: c.name,
+                            cell_type: "sky130_fd_sc_hd__mux2_1",
+                            conns: new_conns,
+                            is_mapped: 1,
+                        })
+                        expanded = 1
                     }
-                    new_cells = new_cells.push(Cell {
-                        name: c.name,
-                        cell_type: "sky130_fd_sc_hd__mux2_1",
-                        conns: new_conns,
-                        is_mapped: 1,
-                    })
-                    expanded = 1
                 }
                 if c.cell_type == "$eq" {
                     let lr = _passes_lower_eq_cell(c)
@@ -3603,6 +3850,87 @@ fn main() {
         println("FAIL T35d handoff_lastwins got "
             + r_t35b.design.modules[0].connect_rhs[0]
             + " (want r)"); fails = fails + 1
+    }
+
+    // T_BIT_OUTPUT — rfc_006 §5 Source 3a falsifier. A 3-bit $xnor-shaped
+    // cell (we use $xor here — same shape, simpler to reuse the existing
+    // generic SKY130 xor2_1 mapping; the 3a fix applies identically to
+    // $xor / $and / $or / $not on the plain A/B/Y pin shape). The cell
+    // declares plain A/B/Y pins, each wired to a width=3 module wire.
+    // After pass_techmap_sky130, expect:
+    //   • exactly 3 sky130_fd_sc_hd__xor2_1 cells
+    //   • each cell's X-pin net is unique (`y_net__b0`, `y_net__b1`,
+    //     `y_net__b2`) — proves the bit-output suffixing landed.
+    total = total + 1
+    let mut m_bo = rtlil_new_module("bo")
+    m_bo = rtlil_module_add_wire(m_bo, rtlil_wire("a3", 3, 1, 1))
+    m_bo = rtlil_module_add_wire(m_bo, rtlil_wire("b3", 3, 1, 2))
+    m_bo = rtlil_module_add_wire(m_bo, rtlil_wire("y3", 3, 2, 3))
+    let mut c_bo = rtlil_cell("u_bo", "$xor", 0)
+    c_bo = rtlil_cell_connect(c_bo, "A", "a3")
+    c_bo = rtlil_cell_connect(c_bo, "B", "b3")
+    c_bo = rtlil_cell_connect(c_bo, "Y", "y3")
+    m_bo = rtlil_module_add_cell(m_bo, c_bo)
+    let mut d_bo = rtlil_new_design("bo_d")
+    d_bo = rtlil_design_add(d_bo, m_bo)
+    let r_bo = pass_techmap_sky130(d_bo)
+    if r_bo.ok != 1 {
+        println("FAIL T_BIT_OUTPUT techmap: " + r_bo.message); fails = fails + 1
+    }
+    let xor_count = rtlil_count_cells_of_type(r_bo.design.modules[0], "sky130_fd_sc_hd__xor2_1")
+    if xor_count != 3 {
+        println("FAIL T_BIT_OUTPUT xor_count got " + str(xor_count)
+            + " (want 3 — one sky130 xor2_1 per bit)"); fails = fails + 1
+    }
+    // verify per-bit unique X output: walk all 3 cells, collect X-pin nets
+    let mut x_nets: [str] = []
+    let mut cbi = 0
+    while cbi < len(r_bo.design.modules[0].cells) {
+        let cb_c = r_bo.design.modules[0].cells[cbi]
+        if cb_c.cell_type == "sky130_fd_sc_hd__xor2_1" {
+            let xn = _passes_pin_net(cb_c, "X")
+            x_nets = x_nets.push(xn)
+        }
+        cbi = cbi + 1
+    }
+    if len(x_nets) != 3 {
+        println("FAIL T_BIT_OUTPUT x_nets_len got " + str(len(x_nets))); fails = fails + 1
+    } else {
+        // each X-net must end in `__b0` / `__b1` / `__b2`, all distinct.
+        let mut seen_b0 = 0
+        let mut seen_b1 = 0
+        let mut seen_b2 = 0
+        let mut xi = 0
+        while xi < 3 {
+            let xn = x_nets[xi]
+            if xn == "y3__b0" { seen_b0 = seen_b0 + 1 }
+            if xn == "y3__b1" { seen_b1 = seen_b1 + 1 }
+            if xn == "y3__b2" { seen_b2 = seen_b2 + 1 }
+            xi = xi + 1
+        }
+        if seen_b0 != 1 {
+            println("FAIL T_BIT_OUTPUT b0_seen got " + str(seen_b0)); fails = fails + 1
+        }
+        if seen_b1 != 1 {
+            println("FAIL T_BIT_OUTPUT b1_seen got " + str(seen_b1)); fails = fails + 1
+        }
+        if seen_b2 != 1 {
+            println("FAIL T_BIT_OUTPUT b2_seen got " + str(seen_b2)); fails = fails + 1
+        }
+    }
+    // Verify input A pin also bit-suffixed.
+    let mut a_b0 = 0
+    let mut ci2 = 0
+    while ci2 < len(r_bo.design.modules[0].cells) {
+        let cc = r_bo.design.modules[0].cells[ci2]
+        if cc.cell_type == "sky130_fd_sc_hd__xor2_1" {
+            if _passes_pin_net(cc, "A") == "a3__b0" { a_b0 = a_b0 + 1 }
+        }
+        ci2 = ci2 + 1
+    }
+    if a_b0 != 1 {
+        println("FAIL T_BIT_OUTPUT a_b0_seen got " + str(a_b0)
+            + " (want 1 — bit-0 cell's A pin should be `a3__b0`)"); fails = fails + 1
     }
 
     if fails > 0 {
