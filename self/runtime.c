@@ -2969,10 +2969,22 @@ HexaVal hexa_str_parse_int(HexaVal s) {
     return hexa_int((int64_t)v);
 }
 
+// Step-3 cycle 73 port — strtod replacement. Hexa source parses
+// whitespace + sign + integer + optional fractional + optional
+// exponent. Edge cases (subnormals/INF/NaN/hex floats) fall short of
+// libm strtod — acceptable for typical user-input parse.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_parse_float(HexaVal s) {
     if (!HX_IS_STR(s)) return hexa_float(0.0);
     return hexa_float(strtod(HX_STR(s), NULL));
 }
+#else
+extern HexaVal rt_str_parse_float(HexaVal s);
+HexaVal hexa_str_parse_float(HexaVal s) {
+    if (!HX_IS_STR(s)) return hexa_float(0.0);
+    return rt_str_parse_float(s);
+}
+#endif
 
 // M1 full · str_ext Step 5 (hxa-20260423-003): rt_str_trim_start/end —
 // codegen emits rt_str_* directly; hexa_str_trim_start/end shims retired.

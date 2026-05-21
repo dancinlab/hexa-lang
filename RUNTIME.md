@@ -1094,6 +1094,21 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 73: hexa_str_parse_float (strtod replacement)
+
+- ✅ `hexa_str_parse_float` (self/runtime.c:2963) ported. Replaces
+  libc `strtod` with hexa-source parser: optional whitespace + sign
+  + integer + optional fractional + optional exponent
+- Bit-exact for common decimal cases (well-formed floats within
+  ±2^53 mantissa, exp ≤ ~308 limited by `pow10` loop). Edge cases
+  not handled: subnormals, "INF"/"NaN" strings, hex floats (0x1p10),
+  thousands separators
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,165,496 B
+- Note: ubu-2 hexa_v2 is stale (older codegen lacks byte_at + `as`
+  binop handling) — cross-parity validation skipped for this cycle.
+  Mac hexa_v2 path verified
+
 ### 2026-05-21 — step 3 cycle 72: hexa_char_code (byte at idx, 0 on OOB)
 
 - ✅ `hexa_char_code` (self/runtime.c:2540) ported. Distinct from
