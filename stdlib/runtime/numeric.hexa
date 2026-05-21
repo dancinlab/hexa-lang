@@ -1129,6 +1129,102 @@ pub fn rt_valstruct_repr(v: HexaVal) -> HexaVal {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Step 5 #3 cycle C2 — to_string ARRAY/MAP container branches port
+// ─────────────────────────────────────────────────────────────────────
+// C body for _hexa_to_string_rec (runtime_core.c:5387/5406) iterates
+// HX_ARR_ITEMS/HexaMapTable.order_{keys,vals} and recursively renders
+// each element via _hexa_to_string_rec(elem, depth+1). The hexa-source
+// port uses __arr_raw_len(v) (Step 5 #2 codegen builtin) for the array
+// length (avoids hexa_len recursion through rt_len), m.keys() + m.get(k)
+// for map traversal (lower to hexa_map_keys + hexa_map_get — neither
+// re-enters hexa_to_string).
+//
+// Element recursion: for nested arrays/maps, calls rt_to_string_array/
+// rt_to_string_map directly with depth+1, preserving the depth-8 cap
+// for true cyclic-guard semantics. For scalars (int/float/bool/void/
+// string) + ValStruct, dispatches to to_string(elem) which re-enters
+// the C hexa_to_string wrapper — TAG_VALSTRUCT keeps the C
+// _hexa_to_string_rec path, scalars dispatch to rt_to_string_scalar,
+// and the small-int cache hits early.
+//
+// @no_arena: caller (C hexa_to_string) is not arena-wrapped; these fns
+// must share the caller's arena scope so the returned HexaVal string
+// stays live after fn return. Step 5 #1 (b2ae2e9d) made hexa_str_concat
+// arena-safe so the `+` accumulator works without per-fn arena enter.
+//
+// Caps: depth >= 8 returns "[...]" / "{...}" sentinel (matches C);
+// element cap = 64 with `, ... (N more)` overflow trailer.
+// Note: `__arr_raw_len(...)` lowers to `hexa_int((int64_t)HX_ARR_LEN(...))`
+// (Step 5 #2 inline codegen builtin) — returns a TAG_INT HexaVal without
+// dispatching through hexa_len → rt_len (which would recurse here via
+// codegen_c2.hexa:4238 → hexa_int(hexa_len(...))). All loop arithmetic
+// stays in HexaVal space: `<`/`>` → hexa_cmp_lt/hexa_cmp_gt, `+` →
+// hexa_add. `let n: int = X as int` is avoided because the `as int`
+// cast path on a non-known-int RHS would still route through
+// hexa_to_int — adequate, but using raw HexaVal saves one indirection.
+@no_arena
+pub fn rt_to_string_array(arr: HexaVal, depth: int) -> HexaVal {
+    if depth >= 8 { return "[...]" }
+    let n = __arr_raw_len(arr)
+    let cap = 64
+    let mut shown = n
+    if shown > cap { shown = cap }
+    let mut out = "["
+    let mut i = 0
+    while i < shown {
+        if i > 0 { out = out + ", " }
+        let elem = arr[i]
+        let t = type_of(elem)
+        if t == "array" {
+            out = out + rt_to_string_array(elem, depth + 1)
+        } else if t == "map" {
+            out = out + rt_to_string_map(elem, depth + 1)
+        } else {
+            out = out + to_string(elem)
+        }
+        i = i + 1
+    }
+    if n > cap {
+        out = out + ", ... (" + _rt_int_to_dec_str(n - cap) + " more)"
+    }
+    out = out + "]"
+    return out
+}
+
+@no_arena
+pub fn rt_to_string_map(m: HexaVal, depth: int) -> HexaVal {
+    if depth >= 8 { return "{...}" }
+    let keys = m.keys()
+    let n = __arr_raw_len(keys)
+    let cap = 64
+    let mut shown = n
+    if shown > cap { shown = cap }
+    let mut out = "{"
+    let mut i = 0
+    while i < shown {
+        if i > 0 { out = out + ", " }
+        let k = keys[i]
+        out = out + k
+        out = out + ": "
+        let v = m.get(k)
+        let t = type_of(v)
+        if t == "array" {
+            out = out + rt_to_string_array(v, depth + 1)
+        } else if t == "map" {
+            out = out + rt_to_string_map(v, depth + 1)
+        } else {
+            out = out + to_string(v)
+        }
+        i = i + 1
+    }
+    if n > cap {
+        out = out + ", ... (" + _rt_int_to_dec_str(n - cap) + " more)"
+    }
+    out = out + "}"
+    return out
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Step 4 cycle 99 — hexa_len polymorphic port (잔여 #1)
 // ─────────────────────────────────────────────────────────────────────
 // C body (runtime_core.c:2055) was the 3-way tag-dispatch:

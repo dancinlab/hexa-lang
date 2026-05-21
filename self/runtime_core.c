@@ -5303,13 +5303,33 @@ static HexaVal _hexa_to_string_rec(HexaVal v, int depth);
 
 // Step-4 cycle 96 port — scalar branches (int [outside cache] / float
 // [integer-valued in range] / bool / void / str) dispatch to hexa source.
-// Small-int cache + non-integer float [%g] + array/map/valstruct stay C.
+// Small-int cache + non-integer float [%g] + valstruct stay C.
+// Step 5 #3 cycle C2 — TAG_ARRAY/TAG_MAP branches dispatch to hexa-source
+// rt_to_string_array / rt_to_string_map. Null arr_ptr / NULL map table
+// guards stay C-side (avoid hexa-source NULL deref hazard); depth=0
+// initial argument matches the legacy C entry-point.
 #ifdef HEXA_HAS_HEXA_RT_STDLIB
 extern HexaVal rt_to_string_scalar(HexaVal v);
+extern HexaVal rt_to_string_array(HexaVal arr, HexaVal depth);
+extern HexaVal rt_to_string_map(HexaVal m, HexaVal depth);
 HexaVal hexa_to_string(HexaVal v) {
-    /* Array/Map/ValStruct: recursive C body. */
-    if (HX_IS_VALSTRUCT(v) || HX_TAG(v) == TAG_ARRAY || HX_TAG(v) == TAG_MAP) {
+    /* ValStruct: recursive C body (full minimal-repr port lives in
+     * rt_valstruct_repr; _hexa_to_string_rec handles the HX_VS NULL
+     * guard + dispatch). */
+    if (HX_IS_VALSTRUCT(v)) {
         return _hexa_to_string_rec(v, 0);
+    }
+    /* Array: hexa-source port (Step 5 #3 cycle C2). NULL arr_ptr stays
+     * C-side to avoid hexa NULL-deref. */
+    if (HX_TAG(v) == TAG_ARRAY) {
+        if (!v.arr_ptr) return hexa_str("[<null>]");
+        return rt_to_string_array(v, hexa_int(0));
+    }
+    /* Map: hexa-source port (Step 5 #3 cycle C2). NULL table stays
+     * C-side ("{}" sentinel). */
+    if (HX_TAG(v) == TAG_MAP) {
+        if (!HX_MAP_TBL(v)) return hexa_str("{}");
+        return rt_to_string_map(v, hexa_int(0));
     }
     /* Small-int cache fast path. */
     if (HX_IS_INT(v) &&
