@@ -1094,6 +1094,20 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 69: hexa_array_sort_by (callback key-extractor, insertion sort)
+
+- ✅ `hexa_array_sort_by` (self/runtime_core.c:4540) ported. Uses
+  stable insertion sort with parallel `sorted_keys`/`sorted_items`
+  arrays. Keys computed once per element via `key_fn(item)` callback.
+  Comparison goes through `hexa_cmp_le` (handles int/float/string)
+- Stable via `sorted_keys[j] <= k` test (equal keys preserve original
+  order — matches the C body's "ties → left first" merge sort
+  semantic)
+- O(n²) vs the C body's O(n log n) bottom-up merge sort. Acceptable
+  for small arrays on the hot self-host path
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,984 B
+
 ### 2026-05-21 — step 3 cycle 68: hexa_array_enumerate (pair-output, no-callback)
 
 - ✅ `hexa_array_enumerate` (3347) ported. Builds an array of
