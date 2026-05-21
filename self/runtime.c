@@ -10001,23 +10001,6 @@ HexaVal hexa_dict_keys(HexaVal m) {
     return hexa_map_keys(m);
 }
 
-// Step 5 #4 (2026-05-22): __fd_write_bytes(fd, s) — POSIX write(2) thin shim.
-// Companion to the codegen_c2.hexa inline-emit handler. The SSOT codegen
-// branch returns `hexa_int((int64_t)write(...))` inline; the shipped
-// hexa_v2 binary still emits this builtin as a hexa_call2() reference
-// (binary regen pending — Phase C.2 merge gap, see self/main.hexa
-// cmd_regen_cc() trailing comment). The _Generic dispatcher in
-// runtime_core.c routes `hexa_call2(__fd_write_bytes, ...)` to
-// __hexa_call2_fp2 when __fd_write_bytes is a function-pointer C symbol
-// — exactly what this definition provides. Both activation paths
-// converge on the same observable behaviour.
-//
-// Used by stdlib/runtime/io.hexa rt_print / rt_println / rt_eprint /
-// rt_eprintln (RUNTIME.md step 3 cycle-76, IO real-port unblocker).
-HexaVal __fd_write_bytes(HexaVal fd, HexaVal s) {
-    return hexa_int((int64_t)write((int)HX_INT(fd), HX_STR(s), (size_t)HX_STRLEN(s)));
-}
-
 // FIX-A (Anima stdlib unblock, 2026-04-19) ─────────────────────────
 // 10 builtins required across ~230 Anima/serve/train .hexa files
 // (read_stdin ×53, json_parse ×119, json_stringify ×37, json_encode ×5,

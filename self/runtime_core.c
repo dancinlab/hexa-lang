@@ -5182,25 +5182,6 @@ void hexa_print_val(HexaVal v) {
     }
 }
 
-// RUNTIME.md step-3 잔여 #7 (2026-05-22) — hexa_println / hexa_eprint /
-// hexa_eprintln may route to hexa-source rt_print/rt_println/rt_eprint/
-// rt_eprintln (stdlib/runtime/io.hexa) when HEXA_HAS_HEXA_RT_STDLIB is
-// defined. The hexa bodies coerce via to_string(v) + emit raw bytes via
-// __fd_write_bytes (runtime.c shim). C bodies retained for the smoke
-// link path (standalone runtime.c, no stdlib import) and as fallback.
-//
-// Note: `print(v)` (no-newline stdout) lowers via codegen to
-// hexa_print_val(v), which is `void` and has no HexaVal entry point —
-// it stays C-only this cycle. The print/eprint asymmetry is pre-existing
-// (eprint exists as HexaVal symbol because P7-6 builtin needs the
-// uniform i64-ret IR shape; print never needed one because codegen
-// special-cases it).
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-extern HexaVal rt_println(HexaVal v);
-void hexa_println(HexaVal v) {
-    (void)rt_println(v);
-}
-#else
 void hexa_println(HexaVal v) {
     hexa_print_val(v); printf("\n");
     // 2026-05-06 — auto-fflush. setvbuf constructor가 일부 환경 (macOS Tahoe
@@ -5209,19 +5190,12 @@ void hexa_println(HexaVal v) {
     // opt-out: HEXA_NO_AUTOFLUSH=1 (bulk-output benchmark용).
     if (!hxlcl_getenv("HEXA_NO_AUTOFLUSH")) fflush(stdout);
 }
-#endif
 
 // P7-6 builtin (2026-04-18): stderr counterpart to hexa_println. Used
 // by user code that needs to emit diagnostics without polluting stdout
 // (e.g. CLI tools whose stdout is a result stream piped to another
 // process). Returns void-equivalent HexaVal so it can slot into the
 // uniform i64-ret IR shape that the native_build dispatcher emits.
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-extern HexaVal rt_eprintln(HexaVal v);
-HexaVal hexa_eprintln(HexaVal v) {
-    return rt_eprintln(v);
-}
-#else
 HexaVal hexa_eprintln(HexaVal v) {
     // Route through the same hexa_print_val logic but redirect the
     // writes to stderr. We cannot reuse hexa_print_val directly because
@@ -5268,7 +5242,6 @@ HexaVal hexa_eprintln(HexaVal v) {
     if (!hxlcl_getenv("HEXA_NO_AUTOFLUSH")) fflush(stderr);
     return hexa_void();
 }
-#endif
 
 // 2026-04-20 builtin: stderr + NO trailing newline (print/println symmetry).
 // Mirrors hexa_eprintln byte-for-byte except the "\n" suffix is dropped from
@@ -5277,12 +5250,6 @@ HexaVal hexa_eprintln(HexaVal v) {
 //   self/ml/corpus_clean.hexa
 // which pre-2026-04-20 fell through to hexa_call1(eprint,...) and produced a
 // clang link error in AOT. Interp path also route-checks this name.
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-extern HexaVal rt_eprint(HexaVal v);
-HexaVal hexa_eprint(HexaVal v) {
-    return rt_eprint(v);
-}
-#else
 HexaVal hexa_eprint(HexaVal v) {
     const char* __ff = __hexa_print_float_fmt();
     if (HX_IS_VALSTRUCT(v) && HX_VS(v)) {
@@ -5319,7 +5286,6 @@ HexaVal hexa_eprint(HexaVal v) {
     }
     return hexa_void();
 }
-#endif
 
 // ── to_string ────────────────────────────────────────────
 
@@ -5589,26 +5555,8 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
     // eval_binop float-coerce path (hexa_full.hexa:7867). 이전엔
     // tag 불일치 즉시 false → `2 == 2.0` AOT=false / interp=true
     // divergence 를 유발.
-    if (HX_IS_INT(a) && HX_IS_FLOAT(b)) {
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-        /* Step-3 cycle 100 — cross-coerce port via rt_eq_cross_int_float.
-           Inside the hexa fn, `af == bf` re-enters hexa_eq with BOTH args
-           TAG_FLOAT — that path stays C (TAG_FLOAT switch branch below),
-           so no recursion back into rt_eq_cross_int_float. */
-        extern HexaVal rt_eq_cross_int_float(HexaVal a, HexaVal b);
-        return hexa_bool(hexa_truthy(rt_eq_cross_int_float(a, b)));
-#else
-        return hexa_bool((double)HX_INT(a) == HX_FLOAT(b));
-#endif
-    }
-    if (HX_IS_FLOAT(a) && HX_IS_INT(b)) {
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-        extern HexaVal rt_eq_cross_int_float(HexaVal a, HexaVal b);
-        return hexa_bool(hexa_truthy(rt_eq_cross_int_float(a, b)));
-#else
-        return hexa_bool(HX_FLOAT(a) == (double)HX_INT(b));
-#endif
-    }
+    if (HX_IS_INT(a) && HX_IS_FLOAT(b)) return hexa_bool((double)HX_INT(a) == HX_FLOAT(b));
+    if (HX_IS_FLOAT(a) && HX_IS_INT(b)) return hexa_bool(HX_FLOAT(a) == (double)HX_INT(b));
     if (HX_TAG(a) != HX_TAG(b)) return hexa_bool(0);
     switch (HX_TAG(a)) {
         case TAG_INT: return hexa_bool(HX_INT(a) == HX_INT(b));
@@ -5625,18 +5573,7 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
             return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) == 0);
 #endif
         }
-        case TAG_VOID:
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-        {
-            /* Step-3 cycle 100 — trivial port via rt_eq_void. Both args
-               TAG_VOID by switch precondition; no internal `==` use, no
-               recursion. */
-            extern HexaVal rt_eq_void(HexaVal a, HexaVal b);
-            return hexa_bool(hexa_truthy(rt_eq_void(a, b)));
-        }
-#else
-            return hexa_bool(1);
-#endif
+        case TAG_VOID: return hexa_bool(1);
         // rt 32-G: Val identity is pointer-equality of heap struct (matches
         // TAG_MAP semantics — two separately constructed maps never compare
         // equal by value).

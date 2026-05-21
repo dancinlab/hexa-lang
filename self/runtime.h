@@ -309,7 +309,6 @@ int     rt_str_ends_with(HexaVal s, HexaVal suffix);  /* runtime.c:3781 — non-
 HexaVal hexa_map_remove(HexaVal m, const char* key);  /* runtime.c:2606 — Robin-Hood delete */
 HexaVal hexa_find_poly(HexaVal obj, HexaVal arg);     /* runtime.c:7007 — generic .find() */
 HexaVal hexa_dict_keys(HexaVal m);                    /* runtime.c:9948 — alias of hexa_map_keys */
-HexaVal __fd_write_bytes(HexaVal fd, HexaVal s);      /* runtime.c — Step 5 #4 POSIX write(2) shim */
 HexaVal hexa_base64_encode(HexaVal s);                /* runtime.c:10931 — RFC 4648 */
 HexaVal rt_read_file_bytes(HexaVal path);             /* runtime.c:4957 — fs read → byte array */
 HexaVal hexa_to_int(HexaVal v);                       /* runtime.c:5214 — coerce-to-int */
