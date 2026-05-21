@@ -3752,6 +3752,9 @@ HexaVal hexa_array_partition(HexaVal arr, HexaVal fn) {
 // interleave(other): alternates items from both arrays up to max length.
 // When one array runs out, the other's remaining items still alternate in.
 // Matches interpreter at hexa_full.hexa:15451-15464.
+// Step-3 cycle 37 port — float fast-path dispatches when both arrays
+// are all-float; mixed-type stays on the polymorphic C body.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_interleave(HexaVal a, HexaVal b) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(a)) {
@@ -3766,6 +3769,26 @@ HexaVal hexa_array_interleave(HexaVal a, HexaVal b) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_interleave_float(HexaVal a, HexaVal b);
+HexaVal hexa_array_interleave(HexaVal a, HexaVal b) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(a)) {
+        return HX_IS_ARRAY(b) ? b : out;
+    }
+    if (!HX_IS_ARRAY(b)) return a;
+    if (_arr_all_float(a) && _arr_all_float(b)) {
+        return rt_array_interleave_float(a, b);
+    }
+    int64_t na = HX_ARR_LEN(a), nb = HX_ARR_LEN(b);
+    int64_t m = na > nb ? na : nb;
+    for (int64_t i = 0; i < m; i++) {
+        if (i < na) out = hexa_array_push(out, HX_ARR_ITEMS(a)[i]);
+        if (i < nb) out = hexa_array_push(out, HX_ARR_ITEMS(b)[i]);
+    }
+    return out;
+}
+#endif
 
 // scan(init, fn): like fold but returns all intermediate accumulators.
 // Result length is len(arr) + 1 (includes init as first element).

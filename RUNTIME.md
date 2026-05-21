@@ -1081,3 +1081,15 @@ it operates on HexaVal tags from C.
   always pure int, no float fast-path needed
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,664 B
+
+### 2026-05-21 — step 3 cycle 37: hexa_array_interleave → rt_array_interleave_float
+
+- ✅ `hexa_array_interleave` (self/runtime.c:3755) ported. Alternates
+  items from both arrays up to max length; when one runs out, the
+  other's remaining items continue (interpreter contract). Float
+  fast-path dispatches when **both** arrays are all-float
+- Mixed-type or one-non-float arrays stay on the polymorphic C body.
+  Non-array a/b short-circuits (degenerate cases) stay C-side before
+  any dispatch
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,792 B
