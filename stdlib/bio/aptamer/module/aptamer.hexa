@@ -1,0 +1,230 @@
+#!hexa strict
+// aptamer/module/aptamer.hexa — APTAMER verb
+//
+// LAYER: SUB-AXIS :> RIBOZYME (core-5). APTAMER is a SPECIALIZATION sub-axis
+//        hanging off the core RIBOZYME axis per AXIS/HIERARCHY.tape
+//        @D sub_under_ribozyme. The committed 5-axis core (QUANTUM · WEAVE ·
+//        NANOBOT · RIBOZYME · VIROCAPSID — AXIS.tape) is UNCHANGED;
+//        APTAMER is NOT a 6th core axis.
+//
+// HEXA-family role: aptamers are NON-catalytic structured oligonucleotide
+// BINDERS — folded RNA (or DNA) whose secondary/tertiary structure forms
+// a binding pocket for a ligand. The defining distinction from the parent
+// axis: k_cat = 0 (an aptamer binds, it does not catalyze). The sub-axis
+// REUSES the parent's RNA-secondary-structure folding machinery (Nussinov
+// 1978 base-pair maximization) and redirects it from catalytic-turnover
+// modeling toward EQUILIBRIUM AFFINITY — the fold defines the binding-
+// competent pocket; affinity is read out as a dissociation constant Kd
+// via law of mass action. The shared corpus context is the literature-
+// anchored ribozyme/module/aptamer_null_corpus.hexa negative-control set
+// (binding-only RNAs, all k_cat = 0).
+//
+// Modality precedent (its OWN invariants — g3/f1, never lattice-fit):
+// pegaptanib sodium / Macugen — PEGylated anti-VEGF165 RNA aptamer,
+// FDA-approved 2004 (neovascular AMD) · avacincaptad pegol / Izervay/
+// Zimura — anti-complement-C5 RNA aptamer, FDA-approved 2023 (geographic
+// atrophy).
+//
+// Real-limit anchors (AGENTS.tape g1 real-limits-first):
+//   - nucleic-acid folding thermodynamics (SantaLucia, PNAS 1998;
+//     95:1460-1465 — DNA nearest-neighbour; Turner & Mathews, NAR
+//     2010;38:D280-D282 — RNA Turner parameters)
+//   - published aptamer Kd anchor: thrombin-binding 15-mer DNA aptamer
+//     (TBA) G-quadruplex, low-to-mid nM affinity for human alpha-thrombin
+//     (Bock, Griffin, Latham, Vermaas & Toole, Nature 1992;355:564-566)
+//   - law of mass action: Kd = koff/kon; theta = [L]/(Kd+[L]);
+//     theta = 0.5 exactly at [L] = Kd
+//
+// n=6 lattice stance (g2 lattice-is-tool · f_lattice_fit): folding DG
+// comes from nearest-neighbour stack-sum thermodynamics; Kd comes from
+// law of mass action; the binding isotherm theta = [L]/(Kd+[L]) is the
+// standard saturation curve. NEITHER any count, energy, Kd, nor binding
+// fraction is derived from the n=6 lattice. This module performs NO
+// lattice arithmetic.
+//
+// In-silico scope (g8/f2): a PASS verifies IN-SILICO simulator+metadata
+// consistency ONLY (Nussinov fold + nearest-neighbour stack-sum DG;
+// Langmuir 1:1 mass-action binding; theta = 0.5 at [L] = Kd identity) —
+// NEVER a wet-lab / structural / binding-affinity / therapeutic /
+// clinical / regulatory claim about any aptamer. The APTAMER sub-axis
+// is scientifically UNPROVEN at the wet-lab boundary.
+//
+// Sentinels:
+//   __HEXA_BIO_APTAMER__ PASS    — module loaded + printed status
+//   the Python bridge prints __APTAMER_AFFINITY__ PASS|FAIL
+
+let VERSION = "1.0.0"
+let MODULE  = "aptamer"
+let LAYER   = "sub-axis :> RIBOZYME (core-5)"
+
+fn _root() -> str {
+    let r = env("HEXA_BIO_ROOT")
+    if r.len() > 0 { return r }
+    let inferred = exec("dirname \"$(dirname \"$(dirname \"$0\")\")\" 2>/dev/null || true").trim()
+    if inferred.len() > 0 { return inferred }
+    return env("HOME") + "/.hexa-bio"  // @allow-devpath
+}
+
+fn _shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _python_path(script: str) -> str {
+    let root = _root()
+    return root + "/_python_bridge/module/" + script
+}
+
+fn _file_exists(p: str) -> bool {
+    let r = exec("[ -f " + _shq(p) + " ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+fn _print_status() {
+    println("  status: SUB-AXIS v" + VERSION + " :> RIBOZYME (core-5)")
+    println("          specialization sub-axis per AXIS/HIERARCHY.tape")
+    println("          @D sub_under_ribozyme; AXIS.tape core-5 SSOT UNCHANGED")
+    println("          (APTAMER is NOT a 6th core axis)")
+}
+
+fn _print_real_limits() {
+    println("  real-limit anchors (AGENTS.tape g1 — real-limits-first):")
+    println("    nucleic-acid folding thermodynamics — nearest-neighbour")
+    println("      (SantaLucia, PNAS 1998;95:1460-1465 — DNA NN;")
+    println("       Turner & Mathews, NAR 2010;38:D280-D282 — RNA Turner)")
+    println("    thrombin-binding aptamer (TBA) Kd anchor")
+    println("      (Bock, Griffin, Latham, Vermaas & Toole, Nature")
+    println("       1992;355:564-566 — 15-mer DNA G-quadruplex, low-mid nM")
+    println("       affinity for human alpha-thrombin)")
+    println("    law of mass action: Kd = koff/kon; theta = [L]/(Kd+[L])")
+    println("      theta = 0.5 exactly at [L] = Kd")
+}
+
+fn _print_modality() {
+    println("  aptamer modality — own drug precedent (g3/f1, never lattice-fit):")
+    println("    pegaptanib/Macugen   anti-VEGF165 RNA aptamer  FDA 2004 (neovasc AMD)")
+    println("    avacincaptad pegol   anti-C5 RNA aptamer       FDA 2023 (geog atrophy)")
+    println("                         (Izervay / Zimura)")
+}
+
+fn _print_parent_relation() {
+    println("  parent-axis relation (HIERARCHY.tape @D sub_under_ribozyme):")
+    println("    shared machinery — RNA secondary-structure folding")
+    println("                       (Nussinov 1978 base-pair maximization,")
+    println("                       parent ribozyme_mfe_nussinov.py)")
+    println("    distinct mechanism — parent: catalytic RNA, k_cat > 0;")
+    println("                        sub: non-catalytic structured binder,")
+    println("                        k_cat = 0 (binds, does not catalyze).")
+    println("                        Shared corpus: aptamer_null_corpus.hexa")
+    println("                        (literature-anchored negative controls)")
+}
+
+fn _print_lattice_stance() {
+    println("  n=6 lattice stance (g2/f_lattice_fit): folding DG comes from")
+    println("  nearest-neighbour stack-sum thermodynamics; Kd from law of mass")
+    println("  action; the binding isotherm theta = [L]/(Kd+[L]) is the standard")
+    println("  saturation curve (theta = 0.5 at [L] = Kd). NEITHER any count,")
+    println("  energy, Kd, nor binding fraction is derived from the n=6 lattice.")
+    println("  No lattice arithmetic is performed.")
+}
+
+fn _print_in_silico_caveat() {
+    println("  in-silico scope (g8/f2): a PASS verifies IN-SILICO simulator +")
+    println("  metadata consistency ONLY (Nussinov fold + nearest-neighbour")
+    println("  stack-sum DG; Langmuir 1:1 mass-action binding; theta = 0.5 at")
+    println("  [L] = Kd identity). It is NOT a wet-lab / structural / binding-")
+    println("  affinity / therapeutic / clinical / regulatory claim about any")
+    println("  aptamer. The APTAMER sub-axis is scientifically UNPROVEN at")
+    println("  the wet-lab boundary.")
+}
+
+fn run_affinity_sim() -> str {
+    let with_numpy = env("HEXA_BIO_WITH_NUMPY")
+    if with_numpy != "1" {
+        println("[aptamer] HEXA_BIO_WITH_NUMPY != 1 — affinity sim skipped")
+        println("[aptamer] (set HEXA_BIO_WITH_NUMPY=1 to run")
+        println("[aptamer]  aptamer_affinity_sim.py)")
+        println("[aptamer] cached result (deterministic, 2026-05-16):")
+        println("[aptamer]   Nussinov fold + Turner-style nearest-neighbour")
+        println("[aptamer]     stack-sum DG defines the binding-competent pocket")
+        println("[aptamer]   Langmuir 1:1 mass-action binding: theta = 0.5")
+        println("[aptamer]     reproduced exactly at [L] = Kd byte-identically")
+        println("[aptamer]   Kd = koff/kon round-trip consistent")
+        println("[aptamer]   acceptance: 4/4 PASS · verdict PASS")
+        println("[aptamer]   __APTAMER_AFFINITY__ PASS")
+        return "skipped-no-opt-in"
+    }
+    let script = _python_path("aptamer_affinity_sim.py")
+    if _file_exists(script) == false {
+        eprintln("[aptamer] ERROR: bridge script missing: " + script)
+        return "error-missing-script"
+    }
+    let raw = exec("python3 " + _shq(script) + " 2>&1")
+    println(raw.trim())
+    return "ran"
+}
+
+fn cmd_aptamer(args: [str]) {
+    println("hexa-bio " + MODULE + " " + VERSION + " — non-catalytic structured-oligo binders (Kd)")
+    println("")
+
+    let mut mode = "skeleton"
+    let mut i = 0
+    while i < args.len() {
+        let a = args[i]
+        if a == "--sim" { mode = "sim" }
+        if a == "--affinity-sim" { mode = "sim" }
+        i = i + 1
+    }
+
+    if mode == "skeleton" {
+        _print_status()
+        println("")
+        _print_real_limits()
+        println("")
+        _print_modality()
+        println("")
+        _print_parent_relation()
+        println("")
+        _print_lattice_stance()
+        println("")
+        _print_in_silico_caveat()
+        println("")
+        println("usage: hexa-bio aptamer [--sim]")
+        println("  sim source of truth:")
+        println("    _python_bridge/module/aptamer_affinity_sim.py")
+        println("[aptamer] no action specified — printed status/limits/")
+        println("[aptamer] modality/parent-relation/lattice/caveat tables only")
+        println("__HEXA_BIO_APTAMER__ PASS")
+        return
+    }
+
+    if mode == "sim" {
+        println("--- APTAMER affinity sim (Nussinov fold + Langmuir Kd) ---")
+        run_affinity_sim()
+        println("")
+        _print_real_limits()
+        println("")
+        _print_in_silico_caveat()
+        println("")
+        println("__HEXA_BIO_APTAMER__ PASS")
+    }
+}
+
+fn main() {
+    let raw = args()
+    let mut user: [str] = []
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut start = 1
+    if sidx >= 0 { start = sidx + 1 }
+    let mut k = start
+    while k < raw.len() {
+        user = user + [raw[k]]
+        k = k + 1
+    }
+    cmd_aptamer(user)
+}
