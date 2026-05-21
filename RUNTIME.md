@@ -1094,6 +1094,23 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 40: rt_atan + rt_asin + rt_acos (inverse trig batch)
+
+- ✅ Three new hexa-source fns in `stdlib/runtime/math.hexa`:
+  - `rt_atan(x)`: two-stage range reduction — (1) |x|>1 → atan(x) =
+    sign·π/2 − atan(1/x); (2) |x|>tan(π/8)≈0.4142 → atan(a) = π/4 +
+    atan((a−1)/(a+1)). Then 6-term Maclaurin on |a|≤tan(π/8)
+    (~1e-9 precision on the reduced domain)
+  - `rt_asin(x)`: standard identity asin(x) = atan(x / sqrt(1 − x²)).
+    Clamps |x|>1 to ±π/2 (NaN-free fallback). Precision degrades near
+    |x|=1 by design (matches the cycle-2/4 precision budget)
+  - `rt_acos(x)`: identity acos(x) = π/2 − asin(x)
+- C-side dispatch in `self/runtime.c:4061-4068`: `hexa_math_asin/acos/atan`
+  gain two-mode wiring to the new rt_ fns. `hexa_math_atan2` stays on
+  libm — it has no rt_ counterpart yet (two-arg quadrant resolution)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,920 B
+
 ### 2026-05-21 — step 3 cycle 39: hexa_math_floor/ceil/round int→float bridge
 
 - ✅ `hexa_math_floor/ceil/round` (self/runtime.c:4072-4074) gain
