@@ -1094,6 +1094,30 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-22 — Step 3+4 잔여 final status (7-agent parallel campaign)
+
+After cycles 89-99 (11 cycles spanning step 3 closure + step 4 opening),
+the 8 잔여 items have settled to:
+
+| # | item | status | cycle / verdict |
+|---|------|--------|-----------------|
+| 1 | hexa_len polymorphic | ✅ ported | cycle 99 (alias dispatch via `byte_len`) |
+| 2 | hexa_to_string | ✅ partial | cycle 96 (scalar branches: int/float/bool/void/str). Array/Map recursive + ValStruct stay C |
+| 3 | hexa_str_concat heap-only | ❌ REVERT | arena nesting hazard (cycle-30 family). Inner-fn `__hexa_fn_arena_enter` frame corrupts outer arena array storage. Step 5+ work |
+| 4 | hexa_eq deep eq | ✅ partial | cycles 91 (TAG_STR strcmp) + 97 (TAG_ARRAY deep). 2/9 branches ported |
+| 5 | Map basic ops (set/get/keys/values/contains_key/remove) | ❌ CORE | foundation primitives — surface builtins LOWER to them. Robin Hood deletion + hash slot insert + key-interning malloc all C-internal |
+| 6 | Array allocators (new/zeros_float/alloc) | ❌ CORE | `[]` literal lowers to `hexa_array_new()` → self-recursion. Fast-path semantics (single-shot calloc + pre-cap) require HX_SET_ARR_CAP exposure |
+| 7 | IO (println/eprint/print/eprintln) | ❌ DEFERRED | needs new `__fd_write_bytes(fd, s)` codegen builtin (3-5 cycles). Tier-A.6 syscall layer architectural mismatch |
+| 8 | ValStruct repr | ✅ ported | cycle 98 (no new builtins — `.get("tag")` routes through `hexa_valstruct_get_by_key`) |
+
+**Outcome**: 4 of 8 잔여 ported (1, 2-partial, 4-partial, 8). 4 CORE-confirmed (3, 5, 6, 7) requiring Step 5+ codegen-level infrastructure work:
+- arena-builtin / arena-disable-local API → unblocks #3
+- HX_*_LEN / HX_SET_ARR_CAP exposure → unblocks #6
+- HexaMapTable opaque-pointer escape → unblocks #5
+- `__fd_write_bytes` codegen builtin → unblocks #7
+
+**Wipe pattern recurrence** (memory `feedback_runtime_c_deploy_regen_wipe`): commits c39afbbe + 0d59c419 silently overwrote stdlib/runtime/numeric.hexa + ctype.hexa + self/runtime_core.c entries cycles 91-96 between original land and re-land. Cherry-picks `3fc62729 + 459be02c + f0be7ace + 7bdb4aba + 85150013` recovered the work. Sub-agent worktree leak also observed (#4 agent's branch HEAD propagated into main worktree's index via shared git object store — fixed by `cd` back to session worktree).
+
 ### 2026-05-22 — step 3 cycle 97: hexa_eq TAG_ARRAY deep-eq loop via rt_eq_array_deep (잔여 #4 partial discharge — 2 of 9 branches ported)
 
 - ✅ Polymorphic `hexa_eq`'s TAG_ARRAY branch (self/runtime_core.c:5469)
