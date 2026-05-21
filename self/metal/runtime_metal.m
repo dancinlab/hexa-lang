@@ -94,6 +94,24 @@ typedef struct {
 extern HexaFarrEntry* _hx_farr_table;
 extern int64_t        _hx_farr_count;
 
+/* METAL_INTEGRATION.md step 3 of 5 (2026-05-21): mirror of the
+ * HexaFarr32Entry layout in self/runtime.c (added in the step-3 cycle).
+ * The runtime.c side exports _hx_farr32_table/_count as non-static under
+ * -DHEXA_METAL (same gate pattern as _hx_farr_table). Float storage =
+ * no FP64→FP32 down-cast at the dispatch boundary; the entire pipeline
+ * (host buffer → MPSMatrix → result) stays in MPSDataTypeFloat32. */
+typedef struct {
+    float*   buf;
+    int64_t  len;
+    void*    d_buf;
+    int      loc;
+    int      pinned;
+    int      dirty_host;
+    int      dirty_dev;
+} HexaFarr32Entry;
+extern HexaFarr32Entry* _hx_farr32_table;
+extern int64_t          _hx_farr32_count;
+
 /* ═══════════════════════════════════════════════════════════════════
  * Global state — lazy-init on first call (matches hxmetal_macos.m
  * convention; self-contained, owns its own device + queue).
@@ -281,6 +299,337 @@ int _hx_metal_farr_matmul_gpu(int64_t a_id, int64_t M, int64_t K,
          * host buffer. */
         double* c64 = ce->buf;
         for (NSUInteger i = 0; i < c_count; i++) c64[i] = (double)c32[i];
+    } /* @autoreleasepool */
+
+    return 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * METAL_INTEGRATION.md step 3 of 5 (2026-05-21): native FP32 SGEMM.
+ *
+ * _hx_metal_farr32_matmul_gpu(A, M, K, B, N, C) — same row-major
+ *   contract as the FP64 variant above, but the host buffers are
+ *   already float (HexaFarr32Entry.buf) — NO down-cast, NO up-cast.
+ *
+ *   This is the gap-#1 closer in METAL_INTEGRATION.md: the FP64
+ *   variant above loses ~29 mantissa bits per element on the host-
+ *   boundary cast. This FP32 variant is bit-identical to a pure-CPU
+ *   FP32 SGEMM (modulo MPS's internal reduce ordering, which is
+ *   tile-major and matches the host_mps_gemm.swift baseline).
+ *
+ *   Memcpy strategy: storageModeShared MTLBuffers on Apple Silicon
+ *   are unified-memory mapped, but the safe portable pattern is
+ *   still a memcpy in (host → buffer.contents). The cost is N*sizeof
+ *   (float) bytes per operand vs the FP64 variant's 2× cast loop;
+ *   same bandwidth budget, half the work.
+ *
+ *   Caller (self/runtime.c::hexa_farr32_matmul) has already allocated
+ *   c_id host buf len = M·N via hexa_farr32_zeros (FP32).
+ *
+ *   Returns 0 ok / -1 err. Any -1 → runtime.c falls through to the
+ *   CPU ikj fallback (safe).
+ * ═══════════════════════════════════════════════════════════════════ */
+int _hx_metal_farr32_matmul_gpu(int64_t a_id, int64_t M, int64_t K,
+                                int64_t b_id, int64_t N,
+                                int64_t c_id) {
+    if (_metal_ensure_init() != 0) return -1;
+    if (a_id < 0 || b_id < 0 || c_id < 0) {
+        fprintf(stderr, "[metal] farr32_matmul: bad ids %lld %lld %lld\n",
+                (long long)a_id, (long long)b_id, (long long)c_id);
+        return -1;
+    }
+    if (a_id >= _hx_farr32_count || b_id >= _hx_farr32_count ||
+        c_id >= _hx_farr32_count) {
+        fprintf(stderr, "[metal] farr32_matmul: ids out of range "
+                        "(a=%lld b=%lld c=%lld count=%lld)\n",
+                (long long)a_id, (long long)b_id, (long long)c_id,
+                (long long)_hx_farr32_count);
+        return -1;
+    }
+    if (M <= 0 || K <= 0 || N <= 0) {
+        fprintf(stderr, "[metal] farr32_matmul: bad shape "
+                        "M=%lld K=%lld N=%lld\n",
+                (long long)M, (long long)K, (long long)N);
+        return -1;
+    }
+    HexaFarr32Entry* ae = &_hx_farr32_table[a_id];
+    HexaFarr32Entry* be = &_hx_farr32_table[b_id];
+    HexaFarr32Entry* ce = &_hx_farr32_table[c_id];
+    if (!ae->buf || !be->buf || !ce->buf) {
+        fprintf(stderr, "[metal] farr32_matmul: NULL host buf\n");
+        return -1;
+    }
+    if (ae->len < M * K || be->len < K * N || ce->len < M * N) {
+        fprintf(stderr, "[metal] farr32_matmul: host len mismatch "
+                        "(a=%lld<%lld b=%lld<%lld c=%lld<%lld)\n",
+                (long long)ae->len, (long long)(M*K),
+                (long long)be->len, (long long)(K*N),
+                (long long)ce->len, (long long)(M*N));
+        return -1;
+    }
+
+    @autoreleasepool {
+        NSUInteger a_bytes = (NSUInteger)(M * K) * sizeof(float);
+        NSUInteger b_bytes = (NSUInteger)(K * N) * sizeof(float);
+        NSUInteger c_bytes = (NSUInteger)(M * N) * sizeof(float);
+
+        id<MTLBuffer> a_buf = [g_metal_device newBufferWithLength:a_bytes
+                                                          options:MTLResourceStorageModeShared];
+        id<MTLBuffer> b_buf = [g_metal_device newBufferWithLength:b_bytes
+                                                          options:MTLResourceStorageModeShared];
+        id<MTLBuffer> c_buf = [g_metal_device newBufferWithLength:c_bytes
+                                                          options:MTLResourceStorageModeShared];
+        if (!a_buf || !b_buf || !c_buf) {
+            fprintf(stderr, "[metal] farr32_matmul: newBufferWithLength OOM "
+                            "(a=%llu b=%llu c=%llu bytes)\n",
+                    (unsigned long long)a_bytes,
+                    (unsigned long long)b_bytes,
+                    (unsigned long long)c_bytes);
+            return -1;
+        }
+
+        /* Native FP32: straight memcpy host → MTLBuffer.contents, no
+         * per-element cast. This is the step-3 win over the FP64 path
+         * (gap #1 of METAL_INTEGRATION.md closed). */
+        memcpy([a_buf contents], ae->buf, a_bytes);
+        memcpy([b_buf contents], be->buf, b_bytes);
+        /* C zero-init: storageModeShared buffers are zeroed by Metal on
+         * alloc; matches host_mps_gemm.swift convention. */
+
+        MPSMatrixDescriptor* a_desc =
+            [MPSMatrixDescriptor matrixDescriptorWithRows:(NSUInteger)M
+                                                  columns:(NSUInteger)K
+                                                 rowBytes:(NSUInteger)(K * sizeof(float))
+                                                 dataType:MPSDataTypeFloat32];
+        MPSMatrixDescriptor* b_desc =
+            [MPSMatrixDescriptor matrixDescriptorWithRows:(NSUInteger)K
+                                                  columns:(NSUInteger)N
+                                                 rowBytes:(NSUInteger)(N * sizeof(float))
+                                                 dataType:MPSDataTypeFloat32];
+        MPSMatrixDescriptor* c_desc =
+            [MPSMatrixDescriptor matrixDescriptorWithRows:(NSUInteger)M
+                                                  columns:(NSUInteger)N
+                                                 rowBytes:(NSUInteger)(N * sizeof(float))
+                                                 dataType:MPSDataTypeFloat32];
+
+        MPSMatrix* a_mat = [[MPSMatrix alloc] initWithBuffer:a_buf descriptor:a_desc];
+        MPSMatrix* b_mat = [[MPSMatrix alloc] initWithBuffer:b_buf descriptor:b_desc];
+        MPSMatrix* c_mat = [[MPSMatrix alloc] initWithBuffer:c_buf descriptor:c_desc];
+        if (!a_mat || !b_mat || !c_mat) {
+            fprintf(stderr, "[metal] farr32_matmul: MPSMatrix init failed\n");
+            return -1;
+        }
+
+        MPSMatrixMultiplication* mm =
+            [[MPSMatrixMultiplication alloc] initWithDevice:g_metal_device
+                                              transposeLeft:NO
+                                             transposeRight:NO
+                                                 resultRows:(NSUInteger)M
+                                              resultColumns:(NSUInteger)N
+                                            interiorColumns:(NSUInteger)K
+                                                      alpha:1.0
+                                                       beta:0.0];
+        if (!mm) {
+            fprintf(stderr, "[metal] farr32_matmul: "
+                            "MPSMatrixMultiplication init failed\n");
+            return -1;
+        }
+
+        id<MTLCommandBuffer> cmd = [g_metal_queue commandBuffer];
+        if (!cmd) {
+            fprintf(stderr, "[metal] farr32_matmul: "
+                            "commandBuffer alloc failed\n");
+            return -1;
+        }
+        [mm encodeToCommandBuffer:cmd
+                       leftMatrix:a_mat
+                      rightMatrix:b_mat
+                     resultMatrix:c_mat];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) {
+            fprintf(stderr, "[metal] farr32_matmul: command buffer "
+                            "status=%ld (err=%s)\n",
+                    (long)cmd.status,
+                    cmd.error ? [[cmd.error description] UTF8String]
+                              : "(nil)");
+            return -1;
+        }
+
+        /* Native FP32 result: straight memcpy MTLBuffer.contents → host.
+         * No up-cast. Bit-identical to a pure-CPU FP32 SGEMM modulo MPS
+         * tile-major reduce ordering. */
+        memcpy(ce->buf, [c_buf contents], c_bytes);
+    } /* @autoreleasepool */
+
+    return 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * METAL_INTEGRATION.md step 4 of 5 (2026-05-21): native FP32 SGEMM
+ * with B transposed on the right.
+ *
+ * _hx_metal_farr32_matmul_NT_b_gpu(A, M, K, B, N, C) —
+ *   C[M, N] = A[M, K] · B[N, K]^T   (B as passed is N×K row-major;
+ *                                     MPS transposes internally)
+ *   C[i, j] = sum_{k=0..K-1} A[i, k] * B[j, k]
+ *
+ *   This is the bwd-input matmul shape for ag_linear via
+ *   matmul_bwd_auto (stdlib/flame/ag_tape.hexa:630). Same row-major
+ *   FP32 contract as _hx_metal_farr32_matmul_gpu, but the MPS
+ *   constructor flips transposeRight to YES.
+ *
+ *   Apple docs reference:
+ *     MPSMatrixMultiplication.init(device:transposeLeft:transposeRight:
+ *                                  resultRows:resultColumns:
+ *                                  interiorColumns:alpha:beta:)
+ *   When transposeRight=YES, MPS interprets the right matrix as
+ *   logically (interiorColumns × resultColumns) = (K × N) but
+ *   PHYSICALLY laid out as N rows × K columns row-major — exactly
+ *   matching B's N×K row-major storage in _hx_farr32_table.
+ *
+ *   Memcpy strategy: same as the no-T variant — straight memcpy host
+ *   float buf → MTLBuffer.contents → MPS → memcpy back. No transpose
+ *   on the host; MPS handles it via its tile scheduler.
+ *
+ *   Returns 0 ok / -1 err. Any -1 → runtime.c falls through to the
+ *   CPU ikj-NT fallback (safe).
+ * ═══════════════════════════════════════════════════════════════════ */
+int _hx_metal_farr32_matmul_NT_b_gpu(int64_t a_id, int64_t M, int64_t K,
+                                     int64_t b_id, int64_t N,
+                                     int64_t c_id) {
+    if (_metal_ensure_init() != 0) return -1;
+    if (a_id < 0 || b_id < 0 || c_id < 0) {
+        fprintf(stderr, "[metal] farr32_matmul_NT_b: bad ids %lld %lld %lld\n",
+                (long long)a_id, (long long)b_id, (long long)c_id);
+        return -1;
+    }
+    if (a_id >= _hx_farr32_count || b_id >= _hx_farr32_count ||
+        c_id >= _hx_farr32_count) {
+        fprintf(stderr, "[metal] farr32_matmul_NT_b: ids out of range "
+                        "(a=%lld b=%lld c=%lld count=%lld)\n",
+                (long long)a_id, (long long)b_id, (long long)c_id,
+                (long long)_hx_farr32_count);
+        return -1;
+    }
+    if (M <= 0 || K <= 0 || N <= 0) {
+        fprintf(stderr, "[metal] farr32_matmul_NT_b: bad shape "
+                        "M=%lld K=%lld N=%lld\n",
+                (long long)M, (long long)K, (long long)N);
+        return -1;
+    }
+    HexaFarr32Entry* ae = &_hx_farr32_table[a_id];
+    HexaFarr32Entry* be = &_hx_farr32_table[b_id];
+    HexaFarr32Entry* ce = &_hx_farr32_table[c_id];
+    if (!ae->buf || !be->buf || !ce->buf) {
+        fprintf(stderr, "[metal] farr32_matmul_NT_b: NULL host buf\n");
+        return -1;
+    }
+    /* B is N×K row-major (transposed view of K×N original). Validate
+     * against N*K, not K*N. */
+    if (ae->len < M * K || be->len < N * K || ce->len < M * N) {
+        fprintf(stderr, "[metal] farr32_matmul_NT_b: host len mismatch "
+                        "(a=%lld<%lld b=%lld<%lld c=%lld<%lld)\n",
+                (long long)ae->len, (long long)(M*K),
+                (long long)be->len, (long long)(N*K),
+                (long long)ce->len, (long long)(M*N));
+        return -1;
+    }
+
+    @autoreleasepool {
+        NSUInteger a_bytes = (NSUInteger)(M * K) * sizeof(float);
+        NSUInteger b_bytes = (NSUInteger)(N * K) * sizeof(float);
+        NSUInteger c_bytes = (NSUInteger)(M * N) * sizeof(float);
+
+        id<MTLBuffer> a_buf = [g_metal_device newBufferWithLength:a_bytes
+                                                          options:MTLResourceStorageModeShared];
+        id<MTLBuffer> b_buf = [g_metal_device newBufferWithLength:b_bytes
+                                                          options:MTLResourceStorageModeShared];
+        id<MTLBuffer> c_buf = [g_metal_device newBufferWithLength:c_bytes
+                                                          options:MTLResourceStorageModeShared];
+        if (!a_buf || !b_buf || !c_buf) {
+            fprintf(stderr, "[metal] farr32_matmul_NT_b: newBufferWithLength "
+                            "OOM (a=%llu b=%llu c=%llu bytes)\n",
+                    (unsigned long long)a_bytes,
+                    (unsigned long long)b_bytes,
+                    (unsigned long long)c_bytes);
+            return -1;
+        }
+
+        /* Native FP32: memcpy in, no per-element cast. */
+        memcpy([a_buf contents], ae->buf, a_bytes);
+        memcpy([b_buf contents], be->buf, b_bytes);
+
+        /* Descriptors:
+         *   A: M rows × K cols row-major, rowBytes = K*4
+         *   B: N rows × K cols row-major, rowBytes = K*4
+         *      (transposeRight=YES tells MPS to interpret as K×N)
+         *   C: M rows × N cols row-major, rowBytes = N*4 */
+        MPSMatrixDescriptor* a_desc =
+            [MPSMatrixDescriptor matrixDescriptorWithRows:(NSUInteger)M
+                                                  columns:(NSUInteger)K
+                                                 rowBytes:(NSUInteger)(K * sizeof(float))
+                                                 dataType:MPSDataTypeFloat32];
+        MPSMatrixDescriptor* b_desc =
+            [MPSMatrixDescriptor matrixDescriptorWithRows:(NSUInteger)N
+                                                  columns:(NSUInteger)K
+                                                 rowBytes:(NSUInteger)(K * sizeof(float))
+                                                 dataType:MPSDataTypeFloat32];
+        MPSMatrixDescriptor* c_desc =
+            [MPSMatrixDescriptor matrixDescriptorWithRows:(NSUInteger)M
+                                                  columns:(NSUInteger)N
+                                                 rowBytes:(NSUInteger)(N * sizeof(float))
+                                                 dataType:MPSDataTypeFloat32];
+
+        MPSMatrix* a_mat = [[MPSMatrix alloc] initWithBuffer:a_buf descriptor:a_desc];
+        MPSMatrix* b_mat = [[MPSMatrix alloc] initWithBuffer:b_buf descriptor:b_desc];
+        MPSMatrix* c_mat = [[MPSMatrix alloc] initWithBuffer:c_buf descriptor:c_desc];
+        if (!a_mat || !b_mat || !c_mat) {
+            fprintf(stderr, "[metal] farr32_matmul_NT_b: MPSMatrix init failed\n");
+            return -1;
+        }
+
+        /* The transpose-right magic: MPS computes A · B^T natively.
+         * transposeLeft:NO + transposeRight:YES. resultRows=M,
+         * resultColumns=N, interiorColumns=K — matches the math
+         * contract C[i,j] = sum_k A[i,k] * B[j,k] verbatim. */
+        MPSMatrixMultiplication* mm =
+            [[MPSMatrixMultiplication alloc] initWithDevice:g_metal_device
+                                              transposeLeft:NO
+                                             transposeRight:YES
+                                                 resultRows:(NSUInteger)M
+                                              resultColumns:(NSUInteger)N
+                                            interiorColumns:(NSUInteger)K
+                                                      alpha:1.0
+                                                       beta:0.0];
+        if (!mm) {
+            fprintf(stderr, "[metal] farr32_matmul_NT_b: "
+                            "MPSMatrixMultiplication init failed\n");
+            return -1;
+        }
+
+        id<MTLCommandBuffer> cmd = [g_metal_queue commandBuffer];
+        if (!cmd) {
+            fprintf(stderr, "[metal] farr32_matmul_NT_b: "
+                            "commandBuffer alloc failed\n");
+            return -1;
+        }
+        [mm encodeToCommandBuffer:cmd
+                       leftMatrix:a_mat
+                      rightMatrix:b_mat
+                     resultMatrix:c_mat];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) {
+            fprintf(stderr, "[metal] farr32_matmul_NT_b: command buffer "
+                            "status=%ld (err=%s)\n",
+                    (long)cmd.status,
+                    cmd.error ? [[cmd.error description] UTF8String]
+                              : "(nil)");
+            return -1;
+        }
+
+        memcpy(ce->buf, [c_buf contents], c_bytes);
     } /* @autoreleasepool */
 
     return 0;
