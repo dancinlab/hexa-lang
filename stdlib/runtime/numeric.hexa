@@ -303,6 +303,71 @@ pub fn rt_array_sort_float(arr: [float]) -> [float] {
     return sorted
 }
 
+// Step 3 cycle 70 — sample: draw n items uniformly at random (with
+// replacement) from arr. Uses the `random()` builtin which returns
+// float in [0, 1). Empty arr or n ≤ 0 returns empty.
+pub fn rt_array_sample(arr: HexaVal, n: int) -> HexaVal {
+    let mut out: [float] = []
+    let n_items = len(arr)
+    if n_items == 0 { return out }
+    if n <= 0 { return out }
+    let mut i = 0
+    while i < n {
+        let r = random()
+        let n_items_f = n_items as float
+        let mut idx = (r * n_items_f) as int
+        if idx >= n_items { idx = n_items - 1 }
+        out = out.push(arr[idx])
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 69 — sort_by: stable insertion sort using a callback
+// key-extractor. Each element's sort key is computed once (`key_fn
+// (item)`) and stored in a parallel array; comparisons go through
+// hexa_cmp_le (handles int/float/string). Stable via `sorted_keys[j]
+// <= k` test (equal keys preserve original order).
+pub fn rt_array_sort_by(arr: HexaVal, key_fn: HexaVal) -> HexaVal {
+    let n = len(arr)
+    if n <= 1 { return arr }
+    let mut sorted_keys: [float] = []
+    let mut sorted_items: [float] = []
+    let mut idx = 0
+    while idx < n {
+        let item = arr[idx]
+        let k = key_fn(item)
+        let m = len(sorted_keys)
+        let mut j = 0
+        while j < m {
+            if sorted_keys[j] <= k {
+                j = j + 1
+            } else {
+                break
+            }
+        }
+        let mut nsk: [float] = []
+        let mut nsi: [float] = []
+        let mut p = 0
+        while p < j {
+            nsk = nsk.push(sorted_keys[p])
+            nsi = nsi.push(sorted_items[p])
+            p = p + 1
+        }
+        nsk = nsk.push(k)
+        nsi = nsi.push(item)
+        while p < m {
+            nsk = nsk.push(sorted_keys[p])
+            nsi = nsi.push(sorted_items[p])
+            p = p + 1
+        }
+        sorted_keys = nsk
+        sorted_items = nsi
+        idx = idx + 1
+    }
+    return sorted_items
+}
+
 // Step 3 cycle 68 — enumerate: array of [idx, item] pairs. No
 // callback, no polymorphic guard, just pair-building. Type annotations
 // are runtime-relaxed (push accepts any HexaVal).
