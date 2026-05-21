@@ -43,6 +43,62 @@ pub fn rt_str_bytes(s: string) -> [int] {
     return out
 }
 
+// Step 3 cycle 51 — UTF-8 codepoint counter (helper for pad_left/right).
+// Same bit-pattern table as rt_str_chars but just counts (no substring
+// allocations).
+pub fn rt_utf8_cpcount(s: string) -> int {
+    let n = byte_len(s)
+    let mut count = 0
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        let mut cp = 1
+        if (b & 0x80) == 0 {
+            cp = 1
+        } else if (b & 0xE0) == 0xC0 {
+            cp = 2
+        } else if (b & 0xF0) == 0xE0 {
+            cp = 3
+        } else if (b & 0xF8) == 0xF0 {
+            cp = 4
+        }
+        i = i + cp
+        count = count + 1
+    }
+    return count
+}
+
+// Step 3 cycle 51 — pad_left/right: ensure visible width (UTF-8
+// codepoints, not bytes) is ≥ `width` by prepending/appending spaces.
+// If already wide enough, returns the input unchanged. The C body uses
+// hexa_to_string first; that polymorphic coercion stays in the C wrapper
+// and the hexa fn always sees a string.
+pub fn rt_pad_left(s: string, width: int) -> string {
+    let cplen = rt_utf8_cpcount(s)
+    if cplen >= width { return s }
+    let pad = width - cplen
+    let mut bytes: [int] = []
+    let mut i = 0
+    while i < pad {
+        bytes = bytes.push(32)
+        i = i + 1
+    }
+    return bytes_to_str_raw(bytes) + s
+}
+
+pub fn rt_pad_right(s: string, width: int) -> string {
+    let cplen = rt_utf8_cpcount(s)
+    if cplen >= width { return s }
+    let pad = width - cplen
+    let mut bytes: [int] = []
+    let mut i = 0
+    while i < pad {
+        bytes = bytes.push(32)
+        i = i + 1
+    }
+    return s + bytes_to_str_raw(bytes)
+}
+
 // Step 3 cycle 50 — ASCII case conversion. Non-ASCII bytes pass through
 // unchanged (UTF-8 continuation bytes have high bit set, won't match
 // the 'a'-'z' or 'A'-'Z' range). Collect bytes into [int] then one-shot

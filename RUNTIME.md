@@ -1094,6 +1094,20 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 51: hexa_pad_left + hexa_pad_right → rt_pad_left/right (UTF-8 width)
+
+- ✅ `hexa_pad_left` + `hexa_pad_right` (self/runtime_core.c:6116,
+  6136) gain two-mode dispatch. Hexa-source `rt_pad_left/right` use a
+  new `rt_utf8_cpcount` helper (same bit-pattern table as cycle 47's
+  `rt_str_chars`, but count-only without substring allocations)
+- The polymorphic `hexa_to_string(s)` coercion stays C-side (hexa fn
+  params are string-typed); the actual padding work moves to hexa
+- Padding alphabet is fixed at space (byte 32) — matches the C body.
+  `bytes_to_str_raw([32, 32, ...])` one-shot builds the pad prefix/
+  suffix, then `+` concat with `s`
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,848 B
+
 ### 2026-05-21 — step 3 cycle 50: rt_str_to_upper + rt_str_to_lower move to hexa source
 
 - ✅ `rt_str_to_upper` + `rt_str_to_lower` (self/runtime_core.c:6010,

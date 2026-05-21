@@ -6113,6 +6113,10 @@ static int utf8_cpcount(const char* s) {
     for (int i = 0; s[i]; i++) if ((s[i] & 0xC0) != 0x80) n++;
     return n;
 }
+// Step-3 cycle 51 port — pad_left dispatches to rt_pad_left. The
+// hexa_to_string polymorphic coercion stays C-side (hexa-source
+// param is string-typed); the actual padding work is hexa-source.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_pad_left(HexaVal s, HexaVal width) {
     HexaVal str = hexa_to_string(s);
     int w = HX_INT(width);
@@ -6125,6 +6129,13 @@ HexaVal hexa_pad_left(HexaVal s, HexaVal width) {
     hxlcl_strcpy(result + pad, HX_STR(str));
     return hexa_str_own(result);
 }
+#else
+extern HexaVal rt_pad_left(HexaVal s, HexaVal width);
+HexaVal hexa_pad_left(HexaVal s, HexaVal width) {
+    HexaVal str = hexa_to_string(s);
+    return rt_pad_left(str, width);
+}
+#endif
 
 
 // Bootstrap shim: hexa-level `join(arr, sep)` free-fn idiom in SSOT modules
@@ -6133,6 +6144,8 @@ HexaVal hexa_pad_left(HexaVal s, HexaVal width) {
 // (`split` was retired 2026-04-21 — codegen now emits hexa_str_split directly.)
 static HexaVal join;
 
+// Step-3 cycle 51 port — pad_right symmetric to pad_left.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_pad_right(HexaVal s, HexaVal width) {
     HexaVal str = hexa_to_string(s);
     int w = HX_INT(width);
@@ -6146,6 +6159,13 @@ HexaVal hexa_pad_right(HexaVal s, HexaVal width) {
     result[bytelen + pad] = 0;
     return hexa_str_own(result);
 }
+#else
+extern HexaVal rt_pad_right(HexaVal s, HexaVal width);
+HexaVal hexa_pad_right(HexaVal s, HexaVal width) {
+    HexaVal str = hexa_to_string(s);
+    return rt_pad_right(str, width);
+}
+#endif
 
 // B-19: Polymorphic arithmetic — T39 routes through __hx_to_double.
 // ROI-47: explicit float+float fast path avoids 2x __hx_to_double tag dispatch.
