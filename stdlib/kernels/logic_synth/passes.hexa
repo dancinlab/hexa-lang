@@ -1069,8 +1069,30 @@ struct AddLowerResult {
     ok:          int,     // 1 = lowered, 0 = unsupported shape
 }
 
-fn _passes_lower_add_cell(c: Cell) -> AddLowerResult {
-    let w = _passes_add_width(c)
+fn _passes_lower_add_cell(c: Cell, m: Module) -> AddLowerResult {
+    // rfc_006 §5 Tier-1 (e) 21pt-gap closure (2026-05-21): when the $add
+    // cell carries plain A/B/Y pins (the shape emitted by _rv_elab_expr
+    // before any explicit bit-blast pass), the legacy `_passes_add_width`
+    // helper only finds the plain pins and returns w=1, silently
+    // truncating multi-bit adders to one FA. The Source-2 width-aware
+    // emitter (read_verilog L1067) records a multi-bit Y wire when
+    // operands are multi-bit — read that width directly so the
+    // ripple-carry chain matches the actual data path. Per-bit nets
+    // use the `__b<k>` suffix to align with `_passes_lower_bitwise_cell`,
+    // `_passes_lower_mux_cell`, and the abc_emit_blif Option I `.latch
+    // <base>__b<k>` shape — so the per-bit FA SUM outputs feed the
+    // existing mux/latch chain that consumes `<y>__b<k>` nets.
+    let plain_y = _passes_pin_net(c, "Y")
+    let mut w = _passes_add_width(c)
+    let mut bit_blast_plain = 0
+    if plain_y != "" {
+        let yi = rtlil_find_wire(m, plain_y)
+        if yi >= 0 {
+            let yw = m.wires[yi].width
+            if yw > w { w = yw }
+            if yw > 1 { bit_blast_plain = 1 }
+        }
+    }
     if w <= 0 {
         return AddLowerResult {
             cells: [], wires: [],
@@ -1084,27 +1106,64 @@ fn _passes_lower_add_cell(c: Cell) -> AddLowerResult {
     let mut out_crhs:     [str]  = []
 
     // ── constant cin[0] = 0 tie (RTLIL connect to 1'b0) ──────────────
-    // rfc_006 §5 bug (a) iter 10: record `connect (cin0_net, 1'b0)` as
-    // a module-level assignment.  abc_emit_blif translates this by
-    // omitting any driver for cin0_net; ABC's read_blif then auto-ties
-    // the undriven net to constant 0 (its standard behavior).
     let cin0_net = c.name + "$cin0"
     out_wires = out_wires.push(rtlil_wire(cin0_net, 1, 0, 0))
     out_clhs = out_clhs.push(cin0_net)
     out_crhs = out_crhs.push("1'b0")
 
     // ── N-bit ripple-carry chain ────────────────────────────────────
-    // For each bit i in 0..w-1, instantiate one fa_1 driving SUM=Y[i]
-    // and COUT=cy[i]. CIN[0] = cin0_net; CIN[i] = cy[i-1] for i >= 1.
     let mut cin = cin0_net
     let mut i = 0
     while i < w {
-        // resolve per-bit operand nets — accept either bit-indexed or
-        // (for w == 1) the plain single-bit pin convention.
         let mut a_net: str = ""
         let mut b_net: str = ""
         let mut y_net: str = ""
-        if w == 1 {
+        if bit_blast_plain == 1 {
+            let bs = str(i)
+            let pa = _passes_pin_net(c, "A")
+            let pb = _passes_pin_net(c, "B")
+            let py = _passes_pin_net(c, "Y")
+            // rfc_006 §5 21pt-gap closure (2026-05-21): decode $const_<N>
+            // operands per-bit. `_rv_elab_expr` registers integer literals
+            // as 1-bit `$const_<N>` wires; in bit-blast plain mode the
+            // FA's per-bit B-pin would reference `$const_<N>__b<k>` which
+            // has no driver (ABC ties to 0 → adder collapses to identity).
+            // Decode bit k of N: bit=1 → connect via a fresh wire driven
+            // by 1'b1 (abc_emit_blif lowers to inv-of-helper-zero); bit=0
+            // → reference an undriven net (ABC auto-ties to 0). Same idea
+            // applies to A (when A is a literal).
+            if pa != "" {
+                let pa_n = _passes_parse_const_net(pa)
+                if pa_n >= 0 {
+                    let bit_v = (pa_n / _passes_pow2(i)) % 2
+                    let lit_net = c.name + "$alit$" + bs
+                    out_wires = out_wires.push(rtlil_wire(lit_net, 1, 0, 0))
+                    if bit_v == 1 {
+                        out_clhs = out_clhs.push(lit_net)
+                        out_crhs = out_crhs.push("1'b1")
+                    }
+                    a_net = lit_net
+                } else {
+                    a_net = pa + "__b" + bs
+                }
+            }
+            if pb != "" {
+                let pb_n = _passes_parse_const_net(pb)
+                if pb_n >= 0 {
+                    let bit_v = (pb_n / _passes_pow2(i)) % 2
+                    let lit_net = c.name + "$blit$" + bs
+                    out_wires = out_wires.push(rtlil_wire(lit_net, 1, 0, 0))
+                    if bit_v == 1 {
+                        out_clhs = out_clhs.push(lit_net)
+                        out_crhs = out_crhs.push("1'b1")
+                    }
+                    b_net = lit_net
+                } else {
+                    b_net = pb + "__b" + bs
+                }
+            }
+            if py != "" { y_net = py + "__b" + bs }
+        } else if w == 1 {
             a_net = _passes_pin_net(c, "A")
             if a_net == "" { a_net = _passes_pin_net(c, "A[0]") }
             b_net = _passes_pin_net(c, "B")
@@ -1123,11 +1182,14 @@ fn _passes_lower_add_cell(c: Cell) -> AddLowerResult {
         if b_net == "" { return AddLowerResult { cells: [], wires: [], connect_lhs: [], connect_rhs: [], ok: 0 } }
         if y_net == "" { return AddLowerResult { cells: [], wires: [], connect_lhs: [], connect_rhs: [], ok: 0 } }
 
-        // fresh COUT wire for this bit (always pushed so the FA's COUT
-        // pin references a wire present in the module — RTLIL's no-
-        // dangling invariant on cell pins, not on net sinks).
         let cy_net = c.name + "$cyo$" + str(i)
         out_wires = out_wires.push(rtlil_wire(cy_net, 1, 0, 0))
+
+        // bit-blast plain mode: declare per-bit Y so downstream resolvers
+        // can find it.
+        if bit_blast_plain == 1 {
+            out_wires = out_wires.push(rtlil_wire(y_net, 1, 0, 0))
+        }
 
         let mut fa = rtlil_cell(c.name + "$fa$" + str(i),
                                 "sky130_fd_sc_hd__fa_1", 1)
@@ -1273,6 +1335,27 @@ fn _passes_mod_a_bit(c: Cell, w: int, v: int) -> str {
     return _passes_pin_net(c, "A[" + str(v) + "]")
 }
 
+// rfc_006 §5 21pt-gap closure (2026-05-21): when the cell carries a plain
+// "A" pin AND the wire is multi-bit in the module, the source bit `v`
+// lives on the per-bit shadow `<a>__b<v>` (driven by upstream bit-blast
+// `_passes_lower_add_cell` / `_passes_lower_bitwise_cell` / mux chain).
+// Fallback path stays identical to `_passes_mod_a_bit`. Same convention
+// applies to the Y operand (output): a multi-bit plain "Y" pin drives
+// each bit via `<y>__b<i>` shadows so downstream mux/latch consumers
+// can read them.
+fn _passes_mod_a_bit_widened(c: Cell, w: int, v: int, m: Module) -> str {
+    let plain = _passes_pin_net(c, "A")
+    if plain != "" {
+        let ai = rtlil_find_wire(m, plain)
+        if ai >= 0 {
+            if m.wires[ai].width > 1 {
+                return plain + "__b" + str(v)
+            }
+        }
+    }
+    return _passes_mod_a_bit(c, w, v)
+}
+
 // CLEAN-ROOM: resolve the output net carrying bit `i` of the Y operand
 // of cell `c`. Same convention as the A reader.
 fn _passes_mod_y_bit(c: Cell, yw: int, i: int) -> str {
@@ -1282,6 +1365,21 @@ fn _passes_mod_y_bit(c: Cell, yw: int, i: int) -> str {
         return _passes_pin_net(c, "Y[0]")
     }
     return _passes_pin_net(c, "Y[" + str(i) + "]")
+}
+
+// rfc_006 §5 21pt-gap closure (2026-05-21): same as `_passes_mod_a_bit_widened`
+// for the Y output pin.
+fn _passes_mod_y_bit_widened(c: Cell, yw: int, i: int, m: Module) -> str {
+    let plain = _passes_pin_net(c, "Y")
+    if plain != "" {
+        let yi = rtlil_find_wire(m, plain)
+        if yi >= 0 {
+            if m.wires[yi].width > 1 {
+                return plain + "__b" + str(i)
+            }
+        }
+    }
+    return _passes_mod_y_bit(c, yw, i)
 }
 
 // CLEAN-ROOM: case-B LUT lowering for $mod with bounded input width.
@@ -1302,7 +1400,7 @@ fn _passes_mod_y_bit(c: Cell, yw: int, i: int) -> str {
 // ok_kind=2 with a fail-loud diagnostic when W > 5 (LUT table > 32
 // rows → cell-count blow-up; restoring-divider is the correct
 // substrate at that envelope and is out of iter-9 scope).
-fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
+fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int, m: Module) -> ModLowerResult {
     if w > 5 {
         return ModLowerResult {
             cells: [], wires: [],
@@ -1320,7 +1418,20 @@ fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
         }
     }
 
-    let yw = _passes_mod_yw(c)
+    let mut yw = _passes_mod_yw(c)
+    // rfc_006 §5 21pt-gap closure (2026-05-21): widen Y from the Y wire
+    // for the plain-Y multi-bit shape (mirrors A widening above). Without
+    // this, the LUT lowering only built one output bit even when the
+    // expression is multi-bit, leaving `<y>__b<i>` shadows undriven for
+    // i > 0 and the downstream mux chain reading 0 (which collapsed via
+    // `pass_clean_multidriver` constant folding).
+    let plain_y = _passes_pin_net(c, "Y")
+    if plain_y != "" {
+        let yi = rtlil_find_wire(m, plain_y)
+        if yi >= 0 {
+            if m.wires[yi].width > yw { yw = m.wires[yi].width }
+        }
+    }
     if yw < 1 {
         return ModLowerResult {
             cells: [], wires: [],
@@ -1353,7 +1464,7 @@ fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
     // Per output bit Y[i] — build the SOP.
     let mut i = 0
     while i < yw {
-        let y_net = _passes_mod_y_bit(c, yw, i)
+        let y_net = _passes_mod_y_bit_widened(c, yw, i, m)
         if y_net == "" {
             return ModLowerResult {
                 cells: [], wires: [],
@@ -1361,6 +1472,12 @@ fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
                 ok: 0, ok_kind: 3,
                 message: "lower_mod: cell `" + c.name + "` missing Y[" + str(i) + "] pin"
             }
+        }
+        // rfc_006 §5 21pt-gap closure: declare the per-bit Y shadow wire
+        // so downstream consumers can resolve it. The y_net in plain-Y
+        // multi-bit mode is `<y>__b<i>` which is NOT yet in m.wires.
+        if y_net != _passes_mod_y_bit(c, yw, i) {
+            out_wires = out_wires.push(rtlil_wire(y_net, 1, 0, 0))
         }
         // Truth column for Y[i]: list of A-values where bit i of (A%nval)
         // is 1. Each such A is a minterm.
@@ -1405,7 +1522,7 @@ fn _passes_lower_mod_case_b_lut(c: Cell, nval: int, w: int) -> ModLowerResult {
             let mut v = 0
             while v < w {
                 let bit_v = (mt / _passes_pow2(v)) % 2
-                let a_v = _passes_mod_a_bit(c, w, v)
+                let a_v = _passes_mod_a_bit_widened(c, w, v, m)
                 if a_v == "" {
                     return ModLowerResult {
                         cells: [], wires: [],
@@ -1598,8 +1715,20 @@ struct ModLowerResult {
     message:     str,     // empty on case A; diagnostic on B/C
 }
 
-fn _passes_lower_mod_cell(c: Cell) -> ModLowerResult {
-    let w = _passes_add_width(c)
+fn _passes_lower_mod_cell(c: Cell, m: Module) -> ModLowerResult {
+    let mut w = _passes_add_width(c)
+    // rfc_006 §5 21pt-gap closure (2026-05-21): widen W from the A wire
+    // when the cell carries a plain "A" pin (the shape from _rv_elab_expr
+    // for `<expr> % const`) — _passes_add_width returns 1 for plain pins
+    // even when the A net is multi-bit. The widened W feeds the case-B
+    // LUT correctly so the per-output-bit SOP covers all input rows.
+    let plain_a = _passes_pin_net(c, "A")
+    if plain_a != "" {
+        let ai = rtlil_find_wire(m, plain_a)
+        if ai >= 0 {
+            if m.wires[ai].width > w { w = m.wires[ai].width }
+        }
+    }
     if w <= 0 {
         return ModLowerResult {
             cells: [], wires: [],
@@ -1649,7 +1778,7 @@ fn _passes_lower_mod_cell(c: Cell) -> ModLowerResult {
         // bounded-LUT lowering (W ≤ 5) replaces the iter-7 fail-loud.
         // The LUT helper returns ok=1 on success, ok=0 ok_kind=2 with
         // the W-cap diagnostic when out of envelope.
-        return _passes_lower_mod_case_b_lut(c, nval, w)
+        return _passes_lower_mod_case_b_lut(c, nval, w, m)
     }
 
     // ── case A: divisor = 2^k — mask lowering ───────────────────────
@@ -2084,7 +2213,7 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                     }
                 }
                 if c.cell_type == "$add" {
-                    let adr = _passes_lower_add_cell(c)
+                    let adr = _passes_lower_add_cell(c, m)
                     if adr.ok == 1 {
                         // splice expansion in place of the $add cell
                         let mut adi = 0
@@ -2109,7 +2238,7 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                     }
                 }
                 if c.cell_type == "$mod" {
-                    let mdr = _passes_lower_mod_cell(c)
+                    let mdr = _passes_lower_mod_cell(c, m)
                     if mdr.ok == 1 {
                         // splice expansion in place of the $mod cell
                         let mut mdi = 0
@@ -3486,7 +3615,7 @@ fn main() {
     c_md_b = rtlil_cell_connect(c_md_b, "Y", "y0")
     m_md_b = rtlil_module_add_cell(m_md_b, c_md_b)
     // Direct unit-call on the lowering so we can assert ok_kind=2.
-    let r_md_b = _passes_lower_mod_cell(c_md_b)
+    let r_md_b = _passes_lower_mod_cell(c_md_b, m_md_b)
     if r_md_b.ok != 1 {
         println("FAIL T27 mdb_should_lower (ok=" + str(r_md_b.ok) + ", msg=" + r_md_b.message + ")"); fails = fails + 1
     }
@@ -3557,7 +3686,7 @@ fn main() {
         println("FAIL T28d3 lut3_5_no_const1_cell"); fails = fails + 1
     }
     // Direct unit-call to assert the kind tag.
-    let r_t28_u = _passes_lower_mod_cell(c_t28)
+    let r_t28_u = _passes_lower_mod_cell(c_t28, m_t28)
     if r_t28_u.ok_kind != 2 {
         println("FAIL T28e lut3_5_kind (got " + str(r_t28_u.ok_kind) + ", want 2)"); fails = fails + 1
     }
@@ -3612,7 +3741,7 @@ fn main() {
     if rtlil_check_no_dangling(r_t29.design.modules[0]) != 0 {
         println("FAIL T29d lut3_7_dangling_pin"); fails = fails + 1
     }
-    let r_t29_u = _passes_lower_mod_cell(c_t29)
+    let r_t29_u = _passes_lower_mod_cell(c_t29, m_t29)
     if r_t29_u.ok_kind != 2 {
         println("FAIL T29e lut3_7_kind (got " + str(r_t29_u.ok_kind) + ", want 2)"); fails = fails + 1
     }
@@ -3642,7 +3771,7 @@ fn main() {
     }
     c_t30 = rtlil_cell_connect(c_t30, "B[0]", "$const_5")
     m_t30 = rtlil_module_add_cell(m_t30, c_t30)
-    let r_t30 = _passes_lower_mod_cell(c_t30)
+    let r_t30 = _passes_lower_mod_cell(c_t30, m_t30)
     if r_t30.ok != 0 {
         println("FAIL T30 lut6_5_should_fail (ok=" + str(r_t30.ok) + ")"); fails = fails + 1
     }

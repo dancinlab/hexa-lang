@@ -299,6 +299,24 @@ fn abc_emit_blif(d: Design) -> str {
                                     // 1-bit LHS, multi-bit RHS — take bit 0.
                                     buf = buf + ".gate sky130_fd_sc_hd__buf_1 A="
                                         + rhs + "__b0 X=" + lhs + "\n"
+                                    // rfc_006 §5 21pt-gap closure (2026-05-21):
+                                    // integer-decl LHS (`integer i, idx;`)
+                                    // gets m.wires[lhs].width=1 but downstream
+                                    // mux/bitblast consumers may read per-bit
+                                    // `<lhs>__b<k>` shadows because the RHS is
+                                    // multi-bit. Drive those per-bit shadows
+                                    // from `<rhs>__b<k>` so the consumer chain
+                                    // observes the full data path. The plain
+                                    // whole-word LHS buffer above stays for
+                                    // consumers that read the whole word.
+                                    let mut biw = 0
+                                    while biw < rhs_w {
+                                        let bsw = str(biw)
+                                        buf = buf + ".gate sky130_fd_sc_hd__buf_1 A="
+                                            + rhs + "__b" + bsw
+                                            + " X=" + lhs + "__b" + bsw + "\n"
+                                        biw = biw + 1
+                                    }
                                 }
                             } else {
                                 // multi-bit LHS — emit W per-bit buffers.
