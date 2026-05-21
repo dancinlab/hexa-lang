@@ -1094,6 +1094,29 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 63: 🛸 hexa_array_map (callback POC, unlocks fn-dispatch family)
+
+- ✅ `hexa_array_map` (self/runtime.c:3114) ported. **First successful
+  callback dispatch from hexa source** — `fn_v: HexaVal` param lets
+  the codegen lower `fn_v(item)` to `hexa_call1(fn_v, item)`. Verified
+  by transpile inspection on ubu-2 (`cb_poc2.c` generated correct
+  `hexa_call1(fn_v, hexa_index_get(arr, i))`)
+- Polymorphic: `arr: HexaVal` accepts any array kind; the result's
+  element type matches whatever fn_v returns. Output array type
+  annotation `[float]` is purely for codegen lowering of `[]` →
+  `hexa_array_new()` (the actual items can be any HexaVal)
+- **Trap found + fix**: Calling C primitives by bare name in hexa
+  source (`hexa_array_new()` / `hexa_len(arr)` / `hexa_array_push(...)`
+  / `hexa_index_get(arr, i)`) makes codegen treat them as HexaVal
+  function pointers and emit `hexa_call0/1/2(...)` wrappers. The
+  call0 wrapper passes a C-function-pointer of incompatible signature
+  to hexa_call0's HexaVal param → clang errors. **Fix**: use
+  idiomatic hexa (`[]` / `len(arr)` / `arr[i]` / `out.push(v)`)
+- Unlocks the callback family for future cycles: filter, fold, find,
+  any, all, count, for_each, flat_map, scan, group_by, partition
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,936 B
+
 ### 2026-05-21 — step 3 cycle 62: hexa_format → rt_format (single-arg `{}` substitution)
 
 - ✅ `hexa_format` (self/runtime_core.c:5933) ported. Replaces the

@@ -3111,6 +3111,10 @@ HexaVal __hexa_range_array(HexaVal start, HexaVal end, int inclusive) {
 }
 #endif
 
+// Step-3 cycle 63 port — callback dispatch POC. Unlocks the callback
+// family by leveraging HexaVal-typed hexa-source params (codegen lowers
+// `fn(item)` to hexa_call1 when fn is HexaVal — verified on ubu-2).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_map(HexaVal arr, HexaVal fn) {
     if (!HX_IS_ARRAY(arr)) return hexa_array_new();
     HexaVal out = hexa_array_new();
@@ -3119,6 +3123,13 @@ HexaVal hexa_array_map(HexaVal arr, HexaVal fn) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_map(HexaVal arr, HexaVal fn_v);
+HexaVal hexa_array_map(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) return hexa_array_new();
+    return rt_array_map(arr, fn);
+}
+#endif
 
 HexaVal hexa_array_filter(HexaVal arr, HexaVal fn) {
     if (!HX_IS_ARRAY(arr)) return hexa_array_new();

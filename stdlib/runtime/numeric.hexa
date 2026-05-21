@@ -303,6 +303,25 @@ pub fn rt_array_sort_float(arr: [float]) -> [float] {
     return sorted
 }
 
+// Step 3 cycle 63 — array map (callback POC). Unlocks the callback
+// family by using `HexaVal` as the hexa-source param type for the fn —
+// codegen lowers `fn_v(item)` to `hexa_call1(fn_v, item)` (verified
+// via ubu-2 transpile test). Use idiomatic hexa for array ops (`[]` /
+// `len()` / `arr[i]` / `.push()`) — calling C primitives directly by
+// name (`hexa_array_new` etc.) causes codegen to treat them as HexaVal
+// function pointers and emit `hexa_call0(...)` wrappers that mismatch
+// the C signatures.
+pub fn rt_array_map(arr: HexaVal, fn_v: HexaVal) -> HexaVal {
+    let mut out: [float] = []
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        out = out.push(fn_v(arr[i]))
+        i = i + 1
+    }
+    return out
+}
+
 // Step 3 cycle 58 — array contains, float fast-path. Returns true if
 // any element of `arr` equals `item`. C wrapper does the all-float
 // guard before dispatch (mixed arrays stay on the polymorphic hexa_eq
