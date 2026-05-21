@@ -4090,6 +4090,16 @@ HexaVal __hexa_fn_arena_return(HexaVal ret) {
 // by the caller — for now we do NOT perform automatic escape analysis, so
 // the gate defaults to OFF. With the gate OFF behavior is bit-identical to
 // pre-rt-32-D (every concat still does its own malloc).
+//
+// Step 4 잔여 #3 (RUNTIME.md) — hexa-source dispatch via @no_arena.
+// The hexa rt_str_concat (stdlib/runtime/ctype.hexa) carries @no_arena so
+// it shares the caller's arena frame instead of nesting (avoids the
+// b2018e13 nested-arena scope_pop corruption). C wrapper stays for the
+// no-stdlib path and for the empty-side / non-string fast paths (zero
+// arena bookkeeping required → C is strictly cheaper there).
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_str_concat(HexaVal a, HexaVal b);
+#endif
 HexaVal hexa_str_concat(HexaVal a, HexaVal b) {
     if (_hx_stats_on()) _hx_stats_str_concat++;
     // A17: both operands string is the dominant case in self-hosting parser
@@ -4103,6 +4113,16 @@ HexaVal hexa_str_concat(HexaVal a, HexaVal b) {
     // accumulator), so hint the non-empty arms.
     if (HX_UNLIKELY(la == 0)) return HX_IS_STR(b) ? b : hexa_str(sb);
     if (HX_UNLIKELY(lb == 0)) return HX_IS_STR(a) ? a : hexa_str(sa);
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+    // Both operands non-empty strings → hand off to @no_arena hexa port.
+    // a/b are already validated string HexaVals (sa/sb extracted above
+    // imply HX_IS_STR truthy on both at this point).
+    if (HX_LIKELY(HX_IS_STR(a) && HX_IS_STR(b))) {
+        return rt_str_concat(a, b);
+    }
+    // Fall through to C body for non-string (defensive, mirrors C
+    // wrapper's HX_IS_STR ? ... : hexa_str(sX) coercion shape).
+#endif
     size_t total = la + lb + 1;
     char* result;
     if (HX_LIKELY(hexa_arena_on())) {
