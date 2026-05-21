@@ -1,0 +1,25 @@
+// RFC 055 055-P0 - hexa-native NVPTX emit | target=nvptx64-nvidia-cuda-sm120
+.version 8.0
+.target sm_120
+.address_size 64
+
+.visible .entry matmul_kernel (
+    .param .u64 matmul_kernel_param_0,
+    .param .u64 matmul_kernel_param_1,
+    .param .u64 matmul_kernel_param_2,
+    .param .u64 matmul_kernel_param_3,
+    .param .u64 matmul_kernel_param_4,
+    .param .u64 matmul_kernel_param_5
+)
+{
+    .reg .u32 %r3;
+    .reg .u32 %r4;
+    .reg .u32 %r5;
+    .reg .f64 %fd6;
+$L_0:
+    ld.param.u32 %r3, [matmul_kernel_param_3];  // load kernel param 3 into reg
+    ld.param.u32 %r4, [matmul_kernel_param_4];  // load kernel param 4 into reg
+    ld.param.u32 %r5, [matmul_kernel_param_5];  // load kernel param 5 into reg
+    // RFC 055 055-P0 - unsupported call: gpu_matmul
+    ret;  // return
+}

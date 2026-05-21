@@ -1,0 +1,64 @@
+{
+  "cycle": "N108-RFC071-P10-source-to-silicon-matmul",
+  "date": "2026-05-22",
+  "host": "darwin-arm64 (compile) → ubu-2 RTX 5070 sm_120 driver-JIT (fire)",
+  "falsifier": "F-RFC071-NVPTX-MATMUL-SOURCE-TO-SILICON-NUMERIC-EQ",
+  "verdict": "BLOCKED",
+  "verdict_reason": "N100 (gpu_matmul HIR→MIR synthesis) + N86 (NVPTX matmul codegen) NOT present on main HEAD 85150013. Both commits (fcb72487, cff2ebc9) exist as orphan refs but were silently wiped — fixture compiler/codegen/nvptx_p10_matmul_test.hexa was last DELETED by c39afbbe 'project.tape SSOT'. Task constraint forbids touching compiler source; cherry-pick out of scope.",
+  "verification_passes": {
+    "driver_build": "PASS (7.8s, /tmp/hexa_n108_driver, current main 85150013)",
+    "fixture_parse": "PASS (hexa parse rc=0)",
+    "nvptx_target_dispatch": "PASS (--target=nvptx64-nvidia-cuda-sm80 accepted, P3-PATH-B phase tag emitted)",
+    "ptx_emit": "PARTIAL (1/4 expected substrings)",
+    "ptxas_accept": "PASS (4 regs, 400 bytes cmem[0], 0 stack)",
+    "driver_jit_load": "PASS (cuModuleLoadDataEx OK on RTX 5070 after 5-opt fix)",
+    "kernel_launch": "PASS (cuLaunchKernel + cuCtxSynchronize OK)",
+    "numeric_equivalence": "FAIL (all 4096 cells = 0.0; max_abs 9.77 vs CPU reference; byte_mismatch 4096/4096)"
+  },
+  "ptx_substring_audit": {
+    "found": [".visible .entry matmul_kernel"],
+    "missing": [
+      "wmma.load.a.sync.aligned.m16n16k16.row.f16",
+      "wmma.load.b.sync.aligned.m16n16k16.col.f16",
+      "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32",
+      "wmma.store.d.sync.aligned.m16n16k16.row.f32"
+    ],
+    "diagnostic_line": "// RFC 055 055-P0 - unsupported call: gpu_matmul",
+    "ratio": "1/5"
+  },
+  "ptx_metrics": {
+    "size_bytes": 791,
+    "lines": 25,
+    "registers_used": 4,
+    "cmem0_bytes": 400,
+    "stack_frame_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0
+  },
+  "numeric_result": {
+    "M": 64, "N": 64, "K": 64,
+    "max_abs": 9.773343,
+    "max_rel": 1.0,
+    "byte_mismatch": 4096,
+    "byte_mismatch_total": 4096,
+    "c_nonzero_cells": 0,
+    "first_nonzero_idx": -1,
+    "ref_sample_first_8": [-1.980, 4.992, -2.512, -2.866, -1.160, -1.588, 0.901, -4.402],
+    "got_sample_first_8": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "tolerance_4_ulp": "n/a (kernel body produces no output, not even a wrong matmul)",
+    "speedup_vs_cpu_ref": "n/a"
+  },
+  "main_head": "85150013",
+  "wipe_chain": {
+    "n86_original": "6b2b10c0 (2026-05-21 22:58:59) — orphan",
+    "n86_restore": "cff2ebc9 (2026-05-21 22:58:00) — orphan",
+    "n100_landing": "fcb72487 (2026-05-21 23:54:00) — orphan",
+    "n100_respin": "05ca4e54 (2026-05-21 23:58:07) — orphan",
+    "docs_only_landed_main": "ab81ea39 (2026-05-21 23:54:42) — GPU.md +2 lines only, NO code",
+    "wipe_commit": "c39afbbe (2026-05-22 00:02:39) — 'project.tape SSOT' deleted fixture, did not restore N100/N86 code"
+  },
+  "remediation": {
+    "honest_scope_per_g3": "Cycle CANNOT be closed without main-side N100+N86 restoration (3-file edit: bind.hexa + hir_to_mir.hexa + nvptx_target.hexa); task forbids compiler source touch. Diagnostic data captured to enable a follow-up restoration cycle.",
+    "next_step": "Open recovery PR cherry-picking fcb72487 + cff2ebc9 (or rewriting from scratch using GPU.md §1f spec + memory `feedback_worktree_merge_silent_filedrop`)."
+  }
+}
