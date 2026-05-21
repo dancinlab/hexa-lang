@@ -43,6 +43,47 @@ pub fn rt_str_bytes(s: string) -> [int] {
     return out
 }
 
+// Step 3 cycle 49 — strip trailing whitespace (mirror of trim_start).
+pub fn rt_str_trim_end(s: string) -> string {
+    let n = byte_len(s)
+    let mut b_end = n
+    while b_end > 0 {
+        let b = s.byte_at(b_end - 1)
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            b_end = b_end - 1
+        } else {
+            break
+        }
+    }
+    return s.substring(0, b_end)
+}
+
+// Step 3 cycle 49 — strip both leading and trailing whitespace.
+// Could be implemented as trim_end(trim_start(s)) but inlining halves
+// the string allocations.
+pub fn rt_str_trim(s: string) -> string {
+    let n = byte_len(s)
+    let mut a = 0
+    while a < n {
+        let b = s.byte_at(a)
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            a = a + 1
+        } else {
+            break
+        }
+    }
+    let mut b_end = n
+    while b_end > a {
+        let b = s.byte_at(b_end - 1)
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            b_end = b_end - 1
+        } else {
+            break
+        }
+    }
+    return s.substring(a, b_end)
+}
+
 // Step 3 cycle 48 — strip leading whitespace (space, tab, LF, CR).
 // Replaces the C-direct rt_str_trim_start in self/runtime.c:2970 when
 // HEXA_HAS_HEXA_RT_STDLIB is defined. The C body uses strdup; this

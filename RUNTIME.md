@@ -1094,6 +1094,19 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 49: rt_str_trim_end + rt_str_trim move to hexa source
+
+- ✅ `rt_str_trim_end` (self/runtime.c:2977) and `rt_str_trim`
+  (self/runtime_core.c:5953) both move to hexa source. C bodies
+  wrapped in `#ifndef HEXA_HAS_HEXA_RT_STDLIB`; ctype.hexa provides
+  the symbols in the stdlib build
+- `rt_str_trim` is inlined (head-skip + tail-skip + single substring)
+  rather than composed as `trim_end(trim_start(s))` — halves the
+  string allocations vs the compose form
+- Closes the trim family on the hexa-source path (start/end/both)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,592 B
+
 ### 2026-05-21 — step 3 cycle 48: rt_str_trim_start moves to hexa source
 
 - ✅ `rt_str_trim_start` was previously C-only in self/runtime.c:2970

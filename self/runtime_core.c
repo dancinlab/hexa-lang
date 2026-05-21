@@ -5950,6 +5950,9 @@ HexaVal hexa_str_split(HexaVal s, HexaVal delim) {
 
 // M1 full · str_ext Step 5 (hxa-20260423-003): rt_str_trim — codegen
 // emits rt_str_* directly; hexa_str_trim shim retired.
+// Step-3 cycle 49 — rt_str_trim moves to hexa source. C body stays
+// for the no-stdlib path.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal rt_str_trim(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
     char* str = HX_STR(s);
@@ -5959,6 +5962,7 @@ HexaVal rt_str_trim(HexaVal s) {
     char* result = hxlcl_strndup(str, len);
     return hexa_str_own(result);
 }
+#endif
 
 // Step-3 cycle 44 port — string replace-all dispatches to rt_str_replace
 // in stdlib/runtime/ctype.hexa. The hexa path is O(n*m) (no strstr;

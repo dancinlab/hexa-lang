@@ -2978,12 +2978,16 @@ HexaVal rt_str_trim_start(HexaVal s) {
 }
 #endif
 
+// Step-3 cycle 49 — rt_str_trim_end moves to hexa source. C body stays
+// for the no-stdlib path.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal rt_str_trim_end(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
     int len = (int)HX_STRLEN(s);
     while (len > 0 && (HX_STR(s)[len-1] == ' ' || HX_STR(s)[len-1] == '\t' || HX_STR(s)[len-1] == '\n' || HX_STR(s)[len-1] == '\r')) len--;
     return hexa_str_own_with_len(hxlcl_strndup(HX_STR(s), len), (size_t)len);
 }
+#endif
 
 // Byte-based slice: [start, end) clamped to length
 // Step-3 cycle 46 port — byte slice dispatches to rt_str_slice
