@@ -1,11 +1,13 @@
-// compiler/cli/build_nvptx.hexa — RFC 071 P2 emit-driver hexa module
+// compiler/cli/build_nvptx.hexa — RFC 071 P3 emit-driver hexa module
 //
 // @rfc 071
-// @phase P2.2
-// @status P2.2 — sm_arch threaded through codegen (sm_80 / sm_90 / sm_120)
+// @phase P3
+// @status P3 — module-loader bridge wired (parse → lower → MIR → PTX);
+//              hand-MIR vec-add fallback preserved (P2.1 path)
 // @cite RFC 071 §3 P2 "emit-driver hexa module skeleton" +
 //       RFC 055 §6.2 (codegen_emit_ptx_sm80 sibling) +
-//       RFC 071 P2.2 `codegen_emit_ptx_for_sm(module, sm_arch)` dispatch
+//       RFC 071 P2.2 `codegen_emit_ptx_for_sm(module, sm_arch)` dispatch +
+//       RFC 071 P3 "module_loader bridge for @gpu_kernel discovery"
 // @sister self/main.hexa::cmd_build NVPTX branch
 //        + self/main.hexa::_build_nvptx_emit_driver
 //
@@ -107,19 +109,100 @@
 //     source file (`F-RFC071-E2E-NUMERIC-EQ`)
 //
 // ──────────────────────────────────────────────────────────────────────
+// P3 WIRING SPEC (THIS COMMIT — module-loader bridge)
+// ──────────────────────────────────────────────────────────────────────
+// P3 = "first source-derived PTX emission" — the last code-level step
+// before §10 row 1/8 source-to-silicon e2e closure. The minimal P3
+// deliverable composes the existing `pub fn` pipeline directly:
+//
+//   lex(source, path)         -> [Token]   (compiler/lex/lexer.hexa)
+//   parse(tokens, path)       -> Module    (compiler/parse/parser.hexa)
+//   lower(module, atlas)      -> HModule   (compiler/lower/ast_to_hir.hexa)
+//   lower_hir(hmod)           -> MModule   (compiler/lower/hir_to_mir.hexa)
+//
+// The lowering chain DOES handle `@gpu_kernel` already — see
+// `compiler/lower/hir_to_mir.hexa:2749-2770`: every HIR FnDecl with a
+// `@gpu_kernel` annotation gets its corresponding MFunc.gpu_kind stamped
+// `GPU_KIND_KERNEL` (the lowering reads the annotation name, not just
+// "@gpu" — exact strings `gpu_kernel` / `gpu_device`).
+//
+// CRITICAL: `_nvptx_codegen` (compiler/codegen/nvptx_target.hexa:1399-
+// 1437) already filters MFuncs by `gpu_kind != GPU_KIND_CPU` — so the
+// MModule passed to `codegen_emit_ptx_for_sm` can contain mixed CPU +
+// GPU functions and the PTX text will contain ONLY the kernels.
+// No separate filter step needed for partition; that's already wired.
+//
+// Required edits for P3 (additive — preserves F-RFC055-CPU-CODEGEN-
+// UNTOUCHED and F-RFC071-MIR-DRIVER-INVOKE):
+//   1. Import `compiler/lex/lexer.hexa` (lex)
+//   2. Import `compiler/parse/parser.hexa` (parse + parse_diags)
+//   3. Import `compiler/lower/ast_to_hir.hexa` (lower)
+//   4. Import `compiler/lower/hir_to_mir.hexa` (lower_hir)
+//   5. Import `compiler/atlas/static_index.hexa` (static_atlas)
+//   6. New fn `_build_nvptx_source_module(src_path) -> MModule` —
+//      reads the source file, runs lex/parse/lower/lower_hir, returns
+//      the MModule (or an empty placeholder MModule on read miss).
+//   7. New fn `_count_gpu_kernels(mmod) -> i64` — counts MFuncs with
+//      `gpu_kind == GPU_KIND_KERNEL`. Used by the dispatch heuristic
+//      below to decide between source-derived and hand-MIR emission.
+//   8. `_build_nvptx_stub_ptx(src_path, sm_arch)` now takes a path:
+//      a. If src_path is non-empty AND the parse pipeline finds at least
+//         one @gpu_kernel MFunc, emit PTX from the source MModule.
+//      b. Else (empty path, parse miss, or no @gpu_kernel) fall back to
+//         `_build_hand_mir_vec_add()` (P2.1 path; preserves the existing
+//         F-RFC071-MIR-DRIVER-INVOKE smoke surface for callers that pass
+//         "" as the source path).
+//   9. `build_nvptx_emit_driver(src_path, sm_arch)` passes `src_path`
+//      to `_build_nvptx_stub_ptx`.
+//
+// Falsifier `F-RFC071-MODULE-LOADER-BRIDGE` (NEW for P3):
+//   - Source file with `@gpu_kernel fn my_test_kernel(...) { ... }` at a
+//     known path (compiler/codegen/nvptx_p3_source_to_silicon_test.hexa).
+//   - `build_nvptx_emit_driver(path, "sm_80")` writes a PTX whose
+//     `.visible .entry` line names `my_test_kernel`, NOT `vadd`.
+//   - PASS-trigger: the entry name match. FAIL-trigger: the entry name
+//     remains `vadd` (the hand-MIR fixture name).
+//
+// P3 honest scope (@D g3):
+//   - The pipeline composition lives in `compiler/cli/build_nvptx.hexa`,
+//     a spec-sibling module. `self/main.hexa::_build_nvptx_emit_driver`
+//     is the live driver-side mirror — it cannot yet `use compiler/cli/
+//     build_nvptx.hexa` because self/main.hexa is the bootstrap host
+//     (self-host cycle). Bringing the live driver up to P3 requires the
+//     in-hexa compiler self-host default-flip (`HEXA_BACKEND=native`,
+//     RFC 063 P3+) — at which point `cmd_build` can `use` this module
+//     directly and the live emit-path matches the spec body 1:1.
+//   - The parse-gate (`hexa parse compiler/cli/build_nvptx.hexa`) and
+//     the static structural F-RFC071-MODULE-LOADER-BRIDGE falsifier
+//     (compiler/codegen/nvptx_p3_module_loader_bridge_test.hexa) are
+//     the verification surface today. Live driver runtime invocation
+//     of this module's `build_nvptx_emit_driver` is deferred until the
+//     self-host default-flip.
+//   - Per `project_compiler_selfbuild_blockers`: Mac OOMs on the full
+//     compiler self-build flatten today, which is why we land the spec
+//     module ahead of the runtime invocation — when self-host default-
+//     flips, this code path is already proven parse-clean and the
+//     falsifier already cuts.
+//   - P4+ (deferred): silicon fire of the source-derived PTX via
+//     `ptxas -arch=sm_80` + driver-JIT `cuLaunchKernel` + numeric-eq
+//     check (`F-RFC071-E2E-NUMERIC-EQ`).
+//
+// ──────────────────────────────────────────────────────────────────────
 // HONEST SCOPE (@D g3)
 // ──────────────────────────────────────────────────────────────────────
-// - Stub returns CANNED PTX text — NOT a real codegen invocation. The
-//   F-RFC071-MODULE-LOADER-BRIDGE falsifier (RFC 071 §4 P2/P3) requires
-//   the emitted PTX body to reflect the source body; this stub
-//   intentionally fails that falsifier. P2.1+ closure work.
-// - The PTX `.visible .entry _hexa_smoke()` body is `ret;` — a no-op
-//   kernel. It is launchable (ptxas-accepts, driver-JIT-loadable) but
-//   computes nothing.
+// - P3 wiring lands as a spec-sibling module. The runtime invocation
+//   path lives in `self/main.hexa::_build_nvptx_emit_driver` and still
+//   uses the P2.1 hand-MIR fixture — the self-host default-flip
+//   (`HEXA_BACKEND=native`, RFC 063 P3+) is the prerequisite for the
+//   live driver to `use` this module's `build_nvptx_emit_driver`.
+// - When the source path is empty or no `@gpu_kernel` is found, the
+//   fallback hand-MIR fixture preserves the P2.1
+//   `F-RFC071-MIR-DRIVER-INVOKE` falsifier coverage.
 // - NO LLVM (@F f1). NO new C-transpile architecture (@F f2). The
 //   write_file path uses the existing POSIX fwrite builtin.
-// - `compiler/codegen/{x86_64_linux,arm64_darwin,nvptx_target}.hexa` are
-//   NOT touched (F-RFC055-CPU-CODEGEN-UNTOUCHED held).
+// - `compiler/codegen/{x86_64_linux,arm64_darwin,nvptx_target,
+//   thumbv7em_eabihf,metal_target}.hexa` are NOT touched
+//   (F-RFC055-CPU-CODEGEN-UNTOUCHED held; N5 metal lane untouched).
 //
 // ──────────────────────────────────────────────────────────────────────
 // FALSIFIER F-RFC071-EMIT-DRIVER-INVOKE (P2)
@@ -156,7 +239,7 @@
 // callers byte-identically see ZERO diff (F-RFC055-CPU-CODEGEN-
 // UNTOUCHED applies to the GPU corpus as well).
 
-// ── P2.1 wiring imports ─────────────────────────────────────────────
+// ── P2.1 + P3 wiring imports ────────────────────────────────────────
 //
 // `compiler/ir/mir.hexa` — `MModule` / `MFunc` / `Block` / `Stmt` /
 //   `Local` / `Operand` value types + the `GPU_KIND_KERNEL` constant +
@@ -165,8 +248,22 @@
 // `compiler/codegen/nvptx_target.hexa` — `codegen_emit_ptx_sm80` MIR→PTX
 //   text entry point (RFC 055 055-P0). Composes `_nvptx_codegen` +
 //   `emit_ptx`; no CPU-codegen side effects.
+// `compiler/lex/lexer.hexa` — `lex(source, file)` → `[Token]` (P3).
+// `compiler/parse/parser.hexa` — `parse(tokens, file)` → `Module` (P3).
+// `compiler/lower/ast_to_hir.hexa` — `lower(module, atlas)` → `HModule` (P3).
+// `compiler/lower/hir_to_mir.hexa` — `lower_hir(hmod)` → `MModule` (P3);
+//   contains the `@gpu_kernel` annotation → `gpu_kind` mapping
+//   (`compiler/lower/hir_to_mir.hexa:2749-2770`) that the partition
+//   filter in `_nvptx_codegen` consumes.
+// `compiler/atlas/static_index.hexa` — `static_atlas()` → `AtlasIndex`,
+//   the lookup table `lower(module, atlas)` requires for P/C/L/E refs.
 import "../ir/mir.hexa"
 import "../codegen/nvptx_target.hexa"
+import "../lex/lexer.hexa"
+import "../parse/parser.hexa"
+import "../lower/ast_to_hir.hexa"
+import "../lower/hir_to_mir.hexa"
+import "../atlas/static_index.hexa"
 
 // ── P2.1 hand-MIR vec-add fixture ───────────────────────────────────
 //
@@ -348,28 +445,111 @@ fn _build_hand_mir_vec_add() -> MModule {
     }
 }
 
-// ── PTX builder (P2.2 — sm_arch threaded through codegen) ───────────
+// ── P3 source-derived MModule helpers ────────────────────────────────
+//
+// `_build_nvptx_source_module(src_path)` composes the existing `pub fn`
+// pipeline (lex → parse → lower → lower_hir) on the source file at
+// `src_path` and returns the resulting `MModule`. The annotation handling
+// is inherited from `compiler/lower/hir_to_mir.hexa:2749-2770`: every
+// HIR FnDecl with `@gpu_kernel` lands as an `MFunc` with
+// `gpu_kind = GPU_KIND_KERNEL`.
+//
+// On read miss (src_path empty or file_exists == false) we return an
+// empty MModule placeholder so the caller can dispatch back to the P2.1
+// hand-MIR fixture. Parse diagnostics are NOT drained here — they live
+// in `parse_diags()` for the live driver to surface; this spec sibling
+// is parse-clean by construction and the falsifier (text-shape on the
+// emitted PTX) is the verification surface.
+//
+// P3 honest scope (@D g3): this fn composes pure `pub fn` calls. Today
+// it is invoked by `_build_nvptx_stub_ptx` below; the live driver
+// (`self/main.hexa::_build_nvptx_emit_driver`) still uses the P2.1
+// hand-MIR until the self-host default-flip lets `cmd_build` `use`
+// this module directly.
+fn _build_nvptx_source_module(src_path: string) -> MModule {
+    if len(src_path) == 0 {
+        return _empty_mmodule_placeholder()
+    }
+    if file_exists(src_path) == false {
+        return _empty_mmodule_placeholder()
+    }
+    let source  = to_string(read_file(src_path))
+    let tokens  = lex(source, src_path)
+    let module_ast = parse(tokens, src_path)
+    let atlas   = static_atlas()
+    let hmodule = lower(module_ast, atlas)
+    let mmodule = lower_hir(hmodule)
+    return mmodule
+}
+
+// `_empty_mmodule_placeholder()` returns an MModule with no funcs,
+// used as the read-miss sentinel from `_build_nvptx_source_module`.
+// Distinct from a real source MModule with zero kernels: the caller
+// dispatches on `len(mmod.funcs) == 0` OR `_count_gpu_kernels(mmod) == 0`
+// — both route to the P2.1 hand-MIR fallback.
+fn _empty_mmodule_placeholder() -> MModule {
+    return MModule {
+        file: "",
+        funcs: [],
+        globals: []
+    }
+}
+
+// `_count_gpu_kernels(mmod)` returns the number of MFuncs in `mmod`
+// with `gpu_kind == GPU_KIND_KERNEL`. Decision input for the
+// source-derived vs hand-MIR dispatch in `_build_nvptx_stub_ptx`.
+// (gpu_kind == GPU_KIND_DEVICE MFuncs reach the PTX too, as PTX
+// `.func` device fns; they are not counted here because the
+// fallback predicate is "is there at least one entry point?" —
+// a module with only device fns has nothing to launch.)
+fn _count_gpu_kernels(mmod: MModule) -> i64 {
+    let mut count: i64 = 0
+    let mut i = 0
+    while i < len(mmod.funcs) {
+        if mmod.funcs[i].gpu_kind == GPU_KIND_KERNEL {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+// ── PTX builder (P3 — source-derived emission with P2.1 fallback) ────
 
 // Compose the PTX text for the given sm_arch identifier.
 //
-// P2.2 (current): delegates to `codegen_emit_ptx_for_sm` on a hand-
-// built vec-add `MModule` (`_build_hand_mir_vec_add()`). The dispatch
-// entry threads `sm_arch` through to BOTH the LModule.target tag
-// (`.target sm_NN`) AND the PTX ISA `.version` directive — per-arch
+// P3 (current): tries source-derived emission first via
+// `_build_nvptx_source_module(src_path)` → `codegen_emit_ptx_for_sm`.
+// When the source path is empty / unreadable / contains no
+// `@gpu_kernel` MFunc, falls back to `_build_hand_mir_vec_add()` (the
+// P2.1 hand-MIR vec-add fixture) — preserving the
+// `F-RFC071-MIR-DRIVER-INVOKE` falsifier coverage for callers passing
+// "" as the source path.
+//
+// The `sm_arch` parameter threads through to BOTH the LModule.target
+// tag (`.target sm_NN`) AND the PTX ISA `.version` directive — per-arch
 // minimum: sm_80→7.0, sm_90→7.8, sm_120→8.0.
 //
-// The kernel body bytes are unchanged across sm-tags (only the header
-// directives differ); the existing `codegen_emit_ptx_sm80` and
-// `codegen_emit_ptx_sm90` one-shot entry points are preserved
-// byte-identically so the 40+ existing lower_test / emit_test callers
-// continue to see zero diff (F-RFC055-CPU-CODEGEN-UNTOUCHED applies
-// to the GPU corpus too).
+// The existing `codegen_emit_ptx_sm80` and `codegen_emit_ptx_sm90`
+// one-shot entry points are preserved byte-identically so the 40+
+// existing lower_test / emit_test callers continue to see zero diff
+// (F-RFC055-CPU-CODEGEN-UNTOUCHED applies to the GPU corpus too).
 //
 // ASCII-only output (driver-JIT ptxas refuses non-ASCII PTX comments —
 // see `reference_gpu_fire_infra.md`); the codegen pipeline produces
 // pure-ASCII text by construction.
-fn _build_nvptx_stub_ptx(sm_arch: string) -> string {
-    // P2.2 — sm_arch threaded through to both `.target` + `.version`.
+fn _build_nvptx_stub_ptx(src_path: string, sm_arch: string) -> string {
+    // P3 — try source-derived MModule first.
+    let src_mmod = _build_nvptx_source_module(src_path)
+    let kernel_count = _count_gpu_kernels(src_mmod)
+    if kernel_count > 0 {
+        return codegen_emit_ptx_for_sm(src_mmod, sm_arch)
+    }
+    // P2.1 fallback — hand-MIR vec-add fixture preserves
+    // F-RFC071-MIR-DRIVER-INVOKE coverage when:
+    //   * src_path == "" (smoke caller)
+    //   * src_path read failed
+    //   * source has no @gpu_kernel MFuncs (CPU-only file)
     return codegen_emit_ptx_for_sm(_build_hand_mir_vec_add(), sm_arch)
 }
 
@@ -377,12 +557,14 @@ fn _build_nvptx_stub_ptx(sm_arch: string) -> string {
 
 // build_nvptx_emit_driver(src_path, sm_arch) -> int
 //
-// P2 entry point. Today returns canned PTX; P2.1+ wires real codegen.
+// P3 entry point. Composes the source path through the lex → parse →
+// lower → lower_hir pipeline; when the source has at least one
+// `@gpu_kernel` MFunc, the emitted PTX reflects the source body. Else
+// falls back to the P2.1 hand-MIR vec-add fixture.
 //
 // Args:
-//   src_path : caller-side .hexa source path (read for size/summary; the
-//              source bytes are NOT yet routed through parse/check/lower
-//              — that is the P2.1 hook the stub punts on).
+//   src_path : caller-side .hexa source path. Read + lex + parse + lower
+//              + lower_hir invoked when non-empty + file_exists.
 //   sm_arch  : "sm_80" | "sm_90" | "sm_120" (caller's cmd_build branch
 //              already validated the three NVPTX target strings; this fn
 //              accepts the bare sm-tag).
@@ -391,22 +573,28 @@ fn _build_nvptx_stub_ptx(sm_arch: string) -> string {
 //   0 on successful PTX write
 //   1 on file-IO error (source unreadable, write_file failure, etc.)
 //
-// Side effect: writes `<src_path>.ptx` with the stub PTX content.
+// Side effect: writes `<src_path>.ptx` with the source-derived PTX
+// content (P3) or the P2.1 hand-MIR vec-add fallback when the source
+// has no `@gpu_kernel` MFunc.
 pub fn build_nvptx_emit_driver(src_path: string, sm_arch: string) -> int {
     if len(src_path) == 0 { return 1 }
     if len(sm_arch)  == 0 { return 1 }
-    // Confirm the source file exists (cheap pre-check; the stub does
-    // NOT yet read the source bytes — P2.1 hook).
+    // Confirm the source file exists (cheap pre-check; P3 below does
+    // its own internal file_exists check + read_file inside
+    // `_build_nvptx_source_module`, but a missing source is a hard
+    // error at this surface — return 1 rather than silently falling
+    // back to the hand-MIR fixture).
     let src_exists = file_exists(src_path)
     if src_exists == false { return 1 }
-    // Compose the stub PTX text.
-    let ptx_text = _build_nvptx_stub_ptx(sm_arch)
+    // Compose the PTX text — P3 source-derived emission with P2.1
+    // hand-MIR fallback. See `_build_nvptx_stub_ptx` docstring.
+    let ptx_text = _build_nvptx_stub_ptx(src_path, sm_arch)
     let out_path = src_path + ".ptx"
     // Write via the POSIX-fwrite builtin (no exec, no ARG_MAX limit;
     // mirrors stdlib/io.hexa::write_text pattern).
     write_file(out_path, ptx_text)
     // Verify destination materialised.
     if file_exists(out_path) == false { return 1 }
-    println("[nvptx] target=" + sm_arch + " src=" + src_path + " out=" + out_path + " stub=P2")
+    println("[nvptx] target=" + sm_arch + " src=" + src_path + " out=" + out_path + " phase=P3")
     return 0
 }
