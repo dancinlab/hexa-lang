@@ -43,6 +43,22 @@ pub fn rt_str_bytes(s: string) -> [int] {
     return out
 }
 
+// Step 3 cycle 43 — string join, all-string fast path. C body uses
+// hexa_to_string() to coerce mixed-type elements; this hexa-source
+// variant skips that and assumes every element is already a string
+// (caller-side typing or dispatch guard).
+pub fn rt_str_join_str(arr: [string], sep: string) -> string {
+    let n = len(arr)
+    if n == 0 { return "" }
+    let mut out = arr[0]
+    let mut i = 1
+    while i < n {
+        out = out + sep + arr[i]
+        i = i + 1
+    }
+    return out
+}
+
 // Step 3 cycle 42 — string substring with length-style semantics.
 // C-side hexa_str_substr handles the void-len → slen-start defaulting
 // (HX_TAG check), and passes a concrete count int here. We do the

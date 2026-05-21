@@ -1094,6 +1094,22 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 43: hexa_str_join → rt_str_join_str (all-string fast path)
+
+- ✅ `hexa_str_join` (self/runtime_core.c:5987) gains two-mode dispatch.
+  All-string arrays (`HX_IS_STR(sep)` + every element a string) take
+  the new `rt_str_join_str` path in `stdlib/runtime/ctype.hexa`;
+  mixed-type arrays still need per-element `hexa_to_string` coercion
+  and stay on the C body
+- Hexa side uses string `+` concat — codegen lowers to
+  `hexa_str_concat`. Less optimal than the C body's
+  preallocate-then-`memcpy`, but correctness-preserving and matches
+  the cycle-2/4 precision/perf budget
+- New `_arr_all_str_join` static helper (renamed to avoid colliding
+  with any future array-domain helper) inside the `#else` branch
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,016 B
+
 ### 2026-05-21 — step 3 cycle 42: hexa_str_substr → rt_str_substr
 
 - ✅ `hexa_str_substr` (self/runtime.c:3975) JS-style substring(start,

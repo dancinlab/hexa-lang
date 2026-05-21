@@ -5984,6 +5984,10 @@ HexaVal rt_str_to_lower(HexaVal s) {
     return hexa_str_own(r);
 }
 
+// Step-3 cycle 43 port — float-style fast-path for all-string arrays
+// dispatches to rt_str_join_str (ctype.hexa). Mixed-type arrays still
+// need hexa_to_string() coercion per element — that path stays C-side.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_join(HexaVal arr, HexaVal sep) {
     if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_str("");
     size_t total_size = 0;
@@ -6008,6 +6012,43 @@ HexaVal hexa_str_join(HexaVal arr, HexaVal sep) {
     result[total] = 0;
     return hexa_str_own(result);
 }
+#else
+extern HexaVal rt_str_join_str(HexaVal arr, HexaVal sep);
+static int _arr_all_str_join(HexaVal arr) {
+    int64_t n = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < n; i++) {
+        if (!HX_IS_STR(HX_ARR_ITEMS(arr)[i])) return 0;
+    }
+    return 1;
+}
+HexaVal hexa_str_join(HexaVal arr, HexaVal sep) {
+    if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_str("");
+    if (HX_IS_STR(sep) && _arr_all_str_join(arr)) {
+        return rt_str_join_str(arr, sep);
+    }
+    size_t total_size = 0;
+    for (int i = 0; i < HX_ARR_LEN(arr); i++) {
+        HexaVal s = hexa_to_string(HX_ARR_ITEMS(arr)[i]);
+        total_size += HX_STRLEN(s);
+    }
+    size_t seplen = HX_STRLEN(sep);
+    total_size += (HX_ARR_LEN(arr) - 1) * seplen;
+    char* result = malloc(total_size + 1);
+    size_t total = 0;
+    for (int i = 0; i < HX_ARR_LEN(arr); i++) {
+        if (i > 0) {
+            hxlcl_memcpy(result + total, HX_STR(sep), seplen);
+            total += seplen;
+        }
+        HexaVal s = hexa_to_string(HX_ARR_ITEMS(arr)[i]);
+        size_t slen = HX_STRLEN(s);
+        hxlcl_memcpy(result + total, HX_STR(s), slen);
+        total += slen;
+    }
+    result[total] = 0;
+    return hexa_str_own(result);
+}
+#endif
 
 // ─────────────────────────────────────────────────────────────────────
 // M1-lite (hxa-20260423-003 Step 4): rt_str_* layer from runtime_hi.hexa
