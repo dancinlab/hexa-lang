@@ -1660,10 +1660,12 @@ fn gen2_fn_decl(node) {
     // ops 0/1/2/3 of binary_value (and any similar shape). Repro:
     // perfect_number_engine_smoke a/b float params after Fibonacci helper.
     _gen2_current_fn_params = []
+    _gen2_current_fn_param_types = []
     let mut _pi = 0
     while _pi < len(node.params) {
         _gen2_declared_names.push(_hexa_mangle_ident(node.params[_pi].name))
         _gen2_current_fn_params.push(node.params[_pi].name)
+        _gen2_current_fn_param_types.push(node.params[_pi].value)
         _pi = _pi + 1
     }
     // Collect all LetStmt names (with duplicates).
@@ -3713,6 +3715,41 @@ let mut _gen2_pending_hoist = []
 // this guard the float param gets unboxed via `HX_INT()` → garbage.
 // Set in gen2_fn_decl alongside _gen2_current_fn_lets.
 let mut _gen2_current_fn_params = []
+// Step-3 cycle 76 — parallel array of param-type-annotations populated
+// alongside _gen2_current_fn_params. Enables typed-param direct-emit
+// for `<`/`>`/`+`/`*` (instead of routing through hexa_cmp_lt/hexa_add)
+// and typed-source direct cast for `as int`/`as float`. Empty string
+// means no annotation. Indexed in lockstep with _gen2_current_fn_params.
+let mut _gen2_current_fn_param_types = []
+
+// Step-3 cycle 76 — return the declared type annotation for a fn-param
+// name, or "" if not a param of the current fn.
+fn _gen2_param_type(name) {
+    let mut i = 0
+    while i < len(_gen2_current_fn_params) {
+        if _gen2_current_fn_params[i] == name {
+            if i < len(_gen2_current_fn_param_types) {
+                return _gen2_current_fn_param_types[i]
+            }
+            return ""
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Step-3 cycle 76 — true iff `name` is a fn param annotated as int-like.
+fn _gen2_param_is_int(name) {
+    let t = _gen2_param_type(name)
+    if t == "int" || t == "i64" || t == "i32" || t == "i16" || t == "i8" { return true }
+    return false
+}
+
+fn _gen2_param_is_float(name) {
+    let t = _gen2_param_type(name)
+    if t == "float" || t == "f64" || t == "f32" || t == "Float" { return true }
+    return false
+}
 
 fn _gen2_name_in_cur_params(name) {
     let mut i = 0
@@ -4052,8 +4089,26 @@ fn gen2_expr(node) {
         // hexa_to_int / hexa_to_float / hexa_to_string / hexa_truthy).
         if op == "as" {
             let type_name = node.right.name
-            if type_name == "int" { return "hexa_to_int(" + l + ")" }
-            if type_name == "float" { return "hexa_to_float(" + l + ")" }
+            // Step-3 cycle 76 — typed-source direct cast: when source is
+            // provably typed (FloatLit/typed-float-param/known-float-let
+            // or IntLit/typed-int-param/known-int-let), emit a direct C
+            // cast/wrap instead of hexa_to_int/hexa_to_float runtime
+            // dispatch. Unblocks polymorphic to_int/to_float ports
+            // (otherwise `v as int` recurses into hexa_to_int).
+            if type_name == "int" {
+                if _is_known_int(node.left) { return l }
+                if _is_known_float(node.left) {
+                    return "hexa_int((int64_t)HX_FLOAT(" + l + "))"
+                }
+                return "hexa_to_int(" + l + ")"
+            }
+            if type_name == "float" {
+                if _is_known_float(node.left) { return l }
+                if _is_known_int(node.left) {
+                    return "hexa_float((double)HX_INT(" + l + "))"
+                }
+                return "hexa_to_float(" + l + ")"
+            }
             if type_name == "str" || type_name == "string" { return "hexa_to_string(" + l + ")" }
             if type_name == "bool" { return "hexa_bool(hexa_truthy(" + l + "))" }
             // Unknown target type — pass through (no-op cast).
@@ -6966,7 +7021,12 @@ fn _is_known_float_name(name) {
     if len(_known_float_set) != 64 { return false }
     // H17 fix: see _is_known_int_name — param annotation is authoritative
     // over any prior fn's module-global known-float registration.
-    if _gen2_name_in_cur_params(name) { return false }
+    // Step-3 cycle 76: extended to recognize typed-float fn params
+    // (symmetric to _is_known_int_name).
+    if _gen2_name_in_cur_params(name) {
+        if _gen2_param_is_float(name) { return true }
+        return false
+    }
     // 2026-05-19 fn-local shadowing — atlas s8_elliptic_j1728 residue:
     // `let mut x = -1` in this fn shadows another module's prior
     // `let x = <float>` global registration. Mutable lets aren't
@@ -7010,7 +7070,15 @@ fn _is_known_int_name(name) {
     // H17 fix: fn params shadow any module-global known-int registration.
     // The current fn's param type is authoritative; a prior fn's `let X = 0`
     // must not be applied to this fn's `X: float` param.
-    if _gen2_name_in_cur_params(name) { return false }
+    // Step-3 cycle 76 enhancement: still authoritative, but extended to
+    // RECOGNIZE typed-int params (`X: int` / `X: i64` etc.) instead of
+    // unconditionally bailing. This unlocks the typed-int direct-emit
+    // fast paths at lines 3934-3947 (`hexa_int(HX_INT(l) + HX_INT(r))`,
+    // `hexa_bool(HX_INT(l) < HX_INT(r))`) for fn params.
+    if _gen2_name_in_cur_params(name) {
+        if _gen2_param_is_int(name) { return true }
+        return false
+    }
     // 2026-05-19 fn-local shadowing — symmetric to the _is_known_float_
     // name companion. Fn-body local lets (mutable or immutable) shadow
     // a prior module's global registration; the local binding's type
