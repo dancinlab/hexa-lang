@@ -4095,7 +4095,16 @@ HexaVal hexa_math_asin(HexaVal x) { return rt_asin(hexa_float(HX_FLOAT(x))); }
 HexaVal hexa_math_acos(HexaVal x) { return rt_acos(hexa_float(HX_FLOAT(x))); }
 HexaVal hexa_math_atan(HexaVal x) { return rt_atan(hexa_float(HX_FLOAT(x))); }
 #endif
+// Step-3 cycle 41 — atan2 dispatch to rt_atan2 (math.hexa quadrant
+// resolution + 4 edge cases). Closes the inverse-trig family.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_atan2(HexaVal y, HexaVal x) { return hexa_float(atan2(HX_FLOAT(y), HX_FLOAT(x))); }
+#else
+extern HexaVal rt_atan2(HexaVal y, HexaVal x);
+HexaVal hexa_math_atan2(HexaVal y, HexaVal x) {
+    return rt_atan2(hexa_float(HX_FLOAT(y)), hexa_float(HX_FLOAT(x)));
+}
+#endif
 HexaVal hexa_math_log(HexaVal x)  { return hexa_float(hxlcl_log(HX_FLOAT(x))); }
 HexaVal hexa_math_exp(HexaVal x)  { return hexa_float(hxlcl_exp(HX_FLOAT(x))); }
 // Step-3 cycle 39 — math floor/ceil/round wrapper contract is float-out,

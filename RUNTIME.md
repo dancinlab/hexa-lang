@@ -1094,6 +1094,17 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 41: rt_atan2 (close inverse-trig family)
+
+- ✅ `rt_atan2(y, x)` lands in `stdlib/runtime/math.hexa` — quadrant
+  resolution + 4 edge cases (x=0 axes), returning radians ∈ (−π, π].
+  Reuses `rt_atan` for the magnitude
+- C-side `hexa_math_atan2` (self/runtime.c) gains two-mode dispatch.
+  This closes the inverse-trig family (atan/asin/acos/atan2 all on
+  the hexa-source path under `HEXA_HAS_HEXA_RT_STDLIB`)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,920 B
+
 ### 2026-05-21 — step 3 cycle 40: rt_atan + rt_asin + rt_acos (inverse trig batch)
 
 - ✅ Three new hexa-source fns in `stdlib/runtime/math.hexa`:

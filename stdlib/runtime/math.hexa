@@ -462,3 +462,27 @@ pub fn rt_acos(x: float) -> float {
     let PI_HALF = 1.5707963267948966
     return PI_HALF - rt_asin(x)
 }
+
+// Step 3 cycle 41 — atan2 with quadrant resolution. Returns the angle
+// of (x, y) in radians ∈ (-π, π].
+//   x > 0           → atan(y/x)
+//   x < 0, y ≥ 0    → atan(y/x) + π
+//   x < 0, y < 0    → atan(y/x) − π
+//   x = 0, y > 0    → π/2
+//   x = 0, y < 0    → −π/2
+//   x = 0, y = 0    → 0  (libm returns 0; some impls return NaN)
+pub fn rt_atan2(y: float, x: float) -> float {
+    let PI = 3.141592653589793
+    let PI_HALF = 1.5707963267948966
+    if x > 0.0 {
+        return rt_atan(y / x)
+    }
+    if x < 0.0 {
+        if y >= 0.0 { return rt_atan(y / x) + PI }
+        return rt_atan(y / x) - PI
+    }
+    // x == 0
+    if y > 0.0 { return PI_HALF }
+    if y < 0.0 { return -PI_HALF }
+    return 0.0
+}
