@@ -1094,6 +1094,17 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 64: hexa_array_filter + hexa_array_fold (callback family expansion)
+
+- ✅ `hexa_array_filter` (3134) and `hexa_array_fold` (3144) ported.
+  Uses cycle-63 callback POC pattern. New idioms confirmed:
+  - `if keep { ... }` on HexaVal lowers to `if (hexa_truthy(keep))`
+  - `fn_v(a, b)` 2-arg lowers to `hexa_call2(fn_v, a, b)`
+- Both verified via ubu-2 transpile inspection (`cb_filter.c`,
+  `cb_fold.c`)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,165,032 B
+
 ### 2026-05-21 — step 3 cycle 63: 🛸 hexa_array_map (callback POC, unlocks fn-dispatch family)
 
 - ✅ `hexa_array_map` (self/runtime.c:3114) ported. **First successful

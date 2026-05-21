@@ -303,6 +303,35 @@ pub fn rt_array_sort_float(arr: [float]) -> [float] {
     return sorted
 }
 
+// Step 3 cycle 64 — array filter + fold (extends callback POC).
+// `if keep { ... }` on a HexaVal lowers to `if (hexa_truthy(keep))`.
+// `fn_v(a, b)` (2-arg) lowers to `hexa_call2(fn_v, a, b)`.
+pub fn rt_array_filter(arr: HexaVal, fn_v: HexaVal) -> HexaVal {
+    let mut out: [float] = []
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        let item = arr[i]
+        let keep = fn_v(item)
+        if keep {
+            out = out.push(item)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+pub fn rt_array_fold(arr: HexaVal, init: HexaVal, fn_v: HexaVal) -> HexaVal {
+    let mut acc = init
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        acc = fn_v(acc, arr[i])
+        i = i + 1
+    }
+    return acc
+}
+
 // Step 3 cycle 63 — array map (callback POC). Unlocks the callback
 // family by using `HexaVal` as the hexa-source param type for the fn —
 // codegen lowers `fn_v(item)` to `hexa_call1(fn_v, item)` (verified
