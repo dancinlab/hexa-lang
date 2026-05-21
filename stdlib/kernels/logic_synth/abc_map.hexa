@@ -576,6 +576,33 @@ fn abc_parse_mapped_blif(text: str) -> Design {
     return d
 }
 
+// ─── ABC script construction ─────────────────────────────────────────────
+
+// rfc_006 §5 Piece-3 (2026-05-22): build the `abc -c` script string for
+// a given (lib_path, blif_in, blif_out) triple. Factored out of
+// `abc_map` so the T_ABC_FULL_LIB falsifier can verify the exact script
+// string without forking ABC.
+//
+// Script shape (with lib):
+//   read_lib <lib_path> ; read_blif <blif_in> ; strash ;
+//   refactor ; rewrite ; balance ; map -a ; write_blif <blif_out>
+//
+// Script shape (without lib — round-trip only):
+//   read_blif <blif_in> ; strash ; write_blif <blif_out>
+fn _abc_build_script(lib_path: str, blif_in: str, blif_out: str) -> str {
+    let mut script = ""
+    if lib_path != "" {
+        script = "read_lib " + lib_path + " ; "
+    }
+    script = script + "read_blif " + blif_in + " ; strash"
+    if lib_path != "" {
+        script = script + " ; refactor ; rewrite ; balance"
+        script = script + " ; map -a"
+    }
+    script = script + " ; write_blif " + blif_out
+    return script
+}
+
 // ─── main entry — drive ABC ──────────────────────────────────────────────
 
 // CLEAN-ROOM: full D18 invocation:
@@ -626,15 +653,33 @@ fn abc_map(d: Design, lib_path: str, tmp_prefix: str) -> AbcMapResult {
     // The current library is not available` and aborts mapping (the
     // BLIF parser needs to resolve `.gate <type>` against the loaded
     // liberty cell set).
-    let mut script = ""
-    if lib_path != "" {
-        script = "read_lib " + lib_path + " ; "
-    }
-    script = script + "read_blif " + blif_in + " ; strash"
-    if lib_path != "" {
-        script = script + " ; map"
-    }
-    script = script + " ; write_blif " + blif_out
+    // SCRIPT QUALITY (rfc_006 §5 Piece-3 · 2026-05-22): ABC's cut-and-
+    // remap quality is determined by the netlist canonicalization passes
+    // run BEFORE `map`. The bare `strash; map` baseline (cycle 1)
+    // produced a router_d4 mapping at 49092 µm² (Δ 20.52% under the
+    // 61763 µm² upstream-yosys oracle) — heavily under-counted because
+    // strash alone leaves redundant AIG nodes that the cut enumerator
+    // can't see past.
+    //
+    // Iter B adds three canonical pre-map passes:
+    //   refactor — re-derives small SOPs over local cones (≤10 nodes by
+    //              default); merges equivalent functions
+    //   rewrite  — 4-input cut-based AIG rewriting via pre-computed
+    //              NPN-class library; canonical AIG form
+    //   balance  — re-associates AND-tree for min depth + level
+    //              equalization (improves cut enumeration breadth)
+    //
+    // These are the standard ABC "synthesis" sequence (`resyn` macro is
+    // `balance; rewrite; refactor; balance; rewrite; rewrite -z;
+    // balance; refactor -z; rewrite -z; balance`); we apply the lighter
+    // single-pass form to keep script-size bounded and selftest fast.
+    //
+    // Iter C adds `-a` (area-driven mode) to `map`. Default `map` is
+    // delay-driven, which preserves min-depth even at the cost of cell
+    // count; for our rfc_006 §5 absorption gate we care about area
+    // matching the upstream-yosys oracle, not delay — `-a` switches
+    // ABC's cost function to area-first cut selection.
+    let script = _abc_build_script(lib_path, blif_in, blif_out)
     let cmd = bin + " -c \"" + script + "\" 2>&1"
     let raw = exec(cmd)
     let stdout = to_string(raw)
@@ -1138,6 +1183,79 @@ fn main() {
     // (no-op; the pattern presence is enforced by the literal
     // `stdout.find("combinational loop")` in abc_map at L504, which
     // the compiler would error on if removed)
+
+    // T11 — T_ABC_FULL_LIB FALSIFIER (rfc_006 §5 Piece-3 · 2026-05-22):
+    // minimum-shape verification that the ABC script invocation
+    // (a) preserves `read_lib` ordering BEFORE `read_blif`,
+    // (b) feeds the FULL lib_path argument through unchanged (no
+    //     subset truncation — ABC's cut-and-remap quality is bounded
+    //     by the cell set it sees during `read_lib`), and
+    // (c) includes the Piece-3 canonicalization passes
+    //     `refactor ; rewrite ; balance` plus `map -a` area-driven
+    //     mapping (delay-driven default `map` produced d4 area
+    //     49092 µm² · Δ 20.52% under oracle 61763 µm²; Piece-3
+    //     widens the cut enumerator's mapping choices).
+    //
+    // The script is built by the pure `_abc_build_script` helper —
+    // no ABC fork required — so this falsifier runs on any host
+    // regardless of ABC binary or SKY130 lib presence.
+    total = total + 1
+    let full_lib = "/Users/ghost/.pdk/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib"
+    let s11 = _abc_build_script(full_lib, "/tmp/in.blif", "/tmp/out.blif")
+    // T11a — read_lib precedes read_blif (ordering invariant)
+    let pos_lib = s11.find("read_lib ")
+    let pos_blif = s11.find("read_blif ")
+    if pos_lib < 0 {
+        println("FAIL T11a read_lib_missing"); fails = fails + 1
+    }
+    if pos_blif < 0 {
+        println("FAIL T11b read_blif_missing"); fails = fails + 1
+    }
+    if pos_lib >= 0 && pos_blif >= 0 && pos_lib >= pos_blif {
+        println("FAIL T11c read_lib_after_read_blif (pos_lib="
+            + str(pos_lib) + " ≥ pos_blif=" + str(pos_blif) + ")")
+        fails = fails + 1
+    }
+    // T11d — full lib path appears unchanged in the script (no
+    // truncation or subset substitution)
+    if s11.find(full_lib) < 0 {
+        println("FAIL T11d full_lib_path_missing"); fails = fails + 1
+    }
+    // T11e — Piece-3 canonicalization passes present
+    if s11.find("refactor") < 0 {
+        println("FAIL T11e refactor_missing"); fails = fails + 1
+    }
+    if s11.find("rewrite") < 0 {
+        println("FAIL T11f rewrite_missing"); fails = fails + 1
+    }
+    if s11.find("balance") < 0 {
+        println("FAIL T11g balance_missing"); fails = fails + 1
+    }
+    // T11h — area-driven mapping flag present
+    if s11.find("map -a") < 0 {
+        println("FAIL T11h map_a_missing"); fails = fails + 1
+    }
+    // T11i — strash still present (AIG canonicalization prerequisite)
+    if s11.find("strash") < 0 {
+        println("FAIL T11i strash_missing"); fails = fails + 1
+    }
+    // T11j — write_blif appears LAST (after map)
+    let pos_map = s11.find("map -a")
+    let pos_write = s11.find("write_blif")
+    if pos_map >= 0 && pos_write >= 0 && pos_map >= pos_write {
+        println("FAIL T11j map_after_write_blif (pos_map="
+            + str(pos_map) + " ≥ pos_write=" + str(pos_write) + ")")
+        fails = fails + 1
+    }
+    // T11k — no-lib path remains generic (no spurious map -a when
+    // lib is absent — would crash ABC with "library not loaded")
+    let s11_nolib = _abc_build_script("", "/tmp/in.blif", "/tmp/out.blif")
+    if s11_nolib.find("map") >= 0 {
+        println("FAIL T11k map_leaked_into_nolib_script"); fails = fails + 1
+    }
+    if s11_nolib.find("read_lib") >= 0 {
+        println("FAIL T11l read_lib_leaked_into_nolib_script"); fails = fails + 1
+    }
 
     if fails > 0 {
         println("abc_map selftest: " + str(total - fails) + "/" + str(total) + " — FAIL")
