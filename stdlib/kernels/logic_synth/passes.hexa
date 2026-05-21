@@ -1804,6 +1804,61 @@ fn _passes_lower_bitwise_cell(c: Cell, m: Module, mapped_type: str, unary: int) 
     return BitwiseBlastResult { cells: out_cells, wires: out_wires, ok: 1 }
 }
 
+// CLEAN-ROOM (rfc_006 §5 Source 3a follow-on, 2026-05-21): per-bit
+// expansion for multi-bit `$mux` cells lowered to SKY130 `mux2_1`.
+//
+// `$mux` has pins A/B/S/Y where S is INVARIANTLY 1-bit (the selector)
+// and A/B/Y share the data-port width. SKY130 `mux2_1` has pins
+// A0/A1/S/X (function `(A0 & !S) | (A1 & S)`). For an N-bit mux we
+// emit N parallel `mux2_1` cells, all sharing the SAME 1-bit S net,
+// with per-bit data: A0=A__b<k> / A1=B__b<k> / X=Y__b<k>.
+//
+// This complements `_passes_lower_bitwise_cell` for the FSM data-mux
+// path (`$mux` driving `$dff.D` where the LHS reg is multi-bit). The
+// RFC 006 §5 Option II follow-on (commit `fe76656d`) annotated the
+// mux_y wires with the correct multi-bit width via _rv_v2_wire_width;
+// this helper consumes that annotation to emit per-bit cells whose
+// X output nets match the per-bit `.latch` Q-pin names emitted by
+// `abc_emit_blif` Option I (`<base>__b<k>`).
+//
+// Returns:
+//   ok=1 — expansion succeeded (w > 1); splice cells + wires.
+//   ok=0 — single-bit mux; caller falls back to the 1-to-1 rename path.
+fn _passes_lower_mux_cell(c: Cell, m: Module) -> BitwiseBlastResult {
+    let y_net = _passes_pin_net(c, "Y")
+    if y_net == "" { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+    let yi = rtlil_find_wire(m, y_net)
+    if yi < 0 { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+    let w = m.wires[yi].width
+    if w <= 1 { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+
+    let a_net = _passes_pin_net(c, "A")
+    let b_net = _passes_pin_net(c, "B")
+    let s_net = _passes_pin_net(c, "S")
+    if a_net == "" { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+    if b_net == "" { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+    if s_net == "" { return BitwiseBlastResult { cells: [], wires: [], ok: 0 } }
+
+    let mut out_cells: [Cell] = []
+    let mut out_wires: [Wire] = []
+    let mut k = 0
+    while k < w {
+        let bs = str(k)
+        let y_bit = y_net + "__b" + bs
+        let a_bit = a_net + "__b" + bs
+        let b_bit = b_net + "__b" + bs
+        out_wires = out_wires.push(rtlil_wire(y_bit, 1, 0, 0))
+        let mut cc = rtlil_cell(c.name + "$b" + bs, "sky130_fd_sc_hd__mux2_1", 1)
+        cc = rtlil_cell_connect(cc, "A0", a_bit)
+        cc = rtlil_cell_connect(cc, "A1", b_bit)
+        cc = rtlil_cell_connect(cc, "S", s_net)  // shared 1-bit selector
+        cc = rtlil_cell_connect(cc, "X", y_bit)
+        out_cells = out_cells.push(cc)
+        k = k + 1
+    }
+    return BitwiseBlastResult { cells: out_cells, wires: out_wires, ok: 1 }
+}
+
 fn pass_techmap_sky130(d: Design) -> PassResult {
     let cb = _passes_total_cells(d)
     let mut out: [Module] = []
@@ -1919,26 +1974,46 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
                 // cell footprint (Apache-2 / CC-BY-4.0) + Yosys
                 // techlibs/sky130/sky130_fd_sc_hd.lib mapping.
                 if c.cell_type == "$mux" {
-                    let mut new_conns: [CellConn] = []
-                    let mut mi2 = 0
-                    while mi2 < len(c.conns) {
-                        let cn = c.conns[mi2]
-                        let mut pin_out = cn.pin
-                        if cn.pin == "A" { pin_out = "A0" }
-                        if cn.pin == "B" { pin_out = "A1" }
-                        if cn.pin == "Y" { pin_out = "X" }
-                        // S stays as S; any other pin (e.g. bit-indexed
-                        // for future multi-bit mux) passes through.
-                        new_conns = new_conns.push(CellConn { pin: pin_out, net: cn.net })
-                        mi2 = mi2 + 1
+                    // rfc_006 §5 Source 3a follow-on — per-bit blast for
+                    // multi-bit $mux (matches Option II + FSM mux_y width
+                    // annotation, commit fe76656d). The 1-to-1 rename path
+                    // below still fires for single-bit mux cells (the
+                    // helper returns ok=0 on w=1 / unknown wire).
+                    let mr = _passes_lower_mux_cell(c, m)
+                    if mr.ok == 1 {
+                        let mut mxi = 0
+                        while mxi < len(mr.cells) {
+                            new_cells = new_cells.push(mr.cells[mxi])
+                            mxi = mxi + 1
+                        }
+                        let mut mxwi = 0
+                        while mxwi < len(mr.wires) {
+                            new_wires = new_wires.push(mr.wires[mxwi])
+                            mxwi = mxwi + 1
+                        }
+                        expanded = 1
+                    } else {
+                        let mut new_conns: [CellConn] = []
+                        let mut mi2 = 0
+                        while mi2 < len(c.conns) {
+                            let cn = c.conns[mi2]
+                            let mut pin_out = cn.pin
+                            if cn.pin == "A" { pin_out = "A0" }
+                            if cn.pin == "B" { pin_out = "A1" }
+                            if cn.pin == "Y" { pin_out = "X" }
+                            // S stays as S; any other pin (e.g. bit-indexed
+                            // for future multi-bit mux) passes through.
+                            new_conns = new_conns.push(CellConn { pin: pin_out, net: cn.net })
+                            mi2 = mi2 + 1
+                        }
+                        new_cells = new_cells.push(Cell {
+                            name: c.name,
+                            cell_type: "sky130_fd_sc_hd__mux2_1",
+                            conns: new_conns,
+                            is_mapped: 1,
+                        })
+                        expanded = 1
                     }
-                    new_cells = new_cells.push(Cell {
-                        name: c.name,
-                        cell_type: "sky130_fd_sc_hd__mux2_1",
-                        conns: new_conns,
-                        is_mapped: 1,
-                    })
-                    expanded = 1
                 }
                 if c.cell_type == "$eq" {
                     let lr = _passes_lower_eq_cell(c)
