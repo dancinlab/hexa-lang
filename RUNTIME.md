@@ -1094,6 +1094,18 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 4 cycle 93: hexa_map_invert + hexa_map_from_array
+
+- ✅ Two more map ops via same pattern as cycle 90: empty starting map
+  from C wrapper, hexa source iterates + `.set()` (auto stringification
+  via `hexa_to_cstring` lowering)
+- `rt_map_invert(m, empty)` — swap k/v; new key is stringified original
+  value
+- `rt_map_from_array(arr, empty)` — build map from `[k, v]` pair arrays
+  (malformed pairs skipped via `len(pair) >= 2`)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,218,104 B
+
 ### 2026-05-21 — step 4 cycle 92: hexa_str_parse_int port (strtoll replacement)
 
 - ✅ **Step 4 opening cycle**. `hexa_str_parse_int` (self/runtime.c:
