@@ -1,0 +1,10 @@
+device_name=Apple M3
+registry_id=4294968442
+max_threads_per_threadgroup=MTLSize(width: 1024, height: 1024, depth: 1024)
+matmul_naive   M=128 N=128 K=128  median=0.081ms  GFLOPS=51.94  max|d|=2.861e-06  rel=1.790e-07  byte_mm=12619/16384  PASS
+matmul_tiled   M=128 N=128 K=128  median=0.059ms  GFLOPS=71.24  max|d|=2.861e-06  rel=1.790e-07  byte_mm=12619/16384  PASS
+matmul_naive   M=256 N=256 K=256  median=0.235ms  GFLOPS=142.56  max|d|=5.722e-06  rel=2.557e-07  byte_mm=53314/65536  PASS
+matmul_tiled   M=256 N=256 K=256  median=0.352ms  GFLOPS=95.34  max|d|=5.722e-06  rel=2.557e-07  byte_mm=53314/65536  PASS
+matmul_naive   M=512 N=512 K=512  median=1.452ms  GFLOPS=184.90  max|d|=1.144e-05  rel=3.285e-07  byte_mm=222195/262144  PASS
+matmul_tiled   M=512 N=512 K=512  median=0.996ms  GFLOPS=269.41  max|d|=1.144e-05  rel=3.285e-07  byte_mm=222195/262144  PASS
+F-RFC075-METAL-MATMUL-NUMERIC-EQ: PASS

@@ -1,0 +1,75 @@
+{
+  "campaign": "rfc075_metal_matmul_2026_05_21",
+  "host": "Mac",
+  "platform": "darwin-arm64",
+  "gpu": "Apple M3 (registry_id=4294968442)",
+  "max_threads_per_threadgroup": "1024x1024x1024",
+  "date_utc": "2026-05-21T06:04:20Z",
+  "warmup": 3,
+  "timed": 15,
+  "tolerance_rel": 1e-5,
+  "rows": [
+    {
+      "kernel": "matmul_naive",
+      "M": 128, "N": 128, "K": 128,
+      "median_ms": 0.08075000368990004,
+      "gflops": 51.94184282773737,
+      "max_abs_diff": 2.861023e-06,
+      "max_rel_err": 1.789658e-07,
+      "byte_mismatch": 12619,
+      "pass": true
+    },
+    {
+      "kernel": "matmul_tiled",
+      "M": 128, "N": 128, "K": 128,
+      "median_ms": 0.0588750044698827,
+      "gflops": 71.24082686304646,
+      "max_abs_diff": 2.861023e-06,
+      "max_rel_err": 1.789658e-07,
+      "byte_mismatch": 12619,
+      "pass": true
+    },
+    {
+      "kernel": "matmul_naive",
+      "M": 256, "N": 256, "K": 256,
+      "median_ms": 0.23537499509984627,
+      "gflops": 142.5573348849829,
+      "max_abs_diff": 5.722046e-06,
+      "max_rel_err": 2.5567738e-07,
+      "byte_mismatch": 53314,
+      "pass": true
+    },
+    {
+      "kernel": "matmul_tiled",
+      "M": 256, "N": 256, "K": 256,
+      "median_ms": 0.3519583333400078,
+      "gflops": 95.33637598966833,
+      "max_abs_diff": 5.722046e-06,
+      "max_rel_err": 2.5567738e-07,
+      "byte_mismatch": 53314,
+      "pass": true
+    },
+    {
+      "kernel": "matmul_naive",
+      "M": 512, "N": 512, "K": 512,
+      "median_ms": 1.451750002161134,
+      "gflops": 184.90473952154025,
+      "max_abs_diff": 1.1444092e-05,
+      "max_rel_err": 3.2846577e-07,
+      "byte_mismatch": 222195,
+      "pass": true
+    },
+    {
+      "kernel": "matmul_tiled",
+      "M": 512, "N": 512, "K": 512,
+      "median_ms": 0.9963750053429976,
+      "gflops": 269.4120733263399,
+      "max_abs_diff": 1.1444092e-05,
+      "max_rel_err": 3.2846577e-07,
+      "byte_mismatch": 222195,
+      "pass": true
+    }
+  ],
+  "falsifier_F_RFC075_METAL_MATMUL_NUMERIC_EQ": "PASS",
+  "honest_scope": "FP32 matmul on Apple M3 GPU vs FP32 CPU ikj reference. K-reduction reassociates so rel_err < 1e-5 used (single-prec matmul standard). flame ag_linear today is FP64 farr_matmul → Apple integration is FP32-precision-loss path (gap analysis item #1)."
+}
