@@ -13,7 +13,21 @@
   Discovered while manually invoking substrate `abc -c` after the
   PR #247 SSA fix + abc_map script reorder landed.
 
-**Status**: not_started (filed 2026-05-21)
+**Status**: investigated, implementation deferred (2026-05-21) —
+  surface analysis confirms the patch's diagnosis: `read_verilog.hexa`
+  L2828 `if has_idx2 == 1 { continue }` is the single skip point.
+  Adjacent emit infrastructure (`_rv_emit_body_v2` at L2502, the v2
+  super-set helper, plus the existing dyn-idx emit path at L3310+
+  that captures `idx2_toks`) gives concrete entry hooks. Option A
+  (per-element flat $dff) is the recommended first cut per the patch
+  body. Real implementation is multi-cycle (T76 falsifier + Wxslot
+  $dff emit + per-slot $eq decode + per-slot $and guard + per-slot
+  $mux write-mux + downstream multi-driver reconciliation through
+  the existing connect_cond/__d/$dff pipeline at L2199-2211); not
+  attempted in this cycle. Mac arm64 build blocker now resolved
+  (see `runtime-duplicate-symbols-stdlib-port-collision.md`
+  resolved-ssot via tool/build_hexa_cli.sh step 4b), so measurement
+  infrastructure is unblocked when this work lands.
 
 ## Symptom
 
