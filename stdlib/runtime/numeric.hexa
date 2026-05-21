@@ -303,6 +303,31 @@ pub fn rt_array_sort_float(arr: [float]) -> [float] {
     return sorted
 }
 
+// Step 3 cycle 74 — in-place mutation via codegen-recognized builtins.
+// `arr.truncate(n)` lowers to `hexa_array_truncate(arr, n)` (in-place
+// HX_SET_ARR_LEN). `arr[i] = v` lowers to `hexa_index_set` which calls
+// hexa_array_set (in-place HX_ARR_ITEMS[i] = v). Empty-arr edge case
+// stays in the C wrapper (it returns hexa_void() — TAG_VOID=4, while
+// hexa-source `null` literal would be TAG_INT=0 which isn't equivalent).
+pub fn rt_array_pop(arr: HexaVal) -> HexaVal {
+    let n = len(arr)
+    let last = arr[n - 1]
+    arr.truncate(n - 1)
+    return last
+}
+
+pub fn rt_array_shift(arr: HexaVal) -> HexaVal {
+    let n = len(arr)
+    let first = arr[0]
+    let mut i = 0
+    while i < n - 1 {
+        arr[i] = arr[i + 1]
+        i = i + 1
+    }
+    arr.truncate(n - 1)
+    return first
+}
+
 // Step 3 cycle 71 — flatten one-level, assumes all items are arrays.
 // The C wrapper (hexa_array_flatten) pre-checks all-array via tag, and
 // only dispatches here when every element is array. Mixed-type (some

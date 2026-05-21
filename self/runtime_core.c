@@ -4421,24 +4421,17 @@ HexaVal hexa_str_byte_at(HexaVal s, HexaVal idx) {
 }
 
 // ── Array operations ─────────────────────────────────
+// Step-3 cycle 74 port — in-place pop/shift using arr.truncate() and
+// arr[i]=v hexa-source builtins. Empty/non-array guard stays C-side
+// (returns hexa_void(); hexa source can't produce that literal).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_pop(HexaVal arr) {
     if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_void();
-    // Must shrink in place — same pattern as hexa_array_shift below. The
-    // prior body returned the last element but left the length unchanged,
-    // so `a.pop(); len(a)` was wrong on the compiled path (parity gap
-    // t44_array_methods: "FAIL pop len=4", interp expects 3). Synced
-    // from origin/main `a35a9cf5`.
     int n = HX_ARR_LEN(arr);
     HexaVal last = HX_ARR_ITEMS(arr)[n - 1];
     HX_SET_ARR_LEN(arr, n - 1);
     return last;
 }
-
-// Shift: remove + return first element. Mirrors `pop` but front-side. In-place
-// length shrink via HX_SET_ARR_LEN (same pattern as hexa_array_truncate at
-// line 2033). Returns void on empty array. Filed 2026-05-14 (incoming/patches/
-// stdlib-arr-shift.md — wilson harness-cli input buffer was the originating
-// use case; pattern f3 in wilson AGENTS.tape).
 HexaVal hexa_array_shift(HexaVal arr) {
     if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_void();
     HexaVal first = HX_ARR_ITEMS(arr)[0];
@@ -4449,6 +4442,18 @@ HexaVal hexa_array_shift(HexaVal arr) {
     HX_SET_ARR_LEN(arr, n - 1);
     return first;
 }
+#else
+extern HexaVal rt_array_pop(HexaVal arr);
+extern HexaVal rt_array_shift(HexaVal arr);
+HexaVal hexa_array_pop(HexaVal arr) {
+    if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_void();
+    return rt_array_pop(arr);
+}
+HexaVal hexa_array_shift(HexaVal arr) {
+    if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_void();
+    return rt_array_shift(arr);
+}
+#endif
 
 // Step-3 cycle 25 port (float array fast-path).
 HexaVal hexa_array_reverse(HexaVal arr) {
