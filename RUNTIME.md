@@ -1118,6 +1118,76 @@ the 8 잔여 items have settled to:
 
 **Wipe pattern recurrence** (memory `feedback_runtime_c_deploy_regen_wipe`): commits c39afbbe + 0d59c419 silently overwrote stdlib/runtime/numeric.hexa + ctype.hexa + self/runtime_core.c entries cycles 91-96 between original land and re-land. Cherry-picks `3fc62729 + 459be02c + f0be7ace + 7bdb4aba + 85150013` recovered the work. Sub-agent worktree leak also observed (#4 agent's branch HEAD propagated into main worktree's index via shared git object store — fixed by `cd` back to session worktree).
 
+### 2026-05-22 — Step 3+4+5 final state (108 fns, 8 잔여 closure summary)
+
+Consolidates cycles 89-101 (step 3 closure + step 4 + step 5 4-unblocker
+campaign). Supersedes the Step 3+4 final status above with two additional
+잔여 discharges (#3 hexa_str_concat ✅ via realloc bug fix; #7 IO ✅ via
+C-shim activation).
+
+**Cumulative**: 108 fns ported across Step 3 + Step 4 + Step 5
+(75 step-3-only + step-4 batch + step-5 unblocker discharges).
+
+**8 잔여 final status**:
+
+| # | item | status | cycle / verdict |
+|---|------|--------|-----------------|
+| 1 | hexa_len | ✅ ported | cycle 99 alias + Step 5 #2 raw-len builtins |
+| 2 | hexa_to_string | ✅ partial (scalar) + 🚧 staged array+map | cycle 96 + cyc-C2-array-map branch (cross-module fwd-decl pending) |
+| 3 | hexa_str_concat | ✅ Step 5 #1 (root cause = `hxlcl_realloc` bug, NOT arena nesting) | b2ae2e9d |
+| 4 | hexa_eq | ✅ partial 4/9 (STR/ARRAY/VOID + cross-tag int↔float coerce) | cycles 91 + 97 + 100 |
+| 5 | Map basic ops | ❌ CORE-final | doc-only — Robin Hood deletion + hash slot insert + key-interning malloc all C-internal |
+| 6 | Array allocators | ❌ CORE-final | doc-only — `[]` literal lowers to `hexa_array_new()` self-recursion. Step 5 #2 raw-len + arr_set_cap exposure landed but allocators stay C |
+| 7 | IO | ✅ cycle 101 (3 of 4 via C-shim: println / eprint / eprintln; print stdout deferred) | c25ef75e (SSOT `__fd_write_bytes` a39988c9) |
+| 8 | ValStruct repr | ✅ ported | cycle 98 |
+
+**Outcome**: 6 of 8 잔여 ported (1, 2-partial, 3, 4-partial, 7, 8).
+2 CORE-final (5, 6) — confirmed as C-internal foundation, not pursued
+further. Net delta vs Step 3+4 status: +2 ported (#3, #7), reaffirms
+#5 + #6 as CORE-final.
+
+**Step 5 4-unblocker campaign** (closes 잔여 #3 + #7 + adds infrastructure
+for #5 + #6 re-evaluation):
+
+| # | unblocker | status | commit |
+|---|-----------|--------|--------|
+| 1 | arena-local API for hexa_str_concat | ✅ root cause = `hxlcl_realloc` bug, NOT arena nesting | b2ae2e9d |
+| 2 | HX raw-len + arr_set_cap codegen builtins | ✅ landed (3rd re-land after wipe pair) | 477642d5 + 2b024282 (post-wipe re-land of `724c38b3 + c4c721bc`) |
+| 3 | HexaMapTable opaque-pointer escape | ❌ CORE-final reaffirmed (doc-only) | 636a4928 |
+| 4 | `__fd_write_bytes` codegen builtin (SSOT) | ✅ SSOT landed + C-shim activation | a39988c9 (SSOT) + c25ef75e (activation) |
+
+**Wipe pattern recurrence — 4th occurrence in 1 month** (escalation
+from Step 3+4 status above):
+
+- `c39afbbe + 0d59c419` (cycles 91-96 wipe pair, Step 3+4 era)
+- `724c38b3 + c4c721bc` (Step 5 #2 wipe pair, post-477642d5)
+- All 4 are **single-parent non-merge commits with stale worktree
+  replace** — same root cause as memory `feedback_runtime_c_deploy_regen_wipe`
+- 3 re-lands recovered the work: `3a4282ec + 61c7eb8d + 2b024282`
+- **Governance proposal filed**: `inbox/notes/2026-05-22-wipe-governance-proposal.md`
+  (commit 267a04de) — Option D pre-commit hook + project.tape @D entry
+  to gate "deploy-regen overwrites file edited in previous N commits"
+
+**Real remainders for Step 6+ campaign** (genuinely codegen-bound,
+unblocked by Step 5 infrastructure):
+
+- `_is_int_init_expr` / `_is_float_init_expr` codegen extension (recognize
+  `BinOp "as"` cast result types in init-expr classifier) → unblocks
+  hexa_eq same-tag scalar branches (4/9 → 9/9) by allowing typed-param
+  ports to land without recursive coerce
+- hexa_v2 regen Phase C.2 closure (cross-module forward decls + symbol
+  resolution across stdlib/runtime + self/runtime_core boundary) →
+  unblocks cyc-C2-array-map staged branch (hexa_to_string array+map full
+  port) and future codegen builtin retries that span the seam
+- hexa_print stdout port (codegen lowering of `print(v)` to
+  `hexa_print_val` lacks HexaVal entry-point — currently routed via
+  println shim) → closes 잔여 #7 fourth branch
+
+**Baseline preserved**: 24 externs · aprime_cc smoke exit(42) PASS ·
+self-host fixpoint gen1≡gen2 byte-eq remains md5
+`4197fd52560f3acca059a197b000c83c` (Phase 0 cycle 41 PROVEN, untouched
+through Step 3+4+5).
+
 ### 2026-05-22 — step 3 cycle 97: hexa_eq TAG_ARRAY deep-eq loop via rt_eq_array_deep (잔여 #4 partial discharge — 2 of 9 branches ported)
 
 - ✅ Polymorphic `hexa_eq`'s TAG_ARRAY branch (self/runtime_core.c:5469)
