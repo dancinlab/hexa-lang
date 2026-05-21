@@ -29,7 +29,7 @@ use "compiler/atlas/hxc_loader"
 use "stdlib/loop/state"
 use "stdlib/io"
 
-let VERSION = "0.0.1"
+let VERSION = "0.1.0"
 
 fn _bool_str(b: bool) -> string {
     if b { return "true" }
@@ -50,7 +50,7 @@ fn _safe_slug(s: string) -> string {
 }
 
 fn cmd_loop_help() {
-    println("hexa loop — self-growing atlas cycle (RFC 065)")
+    println("hexa loop — self-growing atlas cycle (RFC 065 + RFC 080)")
     println("")
     println("USAGE")
     println("  hexa loop [--once|--budget N|--time D]")
@@ -58,6 +58,12 @@ fn cmd_loop_help() {
     println("            [--no-fire | --fire --budget <USD>]")
     println("            [--resume] [--status] [--dry-run]")
     println("            [--help|-h] [--version|-v]")
+    println("")
+    println("  hexa loop --dfs --llm-cmd <cmd> [--depth N] [--beam K]")
+    println("            [--llm-budget <USD>] [--llm-calls <N>] [--llm-time <s>]")
+    println("            [--llm-families <a,b,c>] [--no-cache] [--allow-llm]")
+    println("  hexa loop --option       (alias = --dfs --depth 3 --beam 2")
+    println("                            --llm-cmd \$HEXA_LLM_CMD)")
     println("")
     println("STAGES (8 per cycle)")
     println("  1.SCAN    2.LENS    3.DEDUP   4.GATE")
@@ -69,13 +75,30 @@ fn cmd_loop_help() {
     println("  cooldown  -> hard-block N=5 cycles (Decision 5)")
     println("  exhaust   -> 3 consecutive 0-emit AND cooldown empty")
     println("")
-    println("PHASE B-2 STATUS")
-    println("  shell skeleton; stages print stage-id only. Bodies populate")
-    println("  in B-2.1 (state I/O) + B-3 (self/main.hexa verb) + C.")
+    println("DFS+LLM MODE (RFC 080, Phase A scaffold)")
+    println("  --dfs           enable DFS+LLM recursive emit (opt-in)")
+    println("  --depth N       max DFS depth                       [default 3]")
+    println("  --beam K        beam-search width per depth         [default 2]")
+    println("  --llm-cmd CMD   pluggable LLM shell (stdin=prompt,")
+    println("                  stdout=markdown response)")
+    println("  --llm-budget U  USD cost cap (3-way AND)")
+    println("  --llm-calls N   hard call-count cap")
+    println("  --llm-time S    wall-clock seconds cap")
+    println("  --llm-families  comma list of lens families to expand")
+    println("                  [default empty_space,cross_pollinate,")
+    println("                   counterexample_mine,paradigm_shift]")
+    println("  --no-cache      disable dist/llm_cache.hxc sidecar")
+    println("  --allow-llm     gate real LLM calls (else stub-only)")
+    println("  --option        alias for default DFS+LLM config")
+    println("")
+    println("PHASE STATUS")
+    println("  RFC 065 Phase C-4 — atlas view + state I/O wired")
+    println("  RFC 080 Phase A   — DFS+LLM flag parse scaffold only")
+    println("                      (no LLM call; stages B-J populate body)")
 }
 
 fn cmd_loop_version() {
-    println("hexa loop " + VERSION + " (RFC 065 Phase B-2 shell)")
+    println("hexa loop " + VERSION + " (RFC 065 Phase C-4 + RFC 080 Phase A)")
 }
 
 fn cmd_loop_status() {
@@ -315,17 +338,75 @@ fn main() {
     let mut show_help = false
     let mut show_version = false
 
+    // RFC 080 Phase A — DFS+LLM mode flags (no-op stage; bodies in B-J).
+    let mut dfs_enabled = false
+    let mut depth_str = "3"
+    let mut beam_str = "2"
+    let mut llm_cmd = ""
+    let mut llm_budget = ""
+    let mut llm_calls = ""
+    let mut llm_time = ""
+    let mut llm_families = "empty_space,cross_pollinate,counterexample_mine,paradigm_shift"
+    let mut resume_mode = false
+    let mut no_cache = false
+    let mut option_alias = false
+    let mut allow_llm = false
+
     let mut k = start
     while k < n {
         let a = argv[k]
-        if a == "--help" || a == "-h" || a == "help" { show_help = true }
-        if a == "--version" || a == "-v" || a == "version" { show_version = true }
-        if a == "--once" { once = true }
-        if a == "--status" { status_only = true }
-        if a == "--dry-run" { dry_run = true }
-        if a == "--no-fire" { no_fire = true }
-        if a == "--fire" { no_fire = false }
-        if a == "--write" { dry_run = false; once = true }
+        if a == "--help" || a == "-h" || a == "help" { show_help = true; k = k + 1; continue }
+        if a == "--version" || a == "-v" || a == "version" { show_version = true; k = k + 1; continue }
+        if a == "--once" { once = true; k = k + 1; continue }
+        if a == "--status" { status_only = true; k = k + 1; continue }
+        if a == "--dry-run" { dry_run = true; k = k + 1; continue }
+        if a == "--no-fire" { no_fire = true; k = k + 1; continue }
+        if a == "--fire" { no_fire = false; k = k + 1; continue }
+        if a == "--write" { dry_run = false; once = true; k = k + 1; continue }
+
+        // RFC 080 — DFS+LLM flag block. Value-taking flags consume argv[k+1]
+        // with bounds check; unknown flags fall through to a no-op increment
+        // (forgiving — strict gate lands in Phase E budget guard).
+        if a == "--dfs" { dfs_enabled = true; k = k + 1; continue }
+        if a == "--resume" { resume_mode = true; k = k + 1; continue }
+        if a == "--no-cache" { no_cache = true; k = k + 1; continue }
+        if a == "--allow-llm" { allow_llm = true; k = k + 1; continue }
+        if a == "--option" {
+            option_alias = true
+            dfs_enabled = true
+            if len(llm_cmd) == 0 { llm_cmd = env("HEXA_LLM_CMD") }
+            k = k + 1
+            continue
+        }
+        if a == "--depth" {
+            if k + 1 < n { depth_str = argv[k + 1]; k = k + 2; continue }
+            k = k + 1; continue
+        }
+        if a == "--beam" {
+            if k + 1 < n { beam_str = argv[k + 1]; k = k + 2; continue }
+            k = k + 1; continue
+        }
+        if a == "--llm-cmd" {
+            if k + 1 < n { llm_cmd = argv[k + 1]; k = k + 2; continue }
+            k = k + 1; continue
+        }
+        if a == "--llm-budget" {
+            if k + 1 < n { llm_budget = argv[k + 1]; k = k + 2; continue }
+            k = k + 1; continue
+        }
+        if a == "--llm-calls" {
+            if k + 1 < n { llm_calls = argv[k + 1]; k = k + 2; continue }
+            k = k + 1; continue
+        }
+        if a == "--llm-time" {
+            if k + 1 < n { llm_time = argv[k + 1]; k = k + 2; continue }
+            k = k + 1; continue
+        }
+        if a == "--llm-families" {
+            if k + 1 < n { llm_families = argv[k + 1]; k = k + 2; continue }
+            k = k + 1; continue
+        }
+
         k = k + 1
     }
 
@@ -339,8 +420,32 @@ fn main() {
         dry_run = true
     }
 
-    println("[loop] hexa loop — RFC 065 Phase B-2 shell")
+    println("[loop] hexa loop — RFC 065 Phase C-4 + RFC 080 Phase A")
     println("  flags: once=" + _bool_str(once) + " no_fire=" + _bool_str(no_fire) + " dry_run=" + _bool_str(dry_run))
+    if dfs_enabled {
+        // RFC 080 Phase A — print parsed DFS+LLM config; stages B-J wire body.
+        println("  [dfs]  enabled=true"
+              + " depth=" + depth_str
+              + " beam=" + beam_str
+              + " resume=" + _bool_str(resume_mode)
+              + " no_cache=" + _bool_str(no_cache)
+              + " allow_llm=" + _bool_str(allow_llm)
+              + " option_alias=" + _bool_str(option_alias))
+        let cmd_shown = llm_cmd
+        if len(cmd_shown) == 0 { cmd_shown = "<unset>" }
+        println("  [dfs]  llm_cmd=" + cmd_shown)
+        println("  [dfs]  llm_families=" + llm_families)
+        let budget_shown = llm_budget
+        if len(budget_shown) == 0 { budget_shown = "<unset>" }
+        let calls_shown = llm_calls
+        if len(calls_shown) == 0 { calls_shown = "<unset>" }
+        let time_shown = llm_time
+        if len(time_shown) == 0 { time_shown = "<unset>" }
+        println("  [dfs]  budget=" + budget_shown
+              + " calls=" + calls_shown
+              + " time=" + time_shown)
+        println("  [dfs]  Phase A scaffold — flag parse only; no LLM call yet.")
+    }
     println("")
     run_one_cycle(no_fire, dry_run)
 }
