@@ -2563,19 +2563,35 @@ fn _gen2_nested_index_assign_stmt(lhs, val_c, pad) {
         expr = "hexa_index_set(" + acc[li] + ", " + keys[li] + ", " + expr + ")"
         li = li - 1
     }
-    // Field-rooted index assign — `obj.field[i] = v` lowered above gave
-    // `hexa_map_get_ic(obj, "field", &ic) = hexa_index_set(...)` which is a
-    // C function-call return on the LHS → "expression is not assignable".
-    // Rewrite as `obj = hexa_map_set(obj, "field", new_field_value)`. This
-    // mirrors the same wrap the plain Field-AssignStmt branch (line ~2279)
-    // already emits. Repro: `cs.clusters[i] = Cluster {...}` in
-    // compiler/atlas/symbolic/convergence_cluster.hexa (broke calc_cli_smoke
-    // and convergence_cluster_smoke).
-    if type_of(cur) != "string" && cur.kind == "Field" {
-        let obj_c = gen2_expr(cur.left)
-        return pad + obj_c + " = hexa_map_set(" + obj_c + ", \"" + cur.name + "\", " + expr + ");\n"
+    // 2026-05-21: extend Field-rooted handling to FULL recursive unwrap.
+    // Prior (2026-05-16) fix only handled 1-level Field root
+    // (`obj.field[i] = v` where obj is bare Ident). For deeper chains
+    // like `s.factions[i].cells[c].hidden[k] = v`, the inner `obj_c` was
+    // itself `hexa_index_get(hexa_map_get(...), ...)` (rvalue function
+    // call) → "expression is not assignable" again. Now iteratively walks
+    // up Field/Index until bare-Ident root is reached, wrapping each level
+    // in hexa_map_set / hexa_index_set respectively. Generalizes 1/2/N
+    // level cases. Repro: `s.factions[i].cells[c].hidden[k] = v` in
+    // anima-physics/consciousness-loop/src/aux_engine_lib.hexa (broke
+    // aux_engine_smoke; superseded by source-side functional rewrite
+    // there, but transpiler 정공법 fix is here).
+    while type_of(cur) != "string" {
+        if cur.kind == "Field" {
+            let obj_c = gen2_expr(cur.left)
+            expr = "hexa_map_set(" + obj_c + ", \"" + cur.name + "\", " + expr + ")"
+            cur = cur.left
+        } else if cur.kind == "Index" {
+            let container_c = gen2_expr(cur.left)
+            let key_c = gen2_expr(cur.right)
+            expr = "hexa_index_set(" + container_c + ", " + key_c + ", " + expr + ")"
+            cur = cur.left
+        } else {
+            // Unknown root kind — emit best-effort fallthrough
+            return pad + gen2_expr(cur) + " = " + expr + ";\n"
+        }
     }
-    return pad + root_c + " = " + expr + ";\n"
+    // cur is now bare-Ident string (valid lvalue)
+    return pad + cur + " = " + expr + ";\n"
 }
 
 // decreases node — structural
