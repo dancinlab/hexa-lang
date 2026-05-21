@@ -4086,9 +4086,23 @@ HexaVal hexa_math_atan(HexaVal x) { return hexa_float(atan(HX_FLOAT(x))); }
 HexaVal hexa_math_atan2(HexaVal y, HexaVal x) { return hexa_float(atan2(HX_FLOAT(y), HX_FLOAT(x))); }
 HexaVal hexa_math_log(HexaVal x)  { return hexa_float(hxlcl_log(HX_FLOAT(x))); }
 HexaVal hexa_math_exp(HexaVal x)  { return hexa_float(hxlcl_exp(HX_FLOAT(x))); }
+// Step-3 cycle 39 — math floor/ceil/round wrapper contract is float-out,
+// but the rt_floor/ceil/round fns in numeric.hexa return int (per their
+// cycle 2/4 ports). Bridge with an explicit int→float cast at the
+// boundary so the libm surface goes away while the wrapper signature
+// stays unchanged.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(HX_FLOAT(x))); }
 HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(HX_FLOAT(x))); }
 HexaVal hexa_math_round(HexaVal x){ return hexa_float(round(HX_FLOAT(x))); }
+#else
+extern HexaVal rt_floor(HexaVal v);
+extern HexaVal rt_ceil(HexaVal v);
+extern HexaVal rt_round(HexaVal v);
+HexaVal hexa_math_floor(HexaVal x){ return hexa_float((double)HX_INT(rt_floor(hexa_float(HX_FLOAT(x))))); }
+HexaVal hexa_math_ceil(HexaVal x) { return hexa_float((double)HX_INT(rt_ceil(hexa_float(HX_FLOAT(x))))); }
+HexaVal hexa_math_round(HexaVal x){ return hexa_float((double)HX_INT(rt_round(hexa_float(HX_FLOAT(x))))); }
+#endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_pow(HexaVal b, HexaVal e) { return hexa_float(pow(HX_FLOAT(b), HX_FLOAT(e))); }
 #else

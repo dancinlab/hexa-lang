@@ -45,6 +45,67 @@
 // substring asserts in P2; live ptxas verification deferred to P3+).
 //
 // ──────────────────────────────────────────────────────────────────────
+// P2.1 WIRING SPEC (next multi-session campaign — recorded 2026-05-21)
+// ──────────────────────────────────────────────────────────────────────
+// P2.1 = "first real codegen invocation from the emit-driver" — strictly
+// narrower than P3 (module_loader bridge for `@gpu_kernel` partition).
+// The minimal P2.1 deliverable bypasses parse/check/lower entirely and
+// hand-constructs a minimal `MModule` in the driver, then calls the
+// existing `codegen_emit_ptx_sm80(MModule) -> string` (RFC 055 055-P0
+// entry point at `compiler/codegen/nvptx_target.hexa:1694`). This proves
+// the call-path from `cmd_build` -> `_build_nvptx_emit_driver` ->
+// `codegen_emit_ptx_sm80` works end-to-end, even though the emitted PTX
+// is not yet derived from the source file.
+//
+// Required edits for P2.1 (no compiler self-host needed):
+//   1. `import compiler/ir/mir` — for `MModule`, `MFunc`, `Stmt`, `Local`,
+//      `Operand`, `GPU_KIND_KERNEL` constants
+//   2. `import compiler/codegen/nvptx_target` — for `codegen_emit_ptx_sm80`
+//   3. Add `fn _build_hand_mir_vec_add() -> MModule` — synthesises a
+//      single `@gpu_kernel` MFunc matching the vec-add shape that
+//      `compiler/codegen/nvptx_vec_add_test.hexa` already exercises
+//      (so the codegen path is known-good)
+//   4. Replace `_build_nvptx_stub_ptx(sm_arch)` body content with
+//      `codegen_emit_ptx_sm80(_build_hand_mir_vec_add())`
+//
+// P2.1 keeps the *interface* of `build_nvptx_emit_driver(src_path,
+// sm_arch) -> int` unchanged; only the body flips from canned text to
+// real codegen invocation. `src_path` continues to be read for existence
+// (the source bytes are still ignored — that is the P3 hook).
+//
+// Falsifier `F-RFC071-MIR-DRIVER-INVOKE` (NEW for P2.1):
+//   - Build a hand-MIR vec-add MModule with `gpu_kind = GPU_KIND_KERNEL`
+//   - `codegen_emit_ptx_sm80(mmod)` returns a non-empty string
+//   - The returned PTX contains `.visible .entry` + `.param .u64` quartet
+//     + `ld.global.f64` + `st.global.f64` (the vec-add markers that
+//     `compiler/codegen/nvptx_vec_add_test.hexa` substring-asserts)
+//   - Distinct from F-RFC071-MODULE-LOADER-BRIDGE (which requires the
+//     source body to be reflected — that is P3)
+//
+// P2.1 honest scope (`@D g3`):
+//   - The PTX emitted reflects a HARDCODED vec-add MIR shape, NOT the
+//     source file body. P2.1 PASSES `F-RFC071-MIR-DRIVER-INVOKE` and
+//     intentionally FAILS `F-RFC071-MODULE-LOADER-BRIDGE`
+//   - The CPU codegen path (x86_64_linux / arm64_darwin / thumbv7em)
+//     must remain byte-identical post-P2.1 (`F-RFC055-CPU-CODEGEN-
+//     UNTOUCHED`); the new imports are pure-data (no side effects on
+//     CPU emit)
+//   - `_build_hand_mir_vec_add` is a SYNTHETIC fixture, not user-facing;
+//     it exists to prove the codegen call path, not as a stable surface
+//
+// P3+ deferred (multi-session compiler self-host campaign):
+//   - Parse + check + lower invoked from the driver requires every
+//     compiler pass exposed as a callable from `compiler/cli/*` (today,
+//     they are wired only into the in-hexa compiler's `main`)
+//   - `@gpu_kernel` module_loader bridge: `module_loader` must recognise
+//     `@gpu_kernel` annotations and partition MFuncs into the NVPTX
+//     target dispatch (today partition happens at codegen time via
+//     `_nvptx_codegen` filter on `gpu_kind != GPU_KIND_CPU`; the
+//     module-level dispatch is the next layer)
+//   - End-to-end silicon fire of an emitted PTX from a real `.hexa`
+//     source file (`F-RFC071-E2E-NUMERIC-EQ`)
+//
+// ──────────────────────────────────────────────────────────────────────
 // HONEST SCOPE (@D g3)
 // ──────────────────────────────────────────────────────────────────────
 // - Stub returns CANNED PTX text — NOT a real codegen invocation. The

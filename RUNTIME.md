@@ -1094,6 +1094,18 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 39: hexa_math_floor/ceil/round int→float bridge
+
+- ✅ `hexa_math_floor/ceil/round` (self/runtime.c:4072-4074) gain
+  two-mode dispatch. The wrappers' contract is float-out, but the
+  cycle-2/4 ports of `rt_floor/ceil/round` return int (truncation +
+  sign-aware adjustment for floor/ceil; half-away-from-zero for
+  round). Bridge with an explicit `hexa_float((double)HX_INT(...))`
+  cast at the boundary so the libm surface (`floor/ceil/round`) goes
+  away while the wrapper signature stays unchanged
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,760 B
+
 ### 2026-05-21 — step 3 cycle 38: hexa_math_* batch (sqrt/tan/tanh/abs/fmod)
 
 - ✅ 5 `hexa_math_*` wrappers gain two-mode dispatch to their existing
