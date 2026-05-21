@@ -303,6 +303,31 @@ pub fn rt_array_sort_float(arr: [float]) -> [float] {
     return sorted
 }
 
+// Step 3 cycle 66 — find via _index helper + for_each (side-effect).
+// hexa-source can't express `hexa_void()` cleanly (bare name → call0
+// trap, cycle 63 lesson). For find, return an int index instead and
+// let the C wrapper extract the item or hexa_void() on -1.
+// for_each uses no-return-type hexa fn → codegen auto-emits
+// `return hexa_void()` (verified via ubu-2 transpile).
+pub fn rt_array_find_index(arr: HexaVal, fn_v: HexaVal) -> int {
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        if fn_v(arr[i]) { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+pub fn rt_array_for_each(arr: HexaVal, fn_v: HexaVal) {
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        fn_v(arr[i])
+        i = i + 1
+    }
+}
+
 // Step 3 cycle 65 — array any/all/count (predicate-based, return bool/int).
 // Map-receiver dispatch (hexa_array_any/all checks HX_IS_MAP) stays
 // C-side; the array branch dispatches to these hexa fns. Bool returns

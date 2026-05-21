@@ -1094,6 +1094,22 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 66: hexa_array_find + hexa_array_for_each (find via _index helper)
+
+- ✅ `hexa_array_for_each` (3443) ported via no-return-type hexa fn —
+  codegen auto-emits `return hexa_void()` at the end (verified
+  cb_voidret POC)
+- ✅ `hexa_array_find` (3279) ported via the `_index` helper pattern:
+  hexa-source `rt_array_find_index` returns `int` (offset or -1), C
+  wrapper resolves to `HX_ARR_ITEMS(arr)[idx]` or `hexa_void()`.
+  Avoids the cycle-63 trap (calling `hexa_void()` from hexa source
+  produces `hexa_call0(hexa_void)` C wrapper — wrong)
+- `flat_map` NOT in this batch — needs runtime-tag check
+  `HX_IS_ARRAY(sub)` to decide flatten-vs-push, which hexa source
+  can't observe
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,165,064 B
+
 ### 2026-05-21 — step 3 cycle 65: hexa_array_any + hexa_array_all + hexa_array_count (predicate batch)
 
 - ✅ All three predicate-callback fns (3200/3211/3222) ported. The

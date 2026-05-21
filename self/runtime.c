@@ -3276,6 +3276,9 @@ HexaVal hexa_contains_poly(HexaVal obj, HexaVal arg) {
 }
 
 // find: first element matching predicate; void if none.
+// Step-3 cycle 66 port — index-based dispatch (hexa side returns int
+// index, C wrapper resolves to item or hexa_void()).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_find(HexaVal arr, HexaVal fn) {
     if (!HX_IS_ARRAY(arr)) return hexa_void();
     for (int i = 0; i < HX_ARR_LEN(arr); i++) {
@@ -3284,6 +3287,15 @@ HexaVal hexa_array_find(HexaVal arr, HexaVal fn) {
     }
     return hexa_void();
 }
+#else
+extern HexaVal rt_array_find_index(HexaVal arr, HexaVal fn_v);
+HexaVal hexa_array_find(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) return hexa_void();
+    int64_t idx = HX_INT(rt_array_find_index(arr, fn));
+    if (idx < 0) return hexa_void();
+    return HX_ARR_ITEMS(arr)[idx];
+}
+#endif
 
 // Polymorphic `.find()` dispatch — .find() 이 string `.find(needle)` 과
 // array `.find(pred)` 에서 의미/반환 타입이 달라 codegen 단일 사이트에서
@@ -3440,6 +3452,8 @@ HexaVal hexa_array_flatten(HexaVal arr) {
 }
 
 // for_each: side-effect iteration. Returns void (hexa_full.hexa:15187).
+// Step-3 cycle 66 port — for_each dispatch (void-return hexa fn).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_for_each(HexaVal arr, HexaVal fn) {
     if (!HX_IS_ARRAY(arr)) return hexa_void();
     for (int64_t i = 0; i < HX_ARR_LEN(arr); i++) {
@@ -3447,6 +3461,13 @@ HexaVal hexa_array_for_each(HexaVal arr, HexaVal fn) {
     }
     return hexa_void();
 }
+#else
+extern HexaVal rt_array_for_each(HexaVal arr, HexaVal fn_v);
+HexaVal hexa_array_for_each(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) return hexa_void();
+    return rt_array_for_each(arr, fn);
+}
+#endif
 
 // fill: new array of same length, every slot set to v.
 // Matches interpreter: returns a NEW array rather than mutating in place
