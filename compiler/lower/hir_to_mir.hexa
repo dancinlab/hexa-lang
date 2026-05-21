@@ -338,11 +338,23 @@ fn _fresh_local(ctx: LowerCtx, t: Type, hint: string) -> LowerCtx {
 // zero behavior change for the byte-eq f64-default path.
 //
 // `_op_with_precision` — when a precision tag is present and the binop
-// is one of the arithmetic ops `add` / `sub` / `mul` / `fma`, return
-// the suffixed opcode (`add_f16` / `add_bf16` / `add_f32`) the
+// is one of the arithmetic ops `add` / `sub` / `mul` / `div` / `fma`,
+// return the suffixed opcode (`add_f16` / `add_bf16` / `add_f32`) the
 // classifier op-name rules also recognize. Comparison ops (lt / le /
 // gt / ge / eq / ne) stay plain — they produce a PRED dst, not an
 // f16/bf16/f32 dst, so a suffix on the op would mis-classify.
+//
+// `div` siblings (N57 follow-on) join `add`/`sub`/`mul` even though
+// `_nvptx_binop_mnemonic` does NOT yet ship a `div.f64` / `div.<prec>`
+// row (the FP64 default still falls through to the `055-P0 unsupported
+// binop` honest stub; cf. `nvptx_p6_vec_div_test.hexa`). Wiring the
+// synthesis here UNBLOCKS the future flame bf16/f16 path: once a
+// `div.rn.f32` / `div.bf16` mnemonic row lands, the HIR→MIR layer
+// already produces the right opcode + dst.precision tag — no second
+// pass through this fn. Same idempotency applies to the Metal target,
+// which currently only consumes `matmul_bf16` (N41 / N51 shape-match)
+// but will pick up generic `div_bf16` once a Metal binop-emit pass
+// joins the existing matmul-shape recognisers.
 //
 // `_update_local_precision` — replace the Local in ctx.locals with one
 // whose `precision` field carries the tag. Codegen reads `s.dst.precision`
@@ -357,17 +369,28 @@ fn _precision_from_typ_kind(kind: string) -> string {
 
 fn _op_with_precision(base: string, precision: string) -> string {
     if len(precision) == 0 { return base }
-    // Normalize the frontend HIR binop spelling (`+` / `-` / `*`) onto
-    // the MIR mnemonic the classifier op-name rules consume
-    // (`add_f16` / `sub_f16` / `mul_f16`). Then suffix by precision.
-    // Comparison ops (lt / le / gt / ge / eq / ne) keep the plain op
-    // because their dst is a PRED (predicate register), not an
-    // f16/bf16/f32 — a suffix would mis-classify those Locals.
+    // Normalize the frontend HIR binop spelling (`+` / `-` / `*` / `/`)
+    // onto the MIR mnemonic the classifier op-name rules consume
+    // (`add_f16` / `sub_f16` / `mul_f16` / `div_f16`). Then suffix by
+    // precision. Comparison ops (lt / le / gt / ge / eq / ne) keep the
+    // plain op because their dst is a PRED (predicate register), not
+    // an f16/bf16/f32 — a suffix would mis-classify those Locals.
+    //
+    // `div` joined the synth list per N57 (`8e9f91da`): the codegen
+    // mnemonic table (`_nvptx_binop_mnemonic`) does not yet ship a
+    // `div.<prec>` row, but adding the HIR→MIR synthesis NOW means the
+    // future codegen-side div row (or a Metal `div_bf16` shape-match)
+    // sees the right opcode + dst.precision tag the moment it lands —
+    // no second pass through this fn. F-RFC055-CPU-CODEGEN-UNTOUCHED
+    // is preserved: CPU targets never see a `div_<prec>` opcode
+    // because the frontend type-check forces FP64 by default in CPU
+    // scope, so this is a pure GPU-path addition.
     let mut canon = base
     if base == "+" { canon = "add" }
     if base == "-" { canon = "sub" }
     if base == "*" { canon = "mul" }
-    if canon == "add" || canon == "sub" || canon == "mul" || canon == "fma" {
+    if base == "/" { canon = "div" }
+    if canon == "add" || canon == "sub" || canon == "mul" || canon == "div" || canon == "fma" {
         if precision == ".f16"  { return canon + "_f16" }
         if precision == ".bf16" { return canon + "_bf16" }
         if precision == ".f32"  { return canon + "_f32" }
