@@ -2670,6 +2670,26 @@ fn pass_techmap_sky130(d: Design) -> PassResult {
 // — only $dff/$dffsr/$_DFF_* family cells, leaving combinational
 // generics for abc_map. Scope-a body: rewrite $dff → sky130 dfxtp_1
 // only, skip combinational.
+//
+// rfc_006 §5 d4 Path-(c) audit (2026-05-22): the substrate yosys-0.33
+// d4 histogram lists 1615 edfxtp_1 (30.03 µm² each) + 23 dfxtp_1
+// (20.02 µm² each) = 48959 µm² of flops. Our flow emits 1600 edfxtp_1
+// + 38 dfxtp_1 = 48809 µm² — flop COUNT (1638 vs 1638) and type-MIX
+// match within ±2 %. The 12.6 kµm² d4 gap is in the combinational
+// fabric (~12.9 k µm² substrate vs ~248 µm² ours), NOT in the flop
+// floor; path (c) is therefore null on §5 area. This block now
+// nonetheless emits the substrate-canonical FF reset variants
+// (`dffrtp_1` / `dffrtn_1` / `sdfrtp_1` / `dffsr_1`) for any future
+// `_rv_parse_always` lowering that produces `$adff` / `$sdff` /
+// `$dffsr` / `$_DFF_PP[01]_` / `$_DFF_NP[01]_` cells — today the
+// frontend never emits those (it folds reset into a `$mux + $dff`
+// priority chain), so the new dispatch arms are dead code at d4
+// scale but cover the IR shapes substrate uses and are exercised by
+// the T_DFFLIBMAP_RESET diagnostic falsifier.
+//
+// @cite SKY130 PDK datasheets `sky130_fd_sc_hd__dffrtp_1`,
+// `sky130_fd_sc_hd__dffrtn_1`, `sky130_fd_sc_hd__sdfrtp_1`,
+// `sky130_fd_sc_hd__dffsr_1` (Apache-2 / CC-BY-4.0).
 fn pass_dfflibmap_sky130(d: Design) -> PassResult {
     let cb = _passes_total_cells(d)
     let mut out: [Module] = []
@@ -2704,6 +2724,93 @@ fn pass_dfflibmap_sky130(d: Design) -> PassResult {
                     let cn = c.conns[pi]
                     let mut pin_out = cn.pin
                     if cn.pin == "EN" { pin_out = "DE" }
+                    renamed = renamed.push(CellConn { pin: pin_out, net: cn.net })
+                    pi = pi + 1
+                }
+                new_conns = renamed
+            }
+            // rfc_006 §5 d4 Path-(c) — $adff (DFF-with-async-reset) →
+            // SKY130 `sky130_fd_sc_hd__dffrtp_1` (posedge-clock,
+            // active-LOW async reset). RTLIL `$adff` pins: CLK / ARST
+            // / D / Q. SKY130 `dffrtp_1` pins: CLK / RESET_B / D / Q.
+            // Pin rename `ARST → RESET_B`. @cite SKY130 PDK
+            // `sky130_fd_sc_hd__dffrtp_1` datasheet (28.78 µm²);
+            // upstream Yosys techlibs/common/cells_sim.v `$adff`.
+            if c.cell_type == "$adff" {
+                mapped_type = "sky130_fd_sc_hd__dffrtp_1"
+                mapped = 1
+                let mut renamed: [CellConn] = []
+                let mut pi = 0
+                while pi < len(c.conns) {
+                    let cn = c.conns[pi]
+                    let mut pin_out = cn.pin
+                    if cn.pin == "ARST" { pin_out = "RESET_B" }
+                    renamed = renamed.push(CellConn { pin: pin_out, net: cn.net })
+                    pi = pi + 1
+                }
+                new_conns = renamed
+            }
+            // rfc_006 §5 d4 Path-(c) — $_DFF_NP0_ / $_DFF_NP1_
+            // (negedge-clock, async-reset DFF gate-primitive form) →
+            // SKY130 `sky130_fd_sc_hd__dffrtn_1` (negedge-clock,
+            // active-LOW async reset). Pin shape: C / R / D / Q on
+            // RTLIL gate-primitives, CLK_N / RESET_B / D / Q on
+            // SKY130. @cite SKY130 PDK `dffrtn_1` datasheet
+            // (29.42 µm²) + Yosys techlibs/common/simcells.v
+            // `$_DFF_NP0_`.
+            if c.cell_type == "$_DFF_NP0_" || c.cell_type == "$_DFF_NP1_" {
+                mapped_type = "sky130_fd_sc_hd__dffrtn_1"
+                mapped = 1
+                let mut renamed: [CellConn] = []
+                let mut pi = 0
+                while pi < len(c.conns) {
+                    let cn = c.conns[pi]
+                    let mut pin_out = cn.pin
+                    if cn.pin == "C" { pin_out = "CLK_N" }
+                    if cn.pin == "R" { pin_out = "RESET_B" }
+                    renamed = renamed.push(CellConn { pin: pin_out, net: cn.net })
+                    pi = pi + 1
+                }
+                new_conns = renamed
+            }
+            // rfc_006 §5 d4 Path-(c) — $sdff (DFF-with-sync-reset) →
+            // SKY130 `sky130_fd_sc_hd__sdfrtp_1` (scan-flop with
+            // sync reset; substrate uses this for sync-reset flops
+            // because dedicated `sdff_1` is absent from SKY130 hd).
+            // RTLIL `$sdff` pins: CLK / SRST / D / Q. SKY130
+            // `sdfrtp_1` pins: CLK / RESET_B / D / Q / SCD / SCE
+            // (scan inputs tied off externally). @cite SKY130 PDK
+            // `sky130_fd_sc_hd__sdfrtp_1` datasheet (42.05 µm²).
+            if c.cell_type == "$sdff" {
+                mapped_type = "sky130_fd_sc_hd__sdfrtp_1"
+                mapped = 1
+                let mut renamed: [CellConn] = []
+                let mut pi = 0
+                while pi < len(c.conns) {
+                    let cn = c.conns[pi]
+                    let mut pin_out = cn.pin
+                    if cn.pin == "SRST" { pin_out = "RESET_B" }
+                    renamed = renamed.push(CellConn { pin: pin_out, net: cn.net })
+                    pi = pi + 1
+                }
+                new_conns = renamed
+            }
+            // rfc_006 §5 d4 Path-(c) — $dffsr (DFF with both async
+            // set AND reset) → SKY130 `sky130_fd_sc_hd__dffsr_1`.
+            // RTLIL `$dffsr` pins: CLK / SET / CLR / D / Q. SKY130
+            // `dffsr_1` pins: CLK / SET_B / RESET_B / D / Q. Pin
+            // renames `SET → SET_B`, `CLR → RESET_B`. @cite SKY130
+            // PDK `sky130_fd_sc_hd__dffsr_1` datasheet (32.54 µm²).
+            if c.cell_type == "$dffsr" {
+                mapped_type = "sky130_fd_sc_hd__dffsr_1"
+                mapped = 1
+                let mut renamed: [CellConn] = []
+                let mut pi = 0
+                while pi < len(c.conns) {
+                    let cn = c.conns[pi]
+                    let mut pin_out = cn.pin
+                    if cn.pin == "SET" { pin_out = "SET_B" }
+                    if cn.pin == "CLR" { pin_out = "RESET_B" }
                     renamed = renamed.push(CellConn { pin: pin_out, net: cn.net })
                     pi = pi + 1
                 }
@@ -3860,6 +3967,142 @@ fn main() {
         }
         if _en_seen != 0 {
             println("FAIL T_DFFE_LIBMAP EN_pin_not_renamed"); fails = fails + 1
+        }
+    }
+
+    // T_DFFLIBMAP_RESET — rfc_006 §5 d4 Path-(c) diagnostic falsifier
+    // (2026-05-22). Build a module with one cell of each reset-flop
+    // shape (`$adff`, `$_DFF_NP0_`, `$sdff`, `$dffsr`), feed through
+    // `pass_dfflibmap_sky130`, confirm each maps to the right SKY130
+    // gate (`dffrtp_1`, `dffrtn_1`, `sdfrtp_1`, `dffsr_1`) AND the
+    // pin renames land (ARST→RESET_B; C→CLK_N + R→RESET_B; SRST
+    // →RESET_B; SET→SET_B + CLR→RESET_B). The shapes are NOT emitted
+    // by `_rv_parse_always` today (frontend folds reset into a
+    // $mux+$dff chain), so this never fires on router_d4 — it's a
+    // diagnostic guard for the dfflibmap dispatch table itself.
+    total = total + 1
+    let mut m_drs = rtlil_new_module("drs1")
+    m_drs = rtlil_module_add_wire(m_drs, rtlil_wire("clk",   1, 1, 1))
+    m_drs = rtlil_module_add_wire(m_drs, rtlil_wire("clkn",  1, 1, 2))
+    m_drs = rtlil_module_add_wire(m_drs, rtlil_wire("arst",  1, 1, 3))
+    m_drs = rtlil_module_add_wire(m_drs, rtlil_wire("srst",  1, 1, 4))
+    m_drs = rtlil_module_add_wire(m_drs, rtlil_wire("setn",  1, 1, 5))
+    m_drs = rtlil_module_add_wire(m_drs, rtlil_wire("clrn",  1, 1, 6))
+    m_drs = rtlil_module_add_wire(m_drs, rtlil_wire("d1",    1, 1, 7))
+    m_drs = rtlil_module_add_wire(m_drs, rtlil_wire("d2",    1, 1, 8))
+    m_drs = rtlil_module_add_wire(m_drs, rtlil_wire("d3",    1, 1, 9))
+    m_drs = rtlil_module_add_wire(m_drs, rtlil_wire("d4",    1, 1, 10))
+    m_drs = rtlil_module_add_wire(m_drs, rtlil_wire("q1",    1, 2, 11))
+    m_drs = rtlil_module_add_wire(m_drs, rtlil_wire("q2",    1, 2, 12))
+    m_drs = rtlil_module_add_wire(m_drs, rtlil_wire("q3",    1, 2, 13))
+    m_drs = rtlil_module_add_wire(m_drs, rtlil_wire("q4",    1, 2, 14))
+    let mut c_adff = rtlil_cell("u_adff", "$adff", 0)
+    c_adff = rtlil_cell_connect(c_adff, "CLK",  "clk")
+    c_adff = rtlil_cell_connect(c_adff, "ARST", "arst")
+    c_adff = rtlil_cell_connect(c_adff, "D",    "d1")
+    c_adff = rtlil_cell_connect(c_adff, "Q",    "q1")
+    m_drs = rtlil_module_add_cell(m_drs, c_adff)
+    let mut c_dffn = rtlil_cell("u_dffn", "$_DFF_NP0_", 0)
+    c_dffn = rtlil_cell_connect(c_dffn, "C", "clkn")
+    c_dffn = rtlil_cell_connect(c_dffn, "R", "arst")
+    c_dffn = rtlil_cell_connect(c_dffn, "D", "d2")
+    c_dffn = rtlil_cell_connect(c_dffn, "Q", "q2")
+    m_drs = rtlil_module_add_cell(m_drs, c_dffn)
+    let mut c_sdff = rtlil_cell("u_sdff", "$sdff", 0)
+    c_sdff = rtlil_cell_connect(c_sdff, "CLK",  "clk")
+    c_sdff = rtlil_cell_connect(c_sdff, "SRST", "srst")
+    c_sdff = rtlil_cell_connect(c_sdff, "D",    "d3")
+    c_sdff = rtlil_cell_connect(c_sdff, "Q",    "q3")
+    m_drs = rtlil_module_add_cell(m_drs, c_sdff)
+    let mut c_dsr = rtlil_cell("u_dsr", "$dffsr", 0)
+    c_dsr = rtlil_cell_connect(c_dsr, "CLK", "clk")
+    c_dsr = rtlil_cell_connect(c_dsr, "SET", "setn")
+    c_dsr = rtlil_cell_connect(c_dsr, "CLR", "clrn")
+    c_dsr = rtlil_cell_connect(c_dsr, "D",   "d4")
+    c_dsr = rtlil_cell_connect(c_dsr, "Q",   "q4")
+    m_drs = rtlil_module_add_cell(m_drs, c_dsr)
+    let mut d_drs = rtlil_new_design("T_DFFLIBMAP_RESET")
+    d_drs = rtlil_design_add(d_drs, m_drs)
+    let r_drs = pass_dfflibmap_sky130(d_drs)
+    if r_drs.ok != 1 {
+        println("FAIL T_DFFLIBMAP_RESET dfflibmap: " + r_drs.message); fails = fails + 1
+    } else {
+        let m_drs_out = r_drs.design.modules[0]
+        if rtlil_count_cells_of_type(m_drs_out, "sky130_fd_sc_hd__dffrtp_1") != 1 {
+            println("FAIL T_DFFLIBMAP_RESET dffrtp_count got "
+                + str(rtlil_count_cells_of_type(m_drs_out, "sky130_fd_sc_hd__dffrtp_1")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(m_drs_out, "sky130_fd_sc_hd__dffrtn_1") != 1 {
+            println("FAIL T_DFFLIBMAP_RESET dffrtn_count got "
+                + str(rtlil_count_cells_of_type(m_drs_out, "sky130_fd_sc_hd__dffrtn_1")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(m_drs_out, "sky130_fd_sc_hd__sdfrtp_1") != 1 {
+            println("FAIL T_DFFLIBMAP_RESET sdfrtp_count got "
+                + str(rtlil_count_cells_of_type(m_drs_out, "sky130_fd_sc_hd__sdfrtp_1")))
+            fails = fails + 1
+        }
+        if rtlil_count_cells_of_type(m_drs_out, "sky130_fd_sc_hd__dffsr_1") != 1 {
+            println("FAIL T_DFFLIBMAP_RESET dffsr_count got "
+                + str(rtlil_count_cells_of_type(m_drs_out, "sky130_fd_sc_hd__dffsr_1")))
+            fails = fails + 1
+        }
+        // Confirm no generic reset-flop survives.
+        let mut _surv = 0
+        _surv = _surv + rtlil_count_cells_of_type(m_drs_out, "$adff")
+        _surv = _surv + rtlil_count_cells_of_type(m_drs_out, "$_DFF_NP0_")
+        _surv = _surv + rtlil_count_cells_of_type(m_drs_out, "$sdff")
+        _surv = _surv + rtlil_count_cells_of_type(m_drs_out, "$dffsr")
+        if _surv != 0 {
+            println("FAIL T_DFFLIBMAP_RESET generic_remains got " + str(_surv)); fails = fails + 1
+        }
+        // Pin-rename audit: ARST→RESET_B (dffrtp_1), R→RESET_B +
+        // C→CLK_N (dffrtn_1), SRST→RESET_B (sdfrtp_1), SET→SET_B +
+        // CLR→RESET_B (dffsr_1). Walk every output cell's conns.
+        let mut _ok_adff_resetb = 0
+        let mut _ok_dffn_clkn   = 0
+        let mut _ok_dffn_resetb = 0
+        let mut _ok_sdff_resetb = 0
+        let mut _ok_dsr_setb    = 0
+        let mut _ok_dsr_resetb  = 0
+        let mut _legacy = 0
+        let mut _ri = 0
+        while _ri < len(m_drs_out.cells) {
+            let _rc = m_drs_out.cells[_ri]
+            let mut _rk = 0
+            while _rk < len(_rc.conns) {
+                let _rcn = _rc.conns[_rk]
+                if _rc.cell_type == "sky130_fd_sc_hd__dffrtp_1" {
+                    if _rcn.pin == "RESET_B" && _rcn.net == "arst" { _ok_adff_resetb = 1 }
+                    if _rcn.pin == "ARST"    { _legacy = _legacy + 1 }
+                }
+                if _rc.cell_type == "sky130_fd_sc_hd__dffrtn_1" {
+                    if _rcn.pin == "CLK_N"   && _rcn.net == "clkn" { _ok_dffn_clkn = 1 }
+                    if _rcn.pin == "RESET_B" && _rcn.net == "arst" { _ok_dffn_resetb = 1 }
+                    if _rcn.pin == "C" || _rcn.pin == "R" { _legacy = _legacy + 1 }
+                }
+                if _rc.cell_type == "sky130_fd_sc_hd__sdfrtp_1" {
+                    if _rcn.pin == "RESET_B" && _rcn.net == "srst" { _ok_sdff_resetb = 1 }
+                    if _rcn.pin == "SRST"    { _legacy = _legacy + 1 }
+                }
+                if _rc.cell_type == "sky130_fd_sc_hd__dffsr_1" {
+                    if _rcn.pin == "SET_B"   && _rcn.net == "setn" { _ok_dsr_setb = 1 }
+                    if _rcn.pin == "RESET_B" && _rcn.net == "clrn" { _ok_dsr_resetb = 1 }
+                    if _rcn.pin == "SET" || _rcn.pin == "CLR" { _legacy = _legacy + 1 }
+                }
+                _rk = _rk + 1
+            }
+            _ri = _ri + 1
+        }
+        if _ok_adff_resetb != 1 { println("FAIL T_DFFLIBMAP_RESET adff_ARST_not_renamed"); fails = fails + 1 }
+        if _ok_dffn_clkn   != 1 { println("FAIL T_DFFLIBMAP_RESET dffn_C_not_renamed");    fails = fails + 1 }
+        if _ok_dffn_resetb != 1 { println("FAIL T_DFFLIBMAP_RESET dffn_R_not_renamed");    fails = fails + 1 }
+        if _ok_sdff_resetb != 1 { println("FAIL T_DFFLIBMAP_RESET sdff_SRST_not_renamed"); fails = fails + 1 }
+        if _ok_dsr_setb    != 1 { println("FAIL T_DFFLIBMAP_RESET dsr_SET_not_renamed");   fails = fails + 1 }
+        if _ok_dsr_resetb  != 1 { println("FAIL T_DFFLIBMAP_RESET dsr_CLR_not_renamed");   fails = fails + 1 }
+        if _legacy != 0 {
+            println("FAIL T_DFFLIBMAP_RESET legacy_pin_survives count=" + str(_legacy)); fails = fails + 1
         }
     }
 
