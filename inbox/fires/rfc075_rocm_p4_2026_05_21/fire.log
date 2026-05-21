@@ -1,0 +1,76 @@
+RFC 075 ROCm P4 silicon-fire campaign log
+==========================================
+date: 2026-05-21
+operator: claude-code (worktree agent-a350fe002ddd2085e)
+intended target: AMD Instinct MI300X OAM via RunPod (EU-RO-1, Romania)
+intended toolchain: runpod/pytorch:2.4.0-py3.10-rocm6.1.0-ubuntu22.04 (template-id runpod-torch-v240-rocm61)
+
+=== Environment ===
+runpodctl: /opt/homebrew/Cellar/runpodctl/2.1.9/bin/runpodctl v2.1.9-673143d
+account balance at start: $301.68 USD
+spend limit: $80
+current spend/hr (other sessions): $16.53/hr (5 NVIDIA pods running)
+
+=== AMD inventory probe ===
+`runpodctl gpu list` returned 16 GPU types, ZERO AMD entries (catalog gates on
+current availability; out-of-stock SKUs disappear from this listing).
+
+`runpodctl datacenter list` parsed: only one AMD entry surfaced globally —
+  EU-RO-1 (Romania): AMD Instinct MI300X OAM, stockStatus=""
+
+Other AMD SKUs probed (MI250X / MI250 / MI210 / MI100 / Radeon Pro V520):
+  not present in any datacenter — none exist in the RunPod catalog at this
+  time.
+
+=== Pod-create attempts ===
+Attempt 1 (SECURE, EU-RO-1 pinned):
+  error: "no longer any instances available with the requested specifications"
+
+Attempt 2 (SECURE, no DC pin):
+  error: "no longer any instances available with the requested specifications"
+
+Attempt 3 (COMMUNITY, no DC pin):
+  error: "no longer any instances available with the requested specifications"
+
+Attempts 4-11 (alternate SKU probes: MI250X / MI250 / MI210 / MI100 /
+                Radeon Pro V520 / MI250 sans OAM / MI210 sans OAM):
+  all returned "no longer any instances available"
+
+Attempts 12-19 (8-attempt poll loop, ~55s spacing, SECURE no DC pin, MI300X):
+  attempt 1: STOCK_EMPTY
+  attempt 2: STOCK_EMPTY
+  attempt 3: STOCK_EMPTY
+  attempt 4: STOCK_EMPTY
+  attempt 5: STOCK_EMPTY
+  attempt 6: STOCK_EMPTY
+  attempt 7: STOCK_EMPTY
+  attempt 8: STOCK_EMPTY
+  POLL_DONE
+
+Attempt 20 (final, COMMUNITY + EU-RO-1 pinned):
+  error: "no longer any instances available with the requested specifications"
+
+=== Outcome ===
+F-RFC075-ROCM-NUMERIC-EQ: BLOCKED (not PASS, not FAIL — never executed)
+Reason: external AMD GPU pool inventory empty across entire ~10-minute window.
+Cost spent: $0.00 (no pod created → no metered time).
+Orphan pods: 0 (verified via `runpodctl pod list` filter for rfc075/rocm names).
+
+=== Artifacts produced ===
+vec_add.cpp       — hand-emit HIP kernel + host harness (compile-ready)
+host_setup.sh     — pod-side runner script (compile-ready)
+result.json       — structured outcome record (BLOCKED status)
+fire.log          — this file
+cleanup_proof.txt — pod inventory snapshot (no orphans, no cleanup needed)
+
+=== Honest scope (@D g3) ===
+This is a honest punt, not a fire. The HIP kernel and toolchain plan are
+correct and ready; the blocker is purely external GPU-pool availability.
+Re-run when MI300X stock returns or an alternate AMD pool (vast.ai, Hot Aisle,
+user-local) becomes available. ROCm codegen P1+ remains future work
+independent of this fire — codegen_emit_rocm_il (compiler/codegen/rocm_target.hexa)
+is still the RFC 075 P0 empty-string stub.
+
+The §10 closure scoreboard's "Multi-vendor: ROCm or Metal kernel parity" row
+remains MET via Metal alone (RFC 075 Metal P4 commit 4415ec91). This cycle
+does NOT strengthen that row — it documents the AMD-side gap with measurement.
