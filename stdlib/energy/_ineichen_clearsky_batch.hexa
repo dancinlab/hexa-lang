@@ -1,0 +1,85 @@
+// stdlib/energy/_ineichen_clearsky_batch.hexa — G31β batch wrapper
+// for the hexa-native Ineichen clearsky CLI.
+//
+// Sibling to `_solar_position_batch.hexa`. This wrapper computes N
+// Ineichen-Perez 2002 clearsky GHI samples in a single process
+// invocation — the producer-side `nrel_midc_pyranometer.py` cuts ~N
+// subprocess fork+exec calls down to ONE, matching the G31 G29-β
+// solar-position batch pattern.
+//
+// Usage:
+//   hexa run stdlib/energy/_ineichen_clearsky_batch.hexa \
+//     <altitude_m> <n_steps> \
+//     <row_0> <row_1> ... <row_{n_steps-1}>
+//
+// where each <row_i> is one comma-separated string:
+//   "<apparent_zenith_deg>,<linke_turbidity>,<dni_extra>"
+//
+// Output: <n_steps> lines on stdout, one GHI (W·m⁻²) per line, in
+// argv order. One trailing newline per value.
+//
+// Airmass is computed internally via Kasten-Young 1989 + the
+// hexa-native `alt2pres(altitude_m)`, so the caller only supplies
+// the closed-form-math inputs the kernel actually consumes.
+//
+// Per-row dni_extra is required because the producer feeds
+// Spencer-1972 extraterrestrial DNI from
+// `pvlib.irradiance.get_extra_radiation(times)`, which varies across
+// the year. Linke turbidity also varies across the year (monthly
+// climatology) and is supplied per-row by the producer.
+//
+// Exit: 0 on success, 2 on usage error, 3 on argv row parse error.
+//
+// G31β scope: closes the second clause of the Energy/solar D80
+// ultimate-form completion. The bridge_stack moves from
+// `hexa_native_solar_position + pvlib Ineichen` to
+// `hexa_native_solar_position + hexa_native_ineichen_clearsky`.
+// Linke-turbidity climatology lookup remains in pvlib (separate axis
+// — NetCDF climatology table out of scope of this PR).
+//
+// Implementation note: argv pattern matches `_solar_position_batch`
+// (avoids the still-broken `read_line()` on mac substrate). For the
+// SRRL day-cadence case (1440 rows × 1 short string per row) the
+// argv payload is ~50 KB — well inside macOS ARG_MAX (~1 MB).
+
+use "stdlib/kernels/solar/solar_kernel"
+
+fn main() {
+    let argv = args()
+    let n = len(argv)
+    if n < 3 {
+        println(
+            "usage: hexa run _ineichen_clearsky_batch.hexa "
+            + "<altitude_m> <n_steps> <row_0> ... <row_{n-1}>")
+        exit(2)
+    }
+
+    let altitude_m = argv[1].to_float()
+    let n_steps    = argv[2].to_int()
+
+    let argv_rows = n - 3
+    if argv_rows != n_steps {
+        println("__ERR__ argv row count " + str(argv_rows)
+                + " != n_steps " + str(n_steps))
+        exit(2)
+    }
+
+    // Pre-compute pressure once (constant for the day).
+    let pressure_pa = alt2pres(altitude_m)
+
+    for i in 0..n_steps {
+        let row = argv[3 + i]
+        let parts = row.split(",")
+        if len(parts) < 3 {
+            println("__ERR__ row " + str(i)
+                    + ": expected 3 fields, got " + str(len(parts)))
+            exit(3)
+        }
+        let z   = parts[0].to_float()
+        let tl  = parts[1].to_float()
+        let dni = parts[2].to_float()
+        let am  = kasten_airmass_absolute(z, pressure_pa)
+        let ghi = ineichen_ghi(z, am, tl, altitude_m, dni)
+        println(str(ghi))
+    }
+}
