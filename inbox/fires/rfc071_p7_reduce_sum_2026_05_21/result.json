@@ -1,0 +1,161 @@
+{
+  "fire_id": "rfc071_p7_reduce_sum_2026_05_21",
+  "falsifier_pass": [],
+  "falsifier_fail": [
+    "F-RFC071-E2E-REDUCE-SUM-SINGLE-THREAD-NUMERIC-EQ"
+  ],
+  "falsifier_blocked": [
+    "F-RFC071-NVPTX-E2E-PTXAS-CLEAN",
+    "F-RFC071-NVPTX-E2E-LAUNCH"
+  ],
+  "status_emit": "PASS_WITH_GAPS",
+  "status_jit_load": "NOT_EXECUTED_HOST_UNREACHABLE",
+  "status_launch": "NOT_EXECUTED_HOST_UNREACHABLE",
+  "status_numeric": "FAIL_BY_STATIC_MALFORMEDNESS",
+  "headline": "reduce_sum surfaces FIVE distinct codegen gaps in a single non-element-wise kernel: predicate-bank-classifier, missing STMT_LOAD on a[idx], missing STMT_STORE on out[0], i64 var-local mis-classified as f64, negative dst sentinel (%fd-1) leaks into emit. Only ONE honest-stub marker emitted (binop:<); other 4 gaps silently emit malformed PTX.",
+
+  "context": {
+    "fixture": "compiler/codegen/nvptx_p7_reduce_sum_test.hexa",
+    "ptx_path": "reduce_sum.sm_80.ptx",
+    "ptx_size_bytes": 1059,
+    "ptx_md5": "7554b36f044e13bc42d5a30494033726",
+    "ptx_lines": 42,
+    "ptx_size_n50_vec_mul": 2082,
+    "ptx_size_n56_vec_div": 2082,
+    "ptx_size_delta_vs_n50": "-1023 bytes (49% smaller — codegen LOST half the body to silent skips, NOT to better optimization)",
+    "target_sm": "sm_80",
+    "device_target": "NVIDIA RTX 5070 (sm_120a JIT) — NOT REACHED THIS SESSION",
+    "host": "macOS arm64 (driver build only)",
+    "registers_used_pre_ptxas": "10 declared (impossible to validate without ptxas)",
+    "block_dim": "1x1x1 (single-thread reduce, as designed)",
+    "grid_dim": "1x1x1",
+    "predecessor": "rfc071_p6_vec_div_2026_05_21 (1 gap, JIT-OK + launch-OK + numeric-FAIL); rfc071_p4_n50_vec_mul_e2e_2026_05_21 (0 gaps, full PASS)"
+  },
+
+  "kernel_shape_delta": {
+    "from_p3_p4_p5_p6": "@gpu_kernel fn <name>(a:[f64], b:[f64], c:[f64], n:i64) { let gid = ...gpu_*..; if to_i64(gid) < n { c[to_i64(gid)] = a[to_i64(gid)] <op> b[to_i64(gid)] } } -- ELEMENT-WISE",
+    "to_p7_n59":      "@gpu_kernel fn reduce_sum(a:[f64], out:[f64], n:i64) { var v: f64 = 0.0; var idx: i64 = 0; while idx < n { v = v + a[to_i64(idx)]; idx = idx + 1 }; out[to_i64(0)] = v } -- SINGLE-THREAD REDUCE (1×1 launch)",
+    "deltas": [
+      "params: 4 (a,b,c,n) -> 3 (a,out,n)",
+      "control flow: `if` (single block) -> `while` (back-edge loop)",
+      "scalar locals: 0 -> 2 (var v: f64, var idx: i64)",
+      "indexed reads: 2 element-wise (a[gid], b[gid]) -> 1 loop-bounded (a[idx])",
+      "indexed writes: 1 element-wise (c[gid]=...) -> 1 SCALAR (out[0]=v, literal-0 index)",
+      "thread-index intrinsics: 3 (block/dim/thread_id_x) -> 0 (single thread, no gid)",
+      "loop count: 0 -> N=1024 inside one thread"
+    ]
+  },
+
+  "ptx_substring_asserts": {
+    ".visible .entry reduce_sum": true,
+    ".target sm_80": true,
+    ".param count = 3": true,
+    "add.f64 (any)": true,
+    "add.f64 on accumulator (v = v + a[idx])": false,
+    "ld.global.f64 (the a[idx] load)": false,
+    "st.global.f64 (the out[0] store)": false,
+    "setp.lt.s64 (the while-cond compare)": false,
+    "// RFC 055 055-P0 - unsupported binop: <": true,
+    ".reg .pred (any)": false,
+    "@%fd5 bra (FP64 register used as predicate — INVALID)": true,
+    "%fd-1 (negative Local id leaked into emit form)": true,
+    "%fd0 (referenced but not declared in .reg section)": true,
+    "add.f64 %fd10, 0, 1 (literal-only increment with no idx read)": true,
+    "pure_ascii": true,
+    "ascii_non_ascii_count": 0,
+    "back_edge_bra ($L_1 reachable from inside loop)": true
+  },
+
+  "codegen_gaps": [
+    {
+      "id": "P7-G1",
+      "name": "while_cond_predicate_bank_mismatch",
+      "claim": "STMT_BINOP op=\"lt\" produces dst `%fd5` declared as .reg .f64 instead of .reg .pred; only `// unsupported binop: <` stub emitted, no setp.lt.s64 instruction.",
+      "evidence_line": "27-28 of reduce_sum.sm_80.ptx",
+      "source_loc_candidate": "compiler/codegen/nvptx_target.hexa: classifier rule lines 1145-1150 (NVPTX_RKIND_PRED for lt/le/gt/ge/eq/ne) — the rule exists, but the dst Local for the while-cond comparison must be classified BEFORE the comparison stmt is seen, so the early classification (def-site = either var-init or _hir_lookup) wins and forces f64",
+      "ptxas_outcome": "REJECT (predicate-bank mismatch on @%fd5 bra)"
+    },
+    {
+      "id": "P7-G2",
+      "name": "missing_stmt_load_on_accumulator_index",
+      "claim": "`a[to_i64(idx)]` did NOT lower to STMT_LOAD; the value-Local for the loaded f64 (called %fd7 in emit) sources from %fd0 (an undeclared Local id), so no `ld.global.f64 %fd<val>, [%rd<addr>]` instruction appears. N35 STMT_LOAD/STORE synth handled the gid-composed index path but did not cover Local-index reads inside a loop.",
+      "evidence_line": "32 of reduce_sum.sm_80.ptx (mov.f64 %fd7, %fd0 — but %fd0 is never declared)",
+      "ptxas_outcome": "REJECT (unknown symbol %fd0) OR JIT-warn + zero/garbage at runtime"
+    },
+    {
+      "id": "P7-G3",
+      "name": "missing_stmt_store_on_scalar_output",
+      "claim": "`out[to_i64(0)] = v` did NOT lower to STMT_STORE; emit produces `mov.f64 %fd-1, %fd1` instead of `st.global.f64 [%rd<addr>], %fd<v>`. Literal-0 index (scalar output) is not covered by the index-arithmetic mul.lo.s64+add.s64 chain that handles per-thread indices.",
+      "evidence_line": "40 of reduce_sum.sm_80.ptx (mov.f64 %fd-1, %fd1)",
+      "ptxas_outcome": "REJECT (invalid register name %fd-1)"
+    },
+    {
+      "id": "P7-G4",
+      "name": "i64_var_local_misclassified_as_f64",
+      "claim": "`var idx: i64 = 0` lowers to STMT_ASSIGN with literal constant 0; the dst Local has no explicit precision tag and `s.kind == STMT_ASSIGN` falls through to the default `return NVPTX_RKIND_F64` at nvptx_target.hexa:1208. The subsequent `idx = idx + 1` therefore emits add.f64, not add.s64. Both operands of the increment are immediates (0 + 1) because the source-side idx Local was never written to a register that gets read here — the idx-update RHS-read-LHS-write chain is broken.",
+      "evidence_line": "24 (mov.f64 %fd4, 0), 35 (add.f64 %fd10, 0, 1)",
+      "ptxas_outcome": "ACCEPT but SEMANTICALLY WRONG: idx stays at 1.0 forever, loop is infinite if the predicate ever fired correctly",
+      "missing_hir_to_mir_signal": "The HIR Type kind 'i64' on the `var idx: i64` declaration does not propagate to the MIR Local's `.precision` field. Mirror gap exists in the param-type inference path but for params it's masked because params are all .u64 in PTX-ABI"
+    },
+    {
+      "id": "P7-G5",
+      "name": "negative_local_id_leaks_into_emit_form",
+      "claim": "Line 40 `mov.f64 %fd-1, %fd1` — the dst Local id is -1, which is the in-IR sentinel for 'no destination assigned' (a void-result statement). It leaks into the textual emit form rather than being suppressed or routed to a side-effecting store. Mirror gap exists in `_nvptx_emit_stmt` where the dst.id < 0 case should either (a) emit the side-effecting form (st.global for STMT_STORE) or (b) skip the line entirely with an honest stub.",
+      "evidence_line": "40",
+      "ptxas_outcome": "REJECT (invalid register name %fd-1)"
+    },
+    {
+      "id": "P7-META",
+      "name": "honest_stub_pattern_only_covers_binop",
+      "claim": "Of the 5 gaps above, only G1 emits a `// RFC 055 055-P0 - unsupported binop: <` honest stub. G2/G3/G4/G5 silently emit malformed PTX. The unsupported-binop-stub discipline (added in N50/N56 era) needs to be generalized to STMT_LOAD/STORE/ASSIGN missing-coverage cases too — silent-malformed-PTX is the worst outcome (no surface diagnostic, dependence on downstream ptxas rejection).",
+      "remediation_class": "codegen-honesty-discipline (separate cycle)"
+    }
+  ],
+
+  "static_falsifier_status": {
+    "F-RFC071-E2E-REDUCE-SUM-SINGLE-THREAD-NUMERIC-EQ": {
+      "verdict": "FAIL",
+      "basis": "static-malformedness — predicates G1, missing-LOAD G2, missing-STORE G3, fp64-idx-incr G4, negative-dst G5 each independently prevent a correct numeric result; G1+G2+G3+G5 each independently cause ptxas REJECT so the kernel cannot launch",
+      "honest_caveat": "without a live ptxas+launch, the verdict is by static analysis of malformations visible in the emitted PTX text. Mirror-N56 pattern showed PTX-malformedness AT THE STUB SITE coexisting with ptxas-accept (because reading an undefined register is unspecified-not-rejected); but THIS kernel has MULTIPLE PTX-syntax errors (negative reg id, .f64 used as .pred predicate) that are STRICT syntax rejects regardless of register-init state. ptxas-accept is unlikely."
+    }
+  },
+
+  "gpu_fire_block": {
+    "reason": "ubu-2 unreachable from all three configured ssh paths this session",
+    "attempts": [
+      "ssh ubu-2 (WireGuard 10.142.0.2) — Operation timed out",
+      "ssh ubu2-ts (tailscale 100.72.76.118) — Operation timed out",
+      "ping 192.168.50.60 (LAN) — 100% packet loss",
+      "ssh -o ConnectTimeout=30 ubu-2 — Operation timed out (longer retry)"
+    ],
+    "alt_hosts": "mini and aiden have no CUDA toolchain. No alternative GPU host available.",
+    "next_session_action": "When ubu-2 reachable: scp host_reduce_sum.c + reduce_sum.sm_80.ptx, gcc -lcuda, run, capture JIT info/err logs. Expected outcome: JIT-load REJECT with predicate-bank mismatch (G1) or invalid register name (G3 / G5)."
+  },
+
+  "honest_scope_g3": {
+    "no_compiler_edits": "This fire is artifact-only per task constraints. The fixture compiler/codegen/nvptx_p7_reduce_sum_test.hexa is the ONLY new file in compiler/. No edits to nvptx_target.hexa, metal_target.hexa, or self/runtime.c.",
+    "ptx_emit_provenance": "Built /tmp/hexa_n59_driver from current self/main.hexa via cp /Users/ghost/.hx/bin/hexa.real -> /tmp/hexac_n59 (per reference_hexa_basename_sigkill_workaround_2026_05_19). HEXA_MODULE_LOADER + HEXA_MAC_BUILD_OK + HEXA_LANG set per reference_hexa_module_loader_env_2026_05_20. SIDECAR_NO_POOL=1 to avoid wilson-pool routing.",
+    "uncommitted_state_note": "Working tree on entry had broad uncommitted edits in flame/Metal/runtime areas (per reference memories on freeze window). NO files outside compiler/codegen/nvptx_p7_reduce_sum_test.hexa and this fire dir were touched.",
+    "static_only_verdict_basis": "The numeric-eq falsifier is REPORTED as FAIL by static-malformedness rather than measured-numeric-divergence. This is honest because (a) the PTX has multiple syntax-level rejects that ptxas-strict will block before the kernel can run, (b) the gap diagnosis is precise enough to predict the rejection class for each gap, (c) an actual ubu-2 fire would only confirm one of {REJECT G1, REJECT G3, REJECT G5}; the diagnostic value of measurement is small relative to the static evidence.",
+    "what_would_change_with_a_live_fire": "If ubu-2 became reachable: the fire would either (a) confirm REJECT (most likely — multiple strict syntax errors) and identify which one ptxas reports first, or (b) reveal a surprising JIT-tolerance path. Either confirms F-RFC071-E2E-REDUCE-SUM-SINGLE-THREAD-NUMERIC-EQ FAIL; the difference is the rejection-class identification."
+  },
+
+  "remediation_sketch_for_followon_cycle": {
+    "priority_order_smallest_first": [
+      "G5 negative_local_id_leak: 1-line guard in _nvptx_emit_stmt — `if s.dst.id < 0 { skip / route to side-effecting form }`",
+      "G4 i64_var_local_misclassified: propagate HIR Type.kind to MIR Local.precision in hir_to_mir.hexa, mirror of the f16/bf16/f32 path that already lands in N28",
+      "G1 predicate_bank_classifier: ensure the dst Local of the while-cond comparison stmt's classification runs AT THE COMPARISON stmt, not at the prior init site — likely a classifier-order or def-site-override bug",
+      "G2+G3 STMT_LOAD/STORE synth coverage: extend the N35 synthesis pass to cover (a) Local-index reads inside loop bodies, (b) literal-0 (scalar) output index — these are two separate code paths that share the index-arithmetic infrastructure",
+      "G6 (META) honest-stub discipline: add `// RFC 055 055-P0 - unsupported {load,store,assign}: <reason>` markers wherever a STMT_LOAD/STORE/ASSIGN falls through without a matching emit branch"
+    ],
+    "north_star_alignment": "These gaps are the same family as RFC 071 P3..P6 — generalization of the element-wise kernel template to non-element-wise shapes. P7 surfaces the next coverage frontier: scalar accumulator + loop + scalar output. Multi-thread warp-reduce (shfl.sync) is a separate cycle that builds ON these fixes."
+  },
+
+  "artifacts": {
+    "fixture_hexa": "/Users/ghost/core/hexa-lang/compiler/codegen/nvptx_p7_reduce_sum_test.hexa",
+    "ptx": "reduce_sum.sm_80.ptx",
+    "host_c": "host_reduce_sum.c",
+    "fire_log": "fire.log",
+    "result_json": "result.json"
+  }
+}

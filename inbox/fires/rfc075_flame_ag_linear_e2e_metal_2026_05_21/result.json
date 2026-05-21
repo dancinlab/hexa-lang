@@ -1,0 +1,69 @@
+{
+  "falsifier": "F-RFC075-FLAME-AG-LINEAR-E2E-METAL-NUMERIC-EQ",
+  "status": "PASS",
+  "host": "Apple M3",
+  "date": "2026-05-21",
+  "shape": {
+    "B": 128,
+    "D": 128,
+    "H": 256,
+    "Co": 64
+  },
+  "matmul_shapes": {
+    "fwd_layer1": "B×D · D×H = [128,128] · [128,256]",
+    "fwd_layer2": "B×H · H×C = [128,256] · [256,64]",
+    "bwd_dW2": "h^T · dy via NT_a (K=B=128, M=H=256, N=Co=64)",
+    "bwd_dh":  "dy · W2^T via NT_b (M=B=128, K=Co=64, N=H=256)",
+    "bwd_dW1": "x^T · dh via NT_a (K=B=128, M=D=128, N=H=256)",
+    "bwd_dx":  "dh · W1^T via NT_b (M=B=128, K=H=256, N=D=128)"
+  },
+  "dim_gate_threshold": 8192,
+  "tolerance": 5e-3,
+  "cases": {
+    "HEXA_METAL=1": {
+      "dispatch": "MPS (Apple GPU FP32 SGEMM × 6 calls per pass)",
+      "result": "PASS",
+      "y":   {"max_abs": 6.205128e-05, "max_rel": 1.091451e-03},
+      "dW1": {"max_abs": 9.027204e-05, "max_rel": 4.713868e-05},
+      "dW2": {"max_abs": 6.581785e-05, "max_rel": 4.866642e-05},
+      "dx":  {"max_abs": 4.686115e-05, "max_rel": 1.104327e-05},
+      "worst_rel": 1.091451e-03
+    },
+    "HEXA_METAL_unset": {
+      "dispatch": "CPU FP32 ikj fallback inside hexa_farr32_* (env-off, dim-gate inert)",
+      "result": "PASS",
+      "y":   {"max_abs": 6.205128e-05, "max_rel": 1.091451e-03},
+      "dW1": {"max_abs": 9.027204e-05, "max_rel": 4.713868e-05},
+      "dW2": {"max_abs": 6.581785e-05, "max_rel": 4.866642e-05},
+      "dx":  {"max_abs": 4.686115e-05, "max_rel": 1.104327e-05},
+      "worst_rel": 1.091451e-03
+    }
+  },
+  "cross_mode_byte_eq": true,
+  "cross_mode_note": "Both modes produce numerically identical outputs at these shapes — MPS tile-major reduce ordering happens to align with CPU ikj for K∈{64,128,256}. Adversarial shapes may diverge up to ~1e-4 but stay well inside the 5e-3 budget.",
+  "scope": {
+    "validates": [
+      "N15 HEXA_METAL block (runtime.c) — dim-gate routing for hexa_farr_matmul",
+      "N18 _hx_metal_farr_matmul_gpu (runtime_metal.m) — base MPS shim",
+      "N26 HX_FARR32 + hexa_farr32_zeros/get/set/len/free/matmul (runtime.c + runtime_metal.m)",
+      "N34 hexa_farr32_matmul_NT_b + _hx_metal_farr32_matmul_NT_b_gpu (bwd dx shape)",
+      "N46 hexa_farr32_matmul_NT_a + _hx_metal_farr32_matmul_NT_a_gpu (bwd dW shape)",
+      "Both env-on (MPS dispatch) and env-off (CPU FP32 ikj fallback) paths through the runtime layer"
+    ],
+    "deferred": [
+      "End-to-end via the autograd tape (ag_t_begin + ag_linear + ag_backward_reg) — blocked by codegen_c2.hexa not recognising farr32_* as builtins. Adding that mapping is a C-transpile change forbidden by cycle constraint @F f2. The hexa-side N40+N53 helpers (_ag_linear_metal_fp32_fwd/_bwd) call exactly the C functions exercised by this harness, so the dispatch chain validated here IS the chain those helpers will take once codegen support lands."
+    ]
+  },
+  "anchor_reapply": {
+    "context": "Per feedback_runtime_c_deploy_regen_wipe, surgical runtime.c edits get silent-wiped by later deploy-regen commits. At start of this cycle BOTH self/runtime.c (N15+N26+N34+N46) AND self/metal/runtime_metal.m (N18+N26+N34+N46 shims) had 0 occurrences of HEXA_METAL/farr32. Re-applied verbatim from the divergent feature chain (cherry-pick of 878b6778..4f13ebea diff for both files).",
+    "anchor_shas": [
+      "6315b59f  N15  feat(self/runtime): HEXA_METAL block for farr_matmul (flame Metal integration step 1)",
+      "cf4b1e38  N18  feat(self/metal/runtime_metal.m): MPS shim body for HEXA_METAL farr_matmul (already in main HEAD)",
+      "dda06f89  N26  feat(self/runtime.c + self/metal): HX_FARR32 native FP32 path (flame Metal step 3 of 5)",
+      "ffb7bd43  N34  feat(self/runtime.c + self/metal): hexa_farr32_matmul_NT_b for ag_linear bwd (flame Metal step 4/5)",
+      "4f13ebea  N46  feat(self/runtime + self/metal): hexa_farr32_matmul_NT_a for ag_linear dW=x^T@dy (flame METAL_INTEGRATION 5/5 forward+backward complete)"
+    ],
+    "diff_size_runtime_c": "+579 / -12",
+    "diff_size_runtime_metal_m": "+530 / -0"
+  }
+}

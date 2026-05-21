@@ -1,0 +1,111 @@
+=== RFC 071 P7 N59 reduce_sum FIRE LOG ===
+date: 2026-05-21
+host: macOS arm64 (driver build only; GPU fire BLOCKED — see ssh log below)
+fixture: compiler/codegen/nvptx_p7_reduce_sum_test.hexa (new file, this cycle)
+
+--- Step 1: Build driver ---
+$ SIDECAR_NO_POOL=1 HEXA_LANG=/Users/ghost/core/hexa-lang HEXA_MAC_BUILD_OK=1 \
+    HEXA_MODULE_LOADER=/Users/ghost/core/hexa-lang/build/hexa_module_loader \
+    /tmp/hexac_n59 build self/main.hexa -o /tmp/hexa_n59_driver
+... (clang macro-redefined warnings — same as N50/N56) ...
+OK: built /tmp/hexa_n59_driver
+
+driver size: 1552128 B  (matches N56)
+hexac_n59 = cp of /Users/ghost/.hx/bin/hexa.real (per
+reference_hexa_basename_sigkill_workaround_2026_05_19)
+
+--- Step 2: Emit PTX ---
+$ SIDECAR_NO_POOL=1 ...env...  /tmp/hexa_n59_driver build \
+    compiler/codegen/nvptx_p7_reduce_sum_test.hexa --target=nvptx64-nvidia-cuda-sm80
+atlas: loaded 15952 nodes from hxc
+[nvptx] target=sm_80 src=compiler/codegen/nvptx_p7_reduce_sum_test.hexa \
+        out=compiler/codegen/nvptx_p7_reduce_sum_test.hexa.ptx phase=P3-PATH-B
+
+ptx size: 1059 B   (vs 2082 B for N50/N56 vec_mul/vec_div — much smaller because
+                    the codegen LOST half the body; see gap diagnosis below)
+ptx line count: 42  (vs 59 for N50/N56)
+ptx md5: 7554b36f044e13bc42d5a30494033726
+register decls (.reg): 10
+
+--- Step 3: GPU fire — BLOCKED ---
+$ SIDECAR_NO_POOL=1 ssh -o ConnectTimeout=10 ubu-2 'echo OK'
+ssh: connect to host 10.142.0.2 port 22: Operation timed out
+
+$ SIDECAR_NO_POOL=1 ssh -o ConnectTimeout=10 ubu2-ts 'echo OK'   # tailscale fallback
+ssh: connect to host 100.72.76.118 port 22: Operation timed out
+
+$ ping -c1 -W1 192.168.50.60   # LAN fallback
+PING 192.168.50.60: 100% packet loss
+
+$ SIDECAR_NO_POOL=1 ssh -o ConnectTimeout=30 ubu-2 'echo connected; nvidia-smi ...'
+ssh: connect to host 10.142.0.2 port 22: Operation timed out
+
+All three ubu-2 ssh paths (WireGuard 10.142.0.2 / tailscale 100.72.76.118 /
+LAN 192.168.50.60) fail. mini and aiden have no CUDA. No alternative GPU host
+available this session for a real ptxas+launch fire.
+
+Per @D g3 honest-scope: the PTX-as-emitted is malformed in ways that a real
+ptxas pass would reject before any launch could even begin (see result.json
+codegen_gap_diagnosis). Numeric eq comparison is therefore moot — there is
+nothing to launch. F-RFC071-E2E-REDUCE-SUM-SINGLE-THREAD-NUMERIC-EQ status =
+FAIL by emitted-PTX-malformedness (not by launch-time numeric divergence).
+This is the SAME class of honest-stub outcome as N56 vec_div, but with FIVE
+distinct codegen gaps in a single kernel rather than one.
+
+--- Step 4: Static PTX malformation inventory ---
+1. line 27: `// RFC 055 055-P0 - unsupported binop: <`
+   STMT_BINOP op="lt" not emitted as `setp.lt.s64`. Predicate dst `%fd5` is
+   declared as `.reg .f64` instead of `.reg .pred`. The classifier rule for
+   `op == "lt"` (nvptx_target.hexa:1145) returns NVPTX_RKIND_PRED, BUT the
+   classifier only fires when Local-defining-stmt is the comparison — the
+   actual dst-Local for the while-condition appears to be classified by an
+   EARLIER def site (the `var idx` init path) which forced it to f64. Or the
+   while-cond goes through a code path that skips the classifier. Either way
+   the dst register bank is wrong AND no setp instruction is emitted.
+
+2. line 28: `@%fd5 bra $L_2`
+   PTX requires `@<pred> bra <label>` where `<pred>` is a `.reg .pred`
+   register. `%fd5` is `.reg .f64` per line decl. ptxas will reject this
+   with something like "Argument type mismatch on predicate: %fd5 is .f64,
+   expected .pred".
+
+3. line 32: `mov.f64 %fd7, %fd0`   AND   line 33: `add.f64 %fd8, 0, %fd7`
+   The accumulator load `v + a[idx]` did NOT lower to a STMT_LOAD on
+   `a[to_i64(idx)]`. No `ld.global.f64` instruction is emitted. The
+   `a[idx]` index access vanished entirely. The add appears to source from
+   `%fd0` which is never declared in the .reg section (out-of-range Local
+   id). ptxas will reject this with "Unknown symbol %fd0" or similar.
+
+4. line 35: `add.f64 %fd10, 0, 1`
+   `idx = idx + 1` lowered as an FP64 add of literal constants 0 and 1.
+   The `idx` Local is i64 in source (`var idx: i64 = 0`) but classified
+   as FP64 in the codegen (default-FP64 STMT_ASSIGN path at line 1208 of
+   nvptx_target.hexa). The current `idx` value is not even referenced —
+   both operands are immediates. ptxas will accept this as valid FP64 but
+   the semantics are wrong: idx stays the literal value 1.0 forever, the
+   loop is infinite (idx never reaches n=1024).
+
+5. line 40: `mov.f64 %fd-1, %fd1`
+   `out[to_i64(0)] = v` did NOT lower to a STMT_STORE on `out[0]`. No
+   `st.global.f64 [%rd_addr], %fd<v>` instruction is emitted. The
+   destination register is `%fd-1` — a NEGATIVE Local id, which is a
+   sentinel for "no dst assigned" leaking into the emit form. ptxas will
+   reject "Invalid register name: %fd-1" or similar.
+
+These 5 gaps are independent — fixing any one in isolation does not unblock
+numeric correctness. The largest is gap (3)+(5): the STMT_LOAD/STORE
+synthesis pass (N35) handled `c[gid] = a[gid] + b[gid]` for element-wise
+kernels but did NOT generalize to:
+  (a) a load where the index is a Local (`idx`) rather than the gid
+      register (`gpu_thread_id_x()` composition);
+  (b) a store with a LITERAL-0 index (`out[to_i64(0)]`) — i.e. a scalar
+      output, not a per-thread output.
+
+--- Step 5: What `// unsupported` markers tell us about pipeline coverage ---
+Only ONE `// unsupported` marker emitted: `// RFC 055 055-P0 - unsupported
+binop: <`. The OTHER gaps (predicate-bank-mismatch, missing-LOAD/STORE,
+fp64-idx-increment, negative-dst-id) do NOT print honest-stub markers — they
+silently emit malformed PTX. This is a meta-gap in the codegen honesty
+discipline: the unsupported-binop-stub pattern only covers the binop branch
+of STMT_BINOP. STMT_LOAD/STORE/ASSIGN missing-coverage paths emit broken PTX
+without complaint. (Fixing this is a separate cycle.)

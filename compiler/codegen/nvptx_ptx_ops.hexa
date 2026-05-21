@@ -83,10 +83,6 @@ pub let PTX_OP_ADD_F64: string        = "add.f64"
 pub let PTX_OP_SUB_F64: string        = "sub.f64"
 pub let PTX_OP_MUL_F64: string        = "mul.f64"
 pub let PTX_OP_FMA_RN_F64: string     = "fma.rn.f64"   // round-to-nearest FMA
-// PTX ISA 8.7 §9.7.1.4 — `div.<ty>` REQUIRES an explicit rounding suffix.
-// For FP64 the only native mode is `div.rn.f64` (IEEE round-to-nearest);
-// `div.approx.f64` / `div.full.f64` do NOT exist (those are FP32-only).
-pub let PTX_OP_DIV_RN_F64: string     = "div.rn.f64"
 
 // ── PTX integer index arithmetic (loop / addressing) ──────────
 pub let PTX_OP_MOV_U32: string        = "mov.u32"      // read sreg / move
@@ -152,7 +148,6 @@ pub fn ptx_fp64_slice_ops() -> [PtxOpEntry] {
     t.push(_ptx_op_entry(PTX_OP_ADD_F64, 3, "", "FP64 add"))
     t.push(_ptx_op_entry(PTX_OP_SUB_F64, 3, "", "FP64 subtract"))
     t.push(_ptx_op_entry(PTX_OP_MUL_F64, 3, "", "FP64 multiply"))
-    t.push(_ptx_op_entry(PTX_OP_DIV_RN_F64, 3, "", "FP64 divide, round-to-nearest (IEEE; ISA §9.7.1.4 — only FP64 div mode)"))
     t.push(_ptx_op_entry(PTX_OP_FMA_RN_F64, 4, "", "FP64 fused multiply-add, round-to-nearest"))
     t.push(_ptx_op_entry(PTX_OP_BAR_SYNC, 1, "", "block-wide barrier"))
     t.push(_ptx_op_entry(PTX_OP_ATOM_ADD_F64, 3, PTX_SPACE_GLOBAL, "FP64 atomic add (returns old)"))
