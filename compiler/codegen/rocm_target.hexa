@@ -1,10 +1,10 @@
-// HEXA Native Compiler — Codegen / ROCm (hexa-src → HIP source)  [RFC 075 P1+ codegen-only]
+// HEXA Native Compiler — Codegen / ROCm (hexa-src → HIP source)  [RFC 075 P1++ codegen-only]
 //
-// @version 0.0.3
+// @version 0.0.4
 // @capabilities [pure]
 //
 // ─────────────────────────────────────────────────────────────────────
-// RFC 075 P1+ — ROCm/HIP codegen text-emit, codegen-only (no silicon
+// RFC 075 P1++ — ROCm/HIP codegen text-emit, codegen-only (no silicon
 // fire this cycle — AMD GPU pool is empty per N10/N14/N22). NVPTX path
 // byte-identically untouched. Metal path byte-identically untouched.
 // Zero edits to `self/codegen_c2.hexa` per @D g_commit_push_deploy.
@@ -17,8 +17,12 @@
 // vec-add (binop "add"), vec-mul (binop "mul"), vec-sub (binop "sub"),
 // vec-div (binop "div"), vec-scale (binop "mul" with const rhs), and
 // reduce-sum (UNOP "reduce_sum", per-wavefront output via HIP warp
-// shuffle `__shfl_xor`). All other kernel shapes still honestly return
-// `""` — see honest scope below.
+// shuffle `__shfl_xor`). P1++ extends the dispatch to NINE shapes by
+// adding the rocWMMA matmul tier: matmul (binop "matmul"), matmul_NT_a
+// (A transposed), matmul_NT_b (B transposed) — each emits a HIP source
+// that includes `<rocwmma/rocwmma.hpp>` and uses the 16x16x16 FP32
+// `rocwmma::fragment<>` API. All other kernel shapes still honestly
+// return `""` — see honest scope below.
 //
 // P2 (silicon fire via `hipcc` + AMD GPU pool host) remains a follow-on
 // MULTI-SESSION cycle requiring AMD GPU stock; this cycle is codegen-
@@ -46,19 +50,23 @@
 // HONEST SCOPE (RFC 075 §6 / @D g3)
 //
 //   IS  — target enum constants (gfx-rev), full vec-add HIP syntax-
-//         fragment table, vec-add / vec-mul / vec-sub / vec-div /
-//         vec-scale / reduce-sum MIR shape recognisers, real HIP source
-//         emit for these six patterns.
+//         fragment table, rocWMMA fragment-type fragment table, vec-add /
+//         vec-mul / vec-sub / vec-div / vec-scale / reduce-sum / matmul /
+//         matmul_NT_a / matmul_NT_b MIR shape recognisers, real HIP
+//         source emit for these nine patterns.
 //   NOT — General MIR-walk HIP emission. The emitters are shape-
 //         hardcoded; other MIR shapes return `""`. Unary family (neg /
 //         abs / sqrt / exp / log / sin / cos / floor / ceil / round) /
-//         matmul / matmul_NT_a / matmul_NT_b / bf16 land on the AMD
-//         lane in multi-session cycles (mirrors RFC 075 plan on the
-//         Apple Metal lane). No `@gpu_kernel` target dispatch wiring
-//         this cycle (codegen-only). No `hipcc` invocation (P2 silicon
-//         fire = follow-on cycle once AMD GPU pool stock returns). AMD
-//         silicon does not fire this cycle — pool empty
-//         (N10/N14/N22 BLOCKED).
+//         bf16 matmul land on the AMD lane in multi-session cycles
+//         (mirrors RFC 075 plan on the Apple Metal lane). No `@gpu_kernel`
+//         target dispatch wiring this cycle (codegen-only). No `hipcc`
+//         invocation (P2 silicon fire = follow-on cycle once AMD GPU
+//         pool stock returns). AMD silicon does not fire this cycle —
+//         pool empty (N10/N14/N22 BLOCKED). The emitted matmul source
+//         requires CDNA2+ (MI200/gfx90a) or RDNA3+ (gfx1100+) at hipcc
+//         time because rocWMMA's 16x16x16 FP32 path depends on the
+//         `v_wmma_*` / `v_mfma_*` instructions introduced in those
+//         architectures — codegen does NOT enforce the gate.
 //
 // `hipcc` (HIP source -> AMD GCN code object) is an external AMD
 // compiler — the same g5 logic as NVPTX's `ptxas`, Apple's `xcrun
@@ -215,6 +223,66 @@ pub let ROCM_OP_THREAD_IDX: string  = "blockIdx.x * blockDim.x + threadIdx.x"
 // for NVIDIA CUDA.
 pub let ROCM_OP_PREAMBLE_INCLUDE: string = "#include <hip/hip_runtime.h>"
 
+// RFC 075 P1++ — rocwmma header include (matmul tier).
+//
+// `<rocwmma/rocwmma.hpp>` is AMD's header-only WMMA (Wave Matrix Multiply-
+// Accumulate) wrapper library; the AMD analog of NVIDIA's
+// `<mma.h>` (CUDA `nvcuda::wmma`) or Apple's `simdgroup_matrix` MSL
+// builtin. The fragment-based API (`rocwmma::fragment<matrix_a,...>`,
+// `load_matrix_sync`, `mma_sync`, `store_matrix_sync`) is identical in
+// shape to the CUDA WMMA API by intent — rocwmma is the source-portable
+// path between vendors.
+//
+// HARDWARE REQUIREMENT (cited): rocwmma's 16x16x16 FP32 accumulator
+// shape requires CDNA2+ (MI200/MI250 = gfx90a) or RDNA3+ (gfx1100+)
+// because the underlying `v_wmma_*` instructions debuted with those
+// architectures. The vec-add tier (gfx1100/1101/1102 targets above) is
+// the minimum baseline for emitted matmul source to be valid; earlier
+// gfx10xx targets need a fallback tiled-naive path (NOT emitted today).
+//   ref: ROCm rocwmma — https://rocm.docs.amd.com/projects/rocWMMA/
+//   ref: AMD RDNA3 ISA §7.6 — V_WMMA instructions
+//   ref: AMD CDNA2 ISA §6.4 — V_MFMA / V_WMMA emulation
+pub let ROCM_OP_PREAMBLE_ROCWMMA: string = "#include <rocwmma/rocwmma.hpp>"
+
+// RFC 075 P1++ — rocwmma fragment type templates (matmul tier).
+//
+// These are SOURCE-TEXT fragments the emit pass concatenates into the
+// kernel body. The 16x16x16 FP32 shape with row-major A + col-major B
+// (or transposed equivalents) lowers to AMD's native `v_wmma_f32_16x16x16_*`
+// instructions on RDNA3+ and `v_mfma_f32_16x16x16f32` on CDNA2+.
+//
+// The `rocwmma::fragment` template signature mirrors `nvcuda::wmma::fragment`:
+//   fragment<use, M, N, K, dtype, layout>
+// where use ∈ {matrix_a, matrix_b, accumulator}. The accumulator carries
+// no explicit layout (it's a register-tile owned uniformly by the
+// wavefront).
+pub let ROCM_OP_WMMA_FRAG_A_ROW: string =
+    "rocwmma::fragment<rocwmma::matrix_a, 16, 16, 16, float, rocwmma::row_major>"
+pub let ROCM_OP_WMMA_FRAG_A_COL: string =
+    "rocwmma::fragment<rocwmma::matrix_a, 16, 16, 16, float, rocwmma::col_major>"
+pub let ROCM_OP_WMMA_FRAG_B_ROW: string =
+    "rocwmma::fragment<rocwmma::matrix_b, 16, 16, 16, float, rocwmma::row_major>"
+pub let ROCM_OP_WMMA_FRAG_B_COL: string =
+    "rocwmma::fragment<rocwmma::matrix_b, 16, 16, 16, float, rocwmma::col_major>"
+pub let ROCM_OP_WMMA_FRAG_C: string =
+    "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
+
+// rocwmma intrinsic function names (matmul tier).
+pub let ROCM_OP_WMMA_FILL: string  = "rocwmma::fill_fragment"
+pub let ROCM_OP_WMMA_LOAD: string  = "rocwmma::load_matrix_sync"
+pub let ROCM_OP_WMMA_STORE: string = "rocwmma::store_matrix_sync"
+pub let ROCM_OP_WMMA_MMA: string   = "rocwmma::mma_sync"
+pub let ROCM_OP_WMMA_MEM_ROW: string = "rocwmma::mem_row_major"
+pub let ROCM_OP_WMMA_MEM_COL: string = "rocwmma::mem_col_major"
+
+// WMMA tile size (16x16x16 — the canonical AMD WMMA tile dimensions).
+// Matches the `M`, `N`, `K` in `v_wmma_*_16x16x16_f32`. Kept as named
+// constants so future bf16/fp16 variants can swap the dtype layer
+// without re-pasting `16` everywhere.
+pub let ROCM_WMMA_TILE_M_LIT: string = "16"
+pub let ROCM_WMMA_TILE_N_LIT: string = "16"
+pub let ROCM_WMMA_TILE_K_LIT: string = "16"
+
 // RFC 075 P1+ — HIP warp-reduction intrinsics (reduce-sum tier).
 //
 // `__shfl_xor` is HIP's wavefront-shuffle intrinsic (analog of CUDA's
@@ -308,6 +376,19 @@ pub fn rocm_fp32_slice_ops() -> [RocmOpEntry] {
 // _rocm_emit_preamble — emit the HIP preamble (runtime header include).
 fn _rocm_emit_preamble() -> string {
     return ROCM_OP_PREAMBLE_INCLUDE + "\n\n"
+}
+
+// _rocm_emit_matmul_preamble — emit the HIP+rocWMMA preamble for the
+// matmul tier. Adds `#include <rocwmma/rocwmma.hpp>` after the HIP
+// runtime header so the `rocwmma::fragment<...>` template types + the
+// `load_matrix_sync` / `mma_sync` / `store_matrix_sync` intrinsics are
+// in scope inside the kernel body. Used only by the matmul / matmul_NT_a
+// / matmul_NT_b emit paths; the element-wise vec-* shapes do not need
+// the rocwmma header.
+fn _rocm_emit_matmul_preamble() -> string {
+    let mut out = ROCM_OP_PREAMBLE_INCLUDE + "\n"
+    out = out + ROCM_OP_PREAMBLE_ROCWMMA + "\n\n"
+    return out
 }
 
 // _rocm_emit_kernel_signature — emit
@@ -499,6 +580,139 @@ fn _rocm_emit_reduce_sum_body() -> string {
     return out
 }
 
+// ── RFC 075 P1++ — matmul kernel signature + body helpers ───────────
+//
+// AMD lane WMMA matmul. The kernel signature for the matmul shape is
+// distinct from the vec-* shapes: three FP32 device buffers (a, b, c)
+// PLUS three integer dimensions (M, N, K) — no element-count `n`
+// because the iteration domain is the (M,N) output tile space, not a
+// flat 1-D length.
+//
+// HARDWARE COMPAT (cited above on ROCM_OP_PREAMBLE_ROCWMMA): the emitted
+// `rocwmma::fragment<..., 16, 16, 16, float, ...>` requires CDNA2+
+// (gfx90a / MI200+) or RDNA3+ (gfx1100+) at runtime — `hipcc` will
+// accept the source against earlier targets only if the host falls back
+// to the rocwmma emulated path. The emit pass does NOT enforce a target
+// gate (codegen-only); the LModule target enum constants above already
+// reflect this baseline (gfx1100+ scaffold).
+
+// _rocm_emit_matmul_kernel_signature — emit
+//   extern "C" __global__ void <name>(const float* a, const float* b,
+//                                     float* c, int M, int N, int K)
+// 3-buffer + 3-dim signature used by all three matmul shapes. Mirrors
+// the canonical cuBLAS / hipBLAS SGEMM-style kernel-argument layout
+// (A, B, C, M, N, K — the inner dims for hipBLASLt + rocWMMA examples).
+fn _rocm_emit_matmul_kernel_signature(name: string) -> string {
+    let mut out = ROCM_OP_KERNEL_DECL + " " + name + "("
+    out = out + ROCM_OP_PARAM_CONST_FLOAT_PTR + "a, "
+    out = out + ROCM_OP_PARAM_CONST_FLOAT_PTR + "b, "
+    out = out + ROCM_OP_PARAM_FLOAT_PTR + "c, "
+    out = out + ROCM_OP_PARAM_INT + "M, "
+    out = out + ROCM_OP_PARAM_INT + "N, "
+    out = out + ROCM_OP_PARAM_INT + "K)\n"
+    return out
+}
+
+// _rocm_emit_matmul_body — emit the HIP/rocWMMA kernel body for the
+// canonical matmul `c = a · b` (A row-major MxK, B col-major KxN, C
+// row-major MxN). The block layout is one 16x16 output tile per
+// wavefront — block coordinates (blockIdx.y, blockIdx.x) pick the
+// (row_tile, col_tile) and the wavefront cooperatively executes the
+// K-loop using `rocwmma::mma_sync`.
+//
+// Hardcoded shape: `c = a · b` with the canonical row_major(A) +
+// col_major(B) layout pair. This is the layout the rocwmma tutorial
+// uses; matmul_NT_a (A transposed → col_major) and matmul_NT_b (B
+// transposed → row_major) are separate emit paths below.
+//
+// Emitted body (illustrative):
+//   {
+//       int row_tile = blockIdx.y * 16;
+//       int col_tile = blockIdx.x * 16;
+//       rocwmma::fragment<rocwmma::matrix_a, 16, 16, 16, float, rocwmma::row_major> a_frag;
+//       rocwmma::fragment<rocwmma::matrix_b, 16, 16, 16, float, rocwmma::col_major> b_frag;
+//       rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float> c_frag;
+//       rocwmma::fill_fragment(c_frag, 0.0f);
+//       for (int k = 0; k < K; k += 16) {
+//           rocwmma::load_matrix_sync(a_frag, &a[row_tile * K + k], K);
+//           rocwmma::load_matrix_sync(b_frag, &b[k * N + col_tile], N);
+//           rocwmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+//       }
+//       rocwmma::store_matrix_sync(&c[row_tile * N + col_tile], c_frag, N, rocwmma::mem_row_major);
+//   }
+fn _rocm_emit_matmul_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + ROCM_TYPE_INT + " row_tile" + ROCM_OP_ASSIGN
+    out = out + "blockIdx.y * " + ROCM_WMMA_TILE_M_LIT + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_TYPE_INT + " col_tile" + ROCM_OP_ASSIGN
+    out = out + "blockIdx.x * " + ROCM_WMMA_TILE_N_LIT + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_OP_WMMA_FRAG_A_ROW + " a_frag" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_OP_WMMA_FRAG_B_COL + " b_frag" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_OP_WMMA_FRAG_C     + " c_frag" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_OP_WMMA_FILL + "(c_frag, 0.0f)" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    for (" + ROCM_TYPE_INT + " k = 0; k < K; k += " + ROCM_WMMA_TILE_K_LIT + ") {\n"
+    out = out + "        " + ROCM_OP_WMMA_LOAD + "(a_frag, &a[row_tile * K + k], K)" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "        " + ROCM_OP_WMMA_LOAD + "(b_frag, &b[k * N + col_tile], N)" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "        " + ROCM_OP_WMMA_MMA + "(c_frag, a_frag, b_frag, c_frag)" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    }\n"
+    out = out + "    " + ROCM_OP_WMMA_STORE + "(&c[row_tile * N + col_tile], c_frag, N, " + ROCM_OP_WMMA_MEM_ROW + ")" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _rocm_emit_matmul_NT_a_body — emit the HIP/rocWMMA kernel body for
+// `c = a^T · b`. A is column-major (transposed-A interpretation), B is
+// column-major. Mirror of `_rocm_emit_matmul_body` with the A fragment
+// layout swapped from row_major to col_major, and the A-load address
+// arithmetic swapped to column-major indexing (`&a[k * M + row_tile]`,
+// stride M instead of K). B stays col_major.
+fn _rocm_emit_matmul_NT_a_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + ROCM_TYPE_INT + " row_tile" + ROCM_OP_ASSIGN
+    out = out + "blockIdx.y * " + ROCM_WMMA_TILE_M_LIT + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_TYPE_INT + " col_tile" + ROCM_OP_ASSIGN
+    out = out + "blockIdx.x * " + ROCM_WMMA_TILE_N_LIT + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_OP_WMMA_FRAG_A_COL + " a_frag" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_OP_WMMA_FRAG_B_COL + " b_frag" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_OP_WMMA_FRAG_C     + " c_frag" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_OP_WMMA_FILL + "(c_frag, 0.0f)" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    for (" + ROCM_TYPE_INT + " k = 0; k < K; k += " + ROCM_WMMA_TILE_K_LIT + ") {\n"
+    out = out + "        " + ROCM_OP_WMMA_LOAD + "(a_frag, &a[k * M + row_tile], M)" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "        " + ROCM_OP_WMMA_LOAD + "(b_frag, &b[k * N + col_tile], N)" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "        " + ROCM_OP_WMMA_MMA + "(c_frag, a_frag, b_frag, c_frag)" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    }\n"
+    out = out + "    " + ROCM_OP_WMMA_STORE + "(&c[row_tile * N + col_tile], c_frag, N, " + ROCM_OP_WMMA_MEM_ROW + ")" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _rocm_emit_matmul_NT_b_body — emit the HIP/rocWMMA kernel body for
+// `c = a · b^T`. A is row-major, B is row-major (transposed-B
+// interpretation flips the canonical col_major default to row_major).
+// Mirror of `_rocm_emit_matmul_body` with the B fragment layout swapped
+// from col_major to row_major, and the B-load address arithmetic
+// swapped to row-major indexing (`&b[col_tile * K + k]`, stride K
+// instead of N). A stays row_major.
+fn _rocm_emit_matmul_NT_b_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + ROCM_TYPE_INT + " row_tile" + ROCM_OP_ASSIGN
+    out = out + "blockIdx.y * " + ROCM_WMMA_TILE_M_LIT + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_TYPE_INT + " col_tile" + ROCM_OP_ASSIGN
+    out = out + "blockIdx.x * " + ROCM_WMMA_TILE_N_LIT + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_OP_WMMA_FRAG_A_ROW + " a_frag" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_OP_WMMA_FRAG_B_ROW + " b_frag" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_OP_WMMA_FRAG_C     + " c_frag" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    " + ROCM_OP_WMMA_FILL + "(c_frag, 0.0f)" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    for (" + ROCM_TYPE_INT + " k = 0; k < K; k += " + ROCM_WMMA_TILE_K_LIT + ") {\n"
+    out = out + "        " + ROCM_OP_WMMA_LOAD + "(a_frag, &a[row_tile * K + k], K)" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "        " + ROCM_OP_WMMA_LOAD + "(b_frag, &b[col_tile * K + k], K)" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "        " + ROCM_OP_WMMA_MMA + "(c_frag, a_frag, b_frag, c_frag)" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "    }\n"
+    out = out + "    " + ROCM_OP_WMMA_STORE + "(&c[row_tile * N + col_tile], c_frag, N, " + ROCM_OP_WMMA_MEM_ROW + ")" + ROCM_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
 // _rocm_mfunc_is_vec_add_shape — recognise the vec-add MIR shape.
 // Hardcoded shape check: entry block has exactly STMT_LOAD + STMT_LOAD
 // + STMT_BINOP("add") + STMT_STORE (in that order), plus an optional
@@ -616,6 +830,65 @@ fn _rocm_mfunc_is_reduce_sum_shape(mfn: MFunc) -> bool {
     return true
 }
 
+// ── RFC 075 P1++ — matmul MIR shape recognisers ─────────────────────
+//
+// SYNTHETIC MIR SHAPE — STMT_LOAD a→va, STMT_LOAD b→vb,
+// STMT_BINOP("matmul"/"matmul_NT_a"/"matmul_NT_b")(va, vb)→vc,
+// STMT_STORE vc→c. Mirrors the Metal lane's matmul shape recogniser
+// pattern (synthetic — no HIR/parser produces these op strings today;
+// they are scaffold for the future `a @ b` / `a.T @ b` / `a @ b.T`
+// lowering on the AMD lane). The matmul recognisers fire AFTER vec-add /
+// vec-mul / vec-sub / vec-div because all four share the 4-stmt
+// LOAD+LOAD+BINOP+STORE prefix; the BINOP op string is the per-shape
+// discriminator.
+
+// _rocm_mfunc_is_matmul_shape — recognise the matmul MIR shape.
+// STMT_LOAD + STMT_LOAD + STMT_BINOP("matmul") + STMT_STORE skeleton.
+fn _rocm_mfunc_is_matmul_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "matmul" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _rocm_mfunc_is_matmul_NT_a_shape — recognise the matmul-NT-a MIR
+// shape (A transposed; `c = a^T · b`). STMT_LOAD + STMT_LOAD +
+// STMT_BINOP("matmul_NT_a") + STMT_STORE.
+fn _rocm_mfunc_is_matmul_NT_a_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "matmul_NT_a" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _rocm_mfunc_is_matmul_NT_b_shape — recognise the matmul-NT-b MIR
+// shape (B transposed; `c = a · b^T`). STMT_LOAD + STMT_LOAD +
+// STMT_BINOP("matmul_NT_b") + STMT_STORE.
+fn _rocm_mfunc_is_matmul_NT_b_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "matmul_NT_b" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
 // _rocm_format_scalar — format a MIR const operand as HIP FP32 literal.
 // const_float → uses the `float_val` field (e.g. "2.5"); const_int →
 // uses the `int_val` field with `.0f` appended so it stays FP32 in
@@ -634,40 +907,45 @@ fn _rocm_format_scalar(op: Operand) -> string {
 
 // codegen_emit_rocm_il — MIR module -> HIP source text.
 //
-// RFC 075 P1+ LANDED (codegen-only) — emits a full HIP kernel source
+// RFC 075 P1++ LANDED (codegen-only) — emits a full HIP kernel source
 // when the first MFunc matches a recognised shape. Otherwise (empty
 // module, unrecognised shape) returns `""` honestly, preserving the
 // P0 contract the lower_test Case 1 still asserts.
 //
-// HONEST SCOPE — SIX shapes recognised today (vec-add, vec-mul,
-// vec-sub, vec-div, vec-scale, reduce-sum). All other MIR patterns
-// return `""`. Unary family (vec-neg / vec-abs / vec-sqrt / vec-exp /
-// vec-log / vec-sin / vec-cos / vec-floor / vec-ceil / vec-round) +
-// matmul / matmul_NT_a / matmul_NT_b / bf16 land in multi-session
-// follow-on cycles on the AMD lane (mirrors the RFC 075 plan that
-// staged the Apple Metal lane shape-by-shape across many cycles).
-// AMD GPU pool currently empty (N10/N14/N22 BLOCKED) — silicon fire
-// deferred until pool stock returns.
+// HONEST SCOPE — NINE shapes recognised today (vec-add, vec-mul,
+// vec-sub, vec-div, vec-scale, reduce-sum, matmul, matmul_NT_a,
+// matmul_NT_b). All other MIR patterns return `""`. Unary family
+// (vec-neg / vec-abs / vec-sqrt / vec-exp / vec-log / vec-sin /
+// vec-cos / vec-floor / vec-ceil / vec-round) + bf16 matmul land in
+// multi-session follow-on cycles on the AMD lane (mirrors the RFC 075
+// plan that staged the Apple Metal lane shape-by-shape across many
+// cycles). AMD GPU pool currently empty (N10/N14/N22 BLOCKED) —
+// silicon fire deferred until pool stock returns.
 //
-//   Shape coverage matrix (RFC 075 P1+):
-//     vec-add     `c[i] = a[i] + b[i]`     STMT_LOAD+LOAD+BINOP(add)+STORE
-//     vec-mul     `c[i] = a[i] * b[i]`     STMT_LOAD+LOAD+BINOP(mul)+STORE
-//     vec-sub     `c[i] = a[i] - b[i]`     STMT_LOAD+LOAD+BINOP(sub)+STORE
-//     vec-div     `c[i] = a[i] / b[i]`     STMT_LOAD+LOAD+BINOP(div)+STORE
-//     vec-scale   `c[i] = a[i] * <const>`  STMT_LOAD+BINOP(mul, const)+STORE
-//     reduce-sum  `c[g] = __shfl_xor(...)` STMT_LOAD+UNOP(reduce_sum)+STORE  (2-buf, per-wavefront output)
+//   Shape coverage matrix (RFC 075 P1++):
+//     vec-add       `c[i] = a[i] + b[i]`     STMT_LOAD+LOAD+BINOP(add)+STORE
+//     vec-mul       `c[i] = a[i] * b[i]`     STMT_LOAD+LOAD+BINOP(mul)+STORE
+//     vec-sub       `c[i] = a[i] - b[i]`     STMT_LOAD+LOAD+BINOP(sub)+STORE
+//     vec-div       `c[i] = a[i] / b[i]`     STMT_LOAD+LOAD+BINOP(div)+STORE
+//     vec-scale     `c[i] = a[i] * <const>`  STMT_LOAD+BINOP(mul, const)+STORE
+//     reduce-sum    `c[g] = __shfl_xor(...)` STMT_LOAD+UNOP(reduce_sum)+STORE  (2-buf, per-wavefront output)
+//     matmul        `c = a · b`              STMT_LOAD+LOAD+BINOP(matmul)+STORE       (rocWMMA 16x16x16 FP32)
+//     matmul_NT_a   `c = a^T · b`            STMT_LOAD+LOAD+BINOP(matmul_NT_a)+STORE  (A col_major)
+//     matmul_NT_b   `c = a · b^T`            STMT_LOAD+LOAD+BINOP(matmul_NT_b)+STORE  (B row_major)
 //
 // Dispatch order: vec-add → vec-mul → vec-sub → vec-div → vec-scale →
-// reduce-sum → "". vec-scale is tried before any unary family (future)
+// reduce-sum → matmul → matmul_NT_a → matmul_NT_b → "". The matmul
+// recognisers fire AFTER the binop quartet because all four 4-stmt
+// LOAD+LOAD+BINOP+STORE recognisers key on the BINOP op string —
+// "add"/"mul"/"sub"/"div" vs "matmul"/"matmul_NT_a"/"matmul_NT_b" are
+// mutually exclusive, so ordering inside the BINOP family is for
+// readability only. vec-scale is tried before any unary family (future)
 // because its recogniser is the most discerning (checks operand kinds)
-// on the 3-stmt prefix it shares with the unary family. The vec-add /
-// vec-mul / vec-sub / vec-div recognisers all key on a 4-stmt 2-LOAD
-// prefix that vec-scale (1-LOAD) can never match, so the in-family
-// ordering is irrelevant within the binop quartet.
+// on the 3-stmt prefix it shares with the unary family.
 //
 // P2+ insertion points:
-//   - TODO RFC 075 P2 — unary family + matmul + bf16 (mirror
-//     metal_target.hexa P3+ buildout for the AMD lane).
+//   - TODO RFC 075 P2 — unary family (mirror metal_target.hexa P3+
+//     buildout for the AMD lane) + bf16 matmul variants.
 //   - TODO RFC 075 P3 — silicon fire via `hipcc` + AMD GPU pool host
 //     (queued behind AMD pool stock return per N10/N14/N22).
 //   - TODO RFC 075 follow-on cycle — general MFunc → HIP emission
@@ -726,6 +1004,35 @@ pub fn codegen_emit_rocm_il(module: MModule) -> string {
         let mut out = _rocm_emit_preamble()
         out = out + _rocm_emit_unary_kernel_signature(kname)
         out = out + _rocm_emit_reduce_sum_body()
+        return out
+    }
+    // matmul — STMT_LOAD + STMT_LOAD + STMT_BINOP(matmul) + STMT_STORE.
+    // First non-pointwise shape on the AMD lane; emits rocWMMA
+    // `rocwmma::fragment<>` 16x16x16 FP32 WMMA kernel with the canonical
+    // row_major(A) + col_major(B) layout pair. Includes the rocwmma
+    // header in the preamble. 3-buffer signature + M/N/K dims.
+    if _rocm_mfunc_is_matmul_shape(mfn) {
+        let mut out = _rocm_emit_matmul_preamble()
+        out = out + _rocm_emit_matmul_kernel_signature(kname)
+        out = out + _rocm_emit_matmul_body()
+        return out
+    }
+    // matmul_NT_a — STMT_LOAD + STMT_LOAD + STMT_BINOP(matmul_NT_a) +
+    // STMT_STORE. A-transposed matmul (`c = a^T · b`); A fragment is
+    // col_major + A-load stride switches from K to M.
+    if _rocm_mfunc_is_matmul_NT_a_shape(mfn) {
+        let mut out = _rocm_emit_matmul_preamble()
+        out = out + _rocm_emit_matmul_kernel_signature(kname)
+        out = out + _rocm_emit_matmul_NT_a_body()
+        return out
+    }
+    // matmul_NT_b — STMT_LOAD + STMT_LOAD + STMT_BINOP(matmul_NT_b) +
+    // STMT_STORE. B-transposed matmul (`c = a · b^T`); B fragment is
+    // row_major + B-load stride switches from N to K.
+    if _rocm_mfunc_is_matmul_NT_b_shape(mfn) {
+        let mut out = _rocm_emit_matmul_preamble()
+        out = out + _rocm_emit_matmul_kernel_signature(kname)
+        out = out + _rocm_emit_matmul_NT_b_body()
         return out
     }
     // No recognised shape — honest empty string.

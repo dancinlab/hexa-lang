@@ -1,13 +1,13 @@
-// HEXA Native Compiler — RFC 075 P1+ / ROCm lowering smoke (codegen-only)
+// HEXA Native Compiler — RFC 075 P1++ / ROCm lowering smoke (codegen-only)
 //
-// @version 0.0.3
+// @version 0.0.4
 // @capabilities [pure]
 //
-// RFC 075 P1+ codegen-only smoke. The codegen entry `codegen_emit_rocm_il`
-// now recognises SIX MIR shapes (vec-add, vec-mul, vec-sub, vec-div,
-// vec-scale, reduce-sum) and emits real HIP kernel source for each.
-// Empty / unrecognised modules continue to return `""` honestly
-// (P0 contract preserved — Case 1 still PASS).
+// RFC 075 P1++ codegen-only smoke. The codegen entry `codegen_emit_rocm_il`
+// now recognises NINE MIR shapes (vec-add, vec-mul, vec-sub, vec-div,
+// vec-scale, reduce-sum, matmul, matmul_NT_a, matmul_NT_b) and emits real
+// HIP kernel source for each. Empty / unrecognised modules continue to
+// return `""` honestly (P0 contract preserved — Case 1 still PASS).
 //
 // Case roster:
 //   Case 1 — P0 empty-module emit returns `""` (P0 contract preserved)
@@ -29,6 +29,13 @@
 //            → ` * <scalar>`, 2-buffer signature, negative guard `b[i]`.
 //   Case 8 — F-RFC075-ROCM-EMIT-REDUCE-SUM: reduce-sum MIR → `__shfl_xor`
 //            butterfly + `__lane_id` gate + per-wavefront output.
+//   Case 9 — F-RFC075-ROCM-EMIT-MATMUL: matmul MIR → rocWMMA include +
+//            `rocwmma::fragment<>` 16x16x16 FP32 row_major(A) / col_major(B)
+//            kernel + K-loop, negative guards for transposed variants.
+//   Case 10 — F-RFC075-ROCM-EMIT-MATMUL-NT-A: A-transposed matmul →
+//            `matrix_a, ..., col_major` A fragment + stride-M load.
+//   Case 11 — F-RFC075-ROCM-EMIT-MATMUL-NT-B: B-transposed matmul →
+//            `matrix_b, ..., row_major` B fragment + stride-K load.
 //
 // Run:
 //   hexa build compiler/codegen/rocm_lower_test.hexa -o build/rocm_lower_test
@@ -240,6 +247,42 @@ fn _stmt_binop_mul_scalar(dst: Local, lhs: i64, scalar: f64) -> Stmt {
     xs.push(_op_const_float(scalar))
     return Stmt {
         kind: STMT_BINOP, dst: dst, op: "mul", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+// _stmt_binop_matmul — STMT_BINOP("matmul") for `c = a · b`.
+// SYNTHETIC opcode — drives the matmul shape recogniser scaffold. The
+// BINOP carries the two local operands (lhs=A, rhs=B). Mirrors the
+// vec-add helper's args[] layout.
+fn _stmt_binop_matmul(dst: Local, lhs: i64, rhs: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(lhs))
+    xs.push(_op_local(rhs))
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: "matmul", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+// _stmt_binop_matmul_NT_a — STMT_BINOP("matmul_NT_a") for `c = a^T · b`.
+fn _stmt_binop_matmul_NT_a(dst: Local, lhs: i64, rhs: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(lhs))
+    xs.push(_op_local(rhs))
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: "matmul_NT_a", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+// _stmt_binop_matmul_NT_b — STMT_BINOP("matmul_NT_b") for `c = a · b^T`.
+fn _stmt_binop_matmul_NT_b(dst: Local, lhs: i64, rhs: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(lhs))
+    xs.push(_op_local(rhs))
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: "matmul_NT_b", args: xs,
         target_block: -1, target_block_else: -1
     }
 }
@@ -794,9 +837,282 @@ fn _test_reduce_sum_emit() -> bool {
     return ok
 }
 
+// ── matmul MIR fixture (Case 9) ──────────────────────────────────────
+
+fn _build_matmul_module() -> MModule {
+    // Three kernel-buffer params (a, b, c) + three private Locals (va,
+    // vb, vc). Stmt sequence: STMT_LOAD a→va, STMT_LOAD b→vb,
+    // STMT_BINOP("matmul") (va, vb)→vc, STMT_STORE vc→c. SYNTHETIC
+    // opcode — no HIR/parser produces this op today; the recogniser is
+    // scaffold for the future `a @ b` lowering on the AMD lane.
+    let a  = _kern_local(0, "a")
+    let b  = _kern_local(1, "b")
+    let c  = _kern_local(2, "c")
+    let va = _priv_local(3, "va")
+    let vb = _priv_local(4, "vb")
+    let vc = _priv_local(5, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_load(vb, b.id))
+    s.push(_stmt_binop_matmul(vc, va.id, vb.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vb)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "matmul",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "rocm_matmul.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 9 — F-RFC075-ROCM-EMIT-MATMUL ───────────────────────────────
+//
+// Synthesise a matmul MIR module, invoke `codegen_emit_rocm_il`, assert
+// the emitted HIP source contains the rocWMMA preamble include, the
+// 3-buffer + M/N/K kernel signature, the 16x16x16 FP32 fragment
+// templates with the canonical row_major(A) + col_major(B) layouts,
+// the fill+load+mma+store intrinsic call sequence, and the K-loop.
+// Negative guards: transposed-A fragment (matrix_a col_major), B-side
+// row_major fragment, vec-add binop fragment.
+
+fn _test_matmul_emit() -> bool {
+    let mut ok = true
+    let mod_mm = _build_matmul_module()
+    let il = codegen_emit_rocm_il(mod_mm)
+
+    println("")
+    println("── emitted HIP source (RFC 075 P1++ matmul case) ──")
+    println(il)
+
+    // F-RFC075-ROCM-EMIT-MATMUL substring battery — 15 positives.
+    ok = _check_contains(ok, il, "#include <hip/hip_runtime.h>", "HIP runtime header include")
+    ok = _check_contains(ok, il, "#include <rocwmma/rocwmma.hpp>", "rocWMMA header include")
+    ok = _check_contains(ok, il, "__global__",                    "kernel qualifier `__global__`")
+    ok = _check_contains(ok, il, "extern \"C\"",                  "C linkage `extern \"C\"`")
+    ok = _check_contains(ok, il, "void matmul",                   "kernel name `matmul` after void return")
+    ok = _check_contains(ok, il, "int M, int N, int K",           "M/N/K integer dims in signature")
+    ok = _check_contains(ok, il, "rocwmma::fragment<rocwmma::matrix_a, 16, 16, 16, float, rocwmma::row_major>", "A fragment row_major 16x16x16 FP32")
+    ok = _check_contains(ok, il, "rocwmma::fragment<rocwmma::matrix_b, 16, 16, 16, float, rocwmma::col_major>", "B fragment col_major 16x16x16 FP32")
+    ok = _check_contains(ok, il, "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>", "C accumulator fragment 16x16x16 FP32")
+    ok = _check_contains(ok, il, "rocwmma::fill_fragment(c_frag, 0.0f)", "accumulator zero-fill")
+    ok = _check_contains(ok, il, "rocwmma::load_matrix_sync(a_frag, &a[row_tile * K + k], K)", "A tile load (row-major stride K)")
+    ok = _check_contains(ok, il, "rocwmma::load_matrix_sync(b_frag, &b[k * N + col_tile], N)", "B tile load (col-major stride N)")
+    ok = _check_contains(ok, il, "rocwmma::mma_sync(c_frag, a_frag, b_frag, c_frag)", "WMMA mma_sync intrinsic")
+    ok = _check_contains(ok, il, "rocwmma::store_matrix_sync(&c[row_tile * N + col_tile], c_frag, N, rocwmma::mem_row_major)", "C tile store row-major")
+    ok = _check_contains(ok, il, "k += 16",                       "K-loop tile-step 16")
+    // Negative guards — matmul (canonical) must NOT carry the transposed
+    // layout fragments and must NOT inherit a vec-* binop body fragment.
+    ok = _check_not_contains(ok, il, "rocwmma::fragment<rocwmma::matrix_a, 16, 16, 16, float, rocwmma::col_major>", "canonical matmul should not emit transposed-A fragment")
+    ok = _check_not_contains(ok, il, "rocwmma::fragment<rocwmma::matrix_b, 16, 16, 16, float, rocwmma::row_major>", "canonical matmul should not emit transposed-B fragment")
+    ok = _check_not_contains(ok, il, "a[i] + b[i]",               "matmul should not emit vec-add body")
+    ok = _check_not_contains(ok, il, "__shfl_xor",                "matmul should not emit reduce-sum butterfly")
+    return ok
+}
+
+// ── matmul_NT_a MIR fixture (Case 10) ────────────────────────────────
+
+fn _build_matmul_NT_a_module() -> MModule {
+    let a  = _kern_local(0, "a")
+    let b  = _kern_local(1, "b")
+    let c  = _kern_local(2, "c")
+    let va = _priv_local(3, "va")
+    let vb = _priv_local(4, "vb")
+    let vc = _priv_local(5, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_load(vb, b.id))
+    s.push(_stmt_binop_matmul_NT_a(vc, va.id, vb.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vb)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "matmul_NT_a",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "rocm_matmul_NT_a.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 10 — F-RFC075-ROCM-EMIT-MATMUL-NT-A ─────────────────────────
+//
+// matmul_NT_a → A fragment is col_major, A-load stride switches from K
+// to M, B stays col_major. Negative guards: canonical A row_major
+// fragment, B row_major fragment.
+
+fn _test_matmul_NT_a_emit() -> bool {
+    let mut ok = true
+    let mod_mt = _build_matmul_NT_a_module()
+    let il = codegen_emit_rocm_il(mod_mt)
+
+    println("")
+    println("── emitted HIP source (RFC 075 P1++ matmul_NT_a case) ──")
+    println(il)
+
+    // F-RFC075-ROCM-EMIT-MATMUL-NT-A substring battery — 15 positives.
+    ok = _check_contains(ok, il, "#include <hip/hip_runtime.h>", "HIP runtime header include")
+    ok = _check_contains(ok, il, "#include <rocwmma/rocwmma.hpp>", "rocWMMA header include")
+    ok = _check_contains(ok, il, "__global__",                    "kernel qualifier `__global__`")
+    ok = _check_contains(ok, il, "extern \"C\"",                  "C linkage `extern \"C\"`")
+    ok = _check_contains(ok, il, "void matmul_NT_a",              "kernel name `matmul_NT_a` after void return")
+    ok = _check_contains(ok, il, "int M, int N, int K",           "M/N/K integer dims in signature")
+    ok = _check_contains(ok, il, "rocwmma::fragment<rocwmma::matrix_a, 16, 16, 16, float, rocwmma::col_major>", "A fragment col_major (transposed-A)")
+    ok = _check_contains(ok, il, "rocwmma::fragment<rocwmma::matrix_b, 16, 16, 16, float, rocwmma::col_major>", "B fragment col_major")
+    ok = _check_contains(ok, il, "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>", "C accumulator fragment 16x16x16 FP32")
+    ok = _check_contains(ok, il, "rocwmma::fill_fragment(c_frag, 0.0f)", "accumulator zero-fill")
+    ok = _check_contains(ok, il, "rocwmma::load_matrix_sync(a_frag, &a[k * M + row_tile], M)", "A tile load (col-major stride M for transposed-A)")
+    ok = _check_contains(ok, il, "rocwmma::load_matrix_sync(b_frag, &b[k * N + col_tile], N)", "B tile load (col-major stride N)")
+    ok = _check_contains(ok, il, "rocwmma::mma_sync(c_frag, a_frag, b_frag, c_frag)", "WMMA mma_sync intrinsic")
+    ok = _check_contains(ok, il, "rocwmma::store_matrix_sync(&c[row_tile * N + col_tile], c_frag, N, rocwmma::mem_row_major)", "C tile store row-major")
+    ok = _check_contains(ok, il, "k += 16",                       "K-loop tile-step 16")
+    // Negative guards — matmul_NT_a must NOT emit the canonical A row_major
+    // fragment, must NOT emit B row_major fragment, must NOT inherit a vec-* body.
+    ok = _check_not_contains(ok, il, "rocwmma::fragment<rocwmma::matrix_a, 16, 16, 16, float, rocwmma::row_major>", "matmul_NT_a should not emit canonical A row_major fragment")
+    ok = _check_not_contains(ok, il, "rocwmma::fragment<rocwmma::matrix_b, 16, 16, 16, float, rocwmma::row_major>", "matmul_NT_a should not emit transposed-B fragment")
+    ok = _check_not_contains(ok, il, "a[i] + b[i]",               "matmul_NT_a should not emit vec-add body")
+    ok = _check_not_contains(ok, il, "__shfl_xor",                "matmul_NT_a should not emit reduce-sum butterfly")
+    return ok
+}
+
+// ── matmul_NT_b MIR fixture (Case 11) ────────────────────────────────
+
+fn _build_matmul_NT_b_module() -> MModule {
+    let a  = _kern_local(0, "a")
+    let b  = _kern_local(1, "b")
+    let c  = _kern_local(2, "c")
+    let va = _priv_local(3, "va")
+    let vb = _priv_local(4, "vb")
+    let vc = _priv_local(5, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_load(vb, b.id))
+    s.push(_stmt_binop_matmul_NT_b(vc, va.id, vb.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vb)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "matmul_NT_b",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "rocm_matmul_NT_b.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 11 — F-RFC075-ROCM-EMIT-MATMUL-NT-B ─────────────────────────
+//
+// matmul_NT_b → A stays row_major, B fragment is row_major, B-load
+// stride switches from N to K. Negative guards: canonical B col_major
+// fragment, A col_major fragment.
+
+fn _test_matmul_NT_b_emit() -> bool {
+    let mut ok = true
+    let mod_mt = _build_matmul_NT_b_module()
+    let il = codegen_emit_rocm_il(mod_mt)
+
+    println("")
+    println("── emitted HIP source (RFC 075 P1++ matmul_NT_b case) ──")
+    println(il)
+
+    // F-RFC075-ROCM-EMIT-MATMUL-NT-B substring battery — 15 positives.
+    ok = _check_contains(ok, il, "#include <hip/hip_runtime.h>", "HIP runtime header include")
+    ok = _check_contains(ok, il, "#include <rocwmma/rocwmma.hpp>", "rocWMMA header include")
+    ok = _check_contains(ok, il, "__global__",                    "kernel qualifier `__global__`")
+    ok = _check_contains(ok, il, "extern \"C\"",                  "C linkage `extern \"C\"`")
+    ok = _check_contains(ok, il, "void matmul_NT_b",              "kernel name `matmul_NT_b` after void return")
+    ok = _check_contains(ok, il, "int M, int N, int K",           "M/N/K integer dims in signature")
+    ok = _check_contains(ok, il, "rocwmma::fragment<rocwmma::matrix_a, 16, 16, 16, float, rocwmma::row_major>", "A fragment row_major")
+    ok = _check_contains(ok, il, "rocwmma::fragment<rocwmma::matrix_b, 16, 16, 16, float, rocwmma::row_major>", "B fragment row_major (transposed-B)")
+    ok = _check_contains(ok, il, "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>", "C accumulator fragment 16x16x16 FP32")
+    ok = _check_contains(ok, il, "rocwmma::fill_fragment(c_frag, 0.0f)", "accumulator zero-fill")
+    ok = _check_contains(ok, il, "rocwmma::load_matrix_sync(a_frag, &a[row_tile * K + k], K)", "A tile load (row-major stride K)")
+    ok = _check_contains(ok, il, "rocwmma::load_matrix_sync(b_frag, &b[col_tile * K + k], K)", "B tile load (row-major stride K for transposed-B)")
+    ok = _check_contains(ok, il, "rocwmma::mma_sync(c_frag, a_frag, b_frag, c_frag)", "WMMA mma_sync intrinsic")
+    ok = _check_contains(ok, il, "rocwmma::store_matrix_sync(&c[row_tile * N + col_tile], c_frag, N, rocwmma::mem_row_major)", "C tile store row-major")
+    ok = _check_contains(ok, il, "k += 16",                       "K-loop tile-step 16")
+    // Negative guards — matmul_NT_b must NOT emit the canonical B col_major
+    // fragment, must NOT emit A col_major fragment, must NOT inherit a vec-* body.
+    ok = _check_not_contains(ok, il, "rocwmma::fragment<rocwmma::matrix_b, 16, 16, 16, float, rocwmma::col_major>", "matmul_NT_b should not emit canonical B col_major fragment")
+    ok = _check_not_contains(ok, il, "rocwmma::fragment<rocwmma::matrix_a, 16, 16, 16, float, rocwmma::col_major>", "matmul_NT_b should not emit transposed-A fragment")
+    ok = _check_not_contains(ok, il, "a[i] + b[i]",               "matmul_NT_b should not emit vec-add body")
+    ok = _check_not_contains(ok, il, "__shfl_xor",                "matmul_NT_b should not emit reduce-sum butterfly")
+    return ok
+}
+
 fn main() {
     println("══════════════════════════════════════════════")
-    println("  RFC 075 P1+ — ROCm codegen smoke (6 shapes)")
+    println("  RFC 075 P1++ — ROCm codegen smoke (9 shapes)")
     println("══════════════════════════════════════════════")
 
     let ok_emit  = _test_p0_empty_emit()
@@ -807,11 +1123,14 @@ fn main() {
     let ok_vd    = _test_vec_div_emit()
     let ok_vsc   = _test_vec_scale_emit()
     let ok_rs    = _test_reduce_sum_emit()
+    let ok_mm    = _test_matmul_emit()
+    let ok_mta   = _test_matmul_NT_a_emit()
+    let ok_mtb   = _test_matmul_NT_b_emit()
 
     println("")
-    if ok_emit && ok_tgt && ok_va && ok_vm && ok_vs && ok_vd && ok_vsc && ok_rs {
-        println("  PASS: RFC 075 P1+ ROCm codegen smoke (vec-add + vec-mul + vec-sub + vec-div + vec-scale + reduce-sum)")
+    if ok_emit && ok_tgt && ok_va && ok_vm && ok_vs && ok_vd && ok_vsc && ok_rs && ok_mm && ok_mta && ok_mtb {
+        println("  PASS: RFC 075 P1++ ROCm codegen smoke (vec-add + vec-mul + vec-sub + vec-div + vec-scale + reduce-sum + matmul + matmul_NT_a + matmul_NT_b)")
     } else {
-        println("  FAIL: RFC 075 P1+ ROCm codegen smoke")
+        println("  FAIL: RFC 075 P1++ ROCm codegen smoke")
     }
 }

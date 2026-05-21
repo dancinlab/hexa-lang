@@ -337,6 +337,86 @@ fn _ag_linear_metal_fp32_bwd(x: int, W: int, og: int,
     let _ = farr32_free(dWn)
 }
 
+// METAL_INTEGRATION.md bonus gap 6 — bf16 precision tier (2026-05-21).
+// Forward helper for `ag_linear` that pre-rounds inputs to bf16 values
+// (kept in the FP64 farr arena per RFC 035 `farr_to_bf16` convention:
+// values are bit-exact bf16, storage stays double) and then runs the
+// same FP32 SGEMM path as `_ag_linear_metal_fp32_fwd` (MPSMatrixMultipli-
+// cation under HEXA_METAL=1 + dim-gate, CPU ikj otherwise). This builds
+// on:
+//   · N68 `6ca89da9` _op_with_precision HIR→MIR synthesis (bf16 opcode
+//     promotion). At this consumer layer we do not yet emit source-level
+//     bf16 type annotations; the bf16 envelope is exercised via the
+//     existing RFC 035 storage round-trip (`farr_to_bf16`) instead. Once
+//     a future cycle wires source-level bf16 type tags through ag_tape,
+//     the same gate flips to the synthesis path with no caller change.
+//   · N51 `0b3be802` Metal `matmul_bf16` codegen-emit silicon-validated
+//     (Apple M3, 1015 GFLOPS @ 768³, bit-exact via FP32 accumulator).
+//     The FP32 accumulator semantics here match: bf16 round → FP32
+//     matmul → FP32 result (kept) → FP64 farr store. The bf16 mantissa
+//     truncation is the dominant error term, ~3 decimal digits.
+//
+// Honest precision: bf16 mantissa = 7 bits → ~3 decimal digits of
+// precision. The FP32 SGEMM accumulator (same as N40) covers the
+// reduction error, so the end-to-end rel_err budget is ~1e-2 (one order
+// looser than N40's 5e-3 FP32 budget). Callers needing FP32 or FP64
+// bit-exactness MUST NOT set HEXA_BF16=1.
+//
+// Honest scope (`@D g3`):
+//   · This consumer helper does NOT exercise N68's HIR→MIR synthesis
+//     directly (that path requires source-level bf16 type tags through
+//     ag_tape, deeper than this cycle). It validates the numeric
+//     bf16 envelope end-to-end via the existing `farr_to_bf16` round-
+//     trip. The remaining synthesis-side gap is documented in this
+//     cycle's RESULT.md.
+//   · Bias is not bf16-rounded — the ag_linear forward currently routes
+//     `farr_matmul` without bias add (mk2-C5 comment above explains).
+//     Future ag_linear_with_bias variant would round the bias too.
+fn _ag_linear_metal_bf16_fwd(x: int, W: int, B: int, D: int, C: int) -> int {
+    // bf16-round x and W into FP64 farrs (values are bit-exact bf16,
+    // storage stays double per RFC 035). Allocate fresh scratch farrs
+    // so the caller-owned x/W are untouched.
+    let x_bf = t_zeros(B * D)
+    let W_bf = t_zeros(D * C)
+    let _ = farr_to_bf16(x, x_bf, B * D)
+    let _ = farr_to_bf16(W, W_bf, D * C)
+    // Down-cast bf16-rounded FP64 into FP32 farr32 mirrors. The FP32
+    // representation of a bf16 value is exact (bf16's 8-bit exponent
+    // matches f32; the 7-bit mantissa fits in f32's 23-bit mantissa).
+    let xn = farr32_zeros(B * D)
+    let Wn = farr32_zeros(D * C)
+    let mut i = 0
+    while i < B * D {
+        let _ = farr32_set(xn, i, t_get(x_bf, i))
+        i = i + 1
+    }
+    let mut k = 0
+    while k < D * C {
+        let _ = farr32_set(Wn, k, t_get(W_bf, k))
+        k = k + 1
+    }
+    // FP32 SGEMM with bf16-rounded inputs. Under HEXA_METAL=1 +
+    // dim-gate, this routes to MPSMatrixMultiplication (N15/N18
+    // shim) — same dispatch as N40's FP32 path. The FP32 accumulator
+    // matches N51's Metal `matmul_bf16` accumulator semantics.
+    let yn = farr32_matmul(xn, B, D, Wn, C)
+    // Up-cast FP32 result back to FP64 farr for the autograd tape.
+    // No additional bf16 rounding on the output — the FP32 result is
+    // the value the FP32 accumulator produced.
+    let y = t_zeros(B * C)
+    let mut j = 0
+    while j < B * C {
+        t_set(y, j, farr32_get(yn, j))
+        j = j + 1
+    }
+    let _ = farr32_free(xn)
+    let _ = farr32_free(Wn)
+    let _ = farr32_free(yn)
+    t_free(x_bf)
+    t_free(W_bf)
+    return y
+}
+
 pub fn ag_linear(tape: int, x: int, W: int, b: int,
                  B: int, D: int, C: int) -> int {
     // mk2-C5: bypass nn_linear_fwd's host-scalar bias broadcast loop
@@ -359,8 +439,16 @@ pub fn ag_linear(tape: int, x: int, W: int, b: int,
     let dim_gate_lhs = M * K
     let dim_gate_rhs = K * N
     let metal_on = env("HEXA_METAL") == "1"
+    let bf16_on  = env("HEXA_BF16") == "1"
     let shape_ok = dim_gate_lhs > 8192 || dim_gate_rhs > 8192
-    let y = if metal_on && shape_ok {
+    // METAL_INTEGRATION.md bonus gap 6 (2026-05-21): bf16 precision tier.
+    // Priority: HEXA_BF16=1 > HEXA_METAL=1 > default FP64 CPU. Both
+    // upper tiers require the same dim-gate (shape_ok) since they share
+    // the FP32 SGEMM (+ optional MPS) route; bf16 adds a pre-round step.
+    // Falsifier: F-RFC075-FLAME-AG-LINEAR-BF16-NUMERIC-EQ (rel_err < 1e-2).
+    let y = if bf16_on && metal_on && shape_ok {
+                _ag_linear_metal_bf16_fwd(x, W, B, D, C)
+            } else if metal_on && shape_ok {
                 _ag_linear_metal_fp32_fwd(x, W, B, D, C)
             } else {
                 farr_matmul(x, B, D, W, C)
