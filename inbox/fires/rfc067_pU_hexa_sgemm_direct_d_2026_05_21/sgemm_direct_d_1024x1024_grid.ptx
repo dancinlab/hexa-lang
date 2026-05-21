@@ -1,0 +1,265 @@
+// RFC 067 PU perf HGEMM hexa-emit -- DIRECT-D-STORE vec2 -- M=N=K=1024.
+//
+// On top of N89 (PS) stack:
+//   N89: 128x128 output / CTA, 32 warps, peak 37.07 TFLOPS @ M=1536 ratio 0.557 vs cuBLAS HGEMM 66.60.
+//   PU:  identical kernel except epilogue uses st.global.v2.f32 (vec-2 contiguous stores)
+//        16 store instr -> 8 store instr per warp.
+
+.version 8.0
+.target sm_90
+.address_size 64
+
+.shared .align 16 .b8 _tg_a[8192];
+.shared .align 16 .b8 _tg_b[8192];
+
+.visible .entry sgemm_direct_d_1024x1024_grid (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 k_tiles
+)
+{
+    .reg .u64 %rd<32>;
+    .reg .u32 %r<96>;
+    .reg .pred %p1;
+    .reg .pred %pmore;
+    .reg .pred %pload_a;
+    .reg .pred %pload_b;
+    .reg .b32 %ra<4>;
+    .reg .b32 %rbl<4>;
+    .reg .b32 %rbh<4>;
+    .reg .f32 %fc<16>;
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [k_tiles];
+
+    mov.u32 %r10, %ctaid.y;
+    mov.u32 %r11, %ctaid.x;
+
+    mov.u32 %r1, %tid.x;
+    shr.u32 %r2, %r1, 5;        // warp id in [0, 32)
+    shr.u32 %r3, %r2, 2;        // m_tile = warp >> 2  in [0, 8)
+    and.b32 %r4, %r2, 3;        // n_tile = warp & 3   in [0, 4)
+    and.b32 %r50, %r1, 31;      // lane id
+
+    setp.lt.u32 %pload_a, %r1, 256;
+    setp.lt.u32 %pload_b, %r1, 512;
+
+    and.b32 %r12, %r1, 255;     // vec_idx
+    shr.u32 %r13, %r12, 1;      // row in [0, 128)
+    and.b32 %r14, %r12, 1;      // col_q in {0,1}
+    shl.b32 %r15, %r14, 4;      // col_q * 16  (byte offset within 32-B row)
+
+    // A_cta base = a + ctaid.y * 262144
+    mul.lo.u32 %r5, %r10, 262144;
+    cvt.u64.u32 %rd4, %r5;
+    add.u64 %rd10, %rd0, %rd4;
+
+    // B_cta base = b + ctaid.x * 262144
+    mul.lo.u32 %r5, %r11, 262144;
+    cvt.u64.u32 %rd5, %r5;
+    add.u64 %rd11, %rd1, %rd5;
+
+    // Per-thread global-load offset: row * 2048 + col_q * 16
+    mul.lo.u32 %r16, %r13, 2048;
+    add.u32 %r16, %r16, %r15;
+    cvt.u64.u32 %rd14, %r16;
+    add.u64 %rd14, %rd10, %rd14;
+
+    cvt.u64.u32 %rd15, %r16;
+    add.u64 %rd15, %rd11, %rd15;
+
+    // Per-thread intra-slab shared-mem store offset: row*32 + col_q*16
+    shl.b32 %r17, %r13, 5;
+    add.u32 %r17, %r17, %r15;
+
+    mov.u32 %r18, _tg_a;
+    mov.u32 %r20, _tg_b;
+
+    // Per-warp shared-mem READ base offsets
+    mul.lo.u32 %r22, %r3, 512;          // A_base = m_tile * 512
+    mul.lo.u32 %r24, %r4, 1024;         // B_lo_base = n_tile * 1024
+    add.u32 %r25, %r24, 512;            // B_hi_base = n_tile * 1024 + 512
+
+    // ldmatrix per-lane intra-subtile address (16x16 fragment)
+    shr.u32 %r51, %r50, 3;
+    and.b32 %r52, %r50, 7;
+    shr.u32 %r53, %r51, 1;
+    shl.b32 %r54, %r53, 3;
+    add.u32 %r55, %r54, %r52;
+    and.b32 %r56, %r51, 1;
+    shl.b32 %r57, %r56, 4;
+    shl.b32 %r58, %r55, 5;
+    add.u32 %r59, %r58, %r57;
+
+    // C base address.
+    mul.lo.u32 %r5, %r10, 524288;
+    mul.lo.u32 %r6, %r3, 65536;
+    add.u32 %r7, %r5, %r6;
+    mul.lo.u32 %r8, %r11, 512;
+    add.u32 %r7, %r7, %r8;
+    mul.lo.u32 %r8, %r4, 128;
+    add.u32 %r7, %r7, %r8;
+    cvt.u64.u32 %rd6, %r7;
+    add.u64 %rd12, %rd2, %rd6;
+
+    // Init accumulator
+    mov.f32 %fc0,  0f00000000;
+    mov.f32 %fc1,  0f00000000;
+    mov.f32 %fc2,  0f00000000;
+    mov.f32 %fc3,  0f00000000;
+    mov.f32 %fc4,  0f00000000;
+    mov.f32 %fc5,  0f00000000;
+    mov.f32 %fc6,  0f00000000;
+    mov.f32 %fc7,  0f00000000;
+    mov.f32 %fc8,  0f00000000;
+    mov.f32 %fc9,  0f00000000;
+    mov.f32 %fc10, 0f00000000;
+    mov.f32 %fc11, 0f00000000;
+    mov.f32 %fc12, 0f00000000;
+    mov.f32 %fc13, 0f00000000;
+    mov.f32 %fc14, 0f00000000;
+    mov.f32 %fc15, 0f00000000;
+
+    cvt.s32.s64 %r0, %rd3;
+
+    mov.u32 %r30, 0;                     // current slot
+
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $epilogue;
+
+    // ---- PROLOGUE: issue K=0 prefetch into slot 0 ----
+    add.u32 %r40, %r18, %r17;
+    @%pload_a cp.async.cg.shared.global [%r40], [%rd14], 16;
+
+    add.u32 %r41, %r20, %r17;
+    @%pload_a bra $skip_b_prologue;
+    @%pload_b cp.async.cg.shared.global [%r41], [%rd15], 16;
+$skip_b_prologue:
+    cp.async.commit_group;
+
+    add.u64 %rd14, %rd14, 32;
+    add.u64 %rd15, %rd15, 32;
+
+$kloop:
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $epilogue;
+
+    setp.gt.s32 %pmore, %r0, 1;
+    @!%pmore bra $no_prefetch;
+
+    xor.b32 %r31, %r30, 1;
+    shl.b32 %r32, %r31, 12;              // next_slot * 4096
+
+    add.u32 %r40, %r18, %r32;
+    add.u32 %r40, %r40, %r17;
+    @%pload_a cp.async.cg.shared.global [%r40], [%rd14], 16;
+
+    add.u32 %r41, %r20, %r32;
+    add.u32 %r41, %r41, %r17;
+    @%pload_a bra $skip_b_kick;
+    @%pload_b cp.async.cg.shared.global [%r41], [%rd15], 16;
+$skip_b_kick:
+
+    cp.async.commit_group;
+    cp.async.wait_group 1;
+    bra $consume;
+
+$no_prefetch:
+    cp.async.wait_all;
+
+$consume:
+    bar.sync 0;
+
+    shl.b32 %r34, %r30, 12;
+    add.u32 %r35, %r18, %r34;
+    add.u32 %r35, %r35, %r22;
+    add.u32 %r36, %r20, %r34;
+    add.u32 %r37, %r36, %r25;
+    add.u32 %r36, %r36, %r24;
+
+    add.u32 %r60, %r35, %r59;
+    add.u32 %r61, %r36, %r59;
+    add.u32 %r62, %r37, %r59;
+
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {%ra0, %ra1, %ra2, %ra3}, [%r60];
+
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {%rbl0, %rbl1, %rbl2, %rbl3}, [%r61];
+
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {%rbh0, %rbh1, %rbh2, %rbh3}, [%r62];
+
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc0, %fc1, %fc2, %fc3},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbl0, %rbl2},
+        {%fc0, %fc1, %fc2, %fc3};
+
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbl1, %rbl3},
+        {%fc4, %fc5, %fc6, %fc7};
+
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc8, %fc9, %fc10, %fc11},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbh0, %rbh2},
+        {%fc8, %fc9, %fc10, %fc11};
+
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc12, %fc13, %fc14, %fc15},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbh1, %rbh3},
+        {%fc12, %fc13, %fc14, %fc15};
+
+    bar.sync 0;
+
+    add.u64 %rd14, %rd14, 32;
+    add.u64 %rd15, %rd15, 32;
+
+    xor.b32 %r30, %r30, 1;
+    sub.s32 %r0, %r0, 1;
+    bra $kloop;
+
+$epilogue:
+    // mma.m16n8k16 D-frag DIRECT-VEC2 store.
+    //   Per lane: 4 f32 outputs of one mma at:
+    //     group = lane >> 2; col_q = lane & 3
+    //     row0 = group;      col_base = col_q * 2
+    //     row1 = group + 8;  col_base = col_q * 2
+    //   Pairs (fc0,fc1) at row0, (fc2,fc3) at row1 are contiguous (col_base+0, col_base+1).
+    //   -> coalesced via st.global.v2.f32.
+    //   Sub-tile offsets along N: 0, 32, 64, 96 B (mma_lo_left, mma_lo_right, mma_hi_left, mma_hi_right).
+    shr.u32 %r70, %r50, 2;               // group = lane >> 2  in [0,8)
+    and.b32 %r71, %r50, 3;               // col_q = lane & 3   in [0,4)
+    mul.lo.u32 %r72, %r70, 4096;        // group * row_stride_bytes
+    shl.b32 %r73, %r71, 3;               // col_q * 2 * 4
+    add.u32 %r74, %r72, %r73;
+    cvt.u64.u32 %rd20, %r74;
+    add.u64 %rd20, %rd12, %rd20;         // row0 base = C_warp + group*S*4 + col_q*8
+
+    add.u64 %rd21, %rd20, 32768;       // row1 base = +8 rows
+
+    // mma_lo_left (cols 0..7):
+    st.global.v2.f32 [%rd20 +     0], {%fc0, %fc1};
+    st.global.v2.f32 [%rd21 +     0], {%fc2, %fc3};
+
+    // mma_lo_right (cols 8..15):
+    st.global.v2.f32 [%rd20 +    32], {%fc4, %fc5};
+    st.global.v2.f32 [%rd21 +    32], {%fc6, %fc7};
+
+    // mma_hi_left (cols 16..23):
+    st.global.v2.f32 [%rd20 +    64], {%fc8, %fc9};
+    st.global.v2.f32 [%rd21 +    64], {%fc10, %fc11};
+
+    // mma_hi_right (cols 24..31):
+    st.global.v2.f32 [%rd20 +    96], {%fc12, %fc13};
+    st.global.v2.f32 [%rd21 +    96], {%fc14, %fc15};
+
+    ret;
+}

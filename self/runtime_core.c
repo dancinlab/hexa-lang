@@ -5456,17 +5456,7 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
         case TAG_INT: return hexa_bool(HX_INT(a) == HX_INT(b));
         case TAG_FLOAT: return hexa_bool(HX_FLOAT(a) == HX_FLOAT(b));
         case TAG_BOOL: return hexa_bool(HX_BOOL(a) == HX_BOOL(b));
-        case TAG_STR: {
-            /* Intern fast-path stays C (HX_STR pointer identity). */
-            if (HX_STR(a) == HX_STR(b)) return hexa_bool(1);
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-            /* Step-3 cycle 91 — strcmp fallback via cycle-57 rt_str_eq_b. */
-            extern HexaVal rt_str_eq_b(HexaVal a, HexaVal b);
-            return hexa_bool(hexa_truthy(rt_str_eq_b(a, b)));
-#else
-            return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) == 0);
-#endif
-        }
+        case TAG_STR: return hexa_bool(HX_STR(a) == HX_STR(b) || hxlcl_strcmp(HX_STR(a), HX_STR(b)) == 0);
         case TAG_VOID: return hexa_bool(1);
         // rt 32-G: Val identity is pointer-equality of heap struct (matches
         // TAG_MAP semantics — two separately constructed maps never compare

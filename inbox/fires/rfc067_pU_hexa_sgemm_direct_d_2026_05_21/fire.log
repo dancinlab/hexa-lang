@@ -1,0 +1,26 @@
+Device: NVIDIA GeForce RTX 5070 sm_120
+CUDA driver=13000 runtime=12000
+loaded hexa-direct_d PTX shape 256 (sgemm_direct_d_256x256_grid)
+  shape 256: regs/thd=47, shmem=16384 B, max_thd_per_block=1024
+loaded hexa-direct_d PTX shape 384 (sgemm_direct_d_384x384_grid)
+  shape 384: regs/thd=47, shmem=16384 B, max_thd_per_block=1024
+loaded hexa-direct_d PTX shape 512 (sgemm_direct_d_512x512_grid)
+  shape 512: regs/thd=47, shmem=16384 B, max_thd_per_block=1024
+loaded hexa-direct_d PTX shape 768 (sgemm_direct_d_768x768_grid)
+  shape 768: regs/thd=47, shmem=16384 B, max_thd_per_block=1024
+loaded hexa-direct_d PTX shape 1024 (sgemm_direct_d_1024x1024_grid)
+  shape 1024: regs/thd=47, shmem=16384 B, max_thd_per_block=1024
+loaded hexa-direct_d PTX shape 1536 (sgemm_direct_d_1536x1536_grid)
+  shape 1536: regs/thd=47, shmem=16384 B, max_thd_per_block=1024
+[M= 256] cuBLAS HGEMM            median=0.006720 ms  std=0.000871  min=0.006208  max=0.013824  TFLOPS=  4.9932
+[M= 256] hexa-direct_d HGEMM     median=0.014112 ms  std=0.000623  min=0.012832  max=0.015904  TFLOPS=  2.3777  ratio=0.4762  maxabs=0.0000  maxrel=0.0000
+[M= 384] cuBLAS HGEMM            median=0.006752 ms  std=0.001418  min=0.006432  max=0.015968  TFLOPS= 16.7722
+[M= 384] hexa-direct_d HGEMM     median=0.019392 ms  std=0.000574  min=0.018112  max=0.021024  TFLOPS=  5.8398  ratio=0.3482  maxabs=0.0000  maxrel=0.0000
+[M= 512] cuBLAS HGEMM            median=0.010816 ms  std=0.000385  min=0.010336  max=0.014752  TFLOPS= 24.8184
+[M= 512] hexa-direct_d HGEMM     median=0.024128 ms  std=0.000590  min=0.023168  max=0.026400  TFLOPS= 11.1255  ratio=0.4483  maxabs=0.0000  maxrel=0.0000
+[M= 768] cuBLAS HGEMM            median=0.018976 ms  std=0.000153  min=0.018048  max=0.019456  TFLOPS= 47.7429
+[M= 768] hexa-direct_d HGEMM     median=0.035008 ms  std=0.000619  min=0.033440  max=0.037440  TFLOPS= 25.8789  ratio=0.5420  maxabs=0.0000  maxrel=0.0000
+[M=1024] cuBLAS HGEMM            median=0.039520 ms  std=0.000980  min=0.037920  max=0.051840  TFLOPS= 54.3392
+[M=1024] hexa-direct_d HGEMM     median=0.088480 ms  std=0.000640  min=0.087808  max=0.090656  TFLOPS= 24.2708  ratio=0.4467  maxabs=0.0000  maxrel=0.0000
+[M=1536] cuBLAS HGEMM            median=0.108832 ms  std=0.001048  min=0.106752  max=0.112608  TFLOPS= 66.5958
+[M=1536] hexa-direct_d HGEMM     median=0.190752 ms  std=0.000673  min=0.189376  max=0.192992  TFLOPS= 37.9957  ratio=0.5705  maxabs=0.0000  maxrel=0.0000
