@@ -331,6 +331,76 @@ fn _nvptx_lookup_kind_for_local(kinds: [PReg], id: i64) -> string {
     return NVPTX_RKIND_F64
 }
 
+// _nvptx_kind_of_operand — RFC 071 P4 — look up the register-bank kind
+// of an Operand. For `local` operands, defer to
+// `_nvptx_lookup_kind_for_local`; for non-local operands (const_int /
+// const_float / const_str / global) return "" so the caller can skip
+// kind inheritance (literal-only binops keep the existing FP64 default).
+fn _nvptx_kind_of_operand(o: Operand, kinds: [PReg]) -> string {
+    if o.kind == "local" {
+        return _nvptx_lookup_kind_for_local(kinds, o.local_id)
+    }
+    return ""
+}
+
+// _nvptx_infer_binop_dst_kind — RFC 071 P4 — derive the dst-Local
+// register-bank kind for an ARITHMETIC binop from its source-operand
+// kinds. Closes the wider N17/N23 gap: a binop like
+// gpu_thread_id_x() * gpu_block_dim_x() whose operands are both U32
+// must NOT default the dst to F64 (which produces a JIT-rejecting
+// mul.f64 mixed-bank instruction).
+// Policy (first non-default wins, matching the cmp-suffix sibling):
+// * If EITHER operand classifies into a non-F64 bank, take that bank.
+// * If BOTH operands resolve to F64 (or one is a literal), keep F64.
+// * Predicate ops are NOT in this path (PRED short-circuit elsewhere).
+// Returns "" when no operand-derived kind is found.
+fn _nvptx_infer_binop_dst_kind(a: Operand, b: Operand, kinds: [PReg]) -> string {
+    let ka = _nvptx_kind_of_operand(a, kinds)
+    if ka != "" && ka != NVPTX_RKIND_F64 { return ka }
+    let kb = _nvptx_kind_of_operand(b, kinds)
+    if kb != "" && kb != NVPTX_RKIND_F64 { return kb }
+    return ""
+}
+
+// _nvptx_mov_mnem_for_kind — RFC 071 P4 — kind-aware mov.<ty> mnemonic
+// for STMT_ASSIGN lowering. Required so a U32-classified dst emits
+// mov.u32 and NOT the JIT-rejecting mixed-bank mov.f64. Maps each
+// RKIND to its corresponding PTX mov.<ty> form per PTX ISA 9.7.1.1.
+fn _nvptx_mov_mnem_for_kind(kind: string) -> string {
+    if kind == NVPTX_RKIND_U32 { return "mov.u32" }
+    if kind == NVPTX_RKIND_U64 { return "mov.u64" }
+    if kind == NVPTX_RKIND_PRED { return "mov.pred" }
+    if kind == NVPTX_RKIND_F16 { return "mov.b16" }
+    if kind == NVPTX_RKIND_BF16 { return "mov.b16" }
+    if kind == NVPTX_RKIND_F32 { return "mov.f32" }
+    if kind == NVPTX_RKIND_F8_E4M3 { return "mov.b8" }
+    if kind == NVPTX_RKIND_F8_E5M2 { return "mov.b8" }
+    return "mov.f64"
+}
+
+// _nvptx_binop_mnemonic_for_kind — RFC 071 P4 — kind-aware ARITHMETIC
+// binop mnemonic resolver. Closes the wider N17/N23 gap: U32/U64
+// integer arithmetic must use add.s32 / mul.lo.s32 / add.s64 /
+// mul.lo.s64, not the F64 default. PTX integer multiplies need a
+// .lo / .hi / .wide qualifier (PTX ISA 9.7.1.3 mul); .lo selects the
+// low half of the product, matching C-style int multiplication.
+// The F64/F32/F16/BF16 banks fall through to the original mnemonic
+// table so the existing FP path stays byte-identical.
+//   ref: PTX ISA 8.7 9.7.1.2 add; 9.7.1.3 mul.
+fn _nvptx_binop_mnemonic_for_kind(op: string, kind: string) -> string {
+    if kind == NVPTX_RKIND_U32 {
+        if op == "add" || op == "+" { return "add.s32" }
+        if op == "sub" || op == "-" { return "sub.s32" }
+        if op == "mul" || op == "*" { return "mul.lo.s32" }
+    }
+    if kind == NVPTX_RKIND_U64 {
+        if op == "add" || op == "+" { return "add.s64" }
+        if op == "sub" || op == "-" { return "sub.s64" }
+        if op == "mul" || op == "*" { return "mul.lo.s64" }
+    }
+    return _nvptx_binop_mnemonic(op)
+}
+
 // _nvptx_ld_mnem_for_kind — global load mnemonic per RKIND.
 // (RFC 068 P4 `F-RFC068-NUMERIC-EQ` codegen seam.)
 fn _nvptx_ld_mnem_for_kind(kind: string) -> string {
@@ -555,14 +625,31 @@ fn _nvptx_wmma_mnemonic(op: string) -> string {
 fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
     let mut out = buf
     if s.kind == STMT_ASSIGN {
+        // RFC 071 P4 — `_miss_local()` sentinel guard (dst.id < 0).
+        // Without this, `_nvptx_lookup_reg_for_local` falls through to
+        // `_nvptx_reg_f64(-1)` which renders as `%fd-1` — the ptxas JIT
+        // rejects `mov.f64 %fd-1, ...` as a syntax error near `-` (N23
+        // ptxas error line 45). A STMT_ASSIGN whose dst is the _miss
+        // sentinel carries no observable value (the MIR layer emits it
+        // when a source-level expression's value is discarded); the
+        // safe lowering is to drop the mov entirely.
+        if s.dst.id < 0 { return out }
         if len(s.args) >= 1 {
             // 055-P3b kind-aware — destination reg picks .f64 / .u32 /
             // .u64 / .pred from the classifier; operand text likewise
             // resolves via `_nvptx_operand_text_kinds`.
+            //
+            // RFC 071 P4 — kind-aware mov mnemonic. The classifier's
+            // Pass 1 STMT_ASSIGN dst-kind inheritance puts the dst Local
+            // into the source operand's bank when applicable; the mov
+            // mnemonic must match (mov.u32/mov.u64/etc.) so ptxas
+            // accepts it. PRED dst uses mov.pred per PTX ISA 9.7.1.1.
+            let dst_kind = _nvptx_lookup_kind_for_local(kinds, s.dst.id)
+            let mov_mnem = _nvptx_mov_mnem_for_kind(dst_kind)
             let mut a = []
             a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
             a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[0], kinds)))
-            out.push(_nvptx_instr("mov.f64", a, "assign"))
+            out.push(_nvptx_instr(mov_mnem, a, "assign"))
         }
         return out
     }
@@ -606,7 +693,15 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
                 return out
             }
             // 055-P0 arithmetic binop fallthrough.
-            let mnem = _nvptx_binop_mnemonic(s.op)
+            // RFC 071 P4 — kind-aware mnemonic. The dst Local's bank
+            // (now inferred from operand kinds in Pass 1) selects the
+            // PTX mnemonic family: U32 -> add.s32 / mul.lo.s32; U64 ->
+            // add.s64 / mul.lo.s64; FP banks fall through to the
+            // existing _nvptx_binop_mnemonic. Without this, an operand-
+            // inferred U32 binop dst would still emit add.f64 %r<d>,
+            // %r<a>, %r<b> — a mixed-bank instr that ptxas rejects.
+            let dst_kind = _nvptx_lookup_kind_for_local(kinds, s.dst.id)
+            let mnem = _nvptx_binop_mnemonic_for_kind(s.op, dst_kind)
             if len(mnem) > 0 {
                 let mut a = []
                 a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
@@ -1353,7 +1448,36 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                         k = k + 1
                     }
                     if !dup {
-                        let kind = _nvptx_classify_local_for_stmt(s)
+                        let mut kind = _nvptx_classify_local_for_stmt(s)
+                        // RFC 071 P4 — operand-kind inference for
+                        // arithmetic binops + STMT_ASSIGN. Closes the
+                        // wider N17/N23 gap: when an arithmetic binop's
+                        // operands are both U32 (e.g. composed from
+                        // gpu_thread_id_x() + gpu_block_dim_x()), the
+                        // dst MUST stay in the U32 bank so the body
+                        // mnemonic resolves to add.s32 / mul.lo.s32,
+                        // NOT the JIT-rejecting mul.f64 %fd<d>, %r, %r
+                        // shape from N23's E2E silicon fire.
+                        // Comparison binops (lt/le/gt/ge/eq/ne) stay on
+                        // the existing classifier's PRED short-circuit.
+                        if s.kind == STMT_BINOP && kind == NVPTX_RKIND_F64 {
+                            if len(s.args) >= 2 {
+                                let inferred_b = _nvptx_infer_binop_dst_kind(s.args[0], s.args[1], regs)
+                                if inferred_b != "" { kind = inferred_b }
+                            }
+                        }
+                        // STMT_ASSIGN dst inherits the source operand
+                        // kind. Without this, let g = gpu_thread_id_x()
+                        // followed by let h = g would mis-classify h
+                        // back to F64 default.
+                        if s.kind == STMT_ASSIGN && kind == NVPTX_RKIND_F64 {
+                            if len(s.args) >= 1 {
+                                let src_kind = _nvptx_kind_of_operand(s.args[0], regs)
+                                if src_kind != "" && src_kind != NVPTX_RKIND_F64 {
+                                    kind = src_kind
+                                }
+                            }
+                        }
                         // RFC 067 P3 — for FRAG PRegs, stamp the role /
                         // dtype / layout from the STMT_CALL op name; for
                         // every other kind the metadata stays "" (the
