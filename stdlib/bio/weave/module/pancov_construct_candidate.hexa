@@ -1,0 +1,117 @@
+#!hexa strict
+//
+// weave/module/pancov_construct_candidate.hexa — C2 cell W·γ.
+// HEXA-NATIVE port (R5 sunset, 2026-05-07).
+
+use "weave/module/weave_composition"
+
+fn registry_path() -> string {
+    let cwd = exec("pwd").trim()
+    return cwd + "/state/discovery_absorption/registry.jsonl"
+}
+
+fn build_candidate() {
+    let c = {}
+    c["target_disease_class_label"] = "gamma_pancov"
+    c["matrix_cell_label"] = "W_gamma"
+    c["marker_referenced"] = "conserved coronavirus envelope-protein RBD region"
+    c["construct_topology"] = "broadly-binding scaffolded module set"
+    c["module_count"] = 5
+    let m1 = {}; m1["module_idx"] = 0; m1["id"] = "scaffold_n_term"; m1["binding_domain_class"] = "stabilizing scaffold N-terminal segment"; m1["source_lit"] = "public protein engineering literature"
+    let m2 = {}; m2["module_idx"] = 1; m2["id"] = "binding_loop_a"; m2["binding_domain_class"] = "broadly-binding loop conserved-RBD-context"; m2["source_lit"] = "public open-access structural biology literature, pan-coronavirus alignment"
+    let m3 = {}; m3["module_idx"] = 2; m3["id"] = "binding_loop_b"; m3["binding_domain_class"] = "broadly-binding loop conserved-RBD-context"; m3["source_lit"] = "public open-access structural biology literature, pan-coronavirus alignment"
+    let m4 = {}; m4["module_idx"] = 3; m4["id"] = "linker_GS_15"; m4["binding_domain_class"] = "flexible glycine-serine linker"; m4["source_lit"] = "standard 15aa GS linker"
+    let m5 = {}; m5["module_idx"] = 4; m5["id"] = "scaffold_c_term"; m5["binding_domain_class"] = "stabilizing scaffold C-terminal segment"; m5["source_lit"] = "public protein engineering literature"
+    let mods = []; mods.push(m1); mods.push(m2); mods.push(m3); mods.push(m4); mods.push(m5)
+    c["modules_summary"] = mods
+    c["n6_invariant_role"] = "σ(6)=12 strategy-pool exponent set; τ(6)=4 conformer-state index on each module."
+    let anchors = []
+    anchors.push("conserved coronavirus envelope-protein RBD region — public open-access structural biology literature")
+    anchors.push("scaffolded broadly-binding construct topology — public protein engineering literature")
+    c["source_literature_anchors"] = anchors
+    let h = []
+    h.push("delivery / formulation / pharmacokinetics → out-of-scope at this primitive")
+    h.push("binding affinity / pan-strain coverage / efficacy → wet-lab (out-of-repo, C3+)")
+    c["downstream_layer_handoff"] = h
+    return c
+}
+
+fn build_witness(verify_result, candidate) {
+    let pe = verify_result["pass_evaluation"]
+    let overall_pass = pe["overall_pass"]
+    let mut sentinel = "__W_GAMMA_PANCOV_C2__ FAIL"
+    if overall_pass { sentinel = "__W_GAMMA_PANCOV_C2__ PASS" }
+    let v = {}
+    v["simulator"] = "weave_composition (F-TP5-b PASS)"
+    v["weave_compose_pass"] = overall_pass
+    v["n_bundles_P"] = verify_result["P"]
+    v["n_trials_per_bundle_N"] = verify_result["N"]
+    v["registry_rows_written"] = verify_result["registry_rows_written"]
+    v["bundles_with_landauer_pass"] = verify_result["bundles_with_landauer_pass"]
+    v["bundles_with_pi_p2_pass"] = verify_result["bundles_with_pi_p2_pass"]
+    v["pass_evaluation"] = pe
+    let n6 = {}
+    n6["sigma_6"] = 12; n6["tau_6"] = 4; n6["phi_6"] = 2; n6["J2"] = 24
+    n6["master_identity_ok"] = (12 * 2 == 24) && (6 * 4 == 24)
+    let d = []
+    d.push("gamma_pancov is a 16-cell matrix label, NOT a clinical proposal.")
+    d.push("Conserved coronavirus envelope-protein RBD region — PUBLIC OPEN-ACCESS structural biology literature.")
+    d.push("Module sequences are illustrative placeholders. NOT clinically validated.")
+    d.push("PASS verifies simulator runs deterministically — does NOT verify any biological property.")
+    d.push("16-cell matrix W·γ at IN-SILICO grade only.")
+    let row = {}
+    row["schema"] = "raw_77_c2_weave_pancov_v1"
+    row["ts"] = utc_iso_now()
+    row["cycle"] = 25
+    row["phase"] = "c2-w-gamma-pancov-broadly-binding-construct-candidate"
+    row["domain"] = "hexa-weave"
+    row["matrix_cell"] = "W_gamma"
+    row["disease_class_label"] = "gamma_pancov"
+    row["candidate"] = candidate
+    row["verification"] = v
+    row["n6_invariant"] = n6
+    row["in_silico_grade_disclose"] = "IN-SILICO numerical-primitive verification ONLY."
+    row["raw_91_c3_disclose"] = d
+    row["raw_47_cross_repo"] = "Imports weave_composition (R2 preserved)."
+    row["raw_9_hexa_only"] = "hexa stdlib only (R5 sunset 2026-05-07)"
+    row["raw_138_sentinel"] = sentinel
+    row["raw_77_append_only"] = true
+    return row
+}
+
+fn parse_argv_local(av) {
+    let r = {}
+    r["P"] = 10; r["N"] = 50; r["seed"] = 42
+    r["no_emit"] = false; r["quiet"] = false
+    let mut i = 0
+    while i < len(av) {
+        let a = av[i]
+        if a == "--P" { if i + 1 < len(av) { r["P"] = to_int(av[i + 1]); i = i + 1 } }
+        else if a == "--N" { if i + 1 < len(av) { r["N"] = to_int(av[i + 1]); i = i + 1 } }
+        else if a == "--seed" { if i + 1 < len(av) { r["seed"] = to_int(av[i + 1]); i = i + 1 } }
+        else if a == "--no-emit" { r["no_emit"] = true }
+        else if a == "--quiet" { r["quiet"] = true }
+        i = i + 1
+    }
+    return r
+}
+
+fn main() {
+    let cfg = parse_argv_local(args())
+    let candidate = build_candidate()
+    let result = weave_compose("", "", cfg["P"], cfg["N"], cfg["seed"], "pancov", false, true)
+    let pe = result["pass_evaluation"]
+    let overall_pass = pe["overall_pass"]
+    let witness = build_witness(result, candidate)
+    if !cfg["no_emit"] {
+        let path = registry_path()
+        let last_slash = path.last_index_of("/")
+        exec("mkdir -p " + path.substring(0, last_slash))
+        append_file(path, json_encode(witness) + "\n")
+    }
+    let mut sentinel = "__W_GAMMA_PANCOV_C2__ FAIL"
+    if overall_pass { sentinel = "__W_GAMMA_PANCOV_C2__ PASS" }
+    println(sentinel)
+    if overall_pass { exit(0) }
+    exit(1)
+}
