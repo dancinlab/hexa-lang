@@ -12,10 +12,11 @@
 //   --version   — print version
 //
 // HONEST STATUS (C3):
-//   RT-SC is academically UNPROVEN as of 2026-05. LK-99 (2023) and
-//   subsequent candidates have not been independently replicated.
-//   This v1.0.0 CLI dispatcher is a PLACEHOLDER — no working empirical
-//   sandbox; verbs print spec excerpt + falsifier preregister only.
+//   RT-SC is academically UNPROVEN as of 2026-05. Canonical negative
+//   anchor: CSH (Snider 2020 Nature, retracted Nature 610:804 2022).
+//   Subsequent claim-only RT-SC candidates have not been independently
+//   replicated. This v1.0.0 CLI dispatcher is a PLACEHOLDER — no working
+//   empirical sandbox; verbs print spec excerpt + falsifier preregister only.
 //
 // Constraints:
 //     — hexa-only orchestration; no python bridge
@@ -86,7 +87,7 @@ fn _file_exists(p: str) -> bool {
 fn _print_caveats() {
     println("")
     println("--- caveats (C3) ---")
-    println("  1. RT-SC is academically UNPROVEN (LK-99 etc. unsettled). v1.0.0 ships")
+    println("  1. RT-SC is academically UNPROVEN (canonical negative anchor: CSH, Snider 2020 Nature, retracted 2022). v1.0.0 ships")
     println("     spec + falsifier preregister only — no working empirical sandbox.")
     println("  2. CLI dispatcher is PLACEHOLDER TBD; verbs print spec excerpt only.")
     println("  3. n=6 invariant lattice (σ·τ=48T Hc2, φ=2 Cooper pair, Tc=300K) is a")
@@ -448,7 +449,7 @@ fn cmd_help() {
     println("env:")
     println("  HEXA_RTSC_ROOT  override repo root (default: inferred from $0)")
     println("")
-    println("HONEST STATUS: RT-SC is academically unproven (LK-99 etc. unsettled).")
+    println("HONEST STATUS: RT-SC is academically unproven (canonical negative anchor: CSH, Snider 2020 Nature, retracted 2022).")
     println("  v1.0.0 ships spec + falsifier preregister only — CLI dispatcher is")
     println("  PLACEHOLDER. Working .hexa empirical sandbox is TBD.")
     println("")

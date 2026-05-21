@@ -9,7 +9,7 @@
 name = "hexa-rtsc"
 version = "1.0.0"
 entry = "cli/hexa-rtsc.hexa"
-description = "Room-Temp Superconductor — Meissner + 48T SC coil. Substrate-of-substrates for fusion · UFO · accelerator. n=6 closed-form candidate (σ·τ=48T Hc2, φ=2 Cooper pair, Tc=300K target) + falsifier preregister. RT-SC is academically unproven; LK-99 etc. candidates remain unsettled."
+description = "Room-Temp Superconductor — Meissner + 48T SC coil. Substrate-of-substrates for fusion · UFO · accelerator. n=6 closed-form candidate (σ·τ=48T Hc2, φ=2 Cooper pair, Tc=300K target) + falsifier preregister. RT-SC is academically unproven; canonical negative anchor: CSH (Snider 2020 Nature, retracted 2022)."
 license = "MIT"
 authors = ["박민우 <nerve011235@gmail.com>"]
 repository = "https://github.com/dancinlab/hexa-rtsc"
@@ -77,8 +77,8 @@ extracted_from = "canon/domains/energy/{room-temp-sc,superconductor}/ @ c0f1f570
 # ── Scope honesty (C3) ─────────────────────────────
 [scope]
 honest_scope = "RTSC + SC: n=6 closed-form candidate spec (σ(6)·τ(6)=48T Hc2, φ(6)=2 Cooper pair boson, Tc target 300K, Abrikosov CN=6 hexagonal lattice) + falsifier preregister tables. NO empirical sandbox at v1.0.0; no working .hexa CLI dispatcher."
-not_scope = ["wet-lab synthesis (LK-99 / cuprate / iron-pnictide)", "DFT band-structure prediction", "BCS gap-equation numerical solver", "Meissner phase-field PDE simulation"]
-academic_status = "UNPROVEN — RT-SC remains academically unsettled as of 2026-05. LK-99 (2023) and subsequent room-temp candidates have not been independently replicated. This substrate is a SPEC + FALSIFIER PREREGISTER, not an empirical claim of working RT-SC."
+not_scope = ["wet-lab synthesis (claim-only RT-SC / cuprate / iron-pnictide)", "DFT band-structure prediction", "BCS gap-equation numerical solver", "Meissner phase-field PDE simulation"]
+academic_status = "UNPROVEN — RT-SC remains academically unsettled as of 2026-05. Canonical negative anchor: CSH (Snider et al. Nature 586:373 2020, retracted Nature 610:804 2022). Subsequent room-temp candidates have not been independently replicated. This substrate is a SPEC + FALSIFIER PREREGISTER, not an empirical claim of working RT-SC."
 
 # ── Substrate-of-substrates role ──────────────────────────
 # hexa-rtsc is the n=6 base substrate that 3 sister substrates depend on:

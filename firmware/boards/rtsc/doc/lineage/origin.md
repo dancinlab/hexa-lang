@@ -80,8 +80,10 @@ If you change a file in `rtsc/` or `sc/` here and want to push it upstream:
 ## Empirical SSOT — UNPROVEN
 
 Per legacy falsifier contractual rule (`hexa-rtsc-empirical-unproven-contractual`): RT-SC is
-academically **unproven** as of 2026-05. LK-99 (2023) and subsequent
-room-temp candidates have not been independently replicated. This
+academically **unproven** as of 2026-05. Canonical negative anchor: CSH
+(Snider et al. Nature 586:373 2020, retracted Nature 610:804 2022).
+Subsequent claim-only RT-SC candidates have not been independently
+replicated. This
 repository ships a **closed-form candidate spec + falsifier preregister**,
 not an empirical claim of working RT-SC. Synthesis-side validation is
 out-of-repo (would require materials lab).

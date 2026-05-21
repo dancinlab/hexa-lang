@@ -3,6 +3,17 @@
 All notable changes to **hexa-rtsc** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and SemVer.
 
+> **SUPERSESSION NOTE (2026-05-22)** — `LK-99` historical mentions below
+> are SUPERSEDED. Per the 2026-05-22 aggressive scrub (hexa-rtsc 7ccd61d
+> · demiurge 50e3d13 · this repo's vendored-snapshot mirror), the
+> canonical RT-SC negative anchor in active research surface is now
+> **CSH** (carbonaceous sulfur hydride, Snider et al. Nature 586:373
+> 2020, retracted Nature 610:804 2022). This changelog retains the
+> historical references as immutable archival record only — they are
+> no longer load-bearing in any active code path. The verify/calc_lk99
+> · empirical_lk99_arxiv · numerics_lk99* filenames are preserved as
+> archival negative-result baseline (see verify/falsifier_check.hexa).
+
 ## [Unreleased]
 
 ### Added (2026-05-08 — recipe §1 slots #12 + #13 · narrative tier (PDF rebuild + numerics_methodology))

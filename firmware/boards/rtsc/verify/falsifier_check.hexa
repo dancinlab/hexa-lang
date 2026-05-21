@@ -17,9 +17,9 @@
 //          T2  numerical   closed-form via math_pure        verify/numerics_*.hexa
 //          T3  empirical   real bench / synthesis lab       Stage-1+ TBD
 //
-//       T3 is empty at v1.0.x — RT-SC empirical claim unsettled (LK-99
-//       not reproduced as of 2026-05). Closure caps at 67% until empirical
-//       lands, by design.
+//       T3 is empty at v1.0.x — RT-SC empirical claim unsettled (canonical
+//       negative anchor: CSH, Snider et al. Nature 586:373, retracted Nature
+//       610:804 2022). Closure caps at 67% until empirical lands, by design.
 //
 // PASS = all 6 IDs declared monotone-correctly + every script in any
 //        Fk_T*_SCRIPTS array exists on disk.
@@ -81,11 +81,16 @@ fn _check(ok: bool, label: str, detail: str) {
 // closes only after Stage-1+ synthesis bench / collider feed.
 
 let F1_ID            = "F-RTSC-1"
-let F1_RETRACT       = "LK-99 reproduction failure → next-candidate substrate spec update"
+let F1_RETRACT       = "Unreplicated RT-SC claim → next-candidate substrate spec update (canonical negative anchor: CSH, Snider 2020 Nature, retracted 2022)"
+// Tier-script filenames preserved as historical record of how F-RTSC-1
+// was implemented in v1.0.x → v1.1.0 (calc_lk99.hexa etc. encode the
+// archival negative-result baseline; renaming would require a separate
+// refactor PR and CHANGELOG re-anchor). See README.md for the CSH
+// narrative anchor + scrub note 2026-05-22.
 let F1_T1_SCRIPTS: [str] = ["calc_lk99.hexa"]
 let F1_T2_SCRIPTS: [str] = ["numerics_lk99.hexa", "numerics_lk99_parity.hexa", "numerics_lk99_solver.hexa"]
 let F1_T3_SCRIPTS: [str] = ["empirical_lk99_arxiv.hexa"]
-let F1_T3_DESCRIPTION = "synthesis lab: independent LK-99 / cuprate / hydride reproduction (live raw-data → Stage-1+ TBD; archival arXiv proxy via empirical_lk99_arxiv.hexa)"
+let F1_T3_DESCRIPTION = "synthesis lab: independent RT-SC reproduction (live raw-data → Stage-1+ TBD; archival arXiv proxy via empirical_lk99_arxiv.hexa — script filename retained as historical record)"
 
 let F2_ID            = "F-RTSC-2"
 let F2_RETRACT       = "BCS λ McMillan ceiling (Tc ≤ 30 K) — beyond mechanism n=6 closed-form fit"
@@ -293,7 +298,7 @@ fn main() {
     println("    T2  numerical     closed-form via math_pure    (verify/numerics_*.hexa)")
     println("    T3  empirical     real bench / synthesis lab   (Stage-1+ TBD)")
     println("")
-    println("  At v1.0.x: empirical RT-SC unsettled (LK-99 unreproduced 2023+).")
+    println("  At v1.0.x: empirical RT-SC unsettled (canonical negative anchor: CSH, Snider et al. Nature 586:373, retracted Nature 610:804).")
     println("  Closure caps at 67% until T3 lands by design.")
     println("")
 

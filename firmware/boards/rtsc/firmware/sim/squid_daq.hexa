@@ -4,7 +4,7 @@
 //
 // Models the QD MPMS-3 SQUID magnetometer GPIB interface (BOM #6 from
 // doc/synthesis_bench_v0.md) + Tc / Meissner susceptibility extraction
-// for F-RTSC-1 (LK-99 reproduction) raw-data acquisition.
+// for F-RTSC-1 (claim-only RT-SC reproduction) raw-data acquisition.
 //
 // Spec: doc/synthesis_bench_v0.md (Stage A) BOM #6.
 //
@@ -13,7 +13,7 @@
 //   2. χ(T,B) = M/H, T-sweep at fixed H, then H-sweep at fixed T
 //   3. Tc extraction: linear fit χ⁻¹(T) → x-intercept (Curie–Weiss)
 //   4. Meissner: M(H, T < Tc) shows full diamagnetism χ → -1/4π
-//   5. Output schema raw_77_rtsc_lk99_repro_v1
+//   5. Output schema raw_77_rtsc_repro_v1 (filename `raw_77_rtsc_lk99_repro_v1` retained as historical archival schema name)
 //
 // Recipe §4 lint_numerics 5 invariants enforced.
 //

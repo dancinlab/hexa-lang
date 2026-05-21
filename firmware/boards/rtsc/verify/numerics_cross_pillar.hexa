@@ -13,11 +13,13 @@
 //   numerics_lattice_arithmetic asks "does math_pure reproduce σ=12
 //   etc to 1e-9?" — a vertical regression-lock on the floating-point
 //   primitives.  This file asks "do all four pillars (BCS / McMillan /
-//   Hc2 / LK-99) AGREE on those same anchors when each derives them
-//   independently?" — a horizontal cross-pillar invariant. A drift in
-//   any one pillar (e.g. someone changes σ=12 in calc_lk99 to σ=11
+//   Hc2 / claim-class) AGREE on those same anchors when each derives
+//   them independently?" — a horizontal cross-pillar invariant. A drift
+//   in any one pillar (e.g. someone changes σ=12 in calc_lk99 to σ=11
 //   to match a stray paper) is silent vs. lattice_arithmetic but
-//   FAILS here. This is genuine additional closure depth.
+//   FAILS here. This is genuine additional closure depth. (Filename
+//   `calc_lk99` retained as historical archival baseline; the active
+//   research anchor is CSH per 2026-05-22 scrub — see README.md.)
 //
 // Invariants checked (each is independently falsifiable):
 //
@@ -44,10 +46,10 @@
 //       (Allen-Dynes 1975, Eq. 2.4 limit). Numerical: at λ=1e-3,
 //       μ*=0, both Tc/ωD prefactors lie within an order of magnitude.
 //
-//   I6  LK-99 substrate σ=12 catalog row — F-RTSC-1 negative result
-//       (LK-99 unreproduced) leaves σ−1 = 11 candidate substrates,
-//       but the lattice σ=12 itself is preserved (negative-result
-//       does not demote σ molecule, only one row inside σ).
+//   I6  claim-class substrate σ=12 catalog row — F-RTSC-1 negative result
+//       (claim-only RT-SC unreproduced) leaves σ−1 = 11 candidate
+//       substrates, but the lattice σ=12 itself is preserved (negative-
+//       result does not demote σ molecule, only one row inside σ).
 //
 // Recipe §4 5-invariant compliance: math_pure import (1) + sentinel
 // __HEXA_RTSC_NUMERICS_CROSS_PILLAR__ PASS (2) + FALSIFIERS array (3)
@@ -66,7 +68,7 @@
 // T2) + §4 (5-invariant lint).  Sister of hexa-cern's
 // verify/numerics_cross_pillar.hexa (3-pillar variant — wakefield /
 // lwfa / collider). hexa-rtsc has 4 pillars (BCS / McMillan / Hc2 /
-// LK-99) so the row count differs but the predicate shape matches.
+// claim-class) so the row count differs but the predicate shape matches.
 //
 // @no-lock-needed
 
@@ -133,7 +135,7 @@ fn rel_err(a: float, b: float) -> float {
 // Each pillar = (label, calc body file, numerics body file). The cross-
 // pillar audit walks every pillar × every lattice-constant cell.
 
-let PILLAR_LABELS:    [str] = ["BCS", "McMillan", "Hc2_48T", "LK99"]
+let PILLAR_LABELS:    [str] = ["BCS", "McMillan", "Hc2_48T", "claim-class"]
 let PILLAR_CALC_FILES:[str] = [
     "calc_bcs.hexa",
     "calc_mcmillan.hexa",
@@ -150,12 +152,12 @@ let PILLAR_NUM_FILES: [str] = [
 // ─── falsifier mapping (recipe §4 invariant 3) ─────────────────────────
 
 let FALSIFIERS: [str] = [
-    "F-RTSC-1: LK99 pillar must echo σ=12 substrate molecule despite negative-result row",
+    "F-RTSC-1: claim-class pillar must echo σ=12 substrate molecule despite negative-result row",
     "F-RTSC-2: McMillan pillar must echo τ=4 phase quartet shared with BCS",
     "F-RTSC-3: Hc2_48T pillar must agree on σ·τ=48 T with master identity",
     "F-SC-1:   BCS pillar must echo Cooper φ=2 boson pair",
     "F-SC-2:   BCS pillar must echo CN=6 (= n) hexagonal vortex coordination",
-    "F-SC-3:   BCS pillar must echo σ=12 specific-heat molecule shared with LK99",
+    "F-SC-3:   BCS pillar must echo σ=12 specific-heat molecule shared with claim-class",
     "cross:    σ·φ = n·τ = J₂ = 24 numerical reproduction across 4 pillars",
     "cross:    McMillan(λ→0) and BCS exponent argument both diverge as 1/λ",
 ]
@@ -298,12 +300,14 @@ fn check_mcmillan_bcs_limit() {
            " (expect ≈ 1.04 Allen-Dynes 1975)")
 }
 
-// ─── I6: LK-99 negative-result preserves σ=12 molecule ─────────────────
+// ─── I6: claim-class negative-result preserves σ=12 molecule ────────────
 //
-// F-RTSC-1 statement (.roadmap §A.4): LK-99 reproduction failure does
-// NOT demote σ(6)=12 substrate molecule — it only demotes the LK-99
-// row INSIDE that molecule (σ−1=11 candidates remain). The σ=12
-// molecule itself is preserved by lattice closure.
+// F-RTSC-1 statement (.roadmap §A.4): claim-only RT-SC reproduction
+// failure does NOT demote σ(6)=12 substrate molecule — it only demotes
+// the claim-class row INSIDE that molecule (σ−1=11 candidates remain).
+// The σ=12 molecule itself is preserved by lattice closure. Calc/numerics
+// filenames `calc_lk99.hexa` / `numerics_lk99.hexa` retained as historical
+// archival baseline (see README.md scrub note 2026-05-22).
 
 fn check_lk99_negative_preserves_sigma() {
     let body = read_file(VERIFY_DIR + "/calc_lk99.hexa") +
@@ -311,14 +315,14 @@ fn check_lk99_negative_preserves_sigma() {
                read_file(VERIFY_DIR + "/numerics_lk99.hexa")
     let has_sigma = body.contains("σ") || body.contains("SIGMA") ||
                     body.contains("12 candidate") || body.contains("12 substrate")
-    _check(has_sigma, "I6 · LK-99 pillar preserves σ=12 substrate molecule",
+    _check(has_sigma, "I6 · claim-class pillar preserves σ=12 substrate molecule",
            if has_sigma { "" }
            else { "calc_lk99 / numerics_lk99 lost σ=12 token — F-RTSC-1 drift" })
 
-    // Numerical: σ - 1 (LK-99 row demoted) must equal 11
+    // Numerical: σ - 1 (claim-class row demoted) must equal 11
     let remaining: int = SIGMA - 1
     let ok = remaining == 11
-    _check(ok, "I6 · σ − 1 = 11 candidate substrates remain after LK-99 demote",
+    _check(ok, "I6 · σ − 1 = 11 candidate substrates remain after claim-class demote",
            "σ=" + str(SIGMA) + " - 1 = " + str(remaining))
 }
 
@@ -337,7 +341,7 @@ fn main() {
     println("    I3  Hc2 master gate σ·τ = 48 T (independent re-derivation)")
     println("    I4  Cooper φ=2 surface in BCS pillar")
     println("    I5  McMillan(λ→0) / BCS exponent ratio ≈ 1.04 (Allen-Dynes limit)")
-    println("    I6  LK-99 negative-result preserves σ=12 molecule (σ−1=11 candidates)")
+    println("    I6  claim-class negative-result preserves σ=12 molecule (σ−1=11 candidates)")
     println("")
     println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
     for f in FALSIFIERS { println("    ✗ " + f) }
@@ -358,7 +362,7 @@ fn main() {
     println("  I5 · McMillan → BCS weak-coupling limit:")
     check_mcmillan_bcs_limit()
     println("")
-    println("  I6 · LK-99 negative-result σ-preservation:")
+    println("  I6 · claim-class negative-result σ-preservation:")
     check_lk99_negative_preserves_sigma()
 
     println("")
@@ -371,7 +375,7 @@ fn main() {
         println("__HEXA_RTSC_NUMERICS_CROSS_PILLAR__ FAIL")
         exit(1)
     }
-    println("  All 4 pillars (BCS / McMillan / Hc2 / LK-99) agree on the n=6 lattice.")
+    println("  All 4 pillars (BCS / McMillan / Hc2 / claim-class) agree on the n=6 lattice.")
     println("  HONEST C3: cross-pillar consistency ≠ empirical RT-SC truth — only")
     println("  proves the closed-forms haven't drifted apart at the code-layer.")
     println("__HEXA_RTSC_NUMERICS_CROSS_PILLAR__ PASS")

@@ -10,7 +10,8 @@ This is the **initial standalone release** of `hexa-rtsc`, a 2-verb
 **substrate-of-substrates** organized around the **n=6 invariant lattice**:
 RTSC (Tc=300K, Hc2=σ·τ=48T, Cooper φ=2) and SC (BCS, Abrikosov CN=6).
 v1.0.0 ships **spec + falsifier preregister** only — no working empirical
-sandbox. RT-SC is **academically unproven** (LK-99 et al. unsettled).
+sandbox. RT-SC is **academically unproven** (canonical retracted claim:
+CSH, Snider et al. Nature 586:373, retracted Nature 610:804 2022).
 
 ## Highlights
 
@@ -34,8 +35,10 @@ sandbox. RT-SC is **academically unproven** (LK-99 et al. unsettled).
 
 ## Honest status (C3)
 
-> **RT-SC is academically UNPROVEN.** LK-99 (2023) and subsequent room-temp
-> candidates have **not been independently replicated**. This v1.0.0 release
+> **RT-SC is academically UNPROVEN.** Canonical negative anchor: CSH
+> (Snider et al. Nature 586:373 2020, retracted Nature 610:804 2022).
+> Subsequent room-temp candidates have **not been independently
+> replicated**. This v1.0.0 release
 > makes **no empirical claim** of working RT-SC. The substrate ships:
 >
 > 1. n=6 **closed-form candidate** spec (Tc=300K, Hc2=σ·τ=48T, Cooper φ=2 boson, Abrikosov CN=6)

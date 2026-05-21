@@ -17,7 +17,8 @@
 > 2-verb energy substrate organized around the **n=6 invariant lattice**:
 > RTSC (Tc=300K, Hc2=σ·τ=48T, Cooper φ=2) / SC (BCS, Abrikosov CN=6).
 > v1.0.0 ships **spec + falsifier preregister** only — no working empirical
-> sandbox. RT-SC is **academically unproven** (LK-99 et al. unsettled).
+> sandbox. RT-SC is **academically unproven** (canonical retracted claim:
+> CSH, Snider et al. Nature 586:373, retracted Nature 610:804 2022).
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20102616.svg)](https://doi.org/10.5281/zenodo.20102616)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -53,8 +54,11 @@ from `canon/domains/energy/{room-temp-sc,superconductor}/` (SHA
 
 ## Status
 
-> **RT-SC is academically UNPROVEN.** LK-99 (2023) and subsequent room-temp
-> candidates have **not been independently replicated**. v1.1.0 ships
+> **RT-SC is academically UNPROVEN.** The canonical negative anchor in this
+> repo is **CSH** (carbonaceous sulfur hydride, Snider et al. Nature 586:373
+> 2020, retracted Nature 610:804 2022; susceptibility analysis Hirsch
+> Physica C 601:1354118 2022). Subsequent room-temp candidates have
+> **not been independently replicated**. v1.1.0 ships
 > RSC code-layer FINAL (book-keeping closure) per `.roadmap §A.6`:
 >
 > - n=6 **closed-form candidate** spec (Tc=300K, Hc2=σ·τ=48T, Cooper φ=2 boson, Abrikosov CN=6)
@@ -84,7 +88,7 @@ code-layer for future bench comparison.
 
 ```
 verify/    35 scripts  (T1×6 + T2×17 + T3-archival×6 + meta×3 + run_all)
-           ├─ T2 ×17: 4 closed-form + 4 parity + 4 solver + lk99_dft + tdgl + whh
+           ├─ T2 ×17: 4 closed-form + 4 parity + 4 solver + claim_class_dft + tdgl + whh
            │          + lattice_arithmetic + cross_pillar  (recipe §1 #7+#13)
            └─ meta×3: falsifier_check + lint_numerics + saturation_check (recipe §7.3)
 build/     pandoc + xelatex PDF rebuild (Makefile + header.tex; recipe §1 #12)
