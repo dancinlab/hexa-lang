@@ -3444,6 +3444,11 @@ HexaVal hexa_array_max(HexaVal arr) {
 
 // flatten: one-level; non-array elements passed through.
 // Matches interpreter semantics at hexa_full.hexa:15316-15327.
+// Step-3 cycle 71 port — all-array fast path. C wrapper pre-checks
+// every element is an array; dispatches to rt_array_flatten_aoa. Mixed
+// (some-array, some-scalar) stays on the polymorphic C body since
+// hexa source can't observe HX_IS_ARRAY runtime tag.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_flatten(HexaVal arr) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3459,6 +3464,30 @@ HexaVal hexa_array_flatten(HexaVal arr) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_flatten_aoa(HexaVal arr);
+HexaVal hexa_array_flatten(HexaVal arr) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t n = HX_ARR_LEN(arr);
+    int all_array = 1;
+    for (int64_t i = 0; i < n; i++) {
+        if (!HX_IS_ARRAY(HX_ARR_ITEMS(arr)[i])) { all_array = 0; break; }
+    }
+    if (all_array) return rt_array_flatten_aoa(arr);
+    for (int64_t i = 0; i < n; i++) {
+        HexaVal it = HX_ARR_ITEMS(arr)[i];
+        if (HX_IS_ARRAY(it)) {
+            for (int64_t j = 0; j < HX_ARR_LEN(it); j++) {
+                out = hexa_array_push(out, HX_ARR_ITEMS(it)[j]);
+            }
+        } else {
+            out = hexa_array_push(out, it);
+        }
+    }
+    return out;
+}
+#endif
 
 // for_each: side-effect iteration. Returns void (hexa_full.hexa:15187).
 // Step-3 cycle 66 port — for_each dispatch (void-return hexa fn).

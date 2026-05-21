@@ -1094,6 +1094,18 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 71: hexa_array_flatten (all-array fast path, mixed-type stays C)
+
+- ✅ `hexa_array_flatten` (self/runtime.c:3447) gains an all-array
+  fast path. C wrapper pre-checks every element via `HX_IS_ARRAY` and
+  dispatches to `rt_array_flatten_aoa` only when every item is an
+  array. Mixed-type input (some items array, some scalar) stays on
+  the polymorphic C body since hexa source can't observe runtime tags
+- Hexa source iterates `arr[i]` (an array), then nested loop pushes
+  `sub[j]` items into output. Pure data — no callback
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,936 B
+
 ### 2026-05-21 — step 3 cycle 70: hexa_array_sample (random pick with replacement)
 
 - ✅ `hexa_array_sample` (self/runtime.c:4077) ported. Uses the

@@ -303,6 +303,27 @@ pub fn rt_array_sort_float(arr: [float]) -> [float] {
     return sorted
 }
 
+// Step 3 cycle 71 — flatten one-level, assumes all items are arrays.
+// The C wrapper (hexa_array_flatten) pre-checks all-array via tag, and
+// only dispatches here when every element is array. Mixed-type (some
+// items array, some scalar) stays on the polymorphic C body.
+pub fn rt_array_flatten_aoa(arr: HexaVal) -> HexaVal {
+    let mut out: [float] = []
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        let sub = arr[i]
+        let m = len(sub)
+        let mut j = 0
+        while j < m {
+            out = out.push(sub[j])
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
 // Step 3 cycle 70 — sample: draw n items uniformly at random (with
 // replacement) from arr. Uses the `random()` builtin which returns
 // float in [0, 1). Empty arr or n ≤ 0 returns empty.
