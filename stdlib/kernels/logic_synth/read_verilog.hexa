@@ -741,6 +741,32 @@ fn _rv_parse_port_decl(st_in: PState, m_in: Module, dir_kind: int, tab: SymTab) 
             let mut pid = 0
             if dir_kind > 0 { pid = len(m.wires) + 1 }
             m = rtlil_module_add_wire(m, rtlil_wire(nm, width, dir_kind, pid))
+            // rfc_006 §5 d4 closure (2026-05-22) — per-bit shadow
+            // outputs for scalar (non-array) multi-bit OUTPUT
+            // declarations (see _rv_parse_ansi_ports for rationale).
+            //
+            // rfc_006 §5 d4 FINAL closure (2026-05-22) — extend per-bit
+            // shadow registration to INTERNAL multi-bit regs/wires
+            // (dir_kind == 0). The SSA pre-loop alias path emits a
+            // whole-word `connect(s__ssa0, s)` which abc_map's connect
+            // buffer-emit (abc_map.hexa L371-381) bit-blasts to
+            // `.gate buf A=<s>__b<k> X=<s>__ssa0__b<k>`. If the source
+            // `<s>__b<k>` wires don't exist, ABC ties the SSA-version
+            // per-bit nets to const-0 (Bug 2 in the inbox brief: 5
+            // residual `_const0_` cells were exactly these dangling
+            // SSA per-bit chains for `reg [2:0] grant_out`).
+            if width > 1 {
+                let mut bj = 0
+                while bj < width {
+                    let bn = nm + "__b" + str(bj)
+                    if rtlil_find_wire(m, bn) < 0 {
+                        let mut bpid = 0
+                        if dir_kind > 0 { bpid = len(m.wires) + 1 }
+                        m = rtlil_module_add_wire(m, rtlil_wire(bn, 1, dir_kind, bpid))
+                    }
+                    bj = bj + 1
+                }
+            }
         }
     }
     return RvStep { st: st, m: m }
@@ -882,6 +908,116 @@ fn _rv_binop_result_width(op: str, wa: int, wb: int) -> int {
         return b
     }
     return 1
+}
+
+// rfc_006 §5 d4 FINAL closure (2026-05-22) — width-aware `$eq`/`$ne` cell emit.
+//
+// Bug 1 in the inbox brief: the binary-op path at `_rv_elab_expr` emitted a
+// `$eq` cell with PLAIN `A`/`B`/`Y` pin connections regardless of operand
+// width. `_passes_eq_width` in passes.hexa returns width=1 for cells with
+// plain `A`/`B` pins (only counts `A[<i>]` bit-indexed pins as width-N
+// evidence), so the downstream XNOR-tree lowering compared only bit 0 of
+// multi-bit operands.
+//
+// Fix: when max(wa, wb) > 1, emit the `$eq` cell with bit-indexed pin
+// connections `A[<i>]=<a_bit_net>` and `B[<i>]=<b_bit_net>` for i in 0..W
+// (W = max(wa, wb)). The Y output stays as a single 1-bit pin per the
+// IEEE 1364-2005 §5.1.7 logical-equality semantics (operands are zero-
+// extended to W bits, result is 1-bit).
+//
+// Per-bit-net resolution:
+//   - If the operand wire is registered as multi-bit AND its `<wire>__b<i>`
+//     shadow exists (added by `_rv_parse_port_decl` or this function via
+//     `_rv_ensure_bit_shadows`), use the shadow.
+//   - If the operand wire is 1-bit (or const), use the bare name for bit 0
+//     and the special `$rv_const0` net (auto-registered 1-bit internal
+//     wire, ABC ties undriven nets to const-0) for bits 1..W-1
+//     (zero-extension per IEEE 1364-2005 §5.1.8).
+//   - If the operand wire is multi-bit but no `__b<i>` shadow is registered,
+//     fall back to plain `A`/`B` pin connections (the legacy single-bit
+//     comparison path) — the multi-bit-aware lowering only fires when
+//     per-bit shadows are present, keeping the older `$eq` legacy shape
+//     for synthesised intermediate wires that lack bit-blasted drivers.
+//
+// `_rv_ensure_bit_shadows` registers `<wire>__b0`/`<wire>__b1`/.../`<wire>
+// __b<W-1>` as 1-bit dir_kind=0 internal wires (idempotent — guarded by
+// `rtlil_find_wire` lookup).
+fn _rv_ensure_bit_shadows(m_in: Module, name: str, w: int) -> Module {
+    let mut m = m_in
+    if w <= 1 { return m }
+    let mut k = 0
+    while k < w {
+        let bn = name + "__b" + str(k)
+        if rtlil_find_wire(m, bn) < 0 {
+            m = rtlil_module_add_wire(m, rtlil_wire(bn, 1, 0, 0))
+        }
+        k = k + 1
+    }
+    return m
+}
+
+// Returns ($const_0 wire name, ensuring it's registered as a 1-bit internal
+// wire — ABC auto-ties undriven nets to const-0, so this serves as the
+// zero-extension source for narrower operands of `$eq`/`$ne`.
+fn _rv_ensure_const0(m_in: Module) -> Module {
+    let mut m = m_in
+    if rtlil_find_wire(m, "$const_0") < 0 {
+        m = rtlil_module_add_wire(m, rtlil_wire("$const_0", 1, 0, 0))
+    }
+    return m
+}
+
+// Returns the per-bit net name for operand `name` at bit index `i`, given
+// recorded width `w` of the operand. When the operand wire has registered
+// per-bit shadows, uses `<name>__b<i>`. Otherwise zero-extends (1-bit
+// operand at bit 0 = bare name; bits 1..W-1 = `$const_0`).
+fn _rv_bit_pin_net(m: Module, name: str, w: int, i: int) -> str {
+    if w > 1 {
+        let bn = name + "__b" + str(i)
+        if rtlil_find_wire(m, bn) >= 0 { return bn }
+        // multi-bit operand without per-bit shadows — fall through to the
+        // zero-extension path; bit-0 returns bare name, bits 1..W-1 = $const_0
+    }
+    if i == 0 { return name }
+    return "$const_0"
+}
+
+// Emit a width-aware `$eq` or `$ne` cell. `op_cell` is "$eq" or "$ne".
+// Returns updated module + Y wire name (caller registers Y).
+fn _rv_emit_eq_ne_cell(m_in: Module, op_cell: str, a_wire: str, b_wire: str,
+                       y_wire: str, cell_name: str) -> Module {
+    let mut m = m_in
+    let wa = _rv_lookup_width(m, a_wire)
+    let wb = _rv_lookup_width(m, b_wire)
+    let mut ww = wa
+    if wb > ww { ww = wb }
+    if ww <= 1 {
+        // Legacy 1-bit path — plain A/B/Y pins.
+        let mut c = rtlil_cell(cell_name, op_cell, 0)
+        c = rtlil_cell_connect(c, "A", a_wire)
+        c = rtlil_cell_connect(c, "B", b_wire)
+        c = rtlil_cell_connect(c, "Y", y_wire)
+        m = rtlil_module_add_cell(m, c)
+        return m
+    }
+    // Multi-bit path — ensure per-bit shadows + $const_0 for zero-extension.
+    m = _rv_ensure_const0(m)
+    if wa > 1 { m = _rv_ensure_bit_shadows(m, a_wire, wa) }
+    if wb > 1 { m = _rv_ensure_bit_shadows(m, b_wire, wb) }
+    let mut c = rtlil_cell(cell_name, op_cell, 0)
+    let mut i = 0
+    while i < ww {
+        let pa = "A[" + str(i) + "]"
+        let pb = "B[" + str(i) + "]"
+        let a_net = _rv_bit_pin_net(m, a_wire, wa, i)
+        let b_net = _rv_bit_pin_net(m, b_wire, wb, i)
+        c = rtlil_cell_connect(c, pa, a_net)
+        c = rtlil_cell_connect(c, pb, b_net)
+        i = i + 1
+    }
+    c = rtlil_cell_connect(c, "Y", y_wire)
+    m = rtlil_module_add_cell(m, c)
+    return m
 }
 
 // CLEAN-ROOM: elaborate a primary — wire reference, 1'b0/1'b1 constant,
@@ -1102,11 +1238,9 @@ fn _rv_elab_primary(toks: [str], pos: int, m_in: Module, tab: SymTab) -> ElabRes
                             }
                             let _eqy = _rv_fresh_wire(m)
                             m = rtlil_module_add_wire(m, rtlil_wire(_eqy, 1, 0, 0))
-                            let mut _eqc = rtlil_cell(_eqy + "$eq", "$eq", 0)
-                            _eqc = rtlil_cell_connect(_eqc, "A", _ier.wire)
-                            _eqc = rtlil_cell_connect(_eqc, "B", _cnk)
-                            _eqc = rtlil_cell_connect(_eqc, "Y", _eqy)
-                            m = rtlil_module_add_cell(m, _eqc)
+                            // rfc_006 §5 d4 FINAL closure (2026-05-22) —
+                            // width-aware `$eq` for dyn-idx RHS demux.
+                            m = _rv_emit_eq_ne_cell(m, "$eq", _ier.wire, _cnk, _eqy, _eqy + "$eq")
                             let _muxy = _rv_fresh_wire(m)
                             m = rtlil_module_add_wire(m, rtlil_wire(_muxy, _slot_w, 0, 0))
                             let mut _muxc = rtlil_cell(_muxy + "$rd", "$mux", 0)
@@ -1163,11 +1297,20 @@ fn _rv_elab_expr(toks: [str], pos: int, m_in: Module, min_prec: int, tab: SymTab
         let wb = _rv_lookup_width(m, rhs.wire)
         let ww = _rv_binop_result_width(op, wa, wb)
         m = rtlil_module_add_wire(m, rtlil_wire(wn, ww, 0, 0))
-        let mut c = rtlil_cell(wn + "$c", cty, 0)
-        c = rtlil_cell_connect(c, "A", cur)
-        c = rtlil_cell_connect(c, "B", rhs.wire)
-        c = rtlil_cell_connect(c, "Y", wn)
-        m = rtlil_module_add_cell(m, c)
+        // rfc_006 §5 d4 FINAL closure (2026-05-22) — width-aware `$eq`/`$ne`
+        // emit. See `_rv_emit_eq_ne_cell` for rationale (Bug 1 in the inbox
+        // brief). All other binary ops keep the legacy plain-pin shape.
+        if cty == "$eq" {
+            m = _rv_emit_eq_ne_cell(m, "$eq", cur, rhs.wire, wn, wn + "$c")
+        } else if cty == "$ne" {
+            m = _rv_emit_eq_ne_cell(m, "$ne", cur, rhs.wire, wn, wn + "$c")
+        } else {
+            let mut c = rtlil_cell(wn + "$c", cty, 0)
+            c = rtlil_cell_connect(c, "A", cur)
+            c = rtlil_cell_connect(c, "B", rhs.wire)
+            c = rtlil_cell_connect(c, "Y", wn)
+            m = rtlil_module_add_cell(m, c)
+        }
         cur = wn
         i = rhs.pos
     }
@@ -3244,11 +3387,8 @@ fn _rv_emit_body_v2(
                         }
                         let eq1y = _rv_fresh_wire(m)
                         m = rtlil_module_add_wire(m, rtlil_wire(eq1y, 1, 0, 0))
-                        let mut eq1c = rtlil_cell(eq1y + "$eq", "$eq", 0)
-                        eq1c = rtlil_cell_connect(eq1c, "A", elab_idx1_w)
-                        eq1c = rtlil_cell_connect(eq1c, "B", coi)
-                        eq1c = rtlil_cell_connect(eq1c, "Y", eq1y)
-                        m = rtlil_module_add_cell(m, eq1c)
+                        // rfc_006 §5 d4 FINAL closure (2026-05-22) — width-aware $eq.
+                        m = _rv_emit_eq_ne_cell(m, "$eq", elab_idx1_w, coi, eq1y, eq1y + "$eq")
                         sel_w = eq1y
                     }
                     if static2 == 0 {
@@ -3258,11 +3398,8 @@ fn _rv_emit_body_v2(
                         }
                         let eq2y = _rv_fresh_wire(m)
                         m = rtlil_module_add_wire(m, rtlil_wire(eq2y, 1, 0, 0))
-                        let mut eq2c = rtlil_cell(eq2y + "$eq", "$eq", 0)
-                        eq2c = rtlil_cell_connect(eq2c, "A", elab_idx2_w)
-                        eq2c = rtlil_cell_connect(eq2c, "B", cii)
-                        eq2c = rtlil_cell_connect(eq2c, "Y", eq2y)
-                        m = rtlil_module_add_cell(m, eq2c)
+                        // rfc_006 §5 d4 FINAL closure (2026-05-22) — width-aware $eq.
+                        m = _rv_emit_eq_ne_cell(m, "$eq", elab_idx2_w, cii, eq2y, eq2y + "$eq")
                         if len(sel_w) == 0 {
                             sel_w = eq2y
                         } else {
@@ -3373,11 +3510,11 @@ fn _rv_emit_body_v2(
             }
             let eq_y = _rv_fresh_wire(m)
             m = rtlil_module_add_wire(m, rtlil_wire(eq_y, 1, 0, 0))
-            let mut eqc = rtlil_cell(eq_y + "$eq", "$eq", 0)
-            eqc = rtlil_cell_connect(eqc, "A", ier2.wire)
-            eqc = rtlil_cell_connect(eqc, "B", cdk)
-            eqc = rtlil_cell_connect(eqc, "Y", eq_y)
-            m = rtlil_module_add_cell(m, eqc)
+            // rfc_006 §5 d4 FINAL closure (2026-05-22) — width-aware `$eq`
+            // for dyn-idx LHS demux. When the index expression (`ier2.wire`)
+            // is multi-bit (e.g. `reg [2:0] grant_out`), emit bit-indexed
+            // pins so passes.hexa's XNOR-tree lowering compares ALL bits.
+            m = _rv_emit_eq_ne_cell(m, "$eq", ier2.wire, cdk, eq_y, eq_y + "$eq")
             let mut sel_w = eq_y
             if len(cond_wire) > 0 {
                 let en_y = _rv_fresh_wire(m)
@@ -4237,11 +4374,18 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                                     let elem = t_dyn_base + "[" + str(dk) + "]"
                                     let eq_y = _rv_fresh_wire(m)
                                     m = rtlil_module_add_wire(m, rtlil_wire(eq_y, 1, 0, 0))
-                                    let mut eqc = rtlil_cell(eq_y + "$eq", "$eq", 0)
-                                    eqc = rtlil_cell_connect(eqc, "A", ier.wire)
-                                    eqc = rtlil_cell_connect(eqc, "B", str(dk))
-                                    eqc = rtlil_cell_connect(eqc, "Y", eq_y)
-                                    m = rtlil_module_add_cell(m, eqc)
+                                    // rfc_006 §5 d4 FINAL closure (2026-05-22)
+                                    // — width-aware `$eq` for dyn-idx clocked
+                                    // LHS demux. Register the slot index as
+                                    // an internal const wire (auto-defaults
+                                    // to const-0 when not driven; ABC ties
+                                    // const wires to their numeric value
+                                    // via dfflibmap pre-stash) before emit.
+                                    let _cnkb = "$const_" + str(dk)
+                                    if rtlil_find_wire(m, _cnkb) < 0 {
+                                        m = rtlil_module_add_wire(m, rtlil_wire(_cnkb, 1, 0, 0))
+                                    }
+                                    m = _rv_emit_eq_ne_cell(m, "$eq", ier.wire, _cnkb, eq_y, eq_y + "$eq")
                                     let en_y = _rv_fresh_wire(m)
                                     m = rtlil_module_add_wire(m, rtlil_wire(en_y, 1, 0, 0))
                                     let mut andc = rtlil_cell(en_y + "$and", "$and", 0)
@@ -4403,11 +4547,13 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                                                     let elem = s[0] + "[" + str(dk) + "]"
                                                     let eq_y = _rv_fresh_wire(m)
                                                     m = rtlil_module_add_wire(m, rtlil_wire(eq_y, 1, 0, 0))
-                                                    let mut eqc = rtlil_cell(eq_y + "$eq", "$eq", 0)
-                                                    eqc = rtlil_cell_connect(eqc, "A", ier.wire)
-                                                    eqc = rtlil_cell_connect(eqc, "B", str(dk))
-                                                    eqc = rtlil_cell_connect(eqc, "Y", eq_y)
-                                                    m = rtlil_module_add_cell(m, eqc)
+                                                    // rfc_006 §5 d4 FINAL closure (2026-05-22)
+                                                    // — width-aware `$eq` for dyn-idx LHS demux.
+                                                    let _cnkc = "$const_" + str(dk)
+                                                    if rtlil_find_wire(m, _cnkc) < 0 {
+                                                        m = rtlil_module_add_wire(m, rtlil_wire(_cnkc, 1, 0, 0))
+                                                    }
+                                                    m = _rv_emit_eq_ne_cell(m, "$eq", ier.wire, _cnkc, eq_y, eq_y + "$eq")
                                                     let en_y = _rv_fresh_wire(m)
                                                     m = rtlil_module_add_wire(m, rtlil_wire(en_y, 1, 0, 0))
                                                     let mut andc = rtlil_cell(en_y + "$and", "$and", 0)
@@ -4897,8 +5043,18 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                         while _ssa_si < len(_ssa_tracked) {
                             let s = _ssa_tracked[_ssa_si]
                             let s0 = s + "__ssa0"
+                            // rfc_006 §5 d4 closure (2026-05-22) — width-aware
+                            // SSA version registration. Source signal width is
+                            // looked up via `_rv_lookup_width(m, s)`. Previously
+                            // every `__ssaN` was registered width=1, which
+                            // collapsed multi-bit registers (`reg [2:0]
+                            // grant_out`) to 1-bit at every loop iteration and
+                            // forced downstream per-bit drivers
+                            // (`grant_out__b0/b1/b2`) to all tie to the same
+                            // 1-bit SSA version (Bug 2 in the inbox brief).
+                            let _ssa_s_w = _rv_lookup_width(m, s)
                             if rtlil_find_wire(m, s0) < 0 {
-                                m = rtlil_module_add_wire(m, rtlil_wire(s0, 1, 0, 0))
+                                m = rtlil_module_add_wire(m, rtlil_wire(s0, _ssa_s_w, 0, 0))
                             }
                             let _ssa_rw = _rv_ssa_rewrite_preloop_for(m, s, _ssa_snapshot_n)
                             m = _ssa_rw.m
@@ -4924,13 +5080,18 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                             if _ssa_fcv.value == 0 { break }
                             // Per-iter default-hold: `<s>__ssa<k+1>` wire
                             // + unconditional alias to `<s>__ssa<k>`.
+                            //
+                            // rfc_006 §5 d4 closure (2026-05-22) — width-aware
+                            // per-iter SSA version. See pre-loop block above
+                            // for rationale.
                             let mut _ssa_si2 = 0
                             while _ssa_si2 < len(_ssa_tracked) {
                                 let s = _ssa_tracked[_ssa_si2]
                                 let sk = s + "__ssa" + str(_ssa_fi)
                                 let sk1 = s + "__ssa" + str(_ssa_fi + 1)
+                                let _ssa_s2_w = _rv_lookup_width(m, s)
                                 if rtlil_find_wire(m, sk1) < 0 {
-                                    m = rtlil_module_add_wire(m, rtlil_wire(sk1, 1, 0, 0))
+                                    m = rtlil_module_add_wire(m, rtlil_wire(sk1, _ssa_s2_w, 0, 0))
                                 }
                                 m = rtlil_module_connect(m, sk1, sk)
                                 _ssa_si2 = _ssa_si2 + 1
@@ -5429,21 +5590,23 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                         if idx_folded == 0 {
                             let eq1y_b = _rv_fresh_wire(m)
                             m = rtlil_module_add_wire(m, rtlil_wire(eq1y_b, 1, 0, 0))
-                            let mut eq1c_b = rtlil_cell(eq1y_b + "$eq", "$eq", 0)
-                            eq1c_b = rtlil_cell_connect(eq1c_b, "A", ier1_w_bare)
-                            eq1c_b = rtlil_cell_connect(eq1c_b, "B", str(oi_b))
-                            eq1c_b = rtlil_cell_connect(eq1c_b, "Y", eq1y_b)
-                            m = rtlil_module_add_cell(m, eq1c_b)
+                            // rfc_006 §5 d4 FINAL closure (2026-05-22) — width-aware $eq.
+                            let _coib_b = "$const_" + str(oi_b)
+                            if rtlil_find_wire(m, _coib_b) < 0 {
+                                m = rtlil_module_add_wire(m, rtlil_wire(_coib_b, 1, 0, 0))
+                            }
+                            m = _rv_emit_eq_ne_cell(m, "$eq", ier1_w_bare, _coib_b, eq1y_b, eq1y_b + "$eq")
                             sel_w_b = eq1y_b
                         }
                         if idx2_folded == 0 {
                             let eq2y_b = _rv_fresh_wire(m)
                             m = rtlil_module_add_wire(m, rtlil_wire(eq2y_b, 1, 0, 0))
-                            let mut eq2c_b = rtlil_cell(eq2y_b + "$eq", "$eq", 0)
-                            eq2c_b = rtlil_cell_connect(eq2c_b, "A", ier2_w_bare)
-                            eq2c_b = rtlil_cell_connect(eq2c_b, "B", str(ii_b))
-                            eq2c_b = rtlil_cell_connect(eq2c_b, "Y", eq2y_b)
-                            m = rtlil_module_add_cell(m, eq2c_b)
+                            // rfc_006 §5 d4 FINAL closure (2026-05-22) — width-aware $eq.
+                            let _ciib_b = "$const_" + str(ii_b)
+                            if rtlil_find_wire(m, _ciib_b) < 0 {
+                                m = rtlil_module_add_wire(m, rtlil_wire(_ciib_b, 1, 0, 0))
+                            }
+                            m = _rv_emit_eq_ne_cell(m, "$eq", ier2_w_bare, _ciib_b, eq2y_b, eq2y_b + "$eq")
                             if len(sel_w_b) == 0 {
                                 sel_w_b = eq2y_b
                             } else {
@@ -5522,11 +5685,13 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     let elem = q_base + "[" + str(dk) + "]"
                     let eq_y = _rv_fresh_wire(m)
                     m = rtlil_module_add_wire(m, rtlil_wire(eq_y, 1, 0, 0))
-                    let mut eqc = rtlil_cell(eq_y + "$eq", "$eq", 0)
-                    eqc = rtlil_cell_connect(eqc, "A", ier.wire)
-                    eqc = rtlil_cell_connect(eqc, "B", str(dk))
-                    eqc = rtlil_cell_connect(eqc, "Y", eq_y)
-                    m = rtlil_module_add_cell(m, eqc)
+                    // rfc_006 §5 d4 FINAL closure (2026-05-22) — width-aware
+                    // `$eq` for bare-path dyn-LHS demux.
+                    let _cnkd = "$const_" + str(dk)
+                    if rtlil_find_wire(m, _cnkd) < 0 {
+                        m = rtlil_module_add_wire(m, rtlil_wire(_cnkd, 1, 0, 0))
+                    }
+                    m = _rv_emit_eq_ne_cell(m, "$eq", ier.wire, _cnkd, eq_y, eq_y + "$eq")
                     let mux_y = _rv_fresh_wire(m)
                     // rfc_006 §5 Tier-1 (e) Option II — bare-path dyn-LHS
                     // demux per-slot $mux: data width = elem (array slot).
