@@ -1094,6 +1094,17 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 83: hexa_base64_encode + hexa_base64_decode
+
+- ✅ Base64 encode + decode ported. Hexa-source bit manipulation via
+  typed-int `<<`, `>>`, `&`, `|` direct emit (codegen L3938 already
+  had these in fast-path; cycle-76 enabled fn-param recognition)
+- `rt_base64_encode`: 3-byte chunks → 4 chars; tail-pad with `=`
+- `rt_base64_decode`: linear-scan dec[] table replaced with inline
+  alphabet lookup (slightly slower but eliminates static dec[256])
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,712 B
+
 ### 2026-05-21 — step 3 cycle 82: hexa_tensor_mul_scalar + hexa_hadamard
 
 - ✅ `rt_tensor_mul_scalar(a, s)` and `rt_hadamard(a, b)` ported.

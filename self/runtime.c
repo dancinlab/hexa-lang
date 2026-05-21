@@ -10590,6 +10590,8 @@ HexaVal hexa_matmul(HexaVal a, HexaVal b, HexaVal mv, HexaVal kv, HexaVal nv) {
 static const char _b64_enc[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+// Step-3 cycle 83 port — base64 encode/decode via hexa source.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_base64_encode(HexaVal s) {
     if (!HX_IS_STR(s) || !HX_STR(s)) return hexa_str("");
     const unsigned char* in = (const unsigned char*)HX_STR(s);
@@ -10646,6 +10648,18 @@ HexaVal hexa_base64_decode(HexaVal s) {
     out[j] = 0;
     return hexa_str_own(out);
 }
+#else
+extern HexaVal rt_base64_encode(HexaVal s);
+extern HexaVal rt_base64_decode(HexaVal s);
+HexaVal hexa_base64_encode(HexaVal s) {
+    if (!HX_IS_STR(s) || !HX_STR(s)) return hexa_str("");
+    return rt_base64_encode(s);
+}
+HexaVal hexa_base64_decode(HexaVal s) {
+    if (!HX_IS_STR(s) || !HX_STR(s)) return hexa_str("");
+    return rt_base64_decode(s);
+}
+#endif
 
 // ── bt 73: bare-ident HexaVal globals for transpiled builtin dispatch ──
 // Self-host codegen (self/native/hexa_cc.c gen2_expr Call fallback, ~line 5642+)
