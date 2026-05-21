@@ -6011,6 +6011,9 @@ HexaVal hexa_str_replace(HexaVal s, HexaVal old, HexaVal new_s) {
 
 // M1 full · str_ext Step 5 (hxa-20260423-003): rt_str_to_upper/lower —
 // codegen emits rt_str_* directly; hexa_str_to_upper/lower shims retired.
+// Step-3 cycle 50 — both move to hexa source. C bodies stay for the
+// no-stdlib path.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal rt_str_to_upper(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
     char* r = hxlcl_strdup(HX_STR(s));
@@ -6024,6 +6027,7 @@ HexaVal rt_str_to_lower(HexaVal s) {
     for (int i = 0; r[i]; i++) if (r[i] >= 'A' && r[i] <= 'Z') r[i] += 32;
     return hexa_str_own(r);
 }
+#endif
 
 // Step-3 cycle 43 port — float-style fast-path for all-string arrays
 // dispatches to rt_str_join_str (ctype.hexa). Mixed-type arrays still

@@ -43,6 +43,42 @@ pub fn rt_str_bytes(s: string) -> [int] {
     return out
 }
 
+// Step 3 cycle 50 — ASCII case conversion. Non-ASCII bytes pass through
+// unchanged (UTF-8 continuation bytes have high bit set, won't match
+// the 'a'-'z' or 'A'-'Z' range). Collect bytes into [int] then one-shot
+// `bytes_to_str_raw` so we avoid O(n²) string concat.
+pub fn rt_str_to_upper(s: string) -> string {
+    let n = byte_len(s)
+    let mut bytes: [int] = []
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b >= 97 && b <= 122 {
+            bytes = bytes.push(b - 32)
+        } else {
+            bytes = bytes.push(b)
+        }
+        i = i + 1
+    }
+    return bytes_to_str_raw(bytes)
+}
+
+pub fn rt_str_to_lower(s: string) -> string {
+    let n = byte_len(s)
+    let mut bytes: [int] = []
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b >= 65 && b <= 90 {
+            bytes = bytes.push(b + 32)
+        } else {
+            bytes = bytes.push(b)
+        }
+        i = i + 1
+    }
+    return bytes_to_str_raw(bytes)
+}
+
 // Step 3 cycle 49 — strip trailing whitespace (mirror of trim_start).
 pub fn rt_str_trim_end(s: string) -> string {
     let n = byte_len(s)

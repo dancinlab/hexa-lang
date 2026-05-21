@@ -1094,6 +1094,17 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 50: rt_str_to_upper + rt_str_to_lower move to hexa source
+
+- ✅ `rt_str_to_upper` + `rt_str_to_lower` (self/runtime_core.c:6010,
+  6017) move to hexa source. ASCII case conversion only; non-ASCII
+  bytes (UTF-8 continuation bytes, high bit set) pass through
+  unchanged (won't match 'a'-'z' / 'A'-'Z' byte ranges)
+- Hexa side collects bytes into `[int]` then `bytes_to_str_raw(...)`
+  one-shot to avoid O(n²) string `+` concat
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,800 B
+
 ### 2026-05-21 — step 3 cycle 49: rt_str_trim_end + rt_str_trim move to hexa source
 
 - ✅ `rt_str_trim_end` (self/runtime.c:2977) and `rt_str_trim`
