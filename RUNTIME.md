@@ -1094,6 +1094,21 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 53: hexa_str_nth_char + hexa_str_char_substring (UTF-8 codepoint ops)
+
+- ✅ `hexa_str_nth_char` (self/runtime_core.c:4278) and
+  `hexa_str_char_substring` (4301) gain two-mode dispatch. Both are
+  codepoint-indexed (not byte-indexed); the C body's `_hx_utf8_cp_len`
+  table is inlined in hexa as the same if/else-if bit-pattern checks
+  used in cycles 47/51
+- nth_char negative-target / OOB → "" matches the C body. char_substring
+  cs<0 clamp + ce≤cs → "" matches; the byte-boundary walk finds bs/be
+  via codepoint counting then a single `s.substring(bs, be)`
+- No recursion trap (cycle-52 lesson applied): the C body callers don't
+  alias into byte_at / nth_char chains
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,944 B
+
 ### 2026-05-21 — step 3 cycle 52: hexa_str_char_at + hexa_str_char_count → rt_str_*
 
 - ✅ `hexa_str_char_at` (self/runtime_core.c:4199) and

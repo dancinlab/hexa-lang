@@ -4275,6 +4275,8 @@ HexaVal hexa_str_char_count(HexaVal s) {
 
 // Codepoint-indexed nth char as a 1-codepoint string (1..4 bytes).
 // Returns "" for negative or out-of-range n.
+// Step-3 cycle 53 — dispatches to rt_str_nth_char (UTF-8 walker).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_nth_char(HexaVal s, HexaVal nv) {
     if (!HX_IS_STR(s)) return hexa_str("");
     int64_t target = HX_INT(nv);
@@ -4296,8 +4298,18 @@ HexaVal hexa_str_nth_char(HexaVal s, HexaVal nv) {
     }
     return hexa_str("");  // OOB
 }
+#else
+extern HexaVal rt_str_nth_char(HexaVal s, HexaVal target);
+HexaVal hexa_str_nth_char(HexaVal s, HexaVal nv) {
+    if (!HX_IS_STR(s)) return hexa_str("");
+    return rt_str_nth_char(s, nv);
+}
+#endif
 
 // Codepoint-indexed substring [start..end). `"한글hi".char_substring(0, 2) == "한글"`.
+// Step-3 cycle 53 — dispatches to rt_str_char_substring (UTF-8 walker
+// finds byte boundaries that correspond to the codepoint indices).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_char_substring(HexaVal s, HexaVal startv, HexaVal endv) {
     if (!HX_IS_STR(s)) return hexa_str("");
     int64_t cs = HX_INT(startv);
@@ -4325,6 +4337,13 @@ HexaVal hexa_str_char_substring(HexaVal s, HexaVal startv, HexaVal endv) {
     buf[len] = 0;
     return hexa_str_own(buf);
 }
+#else
+extern HexaVal rt_str_char_substring(HexaVal s, HexaVal cs, HexaVal ce);
+HexaVal hexa_str_char_substring(HexaVal s, HexaVal startv, HexaVal endv) {
+    if (!HX_IS_STR(s)) return hexa_str("");
+    return rt_str_char_substring(s, startv, endv);
+}
+#endif
 
 // Byte at offset i (0..255), -1 if out-of-range. Alias of char_code_at
 // (same byte-indexed semantics) — separate name because `.byte_at` is

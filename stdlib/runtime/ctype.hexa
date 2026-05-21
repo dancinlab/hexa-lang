@@ -49,6 +49,74 @@ pub fn rt_str_char_count(s: string) -> int {
     return rt_utf8_cpcount(s)
 }
 
+// Step 3 cycle 53 — codepoint-indexed nth char (1-codepoint string,
+// 1..4 bytes). Negative target or OOB returns "". Inlines the same
+// UTF-8 bit-pattern table as rt_utf8_cpcount (cycle 51).
+pub fn rt_str_nth_char(s: string, target: int) -> string {
+    if target < 0 { return "" }
+    let sn = byte_len(s)
+    let mut i = 0
+    let mut k = 0
+    while i < sn {
+        let b = s.byte_at(i)
+        let mut cp = 1
+        if (b & 0x80) == 0 {
+            cp = 1
+        } else if (b & 0xE0) == 0xC0 {
+            cp = 2
+        } else if (b & 0xF0) == 0xE0 {
+            cp = 3
+        } else if (b & 0xF8) == 0xF0 {
+            cp = 4
+        }
+        if k == target {
+            let mut end = i + cp
+            if end > sn { end = sn }
+            return s.substring(i, end)
+        }
+        i = i + cp
+        k = k + 1
+    }
+    return ""
+}
+
+// Step 3 cycle 53 — codepoint-indexed substring [cs..ce). Walks UTF-8
+// to find the byte boundaries that correspond to the requested
+// codepoint indices. cs < 0 clamps to 0; ce ≤ cs returns "". Empty
+// result if cs is beyond the string.
+pub fn rt_str_char_substring(s: string, startv: int, endv: int) -> string {
+    let mut cs = startv
+    let ce = endv
+    if cs < 0 { cs = 0 }
+    if ce <= cs { return "" }
+    let sn = byte_len(s)
+    let mut i = 0
+    let mut k = 0
+    let mut bs = -1
+    let mut be = sn
+    while i < sn {
+        if k == cs && bs < 0 { bs = i }
+        if k == ce { be = i; break }
+        let b = s.byte_at(i)
+        let mut cp = 1
+        if (b & 0x80) == 0 {
+            cp = 1
+        } else if (b & 0xE0) == 0xC0 {
+            cp = 2
+        } else if (b & 0xF0) == 0xE0 {
+            cp = 3
+        } else if (b & 0xF8) == 0xF0 {
+            cp = 4
+        }
+        i = i + cp
+        k = k + 1
+    }
+    if bs < 0 { return "" }
+    if be > sn { be = sn }
+    if be <= bs { return "" }
+    return s.substring(bs, be)
+}
+
 // Step 3 cycle 52 — byte-indexed `.char_at(i)` with Python-style
 // negative-index wraparound. Returns "" on OOB.
 // (Note: hexa_str_char_code_at is intentionally NOT ported — see the
