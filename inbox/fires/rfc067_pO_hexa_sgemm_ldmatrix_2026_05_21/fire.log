@@ -1,0 +1,38 @@
+cuModuleLoadDataEx sgemm_ldmatrix_256x256_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 247; error   : Unexpected instruction types specified for 'wmma.mma'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_ldmatrix_384x384_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 247; error   : Unexpected instruction types specified for 'wmma.mma'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_ldmatrix_512x512_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 247; error   : Unexpected instruction types specified for 'wmma.mma'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_ldmatrix_768x768_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 247; error   : Unexpected instruction types specified for 'wmma.mma'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_ldmatrix_1024x1024_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 247; error   : Unexpected instruction types specified for 'wmma.mma'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_ldmatrix_1536x1536_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 247; error   : Unexpected instruction types specified for 'wmma.mma'
+ptxas fatal   : Ptx assembly aborted due to errors
+Device: NVIDIA GeForce RTX 5070 sm_120
+CUDA driver=13000 runtime=12000
+FAILED hexa-ldmatrix PTX shape 256 -- skipping
+FAILED hexa-ldmatrix PTX shape 384 -- skipping
+FAILED hexa-ldmatrix PTX shape 512 -- skipping
+FAILED hexa-ldmatrix PTX shape 768 -- skipping
+FAILED hexa-ldmatrix PTX shape 1024 -- skipping
+FAILED hexa-ldmatrix PTX shape 1536 -- skipping
+[M= 256] cuBLAS HGEMM            median=0.007120 ms  std=0.001106  min=0.005056  max=0.013792  TFLOPS=  4.7127
+[M= 256] hexa-ldmatrix HGEMM     SKIPPED -- PTX load/lookup failed for sgemm_ldmatrix_256x256_grid.ptx
+[M= 384] cuBLAS HGEMM            median=0.008704 ms  std=0.000546  min=0.007200  max=0.010752  TFLOPS= 13.0108
+[M= 384] hexa-ldmatrix HGEMM     SKIPPED -- PTX load/lookup failed for sgemm_ldmatrix_384x384_grid.ptx
+[M= 512] cuBLAS HGEMM            median=0.010752 ms  std=0.001006  min=0.010432  max=0.023008  TFLOPS= 24.9661
+[M= 512] hexa-ldmatrix HGEMM     SKIPPED -- PTX load/lookup failed for sgemm_ldmatrix_512x512_grid.ptx
+[M= 768] cuBLAS HGEMM            median=0.019008 ms  std=0.000295  min=0.018656  max=0.020000  TFLOPS= 47.6625
+[M= 768] hexa-ldmatrix HGEMM     SKIPPED -- PTX load/lookup failed for sgemm_ldmatrix_768x768_grid.ptx
+[M=1024] cuBLAS HGEMM            median=0.039520 ms  std=0.000660  min=0.038528  max=0.043456  TFLOPS= 54.3392
+[M=1024] hexa-ldmatrix HGEMM     SKIPPED -- PTX load/lookup failed for sgemm_ldmatrix_1024x1024_grid.ptx
+[M=1536] cuBLAS HGEMM            median=0.108848 ms  std=0.000998  min=0.106816  max=0.110208  TFLOPS= 66.5860
+[M=1536] hexa-ldmatrix HGEMM     SKIPPED -- PTX load/lookup failed for sgemm_ldmatrix_1536x1536_grid.ptx

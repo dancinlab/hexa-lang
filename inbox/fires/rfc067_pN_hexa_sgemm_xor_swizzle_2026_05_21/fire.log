@@ -1,0 +1,92 @@
+cuModuleLoadDataEx sgemm_xor_swizzle_256x256_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 299; error   : Arguments mismatch for instruction 'ld'
+ptxas application ptx input, line 304; error   : Arguments mismatch for instruction 'ld'
+ptxas application ptx input, line 317; error   : Illegal expression '%rb20'
+ptxas application ptx input, line 317; error   : Illegal expression '%rb21'
+ptxas application ptx input, line 317; error   : Unable to infer type of vector elements (assuming .b8)
+ptxas application ptx input, line 314; error   : Arguments mismatch for instruction 'mma'
+ptxas application ptx input, line 299; error   : Unknown symbol '%rb20'
+ptxas application ptx input, line 304; error   : Unknown symbol '%rb21'
+ptxas application ptx input, line 317; error   : Unknown symbol '%rb20'
+ptxas application ptx input, line 317; error   : Unknown symbol '%rb21'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_xor_swizzle_384x384_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 299; error   : Arguments mismatch for instruction 'ld'
+ptxas application ptx input, line 304; error   : Arguments mismatch for instruction 'ld'
+ptxas application ptx input, line 317; error   : Illegal expression '%rb20'
+ptxas application ptx input, line 317; error   : Illegal expression '%rb21'
+ptxas application ptx input, line 317; error   : Unable to infer type of vector elements (assuming .b8)
+ptxas application ptx input, line 314; error   : Arguments mismatch for instruction 'mma'
+ptxas application ptx input, line 299; error   : Unknown symbol '%rb20'
+ptxas application ptx input, line 304; error   : Unknown symbol '%rb21'
+ptxas application ptx input, line 317; error   : Unknown symbol '%rb20'
+ptxas application ptx input, line 317; error   : Unknown symbol '%rb21'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_xor_swizzle_512x512_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 299; error   : Arguments mismatch for instruction 'ld'
+ptxas application ptx input, line 304; error   : Arguments mismatch for instruction 'ld'
+ptxas application ptx input, line 317; error   : Illegal expression '%rb20'
+ptxas application ptx input, line 317; error   : Illegal expression '%rb21'
+ptxas application ptx input, line 317; error   : Unable to infer type of vector elements (assuming .b8)
+ptxas application ptx input, line 314; error   : Arguments mismatch for instruction 'mma'
+ptxas application ptx input, line 299; error   : Unknown symbol '%rb20'
+ptxas application ptx input, line 304; error   : Unknown symbol '%rb21'
+ptxas application ptx input, line 317; error   : Unknown symbol '%rb20'
+ptxas application ptx input, line 317; error   : Unknown symbol '%rb21'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_xor_swizzle_768x768_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 299; error   : Arguments mismatch for instruction 'ld'
+ptxas application ptx input, line 304; error   : Arguments mismatch for instruction 'ld'
+ptxas application ptx input, line 317; error   : Illegal expression '%rb20'
+ptxas application ptx input, line 317; error   : Illegal expression '%rb21'
+ptxas application ptx input, line 317; error   : Unable to infer type of vector elements (assuming .b8)
+ptxas application ptx input, line 314; error   : Arguments mismatch for instruction 'mma'
+ptxas application ptx input, line 299; error   : Unknown symbol '%rb20'
+ptxas application ptx input, line 304; error   : Unknown symbol '%rb21'
+ptxas application ptx input, line 317; error   : Unknown symbol '%rb20'
+ptxas application ptx input, line 317; error   : Unknown symbol '%rb21'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_xor_swizzle_1024x1024_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 299; error   : Arguments mismatch for instruction 'ld'
+ptxas application ptx input, line 304; error   : Arguments mismatch for instruction 'ld'
+ptxas application ptx input, line 317; error   : Illegal expression '%rb20'
+ptxas application ptx input, line 317; error   : Illegal expression '%rb21'
+ptxas application ptx input, line 317; error   : Unable to infer type of vector elements (assuming .b8)
+ptxas application ptx input, line 314; error   : Arguments mismatch for instruction 'mma'
+ptxas application ptx input, line 299; error   : Unknown symbol '%rb20'
+ptxas application ptx input, line 304; error   : Unknown symbol '%rb21'
+ptxas application ptx input, line 317; error   : Unknown symbol '%rb20'
+ptxas application ptx input, line 317; error   : Unknown symbol '%rb21'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_xor_swizzle_1536x1536_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 299; error   : Arguments mismatch for instruction 'ld'
+ptxas application ptx input, line 304; error   : Arguments mismatch for instruction 'ld'
+ptxas application ptx input, line 317; error   : Illegal expression '%rb20'
+ptxas application ptx input, line 317; error   : Illegal expression '%rb21'
+ptxas application ptx input, line 317; error   : Unable to infer type of vector elements (assuming .b8)
+ptxas application ptx input, line 314; error   : Arguments mismatch for instruction 'mma'
+ptxas application ptx input, line 299; error   : Unknown symbol '%rb20'
+ptxas application ptx input, line 304; error   : Unknown symbol '%rb21'
+ptxas application ptx input, line 317; error   : Unknown symbol '%rb20'
+ptxas application ptx input, line 317; error   : Unknown symbol '%rb21'
+ptxas fatal   : Ptx assembly aborted due to errors
+Device: NVIDIA GeForce RTX 5070 sm_120
+CUDA driver=13000 runtime=12000
+FAILED hexa-xor-swizzle PTX shape 256 -- skipping
+FAILED hexa-xor-swizzle PTX shape 384 -- skipping
+FAILED hexa-xor-swizzle PTX shape 512 -- skipping
+FAILED hexa-xor-swizzle PTX shape 768 -- skipping
+FAILED hexa-xor-swizzle PTX shape 1024 -- skipping
+FAILED hexa-xor-swizzle PTX shape 1536 -- skipping
+[M= 256] cuBLAS SGEMM            median=0.008672 ms  std=0.000934  min=0.007168  max=0.015680  TFLOPS=  3.8693
+[M= 256] hexa-xor-swizzle SGEMM   SKIPPED -- PTX load/lookup failed for sgemm_xor_swizzle_256x256_grid.ptx
+[M= 384] cuBLAS SGEMM            median=0.010752 ms  std=0.000864  min=0.008160  max=0.017824  TFLOPS= 10.5326
+[M= 384] hexa-xor-swizzle SGEMM   SKIPPED -- PTX load/lookup failed for sgemm_xor_swizzle_384x384_grid.ptx
+[M= 512] cuBLAS SGEMM            median=0.016960 ms  std=0.000434  min=0.016352  max=0.019008  TFLOPS= 15.8276
+[M= 512] hexa-xor-swizzle SGEMM   SKIPPED -- PTX load/lookup failed for sgemm_xor_swizzle_512x512_grid.ptx
+[M= 768] cuBLAS SGEMM            median=0.039552 ms  std=0.000877  min=0.038560  max=0.050688  TFLOPS= 22.9058
+[M= 768] hexa-xor-swizzle SGEMM   SKIPPED -- PTX load/lookup failed for sgemm_xor_swizzle_768x768_grid.ptx
+[M=1024] cuBLAS SGEMM            median=0.096864 ms  std=0.000646  min=0.094848  max=0.104064  TFLOPS= 22.1701
+[M=1024] hexa-xor-swizzle SGEMM   SKIPPED -- PTX load/lookup failed for sgemm_xor_swizzle_1024x1024_grid.ptx
+[M=1536] cuBLAS SGEMM            median=0.218720 ms  std=0.000736  min=0.217184  max=0.221760  TFLOPS= 33.1371
+[M=1536] hexa-xor-swizzle SGEMM   SKIPPED -- PTX load/lookup failed for sgemm_xor_swizzle_1536x1536_grid.ptx
