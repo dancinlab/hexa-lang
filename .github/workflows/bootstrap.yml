@@ -63,8 +63,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p self/native build/stage1
+          # runtime.c #include's runtime_core.c (line 1211), so a single
+          # extra C input suffices to resolve the 66 undefined symbols
+          # (hexa_int / hexa_str / hexa_array_new / __hexa_fn_arena_*).
           clang -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self self/native/hexa_cc.c \
+              -I self self/native/hexa_cc.c self/runtime.c \
               -o self/native/hexa_v2
           file self/native/hexa_v2
           ls -la self/native/hexa_v2
@@ -81,7 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           clang -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self build/stage1/main.c \
+              -I self build/stage1/main.c self/runtime.c \
               -o hexa
           file hexa
           ls -la hexa
@@ -99,7 +102,7 @@ jobs:
           HEXA_EOF
           ./self/native/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
           clang -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self /tmp/hexa_ci/hi.c -o /tmp/hexa_ci/hi
+              -I self /tmp/hexa_ci/hi.c self/runtime.c -o /tmp/hexa_ci/hi
           OUT="$(/tmp/hexa_ci/hi)"
           echo "smoke output: $OUT"
           [[ "$OUT" == "ok" ]] || { echo "::error::smoke failed (got '$OUT')"; exit 1; }
@@ -147,8 +150,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p self/native build/stage1
+          # runtime.c #include's runtime_core.c (line 1211), so a single
+          # extra C input suffices to resolve the 66 undefined symbols
+          # (hexa_int / hexa_str / hexa_array_new / __hexa_fn_arena_*).
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self self/native/hexa_cc.c \
+              -I self self/native/hexa_cc.c self/runtime.c \
               -o self/native/hexa_v2 \
               -lm -ldl
           file self/native/hexa_v2
@@ -165,7 +171,7 @@ jobs:
         run: |
           set -euo pipefail
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self build/stage1/main.c \
+              -I self build/stage1/main.c self/runtime.c \
               -o hexa \
               -lm -ldl
           file hexa
@@ -184,7 +190,7 @@ jobs:
           HEXA_EOF
           ./self/native/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self /tmp/hexa_ci/hi.c -o /tmp/hexa_ci/hi \
+              -I self /tmp/hexa_ci/hi.c self/runtime.c -o /tmp/hexa_ci/hi \
               -lm -ldl
           OUT="$(/tmp/hexa_ci/hi)"
           echo "smoke output: $OUT"
@@ -235,8 +241,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p self/native build/stage1
+          # runtime.c #include's runtime_core.c (line 1211), so a single
+          # extra C input suffices to resolve the 66 undefined symbols
+          # (hexa_int / hexa_str / hexa_array_new / __hexa_fn_arena_*).
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self self/native/hexa_cc.c \
+              -I self self/native/hexa_cc.c self/runtime.c \
               -o self/native/hexa_v2 \
               -lm -ldl
           file self/native/hexa_v2
@@ -247,7 +256,7 @@ jobs:
           set -euo pipefail
           ./self/native/hexa_v2 self/main.hexa build/stage1/main.c
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self build/stage1/main.c \
+              -I self build/stage1/main.c self/runtime.c \
               -o hexa \
               -lm -ldl
           file hexa
@@ -265,7 +274,7 @@ jobs:
           HEXA_EOF
           ./self/native/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self /tmp/hexa_ci/hi.c -o /tmp/hexa_ci/hi \
+              -I self /tmp/hexa_ci/hi.c self/runtime.c -o /tmp/hexa_ci/hi \
               -lm -ldl
           OUT="$(/tmp/hexa_ci/hi)"
           echo "smoke output: $OUT"
