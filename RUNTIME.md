@@ -1094,6 +1094,22 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 44: hexa_str_replace → rt_str_replace
+
+- ✅ `hexa_str_replace` (self/runtime_core.c:5940) ported. Walks `s`
+  byte-by-byte; at each position, either matches `old` and emits
+  `new_s` (advancing by `olen`) or copies 1 byte (advancing by 1)
+- Empty `old` short-circuits to `s` (matches C body's `oldlen == 0`
+  semantics — no infinite loop)
+- `old` / `new_s` non-str guard stays C-side (hexa `[string]` typing
+  doesn't carry runtime-tag info); only the all-string success path
+  reaches `rt_str_replace`
+- Hexa path is O(n·m) (byte-by-byte match, no strstr) and uses `+`
+  concat (no preallocated buffer). Acceptable trade-off for the
+  hexa-native landing — matches the cycle-2/4 precision/perf budget
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,160 B
+
 ### 2026-05-21 — step 3 cycle 43: hexa_str_join → rt_str_join_str (all-string fast path)
 
 - ✅ `hexa_str_join` (self/runtime_core.c:5987) gains two-mode dispatch.

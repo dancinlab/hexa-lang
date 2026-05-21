@@ -5937,6 +5937,12 @@ HexaVal rt_str_trim(HexaVal s) {
     return hexa_str_own(result);
 }
 
+// Step-3 cycle 44 port — string replace-all dispatches to rt_str_replace
+// in stdlib/runtime/ctype.hexa. The hexa path is O(n*m) (no strstr;
+// byte-by-byte match) and uses `+` concat (no preallocated buffer);
+// acceptable trade-off for hexa-native landing, matches the cycle-
+// 2/4 precision/perf budget.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_replace(HexaVal s, HexaVal old, HexaVal new_s) {
     if (!HX_IS_STR(s)) return s;
     size_t cap = HX_STRLEN(s) * 2 + 1;
@@ -5967,6 +5973,14 @@ HexaVal hexa_str_replace(HexaVal s, HexaVal old, HexaVal new_s) {
     }
     return hexa_str_own(result);
 }
+#else
+extern HexaVal rt_str_replace(HexaVal s, HexaVal old, HexaVal new_s);
+HexaVal hexa_str_replace(HexaVal s, HexaVal old, HexaVal new_s) {
+    if (!HX_IS_STR(s)) return s;
+    if (!HX_IS_STR(old) || !HX_IS_STR(new_s)) return s;
+    return rt_str_replace(s, old, new_s);
+}
+#endif
 
 // M1 full · str_ext Step 5 (hxa-20260423-003): rt_str_to_upper/lower —
 // codegen emits rt_str_* directly; hexa_str_to_upper/lower shims retired.

@@ -43,6 +43,42 @@ pub fn rt_str_bytes(s: string) -> [int] {
     return out
 }
 
+// Step 3 cycle 44 — string replace-all-occurrences. Walks `s` byte by
+// byte; on each position checks whether `old` matches and either emits
+// `new_s` (advancing by olen) or copies one byte (advancing by 1).
+// Empty `old` returns `s` unchanged (matches C body's no-op guard via
+// `oldlen == 0` would loop forever otherwise).
+pub fn rt_str_replace(s: string, old: string, new_s: string) -> string {
+    let slen = byte_len(s)
+    let olen = byte_len(old)
+    if olen == 0 { return s }
+    let mut out = ""
+    let mut i = 0
+    while i + olen <= slen {
+        let mut k = 0
+        let mut matched = true
+        while k < olen {
+            if s.byte_at(i + k) != old.byte_at(k) {
+                matched = false
+                k = olen
+            } else {
+                k = k + 1
+            }
+        }
+        if matched {
+            out = out + new_s
+            i = i + olen
+        } else {
+            out = out + s.substring(i, i + 1)
+            i = i + 1
+        }
+    }
+    if i < slen {
+        out = out + s.substring(i, slen)
+    }
+    return out
+}
+
 // Step 3 cycle 43 — string join, all-string fast path. C body uses
 // hexa_to_string() to coerce mixed-type elements; this hexa-source
 // variant skips that and assumes every element is already a string
