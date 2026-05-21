@@ -9,9 +9,6 @@
 #      (the existing PR #214 composite kernel staged on ubu-2)
 #   3. Capture stdout/stderr to fire.log, result.json from host.
 #
-# All actions wrapped via `SIDECAR_NO_POOL=1` from the caller side to
-# avoid wilson-pool routing the SSH command back to itself.
-#
 # Usage: bash measure.sh
 
 set -euo pipefail

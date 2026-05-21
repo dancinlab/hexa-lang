@@ -7924,7 +7924,7 @@ Dup-race precheck (per `feedback_inbox_dup_race_precheck.md`): `git log --all --
 
 K2 SSOT (`1e82ef95`) 후 deploy 시도 — 결과 ABORT.
 
-**Attempt**: `SIDECAR_NO_POOL=1 HEXA_LANG=<worktree> HEXA_MAC_BUILD_OK=1 bash tool/build_hexa_cli.sh`. driver rebuild 의 첫 단계 (hexa_v2 transpile `self/main.hexa` → `build/stage1/main_native.c` 19 errors) FAIL.
+**Attempt**: `HEXA_LANG=<worktree> HEXA_MAC_BUILD_OK=1 bash tool/build_hexa_cli.sh`. driver rebuild 의 첫 단계 (hexa_v2 transpile `self/main.hexa` → `build/stage1/main_native.c` 19 errors) FAIL.
 
 **Failure mode (19 errors, sample)**:
 

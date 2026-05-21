@@ -33,7 +33,7 @@ done
 HOSTS=("ubu-2" "ubu-2-ts" "ubu2-d")
 PICKED=""
 for h in "${HOSTS[@]}"; do
-    if SIDECAR_NO_POOL=1 ssh -o ConnectTimeout=5 -o BatchMode=yes "$h" 'echo ok' >/dev/null 2>&1; then
+    if ssh -o ConnectTimeout=5 -o BatchMode=yes "$h" 'echo ok' >/dev/null 2>&1; then
         PICKED="$h"
         echo "[fire] reachable via $h" >&2
         break
@@ -42,11 +42,11 @@ done
 [ -n "$PICKED" ] || { echo "[fire] OFFLINE: no route to ubu-2" >&2; exit 3; }
 
 # 3. Upload artifacts
-SIDECAR_NO_POOL=1 scp "$PTX"    "$PICKED:$REMOTE_PTX"
-SIDECAR_NO_POOL=1 scp "$HOST_C" "$PICKED:/tmp/host_vec_add_scale.c"
+scp "$PTX"    "$PICKED:$REMOTE_PTX"
+scp "$HOST_C" "$PICKED:/tmp/host_vec_add_scale.c"
 
 # 4. Build host binary on ubu-2 + fire
-SIDECAR_NO_POOL=1 ssh "$PICKED" bash -s <<'REMOTE_EOF' > result.json 2> fire.log
+ssh "$PICKED" bash -s <<'REMOTE_EOF' > result.json 2> fire.log
 set -e
 cd /tmp
 echo "remote-host: $(hostname)" >&2

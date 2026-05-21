@@ -8,7 +8,7 @@
   "result": "PASS",
   "build": {
     "cmd": "hexa build self/main.hexa -o /tmp/hexa_pathb_probe4",
-    "env": "SIDECAR_NO_POOL=1 HEXA_MAC_BUILD_OK=1 HEXA_MODULE_LOADER=$(pwd)/build/hexa_module_loader",
+    "env": "HEXA_MAC_BUILD_OK=1 HEXA_MODULE_LOADER=$(pwd)/build/hexa_module_loader",
     "rc": 0,
     "binary_size_bytes": 1552128,
     "wall_seconds_lt": 90,
