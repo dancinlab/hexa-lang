@@ -1,0 +1,175 @@
+#!hexa strict
+// molecular_glue/module/molecular_glue.hexa — MOLECULAR-GLUE sub-axis verb
+//
+// LAYER: SUB-AXIS, NOT a hexa-bio core-5 axis. MOLECULAR-GLUE
+//        `:> BIFUNCTIONAL` (expansion-MAIN) per AXIS/HIERARCHY.tape
+//        `@D sub_under_bifunctional`. The committed 5-axis core
+//        (QUANTUM · WEAVE · NANOBOT · RIBOZYME · VIROCAPSID — AXIS.tape)
+//        is UNCHANGED.
+//
+// HEXA-family role: a *monovalent* small molecule — NO bivalent linker
+// (unlike a PROTAC). It binds one partner (typically the target /
+// neosubstrate) with appreciable affinity, has only marginal intrinsic
+// affinity for the other partner (the E3 ligase), and works by
+// remodelling the surface so that a NEW protein-protein interface is
+// created. The ternary complex Target·Glue·E3 is held together
+// cooperatively — the glue's grip on one partner PLUS the glue-induced
+// target↔E3 contact. Specializes the parent BIFUNCTIONAL axis as its
+// monovalent, neo-interface-nucleating limiting case. Own modality
+// precedent (g3/f1, never lattice-fit): lenalidomide / thalidomide
+// (CRBN glues → IKZF1/3, Krönke et al. Science 2014;343:301; Lu et al.
+// Science 2014;343:305 — FDA-APPROVED); indisulam (DCAF15 glue → RBM39,
+// Han et al. Science 2017;356:eaal3755; Uehara et al. Nat Chem Biol
+// 2017;13:675).
+//
+// Real-limit anchor (AGENTS.tape g1 real-limits-first):
+//   - cooperative ternary-complex equilibrium — mass-action with a
+//     cooperativity factor alpha; detailed balance of the assembly
+//     thermodynamic cycle (glue-first vs PPI-first must give the same
+//     ternary occupancy)
+//     (Douglass et al., J Am Chem Soc 2013;135:6092 — three-body
+//      cooperativity formalism; Han, Drug Discov Today 2020;25:1832 —
+//      glue/PROTAC ternary refinement; Guldberg & Waage 1864 —
+//      mass-action law)
+//
+// n=6 lattice stance (g2/f_lattice_fit): the defining glue signature
+// — neither binary occupancy sufficient yet the cooperative ternary
+// occupancy high — is a consequence of alpha ≫ 1 in the mass-action
+// equilibrium. Neither alpha, nor K_glue, nor K_PPI, nor the ternary
+// occupancy is derived from the n=6 lattice. The "2 partners glued by
+// 1 molecule = 3" count is the modality's definition, not a lattice
+// scalar.
+//
+// In-silico scope (g8/f2): a PASS verifies IN-SILICO simulator+metadata
+// consistency ONLY (cooperative-ternary mass-action; thermodynamic-cycle
+// detailed-balance; "neither binary sufficient" glue signature). Although
+// lenalidomide / thalidomide are FDA-approved, this module makes NO
+// clinical claim — it verifies only equilibrium-model self-consistency.
+// The MOLECULAR-GLUE sub-axis is scientifically UNPROVEN at the wet-lab
+// boundary FOR ANY SPECIFIC NEW COMPOUND.
+//
+// Sentinels:
+//   __HEXA_BIO_MOLECULAR_GLUE__ PASS    — verb loaded + status printed
+//   Python sim prints __MOLECULAR_GLUE__ PASS|FAIL (source-of-truth)
+
+let VERSION = "1.0.0"
+let MODULE  = "molecular_glue"
+let LAYER   = "sub-axis :> BIFUNCTIONAL (NOT core-5)"
+
+fn _root() -> str {
+    let r = env("HEXA_BIO_ROOT")
+    if r.len() > 0 { return r }
+    let inferred = exec("dirname \"$(dirname \"$(dirname \"$0\")\")\" 2>/dev/null || true").trim()
+    if inferred.len() > 0 { return inferred }
+    return env("HOME") + "/.hexa-bio"  // @allow-devpath
+}
+
+fn _sim_path() -> str {
+    return _root() + "/_python_bridge/module/molecular_glue_sim.py"
+}
+
+fn _print_status() {
+    println("  status: SUB-AXIS v" + VERSION + " (NOT core-5)")
+    println("          parent: BIFUNCTIONAL (expansion-MAIN)")
+    println("          AXIS/HIERARCHY.tape @D sub_under_bifunctional;")
+    println("          AXIS.tape core-5 SSOT UNCHANGED")
+}
+
+fn _print_modality() {
+    println("  MOLECULAR-GLUE modality — own precedent (g3/f1, never lattice-fit):")
+    println("    lenalidomide /          CRBN glue -> IKZF1/3   FDA-approved")
+    println("    thalidomide             Kronke et al. Science 2014;343:301")
+    println("                            Lu et al.    Science 2014;343:305")
+    println("    indisulam               DCAF15 glue -> RBM39   clinical")
+    println("                            Han et al.   Science 2017;356:eaal3755")
+    println("                            Uehara et al. Nat Chem Biol 2017;13:675")
+}
+
+fn _print_real_limits() {
+    println("  real-limit anchors (AGENTS.tape g1 — real-limits-first):")
+    println("    cooperative ternary-complex equilibrium + detailed balance")
+    println("      (Douglass et al., J Am Chem Soc 2013;135:6092-6099 —")
+    println("       three-body cooperativity formalism;")
+    println("       Han, Drug Discov Today 2020;25:1832-1842 —")
+    println("       glue/PROTAC ternary refinement;")
+    println("       Guldberg & Waage, 1864 — mass-action law)")
+    println("    the two assembly paths (glue-first vs PPI-first) MUST yield")
+    println("    the same ternary occupancy (thermodynamic-cycle consistency)")
+}
+
+fn _print_lattice_stance() {
+    println("  n=6 lattice stance (g2/f_lattice_fit): the defining glue")
+    println("  signature — neither binary occupancy sufficient, yet the")
+    println("  cooperative ternary occupancy high — is a consequence of")
+    println("  alpha >> 1 in mass-action equilibrium. Neither alpha, nor")
+    println("  K_glue, nor K_PPI, nor the ternary occupancy is derived from")
+    println("  the n=6 lattice. '2 partners + 1 glue = 3' is the modality's")
+    println("  definition, NOT a lattice scalar.")
+}
+
+fn _print_in_silico_caveat() {
+    println("  in-silico scope (g8/f2): a PASS verifies IN-SILICO simulator +")
+    println("  metadata consistency ONLY (cooperative-ternary mass-action;")
+    println("  thermodynamic-cycle detailed-balance; 'neither binary")
+    println("  sufficient' glue signature). Although lenalidomide/thalidomide")
+    println("  are FDA-approved, this module makes NO clinical claim — it")
+    println("  verifies only equilibrium-model self-consistency. The")
+    println("  MOLECULAR-GLUE sub-axis is scientifically UNPROVEN at the")
+    println("  wet-lab boundary FOR ANY SPECIFIC NEW COMPOUND.")
+}
+
+fn _print_sim_pointer() {
+    println("  source-of-truth sim (Python, stdlib-only, deterministic):")
+    println("    " + _sim_path())
+    println("    run: python3 _python_bridge/module/molecular_glue_sim.py")
+}
+
+fn cmd_molecular_glue(args: [str]) {
+    println("hexa-bio " + MODULE + " " + VERSION + " — monovalent neo-interface degrader (sub-axis)")
+    println("")
+
+    let mut show_sim = false
+    let mut i = 0
+    while i < args.len() {
+        if args[i] == "--sim" { show_sim = true }
+        i = i + 1
+    }
+
+    _print_status()
+    println("")
+    _print_modality()
+    println("")
+    _print_real_limits()
+    println("")
+    _print_lattice_stance()
+    println("")
+    _print_in_silico_caveat()
+    if show_sim {
+        println("")
+        _print_sim_pointer()
+    }
+    println("")
+    println("usage: hexa-bio molecular_glue [--sim]")
+    println("[molecular_glue] verb is announce/status only; the Python sim")
+    println("[molecular_glue] is the in-silico source-of-truth (see --sim)")
+    println("__HEXA_BIO_MOLECULAR_GLUE__ PASS")
+}
+
+fn main() {
+    let raw = args()
+    let mut user: [str] = []
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut start = 1
+    if sidx >= 0 { start = sidx + 1 }
+    let mut k = start
+    while k < raw.len() {
+        user = user + [raw[k]]
+        k = k + 1
+    }
+    cmd_molecular_glue(user)
+}

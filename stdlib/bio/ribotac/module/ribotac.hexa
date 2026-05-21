@@ -1,0 +1,163 @@
+#!hexa strict
+// ribotac/module/ribotac.hexa — RIBOTAC sub-axis verb
+//
+// LAYER: SUB-AXIS, NOT a hexa-bio core-5 axis. RIBOTAC `:> BIFUNCTIONAL`
+//        (expansion-MAIN) per AXIS/HIERARCHY.tape `@D sub_under_bifunctional`.
+//        Soft cross-axis dependence on the core RIBOZYME axis
+//        (`?> RIBOZYME` — both effect multiple-turnover catalytic RNA
+//        cleavage; ribotac_sim.py imports ribozyme_mfe_nussinov.nussinov
+//        rather than forking it — forbidden-pattern f3). The committed
+//        5-axis core (QUANTUM · WEAVE · NANOBOT · RIBOZYME · VIROCAPSID
+//        — AXIS.tape) is UNCHANGED.
+//
+// HEXA-family role: RIBOnuclease-TArgeting Chimera — a bifunctional small
+// molecule whose two warheads bind (a) a structured RNA target and (b)
+// the endogenous latent ribonuclease RNase-L. The Target·R·RNase-L
+// ternary complex is event-driven: RNase-L catalytically cleaves the
+// bound RNA and the RIBOTAC is released to act again — multiple-turnover
+// catalysis on RNA (vs a stoichiometric RNA binder). Own modality
+// precedent (g3/f1, never lattice-fit): Costales et al., JACS
+// 2018;140:6741 (first RNase-L-recruiting heterobifunctional, Disney
+// lab); Costales et al., PNAS 2020;117:2406 (pre-miR-21 RIBOTAC).
+//
+// Real-limit anchors (AGENTS.tape g1 real-limits-first):
+//   - mass-action law (Guldberg & Waage 1864) — every binary / ternary
+//     occupancy is a closed-form mass-action solution; no occupancy > 1
+//   - catalytic multiple-turnover limit (Cornish-Bowden, Fundamentals
+//     of Enzyme Kinetics, 4th ed. 2012) — turnover number N = k_cat ·
+//     t_exposure must exceed 1 for the catalytic-advantage claim
+//
+// n=6 lattice stance (g2/f_lattice_fit): the ternary complex has three
+// bodies (RNA, RIBOTAC, RNase-L) because the modality bridges one RNA
+// and one nuclease; turnover is an enzyme-kinetics product k_cat·t.
+// Neither alpha, nor K_d, nor k_cat, nor turnover N is derived from the
+// n=6 lattice.
+//
+// In-silico scope (g8/f2): a PASS verifies IN-SILICO simulator+metadata
+// consistency ONLY (mass-action ternary fractions; turnover number;
+// catalytic-advantage gate). NEVER a binding-affinity, knockdown,
+// immunogenic, regulatory, or therapeutic-efficacy claim. RIBOTAC is
+// research-stage — no FDA approval. The RIBOTAC sub-axis is
+// scientifically UNPROVEN at the wet-lab boundary.
+//
+// Sentinels:
+//   __HEXA_BIO_RIBOTAC__ PASS        — verb loaded + status printed
+//   Python sim prints __RIBOTAC__ PASS|FAIL (source-of-truth)
+
+let VERSION = "1.0.0"
+let MODULE  = "ribotac"
+let LAYER   = "sub-axis :> BIFUNCTIONAL · ?> RIBOZYME (NOT core-5)"
+
+fn _root() -> str {
+    let r = env("HEXA_BIO_ROOT")
+    if r.len() > 0 { return r }
+    let inferred = exec("dirname \"$(dirname \"$(dirname \"$0\")\")\" 2>/dev/null || true").trim()
+    if inferred.len() > 0 { return inferred }
+    return env("HOME") + "/.hexa-bio"  // @allow-devpath
+}
+
+fn _sim_path() -> str {
+    return _root() + "/_python_bridge/module/ribotac_sim.py"
+}
+
+fn _print_status() {
+    println("  status: SUB-AXIS v" + VERSION + " (NOT core-5)")
+    println("          parent: BIFUNCTIONAL (expansion-MAIN)")
+    println("          soft cross-axis dep: RIBOZYME (core) — both effect")
+    println("          multiple-turnover catalytic RNA cleavage; the sim")
+    println("          imports ribozyme_mfe_nussinov.nussinov (no fork — f3)")
+    println("          AXIS.tape core-5 SSOT UNCHANGED")
+}
+
+fn _print_modality() {
+    println("  RIBOTAC modality — own precedent (g3/f1, never lattice-fit):")
+    println("    Costales et al. 2018   JACS 140:6741    first RNase-L-")
+    println("                                            recruiting bifunc.")
+    println("                                            (Disney lab)")
+    println("    Costales et al. 2020   PNAS 117:2406    pre-miR-21 RIBOTAC")
+    println("  research-stage modality — no FDA-approved RIBOTAC drug")
+}
+
+fn _print_real_limits() {
+    println("  real-limit anchors (AGENTS.tape g1 — real-limits-first):")
+    println("    mass-action law (Guldberg & Waage, 1864)")
+    println("      every binary / ternary occupancy is a closed-form")
+    println("      mass-action solution; no occupancy may exceed 1.0")
+    println("    catalytic multiple-turnover limit")
+    println("      (Cornish-Bowden, Fundamentals of Enzyme Kinetics,")
+    println("       4th ed., 2012) — N = k_cat * t_exposure > 1 for the")
+    println("       catalytic-advantage claim to hold")
+}
+
+fn _print_lattice_stance() {
+    println("  n=6 lattice stance (g2/f_lattice_fit): the ternary complex")
+    println("  has three bodies (RNA, RIBOTAC, RNase-L) because the modality")
+    println("  bridges one RNA and one nuclease. Neither alpha, nor K_d, nor")
+    println("  k_cat, nor turnover number N is derived from the n=6 lattice.")
+}
+
+fn _print_in_silico_caveat() {
+    println("  in-silico scope (g8/f2): a PASS verifies IN-SILICO simulator +")
+    println("  metadata consistency ONLY (mass-action ternary fractions;")
+    println("  turnover number; catalytic-advantage gate). It is NOT a")
+    println("  binding-affinity, cellular knockdown, immunogenic, regulatory,")
+    println("  or therapeutic-efficacy claim. RIBOTAC is research-stage —")
+    println("  no FDA approval. The RIBOTAC sub-axis is scientifically")
+    println("  UNPROVEN at the wet-lab boundary.")
+}
+
+fn _print_sim_pointer() {
+    println("  source-of-truth sim (Python, stdlib-only, deterministic):")
+    println("    " + _sim_path())
+    println("    run: python3 _python_bridge/module/ribotac_sim.py")
+}
+
+fn cmd_ribotac(args: [str]) {
+    println("hexa-bio " + MODULE + " " + VERSION + " — ribonuclease-targeting chimera (sub-axis)")
+    println("")
+
+    let mut show_sim = false
+    let mut i = 0
+    while i < args.len() {
+        if args[i] == "--sim" { show_sim = true }
+        i = i + 1
+    }
+
+    _print_status()
+    println("")
+    _print_modality()
+    println("")
+    _print_real_limits()
+    println("")
+    _print_lattice_stance()
+    println("")
+    _print_in_silico_caveat()
+    if show_sim {
+        println("")
+        _print_sim_pointer()
+    }
+    println("")
+    println("usage: hexa-bio ribotac [--sim]")
+    println("[ribotac] verb is announce/status only; the Python sim is the")
+    println("[ribotac] in-silico source-of-truth (see --sim for path)")
+    println("__HEXA_BIO_RIBOTAC__ PASS")
+}
+
+fn main() {
+    let raw = args()
+    let mut user: [str] = []
+    let mut sidx = -1
+    let mut i = 0
+    while i < raw.len() {
+        if raw[i].ends_with(".hexa") { sidx = i; break }
+        i = i + 1
+    }
+    let mut start = 1
+    if sidx >= 0 { start = sidx + 1 }
+    let mut k = start
+    while k < raw.len() {
+        user = user + [raw[k]]
+        k = k + 1
+    }
+    cmd_ribotac(user)
+}
