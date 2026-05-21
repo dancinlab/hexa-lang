@@ -1104,7 +1104,7 @@ the 8 잔여 items have settled to:
 | 1 | hexa_len polymorphic | ✅ ported | cycle 99 (alias dispatch via `byte_len`) |
 | 2 | hexa_to_string | ✅ partial | cycle 96 (scalar branches: int/float/bool/void/str). Array/Map recursive + ValStruct stay C |
 | 3 | hexa_str_concat heap-only | ❌ REVERT | arena nesting hazard (cycle-30 family). Inner-fn `__hexa_fn_arena_enter` frame corrupts outer arena array storage. Step 5+ work |
-| 4 | hexa_eq deep eq | ✅ partial | cycles 91 (TAG_STR strcmp) + 97 (TAG_ARRAY deep) + 100 (TAG_VOID + int↔float cross-coerce). 4/9 branches ported |
+| 4 | hexa_eq deep eq | ✅ partial | cycles 91 (TAG_STR strcmp) + 97 (TAG_ARRAY deep). 2/9 branches ported |
 | 5 | Map basic ops (set/get/keys/values/contains_key/remove) | ❌ CORE | foundation primitives — surface builtins LOWER to them. Robin Hood deletion + hash slot insert + key-interning malloc all C-internal |
 | 6 | Array allocators (new/zeros_float/alloc) | ❌ CORE | `[]` literal lowers to `hexa_array_new()` → self-recursion. Fast-path semantics (single-shot calloc + pre-cap) require HX_SET_ARR_CAP exposure |
 | 7 | IO (println/eprint/print/eprintln) | ❌ DEFERRED | needs new `__fd_write_bytes(fd, s)` codegen builtin (3-5 cycles). Tier-A.6 syscall layer architectural mismatch |
@@ -1117,52 +1117,6 @@ the 8 잔여 items have settled to:
 - `__fd_write_bytes` codegen builtin → unblocks #7
 
 **Wipe pattern recurrence** (memory `feedback_runtime_c_deploy_regen_wipe`): commits c39afbbe + 0d59c419 silently overwrote stdlib/runtime/numeric.hexa + ctype.hexa + self/runtime_core.c entries cycles 91-96 between original land and re-land. Cherry-picks `3fc62729 + 459be02c + f0be7ace + 7bdb4aba + 85150013` recovered the work. Sub-agent worktree leak also observed (#4 agent's branch HEAD propagated into main worktree's index via shared git object store — fixed by `cd` back to session worktree).
-
-### 2026-05-22 — step 3 cycle 100: hexa_eq TAG_VOID + int↔float cross-coerce via rt_eq_void + rt_eq_cross_int_float (잔여 #4 further partial discharge — 4 of 9 branches ported)
-
-- ✅ Polymorphic `hexa_eq`'s TAG_VOID switch case + the top-level
-  int↔float cross-coerce path (self/runtime_core.c:5558+5570+5594) all
-  split via `#ifdef HEXA_HAS_HEXA_RT_STDLIB`. Two new rt_* fns in
-  stdlib/runtime/numeric.hexa:
-  - `rt_eq_void(a, b) -> bool` — trivial `return true` (both args TAG_VOID
-    by C wrapper switch precondition)
-  - `rt_eq_cross_int_float(a, b) -> bool` — `let af: float = a as float;
-    let bf: float = b as float; if af == bf { return true } return false`
-- **Recursion safety**: cross-coerce dispatch only fires when args are
-  tag-asymmetric (INT/FLOAT pair). After the two `as float` casts both
-  locals are TAG_FLOAT (`hexa_to_float` returns TAG_FLOAT for both INT
-  and FLOAT inputs). The inner `af == bf` re-enters `hexa_eq` with
-  BOTH args TAG_FLOAT — the cross-coerce check fails, switch hits
-  TAG_FLOAT case (still C — direct double compare), returns. No path
-  back into rt_eq_cross_int_float. Mirrors interp eval_binop float-
-  coerce (hexa_full.hexa:7867) so AOT `2 == 2.0` matches interp (true)
-- **TAG_INT / TAG_FLOAT / TAG_BOOL same-tag branches DEFERRED**: each
-  would need `ai == bi` direct-emit between two typed locals to avoid
-  recursing into `hexa_eq`. Codegen `_is_int_init_expr` / `_is_float_
-  init_expr` currently don't recognize `BinOp "as"` initializers, so
-  `let ai: int = a as int` does NOT register `ai` as known-int.
-  Verified by transpiling a probe: `if ai == bi` lowered to
-  `hexa_eq(ai, bi)` — recursion trap. Three options for closure:
-  (a) extend `_is_int_init_expr` / `_is_float_init_expr` to handle
-      `BinOp` with `op == "as"` and `right.name == "int"`/`"float"`
-      (~5-line codegen edit, queued behind hexa_v2 regen — Mac flatten
-      OOM is the blocker per cycle 76 status)
-  (b) add a `hexa_bool` typed-let recognition + `_is_bool_init_expr`
-      infrastructure (new, parallels int/float)
-  (c) ubu-2 cross-build path (memory `compiler_selfbuild_blockers`)
-- 잔여 #4 cumulative status: **4 of 9** hexa_eq branches now ported
-  (TAG_STR c91 · TAG_ARRAY c97 · TAG_VOID c100 · int↔float cross c100).
-  5 branches remain C-side (TAG_INT, TAG_FLOAT, TAG_BOOL, TAG_VALSTRUCT,
-  TAG_MAP, plus FN/CHAR/CLOSURE which are pointer-eq C-only by design).
-  VALSTRUCT/MAP need `HX_VS` / `HX_MAP_PTR` raw exposure (Step 5
-  unblocker per plan)
-- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
-  binary 1,218,520 B (+928 B vs cycle 97). `nm` confirms
-  `_rt_eq_void` + `_rt_eq_cross_int_float` are defined T symbols
-- Functional smoke (`/tmp/test_eq_smoke.hexa`) — 13 cases PASS exit=42:
-  cross-coerce {2==2.0, 0==0.0, 3!=2.0, 1!=1.5} via rt path; same-tag
-  scalars (still C) for INT/FLOAT/BOOL; TAG_STR via rt_str_eq_b;
-  TAG_ARRAY via rt_eq_array_deep
 
 ### 2026-05-22 — step 3 cycle 97: hexa_eq TAG_ARRAY deep-eq loop via rt_eq_array_deep (잔여 #4 partial discharge — 2 of 9 branches ported)
 
