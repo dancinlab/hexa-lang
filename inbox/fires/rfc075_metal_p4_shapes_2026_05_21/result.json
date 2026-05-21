@@ -1,0 +1,39 @@
+{
+  "all_pass_byte_eq" : true,
+  "campaign" : "rfc075_metal_p4_shapes_2026_05_21",
+  "device" : "Apple M3",
+  "falsifier_F_RFC075_METAL_SHAPES_NUMERIC_EQ" : "PASS",
+  "N" : 1024,
+  "registry_id" : 4294968442,
+  "rows" : [
+    {
+      "byte_mismatch" : 0,
+      "kernel" : "vec_add",
+      "max_abs_diff" : 0,
+      "N" : 1024,
+      "shape" : "vec_add",
+      "status" : "PASS"
+    },
+    {
+      "byte_mismatch" : 0,
+      "kernel" : "vec_mul",
+      "max_abs_diff" : 0,
+      "N" : 1024,
+      "shape" : "vec_mul",
+      "status" : "PASS"
+    },
+    {
+      "byte_mismatch" : 0,
+      "kernel" : "vec_scale",
+      "max_abs_diff" : 0,
+      "N" : 1024,
+      "shape" : "vec_scale",
+      "status" : "PASS"
+    }
+  ],
+  "shapes_tested" : [
+    "vec_add",
+    "vec_mul",
+    "vec_scale"
+  ]
+}
