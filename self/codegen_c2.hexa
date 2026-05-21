@@ -4375,6 +4375,13 @@ fn gen2_expr(node) {
             if name == "__arr_set_cap" {
                 return "(HX_SET_ARR_CAP(" + gen2_expr(node.args[0]) + ", (int)HX_INT(" + gen2_expr(node.args[1]) + ")), hexa_void())"
             }
+            // Step 5 #4 (2026-05-22): __fd_write_bytes(fd, s) inline POSIX write(2).
+            // Returns hexa_int(bytes_written or -1). libc `write` already declared
+            // self/runtime.c:1001 — no new extern. DORMANT until hexa_v2 regen;
+            // io.hexa + runtime_core.c rt_eprint dispatch deferred to next cycle.
+            if name == "__fd_write_bytes" {
+                return "hexa_int((int64_t)write((int)HX_INT(" + gen2_expr(node.args[0]) + "), HX_STR(" + gen2_expr(node.args[1]) + "), (size_t)HX_STRLEN(" + gen2_expr(node.args[1]) + ")))"
+            }
             // Free-function form of `s.byte_at(i)` — raw byte (0..255) at a
             // byte offset, -1 OOB. The method form is already mapped; this
             // covers `byte_at(s, i)` callers.
@@ -7423,6 +7430,7 @@ fn _is_builtin_name(name) {
     if name == "__arr_raw_len" { return true }
     if name == "__map_raw_len" { return true }
     if name == "__arr_set_cap" { return true }
+    if name == "__fd_write_bytes" { return true }
     if name == "dict_keys" { return true }
     // FIX-A (Anima serving unblock, 2026-04-19)
     if name == "append" { return true }
