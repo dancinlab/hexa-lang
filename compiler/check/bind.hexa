@@ -1034,12 +1034,6 @@ fn _bind_builtin_names() -> [string] {
         // _is_builtin_name free-call forms; runtime hexa_str_char_code_at
         // / hexa_map_contains_key / rt_append_file). Last HX2001 residual.
         "append_file", "char_code_at", "has_key", "join",
-        // RUNTIME.md step 4 follow-up (2026-05-22) — codegen-inline raw-length
-        // builtins so rt_len can dispatch true-logic per-kind without self-
-        // recursing through hexa_len. No runtime extern; lowered to HX_*_LEN
-        // macros in self/codegen_c2.hexa::gen2_expr (and __arr_set_cap fast-
-        // path for cycle-86's hexa_array_alloc_capped).
-        "__arr_raw_len", "__arr_set_cap", "__fd_write_bytes", "__map_raw_len", "__str_raw_len",
         "abs", "aes256_ctr_xor", "append", "args", "argv", "bcrypt_pbkdf", "byte_len", "bytes_to_f32_le",
         "bytes", "bytes_to_f64_le", "ceil", "chacha20_poly1305_decrypt", "chacha20_poly1305_encrypt", "chacha20_xor", "chars", "clock_ms", "copy_file",
         "cos", "crc32", "dict_keys", "ed25519_keypair", "ed25519_sign", "ed25519_verify", "env", "eprint",
