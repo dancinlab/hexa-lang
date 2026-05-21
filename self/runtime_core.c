@@ -2468,6 +2468,15 @@ int hexa_map_contains_key(HexaVal m, const char* key) {
 // entries: flat array of [key, value] pairs. Keys come out as strings
 // (HexaMap stores keys as char*). Matches interpreter semantics at
 // self/hexa_full.hexa:15558-15568.
+// Step-3 cycle 38 port — dispatch to rt_map_entries when hexa-source
+// stdlib is present. C body retained for runtime.c standalone link.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_map_entries(HexaVal m);
+HexaVal hexa_map_entries(HexaVal m) {
+    if (!HX_MAP_TBL(m)) return hexa_array_new();
+    return rt_map_entries(m);
+}
+#else
 HexaVal hexa_map_entries(HexaVal m) {
     HexaVal out = hexa_array_new();
     if (!HX_MAP_TBL(m)) return out;
@@ -2480,9 +2489,12 @@ HexaVal hexa_map_entries(HexaVal m) {
     }
     return out;
 }
+#endif
 
 // to_array: same shape as entries() — keeps names consistent with
 // interpreter dispatch (self/hexa_full.hexa:15611-15620).
+// Step-3 cycle 38 — falls through to hexa_map_entries which itself
+// dispatches; no separate rt_ wiring needed.
 HexaVal hexa_map_to_array(HexaVal m) {
     return hexa_map_entries(m);
 }
@@ -2490,6 +2502,20 @@ HexaVal hexa_map_to_array(HexaVal m) {
 // merge: overlay other's entries onto self. Other wins on key collision.
 // Matches interpreter at self/hexa_full.hexa:15570-15583. Non-map `other`
 // returns self unchanged.
+// Step-3 cycle 38 port — map_merge dispatch to hexa-source rt_map_merge.
+// The hexa body iterates b.keys() (array of strings) and calls b.get(k) /
+// out.set(k, v); codegen lowers those to hexa_map_get/set with
+// hexa_to_cstring(key), so the const-char* signature blocker is bypassed
+// without a HexaVal-keyed C wrapper. C body retained for runtime.c
+// standalone link (smoke test path doesn't define HEXA_HAS_HEXA_RT_STDLIB).
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_map_merge(HexaVal a, HexaVal b);
+HexaVal hexa_map_merge(HexaVal a, HexaVal b) {
+    if (!HX_MAP_TBL(a)) return a;
+    if (!HX_MAP_TBL(b)) return a;
+    return rt_map_merge(a, b);
+}
+#else
 HexaVal hexa_map_merge(HexaVal a, HexaVal b) {
     if (!HX_MAP_TBL(a)) return a;
     if (!HX_MAP_TBL(b)) return a;
@@ -2500,6 +2526,7 @@ HexaVal hexa_map_merge(HexaVal a, HexaVal b) {
     }
     return out;
 }
+#endif
 
 // map_values(fn): apply fn to every value, return new map with same keys.
 // Matches interpreter at self/hexa_full.hexa:15584-15594.
@@ -5387,6 +5414,7 @@ HexaVal hexa_add_slow(HexaVal a, HexaVal b) {
 // (launch_alm_14b_r9.hexa ~170 deep → fatal). Semantics = left-fold via
 // hexa_add so mixed int/string/array inputs follow the same rules as the
 // pairwise operator.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_concat_many(int n, HexaVal* parts) {
     if (n <= 0) return hexa_str("");
     HexaVal acc = parts[0];
@@ -5395,6 +5423,24 @@ HexaVal hexa_concat_many(int n, HexaVal* parts) {
     }
     return acc;
 }
+#else
+// Step-3 cycle 89 — hexa-source port via TAG_ARRAY bridge. The variadic
+// `HexaVal*` C buffer can't be expressed in hexa source (잔여 #7), so
+// we wrap it in a TAG_ARRAY HexaVal (one hexa_array_new + n pushes) and
+// delegate to rt_concat_many_arr. Semantics are byte-identical to the C
+// body (left-fold `acc = acc + parts[i]` lowers to `hexa_add(acc,
+// parts[i])` since `acc` is `let mut` untyped). Owner of the loop:
+// stdlib/runtime/numeric.hexa::rt_concat_many_arr.
+extern HexaVal rt_concat_many_arr(HexaVal parts);
+HexaVal hexa_concat_many(int n, HexaVal* parts) {
+    if (n <= 0) return hexa_str("");
+    HexaVal arr = hexa_array_new();
+    for (int i = 0; i < n; i++) {
+        arr = hexa_array_push(arr, parts[i]);
+    }
+    return rt_concat_many_arr(arr);
+}
+#endif
 
 // ── Polymorphic equality ─────────────────────────────────
 

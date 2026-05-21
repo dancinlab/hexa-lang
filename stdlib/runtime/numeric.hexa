@@ -303,6 +303,30 @@ pub fn rt_array_sort_float(arr: [float]) -> [float] {
     return sorted
 }
 
+// Step 3 cycle 89 — variadic concat (N-way) hexa-source port.
+// C ABI `hexa_concat_many(int n, HexaVal* parts)` (variadic raw buffer)
+// cannot be expressed in hexa source. The C wrapper builds a TAG_ARRAY
+// HexaVal from the raw buffer and dispatches here. Semantics = left-fold
+// via `+` (== hexa_add), matching the C body's `acc = hexa_add(acc,
+// parts[i])`. Empty / non-array input returns the empty string (C body
+// returns `hexa_str("")` when `n <= 0`).
+//
+// Recursion safety: `acc` is `let mut` (untyped), `parts[i]` returns
+// untyped HexaVal, so `acc + parts[i]` lowers to plain `hexa_add(acc,
+// parts[i])` — same call shape as the C body, no recursion into
+// hexa_str_concat (still C-owned, 잔여 #3).
+pub fn rt_concat_many_arr(parts: HexaVal) -> HexaVal {
+    let n = len(parts)
+    if n <= 0 { return "" }
+    let mut acc = parts[0]
+    let mut i = 1
+    while i < n {
+        acc = acc + parts[i]
+        i = i + 1
+    }
+    return acc
+}
+
 // Step 3 cycle 71 — flatten one-level, assumes all items are arrays.
 // The C wrapper (hexa_array_flatten) pre-checks all-array via tag, and
 // only dispatches here when every element is array. Mixed-type (some
@@ -896,4 +920,49 @@ pub fn rt_pow_int(b: int, e: int) -> int {
         exp = exp >> 1
     }
     return r
+}
+
+// Step 3 cycle 38 — map_merge: overlay b's entries onto a, other wins
+// on collision. First map-op hexa-source port. Key blocker (const char*
+// signatures on hexa_map_set/get) bypassed by routing through hexa's
+// `.keys()` / `.get(k)` / `.set(k, v)` method syntax — codegen lowers
+// those to the C primitives with hexa_to_cstring wrapping.
+//
+// Caller (hexa_map_merge in runtime_core.c) guarantees both a and b have
+// non-NULL HX_MAP_TBL; this body handles only the iteration logic.
+pub fn rt_map_merge(a: HexaVal, b: HexaVal) -> HexaVal {
+    let keys = b.keys()
+    let n = len(keys)
+    let mut out = a
+    let mut i = 0
+    while i < n {
+        let k = keys[i]
+        let v = b.get(k)
+        out = out.set(k, v)
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 38 — map_entries: flat array of [key, value] pairs.
+// Caller guarantees HX_MAP_TBL(m) is non-NULL.
+pub fn rt_map_entries(m: HexaVal) -> HexaVal {
+    let keys = m.keys()
+    let n = len(keys)
+    let mut out: HexaVal = []
+    let mut i = 0
+    while i < n {
+        let k = keys[i]
+        let v = m.get(k)
+        let pair: HexaVal = [k, v]
+        out = out.push(pair)
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 38 — map_to_array: alias of entries() per interpreter
+// dispatch. Caller guarantees non-NULL HX_MAP_TBL.
+pub fn rt_map_to_array(m: HexaVal) -> HexaVal {
+    return rt_map_entries(m)
 }

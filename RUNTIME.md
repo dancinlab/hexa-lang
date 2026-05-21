@@ -1094,6 +1094,80 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 89: hexa_concat_many variadic port (잔여 #7 discharged via TAG_ARRAY bridge)
+
+- ✅ **Variadic `HexaVal*` C-buffer 잔여 closed.** `hexa_concat_many(int
+  n, HexaVal* parts)` (runtime_core.c:5405) gains `#ifdef HEXA_HAS_HEXA
+  _RT_STDLIB` two-mode dispatch. The new branch packs the raw C buffer
+  into a TAG_ARRAY HexaVal (one `hexa_array_new` + `n` pushes) and
+  delegates to `rt_concat_many_arr(parts: HexaVal)` in stdlib/runtime/
+  numeric.hexa
+- Hexa-source body: `let mut acc = parts[0]` + `while i < n { acc =
+  acc + parts[i]; ... }`. Recursion safety: `acc` is untyped `let mut`,
+  so `acc + parts[i]` lowers to plain `hexa_add(acc, parts[i])` — same
+  call shape as the C body. No recursion trap into hexa_str_concat
+  (still C-owned per 잔여 #3)
+- Codegen unchanged — the compound-literal `(HexaVal[]){...}` lowering
+  at codegen_c2.hexa:4049 remains the call site; bridge lives inside
+  the C wrapper. Lower-risk than rewiring codegen to emit array
+  literals at every `+` chain ≥ _LONG_CONCAT_THRESH
+- Cost: 1 array_new + n pushes per concat (heap-allocating the
+  bridge array on long-chain calls only — anima launchers ~170 deep).
+  Trade-off accepted vs lifting `HexaVal*`-typed C buffer into hexa
+- Rebuild: `clang -O2 -std=c11 -arch arm64 -I self -D_GNU_SOURCE
+  -fbracket-depth=4096 self/native/hexa_cc.c self/runtime.c -o
+  self/native/hexa_v2 -lm`
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,218,040 B
+- 잔여 status: #7 discharged (this cycle). 잔여 doc 자체는 parallel-session
+  GPU work에 의해 RUNTIME.md HEAD에서 revert 됐지만 코드 차원의 작업
+  유효성은 32963ba3 doc 기준으로 평가됨
+
+
+
+- ✅ **First map-op family ported.** Three CORE-tier (runtime_core.c)
+  functions migrated to hexa source:
+  - `hexa_map_merge` → `rt_map_merge` (iterates b.keys(), overlays b
+    onto a per interpreter semantics)
+  - `hexa_map_entries` → `rt_map_entries` (returns array of [k,v]
+    pair arrays in insertion order)
+  - `hexa_map_to_array` → falls through to `hexa_map_entries` (no
+    separate rt_ wiring — aliased per interpreter dispatch)
+- **Blocker discharged**: the stated `const char* key` ABI gap is
+  bypassed cleanly by hexa-source method syntax. `b.keys()` returns
+  a HexaVal array of strings; `b.get(k)` / `out.set(k, v)` codegen
+  to `hexa_map_get(b, hexa_to_cstring(k))` / `hexa_map_set(out,
+  hexa_to_cstring(k), v)` automatically (codegen_c2.hexa:3374-3378).
+  **No new C wrapper** (no `hexa_map_set_v`) needed; no externs
+  baseline impact
+- Two-mode `#ifdef HEXA_HAS_HEXA_RT_STDLIB` dispatch — runtime.c
+  standalone link (smoke test path) keeps the original C body so
+  `prog.hexa` -> arm64 .s -> .o + self/runtime.c link still works.
+  aprime_cc TU gets the macro defined and dispatches into hexa source
+- Caller-side `HX_MAP_TBL(m)` non-NULL guard kept C-side; hexa body
+  handles only iteration logic (no internal-table introspection)
+- Generated C body confirms clean lowering:
+  ```c
+  HexaVal rt_map_merge(HexaVal a, HexaVal b) {
+      HexaVal keys = hexa_map_keys(b);
+      HexaVal n = hexa_int(hexa_len(keys));
+      HexaVal out = a;
+      HexaVal i = hexa_int(0);
+      while (HX_BOOL(hexa_cmp_lt(i, n))) {
+          HexaVal k = hexa_index_get(keys, i);
+          HexaVal v = hexa_map_get(b, hexa_to_cstring(k));
+          out = hexa_map_set(out, hexa_to_cstring(k), v);
+          i = hexa_add(i, hexa_int(1));
+      }
+      return out;
+  }
+  ```
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,217,848 B
+- Next map-op candidates following same pattern: `hexa_map_invert`,
+  `hexa_map_from_array`, `hexa_map_map_values` (fn callback),
+  `hexa_map_filter_keys` (fn callback), `hexa_map_count/any/all`
+
 ### 2026-05-21 — step 3 cycle 76: codegen typed-param + `as` cast direct emit (QUEUED for hexa_v2 rebuild)
 
 - 🚧 **Source-level edits in `self/codegen_c2.hexa`** to close the
