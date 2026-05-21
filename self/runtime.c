@@ -3131,8 +3131,6 @@ HexaVal hexa_array_map(HexaVal arr, HexaVal fn) {
 }
 #endif
 
-// Step-3 cycle 64 port — filter + fold callback dispatch.
-#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_filter(HexaVal arr, HexaVal fn) {
     if (!HX_IS_ARRAY(arr)) return hexa_array_new();
     HexaVal out = hexa_array_new();
@@ -3151,18 +3149,6 @@ HexaVal hexa_array_fold(HexaVal arr, HexaVal init, HexaVal fn) {
     }
     return acc;
 }
-#else
-extern HexaVal rt_array_filter(HexaVal arr, HexaVal fn_v);
-extern HexaVal rt_array_fold(HexaVal arr, HexaVal init, HexaVal fn_v);
-HexaVal hexa_array_filter(HexaVal arr, HexaVal fn) {
-    if (!HX_IS_ARRAY(arr)) return hexa_array_new();
-    return rt_array_filter(arr, fn);
-}
-HexaVal hexa_array_fold(HexaVal arr, HexaVal init, HexaVal fn) {
-    if (!HX_IS_ARRAY(arr)) return init;
-    return rt_array_fold(arr, init, fn);
-}
-#endif
 
 // Step-3 cycle 33 port — float fast-path dispatches to rt_array_index_of_float
 // when both the array is all-float and the item is float; otherwise the
@@ -6196,6 +6182,74 @@ HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
         int grc = _hx_cuda_farr_matmul_gpu(a_id, M, K, b_id, N, c_id);
         if (grc == 0) return c_handle;
         /* grc != 0: GPU path failed — fall through to CPU ikj. */
+    }
+#endif
+#if defined(__APPLE__) && defined(HEXA_METAL)
+    /* RFC 075 P5 flame Metal integration step 1 (2026-05-21): mirror of
+     * the HEXA_CUDA dim-gate above for Apple GPU / Metal Performance
+     * Shaders. The flame ag_linear → nn_linear_fwd → forge_dispatch_matmul
+     * → dispatcher → hexa_farr_matmul path lands here on Mac when the
+     * HEXA_METAL=1 env is set; same d768-class shapes (M*K, K*N up to
+     * ~2.36M) route through MPSMatrixMultiplication (Apple's cuBLAS
+     * equivalent — measured 1.03→1.70 TFLOPS at M=256..1024 in commit
+     * 9b352bda's host_mps_gemm.swift baseline). The tiny ag_tape byte-eq
+     * oracles (M*K, K*N << 8192) stay on the CPU ikj path.
+     *
+     * HONEST PRECISION-LOSS CARVE-OUT (gap #1 of METAL_INTEGRATION.md):
+     *   farr_matmul is FP64 (packed-double). Apple GPUs do NOT support
+     *   FP64 in compute shaders; MPSMatrixMultiplication's only practical
+     *   path is FP32 (MPSDataTypeFloat32). The _hx_metal_farr_matmul_gpu
+     *   shim (TODO[metal] — body lives in self/metal/runtime_metal.m,
+     *   not yet committed) MUST down-cast A,B to FP32, run MPS, and up-
+     *   cast C back to FP64 in the caller's farr slot. The round-trip
+     *   loses ~29 bits of mantissa per matmul element. This is wiring
+     *   only and is documented as the elephant: callers that need
+     *   bit-exact (ag_tape byte-eq oracles, tiny smokes) MUST NOT set
+     *   HEXA_METAL=1. The intended user is the d768/12L Mac decoder hot
+     *   path, where FP32 is already the de-facto target.
+     *
+     * Pre-req chain (METAL_INTEGRATION.md §5):
+     *   1. HX_FARR32 (FP32 farr table)        — separate cycle
+     *   2. THIS BLOCK (runtime.c dim-gate)     — landing now
+     *   3. farr_matmul_NT codegen recogniser  — backward pass, separate cycle
+     *   4. hexa gpu fire Metal target          — RFC 075 P5, in progress
+     *   5. simdgroup_matrix MMA emitter       — P6, gated on (3)
+     *
+     * On any GPU error / first-call init failure / no Metal device /
+     * shim missing at link time → return -1 from the extern, fall
+     * through to the CPU ikj loop (safe). HEXA_METAL-only: the default
+     * Mac build (no -DHEXA_METAL) is byte-identical, this block inert.
+     * Cross-build: HEXA_CUDA and HEXA_METAL coexist fine — only one
+     * platform's hardware will be present at runtime; the other extern
+     * is unreferenced. */
+    if (hxlcl_getenv("HEXA_METAL") &&
+        hxlcl_strcmp(hxlcl_getenv("HEXA_METAL"), "1") == 0 &&
+        ((M * K) > 8192 || (K * N) > 8192)) {
+        extern int _hx_metal_farr_matmul_gpu(int64_t a_id, int64_t M,
+                                             int64_t K, int64_t b_id,
+                                             int64_t N, int64_t c_id);
+        int mrc = _hx_metal_farr_matmul_gpu(a_id, M, K, b_id, N, c_id);
+        if (mrc == 0) {
+            /* Log the precision-loss footnote once-per-process so
+             * callers see the FP64→FP32 down-cast in the run log. The
+             * shim is responsible for the cast itself (FP64 A,B in C's
+             * farr slots → FP32 MTLBuffer → MPS → FP32 → FP64 in c_id's
+             * farr slot). */
+            static int _hx_metal_fp32_warned = 0;
+            if (!_hx_metal_fp32_warned) {
+                hxlcl_fputs("[hexa metal] WARN: farr_matmul routed through "
+                            "MPSMatrixMultiplication (FP32). farr is FP64; "
+                            "down-cast loses ~29 mantissa bits per element. "
+                            "Apple GPU is FP32-only; pre-req #1 (FP32 farr "
+                            "table) pending. See stdlib/flame/"
+                            "METAL_INTEGRATION.md S5.\n",
+                            (void *)stderr);
+                _hx_metal_fp32_warned = 1;
+            }
+            return c_handle;
+        }
+        /* mrc != 0: Metal path failed (no device, MPS init error, OOM,
+         * or shim not linked) — fall through to CPU ikj loop. */
     }
 #endif
     // ikj loop — streaming B + C, A_ik hoisted out of j.
