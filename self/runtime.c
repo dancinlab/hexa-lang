@@ -2635,52 +2635,6 @@ static HexaVal safetensors_mmap_close;
 HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
                          HexaVal b_v, HexaVal bc_v);
 static HexaVal farr_matmul_shim;
-// METAL_INTEGRATION.md step 3 of 5 (2026-05-21): HX_FARR32 — packed-float
-// farr table. Parallel to the FP64 _hx_farr_table above, but with float*
-// storage so the HEXA_METAL MPS shim (step 2, runtime_metal.m) can accept
-// the matmul operands without an FP64→FP32 down-cast at the dispatch
-// boundary. The two tables share NO state: handles are independent
-// namespaces (a farr32_id is meaningless to hexa_farr_*, and vice versa).
-// This is gap #1 of METAL_INTEGRATION.md: native FP32 storage path.
-HexaVal hexa_farr32_zeros(HexaVal n_v);
-HexaVal hexa_farr32_get(HexaVal h_v, HexaVal i_v);
-HexaVal hexa_farr32_set(HexaVal h_v, HexaVal i_v, HexaVal x_v);
-HexaVal hexa_farr32_len(HexaVal h_v);
-HexaVal hexa_farr32_free(HexaVal h_v);
-HexaVal hexa_farr32_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
-                           HexaVal b_v, HexaVal bc_v);
-// METAL_INTEGRATION.md step 4 of 5 (2026-05-21): farr32_matmul_NT_b —
-// FP32 SGEMM with B transposed (right operand). For ag_linear bwd via
-// matmul_bwd_auto (stdlib/flame/ag_tape.hexa:630): gradient input is
-// dC of shape M×N and weight is N×K row-major (same memory layout as
-// the forward weight); the bwd-wrt-input gradient is dC · W = M×K
-// computed as C[i,k] = sum_j dC[i,j] * W[j,k] which when expressed in
-// matmul-NT form (B^T = W viewed transposed) is exactly A · B^T with
-// A=dC (M×N), B=W (N×K row-major contiguous). Routed through MPS with
-// transposeRight:YES when HEXA_METAL=1 + large shape; CPU SGEMM ikj
-// otherwise (same fallback shape as the no-transpose variant).
-HexaVal hexa_farr32_matmul_NT_b(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
-                                HexaVal b_v, HexaVal br_v);
-// METAL_INTEGRATION.md step 5 of 5 (2026-05-21): farr32_matmul_NT_a —
-// FP32 SGEMM with A transposed (left operand). For ag_linear bwd via
-// matmul_bwd_auto (stdlib/flame/ag_tape.hexa): bwd-wrt-weight gradient
-// is dW = X^T · dY where X is M×K row-major and dY is M×N row-major.
-// In matmul-NT form (A^T = X viewed transposed), this is exactly A^T · B
-// with A=X (M×K row-major contiguous, treated as K×M transposed), B=dY
-// (M×N row-major). The result C is K×N row-major. Routed through MPS
-// with transposeLeft:YES when HEXA_METAL=1 + large shape; CPU SGEMM ikj
-// otherwise. Symmetric to NT_b — together NT_a + NT_b close the full
-// transposed-matmul family needed for ag_linear backward.
-HexaVal hexa_farr32_matmul_NT_a(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
-                                HexaVal b_v, HexaVal bc_v);
-static HexaVal farr32_zeros;
-static HexaVal farr32_get;
-static HexaVal farr32_set;
-static HexaVal farr32_len;
-static HexaVal farr32_free;
-static HexaVal farr32_matmul_shim;
-static HexaVal farr32_matmul_NT_b_shim;
-static HexaVal farr32_matmul_NT_a_shim;
 // hexa_v2 (bootstrap transpiler) emits direct C calls for ≥5 args
 // (no `hexa_callN` indirection exists past N=4). The dispatch in
 // hexa_full.hexa::call_builtin uses `farr_matmul(...)` literally —
@@ -3394,6 +3348,9 @@ HexaVal hexa_range_array(HexaVal start, HexaVal end, HexaVal step, int inclusive
 
 // flat_map: map then flatten one level. Non-array callback results
 // are pushed as-is (matches interpreter fallback at hexa_full.hexa:15211).
+// Step-3 cycle 75 port — flat_map dispatch via type_of("array") check
+// in hexa source (lowers to hexa_eq(hexa_type_of(v), interned)).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_flat_map(HexaVal arr, HexaVal fn) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3409,6 +3366,13 @@ HexaVal hexa_array_flat_map(HexaVal arr, HexaVal fn) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_flat_map(HexaVal arr, HexaVal fn_v);
+HexaVal hexa_array_flat_map(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) return hexa_array_new();
+    return rt_array_flat_map(arr, fn);
+}
+#endif
 
 // enumerate: [[idx, item], ...] — matches hexa_full.hexa:15220-15228.
 // Step-3 cycle 68 port — enumerate dispatch.
@@ -4660,14 +4624,8 @@ typedef struct {
  * visible to the runtime_cuda.c TU (cuBLAS Dgemm reads host buf/len for
  * H2D/D2H, and the residence descriptor). Non-static export under
  * HEXA_CUDA only — the no-CUDA build keeps them `static` (byte-identical,
- * zero ABI surface change).
- *
- * METAL_INTEGRATION.md step 3 (2026-05-21): also export under HEXA_METAL
- * so the runtime_metal.m TU's FP64 _hx_metal_farr_matmul_gpu (N18 shim)
- * can resolve _hx_farr_table / _hx_farr_count at link time. The default
- * Mac build with neither HEXA_CUDA nor HEXA_METAL keeps them static —
- * byte-identical to the pre-step-3 default-build state. */
-#if defined(HEXA_CUDA) || defined(HEXA_METAL)
+ * zero ABI surface change). */
+#ifdef HEXA_CUDA
 HexaFarrEntry*        _hx_farr_table     = NULL;
 int64_t               _hx_farr_count     = 0;
 #else
@@ -4819,496 +4777,6 @@ HexaVal hexa_farr_free(HexaVal h_v) {
         _hx_farr_freelist[_hx_farr_freelist_n++] = id;
     }
     return hexa_void();
-}
-
-// ═══════════════════════════════════════════════════════════
-// METAL_INTEGRATION.md step 3 of 5 (2026-05-21): HX_FARR32 —
-// packed-float (FP32) farr table. Parallel to _hx_farr_table above.
-//
-// Why a separate table (not an is_fp32 flag on HexaFarrEntry):
-//   Adding a flag forces every existing FP64 hot path
-//   (hexa_farr_matmul ikj, ad_tape, qmirror, anima reductions) to
-//   branch on the flag in inner loops, costing measurable perf for
-//   zero benefit to the FP64 callers. A parallel table keeps the
-//   FP64 path byte-identical to pre-step-3 (and the FP32 path
-//   memory-contiguous float*, which is what MPS expects).
-//
-// Why now (Mac-only motivation):
-//   N15 + N18 (commits 6315b59f + cf4b1e38) gave us a working Apple
-//   MPS shim that down-casts FP64 → FP32 → MPS → FP64. Each d768
-//   matmul (~590k input + ~590k output doubles) eats ~14 MB of
-//   per-call cast traffic + ~29 mantissa bits of precision per
-//   element. Step 3 closes that gap: flame ag_linear (next cycle)
-//   will allocate FP32 weights directly via farr32_zeros, fill them
-//   from the safetensors mmap reader (bf16 → f32 path already
-//   exists), and call farr32_matmul → MPS with zero cast traffic.
-//
-// API surface (mirrors FP64):
-//   farr32_zeros(n)         → int handle (n floats, zero-filled)
-//   farr32_get(h, i)        → float (HexaVal{TAG_FLOAT}, OOB → 0.0)
-//   farr32_set(h, i, x)     → handle (chain; OOB → no-op)
-//   farr32_len(h)           → int
-//   farr32_free(h)          → void (idempotent)
-//   farr32_matmul(A,M,K,B,N) → C farr32 handle (FP32 SGEMM)
-//
-// Lifetime + handle reuse: same freelist model as the FP64 farr
-// table. No GC; explicit free at process end (or never — bounded
-// per-process leak is acceptable for typical model-weight usage).
-//
-// HEXA_METAL dispatch (gap #1 of METAL_INTEGRATION.md closed):
-//   hexa_farr32_matmul large-shape dispatch (M*K > 8192 || K*N >
-//   8192) routes to _hx_metal_farr32_matmul_gpu — NATIVE FP32, no
-//   cast (the runtime_metal.m FP32 variant is the step-3 deliverable
-//   on the .m side). HEXA_CUDA fallback = CPU SGEMM (no FP32 cuBLAS
-//   shim yet; the d768 Mac path is the priority lever).
-// ═══════════════════════════════════════════════════════════
-
-/* Same RFC 040 residence shape as HexaFarrEntry, FP32 buffer. The
- * d_buf/loc/dirty_* fields are currently unused on the FP32 side (no
- * lazy-D2H mirroring path exists for FP32 yet); they're carried so a
- * future RFC 040-style FP32 device residence is a non-breaking
- * extension. */
-typedef struct {
-    float*   buf;        /* host pointer — FP32 (NULL if device-only) */
-    int64_t  len;        /* element count */
-    void*    d_buf;      /* device pointer (reserved; NULL today) */
-    int      loc;        /* FarrLoc — currently always FARR_HOST */
-    int      pinned;     /* reserved */
-    int      dirty_host; /* reserved */
-    int      dirty_dev;  /* reserved */
-} HexaFarr32Entry;
-
-/* Mirror the HEXA_CUDA export gate from the FP64 table (line 4598):
- * non-static under -DHEXA_METAL so the runtime_metal.m TU can read
- * _hx_farr32_table/_count without re-declaring extern in a header.
- * Default Mac build (no -DHEXA_METAL) keeps them static + byte-
- * identical to the no-FP32 prior state. */
-#ifdef HEXA_METAL
-HexaFarr32Entry*      _hx_farr32_table     = NULL;
-int64_t               _hx_farr32_count     = 0;
-#else
-static HexaFarr32Entry* _hx_farr32_table     = NULL;
-static int64_t          _hx_farr32_count     = 0;
-#endif
-static int64_t        _hx_farr32_capacity    = 0;
-static int64_t*       _hx_farr32_freelist    = NULL;
-static int64_t        _hx_farr32_freelist_n  = 0;
-static int64_t        _hx_farr32_freelist_cap= 0;
-
-HexaVal hexa_farr32_zeros(HexaVal n_v) {
-    int64_t n = hexa_as_num(n_v);
-    if (n < 0) n = 0;
-    float* buf = NULL;
-    if (n > 0) {
-        buf = (float*)calloc((size_t)n, sizeof(float));
-        if (!buf) {
-            fprintf(stderr, "[farr32] OOM allocating %lld floats\n",
-                    (long long)n);
-            exit(77);
-        }
-    }
-    int64_t id;
-    if (_hx_farr32_freelist_n > 0) {
-        id = _hx_farr32_freelist[--_hx_farr32_freelist_n];
-    } else {
-        if (_hx_farr32_count >= _hx_farr32_capacity) {
-            int64_t new_cap = _hx_farr32_capacity < 16 ? 16
-                              : _hx_farr32_capacity * 2;
-            HexaFarr32Entry* nt = (HexaFarr32Entry*)realloc(
-                _hx_farr32_table,
-                (size_t)new_cap * sizeof(HexaFarr32Entry));
-            if (!nt) {
-                fprintf(stderr, "[farr32] OOM growing handle table\n");
-                if (buf) free(buf);
-                exit(77);
-            }
-            _hx_farr32_table = nt;
-            _hx_farr32_capacity = new_cap;
-        }
-        id = _hx_farr32_count++;
-    }
-    _hx_farr32_table[id].buf        = buf;
-    _hx_farr32_table[id].len        = n;
-    _hx_farr32_table[id].d_buf      = NULL;
-    _hx_farr32_table[id].loc        = FARR_HOST;
-    _hx_farr32_table[id].pinned     = 0;
-    _hx_farr32_table[id].dirty_host = 0;
-    _hx_farr32_table[id].dirty_dev  = 0;
-    return hexa_int(id);
-}
-
-HexaVal hexa_farr32_get(HexaVal h_v, HexaVal i_v) {
-    int64_t id = hexa_as_num(h_v);
-    int64_t i  = hexa_as_num(i_v);
-    if (id < 0 || id >= _hx_farr32_count) return hexa_float(0.0);
-    HexaFarr32Entry* e = &_hx_farr32_table[id];
-    if (!e->buf || i < 0 || i >= e->len) return hexa_float(0.0);
-    /* Up-cast on read: hexa surface speaks FP64 doubles; the FP32 is
-     * a storage-format detail (the lossy step happened on set/fill). */
-    return hexa_float((double)e->buf[i]);
-}
-
-HexaVal hexa_farr32_set(HexaVal h_v, HexaVal i_v, HexaVal x_v) {
-    int64_t id = hexa_as_num(h_v);
-    int64_t i  = hexa_as_num(i_v);
-    double  x  = __hx_to_double(x_v);
-    if (id < 0 || id >= _hx_farr32_count) return h_v;
-    HexaFarr32Entry* e = &_hx_farr32_table[id];
-    if (!e->buf || i < 0 || i >= e->len) return h_v;
-    /* Down-cast on write. This is the one-time narrowing step; from
-     * here on the value lives as FP32 in the buffer. */
-    e->buf[i] = (float)x;
-    return h_v;
-}
-
-HexaVal hexa_farr32_len(HexaVal h_v) {
-    int64_t id = hexa_as_num(h_v);
-    if (id < 0 || id >= _hx_farr32_count) return hexa_int(0);
-    return hexa_int(_hx_farr32_table[id].len);
-}
-
-HexaVal hexa_farr32_free(HexaVal h_v) {
-    int64_t id = hexa_as_num(h_v);
-    if (id < 0 || id >= _hx_farr32_count) return hexa_void();
-    HexaFarr32Entry* e = &_hx_farr32_table[id];
-    if (e->buf) { free(e->buf); e->buf = NULL; e->len = 0; }
-    e->d_buf      = NULL;
-    e->loc        = FARR_HOST;
-    e->pinned     = 0;
-    e->dirty_host = 0;
-    e->dirty_dev  = 0;
-    if (_hx_farr32_freelist_n >= _hx_farr32_freelist_cap) {
-        int64_t new_cap = _hx_farr32_freelist_cap < 16 ? 16
-                          : _hx_farr32_freelist_cap * 2;
-        int64_t* nf = (int64_t*)realloc(_hx_farr32_freelist,
-                       (size_t)new_cap * sizeof(int64_t));
-        if (nf) {
-            _hx_farr32_freelist = nf;
-            _hx_farr32_freelist_cap = new_cap;
-        }
-    }
-    if (_hx_farr32_freelist_n < _hx_farr32_freelist_cap) {
-        _hx_farr32_freelist[_hx_farr32_freelist_n++] = id;
-    }
-    return hexa_void();
-}
-
-// hexa_farr32_matmul — native FP32 SGEMM. Same row-major contract +
-// ikj fallback shape as hexa_farr_matmul, but with float storage.
-//
-// HEXA_METAL dispatch (gap #1 closed): when both __APPLE__ and
-// HEXA_METAL are defined AND HEXA_METAL=1 env is set AND the shape is
-// large (M*K > 8192 || K*N > 8192) route to _hx_metal_farr32_matmul_gpu
-// — the native FP32 MPS shim (no down-cast / up-cast at the boundary).
-// On any GPU error → fall through to the CPU ikj SGEMM (safe).
-//
-// HEXA_CUDA: CPU SGEMM only for now (no float32 cuBLAS shim wired —
-// the d768 Mac path is the step-3 priority; a CUDA FP32 shim is a
-// separate cycle if a CUDA Mac box ever shows up, which it won't).
-HexaVal hexa_farr32_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
-                           HexaVal b_v, HexaVal bc_v) {
-    int64_t a_id = hexa_as_num(a_v);
-    int64_t M    = hexa_as_num(ar_v);
-    int64_t K    = hexa_as_num(ac_v);
-    int64_t b_id = hexa_as_num(b_v);
-    int64_t N    = hexa_as_num(bc_v);
-    if (a_id < 0 || a_id >= _hx_farr32_count) return hexa_int(-1);
-    if (b_id < 0 || b_id >= _hx_farr32_count) return hexa_int(-1);
-    if (M <= 0 || K <= 0 || N <= 0)           return hexa_int(-1);
-    HexaFarr32Entry* ae = &_hx_farr32_table[a_id];
-    HexaFarr32Entry* be = &_hx_farr32_table[b_id];
-    if (!ae->buf || !be->buf)                 return hexa_int(-1);
-    if (ae->len < M * K)                      return hexa_int(-1);
-    if (be->len < K * N)                      return hexa_int(-1);
-    HexaVal c_handle = hexa_farr32_zeros(hexa_int(M * N));
-    int64_t c_id = HX_INT(c_handle);
-    if (c_id < 0 || c_id >= _hx_farr32_count) return hexa_int(-1);
-    /* Re-fetch — farr32_zeros may have realloc'd the table. */
-    ae = &_hx_farr32_table[a_id];
-    be = &_hx_farr32_table[b_id];
-    HexaFarr32Entry* ce = &_hx_farr32_table[c_id];
-    if (!ae->buf || !be->buf)         return hexa_int(-1);
-    if (!ce->buf || ce->len < M * N)  return hexa_int(-1);
-    const float* A = ae->buf;
-    const float* B = be->buf;
-    float* C       = ce->buf;
-#if defined(__APPLE__) && defined(HEXA_METAL)
-    /* METAL_INTEGRATION.md step 3 of 5 (2026-05-21): native FP32 path.
-     * Unlike the FP64 hexa_farr_matmul's HEXA_METAL dispatch above,
-     * this one passes float* operands DIRECTLY to MPS — no down-cast,
-     * no up-cast, no precision loss. ~29 mantissa bits regained per
-     * element vs the N15+N18 FP64 path. The runtime_metal.m side
-     * (_hx_metal_farr32_matmul_gpu) bridges _hx_farr32_table directly. */
-    if (hxlcl_getenv("HEXA_METAL") &&
-        hxlcl_strcmp(hxlcl_getenv("HEXA_METAL"), "1") == 0 &&
-        ((M * K) > 8192 || (K * N) > 8192)) {
-        extern int _hx_metal_farr32_matmul_gpu(int64_t a_id, int64_t M,
-                                               int64_t K, int64_t b_id,
-                                               int64_t N, int64_t c_id);
-        int mrc = _hx_metal_farr32_matmul_gpu(a_id, M, K, b_id, N, c_id);
-        if (mrc == 0) return c_handle;
-        /* mrc != 0: Metal path failed — fall through to CPU ikj. */
-    }
-#endif
-    // ikj loop — single-precision FMAC; same cache shape as FP64 path.
-    for (int64_t i = 0; i < M; i++) {
-        const float* Ai = A + i * K;
-        float*       Ci = C + i * N;
-        for (int64_t k = 0; k < K; k++) {
-            float a_ik = Ai[k];
-            const float* Bk = B + k * N;
-            int64_t j = 0;
-            for (; j + 4 <= N; j += 4) {
-                Ci[j]   += a_ik * Bk[j];
-                Ci[j+1] += a_ik * Bk[j+1];
-                Ci[j+2] += a_ik * Bk[j+2];
-                Ci[j+3] += a_ik * Bk[j+3];
-            }
-            for (; j < N; j++) {
-                Ci[j] += a_ik * Bk[j];
-            }
-        }
-    }
-    return c_handle;
-}
-
-// ═══════════════════════════════════════════════════════════
-// METAL_INTEGRATION.md step 4 of 5 (2026-05-21): native FP32 SGEMM
-// with B transposed on the right (matmul-NT_b).
-//
-//   C[M, N] = A[M, K] · B[N, K]^T   (B as passed is N×K row-major;
-//                                     conceptually B_orig is K×N
-//                                     row-major and B = B_orig viewed
-//                                     transposed — but the memory we
-//                                     receive is N×K contiguous)
-//   C[i, j] = sum_{k=0..K-1} A[i, k] * B[j, k]
-//
-// Why this is the bwd-input matmul shape for ag_linear:
-//   forward:  Y[M, N] = X[M, K] · W[K, N]       (W is K×N row-major)
-//   bwd-X:    dX[M, K] = dY[M, N] · W^T[N, K]  (W treated transposed)
-//   In flame's ag_linear bwd (stdlib/flame/ag_tape.hexa:630), W is
-//   stored as N×K row-major (i.e. already "transposed" relative to
-//   the forward), so the bwd-X matmul takes A=dY(M, N), B=W(N, K) and
-//   computes C[i,k] = sum_j A[i,j] * B[k,j] — that is matmul-NT_b
-//   with the (N,K) operand on the right + transposeRight semantics.
-//
-// HEXA_METAL dispatch:
-//   Large shape (M*K > 8192 || K*N > 8192 — same gate as the no-T
-//   variant) and HEXA_METAL=1 env routes to _hx_metal_farr32_matmul_
-//   NT_b_gpu which calls MPSMatrixMultiplication with transposeLeft:NO,
-//   transposeRight:YES. The MPS API computes A · B^T natively (no host-
-//   side transpose copy); B is described as N×K row-major and MPS does
-//   the transpose internally via its tile scheduler.
-//
-//   See Apple docs: MPSMatrixMultiplication.init(device:transposeLeft:
-//   transposeRight:resultRows:resultColumns:interiorColumns:alpha:beta:)
-//   When transposeRight=YES, the right matrix's logical dimensions are
-//   (interiorColumns × resultColumns) — here K (interior) × N (result)
-//   — but its physical (descriptor) layout is N rows × K columns row-
-//   major, which matches our B layout exactly.
-//
-// CPU fallback: ikj triple loop over A[i,k] * B[j,k]. Same cache shape
-// as the no-T variant but the B-stride access pattern is row-major (B
-// row j is K contiguous floats), which is the same FMA-friendly shape.
-HexaVal hexa_farr32_matmul_NT_b(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
-                                HexaVal b_v, HexaVal br_v) {
-    int64_t a_id = hexa_as_num(a_v);
-    int64_t M    = hexa_as_num(ar_v);
-    int64_t K    = hexa_as_num(ac_v);
-    int64_t b_id = hexa_as_num(b_v);
-    int64_t N    = hexa_as_num(br_v);
-    if (a_id < 0 || a_id >= _hx_farr32_count) return hexa_int(-1);
-    if (b_id < 0 || b_id >= _hx_farr32_count) return hexa_int(-1);
-    if (M <= 0 || K <= 0 || N <= 0)           return hexa_int(-1);
-    HexaFarr32Entry* ae = &_hx_farr32_table[a_id];
-    HexaFarr32Entry* be = &_hx_farr32_table[b_id];
-    if (!ae->buf || !be->buf)                 return hexa_int(-1);
-    if (ae->len < M * K)                      return hexa_int(-1);
-    if (be->len < N * K)                      return hexa_int(-1);
-    HexaVal c_handle = hexa_farr32_zeros(hexa_int(M * N));
-    int64_t c_id = HX_INT(c_handle);
-    if (c_id < 0 || c_id >= _hx_farr32_count) return hexa_int(-1);
-    /* Re-fetch — farr32_zeros may have realloc'd the table. */
-    ae = &_hx_farr32_table[a_id];
-    be = &_hx_farr32_table[b_id];
-    HexaFarr32Entry* ce = &_hx_farr32_table[c_id];
-    if (!ae->buf || !be->buf)         return hexa_int(-1);
-    if (!ce->buf || ce->len < M * N)  return hexa_int(-1);
-    const float* A = ae->buf;
-    const float* B = be->buf;
-    float* C       = ce->buf;
-#if defined(__APPLE__) && defined(HEXA_METAL)
-    /* METAL_INTEGRATION.md step 4 of 5: MPS native transpose-right
-     * dispatch. Apple MPS computes A · B^T without a host-side transpose
-     * copy — the descriptor describes B as N×K row-major and the
-     * transposeRight:YES flag tells the kernel to interpret it as a
-     * K×N view (i.e. swap the row/col axes on the GPU tile scheduler).
-     * This is the bwd-input matmul shape for ag_linear and unblocks
-     * matmul_bwd_auto on Mac. */
-    if (hxlcl_getenv("HEXA_METAL") &&
-        hxlcl_strcmp(hxlcl_getenv("HEXA_METAL"), "1") == 0 &&
-        ((M * K) > 8192 || (K * N) > 8192)) {
-        extern int _hx_metal_farr32_matmul_NT_b_gpu(int64_t a_id,
-                                                    int64_t M, int64_t K,
-                                                    int64_t b_id, int64_t N,
-                                                    int64_t c_id);
-        int mrc = _hx_metal_farr32_matmul_NT_b_gpu(a_id, M, K, b_id, N, c_id);
-        if (mrc == 0) return c_handle;
-        /* mrc != 0: Metal path failed — fall through to CPU ikj. */
-    }
-#endif
-    /* CPU SGEMM with B transposed on the right.
-     * Inner loop: C[i,j] += A[i,k] * B[j,k].
-     * B[j,k] is the k-th element of row j of B (N×K row-major). For
-     * each (i,j) pair, we stream A row i and B row j in lock-step —
-     * j-major outer with k-inner gives B contiguous-row access.
-     *
-     * Block by j to keep B row resident in L1; for typical M=K=N=64..
-     * 1024 sizes this gives the same cache utilization as the no-T
-     * ikj path. (For ag_linear-class shapes the GPU path is taken
-     * before this loop runs, so polish here is bonus.) */
-    for (int64_t i = 0; i < M; i++) {
-        const float* Ai = A + i * K;
-        float*       Ci = C + i * N;
-        for (int64_t j = 0; j < N; j++) {
-            const float* Bj = B + j * K;
-            float acc = 0.0f;
-            int64_t k = 0;
-            for (; k + 4 <= K; k += 4) {
-                acc += Ai[k]   * Bj[k];
-                acc += Ai[k+1] * Bj[k+1];
-                acc += Ai[k+2] * Bj[k+2];
-                acc += Ai[k+3] * Bj[k+3];
-            }
-            for (; k < K; k++) {
-                acc += Ai[k] * Bj[k];
-            }
-            Ci[j] = acc;
-        }
-    }
-    return c_handle;
-}
-
-// ═══════════════════════════════════════════════════════════
-// METAL_INTEGRATION.md step 5 of 5 (2026-05-21): native FP32 SGEMM
-// with A transposed on the left (matmul-NT_a).
-//
-//   C[M, N] = A[K, M]^T · B[K, N]   (A as passed is K×M row-major;
-//                                    conceptually A_logical is M×K
-//                                    row-major and A^T = A_passed
-//                                    viewed transposed; equivalently
-//                                    the memory we receive is K×M
-//                                    contiguous with element [k, i] at
-//                                    a[k * M + i])
-//   C[i, j] = sum_{k=0..K-1} A[k, i] * B[k, j]
-//
-// Why this is the bwd-weight matmul shape for ag_linear:
-//   forward:  Y[M_batch, N_out] = X[M_batch, K_in] · W[K_in, N_out]
-//   bwd-W:    dW[K_in, N_out] = X^T[K_in, M_batch] · dY[M_batch, N_out]
-//   In matmul-NT_a form (A^T · B): A=X (M_batch × K_in row-major), B=dY
-//   (M_batch × N_out row-major). Mapping to the spec's NT_a naming:
-//     - spec's K (contracting/inner) = M_batch
-//     - spec's M (result rows)       = K_in   (= A's column count)
-//     - spec's N (result cols)       = N_out  (= B's column count)
-//   The caller passes A's true shape (K=M_batch rows, M=K_in cols) and
-//   B's true shape (K=M_batch rows, N=N_out cols). Both K dimensions
-//   must agree — they are the contracting axis.
-//
-// HEXA_METAL dispatch:
-//   Large shape (K*M > 8192 || K*N > 8192 — symmetric to NT_b's gate)
-//   and HEXA_METAL=1 env routes to _hx_metal_farr32_matmul_NT_a_gpu
-//   which calls MPSMatrixMultiplication with transposeLeft:YES,
-//   transposeRight:NO. The MPS API computes A^T · B natively (no host-
-//   side transpose copy); A is described as K×M row-major and the
-//   transposeLeft:YES flag tells the kernel to interpret it as an
-//   M×K view (descriptor swap on the GPU tile scheduler).
-//
-//   See Apple docs: MPSMatrixMultiplication.init(device:transposeLeft:
-//   transposeRight:resultRows:resultColumns:interiorColumns:alpha:beta:)
-//   When transposeLeft=YES, the left matrix's logical dimensions are
-//   (interiorColumns × resultRows) — here K (interior) × M (result rows)
-//   — but its physical (descriptor) layout is K rows × M columns row-
-//   major, which matches A's storage exactly.
-//
-// CPU fallback: ikj triple loop over A[k,i] * B[k,j]. Outer-loop k
-// streams A row k (M floats) and B row k (N floats) — both contiguous —
-// then the (i,j) inner pair updates C[i,j]. This is the same kj/ij
-// reduction pattern as a transposed-A SGEMM (mirrors numpy.einsum
-// 'mk,mn->kn'). For typical ag_linear shapes (M=batch, K=K_in≤4096,
-// N=N_out≤4096) the GPU path is taken before the CPU loop runs.
-HexaVal hexa_farr32_matmul_NT_a(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
-                                HexaVal b_v, HexaVal bc_v) {
-    int64_t a_id = hexa_as_num(a_v);
-    int64_t K    = hexa_as_num(ar_v);  /* spec: K = A's row count = contracting dim */
-    int64_t M    = hexa_as_num(ac_v);  /* spec: M = A's col count = result rows */
-    int64_t b_id = hexa_as_num(b_v);
-    int64_t N    = hexa_as_num(bc_v);  /* spec: N = B's col count = result cols */
-    if (a_id < 0 || a_id >= _hx_farr32_count) return hexa_int(-1);
-    if (b_id < 0 || b_id >= _hx_farr32_count) return hexa_int(-1);
-    if (M <= 0 || K <= 0 || N <= 0)           return hexa_int(-1);
-    HexaFarr32Entry* ae = &_hx_farr32_table[a_id];
-    HexaFarr32Entry* be = &_hx_farr32_table[b_id];
-    if (!ae->buf || !be->buf)                 return hexa_int(-1);
-    if (ae->len < K * M)                      return hexa_int(-1);
-    if (be->len < K * N)                      return hexa_int(-1);
-    HexaVal c_handle = hexa_farr32_zeros(hexa_int(M * N));
-    int64_t c_id = HX_INT(c_handle);
-    if (c_id < 0 || c_id >= _hx_farr32_count) return hexa_int(-1);
-    /* Re-fetch — farr32_zeros may have realloc'd the table. */
-    ae = &_hx_farr32_table[a_id];
-    be = &_hx_farr32_table[b_id];
-    HexaFarr32Entry* ce = &_hx_farr32_table[c_id];
-    if (!ae->buf || !be->buf)         return hexa_int(-1);
-    if (!ce->buf || ce->len < M * N)  return hexa_int(-1);
-    const float* A = ae->buf;
-    const float* B = be->buf;
-    float* C       = ce->buf;
-#if defined(__APPLE__) && defined(HEXA_METAL)
-    /* METAL_INTEGRATION.md step 5 of 5: MPS native transpose-left
-     * dispatch. Apple MPS computes A^T · B without a host-side transpose
-     * copy — the descriptor describes A as K×M row-major and the
-     * transposeLeft:YES flag tells the kernel to interpret it as an
-     * M×K view (i.e. swap the row/col axes on the GPU tile scheduler).
-     * This is the bwd-weight matmul shape for ag_linear and unblocks
-     * the dW = X^T · dY accumulator on Mac. Together with NT_b's
-     * dX = dY · W^T this closes the full transposed-matmul family. */
-    if (hxlcl_getenv("HEXA_METAL") &&
-        hxlcl_strcmp(hxlcl_getenv("HEXA_METAL"), "1") == 0 &&
-        ((K * M) > 8192 || (K * N) > 8192)) {
-        extern int _hx_metal_farr32_matmul_NT_a_gpu(int64_t a_id,
-                                                    int64_t M, int64_t K,
-                                                    int64_t b_id, int64_t K2,
-                                                    int64_t N, int64_t c_id);
-        int mrc = _hx_metal_farr32_matmul_NT_a_gpu(a_id, M, K, b_id, K, N, c_id);
-        if (mrc == 0) return c_handle;
-        /* mrc != 0: Metal path failed — fall through to CPU ikj. */
-    }
-#endif
-    /* CPU SGEMM with A transposed on the left.
-     * Inner formula: C[i,j] = sum_k A[k,i] * B[k,j].
-     * Outer loop over k streams A row k (M contiguous floats from a[k*M..])
-     * and B row k (N contiguous floats from b[k*N..]); the inner (i,j)
-     * loop accumulates into C. This kij ordering matches the bwd-weight
-     * shape used by ag_linear and gives B contiguous-row access. */
-    for (int64_t k = 0; k < K; k++) {
-        const float* Ak = A + k * M;  /* A's k-th row, length M (= original a[k,*]) */
-        const float* Bk = B + k * N;  /* B's k-th row, length N */
-        for (int64_t i = 0; i < M; i++) {
-            float aki = Ak[i];        /* = original A[k, i] */
-            float*  Ci = C + i * N;
-            int64_t j = 0;
-            for (; j + 4 <= N; j += 4) {
-                Ci[j]   += aki * Bk[j];
-                Ci[j+1] += aki * Bk[j+1];
-                Ci[j+2] += aki * Bk[j+2];
-                Ci[j+3] += aki * Bk[j+3];
-            }
-            for (; j < N; j++) {
-                Ci[j] += aki * Bk[j];
-            }
-        }
-    }
-    return c_handle;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -10718,6 +10186,10 @@ HexaVal hexa_json_encode(HexaVal v) { return hexa_json_stringify(v); }
 // flat row-major arrays of TAG_FLOAT / TAG_INT (coerced via __hx_to_double).
 
 // tensor_zeros(n): length-n array filled with 0.0.
+// Step-3 cycle 81 ports — tensor family dispatches to hexa-source.
+// C wrappers handle the HexaVal→int coercion for length args and
+// array tag checks; hexa fns receive typed [float] / int directly.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_tensor_zeros(HexaVal nv) {
     int64_t n = (int64_t)__hx_to_double(nv);
     if (n < 0) n = 0;
@@ -10725,9 +10197,6 @@ HexaVal hexa_tensor_zeros(HexaVal nv) {
     for (int64_t i = 0; i < n; i++) arr = hexa_array_push(arr, hexa_float(0.0));
     return arr;
 }
-
-// FIX-A 2nd batch (2026-04-19): tensor_ones(n) — length-n array filled with 1.0.
-// Pairs with tensor_zeros for anima-speak init paths (ln_g, rms_g).
 HexaVal hexa_tensor_ones(HexaVal nv) {
     int64_t n = (int64_t)__hx_to_double(nv);
     if (n < 0) n = 0;
@@ -10735,10 +10204,6 @@ HexaVal hexa_tensor_ones(HexaVal nv) {
     for (int64_t i = 0; i < n; i++) arr = hexa_array_push(arr, hexa_float(1.0));
     return arr;
 }
-
-// FIX-A 2nd batch (2026-04-19): swiglu_vec(gate, up) = silu(gate) * up elementwise.
-// silu(x) = x / (1 + exp(-x)). Shape: min(|gate|, |up|). For anima eval_alm.hexa
-// + training hot paths (nn_core etc.) — scalar fallback, fast-path is FFN fused kernel.
 HexaVal hexa_swiglu_vec(HexaVal gate, HexaVal up) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(gate) || !HX_IS_ARRAY(up)) return out;
@@ -10752,8 +10217,6 @@ HexaVal hexa_swiglu_vec(HexaVal gate, HexaVal up) {
     }
     return out;
 }
-
-// tensor_slice(arr, lo, hi): subarray [lo, hi) with clamped bounds.
 HexaVal hexa_tensor_slice(HexaVal a, HexaVal lov, HexaVal hiv) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(a)) return out;
@@ -10765,8 +10228,6 @@ HexaVal hexa_tensor_slice(HexaVal a, HexaVal lov, HexaVal hiv) {
     for (int64_t i = lo; i < hi; i++) out = hexa_array_push(out, hexa_array_get(a, i));
     return out;
 }
-
-// tensor_add(a, b): elementwise a[i] + b[i], length = min(|a|, |b|).
 HexaVal hexa_tensor_add(HexaVal a, HexaVal b) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(a) || !HX_IS_ARRAY(b)) return out;
@@ -10779,8 +10240,39 @@ HexaVal hexa_tensor_add(HexaVal a, HexaVal b) {
     }
     return out;
 }
+#else
+extern HexaVal rt_tensor_zeros(HexaVal n);
+extern HexaVal rt_tensor_ones(HexaVal n);
+extern HexaVal rt_tensor_slice(HexaVal a, HexaVal lo, HexaVal hi);
+extern HexaVal rt_tensor_add(HexaVal a, HexaVal b);
+extern HexaVal rt_swiglu_vec(HexaVal gate, HexaVal up);
+HexaVal hexa_tensor_zeros(HexaVal nv) {
+    int64_t n = (int64_t)__hx_to_double(nv);
+    return rt_tensor_zeros(hexa_int(n));
+}
+HexaVal hexa_tensor_ones(HexaVal nv) {
+    int64_t n = (int64_t)__hx_to_double(nv);
+    return rt_tensor_ones(hexa_int(n));
+}
+HexaVal hexa_swiglu_vec(HexaVal gate, HexaVal up) {
+    if (!HX_IS_ARRAY(gate) || !HX_IS_ARRAY(up)) return hexa_array_new();
+    return rt_swiglu_vec(gate, up);
+}
+HexaVal hexa_tensor_slice(HexaVal a, HexaVal lov, HexaVal hiv) {
+    if (!HX_IS_ARRAY(a)) return hexa_array_new();
+    int64_t lo = (int64_t)__hx_to_double(lov);
+    int64_t hi = (int64_t)__hx_to_double(hiv);
+    return rt_tensor_slice(a, hexa_int(lo), hexa_int(hi));
+}
+HexaVal hexa_tensor_add(HexaVal a, HexaVal b) {
+    if (!HX_IS_ARRAY(a) || !HX_IS_ARRAY(b)) return hexa_array_new();
+    return rt_tensor_add(a, b);
+}
+#endif
 
 // tensor_dot(a, b): scalar sum(a[i] * b[i]) over min length.
+// Step-3 cycle 81 port — dispatches to rt_tensor_dot.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_tensor_dot(HexaVal a, HexaVal b) {
     if (!HX_IS_ARRAY(a) || !HX_IS_ARRAY(b)) return hexa_float(0.0);
     int64_t na = (int64_t)HX_ARR_LEN(a), nb = (int64_t)HX_ARR_LEN(b);
@@ -10792,6 +10284,13 @@ HexaVal hexa_tensor_dot(HexaVal a, HexaVal b) {
     }
     return hexa_float(s);
 }
+#else
+extern HexaVal rt_tensor_dot(HexaVal a, HexaVal b);
+HexaVal hexa_tensor_dot(HexaVal a, HexaVal b) {
+    if (!HX_IS_ARRAY(a) || !HX_IS_ARRAY(b)) return hexa_float(0.0);
+    return rt_tensor_dot(a, b);
+}
+#endif
 
 // tensor_mul_scalar(a, s): elementwise a[i] * s.
 HexaVal hexa_tensor_mul_scalar(HexaVal a, HexaVal sv) {
@@ -11222,27 +10721,6 @@ static void _hexa_init_fn_shims(void) {
     safetensors_mmap_close          = hexa_fn_new((void*)hexa_safetensors_mmap_close,          1);
     // RFC 032 (2026-05-12): farr_matmul — packed-double matrix multiply.
     farr_matmul_shim                = hexa_fn_new((void*)hexa_farr_matmul,                     5);
-    // METAL_INTEGRATION.md step 3 of 5 (2026-05-21): HX_FARR32 shims.
-    // Parallel to FP64 farr_* above, FP32 storage. The 5-arg matmul
-    // uses the same carrier-shim pattern as farr_matmul_shim (codegen
-    // emits direct C call past the hexa_callN ceiling).
-    farr32_zeros                    = hexa_fn_new((void*)hexa_farr32_zeros,                    1);
-    farr32_get                      = hexa_fn_new((void*)hexa_farr32_get,                      2);
-    farr32_set                      = hexa_fn_new((void*)hexa_farr32_set,                      3);
-    farr32_len                      = hexa_fn_new((void*)hexa_farr32_len,                      1);
-    farr32_free                     = hexa_fn_new((void*)hexa_farr32_free,                     1);
-    farr32_matmul_shim              = hexa_fn_new((void*)hexa_farr32_matmul,                   5);
-    // METAL_INTEGRATION.md step 4 of 5 (2026-05-21): FP32 matmul with B
-    // transposed on the right — unblocks flame ag_linear bwd via
-    // matmul_bwd_auto (stdlib/flame/ag_tape.hexa:630). Same 5-arg
-    // carrier-shim pattern as farr32_matmul_shim above.
-    farr32_matmul_NT_b_shim         = hexa_fn_new((void*)hexa_farr32_matmul_NT_b,              5);
-    // METAL_INTEGRATION.md step 5 of 5 (2026-05-21): FP32 matmul with A
-    // transposed on the left — closes the dW = X^T · dY shape needed by
-    // flame ag_linear bwd (the weight-gradient matmul). Symmetric to
-    // farr32_matmul_NT_b_shim — together NT_a + NT_b close the full
-    // transposed-matmul family. Same 5-arg carrier-shim pattern.
-    farr32_matmul_NT_a_shim         = hexa_fn_new((void*)hexa_farr32_matmul_NT_a,              5);
     // RFC 033 (2026-05-12): farr_copy + farr_add_gaussian_noise.
     farr_copy                       = hexa_fn_new((void*)hexa_farr_copy,                       1);
     farr_add_gaussian_noise         = hexa_fn_new((void*)hexa_farr_add_gaussian_noise,         2);

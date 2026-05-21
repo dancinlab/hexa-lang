@@ -1094,6 +1094,20 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 81: tensor family port (6 fns)
+
+- ✅ Six tensor fns ported in batch via cycle-76 typed-float fast-paths:
+  `rt_tensor_zeros(n)`, `rt_tensor_ones(n)`, `rt_tensor_slice(a, lo, hi)`,
+  `rt_tensor_add(a, b)`, `rt_tensor_dot(a, b)`, `rt_swiglu_vec(gate, up)`
+- `rt_swiglu_vec` reuses cycle-7 `rt_exp` for silu — fully libm-free
+- Each hexa-source body uses typed `[float]` + `int` params; bodies
+  like `out.push(a[i] + b[i])` direct-emit `hexa_float(HX_FLOAT(...))` —
+  no hexa_add recursion
+- C wrappers do HexaVal→int coercion for length args (via
+  `__hx_to_double` → `int64_t`) and array-tag check before dispatch
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,376 B
+
 ### 2026-05-21 — step 3 cycle 80: hexa_add_slow array+array concat port
 
 - ✅ Array+array branch of `hexa_add_slow` (self/runtime_core.c:5363-
