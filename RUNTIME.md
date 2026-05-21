@@ -1043,3 +1043,16 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,504 B
 - commit `5d2f9420`
+
+### 2026-05-21 — step 3 cycle 34: hexa_array_fill → rt_array_fill_float
+
+- ✅ `hexa_array_fill` (self/runtime.c:3337) ported. Returns a NEW
+  array of the same length with every slot set to `v`. Float
+  fast-path dispatches to `rt_array_fill_float` only when both the
+  source array is all-float and the fill value is float; mixed-type
+  arrays stay on the polymorphic C body
+- Two-mode `#ifndef HEXA_HAS_HEXA_RT_STDLIB` wiring + `_arr_all_float`
+  dispatch identical to cycle 33 (index_of) — `_arr_all_float`
+  forward decl already in scope from the earlier cycle-33 edit
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,664 B

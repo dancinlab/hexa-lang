@@ -3334,6 +3334,10 @@ HexaVal hexa_array_for_each(HexaVal arr, HexaVal fn) {
 // fill: new array of same length, every slot set to v.
 // Matches interpreter: returns a NEW array rather than mutating in place
 // (hexa_full.hexa:15486-15494).
+// Step-3 cycle 34 port — float fast-path dispatches to rt_array_fill_float
+// when both the array is all-float and the fill value is float; mixed-type
+// arrays stay on the polymorphic C body.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_fill(HexaVal arr, HexaVal v) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3343,6 +3347,21 @@ HexaVal hexa_array_fill(HexaVal arr, HexaVal v) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_fill_float(HexaVal arr, HexaVal v);
+HexaVal hexa_array_fill(HexaVal arr, HexaVal v) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    if (HX_IS_FLOAT(v) && _arr_all_float(arr)) {
+        return rt_array_fill_float(arr, v);
+    }
+    int64_t n = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < n; i++) {
+        out = hexa_array_push(out, v);
+    }
+    return out;
+}
+#endif
 
 // rt#32-O (r5-a10.5-A, 2026-04-20): leak-fix primitives for CLM training.
 //
