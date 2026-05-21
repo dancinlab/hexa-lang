@@ -46,6 +46,15 @@
 //     absorbed_default  = true | false                 // g3 default
 //     scope_caveats     = [ "caveat1", "caveat2", ... ]   // multi-line
 //
+//   Optional keys per [cell.<verb>] section:
+//     python_candidates = python3.13, python3.12, python3
+//        ↑ ONLY honored when substrate == python3 (Phase B bug #3 fix).
+//          On macOS `command -v python3` resolves to /usr/bin/python3
+//          (Apple 3.9.6) which fails PEP 604 `str | None` syntax used
+//          by producer scripts. With this key, the dispatcher walks the
+//          comma-separated list and uses the FIRST candidate that
+//          `command -v` resolves. If none resolve → rc=3 honest-skip.
+//
 //   Example (sscb.demi):
 //     [cell.analyze]
 //     substrate     = python3
@@ -436,6 +445,75 @@ pub fn dep_check(deps: [string]) -> [string] {
     return missing
 }
 
+// ─── Substrate binary resolution (Phase B bug #3 fix) ───────────────
+//
+// resolve_substrate_bin maps a substrate KIND ("python3", "hexa",
+// "ngspice", "bash", ...) to the absolute (or PATH-resolved) binary
+// that should actually be exec'd. The need arose because plain
+// `command -v python3` resolves to `/usr/bin/python3` on macOS
+// (Apple-shipped 3.9.6), which fails PEP 604 `str | None` syntax used
+// by femmt_sweep.py / ngspice_breaking.py. Legacy SSCBProducer.swift
+// explicitly preferred `/opt/homebrew/bin/python3.13`; this dispatcher
+// honors the same intent via a per-cell manifest key.
+//
+// Manifest key (per [cell.<verb>]):
+//   python_candidates = python3.13, python3.12, python3
+//
+// Resolution order (Tier-1 — python3 only · python3 is the only
+// substrate where the system PATH is known to point at a too-old
+// binary on macOS):
+//   1. If substrate == "python3" AND manifest has `python_candidates`:
+//      try each candidate in order via `command -v <name>`. Return the
+//      first one that resolves. Returns empty string "" if NONE resolve
+//      (dispatcher converts that to rc=3 deps-missing honest-skip).
+//   2. Else (no candidates listed OR substrate != python3): return the
+//      substrate string as-is (backward compatible — `command -v` happens
+//      implicitly when shell runs the spawn command).
+//
+// Tier-2 future symmetry (deferred — not needed for bug #3 closure):
+//   - `hexa_candidates` (if hexa-lang ships multiple toolchain binaries)
+//   - `ngspice_candidates` (ngspice-46 vs ngspice-47 selection)
+//   The hook point below is structured so adding these is a one-branch
+//   change; we leave them off for now to avoid over-engineering.
+//
+// Returns: resolved binary name/path (caller passes into spawn_substrate),
+// or empty string "" to signal "all candidates missing" (rc=3 territory).
+
+fn _command_exists(name: string) -> bool {
+    let probe = exec("command -v " + name + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return probe == "y"
+}
+
+pub fn resolve_substrate_bin(manifest) -> string {
+    let substrate = to_string(manifest["substrate"])
+    if substrate == "python3" && has_key(manifest, "python_candidates") {
+        let raw = to_string(manifest["python_candidates"])
+        let cands = _split_csv(raw)
+        if len(cands) > 0 {
+            let mut i = 0
+            while i < len(cands) {
+                let c = cands[i]
+                if _command_exists(c) { return c }
+                i = i + 1
+            }
+            // All candidates missing — signal to caller via empty string.
+            return ""
+        }
+    }
+    // Backward-compat: no candidates declared, use substrate kind as-is.
+    return substrate
+}
+
+// resolution_attempted lists the candidates tried for diagnostic msgs
+// (kept tiny — caller composes the rc=3 honest-skip log line).
+pub fn resolution_attempted(manifest) -> [string] {
+    if to_string(manifest["substrate"]) == "python3" && has_key(manifest, "python_candidates") {
+        return _split_csv(to_string(manifest["python_candidates"]))
+    }
+    let out = [to_string(manifest["substrate"])]
+    return out
+}
+
 // ─── Substrate spawn ────────────────────────────────────────────────
 //
 // spawn_substrate runs `<substrate> <script> <runDir>` and returns a
@@ -471,17 +549,29 @@ fn _tail_lines(text: string, n: int) -> string {
 
 pub fn spawn_substrate(substrate: string, script_abs: string,
                        run_dir: string) {
+    return spawn_substrate_bin(substrate, substrate, script_abs, run_dir)
+}
+
+// spawn_substrate_bin — explicit-binary variant introduced for Phase B
+// bug #3 (python3 → python3.13 candidate resolution). `substrate` is the
+// KIND ("python3" | "hexa" | "ngspice" | "bash" | ...) used for branch
+// selection; `substrate_bin` is the actual binary name/path to exec
+// (e.g. "python3.13" resolved via `command -v` from the manifest's
+// `python_candidates` chain). Backward-compatible: spawn_substrate()
+// forwards `substrate` as both args.
+pub fn spawn_substrate_bin(substrate: string, substrate_bin: string,
+                           script_abs: string, run_dir: string) {
     // Build the argv. For `hexa` substrate we call `hexa run`; for
     // `python3` / `bash` / etc. we exec the binary directly. For
     // `ngspice` we pass the script as the netlist (-b batch mode).
     let mut cmd = ""
     if substrate == "hexa" {
-        cmd = "hexa run " + script_abs + " " + run_dir
+        cmd = substrate_bin + " run " + script_abs + " " + run_dir
     } else if substrate == "ngspice" {
-        cmd = "ngspice -b " + script_abs + " -o " + run_dir + "/ngspice.log"
+        cmd = substrate_bin + " -b " + script_abs + " -o " + run_dir + "/ngspice.log"
     } else {
         // python3 / bash / curl / arbitrary — script-as-arg form.
-        cmd = substrate + " " + script_abs + " " + run_dir
+        cmd = substrate_bin + " " + script_abs + " " + run_dir
     }
 
     let log_path = run_dir + "/_cellrun.log"
@@ -603,6 +693,21 @@ pub fn cell_run_with_roots(domain: string, verb: string, roots) -> int {
         println("[cellrun] deps ok: " + deps.join(", "))
     }
 
+    // Resolve substrate binary (Phase B bug #3 — python_candidates).
+    // For substrate=python3 with a `python_candidates` manifest key,
+    // resolve_substrate_bin walks the candidate list (e.g.
+    // python3.13, python3.12, python3) and returns the first that
+    // exists. Empty string ⇒ all candidates missing ⇒ rc=3 honest-skip.
+    let substrate_bin = resolve_substrate_bin(mf)
+    if len(substrate_bin) == 0 {
+        let tried = resolution_attempted(mf).join(", ")
+        println("[cellrun] honest-skip — no python candidate resolved: tried " + tried)
+        return 3
+    }
+    if substrate_bin != to_string(mf["substrate"]) {
+        println("[cellrun] substrate_bin resolved: " + to_string(mf["substrate"]) + " → " + substrate_bin)
+    }
+
     // Resolve paths.
     let script_abs = hexa_lang_root + "/" + mf["script"]
     if !file_exists(script_abs) {
@@ -626,8 +731,8 @@ pub fn cell_run_with_roots(domain: string, verb: string, roots) -> int {
     println("[cellrun] run_dir = " + final_run_dir)
 
     // Spawn substrate (variable name avoids the reserved `spawn` token).
-    let sp_result = spawn_substrate(mf["substrate"], script_abs, final_run_dir)
-    println("[cellrun] substrate=" + mf["substrate"] + " exit=" + sp_result["exit_code"])
+    let sp_result = spawn_substrate_bin(mf["substrate"], substrate_bin, script_abs, final_run_dir)
+    println("[cellrun] substrate=" + mf["substrate"] + " bin=" + substrate_bin + " exit=" + sp_result["exit_code"])
     if sp_result["ok"] != "true" {
         println("[cellrun] honest-fail — substrate exit nonzero")
         println("[cellrun] log tail:\n" + sp_result["stdout_tail"])

@@ -18,6 +18,11 @@
 //   T6 — empty scope_caveats array `[]` parses to length 0.
 //   T7 — Korean caveats with `(` `)` and internal commas (mirrors
 //        domains/sscb.demi on demiurge main) — count is preserved.
+//   T8 — python_candidates resolves to first present binary
+//        (Phase B bug #3 regression guard — macOS /usr/bin/python3 is
+//        3.9.6 too-old; manifest must prefer python3.13).
+//   T9 — python_candidates with ALL-missing candidates → rc=3 honest-skip
+//        with "no python candidate resolved" log line.
 //
 // Fixtures are built on the fly under /tmp/hexa_cellrun_test_<pid>/.
 
@@ -248,6 +253,75 @@ fn t7_korean_caveats(root: string) {
     }
 }
 
+// ─── T8/T9: python_candidates substrate resolution (Phase B bug #3) ─
+//
+// These tests exercise resolve_substrate_bin + the dispatcher's rc=3
+// path. T8 builds a manifest with `python_candidates = python3.13,
+// python3.12, python3` and asserts the resolver returns one of those
+// (whichever is present on the host — at least `python3` always is on
+// any POSIX dev box). T9 builds a manifest with two bogus candidates
+// and asserts the dispatcher returns rc=3 (no python resolved).
+//
+// T8 calls resolve_substrate_bin DIRECTLY (avoids spawning python on a
+// bash echo script). T9 goes end-to-end through cell_run_with_roots
+// since we want the rc=3 honest-skip log path verified.
+
+fn _write_python_manifest(root: string, domain: string,
+                          candidates: string) -> string {
+    let path = root + "/domains/" + domain + ".demi"
+    let mut body = "[cell.analyze]\n"
+    body = body + "substrate     = python3\n"
+    body = body + "python_candidates = " + candidates + "\n"
+    body = body + "script        = stdlib/mock/echo.sh\n"
+    body = body + "record_kind   = py_mock_record\n"
+    body = body + "output_dir    = exports/py_mock\n"
+    body = body + "required_deps =\n"
+    body = body + "gate_default  = OPEN\n"
+    body = body + "absorbed_default = false\n"
+    body = body + "scope_caveats = []\n"
+    let _ = write_text(path, body)
+    return path
+}
+
+fn t8_python_candidates_resolves(root: string) {
+    println("\nT8 — python_candidates resolves to first present binary")
+    let _ = _write_python_manifest(root, "t8dom",
+        "python3.13, python3.12, python3")
+    let mf = load_manifest_at(root + "/domains", "t8dom", "analyze")
+    check("T8 manifest parses _ok", mf["_ok"] == "true")
+    check("T8 manifest carries python_candidates",
+          has_key(mf, "python_candidates"))
+    let bin = resolve_substrate_bin(mf)
+    check("T8 resolver returned non-empty", len(bin) > 0)
+    // Whichever python is present on this host MUST be one of the three.
+    let ok = bin == "python3.13" || bin == "python3.12" || bin == "python3"
+    check("T8 resolved binary is one of the candidates", ok)
+    // Diagnostic: which one did we pick?
+    println("  T8 resolved → " + bin)
+    // On macOS dev boxes python3.13 from Homebrew is the intended pick;
+    // we don't HARD-assert that (CI Linux runners may not have 3.13),
+    // but log it for the test report.
+}
+
+fn t9_python_candidates_all_missing(root: string) {
+    println("\nT9 — python_candidates all missing → rc=3 honest-skip")
+    let _ = _write_python_manifest(root, "t9dom",
+        "nonexistent_python_xyz1, nonexistent_python_xyz2")
+    // Also need a script that exists, so dep check + script lookup pass
+    // BEFORE substrate resolution runs (resolve_substrate_bin is called
+    // before script_abs lookup → rc=3 triggers first regardless, but
+    // belt-and-braces).
+    _write_mock_script(root)
+    let rc = cell_run_with_roots("t9dom", "analyze", _build_roots(root))
+    check("T9 rc == 3 (no python candidate resolved)", rc == 3)
+
+    // Also directly assert resolver returns empty string.
+    let mf = load_manifest_at(root + "/domains", "t9dom", "analyze")
+    let bin = resolve_substrate_bin(mf)
+    check("T9 resolver returns empty string when all missing",
+          len(bin) == 0)
+}
+
 // ─── main ──────────────────────────────────────────────────────────
 
 fn main() {
@@ -263,6 +337,8 @@ fn main() {
     t5_internal_comma(root)
     t6_empty_caveats(root)
     t7_korean_caveats(root)
+    t8_python_candidates_resolves(root)
+    t9_python_candidates_all_missing(root)
 
     println("")
     println("cellrun_test: " + to_string(_pass) + "/" + to_string(_total))
