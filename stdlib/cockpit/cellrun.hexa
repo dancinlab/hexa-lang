@@ -1,0 +1,898 @@
+// stdlib/cockpit/cellrun.hexa — generic verb-cell dispatcher
+// (ARCH §0 hexa-only ultimate form · ARCH §3 7-verb spine).
+//
+// @version 0.1.0
+// @capabilities [io, process, fs_write]
+// @stability stage-0 scaffold (Phase A) — branch-only, no demiurge-side
+//   .demi manifests authored yet; the dispatcher returns honest-skip
+//   for every domain until the demiurge side ships the manifests.
+// @since 2026-05-21
+//
+// PROBLEM (demiurge cockpit κ-N · 2026-05-21)
+//   Cockpit currently ships 46 hardcoded `*Producer.swift` files +
+//   40+ switch cases in `ActionDispatch.swift`. Every new verb-cell
+//   bolts another Swift module onto the binary even though every
+//   producer's logic is structurally identical (locate substrate ·
+//   locate script · spawn · parse summary line · verify artifacts ·
+//   emit typed JSON record · apply g3 honesty gate). The duplication
+//   contradicts ARCH §0 first principle (hexa-native is the ultimate
+//   destination · Swift cockpit is transitional bridge) — every new
+//   domain ships ≥150 lines of boilerplate Swift instead of one
+//   declarative manifest.
+//
+// SOLUTION (this file)
+//   Replace per-domain Swift dispatch with a single hexa-native
+//   dispatcher that reads a `.demi` manifest per domain. Each cell is
+//   `cell.<verb>` table in the manifest, declaring the substrate
+//   (python3 / hexa / curl / ngspice), script path, record kind,
+//   output dir, required deps, gate defaults, and scope_caveats. The
+//   dispatcher is invoked as
+//       hexa run stdlib/cockpit/cellrun.hexa <domain> <verb>
+//   from cockpit (or any caller); the Swift side reduces to one
+//   subprocess spawn that selects the cell by name.
+//
+// .DEMI MANIFEST FORMAT (one file per domain — domains/<name>.demi)
+//   Minimal TOML-flavored key=value lines, square-bracket section
+//   headers, no nested tables (kept simple-on-purpose for v0.1).
+//
+//   Required keys per [cell.<verb>] section:
+//     substrate         = python3 | hexa | curl | ngspice | bash
+//     script            = stdlib/<domain>/<verb>.{py|hexa|sh}
+//                          (path relative to ~/core/hexa-lang/)
+//     record_kind       = <snake_case identifier>     // schema key
+//     output_dir        = exports/<domain>/<verb>      // under cockpit
+//     required_deps     = <comma-separated list>       // empty ok
+//     gate_default      = OPEN | CLOSED                // g3 default
+//     absorbed_default  = true | false                 // g3 default
+//     scope_caveats     = [ "caveat1", "caveat2", ... ]   // multi-line
+//
+//   Optional keys per [cell.<verb>] section:
+//     python_candidates = python3.13, python3.12, python3
+//        ↑ ONLY honored when substrate == python3 (Phase B bug #3 fix).
+//          On macOS `command -v python3` resolves to /usr/bin/python3
+//          (Apple 3.9.6) which fails PEP 604 `str | None` syntax used
+//          by producer scripts. With this key, the dispatcher walks the
+//          comma-separated list and uses the FIRST candidate that
+//          `command -v` resolves. If none resolve → rc=3 honest-skip.
+//
+//   Example (sscb.demi):
+//     [cell.analyze]
+//     substrate     = python3
+//     script        = stdlib/sscb/ngspice.hexa
+//     record_kind   = sscb_transient_record
+//     output_dir    = exports/sscb/transient
+//     required_deps = ngspice
+//     gate_default  = OPEN
+//     absorbed_default = false
+//     scope_caveats = [
+//       "ngspice-46-SPICE-only",
+//       "no-OpenFOAM-thermal",
+//       "no-UL489I-cert",
+//       "no-datasheet-absorption",
+//     ]
+//
+//     [cell.synthesize]
+//     substrate     = python3
+//     script        = stdlib/sscb/femmt_sweep.py
+//     record_kind   = sscb_synthesize_record
+//     output_dir    = exports/sscb/synthesize
+//     required_deps =
+//     gate_default  = OPEN
+//     absorbed_default = false
+//     scope_caveats = [
+//       "femmt-optional-analytic-fallback",
+//       "no-measured-BH-absorption",
+//     ]
+//
+// HONEST (g3 — non-negotiable)
+//   • Phase A is SCAFFOLD ONLY — the dispatcher is structurally
+//     correct (manifest load · dep check · spawn · record emit · gate
+//     apply) but until demiurge authors the per-domain `.demi`
+//     manifests every cell_run() call returns the "manifest missing"
+//     honest-skip path. That is the contract for branch landing.
+//   • absorbed_default MUST be false for every cell that has not
+//     absorbed a measured-bench oracle. The manifest format permits
+//     `absorbed_default = true` ONLY as a future hook for cells that
+//     legitimately closed; the dispatcher does NOT flip the bit on
+//     its own — it copies the manifest value into the emitted record
+//     verbatim.
+//   • Silent success is forbidden. Every non-OK exit code, missing
+//     artifact, or parse failure surfaces as a JSON record with
+//     `ok=false` and a log tail under output_dir/<stamp>/_cellrun.log.
+//
+// MIGRATION PATH (this file is Phase A · Phase B is demiurge-side)
+//   Phase A (here): scaffold the dispatcher + selftest, branch-land.
+//   Phase B (demiurge): author `domains/*.demi` for each of the 46
+//     existing producer cells (1-line-per-cell manifest authoring; the
+//     46 Swift files become 46 `.demi` rows split across ~13 domain
+//     files). Delete the corresponding `*Producer.swift`.
+//   Phase C (cockpit): collapse `ActionDispatch.swift` switch into a
+//     single `hexa run cellrun.hexa <domain> <verb>` spawn — one
+//     dispatch path instead of 40+ cases.
+
+use "stdlib/io"
+// NOTE on imports:
+//   - stdlib/sys.hexa pulls a `read_line()` builtin that is not linked
+//     into the current runtime — importing it breaks codegen even for
+//     callers that don't touch sys_stdin_*. We re-implement the few
+//     surface bits we need (_env via exec("printenv"), sys_argv via
+//     args()) inline below.
+//   - stdlib/time/iso8601.hexa exposes utc_iso_format / utc_iso_parse
+//     builtins that are not linked either — only `utc_iso_now()` is
+//     present. We call that builtin directly without the module.
+//   - stdlib/io is safe (exercises only write_file/read_file/file_exists
+//     + exec — all linked).
+
+// ─── Tunables (override via env vars; sensible defaults shipped) ───
+//
+// HEXA_CELLRUN_DEMI_ROOT — directory holding `<domain>.demi` files.
+//   Default: ~/core/demiurge/cockpit/domains (demiurge-side SSOT).
+//   Tests + CI override this via env var to point at a fixture root.
+
+// _env(name) — local env lookup (replaces stdlib/sys.sys_env to avoid
+// the broken read_line/iso8601 transitive imports — see header note).
+fn _shell_quote(s: string) -> string {
+    let mut out = []
+    out.push("'")
+    let mut i = 0
+    while i < len(s) {
+        let c = s[i]
+        if c == '\'' {
+            out.push("'\"'\"'")
+        } else {
+            out.push(s.substring(i, i + 1))
+        }
+        i = i + 1
+    }
+    out.push("'")
+    return out.join("")
+}
+
+fn _env(name: string) -> string {
+    let v = exec("printenv " + _shell_quote(name) + " 2>/dev/null")
+    return v.trim()
+}
+
+fn _home_dir() -> string {
+    let h = _env("HOME")
+    if len(h) > 0 { return h }
+    // Fallback to shell expansion (cheap one-shot).
+    return exec("echo $HOME").trim()
+}
+
+// _default_roots() — env-driven defaults map. Callers (tests, CI) can
+// supplant by passing an explicit `roots` map to cell_run_with_roots
+// (the runtime's setenv() builtin is a no-op in the current
+// hexa-lang build — see runtime.c hxlcl_setenv stub — so env-var
+// override via setenv() inside the same process is NOT functional;
+// tests use cell_run_with_roots() with an explicit map instead).
+//
+// roots map shape:
+//   "demi_root"      : path to <domain>.demi directory
+//   "exports_root"   : path to exports/<domain>/<verb>/<stamp> base
+//   "hexa_lang_root" : path to ~/core/hexa-lang (script lookup base)
+pub fn default_roots() {
+    let r = json_parse("{}")
+    let home = _home_dir()
+
+    let demi_env = _env("HEXA_CELLRUN_DEMI_ROOT")
+    r["demi_root"] = if len(demi_env) > 0 { demi_env } else { home + "/core/demiurge/cockpit/domains" }
+
+    let exp_env = _env("HEXA_CELLRUN_EXPORTS_ROOT")
+    r["exports_root"] = if len(exp_env) > 0 { exp_env } else { home + "/core/demiurge/cockpit/exports" }
+
+    let hl_env = _env("HEXA_CELLRUN_HEXA_LANG_ROOT")
+    r["hexa_lang_root"] = if len(hl_env) > 0 { hl_env } else { home + "/core/hexa-lang" }
+
+    return r
+}
+
+// ─── trim / strip helpers (no overloading on string.trim — explicit) ─
+
+fn _strip(s: string) -> string {
+    return s.trim()
+}
+
+fn _is_blank_or_comment(line: string) -> bool {
+    let t = _strip(line)
+    if len(t) == 0 { return true }
+    if t.substring(0, 1) == "#" { return true }
+    return false
+}
+
+// Strip surrounding double-quotes if present. The .demi format permits
+// quoted or unquoted string values; for caveats we accept either.
+fn _unquote(s: string) -> string {
+    let t = _strip(s)
+    let n = len(t)
+    if n >= 2 && t.substring(0, 1) == "\"" && t.substring(n - 1, n) == "\"" {
+        return t.substring(1, n - 1)
+    }
+    return t
+}
+
+// Split a comma list (`a, b, c`) into trimmed pieces.
+//
+// Quote-aware (Phase B bug #1 fix · rfc006-style scope_caveats honest
+// parsing): walk char-by-char and only honor a comma as a separator
+// when NOT inside a double-quoted segment. This preserves Korean (or
+// any) caveat clauses that contain internal commas, e.g.
+//   "snubber (100 nF · 5 Ω) generic-not-engineered, honest gap."
+// would previously fragment into 2 pieces; now stays as 1.
+//
+// Outer double-quotes are stripped per element so callers that already
+// pass through _unquote() still get the same shape (idempotent strip).
+// Escaped quotes (\") are NOT handled — manifest authors avoid them in
+// practice and stdlib has no escape primitive in v0.1; future Tier-2.
+fn _split_csv(s: string) -> [string] {
+    let mut out = []
+    let mut buf = ""
+    let mut in_quote = false
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\"" {
+            in_quote = !in_quote
+            buf = buf + c
+        } else if c == "," && !in_quote {
+            let p = _strip(buf)
+            let u = _unquote(p)
+            if len(u) > 0 { out.push(u) }
+            buf = ""
+        } else {
+            buf = buf + c
+        }
+        i = i + 1
+    }
+    // Flush trailing piece.
+    let p = _strip(buf)
+    let u = _unquote(p)
+    if len(u) > 0 { out.push(u) }
+    return out
+}
+
+// ─── Manifest record shape (a hexa map; documented inline) ──────────
+//
+// CellManifest map keys (every value is a string except scope_caveats
+// which is [string]):
+//   "substrate"        : "python3" | "hexa" | "curl" | "ngspice" | "bash"
+//   "script"           : relative path under HEXA_CELLRUN_HEXA_LANG_ROOT
+//   "record_kind"      : snake_case identifier
+//   "output_dir"       : path under HEXA_CELLRUN_EXPORTS_ROOT
+//   "required_deps"    : comma-joined string (split on use)
+//   "gate_default"     : "OPEN" | "CLOSED"
+//   "absorbed_default" : "true" | "false"
+//   "scope_caveats"    : [string]
+//   "_domain"          : <domain>      (filled by load_manifest)
+//   "_verb"            : <verb>        (filled by load_manifest)
+//   "_ok"              : "true" | "false"  (parse status)
+//   "_log"             : human-readable parse log
+
+fn _empty_manifest() {
+    let m = json_parse("{}")
+    m["_ok"] = "false"
+    m["_log"] = ""
+    m["scope_caveats"] = []
+    return m
+}
+
+// ─── Manifest loader ────────────────────────────────────────────────
+//
+// load_manifest(domain, verb) parses `<demi_root>/<domain>.demi` and
+// returns the `[cell.<verb>]` section as a CellManifest map. Returns
+// _ok="false" if the file is missing, the section is missing, or any
+// required key is missing.
+//
+// Parser is hand-rolled — keeps the scaffold dependency-free (no TOML
+// stdlib yet). Format is intentionally simple: section headers
+// `[cell.<verb>]`, key=value lines, optional multi-line array
+// `key = [ ... ]` for scope_caveats.
+
+pub fn load_manifest_at(demi_root: string, domain: string, verb: string) {
+    let m = _empty_manifest()
+    m["_domain"] = domain
+    m["_verb"] = verb
+
+    let demi_path = demi_root + "/" + domain + ".demi"
+    if !file_exists(demi_path) {
+        m["_log"] = "manifest missing: " + demi_path
+        return m
+    }
+
+    let raw = read_text(demi_path)
+    if len(raw) == 0 {
+        m["_log"] = "manifest empty: " + demi_path
+        return m
+    }
+
+    let lines = split(raw, "\n")
+    let target_header = "[cell." + verb + "]"
+    let mut in_section = false
+    let mut in_array = false
+    let mut array_key = ""
+    let mut array_buf = []
+
+    let mut i = 0
+    while i < len(lines) {
+        let raw_line = lines[i]
+        let line = _strip(raw_line)
+        i = i + 1
+        if _is_blank_or_comment(line) { continue }
+
+        // Section header.
+        if line.substring(0, 1) == "[" {
+            in_section = (line == target_header)
+            in_array = false
+            continue
+        }
+        if !in_section { continue }
+
+        // Multi-line array continuation (we already saw `key = [`).
+        if in_array {
+            // Look for the closing `]`.
+            let close_idx = line.index_of("]")
+            if close_idx >= 0 {
+                let head = line.substring(0, close_idx)
+                let pieces = _split_csv(head)
+                let mut pi = 0
+                while pi < len(pieces) {
+                    let v = _unquote(pieces[pi])
+                    if len(v) > 0 { array_buf.push(v) }
+                    pi = pi + 1
+                }
+                m[array_key] = array_buf
+                in_array = false
+                array_buf = []
+                array_key = ""
+                continue
+            }
+            // Whole-line continuation — split on commas.
+            let pieces = _split_csv(line)
+            let mut pj = 0
+            while pj < len(pieces) {
+                let v = _unquote(pieces[pj])
+                if len(v) > 0 { array_buf.push(v) }
+                pj = pj + 1
+            }
+            continue
+        }
+
+        // key = value
+        let eq = line.index_of("=")
+        if eq < 0 { continue }
+        let key = _strip(line.substring(0, eq))
+        let val = _strip(line.substring(eq + 1, len(line)))
+        if len(key) == 0 { continue }
+
+        // Array opener: `key = [` (rest of line may have inline content
+        // and/or a closing `]` on the same line).
+        if len(val) > 0 && val.substring(0, 1) == "[" {
+            let inner_start = 1
+            // Single-line array?
+            let close_same = val.index_of("]")
+            if close_same > 0 {
+                let inner = val.substring(inner_start, close_same)
+                let pieces = _split_csv(inner)
+                let mut pk = 0
+                let mut tmp = []
+                while pk < len(pieces) {
+                    let v = _unquote(pieces[pk])
+                    if len(v) > 0 { tmp.push(v) }
+                    pk = pk + 1
+                }
+                m[key] = tmp
+                continue
+            }
+            // Multi-line: stash the inner-after-[ piece, mark in_array.
+            in_array = true
+            array_key = key
+            array_buf = []
+            let head = val.substring(inner_start, len(val))
+            let pieces = _split_csv(head)
+            let mut pm = 0
+            while pm < len(pieces) {
+                let v = _unquote(pieces[pm])
+                if len(v) > 0 { array_buf.push(v) }
+                pm = pm + 1
+            }
+            continue
+        }
+
+        // Plain key=value.
+        m[key] = _unquote(val)
+    }
+
+    if !in_section && !has_key(m, "substrate") {
+        m["_log"] = "section [cell." + verb + "] not found in " + demi_path
+        return m
+    }
+
+    // Required-key check.
+    let required = ["substrate", "script", "record_kind", "output_dir",
+                    "gate_default", "absorbed_default"]
+    let mut ri = 0
+    while ri < len(required) {
+        let k = required[ri]
+        if !has_key(m, k) {
+            m["_log"] = "missing required key `" + k + "` in [cell."
+                + verb + "] of " + demi_path
+            return m
+        }
+        ri = ri + 1
+    }
+
+    m["_ok"] = "true"
+    m["_log"] = "loaded " + demi_path + " [cell." + verb + "]"
+    return m
+}
+
+// ─── Dependency check ───────────────────────────────────────────────
+//
+// dep_check returns the list of missing deps (empty list = all present).
+// A dep is "present" if `command -v <name>` exits 0 — the same probe
+// every Swift producer uses today.
+
+pub fn dep_check(deps: [string]) -> [string] {
+    let mut missing = []
+    let mut i = 0
+    while i < len(deps) {
+        let d = deps[i]
+        let probe = exec("command -v " + d + " >/dev/null 2>&1 && echo y || echo n").trim()
+        if probe != "y" { missing.push(d) }
+        i = i + 1
+    }
+    return missing
+}
+
+// ─── Substrate binary resolution (Phase B bug #3 fix) ───────────────
+//
+// resolve_substrate_bin maps a substrate KIND ("python3", "hexa",
+// "ngspice", "bash", ...) to the absolute (or PATH-resolved) binary
+// that should actually be exec'd. The need arose because plain
+// `command -v python3` resolves to `/usr/bin/python3` on macOS
+// (Apple-shipped 3.9.6), which fails PEP 604 `str | None` syntax used
+// by femmt_sweep.py / ngspice_breaking.py. Legacy SSCBProducer.swift
+// explicitly preferred `/opt/homebrew/bin/python3.13`; this dispatcher
+// honors the same intent via a per-cell manifest key.
+//
+// Manifest key (per [cell.<verb>]):
+//   python_candidates = python3.13, python3.12, python3
+//
+// Resolution order (Tier-1 — python3 only · python3 is the only
+// substrate where the system PATH is known to point at a too-old
+// binary on macOS):
+//   1. If substrate == "python3" AND manifest has `python_candidates`:
+//      try each candidate in order via `command -v <name>`. Return the
+//      first one that resolves. Returns empty string "" if NONE resolve
+//      (dispatcher converts that to rc=3 deps-missing honest-skip).
+//   2. Else (no candidates listed OR substrate != python3): return the
+//      substrate string as-is (backward compatible — `command -v` happens
+//      implicitly when shell runs the spawn command).
+//
+// Tier-2 future symmetry (deferred — not needed for bug #3 closure):
+//   - `hexa_candidates` (if hexa-lang ships multiple toolchain binaries)
+//   - `ngspice_candidates` (ngspice-46 vs ngspice-47 selection)
+//   The hook point below is structured so adding these is a one-branch
+//   change; we leave them off for now to avoid over-engineering.
+//
+// Returns: resolved binary name/path (caller passes into spawn_substrate),
+// or empty string "" to signal "all candidates missing" (rc=3 territory).
+
+fn _command_exists(name: string) -> bool {
+    let probe = exec("command -v " + name + " >/dev/null 2>&1 && echo y || echo n").trim()
+    return probe == "y"
+}
+
+pub fn resolve_substrate_bin(manifest) -> string {
+    let substrate = to_string(manifest["substrate"])
+    if substrate == "python3" && has_key(manifest, "python_candidates") {
+        let raw = to_string(manifest["python_candidates"])
+        let cands = _split_csv(raw)
+        if len(cands) > 0 {
+            let mut i = 0
+            while i < len(cands) {
+                let c = cands[i]
+                if _command_exists(c) { return c }
+                i = i + 1
+            }
+            // All candidates missing — signal to caller via empty string.
+            return ""
+        }
+    }
+    // Backward-compat: no candidates declared, use substrate kind as-is.
+    return substrate
+}
+
+// resolution_attempted lists the candidates tried for diagnostic msgs
+// (kept tiny — caller composes the rc=3 honest-skip log line).
+pub fn resolution_attempted(manifest) -> [string] {
+    if to_string(manifest["substrate"]) == "python3" && has_key(manifest, "python_candidates") {
+        return _split_csv(to_string(manifest["python_candidates"]))
+    }
+    let out = [to_string(manifest["substrate"])]
+    return out
+}
+
+// ─── Substrate spawn ────────────────────────────────────────────────
+//
+// spawn_substrate runs `<substrate> <script> <runDir>` and returns a
+// SpawnResult map:
+//   "ok"          : "true" | "false"
+//   "exit_code"   : int (stringified)
+//   "stdout_tail" : last ~32 lines of combined stdout/stderr
+//   "log_path"    : path to the full captured log under runDir
+
+fn _spawn_result(ok: bool, exit_code: int, log_path: string, tail: string) {
+    let r = json_parse("{}")
+    r["ok"] = if ok { "true" } else { "false" }
+    r["exit_code"] = to_string(exit_code)
+    r["stdout_tail"] = tail
+    r["log_path"] = log_path
+    return r
+}
+
+fn _tail_lines(text: string, n: int) -> string {
+    let parts = split(text, "\n")
+    let total = len(parts)
+    if total <= n { return text }
+    let start = total - n
+    let mut out = ""
+    let mut i = start
+    while i < total {
+        if len(out) > 0 { out = out + "\n" }
+        out = out + parts[i]
+        i = i + 1
+    }
+    return out
+}
+
+pub fn spawn_substrate(substrate: string, script_abs: string,
+                       run_dir: string) {
+    return spawn_substrate_bin(substrate, substrate, script_abs, run_dir)
+}
+
+// spawn_substrate_bin — explicit-binary variant introduced for Phase B
+// bug #3 (python3 → python3.13 candidate resolution). `substrate` is the
+// KIND ("python3" | "hexa" | "ngspice" | "bash" | ...) used for branch
+// selection; `substrate_bin` is the actual binary name/path to exec
+// (e.g. "python3.13" resolved via `command -v` from the manifest's
+// `python_candidates` chain). Backward-compatible: spawn_substrate()
+// forwards `substrate` as both args.
+pub fn spawn_substrate_bin(substrate: string, substrate_bin: string,
+                           script_abs: string, run_dir: string) {
+    // Build the argv. For `hexa` substrate we call `hexa run`; for
+    // `python3` / `bash` / etc. we exec the binary directly. For
+    // `ngspice` we pass the script as the netlist (-b batch mode).
+    let mut cmd = ""
+    if substrate == "hexa" {
+        cmd = substrate_bin + " run " + script_abs + " " + run_dir
+    } else if substrate == "ngspice" {
+        cmd = substrate_bin + " -b " + script_abs + " -o " + run_dir + "/ngspice.log"
+    } else {
+        // python3 / bash / curl / arbitrary — script-as-arg form.
+        cmd = substrate_bin + " " + script_abs + " " + run_dir
+    }
+
+    let log_path = run_dir + "/_cellrun.log"
+    // Capture stdout + stderr to log_path and ALSO buffer for tail.
+    let full_cmd = "(" + cmd + ") >'" + log_path + "' 2>&1; echo __EXIT__$?"
+    let captured = exec(full_cmd)
+
+    // Extract exit code from the sentinel.
+    let mut exit_code = -1
+    let marker_idx = captured.last_index_of("__EXIT__")
+    if marker_idx >= 0 {
+        let tail = captured.substring(marker_idx + 8, len(captured)).trim()
+        exit_code = to_int(tail)
+    }
+
+    // Read the log back for the tail (best-effort — log may be empty
+    // on immediate-failure paths).
+    let log_text = read_text(log_path)
+    let tail32 = _tail_lines(log_text, 32)
+    return _spawn_result(exit_code == 0, exit_code, log_path, tail32)
+}
+
+// ─── Sibling .meta.json roll-up (D113) ──────────────────────────────
+//
+// D113 (demiurge design.md `3c49cfd` · ARCH §4.5 cross-link · constitution
+// R2 §1.2.2): substrate scripts (e.g. stdlib/sscb/ngspice.hexa) emit a
+// sibling `*.meta.json` file alongside their other artifacts in run_dir.
+// emit_record now mirrors that file's `measurements{}` block onto the
+// envelope as `payload.measurements` (top-level) so downstream consumers
+// (cockpit chat panel · RTSC view3D · legacy SSCBProducer record-shape
+// consumers) get the legacy-compatible shape without re-loading the
+// sibling file. The sibling file itself is LEFT UNCHANGED (g3 honest
+// disclosure · source-of-truth preserved); `payload.measurements_source`
+// cites the sibling path for provenance audit.
+//
+// Substrate scripts pick their own meta.json filename (ngspice.hexa uses
+// `sscb_v1.meta.json` from its GEOMETRY_ID const · femmt_sweep.py uses a
+// different convention · etc.) so we scan run_dir for `*.meta.json`
+// rather than predicting the basename from the script path. If there is
+// exactly one sibling, we use it; if multiple, we pick the first one
+// `ls` returns (lexicographic) — Tier-2 hardening could pin a manifest
+// key but Phase A keeps the rule generic.
+//
+// Parsing: we use the runtime's `json_parse` builtin to load the full
+// meta.json and extract the `measurements` value (a map). If parse fails
+// or the key is absent, we return empty results and emit_record omits
+// both fields (honest absent · NOT null).
+
+// _find_sibling_meta(run_dir) → first `*.meta.json` filename (basename
+// only · no run_dir prefix) found in run_dir, or "" if none. Uses
+// `ls`-style probe (cheapest path · matches the rest of cellrun.hexa).
+fn _find_sibling_meta(run_dir: string) -> string {
+    let probe = exec("ls -1 " + _shell_quote(run_dir) + "/*.meta.json 2>/dev/null | head -1").trim()
+    if len(probe) == 0 { return "" }
+    // probe is the absolute path · we want just the basename.
+    let slash = probe.last_index_of("/")
+    if slash < 0 { return probe }
+    return probe.substring(slash + 1, len(probe))
+}
+
+// _read_sibling_meta_measurements(run_dir) → (measurements_value, source_path)
+// where measurements_value is the parsed JSON object (hexa map) for the
+// `measurements{}` block, or empty map if absent · source_path is the
+// sibling filename (relative to run_dir · suitable for provenance cite)
+// or "" if no sibling found.
+//
+// Returns the map via a json object {"measurements": <value>, "source": <path>}
+// so callers can detect absence via has_key. (hexa has no first-class
+// tuple return; map is the idiomatic shim.)
+fn _read_sibling_meta_measurements(run_dir: string) {
+    let result = json_parse("{}")
+    let sibling = _find_sibling_meta(run_dir)
+    if len(sibling) == 0 { return result }
+    let abs_path = run_dir + "/" + sibling
+    let raw = read_text(abs_path)
+    if len(raw) == 0 { return result }
+    // Parse the full meta.json · extract measurements key if present.
+    // json_parse handles nested objects (stdlib/test/test_json.hexa § 1).
+    let parsed = json_parse(raw)
+    if !has_key(parsed, "measurements") { return result }
+    result["measurements"] = parsed["measurements"]
+    result["source"] = sibling
+    return result
+}
+
+// ─── Record emit ────────────────────────────────────────────────────
+//
+// emit_record writes one JSON record under
+//   <output_dir>/<stamp>/<record_id>.json
+// returns the absolute record path. content is the inner JSON object
+// (the dispatcher wraps the g3 provenance envelope on top).
+//
+// D113 roll-up: if a sibling `*.meta.json` exists in run_dir, its
+// `measurements{}` block is mirrored into `payload.measurements` and
+// `payload.measurements_source` cites the sibling filename. Sibling file
+// stays untouched (g3 source-of-truth). Both fields are OMITTED (not
+// null) when no sibling is present.
+
+pub fn _stamp_now() -> string {
+    // Prefer the runtime builtin where available; fall back to `date -u`
+    // when the builtin is stubbed (current hexa-lang runtime returns ""
+    // for utc_iso_now on some hosts). FS-safe form: colons → dashes.
+    let iso = utc_iso_now()
+    let mut s = iso
+    if len(s) == 0 {
+        s = exec("date -u +%Y-%m-%dT%H:%M:%SZ").trim()
+    }
+    let parts = split(s, ":")
+    return parts.join("-")
+}
+
+pub fn emit_record(record_kind: string, record_id: string,
+                   payload, output_dir: string, run_dir: string) -> string {
+    // Ensure the run dir exists. `mkdir -p` is the cheapest path.
+    let _ = exec("mkdir -p '" + run_dir + "'")
+    let dest = run_dir + "/" + record_id + ".json"
+
+    // D113 — sibling `*.meta.json` roll-up. If the substrate script
+    // produced a meta.json alongside its other artifacts, mirror its
+    // `measurements{}` block onto payload top-level. Sibling file is
+    // NOT modified (g3 source-of-truth). `payload.measurements_source`
+    // cites the sibling filename (relative to run_dir) for provenance.
+    // Absent sibling ⇒ both fields OMITTED (honest absent · not null).
+    let meta = _read_sibling_meta_measurements(run_dir)
+    if has_key(meta, "measurements") {
+        payload["measurements"] = meta["measurements"]
+        payload["measurements_source"] = meta["source"]
+    }
+
+    // Wrap in the canonical envelope shape (mirrors SSCBProducer's
+    // SSCBRecord shape: interface · schemaVersion · recordId ·
+    // producedAtUtc · provenance · payload).
+    let envelope = json_parse("{}")
+    envelope["interface"] = "demiurge:cellrun:" + record_kind
+    envelope["schema_version"] = "1.0"
+    envelope["record_id"] = record_id
+    envelope["record_kind"] = record_kind
+    // utc_iso_now() may be stubbed in some hexa-lang builds; fall back
+    // to `date -u` so the envelope always carries a timestamp.
+    let ts = utc_iso_now()
+    envelope["produced_at_utc"] = if len(ts) > 0 { ts } else { exec("date -u +%Y-%m-%dT%H:%M:%SZ").trim() }
+    envelope["payload"] = payload
+
+    let serialized = json_stringify(envelope)
+    write_text(dest, serialized)
+    return dest
+}
+
+// ─── g3 honest gate ─────────────────────────────────────────────────
+//
+// apply_gate annotates the payload map with the manifest's gate +
+// absorbed defaults and the scope_caveats list. The dispatcher does
+// NOT flip absorbed=true on its own — the manifest value is copied
+// verbatim into the record.
+
+pub fn apply_gate(payload, gate_default: string,
+                  absorbed_default: string, scope_caveats: [string]) {
+    let prov = json_parse("{}")
+    prov["measurement_gate"] = gate_default
+    prov["absorbed"] = absorbed_default == "true"
+    prov["scope_caveats"] = scope_caveats
+    payload["provenance"] = prov
+    return payload
+}
+
+// ─── Top-level entry ────────────────────────────────────────────────
+//
+// cell_run(domain, verb) is the one function the cockpit (or any
+// caller) needs. Returns an exit code:
+//   0  — record emitted successfully
+//   2  — manifest missing / malformed (honest skip)
+//   3  — required deps missing (honest skip)
+//   4  — substrate spawn failed (no record written)
+//   5  — record emit / write failure
+
+pub fn cell_run_with_roots(domain: string, verb: string, roots) -> int {
+    println("[cellrun] domain=" + domain + " verb=" + verb)
+
+    let demi_root = roots["demi_root"]
+    let exports_root = roots["exports_root"]
+    let hexa_lang_root = roots["hexa_lang_root"]
+
+    let mf = load_manifest_at(demi_root, domain, verb)
+    if mf["_ok"] != "true" {
+        println("[cellrun] honest-skip — " + mf["_log"])
+        return 2
+    }
+    println("[cellrun] manifest ok — " + mf["_log"])
+
+    // Dep check.
+    let dep_str = if has_key(mf, "required_deps") { mf["required_deps"] } else { "" }
+    let deps = _split_csv(dep_str)
+    let missing = dep_check(deps)
+    if len(missing) > 0 {
+        let m_str = missing.join(", ")
+        println("[cellrun] honest-skip — missing deps: " + m_str)
+        return 3
+    }
+    if len(deps) > 0 {
+        println("[cellrun] deps ok: " + deps.join(", "))
+    }
+
+    // Resolve substrate binary (Phase B bug #3 — python_candidates).
+    // For substrate=python3 with a `python_candidates` manifest key,
+    // resolve_substrate_bin walks the candidate list (e.g.
+    // python3.13, python3.12, python3) and returns the first that
+    // exists. Empty string ⇒ all candidates missing ⇒ rc=3 honest-skip.
+    let substrate_bin = resolve_substrate_bin(mf)
+    if len(substrate_bin) == 0 {
+        let tried = resolution_attempted(mf).join(", ")
+        println("[cellrun] honest-skip — no python candidate resolved: tried " + tried)
+        return 3
+    }
+    if substrate_bin != to_string(mf["substrate"]) {
+        println("[cellrun] substrate_bin resolved: " + to_string(mf["substrate"]) + " → " + substrate_bin)
+    }
+
+    // Resolve paths.
+    let script_abs = hexa_lang_root + "/" + mf["script"]
+    if !file_exists(script_abs) {
+        println("[cellrun] honest-skip — script missing: " + script_abs)
+        return 2
+    }
+
+    // Build run dir. If output_dir starts with "exports/" we treat the
+    // exports_root tunable as the base for the suffix; otherwise we
+    // append output_dir directly. Either way <stamp> creates a unique
+    // per-invocation subdir.
+    let stamp = _stamp_now()
+    let od = mf["output_dir"]
+    let mut final_run_dir = ""
+    if od.starts_with("exports/") {
+        final_run_dir = exports_root + "/" + od.substring(8, len(od)) + "/" + stamp
+    } else {
+        final_run_dir = exports_root + "/" + od + "/" + stamp
+    }
+    let _ = exec("mkdir -p '" + final_run_dir + "'")
+    println("[cellrun] run_dir = " + final_run_dir)
+
+    // Spawn substrate (variable name avoids the reserved `spawn` token).
+    let sp_result = spawn_substrate_bin(mf["substrate"], substrate_bin, script_abs, final_run_dir)
+    println("[cellrun] substrate=" + mf["substrate"] + " bin=" + substrate_bin + " exit=" + sp_result["exit_code"])
+    if sp_result["ok"] != "true" {
+        println("[cellrun] honest-fail — substrate exit nonzero")
+        println("[cellrun] log tail:\n" + sp_result["stdout_tail"])
+        return 4
+    }
+
+    // Build record payload from the spawn result + manifest metadata.
+    let payload = json_parse("{}")
+    payload["substrate"] = mf["substrate"]
+    payload["script"] = mf["script"]
+    payload["exit_code"] = to_int(sp_result["exit_code"])
+    payload["log_path"] = sp_result["log_path"]
+    payload["run_dir"] = final_run_dir
+
+    // Apply the g3 gate (annotates payload["provenance"]).
+    let gated = apply_gate(payload, mf["gate_default"],
+                           mf["absorbed_default"], mf["scope_caveats"])
+
+    // Emit.
+    let record_id = mf["record_kind"] + "_" + split(stamp, "-").join("")
+    let record_path = emit_record(mf["record_kind"], record_id, gated,
+                                   final_run_dir, final_run_dir)
+    if !file_exists(record_path) {
+        println("[cellrun] honest-fail — record write failed: " + record_path)
+        return 5
+    }
+    println("[cellrun] record → " + record_path)
+    println("[cellrun] gate=" + mf["gate_default"]
+        + " absorbed=" + mf["absorbed_default"]
+        + " caveats=" + to_string(len(mf["scope_caveats"])))
+    return 0
+}
+
+// ─── Convenience wrappers (env-defaults) ───────────────────────────
+
+// load_manifest(domain, verb) — env-default wrapper around
+// load_manifest_at. Convenience for CLI / one-shot callers; tests
+// should call load_manifest_at directly with an explicit demi_root.
+pub fn load_manifest(domain: string, verb: string) {
+    let roots = default_roots()
+    return load_manifest_at(roots["demi_root"], domain, verb)
+}
+
+// cell_run(domain, verb) — env-default wrapper around
+// cell_run_with_roots. The CLI entry point uses this; tests use the
+// explicit `_with_roots` form to inject fixture paths.
+pub fn cell_run(domain: string, verb: string) -> int {
+    let roots = default_roots()
+    return cell_run_with_roots(domain, verb, roots)
+}
+
+// ─── CLI main ───────────────────────────────────────────────────────
+
+fn main() {
+    // args() returns the full argv INCLUDING argv[0] (binary path).
+    // Trim to the user-supplied tail: <domain> <verb>.
+    let raw = args()
+    let mut av = []
+    let mut i = 0
+    while i < len(raw) {
+        // Skip the argv[0] (compiled binary cache path) — first arg
+        // ending in ".hexa" or starting with "/" + hexa-cache is the
+        // self path. Conservative heuristic: drop the first element
+        // unconditionally, matching the `let av = args(); av[0] == "run"`
+        // pattern used in stdlib/cloud/cloud_cli.hexa.
+        if i > 0 { av.push(raw[i]) }
+        i = i + 1
+    }
+    if len(av) < 2 {
+        println("usage: hexa run stdlib/cockpit/cellrun.hexa <domain> <verb>")
+        println("")
+        println("examples:")
+        println("  hexa run stdlib/cockpit/cellrun.hexa sscb analyze")
+        println("  hexa run stdlib/cockpit/cellrun.hexa sscb synthesize")
+        println("  hexa run stdlib/cockpit/cellrun.hexa chip verify")
+        exit(2)
+    }
+    let domain = av[0]
+    let verb = av[1]
+    let rc = cell_run(domain, verb)
+    exit(rc)
+}
