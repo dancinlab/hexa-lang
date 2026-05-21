@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "hexa-bio/virocapsid/spec/pdb_corpus_audit_v1.schema.json",
+  "title": "F-VIROCAPSID-1 partial Bayesian audit witness v1",
+  "description": "Aggregate witness emitted by virocapsid_pdb_corpus_audit.py. Computes Bayes factor for σ(6)=12 STRUCTURAL-EXACT (H1) vs uniform-on-{5..50} (H0) over the n=10 corpus.",
+  "type": "object",
+  "required": [
+    "schema",
+    "audited_at",
+    "n",
+    "vertex_match_count",
+    "log10_bf_h1_vs_h0",
+    "posterior_h1",
+    "t_strata",
+    "source_class_strata",
+    "annotation_completeness",
+    "pass_evaluation",
+    "witness_ref"
+  ],
+  "properties": {
+    "schema": {"type": "string", "const": "raw_77_virocapsid_pdb_corpus_audit_v1"},
+    "audited_at": {"type": "string", "format": "date-time"},
+    "n": {"type": "integer", "minimum": 1},
+    "vertex_match_count": {"type": "integer", "minimum": 0},
+    "log10_bf_h1_vs_h0": {"type": "number"},
+    "posterior_h1": {"type": "number", "minimum": 0, "maximum": 1},
+    "t_strata": {"type": "object"},
+    "source_class_strata": {"type": "object"},
+    "annotation_completeness": {"type": "number", "minimum": 0, "maximum": 1},
+    "h0_definition": {"type": "string"},
+    "h1_definition": {"type": "string"},
+    "pass_evaluation": {
+      "type": "object",
+      "required": ["criteria"],
+      "properties": {
+        "criteria": {"type": "object"},
+        "overall_pass": {"type": "boolean"}
+      }
+    },
+    "raw_91_c3_disclose": {"type": "string"},
+    "raw_77_append_only": {"type": "boolean"},
+    "witness_ref": {
+      "type": "string",
+      "pattern": "^state/discovery_absorption/registry\\.jsonl#raw_77_virocapsid_pdb_corpus_audit_v1$"
+    }
+  }
+}

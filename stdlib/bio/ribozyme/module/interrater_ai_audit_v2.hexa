@@ -1,0 +1,225 @@
+#!hexa strict
+//
+// ribozyme/module/interrater_ai_audit_v2.hexa — F-RB-2 inter-rater v2 (locked rubric).
+//
+// HEXA-NATIVE port of _python_bridge/module/ribozyme_interrater_ai_audit_v2.py
+// (R5 sunset 29/57, 2026-05-07). Locked rubric v2 — both raters share
+// the per-axis decision tree; only tie-breaker order differs.
+
+use "ribozyme/module/bayesian_audit_n30"
+use "nanobot/module/inter_rater_rubric_v2"
+
+let RATER_A_ID = "ai_rater_a_rubric_v2_keyword_first_tiebreak"
+let RATER_B_ID = "ai_rater_b_rubric_v2_number_first_tiebreak"
+let KAPPA_PASS_THRESHOLD = 0.6
+let LOCK_AGREEMENT_PASS_THRESHOLD = 0.95
+
+fn registry_path() -> string {
+    let cwd = exec("pwd").trim()
+    return cwd + "/state/discovery_absorption/registry.jsonl"
+}
+
+fn fabs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn cohens_kappa_binary(a_labels, b_labels) -> float {
+    let n = len(a_labels)
+    if n == 0 || n != len(b_labels) { return 0.0 }
+    let mut a_sum = 0
+    let mut b_sum = 0
+    let mut agree = 0
+    let mut i = 0
+    while i < n {
+        let av = a_labels[i]
+        let bv = b_labels[i]
+        let mut a_i = 0
+        let mut b_i = 0
+        if (type_of(av) == "int" && av != 0) || (type_of(av) == "bool" && av) { a_i = 1 }
+        if (type_of(bv) == "int" && bv != 0) || (type_of(bv) == "bool" && bv) { b_i = 1 }
+        a_sum = a_sum + a_i
+        b_sum = b_sum + b_i
+        if a_i == b_i { agree = agree + 1 }
+        i = i + 1
+    }
+    let p_o = to_float(agree) / to_float(n)
+    let pa = to_float(a_sum) / to_float(n)
+    let pb = to_float(b_sum) / to_float(n)
+    let p_e = pa * pb + (1.0 - pa) * (1.0 - pb)
+    if fabs(1.0 - p_e) < 1.0e-12 {
+        if agree == n { return 1.0 }
+        return 0.0
+    }
+    return (p_o - p_e) / (1.0 - p_e)
+}
+
+fn restamp(corpus, axes_list) {
+    let out = []
+    let mut i = 0
+    while i < len(corpus) {
+        let e = corpus[i]
+        let ax = axes_list[i]
+        let e2 = {}
+        let keys_e = keys(e)
+        let mut k = 0
+        while k < len(keys_e) {
+            let kk = keys_e[k]
+            e2[kk] = e[kk]
+            k = k + 1
+        }
+        let ax_copy = []
+        let mut z = 0
+        while z < len(ax) { ax_copy.push(ax[z]); z = z + 1 }
+        e2["axes_match"] = ax_copy
+        let mut s = 0
+        let mut q = 0
+        while q < len(ax) { s = s + ax[q]; q = q + 1 }
+        e2["n6_match_count"] = s
+        out.push(e2)
+        i = i + 1
+    }
+    return out
+}
+
+fn parse_argv_local(av) {
+    let r = {}
+    r["no_emit"] = false
+    r["quiet"] = false
+    let mut i = 0
+    while i < len(av) {
+        let a = av[i]
+        if a == "--no-emit" { r["no_emit"] = true }
+        else if a == "--quiet" { r["quiet"] = true }
+        i = i + 1
+    }
+    return r
+}
+
+fn main() {
+    let cfg = parse_argv_local(args())
+    let corpus = build_corpus_n30()
+    let n = len(corpus)
+
+    let a_axes = []
+    let b_axes = []
+    let mut i = 0
+    while i < n {
+        a_axes.push(ribozyme_axes_v2(corpus[i], "A"))
+        b_axes.push(ribozyme_axes_v2(corpus[i], "B"))
+        i = i + 1
+    }
+
+    let axis_names = ["sigma_6_eq_12_within_10_15_nt", "tau_6_eq_4_reaction_states", "phi_6_eq_2_binary_outcome", "J2_eq_24_TS_pose_symmetry"]
+    let per_axis_kappa = {}
+    let mut a_i = 0
+    while a_i < len(axis_names) {
+        let a_col = []
+        let b_col = []
+        let mut e_i = 0
+        while e_i < n {
+            a_col.push(a_axes[e_i][a_i])
+            b_col.push(b_axes[e_i][a_i])
+            e_i = e_i + 1
+        }
+        per_axis_kappa[axis_names[a_i]] = cohens_kappa_binary(a_col, b_col)
+        a_i = a_i + 1
+    }
+    let mut sum_kappa = 0.0
+    let pk = keys(per_axis_kappa)
+    let mut k_i = 0
+    while k_i < len(pk) { sum_kappa = sum_kappa + to_float(per_axis_kappa[pk[k_i]]); k_i = k_i + 1 }
+    let overall_kappa = sum_kappa / to_float(len(pk))
+
+    let mut full_agree = 0
+    let mut g_i = 0
+    while g_i < n {
+        let aa = a_axes[g_i]
+        let bb = b_axes[g_i]
+        let mut all_eq = true
+        let mut z = 0
+        while z < 4 {
+            if aa[z] != bb[z] { all_eq = false }
+            z = z + 1
+        }
+        if all_eq { full_agree = full_agree + 1 }
+        g_i = g_i + 1
+    }
+    let lock_rate = to_float(full_agree) / to_float(n)
+
+    let corpus_a = restamp(corpus, a_axes)
+    let corpus_b = restamp(corpus, b_axes)
+    let post_a = log_bayes_factor(corpus_a, 1.0, 1.0, 0.0625)
+    let post_b = log_bayes_factor(corpus_b, 1.0, 1.0, 0.0625)
+    let bf_a = to_float(post_a["log_bayes_factor_h1_over_h0"])
+    let bf_b = to_float(post_b["log_bayes_factor_h1_over_h0"])
+    let mut min_v = bf_a
+    let mut max_v = bf_a
+    if bf_b < min_v { min_v = bf_b }
+    if bf_b > max_v { max_v = bf_b }
+    let mean_v = (bf_a + bf_b) / 2.0
+
+    let crit_kappa = overall_kappa >= KAPPA_PASS_THRESHOLD
+    let crit_lock = lock_rate >= LOCK_AGREEMENT_PASS_THRESHOLD
+    let overall_pass = crit_kappa && crit_lock
+
+    let stratified = {}
+    stratified["mean"] = mean_v
+    stratified["min"] = min_v
+    stratified["max"] = max_v
+
+    let crit = {}
+    crit["overall_kappa_ge_0p6"] = crit_kappa
+    crit["rubric_lock_full_agreement_ge_0p95"] = crit_lock
+
+    let pe = {}
+    pe["criteria"] = crit
+    pe["overall_pass"] = overall_pass
+
+    let rater_ids = []
+    rater_ids.push(RATER_A_ID)
+    rater_ids.push(RATER_B_ID)
+
+    let tie_modes = {}
+    tie_modes[RATER_A_ID] = "keyword_first"
+    tie_modes[RATER_B_ID] = "number_first"
+
+    let w = {}
+    w["schema"] = "raw_77_ribozyme_interrater_v2"
+    w["audited_at"] = utc_iso_now()
+    w["rater_count"] = 2
+    w["corpus_size"] = n
+    w["rater_ids"] = rater_ids
+    w["per_axis_kappa"] = per_axis_kappa
+    w["overall_kappa"] = overall_kappa
+    w["rubric_lock_full_agreement_rate"] = lock_rate
+    w["stratified_log_bf"] = stratified
+    w["pass_evaluation"] = pe
+    w["rubric_version"] = "v2_locked_decision_tree"
+    w["tie_breaker_modes"] = tie_modes
+    w["notes"] = "PROVISIONAL_AI_ONLY rubric v2 locked-decision-tree audit. Both AI raters share the same per-axis decision tree on curated structured inputs (numerical fields + notes regex). Rater A: keyword-first tie-breaker; Rater B: number-first tie-breaker. v2 establishes rubric-PRECISION for the n=30 corpus complementing v1 rubric-DEPENDENCE finding (kappa=0.20). Final GATE-26-4 / G26-RB-1 closure requires human-rater agreement. raw_9 hexa-only stdlib (R5 sunset 2026-05-07)."
+    w["witness_ref"] = "state/discovery_absorption/registry.jsonl#raw_77_ribozyme_interrater_v2"
+
+    if !cfg["no_emit"] {
+        let path = registry_path()
+        let last_slash = path.last_index_of("/")
+        exec("mkdir -p " + path.substring(0, last_slash))
+        append_file(path, json_encode(w) + "\n")
+    }
+
+    if !cfg["quiet"] {
+        let mut sentinel = "FAIL"
+        if overall_pass { sentinel = "PASS" }
+        eprintln("overall_kappa=" + to_string(overall_kappa) +
+            "  lock_rate=" + to_string(lock_rate) +
+            "  log_bf{min=" + to_string(min_v) + " max=" + to_string(max_v) + "}" +
+            "  verdict=" + sentinel)
+    }
+
+    let mut sentinel = "FAIL"
+    if overall_pass { sentinel = "PASS" }
+    println("__RB_INTERRATER_AI_AUDIT_V2__ " + sentinel)
+
+    if overall_pass { exit(0) }
+    exit(1)
+}

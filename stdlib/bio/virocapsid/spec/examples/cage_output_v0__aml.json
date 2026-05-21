@@ -1,0 +1,22 @@
+{
+  "schema": "v_r1_cage_output_v0",
+  "t_number": 1,
+  "subunit_count": 60,
+  "vertex_count": 12,
+  "assembly_kinetics": {
+    "model": "zlotnick_2003_4state",
+    "rate_constants": {
+      "K12": 1e-6,
+      "K21": 1e-4,
+      "K_CLOSE": 1e-7,
+      "K_OPEN": 1e-14
+    },
+    "integrator": "backward_euler"
+  },
+  "yield_curve": {
+    "t_grid": [0, 1000, 2500, 5000, 7500, 10000],
+    "y_closed": [0.0, 0.18, 0.51, 0.74, 0.83, 0.86],
+    "y_aberrant": [0.0, 0.04, 0.07, 0.08, 0.09, 0.10]
+  },
+  "witness_ref": "state/discovery_absorption/registry.jsonl#raw_77_v_r1_cage_output_v0__aml__c5_conformance_2026_05_12"
+}

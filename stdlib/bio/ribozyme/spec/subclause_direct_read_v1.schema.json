@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "hexa-bio/ribozyme/spec/subclause_direct_read_v1.schema.json",
+  "title": "raw_77_ribozyme_subclause_direct_read_v1 — direct-read derivative witness",
+  "description": "Session-internal direct-read derivative witness (subclause v1). Permissive registry-coverage spec.",
+  "type": "object",
+  "required": ["schema", "audited_at"],
+  "properties": {
+    "schema": {"type": "string", "const": "raw_77_ribozyme_subclause_direct_read_v1"},
+    "audited_at": {"type": "string"}
+  },
+  "additionalProperties": true
+}
