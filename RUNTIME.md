@@ -1094,6 +1094,20 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 91: hexa_eq TAG_STR strcmp fallback via rt_str_eq_b
+
+- ✅ Polymorphic `hexa_eq`'s TAG_STR branch (self/runtime_core.c:5459)
+  splits into: intern fast-path (HX_STR pointer identity) stays C, then
+  delegates strcmp fallback to cycle-57 `rt_str_eq_b` (already-ported
+  hexa source) via `hexa_truthy(rt_str_eq_b(a, b))`
+- Surgical patch: one TAG_STR case → 5 lines. Other branches (INT/
+  FLOAT/BOOL/VOID/VALSTRUCT/ARRAY/MAP) stay C (per agent-#4
+  feasibility report — array recursive eq + map structural eq + intern
+  pointer comparison all blocked for now)
+- 잔여 #4 partially discharged: 1 of 9 branches ported
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,217,928 B
+
 ### 2026-05-21 — step 3 cycle 90: 🛸 first map-op ports (merge/entries/to_array)
 
 - ✅ **First map-op family ported.** Three CORE-tier (runtime_core.c)
