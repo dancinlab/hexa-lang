@@ -1,0 +1,296 @@
+// RFC 067 PL perf SGEMM hexa-emit + 32x32 per-warp accumulator + 2-stage cp.async.
+// M=N=K=768.
+//
+// 16 warps in 4x4 -> 128x128 output tile per CTA. Each warp owns 32x32
+// via 4 m16n16k8 wmma fragments (2x2 arrangement). Same 2-stage SW
+// pipeline as PK / N66 but with 4x more compute per K-step per warp.
+//
+// Layout:
+//   A row-major     [M=768 x K=768] f32. Row stride = 768 elem = 3072 B.
+//   B col-major     [K=768 x N=768] f32. Col stride = 768 elem = 3072 B.
+//   C row-major out [M=768 x N=768] f32. Row stride = 768 elem = 3072 B.
+//
+// Per-CTA base addresses:
+//   A_cta = a + ctaid.y * 393216       (M-stride: 128 rows * K * 4)
+//   B_cta = b + ctaid.x * 393216       (N-stride: 128 cols * K * 4)
+//   C_cta = c + ctaid.y * 393216 + ctaid.x * 512   (128 cols * 4)
+//
+// Per-warp offsets (warp = tid.x>>5, m_warp = warp>>2, n_warp = warp&3):
+//   A_warp_smem_base(slot) = _tg_a + slot * 4096 + m_warp * (32 rows * 8 K * 4 B)
+//                          = _tg_a + slot * 4096 + m_warp * 1024
+//     fragment m_frag=0 at A_warp_smem_base + 0       (offset 0)
+//     fragment m_frag=1 at A_warp_smem_base + 16*32   (offset 512, 16 rows down)
+//   B_warp_smem_base(slot) = _tg_b + slot * 4096 + n_warp * 1024
+//     fragment n_frag=0 at B_warp_smem_base + 0
+//     fragment n_frag=1 at B_warp_smem_base + 512
+//   C_warp = C_cta + m_warp * (32 rows * N * 4) + n_warp * 128
+
+.version 8.0
+.target sm_90
+.address_size 64
+
+.shared .align 16 .b8 _tg_a[8192];   // 2 slabs * 128 rows * 8 K-elem * 4 B
+.shared .align 16 .b8 _tg_b[8192];
+
+.visible .entry sgemm_32x32_768x768_grid (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 k_tiles
+)
+{
+    .reg .u64 %rd<32>;
+    .reg .u32 %r<64>;
+    .reg .pred %p1;
+    .reg .pred %pmore;
+    // wmma fragment regs: aA<4> = m_frag=0 A; aB<4> = m_frag=1 A; bA<4> = n_frag=0 B; bB<4> = n_frag=1 B
+    .reg .b32 %aA<4>;
+    .reg .b32 %aB<4>;
+    .reg .b32 %bA<4>;
+    .reg .b32 %bB<4>;
+    // accumulators: 4 fragments x 8 fp32 each = 32 fp32 named %cAA0..%cBB7
+    .reg .f32 %cAA<8>;     // (m_frag=0, n_frag=0)
+    .reg .f32 %cAB<8>;     // (m_frag=0, n_frag=1)
+    .reg .f32 %cBA<8>;     // (m_frag=1, n_frag=0)
+    .reg .f32 %cBB<8>;     // (m_frag=1, n_frag=1)
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [k_tiles];
+
+    mov.u32 %r10, %ctaid.y;
+    mov.u32 %r11, %ctaid.x;
+
+    mov.u32 %r1, %tid.x;
+    shr.u32 %r2, %r1, 5;        // warp id (0..15)
+    shr.u32 %r3, %r2, 2;        // m_warp = warp >> 2 (0..3)
+    and.b32 %r4, %r2, 3;        // n_warp = warp & 3  (0..3)
+
+    // Cooperative-load indices (per thread, 2 elements per thread per slab):
+    //   We have 512 threads loading 128 rows * 8 cols = 1024 elements per slab.
+    //   Per thread: 2 consecutive rows, same K-col.
+    //   row_load_lo = (tid >> 3)           in [0, 64)
+    //   col_load    = tid & 7              in [0, 8)
+    //   row_load_hi = row_load_lo + 64     in [64, 128)
+    shr.u32 %r12, %r1, 3;       // row_load_lo
+    and.b32 %r13, %r1, 7;       // col_load
+    add.u32 %r19, %r12, 64;     // row_load_hi
+
+    // A_cta base = a + ctaid.y * 393216
+    mul.lo.u32 %r5, %r10, 393216;
+    cvt.u64.u32 %rd4, %r5;
+    add.u64 %rd10, %rd0, %rd4;
+
+    // B_cta base = b + ctaid.x * 393216
+    mul.lo.u32 %r5, %r11, 393216;
+    cvt.u64.u32 %rd5, %r5;
+    add.u64 %rd11, %rd1, %rd5;
+
+    // A_lo load-offset (per-thread, w.r.t. A_cta, excludes k_step):
+    //   row_load_lo * 3072 + col_load * 4
+    mul.lo.u32 %r14, %r12, 3072;
+    mul.lo.u32 %r15, %r13, 4;
+    add.u32 %r14, %r14, %r15;
+    cvt.u64.u32 %rd14, %r14;
+    add.u64 %rd14, %rd10, %rd14;     // %rd14 = A_cta + row_lo*3072 + col_load*4
+
+    // A_hi load-offset = A_lo + 64 rows * 3072
+    add.u64 %rd16, %rd14, 196608;   // %rd16 = A_cta + row_hi*3072 + col_load*4
+
+    // B_lo load-offset (col-major; same scalar layout: col_index * 3072 + k*4)
+    cvt.u64.u32 %rd15, %r14;
+    add.u64 %rd15, %rd11, %rd15;     // %rd15 = B_cta + col_lo*3072 + col_load*4
+
+    // B_hi load-offset = B_lo + 64 cols * 3072
+    add.u64 %rd17, %rd15, 196608;
+
+    // Per-thread smem store offsets within ONE slab (A row layout, B mirrored):
+    //   A_lo dst = row_load_lo * 32 + col_load * 4   (row * 8 K-elem * 4 B)
+    //   A_hi dst = row_load_hi * 32 + col_load * 4
+    shl.b32 %r16, %r12, 5;
+    mul.lo.u32 %r17, %r13, 4;
+    add.u32 %r16, %r16, %r17;       // %r16 = lo intra-slab offset
+    shl.b32 %r28, %r19, 5;
+    add.u32 %r28, %r28, %r17;       // %r28 = hi intra-slab offset (= %r16 + 2048)
+
+    mov.u32 %r18, _tg_a;
+    mov.u32 %r20, _tg_b;
+
+    // Per-warp shared-mem READ offsets relative to slab base:
+    //   m_warp * 32 rows * (8 K-elem * 4 B) = m_warp * 1024
+    mul.lo.u32 %r22, %r3, 1024;     // warp-A within-slab base
+    mul.lo.u32 %r24, %r4, 1024;     // warp-B within-slab base
+
+    // C base offset per CTA
+    mul.lo.u32 %r5, %r10, 393216;
+    mul.lo.u32 %r6, %r3, 98304;
+    add.u32 %r7, %r5, %r6;
+    mul.lo.u32 %r8, %r11, 512;
+    add.u32 %r7, %r7, %r8;
+    mul.lo.u32 %r8, %r4, 128;
+    add.u32 %r7, %r7, %r8;
+    cvt.u64.u32 %rd6, %r7;
+    add.u64 %rd12, %rd2, %rd6;       // %rd12 = C base for this warp's 32x32 tile
+
+    // Zero accumulators (4 fragments * 8 fp32 = 32 mov)
+    mov.f32 %cAA0, 0f00000000; mov.f32 %cAA1, 0f00000000;
+    mov.f32 %cAA2, 0f00000000; mov.f32 %cAA3, 0f00000000;
+    mov.f32 %cAA4, 0f00000000; mov.f32 %cAA5, 0f00000000;
+    mov.f32 %cAA6, 0f00000000; mov.f32 %cAA7, 0f00000000;
+    mov.f32 %cAB0, 0f00000000; mov.f32 %cAB1, 0f00000000;
+    mov.f32 %cAB2, 0f00000000; mov.f32 %cAB3, 0f00000000;
+    mov.f32 %cAB4, 0f00000000; mov.f32 %cAB5, 0f00000000;
+    mov.f32 %cAB6, 0f00000000; mov.f32 %cAB7, 0f00000000;
+    mov.f32 %cBA0, 0f00000000; mov.f32 %cBA1, 0f00000000;
+    mov.f32 %cBA2, 0f00000000; mov.f32 %cBA3, 0f00000000;
+    mov.f32 %cBA4, 0f00000000; mov.f32 %cBA5, 0f00000000;
+    mov.f32 %cBA6, 0f00000000; mov.f32 %cBA7, 0f00000000;
+    mov.f32 %cBB0, 0f00000000; mov.f32 %cBB1, 0f00000000;
+    mov.f32 %cBB2, 0f00000000; mov.f32 %cBB3, 0f00000000;
+    mov.f32 %cBB4, 0f00000000; mov.f32 %cBB5, 0f00000000;
+    mov.f32 %cBB6, 0f00000000; mov.f32 %cBB7, 0f00000000;
+
+    cvt.s32.s64 %r0, %rd3;          // K_TILES remaining
+    mov.u32 %r30, 0;                // current slot
+
+    // ---- PROLOGUE: K=0 prefetch into slot 0 ----
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $epilogue;
+
+    add.u32 %r40, %r18, %r16;       // A_lo dst in slot 0
+    cp.async.ca.shared.global [%r40], [%rd14], 4;
+    add.u32 %r40, %r18, %r28;       // A_hi dst in slot 0
+    cp.async.ca.shared.global [%r40], [%rd16], 4;
+
+    add.u32 %r41, %r20, %r16;       // B_lo dst in slot 0
+    cp.async.ca.shared.global [%r41], [%rd15], 4;
+    add.u32 %r41, %r20, %r28;       // B_hi dst in slot 0
+    cp.async.ca.shared.global [%r41], [%rd17], 4;
+
+    cp.async.commit_group;
+
+    // Advance global pointers for next prefetch (K=1): K-step = 8 elems = 32 B.
+    add.u64 %rd14, %rd14, 32;
+    add.u64 %rd16, %rd16, 32;
+    add.u64 %rd15, %rd15, 32;
+    add.u64 %rd17, %rd17, 32;
+
+$kloop:
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $epilogue;
+
+    setp.gt.s32 %pmore, %r0, 1;
+    @!%pmore bra $no_prefetch;
+
+    // next_slot = current_slot ^ 1 ; next_slot * 4096 (slab bytes)
+    xor.b32 %r31, %r30, 1;
+    shl.b32 %r32, %r31, 12;          // next_slot * 4096
+
+    // A_lo dst
+    add.u32 %r40, %r18, %r32;
+    add.u32 %r40, %r40, %r16;
+    cp.async.ca.shared.global [%r40], [%rd14], 4;
+    // A_hi dst
+    add.u32 %r40, %r18, %r32;
+    add.u32 %r40, %r40, %r28;
+    cp.async.ca.shared.global [%r40], [%rd16], 4;
+    // B_lo dst
+    add.u32 %r41, %r20, %r32;
+    add.u32 %r41, %r41, %r16;
+    cp.async.ca.shared.global [%r41], [%rd15], 4;
+    // B_hi dst
+    add.u32 %r41, %r20, %r32;
+    add.u32 %r41, %r41, %r28;
+    cp.async.ca.shared.global [%r41], [%rd17], 4;
+
+    cp.async.commit_group;
+    cp.async.wait_group 1;
+    bra $consume;
+
+$no_prefetch:
+    cp.async.wait_all;
+
+$consume:
+    bar.sync 0;
+
+    // Load fragments from CURRENT slot (= %r30).
+    shl.b32 %r34, %r30, 12;          // current_slot * 4096
+    add.u32 %r35, %r18, %r34;
+    add.u32 %r35, %r35, %r22;        // slab-A base + warp-A offset
+    add.u32 %r36, %r20, %r34;
+    add.u32 %r36, %r36, %r24;        // slab-B base + warp-B offset
+
+    // A m_frag=0 at %r35 + 0 (rows 0..15 of warp's 32-row strip)
+    wmma.load.a.sync.aligned.row.m16n16k8.shared.tf32
+        {%aA0, %aA1, %aA2, %aA3}, [%r35], 8;
+    // A m_frag=1 at %r35 + 16 rows * 32 B = +512
+    add.u32 %r37, %r35, 512;
+    wmma.load.a.sync.aligned.row.m16n16k8.shared.tf32
+        {%aB0, %aB1, %aB2, %aB3}, [%r37], 8;
+
+    // B n_frag=0 at %r36 + 0
+    wmma.load.b.sync.aligned.col.m16n16k8.shared.tf32
+        {%bA0, %bA1, %bA2, %bA3}, [%r36], 8;
+    // B n_frag=1 at %r36 + 16 cols * 32 B = +512
+    add.u32 %r38, %r36, 512;
+    wmma.load.b.sync.aligned.col.m16n16k8.shared.tf32
+        {%bB0, %bB1, %bB2, %bB3}, [%r38], 8;
+
+    // 4 wmma.mma: (m_frag, n_frag) in {(0,0),(0,1),(1,0),(1,1)}
+    wmma.mma.sync.aligned.row.col.m16n16k8.f32.tf32.tf32.f32
+        {%cAA0, %cAA1, %cAA2, %cAA3, %cAA4, %cAA5, %cAA6, %cAA7},
+        {%aA0, %aA1, %aA2, %aA3},
+        {%bA0, %bA1, %bA2, %bA3},
+        {%cAA0, %cAA1, %cAA2, %cAA3, %cAA4, %cAA5, %cAA6, %cAA7};
+    wmma.mma.sync.aligned.row.col.m16n16k8.f32.tf32.tf32.f32
+        {%cAB0, %cAB1, %cAB2, %cAB3, %cAB4, %cAB5, %cAB6, %cAB7},
+        {%aA0, %aA1, %aA2, %aA3},
+        {%bB0, %bB1, %bB2, %bB3},
+        {%cAB0, %cAB1, %cAB2, %cAB3, %cAB4, %cAB5, %cAB6, %cAB7};
+    wmma.mma.sync.aligned.row.col.m16n16k8.f32.tf32.tf32.f32
+        {%cBA0, %cBA1, %cBA2, %cBA3, %cBA4, %cBA5, %cBA6, %cBA7},
+        {%aB0, %aB1, %aB2, %aB3},
+        {%bA0, %bA1, %bA2, %bA3},
+        {%cBA0, %cBA1, %cBA2, %cBA3, %cBA4, %cBA5, %cBA6, %cBA7};
+    wmma.mma.sync.aligned.row.col.m16n16k8.f32.tf32.tf32.f32
+        {%cBB0, %cBB1, %cBB2, %cBB3, %cBB4, %cBB5, %cBB6, %cBB7},
+        {%aB0, %aB1, %aB2, %aB3},
+        {%bB0, %bB1, %bB2, %bB3},
+        {%cBB0, %cBB1, %cBB2, %cBB3, %cBB4, %cBB5, %cBB6, %cBB7};
+
+    bar.sync 0;
+
+    // Advance global pointers for the next K=k+1 prefetch.
+    add.u64 %rd14, %rd14, 32;
+    add.u64 %rd16, %rd16, 32;
+    add.u64 %rd15, %rd15, 32;
+    add.u64 %rd17, %rd17, 32;
+
+    xor.b32 %r30, %r30, 1;
+    sub.s32 %r0, %r0, 1;
+    bra $kloop;
+
+$epilogue:
+    // Store 4 fragments to global C.
+    // C_warp base = %rd12.
+    //   frag (0,0) -> C_warp + 0
+    //   frag (0,1) -> C_warp + 16 cols * 4 = +64 bytes
+    //   frag (1,0) -> C_warp + 16 rows * N * 4 = +16*3072
+    //   frag (1,1) -> +16*3072 + 64
+    wmma.store.d.sync.aligned.row.m16n16k8.global.f32
+        [%rd12], {%cAA0, %cAA1, %cAA2, %cAA3, %cAA4, %cAA5, %cAA6, %cAA7}, 768;
+
+    add.u64 %rd20, %rd12, 64;
+    wmma.store.d.sync.aligned.row.m16n16k8.global.f32
+        [%rd20], {%cAB0, %cAB1, %cAB2, %cAB3, %cAB4, %cAB5, %cAB6, %cAB7}, 768;
+
+    add.u64 %rd21, %rd12, 49152;
+    wmma.store.d.sync.aligned.row.m16n16k8.global.f32
+        [%rd21], {%cBA0, %cBA1, %cBA2, %cBA3, %cBA4, %cBA5, %cBA6, %cBA7}, 768;
+
+    add.u64 %rd22, %rd21, 64;
+    wmma.store.d.sync.aligned.row.m16n16k8.global.f32
+        [%rd22], {%cBB0, %cBB1, %cBB2, %cBB3, %cBB4, %cBB5, %cBB6, %cBB7}, 768;
+    ret;
+}

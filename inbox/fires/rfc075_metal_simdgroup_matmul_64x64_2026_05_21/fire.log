@@ -1,0 +1,26 @@
+device_name=Apple M3
+registry_id=4294968442
+max_threads_per_threadgroup=1024x1024x1024
+max_threadgroup_memory_length=32768
+pipe64    tew=32    max=1024   stat_threadgroup_memory_length=8192
+pipe64db  tew=32  max=1024 stat_threadgroup_memory_length=16384
+simdgroup_matmul_64x64_tg         M=256 N=256 K=256  median=0.0684ms  GFLOPS=490.44  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_tg_db      M=256 N=256 K=256  median=0.0822ms  GFLOPS=408.37  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_tg         M=512 N=512 K=512  median=0.2956ms  GFLOPS=908.15  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_tg_db      M=512 N=512 K=512  median=0.1960ms  GFLOPS=1369.86  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_tg         M=768 N=768 K=768  median=1.0687ms  GFLOPS=847.69  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_tg_db      M=768 N=768 K=768  median=0.8700ms  GFLOPS=1041.34  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_tg         M=1024 N=1024 K=1024  median=1.6770ms  GFLOPS=1280.55  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_tg_db      M=1024 N=1024 K=1024  median=1.4140ms  GFLOPS=1518.73  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_tg         M=1536 N=1536 K=1536  median=6.6902ms  GFLOPS=1083.33  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_tg_db      M=1536 N=1536 K=1536  median=5.8111ms  GFLOPS=1247.22  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_tg         M=2048 N=2048 K=2048  median=16.2929ms  GFLOPS=1054.44  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_tg_db      M=2048 N=2048 K=2048  median=15.2975ms  GFLOPS=1123.05  max|d|=0.000e+00  rel=0.000e+00  PASS
+F-RFC075-METAL-SIMDGROUP-64X64-NUMERIC-EQ: PASS
+PEAK_64X64_GFLOPS=1518.73 (best of single + db, across shape sweep)
+PEAK_64X64_SINGLE=1280.55 @ M=1024
+PEAK_64X64_DB=1518.73 @ M=1024
+VS_N30_RATIO=1.539x (N30 peak = 986.97 GFLOPS)
+VS_MPS_RATIO=0.892x (MPS peak = 1702.75 GFLOPS)
+GAP_CLOSURE_VS_MPS=74.3%
+MAX_REL_ERR_OVERALL=0.000e+00 (gate < 1e-4)

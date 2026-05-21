@@ -1,0 +1,34 @@
+=== API gap evidence — Apple Metal toolchain on host ===
+Date: 2026-05-21T09:42:15Z
+Host: Darwin Mac 25.5.0 Darwin Kernel Version 25.5.0: Mon Apr 27 20:41:19 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T8122 arm64
+
+--- xcrun --sdk macosx -f metal ---
+/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.5.188.0.TiBycL/Metal.xctoolchain/usr/bin/metal
+
+--- metal --version ---
+Apple metal version 32023.883 (metalfe-32023.883)
+Target: air64-apple-darwin25.5.0
+Thread model: posix
+InstalledDir: /private/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.5.188.0.TiBycL/Metal.xctoolchain/usr/metal/current/bin
+
+--- header grep: simdgroup_event / async_copy / async_work_group / wait_group_events / event_t ---
+(no matches in metal_stdlib tree)
+
+--- probe_async_api.metal (simdgroup_event / simdgroup_async_copy_2d) ---
+probe_async_api.metal:9:5: error: unknown type name 'simdgroup_event'
+    simdgroup_event e = simdgroup_async_copy_2d(
+    ^
+probe_async_api.metal:9:25: error: use of undeclared identifier 'simdgroup_async_copy_2d'
+    simdgroup_event e = simdgroup_async_copy_2d(
+                        ^
+probe_async_api.metal:15:5: error: unknown type name 'simdgroup_event'
+    simdgroup_event evs[1] = { e };
+
+--- probe2_async_api.metal (async_work_group_copy / event_t) ---
+probe2_async_api.metal:10:5: error: unknown type name 'event_t'
+    event_t e = async_work_group_copy((threadgroup half*)tg, a, 128, 0);
+    ^
+probe2_async_api.metal:10:17: error: use of undeclared identifier 'async_work_group_copy'
+    event_t e = async_work_group_copy((threadgroup half*)tg, a, 128, 0);
+                ^
+2 errors generated.

@@ -1,0 +1,26 @@
+BUILD_OK
+loaded PTX 1427 bytes
+{"status":"FAIL","phase":"jit_load","jit_err":"ptxas application ptx input, line 30; error   : Arguments mismatch for instruction 'mul'
+ptxas application ptx input, line 32; error   : Arguments mismatch for instruction 'add'
+ptxas application ptx input, line 34; error   : Arguments mismatch for instruction 'cvt'
+ptxas application ptx input, line 36; error   : Predicate expression expected
+ptxas application ptx input, line 39; error   : Arguments mismatch for instruction 'cvt'
+ptxas application ptx input, line 40; error   : Arguments mismatch for instruction 'cvt'
+ptxas application ptx input, line 41; error   : Arguments mismatch for instruction 'mov'
+ptxas application ptx input, line 42; error   : Arguments mismatch for instruction 'cvt'
+ptxas application ptx input, line 43; error   : Arguments mismatch for instruction 'mov'
+ptxas application ptx input, line 45; fatal   : Parsing error near '-': syntax error
+ptxas fatal   : Ptx assembly aborted due to errors"}
+cuModuleLoadDataEx FAILED
+JIT info log: 
+JIT err  log: ptxas application ptx input, line 30; error   : Arguments mismatch for instruction 'mul'
+ptxas application ptx input, line 32; error   : Arguments mismatch for instruction 'add'
+ptxas application ptx input, line 34; error   : Arguments mismatch for instruction 'cvt'
+ptxas application ptx input, line 36; error   : Predicate expression expected
+ptxas application ptx input, line 39; error   : Arguments mismatch for instruction 'cvt'
+ptxas application ptx input, line 40; error   : Arguments mismatch for instruction 'cvt'
+ptxas application ptx input, line 41; error   : Arguments mismatch for instruction 'mov'
+ptxas application ptx input, line 42; error   : Arguments mismatch for instruction 'cvt'
+ptxas application ptx input, line 43; error   : Arguments mismatch for instruction 'mov'
+ptxas application ptx input, line 45; fatal   : Parsing error near '-': syntax error
+ptxas fatal   : Ptx assembly aborted due to errors

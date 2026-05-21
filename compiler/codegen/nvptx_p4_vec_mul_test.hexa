@@ -1,0 +1,30 @@
+// compiler/codegen/nvptx_p4_vec_mul_test.hexa
+// RFC 071 P4 N50 — vec-mul source-to-silicon generalisation fixture
+//
+// @version 0.0.1
+// @capabilities [pure]
+// @phase("parse_only")
+//
+// This file is a TEST FIXTURE for F-RFC071-E2E-VEC-MUL-NUMERIC-EQ
+// (RFC 071 §4 P4 N50 follow-up to N34 + N45). Same kernel shape as
+// nvptx_p3_source_to_silicon_test.hexa (vec-add) but with `*` instead
+// of `+` so we can prove the N35 classifier+mnemonic+sentinel fix
+// (commit c29359ab) + N45 CSE (commit 830e44c0) generalise across
+// kernel shapes — not just the one kernel that achieved PASS in N34.
+//
+// Kernel name is `vec_mul` so the P4 falsifier substring-checks
+// `.visible .entry vec_mul` (PASS = source-derived) and verifies
+// `mul.f64` appears in the body (PASS = `*` operator lowers).
+//
+// `@phase("parse_only")` declares this file's role: input to the P4
+// emit-driver, not a standalone test runner.
+
+// ── The kernel (gpu/SPEC.md §2 — @gpu_kernel must return void) ───────
+
+@gpu_kernel
+fn vec_mul(a: [f64], b: [f64], c: [f64], n: i64) {
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(gid) < n {
+        c[to_i64(gid)] = a[to_i64(gid)] * b[to_i64(gid)]
+    }
+}

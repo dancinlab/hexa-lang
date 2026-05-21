@@ -1,0 +1,55 @@
+{
+  "rfc": "RFC 071",
+  "phase": "P9",
+  "cycle": "N70",
+  "title": "warp_reduce_sum multi-thread source-to-silicon",
+  "date": "2026-05-21",
+  "host": {
+    "driver_host": "macOS arm64 (N64 driver reused, /tmp/hexa_n64_driver, commit 2a1eaed0)",
+    "silicon_host": "ubu-2"
+  },
+  "device": {
+    "name": "NVIDIA GeForce RTX 5070",
+    "driver": "580.126.09",
+    "compute_cap": "12.0",
+    "ptx_target": "sm_80 (JIT-forward to sm_120a)"
+  },
+  "outcome": "BLOCKED_HONEST",
+  "scope_note": "Pure fixture + artifact cycle per task spec. No compiler source touched.",
+  "falsifiers": {
+    "F-RFC071-E2E-PTX-EMIT-CLEAN":                    "PASS",
+    "F-RFC071-E2E-PTX-LOAD":                          "PASS",
+    "F-RFC071-E2E-PTX-RESOLVE":                       "PASS",
+    "F-RFC071-E2E-WARP-REDUCE-SUM-LAUNCH-COMPLETE":   "FAIL (timeout 10s, EXIT=124)",
+    "F-RFC071-E2E-WARP-REDUCE-SUM-NUMERIC-EQ":        "BLOCKED"
+  },
+  "builtin_status": {
+    "gpu_thread_id_x":          "WIRED  (mov.u32 %r3, %tid.x)",
+    "gpu_block_dim_x":          "WIRED  (mov.u32 %r6, %ntid.x)",
+    "to_i64":                   "WIRED  (cvt.s64.s32)",
+    "gpu_warp_shuffle (idx)":   "WIRED  (shfl.sync.idx.b32 — u32 only, idx-mode, RFC 055 P4+)",
+    "gpu_warp_shuffle_xor":     "GAP    (XOR butterfly variant not wired)",
+    "gpu_warp_shuffle (f64)":   "GAP    (u32-only; FP64 needs 2× u32-half composition)",
+    "binop_div_i64":            "GAP    (3 `/` occurrences → `// unsupported binop: /`)",
+    "binop_modulo":             "WORKED via subtraction substitution (a - (a/32)*32) — but a/32 itself is gap"
+  },
+  "kernel_hang_root_cause": "Undefined PTX registers (%fd18 from shfl arm, %rd20/%rd21/%rd25 from `/` arms) retain garbage values. `mask > 0` predicate (line 74) stays true forever because `mov.u64 %rd16, %rd20` propagates undefined data into the mask Local each iteration.",
+  "per_warp_outputs": "N/A (kernel hung before reaching lane-0 store arm; cuCtxSynchronize timed out)",
+  "speedup_vs_N64": "N/A (cannot measure with non-functional kernel)",
+  "artifacts": {
+    "fixture":     "compiler/codegen/nvptx_p9_warp_reduce_test.hexa",
+    "emitted_ptx": "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/warp_reduce_sum.sm_80.ptx",
+    "host_c":      "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/host_warp_reduce.c",
+    "fire_log":    "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/fire.log",
+    "result_json": "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/result.json"
+  },
+  "follow_ons": {
+    "N71_A": "Wire gpu_warp_shuffle_xor → shfl.sync.bfly.b32 (compiler/codegen/nvptx_target.hexa L927 sibling arm + PTX_OP_SHFL_SYNC_BFLY_B32 constant + lower_test Case-9 sibling)",
+    "N71_B": "Extend warp-shuffle to FP64 (compose 2× u32 halves via mov.b32 {%r_lo,%r_hi},{%fd}; 2× shfl; mov.b64)",
+    "N71_C": "Wire integer `/` binop → div.s64 / div.u64 (sibling to existing add/sub/mul emit arms)"
+  },
+  "cost": {
+    "usd": 0,
+    "wall_seconds": "~120 (driver reuse + 1 emit + 1 fire + 10s timeout)"
+  }
+}

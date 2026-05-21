@@ -1,0 +1,58 @@
+{
+  "fire_id": "rfc071_p4_jit_load_pass_2026_05_21",
+  "falsifier_pass": ["F-RFC071-NVPTX-E2E-PTXAS-CLEAN", "F-RFC071-NVPTX-E2E-LAUNCH"],
+  "falsifier_fail": ["F-RFC071-E2E-NUMERIC-EQ"],
+  "status_jit_load": "PASS",
+  "status_launch": "PASS",
+  "status_numeric": "FAIL",
+  "N": 1024,
+  "max_abs_diff": 2.289989454992704e+226,
+  "byte_mismatch": 1024,
+  "first_mis": 0,
+  "c_0": -2.289989454992704e+226,
+  "ref_0": 2.9647833402501771,
+  "predecessor": "rfc071_p4_e2e_silicon_fire_2026_05_21 (N23 — 10 ptxas errors)",
+
+  "context": {
+    "ptx_size_bytes": 1461,
+    "target_sm": "sm_80",
+    "device": "NVIDIA GeForce RTX 5070 (sm_120)",
+    "driver_version": "580.126.09",
+    "host": "summer-B650M-K (ubu-2)",
+    "registers_used": 4,
+    "stack_bytes": 0,
+    "barriers_used": 0
+  },
+
+  "n23_to_p4_diff": {
+    "jit_errors_before": 10,
+    "jit_errors_after": 0,
+    "closed_gaps": [
+      "mul.f64 with U32 operands -> mul.lo.s32",
+      "add.f64 with U32 operands -> add.s32",
+      "cvt.s64.s32 with F64 source -> cvt.s64.s32 with U32 source",
+      "@%fd<n> bra (F64 predicate) -> @%p<n> bra (PRED-correct)",
+      "mov.f64 %fd-1 (_miss sentinel) -> dropped (STMT_ASSIGN guard)",
+      "mov.f64 %fd<n>, %fd0 (undefined symbol) -> mov.u64 %rd<n>, %rd0 (KERNEL array-param U64 fallback)",
+      "// unsupported binop: < -> setp.lt.s64 (symbol-form alias recognition)",
+      "// unsupported call: to_i64 -> cvt.s64.s32 (c126aaac restoration)"
+    ]
+  },
+
+  "numeric_fail_diagnosis": {
+    "root_cause": "kernel body has no STMT_LOAD/STMT_STORE wiring + param-value-load not emitted",
+    "observed_c_0": "-2.289989454992704e+226 = 0xEEEEEEEEEEEEEEEE = sentinel 0xee fill from cuMemsetD8",
+    "evidence": "c[0..N) retains the pre-launch sentinel because the kernel never executes ld.global.f64 + st.global.f64 to materialize the vec-add",
+    "remaining_gaps": [
+      "ld.param.u64 %rd<i>, [<name>_param_<i>] at function entry (param Locals are stamped U64 but never loaded)",
+      "STMT_LOAD lowering: source `a[to_i64(gid)]` not emitting ld.global.f64",
+      "STMT_STORE lowering: source `c[i] = ...` not emitting st.global.f64"
+    ]
+  },
+
+  "artifacts": {
+    "ptx": "my_test_kernel.sm_80.ptx",
+    "fire_log": "fire.log",
+    "result_json": "result.json"
+  }
+}

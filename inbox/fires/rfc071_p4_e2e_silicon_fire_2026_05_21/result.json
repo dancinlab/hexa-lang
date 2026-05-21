@@ -1,0 +1,79 @@
+{
+  "fire_id": "rfc071_p4_e2e_silicon_fire_2026_05_21",
+  "falsifier": "F-RFC071-E2E-NUMERIC-EQ",
+  "status": "FAIL",
+  "phase": "jit_load",
+  "max_abs_diff": null,
+  "byte_mismatch": null,
+  "N": 1024,
+
+  "context": {
+    "driver_path": "/tmp/hexa_e2e_driver",
+    "driver_size_bytes": 1552128,
+    "driver_arch": "Mach-O 64-bit arm64",
+    "ptx_path_local": "compiler/codegen/nvptx_p3_source_to_silicon_test.hexa.ptx",
+    "ptx_path_remote": "/tmp/rfc071_e2e_my_test_kernel.ptx",
+    "ptx_size_bytes": 1427,
+    "target_sm": "sm_80",
+    "device": "NVIDIA GeForce RTX 5070 (sm_120)",
+    "driver_version": "580.126.09",
+    "host": "summer-B650M-K (ubu-2)"
+  },
+
+  "ptx_substring_asserts": {
+    ".visible .entry my_test_kernel": true,
+    ".target sm_80": true,
+    "cvt.s64.s32": true,
+    "setp.lt.s64": false,
+    "setp.lt.s32": false,
+    "@%p": false,
+    "@%fd (FP64 predicate — INVALID)": true,
+    "// ... unsupported marker present": true,
+    "unsupported binop: <": true,
+    "pure_ascii": true,
+    "ascii_non_ascii_count": 0
+  },
+
+  "n17_partial_closure": {
+    "to_i64_lowered": "PASS — emits 'cvt.s64.s32 %rd<d>, <src>' as designed",
+    "lt_cmp_lowered": "FAIL — still emits '// unsupported binop: <' because _nvptx_cmp_operand_type_suffix sees both operands classified as F64 (the dst-kind propagation from to_i64 to the binop's operands is missing); kind-aware setp.lt.s64 is never selected",
+    "bounds_check_br_cond": "FAIL — predicate dst is in %fd<n> (F64) bank instead of %p<n> (.pred), because the unselected setp branch leaves the dst Local default-classified F64; @%fd<n> bra is not valid PTX"
+  },
+
+  "ptxas_jit_errors": [
+    "line 30: Arguments mismatch for instruction 'mul' (mul.f64 with u32 source operands %r4 %r5)",
+    "line 32: Arguments mismatch for instruction 'add' (add.f64 with f64 + u32 source operands)",
+    "line 34: Arguments mismatch for instruction 'cvt' (cvt.s64.s32 with f64 source operand %fd9)",
+    "line 36: Predicate expression expected (@%fd11 bra; %fd11 is FP64, not .pred)",
+    "line 39-43: cascading Arguments mismatch for cvt + mov in the if-true block (same F64-default classifier bug for the load/store path operands)",
+    "line 45: Parsing error near '-': syntax error (mov.f64 %fd-1, %fd2 — negative register id; %fd-1 means STMT_STORE's dst is _miss sentinel local_id=-1 which is rendered into the register text as `%fd-1`)"
+  ],
+
+  "scope_diagnosis": {
+    "root_cause_category": "param-type-propagation gap (called out by the task scope as expected blocker)",
+    "what_n17_closed": "Surface-level 'unsupported call: to_i64' marker — the to_i64 dst is now correctly classified U64 and lowers to cvt.s64.s32",
+    "what_n17_did_NOT_close": [
+      "GPU intrinsic dst type propagation — gpu_block_id_x() returns U32 per gpu/SPEC.md §5 and the dst Local IS classified U32 (visible in `.reg .u32 %r4`), but downstream Locals consuming that U32 via `*` and `+` are default-classified F64 (mul.f64 with u32 sources)",
+      "Binop dst-kind inference from operand kinds — when both operands are U32, the binop dst should also be U32 (or at least an integer bank)",
+      "_nvptx_cmp_operand_type_suffix tracking — both operands resolve to F64 because the upstream binop chain misclassifies their producers",
+      "STMT_STORE _miss sentinel (local_id = -1) emits a negative register id `%fd-1` — separate textual emit bug unrelated to N17",
+      "Parameter-type propagation from `.param .u64 my_test_kernel_param_3` to the local that gets the i64 value of `n` — same kind-propagation root cause"
+    ],
+    "honest_scope_marker_quote": "From task scope: 'could be the param-type-propagation gap from N17's report (`n: i64` defaults to F64 bank → `setp.lt.s64 %p, %rd1, %fd3` mixed-bank may not JIT)'. CONFIRMED — the gap is even wider than predicted: not just `n` but every Local that consumes a U32 intrinsic result or a `to_i64` cast defaults to F64."
+  },
+
+  "next_cycle_minimal_fix_sketch": {
+    "step_1": "Extend `_nvptx_classify_locals` to perform dst-kind inference: STMT_BINOP dst inherits the kind of its operands when they agree; STMT_ASSIGN dst inherits the source operand kind (instead of always defaulting to F64).",
+    "step_2": "Implement kind-aware binop mnemonic for U32/U64 — `mul.lo.s32`, `add.s32`, etc. (currently only FP variants exist in _nvptx_binop_mnemonic).",
+    "step_3": "Fix the _miss sentinel rendering — STMT_STORE with dst.id == -1 (void store) should emit `st.global.f64 [<addr>], <src>` not `mov.f64 %fd-1, <src>`.",
+    "step_4": "Param-Local kind inference from `.param .u64` declaration — currently the params are declared U64 in the signature but the consuming Locals see them as F64 because the call-into-kernel arg-bind step doesn't tag them.",
+    "estimated_LOC": "100-200 across nvptx_target.hexa::_nvptx_classify_locals + _nvptx_binop_mnemonic + _nvptx_lower_stmt STMT_STORE branch"
+  },
+
+  "artifacts": {
+    "ptx": "my_test_kernel.sm_80.ptx",
+    "host_c": "rfc071_e2e_host.c",
+    "fire_log": "fire.log",
+    "result_json": "result.json"
+  }
+}

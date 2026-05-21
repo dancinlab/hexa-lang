@@ -1,0 +1,88 @@
+{
+  "campaign": "rfc075_metal_matmul_bf16_codegen_fire_2026_05_21",
+  "host": "Mac (local)",
+  "platform": "darwin-arm64",
+  "gpu": "Apple M3 (registry_id=4294968442)",
+  "max_threads_per_threadgroup": "1024x1024x1024",
+  "max_threadgroup_memory_length": 32768,
+  "date_utc": "2026-05-21T10:19:48Z",
+  "toolchain": "xcrun --sdk macosx metal / swift (jit)",
+  "codegen_commit": "7b5f4997",
+  "codegen_source": "compiler/codegen/metal_target.hexa::_metal_emit_matmul_bf16_body + _metal_emit_matmul_kernel_signature_bf16",
+  "reproduction_method": "mechanical concatenation of constants + literals from N41 emit fns (no compiler self-host required); .metal byte-for-byte equivalent to what codegen_emit_metal_msl would write for the matmul_bf16 MIR shape",
+  "baseline_n36_commit": "dbb09684",
+  "baseline_n36_peak_gflops": 1029.5361136496808,
+  "warmup": 5,
+  "timed": 50,
+  "tolerance_rel": 1e-2,
+  "rows": [
+    {
+      "M": 128, "N": 128, "K": 128,
+      "median_ms": 0.03962499613407999,
+      "gflops_codegen": 105.84995354466758,
+      "gflops_n36_handemit_32x32_tg": 239.105,
+      "ratio_codegen_vs_handemit": 0.4426923466454804,
+      "max_abs_diff": 0.0,
+      "max_rel_err": 0.0,
+      "pass": true
+    },
+    {
+      "M": 256, "N": 256, "K": 256,
+      "median_ms": 0.1745416666381061,
+      "gflops_codegen": 192.2431053071792,
+      "gflops_n36_handemit_32x32_tg": 527.378,
+      "ratio_codegen_vs_handemit": 0.3645262132799988,
+      "max_abs_diff": 0.0,
+      "max_rel_err": 0.0,
+      "pass": true
+    },
+    {
+      "M": 512, "N": 512, "K": 512,
+      "median_ms": 0.27779166703112423,
+      "gflops_codegen": 966.319324365925,
+      "gflops_n36_handemit_32x32_tg": 882.648,
+      "ratio_codegen_vs_handemit": 1.0947958012321164,
+      "max_abs_diff": 0.0,
+      "max_rel_err": 0.0,
+      "pass": true
+    },
+    {
+      "M": 768, "N": 768, "K": 768,
+      "median_ms": 0.8919166648411192,
+      "gflops_codegen": 1015.7559553631438,
+      "gflops_n36_handemit_32x32_tg": 0.0,
+      "ratio_codegen_vs_handemit": 0.0,
+      "max_abs_diff": 0.0,
+      "max_rel_err": 0.0,
+      "pass": true
+    },
+    {
+      "M": 1024, "N": 1024, "K": 1024,
+      "median_ms": 2.3760000040056184,
+      "gflops_codegen": 903.8230826513593,
+      "gflops_n36_handemit_32x32_tg": 1029.536,
+      "ratio_codegen_vs_handemit": 0.8778936167859689,
+      "max_abs_diff": 0.0,
+      "max_rel_err": 0.0,
+      "pass": true
+    }
+  ],
+  "peak_gflops_codegen": 1015.7559553631438,
+  "peak_gflops_n36_handemit": 1029.5361136496808,
+  "codegen_over_handemit_peak_ratio": 0.9866151773562496,
+  "max_rel_err_overall": 0.0,
+  "falsifier_F_RFC075_METAL_MATMUL_BF16_CODEGEN_FIRE": "PASS",
+  "headline": {
+    "codegen_peak_gflops": 1015.7559553631438,
+    "handemit_peak_gflops": 1029.5361136496808,
+    "ratio_codegen_vs_handemit": 0.9866151773562496,
+    "max_rel_err": 0.0,
+    "verdict": "PASS"
+  },
+  "honest_scope": [
+    "The .metal source file in this fire was produced by manual concatenation of the constants + string-builder literals in metal_target.hexa::_metal_emit_matmul_bf16_body and friends, NOT by running the hexa compiler end-to-end (the compiler still gates this codegen path behind the MTLGPUFamily.apple9 host runtime feature check). The output is BYTE-EQUIVALENT to what codegen_emit_metal_msl(mod) would write for the matmul_bf16 MIR shape.",
+    "N41 codegen emits only the 32x32_tg variant of the bf16 matmul. N36 hand-emit had three variants (8x8 / 16x16 / 32x32_tg); the 32x32_tg variant achieved N36's peak 1029 GFLOPS @ 1024^3, so the codegen path covers the highest-throughput shape but does not yet emit the smaller-tile variants.",
+    "Tolerance 1e-2 matches N36 (bf16 has 7-bit mantissa, FP32 accumulator removes K-loop drift). Reference is built on bf16-rounded inputs identical to what the GPU sees, so rel_err measures compute-side error only.",
+    "Variance source: Mac is a shared developer laptop; median over 50 timed runs after 5 warmup runs."
+  ]
+}

@@ -1,0 +1,35 @@
+device_name=Apple M3
+registry_id=4294968442
+max_threads_per_threadgroup=1024x1024x1024
+max_threadgroup_memory_length=32768
+pipeSw      tew=32     max=1024     stat_tg_mem=16384
+pipeSwpipe  tew=32 max=1024 stat_tg_mem=16384
+pipeSplit   tew=32  max=1024  stat_tg_mem=16384
+simdgroup_matmul_64x64_async_sw           M=256 N=256 K=256  median=0.0560ms  GFLOPS=599.63  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_swpipe       M=256 N=256 K=256  median=0.0288ms  GFLOPS=1167.11  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_split        M=256 N=256 K=256  median=0.0311ms  GFLOPS=1079.50  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_sw           M=512 N=512 K=512  median=0.2125ms  GFLOPS=1262.98  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_swpipe       M=512 N=512 K=512  median=0.2129ms  GFLOPS=1261.00  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_split        M=512 N=512 K=512  median=0.2425ms  GFLOPS=1107.14  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_sw           M=768 N=768 K=768  median=0.6254ms  GFLOPS=1448.68  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_swpipe       M=768 N=768 K=768  median=0.6213ms  GFLOPS=1458.30  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_split        M=768 N=768 K=768  median=0.7254ms  GFLOPS=1248.90  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_sw           M=1024 N=1024 K=1024  median=2.0793ms  GFLOPS=1032.80  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_swpipe       M=1024 N=1024 K=1024  median=1.5580ms  GFLOPS=1378.36  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_split        M=1024 N=1024 K=1024  median=1.8330ms  GFLOPS=1171.59  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_sw           M=1536 N=1536 K=1536  median=4.8643ms  GFLOPS=1490.01  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_swpipe       M=1536 N=1536 K=1536  median=4.7805ms  GFLOPS=1516.10  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_split        M=1536 N=1536 K=1536  median=6.2285ms  GFLOPS=1163.64  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_sw           M=2048 N=2048 K=2048  median=13.7262ms  GFLOPS=1251.61  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_swpipe       M=2048 N=2048 K=2048  median=13.0538ms  GFLOPS=1316.09  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_64x64_async_split        M=2048 N=2048 K=2048  median=19.5631ms  GFLOPS=878.18  max|d|=0.000e+00  rel=0.000e+00  PASS
+F-RFC075-METAL-ASYNC-COPY: PASS
+PEAK_ASYNC_PROBE_GFLOPS=1516.10 (best of sw / swpipe / split)
+PEAK_SW=1490.01 @ M=1536
+PEAK_SWPIPE=1516.10 @ M=1536
+PEAK_SPLIT=1248.90 @ M=768
+VS_N37_DB_RATIO=0.998x (N37 DB peak = 1518.73 GFLOPS)
+VS_MPS_RATIO=0.890x (MPS peak = 1702.75 GFLOPS)
+GAP_CLOSURE_VS_MPS=-1.4%
+MAX_REL_ERR_OVERALL=0.000e+00 (gate < 1e-4)
+ASYNC_COPY_API_AVAILABLE=false (see api_gap_finding in result.json)

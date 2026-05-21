@@ -799,6 +799,91 @@ fn _rv_fresh_wire(m: Module) -> str {
     return "$rvexpr$" + str(len(m.cells))
 }
 
+// ─── width-aware combinational emit (rfc_006 §5 Tier-1 (e) Option II) ────
+//
+// CLEAN-ROOM: Source 2 closure for the multi-bit width-truncation note —
+// `inbox/notes/2026-05-21-rfc006-§5-multibit-width-truncation.md`. Before
+// Option II every fresh `$rvexpr$N` Y-wire created in `_rv_elab_expr`,
+// `_rv_elab_primary` and the 2-D LHS demux was registered with width=1,
+// even when the operand wires were multi-bit. The generic RTLIL cells
+// (`$xor`, `$and`, `$add`, …) are themselves width-tolerant per Yosys
+// genrtlil.cc, but the wire-width attribute is what `abc_emit_blif`
+// (Option I `.latch` per-bit expansion) consults to decide how many
+// 1-bit BLIF latches to emit per `$dff` Q-wire. So leaving the result
+// wires at width=1 forced multi-bit storage to collapse downstream.
+//
+// `_rv_lookup_width` is the symmetric helper to `_rv_v2_wire_width` at
+// L2337 (kept separate since this function lives in the elab-helper
+// section and pre-dates the v2 helper). Default 1 when the wire is
+// absent — matches the legacy 1-bit assumption for synthesised wires
+// the caller hasn't yet registered.
+fn _rv_lookup_width(m: Module, name: str) -> int {
+    let idx = rtlil_find_wire(m, name)
+    if idx < 0 { return 1 }
+    let w = m.wires[idx].width
+    if w < 1 { return 1 }
+    return w
+}
+
+// CLEAN-ROOM: size prefix of a Verilog number literal (e.g. `8'hff` → 8,
+// `1'b0` → 1, `64` → 1 for unsized — we keep unsized literals as 1-bit
+// to match the existing `$const_<N>` shape registered downstream).
+// Returns 1 when the token is not a sized literal (degraded default).
+fn _rv_literal_width(tok: str) -> int {
+    let n = len(tok)
+    if n == 0 { return 1 }
+    let mut tick = 0 - 1
+    let mut i = 0
+    while i < n {
+        if tok.substring(i, i + 1) == "'" { tick = i }
+        i = i + 1
+    }
+    if tick <= 0 { return 1 }
+    let mut sz = 0
+    let mut j = 0
+    while j < tick {
+        let d = _rv_digit(tok.substring(j, j + 1), 10)
+        if d < 0 { return 1 }
+        sz = sz * 10 + d
+        j = j + 1
+    }
+    if sz < 1 { return 1 }
+    return sz
+}
+
+// CLEAN-ROOM: result width of a binary RTLIL cell, per IEEE 1364-2005
+// §5.4 (numeric expressions) + Yosys genrtlil.cc cell-type table:
+//   $add/$sub/$mul/$div/$mod/$and/$or/$xor   → max(wa, wb)
+//   $eq/$ne/$lt/$gt/$le/$ge                  → 1  (boolean)
+//   $logic_and/$logic_or                     → 1  (boolean)
+//   $shl/$shr                                → wa (operand-A width)
+// Returns 1 for anything else (degraded default).
+fn _rv_binop_result_width(op: str, wa: int, wb: int) -> int {
+    let mut a = wa
+    let mut b = wb
+    if a < 1 { a = 1 }
+    if b < 1 { b = 1 }
+    if op == "==" { return 1 }
+    if op == "!=" { return 1 }
+    if op == "<"  { return 1 }
+    if op == ">"  { return 1 }
+    if op == "<=" { return 1 }
+    if op == ">=" { return 1 }
+    if op == "&&" { return 1 }
+    if op == "||" { return 1 }
+    if op == "<<" { return a }
+    if op == ">>" { return a }
+    if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
+        if a > b { return a }
+        return b
+    }
+    if op == "&" || op == "|" || op == "^" {
+        if a > b { return a }
+        return b
+    }
+    return 1
+}
+
 // CLEAN-ROOM: elaborate a primary — wire reference, 1'b0/1'b1 constant,
 // parenthesised expression, or unary `~` / `!`.
 fn _rv_elab_primary(toks: [str], pos: int, m_in: Module, tab: SymTab) -> ElabResult {
@@ -815,10 +900,16 @@ fn _rv_elab_primary(toks: [str], pos: int, m_in: Module, tab: SymTab) -> ElabRes
         if len(inner.err) > 0 { return inner }
         m = inner.m
         let wn = _rv_fresh_wire(m)
-        m = rtlil_module_add_wire(m, rtlil_wire(wn, 1, 0, 0))
+        // rfc_006 §5 Tier-1 (e) Option II — unary cell result width:
+        //   $not  preserves operand width (bitwise inversion)
+        //   $neg  preserves operand width (two's-complement negation)
+        //   $logic_not (Verilog `!`) is a boolean reduce → 1 bit
+        // @cite IEEE 1364-2005 §5.1.13 (unary operators).
+        let mut wn_w = _rv_lookup_width(m, inner.wire)
         let mut cty = "$not"
-        if t == "!" { cty = "$logic_not" }
+        if t == "!" { cty = "$logic_not" ; wn_w = 1 }
         if t == "-" { cty = "$neg" }
+        m = rtlil_module_add_wire(m, rtlil_wire(wn, wn_w, 0, 0))
         let mut c = rtlil_cell(wn + "$c", cty, 0)
         c = rtlil_cell_connect(c, "A", inner.wire)
         c = rtlil_cell_connect(c, "Y", wn)
@@ -966,12 +1057,61 @@ fn _rv_elab_expr(toks: [str], pos: int, m_in: Module, min_prec: int, tab: SymTab
         if len(rhs.err) > 0 { return rhs }
         m = rhs.m
         let wn = _rv_fresh_wire(m)
-        m = rtlil_module_add_wire(m, rtlil_wire(wn, 1, 0, 0))
-        let mut c = rtlil_cell(wn + "$c", cty, 0)
-        c = rtlil_cell_connect(c, "A", cur)
-        c = rtlil_cell_connect(c, "B", rhs.wire)
-        c = rtlil_cell_connect(c, "Y", wn)
-        m = rtlil_module_add_cell(m, c)
+        // rfc_006 §5 Tier-1 (e) Option II — width-aware binary-op result.
+        // Operand widths are looked up from the current module. For
+        // arithmetic/bitwise (`+`, `-`, `*`, `&`, `|`, `^`, …) the result
+        // is max(wa, wb); for comparison/logical (`==`, `<`, `&&`, …)
+        // the result is 1 bit. See `_rv_binop_result_width` at L817.
+        let wa = _rv_lookup_width(m, cur)
+        let wb = _rv_lookup_width(m, rhs.wire)
+        let ww = _rv_binop_result_width(op, wa, wb)
+        m = rtlil_module_add_wire(m, rtlil_wire(wn, ww, 0, 0))
+        // rfc_006 §5 Tier-1 (e) Option III — pre-bit-blast at elab time
+        // for the 3 pure-bitwise operators (`^`, `&`, `|`) when ww > 1.
+        // Emit W independent per-bit cells with width-1 Y wires named
+        // `<wn>__b<k>`, with per-bit A/B inputs when the operand is
+        // multi-bit (`<a>__b<k>`), bare when scalar (broadcast). The
+        // multi-bit base wire `<wn>` is still registered at L1068 so
+        // downstream consumers that look up `<wn>` see width=ww and
+        // the abc_emit_blif connect-emit fans out per-bit.
+        //
+        // SCOPE-LIMIT (user prompt 2026-05-21): only `^`, `&`, `|` in
+        // this cycle. `$xnor`/`$not`/`$mux`/`$add`/`$sub`/`$eq`/`$lt`
+        // are DEFERRED — they continue through the single-cell path
+        // below and rely on `passes.hexa::_passes_lower_bitwise_cell`
+        // / `_passes_lower_eq_cell` / `_passes_lower_add_cell` to do
+        // the bit-blast post-techmap.
+        //
+        // Iteration B (per the prompt): per-bit cells only, no buf
+        // chain from per-bit pieces back to `<wn>`. The connect-emit
+        // in abc_map.hexa L327-352 propagates the multi-bit alias by
+        // looking up width(<wn>)=ww and emitting W buf rows per
+        // downstream sink.
+        let bitwise_blast = (op == "^" || op == "&" || op == "|") && ww > 1
+        if bitwise_blast {
+            let a_blast = if _rv_lookup_width(m, cur) > 1 { 1 } else { 0 }
+            let b_blast = if _rv_lookup_width(m, rhs.wire) > 1 { 1 } else { 0 }
+            let mut k = 0
+            while k < ww {
+                let bs = str(k)
+                let yb = wn + "__b" + bs
+                m = rtlil_module_add_wire(m, rtlil_wire(yb, 1, 0, 0))
+                let ab = if a_blast == 1 { cur + "__b" + bs } else { cur }
+                let bb = if b_blast == 1 { rhs.wire + "__b" + bs } else { rhs.wire }
+                let mut cb = rtlil_cell(yb + "$c", cty, 0)
+                cb = rtlil_cell_connect(cb, "A", ab)
+                cb = rtlil_cell_connect(cb, "B", bb)
+                cb = rtlil_cell_connect(cb, "Y", yb)
+                m = rtlil_module_add_cell(m, cb)
+                k = k + 1
+            }
+        } else {
+            let mut c = rtlil_cell(wn + "$c", cty, 0)
+            c = rtlil_cell_connect(c, "A", cur)
+            c = rtlil_cell_connect(c, "B", rhs.wire)
+            c = rtlil_cell_connect(c, "Y", wn)
+            m = rtlil_module_add_cell(m, c)
+        }
         cur = wn
         i = rhs.pos
     }
@@ -996,7 +1136,16 @@ fn _rv_elab_expr(toks: [str], pos: int, m_in: Module, min_prec: int, tab: SymTab
             if len(else_res.err) > 0 { return else_res }
             m = else_res.m
             let mux_y = _rv_fresh_wire(m)
-            m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+            // rfc_006 §5 Tier-1 (e) Option II — `$mux` result width = the
+            // wider of the then/else operand widths (S is 1-bit selector,
+            // doesn't constrain Y). IEEE 1364-2005 §5.1.4 / Yosys
+            // genrtlil.cc::ternary_op width inference.
+            let mux_wt = _rv_lookup_width(m, then_res.wire)
+            let mux_we = _rv_lookup_width(m, else_res.wire)
+            let mut mux_w = mux_wt
+            if mux_we > mux_w { mux_w = mux_we }
+            if mux_w < 1 { mux_w = 1 }
+            m = rtlil_module_add_wire(m, rtlil_wire(mux_y, mux_w, 0, 0))
             let mut tc = rtlil_cell(mux_y + "$tc", "$mux", 0)
             tc = rtlil_cell_connect(tc, "A", else_res.wire)
             tc = rtlil_cell_connect(tc, "B", then_res.wire)
@@ -2242,8 +2391,15 @@ fn _rv_emit_for_if_stmts(
             // Clocked guarded write: $mux feedback-hold + $dff sink.
             // @cite IEEE 1364-2005 §9.2 (non-blocking) + §9.4 (nested
             // conditional) + Yosys proc_mux $mux-feedback shape.
+            // rfc_006 §5 Tier-1 (e) Option II — clocked-write mux_y
+            // width MUST match the LHS Q-wire width (the $mux drives
+            // $dff.D, $dff.Q = LHS multi-bit register). Width-1 mux_y
+            // here was the leaf-truncation that prevented bit-blast
+            // downstream (`abc_emit_blif` Option I `.latch` per-bit
+            // reads Q-width, but $mux→tech-map sees D-width).
             let mux_y = _rv_fresh_wire(m)
-            m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+            let mux_w = _rv_v2_wire_width(m, lhs)
+            m = rtlil_module_add_wire(m, rtlil_wire(mux_y, mux_w, 0, 0))
             let mux_n = "$rvmux$" + str(len(m.cells))
             let mut mc = rtlil_cell(mux_n, "$mux", 0)
             mc = rtlil_cell_connect(mc, "A", lhs)
@@ -3102,7 +3258,14 @@ fn _rv_emit_body_v2(
             if is_clocked == 1 {
                 let dw = _rv_v2_dwire(lhs)
                 if rtlil_find_wire(m, dw) < 0 {
-                    m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                    // rfc_006 §5 Tier-1 (e) Option II W-loop (2026-05-21):
+                    // D-wire width must match Q-wire (lhs) width so the
+                    // downstream `abc_emit_blif` connect-bit-blast +
+                    // procmux Y-bit-blast see a multi-bit driver. Pre-fix
+                    // hardcoded width=1 broke the per-bit chain for
+                    // every multi-bit register (e.g. rr_ptr [2:0]).
+                    let _dw_w_a = _rv_v2_wire_width(m, lhs)
+                    m = rtlil_module_add_wire(m, rtlil_wire(dw, _dw_w_a, 0, 0))
                 }
                 m = rtlil_module_connect_cond(m, dw, rer.wire, cond_wire)
                 tracked = _rv_v2_track(tracked, lhs)
@@ -3119,7 +3282,12 @@ fn _rv_emit_body_v2(
             if is_clocked == 1 {
                 let dw = _rv_v2_dwire(lhs)
                 if rtlil_find_wire(m, dw) < 0 {
-                    m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                    // rfc_006 §5 Tier-1 (e) Option II W-loop —
+                    // name[k]__d width = name[k] width (packed-array slot
+                    // width; e.g. fifo_mem[k] = W bits for `reg [W-1:0]
+                    // fifo_mem [0:P-1]`).
+                    let _dw_w_b = _rv_v2_wire_width(m, lhs)
+                    m = rtlil_module_add_wire(m, rtlil_wire(dw, _dw_w_b, 0, 0))
                 }
                 m = rtlil_module_connect_cond(m, dw, rer.wire, cond_wire)
                 tracked = _rv_v2_track(tracked, lhs)
@@ -3165,7 +3333,10 @@ fn _rv_emit_body_v2(
             if is_clocked == 1 {
                 let dw = _rv_v2_dwire(elem)
                 if rtlil_find_wire(m, dw) < 0 {
-                    m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                    // rfc_006 §5 Tier-1 (e) Option II W-loop — dyn-idx
+                    // per-element D-wire width = element width.
+                    let _dw_w_c = _rv_v2_wire_width(m, elem)
+                    m = rtlil_module_add_wire(m, rtlil_wire(dw, _dw_w_c, 0, 0))
                 }
                 m = rtlil_module_connect_cond(m, dw, rer.wire, sel_w)
                 tracked = _rv_v2_track(tracked, elem)
@@ -3867,7 +4038,13 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                             if emit_ok == 1 {
                                 m = rer.m
                                 let mux_y = _rv_fresh_wire(m)
-                                m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+                                // rfc_006 §5 Tier-1 (e) Option II — left-deep
+                                // chain mux_y width = nested_chain_lhs (the
+                                // final $dff.Q register width). Every chain
+                                // link feeds the next as inner_w; the final
+                                // link is $dff.D — so all share LHS width.
+                                let mux_w = _rv_v2_wire_width(m, nested_chain_lhs)
+                                m = rtlil_module_add_wire(m, rtlil_wire(mux_y, mux_w, 0, 0))
                                 let mux_n = "$rvmux$" + str(len(m.cells))
                                 let mut mc = rtlil_cell(mux_n, "$mux", 0)
                                 mc = rtlil_cell_connect(mc, "A", inner_w)
@@ -3918,7 +4095,11 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                         if len(eer.err) == 0 {
                             m = eer.m
                             let mux_y = _rv_fresh_wire(m)
-                            m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+                            // rfc_006 §5 Tier-1 (e) Option II — single-arm
+                            // if/else cond-mux: mux_y feeds $dff.D / comb
+                            // connect targeting t_lhs (multi-bit register).
+                            let mux_w = _rv_v2_wire_width(m, t_lhs)
+                            m = rtlil_module_add_wire(m, rtlil_wire(mux_y, mux_w, 0, 0))
                             let mux_n = "$rvmux$" + str(len(m.cells))
                             let mut mc = rtlil_cell(mux_n, "$mux", 0)
                             mc = rtlil_cell_connect(mc, "A", eer.wire)
@@ -3954,7 +4135,11 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     if len(ter.err) == 0 {
                         m = ter.m
                         let mux_y = _rv_fresh_wire(m)
-                        m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+                        // rfc_006 §5 Tier-1 (e) Option II — no-else
+                        // single-arm clocked cond-mux: mux_y feeds
+                        // $dff.D with Q=t_lhs (multi-bit register).
+                        let mux_w = _rv_v2_wire_width(m, t_lhs)
+                        m = rtlil_module_add_wire(m, rtlil_wire(mux_y, mux_w, 0, 0))
                         let mux_n = "$rvmux$" + str(len(m.cells))
                         let mut mc = rtlil_cell(mux_n, "$mux", 0)
                         mc = rtlil_cell_connect(mc, "A", t_lhs)
@@ -4007,7 +4192,12 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                                     andc = rtlil_cell_connect(andc, "Y", en_y)
                                     m = rtlil_module_add_cell(m, andc)
                                     let mux_y = _rv_fresh_wire(m)
-                                    m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+                                    // rfc_006 §5 Tier-1 (e) Option II —
+                                    // dyn-idx per-element clocked write:
+                                    // mux_y → $dff.D with Q=elem (multi-bit
+                                    // array slot — fifo_mem[k] is W bits).
+                                    let mux_w = _rv_v2_wire_width(m, elem)
+                                    m = rtlil_module_add_wire(m, rtlil_wire(mux_y, mux_w, 0, 0))
                                     let mut muxc = rtlil_cell(mux_y + "$mux", "$mux", 0)
                                     muxc = rtlil_cell_connect(muxc, "A", elem)
                                     muxc = rtlil_cell_connect(muxc, "B", ter.wire)
@@ -4168,7 +4358,10 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                                                     andc = rtlil_cell_connect(andc, "Y", en_y)
                                                     m = rtlil_module_add_cell(m, andc)
                                                     let mux_yd = _rv_fresh_wire(m)
-                                                    m = rtlil_module_add_wire(m, rtlil_wire(mux_yd, 1, 0, 0))
+                                                    // rfc_006 §5 Tier-1 (e) Option II —
+                                                    // multi-LHS dyn-idx per-element write.
+                                                    let mux_w = _rv_v2_wire_width(m, elem)
+                                                    m = rtlil_module_add_wire(m, rtlil_wire(mux_yd, mux_w, 0, 0))
                                                     let mut muxc = rtlil_cell(mux_yd + "$mux", "$mux", 0)
                                                     muxc = rtlil_cell_connect(muxc, "A", elem)
                                                     muxc = rtlil_cell_connect(muxc, "B", ser_d.wire)
@@ -4207,7 +4400,10 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                                 } else {
                                     m = ser.m
                                     let mux_y = _rv_fresh_wire(m)
-                                    m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+                                    // rfc_006 §5 Tier-1 (e) Option II —
+                                    // multi-LHS static-idx clocked write.
+                                    let mux_w = _rv_v2_wire_width(m, slhs)
+                                    m = rtlil_module_add_wire(m, rtlil_wire(mux_y, mux_w, 0, 0))
                                     let mux_n = "$rvmux$" + str(len(m.cells))
                                     let mut mc = rtlil_cell(mux_n, "$mux", 0)
                                     mc = rtlil_cell_connect(mc, "A", slhs)
@@ -4329,7 +4525,10 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                                 if emit_ok == 1 {
                                     m = eer2.m
                                     let mux_y = _rv_fresh_wire(m)
-                                    m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+                                    // rfc_006 §5 Tier-1 (e) Option II —
+                                    // multi-LHS legacy 3e if/else clocked write.
+                                    let mux_w = _rv_v2_wire_width(m, slhs)
+                                    m = rtlil_module_add_wire(m, rtlil_wire(mux_y, mux_w, 0, 0))
                                     let mux_n = "$rvmux$" + str(len(m.cells))
                                     let mut mc = rtlil_cell(mux_n, "$mux", 0)
                                     mc = rtlil_cell_connect(mc, "A", eer2.wire)
@@ -5205,7 +5404,10 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                         }
                         // sel_w_b is non-empty (we are in dyn-some case)
                         let mux_y_b = _rv_fresh_wire(m)
-                        m = rtlil_module_add_wire(m, rtlil_wire(mux_y_b, 1, 0, 0))
+                        // rfc_006 §5 Tier-1 (e) Option II — bare-path dyn-LHS
+                        // per-slot $dff: mux_y_b drives dff.D with Q=slot.
+                        let mux_w_b = _rv_v2_wire_width(m, slot)
+                        m = rtlil_module_add_wire(m, rtlil_wire(mux_y_b, mux_w_b, 0, 0))
                         let mut muxc_b = rtlil_cell(mux_y_b + "$mux", "$mux", 0)
                         muxc_b = rtlil_cell_connect(muxc_b, "A", slot)
                         muxc_b = rtlil_cell_connect(muxc_b, "B", er.wire)
@@ -5271,7 +5473,10 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                     eqc = rtlil_cell_connect(eqc, "Y", eq_y)
                     m = rtlil_module_add_cell(m, eqc)
                     let mux_y = _rv_fresh_wire(m)
-                    m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+                    // rfc_006 §5 Tier-1 (e) Option II — bare-path dyn-LHS
+                    // demux per-slot $mux: data width = elem (array slot).
+                    let mux_w = _rv_v2_wire_width(m, elem)
+                    m = rtlil_module_add_wire(m, rtlil_wire(mux_y, mux_w, 0, 0))
                     let mut muxc = rtlil_cell(mux_y + "$mux", "$mux", 0)
                     muxc = rtlil_cell_connect(muxc, "A", elem)
                     muxc = rtlil_cell_connect(muxc, "B", er.wire)
@@ -7408,6 +7613,234 @@ fn main() {
         }
         if _b76.inner != 2 {
             println("FAIL T76e inner bound got " + str(_b76.inner) + " (expected 2)")
+            fails = fails + 1
+        }
+    }
+
+    // T77 — RFC 006 §5 Tier-1 (e) Option III (2026-05-21 scope-limited
+    // re-spec of T77): pre-bit-blast in `_rv_elab_expr` for `^`/`&`/`|`
+    // when ww > 1. Falsifier:
+    //   assign y = a ^ b ;  // a, b, y all width-8
+    // produces 8 `$xor` cells (one per bit), each with a width-1 Y wire
+    // `<rvexpr>__b<k>`. The multi-bit base wire `<rvexpr>` is still
+    // registered with width=8 so downstream connect-emit fans out per
+    // bit. Boolean comparison `==` still produces 1-bit Y (T77c).
+    //
+    // Pre-Option III (commit 4aebce33 ancestry) this test asserted
+    // single `$xor` + Y-width=8 — that contract was satisfied by the
+    // post-techmap bit-blast in `_passes_lower_bitwise_cell`. Option
+    // III hoists the bit-blast earlier so the cell-count + Y-width
+    // assertions flip to W cells / Y-width=1 each (the base wire keeps
+    // width=8 as the multi-bit alias).
+    total = total + 1
+    let _v77 = "module sm77 ( input [ 7 : 0 ] a , input [ 7 : 0 ] b , output [ 7 : 0 ] y ) ; assign y = a ^ b ; endmodule"
+    let _r77 = read_verilog(_v77)
+    if _r77.ok != 1 {
+        println("FAIL T77 width_aware_xor: " + _r77.message); fails = fails + 1
+    } else {
+        let _m77 = _r77.design.modules[0]
+        // T77a — exactly 8 `$xor` cells (one per bit).
+        let _xc77 = rtlil_count_cells_of_type(_m77, "$xor")
+        if _xc77 != 8 {
+            println("FAIL T77a xor_count got " + str(_xc77) + " (expected 8)")
+            fails = fails + 1
+        }
+        // T77b — every `$xor` cell's Y-wire width is 1 (per-bit blast).
+        let mut _bad77b = 0
+        let mut _ci77 = 0
+        while _ci77 < len(_m77.cells) {
+            if _m77.cells[_ci77].cell_type == "$xor" {
+                let mut _pi77 = 0
+                while _pi77 < len(_m77.cells[_ci77].conns) {
+                    if _m77.cells[_ci77].conns[_pi77].pin == "Y" {
+                        let _yw = _rv_v2_wire_width(_m77, _m77.cells[_ci77].conns[_pi77].net)
+                        if _yw != 1 { _bad77b = 1 }
+                    }
+                    _pi77 = _pi77 + 1
+                }
+            }
+            _ci77 = _ci77 + 1
+        }
+        if _bad77b == 1 {
+            println("FAIL T77b xor_per_bit_y_width (expected width=1 per cell)")
+            fails = fails + 1
+        }
+    }
+    // T77c — boolean comparison `==` must still produce 1-bit Y.
+    total = total + 1
+    let _v77c = "module sm77c ( input [ 7 : 0 ] a , input [ 7 : 0 ] b , output y ) ; assign y = a == b ; endmodule"
+    let _r77c = read_verilog(_v77c)
+    if _r77c.ok != 1 {
+        println("FAIL T77c eq_compile: " + _r77c.message); fails = fails + 1
+    } else {
+        let _m77c = _r77c.design.modules[0]
+        let _ec77c = rtlil_count_cells_of_type(_m77c, "$eq")
+        if _ec77c != 1 {
+            println("FAIL T77c eq_count got " + str(_ec77c) + " (expected 1)")
+            fails = fails + 1
+        }
+        // Find the $eq's Y-wire and check its width is 1.
+        let mut _ycw = 0
+        let mut _ci = 0
+        while _ci < len(_m77c.cells) {
+            if _m77c.cells[_ci].cell_type == "$eq" {
+                let mut _pi = 0
+                while _pi < len(_m77c.cells[_ci].conns) {
+                    if _m77c.cells[_ci].conns[_pi].pin == "Y" {
+                        _ycw = _rv_v2_wire_width(_m77c, _m77c.cells[_ci].conns[_pi].net)
+                    }
+                    _pi = _pi + 1
+                }
+            }
+            _ci = _ci + 1
+        }
+        if _ycw != 1 {
+            println("FAIL T77c2 eq_y_width got " + str(_ycw) + " (expected 1)")
+            fails = fails + 1
+        }
+    }
+    // T77d — ternary `? :` result width = max(then_w, else_w).
+    total = total + 1
+    let _v77d = "module sm77d ( input sel , input [ 7 : 0 ] a , input [ 7 : 0 ] b , output [ 7 : 0 ] y ) ; assign y = sel ? a : b ; endmodule"
+    let _r77d = read_verilog(_v77d)
+    if _r77d.ok != 1 {
+        println("FAIL T77d ternary_compile: " + _r77d.message); fails = fails + 1
+    } else {
+        let _m77d = _r77d.design.modules[0]
+        let _mxc77d = rtlil_count_cells_of_type(_m77d, "$mux")
+        if _mxc77d != 1 {
+            println("FAIL T77d mux_count got " + str(_mxc77d) + " (expected 1)")
+            fails = fails + 1
+        }
+        let mut _myw = 0
+        let mut _ci = 0
+        while _ci < len(_m77d.cells) {
+            if _m77d.cells[_ci].cell_type == "$mux" {
+                let mut _pi = 0
+                while _pi < len(_m77d.cells[_ci].conns) {
+                    if _m77d.cells[_ci].conns[_pi].pin == "Y" {
+                        _myw = _rv_v2_wire_width(_m77d, _m77d.cells[_ci].conns[_pi].net)
+                    }
+                    _pi = _pi + 1
+                }
+            }
+            _ci = _ci + 1
+        }
+        if _myw != 8 {
+            println("FAIL T77d2 mux_y_width got " + str(_myw) + " (expected 8)")
+            fails = fails + 1
+        }
+    }
+
+    // T78 — RFC 006 §5 Tier-1 (e) Option II follow-on: FSM clocked-write
+    // mux_y width-aware. Falsifier:
+    //   reg [7:0] q;
+    //   always @(posedge clk) if (en) q <= d ;  // q, d both width-8
+    // must produce a `$mux` whose Y-wire width = 8 (the LHS register
+    // width) AND a `$dff` whose D pin is connected to that 8-bit mux_y.
+    // Pre-Option-II.5 the FSM mux_y was hardcoded width=1 — the
+    // downstream Option I `.latch` bit-blast would see Q-width=8 but
+    // upstream $mux→tech-map at width=1, creating dangling per-bit nets.
+    total = total + 1
+    let _v78 = "module sm78 ( input clk , input en , input [ 7 : 0 ] d , output reg [ 7 : 0 ] q ) ; always @ ( posedge clk ) if ( en ) q <= d ; endmodule"
+    let _r78 = read_verilog(_v78)
+    if _r78.ok != 1 {
+        println("FAIL T78 fsm_mux_compile: " + _r78.message); fails = fails + 1
+    } else {
+        let _m78 = _r78.design.modules[0]
+        // T78a — exactly one $mux cell
+        let _xc78 = rtlil_count_cells_of_type(_m78, "$mux")
+        if _xc78 != 1 {
+            println("FAIL T78a mux_count got " + str(_xc78) + " (expected 1)")
+            fails = fails + 1
+        }
+        // T78b — the $mux's Y-wire width is 8 (matches LHS reg width)
+        let mut _yw78 = 0
+        let mut _ci78 = 0
+        while _ci78 < len(_m78.cells) {
+            if _m78.cells[_ci78].cell_type == "$mux" {
+                let mut _pi78 = 0
+                while _pi78 < len(_m78.cells[_ci78].conns) {
+                    if _m78.cells[_ci78].conns[_pi78].pin == "Y" {
+                        _yw78 = _rv_v2_wire_width(_m78, _m78.cells[_ci78].conns[_pi78].net)
+                    }
+                    _pi78 = _pi78 + 1
+                }
+            }
+            _ci78 = _ci78 + 1
+        }
+        if _yw78 != 8 {
+            println("FAIL T78b fsm_mux_y_width got " + str(_yw78) + " (expected 8)")
+            fails = fails + 1
+        }
+    }
+
+    // T79 — rfc_006 §5 Tier-1 (e) Option II W-loop: the per-LHS D-wire
+    // `<lhs>__d` registered by `_rv_emit_body_v2` simple-LHS clocked
+    // path MUST carry the Q-wire's width (not the legacy hardcoded
+    // width=1). Falsifier uses an `if/else` whose ELSE branch is a
+    // multi-statement begin/end block — this forces `t_ok=1, e_ok=0`
+    // and triggers `_3e_fire_b` at L4546, which routes through
+    // `_rv_emit_body_v2` + `_rv_emit_dff_for_tracked` (the only path
+    // that creates `<lhs>__d` wires). The single-arm and nested-chain
+    // paths at L4040-4118 / L3825 emit `$mux + $dff` directly without
+    // the `__d` wire and were already width-fixed in commit 2626bf70.
+    //   reg [2:0] rr_ptr; reg dummy;
+    //   always @(posedge clk)
+    //     if (en) rr_ptr <= a;
+    //     else begin rr_ptr <= b; dummy <= 1'b0; end
+    // → `rr_ptr__d` width must be 3 (matching `reg [2:0] rr_ptr`). The
+    // multi-statement else-block has both rr_ptr and dummy writes →
+    // single-LHS shape detection sees t_ok=1, e_ok=0 → fire_b → v2.
+    total = total + 1
+    let _v79 = "module rr79 ( input clk , input en , input [ 2 : 0 ] a , input [ 2 : 0 ] b , output reg [ 2 : 0 ] rr_ptr , output reg dummy ) ; always @ ( posedge clk ) if ( en ) rr_ptr <= a ; else begin rr_ptr <= b ; dummy <= 1'b0 ; end endmodule"
+    let _r79 = read_verilog(_v79)
+    if _r79.ok != 1 {
+        println("FAIL T79 dwire_compile: " + _r79.message); fails = fails + 1
+    } else {
+        let _m79 = _r79.design.modules[0]
+        // T79a — `rr_ptr__d` exists and width is 3
+        let _dw_w = _rv_v2_wire_width(_m79, "rr_ptr__d")
+        if _dw_w != 3 {
+            println("FAIL T79a dwire_width got " + str(_dw_w) + " (expected 3)")
+            fails = fails + 1
+        }
+    }
+
+    // T80 — rfc_006 §5 Tier-1 (e) Option III (2026-05-21, scope-limited
+    // to `^`/`&`/`|`): pre-bit-blast in `_rv_elab_expr` emits W per-bit
+    // `$xor` cells for multi-bit XOR. Falsifier: width-8 XOR of two
+    // multi-bit operands → expect 8 `$xor` cells whose Y nets follow
+    // the `<rvexpr>__b<k>` pattern; the base `$rvexpr$0` wire stays
+    // registered as width=8 so downstream connect-emit fans out.
+    total = total + 1
+    let _v80 = "module x80 ( input [ 7 : 0 ] a , input [ 7 : 0 ] b , output [ 7 : 0 ] y ) ; assign y = a ^ b ; endmodule"
+    let _r80 = read_verilog(_v80)
+    if _r80.ok != 1 {
+        println("FAIL T80 bitblast_xor: " + _r80.message); fails = fails + 1
+    } else {
+        let _m80 = _r80.design.modules[0]
+        let _xc80 = rtlil_count_cells_of_type(_m80, "$xor")
+        if _xc80 != 8 {
+            println("FAIL T80a bitblast_xor_count got " + str(_xc80) + " (expected 8)")
+            fails = fails + 1
+        }
+        // T80b — verify at least one per-bit Y wire `<base>__b0` is
+        // registered as width=1 (sentinel that the new path fired).
+        let mut _saw_b0 = 0
+        let mut _wi80 = 0
+        while _wi80 < len(_m80.wires) {
+            let _wn = _m80.wires[_wi80].name
+            let _wln = len(_wn)
+            if _wln > 4 {
+                if _wn.substring(_wln - 4, _wln) == "__b0" {
+                    if _m80.wires[_wi80].width == 1 { _saw_b0 = 1 }
+                }
+            }
+            _wi80 = _wi80 + 1
+        }
+        if _saw_b0 != 1 {
+            println("FAIL T80b bitblast_xor_perbit_wire (no `<base>__b0` width=1 wire found)")
             fails = fails + 1
         }
     }

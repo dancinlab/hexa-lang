@@ -1,0 +1,15 @@
+device_name=Apple M3
+registry_id=4294968442
+max_threads_per_threadgroup=MTLSize(width: 1024, height: 1024, depth: 1024)
+max_threadgroup_memory_length=32768
+matmul_bf16 tew=32 max=1024
+matmul_bf16 (codegen)  M=128 N=128 K=128  median=0.0396ms  GFLOPS=105.85  max|d|=0.000e+00  rel=0.000e+00  PASS
+matmul_bf16 (codegen)  M=256 N=256 K=256  median=0.1745ms  GFLOPS=192.24  max|d|=0.000e+00  rel=0.000e+00  PASS
+matmul_bf16 (codegen)  M=512 N=512 K=512  median=0.2778ms  GFLOPS=966.32  max|d|=0.000e+00  rel=0.000e+00  PASS
+matmul_bf16 (codegen)  M=768 N=768 K=768  median=0.8919ms  GFLOPS=1015.76  max|d|=0.000e+00  rel=0.000e+00  PASS
+matmul_bf16 (codegen)  M=1024 N=1024 K=1024  median=2.3760ms  GFLOPS=903.82  max|d|=0.000e+00  rel=0.000e+00  PASS
+F-RFC075-METAL-MATMUL-BF16-CODEGEN-FIRE: PASS
+PEAK_CODEGEN_BF16_GFLOPS=1015.76
+PEAK_N36_HANDEMIT_BF16_GFLOPS=1029.54 (commit dbb09684, 32x32_tg @ 1024^3)
+CODEGEN_OVER_HANDEMIT_RATIO=0.987x
+MAX_REL_ERR_OVERALL=0.000e+00 (gate < 1e-2)

@@ -1,0 +1,57 @@
+// compiler/codegen/nvptx_p9_warp_reduce_test.hexa
+// RFC 071 P9 N70 — multi-thread warp-shuffle reduce_sum source-to-silicon fixture
+//
+// @version 0.0.1
+// @capabilities [pure]
+// @phase("parse_only")
+//
+// Follow-on to N64 (single-thread reduce_sum CLOSED, commit `2a1eaed0`). N64
+// proved STMT_LOAD/STORE + back-edge loop + bounds-check + i64-classifier all
+// work for non-element-wise kernels. This fixture extends to a REAL multi-
+// thread GPU reduction: 1 block × 1024 threads, each thread accumulates
+// N/1024 elements, then warp-shuffle butterfly across 32 lanes per warp
+// followed by per-warp output.
+//
+// Falsifier: F-RFC071-E2E-WARP-REDUCE-SUM-NUMERIC-EQ
+//   Sum of 32 per-warp outputs (warp_id 0..31) MUST equal CPU sequential
+//   sum of the full FP64 LCG-deterministic input array, within 4 ULP.
+//
+// Required intrinsics:
+//   - `gpu_thread_id_x()` -> u32     [WIRED, %tid.x]
+//   - `gpu_block_dim_x()` -> u32     [WIRED, %ntid.x]
+//   - `gpu_warp_shuffle_xor(v, mask)`  [NOT WIRED — XOR butterfly variant of
+//                                       existing `gpu_warp_shuffle(v, lane)`
+//                                       idx-mode; FP64-shuffle would compose
+//                                       from 2× u32 halves per PTX ISA §9.7.13.4]
+//
+// Per task `@D g3` scope: if `gpu_warp_shuffle_xor` is not wired, this
+// fixture's PTX emit will contain `// unsupported` markers for the shuffle
+// calls — the cycle reports HONEST BLOCKED + names the missing builtin.
+// DO NOT touch compiler source this round.
+
+// ── The kernel (gpu/SPEC.md §2 — @gpu_kernel must return void) ───────
+
+@gpu_kernel
+fn warp_reduce_sum(a: [f64], out: [f64], n: i64) {
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    let mut bdim: i64 = to_i64(gpu_block_dim_x())
+    let mut sum: f64 = 0.0
+    let mut i: i64 = tid
+    while i < n {
+        sum = sum + a[to_i64(i)]
+        i = i + bdim
+    }
+    // Warp-shuffle butterfly reduction across 32 lanes (1 warp = 32 lanes).
+    // mask = 16,8,4,2,1 selects XOR-pair partner lane each step.
+    let mut mask: i32 = 16
+    while mask > 0 {
+        sum = sum + gpu_warp_shuffle_xor(sum, mask)
+        mask = mask / 2
+    }
+    // Lane 0 of each warp writes per-warp output (32 warps → 32 outputs).
+    let mut lane_id: i64 = tid - (tid / 32) * 32
+    let mut warp_id: i64 = tid / 32
+    if lane_id == 0 {
+        out[to_i64(warp_id)] = sum
+    }
+}

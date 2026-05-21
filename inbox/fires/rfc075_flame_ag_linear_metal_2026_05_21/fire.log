@@ -1,0 +1,5 @@
+=== HEXA_METAL=1 (MPS path; M*K > 8192 dim-gate active) ===
+F-RFC075-FLAME-AG-LINEAR-METAL-NUMERIC-EQ PASS  shape=M128·D1128→D2256→D364 max_abs=6.205e-05 max_rel=1.091e-03 tol=2e-03
+
+=== HEXA_METAL unset (CPU FP32 ikj fallback) ===
+F-RFC075-FLAME-AG-LINEAR-METAL-NUMERIC-EQ PASS  shape=M128·D1128→D2256→D364 max_abs=6.205e-05 max_rel=1.091e-03 tol=2e-03

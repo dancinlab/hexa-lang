@@ -1,0 +1,27 @@
+device_name=Apple M3
+registry_id=4294968442
+max_threads_per_threadgroup=MTLSize(width: 1024, height: 1024, depth: 1024)
+max_threadgroup_memory_length=32768
+pipe8     tew=32 max=1024
+pipe16    tew=32 max=1024
+pipe32tg  tew=32 max=1024
+simdgroup_matmul_8x8_mixed          M=128 N=128 K=128  median=0.0451ms  GFLOPS=93.03  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_16x16_mixed        M=128 N=128 K=128  median=0.0467ms  GFLOPS=89.72  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_32x32_tg_mixed     M=128 N=128 K=128  median=0.0402ms  GFLOPS=104.31  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_8x8_mixed          M=256 N=256 K=256  median=0.2832ms  GFLOPS=118.48  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_16x16_mixed        M=256 N=256 K=256  median=0.0712ms  GFLOPS=471.49  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_32x32_tg_mixed     M=256 N=256 K=256  median=0.0555ms  GFLOPS=604.13  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_8x8_mixed          M=512 N=512 K=512  median=0.8618ms  GFLOPS=311.47  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_16x16_mixed        M=512 N=512 K=512  median=0.9001ms  GFLOPS=298.23  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_32x32_tg_mixed     M=512 N=512 K=512  median=0.4728ms  GFLOPS=567.82  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_8x8_mixed          M=768 N=768 K=768  median=2.6366ms  GFLOPS=343.61  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_16x16_mixed        M=768 N=768 K=768  median=4.1507ms  GFLOPS=218.27  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_32x32_tg_mixed     M=768 N=768 K=768  median=1.8465ms  GFLOPS=490.64  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_8x8_mixed          M=1024 N=1024 K=1024  median=4.4023ms  GFLOPS=487.82  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_16x16_mixed        M=1024 N=1024 K=1024  median=4.4019ms  GFLOPS=487.86  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_32x32_tg_mixed     M=1024 N=1024 K=1024  median=2.1758ms  GFLOPS=986.97  max|d|=0.000e+00  rel=0.000e+00  PASS
+F-RFC075-METAL-SIMDGROUP-MIXED-PRECISION-NUMERIC-EQ: PASS
+PEAK_SIMDGROUP_MIXED_GFLOPS=986.97 (best of 8x8/16x16/32x32_tg across 128/256/512/768/1024)
+MIXED_OVER_FP32_PEAK_RATIO=1.083x (FP32 peak = 911.55 GFLOPS @ commit 31d729a4)
+MIXED_OVER_FP16_PEAK_RATIO=1.250x (FP16 peak = 789.38 GFLOPS @ commit ab0ff62d)
+MAX_REL_ERR_OVERALL=0.000e+00 (gate < 1e-4)

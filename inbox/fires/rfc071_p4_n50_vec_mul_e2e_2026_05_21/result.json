@@ -1,0 +1,102 @@
+{
+  "fire_id": "rfc071_p4_n50_vec_mul_e2e_2026_05_21",
+  "falsifier_pass": [
+    "F-RFC071-E2E-VEC-MUL-NUMERIC-EQ",
+    "F-RFC071-NVPTX-E2E-PTXAS-CLEAN",
+    "F-RFC071-NVPTX-E2E-LAUNCH"
+  ],
+  "falsifier_fail": [],
+  "status_jit_load": "PASS",
+  "status_launch": "PASS",
+  "status_numeric": "PASS",
+  "headline": "N35 classifier+mnemonic+sentinel fix generalises across kernel shapes — vec-mul source-to-silicon bit-exact",
+  "N": 1024,
+  "max_abs_diff": 0,
+  "byte_mismatch": 0,
+  "first_mis": -1,
+  "c_0": 2.1032052170878326,
+  "ref_0": 2.1032052170878326,
+  "a_0": 1.1753414355242713,
+  "b_0": 1.789441904725906,
+  "rc": 0,
+  "predecessor": "rfc071_p4_n34_numeric_eq_pass_2026_05_21 (N34 vec-add first PASS) + N45 (CSE) commit 830e44c0",
+
+  "context": {
+    "fixture": "compiler/codegen/nvptx_p4_vec_mul_test.hexa",
+    "ptx_size_bytes": 2082,
+    "ptx_size_n34_vec_add": 2428,
+    "ptx_size_delta_vs_n34": "-346 bytes (-14.2%, vec_mul has fewer cvt redundancies via N45 CSE)",
+    "target_sm": "sm_80",
+    "device": "NVIDIA GeForce RTX 5070 (sm_120a JIT)",
+    "driver_version": "580.126.09",
+    "host": "ubu-2 (summer-B650M-K)",
+    "registers_used": 16,
+    "stack_bytes": 0,
+    "spill_stores": 0,
+    "spill_loads": 0,
+    "barriers_used": 0,
+    "block_dim": "1x1024x1",
+    "grid_dim": "1x1x1",
+    "ptxas_compile_time_ms": 2.016
+  },
+
+  "kernel_shape_delta": {
+    "from_n34": "@gpu_kernel fn my_test_kernel(a:[f64], b:[f64], c:[f64], n:i64) { ... c[i] = a[i] + b[i] }",
+    "to_n50": "@gpu_kernel fn vec_mul(a:[f64], b:[f64], c:[f64], n:i64) { ... c[i] = a[i] * b[i] }",
+    "deltas": [
+      "kernel name: my_test_kernel -> vec_mul",
+      "payload binop: + (add.f64) -> * (mul.f64)",
+      "everything else identical (4 params, bounds check, IndexGet/IndexSet, to_i64 gid widen)"
+    ]
+  },
+
+  "ptx_substring_asserts": {
+    ".visible .entry vec_mul": true,
+    ".target sm_80": true,
+    "mul.f64": true,
+    "ld.global.f64": true,
+    "st.global.f64": true,
+    "cvt.s64.s32": true,
+    "setp.lt.s64": true,
+    "@%p11": true,
+    "ld.param.u64 (4 instances)": true,
+    "mul.lo.s32 (i32 gid composition)": true,
+    "add.s32 (i32 gid composition)": true,
+    "mul.lo.s64 (idx*8 byte off)": true,
+    "add.s64 (base+off)": true,
+    "pure_ascii": true,
+    "ascii_non_ascii_count": 0
+  },
+
+  "n35_fix_generalisation_evidence": {
+    "claim": "N35's classifier+mnemonic+sentinel fix (c29359ab) + N45 CSE (830e44c0) work on a DIFFERENT kernel than the one used to land them",
+    "verified_paths": [
+      "STMT_ASSIGN op='index' (IndexGet) — emits mul.lo.s64 + add.s64 + ld.global.f64 for BOTH a[i] AND b[i] reads (2x ld.global.f64 in body)",
+      "STMT_ASSIGN op='index_set' (IndexSet) — emits mul.lo.s64 + add.s64 + st.global.f64 for c[i] = ... write",
+      "Classifier op='index' exclusion — F64 dst not contaminated by U64 base pointer (loaded value lands in .reg .f64 %fd15 / %fd17)",
+      "Scratch addr-reg pre-decl — Pass 3 emitted .reg .u64 %rd_idxa_15 + %rd_idxa_17 + %rd_idxs_addr",
+      "ld.param prologue — 4x ld.param.u64 from vec_mul_param_0..3 at entry block ($L_0)",
+      "N45 CSE — `mul.lo.s64 %rd_idx_off_10_8, %rd10, 8` SHARED across both IndexGet's and the IndexSet (1 mul instead of 3)",
+      "to_i64 lowering — single `cvt.s64.s32 %rd10, %r9` (CSE'd: gid widened once, used 3x)",
+      "Symbol-form `<` comparison — `setp.lt.s64 %p11, %rd10, %rd3` (N32 fix at 3899dbdf accepts symbol form)",
+      "Predicate-bank @ predicate — `@%p11 bra` NOT `@%fd11 bra` (N17 fix retained)",
+      "FP64 arithmetic payload — `mul.f64 %fd18, %fd15, %fd17;  // binop *` (the NEW kernel-specific op; everything else identical to N34)"
+    ],
+    "verdict": "GENERALISED — N35 fix is NOT kernel-specific. The compiler correctly lowered the new fixture without any compiler-source changes; only the host C launcher's CPU reference was edited (a[i] + b[i] -> a[i] * b[i])."
+  },
+
+  "honest_scope_g3": {
+    "worktree_recovery": "On entry, compiler/codegen/nvptx_target.hexa had 928 lines silently wiped vs HEAD (sub-agent worktree leak per feedback_subagent_worktree_leak_pattern). Recovered via `git stash push -- compiler/codegen/nvptx_target.hexa` to restore HEAD content. Stash labelled 'n50_wipe_recovery_2026_05_21'. NO compiler edits, only restoration.",
+    "self_main_rebuild": "Built /tmp/hexa_n50_driver from self/main.hexa in 7.64s user (no OOM, no Path B import issue). Mac arm64 1552128 bytes.",
+    "host_c_changes_vs_n34": "Only 3 lines functionally differ: kernel name string (cuModuleGetFunction), PTX_PATH (different file basename), CPU ref op (* instead of +). No host-side fix needed.",
+    "fp64_mul_bit_exact": "FP64 multiplication is well-defined per IEEE 754 — no rounding-mode ambiguity, no FMA contraction risk (single mul, not fused add+mul). max_abs_diff=0 expected and observed."
+  },
+
+  "artifacts": {
+    "fixture_hexa": "/Users/ghost/core/hexa-lang/compiler/codegen/nvptx_p4_vec_mul_test.hexa",
+    "ptx": "vec_mul.sm_80.ptx",
+    "host_c": "host_vec_mul.c",
+    "fire_log": "fire.log",
+    "result_json": "result.json"
+  }
+}

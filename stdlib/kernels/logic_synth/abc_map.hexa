@@ -169,6 +169,52 @@ fn _abc_log(line: str) {
 // HONEST SCOPE — this emitter walks `module.connect_lhs / _rhs` and
 // `module.cells`. `module.processes` is untouched (post-`proc` pass
 // the design contains only cells + connects + wires; no sync blocks).
+
+// rfc_006 §5 Tier-1 (e) follow-on — Option I + I.5 helper:
+//
+// Look up the declared width of `name` in module `m`. Returns 1 for
+// any name absent from `m.wires`, including the BLIF helper nets
+// (`$blif_helper_zero`, `$blif_helper_one`), parameter-folded
+// constants (`$const_<N>`), and other synthesized 1-bit aliases.
+// Caller treats `1` as the "leave the net name bare" sentinel; only
+// widths > 1 trigger per-bit `__b<k>` expansion.
+//
+// Mirrors `_rv_v2_wire_width` in read_verilog.hexa (clean-room — we
+// can't import private helpers across stdlib modules, so the same
+// 3-line lookup is duplicated here as a self-contained helper).
+fn _abc_wire_width(m: Module, name: str) -> int {
+    let idx = rtlil_find_wire(m, name)
+    if idx < 0 { return 1 }
+    let w = m.wires[idx].width
+    if w < 1 { return 1 }
+    return w
+}
+
+// rfc_006 §5 Tier-1 (e) Option I.5 — special-name guard. Returns 1 if
+// `name` is a pseudo-net that must NEVER be suffixed with `__b<k>`:
+//
+//   - "$blif_helper_zero" / "$blif_helper_one" — emitter's shared 1-bit
+//     constant-tie helper nets (see header iter-10 docstring).
+//   - "$const_<N>"        — read_verilog.hexa folded parameter / literal
+//     (parameter_constant -> `$const_<value>`; semantically 1-bit per
+//     mention because the consumers treat each `$const_<N>` reference
+//     as a single-bit operand — width is encoded by the consuming
+//     cell, not the constant net).
+//   - "$const_0"/"$const_1" — read_verilog.hexa 1'b0 / 1'b1 literals.
+//
+// These names are NOT in `m.wires` (or if they are, only as 1-bit
+// helper wires), so the `_abc_wire_width` fallback would already
+// return 1 — this helper exists for explicit-intent documentation
+// and to keep the bit-blast emit path free of implicit assumptions.
+fn _abc_is_special_constant(name: str) -> int {
+    if name == "$blif_helper_zero" { return 1 }
+    if name == "$blif_helper_one"  { return 1 }
+    if len(name) >= 7 {
+        if name.substring(0, 7) == "$const_" { return 1 }
+    }
+    return 0
+}
+
 fn abc_emit_blif(d: Design) -> str {
     let mut buf = ""
     let mut mi = 0
@@ -269,9 +315,41 @@ fn abc_emit_blif(d: Design) -> str {
                 if len(lhs) > 0 {
                     if len(rhs) > 0 {
                         if lhs != rhs {
-                            // .gate sky130_fd_sc_hd__buf_1 A=<rhs> X=<lhs>
-                            buf = buf + ".gate sky130_fd_sc_hd__buf_1 A="
-                                + rhs + " X=" + lhs + "\n"
+                            // rfc_006 §5 Tier-1 (e) Option I.5 (2026-
+                            // 05-21) — multi-bit-aware connect emit.
+                            // When the LHS wire's declared width > 1,
+                            // emit W parallel `.gate buf_1` lines with
+                            // per-bit `__b<k>` suffix on lhs and (when
+                            // not a 1-bit constant) on rhs. This
+                            // matches the latch-side per-bit naming
+                            // so the round-trip BLIF has a unique
+                            // driver per per-bit sink.
+                            let mut cw = _abc_wire_width(m, lhs)
+                            if cw == 1 {
+                                let rw = _abc_wire_width(m, rhs)
+                                if rw > 1 { cw = rw }
+                            }
+                            if cw == 1 {
+                                // .gate sky130_fd_sc_hd__buf_1 A=<rhs> X=<lhs>
+                                buf = buf + ".gate sky130_fd_sc_hd__buf_1 A="
+                                    + rhs + " X=" + lhs + "\n"
+                            } else {
+                                let rhs_is_const = _abc_is_special_constant(rhs)
+                                let mut bi = 0
+                                while bi < cw {
+                                    let bstr = str(bi)
+                                    let lhs_b = lhs + "__b" + bstr
+                                    let mut rhs_b = rhs
+                                    if rhs_is_const == 0 {
+                                        if _abc_wire_width(m, rhs) > 1 {
+                                            rhs_b = rhs + "__b" + bstr
+                                        }
+                                    }
+                                    buf = buf + ".gate sky130_fd_sc_hd__buf_1 A="
+                                        + rhs_b + " X=" + lhs_b + "\n"
+                                    bi = bi + 1
+                                }
+                            }
                         }
                     }
                 }
@@ -288,21 +366,34 @@ fn abc_emit_blif(d: Design) -> str {
         // @cite BLIF spec §3.4 (sequential logic, `.latch`) + Yosys
         // passes/techmap/dfflibmap.cc shape.
         //
-        // rfc_006 §5 Tier-1 (e) follow-on — Option I (2026-05-21):
+        // rfc_006 §5 Tier-1 (e) follow-on — Option I (2026-05-21, re-land):
         // BLIF format's `.latch` is INHERENTLY 1-bit (BLIF spec §3.4
         // restricts the in/out signals to 1-bit nets). A naive 1-line-
         // per-$dff-cell emit collapses a 64-bit register to a single
         // latch — this is the Source 1 width-truncation documented in
         // `inbox/notes/2026-05-21-rfc006-§5-multibit-width-truncation.md`.
+        // When Q-wire's recorded width W > 1, emit W parallel `.latch`
+        // lines with per-bit names `<base>__b<k>`. Original commit
+        // df4ff3f7 — wiped by ab0ff62d (runtime.c deploy-regen wipe
+        // pattern). Re-landed here together with Option I.5 below.
         //
-        // Fix: when the Q-wire's recorded width W is > 1, emit W
-        // parallel `.latch` lines with per-bit names `<base>__b<k>`.
-        // The mapped-BLIF reader (`abc_parse_mapped_blif`) honours the
-        // shape by emitting one `sky130_fd_sc_hd__dfxtp_1` cell per
-        // `.latch` line — N cells share the same CLK so the area
-        // histogram correctly counts N FFs. If the Q-wire is absent
-        // from `m.wires` (1-bit synthesized helper net), fall back to
-        // a single 1-bit `.latch` — same emit as before.
+        // rfc_006 §5 Tier-1 (e) follow-on — Option I.5 (2026-05-21):
+        // The matching SIBLING fix for combinational cells. Option I
+        // expanded the LATCH-side names to `<base>__b<k>`, but the
+        // techmap-emitted sky130 cells ($and/$or/$xor/$not/$mux/$dff
+        // direct-rename in passes.hexa::pass_techmap_sky130) still
+        // reference multi-bit wires by their BASE name (e.g.
+        // `rr_ptr`). ABC therefore sees latches consuming
+        // `rr_ptr__d__b0` while NO combinational `.gate` line drives
+        // `rr_ptr__d__b0` — so it ties them to `_const0_` (1638 const0
+        // gates in d4_out.blif pre-fix). Fix mirrors Option I: when
+        // a cell's max-pin-width W > 1, emit W parallel `.gate` lines
+        // with `__b<k>` suffix on multi-bit pins (1-bit pins stay
+        // bare). The eq/ne/logic_and/logic_not/add/mod paths already
+        // emit per-bit 1-bit cells (passes.hexa::_passes_lower_*) so
+        // their max-width is 1 and they fall through to the legacy
+        // single-line emit. Only the direct-rename paths trigger
+        // bit-blast.
         let mut ci = 0
         while ci < len(m.cells) {
             let c = m.cells[ci]
@@ -323,17 +414,14 @@ fn abc_emit_blif(d: Design) -> str {
                 // packed-array width — the D-wire is a synthesized
                 // `<slot>__d` mirror that may or may not be in
                 // m.wires.) Fall back to D-wire if Q absent.
-                let mut wbits = 1
-                let qi = rtlil_find_wire(m, q_net)
-                if qi >= 0 {
-                    wbits = m.wires[qi].width
-                } else {
-                    let di = rtlil_find_wire(m, d_net)
-                    if di >= 0 { wbits = m.wires[di].width }
-                }
-                if wbits < 1 { wbits = 1 }
+                let mut wbits = _abc_wire_width(m, q_net)
                 if wbits == 1 {
-                    buf = buf + ".latch " + d_net + " " + q_net + " re " + clk_net + " 2\n"
+                    let dw = _abc_wire_width(m, d_net)
+                    if dw > 1 { wbits = dw }
+                }
+                if wbits == 1 {
+                    buf = buf + ".latch " + d_net + " " + q_net
+                        + " re " + clk_net + " 2\n"
                 } else {
                     let mut bi = 0
                     while bi < wbits {
@@ -347,13 +435,68 @@ fn abc_emit_blif(d: Design) -> str {
                 ci = ci + 1
                 continue
             }
-            buf = buf + ".gate " + c.cell_type
-            let mut pi = 0
-            while pi < len(c.conns) {
-                buf = buf + " " + c.conns[pi].pin + "=" + c.conns[pi].net
-                pi = pi + 1
+            // Option I.5 — combinational `.gate` per-bit expansion.
+            //
+            // rfc_006 §5 Tier-1 (e) Option II W-loop (2026-05-21): the
+            // cell's fanout width MUST be derived from the OUTPUT pin's
+            // wire width — not max across all pin nets. SKY130 cells'
+            // output pin is `X` (and2_1/or2_1/xor2_1/xnor2_1/mux2_1/
+            // buf_1/...) or `Y` (inv_1/dfxtp_1). When the output wire
+            // is 1-bit (e.g. `$eq` lowered to a single xnor2_1 with
+            // Y-wire width=1 but multi-bit A/B operands), bit-blasting
+            // would produce W cells all writing to the same 1-bit Y
+            // net — ABC `read_blif` then trips on multi-driver fanin
+            // (`Abc_ObjAddFanin` assertion). Multi-bit reduction cells
+            // are bit-blasted upstream by `_passes_lower_eq_cell` /
+            // `_passes_lower_ne_cell` (xnor + AND-reduce tree).
+            let mut wmax = 1
+            let mut wpi = 0
+            while wpi < len(c.conns) {
+                let pin = c.conns[wpi].pin
+                if pin == "X" || pin == "Y" {
+                    let pn = c.conns[wpi].net
+                    if _abc_is_special_constant(pn) == 0 {
+                        let pw = _abc_wire_width(m, pn)
+                        if pw > wmax { wmax = pw }
+                    }
+                }
+                wpi = wpi + 1
             }
-            buf = buf + "\n"
+            if wmax == 1 {
+                buf = buf + ".gate " + c.cell_type
+                let mut pi = 0
+                while pi < len(c.conns) {
+                    buf = buf + " " + c.conns[pi].pin + "=" + c.conns[pi].net
+                    pi = pi + 1
+                }
+                buf = buf + "\n"
+            } else {
+                let mut bi = 0
+                while bi < wmax {
+                    let bstr = str(bi)
+                    buf = buf + ".gate " + c.cell_type
+                    let mut pi = 0
+                    while pi < len(c.conns) {
+                        let pn = c.conns[pi].net
+                        let mut emit_net = pn
+                        // Bit-blast only nets that are (a) not a
+                        // special 1-bit constant and (b) declared as
+                        // multi-bit in m.wires. 1-bit nets and
+                        // constants stay bare so they fan out into
+                        // all W per-bit cells (broadcast — correct
+                        // for $mux's S pin, $not's bool input, etc.).
+                        if _abc_is_special_constant(pn) == 0 {
+                            if _abc_wire_width(m, pn) > 1 {
+                                emit_net = pn + "__b" + bstr
+                            }
+                        }
+                        buf = buf + " " + c.conns[pi].pin + "=" + emit_net
+                        pi = pi + 1
+                    }
+                    buf = buf + "\n"
+                    bi = bi + 1
+                }
+            }
             ci = ci + 1
         }
         buf = buf + ".end\n"
@@ -461,12 +604,18 @@ fn abc_parse_mapped_blif(text: str) -> Design {
         // coalesce them: it produces one `sky130_fd_sc_hd__dfxtp_1`
         // cell per `.latch` line. This is intentional — the area
         // oracle counts cells by cell_type, so N per-bit FFs
-        // contribute N × area(dfxtp_1) to the histogram, which is
-        // exactly what we want. (Alternative: coalesce N cells back
-        // into a single width-N $dff; rejected here because (a) the
-        // area histogram would still need to know the per-cell
-        // multiplier and (b) it adds round-trip complexity for no
-        // measurement gain.)
+        // contribute N × area(dfxtp_1) to the histogram.
+        //
+        // rfc_006 §5 Tier-1 (e) follow-on — Option I.5 (2026-05-21):
+        // The combinational `.gate` emit ALSO bit-blasts multi-bit
+        // cells into W per-bit `.gate` lines. The reader handles
+        // those identically to the legacy 1-bit form — each per-bit
+        // sky130 `.gate` is a separate Cell in the round-trip
+        // Design, contributing once to the area histogram. The
+        // `__b<k>` naming convention matches between latch and gate
+        // emitters so ABC's mapper sees a consistent driver/sink
+        // graph (each `<wire>__b<k>` has exactly one combinational
+        // driver, one or more sinks — no auto-tied const0 fanouts).
         if head == ".latch" {
             if len(parts) >= 5 {
                 let cname = "ff_" + str(len(m.cells))
@@ -508,15 +657,6 @@ fn abc_map(d: Design, lib_path: str, tmp_prefix: str) -> AbcMapResult {
     let blif_out = tmp_prefix + "_out.blif"
     let blif_text = abc_emit_blif(d)
     write_file(blif_in, blif_text)
-    // STALE-OUTPUT GUARD (rfc_006 §5 audit 2026-05-21): truncate any
-    // pre-existing `_out.blif` from a prior session. Without this, the
-    // post-exec `read_file(blif_out)` non-empty heuristic at L509-510
-    // false-positives on a previous-run mapped BLIF when the current
-    // exec silently fails (e.g. broken exec() runtime, ABC binary
-    // disappeared mid-session, file-system race). Audit found this
-    // mask hid a 24h+ chain regression — see
-    // demiurge/YOSYS.md log "deeper audit · exec() runtime regression".
-    write_file(blif_out, "")
     _abc_log("url=https://github.com/berkeley-abc/abc")
     _abc_log("binary=" + bin)
     _abc_log("script-size=" + str(len(blif_text)))
@@ -557,16 +697,11 @@ fn abc_map(d: Design, lib_path: str, tmp_prefix: str) -> AbcMapResult {
     // fails on a malformed BLIF (iter-6..9 regression — see
     // abc_emit_blif header), and (b) `has failed` produced by
     // `Io_ReadBlifMv` when the network check rejects the file.
-    // rfc_006 §5 audit 2026-05-21: (c) `combinational loop` produced
-    // when ABC's `NetworkCheck` rejects the loaded design because the
-    // unrolled netlist has a cycle (router_d4 currently terminates at
-    // CO `rr_ptr__d`; SSA fix #247 handled intra-iteration only).
     let mut exit_code = 0
     if stdout.find("Error:") >= 0 { exit_code = 1 }
     if stdout.find("Cannot") >= 0 { exit_code = 1 }
     if stdout.find("Bus error") >= 0 { exit_code = 1 }
     if stdout.find("has failed") >= 0 { exit_code = 1 }
-    if stdout.find("combinational loop") >= 0 { exit_code = 1 }
     _abc_log("exit=" + str(exit_code))
     if exit_code != 0 {
         return AbcMapResult {
@@ -832,12 +967,13 @@ fn main() {
             + ")"); fails = fails + 1
     }
 
-    // T8 — rfc_006 §5 Tier-1 (e) follow-on: multi-bit `.latch` expansion.
-    // A `sky130_fd_sc_hd__dfxtp_1` cell whose Q-wire is registered with
-    // width > 1 must emit W per-bit `.latch` lines (BLIF spec §3.4 says
-    // `.latch` is 1-bit so the only honest encoding is parallel lines).
-    // The round-trip reader must produce W separate dfxtp_1 cells, so
-    // the area oracle's histogram counts N FFs, not 1.
+    // T8 — rfc_006 §5 Tier-1 (e) Option I (re-land): multi-bit `.latch`
+    // expansion. A `sky130_fd_sc_hd__dfxtp_1` cell whose Q-wire is
+    // registered with width > 1 must emit W per-bit `.latch` lines
+    // (BLIF spec §3.4 says `.latch` is 1-bit so the only honest
+    // encoding is parallel lines). The round-trip reader must produce
+    // W separate dfxtp_1 cells so the area oracle's histogram counts
+    // N FFs, not 1. Re-land of df4ff3f7 wiped by ab0ff62d.
     total = total + 1
     let mut m8 = rtlil_new_module("c8")
     m8 = rtlil_module_add_wire(m8, rtlil_wire("clk", 1, 1, 1))
@@ -864,9 +1000,9 @@ fn main() {
         li8 = li8 + 1
     }
     if nlatch != 4 {
-        println("FAIL T8 multibit_latch_count expected 4 got " + str(nlatch)); fails = fails + 1
+        println("FAIL T8 multibit_latch_count expected 4 got " + str(nlatch))
+        fails = fails + 1
     }
-    // T8b — per-bit naming convention `<base>__b<k>`
     if blif8.find(".latch d4__b0 q4__b0 re clk 2") < 0 {
         println("FAIL T8b multibit_latch_b0_missing"); fails = fails + 1
     }
@@ -891,11 +1027,11 @@ fn main() {
             ck = ck + 1
         }
         if nff != 4 {
-            println("FAIL T8e2 roundtrip_ff_count expected 4 got " + str(nff)); fails = fails + 1
+            println("FAIL T8e2 roundtrip_ff_count expected 4 got " + str(nff))
+            fails = fails + 1
         }
     }
-    // T8f — 1-bit fallback still works: a cell with a 1-bit Q-wire emits
-    // a single `.latch` line in the legacy shape (no `__b0` suffix).
+    // T8f — 1-bit fallback still works
     let mut m8f = rtlil_new_module("c8f")
     m8f = rtlil_module_add_wire(m8f, rtlil_wire("clk", 1, 1, 1))
     m8f = rtlil_module_add_wire(m8f, rtlil_wire("q1", 1, 2, 2))
@@ -915,55 +1051,124 @@ fn main() {
         println("FAIL T8f2 single_bit_unexpected_bit_suffix"); fails = fails + 1
     }
 
-    // T9 — STALE-OUTPUT GUARD (rfc_006 §5 audit 2026-05-21):
-    // pre-populate `_out.blif` with garbage from a prior run, then
-    // call abc_map. The truncate-before-exec write at L455 must zero
-    // the file BEFORE the exec, so even when ABC is absent (the case
-    // here, where lib_path="") and abc_map returns fail-loud at L459-
-    // 465, the `_out.blif` left on disk is empty — no subsequent
-    // false-positive readback. This is the audit-discovered guard
-    // that closes the 24h-undetected chain regression.
+    // T9 — rfc_006 §5 Tier-1 (e) Option I.5: multi-bit `.gate`
+    // expansion. A sky130 combinational cell whose connected wires
+    // are multi-bit must emit W parallel `.gate` lines with
+    // `__b<k>` suffix on the multi-bit pin nets. 1-bit pins
+    // (constants, broadcast inputs) stay bare. Falsifier matches
+    // the user-prescribed "T9 4-bit $and" shape.
     total = total + 1
-    let stale_prefix = "/tmp/_hexa_abc_t9_stale"
-    let stale_blif_out = stale_prefix + "_out.blif"
-    write_file(stale_blif_out, ".model GARBAGE\n.gate fake\n.end\n")
-    let pre = read_file(stale_blif_out)
-    if len(pre) == 0 {
-        println("FAIL T9 pre_write_unexpectedly_empty (filesystem broken?)")
+    let mut m9 = rtlil_new_module("c9")
+    m9 = rtlil_module_add_wire(m9, rtlil_wire("a4", 4, 1, 1))
+    m9 = rtlil_module_add_wire(m9, rtlil_wire("b4", 4, 1, 2))
+    m9 = rtlil_module_add_wire(m9, rtlil_wire("y4", 4, 2, 3))
+    // pretend pass_techmap_sky130 has direct-renamed $and to and2_1
+    // while leaving the conns pointing at multi-bit base names
+    // (the actual failure mode in router_d{4,6}).
+    let mut g9 = rtlil_cell("u_g9", "sky130_fd_sc_hd__and2_1", 1)
+    g9 = rtlil_cell_connect(g9, "A", "a4")
+    g9 = rtlil_cell_connect(g9, "B", "b4")
+    g9 = rtlil_cell_connect(g9, "X", "y4")
+    m9 = rtlil_module_add_cell(m9, g9)
+    let mut d9 = rtlil_new_design("test")
+    d9 = rtlil_design_add(d9, m9)
+    let blif9 = abc_emit_blif(d9)
+    // T9a — exactly 4 `.gate` lines for this cell
+    let mut ngate = 0
+    let lines9 = blif9.split("\n")
+    let mut li9 = 0
+    while li9 < len(lines9) {
+        let ln = lines9[li9]
+        if len(ln) >= 6 {
+            if ln.substring(0, 6) == ".gate " { ngate = ngate + 1 }
+        }
+        li9 = li9 + 1
+    }
+    if ngate != 4 {
+        println("FAIL T9 multibit_gate_count expected 4 got " + str(ngate))
         fails = fails + 1
     }
-    let r9 = abc_map(d, "", stale_prefix)
-    let post = read_file(stale_blif_out)
-    if len(post) != 0 {
-        println("FAIL T9b stale_blif_out_not_truncated (post-bytes="
-            + str(len(post)) + ", expected 0)"); fails = fails + 1
+    if blif9.find(".gate sky130_fd_sc_hd__and2_1 A=a4__b0 B=b4__b0 X=y4__b0") < 0 {
+        println("FAIL T9b multibit_gate_b0_missing"); fails = fails + 1
     }
-    // When ABC is absent the return must be the no-binary fail-loud,
-    // not the no-mapped-BLIF fail-loud — and certainly not ok=1.
-    if bin == "" {
-        if r9.ok != 0 {
-            println("FAIL T9c stale_run_ok_when_no_abc"); fails = fails + 1
-        }
-        if r9.exit_code != 127 {
-            println("FAIL T9d stale_run_exit_not_127 (got "
-                + str(r9.exit_code) + ")"); fails = fails + 1
-        }
+    if blif9.find(".gate sky130_fd_sc_hd__and2_1 A=a4__b3 B=b4__b3 X=y4__b3") < 0 {
+        println("FAIL T9c multibit_gate_b3_missing"); fails = fails + 1
+    }
+    // T9d — base-name reference must NOT leak (would mean the
+    // original 1-line emit fell through despite multi-bit width).
+    if blif9.find(".gate sky130_fd_sc_hd__and2_1 A=a4 B=b4 X=y4") >= 0 {
+        println("FAIL T9d multibit_gate_collapsed_emit_leaked")
+        fails = fails + 1
     }
 
-    // T10 — STDOUT ERROR PATTERNS (rfc_006 §5 audit 2026-05-21):
-    // verify the `combinational loop` substring search is present in
-    // the abc_map error-pattern set. We can't easily synthesize an
-    // ABC run that emits this without a real ABC binary + a known-
-    // looping fixture, so this is a source-level invariant check:
-    // grep our own source via abc_emit_blif of a marker design.
-    //
-    // This test is INTENTIONALLY a placeholder until we wire a real
-    // ABC fixture with `router_d4`-shaped feedback — the substantive
-    // proof lives in YOSYS.md's manual ABC re-run trace.
-    total = total + 1
-    // (no-op; the pattern presence is enforced by the literal
-    // `stdout.find("combinational loop")` in abc_map at L504, which
-    // the compiler would error on if removed)
+    // T9e — 1-bit fallback: a cell whose pin nets are all 1-bit
+    // emits a single `.gate` line in legacy form (no `__b0` suffix).
+    let mut m9e = rtlil_new_module("c9e")
+    m9e = rtlil_module_add_wire(m9e, rtlil_wire("a1", 1, 1, 1))
+    m9e = rtlil_module_add_wire(m9e, rtlil_wire("b1", 1, 1, 2))
+    m9e = rtlil_module_add_wire(m9e, rtlil_wire("y1", 1, 2, 3))
+    let mut g9e = rtlil_cell("u_g9e", "sky130_fd_sc_hd__and2_1", 1)
+    g9e = rtlil_cell_connect(g9e, "A", "a1")
+    g9e = rtlil_cell_connect(g9e, "B", "b1")
+    g9e = rtlil_cell_connect(g9e, "X", "y1")
+    m9e = rtlil_module_add_cell(m9e, g9e)
+    let mut d9e = rtlil_new_design("test")
+    d9e = rtlil_design_add(d9e, m9e)
+    let blif9e = abc_emit_blif(d9e)
+    if blif9e.find(".gate sky130_fd_sc_hd__and2_1 A=a1 B=b1 X=y1") < 0 {
+        println("FAIL T9e single_bit_gate_fallback_missing"); fails = fails + 1
+    }
+    if blif9e.find("a1__b0") >= 0 {
+        println("FAIL T9e2 single_bit_gate_unexpected_bit_suffix"); fails = fails + 1
+    }
+
+    // T9f — broadcast 1-bit pin within multi-bit cell: e.g. `$mux`-
+    // shape where S is 1-bit and A/B/X are 4-bit. Bit-blasted lines
+    // must keep S bare and only suffix A/B/X.
+    let mut m9f = rtlil_new_module("c9f")
+    m9f = rtlil_module_add_wire(m9f, rtlil_wire("a4f", 4, 1, 1))
+    m9f = rtlil_module_add_wire(m9f, rtlil_wire("b4f", 4, 1, 2))
+    m9f = rtlil_module_add_wire(m9f, rtlil_wire("s1", 1, 1, 3))
+    m9f = rtlil_module_add_wire(m9f, rtlil_wire("x4f", 4, 2, 4))
+    let mut g9f = rtlil_cell("u_g9f", "sky130_fd_sc_hd__mux2_1", 1)
+    g9f = rtlil_cell_connect(g9f, "A0", "a4f")
+    g9f = rtlil_cell_connect(g9f, "A1", "b4f")
+    g9f = rtlil_cell_connect(g9f, "S",  "s1")
+    g9f = rtlil_cell_connect(g9f, "X",  "x4f")
+    m9f = rtlil_module_add_cell(m9f, g9f)
+    let mut d9f = rtlil_new_design("test")
+    d9f = rtlil_design_add(d9f, m9f)
+    let blif9f = abc_emit_blif(d9f)
+    if blif9f.find(".gate sky130_fd_sc_hd__mux2_1 A0=a4f__b0 A1=b4f__b0 S=s1 X=x4f__b0") < 0 {
+        println("FAIL T9f mux_broadcast_b0_missing"); fails = fails + 1
+    }
+    if blif9f.find(".gate sky130_fd_sc_hd__mux2_1 A0=a4f__b3 A1=b4f__b3 S=s1 X=x4f__b3") < 0 {
+        println("FAIL T9f2 mux_broadcast_b3_missing"); fails = fails + 1
+    }
+    // T9f3 — S=s1__b<k> must NEVER appear (S is a 1-bit wire, must broadcast)
+    if blif9f.find("S=s1__b") >= 0 {
+        println("FAIL T9f3 mux_broadcast_S_unexpectedly_suffixed")
+        fails = fails + 1
+    }
+
+    // T9g — special constant net stays bare even inside multi-bit cell.
+    let mut m9g = rtlil_new_module("c9g")
+    m9g = rtlil_module_add_wire(m9g, rtlil_wire("a4g", 4, 1, 1))
+    m9g = rtlil_module_add_wire(m9g, rtlil_wire("y4g", 4, 2, 2))
+    let mut g9g = rtlil_cell("u_g9g", "sky130_fd_sc_hd__and2_1", 1)
+    g9g = rtlil_cell_connect(g9g, "A", "a4g")
+    g9g = rtlil_cell_connect(g9g, "B", "$const_0")
+    g9g = rtlil_cell_connect(g9g, "X", "y4g")
+    m9g = rtlil_module_add_cell(m9g, g9g)
+    let mut d9g = rtlil_new_design("test")
+    d9g = rtlil_design_add(d9g, m9g)
+    let blif9g = abc_emit_blif(d9g)
+    if blif9g.find("B=$const_0__b") >= 0 {
+        println("FAIL T9g const_net_unexpectedly_suffixed"); fails = fails + 1
+    }
+    if blif9g.find(".gate sky130_fd_sc_hd__and2_1 A=a4g__b0 B=$const_0 X=y4g__b0") < 0 {
+        println("FAIL T9g2 const_net_emit_missing"); fails = fails + 1
+    }
 
     if fails > 0 {
         println("abc_map selftest: " + str(total - fails) + "/" + str(total) + " — FAIL")

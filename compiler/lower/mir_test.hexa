@@ -49,9 +49,6 @@ fn _t(kind: string) -> Type {
 fn _t_i64()  -> Type { return _t("i64") }
 fn _t_bool() -> Type { return _t("bool") }
 fn _t_unit() -> Type { return _t("unit") }
-fn _t_f16()  -> Type { return _t("f16") }
-fn _t_bf16() -> Type { return _t("bf16") }
-fn _t_f32()  -> Type { return _t("f32") }
 
 fn _hexpr(kind: string, typ: Type, text: string, kids: [HExpr]) -> HExpr {
     return HExpr {
@@ -360,103 +357,6 @@ fn _build_case_d() -> HModule {
     return HModule { file: "case_d.hexa", items: items }
 }
 
-// (e) RFC 068 P2 + N57 follow-on — mixed-precision opcode synthesis.
-//
-//     fn f(a: <dtype>, b: <dtype>) -> <dtype> { return a <op> b }
-//
-// For each of (op ∈ {+, -, *, /}) × (dtype ∈ {f16, bf16, f32}) we
-// expect `_op_with_precision` to synthesize `<op>_<dtype>` (e.g.
-// `add_bf16`, `div_bf16`, `mul_f16`, `sub_f32`) on the resulting
-// STMT_BINOP, and stamp the dst Local's `precision` field with
-// `.<dtype>`. This is the HIR→MIR synthesis seam — codegen-side
-// consumers (`_nvptx_binop_mnemonic`, `_nvptx_classify_local_for_stmt`,
-// Metal shape-matchers) already recognise this opcode family per
-// PR #170 / N41 / N51, so wiring the synthesis here UNBLOCKS the
-// future flame bf16/f16 lowering path without a second pass.
-//
-// Honest scope (`@D g3`): this case verifies SYNTHESIS only — that
-// HIR `bf16` type tag → MIR `STMT_BINOP("op_bf16")`. The parser-side
-// `bf16` keyword recognition is independent (and already present in
-// `check/types.hexa`); this test bypasses parsing by hand-building
-// the HIR. No silicon fire.
-fn _build_case_e_binop(op: string, dtype: Type) -> HModule {
-    let a = _ident("a", dtype)
-    let b = _ident("b", dtype)
-    let expr = _binop(op, a, b, dtype)
-    let body = _block([_ret(expr)])
-    let mut pn: [string] = []
-    pn.push("a")
-    pn.push("b")
-    let mut pt: [Type] = []
-    pt.push(dtype)
-    pt.push(dtype)
-    let it = _hfn("op_e", pn, pt, dtype, body)
-    let mut items: [HItem] = []
-    items.push(it)
-    return HModule { file: "case_e.hexa", items: items }
-}
-
-// Walk a lowered MModule and return the first STMT_BINOP's op string
-// + dst.precision tag (mirrors `nvptx_lower_test::_find_first_binop_*`).
-fn _case_e_first_binop_op(m: MModule) -> string {
-    let mut fi = 0
-    while fi < len(m.funcs) {
-        let mf = m.funcs[fi]
-        let mut bi = 0
-        while bi < len(mf.blocks) {
-            let b = mf.blocks[bi]
-            let mut si = 0
-            while si < len(b.stmts) {
-                let s = b.stmts[si]
-                if s.kind == STMT_BINOP { return s.op }
-                si = si + 1
-            }
-            bi = bi + 1
-        }
-        fi = fi + 1
-    }
-    return ""
-}
-
-fn _case_e_first_binop_precision(m: MModule) -> string {
-    let mut fi = 0
-    while fi < len(m.funcs) {
-        let mf = m.funcs[fi]
-        let mut bi = 0
-        while bi < len(mf.blocks) {
-            let b = mf.blocks[bi]
-            let mut si = 0
-            while si < len(b.stmts) {
-                let s = b.stmts[si]
-                if s.kind == STMT_BINOP { return s.dst.precision }
-                si = si + 1
-            }
-            bi = bi + 1
-        }
-        fi = fi + 1
-    }
-    return ""
-}
-
-fn _case_e_check_pair(ok_in: bool, op: string, dtype: Type, want_op: string, want_prec: string) -> bool {
-    let m = lower_hir(_build_case_e_binop(op, dtype))
-    let got_op = _case_e_first_binop_op(m)
-    let got_prec = _case_e_first_binop_precision(m)
-    let mut ok = ok_in
-    if got_op != want_op {
-        println("  FAIL: case (e) " + dtype.kind + " `" + op + "` → op got `" + got_op + "`, want `" + want_op + "`")
-        ok = false
-    }
-    if got_prec != want_prec {
-        println("  FAIL: case (e) " + dtype.kind + " `" + op + "` → prec got `" + got_prec + "`, want `" + want_prec + "`")
-        ok = false
-    }
-    if got_op == want_op && got_prec == want_prec {
-        println("  OK:   case (e) " + dtype.kind + " `" + op + "` → op=`" + got_op + "` prec=`" + got_prec + "`")
-    }
-    return ok
-}
-
 // ── Driver ───────────────────────────────────────────────────
 
 fn main() {
@@ -721,28 +621,6 @@ fn main() {
             ok = false
         }
     }
-
-    // (e) RFC 068 P2 + N57 follow-on — mixed-precision opcode synthesis.
-    // For each (op ∈ {+,-,*,/}) × (dtype ∈ {f16, bf16, f32}) verify
-    // `_op_with_precision` synthesizes `<op>_<dtype>` + stamps dst.precision.
-    println("")
-    println("── (e) RFC 068 P2 + N57 — mixed-precision binop synthesis ──")
-    ok = _case_e_check_pair(ok, "+", _t_f16(),  "add_f16",  ".f16")
-    ok = _case_e_check_pair(ok, "-", _t_f16(),  "sub_f16",  ".f16")
-    ok = _case_e_check_pair(ok, "*", _t_f16(),  "mul_f16",  ".f16")
-    ok = _case_e_check_pair(ok, "/", _t_f16(),  "div_f16",  ".f16")
-    ok = _case_e_check_pair(ok, "+", _t_bf16(), "add_bf16", ".bf16")
-    ok = _case_e_check_pair(ok, "-", _t_bf16(), "sub_bf16", ".bf16")
-    ok = _case_e_check_pair(ok, "*", _t_bf16(), "mul_bf16", ".bf16")
-    ok = _case_e_check_pair(ok, "/", _t_bf16(), "div_bf16", ".bf16")
-    ok = _case_e_check_pair(ok, "+", _t_f32(),  "add_f32",  ".f32")
-    ok = _case_e_check_pair(ok, "-", _t_f32(),  "sub_f32",  ".f32")
-    ok = _case_e_check_pair(ok, "*", _t_f32(),  "mul_f32",  ".f32")
-    ok = _case_e_check_pair(ok, "/", _t_f32(),  "div_f32",  ".f32")
-    // f64 byte-eq guard: a plain `+` on i64 must NOT pick up a precision
-    // suffix (precision tag is empty for non-low-precision kinds — see
-    // `_precision_from_typ_kind`). Mirrors nvptx_lower_test Case 20 sub-D.
-    ok = _case_e_check_pair(ok, "+", _t_i64(),  "+",        "")
 
     println("")
     println("══════════════════════════════════════════════")

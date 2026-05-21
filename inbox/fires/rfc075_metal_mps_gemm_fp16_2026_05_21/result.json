@@ -1,0 +1,137 @@
+{
+  "rfc": "075-Metal-MPS-GEMM-FP16-baseline",
+  "date_utc": "2026-05-21",
+  "host": "Mac (local, ghost)",
+  "device": "Apple M3 (10-core GPU)",
+  "metal_version": "Metal 4",
+  "toolchain": "xcrun --sdk macosx swiftc 6.3.1 (-O)",
+  "library": "MetalPerformanceShaders MPSMatrixMultiplication (FP16, MPSDataType.float16)",
+  "timing_method": "MTLCommandBuffer.gpuEndTime - gpuStartTime (per-launch GPU timestamps, waitUntilCompleted each iter)",
+  "warmup": 5,
+  "measurement_count": 50,
+  "companion_fp32_artifact": "inbox/fires/rfc075_metal_mps_gemm_2026_05_21/result.json (commit 9b352bda)",
+  "companion_hexa_fp16_artifact": "inbox/fires/rfc075_metal_simdgroup_matmul_fp16_2026_05_21/result.json",
+  "hypothesis_tested": {
+    "name": "Apple M3 FP16 2x boost (via MPS dedicated FP16 path)",
+    "prediction": "If Apple M3 has a dedicated FP16 MMA datapath that MPS uses internally (even if simdgroup_matrix<half> doesn't expose it), MPS FP16 throughput should reach ~2x MPS FP32 throughput (~3.4 TFLOPS at d=1024).",
+    "alternative": "If Apple M3 truly has no FP16 acceleration anywhere, MPS FP16 ~= MPS FP32 (~1x).",
+    "measured_ratio_at_peak": 1.1014,
+    "verdict": "FAIL — Apple M3 FP16 2x hypothesis FALSIFIED. MPS FP16 peak (1.875 TFLOPS) is only 1.10x MPS FP32 peak (1.703 TFLOPS) at d=1024. Consistent with Apple M3 having NO dedicated FP16 datapath — FP16 only gets minor benefit from halved bandwidth, not from doubled compute throughput. This independently corroborates N25's hand-emit simdgroup_matrix<half> finding (0.87x FP32, peak 789 GFLOPS): the bottleneck is not the simdgroup_matrix API, it is the silicon itself."
+  },
+  "shapes": [
+    {
+      "M": 256, "N": 256, "K": 256,
+      "mps_fp16_tflops":      0.542294,
+      "mps_fp16_median_ms":   0.061875,
+      "mps_fp16_mean_ms":     0.079465,
+      "mps_fp16_std_ms":      0.062487,
+      "mps_fp16_min_ms":      0.060792,
+      "mps_fp16_max_ms":      0.441792,
+      "mps_fp32_tflops":      1.031783,
+      "fp16_over_fp32_tflops_ratio": 0.526,
+      "max_abs_diff_vs_fp16accum": 0.1171875,
+      "max_rel_err_vs_fp16accum_diagnostic": 2964.02,
+      "max_rel_err_caveat": "near-zero ref values blow up the bare relative error; max_abs_diff=0.117 across N=256 elements with K=256 accumulator is consistent with normal FP16 K-loop drift (~K * ULP); numeric correctness PASS qualitatively"
+    },
+    {
+      "M": 384, "N": 384, "K": 384,
+      "mps_fp16_tflops":      0.677698,
+      "mps_fp16_median_ms":   0.167104,
+      "mps_fp16_mean_ms":     0.335083,
+      "mps_fp16_std_ms":      0.605246,
+      "mps_fp16_min_ms":      0.165542,
+      "mps_fp16_max_ms":      4.240875,
+      "mps_fp32_tflops":      1.347835,
+      "fp16_over_fp32_tflops_ratio": 0.503
+    },
+    {
+      "M": 512, "N": 512, "K": 512,
+      "mps_fp16_tflops":      0.744147,
+      "mps_fp16_median_ms":   0.360729,
+      "mps_fp16_mean_ms":     0.441088,
+      "mps_fp16_std_ms":      0.331501,
+      "mps_fp16_min_ms":      0.359375,
+      "mps_fp16_max_ms":      2.247167,
+      "mps_fp32_tflops":      1.555584,
+      "fp16_over_fp32_tflops_ratio": 0.478
+    },
+    {
+      "M": 768, "N": 768, "K": 768,
+      "mps_fp16_tflops":      1.837356,
+      "mps_fp16_median_ms":   0.493083,
+      "mps_fp16_mean_ms":     0.707474,
+      "mps_fp16_std_ms":      0.683704,
+      "mps_fp16_min_ms":      0.422708,
+      "mps_fp16_max_ms":      4.852500,
+      "mps_fp32_tflops":      1.666343,
+      "fp16_over_fp32_tflops_ratio": 1.103
+    },
+    {
+      "M": 1024, "N": 1024, "K": 1024,
+      "mps_fp16_tflops":      1.874508,
+      "mps_fp16_median_ms":   1.145625,
+      "mps_fp16_mean_ms":     1.223791,
+      "mps_fp16_std_ms":      0.317242,
+      "mps_fp16_min_ms":      0.981875,
+      "mps_fp16_max_ms":      2.407375,
+      "mps_fp32_tflops":      1.702747,
+      "fp16_over_fp32_tflops_ratio": 1.101
+    }
+  ],
+  "comparison_table": {
+    "columns": ["shape", "MPS FP16 TFLOPS", "MPS FP32 TFLOPS", "FP16/FP32 ratio", "hexa simdgroup FP16 (peak) TFLOPS", "hexa simdgroup FP32 (peak) TFLOPS", "MPS_FP16 / hexa_FP16"],
+    "rows": [
+      ["256x256x256",   0.542, 1.032, 0.526, 0.196, 0.439, 2.768],
+      ["384x384x384",   0.678, 1.348, 0.503, null,  null,  null],
+      ["512x512x512",   0.744, 1.556, 0.478, 0.581, 0.638, 1.281],
+      ["768x768x768",   1.837, 1.666, 1.103, 0.337, 0.912, 5.448],
+      ["1024x1024x1024",1.875, 1.703, 1.101, 0.789, 0.506, 2.375]
+    ],
+    "notes": [
+      "MPS FP32 column from rfc075_metal_mps_gemm_2026_05_21 (commit 9b352bda).",
+      "hexa simdgroup FP16/FP32 columns from rfc075_metal_simdgroup_matmul_fp16_2026_05_21 — peak across {8x8, 16x16, 32x32_tg} kernel variants.",
+      "MPS FP16 wins clearly only at d>=768 where the small-shape overhead amortizes. At d<=512 MPS FP16 is roughly half of MPS FP32 (likely because FP16 path adds dispatch overhead but offers no compute advantage to recoup it).",
+      "MPS FP16 / hexa simdgroup FP16 = 2.4-5.4x: even with no FP16 compute boost, MPS extracts substantially more from the silicon via better tiling/scheduling than the hand-emit kernel — same asymmetry seen on the FP32 side (MPS FP32 = 1.7 TFLOPS vs hexa FP32 simdgroup peak 0.91 TFLOPS, 1.87x)."
+    ]
+  },
+  "apple_m3_peak_reference": {
+    "fp32_peak_tflops_advertised": 3.5,
+    "fp16_2x_path_hypothesis_tflops": 7.0,
+    "fp16_1x_path_hypothesis_tflops": 3.5,
+    "measured_mps_fp16_peak_tflops": 1.875,
+    "fraction_of_2x_hypothesis": 0.268,
+    "fraction_of_1x_hypothesis": 0.536,
+    "notes": [
+      "MPS FP16 peak 1.875 TFLOPS is 53.6% of the 1x-FP32 peak hypothesis and 26.8% of the 2x-FP32 peak hypothesis.",
+      "This is the same ~50% utilization MPS FP32 reaches against its own theoretical (1.70 TFLOPS / 3.5 TFLOPS = 48.6%). Consistent with MPS hitting compute-bound asymptote at d=1024 — no hidden compute headroom unlocked by FP16.",
+      "If Apple M3 had a dedicated FP16 MMA path at 2x FP32, MPS would have shown a clear 1.5x-2x throughput jump even at 50% utilization (~3.4 TFLOPS). It did not."
+    ]
+  },
+  "falsifier_F_RFC075_MPS_FP16_2X_HYPOTHESIS": {
+    "predicate": "MPS_FP16_peak_TFLOPS / MPS_FP32_peak_TFLOPS >= 1.5 at any shape >= 512^3",
+    "measurement_at_512": 0.478,
+    "measurement_at_768": 1.103,
+    "measurement_at_1024": 1.101,
+    "verdict": "REFUTED — peak ratio 1.10 < 1.5 threshold"
+  },
+  "interpretation": [
+    "Headline: MPS FP16 GEMM peaks at 1.875 TFLOPS @ d=1024, MPS FP32 peaks at 1.703 TFLOPS @ d=1024 — ratio 1.10x. The 'Apple M3 has a hidden 2x FP16 MMA path that MPS uses' hypothesis is REFUTED by this baseline.",
+    "Below d=768 MPS FP16 is significantly SLOWER than MPS FP32 (0.48-0.53x). The fp16-half-bandwidth advantage doesn't pay back the fixed dispatch/launch overhead until problem size is large enough.",
+    "Independent corroboration of N25 (hexa-emit simdgroup_matrix<half>): N25 found FP16 simdgroup peaked at 0.87x FP32 simdgroup. This MPS measurement finds the same direction (1.10x is well below 2x). Together: Apple M3 ALU silicon treats FP16 essentially the same as FP32 for matmul throughput. No hidden FP16 compute path exists.",
+    "MPS FP16 still beats hexa-emit simdgroup FP16 by 2.4-5.4x — MPS engineering (tile schedules, micro-kernels, memory layout) is far ahead of the hand-emit baseline. This is unchanged from the FP32 conclusion: closing the MPS gap is about *tiling* not *FP16 magic*.",
+    "Variance is wide at d<=768 (std 0.063-0.683 ms) — shared developer laptop. Median is the reliable estimator; 5 warmup + 50 timed protocol matches N7."
+  ],
+  "honest_scope": [
+    "FP16 numeric correctness: max_abs_diff=0.117 at d=256 (K=256 accumulator) is consistent with normal FP16 matmul drift (~K * 2^-10 ULP). The max_rel_err diagnostic blows up because tiny ref values appear near zero — this is a known artifact of bare relative-error metrics on FP16 matmul, not a kernel correctness signal. We trust MPS to produce numerically valid FP16 output.",
+    "Only one shape (d=256) runs the CPU FP16 reference because cpu_ref_fp16_accum is O(N^3) and would dominate wall time at d=1024.",
+    "MPS internally may upcast FP16 -> FP32 -> FP16 (silent), in which case our measurement is 'MPS-as-actually-used-by-developers FP16'. Even so, the verdict stands: from the developer's API surface, FP16 dtype does NOT unlock 2x throughput on Apple M3.",
+    "Single host, single GPU. Variance noted. No rerun on quiesced machine — defer.",
+    "MPSDataType.float16 was accepted by MPSMatrixDescriptor / MPSMatrixMultiplication without API change — no Apple deprecation gap encountered. Build clean, run clean."
+  ],
+  "followup": [
+    "Mixed-precision MPS: FP16 input + FP32 accumulator. MPS may expose this via MPSMatrixMultiplication(... resultDataType: .float32) or via the MPSNDArray API. Worth a separate fire to confirm whether mixed-precision unlocks anything FP16-pure does not.",
+    "d=2048+ shapes — does MPS FP16 maintain its small 10% advantage or scale further?",
+    "Quiesced-laptop rerun with timed=200 to tighten variance, especially d=384/512.",
+    "Cross-reference: Apple's own Metal Performance Shaders documentation for FP16 — does the documentation claim a dedicated FP16 path? If yes, this measurement contradicts Apple's claim and merits a deeper SoC characterization. If no, this confirms the silicon's homogeneous FP32-ish ALU treatment."
+  ]
+}

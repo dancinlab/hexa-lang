@@ -1,0 +1,264 @@
+{
+  "rfc": "067-PH-cublas-sgemm-baseline",
+  "date_utc": "2026-05-21",
+  "host": "ubu-2",
+  "device": "NVIDIA GeForce RTX 5070",
+  "sm": "sm_120",
+  "driver_version": 13000,
+  "runtime_version": 12000,
+  "warmup": 20,
+  "measurement_count": 200,
+  "timing_method": "cudaEventRecord per-launch (sync each iter)",
+  "kernel": "cublasSgemm (FP32 in / FP32 compute / FP32 out)",
+  "math_mode": "CUBLAS_TENSOR_OP_MATH (allows TF32 tensor-core dispatch on sm_80+)",
+  "shapes": [
+    {
+      "M": 192, "N": 192, "K": 192,
+      "sgemm_tflops":    1.731382,
+      "sgemm_median_ms": 0.008176,
+      "sgemm_mean_ms":   0.008171,
+      "sgemm_std_ms":    0.001094,
+      "sgemm_min_ms":    0.006912,
+      "sgemm_max_ms":    0.019104
+    },
+    {
+      "M": 256, "N": 256, "K": 256,
+      "sgemm_tflops":    3.869284,
+      "sgemm_median_ms": 0.008672,
+      "sgemm_mean_ms":   0.008973,
+      "sgemm_std_ms":    0.000686,
+      "sgemm_min_ms":    0.007488,
+      "sgemm_max_ms":    0.010784
+    },
+    {
+      "M": 320, "N": 320, "K": 320,
+      "sgemm_tflops":    7.557196,
+      "sgemm_median_ms": 0.008672,
+      "sgemm_mean_ms":   0.009012,
+      "sgemm_std_ms":    0.000571,
+      "sgemm_min_ms":    0.008384,
+      "sgemm_max_ms":    0.010720
+    },
+    {
+      "M": 384, "N": 384, "K": 384,
+      "sgemm_tflops":    10.595640,
+      "sgemm_median_ms": 0.010688,
+      "sgemm_mean_ms":   0.010533,
+      "sgemm_std_ms":    0.001115,
+      "sgemm_min_ms":    0.008864,
+      "sgemm_max_ms":    0.017920
+    },
+    {
+      "M": 448, "N": 448, "K": 448,
+      "sgemm_tflops":    10.704214,
+      "sgemm_median_ms": 0.016800,
+      "sgemm_mean_ms":   0.016599,
+      "sgemm_std_ms":    0.001075,
+      "sgemm_min_ms":    0.015072,
+      "sgemm_max_ms":    0.028000
+    },
+    {
+      "M": 512, "N": 512, "K": 512,
+      "sgemm_tflops":    15.917662,
+      "sgemm_median_ms": 0.016864,
+      "sgemm_mean_ms":   0.017232,
+      "sgemm_std_ms":    0.000656,
+      "sgemm_min_ms":    0.016576,
+      "sgemm_max_ms":    0.020384
+    },
+    {
+      "M": 576, "N": 576, "K": 576,
+      "sgemm_tflops":    20.209705,
+      "sgemm_median_ms": 0.018912,
+      "sgemm_mean_ms":   0.019175,
+      "sgemm_std_ms":    0.000444,
+      "sgemm_min_ms":    0.018656,
+      "sgemm_max_ms":    0.020960
+    },
+    {
+      "M": 640, "N": 640, "K": 640,
+      "sgemm_tflops":    14.867513,
+      "sgemm_median_ms": 0.035264,
+      "sgemm_mean_ms":   0.035320,
+      "sgemm_std_ms":    0.000836,
+      "sgemm_min_ms":    0.033984,
+      "sgemm_max_ms":    0.045472
+    },
+    {
+      "M": 704, "N": 704, "K": 704,
+      "sgemm_tflops":    18.670465,
+      "sgemm_median_ms": 0.037376,
+      "sgemm_mean_ms":   0.037378,
+      "sgemm_std_ms":    0.000224,
+      "sgemm_min_ms":    0.036608,
+      "sgemm_max_ms":    0.038432
+    },
+    {
+      "M": 768, "N": 768, "K": 768,
+      "sgemm_tflops":    22.942911,
+      "sgemm_median_ms": 0.039488,
+      "sgemm_mean_ms":   0.039514,
+      "sgemm_std_ms":    0.000535,
+      "sgemm_min_ms":    0.038464,
+      "sgemm_max_ms":    0.043104
+    },
+    {
+      "M": 832, "N": 832, "K": 832,
+      "sgemm_tflops":    17.740585,
+      "sgemm_median_ms": 0.064928,
+      "sgemm_mean_ms":   0.064633,
+      "sgemm_std_ms":    0.000954,
+      "sgemm_min_ms":    0.062848,
+      "sgemm_max_ms":    0.073312
+    },
+    {
+      "M": 896, "N": 896, "K": 896,
+      "sgemm_tflops":    20.205707,
+      "sgemm_median_ms": 0.071200,
+      "sgemm_mean_ms":   0.070991,
+      "sgemm_std_ms":    0.000767,
+      "sgemm_min_ms":    0.069152,
+      "sgemm_max_ms":    0.079392
+    },
+    {
+      "M": 960, "N": 960, "K": 960,
+      "sgemm_tflops":    24.146725,
+      "sgemm_median_ms": 0.073280,
+      "sgemm_mean_ms":   0.073166,
+      "sgemm_std_ms":    0.000656,
+      "sgemm_min_ms":    0.071264,
+      "sgemm_max_ms":    0.077824
+    },
+    {
+      "M": 1024, "N": 1024, "K": 1024,
+      "sgemm_tflops":    22.206772,
+      "sgemm_median_ms": 0.096704,
+      "sgemm_mean_ms":   0.096467,
+      "sgemm_std_ms":    0.000579,
+      "sgemm_min_ms":    0.094816,
+      "sgemm_max_ms":    0.098432
+    },
+    {
+      "M": 1088, "N": 1088, "K": 1088,
+      "sgemm_tflops":    25.269060,
+      "sgemm_median_ms": 0.101936,
+      "sgemm_mean_ms":   0.101670,
+      "sgemm_std_ms":    0.000811,
+      "sgemm_min_ms":    0.100384,
+      "sgemm_max_ms":    0.104000
+    },
+    {
+      "M": 1152, "N": 1152, "K": 1152,
+      "sgemm_tflops":    28.548397,
+      "sgemm_median_ms": 0.107104,
+      "sgemm_mean_ms":   0.107484,
+      "sgemm_std_ms":    0.000646,
+      "sgemm_min_ms":    0.106112,
+      "sgemm_max_ms":    0.111040
+    },
+    {
+      "M": 1280, "N": 1280, "K": 1280,
+      "sgemm_tflops":    22.810999,
+      "sgemm_median_ms": 0.183872,
+      "sgemm_mean_ms":   0.184016,
+      "sgemm_std_ms":    0.000568,
+      "sgemm_min_ms":    0.181952,
+      "sgemm_max_ms":    0.185984
+    },
+    {
+      "M": 1408, "N": 1408, "K": 1408,
+      "sgemm_tflops":    27.595196,
+      "sgemm_median_ms": 0.202304,
+      "sgemm_mean_ms":   0.202270,
+      "sgemm_std_ms":    0.000302,
+      "sgemm_min_ms":    0.200736,
+      "sgemm_max_ms":    0.203392
+    },
+    {
+      "M": 1536, "N": 1536, "K": 1536,
+      "sgemm_tflops":    32.834506,
+      "sgemm_median_ms": 0.220736,
+      "sgemm_mean_ms":   0.220748,
+      "sgemm_std_ms":    0.000407,
+      "sgemm_min_ms":    0.219744,
+      "sgemm_max_ms":    0.224416
+    },
+    {
+      "M": 1664, "N": 1664, "K": 1664,
+      "sgemm_tflops":    30.579290,
+      "sgemm_median_ms": 0.301344,
+      "sgemm_mean_ms":   0.300761,
+      "sgemm_std_ms":    0.000969,
+      "sgemm_min_ms":    0.299360,
+      "sgemm_max_ms":    0.302688
+    },
+    {
+      "M": 1792, "N": 1792, "K": 1792,
+      "sgemm_tflops":    28.706327,
+      "sgemm_median_ms": 0.400928,
+      "sgemm_mean_ms":   0.400736,
+      "sgemm_std_ms":    0.000627,
+      "sgemm_min_ms":    0.398624,
+      "sgemm_max_ms":    0.402016
+    },
+    {
+      "M": 1920, "N": 1920, "K": 1920,
+      "sgemm_tflops":    31.750798,
+      "sgemm_median_ms": 0.445840,
+      "sgemm_mean_ms":   0.445696,
+      "sgemm_std_ms":    0.000601,
+      "sgemm_min_ms":    0.443584,
+      "sgemm_max_ms":    0.447008
+    },
+    {
+      "M": 2048, "N": 2048, "K": 2048,
+      "sgemm_tflops":    31.269782,
+      "sgemm_median_ms": 0.549408,
+      "sgemm_mean_ms":   0.549373,
+      "sgemm_std_ms":    0.000461,
+      "sgemm_min_ms":    0.548256,
+      "sgemm_max_ms":    0.552128
+    }
+  ],
+  "cross_platform_apples_to_apples_fp32": {
+    "note": "Apples-to-apples FP32 SGEMM vs FP32 SGEMM. Apple side = RFC 075 MPS GEMM (commit 9b352bda). Nvidia side = this fire.",
+    "columns": [
+      "shape",
+      "Apple M3 MPS FP32 TFLOPS",
+      "RTX 5070 cuBLAS SGEMM TFLOPS",
+      "RTX 5070 / Apple M3 speedup",
+      "Apple M3 / RTX 5070 ratio"
+    ],
+    "rows": [
+      ["256x256x256",    1.032,  3.869,  3.749, 0.2667],
+      ["384x384x384",    1.348, 10.596,  7.860, 0.1272],
+      ["512x512x512",    1.556, 15.918, 10.231, 0.0977],
+      ["768x768x768",    1.666, 22.943, 13.770, 0.0726],
+      ["1024x1024x1024", 1.703, 22.207, 13.041, 0.0767]
+    ]
+  },
+  "hgemm_vs_sgemm_speedup_rtx5070": {
+    "note": "Tensor-core HGEMM (cublasGemmEx FP16 in / FP32 compute, RFC 067 pG commit) vs CUDA-core+TF32 SGEMM (this fire). Both on RTX 5070 sm_120, same protocol.",
+    "columns": ["shape", "SGEMM FP32 TFLOPS", "HGEMM FP16 TFLOPS", "HGEMM/SGEMM speedup"],
+    "rows": [
+      ["256x256x256",     3.869,  4.993,  1.290],
+      ["384x384x384",    10.596, 16.772,  1.583],
+      ["512x512x512",    15.918, 24.745,  1.555],
+      ["768x768x768",    22.943, 47.663,  2.078],
+      ["1024x1024x1024", 22.207, 54.339,  2.447],
+      ["1536x1536x1536", 32.835, 66.420,  2.023],
+      ["1920x1920x1920", 31.751, 67.578,  2.128],
+      ["2048x2048x2048", 31.270, 66.958,  2.141]
+    ]
+  },
+  "peak_sgemm": {
+    "tflops": 32.834506,
+    "shape": "1536x1536x1536",
+    "median_ms": 0.220736,
+    "fraction_of_advertised_fp32_peak": "RTX 5070 advertised non-tensor FP32 peak ~31 TFLOPS (5888 CUDA cores * 2.5125 GHz * 2 FMA = ~29.6 TFLOPS). Measured 32.83 TFLOPS at d=1536 indicates TF32 tensor-core dispatch is active (CUBLAS_TENSOR_OP_MATH) — TF32 tensor-core peak on this die is ~118 TFLOPS, so we are at ~28% of TF32 peak.",
+    "honest_scope": [
+      "CUBLAS_TENSOR_OP_MATH was asserted, so this is NOT strict-IEEE FP32 throughput. It is the throughput a default real caller gets on this driver — the same regime under which the Apple MPS comparison is meaningful since MPS likewise does not promise bit-exact IEEE inputs->output.",
+      "Strict-IEEE SGEMM would require CUBLAS_DEFAULT_MATH (or CUBLAS_PEDANTIC_MATH), which would drop to ~10-12 TFLOPS on this die. That fire is deferred."
+    ]
+  }
+}
