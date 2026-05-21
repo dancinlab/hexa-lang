@@ -106,11 +106,6 @@ pub let PTX_OP_ATOM_ADD_F64: string   = "atom.add.f64"  // global-mem FP64 atomi
 
 // ── PTX warp-level data movement (RFC 055 §12 P4+ — gpu/SPEC.md §5) ──
 pub let PTX_OP_SHFL_SYNC_IDX_B32: string = "shfl.sync.idx.b32"  // warp-lane shuffle by source-lane idx; ref NVIDIA PTX ISA 9.7.13.4
-// RFC 071 P4+ — XOR-butterfly warp shuffle. Same .b32 32-bit form as the
-// idx variant, but the second source operand is an XOR lane-mask (each
-// thread reads from lane `tid ^ lane_mask`). Required by the canonical
-// warp-reduce butterfly pattern (mask = 16, 8, 4, 2, 1). ref PTX ISA 9.7.13.4.
-pub let PTX_OP_SHFL_SYNC_BFLY_B32: string = "shfl.sync.bfly.b32"  // warp-lane shuffle by XOR lane-mask; ref NVIDIA PTX ISA 9.7.13.4
 
 // ── PTX function-kind directives ──────────────────────────────
 //

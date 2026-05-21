@@ -793,12 +793,11 @@ fn main() {
     let ok_fp8a  = _test_f8_e4m3_load_store()
     let ok_fp8b  = _test_f8_e5m2_load_store()
     let ok_i64c  = _test_to_i64_and_int_cmp()
-    let ok_idiv  = _test_int_div()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_idiv {
-        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+ + N71-C int div — 29/29 cases")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c {
+        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+ — 28/28 cases (incl. fp8 e4m3 + e5m2 ld/st + to_i64 + int cmp)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -829,10 +828,9 @@ fn main() {
         if !ok_fp8a { println("      RFC 068 §3 fp8 e4m3 scaffold FAILED") }
         if !ok_fp8b { println("      RFC 068 §3 fp8 e5m2 scaffold FAILED") }
         if !ok_i64c { println("      RFC 071 P3+ to_i64 + int cmp + br_cond FAILED") }
-        if !ok_idiv { println("      RFC 071 P4+ N71-C int div (div.s64 / div.s32) FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_idiv) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -2966,129 +2964,6 @@ fn _test_to_i64_and_int_cmp() -> bool {
         ok = false
     } else {
         println("  ok: no `unsupported binop: lt|<` marker (gap 2 closed)")
-    }
-    return ok
-}
-
-// ── Case 29 — RFC 071 P4+ (N71-C) integer / → div.s64 / div.s32 ─────────
-//
-// N70's warp_reduce_sum PTX emit had `mask/2` (i32 / i32) and `tid/32`
-// (i64 / i32-broadcast → U64) which both fell through to
-// `// RFC 055 055-P0 - unsupported binop: /` honest stubs, leaving the
-// downstream loop-mask register undefined and triggering kernel hangs in
-// silicon-fire. This case feeds a single MFunc where the dst Local
-// classifies U64 (via `to_i64` → U64 bank) and a STMT_BINOP "div" should
-// emit `div.s64 %rd<dst>, %rd<a>, %rd<b>`. The U32 sibling rides through
-// `_nvptx_binop_mnemonic_for_kind` when the dst classifies U32 — covered
-// by a second MFunc in the same module so a single codegen call exercises
-// both banks.
-
-fn _build_case_int_div() -> MModule {
-    // ── MFunc 1: U64-dst integer division (div.s64) ──
-    let gid32_a = _local(0, "gid32_a")     // U32 %r0 (gpu_thread_id_x)
-    let gid64_a = _local(1, "gid64_a")     // U64 %rd1 (to_i64 cast)
-    let gid32_b = _local(2, "gid32_b")     // U32 %r2 (gpu_thread_id_y)
-    let gid64_b = _local(3, "gid64_b")     // U64 %rd3 (to_i64 cast)
-    let q64     = _local(4, "q64")         // U64 %rd4 (div.s64 dst)
-
-    let mut to_i64_a = []
-    to_i64_a.push(_op_local(gid32_a.id))
-    let mut to_i64_b = []
-    to_i64_b.push(_op_local(gid32_b.id))
-
-    let mut s0 = []
-    s0.push(_stmt_call(gid32_a, "gpu_thread_id_x"))
-    s0.push(_stmt_call_with_args(gid64_a, "to_i64", to_i64_a))
-    s0.push(_stmt_call(gid32_b, "gpu_thread_id_y"))
-    s0.push(_stmt_call_with_args(gid64_b, "to_i64", to_i64_b))
-    s0.push(_stmt_binop(q64, "div", _op_local(gid64_a.id), _op_local(gid64_b.id)))
-    s0.push(_stmt_return())
-
-    let mut blocks_a = []
-    blocks_a.push(_block(0, s0))
-
-    let mut locals_a = []
-    locals_a.push(gid32_a); locals_a.push(gid64_a)
-    locals_a.push(gid32_b); locals_a.push(gid64_b)
-    locals_a.push(q64)
-
-    let mf_a = MFunc {
-        name: "div_u64_smoke",
-        params: [],
-        return_local: _miss_local(),
-        locals: locals_a,
-        blocks: blocks_a,
-        entry_block: 0,
-        arena_root: 1,
-        def_line: 0,
-        gpu_kind: GPU_KIND_DEVICE
-    }
-
-    // ── MFunc 2: U32-dst integer division (div.s32) ──
-    // Both operands are the thread-id intrinsic dst (U32 bank); the
-    // STMT_BINOP "div" dst must classify U32 via the first-non-default
-    // rule (operand-bank propagation) and emit `div.s32`.
-    let xa = _local(0, "xa")               // U32 %r0
-    let xb = _local(1, "xb")               // U32 %r1
-    let q32 = _local(2, "q32")             // U32 %r2 (div.s32 dst)
-
-    let mut s0_b = []
-    s0_b.push(_stmt_call(xa, "gpu_thread_id_x"))
-    s0_b.push(_stmt_call(xb, "gpu_thread_id_y"))
-    s0_b.push(_stmt_binop(q32, "div", _op_local(xa.id), _op_local(xb.id)))
-    s0_b.push(_stmt_return())
-
-    let mut blocks_b = []
-    blocks_b.push(_block(0, s0_b))
-
-    let mut locals_b = []
-    locals_b.push(xa); locals_b.push(xb); locals_b.push(q32)
-
-    let mf_b = MFunc {
-        name: "div_u32_smoke",
-        params: [],
-        return_local: _miss_local(),
-        locals: locals_b,
-        blocks: blocks_b,
-        entry_block: 0,
-        arena_root: 1,
-        def_line: 0,
-        gpu_kind: GPU_KIND_DEVICE
-    }
-
-    let mut fns = []
-    fns.push(mf_a)
-    fns.push(mf_b)
-    return MModule { file: "case_int_div.hexa", funcs: fns, globals: [] }
-}
-
-fn _test_int_div() -> bool {
-    let mut ok = true
-    let mod_in = _build_case_int_div()
-    let ptx = codegen_emit_ptx_sm80(mod_in)
-
-    println("")
-    println("── emitted PTX (RFC 071 P4+ N71-C int div, sm_80) ──")
-    println(ptx)
-
-    // GAP A — U64-dst div.s64. The U64 bank dst (`%rd<id>`) on a
-    // STMT_BINOP "div" with U64-classified operands must emit
-    // `div.s64`. N70's `tid/32` lowers this way.
-    ok = _check(ok, ptx, "div.s64",  "div.s64 emitted for U64-dst integer divide")
-
-    // GAP B — U32-dst div.s32. Both operands are U32 (thread-id
-    // intrinsic dst), dst classifies U32 by first-non-default-wins.
-    // N70's `mask/2` lowers this way.
-    ok = _check(ok, ptx, "div.s32",  "div.s32 emitted for U32-dst integer divide")
-
-    // Honest-stub negative guard — no `unsupported binop: /` markers
-    // should remain. The N70-era PTX had three occurrences (mask/2 +
-    // tid/32 ×2); a single residual would falsify GAP-B closure.
-    if _contains(ptx, "unsupported binop: /") || _contains(ptx, "unsupported binop: div") {
-        println("  FAIL: `unsupported binop: /|div` marker still present")
-        ok = false
-    } else {
-        println("  ok: no `unsupported binop: /|div` marker (N70 GAP-B closed)")
     }
     return ok
 }

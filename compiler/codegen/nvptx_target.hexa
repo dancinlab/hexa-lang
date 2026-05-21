@@ -452,15 +452,6 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
     if op == "add_f32"  { return "add.f32" }
     if op == "sub_f32"  { return "sub.f32" }
     if op == "mul_f32"  { return "mul.f32" }
-    // RFC 071 P4+ (N71-C sibling FP32 div) — F32 has THREE legal rounding
-    // modes in PTX ISA §9.7.1.4 (`div.approx.f32`, `div.full.f32`,
-    // `div.rn.f32`). We default to `div.rn.f32` (IEEE round-to-nearest,
-    // full-precision) to match the FP64 sibling at L437 and stay
-    // numerically conservative; `approx`/`full` can be a precision-policy
-    // opt-in later. Required when the `_op_with_precision` chain at
-    // hir_to_mir emits `div_f32` — kept as a tagged-suffix mnemonic so
-    // the dst F32 bank emit (`%fs<id>`) stays consistent.
-    if op == "div_f32"  { return "div.rn.f32" }
     return ""
 }
 
@@ -477,26 +468,11 @@ fn _nvptx_binop_mnemonic_for_kind(op: string, kind: string) -> string {
         if op == "add" || op == "+" { return "add.s32" }
         if op == "sub" || op == "-" { return "sub.s32" }
         if op == "mul" || op == "*" { return "mul.lo.s32" }
-        // RFC 071 P4+ (N71-C, closes N70 GAP-B) — integer division.
-        // PTX ISA §9.7.1.4 requires an EXPLICIT type-class on `div.<ty>`:
-        // `div.s32 %r_dst, %r_a, %r_b`. Signed by default — HIR does not
-        // track an unsigned-int signedness flag distinct from `u32`/`i32`
-        // at this codegen seam (NVPTX_RKIND_U32 covers both); signed
-        // matches the convention of `add.s32` / `mul.lo.s32` siblings
-        // declared above, so the dst-bank classifier and the binop
-        // mnemonic agree. N70's `mask/2` (i32 / i32) lowers here.
-        if op == "div" || op == "/" { return "div.s32" }
     }
     if kind == NVPTX_RKIND_U64 {
         if op == "add" || op == "+" { return "add.s64" }
         if op == "sub" || op == "-" { return "sub.s64" }
         if op == "mul" || op == "*" { return "mul.lo.s64" }
-        // RFC 071 P4+ (N71-C, closes N70 GAP-B) — 64-bit integer division.
-        // `div.s64 %rd_dst, %rd_a, %rd_b` per PTX ISA §9.7.1.4. Signed by
-        // default (sibling of `add.s64` / `mul.lo.s64`); N70's `tid/32`
-        // (i64 / i32-broadcast) lowers here once both operands classify
-        // U64 via the kind-aware binop body emit.
-        if op == "div" || op == "/" { return "div.s64" }
     }
     return _nvptx_binop_mnemonic(op)
 }
@@ -1009,6 +985,28 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
             }
             return out
         }
+        // RFC 071 P4+ — `gpu_warp_shuffle_xor(v, lane_mask) -> u32` warp-lane
+        // XOR-butterfly exchange (closes N70 GAP-A; gpu/SPEC.md §5). Lowers to
+        //   `shfl.sync.bfly.b32 %r<dst>, %r<src>, %r<mask>, 0x1f, 0xffffffff;`
+        // The `bfly` mode XORs the calling thread's lane id with the mask
+        // operand to compute the source lane — the canonical primitive for
+        // warp-reduce (mask = 16, 8, 4, 2, 1 reduces 32 lanes pairwise).
+        if s.op == "gpu_warp_shuffle_xor" {
+            if len(s.args) >= 2 {
+                let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+                let src_reg = _nvptx_reg_u32(s.args[0].local_id)
+                let mask_reg = _nvptx_reg_u32(s.args[1].local_id)
+                let mut a = []
+                a.push(_nvptx_op(dst_reg))
+                a.push(_nvptx_op(src_reg))
+                a.push(_nvptx_op(mask_reg))
+                a.push(_nvptx_op("0x1f"))
+                a.push(_nvptx_op("0xffffffff"))
+                out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_BFLY_B32, a,
+                    "gpu_warp_shuffle_xor(v, lane_mask)"))
+            }
+            return out
+        }
         // RFC 067 LANDED — Real WMMA instruction emit. Replaces the
         // scaffold-comment-only path with real PTX wmma.* instructions
         // referencing the FRAG vector regs (P1) + `.shared` staging slot
@@ -1427,6 +1425,9 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
         if s.op == "gpu_grid_dim_z" { return NVPTX_RKIND_U32 }
         // RFC 055 §12 P4+ — gpu_warp_shuffle returns a 32-bit register.
         if s.op == "gpu_warp_shuffle" { return NVPTX_RKIND_U32 }
+        // RFC 071 P4+ — gpu_warp_shuffle_xor mirrors the 32-bit dst bank
+        // (closes N70 GAP-A; same .b32 form as the idx variant).
+        if s.op == "gpu_warp_shuffle_xor" { return NVPTX_RKIND_U32 }
         // RFC 071 P3+ — int-cast intrinsics. `to_i64(x)` / `to_i32(x)`
         // are the primary widening / narrowing casts the HIR→MIR layer
         // synthesizes when an integer operand needs to match an array
