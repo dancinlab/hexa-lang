@@ -4537,16 +4537,6 @@ HexaVal hexa_array_sort(HexaVal arr) {
 // (e.g. wilson event_bus priority ordering). Comparator is hexa_sort_cmp
 // (which handles int/float/string after 2026-05-14; mixed types tie).
 // Filed at incoming/patches/stdlib-sort.md.
-// Step-3 cycle 69 port — callback-keyed sort. Hexa source uses
-// insertion sort with parallel keys/items arrays; mixed-key sorts
-// (int/float/string) all go through hexa_cmp_le.
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-extern HexaVal rt_array_sort_by(HexaVal arr, HexaVal key_fn);
-HexaVal hexa_array_sort_by(HexaVal arr, HexaVal key_fn) {
-    if (!HX_IS_ARRAY(arr)) return hexa_array_new();
-    return rt_array_sort_by(arr, key_fn);
-}
-#else
 HexaVal hexa_array_sort_by(HexaVal arr, HexaVal key_fn) {
     if (!HX_IS_ARRAY(arr)) return hexa_array_new();
     int n = HX_ARR_LEN(arr);
@@ -4590,7 +4580,6 @@ HexaVal hexa_array_sort_by(HexaVal arr, HexaVal key_fn) {
     free(tmp_items); free(tmp_keys); free(keys);
     return result;
 }
-#endif
 
 // ── Exec ────────────────────────────────────────────
 // TL;DR #2 (2026-05-06): posix_spawnp fast path for shell-free exec().
