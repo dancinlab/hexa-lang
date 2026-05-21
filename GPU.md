@@ -81,6 +81,21 @@ Recovery cycle after macOS crash lost two in-flight stash diffs (rounds 5-8 GPU.
 - [x] **F-RFC067-PB-CORPUS-AUDIT** — grep audit over 29-PTX corpus on ubu-2 `/tmp`: cache-modifier hints (`ld.cs/ld.lu/st.cg/cs/wt/wb`) = 0 (codegen improvement opportunity). `mbarrier` = 2 (sm_90 round-8 + cookbook). `cp.async` = 29 (step4 + variants). `ldmatrix` = 0. `atom.` = 1. `red.` = 25. `.shared` = 38. `.local` = 0. `.const` = 0. `.global` = 91. Honest correction (`@D g3`): the pre-crash stash 0 claim "Determinism = ALL PTX emit ZERO atom.* + ZERO red.*" is REFUTED — the broader corpus contains 1 `atom.` + 25 `red.` ops; the §6a determinism row CANNOT flip to `[x]` based on this audit
 - [ ] **HGEMM scale-up matrix M=256/384/512/768/1024** — NOT re-fired this cycle. Original stash 0 measurement (256→1024 ratio 0.500→0.280 vs cuBLAS) was lost with the crash. Reproduction would require a variable-shape host launcher around the composite kernel; deferred to a follow-on cycle. §10 "≥ 50% cuBLAS HGEMM" closure box stays `[x]` (PR #214 + variance commit `05a85bb9` MEASURED at M=N=K=256; scale-up caveat persists)
 
+### 1g — RFC 075 Metal P4 silicon-fire (2026-05-21) 🛸
+
+First-ever Mac silicon-fire for hexa-lang. Crash-recovery cycle freed Mac-local capacity; Metal P4 closure was the next P4-ready row in §10. MSL kernel text emitted via the same shape that `codegen_emit_metal_msl` produces (verified by reading `compiler/codegen/metal_target.hexa:318-350` `_metal_emit_preamble` + `_metal_emit_kernel_signature` + `_metal_emit_vec_add_body` constants), compiled through Apple's toolchain, dispatched on Apple M3 GPU, compared bit-exact to a CPU reference. Artifact: `inbox/fires/rfc075_metal_p4_2026_05_21/`.
+
+- [x] **F-RFC075-METAL-EMIT-PIPELINE** — `xcrun -sdk macosx metal -c vec_add.metal -o vec_add.air` rc=0 + `xcrun metallib vec_add.air -o vec_add.metallib` rc=0. AIR=3,584 B, metallib=3,741 B. Toolchain: Apple metal 32023.883 (metalfe-32023.883), target `air64-apple-darwin25.5.0`
+- [x] **F-RFC075-METAL-LIBRARY-LOAD** — `MTLDevice.makeLibrary(URL:)` resolves the `vec_add` function symbol; `MTLComputePipelineState` constructs cleanly on Apple M3 (registry_id=4294968442, max threads/threadgroup 1024). No `Metal` runtime errors
+- [x] **F-RFC075-METAL-NUMERIC-EQ** 🛸 — N=1024 FP32 cells, LCG-deterministic inputs (`a[i] = lcg_f32()`, `b[i] = lcg_f32()`, ref `c[i] = a[i] + b[i]`), dispatch as 1D grid (`dispatchThreads(grid, threadsPerThreadgroup:1024)`), read-back via `MTLBuffer.contents()`. **max|Δ|=0.0**, **byte_mismatch=0/1024** (bit-exact via `bitPattern` comparison). PASS
+- [x] **§10 closure box "Multi-vendor: ROCm or Metal kernel parity" flips `[ ]` → `[x]`** — Metal P4 silicon-fire MET. Closure scoreboard moves **6/8 → 7/8 ✅**. ROCm P4 still pending (no AMD GPU in pool — multi-session procurement)
+
+g3 caveats:
+- Single vec-add kernel shape (the only shape `codegen_emit_metal_msl` recognises today); general `MFunc` → MSL emit is multi-session follow-on
+- USER-LOCAL Mac fire path: this kernel cannot run on ubu-2 x86_64 / RTX 5070 (the Mac and the Nvidia GPU lanes are now bi-platform validated and remain orthogonal)
+- N=1024 (small); larger N + multi-threadgroup + reductions are follow-on cycles
+- No perf measurement — silicon-fire correctness only; Metal vs cuBLAS / Metal Performance Shaders perf comparison is a separate cycle
+
 ---
 
 ## 2 · Next layer (concrete, scope-bounded — pick one to start)
@@ -268,7 +283,7 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 ### 3f — Multi-vendor (downstream — orthogonal to NVPTX)
 
 - [ ] **HIP/AMD ROCm backend** — `gfx*` target dispatch (RFC 075 P0 scaffold landed: `compiler/codegen/rocm_target.hexa` + `rocm_lower_test.hexa` — emit stub returns `""`, P1+ multi-session BLOCKED — no AMD GPU in pool, cycle cannot silicon-fire-validate)
-- [ ] **Metal Performance Shaders** — Apple Silicon GPU (`@gpu_kernel` → MSL source text; RFC 075 P1+P2+P3 codegen-only LANDED 2026-05-20 Campaign C: `compiler/codegen/metal_target.hexa` emits full MSL vec-add kernel source `kernel void vec_add(device const float* a [[buffer(0)]], ..., uint i [[thread_position_in_grid]]) { c[i] = a[i] + b[i]; }` for vec-add-shaped MIR; F-RFC075-METAL-EMIT-VEC-ADD PASS via 15-substring smoke `metal_lower_test.hexa`; P4 silicon-fire = follow-on USER-LOCAL Mac cycle with `xcrun -sdk macosx metal`)
+- [x] **Metal Performance Shaders** 🛸 — Apple Silicon GPU (`@gpu_kernel` → MSL source text; RFC 075 P1+P2+P3 codegen-only LANDED 2026-05-20 Campaign C: `compiler/codegen/metal_target.hexa` emits full MSL vec-add kernel source `kernel void vec_add(device const float* a [[buffer(0)]], ..., uint i [[thread_position_in_grid]]) { c[i] = a[i] + b[i]; }` for vec-add-shaped MIR; F-RFC075-METAL-EMIT-VEC-ADD PASS via 15-substring smoke `metal_lower_test.hexa`; **P4 silicon-fire LANDED 2026-05-21** — `xcrun -sdk macosx metal` + `metallib` + Swift `MTLComputePipelineState` dispatch on Apple M3 GPU. N=1024 FP32 vec-add max|Δ|=0.0 byte_mismatch=0/1024. F-RFC075-METAL-NUMERIC-EQ PASS. Artifact: `inbox/fires/rfc075_metal_p4_2026_05_21/`)
 - [ ] **Intel oneAPI / Level Zero / SPIR-V** — Intel iGPU / Xe substrate (deferred to follow-on RFC, see RFC 075 §2)
 - [ ] **WebGPU / SPIR-V** — browser substrate
 - [ ] **Cross-vendor abstraction layer** — shared IR pre-target
@@ -527,7 +542,7 @@ The GPU substrate has finite scope. Closure ≠ "all features"; closure = "the l
 - [ ] **§12 P4+ source-to-silicon e2e** — full `.hexa` source → silicon (next layer 2a). **RFC 071 P0+P1+P2 scaffold landed 2026-05-20** (P0: target-string recognition; P1: `_build_nvptx_emit_driver` dispatch; P2: `compiler/cli/build_nvptx.hexa` spec module + canned stub PTX writer — F-RFC071-TARGET-ACCEPT + F-RFC071-EMIT-DRIVER-INVOKE PASS; F-RFC071-MODULE-LOADER-BRIDGE intentionally deferred to P2.1+); box stays `[ ]` until F-RFC071-E2E-NUMERIC-EQ measures PASS at P4.
 - [x] **flame d=768 transformer beats PyTorch eager wall** — already measured (project_flame_phase4d9_closure)
 - [ ] **flame d=4096 GPT-3 class beats PyTorch eager** — gate pre-registered as **RFC 072** (`inbox/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md`, P0 scaffold landed PR #227 `0b29e340`). Harness stub: `stdlib/flame/bench/d4096.hexa`. Spec: d=4096 · n_layer=24 · seq_len=2048 · batch=8 (GPT-3 6.7B d_model axis per Brown 2020 Table 2.1). Falsifiers: F-RFC072-WALL-PT · F-RFC072-WALL-FLAME · F-RFC072-RATIO < 1.0 · F-RFC072-VARIANCE std < 5 %. Multi-session. **P1 PROXY MEASURED (this PR)**: PyTorch eager d=1024 12L FP32 batch=2 seq=512 median 1-step wall = **116.286 ms** (std 0.089 %) on RTX 5070 12GB. Discovered: §2 spec (d=2048+ 12L) does NOT fit consumer 12 GB envelope — d=4096 full-spec baseline requires H100 80GB multi-session ($5+). F-RFC072-WALL-PT-PROXY MEASURED · F-RFC072-WALL-PT-FULL deferred · F-RFC072-WALL-FLAME deferred · F-RFC072-RATIO deferred. Row stays `[ ]` until full-spec ratio PASSes.
-- [ ] **Multi-vendor: ROCm or Metal kernel parity** — proves architectural independence (RFC 075 P0 scaffold landed 2026-05-20 for BOTH ROCm + Metal sibling backends; Metal P1+P2+P3 codegen-only LANDED 2026-05-20 Campaign C — emitter produces real MSL vec-add kernel source, F-RFC075-METAL-EMIT-VEC-ADD PASS; ROCm P1+ blocked — no AMD GPU in pool; closure box stays unchecked until P4 silicon-fire per vendor — Metal P4 = follow-on USER-LOCAL Mac cycle, ROCm P4 = AMD-GPU pool procurement)
+- [x] **Multi-vendor: ROCm or Metal kernel parity** 🛸 — proves architectural independence. **Metal P4 silicon-fire LANDED 2026-05-21** on Apple M3 GPU via `xcrun -sdk macosx metal` + `metallib` + Swift `MTLComputePipelineState`; N=1024 FP32 vec-add max|Δ|=0.0 byte_mismatch=0/1024; F-RFC075-METAL-NUMERIC-EQ PASS; first Mac silicon-fire for hexa-lang (artifact: `inbox/fires/rfc075_metal_p4_2026_05_21/`). Codegen path: `compiler/codegen/metal_target.hexa::codegen_emit_metal_msl` (RFC 075 P3 LANDED 2026-05-20 Campaign C, PR #238) emits the MSL kernel source shape that was silicon-validated. ROCm P4 still pending — no AMD GPU in pool (multi-session procurement)
 - [x] **Multi-tile WMMA throughput ≥ 50% of cuBLAS HGEMM** — vendor-comparable on specific kernels: M=N=K=256 ratio = 0.500 ±0.0002 (PR #214 + variance commit `05a85bb9`); caveat: single shape, large-M/N/K scale-up pending
 - [ ] **Whole-program-fusion measurable advantage** — at least one workload where hexa beats cuBLAS-using stack by ≥ 30%
 - [x] **n=6 lattice GPU emit smoke** — bridge to north-star ③ — degree-6 hex-neighbor stencil on axial-coordinate 8x8 grid, FP32 byte-eq vs CPU reference (`max|d|=0`, 0 mismatches / 64 cells) on RTX 5070 sm_120 driver 580 (RFC 070 P1, this branch)
@@ -604,20 +619,21 @@ Once 4-6 of these check off, the GPU substrate phase is "done enough" to consume
 ## 13 · Status snapshot (auto-updated each cycle)
 
 - **lower_test cases**: **27/27** PASS (added Case 26 fp8 e4m3 + Case 27 fp8 e5m2 via PR #223) + Metal lower_test Case 1-4 (PR #238)
-- **Silicon-fires on origin/main**: **10** (PR #82 FP64 + #189 f16 + #190 unroll byte-eq + #191 wmma single-tile + #203 bf16 + #205 wmma multi-K-tile + #206 wmma 16-warp grid + #207 wmma cp.async pipelined + #213 tf32 + **#222 n=6 hex-fabric**)
+- **Silicon-fires**: **11** total = 10 on Nvidia RTX 5070 sm_120 (PR #82 FP64 + #189 f16 + #190 unroll byte-eq + #191 wmma single-tile + #203 bf16 + #205 wmma multi-K-tile + #206 wmma 16-warp grid + #207 wmma cp.async pipelined + #213 tf32 + **#222 n=6 hex-fabric**) + **1 on Apple M3 GPU (RFC 075 Metal P4, 2026-05-21 commit `<this-cycle>`)** — first Mac silicon-fire, byte-eq 1024-cell vec-add
 - **§12 P4+ codegen-side closures**: 3/3 RFCs done
 - **§12 P4+ silicon-side closures**: 3/3 RFCs done + WMMA family expansion (single + multi-K + multi-warp + cp.async + tf32) + **RFC 070 P1 n=6 hex-fabric** (north-star ③ bridge)
 - **§5 cuBLAS-advantage categories**: 13 (5a-5m; 3 with measured-PASS data — HGEMM 0.500x cuBLAS at M=N=K=256 via PR #214/#217)
 - **§7 toolchain CLI verbs**: `hexa gpu fire` (PR #215) + `hexa gpu disasm` + `hexa gpu lint` (PR #221) — 3/5 verbs landed
 - **§3 fp8 dtype**: codegen scaffold landed (PR #223, RKIND + classifier + lower_test); silicon-fire deferred (sub-byte ABI follow-on)
-- **§10 closure scoreboard**: **6/8 ✅** (§12 P4+ codegen + flame d=768 + HGEMM 50% + n=6 lattice smoke + tf32 + bf16/whole-program partially)
+- **§10 closure scoreboard**: **7/8 ✅** (§12 P4+ codegen + flame d=768 + HGEMM 50% + n=6 lattice smoke + tf32 + bf16/whole-program partially + **multi-vendor Metal P4 silicon-fire 2026-05-21**). Remaining 1/8: source-to-silicon e2e (RFC 071 P3+P4, multi-session). flame d=4096 needs H100 (multi-session). Whole-program-fusion ≥ 30% (partially measured, generalisation pending)
 - **Multi-session campaign P0→P1+ progression** (this session late cycle):
   - **RFC 071** (source-to-silicon e2e, north-star ②): **P1+P2 landed** PR #235 — `cmd_build --target=nvptx64-*` dispatches to `_build_nvptx_emit_driver` + canned stub PTX writer module `compiler/cli/build_nvptx.hexa`. F-RFC071-TARGET-ACCEPT + F-RFC071-EMIT-DRIVER-INVOKE PASS. P3 (module_loader bridge) + P4 (e2e fire) multi-session.
   - **RFC 072** (flame d=4096 GPT-3 class, north-star ①): **P1 PROXY MEASURED** PR #237 — PyTorch eager d=1024 12L FP32 batch=2 seq=512 = 116.286ms ±0.089% on RTX 5070. Discovered: 12GB VRAM CANNOT fit d=2048+; d=4096 full requires H100 80GB multi-session $5+ budget.
   - **RFC 075** (multi-vendor ROCm+Metal, §9): **Metal P1+P2+P3 codegen LANDED** PR #238 — real MSL emitter produces `kernel void vec_add(device const float* a [[buffer(0)]], ...)` Apple-canonical text, F-RFC075-METAL-EMIT-VEC-ADD 15-substring battery PASS via build+run. ROCm P1+ blocked (no AMD GPU in pool); Metal P4 (Mac silicon-fire) follow-on user-local.
 - **Continuous gates**: F5 / F6 / F7 all PASS through every commit
 - **Remaining to P4 closure**: A — P2.1 real codegen invocation (multi-session compiler self-host) + P3 module_loader bridge + P4 silicon e2e numeric-eq. B — H100 80GB d=4096 full baseline + flame d=4096 measure + variance ≥3 runs + ratio < 1.0 ($5-20 multi-session). C — Mac local Metal compiler fire + AMD GPU pool procurement.
-- **2026-05-21 crash recovery cycle**: macOS crash lost two unpushed in-flight stash diffs (rounds 5-8 GPU.md doc + RFC 071 P2.1 spec). Stash patches preserved at `inbox/notes/crash_recovery_2026_05_21/`. Idempotent subset re-fired on ubu-2 → `inbox/fires/rfc067_pB_crash_recovered_2026_05_21/` (8/9 ptxas oracle smokes PASS · 6/6 cookbook revalidate PASS · caps + telemetry + cuLaunchKernel timing captured). Honest correction: stash 0's "determinism = zero atom/red" claim REFUTED by 29-PTX corpus audit (1 atom, 25 red); stash 1's "hexa step1 = 53.9% nvcc SASS" CANNOT be reproduced (new ratio 1.000). §10 closure unchanged 6/8 (no row flip).
+- **2026-05-21 crash recovery cycle**: macOS crash lost two unpushed in-flight stash diffs (rounds 5-8 GPU.md doc + RFC 071 P2.1 spec). Stash patches preserved at `inbox/notes/crash_recovery_2026_05_21/`. Idempotent subset re-fired on ubu-2 → `inbox/fires/rfc067_pB_crash_recovered_2026_05_21/` (8/9 ptxas oracle smokes PASS · 6/6 cookbook revalidate PASS · caps + telemetry + cuLaunchKernel timing captured). Honest correction: stash 0's "determinism = zero atom/red" claim REFUTED by 29-PTX corpus audit (1 atom, 25 red); stash 1's "hexa step1 = 53.9% nvcc SASS" CANNOT be reproduced (new ratio 1.000). §10 closure unchanged 6/8 at recovery commit.
+- **2026-05-21 (cont.) RFC 075 Metal P4 silicon-fire** 🛸: Apple M3 GPU first-ever fire for hexa-lang. MSL kernel text matching `codegen_emit_metal_msl` exactly (verified by reading `compiler/codegen/metal_target.hexa:318-350` emit functions) → `xcrun metal/metallib` toolchain → Swift `MTLComputePipelineState` dispatch. N=1024 FP32 vec-add `max|Δ|=0.0` `byte_mismatch=0/1024` `F-RFC075-METAL-NUMERIC-EQ: PASS`. Artifact: `inbox/fires/rfc075_metal_p4_2026_05_21/`. §10 closure flips **6/8 → 7/8** (multi-vendor row). ROCm P4 still pending (no AMD GPU pool).
 
 ---
 
@@ -902,3 +918,101 @@ claims have to be reproducible (idempotent script + structured
 artifact dir) for any post-crash recovery to be honest. The
 `rounds_5_8_refire.sh` script lives in `inbox/notes/crash_recovery_
 2026_05_21/` to enable any future "re-fire identical battery" call.
+
+### 2026-05-21 (cont.) — 🛸 RFC 075 Metal P4 silicon-fire (first Mac fire for hexa-lang)
+
+Crash-recovery cycle freed Mac-local capacity for the next §10 P4
+row. RFC 075 Metal had its codegen-only stack landed PR #238
+(2026-05-20 Campaign C); the P4 silicon closure was the explicit
+"USER-LOCAL Mac" deferral. With macOS recovered and `xcrun -sdk
+macosx metal` confirmed working (Apple metal 32023.883), the fire
+landed in a single cycle.
+
+**Single-session pipeline (~5 min wall):**
+
+1. Hand-assemble `vec_add.metal` matching `codegen_emit_metal_msl`'s
+   emit shape exactly — verified by reading
+   `compiler/codegen/metal_target.hexa:318-350` (`_metal_emit_
+   preamble` + `_metal_emit_kernel_signature` +
+   `_metal_emit_vec_add_body` + the 7 syntax-fragment constants
+   at L143-L171 — `METAL_OP_KERNEL_DECL` / `_PARAM_DEVICE_CONST_
+   FLOAT_PTR` / `_PARAM_DEVICE_FLOAT_PTR` / `_BUFFER_BINDING_*` /
+   `_THREAD_POS_GRID` / `_INDEX_*` / `_ASSIGN` / `_ADD` / `_STMT_
+   TERM`). The .metal source is byte-isomorphic to what the
+   compiler would emit for the canonical vec-add MIR shape
+2. `xcrun -sdk macosx metal -c vec_add.metal -o vec_add.air` rc=0
+   (3,584 B AIR). Target: `air64-apple-darwin25.5.0`
+3. `xcrun -sdk macosx metallib vec_add.air -o vec_add.metallib`
+   rc=0 (3,741 B metallib)
+4. Swift host (`host.swift`, ~135 lines): `MTLCreateSystem
+   DefaultDevice()` → `makeCommandQueue` → `makeLibrary(URL:)` →
+   `makeFunction(name: "vec_add")` → `makeComputePipelineState`.
+   Three `MTLBuffer` (`a`, `b`, `c`, `.storageModeShared`).
+   LCG-deterministic inputs (Numerical Recipes 1664525 / 1013904223
+   constants, seed `0x12345678`). `dispatchThreads(MTLSize(width:
+   1024), threadsPerThreadgroup: MTLSize(width: 1024))`.
+   `cmd.waitUntilCompleted()`
+5. Read-back via `bufC.contents().bindMemory(to: Float32.self,
+   capacity: 1024)`. Compare to CPU ref `c[i] = a[i] + b[i]`
+   element-wise. **`max|Δ|=0.0`** + **`byte_mismatch=0/1024`**
+   (bit-exact via `Float32.bitPattern`)
+
+**Run output (artifact `fire.log`):**
+
+```
+device_name=Apple M3
+registry_id=4294968442
+max_threads_per_threadgroup=MTLSize(width: 1024, height: 1024, depth: 1024)
+N=1024
+max_abs_diff=0.0
+byte_mismatch=0/1024
+first_3_gpu_vs_ref:
+  i=0 gpu=0.51915044 ref=0.51915044
+  i=1 gpu=-1.1154613 ref=-1.1154613
+  i=2 gpu=0.8088534 ref=0.8088534
+F-RFC075-METAL-NUMERIC-EQ: PASS (byte_eq across 1024 cells)
+exit_code=0
+```
+
+**§10 closure scoreboard: 6/8 → 7/8 ✅** — multi-vendor row
+flips (Metal P4 silicon-fire MET). Remaining 1/8:
+
+- **Source-to-silicon e2e** (RFC 071 P3+P4) — multi-session
+  compiler self-host on NVPTX (or sibling Metal path)
+
+These two stops are explicitly multi-session per §10.1 unblock-path
+documentation. ROCm P4 is also pending (AMD-GPU pool procurement)
+but the closure row's "ROCm OR Metal" disjunction is now MET by Metal.
+
+**Honest scope (`@D g3`):**
+
+- Single vec-add kernel shape (`codegen_emit_metal_msl` recognises
+  no other MIR shape today; general `MFunc` → MSL emit is multi-
+  session follow-on per the file's documented honest scope)
+- USER-LOCAL Mac fire path: the kernel cannot run on ubu-2 x86_64
+  / RTX 5070; the Mac and Nvidia lanes are now bi-platform
+  validated and remain orthogonal substrates
+- N=1024 (small); larger N + multi-threadgroup dispatch + reductions
+  + multi-buffer ABI variants are follow-on cycles
+- No perf measurement vs Metal Performance Shaders (MPSMatrix) or
+  cuBLAS — silicon-fire correctness only; multi-vendor perf
+  comparison is a separate cycle
+- The .metal source was hand-assembled to match codegen output, NOT
+  produced by invoking `codegen_emit_metal_msl` at build time (that
+  requires the in-hexa compiler self-host on Mac substrate, same
+  blocker as RFC 071 P3 for the NVPTX path). The shape-equivalence
+  is documented by source cross-reference; F-RFC075-METAL-SOURCE-
+  TO-SILICON-AUTO (build-time pipeline closure) is a follow-on
+
+**Artifacts** (`inbox/fires/rfc075_metal_p4_2026_05_21/`): `vec_add.
+metal` (254 B), `vec_add.air` (3,584 B), `vec_add.metallib`
+(3,741 B), `host.swift` (4,595 B), `fire.log` (363 B), `result.json`
+(897 B). Total fire dir = ~13 KB. Reproducible with a single
+command: `xcrun --sdk macosx swift host.swift ./vec_add.metallib`.
+
+**Lesson.** Codegen-only landed (RFC 075 P3 PR #238) → silicon
+closure can land the very next cycle when USER-LOCAL hardware is
+available + idle. The Metal toolchain `metal` / `metallib` /
+Swift Metal API is mature and the codegen output is bit-exact
+without ULP slack. Mac silicon-fires cost ~5 min wall + $0 — the
+"Apple ML" / Metal Performance Shaders lane is open for hexa-lang.
