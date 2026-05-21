@@ -1094,6 +1094,23 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 48: rt_str_trim_start moves to hexa source
+
+- ✅ `rt_str_trim_start` was previously C-only in self/runtime.c:2970
+  (codegen emits it directly; no `hexa_str_*` shim exists per the
+  M1-lite Step-5 retirement). The C body is now wrapped in
+  `#ifndef HEXA_HAS_HEXA_RT_STDLIB`; a hexa-source equivalent in
+  `stdlib/runtime/ctype.hexa` provides the symbol in the stdlib build
+- Whitespace alphabet: space / tab / LF / CR (bytes 32/9/10/13).
+  Hexa-side uses `byte_len + byte_at` + `s.substring(a, n)` so the
+  allocation is the perf-31 single-shot path (vs C body's strdup)
+- First instance in this campaign of "an existing rt_* C body becomes
+  hexa-source under the dispatch switch" — pattern reusable for
+  `rt_str_trim`, `rt_str_trim_end`, `rt_str_to_upper`, `rt_str_to_lower`
+  in subsequent cycles
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,416 B
+
 ### 2026-05-21 — step 3 cycle 47: hexa_str_chars → rt_str_chars (UTF-8 codepoint walker)
 
 - ✅ `hexa_str_chars` (self/runtime_core.c:4072) ported. Returns an

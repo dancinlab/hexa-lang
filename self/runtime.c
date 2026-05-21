@@ -2967,12 +2967,16 @@ HexaVal hexa_str_parse_float(HexaVal s) {
 
 // M1 full · str_ext Step 5 (hxa-20260423-003): rt_str_trim_start/end —
 // codegen emits rt_str_* directly; hexa_str_trim_start/end shims retired.
+// Step-3 cycle 48 — rt_str_trim_start moves to hexa source under
+// HEXA_HAS_HEXA_RT_STDLIB. The C body stays for the no-stdlib path.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal rt_str_trim_start(HexaVal s) {
     if (!HX_IS_STR(s)) return s;
     char* p = HX_STR(s);
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
     return hexa_str_own(hxlcl_strdup(p));
 }
+#endif
 
 HexaVal rt_str_trim_end(HexaVal s) {
     if (!HX_IS_STR(s)) return s;

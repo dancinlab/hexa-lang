@@ -43,6 +43,24 @@ pub fn rt_str_bytes(s: string) -> [int] {
     return out
 }
 
+// Step 3 cycle 48 — strip leading whitespace (space, tab, LF, CR).
+// Replaces the C-direct rt_str_trim_start in self/runtime.c:2970 when
+// HEXA_HAS_HEXA_RT_STDLIB is defined. The C body uses strdup; this
+// uses the substring builtin (perf-31 single-shot alloc).
+pub fn rt_str_trim_start(s: string) -> string {
+    let n = byte_len(s)
+    let mut a = 0
+    while a < n {
+        let b = s.byte_at(a)
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            a = a + 1
+        } else {
+            break
+        }
+    }
+    return s.substring(a, n)
+}
+
 // Step 3 cycle 47 — UTF-8 codepoint walker. Returns an array of
 // 1-codepoint strings ("한글hi".chars().len() == 4, not 8). ASCII
 // behaviour is unchanged (codepoint == byte for ASCII). Mirrors the
