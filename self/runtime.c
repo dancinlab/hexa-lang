@@ -2992,6 +2992,11 @@ HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end) {
     return hexa_str_own_with_len(hxlcl_strndup(HX_STR(s) + a, b - a), (size_t)(b - a));
 }
 
+// Step-3 cycle 35 port — float fast-path for the array branch. The str
+// branch is polymorphic (byte-indexed substring) and stays in C; the
+// array branch dispatches to rt_array_slice_float when the array is
+// all-float. Mixed-type arrays stay on the C body.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end) {
     // 2026-05-19 parity-gate t45b — polymorphic slice + 1-arg form.
     // (1) HX_IS_VOID(end) ⇒ 1-arg `.slice(start)` form — default end to
@@ -3026,6 +3031,42 @@ HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end) {
     for (int i = a; i < b; i++) out = hexa_array_push(out, HX_ARR_ITEMS(arr)[i]);
     return out;
 }
+#else
+static int _arr_all_float(HexaVal arr);  /* forward decl — defined later */
+extern HexaVal rt_array_slice_float(HexaVal arr, HexaVal start, HexaVal end);
+HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end) {
+    if (HX_IS_STR(arr)) {
+        int n = (int)HX_STRLEN(arr);
+        int a = (int)HX_INT(start);
+        int b = HX_IS_VOID(end) ? n : (int)HX_INT(end);
+        if (a < 0) a += n;
+        if (b < 0) b += n;
+        if (a < 0) a = 0;
+        if (b > n) b = n;
+        if (a > b) return hexa_str("");
+        int len = b - a;
+        char* buf = (char*)malloc(len + 1);
+        if (!buf) return hexa_str("");
+        int j = 0;
+        while (j < len) { buf[j] = HX_STR(arr)[a + j]; j++; }
+        buf[len] = 0;
+        return hexa_str_own(buf);
+    }
+    if (!HX_IS_ARRAY(arr)) return hexa_array_new();
+    int n = HX_ARR_LEN(arr);
+    int64_t a = HX_INT(start);
+    int64_t b = HX_IS_VOID(end) ? n : HX_INT(end);
+    if (_arr_all_float(arr)) {
+        return rt_array_slice_float(arr, hexa_int(a), hexa_int(b));
+    }
+    if (a < 0) a = 0;
+    if (b > n) b = n;
+    if (a > b) a = b;
+    HexaVal out = hexa_array_new();
+    for (int64_t i = a; i < b; i++) out = hexa_array_push(out, HX_ARR_ITEMS(arr)[i]);
+    return out;
+}
+#endif
 
 HexaVal __hexa_range_array(HexaVal start, HexaVal end, int inclusive) {
     HexaVal out = hexa_array_new();

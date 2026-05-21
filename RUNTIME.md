@@ -1056,3 +1056,17 @@ it operates on HexaVal tags from C.
   forward decl already in scope from the earlier cycle-33 edit
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,664 B
+
+### 2026-05-21 — step 3 cycle 35: hexa_array_slice → rt_array_slice_float
+
+- ✅ `hexa_array_slice` (self/runtime.c:2995) array branch ported.
+  Float fast-path dispatches to `rt_array_slice_float` when the array
+  is all-float. Mixed-type arrays stay on the polymorphic C body
+- Polymorphic str branch (1-arg form + negative-index normalization)
+  stays in C unchanged — `rt_array_slice_float` only owns the array
+  case
+- Added an in-branch `static int _arr_all_float(HexaVal arr);` forward
+  decl — slice (L2995) sits ~80 lines above the cycle-33 forward decl
+  (L3081), so its `#else` branch needs its own
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,712 B
