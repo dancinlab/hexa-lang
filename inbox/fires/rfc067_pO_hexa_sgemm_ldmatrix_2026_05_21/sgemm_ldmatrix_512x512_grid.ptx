@@ -1,60 +1,19 @@
-// RFC 067 PO perf HGEMM hexa-emit + 2-stage cp.async pipeline + ldmatrix.x4 -- M=N=K=512.
+// RFC 067 PO perf HGEMM hexa-emit + cp.async pipeline + ldmatrix.x4 + mma.m16n8k16 -- M=N=K=512.
 //
-// Same WMMA shape + tile geometry as PK (gen_sgemm_multistage_ptx.py), but
-// switched to FP16 inputs (m16n16k16.f16) so we can use the native
-// ldmatrix.sync.aligned.x4.m8n8.shared.b16 instruction for shared->frag
-// transfer (replaces wmma.load.{a,b}.shared.f16). The K=k+1 cp.async
-// prefetch is issued before the K=k mma, same as PK.
+// Path B (FP16): switched from PK's TF32+wmma.load.shared to FP16+ldmatrix.x4
+// for shared->frag transfer, paired with the modern mma.sync.m16n8k16 (which
+// has matching 4-b32-A / 2-b32-B fragment shape -- ideal ldmatrix companion).
 //
 // Layout:
 //   A row-major     [M=512 x K=512] f16. Row stride = 512 elem = 1024 B.
 //   B col-major     [K=512 x N=512] f16. Col stride = 512 elem = 1024 B.
 //   C row-major out [M=512 x N=512] f32. Row stride = 512 elem = 2048 B.
-//
-// Per-CTA base addresses:
-//   A_cta = a + ctaid.y * 65536       (64 rows of A)
-//   B_cta = b + ctaid.x * 65536       (64 cols of B, col-major contiguous)
-//   C_cta = c + ctaid.y * 131072 + ctaid.x * 256
-//
-// Per-warp offsets (warp = tid.x>>5, m_tile = warp>>2, n_tile = warp&3):
-//   A_warp_smem(slot) = _tg_a + slot * 2048 + m_tile * 512
-//     (m_tile * 16 rows * 16 K-elem * 2 B = m_tile * 512 B)
-//   B_warp_smem(slot) = _tg_b + slot * 2048 + n_tile * 512
-//   C_warp     = C_cta + m_tile * 32768 + n_tile * 64
-//
-// Cooperative load (per K-step k, slot = k & 1):
-//   thread t = tid.x in [0, 512):
-//     row    = t >> 3   in [0, 64)
-//     col2   = t & 7    in [0, 8)
-//     intra_slab_off = row * 32 + col2 * 4    (target byte within 2048-B slab)
-//     A_g = A_cta + row * 1024 + (k * 16 + col2 * 2) * 2
-//     B_g = B_cta + row * 1024 + (k * 16 + col2 * 2) * 2
-//     cp.async.ca.shared.global [_tg_a + slot*2048 + intra_slab_off], [A_g], 4
-//     cp.async.ca.shared.global [_tg_b + slot*2048 + intra_slab_off], [B_g], 4
-//   cp.async.commit_group
-//
-// ldmatrix addressing (warp-uniform after sync):
-//   Each warp covers a 16x16 A sub-tile = 4 8x8 b16 matrices.
-//   Lanes 0..7   -> mat0 rows 0..7  : 8 elements per row, 16 B per row
-//   Lanes 8..15  -> mat1 rows 0..7  (cols 8..15 of A sub-tile)
-//   Lanes 16..23 -> mat2 rows 0..7  (rows 8..15 cols 0..7)
-//   Lanes 24..31 -> mat3 rows 0..7  (rows 8..15 cols 8..15)
-//
-//   For row-major A sub-tile of stride 16 fp16 = 32 B in shared mem:
-//     lane L: group g = L >> 3, row_in_group r = L & 7
-//             g==0: row = r,      col = 0   -> off = r*32 +  0
-//             g==1: row = r,      col = 8   -> off = r*32 + 16
-//             g==2: row = r+8,    col = 0   -> off = (r+8)*32 +  0
-//             g==3: row = r+8,    col = 8   -> off = (r+8)*32 + 16
-//   For B col-major sub-tile (same byte layout in shared if we stored cols),
-//   we use .trans to apply the transpose at ldmatrix time. Same lane-addr
-//   formula, the instruction handles the layout swap.
 
 .version 8.0
 .target sm_90
 .address_size 64
 
-.shared .align 16 .b8 _tg_a[4096];   // 2 slabs * 64 rows * 16 elem * 2 B
+.shared .align 16 .b8 _tg_a[4096];
 .shared .align 16 .b8 _tg_b[4096];
 
 .visible .entry sgemm_ldmatrix_512x512_grid (
@@ -65,7 +24,7 @@
 )
 {
     .reg .u64 %rd<32>;
-    .reg .u32 %r<64>;
+    .reg .u32 %r<80>;
     .reg .pred %p1;
     .reg .pred %pmore;
     .reg .b32 %ra<4>;
@@ -86,9 +45,6 @@
     and.b32 %r4, %r2, 3;        // n_tile = warp & 3
     and.b32 %r50, %r1, 31;      // lane id
 
-    // Cooperative-load indices (per thread):
-    //   row    = tid.x >> 3   in [0, 64)
-    //   col2   = tid.x & 7    in [0, 8)
     shr.u32 %r12, %r1, 3;       // row_load
     and.b32 %r13, %r1, 7;       // col2
 
@@ -102,57 +58,45 @@
     cvt.u64.u32 %rd5, %r5;
     add.u64 %rd11, %rd1, %rd5;
 
-    // A load-offset (per-thread, w.r.t. A_cta, excludes k_step):
-    //   row * 1024 + col2 * 4
+    // A load-offset = row * 1024 + col2 * 4
     mul.lo.u32 %r14, %r12, 1024;
     mul.lo.u32 %r15, %r13, 4;
     add.u32 %r14, %r14, %r15;
     cvt.u64.u32 %rd14, %r14;
-    add.u64 %rd14, %rd10, %rd14;     // %rd14 = A_cta + row*1024 + col2*4
+    add.u64 %rd14, %rd10, %rd14;
 
     cvt.u64.u32 %rd15, %r14;
-    add.u64 %rd15, %rd11, %rd15;     // %rd15 = B_cta + row*1024 + col2*4
+    add.u64 %rd15, %rd11, %rd15;
 
-    // Per-thread shared-mem store offset within ONE slab (load-side):
-    //   row * 32 + col2 * 4
+    // Intra-slab smem store offset = row * 32 + col2 * 4
     shl.b32 %r16, %r12, 5;
     mul.lo.u32 %r17, %r13, 4;
-    add.u32 %r16, %r16, %r17;       // %r16 in [0..2044]; intra-slab load offset
+    add.u32 %r16, %r16, %r17;
 
-    mov.u32 %r18, _tg_a;            // smem A base
-    mov.u32 %r20, _tg_b;            // smem B base
+    mov.u32 %r18, _tg_a;
+    mov.u32 %r20, _tg_b;
 
-    // Per-warp shared-mem READ base offsets relative to slab base:
-    //   m_tile * 16 rows * 32 B = m_tile * 512
-    mul.lo.u32 %r22, %r3, 512;      // warp-A within-slab offset
-    mul.lo.u32 %r24, %r4, 512;      // warp-B within-slab offset
+    // Per-warp shared-mem READ base offsets: m_tile * 512 / n_tile * 512
+    mul.lo.u32 %r22, %r3, 512;
+    mul.lo.u32 %r24, %r4, 512;
 
-    // ldmatrix per-lane address calculation (within the per-warp 16x16 sub-tile):
-    //   lane L: g = L >> 3, r = L & 7
-    //   ld_off_in_subtile = ((g & 2) << 4 + r) << 5 + ((g & 1) << 4)
-    //                     = ((g >> 1) * 8 + r) * 32 + (g & 1) * 16
-    //   simpler: row_part = (g & 2) * 4 = bits 0..7 select rows 0..7 or 8..15
-    //            col_part = (g & 1) * 16
-    //   off = ((g >> 1) * 8 + r) * 32 + (g & 1) * 16
-    //
-    // Implement as:
-    //   g = lane >> 3
-    //   r = lane & 7
-    //   row_hi = (g >> 1) * 8      // 0 if g<2 else 8
-    //   row_idx = row_hi + r       // 0..15
-    //   col_off = (g & 1) * 16     // 0 or 16
+    // ldmatrix per-lane intra-subtile address:
+    //   g = lane >> 3; r = lane & 7
+    //   row_idx = (g >> 1) * 8 + r   in [0..15]
+    //   col_off = (g & 1) * 16       (0 or 16)
     //   ld_off  = row_idx * 32 + col_off
-    shr.u32 %r51, %r50, 3;          // g
-    and.b32 %r52, %r50, 7;          // r
-    shr.u32 %r53, %r51, 1;          // g >> 1   = 0 or 1
-    shl.b32 %r54, %r53, 3;          // (g >> 1) * 8 = row_hi
-    add.u32 %r55, %r54, %r52;       // row_idx
-    and.b32 %r56, %r51, 1;          // g & 1
-    shl.b32 %r57, %r56, 4;          // (g & 1) * 16 = col_off
-    shl.b32 %r58, %r55, 5;          // row_idx * 32
-    add.u32 %r59, %r58, %r57;       // ld_off  (per-lane intra-subtile byte off)
+    shr.u32 %r51, %r50, 3;
+    and.b32 %r52, %r50, 7;
+    shr.u32 %r53, %r51, 1;
+    shl.b32 %r54, %r53, 3;
+    add.u32 %r55, %r54, %r52;
+    and.b32 %r56, %r51, 1;
+    shl.b32 %r57, %r56, 4;
+    shl.b32 %r58, %r55, 5;
+    add.u32 %r59, %r58, %r57;
 
-    // C base offset
+    // C base address calculation for this warp's 16x16 output tile.
+    //   C_warp = c + ctaid.y * 131072 + m_tile * 32768 + ctaid.x * 256 + n_tile * 64
     mul.lo.u32 %r5, %r10, 131072;
     mul.lo.u32 %r6, %r3, 32768;
     add.u32 %r7, %r5, %r6;
@@ -161,8 +105,9 @@
     mul.lo.u32 %r8, %r4, 64;
     add.u32 %r7, %r7, %r8;
     cvt.u64.u32 %rd6, %r7;
-    add.u64 %rd12, %rd2, %rd6;
+    add.u64 %rd12, %rd2, %rd6;     // %rd12 = C_warp_base (top-left of warp's 16x16)
 
+    // Init accumulator (8 f32 = 2 m16n8 calls' worth)
     mov.f32 %fc0, 0f00000000;
     mov.f32 %fc1, 0f00000000;
     mov.f32 %fc2, 0f00000000;
@@ -172,24 +117,21 @@
     mov.f32 %fc6, 0f00000000;
     mov.f32 %fc7, 0f00000000;
 
-    cvt.s32.s64 %r0, %rd3;          // K_TILES remaining
+    cvt.s32.s64 %r0, %rd3;
 
     // Pipeline state:
-    //   %r30 = current slot (0/1)
-    //   %r0  = remaining iterations
-    mov.u32 %r30, 0;
+    mov.u32 %r30, 0;             // current slot
 
-    // ---- PROLOGUE: issue K=0 prefetch into slot 0 ----
     setp.le.s32 %p1, %r0, 0;
     @%p1 bra $epilogue;
 
+    // ---- PROLOGUE: issue K=0 prefetch into slot 0 ----
     add.u32 %r40, %r18, %r16;
     cp.async.ca.shared.global [%r40], [%rd14], 4;
     add.u32 %r41, %r20, %r16;
     cp.async.ca.shared.global [%r41], [%rd15], 4;
     cp.async.commit_group;
 
-    // Advance global pointers for next prefetch (K=1): +16 fp16 = 32 B per row.
     add.u64 %rd14, %rd14, 32;
     add.u64 %rd15, %rd15, 32;
 
@@ -197,20 +139,16 @@ $kloop:
     setp.le.s32 %p1, %r0, 0;
     @%p1 bra $epilogue;
 
-    // If more iterations remain (i.e. %r0 > 1), kick next prefetch into other slot.
     setp.gt.s32 %pmore, %r0, 1;
     @!%pmore bra $no_prefetch;
 
-    // next_slot = current_slot ^ 1
     xor.b32 %r31, %r30, 1;
-    shl.b32 %r32, %r31, 11;          // next_slot * 2048
+    shl.b32 %r32, %r31, 11;
 
-    // A next dst = _tg_a + next_slot*2048 + %r16
     add.u32 %r40, %r18, %r32;
     add.u32 %r40, %r40, %r16;
     cp.async.ca.shared.global [%r40], [%rd14], 4;
 
-    // B next dst = _tg_b + next_slot*2048 + %r16
     add.u32 %r41, %r20, %r32;
     add.u32 %r41, %r41, %r16;
     cp.async.ca.shared.global [%r41], [%rd15], 4;
@@ -225,34 +163,41 @@ $no_prefetch:
 $consume:
     bar.sync 0;
 
-    // Load A/B from CURRENT slot (= %r30) using ldmatrix.x4.
-    shl.b32 %r34, %r30, 11;          // current_slot * 2048
+    // Slab base + per-warp 16x16 subtile offset.
+    shl.b32 %r34, %r30, 11;
     add.u32 %r35, %r18, %r34;
-    add.u32 %r35, %r35, %r22;        // slab-A base + warp offset (= 16x16 A sub-tile start)
+    add.u32 %r35, %r35, %r22;
     add.u32 %r36, %r20, %r34;
-    add.u32 %r36, %r36, %r24;        // slab-B base + warp offset
+    add.u32 %r36, %r36, %r24;
 
-    // Per-lane addresses:
-    add.u32 %r60, %r35, %r59;        // A lane address
-    add.u32 %r61, %r36, %r59;        // B lane address
+    add.u32 %r60, %r35, %r59;
+    add.u32 %r61, %r36, %r59;
 
-    // ldmatrix.x4 -- 4 8x8 b16 matrices into ra0/ra1/ra2/ra3 (per thread).
+    // ldmatrix.x4 A row-layout (4 b32/lane = 16x16 A frag).
     ldmatrix.sync.aligned.m8n8.x4.shared.b16
         {%ra0, %ra1, %ra2, %ra3}, [%r60];
 
-    // ldmatrix.x4.trans for B (col-major in shared, transposed to wmma.b col frag).
+    // ldmatrix.x4.trans B (col-layout in shared, transposed for col B-frag).
     ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
         {%rb0, %rb1, %rb2, %rb3}, [%r61];
 
-    wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32
-        {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7},
+    // 2x mma.m16n8k16 covering 16x16 warp output.
+    // n=0..7 half:  uses A frag full + B frag halves rb0,rb2
+    // n=8..15 half: uses A frag full + B frag halves rb1,rb3
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc0, %fc1, %fc2, %fc3},
         {%ra0, %ra1, %ra2, %ra3},
-        {%rb0, %rb1, %rb2, %rb3},
-        {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7};
+        {%rb0, %rb2},
+        {%fc0, %fc1, %fc2, %fc3};
+
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rb1, %rb3},
+        {%fc4, %fc5, %fc6, %fc7};
 
     bar.sync 0;
 
-    // Advance global pointers for next iter's K=k+1 prefetch.
     add.u64 %rd14, %rd14, 32;
     add.u64 %rd15, %rd15, 32;
 
@@ -261,7 +206,38 @@ $consume:
     bra $kloop;
 
 $epilogue:
-    wmma.store.d.sync.aligned.row.m16n16k16.global.f32
-        [%rd12], {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7}, 512;
+    // mma.m16n8k16 D layout (per lane L):
+    //   group = L >> 2 (0..7); tig = L & 3 (0..3)
+    //   d0 -> (row=group,     col=2*tig + 0)
+    //   d1 -> (row=group,     col=2*tig + 1)
+    //   d2 -> (row=group + 8, col=2*tig + 0)
+    //   d3 -> (row=group + 8, col=2*tig + 1)
+    // Output stride per row = 2048 bytes (full N stride).
+    //
+    // Compute lane-specific store base.
+    shr.u32 %r62, %r50, 2;       // group = lane >> 2
+    and.b32 %r63, %r50, 3;       // tig   = lane & 3
+    // row_a = group;  row_b = group + 8;  col_pair = 2*tig
+    mul.lo.u32 %r64, %r62, 2048;   // row_a stride in C
+    shl.b32 %r65, %r63, 3;          // 2*tig * 4 B = 8*tig
+    add.u32 %r66, %r64, %r65;       // row_a base byte offset
+    cvt.u64.u32 %rd20, %r66;
+    add.u64 %rd20, %rd12, %rd20;    // lane store addr (row=group, col=2*tig)
+
+    // For row_b = group + 8 add 8 * 2048 bytes
+    add.u64 %rd21, %rd20, 16384;
+
+    // First mma's D (fc0..fc3): n=0..7 half. cols in [0..7] -> 2*tig in [0..7]. OK.
+    st.global.f32 [%rd20 +     0], %fc0;
+    st.global.f32 [%rd20 +     4], %fc1;
+    st.global.f32 [%rd21 +     0], %fc2;
+    st.global.f32 [%rd21 +     4], %fc3;
+
+    // Second mma's D (fc4..fc7): n=8..15 half. cols in [8..15] -> +32 B offset.
+    st.global.f32 [%rd20 +    32], %fc4;
+    st.global.f32 [%rd20 +    36], %fc5;
+    st.global.f32 [%rd21 +    32], %fc6;
+    st.global.f32 [%rd21 +    36], %fc7;
+
     ret;
 }
