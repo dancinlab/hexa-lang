@@ -109,7 +109,14 @@ fn _gate_run_one(label: str, v_path: str, top: str, lib_path: str) -> GateRun {
     stages = stages.push(GateStage { name: label + ":clean_multidriver", ok: r5b.ok, detail: r5b.message })
     let r6 = pass_techmap_sky130(r5b.design)
     stages = stages.push(GateStage { name: label + ":techmap",    ok: r6.ok, detail: r6.message })
-    let r7 = pass_dfflibmap_sky130(r6.design)
+    // rfc_006 §5 d4 closure (2026-05-22) — ABC-style cut-and-remap on
+    // the post-techmap RTLIL. Greedy pattern lift of mux2_1 chains
+    // (const-fold + mux4_2) and inv_1-rooted aoi22 trees. See
+    // passes.hexa `pass_cut_and_remap` header for the architectural
+    // contract + Piece-2 honest scope discussion.
+    let r6b = pass_cut_and_remap(r6.design)
+    stages = stages.push(GateStage { name: label + ":cut_and_remap", ok: r6b.ok, detail: r6b.message })
+    let r7 = pass_dfflibmap_sky130(r6b.design)
     stages = stages.push(GateStage { name: label + ":dfflibmap",  ok: r7.ok, detail: r7.message })
     // stage 7 — abc_map (D18)
     let r8 = abc_map(r7.design, lib_path, "/tmp/_hexa_yosys_gate_" + label)

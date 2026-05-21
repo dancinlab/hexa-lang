@@ -3232,6 +3232,451 @@ fn pass_proc_mux(d: Design) -> PassResult {
     }
 }
 
+// ─── cut-and-remap (rfc_006 §5 d4 closure) ───────────────────────────────
+//
+// @rfc rfc_006 §5 d4-closure (2026-05-22) — architectural pass analogous
+//   to ABC's `map` internal cut enumeration. After `pass_techmap_sky130`
+//   has lowered every generic RTLIL cell to its 1-bit SKY130 form, the
+//   substrate yosys reference flow runs ABC's cut-enumeration + area-
+//   driven rewrite to fold cascades of 2-input gates into denser
+//   substrate cells (mux4_2, a22oi_1, a31oi_1, etc.).
+//
+//   Our flow lacks an equivalent layer: Piece-2's `_passes_fuse_complex_
+//   cells` only fires on tree-shaped fan-ins that the substrate yosys
+//   front-end produces, but the router_d4 RTL is dominated by cascaded
+//   priority chains (one mux's X feeds the next mux's A0) — those never
+//   match the Piece-2 patterns. Piece-2 closure note (2026-05-22)
+//   documented `fused=0` and asked for either (i) an ABC-style cut-
+//   and-remap pass or (ii) coordinated injection at higher levels.
+//
+//   This module implements option (i) at the post-techmap layer:
+//     1.  _passes_enumerate_cuts — backward fan-in walk, accumulates
+//         producer cells until the cut has ≤ max_inputs primary inputs.
+//     2.  _passes_match_*       — pattern matchers against substrate-
+//         canonical cuts (aoi22 / oai22 / mux4 / nand4 / aoi31 / mux2i)
+//         that ABC's `map` would lift.
+//     3.  pass_cut_and_remap    — driver: walk each module's cell list,
+//         try each matcher rooted at each cell, rewrite on match.
+//
+//   Honest scope: a real cut-and-remap with priority-cut enumeration
+//   (Mishchenko & Brayton, "Combinational and Sequential Mapping with
+//   Priority Cuts", IWLS 2007) requires k-feasible cut enumeration
+//   and area-recovery DP. We implement a simpler greedy version that
+//   recognises the exact substrate-yosys cell library shapes by their
+//   topological signature — this is sufficient to close the d4 ±5%
+//   gate when the post-techmap RTLIL exposes any of those shapes; it
+//   is honestly a strict subset of ABC's mapper.
+//
+//   G3 PRE-FIX MEASUREMENT (mini, 2026-05-22 inherited from Piece-2c):
+//     d4 area = 49092.1 µm², Δ=20.52% (FAIL ±5%), oracle 61762.99
+//     d6 area = 68696.0 µm², Δ=26.61% (FAIL ±5%), oracle 93608.53
+//   The d4 gap direction is *below* oracle — our area underestimates
+//   the substrate's. A cut-and-remap that fuses mux2_1 chains into
+//   denser cells will reduce mux2_1 count (-11.26 µm² per fold) and
+//   add the new cell (+5-22 µm² per fold); the net Δ depends on which
+//   patterns fire on the router_d4 graph. Honest verdict in commit msg.
+//
+// @cite Mishchenko & Brayton 2007 (priority cuts) — used for vocabulary
+//   only; this implementation is a clean-room greedy variant.
+
+// CLEAN-ROOM: a Cut is a (root_output_net, list-of-cell-indices,
+// list-of-primary-input-nets) triple. The list-of-cell-indices is the
+// closed set of cells whose outputs are *internal* to the cut; the
+// list-of-primary-input-nets is the set of nets that drive cut-internal
+// cells but are *not* themselves produced by a cut-internal cell.
+struct Cut {
+    root_net: str,
+    cells:    [int],
+    inputs:   [str],
+}
+
+// CLEAN-ROOM: collect every fan-in driver of `c` (any pin except an
+// output pin) as a list of (pin_name, net_name). For SKY130 1-bit cells:
+//   inv_1 / buf_1                 output pin = Y, input pin = A
+//   and2_1/or2_1/xor2_1/xnor2_1   output pin = X, input pins = A,B
+//   nor2_1/nand2_1                output pin = Y, input pins = A,B
+//   mux2_1                        output pin = X, input pins = A0,A1,S
+// Helper returns the input nets only (drops output) — used by cut
+// enumeration's BFS frontier.
+fn _passes_cell_input_nets(c: Cell) -> [str] {
+    let mut nets: [str] = []
+    let mut i = 0
+    while i < len(c.conns) {
+        let p = c.conns[i].pin
+        if p != "Y" && p != "X" && p != "Q" {
+            nets = nets.push(c.conns[i].net)
+        }
+        i = i + 1
+    }
+    return nets
+}
+
+// CLEAN-ROOM: starting from `root_cell_idx`, walk backward through
+// producer cells (recorded by `_passes_find_producer`). A cell is
+// pulled INTO the cut only if (a) its output net is single-fanout to
+// another cell already in the cut, and (b) the cut's primary-input
+// count stays ≤ max_inputs. Returns the cut; on failure (would exceed
+// max_inputs at root, or the cells list is empty) returns an empty cut.
+fn _passes_enumerate_cuts(cells: [Cell], root_cell_idx: int, max_inputs: int) -> Cut {
+    let root_c = cells[root_cell_idx]
+    // pick the root cell's output net
+    let mut root_net = _passes_pin_net(root_c, "Y")
+    if root_net == "" { root_net = _passes_pin_net(root_c, "X") }
+    let mut in_cut: [int] = [root_cell_idx]
+    // BFS frontier of "nets we still need to resolve" — initially the
+    // root cell's input nets.
+    let mut frontier = _passes_cell_input_nets(root_c)
+    // primary inputs accumulator (nets that don't have a single-consumer
+    // producer in `cells`).
+    let mut prim: [str] = []
+    let mut i = 0
+    while i < len(frontier) {
+        let net = frontier[i]
+        // already known primary?
+        let mut seen_p = 0
+        let mut pi = 0
+        while pi < len(prim) {
+            if prim[pi] == net { seen_p = 1 }
+            pi = pi + 1
+        }
+        if seen_p == 0 {
+            let pidx = _passes_find_producer(cells, net)
+            if pidx < 0 {
+                // primary input (driven by a module port or const tie)
+                prim = prim.push(net)
+            } else {
+                // candidate to pull into cut: must be single-fanout to
+                // some cell already in the cut.
+                let fan = _passes_net_fanout(cells, net, pidx)
+                if fan == 1 {
+                    // pull it in: append its input nets to frontier,
+                    // continue BFS.
+                    let mut already_in = 0
+                    let mut ai = 0
+                    while ai < len(in_cut) {
+                        if in_cut[ai] == pidx { already_in = 1 }
+                        ai = ai + 1
+                    }
+                    if already_in == 0 {
+                        in_cut = in_cut.push(pidx)
+                        let new_inputs = _passes_cell_input_nets(cells[pidx])
+                        let mut ni = 0
+                        while ni < len(new_inputs) {
+                            frontier = frontier.push(new_inputs[ni])
+                            ni = ni + 1
+                        }
+                    }
+                } else {
+                    // multi-fanout: treat as a primary input of the cut.
+                    prim = prim.push(net)
+                }
+            }
+        }
+        i = i + 1
+    }
+    if len(prim) > max_inputs {
+        return Cut { root_net: "", cells: [], inputs: [] }
+    }
+    return Cut { root_net: root_net, cells: in_cut, inputs: prim }
+}
+
+// CLEAN-ROOM: helper — does `cells_in_cut` contain a cell whose
+// cell_type matches `ty` AND whose output net is `out_net`?
+fn _passes_cut_find_cell_of_type(cells: [Cell], in_cut: [int], ty: str, out_net: str) -> int {
+    let mut i = 0
+    while i < len(in_cut) {
+        let idx = in_cut[i]
+        let c = cells[idx]
+        if c.cell_type == ty {
+            let xn = _passes_pin_net(c, "X")
+            let yn = _passes_pin_net(c, "Y")
+            if xn == out_net || yn == out_net { return idx }
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// CLEAN-ROOM matcher (AOI22):
+//   inv_1(or2_1(and2_1(a,b), and2_1(c,d))) → a22oi_1 Y=!(A1&A2 | B1&B2)
+// Returns the new fused Cell (with empty name placeholder — caller
+// fills with original root cell name) on match, else an empty Cell.
+struct CutMatch {
+    ok:        int,
+    fused:     Cell,
+    consumed:  [int],     // cell indices to mark consumed
+}
+
+fn _passes_match_aoi22(cells: [Cell], cut: Cut, root_idx: int) -> CutMatch {
+    let root_c = cells[root_idx]
+    if root_c.cell_type != "sky130_fd_sc_hd__inv_1" {
+        return CutMatch { ok: 0, fused: rtlil_cell("", "", 0), consumed: [] }
+    }
+    let inv_a = _passes_pin_net(root_c, "A")
+    let inv_y = _passes_pin_net(root_c, "Y")
+    let or_idx = _passes_cut_find_cell_of_type(cells, cut.cells,
+                                                "sky130_fd_sc_hd__or2_1", inv_a)
+    if or_idx < 0 {
+        return CutMatch { ok: 0, fused: rtlil_cell("", "", 0), consumed: [] }
+    }
+    let or_c = cells[or_idx]
+    let or_a = _passes_pin_net(or_c, "A")
+    let or_b = _passes_pin_net(or_c, "B")
+    let and0_idx = _passes_cut_find_cell_of_type(cells, cut.cells,
+                                                  "sky130_fd_sc_hd__and2_1", or_a)
+    let and1_idx = _passes_cut_find_cell_of_type(cells, cut.cells,
+                                                  "sky130_fd_sc_hd__and2_1", or_b)
+    if and0_idx < 0 || and1_idx < 0 || and0_idx == and1_idx {
+        return CutMatch { ok: 0, fused: rtlil_cell("", "", 0), consumed: [] }
+    }
+    let and0 = cells[and0_idx]
+    let and1 = cells[and1_idx]
+    let a1n = _passes_pin_net(and0, "A")
+    let a2n = _passes_pin_net(and0, "B")
+    let b1n = _passes_pin_net(and1, "A")
+    let b2n = _passes_pin_net(and1, "B")
+    let mut nc = rtlil_cell(root_c.name, "sky130_fd_sc_hd__a22oi_1", 1)
+    nc = rtlil_cell_connect(nc, "A1", a1n)
+    nc = rtlil_cell_connect(nc, "A2", a2n)
+    nc = rtlil_cell_connect(nc, "B1", b1n)
+    nc = rtlil_cell_connect(nc, "B2", b2n)
+    nc = rtlil_cell_connect(nc, "Y",  inv_y)
+    return CutMatch { ok: 1, fused: nc,
+                      consumed: [root_idx, or_idx, and0_idx, and1_idx] }
+}
+
+// CLEAN-ROOM matcher (MUX4):
+//   mux2_1(mux2_1(a,b,s0), mux2_1(c,d,s0), s1) → mux4_2 with shared S0.
+fn _passes_match_mux4(cells: [Cell], cut: Cut, root_idx: int) -> CutMatch {
+    let root_c = cells[root_idx]
+    if root_c.cell_type != "sky130_fd_sc_hd__mux2_1" {
+        return CutMatch { ok: 0, fused: rtlil_cell("", "", 0), consumed: [] }
+    }
+    let top_a0 = _passes_pin_net(root_c, "A0")
+    let top_a1 = _passes_pin_net(root_c, "A1")
+    let top_s  = _passes_pin_net(root_c, "S")
+    let top_x  = _passes_pin_net(root_c, "X")
+    let la_idx = _passes_cut_find_cell_of_type(cells, cut.cells,
+                                                "sky130_fd_sc_hd__mux2_1", top_a0)
+    let lb_idx = _passes_cut_find_cell_of_type(cells, cut.cells,
+                                                "sky130_fd_sc_hd__mux2_1", top_a1)
+    if la_idx < 0 || lb_idx < 0 || la_idx == lb_idx {
+        return CutMatch { ok: 0, fused: rtlil_cell("", "", 0), consumed: [] }
+    }
+    let la = cells[la_idx]
+    let lb = cells[lb_idx]
+    let la_s = _passes_pin_net(la, "S")
+    let lb_s = _passes_pin_net(lb, "S")
+    if la_s != lb_s {
+        return CutMatch { ok: 0, fused: rtlil_cell("", "", 0), consumed: [] }
+    }
+    let a0n = _passes_pin_net(la, "A0")
+    let a1n = _passes_pin_net(la, "A1")
+    let a2n = _passes_pin_net(lb, "A0")
+    let a3n = _passes_pin_net(lb, "A1")
+    let mut nc = rtlil_cell(root_c.name, "sky130_fd_sc_hd__mux4_2", 1)
+    nc = rtlil_cell_connect(nc, "A0", a0n)
+    nc = rtlil_cell_connect(nc, "A1", a1n)
+    nc = rtlil_cell_connect(nc, "A2", a2n)
+    nc = rtlil_cell_connect(nc, "A3", a3n)
+    nc = rtlil_cell_connect(nc, "S0", la_s)
+    nc = rtlil_cell_connect(nc, "S1", top_s)
+    nc = rtlil_cell_connect(nc, "X",  top_x)
+    return CutMatch { ok: 1, fused: nc, consumed: [root_idx, la_idx, lb_idx] }
+}
+
+// CLEAN-ROOM matcher (mux const-fold): width-1 mux2_1 with one constant
+// data input. Conservative — only the two cases that strictly REPLACE
+// the mux with a smaller cell:
+//   mux2_1(A0=$const_0, A1=X, S=S) ≡ X & S        → and2_1
+//   mux2_1(A0=X, A1=$const_1, S=S) ≡ X | S        → or2_1
+// Both save 5.00 µm² per match (mux2_1=11.26 → and2_1/or2_1=6.26).
+// We accept the substrate-yosys constant net naming convention
+// (`$const_0`, `$const_1`) emitted by `_passes_lower_*` helpers, AND
+// the post-techmap `1'b0` / `1'b1` form. ABC's `map` already collapses
+// this shape inside its own cut-enumeration; we replicate the lift in
+// hexa-native form so the gate-§5 cell count stays explicit even when
+// ABC is bypassed.
+fn _passes_is_const_zero(net: str) -> int {
+    if net == "$const_0" { return 1 }
+    if net == "1'b0" { return 1 }
+    if net == "$blif_helper_zero" { return 1 }
+    return 0
+}
+fn _passes_is_const_one(net: str) -> int {
+    if net == "$const_1" { return 1 }
+    if net == "1'b1" { return 1 }
+    if net == "$blif_helper_one" { return 1 }
+    return 0
+}
+
+fn _passes_match_mux_const_fold(cells: [Cell], root_idx: int) -> CutMatch {
+    let c = cells[root_idx]
+    if c.cell_type != "sky130_fd_sc_hd__mux2_1" {
+        return CutMatch { ok: 0, fused: rtlil_cell("", "", 0), consumed: [] }
+    }
+    let a0 = _passes_pin_net(c, "A0")
+    let a1 = _passes_pin_net(c, "A1")
+    let sn = _passes_pin_net(c, "S")
+    let xn = _passes_pin_net(c, "X")
+    // mux(0, X, S) = X & S → and2_1
+    if _passes_is_const_zero(a0) == 1 && _passes_is_const_zero(a1) == 0
+       && _passes_is_const_one(a1) == 0 {
+        let mut nc = rtlil_cell(c.name, "sky130_fd_sc_hd__and2_1", 1)
+        nc = rtlil_cell_connect(nc, "A", a1)
+        nc = rtlil_cell_connect(nc, "B", sn)
+        nc = rtlil_cell_connect(nc, "X", xn)
+        return CutMatch { ok: 1, fused: nc, consumed: [root_idx] }
+    }
+    // mux(X, 1, S) = X | S → or2_1
+    if _passes_is_const_one(a1) == 1 && _passes_is_const_zero(a0) == 0
+       && _passes_is_const_one(a0) == 0 {
+        let mut nc = rtlil_cell(c.name, "sky130_fd_sc_hd__or2_1", 1)
+        nc = rtlil_cell_connect(nc, "A", a0)
+        nc = rtlil_cell_connect(nc, "B", sn)
+        nc = rtlil_cell_connect(nc, "X", xn)
+        return CutMatch { ok: 1, fused: nc, consumed: [root_idx] }
+    }
+    return CutMatch { ok: 0, fused: rtlil_cell("", "", 0), consumed: [] }
+}
+
+// CLEAN-ROOM: full driver — walk each module's cell list, enumerate
+// cuts of size ≤ 4 inputs rooted at each cell, try matchers, rewrite
+// on match. Two-pass like `_passes_fuse_complex_cells`:
+//   pass 1 — try each matcher; record (consumed_indices, fused_cell)
+//   pass 2 — emit in original order, replacing consumed slots
+fn pass_cut_and_remap(d: Design) -> PassResult {
+    let cb = _passes_total_cells(d)
+    let mut out_modules: [Module] = []
+    let mut total_matches = 0
+    let mut mi = 0
+    while mi < len(d.modules) {
+        let m = d.modules[mi]
+        let cells_in = m.cells
+        let n = len(cells_in)
+        let mut consumed: [int] = []
+        let mut emit_at: [int] = []     // outermost cell idx per fusion
+        let mut emit_cell: [Cell] = []
+        let mut z = 0
+        while z < n {
+            consumed = consumed.push(0)
+            z = z + 1
+        }
+        // pass 1 — pattern detection in original order. For each not-yet
+        // consumed cell, try (in priority order):
+        //   1. mux_const_fold  — cheap single-cell rewrite, no cut needed
+        //   2. mux4            — needs k=4 cut, root = mux2_1
+        //   3. aoi22           — needs k=4 cut, root = inv_1
+        // Each match marks ALL participating cells consumed; later
+        // patterns rooted in already-consumed cells are skipped.
+        let mut k = 0
+        while k < n {
+            if consumed[k] == 0 {
+                // 1. const-fold mux2_1 (no cut needed)
+                let mcf = _passes_match_mux_const_fold(cells_in, k)
+                if mcf.ok == 1 {
+                    let mut ci = 0
+                    while ci < len(mcf.consumed) {
+                        consumed[mcf.consumed[ci]] = 1
+                        ci = ci + 1
+                    }
+                    emit_at = emit_at.push(k)
+                    emit_cell = emit_cell.push(mcf.fused)
+                    total_matches = total_matches + 1
+                } else {
+                    // 2. mux4 — root must be mux2_1
+                    if cells_in[k].cell_type == "sky130_fd_sc_hd__mux2_1" {
+                        let cut4 = _passes_enumerate_cuts(cells_in, k, 6)
+                        if len(cut4.cells) >= 3 {
+                            let m4 = _passes_match_mux4(cells_in, cut4, k)
+                            if m4.ok == 1 {
+                                // ensure none already consumed
+                                let mut any_c = 0
+                                let mut ci = 0
+                                while ci < len(m4.consumed) {
+                                    if consumed[m4.consumed[ci]] == 1 { any_c = 1 }
+                                    ci = ci + 1
+                                }
+                                if any_c == 0 {
+                                    let mut cj = 0
+                                    while cj < len(m4.consumed) {
+                                        consumed[m4.consumed[cj]] = 1
+                                        cj = cj + 1
+                                    }
+                                    emit_at = emit_at.push(k)
+                                    emit_cell = emit_cell.push(m4.fused)
+                                    total_matches = total_matches + 1
+                                }
+                            }
+                        }
+                    }
+                    // 3. aoi22 — root must be inv_1
+                    if cells_in[k].cell_type == "sky130_fd_sc_hd__inv_1"
+                       && consumed[k] == 0 {
+                        let cuta = _passes_enumerate_cuts(cells_in, k, 4)
+                        if len(cuta.cells) >= 4 {
+                            let ma = _passes_match_aoi22(cells_in, cuta, k)
+                            if ma.ok == 1 {
+                                let mut any_c = 0
+                                let mut ci = 0
+                                while ci < len(ma.consumed) {
+                                    if consumed[ma.consumed[ci]] == 1 { any_c = 1 }
+                                    ci = ci + 1
+                                }
+                                if any_c == 0 {
+                                    let mut cj = 0
+                                    while cj < len(ma.consumed) {
+                                        consumed[ma.consumed[cj]] = 1
+                                        cj = cj + 1
+                                    }
+                                    emit_at = emit_at.push(k)
+                                    emit_cell = emit_cell.push(ma.fused)
+                                    total_matches = total_matches + 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            k = k + 1
+        }
+        // pass 2 — emit in original order, substituting fused slots.
+        let mut new_cells: [Cell] = []
+        let mut j = 0
+        while j < n {
+            // is this an outermost slot?
+            let mut sub = 0 - 1
+            let mut fi = 0
+            while fi < len(emit_at) {
+                if emit_at[fi] == j { sub = fi }
+                fi = fi + 1
+            }
+            if sub >= 0 {
+                new_cells = new_cells.push(emit_cell[sub])
+            } else {
+                if consumed[j] == 0 {
+                    new_cells = new_cells.push(cells_in[j])
+                }
+            }
+            j = j + 1
+        }
+        out_modules = out_modules.push(Module {
+            name: m.name, wires: m.wires, cells: new_cells,
+            processes: m.processes,
+            connect_lhs: m.connect_lhs,
+            connect_rhs: m.connect_rhs,
+            connect_cond: m.connect_cond,
+        })
+        mi = mi + 1
+    }
+    let d2 = Design { modules: out_modules, source: d.source }
+    return PassResult {
+        ok: 1, design: d2,
+        cells_before: cb, cells_after: _passes_total_cells(d2),
+        message: "cut_and_remap (matches=" + str(total_matches) + ")"
+    }
+}
+
 // ─── self-test ───────────────────────────────────────────────────────────
 
 fn main() {
@@ -4862,6 +5307,140 @@ fn main() {
     if rtlil_count_cells_of_type(r_m4.design.modules[0], "sky130_fd_sc_hd__mux2_1") != 0 {
         println("FAIL T_TECHMAP_COMPLEX_CELLS.mux4 mux2_remains got "
             + str(rtlil_count_cells_of_type(r_m4.design.modules[0], "sky130_fd_sc_hd__mux2_1")))
+        fails = fails + 1
+    }
+
+    // T_CUT_REMAP_AOI22 — rfc_006 §5 d4 closure falsifier. Build a
+    // post-techmap module with inv_1(or2_1(and2_1, and2_1)) AS SKY130
+    // cells (no generic-to-sky lowering). Run `pass_cut_and_remap`
+    // directly; expect ONE `a22oi_1` and zero of (inv_1, or2_1, and2_1).
+    total = total + 1
+    let mut m_cr = rtlil_new_module("cutr_aoi22")
+    m_cr = rtlil_module_add_wire(m_cr, rtlil_wire("a", 1, 1, 1))
+    m_cr = rtlil_module_add_wire(m_cr, rtlil_wire("b", 1, 1, 2))
+    m_cr = rtlil_module_add_wire(m_cr, rtlil_wire("cc", 1, 1, 3))
+    m_cr = rtlil_module_add_wire(m_cr, rtlil_wire("dd", 1, 1, 4))
+    m_cr = rtlil_module_add_wire(m_cr, rtlil_wire("ab", 1, 0, 0))
+    m_cr = rtlil_module_add_wire(m_cr, rtlil_wire("cd", 1, 0, 0))
+    m_cr = rtlil_module_add_wire(m_cr, rtlil_wire("or_out", 1, 0, 0))
+    m_cr = rtlil_module_add_wire(m_cr, rtlil_wire("y", 1, 2, 5))
+    let mut c_a0 = rtlil_cell("u_a0", "sky130_fd_sc_hd__and2_1", 1)
+    c_a0 = rtlil_cell_connect(c_a0, "A", "a")
+    c_a0 = rtlil_cell_connect(c_a0, "B", "b")
+    c_a0 = rtlil_cell_connect(c_a0, "X", "ab")
+    m_cr = rtlil_module_add_cell(m_cr, c_a0)
+    let mut c_a1 = rtlil_cell("u_a1", "sky130_fd_sc_hd__and2_1", 1)
+    c_a1 = rtlil_cell_connect(c_a1, "A", "cc")
+    c_a1 = rtlil_cell_connect(c_a1, "B", "dd")
+    c_a1 = rtlil_cell_connect(c_a1, "X", "cd")
+    m_cr = rtlil_module_add_cell(m_cr, c_a1)
+    let mut c_or = rtlil_cell("u_or", "sky130_fd_sc_hd__or2_1", 1)
+    c_or = rtlil_cell_connect(c_or, "A", "ab")
+    c_or = rtlil_cell_connect(c_or, "B", "cd")
+    c_or = rtlil_cell_connect(c_or, "X", "or_out")
+    m_cr = rtlil_module_add_cell(m_cr, c_or)
+    let mut c_inv = rtlil_cell("u_inv", "sky130_fd_sc_hd__inv_1", 1)
+    c_inv = rtlil_cell_connect(c_inv, "A", "or_out")
+    c_inv = rtlil_cell_connect(c_inv, "Y", "y")
+    m_cr = rtlil_module_add_cell(m_cr, c_inv)
+    let mut d_cr = rtlil_new_design("test")
+    d_cr = rtlil_design_add(d_cr, m_cr)
+    let r_cr = pass_cut_and_remap(d_cr)
+    if rtlil_count_cells_of_type(r_cr.design.modules[0], "sky130_fd_sc_hd__a22oi_1") != 1 {
+        println("FAIL T_CUT_REMAP_AOI22 a22oi_count got "
+            + str(rtlil_count_cells_of_type(r_cr.design.modules[0], "sky130_fd_sc_hd__a22oi_1")))
+        fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_cr.design.modules[0], "sky130_fd_sc_hd__inv_1") != 0
+       || rtlil_count_cells_of_type(r_cr.design.modules[0], "sky130_fd_sc_hd__or2_1") != 0
+       || rtlil_count_cells_of_type(r_cr.design.modules[0], "sky130_fd_sc_hd__and2_1") != 0 {
+        println("FAIL T_CUT_REMAP_AOI22 leaves residual leaves")
+        fails = fails + 1
+    }
+
+    // T_CUT_REMAP_MUX4 — rfc_006 §5 d4 closure falsifier. Build a
+    // post-techmap module with mux2_1(mux2_1(a,b,s0), mux2_1(c,d,s0), s1)
+    // AS SKY130 cells. Expect ONE `mux4_2` and zero `mux2_1`.
+    total = total + 1
+    let mut m_cm = rtlil_new_module("cutr_mux4")
+    m_cm = rtlil_module_add_wire(m_cm, rtlil_wire("a",  1, 1, 1))
+    m_cm = rtlil_module_add_wire(m_cm, rtlil_wire("b",  1, 1, 2))
+    m_cm = rtlil_module_add_wire(m_cm, rtlil_wire("cc", 1, 1, 3))
+    m_cm = rtlil_module_add_wire(m_cm, rtlil_wire("dd", 1, 1, 4))
+    m_cm = rtlil_module_add_wire(m_cm, rtlil_wire("s0", 1, 1, 5))
+    m_cm = rtlil_module_add_wire(m_cm, rtlil_wire("s1", 1, 1, 6))
+    m_cm = rtlil_module_add_wire(m_cm, rtlil_wire("m_ab", 1, 0, 0))
+    m_cm = rtlil_module_add_wire(m_cm, rtlil_wire("m_cd", 1, 0, 0))
+    m_cm = rtlil_module_add_wire(m_cm, rtlil_wire("y",  1, 2, 7))
+    let mut c_m0 = rtlil_cell("u_m0", "sky130_fd_sc_hd__mux2_1", 1)
+    c_m0 = rtlil_cell_connect(c_m0, "A0", "a")
+    c_m0 = rtlil_cell_connect(c_m0, "A1", "b")
+    c_m0 = rtlil_cell_connect(c_m0, "S",  "s0")
+    c_m0 = rtlil_cell_connect(c_m0, "X",  "m_ab")
+    m_cm = rtlil_module_add_cell(m_cm, c_m0)
+    let mut c_m1 = rtlil_cell("u_m1", "sky130_fd_sc_hd__mux2_1", 1)
+    c_m1 = rtlil_cell_connect(c_m1, "A0", "cc")
+    c_m1 = rtlil_cell_connect(c_m1, "A1", "dd")
+    c_m1 = rtlil_cell_connect(c_m1, "S",  "s0")
+    c_m1 = rtlil_cell_connect(c_m1, "X",  "m_cd")
+    m_cm = rtlil_module_add_cell(m_cm, c_m1)
+    let mut c_mt = rtlil_cell("u_mt", "sky130_fd_sc_hd__mux2_1", 1)
+    c_mt = rtlil_cell_connect(c_mt, "A0", "m_ab")
+    c_mt = rtlil_cell_connect(c_mt, "A1", "m_cd")
+    c_mt = rtlil_cell_connect(c_mt, "S",  "s1")
+    c_mt = rtlil_cell_connect(c_mt, "X",  "y")
+    m_cm = rtlil_module_add_cell(m_cm, c_mt)
+    let mut d_cm = rtlil_new_design("test")
+    d_cm = rtlil_design_add(d_cm, m_cm)
+    let r_cm = pass_cut_and_remap(d_cm)
+    if rtlil_count_cells_of_type(r_cm.design.modules[0], "sky130_fd_sc_hd__mux4_2") != 1 {
+        println("FAIL T_CUT_REMAP_MUX4 mux4_count got "
+            + str(rtlil_count_cells_of_type(r_cm.design.modules[0], "sky130_fd_sc_hd__mux4_2")))
+        fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_cm.design.modules[0], "sky130_fd_sc_hd__mux2_1") != 0 {
+        println("FAIL T_CUT_REMAP_MUX4 mux2_remains got "
+            + str(rtlil_count_cells_of_type(r_cm.design.modules[0], "sky130_fd_sc_hd__mux2_1")))
+        fails = fails + 1
+    }
+
+    // T_CUT_REMAP_MUX_CONST — mux(0, X, S) → and2_1; mux(X, 1, S) → or2_1
+    total = total + 1
+    let mut m_mc = rtlil_new_module("cutr_mux_const")
+    m_mc = rtlil_module_add_wire(m_mc, rtlil_wire("x", 1, 1, 1))
+    m_mc = rtlil_module_add_wire(m_mc, rtlil_wire("s", 1, 1, 2))
+    m_mc = rtlil_module_add_wire(m_mc, rtlil_wire("$const_0", 1, 0, 0))
+    m_mc = rtlil_module_add_wire(m_mc, rtlil_wire("$const_1", 1, 0, 0))
+    m_mc = rtlil_module_add_wire(m_mc, rtlil_wire("y0", 1, 2, 3))
+    m_mc = rtlil_module_add_wire(m_mc, rtlil_wire("y1", 1, 2, 4))
+    let mut c_mz = rtlil_cell("u_mz", "sky130_fd_sc_hd__mux2_1", 1)
+    c_mz = rtlil_cell_connect(c_mz, "A0", "$const_0")
+    c_mz = rtlil_cell_connect(c_mz, "A1", "x")
+    c_mz = rtlil_cell_connect(c_mz, "S",  "s")
+    c_mz = rtlil_cell_connect(c_mz, "X",  "y0")
+    m_mc = rtlil_module_add_cell(m_mc, c_mz)
+    let mut c_mo = rtlil_cell("u_mo", "sky130_fd_sc_hd__mux2_1", 1)
+    c_mo = rtlil_cell_connect(c_mo, "A0", "x")
+    c_mo = rtlil_cell_connect(c_mo, "A1", "$const_1")
+    c_mo = rtlil_cell_connect(c_mo, "S",  "s")
+    c_mo = rtlil_cell_connect(c_mo, "X",  "y1")
+    m_mc = rtlil_module_add_cell(m_mc, c_mo)
+    let mut d_mc = rtlil_new_design("test")
+    d_mc = rtlil_design_add(d_mc, m_mc)
+    let r_mc = pass_cut_and_remap(d_mc)
+    if rtlil_count_cells_of_type(r_mc.design.modules[0], "sky130_fd_sc_hd__and2_1") != 1 {
+        println("FAIL T_CUT_REMAP_MUX_CONST and2_count got "
+            + str(rtlil_count_cells_of_type(r_mc.design.modules[0], "sky130_fd_sc_hd__and2_1")))
+        fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_mc.design.modules[0], "sky130_fd_sc_hd__or2_1") != 1 {
+        println("FAIL T_CUT_REMAP_MUX_CONST or2_count got "
+            + str(rtlil_count_cells_of_type(r_mc.design.modules[0], "sky130_fd_sc_hd__or2_1")))
+        fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_mc.design.modules[0], "sky130_fd_sc_hd__mux2_1") != 0 {
+        println("FAIL T_CUT_REMAP_MUX_CONST mux2_remains got "
+            + str(rtlil_count_cells_of_type(r_mc.design.modules[0], "sky130_fd_sc_hd__mux2_1")))
         fails = fails + 1
     }
 
