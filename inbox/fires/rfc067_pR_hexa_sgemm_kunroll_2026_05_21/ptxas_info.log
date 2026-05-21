@@ -1,0 +1,36 @@
+==== sgemm_kunroll_1024x1024_grid.ptx ====
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_kunroll_1024x1024_grid' for 'sm_90'
+ptxas info    : Function properties for sgemm_kunroll_1024x1024_grid
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, 16384 bytes smem
+==== sgemm_kunroll_1536x1536_grid.ptx ====
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_kunroll_1536x1536_grid' for 'sm_90'
+ptxas info    : Function properties for sgemm_kunroll_1536x1536_grid
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, 16384 bytes smem
+==== sgemm_kunroll_256x256_grid.ptx ====
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_kunroll_256x256_grid' for 'sm_90'
+ptxas info    : Function properties for sgemm_kunroll_256x256_grid
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, 16384 bytes smem
+==== sgemm_kunroll_384x384_grid.ptx ====
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_kunroll_384x384_grid' for 'sm_90'
+ptxas info    : Function properties for sgemm_kunroll_384x384_grid
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, 16384 bytes smem
+==== sgemm_kunroll_512x512_grid.ptx ====
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_kunroll_512x512_grid' for 'sm_90'
+ptxas info    : Function properties for sgemm_kunroll_512x512_grid
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, 16384 bytes smem
+==== sgemm_kunroll_768x768_grid.ptx ====
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_kunroll_768x768_grid' for 'sm_90'
+ptxas info    : Function properties for sgemm_kunroll_768x768_grid
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, 16384 bytes smem
