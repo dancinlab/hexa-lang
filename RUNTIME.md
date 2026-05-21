@@ -1094,6 +1094,18 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 47: hexa_str_chars → rt_str_chars (UTF-8 codepoint walker)
+
+- ✅ `hexa_str_chars` (self/runtime_core.c:4072) ported. Returns an
+  array of 1-codepoint strings ("한글hi".chars().len() == 4, not 8).
+  ASCII identical to byte-walk
+- The `_hx_utf8_cp_len` C table is inlined as if/else-if bit-pattern
+  checks on the leading byte (0xxx / 110xx / 1110x / 11110x; anything
+  else treated as 1-byte defensive fallback). Continuation bytes are
+  collected via `s.substring(i, i+cp)`
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,384 B
+
 ### 2026-05-21 — step 3 cycle 46: hexa_str_slice → rt_str_slice
 
 - ✅ `hexa_str_slice` (self/runtime.c:2985) ported. Byte-based slice

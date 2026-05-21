@@ -4069,6 +4069,11 @@ static void _hexa_init_byte_str_cache(void) {
 // (immediately below) uses it to walk UTF-8 codepoints.
 static int _hx_utf8_cp_len(unsigned char b);
 
+// Step-3 cycle 47 port — UTF-8 codepoint walker dispatches to
+// rt_str_chars (ctype.hexa). The hexa body inlines the
+// `_hx_utf8_cp_len` bit-pattern table as if/else-if checks; the
+// returned array contains 1-codepoint strings (not bytes).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_chars(HexaVal s) {
     HexaVal arr = hexa_array_new();
     if (!HX_IS_STR(s)) return arr;
@@ -4092,6 +4097,13 @@ HexaVal hexa_str_chars(HexaVal s) {
     }
     return arr;
 }
+#else
+extern HexaVal rt_str_chars(HexaVal s);
+HexaVal hexa_str_chars(HexaVal s) {
+    if (!HX_IS_STR(s)) return hexa_array_new();
+    return rt_str_chars(s);
+}
+#endif
 
 int hexa_str_contains(HexaVal s, HexaVal sub) {
     return hxlcl_strstr(HX_STR(s), HX_STR(sub)) != NULL;

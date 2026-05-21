@@ -43,6 +43,40 @@ pub fn rt_str_bytes(s: string) -> [int] {
     return out
 }
 
+// Step 3 cycle 47 — UTF-8 codepoint walker. Returns an array of
+// 1-codepoint strings ("한글hi".chars().len() == 4, not 8). ASCII
+// behaviour is unchanged (codepoint == byte for ASCII). Mirrors the
+// C body in self/runtime_core.c:4072 (the `_hx_utf8_cp_len` table is
+// inlined here as bit-pattern checks).
+//   leading-byte 0xxxxxxx       → 1 byte
+//   leading-byte 110xxxxx       → 2 bytes
+//   leading-byte 1110xxxx       → 3 bytes
+//   leading-byte 11110xxx       → 4 bytes
+//   anything else (continuation) → 1 byte (defensive fallback)
+pub fn rt_str_chars(s: string) -> [string] {
+    let n = byte_len(s)
+    let mut out: [string] = []
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        let mut cp = 1
+        if (b & 0x80) == 0 {
+            cp = 1
+        } else if (b & 0xE0) == 0xC0 {
+            cp = 2
+        } else if (b & 0xF0) == 0xE0 {
+            cp = 3
+        } else if (b & 0xF8) == 0xF0 {
+            cp = 4
+        }
+        let mut end = i + cp
+        if end > n { end = n }
+        out = out.push(s.substring(i, end))
+        i = end
+    }
+    return out
+}
+
 // Step 3 cycle 46 — byte-based string slice, [start, end) clamped.
 // Uses the substring builtin so the actual allocation is the perf-31
 // hexa_strbuf_alloc + memcpy single-shot path (better than the C body's
