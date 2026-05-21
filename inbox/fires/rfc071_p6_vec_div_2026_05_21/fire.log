@@ -1,10 +1,7 @@
--rwxrwxr-x 1 summer summer 21096  5월 21 19:48 /tmp/host_vec_div
--rw-r--r-- 1 summer summer  2082  5월 21 19:48 /tmp/rfc071_n56_vec_div.ptx
-loaded PTX 2082 bytes
+loaded PTX 2085 bytes
 JIT info: ptxas info    : 0 bytes gmem
 ptxas info    : Compiling entry function 'vec_div' for 'sm_120a'
 ptxas info    : Function properties for vec_div
 ptxas         .     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
-ptxas info    : Used 10 registers, used 0 barriers
-ptxas info    : Compile time = 1.623 ms
-{"status":"FAIL","max_abs_diff":1.9862159125878891,"max_ulp":4539568816616204286,"byte_mismatch":1024,"N":1024,"first_mis":0,"c[0]":7.2891198669664796e-304,"ref[0]":0.65682011381325156,"a[0]":1.1753414355242713,"b[0]":1.789441904725906}
+ptxas info    : Used 26 registers, used 0 barriers
+ptxas info    : Compile time = 24.580 ms

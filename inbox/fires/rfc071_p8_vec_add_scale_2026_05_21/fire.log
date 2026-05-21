@@ -1,19 +1,26 @@
---- RFC 071 P8 N63 fire attempt — 2026-05-21 ---
+device: NVIDIA GeForce RTX 5070
+loaded PTX 2082 bytes
+JIT info: ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'vec_add' for 'sm_120a'
+ptxas info    : Function properties for vec_add
+ptxas         .     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers
+ptxas info    : Compile time = 1.877 ms
 
-[probe] ubu-2 connectivity check (3 routes):
-  ubu-2     (Wireguard 10.142.0.2)   : ssh: connect to host 10.142.0.2 port 22:    Operation timed out
-  ubu-2-ts  (Tailscale 100.72.76.118): ssh: connect to host 100.72.76.118 port 22: Operation timed out
-  ubu2-d    (LAN       192.168.50.60): ssh: connect to host 192.168.50.60 port 2222: Operation timed out
+--- shape 1/6: N=1024 ---
+  N=1024 median=0.003648 ms  6.74 GB/s  bm=0  PASS
 
-[probe] internet sanity:
-  curl https://api.github.com -> 200 OK
-  nslookup github.com         -> resolves
-  -> internet IS UP; ubu-2 itself or its VPN tunnel is DOWN.
+--- shape 2/6: N=16384 ---
+  N=16384 median=0.003488 ms  112.73 GB/s  bm=0  PASS
 
-[status] BLOCKED — cannot fire on RTX 5070.
+--- shape 3/6: N=262144 ---
+  N=262144 median=0.005632 ms  1117.09 GB/s  bm=0  PASS
 
-[next] When ubu-2 returns, run:
-  cd /Users/ghost/core/hexa-lang/inbox/fires/rfc071_p8_vec_add_scale_2026_05_21
-  ./fire.sh
-  # writes fresh result.json + fire.log; the BLOCKED placeholder is
-  # overwritten with the real 6-shape bandwidth table.
+--- shape 4/6: N=1048576 ---
+  N=1048576 median=0.015488 ms  1624.86 GB/s  bm=0  PASS
+
+--- shape 5/6: N=4194304 ---
+  N=4194304 median=0.156256 ms  644.22 GB/s  bm=0  PASS
+
+--- shape 6/6: N=16777216 ---
+  N=16777216 median=0.667872 ms  602.89 GB/s  bm=0  PASS
