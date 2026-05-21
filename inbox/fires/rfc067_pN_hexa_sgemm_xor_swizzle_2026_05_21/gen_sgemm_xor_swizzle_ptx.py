@@ -137,8 +137,7 @@ def gen(S: int) -> str:
     .reg .pred %p1;
     .reg .pred %pmore;
     .reg .b32 %ra<4>;
-    .reg .b32 %rb<4>;
-    .reg .b32 %rb2<4>;
+    .reg .b32 %rb<6>;
     .reg .f32 %fc<8>;
     .reg .f32 %ft<4>;
 
@@ -377,12 +376,12 @@ $consume:
     mul.lo.u32 %r39, %r78, 4;
     add.u32 %r42, %r38, %r39;
     add.u32 %r42, %r42, %r36;
-    ld.shared.b32 %rb20, [%r42];
+    ld.shared.b32 %rb4, [%r42];
 
     mul.lo.u32 %r39, %r79, 4;
     add.u32 %r42, %r38, %r39;
     add.u32 %r42, %r42, %r36;
-    ld.shared.b32 %rb21, [%r42];
+    ld.shared.b32 %rb5, [%r42];
 
     // ---- mma #1: m16n8k8 covering n=0..7 (acc fc0..fc3) ----
     mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32
@@ -395,7 +394,7 @@ $consume:
     mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32
         {{%fc4, %fc5, %fc6, %fc7}},
         {{%ra0, %ra1, %ra2, %ra3}},
-        {{%rb20, %rb21}},
+        {{%rb4, %rb5}},
         {{%fc4, %fc5, %fc6, %fc7}};
 
     bar.sync 0;
