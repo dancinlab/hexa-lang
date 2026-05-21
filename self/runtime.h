@@ -1227,4 +1227,26 @@ HexaVal farr_adamw_step_gpu(HexaVal w, HexaVal m, HexaVal v, HexaVal g,
                             HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
                             HexaVal eps, HexaVal wd, HexaVal step_t);          /* runtime.c — RFC 040 Phase B2 (11-arg direct) */
 
+/* ── regex (G3-REGEX) ──────────────────────────────────────────────
+ * POSIX ERE bridge — runtime delegates to libc regcomp/regexec
+ * (`#include <regex.h>` at runtime.c top). Surface is wrapped in
+ * stdlib/regex/mod.hexa (regex_test/regex_full_match/regex_find/...).
+ *
+ * Flavor: POSIX Extended Regular Expressions.
+ *   Inline flag `(?i)` at pattern start → REG_ICASE (stripped before compile).
+ *   POSIX char classes ([[:digit:]], [[:alpha:]], …) supported by libc.
+ *
+ * On invalid pattern (regcomp error): match/full_match return false (0),
+ * search returns []; findall/split return []; replace returns the
+ * input string unchanged. Fail-soft so test runners don't blow up on
+ * a bad pattern literal.
+ *
+ * Per-call regcomp is acceptable for first land (caching = follow-on). */
+HexaVal hexa_regex_match     (HexaVal pat, HexaVal s);                /* runtime.c — match anywhere */
+HexaVal hexa_regex_match_full(HexaVal pat, HexaVal s);                /* runtime.c — full string match */
+HexaVal hexa_regex_search    (HexaVal pat, HexaVal s);                /* runtime.c — [start,end] of first match, [] if none */
+HexaVal hexa_regex_findall   (HexaVal pat, HexaVal s);                /* runtime.c — [[start,end],…] for all non-overlapping matches */
+HexaVal hexa_regex_split     (HexaVal pat, HexaVal s);                /* runtime.c — split s by pattern */
+HexaVal hexa_regex_replace   (HexaVal pat, HexaVal s, HexaVal repl);  /* runtime.c — replace all matches with repl */
+
 #endif /* HEXA_RUNTIME_H */
