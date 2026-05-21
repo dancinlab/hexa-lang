@@ -1,0 +1,6 @@
+device_name=Apple M3
+pipe.threadExecutionWidth=32 max=1024
+  d=128  max|Δ|=2.861e-06  max|ref|=1.599e+01  rel_err=1.790e-07  91.60 GFLOPS  PASS
+  d=256  max|Δ|=5.722e-06  max|ref|=2.238e+01  rel_err=2.557e-07  372.65 GFLOPS  PASS
+  d=512  max|Δ|=1.144e-05  max|ref|=3.484e+01  rel_err=3.285e-07  233.15 GFLOPS  PASS
+F-RFC075-METAL-MATMUL-CODEGEN-NUMERIC-EQ: PASS (3/3 shapes)
