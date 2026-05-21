@@ -457,6 +457,131 @@ fn _case_e_check_pair(ok_in: bool, op: string, dtype: Type, want_op: string, wan
     return ok
 }
 
+// (f) RFC 071 P5++ — `gpu_matmul(c, a, b, M, N, K)` synthesis.
+//
+//     fn matmul_kernel(a, b, c, M, N, K) {
+//         gpu_matmul(c, a, b, M, N, K)
+//     }
+//
+// MIR shape assertions — the call-branch intercept in `hir_to_mir.hexa`
+// must emit the synthetic STMT_LOAD + STMT_LOAD + STMT_BINOP("matmul")
+// + STMT_STORE skeleton that the NVPTX `_nvptx_mfunc_is_matmul_shape`
+// recogniser keys on (mirrors the ROCm + Metal lanes). We assert on
+// the FIRST four stmts of the entry block (a trailing implicit
+// STMT_RETURN is appended by `_lower_fn`, which the codegen
+// recogniser tolerates via `len(stmts) >= 4`).
+//
+// HONEST SCOPE (@D g3): codegen-only HIR→MIR synthesis check. The
+// NVPTX-side `_nvptx_emit_matmul_*` emit functions are silent-wiped on
+// this worktree's main ancestry (N88 commit e9c89904 dropped 424
+// lines from the N86 contribution). The synthesis seam is verified
+// here; PTX-text + silicon-fire is BLOCKED until the parallel N99
+// worktree restores the codegen lane.
+fn _build_case_f(matmul_callee: string) -> HModule {
+    // Body: gpu_matmul(c, a, b, M, N, K)
+    let c_arg = _ident("c", _t_f32())
+    let a_arg = _ident("a", _t_f16())
+    let b_arg = _ident("b", _t_f16())
+    let m_arg = _ident("M", _t("i32"))
+    let n_arg = _ident("N", _t("i32"))
+    let k_arg = _ident("K", _t("i32"))
+    let callee = _ident(matmul_callee, _t_unit())
+    let mut call_kids: [HExpr] = []
+    call_kids.push(callee)
+    call_kids.push(c_arg)
+    call_kids.push(a_arg)
+    call_kids.push(b_arg)
+    call_kids.push(m_arg)
+    call_kids.push(n_arg)
+    call_kids.push(k_arg)
+    let call = _hexpr("call", _t_unit(), matmul_callee, call_kids)
+    let body = _block([call])
+
+    let mut pn: [string] = []
+    pn.push("a")
+    pn.push("b")
+    pn.push("c")
+    pn.push("M")
+    pn.push("N")
+    pn.push("K")
+    let mut pt: [Type] = []
+    pt.push(_t_f16())  // a
+    pt.push(_t_f16())  // b
+    pt.push(_t_f32())  // c
+    pt.push(_t("i32"))  // M
+    pt.push(_t("i32"))  // N
+    pt.push(_t("i32"))  // K
+    let it = _hfn("matmul_kernel", pn, pt, _t_unit(), body)
+    let mut items: [HItem] = []
+    items.push(it)
+    return HModule { file: "case_f.hexa", items: items }
+}
+
+// _case_f_check — verify the 4-stmt matmul-shape skeleton lands at the
+// start of the entry block. Each call counts the kinds of the first
+// four stmts AND probes the STMT_BINOP op string for the expected
+// "matmul" / "matmul_NT_a" / "matmul_NT_b" discriminator.
+fn _case_f_check(ok_in: bool, callee: string, binop_op: string) -> bool {
+    let m = lower_hir(_build_case_f(callee))
+    let mut ok = ok_in
+    let mut local_ok = true
+    if len(m.funcs) != 1 {
+        println("  FAIL: case (f) " + callee + " expected 1 MFunc, got " + to_string(len(m.funcs)))
+        return false
+    }
+    let mf = m.funcs[0]
+    if len(mf.blocks) == 0 {
+        println("  FAIL: case (f) " + callee + " expected >=1 block, got 0")
+        return false
+    }
+    let entry = mf.blocks[0]
+    if len(entry.stmts) < 4 {
+        println("  FAIL: case (f) " + callee + " expected >=4 entry stmts, got " + to_string(len(entry.stmts)))
+        return false
+    }
+    if entry.stmts[0].kind != STMT_LOAD {
+        println("  FAIL: case (f) " + callee + " stmts[0] kind got " + entry.stmts[0].kind + ", want STMT_LOAD")
+        local_ok = false
+    }
+    if entry.stmts[1].kind != STMT_LOAD {
+        println("  FAIL: case (f) " + callee + " stmts[1] kind got " + entry.stmts[1].kind + ", want STMT_LOAD")
+        local_ok = false
+    }
+    if entry.stmts[2].kind != STMT_BINOP {
+        println("  FAIL: case (f) " + callee + " stmts[2] kind got " + entry.stmts[2].kind + ", want STMT_BINOP")
+        local_ok = false
+    }
+    if entry.stmts[2].op != binop_op {
+        println("  FAIL: case (f) " + callee + " stmts[2] op got `" + entry.stmts[2].op + "`, want `" + binop_op + "`")
+        local_ok = false
+    }
+    if entry.stmts[3].kind != STMT_STORE {
+        println("  FAIL: case (f) " + callee + " stmts[3] kind got " + entry.stmts[3].kind + ", want STMT_STORE")
+        local_ok = false
+    }
+    // Negative — there must be NO STMT_CALL with op = the gpu_matmul callee
+    // (the synthesis short-circuited the generic STMT_CALL emit).
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let b = mf.blocks[bi]
+        let mut si = 0
+        while si < len(b.stmts) {
+            if b.stmts[si].kind == STMT_CALL && b.stmts[si].op == callee {
+                println("  FAIL: case (f) " + callee + " unexpected STMT_CALL with op=`" + callee + "` — synthesis did not short-circuit")
+                local_ok = false
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    if local_ok {
+        println("  OK:   case (f) " + callee + " → STMT_LOAD + STMT_LOAD + STMT_BINOP(`" + binop_op + "`) + STMT_STORE")
+    } else {
+        ok = false
+    }
+    return ok
+}
+
 // ── Driver ───────────────────────────────────────────────────
 
 fn main() {
@@ -743,6 +868,13 @@ fn main() {
     // suffix (precision tag is empty for non-low-precision kinds — see
     // `_precision_from_typ_kind`). Mirrors nvptx_lower_test Case 20 sub-D.
     ok = _case_e_check_pair(ok, "+", _t_i64(),  "+",        "")
+
+    // (f) RFC 071 P5++ — gpu_matmul builtin synthesis (3 variants).
+    println("")
+    println("── (f) RFC 071 P5++ — gpu_matmul builtin → STMT_BINOP(matmul*) synthesis ──")
+    ok = _case_f_check(ok, "gpu_matmul",      "matmul")
+    ok = _case_f_check(ok, "gpu_matmul_NT_a", "matmul_NT_a")
+    ok = _case_f_check(ok, "gpu_matmul_NT_b", "matmul_NT_b")
 
     println("")
     println("══════════════════════════════════════════════")
