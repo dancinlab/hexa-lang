@@ -163,6 +163,20 @@ pub fn rt_array_slice_float(arr: [float], start: int, end: int) -> [float] {
     return out
 }
 
+// Step 3 cycle 58 — array contains, float fast-path. Returns true if
+// any element of `arr` equals `item`. C wrapper does the all-float
+// guard before dispatch (mixed arrays stay on the polymorphic hexa_eq
+// path). Bool return → int via hexa_truthy bridge in the C wrapper.
+pub fn rt_array_contains_float_b(arr: [float], item: float) -> bool {
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        if arr[i] == item { return true }
+        i = i + 1
+    }
+    return false
+}
+
 // Step 3 cycle 34 — array fill. Returns a NEW array of the same length
 // with every slot set to `v` (interpreter contract: non-mutating).
 pub fn rt_array_fill_float(arr: [float], v: float) -> [float] {

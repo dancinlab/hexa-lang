@@ -1094,6 +1094,21 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 58: hexa_array_contains (float fast-path + int-return bridge)
+
+- ✅ `hexa_array_contains` (self/runtime_core.c:6378) gains the
+  float-array fast-path. When `item` is float AND every element of
+  `arr` is float, dispatches to hexa-source `rt_array_contains_float_b`;
+  mixed-type arrays stay on the polymorphic `hexa_eq` path
+- Int return preserved (codegen wraps in `hexa_bool(...)`). Bool
+  return from hexa → int via `hexa_truthy(...) ? 1 : 0` (cycle-56
+  pattern)
+- `_arr_all_float` helper is `static` in runtime.c; inlined here
+  the same way `hexa_array_reverse` (line 4467-4471) does — small
+  cross-TU duplication is the project precedent
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,776 B
+
 ### 2026-05-21 — step 3 cycle 57: hexa_str_contains + hexa_str_eq (int-return bridge)
 
 - ✅ `hexa_str_contains` (self/runtime_core.c:4108) and `hexa_str_eq`

@@ -6375,6 +6375,12 @@ HexaVal hexa_cmp_ge(HexaVal a, HexaVal b) {
     return hexa_bool(HX_INT(a) >= HX_INT(b));
 }
 
+// Step-3 cycle 58 port — float fast-path bridge. Mixed-type arrays
+// stay on the polymorphic hexa_eq path. Int return preserved (codegen
+// wraps in `hexa_bool(...)` like starts_with). _arr_all_float helper
+// is inlined here (lives static in runtime.c — copy-pattern from
+// hexa_array_reverse above).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int hexa_array_contains(HexaVal arr, HexaVal item) {
     if (!HX_IS_ARRAY(arr)) return 0;
     for (int i = 0; i < HX_ARR_LEN(arr); i++) {
@@ -6382,6 +6388,26 @@ int hexa_array_contains(HexaVal arr, HexaVal item) {
     }
     return 0;
 }
+#else
+extern HexaVal rt_array_contains_float_b(HexaVal arr, HexaVal item);
+int hexa_array_contains(HexaVal arr, HexaVal item) {
+    if (!HX_IS_ARRAY(arr)) return 0;
+    if (HX_IS_FLOAT(item)) {
+        int all_float = 1;
+        int64_t n = HX_ARR_LEN(arr);
+        for (int64_t i = 0; i < n; i++) {
+            if (!HX_IS_FLOAT(HX_ARR_ITEMS(arr)[i])) { all_float = 0; break; }
+        }
+        if (all_float) {
+            return hexa_truthy(rt_array_contains_float_b(arr, item)) ? 1 : 0;
+        }
+    }
+    for (int i = 0; i < HX_ARR_LEN(arr); i++) {
+        if (hexa_truthy(hexa_eq(HX_ARR_ITEMS(arr)[i], item))) return 1;
+    }
+    return 0;
+}
+#endif
 
 // count_substr(s, substr): number of non-overlapping occurrences.
 // Matches interpreter's greedy advance (hexa_full.hexa:14954-14973).
