@@ -594,12 +594,81 @@ pub fn spawn_substrate_bin(substrate: string, substrate_bin: string,
     return _spawn_result(exit_code == 0, exit_code, log_path, tail32)
 }
 
+// ─── Sibling .meta.json roll-up (D113) ──────────────────────────────
+//
+// D113 (demiurge design.md `3c49cfd` · ARCH §4.5 cross-link · constitution
+// R2 §1.2.2): substrate scripts (e.g. stdlib/sscb/ngspice.hexa) emit a
+// sibling `*.meta.json` file alongside their other artifacts in run_dir.
+// emit_record now mirrors that file's `measurements{}` block onto the
+// envelope as `payload.measurements` (top-level) so downstream consumers
+// (cockpit chat panel · RTSC view3D · legacy SSCBProducer record-shape
+// consumers) get the legacy-compatible shape without re-loading the
+// sibling file. The sibling file itself is LEFT UNCHANGED (g3 honest
+// disclosure · source-of-truth preserved); `payload.measurements_source`
+// cites the sibling path for provenance audit.
+//
+// Substrate scripts pick their own meta.json filename (ngspice.hexa uses
+// `sscb_v1.meta.json` from its GEOMETRY_ID const · femmt_sweep.py uses a
+// different convention · etc.) so we scan run_dir for `*.meta.json`
+// rather than predicting the basename from the script path. If there is
+// exactly one sibling, we use it; if multiple, we pick the first one
+// `ls` returns (lexicographic) — Tier-2 hardening could pin a manifest
+// key but Phase A keeps the rule generic.
+//
+// Parsing: we use the runtime's `json_parse` builtin to load the full
+// meta.json and extract the `measurements` value (a map). If parse fails
+// or the key is absent, we return empty results and emit_record omits
+// both fields (honest absent · NOT null).
+
+// _find_sibling_meta(run_dir) → first `*.meta.json` filename (basename
+// only · no run_dir prefix) found in run_dir, or "" if none. Uses
+// `ls`-style probe (cheapest path · matches the rest of cellrun.hexa).
+fn _find_sibling_meta(run_dir: string) -> string {
+    let probe = exec("ls -1 " + _shell_quote(run_dir) + "/*.meta.json 2>/dev/null | head -1").trim()
+    if len(probe) == 0 { return "" }
+    // probe is the absolute path · we want just the basename.
+    let slash = probe.last_index_of("/")
+    if slash < 0 { return probe }
+    return probe.substring(slash + 1, len(probe))
+}
+
+// _read_sibling_meta_measurements(run_dir) → (measurements_value, source_path)
+// where measurements_value is the parsed JSON object (hexa map) for the
+// `measurements{}` block, or empty map if absent · source_path is the
+// sibling filename (relative to run_dir · suitable for provenance cite)
+// or "" if no sibling found.
+//
+// Returns the map via a json object {"measurements": <value>, "source": <path>}
+// so callers can detect absence via has_key. (hexa has no first-class
+// tuple return; map is the idiomatic shim.)
+fn _read_sibling_meta_measurements(run_dir: string) {
+    let result = json_parse("{}")
+    let sibling = _find_sibling_meta(run_dir)
+    if len(sibling) == 0 { return result }
+    let abs_path = run_dir + "/" + sibling
+    let raw = read_text(abs_path)
+    if len(raw) == 0 { return result }
+    // Parse the full meta.json · extract measurements key if present.
+    // json_parse handles nested objects (stdlib/test/test_json.hexa § 1).
+    let parsed = json_parse(raw)
+    if !has_key(parsed, "measurements") { return result }
+    result["measurements"] = parsed["measurements"]
+    result["source"] = sibling
+    return result
+}
+
 // ─── Record emit ────────────────────────────────────────────────────
 //
 // emit_record writes one JSON record under
 //   <output_dir>/<stamp>/<record_id>.json
 // returns the absolute record path. content is the inner JSON object
 // (the dispatcher wraps the g3 provenance envelope on top).
+//
+// D113 roll-up: if a sibling `*.meta.json` exists in run_dir, its
+// `measurements{}` block is mirrored into `payload.measurements` and
+// `payload.measurements_source` cites the sibling filename. Sibling file
+// stays untouched (g3 source-of-truth). Both fields are OMITTED (not
+// null) when no sibling is present.
 
 pub fn _stamp_now() -> string {
     // Prefer the runtime builtin where available; fall back to `date -u`
@@ -619,6 +688,18 @@ pub fn emit_record(record_kind: string, record_id: string,
     // Ensure the run dir exists. `mkdir -p` is the cheapest path.
     let _ = exec("mkdir -p '" + run_dir + "'")
     let dest = run_dir + "/" + record_id + ".json"
+
+    // D113 — sibling `*.meta.json` roll-up. If the substrate script
+    // produced a meta.json alongside its other artifacts, mirror its
+    // `measurements{}` block onto payload top-level. Sibling file is
+    // NOT modified (g3 source-of-truth). `payload.measurements_source`
+    // cites the sibling filename (relative to run_dir) for provenance.
+    // Absent sibling ⇒ both fields OMITTED (honest absent · not null).
+    let meta = _read_sibling_meta_measurements(run_dir)
+    if has_key(meta, "measurements") {
+        payload["measurements"] = meta["measurements"]
+        payload["measurements_source"] = meta["source"]
+    }
 
     // Wrap in the canonical envelope shape (mirrors SSCBProducer's
     // SSCBRecord shape: interface · schemaVersion · recordId ·

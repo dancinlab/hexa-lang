@@ -322,6 +322,117 @@ fn t9_python_candidates_all_missing(root: string) {
           len(bin) == 0)
 }
 
+// ─── T10/T11: D113 payload flattening (sibling .meta.json roll-up) ──
+//
+// D113 (demiurge design.md 3c49cfd · ARCH §4.5 · constitution R2 §1.2.2):
+// cellrun's emit_record mirrors a sibling `*.meta.json::measurements{}`
+// block into `payload.measurements` (top-level) for downstream consumer
+// compatibility (cockpit chat panel · RTSC view3D · legacy producer
+// shape). Sibling file stays untouched; `payload.measurements_source`
+// cites the sibling filename (relative to run_dir) for provenance.
+// Absent sibling ⇒ both fields OMITTED (not null).
+
+fn _write_mock_script_with_meta(root: string) {
+    // Variant of _write_mock_script that also emits a sibling
+    // `mock_v1.meta.json` with a `measurements{}` block — exercises the
+    // D113 roll-up path. Filename `mock_v1.meta.json` matches the
+    // *.meta.json glob from cellrun.hexa::_find_sibling_meta.
+    let path = root + "/hexa-lang/stdlib/mock/echo_meta.sh"
+    let body = "#!/usr/bin/env bash\n" +
+        "echo \"mock spawn ok for $1\" > \"$1/_mock_sentinel.txt\"\n" +
+        "cat > \"$1/mock_v1.meta.json\" <<EOF\n" +
+        "{\"toolchain\":\"mock@1.0\",\"measurements\":{\"rise_time\":1.53,\"interrupt_ratio\":0.350}}\n" +
+        "EOF\n" +
+        "exit 0\n"
+    let _ = write_text(path, body)
+    let _ = exec("chmod +x " + _quote(path))
+}
+
+fn _write_meta_manifest(root: string, domain: string, script_rel: string) -> string {
+    // Manifest that points at echo_meta.sh so emit_record sees a sibling
+    // *.meta.json after the substrate runs. record_kind reused as
+    // "mock_meta_record" so the record-locator probe still works.
+    let path = root + "/domains/" + domain + ".demi"
+    let mut body = "[cell.analyze]\n"
+    body = body + "substrate     = bash\n"
+    body = body + "script        = " + script_rel + "\n"
+    body = body + "record_kind   = mock_meta_record\n"
+    body = body + "output_dir    = exports/" + domain + "/mock\n"
+    body = body + "required_deps =\n"
+    body = body + "gate_default  = OPEN\n"
+    body = body + "absorbed_default = false\n"
+    body = body + "scope_caveats = [\"mock D113 fixture\"]\n"
+    let _ = write_text(path, body)
+    return path
+}
+
+fn t10_payload_measurements_rollup(root: string) {
+    println("\nT10 — sibling *.meta.json::measurements → payload.measurements + payload.measurements_source")
+    _write_mock_script_with_meta(root)
+    let _ = _write_meta_manifest(root, "t10dom", "stdlib/mock/echo_meta.sh")
+
+    let rc = cell_run_with_roots("t10dom", "analyze", _build_roots(root))
+    check("T10 rc == 0 (success)", rc == 0)
+
+    // Locate the emitted record.
+    let lookup = exec("ls -1t " + _quote(root + "/exports/t10dom/mock") + " 2>/dev/null | head -1").trim()
+    let stamp_dir = root + "/exports/t10dom/mock/" + lookup
+    let record_glob = exec("ls -1 " + _quote(stamp_dir) + "/mock_meta_record_*.json 2>/dev/null | head -1").trim()
+    check("T10 record file present", file_exists(record_glob))
+
+    if !file_exists(record_glob) { return }
+    let raw = read_text(record_glob)
+    let obj = json_parse(raw)
+    check("T10 payload present", has_key(obj, "payload"))
+    if !has_key(obj, "payload") { return }
+    let payload = obj["payload"]
+    check("T10 payload.measurements present (D113 roll-up)",
+          has_key(payload, "measurements"))
+    check("T10 payload.measurements_source present (provenance cite)",
+          has_key(payload, "measurements_source"))
+    if has_key(payload, "measurements_source") {
+        check("T10 measurements_source == mock_v1.meta.json",
+              to_string(payload["measurements_source"]) == "mock_v1.meta.json")
+    }
+    if has_key(payload, "measurements") {
+        let m = payload["measurements"]
+        check("T10 measurements.rise_time present + correct",
+              has_key(m, "rise_time"))
+        check("T10 measurements.interrupt_ratio present + correct",
+              has_key(m, "interrupt_ratio"))
+    }
+
+    // Verify sibling file UNCHANGED (g3 source-of-truth preserved).
+    let sibling_path = stamp_dir + "/mock_v1.meta.json"
+    check("T10 sibling .meta.json preserved (g3)", file_exists(sibling_path))
+}
+
+fn t11_no_sibling_meta_omits_fields(root: string) {
+    println("\nT11 — no sibling *.meta.json → payload.measurements + measurements_source OMITTED")
+    // Reuse the plain mock script (no meta.json) + a fresh manifest.
+    _write_mock_script(root)
+    let _ = _write_meta_manifest(root, "t11dom", "stdlib/mock/echo.sh")
+
+    let rc = cell_run_with_roots("t11dom", "analyze", _build_roots(root))
+    check("T11 rc == 0 (success)", rc == 0)
+
+    let lookup = exec("ls -1t " + _quote(root + "/exports/t11dom/mock") + " 2>/dev/null | head -1").trim()
+    let stamp_dir = root + "/exports/t11dom/mock/" + lookup
+    let record_glob = exec("ls -1 " + _quote(stamp_dir) + "/mock_meta_record_*.json 2>/dev/null | head -1").trim()
+    check("T11 record file present", file_exists(record_glob))
+
+    if !file_exists(record_glob) { return }
+    let raw = read_text(record_glob)
+    let obj = json_parse(raw)
+    if !has_key(obj, "payload") { return }
+    let payload = obj["payload"]
+    // Both fields MUST be ABSENT (key missing · not present-but-null).
+    check("T11 payload.measurements ABSENT (honest)",
+          !has_key(payload, "measurements"))
+    check("T11 payload.measurements_source ABSENT (honest)",
+          !has_key(payload, "measurements_source"))
+}
+
 // ─── main ──────────────────────────────────────────────────────────
 
 fn main() {
@@ -339,6 +450,8 @@ fn main() {
     t7_korean_caveats(root)
     t8_python_candidates_resolves(root)
     t9_python_candidates_all_missing(root)
+    t10_payload_measurements_rollup(root)
+    t11_no_sibling_meta_omits_fields(root)
 
     println("")
     println("cellrun_test: " + to_string(_pass) + "/" + to_string(_total))
