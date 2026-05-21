@@ -1,0 +1,6 @@
+device: Apple M3
+shape=256  median=0.0619 ms  TFLOPS=0.542  max_abs=0.1172  max_rel=2964.0198
+shape=384  median=0.1671 ms  TFLOPS=0.678
+shape=512  median=0.3607 ms  TFLOPS=0.744
+shape=768  median=0.4931 ms  TFLOPS=1.837
+shape=1024  median=1.1456 ms  TFLOPS=1.875

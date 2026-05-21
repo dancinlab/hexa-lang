@@ -1142,65 +1142,18 @@ fn _nvptx_wmma_mnemonic_family(op: string, role: string, dtype: string, layout: 
     return ""
 }
 
-// _nvptx_param_kind_for_type_id — RFC 071 P3+ — map a MIR Local's
-// `type_id` (set by `compiler/lower/hir_to_mir.hexa::_type_id_of` from
-// the HIR Type kind string) to the matching PTX register-bank kind for
-// the param-prepass below. Mirrors the integer constants in
-// `_type_id_of`:
-//
-//   type_id == 1 → "i64"    → NVPTX_RKIND_U64  (.u64  / %rd<id>)
-//   type_id == 2 → "i32"    → NVPTX_RKIND_U32  (.u32  / %r<id>)
-//   type_id == 3 → "f64"    → NVPTX_RKIND_F64  (.f64  / %fd<id>)
-//   type_id == 4 → "f32"    → NVPTX_RKIND_F32  (.f32  / %fs<id>)
-//   type_id == 5 → "bool"   → NVPTX_RKIND_PRED (.pred / %p<id>)
-//   anything else (0 = unknown / synthetic; 6=string; 7=char; 8=unit;
-//   anything aggregate like `[f64]` whose `_type_id_of` returns 0)
-//                          → "" (caller does NOT push a PReg; the Local
-//                             remains unclassified so Pass 2 + lookup
-//                             fallback keep their existing behaviour —
-//                             arrays still get U64-as-address from Pass 2;
-//                             pre-RFC071 lower_test fixtures with
-//                             type_id=0 params stay byte-identical).
-//
-// Returning the empty string for an unmapped type_id is the
-// honest-no-op signal — Pass 0 below explicitly skips pushing in that
-// case so test fixtures that build Locals via `_local(id, name)` (which
-// stamps type_id=0) see ZERO diff. The PRED case (type_id=5, bool) is
-// listed for completeness; today no HIR FnDecl synthesizes a bool param
-// that reaches an `@gpu_kernel` body, but the mapping is correct if it
-// ever does (PTX `.pred` is the predicate-register bank).
-fn _nvptx_param_kind_for_type_id(type_id: i64) -> string {
-    if type_id == 1 { return NVPTX_RKIND_U64 }
-    if type_id == 2 { return NVPTX_RKIND_U32 }
-    if type_id == 3 { return NVPTX_RKIND_F64 }
-    if type_id == 4 { return NVPTX_RKIND_F32 }
-    if type_id == 5 { return NVPTX_RKIND_PRED }
-    return ""
-}
-
 // _nvptx_classify_locals — produce the per-function PReg roster the
-// emit pass needs to declare. Three passes:
-//   Pass 0 — walk `mfn.params`; for each param Local whose `type_id`
-//            maps to a recognized PTX register bank
-//            (`_nvptx_param_kind_for_type_id` returns non-empty), emit
-//            one PReg up front. Params are AUTHORITATIVE: a defining
-//            stmt cannot legally re-bind a param's SSA slot in well-
-//            formed MIR, so the Pass 1 dup-check downstream skips
-//            already-seen param ids. RFC 071 P3+ (N17 honest-scope
-//            closure): without this pass, an `n: i64` param fell
-//            through `_nvptx_lookup_reg_for_local` to `%fd<id>`,
-//            producing mixed-bank `setp.lt.s64 %p, %rd<gid>, %fd<n>`.
-//            Pass 0 stamps it U64 → all-U64-bank compare.
+// emit pass needs to declare. Two passes:
 //   Pass 1 — walk every assignment-target Local; infer kind via
 //            `_nvptx_classify_local_for_stmt`; emit one PReg per Local.
 //   Pass 2 — walk every STMT_LOAD / STMT_STORE; for each Local USED as
 //            an address operand, ensure it's in the roster as U64
 //            (.global / .shared loads address through `.u64` registers).
-//            Locals that were already classified by Pass 0 or Pass 1
-//            keep their kind (a Local can't be both an arith result and
-//            an address in well-formed MIR); previously-unclassified
-//            Locals (untyped synthetic params, ext temps used directly
-//            as addresses) get a new U64 PReg row.
+//            Locals that were already classified by Pass 1 keep their
+//            kind (a Local can't be both an arith result and an address
+//            in well-formed MIR); previously-unclassified Locals
+//            (function params, ext temps used directly as addresses)
+//            get a new U64 PReg row.
 //
 // This is the 055-P3b replacement for `_nvptx_collect_f64_regs`: the
 // older collector returns [i64] (just ids — every reg becomes .f64);
@@ -1218,42 +1171,6 @@ fn _nvptx_param_kind_for_type_id(type_id: i64) -> string {
 fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
     let mut regs = []
     let mut seen_ids = []
-    // Pass 0 — param-type-propagation (RFC 071 P3+ N17 honest-scope
-    // closure). Walk `mfn.params` and classify each param Local whose
-    // `type_id` maps to a recognized PTX register bank. Params with
-    // type_id=0 (untyped lower_test fixtures + aggregate types like
-    // `[f64]` whose `_type_id_of` falls through) are intentionally
-    // skipped — Pass 2's STMT_LOAD/STORE address-walk + the
-    // `_nvptx_lookup_reg_for_local` fallback continue to handle them
-    // exactly as before (array-base params still become U64 via
-    // Pass 2, lower_test smoke fixtures stay byte-identical).
-    let mut pi = 0
-    while pi < len(mfn.params) {
-        let p = mfn.params[pi]
-        let pkind = _nvptx_param_kind_for_type_id(p.type_id)
-        if pkind != "" {
-            // Dup-guard for paranoia (params are normally unique, but a
-            // duplicate id would still produce two `.reg` decls without
-            // this guard).
-            let mut dup_p = false
-            let mut kp = 0
-            while kp < len(seen_ids) {
-                if seen_ids[kp] == p.id { dup_p = true }
-                kp = kp + 1
-            }
-            if !dup_p {
-                regs.push(PReg {
-                    name: _nvptx_reg_name_for(pkind, p.id),
-                    kind: pkind,
-                    frag_role: "",
-                    frag_dtype: "",
-                    frag_layout: ""
-                })
-                seen_ids.push(p.id)
-            }
-        }
-        pi = pi + 1
-    }
     // Pass 1 — defining-stmt classification.
     let mut bi = 0
     while bi < len(mfn.blocks) {
