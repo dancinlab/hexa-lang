@@ -166,6 +166,56 @@ fn _abc_log(line: str) {
 //     buf_1 to be in the loaded cell library (true for the full
 //     SKY130 PDK, but not for any synthetic test corpus).
 //
+// rfc_006 §5 d4 ±5% FINAL closure (2026-05-22) — per-bit shadow PORT
+// de-duplication. Iter C registered per-bit shadow wires `<base>__b<k>`
+// (1-bit, dir_kind inherited) in read_verilog's port-decl path SO THAT
+// downstream consumers see them. BUT the `.inputs`/`.outputs` loop below
+// ALSO expands the parent multi-bit port wire `<base>` (width W) into
+// `<base>__b0 .. __b<W-1>`. Both sources emit the SAME `__b<k>` names →
+// each per-bit net appears TWICE in the directive. ABC's `read_blif`
+// then asserts (`Abc_ObjAddFanin`: a PI-net cannot receive a fanin) on
+// the duplicate PI declaration and produces NO mapped BLIF — the
+// pre-existing d4 abc_map FAIL (output file empty) blocking ALL area
+// measurement on the Iter-C worktree HEAD.
+//
+// Fix: skip a wire in the `.inputs`/`.outputs` loop when it is a per-bit
+// shadow of an ALSO-registered multi-bit parent — the parent's W-bit
+// expansion already emits that exact `__b<k>` name once. Detection:
+// the name ends in `__b<decimal>` AND the base (everything before the
+// final `__b`) is a registered wire whose width > 1.
+//
+// @cite BLIF spec §2 (one declaration per PI/PO) + ABC abcFanio.c:92
+// (`Abc_ObjAddFanin` PI-fanin assertion).
+fn _abc_is_perbit_shadow_of_multibit(m: Module, wname: str) -> int {
+    // Find the LAST "__b" in the name.
+    let n = len(wname)
+    let mut p = 0 - 1
+    let mut i = 0
+    while i + 3 <= n {
+        if wname.substring(i, i + 3) == "__b" { p = i }
+        i = i + 1
+    }
+    if p < 0 { return 0 }
+    // Suffix after "__b" must be all decimal digits (non-empty).
+    let suf_start = p + 3
+    if suf_start >= n { return 0 }
+    let mut k = suf_start
+    let mut all_digit = 1
+    while k < n {
+        let ch = wname.substring(k, k + 1)
+        if ch < "0" || ch > "9" { all_digit = 0 }
+        k = k + 1
+    }
+    if all_digit == 0 { return 0 }
+    // Base = everything before the final "__b". Must be a registered
+    // multi-bit (width > 1) wire for this to be a parent-expansion dup.
+    let base = wname.substring(0, p)
+    let bi = rtlil_find_wire(m, base)
+    if bi < 0 { return 0 }
+    if m.wires[bi].width > 1 { return 1 }
+    return 0
+}
+
 // HONEST SCOPE — this emitter walks `module.connect_lhs / _rhs` and
 // `module.cells`. `module.processes` is untouched (post-`proc` pass
 // the design contains only cells + connects + wires; no sync blocks).
@@ -211,6 +261,14 @@ fn abc_emit_blif(d: Design) -> str {
             let w = m.wires[wi]
             let mut ww = w.width
             if ww < 1 { ww = 1 }
+            // rfc_006 §5 d4 ±5% FINAL closure — skip per-bit shadow
+            // wires whose multi-bit parent is also registered; the
+            // parent's W-bit expansion below already emits this exact
+            // `__b<k>` name once (avoids the duplicate-PI ABC assertion).
+            if _abc_is_perbit_shadow_of_multibit(m, w.name) == 1 {
+                wi = wi + 1
+                continue
+            }
             if w.dir_kind == 1 {
                 if ww == 1 {
                     ibuf = ibuf + " " + w.name
