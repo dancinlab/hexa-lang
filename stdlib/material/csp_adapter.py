@@ -361,7 +361,7 @@ def _parse_argv(argv: list[str]) -> tuple[str, str, int, float]:
     p.add_argument("out_dir", help="Output directory for JSON record.")
     p.add_argument(
         "composition",
-        help="Composition string, e.g. 'Pb10Cu1(PO4)6O', 'Nb1', 'MgB2'.",
+        help="Composition string, e.g. 'Ca10(PO4)6F2', 'Nb1', 'MgB2'.",
     )
     p.add_argument(
         "--max-atoms",

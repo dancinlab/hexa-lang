@@ -85,7 +85,7 @@ _VALID_PROPERTIES = ("tc", "band_gap", "formation_energy")
 
 def _slugify_mp_cache(composition: str) -> str:
     """Match the slugging used by exports/material_cache/mp filenames.
-    Pb10Cu(PO4)6O → Pb10Cu_PO4_6O.  YBa2Cu3O7 → YBa2Cu3O7."""
+    Ca10(PO4)6F2 → Ca10_PO4_6F2.  YBa2Cu3O7 → YBa2Cu3O7."""
     s = composition.replace("(", "_").replace(")", "_")
     s = re.sub(r"_+", "_", s).strip("_")
     return s
@@ -200,7 +200,7 @@ def _http_get_json(url: str, timeout: float = 10.0
 
 def _parse_formula_to_species(composition: str) -> list[str]:
     """Extract unique element symbols (alphabetized) from a formula like
-    Pb10Cu(PO4)6O → [Cu, O, P, Pb]. Conservative: best-effort regex."""
+    Ca10(PO4)6F2 → [Ca, F, O, P]. Conservative: best-effort regex."""
     # Strip parens but keep element letters
     flat = composition.replace("(", "").replace(")", "")
     flat = re.sub(r"\d+(\.\d+)?", "", flat)
@@ -641,9 +641,9 @@ def main(out_dir: str, composition: str, prop: str) -> int:
             f"for {composition!r} property={prop!r}; consensus requires "
             f">= 2. Reachable sources: "
             f"{[r['name'] for r in returned]!r}. "
-            f"Common cause: composition not in MP/AFLOW/OQMD (e.g., LK-99 "
-            f"lead-apatite is hypothetical — MP cache row_count=0, "
-            f"AFLOW DB-Fail, OQMD empty data list)."
+            f"Common cause: composition not in MP/AFLOW/OQMD (e.g., "
+            f"apatite-class hypothetical claim-only RT-SC compositions — "
+            f"MP cache row_count=0, AFLOW DB-Fail, OQMD empty data list)."
         )
     elif heavy_opted_in:
         # Opted-in but heavy dispatch not yet wired (Phase 2 work).
@@ -746,7 +746,7 @@ if __name__ == "__main__":
     parser.add_argument("out_dir", help="output directory for JSON record")
     parser.add_argument(
         "composition",
-        help="chemical formula (e.g. Nb, MgB2, YBa2Cu3O7, Pb10Cu(PO4)6O)",
+        help="chemical formula (e.g. Nb, MgB2, YBa2Cu3O7, Ca10(PO4)6F2)",
     )
     parser.add_argument(
         "--property",

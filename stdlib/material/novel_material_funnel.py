@@ -130,7 +130,7 @@ _FALLBACK_OX = (-2, -1, 0, 1, 2, 3)
 
 
 def _format_composition(elems: list[str], counts: list[int]) -> str:
-    """Render `[Pb, Cu, P, O] + [10, 1, 6, 26] → 'Pb10CuP6O26'`. Skips
+    """Render `[Y, Ba, Cu, O] + [1, 2, 3, 7] → 'YBa2Cu3O7'`. Skips
     coefficient when count==1 (matches MP / convention)."""
     parts: list[str] = []
     for e, n in zip(elems, counts):
@@ -155,7 +155,7 @@ def _can_charge_balance(elems: list[str], counts: list[int]) -> bool:
     states — this keeps Nb, NbTi, Nb3Sn, MgB2 (intermetallic), etc.
 
     This is a conservative heuristic — passes some compositions that are
-    chemically dubious but won't reject MgB2, YBa2Cu3O7, Pb10Cu(PO4)6O,
+    chemically dubious but won't reject MgB2, YBa2Cu3O7, Ca10(PO4)6F2,
     NbTi, Nb3Sn, etc.
     """
     # Always include 0 (metallic) — covers pure metals + intermetallic

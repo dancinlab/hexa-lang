@@ -20,11 +20,12 @@
 #
 # Honest scope mismatch (the big one for SC materials):
 #   ASKCOS is trained on Reaxys-derived organic reaction data. For INORGANIC
-#   SC families (LK-99 = lead-apatite, YBCO = Y-Ba-Cu oxide, MgB₂ = intermetallic,
-#   hydrides under GPa pressure) it has no training signal. Routes returned for
-#   these targets would be hallucinations. We detect inorganic composition
-#   up-front and emit `gate_type=domain-mismatch` *without* running ASKCOS, so
-#   the record honestly says "not applicable" rather than fake-confident.
+#   SC families (claim-only RT-SC apatite-class, YBCO = Y-Ba-Cu oxide, MgB₂
+#   = intermetallic, hydrides under GPa pressure) it has no training signal.
+#   Routes returned for these targets would be hallucinations. We detect
+#   inorganic composition up-front and emit `gate_type=domain-mismatch`
+#   *without* running ASKCOS, so the record honestly says "not applicable"
+#   rather than fake-confident.
 #
 # Skip path semantics (gate_type values):
 #   - install-gated             — askcos not importable AND no local Docker image
@@ -136,7 +137,7 @@ _ELEMENT_PATTERN = re.compile(r"([A-Z][a-z]?)(\d*\.?\d*)")
 
 def _parse_formula_elements(formula: str) -> dict[str, float]:
     """Parse a flat compound formula into element-count dict. Handles
-    parentheses one level deep (e.g. "Pb10Cu(PO4)6O" → Pb10, Cu1, P6, O25).
+    parentheses one level deep (e.g. "Ca10(PO4)6F2" → Ca10, P6, O24, F2).
     NOT a full IUPAC parser — just enough to detect carbon-presence vs purely
     inorganic-ion families."""
     # Expand single-level parentheses: "(PO4)6" → "P6O24"
@@ -167,10 +168,11 @@ def _parse_formula_elements(formula: str) -> dict[str, float]:
 # trained on. We do NOT enumerate — we use a heuristic: carbon-present AND
 # composition looks molecular (small element count, no oxide-anion pattern).
 _INORGANIC_SC_HINTS = {
-    # LK-99 / lead-apatite
-    "Pb10Cu(PO4)6O",
-    "Pb9Cu(PO4)6O",
-    "Pb10(PO4)6O",
+    # apatite-class oxide hints (anonymized 2026-05-22 from a specific
+    # historical claim — kept as parenthesis-handling test fixtures only)
+    "Ca10(PO4)6F2",
+    "Ca10(PO4)6(OH)2",
+    "Sr10(PO4)6O",
     # YBCO / REBCO cuprates
     "YBa2Cu3O7", "YBa2Cu3O6", "YBa2Cu3O6.5",
     "Bi2Sr2CaCu2O8", "Bi2Sr2Ca2Cu3O10",
@@ -332,8 +334,9 @@ def main(out_dir: str, target_compound: str) -> int:
     scope_caveats = [
         "(s1) ASKCOS is trained on organic reaction data (Reaxys-derived); "
         "applicability to inorganic SC materials (oxides, hydrides, "
-        "intermetallic alloys) is limited. Routes for LK-99, YBCO, MgB2 "
-        "are extrapolation-grade only.",
+        "intermetallic alloys) is limited. Routes for inorganic SC targets "
+        "(YBCO, MgB2, apatite-class hypotheticals) are extrapolation-grade "
+        "only.",
         "(s2) 5-gate (RTSC.md §8.9 (a)): this is recipe *prediction*, "
         "NOT replicated_by_independent_labs >= 3. (a) gate REQUIRES "
         "wet-lab replication.",
@@ -368,8 +371,8 @@ def main(out_dir: str, target_compound: str) -> int:
             f"training distribution. Rationale: {domain_rationale}. "
             f"Adapter declines to run rather than emit hallucinated "
             f"organic routes for an inorganic target. Cross-reference: "
-            f"exports/synthesis_recipe/ (Tier 2 stubs — literature "
-            f"recipe for LK-99 / YBCO / NbTi / REBCO already there)."
+            f"exports/synthesis_recipe/ (Tier 2 stubs — literature recipes "
+            f"for YBCO / NbTi / REBCO / hexa_rtsc n6 candidate already there)."
         )
     elif hosted_endpoint and hosted_key:
         # Hosted MIT REST endpoint path (env-overridden by user).
@@ -466,8 +469,8 @@ def main(out_dir: str, target_compound: str) -> int:
         "recommendation": (
             "downstream consumer should cross-check with literature "
             "recipe (existing Tier 2 stubs at "
-            "exports/synthesis_recipe/{lk99_lee2023,rebco_mocvd_2g_hts"
-            "_tape,nbti_pit_wire_industrial,hexa_rtsc_n6_candidate}.json). "
+            "exports/synthesis_recipe/{rebco_mocvd_2g_hts_tape,"
+            "nbti_pit_wire_industrial,hexa_rtsc_n6_candidate}.json). "
             "Predicted routes (when present) are candidate funnel input "
             "for wet-lab prioritization — NEVER a substitute for "
             "replicated_by_independent_labs >= 3."
@@ -510,5 +513,5 @@ def main(out_dir: str, target_compound: str) -> int:
 if __name__ == "__main__":
     argv = sys.argv
     out_dir = argv[1] if len(argv) > 1 else "/tmp/material_verify_askcos"
-    target = argv[2] if len(argv) > 2 else "Pb10Cu(PO4)6O"
+    target = argv[2] if len(argv) > 2 else "YBa2Cu3O7"
     sys.exit(main(out_dir, target))
