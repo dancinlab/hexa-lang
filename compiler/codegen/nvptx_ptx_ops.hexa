@@ -107,6 +107,11 @@ pub let PTX_OP_ATOM_ADD_F64: string   = "atom.add.f64"  // global-mem FP64 atomi
 // ── PTX warp-level data movement (RFC 055 §12 P4+ — gpu/SPEC.md §5) ──
 pub let PTX_OP_SHFL_SYNC_IDX_B32: string = "shfl.sync.idx.b32"  // warp-lane shuffle by source-lane idx; ref NVIDIA PTX ISA 9.7.13.4
 pub let PTX_OP_SHFL_SYNC_BFLY_B32: string = "shfl.sync.bfly.b32"  // warp-lane shuffle by XOR lane-mask; ref NVIDIA PTX ISA 9.7.13.4 (closes N70 GAP-A, restored after silent-wipe by 7671d7db)
+// RFC 071 P5++ (N91 GAP-C) — FP64 ↔ 2× u32 reinterpret used by the
+// FP64 warp-shuffle composition. Both shapes (`mov.b64 {lo, hi}, %fd`
+// and `mov.b64 %fd, {lo, hi}`) use the same mnemonic — operand order
+// distinguishes pack vs unpack. ref NVIDIA PTX ISA 9.7.4.3 mov.
+pub let PTX_OP_MOV_B64: string        = "mov.b64"
 
 // ── PTX function-kind directives ──────────────────────────────
 //

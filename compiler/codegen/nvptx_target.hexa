@@ -452,6 +452,14 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
     if op == "add_f32"  { return "add.f32" }
     if op == "sub_f32"  { return "sub.f32" }
     if op == "mul_f32"  { return "mul.f32" }
+    // RFC 071 P4+ (N71-C sibling FP32 div) — F32 has THREE legal rounding
+    // modes in PTX ISA §9.7.1.4 (`div.approx.f32`, `div.full.f32`,
+    // `div.rn.f32`). We default to `div.rn.f32` (IEEE round-to-nearest,
+    // full-precision) to match the FP64 sibling at L437 and stay
+    // numerically conservative; `approx`/`full` can be a precision-policy
+    // opt-in later. Restored after silent-wipe by 7671d7db (see N81 BFLY
+    // restore commit 842d6565 — same wipe class).
+    if op == "div_f32"  { return "div.rn.f32" }
     return ""
 }
 
@@ -468,11 +476,22 @@ fn _nvptx_binop_mnemonic_for_kind(op: string, kind: string) -> string {
         if op == "add" || op == "+" { return "add.s32" }
         if op == "sub" || op == "-" { return "sub.s32" }
         if op == "mul" || op == "*" { return "mul.lo.s32" }
+        // RFC 071 P4+ (N71-C, closes N70 GAP-B) — integer division.
+        // PTX ISA §9.7.1.4 requires an EXPLICIT type-class on `div.<ty>`:
+        // `div.s32 %r_dst, %r_a, %r_b`. Signed by default — HIR does not
+        // track an unsigned-int signedness flag distinct from `u32`/`i32`
+        // at this codegen seam (NVPTX_RKIND_U32 covers both). Restored
+        // after silent-wipe by 7671d7db (N81-class).
+        if op == "div" || op == "/" { return "div.s32" }
     }
     if kind == NVPTX_RKIND_U64 {
         if op == "add" || op == "+" { return "add.s64" }
         if op == "sub" || op == "-" { return "sub.s64" }
         if op == "mul" || op == "*" { return "mul.lo.s64" }
+        // RFC 071 P4+ (N71-C, closes N70 GAP-B) — 64-bit integer division.
+        // `div.s64 %rd_dst, %rd_a, %rd_b` per PTX ISA §9.7.1.4. Restored
+        // after silent-wipe by 7671d7db (N81-class).
+        if op == "div" || op == "/" { return "div.s64" }
     }
     return _nvptx_binop_mnemonic(op)
 }
@@ -991,19 +1010,95 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
         // The `bfly` mode XORs the calling thread's lane id with the mask
         // operand to compute the source lane — the canonical primitive for
         // warp-reduce (mask = 16, 8, 4, 2, 1 reduces 32 lanes pairwise).
+        //
+        // RFC 071 P5++ (N91 GAP-C) — FP64 source composition. PTX shfl
+        // operates only on 32-bit registers (PTX ISA §9.7.13.4), so an
+        // FP64 source (`%fd<src>`) must be decomposed into hi/lo u32
+        // halves before the shuffle, and the two shuffled halves
+        // reassembled into an FP64 dst (`%fd<dst>`):
+        //   mov.b64 {%r_lo, %r_hi}, %fd<src>;            // PTX uses lo,hi order
+        //   shfl.sync.bfly.b32 %r_dlo, %r_lo, %r<mask>, 0x1f, 0xffffffff;
+        //   shfl.sync.bfly.b32 %r_dhi, %r_hi, %r<mask>, 0x1f, 0xffffffff;
+        //   mov.b64 %fd<dst>, {%r_dlo, %r_dhi};
+        // The four scratch u32 regs (`%r_shfl_{lo,hi,dlo,dhi}_<dst.id>`)
+        // are declared in Pass 3 of `_nvptx_classify_locals` — one set per
+        // FP64 shuffle statement (no cross-statement aliasing). For the
+        // 32-bit source path the existing single-shfl emit is preserved
+        // (the dst classifier returns U32; src spelled via `_nvptx_reg_u32`).
         if s.op == "gpu_warp_shuffle_xor" {
             if len(s.args) >= 2 {
-                let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
-                let src_reg = _nvptx_reg_u32(s.args[0].local_id)
-                let mask_reg = _nvptx_reg_u32(s.args[1].local_id)
-                let mut a = []
-                a.push(_nvptx_op(dst_reg))
-                a.push(_nvptx_op(src_reg))
-                a.push(_nvptx_op(mask_reg))
-                a.push(_nvptx_op("0x1f"))
-                a.push(_nvptx_op("0xffffffff"))
-                out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_BFLY_B32, a,
-                    "gpu_warp_shuffle_xor(v, lane_mask)"))
+                let src_kind = if s.args[0].kind == "local" { _nvptx_lookup_kind_for_local(kinds, s.args[0].local_id) } else { NVPTX_RKIND_U32 }
+                // Mask must be a 32-bit register per PTX ISA §9.7.13.4.
+                // If the classifier put the mask Local in the U64 bank
+                // (e.g. `mask: i32 = 16` widened to i64 by the HIR→MIR
+                // type-id default), emit a `cvt.u32.u64 <scratch>, %rd<m>`
+                // and pass `<scratch>` to the shfl. Scratch reg is
+                // dst-id-scoped so back-to-back shuffles don't alias.
+                let mask_kind = if s.args[1].kind == "local" { _nvptx_lookup_kind_for_local(kinds, s.args[1].local_id) } else { NVPTX_RKIND_U32 }
+                let mut mask_reg = ""
+                if s.args[1].kind == "local" && mask_kind == NVPTX_RKIND_U64 {
+                    let m_scratch = "%r_shfl_mask_" + to_string(s.dst.id)
+                    let m_src = _nvptx_reg_u64(s.args[1].local_id)
+                    let mut am = []
+                    am.push(_nvptx_op(m_scratch))
+                    am.push(_nvptx_op(m_src))
+                    out.push(_nvptx_instr("cvt.u32.u64", am,
+                        "gpu_warp_shuffle_xor mask u64->u32 narrow"))
+                    mask_reg = m_scratch
+                } else if s.args[1].kind == "local" {
+                    mask_reg = _nvptx_lookup_reg_for_local(kinds, s.args[1].local_id)
+                } else {
+                    mask_reg = _nvptx_reg_u32(s.args[1].local_id)
+                }
+                if src_kind == NVPTX_RKIND_F64 {
+                    let dst_reg = _nvptx_reg_f64(s.dst.id)
+                    let src_reg = _nvptx_reg_f64(s.args[0].local_id)
+                    let r_lo  = "%r_shfl_lo_"  + to_string(s.dst.id)
+                    let r_hi  = "%r_shfl_hi_"  + to_string(s.dst.id)
+                    let r_dlo = "%r_shfl_dlo_" + to_string(s.dst.id)
+                    let r_dhi = "%r_shfl_dhi_" + to_string(s.dst.id)
+                    // mov.b64 {%r_lo, %r_hi}, %fd<src>  — decompose FP64 into 2× u32
+                    let mut a0 = []
+                    a0.push(_nvptx_op("{" + r_lo + ", " + r_hi + "}"))
+                    a0.push(_nvptx_op(src_reg))
+                    out.push(_nvptx_instr(PTX_OP_MOV_B64, a0,
+                        "gpu_warp_shuffle_xor f64 src -> {lo, hi}"))
+                    // shfl.sync.bfly.b32 %r_dlo, %r_lo, %r<mask>, 0x1f, 0xffffffff
+                    let mut a1 = []
+                    a1.push(_nvptx_op(r_dlo))
+                    a1.push(_nvptx_op(r_lo))
+                    a1.push(_nvptx_op(mask_reg))
+                    a1.push(_nvptx_op("0x1f"))
+                    a1.push(_nvptx_op("0xffffffff"))
+                    out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_BFLY_B32, a1,
+                        "gpu_warp_shuffle_xor lo half"))
+                    // shfl.sync.bfly.b32 %r_dhi, %r_hi, %r<mask>, 0x1f, 0xffffffff
+                    let mut a2 = []
+                    a2.push(_nvptx_op(r_dhi))
+                    a2.push(_nvptx_op(r_hi))
+                    a2.push(_nvptx_op(mask_reg))
+                    a2.push(_nvptx_op("0x1f"))
+                    a2.push(_nvptx_op("0xffffffff"))
+                    out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_BFLY_B32, a2,
+                        "gpu_warp_shuffle_xor hi half"))
+                    // mov.b64 %fd<dst>, {%r_dlo, %r_dhi} — reassemble FP64
+                    let mut a3 = []
+                    a3.push(_nvptx_op(dst_reg))
+                    a3.push(_nvptx_op("{" + r_dlo + ", " + r_dhi + "}"))
+                    out.push(_nvptx_instr(PTX_OP_MOV_B64, a3,
+                        "gpu_warp_shuffle_xor {lo, hi} -> f64 dst"))
+                } else {
+                    let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+                    let src_reg = _nvptx_reg_u32(s.args[0].local_id)
+                    let mut a = []
+                    a.push(_nvptx_op(dst_reg))
+                    a.push(_nvptx_op(src_reg))
+                    a.push(_nvptx_op(mask_reg))
+                    a.push(_nvptx_op("0x1f"))
+                    a.push(_nvptx_op("0xffffffff"))
+                    out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_BFLY_B32, a,
+                        "gpu_warp_shuffle_xor(v, lane_mask)"))
+                }
             }
             return out
         }
@@ -1677,6 +1772,23 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                                 if ks == NVPTX_RKIND_U64 || ks == NVPTX_RKIND_U32 { kind = ks }
                             }
                         }
+                        // RFC 071 P5++ (N91 GAP-C) — gpu_warp_shuffle_xor
+                        // dst-kind inherits from the source operand's bank
+                        // (args[0]). The default classifier returns U32 to
+                        // match the 32-bit-baseline mnemonic, but when the
+                        // source is an FP64 Local the FP64-composition body
+                        // emit (mov.b64 hi/lo + 2× shfl.bfly.b32 + mov.b64
+                        // reassemble) produces an FP64 dst — declaring it in
+                        // the F64 bank makes `_nvptx_lookup_reg_for_local`
+                        // resolve to `%fd<id>` for the reassemble's dst. The
+                        // existing U32-source path (the 32-bit baseline) is
+                        // preserved by the F64-only branch.
+                        if s.kind == STMT_CALL && s.op == "gpu_warp_shuffle_xor" && kind == NVPTX_RKIND_U32 {
+                            if len(s.args) >= 1 && s.args[0].kind == "local" {
+                                let ksh = _nvptx_lookup_kind_for_local(regs, s.args[0].local_id)
+                                if ksh == NVPTX_RKIND_F64 { kind = NVPTX_RKIND_F64 }
+                            }
+                        }
                         // RFC 067 P3 — for FRAG PRegs, stamp the role /
                         // dtype / layout from the STMT_CALL op name; for
                         // every other kind the metadata stays "" (the
@@ -1844,6 +1956,46 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
             frag_dtype: "",
             frag_layout: ""
         })
+    }
+    // RFC 071 P5++ (N91 GAP-C) — Pass 3.5 scratch regs for FP64
+    // `gpu_warp_shuffle_xor` composition. Each FP64 shuffle statement
+    // needs four private u32 scratches: lo/hi for the decomposed source
+    // and dlo/dhi for the shuffled halves before reassembly. Naming is
+    // dst-id-scoped (`%r_shfl_{lo,hi,dlo,dhi}_<dst.id>`) so back-to-back
+    // shuffles within a reduce loop don't clobber each other's hi/lo
+    // halves. Pass 1's operand-kind inference (above) flips the dst into
+    // the F64 bank when the source is FP64; we mirror that decision
+    // here by looking up the dst's classified kind.
+    let mut bl = 0
+    while bl < len(mfn.blocks) {
+        let blk = mfn.blocks[bl]
+        let mut sl = 0
+        while sl < len(blk.stmts) {
+            let s = blk.stmts[sl]
+            if s.kind == STMT_CALL && s.op == "gpu_warp_shuffle_xor" && s.dst.id >= 0 {
+                let dst_kind = _nvptx_lookup_kind_for_local(regs, s.dst.id)
+                if dst_kind == NVPTX_RKIND_F64 {
+                    let suf = to_string(s.dst.id)
+                    regs.push(PReg { name: "%r_shfl_lo_"  + suf, kind: NVPTX_RKIND_U32, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: "%r_shfl_hi_"  + suf, kind: NVPTX_RKIND_U32, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: "%r_shfl_dlo_" + suf, kind: NVPTX_RKIND_U32, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: "%r_shfl_dhi_" + suf, kind: NVPTX_RKIND_U32, frag_role: "", frag_dtype: "", frag_layout: "" })
+                }
+                // Mask-narrow scratch: when the mask Local is U64 (e.g.
+                // `mask: i32 = 16` typed up by the MIR layer), the body
+                // emit synthesizes a `cvt.u32.u64 <scratch>, %rd<m>` so
+                // the shfl gets a real `.b32` operand. Declared per
+                // shuffle (mirrors the hi/lo scratch lifetime).
+                if s.dst.id >= 0 && len(s.args) >= 2 && s.args[1].kind == "local" {
+                    let mk = _nvptx_lookup_kind_for_local(regs, s.args[1].local_id)
+                    if mk == NVPTX_RKIND_U64 {
+                        regs.push(PReg { name: "%r_shfl_mask_" + to_string(s.dst.id), kind: NVPTX_RKIND_U32, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    }
+                }
+            }
+            sl = sl + 1
+        }
+        bl = bl + 1
     }
     return regs
 }

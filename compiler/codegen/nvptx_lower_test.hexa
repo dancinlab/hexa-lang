@@ -793,11 +793,12 @@ fn main() {
     let ok_fp8a  = _test_f8_e4m3_load_store()
     let ok_fp8b  = _test_f8_e5m2_load_store()
     let ok_i64c  = _test_to_i64_and_int_cmp()
+    let ok_wsxf  = _test_warp_shuffle_xor_f64()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c {
-        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+ — 28/28 cases (incl. fp8 e4m3 + e5m2 ld/st + to_i64 + int cmp)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_wsxf {
+        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5++ — 29/29 cases (incl. fp8 e4m3 + e5m2 ld/st + to_i64 + int cmp + warp_shuffle_xor FP64 composition)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -828,9 +829,10 @@ fn main() {
         if !ok_fp8a { println("      RFC 068 §3 fp8 e4m3 scaffold FAILED") }
         if !ok_fp8b { println("      RFC 068 §3 fp8 e5m2 scaffold FAILED") }
         if !ok_i64c { println("      RFC 071 P3+ to_i64 + int cmp + br_cond FAILED") }
+        if !ok_wsxf { println("      RFC 071 P5++ warp_shuffle_xor FP64 composition FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_wsxf) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -892,6 +894,110 @@ fn _test_warp_shuffle() -> bool {
     ok = _check(ok, ptx, "shfl.sync.idx.b32 %r2, %r0, %r1, 0x1f, 0xffffffff",  "shfl.sync.idx.b32 full operand list")
     return ok
 }
+
+// ── Case 32 — RFC 071 P5++ gpu_warp_shuffle_xor FP64 composition ────
+//
+// N91 GAP-C closure. When `gpu_warp_shuffle_xor`'s source operand is
+// FP64 (e.g. `sum` from a warp-reduce loop), PTX shfl can't operate
+// directly on 64-bit registers (PTX ISA §9.7.13.4 — shfl is .b32 only).
+// The codegen must decompose the FP64 into hi/lo u32 halves, shuffle
+// each independently, and reassemble. Fixture:
+//
+//   sum = lhs + rhs            ; STMT_BINOP "+" → FP64 dst %fd2
+//   mask = gpu_thread_id_x()   ; STMT_CALL → U32 %r3
+//   shuf = gpu_warp_shuffle_xor(sum, mask)   ; FP64 src → FP64 dst %fd4
+//
+// Expected emitted PTX:
+//   .reg .f64 %fd4                            ; dst in F64 bank
+//   .reg .u32 %r_shfl_lo_4 / hi_4 / dlo_4 / dhi_4   ; 4 scratch regs
+//   mov.b64 {%r_shfl_lo_4, %r_shfl_hi_4}, %fd2;   ; FP64 → 2× u32
+//   shfl.sync.bfly.b32 %r_shfl_dlo_4, %r_shfl_lo_4, %r3, 0x1f, 0xffffffff;
+//   shfl.sync.bfly.b32 %r_shfl_dhi_4, %r_shfl_hi_4, %r3, 0x1f, 0xffffffff;
+//   mov.b64 %fd4, {%r_shfl_dlo_4, %r_shfl_dhi_4};   ; reassemble FP64
+
+fn _build_case_warp_shuffle_xor_f64() -> MModule {
+    let lhs = _local(0, "lhs")         // STMT_BINOP src — F64 %fd0
+    let rhs = _local(1, "rhs")         // STMT_BINOP src — F64 %fd1
+    let sum = _local(2, "sum")         // STMT_BINOP dst — F64 %fd2 (source for shfl)
+    let mask = _local(3, "mask")       // STMT_CALL gpu_thread_id_x — U32 %r3
+    let shuf = _local(4, "shuf")       // gpu_warp_shuffle_xor dst — F64 %fd4 (FP64 composition)
+
+    let mut shuf_args = []
+    shuf_args.push(_op_local(sum.id))
+    shuf_args.push(_op_local(mask.id))
+
+    let mut s0 = []
+    s0.push(_stmt_binop(sum, "+", _op_local(lhs.id), _op_local(rhs.id)))
+    s0.push(_stmt_call(mask, "gpu_thread_id_x"))
+    s0.push(_stmt_call_with_args(shuf, "gpu_warp_shuffle_xor", shuf_args))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(lhs)
+    params.push(rhs)
+    let mut locals = []
+    locals.push(lhs)
+    locals.push(rhs)
+    locals.push(sum)
+    locals.push(mask)
+    locals.push(shuf)
+
+    let mf = MFunc {
+        name: "warp_shuffle_xor_f64_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_warp_shuffle_xor_f64.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_warp_shuffle_xor_f64() -> bool {
+    let mut ok = true
+    let mod_wsxf = _build_case_warp_shuffle_xor_f64()
+    let ptx = codegen_emit_ptx_sm80(mod_wsxf)
+
+    println("")
+    println("-- emitted PTX (RFC 071 P5++ gpu_warp_shuffle_xor FP64 case, sm_80) --")
+    println(ptx)
+
+    // Dst classified into F64 bank (operand-kind inference, Pass 1).
+    ok = _check(ok, ptx, ".reg .f64 %fd4",
+        "f64 bank for warp_shuffle_xor dst (FP64 source inference)")
+    // Four scratch u32 registers, declared in Pass 3.5.
+    ok = _check(ok, ptx, ".reg .u32 %r_shfl_lo_4",
+        "scratch %r_shfl_lo_4 declared")
+    ok = _check(ok, ptx, ".reg .u32 %r_shfl_hi_4",
+        "scratch %r_shfl_hi_4 declared")
+    ok = _check(ok, ptx, ".reg .u32 %r_shfl_dlo_4",
+        "scratch %r_shfl_dlo_4 declared")
+    ok = _check(ok, ptx, ".reg .u32 %r_shfl_dhi_4",
+        "scratch %r_shfl_dhi_4 declared")
+    // FP64 → 2× u32 decompose.
+    ok = _check(ok, ptx, "mov.b64 {%r_shfl_lo_4, %r_shfl_hi_4}, %fd2",
+        "mov.b64 FP64 src -> {lo, hi}")
+    // Two 32-bit shfl.sync.bfly.b32 — one per half.
+    ok = _check(ok, ptx,
+        "shfl.sync.bfly.b32 %r_shfl_dlo_4, %r_shfl_lo_4, %r3, 0x1f, 0xffffffff",
+        "shfl.sync.bfly.b32 on lo half")
+    ok = _check(ok, ptx,
+        "shfl.sync.bfly.b32 %r_shfl_dhi_4, %r_shfl_hi_4, %r3, 0x1f, 0xffffffff",
+        "shfl.sync.bfly.b32 on hi half")
+    // {lo, hi} → FP64 reassemble.
+    ok = _check(ok, ptx, "mov.b64 %fd4, {%r_shfl_dlo_4, %r_shfl_dhi_4}",
+        "mov.b64 {lo, hi} -> FP64 dst")
+    return ok
+}
+
 // ── Case 8 — 055-P4+ _nvptx_unroll_pass (canonical 3-block back-edge) ─
 //
 // RFC 055 §12 P4+ MVP: the loop-unroll pass clones the body of a
