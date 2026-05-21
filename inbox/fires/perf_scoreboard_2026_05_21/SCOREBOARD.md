@@ -320,3 +320,219 @@ explicitly in §9.5 + cell foot-notes (NEVER inferred).
 **Generated**: 2026-05-21 by read-only aggregator (no compiler / GPU.md edits).
 **Scope contract**: this file complements `GPU.md` §10 (binary closure scoreboard). It is
 NOT meant to live in `GPU.md` itself — perf-side is a follow-on artifact per task brief.
+
+---
+
+# ────────────────────────────────────────────────────────────────────────
+# v2 APPENDIX — Round 13–17 cumulative (post-N87, refreshed 2026-05-22)
+# ────────────────────────────────────────────────────────────────────────
+
+**Trigger**: original §1-§10 scoreboard captured the **pre-N77** state
+(peak 31.28 TFLOPS / ratio 0.462 @ M=1536, N76-retry). Subsequent cycles N77–N107
+moved the HGEMM peak to **37.996 TFLOPS / ratio 0.5705** (single-session +21.4% TFLOPS
+/ +23.5% ratio). This appendix preserves the original tables verbatim (no edits to §1-§10)
+and adds new rows for every post-N87 measurement-bearing artifact.
+
+**Substrate**: identical to §1-§10 (RTX 5070 sm_120 ubu-2, FP16 HGEMM input + FP32 acc,
+`wmma`-family hand-emit PTX, 200 reps + 20 warmup, `cudaEventRecord` per-iter sync,
+`max_abs=0` byte-eq vs cuBLAS HGEMM via `cublasGemmEx`+`CUBLAS_TENSOR_OP_MATH`).
+
+**Honest scope** (`@D g3`): still **NOT in cuBLAS-beat regime** at any compute-bound
+shape. Headline best compute-bound ratio remains **N76-retry 0.897 @ 384³** (§1 row).
+The new peak is **N93 0.5705 @ 1536³** which is the highest **at the saturated/large-M
+regime** — a different axis of "catch-up".
+
+---
+
+## v2.A — RTX 5070 HGEMM cumulative (post-N87, every populated artifact)
+
+Each row cites the row's own `result.json` and the landing commit SHA. `pct vs N87 peak`
+is `(hexa_TFLOPS / 31.283 - 1) × 100` at M=1536. Rows ordered by cycle tag.
+
+| Cycle | Variant | Shape (M=N=K) | hexa TFLOPS | cuBLAS HGEMM TFLOPS | Ratio | Δ vs N87-peak (1536) | Artifact | Commit |
+|------:|---------|--------------:|------------:|--------------------:|------:|---------------------:|----------|--------|
+| **N77 (PP)** | ldmatrix.x4 + mma.m16n8k16 + cp.async.cg vec16 (compound) | 256³  | 4.619  | 5.066  | 0.912 | — | `inbox/fires/rfc067_pP_hexa_sgemm_ldmatrix_cpasync_2026_05_21/result.json` | `7cb6d10b` |
+| N77 (PP) | (same) | 384³  | 12.245 | 16.772 | 0.730 | — | (same) | (same) |
+| N77 (PP) | (same) | 512³  | 17.332 | 24.745 | 0.700 | — | (same) | (same) |
+| N77 (PP) | (same) | 768³  | 29.896 | 47.582 | 0.628 | — | (same) | (same) |
+| N77 (PP) | (same) | 1024³ | 29.039 | 54.295 | 0.535 | — | (same) | (same) |
+| **N77 (PP)** | (same) | **1536³** | **36.060** | **67.650** | **0.533** | **+15.27%** | (same) | (same) |
+| N79 (PQ) | SW-pipeline ldmatrix(K+1) ahead of mma(K) | 256³  | 4.406  | 4.510  | 0.977 | — | `inbox/fires/rfc067_pQ_hexa_sgemm_swpipe_2026_05_21/result.json` | `a66df393` |
+| N79 (PQ) | (same) | 384³  | 11.718 | 13.107 | 0.894 | — | (same) | (same) |
+| N79 (PQ) | (same) | 512³  | 15.033 | 23.269 | 0.646 | — | (same) | (same) |
+| N79 (PQ) | (same) | 768³  | 26.435 | 45.775 | 0.577 | — | (same) | (same) |
+| N79 (PQ) | (same) | 1024³ | 25.295 | 51.942 | 0.487 | — | (same) | (same) |
+| N79 (PQ) | (same) | 1536³ | 31.275 | 67.650 | 0.462 | -0.03% | (same) | (same) |
+| N88 (PR) | N77 + K-loop unroll 2× (K_TILE 16→32 consumer)  | 256³  | 4.660  | 4.970  | 0.938 | — | `inbox/fires/rfc067_pR_hexa_sgemm_kunroll_2026_05_21/result.json` | `e9c89904` |
+| N88 (PR) | (same) | 384³  | 12.267 | 14.624 | 0.839 | — | (same) | (same) |
+| N88 (PR) | (same) | 512³  | 15.224 | 24.818 | 0.613 | — | (same) | (same) |
+| N88 (PR) | (same) | 768³  | 25.691 | 47.582 | 0.540 | — | (same) | (same) |
+| N88 (PR) | (same) | 1024³ | 24.713 | 54.339 | 0.455 | — | (same) | (same) |
+| N88 (PR) | (same) | **1536³** | 28.816 | 67.218 | 0.429 | **-7.89%** | (same) | (same) |
+| **N89 (PS)** | 128×128 output tile per CTA, 1024 thd/CTA, 4× mma.m16n8k16 per warp | 256³  | 2.180  | 4.993  | 0.437 | — | `inbox/fires/rfc067_pS_hexa_sgemm_tile128_2026_05_21/result.json` | `c4078b87` |
+| N89 (PS) | (same) | 384³  | 5.578  | 16.772 | 0.333 | — | (same) | (same) |
+| N89 (PS) | (same) | 512³  | 10.486 | 24.818 | 0.423 | — | (same) | (same) |
+| N89 (PS) | (same) | 768³  | 25.278 | 47.663 | 0.530 | — | (same) | (same) |
+| N89 (PS) | (same) | 1024³ | 23.241 | 54.295 | 0.428 | — | (same) | (same) |
+| **N89 (PS)** | (same) | **1536³** | **37.072** | **66.596** | **0.557** | **+18.51%** | (same) | (same) |
+| N90 (PT) | FP16 + mma.m16n8k32 (illegal ISA shape) | all   | null   | (cuBLAS rows captured) | null | — | `inbox/fires/rfc067_pT_hexa_sgemm_m16n8k32_2026_05_21/result.json` | `9c92e3b2` |
+| N94 (PV) | N77 body wrapped in persistent CTA tile loop (grid=#SMs) | 256³  | 4.640  | 4.981  | 0.931 | — | `inbox/fires/rfc067_pV_hexa_sgemm_persistent_2026_05_21/result.json` | `ab81ea39` |
+| N94 (PV) | (same) | 384³  | 12.396 | 16.772 | 0.739 | — | (same) | (same) |
+| N94 (PV) | (same) | 512³  | 16.878 | 24.745 | 0.682 | — | (same) | (same) |
+| N94 (PV) | (same) | 768³  | 29.247 | 47.582 | 0.615 | — | (same) | (same) |
+| N94 (PV) | (same) | 1024³ | 29.014 | 54.383 | 0.534 | — | (same) | (same) |
+| N94 (PV) | (same) | **1536³** | 35.920 | 66.576 | 0.540 | **+14.83%** | (same) | (same) |
+| **N93 (PU)** | N89 (PS) + epilogue `st.global.v2.f32` vec-2 stores | 256³  | 2.378  | 4.993  | 0.476 | — | `inbox/fires/rfc067_pU_hexa_sgemm_direct_d_2026_05_21/result.json` | `932e5189` |
+| N93 (PU) | (same) | 384³  | 5.840  | 16.772 | 0.348 | — | (same) | (same) |
+| N93 (PU) | (same) | 512³  | 11.125 | 24.818 | 0.448 | — | (same) | (same) |
+| N93 (PU) | (same) | 768³  | 25.879 | 47.743 | 0.542 | — | (same) | (same) |
+| N93 (PU) | (same) | 1024³ | 24.271 | 54.339 | 0.447 | — | (same) | (same) |
+| **N93 (PU)** | (same) | **1536³** | **🛸 37.996** | **66.596** | **🛸 0.5705** | **🛸 +21.46% (PEAK)** | (same) | (same) |
+| N104 (SASS-diff) | structural diff vs cublas s16816gemm_f16_64x64_32x6_nn_align8 | 1536³ | (analysis) | 69.4 (cublas-measured median 0.104417 ms) | — | — | `inbox/fires/rfc067_sass_diff_2026_05_21/result.json` | `0d59c419` |
+| N105 (PW) | 6-stage cp.async SW pipeline | — | **pending** | — | — | — | `inbox/fires/rfc067_pW_hexa_sgemm_6stage_2026_05_21/` (empty) | (Round 17 in-flight) |
+| N106 (PX) | K-tile 16→32 | — | **pending** | — | — | — | `inbox/fires/rfc067_pX_hexa_sgemm_ktile32_2026_05_21/` (empty) | (Round 17 in-flight) |
+
+**Notes on `pending` rows**: directories exist but are empty (no `result.json`, no `fire.log`,
+no PTX gen). Round 17 sub-agent (N105 6-stage SW pipeline, N106 K-tile 32, N107 4-warp+swizzle,
+N108 matmul silicon-fire) had not landed an artifact at scoreboard refresh. Per `@D g3`: NO
+numbers fabricated for these rows.
+
+---
+
+## v2.B — Single-session peak progression by round (HGEMM @ M=1536)
+
+Visual ascent of the M=1536 saturated-large-M peak across the cycle history. cuBLAS HGEMM
+ceiling at M=1536 = ~67.65 TFLOPS (measured first-pass) / 69.40 (measured via nsys in N104).
+
+| Round | Best cycle (M=1536) | hexa TFLOPS | Ratio | Δ vs round-1 | Δ vs prior peak | Substrate | Mechanism |
+|-------|---------------------|------------:|------:|-------------:|----------------:|-----------|-----------|
+| 1     | N38 (pD)            | 16.69       | 0.350 | —            | —               | RTX 5070  | naive WMMA m16n16k16 |
+| 13    | N76-retry (pO)      | 31.28       | 0.462 | **+87.4%**   | +87.4%          | RTX 5070  | + ldmatrix.x4 + 2× mma.m16n8k16 |
+| 14    | **N77 (pP)**        | **36.06**   | 0.533 | +116.0%      | **+15.3%**      | RTX 5070  | + cp.async.cg vec16 (compound stack) |
+| 15    | **N89 (pS)**        | **37.07**   | 0.557 | +122.1%      | **+2.81%**      | RTX 5070  | + 128×128 tile, 1024 thd/CTA, 4× mma per warp |
+| 16    | **N93 (pU)**        | **🛸 37.996** | **🛸 0.5705** | **+127.6%** | **+2.49%** | RTX 5070  | + `st.global.v2.f32` vec-2 epilogue stores |
+| 17    | (N105 / N106 / N107)| pending     | pending | pending      | pending         | RTX 5070  | (6-stage cp.async / K-tile 32 / 4-warp+swizzle) |
+
+Round 14 = 14.7% of round-1→round-13 closure delivered in a single compound stack.
+Round 15+16 = diminishing returns (2-3% each) as N77 baseline approached the structural
+ceiling of single-buffer + low-stage-depth + small-K-tile.
+
+**N104 projection** (per `rfc067_sass_diff_2026_05_21/result.json`):
+- rec 1 (6-stage cp.async SW pipe) alone → 53-57 TFLOPS, ratio 0.79-0.85
+- rec 1 + rec 2 (K-tile 32) → 60-62 TFLOPS, ratio 0.90-0.93
+- rec 1 + rec 2 + rec 3 (tile 64×64, 4-warp/CTA) → 62-65 TFLOPS, ratio 0.93-0.98
+
+Round 17 is exactly the rec-1 + rec-2 + rec-3 attempt. If sub-agents land the implementation
+faithfully, projected post-Round-17 peak = **0.93-0.98 ratio @ M=1536** (cuBLAS-beat
+**boundary**, not crossing).
+
+---
+
+## v2.C — Falsified hypotheses (post-N87, additive to §9.1)
+
+Continuation of §9.1's 4-falsifier list. All falsifications honest negatives per `@D g3`.
+
+5. **N79 — SW pipeline ldmatrix(K+1) ahead of mma(K) yields 0% gain.**
+   Hypothesis: explicit b32-mov rename + 2-deep K-loop register pipeline would overlap
+   ldmatrix latency with mma issue. **Refuted**: ratio @ M=1536 = 0.462 (identical to
+   N76-retry pre-compound). ptxas SASS-reorders single-buffer K-loops already; static
+   hexa-side pipelining yields no SASS-observable delta.
+   Artifact: `inbox/fires/rfc067_pQ_hexa_sgemm_swpipe_2026_05_21/result.json` + SASS dumps
+   `sass_po_1536.txt` / `sass_pq_1536.txt` (commit `a66df393`).
+
+6. **N88 — K-loop unroll 2× regresses -20.1% @ M=1536.**
+   Hypothesis: K_TILE 16→32 consumer halves bar.sync + doubles mma per K-step → +10-15%.
+   **Refuted**: occupancy collapse + WAW chain on accumulator regs wipes amortisation.
+   M=1536 ratio drops 0.533 → 0.429.
+   Artifact: `inbox/fires/rfc067_pR_hexa_sgemm_kunroll_2026_05_21/result.json` (commit `e9c89904`).
+
+7. **N90 — mma.m16n8k32 with FP16 input ISA-illegal across all Nvidia gens.**
+   PTX load fails at `cuModuleLoadDataEx` for every shape. The m16n8k32 shape is BF16-only.
+   Artifact: `inbox/fires/rfc067_pT_hexa_sgemm_m16n8k32_2026_05_21/result.json` (all rows
+   `note: "PTX load/lookup failed"`, commit `9c92e3b2`).
+
+8. **N94 — persistent CTA tile-loop on N77 body yields -0.4% @ M=1536.**
+   Hypothesis: grid-scheduler overhead amortised across multi-tile-per-CTA loop.
+   **Refuted**: M=1536 ratio 0.540 vs N77's 0.533 (within noise). Persistent CTA on the
+   N77 tile shape is structurally redundant — N77's 16×16 tile already gives 576 tiles
+   vs 48 SMs (12 tiles/SM); the GPU scheduler hardware already pipelines this.
+   Artifact: `inbox/fires/rfc067_pV_hexa_sgemm_persistent_2026_05_21/result.json`
+   (commit `ab81ea39`).
+
+### Honest negatives that became positives on retry
+
+- **N89 (PS) — 128×128 / 1024-thd tile** was hypothesised in N71 (PL) as register-pressure
+  blocker. PS retry with vectorised loads and revised warp split converted N71's -19 to
+  -63% small-shape regression into a **+2.81% large-M win** (only at M=1536; M≤512 still
+  regresses 30-55%, occupancy collapse intact at small shapes).
+
+- **N93 (PU) — vec-2 epilogue store on N89 body**. PU's `discovery` field documents that
+  N89 already does direct register→global stores; PU's only available delta was
+  vectorising those stores from `st.global.f32` to `st.global.v2.f32` (16→8 store
+  instr/warp). Result: +2.49% over N89, **new peak**.
+
+---
+
+## v2.D — Per-substrate peak refresh (updates §9.3)
+
+| Substrate | Precision | Peak hexa TFLOPS | Cycle | cuBLAS ceiling | Peak ratio | Δ vs §9.3 |
+|-----------|-----------|-----------------:|-------|---------------:|-----------:|-----------|
+| RTX 5070 sm_120 (ubu-2)         | HGEMM (FP16+FP32 acc) | **🛸 37.996** @ 1536³ | **N93 (PU)** | 66.60 @ 1536³ | **🛸 0.5705** | +21.5% TFLOPS / +23.5% ratio |
+| RTX 5070 sm_120 (ubu-2)         | SGEMM (TF32)          | 15.25 @ 1536³ | N74 (PM) | 32.83 @ 1536³ | 0.464 | unchanged (no post-N87 SGEMM cycle) |
+| RTX PRO 4500 Blackwell sm_120   | SGEMM (TF32)          | 22.36 @ 1536³ | N60 (PJ) | 87.69 @ 1536³ | 0.255 | unchanged |
+| Apple M3                        | SGEMM (FP32 MPS)      | 1.703 @ 1024³ | N48 | (vendor) | — | unchanged (Metal simdgroup_matrix 911 GFLOPS @ 768³ in sub-agent worktrees per memory snapshot — outside main-repo scope) |
+| RTX 5070 vec-add bandwidth      | FP64                  | n/a | N63 | spec ~672 GB/s | 1624.86 GB/s peak (L2) / 644 sustained DRAM (~93%) | unchanged |
+
+---
+
+## v2.E — Updated cuBLAS-beat status (refresh of §9.4)
+
+> **STILL NO compute-bound shape × precision exceeds ratio 1.0 against precision-matched cuBLAS/MPS.**
+
+Top compute-bound ratios after N93 (sorted descending):
+- **0.897** — N76-retry HGEMM @ 384³ (§1, unchanged — single-row peak)
+- **0.838** — N88 (PR) HGEMM K-unroll @ 384³ (M=384 NOT compute-bound, launch-overhead-bound)
+- **0.739** — N94 (PV) persistent @ 384³
+- **0.730** — N77 (PP) HGEMM @ 384³
+- **0.614** — N94 (PV) @ 768³ (**best post-N87 compute-bound row**)
+- **0.5705** — N93 (PU) HGEMM @ 1536³ (**post-N87 best at large saturated-M**)
+
+Top launch-overhead ratios (signal-free):
+- 0.979 @ 256³ — N76-retry (still §1's launch-bound peak, unchanged)
+- 0.977 @ 256³ — N79 (PQ) (essentially equal)
+- 0.938 @ 256³ — N88 (PR)
+- 0.931 @ 256³ — N94 (PV)
+- 0.912 @ 256³ — N77 (PP)
+
+The 256³ ratios all cluster ~0.93±0.05 (no signal — both hexa and cuBLAS spend most of
+the ~7 µs wall in API/sync overhead, per §9.4's pre-existing observation).
+
+---
+
+## v2.F — Cumulative session count cross-check (refresh of §9.6)
+
+§9.6 reported 31 measurement-bearing artifacts. Post-N87 additions:
+
+- 6 new RTX 5070 HGEMM artifacts with `result.json`: pP (N77), pQ (N79),
+  pR (N88), pS (N89), pT (N90 — all-null but cuBLAS rows captured),
+  pU (N93), pV (N94)
+- 1 SASS-diff analysis artifact: `rfc067_sass_diff_2026_05_21/result.json` (N104)
+- 2 empty directories (Round 17 in-flight): pW (N105), pX (N106) — no rows tabulated
+
+**v2 cumulative count** = 31 (original) + 7 measured + 1 analysis = **39 measurement-bearing
+artifacts** + **2 in-flight pending**. Memory snapshot updates expected; original "42 GPU
+commits" cross-check still consistent.
+
+---
+
+## v2.G — Provenance
+
+All v2 rows traceable to the cited `result.json` field path. Commit SHAs verified via
+`git log --oneline -100 | grep -iE "N77|N79|...|N104"`. No numbers fabricated for the
+2 empty Round-17 directories (pW / pX) — marked `pending` per `@D g3`. M=1536 is the
+single shape used for "peak" reporting throughout v2 because it is the largest measured
+saturated-compute-bound shape on RTX 5070 sm_120 (12 GB VRAM, no headroom beyond 2048
+for FP32 accumulator + FP16 input intermediates).
+
+**v2 generated**: 2026-05-22 by read-only aggregator (no compiler / GPU.md / source edits).
+**v2 scope contract**: appended to existing SCOREBOARD.md; §1-§10 verbatim preserved.
