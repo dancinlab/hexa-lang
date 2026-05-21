@@ -1094,6 +1094,22 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 45: hexa_str_split → rt_str_split (existing M1-lite, wire-up only)
+
+- ✅ `hexa_str_split` (self/runtime_core.c:5903) wired to the existing
+  `rt_str_split` defined in `self/runtime_hi_gen.c:46` (M1-lite layer
+  generated from `self/runtime_hi.hexa` SSOT — already hexa-source
+  equivalent). The new wrapper-style dispatch retires the strdup +
+  strstr path from the hexa-rt-stdlib build
+- First instance in this campaign of "rt_ already lives in the M1-lite
+  generated layer; no new hexa-source body needed, only the dispatch"
+  — confirms the M1-lite work from 2026-04-23 is reusable here. First
+  attempt at a fresh `rt_str_split` in `stdlib/runtime/ctype.hexa`
+  hit a redefinition collision at clang link; reverted in favour of
+  the existing one
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,240 B
+
 ### 2026-05-21 — step 3 cycle 44: hexa_str_replace → rt_str_replace
 
 - ✅ `hexa_str_replace` (self/runtime_core.c:5940) ported. Walks `s`

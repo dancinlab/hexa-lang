@@ -5900,6 +5900,10 @@ HexaVal hexa_format_n(HexaVal fmt, HexaVal args) {
 
 // ── String split ─────────────────────────────────────
 
+// Step-3 cycle 45 port — string split dispatches to rt_str_split. The
+// hexa path scans byte-by-byte (no strstr) and avoids the strdup/free
+// pair the C body uses for the in-place NUL terminator trick.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_split(HexaVal s, HexaVal delim) {
     HexaVal arr = hexa_array_new();
     if (!HX_IS_STR(s) || !HX_IS_STR(delim)) return arr;
@@ -5917,6 +5921,13 @@ HexaVal hexa_str_split(HexaVal s, HexaVal delim) {
     free(src);
     return arr;
 }
+#else
+extern HexaVal rt_str_split(HexaVal s, HexaVal delim);
+HexaVal hexa_str_split(HexaVal s, HexaVal delim) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(delim)) return hexa_array_new();
+    return rt_str_split(s, delim);
+}
+#endif
 
 // ─────────────────────────────────────────────────────────────────────
 // M1-lite (hxa-20260423-003 Step 4): rt_str_* layer — GENERATED from
