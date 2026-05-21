@@ -1,0 +1,90 @@
+RFC 071 P4+ N45-extend-to-N64 silicon-fire log
+================================================
+
+date:    2026-05-21
+host:    macOS arm64 (driver build) + ubu-2 (silicon)
+device:  NVIDIA GeForce RTX 5070 (sm_120a JIT from sm_80 PTX)
+branch:  worktree-agent-a3ce72db102e9f4cf (FF'd to main 24a10984)
+context: apply N45 CSE pattern (830e44c0) to N64 STMT_ASSIGN op="index" /
+         op="index_set" arms (2a1eaed0). N64 explicitly noted "N45 CSE
+         optimization NOT included — vec_mul emits 3 redundant
+         cvt.s64.s32 lines. Follow-on cycle." This cycle: that follow-on.
+
+driver build:
+  HEXA_LANG=$WORKTREE HEXA_MAC_BUILD_OK=1 hexa build self/main.hexa \
+    -o /tmp/hexa_n45_after_v2
+  (HEXA_LANG override required so hexa_v2 reads the modified
+   compiler/codegen/nvptx_target.hexa from this worktree, not the
+   main repo tree — per reference_hexa_module_loader_env_2026_05_20)
+  => OK: built /tmp/hexa_n45_after_v2
+
+ptx emit:
+  /tmp/hexa_n45_after_v2 build compiler/codegen/nvptx_p5_multi_kernel_test.hexa \
+    --target=nvptx64-nvidia-cuda-sm80
+  => out: compiler/codegen/nvptx_p5_multi_kernel_test.hexa.ptx (4043 B)
+  /tmp/hexa_n45_after_v2 build compiler/codegen/nvptx_p7_reduce_sum_test.hexa \
+    --target=nvptx64-nvidia-cuda-sm80
+  => out: compiler/codegen/nvptx_p7_reduce_sum_test.hexa.ptx (1726 B)
+
+PTX size (vec_add + vec_mul multi-kernel fixture):
+  before N45-extend  4609 B
+  after N45-extend   4043 B
+  delta              -566 B (-12.28 %)
+  matches N55 fire   (4043 B, MD5 differs by reg-decl ordering only —
+                      both reach the same instruction set, same regs
+                      with different .reg ordering inside body)
+
+PTX size (reduce_sum single-thread fixture):
+  before N45-extend  1726 B
+  after N45-extend   1726 B
+  delta              0 B (0 %) — only 1 IndexGet + 1 IndexSet, neither
+                                 idx Local is shared by 2+ ops (the
+                                 IndexSet uses const_int 0, NOT a Local),
+                                 so the collect_shared_idx pass finds
+                                 nothing to share. CSE for to_i64 also
+                                 fires only once per kernel here.
+
+instruction count per kernel (p5 multi_kernel, per kernel: vec_add or vec_mul):
+  cvt.s64.s32        4 -> 1     (3 dedupes via _nvptx_cse_intcast_remap)
+  mul.lo.s64         3 -> 1     (2 dedupes via shared %rd_idx_off_<id>_<sz>)
+  declared regs      21 -> 19   (-2 — the 2 dropped to_i64 Locals)
+
+silicon fire (ubu-2, RTX 5070, sm_120a JIT from sm_80):
+  cp multi_kernel.sm_80.ptx /tmp/rfc071_n55_multi_kernel.ptx
+  /tmp/rfc071_n45_extend/host_multi
+  => {"status":"PASS",
+      "vec_add":{"status":"PASS","max_abs_diff":0,"byte_mismatch":0,
+                 "first_mis":-1,"c0":2.9647833402501771,
+                 "ref0":2.9647833402501771},
+      "vec_mul":{"status":"PASS","max_abs_diff":0,"byte_mismatch":0,
+                 "first_mis":-1,"c0":2.1032052170878326,
+                 "ref0":2.1032052170878326},
+      "N":1024,"a0":1.1753414355242713,"b0":1.789441904725906}
+
+  /tmp/rfc071_n45_extend/host_reduce_sum reduce_sum.sm_80.ptx
+  => Device: NVIDIA GeForce RTX 5070
+     PTX loaded OK
+     Kernel reduce_sum resolved
+     expected = 512.5
+     got      = 512.5
+     abs_err  = 0.0000e+00
+     ulp_err  = 0.0000
+     PASS: ulp_err=0.0000
+
+ptxas info (multi_kernel.sm_80.ptx, both kernels):
+  Used 16 registers, used 0 barriers      (unchanged from N64 baseline)
+  0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+  Compile time ~1.4-2.0 ms per kernel
+
+lower_test regression:
+  28/28 PASS preserved (built with HEXA_LANG override; bare `hexa build`
+  also passes since the test fixture exercises _nvptx_lower_func +
+  _nvptx_lower_stmt directly via synthetic MFuncs — independent of v2
+  cache state).
+
+falsifiers:
+  F-RFC071-NVPTX-E2E-PTXAS-CLEAN          PASS  (JIT info clean, no errors)
+  F-RFC071-NVPTX-E2E-LAUNCH               PASS  (cuLaunchKernel + sync OK)
+  F-RFC071-E2E-MULTI-KERNEL-NUMERIC-EQ    PASS  (vec_add + vec_mul byte-eq)
+  F-RFC071-E2E-REDUCE-SUM-NUMERIC-EQ      PASS  (ulp_err=0)
+  F-RFC071-CSE-PTX-SIZE-REDUCED           PASS  (-12.28 % on vec_add+vec_mul)

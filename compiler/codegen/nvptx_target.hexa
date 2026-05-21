@@ -637,7 +637,18 @@ fn _nvptx_wmma_mnemonic(op: string) -> string {
 // lowers to an honest stub LInstr (op = "//") so the emitted PTX text
 // stays readable and never silently drops a statement. Control flow
 // (`bra`, `setp`) and global/shared load/store are 055-P1+.
-fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
+// RFC 071 P4+ — `shared_idx_off` is a flat `[idx_local_id, elem_size, ...]`
+// array (output of `_nvptx_collect_shared_idx_locals`). When non-empty
+// AND the current IndexGet/IndexSet's idx operand matches, the body
+// lowering emits `add.s64 addr, %rd_idx_off_<id>_<sz>, base` (2 instr)
+// instead of `mul.lo.s64 addr, idx, sz; add.s64 addr, addr, base`
+// (3 instr). The shared offset is declared as a U64 reg by
+// `_nvptx_lower_func` and materialized once at the first qualifying
+// index-op via an inline `mul.lo.s64` emitted in the per-block walk
+// (which sees use/def order — kernel-entry pre-emit would compute the
+// offset on the inactive lane when the index sits inside an
+// `if to_i64(gid) < n { … }` bounds-check shape).
+fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64]) -> [LInstr] {
     let mut out = buf
     if s.kind == STMT_ASSIGN {
         // RFC 071 P4+ (N59 G2) — `op == "index"` (IndexGet, `dst = base[idx]`).
@@ -653,16 +664,36 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
             let base_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
             let idx_reg = _nvptx_operand_text_kinds(s.args[1], kinds)
             let addr_reg = "%rd_idxa_" + to_string(s.dst.id)
-            let mut a1 = []
-            a1.push(_nvptx_op(addr_reg))
-            a1.push(_nvptx_op(idx_reg))
-            a1.push(_nvptx_op(to_string(elem_size)))
-            out.push(_nvptx_instr("mul.lo.s64", a1, "index byte off = idx * " + to_string(elem_size)))
-            let mut a2 = []
-            a2.push(_nvptx_op(addr_reg))
-            a2.push(_nvptx_op(addr_reg))
-            a2.push(_nvptx_op(base_reg))
-            out.push(_nvptx_instr("add.s64", a2, "index addr = base + off"))
+            // RFC 071 P4+ — shared-offset fast path. If the idx operand
+            // is a Local that's referenced by 2+ index ops (collected
+            // by `_nvptx_collect_shared_idx_locals`), the byte-offset
+            // (idx * elem_size) has already been computed into the
+            // shared `%rd_idx_off_<id>_<sz>` register by an earlier
+            // inline `mul.lo.s64` emit in this block. Skip the
+            // per-op mul and read directly from the shared offset.
+            let idx_op = s.args[1]
+            let mut used_shared = false
+            if idx_op.kind == "local" && _nvptx_shared_idx_has(shared_idx_off, idx_op.local_id, elem_size) {
+                used_shared = true
+                let shared_reg = _nvptx_shared_idx_off_reg(idx_op.local_id, elem_size)
+                let mut a2 = []
+                a2.push(_nvptx_op(addr_reg))
+                a2.push(_nvptx_op(shared_reg))
+                a2.push(_nvptx_op(base_reg))
+                out.push(_nvptx_instr("add.s64", a2, "index addr = shared_off + base"))
+            }
+            if !used_shared {
+                let mut a1 = []
+                a1.push(_nvptx_op(addr_reg))
+                a1.push(_nvptx_op(idx_reg))
+                a1.push(_nvptx_op(to_string(elem_size)))
+                out.push(_nvptx_instr("mul.lo.s64", a1, "index byte off = idx * " + to_string(elem_size)))
+                let mut a2 = []
+                a2.push(_nvptx_op(addr_reg))
+                a2.push(_nvptx_op(addr_reg))
+                a2.push(_nvptx_op(base_reg))
+                out.push(_nvptx_instr("add.s64", a2, "index addr = base + off"))
+            }
             let mut a3 = []
             a3.push(_nvptx_op(dst_reg))
             a3.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
@@ -684,16 +715,30 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg]) -> [LInstr] {
             let idx_reg = _nvptx_operand_text_kinds(s.args[1], kinds)
             let val_reg = _nvptx_operand_text_kinds(val_op, kinds)
             let addr_reg = "%rd_idxs_addr"
-            let mut a1 = []
-            a1.push(_nvptx_op(addr_reg))
-            a1.push(_nvptx_op(idx_reg))
-            a1.push(_nvptx_op(to_string(elem_size)))
-            out.push(_nvptx_instr("mul.lo.s64", a1, "index_set byte off = idx * " + to_string(elem_size)))
-            let mut a2 = []
-            a2.push(_nvptx_op(addr_reg))
-            a2.push(_nvptx_op(addr_reg))
-            a2.push(_nvptx_op(base_reg))
-            out.push(_nvptx_instr("add.s64", a2, "index_set addr = base + off"))
+            // RFC 071 P4+ — shared-offset fast path (mirrors IndexGet).
+            let idx_op = s.args[1]
+            let mut used_shared = false
+            if idx_op.kind == "local" && _nvptx_shared_idx_has(shared_idx_off, idx_op.local_id, elem_size) {
+                used_shared = true
+                let shared_reg = _nvptx_shared_idx_off_reg(idx_op.local_id, elem_size)
+                let mut a2 = []
+                a2.push(_nvptx_op(addr_reg))
+                a2.push(_nvptx_op(shared_reg))
+                a2.push(_nvptx_op(base_reg))
+                out.push(_nvptx_instr("add.s64", a2, "index_set addr = shared_off + base"))
+            }
+            if !used_shared {
+                let mut a1 = []
+                a1.push(_nvptx_op(addr_reg))
+                a1.push(_nvptx_op(idx_reg))
+                a1.push(_nvptx_op(to_string(elem_size)))
+                out.push(_nvptx_instr("mul.lo.s64", a1, "index_set byte off = idx * " + to_string(elem_size)))
+                let mut a2 = []
+                a2.push(_nvptx_op(addr_reg))
+                a2.push(_nvptx_op(addr_reg))
+                a2.push(_nvptx_op(base_reg))
+                out.push(_nvptx_instr("add.s64", a2, "index_set addr = base + off"))
+            }
             let mut a3 = []
             a3.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
             a3.push(_nvptx_op(val_reg))
@@ -1780,6 +1825,294 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
 
 // ── Codegen helpers (055-P0 — real MIR -> PTX-LIR lowering) ───
 
+// _nvptx_cse_intcast_remap — RFC 071 P4+ — Common Subexpression
+// Elimination for `to_i64` / `to_i32` STMT_CALLs. N45 (`830e44c0`)
+// honest-scope follow-on extended in this cycle to also dedupe inside
+// the N64 STMT_ASSIGN op="index"/"index_set" arms (which read the
+// same idx Local 3+ times per source-level `c[to_i64(gid)] =
+// a[to_i64(gid)] + b[to_i64(gid)]`). The N64 trio emits
+// `mul.lo.s64 + add.s64 + ld/st.global.<ty>` per index op; the
+// redundant `cvt.s64.s32` calls in front of each idx use bloat the PTX.
+//
+// Builds an id-remap table: for each redundant `to_i64(x)` (or
+// `to_i32(x)`) STMT_CALL whose operand is a `local` Operand and an
+// earlier sibling already produced the cast value, map this stmt's
+// dst.id → the FIRST stmt's dst.id. Subsequent operand refs in the
+// function get rewritten through the table; the redundant STMT_CALLs
+// are dropped from the rebuilt blocks so the classifier never sees
+// them and ptxas never emits the cvt.
+//
+// Key = (op + ":local:" + arg.local_id). Only `local` operand inputs
+// get CSE'd — `const_int`/`const_float` immediates were never the
+// concern. Cross-block CSE is honest within the same function (PTX
+// virtual registers are function-scoped; SSA form lets the cmp's
+// %rd10 reach the IndexGet block via the natural dominance edge).
+//
+// Honest scope: the CSE is SSA-keyed on (op, operand_local_id); a
+// hypothetical interleaved write to the operand Local between the
+// redundant casts would invalidate the dedup. The MIR layer doesn't
+// currently emit such interleaved writes for the to_i64 case (the
+// operand is always a thread-index sreg Local that's mov-assigned
+// exactly once per kernel), and the back-edge loop in reduce_sum
+// re-binds `idx` to a new Local id per iteration (SSA renaming) so
+// the same `to_i64(idx_iter_N)` from iter N never collides with iter
+// N+1 — each cvt has a unique key.
+fn _nvptx_cse_intcast_remap(mfn: MFunc) -> [i64] {
+    // Two parallel arrays: remap_from[i] = redundant dst.id;
+    // remap_to[i]   = canonical first dst.id. Membership tested via
+    // linear scan (function bodies are tiny — single-digit redundant
+    // calls in the worst observed case).
+    let mut remap_from: [i64] = []
+    let mut remap_to: [i64] = []
+
+    // Canonical map: key = op + ":local:" + arg_local_id ; value = first dst.id.
+    let mut canon_keys: [string] = []
+    let mut canon_dsts: [i64] = []
+
+    let mut bi = 0
+    while bi < len(mfn.blocks) {
+        let blk = mfn.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            let s = blk.stmts[si]
+            if s.kind == STMT_CALL && (s.op == "to_i64" || s.op == "to_i32") {
+                if len(s.args) >= 1 && s.dst.id >= 0 {
+                    let arg = s.args[0]
+                    if arg.kind == "local" {
+                        let key = s.op + ":local:" + to_string(arg.local_id)
+                        // Linear lookup.
+                        let mut found_at = -1
+                        let mut ki = 0
+                        while ki < len(canon_keys) {
+                            if canon_keys[ki] == key { found_at = ki }
+                            ki = ki + 1
+                        }
+                        if found_at >= 0 {
+                            // Redundant — map this dst.id to the canonical.
+                            remap_from.push(s.dst.id)
+                            remap_to.push(canon_dsts[found_at])
+                        } else {
+                            canon_keys.push(key)
+                            canon_dsts.push(s.dst.id)
+                        }
+                    }
+                }
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+
+    // Flatten into a paired array [from0, to0, from1, to1, ...] for the
+    // caller to apply. Length is len(remap_from) * 2; caller uses i+0
+    // / i+1 strided iteration.
+    let mut flat: [i64] = []
+    let mut i = 0
+    while i < len(remap_from) {
+        flat.push(remap_from[i])
+        flat.push(remap_to[i])
+        i = i + 1
+    }
+    return flat
+}
+
+// _nvptx_cse_remap_lookup — apply the flat remap table to a Local id.
+// Returns the canonical id (or `id` unchanged if not remapped). Linear
+// scan over the flat [from, to, from, to, ...] pairs.
+fn _nvptx_cse_remap_lookup(flat: [i64], id: i64) -> i64 {
+    let mut i = 0
+    while i + 1 < len(flat) {
+        if flat[i] == id { return flat[i + 1] }
+        i = i + 2
+    }
+    return id
+}
+
+// _nvptx_cse_apply — RFC 071 P4+ — rebuild MFunc with the CSE remap
+// applied. Drops redundant STMT_CALLs (any stmt whose dst.id is in
+// the `from` set) and rewrites every Operand local_id through
+// `_nvptx_cse_remap_lookup`. The dst.id of NON-dropped stmts stays
+// unchanged; only operand refs get the canonical id.
+fn _nvptx_cse_apply(mfn: MFunc, flat: [i64]) -> MFunc {
+    if len(flat) == 0 { return mfn }
+    let mut new_blocks: [Block] = []
+    let mut bi = 0
+    while bi < len(mfn.blocks) {
+        let blk = mfn.blocks[bi]
+        let mut new_stmts: [Stmt] = []
+        let mut si = 0
+        while si < len(blk.stmts) {
+            let s = blk.stmts[si]
+            // Drop redundant intcast STMT_CALLs.
+            let mut should_drop = false
+            if s.kind == STMT_CALL && (s.op == "to_i64" || s.op == "to_i32") && s.dst.id >= 0 {
+                let canon = _nvptx_cse_remap_lookup(flat, s.dst.id)
+                if canon != s.dst.id { should_drop = true }
+            }
+            if !should_drop {
+                // Rewrite operand refs.
+                let mut new_args: [Operand] = []
+                let mut ai = 0
+                while ai < len(s.args) {
+                    let o = s.args[ai]
+                    if o.kind == "local" {
+                        let new_id = _nvptx_cse_remap_lookup(flat, o.local_id)
+                        new_args.push(Operand {
+                            kind: o.kind,
+                            local_id: new_id,
+                            int_val: o.int_val,
+                            float_val: o.float_val,
+                            str_val: o.str_val,
+                            global_id: o.global_id
+                        })
+                    } else {
+                        new_args.push(o)
+                    }
+                    ai = ai + 1
+                }
+                new_stmts.push(Stmt {
+                    kind: s.kind,
+                    dst: s.dst,
+                    op: s.op,
+                    args: new_args,
+                    target_block: s.target_block,
+                    target_block_else: s.target_block_else
+                })
+            }
+            si = si + 1
+        }
+        new_blocks.push(Block {
+            id: blk.id,
+            stmts: new_stmts,
+            preds: blk.preds,
+            succs: blk.succs
+        })
+        bi = bi + 1
+    }
+    return MFunc {
+        name: mfn.name,
+        params: mfn.params,
+        return_local: mfn.return_local,
+        locals: mfn.locals,
+        blocks: new_blocks,
+        entry_block: mfn.entry_block,
+        arena_root: mfn.arena_root,
+        def_line: mfn.def_line,
+        gpu_kind: mfn.gpu_kind
+    }
+}
+
+// _nvptx_collect_shared_idx_locals — RFC 071 P4+ — find idx Locals
+// (the `args[1]` of `op == "index"` or `op == "index_set"`
+// STMT_ASSIGNs — the N64 5-gap lowering shape) that are referenced
+// by 2+ index ops in this function. Their byte-offset (idx *
+// elem_size) is identical across every use, so the shared offset
+// can be computed ONCE and reused — saves N-1 `mul.lo.s64`
+// instructions when the same idx is used N times.
+//
+// Returns a flat `[idx_local_id, elem_size, ...]` array. Linear scan
+// over the function; tiny (kernels rarely have > 8 index ops).
+//
+// Honest scope: the (id, sz) qualifying pair is materialised at the
+// FIRST index-op block, not the kernel entry. This guarantees
+// correctness under bounds-check shapes (the IndexGet sits inside
+// `if to_i64(gid) < n {…}`, so a kernel-entry emit would compute the
+// offset on the inactive lane). For loop-carried idx Locals (e.g.
+// reduce_sum's `idx = idx + 1` updates the same source-level name
+// each iteration), the MIR layer re-binds the source name to a new
+// Local id per iteration — so iteration N's idx Local has a
+// DIFFERENT local_id than iteration N+1's, and the shared-offset
+// register %rd_idx_off_<id>_<sz> stays valid within a single
+// iteration's basic block (not across the back-edge).
+fn _nvptx_collect_shared_idx_locals(mfn: MFunc) -> [i64] {
+    // Two parallel arrays per unique idx Local:
+    //   ids[i]     = idx_local_id
+    //   counts[i]  = number of index ops referencing it
+    //   sizes[i]   = elem_size (8 for F64, 4 for F32, ...)
+    let mut ids: [i64] = []
+    let mut counts: [i64] = []
+    let mut sizes: [i64] = []
+
+    let regs = _nvptx_classify_locals(mfn)
+
+    let mut bi = 0
+    while bi < len(mfn.blocks) {
+        let blk = mfn.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            let s = blk.stmts[si]
+            if s.kind == STMT_ASSIGN && (s.op == "index" || s.op == "index_set") && len(s.args) >= 2 {
+                let idx_op = s.args[1]
+                if idx_op.kind == "local" {
+                    // elem_size depends on stored/loaded value's kind.
+                    let mut val_kind = NVPTX_RKIND_F64
+                    if s.op == "index" && s.dst.id >= 0 {
+                        val_kind = _nvptx_lookup_kind_for_local(regs, s.dst.id)
+                    }
+                    if s.op == "index_set" && len(s.args) >= 3 {
+                        let val_op = s.args[2]
+                        if val_op.kind == "local" {
+                            val_kind = _nvptx_lookup_kind_for_local(regs, val_op.local_id)
+                        }
+                    }
+                    let elem_size = _nvptx_elem_size_for_kind(val_kind)
+                    // Look up existing entry.
+                    let mut at = -1
+                    let mut ki = 0
+                    while ki < len(ids) {
+                        if ids[ki] == idx_op.local_id && sizes[ki] == elem_size { at = ki }
+                        ki = ki + 1
+                    }
+                    if at >= 0 {
+                        counts[at] = counts[at] + 1
+                    } else {
+                        ids.push(idx_op.local_id)
+                        counts.push(1)
+                        sizes.push(elem_size)
+                    }
+                }
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+
+    // Flatten only the entries with count >= 2.
+    let mut flat: [i64] = []
+    let mut i = 0
+    while i < len(ids) {
+        if counts[i] >= 2 {
+            flat.push(ids[i])
+            flat.push(sizes[i])
+        }
+        i = i + 1
+    }
+    return flat
+}
+
+// _nvptx_shared_idx_off_reg — shared offset register name for an idx
+// Local. The scratch reg is declared per (idx_local_id, elem_size)
+// in `_nvptx_lower_func`'s setup (one declaration per qualifying
+// pair), and the body lowering reuses it in place of the per-
+// IndexGet/IndexSet `idx * elem_size` multiplication.
+fn _nvptx_shared_idx_off_reg(idx_local_id: i64, elem_size: i64) -> string {
+    return "%rd_idx_off_" + to_string(idx_local_id) + "_" + to_string(elem_size)
+}
+
+// _nvptx_shared_idx_has — membership test on the shared-idx flat
+// table (pairs `[id, elem_size, ...]`). Used by the body lowering to
+// decide between the legacy 3-instruction sequence (mul + add + ld)
+// and the new 2-instruction sequence (add + ld) that reads the
+// pre-computed shared offset.
+fn _nvptx_shared_idx_has(flat: [i64], idx_local_id: i64, elem_size: i64) -> bool {
+    let mut i = 0
+    while i + 1 < len(flat) {
+        if flat[i] == idx_local_id && flat[i + 1] == elem_size { return true }
+        i = i + 2
+    }
+    return false
+}
+
 // _nvptx_lower_func — lower one MIR function to a PTX-flavored LFunc.
 //
 // RFC 055 055-P0 — implemented for the FP64 arithmetic subset (§6.6).
@@ -1795,7 +2128,18 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
 // declarations the function body needs are recorded in `callee_saved`
 // (one PReg per FP64 virtual register) so the emit pass can declare
 // them — a structural reuse of the LFunc field, not a CPU regalloc.
-fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
+fn _nvptx_lower_func(mfn_in: MFunc, target: string) -> LFunc {
+    // RFC 071 P4+ — CSE for `to_i64`/`to_i32` STMT_CALLs BEFORE the
+    // classifier walks the locals. N45 honest-scope follow-on extended
+    // in this cycle to the N64 STMT_ASSIGN op="index"/"index_set"
+    // arms — vec_mul's `c[to_i64(gid)] = a[to_i64(gid)] + b[to_i64(gid)]`
+    // shape emits the same `cvt.s64.s32 %rd<x>, %r9` 4 times (one per
+    // cmp/IndexGet/IndexGet/IndexSet). After CSE the classifier sees
+    // the deduplicated MFunc — never declares `.reg .u64` for the
+    // dropped Locals, never lowers the dropped STMT_CALLs.
+    let cse_remap = _nvptx_cse_intcast_remap(mfn_in)
+    let mfn = _nvptx_cse_apply(mfn_in, cse_remap)
+
     // 055-P3b — classify every assignment-target Local ONCE before the
     // lowering walk, then thread the kinds roster through every
     // `_nvptx_lower_stmt` call. The same roster doubles as callee_saved
@@ -1813,8 +2157,35 @@ fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
     // kernel param isn't classified anywhere, it stays unclassified
     // — `_nvptx_lookup_reg_for_local` falls back to `%fd<id>` per the
     // 055-P0 behavior the existing _test_partition asserts.
-    let regs = regs0
+    // RFC 071 P4+ — shared idx-offset analysis. Collect idx Locals
+    // referenced by 2+ index ops; declare ONE `%rd_idx_off_<id>_<sz>`
+    // U64 register per qualifying pair so the body lowering can emit
+    // `add.s64 addr, shared_off, base` (2 instr) instead of
+    // `mul + add` (3 instr) per repeated index use.
+    let shared_idx_off = _nvptx_collect_shared_idx_locals(mfn)
+    let mut regs = regs0
+    let mut soi = 0
+    while soi + 1 < len(shared_idx_off) {
+        let so_id = shared_idx_off[soi]
+        let so_sz = shared_idx_off[soi + 1]
+        let so_name = _nvptx_shared_idx_off_reg(so_id, so_sz)
+        regs.push(PReg {
+            name: so_name,
+            kind: NVPTX_RKIND_U64,
+            frag_role: "",
+            frag_dtype: "",
+            frag_layout: ""
+        })
+        soi = soi + 2
+    }
     let mut instrs = []
+    // RFC 071 P4+ — flat `[idx_local_id, elem_size, ...]` track of
+    // which shared-offset registers have already been materialised.
+    // Once a pair is appended, subsequent index ops referencing the
+    // same (idx, size) skip the mul emit and only emit the add (read
+    // by `_nvptx_lower_stmt` via the `shared_idx_off` param — this
+    // `_done` array is the dual that tracks per-block emission).
+    let mut shared_idx_off_done: [i64] = []
     // RFC 071 P4+ (N59 G2/G4) — KERNEL param ld.param prologue. Emit
     // `ld.param.<ty> %<reg>, [<kernel>_param_<i>];` for each param
     // whose Local id is classified in the regs roster (Pass 0 type_id
@@ -1854,7 +2225,54 @@ fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
         }
         let mut si0 = 0
         while si0 < len(entry_blk.stmts) {
-            instrs = _nvptx_lower_stmt(instrs, entry_blk.stmts[si0], regs)
+            let s0 = entry_blk.stmts[si0]
+            // RFC 071 P4+ — inline shared idx-offset materialization
+            // (mirror in the body-block loop below). Emit a single
+            // `mul.lo.s64 %rd_idx_off_<id>_<sz>, idx_reg, sz` the first
+            // time we encounter an index op whose idx Local qualifies
+            // as shared (collected by `_nvptx_collect_shared_idx_locals`).
+            // Subsequent index ops on the same (idx, size) skip the mul
+            // and only emit the add (handled by `_nvptx_lower_stmt`'s
+            // shared-offset fast path).
+            if s0.kind == STMT_ASSIGN && (s0.op == "index" || s0.op == "index_set") && len(s0.args) >= 2 {
+                let idx_op = s0.args[1]
+                if idx_op.kind == "local" {
+                    let mut val_kind = NVPTX_RKIND_F64
+                    if s0.op == "index" && s0.dst.id >= 0 {
+                        val_kind = _nvptx_lookup_kind_for_local(regs, s0.dst.id)
+                    }
+                    if s0.op == "index_set" && len(s0.args) >= 3 {
+                        let v = s0.args[2]
+                        if v.kind == "local" {
+                            val_kind = _nvptx_lookup_kind_for_local(regs, v.local_id)
+                        }
+                    }
+                    let elem_size = _nvptx_elem_size_for_kind(val_kind)
+                    if _nvptx_shared_idx_has(shared_idx_off, idx_op.local_id, elem_size) {
+                        let mut already = false
+                        let mut di = 0
+                        while di + 1 < len(shared_idx_off_done) {
+                            if shared_idx_off_done[di] == idx_op.local_id && shared_idx_off_done[di + 1] == elem_size {
+                                already = true
+                            }
+                            di = di + 2
+                        }
+                        if !already {
+                            let shared_reg = _nvptx_shared_idx_off_reg(idx_op.local_id, elem_size)
+                            let idx_reg = _nvptx_operand_text_kinds(idx_op, regs)
+                            let mut a = []
+                            a.push(_nvptx_op(shared_reg))
+                            a.push(_nvptx_op(idx_reg))
+                            a.push(_nvptx_op(to_string(elem_size)))
+                            instrs.push(_nvptx_instr("mul.lo.s64", a,
+                                "shared idx byte off = idx * " + to_string(elem_size)))
+                            shared_idx_off_done.push(idx_op.local_id)
+                            shared_idx_off_done.push(elem_size)
+                        }
+                    }
+                }
+            }
+            instrs = _nvptx_lower_stmt(instrs, s0, regs, shared_idx_off)
             si0 = si0 + 1
         }
     }
@@ -1867,7 +2285,50 @@ fn _nvptx_lower_func(mfn: MFunc, target: string) -> LFunc {
         instrs.push(_nvptx_instr("label", [_nvptx_op("$L_" + to_string(blk.id))], ""))
         let mut si = 0
         while si < len(blk.stmts) {
-            instrs = _nvptx_lower_stmt(instrs, blk.stmts[si], regs)
+            let s = blk.stmts[si]
+            // RFC 071 P4+ — shared idx-offset materialization (mirror
+            // of the entry-block loop above). See that block for the
+            // honest scope (per-block emit guarantees the mul lands on
+            // the right side of a bounds-check branch).
+            if s.kind == STMT_ASSIGN && (s.op == "index" || s.op == "index_set") && len(s.args) >= 2 {
+                let idx_op = s.args[1]
+                if idx_op.kind == "local" {
+                    let mut val_kind = NVPTX_RKIND_F64
+                    if s.op == "index" && s.dst.id >= 0 {
+                        val_kind = _nvptx_lookup_kind_for_local(regs, s.dst.id)
+                    }
+                    if s.op == "index_set" && len(s.args) >= 3 {
+                        let v = s.args[2]
+                        if v.kind == "local" {
+                            val_kind = _nvptx_lookup_kind_for_local(regs, v.local_id)
+                        }
+                    }
+                    let elem_size = _nvptx_elem_size_for_kind(val_kind)
+                    if _nvptx_shared_idx_has(shared_idx_off, idx_op.local_id, elem_size) {
+                        let mut already = false
+                        let mut di = 0
+                        while di + 1 < len(shared_idx_off_done) {
+                            if shared_idx_off_done[di] == idx_op.local_id && shared_idx_off_done[di + 1] == elem_size {
+                                already = true
+                            }
+                            di = di + 2
+                        }
+                        if !already {
+                            let shared_reg = _nvptx_shared_idx_off_reg(idx_op.local_id, elem_size)
+                            let idx_reg = _nvptx_operand_text_kinds(idx_op, regs)
+                            let mut a = []
+                            a.push(_nvptx_op(shared_reg))
+                            a.push(_nvptx_op(idx_reg))
+                            a.push(_nvptx_op(to_string(elem_size)))
+                            instrs.push(_nvptx_instr("mul.lo.s64", a,
+                                "shared idx byte off = idx * " + to_string(elem_size)))
+                            shared_idx_off_done.push(idx_op.local_id)
+                            shared_idx_off_done.push(elem_size)
+                        }
+                    }
+                }
+            }
+            instrs = _nvptx_lower_stmt(instrs, s, regs, shared_idx_off)
             si = si + 1
         }
         bi = bi + 1
