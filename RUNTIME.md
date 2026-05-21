@@ -1094,6 +1094,19 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-22 — step 4 cycle 94: hexa_map_count/any/all pred ports (callback family)
+
+- ✅ Three predicate-callback map ops ported via cycle-63 callback
+  pattern. `fn(k, v)` in hexa source lowers to `hexa_call2(pred, k, v)`
+- `rt_map_count_pred(m, pred) -> int` (C wrapper boxes via hexa_int)
+- `rt_map_any_pred_b(m, pred) -> bool` (C wrapper boxes via hexa_bool)
+- `rt_map_all_pred_b(m, pred) -> bool`
+- C wrappers retain HX_MAP_TBL nullity guard + void-pred fallback
+  (no-pred count → total entries; no-pred any → false; no-pred all
+  → true)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,218,264 B
+
 ### 2026-05-21 — step 4 cycle 93: hexa_map_invert + hexa_map_from_array
 
 - ✅ Two more map ops via same pattern as cycle 90: empty starting map

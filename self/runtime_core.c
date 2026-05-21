@@ -2619,6 +2619,29 @@ HexaVal hexa_map_from_array(HexaVal self_map, HexaVal arr) {
 // No-pred variant (arg is void sentinel) returns total entry count.
 // Keys are exposed to the predicate as TAG_STR per interpreter semantics.
 // Matches interpreter at self/hexa_full.hexa:15689-15704.
+// Step-4 cycle 94 port — count/any/all with predicate callback via
+// hexa source (cycle-63 callback POC). C wrapper handles HX_MAP_TBL
+// guard + void-pred fallback (no-pred returns total count / false / true).
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_map_count_pred(HexaVal m, HexaVal pred);
+extern HexaVal rt_map_any_pred_b(HexaVal m, HexaVal pred);
+extern HexaVal rt_map_all_pred_b(HexaVal m, HexaVal pred);
+HexaVal hexa_map_count(HexaVal m, HexaVal pred) {
+    if (!HX_MAP_TBL(m)) return hexa_int(0);
+    if (HX_IS_VOID(pred)) return hexa_int(HX_MAP_TBL(m)->len);
+    return hexa_int(HX_INT(rt_map_count_pred(m, pred)));
+}
+HexaVal hexa_map_any(HexaVal m, HexaVal pred) {
+    if (!HX_MAP_TBL(m)) return hexa_bool(0);
+    if (HX_IS_VOID(pred)) return hexa_bool(0);
+    return hexa_bool(hexa_truthy(rt_map_any_pred_b(m, pred)));
+}
+HexaVal hexa_map_all(HexaVal m, HexaVal pred) {
+    if (!HX_MAP_TBL(m)) return hexa_bool(1);
+    if (HX_IS_VOID(pred)) return hexa_bool(1);
+    return hexa_bool(hexa_truthy(rt_map_all_pred_b(m, pred)));
+}
+#else
 HexaVal hexa_map_count(HexaVal m, HexaVal pred) {
     if (!HX_MAP_TBL(m)) return hexa_int(0);
     HexaMapTable* t = HX_MAP_TBL(m);
@@ -2631,10 +2654,6 @@ HexaVal hexa_map_count(HexaVal m, HexaVal pred) {
     }
     return hexa_int(cnt);
 }
-
-// any(pred): pred is 2-arg fn(key, value). Returns true on first truthy
-// result, else false. Empty map → false.
-// Matches interpreter at self/hexa_full.hexa:15705-15718.
 HexaVal hexa_map_any(HexaVal m, HexaVal pred) {
     if (!HX_MAP_TBL(m)) return hexa_bool(0);
     HexaMapTable* t = HX_MAP_TBL(m);
@@ -2646,10 +2665,6 @@ HexaVal hexa_map_any(HexaVal m, HexaVal pred) {
     }
     return hexa_bool(0);
 }
-
-// all(pred): pred is 2-arg fn(key, value). Returns false on first falsy
-// result, else true. Empty map → true (vacuous).
-// Matches interpreter at self/hexa_full.hexa:15719-15732.
 HexaVal hexa_map_all(HexaVal m, HexaVal pred) {
     if (!HX_MAP_TBL(m)) return hexa_bool(1);
     HexaMapTable* t = HX_MAP_TBL(m);
@@ -2661,6 +2676,7 @@ HexaVal hexa_map_all(HexaVal m, HexaVal pred) {
     }
     return hexa_bool(1);
 }
+#endif
 
 HexaVal hexa_map_remove(HexaVal m, const char* key) {
     if (!HX_MAP_TBL(m)) return m;
