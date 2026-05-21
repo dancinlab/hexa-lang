@@ -1104,3 +1104,29 @@ pub fn rt_map_entries(m: HexaVal) -> HexaVal {
 pub fn rt_map_to_array(m: HexaVal) -> HexaVal {
     return rt_map_entries(m)
 }
+
+// Step 3 cycle 97 — hexa_eq TAG_ARRAY deep-equality element loop.
+// Polymorphic hexa_eq's TAG_ARRAY branch (self/runtime_core.c:5469)
+// keeps the same-ptr fast-path + length check in C (cheap), then
+// delegates the element-by-element loop here. `a[i] != b[i]` on
+// untyped HexaVal lowers to `hexa_truthy(hexa_eq(a[i], b[i]))` then
+// negate (arm64_darwin.hexa:1609), so scalar items dispatch back to
+// hexa_eq's C scalar branches (TAG_INT/TAG_FLOAT/...) and nested
+// arrays recurse through the TAG_ARRAY case → here. Mutual
+// recursion terminates on well-formed input (each call advances on a
+// strictly smaller subtree).
+//
+// Caller (C) pre-checks both inputs are TAG_ARRAY and that
+// arr_ptr / length already differ — we just walk and compare. The
+// fn returns bool (HexaVal at the C ABI via hexa_bool wrap).
+pub fn rt_eq_array_deep(a: HexaVal, b: HexaVal) -> bool {
+    let na = len(a)
+    let nb = len(b)
+    if na != nb { return false }
+    let mut i = 0
+    while i < na {
+        if a[i] != b[i] { return false }
+        i = i + 1
+    }
+    return true
+}

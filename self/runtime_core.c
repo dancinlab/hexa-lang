@@ -5555,14 +5555,26 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
         // 이전 comment 는 interp 가 ref eq 이라고 기록했지만 실제 코드는
         // value eq. 같은 포인터 shortcut 으로 빠른 경로 유지.
         case TAG_ARRAY: {
+            /* Same-ptr fast-path + length check stay C (cheap). */
             if (a.arr_ptr == b.arr_ptr) return hexa_bool(1);
             int __na = HX_ARR_LEN(a); int __nb = HX_ARR_LEN(b);
             if (__na != __nb) return hexa_bool(0);
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+            /* Step-3 cycle 97 — element-by-element deep loop via
+               rt_eq_array_deep (hexa source). Inside the ported fn,
+               `a[i] != b[i]` re-enters hexa_eq for each pair; scalar
+               cases stay C, nested arrays recurse back into this
+               case → rt_eq_array_deep. Mutual recursion on a strictly
+               smaller subtree, so well-formed input terminates. */
+            extern HexaVal rt_eq_array_deep(HexaVal a, HexaVal b);
+            return hexa_bool(hexa_truthy(rt_eq_array_deep(a, b)));
+#else
             HexaVal* __xa = HX_ARR_ITEMS(a); HexaVal* __xb = HX_ARR_ITEMS(b);
             for (int __i = 0; __i < __na; __i++) {
                 if (!hexa_truthy(hexa_eq(__xa[__i], __xb[__i]))) return hexa_bool(0);
             }
             return hexa_bool(1);
+#endif
         }
         case TAG_MAP: {
             if (HX_MAP_TBL(a) == HX_MAP_TBL(b)) return hexa_bool(1);
