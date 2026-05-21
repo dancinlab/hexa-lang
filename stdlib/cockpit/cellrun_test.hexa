@@ -1,0 +1,192 @@
+// stdlib/cockpit/cellrun_test.hexa — selftest for the generic verb-cell
+// dispatcher (Phase A scaffold, branch-only).
+//
+// Run:
+//   hexa run stdlib/cockpit/cellrun_test.hexa
+//
+// Covers (each is a one-line PASS/FAIL plus aggregate at bottom):
+//   T1 — missing manifest        → cell_run() returns 2 (honest skip).
+//   T2 — missing deps            → cell_run() returns 3 (honest skip).
+//   T3 — successful mock spawn   → cell_run() returns 0 + JSON record
+//                                   emitted under fixture exports dir.
+//   T4 — emitted JSON has the shape we documented (record_id +
+//        record_kind + provenance with absorbed + measurement_gate +
+//        scope_caveats).
+//
+// Fixtures are built on the fly under /tmp/hexa_cellrun_test_<pid>/.
+
+use "stdlib/io"
+use "stdlib/cockpit/cellrun"
+
+// ─── tiny test runner ──────────────────────────────────────────────
+
+let mut _pass = 0
+let mut _total = 0
+let mut _first_fail = ""
+
+fn check(name: string, cond: bool) {
+    _total = _total + 1
+    if cond {
+        _pass = _pass + 1
+        println("  PASS " + name)
+    } else {
+        if _first_fail == "" { _first_fail = name }
+        println("  FAIL " + name)
+    }
+}
+
+// ─── fixture authoring ─────────────────────────────────────────────
+
+fn _quote(s: string) -> string {
+    return "'" + s + "'"
+}
+
+fn _setup_root() -> string {
+    let pid = to_string(exec("echo $$").trim())
+    let root = "/tmp/hexa_cellrun_test_" + pid
+    let _ = exec("rm -rf " + _quote(root))
+    let _ = exec("mkdir -p " + _quote(root + "/domains"))
+    let _ = exec("mkdir -p " + _quote(root + "/exports"))
+    let _ = exec("mkdir -p " + _quote(root + "/hexa-lang/stdlib/mock"))
+    return root
+}
+
+fn _build_roots(root: string) {
+    // setenv() is a no-op in the current hexa-lang runtime (runtime.c
+    // hxlcl_setenv is a stub — see cellrun.hexa header), so we pass
+    // an explicit `roots` map into cell_run_with_roots instead of
+    // relying on HEXA_CELLRUN_* env vars.
+    let r = json_parse("{}")
+    r["demi_root"] = root + "/domains"
+    r["exports_root"] = root + "/exports"
+    r["hexa_lang_root"] = root + "/hexa-lang"
+    return r
+}
+
+// Build a minimal sscb.demi manifest for the analyze cell.
+fn _write_manifest(root: string, with_dep: string) {
+    let path = root + "/domains/sscb.demi"
+    let mut body = "[cell.analyze]\n"
+    body = body + "substrate     = bash\n"
+    body = body + "script        = stdlib/mock/echo.sh\n"
+    body = body + "record_kind   = sscb_mock_record\n"
+    body = body + "output_dir    = exports/sscb/mock\n"
+    body = body + "required_deps = " + with_dep + "\n"
+    body = body + "gate_default  = OPEN\n"
+    body = body + "absorbed_default = false\n"
+    body = body + "scope_caveats = [\n"
+    body = body + "  \"mock-substrate\",\n"
+    body = body + "  \"no-real-engine\",\n"
+    body = body + "]\n"
+    let _ = write_text(path, body)
+}
+
+// Build a tiny bash script that just succeeds + writes a sentinel.
+fn _write_mock_script(root: string) {
+    let path = root + "/hexa-lang/stdlib/mock/echo.sh"
+    let body = "#!/usr/bin/env bash\necho \"mock spawn ok for $1\" > \"$1/_mock_sentinel.txt\"\nexit 0\n"
+    let _ = write_text(path, body)
+    let _ = exec("chmod +x " + _quote(path))
+}
+
+// ─── T1: missing manifest ──────────────────────────────────────────
+
+fn t1_missing_manifest(root: string) {
+    println("\nT1 — missing manifest → honest-skip (rc=2)")
+    // Clear any prior manifest.
+    let _ = exec("rm -f " + _quote(root + "/domains/sscb.demi"))
+    let rc = cell_run_with_roots("sscb", "analyze", _build_roots(root))
+    check("T1 rc == 2 (manifest missing)", rc == 2)
+}
+
+// ─── T2: missing deps ──────────────────────────────────────────────
+
+fn t2_missing_deps(root: string) {
+    println("\nT2 — required dep missing → honest-skip (rc=3)")
+    // Manifest declares a bogus dep that command -v will never find.
+    _write_manifest(root, "nonexistent_binary_xyzzy_42")
+    _write_mock_script(root)
+    let rc = cell_run_with_roots("sscb", "analyze", _build_roots(root))
+    check("T2 rc == 3 (deps missing)", rc == 3)
+}
+
+// ─── T3: successful spawn + record emit ────────────────────────────
+
+fn t3_success(root: string) -> string {
+    println("\nT3 — successful spawn + record emit (rc=0)")
+    // Re-write manifest with no required deps so the dep check passes.
+    _write_manifest(root, "")
+    _write_mock_script(root)
+    let rc = cell_run_with_roots("sscb", "analyze", _build_roots(root))
+    check("T3 rc == 0 (success)", rc == 0)
+
+    // Locate the record. exports/sscb/mock/<stamp>/<record_id>.json
+    let lookup = exec("ls -1t " + _quote(root + "/exports/sscb/mock") + " 2>/dev/null | head -1").trim()
+    let stamp_dir = root + "/exports/sscb/mock/" + lookup
+    let record_glob = exec("ls -1 " + _quote(stamp_dir) + "/sscb_mock_record_*.json 2>/dev/null | head -1").trim()
+    check("T3 record file present", file_exists(record_glob))
+    check("T3 mock sentinel present (proves substrate ran)",
+          file_exists(stamp_dir + "/_mock_sentinel.txt"))
+    return record_glob
+}
+
+// ─── T4: emitted JSON shape ────────────────────────────────────────
+
+fn t4_record_shape(record_path: string) {
+    println("\nT4 — record JSON shape")
+    if !file_exists(record_path) {
+        check("T4 record file readable", false)
+        return
+    }
+    let raw = read_text(record_path)
+    check("T4 record non-empty", len(raw) > 0)
+
+    let obj = json_parse(raw)
+    check("T4 record_kind == sscb_mock_record",
+          has_key(obj, "record_kind") && to_string(obj["record_kind"]) == "sscb_mock_record")
+    check("T4 has record_id",
+          has_key(obj, "record_id") && len(to_string(obj["record_id"])) > 0)
+    check("T4 has produced_at_utc",
+          has_key(obj, "produced_at_utc") && len(to_string(obj["produced_at_utc"])) > 0)
+    check("T4 has payload", has_key(obj, "payload"))
+
+    if has_key(obj, "payload") {
+        let payload = obj["payload"]
+        check("T4 payload.substrate == bash",
+              has_key(payload, "substrate") && to_string(payload["substrate"]) == "bash")
+        check("T4 payload has provenance", has_key(payload, "provenance"))
+        if has_key(payload, "provenance") {
+            let prov = payload["provenance"]
+            check("T4 provenance.measurement_gate == OPEN",
+                  has_key(prov, "measurement_gate") && to_string(prov["measurement_gate"]) == "OPEN")
+            check("T4 provenance.absorbed == false",
+                  has_key(prov, "absorbed") && to_string(prov["absorbed"]) == "false")
+            check("T4 provenance has 2 scope_caveats",
+                  has_key(prov, "scope_caveats") && len(prov["scope_caveats"]) == 2)
+        }
+    }
+}
+
+// ─── main ──────────────────────────────────────────────────────────
+
+fn main() {
+    println("== cellrun_test (Phase A scaffold selftest) ==")
+
+    let root = _setup_root()
+    println("fixture root: " + root)
+
+    t1_missing_manifest(root)
+    t2_missing_deps(root)
+    let rec_path = t3_success(root)
+    t4_record_shape(rec_path)
+
+    println("")
+    println("cellrun_test: " + to_string(_pass) + "/" + to_string(_total))
+    if _first_fail == "" {
+        println("PASS")
+        exit(0)
+    } else {
+        println("FAIL — first: " + _first_fail)
+        exit(1)
+    }
+}
