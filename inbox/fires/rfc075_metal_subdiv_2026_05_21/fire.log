@@ -1,0 +1,10 @@
+device=Apple M3
+
+shape       max|d|      max_ulp    byte_mm    status
+---------- ----------- --------- ---------- --------
+vec_sub     0.00000000      0       0/1024   PASS_BYTEEQ
+vec_div     0.00000763      1     284/1024   PASS_LOW_ULP
+
+F-RFC075-METAL-SUBDIV-NUMERIC-EQ: PASS (vec_sub byte_eq + vec_div ≤4 ULP)
+wrote result.json (613 bytes)
+exit=0
