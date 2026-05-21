@@ -4,10 +4,12 @@
 // @capabilities [pure]
 //
 // RFC 075 P1+P2+P3+ codegen-only smoke. The codegen entry
-// `codegen_emit_metal_msl` now recognises FIVE MIR shapes (vec-add,
-// vec-mul, vec-sub, vec-div, vec-scale) and emits real MSL kernel
-// source for each. Empty / unrecognised modules continue to return
-// `""` honestly (P0 contract preserved — Case 1 still PASS).
+// `codegen_emit_metal_msl` now recognises SIX MIR shapes (vec-add,
+// vec-mul, vec-sub, vec-div, vec-scale, reduce-sum) and emits real MSL
+// kernel source for each. Empty / unrecognised modules continue to
+// return `""` honestly (P0 contract preserved — Case 1 still PASS).
+// reduce-sum is the FIRST non-element-wise shape (uses Apple's
+// SIMD-group `simd_sum` intrinsic + 2-buffer signature).
 //
 // Case roster:
 //   Case 1 — P0 empty-module emit returns `""`
@@ -42,6 +44,14 @@
 //            battery as vec-add but with ` / ` replacing ` + `. Also
 //            asserts ` + ` and ` * ` are ABSENT — vec-div must not
 //            accidentally inherit vec-add's `+` or vec-mul's `*`.
+//   Case 9 — F-RFC075-METAL-EMIT-REDUCE-SUM: synthesize the FIRST
+//            non-element-wise MIR shape (STMT_LOAD + STMT_UNOP
+//            ("reduce_sum") + STMT_STORE), invoke
+//            `codegen_emit_metal_msl`, assert the emitted MSL contains
+//            the Apple-canonical `simd_sum` + `simd_is_first`
+//            intrinsics, the group-id index, `c[group_id]` write, and
+//            the 2-buffer signature. Asserts `b[i]`, `[[buffer(2)]]`,
+//            ` + ` and ` * ` are ABSENT (single-input unary reduction).
 //
 // Run:
 //   hexa build compiler/codegen/metal_lower_test.hexa -o build/metal_lower_test
@@ -256,6 +266,19 @@ fn _stmt_binop_mul_scalar(dst: Local, lhs: i64, scalar: f64) -> Stmt {
     xs.push(_op_const_float(scalar))
     return Stmt {
         kind: STMT_BINOP, dst: dst, op: "mul", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+// reduce-sum UNOP: args[0] = local (input value loaded from a[i]).
+// Synthetic MIR shape for the FIRST non-element-wise codegen recogniser
+// (no real parser/lowering produces this today — see
+// `_metal_mfunc_is_reduce_sum_shape` docstring for the scaffold note).
+fn _stmt_unop_reduce_sum(dst: Local, src: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(src))
+    return Stmt {
+        kind: STMT_UNOP, dst: dst, op: "reduce_sum", args: xs,
         target_block: -1, target_block_else: -1
     }
 }
@@ -756,6 +779,102 @@ fn _test_vec_div_emit() -> bool {
     return ok
 }
 
+// ── reduce-sum MIR fixture (Case 9) ──────────────────────────────────
+
+fn _build_reduce_sum_module() -> MModule {
+    // Two kernel-buffer params (a, c) + two load/store Locals (va, vc).
+    // Stmt sequence: STMT_LOAD a→va, STMT_UNOP("reduce_sum") va→vc,
+    // STMT_STORE vc→c. Output buffer `c` is per-SIMD-group sized
+    // (host-side N/32) — kernel computes group_id = i/32 and writes
+    // every 32 threads. Synthetic MIR shape (no real parser lowering
+    // produces this today; recogniser docstring documents the scaffold).
+    let a  = _kern_local(0, "a")
+    let c  = _kern_local(1, "c")
+    let va = _priv_local(2, "va")
+    let vc = _priv_local(3, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_unop_reduce_sum(vc, va.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "reduce_sum",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "metal_reduce_sum.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 9 — F-RFC075-METAL-EMIT-REDUCE-SUM ──────────────────────────
+//
+// Synthesise the FIRST non-element-wise MIR shape (reduce-sum), invoke
+// `codegen_emit_metal_msl`, and assert the emitted MSL kernel source
+// contains the Apple-canonical per-SIMD-group reduction intrinsics
+// (`simd_sum`, `simd_is_first`), the group-id index expression, and
+// the 2-buffer kernel signature (NOT the 3-buffer vec-* signature).
+//
+// This case proves the codegen architecture generalises beyond the
+// element-wise family — the dispatcher selects between 6 shapes, and
+// reduce-sum uses a different signature emitter
+// (`_metal_emit_reduce_kernel_signature`) than the vec-* shapes.
+
+fn _test_reduce_sum_emit() -> bool {
+    let mut ok = true
+    let mod_rs = _build_reduce_sum_module()
+    let msl = codegen_emit_metal_msl(mod_rs)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ reduce-sum case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-REDUCE-SUM substring battery —
+    ok = _check_contains(ok, msl, "#include <metal_stdlib>",     "MSL preamble include")
+    ok = _check_contains(ok, msl, "using namespace metal;",      "MSL namespace using-directive")
+    ok = _check_contains(ok, msl, "kernel void",                 "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "reduce_sum",                  "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "device const float*",         "read-only device pointer parameter (input)")
+    ok = _check_contains(ok, msl, "device float*",               "writable device pointer parameter (output)")
+    ok = _check_contains(ok, msl, "[[buffer(0)]]",               "buffer(0) binding (input)")
+    ok = _check_contains(ok, msl, "[[buffer(1)]]",               "buffer(1) binding (output) — 2-buffer signature")
+    ok = _check_contains(ok, msl, "[[thread_position_in_grid]]", "thread-position attribute")
+    ok = _check_contains(ok, msl, "simd_sum",                    "Apple per-SIMD-group reduce intrinsic")
+    ok = _check_contains(ok, msl, "simd_is_first",               "lane-0 predicate")
+    ok = _check_contains(ok, msl, "a[i]",                        "input load `a[i]`")
+    ok = _check_contains(ok, msl, "group_id",                    "per-SIMD-group output index variable")
+    ok = _check_contains(ok, msl, "c[group_id]",                 "per-group output write `c[group_id]`")
+    ok = _check_contains(ok, msl, "i / 32u",                     "group_id = i / 32 (SIMD-group width)")
+    ok = _check_contains(ok, msl, ";",                           "statement terminator")
+    // Negative — reduce-sum is unary (no second input buffer load,
+    // no binary +/* between two loaded values, no 3rd buffer binding).
+    ok = _check_not_contains(ok, msl, "b[i]",                    "reduce-sum should not load `b[i]` (single-input)")
+    ok = _check_not_contains(ok, msl, "[[buffer(2)]]",           "reduce-sum should not bind buffer(2) (2-buffer signature)")
+    ok = _check_not_contains(ok, msl, " + ",                     "reduce-sum should not emit ` + ` (unary reduction)")
+    ok = _check_not_contains(ok, msl, " * ",                     "reduce-sum should not emit ` * ` (unary reduction)")
+    return ok
+}
+
 fn main() {
     println("══════════════════════════════════════════════")
     println("  RFC 075 P1+P2+P3+ — Metal codegen smoke")
@@ -769,10 +888,11 @@ fn main() {
     let ok_vscale = _test_vec_scale_emit()
     let ok_vsub   = _test_vec_sub_emit()
     let ok_vdiv   = _test_vec_div_emit()
+    let ok_rsum   = _test_reduce_sum_emit()
 
     println("")
-    if ok_emit && ok_tgt && ok_vec && ok_class && ok_vmul && ok_vscale && ok_vsub && ok_vdiv {
-        println("  PASS: RFC 075 P1+P2+P3+ Metal codegen smoke (vec-add + vec-mul + vec-sub + vec-div + vec-scale)")
+    if ok_emit && ok_tgt && ok_vec && ok_class && ok_vmul && ok_vscale && ok_vsub && ok_vdiv && ok_rsum {
+        println("  PASS: RFC 075 P1+P2+P3+ Metal codegen smoke (vec-add + vec-mul + vec-sub + vec-div + vec-scale + reduce-sum)")
     } else {
         println("  FAIL: RFC 075 P1+P2+P3+ Metal codegen smoke")
     }
