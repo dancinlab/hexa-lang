@@ -9629,6 +9629,14 @@ HexaVal _fnref_thunk_names;
 HexaVal _gen2_current_fn_lets;
 HexaVal _gen2_pending_hoist;
 HexaVal _gen2_current_fn_params;
+/* Step-3 cycle 76 — parallel array of param type-annotations. */
+HexaVal _gen2_current_fn_param_types;
+/* Step-3 cycle 85 — parallel arrays for typed-let-annotation tracking
+ * (LetStmt with explicit `: int` / `: float` etc.). Built as LetStmts
+ * are processed so `_is_known_*_name` can promote them past the
+ * cur_lets shadow bypass. */
+HexaVal _gen2_current_fn_let_names;
+HexaVal _gen2_current_fn_let_types;
 HexaVal _LONG_CONCAT_THRESH;
 HexaVal _method_registry;
 HexaVal _lambda_counter;
@@ -16448,10 +16456,18 @@ HexaVal gen2_fn_decl(HexaVal node) {
     }
     _gen2_declared_names = hexa_array_new();
     _gen2_current_fn_params = hexa_array_new();
+    _gen2_current_fn_param_types = hexa_array_new();  /* Step-3 cycle 76 */
+    _gen2_current_fn_let_names = hexa_array_new();    /* Step-3 cycle 85 */
+    _gen2_current_fn_let_types = hexa_array_new();    /* Step-3 cycle 85 */
     HexaVal _pi = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(_pi, hexa_int(hexa_len(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_102)))))) {
         hexa_array_push(_gen2_declared_names, _hexa_mangle_ident(hexa_map_get_ic(hexa_index_get(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_103), _pi), "name", &__hexa_codegen_c2_ic_104)));
         hexa_array_push(_gen2_current_fn_params, hexa_map_get_ic(hexa_index_get(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_105), _pi), "name", &__hexa_codegen_c2_ic_106));
+        /* Step-3 cycle 76 — capture .value (type annotation) for direct-emit fast paths. */
+        {
+            static HexaIC __ic_pt = {NULL, 0, 0};
+            hexa_array_push(_gen2_current_fn_param_types, hexa_map_get_ic(hexa_index_get(hexa_map_get_ic(node, "params", &__hexa_codegen_c2_ic_105), _pi), "value", &__ic_pt));
+        }
         _pi = hexa_add(_pi, hexa_int(1));
     }
     HexaVal all_names = _gen2_collect_lets(hexa_map_get_ic(node, "body", &__hexa_codegen_c2_ic_107), hexa_array_new());
@@ -17253,6 +17269,48 @@ HexaVal gen2_stmt(HexaVal node, HexaVal depth) {
             init = gen2_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_209));
         }
         if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_380)) && hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_210)), __hexa_codegen_c2_sl_162))))))) {
+            /* Step-3 cycle 85 — explicit `let X: T = ...` annotation registers
+               X as known-int/float regardless of init-expr provability. The
+               parser stores the type annotation in LetStmt's `value` field
+               (parser.hexa:1325 `"value": typ`). Push (name, type) to the
+               parallel let_names/let_types arrays so `_is_known_*_name` can
+               promote past the cur_lets shadow bypass. Also call the
+               existing _known_*_add for backward compat. */
+            {
+                static HexaIC __ic_let_ann = {NULL, 0, 0};
+                static HexaIC __ic_let_name_ann = {NULL, 0, 0};
+                HexaVal __ann = hexa_map_get_ic(node, "value", &__ic_let_ann);
+                if (HX_IS_STR(__ann)) {
+                    HexaVal __name = hexa_map_get_ic(node, "name", &__ic_let_name_ann);
+                    HexaVal __int_lit = hexa_str("int");
+                    HexaVal __i64_lit = hexa_str("i64");
+                    HexaVal __i32_lit = hexa_str("i32");
+                    HexaVal __i16_lit = hexa_str("i16");
+                    HexaVal __i8_lit = hexa_str("i8");
+                    HexaVal __f_lit = hexa_str("float");
+                    HexaVal __f64_lit = hexa_str("f64");
+                    HexaVal __f32_lit = hexa_str("f32");
+                    HexaVal __F_lit = hexa_str("Float");
+                    int __is_int_t = hexa_truthy(hexa_eq(__ann, __int_lit)) ||
+                                     hexa_truthy(hexa_eq(__ann, __i64_lit)) ||
+                                     hexa_truthy(hexa_eq(__ann, __i32_lit)) ||
+                                     hexa_truthy(hexa_eq(__ann, __i16_lit)) ||
+                                     hexa_truthy(hexa_eq(__ann, __i8_lit));
+                    int __is_flt_t = hexa_truthy(hexa_eq(__ann, __f_lit)) ||
+                                     hexa_truthy(hexa_eq(__ann, __f64_lit)) ||
+                                     hexa_truthy(hexa_eq(__ann, __f32_lit)) ||
+                                     hexa_truthy(hexa_eq(__ann, __F_lit));
+                    if (__is_int_t || __is_flt_t) {
+                        hexa_array_push(_gen2_current_fn_let_names, __name);
+                        hexa_array_push(_gen2_current_fn_let_types, __ann);
+                    }
+                    if (__is_int_t) {
+                        _known_int_add(__name);
+                    } else if (__is_flt_t) {
+                        _known_float_add(__name);
+                    }
+                }
+            }
             if (hexa_truthy(_is_int_init_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_211)))) {
                 _known_int_add(hexa_map_get_ic(node, "name", &__hexa_codegen_c2_ic_212));
             }
@@ -18380,10 +18438,31 @@ HexaVal gen2_expr(HexaVal node) {
         }
         if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_961))) {
             HexaVal type_name = hexa_map_get_ic(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_392), "name", &__hexa_codegen_c2_ic_393);
+            /* Step-3 cycle 76 — typed-source direct cast. When source is
+               provably typed (typed-int/float param or known-int/float let),
+               emit a direct C cast/wrap instead of hexa_to_int/hexa_to_float
+               runtime dispatch. Closes the recursion trap for porting
+               hexa_to_int/_float (`v as int` previously always recursed). */
             if (hexa_truthy(hexa_eq(type_name, __hexa_codegen_c2_sl_78))) {
+                static HexaIC __ic_left_int = {NULL, 0, 0};
+                HexaVal __left = hexa_map_get_ic(node, "left", &__ic_left_int);
+                if (hexa_truthy(_is_known_int(__left))) {
+                    return __hexa_fn_arena_return(l);
+                }
+                if (hexa_truthy(_is_known_float(__left))) {
+                    return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_str("hexa_int((int64_t)HX_FLOAT("), l), hexa_str("))")));
+                }
                 return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_876, l), __hexa_codegen_c2_sl_340));
             }
             if (hexa_truthy(hexa_eq(type_name, __hexa_codegen_c2_sl_79))) {
+                static HexaIC __ic_left_flt = {NULL, 0, 0};
+                HexaVal __left = hexa_map_get_ic(node, "left", &__ic_left_flt);
+                if (hexa_truthy(_is_known_float(__left))) {
+                    return __hexa_fn_arena_return(l);
+                }
+                if (hexa_truthy(_is_known_int(__left))) {
+                    return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_str("hexa_float((double)HX_INT("), l), hexa_str("))")));
+                }
                 return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_c2_sl_878, l), __hexa_codegen_c2_sl_340));
             }
             if (hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(type_name, __hexa_codegen_c2_sl_533)) || hexa_truthy(hexa_eq(type_name, __hexa_codegen_c2_sl_162))))) {
@@ -21265,8 +21344,53 @@ HexaVal _is_known_float_name(HexaVal name) {
     if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_int(hexa_len(_known_float_set)), hexa_int(64)))))) {
         return __hexa_fn_arena_return(hexa_bool(0));
     }
+    /* Step-3 cycle 76 — symmetric to _is_known_int_name: PROMOTE typed-float
+       fn params instead of unconditional H17 bypass. Unlocks float direct-
+       emit fast paths at codegen lines 3954-3960. */
     if (hexa_truthy(_gen2_name_in_cur_params(name))) {
+        int __cf_n = hexa_len(_gen2_current_fn_params);
+        for (int __cf_i = 0; __cf_i < __cf_n; __cf_i++) {
+            if (hexa_truthy(hexa_eq(hexa_index_get(_gen2_current_fn_params, hexa_int(__cf_i)), name))) {
+                if (__cf_i < hexa_len(_gen2_current_fn_param_types)) {
+                    HexaVal __t = hexa_index_get(_gen2_current_fn_param_types, hexa_int(__cf_i));
+                    HexaVal __tstr = hexa_to_string(__t);
+                    HexaVal __f_lit  = hexa_str("float");
+                    HexaVal __f64_lit = hexa_str("f64");
+                    HexaVal __f32_lit = hexa_str("f32");
+                    HexaVal __F_lit  = hexa_str("Float");
+                    if (hexa_truthy(hexa_eq(__tstr, __f_lit)) ||
+                        hexa_truthy(hexa_eq(__tstr, __f64_lit)) ||
+                        hexa_truthy(hexa_eq(__tstr, __f32_lit)) ||
+                        hexa_truthy(hexa_eq(__tstr, __F_lit))) {
+                        return __hexa_fn_arena_return(hexa_bool(1));
+                    }
+                }
+                break;
+            }
+        }
         return __hexa_fn_arena_return(hexa_bool(0));
+    }
+    /* Step-3 cycle 85 — typed-float-let recognition (symmetric). */
+    {
+        int __cl_n = hexa_len(_gen2_current_fn_let_names);
+        for (int __cl_i = 0; __cl_i < __cl_n; __cl_i++) {
+            if (hexa_truthy(hexa_eq(hexa_index_get(_gen2_current_fn_let_names, hexa_int(__cl_i)), name))) {
+                if (__cl_i < hexa_len(_gen2_current_fn_let_types)) {
+                    HexaVal __lt = hexa_index_get(_gen2_current_fn_let_types, hexa_int(__cl_i));
+                    HexaVal __f_lit  = hexa_str("float");
+                    HexaVal __f64_lit = hexa_str("f64");
+                    HexaVal __f32_lit = hexa_str("f32");
+                    HexaVal __F_lit  = hexa_str("Float");
+                    if (hexa_truthy(hexa_eq(__lt, __f_lit)) ||
+                        hexa_truthy(hexa_eq(__lt, __f64_lit)) ||
+                        hexa_truthy(hexa_eq(__lt, __f32_lit)) ||
+                        hexa_truthy(hexa_eq(__lt, __F_lit))) {
+                        return __hexa_fn_arena_return(hexa_bool(1));
+                    }
+                    break;
+                }
+            }
+        }
     }
     if (hexa_truthy(_gen2_name_in_cur_lets(name))) {
         return __hexa_fn_arena_return(hexa_bool(0));
@@ -21309,8 +21433,62 @@ HexaVal _is_known_int_name(HexaVal name) {
     if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_int(hexa_len(_known_int_set)), hexa_int(64)))))) {
         return __hexa_fn_arena_return(hexa_bool(0));
     }
+    /* Step-3 cycle 76 — fn-param typed-int recognition. H17 fix originally
+       returned false unconditionally for params; this extension PROMOTES
+       params annotated `: int` / `: i64` / `: i32` while preserving H17's
+       authoritative-param-type guarantee for other types. Unlocks the
+       typed-int direct-emit fast paths at codegen lines 3934-3947. */
     if (hexa_truthy(_gen2_name_in_cur_params(name))) {
+        int __ck_n = hexa_len(_gen2_current_fn_params);
+        for (int __ck_i = 0; __ck_i < __ck_n; __ck_i++) {
+            if (hexa_truthy(hexa_eq(hexa_index_get(_gen2_current_fn_params, hexa_int(__ck_i)), name))) {
+                if (__ck_i < hexa_len(_gen2_current_fn_param_types)) {
+                    HexaVal __t = hexa_index_get(_gen2_current_fn_param_types, hexa_int(__ck_i));
+                    HexaVal __tstr = hexa_to_string(__t);
+                    HexaVal __int_lit = hexa_str("int");
+                    HexaVal __i64_lit = hexa_str("i64");
+                    HexaVal __i32_lit = hexa_str("i32");
+                    HexaVal __i16_lit = hexa_str("i16");
+                    HexaVal __i8_lit = hexa_str("i8");
+                    if (hexa_truthy(hexa_eq(__tstr, __int_lit)) ||
+                        hexa_truthy(hexa_eq(__tstr, __i64_lit)) ||
+                        hexa_truthy(hexa_eq(__tstr, __i32_lit)) ||
+                        hexa_truthy(hexa_eq(__tstr, __i16_lit)) ||
+                        hexa_truthy(hexa_eq(__tstr, __i8_lit))) {
+                        return __hexa_fn_arena_return(hexa_bool(1));
+                    }
+                }
+                break;
+            }
+        }
         return __hexa_fn_arena_return(hexa_bool(0));
+    }
+    /* Step-3 cycle 85 — typed-let recognition. Check parallel arrays
+       BEFORE the cur_lets shadow bypass below. If a let has explicit
+       `: int` annotation, promote it. Otherwise fall through to the
+       existing cur_lets bypass + global known_int_set lookup. */
+    {
+        int __cl_n = hexa_len(_gen2_current_fn_let_names);
+        for (int __cl_i = 0; __cl_i < __cl_n; __cl_i++) {
+            if (hexa_truthy(hexa_eq(hexa_index_get(_gen2_current_fn_let_names, hexa_int(__cl_i)), name))) {
+                if (__cl_i < hexa_len(_gen2_current_fn_let_types)) {
+                    HexaVal __lt = hexa_index_get(_gen2_current_fn_let_types, hexa_int(__cl_i));
+                    HexaVal __int_lit = hexa_str("int");
+                    HexaVal __i64_lit = hexa_str("i64");
+                    HexaVal __i32_lit = hexa_str("i32");
+                    HexaVal __i16_lit = hexa_str("i16");
+                    HexaVal __i8_lit = hexa_str("i8");
+                    if (hexa_truthy(hexa_eq(__lt, __int_lit)) ||
+                        hexa_truthy(hexa_eq(__lt, __i64_lit)) ||
+                        hexa_truthy(hexa_eq(__lt, __i32_lit)) ||
+                        hexa_truthy(hexa_eq(__lt, __i16_lit)) ||
+                        hexa_truthy(hexa_eq(__lt, __i8_lit))) {
+                        return __hexa_fn_arena_return(hexa_bool(1));
+                    }
+                    break;
+                }
+            }
+        }
     }
     if (hexa_truthy(_gen2_name_in_cur_lets(name))) {
         return __hexa_fn_arena_return(hexa_bool(0));
@@ -23082,6 +23260,9 @@ int _codegen_c2_init(int argc, char** argv) {
     _gen2_current_fn_lets = hexa_array_new();
     _gen2_pending_hoist = hexa_array_new();
     _gen2_current_fn_params = hexa_array_new();
+    _gen2_current_fn_param_types = hexa_array_new();  /* Step-3 cycle 76 */
+    _gen2_current_fn_let_names = hexa_array_new();    /* Step-3 cycle 85 */
+    _gen2_current_fn_let_types = hexa_array_new();    /* Step-3 cycle 85 */
     _LONG_CONCAT_THRESH = hexa_int(16);
     _method_registry = hexa_array_new();
     _lambda_counter = hexa_int(0);
