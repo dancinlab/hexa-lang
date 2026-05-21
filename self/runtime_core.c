@@ -4500,6 +4500,9 @@ static int hexa_sort_cmp(const void* a, const void* b) {
     return 0;
 }
 
+// Step-3 cycle 59 port — float fast-path dispatches to insertion-sort
+// hexa source. Mixed-type arrays still need hexa_sort_cmp polymorphism
+// and stay on the qsort path.
 HexaVal hexa_array_sort(HexaVal arr) {
     // Previously `result = arr` copied the HexaVal struct — but both still
     // alias array_store[arr.int_val]. `HX_SET_ARR_ITEMS(result, malloc(...))`
@@ -4510,6 +4513,15 @@ HexaVal hexa_array_sort(HexaVal arr) {
     // Fix: build a fresh result via hexa_array_new + push (mirrors
     // hexa_array_reverse), then qsort the fresh buffer.
     if (!HX_IS_ARRAY(arr)) return arr;
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+    extern HexaVal rt_array_sort_float(HexaVal arr);
+    int all_float = 1;
+    int64_t arr_n = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < arr_n; i++) {
+        if (!HX_IS_FLOAT(HX_ARR_ITEMS(arr)[i])) { all_float = 0; break; }
+    }
+    if (all_float) return rt_array_sort_float(arr);
+#endif
     HexaVal result = hexa_array_new();
     int n = HX_ARR_LEN(arr);
     for (int i = 0; i < n; i++) {

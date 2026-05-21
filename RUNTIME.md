@@ -1094,6 +1094,20 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 59: hexa_array_sort float fast-path (insertion sort, no recursion)
+
+- ✅ `hexa_array_sort` (self/runtime_core.c:4503) gains float fast-path
+  dispatch. When every element is float, `rt_array_sort_float`
+  insertion-sorts in hexa source; mixed-type arrays stay on the
+  polymorphic `qsort + hexa_sort_cmp` path
+- Insertion sort O(n²) chosen over merge-sort to avoid the hexa_v2
+  transpile recursion trap noted at cycles 30 + 52 ([[rt-port-recursion-trap]]).
+  Builds a new sorted array each pass; acceptable for the hot
+  self-host path where most sorted arrays are small. Stable via
+  `sorted[k] <= v` test
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,856 B
+
 ### 2026-05-21 — step 3 cycle 58: hexa_array_contains (float fast-path + int-return bridge)
 
 - ✅ `hexa_array_contains` (self/runtime_core.c:6378) gains the

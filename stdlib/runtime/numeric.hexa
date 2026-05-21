@@ -163,6 +163,44 @@ pub fn rt_array_slice_float(arr: [float], start: int, end: int) -> [float] {
     return out
 }
 
+// Step 3 cycle 59 — array sort, float fast-path. Insertion sort (O(n²))
+// avoiding recursion (cf. the hexa_v2 transpile recursion trap noted at
+// cycles 30 + 52). Builds a new sorted array each pass; acceptable
+// trade-off for arrays expected to be small in the hot self-host path.
+// Stable: equal keys preserve original order via `sorted[k] <= v` test.
+pub fn rt_array_sort_float(arr: [float]) -> [float] {
+    let n = len(arr)
+    if n <= 1 { return arr }
+    let mut sorted: [float] = []
+    let mut i = 0
+    while i < n {
+        let v = arr[i]
+        let m = len(sorted)
+        let mut k = 0
+        while k < m {
+            if sorted[k] <= v {
+                k = k + 1
+            } else {
+                break
+            }
+        }
+        let mut next: [float] = []
+        let mut j = 0
+        while j < k {
+            next = next.push(sorted[j])
+            j = j + 1
+        }
+        next = next.push(v)
+        while j < m {
+            next = next.push(sorted[j])
+            j = j + 1
+        }
+        sorted = next
+        i = i + 1
+    }
+    return sorted
+}
+
 // Step 3 cycle 58 — array contains, float fast-path. Returns true if
 // any element of `arr` equals `item`. C wrapper does the all-float
 // guard before dispatch (mixed arrays stay on the polymorphic hexa_eq
