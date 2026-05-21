@@ -49,6 +49,35 @@ pub fn rt_str_char_count(s: string) -> int {
     return rt_utf8_cpcount(s)
 }
 
+// Step 3 cycle 56 — prefix / suffix predicates. Hexa fns return bool;
+// the C wrappers keep their `int` return signature (codegen wraps in
+// `hexa_bool(rt_str_starts_with(...))`) so we use `_b` suffix names
+// here and let the C bridge extract via `hexa_truthy(...) ? 1 : 0`.
+pub fn rt_str_starts_with_b(s: string, prefix: string) -> bool {
+    let plen = byte_len(prefix)
+    let slen = byte_len(s)
+    if plen > slen { return false }
+    let mut i = 0
+    while i < plen {
+        if s.byte_at(i) != prefix.byte_at(i) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+pub fn rt_str_ends_with_b(s: string, suffix: string) -> bool {
+    let sfxlen = byte_len(suffix)
+    let slen = byte_len(s)
+    if sfxlen > slen { return false }
+    let offset = slen - sfxlen
+    let mut i = 0
+    while i < sfxlen {
+        if s.byte_at(offset + i) != suffix.byte_at(i) { return false }
+        i = i + 1
+    }
+    return true
+}
+
 // Step 3 cycle 55 — first occurrence at-or-after byte offset `start`.
 // st < 0 clamps to 0; st > hlen returns -1; empty needle returns st
 // (matches C body's `if (*needle == '\0') return st;`).

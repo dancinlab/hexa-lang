@@ -4118,6 +4118,10 @@ int hexa_str_eq(HexaVal a, HexaVal b) {
 
 // M1 full · str_ext Step 5 (hxa-20260423-003): rt_str_starts_with/ends_with —
 // codegen emits rt_str_* directly; hexa_str_starts_with/ends_with shims retired.
+// Step-3 cycle 56 port — int-return bridge through rt_str_*_b (hexa
+// source returns bool; the `_b` suffix avoids name collision with the
+// C int-return symbol that codegen wraps via `hexa_bool(...)`).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 int rt_str_starts_with(HexaVal s, HexaVal prefix) {
     if (!HX_IS_STR(s) || !HX_IS_STR(prefix)) return 0;
     size_t plen = HX_STRLEN(prefix);
@@ -4131,6 +4135,18 @@ int rt_str_ends_with(HexaVal s, HexaVal suffix) {
     if (sfxlen > slen) return 0;
     return hxlcl_strcmp(HX_STR(s) + slen - sfxlen, HX_STR(suffix)) == 0;
 }
+#else
+extern HexaVal rt_str_starts_with_b(HexaVal s, HexaVal prefix);
+extern HexaVal rt_str_ends_with_b(HexaVal s, HexaVal suffix);
+int rt_str_starts_with(HexaVal s, HexaVal prefix) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(prefix)) return 0;
+    return hexa_truthy(rt_str_starts_with_b(s, prefix)) ? 1 : 0;
+}
+int rt_str_ends_with(HexaVal s, HexaVal suffix) {
+    if (!HX_IS_STR(s) || !HX_IS_STR(suffix)) return 0;
+    return hexa_truthy(rt_str_ends_with_b(s, suffix)) ? 1 : 0;
+}
+#endif
 
 HexaVal hexa_str_substring(HexaVal s, HexaVal start, HexaVal end) {
     if (!HX_IS_STR(s)) return hexa_str("");

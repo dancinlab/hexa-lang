@@ -1094,6 +1094,22 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 56: rt_str_starts_with + rt_str_ends_with (int-return bridge via _b suffix)
+
+- ✅ Both `rt_str_starts_with` and `rt_str_ends_with`
+  (self/runtime_core.c:4121, 4127) gain dispatch. C signatures return
+  plain `int` (codegen wraps in `hexa_bool(rt_str_starts_with(...))`)
+  — so we use new hexa-source names with `_b` suffix
+  (`rt_str_starts_with_b`/`_ends_with_b`) returning bool and bridge
+  via `hexa_truthy(...) ? 1 : 0` in the C wrapper
+- starts_with: byte-by-byte compare first plen bytes
+- ends_with: byte-by-byte compare last sfxlen bytes (offset = slen - sfxlen)
+- New variant of the int-return bridge pattern: when the existing C
+  symbol must keep its int signature (called by codegen directly),
+  the hexa-source helper takes a separate name with `_b` suffix
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,552 B
+
 ### 2026-05-21 — step 3 cycle 55: hexa_str_index_of_from + hexa_str_last_index_of (int64_t batch)
 
 - ✅ `hexa_str_index_of_from` (self/runtime_core.c:4172) and
