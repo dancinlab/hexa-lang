@@ -1013,17 +1013,114 @@ fn _rv_elab_primary(toks: [str], pos: int, m_in: Module, tab: SymTab) -> ElabRes
             idxtoks = idxtoks.push(it)
             np = np + 1
         }
+        // rfc_006 §5 d4 closure (2026-05-22) Iter B — only flag `isrange`
+        // when the `:` / `-:` / `+:` appears at DEPTH 0 of this bracket's
+        // content. Without depth tracking, a nested packed-bit-select
+        // inside an unpacked-array index — e.g.
+        //   fifo_mem[pp][fifo_head[pp][FIFO_LD-1:0]]
+        // — flags the OUTER bracket as a range because the `:` from the
+        // inner `[FIFO_LD-1:0]` is matched at depth 1. The outer bracket
+        // is actually a 1-D dynamic unpacked-array select.
         let mut isrange = 0
         let mut k = 0
+        let mut rdepth = 0
         while k < len(idxtoks) {
             let tk = idxtoks[k]
-            if tk == ":" || tk == "-:" || tk == "+:" { isrange = 1 }
+            if tk == "[" { rdepth = rdepth + 1 }
+            if tk == "]" { rdepth = rdepth - 1 }
+            if rdepth == 0 && (tk == ":" || tk == "-:" || tk == "+:") {
+                isrange = 1
+            }
             k = k + 1
         }
         if isrange == 0 {
             let ev = _rv_eval_expr(idxtoks, 0, tab, 1)
             if len(ev.err) == 0 {
                 wn = wn + "[" + str(ev.value) + "]"
+            } else {
+                // rfc_006 §5 d4 closure (2026-05-22) — RFC 073 Phase 3g —
+                // dynamic-index RHS read of unpacked-array element. When
+                // `wn` is the base of a 1-D unpacked array (P slots
+                // `base[0]..base[P-1]` already registered as wires from
+                // `_rv_parse_port_decl`'s 1-D unpacked path) and the
+                // index expression does NOT const-fold, emit a P-way
+                // `$eq` + `$mux` fan-in chain that selects the indexed
+                // slot at runtime. The chain shape mirrors the LHS dyn-
+                // idx path at L3261 (per-slot `$eq` + cascading `$mux`).
+                // Without this fix, dynamic reads like
+                //   out_data[grant_out] <= fifo_peek[grant_in];
+                // emitted `connect_cond(out_data[i]__d, fifo_peek, ...)`
+                // for ALL slots i — RHS collapses to the bare array-base
+                // name, leaving the actual per-slot data un-connected.
+                // ABC then ties every latch D-pin to `_const0_` (1605/
+                // 1610 of router_d4's `_const0_` rows are exactly this
+                // class).
+                //
+                // The new chain produces a wire `wn` (replaces the old
+                // bare `base` name) of width matching slot 0:
+                //   y = (idx==0) ? base[0] :
+                //       (idx==1) ? base[1] :
+                //       ...
+                //       (idx==P-2) ? base[P-2] : base[P-1]
+                // emitted as cascading `$mux(A=lower, B=base[k], S=eq_k,
+                // Y=mux_y_k)` cells.
+                //
+                // Guard: only fires when `_rv_array_bound(m, wn) > 0`.
+                // Multi-dim (`base[i][j]`) and packed-part-select stay
+                // on the legacy unchanged-name path — adding 2-D and
+                // bit-slice would be additional iters.
+                //
+                // @cite IEEE 1364-2005 §5.2.1 (variable-bit-select /
+                // variable-part-select) + Yosys passes/proc/proc_mux.cc
+                // (last-wins multi-driver collapse).
+                let _ab = _rv_array_bound(m, wn)
+                if _ab > 0 {
+                    let _ier = _rv_elab_expr(idxtoks, 0, m, 1, tab)
+                    if len(_ier.err) == 0 {
+                        m = _ier.m
+                        // Per-slot width inherited from base[0] (assume
+                        // homogeneous unpacked array, the only shape this
+                        // path supports).
+                        let _slot0 = wn + "[0]"
+                        let mut _slot_w = 1
+                        let _si = rtlil_find_wire(m, _slot0)
+                        if _si >= 0 { _slot_w = m.wires[_si].width }
+                        if _slot_w < 1 { _slot_w = 1 }
+                        // Build the chain from the LAST slot down to slot 0:
+                        //   inner_w = base[P-1]
+                        //   for k = P-2 down to 0:
+                        //     mux_y_k = mux(inner_w, base[k], eq(idx, k))
+                        //     inner_w = mux_y_k
+                        // Final wire returned is the topmost mux_y_0 (when
+                        // P>1) or base[0] (when P==1).
+                        let mut _inner = wn + "[" + str(_ab - 1) + "]"
+                        let mut _kk = _ab - 2
+                        while _kk >= 0 {
+                            let _cnk = "$const_" + str(_kk)
+                            if rtlil_find_wire(m, _cnk) < 0 {
+                                m = rtlil_module_add_wire(m, rtlil_wire(_cnk, 1, 0, 0))
+                            }
+                            let _eqy = _rv_fresh_wire(m)
+                            m = rtlil_module_add_wire(m, rtlil_wire(_eqy, 1, 0, 0))
+                            let mut _eqc = rtlil_cell(_eqy + "$eq", "$eq", 0)
+                            _eqc = rtlil_cell_connect(_eqc, "A", _ier.wire)
+                            _eqc = rtlil_cell_connect(_eqc, "B", _cnk)
+                            _eqc = rtlil_cell_connect(_eqc, "Y", _eqy)
+                            m = rtlil_module_add_cell(m, _eqc)
+                            let _muxy = _rv_fresh_wire(m)
+                            m = rtlil_module_add_wire(m, rtlil_wire(_muxy, _slot_w, 0, 0))
+                            let mut _muxc = rtlil_cell(_muxy + "$rd", "$mux", 0)
+                            _muxc = rtlil_cell_connect(_muxc, "A", _inner)
+                            _muxc = rtlil_cell_connect(_muxc, "B", wn + "[" + str(_kk) + "]")
+                            _muxc = rtlil_cell_connect(_muxc, "S", _eqy)
+                            _muxc = rtlil_cell_connect(_muxc, "Y", _muxy)
+                            m = rtlil_module_add_cell(m, _muxc)
+                            _inner = _muxy
+                            _kk = _kk - 1
+                        }
+                        wn = _inner
+                    }
+                }
             }
         }
         cur = np + 1                        // past `]`
