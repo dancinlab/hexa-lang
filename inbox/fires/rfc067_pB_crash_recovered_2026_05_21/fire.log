@@ -1,0 +1,156 @@
+=== rounds 5-8 + cookbook-revalidate refire 2026-05-21 ===
+2026. 05. 21. (목) 04:47:36 UTC
+summer-B650M-K
+== caps.txt ==
+name=NVIDIA GeForce RTX 5070
+sm=12.0
+multiprocessor_count=48
+max_threads_per_block=1024
+max_regs_per_block=65536
+max_shared_per_block=49152
+max_shared_per_sm=102400
+max_regs_per_sm=65536
+warp_size=32
+clock_rate_khz=2542000
+memory_bus_width=192
+l2_cache_size=50331648
+concurrent_kernels=1
+cooperative_launch=1
+cooperative_multi_device_launch=1
+async_engine_count=2
+managed_memory=1
+pageable_memory_access=1
+concurrent_managed_access=1
+kernel_exec_timeout=0
+== telemetry.csv ==
+NVIDIA GeForce RTX 5070, 38, 6.28 W, 210 MHz, 210 MHz, 405 MHz
+== oracle_results.txt ==
+vprintf_rc=0
+assertfail_rc=0
+atom_shared_rc=0
+ldmatrix_rc=0
+mbarrier_rc=0
+wmma_f16_f16_f16_rc=0
+wmma_bf16_bf16_f32_rc=0
+coop_launch_rc=0
+tma_attempt_rc=255
+tma_attempt_stderr:
+ptxas tma_attempt.ptx, line 11; error   : State space incorrect for instruction 'cp.async.bulk'
+ptxas fatal   : Ptx assembly aborted due to errors
+== timing.txt ==
+cold_module_load_us=5748
+first_launch_us=23
+nth_launch_us_avg=1
+warm_module_load_us=28
+alloc size=4096 alloc_us=73 free_us=45
+alloc size=4194304 alloc_us=24 free_us=22
+alloc size=67108864 alloc_us=39 free_us=43
+alloc size=268435456 alloc_us=112 free_us=121
+alloc size=268435456 alloc_us=423 free_us=154
+recovery_trial_1=OK
+recovery_trial_2=OK
+recovery_trial_3=OK
+== PTX corpus listing ==
+/tmp/wmma_ref.ptx
+/tmp/wmma_bf16_f32.ptx
+/tmp/tma_basic.ptx
+/tmp/test_var1.ptx
+/tmp/bf16_probe3.ptx
+/tmp/gpu_assert.ptx
+/tmp/r067p4_cpa/wmma_baseline.ptx
+/tmp/r067p4_cpa/wmma_multitile.ptx
+/tmp/r067p4_cpa/wmma_cp_async.ptx
+/tmp/step3_wmma_64x64_grid.ptx
+/tmp/atom_shared.ptx
+/tmp/test_var2.ptx
+/tmp/mbarrier_smoke.ptx
+/tmp/typeprobe3.ptx
+/tmp/r068p4_bf16/bf16_vadd.ptx
+/tmp/step1_wmma_16x16.ptx
+/tmp/step4_wmma_cp_async.ptx
+/tmp/r067p5_hgemm/wmma_256x256_grid.ptx
+/tmp/typeprobe1.ptx
+/tmp/f16_vadd.ptx
+/tmp/r055p2_fire/vec_add.ptx
+/tmp/r055p2_fire/gemm.ptx
+/tmp/typeprobe2.ptx
+/tmp/bf16_probe4.ptx
+/tmp/empty_kernel.ptx
+/tmp/bf16_probe.ptx
+/tmp/r067p4_mt/wmma_multitile.ptx
+/tmp/vec_add_unroll1.ptx
+/tmp/coop_grid.ptx
+/tmp/vec_add_unroll2.ptx
+ptx_corpus_count=29
+== audit_grep.txt ==
+=== memory-hierarchy + cache-modifier audit ===
+ld\.cs = 0
+ld\.lu = 0
+st\.cg = 0
+st\.cs = 0
+st\.wt = 0
+st\.wb = 0
+=== async + barrier audit ===
+mbarrier = 2
+cp\.async = 29
+=== fragment-load + atomic audit ===
+ldmatrix = 0
+atom\. = 1
+red\. = 25
+=== state-space declarations ===
+\.shared = 38
+\.local = 0
+\.const = 0
+\.global = 91
+== cookbook_revalidate result ==
+step1_single_tile: SKIP (not found: /home/summer/core/hexa-lang/inbox/fires/rfc067_p4_2026_05_20/wmma_16x16.ptx)
+step2_multitile: SKIP (not found: /home/summer/core/hexa-lang/inbox/fires/rfc067_p4_multitile_2026_05_20/wmma_multitile.ptx)
+step3_multiwarp: SKIP (not found: /home/summer/core/hexa-lang/inbox/fires/rfc067_p4_multiwarp_2026_05_20/wmma_64x64_grid.ptx)
+step4_cp_async: SKIP (not found: /home/summer/core/hexa-lang/inbox/fires/rfc067_p4_cp_async_2026_05_20/wmma_cp_async.ptx)
+step5_tf32: SKIP (not found: /home/summer/core/hexa-lang/inbox/fires/rfc067_p5_tf32_2026_05_20/tf32_gemm.ptx)
+composite_perf: ptxas_rc=255 sass_instr=0
+== nvcc_ref/sass_diff.txt ==
+nvcc_ptx_rc=0
+nvcc_ref_sass_instr=80
+hexa_step1_sass_instr=0
+== result.json ==
+{
+  "campaign": "rounds_5_8_recovered_after_crash_2026_05_21",
+  "host": "summer-B650M-K",
+  "gpu": "GPU 0: NVIDIA GeForce RTX 5070 (UUID: GPU-28d5e765-d415-c02e-6bda-8e091d8579c3)",
+  "date_utc": "2026-05-21T04:47:38Z",
+  "rounds_recovered": [5, 6, 7, 8],
+  "honest_scope": "Driver-API + ptxas-acceptance oracles + cookbook revalidate. HGEMM scale-up matrix at M=256..1024 NOT re-fired (would need composite kernel variable-shape host launcher). The PTX-acceptance battery + cuDeviceGetAttribute table + cuLaunchKernel timing + ptxas cookbook re-validate ARE fully reproduced.",
+  "oracle_ptx_smokes": 12,
+  "cookbook_revalidate_entries": 6,
+  "ptx_corpus_audited": 29
+}
+==DONE==
+WORKDIR=/home/summer/gpu_round5_8_refire_2026_05_21
+합계 132
+drwxrwxr-x   6 summer summer  4096  5월 21 13:47 .
+drwxr-x--- 178 summer summer  4096  5월 21 13:47 ..
+-rw-rw-r--   1 summer summer   329  5월 21 13:47 audit_grep.txt
+-rwxrwxr-x   1 summer summer 16168  5월 21 13:47 caps
+-rw-rw-r--   1 summer summer  1960  5월 21 13:47 caps.c
+-rw-rw-r--   1 summer summer   456  5월 21 13:47 caps.txt
+drwxrwxr-x   2 summer summer  4096  5월 21 13:47 cookbook_revalidate
+-rw-rw-r--   1 summer summer   600  5월 21 13:47 cupti_lib.txt
+-rw-rw-r--   1 summer summer    11  5월 21 13:47 driver_version.txt
+-rw-rw-r--   1 summer summer  4039  5월 21 13:47 fire.log
+-rw-rw-r--   1 summer summer    52  5월 21 13:47 mig_list.txt
+-rw-rw-r--   1 summer summer    16  5월 21 13:47 mps_check.txt
+drwxrwxr-x   2 summer summer  4096  5월 21 13:47 nvcc_ref
+-rw-rw-r--   1 summer summer   209  5월 21 13:47 nvcc_version.txt
+drwxrwxr-x   2 summer summer  4096  5월 21 13:47 oracle_ptx
+-rw-rw-r--   1 summer summer   246  5월 21 13:47 persistent_cache.txt
+-rw-rw-r--   1 summer summer     3  5월 21 13:47 persistent_cache_count.txt
+drwxrwxr-x   2 summer summer  4096  5월 21 13:47 ptx_corpus
+-rw-rw-r--   1 summer summer   482  5월 21 13:47 ptx_corpus_listing.txt
+-rw-rw-r--   1 summer summer   214  5월 21 13:47 ptxas_version.txt
+-rw-rw-r--   1 summer summer   672  5월 21 13:47 result.json
+-rw-rw-r--   1 summer summer    63  5월 21 13:47 telemetry.csv
+-rwxrwxr-x   1 summer summer 16512  5월 21 13:47 timing
+-rw-rw-r--   1 summer summer  2419  5월 21 13:47 timing.c
+-rw-rw-r--   1 summer summer   363  5월 21 13:47 timing.txt
+-rw-rw-r--   1 summer summer   608  5월 21 13:47 topology.txt

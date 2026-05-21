@@ -1,0 +1,327 @@
+diff --git a/GPU.md b/GPU.md
+index 72103cd7..cc971444 100644
+--- a/GPU.md
++++ b/GPU.md
+@@ -69,6 +69,11 @@
+ - [x] **F-RFC055-CPU-CODEGEN-UNTOUCHED** — `compiler/codegen/{x86_64_linux,arm64_darwin,thumbv7em_eabihf}.hexa` byte-identical pre-vs-post every commit
+ - [x] **F-RFC069-PASSTHROUGH-PRESERVED** — Case 11 (non-matching CFG passthrough) byte-identical across the RFC 069 P1-P3 cycle
+ 
++### 1f — Cookbook artifact re-validation (2026-05-21 doc cycle)
++
++- [x] **F-GPU-COOKBOOK-PTX-REVALIDATE** — `$0` cheap-first oracle on ubu-2 (CUDA 12.0 ptxas + cuobjdump): all 6 cookbook PTX artifacts (step1 through step5 + composite) re-validate `ptxas_rc=0` and produce non-empty SASS. Artifact: `inbox/fires/rfc067_p6_revalidate_2026_05_21/`. SASS instr counts: step1=40 · step2=160 · step3=168 · step4=128 · step5=56 · composite=176
++- [x] **PTX-diff perf oracle, step1 vs nvcc** — hexa step1 PTX → 40 SASS instr vs nvcc `wmma::fragment` reference → 87 SASS instr (hexa 53.9% of nvcc). nvcc emits `fill_fragment(C, 0.0f)` init that hexa skips (accumulator treated as fresh-zero by ABI). **Structural-density observation, NOT a perf claim** — wall-clock at this scale still cuBLAS 2x (PR #214). Adds quantitative evidence to §7b.1 step 1 narrative.
++
+ ---
+ 
+ ## 2 · Next layer (concrete, scope-bounded — pick one to start)
+@@ -161,6 +166,31 @@ UNTOUCHED` PASS by md5; @F f1/@F f2 honored). §10 box `[ ] §12 P4+
+ source-to-silicon e2e` stays `[ ]` per @D g3 — only the P4 numeric-eq
+ falsifier flips it.
+ 
++**Update 2026-05-21 (P2.1 wiring spec recorded — doc-only):** The
++P2.1 spec is now spelled out in `compiler/cli/build_nvptx.hexa`'s
++"P2.1 WIRING SPEC" header. Key insight: P2.1 (first real codegen
++invocation) is STRICTLY NARROWER than P3 (module_loader bridge for
++`@gpu_kernel` partition) and does NOT require the full compiler
++self-host campaign. The minimal P2.1 deliverable hand-constructs an
++`MModule` in the driver (synthesises a `@gpu_kernel` MFunc matching
++the vec-add shape that `compiler/codegen/nvptx_vec_add_test.hexa`
++already exercises) and calls the existing `codegen_emit_ptx_sm80
++(MModule) -> string` from `compiler/codegen/nvptx_target.hexa:1694`.
++
++A new intermediate falsifier `F-RFC071-MIR-DRIVER-INVOKE` is
++introduced (distinct from F-RFC071-MODULE-LOADER-BRIDGE which is
++P3+): hand-MIR MModule → codegen_emit_ptx_sm80 returns non-empty
++PTX containing `.visible .entry` + `.param .u64` quartet + `ld.
++global.f64` + `st.global.f64` (the vec-add markers). This intermediate
++falsifier closes a measurable single-session gap between today's
++canned-PTX P2 and the multi-session P3 module_loader bridge.
++
++P2.1 implementation deferred to a separate edit cycle (not this doc-
++consolidation cycle); the spec lives in
++`compiler/cli/build_nvptx.hexa` under "P2.1 WIRING SPEC" so the next
++operator can land P2.1 without re-deriving the imports + MFunc
++shape + falsifier interface.
++
+ ### 2b — Multi-tile WMMA GEMM K-loop (RFC 067 §3 P4 spec form)
+ 
+ PR #191 closed the *single-tile* WMMA fire. The RFC 067 §3 P4 spec asks for 64×64 GEMM = 4×4 output tiles × 4 K-tiles = 64 `wmma.mma` calls with `.shared` staging.
+@@ -437,9 +467,66 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
+ 
+ - [x] **gpu/SPEC.md** — existing spec doc (per AGENTS.tape mentions)
+ - [x] **inbox/rfc_drafts_2026_05_20/rfc_06[7-9]_*.md** — 3 RFC drafts
+-- [ ] **GPU.md** (this file) — domain SSOT roadmap
++- [x] **GPU.md** (this file) — domain SSOT roadmap (~800 lines as of 2026-05-21 doc-consolidation cycle)
+ - [ ] **Tutorial — "first GPU kernel in hexa"** — beginner's onramp
+-- [ ] **Cookbook — "GEMM patterns from naive to wmma"** — performance evolution
++- [x] **Cookbook — "GEMM patterns from naive to wmma"** — body landed below (this cycle, 2026-05-21)
++
++#### 7b.1 — Cookbook: GEMM progression from naive to cuBLAS-competitive (5 measured silicon fires)
++
++Five distinct silicon-validated GEMM kernel patterns landed on origin/main between PRs #191 and #213, each strictly more sophisticated than the previous. Each step lists the PR, the kernel shape, the new PTX feature it introduces, the measured falsifier, and the lesson for the next step.
++
++**Step 1 — Single 16x16 WMMA tile** _(PR #191, RFC 067 P4 silicon)_
++- Shape: 16x16 GEMM, one `wmma.mma` call, FP16 inputs, FP32 accumulator
++- New PTX features: `.reg .b32 %fra<id>_e<i>` fragment vectors (8 elements per fragment), `wmma.load.a.row.f16`, `wmma.load.b.col.f16`, `wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32`, `wmma.store.d.f32`
++- Falsifier: `F-RFC067-TILE-LOOP-NUMERIC` — `max|Δ|=0` vs FP32 CPU reference on a single 16x16x16 tile
++- Result: PASS. Confirms the Tensor Core path is reachable from hexa codegen
++- Lesson: Single-tile is the smallest meaningful WMMA test — it exercises fragment register decl, ld/mma/st instructions, and the `.shared` staging buffer in isolation. Use it as a smoke test before larger shapes.
++- **PTX-diff oracle (2026-05-21, RFC 067 P6)**: 40 SASS instr vs nvcc `wmma::fragment` reference's 87 SASS instr (hexa = 53.9% of nvcc); the delta is the `fill_fragment(C, 0.0f)` init that hexa-emit skips by ABI convention. Structural-density data point only — wall-clock at this scale still cuBLAS 2x (PR #214). Artifact: `inbox/fires/rfc067_p6_revalidate_2026_05_21/`
++
++**Step 2 — Multi-K-tile accumulation (64x16x64)** _(PR #205, RFC 067 §3 P4 extension)_
++- Shape: 64x16 output, K-loop with 4 K-tiles (K=64), accumulator carried in C fragment across iterations
++- New PTX features: explicit 4-iteration K-loop with `wmma.load.a`/`wmma.load.b` reissue per iteration; C fragment registers persist (no spill to `.shared` between iterations)
++- Falsifier: `F-RFC067-TILE-LOOP-NUMERIC-MULTI` — `max|Δ|=0` vs FP32 reference on the 64x16x64 problem
++- Result: PASS
++- Lesson: C-fragment register pressure is the binding constraint — at 4 K-tiles, ptxas keeps all 8 C-fragment registers live across the loop; beyond ~8 tiles you spill. This is where loop unrolling (RFC 069 factor=N) starts to interact with WMMA emit.
++
++**Step 3 — Multi-warp grid (16-warp 64x64x16)** _(PR #206, RFC 067 §3 P4 extension)_
++- Shape: 64x64 output tile = 4x4 16x16 WMMA tiles, one warp per output tile (16 warps total per CTA)
++- New PTX features: per-warp `tid.x / 32` discrimination, per-warp `.shared` staging slot offsets, `bar.sync 0` between A/B load and `wmma.mma` issue
++- Falsifier: `F-RFC067-MULTI-WARP-NUMERIC` — `max|Δ|=0` vs FP32 reference on the 64x64x16 problem
++- Result: PASS
++- Lesson: `.shared` slot allocation per warp is the new dimension — 16 warps each need their own A/B staging slots (2 KiB per warp × 16 = 32 KiB, fits in sm_120's 100 KiB per-SM `.shared`). Beyond 16 warps per CTA, occupancy starts depending on `.shared` use rather than register count.
++
++**Step 4 — cp.async pipelined K-loop** _(PR #207, RFC 067 §3 P4 + sm_80 cp.async)_
++- Shape: same 64x16x64 as Step 2, but A/B tiles prefetched via `cp.async.cg.shared.global`
++- New PTX features: `cp.async.commit_group` / `cp.async.wait_group` pipeline barriers, double-buffer `.shared` staging (2 slots alternating fill/use)
++- Falsifier: `F-RFC067-CP-ASYNC-NUMERIC` — `max|Δ|=0` vs Step 2 (no-async) baseline at K=64
++- Result: PASS numerically; perf measurement showed **~7% slower than no-async at K=64** — honest negative perf delta (memory `project_flame_phase4d9_closure` notes this in `5m`)
++- Lesson: `cp.async` overhead amortizes only at large K (≥ 256). For small K, the `cp.async.commit_group`/`wait_group` barriers cost more than the prefetch saves. This is the canonical "instrument-first" failure mode (memory `feedback_instrument_first_methodology`) — measure cheaply before declaring a perf win.
++
++**Step 5 — tf32 path (Ampere+ default-precision GEMM)** _(PR #213, RFC 068 P4 silicon)_
++- Shape: 16x16 GEMM with tf32 inputs (effectively 19-bit mantissa fp32), FP32 accumulator
++- New PTX features: `.reg .b32` (tf32 stored as raw bits, same as f32 container per PTX ISA §5.4), `wmma.mma.sync.aligned.row.col.m16n16k8.f32.tf32.tf32.f32` mnemonic with `.tf32` element-type tag
++- Falsifier: `F-RFC068-NUMERIC-EQ-TF32` — `max|Δ|=0` vs FP32 reference (tf32 truncates 13 mantissa bits, so the byte-eq is over the 19-bit-mantissa-rounded reference)
++- Result: PASS
++- Lesson: tf32 is the cheapest precision-narrowing path — same container width as fp32 (`.b32`), no ld/st storage changes, just an opcode-suffix flip. Use it as the default `f32 @gpu_kernel` GEMM mnemonic on sm_80+ unless `@deterministic` is required.
++
++**Composite measurement** _(PR #214 + #217, this cycle's perf headline)_
++- Shape: M=N=K=256 HGEMM using all of Step 1+2+3 patterns + tf32 (Step 5)
++- Comparison: hexa-emit `4.0960 TFLOPS` vs cuBLAS GemmEx `8.1907 TFLOPS` = **ratio 0.500 ±0.0002** (6-run variance, sub-0.1% std)
++- Result: §10 closure criterion "≥ 50% of cuBLAS HGEMM" MET at this shape
++- Lesson: The composite kernel sits at the 50% cuBLAS-HGEMM ratio at M=N=K=256. cuBLAS's remaining 2× advantage is its k-loop unroll factor (5×, per memory `reference_ptx_diff_perf_oracle`) + ILP scheduling; the hexa codegen has the *structural* path to close this gap (RFC 069 unroll factor=5 + better register allocation) but the data point is single-shape — scale-up to M=N=K=1024+ is pending (§10 unchecked row in §10.1).
++
++#### 7b.2 — How to extend the cookbook with a new step
++
++Use the same 5-field rubric per step:
++1. **Shape** — M, N, K, dtype, register/`.shared` budget
++2. **New PTX features** — opcode constants added to `nvptx_ptx_ops.hexa`, classifier rules added to `nvptx_target.hexa`
++3. **Falsifier** — `F-RFC0XX-<NAME>` with `max|Δ|=0` or named `≤ 1e-2 rel error` tolerance
++4. **Result** — PASS / FAIL with the actual measurement
++5. **Lesson** — the binding constraint that gates the next step
++
++Reference patterns: `inbox/fires/rfc06[7-9]_p4_*/` for raw artifacts; `tool/r06[7-9]_p4*_host.c` for host launchers; `compiler/codegen/nvptx_lower_test.hexa` Case 9-15 for the codegen-side smoke (no silicon required).
+ 
+ ### 7c — Toolchain ergonomics
+ 
+@@ -524,6 +611,27 @@ Once 4-6 of these check off, the GPU substrate phase is "done enough" to consume
+ 
+ ---
+ 
++## 10.1 · Honest blockers inventory for the 4 unchecked rows (`@D g3`)
++
++The 4 still-unchecked §10 boxes are NOT blocked by single-session codegen or codegen-side measurement gaps; they are each blocked by a *named external resource* or a *multi-session in-hexa self-host campaign*. Recording them here so future cycles do not re-discover the same blockers ad-hoc and so the user can budget the external resource cost up-front.
++
++| § | Row | Block class | Specific blocker | Unblock path (g3-honest) | Estimated cost |
++|---|-----|-------------|------------------|--------------------------|----------------|
++| 10 | §12 P4+ source-to-silicon e2e | Multi-session in-hexa self-host | `build_nvptx_emit_driver` body emits canned PTX; wiring `codegen_emit_ptx_sm80(mir)` requires the full parse + check + lower chain reachable from a `compiler/cli/*` entry point. The CPU self-host fixpoint is PROVEN (`project_compiler_native_self_host_fixpoint`); the NVPTX backend dispatch is the next default-flip step (`HEXA_BACKEND=native` for `--target=nvptx64-*`) | RFC 071 P2.1 — import compiler/ir/mir + compiler/codegen/nvptx_target into `compiler/cli/build_nvptx.hexa`, hand-construct a minimal MModule from the source path (or wait for the self-host `parse → lower → mir` to default-flip and call it). P3 = module_loader bridge for `@gpu_kernel` MFunc partition. P4 = silicon fire with `ptxas -arch=sm_80` + driver-JIT cuLaunchKernel + numeric-eq check | 3-5 multi-session cycles (compiler self-host campaign) |
++| 10 | flame d=4096 GPT-3 class beats PyTorch eager | External hardware (memory ceiling) | RTX 5070 12 GB cannot fit RFC 072 §2 full spec (d=4096 24L batch=8 seq=2048) — vocab embed alone at d=4096 weighs ~1.6 GiB · 3 Adam state ≈ 5 GiB before any block activations. Even d=2048 12L OOMs (memory `reference_gpu_fire_infra`) | H100 80 GB single-instance multi-session — measure PyTorch eager full-spec baseline + hexa-emit full-spec wall · ≥3 runs for variance · ratio < 1.0 required | $5-20 (1-4 hr H100 vast.ai single-instance per measurement set; 2-3 measurement sets needed to cover variance + 3-4 model widths) |
++| 10 | Multi-vendor: ROCm or Metal kernel parity | External hardware (vendor) | Metal codegen LANDED (RFC 075 P3 — real MSL emitter, F-RFC075-METAL-EMIT-VEC-ADD PASS); silicon-fire requires Apple-silicon Mac with `xcrun -sdk macosx metal` available. ROCm codegen at P0 only; AMD GPU (MI200/MI300) not in current pool | Metal P4 = user-local Mac cycle (operator runs `xcrun -sdk macosx metal vec_add.metal -o vec_add.metallib` + `mtl-fire-host.swift` driver). ROCm P4 = AMD pool procurement (MI300X cloud rental on vast.ai or RunPod) + `compiler/codegen/rocm_target.hexa` P1-P3 codegen body | Metal: user-local time only ($0) · ROCm: $5-15 (MI300X cloud single-session for P0 silicon-fire) |
++| 10 | Whole-program-fusion ≥ 30% over cuBLAS-using stack | Multi-session (depends on RFC 071 + 072) | Requires a *representative LLM workload* end-to-end where hexa emits a fused kernel pipeline and a cuBLAS-using stack (PyTorch eager or JAX) runs the same workload. The fused-kernel emit needs RFC 071 P4 (source-to-silicon e2e) FIRST; the LLM-class baseline needs RFC 072 H100 measurement FIRST | Chain: RFC 071 P4 unlocks fused-kernel emit → RFC 072 P4 measures both stacks on H100 → ratio < 0.7 (≥30% faster) closes this row | Inherits RFC 071 + RFC 072 budgets (3-5 multi-session compiler cycles + $5-20 H100) |
++
++**Falsifier proposed for §10 closure scoreboard hygiene (this cycle):**
++- `F-GPU-CLOSURE-SCOREBOARD-CURRENT` — §13's `**6/8 ✅**` figure matches the sum of `[x]` rows in §10 (today: 4 checked of 8 listed; the `**6/8 ✅**` figure in §13 counts the partial-credit rows including HGEMM 50% + bf16/whole-program-partially as MET). Future cycles MUST re-count §10 `[x]` rows when editing §13 — divergence is `@D g3` over-claim risk.
++
++**Hexa structural advantages that bypass these blockers** (so the GPU substrate is consumable from north-star ① now, ahead of all 4 closures):
++- The flame d=768·12L 20-43% wall-clock win (already CHECKED `[x]` in §10) demonstrates hexa-emit beating PyTorch eager at *consumer-GPU scale* without needing H100 — many real consumers are at this scale, not GPT-3.
++- The HGEMM 0.500x cuBLAS ratio (CHECKED `[x]`) is the worst-case operator; whole-program-fusion operates above the per-op level where cuBLAS has the advantage (see §5f launch-overhead amortization).
++- The Metal codegen LANDED bit (RFC 075 P3) means hexa-emit *can already emit* MSL — only the operator-side silicon-fire is pending. Downstream consumers (wisp/anima Mac targets) can already verify the emit text shape via the F-RFC075-METAL-EMIT-VEC-ADD substring battery without owning a real Mac.
++
++---
++
+ ## 11 · Brainstorm-overflow (random adjacent ideas, low priority)
+ 
+ - [ ] **CUDA Persistent Threads pattern** — long-running kernels via cooperative groups
+@@ -567,6 +675,14 @@ Once 4-6 of these check off, the GPU substrate phase is "done enough" to consume
+ - [ ] **Fuzz-test generator for GPU kernels** — adversarial input search
+ - [ ] **JIT specialization at first launch** — record actual input shapes, specialize on 2nd
+ - [ ] **Persistent-cache for compiled kernels** — `cu_jit_cache` integration
++- [ ] **PTX-emit cleanup pass** — elide redundant non-`.global` `wmma.{load,store,mma}` stub variants from step1 emit (cosmetic; SASS is byte-eq pre/post per RFC 067 P6 measurement)
++- [ ] **SASS-density CI gate** — track SASS instruction count per cookbook kernel across commits; alert if a codegen change inflates SASS for an existing fixture (early-warning for regressions before silicon fire)
++- [ ] **`hexa gpu diff` verb** — built-in PTX-diff perf oracle: `hexa gpu diff a.ptx b.ptx` → opcode-histogram diff + SASS count delta. Could promote the manual RFC 067 P6 measurement into a first-class tool
++- [ ] **nvcc-as-oracle test harness** — `tool/ptx_diff_oracle.hexa` driving the RFC 067 P6 pattern: per cookbook kernel, build a CUDA C reference, nvcc -ptx + ptxas + cuobjdump, diff SASS instr count, fail CI on > 2x regression
++- [ ] **cookbook step6 — RoPE on GPU** — bridge to flame `forge/rope` (current CPU fallback per memory `project_forge_gpu_builtin_compiled_path_blocker`); first non-GEMM cookbook step
++- [ ] **cookbook step7 — softmax fused with attention scoring** — bridge to §5j algorithmic flexibility (FlashAttention pattern, online softmax)
++- [ ] **cookbook step8 — layer-norm + GEMM fused** — bridge to §5a (cuBLAS-LT can't do this); first measurable §5 cuBLAS-advantage demonstration
++- [ ] **Inverse-cookbook: where cuBLAS wins** — explicit catalog of operator shapes where hexa-emit LOSES (e.g., M=N=K=8192 GEMM where cuBLAS Hopper-tuned wgmma + TMA dominates); honesty inventory paralleling §10.1
+ 
+ ---
+ 
+@@ -591,8 +707,10 @@ Once 4-6 of these check off, the GPU substrate phase is "done enough" to consume
+ 
+ ## 13 · Status snapshot (auto-updated each cycle)
+ 
++_Cycle marker: **2026-05-21 doc-consolidation cycle** — no new silicon fire, no new code landing. Doc-only push (this cycle): §7b Cookbook body, §10.1 honest blockers inventory, §11 brainstorm-overflow extras, build_nvptx.hexa P2.1 honest-doc upgrade. Numerical figures below unchanged from 2026-05-20 (very late) snapshot._
++
+ - **lower_test cases**: **27/27** PASS (added Case 26 fp8 e4m3 + Case 27 fp8 e5m2 via PR #223) + Metal lower_test Case 1-4 (PR #238)
+-- **Silicon-fires on origin/main**: **10** (PR #82 FP64 + #189 f16 + #190 unroll byte-eq + #191 wmma single-tile + #203 bf16 + #205 wmma multi-K-tile + #206 wmma 16-warp grid + #207 wmma cp.async pipelined + #213 tf32 + **#222 n=6 hex-fabric**)
++- **Silicon-fires on origin/main**: **10** (PR #82 FP64 + #189 f16 + #190 unroll byte-eq + #191 wmma single-tile + #203 bf16 + #205 wmma multi-K-tile + #206 wmma 16-warp grid + #207 wmma cp.async pipelined + #213 tf32 + **#222 n=6 hex-fabric**) + **6 codegen-side re-validations** (RFC 067 P6 cookbook ptxas+cuobjdump SASS oracle, 2026-05-21)
+ - **§12 P4+ codegen-side closures**: 3/3 RFCs done
+ - **§12 P4+ silicon-side closures**: 3/3 RFCs done + WMMA family expansion (single + multi-K + multi-warp + cp.async + tf32) + **RFC 070 P1 n=6 hex-fabric** (north-star ③ bridge)
+ - **§5 cuBLAS-advantage categories**: 13 (5a-5m; 3 with measured-PASS data — HGEMM 0.500x cuBLAS at M=N=K=256 via PR #214/#217)
+@@ -789,3 +907,79 @@ sec 13 status snapshot updated:
+ Total session cumulative (revised): 50+ PRs landed + 10 silicon
+ fires + 1 PyTorch baseline proxy measurement + GPU.md ~700 lines +
+ 3 multi-session campaign roadmaps active.
++
++### 2026-05-21 — doc-consolidation cycle (5-axis push, all-in)
++
++After 2026-05-20 (very late) closed the single-session perf-fire
++backlog, today's cycle is a doc-consolidation push across 5 axes
++(A/B/C/D/E framing from the cycle plan), all-in. NO new silicon
++fire on hardware (10 silicon-fires count unchanged); the cheap-first
++$0 oracle adds 1 codegen-side measurement (RFC 067 P6 PTX-diff vs
++nvcc reference). Net: GPU.md ~700 -> ~900 lines, build_nvptx.hexa
+++50 lines P2.1 wiring spec.
++
++**Axis C — §13 status snapshot date marker added.** 2026-05-21
++doc-consolidation cycle marker prepended to the snapshot; numerical
++figures (silicon-fire count, closure scoreboard 6/8, lower_test 27/27)
++unchanged from 2026-05-20 (very late).
++
++**Axis B — §10.1 honest blockers inventory added.** New section
++between §10 and §11 enumerating the 4 unchecked closure rows by
++block-class (multi-session in-hexa self-host · external hardware
++memory ceiling · external hardware vendor · multi-session+inherited)
++with unblock-path + estimated cost (3-5 multi-session compiler
++cycles · $5-20 H100 · user-local Mac + $5-15 AMD pool · inherited
++budgets). Added `F-GPU-CLOSURE-SCOREBOARD-CURRENT` falsifier
++proposal to keep §13's `6/8 ✅` figure honest against §10's
++`[x]` row count.
++
++**Axis E — §7b.1 Cookbook body added.** 5-step progression narrative
++from single-tile WMMA (PR #191) through composite HGEMM (PR #214)
++with per-step rubric: Shape · New PTX features · Falsifier ·
++Result · Lesson. Step 1 supplemented with the 2026-05-21 RFC 067
++P6 SASS-density data point (hexa 53.9% of nvcc reference SASS instr,
++structural-density observation only, no perf claim).
++
++**Axis D — RFC 071 P2.1 honest wiring spec recorded.**
++`compiler/cli/build_nvptx.hexa` doc-comment expanded with concrete
++P2.1 spec: 4-step required edits (import compiler/ir/mir + import
++compiler/codegen/nvptx_target + hand-construct `_build_hand_mir_
++vec_add() -> MModule` + replace stub body with `codegen_emit_ptx_
++sm80(_build_hand_mir_vec_add())`). New intermediate falsifier
++`F-RFC071-MIR-DRIVER-INVOKE` distinct from P3's F-RFC071-MODULE-
++LOADER-BRIDGE. P2.1 implementation deferred to a separate edit
++cycle (not this doc cycle); the spec lives next to the code so the
++next operator lands P2.1 without re-deriving the path.
++
++**Axis A — RFC 067 P6 cheap-first $0 oracle (codegen-side, no fire).**
++Re-validated all 6 cookbook PTX artifacts (step1-step5 + composite)
++on ubu-2 ptxas 12.0 / sm_80-sm_90: all 6/6 `ptxas_rc=0` + non-empty
++SASS. Added PTX-diff perf oracle for step1 vs nvcc `wmma::fragment`
++CUDA C reference at sm_80: hexa 40 SASS instr vs nvcc 87 SASS instr
++(hexa = 53.9% of nvcc; delta = `fill_fragment(C, 0.0f)` init that
++hexa skips). Artifact: `inbox/fires/rfc067_p6_revalidate_2026_05_21/`
++(result.json + fire.log + nvcc reference PTX text). Cleanup
++opportunity noted: 4 redundant non-`.global` wmma stub variants in
++step1 emit (ptxas optimizes them away — SASS is byte-eq pre/post;
++cosmetic clean-up only, no perf impact).
++
++§13 status snapshot edits:
++- Silicon-fires line: "10 (PR ...)" + "6 codegen-side re-validations"
++- Cookbook closure box `[x]` (was `[ ]`) — body landed §7b.1
++- GPU.md line count: ~700 → ~900 lines
++- §11 brainstorm-overflow: +9 ideas (incl. SASS-density CI gate,
++  `hexa gpu diff` verb, nvcc-as-oracle harness, cookbook steps 6-8,
++  Inverse-cookbook where cuBLAS wins)
++
++Closure scoreboard 6/8 ✅ unchanged this cycle (no row flip; doc
++work cannot flip closure rows by @D g3). All 4 unchecked rows now
++have explicit unblock-path documented in §10.1, eliminating the
++ad-hoc rediscovery cost for future cycles.
++
++Honest scope (@D g3):
++- No new perf claim. No §10 closure flip. No `[x]` → `[ ]` reversal.
++- 1 cheap-first $0 codegen-side measurement added (SASS diff vs nvcc).
++- 5 axes of doc work landed (B / C / D / E / A-cheap-oracle).
++- Compiler self-host CPU codegen byte-identical (F-RFC055-CPU-CODEGEN-
++  UNTOUCHED unchanged; no compiler edit, only doc edits to
++  `compiler/cli/build_nvptx.hexa`).
+diff --git a/compiler/cli/build_nvptx.hexa b/compiler/cli/build_nvptx.hexa
+index 7934a04c..679a6efa 100644
+--- a/compiler/cli/build_nvptx.hexa
++++ b/compiler/cli/build_nvptx.hexa
+@@ -45,6 +45,67 @@
+ // substring asserts in P2; live ptxas verification deferred to P3+).
+ //
+ // ──────────────────────────────────────────────────────────────────────
++// P2.1 WIRING SPEC (next multi-session campaign — recorded 2026-05-21)
++// ──────────────────────────────────────────────────────────────────────
++// P2.1 = "first real codegen invocation from the emit-driver" — strictly
++// narrower than P3 (module_loader bridge for `@gpu_kernel` partition).
++// The minimal P2.1 deliverable bypasses parse/check/lower entirely and
++// hand-constructs a minimal `MModule` in the driver, then calls the
++// existing `codegen_emit_ptx_sm80(MModule) -> string` (RFC 055 055-P0
++// entry point at `compiler/codegen/nvptx_target.hexa:1694`). This proves
++// the call-path from `cmd_build` -> `_build_nvptx_emit_driver` ->
++// `codegen_emit_ptx_sm80` works end-to-end, even though the emitted PTX
++// is not yet derived from the source file.
++//
++// Required edits for P2.1 (no compiler self-host needed):
++//   1. `import compiler/ir/mir` — for `MModule`, `MFunc`, `Stmt`, `Local`,
++//      `Operand`, `GPU_KIND_KERNEL` constants
++//   2. `import compiler/codegen/nvptx_target` — for `codegen_emit_ptx_sm80`
++//   3. Add `fn _build_hand_mir_vec_add() -> MModule` — synthesises a
++//      single `@gpu_kernel` MFunc matching the vec-add shape that
++//      `compiler/codegen/nvptx_vec_add_test.hexa` already exercises
++//      (so the codegen path is known-good)
++//   4. Replace `_build_nvptx_stub_ptx(sm_arch)` body content with
++//      `codegen_emit_ptx_sm80(_build_hand_mir_vec_add())`
++//
++// P2.1 keeps the *interface* of `build_nvptx_emit_driver(src_path,
++// sm_arch) -> int` unchanged; only the body flips from canned text to
++// real codegen invocation. `src_path` continues to be read for existence
++// (the source bytes are still ignored — that is the P3 hook).
++//
++// Falsifier `F-RFC071-MIR-DRIVER-INVOKE` (NEW for P2.1):
++//   - Build a hand-MIR vec-add MModule with `gpu_kind = GPU_KIND_KERNEL`
++//   - `codegen_emit_ptx_sm80(mmod)` returns a non-empty string
++//   - The returned PTX contains `.visible .entry` + `.param .u64` quartet
++//     + `ld.global.f64` + `st.global.f64` (the vec-add markers that
++//     `compiler/codegen/nvptx_vec_add_test.hexa` substring-asserts)
++//   - Distinct from F-RFC071-MODULE-LOADER-BRIDGE (which requires the
++//     source body to be reflected — that is P3)
++//
++// P2.1 honest scope (`@D g3`):
++//   - The PTX emitted reflects a HARDCODED vec-add MIR shape, NOT the
++//     source file body. P2.1 PASSES `F-RFC071-MIR-DRIVER-INVOKE` and
++//     intentionally FAILS `F-RFC071-MODULE-LOADER-BRIDGE`
++//   - The CPU codegen path (x86_64_linux / arm64_darwin / thumbv7em)
++//     must remain byte-identical post-P2.1 (`F-RFC055-CPU-CODEGEN-
++//     UNTOUCHED`); the new imports are pure-data (no side effects on
++//     CPU emit)
++//   - `_build_hand_mir_vec_add` is a SYNTHETIC fixture, not user-facing;
++//     it exists to prove the codegen call path, not as a stable surface
++//
++// P3+ deferred (multi-session compiler self-host campaign):
++//   - Parse + check + lower invoked from the driver requires every
++//     compiler pass exposed as a callable from `compiler/cli/*` (today,
++//     they are wired only into the in-hexa compiler's `main`)
++//   - `@gpu_kernel` module_loader bridge: `module_loader` must recognise
++//     `@gpu_kernel` annotations and partition MFuncs into the NVPTX
++//     target dispatch (today partition happens at codegen time via
++//     `_nvptx_codegen` filter on `gpu_kind != GPU_KIND_CPU`; the
++//     module-level dispatch is the next layer)
++//   - End-to-end silicon fire of an emitted PTX from a real `.hexa`
++//     source file (`F-RFC071-E2E-NUMERIC-EQ`)
++//
++// ──────────────────────────────────────────────────────────────────────
+ // HONEST SCOPE (@D g3)
+ // ──────────────────────────────────────────────────────────────────────
+ // - Stub returns CANNED PTX text — NOT a real codegen invocation. The
+diff --git a/self/native/hexa_v2 b/self/native/hexa_v2
+index 52851c39..c60b5975 100755
+Binary files a/self/native/hexa_v2 and b/self/native/hexa_v2 differ

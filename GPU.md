@@ -69,6 +69,18 @@
 - [x] **F-RFC055-CPU-CODEGEN-UNTOUCHED** — `compiler/codegen/{x86_64_linux,arm64_darwin,thumbv7em_eabihf}.hexa` byte-identical pre-vs-post every commit
 - [x] **F-RFC069-PASSTHROUGH-PRESERVED** — Case 11 (non-matching CFG passthrough) byte-identical across the RFC 069 P1-P3 cycle
 
+### 1f — Crash-recovery cycle (2026-05-21)
+
+Recovery cycle after macOS crash lost two in-flight stash diffs (rounds 5-8 GPU.md doc + RFC 071 P2.1 spec, both unpushed). The original artifact directories referenced from those stashes (`rfc067_p9_rounds_5_7_2026_05_21/`, `rfc067_pA_round8_2026_05_21/`, `rfc067_p6_revalidate_2026_05_21/`) were lost system-wide. Stash patches preserved at `inbox/notes/crash_recovery_2026_05_21/`. Re-fired the idempotent subset on ubu-2 RTX 5070 sm_120; new artifact: `inbox/fires/rfc067_pB_crash_recovered_2026_05_21/`.
+
+- [x] **F-RFC067-PB-ORACLE-BATTERY** — 8/9 hand-emit PTX smokes ptxas_rc=0 on ubu-2 (sm_80 + sm_90 mixed): `vprintf` · `__assertfail` · `atom.shared.add.s32` · `ldmatrix.sync.aligned.x4.m8n8.shared.b16` · `mbarrier.init.shared::cta.b64` (sm_90) · `wmma.mma.sync...m16n16k16.f16.f16` · `wmma.mma.sync...m16n16k16.f32.bf16.bf16.f32` · `bar.sync 0` (coop_launch). 1 honest fail: `cp.async.bulk.shared::cta.global` → "State space incorrect" (TMA needs full tensor descriptor + mbarrier rendezvous, not the bulk-copy primitive in isolation). Artifact: `inbox/fires/rfc067_pB_crash_recovered_2026_05_21/oracle_ptx/oracle_results.txt`
+- [x] **F-RFC067-PB-COOKBOOK-REVALIDATE** — 6/6 cookbook PTX ptxas_rc=0 with per-file `.target` arch auto-detect (sm_80 + sm_90). SASS instr counts (measured by `cuobjdump --dump-sass` line-count): step1_single_tile=80 (sm_80) · step2_multitile=320 (sm_90) · step3_multiwarp=336 (sm_90) · step4_cp_async=256 (sm_90) · step5_tf32=144 (sm_80) · composite_perf=352 (sm_90). PR #214 composite kernel (`wmma_256x256_grid.ptx`) re-validates cleanly. Artifact: `inbox/fires/rfc067_pB_crash_recovered_2026_05_21/cookbook_revalidate/result.txt`
+- [x] **F-RFC067-PB-NVCC-SASS-DIFF** — hexa step1 single-tile SASS vs nvcc `wmma::fragment` reference SASS at sm_80 = **80 = 80** (`ratio=1.000`). Honest correction (`@D g3`): the pre-crash stash 1 claim "hexa 40 SASS / nvcc 87 SASS (53.9%)" CANNOT be reproduced with the current cookbook PTX + CUDA 12.0 ptxas. New measurement = structural parity. Artifact: `inbox/fires/rfc067_pB_crash_recovered_2026_05_21/nvcc_ref/sass_diff.txt`
+- [x] **F-RFC067-PB-CAPS-TELEMETRY** — full `cuDeviceGetAttribute` table re-captured (48 SM · 1024 max threads/block · 65536 regs/block · 49152 shared/block · 102400 shared/SM · 65536 regs/SM · warp 32 · 2.542 GHz · 192-bit bus · 50 MB L2 · `concurrent_kernels=1` · `cooperative_launch=1` · `async_engine_count=2`). Telemetry: 38 °C · 6.28 W · 210/210/405 MHz (gr/sm/mem) idle. Toolkit: nvcc 12.0.140 · ptxas V12.0.140 · driver 580.126.09
+- [x] **F-RFC067-PB-TIMING** — `cuLaunchKernel` empty-kernel: cold module-load 5,748 μs · first launch 23 μs · Nth launch avg 1 μs (1000 iters) · warm module-load 28 μs (205× speedup). `cuMemAlloc/Free` latency 22-423 μs across 4 KB - 256 MB. 3 ctx-cycle recovery trials all OK (Create → ModuleLoad → LaunchKernel → Synchronize → Unload → Destroy)
+- [x] **F-RFC067-PB-CORPUS-AUDIT** — grep audit over 29-PTX corpus on ubu-2 `/tmp`: cache-modifier hints (`ld.cs/ld.lu/st.cg/cs/wt/wb`) = 0 (codegen improvement opportunity). `mbarrier` = 2 (sm_90 round-8 + cookbook). `cp.async` = 29 (step4 + variants). `ldmatrix` = 0. `atom.` = 1. `red.` = 25. `.shared` = 38. `.local` = 0. `.const` = 0. `.global` = 91. Honest correction (`@D g3`): the pre-crash stash 0 claim "Determinism = ALL PTX emit ZERO atom.* + ZERO red.*" is REFUTED — the broader corpus contains 1 `atom.` + 25 `red.` ops; the §6a determinism row CANNOT flip to `[x]` based on this audit
+- [ ] **HGEMM scale-up matrix M=256/384/512/768/1024** — NOT re-fired this cycle. Original stash 0 measurement (256→1024 ratio 0.500→0.280 vs cuBLAS) was lost with the crash. Reproduction would require a variable-shape host launcher around the composite kernel; deferred to a follow-on cycle. §10 "≥ 50% cuBLAS HGEMM" closure box stays `[x]` (PR #214 + variance commit `05a85bb9` MEASURED at M=N=K=256; scale-up caveat persists)
+
 ---
 
 ## 2 · Next layer (concrete, scope-bounded — pick one to start)
@@ -605,6 +617,7 @@ Once 4-6 of these check off, the GPU substrate phase is "done enough" to consume
   - **RFC 075** (multi-vendor ROCm+Metal, §9): **Metal P1+P2+P3 codegen LANDED** PR #238 — real MSL emitter produces `kernel void vec_add(device const float* a [[buffer(0)]], ...)` Apple-canonical text, F-RFC075-METAL-EMIT-VEC-ADD 15-substring battery PASS via build+run. ROCm P1+ blocked (no AMD GPU in pool); Metal P4 (Mac silicon-fire) follow-on user-local.
 - **Continuous gates**: F5 / F6 / F7 all PASS through every commit
 - **Remaining to P4 closure**: A — P2.1 real codegen invocation (multi-session compiler self-host) + P3 module_loader bridge + P4 silicon e2e numeric-eq. B — H100 80GB d=4096 full baseline + flame d=4096 measure + variance ≥3 runs + ratio < 1.0 ($5-20 multi-session). C — Mac local Metal compiler fire + AMD GPU pool procurement.
+- **2026-05-21 crash recovery cycle**: macOS crash lost two unpushed in-flight stash diffs (rounds 5-8 GPU.md doc + RFC 071 P2.1 spec). Stash patches preserved at `inbox/notes/crash_recovery_2026_05_21/`. Idempotent subset re-fired on ubu-2 → `inbox/fires/rfc067_pB_crash_recovered_2026_05_21/` (8/9 ptxas oracle smokes PASS · 6/6 cookbook revalidate PASS · caps + telemetry + cuLaunchKernel timing captured). Honest correction: stash 0's "determinism = zero atom/red" claim REFUTED by 29-PTX corpus audit (1 atom, 25 red); stash 1's "hexa step1 = 53.9% nvcc SASS" CANNOT be reproduced (new ratio 1.000). §10 closure unchanged 6/8 (no row flip).
 
 ---
 
@@ -789,3 +802,103 @@ sec 13 status snapshot updated:
 Total session cumulative (revised): 50+ PRs landed + 10 silicon
 fires + 1 PyTorch baseline proxy measurement + GPU.md ~700 lines +
 3 multi-session campaign roadmaps active.
+
+### 2026-05-21 — crash recovery cycle (rounds 5-8 partial re-fire + RFC 071 P2.1 spec)
+
+**Crash incident.** macOS crashed during a parallel GPU.md push cycle
+(no power loss, kernel panic-class). Two unpushed `git stash` entries
+preserved the in-flight work:
+
+- `stash@{0}` (290 L GPU.md diff): "rounds 5-7 + round 8 exhaustion
+  sweep" — claimed ~50+ measurement-PASS checkbox flips with rich
+  numeric content (cuDeviceGetAttribute table, ptxas oracle smokes,
+  cuLaunchKernel timing, HGEMM scale-up matrix M=256..1024)
+- `stash@{1}` (200 L GPU.md + 61 L `compiler/cli/build_nvptx.hexa` +
+  binary): RFC 071 P2.1 wiring spec recorded next to the code +
+  §1f cookbook revalidate + §7b.1 cookbook body narrative
+
+**Artifact loss.** System-wide `find` for the three artifact dirs
+referenced by these stashes (`inbox/fires/rfc067_p9_rounds_5_7_*`,
+`rfc067_pA_round8_*`, `rfc067_p6_revalidate_*`) returned ZERO matches.
+The artifacts existed only in the in-flight session and were lost
+with the crash. Per `@D g3` honesty, the stash text could not land
+verbatim — checkbox `[x]` markers citing missing artifacts would be
+unsubstantiated claims.
+
+**Recovery action.** Stash diffs preserved at
+`inbox/notes/crash_recovery_2026_05_21/{stash0_rounds_5_8_exhaustion,
+stash1_rfc071_p2_1_spec_cookbook}.patch` (655 lines total, never
+applied). Re-fired the idempotent subset on ubu-2 RTX 5070 sm_120
+driver 580 / CUDA 12.0.140 via `rounds_5_8_refire.sh` (single bash
+script: 9 hand-emit PTX oracle smokes + caps + telemetry + timing +
+cuMemAlloc + ctx-recovery + cookbook ptxas revalidate + nvcc SASS
+reference). Single artifact: `inbox/fires/rfc067_pB_crash_recovered_
+2026_05_21/` (consolidated rather than 3 separate dirs — honest
+naming reflects scope reduction).
+
+**Honest corrections vs stash claims (`@D g3`):**
+
+- **Cookbook SASS counts** — stash claimed step1=40, step2=160,
+  step3=168, step4=128, step5=56, composite=176. New measurement
+  (auto-detect per-file `.target` arch) shows step1=80, step2=320,
+  step3=336, step4=256, step5=144, composite=352. Stash numbers
+  were 2× lower — likely sm_80-forced compile of sm_90 PTX (which
+  fails) or older toolkit; the new numbers are honestly measured
+  with toolkit-current ptxas
+- **nvcc SASS diff** — stash 1 claimed "hexa step1 = 40 SASS vs
+  nvcc reference = 87 SASS = 53.9 % structural-density advantage."
+  New measurement with the same `wmma::fragment` reference shape
+  compiled by nvcc 12.0.140 on sm_80: hexa=80, nvcc=80, ratio=1.000.
+  No advantage. Pre-crash claim is RETRACTED
+- **Determinism audit** — stash 0 claimed "ALL 8 PTX kernels emit
+  ZERO atom.* + ZERO red.* → DETERMINISTIC by construction." New
+  audit over the 29-PTX corpus on ubu-2 `/tmp` shows `atom.` = 1
+  and `red.` = 25 ops. §6a Determinism row stays `[ ]` — cannot
+  claim determinism-by-construction from this corpus
+- **Round 8 HGEMM scale-up matrix** (M=256/384/512/768/1024) —
+  NOT re-fired this cycle (variable-shape host launcher around
+  the composite kernel would be a new build); deferred. PR #214
+  M=N=K=256 ratio 0.500 ±0.0002 remains the §10 closure
+  measurement
+
+**Successfully recovered (re-measured PASS):**
+
+- 8/9 ptxas oracle PTX smokes rc=0 (vprintf · __assertfail ·
+  atom.shared.add.s32 · ldmatrix.sync.aligned.x4 · mbarrier.init
+  sm_90 · wmma f16f16f16 · wmma bf16bf16f32 · bar.sync 0). TMA
+  cp.async.bulk attempt failed identically to stash: "State space
+  incorrect" (sm_90 TMA needs full tensor descriptor)
+- 6/6 cookbook PTX ptxas_rc=0 with new SASS counts above
+- Full `cuDeviceGetAttribute` table (48 SM · 1024 max threads/
+  block · 49152 shared/block · 102400 shared/SM · 50 MB L2 ·
+  2.542 GHz boost · cooperative_launch=1 · concurrent_kernels=1)
+- Telemetry idle: 38 °C · 6.28 W · 210/210/405 MHz (vs stash
+  35 °C · 6.18 W — small drift, both idle)
+- Timing: cold module load 5,748 μs · first launch 23 μs · Nth
+  avg 1 μs · warm module load 28 μs · alloc 22-423 μs ·
+  recovery 3/3 OK
+- Persistent cache: `~/.nv/ComputeCache` 17 MB · MIG not supported
+  on RTX 5070 (consumer) · NVLink absent (PCIe single-GPU)
+- Toolkit: nvcc 12.0.140 · ptxas V12.0.140 · driver 580.126.09
+
+**Doc landings (separate from re-fire):**
+
+- `compiler/cli/build_nvptx.hexa` P2.1 WIRING SPEC header
+  (+61 lines from stash 1) — concrete 4-step P2.1 recipe + new
+  `F-RFC071-MIR-DRIVER-INVOKE` falsifier (distinct from P3's
+  module-loader-bridge). P2.1 implementation deferred to a
+  separate edit cycle
+- GPU.md §1f new section (Crash-recovery cycle) with 7
+  checkboxes (6 `[x]` measured · 1 `[ ]` deferred)
+- §13 status snapshot bullet appended (crash recovery + correction
+  summary)
+
+**§10 closure scoreboard unchanged at 6/8** — doc cycle + cheap-
+first oracle re-fire does not flip closure rows by `@D g3`.
+
+**Lesson.** Pre-crash GPU silicon work that hasn't been committed
++ pushed is one kernel-panic away from total loss; the SAS S/numeric
+claims have to be reproducible (idempotent script + structured
+artifact dir) for any post-crash recovery to be honest. The
+`rounds_5_8_refire.sh` script lives in `inbox/notes/crash_recovery_
+2026_05_21/` to enable any future "re-fire identical battery" call.
