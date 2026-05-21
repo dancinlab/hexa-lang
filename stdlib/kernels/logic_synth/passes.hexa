@@ -3055,13 +3055,19 @@ fn pass_clean_multidriver(d: Design) -> PassResult {
 //   - Walks every Module; groups `connect_lhs[k]/_rhs[k]/_cond[k]` rows
 //     where `connect_cond[k] != ""` by their `connect_lhs[k]` value.
 //   - For each LHS-group with ≥1 condition-tagged row, builds a
-//     left-deep `$mux` chain:
+//     left-deep `$mux` chain. Source-order-LATER condition rows must
+//     dominate source-order-EARLIER ones (IEEE 1800-2017 §10.4.2
+//     last-write-wins), so the chain is composed with conds[N-1] in
+//     the OUTERMOST mux (highest priority):
 //        inner_0 = LHS itself (feedback / hold)
 //                  OR the last untagged row's RHS (if present)
-//        for k = N-1 down to 0:
+//        for k = 0 up to N-1:
 //            mux_k = $mux(S = cond_k, A = inner_k, B = rhs_k, Y = fresh)
 //            inner_{k+1} = mux_k
-//     Final inner becomes a SINGLE unconditional connect to LHS.
+//     Final inner (= mux_{N-1}.Y) becomes a SINGLE unconditional connect
+//     to LHS. So `conds[N-1]` (last in source order) is the outermost
+//     selector — when it is 1, the chain's Y == rhss[N-1] regardless of
+//     earlier-arm conditions, matching Verilog last-write-wins.
 //   - For LHS-groups where ALL rows are unconditional (legacy path),
 //     this pass is a structural no-op — those rows pass through
 //     unchanged for `pass_clean_multidriver` to handle.
@@ -3190,8 +3196,20 @@ fn _passes_proc_mux_emit_chain(m_in: Module,
         lhs_w = m.wires[li].width
         if lhs_w < 1 { lhs_w = 1 }
     }
-    let mut k = len(conds) - 1
-    while k >= 0 {
+    // rfc_006 §5 closure (2026-05-22): chain direction reversed so the
+    // LAST cond-row in Verilog source order ends up OUTERMOST = HIGHEST
+    // priority. Per IEEE 1800-2017 §10.4.2 (last-write-wins for non-
+    // blocking assignments to the same LHS within one always block) and
+    // Yosys passes/proc/proc_mux.cc, the rows must be priority-encoded
+    // with source-order-LATER beating source-order-EARLIER. The previous
+    // direction (`k = N-1 down to 0`) put conds[0] outermost — the
+    // OPPOSITE of last-write-wins. router_d4's `out_valid[k]` symptom:
+    // the early for-loop clear-row (`out_valid[pp] <= 1'b0` under `!rst`)
+    // dominated the later set-row (`if (any_grant) out_valid[grant_out]
+    // <= 1'b1`), forcing `out_valid[k]__d` to const-0 when `!rst` and
+    // letting ABC strash fold the entire downstream cone (5 × _const0_).
+    let mut k = 0
+    while k < len(conds) {
         let mux_y = "$procmux_y$" + lhs + "$" + str(k)
         m = rtlil_module_add_wire(m, rtlil_wire(mux_y, lhs_w, 0, 0))
         let mux_n = "$procmux$" + lhs + "$" + str(k)
@@ -3202,7 +3220,7 @@ fn _passes_proc_mux_emit_chain(m_in: Module,
         mc = rtlil_cell_connect(mc, "Y", mux_y)
         m = rtlil_module_add_cell(m, mc)
         inner_w = mux_y
-        k = k - 1
+        k = k + 1
     }
     // Final connect — `lhs <= inner_w` (unconditional). Records cond="" so
     // pass_clean_multidriver sees a single-driver row.
@@ -5212,6 +5230,57 @@ fn main() {
             + str(len(r_t34.design.modules[0].connect_lhs))
             + " (want 1)")
         fails = fails + 1
+    }
+
+    // T_PROCMUX_PRIORITY_LAST_WINS — rfc_006 §5 closure (2026-05-22).
+    //   Falsifier for the chain-direction bug that left router_d4 with 5
+    //   `out_valid[k]` const-0 cascades. With three cond-tagged rows in
+    //   source order (c1→a, c2→b, c3→d for LHS=q), Verilog last-write-
+    //   wins (IEEE 1800-2017 §10.4.2) requires conds[N-1]=c3 to dominate
+    //   when asserted. In our chain encoding, OUTERMOST mux = highest
+    //   priority = cell `$procmux$q$<N-1>` (last emitted). Its B-pin must
+    //   be the LAST source-order RHS (`d`) and its S-pin the LAST cond
+    //   (`c3`). The previous direction (`k = N-1 down to 0`) inverted
+    //   this, putting `a` outermost.
+    //   @cite IEEE 1800-2017 §10.4.2 (last-write-wins) + Yosys
+    //   passes/proc/proc_mux.cc (clean-room behaviour).
+    total = total + 1
+    let m_t_pri = r_t34.design.modules[0]
+    let mut outer_b = ""
+    let mut outer_s = ""
+    let outer_name = "$procmux$q$2"
+    let mut ci_pri = 0
+    while ci_pri < len(m_t_pri.cells) {
+        let c_pri = m_t_pri.cells[ci_pri]
+        if c_pri.name == outer_name {
+            let mut pj_pri = 0
+            while pj_pri < len(c_pri.conns) {
+                if c_pri.conns[pj_pri].pin == "B" { outer_b = c_pri.conns[pj_pri].net }
+                if c_pri.conns[pj_pri].pin == "S" { outer_s = c_pri.conns[pj_pri].net }
+                pj_pri = pj_pri + 1
+            }
+        }
+        ci_pri = ci_pri + 1
+    }
+    if outer_b != "d" {
+        println("FAIL T_PROCMUX_PRIORITY_LAST_WINS outermost_B got `"
+            + outer_b + "` want `d` (last source-order rhs)")
+        fails = fails + 1
+    }
+    if outer_s != "c3" {
+        println("FAIL T_PROCMUX_PRIORITY_LAST_WINS outermost_S got `"
+            + outer_s + "` want `c3` (last source-order cond)")
+        fails = fails + 1
+    }
+    // Cross-check: the final connect's RHS must be the outermost mux's
+    // Y wire (`$procmux_y$q$2`), proving the chain terminus is the
+    // last-emitted mux and not the first.
+    if len(m_t_pri.connect_lhs) >= 1 {
+        if m_t_pri.connect_rhs[0] != "$procmux_y$q$2" {
+            println("FAIL T_PROCMUX_PRIORITY_LAST_WINS final_connect_rhs got `"
+                + m_t_pri.connect_rhs[0] + "` want `$procmux_y$q$2`")
+            fails = fails + 1
+        }
     }
 
     // T35 — RFC 073 Phase 1 (F-RFC-RV-NO-REGRESSION).
