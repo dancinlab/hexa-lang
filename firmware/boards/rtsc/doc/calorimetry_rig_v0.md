@@ -12,7 +12,7 @@ To close `F-SC-3` (BCS specific-heat jump ratio ΔC/γTc ≠ ~1.43 → DEMOTE
 σ(6)=12 molecule) at **strict-T3** tier, an in-house calorimetry bench
 is required. The n=6 derivation gives ΔC/γTc = σ(6)/(7·ζ(3)) ≈ 1.426
 which must be cross-verified on s-wave SC samples (Pb, Nb, V₃Si) and
-on putative RT-SC candidates (LK-99 successors).
+on putative RT-SC candidates (claim-only apatite-class successors).
 
 Also closes `F-SC-1` (Cooper pair size φ=2 — derivable from gap
 extraction) and `F-SC-2` (Abrikosov vortex CN=6 — derivable from
@@ -106,7 +106,7 @@ Total to **F-SC-3 strict-T3 closure**: ≈ $0.8M + 17 months.
 - 10 mK base needed (dilution) vs 0.3 K base (³He fridge, $200k cheaper)?
   Latter sufficient for Pb/Nb/V₃Si but not for sub-K candidate
   unconventional pairing.
-- Sample mass: 1 mg suffices via PPMS heat-capacity option; LK-99-class
+- Sample mass: 1 mg suffices via PPMS heat-capacity option; apatite-class claim-only
   novel synthesis often yields < 0.1 mg single-phase — needs nano-cal
   upgrade ($150k delta).
 

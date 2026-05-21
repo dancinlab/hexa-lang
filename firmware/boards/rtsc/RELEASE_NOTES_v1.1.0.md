@@ -41,7 +41,7 @@ pattern (hexa-cern v1.1.0 sister) and extending into hardware-prototype layer
 | 15   | `numerics_bcs_solver.hexa` — F-SC-{1,2,3} → T2 ×3 |
 | 16   | `numerics_mcmillan_solver.hexa` — F-RTSC-2 → T2 ×3 |
 | 17   | `numerics_hc2_48t_solver.hexa` — F-RTSC-3 → T2 ×3 |
-| 18   | `numerics_lk99_solver.hexa` — F-RTSC-1 → T2 ×3 (sat-1 + sat-2) |
+| 18   | `numerics_lk99_solver.hexa` — F-RTSC-1 → T2 ×3 (sat-1 + sat-2; filename retained as historical record) |
 | 19   | 6 `empirical_*_arxiv.hexa` scripts — 100 % closure |
 
 ### §A.6.1 Phase A → E1+ extension (post-saturation, user-overridden):
@@ -66,7 +66,7 @@ pattern (hexa-cern v1.1.0 sister) and extending into hardware-prototype layer
 
 | Falsifier | T1 | T2 | T3 | closure | Status |
 |:----------|:--:|:--:|:--:|:-------:|:------:|
-| F-RTSC-1 (LK-99 reproduction) | 1 | 3 | 1 | **100%** | OPEN |
+| F-RTSC-1 (claim-only RT-SC reproduction) | 1 | 3 | 1 | **100%** | OPEN |
 | F-RTSC-2 (McMillan ceiling)   | 1 | 3 | 1 | **100%** | OPEN |
 | F-RTSC-3 (48 T SC coil)       | 1 | 3 | 1 | **100%** | OPEN |
 | F-SC-1 (Cooper pair φ=2)      | 1 | 3 | 1 | **100%** | OPEN |
@@ -113,7 +113,7 @@ to disk + regression-locked), not empirical (RT-SC physics still unsettled).
 
 100% closure does **NOT** mean:
 
-- LK-99 has been reproduced (it has not)
+- Any claim-only RT-SC candidate has been reproduced (none have)
 - McMillan ceiling has been measured at high-Tc bench (it has not at our hands)
 - 48 T REBCO coil exists (it has not been built)
 - ΔC/γTc has been measured below Tc on s-wave SC at our calorimetry rig (no rig)
@@ -131,7 +131,7 @@ Per `.roadmap.hexa_rtsc §A.6`:
 2. **Step 2** (2026-Q4): Funding round — high-pressure synthesis
    chamber + 48 T REBCO test rig + UPS/STM/INS suite. Out of `.hexa` scope.
 3. **Step 3** (~2026-12): Stage-1 simulation parity (DFT/QSGW for
-   LK-99 candidates · TDGL vortex solver · WHH full integral) —
+   claim-only RT-SC candidates · TDGL vortex solver · WHH full integral) —
    **partial-RSC** (.hexa T2 boost, code-layer reachable).
 4. **Step 4** (~2027-Q1+): Stage-2/3 actual synthesis + measurement —
    firmware flash + cold-test + raw-data ingest. Years out, not in

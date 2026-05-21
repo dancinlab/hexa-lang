@@ -250,7 +250,7 @@ fn _expand_all_parens(formula: string) -> string {
 
 // Parse a flat compound formula into a Composition (parallel arrays of
 // element symbols + counts). Handles parentheses one level deep, e.g.
-// "Pb10Cu(PO4)6O" → {Pb:10, Cu:1, P:6, O:25}. NOT a full IUPAC parser.
+// "Ca10(PO4)6F2" → {Ca:10, P:6, O:24, F:2}. NOT a full IUPAC parser.
 //
 // Behavior parity with Python `_parse_formula_elements`:
 //   - Missing count → 1.0
@@ -282,14 +282,15 @@ pub fn composition_get(comp: Composition, sym: string) -> float {
 }
 
 // Inorganic SC explicit allow-list. Mirrors `_INORGANIC_SC_HINTS` in
-// askcos_adapter.py:169-186 verbatim (LK-99 / lead-apatite, YBCO /
+// askcos_adapter.py:169-186 verbatim (apatite-class hypotheticals, YBCO /
 // REBCO cuprates, iron-based, intermetallics / borides, hydrides,
 // A15 / heavy-fermion). Used as the first short-circuit in
 // classify_composition_domain.
 pub fn inorganic_sc_hints() -> [string] {
     return [
-        // LK-99 / lead-apatite
-        "Pb10Cu(PO4)6O", "Pb9Cu(PO4)6O", "Pb10(PO4)6O",
+        // apatite-class oxide hints (parenthesis-handling test fixtures;
+        // anonymized 2026-05-22 from a specific historical claim)
+        "Ca10(PO4)6F2", "Ca10(PO4)6(OH)2", "Sr10(PO4)6O",
         // YBCO / REBCO cuprates
         "YBa2Cu3O7", "YBa2Cu3O6", "YBa2Cu3O6.5",
         "Bi2Sr2CaCu2O8", "Bi2Sr2Ca2Cu3O10",
@@ -468,7 +469,7 @@ fn main() {
     _emit("Nb")
     _emit("MgB2")
     _emit("YBa2Cu3O7")
-    _emit("Pb10Cu(PO4)6O")
+    _emit("Ca10(PO4)6F2")
     _emit("Fe3Al2(SiO4)3")
     _emit("C6H6")
     _emit("Si")

@@ -238,20 +238,21 @@ pub fn inverse_variance_consensus(values: [float],
 
 // ── reference-panel runner ─────────────────────────────────────────────
 //
-// Same Nb + LK-99 entries as sim_adapter.py DEFAULTS table. Headline lines
-// mirror the Python version so cross-validation is a textual diff away.
+// Nb reference panel + claim-only RT-SC negative anchor — mirrors
+// sim_adapter.py DEFAULTS table so cross-validation is a textual diff away.
 //
 // Sources:
 //   - Nb λ=0.82, μ*=0.13, ω_log≈262 K, Θ_D=275 K: Allen & Dynes 1975 PRB 12
 //     905, Table I (Nb row). dHc2/dT|_Tc ≈ -0.5 T/K is a representative
 //     Nb-alloy slope (reference panel for the formula path, NOT a sourced
 //     Nb single-crystal sample).
-//   - LK-99: Lee et al. arxiv:2307.12008 — Tc>RT claim. INPUT PARAMS for
-//     Eliashberg coupling on Cu-doped lead-apatite are *not measured*:
-//     Θ_D / ω_log / λ / μ* values below are illustrative ranges from
-//     subsequent first-principles papers (Si & Held 2308.13759 etc.),
-//     NOT a consensus first-principles result. Claim-only. Replication
-//     failed at Argonne / IISc / Beihang / Nanjing / Berkeley.
+//   - CSH (carbonaceous sulfur hydride) — Snider et al. Nature 586:373
+//     (2020), arxiv:2010.07320; **retracted** Nature 610:804 (2022);
+//     susceptibility re-analysis Hirsch Physica C 601:1354118 (2022). The
+//     canonical failed RT-SC anchor used in this repo (Nature-published,
+//     formally retracted → strongest available negative reference). INPUT
+//     PARAMS for the claim-only row below are illustrative ranges ONLY;
+//     they are NOT a consensus first-principles derivation. Claim-only.
 
 fn _emit_row(family: string, claim_only: bool,
              theta_d: float, w_log: float,
@@ -285,9 +286,10 @@ fn main() {
               0.13,     // mu_star
               0.5)      // |dHc2/dT|_Tc (T/K)
 
-    // LK-99 claim-only — params NOT measured, illustrative only
-    _emit_row("LK-99 (hypothetical)", true,
-              500.0,    // Theta_D (K) — rough apatite Debye estimate
+    // claim-only RT-SC row — params NOT measured, illustrative only
+    // (CSH, Snider 2020 Nature, retracted 2022 — canonical negative anchor)
+    _emit_row("claim-only RT-SC (hypothetical)", true,
+              500.0,    // Theta_D (K) — rough Debye estimate
               400.0,    // omega_log (K) — claim-only
               1.50,     // lambda_full — claim-only (huge for RT Tc)
               0.40,     // lambda_bcs_weak — claim-only
@@ -319,13 +321,14 @@ fn main() {
     println("[scope] (s2) μ* (Coulomb pseudopotential, Morel-Anderson) is " +
             "empirical, NOT first-principles. Standard value 0.10–0.16 is " +
             "fit to the s/p/d metal family it came from; using μ*=0.13 for " +
-            "a hypothetical novel lattice (LK-99) is itself a claim, not a " +
-            "derivation.")
-    println("[scope] (s3) Input params for unproven families (LK-99) are " +
-            "CLAIM-ONLY — the Θ_D / ω_log / λ values for Cu-doped " +
-            "lead-apatite have no reproduced first-principles consensus " +
-            "and the experimental Tc has not been replicated by " +
-            "independent labs. Marked claim_only=true.")
+            "a hypothetical novel lattice (claim-only RT-SC) is itself a " +
+            "claim, not a derivation.")
+    println("[scope] (s3) Input params for unproven families (claim-only " +
+            "RT-SC) are CLAIM-ONLY — the Θ_D / ω_log / λ values have no " +
+            "reproduced first-principles consensus and the experimental " +
+            "Tc has not been replicated by independent labs. Marked " +
+            "claim_only=true. Canonical negative anchor in this repo: " +
+            "CSH (Snider 2020 Nature, retracted Nature 610:804 2022).")
     println("[scope] (s4) Tier 1 is *prediction*, NEVER *measurement*. " +
             "absorbed=false is permanent for this record-kind per RTSC.md " +
             "§8.7 / §8.8 honest 한계. Promotion to absorbed=true requires " +
@@ -337,7 +340,10 @@ fn main() {
     println("[cite] McMillan 1968, PR 167 331.")
     println("[cite] Allen & Dynes 1975, PRB 12 905.")
     println("[cite] Werthamer, Helfand, Hohenberg 1966, PR 147 295.")
-    println("[cite] arxiv:2307.12008 (Lee et al., LK-99 claim).")
+    println("[cite] Snider et al. 2020 Nature 586:373 (arxiv:2010.07320; " +
+            "retracted Nature 610:804 2022) — CSH canonical negative anchor.")
+    println("[cite] Hirsch 2022 Physica C 601:1354118 — susceptibility " +
+            "re-analysis (technical cause of the CSH retraction).")
     println("[cite] inverse-variance consensus (Phase 4 cohort #1) — " +
             "ported from cross_code_dft.py `_compute_consensus`; " +
             "PAPERS/sample-nb-bcs-absorbed/main.tex §4.")

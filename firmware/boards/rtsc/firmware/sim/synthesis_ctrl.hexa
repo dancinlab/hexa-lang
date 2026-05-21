@@ -2,8 +2,9 @@
 // hexa-rtsc/firmware/sim/synthesis_ctrl.hexa — synthesis-chamber
 // temperature/pressure controller, sim-only (§A.6.1 Stage C deliverable).
 //
-// Models the LK-99 candidate synthesis recipe (925°C heat treatment,
-// 5–20 GPa Belt apparatus, Ar atmosphere) under closed-loop PID control,
+// Models the claim-only RT-SC apatite-class candidate synthesis recipe
+// (925°C heat treatment, 5–20 GPa Belt apparatus, Ar atmosphere) under
+// closed-loop PID control,
 // running entirely in software with no hardware-in-the-loop dependency.
 //
 // Design specification: doc/synthesis_bench_v0.md (Stage A).
@@ -13,7 +14,7 @@
 // Loop structure:
 //
 //   1. Tube furnace temperature setpoint ramp (RT → 925°C @ 5°C/min)
-//   2. Hold @ 925°C ± 0.5 K for 24 h (LK-99 heat-treatment window)
+//   2. Hold @ 925°C ± 0.5 K for 24 h (apatite heat-treatment window)
 //   3. High-P cell load ramp (1 atm → 5 GPa @ 1 GPa/min) — interlocked
 //   4. Glovebox O₂ < 0.5 ppm interlock (abort transfer if exceeded)
 //   5. Quench cycle (controlled cool-down + post-process measurement)
@@ -127,7 +128,7 @@ fn check_hold_at_925() {
         t = t + 1
     }
     _check(max_dev < 0.5,
-        "hold @ 925°C: max deviation < 0.5 K over 24 ticks (LK-99 spec)",
+        "hold @ 925°C: max deviation < 0.5 K over 24 ticks (apatite-class spec)",
         "max_dev=" + str(max_dev) + "°C")
 }
 
@@ -228,7 +229,7 @@ fn check_safety_interlocks() {
 
 let FALSIFIERS = [
     "furnace ramp overshoot ≥ 25°C → DEMOTE PID stability claim",
-    "hold-at-925 deviation ≥ 0.5 K → DEMOTE LK-99 925°C exact-temperature spec",
+    "hold-at-925 deviation ≥ 0.5 K → DEMOTE apatite-class 925°C exact-temperature spec",
     "pressure ramp overshoot ≥ 0.2 GPa → DEMOTE 22 GPa safety margin",
     "O₂ interlock fails to trigger at 0.51 ppm → DEMOTE glovebox safety contract",
     "quench cycle drifts > 5°C from RT → DEMOTE controlled-cool protocol",
@@ -251,7 +252,7 @@ fn main() {
     check_furnace_ramp()
     println("")
 
-    println("  2. hold @ 925°C ± 0.5 K (LK-99 heat-treatment):")
+    println("  2. hold @ 925°C ± 0.5 K (apatite-class heat-treatment):")
     check_hold_at_925()
     println("")
 

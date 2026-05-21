@@ -584,17 +584,62 @@ fn abc_parse_mapped_blif(text: str) -> Design {
 // string without forking ABC.
 //
 // Script shape (with lib):
-//   read_lib <lib_path> ; read_blif <blif_in> ; strash ;
+//   read_lib <lib_path> ; read_blif <blif_in> ; sweep ; strash ;
 //   refactor ; rewrite ; balance ; map -a ; write_blif <blif_out>
 //
 // Script shape (without lib — round-trip only):
 //   read_blif <blif_in> ; strash ; write_blif <blif_out>
+//
+// Iter D (2026-05-22 path-b strash-bypass investigation):
+//   Added `sweep` BEFORE `strash` so ABC's dangling-node + buffer/
+//   inverter propagation runs on the original cell graph (pre-AIG
+//   canonicalization). The `sweep` pass removes the buf_1 chains that
+//   strash would otherwise absorb into identity edges and lose. Tested
+//   against the d4 input BLIF (paths probed: bare `map -a`, `&fraig`,
+//   `amap`, sweep-before-strash, sweep-after-strash, `map -F4 -A4`,
+//   `attach` (rejected: requires SOP form, our BLIF is `.gate` form)).
+//   Result: NULL effect on §5 d4 area. All variants converged on
+//   1610 `_const0_` lines in the output BLIF, area=49054.5 µm² (Δ
+//   20.58% under 61763 µm² oracle).
+//
+//   ROOT CAUSE (g3-honest, scope is upstream of abc_map.hexa):
+//   ABC's `read_blif` reports `Constant-0 drivers added to 465 non-
+//   driven nets in network "router_d4": out_data[0]..[N]`. The d4
+//   input BLIF has 465 undriven output nets — abc_emit_blif is
+//   generating `.outputs` lines for nets that no `.gate` line drives.
+//   ABC backfills with const-0, then any `map`/`strash`/`sweep` pass
+//   correctly propagates that constant through the entire fan-in
+//   cone, collapsing ~840 logic gates (mux2_1+and2_1+xnor2_1+fa_1+...)
+//   to 1610 `_const0_` literal lines. The mux4_2/a22oi_1 cells that
+//   `pass_cut_and_remap` reports matches=10 for ALSO never reach the
+//   BLIF input (verified: `grep -cE "^.gate sky130_fd_sc_hd__(mux4_2|
+//   a22oi_1|...)" /tmp/_hexa_yosys_gate_d4_in.blif` = 0). So the fused
+//   cells are being LOST somewhere between `pass_cut_and_remap` and
+//   `abc_emit_blif` (passes.hexa or read_verilog.hexa scope — NOT
+//   abc_map.hexa scope).
+//
+//   `map` ALWAYS strashes internally as a prerequisite (ABC prints
+//   "The network was strashed and balanced before mapping" even when
+//   no `strash` command appears in the script), so `strash` cannot be
+//   bypassed for the gate-mapping output we need. The path-b "bypass
+//   strash" approach is fundamentally non-viable at the abc_map.hexa
+//   layer; fix must land in the upstream BLIF emitter or pass chain.
 fn _abc_build_script(lib_path: str, blif_in: str, blif_out: str) -> str {
     let mut script = ""
     if lib_path != "" {
         script = "read_lib " + lib_path + " ; "
     }
-    script = script + "read_blif " + blif_in + " ; strash"
+    script = script + "read_blif " + blif_in
+    if lib_path != "" {
+        // Iter D — sweep BEFORE strash so dangling/buffer/inverter
+        // propagation runs on the original cell graph. Strash's AIG
+        // canonicalization will then operate on a cleaner network.
+        // (Measured null effect on §5 d4 area, but kept as a script-
+        // quality hygiene step: it's cheap and removes obviously-dead
+        // nodes before the heavy passes.)
+        script = script + " ; sweep"
+    }
+    script = script + " ; strash"
     if lib_path != "" {
         script = script + " ; refactor ; rewrite ; balance"
         script = script + " ; map -a"
@@ -1239,6 +1284,19 @@ fn main() {
     if s11.find("strash") < 0 {
         println("FAIL T11i strash_missing"); fails = fails + 1
     }
+    // T11i2 — sweep precedes strash (Iter D · 2026-05-22): removes
+    // dangling nodes and buf_1/inv_1 chains on the original cell graph
+    // BEFORE the strash AIG canonicalization absorbs them.
+    let pos_sweep = s11.find("sweep")
+    let pos_strash = s11.find("strash")
+    if pos_sweep < 0 {
+        println("FAIL T11i2 sweep_missing"); fails = fails + 1
+    }
+    if pos_sweep >= 0 && pos_strash >= 0 && pos_sweep >= pos_strash {
+        println("FAIL T11i3 sweep_after_strash (pos_sweep="
+            + str(pos_sweep) + " ≥ pos_strash=" + str(pos_strash) + ")")
+        fails = fails + 1
+    }
     // T11j — write_blif appears LAST (after map)
     let pos_map = s11.find("map -a")
     let pos_write = s11.find("write_blif")
@@ -1255,6 +1313,12 @@ fn main() {
     }
     if s11_nolib.find("read_lib") >= 0 {
         println("FAIL T11l read_lib_leaked_into_nolib_script"); fails = fails + 1
+    }
+    // T11m — no-lib path omits sweep (cell-graph sweep needs the
+    // library's cell-type knowledge to identify buf_1/inv_1 cells
+    // honestly; without lib, sweep would no-op or warn)
+    if s11_nolib.find("sweep") >= 0 {
+        println("FAIL T11m sweep_leaked_into_nolib_script"); fails = fails + 1
     }
 
     if fails > 0 {

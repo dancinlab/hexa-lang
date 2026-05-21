@@ -10,7 +10,7 @@ NIMS / Argonne MSD / 大阪大 / KIAS / SNU CMR cohort).
 
 ## §1 WHY
 
-To close `F-RTSC-1` (LK-99 reproduction failure → next-candidate
+To close `F-RTSC-1` (claim-only RT-SC reproduction failure → next-candidate
 substrate spec) at the **strict-T3** tier (recipe §9 empirical), an
 in-house synthesis bench is required so the τ(6)=4 reproduction-floor
 can be cleared by samples whose provenance + composition + heat-
@@ -22,8 +22,8 @@ informative.
 ## §2 ANCHORS (n=6 lattice + .roadmap §A.4 falsifier)
 
 - F-RTSC-1 retract criterion: 0/τ(6)=0/4 confirmed reproductions
-  for any candidate (LK-99, Cu-Pb-H, hydride family, infinite-layer
-  nickelate) within stated synthesis protocol → spec update
+  for any candidate (claim-only RT-SC apatite, Cu-Pb-H, hydride family,
+  infinite-layer nickelate) within stated synthesis protocol → spec update
 - T3 raw-data evidence required: independent labs (≥ τ=4) reproduce
   candidate Tc + Meissner under `.roadmap §A.4 raw_77_rtsc_lk99_repro_v1`
   schema
@@ -35,14 +35,14 @@ informative.
 
 | # | Item | Spec | Vendor (candidate) | Cost (USD) | Note |
 |:-:|:-----|:-----|:-------------------|:----------:|:-----|
-| 1 | High-pressure cell | 5–20 GPa, ⌀10 mm Belt apparatus | Riken Univ press, Almax | 180k | LK-99 calls 925°C @ 1 atm; hydride family needs 5–20 GPa |
-| 2 | Tube furnace | RT–1500°C, ⌀60 mm bore, 5°C/min ramp | Carbolite STF15/180 | 12k | LK-99 925°C heat treatment |
+| 1 | High-pressure cell | 5–20 GPa, ⌀10 mm Belt apparatus | Riken Univ press, Almax | 180k | apatite-class calls 925°C @ 1 atm; hydride family needs 5–20 GPa |
+| 2 | Tube furnace | RT–1500°C, ⌀60 mm bore, 5°C/min ramp | Carbolite STF15/180 | 12k | apatite-class 925°C heat treatment |
 | 3 | Vacuum + Ar atmosphere | 10⁻⁶ mbar base, 5N Ar fill | Pfeiffer HiCube + Praxair Ar | 28k | precursor Pb₃(VO₄)₂ + Cu₃P inert handling |
 | 4 | Glovebox | < 0.1 ppm O₂/H₂O, He gas-purifier | MBraun UNILAB Pro | 65k | air-sensitive precursors + post-quench sample storage |
 | 5 | Powder XRD | Cu Kα, 2θ 5–120° | Bruker D2 Phaser | 50k | phase confirmation per heat-treatment step |
 | 6 | SQUID magnetometer | 1.8–400 K, ± 7 T | Quantum Design MPMS-3 | 600k | Tc + Meissner susceptibility (T3 raw data) |
 | 7 | Resistivity rig | 1.5–300 K, 4-probe, 0–9 T | QD PPMS DynaCool | 800k | 4-probe ρ(T) cross-check Tc; F-RTSC-2 McMillan ceiling test |
-| 8 | Inert ball mill | tungsten-carbide vials, 1500 rpm | Retsch PM 100 | 18k | precursor mixing (LK-99 Lanarkite + Cu₃P route) |
+| 8 | Inert ball mill | tungsten-carbide vials, 1500 rpm | Retsch PM 100 | 18k | precursor mixing (apatite-class Lanarkite + Cu₃P route) |
 | 9 | Optical microscope + Raman | 532 nm, 1 μm spot | Renishaw inVia | 220k | grain-by-grain composition mapping |
 |10 | EBSD detector (option) | EDAX TSL OIM 8 | EDAX | 250k | crystallographic orientation per grain (CN=6 vs other) |
 |11 | Sample-loading port | UHV-compatible Pb-shielded transfer | custom (in-house) | 8k | radiation-safe Pb-isotope handling |
@@ -147,7 +147,7 @@ candidate Tc claim.
 | 1 | Detailed engineering drawings + vendor quotes | $20k | 2 mo |
 | 2 | Procurement (BOM #1–14) | $2.25M | 6 mo |
 | 3 | Install + commissioning | $300k | 3 mo |
-| 4 | First synthesis (LK-99 baseline batch ×4) | $50k/yr ops | 1 mo |
+| 4 | First synthesis (claim-only RT-SC baseline batch ×4) | $50k/yr ops | 1 mo |
 | 5 | Independent-lab cross-verify (NIMS / Argonne / 大阪大) | TBD | 12 mo |
 
 Total to **F-RTSC-1 strict-T3 closure**: ≈ $2.6M + 22 months from
@@ -159,7 +159,7 @@ funding-release date.
   (synthesis route SLA, `.roadmap §A.5 negative-result granularity`).
 - Cu₃P stoichiometry: x=0.9 vs x=1.1 in Pb₁₀₋ₓCuₓ(PO₄)₆O — affects
   Cu site occupancy.
-- 925°C vs 950°C heat-treatment — original LK-99 group claimed 925°C
+- 925°C vs 950°C heat-treatment — original apatite-class claim group reported 925°C
   exact, reproductions tested 900–960°C.
 - Quench rate: water-quench vs furnace-cool — affects oxygen
   stoichiometry.

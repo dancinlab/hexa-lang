@@ -31,7 +31,7 @@ hexa-rtsc/                          T0 (repo root)
 ├── verify/                         T0 — 33 runnable invariant audits
 │   ├── lattice_check.hexa          T1 cross-cutter (n=6 closed form)
 │   ├── cross_doc_audit.hexa        T1 cross-cutter (anchor consistency)
-│   ├── calc_*.hexa                 T1 algebra (4: bcs / mcmillan / hc2_48t / lk99)
+│   ├── calc_*.hexa                 T1 algebra (4: bcs / mcmillan / hc2_48t / claim_class — calc_lk99.hexa filename retained as historical archival baseline)
 │   ├── numerics_*.hexa             T2 numerical (16: 4 + 4 parity + 4 solver +
 │   │                                              3 sim-parity + lattice_arithmetic)
 │   ├── empirical_*_arxiv.hexa      T3 archival (6, arXiv API + fixture fallback)
@@ -42,7 +42,7 @@ hexa-rtsc/                          T0 (repo root)
 │
 ├── doc/                            T0 — human-archive + Stage A specs
 │   ├── lineage/origin.md
-│   ├── synthesis_bench_v0.md       Stage A: F-RTSC-1 LK-99 reproduction bench ($2.6M)
+│   ├── synthesis_bench_v0.md       Stage A: F-RTSC-1 claim-only RT-SC reproduction bench ($2.6M)
 │   ├── 48t_rebco_coil_v0.md        Stage A: F-RTSC-3 48 T magnet ($3.3M)
 │   └── calorimetry_rig_v0.md       Stage A: F-SC-3 ΔC/γTc rig ($0.8M)
 │

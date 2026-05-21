@@ -307,9 +307,9 @@ def main(out_dir: str, token: str, variant: str = "CSO") -> int:
         "(s2) Training data: SuperCon database + DFT-computed α²F values. "
         "May over/underestimate Tc for materials outside the training "
         "distribution (notably: heavy hydrides under pressure, cuprate-"
-        "family flat-band systems, hypothetical LK-99-like apatites — none "
-        "are well-represented in the DFT-Allen-Dynes corpus the model "
-        "trained on).",
+        "family flat-band systems, apatite-class claim-only hypotheticals "
+        "— none are well-represented in the DFT-Allen-Dynes corpus the "
+        "model trained on).",
         "(s3) 5-gate (RTSC.md §8.9): this record fills only the (b) Tc-"
         "prediction aspect with sim-grade. R4 invariant: absorbed=false "
         "ALWAYS — never promotes to absorbed=true regardless of how close "

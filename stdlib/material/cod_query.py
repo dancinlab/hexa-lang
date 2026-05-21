@@ -102,7 +102,7 @@ def _classify_family(formula: str) -> str:
     f_lower = f.lower()
     if (("pb10" in f_lower or "pb_10" in f_lower) and "p" in f_lower
             and "o" in f_lower):
-        return "lk-99-family (hypothetical · NOT replicated)"
+        return "apatite-class claim-only (hypothetical · NOT replicated)"
     if "mgb2" in f_lower or f_lower == "mgb_2":
         return "mgb2 (replicated 2001~)"
     if f in {"H3S", "LaH10", "CaH6", "ScH9", "YH6"}:

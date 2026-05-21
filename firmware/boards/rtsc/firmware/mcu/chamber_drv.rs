@@ -37,7 +37,7 @@ pub const TICK_MS: u32 = 250;
 /// τ(6) = 4 detection / interlock channels.
 pub const DETECTION_CHANNELS: u8 = 4;
 
-/// LK-99 heat-treatment target: 925 °C exact.
+/// claim-only RT-SC apatite heat-treatment target: 925 °C exact.
 pub const FURNACE_TARGET_C: f32 = 925.0;
 
 /// Furnace ramp rate: 5 °C/min.
