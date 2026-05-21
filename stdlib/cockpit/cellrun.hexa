@@ -203,15 +203,43 @@ fn _unquote(s: string) -> string {
 }
 
 // Split a comma list (`a, b, c`) into trimmed pieces.
+//
+// Quote-aware (Phase B bug #1 fix · rfc006-style scope_caveats honest
+// parsing): walk char-by-char and only honor a comma as a separator
+// when NOT inside a double-quoted segment. This preserves Korean (or
+// any) caveat clauses that contain internal commas, e.g.
+//   "snubber (100 nF · 5 Ω) generic-not-engineered, honest gap."
+// would previously fragment into 2 pieces; now stays as 1.
+//
+// Outer double-quotes are stripped per element so callers that already
+// pass through _unquote() still get the same shape (idempotent strip).
+// Escaped quotes (\") are NOT handled — manifest authors avoid them in
+// practice and stdlib has no escape primitive in v0.1; future Tier-2.
 fn _split_csv(s: string) -> [string] {
-    let parts = split(s, ",")
     let mut out = []
+    let mut buf = ""
+    let mut in_quote = false
     let mut i = 0
-    while i < len(parts) {
-        let p = _strip(parts[i])
-        if len(p) > 0 { out.push(p) }
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\"" {
+            in_quote = !in_quote
+            buf = buf + c
+        } else if c == "," && !in_quote {
+            let p = _strip(buf)
+            let u = _unquote(p)
+            if len(u) > 0 { out.push(u) }
+            buf = ""
+        } else {
+            buf = buf + c
+        }
         i = i + 1
     }
+    // Flush trailing piece.
+    let p = _strip(buf)
+    let u = _unquote(p)
+    if len(u) > 0 { out.push(u) }
     return out
 }
 

@@ -12,6 +12,12 @@
 //   T4 — emitted JSON has the shape we documented (record_id +
 //        record_kind + provenance with absorbed + measurement_gate +
 //        scope_caveats).
+//   T5 — quote-aware splitter: scope_caveats with internal comma in
+//        one element stays as ONE element (Phase B bug #1 regression
+//        guard).
+//   T6 — empty scope_caveats array `[]` parses to length 0.
+//   T7 — Korean caveats with `(` `)` and internal commas (mirrors
+//        domains/sscb.demi on demiurge main) — count is preserved.
 //
 // Fixtures are built on the fly under /tmp/hexa_cellrun_test_<pid>/.
 
@@ -167,6 +173,81 @@ fn t4_record_shape(record_path: string) {
     }
 }
 
+// ─── T5/T6/T7: quote-aware _split_csv (Phase B bug #1) ─────────────
+//
+// These tests exercise the manifest loader directly via load_manifest_at
+// rather than going through cell_run_with_roots — we want to assert on
+// the parsed scope_caveats array shape, not on substrate spawn.
+
+fn _write_caveat_manifest(root: string, domain: string, body_caveats: string) -> string {
+    let path = root + "/domains/" + domain + ".demi"
+    let mut body = "[cell.analyze]\n"
+    body = body + "substrate     = bash\n"
+    body = body + "script        = stdlib/mock/echo.sh\n"
+    body = body + "record_kind   = mock_record\n"
+    body = body + "output_dir    = exports/mock\n"
+    body = body + "required_deps =\n"
+    body = body + "gate_default  = OPEN\n"
+    body = body + "absorbed_default = false\n"
+    body = body + body_caveats
+    let _ = write_text(path, body)
+    return path
+}
+
+fn t5_internal_comma(root: string) {
+    println("\nT5 — quoted caveat with internal comma stays as 1 element")
+    let caveats = "scope_caveats = [\n"
+        + "  \"clean comma-free caveat\",\n"
+        + "  \"caveat with, internal comma\",\n"
+        + "]\n"
+    let _ = _write_caveat_manifest(root, "t5dom", caveats)
+    let mf = load_manifest_at(root + "/domains", "t5dom", "analyze")
+    check("T5 manifest parses _ok", mf["_ok"] == "true")
+    let cv = mf["scope_caveats"]
+    check("T5 caveats length == 2 (NOT 3 fragmented)", len(cv) == 2)
+    if len(cv) == 2 {
+        check("T5 [0] preserved verbatim",
+              to_string(cv[0]) == "clean comma-free caveat")
+        check("T5 [1] internal comma preserved",
+              to_string(cv[1]) == "caveat with, internal comma")
+    }
+}
+
+fn t6_empty_caveats(root: string) {
+    println("\nT6 — empty scope_caveats `[]` → length 0")
+    // Single-line empty array.
+    let caveats = "scope_caveats = []\n"
+    let _ = _write_caveat_manifest(root, "t6dom", caveats)
+    let mf = load_manifest_at(root + "/domains", "t6dom", "analyze")
+    check("T6 manifest parses _ok", mf["_ok"] == "true")
+    let cv = mf["scope_caveats"]
+    check("T6 caveats length == 0", len(cv) == 0)
+}
+
+fn t7_korean_caveats(root: string) {
+    println("\nT7 — Korean caveats with (), internal commas (sscb.demi pattern)")
+    // Mirrors domains/sscb.demi [cell.analyze] shape: 3 caveats each
+    // with one or more internal commas + parens + non-ASCII chars.
+    let caveats = "scope_caveats = [\n"
+        + "  \"ngspice transient — generic Ron/Roff SiC switch, datasheet 흡수 아님 (g3).\",\n"
+        + "  \"snubber (100 nF · 5 Ω) generic-not-engineered — interrupt_ratio ~0.35 at 1.5 µs not buggy, honest gap.\",\n"
+        + "  \"measurement_gate = GATE_OPEN 영구 (단일점 sim, device model 미흡수). UL 489I 별도 게이트.\",\n"
+        + "]\n"
+    let _ = _write_caveat_manifest(root, "t7dom", caveats)
+    let mf = load_manifest_at(root + "/domains", "t7dom", "analyze")
+    check("T7 manifest parses _ok", mf["_ok"] == "true")
+    let cv = mf["scope_caveats"]
+    check("T7 caveats length == 3 (NOT 6 fragmented)", len(cv) == 3)
+    if len(cv) == 3 {
+        check("T7 [0] contains 'datasheet 흡수 아님'",
+              to_string(cv[0]).index_of("datasheet 흡수 아님") >= 0)
+        check("T7 [1] contains 'honest gap'",
+              to_string(cv[1]).index_of("honest gap") >= 0)
+        check("T7 [2] contains 'UL 489I 별도 게이트'",
+              to_string(cv[2]).index_of("UL 489I 별도 게이트") >= 0)
+    }
+}
+
 // ─── main ──────────────────────────────────────────────────────────
 
 fn main() {
@@ -179,6 +260,9 @@ fn main() {
     t2_missing_deps(root)
     let rec_path = t3_success(root)
     t4_record_shape(rec_path)
+    t5_internal_comma(root)
+    t6_empty_caveats(root)
+    t7_korean_caveats(root)
 
     println("")
     println("cellrun_test: " + to_string(_pass) + "/" + to_string(_total))
