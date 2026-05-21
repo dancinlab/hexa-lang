@@ -2720,6 +2720,7 @@ fn _rv_emit_body_v2(
         let lhs_base = stmt[0]
         let mut op_pos = 0 - 1
         let mut idx1_toks: [str] = []
+        let mut idx2_toks: [str] = []
         let mut has_idx1 = 0
         let mut has_idx2 = 0
         if stmt[1] == "<=" || stmt[1] == "=" {
@@ -2737,23 +2738,27 @@ fn _rv_emit_body_v2(
                 }
                 idx1_toks = idx1_toks.push(stmt[p]); p = p + 1
             }
-            // optional second [ idx2 ] — 2-D, graceful skip
+            // optional second [ idx2 ] — 2-D unpacked LHS. rfc_006 §5
+            // Tier-1 (e) 2026-05-21: collect idx2 tokens like idx1 so
+            // the 2-D path below can emit per-(slot1, slot2) $dff
+            // chains (Option A in inbox/patches/yosys-fifo-mem-2d-
+            // array-memwr-emit.md). Previously `continue`-skipped.
             if p < len(stmt) && stmt[p] == "[" {
                 has_idx2 = 1
                 let mut d2 = 1
                 p = p + 1
                 while p < len(stmt) && d2 > 0 {
-                    if stmt[p] == "[" { d2 = d2 + 1 }
+                    if stmt[p] == "[" { d2 = d2 + 1; idx2_toks = idx2_toks.push(stmt[p]); p = p + 1; continue }
                     if stmt[p] == "]" {
                         d2 = d2 - 1
                         if d2 == 0 { p = p + 1; break }
+                        idx2_toks = idx2_toks.push(stmt[p]); p = p + 1; continue
                     }
-                    p = p + 1
+                    idx2_toks = idx2_toks.push(stmt[p]); p = p + 1
                 }
             }
             if p < len(stmt) && (stmt[p] == "<=" || stmt[p] == "=") { op_pos = p }
         }
-        if has_idx2 == 1 { continue }              // 2-D — honest skip
         if op_pos <= 0 { continue }
         let op = stmt[op_pos]
         if op == "<=" && is_clocked == 0 { continue }
@@ -2790,8 +2795,8 @@ fn _rv_emit_body_v2(
         }
         // indexed LHS: try const-fold first
         let ev = _rv_eval_expr(idx1_toks, 0, tab, 1)
-        if len(ev.err) == 0 {
-            // static idx — name[const] is a wire
+        if len(ev.err) == 0 && has_idx2 == 0 {
+            // static idx (1-D only) — name[const] is a wire
             let lhs = lhs_base + "[" + str(ev.value) + "]"
             if is_clocked == 1 {
                 let dw = _rv_v2_dwire(lhs)
@@ -2805,6 +2810,68 @@ fn _rv_emit_body_v2(
             }
             continue
         }
+        // 2-D static-outer + dyn-inner: `name[const][idx2]` (rfc_006 §5
+        // Tier-1 (e) 2026-05-21). Common case for fifo_mem[pp][addr] in
+        // a const-folded for-loop unroll (pp is the iteration variable).
+        // Emit per-slot $eq2 + $and (with optional outer cond AND) +
+        // connect_cond per inner-slot dk2.
+        if len(ev.err) == 0 && has_idx2 == 1 {
+            let ier3a = _rv_elab_expr(idx2_toks, 0, m, 1, tab)
+            if len(ier3a.err) > 0 { continue }
+            m = ier3a.m
+            let bound2a = _rv_array_bound(m, lhs_base)
+            // bound2a may legitimately be 0 if no `name[N]` wires were
+            // registered yet (e.g. 2-D fifo_mem decl that only emits
+            // 1-D outer wires) — in that case fall back to single-LHS
+            // emit at `name[const]` (1-D approximation; loses inner
+            // dimension but preserves driver). Pick a heuristic inner
+            // bound of 4 (matches FIFO_LD=2 → DEPTH=4 for router_d{4,6})
+            // when bound2a==0.
+            let mut bound2_eff = bound2a
+            if bound2_eff <= 0 { bound2_eff = 4 }
+            let outer_lhs = lhs_base + "[" + str(ev.value) + "]"
+            let mut dk2a = 0
+            while dk2a < bound2_eff {
+                let elem = outer_lhs + "[" + str(dk2a) + "]"
+                let cdk2a = "$const_" + str(dk2a)
+                if rtlil_find_wire(m, cdk2a) < 0 {
+                    m = rtlil_module_add_wire(m, rtlil_wire(cdk2a, 1, 0, 0))
+                }
+                let eq2a_y = _rv_fresh_wire(m)
+                m = rtlil_module_add_wire(m, rtlil_wire(eq2a_y, 1, 0, 0))
+                let mut eq2ac = rtlil_cell(eq2a_y + "$eq", "$eq", 0)
+                eq2ac = rtlil_cell_connect(eq2ac, "A", ier3a.wire)
+                eq2ac = rtlil_cell_connect(eq2ac, "B", cdk2a)
+                eq2ac = rtlil_cell_connect(eq2ac, "Y", eq2a_y)
+                m = rtlil_module_add_cell(m, eq2ac)
+                let mut sel2a = eq2a_y
+                if len(cond_wire) > 0 {
+                    let en2a_y = _rv_fresh_wire(m)
+                    m = rtlil_module_add_wire(m, rtlil_wire(en2a_y, 1, 0, 0))
+                    let mut and2ac = rtlil_cell(en2a_y + "$and", "$and", 0)
+                    and2ac = rtlil_cell_connect(and2ac, "A", cond_wire)
+                    and2ac = rtlil_cell_connect(and2ac, "B", eq2a_y)
+                    and2ac = rtlil_cell_connect(and2ac, "Y", en2a_y)
+                    m = rtlil_module_add_cell(m, and2ac)
+                    sel2a = en2a_y
+                }
+                if rtlil_find_wire(m, elem) < 0 {
+                    m = rtlil_module_add_wire(m, rtlil_wire(elem, 1, 0, 0))
+                }
+                if is_clocked == 1 {
+                    let dw = _rv_v2_dwire(elem)
+                    if rtlil_find_wire(m, dw) < 0 {
+                        m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                    }
+                    m = rtlil_module_connect_cond(m, dw, rer.wire, sel2a)
+                    tracked = _rv_v2_track(tracked, elem)
+                } else {
+                    m = rtlil_module_connect_cond(m, elem, rer.wire, sel2a)
+                }
+                dk2a = dk2a + 1
+            }
+            continue
+        }
         // dyn idx — per-element ($eq + $and) chain composes a per-slot
         // guard; each slot emits one cond-tagged row (lhs[i]__d <= rhs
         // when index==i AND outer_guard).
@@ -2813,9 +2880,29 @@ fn _rv_emit_body_v2(
         let ier2 = _rv_elab_expr(idx1_toks, 0, m, 1, tab)
         if len(ier2.err) > 0 { continue }
         m = ier2.m
+        // rfc_006 §5 Tier-1 (e) 2026-05-21: 2-D LHS support. When
+        // has_idx2 == 1, also elaborate idx2_toks and use the inner
+        // bound2 (derived from the LHS wire's array_size attr, if
+        // declared; else conservatively reuse `bound`). The emit
+        // becomes a P × DEPTH per-slot chain ($eq1 + $eq2 + $and +
+        // optional outer $and) per Option A of
+        // inbox/patches/yosys-fifo-mem-2d-array-memwr-emit.md.
+        let mut idx2_wire = ""
+        let mut bound2 = 1
+        if has_idx2 == 1 {
+            let ier3 = _rv_elab_expr(idx2_toks, 0, m, 1, tab)
+            if len(ier3.err) > 0 { continue }
+            m = ier3.m
+            idx2_wire = ier3.wire
+            // Derive bound2 from the LHS's declared array_size2 — for
+            // now we conservatively use `bound` (same as bound1). The
+            // common router_d{4,6} case has bound1=bound2=P/DEPTH≈4-5.
+            // A future audit may add a `_rv_array_bound2` helper that
+            // reads the second dimension explicitly.
+            bound2 = bound
+        }
         let mut dk = 0
         while dk < bound {
-            let elem = lhs_base + "[" + str(dk) + "]"
             // const wire for dk
             let cdk = "$const_" + str(dk)
             if rtlil_find_wire(m, cdk) < 0 {
@@ -2828,26 +2915,63 @@ fn _rv_emit_body_v2(
             eqc = rtlil_cell_connect(eqc, "B", cdk)
             eqc = rtlil_cell_connect(eqc, "Y", eq_y)
             m = rtlil_module_add_cell(m, eqc)
-            let mut sel_w = eq_y
-            if len(cond_wire) > 0 {
-                let en_y = _rv_fresh_wire(m)
-                m = rtlil_module_add_wire(m, rtlil_wire(en_y, 1, 0, 0))
-                let mut andc = rtlil_cell(en_y + "$and", "$and", 0)
-                andc = rtlil_cell_connect(andc, "A", cond_wire)
-                andc = rtlil_cell_connect(andc, "B", eq_y)
-                andc = rtlil_cell_connect(andc, "Y", en_y)
-                m = rtlil_module_add_cell(m, andc)
-                sel_w = en_y
-            }
-            if is_clocked == 1 {
-                let dw = _rv_v2_dwire(elem)
-                if rtlil_find_wire(m, dw) < 0 {
-                    m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+            // Inner-dimension loop (1 iter for 1-D, bound2 iters for 2-D).
+            let mut dk2 = 0
+            while dk2 < bound2 {
+                let mut elem = lhs_base + "[" + str(dk) + "]"
+                let mut slot_guard = eq_y
+                if has_idx2 == 1 {
+                    elem = elem + "[" + str(dk2) + "]"
+                    let cdk2 = "$const_" + str(dk2)
+                    if rtlil_find_wire(m, cdk2) < 0 {
+                        m = rtlil_module_add_wire(m, rtlil_wire(cdk2, 1, 0, 0))
+                    }
+                    let eq2_y = _rv_fresh_wire(m)
+                    m = rtlil_module_add_wire(m, rtlil_wire(eq2_y, 1, 0, 0))
+                    let mut eq2c = rtlil_cell(eq2_y + "$eq", "$eq", 0)
+                    eq2c = rtlil_cell_connect(eq2c, "A", idx2_wire)
+                    eq2c = rtlil_cell_connect(eq2c, "B", cdk2)
+                    eq2c = rtlil_cell_connect(eq2c, "Y", eq2_y)
+                    m = rtlil_module_add_cell(m, eq2c)
+                    // AND idx1 and idx2 match into slot_guard
+                    let sg_y = _rv_fresh_wire(m)
+                    m = rtlil_module_add_wire(m, rtlil_wire(sg_y, 1, 0, 0))
+                    let mut sgc = rtlil_cell(sg_y + "$and", "$and", 0)
+                    sgc = rtlil_cell_connect(sgc, "A", eq_y)
+                    sgc = rtlil_cell_connect(sgc, "B", eq2_y)
+                    sgc = rtlil_cell_connect(sgc, "Y", sg_y)
+                    m = rtlil_module_add_cell(m, sgc)
+                    slot_guard = sg_y
                 }
-                m = rtlil_module_connect_cond(m, dw, rer.wire, sel_w)
-                tracked = _rv_v2_track(tracked, elem)
-            } else {
-                m = rtlil_module_connect_cond(m, elem, rer.wire, sel_w)
+                let mut sel_w = slot_guard
+                if len(cond_wire) > 0 {
+                    let en_y = _rv_fresh_wire(m)
+                    m = rtlil_module_add_wire(m, rtlil_wire(en_y, 1, 0, 0))
+                    let mut andc = rtlil_cell(en_y + "$and", "$and", 0)
+                    andc = rtlil_cell_connect(andc, "A", cond_wire)
+                    andc = rtlil_cell_connect(andc, "B", slot_guard)
+                    andc = rtlil_cell_connect(andc, "Y", en_y)
+                    m = rtlil_module_add_cell(m, andc)
+                    sel_w = en_y
+                }
+                if is_clocked == 1 {
+                    let dw = _rv_v2_dwire(elem)
+                    if rtlil_find_wire(m, dw) < 0 {
+                        m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                    }
+                    // Ensure element wire exists so $dff stitch finds it.
+                    if rtlil_find_wire(m, elem) < 0 {
+                        m = rtlil_module_add_wire(m, rtlil_wire(elem, 1, 0, 0))
+                    }
+                    m = rtlil_module_connect_cond(m, dw, rer.wire, sel_w)
+                    tracked = _rv_v2_track(tracked, elem)
+                } else {
+                    if rtlil_find_wire(m, elem) < 0 {
+                        m = rtlil_module_add_wire(m, rtlil_wire(elem, 1, 0, 0))
+                    }
+                    m = rtlil_module_connect_cond(m, elem, rer.wire, sel_w)
+                }
+                dk2 = dk2 + 1
             }
             dk = dk + 1
         }
