@@ -5555,8 +5555,26 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
     // eval_binop float-coerce path (hexa_full.hexa:7867). 이전엔
     // tag 불일치 즉시 false → `2 == 2.0` AOT=false / interp=true
     // divergence 를 유발.
-    if (HX_IS_INT(a) && HX_IS_FLOAT(b)) return hexa_bool((double)HX_INT(a) == HX_FLOAT(b));
-    if (HX_IS_FLOAT(a) && HX_IS_INT(b)) return hexa_bool(HX_FLOAT(a) == (double)HX_INT(b));
+    if (HX_IS_INT(a) && HX_IS_FLOAT(b)) {
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+        /* Step-3 cycle 100 — cross-coerce port via rt_eq_cross_int_float.
+           Inside the hexa fn, `af == bf` re-enters hexa_eq with BOTH args
+           TAG_FLOAT — that path stays C (TAG_FLOAT switch branch below),
+           so no recursion back into rt_eq_cross_int_float. */
+        extern HexaVal rt_eq_cross_int_float(HexaVal a, HexaVal b);
+        return hexa_bool(hexa_truthy(rt_eq_cross_int_float(a, b)));
+#else
+        return hexa_bool((double)HX_INT(a) == HX_FLOAT(b));
+#endif
+    }
+    if (HX_IS_FLOAT(a) && HX_IS_INT(b)) {
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+        extern HexaVal rt_eq_cross_int_float(HexaVal a, HexaVal b);
+        return hexa_bool(hexa_truthy(rt_eq_cross_int_float(a, b)));
+#else
+        return hexa_bool(HX_FLOAT(a) == (double)HX_INT(b));
+#endif
+    }
     if (HX_TAG(a) != HX_TAG(b)) return hexa_bool(0);
     switch (HX_TAG(a)) {
         case TAG_INT: return hexa_bool(HX_INT(a) == HX_INT(b));
@@ -5573,7 +5591,18 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
             return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) == 0);
 #endif
         }
-        case TAG_VOID: return hexa_bool(1);
+        case TAG_VOID:
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+        {
+            /* Step-3 cycle 100 — trivial port via rt_eq_void. Both args
+               TAG_VOID by switch precondition; no internal `==` use, no
+               recursion. */
+            extern HexaVal rt_eq_void(HexaVal a, HexaVal b);
+            return hexa_bool(hexa_truthy(rt_eq_void(a, b)));
+        }
+#else
+            return hexa_bool(1);
+#endif
         // rt 32-G: Val identity is pointer-equality of heap struct (matches
         // TAG_MAP semantics — two separately constructed maps never compare
         // equal by value).

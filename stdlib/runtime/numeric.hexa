@@ -1118,6 +1118,32 @@ pub fn rt_eq_array_deep(a: HexaVal, b: HexaVal) -> bool {
     return true
 }
 
+// Step 3 cycle 100 — hexa_eq TAG_VOID branch port (잔여 #4 further partial
+// discharge — 3 of 9 branches now ported counting TAG_STR(91)+TAG_ARRAY(97)).
+// Trivial — both args known TAG_VOID by C wrapper dispatch precondition,
+// so equality is unconditionally true. No internal `==` use, no recursion.
+pub fn rt_eq_void(a: HexaVal, b: HexaVal) -> bool {
+    return true
+}
+
+// Step 3 cycle 100 — hexa_eq int↔float cross-coerce port (잔여 #4 partial
+// discharge — 4 of 9 branches counting TAG_STR(91)+TAG_ARRAY(97)+TAG_VOID).
+// Dispatched by C wrapper ONLY when one arg is TAG_INT and the other is
+// TAG_FLOAT. After the `as float` casts both locals are TAG_FLOAT
+// (`hexa_to_float` returns TAG_FLOAT for both INT and FLOAT inputs);
+// the inner `af == bf` re-enters `hexa_eq` which takes the same-tag
+// TAG_FLOAT C branch (still C — direct double compare) and terminates.
+// No recursion back into rt_eq_cross_int_float because the C wrapper's
+// cross-coerce dispatch only fires on tag-asymmetric INT/FLOAT pairs.
+// Mirrors interp eval_binop float-coerce (hexa_full.hexa:7867) so AOT
+// `2 == 2.0` matches interp (true).
+pub fn rt_eq_cross_int_float(a: HexaVal, b: HexaVal) -> bool {
+    let af: float = a as float
+    let bf: float = b as float
+    if af == bf { return true }
+    return false
+}
+
 // Step 4 cycle 98 — ValStruct minimal-repr port (잔여 #8 discharge).
 // `.get("tag")` routes TAG_VALSTRUCT through `hexa_valstruct_get_by_key`
 // → `hexa_int(HX_VSF(v, tag_i))` (runtime_core.c:2334+2874). C wrapper
