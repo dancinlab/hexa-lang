@@ -1,0 +1,74 @@
+// stdlib/runtime/io.hexa — RUNTIME.md step-3 잔여 #7 (IO println/eprint
+// family) hexa-source port. 2026-05-22.
+//
+// History:
+//   - cycle-101 (commit c25ef75e) — initial 4-fn port (rt_print +
+//     rt_println + rt_eprint + rt_eprintln). println/eprintln/eprint
+//     activated via #ifdef HEXA_HAS_HEXA_RT_STDLIB dispatch in
+//     self/runtime_core.c. rt_print declared but not actively dispatched
+//     because `print(v)` codegen lowers to `hexa_print_val(v)` (a void
+//     entry point, no HexaVal symbol).
+//   - cycle-102 (this commit) — restored after silent wipe e8c2dc1c
+//     ("wip: dfflibmap sky130 reset-flop variants + ...") that removed
+//     this file + the runtime.c shim + the three runtime_core.c
+//     dispatch sites + the compiler/main.hexa import. Wipe pattern
+//     matches the codegen-c2 / runtime-c repeat-wipe class documented
+//     in feedback_runtime_c_deploy_regen_wipe.md.
+//   - cycle-102 also adds the 4th dispatch: `hexa_print(v)` C entry
+//     point under HEXA_HAS_HEXA_RT_STDLIB routes to rt_print, and
+//     codegen single-arg `print(v)` emits `hexa_print(v)` (future
+//     regen) — but the activation path that fires on the SHIPPED
+//     hexa_v2 binary is a #ifdef hook inside hexa_print_val itself
+//     (the symbol the stale binary already calls).
+//
+// Pre-existing context (cycle-101): RUNTIME.md cycles 89-99 closure
+// table marked #7 as DEFERRED pending a `__fd_write_bytes(fd, s)`
+// codegen builtin (Tier-A.6 syscall layer architectural mismatch).
+// Step 5 #4 (re-landed 2026-05-22 commit 61c7eb8d) wired that builtin
+// in self/codegen_c2.hexa + self/bind.hexa. The shipped self/native/
+// hexa_v2 binary is still stale (regen pipeline has known Phase C.2
+// merge limitations — see self/main.hexa cmd_regen_cc trailing
+// comment), but the interpreter-style emit `hexa_call2(__fd_write_bytes,
+// fd, s)` routes via runtime_core.c's _Generic dispatcher
+// (hexa_call2 → __hexa_call2_fp2 when the symbol is a function
+// pointer). A thin C shim in self/runtime.c (near hexa_dict_keys,
+// this same cycle) provides exactly that function-pointer entry, so
+// both activation paths converge on the same observable POSIX write(2).
+//
+// Semantics: print/eprint emit to fd 1/2 with NO trailing newline.
+// println/eprintln append "\n". The argument is coerced through
+// `to_string(v)` so all HexaVal tags (int/float/bool/string/array/
+// map/valstruct/void) reduce to a string before the syscall — mirrors
+// the runtime_core.c C-side hexa_println family which delegates
+// TAG_ARRAY/TAG_MAP via hexa_to_string.
+//
+// Cycle-63 lesson (numeric.hexa:472): hexa source can't write
+// `return hexa_void()` — bare `hexa_void` lowers to `hexa_call0(hexa_void)`
+// which fails clang typecheck. We omit the return type so codegen
+// auto-emits `return hexa_void()` at the C end. C-side dispatch in
+// runtime_core.c does `(void)rt_println(v)` / `return rt_eprint(v)`
+// — the eprint family must still surface HexaVal because the original
+// hexa_eprint signature returns HexaVal. Workaround: separate hexa_void
+// returning wrappers — see io.hexa companion patterns below.
+
+pub fn rt_print(v: HexaVal) {
+    let s = to_string(v)
+    __fd_write_bytes(1, s)
+}
+
+pub fn rt_println(v: HexaVal) {
+    let s = to_string(v)
+    __fd_write_bytes(1, s)
+    __fd_write_bytes(1, "\n")
+}
+
+pub fn rt_eprint(v: HexaVal) {
+    let s = to_string(v)
+    __fd_write_bytes(2, s)
+}
+
+pub fn rt_eprintln(v: HexaVal) {
+    let s = to_string(v)
+    __fd_write_bytes(2, s)
+    __fd_write_bytes(2, "\n")
+}

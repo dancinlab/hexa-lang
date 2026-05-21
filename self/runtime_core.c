@@ -5120,6 +5120,21 @@ void hexa_throw(HexaVal err) {
 
 // ── Printing ─────────────────────────────────────────────
 
+// Cycle-102 (2026-05-22) — IO 4th-fn activation. The hexa_print_val
+// symbol is what shipped self/native/hexa_v2 emits for `print(v)`.
+// Under HEXA_HAS_HEXA_RT_STDLIB the entry dispatches to rt_print
+// (stdlib/runtime/io.hexa) which coerces via to_string + raw write.
+// For TAG_ARRAY this routes through _hexa_to_string_rec which produces
+// the same `[e1, e2, ...]` repr (depth-cap 8, element-cap 64) the C
+// path emitted via recursive printf — byte-eq for scalar smokes.
+// The C body is retained under #else for the standalone runtime.c
+// smoke link path (no stdlib import).
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_print(HexaVal v);
+void hexa_print_val(HexaVal v) {
+    (void)rt_print(v);
+}
+#else
 // anima P0 bug #6 (2026-04-18): TAG_VALSTRUCT unwrap guard.
 // When interpreter routes print through hexa_println with an arg that
 // got boxed as TAG_VALSTRUCT (rt 32-G flat struct), the prior `default:`
@@ -5181,7 +5196,30 @@ void hexa_print_val(HexaVal v) {
         default: printf("<value>"); break;
     }
 }
+#endif
 
+// RUNTIME.md step-3 잔여 #7 (2026-05-22 cycle-101 c25ef75e) — hexa_println
+// / hexa_eprint / hexa_eprintln may route to hexa-source rt_print /
+// rt_println / rt_eprint / rt_eprintln (stdlib/runtime/io.hexa) when
+// HEXA_HAS_HEXA_RT_STDLIB is defined. The hexa bodies coerce via
+// to_string(v) + emit raw bytes via __fd_write_bytes (runtime.c shim).
+// C bodies retained for the smoke link path (standalone runtime.c, no
+// stdlib import) and as fallback.
+//
+// Cycle-102 (2026-05-22, runtime|codegen|stdlib|restore) — restores the
+// cycle-101 dispatch after the silent wipe in commit e8c2dc1c (wip:
+// dfflibmap sky130 reset-flop variants + ...). Additionally activates
+// the 4th IO fn (rt_print) by routing the existing `hexa_print_val`
+// symbol — which is what shipped self/native/hexa_v2 emits for
+// `print(v)` — through rt_print at the top of hexa_print_val. Internal
+// recursion (TAG_ARRAY children) stays on the C path via the private
+// helper _hexa_print_val_c_body to avoid double-routing.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_println(HexaVal v);
+void hexa_println(HexaVal v) {
+    (void)rt_println(v);
+}
+#else
 void hexa_println(HexaVal v) {
     hexa_print_val(v); printf("\n");
     // 2026-05-06 — auto-fflush. setvbuf constructor가 일부 환경 (macOS Tahoe
@@ -5190,12 +5228,49 @@ void hexa_println(HexaVal v) {
     // opt-out: HEXA_NO_AUTOFLUSH=1 (bulk-output benchmark용).
     if (!hxlcl_getenv("HEXA_NO_AUTOFLUSH")) fflush(stdout);
 }
+#endif
+
+// Cycle-102 (2026-05-22) — 4th IO fn activation. `print(v)` codegen
+// lowers to `hexa_print_val(v)` (the symbol used recursively for
+// ARRAY children). The shipped hexa_v2 binary emits this name, so we
+// dispatch at this entry point under HEXA_HAS_HEXA_RT_STDLIB to route
+// the top-level call through rt_print (stdlib/runtime/io.hexa). The
+// recursive case (hexa_print_val called from within hexa_print_val
+// for TAG_ARRAY items above) flows through the SAME dispatched entry
+// — `rt_print` calls `to_string(v)` which for arrays delegates to
+// _hexa_to_string_rec (depth-capped at 8, element-capped at 64),
+// producing the same `[e1, e2, ...]` repr that the C path emitted via
+// recursive printf. Byte-eq for plain string args (the smoke test).
+//
+// Additionally introduces a new C symbol `hexa_print(v)` for the
+// codegen rule (single-arg `print(v)` → `hexa_print(v)`) that ships
+// with the next regen of self/native/hexa_v2. Until regen lands the
+// shipped binary continues to call hexa_print_val (which now
+// dispatches), so activation is functional today and will remain
+// correct after regen flips the call site.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_print(HexaVal v);
+HexaVal hexa_print(HexaVal v) {
+    return rt_print(v);
+}
+#else
+HexaVal hexa_print(HexaVal v) {
+    hexa_print_val(v);
+    return hexa_void();
+}
+#endif
 
 // P7-6 builtin (2026-04-18): stderr counterpart to hexa_println. Used
 // by user code that needs to emit diagnostics without polluting stdout
 // (e.g. CLI tools whose stdout is a result stream piped to another
 // process). Returns void-equivalent HexaVal so it can slot into the
 // uniform i64-ret IR shape that the native_build dispatcher emits.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_eprintln(HexaVal v);
+HexaVal hexa_eprintln(HexaVal v) {
+    return rt_eprintln(v);
+}
+#else
 HexaVal hexa_eprintln(HexaVal v) {
     // Route through the same hexa_print_val logic but redirect the
     // writes to stderr. We cannot reuse hexa_print_val directly because
@@ -5242,6 +5317,7 @@ HexaVal hexa_eprintln(HexaVal v) {
     if (!hxlcl_getenv("HEXA_NO_AUTOFLUSH")) fflush(stderr);
     return hexa_void();
 }
+#endif
 
 // 2026-04-20 builtin: stderr + NO trailing newline (print/println symmetry).
 // Mirrors hexa_eprintln byte-for-byte except the "\n" suffix is dropped from
@@ -5250,6 +5326,12 @@ HexaVal hexa_eprintln(HexaVal v) {
 //   self/ml/corpus_clean.hexa
 // which pre-2026-04-20 fell through to hexa_call1(eprint,...) and produced a
 // clang link error in AOT. Interp path also route-checks this name.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_eprint(HexaVal v);
+HexaVal hexa_eprint(HexaVal v) {
+    return rt_eprint(v);
+}
+#else
 HexaVal hexa_eprint(HexaVal v) {
     const char* __ff = __hexa_print_float_fmt();
     if (HX_IS_VALSTRUCT(v) && HX_VS(v)) {
@@ -5286,6 +5368,7 @@ HexaVal hexa_eprint(HexaVal v) {
     }
     return hexa_void();
 }
+#endif
 
 // ── to_string ────────────────────────────────────────────
 

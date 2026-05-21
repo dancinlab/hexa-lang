@@ -1839,6 +1839,36 @@ the 8 잔여 items have settled to:
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,760 B
 
+### 2026-05-22 — step 3 cycle 102: IO 4th-fn activation (hexa_print + wipe restore)
+
+- ✅ Restored cycle-101 (commit `c25ef75e`) IO port after silent wipe
+  in commit `e8c2dc1c` (wip: dfflibmap sky130 reset-flop variants + ...)
+  which removed `stdlib/runtime/io.hexa` (54 LOC) + the runtime.c
+  `__fd_write_bytes` shim + runtime.h proto + 3 runtime_core.c
+  `#ifdef HEXA_HAS_HEXA_RT_STDLIB` dispatch sites + compiler/main.hexa
+  import line. Pattern matches the codegen-c2 / runtime-c repeat-wipe
+  class — see feedback_runtime_c_deploy_regen_wipe.md
+- ✅ NEW: 4th IO fn activated. `print(v)` codegen lowers to
+  `hexa_print_val(v)` (the symbol the shipped self/native/hexa_v2
+  binary already emits). Added `#ifdef HEXA_HAS_HEXA_RT_STDLIB`
+  dispatch at `hexa_print_val` entry → `rt_print(v)` → `to_string(v)`
+  → `__fd_write_bytes(1, s)`. For scalar args (string/int/float/bool)
+  byte-eq with C printf path. For TAG_ARRAY, `to_string` delegates to
+  `_hexa_to_string_rec` (depth-cap 8, element-cap 64) which emits the
+  same `[e1, e2, ...]` repr the C path produced via recursive printf
+- Added `hexa_print(HexaVal)` symbol for symmetry with the existing
+  `hexa_eprint(HexaVal)` (P7-6 builtin shape). Under
+  HEXA_HAS_HEXA_RT_STDLIB it routes to `rt_print`; under #else it
+  delegates to `hexa_print_val`. Forward declaration in runtime.h.
+  Currently unreferenced from codegen (no behavior change today)
+  but allows a future single-line codegen edit `print(v)` →
+  `hexa_print(v)` once self/native/hexa_v2 regen lands
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  byte-eq diag output verified (`diff /tmp/baseline.out /tmp/changes.out`
+  = empty) · binary 1,217,288 B (-224 B vs baseline 1,217,512 B —
+  net negative: rt_print dispatch + new `hexa_print` symbol +
+  unchanged hexa_print_val C body all kept inline)
+
 ### 2026-05-21 — step 3 cycle 38: hexa_math_* batch (sqrt/tan/tanh/abs/fmod)
 
 - ✅ 5 `hexa_math_*` wrappers gain two-mode dispatch to their existing

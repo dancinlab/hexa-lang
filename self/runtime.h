@@ -284,6 +284,7 @@ HexaVal hexa_type_of(HexaVal v);                        /* runtime.c:4704 */
 /* diagnostics */
 void    hexa_print_val(HexaVal v);                    /* runtime.c:4436 */
 void    hexa_eprint_val(HexaVal v);                   /* runtime.c:4343 */
+HexaVal hexa_print(HexaVal v);                        /* runtime_core.c — cycle-102 entry for `print(v)` (symmetry with hexa_eprint) */
 
 /* missing symbols flagged 2026-05-15 by wilson clean build against runtime.h
  * (see incoming/patches/runtime-h-incomplete-after-phase-1-3-b.md). All seven
@@ -340,6 +341,7 @@ int     rt_str_ends_with(HexaVal s, HexaVal suffix);  /* runtime.c:3781 — non-
 HexaVal hexa_map_remove(HexaVal m, const char* key);  /* runtime.c:2606 — Robin-Hood delete */
 HexaVal hexa_find_poly(HexaVal obj, HexaVal arg);     /* runtime.c:7007 — generic .find() */
 HexaVal hexa_dict_keys(HexaVal m);                    /* runtime.c:9948 — alias of hexa_map_keys */
+HexaVal __fd_write_bytes(HexaVal fd, HexaVal s);      /* runtime.c — Step 5 #4 POSIX write(2) shim */
 HexaVal hexa_base64_encode(HexaVal s);                /* runtime.c:10931 — RFC 4648 */
 HexaVal rt_read_file_bytes(HexaVal path);             /* runtime.c:4957 — fs read → byte array */
 HexaVal hexa_to_int(HexaVal v);                       /* runtime.c:5214 — coerce-to-int */
