@@ -1,0 +1,154 @@
+// compiler/codegen/nvptx_p3_module_loader_bridge_test.hexa
+// RFC 071 P3 — F-RFC071-MODULE-LOADER-BRIDGE falsifier
+//
+// @version 0.0.1
+// @capabilities [pure]
+//
+// P3 closure assertion (RFC 071 §4 P3) — the falsifier that distinguishes
+// "source-derived PTX emission" (P3 PASS) from "hand-MIR vec-add fixture"
+// (P2.1 fallback, P3 FAIL).
+//
+// Falsifier shape:
+//   * Source fixture: `compiler/codegen/nvptx_p3_source_to_silicon_test.hexa`
+//     contains `@gpu_kernel fn my_test_kernel(...)`.
+//   * Invocation: `build_nvptx_emit_driver(<fixture-path>, "sm_80")`
+//     (compiler/cli/build_nvptx.hexa).
+//   * PASS substring: `.visible .entry my_test_kernel` — present in the
+//     emitted PTX iff the source-derived MModule reached
+//     `codegen_emit_ptx_for_sm`.
+//   * FAIL substring: `.visible .entry vadd` — present iff the P2.1
+//     hand-MIR fixture path was taken (the source bytes were ignored).
+//
+// Honest scope (@D g3):
+//   * This test exercises the full `build_nvptx_emit_driver` chain when
+//     run via `hexa run` (interp) OR when the compiler self-host
+//     default-flips (`HEXA_BACKEND=native`). Per
+//     `feedback_no_interp_use_compiled`, interp is retired — so today
+//     this file's verification surface is:
+//       (a) `hexa parse` rc=0 on all P3-touched files (structural)
+//       (b) static inspection of the build_nvptx.hexa edits (the
+//           pipeline-composition + fallback predicate are visible)
+//       (c) when the in-hexa compiler self-host default-flips and
+//           `cmd_build` `use`s `compiler/cli/build_nvptx.hexa`
+//           directly, the runtime substring assertion below cuts.
+//   * The compiled-binary fire of `build_nvptx_emit_driver` requires the
+//     `HEXA_MODULE_LOADER` + compiler-self-host wiring — see
+//     `reference_hexa_module_loader_env_2026_05_20` and
+//     `project_compiler_selfbuild_blockers`. Today the runtime test
+//     surface is gated on that follow-on. The falsifier source IS
+//     committed so the moment the self-host default-flips, this test
+//     activates without further edits.
+
+import "../cli/build_nvptx.hexa"
+
+// ── Text inspection helpers ──────────────────────────────────────────
+
+fn _contains(hay: string, needle: string) -> bool {
+    return hay.find(needle) >= 0
+}
+
+fn _check(ok_in: bool, hay: string, needle: string, label: string) -> bool {
+    if _contains(hay, needle) { return ok_in }
+    println("  FAIL: " + label + " (missing: `" + needle + "`)")
+    return false
+}
+
+fn _check_absent(ok_in: bool, hay: string, needle: string, label: string) -> bool {
+    if !_contains(hay, needle) { return ok_in }
+    println("  FAIL: " + label + " (UNEXPECTED: `" + needle + "` present)")
+    return false
+}
+
+// ── F-RFC071-MODULE-LOADER-BRIDGE assertion ──────────────────────────
+
+fn _test_module_loader_bridge() -> bool {
+    let mut ok = true
+
+    // The fixture source has `@gpu_kernel fn my_test_kernel(...)`.
+    // After the P3 wiring, the PTX emitted from
+    // `build_nvptx_emit_driver(<fixture-path>, "sm_80")` MUST contain
+    // `.visible .entry my_test_kernel` (the source body) and MUST NOT
+    // contain `.visible .entry vadd` (the hand-MIR fallback name).
+    //
+    // Calling `build_nvptx_emit_driver` runs the full pipeline +
+    // writes the PTX to disk; we then read it back and substring-test.
+    let fixture_path = "compiler/codegen/nvptx_p3_source_to_silicon_test.hexa"
+    let rc = build_nvptx_emit_driver(fixture_path, "sm_80")
+    if rc != 0 {
+        println("  FAIL: build_nvptx_emit_driver returned rc=" + to_string(rc))
+        return false
+    }
+
+    let ptx_path = fixture_path + ".ptx"
+    if file_exists(ptx_path) == false {
+        println("  FAIL: PTX output not written at " + ptx_path)
+        return false
+    }
+    let ptx_text = to_string(read_file(ptx_path))
+
+    // PASS-trigger: source-derived entry name appears.
+    ok = _check(ok, ptx_text, ".visible .entry my_test_kernel",
+                "P3 source-derived entry name (my_test_kernel)")
+
+    // FAIL-trigger: hand-MIR fallback name absent.
+    ok = _check_absent(ok, ptx_text, ".visible .entry vadd",
+                       "P3 hand-MIR fallback name (vadd) absent")
+
+    // Common PTX prelude substring sanity (carries through both paths;
+    // pinned to sm_80 here).
+    ok = _check(ok, ptx_text, ".target sm_80",
+                "sm_80 .target directive")
+    ok = _check(ok, ptx_text, ".address_size 64",
+                ".address_size 64 directive")
+
+    return ok
+}
+
+// ── F-RFC071-MIR-DRIVER-INVOKE preservation (regression guard) ───────
+//
+// P3 must NOT regress P2.1: when src_path is "" or unreadable, the
+// emit path falls back to the P2.1 hand-MIR vec-add fixture. This sub-
+// test invokes `build_nvptx_emit_driver` with a non-existent path and
+// confirms it returns rc=1 (file-IO error, NOT a silent fallback).
+//
+// The hand-MIR fixture remains reachable via `_build_nvptx_stub_ptx`
+// when called from contexts that pass "" — that surface is the
+// existing P2.1 falsifier, not retested here.
+fn _test_p21_invariant_preserved() -> bool {
+    let mut ok = true
+    let rc_empty   = build_nvptx_emit_driver("",       "sm_80")
+    let rc_missing = build_nvptx_emit_driver("/tmp/nonexistent.hexa.does.not.exist", "sm_80")
+    if rc_empty != 1 {
+        println("  FAIL: empty src_path should return rc=1, got " + to_string(rc_empty))
+        ok = false
+    }
+    if rc_missing != 1 {
+        println("  FAIL: missing src_path should return rc=1, got " + to_string(rc_missing))
+        ok = false
+    }
+    return ok
+}
+
+// ── Test runner ──────────────────────────────────────────────────────
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  RFC 071 P3 — F-RFC071-MODULE-LOADER-BRIDGE smoke")
+    println("══════════════════════════════════════════════")
+
+    let ok_bridge = _test_module_loader_bridge()
+    let ok_p21    = _test_p21_invariant_preserved()
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok_bridge && ok_p21 {
+        println("PASS: RFC 071 P3 module-loader bridge")
+        println("      (source-derived entry name + P2.1 invariant preserved)")
+    } else {
+        println("FAIL: RFC 071 P3 module-loader bridge")
+        if !ok_bridge { println("      module-loader-bridge FAILED (source entry name not in PTX)") }
+        if !ok_p21    { println("      P2.1 invariant FAILED (read-miss did not return rc=1)") }
+    }
+    println("══════════════════════════════════════════════")
+    if !(ok_bridge && ok_p21) { exit(1) }
+}
