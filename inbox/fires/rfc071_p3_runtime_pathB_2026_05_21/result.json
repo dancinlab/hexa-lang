@@ -1,0 +1,41 @@
+{
+  "rfc": "071",
+  "phase": "P3",
+  "approach": "Path B (inline source pipeline in self/main.hexa)",
+  "date": "2026-05-21",
+  "host": "Mac (local)",
+  "falsifier": "F-RFC071-MODULE-LOADER-BRIDGE-RUNTIME",
+  "result": "PASS",
+  "build": {
+    "cmd": "hexa build self/main.hexa -o /tmp/hexa_pathb_probe4",
+    "env": "SIDECAR_NO_POOL=1 HEXA_MAC_BUILD_OK=1 HEXA_MODULE_LOADER=$(pwd)/build/hexa_module_loader",
+    "rc": 0,
+    "binary_size_bytes": 1552128,
+    "wall_seconds_lt": 90,
+    "oom": false
+  },
+  "fire": {
+    "cmd": "/tmp/hexa_pathb_probe4 build compiler/codegen/nvptx_p3_source_to_silicon_test.hexa --target=nvptx64-nvidia-cuda-sm80",
+    "rc": 0,
+    "stdout_marker": "[nvptx] target=sm_80 src=...nvptx_p3_source_to_silicon_test.hexa out=...nvptx_p3_source_to_silicon_test.hexa.ptx phase=P3-PATH-B"
+  },
+  "ptx_assertions": {
+    ".visible .entry my_test_kernel": "PRESENT (line 6) — PASS",
+    ".visible .entry vadd": "ABSENT — PASS (hand-MIR fallback NOT triggered)",
+    ".target sm_80": "PRESENT (line 3)",
+    ".version 7.0": "PRESENT (line 2)",
+    ".address_size 64": "PRESENT (line 4)",
+    "ctaid.x | ntid.x | tid.x mov": "PRESENT — gpu_block_id/dim_x + gpu_thread_id_x lowered",
+    "add.f64 (c = a+b body)": "PRESENT"
+  },
+  "honest_scope_g3": {
+    "ptx_loadable_as_is": false,
+    "unsupported_call_markers": "to_i64 calls + < binop not yet wired in NVPTX target",
+    "silicon_fire_status": "deferred — separate cycle once nvptx_target.hexa closes the to_i64 + < cmp lowering",
+    "cpu_codegen_untouched": "true (only self/main.hexa + GPU.md edited; codegen/* files md5-identical)"
+  },
+  "closure_impact": {
+    "GPU.md_sec10_row": "source-to-silicon e2e — flipped [ ] -> [x]",
+    "scoreboard": "7/8 -> 8/8"
+  }
+}
