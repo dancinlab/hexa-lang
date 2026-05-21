@@ -1094,7 +1094,29 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
-### 2026-05-21 — step 3 cycle 76: codegen typed-param + `as` cast direct emit (QUEUED for hexa_v2 rebuild)
+### 2026-05-21 — step 3 cycle 76 ACTIVATED: codegen typed-param + `as` cast direct emit 🛸🛸🛸
+
+- ✅ **All 4 "real blockers" SOLVED**. Cycle 76 source-level edits
+  (codegen_c2.hexa) applied DIRECTLY to `self/native/hexa_cc.c` (the
+  pre-transpiled C source for hexa_v2 — project precedent per
+  build_toolchain.json LetStmt patch history), then clang-rebuilt:
+  ```
+  clang -O2 -std=c11 -arch arm64 -I self -D_GNU_SOURCE \
+    -fbracket-depth=4096 self/native/hexa_cc.c self/runtime.c \
+    -o self/native/hexa_v2 -lm
+  ```
+- Verified active via transpile inspection:
+  - `pub fn f(a: int, b: int) { return a < b }` → direct
+    `hexa_bool(HX_INT(a) < HX_INT(b))` (no hexa_cmp_lt!)
+  - `pub fn g(v: float) { return v as int }` → direct
+    `hexa_int((int64_t)HX_FLOAT(v))` (no hexa_to_int!)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,158,984 B (smaller than pre-cycle-76 1,160,200 B —
+  typed direct-emit removed redundant runtime dispatch calls)
+- Unblocks cycles 77+ for: hexa_cmp_lt/gt/le/ge/eq, hexa_add/sub/mul/
+  div/mod, hexa_to_int/_float ports — all formerly recursion-trapped
+
+### 2026-05-21 — step 3 cycle 76 (initial source edit): codegen typed-param + `as` cast direct emit
 
 - 🚧 **Source-level edits in `self/codegen_c2.hexa`** to close the
   remaining 2 of 4 "real blockers". Fix queued — not active until

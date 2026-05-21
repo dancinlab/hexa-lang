@@ -41,8 +41,8 @@
 
 @gpu_kernel
 fn reduce_sum(a: [f64], out: [f64], n: i64) {
-    let mut v: f64 = 0.0
-    let mut idx: i64 = 0
+    var v: f64 = 0.0
+    var idx: i64 = 0
     while idx < n {
         v = v + a[to_i64(idx)]
         idx = idx + 1
