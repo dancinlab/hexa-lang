@@ -2982,6 +2982,11 @@ HexaVal rt_str_trim_end(HexaVal s) {
 }
 
 // Byte-based slice: [start, end) clamped to length
+// Step-3 cycle 46 port — byte slice dispatches to rt_str_slice
+// (ctype.hexa). Hexa side uses byte_len + substring builtin so the
+// allocation path is the perf-31 hexa_strbuf_alloc + memcpy single-
+// shot (vs strndup + hexa_str_own_with_len which double-allocates).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end) {
     if (!HX_IS_STR(s)) return hexa_str("");
     int len = (int)HX_STRLEN(s);
@@ -2991,6 +2996,13 @@ HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end) {
     if (a > b) a = b;
     return hexa_str_own_with_len(hxlcl_strndup(HX_STR(s) + a, b - a), (size_t)(b - a));
 }
+#else
+extern HexaVal rt_str_slice(HexaVal s, HexaVal start, HexaVal end);
+HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end) {
+    if (!HX_IS_STR(s)) return hexa_str("");
+    return rt_str_slice(s, start, end);
+}
+#endif
 
 // Step-3 cycle 35 port — float fast-path for the array branch. The str
 // branch is polymorphic (byte-indexed substring) and stays in C; the

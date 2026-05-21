@@ -1094,6 +1094,18 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 46: hexa_str_slice → rt_str_slice
+
+- ✅ `hexa_str_slice` (self/runtime.c:2985) ported. Byte-based slice
+  with [start, end) clamped to [0, len]. Hexa-side uses `byte_len(s)`
+  + `s.substring(a, b)` builtin
+- Perf side note: the substring builtin (`hexa_str_substring`) uses
+  `hexa_strbuf_alloc + memcpy` single-shot (perf-31), strictly better
+  than the C body's `hxlcl_strndup + hexa_str_own_with_len` which
+  double-allocates. So the hexa-rt-stdlib path is also a perf win
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,163,288 B
+
 ### 2026-05-21 — step 3 cycle 45: hexa_str_split → rt_str_split (existing M1-lite, wire-up only)
 
 - ✅ `hexa_str_split` (self/runtime_core.c:5903) wired to the existing

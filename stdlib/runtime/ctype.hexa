@@ -43,6 +43,20 @@ pub fn rt_str_bytes(s: string) -> [int] {
     return out
 }
 
+// Step 3 cycle 46 — byte-based string slice, [start, end) clamped.
+// Uses the substring builtin so the actual allocation is the perf-31
+// hexa_strbuf_alloc + memcpy single-shot path (better than the C body's
+// strndup + hexa_str_own_with_len which double-allocates).
+pub fn rt_str_slice(s: string, start: int, end: int) -> string {
+    let slen = byte_len(s)
+    let mut a = start
+    let mut b = end
+    if a < 0 { a = 0 }
+    if b > slen { b = slen }
+    if a > b { a = b }
+    return s.substring(a, b)
+}
+
 // Step 3 cycle 44 — string replace-all-occurrences. Walks `s` byte by
 // byte; on each position checks whether `old` matches and either emits
 // `new_s` (advancing by olen) or copies one byte (advancing by 1).
