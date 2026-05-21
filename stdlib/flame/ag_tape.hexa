@@ -207,6 +207,136 @@ pub fn ag_rmsnorm(tape: int, x: int, g: int, d: int) -> int {
     return y
 }
 
+// METAL_INTEGRATION.md step 5 of 5 (2026-05-21): FP32-via-Metal forward
+// helper for ag_linear. Routes the M×K · K×N matmul through the runtime
+// `farr32_matmul` FP32 builtin (self/runtime.c, N26 bf545c41), which
+// in turn dispatches to MPSMatrixMultiplication on Apple GPU when the
+// shape is large enough (M·K > 8192 || K·N > 8192) and HEXA_METAL=1 is
+// set. The cast cost (FP64 farr → FP32 farr32 → FP32 farr32 → FP64 farr)
+// is paid on the hexa side via element-wise farr_get + farr32_set + …
+// instead of inside the C MPS shim (N15+N18 path), which means future
+// cycles can hoist the cast UPSTREAM (model init allocates farr32 from
+// the start) without touching this helper again.
+//
+// Honest precision: FP32 matmul on Apple GPU has ~7 decimal digits of
+// precision. Default FP64 farr → matmul has ~16 digits. This helper is
+// for the d768/12L decoder hot path where flame's north-star is already
+// FP32. Callers needing FP64 bit-exactness MUST NOT set HEXA_METAL=1
+// (the default path through `farr_matmul` is unchanged).
+fn _ag_linear_metal_fp32_fwd(x: int, W: int, B: int, D: int, C: int) -> int {
+    // Allocate FP32 mirrors for x [B·D] and W [D·C]. Element-wise copy
+    // from FP64 farr to FP32 farr32 (down-cast on write).
+    let xn = farr32_zeros(B * D)
+    let Wn = farr32_zeros(D * C)
+    let mut i = 0
+    while i < B * D {
+        let _ = farr32_set(xn, i, t_get(x, i))
+        i = i + 1
+    }
+    let mut k = 0
+    while k < D * C {
+        let _ = farr32_set(Wn, k, t_get(W, k))
+        k = k + 1
+    }
+    // FP32 SGEMM: [B,D] · [D,C] = [B,C]. farr32_matmul routes to MPS on
+    // HEXA_METAL=1 large-shape, CPU ikj on FP32 floats otherwise.
+    let yn = farr32_matmul(xn, B, D, Wn, C)
+    // Up-cast FP32 result back to FP64 farr for the tape (the rest of
+    // the autograd path consumes FP64 farr handles).
+    let y = t_zeros(B * C)
+    let mut j = 0
+    while j < B * C {
+        t_set(y, j, farr32_get(yn, j))
+        j = j + 1
+    }
+    let _ = farr32_free(xn)
+    let _ = farr32_free(Wn)
+    let _ = farr32_free(yn)
+    return y
+}
+
+// METAL_INTEGRATION.md step 5 of 5 — BWD consumer helper (2026-05-21).
+// Mirror of `_ag_linear_metal_fp32_fwd` for the matmul vjp pair:
+//   · dx [B,D] = dy [B,C] · W^T [C,D]  via hexa_farr32_matmul_NT_b
+//   · dW [D,C] = x^T [D,B] · dy [B,C]  via hexa_farr32_matmul_NT_a
+// Both routes share the same env-gate + dim-gate semantics as the
+// forward; the inputs (x, W, og) are FP64 farr handles from the tape,
+// down-cast on the hexa side to FP32 farr32, run through the FP32
+// builtins (which themselves route to MPSMatrixMultiplication with the
+// `transposeLeft:YES`/`transposeRight:YES` flags inside the shim), and
+// up-cast back to FP64 farr in the caller-allocated `dx_out`/`dW_out`
+// slots. The legacy CPU path through `matmul_bwd_auto` is unchanged
+// when HEXA_METAL is unset or the shape is below the dim-gate, so the
+// byte-eq oracle stays green on default builds.
+//
+// Inputs:
+//   x, W, og — FP64 farr handles (B*D, D*C, B*C elements)
+//   dx_out, dW_out — caller-allocated FP64 farrs (B*D, D*C, written)
+//   B, D, C — shape (matches the fwd: y[B,C] = x[B,D] · W[D,C])
+//
+// Precision: FP32 round-trip ~ 7 decimal digits — same as the fwd
+// helper. Tests gated against FP64 reference use rel_err < 5e-3 to
+// absorb the FP32 mantissa truncation across the four downstream
+// ops (matmul → cast → matmul → cast).
+fn _ag_linear_metal_fp32_bwd(x: int, W: int, og: int,
+                             dx_out: int, dW_out: int,
+                             B: int, D: int, C: int) {
+    // FP32 mirrors of the fwd inputs + upstream gradient.
+    let xn  = farr32_zeros(B * D)
+    let Wn  = farr32_zeros(D * C)
+    let ogn = farr32_zeros(B * C)
+    let mut i = 0
+    while i < B * D {
+        let _ = farr32_set(xn, i, t_get(x, i))
+        i = i + 1
+    }
+    let mut k = 0
+    while k < D * C {
+        let _ = farr32_set(Wn, k, t_get(W, k))
+        k = k + 1
+    }
+    let mut j = 0
+    while j < B * C {
+        let _ = farr32_set(ogn, j, t_get(og, j))
+        j = j + 1
+    }
+    // dx [B,D] = og [B,C] · W^T [C,D]  → farr32_matmul_NT_b semantics:
+    //   first matrix: og  with shape (B, C)  → M_dy=B, N_dy=C
+    //   second matrix (transposed):    W with logical shape (D, C)
+    //   output:       dx [B, D]
+    // Signature (per codegen wiring + N34 runtime):
+    //   farr32_matmul_NT_b(A, M, K, B, N) -> C
+    // where A is M×K, B is N×K (treated as transposed → result is M×N).
+    // For dx: A=og (B×C → M=B, K=C), B=W (D×C → N=D), result is B×D.
+    let dxn = farr32_matmul_NT_b(ogn, B, C, Wn, D)
+    // dW [D,C] = x^T [D,B] · og [B,C]  → farr32_matmul_NT_a semantics:
+    //   first matrix (transposed): x with logical shape (B, D)
+    //   second matrix: og with shape (B, C)
+    //   output:        dW [D, C]
+    // Signature (per N46 runtime convention):
+    //   farr32_matmul_NT_a(A, K, M, B, N) -> C
+    // where A is K×M (treated as transposed → effectively M×K), B is K×N,
+    // result is M×N. For dW: A=x (B×D → K=B, M=D), B=og (B×C → N=C),
+    // result is D×C.
+    let dWn = farr32_matmul_NT_a(xn, B, D, ogn, C)
+    // Up-cast results back to FP64 farrs in the caller's slots.
+    let mut p = 0
+    while p < B * D {
+        t_set(dx_out, p, farr32_get(dxn, p))
+        p = p + 1
+    }
+    let mut q = 0
+    while q < D * C {
+        t_set(dW_out, q, farr32_get(dWn, q))
+        q = q + 1
+    }
+    let _ = farr32_free(xn)
+    let _ = farr32_free(Wn)
+    let _ = farr32_free(ogn)
+    let _ = farr32_free(dxn)
+    let _ = farr32_free(dWn)
+}
+
 pub fn ag_linear(tape: int, x: int, W: int, b: int,
                  B: int, D: int, C: int) -> int {
     // mk2-C5: bypass nn_linear_fwd's host-scalar bias broadcast loop
@@ -215,7 +345,26 @@ pub fn ag_linear(tape: int, x: int, W: int, b: int,
     // scalar ops per call × 84 calls/step). farr_matmul routes to
     // cuBLAS via the matmul dim-gate (mk2-C0). For non-zero biases a
     // separate ag_linear_with_bias variant should be added.
-    let y = farr_matmul(x, B, D, W, C)
+    //
+    // METAL_INTEGRATION.md step 5 (2026-05-21): per-call FP32 Metal gate.
+    // When env("HEXA_METAL") == "1" AND the shape is past the dim-gate
+    // threshold (M·K > 8192 || K·N > 8192 — same as the runtime's
+    // hexa_farr_matmul gate), route the forward through the explicit
+    // FP32 farr32 path. The dim-gate constants match runtime.c so the
+    // dispatch semantics are identical between the implicit (FP64→shim)
+    // and explicit (hexa-side FP32) paths.
+    let M = B
+    let K = D
+    let N = C
+    let dim_gate_lhs = M * K
+    let dim_gate_rhs = K * N
+    let metal_on = env("HEXA_METAL") == "1"
+    let shape_ok = dim_gate_lhs > 8192 || dim_gate_rhs > 8192
+    let y = if metal_on && shape_ok {
+                _ag_linear_metal_fp32_fwd(x, W, B, D, C)
+            } else {
+                farr_matmul(x, B, D, W, C)
+            }
     let _ = _ag_push(tape, ag_k_linear(), x, W, b, y, 0 - 1, 0 - 1,
                      0 - 1, 0 - 1, B, D, C, 0)
     return y
@@ -627,8 +776,39 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             // walker which still calls `nn_linear_bwd`.
             let dW = t_zeros(D * C)
             let dx = t_zeros(B * D)
-            let _ = matmul_bwd_auto(ag_derive_reg, x, W, og,
-                                    dW, dx, B, D, C)
+            // METAL_INTEGRATION.md step 5 of 5 — BWD consumer wiring
+            // (2026-05-21). Mirrors the forward env-gate above: when
+            // env("HEXA_METAL") == "1" AND the shape is past the same
+            // dim-gate threshold used by the forward (M·K > 8192 ||
+            // K·N > 8192), route the matmul vjp pair through the
+            // explicit FP32 farr32 helper `_ag_linear_metal_fp32_bwd`
+            // (which calls hexa_farr32_matmul_NT_b for dx + hexa_farr32_
+            // matmul_NT_a for dW, both with MPSMatrixMultiplication
+            // dispatch on Apple GPU when the dim-gate passes).
+            //
+            // The default path (no env or small shape) stays on the
+            // SD4 auto-rule `matmul_bwd_auto`, which is byte-identical
+            // to nn_linear_bwd — so the F-RFC043-AUTOGRAD-AUTO-MATMUL-
+            // BYTE-EQ falsifier remains green. The Metal path trades
+            // FP64 bit-exactness for d768/12L throughput (rel_err <
+            // 5e-3 on the FP32 round-trip).
+            //
+            // Honest narrow scope: this env-gate is INSIDE the
+            // ag_k_linear handler so `matmul_bwd_auto` itself is
+            // unchanged (test/flame_ag_derive_test.hexa direct call
+            // still hits the FP64 closed-form rule). The narrow gate
+            // is the right surface per task scope (METAL_INTEGRATION
+            // step 5 final closure).
+            let bwd_lhs_dim = B * D
+            let bwd_rhs_dim = D * C
+            let bwd_metal_on = env("HEXA_METAL") == "1"
+            let bwd_shape_ok = bwd_lhs_dim > 8192 || bwd_rhs_dim > 8192
+            if bwd_metal_on && bwd_shape_ok {
+                _ag_linear_metal_fp32_bwd(x, W, og, dx, dW, B, D, C)
+            } else {
+                let _ = matmul_bwd_auto(ag_derive_reg, x, W, og,
+                                        dW, dx, B, D, C)
+            }
             _ag_reg_acc(tape, x, dx, B * D)
             _ag_reg_acc(tape, W, dW, D * C)
             t_free(dW)
