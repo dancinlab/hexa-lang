@@ -427,6 +427,7 @@ HexaVal hexa_math_abs(HexaVal x);                                               
 HexaVal hexa_math_sqrt(HexaVal x);                                                 /* runtime.c:2155 */
 HexaVal hexa_math_floor(HexaVal x);                                                /* runtime.c:2156 */
 HexaVal hexa_math_ceil(HexaVal x);                                                 /* runtime.c:2157 */
+HexaVal hexa_random(void);                                                         /* runtime.c:2531 — PRNG [0,1) */
 HexaVal hexa_math_round(HexaVal x);                                                /* runtime.c:2158 */
 HexaVal hexa_math_pow(HexaVal b, HexaVal e);                                       /* runtime.c:2159 */
 HexaVal hexa_math_fmod(HexaVal a, HexaVal b);                                      /* runtime.c — blocker-3 fmod-shim */
