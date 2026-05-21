@@ -1093,3 +1093,28 @@ it operates on HexaVal tags from C.
   any dispatch
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
+
+### 2026-05-21 — step 3 cycle 38: hexa_math_* batch (sqrt/tan/tanh/abs/fmod)
+
+- ✅ 5 `hexa_math_*` wrappers gain two-mode dispatch to their existing
+  `rt_*` counterparts: `hexa_math_sqrt → rt_sqrt`, `hexa_math_tan →
+  rt_tan`, `hexa_math_tanh → rt_tanh`, `hexa_math_abs → rt_abs_float`,
+  `hexa_math_fmod → rt_fmod`. Each rt_ fn was already landed in cycles
+  7-9 (math.hexa Newton-Raphson / series)
+- The wrappers in self/runtime.c:4060-4087 previously called libm
+  (`sqrt/tan/tanh/fabs`) or `hxlcl_fmod` directly with no #ifndef
+  branch. This cycle adds the branch so the hexa-rt-stdlib build
+  routes through the hexa-source path explicitly (behaviour-
+  identical to the hxlcl_* chain for fmod; libm-direct surfaces now
+  go away for sqrt/tan/tanh/abs)
+- `hexa_math_sin/cos/exp/log` are intentionally NOT in this batch —
+  they already route through `hxlcl_*` which itself calls `rt_*` via
+  runtime.c:1317-1320, so wrapping again would be cosmetic
+- `hexa_math_asin/acos/atan/atan2` stay on libm — no `rt_*` equivalent
+  has landed yet
+- `hexa_math_floor/ceil/round` stay on libm this cycle — the existing
+  rt_floor/ceil/round return `int` but the wrapper contract is
+  `float`-out; an int→float cast at the boundary works but adds noise
+  and is deferred to its own cycle
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,760 B

@@ -4057,18 +4057,35 @@ int64_t hexa_float_to_int(double f) {
     return (int64_t)f;
 }
 
+// Step-3 cycle 38 batch — hexa_math_* wrappers that have direct rt_*
+// counterparts gain the two-mode dispatch. The hexa-source path stays
+// libm-free; the libm-flavoured names (asin/acos/atan/atan2) have no
+// rt_ equivalent yet and remain on the C path. sin/cos/exp/log already
+// route through hxlcl_* which itself calls rt_* (runtime.c:1317-1320),
+// so no additional wrapping is needed for them.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_tanh(HexaVal x) { return hexa_float(tanh(HX_FLOAT(x))); }
+HexaVal hexa_math_tan(HexaVal x)  { return hexa_float(tan(HX_FLOAT(x))); }
+HexaVal hexa_math_abs(HexaVal x)  { return hexa_float(fabs(HX_FLOAT(x))); }
+HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt(HX_FLOAT(x))); }
+#else
+extern HexaVal rt_tanh(HexaVal x);
+extern HexaVal rt_tan(HexaVal x);
+extern HexaVal rt_abs_float(HexaVal v);
+extern HexaVal rt_sqrt(HexaVal v);
+HexaVal hexa_math_tanh(HexaVal x) { return rt_tanh(hexa_float(HX_FLOAT(x))); }
+HexaVal hexa_math_tan(HexaVal x)  { return rt_tan(hexa_float(HX_FLOAT(x))); }
+HexaVal hexa_math_abs(HexaVal x)  { return rt_abs_float(hexa_float(HX_FLOAT(x))); }
+HexaVal hexa_math_sqrt(HexaVal x) { return rt_sqrt(hexa_float(HX_FLOAT(x))); }
+#endif
 HexaVal hexa_math_sin(HexaVal x)  { return hexa_float(hxlcl_sin(HX_FLOAT(x))); }
 HexaVal hexa_math_cos(HexaVal x)  { return hexa_float(hxlcl_cos(HX_FLOAT(x))); }
-HexaVal hexa_math_tan(HexaVal x)  { return hexa_float(tan(HX_FLOAT(x))); }
 HexaVal hexa_math_asin(HexaVal x) { return hexa_float(asin(HX_FLOAT(x))); }
 HexaVal hexa_math_acos(HexaVal x) { return hexa_float(acos(HX_FLOAT(x))); }
 HexaVal hexa_math_atan(HexaVal x) { return hexa_float(atan(HX_FLOAT(x))); }
 HexaVal hexa_math_atan2(HexaVal y, HexaVal x) { return hexa_float(atan2(HX_FLOAT(y), HX_FLOAT(x))); }
 HexaVal hexa_math_log(HexaVal x)  { return hexa_float(hxlcl_log(HX_FLOAT(x))); }
 HexaVal hexa_math_exp(HexaVal x)  { return hexa_float(hxlcl_exp(HX_FLOAT(x))); }
-HexaVal hexa_math_abs(HexaVal x)  { return hexa_float(fabs(HX_FLOAT(x))); }
-HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt(HX_FLOAT(x))); }
 HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(HX_FLOAT(x))); }
 HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(HX_FLOAT(x))); }
 HexaVal hexa_math_round(HexaVal x){ return hexa_float(round(HX_FLOAT(x))); }
@@ -4084,7 +4101,18 @@ HexaVal hexa_math_pow(HexaVal b, HexaVal e) {
 // from hexa user code. Distinct from `%` which routes through hexa_mod
 // (int+float-aware dispatch); this is the pure float-only path used by
 // scientific kernels that want the libm semantics directly.
+// Step-3 cycle 38 batch — dispatch through rt_fmod (math.hexa cycle 7-9
+// Newton/series-based) when hexa-rt-stdlib is active. hxlcl_fmod itself
+// routes through rt_fmod via runtime.c shim too, so this wrapper is
+// behaviour-identical; lifting it surfaces the dispatch explicitly.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_fmod(HexaVal a, HexaVal b) { return hexa_float(hxlcl_fmod(HX_FLOAT(a), HX_FLOAT(b))); }
+#else
+extern HexaVal rt_fmod(HexaVal x, HexaVal y);
+HexaVal hexa_math_fmod(HexaVal a, HexaVal b) {
+    return rt_fmod(hexa_float(HX_FLOAT(a)), hexa_float(HX_FLOAT(b)));
+}
+#endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_min(HexaVal a, HexaVal b) { return hexa_float(fmin(HX_FLOAT(a), HX_FLOAT(b))); }
 #else
