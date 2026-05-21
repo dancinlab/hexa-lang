@@ -2528,8 +2528,21 @@ HexaVal hexa_map_merge(HexaVal a, HexaVal b) {
 }
 #endif
 
-// map_values(fn): apply fn to every value, return new map with same keys.
-// Matches interpreter at self/hexa_full.hexa:15584-15594.
+// Step-4 cycle 95 ports — map_values + filter_keys via hexa source.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_map_map_values(HexaVal m, HexaVal fn, HexaVal empty);
+extern HexaVal rt_map_filter_keys(HexaVal m, HexaVal fn, HexaVal empty);
+HexaVal hexa_map_map_values(HexaVal m, HexaVal fn) {
+    HexaVal empty = hexa_map_new();
+    if (!HX_MAP_TBL(m)) return empty;
+    return rt_map_map_values(m, fn, empty);
+}
+HexaVal hexa_map_filter_keys(HexaVal m, HexaVal fn) {
+    HexaVal empty = hexa_map_new();
+    if (!HX_MAP_TBL(m)) return empty;
+    return rt_map_filter_keys(m, fn, empty);
+}
+#else
 HexaVal hexa_map_map_values(HexaVal m, HexaVal fn) {
     HexaVal out = hexa_map_new();
     if (!HX_MAP_TBL(m)) return out;
@@ -2540,10 +2553,6 @@ HexaVal hexa_map_map_values(HexaVal m, HexaVal fn) {
     }
     return out;
 }
-
-// filter_keys(fn): keep only entries where fn(key) is truthy.
-// Matches interpreter at self/hexa_full.hexa:15595-15610. Key is passed
-// to predicate as a string value (HexaMap stores keys as char*).
 HexaVal hexa_map_filter_keys(HexaVal m, HexaVal fn) {
     HexaVal out = hexa_map_new();
     if (!HX_MAP_TBL(m)) return out;
@@ -2556,6 +2565,7 @@ HexaVal hexa_map_filter_keys(HexaVal m, HexaVal fn) {
     }
     return out;
 }
+#endif
 
 // invert: swap k<->v. Values get stringified via hexa_to_string to serve
 // as new keys (HexaMap keys are char*); original keys become string vals.

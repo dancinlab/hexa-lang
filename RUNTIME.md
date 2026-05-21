@@ -1094,6 +1094,14 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-22 — step 4 cycle 95: hexa_map_map_values + filter_keys (transformer family)
+
+- ✅ Two more callback map ops. `fn(v)` lowers to `hexa_call1(fn, v)`.
+- `rt_map_map_values(m, fn, empty)` — apply fn to every value, keep keys
+- `rt_map_filter_keys(m, fn, empty)` — keep entries where fn(k) is truthy
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,218,392 B
+
 ### 2026-05-22 — step 4 cycle 94: hexa_map_count/any/all pred ports (callback family)
 
 - ✅ Three predicate-callback map ops ported via cycle-63 callback

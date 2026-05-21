@@ -928,6 +928,38 @@ pub fn rt_pow_int(b: int, e: int) -> int {
 // `.keys()` / `.get(k)` / `.set(k, v)` method syntax — codegen lowers
 // those to the C primitives with hexa_to_cstring wrapping.
 //
+// Step 4 cycle 95 — map_values + filter_keys callback ports.
+// `fn_v(v)` lowers to `hexa_call1(fn_v, v)`.
+pub fn rt_map_map_values(m: HexaVal, fn_v: HexaVal, empty: HexaVal) -> HexaVal {
+    let mut out = empty
+    let keys = m.keys()
+    let n = len(keys)
+    let mut i = 0
+    while i < n {
+        let k = keys[i]
+        let v = m.get(k)
+        out = out.set(k, fn_v(v))
+        i = i + 1
+    }
+    return out
+}
+
+pub fn rt_map_filter_keys(m: HexaVal, fn_v: HexaVal, empty: HexaVal) -> HexaVal {
+    let mut out = empty
+    let keys = m.keys()
+    let n = len(keys)
+    let mut i = 0
+    while i < n {
+        let k = keys[i]
+        if fn_v(k) {
+            let v = m.get(k)
+            out = out.set(k, v)
+        }
+        i = i + 1
+    }
+    return out
+}
+
 // Step 4 cycle 94 — map count/any/all with predicate callback. Each
 // pred is `fn(key, value)` lowered to hexa_call2 via cycle-63's
 // callback POC. Returns int (count) or bool. C wrapper handles
