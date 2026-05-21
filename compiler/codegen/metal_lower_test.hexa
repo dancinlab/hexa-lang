@@ -4,11 +4,12 @@
 // @capabilities [pure]
 //
 // RFC 075 P1+P2+P3+ codegen-only smoke. The codegen entry
-// `codegen_emit_metal_msl` now recognises THIRTEEN MIR shapes (vec-add,
+// `codegen_emit_metal_msl` now recognises SEVENTEEN MIR shapes (vec-add,
 // vec-mul, vec-sub, vec-div, vec-scale, vec-neg, vec-abs, vec-sqrt,
-// vec-exp, vec-log, vec-sin, vec-cos) and emits real MSL kernel source
-// for each. Empty / unrecognised modules continue to return `""`
-// honestly (P0 contract preserved — Case 1 still PASS).
+// vec-exp, vec-log, vec-sin, vec-cos, reduce-sum, matmul, matmul_NT_a,
+// matmul_NT_b, matmul_bf16) and emits real MSL kernel source for each.
+// Empty / unrecognised modules continue to return `""` honestly (P0
+// contract preserved — Case 1 still PASS).
 //
 // Case roster:
 //   Case 1 — P0 empty-module emit returns `""`
@@ -72,6 +73,29 @@
 //            (STMT_UNOP("cos")), invoke `codegen_emit_metal_msl`,
 //            assert the 2-buffer signature + `cos(a[i])` MSL builtin
 //            call (cite Metal Shading Language Specification §5.10).
+//   Case 21 — F-RFC075-METAL-EMIT-VEC-MAX: synthesize vec-max MIR
+//            (STMT_BINOP("max")), invoke `codegen_emit_metal_msl`,
+//            assert the 3-buffer signature + `max(a[i], b[i])` MSL
+//            builtin call (function-call form, NOT infix). Negative
+//            guards: ` + ` / ` * ` / ` - ` / ` / ` ABSENT (no inherited
+//            infix binop). (cite MSL Spec §5.10 — math functions.)
+//   Case 22 — F-RFC075-METAL-EMIT-VEC-MIN: synthesize vec-min MIR
+//            (STMT_BINOP("min")), invoke `codegen_emit_metal_msl`,
+//            assert the 3-buffer signature + `min(a[i], b[i])` MSL
+//            builtin call (function-call form, NOT infix). Same
+//            negative-guard set as vec-max.
+//   Case 23 — F-RFC075-METAL-EMIT-VEC-FLOOR: synthesize vec-floor MIR
+//            (STMT_UNOP("floor")), invoke `codegen_emit_metal_msl`,
+//            assert the 2-buffer signature + `floor(a[i])` MSL builtin
+//            call (cite MSL Spec §5.10).
+//   Case 24 — F-RFC075-METAL-EMIT-VEC-CEIL: synthesize vec-ceil MIR
+//            (STMT_UNOP("ceil")), invoke `codegen_emit_metal_msl`,
+//            assert the 2-buffer signature + `ceil(a[i])` MSL builtin
+//            call (cite MSL Spec §5.10).
+//   Case 25 — F-RFC075-METAL-EMIT-VEC-ROUND: synthesize vec-round MIR
+//            (STMT_UNOP("round")), invoke `codegen_emit_metal_msl`,
+//            assert the 2-buffer signature + `round(a[i])` MSL builtin
+//            call (cite MSL Spec §5.10).
 //
 // Run:
 //   hexa build compiler/codegen/metal_lower_test.hexa -o build/metal_lower_test
@@ -272,6 +296,32 @@ fn _stmt_binop_div(dst: Local, lhs: i64, rhs: i64) -> Stmt {
     }
 }
 
+// _stmt_binop_max — STMT_BINOP("max") for `c[i] = max(a[i], b[i])`.
+// SYNTHETIC opcode — drives the vec-max shape recogniser. Lowering uses
+// MSL function-call form `max(x, y)`, NOT an infix operator.
+fn _stmt_binop_max(dst: Local, lhs: i64, rhs: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(lhs))
+    xs.push(_op_local(rhs))
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: "max", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+// _stmt_binop_min — STMT_BINOP("min") for `c[i] = min(a[i], b[i])`.
+// SYNTHETIC opcode — drives the vec-min shape recogniser. Lowering uses
+// MSL function-call form `min(x, y)`, NOT an infix operator.
+fn _stmt_binop_min(dst: Local, lhs: i64, rhs: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(lhs))
+    xs.push(_op_local(rhs))
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: "min", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
 // _stmt_unop — emit a STMT_UNOP statement with op string
 // ("neg" / "abs" / "sqrt"). UNOP carries a SINGLE local operand
 // (no rhs) — matches `_metal_mfunc_is_unary_shape_with_op`'s arity
@@ -300,6 +350,66 @@ fn _stmt_binop_mul_scalar(dst: Local, lhs: i64, scalar: f64) -> Stmt {
     xs.push(_op_const_float(scalar))
     return Stmt {
         kind: STMT_BINOP, dst: dst, op: "mul", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+// _stmt_binop_matmul — STMT_BINOP("matmul") for plain `C = A · B`.
+// SYNTHETIC opcode — drives the matmul shape recogniser scaffold.
+fn _stmt_binop_matmul(dst: Local, lhs: i64, rhs: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(lhs))
+    xs.push(_op_local(rhs))
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: "matmul", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+// _stmt_binop_matmul_NT_a — STMT_BINOP("matmul_NT_a") for `C = A^T · B`.
+// SYNTHETIC opcode — drives flame ag_linear backward `dW = x^T · dy` scaffold.
+fn _stmt_binop_matmul_NT_a(dst: Local, lhs: i64, rhs: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(lhs))
+    xs.push(_op_local(rhs))
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: "matmul_NT_a", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+// _stmt_binop_matmul_NT_b — STMT_BINOP("matmul_NT_b") for `C = A · B^T`.
+// SYNTHETIC opcode — drives flame ag_linear backward `dx = dy · W^T` scaffold.
+fn _stmt_binop_matmul_NT_b(dst: Local, lhs: i64, rhs: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(lhs))
+    xs.push(_op_local(rhs))
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: "matmul_NT_b", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+// _stmt_binop_matmul_bf16 — STMT_BINOP("matmul_bf16") for `C = A · B`
+// with bfloat A/B + FP32 accumulator (mixed-precision MMA). N30
+// template + N36 bfloat type substitution.
+fn _stmt_binop_matmul_bf16(dst: Local, lhs: i64, rhs: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(lhs))
+    xs.push(_op_local(rhs))
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: "matmul_bf16", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+// _stmt_unop_reduce_sum — STMT_UNOP("reduce_sum") for `c[g] = simd_sum(a[i])`.
+// SYNTHETIC opcode — drives the reduce-sum shape recogniser scaffold.
+fn _stmt_unop_reduce_sum(dst: Local, src: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(src))
+    return Stmt {
+        kind: STMT_UNOP, dst: dst, op: "reduce_sum", args: xs,
         target_block: -1, target_block_else: -1
     }
 }
@@ -879,6 +989,116 @@ fn _build_vec_cos_module() -> MModule {
     return _build_vec_unary_module("cos", "vec_cos", "metal_vec_cos.hexa")
 }
 
+fn _build_vec_floor_module() -> MModule {
+    return _build_vec_unary_module("floor", "vec_floor", "metal_vec_floor.hexa")
+}
+
+fn _build_vec_ceil_module() -> MModule {
+    return _build_vec_unary_module("ceil", "vec_ceil", "metal_vec_ceil.hexa")
+}
+
+fn _build_vec_round_module() -> MModule {
+    return _build_vec_unary_module("round", "vec_round", "metal_vec_round.hexa")
+}
+
+// ── vec-max / vec-min MIR fixtures (Cases 21-22) ─────────────────────
+//
+// 3-buffer binary kernels: read inputs a + b → write output c. The
+// BINOP op string ("max" / "min") drives the shape recogniser. Emit
+// lowering uses MSL function-call form `max(a[i], b[i])` (NOT infix).
+
+fn _build_vec_max_module() -> MModule {
+    let a  = _kern_local(0, "a")
+    let b  = _kern_local(1, "b")
+    let c  = _kern_local(2, "c")
+    let va = _priv_local(3, "va")
+    let vb = _priv_local(4, "vb")
+    let vc = _priv_local(5, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_load(vb, b.id))
+    s.push(_stmt_binop_max(vc, va.id, vb.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vb)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "vec_max",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "metal_vec_max.hexa", funcs: fns, globals: [] }
+}
+
+fn _build_vec_min_module() -> MModule {
+    let a  = _kern_local(0, "a")
+    let b  = _kern_local(1, "b")
+    let c  = _kern_local(2, "c")
+    let va = _priv_local(3, "va")
+    let vb = _priv_local(4, "vb")
+    let vc = _priv_local(5, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_load(vb, b.id))
+    s.push(_stmt_binop_min(vc, va.id, vb.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vb)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "vec_min",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "metal_vec_min.hexa", funcs: fns, globals: [] }
+}
+
 // ── Case 9 — F-RFC075-METAL-EMIT-VEC-NEG ─────────────────────────────
 //
 // Synthesise a vec-neg MIR module (`c[i] = -a[i]`), invoke
@@ -1169,6 +1389,641 @@ fn _test_vec_cos_emit() -> bool {
     return ok
 }
 
+// ── Case 21 — F-RFC075-METAL-EMIT-VEC-MAX ────────────────────────────
+//
+// Synthesise a vec-max MIR module (`c[i] = max(a[i], b[i])`), invoke
+// `codegen_emit_metal_msl`, and assert the emitted MSL kernel source
+// uses the 3-buffer signature and the MSL builtin `max(float, float)`
+// function-call form (NOT an infix operator). Negative guards make
+// sure no inherited binop fragment (` + ` / ` - ` / ` * ` / ` / `)
+// leaks into the body. (cite MSL Spec §5.10.)
+
+fn _test_vec_max_emit() -> bool {
+    let mut ok = true
+    let mod_vx = _build_vec_max_module()
+    let msl = codegen_emit_metal_msl(mod_vx)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ vec-max case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-VEC-MAX substring battery — 15 positive.
+    ok = _check_contains(ok, msl, "#include <metal_stdlib>",     "MSL preamble include")
+    ok = _check_contains(ok, msl, "using namespace metal;",      "MSL namespace using-directive")
+    ok = _check_contains(ok, msl, "kernel void",                 "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "vec_max",                     "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "device const float*",         "read-only device pointer parameter")
+    ok = _check_contains(ok, msl, "device float*",               "writable device pointer parameter")
+    ok = _check_contains(ok, msl, "[[buffer(0)]]",               "buffer(0) binding attribute (a)")
+    ok = _check_contains(ok, msl, "[[buffer(1)]]",               "buffer(1) binding attribute (b)")
+    ok = _check_contains(ok, msl, "[[buffer(2)]]",               "buffer(2) binding attribute (c)")
+    ok = _check_contains(ok, msl, "[[thread_position_in_grid]]", "thread-position attribute")
+    ok = _check_contains(ok, msl, "c[i]",                        "writable buffer index `c[i]`")
+    ok = _check_contains(ok, msl, "a[i]",                        "read buffer index `a[i]`")
+    ok = _check_contains(ok, msl, "b[i]",                        "read buffer index `b[i]`")
+    ok = _check_contains(ok, msl, "max(",                        "MSL builtin call `max(`")
+    ok = _check_contains(ok, msl, "max(a[i], b[i])",             "full MSL call form `max(a[i], b[i])`")
+    // Negative — vec-max is function-call form, no infix binop fragments.
+    ok = _check_not_contains(ok, msl, " + ",                     "vec-max should not emit ` + ` (infix guard)")
+    ok = _check_not_contains(ok, msl, " - ",                     "vec-max should not emit ` - ` (infix guard)")
+    ok = _check_not_contains(ok, msl, " * ",                     "vec-max should not emit ` * ` (infix guard)")
+    ok = _check_not_contains(ok, msl, " / ",                     "vec-max should not emit ` / ` (infix guard)")
+    return ok
+}
+
+// ── Case 22 — F-RFC075-METAL-EMIT-VEC-MIN ────────────────────────────
+//
+// Synthesise a vec-min MIR module (`c[i] = min(a[i], b[i])`), invoke
+// `codegen_emit_metal_msl`, and assert the emitted MSL kernel source
+// uses the 3-buffer signature and the MSL builtin `min(float, float)`
+// function-call form (NOT an infix operator). Negative guards same as
+// vec-max. (cite MSL Spec §5.10.)
+
+fn _test_vec_min_emit() -> bool {
+    let mut ok = true
+    let mod_vn = _build_vec_min_module()
+    let msl = codegen_emit_metal_msl(mod_vn)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ vec-min case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-VEC-MIN substring battery — 15 positive.
+    ok = _check_contains(ok, msl, "#include <metal_stdlib>",     "MSL preamble include")
+    ok = _check_contains(ok, msl, "using namespace metal;",      "MSL namespace using-directive")
+    ok = _check_contains(ok, msl, "kernel void",                 "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "vec_min",                     "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "device const float*",         "read-only device pointer parameter")
+    ok = _check_contains(ok, msl, "device float*",               "writable device pointer parameter")
+    ok = _check_contains(ok, msl, "[[buffer(0)]]",               "buffer(0) binding attribute (a)")
+    ok = _check_contains(ok, msl, "[[buffer(1)]]",               "buffer(1) binding attribute (b)")
+    ok = _check_contains(ok, msl, "[[buffer(2)]]",               "buffer(2) binding attribute (c)")
+    ok = _check_contains(ok, msl, "[[thread_position_in_grid]]", "thread-position attribute")
+    ok = _check_contains(ok, msl, "c[i]",                        "writable buffer index `c[i]`")
+    ok = _check_contains(ok, msl, "a[i]",                        "read buffer index `a[i]`")
+    ok = _check_contains(ok, msl, "b[i]",                        "read buffer index `b[i]`")
+    ok = _check_contains(ok, msl, "min(",                        "MSL builtin call `min(`")
+    ok = _check_contains(ok, msl, "min(a[i], b[i])",             "full MSL call form `min(a[i], b[i])`")
+    // Negative — vec-min is function-call form, no infix binop fragments.
+    ok = _check_not_contains(ok, msl, " + ",                     "vec-min should not emit ` + ` (infix guard)")
+    ok = _check_not_contains(ok, msl, " - ",                     "vec-min should not emit ` - ` (infix guard)")
+    ok = _check_not_contains(ok, msl, " * ",                     "vec-min should not emit ` * ` (infix guard)")
+    ok = _check_not_contains(ok, msl, " / ",                     "vec-min should not emit ` / ` (infix guard)")
+    return ok
+}
+
+// ── Case 23 — F-RFC075-METAL-EMIT-VEC-FLOOR ──────────────────────────
+//
+// Synthesise a vec-floor MIR module (`c[i] = floor(a[i])`), invoke
+// `codegen_emit_metal_msl`, and assert the emitted MSL kernel source
+// uses the 2-buffer signature and the MSL builtin `floor(float)` call
+// (cite MSL Spec §5.10).
+
+fn _test_vec_floor_emit() -> bool {
+    let mut ok = true
+    let mod_vf = _build_vec_floor_module()
+    let msl = codegen_emit_metal_msl(mod_vf)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ vec-floor case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-VEC-FLOOR substring battery — 15 positive.
+    ok = _check_contains(ok, msl, "#include <metal_stdlib>",     "MSL preamble include")
+    ok = _check_contains(ok, msl, "using namespace metal;",      "MSL namespace using-directive")
+    ok = _check_contains(ok, msl, "kernel void",                 "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "vec_floor",                   "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "device const float*",         "read-only device pointer parameter")
+    ok = _check_contains(ok, msl, "device float*",               "writable device pointer parameter")
+    ok = _check_contains(ok, msl, "[[buffer(0)]]",               "buffer(0) binding attribute (a)")
+    ok = _check_contains(ok, msl, "[[buffer(1)]]",               "buffer(1) binding attribute (c)")
+    ok = _check_contains(ok, msl, "[[thread_position_in_grid]]", "thread-position attribute")
+    ok = _check_contains(ok, msl, "c[i]",                        "writable buffer index `c[i]`")
+    ok = _check_contains(ok, msl, "a[i]",                        "read buffer index `a[i]`")
+    ok = _check_contains(ok, msl, "floor(",                      "MSL builtin call `floor(`")
+    ok = _check_contains(ok, msl, "floor(a[i])",                 "full MSL call form `floor(a[i])`")
+    ok = _check_contains(ok, msl, ";",                           "statement terminator")
+    ok = _check_contains(ok, msl, "uint i",                      "thread-index parameter declaration")
+    // Negative — vec-floor is 2-buffer, must NOT name `b[i]` or bind buffer(2),
+    // and must not emit binop add/mul fragments.
+    ok = _check_not_contains(ok, msl, "b[i]",                    "vec-floor should not name `b[i]` (2-buffer guard)")
+    ok = _check_not_contains(ok, msl, "[[buffer(2)]]",           "vec-floor should not bind `[[buffer(2)]]` (2-buffer guard)")
+    ok = _check_not_contains(ok, msl, " + ",                     "vec-floor should not emit ` + ` (binop guard)")
+    ok = _check_not_contains(ok, msl, " * ",                     "vec-floor should not emit ` * ` (binop guard)")
+    return ok
+}
+
+// ── Case 24 — F-RFC075-METAL-EMIT-VEC-CEIL ───────────────────────────
+//
+// Synthesise a vec-ceil MIR module (`c[i] = ceil(a[i])`), invoke
+// `codegen_emit_metal_msl`, and assert the emitted MSL kernel source
+// uses the 2-buffer signature and the MSL builtin `ceil(float)` call
+// (cite MSL Spec §5.10).
+
+fn _test_vec_ceil_emit() -> bool {
+    let mut ok = true
+    let mod_vc = _build_vec_ceil_module()
+    let msl = codegen_emit_metal_msl(mod_vc)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ vec-ceil case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-VEC-CEIL substring battery — 15 positive.
+    ok = _check_contains(ok, msl, "#include <metal_stdlib>",     "MSL preamble include")
+    ok = _check_contains(ok, msl, "using namespace metal;",      "MSL namespace using-directive")
+    ok = _check_contains(ok, msl, "kernel void",                 "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "vec_ceil",                    "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "device const float*",         "read-only device pointer parameter")
+    ok = _check_contains(ok, msl, "device float*",               "writable device pointer parameter")
+    ok = _check_contains(ok, msl, "[[buffer(0)]]",               "buffer(0) binding attribute (a)")
+    ok = _check_contains(ok, msl, "[[buffer(1)]]",               "buffer(1) binding attribute (c)")
+    ok = _check_contains(ok, msl, "[[thread_position_in_grid]]", "thread-position attribute")
+    ok = _check_contains(ok, msl, "c[i]",                        "writable buffer index `c[i]`")
+    ok = _check_contains(ok, msl, "a[i]",                        "read buffer index `a[i]`")
+    ok = _check_contains(ok, msl, "ceil(",                       "MSL builtin call `ceil(`")
+    ok = _check_contains(ok, msl, "ceil(a[i])",                  "full MSL call form `ceil(a[i])`")
+    ok = _check_contains(ok, msl, ";",                           "statement terminator")
+    ok = _check_contains(ok, msl, "uint i",                      "thread-index parameter declaration")
+    // Negative — vec-ceil is 2-buffer, must NOT name `b[i]` or bind buffer(2),
+    // and must not emit binop add/mul fragments.
+    ok = _check_not_contains(ok, msl, "b[i]",                    "vec-ceil should not name `b[i]` (2-buffer guard)")
+    ok = _check_not_contains(ok, msl, "[[buffer(2)]]",           "vec-ceil should not bind `[[buffer(2)]]` (2-buffer guard)")
+    ok = _check_not_contains(ok, msl, " + ",                     "vec-ceil should not emit ` + ` (binop guard)")
+    ok = _check_not_contains(ok, msl, " * ",                     "vec-ceil should not emit ` * ` (binop guard)")
+    return ok
+}
+
+// ── Case 25 — F-RFC075-METAL-EMIT-VEC-ROUND ──────────────────────────
+//
+// Synthesise a vec-round MIR module (`c[i] = round(a[i])`), invoke
+// `codegen_emit_metal_msl`, and assert the emitted MSL kernel source
+// uses the 2-buffer signature and the MSL builtin `round(float)` call
+// (cite MSL Spec §5.10).
+
+fn _test_vec_round_emit() -> bool {
+    let mut ok = true
+    let mod_vr = _build_vec_round_module()
+    let msl = codegen_emit_metal_msl(mod_vr)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ vec-round case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-VEC-ROUND substring battery — 15 positive.
+    ok = _check_contains(ok, msl, "#include <metal_stdlib>",     "MSL preamble include")
+    ok = _check_contains(ok, msl, "using namespace metal;",      "MSL namespace using-directive")
+    ok = _check_contains(ok, msl, "kernel void",                 "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "vec_round",                   "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "device const float*",         "read-only device pointer parameter")
+    ok = _check_contains(ok, msl, "device float*",               "writable device pointer parameter")
+    ok = _check_contains(ok, msl, "[[buffer(0)]]",               "buffer(0) binding attribute (a)")
+    ok = _check_contains(ok, msl, "[[buffer(1)]]",               "buffer(1) binding attribute (c)")
+    ok = _check_contains(ok, msl, "[[thread_position_in_grid]]", "thread-position attribute")
+    ok = _check_contains(ok, msl, "c[i]",                        "writable buffer index `c[i]`")
+    ok = _check_contains(ok, msl, "a[i]",                        "read buffer index `a[i]`")
+    ok = _check_contains(ok, msl, "round(",                      "MSL builtin call `round(`")
+    ok = _check_contains(ok, msl, "round(a[i])",                 "full MSL call form `round(a[i])`")
+    ok = _check_contains(ok, msl, ";",                           "statement terminator")
+    ok = _check_contains(ok, msl, "uint i",                      "thread-index parameter declaration")
+    // Negative — vec-round is 2-buffer, must NOT name `b[i]` or bind buffer(2),
+    // and must not emit binop add/mul fragments.
+    ok = _check_not_contains(ok, msl, "b[i]",                    "vec-round should not name `b[i]` (2-buffer guard)")
+    ok = _check_not_contains(ok, msl, "[[buffer(2)]]",           "vec-round should not bind `[[buffer(2)]]` (2-buffer guard)")
+    ok = _check_not_contains(ok, msl, " + ",                     "vec-round should not emit ` + ` (binop guard)")
+    ok = _check_not_contains(ok, msl, " * ",                     "vec-round should not emit ` * ` (binop guard)")
+    return ok
+}
+
+// ── reduce-sum MIR fixture (Case 16) ─────────────────────────────────
+
+fn _build_reduce_sum_module() -> MModule {
+    // Two kernel-buffer params (a, c) + two private Locals (va, vc).
+    // Stmt sequence: STMT_LOAD a→va, STMT_UNOP("reduce_sum") va→vc,
+    // STMT_STORE vc→c. Output buffer `c` is per-SIMD-group sized
+    // (host-side N/32). SYNTHETIC opcode.
+    let a  = _kern_local(0, "a")
+    let c  = _kern_local(1, "c")
+    let va = _priv_local(2, "va")
+    let vc = _priv_local(3, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_unop_reduce_sum(vc, va.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "reduce_sum",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "metal_reduce_sum.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 16 — F-RFC075-METAL-EMIT-REDUCE-SUM ─────────────────────────
+//
+// Synthesise the FIRST non-element-wise MIR shape (reduce-sum), invoke
+// `codegen_emit_metal_msl`, and assert the emitted MSL kernel source
+// contains the Apple-canonical per-SIMD-group reduction intrinsics
+// (`simd_sum`, `simd_is_first`), the group-id index expression, and
+// the 2-buffer kernel signature (NOT the 3-buffer vec-* signature).
+
+fn _test_reduce_sum_emit() -> bool {
+    let mut ok = true
+    let mod_rs = _build_reduce_sum_module()
+    let msl = codegen_emit_metal_msl(mod_rs)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ reduce-sum case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-REDUCE-SUM substring battery — 15 positives.
+    ok = _check_contains(ok, msl, "#include <metal_stdlib>",     "MSL preamble include")
+    ok = _check_contains(ok, msl, "using namespace metal;",      "MSL namespace using-directive")
+    ok = _check_contains(ok, msl, "kernel void",                 "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "reduce_sum",                  "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "device const float*",         "read-only device pointer parameter (input)")
+    ok = _check_contains(ok, msl, "device float*",               "writable device pointer parameter (output)")
+    ok = _check_contains(ok, msl, "[[buffer(0)]]",               "buffer(0) binding (input)")
+    ok = _check_contains(ok, msl, "[[buffer(1)]]",               "buffer(1) binding (output) — 2-buffer signature")
+    ok = _check_contains(ok, msl, "[[thread_position_in_grid]]", "thread-position attribute")
+    ok = _check_contains(ok, msl, "simd_sum",                    "Apple per-SIMD-group reduce intrinsic")
+    ok = _check_contains(ok, msl, "simd_is_first",               "lane-0 predicate")
+    ok = _check_contains(ok, msl, "a[i]",                        "input load `a[i]`")
+    ok = _check_contains(ok, msl, "group_id",                    "per-SIMD-group output index variable")
+    ok = _check_contains(ok, msl, "c[group_id]",                 "per-group output write `c[group_id]`")
+    ok = _check_contains(ok, msl, "i / 32u",                     "group_id = i / 32 (SIMD-group width)")
+    // Negative — reduce-sum is unary (no second input, no 3rd buffer,
+    // no element-wise binary +/* between two loaded values).
+    ok = _check_not_contains(ok, msl, "b[i]",                    "reduce-sum should not load `b[i]` (single-input)")
+    ok = _check_not_contains(ok, msl, "[[buffer(2)]]",           "reduce-sum should not bind buffer(2) (2-buffer signature)")
+    ok = _check_not_contains(ok, msl, " + ",                     "reduce-sum should not emit ` + ` (unary reduction)")
+    ok = _check_not_contains(ok, msl, " * ",                     "reduce-sum should not emit ` * ` (unary reduction)")
+    return ok
+}
+
+// ── matmul MIR fixture (Case 17) ─────────────────────────────────────
+
+fn _build_matmul_module() -> MModule {
+    let a  = _kern_local(0, "a")
+    let b  = _kern_local(1, "b")
+    let c  = _kern_local(2, "c")
+    let va = _priv_local(3, "va")
+    let vb = _priv_local(4, "vb")
+    let vc = _priv_local(5, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_load(vb, b.id))
+    s.push(_stmt_binop_matmul(vc, va.id, vb.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vb)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "matmul",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "metal_matmul.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 17 — F-RFC075-METAL-EMIT-MATMUL ─────────────────────────────
+
+fn _test_matmul_emit() -> bool {
+    let mut ok = true
+    let mod_mm = _build_matmul_module()
+    let msl = codegen_emit_metal_msl(mod_mm)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ matmul / MMA case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-MATMUL — 15 positives + 4 negative guards.
+    ok = _check_contains(ok, msl, "#include <metal_stdlib>",          "MSL preamble include")
+    ok = _check_contains(ok, msl, "#include <metal_simdgroup_matrix>","MMA simdgroup-matrix header include")
+    ok = _check_contains(ok, msl, "kernel void",                      "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "matmul",                           "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "[[buffer(2)]]",                    "buffer(2) binding (c)")
+    ok = _check_contains(ok, msl, "[[buffer(5)]]",                    "buffer(5) binding (K dim)")
+    ok = _check_contains(ok, msl, "constant uint& M",                 "constant scalar M param")
+    ok = _check_contains(ok, msl, "[[simdgroup_index_in_threadgroup]]","sgid attribute")
+    ok = _check_contains(ok, msl, "simdgroup_matrix<float, 8, 8>",    "MMA tile type")
+    ok = _check_contains(ok, msl, "make_filled_simdgroup_matrix",     "MMA accumulator constructor")
+    ok = _check_contains(ok, msl, "simdgroup_load",                   "MMA load intrinsic")
+    ok = _check_contains(ok, msl, "simdgroup_multiply_accumulate",    "MMA multiply-accumulate intrinsic")
+    ok = _check_contains(ok, msl, "simdgroup_store",                  "MMA store intrinsic")
+    ok = _check_contains(ok, msl, "threadgroup_barrier",              "threadgroup barrier (sync)")
+    ok = _check_contains(ok, msl, "for (uint kk",                     "K-loop control")
+    // Negative guards.
+    ok = _check_not_contains(ok, msl, "b[i]",                         "matmul should not emit `b[i]` (element-wise guard)")
+    ok = _check_not_contains(ok, msl, "c[i] = a[i] + b[i]",           "matmul should not emit vec-add body")
+    ok = _check_not_contains(ok, msl, "c[i] = a[i] * b[i]",           "matmul should not emit vec-mul body")
+    ok = _check_not_contains(ok, msl, "simd_sum",                     "matmul should not emit reduce-sum body")
+    return ok
+}
+
+// ── matmul_NT_a MIR fixture (Case 18) ────────────────────────────────
+
+fn _build_matmul_NT_a_module() -> MModule {
+    let a  = _kern_local(0, "a")
+    let b  = _kern_local(1, "b")
+    let c  = _kern_local(2, "c")
+    let va = _priv_local(3, "va")
+    let vb = _priv_local(4, "vb")
+    let vc = _priv_local(5, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_load(vb, b.id))
+    s.push(_stmt_binop_matmul_NT_a(vc, va.id, vb.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vb)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "matmul_NT_a",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "metal_matmul_NT_a.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 18 — F-RFC075-METAL-EMIT-MATMUL-NT-A ────────────────────────
+
+fn _test_matmul_NT_a_emit() -> bool {
+    let mut ok = true
+    let mod_mm = _build_matmul_NT_a_module()
+    let msl = codegen_emit_metal_msl(mod_mm)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ matmul_NT_a / MMA case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-MATMUL-NT-A — 15 positives + 4 negative guards.
+    ok = _check_contains(ok, msl, "#include <metal_simdgroup_matrix>","MMA simdgroup-matrix header include")
+    ok = _check_contains(ok, msl, "kernel void",                      "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "matmul_NT_a",                      "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "[[buffer(5)]]",                    "buffer(5) binding (K dim)")
+    ok = _check_contains(ok, msl, "constant uint& M",                 "constant scalar M param")
+    ok = _check_contains(ok, msl, "simdgroup_matrix<float, 8, 8>",    "MMA tile type")
+    ok = _check_contains(ok, msl, "simdgroup_load",                   "MMA load intrinsic")
+    ok = _check_contains(ok, msl, "simdgroup_multiply_accumulate",    "MMA multiply-accumulate intrinsic")
+    ok = _check_contains(ok, msl, "simdgroup_store",                  "MMA store intrinsic")
+    ok = _check_contains(ok, msl, "for (uint kk",                     "K-loop control")
+    // NT-A specific: transpose=true on Amat path.
+    ok = _check_contains(ok, msl, "(Amat, As, ulong(TG_M)",           "NT-A: Amat loads from As with TG_M row-stride")
+    ok = _check_contains(ok, msl, ", true);",                         "NT-A: at least one transpose=true simdgroup_load")
+    ok = _check_contains(ok, msl, "(Bmat, Bs, ulong(TG_N)",           "NT-A: Bmat loads from Bs with TG_N row-stride (plain)")
+    ok = _check_contains(ok, msl, "a_col = block_row_base + cc",      "NT-A: A cooperative-load col indexes M-band")
+    ok = _check_contains(ok, msl, "a[a_row * M + a_col]",             "NT-A: A read uses K×M row-major stride M")
+    // Negative guards.
+    ok = _check_not_contains(ok, msl, "b[i]",                         "matmul_NT_a should not emit `b[i]` (element-wise guard)")
+    ok = _check_not_contains(ok, msl, "c[i] = a[i] + b[i]",           "matmul_NT_a should not emit vec-add body")
+    ok = _check_not_contains(ok, msl, "c[i] = a[i] * b[i]",           "matmul_NT_a should not emit vec-mul body")
+    ok = _check_not_contains(ok, msl, "a_col = kk * 8u + cc",         "matmul_NT_a must not use plain-matmul A K-band col")
+    return ok
+}
+
+// ── matmul_NT_b MIR fixture (Case 19) ────────────────────────────────
+
+fn _build_matmul_NT_b_module() -> MModule {
+    let a  = _kern_local(0, "a")
+    let b  = _kern_local(1, "b")
+    let c  = _kern_local(2, "c")
+    let va = _priv_local(3, "va")
+    let vb = _priv_local(4, "vb")
+    let vc = _priv_local(5, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_load(vb, b.id))
+    s.push(_stmt_binop_matmul_NT_b(vc, va.id, vb.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vb)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "matmul_NT_b",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "metal_matmul_NT_b.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 19 — F-RFC075-METAL-EMIT-MATMUL-NT-B ────────────────────────
+
+fn _test_matmul_NT_b_emit() -> bool {
+    let mut ok = true
+    let mod_mm = _build_matmul_NT_b_module()
+    let msl = codegen_emit_metal_msl(mod_mm)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ matmul_NT_b / MMA case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-MATMUL-NT-B — 15 positives + 4 negative guards.
+    ok = _check_contains(ok, msl, "#include <metal_simdgroup_matrix>","MMA simdgroup-matrix header include")
+    ok = _check_contains(ok, msl, "kernel void",                      "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "matmul_NT_b",                      "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "[[buffer(5)]]",                    "buffer(5) binding (K dim)")
+    ok = _check_contains(ok, msl, "constant uint& K",                 "constant scalar K param")
+    ok = _check_contains(ok, msl, "simdgroup_matrix<float, 8, 8>",    "MMA tile type")
+    ok = _check_contains(ok, msl, "simdgroup_load",                   "MMA load intrinsic")
+    ok = _check_contains(ok, msl, "simdgroup_multiply_accumulate",    "MMA multiply-accumulate intrinsic")
+    ok = _check_contains(ok, msl, "simdgroup_store",                  "MMA store intrinsic")
+    ok = _check_contains(ok, msl, "for (uint kk",                     "K-loop control")
+    // NT-B specific: transpose=true on Bmat path.
+    ok = _check_contains(ok, msl, "(Bmat, Bs, ulong(TG_K)",           "NT-B: Bmat loads from Bs with TG_K row-stride")
+    ok = _check_contains(ok, msl, ", true);",                         "NT-B: at least one transpose=true simdgroup_load")
+    ok = _check_contains(ok, msl, "(Amat, As, ulong(TG_K)",           "NT-B: Amat loads from As with TG_K row-stride (plain)")
+    ok = _check_contains(ok, msl, "b_row = block_col_base + r",       "NT-B: B cooperative-load row indexes N-band")
+    ok = _check_contains(ok, msl, "b[b_row * K + b_col]",             "NT-B: B read uses N×K row-major stride K")
+    // Negative guards.
+    ok = _check_not_contains(ok, msl, "b[i]",                         "matmul_NT_b should not emit `b[i]` (element-wise guard)")
+    ok = _check_not_contains(ok, msl, "c[i] = a[i] + b[i]",           "matmul_NT_b should not emit vec-add body")
+    ok = _check_not_contains(ok, msl, "c[i] = a[i] * b[i]",           "matmul_NT_b should not emit vec-mul body")
+    ok = _check_not_contains(ok, msl, "b_row = kk * 8u + r",          "matmul_NT_b must not use plain-matmul B K-band row")
+    return ok
+}
+
+// ── matmul_bf16 MIR fixture (Case 20) ────────────────────────────────
+
+fn _build_matmul_bf16_module() -> MModule {
+    let a  = _kern_local(0, "a")
+    let b  = _kern_local(1, "b")
+    let c  = _kern_local(2, "c")
+    let va = _priv_local(3, "va")
+    let vb = _priv_local(4, "vb")
+    let vc = _priv_local(5, "vc")
+
+    let mut s = []
+    s.push(_stmt_load(va, a.id))
+    s.push(_stmt_load(vb, b.id))
+    s.push(_stmt_binop_matmul_bf16(vc, va.id, vb.id))
+    s.push(_stmt_store(vc, c.id))
+    s.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(c)
+    locals.push(va)
+    locals.push(vb)
+    locals.push(vc)
+
+    let mf = MFunc {
+        name: "matmul_bf16",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "metal_matmul_bf16.hexa", funcs: fns, globals: [] }
+}
+
+// ── Case 20 — F-RFC075-METAL-EMIT-MATMUL-BF16 ────────────────────────
+//
+// Synthesise a matmul_bf16 MIR module (bfloat A/B + FP32 accumulator,
+// mixed-precision MMA — N30 template + N36 bfloat substitution),
+// invoke `codegen_emit_metal_msl`, and assert the emitted MSL kernel
+// source uses (a) bfloat input pointer typing on `a` / `b`, (b) FP32
+// `c` output, (c) `simdgroup_matrix<bfloat, 8, 8>` operand tile type,
+// (d) `simdgroup_matrix<float, 8, 8>` accumulator tile type.
+
+fn _test_matmul_bf16_emit() -> bool {
+    let mut ok = true
+    let mod_mm = _build_matmul_bf16_module()
+    let msl = codegen_emit_metal_msl(mod_mm)
+
+    println("")
+    println("── emitted MSL (RFC 075 P3+ matmul_bf16 / mixed-precision MMA case) ──")
+    println(msl)
+
+    // F-RFC075-METAL-EMIT-MATMUL-BF16 — 15 positives + 4 negative guards.
+    ok = _check_contains(ok, msl, "#include <metal_simdgroup_matrix>","MMA simdgroup-matrix header include")
+    ok = _check_contains(ok, msl, "kernel void",                      "kernel declaration `kernel void`")
+    ok = _check_contains(ok, msl, "matmul_bf16",                      "kernel name from MFunc.name")
+    ok = _check_contains(ok, msl, "device const bfloat*",             "bfloat read-only device pointer parameter")
+    ok = _check_contains(ok, msl, "device float*",                    "FP32 writable device pointer parameter (output)")
+    ok = _check_contains(ok, msl, "[[buffer(5)]]",                    "buffer(5) binding (K dim)")
+    ok = _check_contains(ok, msl, "constant uint& M",                 "constant scalar M param")
+    ok = _check_contains(ok, msl, "simdgroup_matrix<bfloat, 8, 8>",   "bf16 MMA operand tile type")
+    ok = _check_contains(ok, msl, "simdgroup_matrix<float, 8, 8>",    "FP32 MMA accumulator tile type")
+    ok = _check_contains(ok, msl, "make_filled_simdgroup_matrix<float, 8, 8>(0.0f)", "FP32 accumulator constructor")
+    ok = _check_contains(ok, msl, "threadgroup bfloat As[",           "bfloat threadgroup-mem A slab")
+    ok = _check_contains(ok, msl, "threadgroup bfloat Bs[",           "bfloat threadgroup-mem B slab")
+    ok = _check_contains(ok, msl, "simdgroup_multiply_accumulate",    "MMA multiply-accumulate intrinsic")
+    ok = _check_contains(ok, msl, "simdgroup_store",                  "MMA store intrinsic")
+    ok = _check_contains(ok, msl, "for (uint kk",                     "K-loop control")
+    // Negative guards.
+    ok = _check_not_contains(ok, msl, "b[i]",                         "matmul_bf16 should not emit `b[i]` (element-wise guard)")
+    ok = _check_not_contains(ok, msl, "c[i] = a[i] + b[i]",           "matmul_bf16 should not emit vec-add body")
+    ok = _check_not_contains(ok, msl, "device const float* a",        "matmul_bf16 input `a` must be bfloat, not float")
+    ok = _check_not_contains(ok, msl, "device const float* b",        "matmul_bf16 input `b` must be bfloat, not float")
+    return ok
+}
+
 fn main() {
     println("══════════════════════════════════════════════")
     println("  RFC 075 P1+P2+P3+ — Metal codegen smoke")
@@ -1189,10 +2044,20 @@ fn main() {
     let ok_vlog   = _test_vec_log_emit()
     let ok_vsin   = _test_vec_sin_emit()
     let ok_vcos   = _test_vec_cos_emit()
+    let ok_vmax   = _test_vec_max_emit()
+    let ok_vmin   = _test_vec_min_emit()
+    let ok_vfloor = _test_vec_floor_emit()
+    let ok_vceil  = _test_vec_ceil_emit()
+    let ok_vround = _test_vec_round_emit()
+    let ok_rsum   = _test_reduce_sum_emit()
+    let ok_mm     = _test_matmul_emit()
+    let ok_mm_nta = _test_matmul_NT_a_emit()
+    let ok_mm_ntb = _test_matmul_NT_b_emit()
+    let ok_mm_bf  = _test_matmul_bf16_emit()
 
     println("")
-    if ok_emit && ok_tgt && ok_vec && ok_class && ok_vmul && ok_vscale && ok_vsub && ok_vdiv && ok_vneg && ok_vabs && ok_vsqrt && ok_vexp && ok_vlog && ok_vsin && ok_vcos {
-        println("  PASS: RFC 075 P1+P2+P3+ Metal codegen smoke (vec-add + vec-mul + vec-sub + vec-div + vec-scale + vec-neg + vec-abs + vec-sqrt + vec-exp + vec-log + vec-sin + vec-cos)")
+    if ok_emit && ok_tgt && ok_vec && ok_class && ok_vmul && ok_vscale && ok_vsub && ok_vdiv && ok_vneg && ok_vabs && ok_vsqrt && ok_vexp && ok_vlog && ok_vsin && ok_vcos && ok_vmax && ok_vmin && ok_vfloor && ok_vceil && ok_vround && ok_rsum && ok_mm && ok_mm_nta && ok_mm_ntb && ok_mm_bf {
+        println("  PASS: RFC 075 P1+P2+P3+ Metal codegen smoke (vec-add + vec-mul + vec-sub + vec-div + vec-max + vec-min + vec-scale + vec-neg + vec-abs + vec-sqrt + vec-exp + vec-log + vec-sin + vec-cos + vec-floor + vec-ceil + vec-round + reduce-sum + matmul + matmul_NT_a + matmul_NT_b + matmul_bf16)")
     } else {
         println("  FAIL: RFC 075 P1+P2+P3+ Metal codegen smoke")
     }

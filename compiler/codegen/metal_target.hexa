@@ -167,6 +167,16 @@ pub let METAL_OP_EXP: string         = "exp"            // MSL builtin: exp(floa
 pub let METAL_OP_LOG: string         = "log"            // MSL builtin: log(float)
 pub let METAL_OP_SIN: string         = "sin"            // MSL builtin: sin(float)
 pub let METAL_OP_COS: string         = "cos"            // MSL builtin: cos(float)
+// RFC 075 P3+ element-wise extension — binary min/max + unary
+// floor/ceil/round MSL builtins. All five live in `<metal_stdlib>`
+// (MSL Spec §5.10 — common / math functions). `max(x,y)` / `min(x,y)`
+// are function-call form (NOT infix operators); `floor` / `ceil` /
+// `round` are single-argument unary builtins.
+pub let METAL_OP_MAX: string         = "max"            // MSL builtin: max(float, float) — binary
+pub let METAL_OP_MIN: string         = "min"            // MSL builtin: min(float, float) — binary
+pub let METAL_OP_FLOOR: string       = "floor"          // MSL builtin: floor(float)
+pub let METAL_OP_CEIL: string        = "ceil"           // MSL builtin: ceil(float)
+pub let METAL_OP_ROUND: string       = "round"          // MSL builtin: round(float)
 pub let METAL_OP_INDEX_OPEN: string  = "["              // array indexing open
 pub let METAL_OP_INDEX_CLOSE: string = "]"              // array indexing close
 pub let METAL_OP_ASSIGN: string      = " = "            // assignment (with spaces)
@@ -188,6 +198,51 @@ pub let METAL_OP_PREAMBLE_INCLUDE: string    = "#include <metal_stdlib>"        
 pub let METAL_OP_PREAMBLE_USING: string      = "using namespace metal;"         // metal namespace
 pub let METAL_OP_LOAD_F32_TEMPLATE: string   = "[i]"   // a[i] tail — emitted as <buf>[i]
 pub let METAL_OP_STORE_F32_TEMPLATE: string  = "[i]"   // c[i] tail — emitted as <buf>[i]
+
+// RFC 075 P3+ reduce-sum fragments (FIRST NON-ELEMENT-WISE SHAPE).
+// Apple-canonical per-SIMD-group reduction intrinsic + warp-leader gate.
+//   ref: Metal Shading Language Specification §6.9.2 SIMD-group functions
+// `simd_sum(x)` reduces across the 32-wide SIMD group (every lane gets
+// the same broadcast result). `simd_is_first()` returns true on lane 0
+// of the SIMD group — used to gate the single output write per group.
+// The output buffer is per-SIMD-group sized (N / 32 floats for N
+// threads); a full single-scalar reduction would require a second
+// kernel pass or a single-threadgroup launch — explicitly out of scope
+// for this codegen cycle.
+pub let METAL_OP_SIMD_SUM: string         = "simd_sum"        // per-SIMD-group reduce-add intrinsic
+pub let METAL_OP_SIMD_IS_FIRST: string    = "simd_is_first"   // lane-0 predicate
+pub let METAL_OP_SIMD_GROUP_DIV: string   = " / 32u"          // i / 32 → group id (literal kept ASCII)
+
+// RFC 075 P3+ MMA family — simdgroup_matrix FP32/bfloat MMA fragments.
+// MSL simdgroup-matrix builtins (Apple-canonical MMA primitives) +
+// threadgroup-mem barrier flag. Used by matmul / matmul_NT_a /
+// matmul_NT_b / matmul_bf16 emit paths.
+//   ref: Apple Metal header `<metal_simdgroup_matrix>` — defines
+//        `simdgroup_matrix<T,8,8>`, `simdgroup_load`,
+//        `simdgroup_multiply_accumulate`, `simdgroup_store`, plus the
+//        constructor `make_filled_simdgroup_matrix<T,8,8>(0)`.
+//   ref: N16 hand-emit kernel — commit `31d729a4`, `simdgroup_matmul_32x32_tg`
+//        in `inbox/fires/rfc075_metal_simdgroup_matmul_2026_05_21/`.
+pub let METAL_OP_SIMDGROUP_MATRIX: string = "simdgroup_matrix"                     // type template `simdgroup_matrix<T,8,8>`
+pub let METAL_OP_SIMDGROUP_LOAD: string   = "simdgroup_load"                       // MMA tile load from device/threadgroup
+pub let METAL_OP_SIMDGROUP_MMA: string    = "simdgroup_multiply_accumulate"        // C = A*B + C (8×8×8 MMA)
+pub let METAL_OP_SIMDGROUP_STORE: string  = "simdgroup_store"                      // MMA tile store back to device
+pub let METAL_OP_SIMDGROUP_PREAMBLE_INCLUDE: string = "#include <metal_simdgroup_matrix>"  // header for MMA types/intrinsics
+pub let METAL_OP_MAKE_FILLED_SIMDGROUP_MATRIX: string = "make_filled_simdgroup_matrix"  // tile-init constructor
+pub let METAL_OP_THREADGROUP_BARRIER: string = "threadgroup_barrier"               // intra-threadgroup sync
+pub let METAL_OP_SIMDGROUP_IDX_ATTR: string = "[[simdgroup_index_in_threadgroup]]" // sgid kernel-arg attribute
+pub let METAL_OP_THREAD_IDX_SIMD_ATTR: string = "[[thread_index_in_simdgroup]]"    // slid kernel-arg attribute
+pub let METAL_OP_THREADGROUP_POS_ATTR: string = "[[threadgroup_position_in_grid]]" // tgid kernel-arg attribute
+pub let METAL_OP_THREAD_POS_IN_TG_ATTR: string = "[[thread_position_in_threadgroup]]" // lid kernel-arg attribute
+pub let METAL_OP_MEM_FLAGS_TG: string     = "mem_flags::mem_threadgroup"           // threadgroup-mem fence flag
+
+// MSL bfloat element type (M3+ — bf16 hardware support landed M3).
+// Used by matmul_bf16 with `simdgroup_matrix<bfloat, 8, 8>` storage
+// + FP32 accumulator (mixed-precision MMA, ~2× throughput vs FP32 on
+// supported silicon).
+//   ref: Metal Shading Language Specification §2.5.1 (bfloat type),
+//        §6.7 (simdgroup_matrix bfloat overload).
+pub let METAL_TYPE_BFLOAT: string         = "bfloat"
 
 // ── MSL address spaces (lookup pair) ──────────────────────────
 //
@@ -555,6 +610,509 @@ fn _metal_emit_vec_cos_body() -> string {
     return out
 }
 
+// ── RFC 075 P3+ element-wise extension — vec-max/min (3-buffer binary)
+//
+// `max(a, b)` / `min(a, b)` are MSL builtins (`<metal_stdlib>` §5.10) —
+// function-call form, NOT infix operators. Distinguishes them from
+// vec-add/sub/mul/div which use `+`/`-`/`*`/`/`. Emits the same 3-buffer
+// kernel signature (a, b, c + thread index) used by the other binops.
+
+// _metal_emit_vec_max_body — emit the MSL kernel body for vec-max.
+// Hardcoded: `c[i] = max(a[i], b[i]);` with surrounding braces. Calls
+// the MSL builtin `max(float, float)` exposed by `<metal_stdlib>`.
+fn _metal_emit_vec_max_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_MAX + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + ", "
+    out = out + "b" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_min_body — emit the MSL kernel body for vec-min.
+// Hardcoded: `c[i] = min(a[i], b[i]);` with surrounding braces. Calls
+// the MSL builtin `min(float, float)` exposed by `<metal_stdlib>`.
+fn _metal_emit_vec_min_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_MIN + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + ", "
+    out = out + "b" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_floor_body — emit the MSL kernel body for vec-floor.
+// Hardcoded: `c[i] = floor(a[i]);` with surrounding braces. Calls the
+// MSL builtin `floor(float)` exposed by `<metal_stdlib>` (§5.10).
+// Uses the 2-buffer unary kernel signature.
+fn _metal_emit_vec_floor_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_FLOOR + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_ceil_body — emit the MSL kernel body for vec-ceil.
+// Hardcoded: `c[i] = ceil(a[i]);` with surrounding braces. Calls the
+// MSL builtin `ceil(float)` exposed by `<metal_stdlib>` (§5.10).
+// Uses the 2-buffer unary kernel signature.
+fn _metal_emit_vec_ceil_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_CEIL + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_round_body — emit the MSL kernel body for vec-round.
+// Hardcoded: `c[i] = round(a[i]);` with surrounding braces. Calls the
+// MSL builtin `round(float)` exposed by `<metal_stdlib>` (§5.10).
+// Uses the 2-buffer unary kernel signature.
+fn _metal_emit_vec_round_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_ROUND + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// ── RFC 075 P3+ reduce-sum — 2-buffer signature + body ─────────────
+//
+// FIRST NON-ELEMENT-WISE SHAPE. The reduce-sum kernel writes one
+// float per SIMD group (N/32 outputs for N inputs) using Apple's
+// `simd_sum` intrinsic + `simd_is_first()` lane-0 gate.
+
+// _metal_emit_reduce_kernel_signature — emit the 2-buffer signature
+// for reduce-sum (a, c) + thread-position-in-grid binding. Identical
+// to the unary 2-buffer signature today but kept as a separate helper
+// in case the future per-group output sizing diverges (e.g. binding
+// a second output stride scalar).
+fn _metal_emit_reduce_kernel_signature(name: string) -> string {
+    let mut out = METAL_OP_KERNEL_DECL + " " + name + "(\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR + "a "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "0" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_FLOAT_PTR + "c "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "1" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_TYPE_UINT + " i " + METAL_OP_THREAD_POS_GRID + ")\n"
+    return out
+}
+
+// _metal_emit_reduce_sum_body — emit the MSL kernel body for reduce-sum.
+// Per-SIMD-group output pattern:
+//   {
+//       float v = a[i];
+//       v = simd_sum(v);
+//       if (simd_is_first()) {
+//           uint group_id = i / 32u;
+//           c[group_id] = v;
+//       }
+//   }
+fn _metal_emit_reduce_sum_body() -> string {
+    let mut out = "{\n"
+    out = out + "    " + METAL_TYPE_FLOAT + " v" + METAL_OP_ASSIGN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "    v" + METAL_OP_ASSIGN + METAL_OP_SIMD_SUM + "(v)"
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "    if (" + METAL_OP_SIMD_IS_FIRST + "()) {\n"
+    out = out + "        " + METAL_TYPE_UINT + " group_id" + METAL_OP_ASSIGN
+    out = out + "i" + METAL_OP_SIMD_GROUP_DIV + METAL_OP_STMT_TERM + "\n"
+    out = out + "        c" + METAL_OP_INDEX_OPEN + "group_id" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN + "v" + METAL_OP_STMT_TERM + "\n"
+    out = out + "    }\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_mfunc_is_reduce_sum_shape — recognise the reduce-sum MIR shape.
+//
+// SYNTHETIC MIR SHAPE — STMT_LOAD a→va, STMT_UNOP("reduce_sum", va)→vc,
+// STMT_STORE vc→c. No HIR / parser produces this opcode today; the
+// recogniser is scaffold for the future `sum(array)` lowering.
+fn _metal_mfunc_is_reduce_sum_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 3 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_UNOP { return false }
+    if stmts[1].op != "reduce_sum" { return false }
+    if stmts[2].kind != STMT_STORE { return false }
+    return true
+}
+
+// ── RFC 075 P3+ MMA family — preamble + signature + bodies ──────────
+//
+// First multi-buffer (6-arg) signature in the Metal codegen — mirrors
+// the NVPTX `gemm` kernel signature but in MSL source-text form.
+// Body is hardcoded TG_M=32 · TG_N=32 · TG_K=8 with FP32 simdgroup-MMA;
+// general (M, N, K) emit + tile-search is multi-session.
+
+// _metal_emit_matmul_preamble — emit the MSL preamble for MMA shapes:
+// stdlib include + simdgroup-matrix include + namespace using.
+fn _metal_emit_matmul_preamble() -> string {
+    return METAL_OP_PREAMBLE_INCLUDE + "\n"
+         + METAL_OP_SIMDGROUP_PREAMBLE_INCLUDE + "\n"
+         + METAL_OP_PREAMBLE_USING + "\n\n"
+}
+
+// _metal_emit_matmul_kernel_signature — emit `kernel void <name>(...)`
+// with the 6-arg matmul signature: 3 device-pointer buffers (a, b, c)
+// + 3 scalar dim params (M, N, K) + 4 thread-hierarchy attributes
+// (tgid, lid, sgid, slid). Shared across matmul / matmul_NT_a /
+// matmul_NT_b / matmul_bf16 — only the body differs.
+fn _metal_emit_matmul_kernel_signature(name: string) -> string {
+    let mut out = METAL_OP_KERNEL_DECL + " " + name + "(\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR + "a "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "0" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_CONST_FLOAT_PTR + "b "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "1" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_FLOAT_PTR + "c "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "2" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    constant " + METAL_TYPE_UINT + "& M "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "3" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    constant " + METAL_TYPE_UINT + "& N "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "4" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    constant " + METAL_TYPE_UINT + "& K "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "5" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    uint2 tgid " + METAL_OP_THREADGROUP_POS_ATTR + ",\n"
+    out = out + "    uint2 lid " + METAL_OP_THREAD_POS_IN_TG_ATTR + ",\n"
+    out = out + "    uint sgid " + METAL_OP_SIMDGROUP_IDX_ATTR + ",\n"
+    out = out + "    uint slid " + METAL_OP_THREAD_IDX_SIMD_ATTR + ")\n"
+    return out
+}
+
+// _metal_emit_matmul_kernel_signature_bf16 — emit `kernel void <name>(...)`
+// with the bf16-MMA signature. Differs from FP32 sig only in the a/b
+// input pointer element type (bfloat instead of float); output c stays
+// FP32 (mixed-precision MMA pattern from N30).
+fn _metal_emit_matmul_kernel_signature_bf16(name: string) -> string {
+    let mut out = METAL_OP_KERNEL_DECL + " " + name + "(\n"
+    out = out + "    device const " + METAL_TYPE_BFLOAT + "* a "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "0" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    device const " + METAL_TYPE_BFLOAT + "* b "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "1" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    " + METAL_OP_PARAM_DEVICE_FLOAT_PTR + "c "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "2" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    constant " + METAL_TYPE_UINT + "& M "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "3" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    constant " + METAL_TYPE_UINT + "& N "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "4" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    constant " + METAL_TYPE_UINT + "& K "
+    out = out + METAL_OP_BUFFER_BINDING_PREFIX + "5" + METAL_OP_BUFFER_BINDING_SUFFIX + ",\n"
+    out = out + "    uint2 tgid " + METAL_OP_THREADGROUP_POS_ATTR + ",\n"
+    out = out + "    uint2 lid " + METAL_OP_THREAD_POS_IN_TG_ATTR + ",\n"
+    out = out + "    uint sgid " + METAL_OP_SIMDGROUP_IDX_ATTR + ",\n"
+    out = out + "    uint slid " + METAL_OP_THREAD_IDX_SIMD_ATTR + ")\n"
+    return out
+}
+
+// _metal_emit_matmul_body — emit the MSL kernel body for plain matmul
+// `C = A · B` using simdgroup-MMA. Verbatim port of N16
+// `simdgroup_matmul_32x32_tg` (32×32 output block, 4×4 SG tiling,
+// TG_M=32, TG_N=32, TG_K=8). Peak 911.55 GFLOPS @ 768³ on Apple M3,
+// 3.4× over the tiled-naive baseline.
+fn _metal_emit_matmul_body() -> string {
+    let mut out = "{\n"
+    out = out + "    const uint TG_M = 32u;\n"
+    out = out + "    const uint TG_N = 32u;\n"
+    out = out + "    const uint TG_K = 8u;\n"
+    out = out + "    const uint block_row_base = tgid.y * TG_M;\n"
+    out = out + "    const uint block_col_base = tgid.x * TG_N;\n"
+    out = out + "    const uint sg_y = sgid >> 2u;\n"
+    out = out + "    const uint sg_x = sgid & 3u;\n"
+    out = out + "    const uint row_base = block_row_base + sg_y * 8u;\n"
+    out = out + "    const uint col_base = block_col_base + sg_x * 8u;\n"
+    out = out + "    threadgroup float As[32 * 8];\n"
+    out = out + "    threadgroup float Bs[8 * 32];\n"
+    out = out + "    " + METAL_OP_SIMDGROUP_MATRIX + "<float, 8, 8> Cmat = "
+    out = out + METAL_OP_MAKE_FILLED_SIMDGROUP_MATRIX + "<float, 8, 8>(0.0f);\n"
+    out = out + "    const uint tid = sgid * 32u + slid;\n"
+    out = out + "    const uint K8 = K / 8u;\n"
+    out = out + "    for (uint kk = 0u; kk < K8; ++kk) {\n"
+    out = out + "        if (tid < 256u) {\n"
+    out = out + "            const uint r = tid / TG_K;\n"
+    out = out + "            const uint cc = tid % TG_K;\n"
+    out = out + "            const uint a_row = block_row_base + r;\n"
+    out = out + "            const uint a_col = kk * 8u + cc;\n"
+    out = out + "            As[r * TG_K + cc] = (a_row < M && a_col < K) ? a[a_row * K + a_col] : 0.0f;\n"
+    out = out + "        }\n"
+    out = out + "        if (tid < 256u) {\n"
+    out = out + "            const uint r = tid / TG_N;\n"
+    out = out + "            const uint cc = tid % TG_N;\n"
+    out = out + "            const uint b_row = kk * 8u + r;\n"
+    out = out + "            const uint b_col = block_col_base + cc;\n"
+    out = out + "            Bs[r * TG_N + cc] = (b_row < K && b_col < N) ? b[b_row * N + b_col] : 0.0f;\n"
+    out = out + "        }\n"
+    out = out + "        " + METAL_OP_THREADGROUP_BARRIER + "(" + METAL_OP_MEM_FLAGS_TG + ");\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_MATRIX + "<float, 8, 8> Amat;\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_MATRIX + "<float, 8, 8> Bmat;\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_LOAD + "(Amat, As, ulong(TG_K), ulong2(0ul, ulong(sg_y * 8u)), false);\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_LOAD + "(Bmat, Bs, ulong(TG_N), ulong2(ulong(sg_x * 8u), 0ul), false);\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_MMA + "(Cmat, Amat, Bmat, Cmat);\n"
+    out = out + "        " + METAL_OP_THREADGROUP_BARRIER + "(" + METAL_OP_MEM_FLAGS_TG + ");\n"
+    out = out + "    }\n"
+    out = out + "    if (row_base < M && col_base < N) {\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_STORE + "(Cmat, c, ulong(N), ulong2(ulong(col_base), ulong(row_base)), false);\n"
+    out = out + "    }\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_matmul_NT_a_body — emit `C = A^T · B` body. A is K×M.
+// As slab holds 8×32 K-band × M-band; transpose flag on the Amat
+// simdgroup_load flips into M×K for the MMA primitive.
+fn _metal_emit_matmul_NT_a_body() -> string {
+    let mut out = "{\n"
+    out = out + "    const uint TG_M = 32u;\n"
+    out = out + "    const uint TG_N = 32u;\n"
+    out = out + "    const uint TG_K = 8u;\n"
+    out = out + "    const uint block_row_base = tgid.y * TG_M;\n"
+    out = out + "    const uint block_col_base = tgid.x * TG_N;\n"
+    out = out + "    const uint sg_y = sgid >> 2u;\n"
+    out = out + "    const uint sg_x = sgid & 3u;\n"
+    out = out + "    const uint row_base = block_row_base + sg_y * 8u;\n"
+    out = out + "    const uint col_base = block_col_base + sg_x * 8u;\n"
+    out = out + "    threadgroup float As[8 * 32];\n"
+    out = out + "    threadgroup float Bs[8 * 32];\n"
+    out = out + "    " + METAL_OP_SIMDGROUP_MATRIX + "<float, 8, 8> Cmat = "
+    out = out + METAL_OP_MAKE_FILLED_SIMDGROUP_MATRIX + "<float, 8, 8>(0.0f);\n"
+    out = out + "    const uint tid = sgid * 32u + slid;\n"
+    out = out + "    const uint K8 = K / 8u;\n"
+    out = out + "    for (uint kk = 0u; kk < K8; ++kk) {\n"
+    out = out + "        if (tid < 256u) {\n"
+    out = out + "            const uint r = tid / TG_M;\n"
+    out = out + "            const uint cc = tid % TG_M;\n"
+    out = out + "            const uint a_row = kk * 8u + r;\n"
+    out = out + "            const uint a_col = block_row_base + cc;\n"
+    out = out + "            As[r * TG_M + cc] = (a_row < K && a_col < M) ? a[a_row * M + a_col] : 0.0f;\n"
+    out = out + "        }\n"
+    out = out + "        if (tid < 256u) {\n"
+    out = out + "            const uint r = tid / TG_N;\n"
+    out = out + "            const uint cc = tid % TG_N;\n"
+    out = out + "            const uint b_row = kk * 8u + r;\n"
+    out = out + "            const uint b_col = block_col_base + cc;\n"
+    out = out + "            Bs[r * TG_N + cc] = (b_row < K && b_col < N) ? b[b_row * N + b_col] : 0.0f;\n"
+    out = out + "        }\n"
+    out = out + "        " + METAL_OP_THREADGROUP_BARRIER + "(" + METAL_OP_MEM_FLAGS_TG + ");\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_MATRIX + "<float, 8, 8> Amat;\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_MATRIX + "<float, 8, 8> Bmat;\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_LOAD + "(Amat, As, ulong(TG_M), ulong2(ulong(sg_y * 8u), 0ul), true);\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_LOAD + "(Bmat, Bs, ulong(TG_N), ulong2(ulong(sg_x * 8u), 0ul), false);\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_MMA + "(Cmat, Amat, Bmat, Cmat);\n"
+    out = out + "        " + METAL_OP_THREADGROUP_BARRIER + "(" + METAL_OP_MEM_FLAGS_TG + ");\n"
+    out = out + "    }\n"
+    out = out + "    if (row_base < M && col_base < N) {\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_STORE + "(Cmat, c, ulong(N), ulong2(ulong(col_base), ulong(row_base)), false);\n"
+    out = out + "    }\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_matmul_NT_b_body — emit `C = A · B^T` body. B is N×K.
+// Bs slab holds 32×8 N-band × K-band; transpose flag on Bmat
+// simdgroup_load flips into K×N for the MMA primitive.
+fn _metal_emit_matmul_NT_b_body() -> string {
+    let mut out = "{\n"
+    out = out + "    const uint TG_M = 32u;\n"
+    out = out + "    const uint TG_N = 32u;\n"
+    out = out + "    const uint TG_K = 8u;\n"
+    out = out + "    const uint block_row_base = tgid.y * TG_M;\n"
+    out = out + "    const uint block_col_base = tgid.x * TG_N;\n"
+    out = out + "    const uint sg_y = sgid >> 2u;\n"
+    out = out + "    const uint sg_x = sgid & 3u;\n"
+    out = out + "    const uint row_base = block_row_base + sg_y * 8u;\n"
+    out = out + "    const uint col_base = block_col_base + sg_x * 8u;\n"
+    out = out + "    threadgroup float As[32 * 8];\n"
+    out = out + "    threadgroup float Bs[32 * 8];\n"
+    out = out + "    " + METAL_OP_SIMDGROUP_MATRIX + "<float, 8, 8> Cmat = "
+    out = out + METAL_OP_MAKE_FILLED_SIMDGROUP_MATRIX + "<float, 8, 8>(0.0f);\n"
+    out = out + "    const uint tid = sgid * 32u + slid;\n"
+    out = out + "    const uint K8 = K / 8u;\n"
+    out = out + "    for (uint kk = 0u; kk < K8; ++kk) {\n"
+    out = out + "        if (tid < 256u) {\n"
+    out = out + "            const uint r = tid / TG_K;\n"
+    out = out + "            const uint cc = tid % TG_K;\n"
+    out = out + "            const uint a_row = block_row_base + r;\n"
+    out = out + "            const uint a_col = kk * 8u + cc;\n"
+    out = out + "            As[r * TG_K + cc] = (a_row < M && a_col < K) ? a[a_row * K + a_col] : 0.0f;\n"
+    out = out + "        }\n"
+    out = out + "        if (tid < 256u) {\n"
+    out = out + "            const uint r = tid / TG_K;\n"
+    out = out + "            const uint cc = tid % TG_K;\n"
+    out = out + "            const uint b_row = block_col_base + r;\n"
+    out = out + "            const uint b_col = kk * 8u + cc;\n"
+    out = out + "            Bs[r * TG_K + cc] = (b_row < N && b_col < K) ? b[b_row * K + b_col] : 0.0f;\n"
+    out = out + "        }\n"
+    out = out + "        " + METAL_OP_THREADGROUP_BARRIER + "(" + METAL_OP_MEM_FLAGS_TG + ");\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_MATRIX + "<float, 8, 8> Amat;\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_MATRIX + "<float, 8, 8> Bmat;\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_LOAD + "(Amat, As, ulong(TG_K), ulong2(0ul, ulong(sg_y * 8u)), false);\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_LOAD + "(Bmat, Bs, ulong(TG_K), ulong2(0ul, ulong(sg_x * 8u)), true);\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_MMA + "(Cmat, Amat, Bmat, Cmat);\n"
+    out = out + "        " + METAL_OP_THREADGROUP_BARRIER + "(" + METAL_OP_MEM_FLAGS_TG + ");\n"
+    out = out + "    }\n"
+    out = out + "    if (row_base < M && col_base < N) {\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_STORE + "(Cmat, c, ulong(N), ulong2(ulong(col_base), ulong(row_base)), false);\n"
+    out = out + "    }\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_matmul_bf16_body — emit `C = A · B` body with bfloat
+// A/B storage + FP32 accumulator. Mirrors plain matmul body modulo
+// the `simdgroup_matrix<bfloat, 8, 8>` element type for Amat / Bmat
+// and bfloat threadgroup-mem slabs. Cmat stays `simdgroup_matrix<
+// float, 8, 8>` (mixed-precision MMA = ~2× throughput on M3+ silicon
+// where bf16 multiplies feed FP32 accumulator).
+//   ref: Metal Shading Language Specification §6.7 (simdgroup_matrix
+//        bfloat overload). N30 mixed-precision template (FP32
+//        accumulator) + N36 bfloat type substitution.
+//
+// HONEST SCOPE (@D g3) — bf16 support requires Apple silicon M3 or
+// later. The codegen emits the kernel source unconditionally; runtime
+// gating (host driver decides whether to compile this kernel based
+// on `MTLGPUFamily.apple9` feature set) is host-side responsibility.
+fn _metal_emit_matmul_bf16_body() -> string {
+    let mut out = "{\n"
+    out = out + "    const uint TG_M = 32u;\n"
+    out = out + "    const uint TG_N = 32u;\n"
+    out = out + "    const uint TG_K = 8u;\n"
+    out = out + "    const uint block_row_base = tgid.y * TG_M;\n"
+    out = out + "    const uint block_col_base = tgid.x * TG_N;\n"
+    out = out + "    const uint sg_y = sgid >> 2u;\n"
+    out = out + "    const uint sg_x = sgid & 3u;\n"
+    out = out + "    const uint row_base = block_row_base + sg_y * 8u;\n"
+    out = out + "    const uint col_base = block_col_base + sg_x * 8u;\n"
+    // bfloat threadgroup slabs — half the byte footprint of the FP32
+    // matmul (each slab 256 elements × 2 B = 512 B vs 1 KiB).
+    out = out + "    threadgroup " + METAL_TYPE_BFLOAT + " As[32 * 8];\n"
+    out = out + "    threadgroup " + METAL_TYPE_BFLOAT + " Bs[8 * 32];\n"
+    // FP32 accumulator (mixed-precision MMA).
+    out = out + "    " + METAL_OP_SIMDGROUP_MATRIX + "<float, 8, 8> Cmat = "
+    out = out + METAL_OP_MAKE_FILLED_SIMDGROUP_MATRIX + "<float, 8, 8>(0.0f);\n"
+    out = out + "    const uint tid = sgid * 32u + slid;\n"
+    out = out + "    const uint K8 = K / 8u;\n"
+    out = out + "    for (uint kk = 0u; kk < K8; ++kk) {\n"
+    out = out + "        if (tid < 256u) {\n"
+    out = out + "            const uint r = tid / TG_K;\n"
+    out = out + "            const uint cc = tid % TG_K;\n"
+    out = out + "            const uint a_row = block_row_base + r;\n"
+    out = out + "            const uint a_col = kk * 8u + cc;\n"
+    out = out + "            As[r * TG_K + cc] = (a_row < M && a_col < K) ? a[a_row * K + a_col] : " + METAL_TYPE_BFLOAT + "(0.0f);\n"
+    out = out + "        }\n"
+    out = out + "        if (tid < 256u) {\n"
+    out = out + "            const uint r = tid / TG_N;\n"
+    out = out + "            const uint cc = tid % TG_N;\n"
+    out = out + "            const uint b_row = kk * 8u + r;\n"
+    out = out + "            const uint b_col = block_col_base + cc;\n"
+    out = out + "            Bs[r * TG_N + cc] = (b_row < K && b_col < N) ? b[b_row * N + b_col] : " + METAL_TYPE_BFLOAT + "(0.0f);\n"
+    out = out + "        }\n"
+    out = out + "        " + METAL_OP_THREADGROUP_BARRIER + "(" + METAL_OP_MEM_FLAGS_TG + ");\n"
+    // bfloat tile MMA operands — element type is bfloat (mixed-precision).
+    out = out + "        " + METAL_OP_SIMDGROUP_MATRIX + "<" + METAL_TYPE_BFLOAT + ", 8, 8> Amat;\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_MATRIX + "<" + METAL_TYPE_BFLOAT + ", 8, 8> Bmat;\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_LOAD + "(Amat, As, ulong(TG_K), ulong2(0ul, ulong(sg_y * 8u)), false);\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_LOAD + "(Bmat, Bs, ulong(TG_N), ulong2(ulong(sg_x * 8u), 0ul), false);\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_MMA + "(Cmat, Amat, Bmat, Cmat);\n"
+    out = out + "        " + METAL_OP_THREADGROUP_BARRIER + "(" + METAL_OP_MEM_FLAGS_TG + ");\n"
+    out = out + "    }\n"
+    out = out + "    if (row_base < M && col_base < N) {\n"
+    out = out + "        " + METAL_OP_SIMDGROUP_STORE + "(Cmat, c, ulong(N), ulong2(ulong(col_base), ulong(row_base)), false);\n"
+    out = out + "    }\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_mfunc_is_matmul_shape — recognise plain matmul MIR shape.
+// SYNTHETIC: STMT_LOAD a→va + STMT_LOAD b→vb + STMT_BINOP("matmul")
+// (va, vb)→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_matmul_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "matmul" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_matmul_NT_a_shape — recognise `C = A^T · B`.
+// SYNTHETIC: STMT_BINOP("matmul_NT_a"). Drives flame ag_linear
+// backward `dW = x^T · dy` lowering scaffold.
+fn _metal_mfunc_is_matmul_NT_a_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "matmul_NT_a" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_matmul_NT_b_shape — recognise `C = A · B^T`.
+// SYNTHETIC: STMT_BINOP("matmul_NT_b"). Drives flame ag_linear
+// backward `dx = dy · W^T` lowering scaffold.
+fn _metal_mfunc_is_matmul_NT_b_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "matmul_NT_b" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_matmul_bf16_shape — recognise the bf16 matmul MIR
+// shape. SYNTHETIC: STMT_LOAD a→va + STMT_LOAD b→vb +
+// STMT_BINOP("matmul_bf16") (va, vb)→vc + STMT_STORE vc→c. Discriminated
+// from plain matmul by the opcode string. N30 mixed-precision template
+// + N36 bfloat type substitution.
+fn _metal_mfunc_is_matmul_bf16_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "matmul_bf16" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
 // _metal_mfunc_is_vec_add_shape — recognise the vec-add MIR shape.
 // Hardcoded shape check: entry block has exactly STMT_LOAD + STMT_LOAD
 // + STMT_BINOP("add") + STMT_STORE (in that order), plus an optional
@@ -620,6 +1178,42 @@ fn _metal_mfunc_is_vec_div_shape(mfn: MFunc) -> bool {
     if stmts[1].kind != STMT_LOAD { return false }
     if stmts[2].kind != STMT_BINOP { return false }
     if stmts[2].op != "div" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_vec_max_shape — recognise the vec-max MIR shape.
+// Mirror of `_metal_mfunc_is_vec_add_shape` with the BINOP op string
+// switched to "max". Same STMT_LOAD + STMT_LOAD + STMT_BINOP("max") +
+// STMT_STORE skeleton (with optional STMT_RETURN tail). The emit body
+// uses MSL function-call form `max(a[i], b[i])`, NOT an infix operator.
+fn _metal_mfunc_is_vec_max_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "max" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_vec_min_shape — recognise the vec-min MIR shape.
+// Mirror of `_metal_mfunc_is_vec_add_shape` with the BINOP op string
+// switched to "min". Same STMT_LOAD + STMT_LOAD + STMT_BINOP("min") +
+// STMT_STORE skeleton (with optional STMT_RETURN tail). The emit body
+// uses MSL function-call form `min(a[i], b[i])`, NOT an infix operator.
+fn _metal_mfunc_is_vec_min_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "min" { return false }
     if stmts[3].kind != STMT_STORE { return false }
     return true
 }
@@ -715,6 +1309,24 @@ fn _metal_mfunc_is_vec_cos_shape(mfn: MFunc) -> bool {
     return _metal_mfunc_is_unary_shape_with_op(mfn, "cos")
 }
 
+// _metal_mfunc_is_vec_floor_shape — recognise vec-floor MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("floor") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_floor_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "floor")
+}
+
+// _metal_mfunc_is_vec_ceil_shape — recognise vec-ceil MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("ceil") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_ceil_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "ceil")
+}
+
+// _metal_mfunc_is_vec_round_shape — recognise vec-round MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("round") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_round_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "round")
+}
+
 // _metal_format_scalar — format a MIR const operand as MSL literal text.
 // const_float → uses the `float_val` field (e.g. "2.5"); const_int →
 // uses the `int_val` field with `.0` appended so it stays FP32 in MSL.
@@ -733,29 +1345,42 @@ fn _metal_format_scalar(op: Operand) -> string {
 // module, unrecognised shape) returns `""` honestly, preserving the
 // P0 contract the lower_test Case 1 still asserts.
 //
-// HONEST SCOPE — thirteen shapes recognised today (vec-add, vec-mul,
-// vec-sub, vec-div, vec-scale, vec-neg, vec-abs, vec-sqrt, vec-exp,
-// vec-log, vec-sin, vec-cos). All other MIR patterns return "". General
-// MFunc → MSL lowering is multi-session work mirroring the NVPTX P3
-// timeline.
+// HONEST SCOPE — twenty-two shapes recognised today (vec-add, vec-mul,
+// vec-sub, vec-div, vec-max, vec-min, vec-scale, vec-neg, vec-abs,
+// vec-sqrt, vec-exp, vec-log, vec-sin, vec-cos, vec-floor, vec-ceil,
+// vec-round, reduce-sum, matmul, matmul_NT_a, matmul_NT_b, matmul_bf16).
+// All other MIR patterns return "". General MFunc → MSL lowering is
+// multi-session work mirroring the NVPTX P3 timeline.
 //
 //   Shape coverage matrix (RFC 075 P3+):
-//     vec-add   `c[i] = a[i] + b[i]`     STMT_LOAD+LOAD+BINOP(add)+STORE
-//     vec-mul   `c[i] = a[i] * b[i]`     STMT_LOAD+LOAD+BINOP(mul)+STORE
-//     vec-sub   `c[i] = a[i] - b[i]`     STMT_LOAD+LOAD+BINOP(sub)+STORE
-//     vec-div   `c[i] = a[i] / b[i]`     STMT_LOAD+LOAD+BINOP(div)+STORE
-//     vec-scale `c[i] = a[i] * <const>`  STMT_LOAD+BINOP(mul, const)+STORE
-//     vec-neg   `c[i] = -a[i]`           STMT_LOAD+UNOP(neg)+STORE   (2-buf)
-//     vec-abs   `c[i] = abs(a[i])`       STMT_LOAD+UNOP(abs)+STORE   (2-buf)
-//     vec-sqrt  `c[i] = sqrt(a[i])`      STMT_LOAD+UNOP(sqrt)+STORE  (2-buf)
-//     vec-exp   `c[i] = exp(a[i])`       STMT_LOAD+UNOP(exp)+STORE   (2-buf)
-//     vec-log   `c[i] = log(a[i])`       STMT_LOAD+UNOP(log)+STORE   (2-buf)
-//     vec-sin   `c[i] = sin(a[i])`       STMT_LOAD+UNOP(sin)+STORE   (2-buf)
-//     vec-cos   `c[i] = cos(a[i])`       STMT_LOAD+UNOP(cos)+STORE   (2-buf)
+//     vec-add     `c[i] = a[i] + b[i]`     STMT_LOAD+LOAD+BINOP(add)+STORE
+//     vec-mul     `c[i] = a[i] * b[i]`     STMT_LOAD+LOAD+BINOP(mul)+STORE
+//     vec-sub     `c[i] = a[i] - b[i]`     STMT_LOAD+LOAD+BINOP(sub)+STORE
+//     vec-div     `c[i] = a[i] / b[i]`     STMT_LOAD+LOAD+BINOP(div)+STORE
+//     vec-max     `c[i] = max(a[i],b[i])`  STMT_LOAD+LOAD+BINOP(max)+STORE  (call form)
+//     vec-min     `c[i] = min(a[i],b[i])`  STMT_LOAD+LOAD+BINOP(min)+STORE  (call form)
+//     vec-scale   `c[i] = a[i] * <const>`  STMT_LOAD+BINOP(mul, const)+STORE
+//     vec-neg     `c[i] = -a[i]`           STMT_LOAD+UNOP(neg)+STORE   (2-buf)
+//     vec-abs     `c[i] = abs(a[i])`       STMT_LOAD+UNOP(abs)+STORE   (2-buf)
+//     vec-sqrt    `c[i] = sqrt(a[i])`      STMT_LOAD+UNOP(sqrt)+STORE  (2-buf)
+//     vec-exp     `c[i] = exp(a[i])`       STMT_LOAD+UNOP(exp)+STORE   (2-buf)
+//     vec-log     `c[i] = log(a[i])`       STMT_LOAD+UNOP(log)+STORE   (2-buf)
+//     vec-sin     `c[i] = sin(a[i])`       STMT_LOAD+UNOP(sin)+STORE   (2-buf)
+//     vec-cos     `c[i] = cos(a[i])`       STMT_LOAD+UNOP(cos)+STORE   (2-buf)
+//     vec-floor   `c[i] = floor(a[i])`     STMT_LOAD+UNOP(floor)+STORE (2-buf)
+//     vec-ceil    `c[i] = ceil(a[i])`      STMT_LOAD+UNOP(ceil)+STORE  (2-buf)
+//     vec-round   `c[i] = round(a[i])`     STMT_LOAD+UNOP(round)+STORE (2-buf)
+//     reduce-sum  `c[g] = simd_sum(a[i])`  STMT_LOAD+UNOP(reduce_sum)+STORE (2-buf, per-SG output)
+//     matmul      `C = A · B`              STMT_LOAD+LOAD+BINOP(matmul)+STORE (6-buf MMA)
+//     matmul_NT_a `C = A^T · B`            STMT_LOAD+LOAD+BINOP(matmul_NT_a)+STORE (6-buf MMA, Amat transpose=true)
+//     matmul_NT_b `C = A · B^T`            STMT_LOAD+LOAD+BINOP(matmul_NT_b)+STORE (6-buf MMA, Bmat transpose=true)
+//     matmul_bf16 `C = A · B` (bfloat)     STMT_LOAD+LOAD+BINOP(matmul_bf16)+STORE (6-buf bf16 MMA, FP32 acc)
 //
-// Dispatch order: vec-add → vec-mul → vec-sub → vec-div → vec-scale →
-// vec-neg → vec-abs → vec-sqrt → vec-exp → vec-log → vec-sin → vec-cos
-// → "". Element-wise unary kernels are dispatched AFTER all binop /
+// Dispatch order: vec-add → vec-mul → vec-sub → vec-div → vec-max →
+// vec-min → vec-scale → vec-neg → vec-abs → vec-sqrt → vec-exp →
+// vec-log → vec-sin → vec-cos → vec-floor → vec-ceil → vec-round →
+// reduce-sum → matmul → matmul_NT_a → matmul_NT_b → matmul_bf16 → "".
+// Element-wise unary kernels are dispatched AFTER all binop /
 // scale shapes so the existing recognisers short-circuit on a second
 // STMT_LOAD first; the unary recognisers only see MIR with the 2-stmt
 // prefix STMT_LOAD + STMT_UNOP. vec-scale is tried before vec-* unary
@@ -812,6 +1437,22 @@ pub fn codegen_emit_metal_msl(module: MModule) -> string {
         let mut out = _metal_emit_preamble()
         out = out + _metal_emit_kernel_signature(kname)
         out = out + _metal_emit_vec_div_body()
+        return out
+    }
+    // vec-max — STMT_LOAD + STMT_LOAD + STMT_BINOP(max) + STMT_STORE.
+    // Function-call form `max(a[i], b[i])` (NOT an infix operator).
+    if _metal_mfunc_is_vec_max_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_max_body()
+        return out
+    }
+    // vec-min — STMT_LOAD + STMT_LOAD + STMT_BINOP(min) + STMT_STORE.
+    // Function-call form `min(a[i], b[i])` (NOT an infix operator).
+    if _metal_mfunc_is_vec_min_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_min_body()
         return out
     }
     // vec-scale — STMT_LOAD + STMT_BINOP(mul, const) + STMT_STORE.
@@ -872,6 +1513,66 @@ pub fn codegen_emit_metal_msl(module: MModule) -> string {
         let mut out = _metal_emit_preamble()
         out = out + _metal_emit_unary_kernel_signature(kname)
         out = out + _metal_emit_vec_cos_body()
+        return out
+    }
+    // vec-floor — STMT_LOAD + STMT_UNOP(floor) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_floor_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_floor_body()
+        return out
+    }
+    // vec-ceil — STMT_LOAD + STMT_UNOP(ceil) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_ceil_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_ceil_body()
+        return out
+    }
+    // vec-round — STMT_LOAD + STMT_UNOP(round) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_round_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_round_body()
+        return out
+    }
+    // reduce-sum — STMT_LOAD + STMT_UNOP(reduce_sum) + STMT_STORE.
+    // First NON-element-wise shape; emits Apple `simd_sum` + lane-0 gate.
+    if _metal_mfunc_is_reduce_sum_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_reduce_kernel_signature(kname)
+        out = out + _metal_emit_reduce_sum_body()
+        return out
+    }
+    // matmul — STMT_LOAD + STMT_LOAD + STMT_BINOP(matmul) + STMT_STORE.
+    // 6-arg MMA kernel signature + simdgroup_matrix<float, 8, 8> tile.
+    if _metal_mfunc_is_matmul_shape(mfn) {
+        let mut out = _metal_emit_matmul_preamble()
+        out = out + _metal_emit_matmul_kernel_signature(kname)
+        out = out + _metal_emit_matmul_body()
+        return out
+    }
+    // matmul_NT_a — `C = A^T · B` (A is K×M). Transpose flag on Amat.
+    if _metal_mfunc_is_matmul_NT_a_shape(mfn) {
+        let mut out = _metal_emit_matmul_preamble()
+        out = out + _metal_emit_matmul_kernel_signature(kname)
+        out = out + _metal_emit_matmul_NT_a_body()
+        return out
+    }
+    // matmul_NT_b — `C = A · B^T` (B is N×K). Transpose flag on Bmat.
+    if _metal_mfunc_is_matmul_NT_b_shape(mfn) {
+        let mut out = _metal_emit_matmul_preamble()
+        out = out + _metal_emit_matmul_kernel_signature(kname)
+        out = out + _metal_emit_matmul_NT_b_body()
+        return out
+    }
+    // matmul_bf16 — bfloat A/B + FP32 accumulator (mixed-precision MMA).
+    // Uses the bf16 signature (bfloat input pointers); requires M3+ for
+    // hardware bf16 support.
+    if _metal_mfunc_is_matmul_bf16_shape(mfn) {
+        let mut out = _metal_emit_matmul_preamble()
+        out = out + _metal_emit_matmul_kernel_signature_bf16(kname)
+        out = out + _metal_emit_matmul_bf16_body()
         return out
     }
     // No recognised shape — honest empty string.
