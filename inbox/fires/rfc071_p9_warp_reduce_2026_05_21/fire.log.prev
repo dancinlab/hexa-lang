@@ -1,0 +1,104 @@
+RFC 071 P9 N70 warp_reduce_sum source-to-silicon fire log
+==========================================================
+
+date:    2026-05-21
+host:    macOS arm64 (driver build) + ubu-2 (silicon)
+device:  NVIDIA GeForce RTX 5070 (sm_120a JIT from sm_80 PTX), driver 580.126.09
+kernel:  warp_reduce_sum (1 block × 1024 threads = 32 warps × 32 lanes)
+outcome: BLOCKED (HONEST) — 2 codegen gaps surface as undefined-PTX-register
+         + kernel-hang; falsifier F-RFC071-E2E-WARP-REDUCE-SUM-NUMERIC-EQ
+         status = BLOCKED (cannot evaluate numeric without working PTX).
+
+
+driver build (skipped — N64 driver reused):
+  /tmp/hexa_n64_driver  (commit 2a1eaed0, RFC 071 P4+ 5-gap closure)
+
+
+ptx emit (macOS arm64):
+  /tmp/hexa_n64_driver build compiler/codegen/nvptx_p9_warp_reduce_test.hexa --target=nvptx64-nvidia-cuda-sm80
+  → out: compiler/codegen/nvptx_p9_warp_reduce_test.hexa.ptx (3327 B)
+  emit: clean exit 0
+  diag: 4 `// unsupported` markers in body (see GAPS below).
+
+
+silicon fire (ubu-2):
+  scp warp_reduce_sum.sm_80.ptx host_warp_reduce.c ubu-2:/tmp/n70/  → OK
+  gcc host_warp_reduce.c -lcuda -lm -o host_warp_reduce            → OK (no warnings)
+  ./host_warp_reduce warp_reduce_sum.sm_80.ptx
+    Device: NVIDIA GeForce RTX 5070
+    PTX loaded OK                          ← ptxas tolerated `// unsupported …` lines as comments
+    Kernel warp_reduce_sum resolved        ← cuModuleGetFunction succeeded
+    [HANG at cuCtxSynchronize, 100% CPU spin in driver]
+    EXIT=124 (timeout 10s)
+
+
+gap analysis (artifact: warp_reduce_sum.sm_80.ptx):
+
+  G1. `gpu_warp_shuffle_xor(v, mask)` — builtin NOT WIRED.
+      PTX line 78: `// RFC 055 055-P0 - unsupported call: gpu_warp_shuffle_xor`
+      compiler/codegen/nvptx_target.hexa wires only `gpu_warp_shuffle(v, lane)`
+      (shfl.sync.idx.b32, idx-mode source-lane select). The XOR butterfly
+      variant `shfl.sync.bfly.b32` is documented in PTX ISA §9.7.13.4 but
+      not yet emitted. Additionally the existing builtin returns u32 only
+      (`.b32`) — FP64 shuffle would require composing 2× 32-bit halves
+      (high/low) and reassembling on the recv side. Both extensions are
+      compiler-source-touching follow-on cycles (out of N70 scope per
+      task spec).
+      Consequence in PTX: line 79 reads %fd18 which is never assigned →
+      garbage FP64 accumulates into %fd9 each loop iteration.
+
+  G2. integer `/` binop — NOT WIRED (or wired only for ad-hoc cases).
+      3 occurrences: line 81 (`mask / 2`), line 85 (`tid / 32`),
+      line 89 (`tid / 32`) — all emit `// unsupported binop: /`.
+      Lines 82, 86, 89/90 reference %rd20/%rd21/%rd25 which never receive
+      a value. The PTX assembler accepts (declarations exist), but at
+      runtime the values are undefined garbage.
+      Consequence: `mask > 0` predicate on line 74 likely stays true
+      forever (garbage retained in %rd16 because `mov.u64 %rd16, %rd20`
+      where %rd20 was never written) → kernel hangs.
+
+  Note: N64 (single-thread reduce_sum) closed STMT_LOAD/STORE + cmp +
+  bounds-check + i64-classifier (5 gaps in commit `2a1eaed0`). The new
+  N70 gaps (gpu_warp_shuffle_xor + `/`) are ORTHOGONAL — none of N64's
+  fixes overlap.
+
+
+per-warp outputs:
+  N/A (kernel hung before any thread reached the lane-0 store arm).
+
+
+speedup vs N64 single-thread baseline:
+  N/A — cannot measure until G1+G2 closed.
+
+
+falsifiers:
+  F-RFC071-E2E-PTX-EMIT-CLEAN                    PASS  (driver exit 0, .ptx 3327B)
+  F-RFC071-E2E-PTX-LOAD                          PASS  (cuModuleLoadDataEx OK)
+  F-RFC071-E2E-PTX-RESOLVE                       PASS  (cuModuleGetFunction OK)
+  F-RFC071-E2E-WARP-REDUCE-SUM-LAUNCH-COMPLETE   FAIL  (cuCtxSynchronize hang,
+                                                       timeout 10s exit 124)
+  F-RFC071-E2E-WARP-REDUCE-SUM-NUMERIC-EQ        BLOCKED  (no numeric output;
+                                                          kernel hung)
+
+
+follow-on cycles needed (out of N70 scope):
+
+  N71-A: wire `gpu_warp_shuffle_xor(v, mask)` →
+         `shfl.sync.bfly.b32 %r<dst>, %r<src>, %r<mask>, 0x1f, 0xffffffff;`
+         (idx-mode neighbor at compiler/codegen/nvptx_target.hexa L927;
+         new arm matching `s.op == "gpu_warp_shuffle_xor"` emitting
+         PTX_OP_SHFL_SYNC_BFLY_B32). lower_test Case 9 sibling.
+
+  N71-B: extend warp-shuffle to FP64 — `gpu_warp_shuffle_f64`/_xor_f64
+         composing 2× `mov.b32 %r_lo/_hi, {%fd_src};` + 2× shfl + 1×
+         `mov.b64 %fd_dst, {%r_lo,%r_hi};`. Or auto-dispatch by dst type.
+
+  N71-C: integer `/` binop wiring → `div.s64 %rd<d>, %rd<a>, %rd<b>;`
+         (signed) or `div.u64` (unsigned, for the by-32 case where
+         operands are tid-class u32-widened). Augments existing add/sub/mul
+         emit arms.
+
+
+cost:
+  $0 (RTX 5070 on ubu-2, no cloud spend; emit on macOS arm64).
+  wall: <2 min total (driver reuse + 1 emit + 1 fire + 10s timeout).

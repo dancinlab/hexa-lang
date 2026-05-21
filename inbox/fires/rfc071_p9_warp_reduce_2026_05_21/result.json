@@ -1,0 +1,66 @@
+{
+  "rfc": "RFC 071",
+  "phase": "P9",
+  "cycle": "N81 (re-fire of N70 after N71-A + N71-C land)",
+  "title": "warp_reduce_sum multi-thread source-to-silicon — re-fire",
+  "date": "2026-05-21",
+  "host": {
+    "driver_host": "macOS arm64 (BUILD FAILED — driver not produced)",
+    "silicon_host": "ubu-2 (NOT REACHED)"
+  },
+  "device": {
+    "name": "NVIDIA GeForce RTX 5070",
+    "driver": "580.126.09",
+    "compute_cap": "12.0",
+    "ptx_target": "sm_80 (would JIT-forward to sm_120a — not reached)"
+  },
+  "outcome": "BLOCKED_HONEST",
+  "scope_note": "Re-fire attempted per task spec after N71-A + N71-C land. Honest finding: N71-A landing on main is INCOMPLETE — repair commit 7671d7db wiped the PTX_OP_SHFL_SYNC_BFLY_B32 constant declaration. Compiler source NOT touched per task constraint.",
+  "main_head": "faf700c5",
+  "preconditions_verified": {
+    "N71_A_commits_present": "PARTIAL (9d21356c + 7671d7db both in git history, but 7671d7db REGRESSES nvptx_ptx_ops.hexa — wipes PTX_OP_SHFL_SYNC_BFLY_B32)",
+    "N71_C_commit_present":  "YES (9652fd5e in history; not verified at silicon level — driver build blocked before PTX emit)"
+  },
+  "falsifiers": {
+    "F-RFC071-E2E-DRIVER-BUILD":                      "FAIL (new — clang error: use of undeclared identifier 'PTX_OP_SHFL_SYNC_BFLY_B32')",
+    "F-RFC071-E2E-PTX-EMIT-CLEAN":                    "N/A (driver not built)",
+    "F-RFC071-E2E-PTX-LOAD":                          "N/A",
+    "F-RFC071-E2E-PTX-RESOLVE":                       "N/A",
+    "F-RFC071-E2E-WARP-REDUCE-SUM-LAUNCH-COMPLETE":   "N/A",
+    "F-RFC071-E2E-WARP-REDUCE-SUM-NUMERIC-EQ":        "BLOCKED"
+  },
+  "gap_diagnosis_was_wrong": "PARTIAL — the 2 codegen gaps (gpu_warp_shuffle_xor + integer /) were correctly identified by N70. N71-A's pattern-wiring (target.hexa hunk in 7671d7db) is present, but the PTX_OP_SHFL_SYNC_BFLY_B32 string constant it depends on was wiped in the same commit. GAP-A is therefore NOT closed on main HEAD despite the commit subject line.",
+  "build_error": {
+    "file": "build/artifacts/hexa_run.<ts>.c",
+    "line": 16308,
+    "ref":  "PTX_OP_SHFL_SYNC_BFLY_B32",
+    "decl": "absent (only PTX_OP_SHFL_SYNC_IDX_B32 declared at line 709)",
+    "source_origin": "compiler/codegen/nvptx_target.hexa:1005 emits the constant; compiler/codegen/nvptx_ptx_ops.hexa never declares it on main HEAD (wiped by 7671d7db)"
+  },
+  "per_warp_outputs": "N/A (silicon fire not reached)",
+  "cpu_reference_sum": "N/A",
+  "ulp_diff": "N/A",
+  "speedup_vs_N64": "N/A",
+  "artifacts": {
+    "fixture":            "compiler/codegen/nvptx_p9_warp_reduce_test.hexa",
+    "host_c":             "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/host_warp_reduce.c",
+    "fire_log":           "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/fire.log",
+    "result_json":        "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/result.json",
+    "fire_log_prev_n70":  "inbox/fires/rfc071_p9_warp_reduce_2026_05_21/fire.log.prev",
+    "emitted_ptx":        "N/A (driver build blocked)"
+  },
+  "follow_ons": {
+    "N81_FIX": "Add 1 line to compiler/codegen/nvptx_ptx_ops.hexa after line 108: `pub let PTX_OP_SHFL_SYNC_BFLY_B32: string = \"shfl.sync.bfly.b32\"`. Then re-run N81 workflow steps 1-4.",
+    "N71_B":   "Still needed — FP64 warp shuffle composition (deferred from N71-A originally)."
+  },
+  "constraints_honored": {
+    "no_compiler_source_touched": true,
+    "no_gpu_md_touched": true,
+    "plain_ssh_ubu2": "N/A (silicon not reached)",
+    "ptx_pure_ascii": "N/A (PTX not re-emitted)"
+  },
+  "cost": {
+    "usd": 0,
+    "wall_seconds": "~180 (env setup + 1 attempted driver build + log capture; no silicon fire)"
+  }
+}

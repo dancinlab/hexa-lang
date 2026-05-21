@@ -1,0 +1,100 @@
+RFC 071 P9 N70 → N81 RE-FIRE warp_reduce_sum source-to-silicon fire log
+========================================================================
+
+date:    2026-05-21
+cycle:   N81 (re-fire after N71-A + N71-C land — see commits below)
+host:    macOS arm64 (driver build attempt) + ubu-2 (silicon, NOT REACHED)
+device:  NVIDIA GeForce RTX 5070 (sm_120a JIT from sm_80 PTX), driver 580.126.09
+kernel:  warp_reduce_sum (1 block × 1024 threads = 32 warps × 32 lanes)
+outcome: BLOCKED (HONEST — gap diagnosis was INCOMPLETE)
+         F-RFC071-E2E-WARP-REDUCE-SUM-NUMERIC-EQ : BLOCKED
+         (re-fire cannot evaluate numeric; driver fails to build on main HEAD)
+
+
+pre-conditions (per task spec):
+  N71-A landed: 9d21356c + 7671d7db (gpu_warp_shuffle_xor → shfl.sync.bfly.b32)
+  N71-C landed: 9652fd5e (integer / → div.s64/div.s32)
+  main HEAD:    faf700c5 (current)
+
+
+step 1 — driver rebuild from current main:
+  PATH=$HOME/.hx/bin:$PATH
+  HEXA_LANG=/Users/ghost/core/hexa-lang
+  HEXA_MAC_BUILD_OK=1
+  HEXA_MODULE_LOADER=$PWD/build/hexa_module_loader
+  /tmp/hexac self/main.hexa -o /tmp/hexa_n81_driver
+  → FAIL (clang compile error on emitted C, build/artifacts/hexa_run.*.c)
+
+  Root cause (real, not codegen-emission issue):
+    build/artifacts/hexa_run.*.c line 16308 references
+        PTX_OP_SHFL_SYNC_BFLY_B32
+    but only PTX_OP_SHFL_SYNC_IDX_B32 is declared (line 709). The C linker
+    emits:
+        error: use of undeclared identifier 'PTX_OP_SHFL_SYNC_BFLY_B32';
+               did you mean 'PTX_OP_SHFL_SYNC_IDX_B32'?
+
+  Source of the missing declaration:
+    git show 7671d7db -- compiler/codegen/nvptx_ptx_ops.hexa shows that
+    the N71-A repair commit (7671d7db, "re-apply N71-A xor branch +
+    classifier (target.hexa hunk)") DELETED 5 lines from nvptx_ptx_ops.hexa:
+
+        -// RFC 071 P4+ — XOR-butterfly warp shuffle. Same .b32 32-bit form
+        -// as the idx variant, but the second source operand is an XOR
+        -// lane-mask (each thread reads from lane `tid ^ lane_mask`).
+        -// ... (5 lines)
+        -pub let PTX_OP_SHFL_SYNC_BFLY_B32: string = "shfl.sync.bfly.b32"
+
+    The earlier commit 9d21356c had ADDED this constant; 7671d7db's
+    "staging conflict" repair overshot and wiped it. The companion arm
+    in nvptx_target.hexa (line 1005, `_nvptx_instr(PTX_OP_SHFL_SYNC_BFLY_B32, ...)`)
+    references the now-undeclared constant — compile fails downstream.
+
+
+step 2 — re-emit PTX:    NOT REACHED (driver could not be built)
+step 3 — scp + fire:     NOT REACHED
+step 4 — numeric check:  NOT REACHED
+
+
+falsifiers (re-fire):
+  F-RFC071-E2E-DRIVER-BUILD               FAIL    (NEW — surfaced by N81)
+  F-RFC071-E2E-PTX-EMIT-CLEAN             N/A     (driver not built)
+  F-RFC071-E2E-PTX-LOAD                   N/A
+  F-RFC071-E2E-PTX-RESOLVE                N/A
+  F-RFC071-E2E-WARP-REDUCE-SUM-LAUNCH     N/A
+  F-RFC071-E2E-WARP-REDUCE-SUM-NUMERIC-EQ BLOCKED (re-fire could not run)
+
+
+honest scope (@D g3):
+  The N71-A landing on main was INCOMPLETE — commit 7671d7db wiped the
+  PTX_OP_SHFL_SYNC_BFLY_B32 constant declaration during a manual conflict
+  resolution. GAP-A is NOT actually closed on main HEAD at codegen-C level;
+  the constant is referenced but not declared.
+
+  N71-C (integer / wiring) presumably landed correctly, but cannot be
+  verified at silicon level until the GAP-A landing is repaired.
+
+  Task constraint "DO NOT touch compiler source — just rebuild + re-fire"
+  is respected: the missing 1-line `pub let PTX_OP_SHFL_SYNC_BFLY_B32:
+  string = "shfl.sync.bfly.b32"` is NOT being added here. The repair is
+  a follow-on cycle (call it N81-FIX or N71-A.1).
+
+  Cost: $0 (no silicon fire — gap diagnosis surfaced at build step).
+  Wall: ~3 min (env setup + 1 attempted build + log capture).
+
+
+follow-on cycle needed (compiler source touching, out of N81 re-fire scope):
+  N81-FIX / N71-A.1: re-add 1 line to compiler/codegen/nvptx_ptx_ops.hexa
+    after line 108 (PTX_OP_SHFL_SYNC_IDX_B32 declaration):
+
+      pub let PTX_OP_SHFL_SYNC_BFLY_B32: string = "shfl.sync.bfly.b32"
+
+    Then rebuild driver + repeat N81 re-fire workflow steps 2-4.
+
+
+related context:
+  - reference_hexa_module_loader_env_2026_05_20 — env setup followed
+  - reference_hexa_basename_sigkill_workaround_2026_05_19 — used /tmp/hexac shim
+    (~/.hx/bin/hexa wrapper script silenced clang stderr, hexac surfaced it)
+  - The "silent file-drop" pattern is similar in spirit to
+    feedback_worktree_merge_silent_filedrop — a manual conflict repair
+    dropped a constant declaration that was load-bearing for a fixture.
