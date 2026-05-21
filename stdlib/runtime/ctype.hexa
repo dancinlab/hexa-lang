@@ -29,44 +29,6 @@ pub fn rt_isalpha(c: int) -> bool {
     return false
 }
 
-// Step 4 잔여 #3 (RUNTIME.md) — hexa_str_concat port, @no_arena gated.
-//
-// CORE-tier port unblocker. Without @no_arena the fn body opens a new
-// __hexa_fn_arena_enter scope. When called from another arena-wrapped
-// rt_* fn (e.g. rt_str_replace mid-`+`-accumulator), the nested scope
-// corrupts the outer frame's array_store bookkeeping → SIGSEGV in
-// hxlcl_realloc at high garbage address (b2018e13 reverted port's
-// crash signature: rt_str_replace → hexa_str_concat → rt_str_concat →
-// hexa_array_push 0xfc0000000).
-//
-// @no_arena makes this fn share the OUTER scope: it doesn't push a
-// new mark on entry, doesn't heapify-and-pop on return. Inner
-// bytes.push(...) allocations still go through the arena (mark_top
-// > 0 from outer) and get reclaimed when the outer fn returns. The
-// returned string is heap-allocated via bytes_to_str_raw — escapes
-// the arena cleanly.
-//
-// Strict-fp not needed; pure byte/index math.
-@no_arena
-pub fn rt_str_concat(a: string, b: string) -> string {
-    let la = byte_len(a)
-    let lb = byte_len(b)
-    if la == 0 { return b }
-    if lb == 0 { return a }
-    let mut bytes: [int] = []
-    let mut i = 0
-    while i < la {
-        bytes = bytes.push(a.byte_at(i))
-        i = i + 1
-    }
-    i = 0
-    while i < lb {
-        bytes = bytes.push(b.byte_at(i))
-        i = i + 1
-    }
-    return bytes_to_str_raw(bytes)
-}
-
 // Step 3 cycle 28 — string → [int] byte array. C body iterated until
 // NULL terminator; hexa version uses byte_len + .byte_at(i) (byte_len is
 // the canonical hexa string length builtin and doesn't depend on NUL).

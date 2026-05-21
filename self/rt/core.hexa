@@ -39,24 +39,11 @@
 // ── Length / type introspection ─────────────────────────────────────
 
 // Generic len — routes by type. Strings → byte length, arrays → element
-// count, maps → pair count.
-//
-// RUNTIME.md step 4 follow-up (2026-05-22): true-logic polymorphic
-// dispatch via `type_of` + codegen-inline raw-length builtins
-// (`__str_raw_len`/`__arr_raw_len`/`__map_raw_len`). These expand to the
-// `HX_STRLEN`/`HX_ARR_LEN`/`HX_MAP_LEN` macros from self/runtime_core.c
-// inline at compile time, so we never re-enter `len`/`hexa_len` from the
-// `rt_len` C bridge (runtime_core.c L2068 `int hexa_len(HexaVal v) {
-// return (int)HX_INT(rt_len(v)); }`). Cycle-99 used the `len(v)` alias
-// which is correct under the standalone link (where `hexa_len` body
-// stays C) but would recurse once the `HEXA_HAS_HEXA_RT_STDLIB` bridge
-// is wired everywhere. Replaces the alias.
+// count, maps → pair count. hexa's `len()` builtin already covers all
+// three; this wrapper is a stable symbol so codegen_c2 can link rt_len
+// unconditionally in place of hexa_len.
 @pure fn rt_len(v) -> int {
-    let t = type_of(v)
-    if t == "string" { return __str_raw_len(v) }
-    if t == "array"  { return __arr_raw_len(v) }
-    if t == "map"    { return __map_raw_len(v) }
-    return 0
+    return len(v)
 }
 
 // type_of — returns the canonical type string. runtime.c collapses the

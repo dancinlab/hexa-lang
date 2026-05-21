@@ -1094,29 +1094,6 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
-### 2026-05-22 — Step 5 4-unblocker parallel campaign closure
-
-After cycle 99 step-3+4 closure, 4 parallel agents probed the CORE-tier
-unblockers needed for the 4 deferred 잔여. Outcomes:
-
-| # | unblocker | status | commit / verdict |
-|---|-----------|--------|------------------|
-| 1 | arena-disable-local API | ✅ landed | `b2ae2e9d` — `@no_arena` attr (already in codegen) + agent-#3 root-cause FALSIFIED (real bug = `hxlcl_realloc` 16-byte size-header missing → mmap over-read SIGSEGV). Bonus rt_str_concat heap-only port via `bytes_to_str_raw` accumulator now PASSES smoke under HEXA_VAL_ARENA=1 default |
-| 2 | HX raw-len + array-cap builtins | ✅ landed | `81efab36` — 4 codegen-inline builtins (`__str_raw_len`/`__arr_raw_len`/`__map_raw_len`/`__arr_set_cap`) emit `HX_*_LEN`/`HX_SET_ARR_CAP` macros inline. true-logic `rt_len` polymorphic dispatch via `type_of` activated. Pure macro expansion — no new externs |
-| 3 | HexaMapTable opaque escape | ❌ CORE-final reaffirmed | doc-only — `hmap_find` exposure unblocks `contains_key` only (1-line, not worth). Full allocator exposure = 4-6 builtins + new opaque tag system; scope-creep rejected. RUNTIME.md line retired |
-| 4 | `__fd_write_bytes` IO builtin | ⚠️ SSOT-only | codegen_c2.hexa + bind.hexa allowlist landed in this consolidation commit (DORMANT — `hexa_v2` regen needed to activate). Agent-#4's hand-patched binary + io.hexa + runtime_core.c dispatch deferred to next cycle (avoids #2 regen / #4 hand-patch conflict) |
-
-**Net Step 5 result**: 2 of 4 unblockers fully ported (#1 + #2). #3 closed as
-CORE-final. #4 SSOT-staged, awaits hexa_v2 regen.
-
-**Major win**: agent-#1 falsified the cycle-30 arena-nesting root-cause theory
-that blocked agent-#3's str_concat port. The actual bug was a 14-line `hxlcl_realloc`
-over-read across mmap chunk boundaries — a latent bug independent of arena.
-Fixed via 16-byte size header on `hxlcl_malloc`, with `hxlcl_realloc` clamping
-the byte-copy to recorded old user size. This is foundational; any hexa-source
-port that grows `[int]`/`[HexaVal]` accumulators beyond a few hundred items
-benefits.
-
 ### 2026-05-22 — Step 3+4 잔여 final status (7-agent parallel campaign)
 
 After cycles 89-99 (11 cycles spanning step 3 closure + step 4 opening),
