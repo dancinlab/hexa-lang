@@ -1,6 +1,6 @@
 # rfc_006 §5 — multi-bit width truncation in BLIF emit (post-Option-A residual)
 
-**Status**: Source 1 CLOSED 2026-05-21 (Option I landed, commit `df4ff3f7`). Source 2 OPEN.
+**Status**: filed 2026-05-21 (post Option A landing, commit `c4b35b13`)
 **Layer**: `stdlib/kernels/logic_synth/abc_map.hexa::abc_emit_blif` (`.latch` emit) + `stdlib/kernels/logic_synth/read_verilog.hexa` width-aware combinational emit
 **Predecessor**: `inbox/patches/yosys-fifo-mem-2d-array-memwr-emit.md` (Option A landed)
 
