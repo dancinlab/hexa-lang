@@ -13,21 +13,31 @@
   Discovered while manually invoking substrate `abc -c` after the
   PR #247 SSA fix + abc_map script reorder landed.
 
-**Status**: investigated, implementation deferred (2026-05-21) —
-  surface analysis confirms the patch's diagnosis: `read_verilog.hexa`
-  L2828 `if has_idx2 == 1 { continue }` is the single skip point.
-  Adjacent emit infrastructure (`_rv_emit_body_v2` at L2502, the v2
-  super-set helper, plus the existing dyn-idx emit path at L3310+
-  that captures `idx2_toks`) gives concrete entry hooks. Option A
-  (per-element flat $dff) is the recommended first cut per the patch
-  body. Real implementation is multi-cycle (T76 falsifier + Wxslot
-  $dff emit + per-slot $eq decode + per-slot $and guard + per-slot
-  $mux write-mux + downstream multi-driver reconciliation through
-  the existing connect_cond/__d/$dff pipeline at L2199-2211); not
-  attempted in this cycle. Mac arm64 build blocker now resolved
-  (see `runtime-duplicate-symbols-stdlib-port-collision.md`
-  resolved-ssot via tool/build_hexa_cli.sh step 4b), so measurement
-  infrastructure is unblocked when this work lands.
+**Status**: Option A landed (2026-05-21) — `_rv_parse_port_decl`
+  extended for the second unpacked range (P*D wires named
+  `base[i][j]` of width W), `_rv_array_bound2` added, body-parser
+  `_rv_emit_body_v2` (L2828 honest-skip removed) and bare-path
+  `_rv_parse_always` (L5040 expected-`<=`-or-`=` site) both now
+  emit per-slot demux for 2-D LHS writes. Four sub-cases handled
+  (const-const · const-dyn · dyn-const · dyn-dyn) with $eq + $and +
+  $mux + $dff per slot (bare path) / cond-tagged rows + tracked
+  $dff downstream (v2 helper). T76 falsifier landed
+  (2-D `m[i][j] <= d` round-trip · 4 slots · 8 $eq · 4 $and · 4
+  $mux · 4 $dff · bound2=(2,2)) — read_verilog selftest 79/79 PASS.
+  Measured router_d{4,6} after this fix:
+    d4 area = 1207.41 µm² (was 559.286 µm², 2.16× vs cited oracle
+              still ~98% under 61762.99 µm²)
+    d6 area = 1677.86 µm² (was 771.99 µm², 2.17× vs cited oracle
+              still ~98% under 93608.53 µm²)
+  ABC `abc_map: ok` for both designs — no NetworkCheck failure,
+  no honest-skip warning. §5 area-oracle ±5% gate REMAINS OPEN —
+  Option A delivered on its own scoped claim (area > 0 +
+  measurable + no skip), but the absolute area is far below
+  substrate (expected per the patch's body: "~1,340 cells per
+  router · 10× above oracle"). Closure to ±5% needs the deeper
+  substrate match (Option B — RTLIL $memrd/$memwr + module-level
+  $mem cells with synth_memory_dff consolidation) OR the crossbar
+  output array writes (Tier-1 (f) territory).
 
 ## Symptom
 

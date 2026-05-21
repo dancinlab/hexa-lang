@@ -691,8 +691,10 @@ fn _rv_parse_port_decl(st_in: PState, m_in: Module, dir_kind: int, tab: SymTab) 
         width = rg.width
         st = rg.st
     }
-    // name list — each may carry an optional 1-D unpacked range that
-    // expands to one wire per index (`q [ 0 : 3 ]` → q[0]..q[3]).
+    // name list — each may carry an optional 1-D or 2-D unpacked range
+    // that expands to one wire per index combination
+    // (`q [ 0 : 3 ]` → q[0]..q[3];
+    //  `m [ 0 : 1 ] [ 0 : 2 ]` → m[0][0]..m[1][2]).
     while st.pos < len(st.toks) {
         let t = _ps_peek(st)
         if t == ";" { st = _ps_take(st); break }
@@ -704,13 +706,36 @@ fn _rv_parse_port_decl(st_in: PState, m_in: Module, dir_kind: int, tab: SymTab) 
             let ur = _rv_parse_range(st, tab)
             if len(ur.err) > 0 { return RvStep { st: _ps_fail(st, ur.err), m: m } }
             st = ur.st
-            let mut k = 0
-            while k < ur.width {
-                let wn = nm + "[" + str(k) + "]"
-                let mut pid = 0
-                if dir_kind > 0 { pid = len(m.wires) + 1 }
-                m = rtlil_module_add_wire(m, rtlil_wire(wn, width, dir_kind, pid))
-                k = k + 1
+            // Optional second unpacked dim — `reg [W-1:0] m [0:P-1][0:D-1]`.
+            // rfc_006 §5 Tier-1 (e) fifo_mem 2-D LHS path: when present,
+            // emit P*D wires named `nm[i][j]` of width `width` each. The
+            // body parser at L2828 / dyn-idx emit at the 2-D branch use
+            // `_rv_array_bound2(m, nm)` to recover (P, D).
+            if _ps_peek(st) == "[" {
+                let ur2 = _rv_parse_range(st, tab)
+                if len(ur2.err) > 0 { return RvStep { st: _ps_fail(st, ur2.err), m: m } }
+                st = ur2.st
+                let mut k = 0
+                while k < ur.width {
+                    let mut k2 = 0
+                    while k2 < ur2.width {
+                        let wn = nm + "[" + str(k) + "][" + str(k2) + "]"
+                        let mut pid = 0
+                        if dir_kind > 0 { pid = len(m.wires) + 1 }
+                        m = rtlil_module_add_wire(m, rtlil_wire(wn, width, dir_kind, pid))
+                        k2 = k2 + 1
+                    }
+                    k = k + 1
+                }
+            } else {
+                let mut k = 0
+                while k < ur.width {
+                    let wn = nm + "[" + str(k) + "]"
+                    let mut pid = 0
+                    if dir_kind > 0 { pid = len(m.wires) + 1 }
+                    m = rtlil_module_add_wire(m, rtlil_wire(wn, width, dir_kind, pid))
+                    k = k + 1
+                }
             }
         } else {
             let mut pid = 0
@@ -1754,13 +1779,79 @@ fn _rv_array_bound(m: Module, base: str) -> int {
         if len(wn) > pl {
             if wn.substring(0, pl) == prefix {
                 if wn.substring(len(wn) - 1, len(wn)) == "]" {
-                    count = count + 1
+                    // Filter to 1-D entries (`base[k]`) — wires with a
+                    // second `[` after the prefix are 2-D (`base[i][j]`)
+                    // and counted by _rv_array_bound2.
+                    let rest = wn.substring(pl, len(wn))
+                    let mut has2 = 0
+                    let mut k = 0
+                    while k < len(rest) {
+                        if rest.substring(k, k + 1) == "[" { has2 = 1 }
+                        k = k + 1
+                    }
+                    if has2 == 0 { count = count + 1 }
                 }
             }
         }
         i = i + 1
     }
     return count
+}
+
+// CLEAN-ROOM (rfc_006 §5 Tier-1 (e)): bounds of an unpacked 2-D array
+// declared as `reg [W-1:0] base [0:P-1] [0:D-1]`. Returns the (outer,
+// inner) pair as `RvBound2 { outer: P, inner: D }` by scanning wires
+// for the `base[i][j]` pattern. (0, 0) when no 2-D entries found.
+struct RvBound2 {
+    outer: int,
+    inner: int,
+}
+
+fn _rv_array_bound2(m: Module, base: str) -> RvBound2 {
+    let prefix = base + "["
+    let pl = len(prefix)
+    let mut max_outer = 0 - 1
+    let mut max_inner = 0 - 1
+    let mut i = 0
+    while i < len(m.wires) {
+        let wn = m.wires[i].name
+        if len(wn) > pl {
+            if wn.substring(0, pl) == prefix {
+                if wn.substring(len(wn) - 1, len(wn)) == "]" {
+                    // Walk rest of name after the prefix; require shape
+                    // `<outer_digits>][<inner_digits>]`.
+                    let rest = wn.substring(pl, len(wn))
+                    let mut k = 0
+                    let mut outer_buf = ""
+                    while k < len(rest) {
+                        let ch = rest.substring(k, k + 1)
+                        if ch == "]" { k = k + 1; break }
+                        outer_buf = outer_buf + ch
+                        k = k + 1
+                    }
+                    if k < len(rest) && rest.substring(k, k + 1) == "[" {
+                        k = k + 1
+                        let mut inner_buf = ""
+                        while k < len(rest) {
+                            let ch2 = rest.substring(k, k + 1)
+                            if ch2 == "]" { k = k + 1; break }
+                            inner_buf = inner_buf + ch2
+                            k = k + 1
+                        }
+                        let outer_v = _rv_parse_digits(outer_buf, 0, 10)
+                        let inner_v = _rv_parse_digits(inner_buf, 0, 10)
+                        if len(outer_buf) > 0 && outer_v > max_outer { max_outer = outer_v }
+                        if len(inner_buf) > 0 && inner_v > max_inner { max_inner = inner_v }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    if max_outer < 0 || max_inner < 0 {
+        return RvBound2 { outer: 0, inner: 0 }
+    }
+    return RvBound2 { outer: max_outer + 1, inner: max_inner + 1 }
 }
 
 // CLEAN-ROOM: linear lookup of a function by name; -1 if absent.
@@ -2786,12 +2877,14 @@ fn _rv_emit_body_v2(
         if len(stmt) < 4 { continue }
         if stmt[len(stmt) - 1] != ";" { continue }
         // Find the LHS extent and operator. LHS may be:
-        //   (a) simple-name  →  op at stmt[1]
-        //   (b) name [ idx ] →  op at stmt[idx_close + 1]
-        //   (c) name [ idx1 ] [ idx2 ] → 2-D (graceful skip)
+        //   (a) simple-name           →  op at stmt[1]
+        //   (b) name [ idx ]          →  op at stmt[idx_close + 1]
+        //   (c) name [ idx1 ] [ idx2 ] → 2-D (Option A flat $dff emit
+        //                                rfc_006 §5 Tier-1 (e))
         let lhs_base = stmt[0]
         let mut op_pos = 0 - 1
         let mut idx1_toks: [str] = []
+        let mut idx2_toks: [str] = []
         let mut has_idx1 = 0
         let mut has_idx2 = 0
         if stmt[1] == "<=" || stmt[1] == "=" {
@@ -2809,23 +2902,32 @@ fn _rv_emit_body_v2(
                 }
                 idx1_toks = idx1_toks.push(stmt[p]); p = p + 1
             }
-            // optional second [ idx2 ] — 2-D, graceful skip
+            // optional second [ idx2 ] — 2-D, captured for Option A
+            // flat $dff emit (rfc_006 §5 Tier-1 (e)).
             if p < len(stmt) && stmt[p] == "[" {
                 has_idx2 = 1
                 let mut d2 = 1
                 p = p + 1
                 while p < len(stmt) && d2 > 0 {
-                    if stmt[p] == "[" { d2 = d2 + 1 }
+                    if stmt[p] == "[" {
+                        d2 = d2 + 1
+                        idx2_toks = idx2_toks.push(stmt[p])
+                        p = p + 1
+                        continue
+                    }
                     if stmt[p] == "]" {
                         d2 = d2 - 1
                         if d2 == 0 { p = p + 1; break }
+                        idx2_toks = idx2_toks.push(stmt[p])
+                        p = p + 1
+                        continue
                     }
+                    idx2_toks = idx2_toks.push(stmt[p])
                     p = p + 1
                 }
             }
             if p < len(stmt) && (stmt[p] == "<=" || stmt[p] == "=") { op_pos = p }
         }
-        if has_idx2 == 1 { continue }              // 2-D — honest skip
         if op_pos <= 0 { continue }
         let op = stmt[op_pos]
         if op == "<=" && is_clocked == 0 { continue }
@@ -2837,6 +2939,141 @@ fn _rv_emit_body_v2(
         let rer = _rv_elab_expr(rhs, 0, m, 1, tab)
         if len(rer.err) > 0 { continue }
         m = rer.m
+        // ── 2-D indexed LHS — rfc_006 §5 Tier-1 (e) Option A ──
+        // `base [ idx1 ] [ idx2 ] [op] rhs ;` over a 2-D unpacked array
+        // declared as `reg [W-1:0] base [0:P-1] [0:D-1]`. Wires emitted
+        // by `_rv_parse_port_decl` are named `base[i][j]` of width W
+        // each (P*D total). Each `(i, j)` slot becomes its own
+        // cond-tagged row whose guard is `(idx1==i) && (idx2==j) &&
+        // outer_cond`; the downstream `_rv_emit_dff_for_tracked` and
+        // `pass_proc_mux` pipeline folds them into one $dff + $mux
+        // chain per slot. Four sub-cases by const-foldability of the
+        // indices:
+        //   (const i, const j) — direct connect to `base[i][j]`
+        //   (const i, dyn j)   — D inner-eq rows for fixed outer
+        //   (dyn i, const j)   — P outer-eq rows for fixed inner
+        //   (dyn i, dyn j)     — P*D per-slot rows with eq && eq
+        if has_idx2 == 1 {
+            let ev1 = _rv_eval_expr(idx1_toks, 0, tab, 1)
+            let ev2 = _rv_eval_expr(idx2_toks, 0, tab, 1)
+            let static1 = if len(ev1.err) == 0 { 1 } else { 0 }
+            let static2 = if len(ev2.err) == 0 { 1 } else { 0 }
+            // (const, const) — direct connect, no $eq/$and chain.
+            if static1 == 1 && static2 == 1 {
+                let slot = lhs_base + "[" + str(ev1.value) + "][" + str(ev2.value) + "]"
+                if is_clocked == 1 {
+                    let dw = _rv_v2_dwire(slot)
+                    if rtlil_find_wire(m, dw) < 0 {
+                        m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                    }
+                    m = rtlil_module_connect_cond(m, dw, rer.wire, cond_wire)
+                    tracked = _rv_v2_track(tracked, slot)
+                } else {
+                    m = rtlil_module_connect_cond(m, slot, rer.wire, cond_wire)
+                }
+                continue
+            }
+            // Dyn cases — query bounds + elaborate dyn index expressions.
+            let b2 = _rv_array_bound2(m, lhs_base)
+            if b2.outer <= 0 || b2.inner <= 0 { continue }
+            let mut elab_idx1_w = ""
+            if static1 == 0 {
+                let er1 = _rv_elab_expr(idx1_toks, 0, m, 1, tab)
+                if len(er1.err) > 0 { continue }
+                m = er1.m
+                elab_idx1_w = er1.wire
+            }
+            let mut elab_idx2_w = ""
+            if static2 == 0 {
+                let er2 = _rv_elab_expr(idx2_toks, 0, m, 1, tab)
+                if len(er2.err) > 0 { continue }
+                m = er2.m
+                elab_idx2_w = er2.wire
+            }
+            // For static1, restrict outer loop to {ev1.value}; else 0..outer.
+            // Same for static2.
+            let oi_lo = if static1 == 1 { ev1.value } else { 0 }
+            let oi_hi = if static1 == 1 { ev1.value + 1 } else { b2.outer }
+            let ii_lo = if static2 == 1 { ev2.value } else { 0 }
+            let ii_hi = if static2 == 1 { ev2.value + 1 } else { b2.inner }
+            let mut oi = oi_lo
+            while oi < oi_hi {
+                let mut ii = ii_lo
+                while ii < ii_hi {
+                    let slot = lhs_base + "[" + str(oi) + "][" + str(ii) + "]"
+                    // Build per-slot select wire: combine guards
+                    // (outer_eq, inner_eq, cond_wire) via $and chain.
+                    let mut sel_w = ""
+                    if static1 == 0 {
+                        let coi = "$const_" + str(oi)
+                        if rtlil_find_wire(m, coi) < 0 {
+                            m = rtlil_module_add_wire(m, rtlil_wire(coi, 1, 0, 0))
+                        }
+                        let eq1y = _rv_fresh_wire(m)
+                        m = rtlil_module_add_wire(m, rtlil_wire(eq1y, 1, 0, 0))
+                        let mut eq1c = rtlil_cell(eq1y + "$eq", "$eq", 0)
+                        eq1c = rtlil_cell_connect(eq1c, "A", elab_idx1_w)
+                        eq1c = rtlil_cell_connect(eq1c, "B", coi)
+                        eq1c = rtlil_cell_connect(eq1c, "Y", eq1y)
+                        m = rtlil_module_add_cell(m, eq1c)
+                        sel_w = eq1y
+                    }
+                    if static2 == 0 {
+                        let cii = "$const_" + str(ii)
+                        if rtlil_find_wire(m, cii) < 0 {
+                            m = rtlil_module_add_wire(m, rtlil_wire(cii, 1, 0, 0))
+                        }
+                        let eq2y = _rv_fresh_wire(m)
+                        m = rtlil_module_add_wire(m, rtlil_wire(eq2y, 1, 0, 0))
+                        let mut eq2c = rtlil_cell(eq2y + "$eq", "$eq", 0)
+                        eq2c = rtlil_cell_connect(eq2c, "A", elab_idx2_w)
+                        eq2c = rtlil_cell_connect(eq2c, "B", cii)
+                        eq2c = rtlil_cell_connect(eq2c, "Y", eq2y)
+                        m = rtlil_module_add_cell(m, eq2c)
+                        if len(sel_w) == 0 {
+                            sel_w = eq2y
+                        } else {
+                            let andy = _rv_fresh_wire(m)
+                            m = rtlil_module_add_wire(m, rtlil_wire(andy, 1, 0, 0))
+                            let mut andc = rtlil_cell(andy + "$and", "$and", 0)
+                            andc = rtlil_cell_connect(andc, "A", sel_w)
+                            andc = rtlil_cell_connect(andc, "B", eq2y)
+                            andc = rtlil_cell_connect(andc, "Y", andy)
+                            m = rtlil_module_add_cell(m, andc)
+                            sel_w = andy
+                        }
+                    }
+                    // AND in outer cond_wire if present.
+                    if len(cond_wire) > 0 {
+                        if len(sel_w) == 0 {
+                            sel_w = cond_wire
+                        } else {
+                            let andy = _rv_fresh_wire(m)
+                            m = rtlil_module_add_wire(m, rtlil_wire(andy, 1, 0, 0))
+                            let mut andc = rtlil_cell(andy + "$and", "$and", 0)
+                            andc = rtlil_cell_connect(andc, "A", cond_wire)
+                            andc = rtlil_cell_connect(andc, "B", sel_w)
+                            andc = rtlil_cell_connect(andc, "Y", andy)
+                            m = rtlil_module_add_cell(m, andc)
+                            sel_w = andy
+                        }
+                    }
+                    if is_clocked == 1 {
+                        let dw = _rv_v2_dwire(slot)
+                        if rtlil_find_wire(m, dw) < 0 {
+                            m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                        }
+                        m = rtlil_module_connect_cond(m, dw, rer.wire, sel_w)
+                        tracked = _rv_v2_track(tracked, slot)
+                    } else {
+                        m = rtlil_module_connect_cond(m, slot, rer.wire, sel_w)
+                    }
+                    ii = ii + 1
+                }
+                oi = oi + 1
+            }
+            continue
+        }
         // ── leaf emission (Phase 3e per-LHS D-wire model) ──
         // For clocked writes: emit `connect_cond(<lhs>__d, rhs, guard)`
         //   and track <lhs> for $dff stitching at the always-handler
@@ -4768,6 +5005,7 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
         let mut had_brack = 0
         let mut idx_folded = 0
         let mut idx_toks_saved: [str] = []
+        let mut idx_value = 0
         if _ps_peek(st) == "[" {
             had_brack = 1
             st = _ps_take(st)
@@ -4795,8 +5033,49 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
             if len(ev.err) == 0 {
                 q = q_base + "[" + str(ev.value) + "]"
                 idx_folded = 1
+                idx_value = ev.value
             } else {
                 idx_toks_saved = idxtoks
+            }
+        }
+        // rfc_006 §5 Tier-1 (e) — optional SECOND bracket for 2-D LHS
+        // `base [ idx1 ] [ idx2 ]`. Captured here so the per-slot 2-D
+        // demux emit below can compose the per-slot guard with both
+        // index equalities. The legacy 1-D paths below are bypassed
+        // when has_idx2==1 (the 2-D branch handles emit).
+        let mut has_idx2 = 0
+        let mut idx2_folded = 0
+        let mut idx2_value = 0
+        let mut idx2_toks_saved: [str] = []
+        if had_brack == 1 && _ps_peek(st) == "[" {
+            has_idx2 = 1
+            st = _ps_take(st)
+            let mut idx2toks: [str] = []
+            let mut d2 = 1
+            while st.pos < len(st.toks) {
+                let it2 = _ps_peek(st)
+                if it2 == "[" {
+                    d2 = d2 + 1
+                    idx2toks = idx2toks.push(it2)
+                    st = _ps_take(st)
+                    continue
+                }
+                if it2 == "]" {
+                    d2 = d2 - 1
+                    if d2 == 0 { st = _ps_take(st); break }
+                    idx2toks = idx2toks.push(it2)
+                    st = _ps_take(st)
+                    continue
+                }
+                idx2toks = idx2toks.push(it2)
+                st = _ps_take(st)
+            }
+            let ev2 = _rv_eval_expr(idx2toks, 0, tab, 1)
+            if len(ev2.err) == 0 {
+                idx2_folded = 1
+                idx2_value = ev2.value
+            } else {
+                idx2_toks_saved = idx2toks
             }
         }
         let opk = _ps_peek(st)
@@ -4820,6 +5099,124 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
             return RvStep { st: _ps_fail(st, er.err), m: m }
         }
         m = er.m
+        // ── rfc_006 §5 Tier-1 (e) — bare-path 2-D LHS demux ──
+        // `base [ idx1 ] [ idx2 ] [op] rhs ;` over a 2-D unpacked
+        // array `reg [W-1:0] base [0:P-1] [0:D-1]`. Decl-step emits
+        // P*D wires `base[i][j]`. Each (i, j) slot gets its own
+        // $eq($eq($and)) chain feeding a $mux feedback-hold + $dff
+        // (clocked) or direct connect (comb). Const-fold short-cuts
+        // (const-const → direct write, const-dyn → reduced loop)
+        // share the same emit.
+        if has_idx2 == 1 {
+            // (const, const) → direct connect, no demux.
+            if idx_folded == 1 && idx2_folded == 1 {
+                let slot = q_base + "[" + str(idx_value) + "][" + str(idx2_value) + "]"
+                if is_clocked == 1 {
+                    let dn = "$rvff$" + str(len(m.cells))
+                    let mut dc = rtlil_cell(dn, "$dff", 0)
+                    dc = rtlil_cell_connect(dc, "CLK", clk_wire)
+                    dc = rtlil_cell_connect(dc, "D", er.wire)
+                    dc = rtlil_cell_connect(dc, "Q", slot)
+                    m = rtlil_module_add_cell(m, dc)
+                    let _eg = clk_edge
+                } else {
+                    m = rtlil_module_connect(m, slot, er.wire)
+                }
+                if has_begin == 0 { keep_going = 0 }
+                continue
+            }
+            // Dyn-side cases — query bounds and elaborate dyn index
+            // expressions.
+            let b2_bare = _rv_array_bound2(m, q_base)
+            if b2_bare.outer > 0 && b2_bare.inner > 0 {
+                let mut ier1_w_bare = ""
+                if idx_folded == 0 {
+                    let ier1 = _rv_elab_expr(idx_toks_saved, 0, m, 1, tab)
+                    if len(ier1.err) > 0 {
+                        return RvStep { st: _ps_fail(st, ier1.err), m: m }
+                    }
+                    m = ier1.m
+                    ier1_w_bare = ier1.wire
+                }
+                let mut ier2_w_bare = ""
+                if idx2_folded == 0 {
+                    let ier2 = _rv_elab_expr(idx2_toks_saved, 0, m, 1, tab)
+                    if len(ier2.err) > 0 {
+                        return RvStep { st: _ps_fail(st, ier2.err), m: m }
+                    }
+                    m = ier2.m
+                    ier2_w_bare = ier2.wire
+                }
+                let oi_lo_b = if idx_folded == 1 { idx_value } else { 0 }
+                let oi_hi_b = if idx_folded == 1 { idx_value + 1 } else { b2_bare.outer }
+                let ii_lo_b = if idx2_folded == 1 { idx2_value } else { 0 }
+                let ii_hi_b = if idx2_folded == 1 { idx2_value + 1 } else { b2_bare.inner }
+                let mut oi_b = oi_lo_b
+                while oi_b < oi_hi_b {
+                    let mut ii_b = ii_lo_b
+                    while ii_b < ii_hi_b {
+                        let slot = q_base + "[" + str(oi_b) + "][" + str(ii_b) + "]"
+                        // Build per-slot select wire.
+                        let mut sel_w_b = ""
+                        if idx_folded == 0 {
+                            let eq1y_b = _rv_fresh_wire(m)
+                            m = rtlil_module_add_wire(m, rtlil_wire(eq1y_b, 1, 0, 0))
+                            let mut eq1c_b = rtlil_cell(eq1y_b + "$eq", "$eq", 0)
+                            eq1c_b = rtlil_cell_connect(eq1c_b, "A", ier1_w_bare)
+                            eq1c_b = rtlil_cell_connect(eq1c_b, "B", str(oi_b))
+                            eq1c_b = rtlil_cell_connect(eq1c_b, "Y", eq1y_b)
+                            m = rtlil_module_add_cell(m, eq1c_b)
+                            sel_w_b = eq1y_b
+                        }
+                        if idx2_folded == 0 {
+                            let eq2y_b = _rv_fresh_wire(m)
+                            m = rtlil_module_add_wire(m, rtlil_wire(eq2y_b, 1, 0, 0))
+                            let mut eq2c_b = rtlil_cell(eq2y_b + "$eq", "$eq", 0)
+                            eq2c_b = rtlil_cell_connect(eq2c_b, "A", ier2_w_bare)
+                            eq2c_b = rtlil_cell_connect(eq2c_b, "B", str(ii_b))
+                            eq2c_b = rtlil_cell_connect(eq2c_b, "Y", eq2y_b)
+                            m = rtlil_module_add_cell(m, eq2c_b)
+                            if len(sel_w_b) == 0 {
+                                sel_w_b = eq2y_b
+                            } else {
+                                let andy_b = _rv_fresh_wire(m)
+                                m = rtlil_module_add_wire(m, rtlil_wire(andy_b, 1, 0, 0))
+                                let mut andc_b = rtlil_cell(andy_b + "$and", "$and", 0)
+                                andc_b = rtlil_cell_connect(andc_b, "A", sel_w_b)
+                                andc_b = rtlil_cell_connect(andc_b, "B", eq2y_b)
+                                andc_b = rtlil_cell_connect(andc_b, "Y", andy_b)
+                                m = rtlil_module_add_cell(m, andc_b)
+                                sel_w_b = andy_b
+                            }
+                        }
+                        // sel_w_b is non-empty (we are in dyn-some case)
+                        let mux_y_b = _rv_fresh_wire(m)
+                        m = rtlil_module_add_wire(m, rtlil_wire(mux_y_b, 1, 0, 0))
+                        let mut muxc_b = rtlil_cell(mux_y_b + "$mux", "$mux", 0)
+                        muxc_b = rtlil_cell_connect(muxc_b, "A", slot)
+                        muxc_b = rtlil_cell_connect(muxc_b, "B", er.wire)
+                        muxc_b = rtlil_cell_connect(muxc_b, "S", sel_w_b)
+                        muxc_b = rtlil_cell_connect(muxc_b, "Y", mux_y_b)
+                        m = rtlil_module_add_cell(m, muxc_b)
+                        if is_clocked == 1 {
+                            let dn = "$rvff$" + str(len(m.cells))
+                            let mut dc = rtlil_cell(dn, "$dff", 0)
+                            dc = rtlil_cell_connect(dc, "CLK", clk_wire)
+                            dc = rtlil_cell_connect(dc, "D", mux_y_b)
+                            dc = rtlil_cell_connect(dc, "Q", slot)
+                            m = rtlil_module_add_cell(m, dc)
+                            let _eg = clk_edge
+                        } else {
+                            m = rtlil_module_connect(m, slot, mux_y_b)
+                        }
+                        ii_b = ii_b + 1
+                    }
+                    oi_b = oi_b + 1
+                }
+                if has_begin == 0 { keep_going = 0 }
+                continue
+            }
+        }
         // RFC 073 Phase 3d — dynamic-LHS clocked-write demux (bare path).
         //   Shape: `always @(posedge clk) [begin] name [ K ] <= rhs ; [end]`
         //   where K is a runtime wire (does NOT const-fold) and `name`
@@ -6922,6 +7319,81 @@ fn main() {
         if _t75_rr_drivers != 1 {
             println("FAIL T75e expected exactly 1 unconditional driver of `rr` (post-publish) got "
                 + str(_t75_rr_drivers))
+            fails = fails + 1
+        }
+    }
+
+    // T76 — RFC 006 §5 Tier-1 (e) Option A: 2-D LHS write
+    // (`reg [W-1:0] m [0:N-1] [0:M-1] ; always @(posedge clk) m[i][j] <= d ;`)
+    // lowers to N*M slot wires + dyn-idx per-slot $eq chain. Falsifier
+    // F-RFC006-T1E-2D-LHS asserts:
+    //   T76a — N*M slot wires named `m[i][j]` exist post-decl
+    //   T76b — N outer-$eq cells (one per outer index value) — N rows
+    //          AND M inner-$eq cells (one per inner index value) = N+M
+    //          total $eq cells (shared across slots in current emit,
+    //          dyn,dyn case emits PER-SLOT eq → N*M outer + N*M inner)
+    //   T76c — N*M $dff cells (downstream _rv_emit_dff_for_tracked
+    //          stitches per tracked slot)
+    //   T76d — no honest-skip: at least N*M cond-tagged connect rows
+    //          for `m[i][j]__d`
+    //   T76e — total slot count `_rv_array_bound2(m, "m")` returns
+    //          (N, M)
+    total = total + 1
+    let _v76 = "module sm76 ( input clk , input [ 1 : 0 ] i , input [ 1 : 0 ] j , input d ) ; reg m [ 0 : 1 ] [ 0 : 1 ] ; always @ ( posedge clk ) m [ i ] [ j ] <= d ; endmodule"
+    let _r76 = read_verilog(_v76)
+    if _r76.ok != 1 {
+        println("FAIL T76 2d_lhs_dyn_dyn: " + _r76.message); fails = fails + 1
+    } else {
+        let _m76 = _r76.design.modules[0]
+        // T76a — N*M = 4 slot wires
+        let mut _slot_ct = 0
+        let mut _wi = 0
+        while _wi < len(_m76.wires) {
+            let _wn = _m76.wires[_wi].name
+            if _wn == "m[0][0]" { _slot_ct = _slot_ct + 1 }
+            if _wn == "m[0][1]" { _slot_ct = _slot_ct + 1 }
+            if _wn == "m[1][0]" { _slot_ct = _slot_ct + 1 }
+            if _wn == "m[1][1]" { _slot_ct = _slot_ct + 1 }
+            _wi = _wi + 1
+        }
+        if _slot_ct != 4 {
+            println("FAIL T76a slot wire count got " + str(_slot_ct) + " (expected 4)")
+            fails = fails + 1
+        }
+        // T76b — both dyn → 4 outer-$eq + 4 inner-$eq = 8 $eq cells
+        // (current emit makes per-slot eq, no sharing).
+        let _ec76 = rtlil_count_cells_of_type(_m76, "$eq")
+        if _ec76 != 8 {
+            println("FAIL T76b eq_count got " + str(_ec76) + " (expected 8 = 4 outer + 4 inner)")
+            fails = fails + 1
+        }
+        // T76c — 4 $dff cells emitted downstream
+        let _dc76 = rtlil_count_cells_of_type(_m76, "$dff")
+        if _dc76 != 4 {
+            println("FAIL T76c dff_count got " + str(_dc76) + " (expected 4)")
+            fails = fails + 1
+        }
+        // T76d — $mux + $and cells per slot ($mux=4 for the feedback-
+        // hold per slot from bare-path emit; $and=4 since both indices
+        // dyn → eq1 AND eq2 per slot).
+        let _mc76 = rtlil_count_cells_of_type(_m76, "$mux")
+        if _mc76 != 4 {
+            println("FAIL T76d mux_count got " + str(_mc76) + " (expected 4)")
+            fails = fails + 1
+        }
+        let _ac76 = rtlil_count_cells_of_type(_m76, "$and")
+        if _ac76 != 4 {
+            println("FAIL T76d2 and_count got " + str(_ac76) + " (expected 4 — outer && inner per slot)")
+            fails = fails + 1
+        }
+        // T76e — _rv_array_bound2 returns (2, 2)
+        let _b76 = _rv_array_bound2(_m76, "m")
+        if _b76.outer != 2 {
+            println("FAIL T76e outer bound got " + str(_b76.outer) + " (expected 2)")
+            fails = fails + 1
+        }
+        if _b76.inner != 2 {
+            println("FAIL T76e inner bound got " + str(_b76.inner) + " (expected 2)")
             fails = fails + 1
         }
     }
