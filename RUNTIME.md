@@ -1018,3 +1018,28 @@ it operates on HexaVal tags from C.
   dispatch identical to chunk/rotate
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,536 B
+
+### 2026-05-21 — step 3 cycle 32: rt_array_unique_float (close latent cycle-29 gap)
+
+- ✅ Latent link-failure closed. `self/runtime.c:3589` had declared
+  `extern HexaVal rt_array_unique_float` since cycle 29, but the
+  hexa-side implementation was never landed — a `.unique()` call on a
+  float array would have failed at clang link. This cycle lands the
+  O(n²) dedupe body in `stdlib/runtime/numeric.hexa` (same algorithm
+  as the C path, hexa `==` substitutes for `hexa_eq`)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved)
+- commit `408d38a7`
+
+### 2026-05-21 — step 3 cycle 33: hexa_array_index_of → rt_array_index_of_float
+
+- ✅ `hexa_array_index_of` (self/runtime.c:3069) ported. Dispatches to
+  `rt_array_index_of_float` only when both the array is all-float and
+  the search item is float; mixed-type / non-float searches stay on
+  the polymorphic C body. Typed `==` substitutes for `hexa_eq`
+- Added a `static int _arr_all_float(HexaVal arr);` forward
+  declaration inside the `#else` branch — index_of (line 3073) sits
+  ~200 lines above `_arr_all_float` (line 3273) and would otherwise
+  fail to compile
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,504 B
+- commit `5d2f9420`
