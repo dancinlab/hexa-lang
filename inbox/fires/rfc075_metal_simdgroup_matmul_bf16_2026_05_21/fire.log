@@ -1,0 +1,28 @@
+device_name=Apple M3
+registry_id=4294968442
+max_threads_per_threadgroup=MTLSize(width: 1024, height: 1024, depth: 1024)
+max_threadgroup_memory_length=32768
+pipe8     tew=32 max=1024
+pipe16    tew=32 max=1024
+pipe32tg  tew=32 max=1024
+simdgroup_matmul_8x8_bf16           M=128 N=128 K=128  median=0.0192ms  GFLOPS=218.83  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_16x16_bf16         M=128 N=128 K=128  median=0.0200ms  GFLOPS=209.72  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_32x32_tg_bf16      M=128 N=128 K=128  median=0.0175ms  GFLOPS=239.11  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_8x8_bf16           M=256 N=256 K=256  median=0.1556ms  GFLOPS=215.61  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_16x16_bf16         M=256 N=256 K=256  median=0.1171ms  GFLOPS=286.59  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_32x32_tg_bf16      M=256 N=256 K=256  median=0.0636ms  GFLOPS=527.38  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_8x8_bf16           M=512 N=512 K=512  median=0.5383ms  GFLOPS=498.72  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_16x16_bf16         M=512 N=512 K=512  median=0.5605ms  GFLOPS=478.89  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_32x32_tg_bf16      M=512 N=512 K=512  median=0.3041ms  GFLOPS=882.65  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_8x8_bf16           M=768 N=768 K=768  median=2.4396ms  GFLOPS=371.36  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_16x16_bf16         M=768 N=768 K=768  median=2.0184ms  GFLOPS=448.85  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_32x32_tg_bf16      M=768 N=768 K=768  median=0.8928ms  GFLOPS=1014.81  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_8x8_bf16           M=1024 N=1024 K=1024  median=4.6580ms  GFLOPS=461.03  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_16x16_bf16         M=1024 N=1024 K=1024  median=4.7416ms  GFLOPS=452.90  max|d|=0.000e+00  rel=0.000e+00  PASS
+simdgroup_matmul_32x32_tg_bf16      M=1024 N=1024 K=1024  median=2.0859ms  GFLOPS=1029.54  max|d|=0.000e+00  rel=0.000e+00  PASS
+F-RFC075-METAL-SIMDGROUP-BF16-NUMERIC-EQ: PASS
+PEAK_SIMDGROUP_BF16_GFLOPS=1029.54 (best of 8x8/16x16/32x32_tg across 128/256/512/768/1024)
+BF16_OVER_FP32_PEAK_RATIO=1.129x (FP32 peak = 911.55 GFLOPS @ commit 31d729a4)
+BF16_OVER_MIXED_PEAK_RATIO=1.043x (mixed-prec FP16/FP32 peak = 987.00 GFLOPS @ commit 99aed70f)
+MAX_REL_ERR_OVERALL=0.000e+00 (gate < 1e-2)
+APPLE_M3_BF16_HYPOTHESIS_VERDICT=PASS_bf16_at_least_as_fast_as_fp32
