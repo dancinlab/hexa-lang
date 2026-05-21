@@ -1,0 +1,71 @@
+Device: NVIDIA GeForce RTX 5070 sm_120
+CUDA driver=13000 runtime=12000
+loaded hexa PTX shape 192 (wmma_192x192_grid)
+loaded hexa PTX shape 256 (wmma_256x256_grid)
+loaded hexa PTX shape 320 (wmma_320x320_grid)
+loaded hexa PTX shape 384 (wmma_384x384_grid)
+loaded hexa PTX shape 448 (wmma_448x448_grid)
+loaded hexa PTX shape 512 (wmma_512x512_grid)
+loaded hexa PTX shape 576 (wmma_576x576_grid)
+loaded hexa PTX shape 640 (wmma_640x640_grid)
+loaded hexa PTX shape 704 (wmma_704x704_grid)
+loaded hexa PTX shape 768 (wmma_768x768_grid)
+loaded hexa PTX shape 832 (wmma_832x832_grid)
+loaded hexa PTX shape 896 (wmma_896x896_grid)
+loaded hexa PTX shape 960 (wmma_960x960_grid)
+loaded hexa PTX shape 1024 (wmma_1024x1024_grid)
+loaded hexa PTX shape 1088 (wmma_1088x1088_grid)
+loaded hexa PTX shape 1152 (wmma_1152x1152_grid)
+loaded hexa PTX shape 1280 (wmma_1280x1280_grid)
+loaded hexa PTX shape 1408 (wmma_1408x1408_grid)
+loaded hexa PTX shape 1536 (wmma_1536x1536_grid)
+loaded hexa PTX shape 1664 (wmma_1664x1664_grid)
+loaded hexa PTX shape 1792 (wmma_1792x1792_grid)
+loaded hexa PTX shape 1920 (wmma_1920x1920_grid)
+loaded hexa PTX shape 2048 (wmma_2048x2048_grid)
+[M= 192] cuBLAS  median=0.004672 ms  std=0.001918  min=0.003872  max=0.013920  TFLOPS=  3.0299
+[M= 192] hexa    median=0.007120 ms  std=0.000841  min=0.005984  max=0.010848  TFLOPS=  1.9882  ratio=0.6562  maxabs=0.0000
+[M= 256] cuBLAS  median=0.006720 ms  std=0.001035  min=0.004704  max=0.013920  TFLOPS=  4.9932
+[M= 256] hexa    median=0.008448 ms  std=0.000658  min=0.007232  max=0.009824  TFLOPS=  3.9719  ratio=0.7955  maxabs=0.0000
+[M= 320] cuBLAS  median=0.006752 ms  std=0.001715  min=0.005696  max=0.016000  TFLOPS=  9.7062
+[M= 320] hexa    median=0.010560 ms  std=0.000524  min=0.009120  max=0.010912  TFLOPS=  6.2061  ratio=0.6394  maxabs=0.0000
+[M= 384] cuBLAS  median=0.006752 ms  std=0.001275  min=0.005920  max=0.015968  TFLOPS= 16.7722
+[M= 384] hexa    median=0.010592 ms  std=0.000477  min=0.010304  max=0.012864  TFLOPS= 10.6917  ratio=0.6375  maxabs=0.0000
+[M= 448] cuBLAS  median=0.010608 ms  std=0.000975  min=0.008640  max=0.012576  TFLOPS= 16.9524
+[M= 448] hexa    median=0.022720 ms  std=0.000599  min=0.021376  max=0.024160  TFLOPS=  7.9151  ratio=0.4669  maxabs=0.0000
+[M= 512] cuBLAS  median=0.010848 ms  std=0.000234  min=0.009824  max=0.012864  TFLOPS= 24.7452
+[M= 512] hexa    median=0.024960 ms  std=0.000630  min=0.024576  max=0.027200  TFLOPS= 10.7546  ratio=0.4346  maxabs=0.0000
+[M= 576] cuBLAS  median=0.010848 ms  std=0.000666  min=0.010272  max=0.014816  TFLOPS= 35.2329
+[M= 576] hexa    median=0.028896 ms  std=0.000488  min=0.027040  max=0.029248  TFLOPS= 13.2270  ratio=0.3754  maxabs=0.0000
+[M= 640] cuBLAS  median=0.014944 ms  std=0.000888  min=0.014368  max=0.017984  TFLOPS= 35.0835
+[M= 640] hexa    median=0.045424 ms  std=0.000490  min=0.044320  max=0.047360  TFLOPS= 11.5421  ratio=0.3290  maxabs=0.0000
+[M= 704] cuBLAS  median=0.016992 ms  std=0.000239  min=0.015936  max=0.018016  TFLOPS= 41.0680
+[M= 704] hexa    median=0.049536 ms  std=0.000577  min=0.048096  max=0.052064  TFLOPS= 14.0873  ratio=0.3430  maxabs=0.0000
+[M= 768] cuBLAS  median=0.019008 ms  std=0.000211  min=0.017984  max=0.020032  TFLOPS= 47.6625
+[M= 768] hexa    median=0.053664 ms  std=0.000677  min=0.052640  max=0.055872  TFLOPS= 16.8823  ratio=0.3542  maxabs=0.0000
+[M= 832] cuBLAS  median=0.024832 ms  std=0.000996  min=0.022816  max=0.026144  TFLOPS= 46.3861
+[M= 832] hexa    median=0.076160 ms  std=0.000615  min=0.074912  max=0.078208  TFLOPS= 15.1242  ratio=0.3261  maxabs=0.0000
+[M= 896] cuBLAS  median=0.030928 ms  std=0.001016  min=0.028960  max=0.032384  TFLOPS= 46.5160
+[M= 896] hexa    median=0.100768 ms  std=0.000597  min=0.100096  max=0.103392  TFLOPS= 14.2768  ratio=0.3069  maxabs=0.0000
+[M= 960] cuBLAS  median=0.033216 ms  std=0.000992  min=0.031104  max=0.034368  TFLOPS= 53.2717
+[M= 960] hexa    median=0.108928 ms  std=0.000586  min=0.108544  max=0.111040  TFLOPS= 16.2444  ratio=0.3049  maxabs=0.0000
+[M=1024] cuBLAS  median=0.039520 ms  std=0.000609  min=0.038784  max=0.042592  TFLOPS= 54.3392
+[M=1024] hexa    median=0.137568 ms  std=0.000563  min=0.136704  max=0.139904  TFLOPS= 15.6103  ratio=0.2873  maxabs=0.0000
+[M=1088] cuBLAS  median=0.047712 ms  std=0.000621  min=0.046560  max=0.050496  TFLOPS= 53.9870
+[M=1088] hexa    median=0.170336 ms  std=0.000525  min=0.169024  max=0.172288  TFLOPS= 15.1220  ratio=0.2801  maxabs=0.0000
+[M=1152] cuBLAS  median=0.049760 ms  std=0.000882  min=0.048032  max=0.052800  TFLOPS= 61.4479
+[M=1152] hexa    median=0.179808 ms  std=0.000578  min=0.178656  max=0.181856  TFLOPS= 17.0051  ratio=0.2767  maxabs=0.0000
+[M=1280] cuBLAS  median=0.070096 ms  std=0.000527  min=0.068608  max=0.071296  TFLOPS= 59.8366
+[M=1280] hexa    median=0.258272 ms  std=0.000601  min=0.256800  max=0.259552  TFLOPS= 16.2399  ratio=0.2714  maxabs=0.0000
+[M=1408] cuBLAS  median=0.090976 ms  std=0.000904  min=0.090144  max=0.093824  TFLOPS= 61.3636
+[M=1408] hexa    median=0.341088 ms  std=0.000773  min=0.340064  max=0.342560  TFLOPS= 16.3671  ratio=0.2667  maxabs=0.0000
+[M=1536] cuBLAS  median=0.109120 ms  std=0.000450  min=0.106976  max=0.110112  TFLOPS= 66.4201
+[M=1536] hexa    median=0.407696 ms  std=0.000649  min=0.405888  max=0.410112  TFLOPS= 17.7774  ratio=0.2677  maxabs=0.0000
+[M=1664] cuBLAS  median=0.143936 ms  std=0.000537  min=0.142272  max=0.147008  TFLOPS= 64.0207
+[M=1664] hexa    median=0.547168 ms  std=0.000621  min=0.546848  max=0.549440  TFLOPS= 16.8411  ratio=0.2631  maxabs=0.0000
+[M=1792] cuBLAS  median=0.174688 ms  std=0.000607  min=0.172928  max=0.177760  TFLOPS= 65.8842
+[M=1792] hexa    median=0.667968 ms  std=0.000522  min=0.666624  max=0.669408  TFLOPS= 17.2301  ratio=0.2615  maxabs=0.0000
+[M=1920] cuBLAS  median=0.209472 ms  std=0.000567  min=0.207296  max=0.210528  TFLOPS= 67.5784
+[M=1920] hexa    median=0.805184 ms  std=0.000621  min=0.803936  max=0.807456  TFLOPS= 17.5808  ratio=0.2602  maxabs=0.0000
+[M=2048] cuBLAS  median=0.256576 ms  std=0.000286  min=0.255488  max=0.257600  TFLOPS= 66.9582
+[M=2048] hexa    median=0.985408 ms  std=0.000769  min=0.984096  max=0.987616  TFLOPS= 17.4343  ratio=0.2604  maxabs=0.0000

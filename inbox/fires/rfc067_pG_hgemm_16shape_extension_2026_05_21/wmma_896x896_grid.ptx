@@ -1,0 +1,117 @@
+// RFC 067 PG perf HGEMM hexa-emit -- M=N=K=896 WMMA GEMM.
+//
+// Shape-port of wmma_256x256_grid.ptx (PR #214) to S=896:
+//   - 14x14 grid of thread blocks (each block owns 64x64 output sub-block)
+//   - Each block runs 512 threads = 16 warps in 4x4 warp grid
+//   - K-loop iterates S/16 = 56 tiles
+//   - All stride constants scaled where they encode row/col S
+//
+// Layout:
+//   A row-major     [M=896 x K=896] f16. Row stride = 896 elem = 1792 B.
+//   B col-major     [K=896 x N=896] f16. Col stride = 896 elem = 1792 B.
+//   C row-major out [M=896 x N=896] f32. Row stride = 896 elem = 3584 B.
+//
+// Per-warp base addresses:
+//   A: a + ctaid.y * (64 * 896 * 2) + m_tile * (16 * 896 * 2)
+//      = a + ctaid.y * 114688 + m_tile * 28672
+//   B: b + ctaid.x * 114688 + n_tile * 28672
+//   C: c + ctaid.y * (64 * 896 * 4) + m_tile * (16 * 896 * 4)
+//        + ctaid.x * (64 * 4) + n_tile * (16 * 4)
+//      = c + ctaid.y * 229376 + m_tile * 57344 + ctaid.x * 256 + n_tile * 64
+
+.version 8.0
+.target sm_90
+.address_size 64
+
+.visible .entry wmma_896x896_grid (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 k_tiles
+)
+{
+    .reg .u64 %rd<24>;
+    .reg .u32 %r<20>;
+    .reg .pred %p1;
+    .reg .b32 %ra<8>;
+    .reg .b32 %rb<8>;
+    .reg .f32 %fc<8>;
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [k_tiles];
+
+    mov.u32 %r10, %ctaid.y;
+    mov.u32 %r11, %ctaid.x;
+
+    mov.u32 %r1, %tid.x;
+    shr.u32 %r2, %r1, 5;
+    shr.u32 %r3, %r2, 2;
+    and.b32 %r4, %r2, 3;
+
+    // A base offset = ctaid.y * 114688 + m_tile * 28672 bytes.
+    // 114688 = 64 * 896 * 2.  28672 = 16 * 896 * 2.
+    mul.lo.u32 %r5, %r10, 114688;
+    mul.lo.u32 %r6, %r3, 28672;
+    add.u32 %r7, %r5, %r6;
+    cvt.u64.u32 %rd4, %r7;
+    add.u64 %rd10, %rd0, %rd4;
+
+    // B base offset = ctaid.x * 114688 + n_tile * 28672 bytes.
+    mul.lo.u32 %r5, %r11, 114688;
+    mul.lo.u32 %r6, %r4, 28672;
+    add.u32 %r7, %r5, %r6;
+    cvt.u64.u32 %rd5, %r7;
+    add.u64 %rd11, %rd1, %rd5;
+
+    // C base offset = ctaid.y * 229376 + m_tile * 57344
+    //               + ctaid.x * 256   + n_tile * 64.
+    // 229376 = 64 * 896 * 4.  57344 = 16 * 896 * 4.
+    mul.lo.u32 %r5, %r10, 229376;
+    mul.lo.u32 %r6, %r3, 57344;
+    add.u32 %r7, %r5, %r6;
+    mul.lo.u32 %r8, %r11, 256;
+    add.u32 %r7, %r7, %r8;
+    mul.lo.u32 %r8, %r4, 64;
+    add.u32 %r7, %r7, %r8;
+    cvt.u64.u32 %rd6, %r7;
+    add.u64 %rd12, %rd2, %rd6;
+
+    mov.f32 %fc0, 0f00000000;
+    mov.f32 %fc1, 0f00000000;
+    mov.f32 %fc2, 0f00000000;
+    mov.f32 %fc3, 0f00000000;
+    mov.f32 %fc4, 0f00000000;
+    mov.f32 %fc5, 0f00000000;
+    mov.f32 %fc6, 0f00000000;
+    mov.f32 %fc7, 0f00000000;
+
+    cvt.s32.s64 %r0, %rd3;
+
+$kloop:
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $kloop_done;
+
+    wmma.load.a.sync.aligned.row.m16n16k16.global.f16
+        {%ra0, %ra1, %ra2, %ra3, %ra4, %ra5, %ra6, %ra7}, [%rd10], 896;
+
+    wmma.load.b.sync.aligned.col.m16n16k16.global.f16
+        {%rb0, %rb1, %rb2, %rb3, %rb4, %rb5, %rb6, %rb7}, [%rd11], 896;
+
+    wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32
+        {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3, %ra4, %ra5, %ra6, %ra7},
+        {%rb0, %rb1, %rb2, %rb3, %rb4, %rb5, %rb6, %rb7},
+        {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7};
+
+    add.u64 %rd10, %rd10, 32;
+    add.u64 %rd11, %rd11, 32;
+    sub.s32 %r0, %r0, 1;
+    bra $kloop;
+
+$kloop_done:
+    wmma.store.d.sync.aligned.row.m16n16k16.global.f32
+        [%rd12], {%fc0, %fc1, %fc2, %fc3, %fc4, %fc5, %fc6, %fc7}, 896;
+    ret;
+}
