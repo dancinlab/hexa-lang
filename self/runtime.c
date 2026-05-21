@@ -3066,6 +3066,10 @@ HexaVal hexa_array_fold(HexaVal arr, HexaVal init, HexaVal fn) {
     return acc;
 }
 
+// Step-3 cycle 33 port — float fast-path dispatches to rt_array_index_of_float
+// when both the array is all-float and the item is float; otherwise the
+// polymorphic hexa_eq path stays.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_index_of(HexaVal arr, HexaVal item) {
     if (!HX_IS_ARRAY(arr)) return hexa_int(-1);
     for (int i = 0; i < HX_ARR_LEN(arr); i++) {
@@ -3073,6 +3077,20 @@ HexaVal hexa_array_index_of(HexaVal arr, HexaVal item) {
     }
     return hexa_int(-1);
 }
+#else
+static int _arr_all_float(HexaVal arr);  /* forward decl — defined below */
+extern HexaVal rt_array_index_of_float(HexaVal arr, HexaVal item);
+HexaVal hexa_array_index_of(HexaVal arr, HexaVal item) {
+    if (!HX_IS_ARRAY(arr)) return hexa_int(-1);
+    if (HX_IS_FLOAT(item) && _arr_all_float(arr)) {
+        return rt_array_index_of_float(arr, item);
+    }
+    for (int i = 0; i < HX_ARR_LEN(arr); i++) {
+        if (hexa_truthy(hexa_eq(HX_ARR_ITEMS(arr)[i], item))) return hexa_int(i);
+    }
+    return hexa_int(-1);
+}
+#endif
 
 // Higher-order array predicates + scans. Mirror interpreter semantics
 // at self/hexa_full.hexa:15189+ using hexa_call1 for callback dispatch
