@@ -1094,6 +1094,21 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 42: hexa_str_substr → rt_str_substr
+
+- ✅ `hexa_str_substr` (self/runtime.c:3975) JS-style substring(start,
+  length) ported. The void-len normalization (which depends on the
+  `HX_TAG(len_v) == TAG_VOID` runtime check — not expressible in hexa
+  source today) stays in the C wrapper; the substring clamps + builtin
+  call go to `rt_str_substr` in `stdlib/runtime/ctype.hexa`
+- Hexa side uses `byte_len(s)` + `s.substring(a, b)` builtins, both
+  already recognized by the codegen (compiler/codegen/codegen_c2.hexa)
+- First string fn to gain the two-mode pattern (cycle 27/28 ported
+  pure-hexa helpers `rt_str_count_substr` / `rt_str_bytes`; this is
+  the first wrapper-style dispatch over a string method)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,968 B
+
 ### 2026-05-21 — step 3 cycle 41: rt_atan2 (close inverse-trig family)
 
 - ✅ `rt_atan2(y, x)` lands in `stdlib/runtime/math.hexa` — quadrant

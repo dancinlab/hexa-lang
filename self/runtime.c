@@ -3972,6 +3972,11 @@ HexaVal hexa_array_sample(HexaVal arr, HexaVal nv) {
 // string" when not supplied. Negative start clamps to 0, negative length
 // to 0, end clamps to strlen. Matches interpreter at
 // self/hexa_full.hexa:14959-14972.
+// Step-3 cycle 42 port — void-len normalization (which depends on the
+// HX_TAG runtime check, not expressible in hexa source today) stays in
+// C; the substring clamps + builtin call go to rt_str_substr in
+// stdlib/runtime/ctype.hexa.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_str_substr(HexaVal s, HexaVal start_v, HexaVal len_v) {
     if (!HX_IS_STR(s)) return hexa_str("");
     int64_t slen = (int64_t)HX_STRLEN(s);
@@ -3989,6 +3994,22 @@ HexaVal hexa_str_substr(HexaVal s, HexaVal start_v, HexaVal len_v) {
     if (end_idx > slen) end_idx = slen;
     return hexa_str_substring(s, hexa_int(start), hexa_int(end_idx));
 }
+#else
+extern HexaVal rt_str_substr(HexaVal s, HexaVal start, HexaVal count);
+HexaVal hexa_str_substr(HexaVal s, HexaVal start_v, HexaVal len_v) {
+    if (!HX_IS_STR(s)) return hexa_str("");
+    int64_t slen = (int64_t)HX_STRLEN(s);
+    int64_t start = HX_IS_INT(start_v) ? HX_INT(start_v) : (int64_t)__hx_to_double(start_v);
+    int64_t count;
+    if (HX_TAG(len_v) == TAG_VOID) {
+        /* Default count = slen - start (clamped non-negative in hexa) */
+        count = slen - start;
+    } else {
+        count = HX_IS_INT(len_v) ? HX_INT(len_v) : (int64_t)__hx_to_double(len_v);
+    }
+    return rt_str_substr(s, hexa_int(start), hexa_int(count));
+}
+#endif
 
 // Step-3 cycle 28 port.
 #ifndef HEXA_HAS_HEXA_RT_STDLIB

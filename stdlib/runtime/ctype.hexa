@@ -43,6 +43,23 @@ pub fn rt_str_bytes(s: string) -> [int] {
     return out
 }
 
+// Step 3 cycle 42 — string substring with length-style semantics.
+// C-side hexa_str_substr handles the void-len → slen-start defaulting
+// (HX_TAG check), and passes a concrete count int here. We do the
+// remaining clamps (start ∈ [0, slen], count ≥ 0, end ≤ slen) plus the
+// substring builtin call.
+pub fn rt_str_substr(s: string, start: int, count: int) -> string {
+    let slen = byte_len(s)
+    let mut a = start
+    if a < 0 { a = 0 }
+    if a > slen { a = slen }
+    let mut c = count
+    if c < 0 { c = 0 }
+    let mut end_idx = a + c
+    if end_idx > slen { end_idx = slen }
+    return s.substring(a, end_idx)
+}
+
 // Step 3 cycle 27 — count non-overlapping occurrences of substring `sub` in `s`.
 // Matches interpreter's greedy advance (hexa_full.hexa:14954-14973). Empty
 // pattern → 0 (avoids infinite loop on .strstr-equivalent semantics).
