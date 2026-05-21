@@ -476,12 +476,12 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
 // existing 055-P3b smoke tests (`_test_setp_and_br_cond` etc.) stay
 // byte-identical.
 fn _nvptx_cmp_mnemonic(op: string) -> string {
-    if op == "lt" { return "setp.lt.f64" }
-    if op == "le" { return "setp.le.f64" }
-    if op == "gt" { return "setp.gt.f64" }
-    if op == "ge" { return "setp.ge.f64" }
-    if op == "eq" { return "setp.eq.f64" }
-    if op == "ne" { return "setp.ne.f64" }
+    if op == "lt" || op == "<"  { return "setp.lt.f64" }
+    if op == "le" || op == "<=" { return "setp.le.f64" }
+    if op == "gt" || op == ">"  { return "setp.gt.f64" }
+    if op == "ge" || op == ">=" { return "setp.ge.f64" }
+    if op == "eq" || op == "==" { return "setp.eq.f64" }
+    if op == "ne" || op == "!=" { return "setp.ne.f64" }
     return ""
 }
 
@@ -516,12 +516,12 @@ fn _nvptx_cmp_mnemonic_for_type(op: string, ty_suffix: string) -> string {
     if ty_suffix == "" || ty_suffix == ".f64" {
         return _nvptx_cmp_mnemonic(op)
     }
-    if op == "lt" { return "setp.lt" + ty_suffix }
-    if op == "le" { return "setp.le" + ty_suffix }
-    if op == "gt" { return "setp.gt" + ty_suffix }
-    if op == "ge" { return "setp.ge" + ty_suffix }
-    if op == "eq" { return "setp.eq" + ty_suffix }
-    if op == "ne" { return "setp.ne" + ty_suffix }
+    if op == "lt" || op == "<"  { return "setp.lt" + ty_suffix }
+    if op == "le" || op == "<=" { return "setp.le" + ty_suffix }
+    if op == "gt" || op == ">"  { return "setp.gt" + ty_suffix }
+    if op == "ge" || op == ">=" { return "setp.ge" + ty_suffix }
+    if op == "eq" || op == "==" { return "setp.eq" + ty_suffix }
+    if op == "ne" || op == "!=" { return "setp.ne" + ty_suffix }
     return ""
 }
 
@@ -1237,12 +1237,12 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
         // produce a Boolean predicate; PTX represents these as a `.pred`
         // register written by `setp.<cond>.<ty>`. Every comparison binop
         // the MIR layer emits maps to a predicate dst here.
-        if s.op == "lt" { return NVPTX_RKIND_PRED }
-        if s.op == "le" { return NVPTX_RKIND_PRED }
-        if s.op == "gt" { return NVPTX_RKIND_PRED }
-        if s.op == "ge" { return NVPTX_RKIND_PRED }
-        if s.op == "eq" { return NVPTX_RKIND_PRED }
-        if s.op == "ne" { return NVPTX_RKIND_PRED }
+        if s.op == "lt" || s.op == "<"  { return NVPTX_RKIND_PRED }
+        if s.op == "le" || s.op == "<=" { return NVPTX_RKIND_PRED }
+        if s.op == "gt" || s.op == ">"  { return NVPTX_RKIND_PRED }
+        if s.op == "ge" || s.op == ">=" { return NVPTX_RKIND_PRED }
+        if s.op == "eq" || s.op == "==" { return NVPTX_RKIND_PRED }
+        if s.op == "ne" || s.op == "!=" { return NVPTX_RKIND_PRED }
         // RFC 055 §12 P4+ — mixed-precision binop opcodes (SCAFFOLD).
         // These opcodes are ASPIRATIONAL: the lowering layer that
         // produces them (hir_to_mir.hexa with per-Local precision tags)
