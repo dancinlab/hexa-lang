@@ -3348,6 +3348,9 @@ HexaVal hexa_range_array(HexaVal start, HexaVal end, HexaVal step, int inclusive
 
 // flat_map: map then flatten one level. Non-array callback results
 // are pushed as-is (matches interpreter fallback at hexa_full.hexa:15211).
+// Step-3 cycle 75 port — flat_map dispatch via type_of("array") check
+// in hexa source (lowers to hexa_eq(hexa_type_of(v), interned)).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_flat_map(HexaVal arr, HexaVal fn) {
     HexaVal out = hexa_array_new();
     if (!HX_IS_ARRAY(arr)) return out;
@@ -3363,6 +3366,13 @@ HexaVal hexa_array_flat_map(HexaVal arr, HexaVal fn) {
     }
     return out;
 }
+#else
+extern HexaVal rt_array_flat_map(HexaVal arr, HexaVal fn_v);
+HexaVal hexa_array_flat_map(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) return hexa_array_new();
+    return rt_array_flat_map(arr, fn);
+}
+#endif
 
 // enumerate: [[idx, item], ...] — matches hexa_full.hexa:15220-15228.
 // Step-3 cycle 68 port — enumerate dispatch.

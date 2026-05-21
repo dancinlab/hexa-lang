@@ -1094,6 +1094,22 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 75: 🛸 hexa_array_flat_map (type_of dispatch UNBLOCKED)
+
+- ✅ **flat_map blocker SOLVED** — `type_of(v)` is a hexa-source
+  builtin that returns runtime type as interned string ("int" /
+  "float" / "bool" / "string" / "array" / "map" / "void" / "fn" /
+  "char" / "closure" / "struct"). `type_of(sub) == "array"`
+  discriminates per-callback-result array-vs-scalar at runtime
+- Codegen lowers `type_of(v) == "array"` to `hexa_eq(hexa_type_of(v),
+  interned_str)` — verified via Mac hexa_v2 transpile
+- Closes second of the four "real blockers" (cycle 74 closed in-place
+  mutation; cycle 75 closes runtime-tag dispatch). Polymorphic
+  to_int/to_float/to_string ports are now also feasible via the same
+  type_of dispatch pattern
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,200 B
+
 ### 2026-05-21 — step 3 cycle 74: 🛸 hexa_array_pop + hexa_array_shift (in-place mutation UNBLOCKED)
 
 - ✅ **In-place mutation blocker SOLVED** — `arr.truncate(n)` lowers
