@@ -167,6 +167,16 @@ pub let METAL_OP_EXP: string         = "exp"            // MSL builtin: exp(floa
 pub let METAL_OP_LOG: string         = "log"            // MSL builtin: log(float)
 pub let METAL_OP_SIN: string         = "sin"            // MSL builtin: sin(float)
 pub let METAL_OP_COS: string         = "cos"            // MSL builtin: cos(float)
+// RFC 075 P3+ element-wise family — additional MSL §5.10 builtins.
+// `max(float,float)` / `min(float,float)` are 2-arg common-functions,
+// `floor(float)` / `ceil(float)` / `round(float)` are 1-arg math
+// functions (Metal Shading Language Specification §5.10).
+//   ref: Metal Shading Language Specification §5.10 (math functions)
+pub let METAL_OP_MAX: string         = "max"            // MSL builtin: max(float, float)
+pub let METAL_OP_MIN: string         = "min"            // MSL builtin: min(float, float)
+pub let METAL_OP_FLOOR: string       = "floor"          // MSL builtin: floor(float)
+pub let METAL_OP_CEIL: string        = "ceil"           // MSL builtin: ceil(float)
+pub let METAL_OP_ROUND: string       = "round"          // MSL builtin: round(float)
 pub let METAL_OP_INDEX_OPEN: string  = "["              // array indexing open
 pub let METAL_OP_INDEX_CLOSE: string = "]"              // array indexing close
 pub let METAL_OP_ASSIGN: string      = " = "            // assignment (with spaces)
@@ -555,6 +565,90 @@ fn _metal_emit_vec_cos_body() -> string {
     return out
 }
 
+// _metal_emit_vec_max_body — emit the MSL kernel body for vec-max.
+// Hardcoded: `c[i] = max(a[i], b[i]);` with surrounding braces.
+// Calls the MSL builtin `max(float, float)` exposed by `<metal_stdlib>`
+// (§5.10 — common functions). 3-buffer signature (shared with binops).
+fn _metal_emit_vec_max_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_MAX + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + ", "
+    out = out + "b" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_min_body — emit the MSL kernel body for vec-min.
+// Hardcoded: `c[i] = min(a[i], b[i]);` with surrounding braces.
+// Calls the MSL builtin `min(float, float)` exposed by `<metal_stdlib>`
+// (§5.10 — common functions). 3-buffer signature (shared with binops).
+fn _metal_emit_vec_min_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_MIN + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + ", "
+    out = out + "b" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_floor_body — emit the MSL kernel body for vec-floor.
+// Hardcoded: `c[i] = floor(a[i]);` with surrounding braces. Calls the
+// MSL builtin `floor(float)` exposed by `<metal_stdlib>` (§5.10).
+// 2-buffer signature (unary element-wise).
+fn _metal_emit_vec_floor_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_FLOOR + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_ceil_body — emit the MSL kernel body for vec-ceil.
+// Hardcoded: `c[i] = ceil(a[i]);` with surrounding braces. Calls the
+// MSL builtin `ceil(float)` exposed by `<metal_stdlib>` (§5.10).
+// 2-buffer signature (unary element-wise).
+fn _metal_emit_vec_ceil_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_CEIL + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
+// _metal_emit_vec_round_body — emit the MSL kernel body for vec-round.
+// Hardcoded: `c[i] = round(a[i]);` with surrounding braces. Calls the
+// MSL builtin `round(float)` exposed by `<metal_stdlib>` (§5.10).
+// 2-buffer signature (unary element-wise).
+fn _metal_emit_vec_round_body() -> string {
+    let mut out = "{\n"
+    out = out + "    c" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_ASSIGN
+    out = out + METAL_OP_ROUND + METAL_OP_CALL_OPEN
+    out = out + "a" + METAL_OP_INDEX_OPEN + "i" + METAL_OP_INDEX_CLOSE
+    out = out + METAL_OP_CALL_CLOSE
+    out = out + METAL_OP_STMT_TERM + "\n"
+    out = out + "}\n"
+    return out
+}
+
 // _metal_mfunc_is_vec_add_shape — recognise the vec-add MIR shape.
 // Hardcoded shape check: entry block has exactly STMT_LOAD + STMT_LOAD
 // + STMT_BINOP("add") + STMT_STORE (in that order), plus an optional
@@ -620,6 +714,40 @@ fn _metal_mfunc_is_vec_div_shape(mfn: MFunc) -> bool {
     if stmts[1].kind != STMT_LOAD { return false }
     if stmts[2].kind != STMT_BINOP { return false }
     if stmts[2].op != "div" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_vec_max_shape — recognise the vec-max MIR shape.
+// Mirror of `_metal_mfunc_is_vec_add_shape` with the BINOP op string
+// switched to "max". Same STMT_LOAD + STMT_LOAD + STMT_BINOP("max") +
+// STMT_STORE skeleton (with optional STMT_RETURN tail).
+fn _metal_mfunc_is_vec_max_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "max" { return false }
+    if stmts[3].kind != STMT_STORE { return false }
+    return true
+}
+
+// _metal_mfunc_is_vec_min_shape — recognise the vec-min MIR shape.
+// Mirror of `_metal_mfunc_is_vec_add_shape` with the BINOP op string
+// switched to "min". Same STMT_LOAD + STMT_LOAD + STMT_BINOP("min") +
+// STMT_STORE skeleton (with optional STMT_RETURN tail).
+fn _metal_mfunc_is_vec_min_shape(mfn: MFunc) -> bool {
+    if len(mfn.blocks) == 0 { return false }
+    let entry = mfn.blocks[0]
+    let stmts = entry.stmts
+    if len(stmts) < 4 { return false }
+    if stmts[0].kind != STMT_LOAD { return false }
+    if stmts[1].kind != STMT_LOAD { return false }
+    if stmts[2].kind != STMT_BINOP { return false }
+    if stmts[2].op != "min" { return false }
     if stmts[3].kind != STMT_STORE { return false }
     return true
 }
@@ -715,6 +843,24 @@ fn _metal_mfunc_is_vec_cos_shape(mfn: MFunc) -> bool {
     return _metal_mfunc_is_unary_shape_with_op(mfn, "cos")
 }
 
+// _metal_mfunc_is_vec_floor_shape — recognise vec-floor MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("floor") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_floor_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "floor")
+}
+
+// _metal_mfunc_is_vec_ceil_shape — recognise vec-ceil MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("ceil") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_ceil_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "ceil")
+}
+
+// _metal_mfunc_is_vec_round_shape — recognise vec-round MIR shape.
+// STMT_LOAD a→va + STMT_UNOP("round") va→vc + STMT_STORE vc→c.
+fn _metal_mfunc_is_vec_round_shape(mfn: MFunc) -> bool {
+    return _metal_mfunc_is_unary_shape_with_op(mfn, "round")
+}
+
 // _metal_format_scalar — format a MIR const operand as MSL literal text.
 // const_float → uses the `float_val` field (e.g. "2.5"); const_int →
 // uses the `int_val` field with `.0` appended so it stays FP32 in MSL.
@@ -733,17 +879,19 @@ fn _metal_format_scalar(op: Operand) -> string {
 // module, unrecognised shape) returns `""` honestly, preserving the
 // P0 contract the lower_test Case 1 still asserts.
 //
-// HONEST SCOPE — thirteen shapes recognised today (vec-add, vec-mul,
-// vec-sub, vec-div, vec-scale, vec-neg, vec-abs, vec-sqrt, vec-exp,
-// vec-log, vec-sin, vec-cos). All other MIR patterns return "". General
-// MFunc → MSL lowering is multi-session work mirroring the NVPTX P3
-// timeline.
+// HONEST SCOPE — seventeen shapes recognised today (vec-add, vec-mul,
+// vec-sub, vec-div, vec-max, vec-min, vec-scale, vec-neg, vec-abs,
+// vec-sqrt, vec-exp, vec-log, vec-sin, vec-cos, vec-floor, vec-ceil,
+// vec-round). All other MIR patterns return "". General MFunc → MSL
+// lowering is multi-session work mirroring the NVPTX P3 timeline.
 //
 //   Shape coverage matrix (RFC 075 P3+):
 //     vec-add   `c[i] = a[i] + b[i]`     STMT_LOAD+LOAD+BINOP(add)+STORE
 //     vec-mul   `c[i] = a[i] * b[i]`     STMT_LOAD+LOAD+BINOP(mul)+STORE
 //     vec-sub   `c[i] = a[i] - b[i]`     STMT_LOAD+LOAD+BINOP(sub)+STORE
 //     vec-div   `c[i] = a[i] / b[i]`     STMT_LOAD+LOAD+BINOP(div)+STORE
+//     vec-max   `c[i] = max(a[i], b[i])` STMT_LOAD+LOAD+BINOP(max)+STORE
+//     vec-min   `c[i] = min(a[i], b[i])` STMT_LOAD+LOAD+BINOP(min)+STORE
 //     vec-scale `c[i] = a[i] * <const>`  STMT_LOAD+BINOP(mul, const)+STORE
 //     vec-neg   `c[i] = -a[i]`           STMT_LOAD+UNOP(neg)+STORE   (2-buf)
 //     vec-abs   `c[i] = abs(a[i])`       STMT_LOAD+UNOP(abs)+STORE   (2-buf)
@@ -752,10 +900,14 @@ fn _metal_format_scalar(op: Operand) -> string {
 //     vec-log   `c[i] = log(a[i])`       STMT_LOAD+UNOP(log)+STORE   (2-buf)
 //     vec-sin   `c[i] = sin(a[i])`       STMT_LOAD+UNOP(sin)+STORE   (2-buf)
 //     vec-cos   `c[i] = cos(a[i])`       STMT_LOAD+UNOP(cos)+STORE   (2-buf)
+//     vec-floor `c[i] = floor(a[i])`     STMT_LOAD+UNOP(floor)+STORE (2-buf)
+//     vec-ceil  `c[i] = ceil(a[i])`      STMT_LOAD+UNOP(ceil)+STORE  (2-buf)
+//     vec-round `c[i] = round(a[i])`     STMT_LOAD+UNOP(round)+STORE (2-buf)
 //
-// Dispatch order: vec-add → vec-mul → vec-sub → vec-div → vec-scale →
-// vec-neg → vec-abs → vec-sqrt → vec-exp → vec-log → vec-sin → vec-cos
-// → "". Element-wise unary kernels are dispatched AFTER all binop /
+// Dispatch order: vec-add → vec-mul → vec-sub → vec-div → vec-max →
+// vec-min → vec-scale → vec-neg → vec-abs → vec-sqrt → vec-exp →
+// vec-log → vec-sin → vec-cos → vec-floor → vec-ceil → vec-round →
+// "". Element-wise unary kernels are dispatched AFTER all binop /
 // scale shapes so the existing recognisers short-circuit on a second
 // STMT_LOAD first; the unary recognisers only see MIR with the 2-stmt
 // prefix STMT_LOAD + STMT_UNOP. vec-scale is tried before vec-* unary
@@ -773,11 +925,13 @@ fn _metal_format_scalar(op: Operand) -> string {
 //   - TODO RFC 075 P4 — silicon fire via `xcrun -sdk macosx metal`
 //     + Metal Performance Shaders runtime + M-series GPU (vec-add
 //     landed on Apple M3 commit 4415ec91; vec-mul / vec-sub / vec-div /
-//     vec-scale / vec-neg / vec-abs / vec-sqrt / vec-exp / vec-log /
-//     vec-sin / vec-cos silicon fires queued for the same cycle once
-//     a Mac is available — transcendentals need ULP-tolerance compare
-//     against the CPU reference because Apple M-series transcendentals
-//     may differ from IEEE by several ULP).
+//     vec-max / vec-min / vec-scale / vec-neg / vec-abs / vec-sqrt /
+//     vec-exp / vec-log / vec-sin / vec-cos / vec-floor / vec-ceil /
+//     vec-round silicon fires queued for the same cycle once a Mac is
+//     available — transcendentals need ULP-tolerance compare against
+//     the CPU reference because Apple M-series transcendentals may
+//     differ from IEEE by several ULP; max/min/floor/ceil/round are
+//     byte-exact against the CPU reference).
 //   - TODO RFC 075 follow-on cycle — general MFunc → MSL emission
 //     (replicate `_nvptx_lower_func` shape against MSL statements).
 pub fn codegen_emit_metal_msl(module: MModule) -> string {
@@ -812,6 +966,20 @@ pub fn codegen_emit_metal_msl(module: MModule) -> string {
         let mut out = _metal_emit_preamble()
         out = out + _metal_emit_kernel_signature(kname)
         out = out + _metal_emit_vec_div_body()
+        return out
+    }
+    // vec-max — STMT_LOAD + STMT_LOAD + STMT_BINOP(max) + STMT_STORE.
+    if _metal_mfunc_is_vec_max_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_max_body()
+        return out
+    }
+    // vec-min — STMT_LOAD + STMT_LOAD + STMT_BINOP(min) + STMT_STORE.
+    if _metal_mfunc_is_vec_min_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_kernel_signature(kname)
+        out = out + _metal_emit_vec_min_body()
         return out
     }
     // vec-scale — STMT_LOAD + STMT_BINOP(mul, const) + STMT_STORE.
@@ -872,6 +1040,27 @@ pub fn codegen_emit_metal_msl(module: MModule) -> string {
         let mut out = _metal_emit_preamble()
         out = out + _metal_emit_unary_kernel_signature(kname)
         out = out + _metal_emit_vec_cos_body()
+        return out
+    }
+    // vec-floor — STMT_LOAD + STMT_UNOP(floor) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_floor_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_floor_body()
+        return out
+    }
+    // vec-ceil — STMT_LOAD + STMT_UNOP(ceil) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_ceil_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_ceil_body()
+        return out
+    }
+    // vec-round — STMT_LOAD + STMT_UNOP(round) + STMT_STORE (2-buffer sig).
+    if _metal_mfunc_is_vec_round_shape(mfn) {
+        let mut out = _metal_emit_preamble()
+        out = out + _metal_emit_unary_kernel_signature(kname)
+        out = out + _metal_emit_vec_round_body()
         return out
     }
     // No recognised shape — honest empty string.
