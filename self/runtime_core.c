@@ -2528,21 +2528,8 @@ HexaVal hexa_map_merge(HexaVal a, HexaVal b) {
 }
 #endif
 
-// Step-4 cycle 95 ports — map_values + filter_keys via hexa source.
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-extern HexaVal rt_map_map_values(HexaVal m, HexaVal fn, HexaVal empty);
-extern HexaVal rt_map_filter_keys(HexaVal m, HexaVal fn, HexaVal empty);
-HexaVal hexa_map_map_values(HexaVal m, HexaVal fn) {
-    HexaVal empty = hexa_map_new();
-    if (!HX_MAP_TBL(m)) return empty;
-    return rt_map_map_values(m, fn, empty);
-}
-HexaVal hexa_map_filter_keys(HexaVal m, HexaVal fn) {
-    HexaVal empty = hexa_map_new();
-    if (!HX_MAP_TBL(m)) return empty;
-    return rt_map_filter_keys(m, fn, empty);
-}
-#else
+// map_values(fn): apply fn to every value, return new map with same keys.
+// Matches interpreter at self/hexa_full.hexa:15584-15594.
 HexaVal hexa_map_map_values(HexaVal m, HexaVal fn) {
     HexaVal out = hexa_map_new();
     if (!HX_MAP_TBL(m)) return out;
@@ -2553,6 +2540,10 @@ HexaVal hexa_map_map_values(HexaVal m, HexaVal fn) {
     }
     return out;
 }
+
+// filter_keys(fn): keep only entries where fn(key) is truthy.
+// Matches interpreter at self/hexa_full.hexa:15595-15610. Key is passed
+// to predicate as a string value (HexaMap stores keys as char*).
 HexaVal hexa_map_filter_keys(HexaVal m, HexaVal fn) {
     HexaVal out = hexa_map_new();
     if (!HX_MAP_TBL(m)) return out;
@@ -2565,21 +2556,10 @@ HexaVal hexa_map_filter_keys(HexaVal m, HexaVal fn) {
     }
     return out;
 }
-#endif
 
 // invert: swap k<->v. Values get stringified via hexa_to_string to serve
 // as new keys (HexaMap keys are char*); original keys become string vals.
 // Matches interpreter at self/hexa_full.hexa:15641-15645.
-// Step-4 cycle 93 port — invert via hexa source. C wrapper supplies the
-// empty starting map (avoids bare hexa_map_new() call0 trap).
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-extern HexaVal rt_map_invert(HexaVal m, HexaVal empty);
-HexaVal hexa_map_invert(HexaVal m) {
-    HexaVal empty = hexa_map_new();
-    if (!HX_MAP_TBL(m)) return empty;
-    return rt_map_invert(m, empty);
-}
-#else
 HexaVal hexa_map_invert(HexaVal m) {
     HexaVal out = hexa_map_new();
     if (!HX_MAP_TBL(m)) return out;
@@ -2591,22 +2571,11 @@ HexaVal hexa_map_invert(HexaVal m) {
     }
     return out;
 }
-#endif
 
 // from_array: build a map from an array of [k, v] pair arrays. Receiver
 // is ignored (called as-method on an empty map per interpreter dispatch).
 // Malformed pairs (non-array or <2 elements) are skipped. Keys are
 // stringified. Matches interpreter at self/hexa_full.hexa:15622-15640.
-// Step-4 cycle 93 port — from_array via hexa source.
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-extern HexaVal rt_map_from_array(HexaVal arr, HexaVal empty);
-HexaVal hexa_map_from_array(HexaVal self_map, HexaVal arr) {
-    (void)self_map;
-    HexaVal empty = hexa_map_new();
-    if (!HX_IS_ARRAY(arr)) return empty;
-    return rt_map_from_array(arr, empty);
-}
-#else
 HexaVal hexa_map_from_array(HexaVal self_map, HexaVal arr) {
     (void)self_map;
     HexaVal out = hexa_map_new();
@@ -2623,35 +2592,11 @@ HexaVal hexa_map_from_array(HexaVal self_map, HexaVal arr) {
     }
     return out;
 }
-#endif
 
 // count(pred): pred is 2-arg fn(key, value) returning truthy for hits.
 // No-pred variant (arg is void sentinel) returns total entry count.
 // Keys are exposed to the predicate as TAG_STR per interpreter semantics.
 // Matches interpreter at self/hexa_full.hexa:15689-15704.
-// Step-4 cycle 94 port — count/any/all with predicate callback via
-// hexa source (cycle-63 callback POC). C wrapper handles HX_MAP_TBL
-// guard + void-pred fallback (no-pred returns total count / false / true).
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-extern HexaVal rt_map_count_pred(HexaVal m, HexaVal pred);
-extern HexaVal rt_map_any_pred_b(HexaVal m, HexaVal pred);
-extern HexaVal rt_map_all_pred_b(HexaVal m, HexaVal pred);
-HexaVal hexa_map_count(HexaVal m, HexaVal pred) {
-    if (!HX_MAP_TBL(m)) return hexa_int(0);
-    if (HX_IS_VOID(pred)) return hexa_int(HX_MAP_TBL(m)->len);
-    return hexa_int(HX_INT(rt_map_count_pred(m, pred)));
-}
-HexaVal hexa_map_any(HexaVal m, HexaVal pred) {
-    if (!HX_MAP_TBL(m)) return hexa_bool(0);
-    if (HX_IS_VOID(pred)) return hexa_bool(0);
-    return hexa_bool(hexa_truthy(rt_map_any_pred_b(m, pred)));
-}
-HexaVal hexa_map_all(HexaVal m, HexaVal pred) {
-    if (!HX_MAP_TBL(m)) return hexa_bool(1);
-    if (HX_IS_VOID(pred)) return hexa_bool(1);
-    return hexa_bool(hexa_truthy(rt_map_all_pred_b(m, pred)));
-}
-#else
 HexaVal hexa_map_count(HexaVal m, HexaVal pred) {
     if (!HX_MAP_TBL(m)) return hexa_int(0);
     HexaMapTable* t = HX_MAP_TBL(m);
@@ -2664,6 +2609,10 @@ HexaVal hexa_map_count(HexaVal m, HexaVal pred) {
     }
     return hexa_int(cnt);
 }
+
+// any(pred): pred is 2-arg fn(key, value). Returns true on first truthy
+// result, else false. Empty map → false.
+// Matches interpreter at self/hexa_full.hexa:15705-15718.
 HexaVal hexa_map_any(HexaVal m, HexaVal pred) {
     if (!HX_MAP_TBL(m)) return hexa_bool(0);
     HexaMapTable* t = HX_MAP_TBL(m);
@@ -2675,6 +2624,10 @@ HexaVal hexa_map_any(HexaVal m, HexaVal pred) {
     }
     return hexa_bool(0);
 }
+
+// all(pred): pred is 2-arg fn(key, value). Returns false on first falsy
+// result, else true. Empty map → true (vacuous).
+// Matches interpreter at self/hexa_full.hexa:15719-15732.
 HexaVal hexa_map_all(HexaVal m, HexaVal pred) {
     if (!HX_MAP_TBL(m)) return hexa_bool(1);
     HexaMapTable* t = HX_MAP_TBL(m);
@@ -2686,7 +2639,6 @@ HexaVal hexa_map_all(HexaVal m, HexaVal pred) {
     }
     return hexa_bool(1);
 }
-#endif
 
 HexaVal hexa_map_remove(HexaVal m, const char* key) {
     if (!HX_MAP_TBL(m)) return m;
@@ -5283,39 +5235,9 @@ HexaVal hexa_eprint(HexaVal v) {
 // map_ptr / order_keys before deref (T33 arena-dangling defence).
 static HexaVal _hexa_to_string_rec(HexaVal v, int depth);
 
-// Step-4 cycle 96 port — scalar branches (int [outside cache] / float
-// [integer-valued in range] / bool / void / str) dispatch to hexa source.
-// Small-int cache + non-integer float [%g] + array/map/valstruct stay C.
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-extern HexaVal rt_to_string_scalar(HexaVal v);
-HexaVal hexa_to_string(HexaVal v) {
-    /* Array/Map/ValStruct: recursive C body. */
-    if (HX_IS_VALSTRUCT(v) || HX_TAG(v) == TAG_ARRAY || HX_TAG(v) == TAG_MAP) {
-        return _hexa_to_string_rec(v, 0);
-    }
-    /* Small-int cache fast path. */
-    if (HX_IS_INT(v) &&
-        HX_INT(v) >= SMALL_INT_CACHE_MIN &&
-        HX_INT(v) <= SMALL_INT_CACHE_MAX) {
-        if (!_cached_small_ints_ready) _hexa_init_small_int_cache();
-        return _cached_small_ints[HX_INT(v) - SMALL_INT_CACHE_MIN];
-    }
-    /* Non-integer-valued float: %g (more precision than %.1f). */
-    if (HX_IS_FLOAT(v)) {
-        double f = HX_FLOAT(v);
-        if (!(isfinite(f) && f == floor(f) && f >= -1e15 && f <= 1e15)) {
-            char buf[64];
-            snprintf(buf, 64, "%g", f);
-            return hexa_str(buf);
-        }
-    }
-    return rt_to_string_scalar(v);
-}
-#else
 HexaVal hexa_to_string(HexaVal v) {
     return _hexa_to_string_rec(v, 0);
 }
-#endif
 
 static HexaVal _hexa_to_string_rec(HexaVal v, int depth) {
     if (!_cached_strs_ready) _hexa_init_cached_strs();
@@ -5534,17 +5456,7 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
         case TAG_INT: return hexa_bool(HX_INT(a) == HX_INT(b));
         case TAG_FLOAT: return hexa_bool(HX_FLOAT(a) == HX_FLOAT(b));
         case TAG_BOOL: return hexa_bool(HX_BOOL(a) == HX_BOOL(b));
-        case TAG_STR: {
-            /* Intern fast-path stays C (HX_STR pointer identity). */
-            if (HX_STR(a) == HX_STR(b)) return hexa_bool(1);
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-            /* Step-3 cycle 91 — strcmp fallback via cycle-57 rt_str_eq_b. */
-            extern HexaVal rt_str_eq_b(HexaVal a, HexaVal b);
-            return hexa_bool(hexa_truthy(rt_str_eq_b(a, b)));
-#else
-            return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) == 0);
-#endif
-        }
+        case TAG_STR: return hexa_bool(HX_STR(a) == HX_STR(b) || hxlcl_strcmp(HX_STR(a), HX_STR(b)) == 0);
         case TAG_VOID: return hexa_bool(1);
         // rt 32-G: Val identity is pointer-equality of heap struct (matches
         // TAG_MAP semantics — two separately constructed maps never compare
