@@ -1,0 +1,250 @@
+// HEXA Standard Library — nuclear/sim
+//
+// @version 0.1.0
+// @capabilities [pure, io]
+//
+// NUCLEAR.md §6 Phase 4 #1 — N7 hot closed-form post-processing,
+// hexa-native port of `stdlib/nuclear/wkb_alpha_decay.py` closed-form
+// kernels. Mirror of `stdlib/material/sim.hexa` v0.2.0 precedent
+// (BCS / McMillan / Allen-Dynes / WHH + inverse_variance_consensus).
+//
+// The Python file is kept intact at `stdlib/nuclear/wkb_alpha_decay.py`
+// for orchestration + record emission + skip-cascade policy; this hexa
+// module ports ONLY the libm-only closed-form kernels (NC1 + NC2 + NC3
+// per `inbox/notes/2026-05-22-nuclear-9-phase2-stabilization.md` §7).
+//
+// Surface (pure functions, no syscall):
+//   pub fn viola_seaborg_log10_t(Z, Q_alpha_MeV) -> float          // NC1
+//   pub fn royer_log10_t(Z, A, Q_alpha_MeV) -> float               // NC2
+//   pub fn consensus_alpha(values: [float]) -> Consensus           // NC3
+//
+// Source formulas (closed-form algebraic identities, not solvers):
+//   - Viola-Seaborg 1966 / Sobiczewski-Parkhomenko 2005 refit
+//     log10 T₁/₂ [s] = (a·Z + b)/√Q_α + (c·Z + d)
+//     a=1.66175  b=-8.5166  c=-0.20228  d=-33.9069
+//     Refs: Viola & Seaborg 1966, J Inorg Nucl Chem 28:741;
+//           Sobiczewski/Parkhomenko 2005, PRC 72.044316.
+//   - Royer 2000 (mass-dependent refinement)
+//     log10 T₁/₂ [s] = a + b·A^{1/6}·√Z + c·Z/√Q_α
+//     a=-25.31  b=-1.1629  c=1.5864  (even-even nuclei)
+//     Refs: Royer 2000, J Phys G 26:1149; arxiv:nucl-th/0510074.
+//   - Consensus reducer (NC3) — mean / min / max / spread report
+//     across the formula ensemble. Mirrors `_consensus` in
+//     `wkb_alpha_decay.py:124-144` verbatim arithmetic.
+//
+// Cross-stack reuse decision (NC3):
+//   stdlib/material/sim.hexa v0.2.0 already ships
+//   `inverse_variance_consensus` (weighted by 1/σ²) — a strictly more
+//   general kernel. Substituting σ=1 for every formula reduces it to
+//   the *unweighted* mean used by the nuclear N7 producer, but the
+//   spread / min / max shape this module returns is intentionally
+//   *different* from the `Consensus { mean, combined_sigma,
+//   n_sources, rel_err_max_pairwise }` struct in material/sim.hexa
+//   (the nuclear N7 spread_dex is `max - min` of the formula
+//   ensemble, not an inverse-variance combined σ). To avoid coupling
+//   two intentionally-distinct semantics across sibling stdlib
+//   modules, NC3 is implemented as a **dedicated struct + kernel in
+//   this module** rather than a wrapper around material/sim.hexa.
+//   The arithmetic is independent — code drift risk noted in the
+//   "MIRROR" comment near `consensus_alpha` below.
+//
+// g3 (honest scope · NUCLEAR.md §7 wet-lab dependency permanent):
+//   absorbed = false FOREVER for N7 records. Tier 1 prediction
+//   NEVER measurement. The kernel returns numbers only; the
+//   Python orchestrator (`wkb_alpha_decay.py`) keeps record-level
+//   gate_type / skip-cascade / absorbed policy (R4 invariant
+//   carried over per NUCLEAR.md §3.3 + §7).
+
+// ── helpers ────────────────────────────────────────────────────────────
+
+fn _fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _fmin(a: float, b: float) -> float { if a < b { return a } return b }
+
+fn _fmax(a: float, b: float) -> float { if a > b { return a } return b }
+
+// ── 1. NC1 — Viola-Seaborg log10 T₁/₂ [s] ──────────────────────────────
+//
+// log10 T₁/₂ [s] = (a·Z + b)/√Q_α + (c·Z + d)
+//
+// Domain: even-even heavy α emitters; Q_α > 0 (else formula sign-
+// invalid → caller must skip via the Python record path
+// `gate_type=install-gated`).
+//
+// Sentinel: Q_α ≤ 0 returns 0.0 (NaN-free convention — mirror of
+// material/sim.hexa `bcs_weak_tc(λ≤0) = 0.0`). Real callers gate on
+// the same condition upstream, so the sentinel is never the path the
+// nuclear N7 record actually takes.
+pub fn viola_seaborg_log10_t(Z: int, Q_alpha_MeV: float) -> float {
+    if Q_alpha_MeV <= 0.0 { return 0.0 }
+    let a: float =  1.66175
+    let b: float = -8.5166
+    let c: float = -0.20228
+    let d: float = -33.9069
+    let Zf = to_float(Z)
+    return (a * Zf + b) / sqrt(Q_alpha_MeV) + (c * Zf + d)
+}
+
+// ── 2. NC2 — Royer 2000 log10 T₁/₂ [s] ─────────────────────────────────
+//
+// log10 T₁/₂ [s] = a + b·A^{1/6}·√Z + c·Z/√Q_α
+//
+// Domain: even-even heavy α emitters; Q_α > 0. A and Z must be > 0
+// (parent nuclide). Same sentinel as NC1.
+pub fn royer_log10_t(Z: int, A: int, Q_alpha_MeV: float) -> float {
+    if Q_alpha_MeV <= 0.0 { return 0.0 }
+    let a: float = -25.31
+    let b: float = -1.1629
+    let c: float =  1.5864
+    let Zf = to_float(Z)
+    let Af = to_float(A)
+    // A^(1/6) via pow(A, 1/6).
+    let A_pow_1_6 = pow(Af, 1.0 / 6.0)
+    return a + b * A_pow_1_6 * sqrt(Zf) + c * Zf / sqrt(Q_alpha_MeV)
+}
+
+// ── 3. NC3 — Cross-formula consensus ───────────────────────────────────
+//
+// MIRROR of stdlib/material/sim.hexa Consensus struct — keep in sync.
+// Distinct semantics: nuclear N7 uses *unweighted* mean + raw spread
+// (max-min) instead of inverse-variance combined σ (material/sim.hexa
+// `Consensus { mean, combined_sigma, n_sources, rel_err_max_pairwise }`).
+// The two structs are intentionally different shapes; do NOT collapse.
+//
+// Ported from `wkb_alpha_decay.py::_consensus` verbatim:
+//   mean = Σx / n
+//   min  = min(x)
+//   max  = max(x)
+//   spread_dex = max - min
+//   n    = len(values)
+//
+// Edge case (n=0): returns ConsensusAlpha { mean=0, min=0, max=0,
+// spread_dex=0, n=0 }. Caller should check `n == 0`. In Python the
+// equivalent returns a dict with `None` fields; the hexa-native form
+// uses the same n-sentinel convention as material/sim.hexa
+// `inverse_variance_consensus` (mirror v0.2.0 §5 documented divergence
+// from Python `None`).
+
+struct ConsensusAlpha {
+    mean:       float,
+    min:        float,
+    max:        float,
+    spread_dex: float,
+    n:          int,
+}
+
+pub fn consensus_alpha(values: [float]) -> ConsensusAlpha {
+    let n = len(values)
+    if n == 0 {
+        return ConsensusAlpha { mean: 0.0, min: 0.0, max: 0.0,
+                                spread_dex: 0.0, n: 0 }
+    }
+    let nf = to_float(n)
+    let mut sum: float = 0.0
+    let mut lo: float = values[0]
+    let mut hi: float = values[0]
+    let mut i = 0
+    while i < n {
+        let v = values[i]
+        sum = sum + v
+        lo = _fmin(lo, v)
+        hi = _fmax(hi, v)
+        i = i + 1
+    }
+    let mean = sum / nf
+    return ConsensusAlpha { mean: mean, min: lo, max: hi,
+                            spread_dex: hi - lo, n: n }
+}
+
+// ── reference-panel runner ─────────────────────────────────────────────
+//
+// Mirror of material/sim.hexa `_emit_row` + `main` pattern: emit a
+// small reference panel for the Phase 2 audit's two simulation cells
+// (²³⁸U and ²⁹⁴Og), plus a couple of mid-Q regime spot-checks.
+// Cross-validation is a textual diff against `wkb_alpha_decay.py`
+// stdout (or its JSON record's `prediction.viola_seaborg_log10_T_s`
+// + `prediction.royer_log10_T_s` fields).
+
+fn _emit_row(name: string, Z: int, A: int, Q_alpha_MeV: float) {
+    let vs = viola_seaborg_log10_t(Z, Q_alpha_MeV)
+    let ro = royer_log10_t(Z, A, Q_alpha_MeV)
+    let v: [float] = [vs, ro]
+    let c = consensus_alpha(v)
+    println("  · " + name +
+            ": VS=" + to_string(vs) +
+            "  Royer=" + to_string(ro) +
+            "  mean=" + to_string(c.mean) +
+            "  spread=" + to_string(c.spread_dex) + " dex")
+}
+
+fn main() {
+    println("[nuclear+verify] sim.hexa — NUCLEAR.md §6 Phase 4 #1 " +
+            "(hexa-native N7 closed-form)")
+
+    // Phase 2 audit anchors (the two `simulation` cells from the
+    // 5×2 matrix in `2026-05-22-nuclear-9-phase2-stabilization.md` §2).
+    _emit_row("U-238   (Z=92,  A=238, Q=4.27 MeV · low-Q calibration edge)",
+              92, 238, 4.27)
+    _emit_row("Og-294  (Z=118, A=294, Q=11.65 MeV · SHE anchor)",
+              118, 294, 11.65)
+
+    // Mid-Q regime spot-checks (heavy α emitters in the calibration set).
+    _emit_row("Po-212  (Z=84,  A=212, Q=8.954 MeV)",
+              84, 212, 8.954)
+    _emit_row("Ra-226  (Z=88,  A=226, Q=4.871 MeV)",
+              88, 226, 4.871)
+    _emit_row("Cm-244  (Z=96,  A=244, Q=5.902 MeV)",
+              96, 244, 5.902)
+
+    println("[nuclear+verify] absorbed=false (R4 invariant; " +
+            "NUCLEAR.md §7 wet-lab dependency permanent — Geiger-Nuttall " +
+            "family is semi-empirical fit, NEVER measurement)")
+
+    // ── scope_caveats (verbatim from wkb_alpha_decay.py s1-s5) ─────────
+    println("[scope] (s1) Geiger-Nuttall family formulas (Viola-Seaborg, " +
+            "Royer) are semi-empirical fits to ~400 known α emitters. " +
+            "Extrapolation to Z > 118 / SHE region is honest but carries " +
+            "intrinsic ~0.5-1.0 dex (factor of 3-10) uncertainty per " +
+            "formula. The cross-formula spread (spread_dex) is the honest " +
+            "lower bound — the *true* uncertainty against eventual " +
+            "measurement may be larger if the formula family fails in " +
+            "the extrapolation region.")
+    println("[scope] (s2) For unsynthesized nuclides (Z=119, 120, drip-" +
+            "line isotopes), Q_α is itself a sim output (from N6 HFB / " +
+            "FRDM / BSk mass predictions). The formula chain is sim-" +
+            "composed-with-sim, NOT measurement. R4 invariant blocks any " +
+            "absorbed=true promotion for nuclear-novel-discovery-" +
+            "simulation records (NUCLEAR.md §7).")
+    println("[scope] (s3) 5-gate evaluation (NUCLEAR.md §2): this record " +
+            "fills ONLY the (c) gate (α-decay half-life). The other 4 " +
+            "gates ((a) mass, (b) spectroscopy, (d) production σ, (e) " +
+            "detection) are NOT addressed. Even with all 5 sim gates " +
+            "PASS, (d) and (e) remain wet-lab dependent permanently — " +
+            "sim-PASS never substitutes for accelerator beam-time.")
+    println("[scope] (s4) Formula domain limits: Viola-Seaborg + Royer " +
+            "are tuned for even-even heavy α emitters. Odd-A / odd-odd " +
+            "nuclei have hindrance factors not captured by these forms; " +
+            "predictions for odd-A SHE may underestimate T₁/₂ by 1-2 " +
+            "orders. SF (spontaneous fission) competing channel NOT " +
+            "modeled here — for Z ≥ 104 SF often dominates, so α-decay " +
+            "T₁/₂ alone overestimates total survival.")
+    println("[scope] (s5) Path A microkernel: this module is libm-only " +
+            "closed-form (no external binary, no install gate). NUCLEAR.md " +
+            "§6 Phase 4 #1 land — mirror of RTSC.md §9.9.1 Phase 4 #1 " +
+            "material/sim.hexa v0.2.0 precedent. Wet-lab dependency " +
+            "unchanged regardless of port (NUCLEAR.md §3.2).")
+
+    // ── citations (mirror of wkb_alpha_decay.py header) ────────────────
+    println("[cite] Viola & Seaborg 1966 · J Inorg Nucl Chem 28:741 — " +
+            "original Geiger-Nuttall fit for α-decay.")
+    println("[cite] Sobiczewski / Parkhomenko 2005 · PRC 72.044316 — " +
+            "refit of Viola-Seaborg coefficients (used here).")
+    println("[cite] Royer 2000 · J Phys G 26:1149 · arxiv:nucl-th/0510074 " +
+            "— mass-dependent refinement (even-even nuclei coefficients).")
+    println("[cite] arxiv:2105.01035 — Wang/Huang/Kondev/Audi/Naimi, " +
+            "AME2020 evaluation (Q_α cross-validation oracle).")
+    println("[anchor] NUCLEAR.md §2 (c) gate + §4.2 (N7 cohort spec) + " +
+            "§6 (Phase 4 #1 microkernel port) + §7 (R4 invariant block)")
+    println("[anchor] RTSC.md §9.9.1 Phase 4 (B→A microkernel transition " +
+            "schedule — pattern source)")
+}
