@@ -452,6 +452,15 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
     if op == "add_f32"  { return "add.f32" }
     if op == "sub_f32"  { return "sub.f32" }
     if op == "mul_f32"  { return "mul.f32" }
+    // RFC 071 P4+ (N71-C sibling FP32 div) — F32 has THREE legal rounding
+    // modes in PTX ISA §9.7.1.4 (`div.approx.f32`, `div.full.f32`,
+    // `div.rn.f32`). We default to `div.rn.f32` (IEEE round-to-nearest,
+    // full-precision) to match the FP64 sibling at L437 and stay
+    // numerically conservative; `approx`/`full` can be a precision-policy
+    // opt-in later. Required when the `_op_with_precision` chain at
+    // hir_to_mir emits `div_f32` — kept as a tagged-suffix mnemonic so
+    // the dst F32 bank emit (`%fs<id>`) stays consistent.
+    if op == "div_f32"  { return "div.rn.f32" }
     return ""
 }
 
@@ -468,11 +477,26 @@ fn _nvptx_binop_mnemonic_for_kind(op: string, kind: string) -> string {
         if op == "add" || op == "+" { return "add.s32" }
         if op == "sub" || op == "-" { return "sub.s32" }
         if op == "mul" || op == "*" { return "mul.lo.s32" }
+        // RFC 071 P4+ (N71-C, closes N70 GAP-B) — integer division.
+        // PTX ISA §9.7.1.4 requires an EXPLICIT type-class on `div.<ty>`:
+        // `div.s32 %r_dst, %r_a, %r_b`. Signed by default — HIR does not
+        // track an unsigned-int signedness flag distinct from `u32`/`i32`
+        // at this codegen seam (NVPTX_RKIND_U32 covers both); signed
+        // matches the convention of `add.s32` / `mul.lo.s32` siblings
+        // declared above, so the dst-bank classifier and the binop
+        // mnemonic agree. N70's `mask/2` (i32 / i32) lowers here.
+        if op == "div" || op == "/" { return "div.s32" }
     }
     if kind == NVPTX_RKIND_U64 {
         if op == "add" || op == "+" { return "add.s64" }
         if op == "sub" || op == "-" { return "sub.s64" }
         if op == "mul" || op == "*" { return "mul.lo.s64" }
+        // RFC 071 P4+ (N71-C, closes N70 GAP-B) — 64-bit integer division.
+        // `div.s64 %rd_dst, %rd_a, %rd_b` per PTX ISA §9.7.1.4. Signed by
+        // default (sibling of `add.s64` / `mul.lo.s64`); N70's `tid/32`
+        // (i64 / i32-broadcast) lowers here once both operands classify
+        // U64 via the kind-aware binop body emit.
+        if op == "div" || op == "/" { return "div.s64" }
     }
     return _nvptx_binop_mnemonic(op)
 }
