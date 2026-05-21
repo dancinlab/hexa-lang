@@ -5350,11 +5350,21 @@ static HexaVal _hexa_to_string_rec(HexaVal v, int depth) {
         case TAG_VOID: return _cached_str_void;
         // rt 32-G: minimal fallback repr — interpreter has its own
         // val_to_string for the full form.
+        // Step 4 cycle 97 — minimal-repr port (잔여 #8). C wrapper retains
+        // the HX_VS NULL guard + `<Val null>` sentinel; hexa source emits
+        // the `Val{tag=N,i=M}` body via existing .get() builtin which
+        // routes through hexa_valstruct_get_by_key at runtime (no new
+        // codegen builtin required).
         case TAG_VALSTRUCT: {
             if (!HX_VS(v)) return hexa_str("<Val null>");
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+            extern HexaVal rt_valstruct_repr(HexaVal v);
+            return rt_valstruct_repr(v);
+#else
             snprintf(buf, 64, "Val{tag=%lld,i=%lld}",
                 (long long)HX_VSF(v, tag_i), (long long)HX_VSF(v, int_val));
             return hexa_str(buf);
+#endif
         }
         case TAG_ARRAY: {
             if (depth >= 8) return hexa_str("[...]");
