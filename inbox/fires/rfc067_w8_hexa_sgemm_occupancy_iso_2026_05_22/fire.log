@@ -1,0 +1,26 @@
+Device: NVIDIA GeForce RTX 5070 sm_120
+CUDA driver=13000 runtime=12000
+loaded hexa-w8 PTX shape 256 (sgemm_w8_256x256_grid)
+  shape 256: regs/thd=42, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-w8 PTX shape 384 (sgemm_w8_384x384_grid)
+  shape 384: regs/thd=42, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-w8 PTX shape 512 (sgemm_w8_512x512_grid)
+  shape 512: regs/thd=42, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-w8 PTX shape 768 (sgemm_w8_768x768_grid)
+  shape 768: regs/thd=42, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-w8 PTX shape 1024 (sgemm_w8_1024x1024_grid)
+  shape 1024: regs/thd=42, shmem=8192 B, max_thd_per_block=1024
+loaded hexa-w8 PTX shape 1536 (sgemm_w8_1536x1536_grid)
+  shape 1536: regs/thd=42, shmem=8192 B, max_thd_per_block=1024
+[M= 256] cuBLAS HGEMM            median=0.006688 ms  std=0.001063  min=0.005696  max=0.013760  TFLOPS=  5.0171
+[M= 256] hexa-w8 8warp 64x64       median=0.006240 ms  std=0.000707  min=0.005216  max=0.010848  TFLOPS=  5.3773  ratio=1.0718  maxabs=0.0000  maxrel=0.0000  CTAs=16  regs=42
+[M= 384] cuBLAS HGEMM            median=0.006752 ms  std=0.001190  min=0.006208  max=0.014560  TFLOPS= 16.7722
+[M= 384] hexa-w8 8warp 64x64       median=0.008368 ms  std=0.000693  min=0.006880  max=0.010816  TFLOPS= 13.5332  ratio=0.8069  maxabs=0.0000  maxrel=0.0000  CTAs=36  regs=42
+[M= 512] cuBLAS HGEMM            median=0.010816 ms  std=0.001025  min=0.010240  max=0.021664  TFLOPS= 24.8184
+[M= 512] hexa-w8 8warp 64x64       median=0.011920 ms  std=0.000671  min=0.011168  max=0.013920  TFLOPS= 22.5198  ratio=0.9074  maxabs=0.0000  maxrel=0.0000  CTAs=64  regs=42
+[M= 768] cuBLAS HGEMM            median=0.019008 ms  std=0.000159  min=0.018144  max=0.020032  TFLOPS= 47.6625
+[M= 768] hexa-w8 8warp 64x64       median=0.023600 ms  std=0.000612  min=0.022272  max=0.025120  TFLOPS= 38.3885  ratio=0.8054  maxabs=0.0000  maxrel=0.0000  CTAs=144  regs=42
+[M=1024] cuBLAS HGEMM            median=0.039520 ms  std=0.000560  min=0.037504  max=0.041952  TFLOPS= 54.3392
+[M=1024] hexa-w8 8warp 64x64       median=0.053600 ms  std=0.000905  min=0.052256  max=0.061568  TFLOPS= 40.0650  ratio=0.7373  maxabs=0.0000  maxrel=0.0000  CTAs=256  regs=42
+[M=1536] cuBLAS HGEMM            median=0.109120 ms  std=0.000287  min=0.107104  max=0.110176  TFLOPS= 66.4201
+[M=1536] hexa-w8 8warp 64x64       median=0.143680 ms  std=0.001509  min=0.141600  max=0.149120  TFLOPS= 50.4437  ratio=0.7595  maxabs=0.0000  maxrel=0.0000  CTAs=576  regs=42
