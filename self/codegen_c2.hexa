@@ -7167,6 +7167,22 @@ fn _is_int_init_expr(node) {
         if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
             return _is_int_init_expr(node.left) && _is_int_init_expr(node.right)
         }
+        // RUNTIME.md cycle-100 codegen restore: `x as int` / `x as i64` initializer
+        // registers the let as known-int so downstream `if ai == bi` etc. can
+        // skip hexa_eq dispatch and emit raw HX_INT(ai)==HX_INT(bi).  Without
+        // this, hexa_eq same-tag TAG_INT branch cannot port (recursion trap).
+        if op == "as" {
+            if type_of(node.right) != "string" && node.right.kind == "Ident" {
+                let tn = node.right.name
+                if tn == "int" { return true }
+                if tn == "i64" { return true }
+                if tn == "Int" { return true }
+                if tn == "i32" { return true }
+                if tn == "u32" { return true }
+                if tn == "u64" { return true }
+            }
+            return false
+        }
         return false
     }
     if k == "UnaryOp" {
@@ -7259,6 +7275,22 @@ fn _is_float_init_expr(node) {
             if lf && rf { return true }
             if lf && _is_int_init_expr(node.right) { return true }
             if rf && _is_int_init_expr(node.left) { return true }
+        }
+        // RUNTIME.md cycle-100 codegen restore (symmetric to _is_int_init_expr):
+        // `x as float` / `x as f64` initializer registers the let as known-float
+        // so downstream `if af == bf` can skip hexa_eq dispatch and emit raw
+        // HX_FLOAT(af)==HX_FLOAT(bf).  Required for hexa_eq same-tag TAG_FLOAT
+        // branch port (recursion trap).
+        if op == "as" {
+            if type_of(node.right) != "string" && node.right.kind == "Ident" {
+                let tn = node.right.name
+                if tn == "float" { return true }
+                if tn == "f64" { return true }
+                if tn == "Float" { return true }
+                if tn == "f32" { return true }
+                if tn == "double" { return true }
+            }
+            return false
         }
         return false
     }

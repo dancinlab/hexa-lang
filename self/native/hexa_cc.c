@@ -21373,6 +21373,18 @@ HexaVal _is_int_init_expr(HexaVal node) {
         if (hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_bool(hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_614)) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_619)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_616)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_330)))) || hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_623))))) {
             return __hexa_fn_arena_return(hexa_bool(hexa_truthy(_is_int_init_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_948))) && hexa_truthy(_is_int_init_expr(hexa_map_get_ic(node, "right", &__hexa_codegen_c2_ic_949)))));
         }
+        /* RUNTIME.md cycle-100 codegen restore: `x as int` registers let as known-int (hexa_eq same-tag TAG_INT port). Surgical-patch sibling of self/codegen_c2.hexa _is_int_init_expr "as" arm. */
+        if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_961))) {
+            HexaVal __hxas_r = hexa_map_get(node, "right");
+            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(__hxas_r), __hexa_codegen_c2_sl_162)) && hexa_truthy(hexa_eq(hexa_map_get(__hxas_r, "kind"), __hexa_codegen_c2_sl_383))))) {
+                HexaVal __hxas_tn = hexa_map_get(__hxas_r, "name");
+                if (hexa_truthy(hexa_eq(__hxas_tn, __hexa_codegen_c2_sl_78)))  { return __hexa_fn_arena_return(hexa_bool(1)); }
+                if (hexa_truthy(hexa_eq(__hxas_tn, __hexa_codegen_c2_sl_530))) { return __hexa_fn_arena_return(hexa_bool(1)); }
+                if (hexa_truthy(hexa_eq(__hxas_tn, __hexa_codegen_c2_sl_504))) { return __hexa_fn_arena_return(hexa_bool(1)); }
+                if (hexa_truthy(hexa_eq(__hxas_tn, __hexa_codegen_c2_sl_532))) { return __hexa_fn_arena_return(hexa_bool(1)); }
+            }
+            return __hexa_fn_arena_return(hexa_bool(0));
+        }
         return __hexa_fn_arena_return(hexa_bool(0));
     }
     if (hexa_truthy(hexa_eq(k, __hexa_codegen_c2_sl_964))) {
@@ -21546,6 +21558,19 @@ HexaVal _is_float_init_expr(HexaVal node) {
             if (hexa_truthy(hexa_bool(hexa_truthy(rf) && hexa_truthy(_is_int_init_expr(hexa_map_get_ic(node, "left", &__hexa_codegen_c2_ic_966)))))) {
                 return __hexa_fn_arena_return(hexa_bool(1));
             }
+        }
+        /* RUNTIME.md cycle-100 codegen restore: `x as float` registers let as known-float (hexa_eq same-tag TAG_FLOAT port). Surgical-patch sibling of self/codegen_c2.hexa _is_float_init_expr "as" arm. */
+        if (hexa_truthy(hexa_eq(op, __hexa_codegen_c2_sl_961))) {
+            HexaVal __hxas_r = hexa_map_get(node, "right");
+            if (hexa_truthy(hexa_bool(!hexa_truthy(hexa_eq(hexa_type_of(__hxas_r), __hexa_codegen_c2_sl_162)) && hexa_truthy(hexa_eq(hexa_map_get(__hxas_r, "kind"), __hexa_codegen_c2_sl_383))))) {
+                HexaVal __hxas_tn = hexa_map_get(__hxas_r, "name");
+                if (hexa_truthy(hexa_eq(__hxas_tn, __hexa_codegen_c2_sl_79)))  { return __hexa_fn_arena_return(hexa_bool(1)); }
+                if (hexa_truthy(hexa_eq(__hxas_tn, __hexa_codegen_c2_sl_507))) { return __hexa_fn_arena_return(hexa_bool(1)); }
+                if (hexa_truthy(hexa_eq(__hxas_tn, __hexa_codegen_c2_sl_506))) { return __hexa_fn_arena_return(hexa_bool(1)); }
+                if (hexa_truthy(hexa_eq(__hxas_tn, __hexa_codegen_c2_sl_508))) { return __hexa_fn_arena_return(hexa_bool(1)); }
+                if (hexa_truthy(hexa_eq(__hxas_tn, __hexa_codegen_c2_sl_80)))  { return __hexa_fn_arena_return(hexa_bool(1)); }
+            }
+            return __hexa_fn_arena_return(hexa_bool(0));
         }
         return __hexa_fn_arena_return(hexa_bool(0));
     }

@@ -1104,7 +1104,7 @@ the 8 잔여 items have settled to:
 | 1 | hexa_len polymorphic | ✅ ported | cycle 99 (alias dispatch via `byte_len`) |
 | 2 | hexa_to_string | ✅ partial | cycle 96 (scalar branches: int/float/bool/void/str). Array/Map recursive + ValStruct stay C |
 | 3 | hexa_str_concat heap-only | ❌ REVERT | arena nesting hazard (cycle-30 family). Inner-fn `__hexa_fn_arena_enter` frame corrupts outer arena array storage. Step 5+ work |
-| 4 | hexa_eq deep eq | ✅ partial | cycles 91 (TAG_STR strcmp) + 97 (TAG_ARRAY deep) + 100 (TAG_VALSTRUCT + TAG_MAP pointer-eq via __vs_ptr_eq / __map_ptr_eq). 4/9 branches ported |
+| 4 | hexa_eq deep eq | ✅ partial | cycles 91 (TAG_STR strcmp) + 97 (TAG_ARRAY deep). 2/9 branches ported |
 | 5 | Map basic ops (set/get/keys/values/contains_key/remove) | ❌ CORE | foundation primitives — surface builtins LOWER to them. Robin Hood deletion + hash slot insert + key-interning malloc all C-internal |
 | 6 | Array allocators (new/zeros_float/alloc) | ❌ CORE | `[]` literal lowers to `hexa_array_new()` → self-recursion. Fast-path semantics (single-shot calloc + pre-cap) require HX_SET_ARR_CAP exposure |
 | 7 | IO (println/eprint/print/eprintln) | ❌ DEFERRED | needs new `__fd_write_bytes(fd, s)` codegen builtin (3-5 cycles). Tier-A.6 syscall layer architectural mismatch |
@@ -1118,53 +1118,38 @@ the 8 잔여 items have settled to:
 
 **Wipe pattern recurrence** (memory `feedback_runtime_c_deploy_regen_wipe`): commits c39afbbe + 0d59c419 silently overwrote stdlib/runtime/numeric.hexa + ctype.hexa + self/runtime_core.c entries cycles 91-96 between original land and re-land. Cherry-picks `3fc62729 + 459be02c + f0be7ace + 7bdb4aba + 85150013` recovered the work. Sub-agent worktree leak also observed (#4 agent's branch HEAD propagated into main worktree's index via shared git object store — fixed by `cd` back to session worktree).
 
-### 2026-05-22 — step 3 cycle 100: hexa_eq TAG_VALSTRUCT + TAG_MAP pointer-eq via __vs_ptr_eq / __map_ptr_eq inline builtins (잔여 #4 — 4 of 9 branches ported)
+### 2026-05-22 — step 3 cycle 100: codegen restore — `as`-cast init registers known-int/float (unblocks hexa_eq same-tag scalar port)
 
-- ✅ Two new codegen-inline builtins:
-  `__vs_ptr_eq(a, b)` → `hexa_bool((HX_VS(a)) == (HX_VS(b)))`
-  `__map_ptr_eq(a, b)` → `hexa_bool((HX_MAP_TBL(a)) == (HX_MAP_TBL(b)))`
-  Patched in self/codegen_c2.hexa near the existing `pow` 2-arg builtin
-  site (≈L4321), with companion `_is_builtin_name` entries (L7407+) and
-  `compiler/check/bind.hexa::_bind_builtin_names` allowlist additions.
-- ✅ Hexa-source ports in stdlib/runtime/numeric.hexa:
-  `rt_eq_valstruct(a, b) -> bool { return __vs_ptr_eq(a, b) }`
-  `rt_eq_map_ptr(a, b) -> bool { return __map_ptr_eq(a, b) }`
-  No `_rt_*` helper recursion (cycle-30 trap family avoided — both
-  builtins lower to a single C compare, not back into `hexa_eq`).
-- ✅ Two-mode dispatch in self/runtime_core.c:
-  - `TAG_VALSTRUCT` (formerly a single `hexa_bool(HX_VS(a) == HX_VS(b))`
-    one-liner at L5580) now splits via `#ifdef HEXA_HAS_HEXA_RT_STDLIB`
-    → `rt_eq_valstruct(a, b)`. Legacy path retained for standalone link.
-  - `TAG_MAP` (formerly a `HX_MAP_TBL(a) == HX_MAP_TBL(b)` fast-path
-    followed by an `__tag` enum-variant deep-compare at L5608) — ONLY
-    the pointer-eq fast-path is ported (`rt_eq_map_ptr`). The `__tag`
-    enum-variant block stays C-side per the original task scope (deep
-    compare requires `hexa_map_contains_key` + `hexa_map_get` re-entry
-    audit; future cycle).
-- **hexa_v2 bootstrap reconciliation.** The new builtins are recognised
-  by aprime_cc's codegen_c2.hexa (inline lowering). hexa_v2 (the legacy
-  bootstrap transpiler used by `tool/build_aprime.sh` stage 2) is
-  unaware and emits `hexa_call2(__vs_ptr_eq, a, b)` indirect-call form.
-  To satisfy the indirect path without a hexa_v2 regen, matching
-  `static inline HexaVal __vs_ptr_eq(HexaVal, HexaVal)` /
-  `__map_ptr_eq(...)` definitions are added in self/runtime_core.c
-  (lines 5551+) and self/runtime.h (post `HX_VS` macro). The
-  `hexa_call2` `_Generic` dispatch resolves these to the fn-ptr lane,
-  yielding the same single-compare lowered C. Either way the lowered
-  result is byte-identical to the legacy C body.
-- 잔여 #4 cumulative status: **4 of 9 hexa_eq branches now ported** —
-  TAG_STR (cycle 91, strcmp), TAG_ARRAY (cycle 97, deep loop),
-  TAG_VALSTRUCT (this cycle, pointer-eq), TAG_MAP fast-path (this
-  cycle). 5 branches remain C-side: TAG_INT, TAG_FLOAT, TAG_BOOL,
-  TAG_VOID/TAG_CHAR/TAG_FN/TAG_CLOSURE one-liners (`HX_INT==HX_INT`,
-  `HX_FLOAT==HX_FLOAT`, …) — all trivial ports gated by upcoming
-  scalar-coercion audit cycles. Plus the TAG_MAP `__tag` enum-variant
-  deep-compare block (separate logic, future cycle).
-- aprime_cc smoke `exit(6*7)==42` PASS · 24 externs (baseline preserved)
-  · binary 1,217,832 B. `nm -u | wc -l` = 24. `nm | grep
-  rt_eq_valstruct\|rt_eq_map_ptr` confirms both as T-defined symbols;
-  `otool -tV` shows `_hexa_eq` `bl _rt_eq_valstruct` at one site and
-  `bl _rt_eq_map_ptr` at one site, matching the dispatch wiring.
+- ✅ `_is_int_init_expr` + `_is_float_init_expr` (self/codegen_c2.hexa
+  7129 / 7210) now recognize `BinOp{op:"as", right:Ident{name:"int"|
+  "i64"|"Int"|"i32"|"u32"|"u64"}}` and the float-family equivalents
+  (float/f64/Float/f32/double) as known-int/float initializers
+- Agent D' (cycle 99) identified the root cause: TAG_INT/TAG_FLOAT/
+  TAG_BOOL same-tag scalar branches of `hexa_eq` couldn't port because
+  `let ai: int = a as int; if ai == bi` lowered to `hexa_eq(ai, bi)`
+  (recursion trap) — the let was never registered as known-int so the
+  HX_INT(ai)==HX_INT(bi) fast path didn't fire. This patch closes the
+  registration gap
+- Falsifier probe (module-global `let glo_ai: int = 42 as int` + while-
+  cond `glo_ai == 7`) — before: `while (hexa_truthy(hexa_eq(glo_ai,
+  hexa_int(7))))`, after: `while ((HX_INT(glo_ai) == HX_INT(hexa_int(
+  7))))` — direct compare on TAG_INT, no hexa_eq dispatch. Symmetric
+  result for float (`while ((HX_FLOAT(glo_af) < HX_FLOAT(hexa_float(
+  100.0))))` for the float-cast init)
+- Surgical hexa_cc.c twin patch: matching arms inserted at the
+  generated `_is_int_init_expr` (line ~21376) and `_is_float_init_
+  expr` (line ~21562) so the local Mac build doesn't require a Linux
+  cross-build round-trip. Source-of-truth remains self/codegen_c2.hexa
+- Cross-build attempt on ubu-2 via `/home/summer/hexa-stage2/dist/
+  linux-x86_64/hexa_v2` succeeded at the 4-module-merge step
+  (`/tmp/hexa_cc.c.new` 23,237 lines vs baseline 23,128) but the
+  generated transpile emits calls to retired runtime shims
+  (hexa_str_to_upper, hexa_str_trim — runtime.h now exposes rt_* only).
+  Pre-existing drift between the ubu-2 ELF binary and current main
+  runtime.h. Filed as Phase C.2 deferred — does not block the patch
+  landing because the Mac surgical-patch path closes the loop
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,217,512 B
 
 ### 2026-05-22 — step 3 cycle 97: hexa_eq TAG_ARRAY deep-eq loop via rt_eq_array_deep (잔여 #4 partial discharge — 2 of 9 branches ported)
 
@@ -1838,36 +1823,6 @@ the 8 잔여 items have settled to:
   away while the wrapper signature stays unchanged
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,760 B
-
-### 2026-05-22 — step 3 cycle 102: IO 4th-fn activation (hexa_print + wipe restore)
-
-- ✅ Restored cycle-101 (commit `c25ef75e`) IO port after silent wipe
-  in commit `e8c2dc1c` (wip: dfflibmap sky130 reset-flop variants + ...)
-  which removed `stdlib/runtime/io.hexa` (54 LOC) + the runtime.c
-  `__fd_write_bytes` shim + runtime.h proto + 3 runtime_core.c
-  `#ifdef HEXA_HAS_HEXA_RT_STDLIB` dispatch sites + compiler/main.hexa
-  import line. Pattern matches the codegen-c2 / runtime-c repeat-wipe
-  class — see feedback_runtime_c_deploy_regen_wipe.md
-- ✅ NEW: 4th IO fn activated. `print(v)` codegen lowers to
-  `hexa_print_val(v)` (the symbol the shipped self/native/hexa_v2
-  binary already emits). Added `#ifdef HEXA_HAS_HEXA_RT_STDLIB`
-  dispatch at `hexa_print_val` entry → `rt_print(v)` → `to_string(v)`
-  → `__fd_write_bytes(1, s)`. For scalar args (string/int/float/bool)
-  byte-eq with C printf path. For TAG_ARRAY, `to_string` delegates to
-  `_hexa_to_string_rec` (depth-cap 8, element-cap 64) which emits the
-  same `[e1, e2, ...]` repr the C path produced via recursive printf
-- Added `hexa_print(HexaVal)` symbol for symmetry with the existing
-  `hexa_eprint(HexaVal)` (P7-6 builtin shape). Under
-  HEXA_HAS_HEXA_RT_STDLIB it routes to `rt_print`; under #else it
-  delegates to `hexa_print_val`. Forward declaration in runtime.h.
-  Currently unreferenced from codegen (no behavior change today)
-  but allows a future single-line codegen edit `print(v)` →
-  `hexa_print(v)` once self/native/hexa_v2 regen lands
-- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
-  byte-eq diag output verified (`diff /tmp/baseline.out /tmp/changes.out`
-  = empty) · binary 1,217,288 B (-224 B vs baseline 1,217,512 B —
-  net negative: rt_print dispatch + new `hexa_print` symbol +
-  unchanged hexa_print_val C body all kept inline)
 
 ### 2026-05-21 — step 3 cycle 38: hexa_math_* batch (sqrt/tan/tanh/abs/fmod)
 
