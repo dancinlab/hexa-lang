@@ -130,24 +130,217 @@
 //      `.target sm_NN`, `.address_size 64`, `.visible .entry`).
 //   3. (bonus, P3+) live `ptxas -arch=sm_90 /tmp/foo.ptx` accepts.
 
-// ── stub PTX builder ────────────────────────────────────────────────
+// ── P2.1 wiring imports ─────────────────────────────────────────────
+//
+// `compiler/ir/mir.hexa` — `MModule` / `MFunc` / `Block` / `Stmt` /
+//   `Local` / `Operand` value types + the `GPU_KIND_KERNEL` constant +
+//   the `STMT_*` opcode strings. Pure data shapes; importing them does
+//   not perturb the CPU codegen path (F-RFC055-CPU-CODEGEN-UNTOUCHED).
+// `compiler/codegen/nvptx_target.hexa` — `codegen_emit_ptx_sm80` MIR→PTX
+//   text entry point (RFC 055 055-P0). Composes `_nvptx_codegen` +
+//   `emit_ptx`; no CPU-codegen side effects.
+import "../ir/mir.hexa"
+import "../codegen/nvptx_target.hexa"
 
-// Compose the canned smoke PTX text for the given sm_arch identifier
-// (e.g. "sm_80", "sm_90", "sm_120"). ASCII-only (driver-JIT ptxas refuses
-// non-ASCII PTX comments — see `reference_gpu_fire_infra.md`).
+// ── P2.1 hand-MIR vec-add fixture ───────────────────────────────────
+//
+// `_build_hand_mir_vec_add()` synthesises a minimal `MModule` whose
+// single `MFunc` is a `@gpu_kernel`-marked (gpu_kind = GPU_KIND_KERNEL)
+// vec-add body shaped to drive `codegen_emit_ptx_sm80` through the
+// kernel-emit code paths the `F-RFC071-MIR-DRIVER-INVOKE` falsifier
+// pins down:
+//
+//   * 4 params (a, b, c, n)               → 4× `.param .u64` in the
+//                                           kernel param-bank header
+//     (`_nvptx_lower_func` 055-P3c prepends one PReg.kind=="param" per
+//      MFunc.params entry; `_emit_ptx_func` renders them as
+//      `.param .u64 vadd_param_<i>`).
+//   * gpu_kind = GPU_KIND_KERNEL          → `.visible .entry vadd` header
+//     (vs the `.func` device form when gpu_kind = GPU_KIND_DEVICE).
+//   * STMT_LOAD av = *a; STMT_LOAD bv = *b → 2× `ld.global.f64`
+//     (`_nvptx_lower_stmt` STMT_LOAD branch + dst classified as
+//      NVPTX_RKIND_F64 by `_nvptx_classify_local_for_stmt`).
+//   * STMT_BINOP "add" sum = av + bv      → `add.f64` (and `sum` Local
+//                                           classified F64 → `%fd<id>`).
+//   * STMT_STORE *c = sum                  → 1× `st.global.f64`
+//     (`_nvptx_lower_stmt` STMT_STORE branch + value Local kind F64).
+//   * STMT_RETURN                          → `ret;`
+//
+// The param Locals a/b/c/n carry no Pass-1 classification (no def
+// stmt assigns into them); `_nvptx_classify_locals` Pass 2 sees them
+// as STMT_LOAD/STORE address operands and stamps each as U64 (`%rd<id>`),
+// matching the lowering's `[%rd<id>]` address-deref form.
+//
+// P2.1 honest scope: this fixture is SYNTHETIC, not a stable surface.
+// It exists solely to prove the codegen call path; the emitted PTX
+// reflects this hardcoded shape, NOT the caller's `src_path` bytes
+// (that is the P3 module_loader-bridge hook).
+
+fn _p21_local(id: i64, name: string) -> Local {
+    return Local {
+        id: id,
+        arena_id: 1,
+        type_id: 0,
+        name_hint: name,
+        precision: ""
+    }
+}
+
+fn _p21_miss_local() -> Local {
+    return Local {
+        id: -1,
+        arena_id: 0,
+        type_id: 0,
+        name_hint: "",
+        precision: ""
+    }
+}
+
+fn _p21_op_local(local_id: i64) -> Operand {
+    return Operand {
+        kind: "local",
+        local_id: local_id,
+        int_val: 0,
+        float_val: 0.0,
+        str_val: "",
+        global_id: -1
+    }
+}
+
+fn _p21_stmt_load(dst: Local, addr_local_id: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_p21_op_local(addr_local_id))
+    return Stmt {
+        kind: STMT_LOAD,
+        dst: dst,
+        op: "",
+        args: xs,
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
+fn _p21_stmt_store(addr_local_id: i64, value_local_id: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_p21_op_local(addr_local_id))
+    xs.push(_p21_op_local(value_local_id))
+    return Stmt {
+        kind: STMT_STORE,
+        dst: _p21_miss_local(),
+        op: "",
+        args: xs,
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
+fn _p21_stmt_binop(dst: Local, op: string, a_id: i64, b_id: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_p21_op_local(a_id))
+    xs.push(_p21_op_local(b_id))
+    return Stmt {
+        kind: STMT_BINOP,
+        dst: dst,
+        op: op,
+        args: xs,
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
+fn _p21_stmt_return() -> Stmt {
+    return Stmt {
+        kind: STMT_RETURN,
+        dst: _p21_miss_local(),
+        op: "",
+        args: [],
+        target_block: -1,
+        target_block_else: -1
+    }
+}
+
+fn _p21_block(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+// _build_hand_mir_vec_add — see top-of-section docstring for the body
+// shape contract and the marker substrings each MIR construct emits.
+fn _build_hand_mir_vec_add() -> MModule {
+    // Params: 4 Locals — a, b, c are device-resident array bases (used
+    // as STMT_LOAD/STORE address operands; classified U64 by Pass 2);
+    // n is the (unused-in-body) element count, declared so the kernel
+    // param-bank matches the canonical vadd_param_0..3 quartet.
+    let a = _p21_local(0, "a")
+    let b = _p21_local(1, "b")
+    let c = _p21_local(2, "c")
+    let n = _p21_local(3, "n")
+
+    // Body Locals — av/bv loaded f64 values, sum f64 BINOP result.
+    let av  = _p21_local(4, "av")
+    let bv  = _p21_local(5, "bv")
+    let sum = _p21_local(6, "sum")
+
+    // Stmts:
+    //   av  = LOAD  a         → ld.global.f64 %fd4, [%rd0];
+    //   bv  = LOAD  b         → ld.global.f64 %fd5, [%rd1];
+    //   sum = ADD   av, bv    → add.f64       %fd6, %fd4, %fd5;
+    //         STORE c, sum    → st.global.f64 [%rd2], %fd6;
+    //         RETURN          → ret;
+    let mut stmts = []
+    stmts.push(_p21_stmt_load(av, a.id))
+    stmts.push(_p21_stmt_load(bv, b.id))
+    stmts.push(_p21_stmt_binop(sum, "add", av.id, bv.id))
+    stmts.push(_p21_stmt_store(c.id, sum.id))
+    stmts.push(_p21_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_p21_block(0, stmts))
+
+    let mut params = []
+    params.push(a)
+    params.push(b)
+    params.push(c)
+    params.push(n)
+
+    let mf = MFunc {
+        name: "vadd",
+        params: params,
+        return_local: _p21_miss_local(),
+        locals: [],
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule {
+        file: "p21_hand_mir_vec_add.hexa",
+        funcs: fns,
+        globals: []
+    }
+}
+
+// ── PTX builder (P2.1 — real codegen invocation) ────────────────────
+
+// Compose the PTX text for the given sm_arch identifier.
+//
+// P2.1 (current): delegates to `codegen_emit_ptx_sm80` on a hand-built
+// vec-add `MModule` (`_build_hand_mir_vec_add()`). The emitted PTX is
+// the canonical vec-add body and is NOT derived from sm_arch — sm_arch
+// remains in the signature for the P2 `cmd_build` call-site contract
+// (today only sm_80 is the wired codegen entry; sm_90/sm_120 routing is
+// a follow-on P-phase that flips to `codegen_emit_ptx_sm90` or a new
+// sm_120 entry once those land).
+//
+// ASCII-only output (driver-JIT ptxas refuses non-ASCII PTX comments —
+// see `reference_gpu_fire_infra.md`); the codegen pipeline produces
+// pure-ASCII text by construction.
 fn _build_nvptx_stub_ptx(sm_arch: string) -> string {
-    let mut out = ""
-    out = out + "// [P2 stub PTX -- RFC 071 P2.1+ will replace with real codegen_emit_ptx_sm80]\n"
-    out = out + "// @rfc 071 phase P2 status STUB sm=" + sm_arch + "\n"
-    out = out + ".version 7.0\n"
-    out = out + ".target " + sm_arch + "\n"
-    out = out + ".address_size 64\n"
-    out = out + "\n"
-    out = out + ".visible .entry _hexa_smoke()\n"
-    out = out + "{\n"
-    out = out + "    ret;\n"
-    out = out + "}\n"
-    return out
+    // sm_arch is accepted but not threaded through — see fn docstring.
+    // The hand-MIR fixture drives the canonical sm_80 codegen path.
+    return codegen_emit_ptx_sm80(_build_hand_mir_vec_add())
 }
 
 // ── primary surface ────────────────────────────────────────────────
