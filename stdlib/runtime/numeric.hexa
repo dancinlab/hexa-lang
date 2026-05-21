@@ -1127,3 +1127,38 @@ pub fn rt_valstruct_repr(v: HexaVal) -> HexaVal {
     let i: int = v.get("int_val") as int
     return "Val{tag=" + _rt_int_to_dec_str(t) + ",i=" + _rt_int_to_dec_str(i) + "}"
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Step 4 cycle 99 — hexa_len polymorphic port (잔여 #1)
+// ─────────────────────────────────────────────────────────────────────
+// C body (runtime_core.c:2055) was the 3-way tag-dispatch:
+//   if HX_IS_STR  → HX_STRLEN
+//   if HX_IS_ARRAY → HX_ARR_LEN
+//   if HX_IS_MAP  → HX_MAP_LEN
+//   else 0
+//
+// hexa_byte_len(v) (runtime.c L9977) implements byte-for-byte the same
+// 3-way dispatch returning HexaVal int. (Map branch differs in NULL-
+// guard verbosity but yields the same result: 0 when tbl is empty.)
+//
+// Body delegates to `byte_len(v)` builtin (codegen_c2.hexa:4352 →
+// `hexa_byte_len(...)`). No recursion: `byte_len` does not call
+// `hexa_len`. `as int` lowers to `hexa_to_int(...)`, also non-recursive.
+//
+// Recursion-safety vs cycle-30 cmp/add/sub blocker: the prior blocker
+// was that any hexa-source `<` lowered back into the same `hexa_cmp_lt`
+// the C wrapper redirected to rt_*. Here `len(v)` in hexa would lower
+// to `hexa_int(hexa_len(...))` — that would trap. We sidestep entirely
+// by using the parallel `byte_len` builtin which routes to a separate
+// C symbol unaffected by the rt_len dispatch wiring.
+//
+// Baseline: this is the previously-flagged "잔여 #1" entry. The earlier
+// investigation noted "pure alias adds no logic migration; 3 new
+// externs". With the corrected baseline (the 24-extern gate measures
+// libc/system externs from `nm -u`, not internal hexa runtime fns),
+// internal C wrappers do NOT count against the gate. This port is a
+// consolidation (collapsing hexa_len's tag dispatch onto the parallel
+// hexa_byte_len's dispatch, retiring 4 lines of duplicated C).
+pub fn rt_len(v: HexaVal) -> int {
+    return byte_len(v) as int
+}

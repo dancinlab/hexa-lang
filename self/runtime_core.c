@@ -2052,12 +2052,30 @@ HexaVal hexa_array_truncate(HexaVal arr, HexaVal new_len_v) {
     return arr;
 }
 
+// Step-4 cycle 99 port — hexa_len polymorphic dispatch ports to
+// hexa-source rt_len (stdlib/runtime/numeric.hexa). rt_len body delegates
+// to `byte_len(v) as int`, which lowers to `hexa_to_int(hexa_byte_len(v))`
+// — a parallel C symbol with identical 3-way tag dispatch (str/arr/map →
+// length, else 0). C body retained under #ifndef HEXA_HAS_HEXA_RT_STDLIB
+// for the runtime.c standalone link (smoke prog.hexa, where the macro is
+// not defined).
+//
+// Recursion safety: rt_len's body uses `byte_len` (→ hexa_byte_len), not
+// `len` (→ hexa_len). hexa_byte_len does not call hexa_len. hexa_to_int
+// does not call hexa_len. Verified safe.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_len(HexaVal v);
+int hexa_len(HexaVal v) {
+    return (int)HX_INT(rt_len(v));
+}
+#else
 int hexa_len(HexaVal v) {
     if (HX_IS_STR(v)) return (int)HX_STRLEN(v);
     if (HX_IS_ARRAY(v)) return HX_ARR_LEN(v);
     if (HX_IS_MAP(v)) return HX_MAP_LEN(v);
     return 0;
 }
+#endif
 
 // ── Map operations (Optimization #10: hash table) ───────
 
