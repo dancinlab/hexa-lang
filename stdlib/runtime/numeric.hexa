@@ -303,6 +303,93 @@ pub fn rt_array_sort_float(arr: [float]) -> [float] {
     return sorted
 }
 
+// Step 3 cycle 75 — 🛸 flat_map UNBLOCKED via `type_of()` builtin.
+// `type_of(v) == "array"` discriminates array-vs-scalar at runtime
+// (codegen lowers to `hexa_eq(hexa_type_of(v), interned_str)`).
+// Closes one of the four "real blockers" from cycle 72.
+pub fn rt_array_flat_map(arr: HexaVal, fn_v: HexaVal) -> HexaVal {
+    let mut out: [float] = []
+    let n = len(arr)
+    let mut i = 0
+    while i < n {
+        let sub = fn_v(arr[i])
+        if type_of(sub) == "array" {
+            let m = len(sub)
+            let mut j = 0
+            while j < m {
+                out = out.push(sub[j])
+                j = j + 1
+            }
+        } else {
+            out = out.push(sub)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Step 3 cycle 79 — float div + mod with divide-by-zero throw.
+// Only the FLOAT path is portable: typed-float `/` is in cycle 76 fast
+// path (codegen L3957). Typed-int `/` and `%` are intentionally
+// excluded so the C wrapper can throw on b==0 — those stay C-only.
+pub fn rt_div_float(a: float, b: float) -> float {
+    if b == 0.0 { throw "division by zero" }
+    return a / b
+}
+
+pub fn rt_mod_float(a: float, b: float) -> float {
+    if b == 0.0 { throw "modulo by zero" }
+    return rt_fmod(a, b)
+}
+
+// Step 3 cycle 78 — typed arithmetic ports (sub + mul only; `/`, `%`
+// are intentionally excluded from cycle-76 typed fast-path because they
+// need runtime div-by-zero throw, so porting via `a / b` would recurse
+// into hexa_div). hexa_add is a MACRO in runtime.h with an inline
+// int-fast-path + hexa_add_slow fallback — also skipped.
+pub fn rt_sub_int(a: int, b: int) -> int { return a - b }
+pub fn rt_sub_float(a: float, b: float) -> float { return a - b }
+pub fn rt_mul_int(a: int, b: int) -> int { return a * b }
+pub fn rt_mul_float(a: float, b: float) -> float { return a * b }
+
+// Step 3 cycle 77 — typed comparison ports. Cycle 76 codegen fix
+// (typed fn-param → direct emit) means `a < b` here lowers to
+// `hexa_bool(HX_INT(a) < HX_INT(b))` directly, NO hexa_cmp_lt recursion.
+// 8 fns covering int+float for <, >, <=, >=.
+pub fn rt_cmp_lt_int(a: int, b: int) -> bool { return a < b }
+pub fn rt_cmp_gt_int(a: int, b: int) -> bool { return a > b }
+pub fn rt_cmp_le_int(a: int, b: int) -> bool { return a <= b }
+pub fn rt_cmp_ge_int(a: int, b: int) -> bool { return a >= b }
+pub fn rt_cmp_lt_float(a: float, b: float) -> bool { return a < b }
+pub fn rt_cmp_gt_float(a: float, b: float) -> bool { return a > b }
+pub fn rt_cmp_le_float(a: float, b: float) -> bool { return a <= b }
+pub fn rt_cmp_ge_float(a: float, b: float) -> bool { return a >= b }
+
+// Step 3 cycle 74 — in-place mutation via codegen-recognized builtins.
+// `arr.truncate(n)` lowers to `hexa_array_truncate(arr, n)` (in-place
+// HX_SET_ARR_LEN). `arr[i] = v` lowers to `hexa_index_set` which calls
+// hexa_array_set (in-place HX_ARR_ITEMS[i] = v). Empty-arr edge case
+// stays in the C wrapper (it returns hexa_void() — TAG_VOID=4, while
+// hexa-source `null` literal would be TAG_INT=0 which isn't equivalent).
+pub fn rt_array_pop(arr: HexaVal) -> HexaVal {
+    let n = len(arr)
+    let last = arr[n - 1]
+    arr.truncate(n - 1)
+    return last
+}
+
+pub fn rt_array_shift(arr: HexaVal) -> HexaVal {
+    let n = len(arr)
+    let first = arr[0]
+    let mut i = 0
+    while i < n - 1 {
+        arr[i] = arr[i + 1]
+        i = i + 1
+    }
+    arr.truncate(n - 1)
+    return first
+}
+
 // Step 3 cycle 71 — flatten one-level, assumes all items are arrays.
 // The C wrapper (hexa_array_flatten) pre-checks all-array via tag, and
 // only dispatches here when every element is array. Mixed-type (some
