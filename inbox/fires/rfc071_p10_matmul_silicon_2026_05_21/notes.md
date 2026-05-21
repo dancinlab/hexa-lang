@@ -1,71 +1,111 @@
-# RFC 071 P10 — NVPTX source-to-silicon matmul fire (2026-05-22)
+# RFC 071 P10 — NVPTX source-to-silicon matmul fire (retry, 2026-05-22)
 
 ## Verdict
-**BLOCKED** — F-RFC071-NVPTX-MATMUL-SOURCE-TO-SILICON-NUMERIC-EQ = FAIL.
 
-## Root cause
-N100 (gpu_matmul HIR→MIR synthesis) + N86 (NVPTX matmul codegen) are **not on main HEAD `85150013`**.
+**F-RFC071-NVPTX-MATMUL-SOURCE-TO-SILICON-NUMERIC-EQ = FAIL**
 
-- N100 lives at orphan commit `fcb72487` (2026-05-21 23:54:00) — `compiler/lower/hir_to_mir.hexa` (+gpu_matmul intercept), `compiler/check/bind.hexa` (+name registration), `compiler/codegen/nvptx_p10_matmul_test.hexa` (+fixture).
-- N86 lives at orphan commits `cff2ebc9` (2026-05-21 23:53:53) and `6b2b10c0` (22:58:59) — `compiler/codegen/nvptx_target.hexa` (+3 shape recognisers `_nvptx_mfunc_is_matmul{,_NT_a,_NT_b}_shape` + 3 emit-body fns).
-- The only code commit that *did* land on main is the docs-only `ab81ea39` (GPU.md +2 lines). The code-bearing commits never reached main.
-- The fixture file was then explicitly DELETED on main by `c39afbbe` (2026-05-22 00:02:39, "project.tape SSOT").
+N86 (codegen) + N100 (HIR→MIR synthesis + bind) are now **PRESENT on main HEAD `7bc63345`** (no longer the prior wipe pattern). However the N86 PTX-emit produces malformed mnemonics that ptxas rejects, and after hand-correcting 3 mnemonic-shape bugs a 4th addressing/tiling bug remains.
 
-This is the same "deploy-regen wipe" / "worktree merge silent file-drop" pattern documented in memory (`feedback_runtime_c_deploy_regen_wipe`, `feedback_worktree_merge_silent_filedrop`).
+Source-to-silicon E2E **STILL BLOCKED**; the wiring is in place but the strings the emitter writes are wrong.
 
-## What the task assumed vs. reality
-The task brief said *"N100 wired gpu_matmul builtin → HIR→MIR STMT_BINOP("matmul") synthesis (commit fcb72487)"* and *"N86 NVPTX matmul codegen restored on main (commit cff2ebc9)"* and *"Driver path should now work end-to-end."* All three assumptions are FALSIFIED on current main:
+## Prerequisites — all PRESENT on main
 
 ```
-$ grep -c gpu_matmul compiler/lower/hir_to_mir.hexa compiler/check/bind.hexa  # → 0 0
-$ grep -c _nvptx_mfunc_is_matmul compiler/codegen/nvptx_target.hexa            # → 0
-$ ls compiler/codegen/nvptx_p10_matmul_test.hexa                               # → ENOENT
+$ git rev-parse HEAD
+7bc633456d739326e77b3f6b78d0cafd5343aec0
+
+$ grep -c _nvptx_mfunc_is_matmul compiler/codegen/nvptx_target.hexa  # 9 (3 recognisers + 3 dispatcher cases + 3 helper refs)
+$ grep -c gpu_matmul compiler/lower/hir_to_mir.hexa                  # 5
+$ grep -c gpu_matmul compiler/check/bind.hexa                        # 2
+$ ls compiler/codegen/nvptx_p10_matmul_test.hexa                     # 2761 B
 ```
 
-## What we executed end-to-end anyway (positive findings)
-1. Restored fixture from `git show fcb72487:compiler/codegen/nvptx_p10_matmul_test.hexa` (test artifact, not compiler source).
-2. `hexa parse compiler/codegen/nvptx_p10_matmul_test.hexa` → PASS.
-3. Rebuilt driver: `hexa build self/main.hexa -o /tmp/hexa_n108_driver` → PASS in 7.8s. The driver-level NVPTX target-string dispatch on `self/main.hexa:1932-1941` IS wired on main; only the codegen body is wiped.
-4. `/tmp/hexa_n108_driver build <fixture> --target=nvptx64-nvidia-cuda-sm80` → PASS (PTX written, phase tag `P3-PATH-B`).
-5. `ptxas --gpu-name sm_80` → PASS, 4 regs, 400 B cmem[0], 0 stack.
-6. ubu-2 RTX 5070 driver-JIT (sm_120, sm_80→sm_120 forward-compat) → cuModuleLoadDataEx PASS after correcting the JIT-opts shape to the canonical 5-opt pattern (per `inbox/fires/rfc067_pP_hexa_sgemm_ldmatrix_cpasync_2026_05_21/host.c`).
-7. `cuLaunchKernel(matmul_kernel, grid=(4,4,1), block=(32,1,1))` → PASS, kernel completed.
+Origin commits: `7f3448aa` (N86 codegen, "RFC 071 P5+ — matmul + matmul_NT_a + matmul_NT_b shapes") + `f2770d6e` (N100 HIR→MIR + bind + fixture, "closes N86 source-to-silicon E2E").
 
-## Why numeric-eq FAILED
-The emitted PTX `matmul_kernel` body is functionally empty:
+## What ran end-to-end this cycle
 
-```ptx
-.visible .entry matmul_kernel (...) {
-    .reg .u32 %r3, %r4, %r5;
-    .reg .f64 %fd6;
-$L_0:
-    ld.param.u32 %r3, [matmul_kernel_param_3];  // M
-    ld.param.u32 %r4, [matmul_kernel_param_4];  // N
-    ld.param.u32 %r5, [matmul_kernel_param_5];  // K
-    // RFC 055 055-P0 - unsupported call: gpu_matmul
-    ret;
-}
-```
+1. `hexa build self/main.hexa -o /tmp/hexa_n122_driver` — PASS.
+2. `/tmp/hexa_n122_driver build compiler/codegen/nvptx_p10_matmul_test.hexa --target=nvptx64-nvidia-cuda-sm80` — PASS (4843 B PTX, pure ASCII, phase=P3-PATH-B).
+3. ubu-2 `ptxas --gpu-name sm_80 matmul_kernel.sm_80.ptx` — **FAIL**:
+   ```
+   line 101; error : Unexpected instruction types specified for 'wmma.mma'
+   line 110; error : Arguments mismatch for instruction 'wmma.store.d'
+   ptxas fatal : Ptx assembly aborted due to errors
+   ```
+4. ubu-2 driver-JIT (`cuModuleLoadDataEx`) — **FAIL** (same diags, error 218).
+5. After 3 surgical PTX edits → `matmul_kernel.sm_80.handfixed.ptx`:
+   - ptxas — **PASS** (32 regs, 400 B cmem[0]).
+   - driver-JIT — **PASS**.
+   - `cuLaunchKernel(grid=(4,4,1), block=(32,1,1))` + `cuCtxSynchronize` — **PASS**.
+   - Numeric vs CPU FP32 ref — **FAIL** (`max_abs=13.60`, `max_rel=1479`, all 4096 cells nonzero but wrong).
+   - B-pre-transpose host variant — also FAIL (`max_abs=12.7`); not just a layout swap.
 
-The diagnostic comment `unsupported call: gpu_matmul` is precisely the codegen falling through to the generic STMT_CALL emit because neither (a) the HIR→MIR intercept synthesised STMT_BINOP("matmul") (N100 missing) nor (b) the codegen would recognise such a shape if it existed (N86 missing).
+## PTX 5-substring audit
 
-Result: all 4096 cells of c remain 0 (the cuMemsetD32 zero-init survives untouched). CPU reference is non-zero (LCG-fill product). `max_abs = 9.77`, `byte_mismatch = 4096/4096`.
+| Expected | Emitted by main HEAD | Status |
+|---|---|---|
+| `.visible .entry matmul_kernel` | `.visible .entry matmul_kernel` | OK |
+| `wmma.load.a.sync.aligned.m16n16k16.row.f16` | `wmma.load.a.sync.aligned.row.m16n16k16.f16.shared` | MISFORMED — token order swapped + wrong state-space `.shared` |
+| `wmma.load.b.sync.aligned.m16n16k16.col.f16` | `wmma.load.b.sync.aligned.col.m16n16k16.f16.shared` | MISFORMED — same |
+| `wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32` | `wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32` | LITERAL MATCH but ptxas REJECTS (the long form requires 4-reg fragments; with 8-b32 A/B + 8-f32 D/C the only ptxas-accepted form is `.f32.f32` short form, per every working f16 oracle PTX in `inbox/fires/`) |
+| `wmma.store.d.sync.aligned` | `wmma.store.d.sync.aligned.row.m16n16k16.f32.shared` | substring MATCH but operand order wrong + wrong state-space |
 
-## PTX substring audit (F-RFC071-NVPTX-MATMUL-EMIT-SUBSTRING)
-- found: `.visible .entry matmul_kernel` (1/5)
-- missing: `wmma.load.a`, `wmma.load.b`, `wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32`, `wmma.store.d` (4/5)
+Strict-substring ratio: **3/5**. Concept-present ratio: 5/5. ptxas-accepted ratio: 0/5 (entire emit rejected).
 
-## Falsifier honesty (@D g3)
-The task's "honest scope" anticipated each branch I observed: "If PTX emit lacks substrings (N100's gpu_matmul synthesis lookup mismatch), document precisely." Done. The constraint `DO NOT touch compiler source — pure rebuild + fire cycle` correctly prevented me from sneaking in a cherry-pick to fake the closure.
+`// unsupported call: gpu_matmul` diagnostic from N108 cycle is **GONE** — that's the one positive delta this cycle. The synthesis fired; only the WMMA-emit grammar is wrong.
+
+## The 4 N86 emit bugs
+
+### Bug 1 — `wmma.load.{a,b}` malformed
+- **Emitted:** `wmma.load.a.sync.aligned.row.m16n16k16.f16.shared {...8 regs...}, [%rd8], %r6`
+- **Expected:** `wmma.load.a.sync.aligned.row.m16n16k16.global.f16 {...8 regs...}, [%rd8], %r6`
+- Two sub-bugs: (a) state-space modifier `.global/.shared/.const` must precede element-type `.f16` per PTX 7.0 grammar, (b) the pointer is generic-from-`.param.u64` (effectively global), not `.shared`.
+- Working oracle: `inbox/fires/rfc067_p4_2026_05_20/wmma_16x16.ptx:37,41`.
+
+### Bug 2 — `wmma.mma` long-form type spec with 8-reg fragments
+- **Emitted:** `wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32 {D8}, {A8}, {B8}, {C8}`
+- **ptxas:** `Unexpected instruction types specified for 'wmma.mma'`
+- Per PTX 7.0 spec, the long form `.f32.f16.f16.f32` is reserved for the 4-reg fragment layout (used by bf16/u8/s8). For f16 m16n16k16 with the 8-`b32` A/B + 8-`f32` D/C layout — which is what this kernel emits — the canonical ptxas-accepted form is the short form `.f32.f32` (the input element type is implicit in the .b32 register packing).
+- Working oracles: every `wmma.mma.sync.aligned.row.col.m16n16k16` in `inbox/fires/rfc067_*` uses `.f32.f32` (10+ files, all ptxas-accepted).
+
+### Bug 3 — `wmma.store.d` malformed operand order + state space
+- **Emitted:** `wmma.store.d.sync.aligned.row.m16n16k16.f32.shared {...8 regs...}, [%rd14], %r5`
+- **Expected:** `wmma.store.d.sync.aligned.row.m16n16k16.global.f32 [%rd14], {...8 regs...}, %r5`
+- Three sub-bugs: (a) state-space `.global` not `.shared`, (b) state-space precedes element-type, (c) operand order is destination address first, then fragment, then stride.
+- Working oracle: `inbox/fires/rfc067_p4_2026_05_20/wmma_16x16.ptx:62`.
+
+### Bug 4 — addressing/tiling/layout
+- After bugs 1-3 fixed, ptxas PASSes and kernel launches/returns, but `max_abs=13.6` and the value pattern doesn't match CPU FP32 reference. Pre-transposing B to col-major in the host also fails.
+- Suspects: row-major A + col-major B convention mismatch with test fixture layout; OR stride is byte-stride vs element-stride mismatch; OR per-tile A/B offset computation off (the kernel computes `row_tile*K+kk` for A and `kk*N+col_tile` for B which assumes A=row-major + B=row-major, but loads B with `.col` mnemonic, which is internally inconsistent).
+- This bug cannot be diagnosed further without N86 codegen edit access.
+
+## Wipe-chain status — POSITIVE delta vs N108
+
+Last cycle (N108, 2026-05-21) the verdict was BLOCKED because all 3 prereqs (N86 recognisers, N100 synthesis, fixture) were **missing on main**. This cycle (N122, 2026-05-22) all 3 prereqs are **PRESENT** on main HEAD `7bc63345` via commits `7f3448aa` (N86) and `f2770d6e` (N100). The re-restore documented in `cfd056e4` ("N105 ... + N108 BLOCKED diagnosis + N86/N100 re-restored") landed correctly.
+
+So the wiring/dispatch problem is closed. The remaining problem is **codegen string correctness** — the emitter writes ptxas-invalid mnemonics.
+
+## Honest scope (`@D g3`)
+
+Task brief explicitly said: *"If WMMA emit has bug (shape mismatch), document precisely"* and *"DO NOT touch compiler source — pure rebuild + fire cycle"*. Both honored. Source-to-silicon matmul E2E closure status: **NOT CLOSED**. Verdict downgraded from "Source-to-silicon CLOSED" to "wiring closed, emit-grammar bug" — a smaller but real positive delta vs the N108 BLOCKED verdict.
 
 ## Artifacts in this dir
-- `matmul_kernel.sm_80.ptx` — emitted PTX (sm_80, 791 B, 25 lines).
-- `matmul_kernel.sm_120.ptx` — same emitter, sm_120 target (also fired, same body).
-- `host_matmul.c` — silicon-fire harness (CUDA driver API, FP16-input FP32-acc matmul + CPU FP32 reference + 4-ULP gate).
-- `fire.log` — captured stdout/stderr from ubu-2 fire.
-- `result.json` — machine-readable verdict + metrics + wipe-chain.
 
-## Remediation path (out of scope for this cycle)
-1. Open recovery PR cherry-picking `cff2ebc9` (nvptx_target.hexa N86) + `fcb72487` (hir_to_mir + bind + fixture N100).
-2. Or rewrite from scratch using the GPU.md §1f N86 spec + the WMMA m16n16k16 mnemonic table already on main (`compiler/codegen/nvptx_target.hexa:621, 1540, 1550, 1561`).
-3. Re-fire this exact harness; expected outcome on closure: max_abs < 4 ULP × max_ref ≈ 4 × 1.2e-7 × max(|h_ref|) ~ 4e-6 absolute at M=N=K=64.
+- `matmul_kernel.sm_80.ptx` — original main-HEAD emit (4843 B, 112 lines, ptxas REJECTS).
+- `matmul_kernel.sm_120.ptx` — same emitter at sm_120 (4845 B, same shape).
+- `matmul_kernel.sm_80.handfixed.ptx` — 3 surgical edits to test if bugs 1-3 are the only issues (ptxas PASS, numeric FAIL).
+- `host_matmul.c` — silicon-fire harness (unchanged from N108).
+- `fire.log` — original-emit ptxas FAIL + hand-fixed-emit numeric FAIL.
+- `result.json` — machine-readable verdict + bug catalog + remediation pointer.
+
+## Next-cycle remediation
+
+Edit `compiler/codegen/nvptx_target.hexa` (probably `_nvptx_emit_matmul_body` or whatever helper emits the WMMA mnemonics — search for "wmma.load.a" string):
+
+1. Change `wmma.load.a.sync.aligned.row.m16n16k16.f16.shared` → `wmma.load.a.sync.aligned.row.m16n16k16.global.f16`.
+2. Change `wmma.load.b.sync.aligned.col.m16n16k16.f16.shared` → `wmma.load.b.sync.aligned.col.m16n16k16.global.f16`.
+3. Change `wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32` → `wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32`.
+4. Change `wmma.store.d.sync.aligned.row.m16n16k16.f32.shared {regs}, [addr], stride` → `wmma.store.d.sync.aligned.row.m16n16k16.global.f32 [addr], {regs}, stride`.
+5. Audit addressing for bug 4 against `inbox/fires/rfc067_p5_perf_hgemm_2026_05_20/wmma_256x256_grid.ptx` (working 256×256 HGEMM, row-major A + col-major B layout, ptxas-accepted, silicon-verified).
+
+After bugs 1-4 fixed, re-fire this exact harness; expected outcome on closure: `max_abs ≤ 4e-6` at M=N=K=64 (4 ULP × max_ref ~1.2e-7).
