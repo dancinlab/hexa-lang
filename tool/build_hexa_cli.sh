@@ -68,12 +68,8 @@ UNAME="$(uname 2>/dev/null | tr -d ' \n\t')"
 mkdir -p "$STAGE1" "$REPO_ROOT/build"
 
 # Linux needs _GNU_SOURCE + -lm -ldl; Darwin sizes the stack for deep recursion.
-# Linux additionally needs `-include stdarg.h` because self/runtime.c uses
-# va_list/va_arg without an explicit <stdarg.h> include (Apple libc pulls it
-# in transitively via other headers, glibc does not). Forced-include keeps
-# runtime.c untouched (deploy-regen wipe avoidance — see CLAUDE.md).
 if [ "$UNAME" = "Linux" ]; then
-    CFLAGS="-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 -include stdarg.h -I $INC"
+    CFLAGS="-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 -I $INC"
     LDFLAGS="-lpthread -lm -ldl"
 else
     CFLAGS="-O2 -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 -I $INC"
