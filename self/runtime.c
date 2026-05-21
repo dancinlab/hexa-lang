@@ -3068,6 +3068,10 @@ HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end) {
 }
 #endif
 
+// Step-3 cycle 36 port — int range. The `int inclusive` switch is
+// plain C (not HexaVal), so two hexa entry points handle the cases
+// rather than threading a hexa-bool through the ABI.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal __hexa_range_array(HexaVal start, HexaVal end, int inclusive) {
     HexaVal out = hexa_array_new();
     int64_t s = HX_INT(start), e = HX_INT(end);
@@ -3078,6 +3082,14 @@ HexaVal __hexa_range_array(HexaVal start, HexaVal end, int inclusive) {
     }
     return out;
 }
+#else
+extern HexaVal rt_range_int_excl(HexaVal start, HexaVal end);
+extern HexaVal rt_range_int_incl(HexaVal start, HexaVal end);
+HexaVal __hexa_range_array(HexaVal start, HexaVal end, int inclusive) {
+    if (inclusive) return rt_range_int_incl(start, end);
+    return rt_range_int_excl(start, end);
+}
+#endif
 
 HexaVal hexa_array_map(HexaVal arr, HexaVal fn) {
     if (!HX_IS_ARRAY(arr)) return hexa_array_new();

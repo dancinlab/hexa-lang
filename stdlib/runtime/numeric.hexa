@@ -104,6 +104,28 @@ pub fn rt_max_float(a: float, b: float) -> float {
     return b
 }
 
+// Step 3 cycle 36 — integer range. Two entry points mirror the C body
+// `__hexa_range_array`'s plain-C `int inclusive` switch.
+pub fn rt_range_int_excl(start: int, end: int) -> [int] {
+    let mut out: [int] = []
+    let mut i = start
+    while i < end {
+        out = out.push(i)
+        i = i + 1
+    }
+    return out
+}
+
+pub fn rt_range_int_incl(start: int, end: int) -> [int] {
+    let mut out: [int] = []
+    let mut i = start
+    while i <= end {
+        out = out.push(i)
+        i = i + 1
+    }
+    return out
+}
+
 // Step 3 cycle 35 — array slice (array branch only; the polymorphic str
 // branch stays in the C body). Clamps a/b to [0, len] and a ≤ b matches
 // the C body contract.

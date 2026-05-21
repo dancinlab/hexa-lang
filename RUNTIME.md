@@ -1070,3 +1070,14 @@ it operates on HexaVal tags from C.
   (L3081), so its `#else` branch needs its own
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,712 B
+
+### 2026-05-21 — step 3 cycle 36: __hexa_range_array → rt_range_int_excl/incl
+
+- ✅ `__hexa_range_array` (self/runtime.c:3030) ported. Two hexa entry
+  points (`rt_range_int_excl` + `rt_range_int_incl`) match the C
+  body's plain-C `int inclusive` switch — threading a hexa-bool
+  through the ABI would have been heavier than the split
+- Unconditional dispatch (no array-type predicate) — range output is
+  always pure int, no float fast-path needed
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,162,664 B
