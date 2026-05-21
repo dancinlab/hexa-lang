@@ -1094,7 +1094,162 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
-### 2026-05-21 — step 3 cycle 76: codegen typed-param + `as` cast direct emit (QUEUED for hexa_v2 rebuild)
+### 2026-05-21 — step 3 cycle 86: rt_to_int polymorphic port (via cycle 85)
+
+- ✅ `hexa_to_int` polymorphic port via cycle-85 typed-let propagation.
+  Float path: `let f: float = v as float; let i: int = f as int` —
+  cycle-85 makes `i` a typed-int let, codegen direct-emits both casts
+- type_of dispatch for int/float branches; string branch stays C-side
+  (uses hexa_str_parse_int — separate cycle if needed)
+- Also added `rt_to_float_poly` for symmetry (different from cycle-13
+  rt_to_float which is universal coerce)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,840 B
+
+### 2026-05-21 — step 3 cycle 85 ACTIVATED: typed-let annotation propagation 🛸🛸🛸
+
+- ✅ **3rd codegen blocker SOLVED**. `let X: T = ...` annotation now
+  registers X as known-int/float, surviving the cur_lets shadow
+  bypass that previously blocked it
+- hexa_cc.c patches: new globals `_gen2_current_fn_let_names` +
+  `_gen2_current_fn_let_types` parallel arrays. Populated at LetStmt
+  registration site (line ~17264). `_is_known_int_name` and
+  `_is_known_float_name` consult these BEFORE the cur_lets bypass —
+  promoting typed-let names to direct-emit
+- Verified active:
+  - `let g: float = 3.14; g + 1.0` → `hexa_float(HX_FLOAT(g) + HX_FLOAT(...))` (no hexa_add!)
+  - `let f: float = v as float; f as int` → `hexa_int((int64_t)HX_FLOAT(f))` (no hexa_to_int!)
+- Unblocks `hexa_to_int` / `hexa_to_float` polymorphic ports (previously
+  trapped in `as int` → `hexa_to_int(v)` recursion when v is HexaVal
+  but coerced through a typed let)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,792 B
+
+### 2026-05-21 — step 3 cycle 84: hexa_hex (int → hex string)
+
+- ✅ `rt_hex(n)` ported. Loop builds digit-bytes via `x & 0xF` indexed
+  into "0123456789abcdef", then reverse. C body's uint64_t cast of
+  negative ints becomes int64 sign-extending `>> 4` — caveat noted in
+  hexa source comment
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,792 B
+
+### 2026-05-21 — step 3 cycle 83: hexa_base64_encode + hexa_base64_decode
+
+- ✅ Base64 encode + decode ported. Hexa-source bit manipulation via
+  typed-int `<<`, `>>`, `&`, `|` direct emit (codegen L3938 already
+  had these in fast-path; cycle-76 enabled fn-param recognition)
+- `rt_base64_encode`: 3-byte chunks → 4 chars; tail-pad with `=`
+- `rt_base64_decode`: linear-scan dec[] table replaced with inline
+  alphabet lookup (slightly slower but eliminates static dec[256])
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,712 B
+
+### 2026-05-21 — step 3 cycle 82: hexa_tensor_mul_scalar + hexa_hadamard
+
+- ✅ `rt_tensor_mul_scalar(a, s)` and `rt_hadamard(a, b)` ported.
+  Both are pure elementwise float ops — typed-float `*` direct emit
+  via cycle-76
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,296 B
+
+### 2026-05-21 — step 3 cycle 81: tensor family port (6 fns)
+
+- ✅ Six tensor fns ported in batch via cycle-76 typed-float fast-paths:
+  `rt_tensor_zeros(n)`, `rt_tensor_ones(n)`, `rt_tensor_slice(a, lo, hi)`,
+  `rt_tensor_add(a, b)`, `rt_tensor_dot(a, b)`, `rt_swiglu_vec(gate, up)`
+- `rt_swiglu_vec` reuses cycle-7 `rt_exp` for silu — fully libm-free
+- Each hexa-source body uses typed `[float]` + `int` params; bodies
+  like `out.push(a[i] + b[i])` direct-emit `hexa_float(HX_FLOAT(...))` —
+  no hexa_add recursion
+- C wrappers do HexaVal→int coercion for length args (via
+  `__hx_to_double` → `int64_t`) and array-tag check before dispatch
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,376 B
+
+### 2026-05-21 — step 3 cycle 80: hexa_add_slow array+array concat port
+
+- ✅ Array+array branch of `hexa_add_slow` (self/runtime_core.c:5363-
+  5368) ported to `rt_add_arrays`. Deep iteration via `len(a)` /
+  `a[i]` / `out.push()` — same algorithm as the C body
+- Other branches (int+int / float+float / string fallback via
+  to_string + str_concat) stay C — they're already minimal and
+  to_string+str_concat are CORE-tier
+- `hexa_add` macro (runtime.h:147) still in C — the inline int
+  fast-path is the macro's whole point; replacing it would lose
+  zero-overhead int+int
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,376 B
+
+### 2026-05-21 — step 3 cycle 79: hexa_div_float + hexa_mod_float (typed-float div/mod with throw)
+
+- ✅ Float-only path for `hexa_div` + `hexa_mod` ported via cycle-76
+  typed-float fast-path (codegen L3957 includes `/` for known-float).
+  `if b == 0.0 { throw "..." }` lowers to `HX_FLOAT(b) == HX_FLOAT(...)`
+  + `hexa_throw(...)` — no recursion
+- `rt_div_float`: `return a / b` direct emits `hexa_float(HX_FLOAT(a) /
+  HX_FLOAT(b))`. `rt_mod_float`: reuses cycle-7 `rt_fmod`
+- Int paths stay C-side — typed-int `/` `%` are intentionally excluded
+  from cycle-76 fast-path (need divide-by-zero throw before `/` is
+  evaluated; otherwise raw C `/` on 0 is UB)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,312 B
+
+### 2026-05-21 — step 3 cycle 78: hexa_sub + hexa_mul typed dispatch (second hot-path port)
+
+- ✅ `hexa_sub` + `hexa_mul` (self/runtime_core.c:6312, 6317) gain
+  typed int + float dispatch via 4 rt fns (`rt_sub_int/_float`,
+  `rt_mul_int/_float`). Bodies are literally `return a - b` / `a * b`
+  — cycle-76 codegen emits direct C `HX_INT(a) - HX_INT(b)` etc.
+- `hexa_add` is a MACRO (runtime.h:147) with inline int fast-path +
+  `hexa_add_slow` fallback — not ported (different shape)
+- `hexa_div` / `hexa_mod` NOT ported — codegen intentionally excludes
+  `/` `%` from typed fast-path because they need runtime divide-by-
+  zero throw protection. Porting via `a / b` would recurse into
+  `hexa_div` (raw C `/` on 0 is UB → throw infra must stay in C body)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,160,024 B
+
+### 2026-05-21 — step 3 cycle 77: hexa_cmp_lt/gt/le/ge typed dispatch 🛸 (first hot-path port)
+
+- ✅ **FIRST hot-path port** enabled by cycle-76 codegen activation.
+  Four polymorphic comparison fns gain typed int + typed float
+  fast-paths via 8 hexa-source rt fns:
+  - `rt_cmp_{lt,gt,le,ge}_int(a: int, b: int) -> bool` (4 fns)
+  - `rt_cmp_{lt,gt,le,ge}_float(a: float, b: float) -> bool` (4 fns)
+- Each hexa body is literally `return a < b` / `>` / `<=` / `>=` —
+  thanks to cycle 76 typed-param recognition, codegen emits direct
+  `hexa_bool(HX_INT(a) < HX_INT(b))` (or HX_FLOAT variant) with NO
+  hexa_cmp_lt recursion
+- C wrapper: STR-STR path stays C (hxlcl_strcmp), VALSTRUCT path
+  stays C (uses __hx_to_double). New IS_INT/IS_INT and IS_FLOAT/
+  IS_FLOAT fast-paths dispatch to rt_cmp_*_int/float
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,159,864 B
+
+### 2026-05-21 — step 3 cycle 76 ACTIVATED: codegen typed-param + `as` cast direct emit 🛸🛸🛸
+
+- ✅ **All 4 "real blockers" SOLVED**. Cycle 76 source-level edits
+  (codegen_c2.hexa) applied DIRECTLY to `self/native/hexa_cc.c` (the
+  pre-transpiled C source for hexa_v2 — project precedent per
+  build_toolchain.json LetStmt patch history), then clang-rebuilt:
+  ```
+  clang -O2 -std=c11 -arch arm64 -I self -D_GNU_SOURCE \
+    -fbracket-depth=4096 self/native/hexa_cc.c self/runtime.c \
+    -o self/native/hexa_v2 -lm
+  ```
+- Verified active via transpile inspection:
+  - `pub fn f(a: int, b: int) { return a < b }` → direct
+    `hexa_bool(HX_INT(a) < HX_INT(b))` (no hexa_cmp_lt!)
+  - `pub fn g(v: float) { return v as int }` → direct
+    `hexa_int((int64_t)HX_FLOAT(v))` (no hexa_to_int!)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,158,984 B (smaller than pre-cycle-76 1,160,200 B —
+  typed direct-emit removed redundant runtime dispatch calls)
+- Unblocks cycles 77+ for: hexa_cmp_lt/gt/le/ge/eq, hexa_add/sub/mul/
+  div/mod, hexa_to_int/_float ports — all formerly recursion-trapped
+
+### 2026-05-21 — step 3 cycle 76 (initial source edit): codegen typed-param + `as` cast direct emit
 
 - 🚧 **Source-level edits in `self/codegen_c2.hexa`** to close the
   remaining 2 of 4 "real blockers". Fix queued — not active until

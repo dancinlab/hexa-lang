@@ -5347,6 +5347,23 @@ HexaVal hexa_type_of(HexaVal v) {
 // fast path without function-call ABI overhead.
 /* PHASE 1.2.B (2026-05-15): de-staticized. Slow-path fallback for the
  * hexa_add macro emitted into runtime.h — user.c TUs link against this. */
+/* Step-3 cycle 80 port — array+array concat dispatches to rt_add_arrays.
+ * Int/float/string paths stay C-side (already minimal). */
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_add_arrays(HexaVal a, HexaVal b);
+HexaVal hexa_add_slow(HexaVal a, HexaVal b) {
+    if (HX_IS_INT(a) && HX_IS_INT(b)) return hexa_int(HX_INT(a) + HX_INT(b));
+    if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b)) {
+        double fa = __hx_to_double(a);
+        double fb = __hx_to_double(b);
+        return hexa_float(fa + fb);
+    }
+    if (HX_IS_ARRAY(a) && HX_IS_ARRAY(b)) return rt_add_arrays(a, b);
+    HexaVal sa = hexa_to_string(a);
+    HexaVal sb = hexa_to_string(b);
+    return hexa_str_concat(sa, sb);
+}
+#else
 HexaVal hexa_add_slow(HexaVal a, HexaVal b) {
     if (HX_IS_INT(a) && HX_IS_INT(b)) return hexa_int(HX_INT(a) + HX_INT(b));
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b)) {
@@ -5370,6 +5387,7 @@ HexaVal hexa_add_slow(HexaVal a, HexaVal b) {
     HexaVal sb = hexa_to_string(b);
     return hexa_str_concat(sa, sb);
 }
+#endif
 
 // ROI-37: inline macro — int+int hot path avoids 32-byte HexaVal call ABI.
 // Evaluates each operand exactly once via temporaries.
@@ -5924,6 +5942,9 @@ HexaVal hexa_to_float(HexaVal v) {
 #endif
 
 // to_int: coerce any scalar to int (truncate toward zero for floats)
+// Step-3 cycle 86 port — int/float branches go through rt_to_int.
+// String branch stays C (uses hexa_str_parse_int).
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_to_int(HexaVal v) {
     if (HX_IS_INT(v)) return v;
     if (HX_IS_FLOAT(v)) return hexa_int((int64_t)HX_FLOAT(v));
@@ -5931,6 +5952,13 @@ HexaVal hexa_to_int(HexaVal v) {
     if (HX_IS_STR(v)) return hexa_str_parse_int(v);
     return hexa_int((int64_t)__hx_to_double(v));
 }
+#else
+extern HexaVal rt_to_int(HexaVal v);
+HexaVal hexa_to_int(HexaVal v) {
+    if (HX_IS_STR(v)) return hexa_str_parse_int(v);
+    return rt_to_int(v);
+}
+#endif
 
 // ── String format ────────────────────────────────────
 
@@ -6309,6 +6337,23 @@ HexaVal hexa_pad_right(HexaVal s, HexaVal width) {
 
 // B-19: Polymorphic arithmetic — T39 routes through __hx_to_double.
 // ROI-47: explicit float+float fast path avoids 2x __hx_to_double tag dispatch.
+// Step-3 cycle 78 port — typed sub/mul via cycle-76 codegen fix.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_sub_int(HexaVal a, HexaVal b);
+extern HexaVal rt_sub_float(HexaVal a, HexaVal b);
+extern HexaVal rt_mul_int(HexaVal a, HexaVal b);
+extern HexaVal rt_mul_float(HexaVal a, HexaVal b);
+HexaVal hexa_sub(HexaVal a, HexaVal b) {
+    if (HX_IS_INT(a) && HX_IS_INT(b)) return rt_sub_int(a, b);
+    if (HX_IS_FLOAT(a) && HX_IS_FLOAT(b)) return rt_sub_float(a, b);
+    return hexa_float(__hx_to_double(a) - __hx_to_double(b));
+}
+HexaVal hexa_mul(HexaVal a, HexaVal b) {
+    if (HX_IS_INT(a) && HX_IS_INT(b)) return rt_mul_int(a, b);
+    if (HX_IS_FLOAT(a) && HX_IS_FLOAT(b)) return rt_mul_float(a, b);
+    return hexa_float(__hx_to_double(a) * __hx_to_double(b));
+}
+#else
 HexaVal hexa_sub(HexaVal a, HexaVal b) {
     if (HX_IS_INT(a) && HX_IS_INT(b)) return hexa_int(HX_INT(a) - HX_INT(b));
     if (HX_IS_FLOAT(a) && HX_IS_FLOAT(b)) return hexa_float(HX_FLOAT(a) - HX_FLOAT(b));
@@ -6319,6 +6364,7 @@ HexaVal hexa_mul(HexaVal a, HexaVal b) {
     if (HX_IS_FLOAT(a) && HX_IS_FLOAT(b)) return hexa_float(HX_FLOAT(a) * HX_FLOAT(b));
     return hexa_float(__hx_to_double(a) * __hx_to_double(b));
 }
+#endif
 // FMA: fused multiply-add — fma(a,b,c) = a*b + c
 // For floats uses C99 fma() (single rounding, hardware FMA on modern CPUs).
 // For pure ints falls back to a*b+c with int arithmetic.
@@ -6339,6 +6385,33 @@ HexaVal hexa_fma(HexaVal a, HexaVal b, HexaVal c) {
                         hexa_float(__hx_to_double(c)));
 }
 #endif
+// Step-3 cycle 79 port — float-only div/mod via hexa source. Int paths
+// stay C because typed-int `/` `%` codegen is intentionally excluded
+// from fast-path (need divide-by-zero throw before `/` evaluates).
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_div_float(HexaVal a, HexaVal b);
+extern HexaVal rt_mod_float(HexaVal a, HexaVal b);
+HexaVal hexa_div(HexaVal a, HexaVal b) {
+    if (HX_IS_INT(a) && HX_IS_INT(b)) {
+        if (HX_INT(b) == 0) { hexa_throw(hexa_str("division by zero")); return hexa_int(0); }
+        return hexa_int(HX_INT(a) / HX_INT(b));
+    }
+    if (HX_IS_FLOAT(a) && HX_IS_FLOAT(b)) return rt_div_float(a, b);
+    double fb = __hx_to_double(b);
+    if (fb == 0.0) { hexa_throw(hexa_str("division by zero")); return hexa_float(0.0); }
+    return hexa_float(__hx_to_double(a) / fb);
+}
+HexaVal hexa_mod(HexaVal a, HexaVal b) {
+    if (HX_IS_INT(a) && HX_IS_INT(b)) {
+        if (HX_INT(b) == 0) { hexa_throw(hexa_str("modulo by zero")); return hexa_int(0); }
+        return hexa_int(HX_INT(a) % HX_INT(b));
+    }
+    if (HX_IS_FLOAT(a) && HX_IS_FLOAT(b)) return rt_mod_float(a, b);
+    double fb = __hx_to_double(b);
+    if (fb == 0.0) { hexa_throw(hexa_str("modulo by zero")); return hexa_float(0.0); }
+    return hexa_float(hxlcl_fmod(__hx_to_double(a), fb));
+}
+#else
 HexaVal hexa_div(HexaVal a, HexaVal b) {
     if (HX_IS_INT(a) && HX_IS_INT(b)) {
         // 이전엔 silent 0 반환 → 버그 은폐. interp 는 이미 throw + void.
@@ -6363,6 +6436,7 @@ HexaVal hexa_mod(HexaVal a, HexaVal b) {
     if (fb == 0.0) { hexa_throw(hexa_str("modulo by zero")); return hexa_float(0.0); }
     return hexa_float(hxlcl_fmod(__hx_to_double(a), fb));
 }
+#endif
 
 // ROI-44: comparison runtime helpers — replace inline GCC stmt-expr in codegen.
 // Semantics: TAG_FLOAT promotes to double compare; TAG_INT uses int64 compare.
@@ -6375,6 +6449,49 @@ HexaVal hexa_mod(HexaVal a, HexaVal b) {
 // String comparisons via strcmp — 이전 경로는 __hx_to_double("abc") = atof
 // 으로 fallthrough 해서 대부분 0.0 으로 수렴 + intern pointer 비교로 떨어져
 // 의미 없는 순서 (abc>abb=false 같은 오류).
+// Step-3 cycle 77 port — typed int/float dispatch via cycle-76 codegen
+// fix. STR/VALSTRUCT polymorphic paths stay C-side (no hexa-source
+// equivalent). The hexa-source typed bodies lower to direct
+// hexa_bool(HX_INT(a) op HX_INT(b)) / hexa_bool(HX_FLOAT(a) op HX_FLOAT(b))
+// — no hexa_cmp_lt recursion.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_cmp_lt_int(HexaVal a, HexaVal b);
+extern HexaVal rt_cmp_gt_int(HexaVal a, HexaVal b);
+extern HexaVal rt_cmp_le_int(HexaVal a, HexaVal b);
+extern HexaVal rt_cmp_ge_int(HexaVal a, HexaVal b);
+extern HexaVal rt_cmp_lt_float(HexaVal a, HexaVal b);
+extern HexaVal rt_cmp_gt_float(HexaVal a, HexaVal b);
+extern HexaVal rt_cmp_le_float(HexaVal a, HexaVal b);
+extern HexaVal rt_cmp_ge_float(HexaVal a, HexaVal b);
+HexaVal hexa_cmp_lt(HexaVal a, HexaVal b) {
+    if (HX_IS_STR(a) && HX_IS_STR(b))
+        return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) < 0);
+    if (HX_IS_INT(a) && HX_IS_INT(b)) return rt_cmp_lt_int(a, b);
+    if (HX_IS_FLOAT(a) && HX_IS_FLOAT(b)) return rt_cmp_lt_float(a, b);
+    return hexa_bool(__hx_to_double(a) < __hx_to_double(b));
+}
+HexaVal hexa_cmp_gt(HexaVal a, HexaVal b) {
+    if (HX_IS_STR(a) && HX_IS_STR(b))
+        return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) > 0);
+    if (HX_IS_INT(a) && HX_IS_INT(b)) return rt_cmp_gt_int(a, b);
+    if (HX_IS_FLOAT(a) && HX_IS_FLOAT(b)) return rt_cmp_gt_float(a, b);
+    return hexa_bool(__hx_to_double(a) > __hx_to_double(b));
+}
+HexaVal hexa_cmp_le(HexaVal a, HexaVal b) {
+    if (HX_IS_STR(a) && HX_IS_STR(b))
+        return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) <= 0);
+    if (HX_IS_INT(a) && HX_IS_INT(b)) return rt_cmp_le_int(a, b);
+    if (HX_IS_FLOAT(a) && HX_IS_FLOAT(b)) return rt_cmp_le_float(a, b);
+    return hexa_bool(__hx_to_double(a) <= __hx_to_double(b));
+}
+HexaVal hexa_cmp_ge(HexaVal a, HexaVal b) {
+    if (HX_IS_STR(a) && HX_IS_STR(b))
+        return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) >= 0);
+    if (HX_IS_INT(a) && HX_IS_INT(b)) return rt_cmp_ge_int(a, b);
+    if (HX_IS_FLOAT(a) && HX_IS_FLOAT(b)) return rt_cmp_ge_float(a, b);
+    return hexa_bool(__hx_to_double(a) >= __hx_to_double(b));
+}
+#else
 HexaVal hexa_cmp_lt(HexaVal a, HexaVal b) {
     if (HX_IS_STR(a) && HX_IS_STR(b))
         return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) < 0);
@@ -6403,6 +6520,7 @@ HexaVal hexa_cmp_ge(HexaVal a, HexaVal b) {
         return hexa_bool(__hx_to_double(a) >= __hx_to_double(b));
     return hexa_bool(HX_INT(a) >= HX_INT(b));
 }
+#endif
 
 // Step-3 cycle 58 port — float fast-path bridge. Mixed-type arrays
 // stay on the polymorphic hexa_eq path. Int return preserved (codegen
